@@ -11,5 +11,6 @@ require (
 	github.com/libp2p/go-libp2p-pubsub v0.4.1
 	github.com/multiformats/go-multiaddr v0.3.1
 	github.com/syndtr/goleveldb v1.0.0
+	github.com/urfave/cli/v2 v2.3.0
 	go.uber.org/zap v1.17.0
 )

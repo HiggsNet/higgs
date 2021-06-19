@@ -49,14 +49,8 @@ func (s *node) load() error {
 	}
 }
 
-func (s *node) validMessage(m *message) bool {
-	if key := ParsePublicKey(s.PublicKey); key != nil {
-		return m.valid(key)
-	}
-	return false
-}
-
 type nodeManager struct {
+	auth  authManager
 	nodes map[string]node
 	db    *leveldb.DB
 	log   *zap.SugaredLogger
@@ -64,7 +58,7 @@ type nodeManager struct {
 
 func (s *nodeManager) init(db *leveldb.DB, log *zap.SugaredLogger) *nodeManager {
 	s.db = db
-	s.log = log.With("nodeManager")
+	s.log = log
 	s.nodes = make(map[string]node)
 	nodeList := s.getNodeListFromDB()
 	for _, v := range nodeList {
@@ -77,6 +71,9 @@ func (s *nodeManager) init(db *leveldb.DB, log *zap.SugaredLogger) *nodeManager 
 func (s *nodeManager) getNodeListFromDB() []string {
 	result := make([]string, 0)
 	data, err := s.db.Get([]byte("nodeList"), nil)
+	if err == leveldb.ErrNotFound {
+		return result
+	}
 	if err != nil {
 		s.log.Warnf("load nodes failed, db failed, %s", err)
 		return result
