@@ -3,6 +3,7 @@ package higgs
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"time"
 
@@ -16,138 +17,102 @@ import (
 )
 
 type p2p struct {
-	TrustCA       string        `hcl:"TrustCA,attr"`
-	PrivateKey    string        `hcl:"PrivateKey,attr"`
-	Address       string        `hcl:"Address,attr"`
-	ManageKey     string        `hcl:"ManageKey,optional"`
-	BootNode      string        `hcl:"BootNode,optional"`
-	Auth          []AuthMessage `hcl:"Auth,block"`
-	log           *zap.SugaredLogger
-	host          host.Host
-	ctx           context.Context
-	ps            *pubsub.PubSub
-	nm            *nodeManager
-	am            *authManager
-	nodeTopic     *pubsub.Topic
-	nodeSubscribe *pubsub.Subscription
-	authTopic     *pubsub.Topic
-	authSubscribe *pubsub.Subscription
-	hostConnect   chan bool
+	privateKey string
+	listen     string
+	id         string
+
+	log         *zap.SugaredLogger
+	host        host.Host
+	ps          *pubsub.PubSub
+	topic       *pubsub.Topic
+	subscribe   *pubsub.Subscription
+	hostConnect chan bool
+	recvMessage chan *pubsub.Message
 }
 
-func (s *p2p) init(log *zap.SugaredLogger, nm *nodeManager, am *authManager) *p2p {
+func (s *p2p) init(log *zap.SugaredLogger) *p2p {
 	s.log = log
-	s.nm = nm
-	s.am = am
 	s.hostConnect = make(chan bool)
 	return s
 }
 
-func (s *p2p) getBootNodes() []string {
-	addrs := make([]string, 0)
-	if s.BootNode != "" {
-		addrs = append(addrs, s.BootNode)
+func (s *p2p) connect(addrs string) {
+	if addrs == "" {
+		return
 	}
-	for _, v := range s.nm.nodes {
-		addrs = append(addrs, v.Address)
-	}
-	return addrs
-}
-
-func (s *p2p) boot() {
-	ctx := context.Background()
-	for _, v := range s.getBootNodes() {
-		go func(addrs string, done chan bool) {
-			s.log.Debugf("try to connect to %s", addrs)
-			ma, err := ma.NewMultiaddr(addrs)
-			if err != nil {
-				s.log.Warnf("connect to %s failed, parse address failed. %s", addrs, err)
-				return
-			}
-			pi, err := peer.AddrInfoFromP2pAddr(ma)
-			if err != nil {
-				s.log.Warnf("connect to %s failed, parse address failed. %s", addrs, err)
-				return
-			}
-			if err := s.host.Connect(ctx, *pi); err != nil {
-				s.log.Debugf("connect to %s failed. %s", addrs, err)
-			} else {
-				s.log.Debugf("%s connected", addrs)
-				s.hostConnect <- true
-			}
-		}(v, s.hostConnect)
+	s.log.Debugf("try to connect to %s", addrs)
+	addrList := strings.Split(addrs, ",")
+	for _, v := range addrList {
+		if v == "" {
+			continue
+		}
+		ma, err := ma.NewMultiaddr(v)
+		if err != nil {
+			s.log.Warnf("connect to %s failed, parse address failed. %s", v, err)
+			return
+		}
+		pi, err := peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			s.log.Warnf("connect to %s failed, parse address failed. %s", v, err)
+			return
+		}
+		if err := s.host.Connect(context.Background(), *pi); err != nil {
+			s.log.Debugf("connect to %s failed. %s", v, err)
+		} else {
+			s.log.Debugf("%s connected", v)
+			s.hostConnect <- true
+		}
 	}
 }
 
 func (s *p2p) run() {
 	ctx := context.Background()
 	var err error
-	key, err := crypto.UnmarshalEd25519PrivateKey(ParsePrivateKey(s.PrivateKey))
+	key, err := crypto.UnmarshalEd25519PrivateKey(ParsePrivateKey(s.privateKey))
 	if err != nil {
 		s.log.Fatalf("parse private key failed. %s", err)
 	}
-	if s.host, err = libp2p.New(ctx, libp2p.Identity(key), libp2p.ListenAddrStrings(strings.Split(s.Address, ",")...)); err != nil {
+	if s.host, err = libp2p.New(ctx, libp2p.Identity(key), libp2p.ListenAddrStrings(strings.Split(s.listen, ",")...)); err != nil {
 		s.log.Fatalf("listen libp2p failed.%s", err)
 	}
+	s.id = s.host.ID().String()
 	s.log.Infof("start p2p listen on %s, id: %s", s.host.Addrs(), s.host.ID().String())
 	if s.ps, err = pubsub.NewGossipSub(ctx, s.host); err != nil {
 		s.log.Fatal("subpub create failed", err)
 	}
-	s.boot()
-	if s.authTopic, err = s.ps.Join("auth"); err != nil {
+	if s.topic, err = s.ps.Join("node"); err != nil {
 		s.log.Fatal("get topic failed. %s", err)
 	}
-	if s.authSubscribe, err = s.authTopic.Subscribe(); err != nil {
+	if s.subscribe, err = s.topic.Subscribe(); err != nil {
 		s.log.Fatal("get subscript failed. %s", err)
 	}
-	go s.authLoop()
-	if s.nodeTopic, err = s.ps.Join("node"); err != nil {
-		s.log.Fatal("get topic failed. %s", err)
-	}
-	if s.nodeSubscribe, err = s.nodeTopic.Subscribe(); err != nil {
-		s.log.Fatal("get subscript failed. %s", err)
-	}
-	go s.nodeLoop()
-	<-make(chan bool)
+	go s.loop()
 }
 
-func (s *p2p) nodeLoop() {
+func (s *p2p) loop() {
 	for {
-		m, err := s.nodeSubscribe.Next(context.Background())
+		m, err := s.subscribe.Next(context.Background())
 		if err != nil {
 			s.log.Warnf("node loop failed, %s", err)
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		data := m.GetData()
-		nodeMessage := &nodeMessage{}
-		json.Unmarshal(data, nodeMessage)
-		s.handleNodeMessage(nodeMessage)
+		s.recvMessage <- m
 	}
 }
 
-func (s *p2p) handleNodeMessage(m *nodeMessage) {
-	// mm := message{m}
-	// if !s.am.verify(mm) {
-	// 	s.log.Warnf("unauth node message received. Domain: %s.", m.getDomain())
-	// 	return
-	// }
-	// return
-}
-
-func (s *p2p) authLoop() {
-	for {
-		m, err := s.authSubscribe.Next(context.Background())
-		if err != nil {
-			s.log.Warnf("auth loop failed, %s", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		data := m.GetData()
-		authMessage := &AuthMessage{}
-		json.Unmarshal(data, authMessage)
-		if !s.am.add(*authMessage, false) {
-			s.log.Warnf("unauth auth message received. Domain: %s", authMessage.getDomain())
+func (s *p2p) broadcast(m rawMessage) bool {
+	if data, err := json.Marshal(message{
+		Type:    reflect.TypeOf(m).String(),
+		Message: m.Dump(),
+	}); err != nil {
+		s.log.Warnf("broadcast message failed, %s", err)
+		return false
+	} else {
+		if err := s.topic.Publish(context.Background(), data); err != nil {
+			s.log.Warnf("broadcast message failed, %s", err)
+			return false
 		}
 	}
+	return true
 }

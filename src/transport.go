@@ -1,4 +1,4 @@
 package higgs
 
-type transport interface {
+type transport struct {
 }

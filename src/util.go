@@ -41,7 +41,7 @@ func Ed25519Sign(key ed25519.PrivateKey, message string) string {
 }
 
 func Ed25519Verify(key ed25519.PublicKey, message string, sign string) bool {
-	if d, err := base64.RawStdEncoding.DecodeString(sign); err != nil {
+	if d, err := base64.StdEncoding.DecodeString(sign); err == nil {
 		return ed25519.Verify(key, []byte(message), d)
 	}
 	return false
