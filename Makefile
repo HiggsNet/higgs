@@ -1,3 +1,3 @@
 all:
 	mkdir -p build
-	go build -o build/higgs ./app
+	env CGO_BUILD=0 go build -o build/ConfigServer ./app/ConfigServer
