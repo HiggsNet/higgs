@@ -9,13 +9,14 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
 
 // NewNetns creates and returns named network namespace,
 // or the current namespace if no name is specified
-func NewNetns(name string) (netns.NsHandle, error) {
+func newNetns(name string) (netns.NsHandle, error) {
 	// shortcut for current namespace
 	if name == "" {
 		return netns.Get()
@@ -52,7 +53,7 @@ func NewNetns(name string) (netns.NsHandle, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to mount tmpfs onto runtime dir %s: %s", runtimeDir, err)
 		}
-		zap.S().Debugf("created netns runtime dir: %s", runtimeDir)
+		//log.Debugf("created netns runtime dir: %s", runtimeDir)
 	}
 
 	// create the fd for the new namespace
@@ -68,7 +69,7 @@ func NewNetns(name string) (netns.NsHandle, error) {
 	// cleanup the fd file in case of failure
 	// this has no effect when the new netns is successfully mounted
 	defer os.RemoveAll(nsPath)
-	zap.S().Debugf("created netns fd: %s", nsPath)
+	//log.Debugf("created netns fd: %s", nsPath)
 
 	// do the dirty jobs in a locked os thread
 	// go runtime will reap it instead of reuse it
@@ -94,6 +95,14 @@ func NewNetns(name string) (netns.NsHandle, error) {
 		return 0, err
 	}
 
-	zap.S().Debugf("created namespace: %s", name)
+	//log.Debugf("created namespace: %s", name)
 	return netns.GetFromName(name)
+}
+
+func newNetlink(netns string) (*netlink.Handle, error) {
+	if ns, err := newNetns(netns); err != nil {
+		return nil, err
+	} else {
+		return netlink.NewHandleAt(ns)
+	}
 }

@@ -1,32 +1,39 @@
 package higgs
 
 import (
-	"context"
-	"net"
-
-	"github.com/vishvananda/netlink"
+	"go.uber.org/zap"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 type WireguardPeer struct {
 	wgtypes.PeerConfig
-	ctx  context.Context
-	Canc context.CancelFunc
 }
 
-func (s *WireguardPeer) GetContext() context.Context {
-	return s.ctx
+type WireguardConfig struct {
+	wgtypes.Config
+	TunnelConfig
+	Privkey string `hcl:"Privkey,attr"`
+	Port    int    `hcl:"Port,attr"`
+	Host    string `hcl:"Host,attr"`
 }
 
-func (s *WireguardPeer) GetAddr() net.Addr {
-	return s.Endpoint
+func (s *WireguardConfig) init(logger *zap.SugaredLogger) {
+	s.TunnelConfig.init(logger)
+	s.log = s.TunnelConfig.log.With("type", "wireguard")
+	s.log.Debug("Init WireguardConfig")
+	s.Config = wgtypes.Config{}
+	if privKey, err := wgtypes.ParseKey(s.Privkey); err != nil {
+		s.log.Fatal(err)
+	} else {
+		s.Config.PrivateKey = &privKey
+	}
+	s.Config.ListenPort = &s.Port
 }
 
-type Wireguard struct {
-	netlink.LinkAttrs
-	CreateNS, RuningNS int
+func (s *WireguardConfig) LoadFromSys() {
+
 }
 
-func (*Wireguard) LoadFromSys() {
-	s, err := netlink.LinkByName()
+func (s *WireguardConfig) apply() {
+	s.log.Debug("Apply WireguardConfig")
 }
