@@ -1,11 +1,7 @@
 package main
 
-import (
-	"log"
-
-	"github.com/miekg/dns"
-	"github.com/peterzen/goresolver"
-)
+import "log"
 
 func main() {
+	log.Println("higgs starting...")
 }
