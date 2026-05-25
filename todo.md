@@ -82,11 +82,22 @@
   - `permissions: ["delegate", "write", "allocate-ip"]`
   - `signature: 0x...`（由 `catofes.` 的当前持有者签名）
 
+**Authority（权限持有者）**
+- 每个 Zone 的实际写权限主体不是单 key，而是可扩展的 `ZoneAuthority`（keyset + threshold + epoch）
+- Phase 1 可先退化为 `threshold=1`，但数据模型从第一天保留多 key/轮换能力
+- 根 key 仅用于签发/轮换 authority；日常写入使用 operational key
+
 **Record（K-V 记录）**
 - Zone 内的任意键值对，key 形如 `nodes/node1/wg/pubkey`、`ips/10.0.1.0/24`
 - 每条 Record 必须由该 Zone 的当前持有者签名
+- Record 必须带类型与版本链，禁止仅靠时间戳裁决冲突
 - 特殊保留 key：
   - `@delegation`：本 Zone 自身的委派信息（即"我是谁授权的"）
+
+**@delegation 权威性规则（必须固定）**
+- 父 Zone 中 `delegations/<child>` 是唯一权威授权来源
+- 子 Zone 中 `@delegation` 仅作为缓存/证明材料，不单独产生授权
+- 如父 Zone delegation 与子 Zone `@delegation` 不一致，视为冲突并拒绝激活该 Zone 更新
 
 **配置向下覆盖（Fallback/继承）**
 - 查询 `pek.catofes./policy/mtu` 时，先在该 Zone 查找
@@ -174,6 +185,13 @@ node1.catofes.
 - `FETCH_RECORD`: 请求单条 record 内容
 - `ANNOUNCE`: 主动广播某个 Zone 的更新（低频次）
 
+**Gossip 安全边界（Phase 1 必需）**
+- 仅接受 bootstrap 列表、已验证节点、显式 allowlist 节点的同步连接
+- `FETCH_ZONE` 前先验证 zone path 是否位于可信根树下
+- 限制单次同步资源：最大 Zone 数、最大 Record 数、最大字节数
+- 收到的数据先进入 `quarantine store`，签名链通过后再提升到 `active store`
+- 状态分层必须明确：`untrusted received data` -> `verified candidate state` -> `active network state`
+
 **同步流程：**
 1. 节点 A 连接节点 B，交换各自的 zone hash 映射表
 2. A 发现 B 有更新的 `catofes.`（hash 不同）
@@ -184,7 +202,16 @@ node1.catofes.
 
 **并发与冲突：**
 - Zone 天然有单一持有者，同一 Zone 内的写入冲突应由该持有者避免。
-- 若因网络分区恢复等原因检测到同一 Zone 同一 key 的冲突：**以 Timestamp 最新且签名有效的 Record 为准**，旧版本自动丢弃。
+- 若检测到同一 Zone 同一 key 的冲突，采用版本链规则：
+  1. `Version` 更高者胜；
+  2. `Version` 相同但内容不同，进入 `fork/conflict`；
+  3. `fork/conflict` 不自动裁决，需 Zone owner（或上级 Zone）签发修正记录。
+- `Timestamp` 仅作为审计字段，不参与最终裁决。
+
+**Merkle 实施分层（降低 Phase 1 风险）**
+- Phase 1A: `ZoneRoot = hash(sorted(records + delegations))`，hash 不同直接拉完整 Zone
+- Phase 1B: 引入 per-record hash diff
+- Phase 2+: 再上完整 Merkle path/proof 增量同步
 
 ---
 
@@ -208,13 +235,31 @@ type Delegation struct {
     Signature   []byte            // 签名
 }
 
+  // ZoneAuthority Zone 的写权限主体（支持轮换、多 key、门限）
+  type ZoneAuthority struct {
+    Zone      ZonePath
+    Epoch     uint64
+    Keys      []AuthorizedKey
+    Threshold uint8
+  }
+
+  type AuthorizedKey struct {
+    Key         ed25519.PublicKey
+    Capabilities []Permission
+    NotBefore   int64
+    NotAfter    int64
+  }
+
 // Record K-V 记录
 type Record struct {
     Zone      ZonePath
     Key       string            // 如 "wg/pubkey", "ips/10.0.1.0/24"
-    Value     []byte            // 任意值，建议内部再用 msgpack/json
+  Type      string            // 如 "wireguard.public_key", "policy.uint"
+  Value     []byte
     
-    Timestamp int64             // UnixNano，用于冲突解决
+  Version   uint64
+  PrevHash  []byte
+  Timestamp int64             // 审计字段，不参与最终冲突裁决
     SignedBy  ed25519.PublicKey // 签名者的公钥（必须是该 Zone 的当前持有者）
     Signature []byte            // 对 (Zone+Key+Value+Timestamp) 的签名
 }
@@ -223,6 +268,7 @@ type Record struct {
 type ZoneState struct {
     Path        ZonePath
     SelfDelegation *Delegation     // @delegation：本 Zone 是如何被授权的
+  Authority   *ZoneAuthority
     Delegations map[ZonePath]*Delegation // 子 Zone 的委派
     Records     map[string]*Record // 本 Zone 的 K-V，key 为 record key
     
@@ -261,6 +307,18 @@ type TransportLink struct {
     Params     map[string]string
 }
 
+  // LinkInstance 路由适配器消费的链路实例，不直接耦合 PeerView
+  type LinkInstance struct {
+    ID         string
+    Peer       ZonePath
+    Transport  string
+    Interface  string
+    LocalAddr  netip.Addr
+    RemoteAddr netip.Addr
+    Metric     uint32
+    State      string
+  }
+
 // PeerView 从配置系统推导出的对等节点视图（用于生成 WG/路由配置）
 type PeerView struct {
     NodeID      []byte        // blake2b(pubkey) 或直接用 pubkey
@@ -270,11 +328,38 @@ type PeerView struct {
     Endpoints   []Endpoint
     Links       []TransportLink
 }
+
+  // 建议的内置记录类型（用于 schema 约束）
+  // node.identity
+  // node.endpoint
+  // wireguard.public_key
+  // wireguard.listen_port
+  // ipam.assignment
+  // route.announcement
+  // policy.uint
+  // policy.string
+  // policy.string_list
 ```
 
 ---
 
 ## 四、分阶段实施计划
+
+### Phase 1.0: 单机配置模型（建议先做，预计 1-2 周）
+**目标：** 在单机完成可验证的配置状态机，不依赖网络。
+
+- [ ] identity 生成、存储与签名验证
+- [ ] zone/delegation/record/authority/version-chain 基础模型
+- [ ] bbolt 持久化与加载恢复
+- [ ] CLI: `init`, `zone show`, `record put`, `verify`
+
+### Phase 1.1: 两节点同步（建议拆分，预计 1-2 周）
+**目标：** 跑通安全边界明确的同步流程。
+
+- [ ] bootstrap peer 连接
+- [ ] whole-zone 同步（先不做复杂 Merkle diff）
+- [ ] `quarantine -> verify -> active` 状态晋升
+- [ ] CLI: `sync status`
 
 ### Phase 1: 核心骨架 + Zone K-V + WireGuard + Babeld（预计 5-7 周）
 **目标：** 让两个节点能自动发现、同步 Zone 配置、建立 WG 隧道、运行 Babeld 互相学习路由、ping 通。
@@ -293,18 +378,21 @@ type PeerView struct {
   - 内存中的 `ZoneState` 管理（map[ZonePath]*ZoneState）
   - 本地持久化：bbolt，按 Zone 分 bucket
   - `Get(fqkey)` 实现：解析 Zone + Key → 本 Zone 查找 → 向上 fallback 直到根
-  - `Put(record)` 实现：验证签名者是否为该 Zone 当前持有者 → 写入 → 更新 Merkle Tree
+  - `Put(record)` 实现：验证签名者是否属于 ZoneAuthority 且满足权限 → 写入 → 更新 ZoneRoot
+  - 冲突处理：`Version + PrevHash`，同版本冲突进入 fork，禁止自动时间戳覆盖
 
 - [ ] **1.4 Merkle Tree**
-  - 每个 Zone 独立构建 Merkle Tree（delegations + records）
-  - `ComputeRoot()`、`GetDiff(remoteRoot)` → 返回缺失的 leaf hashes
-  - 全局 Zone Root 集合的管理
+  - Phase 1A: `ComputeZoneRoot()`（sorted hash）
+  - Phase 1B: `GetZoneDiff()`（per-record hash）
+  - Phase 2+: 完整 Merkle tree diff
 
 - [ ] **1.5 Gossip 传输层**
   - UDP socket 监听（固定端口，如 33434）
   - Protobuf 消息定义：`Ping`, `Pong`, `FetchZone`, `FetchRecord`, `Announce`
   - Anti-replay：消息带 64-bit nonce + 时间戳窗口（±5分钟）
   - 节点发现：通过配置文件中的 bootstrap 列表启动
+  - 限流与配额：每 peer 限制速率/字节/对象数
+  - 未验证状态隔离存储：禁止直接写 active StateDB
 
 - [ ] **1.6 签名验证链**
   - `VerifyDelegation(d, parentZone)`：检查签名者 = parentZone 的当前持有者
@@ -314,7 +402,8 @@ type PeerView struct {
 - [ ] **1.7 WireGuard 控制模块**
   - 通过 `wgctrl-go` 操作内核 WG 接口
   - 监听 `*.<parent_zone>./wg/*` Record 变更
-  - 自动生成 PeerView → 应用 WG 配置（add/remove/update peer）
+  - 自动生成 PeerView 与 LinkInstance → 应用 WG 配置（add/remove/update peer）
+  - 增加拓扑策略：`policy/topology`、`policy/max-active-links`
 
 - [ ] **1.8 Babeld 路由适配器**
   - 启动 babeld 并通过控制 socket（`-G` Unix/TCP socket）发送命令
@@ -339,9 +428,9 @@ type PeerView struct {
   - Gossip 全网传播后，新节点自动被所有节点识别并建立 WG Peer
 
 - [ ] **2.2 IP 分配管理**
-  - 在 Zone 下记录 `ips/<prefix>` Record，标记 delegated_to 或 assigned_to
+  - 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
   - 节点查询自己的 Zone fallback 路径，汇总所有分配到的 IPs
-  - 冲突检测：同一 IP 被多个节点 claim 时，按签名者优先级/时间戳裁决
+  - 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
 
 - [ ] **2.3 链路健康检测**
   - 在 WG 隧道上周期性发送 ICMP/自定义 keepalive
@@ -366,10 +455,8 @@ type PeerView struct {
   - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
 - [ ] **3.2 UDP 端口跳频（Port Hopping）**
-  - 设计：为 WG 预先协商 N 个端口和一个时间窗口（如 30s）
-  - 使用基于共享密钥的确定性端口序列（类似 TOTP）
-  - 双方同步切换监听/连接端口
-  - 平滑迁移：新端口建立握手成功后，延迟几秒再关闭旧端口
+  - 先实现多 endpoint / 多 port probe 与质量选择
+  - 如需 rotate，必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径
 
 - [ ] **3.3 IKEv2 (StrongSwan) 传输驱动**
   - 通过 vici 协议控制 StrongSwan
