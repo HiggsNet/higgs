@@ -37,7 +37,7 @@
 |------|------|------|
 | 配置同步机制未细化 | 这是整个系统的基石，直接决定项目成败 | 采用 **DNS 式层级作用域 (Zone) + Signed Merkle DAG + Gossip** 方案 |
 | 同时支持 WG/IKEv2/VXLAN/SRv6/Babel/BGP | 工作量巨大，MVP 周期过长 | 第一阶段只保留 **WireGuard + Babeld** |
-| 跳频/多线路并行 | 属于高级对抗/优化特性 | 放到 Phase 3 |
+| 跳频/多线路并行 | 属于高级对抗/优化特性 | 放到 Phase 5 |
 | 与系统服务交互方式未定 | 代码无法开始写 | 明确区分 `netlink`/`exec`/`配置文件` 三种模式 |
 
 ### 1.2 推荐总体架构（核心 + 插件）
@@ -74,30 +74,36 @@
 - 每个 Zone 是一个独立的命名空间，内部包含 K-V 记录和子 Zone 委派声明
 - Zone `A.B.` 的创建必须由 Zone `B.` 的当前持有者签名授权
 
-**Delegation（委派）**
-- 记录在某个 Zone 下，声明子 Zone 由哪个公钥管理
-- 例：在 `catofes.` 下有一条 delegation：
-  - `zone: pek.catofes.`
-  - `delegate_key: 0xAABBCC...`（被委派者的 ed25519 公钥）
-  - `permissions: ["delegate", "write", "allocate-ip"]`
-  - `signature: 0x...`（由 `catofes.` 的当前持有者签名）
-
-**Authority（权限持有者）**
+**ZoneAuthority（Zone 的写权限主体）**
 - 每个 Zone 的实际写权限主体不是单 key，而是可扩展的 `ZoneAuthority`（keyset + threshold + epoch）
-- Phase 1 可先退化为 `threshold=1`，但数据模型从第一天保留多 key/轮换能力
+- Phase 0 可先退化为 `threshold=1`，但数据模型从第一天保留多 key/轮换能力
 - 根 key 仅用于签发/轮换 authority；日常写入使用 operational key
+- `ZoneAuthority` 变更（epoch 递增）时，父 Zone 的 `Delegation` 必须同步更新 `AuthorityEpoch` + `AuthorityHash`
+
+**Delegation（委派）**
+- 父 Zone 授权的不是"某个 key"，而是"某个 ZoneAuthority"
+- `Delegation` 包含：
+  - `zone: pek.catofes.`
+  - `authority_epoch: 3`
+  - `authority_hash: 0x...`（blake2b(ZoneAuthority)）
+  - `authority: ZoneAuthority{Keys: [...], Threshold: 1, Epoch: 3}`
+  - `signature: 0x...`（由父 Zone 的当前持有者签名）
+- 子 Zone 的 `ParentProof` 只是该 `Delegation` 的缓存副本，**唯一权威来源始终是父 Zone 中的 `delegations/<child>` 记录**
 
 **Record（K-V 记录）**
-- Zone 内的任意键值对，key 形如 `nodes/node1/wg/pubkey`、`ips/10.0.1.0/24`
-- 每条 Record 必须由该 Zone 的当前持有者签名
-- Record 必须带类型与版本链，禁止仅靠时间戳裁决冲突
-- 特殊保留 key：
-  - `@delegation`：本 Zone 自身的委派信息（即"我是谁授权的"）
-
-**@delegation 权威性规则（必须固定）**
-- 父 Zone 中 `delegations/<child>` 是唯一权威授权来源
-- 子 Zone 中 `@delegation` 仅作为缓存/证明材料，不单独产生授权
-- 如父 Zone delegation 与子 Zone `@delegation` 不一致，视为冲突并拒绝激活该 Zone 更新
+- Zone 内的任意键值对，key 形如 `wireguard/public_key`、`routes/announcements/10.0.1.1_32`
+- 每条 Record 必须由该 Zone 当前有效的 `ZoneAuthority` 中的某个 key 签名
+- Record 必须带类型与版本链，`Timestamp` 仅作为审计字段，**禁止用于冲突裁决**
+- 建议内置类型：
+  - `node.identity`
+  - `node.endpoint`
+  - `wireguard.public_key`
+  - `wireguard.listen_port`
+  - `ipam.assignment`
+  - `route.announcement`
+  - `policy.uint`
+  - `policy.string`
+  - `policy.string_list`
 
 **配置向下覆盖（Fallback/继承）**
 - 查询 `pek.catofes./policy/mtu` 时，先在该 Zone 查找
@@ -109,52 +115,59 @@
 
 ```
 . (根 Zone，由创世主密钥持有)
-├── @delegation
-│   └── {zone: ".", delegate_key: <root-pubkey>, signed_by: <root-pubkey>}
+├── authority
+│   └── ZoneAuthority{Epoch: 1, Keys: [<root-pubkey>], Threshold: 1}
 ├── records/
 │   ├── policy/allowed-transports  → "wireguard"
 │   ├── policy/default-ip-pool     → "10.0.0.0/8"
 │   └── policy/mtu                 → "1420"
 │
 └── delegations/
-    └── catofes. → {delegate_key: <alice-pubkey>, permissions: ["delegate","write","allocate-ip"], signed_by: <root>}
+    └── catofes. → Delegation{
+        AuthorityEpoch: 1,
+        AuthorityHash: 0x...,
+        Authority: ZoneAuthority{Keys: [<alice-pubkey>], Threshold: 1, Epoch: 1},
+        SignedBy: <root-pubkey>
+    }
 
 catofes.
-├── @delegation
-│   └── {zone: "catofes.", delegate_key: <alice-pubkey>, signed_by: <root>}
+├── authority
+│   └── ZoneAuthority{Epoch: 1, Keys: [<alice-pubkey>], Threshold: 1}
 ├── records/
 │   ├── policy/mtu                 → "1400"          ← 覆盖根的 1420
-│   └── ips/10.0.1.0/24            → {delegated_to: "pek.catofes."}
+│   └── ipam/pools/10.0.1.0/24    → {delegated_to: "pek.catofes."}
 │
 └── delegations/
-    ├── pek.catofes.  → {delegate_key: <bob-pubkey>, signed_by: <alice>}
-    └── node1.catofes. → {delegate_key: <node1-pubkey>, permissions: ["write-self"], signed_by: <alice>}
+    ├── pek.catofes.  → Delegation{Authority: ZoneAuthority{Keys: [<bob-pubkey>], ...}, SignedBy: <alice>}
+    └── node1.catofes. → Delegation{Authority: ZoneAuthority{Keys: [<node1-pubkey>], ...}, SignedBy: <alice>}
 
 pek.catofes.
-├── @delegation
-│   └── {zone: "pek.catofes.", delegate_key: <bob-pubkey>, signed_by: <alice>}
+├── authority
+│   └── ZoneAuthority{Epoch: 1, Keys: [<bob-pubkey>], Threshold: 1}
 └── records/
-    └── ips/10.0.1.1/32            → {assigned_to: "node1.pek.catofes."}  ← bob 分配的 IP
+    └── ipam/assignments/10.0.1.1/32 → {assigned_to: "node1.pek.catofes."}  ← bob 分配的 IP
 
 node1.catofes.
-├── @delegation
-│   └── {zone: "node1.catofes.", delegate_key: <node1-pubkey>, signed_by: <alice>}
+├── authority
+│   └── ZoneAuthority{Epoch: 1, Keys: [<node1-pubkey>], Threshold: 1}
 └── records/
-    ├── wg/pubkey                   → "0xnode1wgpubkey..."
-    ├── wg/endpoint                 → "1.2.3.4:51820"
-    ├── wg/listen-port              → "51820"
-    └── local-routes                → "10.0.1.1/32, fd00::1/128"
+    ├── identity                    → {name: "node1"}
+    ├── endpoints/public            → "1.2.3.4:51820"
+    ├── wireguard/public_key        → "0xnode1wgpubkey..."
+    ├── wireguard/listen_port       → "51820"
+    └── routes/announcements/10.0.1.1_32 → "10.0.1.1/32"
 ```
 
 **验证签名链示例：**
-- 读取 `node1.catofes./wg/pubkey` 时：
-  1. 取出 Record，验证其签名者 = `node1.catofes.` 的 delegate_key
-  2. 验证 `node1.catofes.` 的 delegation 签名者 = `catofes.` 的 delegate_key
-  3. 验证 `catofes.` 的 delegation 签名者 = `.` 的 delegate_key（根自签）
-  4. 全部通过 → 配置可信
+- 读取 `node1.catofes./wireguard/public_key` 时：
+  1. 取出 Record，验证 `SignedBy` 是否属于 `node1.catofes.` 的 `ZoneAuthority.Keys`
+  2. 验证该 key 的 `Capabilities` 包含 `write`（或更细粒度的 `write:wireguard`）
+  3. 验证 `node1.catofes.` 的 `ParentProof`（Delegation）签名者属于 `catofes.` 的 `ZoneAuthority.Keys`
+  4. 验证 `catofes.` 的 `ParentProof` 签名者属于 `.` 的 `ZoneAuthority.Keys`
+  5. 全部通过 → 配置可信
 
 **查询与覆盖示例：**
-- `Get("node1.catofes./wg/pubkey")` → 命中 `node1.catofes.` 的 `wg/pubkey`
+- `Get("node1.catofes./wireguard/public_key")` → 命中 `node1.catofes.` 的 `wireguard/public_key`
 - `Get("pek.catofes./policy/mtu")` → `pek.catofes.` 无此 key → 查 `catofes./policy/mtu` → 命中 `"1400"`
 - `Get("node1.catofes./policy/allowed-transports")` → 一路回退到 `.` → 命中 `"wireguard"`
 
@@ -162,21 +175,70 @@ node1.catofes.
 
 | 原需求 | Zone K-V 映射 |
 |--------|--------------|
-| 节点准入 | 父 Zone 签发一个 `nodeX.parent.` 的 delegation |
-| 节点自宣告信息 | 节点用自身私钥在 `nodeX.parent.` 下写 `wg/*`、`endpoint` 等 Record |
-| IP 分配 | 在 Zone 下写 `ips/<prefix>` Record，值指明 delegated_to 或 assigned_to |
-| 路由宣告 | `nodeX.parent./local-routes` Record |
+| 节点准入 | 父 Zone 签发一个 `nodeX.parent.` 的 delegation（委派 ZoneAuthority） |
+| 节点自宣告信息 | 节点用自身 operational key 在 `nodeX.parent.` 下写 `wireguard/*`、`endpoints/*`、`routes/*` 等 Record |
+| IP 分配 | 在 Zone 下写 `ipam/pools/*` 或 `ipam/assignments/*` Record |
+| 路由宣告 | `nodeX.parent./routes/announcements/<prefix>` Record |
 | 全局策略 | 在 `.` 或中间 Zone 设置 `policy/*` Record，被子 Zone 继承 |
-| 传输层参数 | `nodeX.parent./wg/*`、`nodeX.parent./ipsec/*` 等 Record |
+| 传输层参数 | `nodeX.parent./wireguard/*`、`nodeX.parent./ipsec/*` 等 Record |
 
-### 2.4 Merkle DAG + Gossip 在此模型下的实现
+### 2.4 签名规范（必须无歧义）
+
+**Domain Separator（防止跨对象签名重放）：**
+- Record: `"higgs.record.v1"`
+- Delegation: `"higgs.delegation.v1"`
+- ZoneAuthority: `"higgs.authority.v1"`
+- Gossip message: `"higgs.gossip.v1"`
+
+**Record 签名内容（canonical serialization）：**
+```text
+Sign(
+  "higgs.record.v1",
+  zone,       // e.g. "node1.catofes."
+  key,        // e.g. "wireguard/public_key"
+  type,       // e.g. "wireguard.public_key"
+  value_hash, // blake2b(value)
+  version,    // uint64, per-zone-per-key
+  prev_hash,  // blake2b(prev_record) or nil
+  timestamp,  // int64, audit only
+  signer_key_id // blake2b(signer_pubkey), for lookup
+)
+```
+
+**Delegation 签名内容：**
+```text
+Sign(
+  "higgs.delegation.v1",
+  parent_zone,
+  child_zone,
+  authority_epoch,
+  authority_hash, // blake2b(ZoneAuthority)
+  expires_at,
+  signer_key_id
+)
+```
+
+### 2.5 Merkle DAG + Gossip 在此模型下的实现
 
 **Merkle Tree 组织：**
-- 每个 Zone 维护自己的独立 Merkle Tree，包含两部分：
-  1. `delegations_tree`: 所有子 Zone 的 delegation 记录
-  2. `records_tree`: 本 Zone 的所有 K-V 记录
-- Zone 的 Root Hash = Hash(delegations_root + records_root + @delegation_hash)
-- 全局状态 = 所有 Zone Root Hash 的集合（可再包一层 Merkel Tree）
+- 每个 Zone **独立维护一棵 Merkle Tree**，包含三部分：
+  1. `authority_hash`: 本 Zone 的 ZoneAuthority hash
+  2. `delegations_tree`: 所有子 Zone 的 delegation 记录
+  3. `records_tree`: 本 Zone 的所有 K-V 记录（每条 key 只取最新 active record）
+- Zone 的 Root Hash = Hash(authority_hash + delegations_root + records_root)
+- **全局状态** = 所有 Zone Root Hash 再组成一棵顶层 Merkle Tree（或简单排序后的哈希链）
+- 这样设计的好处：Gossip 时只需交换顶层全局 hash 和变更 Zone 的 hash，同步粒度最细
+
+**Version 链模型（per-zone-per-key）：**
+- `Version` 是 **per-zone-per-key** 的版本号，不是整个 Zone 的全局版本
+- `PrevHash` 指向同一个 Zone + Key 的上一版本 Record hash
+- 同 key 冲突时：Version 更高者胜；Version 相同但内容不同 → 进入 `fork/conflict`，不自动裁决，需 Zone owner（或上级 Zone）签发修正记录
+- `Timestamp` 仅作为审计字段，不参与最终裁决
+- ZoneRoot 由每个 key 的 latest active record 计算：
+  ```text
+  ZoneRoot = Hash(authority_hash + delegations_root + sorted(latest_record_hashes))
+  ```
+- 旧版本记录保留在 `RecordHistory` 中作为审计 log，但 active state 只使用每个 key 的 latest non-conflict record
 
 **Gossip 协议：**
 - `PING`: 携带 `map[zone_name]zone_root_hash`（类似交换各自持有的 zone 版本摘要）
@@ -195,27 +257,27 @@ node1.catofes.
 **同步流程：**
 1. 节点 A 连接节点 B，交换各自的 zone hash 映射表
 2. A 发现 B 有更新的 `catofes.`（hash 不同）
-3. A 向 B 请求 `catofes.` 的 Merkle Tree 顶层
-4. 通过 Merkle diff 快速定位变化的子分支（可能是新 delegation 或 record 变更）
-5. 只拉取变化的叶子节点
-6. 本地验证签名链 → 验证通过 → 应用更新 → 重新计算本地 hash → 继续 Gossip
+3. A 向 B 请求 `catofes.` 的完整内容（Phase 1 先 whole-zone sync，不先做 Merkle diff）
+4. 数据进入 quarantine store
+5. 本地逐条验证签名链（Delegation → Authority → Record）
+6. 验证通过 → 提升到 active store → 重新计算本地 hash → 继续 Gossip
 
 **并发与冲突：**
 - Zone 天然有单一持有者，同一 Zone 内的写入冲突应由该持有者避免。
-- 若检测到同一 Zone 同一 key 的冲突，采用版本链规则：
+- 若因网络分区恢复等原因检测到同一 Zone 同一 key 的冲突：
   1. `Version` 更高者胜；
   2. `Version` 相同但内容不同，进入 `fork/conflict`；
   3. `fork/conflict` 不自动裁决，需 Zone owner（或上级 Zone）签发修正记录。
 - `Timestamp` 仅作为审计字段，不参与最终裁决。
 
 **Merkle 实施分层（降低 Phase 1 风险）**
-- Phase 1A: `ZoneRoot = hash(sorted(records + delegations))`，hash 不同直接拉完整 Zone
+- Phase 1A: `ZoneRoot = hash(sorted(records + delegations + authority))`，hash 不同直接拉完整 Zone
 - Phase 1B: 引入 per-record hash diff
 - Phase 2+: 再上完整 Merkle path/proof 增量同步
 
 ---
 
-## 三、核心数据结构（Phase 1 必须定义）
+## 三、核心数据结构（Phase 0 必须定义）
 
 ```go
 // ZonePath 作用域路径，如 "pek.catofes."
@@ -224,61 +286,80 @@ type ZonePath string
 func (zp ZonePath) Parent() ZonePath   // "pek.catofes." → "catofes."
 func (zp ZonePath) IsRoot() bool      // "."
 
-// Delegation 委派记录：谁被授权管理某个子 Zone
-type Delegation struct {
-    ZoneName    ZonePath          // 被委派的 Zone，如 "pek.catofes."
-    DelegateKey ed25519.PublicKey // 被委派者的公钥
-    Permissions []Permission      // [PermDelegate, PermWrite, PermAllocateIP, ...]
-    ExpiresAt   *time.Time        // 可选过期时间
-    
-    SignedBy    ed25519.PublicKey // 签名者的公钥（即父 Zone 的当前持有者）
-    Signature   []byte            // 签名
+// Permission 能力枚举
+type Permission string
+const (
+    PermWrite       Permission = "write"
+    PermWriteWireGuard Permission = "write:wireguard"
+    PermWriteRoute  Permission = "write:route"
+    PermDelegate    Permission = "delegate"
+    PermAllocateIP  Permission = "allocate-ip"
+)
+
+// Capability key 的能力声明
+type Capability struct {
+    Permissions []Permission
+    KeyPrefix   string // 可选：限制只能写特定 key 前缀
 }
 
-  // ZoneAuthority Zone 的写权限主体（支持轮换、多 key、门限）
-  type ZoneAuthority struct {
+// AuthorizedKey ZoneAuthority 中的授权 key
+type AuthorizedKey struct {
+    Key          ed25519.PublicKey
+    NotBefore    int64
+    NotAfter     int64
+    Capabilities []Capability
+}
+
+// ZoneAuthority Zone 的写权限主体（支持轮换、多 key、门限）
+type ZoneAuthority struct {
     Zone      ZonePath
     Epoch     uint64
     Keys      []AuthorizedKey
     Threshold uint8
-  }
+}
 
-  type AuthorizedKey struct {
-    Key         ed25519.PublicKey
-    Capabilities []Permission
-    NotBefore   int64
-    NotAfter    int64
-  }
+// Delegation 委派记录：父 Zone 授权子 Zone 由哪个 ZoneAuthority 管理
+type Delegation struct {
+    ZoneName       ZonePath
+    AuthorityEpoch uint64
+    AuthorityHash  []byte      // blake2b(ZoneAuthority)
+    Authority      ZoneAuthority
+    ExpiresAt      *time.Time
+
+    SignedBy       ed25519.PublicKey // 父 Zone Authority 中的某个 key
+    Signature      []byte
+}
 
 // Record K-V 记录
 type Record struct {
     Zone      ZonePath
-    Key       string            // 如 "wg/pubkey", "ips/10.0.1.0/24"
-  Type      string            // 如 "wireguard.public_key", "policy.uint"
-  Value     []byte
-    
-  Version   uint64
-  PrevHash  []byte
-  Timestamp int64             // 审计字段，不参与最终冲突裁决
-    SignedBy  ed25519.PublicKey // 签名者的公钥（必须是该 Zone 的当前持有者）
-    Signature []byte            // 对 (Zone+Key+Value+Timestamp) 的签名
+    Key       string
+    Type      string
+    Value     []byte
+    ValueHash []byte        // blake2b(value)
+    Version   uint64        // per-zone-per-key version chain
+    PrevHash  []byte        // 指向同 zone+key 上一版本
+    Timestamp int64         // 审计字段，不参与冲突裁决
+
+    SignedBy  ed25519.PublicKey // 必须是该 Zone 当前 ZoneAuthority.Keys 中的某个 key
+    Signature []byte            // domain + zone + key + type + value_hash + version + prev_hash + timestamp + signer_key_id
 }
 
 // ZoneState 一个 Zone 的完整本地状态
 type ZoneState struct {
-    Path        ZonePath
-    SelfDelegation *Delegation     // @delegation：本 Zone 是如何被授权的
-  Authority   *ZoneAuthority
-    Delegations map[ZonePath]*Delegation // 子 Zone 的委派
-    Records     map[string]*Record // 本 Zone 的 K-V，key 为 record key
-    
-    MerkleRoot  []byte            // 缓存的 Merkle Root Hash
+    Path           ZonePath
+    Authority      *ZoneAuthority         // 本 Zone 当前 authority
+    ParentProof    []*Delegation          // 父级到根的 proof chain（缓存，非权威）
+    Delegations    map[ZonePath]*Delegation // 子 Zone 的委派
+    Records        map[string]*Record     // key → latest active record
+    RecordHistory  map[string][]*Record   // key → version chain（审计）
+    MerkleRoot     []byte                 // 缓存的 Merkle Root Hash
 }
 
 // NetworkState 全局网络状态（所有 Zone 的集合）
 type NetworkState struct {
     Zones map[ZonePath]*ZoneState
-    // 可选：全局 Merkle Root = MerkleTree(Hash(每个 Zone.MerkleRoot))
+    // 全局 Merkle Root = MerkleTree(sorted(每个 Zone.MerkleRoot))
     GlobalRoot []byte
 }
 
@@ -286,7 +367,7 @@ type NetworkState struct {
 type NodeIdentity struct {
     PrivateKey ed25519.PrivateKey
     PublicKey  ed25519.PublicKey
-    
+
     // 本节点被授权管理的 Zone 列表（通常只有一个，如 node1.catofes.）
     ManagedZones []ZonePath
 }
@@ -307,8 +388,8 @@ type TransportLink struct {
     Params     map[string]string
 }
 
-  // LinkInstance 路由适配器消费的链路实例，不直接耦合 PeerView
-  type LinkInstance struct {
+// LinkInstance 路由适配器消费的链路实例，不直接耦合 PeerView
+type LinkInstance struct {
     ID         string
     Peer       ZonePath
     Transport  string
@@ -317,167 +398,240 @@ type TransportLink struct {
     RemoteAddr netip.Addr
     Metric     uint32
     State      string
-  }
-
-// PeerView 从配置系统推导出的对等节点视图（用于生成 WG/路由配置）
-type PeerView struct {
-    NodeID      []byte        // blake2b(pubkey) 或直接用 pubkey
-    Zone        ZonePath      // 如 "node1.catofes."
-    PublicKey   []byte        // wg pubkey
-    AllowedIPs  []net.IPNet   // 从 Zone 的 local-routes + 分配到的 IPs 汇总
-    Endpoints   []Endpoint
-    Links       []TransportLink
 }
 
-  // 建议的内置记录类型（用于 schema 约束）
-  // node.identity
-  // node.endpoint
-  // wireguard.public_key
-  // wireguard.listen_port
-  // ipam.assignment
-  // route.announcement
-  // policy.uint
-  // policy.string
-  // policy.string_list
+// PeerView 从配置系统推导出的对等节点视图
+type PeerView struct {
+    NodeID           []byte
+    Zone             ZonePath
+    PublicKey        []byte         // wg pubkey
+    TunnelAllowedIPs []netip.Prefix // WG 只放 tunnel IP /32 或 /128
+    AnnouncedRoutes  []netip.Prefix // 业务路由，交给 Babeld
+    Endpoints        []Endpoint
+    Links            []TransportLink
+}
 ```
 
 ---
 
-## 四、分阶段实施计划
+## 四、验证逻辑（必须精确定义）
 
-### Phase 1.0: 单机配置模型（建议先做，预计 1-2 周）
+### 4.1 VerifyRecord(r, zone)
+
+```text
+1. 找到 zone 当前有效的 ZoneAuthority
+2. 检查 r.SignedBy 是否属于 authority.Keys（按 key_id 匹配）
+3. 找到匹配的 AuthorizedKey，检查其 Capabilities：
+   a. 是否包含全局 PermWrite；或
+   b. 是否包含 PermWrite<Type>（如 write:wireguard）；或
+   c. 是否包含匹配 r.Key 前缀的 Capability
+4. 检查 AuthorizedKey 的 NotBefore <= now <= NotAfter
+5. 重新计算 value_hash = blake2b(r.Value)，与 r.ValueHash 比对
+6. 验证 Signature：
+   domain="higgs.record.v1" + zone + key + type + value_hash + version + prev_hash + timestamp + signer_key_id
+7. 检查 Version：
+   a. 如果是同 key 的新版本，Version 必须 > current_version
+   b. 如果 Version == current_version 但 hash 不同，标记为 fork/conflict
+   c. 如果 Version < current_version，拒绝（旧版本攻击）
+8. 检查 PrevHash：
+   a. 如果 Version == 1，PrevHash 必须为 nil
+   b. 如果 Version > 1，PrevHash 必须匹配当前 active record 的 hash
+```
+
+### 4.2 VerifyDelegation(d, parentZone)
+
+```text
+1. 找到 parentZone 当前有效的 ZoneAuthority
+2. 检查 d.SignedBy 是否属于 parentZone.Authority.Keys
+3. 检查签名者的 Capabilities 是否包含 PermDelegate
+4. 检查签名者的 NotBefore/NotAfter
+5. 重新计算 authority_hash = blake2b(d.Authority)，与 d.AuthorityHash 比对
+6. 验证 Signature：
+   domain="higgs.delegation.v1" + parent_zone + child_zone + authority_epoch + authority_hash + expires_at + signer_key_id
+7. 检查 d.ZoneName 的 Parent() == parentZone（防路径欺骗）
+```
+
+### 4.3 VerifyChain(zonePath)
+
+```text
+1. 从 zonePath 开始向上回溯：
+   current = zonePath
+   while current != ".":
+     a. 获取 current 的 ParentProof[0]（即父 Zone 对 current 的 Delegation）
+     b. 验证该 Delegation 的 VerifyDelegation(d, current.Parent())
+     c. current = current.Parent()
+2. 根 Zone "." 的 Authority 必须自签（或通过本地可信配置锚定）
+3. 任何一环验证失败 → 整个 Zone 树不可信
+```
+
+---
+
+## 五、分阶段实施计划
+
+### Phase 0: 单机可信状态机（预计 1-2 周）
 **目标：** 在单机完成可验证的配置状态机，不依赖网络。
 
-- [ ] identity 生成、存储与签名验证
-- [ ] zone/delegation/record/authority/version-chain 基础模型
-- [ ] bbolt 持久化与加载恢复
-- [ ] CLI: `init`, `zone show`, `record put`, `verify`
-
-### Phase 1.1: 两节点同步（建议拆分，预计 1-2 周）
-**目标：** 跑通安全边界明确的同步流程。
-
-- [ ] bootstrap peer 连接
-- [ ] whole-zone 同步（先不做复杂 Merkle diff）
-- [ ] `quarantine -> verify -> active` 状态晋升
-- [ ] CLI: `sync status`
-
-### Phase 1: 核心骨架 + Zone K-V + WireGuard + Babeld（预计 5-7 周）
-**目标：** 让两个节点能自动发现、同步 Zone 配置、建立 WG 隧道、运行 Babeld 互相学习路由、ping 通。
-
-- [ ] **1.1 项目结构与工具链**
+- [ ] **0.1 项目结构**
   - 目录：`cmd/higgs/`, `pkg/core/{identity,zone,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/babeld/`, `pkg/crypto/`
   - 升级 Go 至 1.22+
-  - 引入依赖：`golang.zx2c4.com/wireguard/wgctrl`, `github.com/vishvananda/netlink`, `go.etcd.io/bbolt`, `google.golang.org/protobuf`
+  - 引入依赖：`golang.zx2c4.com/wireguard/wgctrl`, `github.com/vishvananda/netlink`, `go.etcd.io/bbolt`
 
-- [ ] **1.2 身份与密钥系统**
-  - ED25519 主密钥生成与本地加密存储（OS keyring 或 passphrase + bcrypt）
+- [ ] **0.2 身份与密钥系统**
+  - ED25519 主密钥生成与本地加密存储（passphrase + bcrypt）
   - NodeID = blake2b(pubkey)
-  - 子密钥/Zone 委派关系存储
 
-- [ ] **1.3 Zone K-V 存储引擎**
-  - 内存中的 `ZoneState` 管理（map[ZonePath]*ZoneState）
-  - 本地持久化：bbolt，按 Zone 分 bucket
-  - `Get(fqkey)` 实现：解析 Zone + Key → 本 Zone 查找 → 向上 fallback 直到根
-  - `Put(record)` 实现：验证签名者是否属于 ZoneAuthority 且满足权限 → 写入 → 更新 ZoneRoot
-  - 冲突处理：`Version + PrevHash`，同版本冲突进入 fork，禁止自动时间戳覆盖
+- [ ] **0.3 Zone / Authority / Delegation / Record 基础模型**
+  - 定义上述数据结构
+  - 实现 `Get(fqkey)`：解析 Zone + Key → 本 Zone 查找 → 向上 fallback 直到根
+  - 实现 `Put(record)`：本地写入（暂不验证网络签名，只验证本地 authority）
 
-- [ ] **1.4 Merkle Tree**
-  - Phase 1A: `ComputeZoneRoot()`（sorted hash）
-  - Phase 1B: `GetZoneDiff()`（per-record hash）
-  - Phase 2+: 完整 Merkle tree diff
+- [ ] **0.4 签名与验证**
+  - 实现 Record / Delegation / ZoneAuthority 的 Sign 和 Verify
+  - 实现 VerifyChain
+  - 定义并使用 domain separator
 
-- [ ] **1.5 Gossip 传输层**
+- [ ] **0.5 bbolt 持久化**
+  - 按 Zone 分 bucket 存储
+  - 加载/恢复/版本链审计
+
+- [ ] **0.6 CLI 调试**
+  - `higgs init`
+  - `higgs zone show <zone>`
+  - `higgs record put <zone> <key> <value>`
+  - `higgs verify <zone>`
+
+### Phase 1: 两节点 Zone 同步（预计 1-2 周）
+**目标：** 跑通安全边界明确的同步流程。
+
+- [ ] **1.1 Gossip 传输层**
   - UDP socket 监听（固定端口，如 33434）
   - Protobuf 消息定义：`Ping`, `Pong`, `FetchZone`, `FetchRecord`, `Announce`
-  - Anti-replay：消息带 64-bit nonce + 时间戳窗口（±5分钟）
-  - 节点发现：通过配置文件中的 bootstrap 列表启动
+  - Anti-replay：64-bit nonce + 时间戳窗口（±5分钟）
   - 限流与配额：每 peer 限制速率/字节/对象数
-  - 未验证状态隔离存储：禁止直接写 active StateDB
 
-- [ ] **1.6 签名验证链**
-  - `VerifyDelegation(d, parentZone)`：检查签名者 = parentZone 的当前持有者
-  - `VerifyRecord(r, zone)`：检查签名者 = zone 的当前持有者
-  - `VerifyChain(zonePath)`：从该 Zone 一路回溯到根，验证每个 @delegation
+- [ ] **1.2 节点发现**
+  - 通过配置文件中的 bootstrap 列表启动
+  - 仅接受已知 peer 的连接
 
-- [ ] **1.7 WireGuard 控制模块**
+- [ ] **1.3 Whole-Zone 同步**
+  - Phase 1A 先不做 Merkle diff，hash 不同直接拉完整 Zone
+  - 数据进入 `quarantine store`
+  - 逐条验证签名链（VerifyDelegation → VerifyRecord → VerifyChain）
+  - 验证通过后提升到 `active store`
+
+- [ ] **1.4 闭环验证**
+  - 节点 A 修改本地 Zone Record
+  - Gossip 到节点 B
+  - B 验证通过后 active store 可见
+  - CLI: `higgs sync status`
+
+### Phase 2: WireGuard 建链（预计 2-3 周）
+**目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
+
+- [ ] **2.1 WireGuard 控制模块**
   - 通过 `wgctrl-go` 操作内核 WG 接口
-  - 监听 `*.<parent_zone>./wg/*` Record 变更
-  - 自动生成 PeerView 与 LinkInstance → 应用 WG 配置（add/remove/update peer）
-  - 增加拓扑策略：`policy/topology`、`policy/max-active-links`
+  - 监听 `*.<parent_zone>./wireguard/*` Record 变更
+  - 从 Zone 推导 PeerView：
+    - `PublicKey` = `wireguard/public_key`
+    - `Endpoints` = `endpoints/*`
+    - `TunnelAllowedIPs` = 节点自身的 tunnel IP /32（从 `ipam/assignments/*` 推导）
+    - `AnnouncedRoutes` = `routes/announcements/*`
+  - 应用 WG 配置（add/remove/update peer）
+  - **安全原则：WG AllowedIPs 只放 tunnel /32 或 /128，业务路由不经过 WG allowed-ips**
 
-- [ ] **1.8 Babeld 路由适配器**
+- [ ] **2.2 链路实例管理**
+  - 当 WG peer 建立后，生成 LinkInstance
+  - 跟踪链路状态：up/down/stale
+
+- [ ] **2.3 最小闭环验证**
+  - 节点 A 和 B 同步配置
+  - 自动为对方添加 WG Peer
+  - `wg show` 看到握手成功
+  - 互相 ping 通 tunnel IP
+
+### Phase 3: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
+**目标：** babeld 在 WG 接口上发现邻居、学习路由，且只接受被授权的前缀。
+
+- [ ] **3.1 Babeld 路由适配器**
   - 启动 babeld 并通过控制 socket（`-G` Unix/TCP socket）发送命令
   - 命令封装：`add interface wg0`、`flush interface wg0`
   - 当 WG 接口建立/拆除时，动态通知 babeld 添加/移除接口
-  - 可选：通过 `redistribute` 或 `install` 注入本地路由
 
-- [ ] **1.9 最小闭环验证**
-  - 节点 A（`node1.catofes.`）和节点 B（`node2.catofes.`）启动
-  - 各自加载本地私钥，读取/写入自己的 Zone Record
-  - 通过 Gossip 交换 Zone 配置
-  - 为对方添加 WG Peer，隧道建立
-  - babeld 在 wg0 上发现邻居，交换路由
-  - 互相 ping 通 tunnel IP
+- [ ] **3.2 Route Authorization Filter（核心安全任务）**
+  - 根据 active state 中的 `routes/announcements/*` 和 `ipam/assignments/*` 生成 prefix whitelist
+  - 为每个 peer/interface 生成 babeld `import filter`：
+    - 只允许来自该 peer 的、被其 Zone 宣告过的前缀
+    - 拒绝 `0.0.0.0/0`、未授权前缀、他人网段
+  - **原则：控制平面验证了节点"可以加入网络"，但路由协议层面还要防止它乱宣告**
 
-### Phase 2: 动态拓扑 + 多节点 + IP 分配（预计 3-4 周）
-**目标：** 支持 3+ 节点、自动准入、IP 分配、链路健康检测。
+- [ ] **3.3 本地路由注入**
+  - 通过 babeld 控制 socket 的 `install` / `uninstall` 注入本节点 AnnouncedRoutes
+  - 或通过 `redistribute` 配置让 babeld 自动学习
 
-- [ ] **2.1 准入流程**
+- [ ] **3.4 闭环验证**
+  - 3+ 节点组网
+  - Babeld 在 wg0 上发现邻居，交换路由
+  - 验证 route filter：节点 A 尝试宣告未授权前缀 → 被其他节点过滤掉
+
+### Phase 4: 多节点/IPAM/准入/防火墙（预计 3-4 周）
+**目标：** 支持动态准入、IP 分配、链路健康、防火墙规则。
+
+- [ ] **4.1 准入流程**
   - 新节点生成密钥对 → 向管理员申请 delegation
   - 管理员在父 Zone 创建 `nodeX.parent.` delegation
   - Gossip 全网传播后，新节点自动被所有节点识别并建立 WG Peer
 
-- [ ] **2.2 IP 分配管理**
+- [ ] **4.2 IP 分配管理（IPAM）**
   - 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
   - 节点查询自己的 Zone fallback 路径，汇总所有分配到的 IPs
   - 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
 
-- [ ] **2.3 链路健康检测**
+- [ ] **4.3 链路健康检测**
   - 在 WG 隧道上周期性发送 ICMP/自定义 keepalive
   - 检测 RTT、丢包率
   - 链路异常时标记 down，从 babeld 接口中移除或降低优先级
 
-- [ ] **2.4 动态 Peer 管理**
+- [ ] **4.4 动态 Peer 管理**
   - 节点离线超时后，保留配置但标记 stale
   - 长期离线后自动清理 WG Peer 和路由
   - 节点信息变更（endpoint、pubkey rotate）自动更新 WG 配置
 
-- [ ] **2.5 防火墙规则同步（基础）**
-  - 基于已同步的 Zone 中所有合法节点的 AllowedIPs
+- [ ] **4.5 防火墙规则同步**
+  - 基于已同步的 Zone 中所有合法节点的 TunnelAllowedIPs
   - 通过 `nftables` netlink 接口生成 accept 规则，默认 drop
 
-### Phase 3: 健壮性与高级特性（预计 4-6 周）
+### Phase 5: 健壮性与高级特性（预计 4-6 周）
 **目标：** 生产可用，支持多线路、跳频、扩展传输协议。
 
-- [ ] **3.1 多线路并行（Multipath）**
+- [ ] **5.1 多线路并行（Multipath）**
   - 一个 Peer 可建立多条 TransportLink（WG over 公网 + WG over 内网 + GRE）
   - 每条链路独立运行 babeld 接口
   - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
-- [ ] **3.2 UDP 端口跳频（Port Hopping）**
+- [ ] **5.2 UDP 端口跳频（Port Hopping）**
   - 先实现多 endpoint / 多 port probe 与质量选择
   - 如需 rotate，必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径
 
-- [ ] **3.3 IKEv2 (StrongSwan) 传输驱动**
+- [ ] **5.3 IKEv2 (StrongSwan) 传输驱动**
   - 通过 vici 协议控制 StrongSwan
   - 复用 Zone K-V 中的 `ipsec/*` Record
 
-- [ ] **3.4 VXLAN Overlay**
+- [ ] **5.4 VXLAN Overlay**
   - 在 WG 三层网络上封装 VXLAN
   - 通过 Zone Record 同步 VNI、VTEP 信息
 
-- [ ] **3.5 SRv6 支持（实验性）**
+- [ ] **5.5 SRv6 支持（实验性）**
   - 通过 netlink 配置 SRv6 SID、End.DT4/End.DX6 行为
   - 与 BIRD/FRR 的 SRv6 扩展联动（如后续引入 BGP）
 
-- [ ] **3.6 运维与可观测性**
+- [ ] **5.6 运维与可观测性**
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`
 
 ---
 
-## 五、关键技术选型建议
+## 六、关键技术选型建议
 
 | 组件 | 推荐方案 | 备选 | 理由 |
 |------|----------|------|------|
@@ -492,8 +646,8 @@ type PeerView struct {
 
 ---
 
-## 六、下一步行动（推荐立即开始）
+## 七、下一步行动
 
-1. **确认 Zone K-V 设计细节：** 上述 DNS 式作用域 + K-V + 向下覆盖的方案是否完全符合预期？有无需要调整的术语或行为？
-2. **细化 Merkle DAG 算法：** 是否需要我先写一份 Zone Merkle Tree 的伪代码/流程图？
-3. **开始写代码：** 从 `pkg/core/zone.go`（Zone/Delegation/Record 定义）、`pkg/crypto/identity.go`（ED25519 密钥+签名）开始。
+1. **开始写 `pkg/core/zone.go`**：`ZonePath`、`ZoneAuthority`、`AuthorizedKey`、`Delegation`、`Record`、`ZoneState` 的定义与基础方法
+2. **开始写 `pkg/crypto/signer.go`**：domain separator 常量、Sign/Verify 函数、VerifyRecord/VerifyDelegation/VerifyChain 逻辑
+3. **Phase 0 闭环验证**：单机完成 `init` → `record put` → `verify chain` 的 CLI 流程
