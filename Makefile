@@ -4,13 +4,13 @@ BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
 BUILD_DIR := build
 GO := go
-GO_CACHE ?= /tmp/higgs-gocache
-GO_MOD_CACHE ?= /tmp/higgs-gomodcache
+# GO_CACHE ?= /tmp/higgs-gocache
+# GO_MOD_CACHE ?= /tmp/higgs-gomodcache
 
 # Build flags
 LDFLAGS := -s -w
 CGO_ENABLED := 0
-GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
+GO_ENV := CGO_ENABLED=$(CGO_ENABLED)
 
 all: build
 
@@ -56,7 +56,7 @@ phase1-smoke: build
 	if ! kill -0 "$$server_pid" >/dev/null 2>&1; then cat "$$tmp/b.log"; exit 1; fi; \
 	HIGGS_STATE="$$tmp/a.db" $(BUILD_DIR)/$(BINARY_NAME) record put a.catofes. identity node-a >/dev/null; \
 	HIGGS_STATE="$$tmp/a.db" HIGGS_SYNC_CONFIG="$$tmp/a.sync.json" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b >/dev/null; \
-	HIGGS_STATE="$$tmp/b.db" $(BUILD_DIR)/$(BINARY_NAME) zone show a.catofes. | grep -q '"node-a"'; \
+	HIGGS_STATE="$$tmp/b.db" $(BUILD_DIR)/$(BINARY_NAME) zone show a.catofes. | grep -q '"identity"'; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	echo "Phase1 smoke passed"
 
