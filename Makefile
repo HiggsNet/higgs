@@ -1,16 +1,16 @@
-.PHONY: all build clean test fmt vet check install run phase1-smoke help
+.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
 BUILD_DIR := build
 GO := go
-# GO_CACHE ?= /tmp/higgs-gocache
-# GO_MOD_CACHE ?= /tmp/higgs-gomodcache
+GO_CACHE ?= /tmp/higgs-gocache
+GO_MOD_CACHE ?= /tmp/higgs-gomodcache
 
 # Build flags
 LDFLAGS := -s -w
 CGO_ENABLED := 0
-GO_ENV := CGO_ENABLED=$(CGO_ENABLED)
+GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
 
 all: build
 
@@ -40,23 +40,39 @@ install:
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)
 
-phase1-smoke: build
+join-smoke: build
 	@set -eu; \
+	tmp="$${TMPDIR:-/tmp}/higgs-join-smoke"; \
+	rm -rf "$$tmp"; \
+	mkdir -p "$$tmp/admin" "$$tmp/node-b"; \
+	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-a' 'listen_addr: 127.0.0.1:33434' > "$$tmp/admin/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/node-b" 'peer_id: node-b' 'listen_addr: 127.0.0.1:33435' > "$$tmp/node-b/config.yaml"; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-b.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
+	echo "Join smoke passed"
+
+phase1-smoke: build
+	@set -xeu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-phase1-smoke"; \
 	rm -rf "$$tmp"; \
-	mkdir -p "$$tmp"; \
-	HIGGS_STATE="$$tmp/a.db" $(BUILD_DIR)/$(BINARY_NAME) init a.catofes. >/dev/null; \
-	cp "$$tmp/a.db" "$$tmp/b.db"; \
-	printf '%s\n' '{"peer_id":"node-a","listen_addr":"127.0.0.1:33434","bootstrap":[{"id":"node-b","addr":"127.0.0.1:33435"}]}' > "$$tmp/a.sync.json"; \
-	printf '%s\n' '{"peer_id":"node-b","listen_addr":"127.0.0.1:33435","bootstrap":[{"id":"node-a","addr":"127.0.0.1:33434"}]}' > "$$tmp/b.sync.json"; \
-	HIGGS_STATE="$$tmp/b.db" HIGGS_SYNC_CONFIG="$$tmp/b.sync.json" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/b.log" 2>&1 & \
+	mkdir -p "$$tmp/a" "$$tmp/b"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a' 'listen_addr: 127.0.0.1:33434' 'bootstrap:' '  - id: node-b' '    addr: 127.0.0.1:33435' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b' 'listen_addr: 127.0.0.1:33435' 'bootstrap:' '  - id: node-a' '    addr: 127.0.0.1:33434' > "$$tmp/b/config.yaml"; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) init a.catofes. >/dev/null; \
+	cp "$$tmp/a/higgs.db" "$$tmp/b/higgs.db"; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/b.log" 2>&1 & \
 	server_pid="$$!"; \
 	trap 'kill "$$server_pid" >/dev/null 2>&1 || true' EXIT; \
 	sleep 1; \
 	if ! kill -0 "$$server_pid" >/dev/null 2>&1; then cat "$$tmp/b.log"; exit 1; fi; \
-	HIGGS_STATE="$$tmp/a.db" $(BUILD_DIR)/$(BINARY_NAME) record put a.catofes. identity node-a >/dev/null; \
-	HIGGS_STATE="$$tmp/a.db" HIGGS_SYNC_CONFIG="$$tmp/a.sync.json" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b >/dev/null; \
-	HIGGS_STATE="$$tmp/b.db" $(BUILD_DIR)/$(BINARY_NAME) zone show a.catofes. | grep -q '"identity"'; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put a.catofes. identity node-a >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b >/dev/null; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show a.catofes. | grep -q '"identity"'; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	echo "Phase1 smoke passed"
 
@@ -70,5 +86,6 @@ help:
 	@echo "  check   - Run fmt, vet, test, and build"
 	@echo "  install - Install higgs to GOPATH/bin"
 	@echo "  run     - Build and run higgs"
+	@echo "  join-smoke - Run root/delegation/join smoke test"
 	@echo "  phase1-smoke - Run a local two-peer gossip smoke test"
 	@echo "  help    - Show this help message"

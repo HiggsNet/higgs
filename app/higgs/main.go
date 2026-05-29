@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"sort"
 	"time"
@@ -17,7 +16,6 @@ import (
 )
 
 const defaultStatePath = ".higgs.db"
-const defaultSyncConfigPath = "higgs.sync.json"
 const cliMetaKey = "cli_state"
 
 type stateFile struct {
@@ -63,6 +61,17 @@ func run(args []string) error {
 			managedZone = zone.ZonePath(args[1])
 		}
 		return initState(managedZone)
+	case "root":
+		return runRoot(args[1:])
+	case "keygen":
+		if len(args) != 2 {
+			return usage()
+		}
+		return keygen(args[1])
+	case "join":
+		return runJoin(args[1:])
+	case "delegate":
+		return runDelegate(args[1:])
 	case "zone":
 		if len(args) != 3 || args[1] != "show" {
 			return usage()
@@ -93,7 +102,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return errors.New("usage: higgs init [zone] | higgs zone show <zone> | higgs record put <zone> <key> <value> [type] | higgs verify [chain] <zone> | higgs sync status|serve|once <peer>")
+	return errors.New("usage: higgs root init [zone] | higgs root pubkey | higgs keygen <key.json> | higgs join request <zone> <key.json> <request.json> | higgs delegate issue <request.json> <bundle.json> | higgs join accept <bundle.json> <key.json> | higgs zone show <zone> | higgs record put <zone> <key> <value> [type] | higgs verify [chain] <zone> | higgs sync status|serve|once <peer>")
 }
 
 func initState(managedZone zone.ZonePath) error {
@@ -164,7 +173,12 @@ func initState(managedZone zone.ZonePath) error {
 	if err := saveState(state); err != nil {
 		return err
 	}
-	fmt.Printf("initialized %s in %s\n", managedZone, statePath())
+	path, err := configuredStatePath()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("initialized %s in %s\n", managedZone, path)
+	fmt.Printf("root public key: %s\n", hex.EncodeToString(rootPub))
 	return nil
 }
 
@@ -288,7 +302,7 @@ func syncServe() error {
 	transport, err := gossip.Listen(gossip.Config{
 		PeerID:     config.PeerID,
 		ListenAddr: config.ListenAddr,
-		KnownPeers: syncKnownPeers(config),
+		KnownPeers: configuredKnownPeers(config),
 		Replay:     gossip.NewReplayWindow(0),
 		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 	})
@@ -322,7 +336,7 @@ func syncOnce(peerID string) error {
 	transport, err := gossip.Listen(gossip.Config{
 		PeerID:     config.PeerID,
 		ListenAddr: config.ListenAddr,
-		KnownPeers: syncKnownPeers(config),
+		KnownPeers: configuredKnownPeers(config),
 		Replay:     gossip.NewReplayWindow(0),
 		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 	})
@@ -526,42 +540,7 @@ func fetchPendingPredecessors(ns *zone.NetworkState, transport *gossip.Transport
 }
 
 func loadSyncConfig(state *stateFile) (*syncConfigFile, error) {
-	path := syncConfigPath()
-	config := &syncConfigFile{}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		config.PeerID = defaultPeerID(state)
-		config.ListenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
-		return config, nil
-	}
-	if err := json.Unmarshal(data, config); err != nil {
-		return nil, err
-	}
-	if config.PeerID == "" {
-		config.PeerID = defaultPeerID(state)
-	}
-	if config.ListenAddr == "" {
-		config.ListenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
-	}
-	return config, nil
-}
-
-func syncKnownPeers(config *syncConfigFile) map[string]*net.UDPAddr {
-	peers := make(map[string]*net.UDPAddr, len(config.Bootstrap))
-	for _, peer := range config.Bootstrap {
-		if peer.ID == "" || peer.Addr == "" {
-			continue
-		}
-		addr, err := net.ResolveUDPAddr("udp", peer.Addr)
-		if err != nil {
-			continue
-		}
-		peers[peer.ID] = addr
-	}
-	return peers
+	return configuredSyncConfig(state)
 }
 
 func defaultPeerID(state *stateFile) string {
@@ -570,13 +549,6 @@ func defaultPeerID(state *stateFile) string {
 	}
 	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
 	return hex.EncodeToString(higgscrypto.KeyID(pub))[:16]
-}
-
-func syncConfigPath() string {
-	if path := os.Getenv("HIGGS_SYNC_CONFIG"); path != "" {
-		return path
-	}
-	return defaultSyncConfigPath
 }
 
 func countPending(zs *zone.ZoneState) int {
@@ -591,7 +563,11 @@ func countPending(zs *zone.ZoneState) int {
 }
 
 func loadState() (*stateFile, error) {
-	store, err := zone.OpenBoltStore(statePath(), 0o600)
+	path, err := configuredStatePath()
+	if err != nil {
+		return nil, err
+	}
+	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -615,11 +591,18 @@ func loadState() (*stateFile, error) {
 		return nil, errors.New("state file has no network")
 	}
 	normalizeState(state.Network)
+	if err := verifyConfiguredRootTrust(state.Network); err != nil {
+		return nil, err
+	}
 	return &state, nil
 }
 
 func saveState(state *stateFile) error {
-	store, err := zone.OpenBoltStore(statePath(), 0o600)
+	path, err := configuredStatePath()
+	if err != nil {
+		return err
+	}
+	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
 		return err
 	}
@@ -636,13 +619,6 @@ func saveState(state *stateFile) error {
 	return store.SaveNetwork(state.Network)
 }
 
-func statePath() string {
-	if path := os.Getenv("HIGGS_STATE"); path != "" {
-		return path
-	}
-	return defaultStatePath
-}
-
 func zoneChain(path zone.ZonePath) []zone.ZonePath {
 	ancestors := path.Ancestors()
 	out := make([]zone.ZonePath, 0, len(ancestors)-1)
@@ -650,6 +626,37 @@ func zoneChain(path zone.ZonePath) []zone.ZonePath {
 		out = append(out, ancestors[i])
 	}
 	return out
+}
+
+func verifyConfiguredRootTrust(ns *zone.NetworkState) error {
+	config, err := loadAppConfig()
+	if err != nil {
+		return err
+	}
+	if len(config.TrustedRootPublicKey) == 0 {
+		return nil
+	}
+	root := ns.Zones[zone.RootZone]
+	if root == nil || root.Authority == nil {
+		return errors.New("trusted root public key configured but root authority is missing")
+	}
+	for _, key := range root.Authority.Keys {
+		if equalPublicKey(key.Key, config.TrustedRootPublicKey) {
+			return nil
+		}
+	}
+	return errors.New("root authority does not match trusted_root_public_key in config.yaml")
+}
+
+func equalPublicKey(a, b ed25519.PublicKey) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var out byte
+	for i := range a {
+		out |= a[i] ^ b[i]
+	}
+	return out == 0
 }
 
 func configureValidation(ns *zone.NetworkState) {

@@ -72,6 +72,32 @@
   - [x] B 验证通过后 active store 可见
   - [x] CLI: `higgs sync status`
 
+## Phase 1.5: 配置与节点准入工具（已完成）
+
+**目标：** 把 Phase 1 的手工状态准备收敛成固定配置文件和可重复的 join/delegation 流程。
+
+- [x] **1.5.1 固定配置文件**
+  - [x] 默认读取 `config.yaml`，可用 `HIGGS_CONFIG=/path/to/config.yaml` 覆盖
+  - [x] 配置数据库目录：`data_dir` / `database_dir`，默认状态库为 `<data_dir>/higgs.db`
+  - [x] 配置监听地址：`listen_addr`，或用 `listen_port` 生成 `:<port>`
+  - [x] 配置 bootstrap allowlist：`bootstrap: [{id, addr}]`
+  - [x] 配置根信任公钥：`trusted_root_public_key`（hex/base64 ED25519 public key）
+  - [x] 提供 `config.example.yaml`
+
+- [x] **1.5.2 根 Zone 与准入 CLI**
+  - [x] `higgs root init <zone>`：创建根 authority，并委派初始管理 Zone
+  - [x] `higgs root pubkey`：输出根公钥，供其他节点配置 `trusted_root_public_key`
+  - [x] `higgs keygen <key.json>`：生成新节点 ED25519 keypair
+  - [x] `higgs join request <zone> <key.json> <request.json>`：新节点生成加入申请
+  - [x] `higgs delegate issue <request.json> <bundle.json>`：父 Zone 持有者签发 delegation bundle
+  - [x] `higgs join accept <bundle.json> <key.json>`：新节点导入信任链和本 Zone authority
+  - [x] 新节点不会接触 root/admin 私钥，只持有自己的 Zone 私钥
+
+- [x] **1.5.3 验证目标**
+  - [x] `make check`：格式化、vet、单元测试、构建
+  - [x] `make join-smoke`：本地验证 root/delegation/join/record/verify 流程
+  - [x] `make phase1-smoke`：本地两 peer UDP gossip smoke；需要运行环境允许 UDP socket
+
 ## Phase 2: WireGuard 建链（预计 2-3 周）
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
@@ -176,6 +202,7 @@
 
 ## 下一步
 
-1. 开始写 `pkg/core/zone.go`：`ZonePath`、`ZoneAuthority`、`AuthorizedKey`、`Delegation`、`Record`、`ZoneState` 的定义与基础方法
-2. 开始写 `pkg/crypto/signer.go`：domain separator 常量、Sign/Verify 函数、VerifyRecord/VerifyDelegation/VerifyChain 逻辑
+1. 开始 Phase 2 WireGuard 控制模块：根据 active Zone records 推导 PeerView，并用 `wgctrl-go` 应用 peer 配置
+2. 定义 WireGuard 相关 Record key/type：公钥、endpoint、listen port、tunnel allowed IP、route announcement
+3. 在 join/delegation 流程后补真实多节点端到端手册：join → gossip sync → WG peer 建立
 3. Phase 0 闭环验证：单机完成 `init` → `record put` → `verify chain` 的 CLI 流程

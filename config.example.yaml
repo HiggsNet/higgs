@@ -1,0 +1,11 @@
+data_dir: .higgs
+peer_id: node-a
+listen_addr: 127.0.0.1:33434
+
+bootstrap:
+  - id: node-b
+    addr: 127.0.0.1:33435
+
+# Hex or base64 encoded ED25519 public key for the trusted root zone.
+# `higgs init <zone>` prints the generated root public key.
+trusted_root_public_key:
