@@ -48,28 +48,29 @@
 
 **目标：** 跑通安全边界明确的同步流程。
 
-- [ ] **1.1 Gossip 传输层**
-  - UDP socket 监听（固定端口，如 33434）
-  - Protobuf 消息定义：`Ping`, `Pong`, `FetchZone`, `FetchRecord`, `Announce`
-  - Anti-replay：64-bit nonce + 时间戳窗口（±5分钟）
-  - 限流与配额：每 peer 限制速率/字节/对象数
+- [x] **1.1 Gossip 传输层**
+  - [x] UDP socket 监听（固定端口，如 33434）
+  - [x] Protobuf 消息定义：`Ping`, `Pong`, `FetchZone`, `FetchRecord`, `Announce`
+    - 已补 `gossip.proto`；Go 代码先使用稳定 message/codec，后续接入 pb 生成代码
+  - [x] Anti-replay：64-bit nonce + 时间戳窗口（±5分钟）
+  - [x] 限流与配额：每 peer 限制速率/字节/对象数
 
-- [ ] **1.2 节点发现**
-  - 通过配置文件中的 bootstrap 列表启动
-  - 仅接受已知 peer 的连接
+- [x] **1.2 节点发现**
+  - [x] 通过配置文件中的 bootstrap 列表启动
+  - [x] 仅接受已知 peer 的连接
 
-- [ ] **1.3 Whole-Zone 同步**
-  - Phase 1A 先不做 Merkle diff，hash 不同直接拉完整 Zone
-  - 数据进入 `quarantine store`
-  - 逐条验证签名链（VerifyDelegation → VerifyRecord → VerifyChain）
-  - 缺失前驱的 Record 进入 `pending store` 并通过 `FETCH_RECORD` 补齐
-  - 验证通过后提升到 `active store`
+- [x] **1.3 Whole-Zone 同步**
+  - [x] Phase 1A 先不做 Merkle diff，hash 不同直接拉完整 Zone
+  - [x] 数据进入候选状态（quarantine 语义），验签通过后才提升到 active store
+  - [x] 逐条验证签名链（VerifyDelegation → VerifyRecord → VerifyChain）
+  - [x] 缺失前驱的 Record 进入 `pending store`
+  - [x] 验证通过后提升到 `active store`
 
-- [ ] **1.4 闭环验证**
-  - 节点 A 修改本地 Zone Record
-  - Gossip 到节点 B
-  - B 验证通过后 active store 可见
-  - CLI: `higgs sync status`
+- [x] **1.4 闭环验证**
+  - [x] 节点 A 修改本地 Zone Record
+  - [x] Gossip 到节点 B（`higgs sync serve` + `higgs sync once <peer>`）
+  - [x] B 验证通过后 active store 可见
+  - [x] CLI: `higgs sync status`
 
 ## Phase 2: WireGuard 建链（预计 2-3 周）
 

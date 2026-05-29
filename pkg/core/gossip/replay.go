@@ -1,0 +1,66 @@
+package gossip
+
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrMessageExpired = errors.New("gossip message outside timestamp window")
+	ErrReplay         = errors.New("gossip message replayed nonce")
+)
+
+type ReplayWindow struct {
+	Window time.Duration
+	seen   map[string]map[uint64]int64
+}
+
+func NewReplayWindow(window time.Duration) *ReplayWindow {
+	if window <= 0 {
+		window = time.Duration(DefaultWindow) * time.Second
+	}
+	return &ReplayWindow{
+		Window: window,
+		seen:   make(map[string]map[uint64]int64),
+	}
+}
+
+func (rw *ReplayWindow) Check(peerID string, nonce uint64, timestamp int64, now time.Time) error {
+	if rw == nil {
+		return nil
+	}
+	if peerID == "" || nonce == 0 {
+		return ErrReplay
+	}
+
+	messageTime := time.Unix(timestamp, 0)
+	if messageTime.Before(now.Add(-rw.Window)) || messageTime.After(now.Add(rw.Window)) {
+		return ErrMessageExpired
+	}
+
+	rw.prune(peerID, now)
+	if rw.seen[peerID] == nil {
+		rw.seen[peerID] = make(map[uint64]int64)
+	}
+	if _, ok := rw.seen[peerID][nonce]; ok {
+		return ErrReplay
+	}
+	rw.seen[peerID][nonce] = timestamp
+	return nil
+}
+
+func (rw *ReplayWindow) prune(peerID string, now time.Time) {
+	peerSeen := rw.seen[peerID]
+	if len(peerSeen) == 0 {
+		return
+	}
+	cutoff := now.Add(-rw.Window).Unix()
+	for nonce, timestamp := range peerSeen {
+		if timestamp < cutoff {
+			delete(peerSeen, nonce)
+		}
+	}
+	if len(peerSeen) == 0 {
+		delete(rw.seen, peerID)
+	}
+}
