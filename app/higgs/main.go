@@ -6,20 +6,26 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
-const defaultStatePath = ".higgs/state.json"
+const defaultStatePath = ".higgs.db"
+const cliMetaKey = "cli_state"
 
 type stateFile struct {
 	ManagedZone    zone.ZonePath      `json:"managed_zone"`
 	RootPrivateKey ed25519.PrivateKey `json:"root_private_key"`
 	ZonePrivateKey ed25519.PrivateKey `json:"zone_private_key"`
 	Network        *zone.NetworkState `json:"network"`
+}
+
+type stateMeta struct {
+	ManagedZone    zone.ZonePath      `json:"managed_zone"`
+	RootPrivateKey ed25519.PrivateKey `json:"root_private_key"`
+	ZonePrivateKey ed25519.PrivateKey `json:"zone_private_key"`
 }
 
 func main() {
@@ -209,15 +215,27 @@ func verifyChain(path zone.ZonePath) error {
 }
 
 func loadState() (*stateFile, error) {
-	data, err := os.ReadFile(statePath())
+	store, err := zone.OpenBoltStore(statePath(), 0o600)
 	if err != nil {
 		return nil, err
 	}
-	var state stateFile
-	if err := json.Unmarshal(data, &state); err != nil {
+	defer store.Close()
+
+	ns, err := store.LoadNetwork()
+	if err != nil {
 		return nil, err
 	}
-	if state.Network == nil {
+	var meta stateMeta
+	if err := store.LoadMetaJSON(cliMetaKey, &meta); err != nil {
+		return nil, err
+	}
+	state := stateFile{
+		ManagedZone:    meta.ManagedZone,
+		RootPrivateKey: meta.RootPrivateKey,
+		ZonePrivateKey: meta.ZonePrivateKey,
+		Network:        ns,
+	}
+	if state.Network == nil || len(state.Network.Zones) == 0 {
 		return nil, errors.New("state file has no network")
 	}
 	normalizeState(state.Network)
@@ -225,15 +243,21 @@ func loadState() (*stateFile, error) {
 }
 
 func saveState(state *stateFile) error {
-	path := statePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	store, err := zone.OpenBoltStore(statePath(), 0o600)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	defer store.Close()
+
+	meta := stateMeta{
+		ManagedZone:    state.ManagedZone,
+		RootPrivateKey: state.RootPrivateKey,
+		ZonePrivateKey: state.ZonePrivateKey,
+	}
+	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
+		return err
+	}
+	return store.SaveNetwork(state.Network)
 }
 
 func statePath() string {

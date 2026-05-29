@@ -1,11 +1,12 @@
 package crypto
 
-import "crypto/sha256"
+import "golang.org/x/crypto/blake2b"
 
-// Hash currently uses SHA-256 as the repository-local digest primitive.
-// The design calls for blake2b; keeping this wrapper limits the replacement.
 func Hash(parts ...[]byte) []byte {
-	h := sha256.New()
+	h, err := blake2b.New256(nil)
+	if err != nil {
+		panic(err)
+	}
 	for _, part := range parts {
 		h.Write(part)
 	}

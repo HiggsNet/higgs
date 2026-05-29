@@ -6,16 +6,18 @@
 
 **目标：** 在单机完成可验证的配置状态机，不依赖网络。
 
-- [ ] **0.1 项目结构**
+- [x] **0.1 项目结构**
   - 入口目录：沿用当前 `app/higgs/`；后续如需要标准 Go 布局，再迁移到 `cmd/higgs/`
   - [x] 已创建：`pkg/core/zone/`, `pkg/crypto/`
-  - [ ] 待创建：`pkg/core/{identity,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/babeld/`
-  - Go 版本已为 1.22；保持 `go.mod` 的最低版本不低于 1.22
-  - 引入依赖：`golang.zx2c4.com/wireguard/wgctrl`, `github.com/vishvananda/netlink`, `go.etcd.io/bbolt`
+  - [x] 待创建：`pkg/core/{identity,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/babeld/`
+  - Go 版本已按当前依赖更新为 `go 1.25.0`
+  - [x] 引入 Phase 0 依赖：`go.etcd.io/bbolt`, `golang.org/x/crypto`
+  - `golang.zx2c4.com/wireguard/wgctrl`, `github.com/vishvananda/netlink` 延后到 WireGuard/路由阶段引入，避免 Phase 0 携带未使用依赖
 
-- [ ] **0.2 身份与密钥系统**
-  - ED25519 主密钥生成与本地加密存储（passphrase + bcrypt）
-  - NodeID = blake2b(pubkey)
+- [x] **0.2 身份与密钥系统**
+  - [x] ED25519 主密钥生成与本地存储
+  - [x] 提供 passphrase + bcrypt 加密私钥工具；Phase 0 CLI 默认不强制使用，bbolt 状态库保持本地明文调试语义
+  - [x] NodeID = blake2b(pubkey)
 
 - [x] **0.3 Zone / Authority / Delegation / Record 基础模型**
   - [x] 定义设计文档中的核心数据结构
@@ -31,10 +33,10 @@
   - [x] Phase 0 只接受 `threshold=1`，遇到 `threshold>1` 返回 `unsupported threshold`
   - [x] 预留 `Delegation.Scope`；Phase 0 只接受 `direct-child`，遇到 `subtree` 返回 `unsupported delegation scope`
 
-- [ ] **0.5 bbolt 持久化**
-  - 按 Zone 分 bucket 存储
-  - 加载/恢复/版本链审计
-  - 保留 `PendingRecords`，补齐版本链后再提升为 active
+- [x] **0.5 bbolt 持久化**
+  - [x] 按 Zone 分 bucket 存储
+  - [x] 加载/恢复/版本链审计
+  - [x] 保留 `PendingRecords`，补齐版本链后再提升为 active
 
 - [x] **0.6 CLI 调试**
   - [x] `higgs init`
