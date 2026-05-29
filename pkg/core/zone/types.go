@@ -72,6 +72,13 @@ const (
 	PermAllocateIP     Permission = "allocate-ip"
 )
 
+type DelegationScope string
+
+const (
+	DelegationScopeDirectChild DelegationScope = "direct-child"
+	DelegationScopeSubtree     DelegationScope = "subtree"
+)
+
 type Capability struct {
 	Permissions []Permission
 	KeyPrefix   string
@@ -93,6 +100,7 @@ type ZoneAuthority struct {
 
 type Delegation struct {
 	ZoneName       ZonePath
+	Scope          DelegationScope
 	AuthorityEpoch uint64
 	AuthorityHash  []byte
 	Authority      ZoneAuthority
@@ -139,12 +147,22 @@ func NewZoneState(path ZonePath, authority *ZoneAuthority) *ZoneState {
 }
 
 type NetworkState struct {
-	Zones      map[ZonePath]*ZoneState
-	GlobalRoot []byte
+	Zones          map[ZonePath]*ZoneState
+	GlobalRoot     []byte
+	RecordVerifier RecordVerifier `json:"-"`
+	RecordHasher   RecordHasher   `json:"-"`
 }
 
 func NewNetworkState() *NetworkState {
 	return &NetworkState{Zones: make(map[ZonePath]*ZoneState)}
+}
+
+type RecordVerifier func(record *Record, authority *ZoneAuthority, now time.Time) error
+type RecordHasher func(record *Record) []byte
+
+func (ns *NetworkState) ConfigureRecordValidation(verifier RecordVerifier, hasher RecordHasher) {
+	ns.RecordVerifier = verifier
+	ns.RecordHasher = hasher
 }
 
 type NodeIdentity struct {

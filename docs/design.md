@@ -298,6 +298,12 @@ const (
     PermAllocateIP  Permission = "allocate-ip"
 )
 
+type DelegationScope string
+const (
+    DelegationScopeDirectChild DelegationScope = "direct-child"
+    DelegationScopeSubtree     DelegationScope = "subtree" // 预留，Phase 0 拒绝
+)
+
 // Capability key 的能力声明
 type Capability struct {
     Permissions []Permission
@@ -323,6 +329,7 @@ type ZoneAuthority struct {
 // Delegation 委派记录：父 Zone 授权子 Zone 由哪个 ZoneAuthority 管理
 type Delegation struct {
     ZoneName       ZonePath
+    Scope          DelegationScope // Phase 0 只接受 direct-child；subtree 为后续跨层委派预留
     AuthorityEpoch uint64
     AuthorityHash  []byte      // blake2b(ZoneAuthority)
     Authority      ZoneAuthority
@@ -451,7 +458,9 @@ type PeerView struct {
 5. 重新计算 authority_hash = blake2b(d.Authority)，与 d.AuthorityHash 比对
 6. 验证 Signature：
    domain="higgs.delegation.v1" + parent_zone + child_zone + authority_epoch + authority_hash + expires_at + signer_key_id
-7. 检查 d.ZoneName 的 Parent() == parentZone（防路径欺骗）
+7. 检查 Scope：
+   a. Phase 0 只接受 `direct-child`，并要求 d.ZoneName 的 Parent() == parentZone（防路径欺骗）
+   b. `subtree` 为后续跨层委派预留；Phase 0 必须拒绝并返回 unsupported delegation scope，避免把跨层数据误按直接子委派验证
 ```
 
 ### 4.3 VerifyChain(zonePath)

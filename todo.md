@@ -17,29 +17,30 @@
   - ED25519 主密钥生成与本地加密存储（passphrase + bcrypt）
   - NodeID = blake2b(pubkey)
 
-- [ ] **0.3 Zone / Authority / Delegation / Record 基础模型**
+- [x] **0.3 Zone / Authority / Delegation / Record 基础模型**
   - [x] 定义设计文档中的核心数据结构
   - [x] 实现 `Get(fqkey)`：解析 Zone + Key → 本 Zone 查找 → 向上 fallback 直到根
   - [x] 实现基础 `Put(record)` 写入 active state
-  - [ ] 在 `Put(record)` 中接入本地 authority 验证、版本链和 pending record 处理
+  - [x] 在 `Put(record)` 中接入本地 authority 验证、版本链和 pending record 处理
 
-- [ ] **0.4 签名与验证**
+- [x] **0.4 签名与验证**
   - [x] 实现 Record / Delegation 的 Sign 和 Verify
   - [x] 实现 ZoneAuthority canonical hash
-  - [ ] 实现 VerifyChain
+  - [x] 实现 VerifyChain
   - [x] 定义并使用 domain separator
   - [x] Phase 0 只接受 `threshold=1`，遇到 `threshold>1` 返回 `unsupported threshold`
+  - [x] 预留 `Delegation.Scope`；Phase 0 只接受 `direct-child`，遇到 `subtree` 返回 `unsupported delegation scope`
 
 - [ ] **0.5 bbolt 持久化**
   - 按 Zone 分 bucket 存储
   - 加载/恢复/版本链审计
   - 保留 `PendingRecords`，补齐版本链后再提升为 active
 
-- [ ] **0.6 CLI 调试**
-  - `higgs init`
-  - `higgs zone show <zone>`
-  - `higgs record put <zone> <key> <value>`
-  - `higgs verify <zone>`
+- [x] **0.6 CLI 调试**
+  - [x] `higgs init`
+  - [x] `higgs zone show <zone>`
+  - [x] `higgs record put <zone> <key> <value>`
+  - [x] `higgs verify <zone>`
 
 ## Phase 1: 两节点 Zone 同步（预计 1-2 周）
 

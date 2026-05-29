@@ -1,6 +1,10 @@
 package zone
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestZonePathParentAndAncestors(t *testing.T) {
 	zp := ZonePath("node1.pek.catofes.")
@@ -51,5 +55,46 @@ func TestNetworkStateGetFallback(t *testing.T) {
 	}
 	if got != rootRecord {
 		t.Fatalf("Get(root fallback) returned wrong record")
+	}
+}
+
+func TestNetworkStatePutValidatesVersionChainAndPromotesPending(t *testing.T) {
+	ns := NewNetworkState()
+	ns.ConfigureRecordValidation(
+		func(record *Record, authority *ZoneAuthority, now time.Time) error { return nil },
+		func(record *Record) []byte { return []byte{byte(record.Version)} },
+	)
+	ns.Zones["node1.catofes."] = NewZoneState("node1.catofes.", &ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+	})
+
+	v2 := &Record{
+		Zone:     "node1.catofes.",
+		Key:      "identity",
+		Version:  2,
+		PrevHash: []byte{1},
+	}
+	if err := ns.PutAt(v2, time.Unix(123, 0)); !errors.Is(err, ErrPendingRecord) {
+		t.Fatalf("PutAt(v2) error = %v, want ErrPendingRecord", err)
+	}
+	if got := ns.Zones["node1.catofes."].Records["identity"]; got != nil {
+		t.Fatalf("pending record was promoted without predecessor")
+	}
+
+	v1 := &Record{
+		Zone:    "node1.catofes.",
+		Key:     "identity",
+		Version: 1,
+	}
+	if err := ns.PutAt(v1, time.Unix(123, 0)); err != nil {
+		t.Fatalf("PutAt(v1): %v", err)
+	}
+	if got := ns.Zones["node1.catofes."].Records["identity"]; got != v2 {
+		t.Fatalf("active record = %#v, want v2 after pending promotion", got)
+	}
+	if got := len(ns.Zones["node1.catofes."].RecordHistory["identity"]); got != 1 {
+		t.Fatalf("history length = %d, want 1", got)
 	}
 }

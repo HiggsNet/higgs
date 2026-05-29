@@ -17,7 +17,81 @@ const (
 	SupportedThreshold = uint8(1)
 )
 
-var ErrUnsupportedThreshold = errors.New("unsupported threshold")
+var (
+	ErrUnsupportedThreshold       = errors.New("unsupported threshold")
+	ErrUnsupportedDelegationScope = errors.New("unsupported delegation scope")
+)
+
+func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) error {
+	if ns == nil {
+		return errors.New("network state is nil")
+	}
+	zs := ns.Zones[zonePath]
+	if zs == nil {
+		return errors.New("zone not found")
+	}
+	if !zonePath.Valid() {
+		return errors.New("invalid zone path")
+	}
+
+	root := ns.Zones[zone.RootZone]
+	if root == nil || root.Authority == nil {
+		return errors.New("root authority is not trusted")
+	}
+	if err := verifyAuthoritySupported(root.Authority); err != nil {
+		return err
+	}
+	if root.Authority.Zone != zone.RootZone {
+		return errors.New("root authority zone mismatch")
+	}
+
+	for current := zonePath; current != zone.RootZone; current = current.Parent() {
+		currentState := ns.Zones[current]
+		if currentState == nil {
+			return errors.New("zone not found")
+		}
+		if currentState.Authority == nil {
+			return errors.New("zone authority is nil")
+		}
+
+		parent := current.Parent()
+		parentState := ns.Zones[parent]
+		if parentState == nil || parentState.Authority == nil {
+			return errors.New("parent zone authority is nil")
+		}
+
+		delegation := parentState.Delegations[current]
+		if delegation == nil {
+			delegation = parentProofDelegation(currentState, current)
+		}
+		if delegation == nil {
+			return errors.New("delegation not found")
+		}
+		if err := VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
+			return err
+		}
+		if !equalBytes(AuthorityHash(currentState.Authority), delegation.AuthorityHash) {
+			return errors.New("zone authority does not match parent delegation")
+		}
+		if currentState.Authority.Epoch != delegation.AuthorityEpoch {
+			return errors.New("zone authority epoch does not match parent delegation")
+		}
+	}
+
+	return nil
+}
+
+func parentProofDelegation(zs *zone.ZoneState, zonePath zone.ZonePath) *zone.Delegation {
+	if zs == nil {
+		return nil
+	}
+	for _, proof := range zs.ParentProof {
+		if proof != nil && proof.ZoneName == zonePath {
+			return proof
+		}
+	}
+	return nil
+}
 
 func SignRecord(r *zone.Record, priv ed25519.PrivateKey) error {
 	if r == nil {
@@ -54,6 +128,7 @@ func SignDelegation(d *zone.Delegation, parent zone.ZonePath, priv ed25519.Priva
 	if d == nil {
 		return errors.New("delegation is nil")
 	}
+	d.Scope = normalizedDelegationScope(d)
 	pub := priv.Public().(ed25519.PublicKey)
 	d.AuthorityEpoch = d.Authority.Epoch
 	d.AuthorityHash = AuthorityHash(&d.Authority)
@@ -69,8 +144,15 @@ func VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, p
 	if err := verifyAuthoritySupported(parentAuthority); err != nil {
 		return err
 	}
-	if d.ZoneName.Parent() != parentZone {
-		return errors.New("delegation parent mismatch")
+	switch normalizedDelegationScope(d) {
+	case zone.DelegationScopeDirectChild:
+		if d.ZoneName.Parent() != parentZone {
+			return errors.New("delegation parent mismatch")
+		}
+	case zone.DelegationScopeSubtree:
+		return ErrUnsupportedDelegationScope
+	default:
+		return ErrUnsupportedDelegationScope
 	}
 	key, err := findAuthorizedKey(parentAuthority, d.SignedBy, zone.PermDelegate, "", "", now)
 	if err != nil {
@@ -118,6 +200,7 @@ func delegationPayload(d *zone.Delegation, parent zone.ZonePath) []byte {
 	b.str(DomainDelegation)
 	b.str(parent.String())
 	b.str(d.ZoneName.String())
+	b.str(string(normalizedDelegationScope(d)))
 	b.u64(d.AuthorityEpoch)
 	b.bytes(d.AuthorityHash)
 	if d.ExpiresAt == nil {
@@ -127,6 +210,13 @@ func delegationPayload(d *zone.Delegation, parent zone.ZonePath) []byte {
 	}
 	b.bytes(KeyID(d.SignedBy))
 	return b.out
+}
+
+func normalizedDelegationScope(d *zone.Delegation) zone.DelegationScope {
+	if d == nil || d.Scope == "" {
+		return zone.DelegationScopeDirectChild
+	}
+	return d.Scope
 }
 
 func authorityPayload(a *zone.ZoneAuthority) []byte {
