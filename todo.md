@@ -8,7 +8,8 @@
 
 - [ ] **0.1 项目结构**
   - 入口目录：沿用当前 `app/higgs/`；后续如需要标准 Go 布局，再迁移到 `cmd/higgs/`
-  - 目录：`pkg/core/{identity,zone,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/babeld/`, `pkg/crypto/`
+  - [x] 已创建：`pkg/core/zone/`, `pkg/crypto/`
+  - [ ] 待创建：`pkg/core/{identity,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/babeld/`
   - Go 版本已为 1.22；保持 `go.mod` 的最低版本不低于 1.22
   - 引入依赖：`golang.zx2c4.com/wireguard/wgctrl`, `github.com/vishvananda/netlink`, `go.etcd.io/bbolt`
 
@@ -17,15 +18,17 @@
   - NodeID = blake2b(pubkey)
 
 - [ ] **0.3 Zone / Authority / Delegation / Record 基础模型**
-  - 定义设计文档中的核心数据结构
-  - 实现 `Get(fqkey)`：解析 Zone + Key → 本 Zone 查找 → 向上 fallback 直到根
-  - 实现 `Put(record)`：本地写入（暂不验证网络签名，只验证本地 authority）
+  - [x] 定义设计文档中的核心数据结构
+  - [x] 实现 `Get(fqkey)`：解析 Zone + Key → 本 Zone 查找 → 向上 fallback 直到根
+  - [x] 实现基础 `Put(record)` 写入 active state
+  - [ ] 在 `Put(record)` 中接入本地 authority 验证、版本链和 pending record 处理
 
 - [ ] **0.4 签名与验证**
-  - 实现 Record / Delegation / ZoneAuthority 的 Sign 和 Verify
-  - 实现 VerifyChain
-  - 定义并使用 domain separator
-  - Phase 0 只接受 `threshold=1`，遇到 `threshold>1` 返回 `unsupported threshold`
+  - [x] 实现 Record / Delegation 的 Sign 和 Verify
+  - [x] 实现 ZoneAuthority canonical hash
+  - [ ] 实现 VerifyChain
+  - [x] 定义并使用 domain separator
+  - [x] Phase 0 只接受 `threshold=1`，遇到 `threshold>1` 返回 `unsupported threshold`
 
 - [ ] **0.5 bbolt 持久化**
   - 按 Zone 分 bucket 存储

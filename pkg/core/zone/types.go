@@ -1,0 +1,189 @@
+package zone
+
+import (
+	"crypto/ed25519"
+	"net"
+	"net/netip"
+	"strings"
+	"time"
+)
+
+// ZonePath is a fully-qualified zone name. The root zone is ".".
+type ZonePath string
+
+const RootZone ZonePath = "."
+
+func (zp ZonePath) String() string {
+	return string(zp)
+}
+
+func (zp ZonePath) IsRoot() bool {
+	return zp == RootZone
+}
+
+func (zp ZonePath) Parent() ZonePath {
+	if zp.IsRoot() {
+		return RootZone
+	}
+
+	s := strings.TrimSuffix(string(zp), ".")
+	if s == "" {
+		return RootZone
+	}
+
+	parts := strings.Split(s, ".")
+	if len(parts) <= 1 {
+		return RootZone
+	}
+
+	return ZonePath(strings.Join(parts[1:], ".") + ".")
+}
+
+func (zp ZonePath) Valid() bool {
+	if zp == RootZone {
+		return true
+	}
+
+	s := string(zp)
+	if !strings.HasSuffix(s, ".") || strings.Contains(s, "..") {
+		return false
+	}
+
+	return strings.TrimSuffix(s, ".") != ""
+}
+
+// Ancestors returns zp followed by its parents up to the root.
+func (zp ZonePath) Ancestors() []ZonePath {
+	out := []ZonePath{zp}
+	for !zp.IsRoot() {
+		zp = zp.Parent()
+		out = append(out, zp)
+	}
+	return out
+}
+
+type Permission string
+
+const (
+	PermWrite          Permission = "write"
+	PermWriteWireGuard Permission = "write:wireguard"
+	PermWriteRoute     Permission = "write:route"
+	PermDelegate       Permission = "delegate"
+	PermAllocateIP     Permission = "allocate-ip"
+)
+
+type Capability struct {
+	Permissions []Permission
+	KeyPrefix   string
+}
+
+type AuthorizedKey struct {
+	Key          ed25519.PublicKey
+	NotBefore    int64
+	NotAfter     int64
+	Capabilities []Capability
+}
+
+type ZoneAuthority struct {
+	Zone      ZonePath
+	Epoch     uint64
+	Keys      []AuthorizedKey
+	Threshold uint8
+}
+
+type Delegation struct {
+	ZoneName       ZonePath
+	AuthorityEpoch uint64
+	AuthorityHash  []byte
+	Authority      ZoneAuthority
+	ExpiresAt      *time.Time
+
+	SignedBy  ed25519.PublicKey
+	Signature []byte
+}
+
+type Record struct {
+	Zone      ZonePath
+	Key       string
+	Type      string
+	Value     []byte
+	ValueHash []byte
+	Version   uint64
+	PrevHash  []byte
+	Timestamp int64
+
+	SignedBy  ed25519.PublicKey
+	Signature []byte
+}
+
+type ZoneState struct {
+	Path           ZonePath
+	Authority      *ZoneAuthority
+	ParentProof    []*Delegation
+	Delegations    map[ZonePath]*Delegation
+	Records        map[string]*Record
+	RecordHistory  map[string][]*Record
+	PendingRecords map[string][]*Record
+	MerkleRoot     []byte
+}
+
+func NewZoneState(path ZonePath, authority *ZoneAuthority) *ZoneState {
+	return &ZoneState{
+		Path:           path,
+		Authority:      authority,
+		Delegations:    make(map[ZonePath]*Delegation),
+		Records:        make(map[string]*Record),
+		RecordHistory:  make(map[string][]*Record),
+		PendingRecords: make(map[string][]*Record),
+	}
+}
+
+type NetworkState struct {
+	Zones      map[ZonePath]*ZoneState
+	GlobalRoot []byte
+}
+
+func NewNetworkState() *NetworkState {
+	return &NetworkState{Zones: make(map[ZonePath]*ZoneState)}
+}
+
+type NodeIdentity struct {
+	PrivateKey   ed25519.PrivateKey
+	PublicKey    ed25519.PublicKey
+	ManagedZones []ZonePath
+}
+
+type Endpoint struct {
+	IP       net.IP
+	Port     uint16
+	Scope    string
+	Priority int
+}
+
+type TransportLink struct {
+	Type       string
+	LocalPort  uint16
+	RemotePort uint16
+	Params     map[string]string
+}
+
+type LinkInstance struct {
+	ID         string
+	Peer       ZonePath
+	Transport  string
+	Interface  string
+	LocalAddr  netip.Addr
+	RemoteAddr netip.Addr
+	Metric     uint32
+	State      string
+}
+
+type PeerView struct {
+	NodeID           []byte
+	Zone             ZonePath
+	PublicKey        []byte
+	TunnelAllowedIPs []netip.Prefix
+	AnnouncedRoutes  []netip.Prefix
+	Endpoints        []Endpoint
+	Links            []TransportLink
+}
