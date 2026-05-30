@@ -158,10 +158,21 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 		active.Authority = cloneAuthority(snapshot.Authority)
 	}
 	active.ParentProof = cloneDelegationSlice(snapshot.ParentProof)
-	active.Delegations = cloneDelegationMap(snapshot.Delegations)
-	active.Records = make(map[string]*zone.Record)
-	active.RecordHistory = make(map[string][]*zone.Record)
-	active.PendingRecords = make(map[string][]*zone.Record)
+	if active.Delegations == nil {
+		active.Delegations = make(map[zone.ZonePath]*zone.Delegation)
+	}
+	if active.Records == nil {
+		active.Records = make(map[string]*zone.Record)
+	}
+	if active.RecordHistory == nil {
+		active.RecordHistory = make(map[string][]*zone.Record)
+	}
+	if active.PendingRecords == nil {
+		active.PendingRecords = make(map[string][]*zone.Record)
+	}
+	for child, delegation := range snapshot.Delegations {
+		active.Delegations[child] = cloneDelegation(delegation)
+	}
 
 	ns.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 	var applied, pending int

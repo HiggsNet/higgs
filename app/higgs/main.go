@@ -24,12 +24,19 @@ type stateFile struct {
 	RootPrivateKey ed25519.PrivateKey `json:"root_private_key"`
 	ZonePrivateKey ed25519.PrivateKey `json:"zone_private_key"`
 	Network        *zone.NetworkState `json:"network"`
+	SyncPeers      map[string]syncPeerState
 }
 
 type stateMeta struct {
-	ManagedZone    zone.ZonePath      `json:"managed_zone"`
-	RootPrivateKey ed25519.PrivateKey `json:"root_private_key"`
-	ZonePrivateKey ed25519.PrivateKey `json:"zone_private_key"`
+	ManagedZone    zone.ZonePath            `json:"managed_zone"`
+	RootPrivateKey ed25519.PrivateKey       `json:"root_private_key"`
+	ZonePrivateKey ed25519.PrivateKey       `json:"zone_private_key"`
+	SyncPeers      map[string]syncPeerState `json:"sync_peers,omitempty"`
+}
+
+type syncPeerState struct {
+	LastSyncUnix int64  `json:"last_sync_unix,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
 }
 
 type syncConfigFile struct {
@@ -417,8 +424,32 @@ func syncStatus() error {
 	}
 	fmt.Printf("peer_id: %s\n", config.PeerID)
 	fmt.Printf("listen_addr: %s\n", config.ListenAddr)
+	digests := gossip.ZoneDigests(state.Network)
+	pending := totalPending(state.Network)
 	fmt.Printf("known_peers: %d\n", len(config.Bootstrap))
-	for _, digest := range gossip.ZoneDigests(state.Network) {
+	fmt.Printf("known_zones: %d\n", len(digests))
+	fmt.Printf("pending_records: %d\n", pending)
+	fmt.Printf("local_root: %s\n", hex.EncodeToString(globalRootHash(digests)))
+	for _, peer := range config.Bootstrap {
+		peerState := state.SyncPeers[peer.ID]
+		lastSync := "never"
+		if peerState.LastSyncUnix != 0 {
+			lastSync = time.Unix(peerState.LastSyncUnix, 0).UTC().Format(time.RFC3339)
+		}
+		lastError := peerState.LastError
+		if lastError == "" {
+			lastError = "-"
+		}
+		fmt.Printf("peer %s addr=%s last_sync=%s known_zones=%d pending=%d last_error=%s\n",
+			peer.ID,
+			peer.Addr,
+			lastSync,
+			len(digests),
+			pending,
+			lastError,
+		)
+	}
+	for _, digest := range digests {
 		zs := state.Network.Zones[digest.Zone]
 		fmt.Printf("zone %s root=%s records=%d pending=%d delegations=%d\n",
 			digest.Zone,
@@ -538,9 +569,15 @@ func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*goss
 	}
 }
 
-func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gossip.Packet) error {
+func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gossip.Packet) (err error) {
 	configureValidation(state.Network)
 	message := packet.Message
+	defer func() {
+		recordPeerSync(state, message.PeerID, err)
+		if saveErr := saveState(state); err == nil && saveErr != nil {
+			err = saveErr
+		}
+	}()
 	switch message.Type {
 	case gossip.MessagePing:
 		fetch := gossip.FetchList(state.Network, message.Ping.Zones)
@@ -703,6 +740,46 @@ func countPending(zs *zone.ZoneState) int {
 	return out
 }
 
+func totalPending(ns *zone.NetworkState) int {
+	if ns == nil {
+		return 0
+	}
+	var out int
+	for _, zs := range ns.Zones {
+		out += countPending(zs)
+	}
+	return out
+}
+
+func globalRootHash(digests []gossip.ZoneDigest) []byte {
+	parts := make([][]byte, 0, len(digests)*2)
+	for _, digest := range digests {
+		parts = append(parts, []byte(digest.Zone), digest.RootHash)
+	}
+	return higgscrypto.Hash(parts...)
+}
+
+func recordPeerSync(state *stateFile, peerID string, err error) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	peerState.LastSyncUnix = time.Now().Unix()
+	if err != nil {
+		peerState.LastError = err.Error()
+	} else {
+		peerState.LastError = ""
+	}
+	state.SyncPeers[peerID] = peerState
+}
+
+func normalizeSyncPeers(state *stateFile) {
+	if state.SyncPeers == nil {
+		state.SyncPeers = make(map[string]syncPeerState)
+	}
+}
+
 func loadState() (*stateFile, error) {
 	path, err := configuredStatePath()
 	if err != nil {
@@ -727,11 +804,13 @@ func loadState() (*stateFile, error) {
 		RootPrivateKey: meta.RootPrivateKey,
 		ZonePrivateKey: meta.ZonePrivateKey,
 		Network:        ns,
+		SyncPeers:      meta.SyncPeers,
 	}
 	if state.Network == nil || len(state.Network.Zones) == 0 {
 		return nil, errors.New("state file has no network")
 	}
 	normalizeState(state.Network)
+	normalizeSyncPeers(&state)
 	if err := verifyConfiguredRootTrust(state.Network); err != nil {
 		return nil, err
 	}
@@ -753,6 +832,7 @@ func saveState(state *stateFile) error {
 		ManagedZone:    state.ManagedZone,
 		RootPrivateKey: state.RootPrivateKey,
 		ZonePrivateKey: state.ZonePrivateKey,
+		SyncPeers:      state.SyncPeers,
 	}
 	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
 		return err

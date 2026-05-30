@@ -106,25 +106,25 @@
 
 **目标：** 在不引入 WireGuard 的前提下，把配置状态同步做扎实：两节点可重复验证，三节点可传播，节点重启后可恢复，冲突/缺前驱/pending 状态可观测。
 
-- [ ] **2.1 双节点端到端同步验证**
-  - `node-admin` 创建 root `.`，不持有 `catofes.` 私钥
-  - `zone-catofes-admin` 通过 root delegation 加入并管理 `catofes.`
-  - `node-a`、`node-b` 都通过 `catofes.` delegation bundle 加入
-  - `node-a` 写入本 Zone record
-  - A/B 通过 gossip 双向同步
-  - 两端 `sync status`、`zone show`、`verify` 结果一致
-  - 将流程固化为不依赖手工复制 DB 的 smoke/integration 命令
+- [x] **2.1 双节点端到端同步验证**
+  - [x] `node-admin` 创建 root `.`，不持有 `catofes.` 私钥
+  - [x] `zone-catofes-admin` 通过 root delegation 加入并管理 `catofes.`
+  - [x] `node-a`、`node-b` 都通过 `catofes.` delegation bundle 加入
+  - [x] `node-a` / `node-b` 分别写入本 Zone record
+  - [x] A/B 通过 gossip 双向同步
+  - [x] 两端 `sync status`、`zone show`、`verify` 结果一致
+  - [x] 将流程固化为不依赖手工复制 DB 的 `make phase2-smoke`
 
 - [ ] **2.2 多节点传播**
-  - 支持 A-B-C bootstrap 拓扑下的 transitive zone propagation
-  - 新 Zone/Record 从 B 写入，经 A 传播到 C
-  - 节点离线后重启，能通过摘要比较补齐缺失 Zone
-  - 增加 `make multi-node-smoke`，覆盖 3 节点本机流程
+  - [x] 支持 B-A-C bootstrap 拓扑下的 transitive zone propagation
+  - [x] 新 Zone/Record 从 B 写入，经 A 传播到 C
+  - [ ] 节点离线后重启，能通过摘要比较补齐缺失 Zone
+  - [x] 增加 `make multi-node-smoke`，覆盖 3 节点本机流程
 
-- [ ] **2.3 同步状态可观测性**
-  - `higgs sync status` 输出每个 peer 的最近同步时间、已知 Zone 数、pending record 数
-  - 显示 local root hash / per-zone root hash / last error
-  - 增加 `higgs sync peers` 或扩展 status，用于排查 bootstrap 与 allowlist
+- [x] **2.3 同步状态可观测性**
+  - [x] `higgs sync status` 输出每个 peer 的最近同步时间、已知 Zone 数、pending record 数
+  - [x] 显示 local root hash / per-zone root hash / last error
+  - [x] 扩展 `sync status` 用于排查 bootstrap 与 allowlist
 
 - [ ] **2.4 Pending / FetchRecord 闭环**
   - 构造高版本 record 先到达的测试场景

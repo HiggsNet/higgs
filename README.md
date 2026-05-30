@@ -68,9 +68,11 @@ make check
 make build
 make join-smoke
 make phase1-smoke
+make phase2-smoke
+make multi-node-smoke
 ```
 
-`make join-smoke` 不依赖 UDP。`make phase1-smoke` 会启动两个本地 UDP gossip peer，因此运行环境需要允许本地 UDP socket。
+`make join-smoke` 不依赖 UDP。`make phase1-smoke`、`make phase2-smoke` 和 `make multi-node-smoke` 会启动本地 UDP gossip peer，因此运行环境需要允许本地 UDP socket。
 
 ## 创建独立管理节点
 
@@ -267,6 +269,22 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync status
 ```
 
 本机双节点测试时，每个节点都需要独立的 `config.yaml` 和 `data_dir`。`bootstrap` 中的 `id` 和 `addr` 必须和对端的 `peer_id`、UDP 监听地址一致。
+
+双节点双向同步可以直接跑：
+
+```bash
+make phase2-smoke
+```
+
+该流程会创建独立的 `node-admin`、`zone-catofes-admin`、`node-a` 和 `node-b`，两端都通过 delegation bundle 加入；A/B 分别写入自己的 `identity` record 后轮流 `sync serve`/`sync once`，最后检查双方 `zone show`、`sync status` 和 `verify`。
+
+三节点传播可以直接跑：
+
+```bash
+make multi-node-smoke
+```
+
+该流程使用 A 作为中间 gossip peer：B 写入 `node-b.catofes./identity`，先同步到 A，再由 C 从 A 拉取，验证 C 能看到并验证 B 的 Zone record。
 
 ## 下一步方向
 

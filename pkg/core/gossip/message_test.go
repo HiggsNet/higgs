@@ -117,7 +117,7 @@ func TestZoneDigestsAreStable(t *testing.T) {
 	}
 }
 
-func TestApplySnapshotVerifiesAndReplacesWholeZone(t *testing.T) {
+func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)
 	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
@@ -152,8 +152,8 @@ func TestApplySnapshotVerifiesAndReplacesWholeZone(t *testing.T) {
 	if got == nil || string(got.Value) != "node-b" || got.Version != 2 {
 		t.Fatalf("active record = %#v, want v2", got)
 	}
-	if target.Zones["catofes."].Records["obsolete"] != nil {
-		t.Fatalf("obsolete local key survived whole-zone snapshot")
+	if target.Zones["catofes."].Records["obsolete"] == nil {
+		t.Fatalf("trusted local key was removed by whole-zone snapshot")
 	}
 }
 
