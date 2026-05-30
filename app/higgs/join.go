@@ -32,70 +32,6 @@ type joinBundle struct {
 	Network       *zone.NetworkState `json:"network"`
 }
 
-func runRoot(args []string) error {
-	if len(args) == 0 {
-		return usage()
-	}
-	switch args[0] {
-	case "init":
-		if len(args) != 1 {
-			return usage()
-		}
-		return initRootState()
-	case "pubkey":
-		state, err := loadState()
-		if err != nil {
-			return err
-		}
-		root := state.Network.Zones[zone.RootZone]
-		if root == nil || root.Authority == nil || len(root.Authority.Keys) == 0 {
-			return errors.New("root authority has no public key")
-		}
-		fmt.Println(hex.EncodeToString(root.Authority.Keys[0].Key))
-		return nil
-	default:
-		return usage()
-	}
-}
-
-func keygen(path string) error {
-	pub, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		return err
-	}
-	key := privateKeyFile{
-		Type:       "higgs.ed25519.private.v1",
-		PublicKey:  pub,
-		PrivateKey: priv,
-	}
-	if err := writeJSONFile(path, 0o600, &key); err != nil {
-		return err
-	}
-	fmt.Printf("wrote key: %s\n", path)
-	fmt.Printf("public key: %s\n", hex.EncodeToString(pub))
-	return nil
-}
-
-func runJoin(args []string) error {
-	if len(args) == 0 {
-		return usage()
-	}
-	switch args[0] {
-	case "request":
-		if len(args) != 4 {
-			return usage()
-		}
-		return createJoinRequest(zone.ZonePath(args[1]), args[2], args[3])
-	case "accept":
-		if len(args) != 3 {
-			return usage()
-		}
-		return acceptJoinBundle(args[1], args[2])
-	default:
-		return usage()
-	}
-}
-
 func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error {
 	if !path.Valid() || path == zone.RootZone {
 		return fmt.Errorf("invalid join zone: %s", path)
@@ -114,13 +50,6 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 	}
 	fmt.Printf("wrote join request: %s\n", outPath)
 	return nil
-}
-
-func runDelegate(args []string) error {
-	if len(args) != 3 || args[0] != "issue" {
-		return usage()
-	}
-	return issueDelegation(args[1], args[2])
 }
 
 func issueDelegation(requestPath string, outPath string) error {
@@ -298,15 +227,6 @@ func readJSONFile(path string, out any) error {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil
-}
-
-func writeJSONFile(path string, mode os.FileMode, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, mode)
 }
 
 func cloneNetworkForBundle(ns *zone.NetworkState) *zone.NetworkState {
