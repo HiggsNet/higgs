@@ -102,7 +102,42 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return errors.New("usage: higgs root init [zone] | higgs root pubkey | higgs keygen <key.json> | higgs join request <zone> <key.json> <request.json> | higgs delegate issue <request.json> <bundle.json> | higgs join accept <bundle.json> <key.json> | higgs zone show <zone> | higgs record put <zone> <key> <value> [type] | higgs verify [chain] <zone> | higgs sync status|serve|once <peer>")
+	return errors.New("usage: higgs root init | higgs root pubkey | higgs keygen <key.json> | higgs join request <zone> <key.json> <request.json> | higgs delegate issue <request.json> <bundle.json> | higgs join accept <bundle.json> <key.json> | higgs zone show <zone> | higgs record put <zone> <key> <value> [type] | higgs verify [chain] <zone> | higgs sync status|serve|once <peer>")
+}
+
+func initRootState() error {
+	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return err
+	}
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: higgscrypto.SupportedThreshold,
+		Keys: []zone.AuthorizedKey{{
+			Key: rootPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
+			}},
+		}},
+	}
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	state := &stateFile{
+		ManagedZone:    zone.RootZone,
+		RootPrivateKey: rootPriv,
+		Network:        ns,
+	}
+	if err := saveState(state); err != nil {
+		return err
+	}
+	path, err := configuredStatePath()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("initialized root in %s\n", path)
+	fmt.Printf("root public key: %s\n", hex.EncodeToString(rootPub))
+	return nil
 }
 
 func initState(managedZone zone.ZonePath) error {

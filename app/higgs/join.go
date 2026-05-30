@@ -38,11 +38,10 @@ func runRoot(args []string) error {
 	}
 	switch args[0] {
 	case "init":
-		managedZone := zone.ZonePath("local.")
-		if len(args) > 1 {
-			managedZone = zone.ZonePath(args[1])
+		if len(args) != 1 {
+			return usage()
 		}
-		return initState(managedZone)
+		return initRootState()
 	case "pubkey":
 		state, err := loadState()
 		if err != nil {
@@ -249,7 +248,7 @@ func signerForParent(state *stateFile, parent zone.ZonePath) (ed25519.PrivateKey
 		if len(state.RootPrivateKey) == ed25519.PrivateKeySize {
 			return state.RootPrivateKey, nil
 		}
-	case len(state.ZonePrivateKey) == ed25519.PrivateKeySize:
+	case parent == state.ManagedZone && len(state.ZonePrivateKey) == ed25519.PrivateKeySize:
 		return state.ZonePrivateKey, nil
 	}
 	return nil, fmt.Errorf("no local signing key for parent zone %s", parent)

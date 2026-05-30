@@ -85,8 +85,10 @@
   - [x] 提供 `config.example.yaml`
 
 - [x] **1.5.2 根 Zone 与准入 CLI**
-  - [x] `higgs root init <zone>`：创建根 authority，并委派初始管理 Zone
+  - [x] `higgs root init`：只创建根域 `.` 的 root authority
   - [x] `higgs root pubkey`：输出根公钥，供其他节点配置 `trusted_root_public_key`
+  - [x] root/admin 状态库与业务节点状态库分离；`node-admin` 只持有 `.` 的 root 私钥
+  - [x] 一级管理 Zone（如 `catofes.`）也通过 join request / root delegation 独立加入，并由自己的管理私钥继续委派子 Zone
   - [x] `higgs keygen <key.json>`：生成新节点 ED25519 keypair
   - [x] `higgs join request <zone> <key.json> <request.json>`：新节点生成加入申请
   - [x] `higgs delegate issue <request.json> <bundle.json>`：父 Zone 持有者签发 delegation bundle
@@ -98,111 +100,151 @@
   - [x] `make join-smoke`：本地验证 root/delegation/join/record/verify 流程
   - [x] `make phase1-smoke`：本地两 peer UDP gossip smoke；需要运行环境允许 UDP socket
 
-## Phase 2: WireGuard 建链（预计 2-3 周）
+## Phase 2: 双节点/多节点配置同步收敛（预计 1-2 周）
+
+**目标：** 在不引入 WireGuard 的前提下，把配置状态同步做扎实：两节点可重复验证，三节点可传播，节点重启后可恢复，冲突/缺前驱/pending 状态可观测。
+
+- [ ] **2.1 双节点端到端同步验证**
+  - `node-admin` 创建 root `.`，不持有 `catofes.` 私钥
+  - `zone-catofes-admin` 通过 root delegation 加入并管理 `catofes.`
+  - `node-a`、`node-b` 都通过 `catofes.` delegation bundle 加入
+  - `node-a` 写入本 Zone record
+  - A/B 通过 gossip 双向同步
+  - 两端 `sync status`、`zone show`、`verify` 结果一致
+  - 将流程固化为不依赖手工复制 DB 的 smoke/integration 命令
+
+- [ ] **2.2 多节点传播**
+  - 支持 A-B-C bootstrap 拓扑下的 transitive zone propagation
+  - 新 Zone/Record 从 B 写入，经 A 传播到 C
+  - 节点离线后重启，能通过摘要比较补齐缺失 Zone
+  - 增加 `make multi-node-smoke`，覆盖 3 节点本机流程
+
+- [ ] **2.3 同步状态可观测性**
+  - `higgs sync status` 输出每个 peer 的最近同步时间、已知 Zone 数、pending record 数
+  - 显示 local root hash / per-zone root hash / last error
+  - 增加 `higgs sync peers` 或扩展 status，用于排查 bootstrap 与 allowlist
+
+- [ ] **2.4 Pending / FetchRecord 闭环**
+  - 构造高版本 record 先到达的测试场景
+  - 验证 pending store 中的缺前驱 record 会触发 `FETCH_RECORD`
+  - 前驱补齐后自动提升 active
+  - 为 stale/conflict/pending 增加明确 CLI 输出
+
+- [ ] **2.5 同步协议收敛**
+  - 明确 JSON wire format 的兼容边界和版本字段
+  - 为 message size、zone count、record count 增加可配置限制
+  - 梳理是否需要在 Phase 2 末尾切 protobuf；默认仍不引入 `protoc`
+
+- [ ] **2.6 文档与操作手册**
+  - README 增加双节点完整同步脚本
+  - README 增加三节点传播示例
+  - 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、pending 未补齐
+
+## Phase 3: WireGuard 建链（预计 2-3 周）
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
 
-- [ ] **2.1 WireGuard 控制模块**
+- [ ] **3.1 WireGuard 控制模块**
   - 通过 `wgctrl-go` 操作内核 WG 接口
   - 监听 `*.<parent_zone>./wireguard/*` Record 变更
   - 从 Zone 推导 PeerView：`PublicKey`、`Endpoints`、`TunnelAllowedIPs`、`AnnouncedRoutes`
   - 应用 WG 配置（add/remove/update peer）
   - WG AllowedIPs 只放 tunnel /32 或 /128，业务路由交给 Babeld
 
-- [ ] **2.2 链路实例管理**
+- [ ] **3.2 链路实例管理**
   - 当 WG peer 建立后，生成 LinkInstance
   - 跟踪链路状态：up/down/stale
 
-- [ ] **2.3 最小闭环验证**
+- [ ] **3.3 最小闭环验证**
   - 节点 A 和 B 同步配置
   - 自动为对方添加 WG Peer
   - `wg show` 看到握手成功
   - 互相 ping 通 tunnel IP
 
-## Phase 3: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
+## Phase 4: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 
 **目标：** babeld 在 WG 接口上发现邻居、学习路由，且只接受被授权的前缀。
 
-- [ ] **3.1 Babeld 路由适配器**
+- [ ] **4.1 Babeld 路由适配器**
   - 启动 babeld 并通过控制 socket（`-G` Unix/TCP socket）发送命令
   - 命令封装：`add interface wg0`、`flush interface wg0`
   - 当 WG 接口建立/拆除时，动态通知 babeld 添加/移除接口
 
-- [ ] **3.2 Route Authorization Filter**
+- [ ] **4.2 Route Authorization Filter**
   - 根据 active state 中的 `routes/announcements/*` 和 `ipam/assignments/*` 生成 prefix whitelist
   - 为每个 peer/interface 生成 babeld `import filter`
   - 拒绝 `0.0.0.0/0`、未授权前缀、他人网段
 
-- [ ] **3.3 本地路由注入**
+- [ ] **4.3 本地路由注入**
   - 通过 babeld 控制 socket 的 `install` / `uninstall` 注入本节点 AnnouncedRoutes
   - 或通过 `redistribute` 配置让 babeld 自动学习
 
-- [ ] **3.4 闭环验证**
+- [ ] **4.4 闭环验证**
   - 3+ 节点组网
   - Babeld 在 wg0 上发现邻居，交换路由
   - 节点 A 尝试宣告未授权前缀时被其他节点过滤掉
 
-## Phase 4: 多节点/IPAM/准入/防火墙（预计 3-4 周）
+## Phase 5: IPAM/准入扩展/防火墙（预计 3-4 周）
 
 **目标：** 支持动态准入、IP 分配、链路健康、防火墙规则。
 
-- [ ] **4.1 准入流程**
+- [ ] **5.1 准入流程**
   - 新节点生成密钥对 → 向管理员申请 delegation
   - 管理员在父 Zone 创建 `nodeX.parent.` delegation
   - Gossip 全网传播后，新节点自动被所有节点识别并建立 WG Peer
 
-- [ ] **4.2 IP 分配管理（IPAM）**
+- [ ] **5.2 IP 分配管理（IPAM）**
   - 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
   - 节点查询自己的 Zone fallback 路径，汇总所有分配到的 IPs
   - 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
 
-- [ ] **4.3 链路健康检测**
+- [ ] **5.3 链路健康检测**
   - 在 WG 隧道上周期性发送 ICMP/自定义 keepalive
   - 检测 RTT、丢包率
   - 链路异常时标记 down，从 babeld 接口中移除或降低优先级
 
-- [ ] **4.4 动态 Peer 管理**
+- [ ] **5.4 动态 Peer 管理**
   - 节点离线超时后，保留配置但标记 stale
   - 长期离线后自动清理 WG Peer 和路由
   - 节点信息变更（endpoint、pubkey rotate）自动更新 WG 配置
 
-- [ ] **4.5 防火墙规则同步**
+- [ ] **5.5 防火墙规则同步**
   - 基于已同步的 Zone 中所有合法节点的 TunnelAllowedIPs
   - 通过 `nftables` netlink 接口生成 accept 规则，默认 drop
 
-## Phase 5: 健壮性与高级特性（预计 4-6 周）
+## Phase 6: 健壮性与高级特性（预计 4-6 周）
 
 **目标：** 生产可用，支持多线路、跳频、扩展传输协议。
 
-- [ ] **5.1 多线路并行（Multipath）**
+- [ ] **6.1 多线路并行（Multipath）**
   - 一个 Peer 可建立多条 TransportLink（WG over 公网 + WG over 内网 + GRE）
   - 每条链路独立运行 babeld 接口
   - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
-- [ ] **5.2 UDP 端口跳频（Port Hopping）**
+- [ ] **6.2 UDP 端口跳频（Port Hopping）**
   - 先实现多 endpoint / 多 port probe 与质量选择
   - 如需 rotate，必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径
 
-- [ ] **5.3 IKEv2 (StrongSwan) 传输驱动**
+- [ ] **6.3 IKEv2 (StrongSwan) 传输驱动**
   - 通过 vici 协议控制 StrongSwan
   - 复用 Zone K-V 中的 `ipsec/*` Record
 
-- [ ] **5.4 VXLAN Overlay**
+- [ ] **6.4 VXLAN Overlay**
   - 在 WG 三层网络上封装 VXLAN
   - 通过 Zone Record 同步 VNI、VTEP 信息
 
-- [ ] **5.5 SRv6 支持（实验性）**
+- [ ] **6.5 SRv6 支持（实验性）**
   - 通过 netlink 配置 SRv6 SID、End.DT4/End.DX6 行为
   - 与 BIRD/FRR 的 SRv6 扩展联动（如后续引入 BGP）
 
-- [ ] **5.6 运维与可观测性**
+- [ ] **6.6 运维与可观测性**
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`
 
 ## 下一步
 
-1. 开始 Phase 2 WireGuard 控制模块：根据 active Zone records 推导 PeerView，并用 `wgctrl-go` 应用 peer 配置
-2. 定义 WireGuard 相关 Record key/type：公钥、endpoint、listen port、tunnel allowed IP、route announcement
-3. 在 join/delegation 流程后补真实多节点端到端手册：join → gossip sync → WG peer 建立
+1. 开始 Phase 2 双节点端到端同步验证：node-admin root init → catofes. join → node-a/node-b join → record put → gossip sync → verify
+2. 增加三节点传播 smoke：A-B-C 拓扑中 B 写入的 Zone/Record 能传播到 C
+3. 强化 `sync status`：输出 per-peer / per-zone / pending / last error，方便排查同步状态
 3. Phase 0 闭环验证：单机完成 `init` → `record put` → `verify chain` 的 CLI 流程
