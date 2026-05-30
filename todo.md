@@ -43,6 +43,8 @@
   - [x] `higgs zone show <zone>`
   - [x] `higgs record put <zone> <key> <value>`
   - [x] `higgs verify <zone>`
+  - [x] `higgs db dump [zone]`：以只读模式打开 bbolt，按 bucket 打印 key-value（JSON 美化）
+  - [x] `higgs db stats`：统计各 bucket 的 key 数和数据大小
 
 ## Phase 1: 两节点 Zone 同步（预计 1-2 周）
 

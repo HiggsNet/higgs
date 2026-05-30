@@ -233,6 +233,23 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs zone show node-b.catofes.
 
 Record 按 Zone/key 独立版本化。如果高版本 record 先于其前驱到达，它会保留在 pending 中，直到前驱被 fetch 或导入。
 
+## 数据库调试
+
+bbolt 是二进制文件，不能直接查看。可以用内置的 debug 命令检查本地状态库：
+
+```bash
+# 查看所有 bucket 的 key 数量和大小统计
+build/higgs db stats
+
+# 打印全部数据库内容（JSON 美化）
+build/higgs db dump
+
+# 只打印指定 zone 的内容（会自动带上 _meta bucket）
+build/higgs db dump catofes.
+```
+
+两个命令都以只读模式打开数据库，不会干扰正在运行的 `sync serve` 实例。
+
 ## Gossip 同步
 
 启动 node B 的 gossip server：
@@ -278,6 +295,8 @@ build/higgs verify <zone>
 build/higgs sync status
 build/higgs sync serve
 build/higgs sync once <peer-id>
+build/higgs db dump [zone]
+build/higgs db stats
 ```
 
 ## 当前限制
