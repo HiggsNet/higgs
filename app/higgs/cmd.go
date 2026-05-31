@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/urfave/cli/v3"
@@ -236,7 +237,18 @@ func cmdSync() *cli.Command {
 				Usage:       "Start the gossip sync server",
 				Description: "Listen for incoming sync messages and respond to pings/pongs.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return syncServe()
+					return syncServe(ctx)
+				},
+			},
+			{
+				Name:        "run",
+				Usage:       "Run gossip serving and periodic outbound sync",
+				Description: "Listen for incoming sync messages while periodically syncing bootstrap peers.",
+				Flags: []cli.Flag{
+					&cli.IntFlag{Name: "interval", Value: 5, Usage: "Outbound sync interval in seconds"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return syncRun(ctx, time.Duration(cmd.Int("interval"))*time.Second)
 				},
 			},
 			{

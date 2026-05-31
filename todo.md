@@ -136,16 +136,25 @@
   - [x] 增加 `higgs debug pending`：列出 pending record、缺失 predecessor、预计 FETCH_RECORD selector
   - [x] 支持 `HIGGS_LOG_LEVEL=debug` 或配置项开启详细日志，默认保持简洁输出
 
-- [ ] **2.5 自动重连与周期同步**
-  - [ ] 增加长期运行模式：`higgs sync run`
-  - [ ] `sync run` 同时执行 UDP serve 与周期性 outbound sync
-  - [ ] 对 bootstrap peers 定时执行摘要比较和缺失 Zone/Record 补齐
-  - [ ] peer 失败后记录 `last_error`，并使用 backoff 避免紧密重试
-  - [ ] 网络恢复后自动重试并收敛，不需要手动 `sync once`
-  - [ ] `sync status` 显示 peer online/stale/backoff/next_retry
-  - [ ] 增加 smoke：断开/停止 peer 后恢复，验证自动补齐
+- [x] **2.5 自动重连与周期同步**
+  - [x] 增加长期运行模式：`higgs sync run`
+  - [x] `sync run` 同时执行 UDP serve 与周期性 outbound sync
+  - [x] 对 bootstrap peers 定时执行摘要比较和缺失 Zone/Record 补齐
+  - [x] peer 失败后记录 `last_error`，并使用 backoff 避免紧密重试
+  - [x] 网络恢复后自动重试并收敛，不需要手动 `sync once`
+  - [x] `sync status` 显示 peer online/stale/backoff/next_retry
+  - [x] 增加 smoke：断开/停止 peer 后恢复，验证自动补齐
 
-- [ ] **2.6 Peer discovery / 动态 allowlist**
+- [ ] **2.6 链式拓扑主动传播 / relay fanout**
+  - [ ] 明确当前语义：在 A-B-C-D 链式 bootstrap 中，A 更新 record 后会优先同步/announce 给直接 peer B；C/D 默认依赖各自周期性摘要比较或 B 后续 outbound sync 才能得到更新
+  - [ ] 决定 Phase 2 目标语义：是否要求 B 在成功 apply A 的新 Zone/Record 后，立即向除 A 外的已知 peers 触发 lightweight announce 或 sync round
+  - [ ] 增加变更来源 tracking，避免 A-B-A、B-C-B 形成 announce 回环；至少需要 peer id + zone root hash / record hash 去重窗口
+  - [ ] 为 relay 增加节流和批处理，避免一个 record 更新在稠密拓扑中产生广播风暴
+  - [ ] `sync run` 在本地 record put 或远端 apply 成功后，支持唤醒 outbound sync，而不是完全等待下一次 interval
+  - [ ] 增加 smoke：A-B-C-D 链式拓扑中 A 写入 record，验证 D 在无需等待完整轮询周期的情况下收敛
+  - [ ] `sync status --verbose` 显示 peer 最近一次更新来源与 relay 抑制原因，方便排查“为什么只到 B 没到 C/D”
+
+- [ ] **2.7 Peer discovery / 动态 allowlist**
   - [ ] 明确默认身份模型：普通节点的 `peer_id` 默认等于本节点授权 Zone（如 `node-a.catofes.`），bootstrap/discovery 均以 Zone FQDN 作为 peer id
   - [ ] 明确 endpoint 模型：一个 `peer_id` 可对应多个 endpoint；多网卡、双栈、迁移地址不应引入多个 peer id
   - [ ] 定义高级例外：只有同一授权 Zone 下存在多个独立 gossip 实例/角色时，才引入 peer alias 或 instance id，并必须由该 Zone 显式授权
@@ -158,31 +167,33 @@
   - [ ] endpoint 变更后更新 known peer table，过期/撤销后标记 stale 或移除
   - [ ] 增加 smoke：新 peer 不手写到所有节点 bootstrap，也能经已知节点发现并同步
 
-- [ ] **2.7 Pending / FetchRecord 闭环**
+- [ ] **2.8 Pending / FetchRecord 闭环**
   - [x] 构造高版本 record 先到达的测试场景
   - [x] 验证 pending store 中的缺前驱 record 会触发 `FETCH_RECORD`
   - [x] 前驱补齐后自动提升 active
   - [ ] 为 stale/conflict/pending 增加明确 CLI 输出
 
-- [ ] **2.8 测试补强**
+- [ ] **2.9 测试补强**
   - [ ] 为 `sync status --verbose`、`debug peer`、`debug zone`、`debug pending` 增加 CLI golden/output 测试
   - [ ] 增加 gossip 故障注入测试：unknown peer、addr mismatch、message too large、replay、quota、unsupported wire version
   - [ ] 增加 verify failure 测试：错误 root key、篡改 delegation、篡改 record signature、过期 authority key
   - [ ] 增加 pending 边界测试：重复 pending、冲突版本、stale record、缺多级 predecessor、pending 持久化后重启恢复
   - [ ] 增加 snapshot limit 测试：zone count、record count、message bytes 达到边界时的 accept/reject 行为
   - [ ] 增加 sync run 自动重连集成测试：peer 停止、恢复、backoff、最终收敛
+  - [ ] 增加 relay fanout 集成测试：链式拓扑、去重、节流、最终收敛时间边界
   - [ ] 增加 peer discovery 集成测试：endpoint record 发布、更新、撤销后 known peer table 收敛
   - [ ] 将需要 UDP 的测试与纯逻辑测试分层，确保受限环境仍能跑完非网络测试
   - [ ] 为 smoke 目标输出失败时的关键日志，减少 CI/本机排障成本
 
-- [x] **2.9 同步协议收敛**
+- [x] **2.10 同步协议收敛**
   - [x] 明确 JSON wire format 的兼容边界和版本字段
   - [x] 为 message size、zone count、record count 增加可配置限制
   - [x] 梳理是否需要在 Phase 2 末尾切 protobuf；默认仍不引入 `protoc`
 
-- [ ] **2.10 文档与操作手册**
+- [ ] **2.11 文档与操作手册**
   - README 增加双节点完整同步脚本
   - README 增加三节点传播示例
+  - README 记录链式拓扑传播语义：周期收敛 vs 主动 relay fanout 的差异
   - 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、pending 未补齐
 
 ## Phase 3: WireGuard 建链（预计 2-3 周）

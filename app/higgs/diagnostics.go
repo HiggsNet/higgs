@@ -74,9 +74,11 @@ func debugPeer(peerID string) error {
 	fmt.Printf("source: %s\n", source)
 	fmt.Printf("configured_addr: %s\n", dash(configuredAddr))
 	fmt.Printf("resolved_addr: %s\n", resolved)
+	fmt.Printf("status: %s\n", peerStatus(peerState, time.Now()))
 	fmt.Printf("last_success: %s\n", formatLastSuccess(peerState))
 	fmt.Printf("last_error: %s\n", dash(peerState.LastError))
-	fmt.Printf("backoff: -\n")
+	fmt.Printf("backoff: %s\n", formatBackoff(peerState, time.Now()))
+	fmt.Printf("next_retry: %s\n", formatNextRetry(peerState, time.Now()))
 	fmt.Printf("known_endpoint: %s\n", resolved)
 	return nil
 }
@@ -194,6 +196,37 @@ func formatLastSuccess(peerState syncPeerState) string {
 		return "never"
 	}
 	return time.Unix(peerState.LastSyncUnix, 0).UTC().Format(time.RFC3339)
+}
+
+func peerStatus(peerState syncPeerState, now time.Time) string {
+	if backoffRemaining(peerState, now) > 0 {
+		return "backoff"
+	}
+	if peerState.LastError != "" {
+		return "stale"
+	}
+	if peerState.LastSyncUnix == 0 {
+		return "unknown"
+	}
+	if now.Sub(time.Unix(peerState.LastSyncUnix, 0)) > 2*time.Minute {
+		return "stale"
+	}
+	return "online"
+}
+
+func formatBackoff(peerState syncPeerState, now time.Time) string {
+	remaining := backoffRemaining(peerState, now)
+	if remaining <= 0 {
+		return "-"
+	}
+	return remaining.Round(time.Second).String()
+}
+
+func formatNextRetry(peerState syncPeerState, now time.Time) string {
+	if backoffRemaining(peerState, now) <= 0 {
+		return "-"
+	}
+	return time.Unix(peerState.BackoffUntilUnix, 0).UTC().Format(time.RFC3339)
 }
 
 func dash(value string) string {

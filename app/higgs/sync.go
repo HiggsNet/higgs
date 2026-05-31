@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -46,15 +49,18 @@ func syncStatus(verbose bool) error {
 				resolved = addr.String()
 			}
 			peerState := state.SyncPeers[peer.ID]
-			fmt.Printf("bootstrap peer=%s configured_addr=%s resolved_addr=%s last_success=%s last_error=%s\n",
+			fmt.Printf("bootstrap peer=%s configured_addr=%s resolved_addr=%s status=%s last_success=%s last_error=%s next_retry=%s\n",
 				peer.ID,
 				peer.Addr,
 				resolved,
+				peerStatus(peerState, time.Now()),
 				formatLastSuccess(peerState),
 				dash(peerState.LastError),
+				formatNextRetry(peerState, time.Now()),
 			)
 		}
 	}
+	now := time.Now()
 	for _, peer := range config.Bootstrap {
 		peerState := state.SyncPeers[peer.ID]
 		lastSync := "never"
@@ -65,13 +71,15 @@ func syncStatus(verbose bool) error {
 		if lastError == "" {
 			lastError = "-"
 		}
-		fmt.Printf("peer %s addr=%s last_sync=%s known_zones=%d pending=%d last_error=%s\n",
+		fmt.Printf("peer %s addr=%s status=%s last_sync=%s known_zones=%d pending=%d last_error=%s next_retry=%s\n",
 			peer.ID,
 			peer.Addr,
+			peerStatus(peerState, now),
 			lastSync,
 			len(digests),
 			pending,
 			lastError,
+			formatNextRetry(peerState, now),
 		)
 	}
 	for _, digest := range digests {
@@ -114,7 +122,7 @@ func missingPredecessorVersion(record *zone.Record) uint64 {
 	return record.Version - 1
 }
 
-func syncServe() error {
+func syncServe(ctx context.Context) error {
 	state, err := loadState()
 	if err != nil {
 		return err
@@ -123,23 +131,24 @@ func syncServe() error {
 	if err != nil {
 		return err
 	}
-	transport, err := gossip.Listen(gossip.Config{
-		PeerID:          config.PeerID,
-		ListenAddr:      config.ListenAddr,
-		KnownPeers:      configuredKnownPeers(config),
-		MaxMessageBytes: config.MaxMessageBytes,
-		Replay:          gossip.NewReplayWindow(0),
-		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
-		Log:             syncDebugLogger(config),
-	})
+	transport, err := openSyncTransport(config)
 	if err != nil {
 		return err
 	}
 	defer transport.Close()
 	fmt.Printf("sync serving as %s on %s\n", config.PeerID, transport.LocalAddr())
 	for {
-		packet, err := transport.Receive()
+		if ctx.Err() != nil {
+			return nil
+		}
+		packet, err := receiveWithContext(ctx, transport, time.Now().Add(time.Second))
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if isReceiveTimeout(err) {
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "sync receive error: %v\n", err)
 			continue
 		}
@@ -159,7 +168,79 @@ func syncOnce(peerID string) error {
 	if err != nil {
 		return err
 	}
-	transport, err := gossip.Listen(gossip.Config{
+	transport, err := openSyncTransport(config)
+	if err != nil {
+		return err
+	}
+	defer transport.Close()
+	return syncRoundWithTransport(context.Background(), state, transport, peerID, 3*time.Second)
+}
+
+func syncRun(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	state, err := loadState()
+	if err != nil {
+		return err
+	}
+	config, err := loadSyncConfig(state)
+	if err != nil {
+		return err
+	}
+	transport, err := openSyncTransport(config)
+	if err != nil {
+		return err
+	}
+	defer transport.Close()
+	fmt.Printf("sync running as %s on %s interval=%s\n", config.PeerID, transport.LocalAddr(), interval)
+
+	nextSync := time.Now()
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		now := time.Now()
+		if !now.Before(nextSync) {
+			if latest, err := loadState(); err == nil {
+				state = latest
+			} else {
+				fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
+			}
+			for _, peer := range config.Bootstrap {
+				if peer.ID == "" {
+					continue
+				}
+				if backoffRemaining(state.SyncPeers[peer.ID], now) > 0 {
+					continue
+				}
+				err := syncRoundWithTransport(ctx, state, transport, peer.ID, 3*time.Second)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "sync round error peer=%s: %v\n", peer.ID, err)
+				}
+			}
+			nextSync = now.Add(interval)
+		}
+		packet, err := receiveWithContext(ctx, transport, time.Now().Add(250*time.Millisecond))
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if isReceiveTimeout(err) || errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "sync receive error: %v\n", err)
+			continue
+		}
+		if err := handleSyncPacket(state, transport, packet); err != nil {
+			fmt.Fprintf(os.Stderr, "sync packet error from %s: %v\n", packet.Message.PeerID, err)
+			continue
+		}
+	}
+}
+
+func openSyncTransport(config *syncConfigFile) (*gossip.Transport, error) {
+	return gossip.Listen(gossip.Config{
 		PeerID:          config.PeerID,
 		ListenAddr:      config.ListenAddr,
 		KnownPeers:      configuredKnownPeers(config),
@@ -168,10 +249,15 @@ func syncOnce(peerID string) error {
 		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 		Log:             syncDebugLogger(config),
 	})
-	if err != nil {
-		return err
-	}
-	defer transport.Close()
+}
+
+func syncRoundWithTransport(ctx context.Context, state *stateFile, transport *gossip.Transport, peerID string, timeout time.Duration) (err error) {
+	defer func() {
+		recordPeerSync(state, peerID, err)
+		if saveErr := saveState(state); err == nil && saveErr != nil {
+			err = saveErr
+		}
+	}()
 	if err := transport.Send(peerID, &gossip.Message{
 		Type: gossip.MessagePing,
 		Ping: &gossip.Ping{Zones: gossip.ZoneDigests(state.Network)},
@@ -179,21 +265,27 @@ func syncOnce(peerID string) error {
 		return err
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		_ = transport.LocalAddr()
-		packet, err := receiveWithDeadline(transport, deadline)
-		if err != nil {
+		packet, receiveErr := receiveWithContext(ctx, transport, deadline)
+		if receiveErr != nil && isReceiveTimeout(receiveErr) && time.Now().Before(deadline) {
+			continue
+		}
+		if receiveErr != nil {
+			err = receiveErr
 			return err
 		}
 		if packet.Message.PeerID != peerID {
+			if handleErr := handleSyncPacket(state, transport, packet); handleErr != nil {
+				fmt.Fprintf(os.Stderr, "sync packet error from %s: %v\n", packet.Message.PeerID, handleErr)
+			}
 			continue
 		}
 		var waitingForAnnounce bool
 		if packet.Message.Pong != nil {
 			waitingForAnnounce = len(gossip.FetchList(state.Network, packet.Message.Pong.Zones)) > 0
 		}
-		if err := handleSyncPacket(state, transport, packet); err != nil {
+		if err = handleSyncPacket(state, transport, packet); err != nil {
 			return err
 		}
 		if packet.Message.Pong != nil && !waitingForAnnounce {
@@ -203,7 +295,31 @@ func syncOnce(peerID string) error {
 			return nil
 		}
 	}
-	return errors.New("sync once timed out")
+	err = errors.New("sync once timed out")
+	return err
+}
+
+func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		readDeadline := deadline
+		shortDeadline := time.Now().Add(250 * time.Millisecond)
+		if shortDeadline.Before(readDeadline) {
+			readDeadline = shortDeadline
+		}
+		packet, err := receiveWithDeadline(transport, readDeadline)
+		if err == nil {
+			return packet, nil
+		}
+		if time.Now().After(deadline) || !isReceiveTimeout(err) {
+			return nil, err
+		}
+	}
 }
 
 func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
@@ -223,6 +339,22 @@ func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*goss
 		}
 		return nil, err
 	}
+}
+
+func isReceiveTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout() || strings.Contains(err.Error(), "timed out")
+}
+
+func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
+	if peerState.BackoffUntilUnix == 0 {
+		return 0
+	}
+	until := time.Unix(peerState.BackoffUntilUnix, 0)
+	if !until.After(now) {
+		return 0
+	}
+	return until.Sub(now)
 }
 
 func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gossip.Packet) (err error) {

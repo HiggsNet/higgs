@@ -30,8 +30,11 @@ type stateMeta struct {
 }
 
 type syncPeerState struct {
-	LastSyncUnix int64  `json:"last_sync_unix,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
+	LastSyncUnix     int64  `json:"last_sync_unix,omitempty"`
+	LastAttemptUnix  int64  `json:"last_attempt_unix,omitempty"`
+	BackoffUntilUnix int64  `json:"backoff_until_unix,omitempty"`
+	FailureCount     int    `json:"failure_count,omitempty"`
+	LastError        string `json:"last_error,omitempty"`
 }
 
 type syncConfigFile struct {
@@ -229,12 +232,26 @@ func recordPeerSync(state *stateFile, peerID string, err error) {
 		return
 	}
 	normalizeSyncPeers(state)
+	now := timeNow()
 	peerState := state.SyncPeers[peerID]
-	peerState.LastSyncUnix = timeNow().Unix()
+	peerState.LastAttemptUnix = now.Unix()
 	if err != nil {
+		peerState.FailureCount++
+		backoff := time.Duration(1<<minInt(peerState.FailureCount, 6)) * time.Second
+		peerState.BackoffUntilUnix = now.Add(backoff).Unix()
 		peerState.LastError = err.Error()
 	} else {
+		peerState.LastSyncUnix = now.Unix()
+		peerState.BackoffUntilUnix = 0
+		peerState.FailureCount = 0
 		peerState.LastError = ""
 	}
 	state.SyncPeers[peerID] = peerState
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
