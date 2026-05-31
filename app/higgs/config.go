@@ -31,6 +31,7 @@ type appConfig struct {
 	MaxMessageBytes      int
 	MaxSyncZones         int
 	MaxSyncRecords       int
+	LogLevel             string
 }
 
 func loadAppConfig() (*appConfig, error) {
@@ -224,6 +225,8 @@ func applyConfigValue(config *appConfig, key, value string) error {
 			return err
 		}
 		config.MaxSyncRecords = limit
+	case "log_level":
+		config.LogLevel = strings.ToLower(value)
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
@@ -307,6 +310,7 @@ func configuredSyncConfig(state *stateFile) (*syncConfigFile, error) {
 		MaxMessageBytes: config.MaxMessageBytes,
 		MaxSyncZones:    config.MaxSyncZones,
 		MaxSyncRecords:  config.MaxSyncRecords,
+		LogLevel:        config.LogLevel,
 	}, nil
 }
 

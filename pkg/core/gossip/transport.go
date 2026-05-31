@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
 var (
 	ErrUnknownPeer     = errors.New("unknown gossip peer")
+	ErrAddrMismatch    = errors.New("gossip peer address mismatch")
 	ErrMessageTooLarge = errors.New("gossip message too large")
 )
 
@@ -24,6 +26,7 @@ type Config struct {
 	Replay          *ReplayWindow
 	Quotas          *PeerQuotas
 	Clock           Clock
+	Log             func(Event)
 }
 
 type Transport struct {
@@ -34,11 +37,26 @@ type Transport struct {
 	replay          *ReplayWindow
 	quotas          *PeerQuotas
 	clock           Clock
+	log             func(Event)
 }
 
 type Packet struct {
 	Message *Message
 	Addr    *net.UDPAddr
+	Bytes   int
+}
+
+type Event struct {
+	Direction string
+	PeerID    string
+	Type      MessageType
+	Addr      string
+	Bytes     int
+	Zones     int
+	Records   int
+	Duration  time.Duration
+	Error     string
+	Reason    string
 }
 
 func Listen(config Config) (*Transport, error) {
@@ -77,6 +95,7 @@ func Listen(config Config) (*Transport, error) {
 		replay:          replay,
 		quotas:          config.Quotas,
 		clock:           clock,
+		log:             config.Log,
 	}, nil
 }
 
@@ -103,17 +122,28 @@ func (t *Transport) SetReadDeadline(deadline time.Time) error {
 }
 
 func (t *Transport) Send(peerID string, message *Message) error {
+	start := t.clock()
+	event := Event{Direction: "send", PeerID: peerID}
+	if message != nil {
+		event.Type = message.Type
+		event.Zones, event.Records = MessageObjectCounts(message)
+	}
 	addr := t.knownPeers[peerID]
 	if addr == nil {
+		t.logEvent(event, ErrUnknownPeer, start)
 		return ErrUnknownPeer
 	}
+	event.Addr = addr.String()
 	if message == nil {
-		return errors.New("gossip message is nil")
+		err := errors.New("gossip message is nil")
+		t.logEvent(event, err, start)
+		return err
 	}
 	message.PeerID = t.peerID
 	if message.Nonce == 0 {
 		nonce, err := randomNonce()
 		if err != nil {
+			t.logEvent(event, err, start)
 			return err
 		}
 		message.Nonce = nonce
@@ -123,45 +153,62 @@ func (t *Transport) Send(peerID string, message *Message) error {
 	}
 	data, err := MarshalMessage(message)
 	if err != nil {
+		t.logEvent(event, err, start)
 		return err
 	}
+	event.Bytes = len(data)
 	if len(data) > t.maxMessageBytes {
+		t.logEvent(event, ErrMessageTooLarge, start)
 		return ErrMessageTooLarge
 	}
 	if t.quotas != nil {
 		if err := t.quotas.Allow(peerID, int64(len(data)), objectCost(message), t.clock()); err != nil {
+			t.logEvent(event, err, start)
 			return err
 		}
 	}
 	_, err = t.conn.WriteToUDP(data, addr)
+	t.logEvent(event, err, start)
 	return err
 }
 
 func (t *Transport) Receive() (*Packet, error) {
+	start := t.clock()
 	buf := make([]byte, t.maxMessageBytes+1)
 	n, addr, err := t.conn.ReadFromUDP(buf)
 	if err != nil {
+		t.logEvent(Event{Direction: "recv", Addr: udpAddrString(addr)}, err, start)
 		return nil, err
 	}
+	event := Event{Direction: "recv", Addr: udpAddrString(addr), Bytes: n}
 	if n > t.maxMessageBytes {
+		t.logEvent(event, ErrMessageTooLarge, start)
 		return nil, ErrMessageTooLarge
 	}
 	message, err := UnmarshalMessage(buf[:n])
 	if err != nil {
+		t.logEvent(event, err, start)
 		return nil, err
 	}
+	event.PeerID = message.PeerID
+	event.Type = message.Type
+	event.Zones, event.Records = MessageObjectCounts(message)
 	if err := t.validatePeer(message.PeerID, addr); err != nil {
+		t.logEvent(event, err, start)
 		return nil, err
 	}
 	if t.quotas != nil {
 		if err := t.quotas.Allow(message.PeerID, int64(n), objectCost(message), t.clock()); err != nil {
+			t.logEvent(event, err, start)
 			return nil, err
 		}
 	}
 	if err := t.replay.Check(message.PeerID, message.Nonce, message.Timestamp, t.clock()); err != nil {
+		t.logEvent(event, err, start)
 		return nil, err
 	}
-	return &Packet{Message: message, Addr: addr}, nil
+	t.logEvent(event, nil, start)
+	return &Packet{Message: message, Addr: addr, Bytes: n}, nil
 }
 
 func (t *Transport) validatePeer(peerID string, addr *net.UDPAddr) error {
@@ -170,9 +217,78 @@ func (t *Transport) validatePeer(peerID string, addr *net.UDPAddr) error {
 		return ErrUnknownPeer
 	}
 	if !known.IP.Equal(addr.IP) || known.Port != addr.Port {
-		return ErrUnknownPeer
+		return fmt.Errorf("%w: got %s want %s", ErrAddrMismatch, addr, known)
 	}
 	return nil
+}
+
+func (t *Transport) logEvent(event Event, err error, start time.Time) {
+	if t == nil || t.log == nil {
+		return
+	}
+	event.Duration = t.clock().Sub(start)
+	if err != nil {
+		event.Error = err.Error()
+		event.Reason = RejectReason(err)
+	}
+	t.log(event)
+}
+
+func udpAddrString(addr *net.UDPAddr) string {
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
+}
+
+func RejectReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrUnknownPeer):
+		return "unknown_peer"
+	case errors.Is(err, ErrAddrMismatch):
+		return "addr_mismatch"
+	case errors.Is(err, ErrMessageTooLarge):
+		return "message_too_large"
+	case errors.Is(err, ErrQuotaExceeded):
+		return "quota"
+	case strings.Contains(err.Error(), "replay"):
+		return "replay"
+	case strings.Contains(err.Error(), "unsupported gossip wire version"):
+		return "unsupported_wire_version"
+	default:
+		return "invalid_message"
+	}
+}
+
+func MessageObjectCounts(message *Message) (zones int, records int) {
+	switch {
+	case message == nil:
+		return 0, 0
+	case message.Ping != nil:
+		return len(message.Ping.Zones), 0
+	case message.Pong != nil:
+		return len(message.Pong.Zones) + len(message.Pong.FetchZones), 0
+	case message.FetchZone != nil:
+		return 1, 0
+	case message.FetchRecord != nil:
+		return 1, 1
+	case message.Announce != nil:
+		records = len(message.Announce.Records)
+		for _, snapshot := range message.Announce.Snapshots {
+			records += len(snapshot.Records)
+			for _, history := range snapshot.RecordHistory {
+				records += len(history)
+			}
+			for _, pending := range snapshot.PendingRecords {
+				records += len(pending)
+			}
+		}
+		return len(message.Announce.Zones) + len(message.Announce.Snapshots), records
+	default:
+		return 0, 0
+	}
 }
 
 func objectCost(message *Message) int64 {

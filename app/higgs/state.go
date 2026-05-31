@@ -41,6 +41,7 @@ type syncConfigFile struct {
 	MaxMessageBytes int              `json:"max_message_bytes"`
 	MaxSyncZones    int              `json:"max_sync_zones"`
 	MaxSyncRecords  int              `json:"max_sync_records"`
+	LogLevel        string           `json:"log_level,omitempty"`
 }
 
 type syncConfigPeer struct {

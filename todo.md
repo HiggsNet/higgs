@@ -126,18 +126,61 @@
   - [x] 显示 local root hash / per-zone root hash / last error
   - [x] 扩展 `sync status` 用于排查 bootstrap 与 allowlist
 
-- [ ] **2.4 Pending / FetchRecord 闭环**
+- [ ] **2.4 Debug / Diagnostics 增强**
+  - [x] 为 `sync serve` / `sync once` 增加结构化 debug log；`sync run` 接入留到 2.5 创建该命令时完成
+  - [x] 输出消息方向、peer id、message type、zone 数、record 数、字节数、耗时
+  - [x] 记录 reject 原因：unknown peer、addr mismatch、message too large、replay、quota、verify failed、unsupported wire version
+  - [x] `sync status --verbose` 显示 bootstrap peers、discovered peers、allowlist 来源、resolved addr、last_success、last_error
+  - [x] 增加 `higgs debug peer <peer-id>`：查看某个 peer 的最近同步、错误、backoff、known endpoint、发现来源
+  - [x] 增加 `higgs debug zone <zone>`：查看 zone root、record/history/pending 数量、delegation、parent proof、验证结果
+  - [x] 增加 `higgs debug pending`：列出 pending record、缺失 predecessor、预计 FETCH_RECORD selector
+  - [x] 支持 `HIGGS_LOG_LEVEL=debug` 或配置项开启详细日志，默认保持简洁输出
+
+- [ ] **2.5 自动重连与周期同步**
+  - [ ] 增加长期运行模式：`higgs sync run`
+  - [ ] `sync run` 同时执行 UDP serve 与周期性 outbound sync
+  - [ ] 对 bootstrap peers 定时执行摘要比较和缺失 Zone/Record 补齐
+  - [ ] peer 失败后记录 `last_error`，并使用 backoff 避免紧密重试
+  - [ ] 网络恢复后自动重试并收敛，不需要手动 `sync once`
+  - [ ] `sync status` 显示 peer online/stale/backoff/next_retry
+  - [ ] 增加 smoke：断开/停止 peer 后恢复，验证自动补齐
+
+- [ ] **2.6 Peer discovery / 动态 allowlist**
+  - [ ] 明确默认身份模型：普通节点的 `peer_id` 默认等于本节点授权 Zone（如 `node-a.catofes.`），bootstrap/discovery 均以 Zone FQDN 作为 peer id
+  - [ ] 明确 endpoint 模型：一个 `peer_id` 可对应多个 endpoint；多网卡、双栈、迁移地址不应引入多个 peer id
+  - [ ] 定义高级例外：只有同一授权 Zone 下存在多个独立 gossip 实例/角色时，才引入 peer alias 或 instance id，并必须由该 Zone 显式授权
+  - [ ] 定义绑定约束：endpoint record 必须由对应授权 Zone 签名，声明的 `peer_id` 默认应等于该 Zone，声明的 endpoints 才能进入 discovered peer table
+  - [ ] 定义同步 endpoint record 格式，如 `sync/endpoints/udp` 或 `sync/peers/default`，支持一个 peer 下多个 endpoint
+  - [ ] 新节点加入时写入自己的 gossip endpoint record
+  - [ ] 从 verified active state 解析已授权 peer 的 endpoints
+  - [ ] 将 discovered peers 合并到运行时 known peer table，bootstrap 作为种子节点保留
+  - [ ] 接收包时仍按 peer id + endpoint allowlist 校验，避免 unknown peer 直接注入状态
+  - [ ] endpoint 变更后更新 known peer table，过期/撤销后标记 stale 或移除
+  - [ ] 增加 smoke：新 peer 不手写到所有节点 bootstrap，也能经已知节点发现并同步
+
+- [ ] **2.7 Pending / FetchRecord 闭环**
   - [x] 构造高版本 record 先到达的测试场景
   - [x] 验证 pending store 中的缺前驱 record 会触发 `FETCH_RECORD`
   - [x] 前驱补齐后自动提升 active
   - [ ] 为 stale/conflict/pending 增加明确 CLI 输出
 
-- [x] **2.5 同步协议收敛**
+- [ ] **2.8 测试补强**
+  - [ ] 为 `sync status --verbose`、`debug peer`、`debug zone`、`debug pending` 增加 CLI golden/output 测试
+  - [ ] 增加 gossip 故障注入测试：unknown peer、addr mismatch、message too large、replay、quota、unsupported wire version
+  - [ ] 增加 verify failure 测试：错误 root key、篡改 delegation、篡改 record signature、过期 authority key
+  - [ ] 增加 pending 边界测试：重复 pending、冲突版本、stale record、缺多级 predecessor、pending 持久化后重启恢复
+  - [ ] 增加 snapshot limit 测试：zone count、record count、message bytes 达到边界时的 accept/reject 行为
+  - [ ] 增加 sync run 自动重连集成测试：peer 停止、恢复、backoff、最终收敛
+  - [ ] 增加 peer discovery 集成测试：endpoint record 发布、更新、撤销后 known peer table 收敛
+  - [ ] 将需要 UDP 的测试与纯逻辑测试分层，确保受限环境仍能跑完非网络测试
+  - [ ] 为 smoke 目标输出失败时的关键日志，减少 CI/本机排障成本
+
+- [x] **2.9 同步协议收敛**
   - [x] 明确 JSON wire format 的兼容边界和版本字段
   - [x] 为 message size、zone count、record count 增加可配置限制
   - [x] 梳理是否需要在 Phase 2 末尾切 protobuf；默认仍不引入 `protoc`
 
-- [ ] **2.6 文档与操作手册**
+- [ ] **2.10 文档与操作手册**
   - README 增加双节点完整同步脚本
   - README 增加三节点传播示例
   - 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、pending 未补齐
@@ -239,7 +282,18 @@
   - 通过 netlink 配置 SRv6 SID、End.DT4/End.DX6 行为
   - 与 BIRD/FRR 的 SRv6 扩展联动（如后续引入 BGP）
 
-- [ ] **6.6 运维与可观测性**
+- [ ] **6.6 Daemon / 本地控制接口**
+  - [ ] 明确运行形态：`higgs daemon` 常驻运行，负责 gossip 同步、active state 更新、WG/IKEv2/Babel/firewall apply
+  - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作
+  - [ ] 提供 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
+  - [ ] 预留 TCP control listener，用于受控远程管理；默认关闭，必须显式配置监听地址与认证
+  - [ ] 定义控制 API：status、peers、zones、records、pending、sync trigger、reload config、apply dry-run
+  - [ ] 控制 API 输出结构化 JSON，CLI 负责格式化成人类可读输出
+  - [ ] 加入认证与授权边界：Unix socket 文件权限、token/mTLS 预留、只读/管理操作分级
+  - [ ] daemon 生命周期：启动、优雅停止、reload、状态持久化、崩溃恢复
+  - [ ] systemd service 示例和 socket 路径约定，如 `/run/higgs/higgs.sock`
+
+- [ ] **6.7 运维与可观测性**
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`

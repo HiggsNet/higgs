@@ -12,7 +12,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-func syncStatus() error {
+func syncStatus(verbose bool) error {
 	state, err := loadState()
 	if err != nil {
 		return err
@@ -35,6 +35,26 @@ func syncStatus() error {
 		config.MaxSyncRecords,
 		gossip.WireVersion,
 	)
+	if verbose {
+		known := configuredKnownPeers(config)
+		fmt.Printf("allowlist_source: bootstrap\n")
+		fmt.Printf("bootstrap_peers: %d\n", len(config.Bootstrap))
+		fmt.Printf("discovered_peers: 0\n")
+		for _, peer := range config.Bootstrap {
+			resolved := "-"
+			if addr := known[peer.ID]; addr != nil {
+				resolved = addr.String()
+			}
+			peerState := state.SyncPeers[peer.ID]
+			fmt.Printf("bootstrap peer=%s configured_addr=%s resolved_addr=%s last_success=%s last_error=%s\n",
+				peer.ID,
+				peer.Addr,
+				resolved,
+				formatLastSuccess(peerState),
+				dash(peerState.LastError),
+			)
+		}
+	}
 	for _, peer := range config.Bootstrap {
 		peerState := state.SyncPeers[peer.ID]
 		lastSync := "never"
@@ -110,6 +130,7 @@ func syncServe() error {
 		MaxMessageBytes: config.MaxMessageBytes,
 		Replay:          gossip.NewReplayWindow(0),
 		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
+		Log:             syncDebugLogger(config),
 	})
 	if err != nil {
 		return err
@@ -145,6 +166,7 @@ func syncOnce(peerID string) error {
 		MaxMessageBytes: config.MaxMessageBytes,
 		Replay:          gossip.NewReplayWindow(0),
 		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
+		Log:             syncDebugLogger(config),
 	})
 	if err != nil {
 		return err
@@ -196,7 +218,7 @@ func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*goss
 		if time.Now().After(deadline) {
 			return nil, errors.New("sync receive timed out")
 		}
-		if errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrMessageTooLarge) {
+		if errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
 			continue
 		}
 		return nil, err
@@ -212,6 +234,24 @@ func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gos
 	message := packet.Message
 	defer func() {
 		recordPeerSync(state, message.PeerID, err)
+		if err != nil && debugLogEnabled(config) {
+			reason := gossip.RejectReason(err)
+			if reason == "invalid_message" {
+				reason = "verify_failed"
+			}
+			event := gossip.Event{
+				Direction: "handle",
+				PeerID:    message.PeerID,
+				Type:      message.Type,
+				Reason:    reason,
+				Error:     err.Error(),
+			}
+			if config != nil {
+				if logger := syncDebugLogger(config); logger != nil {
+					logger(event)
+				}
+			}
+		}
 		if saveErr := saveState(state); err == nil && saveErr != nil {
 			err = saveErr
 		}

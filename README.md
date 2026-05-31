@@ -41,6 +41,7 @@ listen_addr: 127.0.0.1:33434
 max_message_bytes: 65536
 max_sync_zones: 16
 max_sync_records: 1024
+log_level: info
 
 bootstrap:
   - id: node-b
@@ -57,6 +58,7 @@ trusted_root_public_key: <base64-ed25519-public-key>
 - `max_message_bytes`：单个 gossip UDP message 的最大字节数，默认 `65536`。
 - `max_sync_zones`：单次 `ANNOUNCE` 最多携带的 Zone snapshot 数，默认 `16`。
 - `max_sync_records`：单个 Zone snapshot 或 record announce 最多携带的 record 数，默认 `1024`。
+- `log_level`：日志级别。设置为 `debug`，或使用 `HIGGS_LOG_LEVEL=debug`，会输出结构化 gossip debug log。
 - `bootstrap`：已知 gossip peer。未知 peer ID 或地址会被拒绝。
 - `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。CLI 默认输出 base64 编码的裸 32-byte Ed25519 public key；配置仍兼容读取 hex。
 
@@ -81,6 +83,25 @@ make multi-node-smoke
 ```
 
 `make join-smoke` 不依赖 UDP。`make phase1-smoke`、`make phase2-smoke` 和 `make multi-node-smoke` 会启动本地 UDP gossip peer，因此运行环境需要允许本地 UDP socket。
+
+## 同步诊断
+
+常用状态检查：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync status --verbose
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug peer node-b
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-b.catofes.
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug pending
+```
+
+开启结构化 debug log：
+
+```bash
+HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync once node-b
+```
+
+debug log 输出到 stderr，字段包含消息方向、peer ID、message type、zone/record 数量、字节数、耗时，以及 reject reason（如 `unknown_peer`、`addr_mismatch`、`message_too_large`、`replay`、`quota`、`verify_failed`、`unsupported_wire_version`）。
 
 ## 创建独立管理节点
 

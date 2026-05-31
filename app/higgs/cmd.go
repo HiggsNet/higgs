@@ -22,6 +22,7 @@ func rootCommand() *cli.Command {
 			cmdRecord(),
 			cmdVerify(),
 			cmdSync(),
+			cmdDebug(),
 			cmdDB(),
 		},
 	}
@@ -223,8 +224,11 @@ func cmdSync() *cli.Command {
 				Name:        "status",
 				Usage:       "Show sync and peer status",
 				Description: "Display current sync configuration, known peers, and zone digests.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show bootstrap and allowlist details"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return syncStatus()
+					return syncStatus(cmd.Bool("verbose"))
 				},
 			},
 			{
@@ -244,6 +248,48 @@ func cmdSync() *cli.Command {
 						return cli.Exit("usage: higgs sync once <peer-id>", 1)
 					}
 					return syncOnce(cmd.Args().First())
+				},
+			},
+		},
+	}
+}
+
+func cmdDebug() *cli.Command {
+	return &cli.Command{
+		Name:  "debug",
+		Usage: "Diagnostic inspection commands",
+		Commands: []*cli.Command{
+			{
+				Name:      "peer",
+				Usage:     "Show diagnostic state for a peer",
+				UsageText: "higgs debug peer <peer-id>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return cli.Exit("usage: higgs debug peer <peer-id>", 1)
+					}
+					return debugPeer(cmd.Args().First())
+				},
+			},
+			{
+				Name:      "zone",
+				Usage:     "Show diagnostic state for a zone",
+				UsageText: "higgs debug zone <zone>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return cli.Exit("usage: higgs debug zone <zone>", 1)
+					}
+					return debugZone(zone.ZonePath(cmd.Args().First()))
+				},
+			},
+			{
+				Name:        "pending",
+				Usage:       "Show pending records and predecessor fetch selectors",
+				Description: "List pending records that are waiting for predecessor versions.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs debug pending", 1)
+					}
+					return debugPending()
 				},
 			},
 		},
