@@ -28,6 +28,9 @@ type appConfig struct {
 	ListenPort           int
 	Bootstrap            []syncConfigPeer
 	TrustedRootPublicKey ed25519.PublicKey
+	MaxMessageBytes      int
+	MaxSyncZones         int
+	MaxSyncRecords       int
 }
 
 func loadAppConfig() (*appConfig, error) {
@@ -49,8 +52,11 @@ func loadAppConfig() (*appConfig, error) {
 
 func defaultAppConfig() *appConfig {
 	return &appConfig{
-		DataDir:    ".",
-		ListenPort: gossip.DefaultPort,
+		DataDir:         ".",
+		ListenPort:      gossip.DefaultPort,
+		MaxMessageBytes: gossip.DefaultMaxMessage,
+		MaxSyncZones:    gossip.DefaultSyncLimits().MaxZones,
+		MaxSyncRecords:  gossip.DefaultSyncLimits().MaxRecords,
 	}
 }
 
@@ -70,6 +76,15 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	if config.ListenAddr == "" {
 		config.ListenAddr = fmt.Sprintf(":%d", config.ListenPort)
+	}
+	if config.MaxMessageBytes <= 0 {
+		config.MaxMessageBytes = gossip.DefaultMaxMessage
+	}
+	if config.MaxSyncZones <= 0 {
+		config.MaxSyncZones = gossip.DefaultSyncLimits().MaxZones
+	}
+	if config.MaxSyncRecords <= 0 {
+		config.MaxSyncRecords = gossip.DefaultSyncLimits().MaxRecords
 	}
 }
 
@@ -191,10 +206,36 @@ func applyConfigValue(config *appConfig, key, value string) error {
 			return err
 		}
 		config.TrustedRootPublicKey = key
+	case "max_message_bytes":
+		limit, err := parsePositiveInt(value, key)
+		if err != nil {
+			return err
+		}
+		config.MaxMessageBytes = limit
+	case "max_sync_zones":
+		limit, err := parsePositiveInt(value, key)
+		if err != nil {
+			return err
+		}
+		config.MaxSyncZones = limit
+	case "max_sync_records":
+		limit, err := parsePositiveInt(value, key)
+		if err != nil {
+			return err
+		}
+		config.MaxSyncRecords = limit
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
 	return nil
+}
+
+func parsePositiveInt(value, name string) (int, error) {
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit <= 0 {
+		return 0, fmt.Errorf("invalid %s: %q", name, value)
+	}
+	return limit, nil
 }
 
 func applyBootstrapValue(peer *syncConfigPeer, key, value string) {
@@ -260,9 +301,12 @@ func configuredSyncConfig(state *stateFile) (*syncConfigFile, error) {
 		peerID = defaultPeerID(state)
 	}
 	return &syncConfigFile{
-		PeerID:     peerID,
-		ListenAddr: config.ListenAddr,
-		Bootstrap:  config.Bootstrap,
+		PeerID:          peerID,
+		ListenAddr:      config.ListenAddr,
+		Bootstrap:       config.Bootstrap,
+		MaxMessageBytes: config.MaxMessageBytes,
+		MaxSyncZones:    config.MaxSyncZones,
+		MaxSyncRecords:  config.MaxSyncRecords,
 	}, nil
 }
 

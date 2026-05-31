@@ -35,9 +35,12 @@ type syncPeerState struct {
 }
 
 type syncConfigFile struct {
-	PeerID     string           `json:"peer_id"`
-	ListenAddr string           `json:"listen_addr"`
-	Bootstrap  []syncConfigPeer `json:"bootstrap"`
+	PeerID          string           `json:"peer_id"`
+	ListenAddr      string           `json:"listen_addr"`
+	Bootstrap       []syncConfigPeer `json:"bootstrap"`
+	MaxMessageBytes int              `json:"max_message_bytes"`
+	MaxSyncZones    int              `json:"max_sync_zones"`
+	MaxSyncRecords  int              `json:"max_sync_records"`
 }
 
 type syncConfigPeer struct {

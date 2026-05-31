@@ -178,6 +178,18 @@ multi-node-smoke: build
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q '"identity"'; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | grep -q 'peer node-a'; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b-restarted >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/a-restart.log" 2>&1 & server_pid="$$!"; \
+	sleep 1; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
+	sleep 1; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
+	sleep 1; \
+	kill "$$server_pid" >/dev/null 2>&1 || true; \
+	wait "$$server_pid" >/dev/null 2>&1 || true; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RhcnRlZA=='; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RhcnRlZA=='; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	echo "Multi-node smoke passed"
 
 help:

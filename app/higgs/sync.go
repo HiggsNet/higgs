@@ -29,6 +29,12 @@ func syncStatus() error {
 	fmt.Printf("known_zones: %d\n", len(digests))
 	fmt.Printf("pending_records: %d\n", pending)
 	fmt.Printf("local_root: %s\n", hex.EncodeToString(globalRootHash(digests)))
+	fmt.Printf("limits: max_message_bytes=%d max_sync_zones=%d max_sync_records=%d wire_version=%d\n",
+		config.MaxMessageBytes,
+		config.MaxSyncZones,
+		config.MaxSyncRecords,
+		gossip.WireVersion,
+	)
 	for _, peer := range config.Bootstrap {
 		peerState := state.SyncPeers[peer.ID]
 		lastSync := "never"
@@ -57,8 +63,35 @@ func syncStatus() error {
 			countPending(zs),
 			len(zs.Delegations),
 		)
+		printPendingRecords(zs)
 	}
 	return nil
+}
+
+func printPendingRecords(zs *zone.ZoneState) {
+	if zs == nil || len(zs.PendingRecords) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(zs.PendingRecords))
+	for key := range zs.PendingRecords {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		for _, record := range zs.PendingRecords[key] {
+			if record == nil {
+				continue
+			}
+			fmt.Printf("  pending key=%s version=%d missing_prev=%d\n", key, record.Version, missingPredecessorVersion(record))
+		}
+	}
+}
+
+func missingPredecessorVersion(record *zone.Record) uint64 {
+	if record == nil || record.Version <= 1 {
+		return 0
+	}
+	return record.Version - 1
 }
 
 func syncServe() error {
@@ -71,11 +104,12 @@ func syncServe() error {
 		return err
 	}
 	transport, err := gossip.Listen(gossip.Config{
-		PeerID:     config.PeerID,
-		ListenAddr: config.ListenAddr,
-		KnownPeers: configuredKnownPeers(config),
-		Replay:     gossip.NewReplayWindow(0),
-		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{}),
+		PeerID:          config.PeerID,
+		ListenAddr:      config.ListenAddr,
+		KnownPeers:      configuredKnownPeers(config),
+		MaxMessageBytes: config.MaxMessageBytes,
+		Replay:          gossip.NewReplayWindow(0),
+		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 	})
 	if err != nil {
 		return err
@@ -105,11 +139,12 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	transport, err := gossip.Listen(gossip.Config{
-		PeerID:     config.PeerID,
-		ListenAddr: config.ListenAddr,
-		KnownPeers: configuredKnownPeers(config),
-		Replay:     gossip.NewReplayWindow(0),
-		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{}),
+		PeerID:          config.PeerID,
+		ListenAddr:      config.ListenAddr,
+		KnownPeers:      configuredKnownPeers(config),
+		MaxMessageBytes: config.MaxMessageBytes,
+		Replay:          gossip.NewReplayWindow(0),
+		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 	})
 	if err != nil {
 		return err
@@ -170,6 +205,10 @@ func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*goss
 
 func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gossip.Packet) (err error) {
 	configureValidation(state.Network)
+	config, configErr := loadSyncConfig(state)
+	if configErr != nil {
+		return configErr
+	}
 	message := packet.Message
 	defer func() {
 		recordPeerSync(state, message.PeerID, err)
@@ -213,16 +252,22 @@ func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gos
 	case gossip.MessageFetchRecord:
 		return sendRecord(state.Network, transport, message.PeerID, message.FetchRecord)
 	case gossip.MessageAnnounce:
-		return handleAnnounce(state, transport, message)
+		return handleAnnounce(state, transport, message, syncLimits(config))
 	default:
 		return nil
 	}
 }
 
-func handleAnnounce(state *stateFile, transport *gossip.Transport, message *gossip.Message) error {
+func handleAnnounce(state *stateFile, transport *gossip.Transport, message *gossip.Message, limits gossip.SyncLimits) error {
 	var changed bool
+	if limits.MaxZones > 0 && len(message.Announce.Snapshots) > limits.MaxZones {
+		return gossip.ErrZoneSnapshotTooLarge
+	}
+	if limits.MaxRecords > 0 && len(message.Announce.Records) > limits.MaxRecords {
+		return gossip.ErrZoneSnapshotTooLarge
+	}
 	for _, snapshot := range message.Announce.Snapshots {
-		result, err := gossip.ApplySnapshot(state.Network, &snapshot, time.Now(), gossip.DefaultSyncLimits())
+		result, err := gossip.ApplySnapshot(state.Network, &snapshot, time.Now(), limits)
 		if err != nil {
 			return err
 		}
@@ -286,7 +331,30 @@ func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID strin
 }
 
 func fetchPendingPredecessors(ns *zone.NetworkState, transport *gossip.Transport, peerID string) error {
-	for path, zs := range ns.Zones {
+	for _, fetch := range pendingPredecessorFetches(ns) {
+		fetch := fetch
+		if err := transport.Send(peerID, &gossip.Message{
+			Type:        gossip.MessageFetchRecord,
+			FetchRecord: &fetch,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pendingPredecessorFetches(ns *zone.NetworkState) []gossip.FetchRecord {
+	if ns == nil {
+		return nil
+	}
+	paths := make([]zone.ZonePath, 0, len(ns.Zones))
+	for path := range ns.Zones {
+		paths = append(paths, path)
+	}
+	sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+	var out []gossip.FetchRecord
+	for _, path := range paths {
+		zs := ns.Zones[path]
 		if zs == nil {
 			continue
 		}
@@ -300,22 +368,34 @@ func fetchPendingPredecessors(ns *zone.NetworkState, transport *gossip.Transport
 				if record == nil || record.Version <= 1 {
 					continue
 				}
-				if err := transport.Send(peerID, &gossip.Message{
-					Type: gossip.MessageFetchRecord,
-					FetchRecord: &gossip.FetchRecord{
-						Zone:    path,
-						Key:     key,
-						Version: record.Version - 1,
-					},
-				}); err != nil {
-					return err
-				}
+				out = append(out, gossip.FetchRecord{
+					Zone:    path,
+					Key:     key,
+					Version: record.Version - 1,
+				})
 			}
 		}
 	}
-	return nil
+	return out
 }
 
 func loadSyncConfig(state *stateFile) (*syncConfigFile, error) {
 	return configuredSyncConfig(state)
+}
+
+func syncLimits(config *syncConfigFile) gossip.SyncLimits {
+	limits := gossip.DefaultSyncLimits()
+	if config == nil {
+		return limits
+	}
+	if config.MaxSyncZones > 0 {
+		limits.MaxZones = config.MaxSyncZones
+	}
+	if config.MaxSyncRecords > 0 {
+		limits.MaxRecords = config.MaxSyncRecords
+	}
+	if config.MaxMessageBytes > 0 {
+		limits.MaxBytes = config.MaxMessageBytes
+	}
+	return limits
 }

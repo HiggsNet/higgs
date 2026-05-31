@@ -1,6 +1,6 @@
 # Higgs
 
-Higgs 是一个实验性的“信任优先”网络配置系统。当前实现已经覆盖本地 Zone 状态、ED25519 签名、Delegation 信任链、bbolt 持久化、节点准入工具，以及 Phase 1 的 UDP gossip 同步。
+Higgs 是一个实验性的“信任优先”网络配置系统。当前实现已经覆盖本地 Zone 状态、ED25519 签名、Delegation 信任链、bbolt 持久化、节点准入工具，以及 Phase 2 的多节点 UDP gossip 同步。
 
 详细设计见 [docs/design.md](docs/design.md)。可执行任务路线见 [todo.md](todo.md)。
 
@@ -16,13 +16,15 @@ Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zon
 - Record 必须由该 Zone authority 授权的 key 签名。
 - Gossip 收到的数据先视为不可信；信任链和签名验证通过后，才提升到 active state。
 
-Phase 1 gossip 使用 UDP 和一个轻量 JSON wire codec：
+Phase 2 gossip 使用 UDP 和一个轻量 JSON wire codec：
 
 - 默认端口：`33434`
+- wire version：JSON payload 带 `version: 1`，外层 magic 为 `higgs.gossip.v1`
 - 消息类型：`PING`、`PONG`、`FETCH_ZONE`、`FETCH_RECORD`、`ANNOUNCE`
+- 默认限制：单消息 65536 bytes、单次 announce 16 个 Zone snapshot、单 Zone snapshot 1024 条 record
 - 防重放：nonce + timestamp window
 - peer allowlist：只接受 `bootstrap` 中配置的 peer
-- 同步模型：Phase 1A 使用 whole-zone sync；缺失前驱的 record 会进入 pending，并可通过 `FETCH_RECORD` 补齐
+- 同步模型：Phase 2 仍使用 whole-zone sync；缺失前驱的 record 会进入 pending，并可通过 `FETCH_RECORD` 补齐
 
 `gossip.proto` 记录了未来协议形状，但当前构建不需要 `protoc`。
 
@@ -36,6 +38,9 @@ Phase 1 gossip 使用 UDP 和一个轻量 JSON wire codec：
 data_dir: .higgs
 peer_id: node-a
 listen_addr: 127.0.0.1:33434
+max_message_bytes: 65536
+max_sync_zones: 16
+max_sync_records: 1024
 
 bootstrap:
   - id: node-b
@@ -49,6 +54,9 @@ trusted_root_public_key: <base64-ed25519-public-key>
 - `data_dir`：本地状态目录。bbolt 数据库位于 `<data_dir>/higgs.db`。
 - `peer_id`：gossip peer ID。
 - `listen_addr`：UDP gossip 监听地址。也可以用 `listen_port`。
+- `max_message_bytes`：单个 gossip UDP message 的最大字节数，默认 `65536`。
+- `max_sync_zones`：单次 `ANNOUNCE` 最多携带的 Zone snapshot 数，默认 `16`。
+- `max_sync_records`：单个 Zone snapshot 或 record announce 最多携带的 record 数，默认 `1024`。
 - `bootstrap`：已知 gossip peer。未知 peer ID 或地址会被拒绝。
 - `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。CLI 默认输出 base64 编码的裸 32-byte Ed25519 public key；配置仍兼容读取 hex。
 
@@ -284,17 +292,15 @@ make phase2-smoke
 make multi-node-smoke
 ```
 
-该流程使用 A 作为中间 gossip peer：B 写入 `node-b.catofes./identity`，先同步到 A，再由 C 从 A 拉取，验证 C 能看到并验证 B 的 Zone record。
+该流程使用 A 作为中间 gossip peer：B 写入 `node-b.catofes./identity`，先同步到 A，再由 C 从 A 拉取，验证 C 能看到并验证 B 的 Zone record。随后脚本会停止并重启 A，B 离线期间更新 record，再验证 A 重启后通过摘要比较补齐缺失版本，并继续传播给 C。
 
 ## 下一步方向
 
 当前优先级不是直接进入 WireGuard，而是先把配置同步做稳：
 
-- 双节点端到端流程：`node-admin root init` → `catofes. join` → `node-a/node-b join` → `record put` → `gossip sync` → `verify`
-- 三节点传播：A-B-C 拓扑中，B 写入的 Zone/Record 能经由 A 传播到 C
-- `sync status` 增强：显示 peer 状态、per-zone root、pending record、最近错误
-- pending/`FETCH_RECORD` 闭环：高版本 record 先到时，能补齐前驱并自动提升 active
-- 把双节点和三节点流程固化成 Makefile smoke/integration 命令
+- stale/conflict/pending 的 CLI 输出继续细化
+- README 操作手册继续补常见错误和排障路径
+- Phase 2 末尾再决定是否切到 protobuf；默认仍不引入 `protoc`
 
 WireGuard 建链会在配置同步收敛后再做，避免把状态同步问题和系统网络配置问题混在一起。
 
@@ -323,4 +329,4 @@ build/higgs db stats
 - Phase 1 只支持 authority `threshold=1`。
 - Delegation scope 只支持 `direct-child`。
 - Gossip 当前使用 JSON framing，还没有接入 protobuf 生成代码。
-- 多节点配置同步仍在强化中；WireGuard、Babel、route authorization filter、防火墙应用仍在后续阶段。
+- 多节点配置同步仍在收尾；WireGuard、Babel、route authorization filter、防火墙应用仍在后续阶段。

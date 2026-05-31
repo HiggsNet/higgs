@@ -115,10 +115,10 @@
   - [x] 两端 `sync status`、`zone show`、`verify` 结果一致
   - [x] 将流程固化为不依赖手工复制 DB 的 `make phase2-smoke`
 
-- [ ] **2.2 多节点传播**
+- [x] **2.2 多节点传播**
   - [x] 支持 B-A-C bootstrap 拓扑下的 transitive zone propagation
   - [x] 新 Zone/Record 从 B 写入，经 A 传播到 C
-  - [ ] 节点离线后重启，能通过摘要比较补齐缺失 Zone
+  - [x] 节点离线后重启，能通过摘要比较补齐缺失 Zone
   - [x] 增加 `make multi-node-smoke`，覆盖 3 节点本机流程
 
 - [x] **2.3 同步状态可观测性**
@@ -127,15 +127,15 @@
   - [x] 扩展 `sync status` 用于排查 bootstrap 与 allowlist
 
 - [ ] **2.4 Pending / FetchRecord 闭环**
-  - 构造高版本 record 先到达的测试场景
-  - 验证 pending store 中的缺前驱 record 会触发 `FETCH_RECORD`
-  - 前驱补齐后自动提升 active
-  - 为 stale/conflict/pending 增加明确 CLI 输出
+  - [x] 构造高版本 record 先到达的测试场景
+  - [x] 验证 pending store 中的缺前驱 record 会触发 `FETCH_RECORD`
+  - [x] 前驱补齐后自动提升 active
+  - [ ] 为 stale/conflict/pending 增加明确 CLI 输出
 
-- [ ] **2.5 同步协议收敛**
-  - 明确 JSON wire format 的兼容边界和版本字段
-  - 为 message size、zone count、record count 增加可配置限制
-  - 梳理是否需要在 Phase 2 末尾切 protobuf；默认仍不引入 `protoc`
+- [x] **2.5 同步协议收敛**
+  - [x] 明确 JSON wire format 的兼容边界和版本字段
+  - [x] 为 message size、zone count、record count 增加可配置限制
+  - [x] 梳理是否需要在 Phase 2 末尾切 protobuf；默认仍不引入 `protoc`
 
 - [ ] **2.6 文档与操作手册**
   - README 增加双节点完整同步脚本

@@ -13,6 +13,7 @@ const (
 	DefaultPort       = 33434
 	DefaultWindow     = 5 * 60
 	DefaultMaxMessage = 64 << 10
+	WireVersion       = 1
 )
 
 var wireMagic = []byte("higgs.gossip.v1\n")
@@ -28,6 +29,7 @@ const (
 )
 
 type Message struct {
+	Version   int         `json:"version"`
 	Type      MessageType `json:"type"`
 	PeerID    string      `json:"peer_id"`
 	Nonce     uint64      `json:"nonce"`
@@ -86,6 +88,9 @@ type ZoneSnapshot struct {
 }
 
 func MarshalMessage(message *Message) ([]byte, error) {
+	if message != nil && message.Version == 0 {
+		message.Version = WireVersion
+	}
 	if err := validateMessage(message); err != nil {
 		return nil, err
 	}
@@ -116,6 +121,9 @@ func UnmarshalMessage(data []byte) (*Message, error) {
 func validateMessage(message *Message) error {
 	if message == nil {
 		return errors.New("gossip message is nil")
+	}
+	if message.Version != 0 && message.Version != WireVersion {
+		return fmt.Errorf("unsupported gossip wire version: %d", message.Version)
 	}
 	if message.PeerID == "" {
 		return errors.New("gossip message peer id is empty")

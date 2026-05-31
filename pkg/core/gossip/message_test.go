@@ -56,6 +56,20 @@ func TestRejectsInvalidMessageShape(t *testing.T) {
 	}
 }
 
+func TestRejectsUnsupportedWireVersion(t *testing.T) {
+	_, err := MarshalMessage(&Message{
+		Version:   WireVersion + 1,
+		Type:      MessagePing,
+		PeerID:    "node-a",
+		Nonce:     1,
+		Timestamp: 123,
+		Ping:      &Ping{},
+	})
+	if err == nil {
+		t.Fatalf("MarshalMessage accepted unsupported wire version")
+	}
+}
+
 func TestReplayWindow(t *testing.T) {
 	now := time.Unix(1000, 0)
 	rw := NewReplayWindow(5 * time.Minute)
@@ -154,6 +168,70 @@ func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	}
 	if target.Zones["catofes."].Records["obsolete"] == nil {
 		t.Fatalf("trusted local key was removed by whole-zone snapshot")
+	}
+}
+
+func TestApplyRecordSnapshotPromotesPendingPredecessor(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePriv := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+
+	v1 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix())
+	v2 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-b"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
+	if err := source.PutAt(v1, now); err != nil {
+		t.Fatalf("PutAt(v1): %v", err)
+	}
+	if err := source.PutAt(v2, now); err != nil {
+		t.Fatalf("PutAt(v2): %v", err)
+	}
+
+	target := cloneNetworkState(source)
+	target.Zones["catofes."].Records = make(map[string]*zone.Record)
+	target.Zones["catofes."].RecordHistory = make(map[string][]*zone.Record)
+	target.Zones["catofes."].PendingRecords = make(map[string][]*zone.Record)
+
+	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: v2}, now); !errors.Is(err, zone.ErrPendingRecord) {
+		t.Fatalf("ApplyRecordSnapshot(v2) = %v, want ErrPendingRecord", err)
+	}
+	if got := len(target.Zones["catofes."].PendingRecords["identity"]); got != 1 {
+		t.Fatalf("pending len = %d, want 1", got)
+	}
+	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: v1}, now); err != nil {
+		t.Fatalf("ApplyRecordSnapshot(v1): %v", err)
+	}
+	got := target.Zones["catofes."].Records["identity"]
+	if got == nil || got.Version != 2 || string(got.Value) != "node-b" {
+		t.Fatalf("active record = %#v, want promoted v2", got)
+	}
+	if got := len(target.Zones["catofes."].PendingRecords["identity"]); got != 0 {
+		t.Fatalf("pending len after promotion = %d, want 0", got)
+	}
+}
+
+func TestApplySnapshotRejectsRecordLimit(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePriv := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	if err := source.PutAt(signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix()), now); err != nil {
+		t.Fatalf("PutAt(identity): %v", err)
+	}
+	if err := source.PutAt(signedRecord(t, zonePriv, "catofes.", "status", []byte("ready"), 1, nil, now.Unix()), now); err != nil {
+		t.Fatalf("PutAt(status): %v", err)
+	}
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	target := cloneNetworkState(source)
+	target.Zones["catofes."].Records = make(map[string]*zone.Record)
+	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: DefaultMaxMessage}); err != nil {
+		t.Fatalf("ApplySnapshot without record limit: %v", err)
+	}
+	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: 1}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
+		t.Fatalf("ApplySnapshot byte limit = %v, want ErrZoneSnapshotTooLarge", err)
+	}
+	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: DefaultMaxMessage}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
+		t.Fatalf("ApplySnapshot record limit = %v, want ErrZoneSnapshotTooLarge", err)
 	}
 }
 

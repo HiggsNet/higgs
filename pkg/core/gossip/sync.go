@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -202,6 +203,15 @@ func checkSnapshotLimits(snapshot *ZoneSnapshot, limits SyncLimits) error {
 	records := countRecords(snapshot.RecordHistory) + len(snapshot.Records) + countRecords(snapshot.PendingRecords)
 	if limits.MaxRecords > 0 && records > limits.MaxRecords {
 		return ErrZoneSnapshotTooLarge
+	}
+	if limits.MaxBytes > 0 {
+		data, err := json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+		if len(data) > limits.MaxBytes {
+			return ErrZoneSnapshotTooLarge
+		}
 	}
 	return nil
 }

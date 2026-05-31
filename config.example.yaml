@@ -1,6 +1,9 @@
 data_dir: .higgs
 peer_id: node-a
 listen_addr: 127.0.0.1:33434
+max_message_bytes: 65536
+max_sync_zones: 16
+max_sync_records: 1024
 
 bootstrap:
   - id: node-b
