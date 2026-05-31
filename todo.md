@@ -146,12 +146,12 @@
   - [x] 增加 smoke：断开/停止 peer 后恢复，验证自动补齐
 
 - [ ] **2.6 链式拓扑主动传播 / relay fanout**
-  - [ ] 明确当前语义：在 A-B-C-D 链式 bootstrap 中，A 更新 record 后会优先同步/announce 给直接 peer B；C/D 默认依赖各自周期性摘要比较或 B 后续 outbound sync 才能得到更新
-  - [ ] 决定 Phase 2 目标语义：是否要求 B 在成功 apply A 的新 Zone/Record 后，立即向除 A 外的已知 peers 触发 lightweight announce 或 sync round
-  - [ ] 增加变更来源 tracking，避免 A-B-A、B-C-B 形成 announce 回环；至少需要 peer id + zone root hash / record hash 去重窗口
+  - [x] 明确当前语义：在 A-B-C-D 链式 bootstrap 中，A 更新 record 后会优先同步/announce 给直接 peer B；C/D 默认依赖各自周期性摘要比较或 B 后续 outbound sync 才能得到更新
+  - [x] 决定 Phase 2 目标语义：B/C 在成功 apply A 的新 Zone/Record 后，立即向除来源 peer 外的已知 peers 触发 lightweight sync round
+  - [x] 增加基础变更来源 tracking：只在 zone digest 发生变化时 relay，并跳过来源 peer，避免 A-B-A、B-C-B 直接回环
   - [ ] 为 relay 增加节流和批处理，避免一个 record 更新在稠密拓扑中产生广播风暴
   - [ ] `sync run` 在本地 record put 或远端 apply 成功后，支持唤醒 outbound sync，而不是完全等待下一次 interval
-  - [ ] 增加 smoke：A-B-C-D 链式拓扑中 A 写入 record，验证 D 在无需等待完整轮询周期的情况下收敛
+  - [x] 增加 smoke：A-B-C-D 链式拓扑中 A 写入 record，验证 D 在无需等待完整轮询周期的情况下收敛
   - [ ] `sync status --verbose` 显示 peer 最近一次更新来源与 relay 抑制原因，方便排查“为什么只到 B 没到 C/D”
 
 - [ ] **2.7 Peer discovery / 动态 allowlist**

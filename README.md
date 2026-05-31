@@ -80,9 +80,10 @@ make join-smoke
 make phase1-smoke
 make phase2-smoke
 make multi-node-smoke
+make chain-relay-smoke
 ```
 
-`make join-smoke` 不依赖 UDP。`make phase1-smoke`、`make phase2-smoke` 和 `make multi-node-smoke` 会启动本地 UDP gossip peer，因此运行环境需要允许本地 UDP socket。
+`make join-smoke` 不依赖 UDP。`make phase1-smoke`、`make phase2-smoke`、`make multi-node-smoke` 和 `make chain-relay-smoke` 会启动本地 UDP gossip peer，因此运行环境需要允许本地 UDP socket。
 
 ## 同步诊断
 
@@ -314,6 +315,14 @@ make multi-node-smoke
 ```
 
 该流程使用 A 作为中间 gossip peer：B 写入 `node-b.catofes./identity`，先同步到 A，再由 C 从 A 拉取，验证 C 能看到并验证 B 的 Zone record。随后脚本会停止并重启 A，B 离线期间更新 record，再验证 A 重启后通过摘要比较补齐缺失版本，并继续传播给 C。
+
+链式 relay fanout 可以直接跑：
+
+```bash
+make chain-relay-smoke
+```
+
+该流程使用 A-B-C-D 链式 bootstrap，所有节点以 60 秒周期运行 `sync run`。A 写入 `node-a.catofes./identity` 后，B/C 在应用远端更新时会立即向非来源邻居触发同步，验证 D 不需要等待完整轮询周期即可收敛。
 
 ## 下一步方向
 

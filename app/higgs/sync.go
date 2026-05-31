@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -232,11 +233,53 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 			fmt.Fprintf(os.Stderr, "sync receive error: %v\n", err)
 			continue
 		}
+		digestsBefore := gossip.ZoneDigests(state.Network)
 		if err := handleSyncPacket(state, transport, packet); err != nil {
 			fmt.Fprintf(os.Stderr, "sync packet error from %s: %v\n", packet.Message.PeerID, err)
 			continue
 		}
+		if packet.Message.Announce != nil && syncStateChanged(state, digestsBefore) {
+			if err := relaySync(ctx, state, transport, packet.Message.PeerID); err != nil {
+				fmt.Fprintf(os.Stderr, "sync relay error source=%s: %v\n", packet.Message.PeerID, err)
+			}
+		}
 	}
+}
+
+func syncStateChanged(state *stateFile, before []gossip.ZoneDigest) bool {
+	return !sameZoneDigests(before, gossip.ZoneDigests(state.Network))
+}
+
+func sameZoneDigests(a, b []gossip.ZoneDigest) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Zone != b[i].Zone || !bytes.Equal(a[i].RootHash, b[i].RootHash) {
+			return false
+		}
+	}
+	return true
+}
+
+func relaySync(ctx context.Context, state *stateFile, transport *gossip.Transport, sourcePeerID string) error {
+	config, err := loadSyncConfig(state)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, peer := range config.Bootstrap {
+		if peer.ID == "" || peer.ID == sourcePeerID {
+			continue
+		}
+		if backoffRemaining(state.SyncPeers[peer.ID], now) > 0 {
+			continue
+		}
+		if err := syncRoundWithTransport(ctx, state, transport, peer.ID, 3*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "sync relay round error peer=%s: %v\n", peer.ID, err)
+		}
+	}
+	return nil
 }
 
 func openSyncTransport(config *syncConfigFile) (*gossip.Transport, error) {

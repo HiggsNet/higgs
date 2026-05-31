@@ -1,4 +1,4 @@
-.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke help
+.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke chain-relay-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -236,6 +236,39 @@ multi-node-smoke: build
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	echo "Multi-node smoke passed"
 
+chain-relay-smoke: build
+	@set -eu; \
+	tmp="$${TMPDIR:-/tmp}/higgs-chain-relay-smoke"; \
+	rm -rf "$$tmp"; \
+	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c" "$$tmp/d"; \
+	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33473' > "$$tmp/admin/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33478' > "$$tmp/catofes/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a' 'listen_addr: 127.0.0.1:33474' 'bootstrap:' '  - id: node-b' '    addr: 127.0.0.1:33475' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b' 'listen_addr: 127.0.0.1:33475' 'bootstrap:' '  - id: node-a' '    addr: 127.0.0.1:33474' '  - id: node-c' '    addr: 127.0.0.1:33476' > "$$tmp/b/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/c" 'peer_id: node-c' 'listen_addr: 127.0.0.1:33476' 'bootstrap:' '  - id: node-b' '    addr: 127.0.0.1:33475' '  - id: node-d' '    addr: 127.0.0.1:33477' > "$$tmp/c/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/d" 'peer_id: node-d' 'listen_addr: 127.0.0.1:33477' 'bootstrap:' '  - id: node-c' '    addr: 127.0.0.1:33476' > "$$tmp/d/config.yaml"; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
+	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
+	for node in catofes a b c d; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/catofes.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b c d; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a-relay >/dev/null; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 60 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
+	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 60 >"$$tmp/d.log" 2>&1 & d_pid="$$!"; \
+	a_pid=""; \
+	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" "$$d_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" "$$tmp/d.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	sleep 1; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do if HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q 'bm9kZS1hLXJlbGF5'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q 'bm9kZS1hLXJlbGF5'; \
+	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
+	kill "$$a_pid" "$$b_pid" "$$c_pid" "$$d_pid" >/dev/null 2>&1 || true; \
+	echo "Chain relay smoke passed"
+
 help:
 	@echo "Available targets:"
 	@echo "  build   - Build the higgs binary to $(BUILD_DIR)/"
@@ -251,4 +284,5 @@ help:
 	@echo "  phase2-smoke - Run bidirectional two-peer sync smoke test"
 	@echo "  phase2-run-smoke - Run sync run reconnect/recovery smoke test"
 	@echo "  multi-node-smoke - Run three-node transitive sync smoke test"
+	@echo "  chain-relay-smoke - Run four-node chain relay fanout smoke test"
 	@echo "  help    - Show this help message"
