@@ -145,21 +145,17 @@ func dumpZoneBucket(path zone.ZonePath, bucket *bolt.Bucket) error {
 	if err := dumpRecordHistory(bucket.Get([]byte("record_history"))); err != nil {
 		return err
 	}
-	if err := dumpPendingRecords(bucket.Get([]byte("pending_records"))); err != nil {
-		return err
-	}
 	if err := dumpMerkleRoot(bucket.Get([]byte("merkle_root"))); err != nil {
 		return err
 	}
 
 	known := map[string]bool{
-		"authority":       true,
-		"parent_proof":    true,
-		"delegations":     true,
-		"records":         true,
-		"record_history":  true,
-		"pending_records": true,
-		"merkle_root":     true,
+		"authority":      true,
+		"parent_proof":   true,
+		"delegations":    true,
+		"records":        true,
+		"record_history": true,
+		"merkle_root":    true,
 	}
 	return bucket.ForEach(func(k, v []byte) error {
 		if known[string(k)] {
@@ -233,22 +229,6 @@ func dumpRecordHistory(data []byte) error {
 	for _, key := range sortedStringKeys(history) {
 		fmt.Printf("    %s: %d versions\n", key, len(history[key]))
 		for _, record := range history[key] {
-			dumpRecord("", record, "      ")
-		}
-	}
-	return nil
-}
-
-func dumpPendingRecords(data []byte) error {
-	var pending map[string][]*zone.Record
-	if err := unmarshalOptional(data, &pending); err != nil {
-		return dumpRawNamed("pending_records", data, "  ")
-	}
-	total := countRecordLists(pending)
-	fmt.Printf("  pending_records: %d keys, %d records\n", len(pending), total)
-	for _, key := range sortedStringKeys(pending) {
-		fmt.Printf("    %s: %d pending\n", key, len(pending[key]))
-		for _, record := range pending[key] {
 			dumpRecord("", record, "      ")
 		}
 	}
