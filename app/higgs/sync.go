@@ -16,6 +16,8 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
+const relayMinInterval = time.Second
+
 func syncStatus(verbose bool) error {
 	state, err := loadState()
 	if err != nil {
@@ -58,6 +60,11 @@ func syncStatus(verbose bool) error {
 				formatLastSuccess(peerState),
 				dash(peerState.LastError),
 				formatNextRetry(peerState, time.Now()),
+			)
+			fmt.Printf("  update_source=%s last_relay=%s relay_suppression=%s\n",
+				dash(peerState.LastUpdateSource),
+				formatUnixTime(peerState.LastRelayUnix),
+				formatRelaySuppression(peerState),
 			)
 		}
 	}
@@ -197,14 +204,23 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 	fmt.Printf("sync running as %s on %s interval=%s\n", config.PeerID, transport.LocalAddr(), interval)
 
 	nextSync := time.Now()
+	lastObservedDigests := gossip.ZoneDigests(state.Network)
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		now := time.Now()
+		if latest, changed, err := reloadStateIfChanged(lastObservedDigests); err != nil {
+			fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
+		} else if changed {
+			state = latest
+			lastObservedDigests = gossip.ZoneDigests(state.Network)
+			nextSync = now
+		}
 		if !now.Before(nextSync) {
 			if latest, err := loadState(); err == nil {
 				state = latest
+				lastObservedDigests = gossip.ZoneDigests(state.Network)
 			} else {
 				fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
 			}
@@ -239,11 +255,24 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 			continue
 		}
 		if packet.Message.Announce != nil && syncStateChanged(state, digestsBefore) {
+			recordUpdateSource(state, packet.Message.PeerID)
+			lastObservedDigests = gossip.ZoneDigests(state.Network)
 			if err := relaySync(ctx, state, transport, packet.Message.PeerID); err != nil {
 				fmt.Fprintf(os.Stderr, "sync relay error source=%s: %v\n", packet.Message.PeerID, err)
 			}
 		}
 	}
+}
+
+func reloadStateIfChanged(previous []gossip.ZoneDigest) (*stateFile, bool, error) {
+	latest, err := loadState()
+	if err != nil {
+		return nil, false, err
+	}
+	if !sameZoneDigests(previous, gossip.ZoneDigests(latest.Network)) {
+		return latest, true, nil
+	}
+	return latest, false, nil
 }
 
 func syncStateChanged(state *stateFile, before []gossip.ZoneDigest) bool {
@@ -268,18 +297,74 @@ func relaySync(ctx context.Context, state *stateFile, transport *gossip.Transpor
 		return err
 	}
 	now := time.Now()
+	updatedPeerState := false
 	for _, peer := range config.Bootstrap {
-		if peer.ID == "" || peer.ID == sourcePeerID {
-			continue
-		}
-		if backoffRemaining(state.SyncPeers[peer.ID], now) > 0 {
+		allowed, reason := shouldRelayToPeer(state.SyncPeers[peer.ID], peer.ID, sourcePeerID, now)
+		if !allowed {
+			recordRelaySuppression(state, peer.ID, reason, now)
+			updatedPeerState = true
 			continue
 		}
 		if err := syncRoundWithTransport(ctx, state, transport, peer.ID, 3*time.Second); err != nil {
 			fmt.Fprintf(os.Stderr, "sync relay round error peer=%s: %v\n", peer.ID, err)
+			continue
 		}
+		recordRelaySuccess(state, peer.ID, sourcePeerID, now)
+		updatedPeerState = true
+	}
+	if updatedPeerState {
+		return saveState(state)
 	}
 	return nil
+}
+
+func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now time.Time) (bool, string) {
+	switch {
+	case peerID == "":
+		return false, "empty_peer_id"
+	case peerID == sourcePeerID:
+		return false, "source_peer"
+	case backoffRemaining(peerState, now) > 0:
+		return false, "backoff"
+	case peerState.LastRelayUnix != 0 && now.Sub(time.Unix(peerState.LastRelayUnix, 0)) < relayMinInterval:
+		return false, "relay_throttled"
+	default:
+		return true, ""
+	}
+}
+
+func recordUpdateSource(state *stateFile, sourcePeerID string) {
+	if state == nil || sourcePeerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[sourcePeerID]
+	peerState.LastUpdateSource = sourcePeerID
+	state.SyncPeers[sourcePeerID] = peerState
+}
+
+func recordRelaySuccess(state *stateFile, peerID, sourcePeerID string, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	peerState.LastRelayUnix = now.Unix()
+	peerState.LastUpdateSource = sourcePeerID
+	peerState.LastRelaySuppression = ""
+	peerState.LastRelaySuppressedAt = 0
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordRelaySuppression(state *stateFile, peerID, reason string, now time.Time) {
+	if state == nil || peerID == "" || reason == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	peerState.LastRelaySuppression = reason
+	peerState.LastRelaySuppressedAt = now.Unix()
+	state.SyncPeers[peerID] = peerState
 }
 
 func openSyncTransport(config *syncConfigFile) (*gossip.Transport, error) {

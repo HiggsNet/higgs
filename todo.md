@@ -145,14 +145,14 @@
   - [x] `sync status` 显示 peer online/stale/backoff/next_retry
   - [x] 增加 smoke：断开/停止 peer 后恢复，验证自动补齐
 
-- [ ] **2.6 链式拓扑主动传播 / relay fanout**
+- [x] **2.6 链式拓扑主动传播 / relay fanout**
   - [x] 明确当前语义：在 A-B-C-D 链式 bootstrap 中，A 更新 record 后会优先同步/announce 给直接 peer B；C/D 默认依赖各自周期性摘要比较或 B 后续 outbound sync 才能得到更新
   - [x] 决定 Phase 2 目标语义：B/C 在成功 apply A 的新 Zone/Record 后，立即向除来源 peer 外的已知 peers 触发 lightweight sync round
   - [x] 增加基础变更来源 tracking：只在 zone digest 发生变化时 relay，并跳过来源 peer，避免 A-B-A、B-C-B 直接回环
-  - [ ] 为 relay 增加节流和批处理，避免一个 record 更新在稠密拓扑中产生广播风暴
-  - [ ] `sync run` 在本地 record put 或远端 apply 成功后，支持唤醒 outbound sync，而不是完全等待下一次 interval
+  - [x] 为 relay 增加节流和批处理，避免一个 record 更新在稠密拓扑中产生广播风暴
+  - [x] `sync run` 在本地 record put 或远端 apply 成功后，支持唤醒 outbound sync，而不是完全等待下一次 interval
   - [x] 增加 smoke：A-B-C-D 链式拓扑中 A 写入 record，验证 D 在无需等待完整轮询周期的情况下收敛
-  - [ ] `sync status --verbose` 显示 peer 最近一次更新来源与 relay 抑制原因，方便排查“为什么只到 B 没到 C/D”
+  - [x] `sync status --verbose` 显示已落盘的 peer 最近一次更新来源与 relay 抑制原因，方便离线排查“为什么只到 B 没到 C/D”
 
 - [ ] **2.7 Peer discovery / 动态 allowlist**
   - [ ] 明确默认身份模型：普通节点的 `peer_id` 默认等于本节点授权 Zone（如 `node-a.catofes.`），bootstrap/discovery 均以 Zone FQDN 作为 peer id
@@ -369,6 +369,7 @@
   - [ ] 提供 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
   - [ ] 预留 TCP control listener，用于受控远程管理；默认关闭，必须显式配置监听地址与认证
   - [ ] 定义控制 API：status、peers、zones、records、pending、sync trigger、reload config、apply dry-run
+  - [ ] `sync status --verbose` / `debug peer` 优先通过本地控制接口查询正在运行的 daemon，显示 live relay 队列、最近更新来源、relay 抑制原因、backoff 和下一次 sync 计划；daemon 不可用时 fallback 到 DB 快照
   - [ ] 控制 API 输出结构化 JSON，CLI 负责格式化成人类可读输出
   - [ ] 加入认证与授权边界：Unix socket 文件权限、token/mTLS 预留、只读/管理操作分级
   - [ ] daemon 生命周期：启动、优雅停止、reload、状态持久化、崩溃恢复

@@ -80,6 +80,9 @@ func debugPeer(peerID string) error {
 	fmt.Printf("backoff: %s\n", formatBackoff(peerState, time.Now()))
 	fmt.Printf("next_retry: %s\n", formatNextRetry(peerState, time.Now()))
 	fmt.Printf("known_endpoint: %s\n", resolved)
+	fmt.Printf("last_update_source: %s\n", dash(peerState.LastUpdateSource))
+	fmt.Printf("last_relay: %s\n", formatUnixTime(peerState.LastRelayUnix))
+	fmt.Printf("relay_suppression: %s\n", formatRelaySuppression(peerState))
 	return nil
 }
 
@@ -195,7 +198,7 @@ func formatLastSuccess(peerState syncPeerState) string {
 	if peerState.LastSyncUnix == 0 || peerState.LastError != "" {
 		return "never"
 	}
-	return time.Unix(peerState.LastSyncUnix, 0).UTC().Format(time.RFC3339)
+	return formatUnixTime(peerState.LastSyncUnix)
 }
 
 func peerStatus(peerState syncPeerState, now time.Time) string {
@@ -226,7 +229,25 @@ func formatNextRetry(peerState syncPeerState, now time.Time) string {
 	if backoffRemaining(peerState, now) <= 0 {
 		return "-"
 	}
-	return time.Unix(peerState.BackoffUntilUnix, 0).UTC().Format(time.RFC3339)
+	return formatUnixTime(peerState.BackoffUntilUnix)
+}
+
+func formatUnixTime(unix int64) string {
+	if unix == 0 {
+		return "never"
+	}
+	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
+}
+
+func formatRelaySuppression(peerState syncPeerState) string {
+	if peerState.LastRelaySuppression == "" {
+		return "-"
+	}
+	at := formatUnixTime(peerState.LastRelaySuppressedAt)
+	if at == "never" {
+		return peerState.LastRelaySuppression
+	}
+	return fmt.Sprintf("%s at=%s", peerState.LastRelaySuppression, at)
 }
 
 func dash(value string) string {

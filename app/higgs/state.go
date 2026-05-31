@@ -30,11 +30,15 @@ type stateMeta struct {
 }
 
 type syncPeerState struct {
-	LastSyncUnix     int64  `json:"last_sync_unix,omitempty"`
-	LastAttemptUnix  int64  `json:"last_attempt_unix,omitempty"`
-	BackoffUntilUnix int64  `json:"backoff_until_unix,omitempty"`
-	FailureCount     int    `json:"failure_count,omitempty"`
-	LastError        string `json:"last_error,omitempty"`
+	LastSyncUnix          int64  `json:"last_sync_unix,omitempty"`
+	LastAttemptUnix       int64  `json:"last_attempt_unix,omitempty"`
+	BackoffUntilUnix      int64  `json:"backoff_until_unix,omitempty"`
+	LastRelayUnix         int64  `json:"last_relay_unix,omitempty"`
+	FailureCount          int    `json:"failure_count,omitempty"`
+	LastError             string `json:"last_error,omitempty"`
+	LastUpdateSource      string `json:"last_update_source,omitempty"`
+	LastRelaySuppression  string `json:"last_relay_suppression,omitempty"`
+	LastRelaySuppressedAt int64  `json:"last_relay_suppressed_at,omitempty"`
 }
 
 type syncConfigFile struct {
