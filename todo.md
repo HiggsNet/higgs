@@ -160,12 +160,24 @@
   - [ ] 定义高级例外：只有同一授权 Zone 下存在多个独立 gossip 实例/角色时，才引入 peer alias 或 instance id，并必须由该 Zone 显式授权
   - [ ] 定义绑定约束：endpoint record 必须由对应授权 Zone 签名，声明的 `peer_id` 默认应等于该 Zone，声明的 endpoints 才能进入 discovered peer table
   - [ ] 定义同步 endpoint record 格式，如 `sync/endpoints/udp` 或 `sync/peers/default`，支持一个 peer 下多个 endpoint
-  - [ ] 新节点加入时写入自己的 gossip endpoint record
+  - [ ] 明确主路径：节点自动或手工获得自己的公网 endpoint 后，写入本 Zone 下的 signed endpoint record，再通过现有 bootstrap gossip 传播给其他节点
+  - [ ] 明确本机 endpoint 采集来源：手工配置的 `listen_addr` / `advertise_addr`、本机网卡地址扫描、public IP reflector 返回的公网地址；公网部署不考虑局域网 multicast/broadcast discovery
+  - [ ] 增加本机网卡地址扫描器：枚举可用 interface addresses，过滤 loopback、down interface、link-local、docker/容器/临时地址等不可发布地址，按 IPv4/IPv6、private/public、interface priority 生成候选 endpoint
+  - [ ] 增加显式 `advertise_addr` / `advertise_addrs` 配置，用于覆盖自动探测结果；自动发现只能补充，不应覆盖管理员显式声明
+  - [ ] 增加 public IP reflector 支持：可配置多个如 `api.ipify.org`、`ifconfig.me`、`myip.ipip.net` 等服务，查询结果一致时提升置信度，并与 gossip listen port 组合为候选公网 endpoint
+  - [ ] 明确 reflector 结果只是本节点自发现输入：节点必须用自己的 Zone 私钥签名后写入 endpoint record，其他节点只信任 verified active state 中的 signed endpoint，不直接信任第三方 reflector
+  - [ ] 增加 reflector endpoint 定时刷新：配置 `reflector_interval` / `endpoint_ttl`，周期查询公网 IP；IP 或端口变化时生成新的 signed endpoint record 版本并触发 outbound sync
+  - [ ] 处理 endpoint 变更窗口：新 endpoint 发布后保留旧 endpoint grace period，远端根据 ttl/last_observed/连接成功情况逐步淘汰旧地址，避免公网 IP 切换时短暂失联
+  - [ ] 定义 endpoint 可信度与来源优先级：static advertise addr > signed active-state endpoint record > reflector-derived signed endpoint > interface scan；连接成功后提升可用性分数，失败/backoff 后降级
+  - [ ] endpoint record 中保留来源、scope、ttl、priority、last_observed 等元数据，避免把临时公网/NAT 反射地址永久固化为稳定配置
+  - [ ] 新节点加入时写入自己的 gossip endpoint record；如果启用自动探测，则先写入可验证的稳定候选，临时 observed endpoint 走 discovered peer table 而不是长期 record
   - [ ] 从 verified active state 解析已授权 peer 的 endpoints
   - [ ] 将 discovered peers 合并到运行时 known peer table，bootstrap 作为种子节点保留
   - [ ] 接收包时仍按 peer id + endpoint allowlist 校验，避免 unknown peer 直接注入状态
   - [ ] endpoint 变更后更新 known peer table，过期/撤销后标记 stale 或移除
-  - [ ] 增加 smoke：新 peer 不手写到所有节点 bootstrap，也能经已知节点发现并同步
+  - [ ] 增加 CLI 诊断：显示本机候选 endpoints、来源、过滤原因、当前 advertised endpoints、discovered/observed endpoints、最后连接成功地址
+  - [ ] 增加 smoke：新 peer 只要能连上任一 bootstrap，就能发布自己的 signed endpoint record，并经 gossip 传播到其他节点形成动态连接
+  - [ ] 增加 smoke：公网 endpoint 由 reflector 自动发现并签名发布；IP 变化后自动发布新版本，其他节点验证 record 后更新 known peer table，并在失败时回退 bootstrap/static endpoint
 
 - [ ] **2.8 Pending / FetchRecord 闭环**
   - [x] 构造高版本 record 先到达的测试场景
@@ -196,6 +208,33 @@
   - README 记录链式拓扑传播语义：周期收敛 vs 主动 relay fanout 的差异
   - 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、pending 未补齐
 
+- [ ] **2.12 应用运行时与依赖边界整理**
+  - [ ] 盘点并收敛 CLI 层隐式依赖：config/state/store、sync transport、known peer table、logger、clock、stdout/stderr、validation hooks
+  - [ ] 引入轻量 `Runtime` / `App` struct，负责一次性加载 `appConfig`、解析 state path、打开/保存 `stateFile`，并缓存由 config 派生出的 sync config
+  - [ ] 将 `loadState()` / `saveState()` 拆出显式依赖版本，如 `loadStateAt(path, trustRoot)`、`saveStateAt(path, state)`；保留薄 wrapper 兼容简单 CLI 命令
+  - [ ] 避免热路径重复读配置：`handleSyncPacket`、`relaySync`、`syncRoundWithTransport` 使用运行时持有的 sync config、limits、debug logger
+  - [ ] 引入 `SyncRuntime` / `SyncService`，聚合 `state`、`syncConfig`、`transport`、`limits`、`logger`、`clock`，把 packet handling、round、relay fanout 收为方法
+  - [ ] 将 `openSyncTransport` 的 replay window、peer quotas、known peers、debug logger 从局部构造改为运行时可配置依赖，为动态 discovery 和测试注入留接口
+  - [ ] 把 `configureValidation(state.Network)` 这类散落调用收敛到 state/network 加载边界，或明确为 `Runtime.ConfigureNetworkValidation()`，避免忘记调用导致行为差异
+  - [ ] 将 `time.Now()` 的同步/backoff/record timestamp 使用收敛到运行时 clock；生产默认真实时间，测试可注入固定时间
+  - [ ] 将 CLI 输出从业务函数中逐步隔离：命令层负责 `fmt.Printf`，核心函数返回结构化结果；优先处理 sync status/debug/db dump 等未来要做 golden test 的命令
+  - [ ] 梳理文件 I/O 边界：key/join bundle/config/state 读写保留在 app 层，`pkg/core/*` 继续保持纯模型和协议逻辑
+  - [ ] 保持重构边界克制：不要把签名验证、snapshot、record put 等 core 逻辑塞进大对象；struct 只负责生命周期、依赖注入和运行态协调
+  - [ ] 增加针对 runtime 的单元测试：config 只加载一次、state path/env 覆盖优先级、trusted root 校验、sync limits 派生、debug log env/config 优先级
+  - [ ] 重构后跑通 `make check`、`make phase2-smoke`、`make multi-node-smoke`、`make chain-relay-smoke`
+
+- [ ] **2.13 Delegation 撤销 / Zone 删除语义**
+  - [ ] 明确删除模型：父 Zone 中的 delegation 是子 Zone 授权的唯一权威来源；删除子 Zone 必须由父 Zone 写入 signed revocation/tombstone，而不是仅从本地 map 中移除
+  - [ ] 定义 revocation/tombstone 数据结构：包含 child zone、parent zone、revoked authority epoch/hash、reason、revoked_at、ttl/grace、signer，并由父 Zone authority 签名
+  - [ ] 定义父 Zone snapshot 的优先级：同一 child 的有效 delegation 与 revocation 冲突时，以父 Zone 中版本/epoch 更新且签名有效的状态为准；子 Zone 的 `ParentProof` 只是缓存，不可覆盖父 Zone 撤销
+  - [ ] 撤销后，本地 active state 将该 Zone 及其子树标记为 revoked/quarantined：停止接受该 Zone 新 record、停止 relay 其新 announce、停止将其 endpoints 加入 known peer table
+  - [ ] 保留已撤销 Zone 的历史数据用于审计和冲突排查，但默认查询、配置生成、peer discovery、route authorization 不再使用其 active records
+  - [ ] 清理撤销子树相关 pending records、sync peer 状态、discovered endpoints、relay fanout 队列，避免已撤销节点继续通过 pending/relay 恢复活跃状态
+  - [ ] 增加 CLI：`higgs delegate revoke <zone>` 由父 Zone 管理者签发撤销；`higgs debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
+  - [ ] 增加 gossip 同步语义：revocation/tombstone 必须进入 zone digest/snapshot，传播优先级高于普通 record，节点收到后立即触发 outbound sync/relay fanout
+  - [ ] 增加测试：撤销普通节点 Zone 后，其他节点拒绝其新 record 和 endpoint；撤销中间管理 Zone 后，其整个子树失效；重启后 revoked 状态仍持久化
+  - [ ] 增加 smoke：A/B/C 已建立同步后，管理员撤销 node-b delegation，A/C 收敛后不再信任 B 的 record、endpoint、route announcement
+
 ## Phase 3: WireGuard 建链（预计 2-3 周）
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
@@ -205,6 +244,7 @@
   - 监听 `*.<parent_zone>./wireguard/*` Record 变更
   - 从 Zone 推导 PeerView：`PublicKey`、`Endpoints`、`TunnelAllowedIPs`、`AnnouncedRoutes`
   - 应用 WG 配置（add/remove/update peer）
+  - 当 peer Zone 被撤销或其父 delegation 被 tombstone 时，立即从 WireGuard device 移除对应 peer、AllowedIPs、endpoint 与 keepalive 配置
   - WG AllowedIPs 只放 tunnel /32 或 /128，业务路由交给 Babeld
 
 - [ ] **3.2 链路实例管理**
@@ -263,10 +303,21 @@
   - 节点离线超时后，保留配置但标记 stale
   - 长期离线后自动清理 WG Peer 和路由
   - 节点信息变更（endpoint、pubkey rotate）自动更新 WG 配置
+  - 节点 Zone 被撤销后标记 revoked，高优先级触发传输层/路由层/防火墙 apply，不等待普通健康检查超时
 
 - [ ] **5.5 防火墙规则同步**
   - 基于已同步的 Zone 中所有合法节点的 TunnelAllowedIPs
   - 通过 `nftables` netlink 接口生成 accept 规则，默认 drop
+  - 节点或子树被撤销后立即移除对应 allow rules，避免已撤销节点继续访问 overlay
+
+- [ ] **5.6 撤销后的传输与路由清理**
+  - WireGuard：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
+  - IKEv2/StrongSwan：删除被撤销 peer 的 connection/child SA 配置，主动 terminate 已建立 SA，移除对应 secret/cert/key reference
+  - Babeld/BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
+  - 防火墙：移除该 peer/subtree 的 nftables accept rules、set entries、rate-limit exceptions
+  - IPAM/route authorization：被撤销 Zone 及其子树发布的 IP assignment、route announcement 立即从有效配置中剔除；历史记录仅用于审计
+  - 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 WG/IKEv2/Babel/firewall/IPAM 对象，便于管理员确认影响范围
+  - 增加集成测试：撤销节点后，控制平面状态先收敛，随后本机 WG/IKEv2/Babel/firewall 配置全部清理完成
 
 ## Phase 6: 健壮性与高级特性（预计 4-6 周）
 
@@ -293,7 +344,26 @@
   - 通过 netlink 配置 SRv6 SID、End.DT4/End.DX6 行为
   - 与 BIRD/FRR 的 SRv6 扩展联动（如后续引入 BGP）
 
-- [ ] **6.6 Daemon / 本地控制接口**
+- [ ] **6.6 可选 Global Discovery Server**
+  - 作为独立公网服务提供 peer rendezvous，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 peer discovery 仍以 signed endpoint record + gossip 传播为主
+  - 服务端不成为信任根，不持有 root/admin/zone 私钥；客户端仍以 signed endpoint record 和 Zone trust chain 为准
+  - 支持最小 HTTP/JSON API：`POST /v1/announce` 上报本机 signed endpoint，`GET /v1/peers/{peer_id}` 查询候选 endpoints、observed addr、ttl 和 source
+  - 服务端负责 ttl cache、observed remote addr、限流、防重放和基础滥用防护；不替客户端做最终信任裁决
+  - 支持配置多个 discovery server URL，客户端合并查询结果并按 endpoint 可信度/连接成功率排序
+
+- [ ] **6.7 可选 Relay Bootstrap Server**
+  - 作为独立公网 bootstrap/relay 程序运行，负责收集节点发布的已签名 Zone/Record/endpoint 数据，维护本地数据库，并向其他节点传播
+  - relay server 不需要自己的 Zone，不持有 root/admin/zone 私钥，不签发 delegation/record，不成为信任根；所有数据仍由客户端按 Zone trust chain 和签名验证
+  - 运行形态可以是独立 binary，如 `higgs-relay`，或后续子命令；长期部署时作为稳定 bootstrap peer 暴露公网地址
+  - relay 维护持久化 store：按 peer/zone/record digest 保存最新 verified/candidate 数据、来源 peer、收到时间、ttl、last_seen、传播状态
+  - 支持 gossip 协议的 bootstrap 行为：响应 `PING`/`PONG`/`FETCH_ZONE`/`FETCH_RECORD`/`ANNOUNCE`，并可向已知节点做 fanout/relay，但自身不生成业务 record
+  - 支持查询接口：节点可按 peer id、zone、digest 查询 relay 已知的 endpoints、zone snapshots、record snapshots，用于冷启动或补齐缺失数据
+  - relay 接收数据时先做基础格式、大小、配额、防重放检查；可选择做签名链预验证以节省下游带宽，但客户端必须再次验证
+  - relay 的 allowlist 策略可配置：公开收集已签名数据、仅接受指定 root trust 下的数据、或仅接受配置中的 bootstrap peers
+  - 增加 backpressure 和去重：按 digest/record version 去重，限制每 peer 传播频率，避免 relay 成为广播放大器
+  - 增加 smoke：普通节点只配置 relay 作为 bootstrap，也能通过 relay 获取其他节点 signed endpoint 和 zone data，随后建立直接 gossip 连接
+
+- [ ] **6.8 Daemon / 本地控制接口**
   - [ ] 明确运行形态：`higgs daemon` 常驻运行，负责 gossip 同步、active state 更新、WG/IKEv2/Babel/firewall apply
   - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作
   - [ ] 提供 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
@@ -304,7 +374,7 @@
   - [ ] daemon 生命周期：启动、优雅停止、reload、状态持久化、崩溃恢复
   - [ ] systemd service 示例和 socket 路径约定，如 `/run/higgs/higgs.sock`
 
-- [ ] **6.7 运维与可观测性**
+- [ ] **6.9 运维与可观测性**
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`
