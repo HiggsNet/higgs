@@ -239,8 +239,19 @@
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
 
+- [ ] **3.0 最小节点 daemon / 单 writer 边界**
+  - [ ] 增加 `higgs daemon` 常驻模式，复用 `sync run` 的 UDP serve + outbound sync 循环，并为后续 WG/Babel/firewall apply 提供统一事件循环
+  - [ ] 明确 daemon 是本节点 state DB 的唯一长期 writer；`record put`、`sync trigger`、未来 WG apply 等写操作应通过 daemon 进入同一串行写入路径
+  - [ ] CLI 在检测到 daemon control socket 存在时，优先作为 client 提交写命令；daemon 不存在时保留当前直接写 DB 的开发模式，并输出明确提示
+  - [ ] 提供最小 Unix domain socket 控制接口：status、record put、sync trigger、shutdown/reload 预留；只要求本机使用，不做远程管理
+  - [ ] `sync status --verbose` / `debug peer` 优先读取 daemon live 状态；daemon 不存在时 fallback 到 bbolt 快照
+  - [ ] 将 `sync run` 标记为开发/兼容入口，内部可委托 daemon service 实现，避免 Phase 3 后出现两套长期运行路径
+  - [ ] 增加 smoke：daemon 运行时 CLI `record put` 通过 control socket 提交，daemon 写 DB、触发 gossip sync，远端收敛
+  - [ ] 增加并发安全测试：daemon 运行期间多个 CLI 写命令串行处理，不出现旧 state snapshot 覆盖新写入
+
 - [ ] **3.1 WireGuard 控制模块**
   - 通过 `wgctrl-go` 操作内核 WG 接口
+  - 由 daemon 监听 active state 变更并触发 WG apply，避免独立 CLI 进程直接修改运行中状态
   - 监听 `*.<parent_zone>./wireguard/*` Record 变更
   - 从 Zone 推导 PeerView：`PublicKey`、`Endpoints`、`TunnelAllowedIPs`、`AnnouncedRoutes`
   - 应用 WG 配置（add/remove/update peer）
@@ -363,10 +374,10 @@
   - 增加 backpressure 和去重：按 digest/record version 去重，限制每 peer 传播频率，避免 relay 成为广播放大器
   - 增加 smoke：普通节点只配置 relay 作为 bootstrap，也能通过 relay 获取其他节点 signed endpoint 和 zone data，随后建立直接 gossip 连接
 
-- [ ] **6.8 Daemon / 本地控制接口**
-  - [ ] 明确运行形态：`higgs daemon` 常驻运行，负责 gossip 同步、active state 更新、WG/IKEv2/Babel/firewall apply
-  - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作
-  - [ ] 提供 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
+- [ ] **6.8 Daemon / 本地控制接口生产化**
+  - [ ] 在 Phase 3 最小 daemon 基础上完善运行形态：`higgs daemon` 常驻负责 gossip 同步、active state 更新、WG/IKEv2/Babel/firewall apply
+  - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作；直接写 DB 模式仅保留为 debug/recovery
+  - [ ] 完善 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
   - [ ] 预留 TCP control listener，用于受控远程管理；默认关闭，必须显式配置监听地址与认证
   - [ ] 定义控制 API：status、peers、zones、records、pending、sync trigger、reload config、apply dry-run
   - [ ] `sync status --verbose` / `debug peer` 优先通过本地控制接口查询正在运行的 daemon，显示 live relay 队列、最近更新来源、relay 抑制原因、backoff 和下一次 sync 计划；daemon 不可用时 fallback 到 DB 快照
