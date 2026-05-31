@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,7 +166,7 @@ func acceptJoinBundle(bundlePath string, keyPath string) error {
 		return err
 	}
 	fmt.Printf("joined %s in %s\n", bundle.Zone, path)
-	fmt.Printf("trusted root public key: %s\n", hex.EncodeToString(bundle.RootPublicKey))
+	fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
 	return nil
 }
 

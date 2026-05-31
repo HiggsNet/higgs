@@ -83,7 +83,7 @@
   - [x] 配置数据库目录：`data_dir` / `database_dir`，默认状态库为 `<data_dir>/higgs.db`
   - [x] 配置监听地址：`listen_addr`，或用 `listen_port` 生成 `:<port>`
   - [x] 配置 bootstrap allowlist：`bootstrap: [{id, addr}]`
-  - [x] 配置根信任公钥：`trusted_root_public_key`（hex/base64 ED25519 public key）
+  - [x] 配置根信任公钥：`trusted_root_public_key`（默认 base64，兼容 hex 的 ED25519 public key）
   - [x] 提供 `config.example.yaml`
 
 - [x] **1.5.2 根 Zone 与准入 CLI**

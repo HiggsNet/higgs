@@ -41,7 +41,7 @@ bootstrap:
   - id: node-b
     addr: 127.0.0.1:33435
 
-trusted_root_public_key: <hex-or-base64-ed25519-public-key>
+trusted_root_public_key: <base64-ed25519-public-key>
 ```
 
 字段说明：
@@ -50,7 +50,7 @@ trusted_root_public_key: <hex-or-base64-ed25519-public-key>
 - `peer_id`：gossip peer ID。
 - `listen_addr`：UDP gossip 监听地址。也可以用 `listen_port`。
 - `bootstrap`：已知 gossip peer。未知 peer ID 或地址会被拒绝。
-- `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。
+- `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。CLI 默认输出 base64 编码的裸 32-byte Ed25519 public key；配置仍兼容读取 hex。
 
 模板见 [config.example.yaml](config.example.yaml)。
 

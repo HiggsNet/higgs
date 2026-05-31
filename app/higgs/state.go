@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -236,47 +235,6 @@ func recordPeerSync(state *stateFile, peerID string, err error) {
 		peerState.LastError = ""
 	}
 	state.SyncPeers[peerID] = peerState
-}
-
-func dbDump(filter string) error {
-	path, err := configuredStatePath()
-	if err != nil {
-		return err
-	}
-	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true})
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	return db.View(func(tx *bolt.Tx) error {
-		return tx.ForEach(func(name []byte, b *bolt.Bucket) error {
-			bucketName := string(name)
-			if filter != "" {
-				if bucketName == "_meta" {
-					// keep meta bucket even when filtering
-				} else if bucketName != "zone:"+filter {
-					return nil
-				}
-			}
-			fmt.Printf("bucket: %s\n", bucketName)
-			return b.ForEach(func(k, v []byte) error {
-				fmt.Printf("  key: %s\n", string(k))
-				var data any
-				if err := json.Unmarshal(v, &data); err == nil {
-					pretty, _ := json.MarshalIndent(data, "    ", "  ")
-					fmt.Printf("    value (json):\n%s\n", pretty)
-				} else {
-					s := string(v)
-					if len(s) > 200 {
-						s = s[:200] + "..."
-					}
-					fmt.Printf("    value (raw): %s\n", s)
-				}
-				return nil
-			})
-		})
-	})
 }
 
 func dbStats() error {

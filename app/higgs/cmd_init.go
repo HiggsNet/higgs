@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -62,7 +61,7 @@ func initRootState() error {
 		return err
 	}
 	fmt.Printf("initialized root in %s\n", path)
-	fmt.Printf("root public key: %s\n", hex.EncodeToString(rootPub))
+	fmt.Printf("root public key: %s\n", formatPublicKey(rootPub))
 	return nil
 }
 
@@ -139,6 +138,6 @@ func initState(managedZone zone.ZonePath) error {
 		return err
 	}
 	fmt.Printf("initialized %s in %s\n", managedZone, path)
-	fmt.Printf("root public key: %s\n", hex.EncodeToString(rootPub))
+	fmt.Printf("root public key: %s\n", formatPublicKey(rootPub))
 	return nil
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -41,7 +40,7 @@ func keygen(path string) error {
 		return err
 	}
 	fmt.Printf("wrote key: %s\n", path)
-	fmt.Printf("public key: %s\n", hex.EncodeToString(pub))
+	fmt.Printf("public key: %s\n", formatPublicKey(pub))
 	return nil
 }
 

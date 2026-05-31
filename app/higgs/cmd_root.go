@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -42,7 +41,7 @@ func cmdRoot() *cli.Command {
 					if root == nil || root.Authority == nil || len(root.Authority.Keys) == 0 {
 						return errors.New("root authority has no public key")
 					}
-					fmt.Println(hex.EncodeToString(root.Authority.Keys[0].Key))
+					fmt.Println(formatPublicKey(root.Authority.Keys[0].Key))
 					return nil
 				},
 			},
