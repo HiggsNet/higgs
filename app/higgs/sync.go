@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,44 +10,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
-	"github.com/urfave/cli/v3"
 )
-
-func cmdSync() *cli.Command {
-	return &cli.Command{
-		Name:  "sync",
-		Usage: "Gossip sync commands",
-		Commands: []*cli.Command{
-			{
-				Name:        "status",
-				Usage:       "Show sync and peer status",
-				Description: "Display current sync configuration, known peers, and zone digests.",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return syncStatus()
-				},
-			},
-			{
-				Name:        "serve",
-				Usage:       "Start the gossip sync server",
-				Description: "Listen for incoming sync messages and respond to pings/pongs.",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return syncServe()
-				},
-			},
-			{
-				Name:      "once",
-				Usage:     "Run a single sync round with a peer",
-				UsageText: "higgs sync once <peer-id>",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs sync once <peer-id>", 1)
-					}
-					return syncOnce(cmd.Args().First())
-				},
-			},
-		},
-	}
-}
 
 func syncStatus() error {
 	state, err := loadState()

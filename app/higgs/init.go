@@ -1,34 +1,12 @@
 package main
 
 import (
-	"context"
 	"crypto/ed25519"
 	"fmt"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
-	"github.com/urfave/cli/v3"
 )
-
-func cmdInit() *cli.Command {
-	return &cli.Command{
-		Name:      "init",
-		Usage:     "Initialize a new local state file",
-		UsageText: "higgs init [ZONE]",
-		Description: "Initialize a new state database with the given managed zone.\n" +
-			"If ZONE is omitted, defaults to 'local.'.",
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			if cmd.Args().Len() > 1 {
-				return cli.Exit("usage: higgs init [ZONE]", 1)
-			}
-			managedZone := zone.ZonePath("local.")
-			if cmd.Args().Len() > 0 {
-				managedZone = zone.ZonePath(cmd.Args().First())
-			}
-			return initState(managedZone)
-		},
-	}
-}
 
 func initRootState() error {
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -215,17 +214,6 @@ func readPrivateKeyFile(path string) (*privateKeyFile, error) {
 		return nil, errors.New("private key does not match public key")
 	}
 	return &key, nil
-}
-
-func readJSONFile(path string, out any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	return nil
 }
 
 func cloneNetworkForBundle(ns *zone.NetworkState) *zone.NetworkState {

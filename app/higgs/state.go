@@ -4,13 +4,11 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
-	bolt "go.etcd.io/bbolt"
 )
 
 const defaultStatePath = ".higgs.db"
@@ -235,42 +233,4 @@ func recordPeerSync(state *stateFile, peerID string, err error) {
 		peerState.LastError = ""
 	}
 	state.SyncPeers[peerID] = peerState
-}
-
-func dbStats() error {
-	path, err := configuredStatePath()
-	if err != nil {
-		return err
-	}
-	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true})
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	var totalBuckets, totalKeys int
-	var totalSize int64
-
-	err = db.View(func(tx *bolt.Tx) error {
-		return tx.ForEach(func(name []byte, b *bolt.Bucket) error {
-			totalBuckets++
-			bucketName := string(name)
-			bucketKeys := 0
-			var bucketSize int64
-			b.ForEach(func(k, v []byte) error {
-				totalKeys++
-				bucketKeys++
-				bucketSize += int64(len(k)) + int64(len(v))
-				return nil
-			})
-			totalSize += bucketSize
-			fmt.Printf("bucket %-20s keys=%4d size=%8d bytes\n", bucketName+":", bucketKeys, bucketSize)
-			return nil
-		})
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%-27s keys=%4d size=%8d bytes\n", "total:", totalKeys, totalSize)
-	return nil
 }
