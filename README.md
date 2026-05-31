@@ -24,7 +24,7 @@ Phase 2 gossip 使用 UDP 和一个轻量 JSON wire codec：
 - 默认限制：单消息 65536 bytes、单次 announce 16 个 Zone snapshot、单 Zone snapshot 1024 条 record
 - 防重放：nonce + timestamp window
 - peer allowlist：只接受 `bootstrap` 中配置的 peer
-- 同步模型：Phase 2 仍使用 whole-zone sync；缺失前驱的 record 会进入 pending，并可通过 `FETCH_RECORD` 补齐
+- 同步模型：Phase 2 仍使用 whole-zone sync；active record 以 Zone authority 签名的最新版本为准，历史只保留有限窗口用于调试和短期补洞
 
 `gossip.proto` 记录了未来协议形状，但当前构建不需要 `protoc`。
 
@@ -93,7 +93,6 @@ make chain-relay-smoke
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync status --verbose
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug peer node-b
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-b.catofes.
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug pending
 ```
 
 开启结构化 debug log：
@@ -263,7 +262,7 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs record put node-b.catofes. ide
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs zone show node-b.catofes.
 ```
 
-Record 按 Zone/key 独立版本化。如果高版本 record 先于其前驱到达，它会保留在 pending 中，直到前驱被 fetch 或导入。
+Record 按 Zone/key 独立版本化。普通同步以签名有效的最高版本为 active state；旧版本只保留有限历史窗口用于审计和排障。
 
 ## 数据库调试
 
@@ -280,9 +279,15 @@ build/higgs db dump
 build/higgs db dump catofes.
 ```
 
-两个命令都以只读模式打开数据库，不会干扰正在运行的 `sync serve` 实例。
+这些命令都以只读模式打开数据库，不会干扰正在运行的 `sync serve` 或 `sync run` 实例。
 
 ## Gossip 同步
+
+同步相关命令分三种运行方式：
+
+- `sync serve`：只监听 UDP，响应其他 peer 发来的 `PING`、`FETCH_ZONE`、`FETCH_RECORD` 和 `ANNOUNCE`。它是被动服务端，适合手动 smoke 或排查。
+- `sync once <peer-id>`：主动和一个 peer 做一次同步 round。它会先发 `PING`，根据双方 zone digest 差异拉取缺失 zone/record，然后退出。
+- `sync run`：长期运行模式。它同时执行 `sync serve` 的收包处理和周期性 outbound sync；peer 失败后会记录 `last_error` 和 backoff，网络恢复后自动重试。真实节点更接近这个模式。
 
 启动 node B 的 gossip server：
 
@@ -299,6 +304,32 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync status
 ```
 
 本机双节点测试时，每个节点都需要独立的 `config.yaml` 和 `data_dir`。`bootstrap` 中的 `id` 和 `addr` 必须和对端的 `peer_id`、UDP 监听地址一致。
+
+长期运行两个节点时，可以让两端都运行 `sync run`：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync run --interval 5
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync run --interval 5
+```
+
+`sync run` 会定期比较摘要，也会在收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。
+
+### Latest Record 与历史窗口
+
+Record 按 `zone/key` 独立版本化。普通同步采用 `latest signed state is authoritative` 语义：节点收到更高版本 record 后，先验证 Zone 信任链和 record 签名；验签通过后即可把它作为该 key 的 active record，不要求从 `@1` 依次重放到最新版本。
+
+`PrevHash` 仍会保留在 record 中，但它主要用于审计和调试。如果本地正好持有直接前驱，例如 active 是 `@2` 且收到 `@3`，并且 `@3.PrevHash` 非空，则会检查它是否匹配 `@2` 的 hash；如果不匹配，视为 `conflict`。如果本地只有 `@20`，收到签名有效的 `@100`，节点会直接 fast-forward 到 `@100`。
+
+为了避免数据库无限膨胀，每个 `zone/key` 默认只保留最近 128 条被替换的历史版本。Whole-zone snapshot 只同步 active records，不再把远端完整 `RecordHistory` 作为冷启动依赖。`FETCH_RECORD` 仍保留在协议中用于兼容和手工按需取单条历史 record，但普通同步主路径不会为了补齐历史链主动使用它。
+
+如果同一 version 出现不同内容，或本地正好持有直接前驱但 `PrevHash` 不匹配，节点会把它视为 conflict 并拒绝该条 record；后续更高版本的合法签名 record 仍可让各节点继续收敛。
+
+排查时常用：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync status
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-a.catofes.
+```
 
 双节点双向同步可以直接跑：
 
@@ -328,8 +359,8 @@ make chain-relay-smoke
 
 当前优先级不是直接进入 WireGuard，而是先把配置同步做稳：
 
-- stale/conflict/pending 的 CLI 输出继续细化
 - README 操作手册继续补常见错误和排障路径
+- peer discovery / 动态 allowlist 仍在设计和实现中
 - Phase 2 末尾再决定是否切到 protobuf；默认仍不引入 `protoc`
 
 WireGuard 建链会在配置同步收敛后再做，避免把状态同步问题和系统网络配置问题混在一起。
@@ -346,9 +377,12 @@ build/higgs join accept <bundle.json> <key.json>
 build/higgs zone show <zone>
 build/higgs record put <zone> <key> <value> [type]
 build/higgs verify <zone>
-build/higgs sync status
+build/higgs sync status [--verbose]
 build/higgs sync serve
 build/higgs sync once <peer-id>
+build/higgs sync run [--interval seconds]
+build/higgs debug peer <peer-id>
+build/higgs debug zone <zone>
 build/higgs db dump [zone]
 build/higgs db stats
 ```

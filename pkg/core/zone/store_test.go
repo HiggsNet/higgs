@@ -58,7 +58,7 @@ func TestNetworkStateGetFallback(t *testing.T) {
 	}
 }
 
-func TestNetworkStatePutValidatesVersionChainAndPromotesPending(t *testing.T) {
+func TestNetworkStatePutAcceptsSignedFastForward(t *testing.T) {
 	ns := NewNetworkState()
 	ns.ConfigureRecordValidation(
 		func(record *Record, authority *ZoneAuthority, now time.Time) error { return nil },
@@ -76,25 +76,75 @@ func TestNetworkStatePutValidatesVersionChainAndPromotesPending(t *testing.T) {
 		Version:  2,
 		PrevHash: []byte{1},
 	}
-	if err := ns.PutAt(v2, time.Unix(123, 0)); !errors.Is(err, ErrPendingRecord) {
-		t.Fatalf("PutAt(v2) error = %v, want ErrPendingRecord", err)
-	}
-	if got := ns.Zones["node1.catofes."].Records["identity"]; got != nil {
-		t.Fatalf("pending record was promoted without predecessor")
-	}
-
-	v1 := &Record{
-		Zone:    "node1.catofes.",
-		Key:     "identity",
-		Version: 1,
-	}
-	if err := ns.PutAt(v1, time.Unix(123, 0)); err != nil {
-		t.Fatalf("PutAt(v1): %v", err)
+	if err := ns.PutAt(v2, time.Unix(123, 0)); err != nil {
+		t.Fatalf("PutAt(v2): %v", err)
 	}
 	if got := ns.Zones["node1.catofes."].Records["identity"]; got != v2 {
-		t.Fatalf("active record = %#v, want v2 after pending promotion", got)
+		t.Fatalf("active record = %#v, want v2", got)
+	}
+
+	v100 := &Record{
+		Zone:    "node1.catofes.",
+		Key:     "identity",
+		Version: 100,
+	}
+	if err := ns.PutAt(v100, time.Unix(123, 0)); err != nil {
+		t.Fatalf("PutAt(v100): %v", err)
+	}
+	if got := ns.Zones["node1.catofes."].Records["identity"]; got != v100 {
+		t.Fatalf("active record = %#v, want v100", got)
 	}
 	if got := len(ns.Zones["node1.catofes."].RecordHistory["identity"]); got != 1 {
 		t.Fatalf("history length = %d, want 1", got)
+	}
+}
+
+func TestNetworkStatePutRejectsDirectNextPrevHashConflict(t *testing.T) {
+	ns := NewNetworkState()
+	ns.ConfigureRecordValidation(
+		func(record *Record, authority *ZoneAuthority, now time.Time) error { return nil },
+		func(record *Record) []byte { return []byte{byte(record.Version)} },
+	)
+	ns.Zones["node1.catofes."] = NewZoneState("node1.catofes.", &ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+	})
+
+	v1 := &Record{Zone: "node1.catofes.", Key: "identity", Version: 1}
+	if err := ns.PutAt(v1, time.Unix(123, 0)); err != nil {
+		t.Fatalf("PutAt(v1): %v", err)
+	}
+	v2Conflict := &Record{Zone: "node1.catofes.", Key: "identity", Version: 2, PrevHash: []byte{99}}
+	if err := ns.PutAt(v2Conflict, time.Unix(123, 0)); !errors.Is(err, ErrRecordConflict) {
+		t.Fatalf("PutAt(v2Conflict) = %v, want ErrRecordConflict", err)
+	}
+}
+
+func TestNetworkStatePutBoundsRecordHistory(t *testing.T) {
+	ns := NewNetworkState()
+	ns.ConfigureRecordValidation(
+		func(record *Record, authority *ZoneAuthority, now time.Time) error { return nil },
+		func(record *Record) []byte { return []byte{byte(record.Version)} },
+	)
+	ns.Zones["node1.catofes."] = NewZoneState("node1.catofes.", &ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+	})
+
+	for version := uint64(1); version <= MaxRecordHistoryPerKey+2; version++ {
+		record := &Record{Zone: "node1.catofes.", Key: "identity", Version: version}
+		if err := ns.PutAt(record, time.Unix(123, 0)); err != nil {
+			t.Fatalf("PutAt(v%d): %v", version, err)
+		}
+	}
+
+	history := ns.Zones["node1.catofes."].RecordHistory["identity"]
+	if got := len(history); got != MaxRecordHistoryPerKey {
+		t.Fatalf("history length = %d, want %d", got, MaxRecordHistoryPerKey)
+	}
+	if got := history[0].Version; got != 2 {
+		t.Fatalf("oldest retained version = %d, want 2", got)
 	}
 }

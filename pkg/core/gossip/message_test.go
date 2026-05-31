@@ -149,18 +149,20 @@ func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
+	if len(snapshot.RecordHistory) != 0 {
+		t.Fatalf("snapshot history len = %d, want 0", len(snapshot.RecordHistory))
+	}
 
 	target := cloneNetworkState(source)
 	target.Zones["catofes."].Records = make(map[string]*zone.Record)
 	target.Zones["catofes."].RecordHistory = make(map[string][]*zone.Record)
-	target.Zones["catofes."].PendingRecords = make(map[string][]*zone.Record)
 	target.Zones["catofes."].Records["obsolete"] = signedRecord(t, zonePriv, "catofes.", "obsolete", []byte("old"), 1, nil, now.Unix())
 	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot: %v", err)
 	}
-	if result.Records != 2 {
-		t.Fatalf("applied records = %d, want 2", result.Records)
+	if result.Records != 1 {
+		t.Fatalf("applied records = %d, want 1", result.Records)
 	}
 	got := target.Zones["catofes."].Records["identity"]
 	if got == nil || string(got.Value) != "node-b" || got.Version != 2 {
@@ -171,7 +173,7 @@ func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	}
 }
 
-func TestApplyRecordSnapshotPromotesPendingPredecessor(t *testing.T) {
+func TestApplyRecordSnapshotAcceptsSignedFastForward(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)
 	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
@@ -188,23 +190,13 @@ func TestApplyRecordSnapshotPromotesPendingPredecessor(t *testing.T) {
 	target := cloneNetworkState(source)
 	target.Zones["catofes."].Records = make(map[string]*zone.Record)
 	target.Zones["catofes."].RecordHistory = make(map[string][]*zone.Record)
-	target.Zones["catofes."].PendingRecords = make(map[string][]*zone.Record)
 
-	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: v2}, now); !errors.Is(err, zone.ErrPendingRecord) {
-		t.Fatalf("ApplyRecordSnapshot(v2) = %v, want ErrPendingRecord", err)
-	}
-	if got := len(target.Zones["catofes."].PendingRecords["identity"]); got != 1 {
-		t.Fatalf("pending len = %d, want 1", got)
-	}
-	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: v1}, now); err != nil {
-		t.Fatalf("ApplyRecordSnapshot(v1): %v", err)
+	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: v2}, now); err != nil {
+		t.Fatalf("ApplyRecordSnapshot(v2): %v", err)
 	}
 	got := target.Zones["catofes."].Records["identity"]
 	if got == nil || got.Version != 2 || string(got.Value) != "node-b" {
-		t.Fatalf("active record = %#v, want promoted v2", got)
-	}
-	if got := len(target.Zones["catofes."].PendingRecords["identity"]); got != 0 {
-		t.Fatalf("pending len after promotion = %d, want 0", got)
+		t.Fatalf("active record = %#v, want v2", got)
 	}
 }
 

@@ -12,11 +12,12 @@ var (
 	ErrInvalidFQKey       = errors.New("invalid fully-qualified key")
 	ErrZoneNotFound       = errors.New("zone not found")
 	ErrRecordNotFound     = errors.New("record not found")
-	ErrPendingRecord      = errors.New("record pending predecessor")
 	ErrStaleRecord        = errors.New("stale record version")
 	ErrRecordConflict     = errors.New("record version conflict")
 	ErrInvalidRecordChain = errors.New("invalid record version chain")
 )
+
+const MaxRecordHistoryPerKey = 128
 
 func ParseFQKey(fqkey string) (ZonePath, string, error) {
 	zonePart, key, ok := strings.Cut(fqkey, "/")
@@ -69,6 +70,9 @@ func (ns *NetworkState) PutAt(record *Record, now time.Time) error {
 	if record.Key == "" {
 		return ErrInvalidFQKey
 	}
+	if record.Version == 0 {
+		return ErrInvalidRecordChain
+	}
 
 	zs := ns.Zones[record.Zone]
 	if zs == nil {
@@ -83,12 +87,7 @@ func (ns *NetworkState) PutAt(record *Record, now time.Time) error {
 
 	current := zs.Records[record.Key]
 	if current == nil {
-		if record.Version != 1 || len(record.PrevHash) != 0 {
-			zs.PendingRecords[record.Key] = append(zs.PendingRecords[record.Key], record)
-			return ErrPendingRecord
-		}
 		zs.Records[record.Key] = record
-		ns.promotePending(zs, record.Key)
 		return nil
 	}
 
@@ -101,53 +100,13 @@ func (ns *NetworkState) PutAt(record *Record, now time.Time) error {
 		}
 		return ErrRecordConflict
 	}
-	if record.Version != current.Version+1 {
-		zs.PendingRecords[record.Key] = append(zs.PendingRecords[record.Key], record)
-		return ErrPendingRecord
-	}
-	if ns.RecordHasher != nil && !equalBytes(record.PrevHash, ns.RecordHasher(current)) {
-		zs.PendingRecords[record.Key] = append(zs.PendingRecords[record.Key], record)
-		return ErrPendingRecord
+	if record.Version == current.Version+1 && ns.RecordHasher != nil && len(record.PrevHash) > 0 && !equalBytes(record.PrevHash, ns.RecordHasher(current)) {
+		return ErrRecordConflict
 	}
 
-	zs.RecordHistory[record.Key] = append(zs.RecordHistory[record.Key], current)
+	zs.RecordHistory[record.Key] = appendBoundedHistory(zs.RecordHistory[record.Key], current)
 	zs.Records[record.Key] = record
-	ns.promotePending(zs, record.Key)
 	return nil
-}
-
-func (ns *NetworkState) promotePending(zs *ZoneState, key string) {
-	if ns.RecordHasher == nil {
-		return
-	}
-
-	for {
-		current := zs.Records[key]
-		if current == nil {
-			return
-		}
-		currentHash := ns.RecordHasher(current)
-		pending := zs.PendingRecords[key]
-		promoted := false
-		kept := pending[:0]
-		for _, candidate := range pending {
-			if candidate.Version == current.Version+1 && equalBytes(candidate.PrevHash, currentHash) {
-				zs.RecordHistory[key] = append(zs.RecordHistory[key], current)
-				zs.Records[key] = candidate
-				promoted = true
-				continue
-			}
-			kept = append(kept, candidate)
-		}
-		if len(kept) == 0 {
-			delete(zs.PendingRecords, key)
-		} else {
-			zs.PendingRecords[key] = kept
-		}
-		if !promoted {
-			return
-		}
-	}
 }
 
 func (ns *NetworkState) sameRecord(a, b *Record) bool {
@@ -186,8 +145,19 @@ func (ns *NetworkState) PutTrusted(record *Record) error {
 
 	current := zs.Records[record.Key]
 	if current != nil {
-		zs.RecordHistory[record.Key] = append(zs.RecordHistory[record.Key], current)
+		zs.RecordHistory[record.Key] = appendBoundedHistory(zs.RecordHistory[record.Key], current)
 	}
 	zs.Records[record.Key] = record
 	return nil
+}
+
+func appendBoundedHistory(history []*Record, record *Record) []*Record {
+	if record == nil {
+		return history
+	}
+	history = append(history, record)
+	if len(history) <= MaxRecordHistoryPerKey {
+		return history
+	}
+	return append([]*Record(nil), history[len(history)-MaxRecordHistoryPerKey:]...)
 }

@@ -38,15 +38,6 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 		Value:   []byte("old"),
 		Version: 0,
 	}}
-	ns.Zones["node1.catofes."].PendingRecords["identity"] = []*Record{{
-		Zone:     "node1.catofes.",
-		Key:      "identity",
-		Type:     "node.identity",
-		Value:    []byte("future"),
-		Version:  3,
-		PrevHash: []byte{1, 2, 3},
-	}}
-
 	if err := store.SaveNetwork(ns); err != nil {
 		t.Fatalf("SaveNetwork: %v", err)
 	}
@@ -64,8 +55,5 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 	}
 	if got := len(zs.RecordHistory["identity"]); got != 1 {
 		t.Fatalf("loaded history len = %d, want 1", got)
-	}
-	if got := len(zs.PendingRecords["identity"]); got != 1 {
-		t.Fatalf("loaded pending len = %d, want 1", got)
 	}
 }

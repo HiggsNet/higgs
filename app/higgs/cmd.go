@@ -293,17 +293,6 @@ func cmdDebug() *cli.Command {
 					return debugZone(zone.ZonePath(cmd.Args().First()))
 				},
 			},
-			{
-				Name:        "pending",
-				Usage:       "Show pending records and predecessor fetch selectors",
-				Description: "List pending records that are waiting for predecessor versions.",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs debug pending", 1)
-					}
-					return debugPending()
-				},
-			},
 		},
 	}
 }

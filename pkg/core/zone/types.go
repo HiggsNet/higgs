@@ -125,24 +125,22 @@ type Record struct {
 }
 
 type ZoneState struct {
-	Path           ZonePath
-	Authority      *ZoneAuthority
-	ParentProof    []*Delegation
-	Delegations    map[ZonePath]*Delegation
-	Records        map[string]*Record
-	RecordHistory  map[string][]*Record
-	PendingRecords map[string][]*Record
-	MerkleRoot     []byte
+	Path          ZonePath
+	Authority     *ZoneAuthority
+	ParentProof   []*Delegation
+	Delegations   map[ZonePath]*Delegation
+	Records       map[string]*Record
+	RecordHistory map[string][]*Record
+	MerkleRoot    []byte
 }
 
 func NewZoneState(path ZonePath, authority *ZoneAuthority) *ZoneState {
 	return &ZoneState{
-		Path:           path,
-		Authority:      authority,
-		Delegations:    make(map[ZonePath]*Delegation),
-		Records:        make(map[string]*Record),
-		RecordHistory:  make(map[string][]*Record),
-		PendingRecords: make(map[string][]*Record),
+		Path:          path,
+		Authority:     authority,
+		Delegations:   make(map[ZonePath]*Delegation),
+		Records:       make(map[string]*Record),
+		RecordHistory: make(map[string][]*Record),
 	}
 }
 

@@ -78,13 +78,12 @@ type RecordSnapshot struct {
 }
 
 type ZoneSnapshot struct {
-	Zone           zone.ZonePath                      `json:"zone"`
-	Authority      *zone.ZoneAuthority                `json:"authority"`
-	ParentProof    []*zone.Delegation                 `json:"parent_proof,omitempty"`
-	Delegations    map[zone.ZonePath]*zone.Delegation `json:"delegations,omitempty"`
-	Records        map[string]*zone.Record            `json:"records,omitempty"`
-	RecordHistory  map[string][]*zone.Record          `json:"record_history,omitempty"`
-	PendingRecords map[string][]*zone.Record          `json:"pending_records,omitempty"`
+	Zone          zone.ZonePath                      `json:"zone"`
+	Authority     *zone.ZoneAuthority                `json:"authority"`
+	ParentProof   []*zone.Delegation                 `json:"parent_proof,omitempty"`
+	Delegations   map[zone.ZonePath]*zone.Delegation `json:"delegations,omitempty"`
+	Records       map[string]*zone.Record            `json:"records,omitempty"`
+	RecordHistory map[string][]*zone.Record          `json:"record_history,omitempty"`
 }
 
 func MarshalMessage(message *Message) ([]byte, error) {

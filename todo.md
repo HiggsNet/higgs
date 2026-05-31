@@ -23,7 +23,7 @@
   - [x] 定义设计文档中的核心数据结构
   - [x] 实现 `Get(fqkey)`：解析 Zone + Key → 本 Zone 查找 → 向上 fallback 直到根
   - [x] 实现基础 `Put(record)` 写入 active state
-  - [x] 在 `Put(record)` 中接入本地 authority 验证、版本链和 pending record 处理
+  - [x] 在 `Put(record)` 中接入本地 authority 验证、版本比较和冲突处理
 
 - [x] **0.4 签名与验证**
   - [x] 实现 Record / Delegation 的 Sign 和 Verify
@@ -36,7 +36,7 @@
 - [x] **0.5 bbolt 持久化**
   - [x] 按 Zone 分 bucket 存储
   - [x] 加载/恢复/版本链审计
-  - [x] 保留 `PendingRecords`，补齐版本链后再提升为 active
+  - [x] 保留 bounded `RecordHistory` 用于版本审计；普通同步不再维护 pending 补前驱状态
 
 - [x] **0.6 CLI 调试**
   - [x] `higgs init`
@@ -65,7 +65,7 @@
   - [x] Phase 1A 先不做 Merkle diff，hash 不同直接拉完整 Zone
   - [x] 数据进入候选状态（quarantine 语义），验签通过后才提升到 active store
   - [x] 逐条验证签名链（VerifyDelegation → VerifyRecord → VerifyChain）
-  - [x] 缺失前驱的 Record 进入 `pending store`
+  - [x] 高版本 Record 验签通过后可作为 latest active state；历史补齐不阻塞普通同步
   - [x] 验证通过后提升到 `active store`
 
 - [x] **1.4 闭环验证**
@@ -104,7 +104,7 @@
 
 ## Phase 2: 双节点/多节点配置同步收敛（预计 1-2 周）
 
-**目标：** 在不引入 WireGuard 的前提下，把配置状态同步做扎实：两节点可重复验证，三节点可传播，节点重启后可恢复，冲突/缺前驱/pending 状态可观测。
+**目标：** 在不引入 WireGuard 的前提下，把配置状态同步做扎实：两节点可重复验证，三节点可传播，节点重启后可恢复，latest record / bounded history / conflict 状态可观测。
 
 - [x] **2.1 双节点端到端同步验证**
   - [x] `node-admin` 创建 root `.`，不持有 `catofes.` 私钥
@@ -122,7 +122,7 @@
   - [x] 增加 `make multi-node-smoke`，覆盖 3 节点本机流程
 
 - [x] **2.3 同步状态可观测性**
-  - [x] `higgs sync status` 输出每个 peer 的最近同步时间、已知 Zone 数、pending record 数
+  - [x] `higgs sync status` 输出每个 peer 的最近同步时间、已知 Zone 数和本地 root hash
   - [x] 显示 local root hash / per-zone root hash / last error
   - [x] 扩展 `sync status` 用于排查 bootstrap 与 allowlist
 
@@ -132,8 +132,7 @@
   - [x] 记录 reject 原因：unknown peer、addr mismatch、message too large、replay、quota、verify failed、unsupported wire version
   - [x] `sync status --verbose` 显示 bootstrap peers、discovered peers、allowlist 来源、resolved addr、last_success、last_error
   - [x] 增加 `higgs debug peer <peer-id>`：查看某个 peer 的最近同步、错误、backoff、known endpoint、发现来源
-  - [x] 增加 `higgs debug zone <zone>`：查看 zone root、record/history/pending 数量、delegation、parent proof、验证结果
-  - [x] 增加 `higgs debug pending`：列出 pending record、缺失 predecessor、预计 FETCH_RECORD selector
+  - [x] 增加 `higgs debug zone <zone>`：查看 zone root、record/history 数量、delegation、parent proof、验证结果
   - [x] 支持 `HIGGS_LOG_LEVEL=debug` 或配置项开启详细日志，默认保持简洁输出
 
 - [x] **2.5 自动重连与周期同步**
@@ -179,17 +178,19 @@
   - [ ] 增加 smoke：新 peer 只要能连上任一 bootstrap，就能发布自己的 signed endpoint record，并经 gossip 传播到其他节点形成动态连接
   - [ ] 增加 smoke：公网 endpoint 由 reflector 自动发现并签名发布；IP 变化后自动发布新版本，其他节点验证 record 后更新 known peer table，并在失败时回退 bootstrap/static endpoint
 
-- [ ] **2.8 Pending / FetchRecord 闭环**
-  - [x] 构造高版本 record 先到达的测试场景
-  - [x] 验证 pending store 中的缺前驱 record 会触发 `FETCH_RECORD`
-  - [x] 前驱补齐后自动提升 active
-  - [ ] 为 stale/conflict/pending 增加明确 CLI 输出
+- [x] **2.8 Latest signed record / bounded history**
+  - [x] 明确普通同步语义：更高版本且签名有效的 record 可直接成为 active，不要求从 `@1` 顺序重放
+  - [x] `PrevHash` 降级为审计/调试约束：只有本地正好持有直接前驱时才检查，不阻塞跳版本 fast-forward
+  - [x] Whole-zone snapshot 只同步 active records，不再把远端完整 `RecordHistory` 作为冷启动依赖
+  - [x] 每个 `zone/key` 默认只保留最近 128 条历史版本，避免 DB 随版本无限膨胀
+  - [x] 从普通同步主路径移除 pending 补前驱机制；最终一致性依赖 digest + snapshot + 更高版本 signed record
+  - [x] 保留 `FETCH_RECORD` wire message 作为兼容和手工按需取单条历史 record 的能力
 
 - [ ] **2.9 测试补强**
-  - [ ] 为 `sync status --verbose`、`debug peer`、`debug zone`、`debug pending` 增加 CLI golden/output 测试
+  - [ ] 为 `sync status --verbose`、`debug peer`、`debug zone` 增加 CLI golden/output 测试
   - [ ] 增加 gossip 故障注入测试：unknown peer、addr mismatch、message too large、replay、quota、unsupported wire version
   - [ ] 增加 verify failure 测试：错误 root key、篡改 delegation、篡改 record signature、过期 authority key
-  - [ ] 增加 pending 边界测试：重复 pending、冲突版本、stale record、缺多级 predecessor、pending 持久化后重启恢复
+  - [ ] 增加 latest-record 边界测试：跳版本 fast-forward、同版本冲突、直接前驱 PrevHash mismatch、历史窗口裁剪、重启恢复
   - [ ] 增加 snapshot limit 测试：zone count、record count、message bytes 达到边界时的 accept/reject 行为
   - [ ] 增加 sync run 自动重连集成测试：peer 停止、恢复、backoff、最终收敛
   - [ ] 增加 relay fanout 集成测试：链式拓扑、去重、节流、最终收敛时间边界
@@ -206,7 +207,7 @@
   - README 增加双节点完整同步脚本
   - README 增加三节点传播示例
   - README 记录链式拓扑传播语义：周期收敛 vs 主动 relay fanout 的差异
-  - 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、pending 未补齐
+  - 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、record conflict
 
 - [ ] **2.12 应用运行时与依赖边界整理**
   - [ ] 盘点并收敛 CLI 层隐式依赖：config/state/store、sync transport、known peer table、logger、clock、stdout/stderr、validation hooks
@@ -229,7 +230,7 @@
   - [ ] 定义父 Zone snapshot 的优先级：同一 child 的有效 delegation 与 revocation 冲突时，以父 Zone 中版本/epoch 更新且签名有效的状态为准；子 Zone 的 `ParentProof` 只是缓存，不可覆盖父 Zone 撤销
   - [ ] 撤销后，本地 active state 将该 Zone 及其子树标记为 revoked/quarantined：停止接受该 Zone 新 record、停止 relay 其新 announce、停止将其 endpoints 加入 known peer table
   - [ ] 保留已撤销 Zone 的历史数据用于审计和冲突排查，但默认查询、配置生成、peer discovery、route authorization 不再使用其 active records
-  - [ ] 清理撤销子树相关 pending records、sync peer 状态、discovered endpoints、relay fanout 队列，避免已撤销节点继续通过 pending/relay 恢复活跃状态
+  - [ ] 清理撤销子树相关 sync peer 状态、discovered endpoints、relay fanout 队列，避免已撤销节点继续通过 relay 恢复活跃状态
   - [ ] 增加 CLI：`higgs delegate revoke <zone>` 由父 Zone 管理者签发撤销；`higgs debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
   - [ ] 增加 gossip 同步语义：revocation/tombstone 必须进入 zone digest/snapshot，传播优先级高于普通 record，节点收到后立即触发 outbound sync/relay fanout
   - [ ] 增加测试：撤销普通节点 Zone 后，其他节点拒绝其新 record 和 endpoint；撤销中间管理 Zone 后，其整个子树失效；重启后 revoked 状态仍持久化
@@ -379,7 +380,7 @@
   - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作；直接写 DB 模式仅保留为 debug/recovery
   - [ ] 完善 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
   - [ ] 预留 TCP control listener，用于受控远程管理；默认关闭，必须显式配置监听地址与认证
-  - [ ] 定义控制 API：status、peers、zones、records、pending、sync trigger、reload config、apply dry-run
+  - [ ] 定义控制 API：status、peers、zones、records、history、conflicts、sync trigger、reload config、apply dry-run
   - [ ] `sync status --verbose` / `debug peer` 优先通过本地控制接口查询正在运行的 daemon，显示 live relay 队列、最近更新来源、relay 抑制原因、backoff 和下一次 sync 计划；daemon 不可用时 fallback 到 DB 快照
   - [ ] 控制 API 输出结构化 JSON，CLI 负责格式化成人类可读输出
   - [ ] 加入认证与授权边界：Unix socket 文件权限、token/mTLS 预留、只读/管理操作分级
@@ -395,5 +396,5 @@
 
 1. 开始 Phase 2 双节点端到端同步验证：node-admin root init → catofes. join → node-a/node-b join → record put → gossip sync → verify
 2. 增加三节点传播 smoke：A-B-C 拓扑中 B 写入的 Zone/Record 能传播到 C
-3. 强化 `sync status`：输出 per-peer / per-zone / pending / last error，方便排查同步状态
+3. 强化 `sync status`：输出 per-peer / per-zone / history / last error，方便排查同步状态
 3. Phase 0 闭环验证：单机完成 `init` → `record put` → `verify chain` 的 CLI 流程

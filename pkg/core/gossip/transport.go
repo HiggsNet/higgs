@@ -281,9 +281,6 @@ func MessageObjectCounts(message *Message) (zones int, records int) {
 			for _, history := range snapshot.RecordHistory {
 				records += len(history)
 			}
-			for _, pending := range snapshot.PendingRecords {
-				records += len(pending)
-			}
 		}
 		return len(message.Announce.Zones) + len(message.Announce.Snapshots), records
 	default:

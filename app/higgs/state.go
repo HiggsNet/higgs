@@ -177,9 +177,6 @@ func normalizeState(ns *zone.NetworkState) {
 		if zs.RecordHistory == nil {
 			zs.RecordHistory = make(map[string][]*zone.Record)
 		}
-		if zs.PendingRecords == nil {
-			zs.PendingRecords = make(map[string][]*zone.Record)
-		}
 	}
 }
 
@@ -199,28 +196,6 @@ func defaultPeerID(state *stateFile) string {
 
 func timeNow() time.Time {
 	return time.Now()
-}
-
-func countPending(zs *zone.ZoneState) int {
-	if zs == nil {
-		return 0
-	}
-	var out int
-	for _, records := range zs.PendingRecords {
-		out += len(records)
-	}
-	return out
-}
-
-func totalPending(ns *zone.NetworkState) int {
-	if ns == nil {
-		return 0
-	}
-	var out int
-	for _, zs := range ns.Zones {
-		out += countPending(zs)
-	}
-	return out
 }
 
 func globalRootHash(digests []gossip.ZoneDigest) []byte {

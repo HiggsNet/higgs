@@ -105,29 +105,10 @@ func debugZone(path zone.ZonePath) error {
 	fmt.Printf("root: %s\n", hex.EncodeToString(digest.RootHash))
 	fmt.Printf("records: %d\n", len(zs.Records))
 	fmt.Printf("history: %d\n", countHistory(zs))
-	fmt.Printf("pending: %d\n", countPending(zs))
 	fmt.Printf("delegations: %d\n", len(zs.Delegations))
 	fmt.Printf("parent_proof: %d\n", len(zs.ParentProof))
 	fmt.Printf("verify: %s\n", verifyResult)
 	printDebugRecords("record", zs.Records)
-	printDebugPending(zs)
-	return nil
-}
-
-func debugPending() error {
-	state, err := loadState()
-	if err != nil {
-		return err
-	}
-	fetches := pendingPredecessorFetches(state.Network)
-	if len(fetches) == 0 {
-		fmt.Println("pending_records: 0")
-		return nil
-	}
-	fmt.Printf("pending_records: %d\n", totalPending(state.Network))
-	for _, fetch := range fetches {
-		fmt.Printf("fetch_record zone=%s key=%s version=%d\n", fetch.Zone, fetch.Key, fetch.Version)
-	}
 	return nil
 }
 
@@ -172,25 +153,6 @@ func printDebugRecords(prefix string, records map[string]*zone.Record) {
 			continue
 		}
 		fmt.Printf("%s key=%s version=%d type=%s\n", prefix, key, record.Version, record.Type)
-	}
-}
-
-func printDebugPending(zs *zone.ZoneState) {
-	if zs == nil {
-		return
-	}
-	keys := make([]string, 0, len(zs.PendingRecords))
-	for key := range zs.PendingRecords {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		for _, record := range zs.PendingRecords[key] {
-			if record == nil {
-				continue
-			}
-			fmt.Printf("pending key=%s version=%d missing_prev=%d\n", key, record.Version, missingPredecessorVersion(record))
-		}
 	}
 }
 

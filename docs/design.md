@@ -232,15 +232,15 @@ Sign(
 
 **Version 链模型（per-zone-per-key）：**
 - `Version` 是 **per-zone-per-key** 的版本号，不是整个 Zone 的全局版本
-- `PrevHash` 指向同一个 Zone + Key 的上一版本 Record hash
+- `PrevHash` 指向同一个 Zone + Key 的上一版本 Record hash；普通同步把它作为审计/调试字段，而不是冷启动接受最新状态的硬依赖
 - 同 key 冲突时：Version 更高者胜；Version 相同但内容不同 → 进入 `fork/conflict`，不自动裁决，需 Zone owner（或上级 Zone）签发修正记录
-- 如果收到的高版本 Record 的 `PrevHash` 在本地不存在，不能直接提升为 active，也不能永久拒绝；应进入 `pending store`，随后通过 `FETCH_RECORD` 补齐缺失前驱
+- 如果收到更高版本且签名有效的 Record，可直接提升为 active；只有本地正好持有直接前驱且对方提供了 `PrevHash` 时，才检查 `PrevHash` 是否匹配
 - `Timestamp` 仅作为审计字段，不参与最终裁决
 - ZoneRoot 由每个 key 的 latest active record 计算：
   ```text
   ZoneRoot = Hash(authority_hash + delegations_root + sorted(latest_record_hashes))
   ```
-- 旧版本记录保留在 `RecordHistory` 中作为审计 log，但 active state 只使用每个 key 的 latest non-conflict record；缺失前驱的记录保留在 `PendingRecords`，补齐版本链后再参与 active 计算
+- 旧版本记录在 `RecordHistory` 中保留有限窗口作为审计/调试 log，但 active state 只使用每个 key 的 latest non-conflict record；普通同步主路径不维护 pending 补前驱状态
 
 **Gossip 协议：**
 - `PING`: 携带 `map[zone_name]zone_root_hash`（类似交换各自持有的 zone 版本摘要）
@@ -254,7 +254,7 @@ Sign(
 - `FETCH_ZONE` 前先验证 zone path 是否位于可信根树下
 - 限制单次同步资源：最大 Zone 数、最大 Record 数、最大字节数
 - 收到的数据先进入 `quarantine store`，签名链通过后再提升到 `active store`
-- 状态分层必须明确：`untrusted received data` -> `verified candidate state` -> `pending store`/`active network state`
+- 状态分层必须明确：`untrusted received data` -> `verified candidate state` -> `active network state`
 
 **同步流程：**
 1. 节点 A 连接节点 B，交换各自的 zone hash 映射表
@@ -362,7 +362,6 @@ type ZoneState struct {
     Delegations    map[ZonePath]*Delegation // 子 Zone 的委派
     Records        map[string]*Record     // key → latest active record
     RecordHistory  map[string][]*Record   // key → version chain（审计）
-    PendingRecords map[string][]*Record   // key → 已验签但缺失前驱的记录
     MerkleRoot     []byte                 // 缓存的 Merkle Root Hash
 }
 
@@ -444,8 +443,8 @@ type PeerView struct {
    b. 如果 Version == current_version 但 hash 不同，标记为 fork/conflict
    c. 如果 Version < current_version，拒绝（旧版本攻击）
 8. 检查 PrevHash：
-   a. 如果 Version == 1，PrevHash 必须为 nil
-   b. 如果 Version > 1，PrevHash 必须匹配当前 active record 的 hash；若前驱不存在但签名有效，放入 pending store 并请求缺失前驱
+   a. 如果本地当前 active record 正好是 `Version-1`，且新 Record 携带了 PrevHash，则 PrevHash 必须匹配当前 active record 的 hash
+   b. 如果本地缺少直接前驱，但新 Record 签名有效且 Version 更高，则直接 fast-forward；完整历史审计由保留窗口或后续 archive/checkpoint 机制承担
 ```
 
 ### 4.2 VerifyDelegation(d, parentZone)

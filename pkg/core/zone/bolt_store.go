@@ -18,7 +18,6 @@ var (
 	keyDelegations   = []byte("delegations")
 	keyRecords       = []byte("records")
 	keyRecordHistory = []byte("record_history")
-	keyPending       = []byte("pending_records")
 	keyMerkleRoot    = []byte("merkle_root")
 )
 
@@ -85,9 +84,6 @@ func (s *BoltStore) SaveNetwork(ns *NetworkState) error {
 				return err
 			}
 			if err := putJSON(bucket, keyRecordHistory, zs.RecordHistory); err != nil {
-				return err
-			}
-			if err := putJSON(bucket, keyPending, zs.PendingRecords); err != nil {
 				return err
 			}
 			if err := putJSON(bucket, keyMerkleRoot, zs.MerkleRoot); err != nil {
@@ -158,9 +154,6 @@ func (s *BoltStore) LoadNetwork() (*NetworkState, error) {
 			if err := getJSON(bucket, keyRecordHistory, &zs.RecordHistory); err != nil {
 				return err
 			}
-			if err := getJSON(bucket, keyPending, &zs.PendingRecords); err != nil {
-				return err
-			}
 			if err := getJSON(bucket, keyMerkleRoot, &zs.MerkleRoot); err != nil {
 				return err
 			}
@@ -216,8 +209,5 @@ func normalizeZoneState(zs *ZoneState) {
 	}
 	if zs.RecordHistory == nil {
 		zs.RecordHistory = make(map[string][]*Record)
-	}
-	if zs.PendingRecords == nil {
-		zs.PendingRecords = make(map[string][]*Record)
 	}
 }

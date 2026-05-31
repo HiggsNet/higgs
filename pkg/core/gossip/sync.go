@@ -26,7 +26,6 @@ type SyncLimits struct {
 type ApplyResult struct {
 	Zone       zone.ZonePath
 	Records    int
-	Pending    int
 	Delegation int
 }
 
@@ -66,13 +65,11 @@ func Snapshot(ns *zone.NetworkState, path zone.ZonePath) (*ZoneSnapshot, error) 
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
 	return &ZoneSnapshot{
-		Zone:           path,
-		Authority:      cloneAuthority(zs.Authority),
-		ParentProof:    cloneDelegationSlice(zs.ParentProof),
-		Delegations:    cloneDelegationMap(zs.Delegations),
-		Records:        cloneRecordMap(zs.Records),
-		RecordHistory:  cloneRecordHistory(zs.RecordHistory),
-		PendingRecords: cloneRecordHistory(zs.PendingRecords),
+		Zone:        path,
+		Authority:   cloneAuthority(zs.Authority),
+		ParentProof: cloneDelegationSlice(zs.ParentProof),
+		Delegations: cloneDelegationMap(zs.Delegations),
+		Records:     cloneRecordMap(zs.Records),
 	}, nil
 }
 
@@ -94,11 +91,6 @@ func RecordSnapshotFor(ns *zone.NetworkState, fetch *FetchRecord) (*RecordSnapsh
 	}
 	if record := zs.Records[fetch.Key]; record != nil && (fetch.Version == 0 || record.Version == fetch.Version) {
 		return &RecordSnapshot{Zone: fetch.Zone, Record: cloneRecord(record)}, nil
-	}
-	for _, record := range zs.PendingRecords[fetch.Key] {
-		if record != nil && (fetch.Version == 0 || record.Version == fetch.Version) {
-			return &RecordSnapshot{Zone: fetch.Zone, Record: cloneRecord(record)}, nil
-		}
 	}
 	return nil, fmt.Errorf("%w: %s/%s", zone.ErrRecordNotFound, fetch.Zone, fetch.Key)
 }
@@ -168,22 +160,17 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	if active.RecordHistory == nil {
 		active.RecordHistory = make(map[string][]*zone.Record)
 	}
-	if active.PendingRecords == nil {
-		active.PendingRecords = make(map[string][]*zone.Record)
-	}
 	for child, delegation := range snapshot.Delegations {
 		active.Delegations[child] = cloneDelegation(delegation)
 	}
 
 	ns.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
-	var applied, pending int
+	var applied int
 	for _, record := range orderedSnapshotRecords(snapshot) {
 		err := ns.PutAt(record, now)
 		switch {
 		case err == nil:
 			applied++
-		case errors.Is(err, zone.ErrPendingRecord):
-			pending++
 		case errors.Is(err, zone.ErrStaleRecord), errors.Is(err, zone.ErrRecordConflict):
 			continue
 		default:
@@ -194,13 +181,12 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	return &ApplyResult{
 		Zone:       snapshot.Zone,
 		Records:    applied,
-		Pending:    pending + countRecords(active.PendingRecords),
 		Delegation: len(active.Delegations),
 	}, nil
 }
 
 func checkSnapshotLimits(snapshot *ZoneSnapshot, limits SyncLimits) error {
-	records := countRecords(snapshot.RecordHistory) + len(snapshot.Records) + countRecords(snapshot.PendingRecords)
+	records := countRecords(snapshot.RecordHistory) + len(snapshot.Records)
 	if limits.MaxRecords > 0 && records > limits.MaxRecords {
 		return ErrZoneSnapshotTooLarge
 	}
@@ -218,23 +204,9 @@ func checkSnapshotLimits(snapshot *ZoneSnapshot, limits SyncLimits) error {
 
 func orderedSnapshotRecords(snapshot *ZoneSnapshot) []*zone.Record {
 	byKey := make(map[string][]*zone.Record)
-	for key, history := range snapshot.RecordHistory {
-		for _, record := range history {
-			if record != nil {
-				byKey[key] = append(byKey[key], cloneRecord(record))
-			}
-		}
-	}
 	for key, record := range snapshot.Records {
 		if record != nil {
 			byKey[key] = append(byKey[key], cloneRecord(record))
-		}
-	}
-	for key, pending := range snapshot.PendingRecords {
-		for _, record := range pending {
-			if record != nil {
-				byKey[key] = append(byKey[key], cloneRecord(record))
-			}
 		}
 	}
 
@@ -259,13 +231,12 @@ func orderedSnapshotRecords(snapshot *ZoneSnapshot) []*zone.Record {
 
 func snapshotZoneState(snapshot *ZoneSnapshot) *zone.ZoneState {
 	return &zone.ZoneState{
-		Path:           snapshot.Zone,
-		Authority:      cloneAuthority(snapshot.Authority),
-		ParentProof:    cloneDelegationSlice(snapshot.ParentProof),
-		Delegations:    cloneDelegationMap(snapshot.Delegations),
-		Records:        cloneRecordMap(snapshot.Records),
-		RecordHistory:  cloneRecordHistory(snapshot.RecordHistory),
-		PendingRecords: cloneRecordHistory(snapshot.PendingRecords),
+		Path:          snapshot.Zone,
+		Authority:     cloneAuthority(snapshot.Authority),
+		ParentProof:   cloneDelegationSlice(snapshot.ParentProof),
+		Delegations:   cloneDelegationMap(snapshot.Delegations),
+		Records:       cloneRecordMap(snapshot.Records),
+		RecordHistory: cloneRecordHistory(snapshot.RecordHistory),
 	}
 }
 
@@ -279,14 +250,13 @@ func cloneNetworkState(ns *zone.NetworkState) *zone.NetworkState {
 			continue
 		}
 		out.Zones[path] = &zone.ZoneState{
-			Path:           zs.Path,
-			Authority:      cloneAuthority(zs.Authority),
-			ParentProof:    cloneDelegationSlice(zs.ParentProof),
-			Delegations:    cloneDelegationMap(zs.Delegations),
-			Records:        cloneRecordMap(zs.Records),
-			RecordHistory:  cloneRecordHistory(zs.RecordHistory),
-			PendingRecords: cloneRecordHistory(zs.PendingRecords),
-			MerkleRoot:     cloneBytes(zs.MerkleRoot),
+			Path:          zs.Path,
+			Authority:     cloneAuthority(zs.Authority),
+			ParentProof:   cloneDelegationSlice(zs.ParentProof),
+			Delegations:   cloneDelegationMap(zs.Delegations),
+			Records:       cloneRecordMap(zs.Records),
+			RecordHistory: cloneRecordHistory(zs.RecordHistory),
+			MerkleRoot:    cloneBytes(zs.MerkleRoot),
 		}
 	}
 	out.GlobalRoot = cloneBytes(ns.GlobalRoot)

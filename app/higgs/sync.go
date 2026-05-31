@@ -30,10 +30,8 @@ func syncStatus(verbose bool) error {
 	fmt.Printf("peer_id: %s\n", config.PeerID)
 	fmt.Printf("listen_addr: %s\n", config.ListenAddr)
 	digests := gossip.ZoneDigests(state.Network)
-	pending := totalPending(state.Network)
 	fmt.Printf("known_peers: %d\n", len(config.Bootstrap))
 	fmt.Printf("known_zones: %d\n", len(digests))
-	fmt.Printf("pending_records: %d\n", pending)
 	fmt.Printf("local_root: %s\n", hex.EncodeToString(globalRootHash(digests)))
 	fmt.Printf("limits: max_message_bytes=%d max_sync_zones=%d max_sync_records=%d wire_version=%d\n",
 		config.MaxMessageBytes,
@@ -79,55 +77,27 @@ func syncStatus(verbose bool) error {
 		if lastError == "" {
 			lastError = "-"
 		}
-		fmt.Printf("peer %s addr=%s status=%s last_sync=%s known_zones=%d pending=%d last_error=%s next_retry=%s\n",
+		fmt.Printf("peer %s addr=%s status=%s last_sync=%s known_zones=%d last_error=%s next_retry=%s\n",
 			peer.ID,
 			peer.Addr,
 			peerStatus(peerState, now),
 			lastSync,
 			len(digests),
-			pending,
 			lastError,
 			formatNextRetry(peerState, now),
 		)
 	}
 	for _, digest := range digests {
 		zs := state.Network.Zones[digest.Zone]
-		fmt.Printf("zone %s root=%s records=%d pending=%d delegations=%d\n",
+		fmt.Printf("zone %s root=%s records=%d history=%d delegations=%d\n",
 			digest.Zone,
 			hex.EncodeToString(digest.RootHash),
 			len(zs.Records),
-			countPending(zs),
+			countHistory(zs),
 			len(zs.Delegations),
 		)
-		printPendingRecords(zs)
 	}
 	return nil
-}
-
-func printPendingRecords(zs *zone.ZoneState) {
-	if zs == nil || len(zs.PendingRecords) == 0 {
-		return
-	}
-	keys := make([]string, 0, len(zs.PendingRecords))
-	for key := range zs.PendingRecords {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		for _, record := range zs.PendingRecords[key] {
-			if record == nil {
-				continue
-			}
-			fmt.Printf("  pending key=%s version=%d missing_prev=%d\n", key, record.Version, missingPredecessorVersion(record))
-		}
-	}
-}
-
-func missingPredecessorVersion(record *zone.Record) uint64 {
-	if record == nil || record.Version <= 1 {
-		return 0
-	}
-	return record.Version - 1
 }
 
 func syncServe(ctx context.Context) error {
@@ -572,11 +542,11 @@ func handleAnnounce(state *stateFile, transport *gossip.Transport, message *goss
 			return err
 		}
 		changed = true
-		fmt.Printf("applied zone %s records=%d pending=%d delegations=%d\n", result.Zone, result.Records, result.Pending, result.Delegation)
+		fmt.Printf("applied zone %s records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
 	}
 	for _, record := range message.Announce.Records {
 		err := gossip.ApplyRecordSnapshot(state.Network, &record, time.Now())
-		if err != nil && !errors.Is(err, zone.ErrPendingRecord) {
+		if err != nil {
 			return err
 		}
 		changed = true
@@ -585,9 +555,6 @@ func handleAnnounce(state *stateFile, transport *gossip.Transport, message *goss
 		if err := saveState(state); err != nil {
 			return err
 		}
-	}
-	if err := fetchPendingPredecessors(state.Network, transport, message.PeerID); err != nil {
-		return err
 	}
 	for _, path := range gossip.FetchList(state.Network, message.Announce.Zones) {
 		if err := transport.Send(message.PeerID, &gossip.Message{
@@ -628,55 +595,6 @@ func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID strin
 		Type:     gossip.MessageAnnounce,
 		Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{*record}},
 	})
-}
-
-func fetchPendingPredecessors(ns *zone.NetworkState, transport *gossip.Transport, peerID string) error {
-	for _, fetch := range pendingPredecessorFetches(ns) {
-		fetch := fetch
-		if err := transport.Send(peerID, &gossip.Message{
-			Type:        gossip.MessageFetchRecord,
-			FetchRecord: &fetch,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func pendingPredecessorFetches(ns *zone.NetworkState) []gossip.FetchRecord {
-	if ns == nil {
-		return nil
-	}
-	paths := make([]zone.ZonePath, 0, len(ns.Zones))
-	for path := range ns.Zones {
-		paths = append(paths, path)
-	}
-	sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
-	var out []gossip.FetchRecord
-	for _, path := range paths {
-		zs := ns.Zones[path]
-		if zs == nil {
-			continue
-		}
-		keys := make([]string, 0, len(zs.PendingRecords))
-		for key := range zs.PendingRecords {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			for _, record := range zs.PendingRecords[key] {
-				if record == nil || record.Version <= 1 {
-					continue
-				}
-				out = append(out, gossip.FetchRecord{
-					Zone:    path,
-					Key:     key,
-					Version: record.Version - 1,
-				})
-			}
-		}
-	}
-	return out
 }
 
 func loadSyncConfig(state *stateFile) (*syncConfigFile, error) {
