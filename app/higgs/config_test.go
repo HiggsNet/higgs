@@ -52,6 +52,65 @@ trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 	}
 }
 
+func TestParseConfigYAMLLists(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+advertise_addrs:
+  - 127.0.0.1:33434
+  - 10.0.0.2:33434
+reflectors:
+  - 198.51.100.10:33434
+  - 198.51.100.11:33434
+bootstrap:
+  - id: node-b
+    addr: 127.0.0.1:33435
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if got := strings.Join(config.AdvertiseAddrs, ","); got != "127.0.0.1:33434,10.0.0.2:33434" {
+		t.Fatalf("AdvertiseAddrs = %q", got)
+	}
+	if got := strings.Join(config.Reflectors, ","); got != "198.51.100.10:33434,198.51.100.11:33434" {
+		t.Fatalf("Reflectors = %q", got)
+	}
+	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b" {
+		t.Fatalf("Bootstrap = %#v", config.Bootstrap)
+	}
+}
+
+func TestParseConfigYAMLKeepsCommaSeparatedAdvertiseAddrs(t *testing.T) {
+	config := defaultAppConfig()
+	input := `advertise_addrs: 127.0.0.1:33434, 10.0.0.2:33434`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if got := strings.Join(config.AdvertiseAddrs, ","); got != "127.0.0.1:33434,10.0.0.2:33434" {
+		t.Fatalf("AdvertiseAddrs = %q", got)
+	}
+}
+
+func TestParseConfigYAMLRejectsUnknownFields(t *testing.T) {
+	config := defaultAppConfig()
+	if err := parseConfigYAML("unknown: true\n", config); err == nil {
+		t.Fatalf("parseConfigYAML should reject unknown config fields")
+	}
+}
+
+func TestParseConfigYAMLRejectsExplicitZeroLimits(t *testing.T) {
+	for _, input := range []string{
+		"listen_port: 0\n",
+		"max_message_bytes: 0\n",
+		"max_sync_zones: 0\n",
+		"max_sync_records: 0\n",
+	} {
+		config := defaultAppConfig()
+		if err := parseConfigYAML(input, config); err == nil {
+			t.Fatalf("parseConfigYAML(%q) should reject explicit zero", input)
+		}
+	}
+}
+
 func TestRuntimeCachesConfigForStateIO(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

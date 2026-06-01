@@ -84,6 +84,7 @@
   - [x] 配置监听地址：`listen_addr`，或用 `listen_port` 生成 `:<port>`
   - [x] 配置 bootstrap allowlist：`bootstrap: [{id, addr}]`
   - [x] 配置根信任公钥：`trusted_root_public_key`（默认 base64，兼容 hex 的 ED25519 public key）
+  - [x] 使用 `gopkg.in/yaml.v3` struct decode 解析配置文件：启用 `KnownFields`，保留旧字段别名，并支持标准 YAML list 与旧逗号分隔列表兼容
   - [x] 提供 `config.example.yaml`
 
 - [x] **1.5.2 根 Zone 与准入 CLI**

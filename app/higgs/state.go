@@ -59,8 +59,8 @@ type syncConfigFile struct {
 }
 
 type syncConfigPeer struct {
-	ID   string `json:"id"`
-	Addr string `json:"addr"`
+	ID   string `json:"id" yaml:"id"`
+	Addr string `json:"addr" yaml:"addr"`
 }
 
 type Runtime struct {

@@ -9,11 +9,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -39,6 +39,44 @@ type appConfig struct {
 	EndpointTTL          time.Duration
 	EndpointGrace        time.Duration
 }
+
+type configYAML struct {
+	DataDir     string `yaml:"data_dir"`
+	DatabaseDir string `yaml:"database_dir"`
+	DBDir       string `yaml:"db_dir"`
+
+	StatePath    string `yaml:"state_path"`
+	DatabasePath string `yaml:"database_path"`
+	DBPath       string `yaml:"db_path"`
+
+	PeerID     string `yaml:"peer_id"`
+	ListenAddr string `yaml:"listen_addr"`
+	ListenPort *int   `yaml:"listen_port"`
+
+	Bootstrap []syncConfigPeer `yaml:"bootstrap"`
+
+	TrustedRootPublicKey string `yaml:"trusted_root_public_key"`
+	RootPublicKey        string `yaml:"root_public_key"`
+	TrustedRootKey       string `yaml:"trusted_root_key"`
+
+	MaxMessageBytes *int `yaml:"max_message_bytes"`
+	MaxSyncZones    *int `yaml:"max_sync_zones"`
+	MaxSyncRecords  *int `yaml:"max_sync_records"`
+
+	LogLevel string `yaml:"log_level"`
+
+	AdvertiseAddr  string           `yaml:"advertise_addr"`
+	AdvertiseAddrs configStringList `yaml:"advertise_addrs"`
+	Reflector      string           `yaml:"reflector"`
+	Reflectors     configStringList `yaml:"reflectors"`
+
+	ReflectorInterval   string `yaml:"reflector_interval"`
+	EndpointTTL         string `yaml:"endpoint_ttl"`
+	EndpointGrace       string `yaml:"endpoint_grace"`
+	EndpointGracePeriod string `yaml:"endpoint_grace_period"`
+}
+
+type configStringList []string
 
 func loadAppConfig() (*appConfig, error) {
 	config := defaultAppConfig()
@@ -99,192 +137,137 @@ func normalizeAppConfig(config *appConfig) {
 }
 
 func parseConfigYAML(input string, config *appConfig) error {
-	var section string
-	var currentPeer *syncConfigPeer
-	for lineNumber, raw := range strings.Split(input, "\n") {
-		line := strings.TrimSpace(stripYAMLComment(raw))
-		if line == "" {
-			continue
-		}
-		if line == "bootstrap:" {
-			section = "bootstrap"
-			currentPeer = nil
-			continue
-		}
-		if strings.HasPrefix(line, "- ") {
-			if section != "bootstrap" {
-				return fmt.Errorf("config.yaml:%d: list item outside bootstrap", lineNumber+1)
-			}
-			config.Bootstrap = append(config.Bootstrap, syncConfigPeer{})
-			currentPeer = &config.Bootstrap[len(config.Bootstrap)-1]
-			rest := strings.TrimSpace(strings.TrimPrefix(line, "- "))
-			if rest == "" {
-				continue
-			}
-			key, value, err := parseYAMLKeyValue(rest)
-			if err != nil {
-				return fmt.Errorf("config.yaml:%d: %w", lineNumber+1, err)
-			}
-			applyBootstrapValue(currentPeer, key, value)
-			continue
-		}
-		key, value, err := parseYAMLKeyValue(line)
-		if err != nil {
-			return fmt.Errorf("config.yaml:%d: %w", lineNumber+1, err)
-		}
-		if section == "bootstrap" && currentPeer != nil && (key == "id" || key == "addr") {
-			applyBootstrapValue(currentPeer, key, value)
-			continue
-		}
-		section = ""
-		currentPeer = nil
-		if err := applyConfigValue(config, key, value); err != nil {
-			return fmt.Errorf("config.yaml:%d: %w", lineNumber+1, err)
-		}
+	if strings.TrimSpace(input) == "" {
+		return nil
 	}
-	return nil
+	var file configYAML
+	decoder := yaml.NewDecoder(strings.NewReader(input))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
+		return fmt.Errorf("config.yaml: %w", err)
+	}
+	return applyConfigYAML(config, file)
 }
 
-func stripYAMLComment(line string) string {
-	inSingle := false
-	inDouble := false
-	for i, r := range line {
-		switch r {
-		case '\'':
-			if !inDouble {
-				inSingle = !inSingle
-			}
-		case '"':
-			if !inSingle {
-				inDouble = !inDouble
-			}
-		case '#':
-			if !inSingle && !inDouble {
-				return line[:i]
-			}
-		}
-	}
-	return line
-}
-
-func parseYAMLKeyValue(line string) (string, string, error) {
-	key, value, ok := strings.Cut(line, ":")
-	if !ok {
-		return "", "", fmt.Errorf("expected key: value")
-	}
-	key = strings.TrimSpace(key)
-	value = unquoteYAMLValue(strings.TrimSpace(value))
-	if key == "" {
-		return "", "", fmt.Errorf("empty key")
-	}
-	return key, value, nil
-}
-
-func unquoteYAMLValue(value string) string {
-	if len(value) < 2 {
-		return value
-	}
-	if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
-		return value[1 : len(value)-1]
-	}
-	return value
-}
-
-func applyConfigValue(config *appConfig, key, value string) error {
-	switch key {
-	case "data_dir", "database_dir", "db_dir":
+func applyConfigYAML(config *appConfig, file configYAML) error {
+	if value := firstNonEmpty(file.DataDir, file.DatabaseDir, file.DBDir); value != "" {
 		config.DataDir = value
 		config.StatePath = ""
-	case "state_path", "database_path", "db_path":
+	}
+	if value := firstNonEmpty(file.StatePath, file.DatabasePath, file.DBPath); value != "" {
 		config.StatePath = value
-	case "peer_id":
-		config.PeerID = value
-	case "listen_addr":
-		config.ListenAddr = value
-	case "listen_port":
-		port, err := strconv.Atoi(value)
-		if err != nil || port <= 0 || port > 65535 {
-			return fmt.Errorf("invalid listen_port: %q", value)
+	}
+	config.PeerID = firstNonEmpty(file.PeerID, config.PeerID)
+	config.ListenAddr = firstNonEmpty(file.ListenAddr, config.ListenAddr)
+	if file.ListenPort != nil {
+		if *file.ListenPort <= 0 || *file.ListenPort > 65535 {
+			return fmt.Errorf("invalid listen_port: %d", *file.ListenPort)
 		}
-		config.ListenPort = port
+		config.ListenPort = *file.ListenPort
 		if config.ListenAddr == "" {
-			config.ListenAddr = fmt.Sprintf(":%d", port)
+			config.ListenAddr = fmt.Sprintf(":%d", *file.ListenPort)
 		}
-	case "trusted_root_public_key", "root_public_key", "trusted_root_key":
+	}
+	config.Bootstrap = append(config.Bootstrap, file.Bootstrap...)
+	if value := firstNonEmpty(file.TrustedRootPublicKey, file.RootPublicKey, file.TrustedRootKey); value != "" {
 		key, err := decodePublicKey(value)
 		if err != nil {
 			return err
 		}
 		config.TrustedRootPublicKey = key
-	case "max_message_bytes":
-		limit, err := parsePositiveInt(value, key)
+	}
+	if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxMessageBytes, "max_message_bytes"); err != nil {
+		return err
+	}
+	if err := applyPositiveInt(&config.MaxSyncZones, file.MaxSyncZones, "max_sync_zones"); err != nil {
+		return err
+	}
+	if err := applyPositiveInt(&config.MaxSyncRecords, file.MaxSyncRecords, "max_sync_records"); err != nil {
+		return err
+	}
+	if file.LogLevel != "" {
+		config.LogLevel = strings.ToLower(file.LogLevel)
+	}
+	if file.AdvertiseAddr != "" {
+		config.AdvertiseAddrs = append(config.AdvertiseAddrs, file.AdvertiseAddr)
+	}
+	config.AdvertiseAddrs = append(config.AdvertiseAddrs, file.AdvertiseAddrs...)
+	if file.Reflector != "" {
+		config.Reflectors = append(config.Reflectors, file.Reflector)
+	}
+	config.Reflectors = append(config.Reflectors, file.Reflectors...)
+	if file.ReflectorInterval != "" {
+		d, err := parseConfigDuration(file.ReflectorInterval, "reflector_interval")
 		if err != nil {
 			return err
-		}
-		config.MaxMessageBytes = limit
-	case "max_sync_zones":
-		limit, err := parsePositiveInt(value, key)
-		if err != nil {
-			return err
-		}
-		config.MaxSyncZones = limit
-	case "max_sync_records":
-		limit, err := parsePositiveInt(value, key)
-		if err != nil {
-			return err
-		}
-		config.MaxSyncRecords = limit
-	case "log_level":
-		config.LogLevel = strings.ToLower(value)
-	case "advertise_addr":
-		config.AdvertiseAddrs = append(config.AdvertiseAddrs, value)
-	case "advertise_addrs":
-		for _, v := range strings.Split(value, ",") {
-			if v = strings.TrimSpace(v); v != "" {
-				config.AdvertiseAddrs = append(config.AdvertiseAddrs, v)
-			}
-		}
-	case "reflector":
-		config.Reflectors = append(config.Reflectors, value)
-	case "reflector_interval":
-		d, err := time.ParseDuration(value)
-		if err != nil {
-			return fmt.Errorf("invalid reflector_interval: %q", value)
 		}
 		config.ReflectorInterval = d
-	case "endpoint_ttl":
-		d, err := time.ParseDuration(value)
+	}
+	if file.EndpointTTL != "" {
+		d, err := parseConfigDuration(file.EndpointTTL, "endpoint_ttl")
 		if err != nil {
-			return fmt.Errorf("invalid endpoint_ttl: %q", value)
+			return err
 		}
 		config.EndpointTTL = d
-	case "endpoint_grace", "endpoint_grace_period":
-		d, err := time.ParseDuration(value)
+	}
+	if value := firstNonEmpty(file.EndpointGrace, file.EndpointGracePeriod); value != "" {
+		d, err := parseConfigDuration(value, "endpoint_grace")
 		if err != nil {
-			return fmt.Errorf("invalid endpoint_grace: %q", value)
+			return err
 		}
 		config.EndpointGrace = d
-	default:
-		return fmt.Errorf("unknown config key %q", key)
 	}
 	return nil
 }
 
-func parsePositiveInt(value, name string) (int, error) {
-	limit, err := strconv.Atoi(value)
-	if err != nil || limit <= 0 {
-		return 0, fmt.Errorf("invalid %s: %q", name, value)
+func (list *configStringList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.SequenceNode {
+		var values []string
+		if err := node.Decode(&values); err != nil {
+			return err
+		}
+		*list = append((*list)[:0], values...)
+		return nil
 	}
-	return limit, nil
+	var value string
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	*list = (*list)[:0]
+	for _, v := range strings.Split(value, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			*list = append(*list, v)
+		}
+	}
+	return nil
 }
 
-func applyBootstrapValue(peer *syncConfigPeer, key, value string) {
-	switch key {
-	case "id":
-		peer.ID = value
-	case "addr":
-		peer.Addr = value
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
 	}
+	return ""
+}
+
+func applyPositiveInt(target *int, value *int, name string) error {
+	if value == nil {
+		return nil
+	}
+	if *value <= 0 {
+		return fmt.Errorf("invalid %s: %d", name, *value)
+	}
+	*target = *value
+	return nil
+}
+
+func parseConfigDuration(value, name string) (time.Duration, error) {
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %q", name, value)
+	}
+	return d, nil
 }
 
 func decodePublicKey(value string) (ed25519.PublicKey, error) {
