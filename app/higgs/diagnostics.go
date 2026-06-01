@@ -247,8 +247,8 @@ func debugEndpoints() error {
 	for peerID, entries := range discovered {
 		fmt.Printf("peer %s endpoints=%d\n", peerID, len(entries))
 		for _, ep := range entries {
-			fmt.Printf("  endpoint addr=%s port=%d scope=%s priority=%d protocol=%s\n",
-				ep.Address, ep.Port, ep.Scope, ep.Priority, ep.Protocol)
+			fmt.Printf("  endpoint addr=%s port=%d scope=%s priority=%d protocol=%s source=%s last_observed=%s\n",
+				ep.Address, ep.Port, ep.Scope, ep.Priority, ep.Protocol, dash(ep.Source), formatUnixTime(ep.LastObserved))
 		}
 	}
 	return nil

@@ -55,6 +55,7 @@ type syncConfigFile struct {
 	Reflectors        []string         `json:"reflectors,omitempty"`
 	ReflectorInterval time.Duration    `json:"reflector_interval,omitempty"`
 	EndpointTTL       time.Duration    `json:"endpoint_ttl,omitempty"`
+	EndpointGrace     time.Duration    `json:"endpoint_grace,omitempty"`
 }
 
 type syncConfigPeer struct {

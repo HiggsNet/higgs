@@ -5,6 +5,9 @@ max_message_bytes: 65536
 max_sync_zones: 16
 max_sync_records: 1024
 log_level: info
+reflector_interval: 5m
+endpoint_ttl: 1h
+endpoint_grace: 10m
 
 bootstrap:
   - id: node-b

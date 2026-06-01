@@ -166,7 +166,7 @@
   - [x] 增加 public IP reflector 支持框架：可配置多个 reflector 服务（当前 stub，返回错误信号）
   - [x] 明确 reflector 结果只是本节点自发现输入：节点必须用自己的 Zone 私钥签名后写入 endpoint record，其他节点只信任 verified active state 中的 signed endpoint，不直接信任第三方 reflector
   - [x] 增加 reflector endpoint 定时刷新：配置 `reflector_interval` / `endpoint_ttl`，周期发布 endpoint record；IP 或端口变化时生成新的 signed endpoint record 版本并触发 outbound sync
-  - [ ] 处理 endpoint 变更窗口：新 endpoint 发布后保留旧 endpoint grace period，远端根据 ttl/last_observed/连接成功情况逐步淘汰旧地址，避免公网 IP 切换时短暂失联
+  - [x] 处理 endpoint 变更窗口：新 endpoint 发布后保留旧 endpoint grace period，远端根据 ttl/last_observed/连接成功情况逐步淘汰旧地址，避免公网 IP 切换时短暂失联
   - [x] 定义 endpoint 可信度与来源优先级：static advertise addr > signed active-state endpoint record > reflector-derived signed endpoint > interface scan；连接成功后提升可用性分数，失败/backoff 后降级
   - [x] endpoint record 中保留来源、scope、ttl、priority、last_observed 等元数据，避免把临时公网/NAT 反射地址永久固化为稳定配置
   - [x] 新节点加入时写入自己的 gossip endpoint record；如果启用自动探测，则先写入可验证的稳定候选，临时 observed endpoint 走 discovered peer table 而不是长期 record

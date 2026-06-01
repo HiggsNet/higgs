@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -473,9 +474,24 @@ func listenPortFromAddr(addr string) uint16 {
 func publishEndpointRecord(state *stateFile, config *syncConfigFile) error {
 	port := listenPortFromAddr(config.ListenAddr)
 	endpoints := gossip.CollectLocalEndpoints(port, config.AdvertiseAddrs)
-	value := gossip.EndpointRecordBytes(endpoints, time.Now())
+	now := time.Now()
+	var previous *gossip.EndpointRecord
 
 	zs := state.Network.Zones[state.ManagedZone]
+	if zs != nil {
+		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
+			var er gossip.EndpointRecord
+			if err := json.Unmarshal(existing.Value, &er); err == nil {
+				previous = &er
+			}
+		}
+	}
+	recordValue := gossip.LocalEndpointsToRecordWithPolicy(endpoints, previous, now, config.EndpointTTL, config.EndpointGrace)
+	value, err := json.Marshal(recordValue)
+	if err != nil {
+		return err
+	}
+
 	if zs != nil {
 		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
 			if bytes.Equal(existing.Value, value) {
@@ -514,8 +530,9 @@ func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config 
 
 func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
 	addVerifiedZonePeers(state, transport, config)
-	discovered := gossip.ExtractPeerEndpoints(state.Network)
 	now := time.Now()
+	discovered := gossip.ExtractPeerEndpointsAt(state.Network, now)
+	bootstrapPeers := configuredKnownPeers(config)
 	updated := false
 	for peerID, entries := range discovered {
 		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
@@ -530,7 +547,11 @@ func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config
 			if err != nil {
 				continue
 			}
-			addrs = append(addrs, addr)
+			addrs = appendUDPAddrOnce(addrs, addr)
+		}
+		addrs = appendRecentSuccessfulDiscoveredAddr(addrs, state.SyncPeers[peerID], config.EndpointGrace, now)
+		if bootstrapAddr := bootstrapPeers[peerID]; bootstrapAddr != nil {
+			addrs = appendUDPAddrOnce(addrs, bootstrapAddr)
 		}
 		if len(addrs) == 0 {
 			continue
@@ -548,6 +569,36 @@ func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config
 			fmt.Fprintf(os.Stderr, "update discovered peers save error: %v\n", err)
 		}
 	}
+}
+
+func appendRecentSuccessfulDiscoveredAddr(addrs []*net.UDPAddr, peerState syncPeerState, grace time.Duration, now time.Time) []*net.UDPAddr {
+	if peerState.DiscoveredAddr == "" || peerState.LastSyncUnix == 0 || peerState.LastError != "" {
+		return addrs
+	}
+	if grace <= 0 {
+		grace = gossip.DefaultEndpointGrace
+	}
+	if now.After(time.Unix(peerState.LastSyncUnix, 0).Add(grace)) {
+		return addrs
+	}
+	addr, err := net.ResolveUDPAddr("udp", peerState.DiscoveredAddr)
+	if err != nil {
+		return addrs
+	}
+	return appendUDPAddrOnce(addrs, addr)
+}
+
+func appendUDPAddrOnce(addrs []*net.UDPAddr, addr *net.UDPAddr) []*net.UDPAddr {
+	if addr == nil {
+		return addrs
+	}
+	for _, existing := range addrs {
+		if existing != nil && existing.IP.Equal(addr.IP) && existing.Port == addr.Port {
+			return addrs
+		}
+	}
+	copied := *addr
+	return append(addrs, &copied)
 }
 
 func syncRoundWithTransport(ctx context.Context, state *stateFile, transport *gossip.Transport, peerID string, timeout time.Duration) (err error) {

@@ -37,6 +37,7 @@ type appConfig struct {
 	Reflectors           []string
 	ReflectorInterval    time.Duration
 	EndpointTTL          time.Duration
+	EndpointGrace        time.Duration
 }
 
 func loadAppConfig() (*appConfig, error) {
@@ -65,6 +66,7 @@ func defaultAppConfig() *appConfig {
 		MaxSyncRecords:    gossip.DefaultSyncLimits().MaxRecords,
 		ReflectorInterval: 5 * time.Minute,
 		EndpointTTL:       time.Hour,
+		EndpointGrace:     gossip.DefaultEndpointGrace,
 	}
 }
 
@@ -256,6 +258,12 @@ func applyConfigValue(config *appConfig, key, value string) error {
 			return fmt.Errorf("invalid endpoint_ttl: %q", value)
 		}
 		config.EndpointTTL = d
+	case "endpoint_grace", "endpoint_grace_period":
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid endpoint_grace: %q", value)
+		}
+		config.EndpointGrace = d
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
@@ -344,6 +352,7 @@ func configuredSyncConfig(state *stateFile) (*syncConfigFile, error) {
 		Reflectors:        config.Reflectors,
 		ReflectorInterval: config.ReflectorInterval,
 		EndpointTTL:       config.EndpointTTL,
+		EndpointGrace:     config.EndpointGrace,
 	}, nil
 }
 

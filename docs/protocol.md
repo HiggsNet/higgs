@@ -1,5 +1,8 @@
 # Higgs Gossip 协议
 
+> **文档状态（2026-06）**  
+> 本文档描述当前已实现的协议（Phase 1–2）。Phase 3+ 规划内容单独标注。
+
 本文档描述 Higgs 用于在节点间传播区域状态的 gossip 同步协议，包括：传输格式、消息交换模式、最终一致性模型、节点发现机制以及传输层的安全防护。
 
 ---
@@ -200,15 +203,26 @@ Higgs 节点不需要将所有节点都列在静态的 `bootstrap` 配置中。�
 ```json
 {
   "endpoints": [
-    {"address": "192.168.1.10", "port": 33434, "protocol": "udp", "scope": "site", "priority": 20}
+    {
+      "address": "192.168.1.10",
+      "port": 33434,
+      "protocol": "udp",
+      "scope": "site",
+      "source": "interface",
+      "priority": 20,
+      "last_observed": 1717171717
+    }
   ],
   "ttl_seconds": 3600,
+  "grace_seconds": 600,
   "source": "local",
   "updated_at": 1717171717
 }
 ```
 
 由于这只是普通区域中的普通签名记录，它通过与其他数据相同的 `PING`/`PONG`/`ANNOUNCE` 流程传播。
+
+当本机 endpoint 发生变化时，节点会在新记录中继续保留最近观测到的旧 endpoint，直到 `endpoint_grace` 窗口结束。远端解析记录时根据 `ttl_seconds`、`grace_seconds` 和每个 endpoint 的 `last_observed` 过滤过期地址；如果某个已发现地址刚刚成功完成过同步，也会在本地地址簿中短暂保留作为回退地址。静态 bootstrap 地址始终作为发现地址之后的 fallback。
 
 ### 5.2 提取已发现节点
 
@@ -231,11 +245,17 @@ transport.SetPeerAddrs(peerID, addrs)
 
 ### 5.3 允许列表验证
 
-即使节点可以动态发现，**传输层仍会对每个入站数据包进行验证**，针对合并后的节点表（bootstrap + 发现）：
+传输层对每个入站数据包执行两层校验：
 
-1. `ErrUnknownPeer` — 消息中的 `peer_id` 必须存在于已知节点列表中。
+**入站身份校验（`knownPeers` 白名单）：**  
+`peer_id` 必须存在于运行时 `knownPeers` 集合中，否则丢弃并返回 `ErrUnknownPeer`。  
+`knownPeers` 包含两类来源：
+- **Bootstrap 配置**：`config.yaml` 中的 `bootstrap` 列表，节点启动时注册。
+- **已验证 Zone 列表**：凡是本地 active state 中能通过 `VerifyChain` 的 Zone，其 Zone path 即作为合法 `peer_id` 加入白名单（通过 `AddKnownPeerID` 写入，不含出站地址）。
 
-这防止了任意互联网主机仅通过知道魔术前缀就能向 gossip 网格注入数据。节点身份的真实性由上层密码学验证（`VerifyChain` / `VerifyRecord`）保证，传输层不再对 UDP 源地址做严格匹配，因此 NAT 穿透场景下合法数据包不会被误拒。
+这防止了任意互联网主机通过知道魔术前缀就向 gossip 网格注入数据，同时解决了新节点首次接入的死锁问题（详见 §5.5）。
+
+**传输层不再检查 UDP 源地址是否与注册地址匹配** — 身份真实性完全交给上层签名链验证（`VerifyChain` / `VerifyRecord`）。
 
 ### 5.4 CLI 发现诊断
 
@@ -250,19 +270,41 @@ higgs debug peer <peer-id>
 higgs debug endpoints
 ```
 
+### 5.5 Bootstrap 首次接入死锁修复
+
+**问题根因：**  
+若传输层仅对持有 `sync/endpoint/udp` Record 的 peer 开放入站，新节点 B 首次向 A 发 Ping 时会被拒绝（`ErrUnknownPeer`）。而 B 的 endpoint 永远无法传播给 A——形成死锁。
+
+**根本原因** 是传输层 `knownPeers` 混淆了「准入控制（身份）」与「地址发现（可达性）」两个角色。
+
+**修复方案：**
+
+```
+Transport.AddKnownPeerID(peerID)   // 只写入 knownPeers 入站白名单，不写 outboundAddrs
+Transport.SetPeerAddrs(peerID, []) // 写入出站地址簿（endpoint record 来源）
+Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退到最近 inbound 包的 UDP 源地址
+```
+
+- `openSyncTransport` 初始化时先对所有能通过 `VerifyChain` 的 Zone 调用 `AddKnownPeerID`。
+- 有 endpoint record 的 peer 额外调用 `SetPeerAddrs`。
+- B 首次向 A 发 Ping 时，A 可通过 `lastSeenAddrs` 回复 Pong，B 的 endpoint record 随后通过正常 gossip 流程传播。
+
+**安全边界不变：**  
+入站白名单放宽到「有合法 delegation chain」的 zone，但消息内容仍经过完整 `VerifyChain` / `VerifyRecord` 验证，信任根不变。
+
 ---
 
 ## 6. 安全机制
 
 ### 6.1 节点身份验证
 
-传输层维护一个已知节点集合（`knownPeers`）。每个接收到的数据包只会检查：
+传输层维护两个集合：
 
-- `peer_id` 是否在已知列表中。
+- **`knownPeers`**（入站白名单）：包含 bootstrap 配置中的 peer ID + 本地 active state 中所有 `VerifyChain` 通过的 Zone path。每个接收到的数据包检查 `peer_id` 是否在此集合中，否则丢弃（`ErrUnknownPeer`）。
+- **`outboundAddrs`**（出站地址簿）：来自 `config.bootstrap` 中的静态地址 + 从 `sync/endpoint/udp` record 中动态发现的地址。发送时按优先级依次尝试。
+- **`lastSeenAddrs`**（临时入站反向地址）：`Send()` 在无出站地址时，回退使用最近一次收到该 peer 数据包的 UDP 源地址。
 
-如果 `peer_id` 未知，数据包被丢弃（`ErrUnknownPeer`）。**传输层不再检查 UDP 源地址是否与注册地址匹配** — 身份真实性完全交给上层的签名链验证（`VerifyChain` / `VerifyRecord`）。
-
-节点在启动时从 `bootstrap` 配置注册，在运行时从发现的端点记录动态注册。
+节点在启动时从 `bootstrap` 配置注册，在运行时从发现的 Zone 和端点记录动态扩展。
 
 ### 6.2 反重放窗口
 
@@ -316,10 +358,11 @@ bootstrap:
 # 可选：显式公告地址（覆盖接口扫描）
 advertise_addrs: "10.0.0.1,10.0.0.2"
 
-# 可选：公网 IP 反射器（Phase 2.7 中暂为存根）
+# 可选：公网 IP 反射器（Phase 3 规划，当前为存根，配置不生效）
 reflectors: []
 reflector_interval: 5m
 endpoint_ttl: 1h
+endpoint_grace: 10m
 ```
 
 | 键 | 默认值 | 含义 |
@@ -329,8 +372,9 @@ endpoint_ttl: 1h
 | `max_sync_zones` | `16` | 每个 `ANNOUNCE` 快照的最大区域数 |
 | `max_sync_records` | `1024` | 每个 `ANNOUNCE` 的最大记录数 |
 | `advertise_addrs` | （自动） | 以逗号分隔的 IP，发布到端点记录 |
-| `reflector_interval` | `5m` | 重新发布本地端点的间隔 |
+| `reflector_interval` | `5m` | 重新发布本地端点的间隔（reflector 未实现时仅更新 interface 扫描结果） |
 | `endpoint_ttl` | `1h` | 写入端点记录的 TTL |
+| `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
 
 ---
 
@@ -343,6 +387,7 @@ endpoint_ttl: 1h
 | **冲突解决** | 单调版本号；时间戳仅用于审计 |
 | **信任** | 完整委托链验证，追溯到受信任的根公钥 |
 | **节点发现** | 每个节点自身区域中的签名 `sync/endpoint/udp` 记录 |
-| **访问控制** | 合并 bootstrap + 发现的节点允许列表；签名链验证身份 |
+| **访问控制** | `knownPeers`（bootstrap + 已验证 Zone）；签名链验证身份 |
+| **首次接入** | `AddKnownPeerID` 开放入站；`lastSeenAddrs` 回外地址；防死锁 |
 | **反重放** | Nonce 唯一性 + 5 分钟时间戳窗口 |
 | **DoS 缓解** | 每节点字节与对象速率配额；最大消息大小限制 |

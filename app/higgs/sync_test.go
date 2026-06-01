@@ -269,3 +269,35 @@ func TestUpdateDiscoveredPeersAddsAddrsForEndpoints(t *testing.T) {
 		t.Fatalf("PeerAddr = %s, want 127.0.0.1:9999", addr.String())
 	}
 }
+
+func TestAppendRecentSuccessfulDiscoveredAddr(t *testing.T) {
+	now := time.Unix(1000, 0)
+	addrs := []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: 1000}}
+	peerState := syncPeerState{
+		LastSyncUnix:     now.Add(-time.Minute).Unix(),
+		DiscoveredAddr:   "127.0.0.1:2000",
+		DiscoveredAtUnix: now.Add(-2 * time.Minute).Unix(),
+	}
+
+	addrs = appendRecentSuccessfulDiscoveredAddr(addrs, peerState, 10*time.Minute, now)
+
+	if len(addrs) != 2 {
+		t.Fatalf("addrs = %d, want 2", len(addrs))
+	}
+	if addrs[1].String() != "127.0.0.1:2000" {
+		t.Fatalf("fallback addr = %s, want 127.0.0.1:2000", addrs[1])
+	}
+}
+
+func TestAppendRecentSuccessfulDiscoveredAddrExpires(t *testing.T) {
+	now := time.Unix(1000, 0)
+	peerState := syncPeerState{
+		LastSyncUnix:   now.Add(-20 * time.Minute).Unix(),
+		DiscoveredAddr: "127.0.0.1:2000",
+	}
+
+	addrs := appendRecentSuccessfulDiscoveredAddr(nil, peerState, 10*time.Minute, now)
+	if len(addrs) != 0 {
+		t.Fatalf("addrs = %#v, want expired fallback to be dropped", addrs)
+	}
+}
