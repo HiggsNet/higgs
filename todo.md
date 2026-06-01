@@ -236,6 +236,19 @@
   - [ ] 增加测试：撤销普通节点 Zone 后，其他节点拒绝其新 record 和 endpoint；撤销中间管理 Zone 后，其整个子树失效；重启后 revoked 状态仍持久化
   - [ ] 增加 smoke：A/B/C 已建立同步后，管理员撤销 node-b delegation，A/C 收敛后不再信任 B 的 record、endpoint、route announcement
 
+- [x] **2.14 Bootstrap 准入死锁 / 新节点首次接入问题**
+  - [x] 问题：Transport.validatePeer() 仅接受有 endpoint record 的 peer，新节点 B 首次向 A 发 Ping 时被拒（ErrUnknownPeer），B 的 endpoint 永远无法传播给 A，形成死锁
+  - [x] 根因：传输层 `knownPeers` 混淆了「准入控制（身份）」与「地址发现（可达性）」两个角色
+  - [x] 修复：拆分准入与地址概念
+    - [x] `Transport.AddKnownPeerID(peerID)`：只写入 `knownPeers` 入站白名单，不写 `outboundAddrs`
+    - [x] `addVerifiedZonePeers()`：扫描 active state 中所有 `VerifyChain` 通过的 zone，调用 `AddKnownPeerID` 加入白名单
+    - [x] `openSyncTransport` / `updateDiscoveredPeers`：初始化时先执行 `addVerifiedZonePeers`，有 endpoint record 的再追加 `SetPeerAddrs`
+    - [x] `Transport.lastSeenAddrs`：Send() 无静态 outbound 地址时，回退到最近 inbound 包的 UDP 源地址，使 A 能在无 B 的 endpoint record 时仍回复首条 Pong
+  - [x] 安全边界：入站白名单放宽到「有合法 delegation chain」的 zone，但消息内容仍经过完整 `VerifyChain` / `VerifyRecord` 验证，信任根不变
+  - [x] 增加 `pkg/core/gossip/transport_test.go`：AddKnownPeerID / lastSeenAddrs 单元测试
+  - [x] 增加 `app/higgs/sync_test.go`：openSyncTransport / updateDiscoveredPeers 单元测试（构造 root→catofes→node-b delegation chain）
+  - [x] 增加 `make bootstrap-join-smoke`：验证全新节点 B 只配置 bootstrap A、A 有 B 的 zone 但无 endpoint record 时，双向 gossip 同步成功建立
+
 ## Phase 3: WireGuard 建链（预计 2-3 周）
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
