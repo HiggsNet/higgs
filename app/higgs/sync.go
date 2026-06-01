@@ -91,6 +91,11 @@ func syncStatus(verbose bool) error {
 	if err != nil {
 		return err
 	}
+	if response, ok, err := daemonStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		fmt.Fprintf(os.Stdout, "daemon: online peer_id=%s\n", response.PeerID)
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -264,116 +269,7 @@ func syncOnce(peerID string) error {
 }
 
 func syncRun(ctx context.Context, interval time.Duration) error {
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	rt, err := NewRuntime()
-	if err != nil {
-		return err
-	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return err
-	}
-	syncRuntime := newSyncRuntime(state, config, nil, rt)
-	transport, err := syncRuntime.openTransport()
-	if err != nil {
-		return err
-	}
-	defer transport.Close()
-	fmt.Printf("sync running as %s on %s interval=%s\n", config.PeerID, transport.LocalAddr(), interval)
-
-	nextSync := syncRuntime.now()
-	nextEndpointPublish := syncRuntime.now()
-	lastObservedDigests := gossip.ZoneDigests(state.Network)
-	syncRuntime.updateDiscoveredPeers()
-	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-		now := syncRuntime.now()
-		if latest, changed, err := syncRuntime.reloadStateIfChanged(lastObservedDigests); err != nil {
-			fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
-		} else if changed {
-			state = latest
-			syncRuntime.State = latest
-			lastObservedDigests = gossip.ZoneDigests(state.Network)
-			nextSync = now
-			syncRuntime.updateDiscoveredPeers()
-		}
-		if !now.Before(nextEndpointPublish) {
-			if latest, err := syncRuntime.loadState(); err == nil {
-				state = latest
-				syncRuntime.State = latest
-				if err := syncRuntime.publishEndpointRecord(); err != nil {
-					fmt.Fprintf(os.Stderr, "endpoint publish error: %v\n", err)
-				} else {
-					lastObservedDigests = gossip.ZoneDigests(state.Network)
-					nextSync = now
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
-			}
-			interval := config.ReflectorInterval
-			if interval <= 0 {
-				interval = 5 * time.Minute
-			}
-			nextEndpointPublish = now.Add(interval)
-		}
-		if !now.Before(nextSync) {
-			if latest, err := syncRuntime.loadState(); err == nil {
-				state = latest
-				syncRuntime.State = latest
-				lastObservedDigests = gossip.ZoneDigests(state.Network)
-			} else {
-				fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
-			}
-			syncRuntime.updateDiscoveredPeers()
-			digestsBeforeRound := gossip.ZoneDigests(state.Network)
-			for _, peerID := range outboundSyncPeers(state, config) {
-				if backoffRemaining(state.SyncPeers[peerID], now) > 0 {
-					continue
-				}
-				err := syncRuntime.syncRound(ctx, peerID, 3*time.Second)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "sync round error peer=%s: %v\n", peerID, err)
-				}
-			}
-			if syncStateChanged(state, digestsBeforeRound) {
-				syncRuntime.updateDiscoveredPeers()
-				lastObservedDigests = gossip.ZoneDigests(state.Network)
-			}
-			nextSync = now.Add(interval)
-		}
-		packet, err := receiveWithContext(ctx, transport, syncRuntime.now().Add(250*time.Millisecond))
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			if isReceiveTimeout(err) || errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "sync receive error: %v\n", err)
-			continue
-		}
-		digestsBefore := gossip.ZoneDigests(state.Network)
-		if err := syncRuntime.handlePacket(packet); err != nil {
-			fmt.Fprintf(os.Stderr, "sync packet error from %s: %v\n", packet.Message.PeerID, err)
-			continue
-		}
-		if packet.Message.Announce != nil && syncStateChanged(state, digestsBefore) {
-			recordUpdateSource(state, packet.Message.PeerID)
-			lastObservedDigests = gossip.ZoneDigests(state.Network)
-			syncRuntime.updateDiscoveredPeers()
-			if err := syncRuntime.relay(ctx, packet.Message.PeerID); err != nil {
-				fmt.Fprintf(os.Stderr, "sync relay error source=%s: %v\n", packet.Message.PeerID, err)
-			}
-		}
-	}
+	return daemonRun(ctx, interval)
 }
 
 func reloadStateIfChanged(previous []gossip.ZoneDigest) (*stateFile, bool, error) {

@@ -22,6 +22,7 @@ func rootCommand() *cli.Command {
 			cmdZone(),
 			cmdRecord(),
 			cmdVerify(),
+			cmdDaemon(),
 			cmdSync(),
 			cmdDebug(),
 			cmdDB(),
@@ -227,6 +228,23 @@ func cmdVerify() *cli.Command {
 			default:
 				return cli.Exit("usage: higgs verify [chain] <zone>", 1)
 			}
+		},
+	}
+}
+
+func cmdDaemon() *cli.Command {
+	return &cli.Command{
+		Name:        "daemon",
+		Usage:       "Run the local Higgs daemon",
+		Description: "Run gossip serving and periodic outbound sync through the Phase 3 daemon service.",
+		Flags: []cli.Flag{
+			&cli.IntFlag{Name: "interval", Value: 5, Usage: "Outbound sync interval in seconds"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: higgs daemon [--interval seconds]", 1)
+			}
+			return daemonRun(ctx, time.Duration(cmd.Int("interval"))*time.Second)
 		},
 	}
 }

@@ -3,4 +3,4 @@ bin
 build
 .higgs.db
 .higgs
-higgs
+/higgs

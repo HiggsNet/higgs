@@ -59,6 +59,11 @@ func debugPeer(peerID string) error {
 	if err != nil {
 		return err
 	}
+	if response, ok, err := daemonStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		fmt.Printf("daemon: online peer_id=%s\n", response.PeerID)
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err

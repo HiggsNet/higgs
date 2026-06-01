@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -13,6 +14,18 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string) 
 	if err != nil {
 		return err
 	}
+	if version, ok, err := putRecordViaControl(rt, path, key, value, recordType); ok {
+		if err != nil {
+			return err
+		}
+		fmt.Printf("put %s/%s version %d via daemon\n", path, key, version)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; writing state directly")
+	return putRecordDirect(rt, path, key, value, recordType)
+}
+
+func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) error {
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
