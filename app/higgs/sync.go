@@ -15,6 +15,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
 const relayMinInterval = time.Second
@@ -404,6 +405,7 @@ func openSyncTransport(config *syncConfigFile, state *stateFile) (*gossip.Transp
 		return nil, err
 	}
 	if state != nil {
+		addVerifiedZonePeers(state, transport, config)
 		for peerID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
 			if peerID == config.PeerID || peerID == string(state.ManagedZone) {
 				continue
@@ -492,7 +494,26 @@ func publishEndpointRecord(state *stateFile, config *syncConfigFile) error {
 	return saveState(state)
 }
 
+func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
+	if state == nil || state.Network == nil {
+		return
+	}
+	configureValidation(state.Network)
+	now := time.Now()
+	for path := range state.Network.Zones {
+		peerID := string(path)
+		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
+			continue
+		}
+		if err := higgscrypto.VerifyChain(state.Network, path, now); err != nil {
+			continue
+		}
+		transport.AddKnownPeerID(peerID)
+	}
+}
+
 func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
+	addVerifiedZonePeers(state, transport, config)
 	discovered := gossip.ExtractPeerEndpoints(state.Network)
 	now := time.Now()
 	updated := false

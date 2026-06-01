@@ -38,6 +38,8 @@ type Transport struct {
 	knownMu         sync.RWMutex
 	outboundAddrs   map[string][]*net.UDPAddr // addresses used for Send
 	outboundMu      sync.RWMutex
+	lastSeenAddrs   map[string]*net.UDPAddr // fallback addresses from recent inbound packets
+	lastSeenMu      sync.RWMutex
 	maxMessageBytes int
 	replay          *ReplayWindow
 	quotas          *PeerQuotas
@@ -142,6 +144,14 @@ func (t *Transport) Send(peerID string, message *Message) error {
 	t.outboundMu.RUnlock()
 
 	if len(addrs) == 0 {
+		t.lastSeenMu.RLock()
+		if lastAddr := t.lastSeenAddrs[peerID]; lastAddr != nil {
+			addrs = []*net.UDPAddr{lastAddr}
+		}
+		t.lastSeenMu.RUnlock()
+	}
+
+	if len(addrs) == 0 {
 		t.logEvent(event, ErrUnknownPeer, start)
 		return ErrUnknownPeer
 	}
@@ -218,6 +228,13 @@ func (t *Transport) Receive() (*Packet, error) {
 		t.logEvent(event, err, start)
 		return nil, err
 	}
+	t.lastSeenMu.Lock()
+	if t.lastSeenAddrs == nil {
+		t.lastSeenAddrs = make(map[string]*net.UDPAddr)
+	}
+	copied := *addr
+	t.lastSeenAddrs[message.PeerID] = &copied
+	t.lastSeenMu.Unlock()
 	if t.quotas != nil {
 		if err := t.quotas.Allow(message.PeerID, int64(n), objectCost(message), t.clock()); err != nil {
 			t.logEvent(event, err, start)
@@ -337,6 +354,17 @@ func (t *Transport) PeerAddr(peerID string) *net.UDPAddr {
 	}
 	copied := *addrs[0]
 	return &copied
+}
+
+// AddKnownPeerID adds a peer ID to the inbound allowlist without
+// registering any outbound address. Used for zone-identity-based admission.
+func (t *Transport) AddKnownPeerID(peerID string) {
+	t.knownMu.Lock()
+	if t.knownPeers == nil {
+		t.knownPeers = make(map[string]struct{})
+	}
+	t.knownPeers[peerID] = struct{}{}
+	t.knownMu.Unlock()
 }
 
 // AddPeer registers a peer in the inbound allowlist and adds an address
