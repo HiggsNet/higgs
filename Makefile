@@ -1,4 +1,4 @@
-.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke chain-relay-smoke discovery-smoke bootstrap-join-smoke help
+.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -304,6 +304,9 @@ discovery-smoke: build
 	kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; \
 	echo "Discovery smoke passed"
 
+reflector-smoke:
+	$(GO_ENV) $(GO) test -v ./pkg/core/gossip ./app/higgs -run 'Test(QueryPublicIP|CollectLocalEndpointsWithReflectors|ReflectorEndpointPublishSmoke)'
+
 bootstrap-join-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-bootstrap-join-smoke"; \
@@ -363,5 +366,6 @@ help:
 	@echo "  multi-node-smoke - Run three-node transitive sync smoke test"
 	@echo "  chain-relay-smoke - Run four-node chain relay fanout smoke test"
 	@echo "  discovery-smoke - Run endpoint discovery smoke test"
+	@echo "  reflector-smoke - Run public IP reflector endpoint smoke test"
 	@echo "  bootstrap-join-smoke - Run new-node bootstrap admission smoke test"
 	@echo "  help    - Show this help message"

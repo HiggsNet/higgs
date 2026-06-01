@@ -63,8 +63,10 @@ type syncConfigFile struct {
 	AdvertiseAddrs    []string         `json:"advertise_addrs,omitempty"`
 	Reflectors        []string         `json:"reflectors,omitempty"`
 	ReflectorInterval time.Duration    `json:"reflector_interval,omitempty"`
+	ReflectorTimeout  time.Duration    `json:"reflector_timeout,omitempty"`
 	EndpointTTL       time.Duration    `json:"endpoint_ttl,omitempty"`
 	EndpointGrace     time.Duration    `json:"endpoint_grace,omitempty"`
+	FilterPrivateIPv4 bool             `json:"filter_private_ipv4,omitempty"`
 }
 
 type syncConfigPeer struct {

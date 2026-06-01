@@ -535,7 +535,7 @@ type PeerView struct {
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
 | Delegation 撤销（tombstone） | — | 🔲 未实现（Phase 2.13） |
 | 细粒度 Capability 执行 | `pkg/crypto/sign.go` | ⚠️ 结构已定义，校验仅检查 PermDelegate/PermWrite |
-| Public IP Reflector | `pkg/core/gossip/discovery.go` | ⚠️ 框架存根，返回错误 |
+| Public IP Reflector | `pkg/core/gossip/discovery.go` | ✅ HTTP client + local smoke |
 
 ---
 

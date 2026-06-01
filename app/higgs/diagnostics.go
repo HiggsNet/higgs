@@ -239,7 +239,10 @@ func debugEndpoints() error {
 		return err
 	}
 	port := listenPortFromAddr(config.ListenAddr)
-	candidates := gossip.CollectLocalEndpoints(port, config.AdvertiseAddrs)
+	candidates, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
+	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(config.Reflectors)) > 0 {
+		fmt.Printf("reflector_error: %v\n", reflectorErr)
+	}
 	fmt.Printf("local_candidates: %d\n", len(candidates))
 	for _, ep := range candidates {
 		source := "unknown"

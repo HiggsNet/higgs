@@ -483,6 +483,50 @@ make chain-relay-smoke
 
 该 smoke 把同步周期设为 60 秒，并验证 D 能在等待完整周期前看到 A 的 record。
 
+### 公网 Endpoint Reflector
+
+节点可以通过公网 reflector 自动发现自己的公网 IP，然后用本 Zone 私钥签名发布到 `sync/endpoint/udp`。Reflector 只是本机自发现输入；其他节点只信任已经进入 verified active state 的 signed endpoint record。
+
+```yaml
+reflectors: auto
+reflector_interval: 5m
+reflector_timeout: 3s
+endpoint_ttl: 1h
+endpoint_grace: 10m
+```
+
+`reflectors: auto` 会展开内置列表：
+
+```text
+https://api.ipify.org
+https://myip.ipip.net
+https://ddns.oray.com/checkip
+https://ip.3322.net
+https://4.ipw.cn
+https://v4.yinghualuo.cn/bejson
+https://api64.ipify.org
+https://speed.neu6.edu.cn/getIP.php
+https://v6.ident.me
+https://6.ipw.cn
+https://v6.yinghualuo.cn/bejson
+```
+
+也可以混合自定义与内置列表：
+
+```yaml
+reflectors:
+  - https://your-reflector.example/ip
+  - auto
+```
+
+如果不希望访问公网 reflector，可设置：
+
+```yaml
+reflectors: off
+```
+
+解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `advertise_addrs` 和本机 interface scan 的候选，并在 `sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
+
 ### 常见错误与排查
 
 | 现象 | 常见原因 | 排查与修复 |

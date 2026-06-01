@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -484,6 +485,81 @@ func TestUpdateDiscoveredPeersUpdatesEndpointAddrWithoutUDP(t *testing.T) {
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "127.0.0.1:10000" {
 		t.Fatalf("PeerAddr after endpoint change = %v, want 127.0.0.1:10000", addr)
 	}
+}
+
+func TestReflectorEndpointPublishSmoke(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = "node-b.catofes."
+	config.ListenAddr = "127.0.0.1:33434"
+	config.EndpointTTL = time.Hour
+	config.EndpointGrace = 10 * time.Minute
+
+	reflectorIP := "198.51.100.10"
+	oldCollect := collectSyncLocalEndpoints
+	collectSyncLocalEndpoints = func(port uint16, advertiseAddrs, reflectors []string, timeout time.Duration, filterPrivateIPv4 bool) ([]gossip.LocalEndpoint, error) {
+		return []gossip.LocalEndpoint{{
+			IP:       net.ParseIP(reflectorIP),
+			Port:     port,
+			Scope:    "global",
+			Priority: 50,
+			Source:   gossip.SourceReflector,
+		}}, nil
+	}
+	defer func() { collectSyncLocalEndpoints = oldCollect }()
+	config.Reflectors = []string{"https://reflector.example"}
+
+	dir := t.TempDir()
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(dir, "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(1000, 0) },
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(first): %v", err)
+	}
+	first := endpointRecordFromState(t, state, "node-b.catofes.")
+	if len(first.Endpoints) == 0 || first.Endpoints[0].Address != "198.51.100.10" {
+		t.Fatalf("first endpoint record = %#v, want reflector ip", first)
+	}
+	if first.Endpoints[0].Source != "reflector" {
+		t.Fatalf("first endpoint source = %q, want reflector", first.Endpoints[0].Source)
+	}
+
+	reflectorIP = "198.51.100.20"
+	rt.Clock = func() time.Time { return time.Unix(1060, 0) }
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(second): %v", err)
+	}
+	second := endpointRecordFromState(t, state, "node-b.catofes.")
+	if len(second.Endpoints) < 2 {
+		t.Fatalf("second endpoints = %#v, want new endpoint plus grace fallback", second.Endpoints)
+	}
+	if second.Endpoints[0].Address != "198.51.100.20" {
+		t.Fatalf("new endpoint = %s, want 198.51.100.20", second.Endpoints[0].Address)
+	}
+	if second.Endpoints[1].Address != "198.51.100.10" || !strings.Contains(second.Endpoints[1].Source, "grace") {
+		t.Fatalf("grace endpoint = %#v, want old reflector endpoint retained", second.Endpoints[1])
+	}
+}
+
+func endpointRecordFromState(t *testing.T, state *stateFile, path zone.ZonePath) gossip.EndpointRecord {
+	t.Helper()
+	zs := state.Network.Zones[path]
+	if zs == nil {
+		t.Fatalf("zone %s missing", path)
+	}
+	record := zs.Records[gossip.EndpointRecordKeyUDP]
+	if record == nil {
+		t.Fatalf("endpoint record missing")
+	}
+	var er gossip.EndpointRecord
+	if err := json.Unmarshal(record.Value, &er); err != nil {
+		t.Fatalf("Unmarshal(endpoint record): %v", err)
+	}
+	return er
 }
 
 func TestUpdateDiscoveredPeersRevokesExpiredEndpointWithoutUDP(t *testing.T) {

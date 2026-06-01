@@ -194,11 +194,12 @@ Higgs 节点不需要将所有节点都列在静态的 `bootstrap` 配置中。�
 
 每个节点定期（默认 `5m`）调用 `publishEndpointRecord`：
 
-1. 扫描本地网络接口（跳过回环、链路本地和容器接口，如 `docker*`、`veth*`、`cali*`、`flannel*`、`wg*`）。
-2. 合并 `config.yaml` 中显式配置的 `advertise_addrs`（最高优先级）。
-3. 构建一个 `EndpointRecord` JSON 值。
-4. 以记录形式签名，键为 `sync/endpoint/udp`，存储到节点自身管理的区域中。
-5. 存入本地活跃状态（后续同步轮次会将其包含在内）。
+1. 合并 `config.yaml` 中显式配置的 `advertise_addrs`（最高优先级）。
+2. 按配置顺序查询 `reflectors`，接受纯文本 IP、HTML/普通文本中嵌入的 IP，或常见 JSON 字段（如 `ip`、`origin`、`query`、`address`、`public_ip`），并把有效 IPv4/IPv6 作为 `source=reflector` 候选。
+3. 扫描本地网络接口（跳过回环、链路本地和容器接口，如 `docker*`、`veth*`、`cali*`、`flannel*`、`wg*`）。
+4. 构建一个 `EndpointRecord` JSON 值。
+5. 以记录形式签名，键为 `sync/endpoint/udp`，存储到节点自身管理的区域中。
+6. 存入本地活跃状态（后续同步轮次会将其包含在内）。
 
 ```json
 {
@@ -223,6 +224,10 @@ Higgs 节点不需要将所有节点都列在静态的 `bootstrap` 配置中。�
 由于这只是普通区域中的普通签名记录，它通过与其他数据相同的 `PING`/`PONG`/`ANNOUNCE` 流程传播。
 
 当本机 endpoint 发生变化时，节点会在新记录中继续保留最近观测到的旧 endpoint，直到 `endpoint_grace` 窗口结束。远端解析记录时根据 `ttl_seconds`、`grace_seconds` 和每个 endpoint 的 `last_observed` 过滤过期地址；如果某个已发现地址刚刚成功完成过同步，也会在本地地址簿中短暂保留作为回退地址。静态 bootstrap 地址始终作为发现地址之后的 fallback。
+
+Reflector 只参与本节点自发现：第三方 HTTP 响应不会直接进入其他节点的 allowlist。节点必须先用自己的 Zone 私钥签名 endpoint record；其他节点只解析 verified active state 中的记录。
+
+默认 `peer_id` 等于节点授权 Zone FQDN。只有同一个授权 Zone 下确实存在多个独立 gossip 实例或角色时，才允许引入 alias/instance id；该 alias 必须由对应 Zone 的签名记录显式授权，并且不能绕过 Zone FQDN 到 endpoint record 的绑定关系。
 
 ### 5.2 提取已发现节点
 
@@ -358,9 +363,10 @@ bootstrap:
 # 可选：显式公告地址（覆盖接口扫描）
 advertise_addrs: "10.0.0.1,10.0.0.2"
 
-# 可选：公网 IP 反射器（Phase 3 规划，当前为存根，配置不生效）
-reflectors: []
+# 可选：公网 IP 反射器；auto 展开内置 ddns-go 风格 reflector 列表
+reflectors: auto
 reflector_interval: 5m
+reflector_timeout: 3s
 endpoint_ttl: 1h
 endpoint_grace: 10m
 ```
@@ -372,7 +378,9 @@ endpoint_grace: 10m
 | `max_sync_zones` | `16` | 每个 `ANNOUNCE` 快照的最大区域数 |
 | `max_sync_records` | `1024` | 每个 `ANNOUNCE` 的最大记录数 |
 | `advertise_addrs` | （自动） | 以逗号分隔的 IP，发布到端点记录 |
-| `reflector_interval` | `5m` | 重新发布本地端点的间隔（reflector 未实现时仅更新 interface 扫描结果） |
+| `reflectors` | `[]` | 公网 IP reflector URL 列表；设为 `auto` 使用内置列表，设为 `none`/`off` 禁用 |
+| `reflector_interval` | `5m` | 重新发布本地端点的间隔 |
+| `reflector_timeout` | `3s` | 单个 reflector HTTP 请求超时；失败会尝试后续 reflector |
 | `endpoint_ttl` | `1h` | 写入端点记录的 TTL |
 | `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
 

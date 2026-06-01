@@ -1,10 +1,14 @@
 package gossip
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -22,6 +26,24 @@ const (
 	// DefaultEndpointGrace is the old-address retention window after an endpoint changes.
 	DefaultEndpointGrace = 10 * time.Minute
 )
+
+var queryPublicIPForCollect = QueryPublicIP
+
+var ipCandidatePattern = regexp.MustCompile(`[0-9A-Fa-f:.]{3,}`)
+
+var defaultPublicIPReflectors = []string{
+	"https://api.ipify.org",
+	"https://myip.ipip.net",
+	"https://ddns.oray.com/checkip",
+	"https://ip.3322.net",
+	"https://4.ipw.cn",
+	"https://v4.yinghualuo.cn/bejson",
+	"https://api64.ipify.org",
+	"https://speed.neu6.edu.cn/getIP.php",
+	"https://v6.ident.me",
+	"https://6.ipw.cn",
+	"https://v6.yinghualuo.cn/bejson",
+}
 
 // EndpointRecord is the JSON value stored under sync/endpoint/* keys.
 type EndpointRecord struct {
@@ -141,9 +163,58 @@ type LocalEndpoint struct {
 	Source   LocalEndpointSource
 }
 
+var publicIPHTTPClient = func(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout}
+}
+
+// DefaultPublicIPReflectors returns the built-in public IP reflector URLs.
+func DefaultPublicIPReflectors() []string {
+	out := make([]string, len(defaultPublicIPReflectors))
+	copy(out, defaultPublicIPReflectors)
+	return out
+}
+
+// ResolvePublicIPReflectors expands the "auto" preset while preserving
+// explicitly configured reflector order. Values "none", "off", and "disabled"
+// are ignored so callers can disable an inherited preset.
+func ResolvePublicIPReflectors(reflectors []string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	for _, reflector := range reflectors {
+		switch strings.ToLower(strings.TrimSpace(reflector)) {
+		case "", "none", "off", "disabled":
+			continue
+		case "auto", "default", "defaults", "builtin", "builtins":
+			for _, preset := range defaultPublicIPReflectors {
+				add(preset)
+			}
+		default:
+			add(reflector)
+		}
+	}
+	return out
+}
+
 // CollectLocalEndpoints gathers candidate endpoints from explicit advertise
 // addresses and local interface scanning.
 func CollectLocalEndpoints(listenPort uint16, advertiseAddrs []string) []LocalEndpoint {
+	endpoints, _ := CollectLocalEndpointsWithReflectors(listenPort, advertiseAddrs, nil, 0, false)
+	return endpoints
+}
+
+// CollectLocalEndpointsWithReflectors gathers candidate endpoints from explicit
+// advertise addresses, public IP reflectors, and local interface scanning.
+// When filterPrivateIPv4 is true, RFC1918 IPv4 addresses from local interfaces
+// are excluded.
+func CollectLocalEndpointsWithReflectors(listenPort uint16, advertiseAddrs []string, reflectors []string, timeout time.Duration, filterPrivateIPv4 bool) ([]LocalEndpoint, error) {
 	var out []LocalEndpoint
 	for _, addr := range advertiseAddrs {
 		ip, port, err := parseHostPortDefault(addr, listenPort)
@@ -158,10 +229,20 @@ func CollectLocalEndpoints(listenPort uint16, advertiseAddrs []string) []LocalEn
 			Source:   SourceAdvertise,
 		})
 	}
-	for _, ep := range scanInterfaceEndpoints(listenPort) {
+	reflectorIPs, reflectorErr := QueryPublicIPsWithQuery(reflectors, timeout, queryPublicIPForCollect)
+	for _, reflectorIP := range reflectorIPs {
+		out = append(out, LocalEndpoint{
+			IP:       reflectorIP,
+			Port:     listenPort,
+			Scope:    "global",
+			Priority: 50,
+			Source:   SourceReflector,
+		})
+	}
+	for _, ep := range scanInterfaceEndpoints(listenPort, filterPrivateIPv4) {
 		out = append(out, ep)
 	}
-	return dedupLocalEndpoints(out)
+	return dedupLocalEndpoints(out), reflectorErr
 }
 
 func parseHostPortDefault(addr string, defaultPort uint16) (net.IP, uint16, error) {
@@ -184,7 +265,7 @@ func parseHostPortDefault(addr string, defaultPort uint16) (net.IP, uint16, erro
 	return ip, port, nil
 }
 
-func scanInterfaceEndpoints(listenPort uint16) []LocalEndpoint {
+func scanInterfaceEndpoints(listenPort uint16, filterPrivateIPv4 bool) []LocalEndpoint {
 	var out []LocalEndpoint
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -208,6 +289,9 @@ func scanInterfaceEndpoints(listenPort uint16) []LocalEndpoint {
 			}
 			ip := ipNet.IP
 			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				continue
+			}
+			if filterPrivateIPv4 && ip.To4() != nil && ip.IsPrivate() {
 				continue
 			}
 			if isTemporaryOrContainerIface(iface.Name) {
@@ -258,12 +342,254 @@ func dedupLocalEndpoints(in []LocalEndpoint) []LocalEndpoint {
 }
 
 // QueryPublicIP attempts to discover the public IP via external reflector services.
-// Phase 2.7 stub: returns an error to signal unavailability.
 func QueryPublicIP(reflectors []string, timeout time.Duration) (net.IP, error) {
+	ips, err := QueryPublicIPs(reflectors, timeout)
+	if len(ips) > 0 {
+		return ips[0], nil
+	}
+	return nil, err
+}
+
+// QueryPublicIPs attempts to discover public IPv4 and IPv6 addresses via
+// reflector services. It returns at most one address per IP family.
+func QueryPublicIPs(reflectors []string, timeout time.Duration) ([]net.IP, error) {
 	if len(reflectors) == 0 {
 		return nil, errors.New("no reflectors configured")
 	}
-	return nil, errors.New("public ip reflector not available")
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	client := publicIPHTTPClient(timeout)
+	return queryPublicIPsWithClient(reflectors, client)
+}
+
+func QueryPublicIPsWithQuery(reflectors []string, timeout time.Duration, query func([]string, time.Duration) (net.IP, error)) ([]net.IP, error) {
+	reflectors = ResolvePublicIPReflectors(reflectors)
+	if len(reflectors) == 0 {
+		return nil, errors.New("no reflectors configured")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		ip  net.IP
+		err error
+	}
+	outCh := make(chan result, len(reflectors))
+
+	for _, r := range reflectors {
+		r := r
+		go func() {
+			ip, err := query([]string{r}, timeout)
+			select {
+			case outCh <- result{ip, err}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	var out []net.IP
+	var have4, have6 bool
+	var lastErr error
+
+	for i := 0; i < len(reflectors); i++ {
+		res := <-outCh
+		if res.err != nil {
+			lastErr = res.err
+			continue
+		}
+		if appendIPByFamily(&out, res.ip, &have4, &have6) && have4 && have6 {
+			cancel()
+			go func(remaining int) {
+				for j := 0; j < remaining; j++ {
+					<-outCh
+				}
+			}(len(reflectors) - i - 1)
+			return out, nil
+		}
+	}
+
+	if len(out) > 0 {
+		return out, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("all reflectors failed")
+	}
+	return nil, lastErr
+}
+
+func queryPublicIPWithClient(reflectors []string, client *http.Client) (net.IP, error) {
+	ips, err := queryPublicIPsWithClient(reflectors, client)
+	if len(ips) > 0 {
+		return ips[0], nil
+	}
+	return nil, err
+}
+
+func queryPublicIPsWithClient(reflectors []string, client *http.Client) ([]net.IP, error) {
+	reflectors = ResolvePublicIPReflectors(reflectors)
+	if len(reflectors) == 0 {
+		return nil, errors.New("no reflectors configured")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		ip  net.IP
+		err error
+	}
+	outCh := make(chan result, len(reflectors))
+
+	for _, r := range reflectors {
+		r := r
+		go func() {
+			ip, err := queryPublicIPCtx(ctx, client, r)
+			select {
+			case outCh <- result{ip, err}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	var out []net.IP
+	var have4, have6 bool
+	var lastErr error
+
+	for i := 0; i < len(reflectors); i++ {
+		res := <-outCh
+		if res.err != nil {
+			lastErr = res.err
+			continue
+		}
+		if appendIPByFamily(&out, res.ip, &have4, &have6) && have4 && have6 {
+			cancel()
+			go func(remaining int) {
+				for j := 0; j < remaining; j++ {
+					<-outCh
+				}
+			}(len(reflectors) - i - 1)
+			return out, nil
+		}
+	}
+
+	if len(out) > 0 {
+		return out, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("all reflectors failed")
+	}
+	return nil, lastErr
+}
+
+func appendIPByFamily(out *[]net.IP, ip net.IP, have4, have6 *bool) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.To4() != nil {
+		if *have4 {
+			return false
+		}
+		*have4 = true
+		*out = append(*out, ip)
+		return true
+	}
+	if *have6 {
+		return false
+	}
+	*have6 = true
+	*out = append(*out, ip)
+	return true
+}
+
+func queryPublicIP(client *http.Client, reflector string) (net.IP, error) {
+	return queryPublicIPCtx(context.Background(), client, reflector)
+}
+
+func queryPublicIPCtx(ctx context.Context, client *http.Client, reflector string) (net.IP, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reflector, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("reflector %s returned status %s", reflector, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return nil, err
+	}
+	ip := parseReflectorIP(body)
+	if ip == nil {
+		return nil, fmt.Errorf("reflector %s returned no valid ip", reflector)
+	}
+	return ip, nil
+}
+
+func parseReflectorIP(body []byte) net.IP {
+	text := strings.TrimSpace(string(body))
+	if ip := parseIPToken(text); ip != nil {
+		return ip
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return nil
+	}
+	return findIPInJSON(value)
+}
+
+func findIPInJSON(value any) net.IP {
+	switch v := value.(type) {
+	case string:
+		return parseIPToken(v)
+	case []any:
+		for _, item := range v {
+			if ip := findIPInJSON(item); ip != nil {
+				return ip
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"ip", "origin", "query", "address", "public_ip"} {
+			if item, ok := v[key]; ok {
+				if ip := findIPInJSON(item); ip != nil {
+					return ip
+				}
+			}
+		}
+		for _, item := range v {
+			if ip := findIPInJSON(item); ip != nil {
+				return ip
+			}
+		}
+	}
+	return nil
+}
+
+func parseIPToken(value string) net.IP {
+	value = strings.Trim(value, " \t\r\n\"'")
+	if ip := net.ParseIP(value); ip != nil {
+		return ip
+	}
+	for _, token := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' '
+	}) {
+		token = strings.Trim(token, " \t\r\n\"'")
+		if ip := net.ParseIP(token); ip != nil {
+			return ip
+		}
+	}
+	for _, candidate := range ipCandidatePattern.FindAllString(value, -1) {
+		candidate = strings.Trim(candidate, ".:")
+		if ip := net.ParseIP(candidate); ip != nil {
+			return ip
+		}
+	}
+	return nil
 }
 
 // LocalEndpointsToRecord builds an EndpointRecord from local candidates.

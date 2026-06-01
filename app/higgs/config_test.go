@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
 )
 
 func TestParseConfigYAML(t *testing.T) {
@@ -23,6 +25,7 @@ max_message_bytes: 32768
 max_sync_zones: 8
 max_sync_records: 512
 endpoint_grace: 2m
+reflector_timeout: 1500ms
 bootstrap:
   - id: node-b
     addr: 127.0.0.1:33435
@@ -49,6 +52,9 @@ trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 	}
 	if config.EndpointGrace.String() != "2m0s" {
 		t.Fatalf("EndpointGrace = %s, want 2m0s", config.EndpointGrace)
+	}
+	if config.ReflectorTimeout.String() != "1.5s" {
+		t.Fatalf("ReflectorTimeout = %s, want 1.5s", config.ReflectorTimeout)
 	}
 }
 
@@ -87,6 +93,20 @@ func TestParseConfigYAMLKeepsCommaSeparatedAdvertiseAddrs(t *testing.T) {
 	}
 	if got := strings.Join(config.AdvertiseAddrs, ","); got != "127.0.0.1:33434,10.0.0.2:33434" {
 		t.Fatalf("AdvertiseAddrs = %q", got)
+	}
+}
+
+func TestParseConfigYAMLExpandsAutoReflectors(t *testing.T) {
+	config := defaultAppConfig()
+	input := `reflectors: auto, https://custom.example/ip`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if len(config.Reflectors) != len(gossip.DefaultPublicIPReflectors())+1 {
+		t.Fatalf("Reflectors = %d, want custom plus defaults", len(config.Reflectors))
+	}
+	if config.Reflectors[len(config.Reflectors)-1] != "https://custom.example/ip" {
+		t.Fatalf("last reflector = %q, want custom", config.Reflectors[len(config.Reflectors)-1])
 	}
 }
 

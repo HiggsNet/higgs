@@ -23,6 +23,8 @@ import (
 const relayMinInterval = time.Second
 const rejectedDigestTTL = 10 * time.Minute
 
+var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
+
 type SyncRuntime struct {
 	App           *Runtime
 	State         *stateFile
@@ -682,7 +684,10 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 	state := sr.State
 	config := sr.Config
 	port := listenPortFromAddr(config.ListenAddr)
-	endpoints := gossip.CollectLocalEndpoints(port, config.AdvertiseAddrs)
+	endpoints, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
+	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(config.Reflectors)) > 0 {
+		fmt.Fprintf(os.Stderr, "reflector discovery warning: %v\n", reflectorErr)
+	}
 	now := sr.now()
 	var previous *gossip.EndpointRecord
 

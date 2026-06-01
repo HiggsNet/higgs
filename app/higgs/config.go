@@ -36,8 +36,10 @@ type appConfig struct {
 	AdvertiseAddrs       []string
 	Reflectors           []string
 	ReflectorInterval    time.Duration
+	ReflectorTimeout     time.Duration
 	EndpointTTL          time.Duration
 	EndpointGrace        time.Duration
+	FilterPrivateIPv4    bool
 }
 
 type configYAML struct {
@@ -71,9 +73,12 @@ type configYAML struct {
 	Reflectors     configStringList `yaml:"reflectors"`
 
 	ReflectorInterval   string `yaml:"reflector_interval"`
+	ReflectorTimeout    string `yaml:"reflector_timeout"`
 	EndpointTTL         string `yaml:"endpoint_ttl"`
 	EndpointGrace       string `yaml:"endpoint_grace"`
 	EndpointGracePeriod string `yaml:"endpoint_grace_period"`
+
+	FilterPrivateIPv4 bool `yaml:"filter_private_ipv4"`
 }
 
 type configStringList []string
@@ -103,6 +108,7 @@ func defaultAppConfig() *appConfig {
 		MaxSyncZones:      gossip.DefaultSyncLimits().MaxZones,
 		MaxSyncRecords:    gossip.DefaultSyncLimits().MaxRecords,
 		ReflectorInterval: 5 * time.Minute,
+		ReflectorTimeout:  3 * time.Second,
 		EndpointTTL:       time.Hour,
 		EndpointGrace:     gossip.DefaultEndpointGrace,
 	}
@@ -196,12 +202,20 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		config.Reflectors = append(config.Reflectors, file.Reflector)
 	}
 	config.Reflectors = append(config.Reflectors, file.Reflectors...)
+	config.Reflectors = gossip.ResolvePublicIPReflectors(config.Reflectors)
 	if file.ReflectorInterval != "" {
 		d, err := parseConfigDuration(file.ReflectorInterval, "reflector_interval")
 		if err != nil {
 			return err
 		}
 		config.ReflectorInterval = d
+	}
+	if file.ReflectorTimeout != "" {
+		d, err := parseConfigDuration(file.ReflectorTimeout, "reflector_timeout")
+		if err != nil {
+			return err
+		}
+		config.ReflectorTimeout = d
 	}
 	if file.EndpointTTL != "" {
 		d, err := parseConfigDuration(file.EndpointTTL, "endpoint_ttl")
@@ -217,6 +231,7 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.EndpointGrace = d
 	}
+	config.FilterPrivateIPv4 = file.FilterPrivateIPv4
 	return nil
 }
 
@@ -342,8 +357,10 @@ func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFil
 		AdvertiseAddrs:    config.AdvertiseAddrs,
 		Reflectors:        config.Reflectors,
 		ReflectorInterval: config.ReflectorInterval,
+		ReflectorTimeout:  config.ReflectorTimeout,
 		EndpointTTL:       config.EndpointTTL,
 		EndpointGrace:     config.EndpointGrace,
+		FilterPrivateIPv4: config.FilterPrivateIPv4,
 	}
 }
 
