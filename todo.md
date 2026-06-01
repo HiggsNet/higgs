@@ -164,6 +164,7 @@
   - [x] 增加本机网卡地址扫描器：枚举可用 interface addresses，过滤 loopback、down interface、link-local、docker/容器/临时地址等不可发布地址，按 IPv4/IPv6、private/public、interface priority 生成候选 endpoint
   - [x] 增加显式 `advertise_addr` / `advertise_addrs` 配置，用于覆盖自动探测结果；自动发现只能补充，不应覆盖管理员显式声明
   - [x] 增加 public IP reflector 支持框架：可配置多个 reflector 服务（当前 stub，返回错误信号）
+  - [ ] 实现 public IP reflector HTTP client：按配置顺序/超时查询多个服务，支持纯文本 IP 与常见 JSON 响应，校验 IPv4/IPv6 后生成 `SourceReflector` endpoint 候选
   - [x] 明确 reflector 结果只是本节点自发现输入：节点必须用自己的 Zone 私钥签名后写入 endpoint record，其他节点只信任 verified active state 中的 signed endpoint，不直接信任第三方 reflector
   - [x] 增加 reflector endpoint 定时刷新：配置 `reflector_interval` / `endpoint_ttl`，周期发布 endpoint record；IP 或端口变化时生成新的 signed endpoint record 版本并触发 outbound sync
   - [x] 处理 endpoint 变更窗口：新 endpoint 发布后保留旧 endpoint grace period，远端根据 ttl/last_observed/连接成功情况逐步淘汰旧地址，避免公网 IP 切换时短暂失联
@@ -186,17 +187,17 @@
   - [x] 从普通同步主路径移除 pending 补前驱机制；最终一致性依赖 digest + snapshot + 更高版本 signed record
   - [x] 保留 `FETCH_RECORD` wire message 作为兼容和手工按需取单条历史 record 的能力
 
-- [ ] **2.9 测试补强**
-  - [ ] 为 `sync status --verbose`、`debug peer`、`debug zone` 增加 CLI golden/output 测试
-  - [ ] 增加 gossip 故障注入测试：unknown peer、addr mismatch、message too large、replay、quota、unsupported wire version
-  - [ ] 增加 verify failure 测试：错误 root key、篡改 delegation、篡改 record signature、过期 authority key
-  - [ ] 增加 latest-record 边界测试：跳版本 fast-forward、同版本冲突、直接前驱 PrevHash mismatch、历史窗口裁剪、重启恢复
-  - [ ] 增加 snapshot limit 测试：zone count、record count、message bytes 达到边界时的 accept/reject 行为
-  - [ ] 增加 sync run 自动重连集成测试：peer 停止、恢复、backoff、最终收敛
-  - [ ] 增加 relay fanout 集成测试：链式拓扑、去重、节流、最终收敛时间边界
-  - [ ] 增加 peer discovery 集成测试：endpoint record 发布、更新、撤销后 known peer table 收敛
-  - [ ] 将需要 UDP 的测试与纯逻辑测试分层，确保受限环境仍能跑完非网络测试
-  - [ ] 为 smoke 目标输出失败时的关键日志，减少 CI/本机排障成本
+- [x] **2.9 测试补强**
+  - [x] 为 `sync status --verbose`、`debug peer`、`debug zone` 增加 CLI golden/output 测试
+  - [x] 增加 gossip 故障注入测试：unknown peer、message too large、replay、quota、unsupported wire version；addr mismatch 保留 reject reason 映射（接收路径已不做地址绑定）
+  - [x] 增加 verify failure 测试：错误 root key、篡改 delegation、篡改 record signature、过期 authority key
+  - [x] 增加 latest-record 边界测试：跳版本 fast-forward、同版本冲突、直接前驱 PrevHash mismatch、历史窗口裁剪、重启恢复
+  - [x] 增加 snapshot limit 测试：zone count、record count、message bytes 达到边界时的 accept/reject 行为
+  - [x] 增加 sync run 自动重连集成测试：`phase2-run-smoke` 覆盖 peer 停止/恢复/最终收敛；单测覆盖 backoff 后成功恢复
+  - [x] 增加 relay fanout 集成测试：`chain-relay-smoke` 覆盖链式拓扑最终收敛；单测覆盖去重/节流决策
+  - [x] 增加 peer discovery 集成测试：`discovery-smoke` 覆盖 endpoint record 发布；单测覆盖更新、撤销后 known peer table 收敛
+  - [x] 将需要 UDP 的测试与纯逻辑测试分层，确保受限环境仍能跑完非网络测试
+  - [x] 为 smoke 目标输出失败时的关键日志，减少 CI/本机排障成本
 
 - [x] **2.10 同步协议收敛**
   - [x] 明确 JSON wire format 的兼容边界和版本字段

@@ -85,7 +85,7 @@ phase1-smoke: build
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/b.log" 2>&1 & \
 	server_pid="$$!"; \
-	trap 'kill "$$server_pid" >/dev/null 2>&1 || true' EXIT; \
+	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	if ! kill -0 "$$server_pid" >/dev/null 2>&1; then cat "$$tmp/b.log"; exit 1; fi; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a >/dev/null; \
@@ -123,7 +123,7 @@ phase2-smoke: build
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a >/dev/null; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b >/dev/null; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/b.log" 2>&1 & server_pid="$$!"; \
-	trap 'kill "$$server_pid" >/dev/null 2>&1 || true' EXIT; \
+	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b >/dev/null; \
 	sleep 1; \
@@ -174,7 +174,7 @@ phase2-run-smoke: build
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a >/dev/null; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	b_pid=""; \
-	trap 'kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$?" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" 2>/dev/null || true; fi' EXIT; \
+	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/b-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 2; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q '"identity"'; then break; fi; sleep 1; done; \
@@ -209,7 +209,7 @@ multi-node-smoke: build
 	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b >/dev/null; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
-	trap 'kill "$$server_pid" >/dev/null 2>&1 || true' EXIT; \
+	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/a-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
 	sleep 1; \
@@ -292,7 +292,7 @@ discovery-smoke: build
 	sleep 2; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 2 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 2 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
-	trap 'kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true' EXIT; \
+	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
 		if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-c.catofes. 2>/dev/null | grep -q '"identity"'; then break; fi; \
 		sleep 1; \
@@ -336,7 +336,7 @@ bootstrap-join-smoke: build
 	sleep 1; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/node-b.log" 2>&1 & b_pid="$$!"; \
-	trap 'kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true' EXIT; \
+	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/node-a.log" "$$tmp/node-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	for i in 1 2 3 4 5 6 7 8; do \
 		if HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'sync/endpoint/udp'; then break; fi; \
 		sleep 1; \

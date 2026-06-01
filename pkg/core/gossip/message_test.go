@@ -3,6 +3,7 @@ package gossip
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -214,17 +215,55 @@ func TestApplySnapshotRejectsRecordLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	target := cloneNetworkState(source)
-	target.Zones["catofes."].Records = make(map[string]*zone.Record)
+	target := emptySnapshotTarget(source)
 	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: DefaultMaxMessage}); err != nil {
 		t.Fatalf("ApplySnapshot without record limit: %v", err)
 	}
+	target = emptySnapshotTarget(source)
+	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 2, MaxBytes: DefaultMaxMessage}); err != nil {
+		t.Fatalf("ApplySnapshot at record limit: %v", err)
+	}
+	target = emptySnapshotTarget(source)
 	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: 1}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
 		t.Fatalf("ApplySnapshot byte limit = %v, want ErrZoneSnapshotTooLarge", err)
 	}
+	target = emptySnapshotTarget(source)
 	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: DefaultMaxMessage}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
 		t.Fatalf("ApplySnapshot record limit = %v, want ErrZoneSnapshotTooLarge", err)
 	}
+}
+
+func TestApplySnapshotAcceptsAndRejectsByteBoundary(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePriv := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	if err := source.PutAt(signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix()), now); err != nil {
+		t.Fatalf("PutAt(identity): %v", err)
+	}
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("Marshal(snapshot): %v", err)
+	}
+
+	target := emptySnapshotTarget(source)
+	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: len(data)}); err != nil {
+		t.Fatalf("ApplySnapshot at byte limit: %v", err)
+	}
+	target = emptySnapshotTarget(source)
+	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: len(data) - 1}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
+		t.Fatalf("ApplySnapshot below byte limit = %v, want ErrZoneSnapshotTooLarge", err)
+	}
+}
+
+func emptySnapshotTarget(source *zone.NetworkState) *zone.NetworkState {
+	target := cloneNetworkState(source)
+	target.Zones["catofes."].Records = make(map[string]*zone.Record)
+	target.Zones["catofes."].RecordHistory = make(map[string][]*zone.Record)
+	return target
 }
 
 func testNetwork(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey) {

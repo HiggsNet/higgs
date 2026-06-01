@@ -534,6 +534,7 @@ func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config
 	discovered := gossip.ExtractPeerEndpointsAt(state.Network, now)
 	bootstrapPeers := configuredKnownPeers(config)
 	updated := false
+	activeDiscovered := make(map[string]bool)
 	for peerID, entries := range discovered {
 		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
 			continue
@@ -556,12 +557,32 @@ func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config
 		if len(addrs) == 0 {
 			continue
 		}
+		activeDiscovered[peerID] = true
 		transport.SetPeerAddrs(peerID, addrs)
 		normalizeSyncPeers(state)
 		ps := state.SyncPeers[peerID]
 		ps.DiscoveredAddr = addrs[0].String()
 		ps.DiscoveredAtUnix = now.Unix()
 		state.SyncPeers[peerID] = ps
+		updated = true
+	}
+	for peerID, peerState := range state.SyncPeers {
+		if peerState.DiscoveredAddr == "" || activeDiscovered[peerID] || isBootstrapPeer(config, peerID) {
+			continue
+		}
+		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
+			continue
+		}
+		if len(discovered[peerID]) > 0 {
+			continue
+		}
+		if len(appendRecentSuccessfulDiscoveredAddr(nil, peerState, config.EndpointGrace, now)) > 0 {
+			continue
+		}
+		transport.RemovePeerAddrs(peerID)
+		peerState.DiscoveredAddr = ""
+		peerState.DiscoveredAtUnix = 0
+		state.SyncPeers[peerID] = peerState
 		updated = true
 	}
 	if updated {

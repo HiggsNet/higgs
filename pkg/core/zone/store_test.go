@@ -121,6 +121,31 @@ func TestNetworkStatePutRejectsDirectNextPrevHashConflict(t *testing.T) {
 	}
 }
 
+func TestNetworkStatePutRejectsSameVersionConflict(t *testing.T) {
+	ns := NewNetworkState()
+	ns.ConfigureRecordValidation(
+		func(record *Record, authority *ZoneAuthority, now time.Time) error { return nil },
+		func(record *Record) []byte { return record.Value },
+	)
+	ns.Zones["node1.catofes."] = NewZoneState("node1.catofes.", &ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+	})
+
+	first := &Record{Zone: "node1.catofes.", Key: "identity", Value: []byte("node-a"), Version: 1}
+	if err := ns.PutAt(first, time.Unix(123, 0)); err != nil {
+		t.Fatalf("PutAt(first): %v", err)
+	}
+	conflict := &Record{Zone: "node1.catofes.", Key: "identity", Value: []byte("node-b"), Version: 1}
+	if err := ns.PutAt(conflict, time.Unix(123, 0)); !errors.Is(err, ErrRecordConflict) {
+		t.Fatalf("PutAt(conflict) = %v, want ErrRecordConflict", err)
+	}
+	if got := ns.Zones["node1.catofes."].Records["identity"]; got != first {
+		t.Fatalf("active record changed to %#v, want first record", got)
+	}
+}
+
 func TestNetworkStatePutBoundsRecordHistory(t *testing.T) {
 	ns := NewNetworkState()
 	ns.ConfigureRecordValidation(

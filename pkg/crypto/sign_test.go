@@ -50,6 +50,74 @@ func TestSignAndVerifyRecord(t *testing.T) {
 	}
 }
 
+func TestVerifyRecordRejectsTamperedSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	authority := &zone.ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+	record := &zone.Record{
+		Zone:      "node1.catofes.",
+		Key:       "identity",
+		Type:      "node.identity",
+		Value:     []byte("node1"),
+		Version:   1,
+		Timestamp: 123,
+	}
+	if err := SignRecord(record, priv); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+
+	record.Signature[0] ^= 0xff
+	if err := VerifyRecord(record, authority, time.Unix(123, 0)); err == nil {
+		t.Fatalf("VerifyRecord accepted tampered signature")
+	}
+}
+
+func TestVerifyRecordRejectsExpiredAuthorityKey(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	record := &zone.Record{
+		Zone:      "node1.catofes.",
+		Key:       "identity",
+		Type:      "node.identity",
+		Value:     []byte("node1"),
+		Version:   1,
+		Timestamp: 123,
+	}
+	if err := SignRecord(record, priv); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+
+	err = VerifyRecord(record, &zone.ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key:      pub,
+			NotAfter: 122,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}, time.Unix(123, 0))
+	if err == nil {
+		t.Fatalf("VerifyRecord accepted expired authority key")
+	}
+}
+
 func TestVerifyRecordRejectsUnsupportedThreshold(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -127,6 +195,51 @@ func TestSignAndVerifyDelegation(t *testing.T) {
 	}
 	if err := VerifyDelegation(delegation, parentAuthority, "catofes.", time.Unix(123, 0)); err != nil {
 		t.Fatalf("VerifyDelegation: %v", err)
+	}
+}
+
+func TestVerifyDelegationRejectsTamperedAuthority(t *testing.T) {
+	parentPub, parentPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(parent): %v", err)
+	}
+	childPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(child): %v", err)
+	}
+	parentAuthority := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: parentPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate},
+			}},
+		}},
+	}
+	delegation := &zone.Delegation{
+		ZoneName: "node1.catofes.",
+		Scope:    zone.DelegationScopeDirectChild,
+		Authority: zone.ZoneAuthority{
+			Zone:      "node1.catofes.",
+			Epoch:     1,
+			Threshold: 1,
+			Keys: []zone.AuthorizedKey{{
+				Key: childPub,
+				Capabilities: []zone.Capability{{
+					Permissions: []zone.Permission{zone.PermWrite},
+				}},
+			}},
+		},
+	}
+	if err := SignDelegation(delegation, "catofes.", parentPriv); err != nil {
+		t.Fatalf("SignDelegation: %v", err)
+	}
+
+	delegation.Authority.Keys[0].Capabilities[0].Permissions = []zone.Permission{zone.PermDelegate}
+	if err := VerifyDelegation(delegation, parentAuthority, "catofes.", time.Unix(123, 0)); err == nil {
+		t.Fatalf("VerifyDelegation accepted tampered authority")
 	}
 }
 
@@ -224,5 +337,60 @@ func TestVerifyChain(t *testing.T) {
 
 	if err := VerifyChain(ns, "catofes.", time.Unix(123, 0)); err != nil {
 		t.Fatalf("VerifyChain: %v", err)
+	}
+}
+
+func TestVerifyChainRejectsWrongRootKey(t *testing.T) {
+	_, rootPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root signer): %v", err)
+	}
+	wrongRootPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(wrong root): %v", err)
+	}
+	childPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(child): %v", err)
+	}
+
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: wrongRootPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate},
+			}},
+		}},
+	}
+	childAuthority := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: childPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+	delegation := &zone.Delegation{
+		ZoneName:  "catofes.",
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *childAuthority,
+	}
+	if err := SignDelegation(delegation, zone.RootZone, rootPriv); err != nil {
+		t.Fatalf("SignDelegation: %v", err)
+	}
+
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	ns.Zones["catofes."] = zone.NewZoneState("catofes.", childAuthority)
+	ns.Zones[zone.RootZone].Delegations["catofes."] = delegation
+
+	if err := VerifyChain(ns, "catofes.", time.Unix(123, 0)); err == nil {
+		t.Fatalf("VerifyChain accepted delegation signed by an untrusted root key")
 	}
 }

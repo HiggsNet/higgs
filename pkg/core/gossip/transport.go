@@ -422,6 +422,14 @@ func (t *Transport) SetPeerAddrs(peerID string, addrs []*net.UDPAddr) {
 	t.outboundMu.Unlock()
 }
 
+// RemovePeerAddrs removes outbound addresses for a peer while leaving the
+// inbound allowlist intact.
+func (t *Transport) RemovePeerAddrs(peerID string) {
+	t.outboundMu.Lock()
+	delete(t.outboundAddrs, peerID)
+	t.outboundMu.Unlock()
+}
+
 func (t *Transport) RemovePeer(peerID string) {
 	t.knownMu.Lock()
 	delete(t.knownPeers, peerID)
