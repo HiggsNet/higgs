@@ -13,11 +13,25 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string) 
 	if err != nil {
 		return err
 	}
-	configureValidation(state.Network)
+	record, err := buildSignedRecord(state, path, key, value, recordType)
+	if err != nil {
+		return err
+	}
+	if err := state.Network.Put(record); err != nil {
+		return err
+	}
+	if err := saveState(state); err != nil {
+		return err
+	}
+	fmt.Printf("put %s/%s version %d\n", path, key, record.Version)
+	return nil
+}
 
+func buildSignedRecord(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string) (*zone.Record, error) {
+	configureValidation(state.Network)
 	zs := state.Network.Zones[path]
 	if zs == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
 	current := zs.Records[key]
 	record := &zone.Record{
@@ -33,14 +47,7 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string) 
 		record.PrevHash = higgscrypto.RecordHash(current)
 	}
 	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
-		return err
+		return nil, err
 	}
-	if err := state.Network.Put(record); err != nil {
-		return err
-	}
-	if err := saveState(state); err != nil {
-		return err
-	}
-	fmt.Printf("put %s/%s version %d\n", path, key, record.Version)
-	return nil
+	return record, nil
 }

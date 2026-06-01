@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 )
@@ -32,6 +33,10 @@ type appConfig struct {
 	MaxSyncZones         int
 	MaxSyncRecords       int
 	LogLevel             string
+	AdvertiseAddrs       []string
+	Reflectors           []string
+	ReflectorInterval    time.Duration
+	EndpointTTL          time.Duration
 }
 
 func loadAppConfig() (*appConfig, error) {
@@ -53,11 +58,13 @@ func loadAppConfig() (*appConfig, error) {
 
 func defaultAppConfig() *appConfig {
 	return &appConfig{
-		DataDir:         ".",
-		ListenPort:      gossip.DefaultPort,
-		MaxMessageBytes: gossip.DefaultMaxMessage,
-		MaxSyncZones:    gossip.DefaultSyncLimits().MaxZones,
-		MaxSyncRecords:  gossip.DefaultSyncLimits().MaxRecords,
+		DataDir:           ".",
+		ListenPort:        gossip.DefaultPort,
+		MaxMessageBytes:   gossip.DefaultMaxMessage,
+		MaxSyncZones:      gossip.DefaultSyncLimits().MaxZones,
+		MaxSyncRecords:    gossip.DefaultSyncLimits().MaxRecords,
+		ReflectorInterval: 5 * time.Minute,
+		EndpointTTL:       time.Hour,
 	}
 }
 
@@ -227,6 +234,28 @@ func applyConfigValue(config *appConfig, key, value string) error {
 		config.MaxSyncRecords = limit
 	case "log_level":
 		config.LogLevel = strings.ToLower(value)
+	case "advertise_addr":
+		config.AdvertiseAddrs = append(config.AdvertiseAddrs, value)
+	case "advertise_addrs":
+		for _, v := range strings.Split(value, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				config.AdvertiseAddrs = append(config.AdvertiseAddrs, v)
+			}
+		}
+	case "reflector":
+		config.Reflectors = append(config.Reflectors, value)
+	case "reflector_interval":
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid reflector_interval: %q", value)
+		}
+		config.ReflectorInterval = d
+	case "endpoint_ttl":
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid endpoint_ttl: %q", value)
+		}
+		config.EndpointTTL = d
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
@@ -304,13 +333,17 @@ func configuredSyncConfig(state *stateFile) (*syncConfigFile, error) {
 		peerID = defaultPeerID(state)
 	}
 	return &syncConfigFile{
-		PeerID:          peerID,
-		ListenAddr:      config.ListenAddr,
-		Bootstrap:       config.Bootstrap,
-		MaxMessageBytes: config.MaxMessageBytes,
-		MaxSyncZones:    config.MaxSyncZones,
-		MaxSyncRecords:  config.MaxSyncRecords,
-		LogLevel:        config.LogLevel,
+		PeerID:            peerID,
+		ListenAddr:        config.ListenAddr,
+		Bootstrap:         config.Bootstrap,
+		MaxMessageBytes:   config.MaxMessageBytes,
+		MaxSyncZones:      config.MaxSyncZones,
+		MaxSyncRecords:    config.MaxSyncRecords,
+		LogLevel:          config.LogLevel,
+		AdvertiseAddrs:    config.AdvertiseAddrs,
+		Reflectors:        config.Reflectors,
+		ReflectorInterval: config.ReflectorInterval,
+		EndpointTTL:       config.EndpointTTL,
 	}, nil
 }
 

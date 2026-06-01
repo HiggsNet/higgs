@@ -317,7 +317,7 @@ func TestTransportSendReceiveKnownPeer(t *testing.T) {
 	}
 	defer b.Close()
 
-	a.knownPeers["node-b"] = b.LocalAddr()
+	a.AddPeer("node-b", b.LocalAddr())
 	if err := a.Send("node-b", &Message{
 		Type: MessagePing,
 		Ping: &Ping{},
@@ -357,7 +357,7 @@ func TestTransportRejectsUnknownPeer(t *testing.T) {
 	}
 	defer b.Close()
 
-	a.knownPeers["node-b"] = b.LocalAddr()
+	a.AddPeer("node-b", b.LocalAddr())
 	if err := a.Send("node-b", &Message{
 		Type: MessagePing,
 		Ping: &Ping{},

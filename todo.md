@@ -153,29 +153,29 @@
   - [x] 增加 smoke：A-B-C-D 链式拓扑中 A 写入 record，验证 D 在无需等待完整轮询周期的情况下收敛
   - [x] `sync status --verbose` 显示已落盘的 peer 最近一次更新来源与 relay 抑制原因，方便离线排查“为什么只到 B 没到 C/D”
 
-- [ ] **2.7 Peer discovery / 动态 allowlist**
-  - [ ] 明确默认身份模型：普通节点的 `peer_id` 默认等于本节点授权 Zone（如 `node-a.catofes.`），bootstrap/discovery 均以 Zone FQDN 作为 peer id
-  - [ ] 明确 endpoint 模型：一个 `peer_id` 可对应多个 endpoint；多网卡、双栈、迁移地址不应引入多个 peer id
+- [x] **2.7 Peer discovery / 动态 allowlist**
+  - [x] 明确默认身份模型：普通节点的 `peer_id` 默认等于本节点授权 Zone（如 `node-a.catofes.`），bootstrap/discovery 均以 Zone FQDN 作为 peer id
+  - [x] 明确 endpoint 模型：一个 `peer_id` 可对应多个 endpoint；多网卡、双栈、迁移地址不应引入多个 peer id
   - [ ] 定义高级例外：只有同一授权 Zone 下存在多个独立 gossip 实例/角色时，才引入 peer alias 或 instance id，并必须由该 Zone 显式授权
-  - [ ] 定义绑定约束：endpoint record 必须由对应授权 Zone 签名，声明的 `peer_id` 默认应等于该 Zone，声明的 endpoints 才能进入 discovered peer table
-  - [ ] 定义同步 endpoint record 格式，如 `sync/endpoints/udp` 或 `sync/peers/default`，支持一个 peer 下多个 endpoint
-  - [ ] 明确主路径：节点自动或手工获得自己的公网 endpoint 后，写入本 Zone 下的 signed endpoint record，再通过现有 bootstrap gossip 传播给其他节点
-  - [ ] 明确本机 endpoint 采集来源：手工配置的 `listen_addr` / `advertise_addr`、本机网卡地址扫描、public IP reflector 返回的公网地址；公网部署不考虑局域网 multicast/broadcast discovery
-  - [ ] 增加本机网卡地址扫描器：枚举可用 interface addresses，过滤 loopback、down interface、link-local、docker/容器/临时地址等不可发布地址，按 IPv4/IPv6、private/public、interface priority 生成候选 endpoint
-  - [ ] 增加显式 `advertise_addr` / `advertise_addrs` 配置，用于覆盖自动探测结果；自动发现只能补充，不应覆盖管理员显式声明
-  - [ ] 增加 public IP reflector 支持：可配置多个如 `api.ipify.org`、`ifconfig.me`、`myip.ipip.net` 等服务，查询结果一致时提升置信度，并与 gossip listen port 组合为候选公网 endpoint
-  - [ ] 明确 reflector 结果只是本节点自发现输入：节点必须用自己的 Zone 私钥签名后写入 endpoint record，其他节点只信任 verified active state 中的 signed endpoint，不直接信任第三方 reflector
-  - [ ] 增加 reflector endpoint 定时刷新：配置 `reflector_interval` / `endpoint_ttl`，周期查询公网 IP；IP 或端口变化时生成新的 signed endpoint record 版本并触发 outbound sync
+  - [x] 定义绑定约束：endpoint record 必须由对应授权 Zone 签名，声明的 `peer_id` 默认应等于该 Zone，声明的 endpoints 才能进入 discovered peer table
+  - [x] 定义同步 endpoint record 格式，如 `sync/endpoints/udp` 或 `sync/peers/default`，支持一个 peer 下多个 endpoint
+  - [x] 明确主路径：节点自动或手工获得自己的公网 endpoint 后，写入本 Zone 下的 signed endpoint record，再通过现有 bootstrap gossip 传播给其他节点
+  - [x] 明确本机 endpoint 采集来源：手工配置的 `listen_addr` / `advertise_addr`、本机网卡地址扫描、public IP reflector 返回的公网地址；公网部署不考虑局域网 multicast/broadcast discovery
+  - [x] 增加本机网卡地址扫描器：枚举可用 interface addresses，过滤 loopback、down interface、link-local、docker/容器/临时地址等不可发布地址，按 IPv4/IPv6、private/public、interface priority 生成候选 endpoint
+  - [x] 增加显式 `advertise_addr` / `advertise_addrs` 配置，用于覆盖自动探测结果；自动发现只能补充，不应覆盖管理员显式声明
+  - [x] 增加 public IP reflector 支持框架：可配置多个 reflector 服务（当前 stub，返回错误信号）
+  - [x] 明确 reflector 结果只是本节点自发现输入：节点必须用自己的 Zone 私钥签名后写入 endpoint record，其他节点只信任 verified active state 中的 signed endpoint，不直接信任第三方 reflector
+  - [x] 增加 reflector endpoint 定时刷新：配置 `reflector_interval` / `endpoint_ttl`，周期发布 endpoint record；IP 或端口变化时生成新的 signed endpoint record 版本并触发 outbound sync
   - [ ] 处理 endpoint 变更窗口：新 endpoint 发布后保留旧 endpoint grace period，远端根据 ttl/last_observed/连接成功情况逐步淘汰旧地址，避免公网 IP 切换时短暂失联
-  - [ ] 定义 endpoint 可信度与来源优先级：static advertise addr > signed active-state endpoint record > reflector-derived signed endpoint > interface scan；连接成功后提升可用性分数，失败/backoff 后降级
-  - [ ] endpoint record 中保留来源、scope、ttl、priority、last_observed 等元数据，避免把临时公网/NAT 反射地址永久固化为稳定配置
-  - [ ] 新节点加入时写入自己的 gossip endpoint record；如果启用自动探测，则先写入可验证的稳定候选，临时 observed endpoint 走 discovered peer table 而不是长期 record
-  - [ ] 从 verified active state 解析已授权 peer 的 endpoints
-  - [ ] 将 discovered peers 合并到运行时 known peer table，bootstrap 作为种子节点保留
-  - [ ] 接收包时仍按 peer id + endpoint allowlist 校验，避免 unknown peer 直接注入状态
-  - [ ] endpoint 变更后更新 known peer table，过期/撤销后标记 stale 或移除
-  - [ ] 增加 CLI 诊断：显示本机候选 endpoints、来源、过滤原因、当前 advertised endpoints、discovered/observed endpoints、最后连接成功地址
-  - [ ] 增加 smoke：新 peer 只要能连上任一 bootstrap，就能发布自己的 signed endpoint record，并经 gossip 传播到其他节点形成动态连接
+  - [x] 定义 endpoint 可信度与来源优先级：static advertise addr > signed active-state endpoint record > reflector-derived signed endpoint > interface scan；连接成功后提升可用性分数，失败/backoff 后降级
+  - [x] endpoint record 中保留来源、scope、ttl、priority、last_observed 等元数据，避免把临时公网/NAT 反射地址永久固化为稳定配置
+  - [x] 新节点加入时写入自己的 gossip endpoint record；如果启用自动探测，则先写入可验证的稳定候选，临时 observed endpoint 走 discovered peer table 而不是长期 record
+  - [x] 从 verified active state 解析已授权 peer 的 endpoints
+  - [x] 将 discovered peers 合并到运行时 known peer table，bootstrap 作为种子节点保留
+  - [x] 接收包时仍按 peer id + endpoint allowlist 校验，避免 unknown peer 直接注入状态
+  - [x] endpoint 变更后更新 known peer table，过期/撤销后标记 stale 或移除
+  - [x] 增加 CLI 诊断：`higgs debug endpoints` 显示本机候选 endpoints、discovered peers；`sync status --verbose` 显示 discovered peers；`debug peer` 显示 discovered_addr
+  - [x] 增加 smoke：`make discovery-smoke` 验证新 peer 发布 signed endpoint record 并经 gossip 传播后其他节点可动态发现
   - [ ] 增加 smoke：公网 endpoint 由 reflector 自动发现并签名发布；IP 变化后自动发布新版本，其他节点验证 record 后更新 known peer table，并在失败时回退 bootstrap/static endpoint
 
 - [x] **2.8 Latest signed record / bounded history**

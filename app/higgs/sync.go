@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,11 +40,18 @@ func syncStatus(verbose bool) error {
 		config.MaxSyncRecords,
 		gossip.WireVersion,
 	)
+	discovered := gossip.ExtractPeerEndpoints(state.Network)
 	if verbose {
 		known := configuredKnownPeers(config)
-		fmt.Printf("allowlist_source: bootstrap\n")
+		fmt.Printf("allowlist_source: bootstrap+discovery\n")
 		fmt.Printf("bootstrap_peers: %d\n", len(config.Bootstrap))
-		fmt.Printf("discovered_peers: 0\n")
+		var discoveredCount int
+		for peerID := range discovered {
+			if !isBootstrapPeer(config, peerID) {
+				discoveredCount++
+			}
+		}
+		fmt.Printf("discovered_peers: %d\n", discoveredCount)
 		for _, peer := range config.Bootstrap {
 			resolved := "-"
 			if addr := known[peer.ID]; addr != nil {
@@ -63,6 +71,22 @@ func syncStatus(verbose bool) error {
 				dash(peerState.LastUpdateSource),
 				formatUnixTime(peerState.LastRelayUnix),
 				formatRelaySuppression(peerState),
+			)
+		}
+		for peerID, entries := range discovered {
+			if isBootstrapPeer(config, peerID) {
+				continue
+			}
+			peerState := state.SyncPeers[peerID]
+			addr := "-"
+			if len(entries) > 0 {
+				addr = fmt.Sprintf("%s:%d", entries[0].Address, entries[0].Port)
+			}
+			fmt.Printf("discovered peer=%s addr=%s status=%s last_success=%s\n",
+				peerID,
+				addr,
+				peerStatus(peerState, time.Now()),
+				formatLastSuccess(peerState),
 			)
 		}
 	}
@@ -109,7 +133,7 @@ func syncServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	transport, err := openSyncTransport(config)
+	transport, err := openSyncTransport(config, state)
 	if err != nil {
 		return err
 	}
@@ -146,7 +170,7 @@ func syncOnce(peerID string) error {
 	if err != nil {
 		return err
 	}
-	transport, err := openSyncTransport(config)
+	transport, err := openSyncTransport(config, state)
 	if err != nil {
 		return err
 	}
@@ -166,7 +190,7 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 	if err != nil {
 		return err
 	}
-	transport, err := openSyncTransport(config)
+	transport, err := openSyncTransport(config, state)
 	if err != nil {
 		return err
 	}
@@ -174,7 +198,9 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 	fmt.Printf("sync running as %s on %s interval=%s\n", config.PeerID, transport.LocalAddr(), interval)
 
 	nextSync := time.Now()
+	nextEndpointPublish := time.Now()
 	lastObservedDigests := gossip.ZoneDigests(state.Network)
+	updateDiscoveredPeers(state, transport, config)
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -186,6 +212,25 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 			state = latest
 			lastObservedDigests = gossip.ZoneDigests(state.Network)
 			nextSync = now
+			updateDiscoveredPeers(state, transport, config)
+		}
+		if !now.Before(nextEndpointPublish) {
+			if latest, err := loadState(); err == nil {
+				state = latest
+				if err := publishEndpointRecord(state, config); err != nil {
+					fmt.Fprintf(os.Stderr, "endpoint publish error: %v\n", err)
+				} else {
+					lastObservedDigests = gossip.ZoneDigests(state.Network)
+					nextSync = now
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
+			}
+			interval := config.ReflectorInterval
+			if interval <= 0 {
+				interval = 5 * time.Minute
+			}
+			nextEndpointPublish = now.Add(interval)
 		}
 		if !now.Before(nextSync) {
 			if latest, err := loadState(); err == nil {
@@ -194,17 +239,20 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 			} else {
 				fmt.Fprintf(os.Stderr, "sync reload error: %v\n", err)
 			}
-			for _, peer := range config.Bootstrap {
-				if peer.ID == "" {
+			updateDiscoveredPeers(state, transport, config)
+			digestsBeforeRound := gossip.ZoneDigests(state.Network)
+			for _, peerID := range outboundSyncPeers(state, config) {
+				if backoffRemaining(state.SyncPeers[peerID], now) > 0 {
 					continue
 				}
-				if backoffRemaining(state.SyncPeers[peer.ID], now) > 0 {
-					continue
-				}
-				err := syncRoundWithTransport(ctx, state, transport, peer.ID, 3*time.Second)
+				err := syncRoundWithTransport(ctx, state, transport, peerID, 3*time.Second)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "sync round error peer=%s: %v\n", peer.ID, err)
+					fmt.Fprintf(os.Stderr, "sync round error peer=%s: %v\n", peerID, err)
 				}
+			}
+			if syncStateChanged(state, digestsBeforeRound) {
+				updateDiscoveredPeers(state, transport, config)
+				lastObservedDigests = gossip.ZoneDigests(state.Network)
 			}
 			nextSync = now.Add(interval)
 		}
@@ -227,6 +275,7 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 		if packet.Message.Announce != nil && syncStateChanged(state, digestsBefore) {
 			recordUpdateSource(state, packet.Message.PeerID)
 			lastObservedDigests = gossip.ZoneDigests(state.Network)
+			updateDiscoveredPeers(state, transport, config)
 			if err := relaySync(ctx, state, transport, packet.Message.PeerID); err != nil {
 				fmt.Fprintf(os.Stderr, "sync relay error source=%s: %v\n", packet.Message.PeerID, err)
 			}
@@ -268,18 +317,21 @@ func relaySync(ctx context.Context, state *stateFile, transport *gossip.Transpor
 	}
 	now := time.Now()
 	updatedPeerState := false
-	for _, peer := range config.Bootstrap {
-		allowed, reason := shouldRelayToPeer(state.SyncPeers[peer.ID], peer.ID, sourcePeerID, now)
+	for _, peerID := range outboundSyncPeers(state, config) {
+		if peerID == sourcePeerID {
+			continue
+		}
+		allowed, reason := shouldRelayToPeer(state.SyncPeers[peerID], peerID, sourcePeerID, now)
 		if !allowed {
-			recordRelaySuppression(state, peer.ID, reason, now)
+			recordRelaySuppression(state, peerID, reason, now)
 			updatedPeerState = true
 			continue
 		}
-		if err := syncRoundWithTransport(ctx, state, transport, peer.ID, 3*time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "sync relay round error peer=%s: %v\n", peer.ID, err)
+		if err := syncRoundWithTransport(ctx, state, transport, peerID, 3*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "sync relay round error peer=%s: %v\n", peerID, err)
 			continue
 		}
-		recordRelaySuccess(state, peer.ID, sourcePeerID, now)
+		recordRelaySuccess(state, peerID, sourcePeerID, now)
 		updatedPeerState = true
 	}
 	if updatedPeerState {
@@ -337,16 +389,144 @@ func recordRelaySuppression(state *stateFile, peerID, reason string, now time.Ti
 	state.SyncPeers[peerID] = peerState
 }
 
-func openSyncTransport(config *syncConfigFile) (*gossip.Transport, error) {
-	return gossip.Listen(gossip.Config{
+func openSyncTransport(config *syncConfigFile, state *stateFile) (*gossip.Transport, error) {
+	bootstrapPeers := configuredKnownPeers(config)
+	transport, err := gossip.Listen(gossip.Config{
 		PeerID:          config.PeerID,
 		ListenAddr:      config.ListenAddr,
-		KnownPeers:      configuredKnownPeers(config),
+		KnownPeers:      bootstrapPeers,
 		MaxMessageBytes: config.MaxMessageBytes,
 		Replay:          gossip.NewReplayWindow(0),
 		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 		Log:             syncDebugLogger(config),
 	})
+	if err != nil {
+		return nil, err
+	}
+	if state != nil {
+		for peerID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
+			if peerID == config.PeerID || peerID == string(state.ManagedZone) {
+				continue
+			}
+			if _, ok := bootstrapPeers[peerID]; ok {
+				continue
+			}
+			var addrs []*net.UDPAddr
+			for _, entry := range entries {
+				addr, err := entry.UDPAddr()
+				if err != nil {
+					continue
+				}
+				addrs = append(addrs, addr)
+			}
+			if len(addrs) > 0 {
+				transport.SetPeerAddrs(peerID, addrs)
+			}
+		}
+	}
+	return transport, nil
+}
+
+func outboundSyncPeers(state *stateFile, config *syncConfigFile) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, peer := range config.Bootstrap {
+		if peer.ID == "" || seen[peer.ID] {
+			continue
+		}
+		seen[peer.ID] = true
+		out = append(out, peer.ID)
+	}
+	for peerID := range gossip.ExtractPeerEndpoints(state.Network) {
+		if peerID == config.PeerID || peerID == string(state.ManagedZone) || seen[peerID] {
+			continue
+		}
+		seen[peerID] = true
+		out = append(out, peerID)
+	}
+	return out
+}
+
+func isBootstrapPeer(config *syncConfigFile, peerID string) bool {
+	for _, peer := range config.Bootstrap {
+		if peer.ID == peerID {
+			return true
+		}
+	}
+	return false
+}
+
+func listenPortFromAddr(addr string) uint16 {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return uint16(gossip.DefaultPort)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return uint16(gossip.DefaultPort)
+	}
+	return uint16(port)
+}
+
+func publishEndpointRecord(state *stateFile, config *syncConfigFile) error {
+	port := listenPortFromAddr(config.ListenAddr)
+	endpoints := gossip.CollectLocalEndpoints(port, config.AdvertiseAddrs)
+	value := gossip.EndpointRecordBytes(endpoints, time.Now())
+
+	zs := state.Network.Zones[state.ManagedZone]
+	if zs != nil {
+		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
+			if bytes.Equal(existing.Value, value) {
+				return nil
+			}
+		}
+	}
+
+	record, err := buildSignedRecord(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint")
+	if err != nil {
+		return err
+	}
+	if err := state.Network.Put(record); err != nil {
+		return err
+	}
+	return saveState(state)
+}
+
+func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
+	discovered := gossip.ExtractPeerEndpoints(state.Network)
+	now := time.Now()
+	updated := false
+	for peerID, entries := range discovered {
+		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
+			continue
+		}
+		if len(entries) == 0 {
+			continue
+		}
+		var addrs []*net.UDPAddr
+		for _, entry := range entries {
+			addr, err := entry.UDPAddr()
+			if err != nil {
+				continue
+			}
+			addrs = append(addrs, addr)
+		}
+		if len(addrs) == 0 {
+			continue
+		}
+		transport.SetPeerAddrs(peerID, addrs)
+		normalizeSyncPeers(state)
+		ps := state.SyncPeers[peerID]
+		ps.DiscoveredAddr = addrs[0].String()
+		ps.DiscoveredAtUnix = now.Unix()
+		state.SyncPeers[peerID] = ps
+		updated = true
+	}
+	if updated {
+		if err := saveState(state); err != nil {
+			fmt.Fprintf(os.Stderr, "update discovered peers save error: %v\n", err)
+		}
+	}
 }
 
 func syncRoundWithTransport(ctx context.Context, state *stateFile, transport *gossip.Transport, peerID string, timeout time.Duration) (err error) {

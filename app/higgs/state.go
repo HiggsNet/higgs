@@ -39,16 +39,22 @@ type syncPeerState struct {
 	LastUpdateSource      string `json:"last_update_source,omitempty"`
 	LastRelaySuppression  string `json:"last_relay_suppression,omitempty"`
 	LastRelaySuppressedAt int64  `json:"last_relay_suppressed_at,omitempty"`
+	DiscoveredAddr        string `json:"discovered_addr,omitempty"`
+	DiscoveredAtUnix      int64  `json:"discovered_at_unix,omitempty"`
 }
 
 type syncConfigFile struct {
-	PeerID          string           `json:"peer_id"`
-	ListenAddr      string           `json:"listen_addr"`
-	Bootstrap       []syncConfigPeer `json:"bootstrap"`
-	MaxMessageBytes int              `json:"max_message_bytes"`
-	MaxSyncZones    int              `json:"max_sync_zones"`
-	MaxSyncRecords  int              `json:"max_sync_records"`
-	LogLevel        string           `json:"log_level,omitempty"`
+	PeerID            string           `json:"peer_id"`
+	ListenAddr        string           `json:"listen_addr"`
+	Bootstrap         []syncConfigPeer `json:"bootstrap"`
+	MaxMessageBytes   int              `json:"max_message_bytes"`
+	MaxSyncZones      int              `json:"max_sync_zones"`
+	MaxSyncRecords    int              `json:"max_sync_records"`
+	LogLevel          string           `json:"log_level,omitempty"`
+	AdvertiseAddrs    []string         `json:"advertise_addrs,omitempty"`
+	Reflectors        []string         `json:"reflectors,omitempty"`
+	ReflectorInterval time.Duration    `json:"reflector_interval,omitempty"`
+	EndpointTTL       time.Duration    `json:"endpoint_ttl,omitempty"`
 }
 
 type syncConfigPeer struct {
@@ -187,7 +193,13 @@ func normalizeSyncPeers(state *stateFile) {
 }
 
 func defaultPeerID(state *stateFile) string {
-	if state == nil || len(state.ZonePrivateKey) == 0 {
+	if state == nil {
+		return "local"
+	}
+	if state.ManagedZone != "" && state.ManagedZone != zone.RootZone {
+		return string(state.ManagedZone)
+	}
+	if len(state.ZonePrivateKey) == 0 {
 		return "local"
 	}
 	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)

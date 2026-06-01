@@ -293,6 +293,13 @@ func cmdDebug() *cli.Command {
 					return debugZone(zone.ZonePath(cmd.Args().First()))
 				},
 			},
+			{
+				Name:  "endpoints",
+				Usage: "Show local endpoint candidates and discovered peer endpoints",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugEndpoints()
+				},
+			},
 		},
 	}
 }

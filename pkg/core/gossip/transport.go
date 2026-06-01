@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,7 +34,10 @@ type Config struct {
 type Transport struct {
 	conn            *net.UDPConn
 	peerID          string
-	knownPeers      map[string]*net.UDPAddr
+	knownPeers      map[string]struct{} // inbound allowlist
+	knownMu         sync.RWMutex
+	outboundAddrs   map[string][]*net.UDPAddr // addresses used for Send
+	outboundMu      sync.RWMutex
 	maxMessageBytes int
 	replay          *ReplayWindow
 	quotas          *PeerQuotas
@@ -87,16 +92,19 @@ func Listen(config Config) (*Transport, error) {
 	if replay == nil {
 		replay = NewReplayWindow(0)
 	}
-	return &Transport{
+	t := &Transport{
 		conn:            conn,
 		peerID:          config.PeerID,
-		knownPeers:      copyPeers(config.KnownPeers),
 		maxMessageBytes: maxMessageBytes,
 		replay:          replay,
 		quotas:          config.Quotas,
 		clock:           clock,
 		log:             config.Log,
-	}, nil
+	}
+	if len(config.KnownPeers) > 0 {
+		t.SetPeers(config.KnownPeers)
+	}
+	return t, nil
 }
 
 func (t *Transport) Close() error {
@@ -128,12 +136,16 @@ func (t *Transport) Send(peerID string, message *Message) error {
 		event.Type = message.Type
 		event.Zones, event.Records = MessageObjectCounts(message)
 	}
-	addr := t.knownPeers[peerID]
-	if addr == nil {
+
+	t.outboundMu.RLock()
+	addrs := t.outboundAddrs[peerID]
+	t.outboundMu.RUnlock()
+
+	if len(addrs) == 0 {
 		t.logEvent(event, ErrUnknownPeer, start)
 		return ErrUnknownPeer
 	}
-	event.Addr = addr.String()
+
 	if message == nil {
 		err := errors.New("gossip message is nil")
 		t.logEvent(event, err, start)
@@ -167,9 +179,18 @@ func (t *Transport) Send(peerID string, message *Message) error {
 			return err
 		}
 	}
-	_, err = t.conn.WriteToUDP(data, addr)
-	t.logEvent(event, err, start)
-	return err
+
+	var lastErr error
+	for _, addr := range addrs {
+		event.Addr = addr.String()
+		_, lastErr = t.conn.WriteToUDP(data, addr)
+		if lastErr == nil {
+			t.logEvent(event, nil, start)
+			return nil
+		}
+	}
+	t.logEvent(event, lastErr, start)
+	return lastErr
 }
 
 func (t *Transport) Receive() (*Packet, error) {
@@ -193,7 +214,7 @@ func (t *Transport) Receive() (*Packet, error) {
 	event.PeerID = message.PeerID
 	event.Type = message.Type
 	event.Zones, event.Records = MessageObjectCounts(message)
-	if err := t.validatePeer(message.PeerID, addr); err != nil {
+	if err := t.validatePeer(message.PeerID); err != nil {
 		t.logEvent(event, err, start)
 		return nil, err
 	}
@@ -211,13 +232,14 @@ func (t *Transport) Receive() (*Packet, error) {
 	return &Packet{Message: message, Addr: addr, Bytes: n}, nil
 }
 
-func (t *Transport) validatePeer(peerID string, addr *net.UDPAddr) error {
-	known := t.knownPeers[peerID]
-	if known == nil {
+// validatePeer only checks whether the peer_id is known.
+// Address binding has been removed; identity is established by upper-layer
+// cryptographic verification (VerifyChain / VerifyRecord).
+func (t *Transport) validatePeer(peerID string) error {
+	t.knownMu.RLock()
+	defer t.knownMu.RUnlock()
+	if _, ok := t.knownPeers[peerID]; !ok {
 		return ErrUnknownPeer
-	}
-	if !known.IP.Equal(addr.IP) || known.Port != addr.Port {
-		return fmt.Errorf("%w: got %s want %s", ErrAddrMismatch, addr, known)
 	}
 	return nil
 }
@@ -305,15 +327,113 @@ func objectCost(message *Message) int64 {
 	}
 }
 
-func copyPeers(peers map[string]*net.UDPAddr) map[string]*net.UDPAddr {
-	out := make(map[string]*net.UDPAddr, len(peers))
+// PeerAddr returns the preferred (first) outbound address for a peer.
+func (t *Transport) PeerAddr(peerID string) *net.UDPAddr {
+	t.outboundMu.RLock()
+	defer t.outboundMu.RUnlock()
+	addrs := t.outboundAddrs[peerID]
+	if len(addrs) == 0 {
+		return nil
+	}
+	copied := *addrs[0]
+	return &copied
+}
+
+// AddPeer registers a peer in the inbound allowlist and adds an address
+// to its outbound address book. Duplicate addresses are ignored.
+func (t *Transport) AddPeer(peerID string, addr *net.UDPAddr) {
+	if addr == nil {
+		return
+	}
+	t.knownMu.Lock()
+	if t.knownPeers == nil {
+		t.knownPeers = make(map[string]struct{})
+	}
+	t.knownPeers[peerID] = struct{}{}
+	t.knownMu.Unlock()
+
+	t.outboundMu.Lock()
+	if t.outboundAddrs == nil {
+		t.outboundAddrs = make(map[string][]*net.UDPAddr)
+	}
+	for _, existing := range t.outboundAddrs[peerID] {
+		if existing.IP.Equal(addr.IP) && existing.Port == addr.Port {
+			t.outboundMu.Unlock()
+			return
+		}
+	}
+	copied := *addr
+	t.outboundAddrs[peerID] = append(t.outboundAddrs[peerID], &copied)
+	t.outboundMu.Unlock()
+}
+
+// SetPeerAddrs replaces the entire outbound address list for a peer.
+func (t *Transport) SetPeerAddrs(peerID string, addrs []*net.UDPAddr) {
+	if len(addrs) == 0 {
+		return
+	}
+	t.knownMu.Lock()
+	if t.knownPeers == nil {
+		t.knownPeers = make(map[string]struct{})
+	}
+	t.knownPeers[peerID] = struct{}{}
+	t.knownMu.Unlock()
+
+	filtered := make([]*net.UDPAddr, 0, len(addrs))
+	for _, a := range addrs {
+		if a != nil {
+			copied := *a
+			filtered = append(filtered, &copied)
+		}
+	}
+	t.outboundMu.Lock()
+	if t.outboundAddrs == nil {
+		t.outboundAddrs = make(map[string][]*net.UDPAddr)
+	}
+	t.outboundAddrs[peerID] = filtered
+	t.outboundMu.Unlock()
+}
+
+func (t *Transport) RemovePeer(peerID string) {
+	t.knownMu.Lock()
+	delete(t.knownPeers, peerID)
+	t.knownMu.Unlock()
+
+	t.outboundMu.Lock()
+	delete(t.outboundAddrs, peerID)
+	t.outboundMu.Unlock()
+}
+
+// SetPeers initializes both the inbound allowlist and the outbound address
+// book from a single-address-per-peer map (used for bootstrap config).
+func (t *Transport) SetPeers(peers map[string]*net.UDPAddr) {
+	t.knownMu.Lock()
+	t.knownPeers = make(map[string]struct{}, len(peers))
+	for id := range peers {
+		t.knownPeers[id] = struct{}{}
+	}
+	t.knownMu.Unlock()
+
+	t.outboundMu.Lock()
+	t.outboundAddrs = make(map[string][]*net.UDPAddr, len(peers))
 	for id, addr := range peers {
 		if addr == nil {
 			continue
 		}
 		copied := *addr
-		out[id] = &copied
+		t.outboundAddrs[id] = []*net.UDPAddr{&copied}
 	}
+	t.outboundMu.Unlock()
+}
+
+func (t *Transport) KnownPeerIDs() []string {
+	t.knownMu.RLock()
+	defer t.knownMu.RUnlock()
+	out := make([]string, 0, len(t.knownPeers))
+	for id := range t.knownPeers {
+		out = append(out, id)
+	}
+	sort.Strings(out)
 	return out
 }
 

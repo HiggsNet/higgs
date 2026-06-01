@@ -70,6 +70,9 @@ func debugPeer(peerID string) error {
 	if addr := known[peerID]; addr != nil {
 		resolved = addr.String()
 	}
+	if peerState.DiscoveredAddr != "" {
+		resolved = peerState.DiscoveredAddr
+	}
 	fmt.Printf("peer_id: %s\n", peerID)
 	fmt.Printf("source: %s\n", source)
 	fmt.Printf("configured_addr: %s\n", dash(configuredAddr))
@@ -80,6 +83,7 @@ func debugPeer(peerID string) error {
 	fmt.Printf("backoff: %s\n", formatBackoff(peerState, time.Now()))
 	fmt.Printf("next_retry: %s\n", formatNextRetry(peerState, time.Now()))
 	fmt.Printf("known_endpoint: %s\n", resolved)
+	fmt.Printf("discovered_addr: %s\n", dash(peerState.DiscoveredAddr))
 	fmt.Printf("last_update_source: %s\n", dash(peerState.LastUpdateSource))
 	fmt.Printf("last_relay: %s\n", formatUnixTime(peerState.LastRelayUnix))
 	fmt.Printf("relay_suppression: %s\n", formatRelaySuppression(peerState))
@@ -210,6 +214,44 @@ func formatRelaySuppression(peerState syncPeerState) string {
 		return peerState.LastRelaySuppression
 	}
 	return fmt.Sprintf("%s at=%s", peerState.LastRelaySuppression, at)
+}
+
+func debugEndpoints() error {
+	state, err := loadState()
+	if err != nil {
+		return err
+	}
+	config, err := loadSyncConfig(state)
+	if err != nil {
+		return err
+	}
+	port := listenPortFromAddr(config.ListenAddr)
+	candidates := gossip.CollectLocalEndpoints(port, config.AdvertiseAddrs)
+	fmt.Printf("local_candidates: %d\n", len(candidates))
+	for _, ep := range candidates {
+		source := "unknown"
+		switch ep.Source {
+		case gossip.SourceAdvertise:
+			source = "advertise"
+		case gossip.SourceInterface:
+			source = "interface"
+		case gossip.SourceReflector:
+			source = "reflector"
+		}
+		fmt.Printf("candidate addr=%s port=%d scope=%s priority=%d source=%s\n",
+			ep.IP.String(), ep.Port, ep.Scope, ep.Priority, source)
+	}
+
+	discovered := gossip.ExtractPeerEndpoints(state.Network)
+	fmt.Printf("discovered_peers: %d\n", len(discovered))
+	for peerID, entries := range discovered {
+		fmt.Printf("peer %s endpoints=%d\n", peerID, len(entries))
+		for _, ep := range entries {
+			fmt.Printf("  endpoint addr=%s port=%d scope=%s priority=%d protocol=%s\n",
+				ep.Address, ep.Port, ep.Scope, ep.Priority, ep.Protocol)
+		}
+	}
+	return nil
 }
 
 func dash(value string) string {
