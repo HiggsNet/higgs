@@ -259,21 +259,38 @@
   - [x] 增加 `app/higgs/sync_test.go`：openSyncTransport / updateDiscoveredPeers 单元测试（构造 root→catofes→node-b delegation chain）
   - [x] 增加 `make bootstrap-join-smoke`：验证全新节点 B 只配置 bootstrap A、A 有 B 的 zone 但无 endpoint record 时，双向 gossip 同步成功建立
 
-## Phase 3: WireGuard 建链（预计 2-3 周）
+## Phase 3: 最小节点 daemon / 单 writer 边界（预计 1-2 周）
+
+**目标：** 在进入 WireGuard 前，先把长期运行同步、CLI 写入、后续 apply 触发统一收到本机 daemon 的串行写入路径里，避免多个进程同时修改 state DB。
+
+- [ ] **3.1 Daemon 服务骨架**
+  - [ ] 明确 Phase 2 → Phase 3 边界：同步已经具备最终一致性；Phase 3 的首要风险是长期进程、CLI 写入和 WG apply 同时改 state，因此先做 daemon 单 writer，再做 WG
+  - [ ] 抽出 `SyncService` / `DaemonService`：复用 `sync run` 的 UDP serve、周期 outbound sync、endpoint publish、relay fanout、backoff/rejected digest 逻辑，避免维护两套同步主循环
+  - [ ] 增加 `higgs daemon` 常驻模式：加载一次 config/state，启动 UDP transport，进入统一事件循环，并为后续 WG/Babel/firewall apply 预留 state-change hook
+  - [ ] 明确 daemon 是本节点 state DB 的唯一长期 writer：`record put`、endpoint publish、sync apply、sync trigger、未来 WG apply 相关状态都通过 daemon 串行执行
+
+- [ ] **3.2 本地事件队列与控制接口**
+  - [ ] 定义最小内存事件队列：local record put、remote announce applied、timer tick、manual sync trigger、shutdown/reload；同一队列串行落盘和触发后续动作
+  - [ ] 提供最小 Unix domain socket control API：`status`、`record_put`、`sync_trigger`、`shutdown`、`reload` 预留；只做本机接口，不做远程管理
+  - [ ] 约定 socket 路径和权限：默认 `/run/higgs/higgs.sock` 或 `<data_dir>/higgs.sock` fallback；默认只允许本机同用户/管理员访问
+
+- [ ] **3.3 CLI client 化与兼容模式**
+  - [ ] CLI 在检测到 daemon control socket 存在时优先作为 client 提交写命令；daemon 不存在时保留当前直接写 DB 的开发/恢复模式，并输出明确提示
+  - [ ] `record put` client 化：daemon 存在时提交 `record_put`，由 daemon 签名、写 DB、触发 outbound sync；daemon 不存在时沿用现有直接写入路径
+  - [ ] `sync status --verbose` / `debug peer` 优先读取 daemon live 状态；daemon 不存在时 fallback 到 bbolt 快照，保证离线排障仍可用
+  - [ ] 将 `sync run` 标记为开发/兼容入口，内部尽量委托 daemon service 实现，避免 Phase 3 后出现两套长期运行路径
+
+- [ ] **3.4 Daemon 测试闭环**
+  - [ ] 增加 daemon 单元测试：事件队列串行处理、config 只加载一次、state reload 不覆盖更新、control API request/response 兼容错误路径
+  - [ ] 增加并发安全测试：daemon 运行期间多个 CLI 写命令串行处理，不出现旧 state snapshot 覆盖新写入
+  - [ ] 增加 smoke：daemon 运行时 CLI `record put` 通过 control socket 提交，daemon 写 DB、触发 gossip sync，远端收敛
+  - [ ] 增加 smoke：daemon 停止后 CLI 直接写 DB 的开发模式仍可用，并能被下一次 daemon 启动正确加载
+
+## Phase 4: WireGuard 建链（预计 2-3 周）
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
 
-- [ ] **3.0 最小节点 daemon / 单 writer 边界**
-  - [ ] 增加 `higgs daemon` 常驻模式，复用 `sync run` 的 UDP serve + outbound sync 循环，并为后续 WG/Babel/firewall apply 提供统一事件循环
-  - [ ] 明确 daemon 是本节点 state DB 的唯一长期 writer；`record put`、`sync trigger`、未来 WG apply 等写操作应通过 daemon 进入同一串行写入路径
-  - [ ] CLI 在检测到 daemon control socket 存在时，优先作为 client 提交写命令；daemon 不存在时保留当前直接写 DB 的开发模式，并输出明确提示
-  - [ ] 提供最小 Unix domain socket 控制接口：status、record put、sync trigger、shutdown/reload 预留；只要求本机使用，不做远程管理
-  - [ ] `sync status --verbose` / `debug peer` 优先读取 daemon live 状态；daemon 不存在时 fallback 到 bbolt 快照
-  - [ ] 将 `sync run` 标记为开发/兼容入口，内部可委托 daemon service 实现，避免 Phase 3 后出现两套长期运行路径
-  - [ ] 增加 smoke：daemon 运行时 CLI `record put` 通过 control socket 提交，daemon 写 DB、触发 gossip sync，远端收敛
-  - [ ] 增加并发安全测试：daemon 运行期间多个 CLI 写命令串行处理，不出现旧 state snapshot 覆盖新写入
-
-- [ ] **3.1 WireGuard 控制模块**
+- [ ] **4.1 WireGuard 控制模块**
   - 通过 `wgctrl-go` 操作内核 WG 接口
   - 由 daemon 监听 active state 变更并触发 WG apply，避免独立 CLI 进程直接修改运行中状态
   - 监听 `*.<parent_zone>./wireguard/*` Record 变更
@@ -282,70 +299,70 @@
   - 当 peer Zone 被撤销或其父 delegation 被 tombstone 时，立即从 WireGuard device 移除对应 peer、AllowedIPs、endpoint 与 keepalive 配置
   - WG AllowedIPs 只放 tunnel /32 或 /128，业务路由交给 Babeld
 
-- [ ] **3.2 链路实例管理**
+- [ ] **4.2 链路实例管理**
   - 当 WG peer 建立后，生成 LinkInstance
   - 跟踪链路状态：up/down/stale
 
-- [ ] **3.3 最小闭环验证**
+- [ ] **4.3 最小闭环验证**
   - 节点 A 和 B 同步配置
   - 自动为对方添加 WG Peer
   - `wg show` 看到握手成功
   - 互相 ping 通 tunnel IP
 
-## Phase 4: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
+## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 
 **目标：** babeld 在 WG 接口上发现邻居、学习路由，且只接受被授权的前缀。
 
-- [ ] **4.1 Babeld 路由适配器**
+- [ ] **5.1 Babeld 路由适配器**
   - 启动 babeld 并通过控制 socket（`-G` Unix/TCP socket）发送命令
   - 命令封装：`add interface wg0`、`flush interface wg0`
   - 当 WG 接口建立/拆除时，动态通知 babeld 添加/移除接口
 
-- [ ] **4.2 Route Authorization Filter**
+- [ ] **5.2 Route Authorization Filter**
   - 根据 active state 中的 `routes/announcements/*` 和 `ipam/assignments/*` 生成 prefix whitelist
   - 为每个 peer/interface 生成 babeld `import filter`
   - 拒绝 `0.0.0.0/0`、未授权前缀、他人网段
 
-- [ ] **4.3 本地路由注入**
+- [ ] **5.3 本地路由注入**
   - 通过 babeld 控制 socket 的 `install` / `uninstall` 注入本节点 AnnouncedRoutes
   - 或通过 `redistribute` 配置让 babeld 自动学习
 
-- [ ] **4.4 闭环验证**
+- [ ] **5.4 闭环验证**
   - 3+ 节点组网
   - Babeld 在 wg0 上发现邻居，交换路由
   - 节点 A 尝试宣告未授权前缀时被其他节点过滤掉
 
-## Phase 5: IPAM/准入扩展/防火墙（预计 3-4 周）
+## Phase 6: IPAM/准入扩展/防火墙（预计 3-4 周）
 
 **目标：** 支持动态准入、IP 分配、链路健康、防火墙规则。
 
-- [ ] **5.1 准入流程**
+- [ ] **6.1 准入流程**
   - 新节点生成密钥对 → 向管理员申请 delegation
   - 管理员在父 Zone 创建 `nodeX.parent.` delegation
   - Gossip 全网传播后，新节点自动被所有节点识别并建立 WG Peer
 
-- [ ] **5.2 IP 分配管理（IPAM）**
+- [ ] **6.2 IP 分配管理（IPAM）**
   - 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
   - 节点查询自己的 Zone fallback 路径，汇总所有分配到的 IPs
   - 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
 
-- [ ] **5.3 链路健康检测**
+- [ ] **6.3 链路健康检测**
   - 在 WG 隧道上周期性发送 ICMP/自定义 keepalive
   - 检测 RTT、丢包率
   - 链路异常时标记 down，从 babeld 接口中移除或降低优先级
 
-- [ ] **5.4 动态 Peer 管理**
+- [ ] **6.4 动态 Peer 管理**
   - 节点离线超时后，保留配置但标记 stale
   - 长期离线后自动清理 WG Peer 和路由
   - 节点信息变更（endpoint、pubkey rotate）自动更新 WG 配置
   - 节点 Zone 被撤销后标记 revoked，高优先级触发传输层/路由层/防火墙 apply，不等待普通健康检查超时
 
-- [ ] **5.5 防火墙规则同步**
+- [ ] **6.5 防火墙规则同步**
   - 基于已同步的 Zone 中所有合法节点的 TunnelAllowedIPs
   - 通过 `nftables` netlink 接口生成 accept 规则，默认 drop
   - 节点或子树被撤销后立即移除对应 allow rules，避免已撤销节点继续访问 overlay
 
-- [ ] **5.6 撤销后的传输与路由清理**
+- [ ] **6.6 撤销后的传输与路由清理**
   - WireGuard：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
   - IKEv2/StrongSwan：删除被撤销 peer 的 connection/child SA 配置，主动 terminate 已建立 SA，移除对应 secret/cert/key reference
   - Babeld/BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
@@ -354,39 +371,39 @@
   - 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 WG/IKEv2/Babel/firewall/IPAM 对象，便于管理员确认影响范围
   - 增加集成测试：撤销节点后，控制平面状态先收敛，随后本机 WG/IKEv2/Babel/firewall 配置全部清理完成
 
-## Phase 6: 健壮性与高级特性（预计 4-6 周）
+## Phase 7: 健壮性与高级特性（预计 4-6 周）
 
 **目标：** 生产可用，支持多线路、跳频、扩展传输协议。
 
-- [ ] **6.1 多线路并行（Multipath）**
+- [ ] **7.1 多线路并行（Multipath）**
   - 一个 Peer 可建立多条 TransportLink（WG over 公网 + WG over 内网 + GRE）
   - 每条链路独立运行 babeld 接口
   - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
-- [ ] **6.2 UDP 端口跳频（Port Hopping）**
+- [ ] **7.2 UDP 端口跳频（Port Hopping）**
   - 先实现多 endpoint / 多 port probe 与质量选择
   - 如需 rotate，必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径
 
-- [ ] **6.3 IKEv2 (StrongSwan) 传输驱动**
+- [ ] **7.3 IKEv2 (StrongSwan) 传输驱动**
   - 通过 vici 协议控制 StrongSwan
   - 复用 Zone K-V 中的 `ipsec/*` Record
 
-- [ ] **6.4 VXLAN Overlay**
+- [ ] **7.4 VXLAN Overlay**
   - 在 WG 三层网络上封装 VXLAN
   - 通过 Zone Record 同步 VNI、VTEP 信息
 
-- [ ] **6.5 SRv6 支持（实验性）**
+- [ ] **7.5 SRv6 支持（实验性）**
   - 通过 netlink 配置 SRv6 SID、End.DT4/End.DX6 行为
   - 与 BIRD/FRR 的 SRv6 扩展联动（如后续引入 BGP）
 
-- [ ] **6.6 可选 Global Discovery Server**
+- [ ] **7.6 可选 Global Discovery Server**
   - 作为独立公网服务提供 peer rendezvous，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 peer discovery 仍以 signed endpoint record + gossip 传播为主
   - 服务端不成为信任根，不持有 root/admin/zone 私钥；客户端仍以 signed endpoint record 和 Zone trust chain 为准
   - 支持最小 HTTP/JSON API：`POST /v1/announce` 上报本机 signed endpoint，`GET /v1/peers/{peer_id}` 查询候选 endpoints、observed addr、ttl 和 source
   - 服务端负责 ttl cache、observed remote addr、限流、防重放和基础滥用防护；不替客户端做最终信任裁决
   - 支持配置多个 discovery server URL，客户端合并查询结果并按 endpoint 可信度/连接成功率排序
 
-- [ ] **6.7 可选 Relay Bootstrap Server**
+- [ ] **7.7 可选 Relay Bootstrap Server**
   - 作为独立公网 bootstrap/relay 程序运行，负责收集节点发布的已签名 Zone/Record/endpoint 数据，维护本地数据库，并向其他节点传播
   - relay server 不需要自己的 Zone，不持有 root/admin/zone 私钥，不签发 delegation/record，不成为信任根；所有数据仍由客户端按 Zone trust chain 和签名验证
   - 运行形态可以是独立 binary，如 `higgs-relay`，或后续子命令；长期部署时作为稳定 bootstrap peer 暴露公网地址
@@ -398,7 +415,7 @@
   - 增加 backpressure 和去重：按 digest/record version 去重，限制每 peer 传播频率，避免 relay 成为广播放大器
   - 增加 smoke：普通节点只配置 relay 作为 bootstrap，也能通过 relay 获取其他节点 signed endpoint 和 zone data，随后建立直接 gossip 连接
 
-- [ ] **6.8 Daemon / 本地控制接口生产化**
+- [ ] **7.8 Daemon / 本地控制接口生产化**
   - [ ] 在 Phase 3 最小 daemon 基础上完善运行形态：`higgs daemon` 常驻负责 gossip 同步、active state 更新、WG/IKEv2/Babel/firewall apply
   - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作；直接写 DB 模式仅保留为 debug/recovery
   - [ ] 完善 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
@@ -410,14 +427,14 @@
   - [ ] daemon 生命周期：启动、优雅停止、reload、状态持久化、崩溃恢复
   - [ ] systemd service 示例和 socket 路径约定，如 `/run/higgs/higgs.sock`
 
-- [ ] **6.9 运维与可观测性**
+- [ ] **7.9 运维与可观测性**
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`
 
 ## 下一步
 
-1. 开始 Phase 2 双节点端到端同步验证：node-admin root init → catofes. join → node-a/node-b join → record put → gossip sync → verify
-2. 增加三节点传播 smoke：A-B-C 拓扑中 B 写入的 Zone/Record 能传播到 C
-3. 强化 `sync status`：输出 per-peer / per-zone / history / last error，方便排查同步状态
-3. Phase 0 闭环验证：单机完成 `init` → `record put` → `verify chain` 的 CLI 流程
+1. 先抽 `SyncService` / `DaemonService`，让 `sync run` 和未来 `higgs daemon` 共享同一套同步主循环。
+2. 实现最小 Unix socket control API，并把 `record put` 改成 daemon 存在时走 client 提交、daemon 不存在时保留直接写 DB。
+3. 补 daemon 单 writer 单测和 smoke，确认并发 CLI 写入不会覆盖 state，且写入后能触发 gossip 收敛。
+4. daemon 边界稳定后再接 `wgctrl-go`，先完成双节点自动添加 WG peer、撤销后删除 peer、tunnel IP ping 通。

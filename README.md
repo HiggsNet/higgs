@@ -12,7 +12,7 @@ Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zon
 
 - Root Zone `.` 持有根 authority 公钥。
 - 父 Zone 通过签名 `Delegation` 委派子 Zone。
-- 每个 Zone authority 包含一个或多个 ED25519 公钥。Phase 1 只支持 `threshold=1`。
+- 每个 Zone authority 包含一个或多个 ED25519 公钥。当前实现仍只支持 `threshold=1`。
 - Record 必须由该 Zone authority 授权的 key 签名。
 - Gossip 收到的数据先视为不可信；信任链和签名验证通过后，才提升到 active state。
 
@@ -23,7 +23,7 @@ Phase 2 gossip 使用 UDP 和一个轻量 JSON wire codec：
 - 消息类型：`PING`、`PONG`、`FETCH_ZONE`、`FETCH_RECORD`、`ANNOUNCE`
 - 默认限制：单消息 65536 bytes、单次 announce 16 个 Zone snapshot、单 Zone snapshot 1024 条 record
 - 防重放：nonce + timestamp window
-- peer allowlist：只接受 `bootstrap` 中配置的 peer
+- peer allowlist：启动时来自 `bootstrap`；运行中会加入已通过信任链验证的 Zone peer，并从 signed endpoint record 更新出站地址
 - 同步模型：Phase 2 仍使用 whole-zone sync；active record 以 Zone authority 签名的最新版本为准，历史只保留有限窗口用于调试和短期补洞
 
 `gossip.proto` 记录了未来协议形状，但当前构建不需要 `protoc`。
@@ -79,11 +79,16 @@ make build
 make join-smoke
 make phase1-smoke
 make phase2-smoke
+make phase2-run-smoke
 make multi-node-smoke
 make chain-relay-smoke
+make discovery-smoke
+make reflector-smoke
+make bootstrap-join-smoke
+make delegation-revoke-smoke
 ```
 
-`make join-smoke` 不依赖 UDP。`make phase1-smoke`、`make phase2-smoke`、`make multi-node-smoke` 和 `make chain-relay-smoke` 会启动本地 UDP gossip peer，因此运行环境需要允许本地 UDP socket。
+`make join-smoke` 和 `make reflector-smoke` 不依赖真实 UDP peer。其他 gossip smoke 会启动本地 UDP peer，因此运行环境需要允许本地 UDP socket。
 
 ## 同步诊断
 
@@ -580,15 +585,19 @@ make chain-relay-smoke
 
 该流程使用 A-B-C-D 链式 bootstrap，所有节点以 60 秒周期运行 `sync run`。A 写入 `node-a.catofes./identity` 后，B/C 在应用远端更新时会立即向非来源邻居触发同步，验证 D 不需要等待完整轮询周期即可收敛。
 
+delegation 撤销传播可以直接跑：
+
+```bash
+make delegation-revoke-smoke
+```
+
+该流程先让 node-b 的 record 和 endpoint 在 A/C 间传播，再由 `catofes.` 管理节点签发 revocation，最后验证 A/C 不再信任 B 的 record、endpoint 和后续发布内容。
+
 ## 下一步方向
 
-当前优先级不是直接进入 WireGuard，而是先把配置同步做稳：
+Phase 2 的配置同步主线已经收敛。进入 WireGuard 前，Phase 3 会先补一个最小 `higgs daemon`，把长期运行的 gossip、后续 WG apply、以及 CLI 写操作收进同一个本地串行 writer 边界，避免多个 CLI 进程直接同时写 state DB。
 
-- 应用运行时与依赖边界整理仍需收敛
-- peer discovery / 动态 allowlist 需要继续打磨运行时边界与测试注入
-- Phase 2 末尾再决定是否切到 protobuf；默认仍不引入 `protoc`
-
-WireGuard 建链会在配置同步收敛后再做，避免把状态同步问题和系统网络配置问题混在一起。
+之后再接 WireGuard 控制模块：由 daemon 监听 active state 变更，推导 peer view，调用 `wgctrl-go` 添加/删除 peer，并在 Zone 被撤销时立即清理对应 WG 配置。
 
 ## CLI 汇总
 
@@ -615,7 +624,8 @@ build/higgs db stats
 ## 当前限制
 
 - CLI 目前为了开发便利，把私钥保存在本地 bbolt metadata 中。底层 identity 包已有加密私钥 helper，但 CLI 尚未强制使用加密存储。
-- Phase 1 只支持 authority `threshold=1`。
+- 当前只支持 authority `threshold=1`。
 - Delegation scope 只支持 `direct-child`。
 - Gossip 当前使用 JSON framing，还没有接入 protobuf 生成代码。
-- 多节点配置同步仍在收尾；WireGuard、Babel、route authorization filter、防火墙应用仍在后续阶段。
+- 当前同步保证是连通、可达、至少有 bootstrap 或 signed endpoint 发现路径时的最终一致性；复杂 NAT、无稳定 bootstrap、长期网络分区仍需要后续 discovery/relay 能力补强。
+- WireGuard、Babel、route authorization filter、防火墙应用仍在后续阶段。
