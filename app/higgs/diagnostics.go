@@ -55,14 +55,19 @@ func debugLogEnabled(config *syncConfigFile) bool {
 }
 
 func debugPeer(peerID string) error {
-	state, err := loadState()
+	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	config, err := loadSyncConfig(state)
+	state, err := rt.LoadState()
 	if err != nil {
 		return err
 	}
+	config, err := rt.SyncConfig(state)
+	if err != nil {
+		return err
+	}
+	now := rt.Now()
 	known := configuredKnownPeers(config)
 	peerState := state.SyncPeers[peerID]
 	source, configuredAddr := bootstrapPeerSource(config, peerID)
@@ -77,11 +82,11 @@ func debugPeer(peerID string) error {
 	fmt.Printf("source: %s\n", source)
 	fmt.Printf("configured_addr: %s\n", dash(configuredAddr))
 	fmt.Printf("resolved_addr: %s\n", resolved)
-	fmt.Printf("status: %s\n", peerStatus(peerState, time.Now()))
+	fmt.Printf("status: %s\n", peerStatus(peerState, now))
 	fmt.Printf("last_success: %s\n", formatLastSuccess(peerState))
 	fmt.Printf("last_error: %s\n", dash(peerState.LastError))
-	fmt.Printf("backoff: %s\n", formatBackoff(peerState, time.Now()))
-	fmt.Printf("next_retry: %s\n", formatNextRetry(peerState, time.Now()))
+	fmt.Printf("backoff: %s\n", formatBackoff(peerState, now))
+	fmt.Printf("next_retry: %s\n", formatNextRetry(peerState, now))
 	fmt.Printf("known_endpoint: %s\n", resolved)
 	fmt.Printf("discovered_addr: %s\n", dash(peerState.DiscoveredAddr))
 	fmt.Printf("last_update_source: %s\n", dash(peerState.LastUpdateSource))
@@ -91,7 +96,11 @@ func debugPeer(peerID string) error {
 }
 
 func debugZone(path zone.ZonePath) error {
-	state, err := loadState()
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
 	if err != nil {
 		return err
 	}
@@ -102,7 +111,7 @@ func debugZone(path zone.ZonePath) error {
 	}
 	digest := zoneDigest(state.Network, path)
 	verifyResult := "ok"
-	if err := higgscrypto.VerifyChain(state.Network, path, time.Now()); err != nil {
+	if err := higgscrypto.VerifyChain(state.Network, path, rt.Now()); err != nil {
 		verifyResult = err.Error()
 	}
 	fmt.Printf("zone: %s\n", path)
@@ -217,11 +226,15 @@ func formatRelaySuppression(peerState syncPeerState) string {
 }
 
 func debugEndpoints() error {
-	state, err := loadState()
+	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	config, err := loadSyncConfig(state)
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	config, err := rt.SyncConfig(state)
 	if err != nil {
 		return err
 	}

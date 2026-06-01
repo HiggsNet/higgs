@@ -9,18 +9,22 @@ import (
 )
 
 func putRecord(path zone.ZonePath, key string, value []byte, recordType string) error {
-	state, err := loadState()
+	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	record, err := buildSignedRecord(state, path, key, value, recordType)
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	record, err := buildSignedRecordAt(state, path, key, value, recordType, rt.Now())
 	if err != nil {
 		return err
 	}
 	if err := state.Network.Put(record); err != nil {
 		return err
 	}
-	if err := saveState(state); err != nil {
+	if err := rt.SaveState(state); err != nil {
 		return err
 	}
 	fmt.Printf("put %s/%s version %d\n", path, key, record.Version)
@@ -28,6 +32,10 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string) 
 }
 
 func buildSignedRecord(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string) (*zone.Record, error) {
+	return buildSignedRecordAt(state, path, key, value, recordType, timeNow())
+}
+
+func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
 	configureValidation(state.Network)
 	zs := state.Network.Zones[path]
 	if zs == nil {
@@ -40,7 +48,7 @@ func buildSignedRecord(state *stateFile, path zone.ZonePath, key string, value [
 		Type:      recordType,
 		Value:     value,
 		Version:   1,
-		Timestamp: time.Now().Unix(),
+		Timestamp: now.Unix(),
 	}
 	if current != nil {
 		record.Version = current.Version + 1

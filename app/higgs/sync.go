@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
@@ -20,6 +21,7 @@ import (
 )
 
 const relayMinInterval = time.Second
+const rejectedDigestTTL = 10 * time.Minute
 
 type SyncRuntime struct {
 	App           *Runtime
@@ -95,14 +97,17 @@ func syncStatus(verbose bool) error {
 	if err != nil {
 		return err
 	}
-	now := rt.Now()
-	fmt.Printf("peer_id: %s\n", config.PeerID)
-	fmt.Printf("listen_addr: %s\n", config.ListenAddr)
+	return writeSyncStatus(os.Stdout, state, config, rt.Now(), verbose)
+}
+
+func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now time.Time, verbose bool) error {
+	fmt.Fprintf(w, "peer_id: %s\n", config.PeerID)
+	fmt.Fprintf(w, "listen_addr: %s\n", config.ListenAddr)
 	digests := gossip.ZoneDigests(state.Network)
-	fmt.Printf("known_peers: %d\n", len(config.Bootstrap))
-	fmt.Printf("known_zones: %d\n", len(digests))
-	fmt.Printf("local_root: %s\n", hex.EncodeToString(globalRootHash(digests)))
-	fmt.Printf("limits: max_message_bytes=%d max_sync_zones=%d max_sync_records=%d wire_version=%d\n",
+	fmt.Fprintf(w, "known_peers: %d\n", len(config.Bootstrap))
+	fmt.Fprintf(w, "known_zones: %d\n", len(digests))
+	fmt.Fprintf(w, "local_root: %s\n", hex.EncodeToString(globalRootHash(digests)))
+	fmt.Fprintf(w, "limits: max_message_bytes=%d max_sync_zones=%d max_sync_records=%d wire_version=%d\n",
 		config.MaxMessageBytes,
 		config.MaxSyncZones,
 		config.MaxSyncRecords,
@@ -111,22 +116,22 @@ func syncStatus(verbose bool) error {
 	discovered := gossip.ExtractPeerEndpoints(state.Network)
 	if verbose {
 		known := configuredKnownPeers(config)
-		fmt.Printf("allowlist_source: bootstrap+discovery\n")
-		fmt.Printf("bootstrap_peers: %d\n", len(config.Bootstrap))
+		fmt.Fprintf(w, "allowlist_source: bootstrap+discovery\n")
+		fmt.Fprintf(w, "bootstrap_peers: %d\n", len(config.Bootstrap))
 		var discoveredCount int
 		for peerID := range discovered {
 			if !isBootstrapPeer(config, peerID) {
 				discoveredCount++
 			}
 		}
-		fmt.Printf("discovered_peers: %d\n", discoveredCount)
+		fmt.Fprintf(w, "discovered_peers: %d\n", discoveredCount)
 		for _, peer := range config.Bootstrap {
 			resolved := "-"
 			if addr := known[peer.ID]; addr != nil {
 				resolved = addr.String()
 			}
 			peerState := state.SyncPeers[peer.ID]
-			fmt.Printf("bootstrap peer=%s configured_addr=%s resolved_addr=%s status=%s last_success=%s last_error=%s next_retry=%s\n",
+			fmt.Fprintf(w, "bootstrap peer=%s configured_addr=%s resolved_addr=%s status=%s last_success=%s last_error=%s next_retry=%s\n",
 				peer.ID,
 				peer.Addr,
 				resolved,
@@ -135,7 +140,7 @@ func syncStatus(verbose bool) error {
 				dash(peerState.LastError),
 				formatNextRetry(peerState, now),
 			)
-			fmt.Printf("  update_source=%s last_relay=%s relay_suppression=%s\n",
+			fmt.Fprintf(w, "  update_source=%s last_relay=%s relay_suppression=%s\n",
 				dash(peerState.LastUpdateSource),
 				formatUnixTime(peerState.LastRelayUnix),
 				formatRelaySuppression(peerState),
@@ -150,7 +155,7 @@ func syncStatus(verbose bool) error {
 			if len(entries) > 0 {
 				addr = fmt.Sprintf("%s:%d", entries[0].Address, entries[0].Port)
 			}
-			fmt.Printf("discovered peer=%s addr=%s status=%s last_success=%s\n",
+			fmt.Fprintf(w, "discovered peer=%s addr=%s status=%s last_success=%s\n",
 				peerID,
 				addr,
 				peerStatus(peerState, now),
@@ -168,7 +173,7 @@ func syncStatus(verbose bool) error {
 		if lastError == "" {
 			lastError = "-"
 		}
-		fmt.Printf("peer %s addr=%s status=%s last_sync=%s known_zones=%d last_error=%s next_retry=%s\n",
+		fmt.Fprintf(w, "peer %s addr=%s status=%s last_sync=%s known_zones=%d last_error=%s next_retry=%s\n",
 			peer.ID,
 			peer.Addr,
 			peerStatus(peerState, now),
@@ -180,7 +185,7 @@ func syncStatus(verbose bool) error {
 	}
 	for _, digest := range digests {
 		zs := state.Network.Zones[digest.Zone]
-		fmt.Printf("zone %s root=%s records=%d history=%d delegations=%d\n",
+		fmt.Fprintf(w, "zone %s root=%s records=%d history=%d delegations=%d\n",
 			digest.Zone,
 			hex.EncodeToString(digest.RootHash),
 			len(zs.Records),
@@ -440,6 +445,91 @@ func (sr *SyncRuntime) relay(ctx context.Context, sourcePeerID string) error {
 	return nil
 }
 
+func fetchListForPeer(state *stateFile, peerID string, remote []gossip.ZoneDigest, now time.Time) []zone.ZonePath {
+	if state == nil {
+		return nil
+	}
+	fetch := gossip.FetchList(state.Network, remote)
+	if len(fetch) == 0 || peerID == "" {
+		return fetch
+	}
+	remoteByZone := make(map[zone.ZonePath][]byte, len(remote))
+	for _, digest := range remote {
+		remoteByZone[digest.Zone] = digest.RootHash
+	}
+	out := fetch[:0]
+	for _, path := range fetch {
+		rootHash := remoteByZone[path]
+		if isRejectedDigestActive(state, peerID, path, rootHash, now) {
+			continue
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
+func isRejectedDigestActive(state *stateFile, peerID string, path zone.ZonePath, rootHash []byte, now time.Time) bool {
+	if state == nil || peerID == "" || !path.Valid() || len(rootHash) == 0 {
+		return false
+	}
+	peerState := state.SyncPeers[peerID]
+	rejected, ok := peerState.RejectedDigests[rejectedDigestKey(path)]
+	if !ok {
+		return false
+	}
+	if rejected.RootHashHex != hex.EncodeToString(rootHash) {
+		return false
+	}
+	return rejected.UntilUnix != 0 && now.Before(time.Unix(rejected.UntilUnix, 0))
+}
+
+func recordRejectedDigest(state *stateFile, peerID string, digest gossip.ZoneDigest, reason string, now time.Time) {
+	if state == nil || peerID == "" || !digest.Zone.Valid() || len(digest.RootHash) == 0 {
+		return
+	}
+	if reason == "" {
+		reason = "verify_failed"
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.RejectedDigests == nil {
+		peerState.RejectedDigests = make(map[string]rejectedDigestState)
+	}
+	peerState.RejectedDigests[rejectedDigestKey(digest.Zone)] = rejectedDigestState{
+		Zone:           digest.Zone,
+		RootHashHex:    hex.EncodeToString(digest.RootHash),
+		Reason:         reason,
+		RejectedAtUnix: now.Unix(),
+		UntilUnix:      now.Add(rejectedDigestTTL).Unix(),
+	}
+	state.SyncPeers[peerID] = peerState
+}
+
+func clearRejectedDigest(state *stateFile, peerID string, path zone.ZonePath) {
+	if state == nil || peerID == "" || !path.Valid() {
+		return
+	}
+	peerState := state.SyncPeers[peerID]
+	if len(peerState.RejectedDigests) == 0 {
+		return
+	}
+	delete(peerState.RejectedDigests, rejectedDigestKey(path))
+	state.SyncPeers[peerID] = peerState
+}
+
+func rejectedDigestKey(path zone.ZonePath) string {
+	return path.String()
+}
+
+func digestForZone(digests []gossip.ZoneDigest, path zone.ZonePath) gossip.ZoneDigest {
+	for _, digest := range digests {
+		if digest.Zone == path {
+			return digest
+		}
+	}
+	return gossip.ZoneDigest{Zone: path}
+}
+
 func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now time.Time) (bool, string) {
 	switch {
 	case peerID == "":
@@ -619,7 +709,7 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 		}
 	}
 
-	record, err := buildSignedRecord(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint")
+	record, err := buildSignedRecordAt(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint", now)
 	if err != nil {
 		return err
 	}
@@ -630,11 +720,18 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 }
 
 func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
+	newSyncRuntime(state, config, transport, nil).addVerifiedZonePeers()
+}
+
+func (sr *SyncRuntime) addVerifiedZonePeers() {
+	state := sr.State
+	transport := sr.Transport
+	config := sr.Config
 	if state == nil || state.Network == nil {
 		return
 	}
 	configureValidation(state.Network)
-	now := time.Now()
+	now := sr.now()
 	for path := range state.Network.Zones {
 		peerID := string(path)
 		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
@@ -655,7 +752,7 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 	state := sr.State
 	transport := sr.Transport
 	config := sr.Config
-	addVerifiedZonePeers(state, transport, config)
+	sr.addVerifiedZonePeers()
 	now := sr.now()
 	discovered := gossip.ExtractPeerEndpointsAt(state.Network, now)
 	bootstrapPeers := configuredKnownPeers(config)
@@ -902,14 +999,14 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 	}()
 	switch message.Type {
 	case gossip.MessagePing:
-		fetch := gossip.FetchList(state.Network, message.Ping.Zones)
+		fetch := fetchListForPeer(state, message.PeerID, message.Ping.Zones, sr.now())
 		return transport.Send(message.PeerID, &gossip.Message{
 			Type: gossip.MessagePong,
 			Pong: &gossip.Pong{Zones: gossip.ZoneDigests(state.Network), FetchZones: fetch},
 		})
 	case gossip.MessagePong:
 		if len(message.Pong.FetchZones) == 0 {
-			for _, path := range gossip.FetchList(state.Network, message.Pong.Zones) {
+			for _, path := range fetchListForPeer(state, message.PeerID, message.Pong.Zones, sr.now()) {
 				if err := transport.Send(message.PeerID, &gossip.Message{
 					Type:      gossip.MessageFetchZone,
 					FetchZone: &gossip.FetchZone{Zone: path},
@@ -922,7 +1019,7 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 		if err := sendSnapshots(state.Network, transport, message.PeerID, message.Pong.FetchZones); err != nil {
 			return err
 		}
-		for _, path := range gossip.FetchList(state.Network, message.Pong.Zones) {
+		for _, path := range fetchListForPeer(state, message.PeerID, message.Pong.Zones, sr.now()) {
 			if err := transport.Send(message.PeerID, &gossip.Message{
 				Type:      gossip.MessageFetchZone,
 				FetchZone: &gossip.FetchZone{Zone: path},
@@ -963,8 +1060,10 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 	for _, snapshot := range message.Announce.Snapshots {
 		result, err := gossip.ApplySnapshot(state.Network, &snapshot, sr.now(), limits)
 		if err != nil {
+			recordRejectedDigest(state, message.PeerID, digestForZone(message.Announce.Zones, snapshot.Zone), gossip.RejectReason(err), sr.now())
 			return err
 		}
+		clearRejectedDigest(state, message.PeerID, snapshot.Zone)
 		changed = true
 		fmt.Printf("applied zone %s records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
 	}
@@ -980,7 +1079,7 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 			return err
 		}
 	}
-	for _, path := range gossip.FetchList(state.Network, message.Announce.Zones) {
+	for _, path := range fetchListForPeer(state, message.PeerID, message.Announce.Zones, sr.now()) {
 		if err := transport.Send(message.PeerID, &gossip.Message{
 			Type:      gossip.MessageFetchZone,
 			FetchZone: &gossip.FetchZone{Zone: path},

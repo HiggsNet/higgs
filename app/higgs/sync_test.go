@@ -156,6 +156,87 @@ func TestRecordPeerSyncAtUsesInjectedTime(t *testing.T) {
 	}
 }
 
+func TestRejectedDigestCacheSkipsSameRootWithinTTL(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	digest := gossip.ZoneDigest{Zone: "node-b.catofes.", RootHash: []byte("bad-root")}
+
+	recordRejectedDigest(state, "node-b.catofes.", digest, "verify_failed", now)
+
+	if got := fetchListForPeer(state, "node-b.catofes.", []gossip.ZoneDigest{digest}, now.Add(time.Minute)); len(got) != 0 {
+		t.Fatalf("fetchListForPeer() = %v, want skipped rejected digest", got)
+	}
+}
+
+func TestRejectedDigestCacheAllowsRootChangeAndExpiry(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	oldDigest := gossip.ZoneDigest{Zone: "node-b.catofes.", RootHash: []byte("bad-root")}
+	newDigest := gossip.ZoneDigest{Zone: "node-b.catofes.", RootHash: []byte("new-root")}
+
+	recordRejectedDigest(state, "node-b.catofes.", oldDigest, "verify_failed", now)
+
+	if got := fetchListForPeer(state, "node-b.catofes.", []gossip.ZoneDigest{newDigest}, now.Add(time.Minute)); len(got) != 1 {
+		t.Fatalf("fetchListForPeer(new root) = %v, want retry", got)
+	}
+	if got := fetchListForPeer(state, "node-b.catofes.", []gossip.ZoneDigest{oldDigest}, now.Add(rejectedDigestTTL+time.Second)); len(got) != 1 {
+		t.Fatalf("fetchListForPeer(expired) = %v, want retry", got)
+	}
+}
+
+func TestHandleAnnounceRecordsRejectedDigestOnVerifyFailure(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2000, 0)
+	badRecord := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       "bad",
+		Type:      "policy.string",
+		Value:     []byte("original"),
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(badRecord, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	badRecord.Value = []byte("tampered")
+	digest := gossip.ZoneDigest{Zone: "node-b.catofes.", RootHash: []byte("bad-root")}
+	message := &gossip.Message{
+		Type:   gossip.MessageAnnounce,
+		PeerID: "node-b.catofes.",
+		Announce: &gossip.Announce{
+			Zones: []gossip.ZoneDigest{digest},
+			Snapshots: []gossip.ZoneSnapshot{{
+				Zone:      "node-b.catofes.",
+				Authority: state.Network.Zones["node-b.catofes."].Authority,
+				Records:   map[string]*zone.Record{"bad": badRecord},
+			}},
+		},
+	}
+	sr := newSyncRuntime(state, config, nil, &Runtime{Clock: func() time.Time { return now }})
+
+	if err := sr.handleAnnounce(message, gossip.DefaultSyncLimits()); err == nil {
+		t.Fatalf("handleAnnounce succeeded, want verify failure")
+	}
+	if !isRejectedDigestActive(state, "node-b.catofes.", "node-b.catofes.", digest.RootHash, now.Add(time.Minute)) {
+		t.Fatalf("rejected digest was not recorded")
+	}
+}
+
+func TestRelayRejectsSourceAndBackoffToLimitStorm(t *testing.T) {
+	now := time.Unix(1000, 0)
+	state := &stateFile{SyncPeers: map[string]syncPeerState{
+		"node-b.catofes.": {},
+		"node-c.catofes.": {BackoffUntilUnix: now.Add(time.Minute).Unix()},
+	}}
+
+	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-b.catofes."], "node-b.catofes.", "node-b.catofes.", now); allowed || reason != "source_peer" {
+		t.Fatalf("source relay decision = %v %q, want source_peer suppression", allowed, reason)
+	}
+	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-c.catofes."], "node-c.catofes.", "node-b.catofes.", now); allowed || reason != "backoff" {
+		t.Fatalf("backoff relay decision = %v %q, want backoff suppression", allowed, reason)
+	}
+}
+
 func buildTestNetworkState(t *testing.T) (*stateFile, *syncConfigFile) {
 	t.Helper()
 

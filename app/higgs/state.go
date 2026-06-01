@@ -30,17 +30,26 @@ type stateMeta struct {
 }
 
 type syncPeerState struct {
-	LastSyncUnix          int64  `json:"last_sync_unix,omitempty"`
-	LastAttemptUnix       int64  `json:"last_attempt_unix,omitempty"`
-	BackoffUntilUnix      int64  `json:"backoff_until_unix,omitempty"`
-	LastRelayUnix         int64  `json:"last_relay_unix,omitempty"`
-	FailureCount          int    `json:"failure_count,omitempty"`
-	LastError             string `json:"last_error,omitempty"`
-	LastUpdateSource      string `json:"last_update_source,omitempty"`
-	LastRelaySuppression  string `json:"last_relay_suppression,omitempty"`
-	LastRelaySuppressedAt int64  `json:"last_relay_suppressed_at,omitempty"`
-	DiscoveredAddr        string `json:"discovered_addr,omitempty"`
-	DiscoveredAtUnix      int64  `json:"discovered_at_unix,omitempty"`
+	LastSyncUnix          int64                          `json:"last_sync_unix,omitempty"`
+	LastAttemptUnix       int64                          `json:"last_attempt_unix,omitempty"`
+	BackoffUntilUnix      int64                          `json:"backoff_until_unix,omitempty"`
+	LastRelayUnix         int64                          `json:"last_relay_unix,omitempty"`
+	FailureCount          int                            `json:"failure_count,omitempty"`
+	LastError             string                         `json:"last_error,omitempty"`
+	LastUpdateSource      string                         `json:"last_update_source,omitempty"`
+	LastRelaySuppression  string                         `json:"last_relay_suppression,omitempty"`
+	LastRelaySuppressedAt int64                          `json:"last_relay_suppressed_at,omitempty"`
+	DiscoveredAddr        string                         `json:"discovered_addr,omitempty"`
+	DiscoveredAtUnix      int64                          `json:"discovered_at_unix,omitempty"`
+	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
+}
+
+type rejectedDigestState struct {
+	Zone           zone.ZonePath `json:"zone"`
+	RootHashHex    string        `json:"root_hash_hex"`
+	Reason         string        `json:"reason"`
+	RejectedAtUnix int64         `json:"rejected_at_unix"`
+	UntilUnix      int64         `json:"until_unix"`
 }
 
 type syncConfigFile struct {

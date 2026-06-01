@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -51,7 +50,11 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 }
 
 func issueDelegation(requestPath string, outPath string) error {
-	state, err := loadState()
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
 	if err != nil {
 		return err
 	}
@@ -100,10 +103,10 @@ func issueDelegation(requestPath string, outPath string) error {
 	parentState.Delegations[request.Zone] = delegation
 	state.Network.Zones[request.Zone] = zone.NewZoneState(request.Zone, authority)
 	configureValidation(state.Network)
-	if err := higgscrypto.VerifyChain(state.Network, request.Zone, time.Now()); err != nil {
+	if err := higgscrypto.VerifyChain(state.Network, request.Zone, rt.Now()); err != nil {
 		return err
 	}
-	if err := saveState(state); err != nil {
+	if err := rt.SaveState(state); err != nil {
 		return err
 	}
 
@@ -126,6 +129,10 @@ func issueDelegation(requestPath string, outPath string) error {
 }
 
 func acceptJoinBundle(bundlePath string, keyPath string) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
 	var bundle joinBundle
 	if err := readJSONFile(bundlePath, &bundle); err != nil {
 		return err
@@ -149,7 +156,7 @@ func acceptJoinBundle(bundlePath string, keyPath string) error {
 	}
 	configureValidation(bundle.Network)
 	normalizeState(bundle.Network)
-	if err := higgscrypto.VerifyChain(bundle.Network, bundle.Zone, time.Now()); err != nil {
+	if err := higgscrypto.VerifyChain(bundle.Network, bundle.Zone, rt.Now()); err != nil {
 		return err
 	}
 	state := &stateFile{
@@ -157,13 +164,10 @@ func acceptJoinBundle(bundlePath string, keyPath string) error {
 		ZonePrivateKey: key.PrivateKey,
 		Network:        bundle.Network,
 	}
-	if err := saveState(state); err != nil {
+	if err := rt.SaveState(state); err != nil {
 		return err
 	}
-	path, err := configuredStatePath()
-	if err != nil {
-		return err
-	}
+	path := rt.StatePath
 	fmt.Printf("joined %s in %s\n", bundle.Zone, path)
 	fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
 	return nil
