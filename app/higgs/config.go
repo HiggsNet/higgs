@@ -321,7 +321,7 @@ func configPath() string {
 }
 
 func configuredStatePath() (string, error) {
-	if path := os.Getenv("HIGGS_STATE"); path != "" {
+	if path := statePathOverride(); path != "" {
 		return path, nil
 	}
 	config, err := loadAppConfig()
@@ -331,11 +331,19 @@ func configuredStatePath() (string, error) {
 	return config.StatePath, nil
 }
 
+func statePathOverride() string {
+	return os.Getenv("HIGGS_STATE")
+}
+
 func configuredSyncConfig(state *stateFile) (*syncConfigFile, error) {
 	config, err := loadAppConfig()
 	if err != nil {
 		return nil, err
 	}
+	return syncConfigFromAppConfig(config, state), nil
+}
+
+func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFile {
 	peerID := config.PeerID
 	if peerID == "" {
 		peerID = defaultPeerID(state)
@@ -353,7 +361,7 @@ func configuredSyncConfig(state *stateFile) (*syncConfigFile, error) {
 		ReflectorInterval: config.ReflectorInterval,
 		EndpointTTL:       config.EndpointTTL,
 		EndpointGrace:     config.EndpointGrace,
-	}, nil
+	}
 }
 
 func configuredKnownPeers(config *syncConfigFile) map[string]*net.UDPAddr {

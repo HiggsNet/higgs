@@ -63,11 +63,60 @@ type syncConfigPeer struct {
 	Addr string `json:"addr"`
 }
 
-func loadState() (*stateFile, error) {
-	path, err := configuredStatePath()
+type Runtime struct {
+	Config    *appConfig
+	StatePath string
+	Clock     func() time.Time
+}
+
+func NewRuntime() (*Runtime, error) {
+	config, err := loadAppConfig()
 	if err != nil {
 		return nil, err
 	}
+	path := config.StatePath
+	if override := statePathOverride(); override != "" {
+		path = override
+	}
+	return &Runtime{
+		Config:    config,
+		StatePath: path,
+		Clock:     time.Now,
+	}, nil
+}
+
+func (rt *Runtime) Now() time.Time {
+	if rt != nil && rt.Clock != nil {
+		return rt.Clock()
+	}
+	return time.Now()
+}
+
+func (rt *Runtime) LoadState() (*stateFile, error) {
+	return loadStateAt(rt.StatePath, rt.Config.TrustedRootPublicKey)
+}
+
+func (rt *Runtime) SaveState(state *stateFile) error {
+	return saveStateAt(rt.StatePath, state)
+}
+
+func (rt *Runtime) SyncConfig(state *stateFile) (*syncConfigFile, error) {
+	return syncConfigFromAppConfig(rt.Config, state), nil
+}
+
+func (rt *Runtime) ConfigureNetworkValidation(ns *zone.NetworkState) {
+	configureValidation(ns)
+}
+
+func loadState() (*stateFile, error) {
+	rt, err := NewRuntime()
+	if err != nil {
+		return nil, err
+	}
+	return rt.LoadState()
+}
+
+func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
 		return nil, err
@@ -94,17 +143,21 @@ func loadState() (*stateFile, error) {
 	}
 	normalizeState(state.Network)
 	normalizeSyncPeers(&state)
-	if err := verifyConfiguredRootTrust(state.Network); err != nil {
+	if err := verifyConfiguredRootTrustAt(state.Network, trustRoot); err != nil {
 		return nil, err
 	}
 	return &state, nil
 }
 
 func saveState(state *stateFile) error {
-	path, err := configuredStatePath()
+	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	return rt.SaveState(state)
+}
+
+func saveStateAt(path string, state *stateFile) error {
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
 		return err
@@ -137,7 +190,11 @@ func verifyConfiguredRootTrust(ns *zone.NetworkState) error {
 	if err != nil {
 		return err
 	}
-	if len(config.TrustedRootPublicKey) == 0 {
+	return verifyConfiguredRootTrustAt(ns, config.TrustedRootPublicKey)
+}
+
+func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.PublicKey) error {
+	if len(trustRoot) == 0 {
 		return nil
 	}
 	root := ns.Zones[zone.RootZone]
@@ -145,7 +202,7 @@ func verifyConfiguredRootTrust(ns *zone.NetworkState) error {
 		return errors.New("trusted root public key configured but root authority is missing")
 	}
 	for _, key := range root.Authority.Keys {
-		if equalPublicKey(key.Key, config.TrustedRootPublicKey) {
+		if equalPublicKey(key.Key, trustRoot) {
 			return nil
 		}
 	}
@@ -220,11 +277,14 @@ func globalRootHash(digests []gossip.ZoneDigest) []byte {
 }
 
 func recordPeerSync(state *stateFile, peerID string, err error) {
+	recordPeerSyncAt(state, peerID, err, timeNow())
+}
+
+func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time) {
 	if state == nil || peerID == "" {
 		return
 	}
 	normalizeSyncPeers(state)
-	now := timeNow()
 	peerState := state.SyncPeers[peerID]
 	peerState.LastAttemptUnix = now.Unix()
 	if err != nil {
