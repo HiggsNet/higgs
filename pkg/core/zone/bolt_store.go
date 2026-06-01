@@ -16,6 +16,7 @@ var (
 	keyAuthority     = []byte("authority")
 	keyParentProof   = []byte("parent_proof")
 	keyDelegations   = []byte("delegations")
+	keyRevocations   = []byte("revocations")
 	keyRecords       = []byte("records")
 	keyRecordHistory = []byte("record_history")
 	keyMerkleRoot    = []byte("merkle_root")
@@ -78,6 +79,9 @@ func (s *BoltStore) SaveNetwork(ns *NetworkState) error {
 				return err
 			}
 			if err := putJSON(bucket, keyDelegations, zs.Delegations); err != nil {
+				return err
+			}
+			if err := putJSON(bucket, keyRevocations, zs.Revocations); err != nil {
 				return err
 			}
 			if err := putJSON(bucket, keyRecords, zs.Records); err != nil {
@@ -148,6 +152,9 @@ func (s *BoltStore) LoadNetwork() (*NetworkState, error) {
 			if err := getJSON(bucket, keyDelegations, &zs.Delegations); err != nil {
 				return err
 			}
+			if err := getJSON(bucket, keyRevocations, &zs.Revocations); err != nil {
+				return err
+			}
 			if err := getJSON(bucket, keyRecords, &zs.Records); err != nil {
 				return err
 			}
@@ -203,6 +210,9 @@ func getJSON(bucket *bolt.Bucket, key []byte, out any) error {
 func normalizeZoneState(zs *ZoneState) {
 	if zs.Delegations == nil {
 		zs.Delegations = make(map[ZonePath]*Delegation)
+	}
+	if zs.Revocations == nil {
+		zs.Revocations = make(map[ZonePath]*DelegationRevocation)
 	}
 	if zs.Records == nil {
 		zs.Records = make(map[string]*Record)

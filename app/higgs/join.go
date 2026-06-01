@@ -81,9 +81,15 @@ func issueDelegation(requestPath string, outPath string) error {
 		return err
 	}
 
+	authorityEpoch := uint64(1)
+	if parentState.Revocations != nil {
+		if revocation := parentState.Revocations[request.Zone]; revocation != nil && revocation.RevokedAuthorityEpoch >= authorityEpoch {
+			authorityEpoch = revocation.RevokedAuthorityEpoch + 1
+		}
+	}
 	authority := &zone.ZoneAuthority{
 		Zone:      request.Zone,
-		Epoch:     1,
+		Epoch:     authorityEpoch,
 		Threshold: higgscrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
 			Key: request.PublicKey,
@@ -125,6 +131,70 @@ func issueDelegation(requestPath string, outPath string) error {
 	}
 	fmt.Printf("issued delegation for %s\n", request.Zone)
 	fmt.Printf("wrote join bundle: %s\n", outPath)
+	return nil
+}
+
+func revokeDelegation(path zone.ZonePath, reason string) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	if !path.Valid() || path == zone.RootZone {
+		return fmt.Errorf("invalid revoke zone: %s", path)
+	}
+	parent := path.Parent()
+	parentState := state.Network.Zones[parent]
+	if parentState == nil || parentState.Authority == nil {
+		return fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
+	}
+	signer, err := signerForParent(state, parent)
+	if err != nil {
+		return err
+	}
+	if parentState.Revocations == nil {
+		parentState.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
+	}
+
+	delegation := parentState.Delegations[path]
+	authorityEpoch := uint64(1)
+	var authorityHash []byte
+	if delegation != nil {
+		authorityEpoch = delegation.AuthorityEpoch
+		authorityHash = append([]byte(nil), delegation.AuthorityHash...)
+	} else if childState := state.Network.Zones[path]; childState != nil && childState.Authority != nil {
+		authorityEpoch = childState.Authority.Epoch
+		authorityHash = higgscrypto.AuthorityHash(childState.Authority)
+	} else {
+		return fmt.Errorf("delegation not found: %s", path)
+	}
+	if reason == "" {
+		reason = "revoked"
+	}
+	revocation := &zone.DelegationRevocation{
+		ChildZone:             path,
+		ParentZone:            parent,
+		RevokedAuthorityEpoch: authorityEpoch,
+		RevokedAuthorityHash:  authorityHash,
+		Reason:                reason,
+		RevokedAt:             rt.Now().Unix(),
+	}
+	if err := higgscrypto.SignDelegationRevocation(revocation, parent, signer); err != nil {
+		return err
+	}
+	if err := higgscrypto.VerifyDelegationRevocation(revocation, parentState.Authority, parent, rt.Now()); err != nil {
+		return err
+	}
+	parentState.Revocations[path] = revocation
+	delete(parentState.Delegations, path)
+	cleanupRevokedPeerState(state, path)
+	if err := rt.SaveState(state); err != nil {
+		return err
+	}
+	fmt.Printf("revoked delegation for %s\n", path)
 	return nil
 }
 
@@ -171,6 +241,30 @@ func acceptJoinBundle(bundlePath string, keyPath string) error {
 	fmt.Printf("joined %s in %s\n", bundle.Zone, path)
 	fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
 	return nil
+}
+
+func cleanupRevokedPeerState(state *stateFile, revoked zone.ZonePath) {
+	if state == nil || len(state.SyncPeers) == 0 {
+		return
+	}
+	for peerID := range state.SyncPeers {
+		path := zone.ZonePath(peerID)
+		if path == revoked || isZoneDescendantOf(path, revoked) {
+			delete(state.SyncPeers, peerID)
+		}
+	}
+}
+
+func isZoneDescendantOf(path, parent zone.ZonePath) bool {
+	if !path.Valid() || !parent.Valid() || path == parent {
+		return false
+	}
+	for current := path.Parent(); current != zone.RootZone; current = current.Parent() {
+		if current == parent {
+			return true
+		}
+	}
+	return parent == zone.RootZone
 }
 
 func signerForParent(state *stateFile, parent zone.ZonePath) (ed25519.PrivateKey, error) {

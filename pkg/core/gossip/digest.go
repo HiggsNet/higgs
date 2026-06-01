@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"sort"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -14,6 +15,9 @@ func ZoneDigests(ns *zone.NetworkState) []ZoneDigest {
 	out := make([]ZoneDigest, 0, len(ns.Zones))
 	for path, zs := range ns.Zones {
 		if zs == nil {
+			continue
+		}
+		if ns.IsZoneRevoked(path, time.Now()) {
 			continue
 		}
 		out = append(out, ZoneDigest{
@@ -31,7 +35,7 @@ func ZoneRoot(zs *zone.ZoneState) []byte {
 	if zs == nil {
 		return nil
 	}
-	parts := make([][]byte, 0, 1+len(zs.Delegations)+len(zs.Records))
+	parts := make([][]byte, 0, 1+len(zs.Delegations)+len(zs.Revocations)+len(zs.Records))
 	parts = append(parts, higgscrypto.AuthorityHash(zs.Authority))
 
 	delegationZones := make([]string, 0, len(zs.Delegations))
@@ -49,6 +53,24 @@ func ZoneRoot(zs *zone.ZoneState) []byte {
 			[]byte(path),
 			delegation.AuthorityHash,
 			delegation.Signature,
+		))
+	}
+
+	revocationZones := make([]string, 0, len(zs.Revocations))
+	for path := range zs.Revocations {
+		revocationZones = append(revocationZones, path.String())
+	}
+	sort.Strings(revocationZones)
+	for _, path := range revocationZones {
+		revocation := zs.Revocations[zone.ZonePath(path)]
+		if revocation == nil {
+			continue
+		}
+		parts = append(parts, higgscrypto.Hash(
+			[]byte("revocation"),
+			[]byte(path),
+			revocation.RevokedAuthorityHash,
+			revocation.Signature,
 		))
 	}
 

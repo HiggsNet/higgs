@@ -187,12 +187,13 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 	}
 	for _, digest := range digests {
 		zs := state.Network.Zones[digest.Zone]
-		fmt.Fprintf(w, "zone %s root=%s records=%d history=%d delegations=%d\n",
+		fmt.Fprintf(w, "zone %s root=%s records=%d history=%d delegations=%d revocations=%d\n",
 			digest.Zone,
 			hex.EncodeToString(digest.RootHash),
 			len(zs.Records),
 			countHistory(zs),
 			len(zs.Delegations),
+			len(zs.Revocations),
 		)
 	}
 	return nil
@@ -1098,7 +1099,11 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
 	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
 	var snapshots []gossip.ZoneSnapshot
+	now := time.Now()
 	for _, path := range zones {
+		if ns.IsZoneRevoked(path, now) {
+			continue
+		}
 		snapshot, err := gossip.Snapshot(ns, path)
 		if err != nil {
 			continue
@@ -1115,6 +1120,9 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 }
 
 func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord) error {
+	if fetch != nil && ns.IsZoneRevoked(fetch.Zone, time.Now()) {
+		return nil
+	}
 	record, err := gossip.RecordSnapshotFor(ns, fetch)
 	if err != nil {
 		return nil

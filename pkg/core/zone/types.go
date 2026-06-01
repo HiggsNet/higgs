@@ -110,6 +110,20 @@ type Delegation struct {
 	Signature []byte
 }
 
+type DelegationRevocation struct {
+	ChildZone             ZonePath
+	ParentZone            ZonePath
+	RevokedAuthorityEpoch uint64
+	RevokedAuthorityHash  []byte
+	Reason                string
+	RevokedAt             int64
+	TTLSeconds            int64
+	GraceSeconds          int64
+
+	SignedBy  ed25519.PublicKey
+	Signature []byte
+}
+
 type Record struct {
 	Zone      ZonePath
 	Key       string
@@ -129,6 +143,7 @@ type ZoneState struct {
 	Authority     *ZoneAuthority
 	ParentProof   []*Delegation
 	Delegations   map[ZonePath]*Delegation
+	Revocations   map[ZonePath]*DelegationRevocation
 	Records       map[string]*Record
 	RecordHistory map[string][]*Record
 	MerkleRoot    []byte
@@ -139,6 +154,7 @@ func NewZoneState(path ZonePath, authority *ZoneAuthority) *ZoneState {
 		Path:          path,
 		Authority:     authority,
 		Delegations:   make(map[ZonePath]*Delegation),
+		Revocations:   make(map[ZonePath]*DelegationRevocation),
 		Records:       make(map[string]*Record),
 		RecordHistory: make(map[string][]*Record),
 	}

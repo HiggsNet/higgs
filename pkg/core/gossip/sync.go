@@ -69,6 +69,7 @@ func Snapshot(ns *zone.NetworkState, path zone.ZonePath) (*ZoneSnapshot, error) 
 		Authority:   cloneAuthority(zs.Authority),
 		ParentProof: cloneDelegationSlice(zs.ParentProof),
 		Delegations: cloneDelegationMap(zs.Delegations),
+		Revocations: cloneRevocationMap(zs.Revocations),
 		Records:     cloneRecordMap(zs.Records),
 	}, nil
 }
@@ -105,6 +106,9 @@ func ApplyRecordSnapshot(ns *zone.NetworkState, snapshot *RecordSnapshot, now ti
 	if snapshot.Zone != snapshot.Record.Zone {
 		return zone.ErrInvalidZonePath
 	}
+	if ns.IsZoneRevoked(snapshot.Zone, now) {
+		return fmt.Errorf("%w: %s", zone.ErrZoneRevoked, snapshot.Zone)
+	}
 	ns.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 	if err := higgscrypto.VerifyChain(ns, snapshot.Zone, now); err != nil {
 		return fmt.Errorf("%w: %v", ErrUntrustedZone, err)
@@ -121,6 +125,9 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	}
 	if !snapshot.Zone.Valid() {
 		return nil, zone.ErrInvalidZonePath
+	}
+	if ns.IsZoneRevoked(snapshot.Zone, now) {
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneRevoked, snapshot.Zone)
 	}
 	if limits == (SyncLimits{}) {
 		limits = DefaultSyncLimits()
@@ -142,6 +149,11 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 			return nil, fmt.Errorf("verify delegation %s: %w", child, err)
 		}
 	}
+	for child, revocation := range zs.Revocations {
+		if err := higgscrypto.VerifyDelegationRevocation(revocation, zs.Authority, snapshot.Zone, now); err != nil {
+			return nil, fmt.Errorf("verify revocation %s: %w", child, err)
+		}
+	}
 
 	active := ns.Zones[snapshot.Zone]
 	if active == nil {
@@ -154,6 +166,9 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	if active.Delegations == nil {
 		active.Delegations = make(map[zone.ZonePath]*zone.Delegation)
 	}
+	if active.Revocations == nil {
+		active.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
+	}
 	if active.Records == nil {
 		active.Records = make(map[string]*zone.Record)
 	}
@@ -162,6 +177,12 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	}
 	for child, delegation := range snapshot.Delegations {
 		active.Delegations[child] = cloneDelegation(delegation)
+	}
+	for child, revocation := range snapshot.Revocations {
+		active.Revocations[child] = cloneRevocation(revocation)
+		if activeRevocationApplies(active.Delegations[child], revocation) {
+			delete(active.Delegations, child)
+		}
 	}
 
 	ns.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
@@ -235,6 +256,7 @@ func snapshotZoneState(snapshot *ZoneSnapshot) *zone.ZoneState {
 		Authority:     cloneAuthority(snapshot.Authority),
 		ParentProof:   cloneDelegationSlice(snapshot.ParentProof),
 		Delegations:   cloneDelegationMap(snapshot.Delegations),
+		Revocations:   cloneRevocationMap(snapshot.Revocations),
 		Records:       cloneRecordMap(snapshot.Records),
 		RecordHistory: cloneRecordHistory(snapshot.RecordHistory),
 	}
@@ -254,6 +276,7 @@ func cloneNetworkState(ns *zone.NetworkState) *zone.NetworkState {
 			Authority:     cloneAuthority(zs.Authority),
 			ParentProof:   cloneDelegationSlice(zs.ParentProof),
 			Delegations:   cloneDelegationMap(zs.Delegations),
+			Revocations:   cloneRevocationMap(zs.Revocations),
 			Records:       cloneRecordMap(zs.Records),
 			RecordHistory: cloneRecordHistory(zs.RecordHistory),
 			MerkleRoot:    cloneBytes(zs.MerkleRoot),
@@ -297,6 +320,14 @@ func cloneDelegationMap(delegations map[zone.ZonePath]*zone.Delegation) map[zone
 	return out
 }
 
+func cloneRevocationMap(revocations map[zone.ZonePath]*zone.DelegationRevocation) map[zone.ZonePath]*zone.DelegationRevocation {
+	out := make(map[zone.ZonePath]*zone.DelegationRevocation, len(revocations))
+	for path, revocation := range revocations {
+		out[path] = cloneRevocation(revocation)
+	}
+	return out
+}
+
 func cloneDelegationSlice(delegations []*zone.Delegation) []*zone.Delegation {
 	out := make([]*zone.Delegation, 0, len(delegations))
 	for _, delegation := range delegations {
@@ -336,6 +367,27 @@ func cloneDelegation(delegation *zone.Delegation) *zone.Delegation {
 		out.ExpiresAt = &expires
 	}
 	return &out
+}
+
+func cloneRevocation(revocation *zone.DelegationRevocation) *zone.DelegationRevocation {
+	if revocation == nil {
+		return nil
+	}
+	out := *revocation
+	out.RevokedAuthorityHash = cloneBytes(revocation.RevokedAuthorityHash)
+	out.SignedBy = cloneBytes(revocation.SignedBy)
+	out.Signature = cloneBytes(revocation.Signature)
+	return &out
+}
+
+func activeRevocationApplies(delegation *zone.Delegation, revocation *zone.DelegationRevocation) bool {
+	if revocation == nil {
+		return false
+	}
+	if delegation == nil {
+		return true
+	}
+	return bytes.Equal(revocation.RevokedAuthorityHash, delegation.AuthorityHash) || revocation.RevokedAuthorityEpoch >= delegation.AuthorityEpoch
 }
 
 func cloneRecord(record *zone.Record) *zone.Record {

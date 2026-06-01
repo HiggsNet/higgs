@@ -173,3 +173,59 @@ func TestNetworkStatePutBoundsRecordHistory(t *testing.T) {
 		t.Fatalf("oldest retained version = %d, want 2", got)
 	}
 }
+
+func TestNetworkStateRevocationCoversSubtreeAndSkipsGet(t *testing.T) {
+	ns := NewNetworkState()
+	ns.Zones[RootZone] = NewZoneState(RootZone, nil)
+	ns.Zones["catofes."] = NewZoneState("catofes.", nil)
+	ns.Zones["node1.catofes."] = NewZoneState("node1.catofes.", nil)
+	ns.Zones[RootZone].Revocations["catofes."] = &DelegationRevocation{
+		ChildZone:             "catofes.",
+		ParentZone:            RootZone,
+		RevokedAuthorityEpoch: 1,
+		RevokedAuthorityHash:  []byte{1},
+		RevokedAt:             100,
+	}
+	ns.Zones["node1.catofes."].Records["identity"] = &Record{
+		Zone:    "node1.catofes.",
+		Key:     "identity",
+		Value:   []byte("node1"),
+		Version: 1,
+	}
+
+	now := time.Unix(123, 0)
+	if !ns.IsZoneRevoked("catofes.", now) {
+		t.Fatalf("catofes. is not revoked")
+	}
+	if !ns.IsZoneRevoked("node1.catofes.", now) {
+		t.Fatalf("node1.catofes. is not covered by parent revocation")
+	}
+	if _, err := ns.Get("node1.catofes./identity"); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("Get revoked record = %v, want ErrRecordNotFound", err)
+	}
+	if err := ns.PutAt(&Record{Zone: "node1.catofes.", Key: "new", Version: 1}, now); !errors.Is(err, ErrZoneRevoked) {
+		t.Fatalf("PutAt revoked subtree = %v, want ErrZoneRevoked", err)
+	}
+}
+
+func TestNetworkStateRevocationAllowsHigherEpochRedelegation(t *testing.T) {
+	ns := NewNetworkState()
+	ns.Zones[RootZone] = NewZoneState(RootZone, nil)
+	ns.Zones["catofes."] = NewZoneState("catofes.", &ZoneAuthority{Zone: "catofes.", Epoch: 2})
+	ns.Zones[RootZone].Delegations["catofes."] = &Delegation{
+		ZoneName:       "catofes.",
+		AuthorityEpoch: 2,
+		AuthorityHash:  []byte{2},
+	}
+	ns.Zones[RootZone].Revocations["catofes."] = &DelegationRevocation{
+		ChildZone:             "catofes.",
+		ParentZone:            RootZone,
+		RevokedAuthorityEpoch: 1,
+		RevokedAuthorityHash:  []byte{1},
+		RevokedAt:             100,
+	}
+
+	if ns.IsZoneRevoked("catofes.", time.Unix(123, 0)) {
+		t.Fatalf("higher epoch delegation should supersede older revocation")
+	}
+}

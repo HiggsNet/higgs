@@ -88,6 +88,9 @@ func ExtractPeerEndpointsAt(ns *zone.NetworkState, now time.Time) map[string][]E
 		return out
 	}
 	for path, zs := range ns.Zones {
+		if ns.IsZoneRevoked(path, now) {
+			continue
+		}
 		peerID := string(path)
 		for key, record := range zs.Records {
 			if !strings.HasPrefix(key, EndpointRecordKeyPrefix) {

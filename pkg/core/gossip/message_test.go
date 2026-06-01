@@ -201,6 +201,80 @@ func TestApplyRecordSnapshotAcceptsSignedFastForward(t *testing.T) {
 	}
 }
 
+func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, rootPriv, zonePriv := testNetworkWithKeys(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+
+	delegation := source.Zones[zone.RootZone].Delegations["catofes."]
+	revocation := &zone.DelegationRevocation{
+		ChildZone:             "catofes.",
+		ParentZone:            zone.RootZone,
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		Reason:                "compromised",
+		RevokedAt:             now.Unix(),
+	}
+	if err := higgscrypto.SignDelegationRevocation(revocation, zone.RootZone, rootPriv); err != nil {
+		t.Fatalf("SignDelegationRevocation: %v", err)
+	}
+	source.Zones[zone.RootZone].Revocations["catofes."] = revocation
+	delete(source.Zones[zone.RootZone].Delegations, "catofes.")
+
+	snapshot, err := Snapshot(source, zone.RootZone)
+	if err != nil {
+		t.Fatalf("Snapshot(root): %v", err)
+	}
+	target, _ := testNetwork(t)
+	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatalf("ApplySnapshot(root): %v", err)
+	}
+	if result.Delegation != 0 {
+		t.Fatalf("delegations = %d, want 0", result.Delegation)
+	}
+	if !target.IsZoneRevoked("catofes.", now) {
+		t.Fatalf("catofes. was not marked revoked")
+	}
+	if err := higgscrypto.VerifyChain(target, "catofes.", now); !errors.Is(err, zone.ErrZoneRevoked) {
+		t.Fatalf("VerifyChain = %v, want ErrZoneRevoked", err)
+	}
+	record := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-c"), 1, nil, now.Unix())
+	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: record}, now); !errors.Is(err, zone.ErrZoneRevoked) {
+		t.Fatalf("ApplyRecordSnapshot = %v, want ErrZoneRevoked", err)
+	}
+}
+
+func TestRevokedZoneEndpointsAreNotDiscovered(t *testing.T) {
+	now := time.Unix(1000, 0)
+	ns, rootPriv, zonePriv := testNetworkWithKeys(t)
+	ns.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	value := []byte(`{"endpoints":[{"address":"192.0.2.10","port":33434,"protocol":"udp"}],"updated_at":1000}`)
+	record := signedRecord(t, zonePriv, "catofes.", EndpointRecordKeyUDP, value, 1, nil, now.Unix())
+	if err := ns.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt(endpoint): %v", err)
+	}
+	if got := ExtractPeerEndpointsAt(ns, now); len(got["catofes."]) != 1 {
+		t.Fatalf("endpoints before revoke = %#v, want one", got)
+	}
+	delegation := ns.Zones[zone.RootZone].Delegations["catofes."]
+	revocation := &zone.DelegationRevocation{
+		ChildZone:             "catofes.",
+		ParentZone:            zone.RootZone,
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		Reason:                "retired",
+		RevokedAt:             now.Unix(),
+	}
+	if err := higgscrypto.SignDelegationRevocation(revocation, zone.RootZone, rootPriv); err != nil {
+		t.Fatalf("SignDelegationRevocation: %v", err)
+	}
+	ns.Zones[zone.RootZone].Revocations["catofes."] = revocation
+	if got := ExtractPeerEndpointsAt(ns, now); len(got["catofes."]) != 0 {
+		t.Fatalf("endpoints after revoke = %#v, want none", got)
+	}
+}
+
 func TestApplySnapshotRejectsRecordLimit(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)
@@ -268,6 +342,12 @@ func emptySnapshotTarget(source *zone.NetworkState) *zone.NetworkState {
 
 func testNetwork(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey) {
 	t.Helper()
+	ns, _, zonePriv := testNetworkWithKeys(t)
+	return ns, zonePriv
+}
+
+func testNetworkWithKeys(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey, ed25519.PrivateKey) {
+	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey(root): %v", err)
@@ -309,7 +389,7 @@ func testNetwork(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey) {
 		t.Fatalf("SignDelegation: %v", err)
 	}
 	ns.Zones[zone.RootZone].Delegations["catofes."] = delegation
-	return ns, zonePriv
+	return ns, rootPriv, zonePriv
 }
 
 func signedRecord(t *testing.T, priv ed25519.PrivateKey, path zone.ZonePath, key string, value []byte, version uint64, prev []byte, ts int64) *zone.Record {

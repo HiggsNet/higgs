@@ -12,6 +12,7 @@ import (
 const (
 	DomainRecord       = "higgs.record.v1"
 	DomainDelegation   = "higgs.delegation.v1"
+	DomainRevocation   = "higgs.delegation-revocation.v1"
 	DomainAuthority    = "higgs.authority.v1"
 	DomainGossip       = "higgs.gossip.v1"
 	SupportedThreshold = uint8(1)
@@ -61,6 +62,14 @@ func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) e
 		}
 
 		delegation := parentState.Delegations[current]
+		if revocation := parentState.Revocations[current]; revocation != nil {
+			if err := VerifyDelegationRevocation(revocation, parentState.Authority, parent, now); err != nil {
+				return err
+			}
+			if revocationAppliesToDelegation(revocation, delegation) {
+				return zone.ErrZoneRevoked
+			}
+		}
 		if delegation == nil {
 			delegation = parentProofDelegation(currentState, current)
 		}
@@ -173,6 +182,51 @@ func VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, p
 	return nil
 }
 
+func SignDelegationRevocation(r *zone.DelegationRevocation, parent zone.ZonePath, priv ed25519.PrivateKey) error {
+	if r == nil {
+		return errors.New("delegation revocation is nil")
+	}
+	if r.ParentZone == "" {
+		r.ParentZone = parent
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	r.SignedBy = append(r.SignedBy[:0], pub...)
+	r.Signature = ed25519.Sign(priv, revocationPayload(r, parent))
+	return nil
+}
+
+func VerifyDelegationRevocation(r *zone.DelegationRevocation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
+	if r == nil {
+		return errors.New("delegation revocation is nil")
+	}
+	if err := verifyAuthoritySupported(parentAuthority); err != nil {
+		return err
+	}
+	if !r.ChildZone.Valid() || r.ChildZone == zone.RootZone {
+		return errors.New("revocation child zone is invalid")
+	}
+	if r.ParentZone != parentZone || r.ChildZone.Parent() != parentZone {
+		return errors.New("revocation parent mismatch")
+	}
+	if r.RevokedAuthorityEpoch == 0 {
+		return errors.New("revocation authority epoch is empty")
+	}
+	if len(r.RevokedAuthorityHash) == 0 {
+		return errors.New("revocation authority hash is empty")
+	}
+	if r.RevokedAt > 0 && now.Unix() < r.RevokedAt {
+		return errors.New("revocation is not active yet")
+	}
+	key, err := findAuthorizedKey(parentAuthority, r.SignedBy, zone.PermDelegate, "", "", now)
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(key.Key, revocationPayload(r, parentZone), r.Signature) {
+		return errors.New("revocation signature invalid")
+	}
+	return nil
+}
+
 func AuthorityHash(a *zone.ZoneAuthority) []byte {
 	return Hash(authorityPayload(a))
 }
@@ -210,6 +264,32 @@ func delegationPayload(d *zone.Delegation, parent zone.ZonePath) []byte {
 	}
 	b.bytes(KeyID(d.SignedBy))
 	return b.out
+}
+
+func revocationPayload(r *zone.DelegationRevocation, parent zone.ZonePath) []byte {
+	var b builder
+	b.str(DomainRevocation)
+	b.str(parent.String())
+	b.str(r.ParentZone.String())
+	b.str(r.ChildZone.String())
+	b.u64(r.RevokedAuthorityEpoch)
+	b.bytes(r.RevokedAuthorityHash)
+	b.str(r.Reason)
+	b.i64(r.RevokedAt)
+	b.i64(r.TTLSeconds)
+	b.i64(r.GraceSeconds)
+	b.bytes(KeyID(r.SignedBy))
+	return b.out
+}
+
+func revocationAppliesToDelegation(r *zone.DelegationRevocation, d *zone.Delegation) bool {
+	if r == nil {
+		return false
+	}
+	if d == nil {
+		return true
+	}
+	return equalBytes(r.RevokedAuthorityHash, d.AuthorityHash) || r.RevokedAuthorityEpoch >= d.AuthorityEpoch
 }
 
 func normalizedDelegationScope(d *zone.Delegation) zone.DelegationScope {

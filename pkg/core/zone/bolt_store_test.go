@@ -39,6 +39,16 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 		Value:   []byte("old"),
 		Version: 0,
 	}}
+	ns.Zones[RootZone].Revocations["node1.catofes."] = &DelegationRevocation{
+		ChildZone:             "node1.catofes.",
+		ParentZone:            RootZone,
+		RevokedAuthorityEpoch: 1,
+		RevokedAuthorityHash:  []byte{1, 2, 3},
+		Reason:                "retired",
+		RevokedAt:             123,
+		SignedBy:              []byte{4, 5, 6},
+		Signature:             []byte{7, 8, 9},
+	}
 	if err := store.SaveNetwork(ns); err != nil {
 		t.Fatalf("SaveNetwork: %v", err)
 	}
@@ -56,6 +66,13 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 	}
 	if got := len(zs.RecordHistory["identity"]); got != 1 {
 		t.Fatalf("loaded history len = %d, want 1", got)
+	}
+	revocation := got.Zones[RootZone].Revocations["node1.catofes."]
+	if revocation == nil {
+		t.Fatalf("loaded revocation missing")
+	}
+	if revocation.Reason != "retired" || revocation.RevokedAt != 123 {
+		t.Fatalf("loaded revocation = %#v, want retired at 123", revocation)
 	}
 }
 

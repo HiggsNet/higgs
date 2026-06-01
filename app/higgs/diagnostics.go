@@ -114,12 +114,23 @@ func debugZone(path zone.ZonePath) error {
 	if err := higgscrypto.VerifyChain(state.Network, path, rt.Now()); err != nil {
 		verifyResult = err.Error()
 	}
+	revocation := state.Network.ActiveRevocation(path, rt.Now())
 	fmt.Printf("zone: %s\n", path)
 	fmt.Printf("root: %s\n", hex.EncodeToString(digest.RootHash))
 	fmt.Printf("records: %d\n", len(zs.Records))
 	fmt.Printf("history: %d\n", countHistory(zs))
 	fmt.Printf("delegations: %d\n", len(zs.Delegations))
+	fmt.Printf("revocations: %d\n", len(zs.Revocations))
 	fmt.Printf("parent_proof: %d\n", len(zs.ParentProof))
+	if revocation == nil {
+		fmt.Printf("revoked: false\n")
+	} else {
+		fmt.Printf("revoked: true\n")
+		fmt.Printf("revoked_by: %s\n", revocation.ParentZone)
+		fmt.Printf("revoked_at: %s\n", formatUnixTime(revocation.RevokedAt))
+		fmt.Printf("revocation_reason: %s\n", dash(revocation.Reason))
+		fmt.Printf("revoked_authority_epoch: %d\n", revocation.RevokedAuthorityEpoch)
+	}
 	fmt.Printf("verify: %s\n", verifyResult)
 	printDebugRecords("record", zs.Records)
 	return nil

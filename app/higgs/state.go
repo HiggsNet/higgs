@@ -246,6 +246,9 @@ func normalizeState(ns *zone.NetworkState) {
 		if zs.Delegations == nil {
 			zs.Delegations = make(map[zone.ZonePath]*zone.Delegation)
 		}
+		if zs.Revocations == nil {
+			zs.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
+		}
 		if zs.Records == nil {
 			zs.Records = make(map[string]*zone.Record)
 		}

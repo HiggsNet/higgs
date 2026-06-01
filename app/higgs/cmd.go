@@ -143,6 +143,21 @@ func cmdDelegate() *cli.Command {
 					return issueDelegation(cmd.Args().Get(0), cmd.Args().Get(1))
 				},
 			},
+			{
+				Name:      "revoke",
+				Usage:     "Revoke a child zone delegation",
+				UsageText: "higgs delegate revoke <zone> [reason]",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
+						return cli.Exit("usage: higgs delegate revoke <zone> [reason]", 1)
+					}
+					reason := ""
+					if cmd.Args().Len() == 2 {
+						reason = cmd.Args().Get(1)
+					}
+					return revokeDelegation(zone.ZonePath(cmd.Args().Get(0)), reason)
+				},
+			},
 		},
 	}
 }

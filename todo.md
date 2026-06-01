@@ -232,17 +232,19 @@
   - [x] 增加针对 runtime 的单元测试：config 只加载一次、state path/env 覆盖优先级、trusted root 校验、sync limits 派生、debug log env/config 优先级
   - [x] 重构后跑通 `make check`、`make phase2-smoke`、`make multi-node-smoke`、`make chain-relay-smoke`
 
-- [ ] **2.13 Delegation 撤销 / Zone 删除语义**
-  - [ ] 明确删除模型：父 Zone 中的 delegation 是子 Zone 授权的唯一权威来源；删除子 Zone 必须由父 Zone 写入 signed revocation/tombstone，而不是仅从本地 map 中移除
-  - [ ] 定义 revocation/tombstone 数据结构：包含 child zone、parent zone、revoked authority epoch/hash、reason、revoked_at、ttl/grace、signer，并由父 Zone authority 签名
-  - [ ] 定义父 Zone snapshot 的优先级：同一 child 的有效 delegation 与 revocation 冲突时，以父 Zone 中版本/epoch 更新且签名有效的状态为准；子 Zone 的 `ParentProof` 只是缓存，不可覆盖父 Zone 撤销
-  - [ ] 撤销后，本地 active state 将该 Zone 及其子树标记为 revoked/quarantined：停止接受该 Zone 新 record、停止 relay 其新 announce、停止将其 endpoints 加入 known peer table
-  - [ ] 保留已撤销 Zone 的历史数据用于审计和冲突排查，但默认查询、配置生成、peer discovery、route authorization 不再使用其 active records
-  - [ ] 清理撤销子树相关 sync peer 状态、discovered endpoints、relay fanout 队列，避免已撤销节点继续通过 relay 恢复活跃状态
-  - [ ] 增加 CLI：`higgs delegate revoke <zone>` 由父 Zone 管理者签发撤销；`higgs debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
-  - [ ] 增加 gossip 同步语义：revocation/tombstone 必须进入 zone digest/snapshot，传播优先级高于普通 record，节点收到后立即触发 outbound sync/relay fanout
-  - [ ] 增加测试：撤销普通节点 Zone 后，其他节点拒绝其新 record 和 endpoint；撤销中间管理 Zone 后，其整个子树失效；重启后 revoked 状态仍持久化
-  - [ ] 增加 smoke：A/B/C 已建立同步后，管理员撤销 node-b delegation，A/C 收敛后不再信任 B 的 record、endpoint、route announcement
+- [x] **2.13 Delegation 撤销 / Zone 删除语义**
+  - [x] 明确删除模型：父 Zone 中的 delegation 是子 Zone 授权的唯一权威来源；删除子 Zone 必须由父 Zone 写入 signed revocation/tombstone，而不是仅从本地 map 中移除
+  - [x] 定义 revocation/tombstone 数据结构：包含 child zone、parent zone、revoked authority epoch/hash、reason、revoked_at、ttl/grace、signer，并由父 Zone authority 签名
+  - [x] 定义父 Zone snapshot 的优先级：同一 child 的有效 delegation 与 revocation 冲突时，以父 Zone 中版本/epoch 更新且签名有效的状态为准；子 Zone 的 `ParentProof` 只是缓存，不可覆盖父 Zone 撤销
+  - [x] 撤销后，本地 active state 将该 Zone 及其子树标记为 revoked/quarantined：停止接受该 Zone 新 record、停止 relay 其新 announce、停止将其 endpoints 加入 known peer table
+  - [x] 保留已撤销 Zone 的历史数据用于审计和冲突排查，但默认查询、配置生成、peer discovery、route authorization 不再使用其 active records
+  - [x] 清理撤销子树相关 sync peer 状态、discovered endpoints、relay fanout 队列，避免已撤销节点继续通过 relay 恢复活跃状态
+  - [x] 增加 CLI：`higgs delegate revoke <zone>` 由父 Zone 管理者签发撤销；`higgs debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
+  - [x] 增加 gossip 同步语义：revocation/tombstone 必须进入 zone digest/snapshot，传播优先级高于普通 record，节点收到后立即触发 outbound sync/relay fanout
+  - [x] 增加测试：撤销普通节点 Zone 后，其他节点拒绝其新 record 和 endpoint；撤销中间管理 Zone 后，其整个子树失效；重启后 revoked 状态仍持久化
+    - 已补核心单测：父 Zone tombstone 传播后 VerifyChain/RecordSnapshot 拒绝 revoked child；revoked zone endpoint 不再进入 discovery；父 Zone revocation 覆盖整棵子树；bbolt 重启后 revocation 持久化。
+  - [x] 增加 smoke：A/B/C 已建立同步后，管理员撤销 node-b delegation，A/C 收敛后不再信任 B 的 record、endpoint、route announcement
+    - 已新增 `make delegation-revoke-smoke`，覆盖 node-b record/endpoint 先传播，随后 catofes 管理员签发 revocation，A/C 收敛后 `verify node-b.catofes.` 失败、`debug zone` 显示 revoked、endpoint discovery 移除 node-b。
 
 - [x] **2.14 Bootstrap 准入死锁 / 新节点首次接入问题**
   - [x] 问题：Transport.validatePeer() 仅接受有 endpoint record 的 peer，新节点 B 首次向 A 发 Ping 时被拒（ErrUnknownPeer），B 的 endpoint 永远无法传播给 A，形成死锁

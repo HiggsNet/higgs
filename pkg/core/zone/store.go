@@ -15,6 +15,7 @@ var (
 	ErrStaleRecord        = errors.New("stale record version")
 	ErrRecordConflict     = errors.New("record version conflict")
 	ErrInvalidRecordChain = errors.New("invalid record version chain")
+	ErrZoneRevoked        = errors.New("zone revoked")
 )
 
 const MaxRecordHistoryPerKey = 128
@@ -40,6 +41,9 @@ func (ns *NetworkState) Get(fqkey string) (*Record, error) {
 	}
 
 	for _, current := range zp.Ancestors() {
+		if ns.IsZoneRevoked(current, time.Now()) {
+			continue
+		}
 		zs := ns.Zones[current]
 		if zs == nil {
 			continue
@@ -72,6 +76,9 @@ func (ns *NetworkState) PutAt(record *Record, now time.Time) error {
 	}
 	if record.Version == 0 {
 		return ErrInvalidRecordChain
+	}
+	if ns.IsZoneRevoked(record.Zone, now) {
+		return fmt.Errorf("%w: %s", ErrZoneRevoked, record.Zone)
 	}
 
 	zs := ns.Zones[record.Zone]
@@ -109,6 +116,39 @@ func (ns *NetworkState) PutAt(record *Record, now time.Time) error {
 	return nil
 }
 
+func (ns *NetworkState) IsZoneRevoked(path ZonePath, now time.Time) bool {
+	return ns.ActiveRevocation(path, now) != nil
+}
+
+func (ns *NetworkState) ActiveRevocation(path ZonePath, now time.Time) *DelegationRevocation {
+	if ns == nil || !path.Valid() || path == RootZone {
+		return nil
+	}
+	for current := path; current != RootZone; current = current.Parent() {
+		parent := current.Parent()
+		parentState := ns.Zones[parent]
+		if parentState == nil {
+			continue
+		}
+		revocation := parentState.Revocations[current]
+		if revocation == nil || revocation.ChildZone != current || revocation.ParentZone != parent {
+			continue
+		}
+		if revocation.RevokedAt > 0 && now.Unix() < revocation.RevokedAt {
+			continue
+		}
+		if delegation := parentState.Delegations[current]; delegation != nil {
+			hashMatches := equalBytes(revocation.RevokedAuthorityHash, delegation.AuthorityHash)
+			epochCovers := revocation.RevokedAuthorityEpoch >= delegation.AuthorityEpoch
+			if !hashMatches && !epochCovers {
+				continue
+			}
+		}
+		return revocation
+	}
+	return nil
+}
+
 func (ns *NetworkState) sameRecord(a, b *Record) bool {
 	if ns.RecordHasher != nil {
 		return equalBytes(ns.RecordHasher(a), ns.RecordHasher(b))
@@ -136,6 +176,9 @@ func (ns *NetworkState) PutTrusted(record *Record) error {
 	}
 	if record.Key == "" {
 		return ErrInvalidFQKey
+	}
+	if ns.IsZoneRevoked(record.Zone, time.Now()) {
+		return fmt.Errorf("%w: %s", ErrZoneRevoked, record.Zone)
 	}
 
 	zs := ns.Zones[record.Zone]

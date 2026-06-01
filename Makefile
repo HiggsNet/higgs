@@ -1,4 +1,4 @@
-.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke help
+.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke delegation-revoke-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -349,6 +349,53 @@ bootstrap-join-smoke: build
 	kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Bootstrap join smoke passed"
 
+delegation-revoke-smoke: build
+	@set -eu; \
+	tmp="$${TMPDIR:-/tmp}/higgs-delegation-revoke-smoke"; \
+	rm -rf "$$tmp"; \
+	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c"; \
+	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33510' > "$$tmp/admin/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33511' > "$$tmp/catofes/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33512' 'bootstrap:' '  - id: zone-catofes-admin' '    addr: 127.0.0.1:33511' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33513' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33512' > "$$tmp/b/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/c" 'peer_id: node-c.catofes.' 'listen_addr: 127.0.0.1:33514' 'bootstrap:' '  - id: zone-catofes-admin' '    addr: 127.0.0.1:33511' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33512' > "$$tmp/c/config.yaml"; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
+	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
+	for node in catofes a b c; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/catofes.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
+	for node in b c a; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
+	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b >/dev/null; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. sync/endpoint/udp '{"endpoints":[{"address":"127.0.0.1","port":33513,"protocol":"udp"}]}' sync.endpoint >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	catofes_pid=""; \
+	trap 'status="$$?"; kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/catofes.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	sleep 1; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >/dev/null; \
+	sleep 1; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; \
+	kill "$$a_pid" >/dev/null 2>&1 || true; \
+	wait "$$a_pid" >/dev/null 2>&1 || true; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate revoke node-b.catofes. retired >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	sleep 1; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >/dev/null; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >/dev/null; \
+	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
+	if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
+	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; then exit 1; fi; \
+	kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; \
+	echo "Delegation revoke smoke passed"
+
 help:
 	@echo "Available targets:"
 	@echo "  build   - Build the higgs binary to $(BUILD_DIR)/"
@@ -368,4 +415,5 @@ help:
 	@echo "  discovery-smoke - Run endpoint discovery smoke test"
 	@echo "  reflector-smoke - Run public IP reflector endpoint smoke test"
 	@echo "  bootstrap-join-smoke - Run new-node bootstrap admission smoke test"
+	@echo "  delegation-revoke-smoke - Run delegation revocation convergence smoke test"
 	@echo "  help    - Show this help message"

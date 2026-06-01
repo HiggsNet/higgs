@@ -139,6 +139,9 @@ func dumpZoneBucket(path zone.ZonePath, bucket *bolt.Bucket) error {
 	if err := dumpDelegations(bucket.Get([]byte("delegations"))); err != nil {
 		return err
 	}
+	if err := dumpRevocations(bucket.Get([]byte("revocations"))); err != nil {
+		return err
+	}
 	if err := dumpRecords("records", bucket.Get([]byte("records"))); err != nil {
 		return err
 	}
@@ -153,6 +156,7 @@ func dumpZoneBucket(path zone.ZonePath, bucket *bolt.Bucket) error {
 		"authority":      true,
 		"parent_proof":   true,
 		"delegations":    true,
+		"revocations":    true,
 		"records":        true,
 		"record_history": true,
 		"merkle_root":    true,
@@ -202,6 +206,32 @@ func dumpDelegations(data []byte) error {
 	for _, key := range keys {
 		fmt.Printf("    %s: ", key)
 		dumpDelegationLine(delegations[key])
+	}
+	return nil
+}
+
+func dumpRevocations(data []byte) error {
+	var revocations map[zone.ZonePath]*zone.DelegationRevocation
+	if err := unmarshalOptional(data, &revocations); err != nil {
+		return dumpRawNamed("revocations", data, "  ")
+	}
+	fmt.Printf("  revocations: %d\n", len(revocations))
+	keys := sortedZoneKeys(revocations)
+	for _, key := range keys {
+		revocation := revocations[key]
+		if revocation == nil {
+			fmt.Printf("    %s: -\n", key)
+			continue
+		}
+		fmt.Printf("    %s: parent=%s epoch=%d reason=%s revoked_at=%s signed_by=%s signature=%s\n",
+			key,
+			revocation.ParentZone,
+			revocation.RevokedAuthorityEpoch,
+			valueOrDash(revocation.Reason),
+			formatUnix(revocation.RevokedAt),
+			shortKey(revocation.SignedBy),
+			shortBytes(revocation.Signature),
+		)
 	}
 	return nil
 }
