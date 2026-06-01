@@ -314,6 +314,187 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync run --interval 5
 
 `sync run` 会定期比较摘要，也会在收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。
 
+### 双节点完整同步脚本
+
+下面的脚本会从空目录创建 root admin、`catofes.` 管理 Zone、`node-a` 和 `node-b`，让 A/B 都通过 delegation bundle 加入，然后做一次双向同步。
+
+```bash
+set -eu
+
+make build
+
+tmp="${TMPDIR:-/tmp}/higgs-readme-two-node"
+rm -rf "$tmp"
+mkdir -p "$tmp/admin" "$tmp/catofes" "$tmp/a" "$tmp/b"
+
+printf '%s\n' \
+  "data_dir: $tmp/admin" \
+  "peer_id: node-admin" \
+  "listen_addr: 127.0.0.1:33443" \
+  > "$tmp/admin/config.yaml"
+
+printf '%s\n' \
+  "data_dir: $tmp/catofes" \
+  "peer_id: zone-catofes-admin" \
+  "listen_addr: 127.0.0.1:33446" \
+  > "$tmp/catofes/config.yaml"
+
+printf '%s\n' \
+  "data_dir: $tmp/a" \
+  "peer_id: node-a" \
+  "listen_addr: 127.0.0.1:33444" \
+  "bootstrap:" \
+  "  - id: node-b" \
+  "    addr: 127.0.0.1:33445" \
+  > "$tmp/a/config.yaml"
+
+printf '%s\n' \
+  "data_dir: $tmp/b" \
+  "peer_id: node-b" \
+  "listen_addr: 127.0.0.1:33445" \
+  "bootstrap:" \
+  "  - id: node-a" \
+  "    addr: 127.0.0.1:33444" \
+  > "$tmp/b/config.yaml"
+
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root init >/dev/null
+root_key="$(HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root pubkey)"
+for node in catofes a b; do
+  printf '%s\n' "trusted_root_public_key: $root_key" >> "$tmp/$node/config.yaml"
+done
+
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs keygen "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.json" >/dev/null
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.json" "$tmp/catofes.bundle.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.json" "$tmp/catofes.key.json" >/dev/null
+
+for node in a b; do
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs keygen "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.json" >/dev/null
+  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.json" "$tmp/node-$node.bundle.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.json" "$tmp/node-$node.key.json" >/dev/null
+done
+
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs record put node-a.catofes. identity node-a >/dev/null
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record put node-b.catofes. identity node-b >/dev/null
+
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs sync serve >"$tmp/b.log" 2>&1 &
+server_pid="$!"
+trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
+sleep 1
+
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs sync once node-b >/dev/null
+kill "$server_pid" >/dev/null 2>&1 || true
+wait "$server_pid" >/dev/null 2>&1 || true
+trap - EXIT
+
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs sync serve >"$tmp/a.log" 2>&1 &
+server_pid="$!"
+trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
+sleep 1
+
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs sync once node-a >/dev/null
+kill "$server_pid" >/dev/null 2>&1 || true
+wait "$server_pid" >/dev/null 2>&1 || true
+trap - EXIT
+
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs zone show node-b.catofes. | grep -q '"identity"'
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs zone show node-a.catofes. | grep -q '"identity"'
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs verify node-b.catofes. >/dev/null
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs verify node-a.catofes. >/dev/null
+
+echo "two-node sync passed: $tmp"
+```
+
+同样的流程也可以直接用 `make phase2-smoke` 跑。脚本失败时先看 `$tmp/a.log` 和 `$tmp/b.log`。
+
+### 三节点传播示例
+
+下面的脚本创建 `node-a`、`node-b`、`node-c`，其中 B 和 C 都只配置 A 为 bootstrap。B 写入自己的 `identity` record 后先同步给 A，C 再从 A 拉取，验证状态可以通过中间节点传播。
+
+```bash
+set -eu
+
+make build
+
+tmp="${TMPDIR:-/tmp}/higgs-readme-three-node"
+rm -rf "$tmp"
+mkdir -p "$tmp/admin" "$tmp/catofes" "$tmp/a" "$tmp/b" "$tmp/c"
+
+printf '%s\n' "data_dir: $tmp/admin" "peer_id: node-admin" "listen_addr: 127.0.0.1:33453" > "$tmp/admin/config.yaml"
+printf '%s\n' "data_dir: $tmp/catofes" "peer_id: zone-catofes-admin" "listen_addr: 127.0.0.1:33456" > "$tmp/catofes/config.yaml"
+printf '%s\n' "data_dir: $tmp/a" "peer_id: node-a" "listen_addr: 127.0.0.1:33454" "bootstrap:" "  - id: node-b" "    addr: 127.0.0.1:33455" "  - id: node-c" "    addr: 127.0.0.1:33457" > "$tmp/a/config.yaml"
+printf '%s\n' "data_dir: $tmp/b" "peer_id: node-b" "listen_addr: 127.0.0.1:33455" "bootstrap:" "  - id: node-a" "    addr: 127.0.0.1:33454" > "$tmp/b/config.yaml"
+printf '%s\n' "data_dir: $tmp/c" "peer_id: node-c" "listen_addr: 127.0.0.1:33457" "bootstrap:" "  - id: node-a" "    addr: 127.0.0.1:33454" > "$tmp/c/config.yaml"
+
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root init >/dev/null
+root_key="$(HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root pubkey)"
+for node in catofes a b c; do
+  printf '%s\n' "trusted_root_public_key: $root_key" >> "$tmp/$node/config.yaml"
+done
+
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs keygen "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.json" >/dev/null
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.json" "$tmp/catofes.bundle.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.json" "$tmp/catofes.key.json" >/dev/null
+
+for node in a b c; do
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs keygen "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.json" >/dev/null
+  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.json" "$tmp/node-$node.bundle.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.json" "$tmp/node-$node.key.json" >/dev/null
+done
+
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record put node-b.catofes. identity node-b >/dev/null
+
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs sync serve >"$tmp/a.log" 2>&1 &
+server_pid="$!"
+trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
+sleep 1
+
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs sync once node-a >/dev/null
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs sync once node-a >/dev/null
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs sync once node-a >/dev/null
+
+kill "$server_pid" >/dev/null 2>&1 || true
+wait "$server_pid" >/dev/null 2>&1 || true
+trap - EXIT
+
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs zone show node-b.catofes. | grep -q '"identity"'
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs verify node-b.catofes. >/dev/null
+
+echo "three-node propagation passed: $tmp"
+```
+
+同样的流程也可以直接用 `make multi-node-smoke` 跑。更接近长期运行的自动重连流程见 `make phase2-run-smoke`。
+
+### 链式拓扑传播语义
+
+链式拓扑指节点只知道相邻 peer，例如 `A <-> B <-> C <-> D`。在这种拓扑里有两种收敛路径：
+
+- 周期收敛：每个节点按 `sync run --interval` 周期主动和 bootstrap/已发现 peer 比较摘要。即使没有主动中继，只要图连通，更新也会沿链逐轮传播，但最坏延迟接近链路跳数乘以同步周期。
+- 主动 relay fanout：节点应用来自某个 peer 的 `ANNOUNCE` 后，会立即向除来源 peer 外的其他已知 peer 发起轻量同步。这样 A 的更新到达 B 后，B 会马上尝试推给 C，C 再推给 D，不必等待完整周期。
+
+relay fanout 是加速收敛，不是信任捷径。每一跳收到的 snapshot 仍然要通过 root public key、delegation chain 和 record signature 验证；失败的数据不会进入 active state。链式场景可以直接跑：
+
+```bash
+make chain-relay-smoke
+```
+
+该 smoke 把同步周期设为 60 秒，并验证 D 能在等待完整周期前看到 A 的 record。
+
+### 常见错误与排查
+
+| 现象 | 常见原因 | 排查与修复 |
+|------|----------|------------|
+| `trusted root public key mismatch`、`root public key mismatch` 或 `verify` 失败 | `trusted_root_public_key` 填错，或复用了旧 `data_dir` 中的状态库 | 用 admin 节点重新执行 `root pubkey`，确认所有普通节点配置相同；测试时清空对应 `data_dir` 后重新 join |
+| debug log 出现 `unknown_peer` | 对端 `peer_id` 不在本节点 `bootstrap`，也还没有通过已验证 Zone/endpoint record 被发现 | 检查 `bootstrap.id` 是否等于对端配置里的 `peer_id`；首次接入时至少让一侧通过 bootstrap 或已同步 delegation chain 认识对方 |
+| `bind: permission denied`、`operation not permitted`、测试提示 UDP socket 不允许 | 当前运行环境禁止创建 UDP socket，或端口被系统策略拦截 | 换本机普通 shell 运行；确认没有容器/sandbox 网络限制；避免使用低端口；先跑不依赖 UDP 的 `make join-smoke` |
+| `bind: address already in use` | `listen_addr` 端口被已有 `sync serve`/`sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
+| `record version conflict`、`conflict` 或更新没有覆盖 | 同一 `zone/key` 出现相同 version 的不同内容，或本地正好有直接前驱但新 record 的 `PrevHash` 不匹配 | 用 `debug zone <zone>` 查看 active record 和历史；由该 Zone authority 再写入一个更高版本的合法 record，让网络继续 fast-forward 收敛 |
+| `verify_failed` | snapshot 能到达传输层，但 authority、delegation 或 record signature 验证失败 | 确认对端是用正确 bundle `join accept`，没有把 root/admin 私钥数据库复制给普通节点；用 `verify <zone>` 在发送方和接收方分别检查 |
+| `message_too_large`、`quota` | 单包超过限制，或短时间内同步对象太多 | 提高 `max_message_bytes`、`max_sync_zones`、`max_sync_records`，或降低写入/同步频率；两端配置应保持兼容 |
+
 ### Latest Record 与历史窗口
 
 Record 按 `zone/key` 独立版本化。普通同步采用 `latest signed state is authoritative` 语义：节点收到更高版本 record 后，先验证 Zone 信任链和 record 签名；验签通过后即可把它作为该 key 的 active record，不要求从 `@1` 依次重放到最新版本。
@@ -359,8 +540,8 @@ make chain-relay-smoke
 
 当前优先级不是直接进入 WireGuard，而是先把配置同步做稳：
 
-- README 操作手册继续补常见错误和排障路径
-- peer discovery / 动态 allowlist 仍在设计和实现中
+- 应用运行时与依赖边界整理仍需收敛
+- peer discovery / 动态 allowlist 需要继续打磨运行时边界与测试注入
 - Phase 2 末尾再决定是否切到 protobuf；默认仍不引入 `protoc`
 
 WireGuard 建链会在配置同步收敛后再做，避免把状态同步问题和系统网络配置问题混在一起。

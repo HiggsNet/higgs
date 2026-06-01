@@ -204,19 +204,21 @@
   - [x] 为 message size、zone count、record count 增加可配置限制
   - [x] 梳理是否需要在 Phase 2 末尾切 protobuf；默认仍不引入 `protoc`
 
-- [ ] **2.11 文档与操作手册**
-  - README 增加双节点完整同步脚本
-  - README 增加三节点传播示例
-  - README 记录链式拓扑传播语义：周期收敛 vs 主动 relay fanout 的差异
-  - 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、record conflict
+- [x] **2.11 文档与操作手册**
+  - [x] README 增加双节点完整同步脚本
+  - [x] README 增加三节点传播示例
+  - [x] README 记录链式拓扑传播语义：周期收敛 vs 主动 relay fanout 的差异
+  - [x] 记录常见错误：root public key 不匹配、unknown peer、UDP socket 不允许、record conflict
 
 - [ ] **2.12 应用运行时与依赖边界整理**
   - [ ] 盘点并收敛 CLI 层隐式依赖：config/state/store、sync transport、known peer table、logger、clock、stdout/stderr、validation hooks
   - [ ] 引入轻量 `Runtime` / `App` struct，负责一次性加载 `appConfig`、解析 state path、打开/保存 `stateFile`，并缓存由 config 派生出的 sync config
-  - [ ] 将 `loadState()` / `saveState()` 拆出显式依赖版本，如 `loadStateAt(path, trustRoot)`、`saveStateAt(path, state)`；保留薄 wrapper 兼容简单 CLI 命令
-  - [ ] 避免热路径重复读配置：`handleSyncPacket`、`relaySync`、`syncRoundWithTransport` 使用运行时持有的 sync config、limits、debug logger
-  - [ ] 引入 `SyncRuntime` / `SyncService`，聚合 `state`、`syncConfig`、`transport`、`limits`、`logger`、`clock`，把 packet handling、round、relay fanout 收为方法
+  - [ ] 将 `loadState()` / `saveState()` 拆出显式依赖版本，如 `loadStateAt(path, trustRoot)`、`saveStateAt(path, state)`；保留薄 wrapper 兼容简单 CLI 命令；`saveState` 目前每次调用都经由 `configuredStatePath()` 触发 `loadAppConfig()`，每次包处理落盘均读配置文件，需一并修正
+  - [ ] 避免热路径重复读配置：`handleSyncPacket`、`relaySync` 直接调用 `loadSyncConfig`；`syncRoundWithTransport` 通过内部调用 `handleSyncPacket` 间接触发，修复 `handleSyncPacket` 即可，无需额外给 `syncRoundWithTransport` 传 config 参数；`syncRun` 主循环中 `reloadStateIfChanged` 约每 250ms 调用一次 `loadState()` → 双重 `loadAppConfig()`，同样需要收敛到运行时持有的 config
+  - [ ] 引入 `SyncRuntime` / `SyncService`，聚合 `state`、`syncConfig`、`transport`、`limits`、`logger`、`clock`，把 packet handling、round、relay fanout 收为方法；注意应先让函数返回结构化结果（见「CLI 输出隔离」条目），再以方法形式注入 runtime，避免直接平移导致多职责一起塞入大对象，与下方「边界克制」原则矛盾
   - [ ] 将 `openSyncTransport` 的 replay window、peer quotas、known peers、debug logger 从局部构造改为运行时可配置依赖，为动态 discovery 和测试注入留接口
+  - [ ] 补 relay fanout 风险控制：验证失败的 `ANNOUNCE` 当前不会触发 relay，但同一坏 digest 可能被周期性 fetch/reject 形成局部噪音；增加 `(peer_id, zone, root_hash, reject_reason)` rejected digest cache / verify-failed circuit breaker / 更长永久失败 backoff，确保 root mismatch、bad signature、过期 delegation、缺 parent proof 等不会被重复拉取放大
+  - [ ] 为 relay 风险增加测试：验证失败不触发 relay；同一坏 digest 在 TTL 内不重复 fetch；远端 root hash 变化后允许重新尝试；多跳链式拓扑中单点拒绝不会造成全网 relay 风暴
   - [ ] 把 `configureValidation(state.Network)` 这类散落调用收敛到 state/network 加载边界，或明确为 `Runtime.ConfigureNetworkValidation()`，避免忘记调用导致行为差异
   - [ ] 将 `time.Now()` 的同步/backoff/record timestamp 使用收敛到运行时 clock；生产默认真实时间，测试可注入固定时间
   - [ ] 将 CLI 输出从业务函数中逐步隔离：命令层负责 `fmt.Printf`，核心函数返回结构化结果；优先处理 sync status/debug/db dump 等未来要做 golden test 的命令
