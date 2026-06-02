@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,5 +171,52 @@ func TestObjectPullConcurrencyLimit(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("pullObjectTCP succeeded with full limiter")
+	}
+}
+
+func TestObjectPullPerPeerInflightLimit(t *testing.T) {
+	var releases []func()
+	for i := 0; i < maxObjectPullPerPeerInflight; i++ {
+		release, err := objectPullPeerLimiter.acquire("node-b.catofes.")
+		if err != nil {
+			t.Fatalf("acquire(%d): %v", i, err)
+		}
+		releases = append(releases, release)
+	}
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+
+	_, err := pullObjectTCPForPeer("node-b.catofes.", "127.0.0.1:1", &gossip.ObjectPullRequest{
+		Type: gossip.ObjectPullZone,
+		Zone: "node-b.catofes.",
+	})
+	if err == nil {
+		t.Fatalf("pullObjectTCPForPeer succeeded with full peer limiter")
+	}
+	if got, want := err.Error(), "object pull per-peer inflight limit reached"; !strings.Contains(got, want) {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestObjectPullQuotaAccountsBytesAndObjects(t *testing.T) {
+	quotas := newLockedPeerQuotas(gossip.QuotaConfig{
+		ByteRate:    1,
+		ByteBurst:   8,
+		ObjectRate:  1,
+		ObjectBurst: 1,
+	})
+	now := time.Unix(1000, 0)
+
+	if err := quotas.allow("node-b.catofes.", 4, 1, now); err != nil {
+		t.Fatalf("allow(first): %v", err)
+	}
+	if err := quotas.allow("node-b.catofes.", 1, 1, now); !errors.Is(err, gossip.ErrQuotaExceeded) {
+		t.Fatalf("allow(over objects) = %v, want ErrQuotaExceeded", err)
+	}
+	if err := quotas.allow("node-b.catofes.", 9, 0, now.Add(2*time.Second)); !errors.Is(err, gossip.ErrQuotaExceeded) {
+		t.Fatalf("allow(over bytes) = %v, want ErrQuotaExceeded", err)
 	}
 }

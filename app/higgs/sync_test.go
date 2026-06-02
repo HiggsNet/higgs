@@ -331,6 +331,38 @@ func TestHandleAnnounceRecordsRejectedDigestOnVerifyFailure(t *testing.T) {
 	}
 }
 
+func TestRejectedRecordCacheSkipsSameObjectWithinTTL(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(3000, 0)
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       "bad-record",
+		Type:      "policy.string",
+		Value:     []byte("original"),
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	record.Value = []byte("tampered")
+	snapshot := &gossip.RecordSnapshot{Zone: "node-b.catofes.", Record: record}
+
+	recordRejectedRecord(state, "node-b.catofes.", snapshot, "verify_failed", now)
+
+	if !isRejectedRecordActive(state, "node-b.catofes.", snapshot, "", now.Add(time.Minute)) {
+		t.Fatalf("rejected record was not active")
+	}
+	if isRejectedRecordActive(state, "node-b.catofes.", snapshot, "", now.Add(rejectedDigestTTL+time.Second)) {
+		t.Fatalf("rejected record stayed active after TTL")
+	}
+	changed := *record
+	changed.Value = []byte("different tamper")
+	if isRejectedRecordActive(state, "node-b.catofes.", &gossip.RecordSnapshot{Zone: "node-b.catofes.", Record: &changed}, "", now.Add(time.Minute)) {
+		t.Fatalf("changed record hash should be retried")
+	}
+}
+
 func TestRelayRejectsSourceAndBackoffToLimitStorm(t *testing.T) {
 	now := time.Unix(1000, 0)
 	state := &stateFile{SyncPeers: map[string]syncPeerState{

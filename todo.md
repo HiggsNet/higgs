@@ -363,12 +363,13 @@
   - [x] debug/status 显示 object pull 最近错误、对象大小、来源 peer 和是否因不可达而跳过大对象
     - `sync status --verbose` 和 `debug peer` 已显示 object pull attempts/successes/failures、最近对象 zone/key/bytes/source peer、最近错误与 unreachable 标记
 
-- [ ] **3.6.5 可靠性与反放大控制**
+- [x] **3.6.5 可靠性与反放大控制**
   - [x] `sync once` 的完成条件改为基于目标 digest/对象确认或明确的 idle + no-pending-work，而不是收到任意 announce 后返回
     - 当前 sync round 会在 UDP quiet 后进入 object-pull 阶段，最终仍有 pending digest 时返回 `sync once timed out with pending zones`
-  - [ ] 对 object pull、record retry、relay fanout 加入 per-peer inflight 限制、超时清理和配额计费，避免大对象或坏 peer 造成内存/带宽放大
-  - [ ] 验证失败的对象按 `(peer_id, object_hash/root_hash, reason)` 进入 rejected cache；同一坏对象在 TTL 内不重复拉取
-    - 当前已有基于 `(peer_id, zone, root_hash, reason)` 的 rejected digest cache；还没有完整覆盖 record/object hash 与 object pull 最近错误语义
+  - [x] 对 object pull、record retry、relay fanout 加入 per-peer inflight 限制、超时清理和配额计费，避免大对象或坏 peer 造成内存/带宽放大
+    - object pull 客户端保留全局并发上限，并新增 per-peer inflight 上限与按 peer 的 byte/object token quota；TCP dial/read/write 仍使用短 deadline。relay fanout 对单次 inbound 更新设置硬上限，超过后记录 `relay_fanout_limited`。
+  - [x] 验证失败的对象按 `(peer_id, object_hash/root_hash, reason)` 进入 rejected cache；同一坏对象在 TTL 内不重复拉取
+    - rejected cache 继续兼容旧 zone digest 条目，并新增 zone/record 对象维度：zone 记录 root hash，record 记录完整 object hash 与 reason；sync round/object pull apply 失败会写入 cache，同一坏 root/record 在 TTL 内跳过，hash 变化或 TTL 过期后重试。
 
 - [ ] **3.6.6 测试与 smoke**
   - [x] 增加单测：MessagePack codec 往返兼容、未知 codec/version 拒绝、消息编码必须低于 datagram 预算；超预算 record 转 object pull，不生成超预算 UDP datagram
