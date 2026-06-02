@@ -40,6 +40,8 @@ type Transport struct {
 	outboundMu      sync.RWMutex
 	lastSeenAddrs   map[string]*net.UDPAddr // fallback addresses from recent inbound packets
 	lastSeenMu      sync.RWMutex
+	observedPaths   map[string]observedPath // verified short-lived inbound UDP paths
+	observedMu      sync.RWMutex
 	maxMessageBytes int
 	replay          *ReplayWindow
 	quotas          *PeerQuotas
@@ -64,6 +66,12 @@ type Event struct {
 	Duration  time.Duration
 	Error     string
 	Reason    string
+}
+
+type observedPath struct {
+	Addr        *net.UDPAddr
+	Until       time.Time
+	PreferFirst bool
 }
 
 func Listen(config Config) (*Transport, error) {
@@ -132,7 +140,7 @@ func (t *Transport) SetReadDeadline(deadline time.Time) error {
 }
 
 func (t *Transport) Send(peerID string, message *Message) error {
-	start := t.clock()
+	start := t.now()
 	event := Event{Direction: "send", PeerID: peerID}
 	if message != nil {
 		event.Type = message.Type
@@ -140,13 +148,23 @@ func (t *Transport) Send(peerID string, message *Message) error {
 	}
 
 	t.outboundMu.RLock()
-	addrs := t.outboundAddrs[peerID]
+	addrs := appendUDPAddrCopies(nil, t.outboundAddrs[peerID]...)
 	t.outboundMu.RUnlock()
+
+	t.observedMu.RLock()
+	if observed := t.observedPaths[peerID]; observed.Addr != nil && (observed.Until.IsZero() || t.now().Before(observed.Until)) {
+		if observed.PreferFirst {
+			addrs = appendUDPAddrCopies([]*net.UDPAddr{observed.Addr}, addrs...)
+		} else {
+			addrs = appendUDPAddrCopies(addrs, observed.Addr)
+		}
+	}
+	t.observedMu.RUnlock()
 
 	if len(addrs) == 0 {
 		t.lastSeenMu.RLock()
 		if lastAddr := t.lastSeenAddrs[peerID]; lastAddr != nil {
-			addrs = []*net.UDPAddr{lastAddr}
+			addrs = appendUDPAddrCopies(addrs, lastAddr)
 		}
 		t.lastSeenMu.RUnlock()
 	}
@@ -171,7 +189,7 @@ func (t *Transport) Send(peerID string, message *Message) error {
 		message.Nonce = nonce
 	}
 	if message.Timestamp == 0 {
-		message.Timestamp = t.clock().Unix()
+		message.Timestamp = t.now().Unix()
 	}
 	data, err := MarshalMessage(message)
 	if err != nil {
@@ -184,7 +202,7 @@ func (t *Transport) Send(peerID string, message *Message) error {
 		return ErrMessageTooLarge
 	}
 	if t.quotas != nil {
-		if err := t.quotas.Allow(peerID, int64(len(data)), objectCost(message), t.clock()); err != nil {
+		if err := t.quotas.Allow(peerID, int64(len(data)), objectCost(message), t.now()); err != nil {
 			t.logEvent(event, err, start)
 			return err
 		}
@@ -204,7 +222,7 @@ func (t *Transport) Send(peerID string, message *Message) error {
 }
 
 func (t *Transport) Receive() (*Packet, error) {
-	start := t.clock()
+	start := t.now()
 	buf := make([]byte, t.maxMessageBytes+1)
 	n, addr, err := t.conn.ReadFromUDP(buf)
 	if err != nil {
@@ -228,6 +246,16 @@ func (t *Transport) Receive() (*Packet, error) {
 		t.logEvent(event, err, start)
 		return nil, err
 	}
+	if t.quotas != nil {
+		if err := t.quotas.Allow(message.PeerID, int64(n), objectCost(message), t.now()); err != nil {
+			t.logEvent(event, err, start)
+			return nil, err
+		}
+	}
+	if err := t.replay.Check(message.PeerID, message.Nonce, message.Timestamp, t.now()); err != nil {
+		t.logEvent(event, err, start)
+		return nil, err
+	}
 	t.lastSeenMu.Lock()
 	if t.lastSeenAddrs == nil {
 		t.lastSeenAddrs = make(map[string]*net.UDPAddr)
@@ -235,16 +263,6 @@ func (t *Transport) Receive() (*Packet, error) {
 	copied := *addr
 	t.lastSeenAddrs[message.PeerID] = &copied
 	t.lastSeenMu.Unlock()
-	if t.quotas != nil {
-		if err := t.quotas.Allow(message.PeerID, int64(n), objectCost(message), t.clock()); err != nil {
-			t.logEvent(event, err, start)
-			return nil, err
-		}
-	}
-	if err := t.replay.Check(message.PeerID, message.Nonce, message.Timestamp, t.clock()); err != nil {
-		t.logEvent(event, err, start)
-		return nil, err
-	}
 	t.logEvent(event, nil, start)
 	return &Packet{Message: message, Addr: addr, Bytes: n}, nil
 }
@@ -265,7 +283,7 @@ func (t *Transport) logEvent(event Event, err error, start time.Time) {
 	if t == nil || t.log == nil {
 		return
 	}
-	event.Duration = t.clock().Sub(start)
+	event.Duration = t.now().Sub(start)
 	if err != nil {
 		event.Error = err.Error()
 		event.Reason = RejectReason(err)
@@ -356,6 +374,45 @@ func (t *Transport) PeerAddr(peerID string) *net.UDPAddr {
 	return &copied
 }
 
+// SetObservedPeerAddr stores a verified, short-lived inbound UDP path for a
+// peer. It does not change the inbound allowlist and is intended for NAT
+// mappings observed after upper-layer verification.
+func (t *Transport) SetObservedPeerAddr(peerID string, addr *net.UDPAddr, until time.Time, preferFirst bool) {
+	if t == nil || peerID == "" || addr == nil {
+		return
+	}
+	copied := *addr
+	t.observedMu.Lock()
+	if t.observedPaths == nil {
+		t.observedPaths = make(map[string]observedPath)
+	}
+	t.observedPaths[peerID] = observedPath{Addr: &copied, Until: until, PreferFirst: preferFirst}
+	t.observedMu.Unlock()
+}
+
+func (t *Transport) RemoveObservedPeerAddr(peerID string) {
+	if t == nil || peerID == "" {
+		return
+	}
+	t.observedMu.Lock()
+	delete(t.observedPaths, peerID)
+	t.observedMu.Unlock()
+}
+
+func (t *Transport) ObservedPeerAddr(peerID string) *net.UDPAddr {
+	if t == nil || peerID == "" {
+		return nil
+	}
+	t.observedMu.RLock()
+	defer t.observedMu.RUnlock()
+	observed := t.observedPaths[peerID]
+	if observed.Addr == nil || (!observed.Until.IsZero() && !t.now().Before(observed.Until)) {
+		return nil
+	}
+	copied := *observed.Addr
+	return &copied
+}
+
 // AddKnownPeerID adds a peer ID to the inbound allowlist without
 // registering any outbound address. Used for zone-identity-based admission.
 func (t *Transport) AddKnownPeerID(peerID string) {
@@ -438,6 +495,10 @@ func (t *Transport) RemovePeer(peerID string) {
 	t.outboundMu.Lock()
 	delete(t.outboundAddrs, peerID)
 	t.outboundMu.Unlock()
+
+	t.observedMu.Lock()
+	delete(t.observedPaths, peerID)
+	t.observedMu.Unlock()
 }
 
 // SetPeers initializes both the inbound allowlist and the outbound address
@@ -471,6 +532,34 @@ func (t *Transport) KnownPeerIDs() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func (t *Transport) now() time.Time {
+	if t != nil && t.clock != nil {
+		return t.clock()
+	}
+	return time.Now()
+}
+
+func appendUDPAddrCopies(addrs []*net.UDPAddr, more ...*net.UDPAddr) []*net.UDPAddr {
+	for _, addr := range more {
+		if addr == nil {
+			continue
+		}
+		duplicate := false
+		for _, existing := range addrs {
+			if existing != nil && existing.IP.Equal(addr.IP) && existing.Port == addr.Port {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		copied := *addr
+		addrs = append(addrs, &copied)
+	}
+	return addrs
 }
 
 func randomNonce() (uint64, error) {

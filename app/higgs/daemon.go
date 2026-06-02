@@ -356,7 +356,7 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	d.Sync.updateDiscoveredPeers()
 	digestsBeforeRound := gossip.ZoneDigests(d.Sync.State.Network)
 	var syncErr error
-	for _, peerID := range outboundSyncPeers(d.Sync.State, d.Sync.Config) {
+	for _, peerID := range outboundSyncPeersAt(d.Sync.State, d.Sync.Config, d.Sync.now()) {
 		if !force && backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now()) > 0 {
 			continue
 		}

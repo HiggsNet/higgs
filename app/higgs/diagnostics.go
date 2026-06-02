@@ -94,6 +94,8 @@ func debugPeer(peerID string) error {
 	fmt.Printf("next_retry: %s\n", formatNextRetry(peerState, now))
 	fmt.Printf("known_endpoint: %s\n", resolved)
 	fmt.Printf("discovered_addr: %s\n", dash(peerState.DiscoveredAddr))
+	fmt.Printf("observed_addr: %s\n", dash(peerState.ObservedAddr))
+	fmt.Printf("observed_status: %s\n", formatObservedPath(peerState, now))
 	fmt.Printf("last_update_source: %s\n", dash(peerState.LastUpdateSource))
 	fmt.Printf("last_relay: %s\n", formatUnixTime(peerState.LastRelayUnix))
 	fmt.Printf("relay_suppression: %s\n", formatRelaySuppression(peerState))
@@ -239,6 +241,24 @@ func formatRelaySuppression(peerState syncPeerState) string {
 		return peerState.LastRelaySuppression
 	}
 	return fmt.Sprintf("%s at=%s", peerState.LastRelaySuppression, at)
+}
+
+func formatObservedPath(peerState syncPeerState, now time.Time) string {
+	if peerState.ObservedAddr == "" {
+		return "-"
+	}
+	state := "expired"
+	if observedPathActive(peerState, now) {
+		state = "active"
+	}
+	return fmt.Sprintf("%s until=%s last_seen=%s last_success=%s failures=%d source=%s",
+		state,
+		formatUnixTime(peerState.ObservedUntilUnix),
+		formatUnixTime(peerState.ObservedLastSeenUnix),
+		formatUnixTime(peerState.ObservedLastSyncUnix),
+		peerState.ObservedFailureCount,
+		dash(peerState.ObservedSource),
+	)
 }
 
 func debugEndpoints() error {

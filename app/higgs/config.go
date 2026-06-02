@@ -39,6 +39,7 @@ type appConfig struct {
 	ReflectorTimeout     time.Duration
 	EndpointTTL          time.Duration
 	EndpointGrace        time.Duration
+	PublishEndpoints     bool
 	FilterPrivateIPv4    bool
 }
 
@@ -77,6 +78,7 @@ type configYAML struct {
 	EndpointTTL         string `yaml:"endpoint_ttl"`
 	EndpointGrace       string `yaml:"endpoint_grace"`
 	EndpointGracePeriod string `yaml:"endpoint_grace_period"`
+	PublishEndpoints    *bool  `yaml:"publish_endpoints"`
 
 	FilterPrivateIPv4 bool `yaml:"filter_private_ipv4"`
 }
@@ -111,6 +113,7 @@ func defaultAppConfig() *appConfig {
 		ReflectorTimeout:  3 * time.Second,
 		EndpointTTL:       time.Hour,
 		EndpointGrace:     gossip.DefaultEndpointGrace,
+		PublishEndpoints:  true,
 	}
 }
 
@@ -231,6 +234,9 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.EndpointGrace = d
 	}
+	if file.PublishEndpoints != nil {
+		config.PublishEndpoints = *file.PublishEndpoints
+	}
 	config.FilterPrivateIPv4 = file.FilterPrivateIPv4
 	return nil
 }
@@ -347,20 +353,21 @@ func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFil
 		peerID = defaultPeerID(state)
 	}
 	return &syncConfigFile{
-		PeerID:            peerID,
-		ListenAddr:        config.ListenAddr,
-		Bootstrap:         config.Bootstrap,
-		MaxMessageBytes:   config.MaxMessageBytes,
-		MaxSyncZones:      config.MaxSyncZones,
-		MaxSyncRecords:    config.MaxSyncRecords,
-		LogLevel:          config.LogLevel,
-		AdvertiseAddrs:    config.AdvertiseAddrs,
-		Reflectors:        config.Reflectors,
-		ReflectorInterval: config.ReflectorInterval,
-		ReflectorTimeout:  config.ReflectorTimeout,
-		EndpointTTL:       config.EndpointTTL,
-		EndpointGrace:     config.EndpointGrace,
-		FilterPrivateIPv4: config.FilterPrivateIPv4,
+		PeerID:                 peerID,
+		ListenAddr:             config.ListenAddr,
+		Bootstrap:              config.Bootstrap,
+		MaxMessageBytes:        config.MaxMessageBytes,
+		MaxSyncZones:           config.MaxSyncZones,
+		MaxSyncRecords:         config.MaxSyncRecords,
+		LogLevel:               config.LogLevel,
+		AdvertiseAddrs:         config.AdvertiseAddrs,
+		Reflectors:             config.Reflectors,
+		ReflectorInterval:      config.ReflectorInterval,
+		ReflectorTimeout:       config.ReflectorTimeout,
+		EndpointTTL:            config.EndpointTTL,
+		EndpointGrace:          config.EndpointGrace,
+		DisableEndpointPublish: !config.PublishEndpoints,
+		FilterPrivateIPv4:      config.FilterPrivateIPv4,
 	}
 }
 

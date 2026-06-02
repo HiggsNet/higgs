@@ -22,6 +22,7 @@ import (
 
 const relayMinInterval = time.Second
 const rejectedDigestTTL = 10 * time.Minute
+const observedPathTTL = 3 * time.Minute
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
@@ -152,6 +153,10 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 				formatUnixTime(peerState.LastRelayUnix),
 				formatRelaySuppression(peerState),
 			)
+			fmt.Fprintf(w, "  observed_addr=%s observed_status=%s\n",
+				dash(peerState.ObservedAddr),
+				formatObservedPath(peerState, now),
+			)
 		}
 		for peerID, entries := range discovered {
 			if isBootstrapPeer(config, peerID) {
@@ -167,6 +172,10 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 				addr,
 				peerStatus(peerState, now),
 				formatLastSuccess(peerState),
+			)
+			fmt.Fprintf(w, "  observed_addr=%s observed_status=%s\n",
+				dash(peerState.ObservedAddr),
+				formatObservedPath(peerState, now),
 			)
 		}
 	}
@@ -321,7 +330,7 @@ func relaySync(ctx context.Context, state *stateFile, transport *gossip.Transpor
 func (sr *SyncRuntime) relay(ctx context.Context, sourcePeerID string) error {
 	now := sr.now()
 	updatedPeerState := false
-	for _, peerID := range outboundSyncPeers(sr.State, sr.Config) {
+	for _, peerID := range outboundSyncPeersAt(sr.State, sr.Config, now) {
 		if peerID == sourcePeerID {
 			continue
 		}
@@ -478,6 +487,93 @@ func recordRelaySuppression(state *stateFile, peerID, reason string, now time.Ti
 	state.SyncPeers[peerID] = peerState
 }
 
+func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAddr, source gossip.MessageType, now time.Time) {
+	if state == nil || addr == nil || !peerChainVerified(state, peerID, now) {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	addrString := addr.String()
+	if peerState.ObservedAddr != addrString || peerState.ObservedFirstSeenUnix == 0 {
+		peerState.ObservedFirstSeenUnix = now.Unix()
+		peerState.ObservedFailureCount = 0
+	}
+	peerState.ObservedAddr = addrString
+	peerState.ObservedLastSeenUnix = now.Unix()
+	peerState.ObservedUntilUnix = now.Add(observedPathTTL).Unix()
+	peerState.ObservedSource = string(source)
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordObservedPathFailure(state *stateFile, peerID string) {
+	if state == nil || peerID == "" {
+		return
+	}
+	peerState := state.SyncPeers[peerID]
+	if peerState.ObservedAddr == "" {
+		return
+	}
+	peerState.ObservedFailureCount++
+	state.SyncPeers[peerID] = peerState
+}
+
+func observedPathActive(peerState syncPeerState, now time.Time) bool {
+	return peerState.ObservedAddr != "" && peerState.ObservedUntilUnix != 0 && now.Before(time.Unix(peerState.ObservedUntilUnix, 0))
+}
+
+func observedPathPreferFirst(peerState syncPeerState, now time.Time) bool {
+	return observedPathActive(peerState, now) && (peerState.LastError != "" || peerState.DiscoveredAddr == "")
+}
+
+func peerChainVerified(state *stateFile, peerID string, now time.Time) bool {
+	if state == nil || state.Network == nil || peerID == "" {
+		return false
+	}
+	path := zone.ZonePath(peerID)
+	if !path.Valid() {
+		return false
+	}
+	if state.ManagedZone == path {
+		return false
+	}
+	configureValidation(state.Network)
+	return higgscrypto.VerifyChain(state.Network, path, now) == nil
+}
+
+func (sr *SyncRuntime) seedObservedPeerPaths() {
+	if sr == nil || sr.State == nil || sr.Transport == nil {
+		return
+	}
+	now := sr.now()
+	for peerID := range sr.State.SyncPeers {
+		sr.seedObservedPeerPathAt(peerID, now)
+	}
+}
+
+func (sr *SyncRuntime) seedObservedPeerPath(peerID string) {
+	if sr == nil {
+		return
+	}
+	sr.seedObservedPeerPathAt(peerID, sr.now())
+}
+
+func (sr *SyncRuntime) seedObservedPeerPathAt(peerID string, now time.Time) {
+	if sr == nil || sr.State == nil || sr.Transport == nil || peerID == "" {
+		return
+	}
+	peerState := sr.State.SyncPeers[peerID]
+	if !observedPathActive(peerState, now) || !peerChainVerified(sr.State, peerID, now) {
+		sr.Transport.RemoveObservedPeerAddr(peerID)
+		return
+	}
+	addr, err := net.ResolveUDPAddr("udp", peerState.ObservedAddr)
+	if err != nil {
+		sr.Transport.RemoveObservedPeerAddr(peerID)
+		return
+	}
+	sr.Transport.SetObservedPeerAddr(peerID, addr, time.Unix(peerState.ObservedUntilUnix, 0), observedPathPreferFirst(peerState, now))
+}
+
 func openSyncTransport(config *syncConfigFile, state *stateFile) (*gossip.Transport, error) {
 	return newSyncRuntime(state, config, nil, nil).openTransport()
 }
@@ -511,6 +607,7 @@ func (sr *SyncRuntime) seedTransportPeers(deps *SyncTransportDeps) {
 		return
 	}
 	addVerifiedZonePeers(sr.State, sr.Transport, sr.Config)
+	sr.seedObservedPeerPaths()
 	for peerID, entries := range gossip.ExtractPeerEndpoints(sr.State.Network) {
 		if peerID == sr.Config.PeerID || peerID == string(sr.State.ManagedZone) {
 			continue
@@ -533,6 +630,10 @@ func (sr *SyncRuntime) seedTransportPeers(deps *SyncTransportDeps) {
 }
 
 func outboundSyncPeers(state *stateFile, config *syncConfigFile) []string {
+	return outboundSyncPeersAt(state, config, time.Now())
+}
+
+func outboundSyncPeersAt(state *stateFile, config *syncConfigFile, now time.Time) []string {
 	seen := make(map[string]bool)
 	var out []string
 	for _, peer := range config.Bootstrap {
@@ -544,6 +645,16 @@ func outboundSyncPeers(state *stateFile, config *syncConfigFile) []string {
 	}
 	for peerID := range gossip.ExtractPeerEndpoints(state.Network) {
 		if peerID == config.PeerID || peerID == string(state.ManagedZone) || seen[peerID] {
+			continue
+		}
+		seen[peerID] = true
+		out = append(out, peerID)
+	}
+	for peerID, peerState := range state.SyncPeers {
+		if peerID == config.PeerID || peerID == string(state.ManagedZone) || seen[peerID] {
+			continue
+		}
+		if !observedPathActive(peerState, now) || !peerChainVerified(state, peerID, now) {
 			continue
 		}
 		seen[peerID] = true
@@ -580,6 +691,9 @@ func publishEndpointRecord(state *stateFile, config *syncConfigFile) error {
 func (sr *SyncRuntime) publishEndpointRecord() error {
 	state := sr.State
 	config := sr.Config
+	if config != nil && config.DisableEndpointPublish {
+		return nil
+	}
 	port := listenPortFromAddr(config.ListenAddr)
 	endpoints, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
 	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(config.Reflectors)) > 0 {
@@ -644,6 +758,21 @@ func (sr *SyncRuntime) addVerifiedZonePeers() {
 		}
 		transport.AddKnownPeerID(peerID)
 	}
+	for parentPath, zs := range state.Network.Zones {
+		if zs == nil || len(zs.Delegations) == 0 {
+			continue
+		}
+		if err := higgscrypto.VerifyChain(state.Network, parentPath, now); err != nil {
+			continue
+		}
+		for childPath := range zs.Delegations {
+			peerID := string(childPath)
+			if peerID == config.PeerID || peerID == string(state.ManagedZone) || state.Network.IsZoneRevoked(childPath, now) {
+				continue
+			}
+			transport.AddKnownPeerID(peerID)
+		}
+	}
 }
 
 func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
@@ -660,6 +789,7 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 	bootstrapPeers := configuredKnownPeers(config)
 	updated := false
 	activeDiscovered := make(map[string]bool)
+	sr.seedObservedPeerPaths()
 	for peerID, entries := range discovered {
 		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
 			continue
@@ -692,6 +822,20 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 		updated = true
 	}
 	for peerID, peerState := range state.SyncPeers {
+		if peerState.ObservedAddr != "" && !observedPathActive(peerState, now) {
+			if transport != nil {
+				transport.RemoveObservedPeerAddr(peerID)
+			}
+			peerState.ObservedAddr = ""
+			peerState.ObservedFirstSeenUnix = 0
+			peerState.ObservedLastSeenUnix = 0
+			peerState.ObservedLastSyncUnix = 0
+			peerState.ObservedUntilUnix = 0
+			peerState.ObservedSource = ""
+			peerState.ObservedFailureCount = 0
+			state.SyncPeers[peerID] = peerState
+			updated = true
+		}
 		if peerState.DiscoveredAddr == "" || activeDiscovered[peerID] || isBootstrapPeer(config, peerID) {
 			continue
 		}
@@ -758,10 +902,14 @@ func syncRoundWithTransport(ctx context.Context, state *stateFile, transport *go
 func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout time.Duration) (err error) {
 	defer func() {
 		recordPeerSyncAt(sr.State, peerID, err, sr.now())
+		if err != nil {
+			recordObservedPathFailure(sr.State, peerID)
+		}
 		if saveErr := sr.saveState(); err == nil && saveErr != nil {
 			err = saveErr
 		}
 	}()
+	sr.seedObservedPeerPath(peerID)
 	if err := sr.Transport.Send(peerID, &gossip.Message{
 		Type: gossip.MessagePing,
 		Ping: &gossip.Ping{Zones: gossip.ZoneDigests(sr.State.Network)},
@@ -876,6 +1024,10 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 	configureValidation(state.Network)
 	message := packet.Message
 	defer func() {
+		if err == nil {
+			recordVerifiedObservedPath(state, message.PeerID, packet.Addr, message.Type, sr.now())
+			sr.seedObservedPeerPath(message.PeerID)
+		}
 		recordPeerSyncAt(state, message.PeerID, err, sr.now())
 		if err != nil && debugLogEnabled(config) {
 			reason := gossip.RejectReason(err)

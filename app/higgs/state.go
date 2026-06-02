@@ -41,6 +41,13 @@ type syncPeerState struct {
 	LastRelaySuppressedAt int64                          `json:"last_relay_suppressed_at,omitempty"`
 	DiscoveredAddr        string                         `json:"discovered_addr,omitempty"`
 	DiscoveredAtUnix      int64                          `json:"discovered_at_unix,omitempty"`
+	ObservedAddr          string                         `json:"observed_addr,omitempty"`
+	ObservedFirstSeenUnix int64                          `json:"observed_first_seen_unix,omitempty"`
+	ObservedLastSeenUnix  int64                          `json:"observed_last_seen_unix,omitempty"`
+	ObservedLastSyncUnix  int64                          `json:"observed_last_sync_unix,omitempty"`
+	ObservedUntilUnix     int64                          `json:"observed_until_unix,omitempty"`
+	ObservedSource        string                         `json:"observed_source,omitempty"`
+	ObservedFailureCount  int                            `json:"observed_failure_count,omitempty"`
 	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
 }
 
@@ -53,20 +60,21 @@ type rejectedDigestState struct {
 }
 
 type syncConfigFile struct {
-	PeerID            string           `json:"peer_id"`
-	ListenAddr        string           `json:"listen_addr"`
-	Bootstrap         []syncConfigPeer `json:"bootstrap"`
-	MaxMessageBytes   int              `json:"max_message_bytes"`
-	MaxSyncZones      int              `json:"max_sync_zones"`
-	MaxSyncRecords    int              `json:"max_sync_records"`
-	LogLevel          string           `json:"log_level,omitempty"`
-	AdvertiseAddrs    []string         `json:"advertise_addrs,omitempty"`
-	Reflectors        []string         `json:"reflectors,omitempty"`
-	ReflectorInterval time.Duration    `json:"reflector_interval,omitempty"`
-	ReflectorTimeout  time.Duration    `json:"reflector_timeout,omitempty"`
-	EndpointTTL       time.Duration    `json:"endpoint_ttl,omitempty"`
-	EndpointGrace     time.Duration    `json:"endpoint_grace,omitempty"`
-	FilterPrivateIPv4 bool             `json:"filter_private_ipv4,omitempty"`
+	PeerID                 string           `json:"peer_id"`
+	ListenAddr             string           `json:"listen_addr"`
+	Bootstrap              []syncConfigPeer `json:"bootstrap"`
+	MaxMessageBytes        int              `json:"max_message_bytes"`
+	MaxSyncZones           int              `json:"max_sync_zones"`
+	MaxSyncRecords         int              `json:"max_sync_records"`
+	LogLevel               string           `json:"log_level,omitempty"`
+	AdvertiseAddrs         []string         `json:"advertise_addrs,omitempty"`
+	Reflectors             []string         `json:"reflectors,omitempty"`
+	ReflectorInterval      time.Duration    `json:"reflector_interval,omitempty"`
+	ReflectorTimeout       time.Duration    `json:"reflector_timeout,omitempty"`
+	EndpointTTL            time.Duration    `json:"endpoint_ttl,omitempty"`
+	EndpointGrace          time.Duration    `json:"endpoint_grace,omitempty"`
+	DisableEndpointPublish bool             `json:"disable_endpoint_publish,omitempty"`
+	FilterPrivateIPv4      bool             `json:"filter_private_ipv4,omitempty"`
 }
 
 type syncConfigPeer struct {
@@ -311,6 +319,10 @@ func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time)
 		peerState.BackoffUntilUnix = 0
 		peerState.FailureCount = 0
 		peerState.LastError = ""
+		if peerState.ObservedAddr != "" && peerState.ObservedUntilUnix != 0 && now.Before(time.Unix(peerState.ObservedUntilUnix, 0)) {
+			peerState.ObservedLastSyncUnix = now.Unix()
+			peerState.ObservedFailureCount = 0
+		}
 	}
 	state.SyncPeers[peerID] = peerState
 }

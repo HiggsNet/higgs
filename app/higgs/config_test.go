@@ -26,6 +26,7 @@ max_sync_zones: 8
 max_sync_records: 512
 endpoint_grace: 2m
 reflector_timeout: 1500ms
+publish_endpoints: false
 bootstrap:
   - id: node-b
     addr: 127.0.0.1:33435
@@ -55,6 +56,9 @@ trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 	}
 	if config.ReflectorTimeout.String() != "1.5s" {
 		t.Fatalf("ReflectorTimeout = %s, want 1.5s", config.ReflectorTimeout)
+	}
+	if config.PublishEndpoints {
+		t.Fatalf("PublishEndpoints = true, want false")
 	}
 }
 

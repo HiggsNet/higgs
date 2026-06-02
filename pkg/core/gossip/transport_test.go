@@ -78,6 +78,29 @@ func TestRemovePeerAddrsKeepsKnownPeerID(t *testing.T) {
 	}
 }
 
+func TestObservedPeerAddrExpiresAndIsRemovedWithPeer(t *testing.T) {
+	now := time.Unix(100, 0)
+	transport := &Transport{clock: func() time.Time { return now }}
+	addr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}
+
+	transport.SetObservedPeerAddr("peer-a", addr, now.Add(time.Minute), true)
+	if got := transport.ObservedPeerAddr("peer-a"); got == nil || got.String() != "127.0.0.1:1234" {
+		t.Fatalf("ObservedPeerAddr = %v, want 127.0.0.1:1234", got)
+	}
+
+	now = now.Add(2 * time.Minute)
+	if got := transport.ObservedPeerAddr("peer-a"); got != nil {
+		t.Fatalf("ObservedPeerAddr after expiry = %v, want nil", got)
+	}
+
+	now = time.Unix(100, 0)
+	transport.SetObservedPeerAddr("peer-a", addr, now.Add(time.Minute), true)
+	transport.RemovePeer("peer-a")
+	if got := transport.ObservedPeerAddr("peer-a"); got != nil {
+		t.Fatalf("ObservedPeerAddr after RemovePeer = %v, want nil", got)
+	}
+}
+
 func TestReceiveRejectsMessageTooLarge(t *testing.T) {
 	transport, err := Listen(Config{
 		PeerID:          "node-b",
