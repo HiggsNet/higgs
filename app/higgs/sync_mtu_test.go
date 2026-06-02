@@ -54,6 +54,51 @@ func TestSendSnapshotsSkipsOversizedRecords(t *testing.T) {
 	}
 }
 
+func TestSendSnapshotsRecordsDatagramStats(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	now := time.Unix(1000, 0)
+
+	largeValue := make([]byte, 2000)
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       "bigdata",
+		Type:      "test.data",
+		Value:     largeValue,
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	if err := state.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt: %v", err)
+	}
+
+	transport, err := gossip.Listen(gossip.Config{
+		PeerID:          "node-a",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transport.Close()
+	transport.SetPeerAddrs("node-b.catofes.", []*net.UDPAddr{transport.LocalAddr()})
+
+	if err := sendSnapshotsWithStats(state, state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now); err != nil {
+		t.Fatalf("sendSnapshotsWithStats: %v", err)
+	}
+	stats := state.SyncPeers["node-b.catofes."].DatagramStats
+	if stats == nil || stats.TooLargeDropped == 0 {
+		t.Fatalf("datagram stats = %#v, want too_large_dropped", stats)
+	}
+	if stats.LastTooLargeObject != "record" || stats.LastTooLargeZone != "node-b.catofes." || stats.LastTooLargeKey != "bigdata" {
+		t.Fatalf("last too-large stats = %#v", stats)
+	}
+}
+
 func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)

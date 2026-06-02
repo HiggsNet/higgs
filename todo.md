@@ -324,24 +324,25 @@
 
 **目标：** 公网 UDP gossip 不依赖 IP fragmentation。所有常规控制面消息都应控制在保守 MTU 预算内；超过预算的数据通过可靠 object pull 拉取，不能假设 64KB UDP datagram 在公网、WSL、NAT、隧道或云网络中可靠到达。UDP chunk fallback 只作为后续可选能力，不进入第一版主路径。
 
-- [ ] **3.6.1 MTU 预算与配置语义**
+- [x] **3.6.1 MTU 预算与配置语义**
   - [x] 将 `max_message_bytes` 从“允许的最大 UDP payload”重新定义为安全 datagram 上限，默认调整到保守值（建议 1200 bytes，兼容 IPv6、NAT、隧道和常见公网路径）
     - 已将 gossip 默认 datagram 预算调整为 1200 bytes；旧 `max_message_bytes` 仍兼容读取，但新配置示例使用 `max_datagram_bytes: 1200`
   - [x] 增加或明确 `max_datagram_bytes` / `target_datagram_bytes` 配置；两端协商或取本地保守值，禁止发送超过预算的 UDP packet
     - `max_datagram_bytes` / `target_datagram_bytes` 优先于旧字段；发送端通过 MessagePack wire size preflight 和 `Transport.Send` 双重限制，超预算对象转 object pull / digest-only announce
-  - [ ] debug/status 输出当前 datagram 预算、最近丢弃/拒绝的大包、拆包统计，避免只看到 `quota` / timeout 难以定位
-    - 当前 `sync status --verbose` 已输出 `max_datagram_bytes` / `wire_codec`，debug log 也能看到 `message_too_large`；但尚未持久化“最近大包拒绝/丢弃”和统计计数，且第一版无 UDP chunk 统计
+  - [x] debug/status 输出当前 datagram 预算、最近丢弃/拒绝的大包、拆包统计，避免只看到 `quota` / timeout 难以定位
+    - `sync status --verbose` 已输出 `max_datagram_bytes` / `wire_codec`，并按 peer 显示持久化的 oversized UDP drop、digest-only announce 和 UDP chunk fallback 计数；`debug peer` 显示最近 oversized 对象、zone/key、bytes/limit。第一版主路径无 UDP chunk，因此 fallback 计数保持为显式 0。
   - [x] README 和公网手册明确：Higgs gossip 不依赖 IP fragmentation；调大上限只是实验/内网诊断选项，不是公网推荐配置
 
-- [ ] **3.6.2 MessagePack wire codec / 压缩协议**
+- [x] **3.6.2 MessagePack wire codec / 压缩协议**
   - [x] 设计并切换 gossip wire codec：从当前 JSON payload 迁移到 MessagePack，避免一开始引入 protobuf/protoc codegen；protobuf 保留为未来极限优化或强 schema 需求的 optional later 路线
   - [x] Go struct 使用短 tag（如 `msgpack:"t"` / `msgpack:"z"` / `msgpack:"r"`）压缩字段名，让 MessagePack 体积接近 protobuf，同时保持开发和调试轻量
   - [x] 二进制格式必须直接承载 `bytes` 字段（pubkey、signature、hash、record value），避免 JSON base64 与字段名开销放大数据包
   - [x] 定义 wire version / codec negotiation：保留 magic/version，支持短期 JSON v1 兼容或明确升级窗口；未知 codec 返回 `unsupported_wire_version` / `unsupported_codec`
     - 默认发送 `higgs.gossip.m1` MessagePack；接收端短期兼容旧 JSON magic；未知 codec / version 已有单测覆盖
-  - [ ] 为常见消息建立 size benchmark：Ping/Pong、metadata snapshot、single record、endpoint record、delegation/revocation；以 1200-byte datagram 预算评估剩余 headroom
-    - 当前只有 Ping benchmark 和一个 JSON vs MessagePack record announce 回归测试，还未覆盖完整常见消息矩阵
-  - [ ] 评估是否需要通用压缩（如 zstd）但默认不对 UDP 小包启用；压缩只允许用于大 object pull，且必须有阈值、最大解压大小和 CPU/内存上限，避免解压炸弹和小包负收益
+  - [x] 为常见消息建立 size benchmark：Ping/Pong、metadata snapshot、single record、endpoint record、delegation/revocation；以 1200-byte datagram 预算评估剩余 headroom
+    - 已补 `TestCommonMessageSizesWithinDatagramBudget`，覆盖 Ping/Pong、metadata snapshot、single record、endpoint record、delegation snapshot、revocation snapshot 的默认 MessagePack wire size，并按 1200-byte budget 断言。
+  - [x] 评估是否需要通用压缩（如 zstd）但默认不对 UDP 小包启用；压缩只允许用于大 object pull，且必须有阈值、最大解压大小和 CPU/内存上限，避免解压炸弹和小包负收益
+    - 当前 UDP 控制面不启用通用压缩；TCP object pull 仍为 length-prefixed MessagePack。后续若引入 zstd，仅用于大 object pull 响应，并必须带压缩阈值、最大解压大小和 CPU/内存上限。
   - [x] 更新 README / docs/protocol.md：当前 JSON framing 只作为旧协议说明，新公网推荐路径是 MessagePack + MTU-safe framing；`gossip.proto` 保留为协议形状参考而非当前构建依赖
 
 - [ ] **3.6.3 Snapshot / record 分帧**

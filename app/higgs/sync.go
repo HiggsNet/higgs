@@ -157,6 +157,7 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 				dash(peerState.ObservedAddr),
 				formatObservedPath(peerState, now),
 			)
+			writeDatagramStats(w, peer.ID, peerState)
 		}
 		for peerID, entries := range discovered {
 			if isBootstrapPeer(config, peerID) {
@@ -177,6 +178,7 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 				dash(peerState.ObservedAddr),
 				formatObservedPath(peerState, now),
 			)
+			writeDatagramStats(w, peerID, peerState)
 		}
 	}
 	for _, peer := range config.Bootstrap {
@@ -211,6 +213,30 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 		)
 	}
 	return nil
+}
+
+func writeDatagramStats(w io.Writer, peerID string, peerState syncPeerState) {
+	stats := peerState.DatagramStats
+	if stats == nil || (stats.TooLargeDropped == 0 && stats.DigestOnlyAnnounces == 0 && stats.ChunkFallbacks == 0) {
+		return
+	}
+	last := "-"
+	if stats.LastTooLargeUnix != 0 {
+		last = time.Unix(stats.LastTooLargeUnix, 0).UTC().Format(time.RFC3339)
+	}
+	fmt.Fprintf(w, "datagram peer=%s too_large_dropped=%d digest_only_announces=%d chunk_fallbacks=%d last_too_large=%s direction=%s object=%s zone=%s key=%s bytes=%d limit=%d\n",
+		peerID,
+		stats.TooLargeDropped,
+		stats.DigestOnlyAnnounces,
+		stats.ChunkFallbacks,
+		last,
+		dash(stats.LastTooLargeDirection),
+		dash(stats.LastTooLargeObject),
+		dash(stats.LastTooLargeZone),
+		dash(stats.LastTooLargeKey),
+		stats.LastTooLargeBytes,
+		stats.LastTooLargeLimit,
+	)
 }
 
 func syncServe(ctx context.Context) error {
@@ -1130,7 +1156,7 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 			}
 			return nil
 		}
-		if err := sendSnapshots(state.Network, transport, message.PeerID, message.Pong.FetchZones); err != nil {
+		if err := sr.sendSnapshots(message.PeerID, message.Pong.FetchZones); err != nil {
 			return err
 		}
 		for _, path := range fetchListForPeer(state, message.PeerID, message.Pong.Zones, sr.now()) {
@@ -1143,9 +1169,9 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 		}
 		return nil
 	case gossip.MessageFetchZone:
-		return sendSnapshots(state.Network, transport, message.PeerID, []zone.ZonePath{message.FetchZone.Zone})
+		return sr.sendSnapshots(message.PeerID, []zone.ZonePath{message.FetchZone.Zone})
 	case gossip.MessageFetchRecord:
-		return sendRecord(state.Network, transport, message.PeerID, message.FetchRecord)
+		return sr.sendRecord(message.PeerID, message.FetchRecord)
 	case gossip.MessageAnnounce:
 		return sr.handleAnnounce(message, syncLimits(config))
 	default:
@@ -1221,8 +1247,18 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 // datagrams, respecting the datagram budget. Objects that exceed the budget
 // are skipped on the UDP path and must be retrieved via object pull.
 func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
+	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now())
+}
+
+func (sr *SyncRuntime) sendSnapshots(peerID string, zones []zone.ZonePath) error {
+	if sr == nil {
+		return nil
+	}
+	return sendSnapshotsWithStats(sr.State, sr.State.Network, sr.Transport, peerID, zones, sr.now())
+}
+
+func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time) error {
 	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
-	now := time.Now()
 	for _, path := range zones {
 		if ns.IsZoneRevoked(path, now) {
 			continue
@@ -1240,6 +1276,7 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 			Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}, Snapshots: []gossip.ZoneSnapshot{*snapshot}},
 		}
 		if size, err := gossip.WireEncodeSize(msg); err != nil || size > transport.MaxMessageBytes() {
+			recordDatagramTooLarge(state, peerID, "send", "zone_skeleton", path, "", size, transport.MaxMessageBytes(), now)
 			if debugLogEnabled(nil) {
 				fmt.Fprintf(os.Stderr, "sendSnapshots: zone skeleton %s exceeds datagram budget (%d bytes), skipping UDP\n", path, size)
 			}
@@ -1248,6 +1285,7 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 				Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}},
 			}
 			if digestSize, digestErr := gossip.WireEncodeSize(digestMsg); digestErr == nil && digestSize <= transport.MaxMessageBytes() {
+				recordDatagramDigestOnly(state, peerID)
 				if err := transport.Send(peerID, digestMsg); err != nil {
 					if !errors.Is(err, gossip.ErrUnknownPeer) {
 						return err
@@ -1263,8 +1301,13 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 				Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}, Records: []gossip.RecordSnapshot{record}},
 			}
 			if size, err := gossip.WireEncodeSize(recordMsg); err != nil || size > transport.MaxMessageBytes() {
+				key := ""
+				if record.Record != nil {
+					key = record.Record.Key
+				}
+				recordDatagramTooLarge(state, peerID, "send", "record", path, key, size, transport.MaxMessageBytes(), now)
 				if debugLogEnabled(nil) {
-					fmt.Fprintf(os.Stderr, "sendSnapshots: record %s/%s exceeds datagram budget (%d bytes), skipping UDP\n", path, record.Record.Key, size)
+					fmt.Fprintf(os.Stderr, "sendSnapshots: record %s/%s exceeds datagram budget (%d bytes), skipping UDP\n", path, key, size)
 				}
 				continue
 			}
@@ -1317,7 +1360,18 @@ func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapsh
 }
 
 func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord) error {
-	if fetch != nil && ns.IsZoneRevoked(fetch.Zone, time.Now()) {
+	return sendRecordWithStats(nil, ns, transport, peerID, fetch, time.Now())
+}
+
+func (sr *SyncRuntime) sendRecord(peerID string, fetch *gossip.FetchRecord) error {
+	if sr == nil {
+		return nil
+	}
+	return sendRecordWithStats(sr.State, sr.State.Network, sr.Transport, peerID, fetch, sr.now())
+}
+
+func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord, now time.Time) error {
+	if fetch != nil && ns.IsZoneRevoked(fetch.Zone, now) {
 		return nil
 	}
 	record, err := gossip.RecordSnapshotFor(ns, fetch)
@@ -1329,12 +1383,52 @@ func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID strin
 		Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{*record}},
 	}
 	if size, err := gossip.WireEncodeSize(msg); err != nil || size > transport.MaxMessageBytes() {
+		zoneName := zone.ZonePath("")
+		key := ""
+		if fetch != nil {
+			zoneName = fetch.Zone
+			key = fetch.Key
+		}
+		recordDatagramTooLarge(state, peerID, "send", "record", zoneName, key, size, transport.MaxMessageBytes(), now)
 		if debugLogEnabled(nil) {
-			fmt.Fprintf(os.Stderr, "sendRecord: record %s/%s exceeds datagram budget (%d bytes), skipping UDP\n", fetch.Zone, fetch.Key, size)
+			fmt.Fprintf(os.Stderr, "sendRecord: record %s/%s exceeds datagram budget (%d bytes), skipping UDP\n", zoneName, key, size)
 		}
 		return nil
 	}
 	return transport.Send(peerID, msg)
+}
+
+func recordDatagramTooLarge(state *stateFile, peerID, direction, object string, zoneName zone.ZonePath, key string, size, limit int, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.DatagramStats == nil {
+		peerState.DatagramStats = &datagramStats{}
+	}
+	peerState.DatagramStats.TooLargeDropped++
+	peerState.DatagramStats.LastTooLargeUnix = now.Unix()
+	peerState.DatagramStats.LastTooLargeDirection = direction
+	peerState.DatagramStats.LastTooLargeObject = object
+	peerState.DatagramStats.LastTooLargeZone = string(zoneName)
+	peerState.DatagramStats.LastTooLargeKey = key
+	peerState.DatagramStats.LastTooLargeBytes = size
+	peerState.DatagramStats.LastTooLargeLimit = limit
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordDatagramDigestOnly(state *stateFile, peerID string) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.DatagramStats == nil {
+		peerState.DatagramStats = &datagramStats{}
+	}
+	peerState.DatagramStats.DigestOnlyAnnounces++
+	state.SyncPeers[peerID] = peerState
 }
 
 func loadSyncConfig(state *stateFile) (*syncConfigFile, error) {

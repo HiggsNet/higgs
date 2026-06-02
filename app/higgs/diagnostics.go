@@ -99,7 +99,31 @@ func debugPeer(peerID string) error {
 	fmt.Printf("last_update_source: %s\n", dash(peerState.LastUpdateSource))
 	fmt.Printf("last_relay: %s\n", formatUnixTime(peerState.LastRelayUnix))
 	fmt.Printf("relay_suppression: %s\n", formatRelaySuppression(peerState))
+	printDebugPeerDatagramStats(peerState)
 	return nil
+}
+
+func printDebugPeerDatagramStats(peerState syncPeerState) {
+	stats := peerState.DatagramStats
+	if stats == nil {
+		stats = &datagramStats{}
+	}
+	fmt.Printf("datagram_too_large_dropped: %d\n", stats.TooLargeDropped)
+	fmt.Printf("datagram_digest_only_announces: %d\n", stats.DigestOnlyAnnounces)
+	fmt.Printf("datagram_chunk_fallbacks: %d\n", stats.ChunkFallbacks)
+	if stats.LastTooLargeUnix == 0 {
+		fmt.Printf("datagram_last_too_large: -\n")
+		return
+	}
+	fmt.Printf("datagram_last_too_large: %s direction=%s object=%s zone=%s key=%s bytes=%d limit=%d\n",
+		time.Unix(stats.LastTooLargeUnix, 0).UTC().Format(time.RFC3339),
+		dash(stats.LastTooLargeDirection),
+		dash(stats.LastTooLargeObject),
+		dash(stats.LastTooLargeZone),
+		dash(stats.LastTooLargeKey),
+		stats.LastTooLargeBytes,
+		stats.LastTooLargeLimit,
+	)
 }
 
 func debugZone(path zone.ZonePath) error {

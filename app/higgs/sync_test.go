@@ -777,6 +777,7 @@ func TestSyncStatusVerboseOutput(t *testing.T) {
 		"allowlist_source: bootstrap+discovery",
 		"bootstrap_peers: 1",
 		"bootstrap peer=node-b.catofes. configured_addr=127.0.0.1:9999 resolved_addr=127.0.0.1:9999",
+		"datagram peer=node-b.catofes. too_large_dropped=2 digest_only_announces=1 chunk_fallbacks=0",
 		"zone node-b.catofes.",
 	)
 }
@@ -797,6 +798,8 @@ func TestDebugPeerOutput(t *testing.T) {
 		"observed_addr: 127.0.0.1:3000",
 		"observed_status: active",
 		"last_update_source: node-c.catofes.",
+		"datagram_too_large_dropped: 2",
+		"datagram_last_too_large: 2023-11-14T22:13:20Z direction=send object=record zone=node-b.catofes. key=bigdata bytes=1800 limit=1200",
 	)
 }
 
@@ -873,6 +876,17 @@ func prepareDiagnosticsState(t *testing.T) {
 			ObservedUntilUnix:     observedNow.Add(time.Hour).Unix(),
 			ObservedSource:        string(gossip.MessagePing),
 			LastUpdateSource:      "node-c.catofes.",
+			DatagramStats: &datagramStats{
+				TooLargeDropped:       2,
+				DigestOnlyAnnounces:   1,
+				LastTooLargeUnix:      now.Unix(),
+				LastTooLargeDirection: "send",
+				LastTooLargeObject:    "record",
+				LastTooLargeZone:      "node-b.catofes.",
+				LastTooLargeKey:       "bigdata",
+				LastTooLargeBytes:     1800,
+				LastTooLargeLimit:     gossip.DefaultDatagramBudget,
+			},
 		},
 	}
 	if err := saveState(state); err != nil {

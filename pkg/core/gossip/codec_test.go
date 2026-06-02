@@ -2,7 +2,10 @@ package gossip
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
@@ -149,4 +152,145 @@ func TestMsgpackSmallerThanJSON(t *testing.T) {
 		t.Fatalf("msgpack (%d bytes) should be smaller than JSON (%d bytes)", len(msgpackData), len(jsonData))
 	}
 	t.Logf("JSON=%d bytes, MessagePack=%d bytes, savings=%d bytes", len(jsonData), len(msgpackData), len(jsonData)-len(msgpackData))
+}
+
+func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
+	digest := ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
+	record := sampleWireRecord("identity", []byte("node-a"))
+	endpointValue := EndpointRecordBytes([]LocalEndpoint{{
+		IP:       net.ParseIP("192.0.2.10"),
+		Port:     33434,
+		Scope:    "global",
+		Priority: 100,
+		Source:   SourceAdvertise,
+	}}, time.Unix(1717171717, 0))
+	endpointRecord := sampleWireRecord(EndpointRecordKeyUDP, endpointValue)
+	delegation := sampleWireDelegation("node-b.catofes.")
+	revocation := sampleWireRevocation("node-b.catofes.")
+	authority := sampleWireAuthority("catofes.")
+
+	cases := []struct {
+		name    string
+		message *Message
+	}{
+		{
+			name:    "ping",
+			message: commonWireMessage(MessagePing, &Ping{Zones: []ZoneDigest{digest}}, nil, nil, nil, nil),
+		},
+		{
+			name:    "pong",
+			message: commonWireMessage(MessagePong, nil, &Pong{Zones: []ZoneDigest{digest}, FetchZones: []zone.ZonePath{"catofes."}}, nil, nil, nil),
+		},
+		{
+			name: "metadata snapshot",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
+				Zone:        "catofes.",
+				Authority:   authority,
+				ParentProof: []*zone.Delegation{delegation},
+			}}}),
+		},
+		{
+			name:    "single record",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: record}}}),
+		},
+		{
+			name:    "endpoint record",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: endpointRecord}}}),
+		},
+		{
+			name: "delegation snapshot",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
+				Zone:        "catofes.",
+				Authority:   authority,
+				Delegations: map[zone.ZonePath]*zone.Delegation{"node-b.catofes.": delegation},
+			}}}),
+		},
+		{
+			name: "revocation snapshot",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
+				Zone:        "catofes.",
+				Authority:   authority,
+				Revocations: map[zone.ZonePath]*zone.DelegationRevocation{"node-b.catofes.": revocation},
+			}}}),
+		},
+	}
+
+	for _, tc := range cases {
+		size, err := WireEncodeSize(tc.message)
+		if err != nil {
+			t.Fatalf("%s WireEncodeSize: %v", tc.name, err)
+		}
+		t.Logf("%s wire size: %d bytes, headroom: %d bytes", tc.name, size, DefaultDatagramBudget-size)
+		if size > DefaultDatagramBudget {
+			t.Fatalf("%s wire size = %d bytes, exceeds %d-byte datagram budget", tc.name, size, DefaultDatagramBudget)
+		}
+	}
+}
+
+func commonWireMessage(messageType MessageType, ping *Ping, pong *Pong, fetchZone *FetchZone, fetchRecord *FetchRecord, announce *Announce) *Message {
+	return &Message{
+		Version:     WireVersion,
+		Type:        messageType,
+		PeerID:      "node-a.catofes.",
+		Nonce:       123456789,
+		Timestamp:   1717171717,
+		Ping:        ping,
+		Pong:        pong,
+		FetchZone:   fetchZone,
+		FetchRecord: fetchRecord,
+		Announce:    announce,
+	}
+}
+
+func sampleWireAuthority(path zone.ZonePath) *zone.ZoneAuthority {
+	return &zone.ZoneAuthority{
+		Zone:      path,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: make(ed25519.PublicKey, ed25519.PublicKeySize),
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate},
+			}},
+		}},
+	}
+}
+
+func sampleWireDelegation(path zone.ZonePath) *zone.Delegation {
+	return &zone.Delegation{
+		ZoneName:       path,
+		Scope:          zone.DelegationScopeDirectChild,
+		AuthorityEpoch: 1,
+		AuthorityHash:  make([]byte, 32),
+		Authority:      *sampleWireAuthority(path),
+		SignedBy:       make(ed25519.PublicKey, ed25519.PublicKeySize),
+		Signature:      make([]byte, ed25519.SignatureSize),
+	}
+}
+
+func sampleWireRevocation(path zone.ZonePath) *zone.DelegationRevocation {
+	return &zone.DelegationRevocation{
+		ChildZone:             path,
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: 1,
+		RevokedAuthorityHash:  make([]byte, 32),
+		Reason:                "key rotation",
+		RevokedAt:             1717171717,
+		SignedBy:              make(ed25519.PublicKey, ed25519.PublicKeySize),
+		Signature:             make([]byte, ed25519.SignatureSize),
+	}
+}
+
+func sampleWireRecord(key string, value []byte) *zone.Record {
+	return &zone.Record{
+		Zone:      "node-a.catofes.",
+		Key:       key,
+		Type:      "test.record",
+		Value:     value,
+		ValueHash: make([]byte, 32),
+		Version:   1,
+		Timestamp: 1717171717,
+		SignedBy:  make(ed25519.PublicKey, ed25519.PublicKeySize),
+		Signature: make([]byte, ed25519.SignatureSize),
+	}
 }

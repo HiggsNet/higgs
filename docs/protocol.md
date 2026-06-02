@@ -37,6 +37,8 @@ higgs.gossip.m1\n<msgpack payload with version=1>
 
 默认发送路径使用 MessagePack；短期兼容读取旧 JSON magic `higgs.gossip.v1\n`。未知 magic 会被拒绝为 `unsupported_codec`，未知 `version` 会被拒绝为 `unsupported_wire_version`。
 
+UDP 小包默认不启用通用压缩。当前常见控制消息依靠 MessagePack 短字段名和二进制 `bytes` 字段保持在 1200-byte datagram 预算内；超过预算的 zone snapshot / record 不通过 UDP 发送完整对象，而是发送 digest-only announce，并由接收端走 TCP object pull 拉取完整对象。当前 object pull 使用 length-prefixed MessagePack，暂不压缩。后续若引入 zstd 等压缩，只允许用于大 object pull 响应，并必须同时定义压缩阈值、最大解压大小和 CPU/内存上限；UDP 控制面仍默认不压缩，避免小包负收益和解压放大风险。
+
 反序列化时会拒绝以下消息：
 - 不以已支持的 magic 前缀开头。
 - `version` 不等于 `1`。
