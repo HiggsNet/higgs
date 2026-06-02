@@ -235,7 +235,60 @@ docs/scripts/public-gossip-node.sh verify "$HOME/.higgs-public/node-b" node-a.ca
 - `zone show node-a.catofes.` 能看到 `identity`
 - `verify node-a.catofes.` 成功
 
-## 6. 重启和恢复测试
+## 6. NAT / CGNAT 节点 observed path 测试
+
+如果有一台节点在家庭 NAT、CGNAT 或没有端口映射的网络后面，把它作为 `node-b` 测试。这个节点只需要能主动连到公网 `node-a`：
+
+```bash
+docs/scripts/public-gossip-node.sh config \
+  "$HOME/.higgs-public/node-b" \
+  node-b.catofes. \
+  0.0.0.0:33434 \
+  "" \
+  "$root_key" \
+  node-a.catofes. 203.0.113.10:33434
+```
+
+不要给 NAT 节点配置 `advertise_addr`，也不要把 reflector 结果当成一定可拨入的 direct endpoint。若要强制只测试 outbound/observed path，可在 `node-b/config.yaml` 里加：
+
+```yaml
+publish_endpoints: false
+```
+
+接受 bundle 后启动 daemon：
+
+```bash
+docs/scripts/public-gossip-node.sh run-daemon "$HOME/.higgs-public/node-b" 5
+```
+
+在公网 `node-a` 上检查：
+
+```bash
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug peer node-b.catofes.
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs sync status --verbose
+```
+
+预期：
+
+- `observed_addr` 显示 NAT 节点主动发来包时的 UDP 源地址。
+- `observed_status` 为 `active`。
+- `discovered_addr` 可以为空；这表示当前不是依赖 signed direct endpoint，而是依赖本地短期 observed UDP path。
+
+随后在 `node-a` 写入测试 record，确认 NAT 后的 `node-b` 能收到：
+
+```bash
+docs/scripts/public-gossip-node.sh put-identity \
+  "$HOME/.higgs-public/node-a" \
+  node-a.catofes. \
+  node-a-to-nat-b
+
+HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs zone show node-a.catofes.
+HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs verify node-a.catofes.
+```
+
+如果 `observed_status` 很快过期，说明 NAT 映射生命周期较短；缩短 daemon interval 或后续引入 relay / hole punching。
+
+## 7. 重启和恢复测试
 
 停止 node-b daemon：
 
@@ -254,7 +307,7 @@ docs/scripts/public-gossip-node.sh put-identity \
 
 重新启动 node-b daemon 后，node-b 应通过摘要比较补齐缺失版本。
 
-## 7. 撤销测试
+## 8. 撤销测试
 
 在 admin 机器上撤销 node-c：
 
@@ -285,3 +338,4 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs verify node-c.
 - 节点时钟是否同步。
 - daemon 是否真的在线：`sync status --verbose` 顶部应出现 `daemon: online peer_id=...`。
 - 如果公网 IP 会变化，使用 `reflectors: auto`，但要记住远端只信任本节点签名发布后的 endpoint record。
+- NAT / CGNAT 节点没有端口映射时，不要把 reflector IP 当成可被主动拨入的 direct endpoint；先看公网 peer 上的 `observed_addr` / `observed_status` 是否 active。

@@ -541,6 +541,23 @@ reflectors: off
 
 解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `advertise_addrs` 和本机 interface scan 的候选，并在 daemon / `sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
 
+### NAT 后节点与 observed UDP path
+
+signed endpoint record 表示长期、可传播、由 Zone 签名的可达地址；NAT 映射不是这种地址。节点如果在家庭 NAT、CGNAT 或没有端口映射的网络后面，通常只能主动向公网 bootstrap/peer 发起 UDP，同步不能假设其他节点可以主动拨入它的 `listen_addr`。
+
+纯 NAT/outbound-only 节点可以设置 `publish_endpoints: false`，避免把 interface scan 或 reflector 候选发布成 signed direct endpoint。
+
+daemon 收到已准入 peer 的 UDP 包后，会先完成传输层 replay/quota/wire 校验，再由上层按 trust chain 和 record/snapshot 签名验证消息内容。处理成功后，packet 的源地址会被记录为本地短期 `observed_addr`，用于回复、后续 outbound sync 和周期 keepalive/PING。这个地址只保存在本节点 peer state / runtime path table 中，不会写入对外传播的 signed endpoint record。
+
+可以用下面命令排查 NAT path：
+
+```sh
+higgs debug peer node-b.catofes.
+higgs sync status --verbose
+```
+
+输出中的 `observed_addr` / `observed_status` 表示当前维护的短期 UDP 映射。若节点需要被任意 peer 主动拨入，仍需要公网地址、IPv6、端口映射、UDP hole punching，或后续 relay/discovery server 能力。
+
 ### 常见错误与排查
 
 | 现象 | 常见原因 | 排查与修复 |
@@ -548,6 +565,7 @@ reflectors: off
 | `trusted root public key mismatch`、`root public key mismatch` 或 `verify` 失败 | `trusted_root_public_key` 填错，或复用了旧 `data_dir` 中的状态库 | 用 admin 节点重新执行 `root pubkey`，确认所有普通节点配置相同；测试时清空对应 `data_dir` 后重新 join |
 | debug log 出现 `unknown_peer` | 对端 `peer_id` 不在本节点 `bootstrap`，也还没有通过已验证 Zone/endpoint record 被发现 | 检查 `bootstrap.id` 是否等于对端配置里的 `peer_id`；首次接入时至少让一侧通过 bootstrap 或已同步 delegation chain 认识对方 |
 | `bind: permission denied`、`operation not permitted`、测试提示 UDP socket 不允许 | 当前运行环境禁止创建 UDP socket，或端口被系统策略拦截 | 换本机普通 shell 运行；确认没有容器/sandbox 网络限制；避免使用低端口；先跑不依赖 UDP 的 `make join-smoke` |
+| NAT 后节点能主动同步但别人拨不进来 | NAT/CGNAT 没有稳定入站端口映射；reflector 只能发现公网 IP，不能保证该地址可被外部主动访问 | 让 NAT 后节点主动连接公网 bootstrap；用 `debug peer` 查看 `observed_addr` 是否 active；需要任意入站访问时配置端口映射、IPv6 或等待后续 relay 能力 |
 | `bind: address already in use` | `listen_addr` 端口被已有 `daemon`、`sync serve`、`sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
 | `record version conflict`、`conflict` 或更新没有覆盖 | 同一 `zone/key` 出现相同 version 的不同内容，或本地正好有直接前驱但新 record 的 `PrevHash` 不匹配 | 用 `debug zone <zone>` 查看 active record 和历史；由该 Zone authority 再写入一个更高版本的合法 record，让网络继续 fast-forward 收敛 |
 | `verify_failed` | snapshot 能到达传输层，但 authority、delegation 或 record signature 验证失败 | 确认对端是用正确 bundle `join accept`，没有把 root/admin 私钥数据库复制给普通节点；用 `verify <zone>` 在发送方和接收方分别检查 |
