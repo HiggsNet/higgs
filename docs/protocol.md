@@ -1,7 +1,7 @@
 # Higgs Gossip 协议
 
 > **文档状态（2026-06）**  
-> 本文档描述当前已实现的协议（Phase 1–2）。Phase 3+ 规划内容单独标注。
+> 本文档描述当前已实现的协议与 daemon 运行形态（Phase 1–3）。Phase 4+ 规划内容单独标注。
 
 本文档描述 Higgs 用于在节点间传播区域状态的 gossip 同步协议，包括：传输格式、消息交换模式、最终一致性模型、节点发现机制以及传输层的安全防护。
 
@@ -71,7 +71,7 @@ type Message struct {
 
 ## 3. 同步模式
 
-CLI 提供三种与同步相关的命令，分别对应不同的运行时模式：
+CLI 提供四种与同步相关的命令，分别对应不同的运行时模式：
 
 ### 3.1 `sync serve` — 被动入站
 
@@ -91,17 +91,36 @@ higgs sync once <peer-id>
 
 打开传输层，向指定节点发送一个 `PING`，等待最多 `3s` 接收 `PONG`（以及可能的后续 `ANNOUNCE`），然后退出。适用于临时同步或脚本编排。
 
-### 3.3 `sync run` — 主动长运行
+### 3.3 `daemon` — 本机长期运行与单 writer
 
 ```
-higgs sync run --interval 5s
+higgs daemon --interval 5
 ```
 
-这是主要的产品模式，结合了入站服务、定期出站同步和节点发现：
+这是 Phase 3 后推荐的本机长期运行模式，结合了入站服务、定期出站同步、节点发现、endpoint publish 和本机 control socket。daemon 是本节点 state DB 的唯一长期 writer：CLI 写入、同步 apply、endpoint publish、manual trigger 和 timer tick 都经由同一个事件处理边界串行执行。
 
-1. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。这样外部变更（CLI 写入、新委托）可以立即生效。
+1. **事件队列** — `record_put`、UDP packet、remote announce applied、endpoint publish timer、outbound sync timer、manual `sync_trigger`、`shutdown` 都进入 daemon event handler。事件处理函数负责串行落盘、更新 peer state、触发 relay 或唤醒下一轮 outbound sync。
+2. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。这样 daemon 停止期间的恢复写入、新委托或外部修复可以在 daemon 重启后生效。
+3. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
+4. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点执行 sync round。由 local `record_put` 或 manual trigger 唤醒的轮次会绕过旧 backoff 一次，确保本地新写入能立即尝试传播。
+5. **入站接收** — 出站轮次之间，节点以 `250ms` 的超时轮询套接字，处理任何数据包。如果数据包包含的 `ANNOUNCE` 改变了本地状态，则记录来源 peer 并触发**中继**（见 §4.3）。
+6. **Control socket** — daemon 默认监听 Unix domain socket，路径为 `HIGGS_CONTROL_SOCKET`、root 下 `/run/higgs/higgs.sock`，或 `<data_dir>/higgs.sock` fallback。最小 API 包含 `status`、`record_put`、`sync_trigger`、`shutdown`，`reload` 已预留但当前返回错误。
+
+CLI 在检测到 daemon control socket 可用时，会优先作为 client 提交写命令。例如 `record put` 会由 daemon 签名、写 DB 并触发 outbound sync；daemon 不存在时保留直接写 DB 的开发/恢复模式，并输出明确提示。
+
+### 3.4 `sync run` — 兼容长运行入口
+
+```
+higgs sync run --interval 5
+```
+
+`sync run` 保留为开发/兼容入口，当前内部委托给 daemon service，避免维护两套长期运行主循环。语义与 `daemon` 的 gossip 主路径保持一致，但新的本机单 writer/control socket 运行形态应优先使用 `higgs daemon`。
+
+daemon / `sync run` 的核心循环包括：
+
+1. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。
 2. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
-3. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点执行 `syncRoundWithTransport`。
+3. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点执行 sync round。
 4. **入站接收** — 出站轮次之间，节点以 `250ms` 的超时轮询套接字，处理任何数据包。如果数据包包含的 `ANNOUNCE` 改变了本地状态，则触发**中继**（见 §4.3）。
 
 ---

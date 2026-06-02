@@ -200,6 +200,44 @@ func TestDaemonRecordPutReloadsLatestStateBeforeSave(t *testing.T) {
 	}
 }
 
+func TestDaemonRemoteAppliedEventUpdatesPeerState(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(5000, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	var hookCalled bool
+	service.Hooks.OnStateChanged = func(*stateFile) {
+		hookCalled = true
+	}
+
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{
+		Type:         daemonEventRemoteApplied,
+		SourcePeerID: "node-a.catofes.",
+	})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(remote_applied): %v", result.Error)
+	}
+	if syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
+	}
+	if !hookCalled {
+		t.Fatal("state changed hook was not called")
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := latest.SyncPeers["node-a.catofes."].LastUpdateSource; got != "node-a.catofes." {
+		t.Fatalf("LastUpdateSource = %q, want node-a.catofes.", got)
+	}
+}
+
 func TestDaemonControlErrorResponses(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)

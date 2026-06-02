@@ -29,15 +29,23 @@ type DaemonHooks struct {
 type daemonEventType string
 
 const (
-	daemonEventRecordPut   daemonEventType = "record_put"
-	daemonEventSyncTrigger daemonEventType = "sync_trigger"
-	daemonEventShutdown    daemonEventType = "shutdown"
+	daemonEventRecordPut     daemonEventType = "record_put"
+	daemonEventPacket        daemonEventType = "packet"
+	daemonEventSyncTimer     daemonEventType = "timer_sync"
+	daemonEventEndpointTimer daemonEventType = "timer_endpoint_publish"
+	daemonEventRemoteApplied daemonEventType = "remote_announce_applied"
+	daemonEventSyncTrigger   daemonEventType = "sync_trigger"
+	daemonEventShutdown      daemonEventType = "shutdown"
 )
 
 type daemonEvent struct {
-	Type      daemonEventType
-	RecordPut *daemonRecordPut
-	Reply     chan daemonEventResult
+	Type         daemonEventType
+	RecordPut    *daemonRecordPut
+	Packet       *gossip.Packet
+	SourcePeerID string
+	ForceSync    bool
+	Context      context.Context
+	Reply        chan daemonEventResult
 }
 
 type daemonRecordPut struct {
@@ -88,6 +96,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	nextEndpointPublish := d.Sync.now()
 	lastObservedDigests := gossip.ZoneDigests(d.Sync.State.Network)
 	d.Sync.updateDiscoveredPeers()
+	var forceSync bool
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -97,6 +106,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			return nil
 		} else if syncNow {
 			nextSync = now
+			forceSync = true
 		}
 		if latest, changed, err := d.Sync.reloadStateIfChanged(lastObservedDigests); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon reload error: %v\n", err)
@@ -104,21 +114,19 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			d.setState(latest)
 			lastObservedDigests = gossip.ZoneDigests(latest.Network)
 			nextSync = now
+			forceSync = true
 			d.Sync.updateDiscoveredPeers()
 			d.notifyStateChanged()
 		}
 		if !now.Before(nextEndpointPublish) {
-			if latest, err := d.Sync.loadState(); err == nil {
-				d.setState(latest)
-				if err := d.Sync.publishEndpointRecord(); err != nil {
-					fmt.Fprintf(os.Stderr, "endpoint publish error: %v\n", err)
-				} else {
-					lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
-					nextSync = now
-					d.notifyStateChanged()
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "daemon reload error: %v\n", err)
+			result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
+			if result.Error != nil {
+				fmt.Fprintf(os.Stderr, "endpoint publish error: %v\n", result.Error)
+			}
+			if triggerSync {
+				nextSync = now
+				forceSync = true
+				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
 			}
 			interval := d.Sync.Config.ReflectorInterval
 			if interval <= 0 {
@@ -127,29 +135,15 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			nextEndpointPublish = now.Add(interval)
 		}
 		if !now.Before(nextSync) {
-			if latest, err := d.Sync.loadState(); err == nil {
-				d.setState(latest)
-				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
-			} else {
-				fmt.Fprintf(os.Stderr, "daemon reload error: %v\n", err)
+			result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventSyncTimer, ForceSync: forceSync, Context: ctx})
+			if result.Error != nil {
+				fmt.Fprintf(os.Stderr, "sync timer error: %v\n", result.Error)
 			}
-			d.Sync.updateDiscoveredPeers()
-			digestsBeforeRound := gossip.ZoneDigests(d.Sync.State.Network)
-			for _, peerID := range outboundSyncPeers(d.Sync.State, d.Sync.Config) {
-				if backoffRemaining(d.Sync.State.SyncPeers[peerID], now) > 0 {
-					continue
-				}
-				err := d.Sync.syncRound(ctx, peerID, 3*time.Second)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "sync round error peer=%s: %v\n", peerID, err)
-				}
-			}
-			if syncStateChanged(d.Sync.State, digestsBeforeRound) {
-				d.Sync.updateDiscoveredPeers()
+			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
-				d.notifyStateChanged()
 			}
 			nextSync = now.Add(d.Interval)
+			forceSync = false
 		}
 		packet, err := receiveWithContext(ctx, transport, d.Sync.now().Add(250*time.Millisecond))
 		if err != nil {
@@ -162,19 +156,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			fmt.Fprintf(os.Stderr, "daemon receive error: %v\n", err)
 			continue
 		}
-		digestsBefore := gossip.ZoneDigests(d.Sync.State.Network)
-		if err := d.Sync.handlePacket(packet); err != nil {
-			fmt.Fprintf(os.Stderr, "daemon packet error from %s: %v\n", packet.Message.PeerID, err)
-			continue
+		result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
+		if result.Error != nil {
+			fmt.Fprintf(os.Stderr, "daemon packet error from %s: %v\n", packet.Message.PeerID, result.Error)
 		}
-		if packet.Message.Announce != nil && syncStateChanged(d.Sync.State, digestsBefore) {
-			recordUpdateSource(d.Sync.State, packet.Message.PeerID)
+		if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 			lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
-			d.Sync.updateDiscoveredPeers()
-			d.notifyStateChanged()
-			if err := d.Sync.relay(ctx, packet.Message.PeerID); err != nil {
-				fmt.Fprintf(os.Stderr, "sync relay error source=%s: %v\n", packet.Message.PeerID, err)
-			}
 		}
 	}
 }
@@ -316,6 +303,15 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventRecordPut:
 		version, err := d.handleRecordPutEvent(event.RecordPut)
 		return daemonEventResult{Version: version, Error: err}, err == nil, false
+	case daemonEventPacket:
+		return daemonEventResult{Error: d.handlePacketEvent(event.Packet, controlContext(event.Context))}, false, false
+	case daemonEventSyncTimer:
+		return daemonEventResult{Error: d.handleSyncTimerEvent(controlContext(event.Context), event.ForceSync)}, false, false
+	case daemonEventEndpointTimer:
+		err := d.handleEndpointTimerEvent()
+		return daemonEventResult{Error: err}, err == nil, false
+	case daemonEventRemoteApplied:
+		return daemonEventResult{Error: d.handleRemoteAppliedEvent(controlContext(event.Context), event.SourcePeerID)}, false, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
 	case daemonEventShutdown:
@@ -323,6 +319,72 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	default:
 		return daemonEventResult{Error: fmt.Errorf("unknown daemon event: %s", event.Type)}, false, false
 	}
+}
+
+func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Context) error {
+	if packet == nil || packet.Message == nil {
+		return errors.New("packet event is nil")
+	}
+	digestsBefore := gossip.ZoneDigests(d.Sync.State.Network)
+	if err := d.Sync.handlePacket(packet); err != nil {
+		return err
+	}
+	if packet.Message.Announce != nil && syncStateChanged(d.Sync.State, digestsBefore) {
+		return d.handleRemoteAppliedEvent(ctx, packet.Message.PeerID)
+	}
+	return nil
+}
+
+func (d *DaemonService) handleRemoteAppliedEvent(ctx context.Context, sourcePeerID string) error {
+	recordUpdateSource(d.Sync.State, sourcePeerID)
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	if err := d.Sync.relay(ctx, sourcePeerID); err != nil {
+		return fmt.Errorf("sync relay source=%s: %w", sourcePeerID, err)
+	}
+	return d.Sync.saveState()
+}
+
+func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return fmt.Errorf("daemon reload: %w", err)
+	}
+	d.setState(latest)
+	d.Sync.updateDiscoveredPeers()
+	digestsBeforeRound := gossip.ZoneDigests(d.Sync.State.Network)
+	var syncErr error
+	for _, peerID := range outboundSyncPeers(d.Sync.State, d.Sync.Config) {
+		if !force && backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now()) > 0 {
+			continue
+		}
+		if err := d.Sync.syncRound(ctx, peerID, 3*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "sync round error peer=%s: %v\n", peerID, err)
+			if syncErr == nil {
+				syncErr = err
+			}
+		}
+	}
+	if syncStateChanged(d.Sync.State, digestsBeforeRound) {
+		d.Sync.updateDiscoveredPeers()
+		d.notifyStateChanged()
+	}
+	return syncErr
+}
+
+func (d *DaemonService) handleEndpointTimerEvent() error {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return fmt.Errorf("daemon reload: %w", err)
+	}
+	d.setState(latest)
+	if err := d.Sync.publishEndpointRecord(); err != nil {
+		return err
+	}
+	d.notifyStateChanged()
+	return nil
 }
 
 func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {

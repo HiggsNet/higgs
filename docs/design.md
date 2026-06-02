@@ -1,8 +1,8 @@
 # Higgs Mesh VPN 控制平面设计
 
 > **文档状态（2026-06）**
-> Phase 0–2 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
-> 各 Phase 完成情况见 `../todo.md`；Phase 3（WireGuard 建链）起为规划阶段。
+> Phase 0–3 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（WireGuard 建链）起为规划阶段。
 
 ## 原始需求摘要
 
@@ -48,15 +48,15 @@
 
 ```
 ┌──────────────────────────────────────────────────┐
-│             app/higgs/  (CLI 入口)                │
+│             app/higgs/  (CLI / daemon 入口)       │
 │  init · keygen · join · delegate · record        │
-│  verify · sync · debug · db                      │
+│  verify · daemon · sync · debug · db             │
 ├──────────────┬───────────────┬───────────────────┤
 │  pkg/core/   │ pkg/transport/│  pkg/routing/     │
 │              │   drivers     │    adapters        │
 ├──────────────┼───────────────┼───────────────────┤
 │ ✅ identity  │ 🔲 wireguard  │ 🔲 babeld         │
-│ ✅ gossip    │   (Phase 3)   │   (Phase 4)        │
+│ ✅ gossip    │   (Phase 4)   │   (Phase 5)        │
 │ ✅ zone      │               │                   │
 │ 🔲 merkle   │               │                   │
 │ ✅ crypto    │               │                   │
@@ -487,23 +487,24 @@ type PeerView struct {
 
 ## 五、关键技术选型
 
-| 组件 | 当前实现 | Phase 3+ 规划 | 备注 |
+| 组件 | 当前实现 | Phase 4+ 规划 | 备注 |
 |------|----------|--------------|------|
 | Go 版本 | 1.25+ | — | 泛型、slog、标准库增强 |
-| 序列化（Gossip） | JSON（`higgs.gossip.v1\n{...}`） | Protobuf（`gossip.proto` 已预留） | Phase 1–2 用 JSON；proto 文件已定义，后续切换 |
+| 序列化（Gossip） | JSON（`higgs.gossip.v1\n{...}`） | Protobuf（`gossip.proto` 已预留） | Phase 1–3 用 JSON；proto 文件已定义，后续切换 |
 | 序列化（Record 值） | JSON | — | 具体 record 格式（endpoint、policy 等）均为 JSON |
 | 配置文件 | YAML（`config.yaml`） | — | 默认 `./config.yaml`，可用 `HIGGS_CONFIG` 覆盖 |
 | 本地存储 | `bbolt` | — | 纯 Go，无 CGO；按 Zone 分 bucket |
 | 哈希 | `blake2b-256`（`golang.org/x/crypto`） | — | 用于 KeyID、RecordHash、ZoneRoot |
 | 签名 | ED25519（标准库） | — | 密钥加密存储：AES-GCM + bcrypt |
-| WG 控制 | _未实现_（Phase 3） | `wgctrl-go` | 直接 netlink，性能更好 |
+| Daemon / 单 writer | `higgs daemon` + Unix control socket | systemd / 远程管理预留 | Phase 3 最小形态已实现 |
+| WG 控制 | _未实现_（Phase 4） | `wgctrl-go` | 直接 netlink，性能更好 |
 | netlink | _未实现_ | `vishvananda/netlink` | 生态成熟 |
-| 路由协议 | _未实现_（Phase 4） | `babeld` + 控制 socket | Babel 更适合 mesh，自动邻居发现 |
-| 防火墙 | _未实现_（Phase 5） | `nftables` netlink | 现代 Linux 趋势 |
+| 路由协议 | _未实现_（Phase 5） | `babeld` + 控制 socket | Babel 更适合 mesh，自动邻居发现 |
+| 防火墙 | _未实现_（Phase 6） | `nftables` netlink | 现代 Linux 趋势 |
 
 ---
 
-## 六、当前实现现状（Phase 0–2）
+## 六、当前实现现状（Phase 0–3）
 
 ### 已落地
 
@@ -522,10 +523,11 @@ type PeerView struct {
 | Relay fanout（变更后对其他 peer 触发轻量 sync） | `app/higgs/sync.go` | ✅ 完整 |
 | Peer 动态发现（endpoint record 扫描、TTL/grace 管理） | `pkg/core/gossip/` | ✅ 完整 |
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
-| CLI（init / join / keygen / delegate / record / verify / sync / debug / db） | `app/higgs/` | ✅ 完整 |
+| Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ Phase 3 最小形态 |
+| CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db） | `app/higgs/` | ✅ 完整 |
 | 配置文件（YAML + 环境变量覆盖） | `app/higgs/config.go` | ✅ 完整 |
 
-### 预留/存根（Phase 3+）
+### 预留/存根（Phase 4+）
 
 | 模块 | 包路径 | 状态 |
 |------|--------|------|
@@ -533,7 +535,7 @@ type PeerView struct {
 | Babeld 路由适配器 | `pkg/routing/babeld/` | 🔲 仅 doc.go |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
-| Delegation 撤销（tombstone） | — | 🔲 未实现（Phase 2.13） |
+| Delegation 撤销（tombstone） | `pkg/core/zone/` + `app/higgs/` | ✅ 已实现 |
 | 细粒度 Capability 执行 | `pkg/crypto/sign.go` | ⚠️ 结构已定义，校验仅检查 PermDelegate/PermWrite |
 | Public IP Reflector | `pkg/core/gossip/discovery.go` | ✅ HTTP client + local smoke |
 

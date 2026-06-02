@@ -284,15 +284,16 @@ build/higgs db dump
 build/higgs db dump catofes.
 ```
 
-这些命令都以只读模式打开数据库，不会干扰正在运行的 `sync serve` 或 `sync run` 实例。
+这些命令都以只读模式打开数据库，不会干扰正在运行的 `sync serve`、`sync run` 或 `daemon` 实例。
 
 ## Gossip 同步
 
-同步相关命令分三种运行方式：
+同步相关命令分四种运行方式：
 
 - `sync serve`：只监听 UDP，响应其他 peer 发来的 `PING`、`FETCH_ZONE`、`FETCH_RECORD` 和 `ANNOUNCE`。它是被动服务端，适合手动 smoke 或排查。
 - `sync once <peer-id>`：主动和一个 peer 做一次同步 round。它会先发 `PING`，根据双方 zone digest 差异拉取缺失 zone/record，然后退出。
-- `sync run`：长期运行模式。它同时执行 `sync serve` 的收包处理和周期性 outbound sync；peer 失败后会记录 `last_error` 和 backoff，网络恢复后自动重试。真实节点更接近这个模式。
+- `sync run`：开发/兼容长期运行入口，当前内部委托给 daemon service。它同时执行收包处理、周期性 outbound sync、endpoint publish 和 relay fanout。
+- `daemon`：Phase 3 后推荐的本机长期运行入口。daemon 通过 Unix control socket 接收本机 CLI 写命令，把 `record_put`、sync apply、endpoint publish、manual trigger 和 timer tick 收进同一个串行 writer 边界，避免多个进程同时写 state DB。
 
 启动 node B 的 gossip server：
 
@@ -310,14 +311,22 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync status
 
 本机双节点测试时，每个节点都需要独立的 `config.yaml` 和 `data_dir`。`bootstrap` 中的 `id` 和 `addr` 必须和对端的 `peer_id`、UDP 监听地址一致。
 
-长期运行两个节点时，可以让两端都运行 `sync run`：
+长期运行两个节点时，推荐让两端都运行 `daemon`：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync run --interval 5
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync run --interval 5
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs daemon --interval 5
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs daemon --interval 5
 ```
 
-`sync run` 会定期比较摘要，也会在收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。
+daemon 会定期比较摘要，也会在收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。`sync run` 保留为兼容入口，行为尽量复用同一套 daemon service。
+
+daemon 启动后，`record put` 会优先通过本机 control socket 提交给 daemon，由 daemon 签名、落盘并触发 outbound sync：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record put node-a.catofes. identity node-a
+```
+
+如果 daemon 不在，CLI 会明确提示 `daemon control socket unavailable; writing state directly`，并保留直接写 DB 的开发/恢复模式。下次 daemon 启动时会重新加载该状态并继续同步。
 
 ### 双节点完整同步脚本
 
@@ -530,7 +539,7 @@ reflectors:
 reflectors: off
 ```
 
-解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `advertise_addrs` 和本机 interface scan 的候选，并在 `sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
+解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `advertise_addrs` 和本机 interface scan 的候选，并在 daemon / `sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
 
 ### 常见错误与排查
 
@@ -539,7 +548,7 @@ reflectors: off
 | `trusted root public key mismatch`、`root public key mismatch` 或 `verify` 失败 | `trusted_root_public_key` 填错，或复用了旧 `data_dir` 中的状态库 | 用 admin 节点重新执行 `root pubkey`，确认所有普通节点配置相同；测试时清空对应 `data_dir` 后重新 join |
 | debug log 出现 `unknown_peer` | 对端 `peer_id` 不在本节点 `bootstrap`，也还没有通过已验证 Zone/endpoint record 被发现 | 检查 `bootstrap.id` 是否等于对端配置里的 `peer_id`；首次接入时至少让一侧通过 bootstrap 或已同步 delegation chain 认识对方 |
 | `bind: permission denied`、`operation not permitted`、测试提示 UDP socket 不允许 | 当前运行环境禁止创建 UDP socket，或端口被系统策略拦截 | 换本机普通 shell 运行；确认没有容器/sandbox 网络限制；避免使用低端口；先跑不依赖 UDP 的 `make join-smoke` |
-| `bind: address already in use` | `listen_addr` 端口被已有 `sync serve`/`sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
+| `bind: address already in use` | `listen_addr` 端口被已有 `daemon`、`sync serve`、`sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
 | `record version conflict`、`conflict` 或更新没有覆盖 | 同一 `zone/key` 出现相同 version 的不同内容，或本地正好有直接前驱但新 record 的 `PrevHash` 不匹配 | 用 `debug zone <zone>` 查看 active record 和历史；由该 Zone authority 再写入一个更高版本的合法 record，让网络继续 fast-forward 收敛 |
 | `verify_failed` | snapshot 能到达传输层，但 authority、delegation 或 record signature 验证失败 | 确认对端是用正确 bundle `join accept`，没有把 root/admin 私钥数据库复制给普通节点；用 `verify <zone>` 在发送方和接收方分别检查 |
 | `message_too_large`、`quota` | 单包超过限制，或短时间内同步对象太多 | 提高 `max_message_bytes`、`max_sync_zones`、`max_sync_records`，或降低写入/同步频率；两端配置应保持兼容 |
@@ -593,11 +602,20 @@ make delegation-revoke-smoke
 
 该流程先让 node-b 的 record 和 endpoint 在 A/C 间传播，再由 `catofes.` 管理节点签发 revocation，最后验证 A/C 不再信任 B 的 record、endpoint 和后续发布内容。
 
+Phase 3 daemon 写入与 fallback 可以直接跑：
+
+```bash
+make phase3-daemon-smoke
+make phase3-daemon-fallback-smoke
+```
+
+前者验证 CLI `record put` 通过 daemon control socket 提交后，由 daemon 串行写入 DB、唤醒 outbound sync，并让远端收敛；后者验证 daemon 停止时 CLI 直接写 DB 的开发/恢复模式仍可用，下一次 daemon 启动后能加载并传播。
+
 ## 下一步方向
 
-Phase 2 的配置同步主线已经收敛。进入 WireGuard 前，Phase 3 会先补一个最小 `higgs daemon`，把长期运行的 gossip、后续 WG apply、以及 CLI 写操作收进同一个本地串行 writer 边界，避免多个 CLI 进程直接同时写 state DB。
+Phase 3 的最小 daemon / 单 writer 边界已经收敛：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交写命令，daemon 不存在时保留直接写 DB 的开发/恢复模式。
 
-之后再接 WireGuard 控制模块：由 daemon 监听 active state 变更，推导 peer view，调用 `wgctrl-go` 添加/删除 peer，并在 Zone 被撤销时立即清理对应 WG 配置。
+下一步进入 Phase 4 WireGuard 控制模块：由 daemon 监听 active state 变更，推导 peer view，调用 `wgctrl-go` 添加/删除 peer，并在 Zone 被撤销时立即清理对应 WG 配置。
 
 ## CLI 汇总
 
@@ -611,6 +629,7 @@ build/higgs join accept <bundle.json> <key.json>
 build/higgs zone show <zone>
 build/higgs record put <zone> <key> <value> [type]
 build/higgs verify <zone>
+build/higgs daemon [--interval seconds]
 build/higgs sync status [--verbose]
 build/higgs sync serve
 build/higgs sync once <peer-id>

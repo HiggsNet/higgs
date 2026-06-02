@@ -263,30 +263,32 @@
 
 **目标：** 在进入 WireGuard 前，先把长期运行同步、CLI 写入、后续 apply 触发统一收到本机 daemon 的串行写入路径里，避免多个进程同时修改 state DB。
 
-- [ ] **3.1 Daemon 服务骨架**
+- [x] **3.1 Daemon 服务骨架**
   - [x] 明确 Phase 2 → Phase 3 边界：同步已经具备最终一致性；Phase 3 的首要风险是长期进程、CLI 写入和 WG apply 同时改 state，因此先做 daemon 单 writer，再做 WG
   - [x] 抽出 `SyncService` / `DaemonService`：复用 `sync run` 的 UDP serve、周期 outbound sync、endpoint publish、relay fanout、backoff/rejected digest 逻辑，避免维护两套同步主循环
   - [x] 增加 `higgs daemon` 常驻模式：加载一次 config/state，启动 UDP transport，进入统一事件循环，并为后续 WG/Babel/firewall apply 预留 state-change hook
   - [x] 明确 daemon 是本节点 state DB 的唯一长期 writer：`record put`、endpoint publish、sync apply、sync trigger、未来 WG apply 相关状态都通过 daemon 串行执行
 
-- [ ] **3.2 本地事件队列与控制接口**
-  - [ ] 定义最小内存事件队列：local record put、remote announce applied、timer tick、manual sync trigger、shutdown/reload；同一队列串行落盘和触发后续动作
-    - 已接入 local `record_put`、manual `sync_trigger`、`shutdown`；remote announce applied / timer tick 仍由 daemon 主循环直接处理，后续再统一事件化
+- [x] **3.2 本地事件队列与控制接口**
+  - [x] 定义最小内存事件队列：local record put、remote announce applied、timer tick、manual sync trigger、shutdown/reload；同一队列串行落盘和触发后续动作
+    - 已接入 local `record_put`、manual `sync_trigger`、`shutdown`；UDP packet / remote announce applied、endpoint publish timer、outbound sync timer 也已统一为 daemon event handler 分支
   - [x] 提供最小 Unix domain socket control API：`status`、`record_put`、`sync_trigger`、`shutdown`、`reload` 预留；只做本机接口，不做远程管理
   - [x] 约定 socket 路径和权限：默认 `/run/higgs/higgs.sock` 或 `<data_dir>/higgs.sock` fallback；默认只允许本机同用户/管理员访问
 
-- [ ] **3.3 CLI client 化与兼容模式**
+- [x] **3.3 CLI client 化与兼容模式**
   - [x] CLI 在检测到 daemon control socket 存在时优先作为 client 提交写命令；daemon 不存在时保留当前直接写 DB 的开发/恢复模式，并输出明确提示
   - [x] `record put` client 化：daemon 存在时提交 `record_put`，由 daemon 签名、写 DB、触发 outbound sync；daemon 不存在时沿用现有直接写入路径
   - [x] `sync status --verbose` / `debug peer` 优先读取 daemon live 状态；daemon 不存在时 fallback 到 bbolt 快照，保证离线排障仍可用
   - [x] 将 `sync run` 标记为开发/兼容入口，内部尽量委托 daemon service 实现，避免 Phase 3 后出现两套长期运行路径
 
-- [ ] **3.4 Daemon 测试闭环**
+- [x] **3.4 Daemon 测试闭环**
   - [x] 增加 daemon 单元测试：事件队列串行处理、config 只加载一次、state reload 不覆盖更新、control API request/response 兼容错误路径
     - 已覆盖事件串行、state reload 防旧快照覆盖、control API 错误响应；config 只加载一次沿用 `Runtime` 测试覆盖
   - [x] 增加并发安全测试：daemon 运行期间多个 CLI 写命令串行处理，不出现旧 state snapshot 覆盖新写入
-  - [ ] 增加 smoke：daemon 运行时 CLI `record put` 通过 control socket 提交，daemon 写 DB、触发 gossip sync，远端收敛
-  - [ ] 增加 smoke：daemon 停止后 CLI 直接写 DB 的开发模式仍可用，并能被下一次 daemon 启动正确加载
+  - [x] 增加 smoke：daemon 运行时 CLI `record put` 通过 control socket 提交，daemon 写 DB、触发 gossip sync，远端收敛
+    - 已增加 `make phase3-daemon-smoke`；local `record_put` / manual sync trigger 唤醒的 outbound round 会绕过旧 backoff 一次，确保 CLI 写入后立即尝试传播
+  - [x] 增加 smoke：daemon 停止后 CLI 直接写 DB 的开发模式仍可用，并能被下一次 daemon 启动正确加载
+    - 已增加 `make phase3-daemon-fallback-smoke`
 
 ## Phase 4: WireGuard 建链（预计 2-3 周）
 
@@ -436,7 +438,7 @@
 
 ## 下一步
 
-1. 先抽 `SyncService` / `DaemonService`，让 `sync run` 和未来 `higgs daemon` 共享同一套同步主循环。
-2. 实现最小 Unix socket control API，并把 `record put` 改成 daemon 存在时走 client 提交、daemon 不存在时保留直接写 DB。
-3. 补 daemon 单 writer 单测和 smoke，确认并发 CLI 写入不会覆盖 state，且写入后能触发 gossip 收敛。
-4. daemon 边界稳定后再接 `wgctrl-go`，先完成双节点自动添加 WG peer、撤销后删除 peer、tunnel IP ping 通。
+1. 进入 Phase 4 WireGuard 建链：先定义从 active state 推导本机 `PeerView` 的最小 record 约定和 dry-run 输出。
+2. 接入 `wgctrl-go` 的薄适配层，先实现 add/update/remove peer 的可测试接口，避免把 netlink 细节散到 daemon 主循环。
+3. 由 daemon state-change hook 触发 WG apply，确保配置同步、CLI 写入和后续撤销清理仍走 Phase 3 的单 writer 边界。
+4. 增加双节点 WG smoke：两端同步配置后自动添加对方 WG peer，`wg show` 可见握手，并能 ping 通 tunnel IP。
