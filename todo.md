@@ -290,6 +290,36 @@
   - [x] 增加 smoke：daemon 停止后 CLI 直接写 DB 的开发模式仍可用，并能被下一次 daemon 启动正确加载
     - 已增加 `make phase3-daemon-fallback-smoke`
 
+## Phase 3.5: NAT 后节点 / verified inbound UDP path（紧急，Phase 4 前必须完成）
+
+**目标：** 在进入 WireGuard 前，先保证 gossip 能处理“节点在 NAT 后、只能主动发起 UDP”的公网拓扑。已通过 trust chain 验证的 peer 如果从某个 UDP 源地址发来有效消息，本节点应把这条 observed path 当作短期可信通信路径维护，用于回复、后续同步和 keepalive；但不能把临时 NAT 映射永久写成 signed endpoint。
+
+- [x] **3.5.1 入站路径信任语义**
+  - [x] 明确 `signed endpoint record` 与 `observed UDP path` 的区别：前者是长期、可传播、由 Zone 签名的可达性声明；后者是本 daemon 运行态观察到的短期 NAT 映射，只能本地使用
+  - [x] 只有当 `peer_id` 已在 bootstrap 或 verified active state 中通过 delegation chain 准入，且消息本身通过 replay/quota/wire 校验和 zone/record 验证后，才把 packet source addr 记录为 verified observed path
+  - [x] 对未准入 peer、验证失败消息、已撤销 Zone、过期 delegation、bad root digest 的来源地址，不建立 observed path，并记录 reject reason
+
+- [x] **3.5.2 运行态 observed path 维护**
+  - [x] 将 `Transport.lastSeenAddrs` 从“无 outbound 地址时的临时 fallback”提升为带状态的 path table：peer_id、remote UDP addr、first_seen、last_seen、last_success、ttl、失败次数、来源消息类型、验证状态
+  - [x] daemon 周期性对 observed path 做轻量 keepalive / PING，维持 NAT 映射；成功时提升优先级，失败/backoff 后降级或过期移除
+  - [x] `Send(peerID)` 地址选择顺序改为：static/bootstrap 或 signed direct endpoint 优先；当 direct endpoint 失败或 peer 标记为 NAT/outbound-only 时，优先使用仍有效的 verified observed path
+  - [ ] 收到同一 peer 的新源地址时允许迁移 path，但保留旧 path grace period，避免 NAT 重绑定或公网 IP 切换期间立即失联
+
+- [x] **3.5.3 协议与诊断**
+  - [x] 在 peer debug/status 中显示 `observed_addr`、path 状态、TTL、last_seen、last_success、失败原因、是否用于当前 outbound
+  - [x] endpoint metadata 增加或明确 `scope/reachability`：`direct`、`reflector_candidate`、`observed_udp`、`outbound_only`；`observed_udp` 默认不写入 signed endpoint record，只在本地 runtime/peer state 中保存
+  - [x] README 明确 NAT 语义：NAT 后节点可通过主动 outbound gossip 与公网 bootstrap/peer 收敛；任意节点主动拨入 NAT 后节点仍需要端口映射、IPv6、hole punching 或后续 relay 能力
+
+- [x] **3.5.4 测试闭环**
+  - [x] 单测覆盖：验证成功后记录 observed path；验证失败/撤销后不记录；path TTL 过期；新源地址迁移；地址选择优先级与 backoff 降级
+  - [x] 集成 smoke：B 只主动向 A 发起同步，A 通过 verified observed path 回复并继续维持短期双向通信；B 不发布可直连 signed endpoint 时仍能最终收敛
+  - [x] 公网手册增加 NAT 场景检查项：普通家庭宽带/CGNAT 节点只配置公网 bootstrap，验证 daemon 能显示 observed path 并完成 record 收敛
+
+- [ ] **3.5.5 Daemon observed path 自动触发测试**
+  - [ ] 增加 `make nat-daemon-observed-smoke`：A/B 都以 daemon 运行，B 配置 `publish_endpoints: false` 只主动连 A；A 通过 control socket `record put` 后，daemon 的本地写入触发 outbound sync，并必须通过 verified observed path 将新 record 推送给 B
+  - [ ] 该 smoke 应明确区分 daemon 集成行为与 3.5.4 的核心 observed path 能力：测试允许 endpoint timer 存在，但断言 B 没有 signed direct endpoint / `discovered_addr`，且 A 的 `observed_status` 为 active
+  - [ ] 覆盖异步触发边界：CLI `record put` 返回后轮询 B 收敛；若 timeout/backoff 发生，日志中要能看出是 daemon trigger、observed path 失效还是普通 endpoint 路径被误用
+
 ## Phase 4: WireGuard 建链（预计 2-3 周）
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
@@ -447,9 +477,10 @@
 
 ## 下一步
 
-1. 先完成 Phase 4.0：把 `delegate issue/revoke`、`join accept`、root/admin 管理写入也收进 daemon/control API，彻底关闭 admin 直写 DB 的单 writer 口子。
-2. 用 `docs/public-internet-test.md` 和 `docs/scripts/public-gossip-node.sh` 在真实公网 3+ 节点跑 daemon gossip 收敛测试，记录端口、endpoint、bootstrap、revocation 和 daemon restart 的真实行为。
-3. 进入 Phase 4 WireGuard 建链：定义从 active state 推导本机 `PeerView` 的最小 record 约定和 dry-run 输出。
-4. 接入 `wgctrl-go` 的薄适配层，先实现 add/update/remove peer 的可测试接口，避免把 netlink 细节散到 daemon 主循环。
-5. 由 daemon state-change hook 触发 WG apply，确保配置同步、CLI 写入和后续撤销清理仍走单 writer 边界。
-6. 增加双节点 WG smoke：两端同步配置后自动添加对方 WG peer，`wg show` 可见握手，并能 ping 通 tunnel IP。
+1. 先完成 Phase 3.5：把 verified inbound UDP path / NAT 后节点 outbound-only 同步路径做扎实，确保进入 WireGuard 前公网 gossip 不依赖所有节点都可被主动拨入。
+2. 用 `docs/public-internet-test.md` 和 `docs/scripts/public-gossip-node.sh` 在真实公网 3+ 节点跑 daemon gossip 收敛测试，额外覆盖 NAT/CGNAT 节点只主动连公网 bootstrap 的场景。
+3. 完成 Phase 4.0：把 `delegate issue/revoke`、`join accept`、root/admin 管理写入也收进 daemon/control API，彻底关闭 admin 直写 DB 的单 writer 口子。
+4. 进入 Phase 4 WireGuard 建链：定义从 active state 推导本机 `PeerView` 的最小 record 约定和 dry-run 输出。
+5. 接入 `wgctrl-go` 的薄适配层，先实现 add/update/remove peer 的可测试接口，避免把 netlink 细节散到 daemon 主循环。
+6. 由 daemon state-change hook 触发 WG apply，确保配置同步、CLI 写入和后续撤销清理仍走单 writer 边界。
+7. 增加双节点 WG smoke：两端同步配置后自动添加对方 WG peer，`wg show` 可见握手，并能 ping 通 tunnel IP。
