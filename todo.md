@@ -345,22 +345,23 @@
     - 当前 UDP 控制面不启用通用压缩；TCP object pull 仍为 length-prefixed MessagePack。后续若引入 zstd，仅用于大 object pull 响应，并必须带压缩阈值、最大解压大小和 CPU/内存上限。
   - [x] 更新 README / docs/protocol.md：当前 JSON framing 只作为旧协议说明，新公网推荐路径是 MessagePack + MTU-safe framing；`gossip.proto` 保留为协议形状参考而非当前构建依赖
 
-- [ ] **3.6.3 Snapshot / record 分帧**
+- [x] **3.6.3 Snapshot / record 分帧**
   - [x] 固化当前临时修复方向：Zone metadata snapshot 与 record payload 分开发送，单条 record 走独立 `RecordSnapshot` 或等价小消息
   - [x] UDP gossip 主路径只传 digest、fetch request、ack/nack、小 metadata 和小 record；单条 record value 超过 datagram 预算时不直接塞进 UDP announce
     - 超预算 skeleton 会退化为 digest-only announce，超预算 record 会跳过 UDP payload，由 object pull 补齐
-  - [ ] 对多 record / 多 zone 同步增加发送批次规划：按预算打包，优先发送 digest、parent proof、delegation/revocation，再发送 active records
-    - 当前实现已按 zone 排序并拆成 skeleton + 单 record datagram，但还没有完整的预算内 batch planner / 优先级调度
+  - [x] 对多 record / 多 zone 同步增加发送批次规划：按预算打包，优先发送 digest、parent proof、delegation/revocation，再发送 active records
+    - 已增加预算内 announce planner：先按 datagram 预算批量发送 digest，再批量发送不含 record 的 zone skeleton（authority / parent proof / delegation / revocation），最后将多个小 record 合并进预算内 record datagram；单 skeleton 或单 record 超预算时只记录并跳过 UDP payload，由 object pull 补齐
   - [x] 接收端只在完整对象通过大小/数量限制后进入验证；超预算对象必须走 object pull，不能通过大 UDP datagram 隐式传输
 
-- [ ] **3.6.4 Reliable object pull**
+- [x] **3.6.4 Reliable object pull**
   - [x] 设计 object transfer 层：UDP gossip 发现 digest/object 缺失后，通过短连接 TCP pull 拉取完整 snapshot 或大 record；后续可升级 QUIC，但第一版先保持 TCP request/response 简单模型
   - [x] object pull 必须沿用同一 trust boundary：对象内容仍按 root/delegation/record signature 验证；TCP/QUIC 只是传输优化，不是信任捷径
-  - [ ] TCP pull 不做完整 gossip、不维护长连接、不引入连接池；只支持按 object id / zone digest 拉取对象，设置短超时、并发上限和响应大小上限
-    - 当前已是短连接 request/response，支持 zone snapshot / record request，并有超时和响应大小上限；但还没有并发上限
-  - [ ] endpoint/可达性选择：有 signed direct endpoint 或主动连接公网 bootstrap 时使用 TCP pull；对只有 verified observed UDP path 且 TCP 不可达的 peer，第一版允许标记 `large_object_unreachable` 并等待后续可选 fallback
-    - 当前 TCP 地址从 bootstrap 或 signed endpoint 推导，尚未记录 `large_object_unreachable`
-  - [ ] debug/status 显示 object pull 最近错误、对象大小、来源 peer 和是否因不可达而跳过大对象
+  - [x] TCP pull 不做完整 gossip、不维护长连接、不引入连接池；只支持按 object id / zone digest 拉取对象，设置短超时、并发上限和响应大小上限
+    - TCP pull 保持短连接 request/response，支持 zone snapshot / record request；客户端有短超时、本地并发上限（4）和 8 MiB 响应大小上限
+  - [x] endpoint/可达性选择：有 signed direct endpoint 或主动连接公网 bootstrap 时使用 TCP pull；对只有 verified observed UDP path 且 TCP 不可达的 peer，第一版允许标记 `large_object_unreachable` 并等待后续可选 fallback
+    - TCP 地址继续从 bootstrap 或 signed endpoint 推导，并使用同一个数字端口；没有 TCP 地址时写入 object pull stats，并标记 `large_object_unreachable`
+  - [x] debug/status 显示 object pull 最近错误、对象大小、来源 peer 和是否因不可达而跳过大对象
+    - `sync status --verbose` 和 `debug peer` 已显示 object pull attempts/successes/failures、最近对象 zone/key/bytes/source peer、最近错误与 unreachable 标记
 
 - [ ] **3.6.5 可靠性与反放大控制**
   - [x] `sync once` 的完成条件改为基于目标 digest/对象确认或明确的 idle + no-pending-work，而不是收到任意 announce 后返回

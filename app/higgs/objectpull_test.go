@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ func TestObjectPullTCPServerClient(t *testing.T) {
 
 	listener, err := objectPullTCPServe("127.0.0.1:0", objectPullLookup(func() *stateFile { return state }))
 	if err != nil {
+		skipRestrictedSocket(t, err)
 		t.Fatalf("objectPullTCPServe: %v", err)
 	}
 	defer listener.Close()
@@ -70,17 +72,17 @@ func TestObjectPullTCPServerClient(t *testing.T) {
 }
 
 func TestObjectPullTCPAddrDerivation(t *testing.T) {
-	if got := objectPullTCPAddr("192.0.2.1:33434"); got != "192.0.2.1:33435" {
-		t.Fatalf("objectPullTCPAddr = %q, want 192.0.2.1:33435", got)
+	if got := objectPullTCPAddr("192.0.2.1:33434"); got != "192.0.2.1:33434" {
+		t.Fatalf("objectPullTCPAddr = %q, want 192.0.2.1:33434", got)
 	}
-	if got := objectPullTCPAddr("[2001:db8::1]:33434"); got != "[2001:db8::1]:33435" {
-		t.Fatalf("objectPullTCPAddr v6 = %q, want [2001:db8::1]:33435", got)
+	if got := objectPullTCPAddr("[2001:db8::1]:33434"); got != "[2001:db8::1]:33434" {
+		t.Fatalf("objectPullTCPAddr v6 = %q, want [2001:db8::1]:33434", got)
 	}
 }
 
 func TestObjectPullListenAddr(t *testing.T) {
-	if got := objectPullListenAddr("127.0.0.1:33434"); got != "127.0.0.1:33435" {
-		t.Fatalf("objectPullListenAddr = %q, want 127.0.0.1:33435", got)
+	if got := objectPullListenAddr("127.0.0.1:33434"); got != "127.0.0.1:33434" {
+		t.Fatalf("objectPullListenAddr = %q, want 127.0.0.1:33434", got)
 	}
 }
 
@@ -98,10 +100,74 @@ func TestResolvePeerTCPAddrPrefersBootstrap(t *testing.T) {
 			{ID: "node-b", Addr: "192.0.2.10:33434"},
 		},
 	}
-	if got := resolvePeerTCPAddr(state, config, "node-b"); got != "192.0.2.10:33435" {
-		t.Fatalf("resolvePeerTCPAddr = %q, want 192.0.2.10:33435", got)
+	if got := resolvePeerTCPAddr(state, config, "node-b"); got != "192.0.2.10:33434" {
+		t.Fatalf("resolvePeerTCPAddr = %q, want 192.0.2.10:33434", got)
 	}
 	if got := resolvePeerTCPAddr(state, config, "unknown"); got != "" {
 		t.Fatalf("resolvePeerTCPAddr unknown = %q, want empty", got)
+	}
+}
+
+func TestResolvePeerTCPAddrUsesSignedEndpoint(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	now := time.Now()
+	endpoints := []gossip.LocalEndpoint{
+		{IP: net.ParseIP("203.0.113.10"), Port: 33434, Scope: "global", Priority: 100, Source: gossip.SourceAdvertise},
+	}
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       gossip.EndpointRecordKeyUDP,
+		Type:      "sync.endpoint",
+		Value:     gossip.EndpointRecordBytes(endpoints, now),
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord(endpoint): %v", err)
+	}
+	if err := state.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt(endpoint): %v", err)
+	}
+
+	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "node-b.catofes."); got != "203.0.113.10:33434" {
+		t.Fatalf("resolvePeerTCPAddr signed endpoint = %q, want 203.0.113.10:33434", got)
+	}
+}
+
+func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	_, err := tryObjectPullTCP(state, &syncConfigFile{}, "node-b.catofes.", "node-b.catofes.")
+	if err == nil {
+		t.Fatalf("tryObjectPullTCP succeeded without a TCP address")
+	}
+	stats := state.SyncPeers["node-b.catofes."].ObjectPullStats
+	if stats == nil {
+		t.Fatalf("object pull stats missing")
+	}
+	if stats.LargeObjectUnreachable != 1 || !stats.LastUnreachable {
+		t.Fatalf("unreachable stats = %#v", stats)
+	}
+	if stats.LastObject != "zone" || stats.LastZone != "node-b.catofes." || stats.LastError == "" {
+		t.Fatalf("last object stats = %#v", stats)
+	}
+}
+
+func TestObjectPullConcurrencyLimit(t *testing.T) {
+	for i := 0; i < maxObjectPullConcurrency; i++ {
+		objectPullClientLimiter <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < maxObjectPullConcurrency; i++ {
+			<-objectPullClientLimiter
+		}
+	}()
+
+	_, err := pullObjectTCP("127.0.0.1:1", &gossip.ObjectPullRequest{
+		Type: gossip.ObjectPullZone,
+		Zone: "node-b.catofes.",
+	})
+	if err == nil {
+		t.Fatalf("pullObjectTCP succeeded with full limiter")
 	}
 }

@@ -131,7 +131,7 @@ daemon / `sync run` 的核心循环包括：
 
 公网 gossip 不依赖 IP fragmentation。发送端会在写 UDP 前按 `max_datagram_bytes` 预算预估 MessagePack wire size；超预算的 Zone skeleton 或 record 不会直接塞进 UDP datagram。
 
-同步主路径只用 UDP 传播 digest、fetch request、小 metadata 和小 record。若 digest 显示本地缺少完整对象，节点会通过短连接 TCP object pull 拉取完整 Zone snapshot 或单条 record。TCP 只作为对象传输优化：收到的 snapshot / record 仍按 root/delegation/record signature 验证，不能绕过 trust boundary。
+同步主路径只用 UDP 传播 digest、fetch request、小 metadata 和小 record。若 digest 显示本地缺少完整对象，节点会通过短连接 TCP object pull 拉取完整 Zone snapshot 或单条 record。默认 TCP pull 使用 signed/bootstrap UDP endpoint 的同一个数字端口；TCP 与 UDP 可以绑定同一端口号。TCP 只作为对象传输优化：收到的 snapshot / record 仍按 root/delegation/record signature 验证，不能绕过 trust boundary。
 
 ---
 

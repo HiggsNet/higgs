@@ -778,6 +778,7 @@ func TestSyncStatusVerboseOutput(t *testing.T) {
 		"bootstrap_peers: 1",
 		"bootstrap peer=node-b.catofes. configured_addr=127.0.0.1:9999 resolved_addr=127.0.0.1:9999",
 		"datagram peer=node-b.catofes. too_large_dropped=2 digest_only_announces=1 chunk_fallbacks=0",
+		"object_pull peer=node-b.catofes. attempts=3 successes=2 failures=1 large_object_unreachable=1",
 		"zone node-b.catofes.",
 	)
 }
@@ -800,6 +801,8 @@ func TestDebugPeerOutput(t *testing.T) {
 		"last_update_source: node-c.catofes.",
 		"datagram_too_large_dropped: 2",
 		"datagram_last_too_large: 2023-11-14T22:13:20Z direction=send object=record zone=node-b.catofes. key=bigdata bytes=1800 limit=1200",
+		"object_pull_attempts: 3",
+		"object_pull_last: 2023-11-14T22:13:20Z object=record zone=node-b.catofes. key=bigdata bytes=4096 source_peer=node-b.catofes. unreachable=true error=no TCP address",
 	)
 }
 
@@ -886,6 +889,20 @@ func prepareDiagnosticsState(t *testing.T) {
 				LastTooLargeKey:       "bigdata",
 				LastTooLargeBytes:     1800,
 				LastTooLargeLimit:     gossip.DefaultDatagramBudget,
+			},
+			ObjectPullStats: &objectPullStats{
+				Attempts:               3,
+				Successes:              2,
+				Failures:               1,
+				LargeObjectUnreachable: 1,
+				LastUnix:               now.Unix(),
+				LastError:              "no TCP address",
+				LastObject:             "record",
+				LastZone:               "node-b.catofes.",
+				LastKey:                "bigdata",
+				LastBytes:              4096,
+				LastSourcePeer:         "node-b.catofes.",
+				LastUnreachable:        true,
 			},
 		},
 	}

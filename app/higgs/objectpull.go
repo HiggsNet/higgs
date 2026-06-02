@@ -9,6 +9,10 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
+const maxObjectPullConcurrency = 4
+
+var objectPullClientLimiter = make(chan struct{}, maxObjectPullConcurrency)
+
 // objectPullTCPServe starts a minimal TCP server that serves ZoneSnapshot and
 // RecordSnapshot objects over length-prefixed msgpack framing.
 func objectPullTCPServe(addr string, lookup func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse) (net.Listener, error) {
@@ -49,18 +53,24 @@ func objectPullTCPServe(addr string, lookup func(*gossip.ObjectPullRequest) *gos
 }
 
 // objectPullTCPAddr derives the default TCP object-pull address from a UDP
-// endpoint address by incrementing the port by one.
+// endpoint address. TCP and UDP can share the same numeric port.
 func objectPullTCPAddr(udpAddr string) string {
 	udp, err := net.ResolveUDPAddr("udp", udpAddr)
 	if err != nil {
 		return ""
 	}
-	tcp := &net.TCPAddr{IP: udp.IP, Port: udp.Port + 1}
+	tcp := &net.TCPAddr{IP: udp.IP, Port: udp.Port}
 	return tcp.String()
 }
 
 // pullObjectTCP attempts to fetch an object from a peer via TCP.
 func pullObjectTCP(addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
+	select {
+	case objectPullClientLimiter <- struct{}{}:
+		defer func() { <-objectPullClientLimiter }()
+	default:
+		return nil, fmt.Errorf("object pull concurrency limit reached (%d)", maxObjectPullConcurrency)
+	}
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return nil, err
@@ -123,30 +133,46 @@ func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest
 func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath) (*gossip.ZoneSnapshot, error) {
 	addr := resolvePeerTCPAddr(state, config, peerID)
 	if addr == "" {
-		return nil, fmt.Errorf("no TCP address for peer %s", peerID)
+		err := fmt.Errorf("no TCP address for peer %s", peerID)
+		recordObjectPullResult(state, peerID, "zone", path, "", 0, err, true, time.Now())
+		return nil, err
 	}
+	recordObjectPullAttempt(state, peerID, "zone", path, "", time.Now())
 	resp, err := pullObjectTCP(addr, &gossip.ObjectPullRequest{
 		Type: gossip.ObjectPullZone,
 		Zone: path,
 	})
 	if err != nil {
+		recordObjectPullResult(state, peerID, "zone", path, "", 0, err, false, time.Now())
 		return nil, err
 	}
+	respBytes := encodedObjectPullResponseSize(resp)
 	if !resp.OK {
-		return nil, fmt.Errorf("object pull failed: %s", resp.Error)
+		err := fmt.Errorf("object pull failed: %s", resp.Error)
+		recordObjectPullResult(state, peerID, "zone", path, "", respBytes, err, false, time.Now())
+		return nil, err
 	}
 	if resp.Snapshot == nil {
-		return nil, fmt.Errorf("object pull returned empty snapshot")
+		err := fmt.Errorf("object pull returned empty snapshot")
+		recordObjectPullResult(state, peerID, "zone", path, "", respBytes, err, false, time.Now())
+		return nil, err
 	}
+	recordObjectPullResult(state, peerID, "zone", path, "", respBytes, nil, false, time.Now())
 	return resp.Snapshot, nil
 }
 
 // tryObjectPullRecordTCP attempts to pull a single record over TCP from a peer.
 func tryObjectPullRecordTCP(state *stateFile, config *syncConfigFile, peerID string, fetch *gossip.FetchRecord) (*gossip.RecordSnapshot, error) {
+	if fetch == nil {
+		return nil, fmt.Errorf("object pull record selector is nil")
+	}
 	addr := resolvePeerTCPAddr(state, config, peerID)
 	if addr == "" {
-		return nil, fmt.Errorf("no TCP address for peer %s", peerID)
+		err := fmt.Errorf("no TCP address for peer %s", peerID)
+		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, 0, err, true, time.Now())
+		return nil, err
 	}
+	recordObjectPullAttempt(state, peerID, "record", fetch.Zone, fetch.Key, time.Now())
 	resp, err := pullObjectTCP(addr, &gossip.ObjectPullRequest{
 		Type:    gossip.ObjectPullRecord,
 		Zone:    fetch.Zone,
@@ -154,15 +180,79 @@ func tryObjectPullRecordTCP(state *stateFile, config *syncConfigFile, peerID str
 		Version: fetch.Version,
 	})
 	if err != nil {
+		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, 0, err, false, time.Now())
 		return nil, err
 	}
+	respBytes := encodedObjectPullResponseSize(resp)
 	if !resp.OK {
-		return nil, fmt.Errorf("object pull failed: %s", resp.Error)
+		err := fmt.Errorf("object pull failed: %s", resp.Error)
+		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, respBytes, err, false, time.Now())
+		return nil, err
 	}
 	if resp.Record == nil {
-		return nil, fmt.Errorf("object pull returned empty record")
+		err := fmt.Errorf("object pull returned empty record")
+		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, respBytes, err, false, time.Now())
+		return nil, err
 	}
+	recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, respBytes, nil, false, time.Now())
 	return resp.Record, nil
+}
+
+func encodedObjectPullResponseSize(resp *gossip.ObjectPullResponse) int {
+	data, err := gossip.EncodeObjectPullResponse(resp)
+	if err != nil {
+		return 0
+	}
+	return len(data)
+}
+
+func recordObjectPullAttempt(state *stateFile, peerID, object string, zoneName zone.ZonePath, key string, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.ObjectPullStats == nil {
+		peerState.ObjectPullStats = &objectPullStats{}
+	}
+	peerState.ObjectPullStats.Attempts++
+	peerState.ObjectPullStats.LastUnix = now.Unix()
+	peerState.ObjectPullStats.LastObject = object
+	peerState.ObjectPullStats.LastZone = string(zoneName)
+	peerState.ObjectPullStats.LastKey = key
+	peerState.ObjectPullStats.LastSourcePeer = peerID
+	peerState.ObjectPullStats.LastUnreachable = false
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordObjectPullResult(state *stateFile, peerID, object string, zoneName zone.ZonePath, key string, bytes int, err error, unreachable bool, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.ObjectPullStats == nil {
+		peerState.ObjectPullStats = &objectPullStats{}
+	}
+	stats := peerState.ObjectPullStats
+	stats.LastUnix = now.Unix()
+	stats.LastObject = object
+	stats.LastZone = string(zoneName)
+	stats.LastKey = key
+	stats.LastBytes = bytes
+	stats.LastSourcePeer = peerID
+	stats.LastUnreachable = unreachable
+	if err != nil {
+		stats.Failures++
+		stats.LastError = err.Error()
+		if unreachable {
+			stats.LargeObjectUnreachable++
+		}
+	} else {
+		stats.Successes++
+		stats.LastError = ""
+	}
+	state.SyncPeers[peerID] = peerState
 }
 
 // resolvePeerTCPAddr returns the best-effort TCP object-pull address for a peer.
@@ -170,7 +260,7 @@ func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID s
 	if config == nil || targetPeerID == "" {
 		return ""
 	}
-	// Prefer bootstrap address with port+1.
+	// Prefer bootstrap address with the same numeric TCP port.
 	for _, peer := range config.Bootstrap {
 		if peer.ID == targetPeerID && peer.Addr != "" {
 			if tcp := objectPullTCPAddr(peer.Addr); tcp != "" {
@@ -178,13 +268,14 @@ func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID s
 			}
 		}
 	}
-	// Fall back to discovered endpoint with port+1.
+	// Fall back to discovered endpoint with the same numeric TCP port.
 	if state != nil && state.Network != nil {
 		for discoveredID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
 			if discoveredID != targetPeerID || len(entries) == 0 {
 				continue
 			}
-			if tcp := objectPullTCPAddr(entries[0].Address); tcp != "" {
+			udp := net.JoinHostPort(entries[0].Address, fmt.Sprintf("%d", entries[0].Port))
+			if tcp := objectPullTCPAddr(udp); tcp != "" {
 				return tcp
 			}
 		}
@@ -198,7 +289,7 @@ func objectPullListenAddr(listenAddr string) string {
 	if err != nil {
 		return ""
 	}
-	tcp := &net.TCPAddr{IP: udp.IP, Port: udp.Port + 1}
+	tcp := &net.TCPAddr{IP: udp.IP, Port: udp.Port}
 	return tcp.String()
 }
 

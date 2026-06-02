@@ -49,6 +49,7 @@ type syncPeerState struct {
 	ObservedSource        string                         `json:"observed_source,omitempty"`
 	ObservedFailureCount  int                            `json:"observed_failure_count,omitempty"`
 	DatagramStats         *datagramStats                 `json:"datagram_stats,omitempty"`
+	ObjectPullStats       *objectPullStats               `json:"object_pull_stats,omitempty"`
 	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
 }
 
@@ -63,6 +64,21 @@ type datagramStats struct {
 	LastTooLargeKey       string `json:"last_too_large_key,omitempty"`
 	LastTooLargeBytes     int    `json:"last_too_large_bytes,omitempty"`
 	LastTooLargeLimit     int    `json:"last_too_large_limit,omitempty"`
+}
+
+type objectPullStats struct {
+	Attempts               int64  `json:"attempts,omitempty"`
+	Successes              int64  `json:"successes,omitempty"`
+	Failures               int64  `json:"failures,omitempty"`
+	LargeObjectUnreachable int64  `json:"large_object_unreachable,omitempty"`
+	LastUnix               int64  `json:"last_unix,omitempty"`
+	LastError              string `json:"last_error,omitempty"`
+	LastObject             string `json:"last_object,omitempty"`
+	LastZone               string `json:"last_zone,omitempty"`
+	LastKey                string `json:"last_key,omitempty"`
+	LastBytes              int    `json:"last_bytes,omitempty"`
+	LastSourcePeer         string `json:"last_source_peer,omitempty"`
+	LastUnreachable        bool   `json:"last_unreachable,omitempty"`
 }
 
 type rejectedDigestState struct {

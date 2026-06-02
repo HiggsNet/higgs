@@ -100,6 +100,7 @@ func debugPeer(peerID string) error {
 	fmt.Printf("last_relay: %s\n", formatUnixTime(peerState.LastRelayUnix))
 	fmt.Printf("relay_suppression: %s\n", formatRelaySuppression(peerState))
 	printDebugPeerDatagramStats(peerState)
+	printDebugPeerObjectPullStats(peerState)
 	return nil
 }
 
@@ -123,6 +124,31 @@ func printDebugPeerDatagramStats(peerState syncPeerState) {
 		dash(stats.LastTooLargeKey),
 		stats.LastTooLargeBytes,
 		stats.LastTooLargeLimit,
+	)
+}
+
+func printDebugPeerObjectPullStats(peerState syncPeerState) {
+	stats := peerState.ObjectPullStats
+	if stats == nil {
+		stats = &objectPullStats{}
+	}
+	fmt.Printf("object_pull_attempts: %d\n", stats.Attempts)
+	fmt.Printf("object_pull_successes: %d\n", stats.Successes)
+	fmt.Printf("object_pull_failures: %d\n", stats.Failures)
+	fmt.Printf("object_pull_large_object_unreachable: %d\n", stats.LargeObjectUnreachable)
+	if stats.LastUnix == 0 {
+		fmt.Printf("object_pull_last: -\n")
+		return
+	}
+	fmt.Printf("object_pull_last: %s object=%s zone=%s key=%s bytes=%d source_peer=%s unreachable=%t error=%s\n",
+		time.Unix(stats.LastUnix, 0).UTC().Format(time.RFC3339),
+		dash(stats.LastObject),
+		dash(stats.LastZone),
+		dash(stats.LastKey),
+		stats.LastBytes,
+		dash(stats.LastSourcePeer),
+		stats.LastUnreachable,
+		dash(stats.LastError),
 	)
 }
 

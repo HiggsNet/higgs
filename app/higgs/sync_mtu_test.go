@@ -150,3 +150,49 @@ func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
 		t.Fatalf("sendSnapshots returned error for oversized skeleton: %v", err)
 	}
 }
+
+func TestPlanSnapshotDatagramsBatchesRecordsWithinBudget(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	now := time.Unix(1000, 0)
+
+	for _, key := range []string{"alpha", "beta"} {
+		record := &zone.Record{
+			Zone:      "node-b.catofes.",
+			Key:       key,
+			Type:      "test.data",
+			Value:     []byte("small-" + key),
+			Version:   1,
+			Timestamp: now.Unix(),
+		}
+		if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+			t.Fatalf("SignRecord(%s): %v", key, err)
+		}
+		if err := state.Network.PutAt(record, now); err != nil {
+			t.Fatalf("PutAt(%s): %v", key, err)
+		}
+	}
+
+	plan := planSnapshotDatagrams(state.Network, []zone.ZonePath{"node-b.catofes."}, gossip.DefaultDatagramBudget, now)
+	if len(plan.Oversized) != 0 {
+		t.Fatalf("oversized = %#v, want none", plan.Oversized)
+	}
+	if len(plan.Announces) < 3 {
+		t.Fatalf("announces = %d, want digest, skeleton, records", len(plan.Announces))
+	}
+	if got := len(plan.Announces[0].Zones); got == 0 {
+		t.Fatalf("first announce zones = %d, want digest batch", got)
+	}
+	var recordBatchFound bool
+	for _, announce := range plan.Announces {
+		if len(announce.Records) >= 2 {
+			recordBatchFound = true
+		}
+		if size := announceWireSize(announce); size > gossip.DefaultDatagramBudget {
+			t.Fatalf("announce size = %d exceeds budget", size)
+		}
+	}
+	if !recordBatchFound {
+		t.Fatalf("plan did not batch multiple records: %#v", plan.Announces)
+	}
+}
