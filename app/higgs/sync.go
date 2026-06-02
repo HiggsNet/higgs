@@ -918,8 +918,26 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 	}
 
 	deadline := sr.now().Add(timeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	awaitingQuiet := false
 	for sr.now().Before(deadline) {
-		packet, receiveErr := receiveWithContext(ctx, sr.Transport, deadline)
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return err
+		}
+		readDeadline := deadline
+		if awaitingQuiet {
+			quietDeadline := time.Now().Add(250 * time.Millisecond)
+			if quietDeadline.Before(readDeadline) {
+				readDeadline = quietDeadline
+			}
+		}
+		packet, receiveErr := receiveWithDeadline(sr.Transport, readDeadline)
+		if receiveErr != nil && isReceiveTimeout(receiveErr) && awaitingQuiet {
+			return nil
+		}
 		if receiveErr != nil && isReceiveTimeout(receiveErr) && sr.now().Before(deadline) {
 			continue
 		}
@@ -937,14 +955,18 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 		if packet.Message.Pong != nil {
 			waitingForAnnounce = len(gossip.FetchList(sr.State.Network, packet.Message.Pong.Zones)) > 0
 		}
+		peerRequestedZones := packet.Message.Pong != nil && len(packet.Message.Pong.FetchZones) > 0
 		if err = sr.handlePacket(packet); err != nil {
 			return err
 		}
-		if packet.Message.Pong != nil && !waitingForAnnounce {
+		if peerRequestedZones {
+			awaitingQuiet = true
+		}
+		if packet.Message.Pong != nil && !waitingForAnnounce && !peerRequestedZones {
 			return nil
 		}
 		if packet.Message.Announce != nil {
-			return nil
+			awaitingQuiet = true
 		}
 	}
 	err = errors.New("sync once timed out")
@@ -1146,7 +1168,6 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 
 func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
 	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
-	var snapshots []gossip.ZoneSnapshot
 	now := time.Now()
 	for _, path := range zones {
 		if ns.IsZoneRevoked(path, now) {
@@ -1156,15 +1177,65 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 		if err != nil {
 			continue
 		}
-		snapshots = append(snapshots, *snapshot)
+		records := snapshotRecordMessages(snapshot)
+		snapshot.Records = nil
+		snapshot.RecordHistory = nil
+		if err := transport.Send(peerID, &gossip.Message{
+			Type:     gossip.MessageAnnounce,
+			Announce: &gossip.Announce{Snapshots: []gossip.ZoneSnapshot{*snapshot}},
+		}); err != nil {
+			return err
+		}
+		for _, record := range records {
+			if err := transport.Send(peerID, &gossip.Message{
+				Type:     gossip.MessageAnnounce,
+				Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{record}},
+			}); err != nil {
+				return err
+			}
+		}
 	}
-	if len(snapshots) == 0 {
+	return nil
+}
+
+func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapshot {
+	if snapshot == nil {
 		return nil
 	}
-	return transport.Send(peerID, &gossip.Message{
-		Type:     gossip.MessageAnnounce,
-		Announce: &gossip.Announce{Zones: gossip.ZoneDigests(ns), Snapshots: snapshots},
+	type keyedRecord struct {
+		key    string
+		record *zone.Record
+	}
+	var records []keyedRecord
+	for key, history := range snapshot.RecordHistory {
+		for _, record := range history {
+			if record != nil {
+				records = append(records, keyedRecord{key: key, record: record})
+			}
+		}
+	}
+	for key, record := range snapshot.Records {
+		if record != nil {
+			records = append(records, keyedRecord{key: key, record: record})
+		}
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].key != records[j].key {
+			return records[i].key < records[j].key
+		}
+		if records[i].record.Version != records[j].record.Version {
+			return records[i].record.Version < records[j].record.Version
+		}
+		return bytes.Compare(higgscrypto.RecordHash(records[i].record), higgscrypto.RecordHash(records[j].record)) < 0
 	})
+	out := make([]gossip.RecordSnapshot, 0, len(records))
+	for _, item := range records {
+		out = append(out, gossip.RecordSnapshot{
+			Zone:   snapshot.Zone,
+			Record: item.record,
+		})
+	}
+	return out
 }
 
 func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord) error {

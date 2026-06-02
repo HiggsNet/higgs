@@ -71,7 +71,7 @@ join-smoke: build
 	echo "Join smoke passed"
 
 phase1-smoke: build
-	@set -xeu; \
+	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-phase1-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
