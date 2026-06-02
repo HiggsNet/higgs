@@ -106,7 +106,7 @@ higgs daemon --interval 5
 5. **入站接收** — 出站轮次之间，节点以 `250ms` 的超时轮询套接字，处理任何数据包。如果数据包包含的 `ANNOUNCE` 改变了本地状态，则记录来源 peer 并触发**中继**（见 §4.3）。
 6. **Control socket** — daemon 默认监听 Unix domain socket，路径为 `HIGGS_CONTROL_SOCKET`、root 下 `/run/higgs/higgs.sock`，或 `<data_dir>/higgs.sock` fallback。最小 API 包含 `status`、`record_put`、`sync_trigger`、`shutdown`，`reload` 已预留但当前返回错误。
 
-CLI 在检测到 daemon control socket 可用时，会优先作为 client 提交写命令。例如 `record put` 会由 daemon 签名、写 DB 并触发 outbound sync；daemon 不存在时保留直接写 DB 的开发/恢复模式，并输出明确提示。
+CLI 在检测到 daemon control socket 可用时，会优先作为 client 提交写命令。例如 `record put` 会由 daemon 签名、写 DB 并触发 outbound sync；daemon 不存在时保留直接写 DB 的开发/恢复模式，并输出明确提示。`delegate issue`、`delegate revoke`、`join accept` 和 root/admin 管理写入将在 Phase 4.0 纳入同一 control API，关闭 admin 直写 DB 的单 writer 口子。
 
 ### 3.4 `sync run` — 兼容长运行入口
 

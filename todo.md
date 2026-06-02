@@ -294,6 +294,15 @@
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
 
+- [ ] **4.0 Admin 写操作 daemon 化 / 控制 API 补齐**
+  - [ ] 将 `delegate issue` client 化：daemon 存在时通过 control socket 提交 join request，由 daemon 持有父 Zone 私钥、签发 delegation、写 DB、输出 bundle；daemon 不存在时仅保留显式 recovery/direct 模式
+  - [ ] 将 `delegate revoke` client 化：由 daemon 串行写入 signed revocation/tombstone、清理 peer state、触发 outbound sync 和后续 apply hook
+  - [ ] 将 `join accept` 纳入本地 daemon/recovery 边界：普通节点 daemon 未运行时允许初始化；daemon 已运行时通过 control API 导入 bundle，避免旧 snapshot 覆盖运行态更新
+  - [ ] 梳理 `root init` / `root pubkey` / root delegation 的运行形态：root admin 可离线，但若启动 daemon，同样不能绕过本地单 writer
+  - [ ] 扩展 control API：`delegate_issue`、`delegate_revoke`、`join_accept`、`root_init` 或明确分级的 admin/recovery endpoint；返回结构化 JSON，CLI 负责人类可读输出和 bundle 文件写入
+  - [ ] 加入授权分级：只读 status/debug、普通 record 写入、admin delegation/revocation、root 操作分层；Unix socket 权限先落地，token/mTLS 留给远程控制
+  - [ ] 增加测试：daemon 运行期间并发 `record put` + `delegate issue/revoke` 不覆盖 state；撤销后 daemon 立即停止 relay/endpoint 使用该 Zone；admin daemon smoke 覆盖签发 bundle 后公网/多节点 gossip 收敛
+
 - [ ] **4.1 WireGuard 控制模块**
   - 通过 `wgctrl-go` 操作内核 WG 接口
   - 由 daemon 监听 active state 变更并触发 WG apply，避免独立 CLI 进程直接修改运行中状态
@@ -438,7 +447,9 @@
 
 ## 下一步
 
-1. 进入 Phase 4 WireGuard 建链：先定义从 active state 推导本机 `PeerView` 的最小 record 约定和 dry-run 输出。
-2. 接入 `wgctrl-go` 的薄适配层，先实现 add/update/remove peer 的可测试接口，避免把 netlink 细节散到 daemon 主循环。
-3. 由 daemon state-change hook 触发 WG apply，确保配置同步、CLI 写入和后续撤销清理仍走 Phase 3 的单 writer 边界。
-4. 增加双节点 WG smoke：两端同步配置后自动添加对方 WG peer，`wg show` 可见握手，并能 ping 通 tunnel IP。
+1. 先完成 Phase 4.0：把 `delegate issue/revoke`、`join accept`、root/admin 管理写入也收进 daemon/control API，彻底关闭 admin 直写 DB 的单 writer 口子。
+2. 用 `docs/public-internet-test.md` 和 `docs/scripts/public-gossip-node.sh` 在真实公网 3+ 节点跑 daemon gossip 收敛测试，记录端口、endpoint、bootstrap、revocation 和 daemon restart 的真实行为。
+3. 进入 Phase 4 WireGuard 建链：定义从 active state 推导本机 `PeerView` 的最小 record 约定和 dry-run 输出。
+4. 接入 `wgctrl-go` 的薄适配层，先实现 add/update/remove peer 的可测试接口，避免把 netlink 细节散到 daemon 主循环。
+5. 由 daemon state-change hook 触发 WG apply，确保配置同步、CLI 写入和后续撤销清理仍走单 writer 边界。
+6. 增加双节点 WG smoke：两端同步配置后自动添加对方 WG peer，`wg show` 可见握手，并能 ping 通 tunnel IP。

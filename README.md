@@ -611,11 +611,13 @@ make phase3-daemon-fallback-smoke
 
 前者验证 CLI `record put` 通过 daemon control socket 提交后，由 daemon 串行写入 DB、唤醒 outbound sync，并让远端收敛；后者验证 daemon 停止时 CLI 直接写 DB 的开发/恢复模式仍可用，下一次 daemon 启动后能加载并传播。
 
+真实公网多节点 daemon gossip 测试见 [docs/public-internet-test.md](docs/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
+
 ## 下一步方向
 
 Phase 3 的最小 daemon / 单 writer 边界已经收敛：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交写命令，daemon 不存在时保留直接写 DB 的开发/恢复模式。
 
-下一步进入 Phase 4 WireGuard 控制模块：由 daemon 监听 active state 变更，推导 peer view，调用 `wgctrl-go` 添加/删除 peer，并在 Zone 被撤销时立即清理对应 WG 配置。
+下一步先完成 Phase 4.0：把 `delegate issue`、`delegate revoke`、`join accept` 和 root/admin 管理写入也纳入 daemon control API。之后进入 Phase 4 WireGuard 控制模块：由 daemon 监听 active state 变更，推导 peer view，调用 `wgctrl-go` 添加/删除 peer，并在 Zone 被撤销时立即清理对应 WG 配置。
 
 ## CLI 汇总
 
