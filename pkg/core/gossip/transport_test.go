@@ -268,7 +268,7 @@ func rawWireMessage(message *Message) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data := append([]byte(nil), wireMagic...)
+	data := append([]byte(nil), wireMagicJSON...)
 	data = append(data, payload...)
 	return data, nil
 }

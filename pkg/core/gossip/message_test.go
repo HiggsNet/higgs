@@ -3,7 +3,6 @@ package gossip
 import (
 	"bytes"
 	"crypto/ed25519"
-	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func TestMarshalUnmarshalPing(t *testing.T) {
@@ -318,7 +318,8 @@ func TestApplySnapshotAcceptsAndRejectsByteBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	data, err := json.Marshal(snapshot)
+	// Use msgpack for size check because it is the default wire codec.
+	data, err := msgpack.Marshal(snapshot)
 	if err != nil {
 		t.Fatalf("Marshal(snapshot): %v", err)
 	}

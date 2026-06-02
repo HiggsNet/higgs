@@ -2,11 +2,12 @@ package gossip
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -212,7 +213,8 @@ func checkSnapshotLimits(snapshot *ZoneSnapshot, limits SyncLimits) error {
 		return ErrZoneSnapshotTooLarge
 	}
 	if limits.MaxBytes > 0 {
-		data, err := json.Marshal(snapshot)
+		// Use msgpack for size check because it is the default wire codec.
+		data, err := msgpack.Marshal(snapshot)
 		if err != nil {
 			return err
 		}

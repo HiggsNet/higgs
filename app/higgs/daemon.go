@@ -85,6 +85,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		return err
 	}
 	defer transport.Close()
+	objectPullListener, err := startObjectPullServer(d)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "object pull server error: %v\n", err)
+	}
+	if objectPullListener != nil {
+		defer objectPullListener.Close()
+	}
 	stopControl, err := d.startControlServer(ctx)
 	if err != nil {
 		return err

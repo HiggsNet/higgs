@@ -117,6 +117,14 @@ func Listen(config Config) (*Transport, error) {
 	return t, nil
 }
 
+// MaxMessageBytes returns the configured datagram size limit.
+func (t *Transport) MaxMessageBytes() int {
+	if t == nil {
+		return DefaultDatagramBudget
+	}
+	return t.maxMessageBytes
+}
+
 func (t *Transport) Close() error {
 	if t == nil || t.conn == nil {
 		return nil
@@ -314,6 +322,8 @@ func RejectReason(err error) string {
 		return "replay"
 	case strings.Contains(err.Error(), "unsupported gossip wire version"):
 		return "unsupported_wire_version"
+	case errors.Is(err, ErrUnsupportedCodec):
+		return "unsupported_codec"
 	default:
 		return "invalid_message"
 	}

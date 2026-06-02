@@ -1,7 +1,11 @@
 data_dir: .higgs
 peer_id: node-a
 listen_addr: 127.0.0.1:33434
-max_message_bytes: 65536
+
+# Conservative datagram budget (default 1200 bytes). Higgs gossip does not rely
+# on IP fragmentation. Raising this above 1200 is only recommended for lab or
+# known-safe private networks; the public-internet default is 1200.
+max_datagram_bytes: 1200
 max_sync_zones: 16
 max_sync_records: 1024
 log_level: info

@@ -16,15 +16,15 @@ Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zon
 - Record 必须由该 Zone authority 授权的 key 签名。
 - Gossip 收到的数据先视为不可信；信任链和签名验证通过后，才提升到 active state。
 
-Phase 2 gossip 使用 UDP 和一个轻量 JSON wire codec：
+当前 gossip 使用 UDP 和 MessagePack wire codec：
 
 - 默认端口：`33434`
-- wire version：JSON payload 带 `version: 1`，外层 magic 为 `higgs.gossip.v1`
+- wire version：MessagePack payload 带 `version: 1`，外层 magic 为 `higgs.gossip.m1`；短期兼容读取旧 JSON `higgs.gossip.v1`
 - 消息类型：`PING`、`PONG`、`FETCH_ZONE`、`FETCH_RECORD`、`ANNOUNCE`
-- 默认限制：单消息 65536 bytes、单次 announce 16 个 Zone snapshot、单 Zone snapshot 1024 条 record
+- 默认限制：单个 UDP datagram 1200 bytes、单次 announce 16 个 Zone snapshot、单 Zone snapshot 1024 条 record
 - 防重放：nonce + timestamp window
 - peer allowlist：启动时来自 `bootstrap`；运行中会加入已通过信任链验证的 Zone peer，并从 signed endpoint record 更新出站地址
-- 同步模型：Phase 2 仍使用 whole-zone sync；active record 以 Zone authority 签名的最新版本为准，历史只保留有限窗口用于调试和短期补洞
+- 同步模型：先交换 Zone digest 与小 metadata；超出 datagram 预算的大 snapshot / record 通过短连接 TCP object pull 拉取，active record 以 Zone authority 签名的最新版本为准，历史只保留有限窗口用于调试和短期补洞
 
 `gossip.proto` 记录了未来协议形状，但当前构建不需要 `protoc`。
 
@@ -38,7 +38,7 @@ Phase 2 gossip 使用 UDP 和一个轻量 JSON wire codec：
 data_dir: .higgs
 peer_id: node-a
 listen_addr: 127.0.0.1:33434
-max_message_bytes: 65536
+max_datagram_bytes: 1200
 max_sync_zones: 16
 max_sync_records: 1024
 log_level: info
@@ -55,7 +55,7 @@ trusted_root_public_key: <base64-ed25519-public-key>
 - `data_dir`：本地状态目录。bbolt 数据库位于 `<data_dir>/higgs.db`。
 - `peer_id`：gossip peer ID。
 - `listen_addr`：UDP gossip 监听地址。也可以用 `listen_port`。
-- `max_message_bytes`：单个 gossip UDP message 的最大字节数，默认 `65536`。
+- `max_datagram_bytes` / `target_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。旧字段 `max_message_bytes` 仍兼容读取，但公网推荐保持 1200；调大只适合实验或已知 MTU 的内网诊断。
 - `max_sync_zones`：单次 `ANNOUNCE` 最多携带的 Zone snapshot 数，默认 `16`。
 - `max_sync_records`：单个 Zone snapshot 或 record announce 最多携带的 record 数，默认 `1024`。
 - `log_level`：日志级别。设置为 `debug`，或使用 `HIGGS_LOG_LEVEL=debug`，会输出结构化 gossip debug log。
@@ -86,6 +86,7 @@ make discovery-smoke
 make reflector-smoke
 make bootstrap-join-smoke
 make delegation-revoke-smoke
+make object-pull-smoke
 ```
 
 `make join-smoke` 和 `make reflector-smoke` 不依赖真实 UDP peer。其他 gossip smoke 会启动本地 UDP peer，因此运行环境需要允许本地 UDP socket。
@@ -569,7 +570,7 @@ higgs sync status --verbose
 | `bind: address already in use` | `listen_addr` 端口被已有 `daemon`、`sync serve`、`sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
 | `record version conflict`、`conflict` 或更新没有覆盖 | 同一 `zone/key` 出现相同 version 的不同内容，或本地正好有直接前驱但新 record 的 `PrevHash` 不匹配 | 用 `debug zone <zone>` 查看 active record 和历史；由该 Zone authority 再写入一个更高版本的合法 record，让网络继续 fast-forward 收敛 |
 | `verify_failed` | snapshot 能到达传输层，但 authority、delegation 或 record signature 验证失败 | 确认对端是用正确 bundle `join accept`，没有把 root/admin 私钥数据库复制给普通节点；用 `verify <zone>` 在发送方和接收方分别检查 |
-| `message_too_large`、`quota` | 单包超过限制，或短时间内同步对象太多 | 提高 `max_message_bytes`、`max_sync_zones`、`max_sync_records`，或降低写入/同步频率；两端配置应保持兼容 |
+| `message_too_large`、`quota` | 单包超过 datagram 预算，或短时间内同步对象太多 | 公网部署不要依赖调大 UDP 包；确认大 record 能通过 object pull 收敛，必要时降低写入/同步频率或调小单轮对象数量 |
 
 ### Latest Record 与历史窗口
 
@@ -629,6 +630,14 @@ make phase3-daemon-fallback-smoke
 
 前者验证 CLI `record put` 通过 daemon control socket 提交后，由 daemon 串行写入 DB、唤醒 outbound sync，并让远端收敛；后者验证 daemon 停止时 CLI 直接写 DB 的开发/恢复模式仍可用，下一次 daemon 启动后能加载并传播。
 
+Phase 3.6 的大 record / MTU-safe object pull 可以直接跑：
+
+```bash
+make object-pull-smoke
+```
+
+该 smoke 验证 1200-byte UDP datagram 预算下，大 record 不通过超大 UDP 包传播，而是由 daemon 通过 TCP object pull 拉取完整对象后收敛。
+
 真实公网多节点 daemon gossip 测试见 [docs/public-internet-test.md](docs/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
 
 ## 下一步方向
@@ -665,6 +674,6 @@ build/higgs db stats
 - CLI 目前为了开发便利，把私钥保存在本地 bbolt metadata 中。底层 identity 包已有加密私钥 helper，但 CLI 尚未强制使用加密存储。
 - 当前只支持 authority `threshold=1`。
 - Delegation scope 只支持 `direct-child`。
-- Gossip 当前使用 JSON framing，还没有接入 protobuf 生成代码。
+- Gossip 当前默认使用 MessagePack framing，并短期兼容读取旧 JSON v1；没有接入 protobuf 生成代码。
 - 当前同步保证是连通、可达、至少有 bootstrap 或 signed endpoint 发现路径时的最终一致性；复杂 NAT、无稳定 bootstrap、长期网络分区仍需要后续 discovery/relay 能力补强。
 - WireGuard、Babel、route authorization filter、防火墙应用仍在后续阶段。

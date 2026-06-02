@@ -773,7 +773,7 @@ func TestSyncStatusVerboseOutput(t *testing.T) {
 		"listen_addr: 127.0.0.1:0",
 		"known_peers: 1",
 		"known_zones: 3",
-		"limits: max_message_bytes=4096 max_sync_zones=8 max_sync_records=64 wire_version=1",
+		"limits: max_datagram_bytes=4096 max_sync_zones=8 max_sync_records=64 wire_version=1 wire_codec=msgpack",
 		"allowlist_source: bootstrap+discovery",
 		"bootstrap_peers: 1",
 		"bootstrap peer=node-b.catofes. configured_addr=127.0.0.1:9999 resolved_addr=127.0.0.1:9999",

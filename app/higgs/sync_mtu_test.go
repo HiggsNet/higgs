@@ -1,0 +1,107 @@
+package main
+
+import (
+	"crypto/ed25519"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+)
+
+func TestSendSnapshotsSkipsOversizedRecords(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	now := time.Unix(1000, 0)
+
+	// Create a record with a large value that exceeds the 1200-byte datagram budget.
+	largeValue := make([]byte, 2000)
+	for i := range largeValue {
+		largeValue[i] = byte(i % 256)
+	}
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       "bigdata",
+		Type:      "test.data",
+		Value:     largeValue,
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	if err := state.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt: %v", err)
+	}
+
+	transport, err := gossip.Listen(gossip.Config{
+		PeerID:          "node-a",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transport.Close()
+	transport.SetPeerAddrs("peer", []*net.UDPAddr{transport.LocalAddr()})
+
+	// sendSnapshots should return nil even though the record is too large for UDP.
+	if err := sendSnapshots(state.Network, transport, "peer", []zone.ZonePath{"node-b.catofes."}); err != nil {
+		t.Fatalf("sendSnapshots returned error for oversized record: %v", err)
+	}
+}
+
+func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	// Add many delegations to inflate the zone skeleton.
+	for i := 0; i < 50; i++ {
+		child := zone.ZonePath("child-" + string(rune('a'+i%26)) + ".catofes.")
+		pub, priv, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatalf("GenerateKeyPair: %v", err)
+		}
+		authority := &zone.ZoneAuthority{
+			Zone:      child,
+			Epoch:     1,
+			Threshold: 1,
+			Keys: []zone.AuthorizedKey{{
+				Key: pub,
+				Capabilities: []zone.Capability{{
+					Permissions: []zone.Permission{zone.PermWrite},
+				}},
+			}},
+		}
+		delegation := &zone.Delegation{
+			ZoneName:  child,
+			Scope:     zone.DelegationScopeDirectChild,
+			Authority: *authority,
+		}
+		if err := higgscrypto.SignDelegation(delegation, "catofes.", state.ZonePrivateKey); err != nil {
+			t.Fatalf("SignDelegation: %v", err)
+		}
+		state.Network.Zones["catofes."].Delegations[child] = delegation
+		state.Network.Zones[child] = zone.NewZoneState(child, authority)
+		_ = priv
+	}
+
+	transport, err := gossip.Listen(gossip.Config{
+		PeerID:          "node-a",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transport.Close()
+	transport.SetPeerAddrs("peer", []*net.UDPAddr{transport.LocalAddr()})
+
+	// sendSnapshots should return nil even though the skeleton exceeds the budget.
+	if err := sendSnapshots(state.Network, transport, "peer", []zone.ZonePath{"catofes."}); err != nil {
+		t.Fatalf("sendSnapshots returned error for oversized skeleton: %v", err)
+	}
+}

@@ -115,7 +115,7 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 	fmt.Fprintf(w, "known_peers: %d\n", len(config.Bootstrap))
 	fmt.Fprintf(w, "known_zones: %d\n", len(digests))
 	fmt.Fprintf(w, "local_root: %s\n", hex.EncodeToString(globalRootHash(digests)))
-	fmt.Fprintf(w, "limits: max_message_bytes=%d max_sync_zones=%d max_sync_records=%d wire_version=%d\n",
+	fmt.Fprintf(w, "limits: max_datagram_bytes=%d max_sync_zones=%d max_sync_records=%d wire_version=%d wire_codec=msgpack\n",
 		config.MaxMessageBytes,
 		config.MaxSyncZones,
 		config.MaxSyncRecords,
@@ -922,6 +922,9 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 		ctx = context.Background()
 	}
 	awaitingQuiet := false
+	var remoteDigests []gossip.ZoneDigest
+	udpPhase := true
+
 	for sr.now().Before(deadline) {
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -936,7 +939,36 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 		}
 		packet, receiveErr := receiveWithDeadline(sr.Transport, readDeadline)
 		if receiveErr != nil && isReceiveTimeout(receiveErr) && awaitingQuiet {
-			return nil
+			if udpPhase {
+				// UDP quiet reached; move to object-pull phase.
+				udpPhase = false
+				if len(remoteDigests) > 0 {
+					fetch := gossip.FetchList(sr.State.Network, remoteDigests)
+					for _, path := range fetch {
+						if snapshot, pullErr := tryObjectPullTCP(sr.State, sr.Config, peerID, path); pullErr == nil && snapshot != nil {
+							// Object pull uses TCP; relax the byte limit because the object
+							// already passed the 8 MiB response cap in the pull layer.
+							limits := syncLimits(sr.Config)
+							limits.MaxBytes = 8 << 20
+							if _, applyErr := gossip.ApplySnapshot(sr.State.Network, snapshot, sr.now(), limits); applyErr != nil {
+								fmt.Fprintf(os.Stderr, "object pull apply error zone=%s: %v\n", path, applyErr)
+							} else {
+								fmt.Printf("applied zone %s via object pull\n", path)
+							}
+						} else if pullErr != nil && debugLogEnabled(sr.Config) {
+							fmt.Fprintf(os.Stderr, "object pull error zone=%s peer=%s: %v\n", path, peerID, pullErr)
+						}
+					}
+					if len(gossip.FetchList(sr.State.Network, remoteDigests)) == 0 {
+						return nil
+					}
+				}
+				// After object pull, continue waiting for any late UDP ANNOUNCE.
+				awaitingQuiet = true
+				continue
+			}
+			// Second quiet period after object pull.
+			break
 		}
 		if receiveErr != nil && isReceiveTimeout(receiveErr) && sr.now().Before(deadline) {
 			continue
@@ -954,6 +986,7 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 		var waitingForAnnounce bool
 		if packet.Message.Pong != nil {
 			waitingForAnnounce = len(gossip.FetchList(sr.State.Network, packet.Message.Pong.Zones)) > 0
+			remoteDigests = packet.Message.Pong.Zones
 		}
 		peerRequestedZones := packet.Message.Pong != nil && len(packet.Message.Pong.FetchZones) > 0
 		if err = sr.handlePacket(packet); err != nil {
@@ -963,14 +996,19 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 			awaitingQuiet = true
 		}
 		if packet.Message.Pong != nil && !waitingForAnnounce && !peerRequestedZones {
-			return nil
+			udpPhase = false
+			awaitingQuiet = true
+			continue
 		}
 		if packet.Message.Announce != nil {
 			awaitingQuiet = true
 		}
 	}
-	err = errors.New("sync once timed out")
-	return err
+	if len(remoteDigests) > 0 && len(gossip.FetchList(sr.State.Network, remoteDigests)) > 0 {
+		err = errors.New("sync once timed out with pending zones")
+		return err
+	}
+	return nil
 }
 
 func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
@@ -1156,6 +1194,19 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 		}
 	}
 	for _, path := range fetchListForPeer(state, message.PeerID, message.Announce.Zones, sr.now()) {
+		if snapshot, pullErr := tryObjectPullTCP(state, sr.Config, message.PeerID, path); pullErr == nil && snapshot != nil {
+			pullLimits := limits
+			pullLimits.MaxBytes = 8 << 20
+			result, applyErr := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), pullLimits)
+			if applyErr != nil {
+				recordRejectedDigest(state, message.PeerID, digestForZone(message.Announce.Zones, path), gossip.RejectReason(applyErr), sr.now())
+				return applyErr
+			}
+			clearRejectedDigest(state, message.PeerID, path)
+			changed = true
+			fmt.Printf("applied zone %s via object pull records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
+			continue
+		}
 		if err := transport.Send(message.PeerID, &gossip.Message{
 			Type:      gossip.MessageFetchZone,
 			FetchZone: &gossip.FetchZone{Zone: path},
@@ -1166,6 +1217,9 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 	return nil
 }
 
+// sendSnapshots sends zone skeletons and individual records as separate UDP
+// datagrams, respecting the datagram budget. Objects that exceed the budget
+// are skipped on the UDP path and must be retrieved via object pull.
 func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
 	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
 	now := time.Now()
@@ -1177,20 +1231,44 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 		if err != nil {
 			continue
 		}
+		digest := gossip.ZoneDigest{Zone: path, RootHash: gossip.ZoneRoot(ns.Zones[path])}
 		records := snapshotRecordMessages(snapshot)
 		snapshot.Records = nil
 		snapshot.RecordHistory = nil
-		if err := transport.Send(peerID, &gossip.Message{
+		msg := &gossip.Message{
 			Type:     gossip.MessageAnnounce,
-			Announce: &gossip.Announce{Snapshots: []gossip.ZoneSnapshot{*snapshot}},
-		}); err != nil {
+			Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}, Snapshots: []gossip.ZoneSnapshot{*snapshot}},
+		}
+		if size, err := gossip.WireEncodeSize(msg); err != nil || size > transport.MaxMessageBytes() {
+			if debugLogEnabled(nil) {
+				fmt.Fprintf(os.Stderr, "sendSnapshots: zone skeleton %s exceeds datagram budget (%d bytes), skipping UDP\n", path, size)
+			}
+			digestMsg := &gossip.Message{
+				Type:     gossip.MessageAnnounce,
+				Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}},
+			}
+			if digestSize, digestErr := gossip.WireEncodeSize(digestMsg); digestErr == nil && digestSize <= transport.MaxMessageBytes() {
+				if err := transport.Send(peerID, digestMsg); err != nil {
+					if !errors.Is(err, gossip.ErrUnknownPeer) {
+						return err
+					}
+				}
+			}
+		} else if err := transport.Send(peerID, msg); err != nil {
 			return err
 		}
 		for _, record := range records {
-			if err := transport.Send(peerID, &gossip.Message{
+			recordMsg := &gossip.Message{
 				Type:     gossip.MessageAnnounce,
-				Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{record}},
-			}); err != nil {
+				Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}, Records: []gossip.RecordSnapshot{record}},
+			}
+			if size, err := gossip.WireEncodeSize(recordMsg); err != nil || size > transport.MaxMessageBytes() {
+				if debugLogEnabled(nil) {
+					fmt.Fprintf(os.Stderr, "sendSnapshots: record %s/%s exceeds datagram budget (%d bytes), skipping UDP\n", path, record.Record.Key, size)
+				}
+				continue
+			}
+			if err := transport.Send(peerID, recordMsg); err != nil {
 				return err
 			}
 		}
@@ -1246,10 +1324,17 @@ func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID strin
 	if err != nil {
 		return nil
 	}
-	return transport.Send(peerID, &gossip.Message{
+	msg := &gossip.Message{
 		Type:     gossip.MessageAnnounce,
 		Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{*record}},
-	})
+	}
+	if size, err := gossip.WireEncodeSize(msg); err != nil || size > transport.MaxMessageBytes() {
+		if debugLogEnabled(nil) {
+			fmt.Fprintf(os.Stderr, "sendRecord: record %s/%s exceeds datagram budget (%d bytes), skipping UDP\n", fetch.Zone, fetch.Key, size)
+		}
+		return nil
+	}
+	return transport.Send(peerID, msg)
 }
 
 func loadSyncConfig(state *stateFile) (*syncConfigFile, error) {

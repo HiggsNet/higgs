@@ -62,9 +62,11 @@ type configYAML struct {
 	RootPublicKey        string `yaml:"root_public_key"`
 	TrustedRootKey       string `yaml:"trusted_root_key"`
 
-	MaxMessageBytes *int `yaml:"max_message_bytes"`
-	MaxSyncZones    *int `yaml:"max_sync_zones"`
-	MaxSyncRecords  *int `yaml:"max_sync_records"`
+	MaxMessageBytes     *int `yaml:"max_message_bytes"`
+	MaxDatagramBytes    *int `yaml:"max_datagram_bytes"`
+	TargetDatagramBytes *int `yaml:"target_datagram_bytes"`
+	MaxSyncZones        *int `yaml:"max_sync_zones"`
+	MaxSyncRecords      *int `yaml:"max_sync_records"`
 
 	LogLevel string `yaml:"log_level"`
 
@@ -185,7 +187,16 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.TrustedRootPublicKey = key
 	}
-	if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxMessageBytes, "max_message_bytes"); err != nil {
+	// max_datagram_bytes / target_datagram_bytes take precedence over legacy max_message_bytes.
+	if file.MaxDatagramBytes != nil {
+		if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxDatagramBytes, "max_datagram_bytes"); err != nil {
+			return err
+		}
+	} else if file.TargetDatagramBytes != nil {
+		if err := applyPositiveInt(&config.MaxMessageBytes, file.TargetDatagramBytes, "target_datagram_bytes"); err != nil {
+			return err
+		}
+	} else if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxMessageBytes, "max_message_bytes"); err != nil {
 		return err
 	}
 	if err := applyPositiveInt(&config.MaxSyncZones, file.MaxSyncZones, "max_sync_zones"); err != nil {

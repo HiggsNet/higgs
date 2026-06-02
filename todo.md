@@ -320,6 +320,70 @@
   - [x] 该 smoke 明确区分 daemon 集成行为与 3.5.4 的核心 observed path 能力：测试允许 endpoint timer 存在，断言 B 没有 signed direct endpoint / `discovered_addr`（A 使用 `advertise_addr` 避免 interface scan 地址干扰），且 A 的 `observed_status` 为 active
   - [x] 覆盖异步触发边界：CLI `record put` 返回后轮询 B 收敛；失败时通过 `cat a.log b.log` 输出 daemon trigger、observed path 和 sync round 日志用于排障
 
+## Phase 3.6: UDP MTU-safe gossip framing（紧急，Phase 4 前必须完成）
+
+**目标：** 公网 UDP gossip 不依赖 IP fragmentation。所有常规控制面消息都应控制在保守 MTU 预算内；超过预算的数据通过可靠 object pull 拉取，不能假设 64KB UDP datagram 在公网、WSL、NAT、隧道或云网络中可靠到达。UDP chunk fallback 只作为后续可选能力，不进入第一版主路径。
+
+- [ ] **3.6.1 MTU 预算与配置语义**
+  - [x] 将 `max_message_bytes` 从“允许的最大 UDP payload”重新定义为安全 datagram 上限，默认调整到保守值（建议 1200 bytes，兼容 IPv6、NAT、隧道和常见公网路径）
+    - 已将 gossip 默认 datagram 预算调整为 1200 bytes；旧 `max_message_bytes` 仍兼容读取，但新配置示例使用 `max_datagram_bytes: 1200`
+  - [x] 增加或明确 `max_datagram_bytes` / `target_datagram_bytes` 配置；两端协商或取本地保守值，禁止发送超过预算的 UDP packet
+    - `max_datagram_bytes` / `target_datagram_bytes` 优先于旧字段；发送端通过 MessagePack wire size preflight 和 `Transport.Send` 双重限制，超预算对象转 object pull / digest-only announce
+  - [ ] debug/status 输出当前 datagram 预算、最近丢弃/拒绝的大包、拆包统计，避免只看到 `quota` / timeout 难以定位
+    - 当前 `sync status --verbose` 已输出 `max_datagram_bytes` / `wire_codec`，debug log 也能看到 `message_too_large`；但尚未持久化“最近大包拒绝/丢弃”和统计计数，且第一版无 UDP chunk 统计
+  - [x] README 和公网手册明确：Higgs gossip 不依赖 IP fragmentation；调大上限只是实验/内网诊断选项，不是公网推荐配置
+
+- [ ] **3.6.2 MessagePack wire codec / 压缩协议**
+  - [x] 设计并切换 gossip wire codec：从当前 JSON payload 迁移到 MessagePack，避免一开始引入 protobuf/protoc codegen；protobuf 保留为未来极限优化或强 schema 需求的 optional later 路线
+  - [x] Go struct 使用短 tag（如 `msgpack:"t"` / `msgpack:"z"` / `msgpack:"r"`）压缩字段名，让 MessagePack 体积接近 protobuf，同时保持开发和调试轻量
+  - [x] 二进制格式必须直接承载 `bytes` 字段（pubkey、signature、hash、record value），避免 JSON base64 与字段名开销放大数据包
+  - [x] 定义 wire version / codec negotiation：保留 magic/version，支持短期 JSON v1 兼容或明确升级窗口；未知 codec 返回 `unsupported_wire_version` / `unsupported_codec`
+    - 默认发送 `higgs.gossip.m1` MessagePack；接收端短期兼容旧 JSON magic；未知 codec / version 已有单测覆盖
+  - [ ] 为常见消息建立 size benchmark：Ping/Pong、metadata snapshot、single record、endpoint record、delegation/revocation；以 1200-byte datagram 预算评估剩余 headroom
+    - 当前只有 Ping benchmark 和一个 JSON vs MessagePack record announce 回归测试，还未覆盖完整常见消息矩阵
+  - [ ] 评估是否需要通用压缩（如 zstd）但默认不对 UDP 小包启用；压缩只允许用于大 object pull，且必须有阈值、最大解压大小和 CPU/内存上限，避免解压炸弹和小包负收益
+  - [x] 更新 README / docs/protocol.md：当前 JSON framing 只作为旧协议说明，新公网推荐路径是 MessagePack + MTU-safe framing；`gossip.proto` 保留为协议形状参考而非当前构建依赖
+
+- [ ] **3.6.3 Snapshot / record 分帧**
+  - [x] 固化当前临时修复方向：Zone metadata snapshot 与 record payload 分开发送，单条 record 走独立 `RecordSnapshot` 或等价小消息
+  - [x] UDP gossip 主路径只传 digest、fetch request、ack/nack、小 metadata 和小 record；单条 record value 超过 datagram 预算时不直接塞进 UDP announce
+    - 超预算 skeleton 会退化为 digest-only announce，超预算 record 会跳过 UDP payload，由 object pull 补齐
+  - [ ] 对多 record / 多 zone 同步增加发送批次规划：按预算打包，优先发送 digest、parent proof、delegation/revocation，再发送 active records
+    - 当前实现已按 zone 排序并拆成 skeleton + 单 record datagram，但还没有完整的预算内 batch planner / 优先级调度
+  - [x] 接收端只在完整对象通过大小/数量限制后进入验证；超预算对象必须走 object pull，不能通过大 UDP datagram 隐式传输
+
+- [ ] **3.6.4 Reliable object pull**
+  - [x] 设计 object transfer 层：UDP gossip 发现 digest/object 缺失后，通过短连接 TCP pull 拉取完整 snapshot 或大 record；后续可升级 QUIC，但第一版先保持 TCP request/response 简单模型
+  - [x] object pull 必须沿用同一 trust boundary：对象内容仍按 root/delegation/record signature 验证；TCP/QUIC 只是传输优化，不是信任捷径
+  - [ ] TCP pull 不做完整 gossip、不维护长连接、不引入连接池；只支持按 object id / zone digest 拉取对象，设置短超时、并发上限和响应大小上限
+    - 当前已是短连接 request/response，支持 zone snapshot / record request，并有超时和响应大小上限；但还没有并发上限
+  - [ ] endpoint/可达性选择：有 signed direct endpoint 或主动连接公网 bootstrap 时使用 TCP pull；对只有 verified observed UDP path 且 TCP 不可达的 peer，第一版允许标记 `large_object_unreachable` 并等待后续可选 fallback
+    - 当前 TCP 地址从 bootstrap 或 signed endpoint 推导，尚未记录 `large_object_unreachable`
+  - [ ] debug/status 显示 object pull 最近错误、对象大小、来源 peer 和是否因不可达而跳过大对象
+
+- [ ] **3.6.5 可靠性与反放大控制**
+  - [x] `sync once` 的完成条件改为基于目标 digest/对象确认或明确的 idle + no-pending-work，而不是收到任意 announce 后返回
+    - 当前 sync round 会在 UDP quiet 后进入 object-pull 阶段，最终仍有 pending digest 时返回 `sync once timed out with pending zones`
+  - [ ] 对 object pull、record retry、relay fanout 加入 per-peer inflight 限制、超时清理和配额计费，避免大对象或坏 peer 造成内存/带宽放大
+  - [ ] 验证失败的对象按 `(peer_id, object_hash/root_hash, reason)` 进入 rejected cache；同一坏对象在 TTL 内不重复拉取
+    - 当前已有基于 `(peer_id, zone, root_hash, reason)` 的 rejected digest cache；还没有完整覆盖 record/object hash 与 object pull 最近错误语义
+
+- [ ] **3.6.6 测试与 smoke**
+  - [x] 增加单测：MessagePack codec 往返兼容、未知 codec/version 拒绝、消息编码必须低于 datagram 预算；超预算 record 转 object pull，不生成超预算 UDP datagram
+  - [ ] 增加大小基准/回归测试：JSON 与 MessagePack 对典型 gossip 消息的 encoded size 对比，确保二进制迁移实际降低包大小；protobuf 只作为可选参考基准
+    - 当前已有 Ping benchmark 和单个 announce size 对比测试；还缺典型消息矩阵
+  - [ ] 增加 object pull 集成测试：UDP digest 发现缺失后，通过 TCP pull 拉取大 snapshot/record 并收敛；TCP 不可达时记录 `large_object_unreachable`，不假装同步成功
+    - 当前已有 object pull 单测、sync object pull 集成测试和 `make object-pull-smoke`；TCP 不可达诊断仍未实现
+  - [ ] 增加集成测试：模拟丢弃超过 1200 bytes 的 UDP packet，`phase1-smoke`、`phase2-smoke`、`chain-relay-smoke` 仍能收敛
+  - [ ] 增加公网/WSL 回归 smoke：覆盖 WSL loopback 或受限 MTU 环境中 1.5KB+ snapshot 不依赖 IP fragmentation 也能同步
+  - [ ] 保留 `message_too_large` 故障注入测试，并补充“发送端主动不生成超预算 datagram”的断言
+    - `message_too_large` 故障注入仍在；发送端超预算 preflight 有单测/smoke 覆盖，但还缺直接统计发送 datagram size 的断言
+
+- [ ] **3.6.7 UDP chunk fallback（后续可选，第一版不做）**
+  - [ ] 仅当真实公网/NAT 场景证明需要“TCP/QUIC 不可达但 verified observed UDP path 可用的大对象同步”时再实现
+  - [ ] 定义 chunk id、total/index、content hash、zone/key/version 绑定、ACK/NACK 或 selective retry、过期时间和重组缓存上限
+  - [ ] chunk 丢失/乱序/重复/篡改不得进入 active state；chunk fetch 必须计入 per-peer quota，并进入 rejected cache / backoff，避免反放大
+
 ## Phase 4: WireGuard 建链（预计 2-3 周）
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。

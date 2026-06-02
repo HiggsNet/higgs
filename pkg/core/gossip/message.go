@@ -1,8 +1,6 @@
 package gossip
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -10,13 +8,12 @@ import (
 )
 
 const (
-	DefaultPort       = 33434
-	DefaultWindow     = 5 * 60
-	DefaultMaxMessage = 64 << 10
-	WireVersion       = 1
+	DefaultPort           = 33434
+	DefaultWindow         = 5 * 60
+	DefaultMaxMessage     = 1200 // conservative datagram budget; IPv6 + NAT + tunnel safe
+	DefaultDatagramBudget = 1200 // alias for clarity in new code
+	WireVersion           = 1
 )
-
-var wireMagic = []byte("higgs.gossip.v1\n")
 
 type MessageType string
 
@@ -29,93 +26,72 @@ const (
 )
 
 type Message struct {
-	Version   int         `json:"version"`
-	Type      MessageType `json:"type"`
-	PeerID    string      `json:"peer_id"`
-	Nonce     uint64      `json:"nonce"`
-	Timestamp int64       `json:"timestamp"`
+	Version   int         `json:"version" msgpack:"v"`
+	Type      MessageType `json:"type" msgpack:"t"`
+	PeerID    string      `json:"peer_id" msgpack:"p"`
+	Nonce     uint64      `json:"nonce" msgpack:"n"`
+	Timestamp int64       `json:"timestamp" msgpack:"ts"`
 
-	Ping        *Ping        `json:"ping,omitempty"`
-	Pong        *Pong        `json:"pong,omitempty"`
-	FetchZone   *FetchZone   `json:"fetch_zone,omitempty"`
-	FetchRecord *FetchRecord `json:"fetch_record,omitempty"`
-	Announce    *Announce    `json:"announce,omitempty"`
+	Ping        *Ping        `json:"ping,omitempty" msgpack:"g,omitempty"`
+	Pong        *Pong        `json:"pong,omitempty" msgpack:"o,omitempty"`
+	FetchZone   *FetchZone   `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
+	FetchRecord *FetchRecord `json:"fetch_record,omitempty" msgpack:"r,omitempty"`
+	Announce    *Announce    `json:"announce,omitempty" msgpack:"a,omitempty"`
 }
 
 type ZoneDigest struct {
-	Zone     zone.ZonePath `json:"zone"`
-	RootHash []byte        `json:"root_hash"`
+	Zone     zone.ZonePath `json:"zone" msgpack:"z"`
+	RootHash []byte        `json:"root_hash" msgpack:"h"`
 }
 
 type Ping struct {
-	Zones []ZoneDigest `json:"zones"`
+	Zones []ZoneDigest `json:"zones" msgpack:"z"`
 }
 
 type Pong struct {
-	Zones      []ZoneDigest    `json:"zones,omitempty"`
-	FetchZones []zone.ZonePath `json:"fetch_zones"`
+	Zones      []ZoneDigest    `json:"zones,omitempty" msgpack:"z,omitempty"`
+	FetchZones []zone.ZonePath `json:"fetch_zones" msgpack:"fz"`
 }
 
 type FetchZone struct {
-	Zone zone.ZonePath `json:"zone"`
+	Zone zone.ZonePath `json:"zone" msgpack:"z"`
 }
 
 type FetchRecord struct {
-	Zone    zone.ZonePath `json:"zone"`
-	Key     string        `json:"key"`
-	Version uint64        `json:"version,omitempty"`
+	Zone    zone.ZonePath `json:"zone" msgpack:"z"`
+	Key     string        `json:"key" msgpack:"k"`
+	Version uint64        `json:"version,omitempty" msgpack:"v,omitempty"`
 }
 
 type Announce struct {
-	Zones     []ZoneDigest     `json:"zones,omitempty"`
-	Snapshots []ZoneSnapshot   `json:"snapshots,omitempty"`
-	Records   []RecordSnapshot `json:"records,omitempty"`
+	Zones     []ZoneDigest     `json:"zones,omitempty" msgpack:"z,omitempty"`
+	Snapshots []ZoneSnapshot   `json:"snapshots,omitempty" msgpack:"s,omitempty"`
+	Records   []RecordSnapshot `json:"records,omitempty" msgpack:"r,omitempty"`
 }
 
 type RecordSnapshot struct {
-	Zone   zone.ZonePath `json:"zone"`
-	Record *zone.Record  `json:"record"`
+	Zone   zone.ZonePath `json:"zone" msgpack:"z"`
+	Record *zone.Record  `json:"record" msgpack:"r"`
 }
 
 type ZoneSnapshot struct {
-	Zone          zone.ZonePath                                `json:"zone"`
-	Authority     *zone.ZoneAuthority                          `json:"authority"`
-	ParentProof   []*zone.Delegation                           `json:"parent_proof,omitempty"`
-	Delegations   map[zone.ZonePath]*zone.Delegation           `json:"delegations,omitempty"`
-	Revocations   map[zone.ZonePath]*zone.DelegationRevocation `json:"revocations,omitempty"`
-	Records       map[string]*zone.Record                      `json:"records,omitempty"`
-	RecordHistory map[string][]*zone.Record                    `json:"record_history,omitempty"`
+	Zone          zone.ZonePath                                `json:"zone" msgpack:"z"`
+	Authority     *zone.ZoneAuthority                          `json:"authority" msgpack:"a"`
+	ParentProof   []*zone.Delegation                           `json:"parent_proof,omitempty" msgpack:"pp,omitempty"`
+	Delegations   map[zone.ZonePath]*zone.Delegation           `json:"delegations,omitempty" msgpack:"d,omitempty"`
+	Revocations   map[zone.ZonePath]*zone.DelegationRevocation `json:"revocations,omitempty" msgpack:"rv,omitempty"`
+	Records       map[string]*zone.Record                      `json:"records,omitempty" msgpack:"rc,omitempty"`
+	RecordHistory map[string][]*zone.Record                    `json:"record_history,omitempty" msgpack:"rh,omitempty"`
 }
 
+// MarshalMessage encodes a Message using the default send codec (MessagePack).
 func MarshalMessage(message *Message) ([]byte, error) {
-	if message != nil && message.Version == 0 {
-		message.Version = WireVersion
-	}
-	if err := validateMessage(message); err != nil {
-		return nil, err
-	}
-	payload, err := json.Marshal(message)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]byte, 0, len(wireMagic)+len(payload))
-	out = append(out, wireMagic...)
-	out = append(out, payload...)
-	return out, nil
+	return encodeMessage(DefaultSendCodec, message)
 }
 
+// UnmarshalMessage decodes a Message from raw wire bytes, auto-detecting codec.
 func UnmarshalMessage(data []byte) (*Message, error) {
-	if !bytes.HasPrefix(data, wireMagic) {
-		return nil, errors.New("gossip message has invalid magic")
-	}
-	var message Message
-	if err := json.Unmarshal(data[len(wireMagic):], &message); err != nil {
-		return nil, err
-	}
-	if err := validateMessage(&message); err != nil {
-		return nil, err
-	}
-	return &message, nil
+	return decodeMessage(data)
 }
 
 func validateMessage(message *Message) error {

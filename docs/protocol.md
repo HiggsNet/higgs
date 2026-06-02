@@ -24,19 +24,21 @@ Gossip 层绑定一个 UDP 套接字，所有消息以单播数据报形式发�
 | 默认值 | 数值 |
 |---------|-------|
 | 默认端口 | `33434` |
-| 最大消息大小 | `64 KiB`（`65536` 字节） |
+| UDP datagram 预算 | `1200` 字节 |
 | 线路版本 | `1` |
 
 ### 2.2 消息帧格式
 
-线路上每条消息都以 ASCII 魔术前缀开头，后跟一个 JSON 对象：
+线路上每条消息都以 ASCII 魔术前缀开头，后跟一个 MessagePack payload：
 
 ```
-higgs.gossip.v1\n{"version":1,"type":"ping",...}
+higgs.gossip.m1\n<msgpack payload with version=1>
 ```
+
+默认发送路径使用 MessagePack；短期兼容读取旧 JSON magic `higgs.gossip.v1\n`。未知 magic 会被拒绝为 `unsupported_codec`，未知 `version` 会被拒绝为 `unsupported_wire_version`。
 
 反序列化时会拒绝以下消息：
-- 不以精确的魔术前缀 `higgs.gossip.v1\n` 开头。
+- 不以已支持的 magic 前缀开头。
 - `version` 不等于 `1`。
 - `peer_id`、`nonce` 或 `timestamp` 为空。
 - 携带的 body 字段（`ping`、`pong`、`fetch_zone`、`fetch_record`、`announce`）数量**不等于一**。
@@ -122,6 +124,12 @@ daemon / `sync run` 的核心循环包括：
 2. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
 3. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点执行 sync round。
 4. **入站接收** — 出站轮次之间，节点以 `250ms` 的超时轮询套接字，处理任何数据包。如果数据包包含的 `ANNOUNCE` 改变了本地状态，则触发**中继**（见 §4.3）。
+
+### 3.5 MTU-safe object pull
+
+公网 gossip 不依赖 IP fragmentation。发送端会在写 UDP 前按 `max_datagram_bytes` 预算预估 MessagePack wire size；超预算的 Zone skeleton 或 record 不会直接塞进 UDP datagram。
+
+同步主路径只用 UDP 传播 digest、fetch request、小 metadata 和小 record。若 digest 显示本地缺少完整对象，节点会通过短连接 TCP object pull 拉取完整 Zone snapshot 或单条 record。TCP 只作为对象传输优化：收到的 snapshot / record 仍按 root/delegation/record signature 验证，不能绕过 trust boundary。
 
 ---
 
@@ -369,7 +377,7 @@ Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退�
 ```yaml
 peer_id: node-a
 listen_addr: 127.0.0.1:33434
-max_message_bytes: 65536
+max_datagram_bytes: 1200
 max_sync_zones: 16
 max_sync_records: 1024
 log_level: info
@@ -393,7 +401,7 @@ endpoint_grace: 10m
 | 键 | 默认值 | 含义 |
 |-----|---------|---------|
 | `listen_addr` | `:33434` | UDP 绑定地址 |
-| `max_message_bytes` | `65536` | 接受的最大线路消息 |
+| `max_datagram_bytes` / `target_datagram_bytes` | `1200` | 单个 gossip UDP datagram 的安全预算；旧 `max_message_bytes` 仍兼容读取 |
 | `max_sync_zones` | `16` | 每个 `ANNOUNCE` 快照的最大区域数 |
 | `max_sync_records` | `1024` | 每个 `ANNOUNCE` 的最大记录数 |
 | `advertise_addrs` | （自动） | 以逗号分隔的 IP，发布到端点记录 |
