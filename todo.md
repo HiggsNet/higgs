@@ -315,10 +315,10 @@
   - [x] 集成 smoke：B 只主动向 A 发起同步，A 通过 verified observed path 回复并继续维持短期双向通信；B 不发布可直连 signed endpoint 时仍能最终收敛
   - [x] 公网手册增加 NAT 场景检查项：普通家庭宽带/CGNAT 节点只配置公网 bootstrap，验证 daemon 能显示 observed path 并完成 record 收敛
 
-- [ ] **3.5.5 Daemon observed path 自动触发测试**
-  - [ ] 增加 `make nat-daemon-observed-smoke`：A/B 都以 daemon 运行，B 配置 `publish_endpoints: false` 只主动连 A；A 通过 control socket `record put` 后，daemon 的本地写入触发 outbound sync，并必须通过 verified observed path 将新 record 推送给 B
-  - [ ] 该 smoke 应明确区分 daemon 集成行为与 3.5.4 的核心 observed path 能力：测试允许 endpoint timer 存在，但断言 B 没有 signed direct endpoint / `discovered_addr`，且 A 的 `observed_status` 为 active
-  - [ ] 覆盖异步触发边界：CLI `record put` 返回后轮询 B 收敛；若 timeout/backoff 发生，日志中要能看出是 daemon trigger、observed path 失效还是普通 endpoint 路径被误用
+- [x] **3.5.5 Daemon observed path 自动触发测试**
+  - [x] 增加 `make nat-daemon-observed-smoke`：A/B 都以 daemon 运行，B 配置 `publish_endpoints: false` 只主动连 A；A 通过 control socket `record put` 后，daemon 的本地写入触发 outbound sync，并必须通过 verified observed path 将新 record 推送给 B
+  - [x] 该 smoke 明确区分 daemon 集成行为与 3.5.4 的核心 observed path 能力：测试允许 endpoint timer 存在，断言 B 没有 signed direct endpoint / `discovered_addr`（A 使用 `advertise_addr` 避免 interface scan 地址干扰），且 A 的 `observed_status` 为 active
+  - [x] 覆盖异步触发边界：CLI `record put` 返回后轮询 B 收敛；失败时通过 `cat a.log b.log` 输出 daemon trigger、observed path 和 sync round 日志用于排障
 
 ## Phase 4: WireGuard 建链（预计 2-3 周）
 
