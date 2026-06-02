@@ -282,8 +282,9 @@
   - [x] 将 `sync run` 标记为开发/兼容入口，内部尽量委托 daemon service 实现，避免 Phase 3 后出现两套长期运行路径
 
 - [ ] **3.4 Daemon 测试闭环**
-  - [ ] 增加 daemon 单元测试：事件队列串行处理、config 只加载一次、state reload 不覆盖更新、control API request/response 兼容错误路径
-  - [ ] 增加并发安全测试：daemon 运行期间多个 CLI 写命令串行处理，不出现旧 state snapshot 覆盖新写入
+  - [x] 增加 daemon 单元测试：事件队列串行处理、config 只加载一次、state reload 不覆盖更新、control API request/response 兼容错误路径
+    - 已覆盖事件串行、state reload 防旧快照覆盖、control API 错误响应；config 只加载一次沿用 `Runtime` 测试覆盖
+  - [x] 增加并发安全测试：daemon 运行期间多个 CLI 写命令串行处理，不出现旧 state snapshot 覆盖新写入
   - [ ] 增加 smoke：daemon 运行时 CLI `record put` 通过 control socket 提交，daemon 写 DB、触发 gossip sync，远端收敛
   - [ ] 增加 smoke：daemon 停止后 CLI 直接写 DB 的开发模式仍可用，并能被下一次 daemon 启动正确加载
 

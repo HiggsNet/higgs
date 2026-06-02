@@ -1,4 +1,4 @@
-.PHONY: all build clean test fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke delegation-revoke-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run join-smoke phase1-smoke phase2-smoke phase2-run-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke delegation-revoke-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -24,6 +24,9 @@ clean:
 	@echo "Cleaned build artifacts"
 
 test:
+	$(GO_ENV) $(GO) test ./...
+
+test-verbose:
 	$(GO_ENV) $(GO) test -v ./...
 
 fmt:

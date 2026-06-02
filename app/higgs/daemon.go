@@ -329,6 +329,11 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	if event == nil {
 		return 0, errors.New("record_put event is nil")
 	}
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return 0, err
+	}
+	d.setState(latest)
 	record, err := buildSignedRecordAt(d.Sync.State, event.Zone, event.Key, event.Value, event.Type, d.Sync.now())
 	if err != nil {
 		return 0, err
