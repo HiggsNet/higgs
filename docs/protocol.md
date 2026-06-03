@@ -328,9 +328,239 @@ Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退�
 
 ---
 
-## 6. 安全机制
+## 6. Phase 4 IPsec / Overlay 公告协议（规划）
 
-### 6.1 节点身份验证
+本节描述 Phase 4 规划中的 IPsec/StrongSwan mesh 控制面记录。它们仍然是普通 Zone Record，通过本文前述 gossip 协议同步和验证；gossip 只负责传播 signed state，不直接解释或执行 StrongSwan 配置。真正的建链由本机 daemon 的 LinkPlanner 和 `provider=strongswan` 驱动完成。
+
+Phase 4 的关键边界：
+- 公开记录只表达节点的 IPsec 能力、accept intent、地址候选、端口公告和 transport key。
+- 本地 MeshPolicy 规则不通过 gossip 公开；它属于本节点拓扑和安全策略。
+- 地址与端口分离公告。远端运行时把 AddressCandidate 与 PortAdvertisement 组合成 ContactPoint 后再拨号。
+- StrongSwan/VICI/XFRM apply 永远以 verified active state 为输入；discovery server、reflector、DNS 响应不能绕过 Zone trust chain。
+
+### 6.1 Record key 与类型
+
+规划 record：
+
+| Key | Type | 用途 |
+|-----|------|------|
+| `ipsec/profile` | `ipsec.profile.v1` | 公开本节点 IPsec 能力、IKE identity、accept intent、NAT/reachability hint |
+| `ipsec/addresses` | `ipsec.addresses.v1` | 公开地址来源与当前候选；包括 DNS 源、手工 IP、discovery、reflector、local |
+| `ipsec/ports` | `ipsec.ports.v1` | 公开 IKE/NAT-T 端口策略、当前端口、旧端口 grace、observed external port |
+| `ipsec/transport-key` | `ipsec.transport_key.v1` | 将 IKE public key / cert fingerprint 绑定到节点 Zone trust chain |
+
+这些记录必须由节点自身 Zone 签名，例如 `node-a.catofes.` 只能为自己的 `ipsec/*` 记录签名。父 Zone 的 delegation/revocation 仍然决定该节点是否被全网信任；一旦 Zone 被撤销，远端必须停止使用其 IPsec records，并 teardown 对应 LinkInstance。
+
+### 6.2 `ipsec/profile`
+
+示例：
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "provider": "strongswan",
+  "ike_identity": "node-a.catofes.",
+  "transport_key_fingerprint": "b2:...",
+  "accept": "inbound",
+  "address_families": ["ipv6", "ipv4"],
+  "path_modes": ["family-redundant", "exhaustive"],
+  "nat": {
+    "hint": "unknown",
+    "inbound_reachable": "unknown"
+  },
+  "updated_at": 1717171717
+}
+```
+
+字段语义：
+- `enabled`：是否允许自动 IPsec mesh 使用该 profile。
+- `provider`：第一版只接受 `strongswan`。
+- `ike_identity`：IKE 层身份，默认等于 Zone FQDN。
+- `transport_key_fingerprint`：引用 `ipsec/transport-key` 中的 public key/cert。
+- `accept`：`none`、`inbound`、`bidirectional`。它是公开的连接意图摘要，不是完整拓扑。
+- `address_families`：该节点愿意用于 IPsec 的地址族。
+- `path_modes`：该节点可接受的 path mode。
+- `nat.hint`：`public`、`behind_nat`、`unknown`。它只是 hint，不是安全事实。
+- `nat.inbound_reachable`：`true`、`false`、`unknown`。只有配合已验证 ContactPoint 才能作为拨入依据。
+
+### 6.3 `ipsec/addresses`
+
+地址记录不包含端口。daemon 会从多个来源生成 AddressCandidate，远端按本地优先级和 rule 过滤。
+
+```json
+{
+  "version": 1,
+  "addresses": [
+    {
+      "id": "dns-main",
+      "source": "manual-dns",
+      "host": "node-a.example.com",
+      "families": ["ipv6", "ipv4"],
+      "refresh_seconds": 60,
+      "priority": 90,
+      "reachability": "public",
+      "ttl_seconds": 300
+    },
+    {
+      "id": "manual-v6",
+      "source": "manual-address",
+      "address": "2001:db8::10",
+      "family": "ipv6",
+      "priority": 100,
+      "reachability": "public",
+      "ttl_seconds": 3600
+    },
+    {
+      "id": "reflector-v4",
+      "source": "reflector",
+      "address": "203.0.113.10",
+      "family": "ipv4",
+      "priority": 60,
+      "reachability": "nat-observed",
+      "last_observed": 1717171717,
+      "ttl_seconds": 600
+    }
+  ],
+  "updated_at": 1717171717
+}
+```
+
+地址来源：
+- `manual-address`：管理员显式配置的 IP。
+- `manual-dns`：管理员显式配置的域名。记录必须保留域名本身；运行时按 `refresh_seconds` 解析 A/AAAA。
+- `discovery`：可选 discovery server 返回的候选地址或域名。
+- `reflector`：反射服务看到的外部地址，常用于 NAT/公网变化场景。
+- `local`：本机接口扫描结果。公网场景默认应允许禁用。
+
+DNS 不是天然最高优先级。动态 DNS 很多时候只是 public reflector/discovery 的另一种外壳，因此本地配置必须允许调整 source order 或在 MeshPolicy rule 中限制 source。
+
+### 6.4 `ipsec/ports`
+
+端口记录不包含 IP。节点可以固定端口，也可以在配置范围内选择端口并公告。端口轮换时同时保留 current 与 previous grace，远端在 grace 内可回退旧端口。
+
+```json
+{
+  "version": 1,
+  "mode": "range",
+  "range": {"from": 30000, "to": 30999},
+  "current": {
+    "generation": 42,
+    "ike": {"local": 30412, "advertised": 30412, "observed": 30412},
+    "natt": {"local": 30413, "advertised": 30413, "observed": 30413},
+    "valid_until": 1717175317
+  },
+  "previous": [
+    {
+      "generation": 41,
+      "ike": {"advertised": 30100},
+      "natt": {"advertised": 30101},
+      "valid_until": 1717172017
+    }
+  ],
+  "updated_at": 1717171717
+}
+```
+
+端口字段：
+- `local`：本机 StrongSwan/charon 监听端口。
+- `advertised`：希望远端拨入的端口。
+- `observed`：reflector/discovery 看到的外部端口。NAT 后可能不同于 `local`。
+- `generation`：端口选择代数，用于判断新旧公告。
+- `valid_until`：端口公告过期时间；过期后远端不得继续尝试。
+
+UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它们写死。Phase 4 的实现需要先验证 StrongSwan/VICI 对自定义 IKE/NAT-T 端口、NAT-T port floating、MOBIKE/reestablish 的行为；Phase 7 再考虑高频 port hopping。
+
+### 6.5 `ipsec/transport-key`
+
+IPsec/IKE 认证材料不得复用 Zone signing key。节点应生成独立 IKE key/cert 或 raw public key，再用 Zone record 把该 transport key 绑定到信任链。
+
+示例：
+
+```json
+{
+  "version": 1,
+  "kind": "raw-public-key",
+  "algorithm": "ed25519",
+  "public_key": "base64...",
+  "fingerprint": "b2:...",
+  "not_before": 1717170000,
+  "not_after": 1722440400,
+  "updated_at": 1717171717
+}
+```
+
+优先使用 Ed25519。若 StrongSwan/部署环境兼容性不足，可退到 ECDSA P-256。RSA 长 key 会显著增加 record 和控制面体积，不作为默认路线。
+
+### 6.6 LinkPlanner 组合语义
+
+LinkPlanner 输入：
+- verified active state 中的 peer Zone 和 `ipsec/*` records。
+- 本机 MeshPolicy rule。
+- 本机 address source order、端口策略、连接成功/失败历史。
+- delegation revocation/tombstone 状态。
+
+处理流程：
+
+```text
+1. 扫描 verified peer zones。
+2. 读取 peer ipsec/profile；过滤 enabled=false、accept 不匹配、本地 deny rule 命中的 peer。
+3. 读取 ipsec/addresses；解析 DNS 源，过滤过期/来源不允许/地址族不允许的候选。
+4. 读取 ipsec/ports；过滤过期端口，优先 current，grace 内保留 previous fallback。
+5. 组合 AddressCandidate + PortAdvertisement => ContactPoint。
+6. 根据 path mode 选择 ContactPoint：
+   - family-redundant：每个地址族最多一条。
+   - exhaustive：尽量保留所有允许候选。
+7. 输出 TransportLinkSpec 给 provider=strongswan。
+```
+
+方向组合：
+
+| 本地 direction | 远端 accept | 结果 |
+|----------------|-------------|------|
+| `outbound` | `inbound` / `bidirectional` | 主动拨号 |
+| `inbound` | 任意 | 只加载接收配置 |
+| `bidirectional` | `inbound` | 主动拨号 |
+| `bidirectional` | `bidirectional` | 用 peer id/zone 的稳定排序决定首拨方 |
+| `outbound` | `none` | 不自动建链 |
+
+NAT 组合：
+- 公网 inbound 节点 + NAT/outbound-only 节点：NAT 后节点主动拨公网节点是第一版主路径。
+- 公网节点主动拨 NAT 后节点：只有在远端有 IPv6、静态映射、已验证 observed external port、打洞或 relay 时才可尝试。
+- 两端都在 NAT 后且没有可验证公网 ContactPoint：LinkInstance 进入 `degraded`，debug 输出说明不可达原因。
+
+### 6.7 本地 MeshPolicy 规则
+
+MeshPolicy 本地持久化，不进入 gossip。为了保持配置简单，第一版使用 URI 规则：
+
+```yaml
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+    connect:
+      - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+      - "strongswan://role=edge?accept=bidirectional&family=dual"
+    deny:
+      - "strongswan://tag=lab"
+```
+
+第一版支持的 predicate：
+- zone glob / exact。
+- `role` / `tag`。
+- `accept`。
+- `direction`。
+- `family`。
+- `source`。
+- `mode`。
+- `max_peers`。
+
+规则应先处理 deny，再按 connect 顺序选择。正则表达式不是第一版默认能力；glob/suffix/label 更容易审计。
+
+---
+
+## 7. 安全机制
+
+### 7.1 节点身份验证
 
 传输层维护两个集合：
 
@@ -340,7 +570,7 @@ Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退�
 
 节点在启动时从 `bootstrap` 配置注册，在运行时从发现的 Zone 和端点记录动态扩展。
 
-### 6.2 反重放窗口
+### 7.2 反重放窗口
 
 每条消息都携带随机 `nonce` 和 `timestamp`。接收方检查两者：
 
@@ -349,7 +579,7 @@ Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退�
 
 发送方在 `nonce` 和 `timestamp` 为零时自动填充（64 位随机数 / Unix 秒）。
 
-### 6.3 速率配额
+### 7.3 速率配额
 
 每个节点都有令牌桶配额，在发送和接收时强制执行：
 
@@ -360,7 +590,7 @@ Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退�
 
 超过任一限制将返回 `ErrQuotaExceeded`，数据包被丢弃。
 
-### 6.4 签名验证
+### 7.4 签名验证
 
 所有区域数据（authority、委托、记录）都经过密码学签名。Gossip 层本身不验证签名，而是委托给 `zone` 和 `crypto` 包：
 
@@ -372,7 +602,7 @@ Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退�
 
 ---
 
-## 7. 配置参考
+## 8. 配置参考
 
 影响 gossip 行为的 `config.yaml` 关键配置项：
 
@@ -413,9 +643,53 @@ endpoint_grace: 10m
 | `endpoint_ttl` | `1h` | 写入端点记录的 TTL |
 | `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
 
+Phase 4 规划中的 IPsec/overlay 配置示例。字段名在实现前仍可调整，但语义边界应保持：
+
+```yaml
+ipsec:
+  enabled: true
+  provider: strongswan
+  accept: inbound
+
+  address_source_order:
+    - manual-address
+    - manual-dns
+    - discovery
+    - reflector
+    - local
+
+  addresses:
+    - source: manual-dns
+      host: node-a.example.com
+      families: [ipv6, ipv4]
+      refresh: 60s
+    - source: manual-address
+      address: 2001:db8::10
+
+  ports:
+    mode: range
+    range: 30000-30999
+    grace: 10m
+
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+    connect:
+      - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+    deny:
+      - "strongswan://tag=lab"
+```
+
+配置语义：
+- `ipsec.accept` 会发布到 `ipsec/profile`，表示远端可以怎样尝试连接本节点。
+- `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
+- `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
+- `overlays[].connect/deny` 是本地 MeshPolicy，不发布到 gossip。
+- `address_source_order` 只影响本地选择和排序；远端也会按自己的本地配置重新排序。
+
 ---
 
-## 8. 总结
+## 9. 总结
 
 | 关注点 | 机制 |
 |---------|-----------|
@@ -424,6 +698,7 @@ endpoint_grace: 10m
 | **冲突解决** | 单调版本号；时间戳仅用于审计 |
 | **信任** | 完整委托链验证，追溯到受信任的根公钥 |
 | **节点发现** | 每个节点自身区域中的签名 `sync/endpoint/udp` 记录 |
+| **IPsec mesh 规划** | signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` + 本地 MeshPolicy |
 | **访问控制** | `knownPeers`（bootstrap + 已验证 Zone）；签名链验证身份 |
 | **首次接入** | `AddKnownPeerID` 开放入站；`lastSeenAddrs` 回外地址；防死锁 |
 | **反重放** | Nonce 唯一性 + 5 分钟时间戳窗口 |

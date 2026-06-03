@@ -403,9 +403,19 @@
   - [ ] 增加测试：daemon 运行期间并发 `record put` + `delegate issue/revoke` 不覆盖 state；撤销后 daemon 立即停止 relay/endpoint 使用该 Zone；admin daemon smoke 覆盖签发 bundle 后公网/多节点 gossip 收敛
 
 - [ ] **4.1 StrongSwan / XFRM 控制模块**
-  - [ ] 定义最小 `TransportLinkSpec`：local zone、peer zone、transport id、IKE identity、认证材料引用、endpoint candidates、XFRM `if_id`、interface name、本地/远端 tunnel address、目标 network namespace
+  - [ ] 定义 overlay/provider 分层：`MeshPolicy` 只描述“选择哪些 peer 形成哪类 overlay”；`OverlayProvider` 负责把 desired link 渲染为 StrongSwan/WireGuard/VXLAN 等具体系统配置；Phase 4 只实现 `provider=strongswan`，但内部模型不得把 mesh 选择逻辑写死到 IPsec driver
+  - [ ] 定义最小 `TransportLinkSpec`：local zone、peer zone、overlay id、provider、transport id、IKE identity、认证材料引用、`ContactPoint` candidates、XFRM `if_id`、interface name、本地/远端 tunnel address、目标 network namespace
   - [ ] 认证材料不复用 Zone signing key；生成独立 IKE key/cert 或 raw public key，优先 Ed25519，兼容性不足时退到 ECDSA P-256，避免 RSA 长 key/大 record 体积
   - [ ] 通过 signed transport record 将 IKE public key / fingerprint 绑定到 Zone trust chain：Zone key 证明 transport key 属于该 Zone，IKE 握手只使用 transport key
+  - [ ] 定义 IPsec public profile record：节点公开 `ipsec/profile`，包含 `enabled`、IKE public key/fingerprint、公开 accept intent（`none` / `inbound` / `bidirectional`）、支持的 address family、path mode 能力、NAT/reachability hint；该 record 只表达“可被尝试连接的能力/意图”，不公开完整本地 mesh 规则或拓扑
+  - [ ] 定义 IPsec address advertisement record：节点公开 `ipsec/addresses`，地址与端口分开建模；地址来源支持 `manual-address`、`manual-dns`、`discovery`、`reflector`、`local`，并保留 family、scope/reachability、source、priority、TTL、DNS refresh interval、last_observed 等元数据
+  - [ ] 定义 IPsec port advertisement record：节点公开 `ipsec/ports`，端口不嵌入 address；支持固定端口、端口范围、当前端口、上一组端口 grace period、local/listen port、advertised port、observed external port，并为后续 rotate/hopping 预留 generation/valid_until 字段
+  - [ ] 定义 `AddressCandidate` / `PortAdvertisement` / `ContactPoint` 三层模型：resolver 先得到当前可用地址，再读取当前端口公告，最后组合出 StrongSwan 可拨号目标；避免把 `ip:port` 固化为单一 endpoint
+  - [ ] 支持 DNS 作为一等地址来源：保存原始域名，按配置周期 refresh A/AAAA 记录；DNS 解析结果只是运行时 address candidates，DNS 不天然高于 discovery/reflector，优先级由本地配置决定
+  - [ ] 支持 discovery server / reflector 作为可选地址来源：discovery 可返回候选地址/域名/端口公告；reflector 主要提供 observed address/port；两者都不能成为信任根，远端仍必须验证 Zone 签名记录和本地 mesh policy
+  - [ ] 支持本地地址来源 `local`：用于 LAN、实验和显式启用场景；公网默认配置应允许禁用 private/link-local/interface-scan 结果，避免误把内网地址用于公网 IPsec
+  - [ ] 支持 address source priority 配置：默认可为 `manual-address/manual-dns > discovery > reflector > local`，但必须允许管理员改顺序或按 rule 限制来源；不要把动态 DNS 视为天然最高优先级
+  - [ ] 设计端口选择/轮换边界：端口由本节点在配置的固定值或范围内选择并公告；轮换时同时发布 current 与 previous grace；peer 连接时用当前地址候选与端口公告组合；实现前需确认 StrongSwan/VICI 对自定义 IKE/NAT-T 端口、NAT-T port floating、MOBIKE/reestablish 的实际支持边界
   - [ ] 通过 VICI 控制 StrongSwan，优先使用 `github.com/strongswan/govici/vici`；`swanctl` 只作为人工 debug/dry-run 对照，不作为核心控制面输出解析依赖
   - [ ] 定义 `IPsecDriver` / `XFRMDriver` 薄接口：`LoadConnection`、`UnloadConnection`、`TerminateSA`、`ListSAs`、`EnsureInterface`、`DeleteInterface`、`AssignAddress`
   - [ ] 增加 fake/dry-run driver：非 root、无 strongSwan、无 XFRM 权限环境仍可测试 desired config 推导、apply 顺序和错误路径
@@ -418,17 +428,27 @@
 
 - [ ] **4.2 链路实例管理**
   - [ ] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition
-  - [ ] daemon 从 active state 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/endpoint/transport/ipsec record 变化
+  - [ ] 定义本地 `MeshPolicy` 持久化来源：优先作为本机 daemon 配置/DB policy，不通过 gossip 公开；policy 描述“连接哪些 peer/overlay/provider”，而不是列举每个已发现节点的手工 link
+  - [ ] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、direction、max_peers、allow/deny 顺序
+  - [ ] daemon 从 active state 的 peer profile/address/port records + 本地 MeshPolicy 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/ipsec profile/address/port/transport key/mesh policy 变化
   - [ ] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair
   - [ ] 设计状态机：`pending`、`configuring`、`connecting`、`up`、`degraded`、`stale`、`removing`、`down`、`error`
-  - [ ] endpoint candidates 支持排序和回退：signed endpoint、verified observed path、标准 500/4500、自定义 IKE/NAT-T 端口；记录失败率和最近失败原因
+  - [ ] 实现公开 accept intent 与本地 direction 的组合规则：本地 `outbound` 只能主动连接远端 `inbound`/`bidirectional`；本地 `inbound` 只加载接收配置；双方 `bidirectional` 时使用稳定 tie-break（如 peer zone 字典序）避免重复主动拨号，并允许失败后对端接管
+  - [ ] 实现 path mode：`family-redundant` 每个地址族最多选择一条 ContactPoint（双栈时 IPv4 一条 + IPv6 一条）；`exhaustive` 尽量连接所有候选（调试/特殊高可用）；后续如需单条再引入 `preferred-only`，避免使用语义模糊的 `single-best`
+  - [ ] ContactPoint candidates 支持排序和回退：按 address source priority、address reachability、端口 generation、连接成功率、失败/backoff、IPv4/IPv6 策略综合排序；记录失败率和最近失败原因
+  - [ ] 明确 NAT 处理：NAT hint 只是节点自称，不作为安全事实；公网节点可接受 NAT 后节点主动拨入；主动拨入 NAT 后节点必须依赖 IPv6、端口映射、已验证 observed external port、打洞或后续 relay，不能仅凭 `behind_nat` hint 假装可达
   - [ ] 处理幂等和并发：同一个 peer 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + StrongSwan/XFRM 实际状态恢复
   - [ ] 撤销优先级最高：peer Zone 或父 delegation tombstone 后，不等待普通 reconnect/backoff，立即 teardown link，并阻止 endpoint fallback、rekey 或 reconcile 重建
   - [ ] 暴露 control API/debug 输出：link 列表、desired vs actual、SA 状态、XFRM interface、`if_id`、endpoint、rekey/reconnect 原因、最近错误
   - [ ] 增加 fake driver 单元测试：create/update/delete/revoke/restart recovery；真实 StrongSwan/XFRM smoke 留到 4.3
 
 - [ ] **4.3 最小闭环验证**
-  - [ ] 增加 `make ipsec-dry-run-smoke`：不要求 root/StrongSwan/XFRM，使用 fake driver 验证 A/B 同步后能从 active state 推导出对称 `TransportLinkSpec`、稳定 `if_id`/interface name、Ed25519/ECDSA transport key record 和 expected VICI/XFRM apply plan
+  - [ ] 增加 `make ipsec-policy-smoke`：不要求 root/StrongSwan/XFRM，验证 URI rule + 远端 accept intent + address/port 分离公告能自动选择匹配 peer，不需要手写每个 link
+  - [ ] 增加 `make ipsec-dry-run-smoke`：不要求 root/StrongSwan/XFRM，使用 fake driver 验证 A/B 同步后能从 active state 推导出对称 `TransportLinkSpec`、稳定 `if_id`/interface name、Ed25519/ECDSA transport key record、AddressCandidate/PortAdvertisement/ContactPoint 组合结果和 expected VICI/XFRM apply plan
+  - [ ] dry-run 覆盖双栈多地址：两个双栈 peer 在 `family-redundant` 下最多产生 IPv4/IPv6 各一条 ContactPoint，在 `exhaustive` 下产生所有允许来源的组合，并能解释未选候选的原因
+  - [ ] dry-run 覆盖端口轮换：peer 发布 current + previous grace 端口时优先 current，current 失败可在 grace 内回退 previous；grace 过期后不再尝试旧端口
+  - [ ] dry-run 覆盖 DNS refresh：manual-dns record 保留域名，运行时解析 A/AAAA；DNS 变化后 planner 重新生成 ContactPoint 并触发 reconcile update
+  - [ ] dry-run 覆盖 NAT：公网 inbound peer + NAT outbound peer 可建 outbound initiated link；两个都 `behind_nat` 且无 IPv6/port mapping/observed reachable port 时进入 degraded，并在 debug 中给出不可达原因
   - [ ] 增加真实环境前置检查命令：检测 Linux、root 或 `CAP_NET_ADMIN`、VICI socket/`charon`、XFRM interface 支持、`ip`/`swanctl` 可用性；缺失时给出明确 skip/error，而不是半途留下 connection/interface
   - [ ] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步和 transport key record 发布
   - [ ] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
@@ -506,14 +526,14 @@
 **目标：** 生产可用，支持多线路、跳频、扩展传输协议。
 
 - [ ] **7.1 多线路并行（Multipath）**
-  - 一个 Peer 可建立多条 TransportLink（IKEv2/XFRM over 公网 + IKEv2/XFRM over 内网 + 可选 WG/GRE）
+  - 一个 Peer 可建立多条 TransportLink（IKEv2/XFRM over 公网 + IKEv2/XFRM over 内网 + 可选 WG/GRE），并复用 Phase 4 的 overlay/provider、AddressCandidate、PortAdvertisement、ContactPoint 模型
   - 每条链路独立运行 babeld 接口
   - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
 - [ ] **7.2 UDP 端口候选 / 端口轮换（Port Hopping）**
   - 目标：规避部分网络对大流量固定 UDP 五元组的 QoS/丢包/限速；先做多 endpoint / 多 port probe 与质量选择，再评估定时 rotate
-  - IKEv2/IPsec 第一版不假设能像 WireGuard 一样任意 per-peer 跳监听端口：标准 IKE/NAT-T 默认使用 UDP 500/4500，StrongSwan 支持连接级 `local_port`/`remote_port` 与全局 NAT-T 端口配置，但数据面端口轮换通常需要 reestablish/MOBIKE/多实例或外层 DNAT 配合
-  - 支持在 signed endpoint record 中发布多个 `ipsec` 端口候选：标准 500/4500、备用自定义 IKE 端口、备用 NAT-T/encap 端口；daemon 按质量、失败率、运营商特征选择
+  - IKEv2/IPsec 第一版不假设能像 WireGuard 一样任意 per-peer 跳监听端口：标准 IKE/NAT-T 默认使用 UDP 500/4500，StrongSwan 支持连接级 `local_port`/`remote_port` 与全局 NAT-T 端口配置，但数据面端口轮换通常需要 reestablish/MOBIKE/多实例或外层 DNAT 配合；Phase 4 只把端口作为独立可公告对象建模，不强行实现高频跳变
+  - 支持在 signed `ipsec/ports` record 中发布多个端口候选：标准 500/4500、备用自定义 IKE 端口、备用 NAT-T/encap 端口、current/previous grace；daemon 按质量、失败率、运营商特征选择，并与地址候选组合成 ContactPoint
   - rotate 必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径、QoS 误判回滚、端口探测限速
   - 如果网络允许 ESP 协议且 QoS 主要针对 UDP，可优先评估非 NAT-T ESP 路径；若必须 UDP encapsulation，再评估端口候选和 reestablish 成本
   - 增加公网验证：固定 UDP 4500 大流量劣化时，备用端口/备用 endpoint 能否降低丢包；记录 `swanctl --list-sas`、RTT、loss、babel route cost 变化
@@ -573,7 +593,8 @@
 1. 先完成 Phase 3.5：把 verified inbound UDP path / NAT 后节点 outbound-only 同步路径做扎实，确保进入 StrongSwan/XFRM 前公网 gossip 不依赖所有节点都可被主动拨入。
 2. 用 `docs/public-internet-test.md` 和 `docs/scripts/public-gossip-node.sh` 在真实公网 3+ 节点跑 daemon gossip 收敛测试，额外覆盖 NAT/CGNAT 节点只主动连公网 bootstrap 的场景。
 3. 完成 Phase 4.0：把 `delegate issue/revoke`、`join accept`、root/admin 管理写入也收进 daemon/control API，彻底关闭 admin 直写 DB 的单 writer 口子。
-4. 进入 Phase 4 StrongSwan/IKEv2 + XFRM interface 建链：定义从 active state 推导本机 `PeerView` / `TransportLink` 的最小 record 约定和 dry-run 输出。
-5. 接入 VICI/StrongSwan 薄适配层和 XFRM netlink 管理，先实现 load/update/remove connection、create/delete interface 的可测试接口，避免把系统细节散到 daemon 主循环。
-6. 由 daemon state-change hook 触发 IPsec/XFRM apply，确保配置同步、CLI 写入和后续撤销清理仍走单 writer 边界。
-7. 增加双节点 StrongSwan/XFRM smoke：两端同步配置后自动建立 IKE_SA/CHILD_SA，`swanctl --list-sas` 可见 SA，并能 ping 通 tunnel IP。
+4. 进入 Phase 4 StrongSwan/IKEv2 + XFRM interface 建链：先实现 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 的 record 结构和解析，明确地址与端口分离公告。
+5. 实现本地 MeshPolicy URI rule 解析和 LinkPlanner dry-run：从 verified active state + 本地规则推导 `AddressCandidate` / `PortAdvertisement` / `ContactPoint` / `TransportLinkSpec`，覆盖双栈、DNS refresh、端口 grace、NAT degraded 解释。
+6. 接入 VICI/StrongSwan 薄适配层和 XFRM netlink 管理，先实现 load/update/remove connection、create/delete interface 的可测试接口，避免把系统细节散到 daemon 主循环。
+7. 由 daemon state-change hook 触发 IPsec/XFRM apply，确保配置同步、CLI 写入、DNS/端口刷新和后续撤销清理仍走单 writer 边界。
+8. 增加双节点 StrongSwan/XFRM smoke：两端同步配置后自动建立 IKE_SA/CHILD_SA，`swanctl --list-sas` 可见 SA，并能 ping 通 tunnel IP。

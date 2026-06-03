@@ -190,7 +190,282 @@ node1.catofes.
 | 全局策略 | 在 `.` 或中间 Zone 设置 `policy/*` Record，被子 Zone 继承 |
 | 传输层参数 | `nodeX.parent./wireguard/*`、`nodeX.parent./ipsec/*` 等 Record |
 
-### 2.4 签名规范（必须无歧义）
+### 2.4 Overlay / Provider / Link Policy（Phase 4+）
+
+Phase 4 进入 StrongSwan/IKEv2 + XFRM interface 后，控制平面的核心不应退化成“发现一个节点后，管理员手写一条 VPN link”。Higgs 的目标是用已同步的 Zone 状态、节点公开能力和本地规则快速构建 mesh。因此必须把“选择哪些节点互联”和“用 StrongSwan 具体怎么建链”分层：
+
+```text
+Local MeshPolicy
+        ↓
+Verified NodeProfile / IPsec records
+        ↓
+LinkPlanner
+        ↓
+TransportLinkSpec
+        ↓
+OverlayProvider(strongswan)
+        ↓
+VICI + XFRM apply
+```
+
+**MeshPolicy（本地策略，不 gossip 公开）**
+- 描述本节点希望连接哪些 peer、使用哪个 overlay/provider、方向、地址族、候选来源、path mode 和数量限制。
+- 默认持久化在本机 daemon 配置或本地 DB policy 中；它是本节点的拓扑和安全策略，不应作为普通 public record 向全网广播。
+- 支持手工 override，但第一目标是规则驱动 mesh，而不是给每个 peer 手写 link。
+
+**Public NodeProfile / IPsec profile（可 gossip 公开）**
+- 节点可以公开“我支持 IPsec，我愿意被哪些类型的 peer 尝试连接，我有哪些候选地址/端口”。
+- 公开的是能力和 accept intent，不是完整连接清单。这样可让远端自动决定是否匹配自己的 MeshPolicy，同时避免泄露完整拓扑。
+
+**OverlayProvider（具体系统驱动）**
+- `provider=strongswan` 是 Phase 4 唯一实现目标，负责把 `TransportLinkSpec` 转成 VICI connection/secret、XFRM interface、地址和清理动作。
+- 后续可以增加 `wireguard`、`vxlan`、`gre`、`seg6`。高层 mesh 选择规则不应依赖 StrongSwan 内部字段。
+- 更高层 overlay 可以声明 underlay，例如 `vxlan` 跑在 `strongswan` overlay 之上；Phase 4 只保留模型兼容性，不实现 VXLAN。
+
+#### 2.4.1 Public IPsec records
+
+Phase 4 规划以下 signed records。所有记录都由节点自身 Zone authority 签名，通过普通 gossip 同步，远端只在 `VerifyChain` / `VerifyRecord` 通过后使用。
+
+```text
+node-a.catofes./ipsec/profile
+node-a.catofes./ipsec/addresses
+node-a.catofes./ipsec/ports
+node-a.catofes./ipsec/transport-key
+```
+
+`ipsec/profile` 示例：
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "provider": "strongswan",
+  "ike_identity": "node-a.catofes.",
+  "transport_key_fingerprint": "b2:...",
+  "accept": "inbound",
+  "address_families": ["ipv6", "ipv4"],
+  "path_modes": ["family-redundant", "exhaustive"],
+  "nat": {
+    "hint": "unknown",
+    "inbound_reachable": "unknown"
+  },
+  "updated_at": 1717171717
+}
+```
+
+`accept` 的含义：
+- `none`：不接受自动 mesh 拨入；仍可被本地手工 override 使用。
+- `inbound`：本节点愿意接受匹配 policy 的远端主动拨入。
+- `bidirectional`：本节点既可接受拨入，也可主动拨出；双方都是 `bidirectional` 时必须用稳定 tie-break 避免重复拨号。
+
+NAT 字段只是 hint，不是安全事实。远端必须结合地址来源、端口公告、连接结果和本地策略判断是否可达。
+
+#### 2.4.2 地址与端口分离
+
+IPsec endpoint 不应直接建模为单个 `ip:port`。端口后续可能在配置范围内动态选择、短期保留旧端口、甚至做较快 rotate；地址也可能来自 DNS、discovery、reflector 或本地接口扫描。Phase 4 使用三层模型：
+
+```text
+AddressCandidate      # 当前可用地址或域名解析结果
+PortAdvertisement     # 当前可用 IKE/NAT-T 端口公告
+ContactPoint          # AddressCandidate + PortAdvertisement 组合出的实际拨号目标
+```
+
+`ipsec/addresses` 示例：
+
+```json
+{
+  "version": 1,
+  "addresses": [
+    {
+      "id": "dns-main",
+      "source": "manual-dns",
+      "host": "node-a.example.com",
+      "families": ["ipv6", "ipv4"],
+      "refresh_seconds": 60,
+      "priority": 90,
+      "reachability": "public",
+      "ttl_seconds": 300
+    },
+    {
+      "id": "reflector-v4",
+      "source": "reflector",
+      "address": "203.0.113.10",
+      "family": "ipv4",
+      "priority": 60,
+      "reachability": "nat-observed",
+      "last_observed": 1717171717,
+      "ttl_seconds": 600
+    }
+  ],
+  "updated_at": 1717171717
+}
+```
+
+地址来源：
+- `manual-address`：管理员明确配置的 IP。
+- `manual-dns`：管理员明确配置的域名；daemon 保存原始域名，并定期 refresh A/AAAA。
+- `discovery`：可选 discovery server 返回的候选地址或域名。
+- `reflector`：reflector 观察到的外部地址；主要用于 NAT/公网变化场景。
+- `local`：本机接口扫描结果；适合 LAN/实验，公网默认应允许禁用。
+
+DNS、discovery、reflector 的优先级不能写死。动态 DNS 本质上也可能只是公网反射/发现机制的包装，因此本地配置应允许指定顺序，例如：
+
+```yaml
+ipsec_address_source_order:
+  - manual-address
+  - manual-dns
+  - discovery
+  - reflector
+  - local
+```
+
+`ipsec/ports` 示例：
+
+```json
+{
+  "version": 1,
+  "mode": "range",
+  "range": {"from": 30000, "to": 30999},
+  "current": {
+    "generation": 42,
+    "ike": {"local": 30412, "advertised": 30412, "observed": 30412},
+    "natt": {"local": 30413, "advertised": 30413, "observed": 30413},
+    "valid_until": 1717175317
+  },
+  "previous": [
+    {
+      "generation": 41,
+      "ike": {"advertised": 30100},
+      "natt": {"advertised": 30101},
+      "valid_until": 1717172017
+    }
+  ],
+  "updated_at": 1717171717
+}
+```
+
+端口语义：
+- `local`：本机 StrongSwan/charon 实际监听端口。
+- `advertised`：希望远端拨入的端口。
+- `observed`：reflector/discovery 从外部看到的端口；NAT 后可能与 local 不同。
+- `current`：首选当前端口。
+- `previous`：端口轮换 grace 窗口内可回退的旧端口。
+- `range`：daemon 可在该范围内选择端口；也可配置固定端口。
+
+Phase 4 只要求把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。高频 port hopping 属于 Phase 7；实现前必须验证 StrongSwan/VICI 对自定义 IKE/NAT-T 端口、NAT-T port floating、MOBIKE/reestablish、多实例或 DNAT 配合的实际边界。
+
+#### 2.4.3 本地 MeshPolicy rule DSL
+
+为了避免复杂 YAML selector，第一版 MeshPolicy 可以使用小型 URI rule 语言。URI 只用于本地配置，不作为签名协议格式；解析后内部仍落为结构化对象。
+
+```yaml
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+    connect:
+      - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+      - "strongswan://role=edge?accept=bidirectional&family=dual"
+    deny:
+      - "strongswan://tag=lab"
+```
+
+第一版 predicate 集合应保持克制：
+- zone glob / exact：`*.catofes.`、`node-a.catofes.`
+- label selector：`role=edge`、`tag=lab`
+- 远端公开意图：`accept=inbound|bidirectional`
+- 本地方向：`direction=outbound|inbound|bidirectional`
+- 地址族：`family=ipv4|ipv6|dual`
+- 地址来源：`source=manual-address|manual-dns|discovery|reflector|local`
+- 路径模式：`mode=family-redundant|exhaustive`
+- 数量限制：`max_peers=N`
+
+规则评估顺序为 deny 优先，然后按 connect 顺序匹配。正则表达式可后续作为高级能力加入，但默认使用 glob/suffix/label，便于审计。
+
+#### 2.4.4 方向、双栈与 NAT 处理
+
+实际建链由“本地 direction”和“远端 accept intent”共同决定：
+
+| 本地 direction | 远端 accept | 行为 |
+|----------------|-------------|------|
+| `outbound` | `inbound` / `bidirectional` | 本节点可主动拨远端 |
+| `inbound` | 任意 | 本节点只加载接收配置，不主动拨 |
+| `bidirectional` | `inbound` | 本节点可主动拨远端 |
+| `bidirectional` | `bidirectional` | 双方可拨；用稳定 tie-break 决定首拨方 |
+| `outbound` | `none` | 不自动建链，除非本地手工 override |
+
+双栈 path mode：
+- `family-redundant`：每个地址族最多选择一条 ContactPoint。两个双栈节点之间目标是 IPv6 一条 + IPv4 一条；如果某个地址族不可用，则只建可用族。
+- `exhaustive`：尽量连接所有允许来源和端口组合，主要用于调试或特殊高可用场景。
+- 不使用语义模糊的 `single-best` 作为第一版名称；如果后续需要单条路径，可增加 `preferred-only`，并把排序规则写清楚。
+
+NAT 处理原则：
+- IKEv2/StrongSwan 支持 NAT-T，但“能穿 NAT”不等于“任意方向都能主动拨入”。
+- NAT 后节点主动连接公网 inbound 节点通常是第一版应支持的主路径。
+- 公网节点主动拨入 NAT 后节点需要 IPv6、静态端口映射、已验证 observed external port、打洞或 relay；不能仅凭 `behind_nat` hint 假装可达。
+- 两端都在 NAT 后时，若无可验证公网 ContactPoint，应进入 `degraded`，debug 输出明确不可达原因。
+
+#### 2.4.5 LinkPlanner 输出
+
+LinkPlanner 的输入：
+- 本地 `MeshPolicy`。
+- verified active state 中的 peer Zone、`ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key`。
+- 本地地址来源优先级、端口策略、历史连接成功/失败分数。
+- revocation/tombstone 状态。
+
+输出 `TransportLinkSpec`，供 provider 消费：
+
+```go
+type AddressCandidate struct {
+    ID           string
+    Source       string // manual-address, manual-dns, discovery, reflector, local
+    Family       string // ipv4, ipv6
+    Address      string // resolved IP, if known
+    Host         string // original DNS name, if any
+    Reachability string // public, nat-observed, private, unknown
+    Priority     int
+    ExpiresAt    int64
+}
+
+type PortAdvertisement struct {
+    Generation uint64
+    Kind       string // current, previous
+    IKE        PortTuple
+    NATT       PortTuple
+    ValidUntil int64
+}
+
+type PortTuple struct {
+    Local      uint16
+    Advertised uint16
+    Observed   uint16
+}
+
+type ContactPoint struct {
+    Address AddressCandidate
+    Ports   PortAdvertisement
+}
+
+type TransportLinkSpec struct {
+    OverlayID    string
+    Provider     string // strongswan
+    LocalZone    ZonePath
+    PeerZone     ZonePath
+    Direction    string
+    PathMode     string
+    ContactPoints []ContactPoint
+    IKEIdentity  string
+    TransportKeyFingerprint string
+    XFRMIfID     uint32
+    Interface    string
+    LocalTunnelAddr  netip.Addr
+    RemoteTunnelAddr netip.Addr
+    NetNS        string
+}
+```
+
+撤销优先级最高：peer Zone 或父 delegation tombstone 后，LinkPlanner 必须立即停止输出该 peer 的 specs，并要求 provider teardown 已存在 SA/interface。
+
+### 2.5 签名规范（必须无歧义）
 
 **Domain Separator（防止跨对象签名重放）：**
 - Record: `"higgs.record.v1"`
@@ -226,7 +501,7 @@ Sign(
 )
 ```
 
-### 2.5 Merkle DAG + Gossip 在此模型下的实现
+### 2.6 Merkle DAG + Gossip 在此模型下的实现
 
 **Merkle Tree 组织：**
 - 每个 Zone **独立维护一棵 Merkle Tree**，包含三部分：
@@ -490,7 +765,7 @@ type PeerView struct {
 | 组件 | 当前实现 | Phase 4+ 规划 | 备注 |
 |------|----------|--------------|------|
 | Go 版本 | 1.25+ | — | 泛型、slog、标准库增强 |
-| 序列化（Gossip） | JSON（`higgs.gossip.v1\n{...}`） | Protobuf（`gossip.proto` 已预留） | Phase 1–3 用 JSON；proto 文件已定义，后续切换 |
+| 序列化（Gossip） | MessagePack（`higgs.gossip.m1\n...`），短期兼容旧 JSON magic | Protobuf 可选后续优化 | Phase 3.6 已切 MessagePack + 1200-byte UDP budget；proto 文件仅作协议形状参考 |
 | 序列化（Record 值） | JSON | — | 具体 record 格式（endpoint、policy 等）均为 JSON |
 | 配置文件 | YAML（`config.yaml`） | — | 默认 `./config.yaml`，可用 `HIGGS_CONFIG` 覆盖 |
 | 本地存储 | `bbolt` | — | 纯 Go，无 CGO；按 Zone 分 bucket |
@@ -517,7 +792,7 @@ type PeerView struct {
 | 身份管理（ED25519 生成、加密存储、NodeID） | `pkg/core/identity/` | ✅ 完整 |
 | bbolt 持久化（LoadNetwork / SaveNetwork / 元数据） | `pkg/core/zone/` | ✅ 完整 |
 | NetworkState：Get（fallback 继承）/ Put / PutAt | `pkg/core/zone/` | ✅ 完整 |
-| Gossip 传输层（UDP、magic frame、JSON codec） | `pkg/core/gossip/` | ✅ 完整 |
+| Gossip 传输层（UDP、magic frame、MessagePack codec，短期兼容旧 JSON magic） | `pkg/core/gossip/` | ✅ 完整 |
 | Anti-replay（nonce + 时间戳 ±5min 窗口） | `pkg/core/gossip/` | ✅ 完整 |
 | 速率配额（每 peer 字节 + 对象 token bucket） | `pkg/core/gossip/` | ✅ 完整 |
 | Zone 摘要与快照同步 | `pkg/core/gossip/` | ✅ 完整 |
