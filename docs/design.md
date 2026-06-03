@@ -463,6 +463,8 @@ type TransportLinkSpec struct {
 }
 ```
 
+`LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、tunnel address pool 以及 reconcile/backoff 策略；daemon 后续从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
+
 撤销优先级最高：peer Zone 或父 delegation tombstone 后，LinkPlanner 必须立即停止输出该 peer 的 specs，并要求 provider teardown 已存在 SA/interface。
 
 ### 2.5 签名规范（必须无歧义）

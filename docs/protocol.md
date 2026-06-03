@@ -477,6 +477,8 @@ UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它�
 
 IPsec/IKE 认证材料不得复用 Zone signing key。节点应生成独立 IKE key/cert 或 raw public key，再用 Zone record 把该 transport key 绑定到信任链。
 
+transport private key 是 daemon 本地持久化材料，不进入 gossip。`ipsec/transport-key` 只发布 public key、algorithm、fingerprint 和有效期；生成 record 时必须显式拒绝与当前 Zone signing public key 相同的 raw public key。第一版 fingerprint 使用 `higgs.ipsec.transport-key.v1` domain-separated BLAKE2b-256，对 algorithm 和 public key 一起取 hash，并以冒号分隔 hex 输出。
+
 示例：
 
 ```json
@@ -675,7 +677,20 @@ ipsec:
 
 overlays:
   - name: ipsec-main
+    id: ipsec-main
     provider: strongswan
+    netns:
+      kind: host
+    default_path_mode: family-redundant
+    direction: outbound
+    max_peers: 64
+    max_links_per_peer: 2
+    tunnel_address_pool: fd00:1234::/64
+    reconcile:
+      interval: 30s
+      backoff:
+        initial: 1s
+        max: 60s
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
     deny:
@@ -686,7 +701,8 @@ overlays:
 - `ipsec.accept` 会发布到 `ipsec/profile`，表示远端可以怎样尝试连接本节点。
 - `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
 - `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
-- `overlays[].connect/deny` 是本地 MeshPolicy，不发布到 gossip。
+- `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、tunnel address pool 和 reconcile/backoff 策略，不发布到 gossip。
+- `overlays[].connect/deny` 是 link group 内的本地 MeshPolicy rule，不发布到 gossip。
 - `address_source_order` 只影响本地选择和排序；远端也会按自己的本地配置重新排序。
 
 ---

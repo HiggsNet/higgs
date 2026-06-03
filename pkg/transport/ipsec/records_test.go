@@ -2,7 +2,9 @@ package ipsec
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -135,6 +137,183 @@ func TestTransportKeyAndLinkSpec(t *testing.T) {
 	}
 	if spec.TransportID != again.TransportID || spec.XFRMIfID != again.XFRMIfID || spec.InterfaceName != again.InterfaceName {
 		t.Fatalf("stable derivation changed: %+v vs %+v", spec, again)
+	}
+}
+
+func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Name:              "main ipsec overlay",
+		NetNS:             NetNSSpec{Kind: "name", Name: "higgs-ipsec"},
+		TunnelAddressPool: netip.MustParsePrefix("fd00:1234::/120"),
+		Reconcile: ReconcilePolicy{
+			IntervalSeconds: 30,
+			Backoff:         BackoffPolicy{InitialSeconds: 1, MaxSeconds: 60},
+		},
+	}
+	if err := group.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	normalized := group.Normalized()
+	if normalized.Provider != ProviderStrongSwan {
+		t.Fatalf("provider = %q", normalized.Provider)
+	}
+	if normalized.Direction != DirectionOutbound {
+		t.Fatalf("direction = %q", normalized.Direction)
+	}
+	if normalized.DefaultPathMode != PathModeFamilyRedundant {
+		t.Fatalf("path mode = %q", normalized.DefaultPathMode)
+	}
+	if len(normalized.AddressSourceOrder) != len(defaultAddressSourceOrder) {
+		t.Fatalf("address source order = %+v", normalized.AddressSourceOrder)
+	}
+	local, peer, err := group.TunnelAddresses(1)
+	if err != nil {
+		t.Fatalf("TunnelAddresses: %v", err)
+	}
+	if local.String() != "fd00:1234::3" || peer.String() != "fd00:1234::4" {
+		t.Fatalf("tunnel addresses = %s, %s", local, peer)
+	}
+}
+
+func TestNewTransportLinkSpecForGroupInheritsGroupBoundary(t *testing.T) {
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Provider:          ProviderStrongSwan,
+		NetNS:             NetNSSpec{Kind: "path", Path: "/run/netns/higgs-ipsec"},
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+		MaxPeers:          16,
+		MaxLinksPerPeer:   2,
+	}
+	records := &NodeRecords{
+		Zone: "node-a.catofes.",
+		Profile: &ProfileRecord{
+			Version:                 1,
+			Enabled:                 true,
+			Provider:                ProviderStrongSwan,
+			IKEIdentity:             "node-a.catofes.",
+			TransportKeyFingerprint: "b2",
+			Accept:                  AcceptInbound,
+			AddressFamilies:         []string{FamilyIPv4},
+			PathModes:               []string{PathModeFamilyRedundant},
+		},
+		TransportKey: &TransportKeyRecord{
+			Version:     1,
+			Kind:        TransportKeyRawPublicKey,
+			Algorithm:   AlgorithmEd25519,
+			PublicKey:   "base64",
+			Fingerprint: "b2",
+		},
+	}
+	spec, err := NewTransportLinkSpecForGroup("node-b.catofes.", "node-a.catofes.", group, records, nil, 0)
+	if err != nil {
+		t.Fatalf("NewTransportLinkSpecForGroup: %v", err)
+	}
+	if spec.OverlayID != group.ID || spec.Provider != ProviderStrongSwan {
+		t.Fatalf("spec group fields = %+v", spec)
+	}
+	if spec.Direction != DirectionOutbound || spec.PathMode != PathModeFamilyRedundant {
+		t.Fatalf("spec planner fields = %+v", spec)
+	}
+	if spec.NetNS != "/run/netns/higgs-ipsec" {
+		t.Fatalf("NetNS = %q", spec.NetNS)
+	}
+	if spec.LocalTunnelAddr.String() != "10.44.0.1" || spec.PeerTunnelAddr.String() != "10.44.0.2" {
+		t.Fatalf("tunnel addresses = %s, %s", spec.LocalTunnelAddr, spec.PeerTunnelAddr)
+	}
+}
+
+func TestLinkGroupSpecValidationRejectsAmbiguousNetNSAndTinyPool(t *testing.T) {
+	group := LinkGroupSpec{
+		ID:    "ipsec-main",
+		NetNS: NetNSSpec{Kind: NetNSHost, Name: "should-not-be-set"},
+	}
+	if err := group.Validate(); err == nil {
+		t.Fatalf("Validate should reject host netns with name")
+	}
+	group = LinkGroupSpec{
+		ID:                "ipsec-main",
+		TunnelAddressPool: netip.MustParsePrefix("192.0.2.0/31"),
+	}
+	if _, _, err := group.TunnelAddresses(0); err == nil {
+		t.Fatalf("TunnelAddresses should reject a pool without two usable offsets")
+	}
+	group = LinkGroupSpec{
+		ID:              "ipsec-main",
+		DefaultPathMode: "single-best",
+	}
+	if err := group.Validate(); err == nil {
+		t.Fatalf("Validate should reject unsupported path mode")
+	}
+}
+
+func TestGenerateTransportKeyRecordUsesIndependentEd25519Key(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	zonePub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(zone): %v", err)
+	}
+	key, record, err := GenerateTransportKeyRecord("", now, time.Hour, zonePub)
+	if err != nil {
+		t.Fatalf("GenerateTransportKeyRecord: %v", err)
+	}
+	if key.Algorithm != AlgorithmEd25519 || record.Algorithm != AlgorithmEd25519 {
+		t.Fatalf("algorithm = %s / %s", key.Algorithm, record.Algorithm)
+	}
+	if len(key.PrivateKey) != ed25519.PrivateKeySize {
+		t.Fatalf("private key size = %d", len(key.PrivateKey))
+	}
+	publicKey, err := DecodeTransportPublicKey(*record)
+	if err != nil {
+		t.Fatalf("DecodeTransportPublicKey: %v", err)
+	}
+	if string(publicKey) == string(zonePub) {
+		t.Fatalf("transport key reused zone signing key")
+	}
+	if record.NotBefore != now.Unix() || record.NotAfter != now.Add(time.Hour).Unix() {
+		t.Fatalf("validity = %+v", record)
+	}
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
+func TestGenerateTransportKeyRecordSupportsECDSAP256Fallback(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	key, record, err := GenerateTransportKeyRecord(AlgorithmECDSAP256, now, 0)
+	if err != nil {
+		t.Fatalf("GenerateTransportKeyRecord(ECDSA): %v", err)
+	}
+	if key.Algorithm != AlgorithmECDSAP256 || record.Algorithm != AlgorithmECDSAP256 {
+		t.Fatalf("algorithm = %s / %s", key.Algorithm, record.Algorithm)
+	}
+	if len(key.PublicKey) == 0 || len(key.PrivateKey) == 0 {
+		t.Fatalf("empty key material")
+	}
+	if _, err := DecodeTransportPublicKey(*record); err != nil {
+		t.Fatalf("DecodeTransportPublicKey: %v", err)
+	}
+	if record.NotAfter != 0 {
+		t.Fatalf("NotAfter = %d, want 0", record.NotAfter)
+	}
+}
+
+func TestTransportKeyRecordRejectsZoneSigningKeyReuseAndFingerprintMismatch(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	zonePub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(zone): %v", err)
+	}
+	if _, err := NewTransportKeyRecord(AlgorithmEd25519, zonePub, now, 0, zonePub); err == nil {
+		t.Fatalf("NewTransportKeyRecord should reject zone signing key reuse")
+	}
+	_, record, err := GenerateTransportKeyRecord(AlgorithmEd25519, now, 0)
+	if err != nil {
+		t.Fatalf("GenerateTransportKeyRecord: %v", err)
+	}
+	record.Fingerprint = "wrong"
+	if _, err := DecodeTransportPublicKey(*record); err == nil {
+		t.Fatalf("DecodeTransportPublicKey should reject fingerprint mismatch")
 	}
 }
 

@@ -405,8 +405,8 @@
 - [ ] **4.1 StrongSwan / XFRM 控制模块**
   - [x] 定义 overlay/provider 分层：`MeshPolicy` 只描述“选择哪些 peer 形成哪类 overlay”；`OverlayProvider` 负责把 desired link 渲染为 StrongSwan/WireGuard/VXLAN 等具体系统配置；Phase 4 只实现 `provider=strongswan`，但内部模型不得把 mesh 选择逻辑写死到 IPsec driver
   - [x] 定义最小 `TransportLinkSpec`：local zone、peer zone、overlay id、provider、transport id、IKE identity、认证材料引用、`ContactPoint` candidates、XFRM `if_id`、interface name、本地/远端 tunnel address、目标 network namespace
-  - [ ] 定义 `LinkGroupSpec` / overlay group 模型：group id/name、provider、目标 netns、默认 path mode、方向、地址来源优先级、最大 peer/link 数、tunnel address pool、reconcile/backoff 策略；daemon 以 link group 为 desired-state 边界生成多条 `TransportLinkSpec`，避免把每条 peer link 都变成手工配置
-  - [ ] 认证材料不复用 Zone signing key；生成独立 IKE key/cert 或 raw public key，优先 Ed25519，兼容性不足时退到 ECDSA P-256，避免 RSA 长 key/大 record 体积
+  - [x] 定义 `LinkGroupSpec` / overlay group 模型：group id/name、provider、目标 netns、默认 path mode、方向、地址来源优先级、最大 peer/link 数、tunnel address pool、reconcile/backoff 策略；daemon 以 link group 为 desired-state 边界生成多条 `TransportLinkSpec`，避免把每条 peer link 都变成手工配置
+  - [x] 认证材料不复用 Zone signing key；生成独立 IKE key/cert 或 raw public key，优先 Ed25519，兼容性不足时退到 ECDSA P-256，避免 RSA 长 key/大 record 体积
   - [x] 通过 signed transport record 将 IKE public key / fingerprint 绑定到 Zone trust chain：Zone key 证明 transport key 属于该 Zone，IKE 握手只使用 transport key
   - [x] 定义 IPsec public profile record：节点公开 `ipsec/profile`，包含 `enabled`、IKE public key/fingerprint、公开 accept intent（`none` / `inbound` / `bidirectional`）、支持的 address family、path mode 能力、NAT/reachability hint；该 record 只表达“可被尝试连接的能力/意图”，不公开完整本地 mesh 规则或拓扑
   - [x] 定义 IPsec address advertisement record：节点公开 `ipsec/addresses`，地址与端口分开建模；地址来源支持 `manual-address`、`manual-dns`、`discovery`、`reflector`、`local`，并保留 family、scope/reachability、source、priority、TTL、DNS refresh interval、last_observed 等元数据
