@@ -393,14 +393,14 @@
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 IKEv2/IPsec SA，并通过 XFRM interface 暴露为普通三层链路。WireGuard 后移为可选轻量传输驱动，不作为动态路由主线。
 
-- [ ] **4.0 Admin 写操作 daemon 化 / 控制 API 补齐**
-  - [ ] 将 `delegate issue` client 化：daemon 存在时通过 control socket 提交 join request，由 daemon 持有父 Zone 私钥、签发 delegation、写 DB、输出 bundle；daemon 不存在时仅保留显式 recovery/direct 模式
-  - [ ] 将 `delegate revoke` client 化：由 daemon 串行写入 signed revocation/tombstone、清理 peer state、触发 outbound sync 和后续 apply hook
-  - [ ] 将 `join accept` 纳入本地 daemon/recovery 边界：普通节点 daemon 未运行时允许初始化；daemon 已运行时通过 control API 导入 bundle，避免旧 snapshot 覆盖运行态更新
-  - [ ] 梳理 `root init` / `root pubkey` / root delegation 的运行形态：root admin 可离线，但若启动 daemon，同样不能绕过本地单 writer
-  - [ ] 扩展 control API：`delegate_issue`、`delegate_revoke`、`join_accept`、`root_init` 或明确分级的 admin/recovery endpoint；返回结构化 JSON，CLI 负责人类可读输出和 bundle 文件写入
-  - [ ] 加入授权分级：只读 status/debug、普通 record 写入、admin delegation/revocation、root 操作分层；Unix socket 权限先落地，token/mTLS 留给远程控制
-  - [ ] 增加测试：daemon 运行期间并发 `record put` + `delegate issue/revoke` 不覆盖 state；撤销后 daemon 立即停止 relay/endpoint 使用该 Zone；admin daemon smoke 覆盖签发 bundle 后公网/多节点 gossip 收敛
+- [x] **4.0 Admin 写操作 daemon 化 / 控制 API 补齐**
+  - [x] 将 `delegate issue` client 化：daemon 存在时通过 control socket 提交 join request，由 daemon 持有父 Zone 私钥、签发 delegation、写 DB、返回结构化 bundle；CLI 负责人类可读输出和 bundle 文件写入；daemon 不存在时保留 direct/recovery 模式并输出明确提示
+  - [x] 将 `delegate revoke` client 化：由 daemon 串行写入 signed revocation/tombstone、清理 peer state、触发 outbound sync 和后续 apply hook
+  - [x] 将 `join accept` 纳入本地 daemon/recovery 边界：普通节点 daemon 未运行时允许初始化；daemon 已运行时通过 control API 导入 bundle，避免旧 snapshot 覆盖运行态更新
+  - [x] 梳理 `root init` / `root pubkey` / root delegation 的运行形态：`root init` 是 daemon 启动前的离线初始化；已有 daemon 加载 state 时拒绝 root 重置；root delegation 通过 `delegate_issue` 进入 root admin daemon 单 writer 边界
+  - [x] 扩展 control API：`delegate_issue`、`delegate_revoke`、`join_accept`、`root_init` guard；返回结构化 JSON，CLI 负责人类可读输出和 bundle 文件写入
+  - [x] 加入授权分级第一版：只做本机 Unix socket，socket 文件权限 `0600`；远程 token/mTLS 留给后续远程管理阶段
+  - [x] 增加测试：daemon admin 事件覆盖 `delegate issue` / `join accept` / `delegate revoke` 串行落盘；root init control guard 覆盖已运行 daemon 不可重置；`admin-daemon-smoke` 覆盖 root/catofes daemon 签发 bundle 和撤销
 
 - [ ] **4.1 StrongSwan / XFRM 控制模块**
   - [ ] 定义 overlay/provider 分层：`MeshPolicy` 只描述“选择哪些 peer 形成哪类 overlay”；`OverlayProvider` 负责把 desired link 渲染为 StrongSwan/WireGuard/VXLAN 等具体系统配置；Phase 4 只实现 `provider=strongswan`，但内部模型不得把 mesh 选择逻辑写死到 IPsec driver

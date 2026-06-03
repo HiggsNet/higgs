@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -200,6 +202,199 @@ func TestDaemonRecordPutReloadsLatestStateBeforeSave(t *testing.T) {
 	}
 }
 
+func TestBuildSignedRecordReturnsErrorWithoutLocalSigner(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.ManagedZone = "node-a.catofes."
+	state.ZonePrivateKey = nil
+
+	_, err := buildSignedRecordAt(state, "node-b.catofes.", "identity", []byte("node-b"), "policy.string", time.Unix(1, 0))
+	if err == nil || !strings.Contains(err.Error(), "no local signing key") {
+		t.Fatalf("buildSignedRecordAt error = %v, want missing signer", err)
+	}
+}
+
+func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
+	now := time.Unix(6000, 0)
+	rootRT := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "root.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if _, err := initRootStateInRuntime(rootRT); err != nil {
+		t.Fatalf("initRootStateInRuntime: %v", err)
+	}
+	rootState, err := rootRT.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(root): %v", err)
+	}
+	service := newDaemonService(rootRT, rootState, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+
+	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(catofes): %v", err)
+	}
+	catofesRequest := &joinRequest{Version: 1, Zone: "catofes.", PublicKey: catofesPub}
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventDelegateIssue, JoinRequest: catofesRequest})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(delegate_issue catofes): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("delegate_issue syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	if result.JoinBundle == nil || result.JoinBundle.Zone != "catofes." {
+		t.Fatalf("delegate_issue bundle = %#v", result.JoinBundle)
+	}
+
+	catofesKey := &privateKeyFile{Type: "higgs.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}
+	result, syncNow, shutdown = service.handleEvent(daemonEvent{
+		Type:       daemonEventJoinAccept,
+		JoinBundle: result.JoinBundle,
+		PrivateKey: catofesKey,
+	})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(join_accept catofes): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("join_accept syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	if result.Zone != "catofes." {
+		t.Fatalf("join_accept zone = %s, want catofes.", result.Zone)
+	}
+
+	nodePub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-b): %v", err)
+	}
+	nodeRequest := &joinRequest{Version: 1, Zone: "node-b.catofes.", PublicKey: nodePub}
+	result, _, _ = service.handleEvent(daemonEvent{Type: daemonEventDelegateIssue, JoinRequest: nodeRequest})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(delegate_issue node-b): %v", result.Error)
+	}
+	if result.JoinBundle == nil || result.JoinBundle.Zone != "node-b.catofes." {
+		t.Fatalf("node-b bundle = %#v", result.JoinBundle)
+	}
+
+	result, syncNow, shutdown = service.handleEvent(daemonEvent{
+		Type:   daemonEventDelegateRevoke,
+		Zone:   "node-b.catofes.",
+		Reason: "test revoke",
+	})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(delegate_revoke): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("delegate_revoke syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	latest, err := rootRT.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(latest): %v", err)
+	}
+	parent := latest.Network.Zones[zone.ZonePath("catofes.")]
+	if parent == nil || parent.Revocations["node-b.catofes."] == nil {
+		t.Fatalf("node-b revocation was not persisted")
+	}
+	if parent.Delegations["node-b.catofes."] != nil {
+		t.Fatalf("node-b delegation still active after revoke")
+	}
+}
+
+func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
+	now := time.Unix(7000, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "catofes.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if _, err := initRootStateInRuntime(rt); err != nil {
+		t.Fatalf("initRootStateInRuntime: %v", err)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(root): %v", err)
+	}
+	service := newDaemonService(rt, state, &syncConfigFile{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+
+	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(catofes): %v", err)
+	}
+	catofesIssue, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "catofes.", PublicKey: catofesPub})
+	if err != nil {
+		t.Fatalf("handleDelegateIssueEvent(catofes): %v", err)
+	}
+	if _, err := service.handleJoinAcceptEvent(catofesIssue.Bundle, &privateKeyFile{Type: "higgs.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}); err != nil {
+		t.Fatalf("handleJoinAcceptEvent(catofes): %v", err)
+	}
+
+	nodeBPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-b): %v", err)
+	}
+	if _, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "node-b.catofes.", PublicKey: nodeBPub}); err != nil {
+		t.Fatalf("handleDelegateIssueEvent(node-b): %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pumpDaemonEvents(ctx, service)
+
+	nodeCPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-c): %v", err)
+	}
+	events := []daemonEvent{
+		{
+			Type: daemonEventRecordPut,
+			RecordPut: &daemonRecordPut{
+				Zone:  "catofes.",
+				Key:   "admin-note",
+				Value: []byte("kept"),
+				Type:  "policy.string",
+			},
+		},
+		{
+			Type:        daemonEventDelegateIssue,
+			JoinRequest: &joinRequest{Version: 1, Zone: "node-c.catofes.", PublicKey: nodeCPub},
+		},
+		{
+			Type:   daemonEventDelegateRevoke,
+			Zone:   "node-b.catofes.",
+			Reason: "concurrent test",
+		},
+	}
+	errs := make(chan error, len(events))
+	var wg sync.WaitGroup
+	for _, event := range events {
+		wg.Add(1)
+		go func(event daemonEvent) {
+			defer wg.Done()
+			errs <- service.enqueueEvent(ctx, event).Error
+		}(event)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent daemon event failed: %v", err)
+		}
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(latest): %v", err)
+	}
+	catofes := latest.Network.Zones[zone.ZonePath("catofes.")]
+	if catofes.Records["admin-note"] == nil {
+		t.Fatalf("record_put result missing after concurrent admin events")
+	}
+	if catofes.Delegations["node-c.catofes."] == nil {
+		t.Fatalf("delegate_issue result missing after concurrent record_put")
+	}
+	if catofes.Revocations["node-b.catofes."] == nil {
+		t.Fatalf("delegate_revoke result missing after concurrent record_put")
+	}
+}
+
 func TestDaemonRemoteAppliedEventUpdatesPeerState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	rt := &Runtime{
@@ -255,6 +450,11 @@ func TestDaemonControlErrorResponses(t *testing.T) {
 	response = controlRequestViaPipe(t, service, controlRequest{Method: "bogus"})
 	if response.OK || response.Error == "" {
 		t.Fatalf("unknown method response = %#v, want error", response)
+	}
+
+	response = controlRequestViaPipe(t, service, controlRequest{Method: "root_init"})
+	if response.OK || response.Error == "" {
+		t.Fatalf("root_init response = %#v, want error", response)
 	}
 }
 

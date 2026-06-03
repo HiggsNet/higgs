@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -11,7 +11,7 @@ GO_MOD_CACHE ?= /tmp/higgs-gomodcache
 LDFLAGS := -s -w
 CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
-SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke
+SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke
 
 all: build
 
@@ -319,6 +319,48 @@ phase3-daemon-fallback-smoke: build
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase3 daemon fallback smoke passed"
+
+# admin-daemon-smoke 流程：
+# 1. root admin 离线初始化 "."，随后启动 root admin daemon。
+# 2. catofes. 生成 join request，并通过 root admin control socket 签发 bundle。
+# 3. catofes. 导入 bundle 后启动自己的 daemon。
+# 4. node-b 生成 join request，并通过 catofes. control socket 签发 leaf bundle。
+# 5. 通过 catofes. control socket 撤销 node-b，验证 revocation 持久化且 direct delegation 被清理。
+admin-daemon-smoke: build
+	@set -eu; \
+	tmp="$${TMPDIR:-/tmp}/higgs-admin-daemon-smoke"; \
+	rm -rf "$$tmp"; \
+	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/node-b"; \
+	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33540' > "$$tmp/admin/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33541' > "$$tmp/catofes/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/node-b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33542' > "$$tmp/node-b/config.yaml"; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
+	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
+	for node in catofes node-b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
+	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/admin.log" 2>&1 & admin_pid="$$!"; \
+	trap 'status="$$?"; kill "$$admin_pid" "$${catofes_pid:-}" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/admin.log" "$$tmp/catofes.log" "$$tmp/catofes-issue.out" "$$tmp/node-b-issue.out" "$$tmp/revoke.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/admin/higgs.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/admin/higgs.sock" ]; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/catofes.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >"$$tmp/catofes-issue.out"; \
+	grep -q 'via daemon' "$$tmp/catofes-issue.out"; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	HIGGS_CONTROL_SOCKET="$$tmp/catofes/higgs.sock" HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/catofes/higgs.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/catofes/higgs.sock" ]; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-b.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	HIGGS_CONTROL_SOCKET="$$tmp/catofes/higgs.sock" HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >"$$tmp/node-b-issue.out"; \
+	grep -q 'via daemon' "$$tmp/node-b-issue.out"; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
+	HIGGS_CONTROL_SOCKET="$$tmp/catofes/higgs.sock" HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate revoke node-b.catofes. admin-daemon-smoke >"$$tmp/revoke.out"; \
+	grep -q 'via daemon' "$$tmp/revoke.out"; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked'; \
+	if HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
+	kill "$$admin_pid" "$$catofes_pid" >/dev/null 2>&1 || true; \
+	echo "Admin daemon smoke passed"
 
 # multi-node-smoke 流程：
 # 1. 准备 A/B/C 三节点，A 作为 hub，B/C 只通过 A 同步。

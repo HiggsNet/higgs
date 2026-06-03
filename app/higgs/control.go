@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,20 +17,27 @@ import (
 const controlSocketName = "higgs.sock"
 
 type controlRequest struct {
-	Method    string `json:"method"`
-	Zone      string `json:"zone,omitempty"`
-	Key       string `json:"key,omitempty"`
-	Value     []byte `json:"value,omitempty"`
-	ValueText string `json:"value_text,omitempty"`
-	Type      string `json:"type,omitempty"`
+	Method      string          `json:"method"`
+	Zone        string          `json:"zone,omitempty"`
+	Key         string          `json:"key,omitempty"`
+	Value       []byte          `json:"value,omitempty"`
+	ValueText   string          `json:"value_text,omitempty"`
+	Type        string          `json:"type,omitempty"`
+	Reason      string          `json:"reason,omitempty"`
+	JoinRequest *joinRequest    `json:"join_request,omitempty"`
+	JoinBundle  *joinBundle     `json:"join_bundle,omitempty"`
+	PrivateKey  *privateKeyFile `json:"private_key,omitempty"`
 }
 
 type controlResponse struct {
-	OK      bool   `json:"ok"`
-	Error   string `json:"error,omitempty"`
-	PeerID  string `json:"peer_id,omitempty"`
-	Version uint64 `json:"version,omitempty"`
-	Message string `json:"message,omitempty"`
+	OK            bool              `json:"ok"`
+	Error         string            `json:"error,omitempty"`
+	PeerID        string            `json:"peer_id,omitempty"`
+	Version       uint64            `json:"version,omitempty"`
+	Message       string            `json:"message,omitempty"`
+	Zone          zone.ZonePath     `json:"zone,omitempty"`
+	RootPublicKey ed25519.PublicKey `json:"root_public_key,omitempty"`
+	JoinBundle    *joinBundle       `json:"join_bundle,omitempty"`
 }
 
 func controlSocketPath(config *appConfig) string {
@@ -97,6 +105,61 @@ func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []by
 	return response.Version, true, nil
 }
 
+func issueDelegationViaControl(rt *Runtime, request *joinRequest) (*joinBundle, bool, error) {
+	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+		Method:      "delegate_issue",
+		JoinRequest: request,
+	})
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	if response.JoinBundle == nil {
+		return nil, true, errors.New("daemon delegate_issue response missing join bundle")
+	}
+	return response.JoinBundle, true, nil
+}
+
+func revokeDelegationViaControl(rt *Runtime, path zone.ZonePath, reason string) (bool, error) {
+	_, ok, err := sendAdminControlRequest(rt, controlRequest{
+		Method: "delegate_revoke",
+		Zone:   path.String(),
+		Reason: reason,
+	})
+	return ok, err
+}
+
+func acceptJoinBundleViaControl(rt *Runtime, bundle *joinBundle, key *privateKeyFile) (bool, error) {
+	_, ok, err := sendAdminControlRequest(rt, controlRequest{
+		Method:     "join_accept",
+		JoinBundle: bundle,
+		PrivateKey: key,
+	})
+	return ok, err
+}
+
+func initRootViaControl(rt *Runtime) (ed25519.PublicKey, bool, error) {
+	response, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "root_init"})
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return response.RootPublicKey, true, nil
+}
+
+func sendAdminControlRequest(rt *Runtime, request controlRequest) (*controlResponse, bool, error) {
+	socketPath := controlSocketPath(nil)
+	if rt != nil {
+		socketPath = controlSocketPath(rt.Config)
+	}
+	response, err := sendControlRequest(socketPath, request)
+	if err != nil {
+		if isControlSocketUnavailable(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	return response, true, nil
+}
+
 func isControlSocketUnavailable(err error) bool {
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
@@ -138,4 +201,28 @@ func validateControlRecordPut(request controlRequest) error {
 		return fmt.Errorf("record_put requires type")
 	}
 	return nil
+}
+
+func validateControlDelegateIssue(request controlRequest) error {
+	if request.JoinRequest == nil {
+		return errors.New("delegate_issue requires join_request")
+	}
+	return validateJoinRequest(request.JoinRequest)
+}
+
+func validateControlDelegateRevoke(request controlRequest) error {
+	if zone.ZonePath(request.Zone) == "" {
+		return errors.New("delegate_revoke requires zone")
+	}
+	return nil
+}
+
+func validateControlJoinAccept(request controlRequest) error {
+	if request.JoinBundle == nil {
+		return errors.New("join_accept requires join_bundle")
+	}
+	if request.PrivateKey == nil {
+		return errors.New("join_accept requires private_key")
+	}
+	return validatePrivateKeyFile(request.PrivateKey)
 }

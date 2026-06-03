@@ -705,6 +705,31 @@ func TestReflectorEndpointPublishSmoke(t *testing.T) {
 	}
 }
 
+func TestEndpointPublishSkipsRootAdminState(t *testing.T) {
+	dir := t.TempDir()
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(dir, "root.db"),
+		Clock:     func() time.Time { return time.Unix(1000, 0) },
+	}
+	if _, err := initRootStateInRuntime(rt); err != nil {
+		t.Fatalf("initRootStateInRuntime: %v", err)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(root): %v", err)
+	}
+	config := &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:33540"}
+	sr := newSyncRuntime(state, config, nil, rt)
+
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(root): %v", err)
+	}
+	if record := state.Network.Zones[zone.RootZone].Records[gossip.EndpointRecordKeyUDP]; record != nil {
+		t.Fatalf("root admin unexpectedly published endpoint record")
+	}
+}
+
 func endpointRecordFromState(t *testing.T, state *stateFile, path zone.ZonePath) gossip.EndpointRecord {
 	t.Helper()
 	zs := state.Network.Zones[path]

@@ -626,9 +626,11 @@ Phase 3 daemon 写入与 fallback 可以直接跑：
 ```bash
 make phase3-daemon-smoke
 make phase3-daemon-fallback-smoke
+make admin-daemon-smoke
 ```
 
 前者验证 CLI `record put` 通过 daemon control socket 提交后，由 daemon 串行写入 DB、唤醒 outbound sync，并让远端收敛；后者验证 daemon 停止时 CLI 直接写 DB 的开发/恢复模式仍可用，下一次 daemon 启动后能加载并传播。
+`admin-daemon-smoke` 验证 root/catofes 管理端 daemon 运行时，`delegate issue` 和 `delegate revoke` 会经 control socket 串行写入 state，并由 CLI 负责把 daemon 返回的 bundle 写到文件。
 
 Phase 3.6 的大 record / MTU-safe object pull 可以直接跑：
 
@@ -644,9 +646,9 @@ make object-pull-smoke
 
 ## 下一步方向
 
-Phase 3 的最小 daemon / 单 writer 边界已经收敛：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交写命令，daemon 不存在时保留直接写 DB 的开发/恢复模式。
+Phase 3 的最小 daemon / 单 writer 边界已经收敛，Phase 4.0 的 admin 写操作 daemon 化也已经落地：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交 `record put`、`delegate issue`、`delegate revoke` 和 `join accept`，daemon 不存在时保留直接写 DB 的开发/恢复模式。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
-下一步先完成 Phase 4.0：把 `delegate issue`、`delegate revoke`、`join accept` 和 root/admin 管理写入也纳入 daemon control API。之后进入 Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块：由 daemon 监听 active state 变更，推导 peer view / TransportLink，通过 VICI 控制 StrongSwan，并用 netlink 管理 XFRM interface、地址和路由；WireGuard 后移为可选轻量传输驱动。
+下一步进入 Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块：由 daemon 监听 active state 变更，推导 peer view / TransportLink，通过 VICI 控制 StrongSwan，并用 netlink 管理 XFRM interface、地址和路由；WireGuard 后移为可选轻量传输驱动。
 
 ## CLI 汇总
 

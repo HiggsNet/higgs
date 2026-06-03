@@ -829,6 +829,9 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 	if config != nil && config.DisableEndpointPublish {
 		return nil
 	}
+	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 {
+		return nil
+	}
 	port := listenPortFromAddr(config.ListenAddr)
 	endpoints, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
 	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(config.Reflectors)) > 0 {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"fmt"
 	"os"
 	"time"
@@ -67,8 +68,37 @@ func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value
 		record.Version = current.Version + 1
 		record.PrevHash = higgscrypto.RecordHash(current)
 	}
-	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+	signer, err := signingKeyForZone(state, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := higgscrypto.SignRecord(record, signer); err != nil {
 		return nil, err
 	}
 	return record, nil
+}
+
+func signingKeyForZone(state *stateFile, path zone.ZonePath) (ed25519.PrivateKey, error) {
+	if state == nil || state.Network == nil {
+		return nil, fmt.Errorf("state is nil")
+	}
+	zs := state.Network.Zones[path]
+	if zs == nil || zs.Authority == nil {
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	if len(state.RootPrivateKey) == ed25519.PrivateKeySize && authorityHasPrivateKey(zs.Authority, state.RootPrivateKey) {
+		return state.RootPrivateKey, nil
+	}
+	if len(state.ZonePrivateKey) == ed25519.PrivateKeySize && authorityHasPrivateKey(zs.Authority, state.ZonePrivateKey) {
+		return state.ZonePrivateKey, nil
+	}
+	return nil, fmt.Errorf("no local signing key for zone %s", path)
+}
+
+func authorityHasPrivateKey(authority *zone.ZoneAuthority, priv ed25519.PrivateKey) bool {
+	if authority == nil || len(priv) != ed25519.PrivateKeySize {
+		return false
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	return authorityHasKey(authority, pub)
 }

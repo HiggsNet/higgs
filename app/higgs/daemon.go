@@ -29,18 +29,27 @@ type DaemonHooks struct {
 type daemonEventType string
 
 const (
-	daemonEventRecordPut     daemonEventType = "record_put"
-	daemonEventPacket        daemonEventType = "packet"
-	daemonEventSyncTimer     daemonEventType = "timer_sync"
-	daemonEventEndpointTimer daemonEventType = "timer_endpoint_publish"
-	daemonEventRemoteApplied daemonEventType = "remote_announce_applied"
-	daemonEventSyncTrigger   daemonEventType = "sync_trigger"
-	daemonEventShutdown      daemonEventType = "shutdown"
+	daemonEventRecordPut      daemonEventType = "record_put"
+	daemonEventDelegateIssue  daemonEventType = "delegate_issue"
+	daemonEventDelegateRevoke daemonEventType = "delegate_revoke"
+	daemonEventJoinAccept     daemonEventType = "join_accept"
+	daemonEventRootInit       daemonEventType = "root_init"
+	daemonEventPacket         daemonEventType = "packet"
+	daemonEventSyncTimer      daemonEventType = "timer_sync"
+	daemonEventEndpointTimer  daemonEventType = "timer_endpoint_publish"
+	daemonEventRemoteApplied  daemonEventType = "remote_announce_applied"
+	daemonEventSyncTrigger    daemonEventType = "sync_trigger"
+	daemonEventShutdown       daemonEventType = "shutdown"
 )
 
 type daemonEvent struct {
 	Type         daemonEventType
 	RecordPut    *daemonRecordPut
+	JoinRequest  *joinRequest
+	JoinBundle   *joinBundle
+	PrivateKey   *privateKeyFile
+	Zone         zone.ZonePath
+	Reason       string
 	Packet       *gossip.Packet
 	SourcePeerID string
 	ForceSync    bool
@@ -56,8 +65,11 @@ type daemonRecordPut struct {
 }
 
 type daemonEventResult struct {
-	Version uint64
-	Error   error
+	Version       uint64
+	Zone          zone.ZonePath
+	RootPublicKey []byte
+	JoinBundle    *joinBundle
+	Error         error
 }
 
 func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
@@ -247,6 +259,52 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
+	case "delegate_issue":
+		if err := validateControlDelegateIssue(request); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type:        daemonEventDelegateIssue,
+			JoinRequest: request.JoinRequest,
+		})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Zone: result.Zone, JoinBundle: result.JoinBundle})
+	case "delegate_revoke":
+		if err := validateControlDelegateRevoke(request); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type:   daemonEventDelegateRevoke,
+			Zone:   zone.ZonePath(request.Zone),
+			Reason: request.Reason,
+		})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Zone: result.Zone})
+	case "join_accept":
+		if err := validateControlJoinAccept(request); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type:       daemonEventJoinAccept,
+			JoinBundle: request.JoinBundle,
+			PrivateKey: request.PrivateKey,
+		})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Zone: result.Zone, RootPublicKey: result.RootPublicKey})
+	case "root_init":
+		writeControlResponse(conn, controlError(errors.New("root init via daemon is only valid before a daemon has loaded state; stop the daemon and run root init as recovery/direct initialization")))
 	case "sync_trigger":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventSyncTrigger})
 		if result.Error != nil {
@@ -310,6 +368,24 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventRecordPut:
 		version, err := d.handleRecordPutEvent(event.RecordPut)
 		return daemonEventResult{Version: version, Error: err}, err == nil, false
+	case daemonEventDelegateIssue:
+		result, err := d.handleDelegateIssueEvent(event.JoinRequest)
+		if err != nil {
+			return daemonEventResult{Error: err}, false, false
+		}
+		return daemonEventResult{Zone: result.Zone, JoinBundle: result.Bundle}, true, false
+	case daemonEventDelegateRevoke:
+		err := d.handleDelegateRevokeEvent(event.Zone, event.Reason)
+		return daemonEventResult{Zone: event.Zone, Error: err}, err == nil, false
+	case daemonEventJoinAccept:
+		result, err := d.handleJoinAcceptEvent(event.JoinBundle, event.PrivateKey)
+		if err != nil {
+			return daemonEventResult{Error: err}, false, false
+		}
+		return daemonEventResult{Zone: result.Zone, RootPublicKey: result.RootPublicKey}, true, false
+	case daemonEventRootInit:
+		rootKey, err := d.handleRootInitEvent()
+		return daemonEventResult{Zone: zone.RootZone, RootPublicKey: rootKey, Error: err}, false, false
 	case daemonEventPacket:
 		return daemonEventResult{Error: d.handlePacketEvent(event.Packet, controlContext(event.Context))}, false, false
 	case daemonEventSyncTimer:
@@ -326,6 +402,66 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	default:
 		return daemonEventResult{Error: fmt.Errorf("unknown daemon event: %s", event.Type)}, false, false
 	}
+}
+
+func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest) (*delegationIssueResult, error) {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return nil, err
+	}
+	d.setState(latest)
+	result, err := issueDelegationInState(d.Sync.App, d.Sync.State, request)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.Sync.saveState(); err != nil {
+		return nil, err
+	}
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return result, nil
+}
+
+func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason string) error {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return err
+	}
+	d.setState(latest)
+	if err := revokeDelegationInState(d.Sync.App, d.Sync.State, path, reason); err != nil {
+		return err
+	}
+	if err := d.Sync.saveState(); err != nil {
+		return err
+	}
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return nil
+}
+
+func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
+	result, err := acceptJoinBundleInState(d.Sync.App, bundle, key)
+	if err != nil {
+		return nil, err
+	}
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return nil, err
+	}
+	d.setState(latest)
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return result, nil
+}
+
+func (d *DaemonService) handleRootInitEvent() ([]byte, error) {
+	return nil, errors.New("root init via daemon is only valid before a daemon has loaded state; stop the daemon and run root init as recovery/direct initialization")
 }
 
 func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Context) error {

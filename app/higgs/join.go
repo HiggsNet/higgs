@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -27,6 +28,16 @@ type joinBundle struct {
 	Zone          zone.ZonePath      `json:"zone"`
 	RootPublicKey ed25519.PublicKey  `json:"root_public_key"`
 	Network       *zone.NetworkState `json:"network"`
+}
+
+type delegationIssueResult struct {
+	Zone   zone.ZonePath
+	Bundle *joinBundle
+}
+
+type joinAcceptResult struct {
+	Zone          zone.ZonePath
+	RootPublicKey ed25519.PublicKey
 }
 
 func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error {
@@ -54,31 +65,57 @@ func issueDelegation(requestPath string, outPath string) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
 	var request joinRequest
 	if err := readJSONFile(requestPath, &request); err != nil {
 		return err
 	}
-	if request.Version != 1 {
-		return fmt.Errorf("unsupported join request version: %d", request.Version)
+	if err := validateJoinRequest(&request); err != nil {
+		return err
 	}
-	if !request.Zone.Valid() || request.Zone == zone.RootZone {
-		return fmt.Errorf("invalid join zone: %s", request.Zone)
+	bundle, controlled, err := issueDelegationViaControl(rt, &request)
+	if err != nil {
+		return err
 	}
-	if len(request.PublicKey) != ed25519.PublicKeySize {
-		return errors.New("join request public key is invalid")
+	if controlled {
+		if err := writeJSONFile(outPath, 0o644, bundle); err != nil {
+			return err
+		}
+		fmt.Printf("issued delegation for %s via daemon\n", request.Zone)
+		fmt.Printf("wrote join bundle: %s\n", outPath)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; issuing delegation directly")
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	result, err := issueDelegationInState(rt, state, &request)
+	if err != nil {
+		return err
+	}
+	if err := rt.SaveState(state); err != nil {
+		return err
+	}
+	if err := writeJSONFile(outPath, 0o644, result.Bundle); err != nil {
+		return err
+	}
+	fmt.Printf("issued delegation for %s\n", request.Zone)
+	fmt.Printf("wrote join bundle: %s\n", outPath)
+	return nil
+}
+
+func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest) (*delegationIssueResult, error) {
+	if err := validateJoinRequest(request); err != nil {
+		return nil, err
 	}
 	parent := request.Zone.Parent()
 	parentState := state.Network.Zones[parent]
 	if parentState == nil || parentState.Authority == nil {
-		return fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
+		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
 	}
 	signer, err := signerForParent(state, parent)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	authorityEpoch := uint64(1)
@@ -104,21 +141,18 @@ func issueDelegation(requestPath string, outPath string) error {
 		Authority: *authority,
 	}
 	if err := higgscrypto.SignDelegation(delegation, parent, signer); err != nil {
-		return err
+		return nil, err
 	}
 	parentState.Delegations[request.Zone] = delegation
 	state.Network.Zones[request.Zone] = zone.NewZoneState(request.Zone, authority)
 	configureValidation(state.Network)
 	if err := higgscrypto.VerifyChain(state.Network, request.Zone, rt.Now()); err != nil {
-		return err
-	}
-	if err := rt.SaveState(state); err != nil {
-		return err
+		return nil, err
 	}
 
 	rootKey, err := rootPublicKey(state.Network)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	bundle := joinBundle{
 		Version:       1,
@@ -126,12 +160,7 @@ func issueDelegation(requestPath string, outPath string) error {
 		RootPublicKey: rootKey,
 		Network:       cloneNetworkForBundle(state.Network),
 	}
-	if err := writeJSONFile(outPath, 0o644, &bundle); err != nil {
-		return err
-	}
-	fmt.Printf("issued delegation for %s\n", request.Zone)
-	fmt.Printf("wrote join bundle: %s\n", outPath)
-	return nil
+	return &delegationIssueResult{Zone: request.Zone, Bundle: &bundle}, nil
 }
 
 func revokeDelegation(path zone.ZonePath, reason string) error {
@@ -139,10 +168,30 @@ func revokeDelegation(path zone.ZonePath, reason string) error {
 	if err != nil {
 		return err
 	}
+	controlled, err := revokeDelegationViaControl(rt, path, reason)
+	if err != nil {
+		return err
+	}
+	if controlled {
+		fmt.Printf("revoked delegation for %s via daemon\n", path)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; revoking delegation directly")
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
 	}
+	if err := revokeDelegationInState(rt, state, path, reason); err != nil {
+		return err
+	}
+	if err := rt.SaveState(state); err != nil {
+		return err
+	}
+	fmt.Printf("revoked delegation for %s\n", path)
+	return nil
+}
+
+func revokeDelegationInState(rt *Runtime, state *stateFile, path zone.ZonePath, reason string) error {
 	if !path.Valid() || path == zone.RootZone {
 		return fmt.Errorf("invalid revoke zone: %s", path)
 	}
@@ -191,10 +240,6 @@ func revokeDelegation(path zone.ZonePath, reason string) error {
 	parentState.Revocations[path] = revocation
 	delete(parentState.Delegations, path)
 	cleanupRevokedPeerState(state, path)
-	if err := rt.SaveState(state); err != nil {
-		return err
-	}
-	fmt.Printf("revoked delegation for %s\n", path)
 	return nil
 }
 
@@ -207,27 +252,50 @@ func acceptJoinBundle(bundlePath string, keyPath string) error {
 	if err := readJSONFile(bundlePath, &bundle); err != nil {
 		return err
 	}
-	if bundle.Version != 1 {
-		return fmt.Errorf("unsupported join bundle version: %d", bundle.Version)
-	}
-	if bundle.Network == nil {
-		return errors.New("join bundle network is nil")
-	}
 	key, err := readPrivateKeyFile(keyPath)
 	if err != nil {
 		return err
 	}
+	controlled, err := acceptJoinBundleViaControl(rt, &bundle, key)
+	if err != nil {
+		return err
+	}
+	if controlled {
+		fmt.Printf("joined %s via daemon in %s\n", bundle.Zone, rt.StatePath)
+		fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; accepting join bundle directly")
+	result, err := acceptJoinBundleInState(rt, &bundle, key)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("joined %s in %s\n", result.Zone, rt.StatePath)
+	fmt.Printf("trusted root public key: %s\n", formatPublicKey(result.RootPublicKey))
+	return nil
+}
+
+func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
+	if bundle.Version != 1 {
+		return nil, fmt.Errorf("unsupported join bundle version: %d", bundle.Version)
+	}
+	if bundle.Network == nil {
+		return nil, errors.New("join bundle network is nil")
+	}
+	if err := validatePrivateKeyFile(key); err != nil {
+		return nil, err
+	}
 	zs := bundle.Network.Zones[bundle.Zone]
 	if zs == nil || zs.Authority == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, bundle.Zone)
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, bundle.Zone)
 	}
 	if !authorityHasKey(zs.Authority, key.PublicKey) {
-		return errors.New("private key does not match delegated zone authority")
+		return nil, errors.New("private key does not match delegated zone authority")
 	}
 	configureValidation(bundle.Network)
 	normalizeState(bundle.Network)
 	if err := higgscrypto.VerifyChain(bundle.Network, bundle.Zone, rt.Now()); err != nil {
-		return err
+		return nil, err
 	}
 	state := &stateFile{
 		ManagedZone:    bundle.Zone,
@@ -235,12 +303,9 @@ func acceptJoinBundle(bundlePath string, keyPath string) error {
 		Network:        bundle.Network,
 	}
 	if err := rt.SaveState(state); err != nil {
-		return err
+		return nil, err
 	}
-	path := rt.StatePath
-	fmt.Printf("joined %s in %s\n", bundle.Zone, path)
-	fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
-	return nil
+	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: bundle.RootPublicKey}, nil
 }
 
 func cleanupRevokedPeerState(state *stateFile, revoked zone.ZonePath) {
@@ -301,17 +366,43 @@ func readPrivateKeyFile(path string) (*privateKeyFile, error) {
 	if err := readJSONFile(path, &key); err != nil {
 		return nil, err
 	}
+	if err := validatePrivateKeyFile(&key); err != nil {
+		return nil, err
+	}
+	return &key, nil
+}
+
+func validatePrivateKeyFile(key *privateKeyFile) error {
+	if key == nil {
+		return errors.New("private key is nil")
+	}
 	if key.Type != "higgs.ed25519.private.v1" {
-		return nil, errors.New("unsupported key file type")
+		return errors.New("unsupported key file type")
 	}
 	if len(key.PrivateKey) != ed25519.PrivateKeySize || len(key.PublicKey) != ed25519.PublicKeySize {
-		return nil, errors.New("invalid ed25519 key file")
+		return errors.New("invalid ed25519 key file")
 	}
 	derived := key.PrivateKey.Public().(ed25519.PublicKey)
 	if !equalPublicKey(derived, key.PublicKey) {
-		return nil, errors.New("private key does not match public key")
+		return errors.New("private key does not match public key")
 	}
-	return &key, nil
+	return nil
+}
+
+func validateJoinRequest(request *joinRequest) error {
+	if request == nil {
+		return errors.New("join request is nil")
+	}
+	if request.Version != 1 {
+		return fmt.Errorf("unsupported join request version: %d", request.Version)
+	}
+	if !request.Zone.Valid() || request.Zone == zone.RootZone {
+		return fmt.Errorf("invalid join zone: %s", request.Zone)
+	}
+	if len(request.PublicKey) != ed25519.PublicKeySize {
+		return errors.New("join request public key is invalid")
+	}
+	return nil
 }
 
 func cloneNetworkForBundle(ns *zone.NetworkState) *zone.NetworkState {

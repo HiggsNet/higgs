@@ -19,14 +19,13 @@ docs/scripts/public-gossip-node.sh
 
 ## 当前边界
 
-Phase 3 已经让普通 `record put`、endpoint publish、sync apply、timer tick 进入 daemon 单 writer 边界。但 admin 管理写操作仍是后续 Phase 4.0 待办：
+Phase 4.0 已经让 admin 管理写操作优先进入 daemon 单 writer/control API 边界：
 
 - `delegate issue`
 - `delegate revoke`
 - `join accept`
-- `root init`
 
-因此本公网测试中，admin 签发 delegation / bundle 仍使用 CLI 直接写 admin DB。生产化前应完成 Phase 4.0，将这些写操作也纳入 daemon control API。
+如果对应目录的 daemon 已运行，CLI 会通过本机 control socket 提交请求，并由 daemon 串行写 DB；如果 daemon 不存在，则保留 direct 写 DB 的开发/恢复模式并输出提示。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
 ## 测试拓扑
 
