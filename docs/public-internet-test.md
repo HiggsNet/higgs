@@ -1,20 +1,21 @@
 # Public Internet Daemon Gossip Test
 
-本文档用于在真实公网的若干 Linux 节点之间验证 Phase 3 daemon gossip 收敛。目标不是模拟本机 smoke，而是在真实 UDP 网络、真实公网地址、真实 bootstrap 配置下验证：
+本文档用于在真实公网 Linux 节点之间验证 Phase 3 daemon gossip 收敛。它不是本机 smoke 的替代品，而是一次真实网络演练：真实 UDP、真实公网地址、真实 bootstrap、真实 daemon。
 
-- 多节点都运行 `higgs daemon`
-- signed endpoint record 能在公网传播
-- CLI `record put` 通过 daemon control socket 写入后能触发 outbound sync
-- 节点重启后能从 bootstrap / discovered peers 重新收敛
-- admin 签发 delegation 后，普通节点不接触 root/admin 私钥
+最短路径只需要四类动作：
 
-辅助脚本位于：
+1. admin 机器初始化 root 和 `catofes.` 管理 Zone。
+2. 每个公网节点生成自己的配置和 join request。
+3. admin 批量签发 bundle。
+4. 各节点接受 bundle、启动 daemon、写 record、验证收敛。
+
+配套脚本：
 
 ```bash
 docs/scripts/public-gossip-node.sh
 ```
 
-脚本只是把现有 CLI 命令固定成可重复流程；不会绕过 Higgs 的签名链或信任模型。
+脚本只是把现有 CLI 命令组合成可重复流程；不会绕过 Higgs 的签名链或信任模型。
 
 ## 当前边界
 
@@ -25,11 +26,11 @@ Phase 3 已经让普通 `record put`、endpoint publish、sync apply、timer tic
 - `join accept`
 - `root init`
 
-因此本公网测试中，admin 节点签发 delegation / bundle 仍使用 CLI 直接写 admin DB。生产化前应完成 Phase 4.0，将这些写操作也纳入 daemon control API。
+因此本公网测试中，admin 签发 delegation / bundle 仍使用 CLI 直接写 admin DB。生产化前应完成 Phase 4.0，将这些写操作也纳入 daemon control API。
 
 ## 测试拓扑
 
-推荐至少 3 个公网节点：
+推荐至少 3 个公网节点，先让它们都能互相 UDP 直连：
 
 | 角色 | Zone | 示例公网地址 | UDP |
 |------|------|--------------|-----|
@@ -37,162 +38,165 @@ Phase 3 已经让普通 `record put`、endpoint publish、sync apply、timer tic
 | node-b | `node-b.catofes.` | `203.0.113.11` | `33434` |
 | node-c | `node-c.catofes.` | `203.0.113.12` | `33434` |
 
-另有一个 admin 工作目录，可以在你的本机或其中一台服务器上。admin 负责：
+admin 工作目录可以放在你的本机，也可以放在其中一台服务器上。admin 只负责 root / delegation；普通节点不接触 root/admin 私钥。
 
-- root `.` 初始化
-- `catofes.` 管理 Zone 加入
-- 为 node-a/node-b/node-c 签发 delegation bundle
+## 准备
 
-## 前置条件
-
-所有公网节点：
+所有机器：
 
 ```bash
 git clone <repo> higgs
 cd higgs
 make build
 chmod +x docs/scripts/public-gossip-node.sh
+export HIGGS_BIN="$PWD/build/higgs"
 ```
 
-放通 UDP：
+所有公网节点放通 UDP 端口：
 
 ```bash
 sudo ufw allow 33434/udp
 ```
 
-或 nftables / 云安全组中放通每个节点的 `listen_addr` UDP 端口。
+云安全组 / nftables 也要放通相同端口。确认时间同步正常；gossip anti-replay 使用时间戳窗口，机器时钟偏差过大会被拒绝。
 
-确认时间同步正常。gossip anti-replay 使用时间戳窗口，机器时钟偏差过大会被拒绝。
-
-## 1. 初始化 root 和管理 Zone
+## 1. Admin 初始化
 
 在 admin 机器上：
 
 ```bash
 cd higgs
-chmod +x docs/scripts/public-gossip-node.sh
-
 export HIGGS_BIN="$PWD/build/higgs"
 export HIGGS_BASE="$PWD/.public-test"
 
-docs/scripts/public-gossip-node.sh root-init "$HIGGS_BASE/root-admin" \
-  | tee "$HIGGS_BASE/root-public-key.txt"
-
-root_key="$(tail -n1 "$HIGGS_BASE/root-public-key.txt")"
+mkdir -p "$HIGGS_BASE"
+docs/scripts/public-gossip-node.sh admin-init "$HIGGS_BASE" | tee "$HIGGS_BASE/admin-init.log"
 ```
 
-创建 `catofes.` 管理 Zone：
+输出里会有三行关键结果：
+
+```text
+root_public_key: <copy-this-to-each-node>
+root_admin_dir: .public-test/root-admin
+admin_zone_dir: .public-test/catofes-admin
+```
+
+把 `root_public_key` 复制给每台公网节点。下面用：
 
 ```bash
-docs/scripts/public-gossip-node.sh config \
-  "$HIGGS_BASE/catofes-admin" \
-  zone-catofes-admin \
-  127.0.0.1:33435 \
-  127.0.0.1:33435 \
-  "$root_key"
-
-docs/scripts/public-gossip-node.sh key-request \
-  "$HIGGS_BASE/catofes-admin" \
-  catofes. \
-  "$HIGGS_BASE/catofes.key.json" \
-  "$HIGGS_BASE/catofes.request.json"
-
-docs/scripts/public-gossip-node.sh delegate-issue \
-  "$HIGGS_BASE/root-admin" \
-  "$HIGGS_BASE/catofes.request.json" \
-  "$HIGGS_BASE/catofes.bundle.json"
-
-docs/scripts/public-gossip-node.sh join-accept \
-  "$HIGGS_BASE/catofes-admin" \
-  "$HIGGS_BASE/catofes.bundle.json" \
-  "$HIGGS_BASE/catofes.key.json"
+root_key="<paste root_public_key>"
 ```
 
-## 2. 在公网节点创建配置和 join request
+## 2. 每个公网节点初始化
 
-在 node-a 上：
+node-a：
 
 ```bash
 cd higgs
 export HIGGS_BIN="$PWD/build/higgs"
-export HIGGS_DIR="$HOME/.higgs-public/node-a"
-root_key="<paste root key>"
+root_key="<paste root_public_key>"
 
-docs/scripts/public-gossip-node.sh config \
-  "$HIGGS_DIR" \
+docs/scripts/public-gossip-node.sh node-init \
+  "$HOME/.higgs-public/node-a" \
   node-a.catofes. \
   0.0.0.0:33434 \
   203.0.113.10:33434 \
   "$root_key" \
   node-b.catofes. 203.0.113.11:33434 \
   node-c.catofes. 203.0.113.12:33434
-
-docs/scripts/public-gossip-node.sh key-request \
-  "$HIGGS_DIR" \
-  node-a.catofes. \
-  "$HIGGS_DIR/node-a.key.json" \
-  "$HIGGS_DIR/node-a.request.json"
 ```
 
-在 node-b 上：
+node-b：
 
 ```bash
 cd higgs
 export HIGGS_BIN="$PWD/build/higgs"
-export HIGGS_DIR="$HOME/.higgs-public/node-b"
-root_key="<paste root key>"
+root_key="<paste root_public_key>"
 
-docs/scripts/public-gossip-node.sh config \
-  "$HIGGS_DIR" \
+docs/scripts/public-gossip-node.sh node-init \
+  "$HOME/.higgs-public/node-b" \
   node-b.catofes. \
   0.0.0.0:33434 \
   203.0.113.11:33434 \
   "$root_key" \
   node-a.catofes. 203.0.113.10:33434 \
   node-c.catofes. 203.0.113.12:33434
-
-docs/scripts/public-gossip-node.sh key-request \
-  "$HIGGS_DIR" \
-  node-b.catofes. \
-  "$HIGGS_DIR/node-b.key.json" \
-  "$HIGGS_DIR/node-b.request.json"
 ```
 
-在 node-c 上同理，改成 `node-c.catofes.` 和 `203.0.113.12:33434`。
+node-c 同理，把 Zone 和公网地址改成 `node-c.catofes.` / `203.0.113.12:33434`。
 
-把三个 `*.request.json` 安全传回 admin 机器。只传 request，不传私钥。
+每次 `node-init` 都会输出：
 
-## 3. Admin 签发 node delegation bundle
+```text
+request: /home/.../.higgs-public/node-a/node-a.request.json
+key: /home/.../.higgs-public/node-a/node-a.key.json
+```
+
+把每个节点的 `*.request.json` 传回 admin 机器。只传 request，不传 `*.key.json`。
+
+示例：
+
+```bash
+scp node-a:~/.higgs-public/node-a/node-a.request.json "$HIGGS_BASE/"
+scp node-b:~/.higgs-public/node-b/node-b.request.json "$HIGGS_BASE/"
+scp node-c:~/.higgs-public/node-c/node-c.request.json "$HIGGS_BASE/"
+```
+
+## 3. Admin 批量签发
 
 在 admin 机器上：
 
 ```bash
-for node in node-a node-b node-c; do
-  docs/scripts/public-gossip-node.sh delegate-issue \
-    "$HIGGS_BASE/catofes-admin" \
-    "$HIGGS_BASE/$node.request.json" \
-    "$HIGGS_BASE/$node.bundle.json"
-done
+docs/scripts/public-gossip-node.sh issue-nodes \
+  "$HIGGS_BASE/catofes-admin" \
+  "$HIGGS_BASE/node-a.request.json" \
+  "$HIGGS_BASE/node-b.request.json" \
+  "$HIGGS_BASE/node-c.request.json"
 ```
 
-把对应的 `node-a.bundle.json`、`node-b.bundle.json`、`node-c.bundle.json` 发回各节点。
+脚本会生成：
 
-## 4. 节点接受 bundle 并启动 daemon
+```text
+bundle: .public-test/node-a.bundle.json
+bundle: .public-test/node-b.bundle.json
+bundle: .public-test/node-c.bundle.json
+```
+
+把对应 bundle 发回各节点：
+
+```bash
+scp "$HIGGS_BASE/node-a.bundle.json" node-a:~/.higgs-public/node-a/
+scp "$HIGGS_BASE/node-b.bundle.json" node-b:~/.higgs-public/node-b/
+scp "$HIGGS_BASE/node-c.bundle.json" node-c:~/.higgs-public/node-c/
+```
+
+## 4. 启动 daemon
+
+每台节点用一条命令接受 bundle 并启动 daemon。
 
 node-a：
 
 ```bash
-docs/scripts/public-gossip-node.sh join-accept \
+docs/scripts/public-gossip-node.sh accept-run \
   "$HOME/.higgs-public/node-a" \
-  "$HOME/.higgs-public/node-a.bundle.json" \
-  "$HOME/.higgs-public/node-a/node-a.key.json"
-
-docs/scripts/public-gossip-node.sh run-daemon "$HOME/.higgs-public/node-a" 5
+  node-a.catofes. \
+  "$HOME/.higgs-public/node-a/node-a.bundle.json" \
+  5
 ```
 
-node-b/node-c 同理。
+node-b：
 
-如果你用 systemd，可以先用临时 service：
+```bash
+docs/scripts/public-gossip-node.sh accept-run \
+  "$HOME/.higgs-public/node-b" \
+  node-b.catofes. \
+  "$HOME/.higgs-public/node-b/node-b.bundle.json" \
+  5
+```
+
+node-c 同理。测试时可以直接在 tmux / screen 里跑；长期运行再改成 systemd。
+
+临时 systemd service 示例：
 
 ```ini
 [Unit]
@@ -210,9 +214,9 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-## 5. 写入测试 record 并验证收敛
+## 5. 写入并验证收敛
 
-在 node-a 上：
+在 node-a 写入测试 record：
 
 ```bash
 docs/scripts/public-gossip-node.sh put-identity \
@@ -221,7 +225,7 @@ docs/scripts/public-gossip-node.sh put-identity \
   node-a-public
 ```
 
-在 node-b / node-c 上轮询：
+在 node-b / node-c 验证：
 
 ```bash
 docs/scripts/public-gossip-node.sh status "$HOME/.higgs-public/node-b"
@@ -231,16 +235,21 @@ docs/scripts/public-gossip-node.sh verify "$HOME/.higgs-public/node-b" node-a.ca
 
 预期：
 
-- `sync status --verbose` 能看到 bootstrap peer 或 discovered peer
+- `sync status --verbose` 顶部显示 `daemon: online peer_id=...`
+- 能看到 bootstrap peer 或 discovered peer
 - `zone show node-a.catofes.` 能看到 `identity`
 - `verify node-a.catofes.` 成功
 
-## 6. NAT / CGNAT 节点 observed path 测试
+反向也跑一次：在 node-b 写 `identity`，在 node-a/node-c 验证。
 
-如果有一台节点在家庭 NAT、CGNAT 或没有端口映射的网络后面，把它作为 `node-b` 测试。这个节点只需要能主动连到公网 `node-a`：
+## 6. NAT / CGNAT 节点
+
+如果有一台节点在家庭 NAT、CGNAT 或没有端口映射的网络后面，把它作为 `node-b` 测试。它只需要能主动连到公网 `node-a`。
+
+初始化时不要给 NAT 节点配置 `advertise_addr`：
 
 ```bash
-docs/scripts/public-gossip-node.sh config \
+docs/scripts/public-gossip-node.sh node-init \
   "$HOME/.higgs-public/node-b" \
   node-b.catofes. \
   0.0.0.0:33434 \
@@ -249,19 +258,13 @@ docs/scripts/public-gossip-node.sh config \
   node-a.catofes. 203.0.113.10:33434
 ```
 
-不要给 NAT 节点配置 `advertise_addr`，也不要把 reflector 结果当成一定可拨入的 direct endpoint。若要强制只测试 outbound/observed path，可在 `node-b/config.yaml` 里加：
+若要强制只测试 outbound/observed path，在 `node-b/config.yaml` 里加：
 
 ```yaml
 publish_endpoints: false
 ```
 
-接受 bundle 后启动 daemon：
-
-```bash
-docs/scripts/public-gossip-node.sh run-daemon "$HOME/.higgs-public/node-b" 5
-```
-
-在公网 `node-a` 上检查：
+接受 bundle 并启动 daemon 后，在公网 node-a 上检查：
 
 ```bash
 HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug peer node-b.catofes.
@@ -272,9 +275,9 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs sync status --
 
 - `observed_addr` 显示 NAT 节点主动发来包时的 UDP 源地址。
 - `observed_status` 为 `active`。
-- `discovered_addr` 可以为空；这表示当前不是依赖 signed direct endpoint，而是依赖本地短期 observed UDP path。
+- `discovered_addr` 可以为空；这表示当前依赖本地短期 observed UDP path，而不是 signed direct endpoint。
 
-随后在 `node-a` 写入测试 record，确认 NAT 后的 `node-b` 能收到：
+随后在 node-a 写入 record，确认 NAT 后的 node-b 能收到：
 
 ```bash
 docs/scripts/public-gossip-node.sh put-identity \
@@ -286,9 +289,9 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs zone show node
 HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs verify node-a.catofes.
 ```
 
-如果 `observed_status` 很快过期，说明 NAT 映射生命周期较短；缩短 daemon interval 或后续引入 relay / hole punching。
+如果 `observed_status` 很快过期，说明 NAT 映射生命周期较短；缩短 daemon interval，或后续引入 relay / hole punching。
 
-## 7. 重启和恢复测试
+## 7. 重启恢复
 
 停止 node-b daemon：
 
@@ -307,7 +310,7 @@ docs/scripts/public-gossip-node.sh put-identity \
 
 重新启动 node-b daemon 后，node-b 应通过摘要比较补齐缺失版本。
 
-## 8. 撤销测试
+## 8. 撤销检查
 
 在 admin 机器上撤销 node-c：
 
@@ -329,7 +332,23 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs verify node-c.
 - `verify node-c.catofes.` 失败
 - `sync status --verbose` 不再把 node-c endpoint 作为有效 discovered peer 使用
 
-## 排障 checklist
+## 常用底层命令
+
+组合命令覆盖常规测试。需要拆开排查时，可直接使用这些底层命令：
+
+```bash
+docs/scripts/public-gossip-node.sh root-init <dir>
+docs/scripts/public-gossip-node.sh config <dir> <peer-id> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
+docs/scripts/public-gossip-node.sh key-request <dir> <zone> <key.json> <request.json>
+docs/scripts/public-gossip-node.sh delegate-issue <admin-dir> <request.json> <bundle.json>
+docs/scripts/public-gossip-node.sh join-accept <dir> <bundle.json> <key.json>
+docs/scripts/public-gossip-node.sh run-daemon <dir> [interval-seconds]
+docs/scripts/public-gossip-node.sh put-identity <dir> <zone> <value>
+docs/scripts/public-gossip-node.sh status <dir>
+docs/scripts/public-gossip-node.sh verify <dir> <zone>
+```
+
+## 排障 Checklist
 
 - UDP 端口是否在云安全组和本机防火墙都放通。
 - `advertise_addr` 是否是其他公网节点能访问的地址，而不是 `0.0.0.0` 或内网地址。

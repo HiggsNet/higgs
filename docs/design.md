@@ -2,7 +2,7 @@
 
 > **文档状态（2026-06）**
 > Phase 0–3 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（WireGuard 建链）起为规划阶段。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）起为规划阶段。
 
 ## 原始需求摘要
 
@@ -40,9 +40,9 @@
 | 方向 | 决策 | 说明 |
 |------|------|------|
 | 配置同步机制 | **DNS 式层级作用域 (Zone) + Signed Merkle DAG + Gossip** | 整个系统的基石 |
-| 第一阶段传输 | **WireGuard + Babeld** | 先把控制平面做扎实，其他传输协议后续 Phase 引入 |
+| 第一阶段传输 | **StrongSwan/IKEv2 + XFRM interface + Babeld** | 动态路由、多 peer、namespace 和撤销清理作为主线；WireGuard 后移为可选轻量传输驱动 |
 | 跳频/多线路 | Phase 6 | 高级对抗/优化特性，待控制平面稳定后再做 |
-| 系统服务交互 | `netlink`（WG/netlink）/ `控制 socket`（babeld）/ `exec`（兜底） | 按组件分层 |
+| 系统服务交互 | `vici`（StrongSwan）/ `netlink`（XFRM/路由/WG）/ `控制 socket`（babeld）/ `exec`（兜底） | 按组件分层 |
 
 ### 1.2 总体架构（核心 + 插件）
 
@@ -497,8 +497,9 @@ type PeerView struct {
 | 哈希 | `blake2b-256`（`golang.org/x/crypto`） | — | 用于 KeyID、RecordHash、ZoneRoot |
 | 签名 | ED25519（标准库） | — | 密钥加密存储：AES-GCM + bcrypt |
 | Daemon / 单 writer | `higgs daemon` + Unix control socket | systemd / 远程管理预留 | Phase 3 最小形态已实现 |
-| WG 控制 | _未实现_（Phase 4） | `wgctrl-go` | 直接 netlink，性能更好 |
-| netlink | _未实现_ | `vishvananda/netlink` | 生态成熟 |
+| StrongSwan / IKEv2 控制 | _未实现_（Phase 4） | VICI / `swanctl` 配置模型 | 动态路由主线传输 |
+| XFRM / netlink | _未实现_（Phase 4） | `vishvananda/netlink` | 管理 XFRM interface、地址、路由；生态成熟 |
+| WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
 | 路由协议 | _未实现_（Phase 5） | `babeld` + 控制 socket | Babel 更适合 mesh，自动邻居发现 |
 | 防火墙 | _未实现_（Phase 6） | `nftables` netlink | 现代 Linux 趋势 |
 
@@ -531,7 +532,8 @@ type PeerView struct {
 
 | 模块 | 包路径 | 状态 |
 |------|--------|------|
-| WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go |  
+| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` | 🔲 待创建 |
+| WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
 | Babeld 路由适配器 | `pkg/routing/babeld/` | 🔲 仅 doc.go |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |

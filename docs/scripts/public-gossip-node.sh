@@ -6,6 +6,10 @@ bin="${HIGGS_BIN:-build/higgs}"
 usage() {
   cat <<'USAGE'
 Usage:
+  public-gossip-node.sh admin-init <base-dir> [admin-zone]
+  public-gossip-node.sh node-init <dir> <zone> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
+  public-gossip-node.sh issue-nodes <admin-dir> <request.json>...
+  public-gossip-node.sh accept-run <dir> <zone> <bundle.json> [interval-seconds]
   public-gossip-node.sh root-init <dir>
   public-gossip-node.sh config <dir> <peer-id> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
   public-gossip-node.sh key-request <dir> <zone> <key.json> <request.json>
@@ -25,6 +29,30 @@ config_path() {
   printf '%s/config.yaml' "$1"
 }
 
+zone_slug() {
+  local zone
+  zone="${1%.}"
+  printf '%s' "${zone%%.*}"
+}
+
+key_path() {
+  printf '%s/%s.key.json' "$1" "$(zone_slug "$2")"
+}
+
+request_path() {
+  printf '%s/%s.request.json' "$1" "$(zone_slug "$2")"
+}
+
+bundle_path_for_request() {
+  local request
+  request="$1"
+  if [ "${request%.request.json}" != "$request" ]; then
+    printf '%s.bundle.json' "${request%.request.json}"
+  else
+    printf '%s.bundle.json' "$request"
+  fi
+}
+
 require_bin() {
   if [ ! -x "$bin" ]; then
     printf 'Higgs binary not found or not executable: %s\n' "$bin" >&2
@@ -32,7 +60,21 @@ require_bin() {
   fi
 }
 
+root_init() {
+  local dir
+  dir="$1"
+  mkdir -p "$dir"
+  {
+    printf 'data_dir: %s\n' "$dir"
+    printf 'peer_id: node-admin\n'
+    printf 'listen_addr: 127.0.0.1:33433\n'
+  } >"$(config_path "$dir")"
+  HIGGS_CONFIG="$(config_path "$dir")" "$bin" root init
+  HIGGS_CONFIG="$(config_path "$dir")" "$bin" root pubkey
+}
+
 write_config() {
+  local dir peer_id listen_addr advertise_addr root_key
   dir="$1"
   peer_id="$2"
   listen_addr="$3"
@@ -63,6 +105,32 @@ write_config() {
   printf 'wrote %s\n' "$(config_path "$dir")"
 }
 
+make_key_request() {
+  local dir zone key request
+  dir="$1"
+  zone="$2"
+  key="$3"
+  request="$4"
+  HIGGS_CONFIG="$(config_path "$dir")" "$bin" keygen "$key"
+  HIGGS_CONFIG="$(config_path "$dir")" "$bin" join request "$zone" "$key" "$request"
+}
+
+issue_bundle() {
+  local admin_dir request bundle
+  admin_dir="$1"
+  request="$2"
+  bundle="$3"
+  HIGGS_CONFIG="$(config_path "$admin_dir")" "$bin" delegate issue "$request" "$bundle"
+}
+
+accept_bundle() {
+  local dir bundle key
+  dir="$1"
+  bundle="$2"
+  key="$3"
+  HIGGS_CONFIG="$(config_path "$dir")" "$bin" join accept "$bundle" "$key"
+}
+
 if [ "$#" -lt 1 ]; then
   usage
   exit 1
@@ -73,17 +141,58 @@ shift
 require_bin
 
 case "$cmd" in
+  admin-init)
+    if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; exit 1; fi
+    base="$1"
+    admin_zone="${2:-catofes.}"
+    admin_slug="$(zone_slug "$admin_zone")"
+    root_dir="$base/root-admin"
+    admin_dir="$base/$admin_slug-admin"
+    mkdir -p "$base"
+    root_key="$(root_init "$root_dir" | tail -n 1)"
+    write_config "$admin_dir" "zone-$admin_slug-admin" 127.0.0.1:33435 127.0.0.1:33435 "$root_key"
+    make_key_request "$admin_dir" "$admin_zone" "$base/$admin_slug.key.json" "$base/$admin_slug.request.json"
+    issue_bundle "$root_dir" "$base/$admin_slug.request.json" "$base/$admin_slug.bundle.json"
+    accept_bundle "$admin_dir" "$base/$admin_slug.bundle.json" "$base/$admin_slug.key.json"
+    printf 'root_public_key: %s\n' "$root_key"
+    printf 'root_admin_dir: %s\n' "$root_dir"
+    printf 'admin_zone_dir: %s\n' "$admin_dir"
+    ;;
+  node-init)
+    if [ "$#" -lt 5 ]; then usage; exit 1; fi
+    dir="$1"
+    zone="$2"
+    listen_addr="$3"
+    advertise_addr="$4"
+    root_key="$5"
+    shift 5
+    write_config "$dir" "$zone" "$listen_addr" "$advertise_addr" "$root_key" "$@"
+    make_key_request "$dir" "$zone" "$(key_path "$dir" "$zone")" "$(request_path "$dir" "$zone")"
+    printf 'request: %s\n' "$(request_path "$dir" "$zone")"
+    printf 'key: %s\n' "$(key_path "$dir" "$zone")"
+    ;;
+  issue-nodes)
+    if [ "$#" -lt 2 ]; then usage; exit 1; fi
+    admin_dir="$1"
+    shift
+    for request in "$@"; do
+      bundle="$(bundle_path_for_request "$request")"
+      issue_bundle "$admin_dir" "$request" "$bundle"
+      printf 'bundle: %s\n' "$bundle"
+    done
+    ;;
+  accept-run)
+    if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then usage; exit 1; fi
+    dir="$1"
+    zone="$2"
+    bundle="$3"
+    interval="${4:-5}"
+    accept_bundle "$dir" "$bundle" "$(key_path "$dir" "$zone")"
+    exec env HIGGS_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
+    ;;
   root-init)
     if [ "$#" -ne 1 ]; then usage; exit 1; fi
-    dir="$1"
-    mkdir -p "$dir"
-    {
-      printf 'data_dir: %s\n' "$dir"
-      printf 'peer_id: node-admin\n'
-      printf 'listen_addr: 127.0.0.1:33433\n'
-    } >"$(config_path "$dir")"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" root init
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" root pubkey
+    root_init "$1"
     ;;
   config)
     if [ "$#" -lt 5 ]; then usage; exit 1; fi
@@ -95,22 +204,21 @@ case "$cmd" in
     zone="$2"
     key="$3"
     request="$4"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" keygen "$key"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" join request "$zone" "$key" "$request"
+    make_key_request "$dir" "$zone" "$key" "$request"
     ;;
   delegate-issue)
     if [ "$#" -ne 3 ]; then usage; exit 1; fi
     admin_dir="$1"
     request="$2"
     bundle="$3"
-    HIGGS_CONFIG="$(config_path "$admin_dir")" "$bin" delegate issue "$request" "$bundle"
+    issue_bundle "$admin_dir" "$request" "$bundle"
     ;;
   join-accept)
     if [ "$#" -ne 3 ]; then usage; exit 1; fi
     dir="$1"
     bundle="$2"
     key="$3"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" join accept "$bundle" "$key"
+    accept_bundle "$dir" "$bundle" "$key"
     ;;
   run-daemon)
     if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; exit 1; fi

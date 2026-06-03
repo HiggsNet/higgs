@@ -646,7 +646,7 @@ make object-pull-smoke
 
 Phase 3 的最小 daemon / 单 writer 边界已经收敛：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交写命令，daemon 不存在时保留直接写 DB 的开发/恢复模式。
 
-下一步先完成 Phase 4.0：把 `delegate issue`、`delegate revoke`、`join accept` 和 root/admin 管理写入也纳入 daemon control API。之后进入 Phase 4 WireGuard 控制模块：由 daemon 监听 active state 变更，推导 peer view，调用 `wgctrl-go` 添加/删除 peer，并在 Zone 被撤销时立即清理对应 WG 配置。
+下一步先完成 Phase 4.0：把 `delegate issue`、`delegate revoke`、`join accept` 和 root/admin 管理写入也纳入 daemon control API。之后进入 Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块：由 daemon 监听 active state 变更，推导 peer view / TransportLink，通过 VICI 控制 StrongSwan，并用 netlink 管理 XFRM interface、地址和路由；WireGuard 后移为可选轻量传输驱动。
 
 ## CLI 汇总
 
@@ -678,4 +678,4 @@ build/higgs db stats
 - Delegation scope 只支持 `direct-child`。
 - Gossip 当前默认使用 MessagePack framing，并短期兼容读取旧 JSON v1；没有接入 protobuf 生成代码。
 - 当前同步保证是连通、可达、至少有 bootstrap 或 signed endpoint 发现路径时的最终一致性；复杂 NAT、无稳定 bootstrap、长期网络分区仍需要后续 discovery/relay 能力补强。
-- WireGuard、Babel、route authorization filter、防火墙应用仍在后续阶段。
+- StrongSwan/IKEv2 + XFRM interface、WireGuard fallback、Babel、route authorization filter、防火墙应用仍在后续阶段。

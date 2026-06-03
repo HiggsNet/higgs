@@ -389,9 +389,9 @@
   - [ ] 定义 chunk id、total/index、content hash、zone/key/version 绑定、ACK/NACK 或 selective retry、过期时间和重组缓存上限
   - [ ] chunk 丢失/乱序/重复/篡改不得进入 active state；chunk fetch 必须计入 per-peer quota，并进入 rejected cache / backoff，避免反放大
 
-## Phase 4: WireGuard 建链（预计 2-3 周）
+## Phase 4: StrongSwan / XFRM interface 建链（预计 2-3 周）
 
-**目标：** 两个节点能根据同步后的 Zone 配置自动建立 WG 隧道。
+**目标：** 两个节点能根据同步后的 Zone 配置自动建立 IKEv2/IPsec SA，并通过 XFRM interface 暴露为普通三层链路。WireGuard 后移为可选轻量传输驱动，不作为动态路由主线。
 
 - [ ] **4.0 Admin 写操作 daemon 化 / 控制 API 补齐**
   - [ ] 将 `delegate issue` client 化：daemon 存在时通过 control socket 提交 join request，由 daemon 持有父 Zone 私钥、签发 delegation、写 DB、输出 bundle；daemon 不存在时仅保留显式 recovery/direct 模式
@@ -402,33 +402,34 @@
   - [ ] 加入授权分级：只读 status/debug、普通 record 写入、admin delegation/revocation、root 操作分层；Unix socket 权限先落地，token/mTLS 留给远程控制
   - [ ] 增加测试：daemon 运行期间并发 `record put` + `delegate issue/revoke` 不覆盖 state；撤销后 daemon 立即停止 relay/endpoint 使用该 Zone；admin daemon smoke 覆盖签发 bundle 后公网/多节点 gossip 收敛
 
-- [ ] **4.1 WireGuard 控制模块**
-  - 通过 `wgctrl-go` 操作内核 WG 接口
-  - 由 daemon 监听 active state 变更并触发 WG apply，避免独立 CLI 进程直接修改运行中状态
-  - 监听 `*.<parent_zone>./wireguard/*` Record 变更
-  - 从 Zone 推导 PeerView：`PublicKey`、`Endpoints`、`TunnelAllowedIPs`、`AnnouncedRoutes`
-  - 应用 WG 配置（add/remove/update peer）
-  - 当 peer Zone 被撤销或其父 delegation 被 tombstone 时，立即从 WireGuard device 移除对应 peer、AllowedIPs、endpoint 与 keepalive 配置
-  - WG AllowedIPs 只放 tunnel /32 或 /128，业务路由交给 Babeld
+- [ ] **4.1 StrongSwan / XFRM 控制模块**
+  - 通过 vici 协议控制 StrongSwan，优先使用 `swanctl`/VICI 配置模型，避免直接拼接长生命周期配置文件
+  - 由 daemon 监听 active state 变更并触发 IPsec/XFRM apply，避免独立 CLI 进程直接修改运行中状态
+  - 监听 `*.<parent_zone>./ipsec/*`、`*/transport/*`、`*/endpoints/*` Record 变更
+  - 从 Zone 推导 `PeerView` / `TransportLink`：IKE identity、认证材料、Endpoints、XFRM `if_id`、本地/远端 tunnel address、AnnouncedRoutes、端口候选
+  - 为每条 peer link 创建独立 XFRM interface，第一版默认一条 peer link 一个 interface；后续再评估 shared XFRM interface
+  - CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛，实际路由与准入交给 XFRM interface + Babel/route filter
+  - 当 peer Zone 被撤销或其父 delegation 被 tombstone 时，立即 terminate 对应 IKE_SA/CHILD_SA，删除 XFRM interface、地址、路由、secret/cert/key reference
 
 - [ ] **4.2 链路实例管理**
-  - 当 WG peer 建立后，生成 LinkInstance
+  - 当 IKEv2/IPsec peer 建立后，生成 LinkInstance
   - 跟踪链路状态：up/down/stale
+  - 暴露 IKE_SA/CHILD_SA 状态、XFRM interface 名称、if_id、端口候选、最近 rekey/reestablish 原因
 
 - [ ] **4.3 最小闭环验证**
   - 节点 A 和 B 同步配置
-  - 自动为对方添加 WG Peer
-  - `wg show` 看到握手成功
+  - 自动为对方加载 StrongSwan connection/secret 并创建 XFRM interface
+  - `swanctl --list-sas` 看到 IKE_SA / CHILD_SA 建立成功
   - 互相 ping 通 tunnel IP
 
 ## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 
-**目标：** babeld 在 WG 接口上发现邻居、学习路由，且只接受被授权的前缀。
+**目标：** babeld 在 XFRM/TransportLink 接口上发现邻居、学习路由，且只接受被授权的前缀。
 
 - [ ] **5.1 Babeld 路由适配器**
   - 启动 babeld 并通过控制 socket（`-G` Unix/TCP socket）发送命令
-  - 命令封装：`add interface wg0`、`flush interface wg0`
-  - 当 WG 接口建立/拆除时，动态通知 babeld 添加/移除接口
+  - 命令封装：`add interface <transport-iface>`、`flush interface <transport-iface>`
+  - 当 XFRM/TransportLink 接口建立/拆除时，动态通知 babeld 添加/移除接口
 
 - [ ] **5.2 Route Authorization Filter**
   - 根据 active state 中的 `routes/announcements/*` 和 `ipam/assignments/*` 生成 prefix whitelist
@@ -441,7 +442,7 @@
 
 - [ ] **5.4 闭环验证**
   - 3+ 节点组网
-  - Babeld 在 wg0 上发现邻居，交换路由
+  - Babeld 在 XFRM/TransportLink 接口上发现邻居，交换路由
   - 节点 A 尝试宣告未授权前缀时被其他节点过滤掉
 
 ## Phase 6: IPAM/准入扩展/防火墙（预计 3-4 周）
@@ -451,7 +452,7 @@
 - [ ] **6.1 准入流程**
   - 新节点生成密钥对 → 向管理员申请 delegation
   - 管理员在父 Zone 创建 `nodeX.parent.` delegation
-  - Gossip 全网传播后，新节点自动被所有节点识别并建立 WG Peer
+  - Gossip 全网传播后，新节点自动被所有节点识别并建立 IKEv2/IPsec TransportLink
 
 - [ ] **6.2 IP 分配管理（IPAM）**
   - 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
@@ -459,14 +460,14 @@
   - 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
 
 - [ ] **6.3 链路健康检测**
-  - 在 WG 隧道上周期性发送 ICMP/自定义 keepalive
+  - 在 XFRM/TransportLink 隧道上周期性发送 ICMP/自定义 keepalive
   - 检测 RTT、丢包率
   - 链路异常时标记 down，从 babeld 接口中移除或降低优先级
 
 - [ ] **6.4 动态 Peer 管理**
   - 节点离线超时后，保留配置但标记 stale
-  - 长期离线后自动清理 WG Peer 和路由
-  - 节点信息变更（endpoint、pubkey rotate）自动更新 WG 配置
+  - 长期离线后自动清理 IKEv2/IPsec SA、XFRM interface 和路由
+  - 节点信息变更（endpoint、key/cert rotate、端口候选变化）自动更新传输配置
   - 节点 Zone 被撤销后标记 revoked，高优先级触发传输层/路由层/防火墙 apply，不等待普通健康检查超时
 
 - [ ] **6.5 防火墙规则同步**
@@ -475,30 +476,36 @@
   - 节点或子树被撤销后立即移除对应 allow rules，避免已撤销节点继续访问 overlay
 
 - [ ] **6.6 撤销后的传输与路由清理**
-  - WireGuard：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
   - IKEv2/StrongSwan：删除被撤销 peer 的 connection/child SA 配置，主动 terminate 已建立 SA，移除对应 secret/cert/key reference
+  - WireGuard（可选驱动）：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
   - Babeld/BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
   - 防火墙：移除该 peer/subtree 的 nftables accept rules、set entries、rate-limit exceptions
   - IPAM/route authorization：被撤销 Zone 及其子树发布的 IP assignment、route announcement 立即从有效配置中剔除；历史记录仅用于审计
-  - 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 WG/IKEv2/Babel/firewall/IPAM 对象，便于管理员确认影响范围
-  - 增加集成测试：撤销节点后，控制平面状态先收敛，随后本机 WG/IKEv2/Babel/firewall 配置全部清理完成
+  - 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 IKEv2/WG/Babel/firewall/IPAM 对象，便于管理员确认影响范围
+  - 增加集成测试：撤销节点后，控制平面状态先收敛，随后本机 IKEv2/WG/Babel/firewall 配置全部清理完成
 
 ## Phase 7: 健壮性与高级特性（预计 4-6 周）
 
 **目标：** 生产可用，支持多线路、跳频、扩展传输协议。
 
 - [ ] **7.1 多线路并行（Multipath）**
-  - 一个 Peer 可建立多条 TransportLink（WG over 公网 + WG over 内网 + GRE）
+  - 一个 Peer 可建立多条 TransportLink（IKEv2/XFRM over 公网 + IKEv2/XFRM over 内网 + 可选 WG/GRE）
   - 每条链路独立运行 babeld 接口
   - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
-- [ ] **7.2 UDP 端口跳频（Port Hopping）**
-  - 先实现多 endpoint / 多 port probe 与质量选择
-  - 如需 rotate，必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径
+- [ ] **7.2 UDP 端口候选 / 端口轮换（Port Hopping）**
+  - 目标：规避部分网络对大流量固定 UDP 五元组的 QoS/丢包/限速；先做多 endpoint / 多 port probe 与质量选择，再评估定时 rotate
+  - IKEv2/IPsec 第一版不假设能像 WireGuard 一样任意 per-peer 跳监听端口：标准 IKE/NAT-T 默认使用 UDP 500/4500，StrongSwan 支持连接级 `local_port`/`remote_port` 与全局 NAT-T 端口配置，但数据面端口轮换通常需要 reestablish/MOBIKE/多实例或外层 DNAT 配合
+  - 支持在 signed endpoint record 中发布多个 `ipsec` 端口候选：标准 500/4500、备用自定义 IKE 端口、备用 NAT-T/encap 端口；daemon 按质量、失败率、运营商特征选择
+  - rotate 必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径、QoS 误判回滚、端口探测限速
+  - 如果网络允许 ESP 协议且 QoS 主要针对 UDP，可优先评估非 NAT-T ESP 路径；若必须 UDP encapsulation，再评估端口候选和 reestablish 成本
+  - 增加公网验证：固定 UDP 4500 大流量劣化时，备用端口/备用 endpoint 能否降低丢包；记录 `swanctl --list-sas`、RTT、loss、babel route cost 变化
 
-- [ ] **7.3 IKEv2 (StrongSwan) 传输驱动**
-  - 通过 vici 协议控制 StrongSwan
-  - 复用 Zone K-V 中的 `ipsec/*` Record
+- [ ] **7.3 WireGuard 传输驱动（可选 / fallback）**
+  - 通过 `wgctrl-go` 操作内核 WG 接口
+  - 复用 Zone K-V 中的 `wireguard/*` Record
+  - WG 不作为动态路由主线；仅用于静态前缀、小规模 P2P、或 StrongSwan 不可用平台的轻量 fallback
+  - WG AllowedIPs 只放 tunnel /32 或 /128；业务路由仍交给 Babel/route authorization，避免把 cryptokey routing 当成动态路由表
 
 - [ ] **7.4 VXLAN Overlay**
   - 在 WG 三层网络上封装 VXLAN
@@ -528,7 +535,7 @@
   - 增加 smoke：普通节点只配置 relay 作为 bootstrap，也能通过 relay 获取其他节点 signed endpoint 和 zone data，随后建立直接 gossip 连接
 
 - [ ] **7.8 Daemon / 本地控制接口生产化**
-  - [ ] 在 Phase 3 最小 daemon 基础上完善运行形态：`higgs daemon` 常驻负责 gossip 同步、active state 更新、WG/IKEv2/Babel/firewall apply
+  - [ ] 在 Phase 3 最小 daemon 基础上完善运行形态：`higgs daemon` 常驻负责 gossip 同步、active state 更新、IKEv2/WG/Babel/firewall apply
   - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作；直接写 DB 模式仅保留为 debug/recovery
   - [ ] 完善 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
   - [ ] 预留 TCP control listener，用于受控远程管理；默认关闭，必须显式配置监听地址与认证
@@ -546,10 +553,10 @@
 
 ## 下一步
 
-1. 先完成 Phase 3.5：把 verified inbound UDP path / NAT 后节点 outbound-only 同步路径做扎实，确保进入 WireGuard 前公网 gossip 不依赖所有节点都可被主动拨入。
+1. 先完成 Phase 3.5：把 verified inbound UDP path / NAT 后节点 outbound-only 同步路径做扎实，确保进入 StrongSwan/XFRM 前公网 gossip 不依赖所有节点都可被主动拨入。
 2. 用 `docs/public-internet-test.md` 和 `docs/scripts/public-gossip-node.sh` 在真实公网 3+ 节点跑 daemon gossip 收敛测试，额外覆盖 NAT/CGNAT 节点只主动连公网 bootstrap 的场景。
 3. 完成 Phase 4.0：把 `delegate issue/revoke`、`join accept`、root/admin 管理写入也收进 daemon/control API，彻底关闭 admin 直写 DB 的单 writer 口子。
-4. 进入 Phase 4 WireGuard 建链：定义从 active state 推导本机 `PeerView` 的最小 record 约定和 dry-run 输出。
-5. 接入 `wgctrl-go` 的薄适配层，先实现 add/update/remove peer 的可测试接口，避免把 netlink 细节散到 daemon 主循环。
-6. 由 daemon state-change hook 触发 WG apply，确保配置同步、CLI 写入和后续撤销清理仍走单 writer 边界。
-7. 增加双节点 WG smoke：两端同步配置后自动添加对方 WG peer，`wg show` 可见握手，并能 ping 通 tunnel IP。
+4. 进入 Phase 4 StrongSwan/IKEv2 + XFRM interface 建链：定义从 active state 推导本机 `PeerView` / `TransportLink` 的最小 record 约定和 dry-run 输出。
+5. 接入 VICI/StrongSwan 薄适配层和 XFRM netlink 管理，先实现 load/update/remove connection、create/delete interface 的可测试接口，避免把系统细节散到 daemon 主循环。
+6. 由 daemon state-change hook 触发 IPsec/XFRM apply，确保配置同步、CLI 写入和后续撤销清理仍走单 writer 边界。
+7. 增加双节点 StrongSwan/XFRM smoke：两端同步配置后自动建立 IKE_SA/CHILD_SA，`swanctl --list-sas` 可见 SA，并能 ping 通 tunnel IP。
