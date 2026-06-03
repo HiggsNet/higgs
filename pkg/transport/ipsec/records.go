@@ -1,0 +1,667 @@
+package ipsec
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
+)
+
+const (
+	ProviderStrongSwan = "strongswan"
+
+	RecordKeyProfile      = "ipsec/profile"
+	RecordKeyAddresses    = "ipsec/addresses"
+	RecordKeyPorts        = "ipsec/ports"
+	RecordKeyTransportKey = "ipsec/transport-key"
+
+	RecordTypeProfile      = "ipsec.profile.v1"
+	RecordTypeAddresses    = "ipsec.addresses.v1"
+	RecordTypePorts        = "ipsec.ports.v1"
+	RecordTypeTransportKey = "ipsec.transport_key.v1"
+
+	AcceptNone          = "none"
+	AcceptInbound       = "inbound"
+	AcceptBidirectional = "bidirectional"
+
+	FamilyIPv4 = "ipv4"
+	FamilyIPv6 = "ipv6"
+
+	PathModeFamilyRedundant = "family-redundant"
+	PathModeExhaustive      = "exhaustive"
+
+	SourceManualAddress = "manual-address"
+	SourceManualDNS     = "manual-dns"
+	SourceDiscovery     = "discovery"
+	SourceReflector     = "reflector"
+	SourceLocal         = "local"
+
+	ReachabilityPublic      = "public"
+	ReachabilityNATObserved = "nat-observed"
+	ReachabilityPrivate     = "private"
+	ReachabilityUnknown     = "unknown"
+
+	PortModeFixed = "fixed"
+	PortModeRange = "range"
+
+	TransportKeyRawPublicKey = "raw-public-key"
+	AlgorithmEd25519         = "ed25519"
+	AlgorithmECDSAP256       = "ecdsa-p256"
+)
+
+var defaultAddressSourceOrder = []string{
+	SourceManualAddress,
+	SourceManualDNS,
+	SourceDiscovery,
+	SourceReflector,
+	SourceLocal,
+}
+
+type ProfileRecord struct {
+	Version                 int        `json:"version"`
+	Enabled                 bool       `json:"enabled"`
+	Provider                string     `json:"provider"`
+	IKEIdentity             string     `json:"ike_identity"`
+	TransportKeyFingerprint string     `json:"transport_key_fingerprint"`
+	Accept                  string     `json:"accept"`
+	AddressFamilies         []string   `json:"address_families"`
+	PathModes               []string   `json:"path_modes"`
+	NAT                     NATProfile `json:"nat"`
+	UpdatedAt               int64      `json:"updated_at,omitempty"`
+}
+
+type NATProfile struct {
+	Hint             string `json:"hint,omitempty"`
+	InboundReachable string `json:"inbound_reachable,omitempty"`
+}
+
+type AddressRecord struct {
+	Version   int                    `json:"version"`
+	Addresses []AddressAdvertisement `json:"addresses"`
+	UpdatedAt int64                  `json:"updated_at,omitempty"`
+}
+
+type AddressAdvertisement struct {
+	ID             string   `json:"id"`
+	Source         string   `json:"source"`
+	Host           string   `json:"host,omitempty"`
+	Address        string   `json:"address,omitempty"`
+	Family         string   `json:"family,omitempty"`
+	Families       []string `json:"families,omitempty"`
+	RefreshSeconds int64    `json:"refresh_seconds,omitempty"`
+	Priority       int      `json:"priority,omitempty"`
+	Reachability   string   `json:"reachability,omitempty"`
+	TTLSeconds     int64    `json:"ttl_seconds,omitempty"`
+	LastObserved   int64    `json:"last_observed,omitempty"`
+}
+
+type PortRecord struct {
+	Version   int             `json:"version"`
+	Mode      string          `json:"mode"`
+	Range     *PortRange      `json:"range,omitempty"`
+	Current   *PortSelection  `json:"current,omitempty"`
+	Previous  []PortSelection `json:"previous,omitempty"`
+	UpdatedAt int64           `json:"updated_at,omitempty"`
+}
+
+type PortRange struct {
+	From uint16 `json:"from"`
+	To   uint16 `json:"to"`
+}
+
+type PortSelection struct {
+	Generation uint64      `json:"generation"`
+	IKE        PortBinding `json:"ike"`
+	NATT       PortBinding `json:"natt"`
+	ValidUntil int64       `json:"valid_until,omitempty"`
+}
+
+type PortBinding struct {
+	Local      uint16 `json:"local,omitempty"`
+	Advertised uint16 `json:"advertised,omitempty"`
+	Observed   uint16 `json:"observed,omitempty"`
+}
+
+type TransportKeyRecord struct {
+	Version     int    `json:"version"`
+	Kind        string `json:"kind"`
+	Algorithm   string `json:"algorithm"`
+	PublicKey   string `json:"public_key,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+	NotBefore   int64  `json:"not_before,omitempty"`
+	NotAfter    int64  `json:"not_after,omitempty"`
+	UpdatedAt   int64  `json:"updated_at,omitempty"`
+}
+
+type NodeRecords struct {
+	Zone         zone.ZonePath
+	Profile      *ProfileRecord
+	Addresses    *AddressRecord
+	Ports        *PortRecord
+	TransportKey *TransportKeyRecord
+}
+
+type AddressCandidate struct {
+	ID           string
+	Source       string
+	Host         string
+	Address      string
+	Family       string
+	Priority     int
+	Reachability string
+	ExpiresAt    time.Time
+}
+
+type PortAdvertisement struct {
+	Generation uint64
+	IKE        PortBinding
+	NATT       PortBinding
+	Current    bool
+	ValidUntil time.Time
+}
+
+type ContactPoint struct {
+	AddressID    string
+	Source       string
+	Host         string
+	Address      string
+	Family       string
+	Reachability string
+	Priority     int
+	Generation   uint64
+	Current      bool
+	IKEPort      uint16
+	NATTPort     uint16
+}
+
+func ParseProfileRecord(record *zone.Record) (*ProfileRecord, error) {
+	var profile ProfileRecord
+	if err := parseIPsecRecord(record, RecordKeyProfile, RecordTypeProfile, &profile); err != nil {
+		return nil, err
+	}
+	if err := profile.Validate(record.Zone); err != nil {
+		return nil, err
+	}
+	return &profile, nil
+}
+
+func ParseAddressRecord(record *zone.Record) (*AddressRecord, error) {
+	var addresses AddressRecord
+	if err := parseIPsecRecord(record, RecordKeyAddresses, RecordTypeAddresses, &addresses); err != nil {
+		return nil, err
+	}
+	if err := addresses.Validate(); err != nil {
+		return nil, err
+	}
+	return &addresses, nil
+}
+
+func ParsePortRecord(record *zone.Record) (*PortRecord, error) {
+	var ports PortRecord
+	if err := parseIPsecRecord(record, RecordKeyPorts, RecordTypePorts, &ports); err != nil {
+		return nil, err
+	}
+	if err := ports.Validate(); err != nil {
+		return nil, err
+	}
+	return &ports, nil
+}
+
+func ParseTransportKeyRecord(record *zone.Record) (*TransportKeyRecord, error) {
+	var key TransportKeyRecord
+	if err := parseIPsecRecord(record, RecordKeyTransportKey, RecordTypeTransportKey, &key); err != nil {
+		return nil, err
+	}
+	if err := key.Validate(); err != nil {
+		return nil, err
+	}
+	return &key, nil
+}
+
+func ExtractNodeRecords(ns *zone.NetworkState, peer zone.ZonePath, now time.Time) (*NodeRecords, error) {
+	if ns == nil {
+		return nil, errors.New("network state is nil")
+	}
+	if ns.IsZoneRevoked(peer, now) {
+		return nil, fmt.Errorf("zone %s is revoked", peer)
+	}
+	zs := ns.Zones[peer]
+	if zs == nil {
+		return nil, fmt.Errorf("zone %s not found", peer)
+	}
+	out := &NodeRecords{Zone: peer}
+	var err error
+	if record := zs.Records[RecordKeyProfile]; record != nil {
+		out.Profile, err = ParseProfileRecord(record)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if record := zs.Records[RecordKeyAddresses]; record != nil {
+		out.Addresses, err = ParseAddressRecord(record)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if record := zs.Records[RecordKeyPorts]; record != nil {
+		out.Ports, err = ParsePortRecord(record)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if record := zs.Records[RecordKeyTransportKey]; record != nil {
+		out.TransportKey, err = ParseTransportKeyRecord(record)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (p ProfileRecord) Validate(owner zone.ZonePath) error {
+	if p.Version != 1 {
+		return fmt.Errorf("unsupported ipsec profile version %d", p.Version)
+	}
+	if p.Provider != ProviderStrongSwan {
+		return fmt.Errorf("unsupported ipsec provider %q", p.Provider)
+	}
+	if p.IKEIdentity == "" {
+		return errors.New("ike_identity is required")
+	}
+	if owner.Valid() && p.IKEIdentity != string(owner) {
+		return fmt.Errorf("ike_identity %q does not match zone %s", p.IKEIdentity, owner)
+	}
+	if p.TransportKeyFingerprint == "" {
+		return errors.New("transport_key_fingerprint is required")
+	}
+	if !oneOf(p.Accept, AcceptNone, AcceptInbound, AcceptBidirectional) {
+		return fmt.Errorf("unsupported accept intent %q", p.Accept)
+	}
+	if len(p.AddressFamilies) == 0 {
+		return errors.New("address_families is required")
+	}
+	for _, family := range p.AddressFamilies {
+		if !validFamily(family) {
+			return fmt.Errorf("unsupported address family %q", family)
+		}
+	}
+	if len(p.PathModes) == 0 {
+		return errors.New("path_modes is required")
+	}
+	for _, mode := range p.PathModes {
+		if !oneOf(mode, PathModeFamilyRedundant, PathModeExhaustive) {
+			return fmt.Errorf("unsupported path mode %q", mode)
+		}
+	}
+	return nil
+}
+
+func (r AddressRecord) Validate() error {
+	if r.Version != 1 {
+		return fmt.Errorf("unsupported ipsec addresses version %d", r.Version)
+	}
+	for _, address := range r.Addresses {
+		if err := address.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a AddressAdvertisement) Validate() error {
+	if a.ID == "" {
+		return errors.New("address id is required")
+	}
+	if !oneOf(a.Source, SourceManualAddress, SourceManualDNS, SourceDiscovery, SourceReflector, SourceLocal) {
+		return fmt.Errorf("unsupported address source %q", a.Source)
+	}
+	switch a.Source {
+	case SourceManualDNS:
+		if a.Host == "" {
+			return fmt.Errorf("address %s: host is required for manual-dns", a.ID)
+		}
+		if len(addressFamilies(a)) == 0 {
+			return fmt.Errorf("address %s: families is required for manual-dns", a.ID)
+		}
+	case SourceManualAddress, SourceReflector, SourceLocal:
+		if a.Address == "" {
+			return fmt.Errorf("address %s: address is required for %s", a.ID, a.Source)
+		}
+		if ip := net.ParseIP(a.Address); ip == nil {
+			return fmt.Errorf("address %s: invalid IP %q", a.ID, a.Address)
+		}
+		family := a.Family
+		if family == "" {
+			family = inferIPFamily(a.Address)
+		}
+		if !validFamily(family) {
+			return fmt.Errorf("address %s: unsupported family %q", a.ID, family)
+		}
+	case SourceDiscovery:
+		if a.Address == "" && a.Host == "" {
+			return fmt.Errorf("address %s: discovery source requires address or host", a.ID)
+		}
+	}
+	for _, family := range addressFamilies(a) {
+		if !validFamily(family) {
+			return fmt.Errorf("address %s: unsupported family %q", a.ID, family)
+		}
+	}
+	return nil
+}
+
+func (r PortRecord) Validate() error {
+	if r.Version != 1 {
+		return fmt.Errorf("unsupported ipsec ports version %d", r.Version)
+	}
+	if !oneOf(r.Mode, PortModeFixed, PortModeRange) {
+		return fmt.Errorf("unsupported port mode %q", r.Mode)
+	}
+	if r.Mode == PortModeRange {
+		if r.Range == nil {
+			return errors.New("range mode requires range")
+		}
+		if r.Range.From == 0 || r.Range.To == 0 || r.Range.From > r.Range.To {
+			return fmt.Errorf("invalid port range %d-%d", r.Range.From, r.Range.To)
+		}
+	}
+	if r.Current == nil {
+		return errors.New("current port selection is required")
+	}
+	if err := r.Current.Validate(); err != nil {
+		return err
+	}
+	for i := range r.Previous {
+		if err := r.Previous[i].Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p PortSelection) Validate() error {
+	if p.IKE.Advertised == 0 && p.IKE.Observed == 0 {
+		return errors.New("ike advertised or observed port is required")
+	}
+	if p.NATT.Advertised == 0 && p.NATT.Observed == 0 {
+		return errors.New("natt advertised or observed port is required")
+	}
+	return nil
+}
+
+func (k TransportKeyRecord) Validate() error {
+	if k.Version != 1 {
+		return fmt.Errorf("unsupported ipsec transport key version %d", k.Version)
+	}
+	if k.Kind != TransportKeyRawPublicKey {
+		return fmt.Errorf("unsupported transport key kind %q", k.Kind)
+	}
+	if !oneOf(k.Algorithm, AlgorithmEd25519, AlgorithmECDSAP256) {
+		return fmt.Errorf("unsupported transport key algorithm %q", k.Algorithm)
+	}
+	if k.PublicKey == "" {
+		return errors.New("public_key is required")
+	}
+	if k.Fingerprint == "" {
+		return errors.New("fingerprint is required")
+	}
+	if k.NotAfter != 0 && k.NotBefore != 0 && k.NotAfter <= k.NotBefore {
+		return errors.New("not_after must be after not_before")
+	}
+	return nil
+}
+
+func AddressCandidates(record *AddressRecord, now time.Time) []AddressCandidate {
+	if record == nil {
+		return nil
+	}
+	var out []AddressCandidate
+	for _, address := range record.Addresses {
+		if addressExpired(address, record.UpdatedAt, now) {
+			continue
+		}
+		expiresAt := expiryForAddress(address, record.UpdatedAt)
+		for _, family := range addressFamilies(address) {
+			candidate := AddressCandidate{
+				ID:           address.ID,
+				Source:       address.Source,
+				Host:         address.Host,
+				Address:      address.Address,
+				Family:       family,
+				Priority:     address.Priority,
+				Reachability: address.Reachability,
+				ExpiresAt:    expiresAt,
+			}
+			if candidate.Reachability == "" {
+				candidate.Reachability = ReachabilityUnknown
+			}
+			out = append(out, candidate)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority > out[j].Priority
+		}
+		if sourceRank(out[i].Source) != sourceRank(out[j].Source) {
+			return sourceRank(out[i].Source) < sourceRank(out[j].Source)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func PortAdvertisements(record *PortRecord, now time.Time) []PortAdvertisement {
+	if record == nil {
+		return nil
+	}
+	var out []PortAdvertisement
+	if record.Current != nil && !portSelectionExpired(*record.Current, now) {
+		out = append(out, portAdvertisement(*record.Current, true))
+	}
+	for _, previous := range record.Previous {
+		if portSelectionExpired(previous, now) {
+			continue
+		}
+		out = append(out, portAdvertisement(previous, false))
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Current != out[j].Current {
+			return out[i].Current
+		}
+		return out[i].Generation > out[j].Generation
+	})
+	return out
+}
+
+func ContactPoints(addresses *AddressRecord, ports *PortRecord, now time.Time) []ContactPoint {
+	addressCandidates := AddressCandidates(addresses, now)
+	portAds := PortAdvertisements(ports, now)
+	out := make([]ContactPoint, 0, len(addressCandidates)*len(portAds))
+	for _, address := range addressCandidates {
+		for _, port := range portAds {
+			out = append(out, ContactPoint{
+				AddressID:    address.ID,
+				Source:       address.Source,
+				Host:         address.Host,
+				Address:      address.Address,
+				Family:       address.Family,
+				Reachability: address.Reachability,
+				Priority:     address.Priority,
+				Generation:   port.Generation,
+				Current:      port.Current,
+				IKEPort:      dialPort(port.IKE),
+				NATTPort:     dialPort(port.NATT),
+			})
+		}
+	}
+	sortContactPoints(out)
+	return out
+}
+
+func SelectContactPoints(points []ContactPoint, mode string) []ContactPoint {
+	points = append([]ContactPoint(nil), points...)
+	sortContactPoints(points)
+	if mode == PathModeExhaustive {
+		return points
+	}
+	if mode != PathModeFamilyRedundant {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []ContactPoint
+	for _, point := range points {
+		if seen[point.Family] {
+			continue
+		}
+		seen[point.Family] = true
+		out = append(out, point)
+	}
+	return out
+}
+
+func parseIPsecRecord(record *zone.Record, key, recordType string, into any) error {
+	if record == nil {
+		return errors.New("record is nil")
+	}
+	if record.Key != key {
+		return fmt.Errorf("unexpected record key %q, want %q", record.Key, key)
+	}
+	if record.Type != recordType {
+		return fmt.Errorf("unexpected record type %q, want %q", record.Type, recordType)
+	}
+	if err := json.Unmarshal(record.Value, into); err != nil {
+		return err
+	}
+	return nil
+}
+
+func addressFamilies(a AddressAdvertisement) []string {
+	if len(a.Families) > 0 {
+		return normalizedFamilies(a.Families)
+	}
+	if a.Family != "" {
+		return normalizedFamilies([]string{a.Family})
+	}
+	if a.Address != "" {
+		if family := inferIPFamily(a.Address); family != "" {
+			return []string{family}
+		}
+	}
+	return nil
+}
+
+func normalizedFamilies(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, family := range in {
+		family = strings.ToLower(strings.TrimSpace(family))
+		if family == "" || seen[family] {
+			continue
+		}
+		seen[family] = true
+		out = append(out, family)
+	}
+	return out
+}
+
+func inferIPFamily(address string) string {
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return ""
+	}
+	if ip.To4() != nil {
+		return FamilyIPv4
+	}
+	return FamilyIPv6
+}
+
+func validFamily(family string) bool {
+	return family == FamilyIPv4 || family == FamilyIPv6
+}
+
+func addressExpired(address AddressAdvertisement, recordUpdatedAt int64, now time.Time) bool {
+	expiresAt := expiryForAddress(address, recordUpdatedAt)
+	return !expiresAt.IsZero() && now.After(expiresAt)
+}
+
+func expiryForAddress(address AddressAdvertisement, recordUpdatedAt int64) time.Time {
+	if address.TTLSeconds <= 0 {
+		return time.Time{}
+	}
+	base := address.LastObserved
+	if base == 0 {
+		base = recordUpdatedAt
+	}
+	if base == 0 {
+		return time.Time{}
+	}
+	return time.Unix(base, 0).Add(time.Duration(address.TTLSeconds) * time.Second)
+}
+
+func portSelectionExpired(selection PortSelection, now time.Time) bool {
+	return selection.ValidUntil != 0 && now.After(time.Unix(selection.ValidUntil, 0))
+}
+
+func portAdvertisement(selection PortSelection, current bool) PortAdvertisement {
+	out := PortAdvertisement{
+		Generation: selection.Generation,
+		IKE:        selection.IKE,
+		NATT:       selection.NATT,
+		Current:    current,
+	}
+	if selection.ValidUntil != 0 {
+		out.ValidUntil = time.Unix(selection.ValidUntil, 0)
+	}
+	return out
+}
+
+func dialPort(binding PortBinding) uint16 {
+	if binding.Observed != 0 {
+		return binding.Observed
+	}
+	return binding.Advertised
+}
+
+func sortContactPoints(points []ContactPoint) {
+	sort.SliceStable(points, func(i, j int) bool {
+		if points[i].Priority != points[j].Priority {
+			return points[i].Priority > points[j].Priority
+		}
+		if sourceRank(points[i].Source) != sourceRank(points[j].Source) {
+			return sourceRank(points[i].Source) < sourceRank(points[j].Source)
+		}
+		if points[i].Current != points[j].Current {
+			return points[i].Current
+		}
+		if points[i].Generation != points[j].Generation {
+			return points[i].Generation > points[j].Generation
+		}
+		if points[i].Family != points[j].Family {
+			return points[i].Family < points[j].Family
+		}
+		return points[i].AddressID < points[j].AddressID
+	})
+}
+
+func sourceRank(source string) int {
+	for i, known := range defaultAddressSourceOrder {
+		if source == known {
+			return i
+		}
+	}
+	return len(defaultAddressSourceOrder)
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, item := range allowed {
+		if value == item {
+			return true
+		}
+	}
+	return false
+}

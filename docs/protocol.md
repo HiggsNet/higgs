@@ -340,6 +340,8 @@ Phase 4 的关键边界：
 
 ### 6.1 Record key 与类型
 
+`pkg/transport/ipsec` 已实现这些 record 的 Go 结构、解析/校验和 ContactPoint 组合逻辑；daemon 仍必须只在记录已经通过 Zone trust chain 验证后使用它们。
+
 规划 record：
 
 | Key | Type | 用途 |
