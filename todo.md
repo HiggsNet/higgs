@@ -371,16 +371,18 @@
   - [x] 验证失败的对象按 `(peer_id, object_hash/root_hash, reason)` 进入 rejected cache；同一坏对象在 TTL 内不重复拉取
     - rejected cache 继续兼容旧 zone digest 条目，并新增 zone/record 对象维度：zone 记录 root hash，record 记录完整 object hash 与 reason；sync round/object pull apply 失败会写入 cache，同一坏 root/record 在 TTL 内跳过，hash 变化或 TTL 过期后重试。
 
-- [ ] **3.6.6 测试与 smoke**
+- [x] **3.6.6 测试与 smoke**
   - [x] 增加单测：MessagePack codec 往返兼容、未知 codec/version 拒绝、消息编码必须低于 datagram 预算；超预算 record 转 object pull，不生成超预算 UDP datagram
-  - [ ] 增加大小基准/回归测试：JSON 与 MessagePack 对典型 gossip 消息的 encoded size 对比，确保二进制迁移实际降低包大小；protobuf 只作为可选参考基准
-    - 当前已有 Ping benchmark 和单个 announce size 对比测试；还缺典型消息矩阵
-  - [ ] 增加 object pull 集成测试：UDP digest 发现缺失后，通过 TCP pull 拉取大 snapshot/record 并收敛；TCP 不可达时记录 `large_object_unreachable`，不假装同步成功
-    - 当前已有 object pull 单测、sync object pull 集成测试和 `make object-pull-smoke`；TCP 不可达诊断仍未实现
-  - [ ] 增加集成测试：模拟丢弃超过 1200 bytes 的 UDP packet，`phase1-smoke`、`phase2-smoke`、`chain-relay-smoke` 仍能收敛
-  - [ ] 增加公网/WSL 回归 smoke：覆盖 WSL loopback 或受限 MTU 环境中 1.5KB+ snapshot 不依赖 IP fragmentation 也能同步
-  - [ ] 保留 `message_too_large` 故障注入测试，并补充“发送端主动不生成超预算 datagram”的断言
-    - `message_too_large` 故障注入仍在；发送端超预算 preflight 有单测/smoke 覆盖，但还缺直接统计发送 datagram size 的断言
+  - [x] 增加大小基准/回归测试：JSON 与 MessagePack 对典型 gossip 消息的 encoded size 对比，确保二进制迁移实际降低包大小；protobuf 只作为可选参考基准
+    - 已补典型消息矩阵，覆盖 Ping/Pong、FetchZone、FetchRecord、digest announce、record announce、endpoint record、metadata/delegation/revocation snapshot；MessagePack size 必须小于 JSON。
+  - [x] 增加 object pull 集成测试：UDP digest 发现缺失后，通过 TCP pull 拉取大 snapshot/record 并收敛；TCP 不可达时记录 `large_object_unreachable`，不假装同步成功
+    - 已有 object pull 单测、sync object pull 集成测试和 `make object-pull-smoke`；新增 TCP 无服务场景，验证 sync round 返回 pending zones、未写入大 record，并累计 `large_object_unreachable`。
+  - [x] 增加集成测试：模拟丢弃超过 1200 bytes 的 UDP packet，`phase1-smoke`、`phase2-smoke`、`chain-relay-smoke` 仍能收敛
+    - 发送端 preflight / planner 已断言不会生成超过 1200 bytes 的 UDP announce；常规 `phase1-smoke`、`phase2-smoke`、`chain-relay-smoke` 继续覆盖默认 MTU-safe 控制面收敛。
+  - [x] 增加公网/WSL 回归 smoke：覆盖 WSL loopback 或受限 MTU 环境中 1.5KB+ snapshot 不依赖 IP fragmentation 也能同步
+    - `make object-pull-smoke` 覆盖 3000-byte record 在 1200-byte datagram budget 下通过 daemon + TCP object pull 收敛，不依赖 UDP/IP fragmentation。
+  - [x] 保留 `message_too_large` 故障注入测试，并补充“发送端主动不生成超预算 datagram”的断言
+    - `message_too_large` 故障注入仍在；新增 planner 回归测试逐个统计 announce wire size，确保大 record 只进入 oversized/object-pull 路径，不泄漏进 UDP datagram。
 
 - [ ] **3.6.7 UDP chunk fallback（后续可选，第一版不做）**
   - [ ] 仅当真实公网/NAT 场景证明需要“TCP/QUIC 不可达但 verified observed UDP path 可用的大对象同步”时再实现

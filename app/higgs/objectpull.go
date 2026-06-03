@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -223,7 +224,7 @@ func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, p
 		Zone: path,
 	})
 	if err != nil {
-		recordObjectPullResult(state, peerID, "zone", path, "", 0, err, false, time.Now())
+		recordObjectPullResult(state, peerID, "zone", path, "", 0, err, isObjectPullUnreachable(err), time.Now())
 		return nil, err
 	}
 	respBytes := encodedObjectPullResponseSize(resp)
@@ -260,7 +261,7 @@ func tryObjectPullRecordTCP(state *stateFile, config *syncConfigFile, peerID str
 		Version: fetch.Version,
 	})
 	if err != nil {
-		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, 0, err, false, time.Now())
+		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, 0, err, isObjectPullUnreachable(err), time.Now())
 		return nil, err
 	}
 	respBytes := encodedObjectPullResponseSize(resp)
@@ -284,6 +285,18 @@ func encodedObjectPullResponseSize(resp *gossip.ObjectPullResponse) int {
 		return 0
 	}
 	return len(data)
+}
+
+func isObjectPullUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func recordObjectPullAttempt(state *stateFile, peerID, object string, zoneName zone.ZonePath, key string, now time.Time) {

@@ -154,6 +154,95 @@ func TestMsgpackSmallerThanJSON(t *testing.T) {
 	t.Logf("JSON=%d bytes, MessagePack=%d bytes, savings=%d bytes", len(jsonData), len(msgpackData), len(jsonData)-len(msgpackData))
 }
 
+func TestTypicalMessagePackSizesBeatJSON(t *testing.T) {
+	digest := ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
+	record := sampleWireRecord("identity", []byte("node-a"))
+	endpointValue := EndpointRecordBytes([]LocalEndpoint{{
+		IP:       net.ParseIP("192.0.2.10"),
+		Port:     33434,
+		Scope:    "global",
+		Priority: 100,
+		Source:   SourceAdvertise,
+	}}, time.Unix(1717171717, 0))
+	endpointRecord := sampleWireRecord(EndpointRecordKeyUDP, endpointValue)
+	delegation := sampleWireDelegation("node-b.catofes.")
+	revocation := sampleWireRevocation("node-b.catofes.")
+	authority := sampleWireAuthority("catofes.")
+
+	cases := []struct {
+		name    string
+		message *Message
+	}{
+		{
+			name:    "ping digests",
+			message: commonWireMessage(MessagePing, &Ping{Zones: []ZoneDigest{digest}}, nil, nil, nil, nil),
+		},
+		{
+			name:    "pong fetch zones",
+			message: commonWireMessage(MessagePong, nil, &Pong{Zones: []ZoneDigest{digest}, FetchZones: []zone.ZonePath{"catofes.", "node-a.catofes."}}, nil, nil, nil),
+		},
+		{
+			name:    "fetch zone",
+			message: commonWireMessage(MessageFetchZone, nil, nil, &FetchZone{Zone: "node-a.catofes."}, nil, nil),
+		},
+		{
+			name:    "fetch record",
+			message: commonWireMessage(MessageFetchRecord, nil, nil, nil, &FetchRecord{Zone: "node-a.catofes.", Key: "identity", Version: 7}, nil),
+		},
+		{
+			name:    "announce digest",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}}),
+		},
+		{
+			name:    "announce record",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: record}}}),
+		},
+		{
+			name:    "announce endpoint record",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: endpointRecord}}}),
+		},
+		{
+			name: "announce metadata snapshot",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
+				Zone:        "catofes.",
+				Authority:   authority,
+				ParentProof: []*zone.Delegation{delegation},
+			}}}),
+		},
+		{
+			name: "announce delegation snapshot",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
+				Zone:        "catofes.",
+				Authority:   authority,
+				Delegations: map[zone.ZonePath]*zone.Delegation{"node-b.catofes.": delegation},
+			}}}),
+		},
+		{
+			name: "announce revocation snapshot",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
+				Zone:        "catofes.",
+				Authority:   authority,
+				Revocations: map[zone.ZonePath]*zone.DelegationRevocation{"node-b.catofes.": revocation},
+			}}}),
+		},
+	}
+
+	for _, tc := range cases {
+		jsonData, err := encodeMessage(jsonCodec{}, tc.message)
+		if err != nil {
+			t.Fatalf("%s JSON encode: %v", tc.name, err)
+		}
+		msgpackData, err := encodeMessage(msgpackCodec{}, tc.message)
+		if err != nil {
+			t.Fatalf("%s MessagePack encode: %v", tc.name, err)
+		}
+		if len(msgpackData) >= len(jsonData) {
+			t.Fatalf("%s MessagePack size = %d, want less than JSON size %d", tc.name, len(msgpackData), len(jsonData))
+		}
+		t.Logf("%s JSON=%d MessagePack=%d savings=%d", tc.name, len(jsonData), len(msgpackData), len(jsonData)-len(msgpackData))
+	}
+}
+
 func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 	digest := ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
 	record := sampleWireRecord("identity", []byte("node-a"))

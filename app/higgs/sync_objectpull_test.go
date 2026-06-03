@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,6 +138,115 @@ func TestSyncRoundFallsBackToObjectPull(t *testing.T) {
 	}
 	if len(got.Value) != 3000 {
 		t.Fatalf("record value len = %d, want 3000", len(got.Value))
+	}
+}
+
+func TestSyncRoundReportsUnreachableObjectPull(t *testing.T) {
+	now := time.Unix(1000, 0)
+
+	stateBase, _ := buildTestNetworkState(t)
+	stateBase.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+
+	largeValue := make([]byte, 3000)
+	for i := range largeValue {
+		largeValue[i] = byte(i % 256)
+	}
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       "bigdata",
+		Type:      "test.data",
+		Value:     largeValue,
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, stateBase.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	if err := stateBase.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt: %v", err)
+	}
+
+	stateA := cloneStateFile(stateBase)
+	configA := &syncConfigFile{
+		PeerID:          "node-a.catofes.",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	}
+	transportA, err := gossip.Listen(gossip.Config{
+		PeerID:          configA.PeerID,
+		ListenAddr:      configA.ListenAddr,
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(A): %v", err)
+	}
+	defer transportA.Close()
+
+	stateB := cloneStateFile(stateBase)
+	delete(stateB.Network.Zones["node-b.catofes."].Records, "bigdata")
+	configB := &syncConfigFile{
+		PeerID:          "node-b.catofes.",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+		Bootstrap: []syncConfigPeer{
+			{ID: configA.PeerID, Addr: transportA.LocalAddr().String()},
+		},
+	}
+	transportB, err := gossip.Listen(gossip.Config{
+		PeerID:          configB.PeerID,
+		ListenAddr:      configB.ListenAddr,
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+		KnownPeers: map[string]*net.UDPAddr{
+			configA.PeerID: transportA.LocalAddr(),
+		},
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(B): %v", err)
+	}
+	defer transportB.Close()
+
+	srA := newSyncRuntime(stateA, configA, transportA, &Runtime{Clock: time.Now})
+	srA.addVerifiedZonePeers()
+	ctxA, cancelA := context.WithCancel(context.Background())
+	defer cancelA()
+	go func() {
+		for {
+			select {
+			case <-ctxA.Done():
+				return
+			default:
+			}
+			packet, err := receiveWithContext(ctxA, transportA, time.Now().Add(time.Second))
+			if err != nil {
+				continue
+			}
+			_ = srA.handlePacket(packet)
+		}
+	}()
+
+	statePathB := t.TempDir() + "/b.db"
+	srB := newSyncRuntime(stateB, configB, transportB, &Runtime{Clock: time.Now, StatePath: statePathB})
+	err = srB.syncRound(context.Background(), configA.PeerID, 3*time.Second)
+	if err == nil {
+		t.Fatalf("syncRound succeeded with unreachable TCP object pull")
+	}
+	if !strings.Contains(err.Error(), "pending zones") {
+		t.Fatalf("syncRound error = %v, want pending zones", err)
+	}
+	if got := stateB.Network.Zones["node-b.catofes."].Records["bigdata"]; got != nil {
+		t.Fatalf("large record synced without object pull server: %#v", got)
+	}
+	stats := stateB.SyncPeers[configA.PeerID].ObjectPullStats
+	if stats == nil {
+		t.Fatalf("object pull stats missing")
+	}
+	if stats.LargeObjectUnreachable == 0 {
+		t.Fatalf("unreachable stats = %#v", stats)
+	}
+	if stats.Successes != 0 || stats.Failures == 0 || stats.LastError == "" {
+		t.Fatalf("failure stats = %#v", stats)
 	}
 }
 

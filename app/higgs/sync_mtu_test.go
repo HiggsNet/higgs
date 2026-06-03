@@ -196,3 +196,38 @@ func TestPlanSnapshotDatagramsBatchesRecordsWithinBudget(t *testing.T) {
 		t.Fatalf("plan did not batch multiple records: %#v", plan.Announces)
 	}
 }
+
+func TestPlanSnapshotDatagramsNeverEmitsOversizedDatagrams(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	now := time.Unix(1000, 0)
+
+	largeValue := make([]byte, 3000)
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       "bigdata",
+		Type:      "test.data",
+		Value:     largeValue,
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	if err := state.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt: %v", err)
+	}
+
+	plan := planSnapshotDatagrams(state.Network, []zone.ZonePath{"node-b.catofes."}, gossip.DefaultDatagramBudget, now)
+	if len(plan.Oversized) == 0 {
+		t.Fatalf("oversized = none, want large record to be deferred to object pull")
+	}
+	for _, announce := range plan.Announces {
+		if len(announce.Records) > 0 {
+			t.Fatalf("oversized record leaked into UDP announce: %#v", announce.Records)
+		}
+		if size := announceWireSize(announce); size > gossip.DefaultDatagramBudget {
+			t.Fatalf("announce size = %d exceeds budget %d", size, gossip.DefaultDatagramBudget)
+		}
+	}
+}
