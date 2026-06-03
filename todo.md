@@ -403,24 +403,41 @@
   - [ ] 增加测试：daemon 运行期间并发 `record put` + `delegate issue/revoke` 不覆盖 state；撤销后 daemon 立即停止 relay/endpoint 使用该 Zone；admin daemon smoke 覆盖签发 bundle 后公网/多节点 gossip 收敛
 
 - [ ] **4.1 StrongSwan / XFRM 控制模块**
-  - 通过 vici 协议控制 StrongSwan，优先使用 `swanctl`/VICI 配置模型，避免直接拼接长生命周期配置文件
-  - 由 daemon 监听 active state 变更并触发 IPsec/XFRM apply，避免独立 CLI 进程直接修改运行中状态
-  - 监听 `*.<parent_zone>./ipsec/*`、`*/transport/*`、`*/endpoints/*` Record 变更
-  - 从 Zone 推导 `PeerView` / `TransportLink`：IKE identity、认证材料、Endpoints、XFRM `if_id`、本地/远端 tunnel address、AnnouncedRoutes、端口候选
-  - 为每条 peer link 创建独立 XFRM interface，第一版默认一条 peer link 一个 interface；后续再评估 shared XFRM interface
-  - CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛，实际路由与准入交给 XFRM interface + Babel/route filter
-  - 当 peer Zone 被撤销或其父 delegation 被 tombstone 时，立即 terminate 对应 IKE_SA/CHILD_SA，删除 XFRM interface、地址、路由、secret/cert/key reference
+  - [ ] 定义最小 `TransportLinkSpec`：local zone、peer zone、transport id、IKE identity、认证材料引用、endpoint candidates、XFRM `if_id`、interface name、本地/远端 tunnel address、目标 network namespace
+  - [ ] 认证材料不复用 Zone signing key；生成独立 IKE key/cert 或 raw public key，优先 Ed25519，兼容性不足时退到 ECDSA P-256，避免 RSA 长 key/大 record 体积
+  - [ ] 通过 signed transport record 将 IKE public key / fingerprint 绑定到 Zone trust chain：Zone key 证明 transport key 属于该 Zone，IKE 握手只使用 transport key
+  - [ ] 通过 VICI 控制 StrongSwan，优先使用 `github.com/strongswan/govici/vici`；`swanctl` 只作为人工 debug/dry-run 对照，不作为核心控制面输出解析依赖
+  - [ ] 定义 `IPsecDriver` / `XFRMDriver` 薄接口：`LoadConnection`、`UnloadConnection`、`TerminateSA`、`ListSAs`、`EnsureInterface`、`DeleteInterface`、`AssignAddress`
+  - [ ] 增加 fake/dry-run driver：非 root、无 strongSwan、无 XFRM 权限环境仍可测试 desired config 推导、apply 顺序和错误路径
+  - [ ] 做运行依赖检测：VICI socket / `charon` 可用性、strongSwan XFRM 支持、Linux kernel/iproute2 XFRM interface 支持、`CAP_NET_ADMIN`/root 权限、UDP 500/4500 或自定义端口可用性
+  - [ ] 稳定派生 XFRM `if_id` 与 interface name：基于 local zone + peer zone + transport id hash，`if_id` 使用 32-bit 值，接口名满足 Linux 15 字符限制并处理冲突
+  - [ ] 第一版默认一条 peer link 一个 XFRM interface；后续再评估 shared XFRM interface 或 in/out 分离 interface
+  - [ ] network namespace 第一版默认 host ns；`TransportLinkSpec` 预留目标 ns，`EnsureInterface` 支持创建后 move 到固定 ns，daemon 启动/重启时 ensure，目标 ns 不存在时进入 degraded/error 而不隐式创建复杂 ns
+  - [ ] CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛；Phase 4 只负责 peer-to-peer tunnel link，路由前缀授权留给 Phase 5 Babel/route filter
+  - [ ] 实现撤销/删除清理：terminate IKE_SA/CHILD_SA、unload connection/secret、删除 XFRM interface、地址、临时路由和本地运行态
 
 - [ ] **4.2 链路实例管理**
-  - 当 IKEv2/IPsec peer 建立后，生成 LinkInstance
-  - 跟踪链路状态：up/down/stale
-  - 暴露 IKE_SA/CHILD_SA 状态、XFRM interface 名称、if_id、端口候选、最近 rekey/reestablish 原因
+  - [ ] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition
+  - [ ] daemon 从 active state 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/endpoint/transport/ipsec record 变化
+  - [ ] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair
+  - [ ] 设计状态机：`pending`、`configuring`、`connecting`、`up`、`degraded`、`stale`、`removing`、`down`、`error`
+  - [ ] endpoint candidates 支持排序和回退：signed endpoint、verified observed path、标准 500/4500、自定义 IKE/NAT-T 端口；记录失败率和最近失败原因
+  - [ ] 处理幂等和并发：同一个 peer 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + StrongSwan/XFRM 实际状态恢复
+  - [ ] 撤销优先级最高：peer Zone 或父 delegation tombstone 后，不等待普通 reconnect/backoff，立即 teardown link，并阻止 endpoint fallback、rekey 或 reconcile 重建
+  - [ ] 暴露 control API/debug 输出：link 列表、desired vs actual、SA 状态、XFRM interface、`if_id`、endpoint、rekey/reconnect 原因、最近错误
+  - [ ] 增加 fake driver 单元测试：create/update/delete/revoke/restart recovery；真实 StrongSwan/XFRM smoke 留到 4.3
 
 - [ ] **4.3 最小闭环验证**
-  - 节点 A 和 B 同步配置
-  - 自动为对方加载 StrongSwan connection/secret 并创建 XFRM interface
-  - `swanctl --list-sas` 看到 IKE_SA / CHILD_SA 建立成功
-  - 互相 ping 通 tunnel IP
+  - [ ] 增加 `make ipsec-dry-run-smoke`：不要求 root/StrongSwan/XFRM，使用 fake driver 验证 A/B 同步后能从 active state 推导出对称 `TransportLinkSpec`、稳定 `if_id`/interface name、Ed25519/ECDSA transport key record 和 expected VICI/XFRM apply plan
+  - [ ] 增加真实环境前置检查命令：检测 Linux、root 或 `CAP_NET_ADMIN`、VICI socket/`charon`、XFRM interface 支持、`ip`/`swanctl` 可用性；缺失时给出明确 skip/error，而不是半途留下 connection/interface
+  - [ ] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步和 transport key record 发布
+  - [ ] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
+  - [ ] smoke 使用 VICI/`swanctl --list-sas` 双重观测 IKE_SA/CHILD_SA：断言 peer identity、CHILD_SA name、reqid/if_id、local/remote endpoint 与 `TransportLinkSpec` 一致
+  - [ ] smoke 验证数据面：A/B 通过 tunnel IP 互相 `ping` 成功；抓取失败时输出 daemon log、VICI SA 列表、`ip link`、`ip xfrm state/policy`、`ip route` 和 namespace 信息
+  - [ ] 覆盖重启恢复：停止并重启任一 daemon 后，daemon 从 active state + StrongSwan/XFRM 实际状态恢复或 repair，最终仍只有一组有效 connection/interface/SA，tunnel ping 恢复
+  - [ ] 覆盖撤销闭环：父 Zone 签发 peer revocation 后，远端 daemon 收敛并立即 teardown IKE_SA/CHILD_SA、删除 XFRM interface/地址/临时路由，`LinkInstance` 进入 `removing/down`，tunnel ping 失败且不会被 reconnect/backoff 拉起
+  - [ ] 明确该 smoke 不覆盖 Phase 5 多前缀路由授权；只验证 peer-to-peer tunnel address 和 route-based VPN link 可用
+  - [ ] 将真实 StrongSwan/XFRM smoke 默认排除在 `make smoke-all` 之外，作为显式 root/system integration 目标；`ipsec-dry-run-smoke` 可纳入常规 `make check` 或 smoke-all
 
 ## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 
