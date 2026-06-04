@@ -93,7 +93,7 @@ higgs sync serve
 higgs sync once <peer-id>
 ```
 
-打开传输层，向指定节点发送一个 `PING`，等待最多 `3s` 接收 `PONG`（以及可能的后续 `ANNOUNCE`），然后退出。适用于临时同步或脚本编排。
+打开传输层，向指定节点发送一个 `PING`，等待最多 `5s` 接收 `PONG`（以及可能的后续 `ANNOUNCE` / object pull），然后退出。适用于临时同步或脚本编排。
 
 ### 3.3 `daemon` — 本机长期运行与单 writer
 

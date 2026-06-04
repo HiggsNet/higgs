@@ -530,7 +530,7 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 			continue
 		}
 		start := d.Sync.now()
-		if err := d.Sync.syncRound(ctx, peerID, 3*time.Second); err != nil {
+		if err := d.Sync.syncRound(ctx, peerID, defaultSyncRoundTimeout); err != nil {
 			d.logSyncRoundError(peerID, err, d.Sync.now().Sub(start))
 			if syncErr == nil {
 				syncErr = err

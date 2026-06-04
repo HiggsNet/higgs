@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
@@ -215,6 +216,41 @@ func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
 	}
 	if stats.LastObject != "zone" || stats.LastZone != "node-b.catofes." || stats.LastError == "" {
 		t.Fatalf("last object stats = %#v", stats)
+	}
+}
+
+func TestObjectPullClientTimeoutHonorsOuterDeadline(t *testing.T) {
+	if got, err := objectPullClientTimeoutUntil(time.Time{}, objectPullClientDialTimeout); err != nil || got != objectPullClientDialTimeout {
+		t.Fatalf("zero deadline timeout = %s/%v, want %s/nil", got, err, objectPullClientDialTimeout)
+	}
+	deadline := time.Now().Add(50 * time.Millisecond)
+	got, err := objectPullClientTimeoutUntil(deadline, objectPullClientDialTimeout)
+	if err != nil {
+		t.Fatalf("objectPullClientTimeoutUntil future: %v", err)
+	}
+	if got <= 0 || got > 100*time.Millisecond {
+		t.Fatalf("future deadline timeout = %s, want small positive timeout", got)
+	}
+	if _, err := objectPullClientTimeoutUntil(time.Now().Add(-time.Millisecond), objectPullClientDialTimeout); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired deadline error = %v, want DeadlineExceeded", err)
+	}
+}
+
+func TestObjectPullExpiredDeadlineRecordsUnreachable(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	config := &syncConfigFile{
+		Bootstrap: []syncConfigPeer{
+			{ID: "node-b.catofes.", Addr: "127.0.0.1:1"},
+		},
+	}
+
+	_, err := tryObjectPullTCPUntil(state, config, "node-b.catofes.", "node-b.catofes.", time.Now().Add(-time.Millisecond))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("tryObjectPullTCPUntil error = %v, want DeadlineExceeded", err)
+	}
+	stats := state.SyncPeers["node-b.catofes."].ObjectPullStats
+	if stats == nil || stats.LargeObjectUnreachable != 1 || !stats.LastUnreachable {
+		t.Fatalf("deadline unreachable stats = %#v", stats)
 	}
 }
 

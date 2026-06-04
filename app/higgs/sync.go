@@ -23,6 +23,7 @@ import (
 )
 
 const relayMinInterval = time.Second
+const defaultSyncRoundTimeout = 5 * time.Second
 const maxRelayFanoutPerUpdate = 8
 const rejectedDigestTTL = 10 * time.Minute
 const observedPathTTL = 3 * time.Minute
@@ -458,7 +459,7 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	defer transport.Close()
-	return syncRuntime.syncRound(context.Background(), peerID, 3*time.Second)
+	return syncRuntime.syncRound(context.Background(), peerID, defaultSyncRoundTimeout)
 }
 
 func syncRun(ctx context.Context, interval time.Duration) error {
@@ -560,7 +561,7 @@ func (sr *SyncRuntime) relay(ctx context.Context, sourcePeerID string) error {
 			continue
 		}
 		relayed++
-		if err := sr.syncRound(ctx, peerID, 3*time.Second); err != nil {
+		if err := sr.syncRound(ctx, peerID, defaultSyncRoundTimeout); err != nil {
 			fields := map[string]any{
 				"peer_id":     peerID,
 				"source_peer": sourcePeerID,
@@ -1322,7 +1323,7 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 				if len(remoteDigests) > 0 {
 					fetch := fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())
 					for _, path := range fetch {
-						if snapshot, pullErr := tryObjectPullTCP(sr.State, sr.Config, peerID, path); pullErr == nil && snapshot != nil {
+						if snapshot, pullErr := tryObjectPullTCPUntil(sr.State, sr.Config, peerID, path, deadline); pullErr == nil && snapshot != nil {
 							// Object pull uses TCP; relax the byte limit because the object
 							// already passed the 8 MiB response cap in the pull layer.
 							limits := syncLimits(sr.Config)
@@ -1370,7 +1371,7 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 			return err
 		}
 		if packet.Message.PeerID != peerID {
-			if handleErr := sr.handlePacket(packet); handleErr != nil {
+			if handleErr := sr.handlePacketUntil(packet, deadline); handleErr != nil {
 				sr.logger().Warn("gossip", "packet_failed", map[string]any{
 					"peer_id": packet.Message.PeerID,
 					"type":    packet.Message.Type,
@@ -1386,7 +1387,7 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 			remoteDigests = packet.Message.Pong.Zones
 		}
 		peerRequestedZones := packet.Message.Pong != nil && len(packet.Message.Pong.FetchZones) > 0
-		if err = sr.handlePacket(packet); err != nil {
+		if err = sr.handlePacketUntil(packet, deadline); err != nil {
 			return err
 		}
 		if peerRequestedZones {
@@ -1478,6 +1479,10 @@ func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gos
 }
 
 func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
+	return sr.handlePacketUntil(packet, time.Time{})
+}
+
+func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Time) (err error) {
 	state := sr.State
 	transport := sr.Transport
 	config := sr.Config
@@ -1549,7 +1554,7 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 	case gossip.MessageFetchRecord:
 		return sr.sendRecord(message.PeerID, message.FetchRecord)
 	case gossip.MessageAnnounce:
-		return sr.handleAnnounce(message, syncLimits(config))
+		return sr.handleAnnounceUntil(message, syncLimits(config), deadline)
 	case gossip.MessageObjectChunk:
 		return sr.handleObjectChunk(message, syncLimits(config))
 	default:
@@ -1566,6 +1571,10 @@ func handleAnnounce(state *stateFile, transport *gossip.Transport, message *goss
 }
 
 func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.SyncLimits) error {
+	return sr.handleAnnounceUntil(message, limits, time.Time{})
+}
+
+func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossip.SyncLimits, deadline time.Time) error {
 	state := sr.State
 	transport := sr.Transport
 	var changed bool
@@ -1608,7 +1617,7 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 		}
 	}
 	for _, path := range fetchListForPeer(state, message.PeerID, message.Announce.Zones, sr.now()) {
-		snapshot, pullErr := tryObjectPullTCP(state, sr.Config, message.PeerID, path)
+		snapshot, pullErr := tryObjectPullTCPUntil(state, sr.Config, message.PeerID, path, deadline)
 		if pullErr == nil && snapshot != nil {
 			pullLimits := limits
 			pullLimits.MaxBytes = 8 << 20

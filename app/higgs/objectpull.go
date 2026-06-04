@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +15,9 @@ import (
 const maxObjectPullConcurrency = 4
 const maxObjectPullServerConcurrency = 16
 const maxObjectPullPerPeerInflight = 2
+const objectPullClientDialTimeout = 1500 * time.Millisecond
+const objectPullClientIOTimeout = 3 * time.Second
+const objectPullServerConnDeadline = 10 * time.Second
 
 var objectPullClientLimiter = make(chan struct{}, maxObjectPullConcurrency)
 var objectPullServerLimiter = make(chan struct{}, maxObjectPullServerConcurrency)
@@ -109,7 +113,7 @@ func objectPullTCPServe(addr string, lookup func(*gossip.ObjectPullRequest) *gos
 			go func(c net.Conn) {
 				defer c.Close()
 				defer release()
-				_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+				_ = c.SetDeadline(time.Now().Add(objectPullServerConnDeadline))
 				req, err := gossip.DecodeObjectPullRequest(c)
 				if err != nil {
 					return
@@ -122,7 +126,7 @@ func objectPullTCPServe(addr string, lookup func(*gossip.ObjectPullRequest) *gos
 				if err != nil {
 					return
 				}
-				_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+				_ = c.SetDeadline(time.Now().Add(objectPullServerConnDeadline))
 				_, _ = c.Write(data)
 			}(conn)
 		}
@@ -147,6 +151,10 @@ func pullObjectTCP(addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPu
 }
 
 func pullObjectTCPForPeer(peerID, addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
+	return pullObjectTCPForPeerUntil(peerID, addr, req, time.Time{})
+}
+
+func pullObjectTCPForPeerUntil(peerID, addr string, req *gossip.ObjectPullRequest, deadline time.Time) (*gossip.ObjectPullResponse, error) {
 	select {
 	case objectPullClientLimiter <- struct{}{}:
 		defer func() { <-objectPullClientLimiter }()
@@ -166,16 +174,28 @@ func pullObjectTCPForPeer(peerID, addr string, req *gossip.ObjectPullRequest) (*
 	if err := objectPullQuota.allow(peerID, int64(len(data)), 1, time.Now()); err != nil {
 		return nil, err
 	}
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	dialTimeout, err := objectPullClientTimeoutUntil(deadline, objectPullClientDialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	ioDeadline, err := objectPullClientDeadlineUntil(deadline, objectPullClientIOTimeout)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(ioDeadline)
 	if _, err := conn.Write(data); err != nil {
 		return nil, err
 	}
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	ioDeadline, err = objectPullClientDeadlineUntil(deadline, objectPullClientIOTimeout)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(ioDeadline)
 	resp, err := gossip.DecodeObjectPullResponse(conn)
 	if err != nil {
 		return nil, err
@@ -184,6 +204,31 @@ func pullObjectTCPForPeer(peerID, addr string, req *gossip.ObjectPullRequest) (*
 		return nil, err
 	}
 	return resp, nil
+}
+
+func objectPullClientTimeoutUntil(deadline time.Time, maxTimeout time.Duration) (time.Duration, error) {
+	if maxTimeout <= 0 {
+		return 0, context.DeadlineExceeded
+	}
+	if deadline.IsZero() {
+		return maxTimeout, nil
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, context.DeadlineExceeded
+	}
+	if remaining < maxTimeout {
+		return remaining, nil
+	}
+	return maxTimeout, nil
+}
+
+func objectPullClientDeadlineUntil(deadline time.Time, maxTimeout time.Duration) (time.Time, error) {
+	timeout, err := objectPullClientTimeoutUntil(deadline, maxTimeout)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Now().Add(timeout), nil
 }
 
 // objectPullLookup returns a function that can be passed to objectPullTCPServe.
@@ -229,6 +274,10 @@ func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest
 // tryObjectPullTCP attempts to pull a zone snapshot over TCP from a peer.
 // It derives the TCP address from the peer's discovered or bootstrap UDP address.
 func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath) (*gossip.ZoneSnapshot, error) {
+	return tryObjectPullTCPUntil(state, config, peerID, path, time.Time{})
+}
+
+func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath, deadline time.Time) (*gossip.ZoneSnapshot, error) {
 	addr := resolvePeerTCPAddr(state, config, peerID)
 	if addr == "" {
 		err := fmt.Errorf("no TCP address for peer %s", peerID)
@@ -236,10 +285,10 @@ func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, p
 		return nil, err
 	}
 	recordObjectPullAttempt(state, peerID, "zone", path, "", time.Now())
-	resp, err := pullObjectTCPForPeer(peerID, addr, &gossip.ObjectPullRequest{
+	resp, err := pullObjectTCPForPeerUntil(peerID, addr, &gossip.ObjectPullRequest{
 		Type: gossip.ObjectPullZone,
 		Zone: path,
-	})
+	}, deadline)
 	if err != nil {
 		recordObjectPullResult(state, peerID, "zone", path, "", 0, err, isObjectPullUnreachable(err), time.Now())
 		return nil, err
@@ -261,6 +310,10 @@ func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, p
 
 // tryObjectPullRecordTCP attempts to pull a single record over TCP from a peer.
 func tryObjectPullRecordTCP(state *stateFile, config *syncConfigFile, peerID string, fetch *gossip.FetchRecord) (*gossip.RecordSnapshot, error) {
+	return tryObjectPullRecordTCPUntil(state, config, peerID, fetch, time.Time{})
+}
+
+func tryObjectPullRecordTCPUntil(state *stateFile, config *syncConfigFile, peerID string, fetch *gossip.FetchRecord, deadline time.Time) (*gossip.RecordSnapshot, error) {
 	if fetch == nil {
 		return nil, fmt.Errorf("object pull record selector is nil")
 	}
@@ -271,12 +324,12 @@ func tryObjectPullRecordTCP(state *stateFile, config *syncConfigFile, peerID str
 		return nil, err
 	}
 	recordObjectPullAttempt(state, peerID, "record", fetch.Zone, fetch.Key, time.Now())
-	resp, err := pullObjectTCPForPeer(peerID, addr, &gossip.ObjectPullRequest{
+	resp, err := pullObjectTCPForPeerUntil(peerID, addr, &gossip.ObjectPullRequest{
 		Type:    gossip.ObjectPullRecord,
 		Zone:    fetch.Zone,
 		Key:     fetch.Key,
 		Version: fetch.Version,
-	})
+	}, deadline)
 	if err != nil {
 		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, 0, err, isObjectPullUnreachable(err), time.Now())
 		return nil, err
@@ -307,6 +360,9 @@ func encodedObjectPullResponseSize(resp *gossip.ObjectPullResponse) int {
 func isObjectPullUnreachable(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
