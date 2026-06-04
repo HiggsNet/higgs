@@ -8,6 +8,8 @@ listen_addr: 127.0.0.1:33434
 max_datagram_bytes: 1200
 max_sync_zones: 16
 max_sync_records: 1024
+# Supported levels: debug, info, warn, error. Use debug for per-packet gossip
+# and transport diagnostics.
 log_level: info
 reflectors: auto
 reflector_interval: 5m

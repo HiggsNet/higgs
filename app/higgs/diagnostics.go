@@ -2,11 +2,8 @@ package main
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -18,11 +15,9 @@ func syncDebugLogger(config *syncConfigFile) func(gossip.Event) {
 	if !debugLogEnabled(config) {
 		return nil
 	}
+	logger := newAppLogger(config)
 	return func(event gossip.Event) {
 		fields := map[string]any{
-			"ts":           time.Now().UTC().Format(time.RFC3339Nano),
-			"level":        "debug",
-			"component":    "gossip",
 			"direction":    event.Direction,
 			"peer_id":      event.PeerID,
 			"message_type": event.Type,
@@ -38,20 +33,12 @@ func syncDebugLogger(config *syncConfigFile) func(gossip.Event) {
 		if event.Error != "" {
 			fields["error"] = event.Error
 		}
-		data, err := json.Marshal(fields)
-		if err != nil {
-			return
-		}
-		fmt.Fprintln(os.Stderr, string(data))
+		logger.Debug("gossip", "message", fields)
 	}
 }
 
 func debugLogEnabled(config *syncConfigFile) bool {
-	level := strings.ToLower(os.Getenv("HIGGS_LOG_LEVEL"))
-	if level == "" && config != nil {
-		level = strings.ToLower(config.LogLevel)
-	}
-	return level == "debug"
+	return newAppLogger(config).debugEnabled()
 }
 
 func debugPeer(peerID string) error {

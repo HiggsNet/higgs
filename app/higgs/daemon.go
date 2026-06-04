@@ -20,6 +20,8 @@ type DaemonService struct {
 	ControlSocketPath string
 	Events            chan daemonEvent
 	Hooks             DaemonHooks
+	Log               *appLogger
+	LogLimiter        *repeatedLogLimiter
 }
 
 type DaemonHooks struct {
@@ -86,6 +88,8 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		Interval:          interval,
 		ControlSocketPath: socketPath,
 		Events:            make(chan daemonEvent, 64),
+		Log:               newAppLogger(config),
+		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 	}
 }
 
@@ -100,7 +104,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	defer transport.Close()
 	objectPullListener, err := startObjectPullServer(d)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "object pull server error: %v\n", err)
+		d.logError("object_pull", "server_start_failed", map[string]any{"error": err})
 	}
 	if objectPullListener != nil {
 		defer objectPullListener.Close()
@@ -110,7 +114,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopControl()
-	fmt.Printf("daemon running as %s on %s interval=%s\n", d.Sync.Config.PeerID, transport.LocalAddr(), d.Interval)
+	d.logInfo("daemon", "started", map[string]any{
+		"peer_id":  d.Sync.Config.PeerID,
+		"addr":     transport.LocalAddr(),
+		"interval": d.Interval,
+	})
 
 	nextSync := d.Sync.now()
 	nextEndpointPublish := d.Sync.now()
@@ -129,7 +137,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			forceSync = true
 		}
 		if latest, changed, err := d.Sync.reloadStateIfChanged(lastObservedDigests); err != nil {
-			fmt.Fprintf(os.Stderr, "daemon reload error: %v\n", err)
+			d.logWarn("daemon", "reload_failed", map[string]any{"error": err})
 		} else if changed {
 			d.setState(latest)
 			lastObservedDigests = gossip.ZoneDigests(latest.Network)
@@ -141,7 +149,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if !now.Before(nextEndpointPublish) {
 			result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
 			if result.Error != nil {
-				fmt.Fprintf(os.Stderr, "endpoint publish error: %v\n", result.Error)
+				d.logWarn("endpoint", "publish_failed", map[string]any{"error": result.Error})
 			}
 			if triggerSync {
 				nextSync = now
@@ -157,7 +165,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if !now.Before(nextSync) {
 			result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventSyncTimer, ForceSync: forceSync, Context: ctx})
 			if result.Error != nil {
-				fmt.Fprintf(os.Stderr, "sync timer error: %v\n", result.Error)
+				d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
 			}
 			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
@@ -173,12 +181,17 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if isReceiveTimeout(err) || errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "daemon receive error: %v\n", err)
+			d.logWarn("transport", "receive_failed", map[string]any{"error": err})
 			continue
 		}
 		result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
 		if result.Error != nil {
-			fmt.Fprintf(os.Stderr, "daemon packet error from %s: %v\n", packet.Message.PeerID, result.Error)
+			d.logWarn("gossip", "packet_failed", map[string]any{
+				"peer_id": packet.Message.PeerID,
+				"type":    packet.Message.Type,
+				"error":   result.Error,
+				"reason":  gossip.RejectReason(result.Error),
+			})
 		}
 		if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 			lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
@@ -220,7 +233,7 @@ func (d *DaemonService) serveControl(ctx context.Context, listener net.Listener,
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			fmt.Fprintf(os.Stderr, "daemon control accept error: %v\n", err)
+			d.logWarn("daemon", "control_accept_failed", map[string]any{"error": err})
 			continue
 		}
 		go d.handleControlConn(ctx, conn)
@@ -502,15 +515,31 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	d.Sync.updateDiscoveredPeers()
 	digestsBeforeRound := gossip.ZoneDigests(d.Sync.State.Network)
 	var syncErr error
-	for _, peerID := range outboundSyncPeersAt(d.Sync.State, d.Sync.Config, d.Sync.now()) {
+	peers := outboundSyncPeersAt(d.Sync.State, d.Sync.Config, d.Sync.now())
+	d.logDebug("sync", "timer_started", map[string]any{
+		"peer_count": len(peers),
+		"force":      force,
+	})
+	for _, peerID := range peers {
 		if !force && backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now()) > 0 {
+			d.logDebug("sync", "round_skipped", map[string]any{
+				"peer_id": peerID,
+				"reason":  "backoff",
+				"backoff": backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now()),
+			})
 			continue
 		}
+		start := d.Sync.now()
 		if err := d.Sync.syncRound(ctx, peerID, 3*time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "sync round error peer=%s: %v\n", peerID, err)
+			d.logSyncRoundError(peerID, err, d.Sync.now().Sub(start))
 			if syncErr == nil {
 				syncErr = err
 			}
+		} else {
+			d.logDebug("sync", "round_completed", map[string]any{
+				"peer_id":     peerID,
+				"duration_ms": d.Sync.now().Sub(start).Milliseconds(),
+			})
 		}
 	}
 	if syncStateChanged(d.Sync.State, digestsBeforeRound) {
@@ -518,6 +547,28 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 		d.notifyStateChanged()
 	}
 	return syncErr
+}
+
+func (d *DaemonService) logSyncRoundError(peerID string, err error, duration time.Duration) {
+	if err == nil {
+		return
+	}
+	now := d.Sync.now()
+	reason := syncErrorReason(err)
+	fields := map[string]any{
+		"peer_id":     peerID,
+		"reason":      reason,
+		"error":       err,
+		"duration_ms": duration.Milliseconds(),
+	}
+	addPeerLogFields(fields, d.Sync.State, peerID, now)
+	key := "sync_round|" + peerID + "|" + reason + "|" + err.Error()
+	if suppressed, ok := d.LogLimiter.Allow(key, now); ok {
+		if suppressed > 0 {
+			fields["suppressed"] = suppressed
+		}
+		d.logWarn("sync", "round_failed", fields)
+	}
 }
 
 func (d *DaemonService) handleEndpointTimerEvent() error {
@@ -583,4 +634,28 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 		return err
 	}
 	return newDaemonService(rt, state, config, interval).Run(ctx)
+}
+
+func (d *DaemonService) logDebug(component, event string, fields map[string]any) {
+	if d != nil && d.Log != nil {
+		d.Log.Debug(component, event, fields)
+	}
+}
+
+func (d *DaemonService) logInfo(component, event string, fields map[string]any) {
+	if d != nil && d.Log != nil {
+		d.Log.Info(component, event, fields)
+	}
+}
+
+func (d *DaemonService) logWarn(component, event string, fields map[string]any) {
+	if d != nil && d.Log != nil {
+		d.Log.Warn(component, event, fields)
+	}
+}
+
+func (d *DaemonService) logError(component, event string, fields map[string]any) {
+	if d != nil && d.Log != nil {
+		d.Log.Error(component, event, fields)
+	}
 }

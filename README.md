@@ -58,7 +58,7 @@ trusted_root_public_key: <base64-ed25519-public-key>
 - `max_datagram_bytes` / `target_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。旧字段 `max_message_bytes` 仍兼容读取，但公网推荐保持 1200；调大只适合实验或已知 MTU 的内网诊断。
 - `max_sync_zones`：单次 `ANNOUNCE` 最多携带的 Zone snapshot 数，默认 `16`。
 - `max_sync_records`：单个 Zone snapshot 或 record announce 最多携带的 record 数，默认 `1024`。
-- `log_level`：日志级别。设置为 `debug`，或使用 `HIGGS_LOG_LEVEL=debug`，会输出结构化 gossip debug log。
+- `log_level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。默认运行日志写入 stderr，格式为 `ts=... level=... component=... event=...`，会标明 `gossip` / `sync` / `transport` / `endpoint` / `object_pull` 等类别。设置为 `debug` 会输出更详细的收发包、relay、backoff、object pull 等诊断字段；周期同步里的重复超时会按 peer 和原因汇总，下一次输出时带 `suppressed=N`。
 - `bootstrap`：已知 gossip peer。未知 peer ID 或地址会被拒绝。
 - `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。CLI 默认输出 base64 编码的裸 32-byte Ed25519 public key；配置仍兼容读取 hex。
 

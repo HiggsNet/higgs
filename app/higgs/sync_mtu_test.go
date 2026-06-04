@@ -87,7 +87,7 @@ func TestSendSnapshotsRecordsDatagramStats(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("node-b.catofes.", []*net.UDPAddr{transport.LocalAddr()})
 
-	if err := sendSnapshotsWithStats(state, state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false); err != nil {
+	if err := sendSnapshotsWithStats(state, state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false, nil); err != nil {
 		t.Fatalf("sendSnapshotsWithStats: %v", err)
 	}
 	stats := state.SyncPeers["node-b.catofes."].DatagramStats

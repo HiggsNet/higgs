@@ -1,0 +1,86 @@
+package main
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
+)
+
+func TestAppLoggerWritesStructuredFields(t *testing.T) {
+	var buf bytes.Buffer
+	logger := &appLogger{
+		level: logLevelInfo,
+		out:   &buf,
+		now:   func() time.Time { return time.Unix(100, 123).UTC() },
+	}
+
+	logger.Warn("sync", "round_failed", map[string]any{
+		"peer_id": "node-a.catofes.",
+		"reason":  "timeout",
+		"error":   "sync receive timed out",
+	})
+
+	line := buf.String()
+	for _, want := range []string{
+		"ts=1970-01-01T00:01:40.000000123Z",
+		"level=warn",
+		"component=sync",
+		"event=round_failed",
+		"peer_id=node-a.catofes.",
+		"reason=timeout",
+		`error="sync receive timed out"`,
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log line %q does not contain %q", line, want)
+		}
+	}
+}
+
+func TestRepeatedLogLimiterSuppressesUntilInterval(t *testing.T) {
+	limiter := newRepeatedLogLimiter(time.Minute)
+	now := time.Unix(100, 0)
+
+	if suppressed, ok := limiter.Allow("sync|node-a|timeout", now); !ok || suppressed != 0 {
+		t.Fatalf("first Allow = %d/%v, want 0/true", suppressed, ok)
+	}
+	if suppressed, ok := limiter.Allow("sync|node-a|timeout", now.Add(time.Second)); ok || suppressed != 0 {
+		t.Fatalf("second Allow = %d/%v, want 0/false", suppressed, ok)
+	}
+	if suppressed, ok := limiter.Allow("sync|node-a|timeout", now.Add(2*time.Second)); ok || suppressed != 0 {
+		t.Fatalf("third Allow = %d/%v, want 0/false", suppressed, ok)
+	}
+	if suppressed, ok := limiter.Allow("sync|node-a|timeout", now.Add(time.Minute)); !ok || suppressed != 2 {
+		t.Fatalf("interval Allow = %d/%v, want 2/true", suppressed, ok)
+	}
+}
+
+func TestAppLoggerFiltersByLevel(t *testing.T) {
+	var buf bytes.Buffer
+	logger := (&appLogger{}).setLevel(logLevelWarn).withOutput(&buf).withNow(func() time.Time {
+		return time.Unix(100, 0).UTC()
+	})
+
+	logger.Info("sync", "round_completed", map[string]any{"peer_id": "node-a.catofes."})
+	logger.Warn("sync", "round_failed", map[string]any{"peer_id": "node-a.catofes."})
+
+	line := buf.String()
+	if strings.Contains(line, "round_completed") {
+		t.Fatalf("warn logger emitted info line: %q", line)
+	}
+	if !strings.Contains(line, "event=round_failed") {
+		t.Fatalf("warn logger did not emit warn line: %q", line)
+	}
+}
+
+func TestSyncErrorReasonPendingZones(t *testing.T) {
+	err := &syncPendingZonesError{zones: []zone.ZonePath{"node-b.catofes."}}
+	if got := syncErrorReason(err); got != "pending_zones" {
+		t.Fatalf("syncErrorReason = %q, want pending_zones", got)
+	}
+	if !strings.Contains(err.Error(), "sync once timed out with pending zones: node-b.catofes.") {
+		t.Fatalf("pending error text = %q", err.Error())
+	}
+}

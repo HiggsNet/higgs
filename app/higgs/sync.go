@@ -101,6 +101,17 @@ func (sr *SyncRuntime) now() time.Time {
 	return time.Now()
 }
 
+func (sr *SyncRuntime) logger() *appLogger {
+	if sr == nil {
+		return newAppLogger(nil)
+	}
+	logger := newAppLogger(sr.Config)
+	if sr.App != nil {
+		logger.now = sr.App.Now
+	}
+	return logger
+}
+
 func newChunkAssemblyStore() *chunkAssemblyStore {
 	return &chunkAssemblyStore{entries: make(map[string]*chunkAssembly)}
 }
@@ -391,12 +402,16 @@ func syncServe(ctx context.Context) error {
 		return err
 	}
 	syncRuntime := newSyncRuntime(state, config, nil, rt)
+	logger := newAppLogger(config)
 	transport, err := syncRuntime.openTransport()
 	if err != nil {
 		return err
 	}
 	defer transport.Close()
-	fmt.Printf("sync serving as %s on %s\n", config.PeerID, transport.LocalAddr())
+	logger.Info("sync", "serve_started", map[string]any{
+		"peer_id": config.PeerID,
+		"addr":    transport.LocalAddr(),
+	})
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -409,11 +424,16 @@ func syncServe(ctx context.Context) error {
 			if isReceiveTimeout(err) {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "sync receive error: %v\n", err)
+			logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 			continue
 		}
 		if err := syncRuntime.handlePacket(packet); err != nil {
-			fmt.Fprintf(os.Stderr, "sync packet error from %s: %v\n", packet.Message.PeerID, err)
+			logger.Warn("gossip", "packet_failed", map[string]any{
+				"peer_id": packet.Message.PeerID,
+				"type":    packet.Message.Type,
+				"reason":  gossip.RejectReason(err),
+				"error":   err,
+			})
 			continue
 		}
 	}
@@ -471,6 +491,35 @@ func syncStateChanged(state *stateFile, before []gossip.ZoneDigest) bool {
 	return !sameZoneDigests(before, gossip.ZoneDigests(state.Network))
 }
 
+func zonePathStrings(paths []zone.ZonePath) []string {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, path.String())
+	}
+	return out
+}
+
+type syncPendingZonesError struct {
+	zones []zone.ZonePath
+}
+
+func (e *syncPendingZonesError) Error() string {
+	if e == nil {
+		return "sync once timed out with pending zones"
+	}
+	if len(e.zones) == 0 {
+		return "sync once timed out with pending zones"
+	}
+	return "sync once timed out with pending zones: " + strings.Join(zonePathStrings(e.zones), ",")
+}
+
+func (e *syncPendingZonesError) PendingZones() []string {
+	if e == nil {
+		return nil
+	}
+	return zonePathStrings(e.zones)
+}
+
 func sameZoneDigests(a, b []gossip.ZoneDigest) bool {
 	if len(a) != len(b) {
 		return false
@@ -512,7 +561,14 @@ func (sr *SyncRuntime) relay(ctx context.Context, sourcePeerID string) error {
 		}
 		relayed++
 		if err := sr.syncRound(ctx, peerID, 3*time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "sync relay round error peer=%s: %v\n", peerID, err)
+			fields := map[string]any{
+				"peer_id":     peerID,
+				"source_peer": sourcePeerID,
+				"reason":      syncErrorReason(err),
+				"error":       err,
+			}
+			addPeerLogFields(fields, sr.State, peerID, now)
+			sr.logger().Warn("sync", "relay_round_failed", fields)
 			continue
 		}
 		recordRelaySuccess(sr.State, peerID, sourcePeerID, now)
@@ -956,7 +1012,7 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 	port := listenPortFromAddr(config.ListenAddr)
 	endpoints, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
 	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(config.Reflectors)) > 0 {
-		fmt.Fprintf(os.Stderr, "reflector discovery warning: %v\n", reflectorErr)
+		sr.logger().Warn("endpoint", "reflector_failed", map[string]any{"error": reflectorErr})
 	}
 	now := sr.now()
 	var previous *gossip.EndpointRecord
@@ -1146,7 +1202,7 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 	}
 	if updated {
 		if err := sr.saveState(); err != nil {
-			fmt.Fprintf(os.Stderr, "update discovered peers save error: %v\n", err)
+			sr.logger().Warn("endpoint", "discovered_peer_save_failed", map[string]any{"error": err})
 		}
 	}
 }
@@ -1273,13 +1329,26 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 							limits.MaxBytes = 8 << 20
 							if _, applyErr := gossip.ApplySnapshot(sr.State.Network, snapshot, sr.now(), limits); applyErr != nil {
 								recordRejectedDigest(sr.State, peerID, digestForZone(remoteDigests, path), gossip.RejectReason(applyErr), sr.now())
-								fmt.Fprintf(os.Stderr, "object pull apply error zone=%s: %v\n", path, applyErr)
+								sr.logger().Warn("object_pull", "apply_failed", map[string]any{
+									"peer_id": peerID,
+									"zone":    path,
+									"reason":  gossip.RejectReason(applyErr),
+									"error":   applyErr,
+								})
 							} else {
 								clearRejectedDigest(sr.State, peerID, path)
-								fmt.Printf("applied zone %s via object pull\n", path)
+								sr.logger().Info("sync", "zone_applied", map[string]any{
+									"peer_id": peerID,
+									"zone":    path,
+									"via":     "object_pull",
+								})
 							}
 						} else if pullErr != nil && debugLogEnabled(sr.Config) {
-							fmt.Fprintf(os.Stderr, "object pull error zone=%s peer=%s: %v\n", path, peerID, pullErr)
+							sr.logger().Debug("object_pull", "pull_failed", map[string]any{
+								"peer_id": peerID,
+								"zone":    path,
+								"error":   pullErr,
+							})
 						}
 					}
 					if len(fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())) == 0 {
@@ -1302,7 +1371,12 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 		}
 		if packet.Message.PeerID != peerID {
 			if handleErr := sr.handlePacket(packet); handleErr != nil {
-				fmt.Fprintf(os.Stderr, "sync packet error from %s: %v\n", packet.Message.PeerID, handleErr)
+				sr.logger().Warn("gossip", "packet_failed", map[string]any{
+					"peer_id": packet.Message.PeerID,
+					"type":    packet.Message.Type,
+					"reason":  gossip.RejectReason(handleErr),
+					"error":   handleErr,
+				})
 			}
 			continue
 		}
@@ -1327,9 +1401,12 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 			awaitingQuiet = true
 		}
 	}
-	if len(remoteDigests) > 0 && len(fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())) > 0 {
-		err = errors.New("sync once timed out with pending zones")
-		return err
+	if len(remoteDigests) > 0 {
+		pending := fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())
+		if len(pending) > 0 {
+			err = &syncPendingZonesError{zones: pending}
+			return err
+		}
 	}
 	return nil
 }
@@ -1506,7 +1583,13 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 		}
 		clearRejectedDigest(state, message.PeerID, snapshot.Zone)
 		changed = true
-		fmt.Printf("applied zone %s records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
+		sr.logger().Info("sync", "zone_applied", map[string]any{
+			"peer_id":     message.PeerID,
+			"zone":        result.Zone,
+			"records":     result.Records,
+			"delegations": result.Delegation,
+			"via":         "udp_announce",
+		})
 	}
 	for _, record := range message.Announce.Records {
 		if isRejectedRecordActive(state, message.PeerID, &record, "", sr.now()) {
@@ -1536,7 +1619,13 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 			}
 			clearRejectedDigest(state, message.PeerID, path)
 			changed = true
-			fmt.Printf("applied zone %s via object pull records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
+			sr.logger().Info("sync", "zone_applied", map[string]any{
+				"peer_id":     message.PeerID,
+				"zone":        result.Zone,
+				"records":     result.Records,
+				"delegations": result.Delegation,
+				"via":         "object_pull",
+			})
 			continue
 		}
 		fetch := &gossip.FetchZone{Zone: path}
@@ -1584,7 +1673,13 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 		}
 		clearRejectedDigest(sr.State, message.PeerID, chunk.Zone)
 		recordDatagramChunkFallback(sr.State, message.PeerID)
-		fmt.Printf("applied zone %s via UDP chunks records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
+		sr.logger().Info("sync", "zone_applied", map[string]any{
+			"peer_id":     message.PeerID,
+			"zone":        result.Zone,
+			"records":     result.Records,
+			"delegations": result.Delegation,
+			"via":         "udp_chunks",
+		})
 		return sr.saveState()
 	default:
 		return nil
@@ -1595,17 +1690,17 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 // datagrams, respecting the datagram budget. Objects that exceed the budget
 // are skipped on the UDP path and must be retrieved via object pull.
 func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
-	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now(), false)
+	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now(), false, nil)
 }
 
 func (sr *SyncRuntime) sendSnapshots(peerID string, zones []zone.ZonePath, allowChunks bool) error {
 	if sr == nil {
 		return nil
 	}
-	return sendSnapshotsWithStats(sr.State, sr.State.Network, sr.Transport, peerID, zones, sr.now(), allowChunks)
+	return sendSnapshotsWithStats(sr.State, sr.State.Network, sr.Transport, peerID, zones, sr.now(), allowChunks, sr.logger())
 }
 
-func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool) error {
+func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) error {
 	plan := planSnapshotDatagrams(ns, zones, transport.MaxMessageBytes(), now)
 	chunkZones := make(map[zone.ZonePath]bool)
 	for _, oversized := range plan.Oversized {
@@ -1616,9 +1711,16 @@ func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *
 		if oversized.Object == "zone_skeleton" {
 			recordDatagramDigestOnly(state, peerID)
 		}
-		if debugLogEnabled(nil) {
-			fmt.Fprintf(os.Stderr, "sendSnapshots: %s %s/%s exceeds datagram budget (%d bytes), skipping UDP\n",
-				oversized.Object, oversized.Zone, oversized.Key, oversized.Size)
+		if logger != nil && logger.debugEnabled() {
+			logger.Debug("transport", "datagram_too_large", map[string]any{
+				"peer_id": peerID,
+				"object":  oversized.Object,
+				"zone":    oversized.Zone,
+				"key":     oversized.Key,
+				"bytes":   oversized.Size,
+				"limit":   transport.MaxMessageBytes(),
+				"action":  "skip_udp",
+			})
 		}
 	}
 	for _, announce := range plan.Announces {
@@ -1940,17 +2042,17 @@ func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapsh
 }
 
 func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord) error {
-	return sendRecordWithStats(nil, ns, transport, peerID, fetch, time.Now())
+	return sendRecordWithStats(nil, ns, transport, peerID, fetch, time.Now(), nil)
 }
 
 func (sr *SyncRuntime) sendRecord(peerID string, fetch *gossip.FetchRecord) error {
 	if sr == nil {
 		return nil
 	}
-	return sendRecordWithStats(sr.State, sr.State.Network, sr.Transport, peerID, fetch, sr.now())
+	return sendRecordWithStats(sr.State, sr.State.Network, sr.Transport, peerID, fetch, sr.now(), sr.logger())
 }
 
-func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord, now time.Time) error {
+func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord, now time.Time, logger *appLogger) error {
 	if fetch != nil && ns.IsZoneRevoked(fetch.Zone, now) {
 		return nil
 	}
@@ -1970,8 +2072,16 @@ func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gos
 			key = fetch.Key
 		}
 		recordDatagramTooLarge(state, peerID, "send", "record", zoneName, key, size, transport.MaxMessageBytes(), now)
-		if debugLogEnabled(nil) {
-			fmt.Fprintf(os.Stderr, "sendRecord: record %s/%s exceeds datagram budget (%d bytes), skipping UDP\n", zoneName, key, size)
+		if logger != nil && logger.debugEnabled() {
+			logger.Debug("transport", "datagram_too_large", map[string]any{
+				"peer_id": peerID,
+				"object":  "record",
+				"zone":    zoneName,
+				"key":     key,
+				"bytes":   size,
+				"limit":   transport.MaxMessageBytes(),
+				"action":  "skip_udp",
+			})
 		}
 		return nil
 	}

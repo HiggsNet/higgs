@@ -439,7 +439,7 @@ func startObjectPullServer(d *DaemonService) (net.Listener, error) {
 		return nil, err
 	}
 	if listener != nil {
-		fmt.Printf("object pull serving on %s\n", listener.Addr())
+		d.logInfo("object_pull", "serve_started", map[string]any{"addr": listener.Addr()})
 	}
 	return listener, nil
 }
