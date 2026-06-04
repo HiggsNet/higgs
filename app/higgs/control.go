@@ -172,6 +172,7 @@ func writeControlResponse(conn net.Conn, response controlResponse) {
 	if !response.OK && response.Error == "" {
 		response.Error = "request failed"
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(controlConnDeadline))
 	_ = json.NewEncoder(conn).Encode(response)
 }
 

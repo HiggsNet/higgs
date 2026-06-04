@@ -11,8 +11,9 @@ var (
 )
 
 type ReplayWindow struct {
-	Window time.Duration
-	seen   map[string]map[uint64]int64
+	Window    time.Duration
+	seen      map[string]map[uint64]int64
+	nextPrune time.Time
 }
 
 func NewReplayWindow(window time.Duration) *ReplayWindow {
@@ -38,6 +39,7 @@ func (rw *ReplayWindow) Check(peerID string, nonce uint64, timestamp int64, now 
 		return ErrMessageExpired
 	}
 
+	rw.pruneExpired(now)
 	rw.prune(peerID, now)
 	if rw.seen[peerID] == nil {
 		rw.seen[peerID] = make(map[uint64]int64)
@@ -47,6 +49,30 @@ func (rw *ReplayWindow) Check(peerID string, nonce uint64, timestamp int64, now 
 	}
 	rw.seen[peerID][nonce] = timestamp
 	return nil
+}
+
+func (rw *ReplayWindow) pruneExpired(now time.Time) {
+	if rw == nil || now.Before(rw.nextPrune) {
+		return
+	}
+	pruneInterval := rw.Window / 2
+	if pruneInterval <= 0 {
+		pruneInterval = time.Second
+	} else if rw.Window >= 2*time.Minute && pruneInterval < time.Minute {
+		pruneInterval = time.Minute
+	}
+	rw.nextPrune = now.Add(pruneInterval)
+	cutoff := now.Add(-rw.Window).Unix()
+	for peerID, peerSeen := range rw.seen {
+		for nonce, timestamp := range peerSeen {
+			if timestamp < cutoff {
+				delete(peerSeen, nonce)
+			}
+		}
+		if len(peerSeen) == 0 {
+			delete(rw.seen, peerID)
+		}
+	}
 }
 
 func (rw *ReplayWindow) prune(peerID string, now time.Time) {

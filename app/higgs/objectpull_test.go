@@ -202,6 +202,27 @@ func TestObjectPullConcurrencyLimit(t *testing.T) {
 	}
 }
 
+func TestObjectPullServerConcurrencyLimit(t *testing.T) {
+	var releases []func()
+	for i := 0; i < maxObjectPullServerConcurrency; i++ {
+		release, ok := acquireObjectPullServerSlot()
+		if !ok {
+			t.Fatalf("acquire server slot %d failed", i)
+		}
+		releases = append(releases, release)
+	}
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+
+	if release, ok := acquireObjectPullServerSlot(); ok {
+		release()
+		t.Fatalf("acquireObjectPullServerSlot succeeded with full limiter")
+	}
+}
+
 func TestObjectPullPerPeerInflightLimit(t *testing.T) {
 	var releases []func()
 	for i := 0; i < maxObjectPullPerPeerInflight; i++ {

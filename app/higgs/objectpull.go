@@ -12,9 +12,11 @@ import (
 )
 
 const maxObjectPullConcurrency = 4
+const maxObjectPullServerConcurrency = 16
 const maxObjectPullPerPeerInflight = 2
 
 var objectPullClientLimiter = make(chan struct{}, maxObjectPullConcurrency)
+var objectPullServerLimiter = make(chan struct{}, maxObjectPullServerConcurrency)
 var objectPullPeerLimiter = newObjectPullPeerLimiter(maxObjectPullPerPeerInflight)
 var objectPullQuota = newLockedPeerQuotas(gossip.QuotaConfig{
 	ByteRate:    8 << 20,
@@ -74,6 +76,15 @@ func (q *lockedPeerQuotas) allow(peerID string, bytes int64, objects int64, now 
 	return q.quotas.Allow(peerID, bytes, objects, now)
 }
 
+func acquireObjectPullServerSlot() (func(), bool) {
+	select {
+	case objectPullServerLimiter <- struct{}{}:
+		return func() { <-objectPullServerLimiter }, true
+	default:
+		return nil, false
+	}
+}
+
 // objectPullTCPServe starts a minimal TCP server that serves ZoneSnapshot and
 // RecordSnapshot objects over length-prefixed msgpack framing.
 func objectPullTCPServe(addr string, lookup func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse) (net.Listener, error) {
@@ -90,8 +101,14 @@ func objectPullTCPServe(addr string, lookup func(*gossip.ObjectPullRequest) *gos
 			if err != nil {
 				return
 			}
+			release, ok := acquireObjectPullServerSlot()
+			if !ok {
+				_ = conn.Close()
+				continue
+			}
 			go func(c net.Conn) {
 				defer c.Close()
+				defer release()
 				_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 				req, err := gossip.DecodeObjectPullRequest(c)
 				if err != nil {

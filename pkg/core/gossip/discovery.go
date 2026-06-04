@@ -404,11 +404,6 @@ func QueryPublicIPsWithQuery(reflectors []string, timeout time.Duration, query f
 		}
 		if appendIPByFamily(&out, res.ip, &have4, &have6) && have4 && have6 {
 			cancel()
-			go func(remaining int) {
-				for j := 0; j < remaining; j++ {
-					<-outCh
-				}
-			}(len(reflectors) - i - 1)
 			return out, nil
 		}
 	}
@@ -468,11 +463,6 @@ func queryPublicIPsWithClient(reflectors []string, client *http.Client) ([]net.I
 		}
 		if appendIPByFamily(&out, res.ip, &have4, &have6) && have4 && have6 {
 			cancel()
-			go func(remaining int) {
-				for j := 0; j < remaining; j++ {
-					<-outCh
-				}
-			}(len(reflectors) - i - 1)
 			return out, nil
 		}
 	}

@@ -86,6 +86,26 @@ func TestReplayWindow(t *testing.T) {
 	}
 }
 
+func TestReplayWindowPrunesInactivePeers(t *testing.T) {
+	now := time.Unix(1000, 0)
+	rw := NewReplayWindow(5 * time.Minute)
+
+	if err := rw.Check("node-a", 1, now.Unix(), now); err != nil {
+		t.Fatalf("Check(node-a): %v", err)
+	}
+	if _, ok := rw.seen["node-a"]; !ok {
+		t.Fatalf("node-a replay state was not recorded")
+	}
+
+	later := now.Add(6 * time.Minute)
+	if err := rw.Check("node-b", 1, later.Unix(), later); err != nil {
+		t.Fatalf("Check(node-b): %v", err)
+	}
+	if _, ok := rw.seen["node-a"]; ok {
+		t.Fatalf("inactive peer replay state was not pruned: %#v", rw.seen)
+	}
+}
+
 func TestPeerQuotas(t *testing.T) {
 	now := time.Unix(1000, 0)
 	quotas := NewPeerQuotas(QuotaConfig{
@@ -103,6 +123,32 @@ func TestPeerQuotas(t *testing.T) {
 	}
 	if err := quotas.Allow("node-a", 10, 1, now.Add(time.Second)); err != nil {
 		t.Fatalf("Allow(refilled): %v", err)
+	}
+}
+
+func TestPeerQuotasPrunesInactivePeers(t *testing.T) {
+	now := time.Unix(1000, 0)
+	quotas := NewPeerQuotas(QuotaConfig{
+		ByteRate:    10,
+		ByteBurst:   10,
+		ObjectRate:  1,
+		ObjectBurst: 1,
+		PeerTTL:     time.Minute,
+	})
+
+	if err := quotas.Allow("node-a", 1, 1, now); err != nil {
+		t.Fatalf("Allow(node-a): %v", err)
+	}
+	if _, ok := quotas.peers["node-a"]; !ok {
+		t.Fatalf("node-a quota state was not recorded")
+	}
+
+	later := now.Add(2 * time.Minute)
+	if err := quotas.Allow("node-b", 1, 1, later); err != nil {
+		t.Fatalf("Allow(node-b): %v", err)
+	}
+	if _, ok := quotas.peers["node-a"]; ok {
+		t.Fatalf("inactive peer quota state was not pruned: %#v", quotas.peers)
 	}
 }
 

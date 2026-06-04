@@ -12,11 +12,13 @@ type QuotaConfig struct {
 	ByteBurst   int64
 	ObjectRate  int64
 	ObjectBurst int64
+	PeerTTL     time.Duration
 }
 
 type PeerQuotas struct {
-	config QuotaConfig
-	peers  map[string]*quotaBucket
+	config    QuotaConfig
+	peers     map[string]*quotaBucket
+	nextPrune time.Time
 }
 
 type quotaBucket struct {
@@ -38,6 +40,9 @@ func NewPeerQuotas(config QuotaConfig) *PeerQuotas {
 	if config.ObjectBurst <= 0 {
 		config.ObjectBurst = config.ObjectRate
 	}
+	if config.PeerTTL <= 0 {
+		config.PeerTTL = 10 * time.Minute
+	}
 	return &PeerQuotas{
 		config: config,
 		peers:  make(map[string]*quotaBucket),
@@ -51,6 +56,7 @@ func (pq *PeerQuotas) Allow(peerID string, bytes int64, objects int64, now time.
 	if bytes < 0 || objects < 0 {
 		return ErrQuotaExceeded
 	}
+	pq.pruneExpired(now)
 	bucket := pq.peers[peerID]
 	if bucket == nil {
 		bucket = &quotaBucket{
@@ -67,6 +73,25 @@ func (pq *PeerQuotas) Allow(peerID string, bytes int64, objects int64, now time.
 	bucket.bytes -= bytes
 	bucket.objects -= objects
 	return nil
+}
+
+func (pq *PeerQuotas) pruneExpired(now time.Time) {
+	if pq == nil || pq.config.PeerTTL <= 0 || now.Before(pq.nextPrune) {
+		return
+	}
+	pruneInterval := pq.config.PeerTTL / 2
+	if pruneInterval <= 0 {
+		pruneInterval = time.Second
+	} else if pq.config.PeerTTL >= 2*time.Minute && pruneInterval < time.Minute {
+		pruneInterval = time.Minute
+	}
+	pq.nextPrune = now.Add(pruneInterval)
+	cutoff := now.Add(-pq.config.PeerTTL)
+	for peerID, bucket := range pq.peers {
+		if bucket == nil || bucket.last.Before(cutoff) {
+			delete(pq.peers, peerID)
+		}
+	}
 }
 
 func (pq *PeerQuotas) refill(bucket *quotaBucket, now time.Time) {

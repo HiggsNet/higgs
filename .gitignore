@@ -4,3 +4,4 @@ build
 .higgs.db
 .higgs
 /higgs
+.public-test

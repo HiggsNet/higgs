@@ -29,6 +29,7 @@ type DaemonHooks struct {
 type daemonEventType string
 
 const (
+	controlConnDeadline                       = 10 * time.Second
 	daemonEventRecordPut      daemonEventType = "record_put"
 	daemonEventDelegateIssue  daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke daemonEventType = "delegate_revoke"
@@ -229,10 +230,12 @@ func (d *DaemonService) serveControl(ctx context.Context, listener net.Listener,
 func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	var request controlRequest
+	_ = conn.SetReadDeadline(time.Now().Add(controlConnDeadline))
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {
 		writeControlResponse(conn, controlError(err))
 		return
 	}
+	_ = conn.SetReadDeadline(time.Time{})
 	switch request.Method {
 	case "status":
 		writeControlResponse(conn, controlResponse{
