@@ -354,7 +354,7 @@ ipsec_address_source_order:
 - `previous`：端口轮换 grace 窗口内可回退的旧端口。
 - `range`：daemon 可在该范围内选择端口；也可配置固定端口。
 
-Phase 4 只要求把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。高频 port hopping 属于 Phase 7；实现前必须验证 StrongSwan/VICI 对自定义 IKE/NAT-T 端口、NAT-T port floating、MOBIKE/reestablish、多实例或 DNAT 配合的实际边界。
+Phase 4 只要求把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；daemon 后续只负责签发/刷新，peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。StrongSwan 自定义端口的第一版边界是 `charon.port` / `charon.port_nat_t` + connection `remote_port` + 必要时 reestablish，MOBIKE/port floating 和多实例/DNAT 的高级策略留到 Phase 7。
 
 #### 2.4.3 本地 MeshPolicy rule DSL
 

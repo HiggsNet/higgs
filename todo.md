@@ -416,7 +416,7 @@
   - [ ] 支持 discovery server / reflector 作为可选地址来源：discovery 可返回候选地址/域名/端口公告；reflector 主要提供 observed address/port；两者都不能成为信任根，远端仍必须验证 Zone 签名记录和本地 mesh policy
   - [ ] 支持本地地址来源 `local`：用于 LAN、实验和显式启用场景；公网默认配置应允许禁用 private/link-local/interface-scan 结果，避免误把内网地址用于公网 IPsec
   - [ ] 支持 address source priority 配置：默认可为 `manual-address/manual-dns > discovery > reflector > local`，但必须允许管理员改顺序或按 rule 限制来源；不要把动态 DNS 视为天然最高优先级
-  - [ ] 设计端口选择/轮换边界：端口由本节点在配置的固定值或范围内选择并公告；轮换时同时发布 current 与 previous grace；peer 连接时用当前地址候选与端口公告组合；实现前需确认 StrongSwan/VICI 对自定义 IKE/NAT-T 端口、NAT-T port floating、MOBIKE/reestablish 的实际支持边界
+  - [x] 设计端口选择/轮换边界：端口由本节点在配置的固定值或范围内选择并公告；轮换时同时发布 current 与 previous grace；peer 连接时用当前地址候选与端口公告组合；StrongSwan 自定义端口第一版按 `charon.port` / `charon.port_nat_t` + connection `remote_port` + reestablish 边界处理，高频 port hopping / 多实例 / DNAT 留到 Phase 7
   - [ ] 通过 VICI 控制 StrongSwan，优先使用 `github.com/strongswan/govici/vici`；`swanctl` 只作为人工 debug/dry-run 对照，不作为核心控制面输出解析依赖
   - [x] 定义 `IPsecDriver` / `XFRMDriver` 薄接口：`LoadConnection`、`UnloadConnection`、`TerminateSA`、`ListSAs`、`EnsureInterface`、`DeleteInterface`、`AssignAddress`
   - [x] 增加 fake/dry-run driver：非 root、无 strongSwan、无 XFRM 权限环境仍可测试 desired config 推导、apply 顺序和错误路径
