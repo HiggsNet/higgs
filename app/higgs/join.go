@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -154,11 +153,19 @@ func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest)
 	if err != nil {
 		return nil, err
 	}
+	bundleNetwork, err := minimalNetworkForJoinBundle(state.Network, request.Zone)
+	if err != nil {
+		return nil, err
+	}
+	configureValidation(bundleNetwork)
+	if err := higgscrypto.VerifyChain(bundleNetwork, request.Zone, rt.Now()); err != nil {
+		return nil, err
+	}
 	bundle := joinBundle{
 		Version:       1,
 		Zone:          request.Zone,
 		RootPublicKey: rootKey,
-		Network:       cloneNetworkForBundle(state.Network),
+		Network:       bundleNetwork,
 	}
 	return &delegationIssueResult{Zone: request.Zone, Bundle: &bundle}, nil
 }
@@ -405,15 +412,96 @@ func validateJoinRequest(request *joinRequest) error {
 	return nil
 }
 
-func cloneNetworkForBundle(ns *zone.NetworkState) *zone.NetworkState {
-	data, err := json.Marshal(ns)
-	if err != nil {
-		panic(err)
+func minimalNetworkForJoinBundle(ns *zone.NetworkState, target zone.ZonePath) (*zone.NetworkState, error) {
+	if ns == nil {
+		return nil, errors.New("network state is nil")
 	}
-	var out zone.NetworkState
-	if err := json.Unmarshal(data, &out); err != nil {
-		panic(err)
+	if !target.Valid() || target == zone.RootZone {
+		return nil, fmt.Errorf("invalid join zone: %s", target)
 	}
-	normalizeState(&out)
-	return &out
+	out := zone.NewNetworkState()
+	ancestors := target.Ancestors()
+	for i := len(ancestors) - 1; i >= 0; i-- {
+		path := ancestors[i]
+		source := ns.Zones[path]
+		if source == nil || source.Authority == nil {
+			return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+		}
+		zs := zone.NewZoneState(path, cloneAuthorityForJoinBundle(source.Authority))
+		if path != zone.RootZone {
+			proof, err := directParentProofForBundle(ns, path, source)
+			if err != nil {
+				return nil, err
+			}
+			zs.ParentProof = []*zone.Delegation{proof}
+		}
+		out.Zones[path] = zs
+	}
+	normalizeState(out)
+	return out, nil
+}
+
+func directParentProofForBundle(ns *zone.NetworkState, path zone.ZonePath, source *zone.ZoneState) (*zone.Delegation, error) {
+	parent := path.Parent()
+	if parentState := ns.Zones[parent]; parentState != nil {
+		if delegation := parentState.Delegations[path]; delegation != nil {
+			return cloneDelegationForJoinBundle(delegation), nil
+		}
+	}
+	for _, proof := range source.ParentProof {
+		if proof != nil && proof.ZoneName == path {
+			return cloneDelegationForJoinBundle(proof), nil
+		}
+	}
+	return nil, fmt.Errorf("delegation not found: %s", path)
+}
+
+func cloneAuthorityForJoinBundle(authority *zone.ZoneAuthority) *zone.ZoneAuthority {
+	if authority == nil {
+		return nil
+	}
+	out := &zone.ZoneAuthority{
+		Zone:      authority.Zone,
+		Epoch:     authority.Epoch,
+		Threshold: authority.Threshold,
+		Keys:      make([]zone.AuthorizedKey, 0, len(authority.Keys)),
+	}
+	for _, key := range authority.Keys {
+		cloned := zone.AuthorizedKey{
+			Key:       append(ed25519.PublicKey(nil), key.Key...),
+			NotBefore: key.NotBefore,
+			NotAfter:  key.NotAfter,
+		}
+		if len(key.Capabilities) > 0 {
+			cloned.Capabilities = make([]zone.Capability, 0, len(key.Capabilities))
+			for _, capability := range key.Capabilities {
+				cloned.Capabilities = append(cloned.Capabilities, zone.Capability{
+					Permissions: append([]zone.Permission(nil), capability.Permissions...),
+					KeyPrefix:   capability.KeyPrefix,
+				})
+			}
+		}
+		out.Keys = append(out.Keys, cloned)
+	}
+	return out
+}
+
+func cloneDelegationForJoinBundle(delegation *zone.Delegation) *zone.Delegation {
+	if delegation == nil {
+		return nil
+	}
+	out := &zone.Delegation{
+		ZoneName:       delegation.ZoneName,
+		Scope:          delegation.Scope,
+		AuthorityEpoch: delegation.AuthorityEpoch,
+		AuthorityHash:  append([]byte(nil), delegation.AuthorityHash...),
+		Authority:      *cloneAuthorityForJoinBundle(&delegation.Authority),
+		SignedBy:       append(ed25519.PublicKey(nil), delegation.SignedBy...),
+		Signature:      append([]byte(nil), delegation.Signature...),
+	}
+	if delegation.ExpiresAt != nil {
+		expiresAt := *delegation.ExpiresAt
+		out.ExpiresAt = &expiresAt
+	}
+	return out
 }

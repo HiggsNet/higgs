@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -19,6 +20,9 @@ func TestJoinFlow(t *testing.T) {
 	keyPath := filepath.Join(dir, "node-b.key.json")
 	requestPath := filepath.Join(dir, "node-b.request.json")
 	bundlePath := filepath.Join(dir, "node-b.bundle.json")
+	siblingKeyPath := filepath.Join(dir, "node-a.key.json")
+	siblingRequestPath := filepath.Join(dir, "node-a.request.json")
+	siblingBundlePath := filepath.Join(dir, "node-a.bundle.json")
 
 	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
 	t.Setenv("HIGGS_CONFIG", adminConfig)
@@ -52,8 +56,36 @@ func TestJoinFlow(t *testing.T) {
 		t.Fatalf("createJoinRequest: %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
+	if err := putRecord("catofes.", "admin-note", []byte("kept-out-of-bundle"), "policy.string"); err != nil {
+		t.Fatalf("putRecord(catofes): %v", err)
+	}
+	if err := keygen(siblingKeyPath); err != nil {
+		t.Fatalf("keygen(node-a): %v", err)
+	}
+	if err := createJoinRequest("node-a.catofes.", siblingKeyPath, siblingRequestPath); err != nil {
+		t.Fatalf("createJoinRequest(node-a): %v", err)
+	}
+	if err := issueDelegation(siblingRequestPath, siblingBundlePath); err != nil {
+		t.Fatalf("issueDelegation(node-a): %v", err)
+	}
 	if err := issueDelegation(requestPath, bundlePath); err != nil {
 		t.Fatalf("issueDelegation: %v", err)
+	}
+	var bundle joinBundle
+	if err := readJSONFile(bundlePath, &bundle); err != nil {
+		t.Fatalf("read node-b bundle: %v", err)
+	}
+	assertMinimalJoinBundle(t, &bundle, "node-b.catofes.", []zone.ZonePath{zone.RootZone, "catofes.", "node-b.catofes."})
+	var siblingBundle joinBundle
+	if err := readJSONFile(siblingBundlePath, &siblingBundle); err != nil {
+		t.Fatalf("read node-a bundle: %v", err)
+	}
+	nodeBSnapshot, err := gossip.Snapshot(bundle.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+	if _, err := gossip.ApplySnapshot(siblingBundle.Network, nodeBSnapshot, timeNow(), gossip.DefaultSyncLimits()); err != nil {
+		t.Fatalf("ApplySnapshot(node-b into node-a bundle): %v", err)
 	}
 
 	t.Setenv("HIGGS_CONFIG", nodeConfig)
@@ -75,6 +107,43 @@ func TestJoinFlow(t *testing.T) {
 	}
 	if err := verifyChain("node-b.catofes."); err != nil {
 		t.Fatalf("verifyChain(node-b): %v", err)
+	}
+}
+
+func assertMinimalJoinBundle(t *testing.T, bundle *joinBundle, target zone.ZonePath, wantZones []zone.ZonePath) {
+	t.Helper()
+	if bundle.Zone != target {
+		t.Fatalf("bundle zone = %s, want %s", bundle.Zone, target)
+	}
+	if bundle.Network == nil {
+		t.Fatalf("bundle network is nil")
+	}
+	if len(bundle.Network.Zones) != len(wantZones) {
+		t.Fatalf("bundle zones = %d, want %d: %#v", len(bundle.Network.Zones), len(wantZones), bundle.Network.Zones)
+	}
+	for _, path := range wantZones {
+		zs := bundle.Network.Zones[path]
+		if zs == nil || zs.Authority == nil {
+			t.Fatalf("bundle missing authority for %s", path)
+		}
+		if len(zs.Records) != 0 {
+			t.Fatalf("bundle zone %s carried records: %#v", path, zs.Records)
+		}
+		if len(zs.RecordHistory) != 0 {
+			t.Fatalf("bundle zone %s carried record history: %#v", path, zs.RecordHistory)
+		}
+		if len(zs.Delegations) != 0 {
+			t.Fatalf("bundle zone %s carried delegation table: %#v", path, zs.Delegations)
+		}
+		if path == zone.RootZone {
+			if len(zs.ParentProof) != 0 {
+				t.Fatalf("root bundle zone carried parent proof: %#v", zs.ParentProof)
+			}
+			continue
+		}
+		if len(zs.ParentProof) != 1 || zs.ParentProof[0].ZoneName != path {
+			t.Fatalf("bundle zone %s parent proof = %#v, want direct proof", path, zs.ParentProof)
+		}
 	}
 }
 

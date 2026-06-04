@@ -110,7 +110,7 @@ higgs daemon --interval 5
 5. **入站接收** — 出站轮次之间，节点以 `250ms` 的超时轮询套接字，处理任何数据包。如果数据包包含的 `ANNOUNCE` 改变了本地状态，则记录来源 peer 并触发**中继**（见 §4.3）。
 6. **Control socket** — daemon 默认监听 Unix domain socket，路径为 `HIGGS_CONTROL_SOCKET`、root 下 `/run/higgs/higgs.sock`，或 `<data_dir>/higgs.sock` fallback。API 包含 `status`、`record_put`、`delegate_issue`、`delegate_revoke`、`join_accept`、`sync_trigger`、`shutdown`；`reload` 已预留但当前返回错误。socket 文件权限为 `0600`，第一版只作为本机控制面，不提供远程管理入口。
 
-CLI 在检测到 daemon control socket 可用时，会优先作为 client 提交写命令。例如 `record put` 会由 daemon 签名、写 DB 并触发 outbound sync；`delegate issue` 会把 join request 交给持有父 Zone 私钥的 daemon，由 daemon 签发 delegation、写 DB，并把 bundle 作为结构化响应返回给 CLI 写入文件；`delegate revoke` 由 daemon 串行写入 signed revocation/tombstone、清理 peer state 并触发后续同步；`join accept` 在 daemon 已运行时通过 control API 导入 bundle，避免运行态旧 snapshot 覆盖。daemon 不存在时这些命令保留直接写 DB 的开发/恢复模式，并输出明确提示。`root init` 是 daemon 启动前的离线初始化；如果已有 daemon 加载了 state，control API 会拒绝重置 root state。
+CLI 在检测到 daemon control socket 可用时，会优先作为 client 提交写命令。例如 `record put` 会由 daemon 签名、写 DB 并触发 outbound sync；`delegate issue` 会把 join request 交给持有父 Zone 私钥的 daemon，由 daemon 签发 delegation、写 DB，并把 bundle 作为结构化响应返回给 CLI 写入文件。join bundle 只携带 root 到目标 Zone 的最小 authority chain 和每一跳 direct delegation proof；父 Zone 的 records、record history、兄弟 delegation table 不进入 bundle，后续通过普通同步获取。`delegate revoke` 由 daemon 串行写入 signed revocation/tombstone、清理 peer state 并触发后续同步；`join accept` 在 daemon 已运行时通过 control API 导入 bundle，避免运行态旧 snapshot 覆盖。daemon 不存在时这些命令保留直接写 DB 的开发/恢复模式，并输出明确提示。`root init` 是 daemon 启动前的离线初始化；如果已有 daemon 加载了 state，control API 会拒绝重置 root state。
 
 ### 3.4 `sync run` — 兼容长运行入口
 

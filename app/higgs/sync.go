@@ -1388,6 +1388,12 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 		}
 		peerRequestedZones := packet.Message.Pong != nil && len(packet.Message.Pong.FetchZones) > 0
 		if err = sr.handlePacketUntil(packet, deadline); err != nil {
+			sr.logger().Warn("gossip", "peer_packet_failed", map[string]any{
+				"peer_id": packet.Message.PeerID,
+				"type":    packet.Message.Type,
+				"reason":  gossip.RejectReason(err),
+				"error":   err,
+			})
 			return err
 		}
 		if peerRequestedZones {
@@ -1588,6 +1594,12 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 		result, err := gossip.ApplySnapshot(state.Network, &snapshot, sr.now(), limits)
 		if err != nil {
 			recordRejectedDigest(state, message.PeerID, digestForZone(message.Announce.Zones, snapshot.Zone), gossip.RejectReason(err), sr.now())
+			sr.logger().Warn("sync", "zone_apply_failed", map[string]any{
+				"peer_id": message.PeerID,
+				"zone":    snapshot.Zone,
+				"reason":  gossip.RejectReason(err),
+				"error":   err,
+			})
 			return err
 		}
 		clearRejectedDigest(state, message.PeerID, snapshot.Zone)
@@ -1606,7 +1618,31 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 		}
 		err := gossip.ApplyRecordSnapshot(state.Network, &record, sr.now())
 		if err != nil {
+			if errors.Is(err, gossip.ErrUntrustedZone) {
+				sr.logger().Debug("sync", "record_waiting_for_zone", map[string]any{
+					"peer_id": message.PeerID,
+					"zone":    record.Zone,
+					"key":     record.Record.Key,
+					"error":   err,
+				})
+				if transport != nil {
+					if sendErr := transport.Send(message.PeerID, &gossip.Message{
+						Type:      gossip.MessageFetchZone,
+						FetchZone: &gossip.FetchZone{Zone: record.Zone},
+					}); sendErr != nil {
+						return sendErr
+					}
+				}
+				continue
+			}
 			recordRejectedRecord(state, message.PeerID, &record, gossip.RejectReason(err), sr.now())
+			sr.logger().Warn("sync", "record_apply_failed", map[string]any{
+				"peer_id": message.PeerID,
+				"zone":    record.Zone,
+				"key":     record.Record.Key,
+				"reason":  gossip.RejectReason(err),
+				"error":   err,
+			})
 			return err
 		}
 		changed = true
@@ -1623,6 +1659,27 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 			pullLimits.MaxBytes = 8 << 20
 			result, applyErr := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), pullLimits)
 			if applyErr != nil {
+				if errors.Is(applyErr, gossip.ErrUntrustedZone) {
+					sr.logger().Debug("object_pull", "waiting_for_trust_chain", map[string]any{
+						"peer_id": message.PeerID,
+						"zone":    path,
+						"reason":  gossip.RejectReason(applyErr),
+						"error":   applyErr,
+					})
+					if err := transport.Send(message.PeerID, &gossip.Message{
+						Type:      gossip.MessageFetchZone,
+						FetchZone: &gossip.FetchZone{Zone: path, ChunkFallback: true},
+					}); err != nil {
+						return err
+					}
+					continue
+				}
+				sr.logger().Warn("object_pull", "apply_failed", map[string]any{
+					"peer_id": message.PeerID,
+					"zone":    path,
+					"reason":  gossip.RejectReason(applyErr),
+					"error":   applyErr,
+				})
 				recordRejectedDigest(state, message.PeerID, digestForZone(message.Announce.Zones, path), gossip.RejectReason(applyErr), sr.now())
 				return applyErr
 			}
