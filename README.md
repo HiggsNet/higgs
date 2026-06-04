@@ -570,7 +570,7 @@ higgs sync status --verbose
 | `bind: address already in use` | `listen_addr` 端口被已有 `daemon`、`sync serve`、`sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
 | `record version conflict`、`conflict` 或更新没有覆盖 | 同一 `zone/key` 出现相同 version 的不同内容，或本地正好有直接前驱但新 record 的 `PrevHash` 不匹配 | 用 `debug zone <zone>` 查看 active record 和历史；由该 Zone authority 再写入一个更高版本的合法 record，让网络继续 fast-forward 收敛 |
 | `verify_failed` | snapshot 能到达传输层，但 authority、delegation 或 record signature 验证失败 | 确认对端是用正确 bundle `join accept`，没有把 root/admin 私钥数据库复制给普通节点；用 `verify <zone>` 在发送方和接收方分别检查 |
-| `message_too_large`、`quota` | 单包超过 datagram 预算，或短时间内同步对象太多 | 公网部署不要依赖调大 UDP 包；确认大 record 能通过 object pull 收敛，必要时降低写入/同步频率或调小单轮对象数量 |
+| `message_too_large`、`quota` | 单包超过 datagram 预算，或短时间内同步对象太多 | 公网部署不要依赖调大 UDP 包；确认大 record 能通过 TCP object pull 或 UDP chunk fallback 收敛，必要时降低写入/同步频率或调小单轮对象数量 |
 
 ### Latest Record 与历史窗口
 
@@ -638,9 +638,9 @@ Phase 3.6 的大 record / MTU-safe object pull 可以直接跑：
 make object-pull-smoke
 ```
 
-该 smoke 验证 1200-byte UDP datagram 预算下，大 record 不通过超大 UDP 包传播，而是由 daemon 通过 TCP object pull 拉取完整对象后收敛。TCP object pull 默认使用 signed/bootstrap UDP endpoint 的同一个数字端口。
+该 smoke 验证 1200-byte UDP datagram 预算下，大 record 不通过超大 UDP 包传播，而是由 daemon 优先通过 TCP object pull 拉取完整对象后收敛。TCP object pull 默认使用 signed/bootstrap UDP endpoint 的同一个数字端口；如果 TCP 不可达但已准入 peer 的 UDP path 可用，daemon 会用 UDP chunk fallback 补齐完整 Zone snapshot。
 
-排查 MTU / 大包问题时，`higgs sync status --verbose` 和 `higgs debug peer <peer-id>` 会显示当前 datagram 预算、最近 oversized UDP 对象、digest-only announce 次数以及 UDP chunk fallback 计数。第一版主路径没有 UDP chunk；大对象优先走未压缩 MessagePack object pull，通用压缩仅作为后续 object pull 优化候选，不用于默认 UDP 小包。
+排查 MTU / 大包问题时，`higgs sync status --verbose` 和 `higgs debug peer <peer-id>` 会显示当前 datagram 预算、最近 oversized UDP 对象、digest-only announce 次数以及 UDP chunk fallback 计数。大对象优先走未压缩 MessagePack object pull，UDP chunk fallback 只在 object pull 不可达时兜底；通用压缩仅作为后续 object pull 优化候选，不用于默认 UDP 小包。
 
 真实公网多节点 daemon gossip 测试见 [docs/public-internet-test.md](docs/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
 

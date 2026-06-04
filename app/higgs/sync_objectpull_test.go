@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
@@ -229,14 +229,15 @@ func TestSyncRoundReportsUnreachableObjectPull(t *testing.T) {
 	statePathB := t.TempDir() + "/b.db"
 	srB := newSyncRuntime(stateB, configB, transportB, &Runtime{Clock: time.Now, StatePath: statePathB})
 	err = srB.syncRound(context.Background(), configA.PeerID, 3*time.Second)
-	if err == nil {
-		t.Fatalf("syncRound succeeded with unreachable TCP object pull")
-	}
-	if !strings.Contains(err.Error(), "pending zones") {
-		t.Fatalf("syncRound error = %v, want pending zones", err)
+	if err != nil {
+		t.Fatalf("syncRound with UDP chunk fallback: %v", err)
 	}
 	if got := stateB.Network.Zones["node-b.catofes."].Records["bigdata"]; got != nil {
-		t.Fatalf("large record synced without object pull server: %#v", got)
+		if !bytes.Equal(got.Value, largeValue) {
+			t.Fatalf("large record value length = %d, want %d", len(got.Value), len(largeValue))
+		}
+	} else {
+		t.Fatalf("large record did not sync via UDP chunk fallback")
 	}
 	stats := stateB.SyncPeers[configA.PeerID].ObjectPullStats
 	if stats == nil {
@@ -245,8 +246,12 @@ func TestSyncRoundReportsUnreachableObjectPull(t *testing.T) {
 	if stats.LargeObjectUnreachable == 0 {
 		t.Fatalf("unreachable stats = %#v", stats)
 	}
-	if stats.Successes != 0 || stats.Failures == 0 || stats.LastError == "" {
+	if stats.Failures == 0 {
 		t.Fatalf("failure stats = %#v", stats)
+	}
+	datagramStats := stateB.SyncPeers[configA.PeerID].DatagramStats
+	if datagramStats == nil || datagramStats.ChunkFallbacks == 0 {
+		t.Fatalf("chunk fallback stats = %#v", datagramStats)
 	}
 }
 

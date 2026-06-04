@@ -350,6 +350,11 @@ func MessageObjectCounts(message *Message) (zones int, records int) {
 			}
 		}
 		return len(message.Announce.Zones) + len(message.Announce.Snapshots), records
+	case message.ObjectChunk != nil:
+		if message.ObjectChunk.Object == ObjectPullRecord {
+			return 0, 1
+		}
+		return 1, 0
 	default:
 		return 0, 0
 	}
@@ -365,6 +370,8 @@ func objectCost(message *Message) int64 {
 		return int64(len(message.Pong.FetchZones))
 	case message.Announce != nil:
 		return int64(len(message.Announce.Zones))
+	case message.ObjectChunk != nil:
+		return 1
 	case message.FetchZone != nil, message.FetchRecord != nil:
 		return 1
 	default:

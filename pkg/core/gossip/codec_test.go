@@ -69,6 +69,38 @@ func TestJSONCodecBackwardCompat(t *testing.T) {
 	}
 }
 
+func TestObjectChunkCodecRoundTrip(t *testing.T) {
+	message := &Message{
+		Type:      MessageObjectChunk,
+		PeerID:    "node-a.catofes.",
+		Nonce:     99,
+		Timestamp: 1717171717,
+		ObjectChunk: &ObjectChunk{
+			Object:     ObjectPullZone,
+			Zone:       "catofes.",
+			RootHash:   []byte{1, 2, 3},
+			ObjectHash: []byte{4, 5, 6},
+			Index:      1,
+			Total:      2,
+			Data:       []byte("chunk-data"),
+		},
+	}
+	data, err := encodeMessage(msgpackCodec{}, message)
+	if err != nil {
+		t.Fatalf("encodeMessage(object_chunk): %v", err)
+	}
+	got, err := decodeMessage(data)
+	if err != nil {
+		t.Fatalf("decodeMessage(object_chunk): %v", err)
+	}
+	if got.Type != MessageObjectChunk || got.ObjectChunk == nil {
+		t.Fatalf("decoded message = %#v, want object_chunk", got)
+	}
+	if got.ObjectChunk.Zone != "catofes." || got.ObjectChunk.Index != 1 || string(got.ObjectChunk.Data) != "chunk-data" {
+		t.Fatalf("decoded chunk mismatch: %#v", got.ObjectChunk)
+	}
+}
+
 func TestUnknownCodecRejected(t *testing.T) {
 	data := append([]byte("higgs.gossip.x9\n"), []byte(`{}`)...)
 	_, err := decodeMessage(data)

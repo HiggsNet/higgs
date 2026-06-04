@@ -83,6 +83,18 @@ func DecodeObjectPullResponse(r io.Reader) (*ObjectPullResponse, error) {
 	return &resp, nil
 }
 
+func EncodeZoneSnapshotObject(snapshot *ZoneSnapshot) ([]byte, error) {
+	return msgpack.Marshal(snapshot)
+}
+
+func DecodeZoneSnapshotObject(data []byte) (*ZoneSnapshot, error) {
+	var snapshot ZoneSnapshot
+	if err := msgpack.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
 func readLengthPrefixed(r io.Reader, maxSize int) ([]byte, error) {
 	var sizeBuf [4]byte
 	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {

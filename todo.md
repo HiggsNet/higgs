@@ -384,10 +384,10 @@
   - [x] 保留 `message_too_large` 故障注入测试，并补充“发送端主动不生成超预算 datagram”的断言
     - `message_too_large` 故障注入仍在；新增 planner 回归测试逐个统计 announce wire size，确保大 record 只进入 oversized/object-pull 路径，不泄漏进 UDP datagram。
 
-- [ ] **3.6.7 UDP chunk fallback（后续可选，第一版不做）**
-  - [ ] 仅当真实公网/NAT 场景证明需要“TCP/QUIC 不可达但 verified observed UDP path 可用的大对象同步”时再实现
-  - [ ] 定义 chunk id、total/index、content hash、zone/key/version 绑定、ACK/NACK 或 selective retry、过期时间和重组缓存上限
-  - [ ] chunk 丢失/乱序/重复/篡改不得进入 active state；chunk fetch 必须计入 per-peer quota，并进入 rejected cache / backoff，避免反放大
+- [x] **3.6.7 UDP chunk fallback**
+  - [x] 真实公网/NAT 测试证明需要“TCP/QUIC 不可达但 verified observed UDP path 可用的大对象同步”后启用：`fetch_zone` 请求遇到超预算 zone snapshot/record 时，发送端追加 `object_chunk` UDP fallback
+  - [x] chunk 绑定 object type、zone/key/version、zone root hash、content hash、total/index；接收端使用短期内存重组缓存，完整对象 hash 匹配后才解码
+  - [x] chunk 丢失/乱序/重复/篡改不得进入 active state；完整 zone snapshot 仍经 trust chain / signature 验证后才 apply，chunk 消息继续计入 per-peer quota，并记录 `chunk_fallbacks`
 
 ## Phase 4: StrongSwan / XFRM interface 建链（预计 2-3 周）
 

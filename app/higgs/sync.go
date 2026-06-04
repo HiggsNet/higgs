@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -24,8 +26,33 @@ const relayMinInterval = time.Second
 const maxRelayFanoutPerUpdate = 8
 const rejectedDigestTTL = 10 * time.Minute
 const observedPathTTL = 3 * time.Minute
+const chunkAssemblyTTL = 2 * time.Minute
+const maxChunkObjectBytes = 8 << 20
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
+
+var udpChunkAssemblies = newChunkAssemblyStore()
+
+type chunkAssemblyStore struct {
+	mu      sync.Mutex
+	entries map[string]*chunkAssembly
+}
+
+type chunkAssembly struct {
+	peerID     string
+	object     gossip.ObjectPullRequestType
+	zone       zone.ZonePath
+	key        string
+	version    uint64
+	rootHash   []byte
+	objectHash []byte
+	total      uint16
+	chunks     [][]byte
+	received   int
+	bytes      int
+	created    time.Time
+	updated    time.Time
+}
 
 type SyncRuntime struct {
 	App           *Runtime
@@ -72,6 +99,88 @@ func (sr *SyncRuntime) now() time.Time {
 		return sr.App.Now()
 	}
 	return time.Now()
+}
+
+func newChunkAssemblyStore() *chunkAssemblyStore {
+	return &chunkAssemblyStore{entries: make(map[string]*chunkAssembly)}
+}
+
+func chunkAssemblyKey(peerID string, chunk *gossip.ObjectChunk) string {
+	if chunk == nil {
+		return ""
+	}
+	return peerID + "|" + string(chunk.Object) + "|" + chunk.Zone.String() + "|" + chunk.Key + "|" + strconv.FormatUint(chunk.Version, 10) + "|" + hex.EncodeToString(chunk.ObjectHash)
+}
+
+func (s *chunkAssemblyStore) add(peerID string, chunk *gossip.ObjectChunk, now time.Time) ([]byte, bool, error) {
+	if s == nil || chunk == nil {
+		return nil, false, errors.New("chunk assembly input is nil")
+	}
+	key := chunkAssemblyKey(peerID, chunk)
+	if key == "" {
+		return nil, false, errors.New("chunk assembly key is empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now)
+	entry := s.entries[key]
+	if entry == nil {
+		entry = &chunkAssembly{
+			peerID:     peerID,
+			object:     chunk.Object,
+			zone:       chunk.Zone,
+			key:        chunk.Key,
+			version:    chunk.Version,
+			rootHash:   append([]byte(nil), chunk.RootHash...),
+			objectHash: append([]byte(nil), chunk.ObjectHash...),
+			total:      chunk.Total,
+			chunks:     make([][]byte, chunk.Total),
+			created:    now,
+		}
+		s.entries[key] = entry
+	}
+	if entry.total != chunk.Total || entry.object != chunk.Object || entry.zone != chunk.Zone || entry.key != chunk.Key || entry.version != chunk.Version || !bytes.Equal(entry.objectHash, chunk.ObjectHash) || !bytes.Equal(entry.rootHash, chunk.RootHash) {
+		delete(s.entries, key)
+		return nil, false, errors.New("chunk metadata changed during assembly")
+	}
+	if chunk.Index >= entry.total {
+		return nil, false, errors.New("chunk index out of range")
+	}
+	if entry.chunks[chunk.Index] == nil {
+		entry.chunks[chunk.Index] = append([]byte(nil), chunk.Data...)
+		entry.received++
+		entry.bytes += len(chunk.Data)
+		if entry.bytes > maxChunkObjectBytes {
+			delete(s.entries, key)
+			return nil, false, fmt.Errorf("chunk object exceeds max %d bytes", maxChunkObjectBytes)
+		}
+	}
+	entry.updated = now
+	if entry.received != int(entry.total) {
+		return nil, false, nil
+	}
+	data := make([]byte, 0, entry.bytes)
+	for _, part := range entry.chunks {
+		if part == nil {
+			return nil, false, nil
+		}
+		data = append(data, part...)
+	}
+	hash := sha256.Sum256(data)
+	if !bytes.Equal(hash[:], entry.objectHash) {
+		delete(s.entries, key)
+		return nil, false, errors.New("chunk object hash mismatch")
+	}
+	delete(s.entries, key)
+	return data, true, nil
+}
+
+func (s *chunkAssemblyStore) pruneLocked(now time.Time) {
+	for key, entry := range s.entries {
+		if entry == nil || now.Sub(entry.updated) > chunkAssemblyTTL && now.Sub(entry.created) > chunkAssemblyTTL {
+			delete(s.entries, key)
+		}
+	}
 }
 
 func (sr *SyncRuntime) saveState() error {
@@ -1270,7 +1379,7 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 			}
 			return nil
 		}
-		if err := sr.sendSnapshots(message.PeerID, message.Pong.FetchZones); err != nil {
+		if err := sr.sendSnapshots(message.PeerID, message.Pong.FetchZones, false); err != nil {
 			return err
 		}
 		for _, path := range fetchListForPeer(state, message.PeerID, message.Pong.Zones, sr.now()) {
@@ -1283,11 +1392,13 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 		}
 		return nil
 	case gossip.MessageFetchZone:
-		return sr.sendSnapshots(message.PeerID, []zone.ZonePath{message.FetchZone.Zone})
+		return sr.sendSnapshots(message.PeerID, []zone.ZonePath{message.FetchZone.Zone}, message.FetchZone.ChunkFallback)
 	case gossip.MessageFetchRecord:
 		return sr.sendRecord(message.PeerID, message.FetchRecord)
 	case gossip.MessageAnnounce:
 		return sr.handleAnnounce(message, syncLimits(config))
+	case gossip.MessageObjectChunk:
+		return sr.handleObjectChunk(message, syncLimits(config))
 	default:
 		return nil
 	}
@@ -1338,7 +1449,8 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 		}
 	}
 	for _, path := range fetchListForPeer(state, message.PeerID, message.Announce.Zones, sr.now()) {
-		if snapshot, pullErr := tryObjectPullTCP(state, sr.Config, message.PeerID, path); pullErr == nil && snapshot != nil {
+		snapshot, pullErr := tryObjectPullTCP(state, sr.Config, message.PeerID, path)
+		if pullErr == nil && snapshot != nil {
 			pullLimits := limits
 			pullLimits.MaxBytes = 8 << 20
 			result, applyErr := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), pullLimits)
@@ -1351,9 +1463,13 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 			fmt.Printf("applied zone %s via object pull records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
 			continue
 		}
+		fetch := &gossip.FetchZone{Zone: path}
+		if pullErr != nil {
+			fetch.ChunkFallback = true
+		}
 		if err := transport.Send(message.PeerID, &gossip.Message{
 			Type:      gossip.MessageFetchZone,
-			FetchZone: &gossip.FetchZone{Zone: path},
+			FetchZone: fetch,
 		}); err != nil {
 			return err
 		}
@@ -1361,23 +1477,65 @@ func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.Syn
 	return nil
 }
 
+func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.SyncLimits) error {
+	if sr == nil || message == nil || message.ObjectChunk == nil {
+		return nil
+	}
+	chunk := message.ObjectChunk
+	data, complete, err := udpChunkAssemblies.add(message.PeerID, chunk, sr.now())
+	if err != nil {
+		if chunk.Object == gossip.ObjectPullZone {
+			recordRejectedDigest(sr.State, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
+		}
+		return err
+	}
+	if !complete {
+		return nil
+	}
+	switch chunk.Object {
+	case gossip.ObjectPullZone:
+		snapshot, err := gossip.DecodeZoneSnapshotObject(data)
+		if err != nil {
+			recordRejectedDigest(sr.State, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
+			return err
+		}
+		pullLimits := limits
+		pullLimits.MaxBytes = maxChunkObjectBytes
+		result, err := gossip.ApplySnapshot(sr.State.Network, snapshot, sr.now(), pullLimits)
+		if err != nil {
+			recordRejectedDigest(sr.State, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
+			return err
+		}
+		clearRejectedDigest(sr.State, message.PeerID, chunk.Zone)
+		recordDatagramChunkFallback(sr.State, message.PeerID)
+		fmt.Printf("applied zone %s via UDP chunks records=%d delegations=%d\n", result.Zone, result.Records, result.Delegation)
+		return sr.saveState()
+	default:
+		return nil
+	}
+}
+
 // sendSnapshots sends zone skeletons and individual records as separate UDP
 // datagrams, respecting the datagram budget. Objects that exceed the budget
 // are skipped on the UDP path and must be retrieved via object pull.
 func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
-	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now())
+	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now(), false)
 }
 
-func (sr *SyncRuntime) sendSnapshots(peerID string, zones []zone.ZonePath) error {
+func (sr *SyncRuntime) sendSnapshots(peerID string, zones []zone.ZonePath, allowChunks bool) error {
 	if sr == nil {
 		return nil
 	}
-	return sendSnapshotsWithStats(sr.State, sr.State.Network, sr.Transport, peerID, zones, sr.now())
+	return sendSnapshotsWithStats(sr.State, sr.State.Network, sr.Transport, peerID, zones, sr.now(), allowChunks)
 }
 
-func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time) error {
+func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool) error {
 	plan := planSnapshotDatagrams(ns, zones, transport.MaxMessageBytes(), now)
+	chunkZones := make(map[zone.ZonePath]bool)
 	for _, oversized := range plan.Oversized {
+		if state != nil && allowChunks {
+			chunkZones[oversized.Zone] = true
+		}
 		recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, transport.MaxMessageBytes(), now)
 		if oversized.Object == "zone_skeleton" {
 			recordDatagramDigestOnly(state, peerID)
@@ -1393,7 +1551,99 @@ func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *
 			return err
 		}
 	}
+	for path := range chunkZones {
+		if err := sendZoneSnapshotChunks(state, ns, transport, peerID, path, now); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func sendZoneSnapshotChunks(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, path zone.ZonePath, now time.Time) error {
+	if ns == nil || transport == nil || ns.IsZoneRevoked(path, now) {
+		return nil
+	}
+	zs := ns.Zones[path]
+	if zs == nil {
+		return nil
+	}
+	snapshot, err := gossip.Snapshot(ns, path)
+	if err != nil {
+		return nil
+	}
+	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
+	if err != nil {
+		return err
+	}
+	if len(data) > maxChunkObjectBytes {
+		return fmt.Errorf("chunk zone snapshot %s exceeds max %d bytes", path, maxChunkObjectBytes)
+	}
+	chunkSize := maxObjectChunkDataSize(transport.MaxMessageBytes(), peerID, path)
+	if chunkSize <= 0 {
+		return gossip.ErrMessageTooLarge
+	}
+	total := (len(data) + chunkSize - 1) / chunkSize
+	if total <= 0 || total > int(^uint16(0)) {
+		return fmt.Errorf("chunk zone snapshot %s needs invalid chunk count %d", path, total)
+	}
+	objectHash := sha256.Sum256(data)
+	rootHash := gossip.ZoneRoot(zs)
+	for i := 0; i < total; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		msg := &gossip.Message{
+			Type: gossip.MessageObjectChunk,
+			ObjectChunk: &gossip.ObjectChunk{
+				Object:     gossip.ObjectPullZone,
+				Zone:       path,
+				RootHash:   append([]byte(nil), rootHash...),
+				ObjectHash: append([]byte(nil), objectHash[:]...),
+				Index:      uint16(i),
+				Total:      uint16(total),
+				Data:       data[start:end],
+			},
+		}
+		if err := transport.Send(peerID, msg); err != nil {
+			return err
+		}
+		recordDatagramChunkFallback(state, peerID)
+	}
+	return nil
+}
+
+func maxObjectChunkDataSize(budget int, peerID string, path zone.ZonePath) int {
+	if budget <= 0 {
+		return 0
+	}
+	low, high := 1, budget
+	best := 0
+	for low <= high {
+		mid := (low + high) / 2
+		data, err := gossip.MarshalMessage(&gossip.Message{
+			Type:      gossip.MessageObjectChunk,
+			PeerID:    peerID,
+			Nonce:     1,
+			Timestamp: 1,
+			ObjectChunk: &gossip.ObjectChunk{
+				Object:     gossip.ObjectPullZone,
+				Zone:       path,
+				RootHash:   make([]byte, 32),
+				ObjectHash: make([]byte, 32),
+				Total:      1,
+				Data:       make([]byte, mid),
+			},
+		})
+		if err == nil && len(data) <= budget {
+			best = mid
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	return best
 }
 
 type snapshotDatagramPlan struct {
@@ -1682,6 +1932,19 @@ func recordDatagramDigestOnly(state *stateFile, peerID string) {
 		peerState.DatagramStats = &datagramStats{}
 	}
 	peerState.DatagramStats.DigestOnlyAnnounces++
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordDatagramChunkFallback(state *stateFile, peerID string) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.DatagramStats == nil {
+		peerState.DatagramStats = &datagramStats{}
+	}
+	peerState.DatagramStats.ChunkFallbacks++
 	state.SyncPeers[peerID] = peerState
 }
 

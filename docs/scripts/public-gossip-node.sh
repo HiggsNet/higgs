@@ -150,7 +150,7 @@ case "$cmd" in
     admin_dir="$base/$admin_slug-admin"
     mkdir -p "$base"
     root_key="$(root_init "$root_dir" | tail -n 1)"
-    write_config "$admin_dir" "zone-$admin_slug-admin" 127.0.0.1:33435 127.0.0.1:33435 "$root_key"
+    write_config "$admin_dir" "$admin_zone" 127.0.0.1:33435 127.0.0.1:33435 "$root_key"
     make_key_request "$admin_dir" "$admin_zone" "$base/$admin_slug.key.json" "$base/$admin_slug.request.json"
     issue_bundle "$root_dir" "$base/$admin_slug.request.json" "$base/$admin_slug.bundle.json"
     accept_bundle "$admin_dir" "$base/$admin_slug.bundle.json" "$base/$admin_slug.key.json"

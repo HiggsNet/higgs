@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -518,6 +519,77 @@ func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("KnownPeerIDs() does not contain delegated node-b.catofes.")
+	}
+}
+
+func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
+	prepareStatePersistence(t)
+	udpChunkAssemblies = newChunkAssemblyStore()
+	sourceState, _ := buildTestNetworkState(t)
+	snapshot, err := gossip.Snapshot(sourceState.Network, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(catofes): %v", err)
+	}
+	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
+	if err != nil {
+		t.Fatalf("EncodeZoneSnapshotObject: %v", err)
+	}
+	objectHash := sha256.Sum256(data)
+	rootHash := gossip.ZoneRoot(sourceState.Network.Zones["catofes."])
+	targetState := sourceState
+	config := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
+	delete(targetState.Network.Zones, zone.ZonePath("catofes."))
+	delete(targetState.Network.Zones, zone.ZonePath("node-b.catofes."))
+	if err := saveState(targetState); err != nil {
+		t.Fatalf("saveState(target): %v", err)
+	}
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	rt.Clock = func() time.Time { return time.Unix(123, 0) }
+	sr := newSyncRuntime(targetState, config, nil, rt)
+
+	chunkSize := len(data) / 2
+	if chunkSize == 0 {
+		t.Fatalf("encoded snapshot unexpectedly empty")
+	}
+	chunks := []*gossip.ObjectChunk{
+		{
+			Object:     gossip.ObjectPullZone,
+			Zone:       "catofes.",
+			RootHash:   rootHash,
+			ObjectHash: objectHash[:],
+			Index:      0,
+			Total:      2,
+			Data:       data[:chunkSize],
+		},
+		{
+			Object:     gossip.ObjectPullZone,
+			Zone:       "catofes.",
+			RootHash:   rootHash,
+			ObjectHash: objectHash[:],
+			Index:      1,
+			Total:      2,
+			Data:       data[chunkSize:],
+		},
+	}
+	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
+		err := sr.handleObjectChunk(&gossip.Message{
+			Type:        gossip.MessageObjectChunk,
+			PeerID:      "node-b.catofes.",
+			ObjectChunk: chunk,
+		}, gossip.DefaultSyncLimits())
+		if err != nil {
+			t.Fatalf("handleObjectChunk: %v", err)
+		}
+	}
+	if targetState.Network.Zones["catofes."] == nil {
+		t.Fatalf("catofes. zone was not applied from chunks")
+	}
+	stats := targetState.SyncPeers["node-b.catofes."].DatagramStats
+	if stats == nil || stats.ChunkFallbacks == 0 {
+		t.Fatalf("chunk fallback stats were not recorded: %#v", stats)
 	}
 }
 

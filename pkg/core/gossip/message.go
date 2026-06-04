@@ -23,6 +23,7 @@ const (
 	MessageFetchZone   MessageType = "fetch_zone"
 	MessageFetchRecord MessageType = "fetch_record"
 	MessageAnnounce    MessageType = "announce"
+	MessageObjectChunk MessageType = "object_chunk"
 )
 
 type Message struct {
@@ -37,6 +38,7 @@ type Message struct {
 	FetchZone   *FetchZone   `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
 	FetchRecord *FetchRecord `json:"fetch_record,omitempty" msgpack:"r,omitempty"`
 	Announce    *Announce    `json:"announce,omitempty" msgpack:"a,omitempty"`
+	ObjectChunk *ObjectChunk `json:"object_chunk,omitempty" msgpack:"c,omitempty"`
 }
 
 type ZoneDigest struct {
@@ -54,7 +56,8 @@ type Pong struct {
 }
 
 type FetchZone struct {
-	Zone zone.ZonePath `json:"zone" msgpack:"z"`
+	Zone          zone.ZonePath `json:"zone" msgpack:"z"`
+	ChunkFallback bool          `json:"chunk_fallback,omitempty" msgpack:"c,omitempty"`
 }
 
 type FetchRecord struct {
@@ -67,6 +70,18 @@ type Announce struct {
 	Zones     []ZoneDigest     `json:"zones,omitempty" msgpack:"z,omitempty"`
 	Snapshots []ZoneSnapshot   `json:"snapshots,omitempty" msgpack:"s,omitempty"`
 	Records   []RecordSnapshot `json:"records,omitempty" msgpack:"r,omitempty"`
+}
+
+type ObjectChunk struct {
+	Object     ObjectPullRequestType `json:"object" msgpack:"o"`
+	Zone       zone.ZonePath         `json:"zone" msgpack:"z"`
+	Key        string                `json:"key,omitempty" msgpack:"k,omitempty"`
+	Version    uint64                `json:"version,omitempty" msgpack:"v,omitempty"`
+	RootHash   []byte                `json:"root_hash,omitempty" msgpack:"rh,omitempty"`
+	ObjectHash []byte                `json:"object_hash" msgpack:"h"`
+	Index      uint16                `json:"index" msgpack:"i"`
+	Total      uint16                `json:"total" msgpack:"t"`
+	Data       []byte                `json:"data" msgpack:"d"`
 }
 
 type RecordSnapshot struct {
@@ -118,6 +133,7 @@ func validateMessage(message *Message) error {
 		message.FetchZone != nil,
 		message.FetchRecord != nil,
 		message.Announce != nil,
+		message.ObjectChunk != nil,
 	} {
 		if present {
 			bodies++
@@ -147,6 +163,13 @@ func validateMessage(message *Message) error {
 	case MessageAnnounce:
 		if message.Announce == nil {
 			return errors.New("announce message missing announce body")
+		}
+	case MessageObjectChunk:
+		if message.ObjectChunk == nil || !message.ObjectChunk.Zone.Valid() || len(message.ObjectChunk.ObjectHash) == 0 || message.ObjectChunk.Total == 0 || message.ObjectChunk.Index >= message.ObjectChunk.Total || len(message.ObjectChunk.Data) == 0 {
+			return errors.New("object_chunk message has invalid chunk")
+		}
+		if message.ObjectChunk.Object != ObjectPullZone && message.ObjectChunk.Object != ObjectPullRecord {
+			return errors.New("object_chunk message has invalid object type")
 		}
 	default:
 		return fmt.Errorf("unknown gossip message type: %s", message.Type)

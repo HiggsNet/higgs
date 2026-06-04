@@ -39,6 +39,19 @@ Phase 4.0 已经让 admin 管理写操作优先进入 daemon 单 writer/control 
 
 admin 工作目录可以放在你的本机，也可以放在其中一台服务器上。admin 只负责 root / delegation；普通节点不接触 root/admin 私钥。
 
+## Peer ID 与 Zone
+
+公网 gossip 的默认身份模型是：`peer_id` 等于该进程持有私钥并管理的授权 Zone FQDN。短名字只作为人类角色名、目录名或主机名使用：
+
+| 人类角色名 | 配置中的 `peer_id` / Zone |
+|------------|---------------------------|
+| catofes admin | `catofes.` |
+| node-a | `node-a.catofes.` |
+| node-b | `node-b.catofes.` |
+| node-c | `node-c.catofes.` |
+
+例如 `zone-catofes-admin` 可以作为目录名或 systemd service 名，但不应作为公网 gossip `peer_id`。节点收到包时先按 `peer_id` 查入站 allowlist；allowlist 来自静态 `bootstrap` 和已验证的 Zone/delegation chain。`catofes.` 能通过 root delegation 被自动准入，但 `zone-catofes-admin` 这种别名没有对应的 ZonePath，除非显式放进 `bootstrap`。
+
 ## 准备
 
 所有机器：
@@ -51,13 +64,21 @@ chmod +x docs/scripts/public-gossip-node.sh
 export HIGGS_BIN="$PWD/build/higgs"
 ```
 
-所有公网节点放通 UDP 端口：
+所有公网节点放通 gossip UDP 端口，以及同数字端口的 TCP object pull：
 
 ```bash
 sudo ufw allow 33434/udp
+sudo ufw allow 33434/tcp
 ```
 
-云安全组 / nftables 也要放通相同端口。确认时间同步正常；gossip anti-replay 使用时间戳窗口，机器时钟偏差过大会被拒绝。
+云安全组 / nftables 也要放通相同端口。UDP 用于 gossip digest / fetch / announce，小包超过公网 MTU 预算时会通过 TCP object pull 拉取完整 snapshot 或 record；如果 TCP 不通，节点可能反复 `fetch_zone` 直到触发 `quota`。确认时间同步正常；gossip anti-replay 使用时间戳窗口，机器时钟偏差过大会被拒绝。
+
+如果 `catofes.` 管理节点也参与公网 gossip，并使用 `33435`：
+
+```bash
+sudo ufw allow 33435/udp
+sudo ufw allow 33435/tcp
+```
 
 ## 1. Admin 初始化
 
@@ -79,6 +100,8 @@ root_public_key: <copy-this-to-each-node>
 root_admin_dir: .public-test/root-admin
 admin_zone_dir: .public-test/catofes-admin
 ```
+
+其中 `.public-test/catofes-admin/config.yaml` 的 `peer_id` 是 `catofes.`；`catofes-admin` 只是本地目录名。
 
 把 `root_public_key` 复制给每台公网节点。下面用：
 
@@ -245,7 +268,7 @@ docs/scripts/public-gossip-node.sh verify "$HOME/.higgs-public/node-b" node-a.ca
 
 如果有一台节点在家庭 NAT、CGNAT 或没有端口映射的网络后面，把它作为 `node-b` 测试。它只需要能主动连到公网 `node-a`。
 
-初始化时不要给 NAT 节点配置 `advertise_addr`：
+初始化时不要给 NAT 节点配置 `advertise_addr`，也不要让它发布 signed endpoint record：
 
 ```bash
 docs/scripts/public-gossip-node.sh node-init \
@@ -257,11 +280,23 @@ docs/scripts/public-gossip-node.sh node-init \
   node-a.catofes. 203.0.113.10:33434
 ```
 
-若要强制只测试 outbound/observed path，在 `node-b/config.yaml` 里加：
+在 `node-b/config.yaml` 里加：
 
 ```yaml
 publish_endpoints: false
 ```
+
+这个设置应在 NAT 节点首次启动 daemon 前加入。如果节点已经发布过 `sync/endpoint/udp` record，旧 record 仍会留在本地 Zone snapshot 里；测试时建议重新初始化该节点目录，或先用一个小的、明确可达的 endpoint record 覆盖它。不要把 reflector 得到的公网 IP 当成可被主动拨入的 signed endpoint，除非已经配置端口映射。
+
+当前 object pull 是接收方主动向发送方发起 TCP 连接，TCP 端口默认和对端 UDP gossip 使用同一个数字端口。因此，NAT/内网节点可以做 outbound-only gossip，但不适合做需要被公网节点拉取大对象的 bootstrap/authority 源。如果日志同时出现：
+
+```text
+exceeds datagram budget
+fetch_zone
+quota
+```
+
+且该 peer 在 NAT 后面，说明公网节点正在尝试补齐一个 UDP 放不下的对象，但无法通过 TCP object pull 反向连接该 NAT peer。当前 daemon 会在已准入 UDP path 上使用 UDP chunk fallback 兜底；如果仍反复触发 `quota`，短期处理方式是避免 NAT peer 产生超预算对象，尤其是禁用 endpoint 发布。更复杂拓扑仍需要 relay、hole punching 或反向 object push。
 
 接受 bundle 并启动 daemon 后，在公网 node-a 上检查：
 
@@ -352,7 +387,8 @@ docs/scripts/public-gossip-node.sh verify <dir> <zone>
 - UDP 端口是否在云安全组和本机防火墙都放通。
 - `advertise_addr` 是否是其他公网节点能访问的地址，而不是 `0.0.0.0` 或内网地址。
 - 每个节点的 `trusted_root_public_key` 是否完全相同。
-- `bootstrap.id` 是否等于对端 `peer_id`，通常是 Zone FQDN，如 `node-a.catofes.`。
+- `bootstrap.id` 是否等于对端 `peer_id`，通常是 Zone FQDN，如 `catofes.` 或 `node-a.catofes.`；不要把 `zone-catofes-admin` 这类角色名当成公网 gossip `peer_id`。
+- TCP object pull 端口是否放通；默认和对端 UDP gossip 使用同一个数字端口。日志里如果同时出现 `exceeds datagram budget`、重复 `fetch_zone` 和 `quota`，先检查 TCP object pull 连通性；对 NAT/outbound-only peer，再检查是否出现 `applied zone ... via UDP chunks` 和 `chunk_fallbacks`。
 - 节点时钟是否同步。
 - daemon 是否真的在线：`sync status --verbose` 顶部应出现 `daemon: online peer_id=...`。
 - 如果公网 IP 会变化，使用 `reflectors: auto`，但要记住远端只信任本节点签名发布后的 endpoint record。
