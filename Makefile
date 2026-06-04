@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -11,7 +11,7 @@ GO_MOD_CACHE ?= /tmp/higgs-gomodcache
 LDFLAGS := -s -w
 CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
-SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke
+SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke
 
 all: build
 
@@ -760,6 +760,54 @@ object-pull-smoke: build
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Object pull smoke passed"
 
+# chunk-fallback-smoke 流程：
+# 1. 准备 A/B（拓扑同 object-pull-smoke，互相 bootstrap）。
+# 2. B 的 TCP object pull 端口被临时抢占，导致 B 的 daemon 启动时
+#    object pull server 绑定失败（daemon 继续运行，只剩 UDP）。
+# 3. A 正常启动 daemon（UDP+TCP）。
+# 4. B 通过 control socket 写入 3000-byte bigdata record。
+# 5. B 的 UDP gossip 向 A 发出 announce/digest；A 尝试 TCP object pull B
+#    失败（connection refused），触发 chunk fallback 路径。
+# 6. A 发送 fetch_zone 带 ChunkFallback=true；B 将 zone snapshot 拆成
+#    多个 UDP object_chunk 发给 A。
+# 7. 断言 A 收到 bigdata，且 A 的 debug peer 显示 chunk_fallbacks > 0。
+chunk-fallback-smoke: build
+	@set -eu; \
+	tmp="$${TMPDIR:-/tmp}/higgs-chunk-fallback-smoke"; \
+	rm -rf "$$tmp"; \
+	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
+	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33590' > "$$tmp/admin/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: catofes.' 'listen_addr: 127.0.0.1:33591' > "$$tmp/catofes/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33592' 'advertise_addr: 127.0.0.1:33592' 'bootstrap:' '  - id: node-b.catofes.' '    addr: 127.0.0.1:33593' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33593' 'advertise_addr: 127.0.0.1:33593' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33592' > "$$tmp/b/config.yaml"; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
+	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
+	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/catofes.key.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	perl -e 'use IO::Socket::INET; my $$s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 33593, Proto => "tcp", Listen => 1, Reuse => 1) or die $$!; sleep 3600' & tcp_blocker_pid="$$!"; \
+	sleep 0.5; \
+	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	sleep 2; \
+	kill "$$tcp_blocker_pid" >/dev/null 2>&1 || true; wait "$$tcp_blocker_pid" >/dev/null 2>&1 || true; \
+	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/higgs.sock" ] && [ -S "$$tmp/b/higgs.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/a/higgs.sock" ]; \
+	[ -S "$$tmp/b/higgs.sock" ]; \
+	large_value="$$(perl -e 'print "x" x 3000')"; \
+	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
+	grep -q 'via daemon' "$$tmp/record-put.out"; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes.; exit 1; }; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'datagram_chunk_fallbacks: [1-9]'; \
+	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
+	echo "Chunk fallback smoke passed"
+
 help:
 	@echo "Available targets:"
 	@echo "  build   - Build the higgs binary to $(BUILD_DIR)/"
@@ -786,4 +834,5 @@ help:
 	@echo "  nat-observed-smoke - Run NAT-style verified observed UDP path smoke test"
 	@echo "  delegation-revoke-smoke - Run delegation revocation convergence smoke test"
 	@echo "  object-pull-smoke - Run large-record object-pull over TCP smoke test"
+	@echo "  chunk-fallback-smoke - Run large-record UDP chunk fallback when TCP object pull is unreachable"
 	@echo "  help    - Show this help message"
