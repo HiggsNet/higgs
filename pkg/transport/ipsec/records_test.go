@@ -216,6 +216,9 @@ func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
 	if len(normalized.AddressSourceOrder) != len(defaultAddressSourceOrder) {
 		t.Fatalf("address source order = %+v", normalized.AddressSourceOrder)
 	}
+	if normalized.NetNS.Target() != "higgs-ipsec" || normalized.NetNS.Create {
+		t.Fatalf("netns = %+v", normalized.NetNS)
+	}
 	local, peer, err := group.TunnelAddresses(1)
 	if err != nil {
 		t.Fatalf("TunnelAddresses: %v", err)
@@ -272,13 +275,33 @@ func TestNewTransportLinkSpecForGroupInheritsGroupBoundary(t *testing.T) {
 	}
 }
 
+func TestLinkGroupSpecDefaultsToCreatedH2NetNS(t *testing.T) {
+	group := LinkGroupSpec{
+		ID: "ipsec-main",
+	}
+	if err := group.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	normalized := group.Normalized()
+	if normalized.NetNS.Kind != NetNSName || normalized.NetNS.Name != DefaultNetNSName || !normalized.NetNS.Create {
+		t.Fatalf("NetNS default = %+v", normalized.NetNS)
+	}
+	spec, err := NewTransportLinkSpecForGroup("node-b.catofes.", "node-a.catofes.", group, validNodeRecords(), nil, 0)
+	if err != nil {
+		t.Fatalf("NewTransportLinkSpecForGroup: %v", err)
+	}
+	if spec.NetNS != DefaultNetNSName {
+		t.Fatalf("spec NetNS = %q, want %q", spec.NetNS, DefaultNetNSName)
+	}
+}
+
 func TestLinkGroupSpecValidationRejectsAmbiguousNetNSAndTinyPool(t *testing.T) {
 	group := LinkGroupSpec{
 		ID:    "ipsec-main",
-		NetNS: NetNSSpec{Kind: NetNSHost, Name: "should-not-be-set"},
+		NetNS: NetNSSpec{Kind: NetNSHost, Create: true},
 	}
 	if err := group.Validate(); err == nil {
-		t.Fatalf("Validate should reject host netns with name")
+		t.Fatalf("Validate should reject host netns with create")
 	}
 	group = LinkGroupSpec{
 		ID:                "ipsec-main",
@@ -395,6 +418,9 @@ func TestShouldInitiateBidirectionalTieBreak(t *testing.T) {
 func TestDryRunDriverRecordsApplyOrderInputs(t *testing.T) {
 	driver := &DryRunDriver{}
 	spec := TransportLinkSpec{TransportID: "ipsec-1", InterfaceName: "hgs1"}
+	if err := driver.EnsureNamespace(context.Background(), NetNSSpec{}); err != nil {
+		t.Fatalf("EnsureNamespace: %v", err)
+	}
 	if err := driver.LoadConnection(context.Background(), spec); err != nil {
 		t.Fatalf("LoadConnection: %v", err)
 	}
@@ -404,8 +430,34 @@ func TestDryRunDriverRecordsApplyOrderInputs(t *testing.T) {
 	if err := driver.AssignAddress(context.Background(), "hgs1", "fd00::1/64"); err != nil {
 		t.Fatalf("AssignAddress: %v", err)
 	}
-	if len(driver.Connections) != 1 || len(driver.Interfaces) != 1 || len(driver.Addresses) != 1 {
+	if len(driver.Namespaces) != 1 || len(driver.Connections) != 1 || len(driver.Interfaces) != 1 || len(driver.Addresses) != 1 {
 		t.Fatalf("driver = %+v", driver)
+	}
+	if driver.Namespaces[0].Name != DefaultNetNSName || !driver.Namespaces[0].Create {
+		t.Fatalf("namespace = %+v", driver.Namespaces[0])
+	}
+}
+
+func validNodeRecords() *NodeRecords {
+	return &NodeRecords{
+		Zone: "node-a.catofes.",
+		Profile: &ProfileRecord{
+			Version:                 1,
+			Enabled:                 true,
+			Provider:                ProviderStrongSwan,
+			IKEIdentity:             "node-a.catofes.",
+			TransportKeyFingerprint: "b2",
+			Accept:                  AcceptInbound,
+			AddressFamilies:         []string{FamilyIPv4},
+			PathModes:               []string{PathModeFamilyRedundant},
+		},
+		TransportKey: &TransportKeyRecord{
+			Version:     1,
+			Kind:        TransportKeyRawPublicKey,
+			Algorithm:   AlgorithmEd25519,
+			PublicKey:   "base64",
+			Fingerprint: "b2",
+		},
 	}
 }
 

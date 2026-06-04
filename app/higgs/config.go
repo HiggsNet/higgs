@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,6 +42,7 @@ type appConfig struct {
 	EndpointGrace        time.Duration
 	PublishEndpoints     bool
 	FilterPrivateIPv4    bool
+	IPsec                ipsecConfig
 }
 
 type configYAML struct {
@@ -82,10 +84,19 @@ type configYAML struct {
 	EndpointGracePeriod string `yaml:"endpoint_grace_period"`
 	PublishEndpoints    *bool  `yaml:"publish_endpoints"`
 
-	FilterPrivateIPv4 bool `yaml:"filter_private_ipv4"`
+	FilterPrivateIPv4 bool            `yaml:"filter_private_ipv4"`
+	IPsec             ipsecConfigYAML `yaml:"ipsec"`
 }
 
 type configStringList []string
+
+type ipsecConfig struct {
+	DefaultNetNS ipsec.NetNSSpec
+}
+
+type ipsecConfigYAML struct {
+	DefaultNetNS ipsec.NetNSSpec `yaml:"default_netns"`
+}
 
 func loadAppConfig() (*appConfig, error) {
 	config := defaultAppConfig()
@@ -116,6 +127,9 @@ func defaultAppConfig() *appConfig {
 		EndpointTTL:       time.Hour,
 		EndpointGrace:     gossip.DefaultEndpointGrace,
 		PublishEndpoints:  true,
+		IPsec: ipsecConfig{
+			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
+		},
 	}
 }
 
@@ -145,6 +159,7 @@ func normalizeAppConfig(config *appConfig) {
 	if config.MaxSyncRecords <= 0 {
 		config.MaxSyncRecords = gossip.DefaultSyncLimits().MaxRecords
 	}
+	config.IPsec.DefaultNetNS = config.IPsec.DefaultNetNS.Normalized()
 }
 
 func parseConfigYAML(input string, config *appConfig) error {
@@ -249,6 +264,13 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		config.PublishEndpoints = *file.PublishEndpoints
 	}
 	config.FilterPrivateIPv4 = file.FilterPrivateIPv4
+	if file.IPsec.DefaultNetNS.Kind != "" || file.IPsec.DefaultNetNS.Name != "" || file.IPsec.DefaultNetNS.Path != "" || file.IPsec.DefaultNetNS.Create {
+		netns := file.IPsec.DefaultNetNS.Normalized()
+		if err := netns.Validate(); err != nil {
+			return fmt.Errorf("ipsec.default_netns: %w", err)
+		}
+		config.IPsec.DefaultNetNS = netns
+	}
 	return nil
 }
 

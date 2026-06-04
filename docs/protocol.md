@@ -337,10 +337,11 @@ Phase 4 的关键边界：
 - 本地 MeshPolicy 规则不通过 gossip 公开；它属于本节点拓扑和安全策略。
 - 地址与端口分离公告。远端运行时把 AddressCandidate 与 PortAdvertisement 组合成 ContactPoint 后再拨号。
 - StrongSwan/VICI/XFRM apply 永远以 verified active state 为输入；discovery server、reflector、DNS 响应不能绕过 Zone trust chain。
+- VICI socket、`charon`、XFRM interface、`CAP_NET_ADMIN`/root、UDP 端口可用性等 preflight 只决定本机是否能 apply；它们不是 gossip 记录，也不参与 Zone trust chain。
 
 ### 6.1 Record key 与类型
 
-`pkg/transport/ipsec` 已实现这些 record 的 Go 结构、解析/校验和 ContactPoint 组合逻辑；daemon 仍必须只在记录已经通过 Zone trust chain 验证后使用它们。
+`pkg/transport/ipsec` 已实现这些 record 的 Go 结构、解析/校验、ContactPoint 组合逻辑和本机 StrongSwan/XFRM preflight 检测；daemon 仍必须只在记录已经通过 Zone trust chain 验证后使用它们。
 
 规划 record：
 
@@ -656,6 +657,10 @@ ipsec:
   enabled: true
   provider: strongswan
   accept: inbound
+  default_netns:
+    kind: name
+    name: h2
+    create: true
 
   address_source_order:
     - manual-address
@@ -682,7 +687,9 @@ overlays:
     id: ipsec-main
     provider: strongswan
     netns:
-      kind: host
+      kind: name
+      name: h2
+      create: true
     default_path_mode: family-redundant
     direction: outbound
     max_peers: 64
@@ -701,9 +708,11 @@ overlays:
 
 配置语义：
 - `ipsec.accept` 会发布到 `ipsec/profile`，表示远端可以怎样尝试连接本节点。
+- `ipsec.default_netns` 是本机默认 LinkGroup namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。
 - `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
 - `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
 - `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、tunnel address pool 和 reconcile/backoff 策略，不发布到 gossip。
+- `overlays[].netns` 可以覆盖默认 namespace；`kind: host` 明确表示不隔离，`kind: path` 只引用已有 namespace path，不隐式创建。
 - `overlays[].connect/deny` 是 link group 内的本地 MeshPolicy rule，不发布到 gossip。
 - `address_source_order` 只影响本地选择和排序；远端也会按自己的本地配置重新排序。
 

@@ -16,7 +16,10 @@ const (
 	DirectionOutbound      = "outbound"
 	DirectionBidirectional = "bidirectional"
 
-	NetNSHost = "host"
+	NetNSHost        = "host"
+	NetNSName        = "name"
+	NetNSPath        = "path"
+	DefaultNetNSName = "h2"
 )
 
 type MeshPolicy struct {
@@ -29,9 +32,10 @@ type MeshPolicy struct {
 }
 
 type NetNSSpec struct {
-	Kind string
-	Name string
-	Path string
+	Kind   string `yaml:"kind" json:"kind"`
+	Name   string `yaml:"name,omitempty" json:"name,omitempty"`
+	Path   string `yaml:"path,omitempty" json:"path,omitempty"`
+	Create bool   `yaml:"create,omitempty" json:"create,omitempty"`
 }
 
 type BackoffPolicy struct {
@@ -191,7 +195,8 @@ func (g LinkGroupSpec) Validate() error {
 	if g.MaxLinksPerPeer < 0 {
 		return fmt.Errorf("max links per peer must be non-negative")
 	}
-	if err := g.NetNS.Validate(); err != nil {
+	netns := g.NetNS.Normalized()
+	if err := netns.Validate(); err != nil {
 		return err
 	}
 	if g.Reconcile.Backoff.MaxSeconds != 0 && g.Reconcile.Backoff.InitialSeconds > g.Reconcile.Backoff.MaxSeconds {
@@ -211,9 +216,7 @@ func (g LinkGroupSpec) Normalized() LinkGroupSpec {
 	if out.Direction == "" {
 		out.Direction = DirectionOutbound
 	}
-	if out.NetNS.Kind == "" {
-		out.NetNS.Kind = NetNSHost
-	}
+	out.NetNS = out.NetNS.Normalized()
 	if len(out.AddressSourceOrder) == 0 {
 		out.AddressSourceOrder = append([]string(nil), defaultAddressSourceOrder...)
 	}
@@ -239,28 +242,29 @@ func (g LinkGroupSpec) TunnelAddresses(linkIndex int) (netip.Addr, netip.Addr, e
 }
 
 func (n NetNSSpec) Validate() error {
+	n = n.Normalized()
 	kind := n.Kind
-	if kind == "" {
-		kind = NetNSHost
-	}
 	switch kind {
 	case NetNSHost:
-		if n.Name != "" || n.Path != "" {
-			return fmt.Errorf("host netns must not set name or path")
+		if n.Name != "" || n.Path != "" || n.Create {
+			return fmt.Errorf("host netns must not set name, path, or create")
 		}
-	case "name":
+	case NetNSName:
 		if n.Name == "" {
 			return fmt.Errorf("netns name is required")
 		}
 		if n.Path != "" {
 			return fmt.Errorf("netns name mode must not set path")
 		}
-	case "path":
+	case NetNSPath:
 		if n.Path == "" {
 			return fmt.Errorf("netns path is required")
 		}
 		if n.Name != "" {
 			return fmt.Errorf("netns path mode must not set name")
+		}
+		if n.Create {
+			return fmt.Errorf("netns path mode cannot create namespaces")
 		}
 	default:
 		return fmt.Errorf("unsupported netns kind %q", kind)
@@ -268,13 +272,28 @@ func (n NetNSSpec) Validate() error {
 	return nil
 }
 
+func (n NetNSSpec) Normalized() NetNSSpec {
+	out := n
+	if out.Kind == "" {
+		out.Kind = NetNSName
+	}
+	if out.Kind == NetNSName && out.Name == "" {
+		out.Name = DefaultNetNSName
+	}
+	if out.Kind == NetNSName && n.Kind == "" && n.Name == "" && n.Path == "" {
+		out.Create = true
+	}
+	return out
+}
+
 func (n NetNSSpec) Target() string {
+	n = n.Normalized()
 	switch n.Kind {
-	case "", NetNSHost:
+	case NetNSHost:
 		return ""
-	case "name":
+	case NetNSName:
 		return n.Name
-	case "path":
+	case NetNSPath:
 		return n.Path
 	default:
 		return ""

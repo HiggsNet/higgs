@@ -19,6 +19,7 @@ type IPsecDriver interface {
 }
 
 type XFRMDriver interface {
+	EnsureNamespace(context.Context, NetNSSpec) error
 	EnsureInterface(context.Context, TransportLinkSpec) error
 	DeleteInterface(context.Context, string) error
 	AssignAddress(context.Context, string, string) error
@@ -29,6 +30,7 @@ type DryRunDriver struct {
 	Unloaded    []string
 	Terminated  []string
 	Interfaces  []TransportLinkSpec
+	Namespaces  []NetNSSpec
 	DeletedIFs  []string
 	Addresses   []string
 }
@@ -50,6 +52,11 @@ func (d *DryRunDriver) TerminateSA(_ context.Context, id string) error {
 
 func (d *DryRunDriver) ListSAs(context.Context) ([]SAState, error) {
 	return nil, nil
+}
+
+func (d *DryRunDriver) EnsureNamespace(_ context.Context, spec NetNSSpec) error {
+	d.Namespaces = append(d.Namespaces, spec.Normalized())
+	return nil
 }
 
 func (d *DryRunDriver) EnsureInterface(_ context.Context, spec TransportLinkSpec) error {

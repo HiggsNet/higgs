@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestParseConfigYAML(t *testing.T) {
@@ -59,6 +60,40 @@ trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 	}
 	if config.PublishEndpoints {
 		t.Fatalf("PublishEndpoints = true, want false")
+	}
+	if config.IPsec.DefaultNetNS.Name != ipsec.DefaultNetNSName || !config.IPsec.DefaultNetNS.Create {
+		t.Fatalf("IPsec.DefaultNetNS = %+v", config.IPsec.DefaultNetNS)
+	}
+}
+
+func TestParseConfigYAMLIPsecDefaultNetNS(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  default_netns:
+    kind: name
+    name: h2
+    create: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.IPsec.DefaultNetNS.Kind != ipsec.NetNSName || config.IPsec.DefaultNetNS.Name != "h2" || !config.IPsec.DefaultNetNS.Create {
+		t.Fatalf("IPsec.DefaultNetNS = %+v", config.IPsec.DefaultNetNS)
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidIPsecDefaultNetNS(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  default_netns:
+    kind: host
+    create: true
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("parseConfigYAML should reject host netns create")
 	}
 }
 

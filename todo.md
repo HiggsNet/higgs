@@ -420,11 +420,12 @@
   - [ ] 通过 VICI 控制 StrongSwan，优先使用 `github.com/strongswan/govici/vici`；`swanctl` 只作为人工 debug/dry-run 对照，不作为核心控制面输出解析依赖
   - [x] 定义 `IPsecDriver` / `XFRMDriver` 薄接口：`LoadConnection`、`UnloadConnection`、`TerminateSA`、`ListSAs`、`EnsureInterface`、`DeleteInterface`、`AssignAddress`
   - [x] 增加 fake/dry-run driver：非 root、无 strongSwan、无 XFRM 权限环境仍可测试 desired config 推导、apply 顺序和错误路径
-  - [ ] 做运行依赖检测：VICI socket / `charon` 可用性、strongSwan XFRM 支持、Linux kernel/iproute2 XFRM interface 支持、`CAP_NET_ADMIN`/root 权限、UDP 500/4500 或自定义端口可用性
+  - [x] 做运行依赖检测：VICI socket / `charon` 可用性、strongSwan XFRM 支持、Linux kernel/iproute2 XFRM interface 支持、`CAP_NET_ADMIN`/root 权限、UDP 500/4500 或自定义端口可用性
   - [x] 稳定派生 XFRM `if_id` 与 interface name：基于 local zone + peer zone + transport id hash，`if_id` 使用 32-bit 值，接口名满足 Linux 15 字符限制并处理冲突
   - [x] 第一版默认一条 peer link 一个 XFRM interface；后续再评估 shared XFRM interface 或 in/out 分离 interface
-  - [ ] 定义 netns 配置来源：link group 可声明 `host`、netns name 或 netns path；单条 `TransportLinkSpec` 可继承或覆盖；daemon 只 ensure/move 到已存在的目标 ns，目标 ns 不存在时进入 degraded/error，不隐式创建复杂 ns
-  - [ ] network namespace 第一版默认 host ns；`TransportLinkSpec` 预留目标 ns，`EnsureInterface` 支持创建后 move 到固定 ns，daemon 启动/重启时 ensure，目标 ns 不存在时进入 degraded/error 而不隐式创建复杂 ns
+  - [x] 定义 netns 配置来源：`config.yaml` 暴露 `ipsec.default_netns`，link group 可声明 `host`、netns name 或 netns path；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 IPsec/XFRM 链路默认落在 host ns
+  - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建/move 前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
+  - [ ] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、创建 XFRM interface 后 move 到目标 ns、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
   - [ ] CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛；Phase 4 只负责 peer-to-peer tunnel link，路由前缀授权留给 Phase 5 Babel/route filter
   - [ ] 实现撤销/删除清理：terminate IKE_SA/CHILD_SA、unload connection/secret、删除 XFRM interface、地址、临时路由和本地运行态
 

@@ -467,6 +467,8 @@ type TransportLinkSpec struct {
 
 `LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、tunnel address pool 以及 reconcile/backoff 策略；daemon 后续从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
+netns 属于本机配置，不进入 gossip。`config.yaml` 的 `ipsec.default_netns` 默认是 `kind=name, name=h2, create=true`；link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；只有显式声明且带 Higgs 归属边界的 named netns 会被自动创建，path/host 不隐式创建。
+
 撤销优先级最高：peer Zone 或父 delegation tombstone 后，LinkPlanner 必须立即停止输出该 peer 的 specs，并要求 provider teardown 已存在 SA/interface。
 
 ### 2.5 签名规范（必须无歧义）
@@ -811,7 +813,7 @@ type PeerView struct {
 
 | 模块 | 包路径 | 状态 |
 |------|--------|------|
-| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` | 🟨 record / ContactPoint / dry-run driver 基础已创建 |
+| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` | 🟨 record / ContactPoint / dry-run driver / preflight / netns 配置基础已创建 |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
 | Babeld 路由适配器 | `pkg/routing/babeld/` | 🔲 仅 doc.go |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
