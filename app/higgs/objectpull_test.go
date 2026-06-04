@@ -165,6 +165,41 @@ func TestResolvePeerTCPAddrUsesVerifiedObservedPath(t *testing.T) {
 	}
 }
 
+func TestResolvePeerTCPAddrPrefersObservedOverPrivateSignedEndpoint(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Now()
+	endpoints := []gossip.LocalEndpoint{
+		{IP: net.ParseIP("10.16.255.8"), Port: 33435, Scope: "global", Priority: 100, Source: gossip.SourceInterface},
+	}
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       gossip.EndpointRecordKeyUDP,
+		Type:      "sync.endpoint",
+		Value:     gossip.EndpointRecordBytes(endpoints, now),
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord(endpoint): %v", err)
+	}
+	if err := state.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt(endpoint): %v", err)
+	}
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			ObservedAddr:          "114.246.101.91:33435",
+			ObservedFirstSeenUnix: now.Unix(),
+			ObservedLastSeenUnix:  now.Unix(),
+			ObservedUntilUnix:     now.Add(time.Minute).Unix(),
+			ObservedSource:        string(gossip.MessagePing),
+		},
+	}
+
+	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "node-b.catofes."); got != "114.246.101.91:33435" {
+		t.Fatalf("resolvePeerTCPAddr = %q, want observed public path", got)
+	}
+}
+
 func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	_, err := tryObjectPullTCP(state, &syncConfigFile{}, "node-b.catofes.", "node-b.catofes.")

@@ -238,7 +238,7 @@ func printDebugRecords(prefix string, records map[string]*zone.Record) {
 }
 
 func formatLastSuccess(peerState syncPeerState) string {
-	if peerState.LastSyncUnix == 0 || peerState.LastError != "" {
+	if peerState.LastSyncUnix == 0 {
 		return "never"
 	}
 	return formatUnixTime(peerState.LastSyncUnix)

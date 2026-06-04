@@ -379,13 +379,24 @@ func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID s
 		}
 	}
 	// Fall back to discovered endpoint with the same numeric TCP port.
+	var privateTCP string
 	if state != nil && state.Network != nil {
 		for discoveredID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
 			if discoveredID != targetPeerID || len(entries) == 0 {
 				continue
 			}
-			udp := net.JoinHostPort(entries[0].Address, fmt.Sprintf("%d", entries[0].Port))
-			if tcp := objectPullTCPAddr(udp); tcp != "" {
+			for _, entry := range sortedEndpointEntriesForDial(entries) {
+				udp := net.JoinHostPort(entry.Address, fmt.Sprintf("%d", entry.Port))
+				tcp := objectPullTCPAddr(udp)
+				if tcp == "" {
+					continue
+				}
+				if endpointEntryIsPrivate(entry) {
+					if privateTCP == "" {
+						privateTCP = tcp
+					}
+					continue
+				}
 				return tcp
 			}
 		}
@@ -400,6 +411,9 @@ func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID s
 				return tcp
 			}
 		}
+	}
+	if privateTCP != "" {
+		return privateTCP
 	}
 	return ""
 }

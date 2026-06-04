@@ -134,6 +134,16 @@ func TestRecordPeerSyncBackoffAndRecovery(t *testing.T) {
 	if recovered.LastSyncUnix == 0 {
 		t.Fatalf("LastSyncUnix was not set on recovery")
 	}
+
+	lastSuccess := recovered.LastSyncUnix
+	recordPeerSync(state, "node-b", errors.New("sync receive timed out"))
+	failedAgain := state.SyncPeers["node-b"]
+	if failedAgain.LastSyncUnix != lastSuccess {
+		t.Fatalf("LastSyncUnix after later failure = %d, want previous %d", failedAgain.LastSyncUnix, lastSuccess)
+	}
+	if got := formatLastSuccess(failedAgain); got == "never" {
+		t.Fatalf("formatLastSuccess after later failure = %q, want previous success timestamp", got)
+	}
 }
 
 func TestRecordVerifiedObservedPathRequiresVerifiedPeer(t *testing.T) {
@@ -231,6 +241,11 @@ func TestObservedPathPreferenceAndFailureCount(t *testing.T) {
 	peerState.LastError = "sync once timed out"
 	if !observedPathPreferFirst(peerState, now) {
 		t.Fatalf("observedPathPreferFirst should prefer observed path after failure")
+	}
+	peerState.LastError = ""
+	peerState.DiscoveredAddr = "10.16.255.8:33435"
+	if !observedPathPreferFirst(peerState, now) {
+		t.Fatalf("observedPathPreferFirst should prefer observed path over private discovered endpoint")
 	}
 
 	state := &stateFile{SyncPeers: map[string]syncPeerState{"node-b": peerState}}
@@ -699,6 +714,41 @@ func TestUpdateDiscoveredPeersAddsAddrsForEndpoints(t *testing.T) {
 	}
 }
 
+func TestUpdateDiscoveredPeersRanksPrivateEndpointsAfterPublic(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	prepareStatePersistence(t)
+	transport := &gossip.Transport{}
+	now := time.Now()
+	endpoints := []gossip.LocalEndpoint{
+		{IP: net.ParseIP("10.16.255.8"), Port: 33435, Scope: "global", Priority: 200, Source: gossip.SourceInterface},
+		{IP: net.ParseIP("203.0.113.10"), Port: 33434, Scope: "global", Priority: 10, Source: gossip.SourceReflector},
+	}
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       gossip.EndpointRecordKeyUDP,
+		Type:      "sync.endpoint",
+		Value:     gossip.EndpointRecordBytes(endpoints, now),
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	if err := state.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt: %v", err)
+	}
+
+	updateDiscoveredPeers(state, transport, config)
+
+	addr := transport.PeerAddr("node-b.catofes.")
+	if addr == nil || addr.String() != "203.0.113.10:33434" {
+		t.Fatalf("PeerAddr = %v, want 203.0.113.10:33434", addr)
+	}
+	if got := state.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "203.0.113.10:33434" {
+		t.Fatalf("DiscoveredAddr = %q, want 203.0.113.10:33434", got)
+	}
+}
+
 func TestUpdateDiscoveredPeersUpdatesEndpointAddrWithoutUDP(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	config.EndpointGrace = time.Nanosecond
@@ -774,6 +824,60 @@ func TestReflectorEndpointPublishSmoke(t *testing.T) {
 	}
 	if second.Endpoints[1].Address != "198.51.100.10" || !strings.Contains(second.Endpoints[1].Source, "grace") {
 		t.Fatalf("grace endpoint = %#v, want old reflector endpoint retained", second.Endpoints[1])
+	}
+}
+
+func TestEndpointPublishDisabledClearsExistingEndpoint(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = "node-b.catofes."
+	config.DisableEndpointPublish = true
+	dir := t.TempDir()
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(dir, "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(1000, 0) },
+	}
+	now := time.Unix(900, 0)
+	endpoints := []gossip.LocalEndpoint{
+		{IP: net.ParseIP("10.16.255.8"), Port: 33435, Scope: "global", Priority: 100, Source: gossip.SourceInterface},
+	}
+	record := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       gossip.EndpointRecordKeyUDP,
+		Type:      "sync.endpoint",
+		Value:     gossip.EndpointRecordBytes(endpoints, now),
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+		t.Fatalf("SignRecord(endpoint): %v", err)
+	}
+	if err := state.Network.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt(endpoint): %v", err)
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(clear): %v", err)
+	}
+	clearedRecord := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
+	if clearedRecord.Version != 2 {
+		t.Fatalf("cleared endpoint version = %d, want 2", clearedRecord.Version)
+	}
+	cleared := endpointRecordFromState(t, state, "node-b.catofes.")
+	if len(cleared.Endpoints) != 0 {
+		t.Fatalf("cleared endpoints = %#v, want empty", cleared.Endpoints)
+	}
+	if history := state.Network.Zones["node-b.catofes."].RecordHistory[gossip.EndpointRecordKeyUDP]; len(history) != 1 {
+		t.Fatalf("endpoint history len = %d, want previous record retained", len(history))
+	}
+
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(clear again): %v", err)
+	}
+	if got := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP].Version; got != 2 {
+		t.Fatalf("endpoint version after second clear = %d, want 2", got)
 	}
 }
 

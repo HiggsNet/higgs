@@ -766,7 +766,19 @@ func observedPathActive(peerState syncPeerState, now time.Time) bool {
 }
 
 func observedPathPreferFirst(peerState syncPeerState, now time.Time) bool {
-	return observedPathActive(peerState, now) && (peerState.LastError != "" || peerState.DiscoveredAddr == "")
+	return observedPathActive(peerState, now) && (peerState.LastError != "" || peerState.DiscoveredAddr == "" || discoveredAddrIsPrivate(peerState.DiscoveredAddr))
+}
+
+func discoveredAddrIsPrivate(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
 func peerChainVerified(state *stateFile, peerID string, now time.Time) bool {
@@ -860,7 +872,7 @@ func (sr *SyncRuntime) seedTransportPeers(deps *SyncTransportDeps) {
 			continue
 		}
 		var addrs []*net.UDPAddr
-		for _, entry := range entries {
+		for _, entry := range sortedEndpointEntriesForDial(entries) {
 			addr, err := entry.UDPAddr()
 			if err != nil {
 				continue
@@ -935,11 +947,11 @@ func publishEndpointRecord(state *stateFile, config *syncConfigFile) error {
 func (sr *SyncRuntime) publishEndpointRecord() error {
 	state := sr.State
 	config := sr.Config
-	if config != nil && config.DisableEndpointPublish {
-		return nil
-	}
 	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 {
 		return nil
+	}
+	if config != nil && config.DisableEndpointPublish {
+		return sr.clearPublishedEndpointRecord()
 	}
 	port := listenPortFromAddr(config.ListenAddr)
 	endpoints, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
@@ -972,6 +984,37 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 		}
 	}
 
+	record, err := buildSignedRecordAt(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint", now)
+	if err != nil {
+		return err
+	}
+	if err := state.Network.Put(record); err != nil {
+		return err
+	}
+	return sr.saveState()
+}
+
+func (sr *SyncRuntime) clearPublishedEndpointRecord() error {
+	state := sr.State
+	config := sr.Config
+	zs := state.Network.Zones[state.ManagedZone]
+	if zs == nil {
+		return nil
+	}
+	existing := zs.Records[gossip.EndpointRecordKeyUDP]
+	if existing == nil {
+		return nil
+	}
+	var current gossip.EndpointRecord
+	if err := json.Unmarshal(existing.Value, &current); err == nil && len(current.Endpoints) == 0 {
+		return nil
+	}
+	now := sr.now()
+	recordValue := gossip.LocalEndpointsToRecordWithPolicy(nil, nil, now, config.EndpointTTL, 0)
+	value, err := json.Marshal(recordValue)
+	if err != nil {
+		return err
+	}
 	record, err := buildSignedRecordAt(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint", now)
 	if err != nil {
 		return err
@@ -1045,7 +1088,7 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 			continue
 		}
 		var addrs []*net.UDPAddr
-		for _, entry := range entries {
+		for _, entry := range sortedEndpointEntriesForDial(entries) {
 			addr, err := entry.UDPAddr()
 			if err != nil {
 				continue
@@ -1136,6 +1179,37 @@ func appendUDPAddrOnce(addrs []*net.UDPAddr, addr *net.UDPAddr) []*net.UDPAddr {
 	}
 	copied := *addr
 	return append(addrs, &copied)
+}
+
+func sortedEndpointEntriesForDial(entries []gossip.EndpointEntry) []gossip.EndpointEntry {
+	out := append([]gossip.EndpointEntry(nil), entries...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ri := endpointDialRank(out[i])
+		rj := endpointDialRank(out[j])
+		if ri != rj {
+			return ri < rj
+		}
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority > out[j].Priority
+		}
+		return out[i].LastObserved > out[j].LastObserved
+	})
+	return out
+}
+
+func endpointDialRank(entry gossip.EndpointEntry) int {
+	ip := net.ParseIP(entry.Address)
+	if ip == nil {
+		return 3
+	}
+	if ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return 2
+	}
+	return 0
+}
+
+func endpointEntryIsPrivate(entry gossip.EndpointEntry) bool {
+	return endpointDialRank(entry) == 2
 }
 
 func syncRoundWithTransport(ctx context.Context, state *stateFile, transport *gossip.Transport, peerID string, timeout time.Duration) (err error) {
@@ -1362,6 +1436,8 @@ func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
 	}()
 	switch message.Type {
 	case gossip.MessagePing:
+		recordVerifiedObservedPath(state, message.PeerID, packet.Addr, message.Type, sr.now())
+		sr.seedObservedPeerPath(message.PeerID)
 		fetch := fetchListForPeer(state, message.PeerID, message.Ping.Zones, sr.now())
 		return transport.Send(message.PeerID, &gossip.Message{
 			Type: gossip.MessagePong,
