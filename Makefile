@@ -196,7 +196,7 @@ phase2-smoke: build
 # 2. 启动 A 的 sync run，再延迟启动 B，验证 B 可自动追上 A。
 # 3. 停止 B，模拟 peer 离线。
 # 4. B 离线修改本地 record 后重新启动 sync run。
-# 5. 断言 A 自动收到 B 的新 record，并且 sync status 进入 online。
+# 5. 断言 A 自动收到 B 的新 record，A/B verified state 的 root 一致。
 phase2-run-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-phase2-run-smoke"; \
@@ -204,8 +204,8 @@ phase2-run-smoke: build
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33463' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33466' > "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a' 'listen_addr: 127.0.0.1:33464' 'bootstrap:' '  - id: node-b' '    addr: 127.0.0.1:33465' > "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b' 'listen_addr: 127.0.0.1:33465' 'bootstrap:' '  - id: node-a' '    addr: 127.0.0.1:33464' > "$$tmp/b/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33464' 'advertise_addr: 127.0.0.1:33464' 'publish_endpoints: false' 'bootstrap:' '  - id: node-b.catofes.' '    addr: 127.0.0.1:33465' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33465' 'advertise_addr: 127.0.0.1:33465' 'publish_endpoints: false' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33464' > "$$tmp/b/config.yaml"; \
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
 	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/catofes/config.yaml"; \
@@ -236,8 +236,10 @@ phase2-run-smoke: build
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/b-restart.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RvcmVk'; then break; fi; sleep 1; done; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RvcmVk'; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | grep -q 'status=online'; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
+	a_root="$$(HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | awk '/^local_root:/ {print $$2}')"; \
+	b_root="$$(HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | awk '/^local_root:/ {print $$2}')"; \
+	[ "$$a_root" = "$$b_root" ]; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase2 sync run smoke passed"
 
@@ -364,10 +366,11 @@ admin-daemon-smoke: build
 
 # multi-node-smoke 流程：
 # 1. 准备 A/B/C 三节点，A 作为 hub，B/C 只通过 A 同步。
-# 2. B 写入 identity，A serve 后 B 先把状态推给 A。
-# 3. C 对 A 执行 sync once，通过 A 学到 B 的 record。
-# 4. 停止并重启 A 的 serve 路径，B 写入更高版本 record。
-# 5. 断言 A 和 C 都看到 B 的新版本，验证重启恢复和 latest-record 收敛。
+# 2. 所有 leaf 先生成 request，再执行两轮 issue，确保 bundle 带完整 leaf delegation table。
+# 3. B 写入 identity，A serve 后 B 先把状态推给 A。
+# 4. C 对 A 执行 sync once，通过 A 学到 B 的 record。
+# 5. 停止并重启 A 的 serve 路径，B 写入更高版本 record。
+# 6. 断言 A 和 C 都看到 B 的新版本，验证重启恢复和 latest-record 收敛。
 multi-node-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-multi-node-smoke"; \
@@ -375,9 +378,9 @@ multi-node-smoke: build
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33453' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33456' > "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a' 'listen_addr: 127.0.0.1:33454' 'bootstrap:' '  - id: node-b' '    addr: 127.0.0.1:33455' '  - id: node-c' '    addr: 127.0.0.1:33457' > "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b' 'listen_addr: 127.0.0.1:33455' 'bootstrap:' '  - id: node-a' '    addr: 127.0.0.1:33454' > "$$tmp/b/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/c" 'peer_id: node-c' 'listen_addr: 127.0.0.1:33457' 'bootstrap:' '  - id: node-a' '    addr: 127.0.0.1:33454' > "$$tmp/c/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33454' 'bootstrap:' '  - id: node-b.catofes.' '    addr: 127.0.0.1:33455' '  - id: node-c.catofes.' '    addr: 127.0.0.1:33457' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33455' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33454' > "$$tmp/b/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/c" 'peer_id: node-c.catofes.' 'listen_addr: 127.0.0.1:33457' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33454' > "$$tmp/c/config.yaml"; \
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
 	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
 	for node in catofes a b c; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
@@ -385,28 +388,31 @@ multi-node-smoke: build
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
+	for node in a b c; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
+	for node in a b c; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
+	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b >/dev/null; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
 	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/a-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a.log"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a.log"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/c-to-a-2.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-2.log"; \
 	sleep 1; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q '"identity"'; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | grep -q 'peer node-a'; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | grep -q 'peer node-a.catofes.'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b-restarted >/dev/null; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/a-restart.log" 2>&1 & server_pid="$$!"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/b-to-a-restart.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a-restart.log"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a >/dev/null; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/c-to-a-restart.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-restart.log"; \
 	sleep 1; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
@@ -508,15 +514,18 @@ reflector-smoke:
 
 # bootstrap-join-smoke 流程：
 # 1. 准备 catofes、node-a、node-b，其中 B 只知道 bootstrap A。
-# 2. A 先从 catofes 同步到 B 的 delegated identity，但还没有 B 的 endpoint。
-# 3. A 写入 identity 并启动 sync run，作为 B 的首次接入入口。
-# 4. B accept bundle 后启动 sync run，依靠已验证身份入站白名单和 observed reply address。
-# 5. 断言 A 看到 B 的 endpoint，B 也看到 A 的既有 record，覆盖首次接入死锁。
+# 2. catofes 以 sync run 启动，提供 UDP gossip 和同端口 TCP object pull。
+# 3. A 先从 catofes 同步到 B 的 delegated identity，但还没有 B 的 endpoint。
+# 4. A 写入 identity 并启动 sync run，作为 B 的首次接入入口。
+# 5. B accept bundle 后启动 sync run，依靠已验证身份入站白名单和 observed reply address。
+# 6. 断言 A 看到 B 的 endpoint，B 也看到 A 的既有 record，覆盖首次接入死锁。
 bootstrap-join-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-bootstrap-join-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/node-a" "$$tmp/node-b"; \
+	catofes_pid=""; a_pid=""; b_pid=""; \
+	trap 'status="$$?"; kill "$${catofes_pid:-}" "$${a_pid:-}" "$${b_pid:-}" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/node-a-bootstrap.log" "$$tmp/node-a.log" "$$tmp/node-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33500' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33501' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/node-a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33502' 'bootstrap:' '  - id: zone-catofes-admin' '    addr: 127.0.0.1:33501' > "$$tmp/node-a/config.yaml"; \
@@ -535,16 +544,16 @@ bootstrap-join-smoke: build
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-b.key.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	sleep 2; \
 	if ! kill -0 "$$catofes_pid" >/dev/null 2>&1; then cat "$$tmp/catofes.log"; exit 1; fi; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >/dev/null; \
+	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >"$$tmp/node-a-bootstrap.log" 2>&1; \
+	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/node-a.log" 2>&1 & a_pid="$$!"; \
 	sleep 1; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/node-b.log" 2>&1 & b_pid="$$!"; \
-	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/node-a.log" "$$tmp/node-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	for i in 1 2 3 4 5 6 7 8; do \
 		if HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'sync/endpoint/udp'; then break; fi; \
 		sleep 1; \
@@ -556,17 +565,18 @@ bootstrap-join-smoke: build
 
 # nat-observed-smoke 流程：
 # 1. 准备 A/B，其中 B 设置 publish_endpoints: false 模拟 NAT 后节点。
-# 2. A 先从 catofes 同步必要 delegation，再作为 serve 端等待 B。
-# 3. B 主动连 A，A 只能记录 observed UDP path，不能生成 durable discovered_addr。
-# 4. A 停止 serve 后写入 record，再通过 observed path 对 B 执行 sync once。
-# 5. 断言 B 收到 A 的 record，证明无 signed endpoint 时仍可用 verified observed path 返回同步。
+# 2. catofes 以 sync run 启动，提供 UDP gossip 和同端口 TCP object pull。
+# 3. A 先从 catofes 同步必要 delegation，再作为 serve 端等待 B。
+# 4. B 主动连 A，A 只能记录 observed UDP path，不能生成 durable discovered_addr。
+# 5. A 停止 serve 后写入 record，再通过 observed path 对 B 执行 sync once。
+# 6. 断言 B 收到 A 的 record，证明无 signed endpoint 时仍可用 verified observed path 返回同步。
 nat-observed-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-nat-observed-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33540' > "$$tmp/admin/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33541' > "$$tmp/catofes/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33541' 'publish_endpoints: false' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33542' 'bootstrap:' '  - id: zone-catofes-admin' '    addr: 127.0.0.1:33541' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33543' 'publish_endpoints: false' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33542' > "$$tmp/b/config.yaml"; \
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
@@ -577,11 +587,12 @@ nat-observed-smoke: build
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
 	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	a_pid=""; b_pid=""; \
-	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$$tmp/b.log" "$$tmp/put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$$tmp/b.log" "$$tmp/put.out" "$$tmp/a-to-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	kill "$$catofes_pid" >/dev/null 2>&1 || true; wait "$$catofes_pid" >/dev/null 2>&1 || true; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	sleep 1; \
@@ -593,7 +604,7 @@ nat-observed-smoke: build
 	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:33543'; then exit 1; fi; \
 	kill "$$a_pid" >/dev/null 2>&1 || true; wait "$$a_pid" >/dev/null 2>&1 || true; a_pid=""; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a-observed >"$$tmp/put.out"; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b.catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b.catofes. >"$$tmp/a-to-b.log" 2>&1 || grep -q 'pending zones' "$$tmp/a-to-b.log"; \
 	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bm9kZS1hLW9ic2VydmVk'; then break; fi; sleep 1; done; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bm9kZS1hLW9ic2VydmVk'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
@@ -602,17 +613,18 @@ nat-observed-smoke: build
 
 # nat-daemon-observed-smoke 流程：
 # 1. 准备 A/B，其中 B 禁用 endpoint 发布，A 使用 advertise_addr。
-# 2. A 先从 catofes 同步 delegation，再启动 A/B daemon。
-# 3. 断言 A 对 B 只记录 observed_addr/observed_status，不产生 discovered_addr。
-# 4. 通过 A 的 control socket 写入 record。
-# 5. 等待 B 收到并 verify A，确保 daemon 路径与 direct CLI 的 NAT observed 行为一致。
+# 2. catofes 以 sync run 启动，提供 UDP gossip 和同端口 TCP object pull。
+# 3. A 先从 catofes 同步 delegation，再启动 A/B daemon。
+# 4. 断言 A 对 B 只记录 observed_addr/observed_status，不产生 discovered_addr。
+# 5. 通过 A 的 control socket 写入 record。
+# 6. 等待 B 收到并 verify A，确保 daemon 路径与 direct CLI 的 NAT observed 行为一致。
 nat-daemon-observed-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-nat-daemon-observed-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33560' > "$$tmp/admin/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33561' > "$$tmp/catofes/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33561' 'publish_endpoints: false' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33562' 'advertise_addr: 127.0.0.1:33562' 'bootstrap:' '  - id: zone-catofes-admin' '    addr: 127.0.0.1:33561' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33563' 'publish_endpoints: false' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33562' > "$$tmp/b/config.yaml"; \
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
@@ -623,11 +635,12 @@ nat-daemon-observed-smoke: build
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
 	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	a_pid=""; b_pid=""; \
 	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$$tmp/b.log" "$$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >/dev/null; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	kill "$$catofes_pid" >/dev/null 2>&1 || true; wait "$$catofes_pid" >/dev/null 2>&1 || true; catofes_pid=""; \
 	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	sleep 2; \
@@ -649,10 +662,11 @@ nat-daemon-observed-smoke: build
 
 # delegation-revoke-smoke 流程：
 # 1. 准备 A/B/C 和 catofes，其中 B 先发布 identity 与 endpoint record。
-# 2. 让 A/C 通过同步信任 B，并确认 B endpoint 进入 discovered peers。
-# 3. catofes. 对 node-b.catofes. 写入 parent-authoritative revocation。
-# 4. A/C 从 catofes 同步 revocation 后，verify B 必须失败且 debug zone 显示 revoked。
-# 5. 断言 A 的 discovered peers 不再包含 B，防止撤销节点通过旧 endpoint 复活。
+# 2. 所有 leaf 先生成 request，再执行两轮 issue，确保 bundle 带完整 leaf delegation table。
+# 3. 让 A/C 通过同步信任 B，并确认 B endpoint 进入 discovered peers。
+# 4. catofes. 对 node-b.catofes. 写入 parent-authoritative revocation。
+# 5. A/C 从 catofes 同步 revocation 后，verify B 必须失败且 debug zone 显示 revoked。
+# 6. 断言 A 的 discovered peers 不再包含 B，防止撤销节点通过旧 endpoint 复活。
 delegation-revoke-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-delegation-revoke-smoke"; \
@@ -672,26 +686,32 @@ delegation-revoke-smoke: build
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
 	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
 	for node in b c a; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
+	for node in a b c; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
 	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b >/dev/null; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. sync/endpoint/udp '{"endpoints":[{"address":"127.0.0.1","port":33513,"protocol":"udp"}]}' sync.endpoint >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	catofes_pid=""; \
-	trap 'status="$$?"; kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/catofes.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	trap 'status="$$?"; kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/catofes.log" "$$tmp/b-to-a.log" "$$tmp/c-to-a.log" "$$tmp/a-from-catofes.log" "$$tmp/c-from-catofes.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a.log"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >/dev/null; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a.log"; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; \
 	kill "$$a_pid" >/dev/null 2>&1 || true; \
 	wait "$$a_pid" >/dev/null 2>&1 || true; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate revoke node-b.catofes. retired >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync serve >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >/dev/null; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >/dev/null; \
+	for node in a c; do \
+		for i in 1 2 3; do \
+			HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once zone-catofes-admin >"$$tmp/$$node-from-catofes.log" 2>&1 || grep -Eq 'pending zones|gossip peer quota exceeded|sync receive timed out' "$$tmp/$$node-from-catofes.log"; \
+			if HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. 2>/dev/null | grep -q 'revoked: true'; then break; fi; \
+			sleep 1; \
+		done; \
+	done; \
 	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
 	if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \

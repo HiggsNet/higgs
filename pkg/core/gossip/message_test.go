@@ -174,6 +174,60 @@ func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	}
 }
 
+func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, _, zonePriv := testNetworkWithKeys(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	nodePub, nodePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node): %v", err)
+	}
+	nodeAuthority := &zone.ZoneAuthority{
+		Zone:      "node-b.catofes.",
+		Epoch:     1,
+		Threshold: higgscrypto.SupportedThreshold,
+		Keys: []zone.AuthorizedKey{{
+			Key: nodePub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+	delegation := &zone.Delegation{
+		ZoneName:  "node-b.catofes.",
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *nodeAuthority,
+	}
+	if err := higgscrypto.SignDelegation(delegation, "catofes.", zonePriv); err != nil {
+		t.Fatalf("SignDelegation(node-b): %v", err)
+	}
+	source.Zones["catofes."].Delegations["node-b.catofes."] = delegation
+	source.Zones["node-b.catofes."] = zone.NewZoneState("node-b.catofes.", nodeAuthority)
+	record := signedRecord(t, nodePriv, "node-b.catofes.", "identity", []byte("node-b"), 1, nil, now.Unix())
+	if err := source.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt(node-b): %v", err)
+	}
+
+	snapshot, err := Snapshot(source, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+	if len(snapshot.ParentProof) == 0 || snapshot.ParentProof[0].ZoneName != "node-b.catofes." {
+		t.Fatalf("snapshot parent proof = %#v, want direct node-b delegation", snapshot.ParentProof)
+	}
+
+	target := cloneNetworkState(source)
+	delete(target.Zones["catofes."].Delegations, zone.ZonePath("node-b.catofes."))
+	delete(target.Zones, zone.ZonePath("node-b.catofes."))
+
+	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
+	}
+	if err := higgscrypto.VerifyChain(target, "node-b.catofes.", now); err != nil {
+		t.Fatalf("VerifyChain(node-b): %v", err)
+	}
+}
+
 func TestApplyRecordSnapshotAcceptsSignedFastForward(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)

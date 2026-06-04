@@ -435,6 +435,8 @@ Phase 4 的关键边界：
 - `reflector`：反射服务看到的外部地址，常用于 NAT/公网变化场景。
 - `local`：本机接口扫描结果。公网场景默认应允许禁用。
 
+实现上，`pkg/transport/ipsec` 将 DNS 解析作为运行时输入处理：signed record 保留 `host`，`ResolveAddressCandidates` / `ResolveContactPoints` 在传入 resolver 时才把 A/AAAA 展开为可拨号的 `AddressCandidate` / `ContactPoint`，并保留原始域名、family、TTL/refresh 元数据。没有 resolver 的 dry-run 仍可读取域名记录，但不会把未解析域名误当成 IP endpoint。
+
 DNS 不是天然最高优先级。动态 DNS 很多时候只是 public reflector/discovery 的另一种外壳，因此本地配置必须允许调整 source order 或在 MeshPolicy rule 中限制 source。
 
 ### 6.4 `ipsec/ports`

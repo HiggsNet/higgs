@@ -137,6 +137,34 @@ func TestResolvePeerTCPAddrUsesSignedEndpoint(t *testing.T) {
 	}
 }
 
+func TestResolvePeerTCPAddrUsesVerifiedObservedPath(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Now()
+	state.SyncPeers = make(map[string]syncPeerState)
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		ObservedAddr:          "127.0.0.1:33434",
+		ObservedFirstSeenUnix: now.Unix(),
+		ObservedLastSeenUnix:  now.Unix(),
+		ObservedUntilUnix:     now.Add(time.Minute).Unix(),
+		ObservedSource:        string(gossip.MessagePing),
+	}
+
+	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "node-b.catofes."); got != "127.0.0.1:33434" {
+		t.Fatalf("resolvePeerTCPAddr observed = %q, want 127.0.0.1:33434", got)
+	}
+
+	state.SyncPeers["unknown.catofes."] = syncPeerState{
+		ObservedAddr:          "127.0.0.1:33435",
+		ObservedFirstSeenUnix: now.Unix(),
+		ObservedLastSeenUnix:  now.Unix(),
+		ObservedUntilUnix:     now.Add(time.Minute).Unix(),
+		ObservedSource:        string(gossip.MessagePing),
+	}
+	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "unknown.catofes."); got != "" {
+		t.Fatalf("resolvePeerTCPAddr unverified observed = %q, want empty", got)
+	}
+}
+
 func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	_, err := tryObjectPullTCP(state, &syncConfigFile{}, "node-b.catofes.", "node-b.catofes.")

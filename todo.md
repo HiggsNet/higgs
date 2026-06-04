@@ -412,7 +412,7 @@
   - [x] 定义 IPsec address advertisement record：节点公开 `ipsec/addresses`，地址与端口分开建模；地址来源支持 `manual-address`、`manual-dns`、`discovery`、`reflector`、`local`，并保留 family、scope/reachability、source、priority、TTL、DNS refresh interval、last_observed 等元数据
   - [x] 定义 IPsec port advertisement record：节点公开 `ipsec/ports`，端口不嵌入 address；支持固定端口、端口范围、当前端口、上一组端口 grace period、local/listen port、advertised port、observed external port，并为后续 rotate/hopping 预留 generation/valid_until 字段
   - [x] 定义 `AddressCandidate` / `PortAdvertisement` / `ContactPoint` 三层模型：resolver 先得到当前可用地址，再读取当前端口公告，最后组合出 StrongSwan 可拨号目标；避免把 `ip:port` 固化为单一 endpoint
-  - [ ] 支持 DNS 作为一等地址来源：保存原始域名，按配置周期 refresh A/AAAA 记录；DNS 解析结果只是运行时 address candidates，DNS 不天然高于 discovery/reflector，优先级由本地配置决定
+  - [x] 支持 DNS 作为一等地址来源：保存原始域名，按配置周期 refresh A/AAAA 记录；DNS 解析结果只是运行时 address candidates，DNS 不天然高于 discovery/reflector，优先级由本地配置决定
   - [ ] 支持 discovery server / reflector 作为可选地址来源：discovery 可返回候选地址/域名/端口公告；reflector 主要提供 observed address/port；两者都不能成为信任根，远端仍必须验证 Zone 签名记录和本地 mesh policy
   - [ ] 支持本地地址来源 `local`：用于 LAN、实验和显式启用场景；公网默认配置应允许禁用 private/link-local/interface-scan 结果，避免误把内网地址用于公网 IPsec
   - [ ] 支持 address source priority 配置：默认可为 `manual-address/manual-dns > discovery > reflector > local`，但必须允许管理员改顺序或按 rule 限制来源；不要把动态 DNS 视为天然最高优先级

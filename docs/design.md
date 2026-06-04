@@ -308,6 +308,8 @@ ContactPoint          # AddressCandidate + PortAdvertisement 组合出的实际�
 - `reflector`：reflector 观察到的外部地址；主要用于 NAT/公网变化场景。
 - `local`：本机接口扫描结果；适合 LAN/实验，公网默认应允许禁用。
 
+Go 实现里 DNS 被建模为运行时候选展开，而不是 signed record 里的固定 endpoint：`manual-dns` record 保留原始域名；planner 通过 resolver 把 A/AAAA 结果展开成 `AddressCandidate`，再与 `PortAdvertisement` 组合为 `ContactPoint`。这样 DNS refresh 只影响本地 desired-state 计算，不改变 Zone 签名记录本身。
+
 DNS、discovery、reflector 的优先级不能写死。动态 DNS 本质上也可能只是公网反射/发现机制的包装，因此本地配置应允许指定顺序，例如：
 
 ```yaml

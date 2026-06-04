@@ -373,6 +373,17 @@ func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID s
 			}
 		}
 	}
+	// Last resort for first-contact bootstrap: a verified, short-lived observed
+	// UDP path can reach the peer before its signed endpoint record is synced.
+	if state != nil {
+		peerState := state.SyncPeers[targetPeerID]
+		now := time.Now()
+		if observedPathActive(peerState, now) && peerChainVerified(state, targetPeerID, now) {
+			if tcp := objectPullTCPAddr(peerState.ObservedAddr); tcp != "" {
+				return tcp
+			}
+		}
+	}
 	return ""
 }
 

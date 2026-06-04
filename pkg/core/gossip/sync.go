@@ -68,7 +68,7 @@ func Snapshot(ns *zone.NetworkState, path zone.ZonePath) (*ZoneSnapshot, error) 
 	return &ZoneSnapshot{
 		Zone:        path,
 		Authority:   cloneAuthority(zs.Authority),
-		ParentProof: cloneDelegationSlice(zs.ParentProof),
+		ParentProof: snapshotParentProof(ns, path, zs),
 		Delegations: cloneDelegationMap(zs.Delegations),
 		Revocations: cloneRevocationMap(zs.Revocations),
 		Records:     cloneRecordMap(zs.Records),
@@ -262,6 +262,31 @@ func snapshotZoneState(snapshot *ZoneSnapshot) *zone.ZoneState {
 		Records:       cloneRecordMap(snapshot.Records),
 		RecordHistory: cloneRecordHistory(snapshot.RecordHistory),
 	}
+}
+
+func snapshotParentProof(ns *zone.NetworkState, path zone.ZonePath, zs *zone.ZoneState) []*zone.Delegation {
+	proof := cloneDelegationSlice(zs.ParentProof)
+	if path == zone.RootZone || ns == nil {
+		return proof
+	}
+	parent := path.Parent()
+	if parent == zone.RootZone {
+		return proof
+	}
+	parentState := ns.Zones[parent]
+	if parentState == nil {
+		return proof
+	}
+	delegation := parentState.Delegations[path]
+	if delegation == nil {
+		return proof
+	}
+	for _, existing := range proof {
+		if existing != nil && existing.ZoneName == path {
+			return proof
+		}
+	}
+	return append([]*zone.Delegation{cloneDelegation(delegation)}, proof...)
 }
 
 func cloneNetworkState(ns *zone.NetworkState) *zone.NetworkState {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -75,7 +76,17 @@ func TestParseIPsecRecordsAndBuildContactPoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePortRecord: %v", err)
 	}
-	points := ContactPoints(addresses, ports, now)
+	points, err := ResolveContactPoints(context.Background(), addresses, ports, now, AddressCandidateOptions{
+		DNSResolver: staticDNSResolver{
+			"node-a.example.com": {
+				{IP: net.ParseIP("2001:db8::20")},
+				{IP: net.ParseIP("198.51.100.20")},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveContactPoints: %v", err)
+	}
 	if len(points) != 6 {
 		t.Fatalf("ContactPoints len = %d, want 6", len(points))
 	}
@@ -85,6 +96,44 @@ func TestParseIPsecRecordsAndBuildContactPoints(t *testing.T) {
 	}
 	if selected[0].IKEPort != 30412 || !selected[0].Current {
 		t.Fatalf("selected current port = %+v", selected[0])
+	}
+}
+
+func TestResolveAddressCandidatesExpandsManualDNSRuntimeOnly(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	addresses := &AddressRecord{
+		Version: 1,
+		Addresses: []AddressAdvertisement{{
+			ID:             "dns-main",
+			Source:         SourceManualDNS,
+			Host:           "node-a.example.com",
+			Families:       []string{FamilyIPv6},
+			RefreshSeconds: 30,
+			Priority:       80,
+			Reachability:   ReachabilityPublic,
+			TTLSeconds:     300,
+		}},
+		UpdatedAt: now.Unix(),
+	}
+	candidates, err := ResolveAddressCandidates(context.Background(), addresses, now, AddressCandidateOptions{
+		DNSResolver: staticDNSResolver{
+			"node-a.example.com": {
+				{IP: net.ParseIP("2001:db8::20")},
+				{IP: net.ParseIP("198.51.100.20")},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates len = %d, want 1", len(candidates))
+	}
+	if candidates[0].Host != "node-a.example.com" || candidates[0].Address != "2001:db8::20" || candidates[0].Family != FamilyIPv6 {
+		t.Fatalf("candidate = %+v", candidates[0])
+	}
+	if candidates[0].RefreshAt != now.Add(30*time.Second) {
+		t.Fatalf("RefreshAt = %s", candidates[0].RefreshAt)
 	}
 }
 
@@ -372,4 +421,10 @@ func record(t *testing.T, owner zone.ZonePath, key, recordType string, value any
 		Type:  recordType,
 		Value: data,
 	}
+}
+
+type staticDNSResolver map[string][]net.IPAddr
+
+func (r staticDNSResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	return append([]net.IPAddr(nil), r[host]...), nil
 }

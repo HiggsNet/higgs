@@ -1,6 +1,7 @@
 package ipsec
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -155,6 +156,7 @@ type AddressCandidate struct {
 	Priority     int
 	Reachability string
 	ExpiresAt    time.Time
+	RefreshAt    time.Time
 }
 
 type PortAdvertisement struct {
@@ -177,6 +179,15 @@ type ContactPoint struct {
 	Current      bool
 	IKEPort      uint16
 	NATTPort     uint16
+}
+
+type DNSResolver interface {
+	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
+
+type AddressCandidateOptions struct {
+	DNSResolver DNSResolver
+	SourceOrder []string
 }
 
 func ParseProfileRecord(record *zone.Record) (*ProfileRecord, error) {
@@ -417,8 +428,13 @@ func (k TransportKeyRecord) Validate() error {
 }
 
 func AddressCandidates(record *AddressRecord, now time.Time) []AddressCandidate {
+	candidates, _ := ResolveAddressCandidates(context.Background(), record, now, AddressCandidateOptions{})
+	return candidates
+}
+
+func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now time.Time, opts AddressCandidateOptions) ([]AddressCandidate, error) {
 	if record == nil {
-		return nil
+		return nil, nil
 	}
 	var out []AddressCandidate
 	for _, address := range record.Addresses {
@@ -426,33 +442,71 @@ func AddressCandidates(record *AddressRecord, now time.Time) []AddressCandidate 
 			continue
 		}
 		expiresAt := expiryForAddress(address, record.UpdatedAt)
-		for _, family := range addressFamilies(address) {
-			candidate := AddressCandidate{
-				ID:           address.ID,
-				Source:       address.Source,
-				Host:         address.Host,
-				Address:      address.Address,
-				Family:       family,
-				Priority:     address.Priority,
-				Reachability: address.Reachability,
-				ExpiresAt:    expiresAt,
+		refreshAt := refreshForAddress(address, record.UpdatedAt)
+		if address.Source == SourceManualDNS && opts.DNSResolver != nil {
+			resolved, err := opts.DNSResolver.LookupIPAddr(ctx, address.Host)
+			if err != nil {
+				return nil, fmt.Errorf("resolve address %s host %q: %w", address.ID, address.Host, err)
 			}
-			if candidate.Reachability == "" {
-				candidate.Reachability = ReachabilityUnknown
+			for _, ipAddr := range resolved {
+				ip := ipAddr.IP
+				if ip == nil {
+					continue
+				}
+				family := inferIPFamily(ip.String())
+				if !familyAllowed(family, addressFamilies(address)) {
+					continue
+				}
+				out = append(out, newAddressCandidate(address, ip.String(), family, expiresAt, refreshAt))
+			}
+			continue
+		}
+		for _, family := range addressFamilies(address) {
+			candidate := newAddressCandidate(address, address.Address, family, expiresAt, refreshAt)
+			if candidate.Address == "" && address.Source != SourceManualDNS {
+				continue
 			}
 			out = append(out, candidate)
 		}
 	}
+	sortAddressCandidates(out, opts.SourceOrder)
+	return out, nil
+}
+
+func newAddressCandidate(address AddressAdvertisement, resolvedAddress, family string, expiresAt, refreshAt time.Time) AddressCandidate {
+	candidate := AddressCandidate{
+		ID:           address.ID,
+		Source:       address.Source,
+		Host:         address.Host,
+		Address:      resolvedAddress,
+		Family:       family,
+		Priority:     address.Priority,
+		Reachability: address.Reachability,
+		ExpiresAt:    expiresAt,
+		RefreshAt:    refreshAt,
+	}
+	if candidate.Reachability == "" {
+		candidate.Reachability = ReachabilityUnknown
+	}
+	return candidate
+}
+
+func sortAddressCandidates(out []AddressCandidate, sourceOrder []string) {
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Priority != out[j].Priority {
 			return out[i].Priority > out[j].Priority
 		}
-		if sourceRank(out[i].Source) != sourceRank(out[j].Source) {
-			return sourceRank(out[i].Source) < sourceRank(out[j].Source)
+		if sourceRank(out[i].Source, sourceOrder) != sourceRank(out[j].Source, sourceOrder) {
+			return sourceRank(out[i].Source, sourceOrder) < sourceRank(out[j].Source, sourceOrder)
+		}
+		if out[i].Family != out[j].Family {
+			return out[i].Family < out[j].Family
+		}
+		if out[i].Address != out[j].Address {
+			return out[i].Address < out[j].Address
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out
 }
 
 func PortAdvertisements(record *PortRecord, now time.Time) []PortAdvertisement {
@@ -479,10 +533,21 @@ func PortAdvertisements(record *PortRecord, now time.Time) []PortAdvertisement {
 }
 
 func ContactPoints(addresses *AddressRecord, ports *PortRecord, now time.Time) []ContactPoint {
-	addressCandidates := AddressCandidates(addresses, now)
+	points, _ := ResolveContactPoints(context.Background(), addresses, ports, now, AddressCandidateOptions{})
+	return points
+}
+
+func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *PortRecord, now time.Time, opts AddressCandidateOptions) ([]ContactPoint, error) {
+	addressCandidates, err := ResolveAddressCandidates(ctx, addresses, now, opts)
+	if err != nil {
+		return nil, err
+	}
 	portAds := PortAdvertisements(ports, now)
 	out := make([]ContactPoint, 0, len(addressCandidates)*len(portAds))
 	for _, address := range addressCandidates {
+		if address.Address == "" {
+			continue
+		}
 		for _, port := range portAds {
 			out = append(out, ContactPoint{
 				AddressID:    address.ID,
@@ -499,13 +564,13 @@ func ContactPoints(addresses *AddressRecord, ports *PortRecord, now time.Time) [
 			})
 		}
 	}
-	sortContactPoints(out)
-	return out
+	sortContactPoints(out, opts.SourceOrder)
+	return out, nil
 }
 
 func SelectContactPoints(points []ContactPoint, mode string) []ContactPoint {
 	points = append([]ContactPoint(nil), points...)
-	sortContactPoints(points)
+	sortContactPoints(points, nil)
 	if mode == PathModeExhaustive {
 		return points
 	}
@@ -603,6 +668,22 @@ func expiryForAddress(address AddressAdvertisement, recordUpdatedAt int64) time.
 	return time.Unix(base, 0).Add(time.Duration(address.TTLSeconds) * time.Second)
 }
 
+func refreshForAddress(address AddressAdvertisement, recordUpdatedAt int64) time.Time {
+	if address.RefreshSeconds <= 0 || recordUpdatedAt == 0 {
+		return time.Time{}
+	}
+	return time.Unix(recordUpdatedAt, 0).Add(time.Duration(address.RefreshSeconds) * time.Second)
+}
+
+func familyAllowed(family string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if family == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 func portSelectionExpired(selection PortSelection, now time.Time) bool {
 	return selection.ValidUntil != 0 && now.After(time.Unix(selection.ValidUntil, 0))
 }
@@ -627,13 +708,13 @@ func dialPort(binding PortBinding) uint16 {
 	return binding.Advertised
 }
 
-func sortContactPoints(points []ContactPoint) {
+func sortContactPoints(points []ContactPoint, sourceOrder []string) {
 	sort.SliceStable(points, func(i, j int) bool {
 		if points[i].Priority != points[j].Priority {
 			return points[i].Priority > points[j].Priority
 		}
-		if sourceRank(points[i].Source) != sourceRank(points[j].Source) {
-			return sourceRank(points[i].Source) < sourceRank(points[j].Source)
+		if sourceRank(points[i].Source, sourceOrder) != sourceRank(points[j].Source, sourceOrder) {
+			return sourceRank(points[i].Source, sourceOrder) < sourceRank(points[j].Source, sourceOrder)
 		}
 		if points[i].Current != points[j].Current {
 			return points[i].Current
@@ -648,13 +729,16 @@ func sortContactPoints(points []ContactPoint) {
 	})
 }
 
-func sourceRank(source string) int {
-	for i, known := range defaultAddressSourceOrder {
+func sourceRank(source string, sourceOrder []string) int {
+	if len(sourceOrder) == 0 {
+		sourceOrder = defaultAddressSourceOrder
+	}
+	for i, known := range sourceOrder {
 		if source == known {
 			return i
 		}
 	}
-	return len(defaultAddressSourceOrder)
+	return len(sourceOrder)
 }
 
 func oneOf(value string, allowed ...string) bool {
