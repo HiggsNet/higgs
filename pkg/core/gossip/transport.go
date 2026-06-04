@@ -86,7 +86,7 @@ func Listen(config Config) (*Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.ListenUDP("udp", addr)
+	conn, err := listenUDP(addr)
 	if err != nil {
 		return nil, err
 	}

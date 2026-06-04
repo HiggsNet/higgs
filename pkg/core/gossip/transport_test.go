@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -99,6 +100,32 @@ func TestObservedPeerAddrExpiresAndIsRemovedWithPeer(t *testing.T) {
 	if got := transport.ObservedPeerAddr("peer-a"); got != nil {
 		t.Fatalf("ObservedPeerAddr after RemovePeer = %v, want nil", got)
 	}
+}
+
+func TestListenAllowsUDPPortReuse(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("SO_REUSEPORT behavior is only enabled on linux")
+	}
+
+	first, err := Listen(Config{
+		PeerID:     "node-a",
+		ListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(first): %v", err)
+	}
+	defer first.Close()
+
+	second, err := Listen(Config{
+		PeerID:     "node-b",
+		ListenAddr: first.LocalAddr().String(),
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(second on %s): %v", first.LocalAddr(), err)
+	}
+	defer second.Close()
 }
 
 func TestReceiveRejectsMessageTooLarge(t *testing.T) {
