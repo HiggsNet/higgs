@@ -527,7 +527,18 @@ LinkPlanner 输入：
 7. 输出 TransportLinkSpec 给 provider=strongswan。
 ```
 
-provider apply 的第一版可审计边界已经固定在 `ApplyTransportLink` / `ApplyPlan`：先确保目标 namespace，再加载 StrongSwan connection，然后确保 XFRM interface，最后分配本地 tunnel address。dry-run driver 记录同一顺序，使非 root 环境也能验证 desired config 推导和错误路径；真实 VICI/netlink provider 后续实现时应保持同一操作顺序和 plan 输出。
+provider apply 的第一版可审计边界已经固定在 `ApplyTransportLink` / `ApplyPlan`：先确保目标 namespace，再加载 StrongSwan connection，然后确保 XFRM interface，最后分配本地 tunnel address。dry-run driver 记录同一顺序，使非 root 环境也能验证 desired config 推导和错误路径；真实 VICI/netlink provider 应保持同一操作顺序和 plan 输出。
+
+StrongSwan 控制面通过 VICI command 完成，不解析 `swanctl` 输出作为核心状态来源。`StrongSwanDriver` 发出的最小命令集是：
+
+- `load-conn`：加载由 `TransportLinkSpec` 渲染出的 connection / CHILD_SA。
+- `terminate`：撤销或删除时终止对应 IKE_SA / CHILD_SA。
+- `unload-conn`：从 charon 卸载 Higgs 管理的 connection。
+- `list-sas`：读取运行态 SA 状态，供后续 LinkInstance/reconcile/debug 使用。
+
+VICI message 的 connection 形状保持接近 `swanctl.conf`：local/remote auth 使用独立 transport key 对应的 `pubkey` 身份，remote address/port 来自选中的 `ContactPoint`，每条 link 只有一个 route-based CHILD_SA。CHILD_SA 设置 `mode=tunnel` 和稳定的 `if_id_in` / `if_id_out`；traffic selector 保持宽泛，IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`。Phase 4 不在 selector 中表达多前缀授权；Babel route filter 和 prefix authorization 留给 Phase 5。
+
+teardown 的第一版顺序固定为 `TeardownTransportLink` / `PlanTeardown`：terminate SA -> unload connection -> delete XFRM interface。daemon 后续在 LinkInstance 层补充本地运行态删除、状态转换和持久化。
 
 方向组合：
 

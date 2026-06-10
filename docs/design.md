@@ -471,7 +471,11 @@ type TransportLinkSpec struct {
 
 netns 属于本机配置，不进入 gossip。`config.yaml` 的 `ipsec.default_netns` 默认是 `kind=name, name=h2, create=true`；link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；只有显式声明且带 Higgs 归属边界的 named netns 会被自动创建，path/host 不隐式创建。
 
-`pkg/transport/ipsec.ApplyTransportLink` 固化了第一版 apply 顺序：ensure namespace -> load StrongSwan connection -> ensure XFRM interface -> assign local tunnel address，并返回 `ApplyPlan` 供 dry-run、debug 和失败审计使用。真实 VICI/netlink provider 后续补齐时应沿用这个 plan 边界，而不是在 driver 内部隐藏操作顺序。
+`pkg/transport/ipsec.ApplyTransportLink` 固化了第一版 apply 顺序：ensure namespace -> load StrongSwan connection -> ensure XFRM interface -> assign local tunnel address，并返回 `ApplyPlan` 供 dry-run、debug 和失败审计使用。StrongSwan provider 通过 VICI command 控制 charon：`load-conn` 加载 connection，`terminate` / `unload-conn` 做撤销清理，`list-sas` 做运行态观测；`swanctl` 只作为人工 debug 对照，不作为核心控制面的输出解析依赖。
+
+StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对应一条 IKE connection 和一个 CHILD_SA，CHILD_SA 使用稳定 XFRM `if_id_in` / `if_id_out`，traffic selector 保持宽泛（IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`）。Phase 4 只证明 peer-to-peer tunnel link 可用；多前缀授权、route filter 和 Babel import/export 留给 Phase 5。
+
+撤销或删除 link 时使用 `TeardownTransportLink` 的可审计顺序：先 terminate IKE_SA/CHILD_SA，再 unload StrongSwan connection，最后删除 Higgs 管理的 XFRM interface。daemon 后续接入 LinkInstance 后应在这个顺序外层补本地运行态清理和持久化状态转换。
 
 撤销优先级最高：peer Zone 或父 delegation tombstone 后，LinkPlanner 必须立即停止输出该 peer 的 specs，并要求 provider teardown 已存在 SA/interface。
 

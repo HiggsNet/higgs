@@ -14,6 +14,11 @@ type SAState struct {
 	Established bool
 }
 
+type VICIClient interface {
+	Call(context.Context, string, map[string]any) (map[string]any, error)
+	CallStreaming(context.Context, string, string, map[string]any) ([]map[string]any, error)
+}
+
 type IPsecDriver interface {
 	LoadConnection(context.Context, TransportLinkSpec) error
 	UnloadConnection(context.Context, string) error
@@ -48,6 +53,10 @@ type ApplyPlan struct {
 	Operations []ApplyOperation
 }
 
+type StrongSwanDriver struct {
+	VICI VICIClient
+}
+
 func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
 	netns = netns.Normalized()
 	plan := ApplyPlan{}
@@ -57,6 +66,14 @@ func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
 	if spec.LocalTunnelAddr.IsValid() {
 		plan.add("assign_address", spec.InterfaceName, spec.LocalTunnelAddr.String())
 	}
+	return plan
+}
+
+func PlanTeardown(spec TransportLinkSpec) ApplyPlan {
+	plan := ApplyPlan{}
+	plan.add("terminate_sa", spec.TransportID, string(spec.PeerZone))
+	plan.add("unload_connection", spec.TransportID, string(spec.PeerZone))
+	plan.add("delete_interface", spec.InterfaceName, fmt.Sprintf("if_id=%d netns=%s", spec.XFRMIfID, spec.NetNS))
 	return plan
 }
 
@@ -83,6 +100,75 @@ func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver,
 		}
 	}
 	return plan, nil
+}
+
+func TeardownTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, spec TransportLinkSpec) (ApplyPlan, error) {
+	if ipsec == nil {
+		return ApplyPlan{}, fmt.Errorf("ipsec driver is required")
+	}
+	if xfrm == nil {
+		return ApplyPlan{}, fmt.Errorf("xfrm driver is required")
+	}
+	plan := PlanTeardown(spec)
+	if err := ipsec.TerminateSA(ctx, spec.TransportID); err != nil {
+		return plan, fmt.Errorf("terminate sa: %w", err)
+	}
+	if err := ipsec.UnloadConnection(ctx, spec.TransportID); err != nil {
+		return plan, fmt.Errorf("unload connection: %w", err)
+	}
+	if err := xfrm.DeleteInterface(ctx, spec.InterfaceName); err != nil {
+		return plan, fmt.Errorf("delete interface: %w", err)
+	}
+	return plan, nil
+}
+
+func (d StrongSwanDriver) LoadConnection(ctx context.Context, spec TransportLinkSpec) error {
+	if d.VICI == nil {
+		return fmt.Errorf("vici client is required")
+	}
+	msg, err := BuildLoadConnMessage(spec)
+	if err != nil {
+		return err
+	}
+	_, err = d.VICI.Call(ctx, "load-conn", msg)
+	return err
+}
+
+func (d StrongSwanDriver) UnloadConnection(ctx context.Context, id string) error {
+	if d.VICI == nil {
+		return fmt.Errorf("vici client is required")
+	}
+	if id == "" {
+		return fmt.Errorf("connection id is required")
+	}
+	_, err := d.VICI.Call(ctx, "unload-conn", map[string]any{"name": id})
+	return err
+}
+
+func (d StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
+	if d.VICI == nil {
+		return fmt.Errorf("vici client is required")
+	}
+	if id == "" {
+		return fmt.Errorf("sa id is required")
+	}
+	_, err := d.VICI.Call(ctx, "terminate", map[string]any{"ike": id, "force": "yes"})
+	return err
+}
+
+func (d StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {
+	if d.VICI == nil {
+		return nil, fmt.Errorf("vici client is required")
+	}
+	events, err := d.VICI.CallStreaming(ctx, "list-sas", "list-sa", nil)
+	if err != nil {
+		return nil, err
+	}
+	states := make([]SAState, 0, len(events))
+	for _, event := range events {
+		states = append(states, parseSAStates(event)...)
+	}
+	return states, nil
 }
 
 func (p *ApplyPlan) add(action, target, detail string) {

@@ -402,7 +402,7 @@
   - [x] 加入授权分级第一版：只做本机 Unix socket，socket 文件权限 `0600`；远程 token/mTLS 留给后续远程管理阶段
   - [x] 增加测试：daemon admin 事件覆盖 `delegate issue` / `join accept` / `delegate revoke` 串行落盘；root init control guard 覆盖已运行 daemon 不可重置；`admin-daemon-smoke` 覆盖 root/catofes daemon 签发 bundle 和撤销
 
-- [ ] **4.1 StrongSwan / XFRM 控制模块**
+- [x] **4.1 StrongSwan / XFRM 控制模块**
   - [x] 定义 overlay/provider 分层：`MeshPolicy` 只描述“选择哪些 peer 形成哪类 overlay”；`OverlayProvider` 负责把 desired link 渲染为 StrongSwan/WireGuard/VXLAN 等具体系统配置；Phase 4 只实现 `provider=strongswan`，但内部模型不得把 mesh 选择逻辑写死到 IPsec driver
   - [x] 定义最小 `TransportLinkSpec`：local zone、peer zone、overlay id、provider、transport id、IKE identity、认证材料引用、`ContactPoint` candidates、XFRM `if_id`、interface name、本地/远端 tunnel address、目标 network namespace
   - [x] 定义 `LinkGroupSpec` / overlay group 模型：group id/name、provider、目标 netns、默认 path mode、方向、地址来源优先级、最大 peer/link 数、tunnel address pool、reconcile/backoff 策略；daemon 以 link group 为 desired-state 边界生成多条 `TransportLinkSpec`，避免把每条 peer link 都变成手工配置
@@ -420,7 +420,8 @@
   - [x] 支持 address source priority 配置：默认可为 `manual-address/manual-dns > discovery > reflector > local`，但必须允许管理员改顺序或按 rule 限制来源；不要把动态 DNS 视为天然最高优先级
     - `AddressCandidateOptions.SourceOrder` / `AllowedSources` 控制排序与过滤；排序先按 source order，再按单条 priority/current generation，避免动态 DNS 被硬编码成最高优先级。
   - [x] 设计端口选择/轮换边界：端口由本节点在配置的固定值或范围内选择并公告；轮换时同时发布 current 与 previous grace；peer 连接时用当前地址候选与端口公告组合；StrongSwan 自定义端口第一版按 `charon.port` / `charon.port_nat_t` + connection `remote_port` + reestablish 边界处理，高频 port hopping / 多实例 / DNAT 留到 Phase 7
-  - [ ] 通过 VICI 控制 StrongSwan，优先使用 `github.com/strongswan/govici/vici`；`swanctl` 只作为人工 debug/dry-run 对照，不作为核心控制面输出解析依赖
+  - [x] 通过 VICI 控制 StrongSwan，优先使用 `github.com/strongswan/govici/vici`；`swanctl` 只作为人工 debug/dry-run 对照，不作为核心控制面输出解析依赖
+    - 已新增 `StrongSwanDriver` / `VICIClient` 边界：driver 只发 `load-conn`、`terminate`、`unload-conn`、`list-sas` VICI command，不解析 `swanctl` 输出；`VICIClient` 的 command/message 形状与 govici 的 `Session.Call` / streaming command 模型对齐，真实环境接入 govici session 时不改变 `IPsecDriver` 边界。
   - [x] 定义 `IPsecDriver` / `XFRMDriver` 薄接口：`LoadConnection`、`UnloadConnection`、`TerminateSA`、`ListSAs`、`EnsureInterface`、`DeleteInterface`、`AssignAddress`
   - [x] 增加 fake/dry-run driver：非 root、无 strongSwan、无 XFRM 权限环境仍可测试 desired config 推导、apply 顺序和错误路径
     - `ApplyTransportLink` 生成可审计 `ApplyPlan`，并按 ensure namespace -> load connection -> ensure XFRM interface -> assign tunnel address 的顺序调用 dry-run driver。
@@ -431,8 +432,10 @@
   - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建/move 前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
   - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、创建 XFRM interface 后 move 到目标 ns、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
     - 已增加 `SystemXFRMDriver`：通过 `ip`/iproute2 执行 named netns ensure、XFRM interface create/move/up、address replace 和 delete；path netns 第一版只做存在性检查，需 bind 到 `/var/run/netns` 后按 named netns 管理。
-  - [ ] CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛；Phase 4 只负责 peer-to-peer tunnel link，路由前缀授权留给 Phase 5 Babel/route filter
-  - [ ] 实现撤销/删除清理：terminate IKE_SA/CHILD_SA、unload connection/secret、删除 XFRM interface、地址、临时路由和本地运行态
+  - [x] CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛；Phase 4 只负责 peer-to-peer tunnel link，路由前缀授权留给 Phase 5 Babel/route filter
+    - `BuildLoadConnMessage` 渲染 VICI `load-conn` message：每条 link 一个 child，`mode=tunnel`，`if_id_in/out` 使用稳定 XFRM if_id；IPv4/IPv6 tunnel address 仅决定宽泛 selector family（`0.0.0.0/0` 或 `::/0`），多前缀授权不进入 Phase 4。
+  - [x] 实现撤销/删除清理：terminate IKE_SA/CHILD_SA、unload connection/secret、删除 XFRM interface、地址、临时路由和本地运行态
+    - 已增加 `PlanTeardown` / `TeardownTransportLink`：按 terminate SA -> unload connection -> delete XFRM interface 的顺序执行，并由 dry-run 测试锁住撤销/删除 apply plan。
 
 - [ ] **4.2 链路实例管理**
   - [ ] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition

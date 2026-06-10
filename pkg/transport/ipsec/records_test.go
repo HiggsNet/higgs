@@ -524,6 +524,128 @@ func TestApplyTransportLinkRecordsAuditablePlanAndOrder(t *testing.T) {
 	}
 }
 
+func TestBuildStrongSwanConnectionUsesRouteBasedChildSA(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		TransportID:     "ipsec-main",
+		IKEIdentity:     "node-b.catofes.",
+		XFRMIfID:        77,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
+		PeerTunnelAddr:  netip.MustParseAddr("fd00:1234::2"),
+		ContactPoints: []ContactPoint{{
+			Address:    "2001:db8::20",
+			Family:     FamilyIPv6,
+			Priority:   10,
+			Generation: 2,
+			Current:    true,
+			IKEPort:    4500,
+		}},
+	}
+	msg, err := BuildLoadConnMessage(spec)
+	if err != nil {
+		t.Fatalf("BuildLoadConnMessage: %v", err)
+	}
+	conn := msg["ipsec-main"].(map[string]any)
+	if conn["remote_port"] != "4500" {
+		t.Fatalf("remote_port = %v", conn["remote_port"])
+	}
+	children := conn["children"].(map[string]any)
+	child := children["ipsec-main-child"].(map[string]any)
+	if child["mode"] != StrongSwanChildMode || child["if_id_in"] != "77" || child["if_id_out"] != "77" {
+		t.Fatalf("child = %+v", child)
+	}
+	if got := child["local_ts"].([]string); len(got) != 1 || got[0] != "::/0" {
+		t.Fatalf("local_ts = %+v", got)
+	}
+	if got := child["remote_ts"].([]string); len(got) != 1 || got[0] != "::/0" {
+		t.Fatalf("remote_ts = %+v", got)
+	}
+}
+
+func TestBuildStrongSwanConnectionAllowsInboundWithoutContactPoint(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:   "node-a.catofes.",
+		PeerZone:    "node-b.catofes.",
+		TransportID: "ipsec-main",
+		Direction:   DirectionInbound,
+		XFRMIfID:    77,
+	}
+	msg, err := BuildLoadConnMessage(spec)
+	if err != nil {
+		t.Fatalf("BuildLoadConnMessage: %v", err)
+	}
+	conn := msg["ipsec-main"].(map[string]any)
+	addrs := conn["remote_addrs"].([]string)
+	if len(addrs) != 1 || addrs[0] != "%any" {
+		t.Fatalf("remote_addrs = %+v", addrs)
+	}
+	if _, ok := conn["remote_port"]; ok {
+		t.Fatalf("inbound connection should not force remote_port: %+v", conn)
+	}
+}
+
+func TestStrongSwanDriverCallsVICIWithoutSwanctlParsing(t *testing.T) {
+	client := &recordingVICIClient{}
+	driver := StrongSwanDriver{VICI: client}
+	spec := TransportLinkSpec{
+		LocalZone:   "node-a.catofes.",
+		PeerZone:    "node-b.catofes.",
+		TransportID: "ipsec-main",
+		XFRMIfID:    77,
+		ContactPoints: []ContactPoint{{
+			Address: "198.51.100.20",
+			Current: true,
+			IKEPort: 500,
+		}},
+	}
+	if err := driver.LoadConnection(context.Background(), spec); err != nil {
+		t.Fatalf("LoadConnection: %v", err)
+	}
+	if err := driver.TerminateSA(context.Background(), spec.TransportID); err != nil {
+		t.Fatalf("TerminateSA: %v", err)
+	}
+	if err := driver.UnloadConnection(context.Background(), spec.TransportID); err != nil {
+		t.Fatalf("UnloadConnection: %v", err)
+	}
+	got := client.commands
+	want := []string{"load-conn", "terminate", "unload-conn"}
+	if len(got) != len(want) {
+		t.Fatalf("commands = %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("command[%d] = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestTeardownTransportLinkRecordsOrder(t *testing.T) {
+	driver := &DryRunDriver{}
+	spec := TransportLinkSpec{
+		TransportID:   "ipsec-main",
+		PeerZone:      "node-b.catofes.",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+		NetNS:         DefaultNetNSName,
+	}
+	plan, err := TeardownTransportLink(context.Background(), driver, driver, spec)
+	if err != nil {
+		t.Fatalf("TeardownTransportLink: %v", err)
+	}
+	if len(plan.Operations) != 3 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if plan.Operations[0].Action != "terminate_sa" ||
+		plan.Operations[1].Action != "unload_connection" ||
+		plan.Operations[2].Action != "delete_interface" {
+		t.Fatalf("operation order = %+v", plan.Operations)
+	}
+	if len(driver.Terminated) != 1 || len(driver.Unloaded) != 1 || len(driver.DeletedIFs) != 1 {
+		t.Fatalf("driver = %+v", driver)
+	}
+}
+
 func validNodeRecords() *NodeRecords {
 	return &NodeRecords{
 		Zone: "node-a.catofes.",
@@ -565,4 +687,18 @@ type staticDNSResolver map[string][]net.IPAddr
 
 func (r staticDNSResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
 	return append([]net.IPAddr(nil), r[host]...), nil
+}
+
+type recordingVICIClient struct {
+	commands []string
+}
+
+func (c *recordingVICIClient) Call(_ context.Context, command string, _ map[string]any) (map[string]any, error) {
+	c.commands = append(c.commands, command)
+	return map[string]any{"success": "yes"}, nil
+}
+
+func (c *recordingVICIClient) CallStreaming(_ context.Context, command, _ string, _ map[string]any) ([]map[string]any, error) {
+	c.commands = append(c.commands, command)
+	return nil, nil
 }
