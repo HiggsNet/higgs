@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"time"
 
@@ -18,6 +19,7 @@ const (
 	SkipUnsupportedFamily    = "unsupported_address_family"
 	SkipAcceptIntentMismatch = "accept_intent_mismatch"
 	SkipNoContactPoints      = "no_contact_points"
+	SkipNoInboundNATEvidence = "no_inbound_nat_evidence"
 	SkipMaxPeers             = "max_peers"
 	SkipPlannerError         = "planner_error"
 )
@@ -136,6 +138,12 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			Now:            now,
 			ContactQuality: opts.ContactPointQuality[peer],
 		})
+		if remoteNeedsInboundNATEvidence(records.Profile) {
+			contacts = filterInboundNATEvidence(contacts)
+			if len(contacts) == 0 {
+				return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoInboundNATEvidence, Detail: natEvidenceDetail(records.Profile)}, nil
+			}
+		}
 		if len(contacts) == 0 {
 			return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoContactPoints}, nil
 		}
@@ -190,4 +198,45 @@ func familiesOverlap(left, right []string) bool {
 		}
 	}
 	return false
+}
+
+func remoteNeedsInboundNATEvidence(profile *ProfileRecord) bool {
+	if profile == nil {
+		return false
+	}
+	return profile.NAT.Hint == NATHintBehindNAT || profile.NAT.InboundReachable == NATReachableFalse
+}
+
+func filterInboundNATEvidence(points []ContactPoint) []ContactPoint {
+	out := make([]ContactPoint, 0, len(points))
+	for _, point := range points {
+		if contactHasInboundNATEvidence(point) {
+			out = append(out, point)
+		}
+	}
+	return out
+}
+
+func contactHasInboundNATEvidence(point ContactPoint) bool {
+	if point.Reachability == ReachabilityPublic {
+		return true
+	}
+	if point.Reachability == ReachabilityNATObserved && point.ObservedPort {
+		return true
+	}
+	ip := net.ParseIP(point.Address)
+	return point.Family == FamilyIPv6 && ip != nil && !isPrivateOrLinkLocal(ip) && !ip.IsUnspecified()
+}
+
+func natEvidenceDetail(profile *ProfileRecord) string {
+	if profile == nil {
+		return ""
+	}
+	if profile.NAT.Hint != "" && profile.NAT.InboundReachable != "" {
+		return fmt.Sprintf("nat.hint=%s inbound_reachable=%s requires public IPv6/address, port mapping, observed external port, hole punching, or relay", profile.NAT.Hint, profile.NAT.InboundReachable)
+	}
+	if profile.NAT.Hint != "" {
+		return fmt.Sprintf("nat.hint=%s requires public IPv6/address, port mapping, observed external port, hole punching, or relay", profile.NAT.Hint)
+	}
+	return fmt.Sprintf("inbound_reachable=%s requires public IPv6/address, port mapping, observed external port, hole punching, or relay", profile.NAT.InboundReachable)
 }

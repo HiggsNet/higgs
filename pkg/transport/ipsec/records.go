@@ -47,6 +47,13 @@ const (
 	ReachabilityPrivate     = "private"
 	ReachabilityUnknown     = "unknown"
 
+	NATHintPublic       = "public"
+	NATHintBehindNAT    = "behind_nat"
+	NATHintUnknown      = "unknown"
+	NATReachableTrue    = "true"
+	NATReachableFalse   = "false"
+	NATReachableUnknown = "unknown"
+
 	PortModeFixed = "fixed"
 	PortModeRange = "range"
 
@@ -165,6 +172,7 @@ type PortAdvertisement struct {
 	NATT       PortBinding
 	Current    bool
 	ValidUntil time.Time
+	Observed   bool
 }
 
 type ContactPoint struct {
@@ -179,6 +187,7 @@ type ContactPoint struct {
 	Current      bool
 	IKEPort      uint16
 	NATTPort     uint16
+	ObservedPort bool
 	Successes    int
 	Failures     int
 	BackoffUntil time.Time
@@ -308,6 +317,12 @@ func (p ProfileRecord) Validate(owner zone.ZonePath) error {
 	}
 	if !oneOf(p.Accept, AcceptNone, AcceptInbound, AcceptBidirectional) {
 		return fmt.Errorf("unsupported accept intent %q", p.Accept)
+	}
+	if p.NAT.Hint != "" && !oneOf(p.NAT.Hint, NATHintPublic, NATHintBehindNAT, NATHintUnknown) {
+		return fmt.Errorf("unsupported nat hint %q", p.NAT.Hint)
+	}
+	if p.NAT.InboundReachable != "" && !oneOf(p.NAT.InboundReachable, NATReachableTrue, NATReachableFalse, NATReachableUnknown) {
+		return fmt.Errorf("unsupported nat inbound_reachable %q", p.NAT.InboundReachable)
 	}
 	if len(p.AddressFamilies) == 0 {
 		return errors.New("address_families is required")
@@ -586,6 +601,7 @@ func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *
 				Current:      port.Current,
 				IKEPort:      dialPort(port.IKE),
 				NATTPort:     dialPort(port.NATT),
+				ObservedPort: port.Observed,
 			})
 		}
 	}
@@ -733,6 +749,7 @@ func portAdvertisement(selection PortSelection, current bool) PortAdvertisement 
 	if selection.ValidUntil != 0 {
 		out.ValidUntil = time.Unix(selection.ValidUntil, 0)
 	}
+	out.Observed = selection.IKE.Observed != 0 || selection.NATT.Observed != 0
 	return out
 }
 

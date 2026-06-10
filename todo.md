@@ -450,7 +450,12 @@
   - [x] 实现 path mode：`family-redundant` 每个地址族最多选择一条 ContactPoint（双栈时 IPv4 一条 + IPv6 一条）；`exhaustive` 尽量连接所有候选（调试/特殊高可用）；后续如需单条再引入 `preferred-only`，避免使用语义模糊的 `single-best`
   - [x] ContactPoint candidates 支持排序和回退：按 address source priority、address reachability、端口 generation、连接成功率、失败/backoff、IPv4/IPv6 策略综合排序；记录失败率和最近失败原因
     - 已在纯 planner/model 层加入 `ContactPointQuality`：daemon 可按 peer/contact 注入 successes/failures/backoff/last_error，planner 生成的 `TransportLinkSpec` 会保留排序原因，并在 current 端口处于 backoff 时回退 previous grace 端口；真实 daemon apply 侧的指标采集随后续 state-change/reconcile 接线落地。
-  - [ ] 明确 NAT 处理：NAT hint 只是节点自称，不作为安全事实；公网节点可接受 NAT 后节点主动拨入；主动拨入 NAT 后节点必须依赖 IPv6、端口映射、已验证 observed external port、打洞或后续 relay，不能仅凭 `behind_nat` hint 假装可达
+  - [x] 明确 NAT 处理：NAT hint 只是节点自称，不作为安全事实；公网节点可接受 NAT 后节点主动拨入；主动拨入 NAT 后节点必须依赖 IPv6、端口映射、已验证 observed external port、打洞或后续 relay，不能仅凭 `behind_nat` hint 假装可达
+    - `nat.hint=behind_nat` / `nat.inbound_reachable=false` 只表示远端自报“我大概率不能被公网直接拨入”，不能证明某个地址端口可用，也不能绕过 Zone trust chain、transport key、profile、revocation 和 IKEv2 认证。
+    - “假装可达”指 planner 看到远端 `accept=inbound` 或有 private/unknown 地址，就生成 outbound StrongSwan link，让公网节点反复拨 `192.168.x.x:4500`、CGNAT 反射地址或未验证端口；这种 link 应进入 skip/degraded，并在 debug 中说明缺少可拨入证据。
+    - 第一版允许主动拨入 NAT 后节点的证据只包括：公开可路由 IPv6/公网地址、管理员明确配置的端口映射、reflector/discovery 产生且经本 Zone 签名发布的 observed external address/port、后续 hole punching/relay 成功路径；单独的 `behind_nat` hint 或 LAN/private 地址不算。
+    - planner 应把 NAT 过滤放在 ContactPoint 选择之后、StrongSwan apply 之前：公网 inbound peer + NAT/outbound-only peer 由 NAT 节点主动拨公网 peer；公网 peer 反拨 NAT peer 时若无上述证据，返回结构化 skip/degraded reason，避免 daemon 无限重试不可达目标。
+    - 已实现 planner 侧 `SkipNoInboundNATEvidence`：远端 `behind_nat` / `inbound_reachable=false` 时，只保留 public ContactPoint 或带 observed external port 的 `nat-observed` ContactPoint；只有 private/unknown 地址时不会生成 StrongSwan link。daemon debug/degraded 状态展示随后续 apply/reconcile 接线补齐。
   - [ ] 处理幂等和并发：同一个 peer/group 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + 本地 LinkGroupSpec + 持久化 LinkInstance + StrongSwan/XFRM 实际状态恢复
   - [ ] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
     - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id，第一版命名仍沿用稳定 `TransportID` / interface name，后续 daemon apply 只应操作可验证归属资源。
@@ -468,7 +473,8 @@
   - [ ] dry-run 覆盖双栈多地址：两个双栈 peer 在 `family-redundant` 下最多产生 IPv4/IPv6 各一条 ContactPoint，在 `exhaustive` 下产生所有允许来源的组合，并能解释未选候选的原因
   - [ ] dry-run 覆盖端口轮换：peer 发布 current + previous grace 端口时优先 current，current 失败可在 grace 内回退 previous；grace 过期后不再尝试旧端口
   - [ ] dry-run 覆盖 DNS refresh：manual-dns record 保留域名，运行时解析 A/AAAA；DNS 变化后 planner 重新生成 ContactPoint 并触发 reconcile update
-  - [ ] dry-run 覆盖 NAT：公网 inbound peer + NAT outbound peer 可建 outbound initiated link；两个都 `behind_nat` 且无 IPv6/port mapping/observed reachable port 时进入 degraded，并在 debug 中给出不可达原因
+  - [x] dry-run 覆盖 NAT：公网 inbound peer + NAT outbound peer 可建 outbound initiated link；两个都 `behind_nat` 且无 IPv6/port mapping/observed reachable port 时进入 degraded，并在 debug 中给出不可达原因
+    - 已补 planner dry-run 测试：NAT 后本地节点可主动规划到公网 inbound peer；反向拨入 `behind_nat` 且只有 private/unknown ContactPoint 的 peer 会返回 `no_inbound_nat_evidence`，带 observed external port 的 `nat-observed` ContactPoint 则允许规划。daemon debug/degraded 展示留到 control/apply 接线。
   - [x] 增加真实环境前置检查命令：检测 Linux、root 或 `CAP_NET_ADMIN`、VICI socket/`charon`、XFRM interface 支持、`ip`/`swanctl` 可用性；缺失时给出明确 skip/error，而不是半途留下 connection/interface
     - 已增加 `make ipsec-xfrm-preflight` 与 `docs/strongswan-xfrm-test.md`，真实 `ipsec-xfrm-smoke` 仍保持显式 root/system integration 目标，默认不纳入 `smoke-all`。
   - [ ] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步、link group/netns 配置和 transport key record 发布

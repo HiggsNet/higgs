@@ -166,6 +166,93 @@ func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) 
 	}
 }
 
+func TestPlanTransportLinksSkipsBehindNATWithoutInboundEvidence(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-lan", Source: SourceLocal, Address: "192.168.8.20", Priority: 100, Reachability: ReachabilityPrivate, TTLSeconds: 300,
+	}}, now)
+	setIPsecNATProfile(t, ns, "node-b.catofes.", NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
+
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{
+		Now:               now,
+		AllowPrivateLocal: true,
+	})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 0 {
+		t.Fatalf("desired = %+v, want no fake reachable NAT link", plan.Desired)
+	}
+	if !hasSkip(plan.Skipped, "node-b.catofes.", SkipNoInboundNATEvidence) {
+		t.Fatalf("skips = %+v, want %s", plan.Skipped, SkipNoInboundNATEvidence)
+	}
+}
+
+func TestPlanTransportLinksAllowsNATOutboundToPublicPeer(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "a-lan", Source: SourceLocal, Address: "192.168.8.10", Priority: 100, Reachability: ReachabilityPrivate, TTLSeconds: 300,
+	}}, now)
+	setIPsecNATProfile(t, ns, "node-a.catofes.", NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired len = %d skips=%+v", len(plan.Desired), plan.Skipped)
+	}
+	if plan.Desired[0].PeerZone != "node-b.catofes." || plan.Desired[0].ContactPoints[0].Address != "198.51.100.20" {
+		t.Fatalf("desired = %+v", plan.Desired)
+	}
+}
+
+func TestPlanTransportLinksAllowsNATObservedExternalPort(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-observed", Source: SourceReflector, Address: "203.0.113.20", Priority: 100, Reachability: ReachabilityNATObserved, TTLSeconds: 300,
+	}}, now)
+	setIPsecNATProfile(t, ns, "node-b.catofes.", NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableUnknown}, now)
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 1,
+			IKE:        PortBinding{Advertised: 500, Observed: 35000},
+			NATT:       PortBinding{Advertised: 4500, Observed: 35001},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		UpdatedAt: now.Unix(),
+	})
+
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired len = %d skips=%+v", len(plan.Desired), plan.Skipped)
+	}
+	point := plan.Desired[0].ContactPoints[0]
+	if !point.ObservedPort || point.IKEPort != 35000 || point.NATTPort != 35001 {
+		t.Fatalf("contact point = %+v, want observed external ports", point)
+	}
+}
+
 func TestReconcileLinkInstancesCreatesAdoptsRepairsAndTeardowns(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	spec := TransportLinkSpec{
@@ -245,6 +332,24 @@ func TestReconcileLinkInstancesRevocationWinsOverDesiredState(t *testing.T) {
 	if result.Instances[LinkInstanceID(spec)].ActualState != LinkStateRemoving {
 		t.Fatalf("instance = %+v", result.Instances[LinkInstanceID(spec)])
 	}
+}
+
+func setIPsecNATProfile(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, nat NATProfile, now time.Time) {
+	t.Helper()
+	zs := ns.Zones[peer]
+	fingerprint := "fp-" + string(peer)
+	zs.Records[RecordKeyProfile] = record(t, peer, RecordKeyProfile, RecordTypeProfile, ProfileRecord{
+		Version:                 1,
+		Enabled:                 true,
+		Provider:                ProviderStrongSwan,
+		IKEIdentity:             string(peer),
+		TransportKeyFingerprint: fingerprint,
+		Accept:                  AcceptInbound,
+		AddressFamilies:         []string{FamilyIPv4, FamilyIPv6},
+		PathModes:               []string{PathModeFamilyRedundant, PathModeExhaustive},
+		NAT:                     nat,
+		UpdatedAt:               now.Unix(),
+	})
 }
 
 func addIPsecNode(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, accept string, addresses []AddressAdvertisement, now time.Time) {
