@@ -428,7 +428,7 @@
   - [x] 做运行依赖检测：VICI socket / `charon` 可用性、strongSwan XFRM 支持、Linux kernel/iproute2 XFRM interface 支持、`CAP_NET_ADMIN`/root 权限、UDP 500/4500 或自定义端口可用性
   - [x] 稳定派生 XFRM `if_id` 与 interface name：基于 local zone + peer zone + transport id hash，`if_id` 使用 32-bit 值，接口名满足 Linux 15 字符限制并处理冲突
   - [x] 第一版默认一条 peer link 一个 XFRM interface；后续再评估 shared XFRM interface 或 in/out 分离 interface
-  - [x] 定义 netns 配置来源：`config.yaml` 暴露 `ipsec.default_netns`，link group 可声明 `host`、netns name 或 netns path；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 IPsec/XFRM 链路默认落在 host ns
+  - [x] 定义 netns 配置来源：`config.yaml` 暴露 `overlay.default_netns`，link group 可声明 `host`、netns name 或 netns path；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 XFRM/Babel overlay data-plane 默认落在 host ns；`ipsec.default_netns` 仅保留为旧配置兼容别名
   - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建/move 前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
   - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、创建 XFRM interface 后 move 到目标 ns、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
     - 已增加 `SystemXFRMDriver`：通过 `ip`/iproute2 执行 named netns ensure、XFRM interface create/move/up、address replace 和 delete；path netns 第一版只做存在性检查，需 bind 到 `/var/run/netns` 后按 named netns 管理。
@@ -440,9 +440,9 @@
 - [ ] **4.2 链路实例管理**
   - [x] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition
   - [x] 定义本地 `MeshPolicy` / `LinkGroupSpec` 持久化来源：优先作为本机 daemon 配置/DB policy，不通过 gossip 公开；policy 描述“哪些 group 连接哪些 peer/overlay/provider/netns”，而不是列举每个已发现节点的手工 link
-    - 已在 `config.yaml` 增加本地 `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `ipsec.default_netns`，支持 provider、netns、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串。当前只落地持久化和校验，rule DSL 匹配逻辑在下一项实现。
+    - 已在 `config.yaml` 增加本地 `overlay.default_netns` / `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `overlay.default_netns`，支持 provider、netns、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串。当前只落地持久化和校验，rule DSL 匹配逻辑在下一项实现；`ipsec.default_netns` 保留为旧配置兼容别名。
   - [x] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、direction、max_peers、allow/deny 顺序
-    - 已新增 `ParseMeshPolicyRule` / `ParseMeshPolicyRules`：支持 `strongswan://*.catofes.`, `strongswan://role=edge`, `strongswan://tag=lab` 三类目标，校验 `accept`、`family`、`source`、`mode`、`direction`、`max_peers`，并提供 zone glob/exact 匹配；`config.yaml overlays[].connect/deny` 现在会在加载时校验 rule 字符串。下一步再把 connect/deny 规则实际接入 peer 过滤和 group 推导。
+    - 已新增 `ParseMeshPolicyRule` / `ParseMeshPolicyRules`：支持 `strongswan://*.catofes.`, `strongswan://role=edge`, `strongswan://tag=lab` 三类目标，校验 `accept`、`family`、`source`、`mode`、`direction`、`max_peers`，并提供 zone glob/exact 匹配；`config.yaml overlays[].connect/deny` 现在会在加载时校验 rule 字符串。示例默认使用 zone glob（如 `*.lab.catofes.`），`role/tag` 等待本地 peer label 来源接入后再作为常规示例。下一步再把 connect/deny 规则实际接入 peer 过滤和 group 推导。
   - [ ] daemon 从 active state 的 peer profile/address/port records + 本地 MeshPolicy/LinkGroupSpec 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/ipsec profile/address/port/transport key/mesh policy/group/netns 变化
     - [x] 新增纯 planner：从 verified active state 的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并输出结构化 skip reason；daemon state-change hook 后续接入该 planner。
   - [ ] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair

@@ -64,12 +64,15 @@ trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 	if config.IPsec.DefaultNetNS.Name != ipsec.DefaultNetNSName || !config.IPsec.DefaultNetNS.Create {
 		t.Fatalf("IPsec.DefaultNetNS = %+v", config.IPsec.DefaultNetNS)
 	}
+	if config.Overlay.DefaultNetNS.Name != ipsec.DefaultNetNSName || !config.Overlay.DefaultNetNS.Create {
+		t.Fatalf("Overlay.DefaultNetNS = %+v", config.Overlay.DefaultNetNS)
+	}
 }
 
-func TestParseConfigYAMLIPsecDefaultNetNS(t *testing.T) {
+func TestParseConfigYAMLOverlayDefaultNetNS(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-ipsec:
+overlay:
   default_netns:
     kind: name
     name: h2
@@ -79,15 +82,59 @@ ipsec:
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
+	if config.Overlay.DefaultNetNS.Kind != ipsec.NetNSName || config.Overlay.DefaultNetNS.Name != "h2" || !config.Overlay.DefaultNetNS.Create {
+		t.Fatalf("Overlay.DefaultNetNS = %+v", config.Overlay.DefaultNetNS)
+	}
 	if config.IPsec.DefaultNetNS.Kind != ipsec.NetNSName || config.IPsec.DefaultNetNS.Name != "h2" || !config.IPsec.DefaultNetNS.Create {
 		t.Fatalf("IPsec.DefaultNetNS = %+v", config.IPsec.DefaultNetNS)
+	}
+}
+
+func TestParseConfigYAMLLegacyIPsecDefaultNetNS(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  default_netns:
+    kind: name
+    name: legacy-h2
+    create: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.Overlay.DefaultNetNS.Name != "legacy-h2" || config.IPsec.DefaultNetNS.Name != "legacy-h2" {
+		t.Fatalf("default netns = overlay:%+v ipsec:%+v", config.Overlay.DefaultNetNS, config.IPsec.DefaultNetNS)
+	}
+}
+
+func TestParseConfigYAMLOverlayDefaultNetNSOverridesLegacyIPsecDefault(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  default_netns:
+    kind: name
+    name: legacy-h2
+    create: true
+overlay:
+  default_netns:
+    kind: name
+    name: overlay-h2
+    create: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.Overlay.DefaultNetNS.Name != "overlay-h2" || config.IPsec.DefaultNetNS.Name != "overlay-h2" {
+		t.Fatalf("default netns = overlay:%+v ipsec:%+v", config.Overlay.DefaultNetNS, config.IPsec.DefaultNetNS)
 	}
 }
 
 func TestParseConfigYAMLOverlays(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-ipsec:
+overlay:
   default_netns:
     kind: name
     name: h2
@@ -109,7 +156,7 @@ overlays:
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual"
     deny:
-      - "strongswan://tag=lab"
+      - "strongswan://*.lab.catofes."
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -166,16 +213,16 @@ overlays:
 	}
 }
 
-func TestParseConfigYAMLRejectsInvalidIPsecDefaultNetNS(t *testing.T) {
+func TestParseConfigYAMLRejectsInvalidOverlayDefaultNetNS(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-ipsec:
+overlay:
   default_netns:
     kind: host
     create: true
 `
 	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject host netns create")
+		t.Fatalf("parseConfigYAML should reject overlay host netns create")
 	}
 }
 

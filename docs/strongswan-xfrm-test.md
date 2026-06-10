@@ -65,7 +65,7 @@ ip netns delete h2-a
 第一个真正面向 Higgs 的检查，是先不接 VICI，只验证 XFRM/netns apply：
 
 - 从 verified `ipsec/*` records 和本地 `LinkGroupSpec` 构造 `TransportLinkSpec`。
-- 使用带默认 `ipsec.default_netns` 的 `SystemXFRMDriver`。
+- 使用带默认 `overlay.default_netns` 的 `SystemXFRMDriver`；`ipsec.default_netns` 仅作为旧配置兼容别名。
 - provider 预期按这个顺序执行：
   `EnsureNamespace -> LoadConnection -> EnsureInterface -> AssignAddress`.
 - 真实 XFRM driver 只会在 `create=true` 时创建 named namespace；`host` 和 path

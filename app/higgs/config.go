@@ -43,6 +43,7 @@ type appConfig struct {
 	EndpointGrace        time.Duration
 	PublishEndpoints     bool
 	FilterPrivateIPv4    bool
+	Overlay              overlayConfig
 	IPsec                ipsecConfig
 }
 
@@ -85,12 +86,21 @@ type configYAML struct {
 	EndpointGracePeriod string `yaml:"endpoint_grace_period"`
 	PublishEndpoints    *bool  `yaml:"publish_endpoints"`
 
-	FilterPrivateIPv4 bool                `yaml:"filter_private_ipv4"`
-	IPsec             ipsecConfigYAML     `yaml:"ipsec"`
-	Overlays          []overlayConfigYAML `yaml:"overlays"`
+	FilterPrivateIPv4 bool                     `yaml:"filter_private_ipv4"`
+	Overlay           overlayDefaultsYAML      `yaml:"overlay"`
+	IPsec             ipsecConfigYAML          `yaml:"ipsec"`
+	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
 }
 
 type configStringList []string
+
+type overlayConfig struct {
+	DefaultNetNS ipsec.NetNSSpec
+}
+
+type overlayDefaultsYAML struct {
+	DefaultNetNS ipsec.NetNSSpec `yaml:"default_netns"`
+}
 
 type ipsecConfig struct {
 	DefaultNetNS ipsec.NetNSSpec
@@ -101,7 +111,7 @@ type ipsecConfigYAML struct {
 	DefaultNetNS ipsec.NetNSSpec `yaml:"default_netns"`
 }
 
-type overlayConfigYAML struct {
+type overlayGroupConfigYAML struct {
 	ID                 string               `yaml:"id"`
 	Name               string               `yaml:"name"`
 	Provider           string               `yaml:"provider"`
@@ -156,6 +166,9 @@ func defaultAppConfig() *appConfig {
 		EndpointTTL:       time.Hour,
 		EndpointGrace:     gossip.DefaultEndpointGrace,
 		PublishEndpoints:  true,
+		Overlay: overlayConfig{
+			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
+		},
 		IPsec: ipsecConfig{
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
@@ -188,7 +201,8 @@ func normalizeAppConfig(config *appConfig) {
 	if config.MaxSyncRecords <= 0 {
 		config.MaxSyncRecords = gossip.DefaultSyncLimits().MaxRecords
 	}
-	config.IPsec.DefaultNetNS = config.IPsec.DefaultNetNS.Normalized()
+	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
+	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 }
 
 func parseConfigYAML(input string, config *appConfig) error {
@@ -293,15 +307,23 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		config.PublishEndpoints = *file.PublishEndpoints
 	}
 	config.FilterPrivateIPv4 = file.FilterPrivateIPv4
-	if file.IPsec.DefaultNetNS.Kind != "" || file.IPsec.DefaultNetNS.Name != "" || file.IPsec.DefaultNetNS.Path != "" || file.IPsec.DefaultNetNS.Create {
+	if netnsConfigured(file.IPsec.DefaultNetNS) {
 		netns := file.IPsec.DefaultNetNS.Normalized()
 		if err := netns.Validate(); err != nil {
 			return fmt.Errorf("ipsec.default_netns: %w", err)
 		}
-		config.IPsec.DefaultNetNS = netns
+		config.Overlay.DefaultNetNS = netns
 	}
+	if netnsConfigured(file.Overlay.DefaultNetNS) {
+		netns := file.Overlay.DefaultNetNS.Normalized()
+		if err := netns.Validate(); err != nil {
+			return fmt.Errorf("overlay.default_netns: %w", err)
+		}
+		config.Overlay.DefaultNetNS = netns
+	}
+	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	if len(file.Overlays) > 0 {
-		groups, err := parseOverlayConfigs(file.Overlays, config.IPsec.DefaultNetNS)
+		groups, err := parseOverlayConfigs(file.Overlays, config.Overlay.DefaultNetNS)
 		if err != nil {
 			return err
 		}
@@ -310,7 +332,7 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	return nil
 }
 
-func parseOverlayConfigs(overlays []overlayConfigYAML, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
+func parseOverlayConfigs(overlays []overlayGroupConfigYAML, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
 	groups := make([]ipsec.LinkGroupSpec, 0, len(overlays))
 	for i, overlay := range overlays {
 		group, err := parseOverlayConfig(overlay, defaultNetNS)
@@ -322,7 +344,7 @@ func parseOverlayConfigs(overlays []overlayConfigYAML, defaultNetNS ipsec.NetNSS
 	return groups, nil
 }
 
-func parseOverlayConfig(overlay overlayConfigYAML, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
+func parseOverlayConfig(overlay overlayGroupConfigYAML, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
 	group := ipsec.LinkGroupSpec{
 		ID:                 overlay.ID,
 		Name:               overlay.Name,
@@ -415,6 +437,10 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func netnsConfigured(spec ipsec.NetNSSpec) bool {
+	return spec.Kind != "" || spec.Name != "" || spec.Path != "" || spec.Create
 }
 
 func applyPositiveInt(target *int, value *int, name string) error {

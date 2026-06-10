@@ -29,9 +29,9 @@ bootstrap:
 # CLI output uses base64; existing hex values are still accepted.
 trusted_root_public_key:
 
-# Phase 4 local IPsec/XFRM defaults. Link groups are local policy and are not
-# published through gossip.
-ipsec:
+# Phase 4 local overlay data-plane defaults. Link groups are local policy and
+# are not published through gossip.
+overlay:
   default_netns:
     kind: name
     name: h2
@@ -55,4 +55,4 @@ overlays:
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
     deny:
-      - "strongswan://tag=lab"
+      - "strongswan://*.lab.catofes."

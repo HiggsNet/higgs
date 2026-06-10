@@ -368,14 +368,14 @@ overlays:
     provider: strongswan
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
-      - "strongswan://role=edge?accept=bidirectional&family=dual"
+      - "strongswan://edge.catofes.?accept=bidirectional&family=dual"
     deny:
-      - "strongswan://tag=lab"
+      - "strongswan://*.lab.catofes."
 ```
 
 第一版 predicate 集合应保持克制：
 - zone glob / exact：`*.catofes.`、`node-a.catofes.`
-- label selector：`role=edge`、`tag=lab`
+- label selector：`role=edge`、`tag=lab`，仅在本机已有 peer label/tag 来源后使用；示例默认使用 zone glob，避免把未实现的 tag 来源误认为远端声明。
 - 远端公开意图：`accept=inbound|bidirectional`
 - 本地方向：`direction=outbound|inbound|bidirectional`
 - 地址族：`family=ipv4|ipv6|dual`
@@ -469,7 +469,7 @@ type TransportLinkSpec struct {
 
 `LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、tunnel address pool 以及 reconcile/backoff 策略；daemon 后续从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
-netns 属于本机配置，不进入 gossip。`config.yaml` 的 `ipsec.default_netns` 默认是 `kind=name, name=h2, create=true`；link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；只有显式声明且带 Higgs 归属边界的 named netns 会被自动创建，path/host 不隐式创建。
+netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `overlay.default_netns` 默认是 `kind=name, name=h2, create=true`；`ipsec.default_netns` 只作为旧配置兼容别名。link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；Phase 5 babeld 应运行在对应 `LinkGroupSpec.NetNS` 中，和 XFRM interface 看到同一张 overlay data-plane；只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
 
 `pkg/transport/ipsec.ApplyTransportLink` 固化了第一版 apply 顺序：ensure namespace -> load StrongSwan connection -> ensure XFRM interface -> assign local tunnel address，并返回 `ApplyPlan` 供 dry-run、debug 和失败审计使用。StrongSwan provider 通过 VICI command 控制 charon：`load-conn` 加载 connection，`terminate` / `unload-conn` 做撤销清理，`list-sas` 做运行态观测；`swanctl` 只作为人工 debug 对照，不作为核心控制面的输出解析依赖。
 

@@ -567,14 +567,14 @@ overlays:
     provider: strongswan
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
-      - "strongswan://role=edge?accept=bidirectional&family=dual"
+      - "strongswan://edge.catofes.?accept=bidirectional&family=dual"
     deny:
-      - "strongswan://tag=lab"
+      - "strongswan://*.lab.catofes."
 ```
 
 第一版支持的 predicate：
 - zone glob / exact。
-- `role` / `tag`。
+- `role` / `tag` 作为本地 peer label 来源接入后的预留 selector；默认示例使用 zone glob / exact。
 - `accept`。
 - `direction`。
 - `family`。
@@ -678,10 +678,6 @@ ipsec:
   enabled: true
   provider: strongswan
   accept: inbound
-  default_netns:
-    kind: name
-    name: h2
-    create: true
 
   address_source_order:
     - manual-address
@@ -702,6 +698,12 @@ ipsec:
     mode: range
     range: 30000-30999
     grace: 10m
+
+overlay:
+  default_netns:
+    kind: name
+    name: h2
+    create: true
 
 overlays:
   - name: ipsec-main
@@ -724,12 +726,12 @@ overlays:
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
     deny:
-      - "strongswan://tag=lab"
+      - "strongswan://*.lab.catofes."
 ```
 
 配置语义：
 - `ipsec.accept` 会发布到 `ipsec/profile`，表示远端可以怎样尝试连接本节点。
-- `ipsec.default_netns` 是本机默认 LinkGroup namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。
+- `overlay.default_netns` 是本机默认 LinkGroup / overlay data-plane namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 和后续 babeld 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。`ipsec.default_netns` 仅作为旧配置兼容别名。
 - `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
 - `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
 - `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、tunnel address pool 和 reconcile/backoff 策略，不发布到 gossip。
