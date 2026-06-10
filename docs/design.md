@@ -308,7 +308,7 @@ ContactPoint          # AddressCandidate + PortAdvertisement 组合出的实际�
 - `reflector`：reflector 观察到的外部地址；主要用于 NAT/公网变化场景。
 - `local`：本机接口扫描结果；适合 LAN/实验，公网默认应允许禁用。
 
-Go 实现里 DNS 被建模为运行时候选展开，而不是 signed record 里的固定 endpoint：`manual-dns` record 保留原始域名；planner 通过 resolver 把 A/AAAA 结果展开成 `AddressCandidate`，再与 `PortAdvertisement` 组合为 `ContactPoint`。这样 DNS refresh 只影响本地 desired-state 计算，不改变 Zone 签名记录本身。
+Go 实现里 DNS/discovery host 被建模为运行时候选展开，而不是 signed record 里的固定 endpoint：`manual-dns` / `discovery` record 保留原始域名；planner 通过 resolver 把 A/AAAA 结果展开成 `AddressCandidate`，再与 `PortAdvertisement` 组合为 `ContactPoint`。这样 DNS refresh 或 discovery 返回变化只影响本地 desired-state 计算，不改变 Zone 签名记录本身。
 
 DNS、discovery、reflector 的优先级不能写死。动态 DNS 本质上也可能只是公网反射/发现机制的包装，因此本地配置应允许指定顺序，例如：
 
@@ -320,6 +320,8 @@ ipsec_address_source_order:
   - reflector
   - local
 ```
+
+当前 `AddressCandidateOptions.SourceOrder` / `AllowedSources` 已经把 source order 和本地 rule 过滤作为运行时输入；排序先看来源顺序，再看单条 `priority`。`local` 来源默认不使用 private/link-local/interface-scan 候选，只有 LAN/实验或管理员显式启用时才通过 `AllowPrivateLocal` 放行，避免公网 IPsec 误连内网地址。
 
 `ipsec/ports` 示例：
 
@@ -468,6 +470,8 @@ type TransportLinkSpec struct {
 `LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、tunnel address pool 以及 reconcile/backoff 策略；daemon 后续从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
 netns 属于本机配置，不进入 gossip。`config.yaml` 的 `ipsec.default_netns` 默认是 `kind=name, name=h2, create=true`；link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；只有显式声明且带 Higgs 归属边界的 named netns 会被自动创建，path/host 不隐式创建。
+
+`pkg/transport/ipsec.ApplyTransportLink` 固化了第一版 apply 顺序：ensure namespace -> load StrongSwan connection -> ensure XFRM interface -> assign local tunnel address，并返回 `ApplyPlan` 供 dry-run、debug 和失败审计使用。真实 VICI/netlink provider 后续补齐时应沿用这个 plan 边界，而不是在 driver 内部隐藏操作顺序。
 
 撤销优先级最高：peer Zone 或父 delegation tombstone 后，LinkPlanner 必须立即停止输出该 peer 的 specs，并要求 provider teardown 已存在 SA/interface。
 

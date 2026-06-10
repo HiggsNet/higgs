@@ -137,6 +137,60 @@ func TestResolveAddressCandidatesExpandsManualDNSRuntimeOnly(t *testing.T) {
 	}
 }
 
+func TestResolveAddressCandidatesAppliesSourcePolicyAndDiscoveryDNS(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	addresses := &AddressRecord{
+		Version: 1,
+		Addresses: []AddressAdvertisement{
+			{ID: "local-private", Source: SourceLocal, Address: "192.168.8.10", Priority: 100, TTLSeconds: 300},
+			{ID: "manual-low", Source: SourceManualAddress, Address: "203.0.113.10", Priority: 1, TTLSeconds: 300},
+			{ID: "discovery-host", Source: SourceDiscovery, Host: "disc.example.com", Families: []string{FamilyIPv4}, Priority: 50, TTLSeconds: 300},
+			{ID: "reflector", Source: SourceReflector, Address: "198.51.100.30", Priority: 90, TTLSeconds: 300},
+		},
+		UpdatedAt: now.Unix(),
+	}
+	candidates, err := ResolveAddressCandidates(context.Background(), addresses, now, AddressCandidateOptions{
+		DNSResolver: staticDNSResolver{
+			"disc.example.com": {{IP: net.ParseIP("198.51.100.20")}},
+		},
+		SourceOrder:    []string{SourceDiscovery, SourceReflector, SourceManualAddress},
+		AllowedSources: []string{SourceManualAddress, SourceDiscovery, SourceReflector, SourceLocal},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressCandidates: %v", err)
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("candidates len = %d, want 3: %+v", len(candidates), candidates)
+	}
+	if candidates[0].ID != "discovery-host" || candidates[0].Address != "198.51.100.20" {
+		t.Fatalf("first candidate = %+v", candidates[0])
+	}
+	if candidates[1].ID != "reflector" || candidates[2].ID != "manual-low" {
+		t.Fatalf("source ordering not applied: %+v", candidates)
+	}
+}
+
+func TestResolveAddressCandidatesCanAllowLocalPrivateForLAN(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	addresses := &AddressRecord{
+		Version: 1,
+		Addresses: []AddressAdvertisement{{
+			ID:         "local-private",
+			Source:     SourceLocal,
+			Address:    "192.168.8.10",
+			TTLSeconds: 300,
+		}},
+		UpdatedAt: now.Unix(),
+	}
+	candidates, err := ResolveAddressCandidates(context.Background(), addresses, now, AddressCandidateOptions{AllowPrivateLocal: true})
+	if err != nil {
+		t.Fatalf("ResolveAddressCandidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ID != "local-private" {
+		t.Fatalf("local private candidate = %+v", candidates)
+	}
+}
+
 func TestTransportKeyAndLinkSpec(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	keyRecord := record(t, "node-a.catofes.", RecordKeyTransportKey, RecordTypeTransportKey, TransportKeyRecord{
@@ -435,6 +489,38 @@ func TestDryRunDriverRecordsApplyOrderInputs(t *testing.T) {
 	}
 	if driver.Namespaces[0].Name != DefaultNetNSName || !driver.Namespaces[0].Create {
 		t.Fatalf("namespace = %+v", driver.Namespaces[0])
+	}
+}
+
+func TestApplyTransportLinkRecordsAuditablePlanAndOrder(t *testing.T) {
+	driver := &DryRunDriver{}
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		TransportID:     "ipsec-1",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           DefaultNetNSName,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
+	}
+	plan, err := ApplyTransportLink(context.Background(), driver, driver, spec, NetNSSpec{})
+	if err != nil {
+		t.Fatalf("ApplyTransportLink: %v", err)
+	}
+	if len(plan.Operations) != 4 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if plan.Operations[0].Action != "ensure_namespace" ||
+		plan.Operations[1].Action != "load_connection" ||
+		plan.Operations[2].Action != "ensure_interface" ||
+		plan.Operations[3].Action != "assign_address" {
+		t.Fatalf("operation order = %+v", plan.Operations)
+	}
+	if len(driver.Namespaces) != 1 || len(driver.Connections) != 1 || len(driver.Interfaces) != 1 || len(driver.Addresses) != 1 {
+		t.Fatalf("driver = %+v", driver)
+	}
+	if driver.Addresses[0] != "hgs1=fd00:1234::1" {
+		t.Fatalf("address assignment = %+v", driver.Addresses)
 	}
 }
 

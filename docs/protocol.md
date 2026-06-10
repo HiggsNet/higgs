@@ -440,9 +440,9 @@ Phase 4 的关键边界：
 - `reflector`：反射服务看到的外部地址，常用于 NAT/公网变化场景。
 - `local`：本机接口扫描结果。公网场景默认应允许禁用。
 
-实现上，`pkg/transport/ipsec` 将 DNS 解析作为运行时输入处理：signed record 保留 `host`，`ResolveAddressCandidates` / `ResolveContactPoints` 在传入 resolver 时才把 A/AAAA 展开为可拨号的 `AddressCandidate` / `ContactPoint`，并保留原始域名、family、TTL/refresh 元数据。没有 resolver 的 dry-run 仍可读取域名记录，但不会把未解析域名误当成 IP endpoint。
+实现上，`pkg/transport/ipsec` 将 DNS/discovery host 解析作为运行时输入处理：signed record 保留 `host`，`ResolveAddressCandidates` / `ResolveContactPoints` 在传入 resolver 时才把 `manual-dns` 或 `discovery` host 的 A/AAAA 展开为可拨号的 `AddressCandidate` / `ContactPoint`，并保留原始域名、family、TTL/refresh 元数据。没有 resolver 的 dry-run 仍可读取域名记录，但不会把未解析域名误当成 IP endpoint。
 
-DNS 不是天然最高优先级。动态 DNS 很多时候只是 public reflector/discovery 的另一种外壳，因此本地配置必须允许调整 source order 或在 MeshPolicy rule 中限制 source。
+DNS 不是天然最高优先级。动态 DNS 很多时候只是 public reflector/discovery 的另一种外壳，因此本地配置必须允许调整 source order 或在 MeshPolicy rule 中限制 source。当前 Go 实现通过 `AddressCandidateOptions.SourceOrder` 和 `AllowedSources` 做来源排序/过滤，先按 source order，再按单条 priority 排序；`AllowPrivateLocal` 默认 false，公网默认不会把 local 私网、loopback、link-local 或 ULA 候选用于 IPsec 拨号。
 
 ### 6.4 `ipsec/ports`
 
@@ -526,6 +526,8 @@ LinkPlanner 输入：
    - exhaustive：尽量保留所有允许候选。
 7. 输出 TransportLinkSpec 给 provider=strongswan。
 ```
+
+provider apply 的第一版可审计边界已经固定在 `ApplyTransportLink` / `ApplyPlan`：先确保目标 namespace，再加载 StrongSwan connection，然后确保 XFRM interface，最后分配本地 tunnel address。dry-run driver 记录同一顺序，使非 root 环境也能验证 desired config 推导和错误路径；真实 VICI/netlink provider 后续实现时应保持同一操作顺序和 plan 输出。
 
 方向组合：
 

@@ -186,8 +186,10 @@ type DNSResolver interface {
 }
 
 type AddressCandidateOptions struct {
-	DNSResolver DNSResolver
-	SourceOrder []string
+	DNSResolver       DNSResolver
+	SourceOrder       []string
+	AllowedSources    []string
+	AllowPrivateLocal bool
 }
 
 func ParseProfileRecord(record *zone.Record) (*ProfileRecord, error) {
@@ -438,12 +440,15 @@ func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now ti
 	}
 	var out []AddressCandidate
 	for _, address := range record.Addresses {
+		if !sourceAllowed(address.Source, opts.AllowedSources) {
+			continue
+		}
 		if addressExpired(address, record.UpdatedAt, now) {
 			continue
 		}
 		expiresAt := expiryForAddress(address, record.UpdatedAt)
 		refreshAt := refreshForAddress(address, record.UpdatedAt)
-		if address.Source == SourceManualDNS && opts.DNSResolver != nil {
+		if address.Host != "" && opts.DNSResolver != nil && (address.Source == SourceManualDNS || address.Source == SourceDiscovery) {
 			resolved, err := opts.DNSResolver.LookupIPAddr(ctx, address.Host)
 			if err != nil {
 				return nil, fmt.Errorf("resolve address %s host %q: %w", address.ID, address.Host, err)
@@ -457,13 +462,19 @@ func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now ti
 				if !familyAllowed(family, addressFamilies(address)) {
 					continue
 				}
-				out = append(out, newAddressCandidate(address, ip.String(), family, expiresAt, refreshAt))
+				candidate := newAddressCandidate(address, ip.String(), family, expiresAt, refreshAt)
+				if candidateAllowed(candidate, opts) {
+					out = append(out, candidate)
+				}
 			}
 			continue
 		}
 		for _, family := range addressFamilies(address) {
 			candidate := newAddressCandidate(address, address.Address, family, expiresAt, refreshAt)
 			if candidate.Address == "" && address.Source != SourceManualDNS {
+				continue
+			}
+			if !candidateAllowed(candidate, opts) {
 				continue
 			}
 			out = append(out, candidate)
@@ -493,11 +504,11 @@ func newAddressCandidate(address AddressAdvertisement, resolvedAddress, family s
 
 func sortAddressCandidates(out []AddressCandidate, sourceOrder []string) {
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Priority != out[j].Priority {
-			return out[i].Priority > out[j].Priority
-		}
 		if sourceRank(out[i].Source, sourceOrder) != sourceRank(out[j].Source, sourceOrder) {
 			return sourceRank(out[i].Source, sourceOrder) < sourceRank(out[j].Source, sourceOrder)
+		}
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority > out[j].Priority
 		}
 		if out[i].Family != out[j].Family {
 			return out[i].Family < out[j].Family
@@ -710,11 +721,11 @@ func dialPort(binding PortBinding) uint16 {
 
 func sortContactPoints(points []ContactPoint, sourceOrder []string) {
 	sort.SliceStable(points, func(i, j int) bool {
-		if points[i].Priority != points[j].Priority {
-			return points[i].Priority > points[j].Priority
-		}
 		if sourceRank(points[i].Source, sourceOrder) != sourceRank(points[j].Source, sourceOrder) {
 			return sourceRank(points[i].Source, sourceOrder) < sourceRank(points[j].Source, sourceOrder)
+		}
+		if points[i].Priority != points[j].Priority {
+			return points[i].Priority > points[j].Priority
 		}
 		if points[i].Current != points[j].Current {
 			return points[i].Current
@@ -739,6 +750,41 @@ func sourceRank(source string, sourceOrder []string) int {
 		}
 	}
 	return len(sourceOrder)
+}
+
+func sourceAllowed(source string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, candidate := range allowed {
+		if source == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func candidateAllowed(candidate AddressCandidate, opts AddressCandidateOptions) bool {
+	if candidate.Source != SourceLocal || opts.AllowPrivateLocal {
+		return true
+	}
+	ip := net.ParseIP(candidate.Address)
+	if ip == nil {
+		return true
+	}
+	return !isPrivateOrLinkLocal(ip)
+}
+
+func isPrivateOrLinkLocal(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4[0] == 10 ||
+			(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
+			(ip4[0] == 192 && ip4[1] == 168)
+	}
+	return len(ip) == net.IPv6len && ip[0]&0xfe == 0xfc
 }
 
 func oneOf(value string, allowed ...string) bool {

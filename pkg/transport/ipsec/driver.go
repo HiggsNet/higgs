@@ -1,6 +1,9 @@
 package ipsec
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 type SAState struct {
 	Name        string
@@ -33,6 +36,57 @@ type DryRunDriver struct {
 	Namespaces  []NetNSSpec
 	DeletedIFs  []string
 	Addresses   []string
+}
+
+type ApplyOperation struct {
+	Action string
+	Target string
+	Detail string
+}
+
+type ApplyPlan struct {
+	Operations []ApplyOperation
+}
+
+func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
+	netns = netns.Normalized()
+	plan := ApplyPlan{}
+	plan.add("ensure_namespace", netns.Target(), netns.Kind)
+	plan.add("load_connection", spec.TransportID, string(spec.PeerZone))
+	plan.add("ensure_interface", spec.InterfaceName, fmt.Sprintf("if_id=%d netns=%s", spec.XFRMIfID, spec.NetNS))
+	if spec.LocalTunnelAddr.IsValid() {
+		plan.add("assign_address", spec.InterfaceName, spec.LocalTunnelAddr.String())
+	}
+	return plan
+}
+
+func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, spec TransportLinkSpec, netns NetNSSpec) (ApplyPlan, error) {
+	if ipsec == nil {
+		return ApplyPlan{}, fmt.Errorf("ipsec driver is required")
+	}
+	if xfrm == nil {
+		return ApplyPlan{}, fmt.Errorf("xfrm driver is required")
+	}
+	plan := PlanApply(spec, netns)
+	if err := xfrm.EnsureNamespace(ctx, netns); err != nil {
+		return plan, fmt.Errorf("ensure namespace: %w", err)
+	}
+	if err := ipsec.LoadConnection(ctx, spec); err != nil {
+		return plan, fmt.Errorf("load connection: %w", err)
+	}
+	if err := xfrm.EnsureInterface(ctx, spec); err != nil {
+		return plan, fmt.Errorf("ensure interface: %w", err)
+	}
+	if spec.LocalTunnelAddr.IsValid() {
+		if err := xfrm.AssignAddress(ctx, spec.InterfaceName, spec.LocalTunnelAddr.String()); err != nil {
+			return plan, fmt.Errorf("assign address: %w", err)
+		}
+	}
+	return plan, nil
+}
+
+func (p *ApplyPlan) add(action, target, detail string) {
+	p.Operations = append(p.Operations, ApplyOperation{Action: action, Target: target, Detail: detail})
 }
 
 func (d *DryRunDriver) LoadConnection(_ context.Context, spec TransportLinkSpec) error {
