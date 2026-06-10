@@ -3,7 +3,6 @@ package ipsec
 import (
 	"fmt"
 	"net/netip"
-	"sort"
 )
 
 const (
@@ -95,20 +94,7 @@ func firstContactPoint(points []ContactPoint) (ContactPoint, bool) {
 	if len(points) == 0 {
 		return ContactPoint{}, false
 	}
-	copied := append([]ContactPoint(nil), points...)
-	sort.SliceStable(copied, func(i, j int) bool {
-		if copied[i].Current != copied[j].Current {
-			return copied[i].Current
-		}
-		if copied[i].Priority != copied[j].Priority {
-			return copied[i].Priority > copied[j].Priority
-		}
-		if copied[i].Generation != copied[j].Generation {
-			return copied[i].Generation > copied[j].Generation
-		}
-		return copied[i].Address < copied[j].Address
-	})
-	return copied[0], true
+	return points[0], true
 }
 
 func strongSwanRemoteAddress(point ContactPoint, hasPoint bool) (string, error) {

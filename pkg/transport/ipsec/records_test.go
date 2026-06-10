@@ -137,6 +137,71 @@ func TestResolveAddressCandidatesExpandsManualDNSRuntimeOnly(t *testing.T) {
 	}
 }
 
+func TestContactPointSelectionFallsBackFromBackoffCurrentPort(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	addresses := &AddressRecord{
+		Version: 1,
+		Addresses: []AddressAdvertisement{{
+			ID:           "public-v4",
+			Source:       SourceManualAddress,
+			Address:      "198.51.100.20",
+			Family:       FamilyIPv4,
+			Priority:     100,
+			Reachability: ReachabilityPublic,
+			TTLSeconds:   300,
+		}},
+		UpdatedAt: now.Unix(),
+	}
+	ports := &PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: 500},
+			NATT:       PortBinding{Advertised: 4500},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		Previous: []PortSelection{{
+			Generation: 1,
+			IKE:        PortBinding{Advertised: 1500},
+			NATT:       PortBinding{Advertised: 14500},
+			ValidUntil: now.Add(10 * time.Minute).Unix(),
+		}},
+		UpdatedAt: now.Unix(),
+	}
+	currentKey := ContactPoint{
+		AddressID:  "public-v4",
+		Address:    "198.51.100.20",
+		Generation: 2,
+		IKEPort:    500,
+		NATTPort:   4500,
+	}.Key()
+	points, err := ResolveContactPoints(context.Background(), addresses, ports, now, AddressCandidateOptions{
+		Now: now,
+		ContactQuality: map[string]ContactPointQuality{
+			currentKey: {
+				Failures:     3,
+				BackoffUntil: now.Add(time.Minute),
+				LastError:    "dial_timeout",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveContactPoints: %v", err)
+	}
+	selected := SelectContactPointsWithOptions(points, PathModeFamilyRedundant, AddressCandidateOptions{Now: now})
+	if len(selected) != 1 {
+		t.Fatalf("selected len = %d, want 1", len(selected))
+	}
+	if selected[0].Current || selected[0].Generation != 1 || selected[0].IKEPort != 1500 {
+		t.Fatalf("selected = %+v, want previous grace port", selected[0])
+	}
+	current := points[1]
+	if current.LastError != "dial_timeout" || current.Failures != 3 || current.RankReason == "" {
+		t.Fatalf("current quality not annotated: %+v", current)
+	}
+}
+
 func TestResolveAddressCandidatesAppliesSourcePolicyAndDiscoveryDNS(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	addresses := &AddressRecord{

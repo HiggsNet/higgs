@@ -105,6 +105,67 @@ func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) 
 	}
 }
 
+func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: 500},
+			NATT:       PortBinding{Advertised: 4500},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		Previous: []PortSelection{{
+			Generation: 1,
+			IKE:        PortBinding{Advertised: 1500},
+			NATT:       PortBinding{Advertised: 14500},
+			ValidUntil: now.Add(10 * time.Minute).Unix(),
+		}},
+		UpdatedAt: now.Unix(),
+	})
+	currentKey := ContactPoint{
+		AddressID:  "b-public",
+		Address:    "198.51.100.20",
+		Generation: 2,
+		IKEPort:    500,
+		NATTPort:   4500,
+	}.Key()
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound, DefaultPathMode: PathModeExhaustive}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{
+		Now: now,
+		ContactPointQuality: map[zone.ZonePath]map[string]ContactPointQuality{
+			"node-b.catofes.": {
+				currentKey: {
+					Failures:     2,
+					BackoffUntil: now.Add(time.Minute),
+					LastError:    "ike_timeout",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired len = %d skips=%+v", len(plan.Desired), plan.Skipped)
+	}
+	point := plan.Desired[0].ContactPoints[0]
+	if point.Current || point.IKEPort != 1500 {
+		t.Fatalf("first contact point = %+v, want previous grace port", point)
+	}
+	if plan.Desired[0].ContactPoints[1].LastError != "ike_timeout" {
+		t.Fatalf("current point quality missing: %+v", plan.Desired[0].ContactPoints)
+	}
+}
+
 func TestReconcileLinkInstancesCreatesAdoptsRepairsAndTeardowns(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	spec := TransportLinkSpec{

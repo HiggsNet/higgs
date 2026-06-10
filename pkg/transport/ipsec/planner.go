@@ -23,9 +23,10 @@ const (
 )
 
 type LinkPlannerOptions struct {
-	Now               time.Time
-	DNSResolver       DNSResolver
-	AllowPrivateLocal bool
+	Now                 time.Time
+	DNSResolver         DNSResolver
+	AllowPrivateLocal   bool
+	ContactPointQuality map[zone.ZonePath]map[string]ContactPointQuality
 }
 
 type LinkPlan struct {
@@ -124,11 +125,17 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			SourceOrder:       group.AddressSourceOrder,
 			AllowedSources:    group.AddressSourceOrder,
 			AllowPrivateLocal: opts.AllowPrivateLocal,
+			Now:               now,
+			ContactQuality:    opts.ContactPointQuality[peer],
 		})
 		if err != nil {
 			return TransportLinkSpec{}, false, PlanSkip{}, err
 		}
-		contacts = SelectContactPoints(allContacts, group.DefaultPathMode)
+		contacts = SelectContactPointsWithOptions(allContacts, group.DefaultPathMode, AddressCandidateOptions{
+			SourceOrder:    group.AddressSourceOrder,
+			Now:            now,
+			ContactQuality: opts.ContactPointQuality[peer],
+		})
 		if len(contacts) == 0 {
 			return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoContactPoints}, nil
 		}

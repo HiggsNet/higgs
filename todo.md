@@ -448,7 +448,8 @@
   - [x] 设计状态机：`pending`、`configuring`、`connecting`、`up`、`degraded`、`stale`、`removing`、`down`、`error`
   - [x] 实现公开 accept intent 与本地 direction 的组合规则：本地 `outbound` 只能主动连接远端 `inbound`/`bidirectional`；本地 `inbound` 只加载接收配置；双方 `bidirectional` 时使用稳定 tie-break（如 peer zone 字典序）避免重复主动拨号，并允许失败后对端接管
   - [x] 实现 path mode：`family-redundant` 每个地址族最多选择一条 ContactPoint（双栈时 IPv4 一条 + IPv6 一条）；`exhaustive` 尽量连接所有候选（调试/特殊高可用）；后续如需单条再引入 `preferred-only`，避免使用语义模糊的 `single-best`
-  - [ ] ContactPoint candidates 支持排序和回退：按 address source priority、address reachability、端口 generation、连接成功率、失败/backoff、IPv4/IPv6 策略综合排序；记录失败率和最近失败原因
+  - [x] ContactPoint candidates 支持排序和回退：按 address source priority、address reachability、端口 generation、连接成功率、失败/backoff、IPv4/IPv6 策略综合排序；记录失败率和最近失败原因
+    - 已在纯 planner/model 层加入 `ContactPointQuality`：daemon 可按 peer/contact 注入 successes/failures/backoff/last_error，planner 生成的 `TransportLinkSpec` 会保留排序原因，并在 current 端口处于 backoff 时回退 previous grace 端口；真实 daemon apply 侧的指标采集随后续 state-change/reconcile 接线落地。
   - [ ] 明确 NAT 处理：NAT hint 只是节点自称，不作为安全事实；公网节点可接受 NAT 后节点主动拨入；主动拨入 NAT 后节点必须依赖 IPv6、端口映射、已验证 observed external port、打洞或后续 relay，不能仅凭 `behind_nat` hint 假装可达
   - [ ] 处理幂等和并发：同一个 peer/group 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + 本地 LinkGroupSpec + 持久化 LinkInstance + StrongSwan/XFRM 实际状态恢复
   - [ ] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置

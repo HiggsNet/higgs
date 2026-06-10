@@ -340,7 +340,7 @@ Phase 4 的关键边界：
 - 公开记录只表达节点的 IPsec 能力、accept intent、地址候选、端口公告和 transport key。
 - 本地 MeshPolicy 规则不通过 gossip 公开；它属于本节点拓扑和安全策略。
 - 地址与端口分离公告。远端运行时把 AddressCandidate 与 PortAdvertisement 组合成 ContactPoint 后再拨号。
-- StrongSwan/VICI/XFRM apply 永远以 verified active state 为输入；discovery server、reflector、DNS 响应不能绕过 Zone trust chain。
+- StrongSwan/VICI/XFRM apply 的身份、授权、transport key、profile 和 revocation 判断必须来自 verified active state。DNS、reflector、discovery server 可以作为运行时地址候选来源；这些地址候选不单独构成信任依据，最终仍需匹配 verified active state 中声明的 peer identity / transport key，并通过 IKEv2 认证。
 - VICI socket、`charon`、XFRM interface、`CAP_NET_ADMIN`/root、UDP 端口可用性等 preflight 只决定本机是否能 apply；它们不是 gossip 记录，也不参与 Zone trust chain。
 
 ### 6.1 Record key 与类型

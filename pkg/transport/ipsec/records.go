@@ -179,10 +179,22 @@ type ContactPoint struct {
 	Current      bool
 	IKEPort      uint16
 	NATTPort     uint16
+	Successes    int
+	Failures     int
+	BackoffUntil time.Time
+	LastError    string
+	RankReason   string
 }
 
 type DNSResolver interface {
 	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
+
+type ContactPointQuality struct {
+	Successes    int
+	Failures     int
+	BackoffUntil time.Time
+	LastError    string
 }
 
 type AddressCandidateOptions struct {
@@ -190,6 +202,8 @@ type AddressCandidateOptions struct {
 	SourceOrder       []string
 	AllowedSources    []string
 	AllowPrivateLocal bool
+	Now               time.Time
+	ContactQuality    map[string]ContactPointQuality
 }
 
 func ParseProfileRecord(record *zone.Record) (*ProfileRecord, error) {
@@ -575,13 +589,19 @@ func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *
 			})
 		}
 	}
-	sortContactPoints(out, opts.SourceOrder)
+	annotateContactPoints(out, opts)
+	sortContactPoints(out, opts)
 	return out, nil
 }
 
 func SelectContactPoints(points []ContactPoint, mode string) []ContactPoint {
+	return SelectContactPointsWithOptions(points, mode, AddressCandidateOptions{})
+}
+
+func SelectContactPointsWithOptions(points []ContactPoint, mode string, opts AddressCandidateOptions) []ContactPoint {
 	points = append([]ContactPoint(nil), points...)
-	sortContactPoints(points, nil)
+	annotateContactPoints(points, opts)
+	sortContactPoints(points, opts)
 	if mode == PathModeExhaustive {
 		return points
 	}
@@ -598,6 +618,10 @@ func SelectContactPoints(points []ContactPoint, mode string) []ContactPoint {
 		out = append(out, point)
 	}
 	return out
+}
+
+func (p ContactPoint) Key() string {
+	return fmt.Sprintf("%s|%s|%d|%d|%d", p.AddressID, p.Address, p.Generation, p.IKEPort, p.NATTPort)
 }
 
 func parseIPsecRecord(record *zone.Record, key, recordType string, into any) error {
@@ -719,13 +743,19 @@ func dialPort(binding PortBinding) uint16 {
 	return binding.Advertised
 }
 
-func sortContactPoints(points []ContactPoint, sourceOrder []string) {
+func sortContactPoints(points []ContactPoint, opts AddressCandidateOptions) {
 	sort.SliceStable(points, func(i, j int) bool {
-		if sourceRank(points[i].Source, sourceOrder) != sourceRank(points[j].Source, sourceOrder) {
-			return sourceRank(points[i].Source, sourceOrder) < sourceRank(points[j].Source, sourceOrder)
+		if sourceRank(points[i].Source, opts.SourceOrder) != sourceRank(points[j].Source, opts.SourceOrder) {
+			return sourceRank(points[i].Source, opts.SourceOrder) < sourceRank(points[j].Source, opts.SourceOrder)
+		}
+		if reachabilityRank(points[i].Reachability) != reachabilityRank(points[j].Reachability) {
+			return reachabilityRank(points[i].Reachability) < reachabilityRank(points[j].Reachability)
 		}
 		if points[i].Priority != points[j].Priority {
 			return points[i].Priority > points[j].Priority
+		}
+		if contactInBackoff(points[i], opts.Now) != contactInBackoff(points[j], opts.Now) {
+			return !contactInBackoff(points[i], opts.Now)
 		}
 		if points[i].Current != points[j].Current {
 			return points[i].Current
@@ -733,11 +763,86 @@ func sortContactPoints(points []ContactPoint, sourceOrder []string) {
 		if points[i].Generation != points[j].Generation {
 			return points[i].Generation > points[j].Generation
 		}
+		if contactSuccessRate(points[i]) != contactSuccessRate(points[j]) {
+			return contactSuccessRate(points[i]) > contactSuccessRate(points[j])
+		}
+		if points[i].Failures != points[j].Failures {
+			return points[i].Failures < points[j].Failures
+		}
 		if points[i].Family != points[j].Family {
 			return points[i].Family < points[j].Family
 		}
-		return points[i].AddressID < points[j].AddressID
+		if points[i].AddressID != points[j].AddressID {
+			return points[i].AddressID < points[j].AddressID
+		}
+		return points[i].Address < points[j].Address
 	})
+}
+
+func annotateContactPoints(points []ContactPoint, opts AddressCandidateOptions) {
+	for i := range points {
+		if opts.ContactQuality != nil {
+			if quality, ok := opts.ContactQuality[points[i].Key()]; ok {
+				points[i].Successes = quality.Successes
+				points[i].Failures = quality.Failures
+				points[i].BackoffUntil = quality.BackoffUntil
+				points[i].LastError = quality.LastError
+			}
+		}
+		points[i].RankReason = contactRankReason(points[i], opts.Now)
+	}
+}
+
+func reachabilityRank(reachability string) int {
+	switch reachability {
+	case ReachabilityPublic:
+		return 0
+	case ReachabilityNATObserved:
+		return 1
+	case ReachabilityUnknown:
+		return 2
+	case ReachabilityPrivate:
+		return 3
+	default:
+		return 4
+	}
+}
+
+func contactInBackoff(point ContactPoint, now time.Time) bool {
+	return !point.BackoffUntil.IsZero() && !now.IsZero() && now.Before(point.BackoffUntil)
+}
+
+func contactSuccessRate(point ContactPoint) float64 {
+	total := point.Successes + point.Failures
+	if total == 0 {
+		return 0
+	}
+	return float64(point.Successes) / float64(total)
+}
+
+func contactRankReason(point ContactPoint, now time.Time) string {
+	parts := []string{point.Source}
+	if point.Reachability != "" {
+		parts = append(parts, point.Reachability)
+	}
+	if point.Current {
+		parts = append(parts, "current-port")
+	} else {
+		parts = append(parts, "previous-port")
+	}
+	if contactInBackoff(point, now) {
+		parts = append(parts, "backoff")
+	}
+	if point.Failures > 0 {
+		parts = append(parts, fmt.Sprintf("failures=%d", point.Failures))
+	}
+	if point.Successes > 0 {
+		parts = append(parts, fmt.Sprintf("successes=%d", point.Successes))
+	}
+	if point.LastError != "" {
+		parts = append(parts, "last_error="+point.LastError)
+	}
+	return strings.Join(parts, ",")
 }
 
 func sourceRank(source string, sourceOrder []string) int {
