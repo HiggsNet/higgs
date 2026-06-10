@@ -20,6 +20,8 @@ const (
 	SkipAcceptIntentMismatch = "accept_intent_mismatch"
 	SkipNoContactPoints      = "no_contact_points"
 	SkipNoInboundNATEvidence = "no_inbound_nat_evidence"
+	SkipPolicyDenied         = "policy_denied"
+	SkipPolicyNoMatch        = "policy_no_match"
 	SkipMaxPeers             = "max_peers"
 	SkipPlannerError         = "planner_error"
 )
@@ -61,6 +63,14 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 			return plan, err
 		}
 		group = group.Normalized()
+		connectRules, err := ParseMeshPolicyRules(group.ConnectRules)
+		if err != nil {
+			return plan, err
+		}
+		denyRules, err := ParseMeshPolicyRules(group.DenyRules)
+		if err != nil {
+			return plan, err
+		}
 		selectedPeers := 0
 		linkIndex := 0
 		for _, peer := range peers {
@@ -72,11 +82,7 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 				plan.skip(group.ID, peer, SkipRevokedZone, "")
 				continue
 			}
-			if group.MaxPeers > 0 && selectedPeers >= group.MaxPeers {
-				plan.skip(group.ID, peer, SkipMaxPeers, "")
-				continue
-			}
-			spec, ok, skip, err := planPeerLink(ctx, ns, local, peer, group, linkIndex, now, opts)
+			spec, ok, skip, err := planPeerLink(ctx, ns, local, peer, group, connectRules, denyRules, selectedPeers, linkIndex, now, opts)
 			if err != nil {
 				plan.skip(group.ID, peer, SkipPlannerError, err.Error())
 				continue
@@ -99,13 +105,24 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 	return plan, nil
 }
 
-func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.ZonePath, group LinkGroupSpec, linkIndex int, now time.Time, opts LinkPlannerOptions) (TransportLinkSpec, bool, PlanSkip, error) {
+func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.ZonePath, group LinkGroupSpec, connectRules, denyRules []MeshPolicyRule, selectedPeers, linkIndex int, now time.Time, opts LinkPlannerOptions) (TransportLinkSpec, bool, PlanSkip, error) {
 	records, err := ExtractNodeRecords(ns, peer, now)
 	if err != nil {
 		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingRecords, Detail: err.Error()}, nil
 	}
 	if records.Profile == nil || records.Addresses == nil || records.Ports == nil || records.TransportKey == nil {
 		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingRecords}, nil
+	}
+	effectiveGroup, ok, skip, err := applyMeshPolicyRules(group, peer, records, connectRules, denyRules)
+	if err != nil {
+		return TransportLinkSpec{}, false, PlanSkip{}, err
+	}
+	if !ok {
+		return TransportLinkSpec{}, false, skip, nil
+	}
+	group = effectiveGroup
+	if group.MaxPeers > 0 && selectedPeers >= group.MaxPeers {
+		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMaxPeers}, nil
 	}
 	if !records.Profile.Enabled {
 		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipDisabledProfile}, nil
@@ -153,6 +170,68 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		return TransportLinkSpec{}, false, PlanSkip{}, err
 	}
 	return spec, true, PlanSkip{}, nil
+}
+
+func applyMeshPolicyRules(group LinkGroupSpec, peer zone.ZonePath, records *NodeRecords, connectRules, denyRules []MeshPolicyRule) (LinkGroupSpec, bool, PlanSkip, error) {
+	for _, rule := range denyRules {
+		if meshRuleMatchesPeer(rule, peer, records) {
+			return LinkGroupSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipPolicyDenied, Detail: rule.Raw}, nil
+		}
+	}
+	if len(connectRules) == 0 {
+		return group, true, PlanSkip{}, nil
+	}
+	for _, rule := range connectRules {
+		if !meshRuleMatchesPeer(rule, peer, records) {
+			continue
+		}
+		effective := applyMeshRuleToGroup(group, rule)
+		if err := effective.Validate(); err != nil {
+			return LinkGroupSpec{}, false, PlanSkip{}, err
+		}
+		return effective.Normalized(), true, PlanSkip{}, nil
+	}
+	return LinkGroupSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipPolicyNoMatch}, nil
+}
+
+func meshRuleMatchesPeer(rule MeshPolicyRule, peer zone.ZonePath, records *NodeRecords) bool {
+	if rule.ZonePattern != "" && !rule.MatchesZone(peer) {
+		return false
+	}
+	// Role/tag selectors are parsed and validated, but peer labels are not part of
+	// the signed IPsec records yet. Until that source exists, they never match.
+	if rule.Role != "" || rule.Tag != "" {
+		return false
+	}
+	if rule.Accept != "" && (records == nil || records.Profile == nil || records.Profile.Accept != rule.Accept) {
+		return false
+	}
+	if rule.Family != "" && rule.Family != RuleFamilyDual {
+		if records == nil || records.Profile == nil || !oneOf(rule.Family, records.Profile.AddressFamilies...) {
+			return false
+		}
+		if records.Addresses == nil || !oneOf(rule.Family, recordFamilies(records.Addresses)...) {
+			return false
+		}
+	}
+	return true
+}
+
+func applyMeshRuleToGroup(group LinkGroupSpec, rule MeshPolicyRule) LinkGroupSpec {
+	out := group
+	if rule.Direction != "" {
+		out.Direction = rule.Direction
+	}
+	if rule.PathMode != "" {
+		out.DefaultPathMode = rule.PathMode
+	}
+	if len(rule.Sources) > 0 {
+		out.AddressSourceOrder = append([]string(nil), rule.Sources...)
+	}
+	if rule.MaxPeers >= 0 {
+		out.MaxPeers = rule.MaxPeers
+	}
+	return out
 }
 
 func sortedZones(ns *zone.NetworkState) []zone.ZonePath {

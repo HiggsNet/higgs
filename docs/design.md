@@ -385,6 +385,8 @@ overlays:
 
 规则评估顺序为 deny 优先，然后按 connect 顺序匹配。正则表达式可后续作为高级能力加入，但默认使用 glob/suffix/label，便于审计。
 
+当前 planner 已把 zone glob/exact connect/deny rule 接入 `TransportLinkSpec` 推导：rule 可按远端 `accept`、地址族、地址来源、path mode、direction 和 `max_peers` 过滤或覆盖 group 默认值；`role` / `tag` selector 已解析但在本地 peer label 来源接入前不会匹配。
+
 #### 2.4.4 方向、双栈与 NAT 处理
 
 实际建链由“本地 direction”和“远端 accept intent”共同决定：
