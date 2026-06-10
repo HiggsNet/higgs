@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-xfrm-preflight help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -48,6 +48,9 @@ smoke: smoke-all
 
 smoke-all: $(SMOKE_TARGETS)
 	@echo "All smoke tests passed"
+
+ipsec-xfrm-preflight:
+	@docs/scripts/ipsec-xfrm-preflight.sh
 
 # Smoke 目标约定：
 # - 每个 smoke 都在 $TMPDIR 下创建独立目录，避免重复运行时复用密钥、

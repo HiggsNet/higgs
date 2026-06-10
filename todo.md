@@ -429,7 +429,8 @@
   - [x] 第一版默认一条 peer link 一个 XFRM interface；后续再评估 shared XFRM interface 或 in/out 分离 interface
   - [x] 定义 netns 配置来源：`config.yaml` 暴露 `ipsec.default_netns`，link group 可声明 `host`、netns name 或 netns path；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 IPsec/XFRM 链路默认落在 host ns
   - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建/move 前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
-  - [ ] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、创建 XFRM interface 后 move 到目标 ns、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
+  - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、创建 XFRM interface 后 move 到目标 ns、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
+    - 已增加 `SystemXFRMDriver`：通过 `ip`/iproute2 执行 named netns ensure、XFRM interface create/move/up、address replace 和 delete；path netns 第一版只做存在性检查，需 bind 到 `/var/run/netns` 后按 named netns 管理。
   - [ ] CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛；Phase 4 只负责 peer-to-peer tunnel link，路由前缀授权留给 Phase 5 Babel/route filter
   - [ ] 实现撤销/删除清理：terminate IKE_SA/CHILD_SA、unload connection/secret、删除 XFRM interface、地址、临时路由和本地运行态
 
@@ -458,7 +459,8 @@
   - [ ] dry-run 覆盖端口轮换：peer 发布 current + previous grace 端口时优先 current，current 失败可在 grace 内回退 previous；grace 过期后不再尝试旧端口
   - [ ] dry-run 覆盖 DNS refresh：manual-dns record 保留域名，运行时解析 A/AAAA；DNS 变化后 planner 重新生成 ContactPoint 并触发 reconcile update
   - [ ] dry-run 覆盖 NAT：公网 inbound peer + NAT outbound peer 可建 outbound initiated link；两个都 `behind_nat` 且无 IPv6/port mapping/observed reachable port 时进入 degraded，并在 debug 中给出不可达原因
-  - [ ] 增加真实环境前置检查命令：检测 Linux、root 或 `CAP_NET_ADMIN`、VICI socket/`charon`、XFRM interface 支持、`ip`/`swanctl` 可用性；缺失时给出明确 skip/error，而不是半途留下 connection/interface
+  - [x] 增加真实环境前置检查命令：检测 Linux、root 或 `CAP_NET_ADMIN`、VICI socket/`charon`、XFRM interface 支持、`ip`/`swanctl` 可用性；缺失时给出明确 skip/error，而不是半途留下 connection/interface
+    - 已增加 `make ipsec-xfrm-preflight` 与 `docs/strongswan-xfrm-test.md`，真实 `ipsec-xfrm-smoke` 仍保持显式 root/system integration 目标，默认不纳入 `smoke-all`。
   - [ ] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步、link group/netns 配置和 transport key record 发布
   - [ ] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
   - [ ] smoke 使用 VICI/`swanctl --list-sas` 双重观测 IKE_SA/CHILD_SA：断言 peer identity、CHILD_SA name、reqid/if_id、local/remote endpoint 与 `TransportLinkSpec` 一致
