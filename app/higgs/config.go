@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,18 +85,46 @@ type configYAML struct {
 	EndpointGracePeriod string `yaml:"endpoint_grace_period"`
 	PublishEndpoints    *bool  `yaml:"publish_endpoints"`
 
-	FilterPrivateIPv4 bool            `yaml:"filter_private_ipv4"`
-	IPsec             ipsecConfigYAML `yaml:"ipsec"`
+	FilterPrivateIPv4 bool                `yaml:"filter_private_ipv4"`
+	IPsec             ipsecConfigYAML     `yaml:"ipsec"`
+	Overlays          []overlayConfigYAML `yaml:"overlays"`
 }
 
 type configStringList []string
 
 type ipsecConfig struct {
 	DefaultNetNS ipsec.NetNSSpec
+	LinkGroups   []ipsec.LinkGroupSpec
 }
 
 type ipsecConfigYAML struct {
 	DefaultNetNS ipsec.NetNSSpec `yaml:"default_netns"`
+}
+
+type overlayConfigYAML struct {
+	ID                 string               `yaml:"id"`
+	Name               string               `yaml:"name"`
+	Provider           string               `yaml:"provider"`
+	NetNS              ipsec.NetNSSpec      `yaml:"netns"`
+	DefaultPathMode    string               `yaml:"default_path_mode"`
+	Direction          string               `yaml:"direction"`
+	AddressSourceOrder configStringList     `yaml:"address_source_order"`
+	MaxPeers           *int                 `yaml:"max_peers"`
+	MaxLinksPerPeer    *int                 `yaml:"max_links_per_peer"`
+	TunnelAddressPool  string               `yaml:"tunnel_address_pool"`
+	Reconcile          overlayReconcileYAML `yaml:"reconcile"`
+	Connect            configStringList     `yaml:"connect"`
+	Deny               configStringList     `yaml:"deny"`
+}
+
+type overlayReconcileYAML struct {
+	Interval string             `yaml:"interval"`
+	Backoff  overlayBackoffYAML `yaml:"backoff"`
+}
+
+type overlayBackoffYAML struct {
+	Initial string `yaml:"initial"`
+	Max     string `yaml:"max"`
 }
 
 func loadAppConfig() (*appConfig, error) {
@@ -271,7 +300,90 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.IPsec.DefaultNetNS = netns
 	}
+	if len(file.Overlays) > 0 {
+		groups, err := parseOverlayConfigs(file.Overlays, config.IPsec.DefaultNetNS)
+		if err != nil {
+			return err
+		}
+		config.IPsec.LinkGroups = groups
+	}
 	return nil
+}
+
+func parseOverlayConfigs(overlays []overlayConfigYAML, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
+	groups := make([]ipsec.LinkGroupSpec, 0, len(overlays))
+	for i, overlay := range overlays {
+		group, err := parseOverlayConfig(overlay, defaultNetNS)
+		if err != nil {
+			return nil, fmt.Errorf("overlays[%d]: %w", i, err)
+		}
+		groups = append(groups, group)
+	}
+	return groups, nil
+}
+
+func parseOverlayConfig(overlay overlayConfigYAML, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
+	group := ipsec.LinkGroupSpec{
+		ID:                 overlay.ID,
+		Name:               overlay.Name,
+		Provider:           overlay.Provider,
+		NetNS:              overlay.NetNS,
+		DefaultPathMode:    overlay.DefaultPathMode,
+		Direction:          overlay.Direction,
+		AddressSourceOrder: append([]string(nil), overlay.AddressSourceOrder...),
+		ConnectRules:       append([]string(nil), overlay.Connect...),
+		DenyRules:          append([]string(nil), overlay.Deny...),
+	}
+	if group.ID == "" {
+		group.ID = group.Name
+	}
+	if group.NetNS.Kind == "" && group.NetNS.Name == "" && group.NetNS.Path == "" && !group.NetNS.Create {
+		group.NetNS = defaultNetNS
+	}
+	if overlay.MaxPeers != nil {
+		group.MaxPeers = *overlay.MaxPeers
+	}
+	if overlay.MaxLinksPerPeer != nil {
+		group.MaxLinksPerPeer = *overlay.MaxLinksPerPeer
+	}
+	if overlay.TunnelAddressPool != "" {
+		prefix, err := netip.ParsePrefix(overlay.TunnelAddressPool)
+		if err != nil {
+			return ipsec.LinkGroupSpec{}, fmt.Errorf("invalid tunnel_address_pool %q: %w", overlay.TunnelAddressPool, err)
+		}
+		group.TunnelAddressPool = prefix
+	}
+	if overlay.Reconcile.Interval != "" {
+		d, err := parseConfigDuration(overlay.Reconcile.Interval, "reconcile.interval")
+		if err != nil {
+			return ipsec.LinkGroupSpec{}, err
+		}
+		group.Reconcile.IntervalSeconds = durationSeconds(d)
+	}
+	if overlay.Reconcile.Backoff.Initial != "" {
+		d, err := parseConfigDuration(overlay.Reconcile.Backoff.Initial, "reconcile.backoff.initial")
+		if err != nil {
+			return ipsec.LinkGroupSpec{}, err
+		}
+		group.Reconcile.Backoff.InitialSeconds = durationSeconds(d)
+	}
+	if overlay.Reconcile.Backoff.Max != "" {
+		d, err := parseConfigDuration(overlay.Reconcile.Backoff.Max, "reconcile.backoff.max")
+		if err != nil {
+			return ipsec.LinkGroupSpec{}, err
+		}
+		group.Reconcile.Backoff.MaxSeconds = durationSeconds(d)
+	}
+	if err := group.Validate(); err != nil {
+		return ipsec.LinkGroupSpec{}, err
+	}
+	if _, err := ipsec.ParseMeshPolicyRules(group.ConnectRules); err != nil {
+		return ipsec.LinkGroupSpec{}, fmt.Errorf("connect: %w", err)
+	}
+	if _, err := ipsec.ParseMeshPolicyRules(group.DenyRules); err != nil {
+		return ipsec.LinkGroupSpec{}, fmt.Errorf("deny: %w", err)
+	}
+	return group.Normalized(), nil
 }
 
 func (list *configStringList) UnmarshalYAML(node *yaml.Node) error {
@@ -322,6 +434,13 @@ func parseConfigDuration(value, name string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid %s: %q", name, value)
 	}
 	return d, nil
+}
+
+func durationSeconds(d time.Duration) int {
+	if d <= 0 {
+		return 0
+	}
+	return int(d.Round(time.Second) / time.Second)
 }
 
 func decodePublicKey(value string) (ed25519.PublicKey, error) {

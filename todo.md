@@ -439,8 +439,10 @@
 
 - [ ] **4.2 链路实例管理**
   - [x] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition
-  - [ ] 定义本地 `MeshPolicy` / `LinkGroupSpec` 持久化来源：优先作为本机 daemon 配置/DB policy，不通过 gossip 公开；policy 描述“哪些 group 连接哪些 peer/overlay/provider/netns”，而不是列举每个已发现节点的手工 link
-  - [ ] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、direction、max_peers、allow/deny 顺序
+  - [x] 定义本地 `MeshPolicy` / `LinkGroupSpec` 持久化来源：优先作为本机 daemon 配置/DB policy，不通过 gossip 公开；policy 描述“哪些 group 连接哪些 peer/overlay/provider/netns”，而不是列举每个已发现节点的手工 link
+    - 已在 `config.yaml` 增加本地 `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `ipsec.default_netns`，支持 provider、netns、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串。当前只落地持久化和校验，rule DSL 匹配逻辑在下一项实现。
+  - [x] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、direction、max_peers、allow/deny 顺序
+    - 已新增 `ParseMeshPolicyRule` / `ParseMeshPolicyRules`：支持 `strongswan://*.catofes.`, `strongswan://role=edge`, `strongswan://tag=lab` 三类目标，校验 `accept`、`family`、`source`、`mode`、`direction`、`max_peers`，并提供 zone glob/exact 匹配；`config.yaml overlays[].connect/deny` 现在会在加载时校验 rule 字符串。下一步再把 connect/deny 规则实际接入 peer 过滤和 group 推导。
   - [ ] daemon 从 active state 的 peer profile/address/port records + 本地 MeshPolicy/LinkGroupSpec 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/ipsec profile/address/port/transport key/mesh policy/group/netns 变化
     - [x] 新增纯 planner：从 verified active state 的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并输出结构化 skip reason；daemon state-change hook 后续接入该 planner。
   - [ ] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair

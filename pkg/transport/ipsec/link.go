@@ -60,6 +60,8 @@ type LinkGroupSpec struct {
 	MaxLinksPerPeer    int
 	TunnelAddressPool  netip.Prefix
 	Reconcile          ReconcilePolicy
+	ConnectRules       []string
+	DenyRules          []string
 }
 
 type TransportLinkSpec struct {

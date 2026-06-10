@@ -84,6 +84,88 @@ ipsec:
 	}
 }
 
+func TestParseConfigYAMLOverlays(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  default_netns:
+    kind: name
+    name: h2
+    create: true
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+    default_path_mode: family-redundant
+    direction: outbound
+    address_source_order: manual-dns, discovery
+    max_peers: 64
+    max_links_per_peer: 2
+    tunnel_address_pool: fd00:1234::/64
+    reconcile:
+      interval: 30s
+      backoff:
+        initial: 1s
+        max: 1m
+    connect:
+      - "strongswan://*.catofes.?accept=inbound&family=dual"
+    deny:
+      - "strongswan://tag=lab"
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if len(config.IPsec.LinkGroups) != 1 {
+		t.Fatalf("LinkGroups len = %d, want 1", len(config.IPsec.LinkGroups))
+	}
+	group := config.IPsec.LinkGroups[0]
+	if group.ID != "ipsec-main" || group.Name != "ipsec-main" || group.Provider != ipsec.ProviderStrongSwan {
+		t.Fatalf("group identity = %+v", group)
+	}
+	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "h2" || !group.NetNS.Create {
+		t.Fatalf("group netns = %+v", group.NetNS)
+	}
+	if group.TunnelAddressPool.String() != "fd00:1234::/64" {
+		t.Fatalf("tunnel pool = %s", group.TunnelAddressPool)
+	}
+	if group.Reconcile.IntervalSeconds != 30 || group.Reconcile.Backoff.InitialSeconds != 1 || group.Reconcile.Backoff.MaxSeconds != 60 {
+		t.Fatalf("reconcile = %+v", group.Reconcile)
+	}
+	if got := strings.Join(group.AddressSourceOrder, ","); got != "manual-dns,discovery" {
+		t.Fatalf("AddressSourceOrder = %q", got)
+	}
+	if len(group.ConnectRules) != 1 || len(group.DenyRules) != 1 {
+		t.Fatalf("rules = connect:%v deny:%v", group.ConnectRules, group.DenyRules)
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidOverlay(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+overlays:
+  - name: broken
+    provider: strongswan
+    tunnel_address_pool: not-a-prefix
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("parseConfigYAML should reject invalid overlay tunnel pool")
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidOverlayRule(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+    connect:
+      - "strongswan://*.catofes.?source=magic"
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("parseConfigYAML should reject invalid overlay rule")
+	}
+}
+
 func TestParseConfigYAMLRejectsInvalidIPsecDefaultNetNS(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

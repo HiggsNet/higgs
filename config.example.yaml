@@ -28,3 +28,31 @@ bootstrap:
 # Base64 encoded raw 32-byte ED25519 public key for the trusted root zone.
 # CLI output uses base64; existing hex values are still accepted.
 trusted_root_public_key:
+
+# Phase 4 local IPsec/XFRM defaults. Link groups are local policy and are not
+# published through gossip.
+ipsec:
+  default_netns:
+    kind: name
+    name: h2
+    create: true
+
+overlays:
+  - id: ipsec-main
+    name: ipsec-main
+    provider: strongswan
+    default_path_mode: family-redundant
+    direction: outbound
+    address_source_order: manual-address, manual-dns, discovery, reflector
+    max_peers: 64
+    max_links_per_peer: 2
+    tunnel_address_pool: fd00:1234::/64
+    reconcile:
+      interval: 30s
+      backoff:
+        initial: 1s
+        max: 1m
+    connect:
+      - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+    deny:
+      - "strongswan://tag=lab"
