@@ -648,7 +648,7 @@ make object-pull-smoke
 
 Phase 3 的最小 daemon / 单 writer 边界已经收敛，Phase 4.0 的 admin 写操作 daemon 化也已经落地：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交 `record put`、`delegate issue`、`delegate revoke` 和 `join accept`，daemon 不存在时保留直接写 DB 的开发/恢复模式。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
-下一步进入 Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块：由 daemon 监听 active state 变更，推导 peer view / TransportLink，通过 VICI 控制 StrongSwan，并用 netlink 管理 XFRM interface、地址和路由；WireGuard 后移为可选轻量传输驱动。
+Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块正在推进：daemon 已能在 active state 变更后从本地 link group 推导 desired TransportLink，持久化 `LinkInstance`，通过 driver `ListSAs` 观测 adopt 已存在 SA，并用 dry-run apply 验证 create/update/repair/teardown/backoff 路径。下一步仍是真实 StrongSwan/VICI + XFRM 系统 apply smoke；WireGuard 后移为可选轻量传输驱动。
 
 ## CLI 汇总
 
@@ -680,4 +680,4 @@ build/higgs db stats
 - Delegation scope 只支持 `direct-child`。
 - Gossip 当前默认使用 MessagePack framing，并短期兼容读取旧 JSON v1；没有接入 protobuf 生成代码。
 - 当前同步保证是连通、可达、至少有 bootstrap 或 signed endpoint 发现路径时的最终一致性；复杂 NAT、无稳定 bootstrap、长期网络分区仍需要后续 discovery/relay 能力补强。
-- StrongSwan/IKEv2 + XFRM interface、WireGuard fallback、Babel、route authorization filter、防火墙应用仍在后续阶段。
+- StrongSwan/IKEv2 + XFRM interface 已有 planner/reconcile/dry-run 基础；真实系统 apply smoke、WireGuard fallback、Babel、route authorization filter、防火墙应用仍在后续阶段。

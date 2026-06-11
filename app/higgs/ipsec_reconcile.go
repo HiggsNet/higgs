@@ -23,11 +23,16 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		d.recordIPsecReconcileError(now.Unix(), err)
 		return err
 	}
-	driver := &ipsec.DryRunDriver{}
+	ipsecDriver, xfrmDriver := d.ipsecDrivers()
+	sas, err := ipsecDriver.ListSAs(ctx)
+	if err != nil {
+		d.recordIPsecReconcileError(now.Unix(), err)
+		return fmt.Errorf("list ipsec sas: %w", err)
+	}
 	result := ipsec.ReconcileLinkInstances(ipsec.ReconcileInputs{
 		Desired:   plan.Desired,
 		Instances: linkInstancesToIPsec(d.Sync.State.LinkInstances),
-		SAs:       nil,
+		SAs:       sas,
 		Now:       now,
 		Revoked:   revokedLinkPeers(d.Sync.State, now),
 	})
@@ -35,7 +40,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		switch action.Action {
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionTeardown:
 			netns := netnsForAction(action, groups)
-			if _, err := ipsec.ApplyReconcileAction(ctx, driver, driver, action, netns); err != nil {
+			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
 				d.Sync.State.LinkInstances = linkInstancesFromIPsec(result.Instances)
 				d.Sync.State.IPsecReconcile = summarizeIPsecReconcile(now.Unix(), len(plan.Desired), result.Actions, plan.Skipped, err.Error())
@@ -54,6 +59,22 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
+}
+
+func (d *DaemonService) ipsecDrivers() (ipsec.IPsecDriver, ipsec.XFRMDriver) {
+	var dryRun *ipsec.DryRunDriver
+	ipsecDriver := d.IPsecDriver
+	xfrmDriver := d.XFRMDriver
+	if ipsecDriver == nil || xfrmDriver == nil {
+		dryRun = &ipsec.DryRunDriver{}
+	}
+	if ipsecDriver == nil {
+		ipsecDriver = dryRun
+	}
+	if xfrmDriver == nil {
+		xfrmDriver = dryRun
+	}
+	return ipsecDriver, xfrmDriver
 }
 
 func (d *DaemonService) recordIPsecReconcileError(unix int64, err error) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 type DaemonService struct {
@@ -20,6 +21,8 @@ type DaemonService struct {
 	ControlSocketPath string
 	Events            chan daemonEvent
 	Hooks             DaemonHooks
+	IPsecDriver       ipsec.IPsecDriver
+	XFRMDriver        ipsec.XFRMDriver
 	Log               *appLogger
 	LogLimiter        *repeatedLogLimiter
 }
