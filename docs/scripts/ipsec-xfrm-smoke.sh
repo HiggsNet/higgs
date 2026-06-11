@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+go_cmd="${GO:-go}"
+go_cache="${GOCACHE:-/tmp/higgs-gocache}"
+go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
+
+dump_diagnostics() {
+  printf '\n[ipsec-xfrm-smoke] diagnostics\n' >&2
+  ip netns list >&2 || true
+  ip link show type xfrm >&2 || true
+  ip xfrm state >&2 || true
+  ip xfrm policy >&2 || true
+  swanctl --list-sas >&2 || true
+}
+
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then dump_diagnostics; fi; exit "$rc"' EXIT
+
+docs/scripts/ipsec-xfrm-preflight.sh
+
+HIGGS_IPSEC_XFRM_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./pkg/transport/ipsec -run '^TestSystemXFRMDriverIntegrationSmoke$' -count=1
+
+printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver namespace/interface/address lifecycle)\n'

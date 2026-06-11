@@ -648,7 +648,7 @@ make object-pull-smoke
 
 Phase 3 的最小 daemon / 单 writer 边界已经收敛，Phase 4.0 的 admin 写操作 daemon 化也已经落地：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交 `record put`、`delegate issue`、`delegate revoke` 和 `join accept`，daemon 不存在时保留直接写 DB 的开发/恢复模式。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
-Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块正在推进：daemon 已能在 active state 变更后从本地 link group 推导 desired TransportLink，持久化 `LinkInstance`，通过 driver `ListSAs` 观测 adopt 已存在 SA，并用 dry-run apply 验证 create/update/repair/teardown/backoff 路径；teardown 成功后会移除本地实例，避免 link group 删除、record 过期或 peer revocation 后重复清理/重建。`higgs debug links` 会重算当前 desired links，并与已落盘 instance、最近 SA/CHILD_SA、XFRM `if_id`、endpoint、backoff 和错误并排显示。下一步仍是真实 StrongSwan/VICI + XFRM 系统 apply smoke；WireGuard 后移为可选轻量传输驱动。
+Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块正在推进：daemon 已能在 active state 变更后从本地 link group 推导 desired TransportLink，持久化 `LinkInstance`，通过 driver `ListSAs` 观测 adopt 已存在 SA，并用 dry-run apply 验证 create/update/repair/teardown/backoff 路径；teardown 成功后会移除本地实例，避免 link group 删除、record 过期或 peer revocation 后重复清理/重建。`higgs debug links` 会重算当前 desired links，并与已落盘 instance、最近 SA/CHILD_SA、XFRM `if_id`、endpoint、backoff 和错误并排显示。显式 `make ipsec-xfrm-smoke` 已作为 root/system integration 入口验证 preflight 和真实 XFRM netns/interface/address 生命周期，但完整双 daemon + VICI IKE_SA/CHILD_SA + tunnel ping 仍是下一步；WireGuard 后移为可选轻量传输驱动。
 
 ## CLI 汇总
 

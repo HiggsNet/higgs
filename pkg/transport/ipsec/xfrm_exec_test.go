@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recordedCommand struct {
@@ -87,6 +89,48 @@ func TestSystemXFRMDriverRejectsPathNetNSInterfaceMove(t *testing.T) {
 	err := driver.EnsureInterface(context.Background(), spec)
 	if err == nil || !strings.Contains(err.Error(), "path netns") {
 		t.Fatalf("EnsureInterface err = %v", err)
+	}
+}
+
+func TestSystemXFRMDriverIntegrationSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system XFRM smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	ns := "higgs-xfrm-smoke-" + time.Now().UTC().Format("20060102150405")
+	iface := "hgsxfrm0"
+	driver := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: ns, Create: true})
+	spec := TransportLinkSpec{
+		TransportID:     "ipsec-smoke-a-b",
+		InterfaceName:   iface,
+		XFRMIfID:        424242,
+		NetNS:           ns,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:4242::1"),
+	}
+	t.Cleanup(func() {
+		_ = driver.DeleteInterface(context.Background(), iface)
+		_, _ = execCommand(context.Background(), "ip", "netns", "delete", ns)
+	})
+
+	if err := driver.EnsureInterface(ctx, spec); err != nil {
+		t.Fatalf("EnsureInterface: %v", err)
+	}
+	if err := driver.AssignAddress(ctx, iface, "fd00:4242::1/64"); err != nil {
+		t.Fatalf("AssignAddress: %v", err)
+	}
+	if _, err := execCommand(ctx, "ip", "netns", "exec", ns, "ip", "link", "show", "dev", iface); err != nil {
+		t.Fatalf("link not visible in namespace: %v", err)
+	}
+	if _, err := execCommand(ctx, "ip", "netns", "exec", ns, "ip", "addr", "show", "dev", iface); err != nil {
+		t.Fatalf("address not visible in namespace: %v", err)
+	}
+	if err := driver.DeleteInterface(ctx, iface); err != nil {
+		t.Fatalf("DeleteInterface: %v", err)
+	}
+	if _, err := execCommand(ctx, "ip", "netns", "exec", ns, "ip", "link", "show", "dev", iface); err == nil {
+		t.Fatalf("interface %s still exists after DeleteInterface", iface)
 	}
 }
 

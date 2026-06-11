@@ -24,7 +24,32 @@ make ipsec-xfrm-preflight
 如果 preflight 失败，先修宿主机环境。不要让半途失败的 smoke 留下 connection 或
 interface。
 
-## 2. 最小手工 StrongSwan 健康检查
+## 2. 当前自动化 Smoke
+
+显式系统 smoke 入口为：
+
+```sh
+make ipsec-xfrm-smoke
+```
+
+该目标不会进入 `make smoke-all`。它会：
+
+1. 构建 `build/higgs`。
+2. 运行 `docs/scripts/ipsec-xfrm-preflight.sh`；任何 root/CAP、VICI、charon、
+   iproute2 或 XFRM 能力缺失都会在创建资源前失败。
+3. 设置 `HIGGS_IPSEC_XFRM_SMOKE=1`，运行
+   `TestSystemXFRMDriverIntegrationSmoke`。
+4. 创建一个一次性的 named netns、创建 XFRM interface、移动到该 namespace、
+   分配 tunnel address、验证 interface/address 可见，再删除 interface 和 namespace。
+
+失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
+`swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。
+
+当前自动化 smoke 只验证真实 `SystemXFRMDriver` 的 namespace/interface/address
+lifecycle。双 Higgs daemon、signed `ipsec/*` record 发布、VICI IKE_SA/CHILD_SA
+bring-up 和 tunnel ping 仍属于后续完整 smoke。
+
+## 3. 最小手工 StrongSwan 健康检查
 
 在接入 Higgs daemon reconcile 前，先确认宿主机能跑最小 route-based IPsec 链路：
 
@@ -60,7 +85,7 @@ ip netns delete h2-a
 
 这一步用于把 kernel/iproute2 问题和 Higgs 控制面问题分开排查。
 
-## 3. Higgs Provider Apply 检查
+## 4. Higgs Provider Apply 检查
 
 第一个真正面向 Higgs 的检查，是先不接 VICI，只验证 XFRM/netns apply：
 
@@ -75,9 +100,9 @@ ip netns delete h2-a
 执行任何变更前必须先记录 apply plan。失败时 daemon 应把 link 标记为
 `degraded` 或 `error`，记录失败 operation，并且不能继续执行后续步骤。
 
-## 4. 完整双节点 Smoke 形态
+## 5. 完整双节点 Smoke 形态
 
-未来的 `make ipsec-xfrm-smoke` 只应在 preflight 通过后运行：
+完整双节点版本的 `make ipsec-xfrm-smoke` 只应在 preflight 通过后扩展：
 
 1. 创建两个 Higgs 数据目录和两个 named namespace，例如 `h2-a` 和
    `h2-b`.
@@ -99,7 +124,7 @@ ip netns delete h2-a
 `ip xfrm state`、`ip xfrm policy`、`ip route`，以及对应 namespace 内的
 `ip addr`。
 
-## 5. 恢复与撤销
+## 6. 恢复与撤销
 
 happy path 通过后继续覆盖：
 
