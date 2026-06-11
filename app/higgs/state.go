@@ -62,11 +62,33 @@ type linkOwnerState struct {
 }
 
 type ipsecReconcileState struct {
-	LastRunUnix  int64             `json:"last_run_unix,omitempty"`
-	DesiredLinks int               `json:"desired_links,omitempty"`
-	Actions      []linkActionState `json:"actions,omitempty"`
-	Skipped      []linkSkipState   `json:"skipped,omitempty"`
-	LastError    string            `json:"last_error,omitempty"`
+	LastRunUnix  int64              `json:"last_run_unix,omitempty"`
+	DesiredLinks int                `json:"desired_links,omitempty"`
+	Desired      []desiredLinkState `json:"desired,omitempty"`
+	ActualSAs    []linkSAState      `json:"actual_sas,omitempty"`
+	Actions      []linkActionState  `json:"actions,omitempty"`
+	Skipped      []linkSkipState    `json:"skipped,omitempty"`
+	LastError    string             `json:"last_error,omitempty"`
+}
+
+type desiredLinkState struct {
+	InstanceID      string        `json:"instance_id,omitempty"`
+	GroupID         string        `json:"group_id,omitempty"`
+	PeerZone        zone.ZonePath `json:"peer_zone,omitempty"`
+	TransportID     string        `json:"transport_id,omitempty"`
+	DesiredSpecHash string        `json:"desired_spec_hash,omitempty"`
+	InterfaceName   string        `json:"interface_name,omitempty"`
+	XFRMIfID        uint32        `json:"xfrm_if_id,omitempty"`
+	Endpoint        string        `json:"endpoint,omitempty"`
+}
+
+type linkSAState struct {
+	Name        string `json:"name,omitempty"`
+	Peer        string `json:"peer,omitempty"`
+	ChildSA     string `json:"child_sa,omitempty"`
+	XFRMIfID    uint32 `json:"xfrm_if_id,omitempty"`
+	Endpoint    string `json:"endpoint,omitempty"`
+	Established bool   `json:"established,omitempty"`
 }
 
 type linkActionState struct {

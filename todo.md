@@ -472,8 +472,9 @@
     - [x] daemon 已持久化加载/保存 `LinkInstance`，state-change reconcile 会基于已落盘实例重建 desired/current 对比；reconcile 已通过可注入 IPsec driver 查询 `ListSAs` 并可在重启后 adopt 已存在 SA，默认 daemon 仍使用 dry-run driver，真实 StrongSwan/XFRM apply 与 XFRM interface 观测留到 4.3 系统 smoke。
   - [ ] 撤销优先级最高：peer Zone 或父 delegation tombstone 后，不等待普通 reconnect/backoff，立即 teardown link，并阻止 endpoint fallback、rekey 或 reconcile 重建
     - [x] reconcile 输入支持 revoked peer 集合；revocation 命中时即使 desired spec 仍存在也进入 `removing` 并产生 teardown action。
-  - [ ] 暴露 control API/debug 输出：link 列表、desired vs actual、SA 状态、XFRM interface、`if_id`、endpoint、rekey/reconnect 原因、最近错误
+  - [x] 暴露 control API/debug 输出：link 列表、desired vs actual、SA 状态、XFRM interface、`if_id`、endpoint、rekey/reconnect 原因、最近错误
     - [x] `daemon status` control response 增加 link instance 数、desired link 数和最近 reconcile error；新增 `higgs debug links` 输出持久化 link、最近 action/skip、interface、`if_id`、endpoint、owner、failure count、backoff 与最近错误。
+    - [x] daemon reconcile 摘要持久化最近 desired `TransportLinkSpec` 快照和 driver `ListSAs` 观测；`higgs debug links` 会重新按当前 active state + `LinkGroupSpec` 规划 desired links，并与已落盘 `LinkInstance` / 最近 SA 快照并排展示 desired hash、actual hash、CHILD_SA、SA endpoint、backoff 和 apply error，便于排查“应该建什么”和“实际 StrongSwan 看到什么”的差异。
   - [x] 增加 fake driver 单元测试：create/update/delete/revoke/restart recovery；真实 StrongSwan/XFRM smoke 留到 4.3
 
 - [ ] **4.3 最小闭环验证**

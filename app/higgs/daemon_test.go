@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -157,6 +158,26 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != "198.51.100.20" {
 		t.Fatalf("instance = %+v, want up adopted endpoint", inst)
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Desired) != 1 || len(latest.IPsecReconcile.ActualSAs) != 1 {
+		t.Fatalf("ipsec reconcile detail = %+v, want desired and actual sa snapshots", latest.IPsecReconcile)
+	}
+	var out bytes.Buffer
+	if err := writeDebugLinks(&out, rt, latest); err != nil {
+		t.Fatalf("writeDebugLinks: %v", err)
+	}
+	output := out.String()
+	for _, want := range []string{
+		"planned_desired_links: 1",
+		"actual_sas: 1",
+		"desired_hash=",
+		"if_id=",
+		"sa=established",
+		"sa_endpoint=198.51.100.20",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("debug links output missing %q:\n%s", want, output)
+		}
 	}
 	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
 		t.Fatalf("adopt should not apply resources: connections=%d interfaces=%d", len(driver.Connections), len(driver.Interfaces))

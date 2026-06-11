@@ -43,7 +43,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
 				d.Sync.State.LinkInstances = linkInstancesFromIPsec(result.Instances)
-				d.Sync.State.IPsecReconcile = summarizeIPsecReconcile(now.Unix(), len(plan.Desired), result.Actions, plan.Skipped, err.Error())
+				d.Sync.State.IPsecReconcile = summarizeIPsecReconcile(now.Unix(), plan.Desired, sas, result.Actions, plan.Skipped, err.Error())
 				if saveErr := d.Sync.saveState(); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
 				}
@@ -54,7 +54,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		}
 	}
 	d.Sync.State.LinkInstances = linkInstancesFromIPsec(result.Instances)
-	d.Sync.State.IPsecReconcile = summarizeIPsecReconcile(now.Unix(), len(plan.Desired), result.Actions, plan.Skipped, "")
+	d.Sync.State.IPsecReconcile = summarizeIPsecReconcile(now.Unix(), plan.Desired, sas, result.Actions, plan.Skipped, "")
 	if err := d.Sync.saveState(); err != nil {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
@@ -90,11 +90,33 @@ func (d *DaemonService) recordIPsecReconcileError(unix int64, err error) {
 	d.Sync.State.IPsecReconcile = state
 }
 
-func summarizeIPsecReconcile(unix int64, desired int, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) *ipsecReconcileState {
+func summarizeIPsecReconcile(unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) *ipsecReconcileState {
 	state := &ipsecReconcileState{
 		LastRunUnix:  unix,
-		DesiredLinks: desired,
+		DesiredLinks: len(desired),
 		LastError:    lastError,
+	}
+	for _, spec := range desired {
+		state.Desired = append(state.Desired, desiredLinkState{
+			InstanceID:      ipsec.LinkInstanceID(spec),
+			GroupID:         spec.OverlayID,
+			PeerZone:        spec.PeerZone,
+			TransportID:     spec.TransportID,
+			DesiredSpecHash: ipsec.TransportLinkSpecHash(spec),
+			InterfaceName:   spec.InterfaceName,
+			XFRMIfID:        spec.XFRMIfID,
+			Endpoint:        summarizeContactEndpoint(spec.ContactPoints),
+		})
+	}
+	for _, sa := range sas {
+		state.ActualSAs = append(state.ActualSAs, linkSAState{
+			Name:        sa.Name,
+			Peer:        sa.Peer,
+			ChildSA:     sa.ChildSA,
+			XFRMIfID:    sa.XFRMIfID,
+			Endpoint:    sa.Endpoint,
+			Established: sa.Established,
+		})
 	}
 	for _, action := range actions {
 		item := linkActionState{Action: action.Action, Reason: action.Reason}
@@ -119,6 +141,16 @@ func summarizeIPsecReconcile(unix int64, desired int, actions []ipsec.ReconcileA
 		})
 	}
 	return state
+}
+
+func summarizeContactEndpoint(points []ipsec.ContactPoint) string {
+	if len(points) == 0 {
+		return ""
+	}
+	if points[0].Address != "" {
+		return points[0].Address
+	}
+	return points[0].Host
 }
 
 func desiredIPsecLinks(state *stateFile) int {

@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func syncDebugLogger(config *syncConfigFile) func(gossip.Event) {
@@ -110,38 +114,100 @@ func debugLinks() error {
 	if err != nil {
 		return err
 	}
+	return writeDebugLinks(os.Stdout, rt, state)
+}
+
+func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 	reconcile := state.IPsecReconcile
 	if reconcile == nil {
 		reconcile = &ipsecReconcileState{}
 	}
-	fmt.Printf("last_run: %s\n", formatUnixTime(reconcile.LastRunUnix))
-	fmt.Printf("desired_links: %d\n", reconcile.DesiredLinks)
-	fmt.Printf("last_error: %s\n", dash(reconcile.LastError))
+	plannedDesired := map[string]desiredLinkState{}
+	if rt != nil && rt.Config != nil && state != nil && state.Network != nil && !state.ManagedZone.IsRoot() && state.ManagedZone.Valid() && len(rt.Config.IPsec.LinkGroups) > 0 {
+		plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: rt.Now()})
+		if err != nil {
+			fmt.Fprintf(w, "desired_plan_error: %s\n", err)
+		} else {
+			for _, spec := range plan.Desired {
+				item := desiredLinkState{
+					InstanceID:      ipsec.LinkInstanceID(spec),
+					GroupID:         spec.OverlayID,
+					PeerZone:        spec.PeerZone,
+					TransportID:     spec.TransportID,
+					DesiredSpecHash: ipsec.TransportLinkSpecHash(spec),
+					InterfaceName:   spec.InterfaceName,
+					XFRMIfID:        spec.XFRMIfID,
+					Endpoint:        summarizeContactEndpoint(spec.ContactPoints),
+				}
+				plannedDesired[item.InstanceID] = item
+			}
+		}
+	}
+	lastDesired := desiredByInstanceID(reconcile.Desired)
+	actualSAs := saByInstanceID(reconcile.ActualSAs)
+	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(reconcile.LastRunUnix))
+	fmt.Fprintf(w, "desired_links: %d\n", reconcile.DesiredLinks)
+	fmt.Fprintf(w, "planned_desired_links: %d\n", len(plannedDesired))
+	fmt.Fprintf(w, "actual_sas: %d\n", len(reconcile.ActualSAs))
+	fmt.Fprintf(w, "last_error: %s\n", dash(reconcile.LastError))
 	ids := make([]string, 0, len(state.LinkInstances))
 	for id := range state.LinkInstances {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	fmt.Printf("link_instances: %d\n", len(ids))
+	fmt.Fprintf(w, "link_instances: %d\n", len(ids))
 	for _, id := range ids {
 		inst := state.LinkInstances[id]
-		fmt.Printf("- id=%s group=%s peer=%s state=%s if=%s if_id=%d endpoint=%s owner=%s failures=%d backoff=%s error=%s\n",
+		desired := lastDesired[id]
+		if planned, ok := plannedDesired[id]; ok {
+			desired = planned
+		}
+		sa := actualSAs[id]
+		desiredHash := desired.DesiredSpecHash
+		if desiredHash == "" {
+			desiredHash = inst.DesiredSpecHash
+		}
+		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s endpoint=%s sa=%s sa_endpoint=%s owner=%s failures=%d backoff=%s error=%s\n",
 			inst.ID,
 			dash(inst.GroupID),
 			inst.PeerZone,
+			dash(shortHash(desiredHash)),
+			dash(shortHash(inst.DesiredSpecHash)),
 			dash(inst.ActualState),
 			dash(inst.InterfaceName),
 			inst.XFRMIfID,
+			dash(inst.ChildSAName),
 			dash(inst.Endpoint),
+			formatSAState(sa),
+			dash(sa.Endpoint),
 			dash(inst.Owner.Manager),
 			inst.FailureCount,
 			formatUnixTime(inst.BackoffUntil),
 			dash(inst.LastError),
 		)
 	}
-	fmt.Printf("actions: %d\n", len(reconcile.Actions))
+	if len(ids) == 0 && len(plannedDesired) > 0 {
+		plannedIDs := make([]string, 0, len(plannedDesired))
+		for id := range plannedDesired {
+			plannedIDs = append(plannedIDs, id)
+		}
+		sort.Strings(plannedIDs)
+		for _, id := range plannedIDs {
+			desired := plannedDesired[id]
+			fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=- state=missing if=%s if_id=%d child_sa=- endpoint=%s sa=- sa_endpoint=- owner=- failures=0 backoff=- error=-\n",
+				desired.InstanceID,
+				dash(desired.GroupID),
+				desired.PeerZone,
+				dash(shortHash(desired.DesiredSpecHash)),
+				dash(desired.InterfaceName),
+				desired.XFRMIfID,
+				dash(desired.Endpoint),
+			)
+		}
+	}
+	fmt.Fprintf(w, "actions: %d\n", len(reconcile.Actions))
 	for _, action := range reconcile.Actions {
-		fmt.Printf("- action=%s instance=%s group=%s peer=%s reason=%s\n",
+		fmt.Fprintf(w, "- action=%s instance=%s group=%s peer=%s reason=%s\n",
 			action.Action,
 			dash(action.InstanceID),
 			dash(action.GroupID),
@@ -149,9 +215,9 @@ func debugLinks() error {
 			dash(action.Reason),
 		)
 	}
-	fmt.Printf("skipped: %d\n", len(reconcile.Skipped))
+	fmt.Fprintf(w, "skipped: %d\n", len(reconcile.Skipped))
 	for _, skip := range reconcile.Skipped {
-		fmt.Printf("- group=%s peer=%s reason=%s detail=%s\n",
+		fmt.Fprintf(w, "- group=%s peer=%s reason=%s detail=%s\n",
 			dash(skip.GroupID),
 			skip.Peer,
 			dash(skip.Reason),
@@ -159,6 +225,46 @@ func debugLinks() error {
 		)
 	}
 	return nil
+}
+
+func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {
+	out := map[string]desiredLinkState{}
+	for _, item := range items {
+		if item.InstanceID != "" {
+			out[item.InstanceID] = item
+		}
+	}
+	return out
+}
+
+func saByInstanceID(items []linkSAState) map[string]linkSAState {
+	out := map[string]linkSAState{}
+	for _, item := range items {
+		if item.Name != "" {
+			out[item.Name] = item
+		}
+		if item.ChildSA != "" {
+			out[item.ChildSA] = item
+		}
+	}
+	return out
+}
+
+func formatSAState(sa linkSAState) string {
+	if sa.Name == "" && sa.ChildSA == "" {
+		return "-"
+	}
+	if sa.Established {
+		return "established"
+	}
+	return "present"
+}
+
+func shortHash(hash string) string {
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
 }
 
 func printDebugPeerDatagramStats(peerState syncPeerState) {
