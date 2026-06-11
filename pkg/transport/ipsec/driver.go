@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"fmt"
+	"net/netip"
 )
 
 type SAState struct {
@@ -69,7 +70,7 @@ func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
 	plan.add("load_connection", spec.TransportID, string(spec.PeerZone))
 	plan.add("ensure_interface", spec.InterfaceName, fmt.Sprintf("if_id=%d netns=%s", spec.XFRMIfID, spec.NetNS))
 	if spec.LocalTunnelAddr.IsValid() {
-		plan.add("assign_address", spec.InterfaceName, spec.LocalTunnelAddr.String())
+		plan.add("assign_address", spec.InterfaceName, tunnelAddressPrefix(spec.LocalTunnelAddr))
 	}
 	return plan
 }
@@ -100,11 +101,22 @@ func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver,
 		return plan, fmt.Errorf("ensure interface: %w", err)
 	}
 	if spec.LocalTunnelAddr.IsValid() {
-		if err := xfrm.AssignAddress(ctx, spec.InterfaceName, spec.LocalTunnelAddr.String()); err != nil {
+		if err := xfrm.AssignAddress(ctx, spec.InterfaceName, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
 			return plan, fmt.Errorf("assign address: %w", err)
 		}
 	}
 	return plan, nil
+}
+
+func tunnelAddressPrefix(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return ""
+	}
+	bits := 32
+	if addr.Is6() {
+		bits = 128
+	}
+	return netip.PrefixFrom(addr, bits).String()
 }
 
 func TeardownTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, spec TransportLinkSpec) (ApplyPlan, error) {

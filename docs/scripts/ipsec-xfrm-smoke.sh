@@ -24,4 +24,10 @@ HIGGS_IPSEC_XFRM_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/transport/ipsec -run '^TestSystemXFRMDriver(IntegrationSmoke|PeerTunnelPingSmoke)$' -count=1
 
-printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver namespace/interface/address lifecycle + peer tunnel ping)\n'
+HIGGS_IPSEC_XFRM_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./app/higgs -run '^TestDaemonReconcileUsesSystemXFRMDriverSmoke$' -count=1
+
+printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + daemon reconcile system apply)\n'

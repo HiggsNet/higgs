@@ -584,7 +584,7 @@ func TestApplyTransportLinkRecordsAuditablePlanAndOrder(t *testing.T) {
 	if len(driver.Namespaces) != 1 || len(driver.Connections) != 1 || len(driver.Interfaces) != 1 || len(driver.Addresses) != 1 {
 		t.Fatalf("driver = %+v", driver)
 	}
-	if driver.Addresses[0] != "hgs1=fd00:1234::1" {
+	if driver.Addresses[0] != "hgs1=fd00:1234::1/128" {
 		t.Fatalf("address assignment = %+v", driver.Addresses)
 	}
 }

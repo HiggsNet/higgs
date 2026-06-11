@@ -102,12 +102,15 @@ make ipsec-xfrm-container-smoke
 2. 运行 `docs/scripts/ipsec-xfrm-preflight.sh`；任何 root/CAP、VICI、charon、
    iproute2 或 XFRM 能力缺失都会在创建资源前失败。
 3. 设置 `HIGGS_IPSEC_XFRM_SMOKE=1`，运行
-   `TestSystemXFRMDriverIntegrationSmoke` 和
-   `TestSystemXFRMDriverPeerTunnelPingSmoke`。
+   `TestSystemXFRMDriverIntegrationSmoke`、
+   `TestSystemXFRMDriverPeerTunnelPingSmoke` 和
+   `TestDaemonReconcileUsesSystemXFRMDriverSmoke`。
 4. 创建一个一次性的 named netns、直接在该 namespace 内创建 XFRM interface、
    分配 tunnel address、验证 interface/address 可见，再删除 interface 和 namespace。
 5. 创建两个一次性的 named netns、veth underlay、两端 XFRM interface、手工 XFRM
    state/policy 和 tunnel route，验证 A/B tunnel IP 能互相 `ping`。
+6. 通过 Higgs daemon reconcile 路径创建一次性的 named netns 内 XFRM interface，
+   分配 tunnel host prefix，并在 link group 删除后由 daemon teardown 清理 interface。
 
 失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
 `swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。
@@ -115,7 +118,8 @@ make ipsec-xfrm-container-smoke
 当前自动化 smoke 已验证真实 `SystemXFRMDriver` 的 namespace/interface/address
 lifecycle，其中 XFRM interface 会在目标 named netns 内创建，避免依赖宿主创建后
 move 到 netns 的额外权限路径；同时 smoke 验证了手工 XFRM state/policy 下的双
-namespace tunnel ping。双 Higgs daemon、signed `ipsec/*` record 发布、VICI
+namespace tunnel ping，并验证 daemon reconcile 能驱动真实 XFRM provider 创建和
+清理 interface/address。双 Higgs daemon、signed `ipsec/*` record 发布、VICI
 IKE_SA/CHILD_SA bring-up 仍属于后续完整 smoke。
 
 ## 3. 最小手工 StrongSwan 健康检查
@@ -188,7 +192,8 @@ ip netns delete h2-a
    `TransportLinkSpec`；不应需要为每个 peer 手写 link。
 6. StrongSwan provider 通过 VICI 加载 connection 和 secret。`swanctl` 只作为人工
    debug / 交叉检查工具。
-7. XFRM provider 在目标 named namespace 内创建 interface，并分配 tunnel address。
+7. XFRM provider 在目标 named namespace 内创建 interface，并分配 tunnel host
+   prefix；当前 daemon system smoke 已覆盖这条 apply/teardown 路径。
 8. 断言 `LinkInstance` 进入 `up`。
 9. 断言 VICI 和 `swanctl --list-sas` 能看到匹配的 IKE_SA/CHILD_SA identity、
    child name、reqid/if_id 和 endpoint。

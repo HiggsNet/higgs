@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -102,6 +103,81 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 	if len(reloaded.IPsecReconcile.Actions) != 1 || reloaded.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionNoop {
 		t.Fatalf("second actions = %+v, want noop", reloaded.IPsecReconcile.Actions)
+	}
+}
+
+func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system XFRM smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4060, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+
+	ns := "higgs-daemon-xfrm-" + time.Now().UTC().Format("20060102150405")
+	group := testIPsecLinkGroup()
+	group.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: ns, Create: true}
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", ns)
+	})
+
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = &observedIPsecDriver{}
+	service.XFRMDriver = ipsec.NewSystemXFRMDriver(group.NetNS)
+	service.flushIPsecReconcile(ctx)
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastError != "" {
+		t.Fatalf("ipsec reconcile = %+v, want successful system xfrm apply", latest.IPsecReconcile)
+	}
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("link instances = %+v, want one system-applied link", latest.LinkInstances)
+	}
+	var inst linkInstanceState
+	for _, item := range latest.LinkInstances {
+		inst = item
+	}
+	if inst.ActualState != ipsec.LinkStateConnecting {
+		t.Fatalf("instance state = %+v, want connecting after provider apply", inst)
+	}
+	if _, err := appExecCommand(ctx, "ip", "netns", "exec", ns, "ip", "link", "show", "dev", inst.InterfaceName); err != nil {
+		t.Fatalf("daemon-created xfrm interface %s not visible in %s: %v", inst.InterfaceName, ns, err)
+	}
+	if _, err := appExecCommand(ctx, "ip", "netns", "exec", ns, "ip", "addr", "show", "dev", inst.InterfaceName); err != nil {
+		t.Fatalf("daemon-assigned tunnel address not visible on %s/%s: %v", ns, inst.InterfaceName, err)
+	}
+
+	service.setState(latest)
+	service.Sync.App.Config.IPsec.LinkGroups = nil
+	service.flushIPsecReconcile(ctx)
+	removed, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(after teardown): %v", err)
+	}
+	if removed.IPsecReconcile == nil || removed.IPsecReconcile.LastError != "" {
+		t.Fatalf("teardown reconcile = %+v, want successful system xfrm teardown", removed.IPsecReconcile)
+	}
+	if len(removed.LinkInstances) != 0 {
+		t.Fatalf("link instances after teardown = %+v, want none", removed.LinkInstances)
+	}
+	if _, err := appExecCommand(ctx, "ip", "netns", "exec", ns, "ip", "link", "show", "dev", inst.InterfaceName); err == nil {
+		t.Fatalf("daemon-created xfrm interface %s still exists after teardown", inst.InterfaceName)
 	}
 }
 
@@ -805,7 +881,7 @@ func assertDryRunApply(t *testing.T, driver *observedIPsecDriver, spec ipsec.Tra
 	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName || driver.Interfaces[0].XFRMIfID != spec.XFRMIfID {
 		t.Fatalf("interfaces = %+v, want %s/%d", driver.Interfaces, spec.InterfaceName, spec.XFRMIfID)
 	}
-	wantAddr := spec.InterfaceName + "=" + spec.LocalTunnelAddr.String()
+	wantAddr := spec.InterfaceName + "=" + netip.PrefixFrom(spec.LocalTunnelAddr, 32).String()
 	if len(driver.Addresses) != 1 || driver.Addresses[0] != wantAddr {
 		t.Fatalf("addresses = %+v, want %s", driver.Addresses, wantAddr)
 	}
@@ -874,6 +950,10 @@ func hasDebugSkip(skips []linkSkipState, peer zone.ZonePath, reason string) bool
 		}
 	}
 	return false
+}
+
+func appExecCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
