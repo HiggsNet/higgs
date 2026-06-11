@@ -91,6 +91,73 @@ func debugPeer(peerID string) error {
 	return nil
 }
 
+func debugLinks() error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	if response, ok, err := daemonStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d last_link_error=%s\n",
+			response.PeerID,
+			response.LinkInstances,
+			response.DesiredLinks,
+			dash(response.LastLinkError),
+		)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	reconcile := state.IPsecReconcile
+	if reconcile == nil {
+		reconcile = &ipsecReconcileState{}
+	}
+	fmt.Printf("last_run: %s\n", formatUnixTime(reconcile.LastRunUnix))
+	fmt.Printf("desired_links: %d\n", reconcile.DesiredLinks)
+	fmt.Printf("last_error: %s\n", dash(reconcile.LastError))
+	ids := make([]string, 0, len(state.LinkInstances))
+	for id := range state.LinkInstances {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	fmt.Printf("link_instances: %d\n", len(ids))
+	for _, id := range ids {
+		inst := state.LinkInstances[id]
+		fmt.Printf("- id=%s group=%s peer=%s state=%s if=%s if_id=%d endpoint=%s owner=%s\n",
+			inst.ID,
+			dash(inst.GroupID),
+			inst.PeerZone,
+			dash(inst.ActualState),
+			dash(inst.InterfaceName),
+			inst.XFRMIfID,
+			dash(inst.Endpoint),
+			dash(inst.Owner.Manager),
+		)
+	}
+	fmt.Printf("actions: %d\n", len(reconcile.Actions))
+	for _, action := range reconcile.Actions {
+		fmt.Printf("- action=%s instance=%s group=%s peer=%s reason=%s\n",
+			action.Action,
+			dash(action.InstanceID),
+			dash(action.GroupID),
+			action.PeerZone,
+			dash(action.Reason),
+		)
+	}
+	fmt.Printf("skipped: %d\n", len(reconcile.Skipped))
+	for _, skip := range reconcile.Skipped {
+		fmt.Printf("- group=%s peer=%s reason=%s detail=%s\n",
+			dash(skip.GroupID),
+			skip.Peer,
+			dash(skip.Reason),
+			dash(skip.Detail),
+		)
+	}
+	return nil
+}
+
 func printDebugPeerDatagramStats(peerState syncPeerState) {
 	stats := peerState.DatagramStats
 	if stats == nil {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
@@ -39,6 +40,65 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 	service.notifyStateChanged()
 	if !called {
 		t.Fatal("state changed hook was not called")
+	}
+}
+
+func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4000, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:                 "main",
+		Provider:           ipsec.ProviderStrongSwan,
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+		Direction:          ipsec.DirectionOutbound,
+		AddressSourceOrder: []string{ipsec.SourceManualAddress},
+		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	service.notifyStateChanged()
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
+	}
+	if latest.IPsecReconcile == nil || latest.IPsecReconcile.DesiredLinks != 1 {
+		t.Fatalf("ipsec reconcile = %+v, want one desired link", latest.IPsecReconcile)
+	}
+	if len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("actions = %+v, want create", latest.IPsecReconcile.Actions)
+	}
+	for _, inst := range latest.LinkInstances {
+		if inst.Owner.Manager != "higgs" || inst.ActualState != ipsec.LinkStateConfiguring {
+			t.Fatalf("instance = %+v, want higgs configuring", inst)
+		}
+	}
+
+	service.setState(latest)
+	service.notifyStateChanged()
+	reloaded, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(second): %v", err)
+	}
+	if len(reloaded.LinkInstances) != 1 {
+		t.Fatalf("second link instances len = %d, want 1", len(reloaded.LinkInstances))
+	}
+	if len(reloaded.IPsecReconcile.Actions) != 1 || reloaded.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionNoop {
+		t.Fatalf("second actions = %+v, want noop", reloaded.IPsecReconcile.Actions)
 	}
 }
 
@@ -146,6 +206,71 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 	}
 	if history := latest.Network.Zones["node-b.catofes."].RecordHistory["identity"]; len(history) != writes-1 {
 		t.Fatalf("history length = %d, want %d", len(history), writes-1)
+	}
+}
+
+func addTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, now time.Time) {
+	t.Helper()
+	if zs == nil {
+		t.Fatalf("missing zone state for %s", peer)
+	}
+	fingerprint := "fp-" + string(peer)
+	zs.Records[ipsec.RecordKeyProfile] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyProfile, ipsec.RecordTypeProfile, ipsec.ProfileRecord{
+		Version:                 1,
+		Enabled:                 true,
+		Provider:                ipsec.ProviderStrongSwan,
+		IKEIdentity:             string(peer),
+		TransportKeyFingerprint: fingerprint,
+		Accept:                  ipsec.AcceptInbound,
+		AddressFamilies:         []string{ipsec.FamilyIPv4},
+		PathModes:               []string{ipsec.PathModeFamilyRedundant},
+		UpdatedAt:               now.Unix(),
+	})
+	zs.Records[ipsec.RecordKeyAddresses] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, ipsec.AddressRecord{
+		Version: 1,
+		Addresses: []ipsec.AddressAdvertisement{{
+			ID:           "public-v4",
+			Source:       ipsec.SourceManualAddress,
+			Address:      "203.0.113.10",
+			Family:       ipsec.FamilyIPv4,
+			Reachability: ipsec.ReachabilityPublic,
+		}},
+		UpdatedAt: now.Unix(),
+	})
+	zs.Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
+		Version: 1,
+		Mode:    ipsec.PortModeFixed,
+		Current: &ipsec.PortSelection{
+			Generation: 1,
+			IKE:        ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort},
+			NATT:       ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		UpdatedAt: now.Unix(),
+	})
+	zs.Records[ipsec.RecordKeyTransportKey] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyTransportKey, ipsec.RecordTypeTransportKey, ipsec.TransportKeyRecord{
+		Version:     1,
+		Kind:        ipsec.TransportKeyRawPublicKey,
+		Algorithm:   ipsec.AlgorithmEd25519,
+		PublicKey:   "base64",
+		Fingerprint: fingerprint,
+		UpdatedAt:   now.Unix(),
+	})
+}
+
+func unsignedIPsecRecord(t *testing.T, peer zone.ZonePath, key, recordType string, value any) *zone.Record {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal(%s): %v", key, err)
+	}
+	return &zone.Record{
+		Zone:      peer,
+		Key:       key,
+		Type:      recordType,
+		Value:     data,
+		Version:   1,
+		Timestamp: time.Unix(4000, 0).Unix(),
 	}
 }
 

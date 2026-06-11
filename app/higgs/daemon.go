@@ -252,9 +252,12 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	switch request.Method {
 	case "status":
 		writeControlResponse(conn, controlResponse{
-			OK:      true,
-			PeerID:  d.Sync.Config.PeerID,
-			Message: "daemon online",
+			OK:            true,
+			PeerID:        d.Sync.Config.PeerID,
+			LinkInstances: len(d.Sync.State.LinkInstances),
+			DesiredLinks:  desiredIPsecLinks(d.Sync.State),
+			LastLinkError: lastIPsecReconcileError(d.Sync.State),
+			Message:       "daemon online",
 		})
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
@@ -617,6 +620,9 @@ func (d *DaemonService) setState(state *stateFile) {
 func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
 		d.Hooks.OnStateChanged(d.Sync.State)
+	}
+	if err := d.reconcileIPsecLinks(context.Background()); err != nil {
+		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
 	}
 }
 

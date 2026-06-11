@@ -20,13 +20,65 @@ type stateFile struct {
 	ZonePrivateKey ed25519.PrivateKey `json:"zone_private_key"`
 	Network        *zone.NetworkState `json:"network"`
 	SyncPeers      map[string]syncPeerState
+	LinkInstances  map[string]linkInstanceState
+	IPsecReconcile *ipsecReconcileState
 }
 
 type stateMeta struct {
-	ManagedZone    zone.ZonePath            `json:"managed_zone"`
-	RootPrivateKey ed25519.PrivateKey       `json:"root_private_key"`
-	ZonePrivateKey ed25519.PrivateKey       `json:"zone_private_key"`
-	SyncPeers      map[string]syncPeerState `json:"sync_peers,omitempty"`
+	ManagedZone    zone.ZonePath                `json:"managed_zone"`
+	RootPrivateKey ed25519.PrivateKey           `json:"root_private_key"`
+	ZonePrivateKey ed25519.PrivateKey           `json:"zone_private_key"`
+	SyncPeers      map[string]syncPeerState     `json:"sync_peers,omitempty"`
+	LinkInstances  map[string]linkInstanceState `json:"link_instances,omitempty"`
+	IPsecReconcile *ipsecReconcileState         `json:"ipsec_reconcile,omitempty"`
+}
+
+type linkInstanceState struct {
+	ID              string         `json:"id"`
+	GroupID         string         `json:"group_id,omitempty"`
+	PeerZone        zone.ZonePath  `json:"peer_zone"`
+	TransportKind   string         `json:"transport_kind,omitempty"`
+	TransportID     string         `json:"transport_id,omitempty"`
+	DesiredSpecHash string         `json:"desired_spec_hash,omitempty"`
+	ActualState     string         `json:"actual_state,omitempty"`
+	InterfaceName   string         `json:"interface_name,omitempty"`
+	XFRMIfID        uint32         `json:"xfrm_if_id,omitempty"`
+	IKEName         string         `json:"ike_name,omitempty"`
+	ChildSAName     string         `json:"child_sa_name,omitempty"`
+	Endpoint        string         `json:"endpoint,omitempty"`
+	LastError       string         `json:"last_error,omitempty"`
+	LastTransition  int64          `json:"last_transition,omitempty"`
+	Owner           linkOwnerState `json:"owner,omitempty"`
+}
+
+type linkOwnerState struct {
+	Manager     string `json:"manager,omitempty"`
+	GroupID     string `json:"group_id,omitempty"`
+	InstanceID  string `json:"instance_id,omitempty"`
+	TransportID string `json:"transport_id,omitempty"`
+}
+
+type ipsecReconcileState struct {
+	LastRunUnix  int64             `json:"last_run_unix,omitempty"`
+	DesiredLinks int               `json:"desired_links,omitempty"`
+	Actions      []linkActionState `json:"actions,omitempty"`
+	Skipped      []linkSkipState   `json:"skipped,omitempty"`
+	LastError    string            `json:"last_error,omitempty"`
+}
+
+type linkActionState struct {
+	Action     string        `json:"action"`
+	InstanceID string        `json:"instance_id,omitempty"`
+	GroupID    string        `json:"group_id,omitempty"`
+	PeerZone   zone.ZonePath `json:"peer_zone,omitempty"`
+	Reason     string        `json:"reason,omitempty"`
+}
+
+type linkSkipState struct {
+	GroupID string        `json:"group_id,omitempty"`
+	Peer    zone.ZonePath `json:"peer,omitempty"`
+	Reason  string        `json:"reason,omitempty"`
+	Detail  string        `json:"detail,omitempty"`
 }
 
 type syncPeerState struct {
@@ -189,6 +241,8 @@ func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
 		ZonePrivateKey: meta.ZonePrivateKey,
 		Network:        ns,
 		SyncPeers:      meta.SyncPeers,
+		LinkInstances:  meta.LinkInstances,
+		IPsecReconcile: meta.IPsecReconcile,
 	}
 	if state.Network == nil || len(state.Network.Zones) == 0 {
 		return nil, errors.New("state file has no network")
@@ -221,6 +275,8 @@ func saveStateAt(path string, state *stateFile) error {
 		RootPrivateKey: state.RootPrivateKey,
 		ZonePrivateKey: state.ZonePrivateKey,
 		SyncPeers:      state.SyncPeers,
+		LinkInstances:  state.LinkInstances,
+		IPsecReconcile: state.IPsecReconcile,
 	}
 	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
 		return err

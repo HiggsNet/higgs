@@ -33,6 +33,9 @@ type controlResponse struct {
 	OK            bool              `json:"ok"`
 	Error         string            `json:"error,omitempty"`
 	PeerID        string            `json:"peer_id,omitempty"`
+	LinkInstances int               `json:"link_instances,omitempty"`
+	DesiredLinks  int               `json:"desired_links,omitempty"`
+	LastLinkError string            `json:"last_link_error,omitempty"`
 	Version       uint64            `json:"version,omitempty"`
 	Message       string            `json:"message,omitempty"`
 	Zone          zone.ZonePath     `json:"zone,omitempty"`

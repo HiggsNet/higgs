@@ -333,6 +333,13 @@ func cmdDebug() *cli.Command {
 					return debugEndpoints()
 				},
 			},
+			{
+				Name:  "links",
+				Usage: "Show IPsec link instances and reconcile state",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugLinks()
+				},
+			},
 		},
 	}
 }
