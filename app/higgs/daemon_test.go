@@ -139,7 +139,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	service := newDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = &observedIPsecDriver{}
 	service.XFRMDriver = ipsec.NewSystemXFRMDriver(group.NetNS)
-	service.flushIPsecReconcile(ctx)
+	service.recoverIPsecLinksOnStart(ctx)
 
 	latest, err := rt.LoadState()
 	if err != nil {
@@ -167,7 +167,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 
 	service.setState(latest)
 	service.Sync.App.Config.IPsec.LinkGroups = nil
-	service.flushIPsecReconcile(ctx)
+	service.recoverIPsecLinksOnStart(ctx)
 	removed, err := rt.LoadState()
 	if err != nil {
 		t.Fatalf("LoadState(after teardown): %v", err)
