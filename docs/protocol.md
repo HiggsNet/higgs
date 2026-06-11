@@ -563,7 +563,54 @@ LinkPlanner 输入：
 
 provider apply 的第一版可审计边界已经固定在 `ApplyTransportLink` / `ApplyPlan`：先确保目标 namespace，再加载 StrongSwan connection，然后确保 XFRM interface，最后分配本地 tunnel address。dry-run driver 记录同一顺序，使非 root 环境也能验证 desired config 推导和错误路径；真实 VICI/netlink provider 应保持同一操作顺序和 plan 输出。
 
-当前实现的 planner/reconcile 核心在 `pkg/transport/ipsec`：`PlanTransportLinks` 从 verified active state 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，接入 zone glob/exact connect/deny rule，并返回结构化 skip reason；`role` / `tag` selector 已解析但在本地 peer label 来源接入前不会匹配。配置了 `overlays:` / link group 的 daemon 会自动发布本节点 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records；transport key 独立于 Zone signing key，并持久化在本地 state meta 中，避免重启或重复发布导致 fingerprint 与 profile version 抖动。`LinkInstance` 持久化 desired spec hash、实际状态、XFRM if_id、IKE/CHILD_SA 名称、endpoint、Higgs owner、failure count、backoff_until 与 last_error；`ReconcileLinkInstances` 根据 desired spec、持久化 instance、driver SA 观测和 revocation 输入产生 create/update/adopt/repair/teardown/noop action。daemon state-change hook 已接入 driver `ListSAs` 观测、dry-run apply 和实例持久化；daemon 启动进入主循环前也会先跑一次 IPsec reconcile，从当前 active state、本地 `LinkGroupSpec`、持久化 `LinkInstance` 和 driver SA 快照恢复 link state；daemon drain event 队列时会合并多次 state change，让同一轮 record/admin/remote apply 或 config reload 只触发一次 IPsec `ListSAs` + reconcile/apply。`reload` control event 会重新读取本地 `config.yaml`，刷新 `overlays:`、`connect/deny`、`overlay.default_netns`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。reconcile 摘要会保存最近 desired spec 快照和 SA 快照，`higgs debug links` 再用当前 active state + `LinkGroupSpec` 重算 desired links，与已落盘 instance、上次 SA/CHILD_SA、endpoint、spec hash、backoff 和 error 并排展示。SA 快照会保留 VICI `list-sas` 中的 local/remote identity、local/remote endpoint、CHILD_SA name、reqid 和 XFRM if_id，供后续系统 smoke 与 `swanctl --list-sas` 做字段级交叉检查。apply 失败会先落盘 backoff 状态，backoff 未到期时返回 `noop/apply backoff active`，到期后 error/degraded link 重新进入 repair。create/update/repair apply 成功后本地实例进入 `connecting`，表示 provider 配置已经应用但还未观测到 SA；后续 driver `ListSAs` 看到匹配 connection/CHILD_SA 后才进入 `up`。teardown 成功会从本地持久化状态移除对应 `LinkInstance`，因此 link group 删除、record 过期或 peer revocation 不会留下 `removing` 实例并在后续轮次重复 teardown。默认 daemon 仍使用 dry-run driver，真实 StrongSwan/XFRM 系统 apply、XFRM interface 实际状态观测和系统 smoke 仍在后续接入。
+当前 `pkg/transport/ipsec` 的 planner/reconcile 主线可以按“公告 -> 规划 -> 对账 -> 应用 -> 观测”理解：
+
+```mermaid
+flowchart TD
+    A[verified active state] --> P[PlanTransportLinks]
+    B[local LinkGroupSpec] --> P
+    C[connect / deny policy] --> P
+    P --> D[desired TransportLinkSpec]
+    P --> S[structured skip reason]
+
+    D --> R[ReconcileLinkInstances]
+    E[persisted LinkInstance] --> R
+    F[driver ListSAs snapshot] --> R
+    G[revocation / record expiry / group deletion] --> R
+
+    R --> H{action}
+    H -->|create / update / repair| I[ApplyReconcileAction]
+    H -->|adopt| U[LinkInstance = up]
+    H -->|teardown| T[remove Higgs-owned resources]
+    H -->|noop| N[keep current state]
+
+    I --> K{apply result}
+    K -->|success| C1[LinkInstance = connecting]
+    K -->|failure| B1[persist backoff + last_error]
+    F --> O{matching SA observed?}
+    O -->|yes| U
+    O -->|no| C1
+
+    C1 --> M[state meta]
+    B1 --> M
+    U --> M
+    T --> M
+    M --> Z[higgs debug links]
+```
+
+规划层只负责回答“应该尝试建哪些 link”。`PlanTransportLinks` 从 verified active state 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并应用 zone exact/glob connect/deny rule。缺少 `ipsec/*` record、profile disabled、policy 不匹配、accept/direction 不允许、地址族或 path mode 不支持、没有可拨 ContactPoint、NAT 后缺少公网证据等情况都会变成结构化 skip reason。`role` / `tag` selector 已完成解析，但在本地 peer label 来源接入前不会匹配。
+
+公告层由配置了 `overlays:` / link group 的 daemon 自动完成。本节点会发布 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records。transport key 独立于 Zone signing key，并持久化在本地 state meta 中，避免 daemon 重启或重复发布时造成 fingerprint / profile version 抖动。
+
+持久化层用 `LinkInstance` 记录本机已经知道的 link 实例：desired spec hash、实际状态、XFRM if_id、IKE/CHILD_SA 名称、endpoint、Higgs owner、failure count、backoff_until 和 last_error。`ReconcileLinkInstances` 再把 desired spec、持久化 instance、driver `ListSAs` 观测和 revocation 输入放在一起，产生 `create`、`update`、`adopt`、`repair`、`teardown` 或 `noop` action。
+
+daemon 已经把这条链路接入 state-change hook。启动进入主循环前，daemon 会先用当前 active state、本地 `LinkGroupSpec`、持久化 `LinkInstance` 和 driver SA 快照跑一次 reconcile，恢复 link state；事件队列 drain 时会合并多次 state change，让同一轮 record/admin/remote apply 或 config reload 只触发一次 IPsec `ListSAs` + reconcile/apply。`reload` 会重新读取本地 `config.yaml`，刷新 `overlays:`、`connect/deny`、`overlay.default_netns`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。
+
+状态语义上，create/update/repair apply 成功后实例进入 `connecting`，表示 provider 配置已经应用，但还没有观测到 IKE_SA/CHILD_SA；后续 driver `ListSAs` 看到匹配 connection/CHILD_SA 后才进入 `up`。apply 失败会先落盘 backoff 状态，backoff 未到期时返回 `noop/apply backoff active`，到期后 error/degraded link 再进入 repair。teardown 成功会从本地持久化状态移除对应 `LinkInstance`，因此 link group 删除、record 过期或 peer revocation 不会留下 `removing` 实例在后续轮次反复 teardown。
+
+观测层由 reconcile 摘要和 `higgs debug links` 提供。reconcile 摘要保存最近 desired spec 快照和 SA 快照；`higgs debug links` 会用当前 active state + `LinkGroupSpec` 重算 desired links，并和已落盘 instance、上次 SA/CHILD_SA、endpoint、spec hash、backoff、last error 并排展示。SA 快照保留 VICI `list-sas` 中的 local/remote identity、local/remote endpoint、CHILD_SA name、reqid 和 XFRM if_id，供后续系统 smoke 与 `swanctl --list-sas` 做字段级交叉检查。
+
+当前默认 daemon 仍使用 dry-run driver。真实 StrongSwan/VICI apply、XFRM interface 实际状态观测，以及完整双 daemon + IKE/CHILD_SA + tunnel ping 系统 smoke 仍在后续接入。
 
 `ResourceOwner` 当前包含 `manager`、`group_id`、`instance_id`、`transport_id` 和派生 `token`。当 persisted instance 不再出现在 desired set 中时，reconcile 会先验证 owner；无法证明属于 Higgs 的实例会保留为 noop，并在 reason 中说明 retained unmanaged resource。`ApplyReconcileAction` 对 instance-only teardown 再执行同样校验，因此 revocation/restart recovery 只能自动删除可追溯到 `LinkGroupSpec` + `LinkInstance` 的资源。
 
