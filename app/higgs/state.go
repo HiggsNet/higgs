@@ -130,9 +130,15 @@ type syncPeerState struct {
 	ObservedUntilUnix     int64                          `json:"observed_until_unix,omitempty"`
 	ObservedSource        string                         `json:"observed_source,omitempty"`
 	ObservedFailureCount  int                            `json:"observed_failure_count,omitempty"`
+	ObservedGraceAddrs    []observedGraceAddrState       `json:"observed_grace_addrs,omitempty"`
 	DatagramStats         *datagramStats                 `json:"datagram_stats,omitempty"`
 	ObjectPullStats       *objectPullStats               `json:"object_pull_stats,omitempty"`
 	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
+}
+
+type observedGraceAddrState struct {
+	Addr      string `json:"addr,omitempty"`
+	UntilUnix int64  `json:"until_unix,omitempty"`
 }
 
 type datagramStats struct {

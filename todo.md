@@ -303,7 +303,7 @@
   - [x] 将 `Transport.lastSeenAddrs` 从“无 outbound 地址时的临时 fallback”提升为带状态的 path table：peer_id、remote UDP addr、first_seen、last_seen、last_success、ttl、失败次数、来源消息类型、验证状态
   - [x] daemon 周期性对 observed path 做轻量 keepalive / PING，维持 NAT 映射；成功时提升优先级，失败/backoff 后降级或过期移除
   - [x] `Send(peerID)` 地址选择顺序改为：static/bootstrap 或 signed direct endpoint 优先；当 direct endpoint 失败或 peer 标记为 NAT/outbound-only 时，优先使用仍有效的 verified observed path
-  - [ ] 收到同一 peer 的新源地址时允许迁移 path，但保留旧 path grace period，避免 NAT 重绑定或公网 IP 切换期间立即失联
+  - [x] 收到同一 peer 的新源地址时允许迁移 path，但保留旧 path grace period，避免 NAT 重绑定或公网 IP 切换期间立即失联
 
 - [x] **3.5.3 协议与诊断**
   - [x] 在 peer debug/status 中显示 `observed_addr`、path 状态、TTL、last_seen、last_success、失败原因、是否用于当前 outbound

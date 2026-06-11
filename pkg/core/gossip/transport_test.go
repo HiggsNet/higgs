@@ -88,6 +88,18 @@ func TestObservedPeerAddrExpiresAndIsRemovedWithPeer(t *testing.T) {
 	if got := transport.ObservedPeerAddr("peer-a"); got == nil || got.String() != "127.0.0.1:1234" {
 		t.Fatalf("ObservedPeerAddr = %v, want 127.0.0.1:1234", got)
 	}
+	transport.SetObservedPeerPaths("peer-a", []ObservedPath{
+		{Addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, Until: now.Add(time.Minute)},
+		{Addr: addr, Until: now.Add(30 * time.Second)},
+	}, true)
+	if got := transport.ObservedPeerAddrs("peer-a"); len(got) != 2 || got[0].String() != "127.0.0.1:2000" || got[1].String() != "127.0.0.1:1234" {
+		t.Fatalf("ObservedPeerAddrs = %v, want primary plus grace", got)
+	}
+
+	now = now.Add(45 * time.Second)
+	if got := transport.ObservedPeerAddrs("peer-a"); len(got) != 1 || got[0].String() != "127.0.0.1:2000" {
+		t.Fatalf("ObservedPeerAddrs after grace expiry = %v, want only primary", got)
+	}
 
 	now = now.Add(2 * time.Minute)
 	if got := transport.ObservedPeerAddr("peer-a"); got != nil {

@@ -69,9 +69,14 @@ type Event struct {
 }
 
 type observedPath struct {
-	Addr        *net.UDPAddr
-	Until       time.Time
+	Paths       []ObservedPath
 	PreferFirst bool
+}
+
+// ObservedPath is a verified short-lived inbound UDP path for a peer.
+type ObservedPath struct {
+	Addr  *net.UDPAddr
+	Until time.Time
 }
 
 func Listen(config Config) (*Transport, error) {
@@ -160,11 +165,15 @@ func (t *Transport) Send(peerID string, message *Message) error {
 	t.outboundMu.RUnlock()
 
 	t.observedMu.RLock()
-	if observed := t.observedPaths[peerID]; observed.Addr != nil && (observed.Until.IsZero() || t.now().Before(observed.Until)) {
+	if observed := t.activeObservedPath(peerID); len(observed.Paths) > 0 {
+		observedAddrs := make([]*net.UDPAddr, 0, len(observed.Paths))
+		for _, path := range observed.Paths {
+			observedAddrs = append(observedAddrs, path.Addr)
+		}
 		if observed.PreferFirst {
-			addrs = appendUDPAddrCopies([]*net.UDPAddr{observed.Addr}, addrs...)
+			addrs = appendUDPAddrCopies(observedAddrs, addrs...)
 		} else {
-			addrs = appendUDPAddrCopies(addrs, observed.Addr)
+			addrs = appendUDPAddrCopies(addrs, observedAddrs...)
 		}
 	}
 	t.observedMu.RUnlock()
@@ -395,15 +404,33 @@ func (t *Transport) PeerAddr(peerID string) *net.UDPAddr {
 // peer. It does not change the inbound allowlist and is intended for NAT
 // mappings observed after upper-layer verification.
 func (t *Transport) SetObservedPeerAddr(peerID string, addr *net.UDPAddr, until time.Time, preferFirst bool) {
-	if t == nil || peerID == "" || addr == nil {
+	t.SetObservedPeerPaths(peerID, []ObservedPath{{Addr: addr, Until: until}}, preferFirst)
+}
+
+// SetObservedPeerPaths stores verified short-lived inbound UDP paths for a
+// peer. The first path is preferred; later paths are grace fallbacks retained
+// across NAT rebinding or public-address changes.
+func (t *Transport) SetObservedPeerPaths(peerID string, paths []ObservedPath, preferFirst bool) {
+	if t == nil || peerID == "" {
 		return
 	}
-	copied := *addr
+	filtered := make([]ObservedPath, 0, len(paths))
+	now := t.now()
+	for _, path := range paths {
+		if path.Addr == nil || (!path.Until.IsZero() && !now.Before(path.Until)) {
+			continue
+		}
+		copied := *path.Addr
+		filtered = append(filtered, ObservedPath{Addr: &copied, Until: path.Until})
+	}
+	if len(filtered) == 0 {
+		return
+	}
 	t.observedMu.Lock()
 	if t.observedPaths == nil {
 		t.observedPaths = make(map[string]observedPath)
 	}
-	t.observedPaths[peerID] = observedPath{Addr: &copied, Until: until, PreferFirst: preferFirst}
+	t.observedPaths[peerID] = observedPath{Paths: filtered, PreferFirst: preferFirst}
 	t.observedMu.Unlock()
 }
 
@@ -422,12 +449,44 @@ func (t *Transport) ObservedPeerAddr(peerID string) *net.UDPAddr {
 	}
 	t.observedMu.RLock()
 	defer t.observedMu.RUnlock()
-	observed := t.observedPaths[peerID]
-	if observed.Addr == nil || (!observed.Until.IsZero() && !t.now().Before(observed.Until)) {
+	observed := t.activeObservedPath(peerID)
+	if len(observed.Paths) == 0 || observed.Paths[0].Addr == nil {
 		return nil
 	}
-	copied := *observed.Addr
+	copied := *observed.Paths[0].Addr
 	return &copied
+}
+
+// ObservedPeerAddrs returns the active observed paths for a peer in send order.
+func (t *Transport) ObservedPeerAddrs(peerID string) []*net.UDPAddr {
+	if t == nil || peerID == "" {
+		return nil
+	}
+	t.observedMu.RLock()
+	defer t.observedMu.RUnlock()
+	observed := t.activeObservedPath(peerID)
+	out := make([]*net.UDPAddr, 0, len(observed.Paths))
+	for _, path := range observed.Paths {
+		out = appendUDPAddrCopies(out, path.Addr)
+	}
+	return out
+}
+
+func (t *Transport) activeObservedPath(peerID string) observedPath {
+	observed := t.observedPaths[peerID]
+	if len(observed.Paths) == 0 {
+		return observedPath{}
+	}
+	now := t.now()
+	active := observedPath{PreferFirst: observed.PreferFirst}
+	for _, path := range observed.Paths {
+		if path.Addr == nil || (!path.Until.IsZero() && !now.Before(path.Until)) {
+			continue
+		}
+		copied := *path.Addr
+		active.Paths = append(active.Paths, ObservedPath{Addr: &copied, Until: path.Until})
+	}
+	return active
 }
 
 // AddKnownPeerID adds a peer ID to the inbound allowlist without

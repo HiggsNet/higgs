@@ -27,6 +27,7 @@ const defaultSyncRoundTimeout = 5 * time.Second
 const maxRelayFanoutPerUpdate = 8
 const rejectedDigestTTL = 10 * time.Minute
 const observedPathTTL = 3 * time.Minute
+const observedPathMigrationGrace = time.Minute
 const chunkAssemblyTTL = 2 * time.Minute
 const maxChunkObjectBytes = 8 << 20
 
@@ -777,6 +778,9 @@ func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAd
 	peerState := state.SyncPeers[peerID]
 	addrString := addr.String()
 	if peerState.ObservedAddr != addrString || peerState.ObservedFirstSeenUnix == 0 {
+		if observedPathActive(peerState, now) && peerState.ObservedAddr != "" && peerState.ObservedAddr != addrString {
+			peerState.ObservedGraceAddrs = appendObservedGraceAddr(peerState.ObservedGraceAddrs, peerState.ObservedAddr, now.Add(observedPathMigrationGrace), now)
+		}
 		peerState.ObservedFirstSeenUnix = now.Unix()
 		peerState.ObservedFailureCount = 0
 	}
@@ -784,6 +788,7 @@ func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAd
 	peerState.ObservedLastSeenUnix = now.Unix()
 	peerState.ObservedUntilUnix = now.Add(observedPathTTL).Unix()
 	peerState.ObservedSource = string(source)
+	peerState.ObservedGraceAddrs = pruneObservedGraceAddrs(peerState.ObservedGraceAddrs, addrString, now)
 	state.SyncPeers[peerID] = peerState
 }
 
@@ -801,6 +806,40 @@ func recordObservedPathFailure(state *stateFile, peerID string) {
 
 func observedPathActive(peerState syncPeerState, now time.Time) bool {
 	return peerState.ObservedAddr != "" && peerState.ObservedUntilUnix != 0 && now.Before(time.Unix(peerState.ObservedUntilUnix, 0))
+}
+
+func appendObservedGraceAddr(grace []observedGraceAddrState, addr string, until, now time.Time) []observedGraceAddrState {
+	if addr == "" || !now.Before(until) {
+		return pruneObservedGraceAddrs(grace, "", now)
+	}
+	out := pruneObservedGraceAddrs(grace, addr, now)
+	return append(out, observedGraceAddrState{Addr: addr, UntilUnix: until.Unix()})
+}
+
+func pruneObservedGraceAddrs(grace []observedGraceAddrState, current string, now time.Time) []observedGraceAddrState {
+	if len(grace) == 0 {
+		return nil
+	}
+	out := grace[:0]
+	for _, entry := range grace {
+		if entry.Addr == "" || entry.Addr == current || entry.UntilUnix == 0 || !now.Before(time.Unix(entry.UntilUnix, 0)) {
+			continue
+		}
+		duplicate := false
+		for _, existing := range out {
+			if existing.Addr == entry.Addr {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, entry)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func observedPathPreferFirst(peerState syncPeerState, now time.Time) bool {
@@ -865,7 +904,15 @@ func (sr *SyncRuntime) seedObservedPeerPathAt(peerID string, now time.Time) {
 		sr.Transport.RemoveObservedPeerAddr(peerID)
 		return
 	}
-	sr.Transport.SetObservedPeerAddr(peerID, addr, time.Unix(peerState.ObservedUntilUnix, 0), observedPathPreferFirst(peerState, now))
+	paths := []gossip.ObservedPath{{Addr: addr, Until: time.Unix(peerState.ObservedUntilUnix, 0)}}
+	for _, entry := range pruneObservedGraceAddrs(peerState.ObservedGraceAddrs, peerState.ObservedAddr, now) {
+		graceAddr, err := net.ResolveUDPAddr("udp", entry.Addr)
+		if err != nil {
+			continue
+		}
+		paths = append(paths, gossip.ObservedPath{Addr: graceAddr, Until: time.Unix(entry.UntilUnix, 0)})
+	}
+	sr.Transport.SetObservedPeerPaths(peerID, paths, observedPathPreferFirst(peerState, now))
 }
 
 func openSyncTransport(config *syncConfigFile, state *stateFile) (*gossip.Transport, error) {

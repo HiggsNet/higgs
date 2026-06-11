@@ -174,7 +174,7 @@ func TestRecordVerifiedObservedPathRequiresVerifiedPeer(t *testing.T) {
 
 func TestRecordVerifiedObservedPathMigratesNewSource(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
-	now := time.Unix(1000, 0)
+	now := time.Now()
 
 	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, gossip.MessagePing, now)
 	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}, gossip.MessagePong, now.Add(time.Second))
@@ -188,6 +188,28 @@ func TestRecordVerifiedObservedPathMigratesNewSource(t *testing.T) {
 	}
 	if peerState.ObservedSource != string(gossip.MessagePong) {
 		t.Fatalf("ObservedSource = %q, want %q", peerState.ObservedSource, gossip.MessagePong)
+	}
+	if len(peerState.ObservedGraceAddrs) != 1 {
+		t.Fatalf("ObservedGraceAddrs = %#v, want previous address retained", peerState.ObservedGraceAddrs)
+	}
+	if peerState.ObservedGraceAddrs[0].Addr != "127.0.0.1:2000" {
+		t.Fatalf("ObservedGraceAddrs[0].Addr = %q, want old address", peerState.ObservedGraceAddrs[0].Addr)
+	}
+	if peerState.ObservedGraceAddrs[0].UntilUnix != now.Add(time.Second).Add(observedPathMigrationGrace).Unix() {
+		t.Fatalf("ObservedGraceAddrs[0].UntilUnix = %d, want migration grace", peerState.ObservedGraceAddrs[0].UntilUnix)
+	}
+	transport := &gossip.Transport{}
+	rt := &Runtime{Clock: func() time.Time { return now.Add(2 * time.Second) }}
+	sr := newSyncRuntime(state, &syncConfigFile{PeerID: "node-a.catofes."}, transport, rt)
+	sr.seedObservedPeerPath("node-b.catofes.")
+	if got := transport.ObservedPeerAddrs("node-b.catofes."); len(got) != 2 || got[0].String() != "127.0.0.1:3000" || got[1].String() != "127.0.0.1:2000" {
+		t.Fatalf("ObservedPeerAddrs after migration = %v, want new addr plus grace old addr", got)
+	}
+
+	rt.Clock = func() time.Time { return now.Add(2*time.Second + observedPathMigrationGrace) }
+	sr.seedObservedPeerPath("node-b.catofes.")
+	if got := transport.ObservedPeerAddrs("node-b.catofes."); len(got) != 1 || got[0].String() != "127.0.0.1:3000" {
+		t.Fatalf("ObservedPeerAddrs after grace expiry = %v, want only new addr", got)
 	}
 }
 
