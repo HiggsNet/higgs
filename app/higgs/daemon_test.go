@@ -245,6 +245,74 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	}
 }
 
+func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4150, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:                 "main",
+		Provider:           ipsec.ProviderStrongSwan,
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+		Direction:          ipsec.DirectionOutbound,
+		AddressSourceOrder: []string{ipsec.SourceManualAddress},
+		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &countingIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.Events <- daemonEvent{
+		Type: daemonEventRecordPut,
+		RecordPut: &daemonRecordPut{
+			Zone:  "node-b.catofes.",
+			Key:   "coalesce-a",
+			Value: []byte("a"),
+			Type:  "policy.string",
+		},
+	}
+	service.Events <- daemonEvent{
+		Type: daemonEventRecordPut,
+		RecordPut: &daemonRecordPut{
+			Zone:  "node-b.catofes.",
+			Key:   "coalesce-b",
+			Value: []byte("b"),
+			Type:  "policy.string",
+		},
+	}
+
+	syncNow, shutdown := service.processEvents(context.Background())
+	if !syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	if driver.listCalls != 1 {
+		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
+	}
+	if len(driver.Connections) != 1 {
+		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if latest.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || latest.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
+		t.Fatalf("queued record puts were not both persisted")
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("ipsec reconcile = %+v, want one create", latest.IPsecReconcile)
+	}
+}
+
 func TestRootCommandIncludesDaemon(t *testing.T) {
 	for _, command := range rootCommand().Commands {
 		if command.Name == "daemon" {
@@ -261,6 +329,16 @@ type observedIPsecDriver struct {
 
 func (d *observedIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
 	return d.sas, nil
+}
+
+type countingIPsecDriver struct {
+	ipsec.DryRunDriver
+	listCalls int
+}
+
+func (d *countingIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
+	d.listCalls++
+	return d.DryRunDriver.ListSAs(context.Background())
 }
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {

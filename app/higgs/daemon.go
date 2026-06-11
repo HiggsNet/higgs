@@ -25,6 +25,8 @@ type DaemonService struct {
 	XFRMDriver        ipsec.XFRMDriver
 	Log               *appLogger
 	LogLimiter        *repeatedLogLimiter
+	drainingEvents    bool
+	ipsecDirty        bool
 }
 
 type DaemonHooks struct {
@@ -367,6 +369,11 @@ func (d *DaemonService) enqueueEvent(ctx context.Context, event daemonEvent) dae
 }
 
 func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool) {
+	d.drainingEvents = true
+	defer func() {
+		d.drainingEvents = false
+		d.flushIPsecReconcile(ctx)
+	}()
 	for {
 		select {
 		case event := <-d.Events:
@@ -624,7 +631,20 @@ func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
 		d.Hooks.OnStateChanged(d.Sync.State)
 	}
-	if err := d.reconcileIPsecLinks(context.Background()); err != nil {
+	if d.drainingEvents {
+		d.ipsecDirty = true
+		return
+	}
+	d.ipsecDirty = true
+	d.flushIPsecReconcile(context.Background())
+}
+
+func (d *DaemonService) flushIPsecReconcile(ctx context.Context) {
+	if d == nil || !d.ipsecDirty {
+		return
+	}
+	d.ipsecDirty = false
+	if err := d.reconcileIPsecLinks(ctx); err != nil {
 		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
 	}
 }
