@@ -45,10 +45,6 @@ func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, 
 	return nil
 }
 
-func buildSignedRecord(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string) (*zone.Record, error) {
-	return buildSignedRecordAt(state, path, key, value, recordType, timeNow())
-}
-
 func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
 	configureValidation(state.Network)
 	zs := state.Network.Zones[path]

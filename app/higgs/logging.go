@@ -203,10 +203,10 @@ func quoteLogValue(value any) string {
 		return string(v)
 	case error:
 		return quoteLogValue(v.Error())
-	case fmt.Stringer:
-		return quoteLogValue(v.String())
 	case time.Duration:
 		return v.String()
+	case fmt.Stringer:
+		return quoteLogValue(v.String())
 	default:
 		return fmt.Sprint(v)
 	}

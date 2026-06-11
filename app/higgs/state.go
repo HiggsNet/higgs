@@ -323,14 +323,6 @@ func zoneChain(path zone.ZonePath) []zone.ZonePath {
 	return out
 }
 
-func verifyConfiguredRootTrust(ns *zone.NetworkState) error {
-	config, err := loadAppConfig()
-	if err != nil {
-		return err
-	}
-	return verifyConfiguredRootTrustAt(ns, config.TrustedRootPublicKey)
-}
-
 func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.PublicKey) error {
 	if len(trustRoot) == 0 {
 		return nil

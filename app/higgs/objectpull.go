@@ -308,47 +308,6 @@ func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID stri
 	return resp.Snapshot, nil
 }
 
-// tryObjectPullRecordTCP attempts to pull a single record over TCP from a peer.
-func tryObjectPullRecordTCP(state *stateFile, config *syncConfigFile, peerID string, fetch *gossip.FetchRecord) (*gossip.RecordSnapshot, error) {
-	return tryObjectPullRecordTCPUntil(state, config, peerID, fetch, time.Time{})
-}
-
-func tryObjectPullRecordTCPUntil(state *stateFile, config *syncConfigFile, peerID string, fetch *gossip.FetchRecord, deadline time.Time) (*gossip.RecordSnapshot, error) {
-	if fetch == nil {
-		return nil, fmt.Errorf("object pull record selector is nil")
-	}
-	addr := resolvePeerTCPAddr(state, config, peerID)
-	if addr == "" {
-		err := fmt.Errorf("no TCP address for peer %s", peerID)
-		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, 0, err, true, time.Now())
-		return nil, err
-	}
-	recordObjectPullAttempt(state, peerID, "record", fetch.Zone, fetch.Key, time.Now())
-	resp, err := pullObjectTCPForPeerUntil(peerID, addr, &gossip.ObjectPullRequest{
-		Type:    gossip.ObjectPullRecord,
-		Zone:    fetch.Zone,
-		Key:     fetch.Key,
-		Version: fetch.Version,
-	}, deadline)
-	if err != nil {
-		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, 0, err, isObjectPullUnreachable(err), time.Now())
-		return nil, err
-	}
-	respBytes := encodedObjectPullResponseSize(resp)
-	if !resp.OK {
-		err := fmt.Errorf("object pull failed: %s", resp.Error)
-		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, respBytes, err, false, time.Now())
-		return nil, err
-	}
-	if resp.Record == nil {
-		err := fmt.Errorf("object pull returned empty record")
-		recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, respBytes, err, false, time.Now())
-		return nil, err
-	}
-	recordObjectPullResult(state, peerID, "record", fetch.Zone, fetch.Key, respBytes, nil, false, time.Now())
-	return resp.Record, nil
-}
-
 func encodedObjectPullResponseSize(resp *gossip.ObjectPullResponse) int {
 	data, err := gossip.EncodeObjectPullResponse(resp)
 	if err != nil {

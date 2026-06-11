@@ -496,10 +496,6 @@ func appendIPByFamily(out *[]net.IP, ip net.IP, have4, have6 *bool) bool {
 	return true
 }
 
-func queryPublicIP(client *http.Client, reflector string) (net.IP, error) {
-	return queryPublicIPCtx(context.Background(), client, reflector)
-}
-
 func queryPublicIPCtx(ctx context.Context, client *http.Client, reflector string) (net.IP, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reflector, nil)
 	if err != nil {

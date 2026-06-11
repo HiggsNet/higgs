@@ -466,17 +466,6 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 	return daemonRun(ctx, interval)
 }
 
-func reloadStateIfChanged(previous []gossip.ZoneDigest) (*stateFile, bool, error) {
-	latest, err := loadState()
-	if err != nil {
-		return nil, false, err
-	}
-	if !sameZoneDigests(previous, gossip.ZoneDigests(latest.Network)) {
-		return latest, true, nil
-	}
-	return latest, false, nil
-}
-
 func (sr *SyncRuntime) reloadStateIfChanged(previous []gossip.ZoneDigest) (*stateFile, bool, error) {
 	latest, err := sr.loadState()
 	if err != nil {
@@ -531,14 +520,6 @@ func sameZoneDigests(a, b []gossip.ZoneDigest) bool {
 		}
 	}
 	return true
-}
-
-func relaySync(ctx context.Context, state *stateFile, transport *gossip.Transport, sourcePeerID string) error {
-	config, err := loadSyncConfig(state)
-	if err != nil {
-		return err
-	}
-	return newSyncRuntime(state, config, transport, nil).relay(ctx, sourcePeerID)
 }
 
 func (sr *SyncRuntime) relay(ctx context.Context, sourcePeerID string) error {
@@ -942,10 +923,6 @@ func (sr *SyncRuntime) seedTransportPeers(deps *SyncTransportDeps) {
 	}
 }
 
-func outboundSyncPeers(state *stateFile, config *syncConfigFile) []string {
-	return outboundSyncPeersAt(state, config, time.Now())
-}
-
 func outboundSyncPeersAt(state *stateFile, config *syncConfigFile, now time.Time) []string {
 	seen := make(map[string]bool)
 	var out []string
@@ -995,10 +972,6 @@ func listenPortFromAddr(addr string) uint16 {
 		return uint16(gossip.DefaultPort)
 	}
 	return uint16(port)
-}
-
-func publishEndpointRecord(state *stateFile, config *syncConfigFile) error {
-	return newSyncRuntime(state, config, nil, nil).publishEndpointRecord()
 }
 
 func (sr *SyncRuntime) publishEndpointRecord() error {
@@ -1269,14 +1242,6 @@ func endpointEntryIsPrivate(entry gossip.EndpointEntry) bool {
 	return endpointDialRank(entry) == 2
 }
 
-func syncRoundWithTransport(ctx context.Context, state *stateFile, transport *gossip.Transport, peerID string, timeout time.Duration) (err error) {
-	config, configErr := loadSyncConfig(state)
-	if configErr != nil {
-		return configErr
-	}
-	return newSyncRuntime(state, config, transport, nil).syncRound(ctx, peerID, timeout)
-}
-
 func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout time.Duration) (err error) {
 	defer func() {
 		recordPeerSyncAt(sr.State, peerID, err, sr.now())
@@ -1474,14 +1439,6 @@ func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
 		return 0
 	}
 	return until.Sub(now)
-}
-
-func handleSyncPacket(state *stateFile, transport *gossip.Transport, packet *gossip.Packet) (err error) {
-	config, configErr := loadSyncConfig(state)
-	if configErr != nil {
-		return configErr
-	}
-	return newSyncRuntime(state, config, transport, nil).handlePacket(packet)
 }
 
 func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
@@ -2105,10 +2062,6 @@ func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapsh
 		})
 	}
 	return out
-}
-
-func sendRecord(ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord) error {
-	return sendRecordWithStats(nil, ns, transport, peerID, fetch, time.Now(), nil)
 }
 
 func (sr *SyncRuntime) sendRecord(peerID string, fetch *gossip.FetchRecord) error {
