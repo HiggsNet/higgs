@@ -2,6 +2,7 @@ package ipsec
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"strings"
@@ -473,6 +474,50 @@ func TestReconcileLinkInstancesRevocationWinsOverDesiredState(t *testing.T) {
 	}
 	if result.Instances[LinkInstanceID(spec)].ActualState != LinkStateRemoving {
 		t.Fatalf("instance = %+v", result.Instances[LinkInstanceID(spec)])
+	}
+}
+
+func TestReconcileLinkInstancesHonorsApplyBackoff(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ab",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+	}
+	inst := NewLinkInstance(spec, LinkStateUp, now)
+	inst = MarkLinkApplyFailure(inst, BackoffPolicy{InitialSeconds: 2, MaxSeconds: 8}, now, errors.New("load connection: vici unavailable"))
+	if inst.FailureCount != 1 || inst.BackoffUntil != now.Add(2*time.Second).Unix() || inst.LastError == "" {
+		t.Fatalf("failed instance = %+v", inst)
+	}
+	inst = MarkLinkApplyFailure(inst, BackoffPolicy{InitialSeconds: 2, MaxSeconds: 8}, now.Add(time.Second), errors.New("load connection: vici unavailable"))
+	if inst.FailureCount != 2 || inst.BackoffUntil != now.Add(5*time.Second).Unix() {
+		t.Fatalf("second failed instance = %+v", inst)
+	}
+
+	duringBackoff := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{inst.ID: inst},
+		Now:       now.Add(3 * time.Second),
+	})
+	if action := firstAction(duringBackoff, ReconcileActionNoop); action == nil || action.Reason != "apply backoff active" {
+		t.Fatalf("during backoff actions = %+v", duringBackoff.Actions)
+	}
+
+	afterBackoff := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{inst.ID: inst},
+		Now:       now.Add(6 * time.Second),
+	})
+	if action := firstAction(afterBackoff, ReconcileActionRepair); action == nil {
+		t.Fatalf("after backoff actions = %+v", afterBackoff.Actions)
+	}
+	cleared := MarkLinkApplySuccess(inst, now.Add(6*time.Second))
+	if cleared.FailureCount != 0 || cleared.BackoffUntil != 0 || cleared.LastError != "" {
+		t.Fatalf("cleared instance = %+v", cleared)
 	}
 }
 

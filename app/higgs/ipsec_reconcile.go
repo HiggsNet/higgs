@@ -36,9 +36,16 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionTeardown:
 			netns := netnsForAction(action, groups)
 			if _, err := ipsec.ApplyReconcileAction(ctx, driver, driver, action, netns); err != nil {
+				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
+				d.Sync.State.LinkInstances = linkInstancesFromIPsec(result.Instances)
+				d.Sync.State.IPsecReconcile = summarizeIPsecReconcile(now.Unix(), len(plan.Desired), result.Actions, plan.Skipped, err.Error())
+				if saveErr := d.Sync.saveState(); saveErr != nil {
+					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
+				}
 				d.recordIPsecReconcileError(now.Unix(), err)
 				return err
 			}
+			markIPsecActionSucceeded(result.Instances, action, now)
 		}
 	}
 	d.Sync.State.LinkInstances = linkInstancesFromIPsec(result.Instances)
@@ -124,6 +131,8 @@ func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.Link
 			ChildSAName:     inst.ChildSAName,
 			Endpoint:        inst.Endpoint,
 			LastError:       inst.LastError,
+			FailureCount:    inst.FailureCount,
+			BackoffUntil:    inst.BackoffUntil,
 			LastTransition:  inst.LastTransition,
 			Owner: ipsec.ResourceOwner{
 				Manager:     inst.Owner.Manager,
@@ -156,6 +165,8 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 			ChildSAName:     inst.ChildSAName,
 			Endpoint:        inst.Endpoint,
 			LastError:       inst.LastError,
+			FailureCount:    inst.FailureCount,
+			BackoffUntil:    inst.BackoffUntil,
 			LastTransition:  inst.LastTransition,
 			Owner: linkOwnerState{
 				Manager:     inst.Owner.Manager,
@@ -194,4 +205,59 @@ func netnsForAction(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) 
 		}
 	}
 	return ipsec.NetNSSpec{}
+}
+
+func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec.ReconcileAction, policy ipsec.BackoffPolicy, now time.Time, err error) {
+	id := actionInstanceID(action)
+	if id == "" {
+		return
+	}
+	inst, ok := instances[id]
+	if !ok {
+		if action.Instance != nil {
+			inst = *action.Instance
+		} else if action.Spec != nil {
+			inst = ipsec.NewLinkInstance(*action.Spec, ipsec.LinkStateError, now)
+		} else {
+			return
+		}
+	}
+	instances[id] = ipsec.MarkLinkApplyFailure(inst, policy, now, err)
+}
+
+func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ipsec.ReconcileAction, now time.Time) {
+	id := actionInstanceID(action)
+	if id == "" {
+		return
+	}
+	inst, ok := instances[id]
+	if !ok {
+		return
+	}
+	instances[id] = ipsec.MarkLinkApplySuccess(inst, now)
+}
+
+func actionInstanceID(action ipsec.ReconcileAction) string {
+	if action.Instance != nil && action.Instance.ID != "" {
+		return action.Instance.ID
+	}
+	if action.Spec != nil {
+		return ipsec.LinkInstanceID(*action.Spec)
+	}
+	return ""
+}
+
+func groupBackoffPolicy(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) ipsec.BackoffPolicy {
+	groupID := ""
+	if action.Spec != nil {
+		groupID = action.Spec.OverlayID
+	} else if action.Instance != nil {
+		groupID = action.Instance.GroupID
+	}
+	for _, group := range groups {
+		if group.ID == groupID {
+			return group.Reconcile.Backoff
+		}
+	}
+	return ipsec.BackoffPolicy{}
 }

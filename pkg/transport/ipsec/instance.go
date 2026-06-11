@@ -44,6 +44,8 @@ type LinkInstance struct {
 	ChildSAName     string
 	Endpoint        string
 	LastError       string
+	FailureCount    int
+	BackoffUntil    int64
 	LastTransition  int64
 	Owner           ResourceOwner
 }
@@ -160,9 +162,28 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			continue
 		}
 		if existing.DesiredSpecHash != specHash {
+			if inLinkBackoff(existing, now) {
+				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
+				continue
+			}
 			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
+			inst.FailureCount = existing.FailureCount
+			inst.BackoffUntil = existing.BackoffUntil
+			inst.LastError = existing.LastError
 			result.Instances[id] = inst
 			result.add(ReconcileActionUpdate, &spec, &inst, "desired spec changed")
+			continue
+		}
+		if inLinkBackoff(existing, now) {
+			result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
+			continue
+		}
+		if (existing.ActualState == LinkStateError || existing.ActualState == LinkStateDegraded) && !sa.Established {
+			inst := existing
+			inst.ActualState = LinkStateDegraded
+			inst.LastTransition = now.Unix()
+			result.Instances[id] = inst
+			result.add(ReconcileActionRepair, &spec, &inst, "previous apply failed")
 			continue
 		}
 		if existing.ActualState == LinkStateUp && !sa.Established {
@@ -194,6 +215,63 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		result.add(ReconcileActionTeardown, nil, &inst, "no longer desired")
 	}
 	return result
+}
+
+func MarkLinkApplyFailure(inst LinkInstance, policy BackoffPolicy, now time.Time, err error) LinkInstance {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	inst.FailureCount++
+	inst.BackoffUntil = now.Add(nextLinkBackoff(policy, inst.FailureCount)).Unix()
+	inst.LastTransition = now.Unix()
+	inst.ActualState = LinkStateError
+	if err != nil {
+		inst.LastError = err.Error()
+	}
+	return inst
+}
+
+func MarkLinkApplySuccess(inst LinkInstance, now time.Time) LinkInstance {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	inst.FailureCount = 0
+	inst.BackoffUntil = 0
+	inst.LastError = ""
+	inst.LastTransition = now.Unix()
+	return inst
+}
+
+func nextLinkBackoff(policy BackoffPolicy, failureCount int) time.Duration {
+	if failureCount < 1 {
+		failureCount = 1
+	}
+	initial := policy.InitialSeconds
+	if initial <= 0 {
+		initial = 1
+	}
+	maximum := policy.MaxSeconds
+	if maximum <= 0 {
+		maximum = 60
+	}
+	seconds := initial
+	for i := 1; i < failureCount; i++ {
+		if seconds >= maximum {
+			return time.Duration(maximum) * time.Second
+		}
+		seconds *= 2
+	}
+	if seconds > maximum {
+		seconds = maximum
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func inLinkBackoff(inst LinkInstance, now time.Time) bool {
+	if inst.BackoffUntil == 0 || now.IsZero() {
+		return false
+	}
+	return now.Before(time.Unix(inst.BackoffUntil, 0))
 }
 
 func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, action ReconcileAction, netns NetNSSpec) (ApplyPlan, error) {

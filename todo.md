@@ -463,6 +463,7 @@
     - 已实现 planner 侧 `SkipNoInboundNATEvidence`：远端 `behind_nat` / `inbound_reachable=false` 时，只保留 public ContactPoint 或带 observed external port 的 `nat-observed` ContactPoint；只有 private/unknown 地址时不会生成 StrongSwan link。daemon debug/degraded 状态展示随后续 apply/reconcile 接线补齐。
   - [ ] 处理幂等和并发：同一个 peer/group 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + 本地 LinkGroupSpec + 持久化 LinkInstance + StrongSwan/XFRM 实际状态恢复
     - [x] 第一版幂等骨架：同一 desired spec 再次 reconcile 时复用已落盘 `LinkInstance` 并进入 `noop`，避免 dry-run daemon 重复 create；真实 driver drift/backoff 仍待接入。
+    - [x] apply 失败 backoff 已接入 `LinkInstance`：记录 failure count、backoff_until 和 last_error；backoff 未到期时 reconcile 返回 `noop/apply backoff active`，到期后 error/degraded link 重新进入 repair；daemon apply 成功会清理失败状态，失败会先落盘再返回错误。
   - [ ] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
     - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id，第一版命名仍沿用稳定 `TransportID` / interface name，后续 daemon apply 只应操作可验证归属资源。
   - [ ] daemon 启动恢复时重建 link state：重新计算每个 link group 的 desired specs，读取持久化 `LinkInstance`，查询 driver 实际 connection/interface/SA；匹配则 adopt，缺失则 create，漂移则 repair，多余或已撤销则 teardown，保证重启后不会重复创建或遗留旧 link
@@ -471,7 +472,7 @@
   - [ ] 撤销优先级最高：peer Zone 或父 delegation tombstone 后，不等待普通 reconnect/backoff，立即 teardown link，并阻止 endpoint fallback、rekey 或 reconcile 重建
     - [x] reconcile 输入支持 revoked peer 集合；revocation 命中时即使 desired spec 仍存在也进入 `removing` 并产生 teardown action。
   - [ ] 暴露 control API/debug 输出：link 列表、desired vs actual、SA 状态、XFRM interface、`if_id`、endpoint、rekey/reconnect 原因、最近错误
-    - [x] `daemon status` control response 增加 link instance 数、desired link 数和最近 reconcile error；新增 `higgs debug links` 输出持久化 link、最近 action/skip、interface、`if_id`、endpoint 与 owner。
+    - [x] `daemon status` control response 增加 link instance 数、desired link 数和最近 reconcile error；新增 `higgs debug links` 输出持久化 link、最近 action/skip、interface、`if_id`、endpoint、owner、failure count、backoff 与最近错误。
   - [x] 增加 fake driver 单元测试：create/update/delete/revoke/restart recovery；真实 StrongSwan/XFRM smoke 留到 4.3
 
 - [ ] **4.3 最小闭环验证**

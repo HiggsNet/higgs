@@ -47,6 +47,8 @@ type linkInstanceState struct {
 	ChildSAName     string         `json:"child_sa_name,omitempty"`
 	Endpoint        string         `json:"endpoint,omitempty"`
 	LastError       string         `json:"last_error,omitempty"`
+	FailureCount    int            `json:"failure_count,omitempty"`
+	BackoffUntil    int64          `json:"backoff_until,omitempty"`
 	LastTransition  int64          `json:"last_transition,omitempty"`
 	Owner           linkOwnerState `json:"owner,omitempty"`
 }

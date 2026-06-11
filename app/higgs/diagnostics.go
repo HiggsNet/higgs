@@ -125,7 +125,7 @@ func debugLinks() error {
 	fmt.Printf("link_instances: %d\n", len(ids))
 	for _, id := range ids {
 		inst := state.LinkInstances[id]
-		fmt.Printf("- id=%s group=%s peer=%s state=%s if=%s if_id=%d endpoint=%s owner=%s\n",
+		fmt.Printf("- id=%s group=%s peer=%s state=%s if=%s if_id=%d endpoint=%s owner=%s failures=%d backoff=%s error=%s\n",
 			inst.ID,
 			dash(inst.GroupID),
 			inst.PeerZone,
@@ -134,6 +134,9 @@ func debugLinks() error {
 			inst.XFRMIfID,
 			dash(inst.Endpoint),
 			dash(inst.Owner.Manager),
+			inst.FailureCount,
+			formatUnixTime(inst.BackoffUntil),
+			dash(inst.LastError),
 		)
 	}
 	fmt.Printf("actions: %d\n", len(reconcile.Actions))
