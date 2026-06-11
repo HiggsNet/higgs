@@ -21,14 +21,24 @@ check() {
   fi
 }
 
+note_container_context() {
+  if test -f /.dockerenv || test -f /run/.containerenv || grep -qaE '(docker|lxc|containerd|kubepods)' /proc/1/cgroup /proc/self/cgroup 2>/dev/null; then
+    printf '[info] container-like environment detected; nested LXC/Docker may still block netns, mount, XFRM, or VICI even with --privileged\n'
+  fi
+}
+
+note_container_context
+
 check "linux" test "$(uname -s)" = "Linux"
 check "root-or-cap-net-admin" bash -c '[ "$(id -u)" = 0 ] || { cap_eff="$(awk "/^CapEff:/ {print \$2}" /proc/self/status)"; cap=$((16#$cap_eff)); [ $((cap & (1 << 12))) -ne 0 ]; }'
 check "vici-socket" test -S "$vici_socket"
 check "ip command" command -v ip
 check "swanctl command" command -v swanctl
 check "charon command" command -v charon
+check "ping command" command -v ping
 check "kernel xfrm" sh -c 'test -e /proc/net/xfrm_stat || test -e /proc/net/xfrm_policy'
 check "xfrm interface support" ip link help xfrm
+check "named netns create/delete" sh -c 'set -e; ns="higgs-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" true'
 
 if [ "$check_udp" = "1" ]; then
   check "udp ike port" sh -c "python3 - <<PY

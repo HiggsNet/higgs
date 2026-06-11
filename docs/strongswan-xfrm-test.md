@@ -4,6 +4,47 @@
 `make smoke-all`：该流程会接触宿主机网络、StrongSwan/charon、VICI、XFRM
 interface，以及 root 或 `CAP_NET_ADMIN` 权限。
 
+推荐在 disposable root VM 或一次性 privileged container 中运行，而不是直接在日常
+宿主机上手工折腾网络资源。容器路径已经自动化，优先使用：
+
+```sh
+make ipsec-xfrm-container-smoke
+```
+
+该目标会调用 `docs/scripts/ipsec-xfrm-container-smoke.sh`，自动完成：
+
+- 使用 `docker` 启动一次性 `ubuntu:24.04` privileged container。
+- 挂载当前 repo 到 `/work`，工作目录设为 `/work`。
+- 安装 `make`、Go、`iproute2`、`iputils-ping`、`strongswan-swanctl`、
+  `strongswan-charon`。
+- 在容器内运行 `make ipsec-xfrm-smoke`。
+- 退出时尽量把 `build/` ownership 还给宿主用户，避免 root-owned 构建产物。
+
+可用环境变量覆盖默认值：
+
+```sh
+HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
+HIGGS_IPSEC_XFRM_IMAGE=ubuntu:24.04 make ipsec-xfrm-container-smoke
+```
+
+如果要手工复现容器步骤，等价形式是：
+
+```sh
+docker run --rm -it --privileged \
+  -v "$PWD":/work \
+  -w /work \
+  ubuntu:24.04 bash
+```
+
+注意：`--privileged` 是测试便利手段，不是安全隔离边界。尤其当宿主本身已经是
+NixOS over LXC、云厂商受限容器、CI runner container 等嵌套环境时，内层
+Docker/LXC 的 `--privileged` 不一定等价于真实宿主 root。外层 LXC 仍可能拦截
+`/run/netns` mount、named netns、XFRM interface/state/policy、内核模块、AppArmor
+或 seccomp 行为。因此不要只看容器启动参数是否有 `--privileged`；必须以
+`make ipsec-xfrm-preflight` 的实际能力检查为准。若 preflight 中 named netns
+create/delete、XFRM interface 或 VICI socket 检查失败，应换 root VM/裸机测试机，
+或调整外层 LXC 配置后再跑。
+
 ## 1. 前置检查
 
 运行：
@@ -19,6 +60,8 @@ make ipsec-xfrm-preflight
 - VICI socket 是否存在；默认是 `/run/charon.vici`，可用 `HIGGS_VICI_SOCKET` 覆盖。
 - `ip`、`swanctl`、`charon` 是否可用。
 - `ip link type xfrm` 是否可用。
+- named netns 是否能真实 create/delete；这一步能提前发现 LXC/嵌套容器里常见的
+  `/run/netns` 或 mount namespace 限制。
 - 当 `HIGGS_IPSEC_CHECK_UDP=1` 时，额外检查 IKE/NAT-T UDP 端口是否可绑定。
 
 如果 preflight 失败，先修宿主机环境。不要让半途失败的 smoke 留下 connection 或
@@ -32,22 +75,32 @@ interface。
 make ipsec-xfrm-smoke
 ```
 
+在日常宿主机没有 root/system 网络权限时，优先使用容器包装入口：
+
+```sh
+make ipsec-xfrm-container-smoke
+```
+
 该目标不会进入 `make smoke-all`。它会：
 
 1. 构建 `build/higgs`。
 2. 运行 `docs/scripts/ipsec-xfrm-preflight.sh`；任何 root/CAP、VICI、charon、
    iproute2 或 XFRM 能力缺失都会在创建资源前失败。
 3. 设置 `HIGGS_IPSEC_XFRM_SMOKE=1`，运行
-   `TestSystemXFRMDriverIntegrationSmoke`。
+   `TestSystemXFRMDriverIntegrationSmoke` 和
+   `TestSystemXFRMDriverPeerTunnelPingSmoke`。
 4. 创建一个一次性的 named netns、创建 XFRM interface、移动到该 namespace、
    分配 tunnel address、验证 interface/address 可见，再删除 interface 和 namespace。
+5. 创建两个一次性的 named netns、veth underlay、两端 XFRM interface、手工 XFRM
+   state/policy 和 tunnel route，验证 A/B tunnel IP 能互相 `ping`。
 
 失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
 `swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。
 
-当前自动化 smoke 只验证真实 `SystemXFRMDriver` 的 namespace/interface/address
-lifecycle。双 Higgs daemon、signed `ipsec/*` record 发布、VICI IKE_SA/CHILD_SA
-bring-up 和 tunnel ping 仍属于后续完整 smoke。
+当前自动化 smoke 已验证真实 `SystemXFRMDriver` 的 namespace/interface/address
+lifecycle，以及手工 XFRM state/policy 下的双 namespace tunnel ping。双 Higgs
+daemon、signed `ipsec/*` record 发布、VICI IKE_SA/CHILD_SA bring-up 仍属于后续完整
+smoke。
 
 ## 3. 最小手工 StrongSwan 健康检查
 

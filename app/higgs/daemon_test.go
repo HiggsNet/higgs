@@ -6,7 +6,9 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -313,6 +315,233 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	}
 }
 
+func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
+	now := time.Unix(4130, 0)
+	stateA, configA := buildTestNetworkState(t)
+	stateA.Network.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
+	addTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", now)
+	addTestIPsecRecords(t, stateA.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	group := testIPsecLinkGroup()
+	appConfigA := defaultAppConfig()
+	appConfigA.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rtA := &Runtime{
+		Config:    appConfigA,
+		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rtA.SaveState(stateA); err != nil {
+		t.Fatalf("SaveState(node-a): %v", err)
+	}
+	driverA := &observedIPsecDriver{}
+	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
+	serviceA.IPsecDriver = driverA
+	serviceA.XFRMDriver = driverA
+
+	stateB := *stateA
+	stateB.ManagedZone = "node-b.catofes."
+	stateB.LinkInstances = nil
+	stateB.IPsecReconcile = nil
+	configB := *configA
+	configB.PeerID = "node-b.catofes."
+	appConfigB := defaultAppConfig()
+	appConfigB.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rtB := &Runtime{
+		Config:    appConfigB,
+		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rtB.SaveState(&stateB); err != nil {
+		t.Fatalf("SaveState(node-b): %v", err)
+	}
+	driverB := &observedIPsecDriver{}
+	serviceB := newDaemonService(rtB, &stateB, &configB, time.Second)
+	serviceB.IPsecDriver = driverB
+	serviceB.XFRMDriver = driverB
+
+	serviceA.notifyStateChanged()
+	serviceB.notifyStateChanged()
+
+	latestA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a): %v", err)
+	}
+	latestB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b): %v", err)
+	}
+	specA := singleDesiredSpec(t, latestA)
+	specB := singleDesiredSpec(t, latestB)
+	assertDryRunApply(t, driverA, specA, group.NetNS)
+	assertDryRunApply(t, driverB, specB, group.NetNS)
+	assertStrongSwanLoadConnMatchesSpec(t, specA)
+	assertStrongSwanLoadConnMatchesSpec(t, specB)
+	if specA.PeerZone != "node-b.catofes." || specB.PeerZone != "node-a.catofes." {
+		t.Fatalf("A/B peer zones = %s/%s", specA.PeerZone, specB.PeerZone)
+	}
+	if specA.TransportID == specB.TransportID || specA.XFRMIfID == specB.XFRMIfID {
+		t.Fatalf("A/B links should use direction-specific transport identity: A=%+v B=%+v", specA, specB)
+	}
+
+	driverA.sas = []ipsec.SAState{observedSAForSpec(specA, "10.44.0.1:500", "203.0.113.10:500", 1001)}
+	driverB.sas = []ipsec.SAState{observedSAForSpec(specB, "10.44.0.2:500", "203.0.113.20:500", 1002)}
+	serviceA.setState(latestA)
+	serviceB.setState(latestB)
+	serviceA.notifyStateChanged()
+	serviceB.notifyStateChanged()
+
+	latestA, err = rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a up): %v", err)
+	}
+	latestB, err = rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b up): %v", err)
+	}
+	assertSingleLinkUpFromSA(t, latestA, specA, driverA.sas[0])
+	assertSingleLinkUpFromSA(t, latestB, specB, driverB.sas[0])
+	var out bytes.Buffer
+	if err := writeDebugLinks(&out, rtA, latestA); err != nil {
+		t.Fatalf("writeDebugLinks(node-a): %v", err)
+	}
+	output := out.String()
+	for _, want := range []string{
+		"state=up",
+		"sa=established",
+		"sa_local_id=node-a.catofes.",
+		"sa_remote_id=node-b.catofes.",
+		"sa_reqid=1001",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("debug links output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4135, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	group := testIPsecLinkGroup()
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
+	}
+	spec := plan.Desired[0]
+	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now.Add(-time.Minute))
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+		persisted.ID: persisted,
+	})
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &observedIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.recoverIPsecLinksOnStart(context.Background())
+
+	if driver.listCalls != 1 {
+		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
+	}
+	assertDryRunApply(t, driver, spec, group.NetNS)
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	if inst.ActualState != ipsec.LinkStateConnecting {
+		t.Fatalf("startup repaired instance = %+v, want connecting", inst)
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionRepair {
+		t.Fatalf("startup reconcile = %+v, want repair", latest.IPsecReconcile)
+	}
+}
+
+func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	group := testIPsecLinkGroup()
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &observedIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.notifyStateChanged()
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(create): %v", err)
+	}
+	spec := singleDesiredSpec(t, latest)
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("link instances after create = %+v, want one", latest.LinkInstances)
+	}
+
+	parent := latest.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		Reason:                "ipsec smoke revoke",
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+	if err := rt.SaveState(latest); err != nil {
+		t.Fatalf("SaveState(revoked): %v", err)
+	}
+	service.setState(latest)
+	service.notifyStateChanged()
+
+	revoked, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(revoked): %v", err)
+	}
+	if len(revoked.LinkInstances) != 0 {
+		t.Fatalf("link instances after revoke = %+v, want none", revoked.LinkInstances)
+	}
+	if revoked.IPsecReconcile == nil || len(revoked.IPsecReconcile.Actions) != 1 || revoked.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionTeardown {
+		t.Fatalf("revoke reconcile = %+v, want teardown", revoked.IPsecReconcile)
+	}
+	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID || len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID || len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
+		t.Fatalf("teardown driver state terminated=%+v unloaded=%+v deleted=%+v", driver.Terminated, driver.Unloaded, driver.DeletedIFs)
+	}
+	if !hasDebugSkip(revoked.IPsecReconcile.Skipped, "node-b.catofes.", ipsec.SkipRevokedZone) {
+		t.Fatalf("skips = %+v, want revoked zone", revoked.IPsecReconcile.Skipped)
+	}
+
+	service.setState(revoked)
+	service.notifyStateChanged()
+	stable, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(stable): %v", err)
+	}
+	if len(stable.LinkInstances) != 0 || len(stable.IPsecReconcile.Actions) != 0 || stable.IPsecReconcile.DesiredLinks != 0 {
+		t.Fatalf("stable revoked reconcile = %+v instances=%+v, want no recreate", stable.IPsecReconcile, stable.LinkInstances)
+	}
+}
+
 func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4150, 0)
@@ -525,6 +754,126 @@ type countingIPsecDriver struct {
 func (d *countingIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
 	d.listCalls++
 	return d.DryRunDriver.ListSAs(context.Background())
+}
+
+func testIPsecLinkGroup() ipsec.LinkGroupSpec {
+	return ipsec.LinkGroupSpec{
+		ID:                 "main",
+		Provider:           ipsec.ProviderStrongSwan,
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+		Direction:          ipsec.DirectionOutbound,
+		AddressSourceOrder: []string{ipsec.SourceManualAddress},
+		TunnelAddressPool:  netip.MustParsePrefix("10.44.0.0/29"),
+		ConnectRules:       []string{"strongswan://node-*.catofes.?accept=inbound"},
+	}
+}
+
+func singleDesiredSpec(t *testing.T, state *stateFile) ipsec.TransportLinkSpec {
+	t.Helper()
+	if state == nil || state.IPsecReconcile == nil || len(state.IPsecReconcile.Desired) != 1 {
+		t.Fatalf("desired snapshot = %+v, want one desired link", state.IPsecReconcile)
+	}
+	desired := state.IPsecReconcile.Desired[0]
+	return ipsec.TransportLinkSpec{
+		LocalZone:       state.ManagedZone,
+		PeerZone:        desired.PeerZone,
+		OverlayID:       desired.GroupID,
+		Provider:        ipsec.ProviderStrongSwan,
+		TransportID:     desired.TransportID,
+		InterfaceName:   desired.InterfaceName,
+		XFRMIfID:        desired.XFRMIfID,
+		LocalTunnelAddr: netip.MustParseAddr("10.44.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.44.0.2"),
+		NetNS:           "h2",
+		ContactPoints: []ipsec.ContactPoint{{
+			Address:  desired.Endpoint,
+			IKEPort:  ipsec.DefaultIKEPort,
+			NATTPort: ipsec.DefaultNATTPort,
+		}},
+	}
+}
+
+func assertDryRunApply(t *testing.T, driver *observedIPsecDriver, spec ipsec.TransportLinkSpec, netns ipsec.NetNSSpec) {
+	t.Helper()
+	if len(driver.Namespaces) != 1 || driver.Namespaces[0] != netns.Normalized() {
+		t.Fatalf("namespaces = %+v, want %s", driver.Namespaces, netns.Target())
+	}
+	if len(driver.Connections) != 1 || driver.Connections[0].TransportID != spec.TransportID {
+		t.Fatalf("connections = %+v, want one %s", driver.Connections, spec.TransportID)
+	}
+	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName || driver.Interfaces[0].XFRMIfID != spec.XFRMIfID {
+		t.Fatalf("interfaces = %+v, want %s/%d", driver.Interfaces, spec.InterfaceName, spec.XFRMIfID)
+	}
+	wantAddr := spec.InterfaceName + "=" + spec.LocalTunnelAddr.String()
+	if len(driver.Addresses) != 1 || driver.Addresses[0] != wantAddr {
+		t.Fatalf("addresses = %+v, want %s", driver.Addresses, wantAddr)
+	}
+}
+
+func assertStrongSwanLoadConnMatchesSpec(t *testing.T, spec ipsec.TransportLinkSpec) {
+	t.Helper()
+	msg, err := ipsec.BuildLoadConnMessage(spec)
+	if err != nil {
+		t.Fatalf("BuildLoadConnMessage: %v", err)
+	}
+	raw := msg[spec.TransportID]
+	conn, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("load-conn message = %#v", msg)
+	}
+	if got := conn["remote_port"]; got != "500" {
+		t.Fatalf("remote_port = %#v, want 500", got)
+	}
+	children, _ := conn["children"].(map[string]any)
+	child, _ := children[ipsec.ChildSAName(spec)].(map[string]any)
+	if child["if_id_in"] != fmt.Sprintf("%d", spec.XFRMIfID) || child["if_id_out"] != fmt.Sprintf("%d", spec.XFRMIfID) {
+		t.Fatalf("child if_id = %#v, want %d", child, spec.XFRMIfID)
+	}
+	local, _ := conn["local"].(map[string]any)
+	remote, _ := conn["remote"].(map[string]any)
+	if local["id"] != string(spec.LocalZone) || remote["id"] != string(spec.PeerZone) {
+		t.Fatalf("conn identities local=%#v remote=%#v spec=%+v", local["id"], remote["id"], spec)
+	}
+}
+
+func observedSAForSpec(spec ipsec.TransportLinkSpec, localEndpoint, remoteEndpoint string, reqID uint32) ipsec.SAState {
+	return ipsec.SAState{
+		Name:           spec.TransportID,
+		Peer:           remoteEndpoint,
+		ChildSA:        ipsec.ChildSAName(spec),
+		XFRMIfID:       spec.XFRMIfID,
+		ReqID:          reqID,
+		LocalIdentity:  string(spec.LocalZone),
+		RemoteIdentity: string(spec.PeerZone),
+		LocalEndpoint:  localEndpoint,
+		RemoteEndpoint: remoteEndpoint,
+		Endpoint:       remoteEndpoint,
+		Established:    true,
+	}
+}
+
+func assertSingleLinkUpFromSA(t *testing.T, state *stateFile, spec ipsec.TransportLinkSpec, sa ipsec.SAState) {
+	t.Helper()
+	if state.IPsecReconcile == nil || len(state.IPsecReconcile.Actions) != 1 || state.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
+		t.Fatalf("reconcile = %+v, want adopt", state.IPsecReconcile)
+	}
+	inst := state.LinkInstances[ipsec.LinkInstanceID(spec)]
+	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != sa.Endpoint {
+		t.Fatalf("instance = %+v, want up endpoint %s", inst, sa.Endpoint)
+	}
+	if len(state.IPsecReconcile.ActualSAs) != 1 || state.IPsecReconcile.ActualSAs[0].ReqID != sa.ReqID || state.IPsecReconcile.ActualSAs[0].RemoteIdentity != sa.RemoteIdentity {
+		t.Fatalf("actual SAs = %+v, want reqid=%d remote_id=%s", state.IPsecReconcile.ActualSAs, sa.ReqID, sa.RemoteIdentity)
+	}
+}
+
+func hasDebugSkip(skips []linkSkipState, peer zone.ZonePath, reason string) bool {
+	for _, skip := range skips {
+		if skip.Peer == peer && skip.Reason == reason {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
