@@ -15,22 +15,35 @@ const defaultStatePath = ".higgs.db"
 const cliMetaKey = "cli_state"
 
 type stateFile struct {
-	ManagedZone    zone.ZonePath      `json:"managed_zone"`
-	RootPrivateKey ed25519.PrivateKey `json:"root_private_key"`
-	ZonePrivateKey ed25519.PrivateKey `json:"zone_private_key"`
-	Network        *zone.NetworkState `json:"network"`
-	SyncPeers      map[string]syncPeerState
-	LinkInstances  map[string]linkInstanceState
-	IPsecReconcile *ipsecReconcileState
+	ManagedZone       zone.ZonePath      `json:"managed_zone"`
+	RootPrivateKey    ed25519.PrivateKey `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
+	Network           *zone.NetworkState `json:"network"`
+	SyncPeers         map[string]syncPeerState
+	IPsecTransportKey *ipsecTransportKeyState
+	LinkInstances     map[string]linkInstanceState
+	IPsecReconcile    *ipsecReconcileState
 }
 
 type stateMeta struct {
-	ManagedZone    zone.ZonePath                `json:"managed_zone"`
-	RootPrivateKey ed25519.PrivateKey           `json:"root_private_key"`
-	ZonePrivateKey ed25519.PrivateKey           `json:"zone_private_key"`
-	SyncPeers      map[string]syncPeerState     `json:"sync_peers,omitempty"`
-	LinkInstances  map[string]linkInstanceState `json:"link_instances,omitempty"`
-	IPsecReconcile *ipsecReconcileState         `json:"ipsec_reconcile,omitempty"`
+	ManagedZone       zone.ZonePath                `json:"managed_zone"`
+	RootPrivateKey    ed25519.PrivateKey           `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey           `json:"zone_private_key"`
+	SyncPeers         map[string]syncPeerState     `json:"sync_peers,omitempty"`
+	IPsecTransportKey *ipsecTransportKeyState      `json:"ipsec_transport_key,omitempty"`
+	LinkInstances     map[string]linkInstanceState `json:"link_instances,omitempty"`
+	IPsecReconcile    *ipsecReconcileState         `json:"ipsec_reconcile,omitempty"`
+}
+
+type ipsecTransportKeyState struct {
+	Kind        string `json:"kind,omitempty"`
+	Algorithm   string `json:"algorithm,omitempty"`
+	PublicKey   []byte `json:"public_key,omitempty"`
+	PrivateKey  []byte `json:"private_key,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	NotBefore   int64  `json:"not_before,omitempty"`
+	NotAfter    int64  `json:"not_after,omitempty"`
+	UpdatedAt   int64  `json:"updated_at,omitempty"`
 }
 
 type linkInstanceState struct {
@@ -272,13 +285,14 @@ func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
 		return nil, err
 	}
 	state := stateFile{
-		ManagedZone:    meta.ManagedZone,
-		RootPrivateKey: meta.RootPrivateKey,
-		ZonePrivateKey: meta.ZonePrivateKey,
-		Network:        ns,
-		SyncPeers:      meta.SyncPeers,
-		LinkInstances:  meta.LinkInstances,
-		IPsecReconcile: meta.IPsecReconcile,
+		ManagedZone:       meta.ManagedZone,
+		RootPrivateKey:    meta.RootPrivateKey,
+		ZonePrivateKey:    meta.ZonePrivateKey,
+		Network:           ns,
+		SyncPeers:         meta.SyncPeers,
+		IPsecTransportKey: meta.IPsecTransportKey,
+		LinkInstances:     meta.LinkInstances,
+		IPsecReconcile:    meta.IPsecReconcile,
 	}
 	if state.Network == nil || len(state.Network.Zones) == 0 {
 		return nil, errors.New("state file has no network")
@@ -307,12 +321,13 @@ func saveStateAt(path string, state *stateFile) error {
 	defer store.Close()
 
 	meta := stateMeta{
-		ManagedZone:    state.ManagedZone,
-		RootPrivateKey: state.RootPrivateKey,
-		ZonePrivateKey: state.ZonePrivateKey,
-		SyncPeers:      state.SyncPeers,
-		LinkInstances:  state.LinkInstances,
-		IPsecReconcile: state.IPsecReconcile,
+		ManagedZone:       state.ManagedZone,
+		RootPrivateKey:    state.RootPrivateKey,
+		ZonePrivateKey:    state.ZonePrivateKey,
+		SyncPeers:         state.SyncPeers,
+		IPsecTransportKey: state.IPsecTransportKey,
+		LinkInstances:     state.LinkInstances,
+		IPsecReconcile:    state.IPsecReconcile,
 	}
 	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
 		return err

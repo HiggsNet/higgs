@@ -140,9 +140,14 @@ ipsec:
 如果 VICI socket 不可连接，启动/reload 会直接失败，避免运行到一半才发现
 StrongSwan 控制面不可用。
 
-双 Higgs daemon、signed `ipsec/*` record 发布、真实 VICI IKE_SA/CHILD_SA
-bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性断言，仍属于
-后续完整 smoke。
+配置了 `overlays:` / link group 的 daemon 会自动发布本节点 signed `ipsec/*`
+capability records：`ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和
+`ipsec/transport-key`。transport key 独立于 Zone signing key，并持久化到本地
+state meta，避免 daemon 重启后 fingerprint 抖动。
+
+双 Higgs daemon 完整 join/gossip 后的对端 `ipsec/*` record 同步、真实 VICI
+IKE_SA/CHILD_SA bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性
+断言，仍属于后续完整 smoke。
 
 ## 3. 最小手工 StrongSwan 健康检查
 

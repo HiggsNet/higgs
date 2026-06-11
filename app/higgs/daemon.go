@@ -661,6 +661,9 @@ func (d *DaemonService) handleEndpointTimerEvent() error {
 	if err := d.Sync.publishEndpointRecord(); err != nil {
 		return err
 	}
+	if err := d.Sync.publishIPsecRecords(); err != nil {
+		return err
+	}
 	d.notifyStateChanged()
 	return nil
 }
