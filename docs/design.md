@@ -477,9 +477,11 @@ netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 
 
 `pkg/transport/ipsec.PlanTransportLinks` / `ReconcileLinkInstances` 提供 Phase 4.2 的纯函数核心：planner 从 active state 的 peer `ipsec/*` records 与本地 `LinkGroupSpec` 输出 desired specs 和 skip reason；reconciler 用 desired spec、持久化 `LinkInstance`、StrongSwan SA 观测和 revocation 输入判定 create/update/adopt/repair/teardown/noop。daemon 已接入第一版 reconcile hook：state 变化后从 active state + overlay 配置生成 desired links，通过 IPsec driver 查询 `ListSAs`，读取/保存本地 `LinkInstance`，记录最近 action/skip 摘要，并通过 control status / `higgs debug links` 暴露 link 数、desired 数、interface、`if_id`、endpoint、owner、failure count、backoff 和最近错误。默认 daemon 仍使用 dry-run driver；apply 失败会写入 `LinkInstance` 的 failure/backoff 状态，backoff 未到期时 reconcile 不重复 apply，到期后 error/degraded link 重新进入 repair。真实 StrongSwan/XFRM 系统 apply、XFRM interface 实际状态观测和系统 smoke 留到 4.3。
 
+`LinkInstance.Owner` 是 daemon 自动清理资源的归属边界。新建实例会保存 `manager=higgs`、group id、instance id、transport id 和派生 owner token；reconcile 对“不再 desired”的旧实例只在 owner 字段与实例字段匹配、transport id 使用 `ipsec-*`、interface 使用 `hgs*` 命名时生成 teardown。apply 层对只有 persisted instance、没有 desired spec 的 teardown 再做一次同样校验，避免 daemon 误删管理员手工创建的 StrongSwan connection 或 XFRM interface。旧状态没有 token 时仍可通过 manager/group/instance/transport/name 校验迁移，带 token 的新状态会额外校验 token。
+
 StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对应一条 IKE connection 和一个 CHILD_SA，CHILD_SA 使用稳定 XFRM `if_id_in` / `if_id_out`，traffic selector 保持宽泛（IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`）。Phase 4 只证明 peer-to-peer tunnel link 可用；多前缀授权、route filter 和 Babel import/export 留给 Phase 5。
 
-撤销或删除 link 时使用 `TeardownTransportLink` 的可审计顺序：先 terminate IKE_SA/CHILD_SA，再 unload StrongSwan connection，最后删除 Higgs 管理的 XFRM interface。daemon 后续接入 LinkInstance 后应在这个顺序外层补本地运行态清理和持久化状态转换。
+撤销或删除 link 时使用 `TeardownTransportLink` 的可审计顺序：先 terminate IKE_SA/CHILD_SA，再 unload StrongSwan connection，最后删除通过 `LinkInstance.Owner` 校验的 Higgs 管理 XFRM interface。daemon 后续接入真实 provider 时仍应在这个顺序外层补本地运行态清理和持久化状态转换。
 
 撤销优先级最高：peer Zone 或父 delegation tombstone 后，LinkPlanner 必须立即停止输出该 peer 的 specs，并要求 provider teardown 已存在 SA/interface。
 

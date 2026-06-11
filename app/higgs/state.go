@@ -58,6 +58,7 @@ type linkOwnerState struct {
 	GroupID     string `json:"group_id,omitempty"`
 	InstanceID  string `json:"instance_id,omitempty"`
 	TransportID string `json:"transport_id,omitempty"`
+	Token       string `json:"token,omitempty"`
 }
 
 type ipsecReconcileState struct {

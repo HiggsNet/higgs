@@ -412,8 +412,11 @@ func TestReconcileLinkInstancesCreatesAdoptsRepairsAndTeardowns(t *testing.T) {
 		t.Fatalf("create action missing: %+v", result.Actions)
 	}
 	instance := result.Instances[LinkInstanceID(spec)]
-	if instance.Owner.Manager != "higgs" || instance.DesiredSpecHash == "" {
+	if instance.Owner.Manager != "higgs" || instance.Owner.Token == "" || instance.DesiredSpecHash == "" {
 		t.Fatalf("instance = %+v", instance)
+	}
+	if err := instance.Owner.Validate(instance); err != nil {
+		t.Fatalf("owner should validate: %v", err)
 	}
 
 	adopted := ReconcileLinkInstances(ReconcileInputs{
@@ -447,6 +450,37 @@ func TestReconcileLinkInstancesCreatesAdoptsRepairsAndTeardowns(t *testing.T) {
 	})
 	if action := firstAction(teardown, ReconcileActionTeardown); action == nil || action.Reason != "no longer desired" {
 		t.Fatalf("teardown action = %+v", teardown.Actions)
+	}
+}
+
+func TestReconcileLinkInstancesRetainsUnmanagedInstances(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	inst := LinkInstance{
+		ID:            "manual-conn",
+		GroupID:       "main",
+		PeerZone:      "node-b.catofes.",
+		TransportKind: ProviderStrongSwan,
+		TransportID:   "manual-conn",
+		ActualState:   LinkStateUp,
+		InterfaceName: "admin0",
+		XFRMIfID:      77,
+		Owner: ResourceOwner{
+			Manager:     "admin",
+			GroupID:     "main",
+			InstanceID:  "manual-conn",
+			TransportID: "manual-conn",
+		},
+	}
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Instances: map[string]LinkInstance{inst.ID: inst},
+		Now:       now,
+	})
+	action := firstAction(result, ReconcileActionNoop)
+	if action == nil || !strings.Contains(action.Reason, "unmanaged resource retained") {
+		t.Fatalf("actions = %+v, want retained unmanaged noop", result.Actions)
+	}
+	if result.Instances[inst.ID].ActualState != LinkStateUp {
+		t.Fatalf("instance state changed: %+v", result.Instances[inst.ID])
 	}
 }
 

@@ -342,6 +342,7 @@ Phase 4 的关键边界：
 - 地址与端口分离公告。远端运行时把 AddressCandidate 与 PortAdvertisement 组合成 ContactPoint 后再拨号。
 - StrongSwan/VICI/XFRM apply 的身份、授权、transport key、profile 和 revocation 判断必须来自 verified active state。DNS、reflector、discovery server 可以作为运行时地址候选来源；这些地址候选不单独构成信任依据，最终仍需匹配 verified active state 中声明的 peer identity / transport key，并通过 IKEv2 认证。
 - VICI socket、`charon`、XFRM interface、`CAP_NET_ADMIN`/root、UDP 端口可用性等 preflight 只决定本机是否能 apply；它们不是 gossip 记录，也不参与 Zone trust chain。
+- daemon 只自动修改或清理能通过 `LinkInstance.Owner` 验证的本机资源。owner 必须绑定 `manager=higgs`、link group、instance id、transport id 和 owner token；旧状态没有 token 时仍要求字段匹配并使用 Higgs 的 `ipsec-*` transport id / `hgs*` interface 命名约定。
 
 ### 6.1 Record key 与类型
 
@@ -531,6 +532,8 @@ provider apply 的第一版可审计边界已经固定在 `ApplyTransportLink` /
 
 当前实现的 planner/reconcile 核心在 `pkg/transport/ipsec`：`PlanTransportLinks` 从 verified active state 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，接入 zone glob/exact connect/deny rule，并返回结构化 skip reason；`role` / `tag` selector 已解析但在本地 peer label 来源接入前不会匹配。`LinkInstance` 持久化 desired spec hash、实际状态、XFRM if_id、IKE/CHILD_SA 名称、endpoint、Higgs owner、failure count、backoff_until 与 last_error；`ReconcileLinkInstances` 根据 desired spec、持久化 instance、driver SA 观测和 revocation 输入产生 create/update/adopt/repair/teardown/noop action。daemon state-change hook 已接入 driver `ListSAs` 观测、dry-run apply 和实例持久化；apply 失败会先落盘 backoff 状态，backoff 未到期时返回 `noop/apply backoff active`，到期后 error/degraded link 重新进入 repair。默认 daemon 仍使用 dry-run driver，真实 StrongSwan/XFRM 系统 apply、XFRM interface 实际状态观测和系统 smoke 仍在后续接入。
 
+`ResourceOwner` 当前包含 `manager`、`group_id`、`instance_id`、`transport_id` 和派生 `token`。当 persisted instance 不再出现在 desired set 中时，reconcile 会先验证 owner；无法证明属于 Higgs 的实例会保留为 noop，并在 reason 中说明 retained unmanaged resource。`ApplyReconcileAction` 对 instance-only teardown 再执行同样校验，因此 revocation/restart recovery 只能自动删除可追溯到 `LinkGroupSpec` + `LinkInstance` 的资源。
+
 StrongSwan 控制面通过 VICI command 完成，不解析 `swanctl` 输出作为核心状态来源。`StrongSwanDriver` 发出的最小命令集是：
 
 - `load-conn`：加载由 `TransportLinkSpec` 渲染出的 connection / CHILD_SA。
@@ -540,7 +543,7 @@ StrongSwan 控制面通过 VICI command 完成，不解析 `swanctl` 输出作�
 
 VICI message 的 connection 形状保持接近 `swanctl.conf`：local/remote auth 使用独立 transport key 对应的 `pubkey` 身份，remote address/port 来自选中的 `ContactPoint`，每条 link 只有一个 route-based CHILD_SA。CHILD_SA 设置 `mode=tunnel` 和稳定的 `if_id_in` / `if_id_out`；traffic selector 保持宽泛，IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`。Phase 4 不在 selector 中表达多前缀授权；Babel route filter 和 prefix authorization 留给 Phase 5。
 
-teardown 的第一版顺序固定为 `TeardownTransportLink` / `PlanTeardown`：terminate SA -> unload connection -> delete XFRM interface。daemon 后续在 LinkInstance 层补充本地运行态删除、状态转换和持久化。
+teardown 的第一版顺序固定为 `TeardownTransportLink` / `PlanTeardown`：terminate SA -> unload connection -> delete XFRM interface。对没有 desired spec、只来自 persisted `LinkInstance` 的 teardown，daemon 必须先通过 owner 校验；daemon 后续在 LinkInstance 层补充本地运行态删除、状态转换和持久化。
 
 方向组合：
 

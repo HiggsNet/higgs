@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -55,6 +56,7 @@ type ResourceOwner struct {
 	GroupID     string
 	InstanceID  string
 	TransportID string
+	Token       string
 }
 
 type ReconcileInputs struct {
@@ -100,6 +102,7 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 			GroupID:     spec.OverlayID,
 			InstanceID:  LinkInstanceID(spec),
 			TransportID: spec.TransportID,
+			Token:       ResourceOwnerToken(spec.OverlayID, LinkInstanceID(spec), spec.TransportID),
 		},
 	}
 }
@@ -118,6 +121,39 @@ func TransportLinkSpecHash(spec TransportLinkSpec) string {
 	}
 	sum := higgscrypto.Hash(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func ResourceOwnerToken(groupID, instanceID, transportID string) string {
+	sum := higgscrypto.Hash([]byte("higgs.ipsec.owner.v1"), []byte{0}, []byte(groupID), []byte{0}, []byte(instanceID), []byte{0}, []byte(transportID))
+	return hex.EncodeToString(sum[:8])
+}
+
+func (o ResourceOwner) Validate(instance LinkInstance) error {
+	if o.Manager != "higgs" {
+		return fmt.Errorf("resource is not managed by higgs")
+	}
+	if o.GroupID == "" || o.InstanceID == "" || o.TransportID == "" {
+		return fmt.Errorf("resource owner is incomplete")
+	}
+	if o.GroupID != instance.GroupID {
+		return fmt.Errorf("owner group %q does not match instance group %q", o.GroupID, instance.GroupID)
+	}
+	if o.InstanceID != instance.ID {
+		return fmt.Errorf("owner instance %q does not match instance %q", o.InstanceID, instance.ID)
+	}
+	if o.TransportID != instance.TransportID {
+		return fmt.Errorf("owner transport %q does not match instance transport %q", o.TransportID, instance.TransportID)
+	}
+	if o.Token != "" && o.Token != ResourceOwnerToken(o.GroupID, o.InstanceID, o.TransportID) {
+		return fmt.Errorf("resource owner token mismatch")
+	}
+	if instance.TransportID != "" && !strings.HasPrefix(instance.TransportID, "ipsec-") {
+		return fmt.Errorf("transport id %q does not use higgs ipsec naming", instance.TransportID)
+	}
+	if instance.InterfaceName != "" && !strings.HasPrefix(instance.InterfaceName, "hgs") {
+		return fmt.Errorf("interface %q does not use higgs naming", instance.InterfaceName)
+	}
+	return nil
 }
 
 func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
@@ -209,6 +245,10 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		if _, ok := desiredByID[id]; ok {
 			continue
 		}
+		if err := inst.Owner.Validate(inst); err != nil {
+			result.add(ReconcileActionNoop, nil, &inst, "unmanaged resource retained: "+err.Error())
+			continue
+		}
 		inst.ActualState = LinkStateRemoving
 		inst.LastTransition = now.Unix()
 		result.Instances[id] = inst
@@ -287,6 +327,9 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		}
 		if action.Instance == nil {
 			return ApplyPlan{}, fmt.Errorf("teardown action requires spec or instance")
+		}
+		if err := action.Instance.Owner.Validate(*action.Instance); err != nil {
+			return ApplyPlan{}, fmt.Errorf("refuse unmanaged teardown: %w", err)
 		}
 		spec := TransportLinkSpec{
 			PeerZone:      action.Instance.PeerZone,

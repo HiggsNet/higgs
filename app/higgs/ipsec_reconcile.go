@@ -160,6 +160,7 @@ func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.Link
 				GroupID:     inst.Owner.GroupID,
 				InstanceID:  inst.Owner.InstanceID,
 				TransportID: inst.Owner.TransportID,
+				Token:       inst.Owner.Token,
 			},
 		}
 	}
@@ -194,6 +195,7 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 				GroupID:     inst.Owner.GroupID,
 				InstanceID:  inst.Owner.InstanceID,
 				TransportID: inst.Owner.TransportID,
+				Token:       inst.Owner.Token,
 			},
 		}
 	}
