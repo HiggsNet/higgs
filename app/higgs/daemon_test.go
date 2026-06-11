@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -493,6 +495,109 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	}
 }
 
+func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
+	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
+	group := testIPsecLinkGroup()
+
+	transportA, err := gossip.Listen(gossip.Config{
+		PeerID:     configA.PeerID,
+		ListenAddr: configA.ListenAddr,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(A): %v", err)
+	}
+	defer transportA.Close()
+	transportB, err := gossip.Listen(gossip.Config{
+		PeerID:     configB.PeerID,
+		ListenAddr: configB.ListenAddr,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(B): %v", err)
+	}
+	defer transportB.Close()
+	transportA.AddPeer(configB.PeerID, transportB.LocalAddr())
+	transportB.AddPeer(configA.PeerID, transportA.LocalAddr())
+	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
+	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
+
+	rtA := &Runtime{
+		Config:    testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "a"), "198.51.100.10:4500", group),
+		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
+		Clock:     time.Now,
+	}
+	rtB := &Runtime{
+		Config:    testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "b"), "198.51.100.20:4500", group),
+		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
+		Clock:     time.Now,
+	}
+	if err := rtA.SaveState(stateA); err != nil {
+		t.Fatalf("SaveState(node-a): %v", err)
+	}
+	if err := rtB.SaveState(stateB); err != nil {
+		t.Fatalf("SaveState(node-b): %v", err)
+	}
+
+	driverA := &observedIPsecDriver{}
+	driverB := &observedIPsecDriver{}
+	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
+	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
+	serviceA.Sync.Transport = transportA
+	serviceB.Sync.Transport = transportB
+	serviceA.IPsecDriver = driverA
+	serviceA.XFRMDriver = driverA
+	serviceB.IPsecDriver = driverB
+	serviceB.XFRMDriver = driverB
+
+	if err := serviceA.handleEndpointTimerEvent(); err != nil {
+		t.Fatalf("publish node-a ipsec records: %v", err)
+	}
+	if err := serviceB.handleEndpointTimerEvent(); err != nil {
+		t.Fatalf("publish node-b ipsec records: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	serveA, stopA := serveDaemonPackets(ctx, serviceA, transportA)
+	if err := serviceB.handleSyncTimerEvent(ctx, true); err != nil {
+		t.Fatalf("sync node-b from node-a: %v", err)
+	}
+	stopA()
+	<-serveA
+
+	serveB, stopB := serveDaemonPackets(ctx, serviceB, transportB)
+	if err := serviceA.handleSyncTimerEvent(ctx, true); err != nil {
+		t.Fatalf("sync node-a from node-b: %v", err)
+	}
+	stopB()
+	<-serveB
+
+	latestA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a): %v", err)
+	}
+	latestB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b): %v", err)
+	}
+	assertGossipedIPsecRecords(t, latestA, "node-b.catofes.")
+	assertGossipedIPsecRecords(t, latestB, "node-a.catofes.")
+	specA := singleDesiredSpec(t, latestA)
+	specB := singleDesiredSpec(t, latestB)
+	if specA.PeerZone != "node-b.catofes." || specB.PeerZone != "node-a.catofes." {
+		t.Fatalf("planned peer zones = %s/%s, want node-b/node-a", specA.PeerZone, specB.PeerZone)
+	}
+	assertDryRunApply(t, driverA, specA, group.NetNS)
+	assertDryRunApply(t, driverB, specB, group.NetNS)
+	if latestA.IPsecReconcile == nil || latestA.IPsecReconcile.DesiredLinks != 1 || len(latestA.IPsecReconcile.Actions) == 0 {
+		t.Fatalf("node-a reconcile = %+v, want desired link and action", latestA.IPsecReconcile)
+	}
+	if latestB.IPsecReconcile == nil || latestB.IPsecReconcile.DesiredLinks != 1 || len(latestB.IPsecReconcile.Actions) == 0 {
+		t.Fatalf("node-b reconcile = %+v, want desired link and action", latestB.IPsecReconcile)
+	}
+}
+
 func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4135, 0)
@@ -926,6 +1031,164 @@ func observedSAForSpec(spec ipsec.TransportLinkSpec, localEndpoint, remoteEndpoi
 		RemoteEndpoint: remoteEndpoint,
 		Endpoint:       remoteEndpoint,
 		Established:    true,
+	}
+}
+
+func buildTestABDaemonStates(t *testing.T) (*stateFile, *syncConfigFile, *stateFile, *syncConfigFile) {
+	t.Helper()
+	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root): %v", err)
+	}
+	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(catofes): %v", err)
+	}
+	nodeAPub, nodeAPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-a): %v", err)
+	}
+	nodeBPub, nodeBPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-b): %v", err)
+	}
+
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: rootPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate},
+			}},
+		}},
+	}
+	catofesAuthority := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: catofesPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate},
+			}},
+		}},
+	}
+	nodeAAuthority := testWriteAuthority("node-a.catofes.", nodeAPub)
+	nodeBAuthority := testWriteAuthority("node-b.catofes.", nodeBPub)
+	catofesDelegation := testSignedDelegation(t, "catofes.", *catofesAuthority, zone.RootZone, rootPriv)
+	nodeADelegation := testSignedDelegation(t, "node-a.catofes.", *nodeAAuthority, "catofes.", catofesPriv)
+	nodeBDelegation := testSignedDelegation(t, "node-b.catofes.", *nodeBAuthority, "catofes.", catofesPriv)
+
+	buildNetwork := func(managed zone.ZonePath) *zone.NetworkState {
+		ns := zone.NewNetworkState()
+		ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+		ns.Zones["catofes."] = zone.NewZoneState("catofes.", catofesAuthority)
+		ns.Zones[zone.RootZone].Delegations["catofes."] = catofesDelegation
+		ns.Zones["catofes."].Delegations["node-a.catofes."] = nodeADelegation
+		ns.Zones["catofes."].Delegations["node-b.catofes."] = nodeBDelegation
+		switch managed {
+		case "node-a.catofes.":
+			ns.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nodeAAuthority)
+		case "node-b.catofes.":
+			ns.Zones["node-b.catofes."] = zone.NewZoneState("node-b.catofes.", nodeBAuthority)
+		default:
+			t.Fatalf("unexpected managed zone %s", managed)
+		}
+		configureValidation(ns)
+		for _, path := range []zone.ZonePath{"catofes.", managed} {
+			if err := higgscrypto.VerifyChain(ns, path, time.Unix(123, 0)); err != nil {
+				t.Fatalf("VerifyChain(%s): %v", path, err)
+			}
+		}
+		return ns
+	}
+
+	stateA := &stateFile{
+		ManagedZone:    "node-a.catofes.",
+		Network:        buildNetwork("node-a.catofes."),
+		ZonePrivateKey: nodeAPriv,
+	}
+	stateB := &stateFile{
+		ManagedZone:    "node-b.catofes.",
+		Network:        buildNetwork("node-b.catofes."),
+		ZonePrivateKey: nodeBPriv,
+	}
+	configA := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
+	configB := &syncConfigFile{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
+	return stateA, configA, stateB, configB
+}
+
+func testWriteAuthority(path zone.ZonePath, pub ed25519.PublicKey) *zone.ZoneAuthority {
+	return &zone.ZoneAuthority{
+		Zone:      path,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+}
+
+func testSignedDelegation(t *testing.T, path zone.ZonePath, authority zone.ZoneAuthority, parent zone.ZonePath, priv ed25519.PrivateKey) *zone.Delegation {
+	t.Helper()
+	delegation := &zone.Delegation{
+		ZoneName:  path,
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: authority,
+	}
+	if err := higgscrypto.SignDelegation(delegation, parent, priv); err != nil {
+		t.Fatalf("SignDelegation(%s): %v", path, err)
+	}
+	return delegation
+}
+
+func testDaemonIPsecAppConfig(dataDir, advertiseAddr string, group ipsec.LinkGroupSpec) *appConfig {
+	config := defaultAppConfig()
+	config.DataDir = dataDir
+	config.StatePath = filepath.Join(dataDir, "higgs.db")
+	config.ListenAddr = advertiseAddr
+	config.AdvertiseAddrs = []string{advertiseAddr}
+	config.PublishEndpoints = false
+	config.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	return config
+}
+
+func serveDaemonPackets(ctx context.Context, service *DaemonService, transport *gossip.Transport) (<-chan struct{}, context.CancelFunc) {
+	serveCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-serveCtx.Done():
+				return
+			default:
+			}
+			packet, err := receiveWithContext(serveCtx, transport, time.Now().Add(100*time.Millisecond))
+			if err != nil {
+				continue
+			}
+			_ = service.handlePacketEvent(packet, serveCtx)
+		}
+	}()
+	return done, cancel
+}
+
+func assertGossipedIPsecRecords(t *testing.T, state *stateFile, peer zone.ZonePath) {
+	t.Helper()
+	zs := state.Network.Zones[peer]
+	if zs == nil {
+		t.Fatalf("zone %s missing after gossip", peer)
+	}
+	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.RecordKeyTransportKey} {
+		if zs.Records[key] == nil {
+			t.Fatalf("%s missing for %s after gossip", key, peer)
+		}
 	}
 }
 

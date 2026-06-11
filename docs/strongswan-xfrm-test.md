@@ -145,6 +145,11 @@ capability records：`ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和
 `ipsec/transport-key`。transport key 独立于 Zone signing key，并持久化到本地
 state meta，避免 daemon 重启后 fingerprint 抖动。
 
+普通 Go 测试已经覆盖双 daemon dry-run 闭环：两端使用真实 root -> `catofes.` ->
+`node-a`/`node-b` 信任链，各自发布 signed `ipsec/*` records，通过 UDP gossip 同步
+对端 Zone，再由本地 `LinkGroupSpec` 推导 `TransportLinkSpec` 并执行 dry-run
+provider apply。这证明 daemon publish/gossip/planner/reconcile 边界已接通。
+
 双 Higgs daemon 完整 join/gossip 后的对端 `ipsec/*` record 同步、真实 VICI
 IKE_SA/CHILD_SA bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性
 断言，仍属于后续完整 smoke。
