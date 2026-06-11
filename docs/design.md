@@ -2,7 +2,7 @@
 
 > **文档状态（2026-06）**
 > Phase 0–3 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）起为规划阶段。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已进入实现阶段：record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / XFRM preflight 已落地，真实双 daemon + VICI IKE/CHILD_SA + tunnel ping 仍在 4.3 扩展中。
 
 ## 原始需求摘要
 
@@ -55,7 +55,7 @@
 │  pkg/core/   │ pkg/transport/│  pkg/routing/     │
 │              │   drivers     │    adapters        │
 ├──────────────┼───────────────┼───────────────────┤
-│ ✅ identity  │ 🔲 wireguard  │ 🔲 babeld         │
+│ ✅ identity  │ 🟨 ipsec      │ 🔲 babeld         │
 │ ✅ gossip    │   (Phase 4)   │   (Phase 5)        │
 │ ✅ zone      │               │                   │
 │ 🔲 merkle   │               │                   │
@@ -65,7 +65,7 @@
 │       vxlan (🔲)    seg6 (🔲)                    │
 └──────────────────────────────────────────────────┘
 
-✅ = 已实现   🔲 = 已建目录/存根，待实现
+✅ = 已实现   🟨 = 部分实现/系统闭环扩展中   🔲 = 已建目录/存根，待实现
 ```
 
 ---
@@ -224,7 +224,7 @@ VICI + XFRM apply
 
 #### 2.4.1 Public IPsec records
 
-Phase 4 规划以下 signed records。所有记录都由节点自身 Zone authority 签名，通过普通 gossip 同步，远端只在 `VerifyChain` / `VerifyRecord` 通过后使用。
+Phase 4 已实现以下 signed record 的模型、解析和 planner 消费路径。所有记录都由节点自身 Zone authority 签名，通过普通 gossip 同步，远端只在 `VerifyChain` / `VerifyRecord` 通过后使用。
 
 ```text
 node-a.catofes./ipsec/profile
@@ -356,7 +356,15 @@ ipsec_address_source_order:
 - `previous`：端口轮换 grace 窗口内可回退的旧端口。
 - `range`：daemon 可在该范围内选择端口；也可配置固定端口。
 
-Phase 4 只要求把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；daemon 后续只负责签发/刷新，peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。StrongSwan 自定义端口的第一版边界是 `charon.port` / `charon.port_nat_t` + connection `remote_port` + 必要时 reestablish，MOBIKE/port floating 和多实例/DNAT 的高级策略留到 Phase 7。
+Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。这里需要区分两层能力：当前已实现的是“公告 + planner fallback”，即远端可以优先尝试 current，current 失败/backoff 时在 grace 内回退 previous；这不代表本机 StrongSwan 已经同时监听新旧两组端口，也不代表系统层已经做到无损 rotate。StrongSwan 自定义端口的第一版边界是 `charon.port` / `charon.port_nat_t` + connection `remote_port` + 必要时 reestablish；低频生产可用的平滑 rotate 提前到 Phase 4.4 设计和实现，高频/对抗性 port hopping、复杂多实例策略留到 Phase 7。
+
+平滑 rotate 的 Phase 4.4 目标是把 current/previous grace 变成系统可执行的 staged transition，而不只是远端选择候选端口。当前优先考虑三种实现路径：
+
+- 外层 DNAT/redirect grace：charon 保持稳定监听端口，系统防火墙在 grace 窗口内把新旧 advertised 端口都转发到当前监听端口，grace 后清理旧规则。
+- 双 connection / staged reestablish：为新旧端口加载可区分的临时 StrongSwan connection，先确认新 SA，再终止旧 SA。
+- 多 charon/socket 实例：新旧监听端口并行，grace 后清理旧实例；部署成本最高，作为后备方案。
+
+无论选择哪条路径，`LinkInstance` 都需要记录 selected ContactPoint、port generation、rotate phase、旧/新端口 owner、rollback deadline 和最近 rotate error；`higgs debug links` 应能说明当前处于 preparing、dual-running、cutover、rollback 还是 cleanup，避免端口轮换变成不可解释的连接抖动。
 
 #### 2.4.3 本地 MeshPolicy rule DSL
 
@@ -410,7 +418,29 @@ NAT 处理原则：
 - 公网节点主动拨入 NAT 后节点需要 IPv6、静态端口映射、已验证 observed external port、打洞或 relay；不能仅凭 `behind_nat` hint 假装可达。
 - 两端都在 NAT 后时，若无可验证公网 ContactPoint，应进入 `degraded`，debug 输出明确不可达原因。
 
-#### 2.4.5 LinkPlanner 输出
+#### 2.4.5 远端公告到本机 reconcile 的运行流程
+
+远端节点从“不支持/未广播 StrongSwan”变成“广播可连接”时，本机不会因为收到某个字符串就立即修改系统网络。当前 daemon 的处理路径是：
+
+```text
+gossip announce
+  -> SyncRuntime.handleAnnounceUntil
+  -> VerifyChain / VerifyRecord / ApplySnapshot 或 ApplyRecordSnapshot
+  -> verified active state digest 发生变化
+  -> DaemonService.handleRemoteAppliedEvent
+  -> notifyStateChanged
+  -> PlanTransportLinks(active state + 本地 LinkGroupSpec)
+  -> ReconcileLinkInstances(desired + persisted LinkInstance + driver ListSAs)
+  -> ApplyReconcileAction(create/update/repair/teardown)
+```
+
+因此，远端新发布 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 后，只有这些记录已经通过 Zone trust chain 验证并进入本地 active state，才会被 LinkPlanner 使用。LinkPlanner 会重新扫描所有 verified peer zone：缺少任一 `ipsec/*` 记录、profile disabled、本地 connect/deny rule 不匹配、accept intent 不允许、地址族/path mode 不支持、没有可拨 ContactPoint、NAT 后缺少可验证公网证据，都会变成结构化 skip reason，而不是进入 apply。
+
+如果远端记录从“缺失/不匹配”变成“完整且匹配本地 MeshPolicy”，planner 会输出新的 `TransportLinkSpec`。reconciler 随后根据本地是否已有 `LinkInstance`、driver 是否已经能从 `ListSAs` 看到匹配 SA、desired spec hash 是否变化、是否处于 apply backoff，决定 `create`、`adopt`、`update`、`repair` 或 `noop`。daemon event drain 期间多次 state change 会合并为一次 IPsec `ListSAs` + reconcile/apply，所以同一轮收到 profile/address/port/key 多条 record 时不会对同一个 peer/group 重复加载 connection/interface。
+
+当前默认 daemon 未注入真实系统 driver 时使用 dry-run driver，因此可在非 root 环境验证 desired-state、action 和 debug 输出。真实 StrongSwan/VICI + XFRM 系统 apply、双 daemon IKE/CHILD_SA 建立和 tunnel ping 仍归入 4.3 系统闭环。
+
+#### 2.4.6 LinkPlanner 输出
 
 LinkPlanner 的输入：
 - 本地 `MeshPolicy`。
@@ -469,7 +499,7 @@ type TransportLinkSpec struct {
 }
 ```
 
-`LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、tunnel address pool 以及 reconcile/backoff 策略；daemon 后续从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
+`LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、tunnel address pool 以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
 netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `overlay.default_netns` 默认是 `kind=name, name=h2, create=true`；`ipsec.default_netns` 只作为旧配置兼容别名。link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；Phase 5 babeld 应运行在对应 `LinkGroupSpec.NetNS` 中，和 XFRM interface 看到同一张 overlay data-plane；只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
 
@@ -792,15 +822,15 @@ type PeerView struct {
 | 哈希 | `blake2b-256`（`golang.org/x/crypto`） | — | 用于 KeyID、RecordHash、ZoneRoot |
 | 签名 | ED25519（标准库） | — | 密钥加密存储：AES-GCM + bcrypt |
 | Daemon / 单 writer | `higgs daemon` + Unix control socket | systemd / 远程管理预留 | Phase 3 最小形态已实现 |
-| StrongSwan / IKEv2 控制 | _未实现_（Phase 4） | VICI / `swanctl` 配置模型 | 动态路由主线传输 |
-| XFRM / netlink | _未实现_（Phase 4） | `vishvananda/netlink` | 管理 XFRM interface、地址、路由；生态成熟 |
+| StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot 已实现 | 真实双 daemon IKE/CHILD_SA smoke | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
+| XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
 | 路由协议 | _未实现_（Phase 5） | `babeld` + 控制 socket | Babel 更适合 mesh，自动邻居发现 |
 | 防火墙 | _未实现_（Phase 6） | `nftables` netlink | 现代 Linux 趋势 |
 
 ---
 
-## 六、当前实现现状（Phase 0–3）
+## 六、当前实现现状（Phase 0–4.2）
 
 ### 已落地
 
@@ -819,15 +849,15 @@ type PeerView struct {
 | Relay fanout（变更后对其他 peer 触发轻量 sync） | `app/higgs/sync.go` | ✅ 完整 |
 | Peer 动态发现（endpoint record 扫描、TTL/grace 管理） | `pkg/core/gossip/` | ✅ 完整 |
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
-| Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ Phase 3 最小形态 |
+| Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ 已实现，admin 写入和 IPsec state-change hook 已接入 |
 | CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db） | `app/higgs/` | ✅ 完整 |
 | 配置文件（YAML + 环境变量覆盖） | `app/higgs/config.go` | ✅ 完整 |
 
-### 预留/存根（Phase 4+）
+### 进行中/预留（Phase 4+）
 
 | 模块 | 包路径 | 状态 |
 |------|--------|------|
-| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` | 🟨 record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / preflight / netns 配置基础已创建 |
+| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / VICI boundary / XFRM preflight / daemon debug 已创建；真实双 daemon IKE/CHILD_SA/tunnel ping 待 4.3 |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
 | Babeld 路由适配器 | `pkg/routing/babeld/` | 🔲 仅 doc.go |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |

@@ -419,7 +419,7 @@
     - `AddressCandidateOptions.AllowPrivateLocal` 默认 false，local 私网、loopback、link-local、ULA 候选会被过滤；LAN/实验场景可显式放开。
   - [x] 支持 address source priority 配置：默认可为 `manual-address/manual-dns > discovery > reflector > local`，但必须允许管理员改顺序或按 rule 限制来源；不要把动态 DNS 视为天然最高优先级
     - `AddressCandidateOptions.SourceOrder` / `AllowedSources` 控制排序与过滤；排序先按 source order，再按单条 priority/current generation，避免动态 DNS 被硬编码成最高优先级。
-  - [x] 设计端口选择/轮换边界：端口由本节点在配置的固定值或范围内选择并公告；轮换时同时发布 current 与 previous grace；peer 连接时用当前地址候选与端口公告组合；StrongSwan 自定义端口第一版按 `charon.port` / `charon.port_nat_t` + connection `remote_port` + reestablish 边界处理，高频 port hopping / 多实例 / DNAT 留到 Phase 7
+  - [x] 设计端口选择/轮换边界：端口由本节点在配置的固定值或范围内选择并公告；轮换时同时发布 current 与 previous grace；peer 连接时用当前地址候选与端口公告组合；当前实现只完成公告/planner/dry-run 层，不代表 StrongSwan 已同时监听新旧端口；平滑 rotate 的低频生产路径提前到 Phase 4.4 规划，高频 port hopping / 对抗性跳变留到 Phase 7
   - [x] 通过 VICI 控制 StrongSwan，优先使用 `github.com/strongswan/govici/vici`；`swanctl` 只作为人工 debug/dry-run 对照，不作为核心控制面输出解析依赖
     - 已新增 `StrongSwanDriver` / `VICIClient` 边界：driver 只发 `load-conn`、`terminate`、`unload-conn`、`list-sas` VICI command，不解析 `swanctl` 输出；`VICIClient` 的 command/message 形状与 govici 的 `Session.Call` / streaming command 模型对齐，真实环境接入 govici session 时不改变 `IPsecDriver` 边界。
   - [x] 定义 `IPsecDriver` / `XFRMDriver` 薄接口：`LoadConnection`、`UnloadConnection`、`TerminateSA`、`ListSAs`、`EnsureInterface`、`DeleteInterface`、`AssignAddress`
@@ -510,6 +510,21 @@
   - [ ] 明确该 smoke 不覆盖 Phase 5 多前缀路由授权；只验证 peer-to-peer tunnel address 和 route-based VPN link 可用
   - [x] 将真实 StrongSwan/XFRM smoke 默认排除在 `make smoke-all` 之外，作为显式 root/system integration 目标；`ipsec-dry-run-smoke` 可纳入常规 `make check` 或 smoke-all
 
+- [ ] **4.4 平滑端口轮换 / 低频 rotate（生产必需）**
+  - 目标：把 `ipsec/ports` 的 current/previous grace 从“公告和 planner fallback”推进到可执行的低频平滑 rotate，支持运营商 QoS、端口迁移、NAT 映射变化和维护窗口中的不中断或低中断切换；高频/对抗性 port hopping 仍留到 Phase 7。
+  - 明确当前边界：现在 `PlanPortRecord` 会发布 current + previous grace，peer planner 会在 current 失败/backoff 时回退 previous；但 StrongSwan apply 当前一次只加载 `TransportLinkSpec.ContactPoints[0]` 对应的一个 `remote_port`，本机 charon 也没有同时监听新旧两组端口，因此还不是平滑 rotate。
+  - 做方案选择并记录取舍：
+    - **preferred：外层 DNAT/redirect grace**。charon 保持一个稳定本地监听端口，nftables/iptables 在 grace 窗口内把新旧 advertised 端口都转发到当前 charon 端口；优点是可同时接受新旧端口，避免多 charon 实例，缺点是依赖防火墙/NAT 规则和 root 权限。
+    - **备选：双 connection / staged reestablish**。为 current 与 previous 分别加载临时 connection，先让新端口建立 SA，确认 `ListSAs` 后再 terminate/unload 旧 connection；优点是纯 StrongSwan/VICI 边界内可审计，缺点是命名、owner、SA 去重、对端同步时序更复杂。
+    - **备选：多 charon/socket 实例**。新旧端口同时监听，grace 后清理旧实例；优点是语义直接，缺点是部署复杂，和 namespace/secret/VICI 管理成本高。
+  - 扩展 `LinkInstance` / debug 状态：记录 selected contact、port generation、rotation phase（idle/preparing/dual-running/cutover/rollback/cleanup）、old/new transport id 或 NAT owner、last rotate error、rollback deadline；`higgs debug links` 显示 current/previous 端口、实际 SA endpoint 和 rotate phase。
+  - 扩展 planner/reconcile：当远端 `ipsec/ports` generation 变化或本地端口 generation 切换时，不直接替换成单个新 spec；先生成 staged rotate action，保留旧端口 grace，等待新 SA/新路径观测成功后再清理旧路径。
+  - 失败与回滚：current 端口 apply/SA 建立失败时在 grace 内继续使用 previous；QoS 误判或新端口丢包升高时自动回滚到 previous/static fallback；限制探测频率，避免端口旋转变成对远端/运营商的噪音。
+  - 验证：
+    - dry-run：current + previous grace 生成 staged apply plan，debug 输出 rotate phase；current 失败/backoff 时仍选择 previous。
+    - system smoke：在 root Linux 环境中验证新旧 advertised 端口 grace 内都可触发 IKE/CHILD_SA 或被 DNAT 到当前 charon，grace 后旧端口被清理。
+    - restart recovery：daemon 重启后从 `LinkInstance` + active `ipsec/ports` + `ListSAs` 恢复 rotate phase，不重复创建旧规则，也不提前删除仍在 grace 的旧端口。
+
 ## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 
 **目标：** babeld 在 XFRM/TransportLink 接口上发现邻居、学习路由，且只接受被授权的前缀。
@@ -581,11 +596,11 @@
   - 每条链路独立运行 babeld 接口
   - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
-- [ ] **7.2 UDP 端口候选 / 端口轮换（Port Hopping）**
-  - 目标：规避部分网络对大流量固定 UDP 五元组的 QoS/丢包/限速；先做多 endpoint / 多 port probe 与质量选择，再评估定时 rotate
-  - IKEv2/IPsec 第一版不假设能像 WireGuard 一样任意 per-peer 跳监听端口：标准 IKE/NAT-T 默认使用 UDP 500/4500，StrongSwan 支持连接级 `local_port`/`remote_port` 与全局 NAT-T 端口配置，但数据面端口轮换通常需要 reestablish/MOBIKE/多实例或外层 DNAT 配合；Phase 4 只把端口作为独立可公告对象建模，不强行实现高频跳变
+- [ ] **7.2 高频 UDP 端口候选 / 对抗性 Port Hopping**
+  - 目标：在 Phase 4.4 已具备低频平滑 rotate 后，再评估用于规避固定 UDP 五元组 QoS/丢包/限速的多 endpoint / 多 port probe、质量评分和定时/事件驱动 hopping。
+  - IKEv2/IPsec 仍不假设能像 WireGuard 一样任意 per-peer 高频跳监听端口：标准 IKE/NAT-T 默认使用 UDP 500/4500，StrongSwan 支持连接级 `local_port`/`remote_port` 与全局 NAT-T 端口配置，但高频数据面端口跳变通常需要 reestablish/MOBIKE/多实例或外层 DNAT 配合；Phase 7 只做 Phase 4.4 低频 rotate 之上的高级策略。
   - 支持在 signed `ipsec/ports` record 中发布多个端口候选：标准 500/4500、备用自定义 IKE 端口、备用 NAT-T/encap 端口、current/previous grace；daemon 按质量、失败率、运营商特征选择，并与地址候选组合成 ContactPoint
-  - rotate 必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径、QoS 误判回滚、端口探测限速
+  - hopping 必须包含：old-port grace period、clock skew 容忍、fallback static port、失联恢复路径、QoS 误判回滚、端口探测限速
   - 如果网络允许 ESP 协议且 QoS 主要针对 UDP，可优先评估非 NAT-T ESP 路径；若必须 UDP encapsulation，再评估端口候选和 reestablish 成本
   - 增加公网验证：固定 UDP 4500 大流量劣化时，备用端口/备用 endpoint 能否降低丢包；记录 `swanctl --list-sas`、RTT、loss、babel route cost 变化
 

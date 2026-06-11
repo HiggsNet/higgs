@@ -332,9 +332,9 @@ Transport.lastSeenAddrs            // Send() 无静态出站地址时，回退�
 
 ---
 
-## 6. Phase 4 IPsec / Overlay 公告协议（规划）
+## 6. Phase 4 IPsec / Overlay 公告协议（当前实现边界）
 
-本节描述 Phase 4 规划中的 IPsec/StrongSwan mesh 控制面记录。它们仍然是普通 Zone Record，通过本文前述 gossip 协议同步和验证；gossip 只负责传播 signed state，不直接解释或执行 StrongSwan 配置。真正的建链由本机 daemon 的 LinkPlanner 和 `provider=strongswan` 驱动完成。
+本节描述 Phase 4 当前使用的 IPsec/StrongSwan mesh 控制面记录和 daemon 处理边界。它们仍然是普通 Zone Record，通过本文前述 gossip 协议同步和验证；gossip 只负责传播 signed state，不直接解释或执行 StrongSwan 配置。真正的建链由本机 daemon 的 LinkPlanner 和 `provider=strongswan` 驱动完成。
 
 Phase 4 的关键边界：
 - 公开记录只表达节点的 IPsec 能力、accept intent、地址候选、端口公告和 transport key。
@@ -346,9 +346,9 @@ Phase 4 的关键边界：
 
 ### 6.1 Record key 与类型
 
-`pkg/transport/ipsec` 已实现这些 record 的 Go 结构、解析/校验、ContactPoint 组合逻辑和本机 StrongSwan/XFRM preflight 检测；daemon 仍必须只在记录已经通过 Zone trust chain 验证后使用它们。
+`pkg/transport/ipsec` 已实现这些 record 的 Go 结构、解析/校验、ContactPoint 组合逻辑、planner/reconcile 核心和本机 StrongSwan/XFRM preflight 检测；daemon 仍必须只在记录已经通过 Zone trust chain 验证后使用它们。
 
-规划 record：
+当前 record：
 
 | Key | Type | 用途 |
 |-----|------|------|
@@ -481,7 +481,15 @@ DNS 不是天然最高优先级。动态 DNS 很多时候只是 public reflector
 
 `pkg/transport/ipsec.PlanPortRecord` 是第一版本地端口选择边界：未配置时发布标准 500/4500；固定端口按配置发布；范围端口按 `generation` 稳定选择一组 IKE/NAT-T 端口；轮换时把上一代 `current` 带入 `previous` 并设置 grace `valid_until`。peer 端只把未过期的 `current` / `previous` 与 address candidates 组合成 `ContactPoint`，不把端口写死到地址里。
 
-UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它们写死。StrongSwan 当前的实际边界是：`charon.port` / `charon.port_nat_t` 控制本地监听端口，`swanctl.conf` connection 的 `remote_port` 可指定远端端口；自定义 server port 通常走 NAT-T socket，MOBIKE 默认可能把会话漂移到 NAT-T 端口。Phase 4 先支持 current/previous grace 与明确 reestablish，Phase 7 再考虑高频 port hopping、多实例或 DNAT 风格的更激进方案。
+UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它们写死。StrongSwan 当前的实际边界是：`charon.port` / `charon.port_nat_t` 控制本地监听端口，`swanctl.conf` connection 的 `remote_port` 可指定远端端口；自定义 server port 通常走 NAT-T socket，MOBIKE 默认可能把会话漂移到 NAT-T 端口。当前已实现的是公告和 planner 层的 current/previous grace，不是系统层平滑 rotate：`BuildStrongSwanConnection` 仍只从 `TransportLinkSpec.ContactPoints[0]` 选择一个 `remote_port`，daemon 也没有让 charon 同时监听新旧两组端口。低频生产可用的平滑 rotate 提前到 Phase 4.4，Phase 7 只保留高频/对抗性 port hopping。
+
+Phase 4.4 的平滑 rotate 协议边界：
+
+- `ipsec/ports` 的 `generation` 是轮换代数；current generation 变化表示进入新的端口世代。
+- `previous[].valid_until` 是旧端口 grace 窗口，不保证本地一定还在监听旧端口；只有当本机 rotate provider 明确支持 DNAT/dual connection/multi-socket grace 时，旧端口才是系统层可接收路径。
+- daemon 必须把 rotate phase 写入本地 `LinkInstance` 或 reconcile 摘要，例如 `preparing`、`dual-running`、`cutover`、`rollback`、`cleanup`，并把 selected ContactPoint、old/new generation、rollback deadline 暴露给 `higgs debug links`。
+- planner/reconcile 看到端口 generation 变化时，不应直接把旧 desired spec 替换成单个新 spec；应生成 staged rotate action，先让新端口路径建立或 DNAT 生效，再在 grace 结束后清理旧路径。
+- 失败时必须可回滚：新 current 端口 apply 失败、IKE/CHILD_SA 未建立、或质量指标恶化时，在 grace 内继续使用 previous/static fallback，并限制下一次探测/rotate 频率。
 
 ### 6.5 `ipsec/transport-key`
 
@@ -506,7 +514,32 @@ transport private key 是 daemon 本地持久化材料，不进入 gossip。`ips
 
 优先使用 Ed25519。若 StrongSwan/部署环境兼容性不足，可退到 ECDSA P-256。RSA 长 key 会显著增加 record 和控制面体积，不作为默认路线。
 
-### 6.6 LinkPlanner 组合语义
+### 6.6 远端公告到本机建链的处理流程
+
+远端节点如果之前没有广播 StrongSwan/IPsec 能力，现在开始广播完整且可连接的 `ipsec/*` records，本机处理顺序如下：
+
+```text
+1. gossip 收到 announce。
+2. SyncRuntime.handleAnnounceUntil 处理 snapshot / record / digest。
+3. ApplySnapshot 或 ApplyRecordSnapshot 验证 Zone trust chain、record 签名、版本和 revocation 边界。
+4. 只有 verified active state digest 发生变化时，daemon 才进入 remote-applied/state-changed 路径。
+5. daemon 调用 notifyStateChanged；事件队列 drain 期间只标记 ipsecDirty，队列结束后统一 flush。
+6. reconcileIPsecLinks 读取本地 LinkGroupSpec，调用 PlanTransportLinks 重算 desired links。
+7. ReconcileLinkInstances 对比 desired spec、持久化 LinkInstance、driver ListSAs 观测和 revoked peers。
+8. create/update/repair/teardown 动作进入 ApplyReconcileAction；adopt/noop 不触发系统 apply。
+```
+
+这条路径有几个重要边界：
+
+- **信任边界**：远端 announce 本身不授权建链；只有已验证的 active state 中的 peer Zone、`ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 才能进入 planner。
+- **本地策略边界**：远端声明 `enabled=true` / `accept=inbound` 只表示它愿意被尝试连接；本机是否连接仍由本地 `LinkGroupSpec` / MeshPolicy connect/deny rule 决定。
+- **可达性边界**：DNS、reflector、discovery、observed port 只提供 runtime ContactPoint 候选，不成为身份或授权依据；NAT 后 peer 如果没有 public/observed/映射等证据，会被 `no_inbound_nat_evidence` skip。
+- **幂等边界**：短时间收到 profile/address/port/key 多条 record 时，daemon 会把同一轮 state change 合并为一次 IPsec `ListSAs` + reconcile/apply，避免重复加载同一个 connection/interface。
+- **状态边界**：apply 成功只把 `LinkInstance` 推进到 `connecting`；必须后续 `ListSAs` 观测到匹配 IKE/CHILD_SA 后才进入 `up`。
+
+如果远端只发布了其中一部分记录，例如只有 `ipsec/profile` 但没有 `ipsec/transport-key` 或端口公告，planner 必须输出 `missing_ipsec_records`，不会创建 `TransportLinkSpec`。如果远端完整发布后又被父 Zone revocation/tombstone 撤销，planner 停止输出 desired spec，reconciler 对已有 Higgs-owned instance 生成 teardown，并阻止后续 endpoint fallback 或 backoff repair 把它重新拉起。
+
+### 6.7 LinkPlanner 组合语义
 
 LinkPlanner 输入：
 - verified active state 中的 peer Zone 和 `ipsec/*` records。
@@ -560,7 +593,7 @@ NAT 组合：
 - 公网节点主动拨 NAT 后节点：只有在远端有 IPv6、静态映射、已验证 observed external port、打洞或 relay 时才可尝试。
 - 两端都在 NAT 后且没有可验证公网 ContactPoint：LinkInstance 进入 `degraded`，debug 输出说明不可达原因。
 
-### 6.7 本地 MeshPolicy 规则
+### 6.8 本地 MeshPolicy 规则
 
 MeshPolicy 本地持久化，不进入 gossip。为了保持配置简单，第一版使用 URI 规则：
 
@@ -674,7 +707,7 @@ endpoint_grace: 10m
 | `endpoint_ttl` | `1h` | 写入端点记录的 TTL |
 | `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
 
-Phase 4 规划中的 IPsec/overlay 配置示例。字段名在实现前仍可调整，但语义边界应保持：
+Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：本机 `ipsec` 负责本节点公开能力和地址/端口来源，`overlay.default_netns` 负责 overlay data-plane 默认 namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
 
 ```yaml
 ipsec:
