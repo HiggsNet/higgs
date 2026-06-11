@@ -103,6 +103,67 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 }
 
+func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4050, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:                 "main",
+		Provider:           ipsec.ProviderStrongSwan,
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+		Direction:          ipsec.DirectionOutbound,
+		AddressSourceOrder: []string{ipsec.SourceManualAddress},
+		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	service.notifyStateChanged()
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
+	}
+
+	appConfig.IPsec.LinkGroups = nil
+	service.setState(latest)
+	service.notifyStateChanged()
+	removed, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(after teardown): %v", err)
+	}
+	if len(removed.LinkInstances) != 0 {
+		t.Fatalf("link instances after teardown = %+v, want none", removed.LinkInstances)
+	}
+	if len(removed.IPsecReconcile.Actions) != 1 || removed.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionTeardown {
+		t.Fatalf("teardown actions = %+v, want one teardown", removed.IPsecReconcile.Actions)
+	}
+
+	service.setState(removed)
+	service.notifyStateChanged()
+	stable, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(stable): %v", err)
+	}
+	if len(stable.LinkInstances) != 0 {
+		t.Fatalf("stable link instances = %+v, want none", stable.LinkInstances)
+	}
+	if len(stable.IPsecReconcile.Actions) != 0 {
+		t.Fatalf("stable actions = %+v, want no repeated teardown", stable.IPsecReconcile.Actions)
+	}
+}
+
 func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4100, 0)

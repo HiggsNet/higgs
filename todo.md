@@ -447,9 +447,10 @@
     - [x] 新增纯 planner：从 verified active state 的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并输出结构化 skip reason；daemon state-change hook 后续接入该 planner。
     - [x] planner 已实际消费 `LinkGroupSpec.ConnectRules` / `DenyRules`：zone glob/exact rule 可按远端 accept intent、address family、address source、path mode、direction、max_peers 选择 peer 并覆盖 group 默认值；deny 命中返回 `policy_denied`，connect 未命中返回 `policy_no_match`。`role/tag` 已解析但暂不匹配，等待本地 peer label 来源接入。
     - [x] daemon state-change hook 已接入 dry-run reconcile：从 active state + 本地 `LinkGroupSpec` 生成 desired links，更新持久化 `LinkInstance`，记录 action/skip 摘要；真实 StrongSwan/XFRM driver 接入留到 4.3 系统 smoke。
-  - [ ] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair
+  - [x] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair
     - [x] 新增可测试 reconcile 核心：对 desired spec、持久化 `LinkInstance`、driver SA 观测执行 create/update/adopt/repair/teardown 判定，并提供 `ApplyReconcileAction` 复用现有 StrongSwan/XFRM fake driver。
     - [x] daemon 侧新增第一版 dry-run reconcile loop：state 变化后执行 create/update/repair/teardown 的 fake apply plan，noop/adopt 不触发系统动作，并将最近 reconcile 结果落盘供 debug 使用。
+    - [x] daemon 侧 teardown 成功后会从持久化 `LinkInstance` 集合移除对应实例；link group 被删除、peer record 过期或 peer 不再可信时，不会把 `removing` 状态遗留到下一轮反复 teardown。
   - [x] 设计状态机：`pending`、`configuring`、`connecting`、`up`、`degraded`、`stale`、`removing`、`down`、`error`
   - [x] 实现公开 accept intent 与本地 direction 的组合规则：本地 `outbound` 只能主动连接远端 `inbound`/`bidirectional`；本地 `inbound` 只加载接收配置；双方 `bidirectional` 时使用稳定 tie-break（如 peer zone 字典序）避免重复主动拨号，并允许失败后对端接管
   - [x] 实现 path mode：`family-redundant` 每个地址族最多选择一条 ContactPoint（双栈时 IPv4 一条 + IPv6 一条）；`exhaustive` 尽量连接所有候选（调试/特殊高可用）；后续如需单条再引入 `preferred-only`，避免使用语义模糊的 `single-best`
@@ -464,14 +465,16 @@
   - [ ] 处理幂等和并发：同一个 peer/group 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + 本地 LinkGroupSpec + 持久化 LinkInstance + StrongSwan/XFRM 实际状态恢复
     - [x] 第一版幂等骨架：同一 desired spec 再次 reconcile 时复用已落盘 `LinkInstance` 并进入 `noop`，避免 dry-run daemon 重复 create；真实 driver drift/backoff 仍待接入。
     - [x] apply 失败 backoff 已接入 `LinkInstance`：记录 failure count、backoff_until 和 last_error；backoff 未到期时 reconcile 返回 `noop/apply backoff active`，到期后 error/degraded link 重新进入 repair；daemon apply 成功会清理失败状态，失败会先落盘再返回错误。
+    - [x] no-longer-desired teardown 也纳入幂等骨架：成功清理后删除本地实例，后续 state-change/restart reconcile 不会重复执行同一个 teardown action。
   - [x] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
     - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id 和派生 owner token；reconcile 对不再 desired 的 persisted instance 先校验 owner 字段、token、`ipsec-*` transport id 与 `hgs*` interface 命名，无法证明归属的资源保留为 noop，不自动 teardown。
     - [x] `ApplyReconcileAction` 对只有 `LinkInstance`、没有 desired spec 的 teardown 再执行 owner guard，防止 revocation/restart recovery 路径误删管理员手工 StrongSwan/XFRM 资源；旧状态无 token 时仍可凭 manager/group/instance/transport/name 匹配迁移。
   - [ ] daemon 启动恢复时重建 link state：重新计算每个 link group 的 desired specs，读取持久化 `LinkInstance`，查询 driver 实际 connection/interface/SA；匹配则 adopt，缺失则 create，漂移则 repair，多余或已撤销则 teardown，保证重启后不会重复创建或遗留旧 link
     - [x] reconcile 核心已覆盖 adopt/create/repair/teardown 判定；daemon 持久化加载和 IPsec driver SA 查询已接入 state-change reconcile，真实 XFRM 实际状态观测仍待系统 driver 接入。
     - [x] daemon 已持久化加载/保存 `LinkInstance`，state-change reconcile 会基于已落盘实例重建 desired/current 对比；reconcile 已通过可注入 IPsec driver 查询 `ListSAs` 并可在重启后 adopt 已存在 SA，默认 daemon 仍使用 dry-run driver，真实 StrongSwan/XFRM apply 与 XFRM interface 观测留到 4.3 系统 smoke。
-  - [ ] 撤销优先级最高：peer Zone 或父 delegation tombstone 后，不等待普通 reconnect/backoff，立即 teardown link，并阻止 endpoint fallback、rekey 或 reconcile 重建
+  - [x] 撤销优先级最高：peer Zone 或父 delegation tombstone 后，不等待普通 reconnect/backoff，立即 teardown link，并阻止 endpoint fallback、rekey 或 reconcile 重建
     - [x] reconcile 输入支持 revoked peer 集合；revocation 命中时即使 desired spec 仍存在也进入 `removing` 并产生 teardown action。
+    - [x] planner 对 revoked peer 停止输出 desired spec；daemon 对已存在实例执行 owner-guarded teardown，成功后删除本地 `LinkInstance`，避免 endpoint fallback、rekey 或下一轮 reconcile 重新拉起。
   - [x] 暴露 control API/debug 输出：link 列表、desired vs actual、SA 状态、XFRM interface、`if_id`、endpoint、rekey/reconnect 原因、最近错误
     - [x] `daemon status` control response 增加 link instance 数、desired link 数和最近 reconcile error；新增 `higgs debug links` 输出持久化 link、最近 action/skip、interface、`if_id`、endpoint、owner、failure count、backoff 与最近错误。
     - [x] daemon reconcile 摘要持久化最近 desired `TransportLinkSpec` 快照和 driver `ListSAs` 观测；`higgs debug links` 会重新按当前 active state + `LinkGroupSpec` 规划 desired links，并与已落盘 `LinkInstance` / 最近 SA 快照并排展示 desired hash、actual hash、CHILD_SA、SA endpoint、backoff 和 apply error，便于排查“应该建什么”和“实际 StrongSwan 看到什么”的差异。

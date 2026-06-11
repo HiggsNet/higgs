@@ -14,14 +14,18 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return nil
 	}
 	groups := d.Sync.App.Config.IPsec.LinkGroups
-	if len(groups) == 0 || d.Sync.State.ManagedZone.IsRoot() || !d.Sync.State.ManagedZone.Valid() {
+	if d.Sync.State.ManagedZone.IsRoot() || !d.Sync.State.ManagedZone.Valid() {
 		return nil
 	}
 	now := d.Sync.now()
-	plan, err := ipsec.PlanTransportLinks(ctx, d.Sync.State.Network, d.Sync.State.ManagedZone, groups, ipsec.LinkPlannerOptions{Now: now})
-	if err != nil {
-		d.recordIPsecReconcileError(now.Unix(), err)
-		return err
+	plan := ipsec.LinkPlan{}
+	if len(groups) > 0 {
+		var err error
+		plan, err = ipsec.PlanTransportLinks(ctx, d.Sync.State.Network, d.Sync.State.ManagedZone, groups, ipsec.LinkPlannerOptions{Now: now})
+		if err != nil {
+			d.recordIPsecReconcileError(now.Unix(), err)
+			return err
+		}
 	}
 	ipsecDriver, xfrmDriver := d.ipsecDrivers()
 	sas, err := ipsecDriver.ListSAs(ctx)
@@ -283,6 +287,10 @@ func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec
 func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ipsec.ReconcileAction, now time.Time) {
 	id := actionInstanceID(action)
 	if id == "" {
+		return
+	}
+	if action.Action == ipsec.ReconcileActionTeardown {
+		delete(instances, id)
 		return
 	}
 	inst, ok := instances[id]
