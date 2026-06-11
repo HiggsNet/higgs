@@ -297,7 +297,13 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 	if !ok {
 		return
 	}
-	instances[id] = ipsec.MarkLinkApplySuccess(inst, now)
+	inst = ipsec.MarkLinkApplySuccess(inst, now)
+	switch action.Action {
+	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair:
+		inst.ActualState = ipsec.LinkStateConnecting
+		inst.LastTransition = now.Unix()
+	}
+	instances[id] = inst
 }
 
 func actionInstanceID(action ipsec.ReconcileAction) string {

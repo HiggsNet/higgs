@@ -452,6 +452,7 @@
     - [x] daemon 侧新增第一版 dry-run reconcile loop：state 变化后执行 create/update/repair/teardown 的 fake apply plan，noop/adopt 不触发系统动作，并将最近 reconcile 结果落盘供 debug 使用。
     - [x] daemon 侧 teardown 成功后会从持久化 `LinkInstance` 集合移除对应实例；link group 被删除、peer record 过期或 peer 不再可信时，不会把 `removing` 状态遗留到下一轮反复 teardown。
   - [x] 设计状态机：`pending`、`configuring`、`connecting`、`up`、`degraded`、`stale`、`removing`、`down`、`error`
+    - [x] daemon apply 成功后将 create/update/repair 的 `LinkInstance` 从 `configuring` 推进到 `connecting`，表示 StrongSwan/XFRM provider 配置已应用、正在等待 IKE_SA/CHILD_SA；后续 `ListSAs` 观测到匹配 SA 后才进入 `up`。
   - [x] 实现公开 accept intent 与本地 direction 的组合规则：本地 `outbound` 只能主动连接远端 `inbound`/`bidirectional`；本地 `inbound` 只加载接收配置；双方 `bidirectional` 时使用稳定 tie-break（如 peer zone 字典序）避免重复主动拨号，并允许失败后对端接管
   - [x] 实现 path mode：`family-redundant` 每个地址族最多选择一条 ContactPoint（双栈时 IPv4 一条 + IPv6 一条）；`exhaustive` 尽量连接所有候选（调试/特殊高可用）；后续如需单条再引入 `preferred-only`，避免使用语义模糊的 `single-best`
   - [x] ContactPoint candidates 支持排序和回退：按 address source priority、address reachability、端口 generation、连接成功率、失败/backoff、IPv4/IPv6 策略综合排序；记录失败率和最近失败原因
@@ -499,6 +500,7 @@
     - [x] 已增加显式 `make ipsec-xfrm-smoke` 系统集成入口，默认不纳入 `smoke-all`；运行时先执行 preflight，再用 `HIGGS_IPSEC_XFRM_SMOKE=1` 跑真实 `SystemXFRMDriver` named netns / XFRM interface / address / delete lifecycle 测试，失败时输出 netns、XFRM state/policy、link 和 `swanctl --list-sas` 诊断。
     - [ ] 双 Higgs daemon、join/gossip、signed `ipsec/*` record 发布和 StrongSwan/VICI IKE bring-up 仍待接入后再在该目标中扩展。
   - [ ] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
+    - [x] daemon 状态机已区分 provider apply 成功后的 `connecting` 与 driver SA 观测后的 `up`；完整 smoke 仍需真实 VICI/IKE bring-up 后断言 `up`。
   - [ ] smoke 使用 VICI/`swanctl --list-sas` 双重观测 IKE_SA/CHILD_SA：断言 peer identity、CHILD_SA name、reqid/if_id、local/remote endpoint 与 `TransportLinkSpec` 一致
   - [ ] smoke 验证数据面：A/B 通过 tunnel IP 互相 `ping` 成功；抓取失败时输出 daemon log、VICI SA 列表、`ip link`、`ip xfrm state/policy`、`ip route` 和 namespace 信息
   - [ ] 覆盖重启恢复：停止并重启任一 daemon 后，daemon 从 active state + StrongSwan/XFRM 实际状态恢复或 repair，最终仍只有一组有效 connection/interface/SA，tunnel ping 恢复

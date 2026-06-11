@@ -84,8 +84,8 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 		t.Fatalf("actions = %+v, want create", latest.IPsecReconcile.Actions)
 	}
 	for _, inst := range latest.LinkInstances {
-		if inst.Owner.Manager != "higgs" || inst.ActualState != ipsec.LinkStateConfiguring {
-			t.Fatalf("instance = %+v, want higgs configuring", inst)
+		if inst.Owner.Manager != "higgs" || inst.ActualState != ipsec.LinkStateConnecting {
+			t.Fatalf("instance = %+v, want higgs connecting", inst)
 		}
 	}
 
