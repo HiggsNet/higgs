@@ -507,12 +507,14 @@
     - [x] 增加 root-gated 双 namespace XFRM 数据面基座：创建 `ns-a/ns-b`、veth underlay、两端 XFRM interface、tunnel address、手工 XFRM state/policy，并验证 A/B tunnel IP ping；这一步先证明宿主权限、kernel XFRM interface、named netns 内 interface create、route-based dataplane 都可用。
     - [x] `SystemXFRMDriver` smoke 已改为在目标 named netns 内直接创建 XFRM interface，并同步容器脚本中的 nested netns wrapper，减少 privileged container/LXC 环境中 host-side link move 失败导致的误判；完整 daemon/VICI IKE bring-up 仍由下一条未完成项跟踪。
     - [x] 已将 XFRM interface/address apply 接到 Higgs daemon reconcile：root-gated `app/higgs` smoke 使用真实 `SystemXFRMDriver` 由 daemon 创建 named netns 内的 XFRM interface、分配 tunnel host prefix，并在 link group 删除后通过 daemon teardown 清理 interface；当前仍用 dry-run IPsec driver，IKE_SA/CHILD_SA 与 XFRM state 仍待 StrongSwan/VICI bring-up 接入。
+    - [x] 已接入真实 govici 客户端边界：`GoviciClient` 使用 `github.com/strongswan/govici/vici` 连接 charon VICI socket，把现有 `StrongSwanDriver` 的 `load-conn` / `terminate` / `unload-conn` / streaming `list-sas` map 结构转换为 VICI message；单测覆盖 `load-conn` 嵌套 message 与 `list-sas` 事件解析，为后续系统 smoke 从 fake IPsec driver 切到真实 VICI driver 做准备。
     - [ ] 双 Higgs daemon、join/gossip、signed `ipsec/*` record 发布和 StrongSwan/VICI IKE bring-up 仍待接入后再在该目标中扩展。
     - [x] 在 root smoke 中补齐权限说明和失败分层：`CAP_NET_ADMIN` 覆盖 XFRM/link 操作，named netns 通常还需要 root 或 `CAP_SYS_ADMIN`/privileged container，VICI socket 还取决于 charon/swanctl 的本机访问权限；preflight 必须在资源创建前给出明确失败。
   - [ ] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
     - [x] daemon 状态机已区分 provider apply 成功后的 `connecting` 与 driver SA 观测后的 `up`；新增 daemon A/B dry-run 测试断言 connection/interface/address apply、SA snapshot adopt、`higgs debug links` 中的 `state=up`、identity、reqid 与 endpoint 字段；root-gated system smoke 已断言 daemon 使用真实 `SystemXFRMDriver` 创建/清理 XFRM interface 和 tunnel address；完整 smoke 仍需真实 VICI/IKE bring-up 后断言 `up`。
   - [ ] smoke 使用 VICI/`swanctl --list-sas` 双重观测 IKE_SA/CHILD_SA：断言 peer identity、CHILD_SA name、reqid/if_id、local/remote endpoint 与 `TransportLinkSpec` 一致
     - [x] VICI `list-sas` 解析与 daemon reconcile snapshot 已携带 local/remote identity、local/remote endpoint、CHILD_SA name、reqid 和 XFRM if_id；`debug links` 会展示这些字段，后续系统 smoke 可直接做字段级断言。
+    - [x] govici streaming `list-sas` 客户端适配已落地，避免用 `swanctl` 输出解析作为 daemon 核心控制面；后续 smoke 仍需在真实 charon IKE bring-up 后增加字段级断言，并保留 `swanctl --list-sas` 作为失败诊断/人工对照。
   - [ ] smoke 验证数据面：A/B 通过 tunnel IP 互相 `ping` 成功；抓取失败时输出 daemon log、VICI SA 列表、`ip link`、`ip xfrm state/policy`、`ip route` 和 namespace 信息
   - [ ] 覆盖重启恢复：停止并重启任一 daemon 后，daemon 从 active state + StrongSwan/XFRM 实际状态恢复或 repair，最终仍只有一组有效 connection/interface/SA，tunnel ping 恢复
     - [x] daemon dry-run 已覆盖启动恢复：已有 SA 时 adopt 为 `up`，已有 `LinkInstance` 但 driver SA 缺失时进入 repair 并重新执行 connection/interface/address apply；真实 smoke 仍需验证重启后唯一 connection/interface/SA 和 tunnel ping。

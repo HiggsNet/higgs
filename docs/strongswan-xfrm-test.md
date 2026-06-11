@@ -119,8 +119,17 @@ make ipsec-xfrm-container-smoke
 lifecycle，其中 XFRM interface 会在目标 named netns 内创建，避免依赖宿主创建后
 move 到 netns 的额外权限路径；同时 smoke 验证了手工 XFRM state/policy 下的双
 namespace tunnel ping，并验证 daemon reconcile 能驱动真实 XFRM provider 创建和
-清理 interface/address。双 Higgs daemon、signed `ipsec/*` record 发布、VICI
-IKE_SA/CHILD_SA bring-up 仍属于后续完整 smoke。
+清理 interface/address。
+
+StrongSwan 控制面已有真实 govici 客户端边界：`GoviciClient` 连接 charon VICI
+socket，并把 Higgs 内部 `StrongSwanDriver` 生成的 `load-conn`、`terminate`、
+`unload-conn` 和 streaming `list-sas` 调用转换为 govici `Message`。这条路径
+避免在 daemon 核心控制面解析 `swanctl` 输出；`swanctl --list-sas` 仍保留为
+失败诊断和人工对照。
+
+双 Higgs daemon、signed `ipsec/*` record 发布、真实 VICI IKE_SA/CHILD_SA
+bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性断言，仍属于
+后续完整 smoke。
 
 ## 3. 最小手工 StrongSwan 健康检查
 
