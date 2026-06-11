@@ -23,6 +23,7 @@ type DaemonService struct {
 	Hooks             DaemonHooks
 	IPsecDriver       ipsec.IPsecDriver
 	XFRMDriver        ipsec.XFRMDriver
+	closeIPsecDriver  func() error
 	Log               *appLogger
 	LogLimiter        *repeatedLogLimiter
 	drainingEvents    bool
@@ -103,6 +104,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.Config == nil {
 		return errors.New("daemon service is not initialized")
 	}
+	if d.IPsecDriver == nil && d.XFRMDriver == nil {
+		if err := d.configureIPsecDriversFromConfig(); err != nil {
+			return err
+		}
+	}
+	defer d.closeConfiguredIPsecDriver()
 	transport, err := d.Sync.openTransport()
 	if err != nil {
 		return err
@@ -467,9 +474,23 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 		return err
 	}
 	syncConfig := syncConfigFromAppConfig(config, latest)
+	var ipsecDrivers configuredIPsecDrivers
+	refreshIPsecDrivers := (d.IPsecDriver == nil && d.XFRMDriver == nil) || d.closeIPsecDriver != nil
+	if refreshIPsecDrivers {
+		var err error
+		ipsecDrivers, err = newConfiguredIPsecDrivers(config.IPsec)
+		if err != nil {
+			return err
+		}
+	}
 	d.Sync.App.Config = config
 	d.Sync.App.StatePath = statePath
 	d.Sync.Config = syncConfig
+	if refreshIPsecDrivers {
+		if err := d.installConfiguredIPsecDrivers(ipsecDrivers); err != nil {
+			return err
+		}
+	}
 	d.Log = newAppLogger(syncConfig)
 	d.ControlSocketPath = socketPath
 	d.setState(latest)
@@ -717,7 +738,77 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 	if err != nil {
 		return err
 	}
-	return newDaemonService(rt, state, config, interval).Run(ctx)
+	service := newDaemonService(rt, state, config, interval)
+	if err := service.configureIPsecDriversFromConfig(); err != nil {
+		return err
+	}
+	return service.Run(ctx)
+}
+
+func (d *DaemonService) configureIPsecDriversFromConfig() error {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return nil
+	}
+	drivers, err := newConfiguredIPsecDrivers(d.Sync.App.Config.IPsec)
+	if err != nil {
+		return err
+	}
+	return d.installConfiguredIPsecDrivers(drivers)
+}
+
+type configuredIPsecDrivers struct {
+	ipsecDriver ipsec.IPsecDriver
+	xfrmDriver  ipsec.XFRMDriver
+	close       func() error
+}
+
+func newConfiguredIPsecDrivers(config ipsecConfig) (configuredIPsecDrivers, error) {
+	driver := config.Driver
+	if driver == "" {
+		driver = ipsecDriverDryRun
+	}
+	switch driver {
+	case ipsecDriverDryRun:
+		return configuredIPsecDrivers{}, nil
+	case ipsecDriverStrongSwan:
+		client, err := ipsec.NewGoviciClient(config.VICISocket)
+		if err != nil {
+			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
+		}
+		return configuredIPsecDrivers{
+			ipsecDriver: ipsec.StrongSwanDriver{VICI: client},
+			xfrmDriver:  ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
+			close:       client.Close,
+		}, nil
+	default:
+		return configuredIPsecDrivers{}, fmt.Errorf("unsupported ipsec driver %q", driver)
+	}
+}
+
+func (d *DaemonService) installConfiguredIPsecDrivers(drivers configuredIPsecDrivers) error {
+	if err := d.closeConfiguredIPsecDriver(); err != nil {
+		if drivers.close != nil {
+			_ = drivers.close()
+		}
+		return err
+	}
+	d.IPsecDriver = drivers.ipsecDriver
+	d.XFRMDriver = drivers.xfrmDriver
+	d.closeIPsecDriver = drivers.close
+	return nil
+}
+
+func (d *DaemonService) closeConfiguredIPsecDriver() error {
+	if d == nil || d.closeIPsecDriver == nil {
+		return nil
+	}
+	closeFn := d.closeIPsecDriver
+	d.closeIPsecDriver = nil
+	err := closeFn()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (d *DaemonService) logDebug(component, event string, fields map[string]any) {

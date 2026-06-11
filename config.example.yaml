@@ -37,6 +37,13 @@ overlay:
     name: h2
     create: true
 
+ipsec:
+  # Default is dry-run so normal daemon runs never require root, charon, VICI,
+  # or XFRM privileges. Set to strongswan only on a prepared system-smoke host.
+  driver: dry-run
+  # Optional; empty uses strongSwan/govici's default VICI socket path.
+  vici_socket:
+
 overlays:
   - id: ipsec-main
     name: ipsec-main

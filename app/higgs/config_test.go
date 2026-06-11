@@ -108,6 +108,33 @@ ipsec:
 	}
 }
 
+func TestParseConfigYAMLIPsecDriver(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  driver: strongswan
+  vici_socket: /tmp/charon.vici
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.IPsec.Driver != ipsecDriverStrongSwan || config.IPsec.VICISocket != "/tmp/charon.vici" {
+		t.Fatalf("IPsec driver config = %+v", config.IPsec)
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidIPsecDriver(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  driver: magic
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("parseConfigYAML should reject invalid ipsec.driver")
+	}
+}
+
 func TestParseConfigYAMLOverlayDefaultNetNSOverridesLegacyIPsecDefault(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

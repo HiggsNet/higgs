@@ -105,10 +105,14 @@ type overlayDefaultsYAML struct {
 type ipsecConfig struct {
 	DefaultNetNS ipsec.NetNSSpec
 	LinkGroups   []ipsec.LinkGroupSpec
+	Driver       string
+	VICISocket   string
 }
 
 type ipsecConfigYAML struct {
 	DefaultNetNS ipsec.NetNSSpec `yaml:"default_netns"`
+	Driver       string          `yaml:"driver"`
+	VICISocket   string          `yaml:"vici_socket"`
 }
 
 type overlayGroupConfigYAML struct {
@@ -171,6 +175,7 @@ func defaultAppConfig() *appConfig {
 		},
 		IPsec: ipsecConfig{
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
+			Driver:       ipsecDriverDryRun,
 		},
 	}
 }
@@ -203,6 +208,9 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
+	if config.IPsec.Driver == "" {
+		config.IPsec.Driver = ipsecDriverDryRun
+	}
 }
 
 func parseConfigYAML(input string, config *appConfig) error {
@@ -314,6 +322,16 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.Overlay.DefaultNetNS = netns
 	}
+	if file.IPsec.Driver != "" {
+		driver, err := parseIPsecDriver(file.IPsec.Driver)
+		if err != nil {
+			return err
+		}
+		config.IPsec.Driver = driver
+	}
+	if file.IPsec.VICISocket != "" {
+		config.IPsec.VICISocket = file.IPsec.VICISocket
+	}
 	if netnsConfigured(file.Overlay.DefaultNetNS) {
 		netns := file.Overlay.DefaultNetNS.Normalized()
 		if err := netns.Validate(); err != nil {
@@ -330,6 +348,22 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		config.IPsec.LinkGroups = groups
 	}
 	return nil
+}
+
+const (
+	ipsecDriverDryRun     = "dry-run"
+	ipsecDriverStrongSwan = "strongswan"
+)
+
+func parseIPsecDriver(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", ipsecDriverDryRun:
+		return ipsecDriverDryRun, nil
+	case ipsecDriverStrongSwan, "system", "vici":
+		return ipsecDriverStrongSwan, nil
+	default:
+		return "", fmt.Errorf("invalid ipsec.driver %q: expected dry-run or strongswan", value)
+	}
 }
 
 func parseOverlayConfigs(overlays []overlayGroupConfigYAML, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {

@@ -127,6 +127,19 @@ socket，并把 Higgs 内部 `StrongSwanDriver` 生成的 `load-conn`、`termina
 避免在 daemon 核心控制面解析 `swanctl` 输出；`swanctl --list-sas` 仍保留为
 失败诊断和人工对照。
 
+daemon 默认仍使用 `ipsec.driver: dry-run`，不会触碰 root namespace、charon 或
+XFRM。系统 smoke 主机可以在 `config.yaml` 中显式配置：
+
+```yaml
+ipsec:
+  driver: strongswan
+  vici_socket: /run/charon.vici
+```
+
+此时 daemon 启动或 `reload` 会创建真实 `GoviciClient` 和 `SystemXFRMDriver`；
+如果 VICI socket 不可连接，启动/reload 会直接失败，避免运行到一半才发现
+StrongSwan 控制面不可用。
+
 双 Higgs daemon、signed `ipsec/*` record 发布、真实 VICI IKE_SA/CHILD_SA
 bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性断言，仍属于
 后续完整 smoke。
