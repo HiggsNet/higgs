@@ -17,7 +17,7 @@ type recordedCommand struct {
 	args []string
 }
 
-func TestSystemXFRMDriverCreatesNamedNamespaceAndXFRMInterface(t *testing.T) {
+func TestSystemXFRMDriverCreatesXFRMInterfaceInsideNamedNamespace(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{
 		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
@@ -54,8 +54,7 @@ func TestSystemXFRMDriverCreatesNamedNamespaceAndXFRMInterface(t *testing.T) {
 		"ip netns add h2",
 		"ip netns exec h2 ip link show dev hgs1",
 		"ip link show dev hgs1",
-		"ip link add hgs1 type xfrm if_id 42",
-		"ip link set hgs1 netns h2",
+		"ip netns exec h2 ip link add hgs1 type xfrm if_id 42",
 		"ip netns exec h2 ip link set dev hgs1 up",
 		"ip netns exec h2 ip addr replace fd00:1234::1/64 dev hgs1",
 	}

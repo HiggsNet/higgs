@@ -13,10 +13,15 @@ make ipsec-xfrm-container-smoke
 
 该目标会调用 `docs/scripts/ipsec-xfrm-container-smoke.sh`，自动完成：
 
-- 使用 `docker` 启动一次性 `ubuntu:24.04` privileged container。
+- 首次运行时基于 `ubuntu:24.04` 构建本地缓存镜像
+  `higgs-ipsec-xfrm-smoke:ubuntu-24.04`；后续运行复用该镜像，避免重复
+  `apt-get update/install`。
+- 使用 `docker` 启动一次性 privileged container。
 - 挂载当前 repo 到 `/work`，工作目录设为 `/work`。
-- 安装 `make`、Go、`iproute2`、`iputils-ping`、`strongswan-swanctl`、
-  `strongswan-charon`。
+- 镜像内已包含 `make`、Go、`iproute2`、`iputils-ping`、
+  `strongswan-swanctl`、`strongswan-charon` 和 nested netns wrapper。
+- 使用 named volume 缓存 Go build cache 和 module cache，避免一次性容器每次重新
+  下载 Go toolchain/module。
 - 在容器内运行 `make ipsec-xfrm-smoke`。
 - 退出时尽量把 `build/` ownership 还给宿主用户，避免 root-owned 构建产物。
 
@@ -25,7 +30,17 @@ make ipsec-xfrm-container-smoke
 ```sh
 HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 HIGGS_IPSEC_XFRM_IMAGE=ubuntu:24.04 make ipsec-xfrm-container-smoke
+HIGGS_IPSEC_XFRM_CACHE_IMAGE=my-higgs-xfrm-smoke:latest make ipsec-xfrm-container-smoke
+HIGGS_IPSEC_XFRM_REBUILD_IMAGE=1 make ipsec-xfrm-container-smoke
+HIGGS_IPSEC_XFRM_GO_CACHE_VOLUME=my-higgs-gocache make ipsec-xfrm-container-smoke
+HIGGS_IPSEC_XFRM_GO_MOD_CACHE_VOLUME=my-higgs-gomodcache make ipsec-xfrm-container-smoke
+HIGGS_CONTAINER_USERNS= make ipsec-xfrm-container-smoke
 ```
+
+Docker 默认额外使用 `--userns=host`。这不是扩大外层 LXC 权限的魔法开关；它只是
+避免 Docker 在已经 unprivileged LXC 的环境里再加一层 user namespace remap，从而
+减少 mount/sysfs/netns 行为被二次映射弄坏的概率。若要验证它是否影响当前机器，可
+用 `HIGGS_CONTAINER_USERNS=` 临时关闭。
 
 如果要手工复现容器步骤，等价形式是：
 
@@ -89,7 +104,7 @@ make ipsec-xfrm-container-smoke
 3. 设置 `HIGGS_IPSEC_XFRM_SMOKE=1`，运行
    `TestSystemXFRMDriverIntegrationSmoke` 和
    `TestSystemXFRMDriverPeerTunnelPingSmoke`。
-4. 创建一个一次性的 named netns、创建 XFRM interface、移动到该 namespace、
+4. 创建一个一次性的 named netns、直接在该 namespace 内创建 XFRM interface、
    分配 tunnel address、验证 interface/address 可见，再删除 interface 和 namespace。
 5. 创建两个一次性的 named netns、veth underlay、两端 XFRM interface、手工 XFRM
    state/policy 和 tunnel route，验证 A/B tunnel IP 能互相 `ping`。
@@ -98,9 +113,10 @@ make ipsec-xfrm-container-smoke
 `swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。
 
 当前自动化 smoke 已验证真实 `SystemXFRMDriver` 的 namespace/interface/address
-lifecycle，以及手工 XFRM state/policy 下的双 namespace tunnel ping。双 Higgs
-daemon、signed `ipsec/*` record 发布、VICI IKE_SA/CHILD_SA bring-up 仍属于后续完整
-smoke。
+lifecycle，其中 XFRM interface 会在目标 named netns 内创建，避免依赖宿主创建后
+move 到 netns 的额外权限路径；同时 smoke 验证了手工 XFRM state/policy 下的双
+namespace tunnel ping。双 Higgs daemon、signed `ipsec/*` record 发布、VICI
+IKE_SA/CHILD_SA bring-up 仍属于后续完整 smoke。
 
 ## 3. 最小手工 StrongSwan 健康检查
 
@@ -149,6 +165,11 @@ ip netns delete h2-a
 - 真实 XFRM driver 只会在 `create=true` 时创建 named namespace；`host` 和 path
   namespace 必须已经存在。对于 path namespace，第一版 provider 建议先 bind 到
   `/var/run/netns` 下，再用 `kind=name` 管理。
+- 对 named namespace，`SystemXFRMDriver` 直接通过
+  `ip netns exec <name> ip link add ... type xfrm` 在目标 namespace 内创建
+  interface，再执行 `ip netns exec <name> ip addr replace ...` 分配地址；这条路径
+  更贴近 daemon 后续管理目标 netns 的实际行为，也避开部分 LXC/容器环境对
+  host-side link move 的限制。
 
 执行任何变更前必须先记录 apply plan。失败时 daemon 应把 link 标记为
 `degraded` 或 `error`，记录失败 operation，并且不能继续执行后续步骤。
@@ -167,7 +188,7 @@ ip netns delete h2-a
    `TransportLinkSpec`；不应需要为每个 peer 手写 link。
 6. StrongSwan provider 通过 VICI 加载 connection 和 secret。`swanctl` 只作为人工
    debug / 交叉检查工具。
-7. XFRM provider 创建 interface，移动到目标 namespace，并分配 tunnel address。
+7. XFRM provider 在目标 named namespace 内创建 interface，并分配 tunnel address。
 8. 断言 `LinkInstance` 进入 `up`。
 9. 断言 VICI 和 `swanctl --list-sas` 能看到匹配的 IKE_SA/CHILD_SA identity、
    child name、reqid/if_id 和 endpoint。

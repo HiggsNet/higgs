@@ -429,9 +429,9 @@
   - [x] 稳定派生 XFRM `if_id` 与 interface name：基于 local zone + peer zone + transport id hash，`if_id` 使用 32-bit 值，接口名满足 Linux 15 字符限制并处理冲突
   - [x] 第一版默认一条 peer link 一个 XFRM interface；后续再评估 shared XFRM interface 或 in/out 分离 interface
   - [x] 定义 netns 配置来源：`config.yaml` 暴露 `overlay.default_netns`，link group 可声明 `host`、netns name 或 netns path；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 XFRM/Babel overlay data-plane 默认落在 host ns；`ipsec.default_netns` 仅保留为旧配置兼容别名
-  - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建/move 前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
-  - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、创建 XFRM interface 后 move 到目标 ns、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
-    - 已增加 `SystemXFRMDriver`：通过 `ip`/iproute2 执行 named netns ensure、XFRM interface create/move/up、address replace 和 delete；path netns 第一版只做存在性检查，需 bind 到 `/var/run/netns` 后按 named netns 管理。
+  - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
+  - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、在目标 named netns 内创建 XFRM interface、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
+    - 已增加 `SystemXFRMDriver`：通过 `ip`/iproute2 执行 named netns ensure、XFRM interface create/up、address replace 和 delete；named netns 下直接执行 `ip netns exec <ns> ip link add ... type xfrm`，避免依赖 host-side link move；path netns 第一版只做存在性检查，需 bind 到 `/var/run/netns` 后按 named netns 管理。
   - [x] CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛；Phase 4 只负责 peer-to-peer tunnel link，路由前缀授权留给 Phase 5 Babel/route filter
     - `BuildLoadConnMessage` 渲染 VICI `load-conn` message：每条 link 一个 child，`mode=tunnel`，`if_id_in/out` 使用稳定 XFRM if_id；IPv4/IPv6 tunnel address 仅决定宽泛 selector family（`0.0.0.0/0` 或 `::/0`），多前缀授权不进入 Phase 4。
   - [x] 实现撤销/删除清理：terminate IKE_SA/CHILD_SA、unload connection/secret、删除 XFRM interface、地址、临时路由和本地运行态
@@ -503,8 +503,9 @@
   - [ ] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步、link group/netns 配置和 transport key record 发布
     - [x] 已增加显式 `make ipsec-xfrm-smoke` 系统集成入口，默认不纳入 `smoke-all`；运行时先执行 preflight，再用 `HIGGS_IPSEC_XFRM_SMOKE=1` 跑真实 `SystemXFRMDriver` named netns / XFRM interface / address / delete lifecycle 测试，失败时输出 netns、XFRM state/policy、link 和 `swanctl --list-sas` 诊断。
     - [x] root/system smoke 不再只停留在非 root dry-run：`make ipsec-xfrm-smoke` 必须作为显式 privileged 目标运行，测试机器可用 `sudo make ipsec-xfrm-smoke`、root VM，或具备 netns/XFRM 所需 capability 的 privileged container；默认 `make check` / `smoke-all` 仍不要求 root。
-    - [x] 增加 `make ipsec-xfrm-container-smoke`：自动启动 disposable privileged Ubuntu container、挂载当前 repo、安装 Go/iproute2/ping/StrongSwan 依赖并运行 `make ipsec-xfrm-smoke`，避免手工复制 docker run / apt install / mount 参数；文档明确 NixOS over LXC、CI nested container 等外层受限环境即使内层 Docker 使用 `--privileged` 也可能被外层拦截，preflight 必须以真实 named netns create/delete、XFRM interface 和 VICI socket 能力检查为准。
-    - [x] 增加 root-gated 双 namespace XFRM 数据面基座：创建 `ns-a/ns-b`、veth underlay、两端 XFRM interface、tunnel address、手工 XFRM state/policy，并验证 A/B tunnel IP ping；这一步先证明宿主权限、kernel XFRM interface、namespace move、route-based dataplane 都可用。
+    - [x] 增加 `make ipsec-xfrm-container-smoke`：自动启动 privileged Ubuntu container、挂载当前 repo、复用已构建的本地 smoke 镜像和 Go cache volume、启动 charon 后运行 `make ipsec-xfrm-smoke`，避免每次重新 apt install / 下载 Go module；文档明确 NixOS over LXC、CI nested container 等外层受限环境即使内层 Docker 使用 `--privileged` 也可能被外层拦截，preflight 必须以真实 named netns create/delete、XFRM interface 和 VICI socket 能力检查为准。
+    - [x] 增加 root-gated 双 namespace XFRM 数据面基座：创建 `ns-a/ns-b`、veth underlay、两端 XFRM interface、tunnel address、手工 XFRM state/policy，并验证 A/B tunnel IP ping；这一步先证明宿主权限、kernel XFRM interface、named netns 内 interface create、route-based dataplane 都可用。
+    - [x] `SystemXFRMDriver` smoke 已改为在目标 named netns 内直接创建 XFRM interface，并同步容器脚本中的 nested netns wrapper，减少 privileged container/LXC 环境中 host-side link move 失败导致的误判；完整 daemon/VICI IKE bring-up 仍由下一条未完成项跟踪。
     - [ ] 将该数据面基座接到 Higgs daemon reconcile：由 daemon 的 `SystemXFRMDriver` 创建 interface/address，由 StrongSwan/VICI 创建 IKE_SA/CHILD_SA 和 XFRM state，而不是测试手工 `ip xfrm state/policy add`。
     - [ ] 双 Higgs daemon、join/gossip、signed `ipsec/*` record 发布和 StrongSwan/VICI IKE bring-up 仍待接入后再在该目标中扩展。
     - [x] 在 root smoke 中补齐权限说明和失败分层：`CAP_NET_ADMIN` 覆盖 XFRM/link 操作，named netns 通常还需要 root 或 `CAP_SYS_ADMIN`/privileged container，VICI socket 还取决于 charon/swanctl 的本机访问权限；preflight 必须在资源创建前给出明确失败。

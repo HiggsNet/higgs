@@ -81,10 +81,7 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 		}
 		return d.setLinkUp(ctx, netns, spec.InterfaceName)
 	}
-	if err := d.run(ctx, "ip", "link", "add", spec.InterfaceName, "type", "xfrm", "if_id", fmt.Sprintf("%d", spec.XFRMIfID)); err != nil {
-		return err
-	}
-	if err := d.moveLink(ctx, spec.InterfaceName, netns); err != nil {
+	if err := d.addXFRMInterface(ctx, netns, spec.InterfaceName, spec.XFRMIfID); err != nil {
 		return err
 	}
 	return d.setLinkUp(ctx, netns, spec.InterfaceName)
@@ -153,6 +150,11 @@ func (d SystemXFRMDriver) moveLink(ctx context.Context, name string, netns NetNS
 	default:
 		return fmt.Errorf("unsupported netns kind %q", netns.Kind)
 	}
+}
+
+func (d SystemXFRMDriver) addXFRMInterface(ctx context.Context, netns NetNSSpec, name string, ifID uint32) error {
+	args := []string{"link", "add", name, "type", "xfrm", "if_id", fmt.Sprintf("%d", ifID)}
+	return d.runInNetNS(ctx, netns, args...)
 }
 
 func (d SystemXFRMDriver) setLinkUp(ctx context.Context, netns NetNSSpec, name string) error {
