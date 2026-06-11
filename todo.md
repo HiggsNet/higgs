@@ -437,7 +437,7 @@
   - [x] 实现撤销/删除清理：terminate IKE_SA/CHILD_SA、unload connection/secret、删除 XFRM interface、地址、临时路由和本地运行态
     - 已增加 `PlanTeardown` / `TeardownTransportLink`：按 terminate SA -> unload connection -> delete XFRM interface 的顺序执行，并由 dry-run 测试锁住撤销/删除 apply plan。
 
-- [ ] **4.2 链路实例管理**
+- [x] **4.2 链路实例管理**
   - [x] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition
   - [x] 定义本地 `MeshPolicy` / `LinkGroupSpec` 持久化来源：优先作为本机 daemon 配置/DB policy，不通过 gossip 公开；policy 描述“哪些 group 连接哪些 peer/overlay/provider/netns”，而不是列举每个已发现节点的手工 link
     - 已在 `config.yaml` 增加本地 `overlay.default_netns` / `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `overlay.default_netns`，支持 provider、netns、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串；`ipsec.default_netns` 保留为旧配置兼容别名。
@@ -464,7 +464,7 @@
     - 第一版允许主动拨入 NAT 后节点的证据只包括：公开可路由 IPv6/公网地址、管理员明确配置的端口映射、reflector/discovery 产生且经本 Zone 签名发布的 observed external address/port、后续 hole punching/relay 成功路径；单独的 `behind_nat` hint 或 LAN/private 地址不算。
     - planner 应把 NAT 过滤放在 ContactPoint 选择之后、StrongSwan apply 之前：公网 inbound peer + NAT/outbound-only peer 由 NAT 节点主动拨公网 peer；公网 peer 反拨 NAT peer 时若无上述证据，返回结构化 skip/degraded reason，避免 daemon 无限重试不可达目标。
     - 已实现 planner 侧 `SkipNoInboundNATEvidence`：远端 `behind_nat` / `inbound_reachable=false` 时，只保留 public ContactPoint 或带 observed external port 的 `nat-observed` ContactPoint；只有 private/unknown 地址时不会生成 StrongSwan link。daemon debug/degraded 状态展示随后续 apply/reconcile 接线补齐。
-  - [ ] 处理幂等和并发：同一个 peer/group 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + 本地 LinkGroupSpec + 持久化 LinkInstance + StrongSwan/XFRM 实际状态恢复
+  - [x] 处理幂等和并发：同一个 peer/group 的多次 state change 合并，apply 失败 backoff，daemon restart 后从 active state + 本地 LinkGroupSpec + 持久化 LinkInstance + StrongSwan/XFRM 实际状态恢复
     - [x] 第一版幂等骨架：同一 desired spec 再次 reconcile 时复用已落盘 `LinkInstance` 并进入 `noop`，避免 dry-run daemon 重复 create；真实 driver drift/backoff 仍待接入。
     - [x] apply 失败 backoff 已接入 `LinkInstance`：记录 failure count、backoff_until 和 last_error；backoff 未到期时 reconcile 返回 `noop/apply backoff active`，到期后 error/degraded link 重新进入 repair；daemon apply 成功会清理失败状态，失败会先落盘再返回错误。
     - [x] no-longer-desired teardown 也纳入幂等骨架：成功清理后删除本地实例，后续 state-change/restart reconcile 不会重复执行同一个 teardown action。
@@ -473,9 +473,10 @@
   - [x] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
     - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id 和派生 owner token；reconcile 对不再 desired 的 persisted instance 先校验 owner 字段、token、`ipsec-*` transport id 与 `hgs*` interface 命名，无法证明归属的资源保留为 noop，不自动 teardown。
     - [x] `ApplyReconcileAction` 对只有 `LinkInstance`、没有 desired spec 的 teardown 再执行 owner guard，防止 revocation/restart recovery 路径误删管理员手工 StrongSwan/XFRM 资源；旧状态无 token 时仍可凭 manager/group/instance/transport/name 匹配迁移。
-  - [ ] daemon 启动恢复时重建 link state：重新计算每个 link group 的 desired specs，读取持久化 `LinkInstance`，查询 driver 实际 connection/interface/SA；匹配则 adopt，缺失则 create，漂移则 repair，多余或已撤销则 teardown，保证重启后不会重复创建或遗留旧 link
+  - [x] daemon 启动恢复时重建 link state：重新计算每个 link group 的 desired specs，读取持久化 `LinkInstance`，查询 driver 实际 connection/interface/SA；匹配则 adopt，缺失则 create，漂移则 repair，多余或已撤销则 teardown，保证重启后不会重复创建或遗留旧 link
     - [x] reconcile 核心已覆盖 adopt/create/repair/teardown 判定；daemon 持久化加载和 IPsec driver SA 查询已接入 state-change reconcile，真实 XFRM 实际状态观测仍待系统 driver 接入。
     - [x] daemon 已持久化加载/保存 `LinkInstance`，state-change reconcile 会基于已落盘实例重建 desired/current 对比；reconcile 已通过可注入 IPsec driver 查询 `ListSAs` 并可在重启后 adopt 已存在 SA，默认 daemon 仍使用 dry-run driver，真实 StrongSwan/XFRM apply 与 XFRM interface 观测留到 4.3 系统 smoke。
+    - [x] daemon `Run` 启动进入主循环前会主动执行一次 IPsec reconcile：从当前 active state、本地 `LinkGroupSpec`、已持久化 `LinkInstance` 与 driver `ListSAs` 快照恢复 link state；已有 SA 会 adopt，缺失状态会进入 create/repair/noop/teardown 路径，不必等待下一次 record/reload 事件。
   - [x] 撤销优先级最高：peer Zone 或父 delegation tombstone 后，不等待普通 reconnect/backoff，立即 teardown link，并阻止 endpoint fallback、rekey 或 reconcile 重建
     - [x] reconcile 输入支持 revoked peer 集合；revocation 命中时即使 desired spec 仍存在也进入 `removing` 并产生 teardown action。
     - [x] planner 对 revoked peer 停止输出 desired spec；daemon 对已存在实例执行 owner-guarded teardown，成功后删除本地 `LinkInstance`，避免 endpoint fallback、rekey 或下一轮 reconcile 重新拉起。

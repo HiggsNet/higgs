@@ -130,6 +130,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	nextEndpointPublish := d.Sync.now()
 	lastObservedDigests := gossip.ZoneDigests(d.Sync.State.Network)
 	d.Sync.updateDiscoveredPeers()
+	d.recoverIPsecLinksOnStart(ctx)
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -683,6 +684,14 @@ func (d *DaemonService) notifyStateChanged() {
 	}
 	d.ipsecDirty = true
 	d.flushIPsecReconcile(context.Background())
+}
+
+func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
+	if d == nil {
+		return
+	}
+	d.ipsecDirty = true
+	d.flushIPsecReconcile(ctx)
 }
 
 func (d *DaemonService) flushIPsecReconcile(ctx context.Context) {

@@ -245,6 +245,74 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	}
 }
 
+func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4125, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:                 "main",
+		Provider:           ipsec.ProviderStrongSwan,
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+		Direction:          ipsec.DirectionOutbound,
+		AddressSourceOrder: []string{ipsec.SourceManualAddress},
+		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+	}}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
+	}
+	spec := plan.Desired[0]
+	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateConnecting, now.Add(-time.Minute))
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+		persisted.ID: persisted,
+	})
+	driver := &observedIPsecDriver{
+		sas: []ipsec.SAState{{
+			Name:        spec.TransportID,
+			ChildSA:     ipsec.ChildSAName(spec),
+			XFRMIfID:    spec.XFRMIfID,
+			Endpoint:    "198.51.100.20",
+			Established: true,
+		}},
+	}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.recoverIPsecLinksOnStart(context.Background())
+
+	if driver.listCalls != 1 {
+		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != "198.51.100.20" {
+		t.Fatalf("startup recovered instance = %+v, want up adopted endpoint", inst)
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
+		t.Fatalf("startup reconcile = %+v, want adopt", latest.IPsecReconcile)
+	}
+	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
+		t.Fatalf("startup adopt should not apply resources: connections=%d interfaces=%d", len(driver.Connections), len(driver.Interfaces))
+	}
+}
+
 func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4150, 0)
@@ -440,10 +508,12 @@ func TestRootCommandIncludesDaemon(t *testing.T) {
 
 type observedIPsecDriver struct {
 	ipsec.DryRunDriver
-	sas []ipsec.SAState
+	sas       []ipsec.SAState
+	listCalls int
 }
 
 func (d *observedIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
+	d.listCalls++
 	return d.sas, nil
 }
 
