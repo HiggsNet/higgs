@@ -83,12 +83,17 @@ type desiredLinkState struct {
 }
 
 type linkSAState struct {
-	Name        string `json:"name,omitempty"`
-	Peer        string `json:"peer,omitempty"`
-	ChildSA     string `json:"child_sa,omitempty"`
-	XFRMIfID    uint32 `json:"xfrm_if_id,omitempty"`
-	Endpoint    string `json:"endpoint,omitempty"`
-	Established bool   `json:"established,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Peer           string `json:"peer,omitempty"`
+	ChildSA        string `json:"child_sa,omitempty"`
+	XFRMIfID       uint32 `json:"xfrm_if_id,omitempty"`
+	ReqID          uint32 `json:"reqid,omitempty"`
+	LocalIdentity  string `json:"local_identity,omitempty"`
+	RemoteIdentity string `json:"remote_identity,omitempty"`
+	LocalEndpoint  string `json:"local_endpoint,omitempty"`
+	RemoteEndpoint string `json:"remote_endpoint,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty"`
+	Established    bool   `json:"established,omitempty"`
 }
 
 type linkActionState struct {

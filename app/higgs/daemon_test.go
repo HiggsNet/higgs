@@ -234,7 +234,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		"desired_hash=",
 		"if_id=",
 		"sa=established",
-		"sa_endpoint=198.51.100.20",
+		"sa_remote=198.51.100.20",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)

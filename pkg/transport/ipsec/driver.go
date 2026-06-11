@@ -6,12 +6,17 @@ import (
 )
 
 type SAState struct {
-	Name        string
-	Peer        string
-	ChildSA     string
-	XFRMIfID    uint32
-	Endpoint    string
-	Established bool
+	Name           string
+	Peer           string
+	ChildSA        string
+	XFRMIfID       uint32
+	ReqID          uint32
+	LocalIdentity  string
+	RemoteIdentity string
+	LocalEndpoint  string
+	RemoteEndpoint string
+	Endpoint       string
+	Established    bool
 }
 
 type VICIClient interface {

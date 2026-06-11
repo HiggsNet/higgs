@@ -167,7 +167,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		if desiredHash == "" {
 			desiredHash = inst.DesiredSpecHash
 		}
-		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s endpoint=%s sa=%s sa_endpoint=%s owner=%s failures=%d backoff=%s error=%s\n",
+		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s endpoint=%s sa=%s sa_local=%s sa_remote=%s sa_local_id=%s sa_remote_id=%s sa_reqid=%d owner=%s failures=%d backoff=%s error=%s\n",
 			inst.ID,
 			dash(inst.GroupID),
 			inst.PeerZone,
@@ -179,7 +179,11 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 			dash(inst.ChildSAName),
 			dash(inst.Endpoint),
 			formatSAState(sa),
-			dash(sa.Endpoint),
+			dash(sa.LocalEndpoint),
+			dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)),
+			dash(sa.LocalIdentity),
+			dash(sa.RemoteIdentity),
+			sa.ReqID,
 			dash(inst.Owner.Manager),
 			inst.FailureCount,
 			formatUnixTime(inst.BackoffUntil),

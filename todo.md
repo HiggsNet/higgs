@@ -502,6 +502,7 @@
   - [ ] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
     - [x] daemon 状态机已区分 provider apply 成功后的 `connecting` 与 driver SA 观测后的 `up`；完整 smoke 仍需真实 VICI/IKE bring-up 后断言 `up`。
   - [ ] smoke 使用 VICI/`swanctl --list-sas` 双重观测 IKE_SA/CHILD_SA：断言 peer identity、CHILD_SA name、reqid/if_id、local/remote endpoint 与 `TransportLinkSpec` 一致
+    - [x] VICI `list-sas` 解析与 daemon reconcile snapshot 已携带 local/remote identity、local/remote endpoint、CHILD_SA name、reqid 和 XFRM if_id；`debug links` 会展示这些字段，后续系统 smoke 可直接做字段级断言。
   - [ ] smoke 验证数据面：A/B 通过 tunnel IP 互相 `ping` 成功；抓取失败时输出 daemon log、VICI SA 列表、`ip link`、`ip xfrm state/policy`、`ip route` 和 namespace 信息
   - [ ] 覆盖重启恢复：停止并重启任一 daemon 后，daemon 从 active state + StrongSwan/XFRM 实际状态恢复或 repair，最终仍只有一组有效 connection/interface/SA，tunnel ping 恢复
   - [ ] 覆盖撤销闭环：父 Zone 签发 peer revocation 后，远端 daemon 收敛并立即 teardown IKE_SA/CHILD_SA、删除 XFRM interface/地址/临时路由，`LinkInstance` 进入 `removing/down`，tunnel ping 失败且不会被 reconnect/backoff 拉起

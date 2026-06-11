@@ -2,7 +2,9 @@ package ipsec
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
+	"strconv"
 )
 
 const (
@@ -136,22 +138,23 @@ func parseSAStates(event map[string]any) []SAState {
 			continue
 		}
 		state := SAState{Name: name}
-		if peer, ok := body["remote-host"].(string); ok {
-			state.Peer = peer
-		}
-		if endpoint, ok := body["remote-port"].(string); ok {
-			state.Endpoint = endpoint
-		}
+		remoteHost := stringValue(body["remote-host"])
+		remotePort := stringValue(body["remote-port"])
+		localHost := stringValue(body["local-host"])
+		localPort := stringValue(body["local-port"])
+		state.Peer = remoteHost
+		state.LocalIdentity = stringValue(body["local-id"])
+		state.RemoteIdentity = stringValue(body["remote-id"])
+		state.LocalEndpoint = joinEndpoint(localHost, localPort)
+		state.RemoteEndpoint = joinEndpoint(remoteHost, remotePort)
+		state.Endpoint = state.RemoteEndpoint
 		children, _ := body["child-sas"].(map[string]any)
 		for childName, childRaw := range children {
 			child, _ := childRaw.(map[string]any)
 			childState := state
 			childState.ChildSA = childName
-			if ifID, ok := child["if-id-out"].(string); ok {
-				var parsed uint32
-				_, _ = fmt.Sscanf(ifID, "%d", &parsed)
-				childState.XFRMIfID = parsed
-			}
+			childState.XFRMIfID = firstUint32(child["if-id-out"], child["if-id-in"])
+			childState.ReqID = uint32Value(child["reqid"])
 			childState.Established = true
 			states = append(states, childState)
 		}
@@ -161,4 +164,70 @@ func parseSAStates(event map[string]any) []SAState {
 		}
 	}
 	return states
+}
+
+func stringValue(v any) string {
+	switch value := v.(type) {
+	case string:
+		return value
+	case []byte:
+		return string(value)
+	case fmt.Stringer:
+		return value.String()
+	default:
+		return ""
+	}
+}
+
+func uint32Value(v any) uint32 {
+	switch value := v.(type) {
+	case uint32:
+		return value
+	case uint64:
+		return uint32(value)
+	case uint:
+		return uint32(value)
+	case int:
+		if value > 0 {
+			return uint32(value)
+		}
+	case int64:
+		if value > 0 {
+			return uint32(value)
+		}
+	case float64:
+		if value > 0 {
+			return uint32(value)
+		}
+	case string:
+		parsed, err := strconv.ParseUint(value, 10, 32)
+		if err == nil {
+			return uint32(parsed)
+		}
+	case []byte:
+		parsed, err := strconv.ParseUint(string(value), 10, 32)
+		if err == nil {
+			return uint32(parsed)
+		}
+	}
+	return 0
+}
+
+func firstUint32(values ...any) uint32 {
+	for _, value := range values {
+		if parsed := uint32Value(value); parsed != 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func joinEndpoint(host, port string) string {
+	if host == "" {
+		return ""
+	}
+	if port == "" {
+		return host
+	}
+	return net.JoinHostPort(host, port)
 }

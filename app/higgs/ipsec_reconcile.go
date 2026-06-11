@@ -114,12 +114,17 @@ func summarizeIPsecReconcile(unix int64, desired []ipsec.TransportLinkSpec, sas 
 	}
 	for _, sa := range sas {
 		state.ActualSAs = append(state.ActualSAs, linkSAState{
-			Name:        sa.Name,
-			Peer:        sa.Peer,
-			ChildSA:     sa.ChildSA,
-			XFRMIfID:    sa.XFRMIfID,
-			Endpoint:    sa.Endpoint,
-			Established: sa.Established,
+			Name:           sa.Name,
+			Peer:           sa.Peer,
+			ChildSA:        sa.ChildSA,
+			XFRMIfID:       sa.XFRMIfID,
+			ReqID:          sa.ReqID,
+			LocalIdentity:  sa.LocalIdentity,
+			RemoteIdentity: sa.RemoteIdentity,
+			LocalEndpoint:  sa.LocalEndpoint,
+			RemoteEndpoint: sa.RemoteEndpoint,
+			Endpoint:       sa.Endpoint,
+			Established:    sa.Established,
 		})
 	}
 	for _, action := range actions {
