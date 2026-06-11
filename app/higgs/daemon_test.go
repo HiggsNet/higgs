@@ -313,6 +313,122 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	}
 }
 
+func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4200, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	statePath := filepath.Join(dataDir, "higgs.db")
+	configPath := filepath.Join(dir, "config.yaml")
+	t.Setenv("HIGGS_CONFIG", configPath)
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(dataDir): %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("data_dir: "+dataDir+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(initial config): %v", err)
+	}
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = dataDir
+	appConfig.StatePath = statePath
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: statePath,
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(reload initial): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("initial reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(initial): %v", err)
+	}
+	if len(latest.LinkInstances) != 0 {
+		t.Fatalf("initial link instances = %+v, want none", latest.LinkInstances)
+	}
+
+	reloadedConfig := strings.Join([]string{
+		"data_dir: " + dataDir,
+		"overlays:",
+		"  - id: main",
+		"    provider: strongswan",
+		"    netns:",
+		"      name: h2",
+		"      create: true",
+		"    default_path_mode: family-redundant",
+		"    direction: outbound",
+		"    address_source_order: [manual-address]",
+		"    connect:",
+		"      - strongswan://*.catofes.?accept=inbound",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(reloadedConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile(reloaded config): %v", err)
+	}
+
+	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(reload overlay): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("overlay reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	latest, err = rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(reloaded): %v", err)
+	}
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("link instances after reload = %d, want 1", len(latest.LinkInstances))
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("ipsec reconcile after reload = %+v, want create", latest.IPsecReconcile)
+	}
+	if len(service.Sync.App.Config.IPsec.LinkGroups) != 1 || service.Sync.Config.PeerID != config.PeerID {
+		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.Sync.App.Config.IPsec.LinkGroups, service.Sync.Config)
+	}
+}
+
+func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	dataDir := filepath.Join(dir, "data")
+	otherDir := filepath.Join(dir, "other")
+	t.Setenv("HIGGS_CONFIG", configPath)
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(dataDir): %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("data_dir: "+otherDir+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config): %v", err)
+	}
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(dataDir, "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(4300, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "restart daemon to switch state") {
+		t.Fatalf("reload error = %v, want state path switch rejection", result.Error)
+	}
+	if syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
+	}
+}
+
 func TestRootCommandIncludesDaemon(t *testing.T) {
 	for _, command := range rootCommand().Commands {
 		if command.Name == "daemon" {
@@ -792,12 +908,7 @@ func TestDaemonControlErrorResponses(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
-	response := controlRequestViaPipe(t, service, controlRequest{Method: "reload"})
-	if response.OK || response.Error == "" {
-		t.Fatalf("reload response = %#v, want error", response)
-	}
-
-	response = controlRequestViaPipe(t, service, controlRequest{Method: "record_put", Zone: "node-b.catofes."})
+	response := controlRequestViaPipe(t, service, controlRequest{Method: "record_put", Zone: "node-b.catofes."})
 	if response.OK || response.Error == "" {
 		t.Fatalf("invalid record_put response = %#v, want error", response)
 	}

@@ -47,6 +47,7 @@ const (
 	daemonEventEndpointTimer  daemonEventType = "timer_endpoint_publish"
 	daemonEventRemoteApplied  daemonEventType = "remote_announce_applied"
 	daemonEventSyncTrigger    daemonEventType = "sync_trigger"
+	daemonEventReloadConfig   daemonEventType = "reload_config"
 	daemonEventShutdown       daemonEventType = "shutdown"
 )
 
@@ -336,6 +337,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "sync scheduled"})
+	case "reload":
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventReloadConfig})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Message: "config reloaded"})
 	case "shutdown":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventShutdown})
 		if result.Error != nil {
@@ -343,8 +351,6 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "shutdown scheduled"})
-	case "reload":
-		writeControlResponse(conn, controlError(errors.New("reload is reserved for a later Phase 3 step")))
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}
@@ -426,11 +432,51 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		return daemonEventResult{Error: d.handleRemoteAppliedEvent(controlContext(event.Context), event.SourcePeerID)}, false, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
+	case daemonEventReloadConfig:
+		err := d.handleReloadConfigEvent()
+		return daemonEventResult{Error: err}, err == nil, false
 	case daemonEventShutdown:
 		return daemonEventResult{}, false, true
 	default:
 		return daemonEventResult{Error: fmt.Errorf("unknown daemon event: %s", event.Type)}, false, false
 	}
+}
+
+func (d *DaemonService) handleReloadConfigEvent() error {
+	if d == nil || d.Sync == nil || d.Sync.App == nil {
+		return errors.New("daemon service is not initialized")
+	}
+	config, err := loadAppConfig()
+	if err != nil {
+		return err
+	}
+	statePath := config.StatePath
+	if override := statePathOverride(); override != "" {
+		statePath = override
+	}
+	if d.Sync.App.StatePath != "" && statePath != d.Sync.App.StatePath {
+		return fmt.Errorf("reload would change state path from %s to %s; restart daemon to switch state", d.Sync.App.StatePath, statePath)
+	}
+	socketPath := controlSocketPath(config)
+	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
+		return fmt.Errorf("reload would change control socket path from %s to %s; restart daemon to switch control socket", d.ControlSocketPath, socketPath)
+	}
+	latest, err := loadStateAt(statePath, config.TrustedRootPublicKey)
+	if err != nil {
+		return err
+	}
+	syncConfig := syncConfigFromAppConfig(config, latest)
+	d.Sync.App.Config = config
+	d.Sync.App.StatePath = statePath
+	d.Sync.Config = syncConfig
+	d.Log = newAppLogger(syncConfig)
+	d.ControlSocketPath = socketPath
+	d.setState(latest)
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return nil
 }
 
 func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest) (*delegationIssueResult, error) {

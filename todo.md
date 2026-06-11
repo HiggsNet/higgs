@@ -272,7 +272,7 @@
 - [x] **3.2 本地事件队列与控制接口**
   - [x] 定义最小内存事件队列：local record put、remote announce applied、timer tick、manual sync trigger、shutdown/reload；同一队列串行落盘和触发后续动作
     - 已接入 local `record_put`、manual `sync_trigger`、`shutdown`；UDP packet / remote announce applied、endpoint publish timer、outbound sync timer 也已统一为 daemon event handler 分支
-  - [x] 提供最小 Unix domain socket control API：`status`、`record_put`、`sync_trigger`、`shutdown`、`reload` 预留；只做本机接口，不做远程管理
+  - [x] 提供最小 Unix domain socket control API：`status`、`record_put`、`sync_trigger`、`reload`、`shutdown`；只做本机接口，不做远程管理
   - [x] 约定 socket 路径和权限：默认 `/run/higgs/higgs.sock` 或 `<data_dir>/higgs.sock` fallback；默认只允许本机同用户/管理员访问
 
 - [x] **3.3 CLI client 化与兼容模式**
@@ -443,10 +443,11 @@
     - 已在 `config.yaml` 增加本地 `overlay.default_netns` / `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `overlay.default_netns`，支持 provider、netns、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串；`ipsec.default_netns` 保留为旧配置兼容别名。
   - [x] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、direction、max_peers、allow/deny 顺序
     - 已新增 `ParseMeshPolicyRule` / `ParseMeshPolicyRules`：支持 `strongswan://*.catofes.`, `strongswan://role=edge`, `strongswan://tag=lab` 三类目标，校验 `accept`、`family`、`source`、`mode`、`direction`、`max_peers`，并提供 zone glob/exact 匹配；`config.yaml overlays[].connect/deny` 现在会在加载时校验 rule 字符串。示例默认使用 zone glob（如 `*.lab.catofes.`），`role/tag` 等待本地 peer label 来源接入后再作为常规示例。
-  - [ ] daemon 从 active state 的 peer profile/address/port records + 本地 MeshPolicy/LinkGroupSpec 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/ipsec profile/address/port/transport key/mesh policy/group/netns 变化
+  - [x] daemon 从 active state 的 peer profile/address/port records + 本地 MeshPolicy/LinkGroupSpec 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/ipsec profile/address/port/transport key/mesh policy/group/netns 变化
     - [x] 新增纯 planner：从 verified active state 的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并输出结构化 skip reason；daemon state-change hook 后续接入该 planner。
     - [x] planner 已实际消费 `LinkGroupSpec.ConnectRules` / `DenyRules`：zone glob/exact rule 可按远端 accept intent、address family、address source、path mode、direction、max_peers 选择 peer 并覆盖 group 默认值；deny 命中返回 `policy_denied`，connect 未命中返回 `policy_no_match`。`role/tag` 已解析但暂不匹配，等待本地 peer label 来源接入。
     - [x] daemon state-change hook 已接入 dry-run reconcile：从 active state + 本地 `LinkGroupSpec` 生成 desired links，更新持久化 `LinkInstance`，记录 action/skip 摘要；真实 StrongSwan/XFRM driver 接入留到 4.3 系统 smoke。
+    - [x] daemon `reload` control event 已重新读取 `config.yaml`，刷新本地 sync/log/IPsec overlay 配置，并触发一次 reconcile；`overlays:`、`connect/deny`、`overlay.default_netns` 或 link group 删除会立即进入 create/update/teardown 判定。热 reload 明确拒绝切换 state DB/control socket 路径，避免运行中的 daemon 半路换库或迁移监听入口。
   - [x] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair
     - [x] 新增可测试 reconcile 核心：对 desired spec、持久化 `LinkInstance`、driver SA 观测执行 create/update/adopt/repair/teardown 判定，并提供 `ApplyReconcileAction` 复用现有 StrongSwan/XFRM fake driver。
     - [x] daemon 侧新增第一版 dry-run reconcile loop：state 变化后执行 create/update/repair/teardown 的 fake apply plan，noop/adopt 不触发系统动作，并将最近 reconcile 结果落盘供 debug 使用。
@@ -468,6 +469,7 @@
     - [x] apply 失败 backoff 已接入 `LinkInstance`：记录 failure count、backoff_until 和 last_error；backoff 未到期时 reconcile 返回 `noop/apply backoff active`，到期后 error/degraded link 重新进入 repair；daemon apply 成功会清理失败状态，失败会先落盘再返回错误。
     - [x] no-longer-desired teardown 也纳入幂等骨架：成功清理后删除本地实例，后续 state-change/restart reconcile 不会重复执行同一个 teardown action。
     - [x] daemon event drain 期间合并多次 state change：record/admin/remote apply 仍串行落盘，但同一轮事件队列只触发一次 IPsec `ListSAs` + reconcile/apply，避免同一个 peer/group 在短时间内重复加载 connection/interface。
+    - [x] config reload 与 state-change 使用同一条 dirty/reconcile 路径：同一轮事件中的多次 reload/record/admin/remote apply 会合并为一次 IPsec reconcile；reload 失败不会触发 sync。
   - [x] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
     - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id 和派生 owner token；reconcile 对不再 desired 的 persisted instance 先校验 owner 字段、token、`ipsec-*` transport id 与 `hgs*` interface 命名，无法证明归属的资源保留为 noop，不自动 teardown。
     - [x] `ApplyReconcileAction` 对只有 `LinkInstance`、没有 desired spec 的 teardown 再执行 owner guard，防止 revocation/restart recovery 路径误删管理员手工 StrongSwan/XFRM 资源；旧状态无 token 时仍可凭 manager/group/instance/transport/name 匹配迁移。
