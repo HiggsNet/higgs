@@ -252,9 +252,11 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	}()
 	defer func() {
 		if t.Failed() {
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dumpCancel()
 			logDaemonTestFile(t, "charon A", logA.Name())
 			logDaemonTestFile(t, "charon B", logB.Name())
-			dumpDaemonSystemState(t, ctx, nsA, nsB)
+			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
 		}
 	}()
 
@@ -339,6 +341,165 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState(node-b up): %v", err)
 	}
+	assertDaemonSystemLinkUp(t, latestA, specA)
+	assertDaemonSystemLinkUp(t, latestB, specB)
+
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ip", "route", "replace", specA.PeerTunnelAddr.String()+"/32", "dev", specA.InterfaceName, "src", specA.LocalTunnelAddr.String())
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ip", "route", "replace", specB.PeerTunnelAddr.String()+"/32", "dev", specB.InterfaceName, "src", specB.LocalTunnelAddr.String())
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", specA.PeerTunnelAddr.String())
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ping", "-c", "1", "-W", "3", specB.PeerTunnelAddr.String())
+}
+
+func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system daemon gossip StrongSwan smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UTC().Format("20060102150405")
+	nsA := "higgs-daemon-run-a-" + suffix
+	nsB := "higgs-daemon-run-b-" + suffix
+	viciA := "/tmp/charon-" + nsA + ".vici"
+	viciB := "/tmp/charon-" + nsB + ".vici"
+	t.Cleanup(func() {
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsA)
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsB)
+		_ = os.Remove(viciA)
+		_ = os.Remove(viciB)
+	})
+
+	runAppCommand(t, ctx, "ip", "netns", "add", nsA)
+	runAppCommand(t, ctx, "ip", "netns", "add", nsB)
+	runAppCommand(t, ctx, "ip", "link", "add", "hgdruna", "type", "veth", "peer", "name", "hgdrunb")
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdruna", "netns", nsA)
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdrunb", "netns", nsB)
+	for _, args := range [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.1/30", "dev", "hgdruna"},
+		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.2/30", "dev", "hgdrunb"},
+		{"netns", "exec", nsA, "ip", "link", "set", "hgdruna", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "hgdrunb", "up"},
+	} {
+		runAppCommand(t, ctx, "ip", args...)
+	}
+
+	confA, err := writeDaemonStrongSwanConf(viciA)
+	if err != nil {
+		t.Fatalf("write strongswan.conf A: %v", err)
+	}
+	confB, err := writeDaemonStrongSwanConf(viciB)
+	if err != nil {
+		t.Fatalf("write strongswan.conf B: %v", err)
+	}
+	piddirA := t.TempDir()
+	piddirB := t.TempDir()
+	logA, err := os.CreateTemp("", "higgs-daemon-run-charon-a-*.log")
+	if err != nil {
+		t.Fatalf("create charon A log: %v", err)
+	}
+	logB, err := os.CreateTemp("", "higgs-daemon-run-charon-b-*.log")
+	if err != nil {
+		t.Fatalf("create charon B log: %v", err)
+	}
+	charonA := startDaemonTestCharonInNetNS(ctx, t, nsA, piddirA, confA, logA)
+	charonB := startDaemonTestCharonInNetNS(ctx, t, nsB, piddirB, confB, logB)
+	defer func() {
+		_ = charonA.Process.Kill()
+		_ = charonB.Process.Kill()
+		_ = charonA.Wait()
+		_ = charonB.Wait()
+		_ = os.Remove(confA)
+		_ = os.Remove(confB)
+		_ = logA.Close()
+		_ = logB.Close()
+		_ = os.Remove(logA.Name())
+		_ = os.Remove(logB.Name())
+	}()
+	defer func() {
+		if t.Failed() {
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dumpCancel()
+			logDaemonTestFile(t, "charon A", logA.Name())
+			logDaemonTestFile(t, "charon B", logB.Name())
+			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
+		}
+	}()
+
+	clientA, err := waitDaemonTestVICI(ctx, viciA)
+	if err != nil {
+		t.Fatalf("connect to charon A VICI: %v", err)
+	}
+	defer clientA.Close()
+	clientB, err := waitDaemonTestVICI(ctx, viciB)
+	if err != nil {
+		t.Fatalf("connect to charon B VICI: %v", err)
+	}
+	defer clientB.Close()
+
+	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
+	now := time.Now()
+	keyA, _ := daemonTestTransportKey(t, now)
+	keyB, _ := daemonTestTransportKey(t, now)
+	stateA.IPsecTransportKey = keyA
+	stateB.IPsecTransportKey = keyB
+	gossipA := freeDaemonTestUDPAddr(t)
+	gossipB := freeDaemonTestUDPAddr(t)
+	configA.ListenAddr = gossipA
+	configB.ListenAddr = gossipB
+	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: gossipB}}
+	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: gossipA}}
+
+	groupA := testIPsecLinkGroup()
+	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
+	groupB := testIPsecLinkGroup()
+	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
+	rtA := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.1:4500", groupA),
+		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
+		Clock:     time.Now,
+	}
+	rtA.Config.ListenAddr = gossipA
+	rtB := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB),
+		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
+		Clock:     time.Now,
+	}
+	rtB.Config.ListenAddr = gossipB
+	if err := rtA.SaveState(stateA); err != nil {
+		t.Fatalf("SaveState(node-a): %v", err)
+	}
+	if err := rtB.SaveState(stateB); err != nil {
+		t.Fatalf("SaveState(node-b): %v", err)
+	}
+
+	serviceA := newDaemonService(rtA, stateA, configA, 200*time.Millisecond)
+	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceB := newDaemonService(rtB, stateB, configB, 200*time.Millisecond)
+	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+
+	runCtx, stopDaemons := context.WithCancel(ctx)
+	defer stopDaemons()
+	errCh := make(chan error, 2)
+	go func() { errCh <- serviceA.Run(runCtx) }()
+	go func() { errCh <- serviceB.Run(runCtx) }()
+	defer func() {
+		stopDaemons()
+		for i := 0; i < 2; i++ {
+			if err := <-errCh; err != nil {
+				t.Fatalf("daemon Run returned error: %v", err)
+			}
+		}
+	}()
+
+	latestA, latestB := waitDaemonRunGossipStrongSwanUp(ctx, t, rtA, rtB, groupA, groupB)
+	specA := daemonSystemDesiredSpec(t, latestA, groupA, time.Now())
+	specB := daemonSystemDesiredSpec(t, latestB, groupB, time.Now())
+	assertGossipedIPsecRecords(t, latestA, "node-b.catofes.")
+	assertGossipedIPsecRecords(t, latestB, "node-a.catofes.")
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 
@@ -1599,6 +1760,79 @@ func daemonSystemDesiredSpec(t *testing.T, state *stateFile, group ipsec.LinkGro
 		t.Fatalf("desired for %s = %+v, skips=%+v, want one", state.ManagedZone, plan.Desired, plan.Skipped)
 	}
 	return injectIPsecKeyMaterial(state, plan.Desired)[0]
+}
+
+func freeDaemonTestUDPAddr(t *testing.T) string {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("ListenUDP(free port): %v", err)
+	}
+	addr := conn.LocalAddr().String()
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close free UDP port: %v", err)
+	}
+	return addr
+}
+
+func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, rtA, rtB *Runtime, groupA, groupB ipsec.LinkGroupSpec) (*stateFile, *stateFile) {
+	t.Helper()
+	var lastA, lastB *stateFile
+	var lastErr error
+	for {
+		if stateA, err := rtA.LoadState(); err == nil {
+			lastA = stateA
+		} else {
+			lastErr = err
+		}
+		if stateB, err := rtB.LoadState(); err == nil {
+			lastB = stateB
+		} else {
+			lastErr = err
+		}
+		if lastA != nil && lastB != nil && daemonRunGossipStrongSwanReady(lastA, groupA) && daemonRunGossipStrongSwanReady(lastB, groupB) {
+			return lastA, lastB
+		}
+		select {
+		case <-ctx.Done():
+			if lastA != nil {
+				t.Logf("last node-a reconcile = %+v instances=%+v", lastA.IPsecReconcile, lastA.LinkInstances)
+			}
+			if lastB != nil {
+				t.Logf("last node-b reconcile = %+v instances=%+v", lastB.IPsecReconcile, lastB.LinkInstances)
+			}
+			if lastErr != nil {
+				t.Fatalf("timeout waiting for daemon gossip StrongSwan up; last load error: %v", lastErr)
+			}
+			t.Fatalf("timeout waiting for daemon gossip StrongSwan up")
+		default:
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+}
+
+func daemonRunGossipStrongSwanReady(state *stateFile, group ipsec.LinkGroupSpec) bool {
+	if state == nil || state.IPsecReconcile == nil || len(state.IPsecReconcile.ActualSAs) == 0 || len(state.LinkInstances) == 0 {
+		return false
+	}
+	if state.ManagedZone == "node-a.catofes." {
+		if zs := state.Network.Zones["node-b.catofes."]; zs == nil || zs.Records[ipsec.RecordKeyTransportKey] == nil {
+			return false
+		}
+	}
+	if state.ManagedZone == "node-b.catofes." {
+		if zs := state.Network.Zones["node-a.catofes."]; zs == nil || zs.Records[ipsec.RecordKeyTransportKey] == nil {
+			return false
+		}
+	}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, []ipsec.LinkGroupSpec{group}, ipsec.LinkPlannerOptions{Now: time.Now()})
+	if err != nil || len(plan.Desired) != 1 {
+		return false
+	}
+	spec := injectIPsecKeyMaterial(state, plan.Desired)[0]
+	inst, ok := state.LinkInstances[ipsec.LinkInstanceID(spec)]
+	return ok && inst.ActualState == ipsec.LinkStateUp
 }
 
 func logDaemonTestFile(t *testing.T, label, path string) {

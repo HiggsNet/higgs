@@ -2,7 +2,7 @@
 
 > **文档状态（2026-06）**
 > Phase 0–3 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已进入实现阶段：record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / XFRM preflight 已落地，driver 层真实 StrongSwan/VICI IKE/CHILD_SA + tunnel ping 已在 4.3 验证，完整双 daemon gossip 驱动的真实 IKE bring-up 仍在 4.3 扩展中。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已进入实现阶段：record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / XFRM preflight 已落地，driver 层真实 StrongSwan/VICI IKE/CHILD_SA + tunnel ping 已在 4.3 验证，daemon `Run` 循环级 gossip 同步后的真实 VICI/XFRM bring-up 和 tunnel ping 已进入 root/container smoke。
 
 ## 原始需求摘要
 
@@ -438,7 +438,7 @@ gossip announce
 
 如果远端记录从“缺失/不匹配”变成“完整且匹配本地 MeshPolicy”，planner 会输出新的 `TransportLinkSpec`。reconciler 随后根据本地是否已有 `LinkInstance`、driver 是否已经能从 `ListSAs` 看到匹配 SA、desired spec hash 是否变化、是否处于 apply backoff，决定 `create`、`adopt`、`update`、`repair` 或 `noop`。daemon event drain 期间多次 state change 会合并为一次 IPsec `ListSAs` + reconcile/apply，所以同一轮收到 profile/address/port/key 多条 record 时不会对同一个 peer/group 重复加载 connection/interface。
 
-当前默认 daemon 使用 `ipsec.driver: dry-run`，因此可在非 root 环境验证 desired-state、action 和 debug 输出。测试机显式设置 `ipsec.driver: strongswan` 后，daemon 会创建真实 `GoviciClient`、通过 VICI 控制 StrongSwan，并使用 `SystemXFRMDriver` 管理 XFRM/netns；`ipsec.vici_socket` 可覆盖 charon VICI socket 路径。双 daemon IKE/CHILD_SA 建立和 tunnel ping 仍归入 4.3 系统闭环。
+当前默认 daemon 使用 `ipsec.driver: dry-run`，因此可在非 root 环境验证 desired-state、action 和 debug 输出。测试机显式设置 `ipsec.driver: strongswan` 后，daemon 会创建真实 `GoviciClient`、通过 VICI 控制 StrongSwan，并使用 `SystemXFRMDriver` 管理 XFRM/netns；`ipsec.vici_socket` 可覆盖 charon VICI socket 路径。root/container smoke 已覆盖两个 daemon service 在 `Run` 循环中自动发布 `ipsec/*` records、经 UDP gossip 同步后触发真实 StrongSwan/VICI + XFRM bring-up，并完成 tunnel ping；外部 CLI daemon 进程级验证、重启恢复和 revocation teardown 仍作为后续 hardening。
 
 #### 2.4.6 LinkPlanner 输出
 
@@ -512,10 +512,11 @@ daemon 已接入这条 reconcile 链路：
 - 启动进入主循环前，会主动执行一次 IPsec reconcile，用 active state、本地 `LinkGroupSpec`、已持久化 `LinkInstance` 和 driver SA 快照恢复 link state，而不是等待下一次 record/reload 事件。
 - `reload` control event 会重新读取本地 `config.yaml`，刷新 `overlays:`、`connect/deny`、`overlay.default_netns`、`ipsec.driver` / `ipsec.vici_socket`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。
 - daemon drain event 队列时会合并多次 state change，同一轮 record/admin/remote apply 或 config reload 只触发一次 IPsec `ListSAs` + reconcile/apply，避免同一个 peer/group 被短时间重复加载。
+- daemon sync tick 后也会做一次 IPsec observe/reconcile，用 driver `ListSAs` 把已由 StrongSwan 建立的 `connecting` link 推进到 `up`；默认频率跟随 daemon interval，root smoke 可用更短 interval 加速验证。
 
 `LinkInstance` 是这条链路的持久化锚点，保存 desired spec hash、实际状态、XFRM `if_id`、IKE/CHILD_SA 名称、endpoint、owner、failure count、backoff 和最近错误。provider apply 成功后 create/update/repair 会把实例推进到 `connecting`，表示配置已经应用、正在等待 IKE_SA/CHILD_SA；只有后续 `ListSAs` 观测到匹配 SA 时才进入 `up`。apply 失败会写入 failure/backoff，backoff 未到期时 reconcile 不重复 apply，到期后 error/degraded link 再进入 repair。teardown 成功后 daemon 会删除本地持久化实例，因此 link group 删除、record 过期或 peer 不再可信不会留下 `removing` 状态并在下一轮重复清理。
 
-reconcile 摘要会持久化最近 desired `TransportLinkSpec` 快照和 driver SA 快照；`higgs debug links` 重新按当前 active state + `LinkGroupSpec` 规划 desired links，再与已落盘 `LinkInstance`、上次 daemon 看到的 SA、CHILD_SA、endpoint、spec hash、local/remote identity、local/remote endpoint、reqid、if_id、backoff 和错误并排展示。默认 daemon 仍使用 dry-run driver；双 daemon IKE/CHILD_SA 和 tunnel ping 系统 smoke 仍留到 4.3。
+reconcile 摘要会持久化最近 desired `TransportLinkSpec` 快照和 driver SA 快照；`higgs debug links` 重新按当前 active state + `LinkGroupSpec` 规划 desired links，再与已落盘 `LinkInstance`、上次 daemon 看到的 SA、CHILD_SA、endpoint、spec hash、local/remote identity、local/remote endpoint、reqid、if_id、backoff 和错误并排展示。默认 daemon 仍使用 dry-run driver；显式 root/container smoke 已覆盖真实 VICI/XFRM apply、双 daemon service gossip 同步、`LinkInstance=up` 和 tunnel ping。
 
 `LinkInstance.Owner` 是 daemon 自动清理资源的归属边界。新建实例会保存 `manager=higgs`、group id、instance id、transport id 和派生 owner token；reconcile 对“不再 desired”的旧实例只在 owner 字段与实例字段匹配、transport id 使用 `ipsec-*`、interface 使用 `hgs*` 命名时生成 teardown。apply 层对只有 persisted instance、没有 desired spec 的 teardown 再做一次同样校验，避免 daemon 误删管理员手工创建的 StrongSwan connection 或 XFRM interface。旧状态没有 token 时仍可通过 manager/group/instance/transport/name 校验迁移，带 token 的新状态会额外校验 token。
 
@@ -832,7 +833,7 @@ type PeerView struct {
 | 哈希 | `blake2b-256`（`golang.org/x/crypto`） | — | 用于 KeyID、RecordHash、ZoneRoot |
 | 签名 | ED25519（标准库） | — | 密钥加密存储：AES-GCM + bcrypt |
 | Daemon / 单 writer | `higgs daemon` + Unix control socket | systemd / 远程管理预留 | Phase 3 最小形态已实现 |
-| StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot 已实现 | 真实双 daemon IKE/CHILD_SA smoke | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
+| StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot、root/container daemon-run gossip smoke 已实现 | CLI 进程级 smoke、重启恢复、撤销闭环 | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
 | XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
 | 路由协议 | _未实现_（Phase 5） | `babeld` + 控制 socket | Babel 更适合 mesh，自动邻居发现 |
@@ -867,7 +868,7 @@ type PeerView struct {
 
 | 模块 | 包路径 | 状态 |
 |------|--------|------|
-| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / VICI boundary / XFRM preflight / daemon debug 已创建；真实双 daemon IKE/CHILD_SA/tunnel ping 待 4.3 |
+| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / VICI boundary / XFRM preflight / daemon debug / daemon-run gossip + IKE/CHILD_SA/tunnel ping smoke 已创建；重启恢复和撤销闭环待补强 |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
 | Babeld 路由适配器 | `pkg/routing/babeld/` | 🔲 仅 doc.go |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |

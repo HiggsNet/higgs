@@ -181,6 +181,8 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if result.Error != nil {
 				d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
 			}
+			d.ipsecDirty = true
+			d.flushIPsecReconcile(ctx)
 			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
 			}

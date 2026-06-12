@@ -106,7 +106,9 @@ make ipsec-xfrm-container-smoke
    `TestSystemXFRMDriverPeerTunnelPingSmoke`、
    `TestStrongSwanDriverLoadsKeyAndConnection`、
    `TestStrongSwanDriverIKEBringupSmoke` 和
-   `TestDaemonReconcileUsesSystemXFRMDriverSmoke`。
+   `TestDaemonReconcileUsesSystemXFRMDriverSmoke`、
+   `TestDaemonStrongSwanReconcileBringupSmoke`、
+   `TestDaemonRunGossipStrongSwanBringupSmoke`。
 4. 创建一个一次性的 named netns、直接在该 namespace 内创建 XFRM interface、
    分配 tunnel address、验证 interface/address 可见，再删除 interface 和 namespace。
 5. 创建两个一次性的 named netns、veth underlay、两端 XFRM interface、手工 XFRM
@@ -123,6 +125,11 @@ make ipsec-xfrm-container-smoke
    `SystemXFRMDriver` 自动加载 key/connection、创建 XFRM interface、观测
    VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 tunnel IP 双向
    `ping`。
+9. 启动两个 daemon service 的真实 `Run` 循环，让两端各自自动发布 signed
+   `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key`，
+   通过 UDP gossip 同步对端 Zone 后自动触发真实 StrongSwan/VICI + XFRM
+   reconcile；测试断言双方 `LinkInstance=up`、VICI SA snapshot 可见，并验证
+   tunnel IP 双向 `ping`。
 
 失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
 `swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。
@@ -133,7 +140,8 @@ move 到 netns 的额外权限路径；同时 smoke 验证了手工 XFRM state/p
 namespace tunnel ping，并验证 daemon reconcile 能驱动真实 XFRM provider 创建和
 清理 interface/address。root-gated daemon reconcile smoke 进一步覆盖 verified
 active state 进入 daemon reconcile 后的真实 StrongSwan/VICI + XFRM bring-up 和
-tunnel ping。
+tunnel ping；daemon run smoke 进一步覆盖自动发布 `ipsec/*` records、UDP gossip
+同步和真实 VICI/XFRM apply 的同一闭环。
 
 StrongSwan 控制面已有真实 govici 客户端边界：`GoviciClient` 连接 charon VICI
 socket，并把 Higgs 内部 `StrongSwanDriver` 生成的 `load-conn`、`terminate`、
@@ -172,10 +180,10 @@ state meta，避免 daemon 重启后 fingerprint 抖动。
 对端 Zone，再由本地 `LinkGroupSpec` 推导 `TransportLinkSpec` 并执行 dry-run
 provider apply。这证明 daemon publish/gossip/planner/reconcile 边界已接通。
 
-双 `higgs daemon` 进程完整 join/gossip 后的对端 `ipsec/*` record 同步、真实 VICI
-IKE_SA/CHILD_SA bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性
-断言，仍属于后续完整 daemon-level smoke。当前 driver 层和 daemon reconcile 层
-bring-up 测试已经为该目标验证了 StrongSwan/XFRM/VICI 数据面基座。
+root/container smoke 现在已经覆盖 daemon `Run` 循环下的对端 `ipsec/*` record
+同步、真实 VICI IKE_SA/CHILD_SA bring-up 和 tunnel ping。它仍是 Go 测试内的
+daemon service，不是外部 `build/higgs daemon` OS 进程；后续如果需要继续收紧，
+可以把同一断言扩展到 CLI 进程启动、daemon 重启恢复和 revocation teardown。
 
 ## 3. 最小手工 StrongSwan 健康检查
 
