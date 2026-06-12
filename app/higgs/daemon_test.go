@@ -284,9 +284,11 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 
 	groupA := testIPsecLinkGroup()
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
+	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB := testIPsecLinkGroup()
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.Direction = ipsec.DirectionInbound
+	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	rtA := &Runtime{
 		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
 		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
@@ -344,10 +346,10 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ip", "route", "replace", specA.PeerTunnelAddr.String()+"/32", "dev", specA.InterfaceName, "src", specA.LocalTunnelAddr.String())
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ip", "route", "replace", specB.PeerTunnelAddr.String()+"/32", "dev", specB.InterfaceName, "src", specB.LocalTunnelAddr.String())
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", specA.PeerTunnelAddr.String())
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ping", "-c", "1", "-W", "3", specB.PeerTunnelAddr.String())
+	addTunnelRoute(t, ctx, nsA, specA)
+	addTunnelRoute(t, ctx, nsB, specB)
+	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
+	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 
 	restartedA, err := rtA.LoadState()
 	if err != nil {
@@ -374,7 +376,7 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	} else if count != 1 {
 		t.Fatalf("node-a established SA count after restart = %d, want 1", count)
 	}
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", specA.PeerTunnelAddr.String())
+	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
 
 	parent := recoveredA.Network.Zones["catofes."]
 	if parent == nil || parent.Delegations["node-b.catofes."] == nil {
@@ -413,9 +415,187 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	if _, err := appExecCommand(ctx, "ip", "netns", "exec", nsA, "ip", "link", "show", "dev", specA.InterfaceName); err == nil {
 		t.Fatalf("node-a xfrm interface %s still exists after revoke", specA.InterfaceName)
 	}
-	if out, err := appExecCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "1", specA.PeerTunnelAddr.String()); err == nil {
-		t.Fatalf("ping unexpectedly succeeded after revoke:\n%s", string(out))
+	if out := pingTunnelAddrShouldFail(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName); out != nil {
+		t.Logf("post-revoke ping failed as expected: %s", string(out))
 	}
+}
+
+func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan daemon smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UTC().Format("20060102150405")
+	nsA := "higgs-daemon-pool-a-" + suffix
+	nsB := "higgs-daemon-pool-b-" + suffix
+	viciA := "/tmp/charon-" + nsA + ".vici"
+	viciB := "/tmp/charon-" + nsB + ".vici"
+	t.Cleanup(func() {
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsA)
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsB)
+		_ = os.Remove(viciA)
+		_ = os.Remove(viciB)
+	})
+
+	runAppCommand(t, ctx, "ip", "netns", "add", nsA)
+	runAppCommand(t, ctx, "ip", "netns", "add", nsB)
+	runAppCommand(t, ctx, "ip", "link", "add", "hgdpoola", "type", "veth", "peer", "name", "hgdpoolb")
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdpoola", "netns", nsA)
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdpoolb", "netns", nsB)
+	for _, args := range [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.1/30", "dev", "hgdpoola"},
+		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.2/30", "dev", "hgdpoolb"},
+		{"netns", "exec", nsA, "ip", "link", "set", "hgdpoola", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "hgdpoolb", "up"},
+	} {
+		runAppCommand(t, ctx, "ip", args...)
+	}
+
+	confA, err := writeDaemonStrongSwanConf(viciA)
+	if err != nil {
+		t.Fatalf("write strongswan.conf A: %v", err)
+	}
+	confB, err := writeDaemonStrongSwanConf(viciB)
+	if err != nil {
+		t.Fatalf("write strongswan.conf B: %v", err)
+	}
+	piddirA := t.TempDir()
+	piddirB := t.TempDir()
+	logA, err := os.CreateTemp("", "higgs-daemon-charon-pool-a-*.log")
+	if err != nil {
+		t.Fatalf("create charon A log: %v", err)
+	}
+	logB, err := os.CreateTemp("", "higgs-daemon-charon-pool-b-*.log")
+	if err != nil {
+		t.Fatalf("create charon B log: %v", err)
+	}
+	charonA := startDaemonTestCharonInNetNS(ctx, t, nsA, piddirA, confA, logA)
+	charonB := startDaemonTestCharonInNetNS(ctx, t, nsB, piddirB, confB, logB)
+	defer func() {
+		_ = charonA.Process.Kill()
+		_ = charonB.Process.Kill()
+		_ = charonA.Wait()
+		_ = charonB.Wait()
+		_ = os.Remove(confA)
+		_ = os.Remove(confB)
+		_ = logA.Close()
+		_ = logB.Close()
+		_ = os.Remove(logA.Name())
+		_ = os.Remove(logB.Name())
+	}()
+	defer func() {
+		if t.Failed() {
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dumpCancel()
+			logDaemonTestFile(t, "charon A", logA.Name())
+			logDaemonTestFile(t, "charon B", logB.Name())
+			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
+		}
+	}()
+
+	clientA, err := waitDaemonTestVICI(ctx, viciA)
+	if err != nil {
+		t.Fatalf("connect to charon A VICI: %v", err)
+	}
+	defer clientA.Close()
+	clientB, err := waitDaemonTestVICI(ctx, viciB)
+	if err != nil {
+		t.Fatalf("connect to charon B VICI: %v", err)
+	}
+	defer clientB.Close()
+
+	now := time.Unix(4140, 0)
+	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
+	keyA, recordA := daemonTestTransportKey(t, now)
+	keyB, recordB := daemonTestTransportKey(t, now)
+	stateA.IPsecTransportKey = keyA
+	stateB.IPsecTransportKey = keyB
+	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, now)
+	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, now)
+	stateA.Network.Zones["node-b.catofes."] = stateB.Network.Zones["node-b.catofes."]
+	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
+
+	pool := netip.MustParsePrefix("10.88.0.0/24")
+	groupA := testIPsecLinkGroup()
+	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
+	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedPool, Family: ipsec.FamilyIPv4, Pool: pool}
+	groupB := testIPsecLinkGroup()
+	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
+	groupB.Direction = ipsec.DirectionInbound
+	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedPool, Family: ipsec.FamilyIPv4, Pool: pool}
+
+	rtA := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
+		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
+		Clock:     func() time.Time { return now },
+	}
+	rtB := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
+		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rtA.SaveState(stateA); err != nil {
+		t.Fatalf("SaveState(node-a): %v", err)
+	}
+	if err := rtB.SaveState(stateB); err != nil {
+		t.Fatalf("SaveState(node-b): %v", err)
+	}
+	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
+	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
+	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+
+	serviceB.recoverIPsecLinksOnStart(ctx)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	latestA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a connecting): %v", err)
+	}
+	latestB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b connecting): %v", err)
+	}
+	specA := daemonSystemDesiredSpec(t, latestA, groupA, now)
+	specB := daemonSystemDesiredSpec(t, latestB, groupB, now)
+	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
+		t.Fatalf("wait for daemon SA on A: %v", err)
+	}
+	if err := waitDaemonTestSA(ctx, clientB, specB.TransportID); err != nil {
+		t.Fatalf("wait for daemon SA on B: %v", err)
+	}
+
+	serviceA.setState(latestA)
+	serviceB.setState(latestB)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	serviceB.recoverIPsecLinksOnStart(ctx)
+	latestA, err = rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a up): %v", err)
+	}
+	latestB, err = rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b up): %v", err)
+	}
+	assertDaemonSystemLinkUp(t, latestA, specA)
+	assertDaemonSystemLinkUp(t, latestB, specB)
+
+	if !pool.Contains(specA.LocalTunnelAddr) || !pool.Contains(specA.PeerTunnelAddr) {
+		t.Fatalf("derived pool addresses not in %s: local=%s peer=%s", pool, specA.LocalTunnelAddr, specA.PeerTunnelAddr)
+	}
+	if !specA.LocalTunnelAddr.Is4() || !specA.PeerTunnelAddr.Is4() {
+		t.Fatalf("expected IPv4 derived pool addresses, got local=%s peer=%s", specA.LocalTunnelAddr, specA.PeerTunnelAddr)
+	}
+
+	addTunnelRoute(t, ctx, nsA, specA)
+	addTunnelRoute(t, ctx, nsB, specB)
+	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
+	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 }
 
 func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
@@ -521,8 +701,10 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 
 	groupA := testIPsecLinkGroup()
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
+	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB := testIPsecLinkGroup()
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
+	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	rtA := &Runtime{
 		Config:    testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.1:4500", groupA),
 		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
@@ -571,10 +753,10 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ip", "route", "replace", specA.PeerTunnelAddr.String()+"/32", "dev", specA.InterfaceName, "src", specA.LocalTunnelAddr.String())
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ip", "route", "replace", specB.PeerTunnelAddr.String()+"/32", "dev", specB.InterfaceName, "src", specB.LocalTunnelAddr.String())
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", specA.PeerTunnelAddr.String())
-	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ping", "-c", "1", "-W", "3", specB.PeerTunnelAddr.String())
+	addTunnelRoute(t, ctx, nsA, specA)
+	addTunnelRoute(t, ctx, nsB, specB)
+	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
+	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 }
 
 func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
@@ -1339,8 +1521,12 @@ func testIPsecLinkGroup() ipsec.LinkGroupSpec {
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		Direction:          ipsec.DirectionOutbound,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		TunnelAddressPool:  netip.MustParsePrefix("10.44.0.0/29"),
-		ConnectRules:       []string{"strongswan://node-*.catofes.?accept=inbound"},
+		TunnelAddressSpec: ipsec.TunnelAddressSpec{
+			Mode:   ipsec.TunnelAddressSequentialPool,
+			Family: ipsec.FamilyIPv4,
+			Pool:   netip.MustParsePrefix("10.44.0.0/29"),
+		},
+		ConnectRules: []string{"strongswan://node-*.catofes.?accept=inbound"},
 	}
 }
 
@@ -1623,6 +1809,43 @@ func runAppCommand(t *testing.T, ctx context.Context, name string, args ...strin
 	if out, err := appExecCommand(ctx, name, args...); err != nil {
 		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(args, " "), err, string(out))
 	}
+}
+
+func addTunnelRoute(t *testing.T, ctx context.Context, ns string, spec ipsec.TransportLinkSpec) {
+	t.Helper()
+	bits := 32
+	if spec.PeerTunnelAddr.Is6() {
+		bits = 128
+	}
+	args := []string{"netns", "exec", ns, "ip", "route", "replace", netip.PrefixFrom(spec.PeerTunnelAddr, bits).String(), "dev", spec.InterfaceName}
+	if spec.PeerTunnelAddr.Is4() {
+		args = append(args, "src", spec.LocalTunnelAddr.String())
+	}
+	runAppCommand(t, ctx, "ip", args...)
+}
+
+func pingTunnelAddr(t *testing.T, ctx context.Context, ns string, target netip.Addr, iface string) {
+	t.Helper()
+	if target.Is4() {
+		runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping", "-c", "1", "-W", "3", target.String())
+		return
+	}
+	runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping6", "-c", "1", "-W", "3", target.String()+"%"+iface)
+}
+
+func pingTunnelAddrShouldFail(t *testing.T, ctx context.Context, ns string, target netip.Addr, iface string) []byte {
+	t.Helper()
+	var cmdArgs []string
+	if target.Is4() {
+		cmdArgs = []string{"netns", "exec", ns, "ping", "-c", "1", "-W", "1", target.String()}
+	} else {
+		cmdArgs = []string{"netns", "exec", ns, "ping6", "-c", "1", "-W", "1", target.String() + "%" + iface}
+	}
+	out, err := appExecCommand(ctx, "ip", cmdArgs...)
+	if err == nil {
+		t.Fatalf("ping unexpectedly succeeded to %s", target)
+	}
+	return out
 }
 
 func writeDaemonStrongSwanConf(viciSocket string) (string, error) {

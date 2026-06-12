@@ -93,6 +93,8 @@ type desiredLinkState struct {
 	InterfaceName   string        `json:"interface_name,omitempty"`
 	XFRMIfID        uint32        `json:"xfrm_if_id,omitempty"`
 	Endpoint        string        `json:"endpoint,omitempty"`
+	LocalTunnelAddr string        `json:"local_tunnel_addr,omitempty"`
+	PeerTunnelAddr  string        `json:"peer_tunnel_addr,omitempty"`
 }
 
 type linkSAState struct {

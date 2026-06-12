@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -435,6 +436,139 @@ func TestLinkGroupSpecValidationRejectsAmbiguousNetNSAndTinyPool(t *testing.T) {
 	}
 	if err := group.Validate(); err == nil {
 		t.Fatalf("Validate should reject unsupported path mode")
+	}
+}
+
+func TestDeriveTunnelAddressesLinkLocalMirror(t *testing.T) {
+	group := LinkGroupSpec{
+		ID: "ipsec-main",
+		TunnelAddressSpec: TunnelAddressSpec{
+			Mode:   TunnelAddressDerivedLinkLocal,
+			Family: FamilyIPv6,
+		},
+	}
+	aLocal, aPeer, err := group.DeriveTunnelAddresses("node-a.catofes.", "node-b.catofes.", 0)
+	if err != nil {
+		t.Fatalf("derive A: %v", err)
+	}
+	bLocal, bPeer, err := group.DeriveTunnelAddresses("node-b.catofes.", "node-a.catofes.", 0)
+	if err != nil {
+		t.Fatalf("derive B: %v", err)
+	}
+	if aLocal != bPeer || aPeer != bLocal {
+		t.Fatalf("addresses not mirrored: A=%s/%s B=%s/%s", aLocal, aPeer, bLocal, bPeer)
+	}
+	prefix := netip.MustParsePrefix("fe80::/64")
+	for _, addr := range []netip.Addr{aLocal, aPeer, bLocal, bPeer} {
+		if !prefix.Contains(addr) {
+			t.Fatalf("address %s is not link-local", addr)
+		}
+		if addr == prefix.Masked().Addr() {
+			t.Fatalf("address %s is subnet-router anycast", addr)
+		}
+	}
+}
+
+func TestDeriveTunnelAddressesDerivedPoolMirror(t *testing.T) {
+	group := LinkGroupSpec{
+		ID: "ipsec-main",
+		TunnelAddressSpec: TunnelAddressSpec{
+			Mode:   TunnelAddressDerivedPool,
+			Family: FamilyIPv4,
+			Pool:   netip.MustParsePrefix("10.44.0.0/24"),
+		},
+	}
+	aLocal, aPeer, err := group.DeriveTunnelAddresses("node-a.catofes.", "node-b.catofes.", 0)
+	if err != nil {
+		t.Fatalf("derive A: %v", err)
+	}
+	bLocal, bPeer, err := group.DeriveTunnelAddresses("node-b.catofes.", "node-a.catofes.", 0)
+	if err != nil {
+		t.Fatalf("derive B: %v", err)
+	}
+	if aLocal != bPeer || aPeer != bLocal {
+		t.Fatalf("addresses not mirrored: A=%s/%s B=%s/%s", aLocal, aPeer, bLocal, bPeer)
+	}
+	pool := netip.MustParsePrefix("10.44.0.0/24")
+	for _, addr := range []netip.Addr{aLocal, aPeer, bLocal, bPeer} {
+		if !pool.Contains(addr) {
+			t.Fatalf("address %s not in pool", addr)
+		}
+		if addr == pool.Masked().Addr() || addr == netip.MustParseAddr("10.44.0.255") {
+			t.Fatalf("address %s is network/broadcast", addr)
+		}
+	}
+}
+
+func TestDeriveTunnelAddressesDependsOnInputs(t *testing.T) {
+	group := LinkGroupSpec{
+		ID: "ipsec-main",
+		TunnelAddressSpec: TunnelAddressSpec{
+			Mode:   TunnelAddressDerivedLinkLocal,
+			Family: FamilyIPv6,
+		},
+	}
+	base, _, err := group.DeriveTunnelAddresses("node-a.catofes.", "node-b.catofes.", 0)
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	group2 := group
+	group2.ID = "ipsec-other"
+	other, _, err := group2.DeriveTunnelAddresses("node-a.catofes.", "node-b.catofes.", 0)
+	if err != nil {
+		t.Fatalf("other: %v", err)
+	}
+	if base == other {
+		t.Fatalf("overlay id change did not affect address: %s vs %s", base, other)
+	}
+	idx1, _, err := group.DeriveTunnelAddresses("node-a.catofes.", "node-b.catofes.", 1)
+	if err != nil {
+		t.Fatalf("index 1: %v", err)
+	}
+	if base == idx1 {
+		t.Fatalf("link index change did not affect address: %s vs %s", base, idx1)
+	}
+}
+
+func TestDeriveTunnelAddressesSequentialPoolLegacy(t *testing.T) {
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+	}
+	local, peer, err := group.DeriveTunnelAddresses("node-a.catofes.", "node-b.catofes.", 0)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	if local.String() != "10.44.0.1" || peer.String() != "10.44.0.2" {
+		t.Fatalf("addresses = %s/%s", local, peer)
+	}
+}
+
+func TestPlanApplyShowsScopedLinkLocalAddress(t *testing.T) {
+	spec := TransportLinkSpec{
+		TransportID:     "ipsec-1",
+		InterfaceName:   "hgs1234",
+		XFRMIfID:        1234,
+		NetNS:           "h2",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
+		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
+	}
+	plan := PlanApply(spec, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	var assign *ApplyOperation
+	for i := range plan.Operations {
+		if plan.Operations[i].Action == "assign_address" {
+			assign = &plan.Operations[i]
+			break
+		}
+	}
+	if assign == nil {
+		t.Fatalf("assign_address operation missing: %+v", plan.Operations)
+	}
+	if !strings.Contains(assign.Detail, "fe80::1%hgs1234") {
+		t.Fatalf("assign_address detail %q missing scoped link-local address", assign.Detail)
+	}
+	if !strings.Contains(assign.Detail, "netns=h2") {
+		t.Fatalf("assign_address detail %q missing netns scope", assign.Detail)
 	}
 }
 

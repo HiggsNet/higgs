@@ -144,6 +144,16 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	transportAtoB := "ipsec-ike-a-b"
 	transportBtoA := "ipsec-ike-b-a"
 
+	group := LinkGroupSpec{
+		ID:                "main",
+		Provider:          ProviderStrongSwan,
+		TunnelAddressSpec: TunnelAddressSpec{Mode: TunnelAddressDerivedPool, Family: FamilyIPv6, Pool: netip.MustParsePrefix("fd00:4242::/64")},
+	}
+	addrA, addrB, err := group.DeriveTunnelAddresses("node-a.", "node-b.", 0)
+	if err != nil {
+		t.Fatalf("derive tunnel addresses: %v", err)
+	}
+
 	specA := TransportLinkSpec{
 		LocalZone:                "node-a.",
 		PeerZone:                 "node-b.",
@@ -157,8 +167,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.2", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
 		XFRMIfID:                 ifID,
 		InterfaceName:            iface,
-		LocalTunnelAddr:          netip.MustParseAddr("10.44.0.1"),
-		PeerTunnelAddr:           netip.MustParseAddr("10.44.0.2"),
+		LocalTunnelAddr:          addrA,
+		PeerTunnelAddr:           addrB,
 		NetNS:                    nsA,
 		LocalPrivateKey:          localPrivA,
 		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
@@ -177,8 +187,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.1", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
 		XFRMIfID:                 ifID,
 		InterfaceName:            iface,
-		LocalTunnelAddr:          netip.MustParseAddr("10.44.0.2"),
-		PeerTunnelAddr:           netip.MustParseAddr("10.44.0.1"),
+		LocalTunnelAddr:          addrB,
+		PeerTunnelAddr:           addrA,
 		NetNS:                    nsB,
 		LocalPrivateKey:          localPrivB,
 		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
@@ -211,13 +221,13 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	}
 
 	// Add host routes so tunnel ping traverses the XFRM interface.
-	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", "10.44.0.2/32", "dev", iface, "src", "10.44.0.1")
-	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", "10.44.0.1/32", "dev", iface, "src", "10.44.0.2")
+	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
+	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
 
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", "10.44.0.2"); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping6", "-c", "1", "-W", "3", addrB.String()); err != nil {
 		t.Fatalf("tunnel ping A->B failed: %v\n%s", err, string(out))
 	}
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping", "-c", "1", "-W", "3", "10.44.0.1"); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping6", "-c", "1", "-W", "3", addrA.String()); err != nil {
 		t.Fatalf("tunnel ping B->A failed: %v\n%s", err, string(out))
 	}
 

@@ -108,7 +108,8 @@ make ipsec-xfrm-container-smoke
    `TestStrongSwanDriverIKEBringupSmoke` 和
    `TestDaemonReconcileUsesSystemXFRMDriverSmoke`、
    `TestDaemonStrongSwanReconcileBringupSmoke`、
-   `TestDaemonRunGossipStrongSwanBringupSmoke`。
+   `TestDaemonRunGossipStrongSwanBringupSmoke`、
+   `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke`。
 4. 创建一个一次性的 named netns、直接在该 namespace 内创建 XFRM interface、
    分配 tunnel address、验证 interface/address 可见，再删除 interface 和 namespace。
 5. 创建两个一次性的 named netns、veth underlay、两端 XFRM interface、手工 XFRM
@@ -136,6 +137,9 @@ make ipsec-xfrm-container-smoke
     revocation，断言 planner 输出 revoked skip reason，daemon 执行
     terminate/unload/delete interface，VICI 不再观测到该 SA，`LinkInstance`
     被清空，tunnel ping 失败。
+11. 新增 IPv4 `derived-pool` 覆盖：使用 `10.88.0.0/24` 的 deterministic host
+    派生，验证两端 tunnel address 落在同一 pool 内，XFRM interface 分配 `/32`
+    host prefix，添加 `remote/32 dev xfrm src local` 路由后双向 `ping` 成功。
 
 失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
 `swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。

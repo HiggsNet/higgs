@@ -111,6 +111,8 @@ func summarizeIPsecReconcile(unix int64, desired []ipsec.TransportLinkSpec, sas 
 			InterfaceName:   spec.InterfaceName,
 			XFRMIfID:        spec.XFRMIfID,
 			Endpoint:        summarizeContactEndpoint(spec.ContactPoints),
+			LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS),
+			PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
 		})
 	}
 	for _, sa := range sas {

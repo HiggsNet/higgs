@@ -800,7 +800,16 @@ overlays:
     direction: outbound
     max_peers: 64
     max_links_per_peer: 2
-    tunnel_address_pool: fd00:1234::/64
+    # Tunnel address allocation mode. Modes:
+    #   derived-link-local  IPv6 fe80::/64 scoped link-local (default for IPv6)
+    #   derived-pool        Deterministic host from the configured pool
+    #   sequential-pool     Legacy index-based allocation (testing/migration only)
+    #   disabled            No tunnel address assigned (default for IPv4)
+    # Legacy field tunnel_address_pool maps to sequential-pool and cannot be used
+    # together with tunnel_address.
+    tunnel_address:
+      mode: derived-link-local
+      family: ipv6
     reconcile:
       interval: 30s
       backoff:
@@ -817,7 +826,7 @@ overlays:
 - `overlay.default_netns` 是本机默认 LinkGroup / overlay data-plane namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 和后续 babeld 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。`ipsec.default_netns` 仅作为旧配置兼容别名。
 - `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
 - `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
-- `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、tunnel address pool 和 reconcile/backoff 策略，不发布到 gossip。
+- `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、`tunnel_address` 分配模式（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）和 reconcile/backoff 策略，不发布到 gossip。IPv6 默认 `derived-link-local`，IPv4 默认 `disabled`；旧字段 `tunnel_address_pool` 仍映射为 `sequential-pool` 兼容模式，但二者不可混用。
 - `overlays[].netns` 可以覆盖默认 namespace；`kind: host` 明确表示不隔离，`kind: path` 只引用已有 namespace path，不隐式创建。
 - `overlays[].connect/deny` 是 link group 内的本地 MeshPolicy rule，不发布到 gossip。
 - `address_source_order` 只影响本地选择和排序；远端也会按自己的本地配置重新排序。

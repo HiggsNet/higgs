@@ -499,7 +499,7 @@ type TransportLinkSpec struct {
 }
 ```
 
-`LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、tunnel address pool 以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
+`LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、`tunnel_address` 分配策略（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
 netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `overlay.default_netns` 默认是 `kind=name, name=h2, create=true`；`ipsec.default_netns` 只作为旧配置兼容别名。link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；Phase 5 babeld 应运行在对应 `LinkGroupSpec.NetNS` 中，和 XFRM interface 看到同一张 overlay data-plane；只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
 
@@ -516,7 +516,7 @@ daemon 已接入这条 reconcile 链路：
 
 `LinkInstance` 是这条链路的持久化锚点，保存 desired spec hash、实际状态、XFRM `if_id`、IKE/CHILD_SA 名称、endpoint、owner、failure count、backoff 和最近错误。provider apply 成功后 create/update/repair 会把实例推进到 `connecting`，表示配置已经应用、正在等待 IKE_SA/CHILD_SA；只有后续 `ListSAs` 观测到匹配 SA 时才进入 `up`。apply 失败会写入 failure/backoff，backoff 未到期时 reconcile 不重复 apply，到期后 error/degraded link 再进入 repair。teardown 成功后 daemon 会删除本地持久化实例，因此 link group 删除、record 过期或 peer 不再可信不会留下 `removing` 状态并在下一轮重复清理。
 
-reconcile 摘要会持久化最近 desired `TransportLinkSpec` 快照和 driver SA 快照；`higgs debug links` 重新按当前 active state + `LinkGroupSpec` 规划 desired links，再与已落盘 `LinkInstance`、上次 daemon 看到的 SA、CHILD_SA、endpoint、spec hash、local/remote identity、local/remote endpoint、reqid、if_id、backoff 和错误并排展示。默认 daemon 仍使用 dry-run driver；显式 root/container smoke 已覆盖真实 VICI/XFRM apply、双 daemon service gossip 同步、`LinkInstance=up`、启动恢复观测、撤销 teardown 和 tunnel ping。
+reconcile 摘要会持久化最近 desired `TransportLinkSpec` 快照和 driver SA 快照；`higgs debug links` 重新按当前 active state + `LinkGroupSpec` 规划 desired links，再与已落盘 `LinkInstance`、上次 daemon 看到的 SA、CHILD_SA、endpoint、spec hash、local/remote identity、local/remote endpoint、reqid、if_id、backoff 和错误并排展示；link-local 地址会带 interface scope（如 `fe80::...%hgsxxxx`）展示。默认 daemon 仍使用 dry-run driver；显式 root/container smoke 已覆盖真实 VICI/XFRM apply、双 daemon service gossip 同步、`LinkInstance=up`、启动恢复观测、撤销 teardown、link-local scoped tunnel ping 和 IPv4 derived-pool tunnel ping。
 
 `LinkInstance.Owner` 是 daemon 自动清理资源的归属边界。新建实例会保存 `manager=higgs`、group id、instance id、transport id 和派生 owner token；reconcile 对“不再 desired”的旧实例只在 owner 字段与实例字段匹配、transport id 使用 `ipsec-*`、interface 使用 `hgs*` 命名时生成 teardown。apply 层对只有 persisted instance、没有 desired spec 的 teardown 再做一次同样校验，避免 daemon 误删管理员手工创建的 StrongSwan connection 或 XFRM interface。旧状态没有 token 时仍可通过 manager/group/instance/transport/name 校验迁移，带 token 的新状态会额外校验 token。
 

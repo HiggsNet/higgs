@@ -115,20 +115,27 @@ type ipsecConfigYAML struct {
 	VICISocket   string          `yaml:"vici_socket"`
 }
 
+type tunnelAddressConfigYAML struct {
+	Mode   string `yaml:"mode"`
+	Family string `yaml:"family"`
+	Pool   string `yaml:"pool"`
+}
+
 type overlayGroupConfigYAML struct {
-	ID                 string               `yaml:"id"`
-	Name               string               `yaml:"name"`
-	Provider           string               `yaml:"provider"`
-	NetNS              ipsec.NetNSSpec      `yaml:"netns"`
-	DefaultPathMode    string               `yaml:"default_path_mode"`
-	Direction          string               `yaml:"direction"`
-	AddressSourceOrder configStringList     `yaml:"address_source_order"`
-	MaxPeers           *int                 `yaml:"max_peers"`
-	MaxLinksPerPeer    *int                 `yaml:"max_links_per_peer"`
-	TunnelAddressPool  string               `yaml:"tunnel_address_pool"`
-	Reconcile          overlayReconcileYAML `yaml:"reconcile"`
-	Connect            configStringList     `yaml:"connect"`
-	Deny               configStringList     `yaml:"deny"`
+	ID                 string                  `yaml:"id"`
+	Name               string                  `yaml:"name"`
+	Provider           string                  `yaml:"provider"`
+	NetNS              ipsec.NetNSSpec         `yaml:"netns"`
+	DefaultPathMode    string                  `yaml:"default_path_mode"`
+	Direction          string                  `yaml:"direction"`
+	AddressSourceOrder configStringList        `yaml:"address_source_order"`
+	MaxPeers           *int                    `yaml:"max_peers"`
+	MaxLinksPerPeer    *int                    `yaml:"max_links_per_peer"`
+	TunnelAddressPool  string                  `yaml:"tunnel_address_pool"`
+	TunnelAddress      tunnelAddressConfigYAML `yaml:"tunnel_address"`
+	Reconcile          overlayReconcileYAML    `yaml:"reconcile"`
+	Connect            configStringList        `yaml:"connect"`
+	Deny               configStringList        `yaml:"deny"`
 }
 
 type overlayReconcileYAML struct {
@@ -366,6 +373,59 @@ func parseIPsecDriver(value string) (string, error) {
 	}
 }
 
+func parseTunnelAddressConfig(cfg tunnelAddressConfigYAML) (ipsec.TunnelAddressSpec, error) {
+	mode := ipsec.TunnelAddressMode(strings.ToLower(strings.TrimSpace(cfg.Mode)))
+	switch mode {
+	case "", ipsec.TunnelAddressDerivedLinkLocal, ipsec.TunnelAddressDerivedPool, ipsec.TunnelAddressSequentialPool, ipsec.TunnelAddressDisabled:
+		// ok
+	default:
+		return ipsec.TunnelAddressSpec{}, fmt.Errorf("invalid tunnel_address.mode %q", cfg.Mode)
+	}
+	family := strings.ToLower(strings.TrimSpace(cfg.Family))
+	switch family {
+	case "", ipsec.FamilyIPv4, ipsec.FamilyIPv6:
+		// ok
+	default:
+		return ipsec.TunnelAddressSpec{}, fmt.Errorf("invalid tunnel_address.family %q", cfg.Family)
+	}
+	var prefix netip.Prefix
+	if cfg.Pool != "" {
+		var err error
+		prefix, err = netip.ParsePrefix(cfg.Pool)
+		if err != nil {
+			return ipsec.TunnelAddressSpec{}, fmt.Errorf("invalid tunnel_address.pool %q: %w", cfg.Pool, err)
+		}
+		if family == "" {
+			if prefix.Addr().Is4() {
+				family = ipsec.FamilyIPv4
+			} else {
+				family = ipsec.FamilyIPv6
+			}
+		}
+		if prefix.Addr().Is4() && family != ipsec.FamilyIPv4 {
+			return ipsec.TunnelAddressSpec{}, fmt.Errorf("tunnel_address.family %q does not match pool %q", cfg.Family, cfg.Pool)
+		}
+		if prefix.Addr().Is6() && family != ipsec.FamilyIPv6 {
+			return ipsec.TunnelAddressSpec{}, fmt.Errorf("tunnel_address.family %q does not match pool %q", cfg.Family, cfg.Pool)
+		}
+	}
+	if mode == "" {
+		if family == ipsec.FamilyIPv4 {
+			mode = ipsec.TunnelAddressDisabled
+		} else {
+			mode = ipsec.TunnelAddressDerivedLinkLocal
+		}
+	}
+	if (mode == ipsec.TunnelAddressDerivedPool || mode == ipsec.TunnelAddressSequentialPool) && !prefix.IsValid() {
+		return ipsec.TunnelAddressSpec{}, fmt.Errorf("tunnel_address.mode %q requires a pool", mode)
+	}
+	return ipsec.TunnelAddressSpec{
+		Mode:   mode,
+		Family: family,
+		Pool:   prefix,
+	}, nil
+}
+
 func parseOverlayConfigs(overlays []overlayGroupConfigYAML, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
 	groups := make([]ipsec.LinkGroupSpec, 0, len(overlays))
 	for i, overlay := range overlays {
@@ -402,12 +462,24 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, defaultNetNS ipsec.NetNS
 	if overlay.MaxLinksPerPeer != nil {
 		group.MaxLinksPerPeer = *overlay.MaxLinksPerPeer
 	}
-	if overlay.TunnelAddressPool != "" {
+	legacyPoolSet := overlay.TunnelAddressPool != ""
+	newBlockSet := overlay.TunnelAddress.Mode != "" || overlay.TunnelAddress.Family != "" || overlay.TunnelAddress.Pool != ""
+	if legacyPoolSet && newBlockSet {
+		return ipsec.LinkGroupSpec{}, fmt.Errorf("cannot mix tunnel_address_pool with tunnel_address")
+	}
+	if legacyPoolSet {
 		prefix, err := netip.ParsePrefix(overlay.TunnelAddressPool)
 		if err != nil {
 			return ipsec.LinkGroupSpec{}, fmt.Errorf("invalid tunnel_address_pool %q: %w", overlay.TunnelAddressPool, err)
 		}
 		group.TunnelAddressPool = prefix
+	}
+	if newBlockSet {
+		spec, err := parseTunnelAddressConfig(overlay.TunnelAddress)
+		if err != nil {
+			return ipsec.LinkGroupSpec{}, err
+		}
+		group.TunnelAddressSpec = spec
 	}
 	if overlay.Reconcile.Interval != "" {
 		d, err := parseConfigDuration(overlay.Reconcile.Interval, "reconcile.interval")

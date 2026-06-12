@@ -53,7 +53,16 @@ overlays:
     address_source_order: manual-address, manual-dns, discovery, reflector
     max_peers: 64
     max_links_per_peer: 2
-    tunnel_address_pool: fd00:1234::/64
+    # Tunnel address allocation mode. Modes:
+    #   derived-link-local  IPv6 fe80::/64 scoped link-local (default for IPv6)
+    #   derived-pool        Deterministic host from the configured pool
+    #   sequential-pool     Legacy index-based allocation (testing/migration only)
+    #   disabled            No tunnel address assigned (default for IPv4)
+    # Legacy field tunnel_address_pool maps to sequential-pool and cannot be used
+    # together with tunnel_address.
+    tunnel_address:
+      mode: derived-link-local
+      family: ipv6
     reconcile:
       interval: 30s
       backoff:

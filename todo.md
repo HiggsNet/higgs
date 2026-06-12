@@ -540,51 +540,93 @@
     - [x] `docs/strongswan-xfrm-test.md` 和 `docs/design.md` 均保持边界：Phase 4 smoke 只证明 route-based peer tunnel link、VICI/SA 观测和 tunnel IP ping，不验证 Babel、多前缀 route authorization 或 import/export policy。
   - [x] 将真实 StrongSwan/XFRM smoke 默认排除在 `make smoke-all` 之外，作为显式 root/system integration 目标；`ipsec-dry-run-smoke` 可纳入常规 `make check` 或 smoke-all
 
+- [x] **4.3.1 派生式 tunnel/link-local 地址分配**
+  - 目标：把当前 `tunnel_address_pool` 顺序分配升级为确定性地址派生，避免各节点手工配置或独立顺序规划导致 tunnel address 冲突；tunnel address 只表达每条 peer-to-peer tunnel link 的邻接地址，不作为节点身份或业务前缀，业务前缀仍由 Phase 5 Babel / route authorization 协商和过滤。
+  - [x] 先定配置形状并保留兼容：
+    - 新增结构化配置 `overlays[].tunnel_address`，字段包含 `mode`、`family`、`pool`；合法 mode 为 `derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`。
+    - `config.example.yaml` 默认改为 IPv6 `derived-link-local`，不再展示 `fd00:1234::/64` 作为默认；IPv4 默认 `disabled`。
+    - 旧字段 `tunnel_address_pool` 继续接受，明确映射为 `sequential-pool` 兼容模式；二者同时出现时配置加载报错。
+    - 文档说明 `sequential-pool` 只用于测试、迁移和排障。
+  - [x] 扩展内部模型：
+    - 在 `LinkGroupSpec` 中加入 `TunnelAddressSpec`，表达 mode、family、pool；保留 `TunnelAddressPool` 作为过渡字段。
+    - `TransportLinkSpec` 继续携带本地/远端 tunnel address；`FormatScopedTunnelAddress` / `debug links` 输出 scoped link-local 地址。
+    - `ApplyPlan` / `debug links` 输出 link-local 地址时显示 interface scope，例如 `fe80::...%hgsxxxx`。
+  - [x] 实现确定性派生函数：
+    - 新增 `DeriveTunnelAddresses(local, peer, group, linkIndex)`，使用项目已有 `higgscrypto.Hash` 做稳定派生。
+    - hash 输入包含 group ID、按字典序排序的 peer pair、端点 role（lower/higher）、address family、address mode、provider/link index；A/B 两端独立规划得到镜像地址。
+    - IPv6 `derived-link-local` 固定使用 `fe80::/64`，派生 interface-id 并过滤不可用结果。
+    - IPv6/IPv4 `derived-pool` 从配置 prefix 内派生 host bits，过滤 network/broadcast/全 0/全 1 host。
+    - `sequential-pool` 保留 `pool + (linkIndex*2+1/2)` 行为作为 legacy 路径。
+  - [x] 接入 planner/reconcile/apply：
+    - `NewTransportLinkSpecForGroup` 默认走 `DeriveTunnelAddresses`；legacy sequential mode 走旧顺序逻辑。
+    - StrongSwan `BuildLoadConnMessage` 仍只根据 tunnel address family 选择宽泛 selector（IPv4 `0.0.0.0/0`、IPv6 `::/0`）。
+    - XFRM `AssignAddress` 对 IPv6 link-local 使用 host prefix `/128`；root smoke 的 `ping`/route 显式带 interface。
+    - `higgs debug links` 展示 scoped local/remote tunnel address。
+  - 验证：
+    - [x] config 单测：新结构化配置、旧 `tunnel_address_pool` 兼容、同时配置冲突、非法 mode/family/prefix、IPv4 默认 disabled 都有断言。
+    - [x] planner 单测：A/B 镜像、不同 overlay/provider/link index 地址不同、IPv6 link-local 落在 `fe80::/64`、IPv4 derived-pool 落在 pool 且避开不可用 host。
+    - [x] dry-run 测试：`ApplyPlan` / `debug links` 显示 scoped link-local address；sequential pool 仍输出旧式地址。
+    - [x] root smoke：link-local 模式 XFRM interface 分配 scoped tunnel address，`ping6`/`route` 显式带 interface；新增 `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke` 覆盖 IPv4 derived-pool。
+
 - [ ] **4.4 平滑端口轮换 / 低频 rotate（生产必需）**
   - 目标：把 `ipsec/ports` 的 current/previous grace 从“公告和 planner fallback”推进到可执行的低频平滑 rotate，支持运营商 QoS、端口迁移、NAT 映射变化和维护窗口中的不中断或低中断切换；高频/对抗性 port hopping 仍留到 Phase 7。
   - 明确当前边界：现在 `PlanPortRecord` 会发布 current + previous grace，peer planner 会在 current 失败/backoff 时回退 previous；但 StrongSwan apply 当前一次只加载 `TransportLinkSpec.ContactPoints[0]` 对应的一个 `remote_port`，本机 charon 也没有同时监听新旧两组端口，因此还不是平滑 rotate。
-  - 做方案选择并记录取舍：
-    - **preferred：外层 DNAT/redirect grace**。charon 保持一个稳定本地监听端口，nftables/iptables 在 grace 窗口内把新旧 advertised 端口都转发到当前 charon 端口；优点是可同时接受新旧端口，避免多 charon 实例，缺点是依赖防火墙/NAT 规则和 root 权限。
-    - **备选：双 connection / staged reestablish**。为 current 与 previous 分别加载临时 connection，先让新端口建立 SA，确认 `ListSAs` 后再 terminate/unload 旧 connection；优点是纯 StrongSwan/VICI 边界内可审计，缺点是命名、owner、SA 去重、对端同步时序更复杂。
-    - **备选：多 charon/socket 实例**。新旧端口同时监听，grace 后清理旧实例；优点是语义直接，缺点是部署复杂，和 namespace/secret/VICI 管理成本高。
-  - 扩展 `LinkInstance` / debug 状态：记录 selected contact、port generation、rotation phase（idle/preparing/dual-running/cutover/rollback/cleanup）、old/new transport id 或 NAT owner、last rotate error、rollback deadline；`higgs debug links` 显示 current/previous 端口、实际 SA endpoint 和 rotate phase。
-  - 扩展 planner/reconcile：当远端 `ipsec/ports` generation 变化或本地端口 generation 切换时，不直接替换成单个新 spec；先生成 staged rotate action，保留旧端口 grace，等待新 SA/新路径观测成功后再清理旧路径。
-  - 失败与回滚：current 端口 apply/SA 建立失败时在 grace 内继续使用 previous；QoS 误判或新端口丢包升高时自动回滚到 previous/static fallback；限制探测频率，避免端口旋转变成对远端/运营商的噪音。
+  - [ ] 先做方案裁剪：
+    - Phase 4.4 首选实现 **staged reestablish over VICI**：对远端 current/previous ContactPoint 分别生成可审计 staged connection/action，先让新端口建立 SA，确认 `ListSAs` 后再清理旧 connection。理由：不引入 nftables/iptables ownership 和部署依赖，先把 StrongSwan/VICI 边界做完整。
+    - 外层 DNAT/redirect grace 延后为 Phase 6/7 防火墙集成：charon 保持稳定监听端口，nftables/iptables 把新旧 advertised 端口转发到当前 charon 端口；适合生产部署，但需要独立 owner token、规则恢复和 root 权限设计。
+    - 多 charon/socket 实例暂不实现，只保留为极端部署选项；除非 staged reestablish 无法满足，否则不要把 namespace/secret/VICI 管理复杂度提前引入。
+  - [ ] 扩展状态模型：
+    - `LinkInstance` 增加 selected contact id/source/address/port、remote port generation、local port generation、rotation phase（`idle`、`preparing`、`testing_new`、`dual_running`、`cutover`、`rollback`、`cleanup`）、old/new transport id 或 child suffix、rollback deadline、last rotate error。
+    - `TransportLinkSpec` 或 planner result 增加 staged contacts：primary/current、previous grace、candidate selected reason；spec hash 需要区分“普通 endpoint 更新”和“rotate staged update”，避免直接 tear down 旧 SA。
+    - `higgs debug links` 显示 current/previous 端口、实际 VICI SA endpoint、rotate phase、rollback deadline、old/new child/connection 名称和最近失败原因。
+  - [ ] 扩展 planner/reconcile：
+    - 当远端 `ipsec/ports` generation 变化或本地端口 generation 切换时，planner 输出 rotate intent，而不是单纯替换 `ContactPoints[0]`。
+    - reconcile 在 `idle -> preparing` 阶段加载新 connection/child，但保留旧 connection/SA；`testing_new` 阶段观察新 SA 是否 established；成功后进入 `cutover/cleanup`，失败则进入 `rollback` 并继续使用 previous。
+    - 如果 current 端口处于 backoff、质量评分下降或 VICI 建链失败，在 grace 窗口内继续选择 previous；grace 过期后旧端口只能清理，不能无限保留。
+    - daemon 重启时从 `LinkInstance`、active `ipsec/ports`、VICI `ListSAs` 恢复 rotate phase；如果状态不一致，优先 adopt 已 established SA，再决定 repair/cleanup。
+  - [ ] 明确命名和 owner 规则：
+    - staged connection/child 名称必须稳定可推导，例如 `transportID` 加 port generation/suffix；teardown 只能清理 Higgs owner token 匹配的 staged resource。
+    - 同一 peer 不能同时保留无限多 staged SA；最多允许 old+new 两组，超过则按 generation/established time/owner 选择保留并清理。
+    - revocation、policy deny、transport key mismatch 时跳过 rotate 状态机，直接走强制 teardown。
+  - [ ] 失败与回滚边界：
+    - current 端口 apply 成功但 SA 未建立，按 backoff 重试到 rollback deadline；超过 deadline 切回 previous/static fallback。
+    - QoS/质量评分误判或新端口丢包升高时自动回滚；限制 rotate 触发频率，避免端口旋转变成对远端/运营商的噪音。
+    - grace 过期后如果只有 previous SA 可用，debug 明确显示 `rotation_expired_but_old_sa_active` 或类似 degraded reason，避免静默卡住。
   - 验证：
-    - dry-run：current + previous grace 生成 staged apply plan，debug 输出 rotate phase；current 失败/backoff 时仍选择 previous。
-    - system smoke：在 root Linux 环境中验证新旧 advertised 端口 grace 内都可触发 IKE/CHILD_SA 或被 DNAT 到当前 charon，grace 后旧端口被清理。
-    - restart recovery：daemon 重启后从 `LinkInstance` + active `ipsec/ports` + `ListSAs` 恢复 rotate phase，不重复创建旧规则，也不提前删除仍在 grace 的旧端口。
+    - [ ] dry-run：current + previous grace 生成 staged apply plan，debug 输出 rotate phase；current 失败/backoff 时仍选择 previous。
+    - [ ] reconcile 单测：`idle -> preparing -> testing_new -> cutover -> cleanup` 成功路径；`testing_new -> rollback` 失败路径；grace 过期清理旧路径。
+    - [ ] restart recovery：daemon 重启后从 `LinkInstance` + active `ipsec/ports` + `ListSAs` 恢复 rotate phase，不重复创建旧资源，也不提前删除仍在 grace 的旧端口。
+    - [ ] root smoke：在 root Linux 环境中验证 staged reestablish 后新 SA 建立、旧 SA 清理、tunnel ping 持续恢复；DNAT/redirect 只作为后续防火墙 smoke，不阻塞 4.4。
 
 - [ ] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
   - 目标：双方 `direction=bidirectional` 且双方 `accept=bidirectional` 时，仍先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。
   - 明确当前边界：当前 `ShouldInitiate(local, peer, bidirectional, bidirectional)` 只用 zone 字典序决定首拨方；失败后 primary 进入本地 `LinkInstance` backoff/repair，secondary 仍返回 `accept_intent_mismatch` / 不主动拨。也就是说“稳定首拨 + 本地重试”已实现，“对端接管”尚未实现。
-  - 设计接管状态机：
-    - `primary`：稳定排序胜出的一侧，正常负责主动拨号；失败时按现有 backoff/repair 重试。
-    - `secondary-standby`：稳定排序落败的一侧，默认只加载可接收配置或保持 no-op，不主动创建 outbound SA。
-    - `secondary-takeover`：当本地长期没有观测到来自 primary 的有效 SA，且本地也具备可拨 ContactPoint / NAT 证据时，临时允许 secondary 主动拨 primary。
-    - `converged`：任一方向观测到匹配 IKE_SA/CHILD_SA 后，两侧 adopt 同一条 link，secondary 停止额外主动拨号。
-    - `cooldown`：takeover 失败后进入更长 backoff，防止双方在网络抖动时来回抢拨。
-  - 接管触发条件需要保守：
+  - [ ] 先做纯本地 runtime takeover：
+    - 4.5 不新增 signed health record；secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。
+    - Phase 6/7 再考虑低频 signed/runtime health hint；如果以后发布 health hint，必须防止瞬时网络抖动造成 gossip 风暴，也不能让第三方伪造失败诱导错误接管。
+  - [ ] 扩展 planner 角色模型：
+    - `ShouldInitiate` 保持稳定 tie-break，但 planner 需要输出 initiator role：`primary`、`secondary-standby`、`secondary-takeover`、`converged`、`cooldown`。
+    - `TransportLinkSpec` 或 planner metadata 记录 initiator role、takeover phase、takeover generation、takeover reason；`LinkInstance` 记录 primary/secondary role、takeover_started_at、takeover_until、last_takeover_error、observed_initiator。
+    - 初始状态：双方 `bidirectional` 且都 `accept=bidirectional` 时，只有稳定排序胜出的一侧生成 create/repair；另一侧输出 `bidirectional_standby` skip/noop，但仍能加载必要的接收配置。
+  - [ ] 接管触发条件需要保守：
     - 必须双方 profile 都是 `accept=bidirectional`，本地 rule/effective direction 也是 `bidirectional`；`outbound/inbound` 不参与 takeover。
-    - primary 连续失败次数或 `connecting` 超时达到阈值后，secondary 才可接管；阈值建议从 `LinkGroupSpec.Reconcile.Backoff` 派生，并设置最小 takeover delay（例如 2-3 个 backoff 周期）。
+    - primary 连续失败次数、`connecting` 超时或长期未观测到匹配 SA 达到阈值后，secondary 才可接管；阈值从 `LinkGroupSpec.Reconcile.Backoff` 派生，并设置最小 takeover delay（例如 2-3 个 backoff 周期）。
     - secondary 接管前必须重新跑 ContactPoint/NAT evidence 过滤；如果对端只有 private/unknown 地址且无 observed external port，不接管，继续展示结构化 skip reason。
     - revocation、record 过期、transport key/profile mismatch、policy deny 时禁止 takeover；这些属于信任/授权失败，不是连通性失败。
-  - 避免双拨和抖动：
-    - `TransportLinkSpec` 需要记录 initiator role / takeover phase / takeover generation，`LinkInstance` 需要记录 primary/secondary role、takeover_started_at、takeover_until、last_takeover_error、observed_initiator。
-    - `ReconcileLinkInstances` 看到已有匹配 SA 时优先 adopt，而不是因为本地角色变化重复 create；若同时存在 primary/secondary 两条候选 SA，应按 owner token、generation、established time 和稳定 role 规则选择保留一条，另一条 terminate/unload。
+  - [ ] reconcile/adopt 规则：
+    - `ReconcileLinkInstances` 看到已有匹配 SA 时优先 adopt，而不是因为本地角色变化重复 create；已有 SA 的 observed initiator 需要写回 `LinkInstance`。
+    - 如果同时存在 primary/secondary 两条候选 SA，按 owner token、generation、established time 和稳定 role 规则选择保留一条，另一条 terminate/unload。
     - takeover 必须有 lease/cooldown：secondary 接管成功后维持一段稳定窗口；primary 后续恢复时应先 adopt 现有 SA，不应立刻抢回主动权导致 rekey/重连风暴。
-  - 状态传播方案选择：
-    - **preferred：先做纯本地 runtime takeover**。secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管，不新增 signed health record；优点是简单、不会把短期链路失败写入 Zone 状态，缺点是 secondary 无法直接知道 primary 的真实失败原因，只能按“长期未见 SA”推断。
-    - **后续可选：signed/runtime health hint**。在 Phase 6/7 的链路健康检测中发布低频 link-health/initiator hint，让对端更快判断 primary 是否失效；必须避免把瞬时网络抖动变成 gossip 风暴，也不能让第三方伪造失败导致错误接管。
-  - debug / operator 输出：
+    - takeover 失败后进入更长 cooldown；cooldown 内 planner 不反复生成 create/repair，debug 明确显示剩余时间和失败原因。
+  - [ ] debug / operator 输出：
     - `higgs debug links` 显示 `initiator_role=primary|secondary`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_reason`、最近 primary/secondary SA 快照。
-    - skip reason 区分 `bidirectional_standby`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_no_nat_evidence`、`takeover_cooldown_active`。
+    - skip reason 区分 `bidirectional_standby`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_no_nat_evidence`、`takeover_cooldown_active`、`takeover_forbidden_by_policy`。
   - 验证：
-    - dry-run：A/B 都 `bidirectional` 时初始只由稳定排序胜出的一侧 create；另一侧进入 standby/noop，并在 debug 中说明原因。
-    - dry-run：primary 连续失败并超过 takeover delay 后，secondary 生成 takeover create/repair action；成功观测 SA 后双方 adopt，不产生重复 `LinkInstance`。
-    - dry-run：takeover 失败进入 cooldown；cooldown 内不反复 apply。
-    - dry-run：policy deny、revocation、missing/mismatched transport key 不触发 takeover。
-    - system smoke：模拟 primary 侧 outbound 被防火墙阻断或 NAT 映射异常，验证 secondary 在 delay 后接管并建立 IKE_SA/CHILD_SA，tunnel ping 恢复；primary 恢复后 adopt 现有 SA，不抢回导致重连。
+    - [ ] dry-run：A/B 都 `bidirectional` 时初始只由稳定排序胜出的一侧 create；另一侧进入 standby/noop，并在 debug 中说明原因。
+    - [ ] dry-run：primary 连续失败并超过 takeover delay 后，secondary 生成 takeover create/repair action；成功观测 SA 后双方 adopt，不产生重复 `LinkInstance`。
+    - [ ] dry-run：takeover 失败进入 cooldown；cooldown 内不反复 apply。
+    - [ ] dry-run：policy deny、revocation、missing/mismatched transport key、record 过期都不触发 takeover。
+    - [ ] root/system smoke：模拟 primary 侧 outbound 被防火墙阻断或 NAT 映射异常，验证 secondary 在 delay 后接管并建立 IKE_SA/CHILD_SA，tunnel ping 恢复；primary 恢复后 adopt 现有 SA，不抢回导致重连。
 
 ## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 

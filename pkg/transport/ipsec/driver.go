@@ -90,7 +90,7 @@ func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
 	plan.add("load_connection", spec.TransportID, string(spec.PeerZone))
 	plan.add("ensure_interface", spec.InterfaceName, fmt.Sprintf("if_id=%d netns=%s", spec.XFRMIfID, spec.NetNS))
 	if spec.LocalTunnelAddr.IsValid() {
-		plan.add("assign_address", spec.InterfaceName, tunnelAddressPrefix(spec.LocalTunnelAddr))
+		plan.add("assign_address", spec.InterfaceName, FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
 	}
 	return plan
 }

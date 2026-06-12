@@ -166,19 +166,32 @@ func TestSystemXFRMDriverPeerTunnelPingSmoke(t *testing.T) {
 
 	driverA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: true})
 	driverB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: true})
+
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Provider:          ProviderStrongSwan,
+		TunnelAddressSpec: TunnelAddressSpec{Mode: TunnelAddressDerivedLinkLocal, Family: FamilyIPv6},
+	}
+	addrA, addrB, err := group.DeriveTunnelAddresses("node-a.", "node-b.", 0)
+	if err != nil {
+		t.Fatalf("derive link-local addresses: %v", err)
+	}
+
 	specA := TransportLinkSpec{
 		TransportID:     "ipsec-smoke-a-b",
 		InterfaceName:   iface,
 		XFRMIfID:        ifID,
 		NetNS:           nsA,
-		LocalTunnelAddr: netip.MustParseAddr("10.44.0.1"),
+		LocalTunnelAddr: addrA,
+		PeerTunnelAddr:  addrB,
 	}
 	specB := TransportLinkSpec{
 		TransportID:     "ipsec-smoke-b-a",
 		InterfaceName:   iface,
 		XFRMIfID:        ifID,
 		NetNS:           nsB,
-		LocalTunnelAddr: netip.MustParseAddr("10.44.0.2"),
+		LocalTunnelAddr: addrB,
+		PeerTunnelAddr:  addrA,
 	}
 	if err := driverA.EnsureInterface(ctx, specA); err != nil {
 		t.Fatalf("EnsureInterface(A): %v", err)
@@ -186,22 +199,22 @@ func TestSystemXFRMDriverPeerTunnelPingSmoke(t *testing.T) {
 	if err := driverB.EnsureInterface(ctx, specB); err != nil {
 		t.Fatalf("EnsureInterface(B): %v", err)
 	}
-	if err := driverA.AssignAddress(ctx, iface, "10.44.0.1/30"); err != nil {
+	if err := driverA.AssignAddress(ctx, iface, addrA.String()+"/128"); err != nil {
 		t.Fatalf("AssignAddress(A): %v", err)
 	}
-	if err := driverB.AssignAddress(ctx, iface, "10.44.0.2/30"); err != nil {
+	if err := driverB.AssignAddress(ctx, iface, addrB.String()+"/128"); err != nil {
 		t.Fatalf("AssignAddress(B): %v", err)
 	}
 
-	installPeerXFRM(t, ctx, nsA, ifID, reqID, "192.0.2.1", "192.0.2.2", "10.44.0.1", "10.44.0.2", "0x100", "0x200")
-	installPeerXFRM(t, ctx, nsB, ifID, reqID, "192.0.2.2", "192.0.2.1", "10.44.0.2", "10.44.0.1", "0x200", "0x100")
-	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", "10.44.0.2/32", "dev", iface, "src", "10.44.0.1")
-	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", "10.44.0.1/32", "dev", iface, "src", "10.44.0.2")
+	installPeerXFRM(t, ctx, nsA, ifID, reqID, "192.0.2.1", "192.0.2.2", addrA.String(), addrB.String(), "0x100", "0x200")
+	installPeerXFRM(t, ctx, nsB, ifID, reqID, "192.0.2.2", "192.0.2.1", addrB.String(), addrA.String(), "0x200", "0x100")
+	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
+	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
 
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "2", "10.44.0.2"); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping6", "-c", "1", "-W", "2", addrB.String()+"%"+iface); err != nil {
 		t.Fatalf("tunnel ping A->B failed: %v\n%s", err, string(out))
 	}
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping", "-c", "1", "-W", "2", "10.44.0.1"); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping6", "-c", "1", "-W", "2", addrA.String()+"%"+iface); err != nil {
 		t.Fatalf("tunnel ping B->A failed: %v\n%s", err, string(out))
 	}
 }

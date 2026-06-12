@@ -138,6 +138,8 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 					InterfaceName:   spec.InterfaceName,
 					XFRMIfID:        spec.XFRMIfID,
 					Endpoint:        summarizeContactEndpoint(spec.ContactPoints),
+					LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS),
+					PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
 				}
 				plannedDesired[item.InstanceID] = item
 			}
@@ -167,7 +169,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		if desiredHash == "" {
 			desiredHash = inst.DesiredSpecHash
 		}
-		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s endpoint=%s sa=%s sa_local=%s sa_remote=%s sa_local_id=%s sa_remote_id=%s sa_reqid=%d owner=%s failures=%d backoff=%s error=%s\n",
+		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s local_tunnel=%s peer_tunnel=%s endpoint=%s sa=%s sa_local=%s sa_remote=%s sa_local_id=%s sa_remote_id=%s sa_reqid=%d owner=%s failures=%d backoff=%s error=%s\n",
 			inst.ID,
 			dash(inst.GroupID),
 			inst.PeerZone,
@@ -177,6 +179,8 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 			dash(inst.InterfaceName),
 			inst.XFRMIfID,
 			dash(inst.ChildSAName),
+			dash(desired.LocalTunnelAddr),
+			dash(desired.PeerTunnelAddr),
 			dash(inst.Endpoint),
 			formatSAState(sa),
 			dash(sa.LocalEndpoint),
@@ -198,13 +202,15 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		sort.Strings(plannedIDs)
 		for _, id := range plannedIDs {
 			desired := plannedDesired[id]
-			fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=- state=missing if=%s if_id=%d child_sa=- endpoint=%s sa=- sa_endpoint=- owner=- failures=0 backoff=- error=-\n",
+			fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=- state=missing if=%s if_id=%d child_sa=- local_tunnel=%s peer_tunnel=%s endpoint=%s sa=- sa_endpoint=- owner=- failures=0 backoff=- error=-\n",
 				desired.InstanceID,
 				dash(desired.GroupID),
 				desired.PeerZone,
 				dash(shortHash(desired.DesiredSpecHash)),
 				dash(desired.InterfaceName),
 				desired.XFRMIfID,
+				dash(desired.LocalTunnelAddr),
+				dash(desired.PeerTunnelAddr),
 				dash(desired.Endpoint),
 			)
 		}
