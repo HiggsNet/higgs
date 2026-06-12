@@ -1425,6 +1425,23 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	serviceB.IPsecDriver = driverB
 	serviceB.XFRMDriver = driverB
 
+	tcpAddrA := objectPullTCPAddr(transportA.LocalAddr().String())
+	listenerA, err := objectPullTCPServe(tcpAddrA, objectPullLookup(func() *stateFile { return serviceA.Sync.State }))
+	if err != nil {
+		t.Fatalf("objectPullTCPServe(A): %v", err)
+	}
+	if listenerA != nil {
+		defer listenerA.Close()
+	}
+	tcpAddrB := objectPullTCPAddr(transportB.LocalAddr().String())
+	listenerB, err := objectPullTCPServe(tcpAddrB, objectPullLookup(func() *stateFile { return serviceB.Sync.State }))
+	if err != nil {
+		t.Fatalf("objectPullTCPServe(B): %v", err)
+	}
+	if listenerB != nil {
+		defer listenerB.Close()
+	}
+
 	if err := serviceA.handleEndpointTimerEvent(); err != nil {
 		t.Fatalf("publish node-a ipsec records: %v", err)
 	}
@@ -1435,18 +1452,32 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serveA, stopA := serveDaemonPackets(ctx, serviceA, transportA)
-	if err := serviceB.handleSyncTimerEvent(ctx, true); err != nil {
-		t.Fatalf("sync node-b from node-a: %v", err)
-	}
+	serveB, stopB := serveDaemonPackets(ctx, serviceB, transportB)
+
+	var syncErrs [2]error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		syncErrs[0] = serviceB.handleSyncTimerEvent(ctx, true)
+	}()
+	go func() {
+		defer wg.Done()
+		syncErrs[1] = serviceA.handleSyncTimerEvent(ctx, true)
+	}()
+	wg.Wait()
+
 	stopA()
 	<-serveA
-
-	serveB, stopB := serveDaemonPackets(ctx, serviceB, transportB)
-	if err := serviceA.handleSyncTimerEvent(ctx, true); err != nil {
-		t.Fatalf("sync node-a from node-b: %v", err)
-	}
 	stopB()
 	<-serveB
+
+	if err := syncErrs[0]; err != nil {
+		t.Fatalf("sync node-b from node-a: %v", err)
+	}
+	if err := syncErrs[1]; err != nil {
+		t.Fatalf("sync node-a from node-b: %v", err)
+	}
 
 	latestA, err := rtA.LoadState()
 	if err != nil {
