@@ -1428,9 +1428,12 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		},
 	}
 
-	syncNow, shutdown := service.processEvents(context.Background())
+	syncNow, shutdown, ipsecFlushed := service.processEvents(context.Background())
 	if !syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	if !ipsecFlushed {
+		t.Fatalf("ipsecFlushed = false, want true")
 	}
 	if driver.listCalls != 1 {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
@@ -1447,6 +1450,48 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	}
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
 		t.Fatalf("ipsec reconcile = %+v, want one create", latest.IPsecReconcile)
+	}
+}
+
+func TestDaemonIPsecReconcileInterval(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	appConfig := defaultAppConfig()
+	service := newDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	if interval := service.ipsecReconcileInterval(); interval != 0 {
+		t.Fatalf("interval without link groups = %s, want 0", interval)
+	}
+
+	state.LinkInstances = map[string]linkInstanceState{"stale": {ID: "stale"}}
+	if interval := service.ipsecReconcileInterval(); interval != defaultIPsecReconcileInterval {
+		t.Fatalf("interval with stale instances = %s, want %s", interval, defaultIPsecReconcileInterval)
+	}
+	state.LinkInstances = nil
+
+	defaultGroup := testIPsecLinkGroup()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{defaultGroup}
+	if interval := service.ipsecReconcileInterval(); interval != defaultIPsecReconcileInterval {
+		t.Fatalf("default interval = %s, want %s", interval, defaultIPsecReconcileInterval)
+	}
+
+	fastGroup := testIPsecLinkGroup()
+	fastGroup.ID = "fast"
+	fastGroup.Reconcile.IntervalSeconds = 5
+	slowGroup := testIPsecLinkGroup()
+	slowGroup.ID = "slow"
+	slowGroup.Reconcile.IntervalSeconds = 60
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{slowGroup, fastGroup}
+	if interval := service.ipsecReconcileInterval(); interval != 5*time.Second {
+		t.Fatalf("minimum interval = %s, want 5s", interval)
+	}
+}
+
+func TestNextIPsecReconcileTime(t *testing.T) {
+	now := time.Unix(4200, 0)
+	if next := nextIPsecReconcileTime(now, 0); !next.IsZero() {
+		t.Fatalf("next disabled = %s, want zero", next)
+	}
+	if next := nextIPsecReconcileTime(now, 30*time.Second); !next.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("next = %s, want %s", next, now.Add(30*time.Second))
 	}
 }
 

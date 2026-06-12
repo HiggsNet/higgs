@@ -470,6 +470,7 @@
     - [x] no-longer-desired teardown 也纳入幂等骨架：成功清理后删除本地实例，后续 state-change/restart reconcile 不会重复执行同一个 teardown action。
     - [x] daemon event drain 期间合并多次 state change：record/admin/remote apply 仍串行落盘，但同一轮事件队列只触发一次 IPsec `ListSAs` + reconcile/apply，避免同一个 peer/group 在短时间内重复加载 connection/interface。
     - [x] config reload 与 state-change 使用同一条 dirty/reconcile 路径：同一轮事件中的多次 reload/record/admin/remote apply 会合并为一次 IPsec reconcile；reload 失败不会触发 sync。
+    - [x] `reconcile.interval` 已接入 daemon 主循环：存在 IPsec link group 时按最短 group interval 周期触发一次 `ListSAs` + reconcile，用于发现 strongSwan/XFRM/SA 等系统层漂移；没有 link group 但仍有残留 `LinkInstance` 时继续按默认 30s 巡检以重试 teardown；state-change/sync/reload 触发后会重置下一次周期巡检时间。
   - [x] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
     - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id 和派生 owner token；reconcile 对不再 desired 的 persisted instance 先校验 owner 字段、token、`ipsec-*` transport id 与 `hgs*` interface 命名，无法证明归属的资源保留为 noop，不自动 teardown。
     - [x] `ApplyReconcileAction` 对只有 `LinkInstance`、没有 desired spec 的 teardown 再执行 owner guard，防止 revocation/restart recovery 路径误删管理员手工 StrongSwan/XFRM 资源；旧状态无 token 时仍可凭 manager/group/instance/transport/name 匹配迁移。

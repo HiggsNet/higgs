@@ -37,19 +37,20 @@ type DaemonHooks struct {
 type daemonEventType string
 
 const (
-	controlConnDeadline                       = 10 * time.Second
-	daemonEventRecordPut      daemonEventType = "record_put"
-	daemonEventDelegateIssue  daemonEventType = "delegate_issue"
-	daemonEventDelegateRevoke daemonEventType = "delegate_revoke"
-	daemonEventJoinAccept     daemonEventType = "join_accept"
-	daemonEventRootInit       daemonEventType = "root_init"
-	daemonEventPacket         daemonEventType = "packet"
-	daemonEventSyncTimer      daemonEventType = "timer_sync"
-	daemonEventEndpointTimer  daemonEventType = "timer_endpoint_publish"
-	daemonEventRemoteApplied  daemonEventType = "remote_announce_applied"
-	daemonEventSyncTrigger    daemonEventType = "sync_trigger"
-	daemonEventReloadConfig   daemonEventType = "reload_config"
-	daemonEventShutdown       daemonEventType = "shutdown"
+	controlConnDeadline                           = 10 * time.Second
+	defaultIPsecReconcileInterval                 = 30 * time.Second
+	daemonEventRecordPut          daemonEventType = "record_put"
+	daemonEventDelegateIssue      daemonEventType = "delegate_issue"
+	daemonEventDelegateRevoke     daemonEventType = "delegate_revoke"
+	daemonEventJoinAccept         daemonEventType = "join_accept"
+	daemonEventRootInit           daemonEventType = "root_init"
+	daemonEventPacket             daemonEventType = "packet"
+	daemonEventSyncTimer          daemonEventType = "timer_sync"
+	daemonEventEndpointTimer      daemonEventType = "timer_endpoint_publish"
+	daemonEventRemoteApplied      daemonEventType = "remote_announce_applied"
+	daemonEventSyncTrigger        daemonEventType = "sync_trigger"
+	daemonEventReloadConfig       daemonEventType = "reload_config"
+	daemonEventShutdown           daemonEventType = "shutdown"
 )
 
 type daemonEvent struct {
@@ -135,6 +136,8 @@ func (d *DaemonService) Run(ctx context.Context) error {
 
 	nextSync := d.Sync.now()
 	nextEndpointPublish := d.Sync.now()
+	ipsecReconcileInterval := d.ipsecReconcileInterval()
+	nextIPsecReconcile := nextIPsecReconcileTime(d.Sync.now(), ipsecReconcileInterval)
 	lastObservedDigests := gossip.ZoneDigests(d.Sync.State.Network)
 	d.Sync.updateDiscoveredPeers()
 	d.recoverIPsecLinksOnStart(ctx)
@@ -144,11 +147,20 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			return nil
 		}
 		now := d.Sync.now()
-		if syncNow, shutdown := d.processEvents(ctx); shutdown {
+		syncNow, shutdown, ipsecFlushed := d.processEvents(ctx)
+		if shutdown {
 			return nil
-		} else if syncNow {
+		}
+		if syncNow {
 			nextSync = now
 			forceSync = true
+		}
+		if ipsecFlushed {
+			nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+		}
+		if interval := d.ipsecReconcileInterval(); interval != ipsecReconcileInterval {
+			ipsecReconcileInterval = interval
+			nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
 		}
 		if latest, changed, err := d.Sync.reloadStateIfChanged(lastObservedDigests); err != nil {
 			d.logWarn("daemon", "reload_failed", map[string]any{"error": err})
@@ -182,12 +194,20 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
 			}
 			d.ipsecDirty = true
-			d.flushIPsecReconcile(ctx)
+			if d.flushIPsecReconcile(ctx) {
+				nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+			}
 			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
 			}
 			nextSync = now.Add(d.Interval)
 			forceSync = false
+		}
+		if !nextIPsecReconcile.IsZero() && !now.Before(nextIPsecReconcile) {
+			d.ipsecDirty = true
+			if d.flushIPsecReconcile(ctx) {
+				nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+			}
 		}
 		packet, err := receiveWithContext(ctx, transport, d.Sync.now().Add(250*time.Millisecond))
 		if err != nil {
@@ -384,11 +404,11 @@ func (d *DaemonService) enqueueEvent(ctx context.Context, event daemonEvent) dae
 	}
 }
 
-func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool) {
+func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool, ipsecFlushed bool) {
 	d.drainingEvents = true
 	defer func() {
 		d.drainingEvents = false
-		d.flushIPsecReconcile(ctx)
+		ipsecFlushed = d.flushIPsecReconcile(ctx)
 	}()
 	for {
 		select {
@@ -400,10 +420,10 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 			syncNow = syncNow || triggerSync
 			shutdown = shutdown || stop
 			if shutdown {
-				return syncNow, shutdown
+				return syncNow, shutdown, ipsecFlushed
 			}
 		default:
-			return syncNow, shutdown
+			return syncNow, shutdown, ipsecFlushed
 		}
 	}
 }
@@ -720,14 +740,46 @@ func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
 	d.flushIPsecReconcile(ctx)
 }
 
-func (d *DaemonService) flushIPsecReconcile(ctx context.Context) {
+func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
 	if d == nil || !d.ipsecDirty {
-		return
+		return false
 	}
 	d.ipsecDirty = false
 	if err := d.reconcileIPsecLinks(ctx); err != nil {
 		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
 	}
+	return true
+}
+
+func (d *DaemonService) ipsecReconcileInterval() time.Duration {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return 0
+	}
+	groups := d.Sync.App.Config.IPsec.LinkGroups
+	if len(groups) == 0 {
+		if d.Sync.State != nil && len(d.Sync.State.LinkInstances) > 0 {
+			return defaultIPsecReconcileInterval
+		}
+		return 0
+	}
+	var interval time.Duration
+	for _, group := range groups {
+		groupInterval := defaultIPsecReconcileInterval
+		if group.Reconcile.IntervalSeconds > 0 {
+			groupInterval = time.Duration(group.Reconcile.IntervalSeconds) * time.Second
+		}
+		if interval == 0 || groupInterval < interval {
+			interval = groupInterval
+		}
+	}
+	return interval
+}
+
+func nextIPsecReconcileTime(now time.Time, interval time.Duration) time.Time {
+	if interval <= 0 {
+		return time.Time{}
+	}
+	return now.Add(interval)
 }
 
 func daemonRun(ctx context.Context, interval time.Duration) error {
