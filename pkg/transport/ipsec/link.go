@@ -144,7 +144,7 @@ func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string
 		TransportID:     transportID,
 		Direction:       opts.Direction,
 		PathMode:        opts.PathMode,
-		IKEIdentity:     records.Profile.IKEIdentity,
+		IKEIdentity:     string(local),
 		AuthRef:         records.Profile.TransportKeyFingerprint,
 		ContactPoints:   append([]ContactPoint(nil), contacts...),
 		XFRMIfID:        ifID,
@@ -163,6 +163,9 @@ func NewTransportLinkSpecForGroup(local, peer zone.ZonePath, group LinkGroupSpec
 	localAddr, peerAddr, err := group.TunnelAddresses(linkIndex)
 	if err != nil {
 		return TransportLinkSpec{}, err
+	}
+	if peer < local {
+		localAddr, peerAddr = peerAddr, localAddr
 	}
 	return NewTransportLinkSpecWithOptions(local, peer, group.ID, records, contacts, TransportLinkOptions{
 		Provider:        group.Provider,

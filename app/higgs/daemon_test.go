@@ -183,6 +183,171 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	}
 }
 
+func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan daemon smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UTC().Format("20060102150405")
+	nsA := "higgs-daemon-ike-a-" + suffix
+	nsB := "higgs-daemon-ike-b-" + suffix
+	viciA := "/tmp/charon-" + nsA + ".vici"
+	viciB := "/tmp/charon-" + nsB + ".vici"
+	t.Cleanup(func() {
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsA)
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsB)
+		_ = os.Remove(viciA)
+		_ = os.Remove(viciB)
+	})
+
+	runAppCommand(t, ctx, "ip", "netns", "add", nsA)
+	runAppCommand(t, ctx, "ip", "netns", "add", nsB)
+	runAppCommand(t, ctx, "ip", "link", "add", "hgdvetha", "type", "veth", "peer", "name", "hgdvethb")
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdvetha", "netns", nsA)
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdvethb", "netns", nsB)
+	for _, args := range [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.1/30", "dev", "hgdvetha"},
+		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.2/30", "dev", "hgdvethb"},
+		{"netns", "exec", nsA, "ip", "link", "set", "hgdvetha", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "hgdvethb", "up"},
+	} {
+		runAppCommand(t, ctx, "ip", args...)
+	}
+
+	confA, err := writeDaemonStrongSwanConf(viciA)
+	if err != nil {
+		t.Fatalf("write strongswan.conf A: %v", err)
+	}
+	confB, err := writeDaemonStrongSwanConf(viciB)
+	if err != nil {
+		t.Fatalf("write strongswan.conf B: %v", err)
+	}
+	piddirA := t.TempDir()
+	piddirB := t.TempDir()
+	logA, err := os.CreateTemp("", "higgs-daemon-charon-a-*.log")
+	if err != nil {
+		t.Fatalf("create charon A log: %v", err)
+	}
+	logB, err := os.CreateTemp("", "higgs-daemon-charon-b-*.log")
+	if err != nil {
+		t.Fatalf("create charon B log: %v", err)
+	}
+	charonA := startDaemonTestCharonInNetNS(ctx, t, nsA, piddirA, confA, logA)
+	charonB := startDaemonTestCharonInNetNS(ctx, t, nsB, piddirB, confB, logB)
+	defer func() {
+		_ = charonA.Process.Kill()
+		_ = charonB.Process.Kill()
+		_ = charonA.Wait()
+		_ = charonB.Wait()
+		_ = os.Remove(confA)
+		_ = os.Remove(confB)
+		_ = logA.Close()
+		_ = logB.Close()
+		_ = os.Remove(logA.Name())
+		_ = os.Remove(logB.Name())
+	}()
+	defer func() {
+		if t.Failed() {
+			logDaemonTestFile(t, "charon A", logA.Name())
+			logDaemonTestFile(t, "charon B", logB.Name())
+			dumpDaemonSystemState(t, ctx, nsA, nsB)
+		}
+	}()
+
+	clientA, err := waitDaemonTestVICI(ctx, viciA)
+	if err != nil {
+		t.Fatalf("connect to charon A VICI: %v", err)
+	}
+	defer clientA.Close()
+	clientB, err := waitDaemonTestVICI(ctx, viciB)
+	if err != nil {
+		t.Fatalf("connect to charon B VICI: %v", err)
+	}
+	defer clientB.Close()
+
+	now := time.Unix(4140, 0)
+	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
+	keyA, recordA := daemonTestTransportKey(t, now)
+	keyB, recordB := daemonTestTransportKey(t, now)
+	stateA.IPsecTransportKey = keyA
+	stateB.IPsecTransportKey = keyB
+	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, now)
+	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, now)
+	stateA.Network.Zones["node-b.catofes."] = stateB.Network.Zones["node-b.catofes."]
+	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
+
+	groupA := testIPsecLinkGroup()
+	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
+	groupB := testIPsecLinkGroup()
+	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
+	groupB.Direction = ipsec.DirectionInbound
+	rtA := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
+		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
+		Clock:     func() time.Time { return now },
+	}
+	rtB := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
+		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rtA.SaveState(stateA); err != nil {
+		t.Fatalf("SaveState(node-a): %v", err)
+	}
+	if err := rtB.SaveState(stateB); err != nil {
+		t.Fatalf("SaveState(node-b): %v", err)
+	}
+	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
+	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
+	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+
+	serviceB.recoverIPsecLinksOnStart(ctx)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	latestA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a connecting): %v", err)
+	}
+	latestB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b connecting): %v", err)
+	}
+	specA := daemonSystemDesiredSpec(t, latestA, groupA, now)
+	specB := daemonSystemDesiredSpec(t, latestB, groupB, now)
+	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
+		t.Fatalf("wait for daemon SA on A: %v", err)
+	}
+	if err := waitDaemonTestSA(ctx, clientB, specB.TransportID); err != nil {
+		t.Fatalf("wait for daemon SA on B: %v", err)
+	}
+
+	serviceA.setState(latestA)
+	serviceB.setState(latestB)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	serviceB.recoverIPsecLinksOnStart(ctx)
+	latestA, err = rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a up): %v", err)
+	}
+	latestB, err = rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b up): %v", err)
+	}
+	assertDaemonSystemLinkUp(t, latestA, specA)
+	assertDaemonSystemLinkUp(t, latestB, specB)
+
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ip", "route", "replace", specA.PeerTunnelAddr.String()+"/32", "dev", specA.InterfaceName, "src", specA.LocalTunnelAddr.String())
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ip", "route", "replace", specB.PeerTunnelAddr.String()+"/32", "dev", specB.InterfaceName, "src", specB.LocalTunnelAddr.String())
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", specA.PeerTunnelAddr.String())
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ping", "-c", "1", "-W", "3", specB.PeerTunnelAddr.String())
+}
+
 func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4050, 0)
@@ -956,6 +1121,11 @@ func singleDesiredSpec(t *testing.T, state *stateFile) ipsec.TransportLinkSpec {
 		t.Fatalf("desired snapshot = %+v, want one desired link", state.IPsecReconcile)
 	}
 	desired := state.IPsecReconcile.Desired[0]
+	localTunnel := netip.MustParseAddr("10.44.0.1")
+	peerTunnel := netip.MustParseAddr("10.44.0.2")
+	if desired.PeerZone < state.ManagedZone {
+		localTunnel, peerTunnel = peerTunnel, localTunnel
+	}
 	return ipsec.TransportLinkSpec{
 		LocalZone:       state.ManagedZone,
 		PeerZone:        desired.PeerZone,
@@ -964,8 +1134,8 @@ func singleDesiredSpec(t *testing.T, state *stateFile) ipsec.TransportLinkSpec {
 		TransportID:     desired.TransportID,
 		InterfaceName:   desired.InterfaceName,
 		XFRMIfID:        desired.XFRMIfID,
-		LocalTunnelAddr: netip.MustParseAddr("10.44.0.1"),
-		PeerTunnelAddr:  netip.MustParseAddr("10.44.0.2"),
+		LocalTunnelAddr: localTunnel,
+		PeerTunnelAddr:  peerTunnel,
 		NetNS:           "h2",
 		ContactPoints: []ipsec.ContactPoint{{
 			Address:  desired.Endpoint,
@@ -1217,6 +1387,265 @@ func hasDebugSkip(skips []linkSkipState, peer zone.ZonePath, reason string) bool
 
 func appExecCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func runAppCommand(t *testing.T, ctx context.Context, name string, args ...string) {
+	t.Helper()
+	if out, err := appExecCommand(ctx, name, args...); err != nil {
+		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(args, " "), err, string(out))
+	}
+}
+
+func writeDaemonStrongSwanConf(viciSocket string) (string, error) {
+	f, err := os.CreateTemp("", "higgs-daemon-strongswan-*.conf")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, `charon {
+	install_routes = no
+	install_virtual_ip = no
+	plugins {
+		vici {
+			socket = unix://%s
+		}
+	}
+}
+`, viciSocket)
+	if err != nil {
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+func startDaemonTestCharonInNetNS(ctx context.Context, t *testing.T, ns, piddir, conf string, logFile *os.File) *exec.Cmd {
+	t.Helper()
+	script := fmt.Sprintf("mkdir -p /run && mount --bind %s /run && STRONGSWAN_CONF=%s exec charon", piddir, conf)
+	cmd := exec.CommandContext(ctx, "unshare", "-m", "ip", "netns", "exec", ns, "bash", "-c", script)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start charon in %s: %v", ns, err)
+	}
+	return cmd
+}
+
+func waitDaemonTestVICI(ctx context.Context, socket string) (*ipsec.GoviciClient, error) {
+	for {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout waiting for vici socket %s", socket)
+		default:
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	var lastErr error
+	for {
+		client, err := ipsec.NewGoviciClient(socket)
+		if err == nil {
+			return client, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("connect to %s: %w", socket, lastErr)
+		default:
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+func waitDaemonTestSA(ctx context.Context, client *ipsec.GoviciClient, name string) error {
+	for {
+		events, err := client.CallStreaming(ctx, "list-sas", "list-sa", map[string]any{"ike": name})
+		if err != nil {
+			return err
+		}
+		for _, event := range events {
+			if daemonTestSAEstablished(event) {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for SA %s", name)
+		default:
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+}
+
+func daemonTestSAEstablished(raw map[string]any) bool {
+	for _, v := range raw {
+		sa, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(daemonTestString(sa["state"]), "ESTABLISHED") {
+			return true
+		}
+		children, _ := sa["child-sas"].(map[string]any)
+		for _, cv := range children {
+			child, ok := cv.(map[string]any)
+			if ok && daemonTestString(child["state"]) == "INSTALLED" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func daemonTestString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case fmt.Stringer:
+		return x.String()
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func daemonTestTransportKey(t *testing.T, now time.Time) (*ipsecTransportKeyState, *ipsec.TransportKeyRecord) {
+	t.Helper()
+	key, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmECDSAP256, now, 0)
+	if err != nil {
+		t.Fatalf("GenerateTransportKeyRecord: %v", err)
+	}
+	return &ipsecTransportKeyState{
+		Kind:        key.Kind,
+		Algorithm:   key.Algorithm,
+		PublicKey:   append([]byte(nil), key.PublicKey...),
+		PrivateKey:  append([]byte(nil), key.PrivateKey...),
+		Fingerprint: record.Fingerprint,
+		NotBefore:   record.NotBefore,
+		NotAfter:    record.NotAfter,
+		UpdatedAt:   record.UpdatedAt,
+	}, record
+}
+
+func addDaemonTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, address string, key *ipsec.TransportKeyRecord, now time.Time) {
+	t.Helper()
+	if zs == nil {
+		t.Fatalf("missing zone state for %s", peer)
+	}
+	zs.Records[ipsec.RecordKeyProfile] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyProfile, ipsec.RecordTypeProfile, ipsec.ProfileRecord{
+		Version:                 1,
+		Enabled:                 true,
+		Provider:                ipsec.ProviderStrongSwan,
+		IKEIdentity:             string(peer),
+		TransportKeyFingerprint: key.Fingerprint,
+		Accept:                  ipsec.AcceptInbound,
+		AddressFamilies:         []string{ipsec.FamilyIPv4},
+		PathModes:               []string{ipsec.PathModeFamilyRedundant},
+		UpdatedAt:               now.Unix(),
+	})
+	zs.Records[ipsec.RecordKeyAddresses] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, ipsec.AddressRecord{
+		Version: 1,
+		Addresses: []ipsec.AddressAdvertisement{{
+			ID:           "underlay-v4",
+			Source:       ipsec.SourceManualAddress,
+			Address:      address,
+			Family:       ipsec.FamilyIPv4,
+			Reachability: ipsec.ReachabilityPublic,
+		}},
+		UpdatedAt: now.Unix(),
+	})
+	zs.Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
+		Version: 1,
+		Mode:    ipsec.PortModeFixed,
+		Current: &ipsec.PortSelection{
+			Generation: 1,
+			IKE:        ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort},
+			NATT:       ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		UpdatedAt: now.Unix(),
+	})
+	zs.Records[ipsec.RecordKeyTransportKey] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyTransportKey, ipsec.RecordTypeTransportKey, *key)
+}
+
+func assertDaemonSystemLinkUp(t *testing.T, state *stateFile, spec ipsec.TransportLinkSpec) {
+	t.Helper()
+	inst := state.LinkInstances[ipsec.LinkInstanceID(spec)]
+	if inst.ActualState != ipsec.LinkStateUp {
+		t.Fatalf("link instance = %+v, want up", inst)
+	}
+	if state.IPsecReconcile == nil || len(state.IPsecReconcile.ActualSAs) == 0 {
+		t.Fatalf("ipsec reconcile = %+v, want observed SAs", state.IPsecReconcile)
+	}
+	for _, sa := range state.IPsecReconcile.ActualSAs {
+		childMatches := sa.ChildSA == ipsec.ChildSAName(spec) || strings.HasPrefix(sa.ChildSA, ipsec.ChildSAName(spec)+"-")
+		if sa.Name == spec.TransportID && childMatches && (sa.XFRMIfID == 0 || sa.XFRMIfID == spec.XFRMIfID) && sa.Established {
+			if sa.LocalIdentity != string(spec.LocalZone) || sa.RemoteIdentity != string(spec.PeerZone) {
+				t.Fatalf("SA identities = %+v, want %s -> %s", sa, spec.LocalZone, spec.PeerZone)
+			}
+			return
+		}
+	}
+	t.Fatalf("actual SAs = %+v, want established SA for %s", state.IPsecReconcile.ActualSAs, spec.TransportID)
+}
+
+func daemonSystemDesiredSpec(t *testing.T, state *stateFile, group ipsec.LinkGroupSpec, now time.Time) ipsec.TransportLinkSpec {
+	t.Helper()
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, []ipsec.LinkGroupSpec{group}, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(%s): %v", state.ManagedZone, err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired for %s = %+v, skips=%+v, want one", state.ManagedZone, plan.Desired, plan.Skipped)
+	}
+	return injectIPsecKeyMaterial(state, plan.Desired)[0]
+}
+
+func logDaemonTestFile(t *testing.T, label, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Logf("--- %s unavailable: %v ---", label, err)
+		return
+	}
+	t.Logf("--- %s ---\n%s", label, string(data))
+}
+
+func dumpDaemonSystemState(t *testing.T, ctx context.Context, namespaces ...string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"netns", "list"},
+		{"link", "show", "type", "xfrm"},
+		{"xfrm", "state"},
+		{"xfrm", "policy"},
+	} {
+		if out, err := appExecCommand(ctx, "ip", args...); err == nil {
+			t.Logf("ip %s\n%s", strings.Join(args, " "), string(out))
+		} else {
+			t.Logf("ip %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
+		}
+	}
+	for _, ns := range namespaces {
+		for _, args := range [][]string{
+			{"link"},
+			{"addr"},
+			{"route"},
+			{"xfrm", "state"},
+			{"xfrm", "policy"},
+		} {
+			full := append([]string{"netns", "exec", ns, "ip"}, args...)
+			if out, err := appExecCommand(ctx, "ip", full...); err == nil {
+				t.Logf("ip %s\n%s", strings.Join(full, " "), string(out))
+			} else {
+				t.Logf("ip %s failed: %v\n%s", strings.Join(full, " "), err, string(out))
+			}
+		}
+	}
+	if out, err := appExecCommand(ctx, "swanctl", "--list-sas"); err == nil {
+		t.Logf("swanctl --list-sas\n%s", string(out))
+	} else {
+		t.Logf("swanctl --list-sas failed: %v\n%s", err, string(out))
+	}
 }
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {

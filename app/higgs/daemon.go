@@ -779,7 +779,7 @@ func newConfiguredIPsecDrivers(config ipsecConfig) (configuredIPsecDrivers, erro
 			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
 		return configuredIPsecDrivers{
-			ipsecDriver: ipsec.StrongSwanDriver{VICI: client},
+			ipsecDriver: &ipsec.StrongSwanDriver{VICI: client},
 			xfrmDriver:  ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
 			close:       client.Close,
 		}, nil

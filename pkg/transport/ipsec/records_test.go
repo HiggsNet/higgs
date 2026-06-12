@@ -389,7 +389,7 @@ func TestNewTransportLinkSpecForGroupInheritsGroupBoundary(t *testing.T) {
 	if spec.NetNS != "/run/netns/higgs-ipsec" {
 		t.Fatalf("NetNS = %q", spec.NetNS)
 	}
-	if spec.LocalTunnelAddr.String() != "10.44.0.1" || spec.PeerTunnelAddr.String() != "10.44.0.2" {
+	if spec.LocalTunnelAddr.String() != "10.44.0.2" || spec.PeerTunnelAddr.String() != "10.44.0.1" {
 		t.Fatalf("tunnel addresses = %s, %s", spec.LocalTunnelAddr, spec.PeerTunnelAddr)
 	}
 }
@@ -651,11 +651,16 @@ func TestBuildStrongSwanConnectionAllowsInboundWithoutContactPoint(t *testing.T)
 	if _, ok := conn["remote_port"]; ok {
 		t.Fatalf("inbound connection should not force remote_port: %+v", conn)
 	}
+	children := conn["children"].(map[string]any)
+	child := children[ChildSAName(spec)].(map[string]any)
+	if child["start_action"] != "trap" {
+		t.Fatalf("start_action = %#v, want trap", child["start_action"])
+	}
 }
 
 func TestStrongSwanDriverCallsVICIWithoutSwanctlParsing(t *testing.T) {
 	client := &recordingVICIClient{}
-	driver := StrongSwanDriver{VICI: client}
+	driver := &StrongSwanDriver{VICI: client}
 	spec := TransportLinkSpec{
 		LocalZone:   "node-a.catofes.",
 		PeerZone:    "node-b.catofes.",

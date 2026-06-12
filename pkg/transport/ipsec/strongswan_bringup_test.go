@@ -187,8 +187,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 
 	keyDirA := t.TempDir()
 	keyDirB := t.TempDir()
-	ipsecA := StrongSwanDriver{VICI: clientA, KeyDir: keyDirA}
-	ipsecB := StrongSwanDriver{VICI: clientB, KeyDir: keyDirB}
+	ipsecA := &StrongSwanDriver{VICI: clientA, KeyDir: keyDirA}
+	ipsecB := &StrongSwanDriver{VICI: clientB, KeyDir: keyDirB}
 	xfrmA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: false})
 	xfrmB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: false})
 
@@ -350,4 +350,3 @@ func saEstablished(raw map[string]any) bool {
 	}
 	return false
 }
-

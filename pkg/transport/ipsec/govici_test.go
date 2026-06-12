@@ -47,7 +47,7 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	client := &GoviciClient{Session: session}
 	spec := sampleStrongSwanSpec()
 
-	if err := (StrongSwanDriver{VICI: client}).LoadConnection(context.Background(), spec); err != nil {
+	if err := (&StrongSwanDriver{VICI: client}).LoadConnection(context.Background(), spec); err != nil {
 		t.Fatalf("LoadConnection: %v", err)
 	}
 	if session.callCmd != "load-conn" {
@@ -96,7 +96,7 @@ func TestGoviciClientStreamsListSAs(t *testing.T) {
 	session := &fakeGoviciSession{streamEvents: []*vici.Message{event}}
 	client := &GoviciClient{Session: session}
 
-	states, err := (StrongSwanDriver{VICI: client}).ListSAs(context.Background())
+	states, err := (&StrongSwanDriver{VICI: client}).ListSAs(context.Background())
 	if err != nil {
 		t.Fatalf("ListSAs: %v", err)
 	}

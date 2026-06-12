@@ -35,7 +35,7 @@ func BuildLoadConnMessage(spec TransportLinkSpec) (map[string]any, error) {
 	return map[string]any{spec.TransportID: conn}, nil
 }
 
-func (d StrongSwanDriver) buildLoadConnMessage(spec TransportLinkSpec) (map[string]any, error) {
+func (d *StrongSwanDriver) buildLoadConnMessage(spec TransportLinkSpec) (map[string]any, error) {
 	msg, err := BuildLoadConnMessage(spec)
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ func (d StrongSwanDriver) buildLoadConnMessage(spec TransportLinkSpec) (map[stri
 	return msg, nil
 }
 
-func (d StrongSwanDriver) materializePeerPublicKey(spec TransportLinkSpec) (string, error) {
+func (d *StrongSwanDriver) materializePeerPublicKey(spec TransportLinkSpec) (string, error) {
 	if d.KeyDir == "" {
 		return "", fmt.Errorf("strongswan driver KeyDir is required to materialize peer public key")
 	}
@@ -144,13 +144,17 @@ func ChildSAName(spec TransportLinkSpec) string {
 }
 
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
+	startAction := "start"
+	if spec.Direction == DirectionInbound {
+		startAction = "trap"
+	}
 	return map[string]any{
 		"mode":         StrongSwanChildMode,
 		"local_ts":     broadTrafficSelectors(spec.LocalTunnelAddr),
 		"remote_ts":    broadTrafficSelectors(spec.PeerTunnelAddr),
 		"if_id_in":     fmt.Sprintf("%d", spec.XFRMIfID),
 		"if_id_out":    fmt.Sprintf("%d", spec.XFRMIfID),
-		"start_action": "start",
+		"start_action": startAction,
 	}
 }
 

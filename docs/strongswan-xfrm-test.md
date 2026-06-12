@@ -117,6 +117,12 @@ make ipsec-xfrm-container-smoke
    数据面闭环。
 7. 通过 Higgs daemon reconcile 路径创建一次性的 named netns 内 XFRM interface，
    分配 tunnel host prefix，并在 link group 删除后由 daemon teardown 清理 interface。
+8. 在两个 named netns 中启动隔离 charon/VICI 实例，构造已验证的
+   root -> `catofes.` -> `node-a`/`node-b` active state 与 signed `ipsec/*`
+   records，让两个 daemon service 使用真实 `StrongSwanDriver` +
+   `SystemXFRMDriver` 自动加载 key/connection、创建 XFRM interface、观测
+   VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 tunnel IP 双向
+   `ping`。
 
 失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
 `swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。
@@ -125,7 +131,9 @@ make ipsec-xfrm-container-smoke
 lifecycle，其中 XFRM interface 会在目标 named netns 内创建，避免依赖宿主创建后
 move 到 netns 的额外权限路径；同时 smoke 验证了手工 XFRM state/policy 下的双
 namespace tunnel ping，并验证 daemon reconcile 能驱动真实 XFRM provider 创建和
-清理 interface/address。
+清理 interface/address。root-gated daemon reconcile smoke 进一步覆盖 verified
+active state 进入 daemon reconcile 后的真实 StrongSwan/VICI + XFRM bring-up 和
+tunnel ping。
 
 StrongSwan 控制面已有真实 govici 客户端边界：`GoviciClient` 连接 charon VICI
 socket，并把 Higgs 内部 `StrongSwanDriver` 生成的 `load-conn`、`terminate`、
@@ -164,10 +172,10 @@ state meta，避免 daemon 重启后 fingerprint 抖动。
 对端 Zone，再由本地 `LinkGroupSpec` 推导 `TransportLinkSpec` 并执行 dry-run
 provider apply。这证明 daemon publish/gossip/planner/reconcile 边界已接通。
 
-双 Higgs daemon 完整 join/gossip 后的对端 `ipsec/*` record 同步、真实 VICI
+双 `higgs daemon` 进程完整 join/gossip 后的对端 `ipsec/*` record 同步、真实 VICI
 IKE_SA/CHILD_SA bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性
-断言，仍属于后续完整 daemon-level smoke。当前 driver 层 bring-up 测试已经为该目标
-验证了 StrongSwan/XFRM/VICI 数据面基座。
+断言，仍属于后续完整 daemon-level smoke。当前 driver 层和 daemon reconcile 层
+bring-up 测试已经为该目标验证了 StrongSwan/XFRM/VICI 数据面基座。
 
 ## 3. 最小手工 StrongSwan 健康检查
 
@@ -227,20 +235,21 @@ ip netns delete h2-a
 
 ## 5. 完整双节点 Smoke 形态
 
-完整双节点版本的 `make ipsec-xfrm-smoke` 只应在 preflight 通过后扩展：
+完整双节点进程级版本的 `make ipsec-xfrm-smoke` 只应在 preflight 通过后扩展：
 
 1. 创建两个 Higgs 数据目录和两个 named namespace，例如 `h2-a` 和
    `h2-b`.
 2. 完成 root -> `catofes.` -> `node-a.catofes.` / `node-b.catofes.` join。
 3. 每个节点发布已签名的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`
    和 `ipsec/transport-key` records。
-4. 启动两端 daemon，让 gossip 收敛。
+4. 启动两端 `higgs daemon` 进程，让 gossip 收敛。
 5. link planner 从 verified active state 加本地 `LinkGroupSpec` 推导对称的
    `TransportLinkSpec`；不应需要为每个 peer 手写 link。
 6. StrongSwan provider 通过 VICI 加载 connection 和 secret。`swanctl` 只作为人工
    debug / 交叉检查工具。
 7. XFRM provider 在目标 named namespace 内创建 interface，并分配 tunnel host
-   prefix；当前 daemon system smoke 已覆盖这条 apply/teardown 路径。
+   prefix；当前 daemon system smoke 已覆盖这条 apply/teardown 路径，并已在
+   verified active state 下覆盖真实 VICI/XFRM bring-up 与 tunnel ping。
 8. 断言 `LinkInstance` 进入 `up`。
 9. 断言 VICI 和 `swanctl --list-sas` 能看到匹配的 IKE_SA/CHILD_SA identity、
    child name、reqid/if_id 和 endpoint。

@@ -37,11 +37,46 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	if spec.PeerZone != "node-b.catofes." || spec.Direction != DirectionOutbound {
 		t.Fatalf("spec = %+v", spec)
 	}
+	if spec.IKEIdentity != "node-a.catofes." {
+		t.Fatalf("IKEIdentity = %q, want local zone", spec.IKEIdentity)
+	}
 	if spec.LocalTunnelAddr.String() != "10.44.0.1" || spec.PeerTunnelAddr.String() != "10.44.0.2" {
 		t.Fatalf("tunnel addresses = %s, %s", spec.LocalTunnelAddr, spec.PeerTunnelAddr)
 	}
 	if len(spec.ContactPoints) != 1 || spec.ContactPoints[0].Address != "198.51.100.20" {
 		t.Fatalf("contact points = %+v", spec.ContactPoints)
+	}
+}
+
+func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Direction:         DirectionOutbound,
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+	}
+	planA, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(a): %v", err)
+	}
+	planB, err := PlanTransportLinks(context.Background(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(b): %v", err)
+	}
+	if len(planA.Desired) != 1 || len(planB.Desired) != 1 {
+		t.Fatalf("desired A/B = %+v / %+v", planA.Desired, planB.Desired)
+	}
+	a := planA.Desired[0]
+	b := planB.Desired[0]
+	if a.LocalTunnelAddr != b.PeerTunnelAddr || a.PeerTunnelAddr != b.LocalTunnelAddr {
+		t.Fatalf("tunnel addresses are not mirrored: A local=%s peer=%s, B local=%s peer=%s", a.LocalTunnelAddr, a.PeerTunnelAddr, b.LocalTunnelAddr, b.PeerTunnelAddr)
 	}
 }
 

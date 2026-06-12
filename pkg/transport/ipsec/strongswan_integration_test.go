@@ -59,7 +59,7 @@ func TestStrongSwanDriverLoadsKeyAndConnection(t *testing.T) {
 		t.Fatalf("decode peer public key: %v", err)
 	}
 
-	driver := StrongSwanDriver{VICI: client, KeyDir: t.TempDir()}
+	driver := &StrongSwanDriver{VICI: client, KeyDir: t.TempDir()}
 	transportID := "ipsec-strongswan-integration"
 	if err := driver.LoadPrivateKey(ctx, transportID, localPriv.PrivateKey, localPriv.Algorithm); err != nil {
 		t.Fatalf("LoadPrivateKey: %v", err)

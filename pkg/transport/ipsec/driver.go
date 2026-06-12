@@ -45,14 +45,14 @@ type XFRMDriver interface {
 }
 
 type DryRunDriver struct {
-	Connections []TransportLinkSpec
-	Unloaded    []string
-	Terminated  []string
-	Interfaces  []TransportLinkSpec
-	Namespaces  []NetNSSpec
-	DeletedIFs  []string
-	Addresses   []string
-	PrivateKeys []DryRunPrivateKey
+	Connections  []TransportLinkSpec
+	Unloaded     []string
+	Terminated   []string
+	Interfaces   []TransportLinkSpec
+	Namespaces   []NetNSSpec
+	DeletedIFs   []string
+	Addresses    []string
+	PrivateKeys  []DryRunPrivateKey
 	UnloadedKeys []string
 }
 
@@ -172,7 +172,7 @@ func TeardownTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	return plan, nil
 }
 
-func (d StrongSwanDriver) LoadConnection(ctx context.Context, spec TransportLinkSpec) error {
+func (d *StrongSwanDriver) LoadConnection(ctx context.Context, spec TransportLinkSpec) error {
 	if d.VICI == nil {
 		return fmt.Errorf("vici client is required")
 	}
@@ -184,7 +184,7 @@ func (d StrongSwanDriver) LoadConnection(ctx context.Context, spec TransportLink
 	return err
 }
 
-func (d StrongSwanDriver) UnloadConnection(ctx context.Context, id string) error {
+func (d *StrongSwanDriver) UnloadConnection(ctx context.Context, id string) error {
 	if d.VICI == nil {
 		return fmt.Errorf("vici client is required")
 	}
@@ -195,7 +195,7 @@ func (d StrongSwanDriver) UnloadConnection(ctx context.Context, id string) error
 	return err
 }
 
-func (d StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
+func (d *StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
 	if d.VICI == nil {
 		return fmt.Errorf("vici client is required")
 	}
@@ -206,7 +206,7 @@ func (d StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
 	return err
 }
 
-func (d StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {
+func (d *StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {
 	if d.VICI == nil {
 		return nil, fmt.Errorf("vici client is required")
 	}
@@ -221,7 +221,7 @@ func (d StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {
 	return states, nil
 }
 
-func (d StrongSwanDriver) LoadPrivateKey(ctx context.Context, id string, key []byte, algorithm string) error {
+func (d *StrongSwanDriver) LoadPrivateKey(ctx context.Context, id string, key []byte, algorithm string) error {
 	if d.VICI == nil {
 		return fmt.Errorf("vici client is required")
 	}
@@ -254,7 +254,7 @@ func (d StrongSwanDriver) LoadPrivateKey(ctx context.Context, id string, key []b
 	return nil
 }
 
-func (d StrongSwanDriver) UnloadPrivateKey(ctx context.Context, id string) error {
+func (d *StrongSwanDriver) UnloadPrivateKey(ctx context.Context, id string) error {
 	if d.VICI == nil {
 		return fmt.Errorf("vici client is required")
 	}
