@@ -529,7 +529,19 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
-		return ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
+		plan := ApplyPlan{}
+		if action.Instance != nil && action.Instance.IKEName != "" && action.Instance.IKEName != action.Spec.TransportID {
+			plan.add("terminate_sa", action.Instance.IKEName, "break_before_make_rotate")
+			if ipsec == nil {
+				return plan, fmt.Errorf("ipsec driver is required")
+			}
+			if err := ipsec.TerminateSA(ctx, action.Instance.IKEName); err != nil {
+				return plan, fmt.Errorf("terminate old sa before rotate: %w", err)
+			}
+		}
+		stagedPlan, err := ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
+		plan.Operations = append(plan.Operations, stagedPlan.Operations...)
+		return plan, err
 	case ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)

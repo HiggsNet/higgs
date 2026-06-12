@@ -1,6 +1,7 @@
 package ipsec
 
 import (
+	"context"
 	"net/netip"
 	"testing"
 	"time"
@@ -315,6 +316,50 @@ func TestApplyReconcileActionPrepareRotateSkipsPrivateKeyLoad(t *testing.T) {
 	}
 	if len(xfrmDrv.Interfaces) != 1 {
 		t.Fatalf("interfaces = %+v", xfrmDrv.Interfaces)
+	}
+}
+
+func TestApplyReconcileActionPrepareRotateTerminatesOldSA(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ab",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 2,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	stagedSpec := rotateSpec(spec, 2)
+	inst := NewLinkInstance(spec, LinkStateUp, time.Unix(4100, 0))
+	inst.IKEName = spec.TransportID
+	inst.StagedIKEName = stagedSpec.TransportID
+	inst.StagedGeneration = 2
+
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action:   ReconcileActionPrepareRotate,
+		Spec:     &stagedSpec,
+		Instance: &inst,
+	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Terminated) != 1 || ipsecDrv.Terminated[0] != spec.TransportID {
+		t.Fatalf("terminated = %+v, want old SA %s", ipsecDrv.Terminated, spec.TransportID)
+	}
+	if len(ipsecDrv.Connections) != 1 || ipsecDrv.Connections[0].TransportID != stagedSpec.TransportID {
+		t.Fatalf("connections = %+v", ipsecDrv.Connections)
+	}
+	if len(plan.Operations) == 0 || plan.Operations[0].Action != "terminate_sa" {
+		t.Fatalf("plan operations = %+v, want terminate_sa first", plan.Operations)
 	}
 }
 

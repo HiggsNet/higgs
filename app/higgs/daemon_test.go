@@ -681,6 +681,222 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 }
 
+func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan port rotation smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UTC().Format("20060102150405")
+	nsA := "higgs-daemon-rot-a-" + suffix
+	nsB := "higgs-daemon-rot-b-" + suffix
+	viciA := "/tmp/charon-" + nsA + ".vici"
+	viciB := "/tmp/charon-" + nsB + ".vici"
+	t.Cleanup(func() {
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsA)
+		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", nsB)
+		_ = os.Remove(viciA)
+		_ = os.Remove(viciB)
+	})
+
+	runAppCommand(t, ctx, "ip", "netns", "add", nsA)
+	runAppCommand(t, ctx, "ip", "netns", "add", nsB)
+	runAppCommand(t, ctx, "ip", "link", "add", "hgdrota", "type", "veth", "peer", "name", "hgdrotb")
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdrota", "netns", nsA)
+	runAppCommand(t, ctx, "ip", "link", "set", "hgdrotb", "netns", nsB)
+	for _, args := range [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.1/30", "dev", "hgdrota"},
+		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.2/30", "dev", "hgdrotb"},
+		{"netns", "exec", nsA, "ip", "link", "set", "hgdrota", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "hgdrotb", "up"},
+	} {
+		runAppCommand(t, ctx, "ip", args...)
+	}
+
+	confA, err := writeDaemonStrongSwanConf(viciA)
+	if err != nil {
+		t.Fatalf("write strongswan.conf A: %v", err)
+	}
+	confB, err := writeDaemonStrongSwanConf(viciB)
+	if err != nil {
+		t.Fatalf("write strongswan.conf B: %v", err)
+	}
+	piddirA := t.TempDir()
+	piddirB := t.TempDir()
+	logA, err := os.CreateTemp("", "higgs-daemon-charon-rot-a-*.log")
+	if err != nil {
+		t.Fatalf("create charon A log: %v", err)
+	}
+	logB, err := os.CreateTemp("", "higgs-daemon-charon-rot-b-*.log")
+	if err != nil {
+		t.Fatalf("create charon B log: %v", err)
+	}
+	charonA := startDaemonTestCharonInNetNS(ctx, t, nsA, piddirA, confA, logA)
+	charonB := startDaemonTestCharonInNetNS(ctx, t, nsB, piddirB, confB, logB)
+	defer func() {
+		_ = charonA.Process.Kill()
+		_ = charonB.Process.Kill()
+		_ = charonA.Wait()
+		_ = charonB.Wait()
+		_ = os.Remove(confA)
+		_ = os.Remove(confB)
+		_ = logA.Close()
+		_ = logB.Close()
+		_ = os.Remove(logA.Name())
+		_ = os.Remove(logB.Name())
+	}()
+	defer func() {
+		if t.Failed() {
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dumpCancel()
+			logDaemonTestFile(t, "charon A", logA.Name())
+			logDaemonTestFile(t, "charon B", logB.Name())
+			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
+		}
+	}()
+
+	clientA, err := waitDaemonTestVICI(ctx, viciA)
+	if err != nil {
+		t.Fatalf("connect to charon A VICI: %v", err)
+	}
+	defer clientA.Close()
+	clientB, err := waitDaemonTestVICI(ctx, viciB)
+	if err != nil {
+		t.Fatalf("connect to charon B VICI: %v", err)
+	}
+	defer clientB.Close()
+
+	now := time.Unix(4140, 0)
+	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
+	keyA, recordA := daemonTestTransportKey(t, now)
+	keyB, recordB := daemonTestTransportKey(t, now)
+	stateA.IPsecTransportKey = keyA
+	stateB.IPsecTransportKey = keyB
+	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, now)
+	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, now)
+	stateA.Network.Zones["node-b.catofes."] = stateB.Network.Zones["node-b.catofes."]
+	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
+
+	groupA := testIPsecLinkGroup()
+	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
+	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
+	groupB := testIPsecLinkGroup()
+	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
+	groupB.Direction = ipsec.DirectionInbound
+	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
+	rtA := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
+		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
+		Clock:     func() time.Time { return now },
+	}
+	rtB := &Runtime{
+		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
+		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rtA.SaveState(stateA); err != nil {
+		t.Fatalf("SaveState(node-a): %v", err)
+	}
+	if err := rtB.SaveState(stateB); err != nil {
+		t.Fatalf("SaveState(node-b): %v", err)
+	}
+	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
+	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
+	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+
+	serviceB.recoverIPsecLinksOnStart(ctx)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	latestA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a connecting): %v", err)
+	}
+	latestB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b connecting): %v", err)
+	}
+	specA := daemonSystemDesiredSpec(t, latestA, groupA, now)
+	specB := daemonSystemDesiredSpec(t, latestB, groupB, now)
+	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
+		t.Fatalf("wait for daemon SA on A: %v", err)
+	}
+	if err := waitDaemonTestSA(ctx, clientB, specB.TransportID); err != nil {
+		t.Fatalf("wait for daemon SA on B: %v", err)
+	}
+
+	serviceA.setState(latestA)
+	serviceB.setState(latestB)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	serviceB.recoverIPsecLinksOnStart(ctx)
+	latestA, err = rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a up): %v", err)
+	}
+	latestB, err = rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b up): %v", err)
+	}
+	assertDaemonSystemLinkUp(t, latestA, specA)
+	assertDaemonSystemLinkUp(t, latestB, specB)
+	addTunnelRoute(t, ctx, nsA, specA)
+	addTunnelRoute(t, ctx, nsB, specB)
+	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
+	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
+
+	rotateA := latestA
+	updateDaemonTestPortRecord(t, rotateA.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, ipsec.DefaultIKEPort, now.Add(time.Minute))
+	if err := rtA.SaveState(rotateA); err != nil {
+		t.Fatalf("SaveState(node-a rotated peer ports): %v", err)
+	}
+	serviceA.setState(rotateA)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	preparedA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a prepared rotate): %v", err)
+	}
+	inst := preparedA.LinkInstances[ipsec.LinkInstanceID(specA)]
+	if inst.RotatePhase != ipsec.RotatePhaseTestingNew || inst.StagedGeneration != 2 {
+		t.Fatalf("prepared rotate instance = %+v, want testing_new generation 2", inst)
+	}
+	stagedIKE := ipsec.RotateConnectionName(inst.TransportID, 2)
+	if inst.StagedIKEName != stagedIKE {
+		t.Fatalf("staged ike = %q, want %q", inst.StagedIKEName, stagedIKE)
+	}
+	if err := waitDaemonTestSA(ctx, clientA, stagedIKE); err != nil {
+		t.Fatalf("wait for staged daemon SA on A: %v", err)
+	}
+
+	serviceA.setState(preparedA)
+	serviceA.recoverIPsecLinksOnStart(ctx)
+	committedA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a committed rotate): %v", err)
+	}
+	rotatedSpecA := daemonSystemDesiredSpec(t, committedA, groupA, now.Add(time.Minute))
+	assertDaemonSystemLinkUp(t, committedA, rotatedSpecA)
+	committedInst := committedA.LinkInstances[ipsec.LinkInstanceID(rotatedSpecA)]
+	if committedInst.RotatePhase != ipsec.RotatePhaseIdle || committedInst.StagedGeneration != 0 {
+		t.Fatalf("committed rotate instance = %+v, want idle with no staged generation", committedInst)
+	}
+	if committedInst.IKEName != stagedIKE || committedInst.RemoteGeneration != 2 {
+		t.Fatalf("committed rotate instance = %+v, want ike=%s remote_generation=2", committedInst, stagedIKE)
+	}
+	if err := waitDaemonTestNoSA(ctx, clientA, specA.TransportID); err != nil {
+		t.Fatalf("old daemon SA on A after rotate commit: %v", err)
+	}
+	if count, err := daemonTestEstablishedSACount(ctx, clientA, stagedIKE); err != nil {
+		t.Fatalf("count staged SA on A after commit: %v", err)
+	} else if count != 1 {
+		t.Fatalf("staged SA count after commit = %d, want 1", count)
+	}
+	pingTunnelAddr(t, ctx, nsA, rotatedSpecA.PeerTunnelAddr, rotatedSpecA.InterfaceName)
+}
+
 func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
 		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system daemon gossip StrongSwan smoke")
@@ -2178,6 +2394,34 @@ func addDaemonTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZoneP
 		UpdatedAt: now.Unix(),
 	})
 	zs.Records[ipsec.RecordKeyTransportKey] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyTransportKey, ipsec.RecordTypeTransportKey, *key)
+}
+
+func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, generation uint64, ikePort uint16, now time.Time) {
+	t.Helper()
+	if zs == nil {
+		t.Fatalf("missing zone state for %s", peer)
+	}
+	if ikePort == 0 {
+		ikePort = ipsec.DefaultIKEPort
+	}
+	previous := ipsec.PortSelection{
+		Generation: 1,
+		IKE:        ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort},
+		NATT:       ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort},
+		ValidUntil: now.Add(time.Hour).Unix(),
+	}
+	zs.Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
+		Version: 1,
+		Mode:    ipsec.PortModeFixed,
+		Current: &ipsec.PortSelection{
+			Generation: generation,
+			IKE:        ipsec.PortBinding{Advertised: ikePort},
+			NATT:       ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		Previous:  []ipsec.PortSelection{previous},
+		UpdatedAt: now.Unix(),
+	})
 }
 
 func assertDaemonSystemLinkUp(t *testing.T, state *stateFile, spec ipsec.TransportLinkSpec) {

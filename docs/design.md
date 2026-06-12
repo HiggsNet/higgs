@@ -361,7 +361,7 @@ Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/c
 平滑 rotate 的 Phase 4.4 目标是把 current/previous grace 变成系统可执行的 staged transition，而不只是远端选择候选端口。当前优先考虑三种实现路径：
 
 - 外层 DNAT/redirect grace：charon 保持稳定监听端口，系统防火墙在 grace 窗口内把新旧 advertised 端口都转发到当前监听端口，grace 后清理旧规则。
-- 双 connection / staged reestablish：为新旧端口加载可区分的临时 StrongSwan connection，先确认新 SA，再终止旧 SA。
+- 双 connection / staged reestablish：为新旧端口加载可区分的临时 StrongSwan connection，先确认新 SA，再终止旧 SA。root/container 实验已证明，若 staged CHILD_SA 继续复用同一 peer traffic selector 和同一 XFRM `if_id`，StrongSwan/内核策略会拒绝并行建立；因此该路径必须进一步选择“staged 独立 XFRM interface/if_id 后切换 route”，或退化为有边界的 break-before-make。
 - 多 charon/socket 实例：新旧监听端口并行，grace 后清理旧实例；部署成本最高，作为后备方案。
 
 无论选择哪条路径，`LinkInstance` 都需要记录 selected ContactPoint、port generation、rotate phase、旧/新端口 owner、rollback deadline 和最近 rotate error；`higgs debug links` 应能说明当前处于 preparing、dual-running、cutover、rollback 还是 cleanup，避免端口轮换变成不可解释的连接抖动。

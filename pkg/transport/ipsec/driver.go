@@ -37,6 +37,10 @@ type IPsecDriver interface {
 	UnloadPrivateKey(ctx context.Context, id string) error
 }
 
+type ChildInitiator interface {
+	InitiateChild(context.Context, string) error
+}
+
 type XFRMDriver interface {
 	EnsureNamespace(context.Context, NetNSSpec) error
 	EnsureInterface(context.Context, TransportLinkSpec) error
@@ -133,6 +137,13 @@ func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	if spec.LocalTunnelAddr.IsValid() {
 		if err := xfrm.AssignAddress(ctx, spec.InterfaceName, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
 			return plan, fmt.Errorf("assign address: %w", err)
+		}
+	}
+	if initiator, ok := ipsec.(ChildInitiator); ok && spec.Direction != DirectionInbound {
+		child := ChildSAName(spec)
+		plan.add("initiate_child", child, spec.TransportID)
+		if err := initiator.InitiateChild(ctx, child); err != nil {
+			return plan, fmt.Errorf("initiate child: %w", err)
 		}
 	}
 	return plan, nil
@@ -251,6 +262,17 @@ func (d *StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
 		return fmt.Errorf("sa id is required")
 	}
 	_, err := d.VICI.Call(ctx, "terminate", map[string]any{"ike": id, "force": "yes"})
+	return err
+}
+
+func (d *StrongSwanDriver) InitiateChild(ctx context.Context, child string) error {
+	if d.VICI == nil {
+		return fmt.Errorf("vici client is required")
+	}
+	if child == "" {
+		return fmt.Errorf("child sa name is required")
+	}
+	_, err := d.VICI.Call(ctx, "initiate", map[string]any{"child": child})
 	return err
 }
 

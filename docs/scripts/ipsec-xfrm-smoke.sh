@@ -52,6 +52,12 @@ HIGGS_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanPortRotationSmoke$' -count=1
+
+HIGGS_IPSEC_XFRM_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonRunGossipStrongSwanBringupSmoke$' -count=1
 
 HIGGS_IPSEC_XFRM_SMOKE=1 \
@@ -60,4 +66,4 @@ HIGGS_IPSEC_XFRM_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke$' -count=1
 
-printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
+printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'

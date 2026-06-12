@@ -809,6 +809,9 @@ func TestStrongSwanDriverCallsVICIWithoutSwanctlParsing(t *testing.T) {
 	if err := driver.LoadConnection(context.Background(), spec); err != nil {
 		t.Fatalf("LoadConnection: %v", err)
 	}
+	if err := driver.InitiateChild(context.Background(), ChildSAName(spec)); err != nil {
+		t.Fatalf("InitiateChild: %v", err)
+	}
 	if err := driver.TerminateSA(context.Background(), spec.TransportID); err != nil {
 		t.Fatalf("TerminateSA: %v", err)
 	}
@@ -816,7 +819,7 @@ func TestStrongSwanDriverCallsVICIWithoutSwanctlParsing(t *testing.T) {
 		t.Fatalf("UnloadConnection: %v", err)
 	}
 	got := client.commands
-	want := []string{"load-conn", "terminate", "unload-conn"}
+	want := []string{"load-conn", "initiate", "terminate", "unload-conn"}
 	if len(got) != len(want) {
 		t.Fatalf("commands = %+v", got)
 	}
