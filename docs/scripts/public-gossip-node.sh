@@ -6,9 +6,10 @@ bin="${HIGGS_BIN:-build/higgs}"
 usage() {
   cat <<'USAGE'
 Usage:
-  public-gossip-node.sh admin-init <base-dir> [admin-zone]
+  public-gossip-node.sh admin-init <base-dir> [admin-zone] [listen-addr] [advertise-addr]
   public-gossip-node.sh node-init <dir> <zone> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
   public-gossip-node.sh issue-nodes <admin-dir> <request.b64>...
+  public-gossip-node.sh auto-run <dir> [interval-seconds]
   public-gossip-node.sh accept-run <dir> <zone> <bundle.b64> [interval-seconds]
   public-gossip-node.sh root-init <dir>
   public-gossip-node.sh config <dir> <peer-id> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
@@ -85,6 +86,13 @@ write_config() {
   mkdir -p "$dir"
   {
     printf 'data_dir: %s\n' "$dir"
+    if [ "${CONFIG_MANAGED_ZONE:-}" != "" ]; then
+      printf 'managed_zone: %s\n' "$CONFIG_MANAGED_ZONE"
+    fi
+    if [ "${CONFIG_IDENTITY_KEY_PATH:-}" != "" ]; then
+      printf 'identity:\n'
+      printf '  key_path: %s\n' "$CONFIG_IDENTITY_KEY_PATH"
+    fi
     printf 'peer_id: %s\n' "$peer_id"
     printf 'listen_addr: %s\n' "$listen_addr"
     printf 'advertise_addr: %s\n' "$advertise_addr"
@@ -115,6 +123,13 @@ make_key_request() {
   HIGGS_CONFIG="$(config_path "$dir")" "$bin" join request "$zone" "$key" "$request"
 }
 
+make_configured_request() {
+  local dir request
+  dir="$1"
+  request="$2"
+  HIGGS_CONFIG="$(config_path "$dir")" "$bin" join request --from-config "$request"
+}
+
 issue_bundle() {
   local admin_dir request bundle
   admin_dir="$1"
@@ -142,15 +157,20 @@ require_bin
 
 case "$cmd" in
   admin-init)
-    if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; exit 1; fi
+    if [ "$#" -lt 1 ] || [ "$#" -gt 4 ]; then usage; exit 1; fi
     base="$1"
     admin_zone="${2:-catofes.}"
+    admin_listen_addr="${3:-127.0.0.1:33435}"
+    admin_advertise_addr="${4:-127.0.0.1:33435}"
     admin_slug="$(zone_slug "$admin_zone")"
     root_dir="$base/root-admin"
     admin_dir="$base/$admin_slug-admin"
     mkdir -p "$base"
     root_key="$(root_init "$root_dir" | tail -n 1)"
-    write_config "$admin_dir" "$admin_zone" 127.0.0.1:33435 127.0.0.1:33435 "$root_key"
+    CONFIG_MANAGED_ZONE="$admin_zone"
+    CONFIG_IDENTITY_KEY_PATH="$base/$admin_slug.key.json"
+    write_config "$admin_dir" "$admin_zone" "$admin_listen_addr" "$admin_advertise_addr" "$root_key"
+    unset CONFIG_MANAGED_ZONE CONFIG_IDENTITY_KEY_PATH
     make_key_request "$admin_dir" "$admin_zone" "$base/$admin_slug.key.json" "$base/$admin_slug.request.b64"
     issue_bundle "$root_dir" "$base/$admin_slug.request.b64" "$base/$admin_slug.bundle.b64"
     accept_bundle "$admin_dir" "$base/$admin_slug.bundle.b64" "$base/$admin_slug.key.json"
@@ -166,10 +186,17 @@ case "$cmd" in
     advertise_addr="$4"
     root_key="$5"
     shift 5
+    key="$(key_path "$dir" "$zone")"
+    request="$(request_path "$dir" "$zone")"
+    mkdir -p "$dir"
+    HIGGS_CONFIG="$(config_path "$dir")" "$bin" keygen "$key"
+    CONFIG_MANAGED_ZONE="$zone"
+    CONFIG_IDENTITY_KEY_PATH="$key"
     write_config "$dir" "$zone" "$listen_addr" "$advertise_addr" "$root_key" "$@"
-    make_key_request "$dir" "$zone" "$(key_path "$dir" "$zone")" "$(request_path "$dir" "$zone")"
-    printf 'request: %s\n' "$(request_path "$dir" "$zone")"
-    printf 'key: %s\n' "$(key_path "$dir" "$zone")"
+    unset CONFIG_MANAGED_ZONE CONFIG_IDENTITY_KEY_PATH
+    make_configured_request "$dir" "$request"
+    printf 'request: %s\n' "$request"
+    printf 'key: %s\n' "$key"
     ;;
   issue-nodes)
     if [ "$#" -lt 2 ]; then usage; exit 1; fi
@@ -188,6 +215,12 @@ case "$cmd" in
     bundle="$3"
     interval="${4:-5}"
     accept_bundle "$dir" "$bundle" "$(key_path "$dir" "$zone")"
+    exec env HIGGS_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
+    ;;
+  auto-run)
+    if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; exit 1; fi
+    dir="$1"
+    interval="${2:-5}"
     exec env HIGGS_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
     ;;
   root-init)

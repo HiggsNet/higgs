@@ -1,13 +1,13 @@
 # Public Internet Daemon Gossip Test
 
-本文档用于在真实公网 Linux 节点之间验证 Phase 3 daemon gossip 收敛。它不是本机 smoke 的替代品，而是一次真实网络演练：真实 UDP、真实公网地址、真实 bootstrap、真实 daemon。
+本文档用于在真实公网 Linux 节点之间验证 daemon gossip 收敛。它不是本机 smoke 的替代品，而是一次真实网络演练：真实 UDP、真实公网地址、真实 bootstrap、真实 daemon。
 
 最短路径只需要四类动作：
 
 1. admin 机器初始化 root 和 `catofes.` 管理 Zone。
-2. 每个公网节点生成自己的配置和 join request。
-3. admin 批量签发 bundle。
-4. 各节点接受 bundle、启动 daemon、写 record、验证收敛。
+2. 每个公网节点生成配置化身份和 join request。
+3. 各节点先以 auto-join pending 状态启动 daemon。
+4. admin 批量签发 delegation，节点通过 gossip 自动获得授权链，然后写 record、验证收敛。
 
 配套脚本：
 
@@ -27,17 +27,22 @@ Phase 4.0 已经让 admin 管理写操作优先进入 daemon 单 writer/control 
 
 如果对应目录的 daemon 已运行，CLI 会通过本机 control socket 提交请求，并由 daemon 串行写 DB；如果 daemon 不存在，则保留 direct 写 DB 的开发/恢复模式并输出提示。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
+Phase 4.0.1 增加了 auto-join / 配置化身份初始化。普通公网节点的 `config.yaml` 只要同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和至少一个 bootstrap peer，就可以在空 DB 首次启动时创建最小 bootstrap state。此时节点还没有本 Zone authority，daemon 会处于 `auto_join pending`，不会发布本机 record；admin 根据 join request 签发 delegation 后，节点会通过普通 gossip 从 bootstrap peer 同步 root 到本 Zone 的 authority/delegation chain。验证 trusted root、delegation chain 和本地 identity public key 都匹配后，节点才进入正常 record signing、endpoint publish 和后续 transport reconcile。
+
+`join accept <bundle> <key>` 仍保留为 recovery/debug 兼容路径；公网常规测试不再需要把 bundle 分发回每个节点。
+
 ## 测试拓扑
 
-推荐至少 3 个公网节点，先让它们都能互相 UDP 直连：
+推荐至少 1 个公网 `catofes.` 管理节点和 3 个 leaf 节点，先让它们都能互相 UDP 直连：
 
 | 角色 | Zone | 示例公网地址 | UDP |
 |------|------|--------------|-----|
+| catofes admin | `catofes.` | `203.0.113.9` | `33435` |
 | node-a | `node-a.catofes.` | `203.0.113.10` | `33434` |
 | node-b | `node-b.catofes.` | `203.0.113.11` | `33434` |
 | node-c | `node-c.catofes.` | `203.0.113.12` | `33434` |
 
-admin 工作目录可以放在你的本机，也可以放在其中一台服务器上。admin 只负责 root / delegation；普通节点不接触 root/admin 私钥。
+admin 工作目录可以放在你的本机，也可以放在其中一台服务器上。auto-join 常规路径要求持有新 delegation 的 `catofes.` 管理节点参与 gossip，或者至少有一个已同步到该 delegation 的公网节点参与 gossip；否则 leaf 节点会一直停在 `auto_join pending`。普通节点不接触 root/admin 私钥。
 
 ## Peer ID 与 Zone
 
@@ -90,7 +95,11 @@ export HIGGS_BIN="$PWD/build/higgs"
 export HIGGS_BASE="$PWD/.public-test"
 
 mkdir -p "$HIGGS_BASE"
-docs/scripts/public-gossip-node.sh admin-init "$HIGGS_BASE" | tee "$HIGGS_BASE/admin-init.log"
+docs/scripts/public-gossip-node.sh admin-init \
+  "$HIGGS_BASE" \
+  catofes. \
+  0.0.0.0:33435 \
+  203.0.113.9:33435 | tee "$HIGGS_BASE/admin-init.log"
 ```
 
 输出里会有三行关键结果：
@@ -102,6 +111,12 @@ admin_zone_dir: .public-test/catofes-admin
 ```
 
 其中 `.public-test/catofes-admin/config.yaml` 的 `peer_id` 是 `catofes.`；`catofes-admin` 只是本地目录名。
+
+在 tmux / screen 或 systemd 中启动 `catofes.` 管理 daemon，让后续签发的 delegation 能通过 gossip 传播给 auto-join 节点：
+
+```bash
+docs/scripts/public-gossip-node.sh auto-run "$HIGGS_BASE/catofes-admin" 5
+```
 
 把 `root_public_key` 复制给每台公网节点。下面用：
 
@@ -124,6 +139,7 @@ docs/scripts/public-gossip-node.sh node-init \
   0.0.0.0:33434 \
   203.0.113.10:33434 \
   "$root_key" \
+  catofes. 203.0.113.9:33435 \
   node-b.catofes. 203.0.113.11:33434 \
   node-c.catofes. 203.0.113.12:33434
 ```
@@ -141,17 +157,30 @@ docs/scripts/public-gossip-node.sh node-init \
   0.0.0.0:33434 \
   203.0.113.11:33434 \
   "$root_key" \
+  catofes. 203.0.113.9:33435 \
   node-a.catofes. 203.0.113.10:33434 \
   node-c.catofes. 203.0.113.12:33434
 ```
 
 node-c 同理，把 Zone 和公网地址改成 `node-c.catofes.` / `203.0.113.12:33434`。
 
-每次 `node-init` 都会输出：
+每次 `node-init` 都会写入：
+
+- `managed_zone: <zone>`
+- `identity.key_path: <dir>/<node>.key.json`
+- `peer_id: <zone>`
+
+并输出：
 
 ```text
 request: /home/.../.higgs-public/node-a/node-a.request.b64
 key: /home/.../.higgs-public/node-a/node-a.key.json
+```
+
+`*.request.b64` 是从 `config.yaml` 的 `managed_zone` 和 `identity.key_path` 生成的，等价于：
+
+```bash
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs join request --from-config
 ```
 
 把每个节点的 `*.request.b64` 传回 admin 机器。只传 request，不传 `*.key.json`。
@@ -165,6 +194,16 @@ scp node-c:~/.higgs-public/node-c/node-c.request.b64 "$HIGGS_BASE/"
 ```
 
 ## 3. Admin 批量签发
+
+先在 tmux / screen 或 systemd 中让各公网节点启动 daemon。此时节点只有 trusted root 和 bootstrap peer，还没有本 Zone authority；日志中应能看到 `auto_join pending` 以及可提交给 admin 的 `join_request`。
+
+node-a：
+
+```bash
+docs/scripts/public-gossip-node.sh auto-run "$HOME/.higgs-public/node-a" 5
+```
+
+node-b / node-c 同理。测试时可以直接在 tmux / screen 里跑；长期运行再改成 systemd。
 
 在 admin 机器上：
 
@@ -184,39 +223,9 @@ bundle: .public-test/node-b.bundle.b64
 bundle: .public-test/node-c.bundle.b64
 ```
 
-把对应 bundle 发回各节点：
+这些 bundle 文件只是 `delegate issue` 的兼容输出，不需要传回节点。签发会把 delegation 写入 `catofes.` admin state；因为上面已经让 `catofes.` 管理 daemon 参与 gossip，auto-join pending 的节点会从 bootstrap 同步到自己的 authority chain，随后开始正常签名和发布 record。
 
-```bash
-scp "$HIGGS_BASE/node-a.bundle.b64" node-a:~/.higgs-public/node-a/
-scp "$HIGGS_BASE/node-b.bundle.b64" node-b:~/.higgs-public/node-b/
-scp "$HIGGS_BASE/node-c.bundle.b64" node-c:~/.higgs-public/node-c/
-```
-
-## 4. 启动 daemon
-
-每台节点用一条命令接受 bundle 并启动 daemon。
-
-node-a：
-
-```bash
-docs/scripts/public-gossip-node.sh accept-run \
-  "$HOME/.higgs-public/node-a" \
-  node-a.catofes. \
-  "$HOME/.higgs-public/node-a/node-a.bundle.b64" \
-  5
-```
-
-node-b：
-
-```bash
-docs/scripts/public-gossip-node.sh accept-run \
-  "$HOME/.higgs-public/node-b" \
-  node-b.catofes. \
-  "$HOME/.higgs-public/node-b/node-b.bundle.b64" \
-  5
-```
-
-node-c 同理。测试时可以直接在 tmux / screen 里跑；长期运行再改成 systemd。
+## 4. 等待授权收敛
 
 临时 systemd service 示例：
 
@@ -235,6 +244,20 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 ```
+
+授权同步完成后，每个节点上应看到：
+
+```bash
+docs/scripts/public-gossip-node.sh status "$HOME/.higgs-public/node-a"
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs verify node-a.catofes.
+```
+
+预期：
+
+- `sync status --verbose` 顶部显示 `daemon: online peer_id=node-a.catofes.`
+- 不再持续打印 `auto_join pending`
+- `verify node-a.catofes.` 成功
+- 此后 `record put`、endpoint publish 和后续 IPsec publish/reconcile 才会进入正常路径
 
 ## 5. 写入并验证收敛
 
@@ -277,6 +300,7 @@ docs/scripts/public-gossip-node.sh node-init \
   0.0.0.0:33434 \
   "" \
   "$root_key" \
+  catofes. 203.0.113.9:33435 \
   node-a.catofes. 203.0.113.10:33434
 ```
 
@@ -298,7 +322,7 @@ quota
 
 且该 peer 在 NAT 后面，说明公网节点正在尝试补齐一个 UDP 放不下的对象，但无法通过 TCP object pull 反向连接该 NAT peer。当前 daemon 会在已准入 UDP path 上使用 UDP chunk fallback 兜底；如果仍反复触发 `quota`，短期处理方式是避免 NAT peer 产生超预算对象，尤其是禁用 endpoint 发布。更复杂拓扑仍需要 relay、hole punching 或反向 object push。
 
-接受 bundle 并启动 daemon 后，在公网 node-a 上检查：
+auto-join 授权收敛后，在公网 node-a 上检查：
 
 ```bash
 HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug peer node-b.catofes.
@@ -353,7 +377,7 @@ HIGGS_CONFIG="$HIGGS_BASE/catofes-admin/config.yaml" \
   "$HIGGS_BIN" delegate revoke node-c.catofes. public-test-revoke
 ```
 
-当前这是 admin 直写 DB 的 recovery/admin 路径。让 `catofes-admin` 或任一已经获得该更新的节点参与 gossip 后，其他节点应逐步看到：
+如果 `catofes.` 管理 daemon 正在运行，`delegate revoke` 会通过本机 control socket 串行写入；daemon 不存在时才退回 direct/recovery 路径。让 `catofes-admin` 或任一已经获得该更新的节点参与 gossip 后，其他节点应逐步看到：
 
 ```bash
 HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug zone node-c.catofes.
@@ -376,6 +400,7 @@ docs/scripts/public-gossip-node.sh config <dir> <peer-id> <listen-addr> <adverti
 docs/scripts/public-gossip-node.sh key-request <dir> <zone> <key.json> <request.b64>
 docs/scripts/public-gossip-node.sh delegate-issue <admin-dir> <request.b64> <bundle.b64>
 docs/scripts/public-gossip-node.sh join-accept <dir> <bundle.b64> <key.json>
+docs/scripts/public-gossip-node.sh auto-run <dir> [interval-seconds]
 docs/scripts/public-gossip-node.sh run-daemon <dir> [interval-seconds]
 docs/scripts/public-gossip-node.sh put-identity <dir> <zone> <value>
 docs/scripts/public-gossip-node.sh status <dir>
@@ -387,7 +412,9 @@ docs/scripts/public-gossip-node.sh verify <dir> <zone>
 - UDP 端口是否在云安全组和本机防火墙都放通。
 - `advertise_addr` 是否是其他公网节点能访问的地址，而不是 `0.0.0.0` 或内网地址。
 - 每个节点的 `trusted_root_public_key` 是否完全相同。
+- auto-join 节点的 `managed_zone`、`peer_id` 和 `identity.key_path` 是否指向同一个 Zone 身份；`identity.key_path` 的 public key 必须和 admin 签发的 join request public key 一致。
 - `bootstrap.id` 是否等于对端 `peer_id`，通常是 Zone FQDN，如 `catofes.` 或 `node-a.catofes.`；不要把 `zone-catofes-admin` 这类角色名当成公网 gossip `peer_id`。
+- 如果一直 `auto_join pending`，先确认 admin 已经对对应 request 执行 `delegate issue`，并且持有新 delegation 的 admin/peer 真的参与 gossip 或能被 bootstrap 到。
 - TCP object pull 端口是否放通；默认和对端 UDP gossip 使用同一个数字端口。日志里如果同时出现 `exceeds datagram budget`、重复 `fetch_zone` 和 `quota`，先检查 TCP object pull 连通性；对 NAT/outbound-only peer，再检查是否出现 `applied zone ... via UDP chunks` 和 `chunk_fallbacks`。
 - 节点时钟是否同步。
 - daemon 是否真的在线：`sync status --verbose` 顶部应出现 `daemon: online peer_id=...`。
