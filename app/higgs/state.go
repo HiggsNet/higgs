@@ -82,6 +82,14 @@ type linkInstanceState struct {
 	BackoffUntil      int64          `json:"backoff_until,omitempty"`
 	LastTransition    int64          `json:"last_transition,omitempty"`
 	Owner             linkOwnerState `json:"owner,omitempty"`
+
+	// Phase 4.5 bidirectional takeover state.
+	InitiatorRole     string `json:"initiator_role,omitempty"`
+	TakeoverPhase     string `json:"takeover_phase,omitempty"`
+	TakeoverStartedAt int64  `json:"takeover_started_at,omitempty"`
+	TakeoverUntil     int64  `json:"takeover_until,omitempty"`
+	LastTakeoverError string `json:"last_takeover_error,omitempty"`
+	ObservedInitiator string `json:"observed_initiator,omitempty"`
 }
 
 type linkOwnerState struct {

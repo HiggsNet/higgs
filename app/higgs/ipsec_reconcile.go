@@ -35,11 +35,13 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
 	result := ipsec.ReconcileLinkInstances(ipsec.ReconcileInputs{
-		Desired:   plan.Desired,
-		Instances: linkInstancesToIPsec(d.Sync.State.LinkInstances),
-		SAs:       sas,
-		Now:       now,
-		Revoked:   revokedLinkPeers(d.Sync.State, now),
+		Desired:      plan.Desired,
+		Instances:    linkInstancesToIPsec(d.Sync.State.LinkInstances),
+		SAs:          sas,
+		Now:          now,
+		Revoked:      revokedLinkPeers(d.Sync.State, now),
+		Roles:        plan.Roles,
+		GroupBackoff: groupBackoffMap(groups),
 	})
 	for _, action := range result.Actions {
 		switch action.Action {
@@ -214,6 +216,12 @@ func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.Link
 				TransportID: inst.Owner.TransportID,
 				Token:       inst.Owner.Token,
 			},
+			InitiatorRole:     inst.InitiatorRole,
+			TakeoverPhase:     inst.TakeoverPhase,
+			TakeoverStartedAt: inst.TakeoverStartedAt,
+			TakeoverUntil:     inst.TakeoverUntil,
+			LastTakeoverError: inst.LastTakeoverError,
+			ObservedInitiator: inst.ObservedInitiator,
 		}
 	}
 	return out
@@ -255,6 +263,12 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 				TransportID: inst.Owner.TransportID,
 				Token:       inst.Owner.Token,
 			},
+			InitiatorRole:     inst.InitiatorRole,
+			TakeoverPhase:     inst.TakeoverPhase,
+			TakeoverStartedAt: inst.TakeoverStartedAt,
+			TakeoverUntil:     inst.TakeoverUntil,
+			LastTakeoverError: inst.LastTakeoverError,
+			ObservedInitiator: inst.ObservedInitiator,
 		}
 	}
 	return out
@@ -335,6 +349,11 @@ func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec
 			inst.LastError = "rotate " + inst.RotatePhase + ": " + inst.LastError
 		}
 	}
+	if inst.InitiatorRole == ipsec.InitiatorRoleSecondaryTakeover {
+		inst.TakeoverPhase = ipsec.TakeoverPhaseCooldown
+		inst.TakeoverUntil = now.Add(ipsec.TakeoverCooldownDuration(policy)).Unix()
+		inst.LastTakeoverError = inst.LastError
+	}
 	instances[id] = inst
 }
 
@@ -386,6 +405,14 @@ func actionInstanceID(action ipsec.ReconcileAction) string {
 		return ipsec.LinkInstanceID(*action.Spec)
 	}
 	return ""
+}
+
+func groupBackoffMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.BackoffPolicy {
+	out := make(map[string]ipsec.BackoffPolicy, len(groups))
+	for _, group := range groups {
+		out[group.ID] = group.Reconcile.Backoff
+	}
+	return out
 }
 
 func groupBackoffPolicy(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) ipsec.BackoffPolicy {

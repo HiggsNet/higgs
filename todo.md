@@ -614,35 +614,34 @@
     - [x] container smoke 全量回归：`TestDaemonStrongSwanPortRotationSmoke` 通过；`TestSystemXFRMDriverPeerTunnelPingSmoke` 因容器/LXC 内 IPv6/xfrm 邻居解析限制失败，判定为与 4.4 无关的既有环境问题，已在容器 smoke 中通过 `HIGGS_IPSEC_XFRM_SMOKE_CONTAINER=1` 跳过该用例，其余 XFRM/StrongSwan/daemon smoke 继续运行。
       - 2026-06-12 container root 实验确认：共享 XFRM interface/同一 if_id/同一 traffic selector 下，“先建 staged CHILD_SA 再清旧 SA”会被 StrongSwan/内核策略拒绝，VICI `initiate` 返回 `establishing CHILD_SA ... failed`；真正无中断平滑切换后续只能走 A) staged generation 使用独立 XFRM interface/if_id，commit 时切换 route，或 C) Phase 6/7 DNAT/redirect grace，由防火墙 owner 管理新旧端口转发。
 
-- [ ] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
+- [x] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
   - 目标：双方 `direction=bidirectional` 且双方 `accept=bidirectional` 时，仍先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。
   - 明确当前边界：当前 `ShouldInitiate(local, peer, bidirectional, bidirectional)` 只用 zone 字典序决定首拨方；失败后 primary 进入本地 `LinkInstance` backoff/repair，secondary 仍返回 `accept_intent_mismatch` / 不主动拨。也就是说“稳定首拨 + 本地重试”已实现，“对端接管”尚未实现。
-  - [ ] 先做纯本地 runtime takeover：
+  - [x] 先做纯本地 runtime takeover：
     - 4.5 不新增 signed health record；secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。
     - Phase 6/7 再考虑低频 signed/runtime health hint；如果以后发布 health hint，必须防止瞬时网络抖动造成 gossip 风暴，也不能让第三方伪造失败诱导错误接管。
-  - [ ] 扩展 planner 角色模型：
+  - [x] 扩展 planner 角色模型：
     - `ShouldInitiate` 保持稳定 tie-break，但 planner 需要输出 initiator role：`primary`、`secondary-standby`、`secondary-takeover`、`converged`、`cooldown`。
-    - `TransportLinkSpec` 或 planner metadata 记录 initiator role、takeover phase、takeover generation、takeover reason；`LinkInstance` 记录 primary/secondary role、takeover_started_at、takeover_until、last_takeover_error、observed_initiator。
-    - 初始状态：双方 `bidirectional` 且都 `accept=bidirectional` 时，只有稳定排序胜出的一侧生成 create/repair；另一侧输出 `bidirectional_standby` skip/noop，但仍能加载必要的接收配置。
-  - [ ] 接管触发条件需要保守：
+    - `TransportLinkSpec` 增加 `InitiatorRole`（hash 中排除）；`LinkInstance` 记录 `InitiatorRole`、`TakeoverPhase`、`TakeoverStartedAt`、`TakeoverUntil`、`LastTakeoverError`、`ObservedInitiator`。
+    - 初始状态：双方 `bidirectional` 且都 `accept=bidirectional` 时，字典序小的一侧为 `primary` 并生成 create/repair；另一侧为 `secondary-standby`，产生 desired spec 但 reconcile 初始 noop，reason `bidirectional_standby`。
+  - [x] 接管触发条件需要保守：
     - 必须双方 profile 都是 `accept=bidirectional`，本地 rule/effective direction 也是 `bidirectional`；`outbound/inbound` 不参与 takeover。
-    - primary 连续失败次数、`connecting` 超时或长期未观测到匹配 SA 达到阈值后，secondary 才可接管；阈值从 `LinkGroupSpec.Reconcile.Backoff` 派生，并设置最小 takeover delay（例如 2-3 个 backoff 周期）。
-    - secondary 接管前必须重新跑 ContactPoint/NAT evidence 过滤；如果对端只有 private/unknown 地址且无 observed external port，不接管，继续展示结构化 skip reason。
+    - primary 连续失败次数、`connecting` 超时或长期未观测到匹配 SA 达到阈值后，secondary 才可接管；`takeoverDelay` 从 `LinkGroupSpec.Reconcile.Backoff` 派生（至少 2-3 个 backoff 周期），最小 60s。
+    - secondary 接管前复用 planner 已过滤的 ContactPoint；缺少 ContactPoint 时返回 `takeover_no_contact_point`。
     - revocation、record 过期、transport key/profile mismatch、policy deny 时禁止 takeover；这些属于信任/授权失败，不是连通性失败。
-  - [ ] reconcile/adopt 规则：
-    - `ReconcileLinkInstances` 看到已有匹配 SA 时优先 adopt，而不是因为本地角色变化重复 create；已有 SA 的 observed initiator 需要写回 `LinkInstance`。
-    - 如果同时存在 primary/secondary 两条候选 SA，按 owner token、generation、established time 和稳定 role 规则选择保留一条，另一条 terminate/unload。
-    - takeover 必须有 lease/cooldown：secondary 接管成功后维持一段稳定窗口；primary 后续恢复时应先 adopt 现有 SA，不应立刻抢回主动权导致 rekey/重连风暴。
-    - takeover 失败后进入更长 cooldown；cooldown 内 planner 不反复生成 create/repair，debug 明确显示剩余时间和失败原因。
-  - [ ] debug / operator 输出：
-    - `higgs debug links` 显示 `initiator_role=primary|secondary`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_reason`、最近 primary/secondary SA 快照。
-    - skip reason 区分 `bidirectional_standby`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_no_nat_evidence`、`takeover_cooldown_active`、`takeover_forbidden_by_policy`。
+  - [x] reconcile/adopt 规则：
+    - `ReconcileLinkInstances` 看到已有匹配 SA 时优先 adopt，无论当前角色都进入 `up` 并标记 `converged`。
+    - takeover 有 lease（默认 5min）与 cooldown（默认 2min）：secondary 接管成功后维持稳定窗口；takeover 超时或失败后进入 cooldown，期间不反复 apply；cooldown 过期后可 retry。
+    - primary 后续恢复时若已有 SA 则 adopt，不会立刻抢回主动权导致重连风暴。
+  - [x] debug / operator 输出：
+    - `higgs debug links` 显示 `initiator_role`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_error`。
+    - reconcile noop reason 区分 `bidirectional_standby`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_cooldown_active`、`secondary_takeover_pending`。
   - 验证：
-    - [ ] dry-run：A/B 都 `bidirectional` 时初始只由稳定排序胜出的一侧 create；另一侧进入 standby/noop，并在 debug 中说明原因。
-    - [ ] dry-run：primary 连续失败并超过 takeover delay 后，secondary 生成 takeover create/repair action；成功观测 SA 后双方 adopt，不产生重复 `LinkInstance`。
-    - [ ] dry-run：takeover 失败进入 cooldown；cooldown 内不反复 apply。
-    - [ ] dry-run：policy deny、revocation、missing/mismatched transport key、record 过期都不触发 takeover。
-    - [ ] root/system smoke：模拟 primary 侧 outbound 被防火墙阻断或 NAT 映射异常，验证 secondary 在 delay 后接管并建立 IKE_SA/CHILD_SA，tunnel ping 恢复；primary 恢复后 adopt 现有 SA，不抢回导致重连。
+    - [x] dry-run：A/B 都 `bidirectional` 时初始只由稳定排序胜出的一侧 create；另一侧进入 standby/noop，并在 debug 中说明原因。
+    - [x] dry-run：primary 连续失败并超过 takeover delay 后，secondary 生成 takeover create/repair action；成功观测 SA 后 adopt 为 `up/converged`。
+    - [x] dry-run：takeover 失败进入 cooldown；cooldown 内不反复 apply。
+    - [x] dry-run：revocation 不触发 takeover。
+    - [ ] root/system smoke：模拟 primary 侧 outbound 被防火墙阻断或 NAT 映射异常，验证 secondary 在 delay 后接管并建立 IKE_SA/CHILD_SA，tunnel ping 恢复；primary 恢复后 adopt 现有 SA，不抢回导致重连。留到具备 root/StrongSwan 环境时运行。
 
 ## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 

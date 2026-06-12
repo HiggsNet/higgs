@@ -41,6 +41,11 @@ const (
 	RotatePhaseCutover     = "cutover"
 	RotatePhaseRollback    = "rollback"
 	RotatePhaseCleanup     = "cleanup"
+
+	TakeoverPhaseIdle     = ""
+	TakeoverPhaseDelay    = "delay"
+	TakeoverPhaseActive   = "active"
+	TakeoverPhaseCooldown = "cooldown"
 )
 
 type LinkInstance struct {
@@ -68,6 +73,14 @@ type LinkInstance struct {
 	BackoffUntil      int64
 	LastTransition    int64
 	Owner             ResourceOwner
+
+	// Bidirectional takeover state (Phase 4.5).
+	InitiatorRole     string
+	TakeoverPhase     string
+	TakeoverStartedAt int64
+	TakeoverUntil     int64
+	LastTakeoverError string
+	ObservedInitiator string
 }
 
 type ResourceOwner struct {
@@ -79,11 +92,13 @@ type ResourceOwner struct {
 }
 
 type ReconcileInputs struct {
-	Desired   []TransportLinkSpec
-	Instances map[string]LinkInstance
-	SAs       []SAState
-	Now       time.Time
-	Revoked   map[zone.ZonePath]bool
+	Desired      []TransportLinkSpec
+	Instances    map[string]LinkInstance
+	SAs          []SAState
+	Now          time.Time
+	Revoked      map[zone.ZonePath]bool
+	Roles        map[string]string
+	GroupBackoff map[string]BackoffPolicy
 }
 
 type ReconcileResult struct {
@@ -116,6 +131,7 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 		ChildSAName:     ChildSAName(spec),
 		Endpoint:        endpointForSpec(spec),
 		LastTransition:  now.Unix(),
+		InitiatorRole:   spec.InitiatorRole,
 		Owner: ResourceOwner{
 			Manager:     "higgs",
 			GroupID:     spec.OverlayID,
@@ -140,6 +156,10 @@ func LinkInstanceID(spec TransportLinkSpec) string {
 }
 
 func TransportLinkSpecHash(spec TransportLinkSpec) string {
+	// Runtime role metadata must not change the desired spec hash; otherwise
+	// standby -> takeover -> converged transitions would emit unnecessary
+	// update actions for an otherwise identical configuration.
+	spec.InitiatorRole = ""
 	data, err := json.Marshal(spec)
 	if err != nil {
 		panic(fmt.Sprintf("marshal transport link spec: %v", err))
@@ -247,6 +267,16 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			result.add(ReconcileActionTeardown, nil, &inst, "peer revoked")
 			continue
 		}
+		role := roleForSpec(id, in.Roles)
+		if role == InitiatorRoleSecondaryStandby {
+			sa := findInstanceSA(in.SAs, existing)
+			if !sa.Established {
+				sa = findMatchingSA(in.SAs, spec)
+			}
+			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.GroupBackoff, now)
+			continue
+		}
+		// Primary / outbound initiator path.
 		desiredGen := contactGeneration(spec)
 		if !exists {
 			sa := findMatchingSA(in.SAs, spec)
@@ -339,6 +369,95 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		result.add(ReconcileActionTeardown, nil, &inst, "no longer desired")
 	}
 	return result
+}
+
+func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, groupBackoff map[string]BackoffPolicy, now time.Time) {
+	policy := groupBackoffForSpec(spec, groupBackoff)
+	if sa.Established {
+		inst := existing
+		if !exists {
+			inst = NewLinkInstance(spec, LinkStateUp, now)
+		}
+		inst.ActualState = LinkStateUp
+		inst.Endpoint = sa.Endpoint
+		inst.DesiredSpecHash = TransportLinkSpecHash(spec)
+		inst.InitiatorRole = InitiatorRoleConverged
+		inst.TakeoverPhase = TakeoverPhaseIdle
+		inst.TakeoverUntil = 0
+		inst.LastTakeoverError = ""
+		inst.LastTransition = now.Unix()
+		r.Instances[id] = inst
+		r.add(ReconcileActionAdopt, &spec, &inst, "driver state already exists")
+		return
+	}
+	if !exists {
+		inst := NewLinkInstance(spec, LinkStateDown, now)
+		inst.InitiatorRole = InitiatorRoleSecondaryStandby
+		r.Instances[id] = inst
+		r.add(ReconcileActionNoop, &spec, &inst, "bidirectional_standby")
+		return
+	}
+	inst := existing
+	switch inst.InitiatorRole {
+	case InitiatorRoleSecondaryTakeover:
+		if inLinkBackoff(inst, now) {
+			r.add(ReconcileActionNoop, &spec, &inst, "apply backoff active")
+			return
+		}
+		if inst.TakeoverPhase == TakeoverPhaseCooldown && now.Before(time.Unix(inst.TakeoverUntil, 0)) {
+			r.add(ReconcileActionNoop, &spec, &inst, "takeover_cooldown_active")
+			return
+		}
+		lease := TakeoverLeaseDuration(policy)
+		if (inst.ActualState == LinkStateConfiguring || inst.ActualState == LinkStateConnecting) &&
+			now.After(time.Unix(inst.TakeoverStartedAt, 0).Add(lease)) {
+			inst.ActualState = LinkStateError
+			inst.LastError = "secondary takeover timed out waiting for SA"
+			inst.LastTransition = now.Unix()
+			inst.TakeoverPhase = TakeoverPhaseCooldown
+			inst.TakeoverUntil = now.Add(TakeoverCooldownDuration(policy)).Unix()
+			inst.LastTakeoverError = inst.LastError
+			r.Instances[id] = inst
+			r.add(ReconcileActionRepair, &spec, &inst, "secondary_takeover_timeout")
+			return
+		}
+		if inst.ActualState == LinkStateError || inst.ActualState == LinkStateDegraded {
+			inst.ActualState = LinkStateDegraded
+			inst.LastTransition = now.Unix()
+			r.Instances[id] = inst
+			r.add(ReconcileActionRepair, &spec, &inst, "secondary_takeover_retry")
+			return
+		}
+		if inst.ActualState == LinkStateConfiguring || inst.ActualState == LinkStateConnecting {
+			r.add(ReconcileActionNoop, &spec, &inst, "secondary_takeover_pending")
+			return
+		}
+	case InitiatorRoleConverged:
+		if inLinkBackoff(inst, now) {
+			r.add(ReconcileActionNoop, &spec, &inst, "apply backoff active")
+			return
+		}
+		inst.ActualState = LinkStateDegraded
+		inst.LastTransition = now.Unix()
+		r.Instances[id] = inst
+		r.add(ReconcileActionRepair, &spec, &inst, "driver state missing after convergence")
+		return
+	}
+	ok, reason := shouldSecondaryTakeover(inst, InitiatorRoleSecondaryStandby, spec, sa, policy, now)
+	if !ok {
+		r.add(ReconcileActionNoop, &spec, &inst, reason)
+		return
+	}
+	inst.InitiatorRole = InitiatorRoleSecondaryTakeover
+	inst.TakeoverPhase = TakeoverPhaseActive
+	inst.TakeoverStartedAt = now.Unix()
+	inst.TakeoverUntil = now.Add(TakeoverLeaseDuration(policy)).Unix()
+	inst.LastError = ""
+	inst.LastTransition = now.Unix()
+	inst.ActualState = LinkStateConfiguring
+	inst.DesiredSpecHash = TransportLinkSpecHash(spec)
+	r.Instances[id] = inst
+	r.add(ReconcileActionCreate, &spec, &inst, reason)
 }
 
 func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, now time.Time) {
@@ -520,6 +639,86 @@ func inLinkBackoff(inst LinkInstance, now time.Time) bool {
 		return false
 	}
 	return now.Before(time.Unix(inst.BackoffUntil, 0))
+}
+
+func roleForSpec(id string, roles map[string]string) string {
+	if roles == nil {
+		return InitiatorRolePrimary
+	}
+	if role := roles[id]; role != "" {
+		return role
+	}
+	return InitiatorRolePrimary
+}
+
+func groupBackoffForSpec(spec TransportLinkSpec, groups map[string]BackoffPolicy) BackoffPolicy {
+	if groups == nil {
+		return BackoffPolicy{}
+	}
+	return groups[spec.OverlayID]
+}
+
+func takeoverDelayFor(policy BackoffPolicy, failureCount int) time.Duration {
+	if failureCount < 0 {
+		failureCount = 0
+	}
+	// Require at least 2-3 backoff cycles before a secondary takes over.
+	delay := nextLinkBackoff(policy, failureCount+2) + nextLinkBackoff(policy, failureCount+3)
+	const minDelay = 60 * time.Second
+	if delay < minDelay {
+		return minDelay
+	}
+	return delay
+}
+
+func TakeoverLeaseDuration(policy BackoffPolicy) time.Duration {
+	d := 5 * nextLinkBackoff(policy, 1)
+	const minLease = 5 * time.Minute
+	if d < minLease {
+		return minLease
+	}
+	return d
+}
+
+func TakeoverCooldownDuration(policy BackoffPolicy) time.Duration {
+	d := 3 * nextLinkBackoff(policy, 3)
+	const minCooldown = 2 * time.Minute
+	if d < minCooldown {
+		return minCooldown
+	}
+	return d
+}
+
+func shouldSecondaryTakeover(inst LinkInstance, role string, spec TransportLinkSpec, sa SAState, policy BackoffPolicy, now time.Time) (bool, string) {
+	if role != InitiatorRoleSecondaryStandby {
+		return false, ""
+	}
+	if sa.Established {
+		return false, ""
+	}
+	if inst.TakeoverPhase == TakeoverPhaseCooldown && now.Before(time.Unix(inst.TakeoverUntil, 0)) {
+		return false, "takeover_cooldown_active"
+	}
+	if len(spec.ContactPoints) == 0 {
+		return false, "takeover_no_contact_point"
+	}
+	// Cooldown expired after a previous failed takeover: allow retry.
+	if inst.TakeoverPhase == TakeoverPhaseCooldown && !now.Before(time.Unix(inst.TakeoverUntil, 0)) {
+		return true, "secondary_takeover_retry"
+	}
+	delay := takeoverDelayFor(policy, inst.FailureCount)
+	lastTransition := time.Unix(inst.LastTransition, 0)
+	switch inst.ActualState {
+	case LinkStatePending, LinkStateDown, "":
+		if now.Sub(lastTransition) < delay {
+			return false, "takeover_delay_active"
+		}
+	default:
+		if inst.FailureCount < 2 && now.Sub(lastTransition) < delay {
+			return false, "takeover_delay_active"
+		}
+	}
+	return true, "secondary_takeover"
 }
 
 func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, action ReconcileAction, netns NetNSSpec) (ApplyPlan, error) {

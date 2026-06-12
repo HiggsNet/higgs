@@ -36,6 +36,7 @@ type LinkPlannerOptions struct {
 type LinkPlan struct {
 	Desired []TransportLinkSpec
 	Skipped []PlanSkip
+	Roles   map[string]string // instance ID -> InitiatorRole
 }
 
 type PlanSkip struct {
@@ -57,7 +58,7 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 		now = time.Now()
 	}
 	peers := sortedZones(ns)
-	plan := LinkPlan{}
+	plan := LinkPlan{Roles: map[string]string{}}
 	for _, group := range groups {
 		if err := group.Validate(); err != nil {
 			return plan, err
@@ -92,6 +93,7 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 				continue
 			}
 			plan.Desired = append(plan.Desired, spec)
+			plan.Roles[LinkInstanceID(spec)] = spec.InitiatorRole
 			selectedPeers++
 			linkIndex++
 		}
@@ -133,8 +135,8 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {
 		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedFamily}, nil
 	}
-	initiate := ShouldInitiate(local, peer, group.Direction, records.Profile.Accept)
-	if group.Direction != DirectionInbound && !initiate {
+	role := InitiatorRoleForPeer(local, peer, group.Direction, records.Profile.Accept)
+	if role == "" {
 		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipAcceptIntentMismatch, Detail: records.Profile.Accept}, nil
 	}
 	var contacts []ContactPoint
@@ -169,6 +171,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if err != nil {
 		return TransportLinkSpec{}, false, PlanSkip{}, err
 	}
+	spec.InitiatorRole = role
 	return spec, true, PlanSkip{}, nil
 }
 

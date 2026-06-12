@@ -97,15 +97,18 @@ func TestPlanTransportLinksHonorsBidirectionalTieBreakAndInboundAccept(t *testin
 	if len(plan.Desired) != 1 || plan.Desired[0].PeerZone != "node-b.catofes." {
 		t.Fatalf("node-a plan = %+v skips=%+v", plan.Desired, plan.Skipped)
 	}
+	if plan.Roles[plan.Desired[0].TransportID] != InitiatorRolePrimary {
+		t.Fatalf("node-a role = %q, want primary", plan.Roles[plan.Desired[0].TransportID])
+	}
 	plan, err = PlanTransportLinks(context.Background(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks(b): %v", err)
 	}
-	if len(plan.Desired) != 0 {
-		t.Fatalf("node-b should not initiate duplicate link: %+v", plan.Desired)
+	if len(plan.Desired) != 1 || plan.Desired[0].PeerZone != "node-a.catofes." {
+		t.Fatalf("node-b should keep a standby desired spec: desired=%+v skips=%+v", plan.Desired, plan.Skipped)
 	}
-	if !hasSkip(plan.Skipped, "node-a.catofes.", SkipAcceptIntentMismatch) {
-		t.Fatalf("skips = %+v", plan.Skipped)
+	if plan.Roles[plan.Desired[0].TransportID] != InitiatorRoleSecondaryStandby {
+		t.Fatalf("node-b role = %q, want secondary-standby", plan.Roles[plan.Desired[0].TransportID])
 	}
 }
 

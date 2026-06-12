@@ -26,6 +26,12 @@ const (
 	TunnelAddressDerivedPool      TunnelAddressMode = "derived-pool"
 	TunnelAddressSequentialPool   TunnelAddressMode = "sequential-pool"
 	TunnelAddressDisabled         TunnelAddressMode = "disabled"
+
+	InitiatorRolePrimary           = "primary"
+	InitiatorRoleSecondaryStandby  = "secondary-standby"
+	InitiatorRoleSecondaryTakeover = "secondary-takeover"
+	InitiatorRoleConverged         = "converged"
+	InitiatorRoleCooldown          = "cooldown"
 )
 
 type MeshPolicy struct {
@@ -108,6 +114,10 @@ type TransportLinkSpec struct {
 	// identity. The driver materializes it as needed (e.g. a PEM file for
 	// StrongSwan raw-public-key authentication).
 	PeerPublicKey []byte
+
+	// InitiatorRole is a runtime planner/reconcile hint. It does not affect the
+	// StrongSwan configuration and is excluded from the spec hash.
+	InitiatorRole string
 }
 
 type TransportLinkOptions struct {
@@ -641,6 +651,31 @@ func ShouldInitiate(local, peer zone.ZonePath, direction, remoteAccept string) b
 	default:
 		return false
 	}
+}
+
+// InitiatorRoleForPeer returns the local initiator role for a peer link.
+// It returns an empty string when the local node should not participate in
+// this link at all (accept intent mismatch).
+func InitiatorRoleForPeer(local, peer zone.ZonePath, direction, remoteAccept string) string {
+	switch direction {
+	case DirectionOutbound:
+		if remoteAccept == AcceptInbound || remoteAccept == AcceptBidirectional {
+			return InitiatorRolePrimary
+		}
+	case DirectionInbound:
+		return ""
+	case DirectionBidirectional:
+		switch remoteAccept {
+		case AcceptInbound:
+			return InitiatorRolePrimary
+		case AcceptBidirectional:
+			if strings.Compare(string(local), string(peer)) < 0 {
+				return InitiatorRolePrimary
+			}
+			return InitiatorRoleSecondaryStandby
+		}
+	}
+	return ""
 }
 
 func addrAt(prefix netip.Prefix, offset uint64) (netip.Addr, bool) {

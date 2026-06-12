@@ -503,3 +503,205 @@ func TestReconcileNormalUpdateWhenNoGenerationChange(t *testing.T) {
 		t.Fatalf("expected update action, got %+v", result.Actions)
 	}
 }
+
+func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
+	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 || plan.Roles[plan.Desired[0].TransportID] != InitiatorRoleSecondaryStandby {
+		t.Fatalf("expected one secondary-standby desired spec: %+v", plan)
+	}
+	spec := plan.Desired[0]
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{},
+		SAs:          nil,
+		Now:          now,
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "bidirectional_standby" {
+		t.Fatalf("expected standby noop, got %+v", result.Actions)
+	}
+	inst := result.Instances[spec.TransportID]
+	if inst.ActualState != LinkStateDown || inst.InitiatorRole != InitiatorRoleSecondaryStandby {
+		t.Fatalf("instance = %+v", inst)
+	}
+}
+
+func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
+	base := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
+	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	spec := plan.Desired[0]
+	// First reconcile creates the standby instance.
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{},
+		SAs:          nil,
+		Now:          base,
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	inst := result.Instances[spec.TransportID]
+	// Before delay has passed, takeover is suppressed.
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          base.Add(30 * time.Second),
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Reason != "takeover_delay_active" {
+		t.Fatalf("expected takeover_delay_active, got %+v", result.Actions)
+	}
+	// After the conservative delay, secondary takes over.
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          base.Add(2 * time.Minute),
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionCreate || result.Actions[0].Reason != "secondary_takeover" {
+		t.Fatalf("expected secondary_takeover create, got %+v", result.Actions)
+	}
+	inst = result.Instances[spec.TransportID]
+	if inst.InitiatorRole != InitiatorRoleSecondaryTakeover || inst.ActualState != LinkStateConfiguring || inst.TakeoverPhase != TakeoverPhaseActive {
+		t.Fatalf("instance = %+v", inst)
+	}
+}
+
+func TestReconcileSecondaryTakeoverCooldownPreventsRetry(t *testing.T) {
+	base := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
+	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	spec := plan.Desired[0]
+	inst := NewLinkInstance(spec, LinkStateDown, base)
+	inst.InitiatorRole = InitiatorRoleSecondaryStandby
+	inst.LastTransition = base.Unix()
+
+	// Trigger takeover.
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          base.Add(2 * time.Minute),
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	inst = result.Instances[spec.TransportID]
+	if inst.InitiatorRole != InitiatorRoleSecondaryTakeover {
+		t.Fatalf("expected takeover, got %+v", inst)
+	}
+	// Simulate apply failure: cooldown is set by the daemon, but we can set it directly.
+	inst.ActualState = LinkStateError
+	inst.FailureCount = 1
+	inst.LastError = "ike timeout"
+	inst.TakeoverPhase = TakeoverPhaseCooldown
+	inst.TakeoverUntil = base.Add(3 * time.Minute).Unix()
+
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          base.Add(2*time.Minute + 30*time.Second),
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Reason != "takeover_cooldown_active" {
+		t.Fatalf("expected cooldown noop, got %+v", result.Actions)
+	}
+}
+
+func TestReconcileTakeoverAdoptsExistingSA(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
+	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	spec := plan.Desired[0]
+	inst := NewLinkInstance(spec, LinkStateDown, now)
+	inst.InitiatorRole = InitiatorRoleSecondaryStandby
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          []SAState{{Name: spec.TransportID, Established: true, Endpoint: "198.51.100.10:500"}},
+		Now:          now,
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionAdopt {
+		t.Fatalf("expected adopt, got %+v", result.Actions)
+	}
+	inst = result.Instances[spec.TransportID]
+	if inst.ActualState != LinkStateUp || inst.InitiatorRole != InitiatorRoleConverged || inst.Endpoint != "198.51.100.10:500" {
+		t.Fatalf("instance = %+v", inst)
+	}
+}
+
+func TestReconcileTakeoverForbiddenByRevocation(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["catofes."] = zone.NewZoneState("catofes.", nil)
+	ns.Zones["catofes."].Revocations["node-a.catofes."] = &zone.DelegationRevocation{
+		ChildZone:  "node-a.catofes.",
+		ParentZone: "catofes.",
+		RevokedAt:  now.Add(-time.Minute).Unix(),
+	}
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
+	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 0 {
+		t.Fatalf("planner should skip revoked peer")
+	}
+}
