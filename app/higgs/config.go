@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +27,8 @@ const (
 type appConfig struct {
 	DataDir              string
 	StatePath            string
+	ManagedZone          zone.ZonePath
+	Identity             identityConfig
 	PeerID               string
 	ListenAddr           string
 	ListenPort           int
@@ -55,6 +58,9 @@ type configYAML struct {
 	StatePath    string `yaml:"state_path"`
 	DatabasePath string `yaml:"database_path"`
 	DBPath       string `yaml:"db_path"`
+
+	ManagedZone string       `yaml:"managed_zone"`
+	Identity    identityYAML `yaml:"identity"`
 
 	PeerID     string `yaml:"peer_id"`
 	ListenAddr string `yaml:"listen_addr"`
@@ -93,6 +99,14 @@ type configYAML struct {
 }
 
 type configStringList []string
+
+type identityConfig struct {
+	KeyPath string
+}
+
+type identityYAML struct {
+	KeyPath string `yaml:"key_path"`
+}
 
 type overlayConfig struct {
 	DefaultNetNS ipsec.NetNSSpec
@@ -257,6 +271,16 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	}
 	if value := firstNonEmpty(file.StatePath, file.DatabasePath, file.DBPath); value != "" {
 		config.StatePath = value
+	}
+	if file.ManagedZone != "" {
+		path := zone.ZonePath(strings.TrimSpace(file.ManagedZone))
+		if !path.Valid() || path == zone.RootZone {
+			return fmt.Errorf("invalid managed_zone: %s", file.ManagedZone)
+		}
+		config.ManagedZone = path
+	}
+	if file.Identity.KeyPath != "" {
+		config.Identity.KeyPath = file.Identity.KeyPath
 	}
 	config.PeerID = firstNonEmpty(file.PeerID, config.PeerID)
 	config.ListenAddr = firstNonEmpty(file.ListenAddr, config.ListenAddr)

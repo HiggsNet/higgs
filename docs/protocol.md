@@ -754,9 +754,17 @@ endpoint_grace: 10m
 | `endpoint_ttl` | `1h` | 写入端点记录的 TTL |
 | `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
 
-Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：本机 `ipsec` 负责本节点公开能力和地址/端口来源，`overlay.default_netns` 负责 overlay data-plane 默认 namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
+Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：`managed_zone` + `identity.key_path` 声明本节点不可变身份，配置文件只引用 ED25519 私钥文件路径，不内嵌私钥；本机 `ipsec` 负责本节点公开能力和地址/端口来源，`overlay.default_netns` 负责 overlay data-plane 默认 namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
 
 ```yaml
+managed_zone: node-a.catofes.
+identity:
+  key_path: .higgs/identity.key.json
+trusted_root_public_key: "<base64-or-hex-root-public-key>"
+bootstrap:
+  - id: catofes.
+    addr: 203.0.113.10:33434
+
 ipsec:
   enabled: true
   provider: strongswan

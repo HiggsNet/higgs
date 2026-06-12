@@ -853,6 +853,7 @@ type PeerView struct {
 | 身份管理（ED25519 生成、加密存储、NodeID） | `pkg/core/identity/` | ✅ 完整 |
 | bbolt 持久化（LoadNetwork / SaveNetwork / 元数据） | `pkg/core/zone/` | ✅ 完整 |
 | NetworkState：Get（fallback 继承）/ Put / PutAt | `pkg/core/zone/` | ✅ 完整 |
+| 配置化身份初始化 | `app/higgs/identity_bootstrap.go` | ✅ `managed_zone` / `identity.key_path` identity overlay、空 DB pending bootstrap state、reload 不可变校验和 pending 签名 gating 已实现 |
 | Gossip 传输层（UDP、magic frame、MessagePack codec，短期兼容旧 JSON magic） | `pkg/core/gossip/` | ✅ 完整 |
 | Anti-replay（nonce + 时间戳 ±5min 窗口） | `pkg/core/gossip/` | ✅ 完整 |
 | 速率配额（每 peer 字节 + 对象 token bucket） | `pkg/core/gossip/` | ✅ 完整 |

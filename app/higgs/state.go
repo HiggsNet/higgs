@@ -17,6 +17,7 @@ const cliMetaKey = "cli_state"
 
 type stateFile struct {
 	ManagedZone       zone.ZonePath      `json:"managed_zone"`
+	IdentityKeyPath   string             `json:"identity_key_path,omitempty"`
 	RootPrivateKey    ed25519.PrivateKey `json:"root_private_key"`
 	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
 	Network           *zone.NetworkState `json:"network"`
@@ -29,6 +30,7 @@ type stateFile struct {
 
 type stateMeta struct {
 	ManagedZone       zone.ZonePath                `json:"managed_zone"`
+	IdentityKeyPath   string                       `json:"identity_key_path,omitempty"`
 	RootPrivateKey    ed25519.PrivateKey           `json:"root_private_key"`
 	ZonePrivateKey    ed25519.PrivateKey           `json:"zone_private_key"`
 	SyncPeers         map[string]syncPeerState     `json:"sync_peers,omitempty"`
@@ -264,7 +266,7 @@ func (rt *Runtime) Now() time.Time {
 }
 
 func (rt *Runtime) LoadState() (*stateFile, error) {
-	return loadStateAt(rt.StatePath, rt.Config.TrustedRootPublicKey)
+	return loadStateAtWithConfig(rt.StatePath, rt.Config)
 }
 
 func (rt *Runtime) SaveState(state *stateFile) error {
@@ -288,11 +290,22 @@ func loadState() (*stateFile, error) {
 }
 
 func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
+	return loadStateAtWithConfig(path, &appConfig{TrustedRootPublicKey: trustRoot})
+}
+
+func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
+	if config == nil {
+		config = defaultAppConfig()
+	}
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	defer store.Close()
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
 
 	ns, err := store.LoadNetwork()
 	if err != nil {
@@ -304,6 +317,7 @@ func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
 	}
 	state := stateFile{
 		ManagedZone:       meta.ManagedZone,
+		IdentityKeyPath:   meta.IdentityKeyPath,
 		RootPrivateKey:    meta.RootPrivateKey,
 		ZonePrivateKey:    meta.ZonePrivateKey,
 		Network:           ns,
@@ -314,11 +328,22 @@ func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
 		IPsecReconcile:    meta.IPsecReconcile,
 	}
 	if state.Network == nil || len(state.Network.Zones) == 0 {
-		return nil, errors.New("state file has no network")
+		if err := store.Close(); err != nil {
+			return nil, err
+		}
+		store = nil
+		state, err := createConfiguredBootstrapState(path, config)
+		if err != nil {
+			return nil, err
+		}
+		return state, nil
 	}
 	normalizeState(state.Network)
 	normalizeSyncPeers(&state)
-	if err := verifyConfiguredRootTrustAt(state.Network, trustRoot); err != nil {
+	if err := verifyConfiguredRootTrustAt(state.Network, config.TrustedRootPublicKey); err != nil {
+		return nil, err
+	}
+	if err := applyConfiguredIdentityOverlay(&state, config); err != nil {
 		return nil, err
 	}
 	return &state, nil
@@ -341,6 +366,7 @@ func saveStateAt(path string, state *stateFile) error {
 
 	meta := stateMeta{
 		ManagedZone:       state.ManagedZone,
+		IdentityKeyPath:   state.IdentityKeyPath,
 		RootPrivateKey:    state.RootPrivateKey,
 		ZonePrivateKey:    state.ZonePrivateKey,
 		SyncPeers:         state.SyncPeers,

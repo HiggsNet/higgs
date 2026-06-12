@@ -402,6 +402,17 @@
   - [x] 加入授权分级第一版：只做本机 Unix socket，socket 文件权限 `0600`；远程 token/mTLS 留给后续远程管理阶段
   - [x] 增加测试：daemon admin 事件覆盖 `delegate issue` / `join accept` / `delegate revoke` 串行落盘；root init control guard 覆盖已运行 daemon 不可重置；`admin-daemon-smoke` 覆盖 root/catofes daemon 签发 bundle 和撤销
 
+- [x] **4.0.1 Auto-join / 配置化身份初始化**
+  - [x] 增加配置项：`managed_zone` 声明本节点 Zone，`identity.key_path` 指向本节点 ED25519 私钥文件；配置文件只引用 key 文件路径，不直接内嵌私钥
+  - [x] daemon/CLI 启动加载 state 时支持配置化 identity overlay：先校验 key 文件自洽，再校验 key public 与 DB 中 `ZonePrivateKey`、`ManagedZone` authority 一致；不一致时 fail closed
+  - [x] 明确身份不可变：DB 一旦已有 `ManagedZone` / signing key，启动或 reload 发现 `managed_zone`、`identity.key_path` 或 key public 与 DB 不一致，直接拒绝并提示使用新的 `data_dir` / `state_path` 重新创建节点
+  - [x] reload 只允许验证身份配置仍与当前 DB/运行态一致，不支持热切换身份；身份变更等价于新节点，不做 DB 迁移、覆盖或半更新
+  - [x] 空 DB / 未初始化 DB 首次启动时，如果配置同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和 bootstrap peer，则自动创建最小 bootstrap state，不再要求人工 `join accept <bundle.json> <key.json>`
+  - [x] auto-join 节点启动后从 bootstrap peer 普通同步 root 到本 Zone 的 authority/delegation chain；只有验证 `trusted_root_public_key`、delegation chain 和本地 key public 均匹配后，才进入正常 record signing、endpoint publish、IPsec publish/reconcile
+  - [x] auto-join pending 时 daemon 日志直接打印可提交给父 Zone 管理节点的 `joinRequest` JSON，并提示可用 `higgs join request --from-config <request.json>` 保存同等内容；daemon 不引入 `join_request_path`，也不自动提交授权请求
+  - [x] 保留 `join request` / `delegate issue` 作为父节点授权入口；父节点签发 delegation 后写入自身 active state，从节点重连后通过同步获得授权信息，bundle 文件导入只作为 recovery/debug 兼容路径
+  - [x] 增加测试：空 DB auto-join happy path、key/public mismatch 拒绝启动、`managed_zone` mismatch 拒绝启动、reload 身份变化拒绝、已初始化 DB 与配置一致时可正常启动/reload
+
 - [x] **4.1 StrongSwan / XFRM 控制模块**
   - [x] 定义 overlay/provider 分层：`MeshPolicy` 只描述“选择哪些 peer 形成哪类 overlay”；`OverlayProvider` 负责把 desired link 渲染为 StrongSwan/WireGuard/VXLAN 等具体系统配置；Phase 4 只实现 `provider=strongswan`，但内部模型不得把 mesh 选择逻辑写死到 IPsec driver
   - [x] 定义最小 `TransportLinkSpec`：local zone、peer zone、overlay id、provider、transport id、IKE identity、认证材料引用、`ContactPoint` candidates、XFRM `if_id`、interface name、本地/远端 tunnel address、目标 network namespace

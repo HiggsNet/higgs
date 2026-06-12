@@ -1,0 +1,191 @@
+package main
+
+import (
+	"crypto/ed25519"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+)
+
+func createConfiguredBootstrapState(path string, config *appConfig) (*stateFile, error) {
+	if config == nil || config.ManagedZone == "" || config.Identity.KeyPath == "" || len(config.TrustedRootPublicKey) == 0 || len(config.Bootstrap) == 0 {
+		return nil, errors.New("state file has no network")
+	}
+	key, keyPath, err := configuredIdentityKey(config)
+	if err != nil {
+		return nil, err
+	}
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: higgscrypto.SupportedThreshold,
+		Keys: []zone.AuthorizedKey{{
+			Key: append(ed25519.PublicKey(nil), config.TrustedRootPublicKey...),
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
+			}},
+		}},
+	}
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	configureValidation(ns)
+	state := &stateFile{
+		ManagedZone:       config.ManagedZone,
+		IdentityKeyPath:   keyPath,
+		ZonePrivateKey:    append(ed25519.PrivateKey(nil), key.PrivateKey...),
+		Network:           ns,
+		SyncPeers:         make(map[string]syncPeerState),
+		LinkInstances:     make(map[string]linkInstanceState),
+		IPsecReconcile:    nil,
+		IPsecPortRecord:   nil,
+		IPsecTransportKey: nil,
+	}
+	if err := saveStateAt(path, state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+func applyConfiguredIdentityOverlay(state *stateFile, config *appConfig) error {
+	if state == nil || config == nil {
+		return nil
+	}
+	if config.ManagedZone == "" && config.Identity.KeyPath == "" {
+		return nil
+	}
+	if state.ManagedZone == "" {
+		return fmt.Errorf("configured identity requires initialized ManagedZone; use a new data_dir/state_path to create this node")
+	}
+	if config.ManagedZone != "" && state.ManagedZone != config.ManagedZone {
+		return fmt.Errorf("managed_zone %s does not match DB ManagedZone %s; identity is immutable, use a new data_dir/state_path to create a different node", config.ManagedZone, state.ManagedZone)
+	}
+	if config.Identity.KeyPath == "" {
+		return nil
+	}
+	key, keyPath, err := configuredIdentityKey(config)
+	if err != nil {
+		return err
+	}
+	if state.IdentityKeyPath != "" && state.IdentityKeyPath != keyPath {
+		return fmt.Errorf("identity.key_path %s does not match DB identity key path %s; identity is immutable, use a new data_dir/state_path to create a different node", keyPath, state.IdentityKeyPath)
+	}
+	if len(state.ZonePrivateKey) == ed25519.PrivateKeySize {
+		dbPub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+		if !equalPublicKey(dbPub, key.PublicKey) {
+			return fmt.Errorf("identity.key_path public key does not match DB ZonePrivateKey; identity is immutable, use a new data_dir/state_path to create a different node")
+		}
+	} else if len(state.ZonePrivateKey) != 0 {
+		return errors.New("DB ZonePrivateKey is invalid")
+	}
+	if state.Network != nil {
+		if zs := state.Network.Zones[state.ManagedZone]; zs != nil && zs.Authority != nil && !authorityHasKey(zs.Authority, key.PublicKey) {
+			return fmt.Errorf("identity.key_path public key does not match ManagedZone authority for %s; identity is immutable, use a new data_dir/state_path to create a different node", state.ManagedZone)
+		}
+	}
+	state.IdentityKeyPath = keyPath
+	state.ZonePrivateKey = append(ed25519.PrivateKey(nil), key.PrivateKey...)
+	return nil
+}
+
+func configuredIdentityKey(config *appConfig) (*privateKeyFile, string, error) {
+	if config == nil || config.Identity.KeyPath == "" {
+		return nil, "", errors.New("identity.key_path is required")
+	}
+	keyPath, err := canonicalIdentityKeyPath(config.Identity.KeyPath)
+	if err != nil {
+		return nil, "", err
+	}
+	key, err := readPrivateKeyFile(keyPath)
+	if err != nil {
+		return nil, "", err
+	}
+	return key, keyPath, nil
+}
+
+func canonicalIdentityKeyPath(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	clean := filepath.Clean(path)
+	abs, err := filepath.Abs(clean)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+func configuredJoinRequest(config *appConfig) (*joinRequest, error) {
+	if config == nil || config.ManagedZone == "" {
+		return nil, errors.New("managed_zone is required")
+	}
+	key, _, err := configuredIdentityKey(config)
+	if err != nil {
+		return nil, err
+	}
+	request := &joinRequest{
+		Version:   1,
+		Zone:      config.ManagedZone,
+		PublicKey: key.PublicKey,
+	}
+	if err := validateJoinRequest(request); err != nil {
+		return nil, err
+	}
+	return request, nil
+}
+
+func writeJoinRequestFromConfig(outPath string) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	request, err := configuredJoinRequest(rt.Config)
+	if err != nil {
+		return err
+	}
+	if err := writeJSONFile(outPath, 0o644, request); err != nil {
+		return err
+	}
+	fmt.Printf("wrote join request: %s\n", outPath)
+	return nil
+}
+
+func autoJoinPending(state *stateFile) bool {
+	if state == nil || state.Network == nil || state.ManagedZone == "" || state.ManagedZone == zone.RootZone {
+		return false
+	}
+	zs := state.Network.Zones[state.ManagedZone]
+	if zs == nil || zs.Authority == nil {
+		return true
+	}
+	if len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
+		return true
+	}
+	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	return !authorityHasKey(zs.Authority, pub)
+}
+
+func logAutoJoinPending(logger *appLogger, state *stateFile) {
+	if !autoJoinPending(state) || len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
+		return
+	}
+	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	request := joinRequest{Version: 1, Zone: state.ManagedZone, PublicKey: pub}
+	data, err := json.Marshal(&request)
+	if err != nil {
+		return
+	}
+	if logger == nil {
+		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, string(data), "higgs join request --from-config <request.json>")
+		return
+	}
+	logger.Info("auto_join", "pending", map[string]any{
+		"zone":         state.ManagedZone,
+		"join_request": string(data),
+		"hint":         "higgs join request --from-config <request.json>",
+	})
+}

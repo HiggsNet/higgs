@@ -133,6 +133,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		"addr":     transport.LocalAddr(),
 		"interval": d.Interval,
 	})
+	logAutoJoinPending(d.Log, d.Sync.State)
 
 	nextSync := d.Sync.now()
 	nextEndpointPublish := d.Sync.now()
@@ -491,9 +492,12 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
 		return fmt.Errorf("reload would change control socket path from %s to %s; restart daemon to switch control socket", d.ControlSocketPath, socketPath)
 	}
-	latest, err := loadStateAt(statePath, config.TrustedRootPublicKey)
+	latest, err := loadStateAtWithConfig(statePath, config)
 	if err != nil {
 		return err
+	}
+	if d.Sync.State != nil && d.Sync.State.IdentityKeyPath != "" && latest.IdentityKeyPath != "" && latest.IdentityKeyPath != d.Sync.State.IdentityKeyPath {
+		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", d.Sync.State.IdentityKeyPath, latest.IdentityKeyPath)
 	}
 	syncConfig := syncConfigFromAppConfig(config, latest)
 	var ipsecDrivers configuredIPsecDrivers

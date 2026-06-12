@@ -105,8 +105,17 @@ func cmdJoin() *cli.Command {
 			{
 				Name:      "request",
 				Usage:     "Create a join request for a zone",
-				UsageText: "higgs join request <zone> <key.json> <request.json>",
+				UsageText: "higgs join request <zone> <key.json> <request.json>\n   higgs join request --from-config <request.json>",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "from-config", Usage: "Create the request from managed_zone and identity.key_path in config.yaml"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Bool("from-config") {
+						if cmd.Args().Len() != 1 {
+							return cli.Exit("usage: higgs join request --from-config <request.json>", 1)
+						}
+						return writeJoinRequestFromConfig(cmd.Args().First())
+					}
 					if cmd.Args().Len() != 3 {
 						return cli.Exit("usage: higgs join request <zone> <key.json> <request.json>", 1)
 					}

@@ -22,7 +22,7 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 	}
 	state := sr.State
 	config := sr.App.Config
-	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() || len(state.ZonePrivateKey) == 0 {
+	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() || len(state.ZonePrivateKey) == 0 || autoJoinPending(state) {
 		return nil
 	}
 	if len(config.IPsec.LinkGroups) == 0 {

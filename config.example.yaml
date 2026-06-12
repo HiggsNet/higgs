@@ -1,4 +1,11 @@
 data_dir: .higgs
+# Optional Phase 4.0.1 identity overlay. For a new node, set managed_zone,
+# trusted_root_public_key, identity.key_path, and at least one bootstrap peer;
+# the first daemon/CLI state load creates a pending bootstrap state and prints
+# the join request instead of embedding a private key in config.yaml.
+# managed_zone: node-a.catofes.
+# identity:
+#   key_path: .higgs/identity.key.json
 peer_id: node-a
 listen_addr: 127.0.0.1:33434
 

@@ -1024,7 +1024,7 @@ func listenPortFromAddr(addr string) uint16 {
 func (sr *SyncRuntime) publishEndpointRecord() error {
 	state := sr.State
 	config := sr.Config
-	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 {
+	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 || autoJoinPending(state) {
 		return nil
 	}
 	if config != nil && config.DisableEndpointPublish {
