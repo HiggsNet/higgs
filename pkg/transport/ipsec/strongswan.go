@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -33,6 +35,70 @@ func BuildLoadConnMessage(spec TransportLinkSpec) (map[string]any, error) {
 	return map[string]any{spec.TransportID: conn}, nil
 }
 
+func (d StrongSwanDriver) buildLoadConnMessage(spec TransportLinkSpec) (map[string]any, error) {
+	msg, err := BuildLoadConnMessage(spec)
+	if err != nil {
+		return nil, err
+	}
+	if len(spec.PeerPublicKey) == 0 {
+		return msg, nil
+	}
+	// VICI load-conn accepts public keys as PEM encoded key blobs in the list
+	// value. Materialize the peer key to KeyDir for diagnostics, but embed the
+	// PEM content in the message. Also include the local public key so charon
+	// can bind the connection's local identity to the loaded private key.
+	if d.KeyDir != "" {
+		_, _ = d.materializePeerPublicKey(spec)
+	}
+	conn, ok := msg[spec.TransportID].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("connection %s missing from load-conn message", spec.TransportID)
+	}
+	if len(spec.LocalPrivateKey) > 0 {
+		localPub, err := DeriveTransportPublicKey(spec.LocalPrivateKey, spec.LocalPrivateKeyAlgorithm)
+		if err == nil {
+			local, ok := conn["local"].(map[string]any)
+			if !ok {
+				local = map[string]any{}
+				conn["local"] = local
+			}
+			pemBytes, err := PEMEncodePublicKey(localPub)
+			if err == nil {
+				local["pubkeys"] = []string{string(pemBytes)}
+			}
+		}
+	}
+	remote, ok := conn["remote"].(map[string]any)
+	if !ok {
+		remote = map[string]any{}
+		conn["remote"] = remote
+	}
+	pemBytes, err := PEMEncodePublicKey(spec.PeerPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("encode peer public key for load-conn: %w", err)
+	}
+	remote["pubkeys"] = []string{string(pemBytes)}
+	return msg, nil
+}
+
+func (d StrongSwanDriver) materializePeerPublicKey(spec TransportLinkSpec) (string, error) {
+	if d.KeyDir == "" {
+		return "", fmt.Errorf("strongswan driver KeyDir is required to materialize peer public key")
+	}
+	if err := os.MkdirAll(d.KeyDir, 0700); err != nil {
+		return "", fmt.Errorf("create key dir: %w", err)
+	}
+	path := filepath.Join(d.KeyDir, spec.TransportID+"-peer.pub.pem")
+	pemBytes, err := PEMEncodePublicKey(spec.PeerPublicKey)
+	if err != nil {
+		return "", fmt.Errorf("encode peer public key: %w", err)
+	}
+	if err := os.WriteFile(path, pemBytes, 0600); err != nil {
+		return "", fmt.Errorf("write peer public key: %w", err)
+	}
+	return path, nil
+}
+
 func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 	point, hasPoint := firstContactPoint(spec.ContactPoints)
 	if !hasPoint && spec.Direction != DirectionInbound {
@@ -43,13 +109,18 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 		return nil, err
 	}
 	childName := ChildSAName(spec)
+	localAddrs := []string{"%any"}
+	if spec.LocalAddress != "" {
+		localAddrs = []string{spec.LocalAddress}
+	}
 	conn := map[string]any{
 		"version":      StrongSwanIKEVersion,
+		"local_addrs":  localAddrs,
 		"remote_addrs": []string{remoteAddr},
 		"encap":        "yes",
 		"local": map[string]any{
 			"auth": StrongSwanAuthPubkey,
-			"id":   string(spec.LocalZone),
+			"id":   localIdentity(spec),
 		},
 		"remote": map[string]any{
 			"auth": StrongSwanAuthPubkey,
@@ -74,11 +145,12 @@ func ChildSAName(spec TransportLinkSpec) string {
 
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 	return map[string]any{
-		"mode":      StrongSwanChildMode,
-		"local_ts":  broadTrafficSelectors(spec.LocalTunnelAddr),
-		"remote_ts": broadTrafficSelectors(spec.PeerTunnelAddr),
-		"if_id_in":  fmt.Sprintf("%d", spec.XFRMIfID),
-		"if_id_out": fmt.Sprintf("%d", spec.XFRMIfID),
+		"mode":         StrongSwanChildMode,
+		"local_ts":     broadTrafficSelectors(spec.LocalTunnelAddr),
+		"remote_ts":    broadTrafficSelectors(spec.PeerTunnelAddr),
+		"if_id_in":     fmt.Sprintf("%d", spec.XFRMIfID),
+		"if_id_out":    fmt.Sprintf("%d", spec.XFRMIfID),
+		"start_action": "start",
 	}
 }
 
@@ -123,10 +195,14 @@ func chooseIKEPort(point ContactPoint) uint16 {
 	return DefaultIKEPort
 }
 
-func remoteIdentity(spec TransportLinkSpec) string {
+func localIdentity(spec TransportLinkSpec) string {
 	if spec.IKEIdentity != "" {
 		return spec.IKEIdentity
 	}
+	return string(spec.LocalZone)
+}
+
+func remoteIdentity(spec TransportLinkSpec) string {
 	return string(spec.PeerZone)
 }
 

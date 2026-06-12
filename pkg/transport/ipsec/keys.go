@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"time"
@@ -105,11 +106,15 @@ func generateTransportPrivateKey(algorithm string) (*TransportPrivateKey, error)
 		if err != nil {
 			return nil, err
 		}
+		privDER, err := x509.MarshalPKCS8PrivateKey(ed25519.PrivateKey(priv))
+		if err != nil {
+			return nil, err
+		}
 		return &TransportPrivateKey{
 			Kind:       TransportKeyRawPublicKey,
 			Algorithm:  AlgorithmEd25519,
 			PublicKey:  append([]byte(nil), pub...),
-			PrivateKey: append([]byte(nil), priv...),
+			PrivateKey: privDER,
 		}, nil
 	case AlgorithmECDSAP256:
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -120,7 +125,7 @@ func generateTransportPrivateKey(algorithm string) (*TransportPrivateKey, error)
 		if err != nil {
 			return nil, err
 		}
-		privDER, err := x509.MarshalECPrivateKey(priv)
+		privDER, err := x509.MarshalPKCS8PrivateKey(priv)
 		if err != nil {
 			return nil, err
 		}
@@ -130,6 +135,83 @@ func generateTransportPrivateKey(algorithm string) (*TransportPrivateKey, error)
 			PublicKey:  pubDER,
 			PrivateKey: privDER,
 		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported transport key algorithm %q", algorithm)
+	}
+}
+
+// PEMEncodePrivateKey encodes a DER private key as PEM.
+// It uses "EC PRIVATE KEY" for SEC1 ECDSA keys and "PRIVATE KEY" for PKCS#8.
+func PEMEncodePrivateKey(der []byte) ([]byte, error) {
+	if len(der) == 0 {
+		return nil, fmt.Errorf("empty private key DER")
+	}
+	blockType := "PRIVATE KEY"
+	if _, err := x509.ParseECPrivateKey(der); err == nil {
+		blockType = "EC PRIVATE KEY"
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der}), nil
+}
+
+// PEMEncodePublicKey encodes a DER public key as PKIX PEM.
+func PEMEncodePublicKey(der []byte) ([]byte, error) {
+	if len(der) == 0 {
+		return nil, fmt.Errorf("empty public key DER")
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
+}
+
+// KeyTypeForAlgorithm returns the StrongSwan VICI load-key type for an algorithm.
+func KeyTypeForAlgorithm(algorithm string) string {
+	switch algorithm {
+	case AlgorithmEd25519:
+		return "ed25519"
+	case AlgorithmECDSAP256:
+		return "ecdsa"
+	default:
+		return "any"
+	}
+}
+
+// KeyTypeAny returns the StrongSwan VICI load-key type that lets charon auto-detect the key format.
+func KeyTypeAny() string { return "any" }
+
+// DeriveTransportPublicKey extracts the public key from a PKCS#8 or SEC1
+// private key for the supported transport algorithms.
+func DeriveTransportPublicKey(privateKey []byte, algorithm string) ([]byte, error) {
+	if len(privateKey) == 0 {
+		return nil, fmt.Errorf("empty private key")
+	}
+	switch algorithm {
+	case AlgorithmEd25519:
+		key, err := x509.ParsePKCS8PrivateKey(privateKey)
+		if err != nil {
+			return nil, fmt.Errorf("parse ed25519 private key: %w", err)
+		}
+		priv, ok := key.(ed25519.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("unexpected ed25519 private key type %T", key)
+		}
+		pub, ok := priv.Public().(ed25519.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("unexpected ed25519 public key type %T", priv.Public())
+		}
+		return []byte(pub), nil
+	case AlgorithmECDSAP256:
+		key, err := x509.ParsePKCS8PrivateKey(privateKey)
+		if err != nil {
+			// Fallback to SEC1 parsing.
+			ecKey, err2 := x509.ParseECPrivateKey(privateKey)
+			if err2 != nil {
+				return nil, fmt.Errorf("parse ecdsa private key: %w", err)
+			}
+			key = ecKey
+		}
+		priv, ok := key.(*ecdsa.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("unexpected ecdsa private key type %T", key)
+		}
+		return x509.MarshalPKIXPublicKey(&priv.PublicKey)
 	default:
 		return nil, fmt.Errorf("unsupported transport key algorithm %q", algorithm)
 	}

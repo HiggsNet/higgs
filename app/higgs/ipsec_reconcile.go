@@ -26,6 +26,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			d.recordIPsecReconcileError(now.Unix(), err)
 			return err
 		}
+		plan.Desired = injectIPsecKeyMaterial(d.Sync.State, plan.Desired)
 	}
 	ipsecDriver, xfrmDriver := d.ipsecDrivers()
 	sas, err := ipsecDriver.ListSAs(ctx)
@@ -252,6 +253,31 @@ func revokedLinkPeers(state *stateFile, now time.Time) map[zone.ZonePath]bool {
 		if state.Network.IsZoneRevoked(inst.PeerZone, now) {
 			out[inst.PeerZone] = true
 		}
+	}
+	return out
+}
+
+func injectIPsecKeyMaterial(state *stateFile, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
+	if state == nil {
+		return desired
+	}
+	localKey := state.IPsecTransportKey
+	out := make([]ipsec.TransportLinkSpec, len(desired))
+	for i, spec := range desired {
+		if localKey != nil && len(localKey.PrivateKey) > 0 {
+			spec.LocalPrivateKey = append([]byte(nil), localKey.PrivateKey...)
+			spec.LocalPrivateKeyAlgorithm = localKey.Algorithm
+		}
+		if peerZone := state.Network.Zones[spec.PeerZone]; peerZone != nil {
+			if record := peerZone.Records[ipsec.RecordKeyTransportKey]; record != nil {
+				if keyRecord, err := ipsec.ParseTransportKeyRecord(record); err == nil {
+					if pub, err := ipsec.DecodeTransportPublicKey(*keyRecord); err == nil {
+						spec.PeerPublicKey = append([]byte(nil), pub...)
+					}
+				}
+			}
+		}
+		out[i] = spec
 	}
 	return out
 }

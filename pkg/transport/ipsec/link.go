@@ -79,7 +79,20 @@ type TransportLinkSpec struct {
 	InterfaceName   string
 	LocalTunnelAddr netip.Addr
 	PeerTunnelAddr  netip.Addr
-	NetNS           string
+	// LocalAddress is the local underlay address used for the IKE endpoint.
+	// If empty, the IPsec daemon binds to any address.
+	LocalAddress string
+	NetNS        string
+
+	// LocalPrivateKey is the raw private key material for the local transport
+	// identity. The driver is responsible for loading it into the IPsec daemon.
+	LocalPrivateKey []byte
+	// LocalPrivateKeyAlgorithm is one of AlgorithmEd25519 or AlgorithmECDSAP256.
+	LocalPrivateKeyAlgorithm string
+	// PeerPublicKey is the raw public key material for the peer transport
+	// identity. The driver materializes it as needed (e.g. a PEM file for
+	// StrongSwan raw-public-key authentication).
+	PeerPublicKey []byte
 }
 
 type TransportLinkOptions struct {

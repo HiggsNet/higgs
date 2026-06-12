@@ -451,8 +451,11 @@ func TestGenerateTransportKeyRecordUsesIndependentEd25519Key(t *testing.T) {
 	if key.Algorithm != AlgorithmEd25519 || record.Algorithm != AlgorithmEd25519 {
 		t.Fatalf("algorithm = %s / %s", key.Algorithm, record.Algorithm)
 	}
-	if len(key.PrivateKey) != ed25519.PrivateKeySize {
-		t.Fatalf("private key size = %d", len(key.PrivateKey))
+	if len(key.PrivateKey) == 0 {
+		t.Fatalf("private key is empty")
+	}
+	if _, err := PEMEncodePrivateKey(key.PrivateKey); err != nil {
+		t.Fatalf("PEMEncodePrivateKey: %v", err)
 	}
 	publicKey, err := DecodeTransportPublicKey(*record)
 	if err != nil {

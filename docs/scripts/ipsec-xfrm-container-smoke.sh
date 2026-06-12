@@ -48,6 +48,8 @@ RUN apt-get update \
     iputils-ping \
     strongswan-swanctl \
     strongswan-charon \
+    libstrongswan-standard-plugins \
+    libstrongswan-extra-plugins \
     util-linux \
   && rm -rf /var/lib/apt/lists/*
 

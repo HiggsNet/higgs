@@ -28,6 +28,18 @@ HIGGS_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverLoadsKeyAndConnection$' -count=1
+
+HIGGS_IPSEC_XFRM_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonReconcileUsesSystemXFRMDriverSmoke$' -count=1
 
-printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + daemon reconcile system apply)\n'
+HIGGS_IPSEC_XFRM_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverIKEBringupSmoke$' -count=1
+
+printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply)\n'
