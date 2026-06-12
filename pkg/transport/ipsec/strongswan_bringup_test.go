@@ -234,6 +234,251 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	t.Logf("IKE bring-up succeeded; bidirectional tunnel ping passed")
 }
 
+// TestStrongSwanBidirectionalTakeoverSmoke exercises the Phase 4.5 takeover
+// path with real StrongSwan/VICI/XFRM. The primary side is loaded as a
+// responder-only trap to model "primary outbound cannot initiate, but inbound
+// IKE is still reachable"; the secondary starts in standby, then reconcile
+// promotes it to takeover and establishes the SA.
+func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UTC().Format("20060102150405")
+	nsA := "higgs-take-a-" + suffix
+	nsB := "higgs-take-b-" + suffix
+	viciA := "/tmp/charon-" + nsA + ".vici"
+	viciB := "/tmp/charon-" + nsB + ".vici"
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", nsA).Run()
+		_ = exec.Command("ip", "netns", "delete", nsB).Run()
+		_ = os.Remove(viciA)
+		_ = os.Remove(viciB)
+	})
+
+	runIP(t, ctx, "netns", "add", nsA)
+	runIP(t, ctx, "netns", "add", nsB)
+	runIP(t, ctx, "link", "add", "hgtakea", "type", "veth", "peer", "name", "hgtakeb")
+	runIP(t, ctx, "link", "set", "hgtakea", "netns", nsA)
+	runIP(t, ctx, "link", "set", "hgtakeb", "netns", nsB)
+	for _, args := range [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.5/30", "dev", "hgtakea"},
+		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.6/30", "dev", "hgtakeb"},
+		{"netns", "exec", nsA, "ip", "link", "set", "hgtakea", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "hgtakeb", "up"},
+	} {
+		runIP(t, ctx, args...)
+	}
+
+	confA, err := writeStrongSwanConf(viciA)
+	if err != nil {
+		t.Fatalf("write strongswan.conf A: %v", err)
+	}
+	confB, err := writeStrongSwanConf(viciB)
+	if err != nil {
+		t.Fatalf("write strongswan.conf B: %v", err)
+	}
+	piddirA, err := os.MkdirTemp("", "higgs-take-piddir-a-*")
+	if err != nil {
+		t.Fatalf("create piddir A: %v", err)
+	}
+	piddirB, err := os.MkdirTemp("", "higgs-take-piddir-b-*")
+	if err != nil {
+		t.Fatalf("create piddir B: %v", err)
+	}
+	logA, err := os.CreateTemp("", "higgs-take-charon-a-*.log")
+	if err != nil {
+		t.Fatalf("create log A: %v", err)
+	}
+	logB, err := os.CreateTemp("", "higgs-take-charon-b-*.log")
+	if err != nil {
+		t.Fatalf("create log B: %v", err)
+	}
+
+	charonA := startCharonInNetNS(ctx, t, nsA, piddirA, confA, logA)
+	charonB := startCharonInNetNS(ctx, t, nsB, piddirB, confB, logB)
+	defer func() {
+		_ = charonA.Process.Kill()
+		_ = charonB.Process.Kill()
+		_ = charonA.Wait()
+		_ = charonB.Wait()
+		_ = os.Remove(confA)
+		_ = os.Remove(confB)
+		_ = os.RemoveAll(piddirA)
+		_ = os.RemoveAll(piddirB)
+		_ = logA.Close()
+		_ = logB.Close()
+		_ = os.Remove(logA.Name())
+		_ = os.Remove(logB.Name())
+	}()
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		_ = logA.Sync()
+		_ = logB.Sync()
+		if data, err := os.ReadFile(logA.Name()); err == nil {
+			t.Logf("--- takeover charon A log ---\n%s", string(data))
+		}
+		if data, err := os.ReadFile(logB.Name()); err == nil {
+			t.Logf("--- takeover charon B log ---\n%s", string(data))
+		}
+	}()
+
+	clientA, err := waitForVICI(ctx, viciA)
+	if err != nil {
+		t.Fatalf("connect to charon A VICI: %v", err)
+	}
+	defer clientA.Close()
+	clientB, err := waitForVICI(ctx, viciB)
+	if err != nil {
+		t.Fatalf("connect to charon B VICI: %v", err)
+	}
+	defer clientB.Close()
+
+	localPrivA, localPubA, err := generateECDSAKeyPair()
+	if err != nil {
+		t.Fatalf("generate key A: %v", err)
+	}
+	localPrivB, localPubB, err := generateECDSAKeyPair()
+	if err != nil {
+		t.Fatalf("generate key B: %v", err)
+	}
+
+	const ifID = uint32(424245)
+	iface := "hgstake0"
+	transportA := "ipsec-takeover-a"
+	transportB := "ipsec-takeover-b"
+	group := LinkGroupSpec{
+		ID:                "main",
+		Direction:         DirectionBidirectional,
+		Provider:          ProviderStrongSwan,
+		TunnelAddressSpec: TunnelAddressSpec{Mode: TunnelAddressDerivedPool, Family: FamilyIPv6, Pool: netip.MustParsePrefix("fd00:4545::/64")},
+	}
+	addrA, addrB, err := group.DeriveTunnelAddresses("node-a.", "node-b.", 0)
+	if err != nil {
+		t.Fatalf("derive tunnel addresses: %v", err)
+	}
+
+	specA := TransportLinkSpec{
+		LocalZone:                "node-a.",
+		PeerZone:                 "node-b.",
+		OverlayID:                group.ID,
+		Provider:                 ProviderStrongSwan,
+		TransportID:              transportA,
+		Direction:                DirectionBidirectional,
+		IKEIdentity:              "node-a.",
+		LocalAddress:             "192.0.2.5",
+		ContactPoints:            []ContactPoint{{Address: "192.0.2.6", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
+		XFRMIfID:                 ifID,
+		InterfaceName:            iface,
+		LocalTunnelAddr:          addrA,
+		PeerTunnelAddr:           addrB,
+		NetNS:                    nsA,
+		LocalPrivateKey:          localPrivA,
+		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
+		PeerPublicKey:            localPubB,
+		InitiatorRole:            InitiatorRolePrimary,
+	}
+	specAInbound := specA
+	specAInbound.Direction = DirectionInbound
+	specAInbound.ContactPoints = nil
+	specB := TransportLinkSpec{
+		LocalZone:                "node-b.",
+		PeerZone:                 "node-a.",
+		OverlayID:                group.ID,
+		Provider:                 ProviderStrongSwan,
+		TransportID:              transportB,
+		Direction:                DirectionBidirectional,
+		IKEIdentity:              "node-b.",
+		LocalAddress:             "192.0.2.6",
+		ContactPoints:            []ContactPoint{{Address: "192.0.2.5", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
+		XFRMIfID:                 ifID,
+		InterfaceName:            iface,
+		LocalTunnelAddr:          addrB,
+		PeerTunnelAddr:           addrA,
+		NetNS:                    nsB,
+		LocalPrivateKey:          localPrivB,
+		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
+		PeerPublicKey:            localPubA,
+		InitiatorRole:            InitiatorRoleSecondaryStandby,
+	}
+
+	ipsecA := &StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	ipsecB := &StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	xfrmA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: false})
+	xfrmB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: false})
+
+	if _, err := ApplyTransportLink(ctx, ipsecA, xfrmA, specAInbound, NetNSSpec{Kind: NetNSName, Name: nsA}); err != nil {
+		t.Fatalf("apply primary responder config: %v", err)
+	}
+
+	base := time.Now()
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{specB},
+		Instances:    map[string]LinkInstance{},
+		Now:          base,
+		Roles:        map[string]string{transportB: InitiatorRoleSecondaryStandby},
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Reason != "bidirectional_standby" {
+		t.Fatalf("expected secondary standby, got %+v", result.Actions)
+	}
+	instB := result.Instances[transportB]
+
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{specB},
+		Instances:    map[string]LinkInstance{instB.ID: instB},
+		Now:          base.Add(2 * time.Minute),
+		Roles:        map[string]string{transportB: InitiatorRoleSecondaryStandby},
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionCreate || result.Actions[0].Reason != "secondary_takeover" {
+		t.Fatalf("expected secondary takeover create, got %+v", result.Actions)
+	}
+	if _, err := ApplyReconcileAction(ctx, ipsecB, xfrmB, result.Actions[0], NetNSSpec{Kind: NetNSName, Name: nsB}); err != nil {
+		t.Fatalf("apply secondary takeover: %v", err)
+	}
+
+	if err := waitForSA(ctx, clientA, transportA); err != nil {
+		t.Fatalf("wait for takeover SA on primary responder: %v", err)
+	}
+	if err := waitForSA(ctx, clientB, transportB); err != nil {
+		t.Fatalf("wait for takeover SA on secondary: %v", err)
+	}
+
+	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
+	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping6", "-c", "1", "-W", "3", addrA.String()); err != nil {
+		t.Fatalf("takeover tunnel ping B->A failed: %v\n%s", err, string(out))
+	}
+
+	sasA, err := ipsecA.ListSAs(ctx)
+	if err != nil {
+		t.Fatalf("list SAs on primary: %v", err)
+	}
+	recovered := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{specA},
+		Instances: map[string]LinkInstance{},
+		SAs:       sasA,
+		Now:       time.Now(),
+		Roles:     map[string]string{transportA: InitiatorRolePrimary},
+	})
+	if len(recovered.Actions) != 1 || recovered.Actions[0].Action != ReconcileActionAdopt {
+		t.Fatalf("primary recovery should adopt existing SA, got %+v", recovered.Actions)
+	}
+	if inst := recovered.Instances[transportA]; inst.ActualState != LinkStateUp {
+		t.Fatalf("primary recovered instance = %+v", inst)
+	}
+
+	t.Logf("bidirectional takeover smoke succeeded; secondary established SA and primary recovered by adopt")
+}
+
 func generateECDSAKeyPair() (privDER, pubDER []byte, err error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

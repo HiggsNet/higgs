@@ -641,7 +641,8 @@
     - [x] dry-run：primary 连续失败并超过 takeover delay 后，secondary 生成 takeover create/repair action；成功观测 SA 后 adopt 为 `up/converged`。
     - [x] dry-run：takeover 失败进入 cooldown；cooldown 内不反复 apply。
     - [x] dry-run：revocation 不触发 takeover。
-    - [ ] root/system smoke：模拟 primary 侧 outbound 被防火墙阻断或 NAT 映射异常，验证 secondary 在 delay 后接管并建立 IKE_SA/CHILD_SA，tunnel ping 恢复；primary 恢复后 adopt 现有 SA，不抢回导致重连。留到具备 root/StrongSwan 环境时运行。
+    - [x] root/system smoke：模拟 primary 侧 outbound 不可主动拨号但 responder 仍可达，验证 secondary 在 delay 后接管并建立 IKE_SA/CHILD_SA，tunnel ping 恢复；primary 恢复后 adopt 现有 SA，不抢回导致重连。
+      - 2026-06-12 已加入 `TestStrongSwanBidirectionalTakeoverSmoke` 并接入 `make ipsec-xfrm-container-smoke`：container 内真实 netns/charon/VICI/XFRM 跑通 secondary takeover、`list-sas` adopt 和 tunnel ping；同时修正 planner 中 `DirectionInbound` 必须生成 responder/trap desired spec 的边界，避免真实 StrongSwan primary 没有对端 responder 配置。
 
 ## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
 

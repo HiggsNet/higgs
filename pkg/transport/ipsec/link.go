@@ -653,9 +653,10 @@ func ShouldInitiate(local, peer zone.ZonePath, direction, remoteAccept string) b
 	}
 }
 
-// InitiatorRoleForPeer returns the local initiator role for a peer link.
-// It returns an empty string when the local node should not participate in
-// this link at all (accept intent mismatch).
+// InitiatorRoleForPeer returns the local runtime role for a peer link.
+// DirectionInbound still participates by loading a responder/trap config; it
+// just never actively initiates. An empty role means policy/accept intent says
+// the local node should not participate in this link at all.
 func InitiatorRoleForPeer(local, peer zone.ZonePath, direction, remoteAccept string) string {
 	switch direction {
 	case DirectionOutbound:
@@ -663,7 +664,7 @@ func InitiatorRoleForPeer(local, peer zone.ZonePath, direction, remoteAccept str
 			return InitiatorRolePrimary
 		}
 	case DirectionInbound:
-		return ""
+		return InitiatorRolePrimary
 	case DirectionBidirectional:
 		switch remoteAccept {
 		case AcceptInbound:

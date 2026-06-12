@@ -112,6 +112,33 @@ func TestPlanTransportLinksHonorsBidirectionalTieBreakAndInboundAccept(t *testin
 	}
 }
 
+func TestPlanTransportLinksKeepsInboundResponderDesired(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-local", Source: SourceLocal, Address: "192.168.8.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionInbound}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 || plan.Desired[0].PeerZone != "node-b.catofes." {
+		t.Fatalf("inbound responder desired = %+v skips=%+v, want one", plan.Desired, plan.Skipped)
+	}
+	spec := plan.Desired[0]
+	if spec.Direction != DirectionInbound || len(spec.ContactPoints) != 0 {
+		t.Fatalf("inbound responder spec = %+v, want trap-style spec without contact points", spec)
+	}
+	if plan.Roles[spec.TransportID] != InitiatorRolePrimary {
+		t.Fatalf("inbound responder role = %q, want apply-capable role", plan.Roles[spec.TransportID])
+	}
+}
+
 func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

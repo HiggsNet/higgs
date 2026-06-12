@@ -46,6 +46,12 @@ HIGGS_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanBidirectionalTakeoverSmoke$' -count=1
+
+HIGGS_IPSEC_XFRM_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupSmoke$' -count=1
 
 HIGGS_IPSEC_XFRM_SMOKE=1 \
@@ -67,7 +73,7 @@ HIGGS_IPSEC_XFRM_SMOKE=1 \
   "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke$' -count=1
 
 if [ "${HIGGS_IPSEC_XFRM_SMOKE_CONTAINER:-0}" = "1" ]; then
-  printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping SKIPPED in container + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
+  printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping SKIPPED in container + StrongSwan key/conn load + StrongSwan IKE bring-up + StrongSwan bidirectional takeover + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
 else
-  printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
+  printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + StrongSwan bidirectional takeover + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
 fi
