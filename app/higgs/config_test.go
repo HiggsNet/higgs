@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -572,6 +573,60 @@ overlays:
 `
 	if err := parseConfigYAML(input, config); err == nil {
 		t.Fatalf("parseConfigYAML should reject mismatched family/pool")
+	}
+}
+
+func TestParseConfigYAMLIPsecPortRotation(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  port_mode: range
+  port_range:
+    from: 30000
+    to: 30099
+  port_rotate_interval: 24h
+  port_previous_grace: 10m
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.IPsec.PortMode != ipsec.PortModeRange {
+		t.Fatalf("PortMode = %q, want range", config.IPsec.PortMode)
+	}
+	if config.IPsec.PortRange.From != 30000 || config.IPsec.PortRange.To != 30099 {
+		t.Fatalf("PortRange = %+v", config.IPsec.PortRange)
+	}
+	if config.IPsec.PortRotateInterval != 24*time.Hour {
+		t.Fatalf("PortRotateInterval = %s", config.IPsec.PortRotateInterval)
+	}
+	if config.IPsec.PortPreviousGrace != 10*time.Minute {
+		t.Fatalf("PortPreviousGrace = %s", config.IPsec.PortPreviousGrace)
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidPortMode(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  port_mode: dynamic
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("parseConfigYAML should reject invalid port_mode")
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidPortRange(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  port_mode: range
+  port_range:
+    from: 40000
+    to: 30000
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("parseConfigYAML should reject invalid port_range")
 	}
 }
 

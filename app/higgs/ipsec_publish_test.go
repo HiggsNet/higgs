@@ -86,6 +86,73 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	}
 }
 
+func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(5000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = "198.51.100.10:4500"
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	appConfig.IPsec.PortMode = ipsec.PortModeRange
+	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
+	appConfig.IPsec.PortRotateInterval = time.Hour
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords: %v", err)
+	}
+	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord: %v", err)
+	}
+	if first.Current.Generation != 1 {
+		t.Fatalf("first generation = %d, want 1", first.Current.Generation)
+	}
+	if state.IPsecPortRecord == nil || state.IPsecPortRecord.Generation != 1 {
+		t.Fatalf("port state not persisted")
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	rt.Clock = func() time.Time { return now.Add(30 * time.Minute) }
+	sr.State = latest
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords(second): %v", err)
+	}
+	second, err := ipsec.ParsePortRecord(latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(second): %v", err)
+	}
+	if second.Current.Generation != 1 {
+		t.Fatalf("generation advanced within interval = %d", second.Current.Generation)
+	}
+
+	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords(third): %v", err)
+	}
+	third, err := ipsec.ParsePortRecord(latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(third): %v", err)
+	}
+	if third.Current.Generation != 2 {
+		t.Fatalf("generation = %d, want 2", third.Current.Generation)
+	}
+	if len(third.Previous) == 0 || third.Previous[0].Generation != 1 {
+		t.Fatalf("previous grace missing: %+v", third.Previous)
+	}
+}
+
 func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."

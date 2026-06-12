@@ -9,6 +9,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 const defaultStatePath = ".higgs.db"
@@ -21,6 +22,7 @@ type stateFile struct {
 	Network           *zone.NetworkState `json:"network"`
 	SyncPeers         map[string]syncPeerState
 	IPsecTransportKey *ipsecTransportKeyState
+	IPsecPortRecord   *ipsecPortRecordState
 	LinkInstances     map[string]linkInstanceState
 	IPsecReconcile    *ipsecReconcileState
 }
@@ -31,6 +33,7 @@ type stateMeta struct {
 	ZonePrivateKey    ed25519.PrivateKey           `json:"zone_private_key"`
 	SyncPeers         map[string]syncPeerState     `json:"sync_peers,omitempty"`
 	IPsecTransportKey *ipsecTransportKeyState      `json:"ipsec_transport_key,omitempty"`
+	IPsecPortRecord   *ipsecPortRecordState        `json:"ipsec_port_record,omitempty"`
 	LinkInstances     map[string]linkInstanceState `json:"link_instances,omitempty"`
 	IPsecReconcile    *ipsecReconcileState         `json:"ipsec_reconcile,omitempty"`
 }
@@ -46,24 +49,37 @@ type ipsecTransportKeyState struct {
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
 }
 
+type ipsecPortRecordState struct {
+	Mode       string           `json:"mode,omitempty"`
+	Range      *ipsec.PortRange `json:"range,omitempty"`
+	Generation uint64           `json:"generation,omitempty"`
+	UpdatedAt  int64            `json:"updated_at,omitempty"`
+}
+
 type linkInstanceState struct {
-	ID              string         `json:"id"`
-	GroupID         string         `json:"group_id,omitempty"`
-	PeerZone        zone.ZonePath  `json:"peer_zone"`
-	TransportKind   string         `json:"transport_kind,omitempty"`
-	TransportID     string         `json:"transport_id,omitempty"`
-	DesiredSpecHash string         `json:"desired_spec_hash,omitempty"`
-	ActualState     string         `json:"actual_state,omitempty"`
-	InterfaceName   string         `json:"interface_name,omitempty"`
-	XFRMIfID        uint32         `json:"xfrm_if_id,omitempty"`
-	IKEName         string         `json:"ike_name,omitempty"`
-	ChildSAName     string         `json:"child_sa_name,omitempty"`
-	Endpoint        string         `json:"endpoint,omitempty"`
-	LastError       string         `json:"last_error,omitempty"`
-	FailureCount    int            `json:"failure_count,omitempty"`
-	BackoffUntil    int64          `json:"backoff_until,omitempty"`
-	LastTransition  int64          `json:"last_transition,omitempty"`
-	Owner           linkOwnerState `json:"owner,omitempty"`
+	ID                string         `json:"id"`
+	GroupID           string         `json:"group_id,omitempty"`
+	PeerZone          zone.ZonePath  `json:"peer_zone"`
+	TransportKind     string         `json:"transport_kind,omitempty"`
+	TransportID       string         `json:"transport_id,omitempty"`
+	DesiredSpecHash   string         `json:"desired_spec_hash,omitempty"`
+	ActualState       string         `json:"actual_state,omitempty"`
+	InterfaceName     string         `json:"interface_name,omitempty"`
+	XFRMIfID          uint32         `json:"xfrm_if_id,omitempty"`
+	IKEName           string         `json:"ike_name,omitempty"`
+	ChildSAName       string         `json:"child_sa_name,omitempty"`
+	Endpoint          string         `json:"endpoint,omitempty"`
+	RemoteGeneration  uint64         `json:"remote_generation,omitempty"`
+	StagedGeneration  uint64         `json:"staged_generation,omitempty"`
+	RotatePhase       string         `json:"rotate_phase,omitempty"`
+	StagedIKEName     string         `json:"staged_ike_name,omitempty"`
+	StagedChildSAName string         `json:"staged_child_sa_name,omitempty"`
+	RotateDeadline    int64          `json:"rotate_deadline,omitempty"`
+	LastError         string         `json:"last_error,omitempty"`
+	FailureCount      int            `json:"failure_count,omitempty"`
+	BackoffUntil      int64          `json:"backoff_until,omitempty"`
+	LastTransition    int64          `json:"last_transition,omitempty"`
+	Owner             linkOwnerState `json:"owner,omitempty"`
 }
 
 type linkOwnerState struct {
@@ -293,6 +309,7 @@ func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
 		Network:           ns,
 		SyncPeers:         meta.SyncPeers,
 		IPsecTransportKey: meta.IPsecTransportKey,
+		IPsecPortRecord:   meta.IPsecPortRecord,
 		LinkInstances:     meta.LinkInstances,
 		IPsecReconcile:    meta.IPsecReconcile,
 	}
@@ -328,6 +345,7 @@ func saveStateAt(path string, state *stateFile) error {
 		ZonePrivateKey:    state.ZonePrivateKey,
 		SyncPeers:         state.SyncPeers,
 		IPsecTransportKey: state.IPsecTransportKey,
+		IPsecPortRecord:   state.IPsecPortRecord,
 		LinkInstances:     state.LinkInstances,
 		IPsecReconcile:    state.IPsecReconcile,
 	}

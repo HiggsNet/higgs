@@ -108,6 +108,89 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 }
 
+func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4000, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:                 "main",
+		Provider:           ipsec.ProviderStrongSwan,
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+		Direction:          ipsec.DirectionOutbound,
+		AddressSourceOrder: []string{ipsec.SourceManualAddress},
+		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.notifyStateChanged()
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	var inst linkInstanceState
+	for _, v := range latest.LinkInstances {
+		inst = v
+	}
+	if inst.ActualState != ipsec.LinkStateConnecting {
+		t.Fatalf("initial state = %q, want connecting", inst.ActualState)
+	}
+
+	// Simulate peer publishing generation 2 port record.
+	state = latest
+	zs := state.Network.Zones["node-b.catofes."]
+	zs.Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, "node-b.catofes.", ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
+		Version: 1,
+		Mode:    ipsec.PortModeFixed,
+		Current: &ipsec.PortSelection{
+			Generation: 2,
+			IKE:        ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort},
+			NATT:       ipsec.PortBinding{Advertised: 4501},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState(rotate): %v", err)
+	}
+	service.setState(state)
+	service.notifyStateChanged()
+
+	rotated, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(rotate): %v", err)
+	}
+	for _, v := range rotated.LinkInstances {
+		inst = v
+	}
+	if inst.RotatePhase != ipsec.RotatePhaseTestingNew {
+		t.Fatalf("rotate phase = %q, want testing_new", inst.RotatePhase)
+	}
+	if inst.StagedGeneration != 2 {
+		t.Fatalf("staged generation = %d, want 2", inst.StagedGeneration)
+	}
+	if inst.StagedIKEName != ipsec.RotateConnectionName(inst.TransportID, 2) {
+		t.Fatalf("staged ike name = %q", inst.StagedIKEName)
+	}
+	foundPrepare := false
+	for _, action := range rotated.IPsecReconcile.Actions {
+		if action.Action == ipsec.ReconcileActionPrepareRotate {
+			foundPrepare = true
+		}
+	}
+	if !foundPrepare {
+		t.Fatalf("expected prepare_rotate action, got %+v", rotated.IPsecReconcile.Actions)
+	}
+}
+
 func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
 		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system XFRM smoke")

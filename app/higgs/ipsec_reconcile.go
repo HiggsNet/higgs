@@ -43,7 +43,9 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	})
 	for _, action := range result.Actions {
 		switch action.Action {
-		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionTeardown:
+		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair,
+			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate,
+			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			netns := netnsForAction(action, groups)
 			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
@@ -183,22 +185,28 @@ func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.Link
 	out := make(map[string]ipsec.LinkInstance, len(in))
 	for id, inst := range in {
 		out[id] = ipsec.LinkInstance{
-			ID:              inst.ID,
-			GroupID:         inst.GroupID,
-			PeerZone:        inst.PeerZone,
-			TransportKind:   inst.TransportKind,
-			TransportID:     inst.TransportID,
-			DesiredSpecHash: inst.DesiredSpecHash,
-			ActualState:     inst.ActualState,
-			InterfaceName:   inst.InterfaceName,
-			XFRMIfID:        inst.XFRMIfID,
-			IKEName:         inst.IKEName,
-			ChildSAName:     inst.ChildSAName,
-			Endpoint:        inst.Endpoint,
-			LastError:       inst.LastError,
-			FailureCount:    inst.FailureCount,
-			BackoffUntil:    inst.BackoffUntil,
-			LastTransition:  inst.LastTransition,
+			ID:                inst.ID,
+			GroupID:           inst.GroupID,
+			PeerZone:          inst.PeerZone,
+			TransportKind:     inst.TransportKind,
+			TransportID:       inst.TransportID,
+			DesiredSpecHash:   inst.DesiredSpecHash,
+			ActualState:       inst.ActualState,
+			InterfaceName:     inst.InterfaceName,
+			XFRMIfID:          inst.XFRMIfID,
+			IKEName:           inst.IKEName,
+			ChildSAName:       inst.ChildSAName,
+			Endpoint:          inst.Endpoint,
+			RemoteGeneration:  inst.RemoteGeneration,
+			StagedGeneration:  inst.StagedGeneration,
+			RotatePhase:       inst.RotatePhase,
+			StagedIKEName:     inst.StagedIKEName,
+			StagedChildSAName: inst.StagedChildSAName,
+			RotateDeadline:    inst.RotateDeadline,
+			LastError:         inst.LastError,
+			FailureCount:      inst.FailureCount,
+			BackoffUntil:      inst.BackoffUntil,
+			LastTransition:    inst.LastTransition,
 			Owner: ipsec.ResourceOwner{
 				Manager:     inst.Owner.Manager,
 				GroupID:     inst.Owner.GroupID,
@@ -218,22 +226,28 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 	out := make(map[string]linkInstanceState, len(in))
 	for id, inst := range in {
 		out[id] = linkInstanceState{
-			ID:              inst.ID,
-			GroupID:         inst.GroupID,
-			PeerZone:        inst.PeerZone,
-			TransportKind:   inst.TransportKind,
-			TransportID:     inst.TransportID,
-			DesiredSpecHash: inst.DesiredSpecHash,
-			ActualState:     inst.ActualState,
-			InterfaceName:   inst.InterfaceName,
-			XFRMIfID:        inst.XFRMIfID,
-			IKEName:         inst.IKEName,
-			ChildSAName:     inst.ChildSAName,
-			Endpoint:        inst.Endpoint,
-			LastError:       inst.LastError,
-			FailureCount:    inst.FailureCount,
-			BackoffUntil:    inst.BackoffUntil,
-			LastTransition:  inst.LastTransition,
+			ID:                inst.ID,
+			GroupID:           inst.GroupID,
+			PeerZone:          inst.PeerZone,
+			TransportKind:     inst.TransportKind,
+			TransportID:       inst.TransportID,
+			DesiredSpecHash:   inst.DesiredSpecHash,
+			ActualState:       inst.ActualState,
+			InterfaceName:     inst.InterfaceName,
+			XFRMIfID:          inst.XFRMIfID,
+			IKEName:           inst.IKEName,
+			ChildSAName:       inst.ChildSAName,
+			Endpoint:          inst.Endpoint,
+			RemoteGeneration:  inst.RemoteGeneration,
+			StagedGeneration:  inst.StagedGeneration,
+			RotatePhase:       inst.RotatePhase,
+			StagedIKEName:     inst.StagedIKEName,
+			StagedChildSAName: inst.StagedChildSAName,
+			RotateDeadline:    inst.RotateDeadline,
+			LastError:         inst.LastError,
+			FailureCount:      inst.FailureCount,
+			BackoffUntil:      inst.BackoffUntil,
+			LastTransition:    inst.LastTransition,
 			Owner: linkOwnerState{
 				Manager:     inst.Owner.Manager,
 				GroupID:     inst.Owner.GroupID,
@@ -314,7 +328,14 @@ func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec
 			return
 		}
 	}
-	instances[id] = ipsec.MarkLinkApplyFailure(inst, policy, now, err)
+	inst = ipsec.MarkLinkApplyFailure(inst, policy, now, err)
+	switch action.Action {
+	case ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
+		if inst.RotatePhase != "" {
+			inst.LastError = "rotate " + inst.RotatePhase + ": " + inst.LastError
+		}
+	}
+	instances[id] = inst
 }
 
 func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ipsec.ReconcileAction, now time.Time) {
@@ -332,9 +353,21 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 	}
 	inst = ipsec.MarkLinkApplySuccess(inst, now)
 	switch action.Action {
-	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair:
+	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareRotate:
 		inst.ActualState = ipsec.LinkStateConnecting
 		inst.LastTransition = now.Unix()
+		if inst.StagedGeneration != 0 {
+			inst.RotatePhase = ipsec.RotatePhaseTestingNew
+		}
+	case ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate:
+		inst.ActualState = ipsec.LinkStateConnecting
+		inst.LastTransition = now.Unix()
+	case ipsec.ReconcileActionCleanupRotate:
+		inst.StagedGeneration = 0
+		inst.StagedIKEName = ""
+		inst.StagedChildSAName = ""
+		inst.RotatePhase = ipsec.RotatePhaseIdle
+		inst.RotateDeadline = 0
 	}
 	instances[id] = inst
 }

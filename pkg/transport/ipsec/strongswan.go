@@ -143,6 +143,14 @@ func ChildSAName(spec TransportLinkSpec) string {
 	return spec.TransportID + "-child"
 }
 
+func RotateConnectionName(transportID string, generation uint64) string {
+	return transportID + "-rot-" + strconv.FormatUint(generation, 10)
+}
+
+func RotateChildSAName(transportID string, generation uint64) string {
+	return RotateConnectionName(transportID, generation) + "-child"
+}
+
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 	startAction := "start"
 	if spec.Direction == DirectionInbound {

@@ -23,32 +23,51 @@ const (
 	LinkStateDown        = "down"
 	LinkStateError       = "error"
 
-	ReconcileActionAdopt    = "adopt"
-	ReconcileActionCreate   = "create"
-	ReconcileActionUpdate   = "update"
-	ReconcileActionRepair   = "repair"
-	ReconcileActionTeardown = "teardown"
-	ReconcileActionNoop     = "noop"
+	ReconcileActionAdopt          = "adopt"
+	ReconcileActionCreate         = "create"
+	ReconcileActionUpdate         = "update"
+	ReconcileActionRepair         = "repair"
+	ReconcileActionTeardown       = "teardown"
+	ReconcileActionNoop           = "noop"
+	ReconcileActionPrepareRotate  = "prepare_rotate"
+	ReconcileActionCommitRotate   = "commit_rotate"
+	ReconcileActionRollbackRotate = "rollback_rotate"
+	ReconcileActionCleanupRotate  = "cleanup_rotate"
+
+	RotatePhaseIdle        = ""
+	RotatePhasePreparing   = "preparing"
+	RotatePhaseTestingNew  = "testing_new"
+	RotatePhaseDualRunning = "dual_running"
+	RotatePhaseCutover     = "cutover"
+	RotatePhaseRollback    = "rollback"
+	RotatePhaseCleanup     = "cleanup"
 )
 
 type LinkInstance struct {
-	ID              string
-	GroupID         string
-	PeerZone        zone.ZonePath
-	TransportKind   string
-	TransportID     string
-	DesiredSpecHash string
-	ActualState     string
-	InterfaceName   string
-	XFRMIfID        uint32
-	IKEName         string
-	ChildSAName     string
-	Endpoint        string
-	LastError       string
-	FailureCount    int
-	BackoffUntil    int64
-	LastTransition  int64
-	Owner           ResourceOwner
+	ID                string
+	GroupID           string
+	PeerZone          zone.ZonePath
+	TransportKind     string
+	TransportID       string
+	DesiredSpecHash   string
+	ActualState       string
+	InterfaceName     string
+	XFRMIfID          uint32
+	IKEName           string
+	ChildSAName       string
+	Endpoint          string
+	SelectedContact   ContactPoint
+	RemoteGeneration  uint64
+	StagedGeneration  uint64
+	RotatePhase       string
+	StagedIKEName     string
+	StagedChildSAName string
+	RotateDeadline    int64
+	LastError         string
+	FailureCount      int
+	BackoffUntil      int64
+	LastTransition    int64
+	Owner             ResourceOwner
 }
 
 type ResourceOwner struct {
@@ -83,7 +102,7 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 	if state == "" {
 		state = LinkStatePending
 	}
-	return LinkInstance{
+	inst := LinkInstance{
 		ID:              LinkInstanceID(spec),
 		GroupID:         spec.OverlayID,
 		PeerZone:        spec.PeerZone,
@@ -105,6 +124,12 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 			Token:       ResourceOwnerToken(spec.OverlayID, LinkInstanceID(spec), spec.TransportID),
 		},
 	}
+	if point, ok := firstContactPoint(spec.ContactPoints); ok {
+		inst.SelectedContact = point
+		inst.RemoteGeneration = point.Generation
+		inst.Endpoint = contactEndpoint(point)
+	}
+	return inst
 }
 
 func LinkInstanceID(spec TransportLinkSpec) string {
@@ -156,6 +181,46 @@ func (o ResourceOwner) Validate(instance LinkInstance) error {
 	return nil
 }
 
+func contactGeneration(spec TransportLinkSpec) uint64 {
+	point, ok := firstContactPoint(spec.ContactPoints)
+	if !ok {
+		return 0
+	}
+	return point.Generation
+}
+
+func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
+	spec := base
+	spec.TransportID = RotateConnectionName(base.TransportID, generation)
+	var contacts []ContactPoint
+	for _, point := range base.ContactPoints {
+		if point.Generation == generation {
+			contacts = append(contacts, point)
+		}
+	}
+	if len(contacts) == 0 {
+		contacts = append([]ContactPoint(nil), base.ContactPoints...)
+	}
+	spec.ContactPoints = contacts
+	return spec
+}
+
+func findStagedSA(states []SAState, inst LinkInstance) SAState {
+	if inst.StagedIKEName == "" {
+		return SAState{}
+	}
+	for _, state := range states {
+		if state.Name == inst.StagedIKEName || state.ChildSA == inst.StagedChildSAName {
+			return state
+		}
+	}
+	return SAState{}
+}
+
+func rotateTimeout() time.Duration {
+	return 2 * time.Minute
+}
+
 func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	now := in.Now
 	if now.IsZero() {
@@ -179,12 +244,12 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst.ActualState = LinkStateRemoving
 			inst.LastTransition = now.Unix()
 			result.Instances[id] = inst
-			result.add(ReconcileActionTeardown, &spec, &inst, "peer revoked")
+			result.add(ReconcileActionTeardown, nil, &inst, "peer revoked")
 			continue
 		}
-		specHash := TransportLinkSpecHash(spec)
-		sa := findMatchingSA(in.SAs, spec)
+		desiredGen := contactGeneration(spec)
 		if !exists {
+			sa := findMatchingSA(in.SAs, spec)
 			inst := NewLinkInstance(spec, LinkStatePending, now)
 			if sa.Established {
 				inst.ActualState = LinkStateUp
@@ -197,6 +262,16 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			result.Instances[id] = inst
 			continue
 		}
+		if existing.RemoteGeneration == 0 {
+			existing.RemoteGeneration = desiredGen
+		}
+		if existing.RemoteGeneration != desiredGen {
+			result.handleRotate(id, spec, existing, in.SAs, now)
+			continue
+		}
+		existing = result.clearStagedIfIdle(existing, in.SAs, now)
+		sa := findInstanceSA(in.SAs, existing)
+		specHash := TransportLinkSpecHash(spec)
 		if existing.DesiredSpecHash != specHash {
 			if inLinkBackoff(existing, now) {
 				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
@@ -208,6 +283,15 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst.LastError = existing.LastError
 			result.Instances[id] = inst
 			result.add(ReconcileActionUpdate, &spec, &inst, "desired spec changed")
+			if existing.IKEName != "" && existing.IKEName != spec.TransportID {
+				oldSpec := TransportLinkSpec{
+					PeerZone:      existing.PeerZone,
+					TransportID:   existing.IKEName,
+					InterfaceName: existing.InterfaceName,
+					XFRMIfID:      existing.XFRMIfID,
+				}
+				result.add(ReconcileActionCleanupRotate, &oldSpec, &inst, "old rotated connection after spec update")
+			}
 			continue
 		}
 		if inLinkBackoff(existing, now) {
@@ -255,6 +339,126 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		result.add(ReconcileActionTeardown, nil, &inst, "no longer desired")
 	}
 	return result
+}
+
+func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, now time.Time) {
+	desiredGen := contactGeneration(spec)
+	if existing.StagedGeneration != 0 && existing.StagedGeneration != desiredGen {
+		inst := existing
+		inst.RotatePhase = RotatePhaseCleanup
+		r.Instances[id] = inst
+		stagedSpec := rotateSpec(spec, existing.StagedGeneration)
+		r.add(ReconcileActionCleanupRotate, &stagedSpec, &inst, "stale staged generation")
+		return
+	}
+	if inLinkBackoff(existing, now) {
+		r.add(ReconcileActionNoop, &spec, &existing, "rotate backoff active")
+		return
+	}
+	if existing.StagedGeneration == desiredGen {
+		stagedSA := findStagedSA(sas, existing)
+		if stagedSA.Established {
+			inst := existing
+			inst.RemoteGeneration = desiredGen
+			inst.IKEName = existing.StagedIKEName
+			inst.ChildSAName = existing.StagedChildSAName
+			if point, ok := firstContactPointForGeneration(spec, desiredGen); ok {
+				inst.SelectedContact = point
+				inst.Endpoint = contactEndpoint(point)
+			}
+			inst.DesiredSpecHash = TransportLinkSpecHash(spec)
+			inst.StagedGeneration = 0
+			inst.StagedIKEName = ""
+			inst.StagedChildSAName = ""
+			inst.RotatePhase = RotatePhaseCutover
+			inst.RotateDeadline = 0
+			inst.FailureCount = 0
+			inst.BackoffUntil = 0
+			inst.LastError = ""
+			inst.LastTransition = now.Unix()
+			r.Instances[id] = inst
+			oldSpec := TransportLinkSpec{
+				PeerZone:      existing.PeerZone,
+				TransportID:   existing.IKEName,
+				InterfaceName: existing.InterfaceName,
+				XFRMIfID:      existing.XFRMIfID,
+				ContactPoints: []ContactPoint{existing.SelectedContact},
+			}
+			r.add(ReconcileActionCommitRotate, &oldSpec, &inst, "staged sa established")
+			return
+		}
+		if existing.RotateDeadline != 0 && now.After(time.Unix(existing.RotateDeadline, 0)) {
+			inst := existing
+			inst.StagedGeneration = 0
+			inst.StagedIKEName = ""
+			inst.StagedChildSAName = ""
+			inst.RotatePhase = RotatePhaseRollback
+			inst.RotateDeadline = 0
+			inst.LastError = "staged sa not established by deadline"
+			inst.FailureCount++
+			inst.BackoffUntil = now.Add(nextLinkBackoff(BackoffPolicy{}, inst.FailureCount)).Unix()
+			inst.LastTransition = now.Unix()
+			r.Instances[id] = inst
+			stagedSpec := rotateSpec(spec, existing.StagedGeneration)
+			r.add(ReconcileActionRollbackRotate, &stagedSpec, &inst, "staged sa deadline exceeded")
+			return
+		}
+		inst := existing
+		inst.RotatePhase = RotatePhaseTestingNew
+		inst.LastTransition = now.Unix()
+		r.Instances[id] = inst
+		stagedSpec := rotateSpec(spec, desiredGen)
+		r.add(ReconcileActionPrepareRotate, &stagedSpec, &inst, "awaiting staged sa")
+		return
+	}
+	inst := existing
+	inst.StagedGeneration = desiredGen
+	inst.StagedIKEName = RotateConnectionName(existing.TransportID, desiredGen)
+	inst.StagedChildSAName = RotateChildSAName(existing.TransportID, desiredGen)
+	inst.RotatePhase = RotatePhasePreparing
+	inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
+	inst.LastTransition = now.Unix()
+	r.Instances[id] = inst
+	stagedSpec := rotateSpec(spec, desiredGen)
+	r.add(ReconcileActionPrepareRotate, &stagedSpec, &inst, "remote port generation changed")
+}
+
+func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState, now time.Time) LinkInstance {
+	if existing.StagedGeneration == 0 {
+		return existing
+	}
+	stagedSA := findStagedSA(sas, existing)
+	if stagedSA.Established {
+		inst := existing
+		inst.RemoteGeneration = existing.StagedGeneration
+		inst.IKEName = existing.StagedIKEName
+		inst.ChildSAName = existing.StagedChildSAName
+		inst.SelectedContact = ContactPoint{}
+		inst.StagedGeneration = 0
+		inst.StagedIKEName = ""
+		inst.StagedChildSAName = ""
+		inst.RotatePhase = RotatePhaseCutover
+		inst.RotateDeadline = 0
+		inst.LastTransition = now.Unix()
+		r.Instances[existing.ID] = inst
+		oldSpec := TransportLinkSpec{
+			PeerZone:      existing.PeerZone,
+			TransportID:   existing.TransportID,
+			InterfaceName: existing.InterfaceName,
+			XFRMIfID:      existing.XFRMIfID,
+			ContactPoints: []ContactPoint{existing.SelectedContact},
+		}
+		r.add(ReconcileActionCleanupRotate, &oldSpec, &inst, "staged sa adopted")
+		return inst
+	}
+	inst := existing
+	inst.StagedGeneration = 0
+	inst.StagedIKEName = ""
+	inst.StagedChildSAName = ""
+	inst.RotatePhase = RotatePhaseIdle
+	inst.RotateDeadline = 0
+	r.Instances[existing.ID] = inst
+	return inst
 }
 
 func MarkLinkApplyFailure(inst LinkInstance, policy BackoffPolicy, now time.Time, err error) LinkInstance {
@@ -321,6 +525,16 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
 		return ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+	case ReconcileActionPrepareRotate:
+		if action.Spec == nil {
+			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
+		}
+		return ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
+	case ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
+		if action.Spec == nil {
+			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
+		}
+		return TeardownConnectionOnly(ctx, ipsec, *action.Spec)
 	case ReconcileActionTeardown:
 		if action.Spec != nil {
 			return TeardownTransportLink(ctx, ipsec, xfrm, *action.Spec)
@@ -331,13 +545,39 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		if err := action.Instance.Owner.Validate(*action.Instance); err != nil {
 			return ApplyPlan{}, fmt.Errorf("refuse unmanaged teardown: %w", err)
 		}
-		spec := TransportLinkSpec{
+		connSpec := TransportLinkSpec{
+			PeerZone:      action.Instance.PeerZone,
+			TransportID:   action.Instance.IKEName,
+			InterfaceName: action.Instance.InterfaceName,
+			XFRMIfID:      action.Instance.XFRMIfID,
+		}
+		if _, err := TeardownConnectionOnly(ctx, ipsec, connSpec); err != nil {
+			return ApplyPlan{}, err
+		}
+		if action.Instance.StagedIKEName != "" {
+			stagedSpec := TransportLinkSpec{
+				PeerZone:      action.Instance.PeerZone,
+				TransportID:   action.Instance.StagedIKEName,
+				InterfaceName: action.Instance.InterfaceName,
+				XFRMIfID:      action.Instance.XFRMIfID,
+			}
+			if _, err := TeardownConnectionOnly(ctx, ipsec, stagedSpec); err != nil {
+				return ApplyPlan{}, err
+			}
+		}
+		keySpec := TransportLinkSpec{
 			PeerZone:      action.Instance.PeerZone,
 			TransportID:   action.Instance.TransportID,
 			InterfaceName: action.Instance.InterfaceName,
 			XFRMIfID:      action.Instance.XFRMIfID,
 		}
-		return TeardownTransportLink(ctx, ipsec, xfrm, spec)
+		if err := ipsec.UnloadPrivateKey(ctx, keySpec.TransportID); err != nil {
+			return ApplyPlan{}, fmt.Errorf("unload private key: %w", err)
+		}
+		if err := xfrm.DeleteInterface(ctx, action.Instance.InterfaceName); err != nil {
+			return ApplyPlan{}, fmt.Errorf("delete interface: %w", err)
+		}
+		return ApplyPlan{}, nil
 	case ReconcileActionAdopt, ReconcileActionNoop:
 		return ApplyPlan{}, nil
 	default:
@@ -364,11 +604,36 @@ func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 	return SAState{}
 }
 
+func findInstanceSA(states []SAState, inst LinkInstance) SAState {
+	for _, state := range states {
+		if state.Name == inst.IKEName || state.ChildSA == inst.ChildSAName {
+			return state
+		}
+		if inst.XFRMIfID != 0 && state.XFRMIfID == inst.XFRMIfID {
+			return state
+		}
+	}
+	return SAState{}
+}
+
+func firstContactPointForGeneration(spec TransportLinkSpec, generation uint64) (ContactPoint, bool) {
+	for _, point := range spec.ContactPoints {
+		if point.Generation == generation {
+			return point, true
+		}
+	}
+	return firstContactPoint(spec.ContactPoints)
+}
+
 func endpointForSpec(spec TransportLinkSpec) string {
 	point, ok := firstContactPoint(spec.ContactPoints)
 	if !ok {
 		return ""
 	}
+	return contactEndpoint(point)
+}
+
+func contactEndpoint(point ContactPoint) string {
 	if point.Address != "" {
 		return point.Address
 	}

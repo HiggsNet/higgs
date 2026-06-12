@@ -909,6 +909,10 @@ func isPrivateOrLinkLocal(ip net.IP) bool {
 	return len(ip) == net.IPv6len && ip[0]&0xfe == 0xfc
 }
 
+func ValidPortMode(mode string) bool {
+	return oneOf(mode, PortModeFixed, PortModeRange)
+}
+
 func oneOf(value string, allowed ...string) bool {
 	for _, item := range allowed {
 		if value == item {

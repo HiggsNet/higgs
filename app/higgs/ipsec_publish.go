@@ -34,7 +34,7 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 		return err
 	}
 	state.IPsecTransportKey = key
-	records, err := localIPsecRecords(config, state.ManagedZone, keyRecord)
+	records, err := localIPsecRecords(config, state, state.ManagedZone, keyRecord, now)
 	if err != nil {
 		return err
 	}
@@ -45,6 +45,31 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 			return err
 		}
 		changed = changed || updated
+	}
+	for _, item := range records {
+		if item.key != ipsec.RecordKeyPorts {
+			continue
+		}
+		var portRecord *ipsec.PortRecord
+		switch v := item.value.(type) {
+		case ipsec.PortRecord:
+			portRecord = &v
+		case *ipsec.PortRecord:
+			portRecord = v
+		default:
+			continue
+		}
+		var r *ipsec.PortRange
+		if portRecord.Range != nil {
+			r = portRecord.Range
+		}
+		state.IPsecPortRecord = &ipsecPortRecordState{
+			Mode:       portRecord.Mode,
+			Range:      r,
+			Generation: portRecord.Current.Generation,
+			UpdatedAt:  portRecord.UpdatedAt,
+		}
+		changed = true
 	}
 	if changed {
 		return sr.saveState()
@@ -120,7 +145,7 @@ func zonePublicKey(state *stateFile) [][]byte {
 	return [][]byte{append([]byte(nil), pub...)}
 }
 
-func localIPsecRecords(config *appConfig, managed zone.ZonePath, key *ipsec.TransportKeyRecord) ([]localIPsecRecord, error) {
+func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePath, key *ipsec.TransportKeyRecord, now time.Time) ([]localIPsecRecord, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -128,7 +153,7 @@ func localIPsecRecords(config *appConfig, managed zone.ZonePath, key *ipsec.Tran
 		return nil, fmt.Errorf("transport key record is required")
 	}
 	addresses := localIPsecAddressRecord(config)
-	ports, err := localIPsecPortRecord(config)
+	ports, err := localIPsecPortRecord(config, state, now)
 	if err != nil {
 		return nil, err
 	}
@@ -193,22 +218,76 @@ func localIPsecAddressRecord(config *appConfig) ipsec.AddressRecord {
 	return record
 }
 
-func localIPsecPortRecord(config *appConfig) (*ipsec.PortRecord, error) {
+func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*ipsec.PortRecord, error) {
 	ike := uint16(ipsec.DefaultIKEPort)
 	natt := uint16(ipsec.DefaultNATTPort)
 	if port := listenPortFromAddr(config.ListenAddr); port != 0 && port != uint16(ipsec.DefaultIKEPort) {
 		natt = port
 	}
-	var previous *ipsec.PortRecord
+	previous := previousIPsecPortRecord(state)
+	mode := config.IPsec.PortMode
+	if mode == "" {
+		mode = ipsec.PortModeFixed
+	}
+	generation := uint64(1)
+	var portRange *ipsec.PortRange
+	if mode == ipsec.PortModeRange {
+		portRange = &config.IPsec.PortRange
+		generation = nextPortGeneration(state, config, now)
+	}
 	return ipsec.PlanPortRecord(ipsec.PortPlanOptions{
-		Mode:          ipsec.PortModeFixed,
+		Mode:          mode,
+		Range:         portRange,
 		FixedIKE:      ike,
 		FixedNATT:     natt,
-		Generation:    1,
+		Generation:    generation,
 		Previous:      previous,
-		PreviousGrace: config.EndpointGrace,
-		Now:           time.Unix(0, 0),
+		PreviousGrace: config.IPsec.PortPreviousGrace,
+		Now:           now,
 	})
+}
+
+func previousIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
+	if state == nil || state.IPsecPortRecord == nil {
+		return nil
+	}
+	prev := state.IPsecPortRecord
+	record := &ipsec.PortRecord{
+		Version:   1,
+		Mode:      prev.Mode,
+		UpdatedAt: prev.UpdatedAt,
+		Current: &ipsec.PortSelection{
+			Generation: prev.Generation,
+			IKE:        ipsec.PortBinding{Local: uint16(ipsec.DefaultIKEPort), Advertised: uint16(ipsec.DefaultIKEPort)},
+			NATT:       ipsec.PortBinding{Local: uint16(ipsec.DefaultNATTPort), Advertised: uint16(ipsec.DefaultNATTPort)},
+		},
+	}
+	if prev.Range != nil {
+		r := *prev.Range
+		record.Range = &r
+		ike, natt, _ := ipsec.SelectPortsFromRange(r, prev.Generation)
+		record.Current.IKE = ipsec.PortBinding{Local: ike, Advertised: ike}
+		record.Current.NATT = ipsec.PortBinding{Local: natt, Advertised: natt}
+	}
+	return record
+}
+
+func nextPortGeneration(state *stateFile, config *appConfig, now time.Time) uint64 {
+	if state == nil || state.IPsecPortRecord == nil {
+		return 1
+	}
+	prev := state.IPsecPortRecord
+	if config.IPsec.PortRotateInterval <= 0 {
+		return prev.Generation
+	}
+	if prev.UpdatedAt == 0 {
+		return prev.Generation + 1
+	}
+	last := time.Unix(prev.UpdatedAt, 0)
+	if now.After(last.Add(config.IPsec.PortRotateInterval)) {
+		return prev.Generation + 1
+	}
+	return prev.Generation
 }
 
 func putSignedIPsecRecordIfChanged(state *stateFile, path zone.ZonePath, key, recordType string, value any, now time.Time) (bool, error) {

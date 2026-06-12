@@ -43,6 +43,15 @@ ipsec:
   driver: dry-run
   # Optional; empty uses strongSwan/govici's default VICI socket path.
   vici_socket:
+  # Port rotation mode. "fixed" (default) keeps IKE/NAT-T on their default or
+  # listen_addr-derived ports. "range" selects ports deterministically from the
+  # configured range and advances generation per port_rotate_interval.
+  port_mode: fixed
+  # port_range:
+  #   from: 30000
+  #   to: 30099
+  # port_rotate_interval: 24h
+  # port_previous_grace: 10m
 
 overlays:
   - id: ipsec-main

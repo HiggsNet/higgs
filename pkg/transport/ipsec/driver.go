@@ -106,6 +106,38 @@ func PlanTeardown(spec TransportLinkSpec) ApplyPlan {
 	return plan
 }
 
+func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, spec TransportLinkSpec, netns NetNSSpec) (ApplyPlan, error) {
+	if ipsec == nil {
+		return ApplyPlan{}, fmt.Errorf("ipsec driver is required")
+	}
+	if xfrm == nil {
+		return ApplyPlan{}, fmt.Errorf("xfrm driver is required")
+	}
+	plan := PlanApply(spec, netns)
+	var filtered []ApplyOperation
+	for _, op := range plan.Operations {
+		if op.Action != "load_private_key" {
+			filtered = append(filtered, op)
+		}
+	}
+	plan.Operations = filtered
+	if err := xfrm.EnsureNamespace(ctx, netns); err != nil {
+		return plan, fmt.Errorf("ensure namespace: %w", err)
+	}
+	if err := ipsec.LoadConnection(ctx, spec); err != nil {
+		return plan, fmt.Errorf("load connection: %w", err)
+	}
+	if err := xfrm.EnsureInterface(ctx, spec); err != nil {
+		return plan, fmt.Errorf("ensure interface: %w", err)
+	}
+	if spec.LocalTunnelAddr.IsValid() {
+		if err := xfrm.AssignAddress(ctx, spec.InterfaceName, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
+			return plan, fmt.Errorf("assign address: %w", err)
+		}
+	}
+	return plan, nil
+}
+
 func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, spec TransportLinkSpec, netns NetNSSpec) (ApplyPlan, error) {
 	if ipsec == nil {
 		return ApplyPlan{}, fmt.Errorf("ipsec driver is required")
@@ -168,6 +200,22 @@ func TeardownTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	}
 	if err := xfrm.DeleteInterface(ctx, spec.InterfaceName); err != nil {
 		return plan, fmt.Errorf("delete interface: %w", err)
+	}
+	return plan, nil
+}
+
+func TeardownConnectionOnly(ctx context.Context, ipsec IPsecDriver, spec TransportLinkSpec) (ApplyPlan, error) {
+	if ipsec == nil {
+		return ApplyPlan{}, fmt.Errorf("ipsec driver is required")
+	}
+	plan := ApplyPlan{}
+	plan.add("terminate_sa", spec.TransportID, string(spec.PeerZone))
+	plan.add("unload_connection", spec.TransportID, string(spec.PeerZone))
+	if err := ipsec.TerminateSA(ctx, spec.TransportID); err != nil {
+		return plan, fmt.Errorf("terminate sa: %w", err)
+	}
+	if err := ipsec.UnloadConnection(ctx, spec.TransportID); err != nil {
+		return plan, fmt.Errorf("unload connection: %w", err)
 	}
 	return plan, nil
 }

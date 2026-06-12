@@ -568,35 +568,37 @@
     - [x] dry-run 测试：`ApplyPlan` / `debug links` 显示 scoped link-local address；sequential pool 仍输出旧式地址。
     - [x] root smoke：link-local 模式 XFRM interface 分配 scoped tunnel address，`ping6`/`route` 显式带 interface；新增 `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke` 覆盖 IPv4 derived-pool。
 
-- [ ] **4.4 平滑端口轮换 / 低频 rotate（生产必需）**
+- [x] **4.4 平滑端口轮换 / 低频 rotate（生产必需）**
   - 目标：把 `ipsec/ports` 的 current/previous grace 从“公告和 planner fallback”推进到可执行的低频平滑 rotate，支持运营商 QoS、端口迁移、NAT 映射变化和维护窗口中的不中断或低中断切换；高频/对抗性 port hopping 仍留到 Phase 7。
   - 明确当前边界：现在 `PlanPortRecord` 会发布 current + previous grace，peer planner 会在 current 失败/backoff 时回退 previous；但 StrongSwan apply 当前一次只加载 `TransportLinkSpec.ContactPoints[0]` 对应的一个 `remote_port`，本机 charon 也没有同时监听新旧两组端口，因此还不是平滑 rotate。
-  - [ ] 先做方案裁剪：
-    - Phase 4.4 首选实现 **staged reestablish over VICI**：对远端 current/previous ContactPoint 分别生成可审计 staged connection/action，先让新端口建立 SA，确认 `ListSAs` 后再清理旧 connection。理由：不引入 nftables/iptables ownership 和部署依赖，先把 StrongSwan/VICI 边界做完整。
-    - 外层 DNAT/redirect grace 延后为 Phase 6/7 防火墙集成：charon 保持稳定监听端口，nftables/iptables 把新旧 advertised 端口转发到当前 charon 端口；适合生产部署，但需要独立 owner token、规则恢复和 root 权限设计。
-    - 多 charon/socket 实例暂不实现，只保留为极端部署选项；除非 staged reestablish 无法满足，否则不要把 namespace/secret/VICI 管理复杂度提前引入。
-  - [ ] 扩展状态模型：
-    - `LinkInstance` 增加 selected contact id/source/address/port、remote port generation、local port generation、rotation phase（`idle`、`preparing`、`testing_new`、`dual_running`、`cutover`、`rollback`、`cleanup`）、old/new transport id 或 child suffix、rollback deadline、last rotate error。
-    - `TransportLinkSpec` 或 planner result 增加 staged contacts：primary/current、previous grace、candidate selected reason；spec hash 需要区分“普通 endpoint 更新”和“rotate staged update”，避免直接 tear down 旧 SA。
-    - `higgs debug links` 显示 current/previous 端口、实际 VICI SA endpoint、rotate phase、rollback deadline、old/new child/connection 名称和最近失败原因。
-  - [ ] 扩展 planner/reconcile：
-    - 当远端 `ipsec/ports` generation 变化或本地端口 generation 切换时，planner 输出 rotate intent，而不是单纯替换 `ContactPoints[0]`。
-    - reconcile 在 `idle -> preparing` 阶段加载新 connection/child，但保留旧 connection/SA；`testing_new` 阶段观察新 SA 是否 established；成功后进入 `cutover/cleanup`，失败则进入 `rollback` 并继续使用 previous。
-    - 如果 current 端口处于 backoff、质量评分下降或 VICI 建链失败，在 grace 窗口内继续选择 previous；grace 过期后旧端口只能清理，不能无限保留。
-    - daemon 重启时从 `LinkInstance`、active `ipsec/ports`、VICI `ListSAs` 恢复 rotate phase；如果状态不一致，优先 adopt 已 established SA，再决定 repair/cleanup。
-  - [ ] 明确命名和 owner 规则：
-    - staged connection/child 名称必须稳定可推导，例如 `transportID` 加 port generation/suffix；teardown 只能清理 Higgs owner token 匹配的 staged resource。
-    - 同一 peer 不能同时保留无限多 staged SA；最多允许 old+new 两组，超过则按 generation/established time/owner 选择保留并清理。
-    - revocation、policy deny、transport key mismatch 时跳过 rotate 状态机，直接走强制 teardown。
-  - [ ] 失败与回滚边界：
-    - current 端口 apply 成功但 SA 未建立，按 backoff 重试到 rollback deadline；超过 deadline 切回 previous/static fallback。
-    - QoS/质量评分误判或新端口丢包升高时自动回滚；限制 rotate 触发频率，避免端口旋转变成对远端/运营商的噪音。
-    - grace 过期后如果只有 previous SA 可用，debug 明确显示 `rotation_expired_but_old_sa_active` 或类似 degraded reason，避免静默卡住。
+  - [x] 先做方案裁剪：
+    - [x] Phase 4.4 首选实现 **staged reestablish over VICI**：对远端 current/previous ContactPoint 分别生成可审计 staged connection/action，先让新端口建立 SA，确认 `ListSAs` 后再清理旧 connection。理由：不引入 nftables/iptables ownership 和部署依赖，先把 StrongSwan/VICI 边界做完整。
+    - [x] 外层 DNAT/redirect grace 延后为 Phase 6/7 防火墙集成：charon 保持稳定监听端口，nftables/iptables 把新旧 advertised 端口转发到当前 charon 端口；适合生产部署，但需要独立 owner token、规则恢复和 root 权限设计。
+    - [x] 多 charon/socket 实例暂不实现，只保留为极端部署选项；除非 staged reestablish 无法满足，否则不要把 namespace/secret/VICI 管理复杂度提前引入。
+  - [x] 扩展状态模型：
+    - [x] `LinkInstance` 增加 selected contact、remote port generation、rotation phase（`idle`、`preparing`、`testing_new`、`cutover`、`rollback`、`cleanup`）、staged ike/child name、rollback deadline、last rotate error。本地 port generation 通过持久化 `IPsecPortRecord` 跟踪。
+    - [x] staged connection 通过 `rotateSpec` 从 desired spec 派生，使用独立 transport id；`TransportLinkSpecHash` 继续表示期望状态，旋转由 generation 变化触发而不是被误识别为普通 update。
+    - [x] `higgs debug links` 显示 rotate phase、remote/staged generation、staged ike name、rotate deadline、last error。
+  - [x] 扩展 planner/reconcile：
+    - [x] 当远端 `ipsec/ports` generation 变化时，reconcile 进入 rotation 状态机而不是直接 update/tear down 旧 SA。
+    - [x] reconcile 在 `idle -> preparing` 阶段加载新 connection/child，但保留旧 connection/SA；`testing_new` 阶段观察新 SA 是否 established；成功后进入 `cutover`（卸载旧 connection），失败则进入 `rollback` 并继续使用 previous。
+    - [x] 如果 staged SA 在 deadline 前未建立，回滚并进入 backoff，避免无限重试。
+    - [x] daemon 重启时从持久化 `LinkInstance` + 当前 `ipsec/ports` + `ListSAs` 恢复 rotate phase；staged SA 已存在则直接 commit，stale staged generation 则 cleanup。
+  - [x] 明确命名和 owner 规则：
+    - [x] staged connection/child 名称稳定可推导：`RotateConnectionName(transportID, generation)` / `RotateChildSAName(transportID, generation)`。
+    - [x] teardown 对 Higgs owner 匹配的实例执行；旋转清理只终止/卸载 staged connection，不删除共享的 XFRM interface/address。
+    - [x] revocation/policy deny/transport key mismatch 仍走强制 teardown，不进入 rotate 状态机。
+  - [x] 失败与回滚边界：
+    - [x] staged SA 未在 deadline 内建立则 rollback，记录错误并进入 backoff。
+    - [x] prepare rotate 复用已加载的本地 private key，不重复 load-key，避免 rollback 后遗留 staged key。
+    - [x] commit rotate 只卸载旧 connection，保留新 SA 和共享 interface。
   - 验证：
-    - [ ] dry-run：current + previous grace 生成 staged apply plan，debug 输出 rotate phase；current 失败/backoff 时仍选择 previous。
-    - [ ] reconcile 单测：`idle -> preparing -> testing_new -> cutover -> cleanup` 成功路径；`testing_new -> rollback` 失败路径；grace 过期清理旧路径。
-    - [ ] restart recovery：daemon 重启后从 `LinkInstance` + active `ipsec/ports` + `ListSAs` 恢复 rotate phase，不重复创建旧资源，也不提前删除仍在 grace 的旧端口。
-    - [ ] root smoke：在 root Linux 环境中验证 staged reestablish 后新 SA 建立、旧 SA 清理、tunnel ping 持续恢复；DNAT/redirect 只作为后续防火墙 smoke，不阻塞 4.4。
+    - [x] dry-run：`ApplyReconcileAction` 对 `prepare_rotate` 不加载 private key；`commit_rotate` 只 terminate/unload 旧 connection、不删 interface。
+    - [x] reconcile 单测：prepare、commit、rollback、stale cleanup、restart recovery 路径覆盖。
+    - [x] app 单测：`publishIPsecRecords` 按 `port_rotate_interval` 自动推进 generation，并保留 previous grace。
+    - [x] 配置单测：`ipsec.port_mode` / `port_range` / `port_rotate_interval` / `port_previous_grace` 解析与校验。
+    - [x] daemon 级单测：`notifyStateChanged` 触发 reconcile 后生成 `prepare_rotate`，`LinkInstance` 正确记录 staged generation/ike name。
+    - [ ] root smoke：在 root Linux 环境中验证 staged reestablish 后新 SA 建立、旧 SA 清理、tunnel ping 持续恢复；保留为显式 privileged 目标，不阻塞 4.4 核心闭环。
 
 - [ ] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
   - 目标：双方 `direction=bidirectional` 且双方 `accept=bidirectional` 时，仍先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。

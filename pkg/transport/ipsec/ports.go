@@ -70,7 +70,7 @@ func plannedCurrentPortSelection(opts PortPlanOptions) (PortSelection, error) {
 		if opts.Range == nil {
 			return PortSelection{}, fmt.Errorf("range mode requires range")
 		}
-		ike, natt, err := selectPortsFromRange(*opts.Range, opts.Generation)
+		ike, natt, err := SelectPortsFromRange(*opts.Range, opts.Generation)
 		if err != nil {
 			return PortSelection{}, err
 		}
@@ -96,7 +96,7 @@ func newPlannedPortSelection(generation uint64, ike, natt, observedIKE, observed
 	}
 }
 
-func selectPortsFromRange(r PortRange, generation uint64) (uint16, uint16, error) {
+func SelectPortsFromRange(r PortRange, generation uint64) (uint16, uint16, error) {
 	if r.From == 0 || r.To == 0 || r.From > r.To {
 		return 0, 0, fmt.Errorf("invalid port range %d-%d", r.From, r.To)
 	}

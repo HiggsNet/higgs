@@ -103,16 +103,24 @@ type overlayDefaultsYAML struct {
 }
 
 type ipsecConfig struct {
-	DefaultNetNS ipsec.NetNSSpec
-	LinkGroups   []ipsec.LinkGroupSpec
-	Driver       string
-	VICISocket   string
+	DefaultNetNS       ipsec.NetNSSpec
+	LinkGroups         []ipsec.LinkGroupSpec
+	Driver             string
+	VICISocket         string
+	PortMode           string
+	PortRange          ipsec.PortRange
+	PortRotateInterval time.Duration
+	PortPreviousGrace  time.Duration
 }
 
 type ipsecConfigYAML struct {
-	DefaultNetNS ipsec.NetNSSpec `yaml:"default_netns"`
-	Driver       string          `yaml:"driver"`
-	VICISocket   string          `yaml:"vici_socket"`
+	DefaultNetNS       ipsec.NetNSSpec `yaml:"default_netns"`
+	Driver             string          `yaml:"driver"`
+	VICISocket         string          `yaml:"vici_socket"`
+	PortMode           string          `yaml:"port_mode"`
+	PortRange          ipsec.PortRange `yaml:"port_range"`
+	PortRotateInterval string          `yaml:"port_rotate_interval"`
+	PortPreviousGrace  string          `yaml:"port_previous_grace"`
 }
 
 type tunnelAddressConfigYAML struct {
@@ -181,8 +189,11 @@ func defaultAppConfig() *appConfig {
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
 		IPsec: ipsecConfig{
-			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
-			Driver:       ipsecDriverDryRun,
+			DefaultNetNS:       ipsec.NetNSSpec{}.Normalized(),
+			Driver:             ipsecDriverDryRun,
+			PortMode:           ipsec.PortModeFixed,
+			PortRotateInterval: 0,
+			PortPreviousGrace:  gossip.DefaultEndpointGrace,
 		},
 	}
 }
@@ -217,6 +228,12 @@ func normalizeAppConfig(config *appConfig) {
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	if config.IPsec.Driver == "" {
 		config.IPsec.Driver = ipsecDriverDryRun
+	}
+	if config.IPsec.PortMode == "" {
+		config.IPsec.PortMode = ipsec.PortModeFixed
+	}
+	if config.IPsec.PortPreviousGrace <= 0 {
+		config.IPsec.PortPreviousGrace = gossip.DefaultEndpointGrace
 	}
 }
 
@@ -338,6 +355,33 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	}
 	if file.IPsec.VICISocket != "" {
 		config.IPsec.VICISocket = file.IPsec.VICISocket
+	}
+	if file.IPsec.PortMode != "" {
+		mode := strings.ToLower(strings.TrimSpace(file.IPsec.PortMode))
+		if !ipsec.ValidPortMode(mode) {
+			return fmt.Errorf("invalid ipsec.port_mode %q", file.IPsec.PortMode)
+		}
+		config.IPsec.PortMode = mode
+	}
+	if config.IPsec.PortMode == ipsec.PortModeRange {
+		if file.IPsec.PortRange.From == 0 || file.IPsec.PortRange.To == 0 || file.IPsec.PortRange.From > file.IPsec.PortRange.To {
+			return fmt.Errorf("invalid ipsec.port_range %d-%d", file.IPsec.PortRange.From, file.IPsec.PortRange.To)
+		}
+		config.IPsec.PortRange = file.IPsec.PortRange
+	}
+	if file.IPsec.PortRotateInterval != "" {
+		d, err := parseConfigDuration(file.IPsec.PortRotateInterval, "ipsec.port_rotate_interval")
+		if err != nil {
+			return err
+		}
+		config.IPsec.PortRotateInterval = d
+	}
+	if file.IPsec.PortPreviousGrace != "" {
+		d, err := parseConfigDuration(file.IPsec.PortPreviousGrace, "ipsec.port_previous_grace")
+		if err != nil {
+			return err
+		}
+		config.IPsec.PortPreviousGrace = d
 	}
 	if netnsConfigured(file.Overlay.DefaultNetNS) {
 		netns := file.Overlay.DefaultNetNS.Normalized()

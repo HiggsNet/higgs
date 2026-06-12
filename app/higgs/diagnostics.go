@@ -169,7 +169,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		if desiredHash == "" {
 			desiredHash = inst.DesiredSpecHash
 		}
-		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s local_tunnel=%s peer_tunnel=%s endpoint=%s sa=%s sa_local=%s sa_remote=%s sa_local_id=%s sa_remote_id=%s sa_reqid=%d owner=%s failures=%d backoff=%s error=%s\n",
+		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s local_tunnel=%s peer_tunnel=%s endpoint=%s sa=%s sa_local=%s sa_remote=%s sa_local_id=%s sa_remote_id=%s sa_reqid=%d rotate_phase=%s remote_gen=%d staged_gen=%d staged_ike=%s rotate_deadline=%s owner=%s failures=%d backoff=%s error=%s\n",
 			inst.ID,
 			dash(inst.GroupID),
 			inst.PeerZone,
@@ -188,6 +188,11 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 			dash(sa.LocalIdentity),
 			dash(sa.RemoteIdentity),
 			sa.ReqID,
+			dash(inst.RotatePhase),
+			inst.RemoteGeneration,
+			inst.StagedGeneration,
+			dash(inst.StagedIKEName),
+			formatUnixTime(inst.RotateDeadline),
 			dash(inst.Owner.Manager),
 			inst.FailureCount,
 			formatUnixTime(inst.BackoffUntil),
