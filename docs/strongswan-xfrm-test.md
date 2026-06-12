@@ -124,12 +124,18 @@ make ipsec-xfrm-container-smoke
    records，让两个 daemon service 使用真实 `StrongSwanDriver` +
    `SystemXFRMDriver` 自动加载 key/connection、创建 XFRM interface、观测
    VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 tunnel IP 双向
-   `ping`。
+   `ping`；同一 smoke 还会在保留 charon/XFRM 运行态时重建 node-a daemon
+   service，断言启动 reconcile 观测现有 SA、不会重复创建 SA，并继续通过
+   tunnel ping。已有 `up` 状态可保持 noop；缺失或旧状态才需要 adopt/repair。
 9. 启动两个 daemon service 的真实 `Run` 循环，让两端各自自动发布 signed
    `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key`，
    通过 UDP gossip 同步对端 Zone 后自动触发真实 StrongSwan/VICI + XFRM
    reconcile；测试断言双方 `LinkInstance=up`、VICI SA snapshot 可见，并验证
    tunnel IP 双向 `ping`。
+10. 在 daemon reconcile 级真实 StrongSwan/XFRM smoke 中注入父 Zone 对 peer 的
+    revocation，断言 planner 输出 revoked skip reason，daemon 执行
+    terminate/unload/delete interface，VICI 不再观测到该 SA，`LinkInstance`
+    被清空，tunnel ping 失败。
 
 失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
 `swanctl --list-sas`，方便区分 kernel/iproute2/StrongSwan 环境问题。
@@ -181,9 +187,11 @@ state meta，避免 daemon 重启后 fingerprint 抖动。
 provider apply。这证明 daemon publish/gossip/planner/reconcile 边界已接通。
 
 root/container smoke 现在已经覆盖 daemon `Run` 循环下的对端 `ipsec/*` record
-同步、真实 VICI IKE_SA/CHILD_SA bring-up 和 tunnel ping。它仍是 Go 测试内的
-daemon service，不是外部 `build/higgs daemon` OS 进程；后续如果需要继续收紧，
-可以把同一断言扩展到 CLI 进程启动、daemon 重启恢复和 revocation teardown。
+同步、真实 VICI IKE_SA/CHILD_SA bring-up 和 tunnel ping；daemon reconcile 级
+smoke 还覆盖启动恢复观测现有 SA、唯一 SA 断言、revocation teardown、VICI SA
+消失、XFRM interface 删除和 tunnel ping 失败。它们仍是 Go 测试内的 daemon
+service，不是外部 `build/higgs daemon` OS 进程；后续如果需要继续收紧，可以把同一
+断言扩展到 CLI 进程启动和双外部 daemon 进程的 gossip revocation 传播。
 
 ## 3. 最小手工 StrongSwan 健康检查
 
@@ -269,13 +277,19 @@ ip netns delete h2-a
 
 ## 6. 恢复与撤销
 
-happy path 通过后继续覆盖：
+root/container smoke 已覆盖当前 daemon service 级恢复与撤销：
 
-- 重启任意一端 daemon。daemon 必须 adopt 或 repair 已有 StrongSwan/XFRM state，
-  不能重复创建资源。
-- 从父 Zone 撤销其中一个 peer。另一端 daemon 必须 terminate IKE_SA/CHILD_SA、
-  unload connection/secret、删除 XFRM interface 和 address，并阻止 reconnect/backoff
-  再次把它拉起。
+- 重建任意一端 daemon service 时，daemon 必须观测已有 StrongSwan/XFRM state，
+  不能重复创建资源；已有 `up` 状态可保持 noop，缺失或旧状态才需要 adopt/repair。
+  当前测试断言 node-a 重建后通过 VICI 看到现有 SA、established SA 仍只有一组，
+  并且 tunnel ping 继续成功。
+- 从父 Zone 撤销其中一个 peer 后，本地 daemon 必须 terminate IKE_SA/CHILD_SA、
+  unload connection、删除 XFRM interface 和 address，并阻止 reconnect/backoff
+  再次把它拉起；当前测试断言 revoked skip reason、VICI SA 消失、XFRM interface
+  删除、`LinkInstance` 清空和 tunnel ping 失败。
+
+尚未覆盖的是两个外部 `build/higgs daemon` OS 进程之间通过 gossip 传播 revocation
+后的同一组断言；这属于更高保真的 hardening，不再阻塞 Phase 4.3 最小闭环。
 
 Phase 4 只做到 peer-to-peer tunnel link 可用。Babel routing 和 prefix authorization
 仍属于 Phase 5。

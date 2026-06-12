@@ -348,6 +348,74 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ip", "route", "replace", specB.PeerTunnelAddr.String()+"/32", "dev", specB.InterfaceName, "src", specB.LocalTunnelAddr.String())
 	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", specA.PeerTunnelAddr.String())
 	runAppCommand(t, ctx, "ip", "netns", "exec", nsB, "ping", "-c", "1", "-W", "3", specB.PeerTunnelAddr.String())
+
+	restartedA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a before restart): %v", err)
+	}
+	restartServiceA := newDaemonService(rtA, restartedA, configA, time.Second)
+	restartServiceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	restartServiceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	restartServiceA.recoverIPsecLinksOnStart(ctx)
+	recoveredA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a after restart): %v", err)
+	}
+	assertDaemonSystemLinkUp(t, recoveredA, specA)
+	if recoveredA.IPsecReconcile == nil || len(recoveredA.IPsecReconcile.Actions) != 1 {
+		t.Fatalf("restart reconcile = %+v, want one recovery observation action", recoveredA.IPsecReconcile)
+	}
+	restartAction := recoveredA.IPsecReconcile.Actions[0].Action
+	if restartAction != ipsec.ReconcileActionAdopt && restartAction != ipsec.ReconcileActionNoop {
+		t.Fatalf("restart reconcile action = %s, want adopt or noop with existing SA", restartAction)
+	}
+	if count, err := daemonTestEstablishedSACount(ctx, clientA, specA.TransportID); err != nil {
+		t.Fatalf("count node-a SAs after restart: %v", err)
+	} else if count != 1 {
+		t.Fatalf("node-a established SA count after restart = %d, want 1", count)
+	}
+	runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "3", specA.PeerTunnelAddr.String())
+
+	parent := recoveredA.Network.Zones["catofes."]
+	if parent == nil || parent.Delegations["node-b.catofes."] == nil {
+		t.Fatalf("node-a state missing node-b delegation before revoke")
+	}
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		Reason:                "ipsec root smoke revoke",
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+	if err := rtA.SaveState(recoveredA); err != nil {
+		t.Fatalf("SaveState(node-a revoked): %v", err)
+	}
+	restartServiceA.setState(recoveredA)
+	restartServiceA.recoverIPsecLinksOnStart(ctx)
+	revokedA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-a revoked): %v", err)
+	}
+	if len(revokedA.LinkInstances) != 0 {
+		t.Fatalf("node-a link instances after revoke = %+v, want none", revokedA.LinkInstances)
+	}
+	if revokedA.IPsecReconcile == nil || len(revokedA.IPsecReconcile.Actions) != 1 || revokedA.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionTeardown {
+		t.Fatalf("revoke reconcile = %+v, want teardown", revokedA.IPsecReconcile)
+	}
+	if !hasDebugSkip(revokedA.IPsecReconcile.Skipped, "node-b.catofes.", ipsec.SkipRevokedZone) {
+		t.Fatalf("revoke skips = %+v, want revoked node-b", revokedA.IPsecReconcile.Skipped)
+	}
+	if err := waitDaemonTestNoSA(ctx, clientA, specA.TransportID); err != nil {
+		t.Fatalf("node-a SA after revoke: %v", err)
+	}
+	if _, err := appExecCommand(ctx, "ip", "netns", "exec", nsA, "ip", "link", "show", "dev", specA.InterfaceName); err == nil {
+		t.Fatalf("node-a xfrm interface %s still exists after revoke", specA.InterfaceName)
+	}
+	if out, err := appExecCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-c", "1", "-W", "1", specA.PeerTunnelAddr.String()); err == nil {
+		t.Fatalf("ping unexpectedly succeeded after revoke:\n%s", string(out))
+	}
 }
 
 func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
@@ -1637,6 +1705,38 @@ func waitDaemonTestSA(ctx context.Context, client *ipsec.GoviciClient, name stri
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
+}
+
+func waitDaemonTestNoSA(ctx context.Context, client *ipsec.GoviciClient, name string) error {
+	for {
+		count, err := daemonTestEstablishedSACount(ctx, client, name)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for SA %s teardown; established count=%d", name, count)
+		default:
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+}
+
+func daemonTestEstablishedSACount(ctx context.Context, client *ipsec.GoviciClient, name string) (int, error) {
+	events, err := client.CallStreaming(ctx, "list-sas", "list-sa", map[string]any{"ike": name})
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, event := range events {
+		if daemonTestSAEstablished(event) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func daemonTestSAEstablished(raw map[string]any) bool {

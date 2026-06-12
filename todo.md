@@ -485,7 +485,7 @@
     - [x] daemon reconcile 摘要持久化最近 desired `TransportLinkSpec` 快照和 driver `ListSAs` 观测；`higgs debug links` 会重新按当前 active state + `LinkGroupSpec` 规划 desired links，并与已落盘 `LinkInstance` / 最近 SA 快照并排展示 desired hash、actual hash、CHILD_SA、SA endpoint、backoff 和 apply error，便于排查“应该建什么”和“实际 StrongSwan 看到什么”的差异。
   - [x] 增加 fake driver 单元测试：create/update/delete/revoke/restart recovery；真实 StrongSwan/XFRM smoke 留到 4.3
 
-- [ ] **4.3 最小闭环验证**
+- [x] **4.3 最小闭环验证**
   - [x] 增加 `make ipsec-policy-smoke`：不要求 root/StrongSwan/XFRM，验证 URI rule/link group + 远端 accept intent + address/port 分离公告能自动选择匹配 peer，不需要手写每个 link
     - 已新增 `ipsec-policy-smoke` 并纳入 `smoke-all`；覆盖 MeshPolicy URI 解析、connect/deny rule 接入 planner、accept intent 过滤、source 过滤，以及从 address/port 分离公告生成匹配 `TransportLinkSpec`。
   - [x] 增加 `make ipsec-dry-run-smoke`：不要求 root/StrongSwan/XFRM，使用 fake driver 验证 A/B 同步后能从 link group + active state 推导出对称 `TransportLinkSpec`、稳定 `if_id`/interface name、Ed25519/ECDSA transport key record、AddressCandidate/PortAdvertisement/ContactPoint 组合结果和 expected VICI/XFRM apply plan
@@ -500,7 +500,7 @@
     - 已补 planner dry-run 测试：NAT 后本地节点可主动规划到公网 inbound peer；反向拨入 `behind_nat` 且只有 private/unknown ContactPoint 的 peer 会返回 `no_inbound_nat_evidence`，带 observed external port 的 `nat-observed` ContactPoint 则允许规划。daemon debug/degraded 展示留到 control/apply 接线。
   - [x] 增加真实环境前置检查命令：检测 Linux、root 或 `CAP_NET_ADMIN`、VICI socket/`charon`、XFRM interface 支持、`ip`/`swanctl` 可用性；缺失时给出明确 skip/error，而不是半途留下 connection/interface
     - 已增加 `make ipsec-xfrm-preflight` 与 `docs/strongswan-xfrm-test.md`，真实 `ipsec-xfrm-smoke` 仍保持显式 root/system integration 目标，默认不纳入 `smoke-all`。
-  - [ ] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步、link group/netns 配置和 transport key record 发布
+  - [x] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步、link group/netns 配置和 transport key record 发布
     - [x] 已增加显式 `make ipsec-xfrm-smoke` 系统集成入口，默认不纳入 `smoke-all`；运行时先执行 preflight，再用 `HIGGS_IPSEC_XFRM_SMOKE=1` 跑真实 `SystemXFRMDriver` named netns / XFRM interface / address / delete lifecycle 测试，失败时输出 netns、XFRM state/policy、link 和 `swanctl --list-sas` 诊断。
     - [x] root/system smoke 不再只停留在非 root dry-run：`make ipsec-xfrm-smoke` 必须作为显式 privileged 目标运行，测试机器可用 `sudo make ipsec-xfrm-smoke`、root VM，或具备 netns/XFRM 所需 capability 的 privileged container；默认 `make check` / `smoke-all` 仍不要求 root。
     - [x] 增加 `make ipsec-xfrm-container-smoke`：自动启动 privileged Ubuntu container、挂载当前 repo、复用已构建的本地 smoke 镜像和 Go cache volume、启动 charon 后运行 `make ipsec-xfrm-smoke`，避免每次重新 apt install / 下载 Go module；文档明确 NixOS over LXC、CI nested container 等外层受限环境即使内层 Docker 使用 `--privileged` 也可能被外层拦截，preflight 必须以真实 named netns create/delete、XFRM interface 和 VICI socket 能力检查为准。
@@ -513,8 +513,10 @@
     - [x] 增加普通 Go 覆盖：两个 daemon 使用真实 root -> `catofes.` -> `node-a`/`node-b` 信任链，各自自动发布 signed `ipsec/*` records，经 UDP gossip 同步对端 Zone 后，从 verified active state + 本地 `LinkGroupSpec` 推导对端 `TransportLinkSpec` 并执行 dry-run apply；该测试证明完整 daemon publish/gossip/planner/reconcile 边界已闭合，但仍不触碰 root XFRM 或真实 VICI/IKE。
     - [x] 增加真实 StrongSwan/VICI driver 层 IKE bring-up 测试：`TestStrongSwanDriverIKEBringupSmoke` 在单测中启动两个隔离 charon 实例、两个 named netns、veth underlay、XFRM interface、tunnel address，通过 VICI `load-key`/`load-conn` 加载 Ed25519/ECDSA raw-public-key 认证与 connection，验证 IKE_SA/CHILD_SA 建立成功及 A/B tunnel IP 双向 `ping` 通；`TestStrongSwanDriverLoadsKeyAndConnection` 验证 VICI 公私钥加载与 `load-conn` 消息构造。该测试位于 driver 层，不经过完整 daemon/gossip，但证明 StrongSwan/XFRM/VICI 数据面闭环已打通。
     - [x] 增加真实 daemon reconcile + StrongSwan/VICI + XFRM bring-up 测试：`TestDaemonStrongSwanReconcileBringupSmoke` 在 root/container smoke 中启动两个 named netns、两个隔离 charon/VICI 实例和 veth underlay，构造已验证的 root -> `catofes.` -> `node-a`/`node-b` active state 与 signed `ipsec/*` records，让两个 daemon service 通过真实 `StrongSwanDriver` + `SystemXFRMDriver` 自动加载 private key/connection、创建 XFRM interface、分配 tunnel address、观测 VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 A/B tunnel IP 双向 `ping` 通。
+    - [x] 扩展真实 daemon reconcile smoke 的恢复/撤销段：同一 charon/XFRM 实例保持运行时重建 node-a daemon service，启动 reconcile 必须通过 VICI `ListSAs` 观测已有 SA、保持唯一 established SA，并继续 tunnel ping；已有 `up` 实例可保持 noop，缺失/旧状态才 adopt/repair；随后注入父 Zone 对 `node-b.catofes.` 的 revocation，daemon 必须 terminate/unload、删除 XFRM interface、清空 `LinkInstance`、输出 revoked skip reason，且 tunnel ping 失败。
     - [x] 修正 planner tunnel address 分配：同一 peer pair 独立规划时按 Zone 字典序稳定镜像 tunnel IP，避免 A/B 两端都把 pool 第一个地址当 local；新增 planner 回归测试锁住 A local/B peer 与 B local/A peer 互为镜像。
     - [x] 增加 daemon `Run` 循环级 root/container smoke：`TestDaemonRunGossipStrongSwanBringupSmoke` 启动两个 daemon service、两个 isolated named netns、两个隔离 charon/VICI 实例和 veth underlay；两端各自自动发布 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` records，经 UDP gossip 同步对端 Zone 后，从 verified active state 自动触发真实 `StrongSwanDriver` + `SystemXFRMDriver` reconcile，观测 VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 A/B tunnel IP 双向 `ping`。该 smoke 使用真实 daemon service 主循环，但还不是外部 `build/higgs daemon` OS 进程。
+    - [x] 4.3 最小闭环以 Go 测试内 daemon service 为系统边界完成；外部 `build/higgs daemon` 双 OS 进程、进程重启和 gossip revocation 传播保留到 Phase 7.8 daemon 生产化/hardening，不再阻塞 StrongSwan/XFRM 最小链路闭环。
     - [x] 在 root smoke 中补齐权限说明和失败分层：`CAP_NET_ADMIN` 覆盖 XFRM/link 操作，named netns 通常还需要 root 或 `CAP_SYS_ADMIN`/privileged container，VICI socket 还取决于 charon/swanctl 的本机访问权限；preflight 必须在资源创建前给出明确失败。
   - [x] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
     - [x] daemon 状态机已区分 provider apply 成功后的 `connecting` 与 driver SA 观测后的 `up`；新增 daemon A/B dry-run 测试断言 connection/interface/address apply、SA snapshot adopt、`higgs debug links` 中的 `state=up`、identity、reqid 与 endpoint 字段；root-gated system smoke 已断言 daemon 使用真实 `SystemXFRMDriver` 创建/清理 XFRM interface 和 tunnel address。
@@ -528,11 +530,14 @@
   - [x] smoke 验证 daemon 级数据面：双 Higgs daemon 同步后 A/B 通过 tunnel IP 互相 `ping` 成功；抓取失败时输出 daemon log、VICI SA 列表、`ip link`、`ip xfrm state/policy`、`ip route` 和 namespace 信息
     - [x] root/container smoke 已覆盖 daemon reconcile 级数据面：两个 daemon service 基于已验证 active state 使用真实 VICI/XFRM 建链并完成 A/B tunnel IP 双向 `ping`；失败时输出 charon log、VICI/swanctl、netns、link、route、XFRM state/policy 诊断。完整双 `higgs daemon` 进程 + gossip 同步后的同一断言仍保留为后续项。
     - [x] root/container smoke 已扩展到 daemon `Run` 循环级：双方自动发布并 gossip 同步 `ipsec/*` records 后真实建链、进入 `up` 并双向 tunnel ping；失败时保留 charon log、VICI/swanctl 和 namespace 诊断。外部 CLI `build/higgs daemon` 进程级 smoke 仍可作为后续 hardening，但不再阻塞 4.3 最小闭环。
-  - [ ] 覆盖 daemon 级重启恢复：停止并重启任一 daemon 后，daemon 从 active state + StrongSwan/XFRM 实际状态恢复或 repair，最终仍只有一组有效 connection/interface/SA，tunnel ping 恢复
-    - [x] daemon dry-run 已覆盖启动恢复：已有 SA 时 adopt 为 `up`，已有 `LinkInstance` 但 driver SA 缺失时进入 repair 并重新执行 connection/interface/address apply；driver 层真实 StrongSwan/XFRM 测试已验证首次 bring-up 后 tunnel ping；真实 daemon-level smoke 仍需验证重启后唯一 connection/interface/SA 和 tunnel ping。
-  - [ ] 覆盖撤销闭环：父 Zone 签发 peer revocation 后，远端 daemon 收敛并立即 teardown IKE_SA/CHILD_SA、删除 XFRM interface/地址/临时路由，`LinkInstance` 进入 `removing/down`，tunnel ping 失败且不会被 reconnect/backoff 拉起
-    - [x] daemon dry-run 已覆盖 revocation 后 planner 不再输出 desired link、reconcile 执行 terminate/unload/delete interface、清空 `LinkInstance`，下一轮不会因 backoff/reconnect 重建；driver 层真实 StrongSwan/XFRM 测试已验证 teardown 后 interface/address 清理；真实 daemon-level smoke 仍需补 IKE_SA/CHILD_SA 终止和 ping 失败断言。
-  - [ ] 明确该 smoke 不覆盖 Phase 5 多前缀路由授权；只验证 peer-to-peer tunnel address 和 route-based VPN link 可用
+  - [x] 覆盖 daemon 级重启恢复：停止并重启任一 daemon 后，daemon 从 active state + StrongSwan/XFRM 实际状态恢复或 repair，最终仍只有一组有效 connection/interface/SA，tunnel ping 恢复
+    - [x] daemon dry-run 已覆盖启动恢复：已有 SA 时 adopt 为 `up`，已有 `LinkInstance` 但 driver SA 缺失时进入 repair 并重新执行 connection/interface/address apply；driver 层真实 StrongSwan/XFRM 测试已验证首次 bring-up 后 tunnel ping；root/container daemon-level smoke 已验证重启后唯一 connection/interface/SA 和 tunnel ping。
+    - [x] root/container smoke 已覆盖真实 daemon service 重启恢复：保留 charon/VICI/XFRM 运行态，重建 daemon service 后启动 reconcile 观测现有 IKE_SA/CHILD_SA，已有 `up` 状态保持 noop，缺失/旧状态走 adopt/repair；断言 established SA 仍只有一组并且 tunnel ping 恢复。外部 `build/higgs daemon` OS 进程重启仍作为后续 hardening。
+  - [x] 覆盖撤销闭环：父 Zone 签发 peer revocation 后，远端 daemon 收敛并立即 teardown IKE_SA/CHILD_SA、删除 XFRM interface/地址/临时路由，清空 `LinkInstance`，tunnel ping 失败且不会被 reconnect/backoff 拉起
+    - [x] daemon dry-run 已覆盖 revocation 后 planner 不再输出 desired link、reconcile 执行 terminate/unload/delete interface、清空 `LinkInstance`，下一轮不会因 backoff/reconnect 重建；driver 层真实 StrongSwan/XFRM 测试已验证 teardown 后 interface/address 清理；root/container daemon-level smoke 已验证 IKE_SA/CHILD_SA 终止和 ping 失败断言。
+    - [x] root/container smoke 已覆盖真实 daemon service 撤销：注入父 Zone revocation 后 planner 输出 `revoked_zone` skip，reconcile terminate/unload/delete XFRM interface，清空 `LinkInstance`，VICI 不再观测到该 SA，tunnel ping 失败。当前断言针对一端撤销收敛，完整双外部 daemon 进程 gossip revocation 传播仍作为后续 hardening。
+  - [x] 明确该 smoke 不覆盖 Phase 5 多前缀路由授权；只验证 peer-to-peer tunnel address 和 route-based VPN link 可用
+    - [x] `docs/strongswan-xfrm-test.md` 和 `docs/design.md` 均保持边界：Phase 4 smoke 只证明 route-based peer tunnel link、VICI/SA 观测和 tunnel IP ping，不验证 Babel、多前缀 route authorization 或 import/export policy。
   - [x] 将真实 StrongSwan/XFRM smoke 默认排除在 `make smoke-all` 之外，作为显式 root/system integration 目标；`ipsec-dry-run-smoke` 可纳入常规 `make check` 或 smoke-all
 
 - [ ] **4.4 平滑端口轮换 / 低频 rotate（生产必需）**
