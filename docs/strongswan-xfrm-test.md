@@ -103,13 +103,19 @@ make ipsec-xfrm-container-smoke
    iproute2 或 XFRM 能力缺失都会在创建资源前失败。
 3. 设置 `HIGGS_IPSEC_XFRM_SMOKE=1`，运行
    `TestSystemXFRMDriverIntegrationSmoke`、
-   `TestSystemXFRMDriverPeerTunnelPingSmoke` 和
+   `TestSystemXFRMDriverPeerTunnelPingSmoke`、
+   `TestStrongSwanDriverLoadsKeyAndConnection`、
+   `TestStrongSwanDriverIKEBringupSmoke` 和
    `TestDaemonReconcileUsesSystemXFRMDriverSmoke`。
 4. 创建一个一次性的 named netns、直接在该 namespace 内创建 XFRM interface、
    分配 tunnel address、验证 interface/address 可见，再删除 interface 和 namespace。
 5. 创建两个一次性的 named netns、veth underlay、两端 XFRM interface、手工 XFRM
    state/policy 和 tunnel route，验证 A/B tunnel IP 能互相 `ping`。
-6. 通过 Higgs daemon reconcile 路径创建一次性的 named netns 内 XFRM interface，
+6. 通过 VICI `load-key`/`load-conn` 在两个隔离 charon 实例之间建立真实 IKE_SA/CHILD_SA，
+   创建 XFRM interface、分配 tunnel address，验证 A/B tunnel IP 能互相 `ping`；该测试位于
+   `pkg/transport/ipsec` driver 层，不经过完整 daemon/gossip，但验证 StrongSwan/XFRM/VICI
+   数据面闭环。
+7. 通过 Higgs daemon reconcile 路径创建一次性的 named netns 内 XFRM interface，
    分配 tunnel host prefix，并在 link group 删除后由 daemon teardown 清理 interface。
 
 失败时脚本会输出 `ip netns list`、host XFRM links、`ip xfrm state/policy` 和
@@ -126,6 +132,14 @@ socket，并把 Higgs 内部 `StrongSwanDriver` 生成的 `load-conn`、`termina
 `unload-conn` 和 streaming `list-sas` 调用转换为 govici `Message`。这条路径
 避免在 daemon 核心控制面解析 `swanctl` 输出；`swanctl --list-sas` 仍保留为
 失败诊断和人工对照。
+
+真实 StrongSwan/VICI driver 层测试已落地：
+`TestStrongSwanDriverLoadsKeyAndConnection` 验证 VICI `load-key` 加载本地私钥和
+`load-conn` 消息构造；`TestStrongSwanDriverIKEBringupSmoke` 在单测中启动两个隔离
+charon 实例、两个 named netns、veth underlay、XFRM interface、tunnel address，
+通过 Ed25519/ECDSA raw-public-key 认证完成 IKE_SA/CHILD_SA bring-up，并断言 A/B
+tunnel IP 双向 `ping` 成功。该测试证明 StrongSwan/XFRM/VICI 数据面闭环已打通，但它
+位于 driver 层，不经过完整 daemon/gossip 路径。
 
 daemon 默认仍使用 `ipsec.driver: dry-run`，不会触碰 root namespace、charon 或
 XFRM。系统 smoke 主机可以在 `config.yaml` 中显式配置：
@@ -152,7 +166,8 @@ provider apply。这证明 daemon publish/gossip/planner/reconcile 边界已接�
 
 双 Higgs daemon 完整 join/gossip 后的对端 `ipsec/*` record 同步、真实 VICI
 IKE_SA/CHILD_SA bring-up，以及随后基于 VICI 与 `swanctl --list-sas` 的字段级一致性
-断言，仍属于后续完整 smoke。
+断言，仍属于后续完整 daemon-level smoke。当前 driver 层 bring-up 测试已经为该目标
+验证了 StrongSwan/XFRM/VICI 数据面基座。
 
 ## 3. 最小手工 StrongSwan 健康检查
 

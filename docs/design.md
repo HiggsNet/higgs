@@ -2,7 +2,7 @@
 
 > **文档状态（2026-06）**
 > Phase 0–3 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已进入实现阶段：record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / XFRM preflight 已落地，真实双 daemon + VICI IKE/CHILD_SA + tunnel ping 仍在 4.3 扩展中。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已进入实现阶段：record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / XFRM preflight 已落地，driver 层真实 StrongSwan/VICI IKE/CHILD_SA + tunnel ping 已在 4.3 验证，完整双 daemon gossip 驱动的真实 IKE bring-up 仍在 4.3 扩展中。
 
 ## 原始需求摘要
 
