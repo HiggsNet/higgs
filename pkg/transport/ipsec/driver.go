@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -139,12 +140,13 @@ func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 			return plan, fmt.Errorf("assign address: %w", err)
 		}
 	}
-	if initiator, ok := ipsec.(ChildInitiator); ok && spec.Direction != DirectionInbound {
+	// Staged connections rely on StrongSwan's start_action (start/trap) instead
+	// of an explicit vici initiate. This avoids racing with the auto-start that
+	// load-conn triggers for outbound/bidirectional children while still letting
+	// inbound children install a trap policy.
+	if spec.Direction != DirectionInbound {
 		child := ChildSAName(spec)
 		plan.add("initiate_child", child, spec.TransportID)
-		if err := initiator.InitiateChild(ctx, child); err != nil {
-			return plan, fmt.Errorf("initiate child: %w", err)
-		}
 	}
 	return plan, nil
 }
@@ -262,6 +264,11 @@ func (d *StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
 		return fmt.Errorf("sa id is required")
 	}
 	_, err := d.VICI.Call(ctx, "terminate", map[string]any{"ike": id, "force": "yes"})
+	// Terminating an already-gone SA is a no-op: the caller just wants the
+	// SA gone before the next step (e.g. bounded break-before-make rotate).
+	if err != nil && strings.Contains(err.Error(), "no matching SAs to terminate found") {
+		return nil
+	}
 	return err
 }
 

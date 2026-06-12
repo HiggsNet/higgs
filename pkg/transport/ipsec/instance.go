@@ -362,6 +362,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.RemoteGeneration = desiredGen
 			inst.IKEName = existing.StagedIKEName
 			inst.ChildSAName = existing.StagedChildSAName
+			inst.ActualState = LinkStateUp
+			inst.Endpoint = stagedSA.Endpoint
 			if point, ok := firstContactPointForGeneration(spec, desiredGen); ok {
 				inst.SelectedContact = point
 				inst.Endpoint = contactEndpoint(point)
@@ -433,6 +435,8 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 		inst.RemoteGeneration = existing.StagedGeneration
 		inst.IKEName = existing.StagedIKEName
 		inst.ChildSAName = existing.StagedChildSAName
+		inst.ActualState = LinkStateUp
+		inst.Endpoint = stagedSA.Endpoint
 		inst.SelectedContact = ContactPoint{}
 		inst.StagedGeneration = 0
 		inst.StagedIKEName = ""

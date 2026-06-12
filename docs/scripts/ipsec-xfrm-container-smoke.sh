@@ -104,6 +104,7 @@ cache_args=(
   -e GOCACHE="$go_cache" \
   -e GOMODCACHE="$go_mod_cache" \
   -e CGO_ENABLED="${CGO_ENABLED:-0}" \
+  -e HIGGS_IPSEC_XFRM_SMOKE_CONTAINER=1 \
   "$cache_image" bash -lc '
     set -euo pipefail
     # Start charon manually because containers lack systemd.

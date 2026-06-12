@@ -359,7 +359,13 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 		if inst.StagedGeneration != 0 {
 			inst.RotatePhase = ipsec.RotatePhaseTestingNew
 		}
-	case ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate:
+	case ipsec.ReconcileActionCommitRotate:
+		// The staged SA was already established before commit; after tearing
+		// down the old connection the link is up and rotation is complete.
+		inst.ActualState = ipsec.LinkStateUp
+		inst.RotatePhase = ipsec.RotatePhaseIdle
+		inst.LastTransition = now.Unix()
+	case ipsec.ReconcileActionRollbackRotate:
 		inst.ActualState = ipsec.LinkStateConnecting
 		inst.LastTransition = now.Unix()
 	case ipsec.ReconcileActionCleanupRotate:

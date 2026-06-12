@@ -66,4 +66,8 @@ HIGGS_IPSEC_XFRM_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke$' -count=1
 
-printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
+if [ "${HIGGS_IPSEC_XFRM_SMOKE_CONTAINER:-0}" = "1" ]; then
+  printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping SKIPPED in container + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
+else
+  printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
+fi

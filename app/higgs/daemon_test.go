@@ -2433,9 +2433,19 @@ func assertDaemonSystemLinkUp(t *testing.T, state *stateFile, spec ipsec.Transpo
 	if state.IPsecReconcile == nil || len(state.IPsecReconcile.ActualSAs) == 0 {
 		t.Fatalf("ipsec reconcile = %+v, want observed SAs", state.IPsecReconcile)
 	}
+	ikeName := inst.IKEName
+	if ikeName == "" {
+		ikeName = spec.TransportID
+	}
+	childName := inst.ChildSAName
+	if childName == "" {
+		childName = ipsec.ChildSAName(spec)
+	}
 	for _, sa := range state.IPsecReconcile.ActualSAs {
-		childMatches := sa.ChildSA == ipsec.ChildSAName(spec) || strings.HasPrefix(sa.ChildSA, ipsec.ChildSAName(spec)+"-")
-		if sa.Name == spec.TransportID && childMatches && (sa.XFRMIfID == 0 || sa.XFRMIfID == spec.XFRMIfID) && sa.Established {
+		// StrongSwan may append a rekey suffix (e.g. "-2") to IKE/child names.
+		nameMatches := sa.Name == ikeName || strings.HasPrefix(sa.Name, ikeName+"-")
+		childMatches := sa.ChildSA == childName || strings.HasPrefix(sa.ChildSA, childName+"-")
+		if nameMatches && childMatches && (sa.XFRMIfID == 0 || sa.XFRMIfID == spec.XFRMIfID) && sa.Established {
 			if sa.LocalIdentity != string(spec.LocalZone) || sa.RemoteIdentity != string(spec.PeerZone) {
 				t.Fatalf("SA identities = %+v, want %s -> %s", sa, spec.LocalZone, spec.PeerZone)
 			}
