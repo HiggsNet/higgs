@@ -15,14 +15,14 @@ func TestJoinFlow(t *testing.T) {
 	catofesConfig := filepath.Join(dir, "catofes.yaml")
 	nodeConfig := filepath.Join(dir, "node.yaml")
 	catofesKeyPath := filepath.Join(dir, "catofes.key.json")
-	catofesRequestPath := filepath.Join(dir, "catofes.request.json")
-	catofesBundlePath := filepath.Join(dir, "catofes.bundle.json")
+	catofesRequestPath := filepath.Join(dir, "catofes.request.b64")
+	catofesBundlePath := filepath.Join(dir, "catofes.bundle.b64")
 	keyPath := filepath.Join(dir, "node-b.key.json")
-	requestPath := filepath.Join(dir, "node-b.request.json")
-	bundlePath := filepath.Join(dir, "node-b.bundle.json")
+	requestPath := filepath.Join(dir, "node-b.request.b64")
+	bundlePath := filepath.Join(dir, "node-b.bundle.b64")
 	siblingKeyPath := filepath.Join(dir, "node-a.key.json")
-	siblingRequestPath := filepath.Join(dir, "node-a.request.json")
-	siblingBundlePath := filepath.Join(dir, "node-a.bundle.json")
+	siblingRequestPath := filepath.Join(dir, "node-a.request.b64")
+	siblingBundlePath := filepath.Join(dir, "node-a.bundle.b64")
 
 	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
 	t.Setenv("HIGGS_CONFIG", adminConfig)
@@ -72,12 +72,12 @@ func TestJoinFlow(t *testing.T) {
 		t.Fatalf("issueDelegation: %v", err)
 	}
 	var bundle joinBundle
-	if err := readJSONFile(bundlePath, &bundle); err != nil {
+	if err := readBase64JSONOrJSON(bundlePath, &bundle); err != nil {
 		t.Fatalf("read node-b bundle: %v", err)
 	}
 	assertMinimalJoinBundle(t, &bundle, "node-b.catofes.", []zone.ZonePath{zone.RootZone, "catofes.", "node-b.catofes."})
 	var siblingBundle joinBundle
-	if err := readJSONFile(siblingBundlePath, &siblingBundle); err != nil {
+	if err := readBase64JSONOrJSON(siblingBundlePath, &siblingBundle); err != nil {
 		t.Fatalf("read node-a bundle: %v", err)
 	}
 	nodeBSnapshot, err := gossip.Snapshot(bundle.Network, "node-b.catofes.")
@@ -107,6 +107,71 @@ func TestJoinFlow(t *testing.T) {
 	}
 	if err := verifyChain("node-b.catofes."); err != nil {
 		t.Fatalf("verifyChain(node-b): %v", err)
+	}
+}
+
+func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
+	dir := t.TempDir()
+	adminConfig := filepath.Join(dir, "admin.yaml")
+	nodeConfig := filepath.Join(dir, "node.yaml")
+	keyPath := filepath.Join(dir, "node-b.key.json")
+
+	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
+	t.Setenv("HIGGS_CONFIG", adminConfig)
+	if err := initRootState(); err != nil {
+		t.Fatalf("initRootState(admin): %v", err)
+	}
+
+	writeConfig(t, nodeConfig, filepath.Join(dir, "node-b"))
+	t.Setenv("HIGGS_CONFIG", nodeConfig)
+	if err := keygen(keyPath); err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	key, err := readPrivateKeyFile(keyPath)
+	if err != nil {
+		t.Fatalf("readPrivateKeyFile: %v", err)
+	}
+	requestText, err := encodeBase64JSON(&joinRequest{
+		Version:   1,
+		Zone:      "node-b.",
+		PublicKey: key.PublicKey,
+	})
+	if err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+
+	t.Setenv("HIGGS_CONFIG", adminConfig)
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime(admin): %v", err)
+	}
+	var request joinRequest
+	if err := readBase64JSONOrJSON(requestText, &request); err != nil {
+		t.Fatalf("read request payload: %v", err)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("loadState(admin): %v", err)
+	}
+	result, err := issueDelegationInState(rt, state, &request)
+	if err != nil {
+		t.Fatalf("issueDelegationInState: %v", err)
+	}
+	bundleText, err := encodeBase64JSON(result.Bundle)
+	if err != nil {
+		t.Fatalf("encode bundle: %v", err)
+	}
+
+	t.Setenv("HIGGS_CONFIG", nodeConfig)
+	if err := acceptJoinBundle(bundleText, keyPath); err != nil {
+		t.Fatalf("acceptJoinBundle(base64): %v", err)
+	}
+	joined, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState(node): %v", err)
+	}
+	if joined.ManagedZone != zone.ZonePath("node-b.") {
+		t.Fatalf("ManagedZone = %s, want node-b.", joined.ManagedZone)
 	}
 }
 

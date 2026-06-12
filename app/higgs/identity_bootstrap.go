@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -147,7 +146,15 @@ func writeJoinRequestFromConfig(outPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeJSONFile(outPath, 0o644, request); err != nil {
+	if outPath == "" {
+		text, err := encodeBase64JSON(request)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\n", text)
+		return nil
+	}
+	if err := writeBase64JSONFile(outPath, 0o644, request); err != nil {
 		return err
 	}
 	fmt.Printf("wrote join request: %s\n", outPath)
@@ -175,17 +182,17 @@ func logAutoJoinPending(logger *appLogger, state *stateFile) {
 	}
 	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
 	request := joinRequest{Version: 1, Zone: state.ManagedZone, PublicKey: pub}
-	data, err := json.Marshal(&request)
+	text, err := encodeBase64JSON(&request)
 	if err != nil {
 		return
 	}
 	if logger == nil {
-		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, string(data), "higgs join request --from-config <request.json>")
+		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, text, "higgs join request --from-config")
 		return
 	}
 	logger.Info("auto_join", "pending", map[string]any{
 		"zone":         state.ManagedZone,
-		"join_request": string(data),
-		"hint":         "higgs join request --from-config <request.json>",
+		"join_request": text,
+		"hint":         "higgs join request --from-config",
 	})
 }

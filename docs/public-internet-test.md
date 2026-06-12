@@ -150,18 +150,18 @@ node-c 同理，把 Zone 和公网地址改成 `node-c.catofes.` / `203.0.113.12
 每次 `node-init` 都会输出：
 
 ```text
-request: /home/.../.higgs-public/node-a/node-a.request.json
+request: /home/.../.higgs-public/node-a/node-a.request.b64
 key: /home/.../.higgs-public/node-a/node-a.key.json
 ```
 
-把每个节点的 `*.request.json` 传回 admin 机器。只传 request，不传 `*.key.json`。
+把每个节点的 `*.request.b64` 传回 admin 机器。只传 request，不传 `*.key.json`。
 
 示例：
 
 ```bash
-scp node-a:~/.higgs-public/node-a/node-a.request.json "$HIGGS_BASE/"
-scp node-b:~/.higgs-public/node-b/node-b.request.json "$HIGGS_BASE/"
-scp node-c:~/.higgs-public/node-c/node-c.request.json "$HIGGS_BASE/"
+scp node-a:~/.higgs-public/node-a/node-a.request.b64 "$HIGGS_BASE/"
+scp node-b:~/.higgs-public/node-b/node-b.request.b64 "$HIGGS_BASE/"
+scp node-c:~/.higgs-public/node-c/node-c.request.b64 "$HIGGS_BASE/"
 ```
 
 ## 3. Admin 批量签发
@@ -171,25 +171,25 @@ scp node-c:~/.higgs-public/node-c/node-c.request.json "$HIGGS_BASE/"
 ```bash
 docs/scripts/public-gossip-node.sh issue-nodes \
   "$HIGGS_BASE/catofes-admin" \
-  "$HIGGS_BASE/node-a.request.json" \
-  "$HIGGS_BASE/node-b.request.json" \
-  "$HIGGS_BASE/node-c.request.json"
+  "$HIGGS_BASE/node-a.request.b64" \
+  "$HIGGS_BASE/node-b.request.b64" \
+  "$HIGGS_BASE/node-c.request.b64"
 ```
 
 脚本会生成：
 
 ```text
-bundle: .public-test/node-a.bundle.json
-bundle: .public-test/node-b.bundle.json
-bundle: .public-test/node-c.bundle.json
+bundle: .public-test/node-a.bundle.b64
+bundle: .public-test/node-b.bundle.b64
+bundle: .public-test/node-c.bundle.b64
 ```
 
 把对应 bundle 发回各节点：
 
 ```bash
-scp "$HIGGS_BASE/node-a.bundle.json" node-a:~/.higgs-public/node-a/
-scp "$HIGGS_BASE/node-b.bundle.json" node-b:~/.higgs-public/node-b/
-scp "$HIGGS_BASE/node-c.bundle.json" node-c:~/.higgs-public/node-c/
+scp "$HIGGS_BASE/node-a.bundle.b64" node-a:~/.higgs-public/node-a/
+scp "$HIGGS_BASE/node-b.bundle.b64" node-b:~/.higgs-public/node-b/
+scp "$HIGGS_BASE/node-c.bundle.b64" node-c:~/.higgs-public/node-c/
 ```
 
 ## 4. 启动 daemon
@@ -202,7 +202,7 @@ node-a：
 docs/scripts/public-gossip-node.sh accept-run \
   "$HOME/.higgs-public/node-a" \
   node-a.catofes. \
-  "$HOME/.higgs-public/node-a/node-a.bundle.json" \
+  "$HOME/.higgs-public/node-a/node-a.bundle.b64" \
   5
 ```
 
@@ -212,7 +212,7 @@ node-b：
 docs/scripts/public-gossip-node.sh accept-run \
   "$HOME/.higgs-public/node-b" \
   node-b.catofes. \
-  "$HOME/.higgs-public/node-b/node-b.bundle.json" \
+  "$HOME/.higgs-public/node-b/node-b.bundle.b64" \
   5
 ```
 
@@ -373,9 +373,9 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs verify node-c.
 ```bash
 docs/scripts/public-gossip-node.sh root-init <dir>
 docs/scripts/public-gossip-node.sh config <dir> <peer-id> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
-docs/scripts/public-gossip-node.sh key-request <dir> <zone> <key.json> <request.json>
-docs/scripts/public-gossip-node.sh delegate-issue <admin-dir> <request.json> <bundle.json>
-docs/scripts/public-gossip-node.sh join-accept <dir> <bundle.json> <key.json>
+docs/scripts/public-gossip-node.sh key-request <dir> <zone> <key.json> <request.b64>
+docs/scripts/public-gossip-node.sh delegate-issue <admin-dir> <request.b64> <bundle.b64>
+docs/scripts/public-gossip-node.sh join-accept <dir> <bundle.b64> <key.json>
 docs/scripts/public-gossip-node.sh run-daemon <dir> [interval-seconds]
 docs/scripts/public-gossip-node.sh put-identity <dir> <zone> <value>
 docs/scripts/public-gossip-node.sh status <dir>

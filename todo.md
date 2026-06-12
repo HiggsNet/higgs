@@ -93,9 +93,9 @@
   - [x] root/admin 状态库与业务节点状态库分离；`node-admin` 只持有 `.` 的 root 私钥
   - [x] 一级管理 Zone（如 `catofes.`）也通过 join request / root delegation 独立加入，并由自己的管理私钥继续委派子 Zone
   - [x] `higgs keygen <key.json>`：生成新节点 ED25519 keypair
-  - [x] `higgs join request <zone> <key.json> <request.json>`：新节点生成加入申请
-  - [x] `higgs delegate issue <request.json> <bundle.json>`：父 Zone 持有者签发 delegation bundle
-  - [x] `higgs join accept <bundle.json> <key.json>`：新节点导入信任链和本 Zone authority
+  - [x] `higgs join request <zone> <key.json> [request.b64]`：新节点生成可直接复制的 base64 加入申请
+  - [x] `higgs delegate issue <request-b64|request-file> [bundle.b64]`：父 Zone 持有者签发可直接复制的 base64 delegation bundle
+  - [x] `higgs join accept <bundle-b64|bundle-file> <key.json>`：新节点导入信任链和本 Zone authority
   - [x] 新节点不会接触 root/admin 私钥，只持有自己的 Zone 私钥
 
 - [x] **1.5.3 验证目标**
@@ -407,9 +407,9 @@
   - [x] daemon/CLI 启动加载 state 时支持配置化 identity overlay：先校验 key 文件自洽，再校验 key public 与 DB 中 `ZonePrivateKey`、`ManagedZone` authority 一致；不一致时 fail closed
   - [x] 明确身份不可变：DB 一旦已有 `ManagedZone` / signing key，启动或 reload 发现 `managed_zone`、`identity.key_path` 或 key public 与 DB 不一致，直接拒绝并提示使用新的 `data_dir` / `state_path` 重新创建节点
   - [x] reload 只允许验证身份配置仍与当前 DB/运行态一致，不支持热切换身份；身份变更等价于新节点，不做 DB 迁移、覆盖或半更新
-  - [x] 空 DB / 未初始化 DB 首次启动时，如果配置同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和 bootstrap peer，则自动创建最小 bootstrap state，不再要求人工 `join accept <bundle.json> <key.json>`
+  - [x] 空 DB / 未初始化 DB 首次启动时，如果配置同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和 bootstrap peer，则自动创建最小 bootstrap state，不再要求人工 `join accept <bundle.b64> <key.json>`
   - [x] auto-join 节点启动后从 bootstrap peer 普通同步 root 到本 Zone 的 authority/delegation chain；只有验证 `trusted_root_public_key`、delegation chain 和本地 key public 均匹配后，才进入正常 record signing、endpoint publish、IPsec publish/reconcile
-  - [x] auto-join pending 时 daemon 日志直接打印可提交给父 Zone 管理节点的 `joinRequest` JSON，并提示可用 `higgs join request --from-config <request.json>` 保存同等内容；daemon 不引入 `join_request_path`，也不自动提交授权请求
+  - [x] auto-join pending 时 daemon 日志直接打印可提交给父 Zone 管理节点的 base64 `join_request`，并提示可用 `higgs join request --from-config [request.b64]` 输出或保存同等内容；daemon 不引入 `join_request_path`，也不自动提交授权请求
   - [x] 保留 `join request` / `delegate issue` 作为父节点授权入口；父节点签发 delegation 后写入自身 active state，从节点重连后通过同步获得授权信息，bundle 文件导入只作为 recovery/debug 兼容路径
   - [x] 增加测试：空 DB auto-join happy path、key/public mismatch 拒绝启动、`managed_zone` mismatch 拒绝启动、reload 身份变化拒绝、已初始化 DB 与配置一致时可正常启动/reload
 

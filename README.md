@@ -152,19 +152,19 @@ EOF
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs keygen /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join request catofes. /tmp/catofes.key.json /tmp/catofes.request.json
+CATOFES_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join request catofes. /tmp/catofes.key.json)
 ```
 
-把 `/tmp/catofes.request.json` 交给 `node-admin`，由根域 `.` 签发 `catofes.` 的 delegation：
+把 `CATOFES_REQUEST` 的 base64 内容复制给 `node-admin`，由根域 `.` 签发 `catofes.` 的 delegation：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate issue /tmp/catofes.request.json /tmp/catofes.bundle.json
+CATOFES_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate issue "$CATOFES_REQUEST")
 ```
 
-把 bundle 交还给 `zone-catofes-admin`：
+把 `CATOFES_BUNDLE` 的 base64 内容交还给 `zone-catofes-admin`：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes.bundle.json /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept "$CATOFES_BUNDLE" /tmp/catofes.key.json
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs verify catofes.
 ```
 
@@ -197,19 +197,19 @@ EOF
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs keygen /tmp/node-a.key.json
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs join request node-a.catofes. /tmp/node-a.key.json /tmp/node-a.request.json
+NODE_A_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs join request node-a.catofes. /tmp/node-a.key.json)
 ```
 
-把 `/tmp/node-a.request.json` 交给 `zone-catofes-admin`，由 `catofes.` 签发 delegation bundle：
+把 `NODE_A_REQUEST` 的 base64 内容交给 `zone-catofes-admin`，由 `catofes.` 签发 delegation bundle：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate issue /tmp/node-a.request.json /tmp/node-a.bundle.json
+NODE_A_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate issue "$NODE_A_REQUEST")
 ```
 
-把 `/tmp/node-a.bundle.json` 交还给 node A，然后导入：
+把 `NODE_A_BUNDLE` 的 base64 内容交还给 node A，然后导入：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs join accept /tmp/node-a.bundle.json /tmp/node-a.key.json
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs join accept "$NODE_A_BUNDLE" /tmp/node-a.key.json
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs verify node-a.catofes.
 ```
 
@@ -232,19 +232,19 @@ EOF
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs keygen /tmp/node-b.key.json
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs join request node-b.catofes. /tmp/node-b.key.json /tmp/node-b.request.json
+NODE_B_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs join request node-b.catofes. /tmp/node-b.key.json)
 ```
 
-把 `/tmp/node-b.request.json` 交给 `zone-catofes-admin`。然后在 `zone-catofes-admin` 上签发 delegation bundle：
+把 `NODE_B_REQUEST` 的 base64 内容交给 `zone-catofes-admin`。然后在 `zone-catofes-admin` 上签发 delegation bundle：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate issue /tmp/node-b.request.json /tmp/node-b.bundle.json
+NODE_B_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate issue "$NODE_B_REQUEST")
 ```
 
-把 `/tmp/node-b.bundle.json` 交还给 node B。然后在 node B 上导入：
+把 `NODE_B_BUNDLE` 的 base64 内容交还给 node B。然后在 node B 上导入：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs join accept /tmp/node-b.bundle.json /tmp/node-b.key.json
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs join accept "$NODE_B_BUNDLE" /tmp/node-b.key.json
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs verify node-b.catofes.
 ```
 
@@ -379,15 +379,15 @@ for node in catofes a b; do
 done
 
 HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs keygen "$tmp/catofes.key.json" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.json" >/dev/null
-HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.json" "$tmp/catofes.bundle.json" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.json" "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.b64" >/dev/null
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.b64" "$tmp/catofes.bundle.b64" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.b64" "$tmp/catofes.key.json" >/dev/null
 
 for node in a b; do
   HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs keygen "$tmp/node-$node.key.json" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.json" >/dev/null
-  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.json" "$tmp/node-$node.bundle.json" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.json" "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.b64" "$tmp/node-$node.bundle.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.b64" "$tmp/node-$node.key.json" >/dev/null
 done
 
 HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs record put node-a.catofes. identity node-a >/dev/null
@@ -449,15 +449,15 @@ for node in catofes a b c; do
 done
 
 HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs keygen "$tmp/catofes.key.json" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.json" >/dev/null
-HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.json" "$tmp/catofes.bundle.json" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.json" "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.b64" >/dev/null
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.b64" "$tmp/catofes.bundle.b64" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.b64" "$tmp/catofes.key.json" >/dev/null
 
 for node in a b c; do
   HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs keygen "$tmp/node-$node.key.json" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.json" >/dev/null
-  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.json" "$tmp/node-$node.bundle.json" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.json" "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.b64" "$tmp/node-$node.bundle.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.b64" "$tmp/node-$node.key.json" >/dev/null
 done
 
 HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record put node-b.catofes. identity node-b >/dev/null
@@ -658,9 +658,9 @@ Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块正在推进。当前核�
 build/higgs root init
 build/higgs root pubkey
 build/higgs keygen <key.json>
-build/higgs join request <zone> <key.json> <request.json>
-build/higgs delegate issue <request.json> <bundle.json>
-build/higgs join accept <bundle.json> <key.json>
+build/higgs join request <zone> <key.json> [request.b64]
+build/higgs delegate issue <request-b64|request-file> [bundle.b64]
+build/higgs join accept <bundle-b64|bundle-file> <key.json>
 build/higgs zone show <zone>
 build/higgs record put <zone> <key> <value> [type]
 build/higgs verify <zone>

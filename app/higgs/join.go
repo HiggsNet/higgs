@@ -52,20 +52,28 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 		Zone:      path,
 		PublicKey: key.PublicKey,
 	}
-	if err := writeJSONFile(outPath, 0o644, &request); err != nil {
+	if outPath == "" {
+		text, err := encodeBase64JSON(&request)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\n", text)
+		return nil
+	}
+	if err := writeBase64JSONFile(outPath, 0o644, &request); err != nil {
 		return err
 	}
 	fmt.Printf("wrote join request: %s\n", outPath)
 	return nil
 }
 
-func issueDelegation(requestPath string, outPath string) error {
+func issueDelegation(requestInput string, outPath string) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
 	var request joinRequest
-	if err := readJSONFile(requestPath, &request); err != nil {
+	if err := readBase64JSONOrJSON(requestInput, &request); err != nil {
 		return err
 	}
 	if err := validateJoinRequest(&request); err != nil {
@@ -76,10 +84,19 @@ func issueDelegation(requestPath string, outPath string) error {
 		return err
 	}
 	if controlled {
-		if err := writeJSONFile(outPath, 0o644, bundle); err != nil {
-			return err
+		if outPath == "" {
+			fmt.Fprintf(os.Stderr, "issued delegation for %s via daemon\n", request.Zone)
+			text, err := encodeBase64JSON(bundle)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s\n", text)
+			return nil
 		}
 		fmt.Printf("issued delegation for %s via daemon\n", request.Zone)
+		if err := writeBase64JSONFile(outPath, 0o644, bundle); err != nil {
+			return err
+		}
 		fmt.Printf("wrote join bundle: %s\n", outPath)
 		return nil
 	}
@@ -95,10 +112,19 @@ func issueDelegation(requestPath string, outPath string) error {
 	if err := rt.SaveState(state); err != nil {
 		return err
 	}
-	if err := writeJSONFile(outPath, 0o644, result.Bundle); err != nil {
-		return err
+	if outPath == "" {
+		fmt.Fprintf(os.Stderr, "issued delegation for %s\n", request.Zone)
+		text, err := encodeBase64JSON(result.Bundle)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\n", text)
+		return nil
 	}
 	fmt.Printf("issued delegation for %s\n", request.Zone)
+	if err := writeBase64JSONFile(outPath, 0o644, result.Bundle); err != nil {
+		return err
+	}
 	fmt.Printf("wrote join bundle: %s\n", outPath)
 	return nil
 }
@@ -250,13 +276,13 @@ func revokeDelegationInState(rt *Runtime, state *stateFile, path zone.ZonePath, 
 	return nil
 }
 
-func acceptJoinBundle(bundlePath string, keyPath string) error {
+func acceptJoinBundle(bundleInput string, keyPath string) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
 	var bundle joinBundle
-	if err := readJSONFile(bundlePath, &bundle); err != nil {
+	if err := readBase64JSONOrJSON(bundleInput, &bundle); err != nil {
 		return err
 	}
 	key, err := readPrivateKeyFile(keyPath)

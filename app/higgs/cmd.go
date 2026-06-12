@@ -105,19 +105,19 @@ func cmdJoin() *cli.Command {
 			{
 				Name:      "request",
 				Usage:     "Create a join request for a zone",
-				UsageText: "higgs join request <zone> <key.json> <request.json>\n   higgs join request --from-config <request.json>",
+				UsageText: "higgs join request <zone> <key.json> [request.b64]\n   higgs join request --from-config [request.b64]",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "from-config", Usage: "Create the request from managed_zone and identity.key_path in config.yaml"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Bool("from-config") {
-						if cmd.Args().Len() != 1 {
-							return cli.Exit("usage: higgs join request --from-config <request.json>", 1)
+						if cmd.Args().Len() > 1 {
+							return cli.Exit("usage: higgs join request --from-config [request.b64]", 1)
 						}
 						return writeJoinRequestFromConfig(cmd.Args().First())
 					}
-					if cmd.Args().Len() != 3 {
-						return cli.Exit("usage: higgs join request <zone> <key.json> <request.json>", 1)
+					if cmd.Args().Len() < 2 || cmd.Args().Len() > 3 {
+						return cli.Exit("usage: higgs join request <zone> <key.json> [request.b64]", 1)
 					}
 					return createJoinRequest(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Args().Get(2))
 				},
@@ -125,10 +125,10 @@ func cmdJoin() *cli.Command {
 			{
 				Name:      "accept",
 				Usage:     "Accept a join bundle",
-				UsageText: "higgs join accept <bundle.json> <key.json>",
+				UsageText: "higgs join accept <bundle-b64|bundle-file> <key.json>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
-						return cli.Exit("usage: higgs join accept <bundle.json> <key.json>", 1)
+						return cli.Exit("usage: higgs join accept <bundle-b64|bundle-file> <key.json>", 1)
 					}
 					return acceptJoinBundle(cmd.Args().Get(0), cmd.Args().Get(1))
 				},
@@ -145,10 +145,10 @@ func cmdDelegate() *cli.Command {
 			{
 				Name:      "issue",
 				Usage:     "Issue a delegation from a join request",
-				UsageText: "higgs delegate issue <request.json> <bundle.json>",
+				UsageText: "higgs delegate issue <request-b64|request-file> [bundle.b64]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 2 {
-						return cli.Exit("usage: higgs delegate issue <request.json> <bundle.json>", 1)
+					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
+						return cli.Exit("usage: higgs delegate issue <request-b64|request-file> [bundle.b64]", 1)
 					}
 					return issueDelegation(cmd.Args().Get(0), cmd.Args().Get(1))
 				},

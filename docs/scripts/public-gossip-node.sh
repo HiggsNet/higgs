@@ -8,13 +8,13 @@ usage() {
 Usage:
   public-gossip-node.sh admin-init <base-dir> [admin-zone]
   public-gossip-node.sh node-init <dir> <zone> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
-  public-gossip-node.sh issue-nodes <admin-dir> <request.json>...
-  public-gossip-node.sh accept-run <dir> <zone> <bundle.json> [interval-seconds]
+  public-gossip-node.sh issue-nodes <admin-dir> <request.b64>...
+  public-gossip-node.sh accept-run <dir> <zone> <bundle.b64> [interval-seconds]
   public-gossip-node.sh root-init <dir>
   public-gossip-node.sh config <dir> <peer-id> <listen-addr> <advertise-addr> <root-public-key> [<bootstrap-id> <bootstrap-addr> ...]
-  public-gossip-node.sh key-request <dir> <zone> <key.json> <request.json>
-  public-gossip-node.sh delegate-issue <admin-dir> <request.json> <bundle.json>
-  public-gossip-node.sh join-accept <dir> <bundle.json> <key.json>
+  public-gossip-node.sh key-request <dir> <zone> <key.json> <request.b64>
+  public-gossip-node.sh delegate-issue <admin-dir> <request.b64> <bundle.b64>
+  public-gossip-node.sh join-accept <dir> <bundle.b64> <key.json>
   public-gossip-node.sh run-daemon <dir> [interval-seconds]
   public-gossip-node.sh put-identity <dir> <zone> <value>
   public-gossip-node.sh status <dir>
@@ -40,16 +40,16 @@ key_path() {
 }
 
 request_path() {
-  printf '%s/%s.request.json' "$1" "$(zone_slug "$2")"
+  printf '%s/%s.request.b64' "$1" "$(zone_slug "$2")"
 }
 
 bundle_path_for_request() {
   local request
   request="$1"
-  if [ "${request%.request.json}" != "$request" ]; then
-    printf '%s.bundle.json' "${request%.request.json}"
+  if [ "${request%.request.b64}" != "$request" ]; then
+    printf '%s.bundle.b64' "${request%.request.b64}"
   else
-    printf '%s.bundle.json' "$request"
+    printf '%s.bundle.b64' "$request"
   fi
 }
 
@@ -151,9 +151,9 @@ case "$cmd" in
     mkdir -p "$base"
     root_key="$(root_init "$root_dir" | tail -n 1)"
     write_config "$admin_dir" "$admin_zone" 127.0.0.1:33435 127.0.0.1:33435 "$root_key"
-    make_key_request "$admin_dir" "$admin_zone" "$base/$admin_slug.key.json" "$base/$admin_slug.request.json"
-    issue_bundle "$root_dir" "$base/$admin_slug.request.json" "$base/$admin_slug.bundle.json"
-    accept_bundle "$admin_dir" "$base/$admin_slug.bundle.json" "$base/$admin_slug.key.json"
+    make_key_request "$admin_dir" "$admin_zone" "$base/$admin_slug.key.json" "$base/$admin_slug.request.b64"
+    issue_bundle "$root_dir" "$base/$admin_slug.request.b64" "$base/$admin_slug.bundle.b64"
+    accept_bundle "$admin_dir" "$base/$admin_slug.bundle.b64" "$base/$admin_slug.key.json"
     printf 'root_public_key: %s\n' "$root_key"
     printf 'root_admin_dir: %s\n' "$root_dir"
     printf 'admin_zone_dir: %s\n' "$admin_dir"
