@@ -102,6 +102,7 @@ type ReconcileInputs struct {
 	Roles                map[string]string
 	GroupBackoff         map[string]BackoffPolicy
 	GroupRotateRetention map[string]int
+	RotateCutoverReady   map[string]bool
 }
 
 type ReconcileResult struct {
@@ -287,7 +288,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			if !sa.Established {
 				sa = findMatchingSA(in.SAs, spec)
 			}
-			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, in.GroupBackoff, in.GroupRotateRetention, now)
+			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, in.GroupBackoff, in.GroupRotateRetention, in.RotateCutoverReady, now)
 			continue
 		}
 		// Primary / outbound initiator path.
@@ -310,7 +311,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			existing.RemoteGeneration = desiredGen
 		}
 		if existing.RemoteGeneration != desiredGen {
-			result.handleRotate(id, spec, existing, in.SAs, rotateRetentionForSpec(spec, in.GroupRotateRetention), now, role)
+			result.handleRotate(id, spec, existing, in.SAs, rotateRetentionForSpec(spec, in.GroupRotateRetention), rotateCutoverReady(id, in.RotateCutoverReady), now, role)
 			continue
 		}
 		existing = result.clearStagedIfIdle(existing, in.SAs, now)
@@ -385,7 +386,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	return result
 }
 
-func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, now time.Time) {
+func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, rotateCutover map[string]bool, now time.Time) {
 	policy := groupBackoffForSpec(spec, groupBackoff)
 	if sa.Established {
 		if exists {
@@ -398,7 +399,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 				if existing.InitiatorRole == InitiatorRoleSecondaryTakeover {
 					rotateRole = InitiatorRoleSecondaryTakeover
 				}
-				r.handleRotate(id, spec, existing, sas, rotateRetentionForSpec(spec, groupRotateRetention), now, rotateRole)
+				r.handleRotate(id, spec, existing, sas, rotateRetentionForSpec(spec, groupRotateRetention), rotateCutoverReady(id, rotateCutover), now, rotateRole)
 				return
 			}
 		}
@@ -488,7 +489,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	r.add(ReconcileActionCreate, &spec, &inst, reason)
 }
 
-func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, retention time.Duration, now time.Time, initiatorRole string) {
+func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, retention time.Duration, cutoverReady bool, now time.Time, initiatorRole string) {
 	desiredGen := contactGeneration(spec)
 	if existing.StagedGeneration != 0 && existing.StagedGeneration != desiredGen {
 		inst := existing
@@ -525,6 +526,14 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 				inst.RotatePhase = RotatePhaseDualRunning
 				r.Instances[id] = inst
 				r.add(ReconcileActionNoop, &spec, &inst, "rotate retention active")
+				return
+			}
+			if oldSA.Established && !cutoverReady {
+				inst := existing
+				inst.ActualState = LinkStateUp
+				inst.RotatePhase = RotatePhaseDualRunning
+				r.Instances[id] = inst
+				r.add(ReconcileActionNoop, &spec, &inst, "route_cutover_pending")
 				return
 			}
 			inst := existing
@@ -733,6 +742,17 @@ func rotateRetentionForSpec(spec TransportLinkSpec, groups map[string]int) time.
 		return defaultRotateRetention
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func rotateCutoverReady(id string, readiness map[string]bool) bool {
+	if readiness == nil {
+		return true
+	}
+	ready, ok := readiness[id]
+	if !ok {
+		return true
+	}
+	return ready
 }
 
 func takeoverDelayFor(policy BackoffPolicy, failureCount int) time.Duration {

@@ -495,7 +495,7 @@ Phase 4.4/4.4.x 的端口 rotate 状态机分为两层协议语义：
 | idle | `RemoteGeneration == desired generation` 且无 staged generation | `noop` / 常规 create-update-repair-adopt 路径 | 保持或修复当前 generation | 远端 `ipsec/ports.current.generation` 改变 |
 | preparing | 远端 generation 改变，且无现存 staged generation | `prepare_rotate` / `remote port generation changed` | 生成 staged connection/CHILD_SA/interface；primary/outbound/takeover owner 主动 initiate，inbound/standby 只加载 responder/trap | 下一轮进入 `testing_new`，或发现 stale staged generation |
 | testing_new | staged generation 已落盘但 VICI `ListSAs` 尚未观测到 staged SA | `prepare_rotate` / `awaiting staged sa` | 重试/确认 staged config，不拆旧 generation | staged SA established -> `dual_running`；deadline 超时 -> `rollback` |
-| dual_running | staged SA established，旧 SA 仍存在，`rotate_retention` 未到期 | `noop` / `rotate retention active` | 新旧 generation 并行；旧 generation 保留给 Babel/route manager 收敛和回滚 | retention 到期，或旧 SA 已不存在 |
+| dual_running | staged SA established，旧 SA 仍存在，`rotate_retention` 未到期，或 route manager 尚未允许切换 | `noop` / `rotate retention active` 或 `route_cutover_pending` | 新旧 generation 并行；旧 generation 保留给 Babel/route manager 收敛和回滚 | retention 到期且 route manager 允许 cutover，或旧 SA 已不存在 |
 | cutover | staged SA established，且无需继续保留旧 generation | `commit_rotate` / `staged sa established` | promote staged generation 为当前 generation；terminate/unload/delete 旧 connection/interface | 回到 idle |
 | rollback | staged SA 在 prepare deadline 前未建立，或 apply 失败进入 backoff | `rollback_rotate` / `staged sa deadline exceeded` | 只清 staged artifacts，旧 generation 保持可用，记录 `LastError`、`FailureCount`、`BackoffUntil` | backoff 到期后可重新 prepare |
 | cleanup | staged generation 与当前 desired generation 不一致，或 spec 更新留下旧 rotated connection | `cleanup_rotate` / `stale staged generation` 或 `old rotated connection after spec update` | 清理过期 staged/旧 connection，不 promote | 回到 idle 或重新 prepare |
@@ -538,7 +538,7 @@ Initiator/direction 规则：
 - `RotateDeadline`：在 `testing_new` 中表示 prepare timeout；在 `dual_running` 中表示旧 generation retention 截止时间。
 - `LastError`、`FailureCount`、`BackoffUntil`：rollback/apply failure 后的节流和诊断信息。
 
-配置窗口要分清职责：`ipsec.port_previous_grace` 覆盖“远端还能尝试旧入口端口”的窗口；`overlays[].reconcile.rotate_retention` 覆盖“本地新旧 XFRM/Babel 数据面并行”的窗口，默认 1h。配置校验要求 previous grace 至少覆盖 rotate retention。revocation、policy deny、record expiry、transport key/profile mismatch 仍走强制 teardown，不进入 rotate 状态机。
+配置窗口要分清职责：`ipsec.port_previous_grace` 覆盖“远端还能尝试旧入口端口”的窗口；`overlays[].reconcile.rotate_retention` 覆盖“本地新旧 XFRM/Babel 数据面并行”的窗口，默认 1h。配置校验要求 previous grace 至少覆盖 rotate retention。Phase 5 route/Babel manager 可通过 `ReconcileInputs.RotateCutoverReady[instance_id]=false` 明确阻止 retention 到期后的 `commit_rotate`，此时 reconcile 返回 `noop` / `route_cutover_pending` 并继续保留旧 generation；未提供该输入时保持 Phase 4 默认行为，retention 到期即可切换。revocation、policy deny、record expiry、transport key/profile mismatch 仍走强制 teardown，不进入 rotate 状态机。
 
 endpoint 变化与 rotate 的关系由 reconcile 的判断顺序决定：
 

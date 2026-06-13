@@ -418,6 +418,70 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	}
 }
 
+func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: DefaultIKEPort},
+			NATT:       PortBinding{Advertised: 4501},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Direction:         DirectionOutbound,
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+	}
+	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	newSpec := plan.Desired[0]
+	stagedSpec := rotateSpec(newSpec, 2)
+
+	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing.RemoteGeneration = 1
+	existing.StagedGeneration = 2
+	existing.StagedIKEName = stagedSpec.TransportID
+	existing.StagedChildSAName = ChildSAName(stagedSpec)
+	existing.StagedInterfaceName = stagedSpec.InterfaceName
+	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.RotatePhase = RotatePhaseDualRunning
+	existing.RotateDeadline = now.Add(-time.Second).Unix()
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{newSpec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{
+			{Name: existing.IKEName, Established: true},
+			{Name: existing.StagedIKEName, Established: true},
+		},
+		Now:                now,
+		RotateCutoverReady: map[string]bool{existing.ID: false},
+	})
+
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "route_cutover_pending" {
+		t.Fatalf("expected route cutover pending noop, got %+v", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.RemoteGeneration != 1 || inst.StagedGeneration != 2 {
+		t.Fatalf("rotate generation changed before route cutover: %+v", inst)
+	}
+	if inst.IKEName != existing.IKEName || inst.InterfaceName != existing.InterfaceName {
+		t.Fatalf("old generation was promoted before route cutover: %+v", inst)
+	}
+	if inst.RotatePhase != RotatePhaseDualRunning {
+		t.Fatalf("rotate phase = %q, want dual_running", inst.RotatePhase)
+	}
+}
+
 func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

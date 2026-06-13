@@ -627,7 +627,8 @@
     - [ ] inbound 端 rotate advertised/listen port 时，真正平滑依赖 responder 侧能在 retention/grace 窗口同时接收 old/current port；若 StrongSwan 单实例无法双 listen，则 A 只能保持旧 SA/XFRM link，不能单独保证新旧端口监听无断，需 DNAT/redirect grace 或多实例 listener 作为 Phase 6/7 能力。
     - [x] bidirectional 双端同时 rotate 时沿用 4.5 的 primary/secondary-takeover：primary 或 takeover owner 负责 staged initiate，standby 只加载 responder；takeover 不应在 `dual_running` 保留窗口内抢拨，除非当前 owner 超时且无 established staged SA。
       - 2026-06-13 已补 reconcile 守卫：secondary-standby 在 staged/`dual_running` rotate deadline 未到期时返回 `rotate_staged_active` / `rotate_retention_active` noop，不触发 takeover；新增单测覆盖超过 takeover delay 但仍处于 retention 窗口时保持 standby。
-    - [ ] 后续 Phase 5 接 Babel 时增加 route manager 回调/状态输入，避免 IPsec reconcile 在 Babel 尚未收敛前过早清理旧 generation。
+    - [x] 后续 Phase 5 接 Babel 时增加 route manager 回调/状态输入，避免 IPsec reconcile 在 Babel 尚未收敛前过早清理旧 generation。
+      - 2026-06-13 已在 `ReconcileInputs` 增加 `RotateCutoverReady` per-instance 门闩：默认未接 route manager 时沿用 retention 到期 commit；Phase 5 route/Babel manager 可显式置为 false，让 `dual_running` 即使 retention 到期也继续保留旧 generation，直到 Babel metric/邻居/路由收敛后再允许 `commit_rotate`。
   - 配置边界必须明确，避免把两类 rotate 混在一起：
     - `ipsec.port_mode` / `ipsec.port_range` / `ipsec.port_rotate_interval` / `ipsec.port_previous_grace` 是本节点公开的 IKE/NAT-T **入口端口 generation 策略**，决定本节点何时选择/公告 current port、previous port grace 多久；它主要影响 responder/inbound 入口和远端 planner 如何选择 ContactPoint。
     - `overlays[].reconcile.rotate_retention` 是本地 overlay link 的 **数据面旧 generation 保留窗口**，决定 staged CHILD_SA/XFRM link 已建立后，本机旧 SA/interface 继续保留多久给 Babel metric 收敛和回滚使用；默认 1h。它不负责让 charon 同时监听 old/current port。
