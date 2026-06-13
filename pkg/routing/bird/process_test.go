@@ -1,0 +1,243 @@
+package bird
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+)
+
+type recordedCmd struct {
+	name string
+	args []string
+}
+
+type mockRunner struct {
+	cmds     []recordedCmd
+	fallback func(ctx context.Context, name string, args ...string) *exec.Cmd
+}
+
+func (m *mockRunner) run(ctx context.Context, name string, args ...string) *exec.Cmd {
+	m.cmds = append(m.cmds, recordedCmd{
+		name: name,
+		args: slices.Clone(args),
+	})
+	if m.fallback != nil {
+		return m.fallback(ctx, name, args...)
+	}
+	// Fail immediately so no real binary runs.
+	return exec.CommandContext(ctx, "false")
+}
+
+func fakeBirdBinary(t *testing.T) string {
+	t.Helper()
+	birdPath := filepath.Join(t.TempDir(), "bird")
+	script := "#!/bin/sh\nexit 0\n"
+	if err := os.WriteFile(birdPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("create fake bird binary: %v", err)
+	}
+	return birdPath
+}
+
+func managedSpec(tmp string) BirdInstanceSpec {
+	return BirdInstanceSpec{
+		Mode:              BirdModeManaged,
+		OverlayID:         "test-overlay",
+		RouterID:          1,
+		ConfigPath:        filepath.Join(tmp, "bird.conf"),
+		ControlSocketPath: filepath.Join(tmp, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmp, "bird.pid"),
+	}
+}
+
+func TestExecProcessManagerStartHostMode(t *testing.T) {
+	tmp := t.TempDir()
+	mr := &mockRunner{}
+	pm := NewExecProcessManager(fakeBirdBinary(t))
+	pm.runner = mr.run
+	pm.socketWaitTimeout = 100 * time.Millisecond
+
+	spec := managedSpec(tmp)
+	spec.NetNS = NetNSSpec{Kind: "host"}
+
+	// The fake bird exits immediately, so the socket wait will time out.
+	if err := pm.Start(context.Background(), spec); err == nil {
+		t.Fatal("expected Start to fail when socket does not appear")
+	}
+
+	if len(mr.cmds) != 1 {
+		t.Fatalf("expected 1 recorded command, got %d: %+v", len(mr.cmds), mr.cmds)
+	}
+	cmd := mr.cmds[0]
+	if filepath.Base(cmd.name) != "bird" {
+		t.Errorf("expected bird command, got %s", cmd.name)
+	}
+	want := []string{"-c", spec.ConfigPath, "-s", spec.ControlSocketPath, "-P", spec.PIDFilePath}
+	if !slices.Equal(cmd.args, want) {
+		t.Errorf("expected args %v, got %v", want, cmd.args)
+	}
+}
+
+func TestExecProcessManagerStartNamedNetNS(t *testing.T) {
+	tmp := t.TempDir()
+	mr := &mockRunner{
+		fallback: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			if name == "ip" && len(args) >= 2 && args[0] == "netns" && args[1] == "add" {
+				return exec.CommandContext(ctx, "true")
+			}
+			return exec.CommandContext(ctx, "false")
+		},
+	}
+	pm := NewExecProcessManager(fakeBirdBinary(t))
+	pm.runner = mr.run
+	pm.socketWaitTimeout = 100 * time.Millisecond
+
+	spec := managedSpec(tmp)
+	spec.NetNS = NetNSSpec{Kind: "name", Name: "higgs-test", Create: true}
+
+	if err := pm.Start(context.Background(), spec); err == nil {
+		t.Fatal("expected Start to fail when socket does not appear")
+	}
+
+	var foundAdd, foundExec bool
+	for _, cmd := range mr.cmds {
+		if cmd.name == "ip" && len(cmd.args) >= 3 && cmd.args[0] == "netns" && cmd.args[1] == "add" && cmd.args[2] == "higgs-test" {
+			foundAdd = true
+		}
+		if cmd.name == "ip" && len(cmd.args) >= 3 && cmd.args[0] == "netns" && cmd.args[1] == "exec" && cmd.args[2] == "higgs-test" {
+			foundExec = true
+			want := []string{"netns", "exec", "higgs-test", pm.birdBinary, "-c", spec.ConfigPath, "-s", spec.ControlSocketPath, "-P", spec.PIDFilePath}
+			if !slices.Equal(cmd.args, want) {
+				t.Errorf("expected exec args %v, got %v", want, cmd.args)
+			}
+		}
+	}
+	if !foundAdd {
+		t.Errorf("expected ip netns add command, got %+v", mr.cmds)
+	}
+	if !foundExec {
+		t.Errorf("expected ip netns exec command, got %+v", mr.cmds)
+	}
+}
+
+func TestExecProcessManagerStartRejectsNonManagedModes(t *testing.T) {
+	pm := NewExecProcessManager("")
+
+	for _, mode := range []BirdMode{BirdModeExternal, BirdModeDisabled} {
+		spec := BirdInstanceSpec{Mode: mode, OverlayID: "x"}
+		err := pm.Start(context.Background(), spec)
+		if err == nil {
+			t.Errorf("expected error for mode %q", mode)
+		}
+	}
+}
+
+func TestExecProcessManagerStopIssuesCorrectCommands(t *testing.T) {
+	tmp := t.TempDir()
+	spec := managedSpec(tmp)
+
+	// Create the managed files so Stop tries graceful shutdown and cleans up.
+	if err := os.WriteFile(spec.ConfigPath, []byte("# config"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
+		t.Fatalf("write socket: %v", err)
+	}
+	if err := os.WriteFile(spec.PIDFilePath, []byte("99999\n"), 0o644); err != nil {
+		t.Fatalf("write pidfile: %v", err)
+	}
+
+	mr := &mockRunner{
+		fallback: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			if name == "birdc" {
+				// Graceful shutdown fails.
+				return exec.CommandContext(ctx, "false")
+			}
+			return exec.CommandContext(ctx, "false")
+		},
+	}
+	pm := NewExecProcessManager("")
+	pm.runner = mr.run
+	pm.pid = 99999
+
+	if err := pm.Stop(context.Background(), spec); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	var foundShutdown bool
+	for _, cmd := range mr.cmds {
+		if cmd.name == "birdc" {
+			foundShutdown = true
+			want := []string{"-s", spec.ControlSocketPath, "down"}
+			if !slices.Equal(cmd.args, want) {
+				t.Errorf("expected birdc args %v, got %v", want, cmd.args)
+			}
+		}
+	}
+	if !foundShutdown {
+		t.Errorf("expected birdc shutdown command, got %+v", mr.cmds)
+	}
+
+	for _, p := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("expected %s to be removed", p)
+		}
+	}
+}
+
+func TestExecProcessManagerIsRunning(t *testing.T) {
+	tmp := t.TempDir()
+	mr := &mockRunner{
+		fallback: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			if filepath.Base(name) == "bird" {
+				return exec.CommandContext(ctx, "sleep", "30")
+			}
+			return exec.CommandContext(ctx, "false")
+		},
+	}
+	pm := NewExecProcessManager(fakeBirdBinary(t))
+	pm.runner = mr.run
+	pm.socketWaitTimeout = 100 * time.Millisecond
+
+	spec := managedSpec(tmp)
+	spec.NetNS = NetNSSpec{Kind: "host"}
+
+	// Pre-create the socket so Start succeeds without a real BIRD daemon.
+	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
+		t.Fatalf("write socket: %v", err)
+	}
+
+	if err := pm.Start(context.Background(), spec); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if pid := pm.pid; pid > 0 {
+			if p, err := os.FindProcess(pid); err == nil {
+				_ = p.Kill()
+			}
+		}
+	})
+
+	if !pm.IsRunning(context.Background()) {
+		t.Fatal("expected process to be running")
+	}
+
+	proc, err := os.FindProcess(pm.pid)
+	if err != nil {
+		t.Fatalf("find process: %v", err)
+	}
+	if err := proc.Kill(); err != nil {
+		t.Fatalf("kill process: %v", err)
+	}
+
+	// Wait for the goroutine that reaps the child process.
+	time.Sleep(100 * time.Millisecond)
+
+	if pm.IsRunning(context.Background()) {
+		t.Fatal("expected process to be stopped")
+	}
+}
