@@ -692,16 +692,23 @@
 - [ ] **5.0 Babel 运行模式与配置模型**
   - 增加 `overlays[].routing` 配置：`enabled`、`protocol=bird`、`mode=managed|external|disabled`、`netns` 继承 LinkGroup、`control_socket`、`pid_file`、`router_id` override、`table`（可选，默认 main）、`priority`（可选，仅非 main table 时生效）、`metric_base`、`metric_staged`、`metric_draining`、`export_static`。
   - managed 模式：daemon 在目标 netns 内启动 BIRD daemon，传入固定 router-id、control socket、pid/log 路径、routing table（默认该 netns 的 main table）；daemon 退出时按 ownership 清理子进程和 socket。
-  - external 模式：daemon 只连接 control socket，不杀进程；启动 reconcile 时必须 dry-run/校验 router-id、table、netns、control socket 权限和是否允许动态接口控制。
+    - 启动流程：确保 netns 存在 → 生成 `bird.conf` → `ip netns exec <ns> bird -c ... -s ... -P <pidfile>` → 等待 control socket 出现 → 首次 `birdc show status` 确认可用。
+    - 配置热重载：filter/接口参数变化时重写 `bird.conf`，执行 `birdc configure soft`（不影响协议会话）或普通 `birdc configure`（结构变化时）；filter-only 变化后可再执行 `birdc reload in <proto>` / `reload out <proto>` 让已有路由重新过 filter。table/通道结构变化可能需要 `birdc restart <proto>`。
+    - 优雅退出：daemon 收到 shutdown 后先发 `birdc down`（或 SIGTERM），等待进程退出，再删除 pid、control socket、`bird.conf` 等 Higgs-owned 文件。
+    - 崩溃恢复：daemon 周期性 `birdc show status` 或在事件循环中 waitpid(NO HANG)；发现 BIRD 异常退出时，用同一份 router-id/config 重新拉起，避免序列号丢失；连续崩溃进入 backoff 并记录 error。
+  - external 模式：daemon 只连接 control socket，不杀进程；启动 reconcile 时必须 dry-run/校验 router-id、table、netns、control socket 权限和是否允许动态接口控制；control socket 丢失时标记 degraded 但不主动重启 BIRD。
   - preflight：检测 BIRD binary、birdc control socket 能力、目标 netns、路由表写权限、`ip rule`/`ip route` 能力；`higgs debug preflight` 或现有 preflight 输出中加入 BIRD 段。
   - owner 边界：control socket、pid file、运行目录、route table/rule、Higgs 管理接口名都带 overlay/group owner token；teardown 只清理 Higgs-owned 对象。
 
 - [ ] **5.1 Babel daemon control client 与 adapter**
   - 在 `pkg/routing/bird/` 实现 BIRD adapter：config generator、birdc client、process manager、observed state parser。
   - birdc client 能力：连接 control socket、执行 `configure`、`configure soft`、`reload in/out`、解析 `show protocols` / `show route` / `show interfaces` 输出、超时与重连。
+    - dump 能力：`show status`、`show protocols all <proto>`、`show interfaces`、`show route all`、`show route for <prefix>`、`show route protocol <proto>`；输出结构化 JSON 供 CLI 和 debug 使用。
+    - birdc 返回的是文本表格，Higgs 负责稳定解析（regex + 列对齐），并在 BIRD 版本变化时给出解析降级/失败提示。
   - 定义纯函数 desired model：`BirdInstanceSpec`、`BirdInterfacePattern`、`BirdRoutePolicy`、`BirdExportRoute`、`BirdObservedState`、`BirdAction`。
   - daemon reconcile 顺序：IPsec desired/up snapshot -> BIRD desired config -> route authorization -> policy route table/rule -> BIRD config apply (`birdc configure`) -> observe routes/neighbors -> 写入 debug snapshot。
   - **BIRD 后端**：依赖 interface pattern（如 `"hgs*"`）自动发现新接口，Higgs 无需逐条 `interface`/`flush` 命令；teardown/revocation 时可直接 `birdc restart <proto>` 或等待接口消失后 BIRD 自动 retract。
+  - **tunnel 模式选路**：BIRD Babel 的 `interface ... { type tunnel; }` 默认开启 RTT-based metric，等价于 `rxcost 96 + rtt cost`；同一前缀经多条 XFRM tunnel 学到时，BIRD 按 metric 选最优路径。若 metric 相等且协议级开启 `ecmp on [limit N]`，可生成 ECMP 多下一跳路由；per-interface `ecmp weight` 可调整流量比例。Higgs 通过给 staged/draining 接口配置更高 `rxcost` 或 `rtt cost` 实现主动/备份选路。
   - staged generation 接入：新旧 XFRM interface 同时存在时，新 interface 使用正常或更优 metric，旧 interface 提高 metric 进入 draining；只有观测到新 Babel neighbor 与关键路由收敛后，才向 IPsec reconcile 提供 `RotateCutoverReady=true`。
 
 - [ ] **5.2 Route Authorization / IPAM 输入模型**
@@ -724,6 +731,7 @@
   - 安装 `ip rule`：按 overlay 源前缀、fwmark 或 iif/oif 将业务流量查 `higgs` route table；优先级由配置控制，默认低于管理员显式 rule，高于 main table fallback。
   - XFRM tunnel peer host route/直连 route 与业务 learned route 分开：peer tunnel address route 可留在 main/overlay table 的 link-scope 直连项，业务前缀只由 Babel 管理。
   - 处理多 overlay/table：不同 overlay 的 rule/table 不互相覆盖；同一业务前缀来自多个 Babel next-hop 时允许 ECMP，但只在同一 overlay/table 内合并。
+  - ECMP 与选路：BIRD Babel 支持 `ecmp on [limit <num>]` 和 per-interface `ecmp weight <num>`；当多条 tunnel 到同一前缀 metric 相等时，BIRD 可向 kernel 注入多下一跳 ECMP 路由；metric 不等时只保留最优。Higgs 在 bird.conf 中按 overlay 开启 ECMP，默认 limit 16。
   - teardown/revocation 时按 owner token 删除 Higgs 创建的 table routes/rules；不删除管理员手工 rule。
 
 - [ ] **5.5 Operator / Debug 命令**
@@ -732,6 +740,8 @@
   - `higgs debug route <prefix>`：解释某前缀为什么被导出/接受/拒绝，列出 assignment、announcement、delegation/revocation、filter、babel route 和 kernel table 证据。
   - `higgs debug links` 扩展 Babel 状态列：babel interface state、neighbor count、best route count、rotate drain metric、route cutover gate reason。
   - daemon status/control socket 增加 `routing_reconcile` / `routing_reload`，支持不重启 daemon 重新生成 Babel filter 和策略路由。
+  - 新增 control method `bird_dump` / `bird_status`：CLI `higgs debug babel` 通过 daemon 拉取各 overlay BIRD 的 `show status` / `show protocols` / `show route` 等快照，避免用户手动进 netns 执行 `birdc`。
+  - `higgs debug routes` 同时展示 Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图：哪些前缀被 BIRD 接受、哪些被 filter 拒绝、哪些未出现在 BIRD 中。
 
 - [ ] **5.6 闭环验证**
   - 单元测试：router-id 派生稳定；AuthorizedRouteSet 校验 assignment/announcement/撤销/重叠/default route；Babel desired diff；policy route rule/table ownership。

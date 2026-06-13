@@ -263,10 +263,12 @@ protocol babel higgs_babel_100 {
 │  └── password / authentication               │
 ├─────────────────────────────────────────────┤
 │  BIRD Process Manager                        │
-│  ├── 启动: bird -c <conf> -s <ctl>           │
+│  ├── 确保 netns 存在                          │
+│  ├── 启动: ip netns exec <ns> bird -c ...    │
 │  ├── filter 变更: 重写 conf + birdc configure│
-│  ├── 监控: birdc show protocols / show route │
-│  └── 退出: birdc down / SIGTERM              │
+│  ├── 监控: birdc show status / protocols / route│
+│  ├── 崩溃恢复: 同 router-id 重新拉起          │
+│  └── 退出: birdc down / SIGTERM + 清理 socket │
 ├─────────────────────────────────────────────┤
 │  Route Auditor (kernel layer, 可选)          │
 │  ├── 如果 BIRD filter 足够精确可弱化         │
@@ -281,15 +283,120 @@ protocol babel higgs_babel_100 {
 - 只有观测到新 Babel neighbor 与关键路由收敛后，Higgs 才向 IPsec reconcile 提供 `RotateCutoverReady=true`。
 - 旧 interface 进入 draining 期间提高 metric，保留作为退路；最终被删除时 BIRD 自动 retract 相关路由。
 
+## BIRD 生命周期设计
+
+### managed 模式
+
+Higgs daemon 作为 BIRD 的父进程/监管者：
+
+1. **启动 / 领养**
+   - 确保目标 named netns 已存在（Higgs 创建或复用）。
+   - 将 `router-id`、interface pattern、filter、table、metric 等渲染为 `/run/higgs/bird-<overlay>.conf`。
+   - 启动前检查 pidfile：若已存在且进程仍在运行、router-id/table 匹配，则直接 adopt（发送 `birdc configure` 同步最新 conf），避免重复启动。
+   - 否则在该 netns 内执行：
+     ```bash
+     ip netns exec <ns> bird -c /run/higgs/bird-<overlay>.conf \
+                             -s /run/higgs/bird-<overlay>.ctl \
+                             -P /run/higgs/bird-<overlay>.pid
+     ```
+   - 等待 control socket 出现，执行 `birdc -s ... show status` 确认可用。
+
+2. **配置热重载**
+   - 仅 filter / per-interface metric / auth 变化：重写 conf → `birdc -s ... configure soft` → `birdc reload in <proto>` / `reload out <proto>`。
+   - table / channel / interface pattern 结构变化：普通 `birdc configure`（会按需重启相关 protocol）。
+   - 重载失败时回退到上一次成功配置，并记录 error；不直接 kill BIRD。
+
+3. **优雅退出**
+   - daemon shutdown 时先 `birdc -s ... down`（或 SIGTERM），等待进程退出。
+   - 删除 Higgs-owned 的 pid、control socket、conf 文件（带 owner token 校验）。
+
+4. **崩溃恢复**
+   - daemon 事件循环中周期性 `waitpid(NO HANG)` 或 `show status` 探测。
+   - BIRD 异常退出后，用同一份持久化 router-id 和 conf 重新拉起；连续崩溃进入指数 backoff。
+   - **不要启用 BIRD 的 `randomize router id`**：Higgs 已经保证 router-id 持久稳定，随机化会导致序列号问题变成 router-id 抖动问题。
+
+### external 模式
+
+- Higgs 不启动/不停止 BIRD，只通过 control socket 执行 `configure`/`show`。
+- 启动 reconcile 时校验 router-id、table、netns、socket 权限、interface pattern 是否匹配 Higgs 期望。
+- control socket 丢失或 `show status` 失败时标记 `degraded`，记录 error，不主动重启。
+
+## 通过 `higgs` 命令 dump BIRD 路由状态
+
+CLI 通过 daemon control socket 请求 BIRD 快照，避免用户手动进 netns 执行 `birdc`：
+
+```bash
+# 每个 overlay 的 BIRD 实例状态
+higgs debug babel [overlay-id]
+
+# Higgs 授权路由集 + BIRD 实际学到/安装的路由
+higgs debug routes
+
+# 单条前缀的完整证据链
+higgs debug route <prefix>
+```
+
+daemon 侧的 birdc client 执行以下命令并解析为结构化数据：
+
+| 用途 | birdc 命令 | 输出字段 |
+|------|-----------|---------|
+| daemon 健康 | `show status` | version, router id, uptime, last reconfig |
+| 协议状态 | `show protocols all <proto>` | name, proto, table, state, info, uptime |
+| 接口/邻居 | `show interfaces` / `show protocols all <proto>` | interface, neighbor, address, babel metric |
+| 学习路由 | `show route all` | prefix, from, via, interface, metric, source |
+| 按协议过滤 | `show route protocol <proto>` | 同上，限定来源 |
+| 按前缀 | `show route for <prefix> all` | 该前缀的多条路径 |
+
+解析策略：
+
+- birdc 输出是文本表格，按固定列对齐；Higgs 用正则/列解析，并在解析失败时返回原始文本 + `parse_warning`。
+- 建议将最近一次解析结果落盘到 `state.BirdObservedState`，供 `debug babel` 离线使用。
+- 命令执行带超时（如 5s），超时时返回部分缓存数据并标记 `stale`。
+
+## BIRD tunnel 模式与选路
+
+BIRD Babel 为 tunnel 接口提供专用模式：
+
+```bird
+protocol babel higgs_babel_main {
+    ipv4 { ... };
+    ipv6 { ... };
+    ecmp on limit 16;          # 可选：等 metric 多路径
+
+    interface "hgs*" {
+        type tunnel;
+        rxcost 96;             # 基础 cost，影响邻居选路
+        hello interval 4 s;
+        update interval 4 s;
+        rtt cost 96;           # RTT 度量权重
+        rtt min 10 ms;
+        rtt max 120 ms;
+        ecmp weight 1;         # ECMP 时权重
+    };
+}
+```
+
+要点：
+
+- `type tunnel` 等价于 wired + 开启 RTT-based metric，默认 `rxcost 96`。
+- Babel 到同一前缀的多条路径按综合 metric 排序；**metric 最小者进入 FIB**。
+- 若开启 `ecmp on [limit N]` 且多条路径 metric 相等，BIRD 会生成多下一跳 ECMP 路由；`ecmp weight` 可调整流量比例。
+- Higgs 可用不同 `rxcost` / `rtt cost` 区分 staged/draining 接口：
+  - `metric_base` → 正常接口 `rxcost 96`
+  - `metric_staged` → staged 接口 `rxcost 200`
+  - `metric_draining` → draining 接口 `rxcost 500`
+- 这意味着 BIRD 本身就能做 **active/backup 选路** 和 **多路径负载均衡**，不需要 Higgs 再写 kernel route 去干预 next-hop。
+
 ## 风险与待验证项
 
-- [ ] BIRD 在目标 netns 中启动并监听 UNIX control socket 的具体命令和权限模型。
+- [x] BIRD 在目标 netns 中启动并监听 UNIX control socket 的具体命令和权限模型。
 - [ ] `birdc configure soft` + `reload in/out` 在 filter 变化时的实际收敛时间和路由中断窗口。
 - [ ] interface pattern `hgs*` 在新接口创建后多久触发 Babel，是否稳定。
 - [ ] 接口删除时 BIRD 是否正确发送 wildcard retraction，邻居多久感知。
 - [ ] BIRD 的 Babel 实现与 babeld 的互操作性（如果网络中混跑）。
 - [ ] BIRD 二进制在 NixOS / target 容器镜像中的体积和依赖。
 - [ ] birdc 文本输出的解析稳定性（考虑使用稳定 CLI 输出格式）。
+- [ ] BIRD Babel `ecmp on` 在 tunnel/RTT metric 场景下是否按预期生成 ECMP，以及 kernel 对 IPv6/IPv4 ECMP 的支持边界。
 
 ## 参考
 
