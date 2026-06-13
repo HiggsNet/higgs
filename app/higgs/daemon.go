@@ -28,6 +28,11 @@ type DaemonService struct {
 	LogLimiter        *repeatedLogLimiter
 	drainingEvents    bool
 	ipsecDirty        bool
+	routingDirty      bool
+
+	// Test overrides for BIRD routing reconcile.
+	birdProcessManager birdProcessManager
+	birdClientFactory  func(socketPath string, timeout time.Duration) birdClient
 }
 
 type DaemonHooks struct {
@@ -139,16 +144,19 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	nextEndpointPublish := d.Sync.now()
 	ipsecReconcileInterval := d.ipsecReconcileInterval()
 	nextIPsecReconcile := nextIPsecReconcileTime(d.Sync.now(), ipsecReconcileInterval)
+	routingReconcileInterval := d.routingReconcileInterval()
+	nextRoutingReconcile := nextRoutingReconcileTime(d.Sync.now(), routingReconcileInterval)
 	lastObservedDigests := gossip.ZoneDigests(d.Sync.State.Network)
 	d.Sync.updateDiscoveredPeers()
 	d.recoverIPsecLinksOnStart(ctx)
+	d.recoverRoutingOnStart(ctx)
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		now := d.Sync.now()
-		syncNow, shutdown, ipsecFlushed := d.processEvents(ctx)
+		syncNow, shutdown, ipsecFlushed, routingFlushed := d.processEvents(ctx)
 		if shutdown {
 			return nil
 		}
@@ -162,6 +170,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if interval := d.ipsecReconcileInterval(); interval != ipsecReconcileInterval {
 			ipsecReconcileInterval = interval
 			nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+		}
+		if routingFlushed {
+			nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
+		}
+		if interval := d.routingReconcileInterval(); interval != routingReconcileInterval {
+			routingReconcileInterval = interval
+			nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 		}
 		if latest, changed, err := d.Sync.reloadStateIfChanged(lastObservedDigests); err != nil {
 			d.logWarn("daemon", "reload_failed", map[string]any{"error": err})
@@ -195,8 +210,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
 			}
 			d.ipsecDirty = true
+			d.routingDirty = true
 			if d.flushIPsecReconcile(ctx) {
 				nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+			}
+			if d.flushRoutingReconcile(ctx) {
+				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 			}
 			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
@@ -208,6 +227,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			d.ipsecDirty = true
 			if d.flushIPsecReconcile(ctx) {
 				nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+			}
+		}
+		if !nextRoutingReconcile.IsZero() && !now.Before(nextRoutingReconcile) {
+			d.routingDirty = true
+			if d.flushRoutingReconcile(ctx) {
+				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 			}
 		}
 		packet, err := receiveWithContext(ctx, transport, d.Sync.now().Add(250*time.Millisecond))
@@ -405,11 +430,12 @@ func (d *DaemonService) enqueueEvent(ctx context.Context, event daemonEvent) dae
 	}
 }
 
-func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool, ipsecFlushed bool) {
+func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool, ipsecFlushed bool, routingFlushed bool) {
 	d.drainingEvents = true
 	defer func() {
 		d.drainingEvents = false
 		ipsecFlushed = d.flushIPsecReconcile(ctx)
+		routingFlushed = d.flushRoutingReconcile(ctx)
 	}()
 	for {
 		select {
@@ -421,10 +447,10 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 			syncNow = syncNow || triggerSync
 			shutdown = shutdown || stop
 			if shutdown {
-				return syncNow, shutdown, ipsecFlushed
+				return syncNow, shutdown, ipsecFlushed, routingFlushed
 			}
 		default:
-			return syncNow, shutdown, ipsecFlushed
+			return syncNow, shutdown, ipsecFlushed, routingFlushed
 		}
 	}
 }
@@ -524,6 +550,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 		d.Sync.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
+	d.recoverRoutingOnStart(context.Background())
 	return nil
 }
 
@@ -730,10 +757,13 @@ func (d *DaemonService) notifyStateChanged() {
 	}
 	if d.drainingEvents {
 		d.ipsecDirty = true
+		d.routingDirty = true
 		return
 	}
 	d.ipsecDirty = true
+	d.routingDirty = true
 	d.flushIPsecReconcile(context.Background())
+	d.flushRoutingReconcile(context.Background())
 }
 
 func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
@@ -742,6 +772,53 @@ func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
 	}
 	d.ipsecDirty = true
 	d.flushIPsecReconcile(ctx)
+}
+
+func (d *DaemonService) recoverRoutingOnStart(ctx context.Context) {
+	if d == nil {
+		return
+	}
+	d.routingDirty = true
+	d.flushRoutingReconcile(ctx)
+}
+
+func (d *DaemonService) flushRoutingReconcile(ctx context.Context) bool {
+	if d == nil || !d.routingDirty {
+		return false
+	}
+	d.routingDirty = false
+	if err := d.reconcileRouting(ctx); err != nil {
+		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
+	}
+	return true
+}
+
+func (d *DaemonService) routingReconcileInterval() time.Duration {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return 0
+	}
+	groups := routingEnabledGroups(d.Sync.App.Config.IPsec.LinkGroups)
+	if len(groups) == 0 {
+		return 0
+	}
+	var interval time.Duration
+	for _, group := range groups {
+		groupInterval := defaultRoutingReconcileInterval
+		if group.Reconcile.IntervalSeconds > 0 {
+			groupInterval = time.Duration(group.Reconcile.IntervalSeconds) * time.Second
+		}
+		if interval == 0 || groupInterval < interval {
+			interval = groupInterval
+		}
+	}
+	return interval
+}
+
+func nextRoutingReconcileTime(now time.Time, interval time.Duration) time.Time {
+	if interval <= 0 {
+		return time.Time{}
+	}
+	return now.Add(interval)
 }
 
 func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {

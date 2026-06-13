@@ -69,6 +69,24 @@ type ReconcilePolicy struct {
 	Backoff                BackoffPolicy
 }
 
+type RoutingSpec struct {
+	Enabled          bool      `yaml:"enabled" json:"enabled"`
+	Protocol         string    `yaml:"protocol" json:"protocol"`
+	Mode             string    `yaml:"mode" json:"mode"` // managed|external|disabled
+	NetNS            NetNSSpec `yaml:"netns" json:"netns"`
+	ControlSocket    string    `yaml:"control_socket" json:"control_socket"`
+	PIDFile          string    `yaml:"pid_file" json:"pid_file"`
+	ConfigFile       string    `yaml:"config_file" json:"config_file"`
+	RouterID         uint32    `yaml:"router_id,omitempty" json:"router_id,omitempty"`
+	TableID          string    `yaml:"table" json:"table"`
+	MetricBase       uint      `yaml:"metric_base" json:"metric_base"`
+	MetricStaged     uint      `yaml:"metric_staged" json:"metric_staged"`
+	MetricDraining   uint      `yaml:"metric_draining" json:"metric_draining"`
+	ECMP             bool      `yaml:"ecmp" json:"ecmp"`
+	ECMPLimit        uint      `yaml:"ecmp_limit" json:"ecmp_limit"`
+	InterfacePattern string    `yaml:"interface_pattern" json:"interface_pattern"`
+}
+
 type LinkGroupSpec struct {
 	ID                 string
 	Name               string
@@ -84,6 +102,7 @@ type LinkGroupSpec struct {
 	Reconcile          ReconcilePolicy
 	ConnectRules       []string
 	DenyRules          []string
+	Routing            RoutingSpec
 }
 
 type TransportLinkSpec struct {
@@ -262,6 +281,9 @@ func (g LinkGroupSpec) Validate() error {
 	if (spec.Mode == TunnelAddressDerivedPool || spec.Mode == TunnelAddressSequentialPool) && !spec.Pool.IsValid() {
 		return fmt.Errorf("tunnel address mode %q requires a pool", spec.Mode)
 	}
+	if err := g.Routing.Validate(); err != nil {
+		return fmt.Errorf("routing: %w", err)
+	}
 	return nil
 }
 
@@ -287,6 +309,7 @@ func (g LinkGroupSpec) Normalized() LinkGroupSpec {
 	if out.TunnelAddressSpec.Mode == TunnelAddressSequentialPool && out.TunnelAddressSpec.Pool.IsValid() {
 		out.TunnelAddressPool = out.TunnelAddressSpec.Pool
 	}
+	out.Routing = out.Routing.Normalized(out.NetNS)
 	return out
 }
 
@@ -592,6 +615,73 @@ func (n NetNSSpec) Normalized() NetNSSpec {
 		out.Create = true
 	}
 	return out
+}
+
+const (
+	RoutingModeManaged   = "managed"
+	RoutingModeExternal  = "external"
+	RoutingModeDisabled  = "disabled"
+	DefaultRoutingMode   = RoutingModeManaged
+	DefaultRoutingTable  = "main"
+	DefaultMetricBase    = 100
+	DefaultMetricStaged  = 200
+	DefaultMetricDrained = 500
+)
+
+func (r RoutingSpec) Normalized(defaultNetNS NetNSSpec) RoutingSpec {
+	out := r
+	if out.Mode == "" {
+		out.Mode = DefaultRoutingMode
+	}
+	if out.TableID == "" {
+		out.TableID = DefaultRoutingTable
+	}
+	if out.MetricBase == 0 {
+		out.MetricBase = DefaultMetricBase
+	}
+	if out.MetricStaged == 0 {
+		out.MetricStaged = DefaultMetricStaged
+	}
+	if out.MetricDraining == 0 {
+		out.MetricDraining = DefaultMetricDrained
+	}
+	if out.InterfacePattern == "" {
+		out.InterfacePattern = "hgs*"
+	}
+	if out.Protocol == "" {
+		out.Protocol = "bird"
+	}
+	if out.ECMPLimit == 0 {
+		out.ECMPLimit = 16
+	}
+	if out.NetNS.Kind == "" && out.NetNS.Name == "" && out.NetNS.Path == "" {
+		out.NetNS = defaultNetNS.Normalized()
+	}
+	return out
+}
+
+func (r RoutingSpec) Validate() error {
+	if !r.Enabled {
+		return nil
+	}
+	mode := r.Mode
+	if mode == "" {
+		mode = DefaultRoutingMode
+	}
+	if !oneOf(mode, RoutingModeManaged, RoutingModeExternal, RoutingModeDisabled) {
+		return fmt.Errorf("unsupported routing mode %q", r.Mode)
+	}
+	if mode == RoutingModeDisabled {
+		return nil
+	}
+	if r.Protocol != "" && r.Protocol != "bird" {
+		return fmt.Errorf("unsupported routing protocol %q", r.Protocol)
+	}
+	netns := r.NetNS.Normalized()
+	if err := netns.Validate(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (n NetNSSpec) Target() string {

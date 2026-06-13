@@ -16,16 +16,17 @@ const defaultStatePath = ".higgs.db"
 const cliMetaKey = "cli_state"
 
 type stateFile struct {
-	ManagedZone       zone.ZonePath      `json:"managed_zone"`
-	IdentityKeyPath   string             `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
-	Network           *zone.NetworkState `json:"network"`
+	ManagedZone       zone.ZonePath                 `json:"managed_zone"`
+	IdentityKeyPath   string                        `json:"identity_key_path,omitempty"`
+	RootPrivateKey    ed25519.PrivateKey            `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey            `json:"zone_private_key"`
+	Network           *zone.NetworkState            `json:"network"`
 	SyncPeers         map[string]syncPeerState
 	IPsecTransportKey *ipsecTransportKeyState
 	IPsecPortRecord   *ipsecPortRecordState
 	LinkInstances     map[string]linkInstanceState
 	IPsecReconcile    *ipsecReconcileState
+	BirdInstances     map[string]*BirdInstanceState
 }
 
 type stateMeta struct {
@@ -38,6 +39,18 @@ type stateMeta struct {
 	IPsecPortRecord   *ipsecPortRecordState        `json:"ipsec_port_record,omitempty"`
 	LinkInstances     map[string]linkInstanceState `json:"link_instances,omitempty"`
 	IPsecReconcile    *ipsecReconcileState         `json:"ipsec_reconcile,omitempty"`
+	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
+}
+
+type BirdInstanceState struct {
+	OverlayID      string `json:"overlay_id"`
+	ConfigPath     string `json:"config_path"`
+	ControlSocket  string `json:"control_socket"`
+	PIDFile        string `json:"pid_file"`
+	RouterID       uint32 `json:"router_id"`
+	LastConfigHash string `json:"last_config_hash"`
+	LastError      string `json:"last_error"`
+	State          string `json:"state"` // pending, running, degraded, error
 }
 
 type ipsecTransportKeyState struct {
@@ -336,6 +349,7 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		IPsecPortRecord:   meta.IPsecPortRecord,
 		LinkInstances:     meta.LinkInstances,
 		IPsecReconcile:    meta.IPsecReconcile,
+		BirdInstances:     meta.BirdInstances,
 	}
 	if state.Network == nil || len(state.Network.Zones) == 0 {
 		if err := store.Close(); err != nil {
@@ -384,6 +398,7 @@ func saveStateAt(path string, state *stateFile) error {
 		IPsecPortRecord:   state.IPsecPortRecord,
 		LinkInstances:     state.LinkInstances,
 		IPsecReconcile:    state.IPsecReconcile,
+		BirdInstances:     state.BirdInstances,
 	}
 	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
 		return err
