@@ -362,10 +362,11 @@ Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/c
 
 Phase 4.4 最终选择的是 **bounded break-before-make** 路径。原因是 root/container 实验已证明：若 staged CHILD_SA 继续复用同一 peer traffic selector 和同一 XFRM `if_id`，StrongSwan/内核策略会拒绝并行建立两条 CHILD_SA。真正无中断平滑切换后续只能走 staged generation 使用独立 XFRM interface/if_id 后切换 route，或通过 Phase 6/7 的 DNAT/redirect grace 由防火墙层管理新旧端口转发。
 
-当前实现的 bounded break-before-make 流程：
-1. `prepare_rotate`：先 terminate/unload 旧 IKE_SA/CHILD_SA，再加载/发起 staged connection（复用共享 XFRM interface）。
-2. 下一轮 reconcile 通过 VICI `list-sas` 观测到新 SA established 后执行 `commit_rotate`，卸载旧 connection，通过 tunnel ping 验证恢复。
-3. 若 staged SA 在 deadline 前未建立，执行 `rollback_rotate` 并进入 backoff。
+当前 rotate 流程分两层：
+1. 4.4 root/container 已验证的是 bounded break-before-make：旧 generation 可被显式清理后再建立新 connection，证明 deadline/backoff/rollback 和 VICI/XFRM 观测闭环可用。
+2. 4.4.x staged transition 使用独立 `TransportID`、XFRM `if_id` 和 interface；`prepare_rotate` 不再要求先拆旧 SA。primary/outbound 或 secondary-takeover owner 会加载可主动建立的 staged connection；`inbound` / `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
+3. 下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`/`commit_rotate`；旧 generation 默认按 `rotate_retention` 保留，后续交给 Babel/route manager 接管 metric 收敛再清理。
+4. 若 staged SA 在 deadline 前未建立，执行 `rollback_rotate` 并进入 backoff；旧 generation 保持可用。
 
 `LinkInstance` 记录 selected ContactPoint、remote/staged port generation、rotation phase（`idle`、`preparing`、`testing_new`、`dual_running`、`cutover`、`rollback`、`cleanup`）、staged ike/child name、rollback deadline 和最近 rotate error；`higgs debug links` 可显示当前 rotate phase、staged generation、deadline 和 error。staged connection/child 名称稳定可推导：`RotateConnectionName(transportID, generation)` / `RotateChildSAName(transportID, generation)`。revocation/policy deny/transport key mismatch 仍走强制 teardown，不进入 rotate 状态机。
 

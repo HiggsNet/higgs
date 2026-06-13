@@ -230,6 +230,15 @@ func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
 	return spec
 }
 
+func rotateSpecForRole(base TransportLinkSpec, generation uint64, role string) TransportLinkSpec {
+	spec := rotateSpec(base, generation)
+	if spec.Direction == DirectionInbound || role == InitiatorRoleSecondaryStandby {
+		spec.Direction = DirectionInbound
+		spec.ContactPoints = nil
+	}
+	return spec
+}
+
 func findStagedSA(states []SAState, inst LinkInstance) SAState {
 	if inst.StagedIKEName == "" {
 		return SAState{}
@@ -278,7 +287,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			if !sa.Established {
 				sa = findMatchingSA(in.SAs, spec)
 			}
-			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.GroupBackoff, now)
+			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, in.GroupBackoff, in.GroupRotateRetention, now)
 			continue
 		}
 		// Primary / outbound initiator path.
@@ -301,7 +310,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			existing.RemoteGeneration = desiredGen
 		}
 		if existing.RemoteGeneration != desiredGen {
-			result.handleRotate(id, spec, existing, in.SAs, rotateRetentionForSpec(spec, in.GroupRotateRetention), now)
+			result.handleRotate(id, spec, existing, in.SAs, rotateRetentionForSpec(spec, in.GroupRotateRetention), now, role)
 			continue
 		}
 		existing = result.clearStagedIfIdle(existing, in.SAs, now)
@@ -376,9 +385,23 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	return result
 }
 
-func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, groupBackoff map[string]BackoffPolicy, now time.Time) {
+func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, now time.Time) {
 	policy := groupBackoffForSpec(spec, groupBackoff)
 	if sa.Established {
+		if exists {
+			desiredGen := contactGeneration(spec)
+			if existing.RemoteGeneration == 0 {
+				existing.RemoteGeneration = desiredGen
+			}
+			if existing.RemoteGeneration != desiredGen {
+				rotateRole := InitiatorRoleSecondaryStandby
+				if existing.InitiatorRole == InitiatorRoleSecondaryTakeover {
+					rotateRole = InitiatorRoleSecondaryTakeover
+				}
+				r.handleRotate(id, spec, existing, sas, rotateRetentionForSpec(spec, groupRotateRetention), now, rotateRole)
+				return
+			}
+		}
 		inst := existing
 		if !exists {
 			inst = NewLinkInstance(spec, LinkStateUp, now)
@@ -465,13 +488,13 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	r.add(ReconcileActionCreate, &spec, &inst, reason)
 }
 
-func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, retention time.Duration, now time.Time) {
+func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, retention time.Duration, now time.Time, initiatorRole string) {
 	desiredGen := contactGeneration(spec)
 	if existing.StagedGeneration != 0 && existing.StagedGeneration != desiredGen {
 		inst := existing
 		inst.RotatePhase = RotatePhaseCleanup
 		r.Instances[id] = inst
-		stagedSpec := rotateSpec(spec, existing.StagedGeneration)
+		stagedSpec := rotateSpecForRole(spec, existing.StagedGeneration, initiatorRole)
 		r.add(ReconcileActionCleanupRotate, &stagedSpec, &inst, "stale staged generation")
 		return
 	}
@@ -481,7 +504,7 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	}
 	if existing.StagedGeneration == desiredGen {
 		stagedSA := findStagedSA(sas, existing)
-		stagedSpec := rotateSpec(spec, existing.StagedGeneration)
+		stagedSpec := rotateSpecForRole(spec, existing.StagedGeneration, initiatorRole)
 		stagedInterfaceName := firstNonEmptyString(existing.StagedInterfaceName, stagedSpec.InterfaceName)
 		stagedXFRMIfID := firstNonZeroUint32(existing.StagedXFRMIfID, stagedSpec.XFRMIfID)
 		if stagedSA.Established {
@@ -567,7 +590,7 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	inst.StagedGeneration = desiredGen
 	inst.StagedIKEName = RotateConnectionName(existing.TransportID, desiredGen)
 	inst.StagedChildSAName = RotateChildSAName(existing.TransportID, desiredGen)
-	stagedSpec := rotateSpec(spec, desiredGen)
+	stagedSpec := rotateSpecForRole(spec, desiredGen, initiatorRole)
 	inst.StagedInterfaceName = stagedSpec.InterfaceName
 	inst.StagedXFRMIfID = stagedSpec.XFRMIfID
 	inst.RotatePhase = RotatePhasePreparing

@@ -46,6 +46,40 @@ func TestRotateSpecUsesIndependentXFRMInterface(t *testing.T) {
 	}
 }
 
+func TestRotateSpecForSecondaryStandbyUsesInboundTrap(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:     "node-b.catofes.",
+		PeerZone:      "node-a.catofes.",
+		Direction:     DirectionBidirectional,
+		TransportID:   "ipsec-main-ba",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.10",
+			Family:     FamilyIPv4,
+			Generation: 2,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+
+	staged := rotateSpecForRole(spec, 2, InitiatorRoleSecondaryStandby)
+	if staged.Direction != DirectionInbound {
+		t.Fatalf("staged direction = %q, want inbound", staged.Direction)
+	}
+	if len(staged.ContactPoints) != 0 {
+		t.Fatalf("standby staged contacts = %+v, want responder-only config", staged.ContactPoints)
+	}
+
+	active := rotateSpecForRole(spec, 2, InitiatorRolePrimary)
+	if active.Direction != DirectionBidirectional {
+		t.Fatalf("active staged direction = %q, want bidirectional", active.Direction)
+	}
+	if len(active.ContactPoints) != 1 {
+		t.Fatalf("active staged contacts = %+v, want preserved contact point", active.ContactPoints)
+	}
+}
+
 func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
@@ -133,6 +167,66 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	}
 	if inst.RemoteGeneration != 1 {
 		t.Fatalf("remote generation changed before commit = %d", inst.RemoteGeneration)
+	}
+}
+
+func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-a.catofes."].Records[RecordKeyPorts] = record(t, "node-a.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: DefaultIKEPort},
+			NATT:       PortBinding{Advertised: 4501},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Direction:         DirectionBidirectional,
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+	}
+	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 || plan.Roles[plan.Desired[0].TransportID] != InitiatorRoleSecondaryStandby {
+		t.Fatalf("expected secondary standby plan: %+v", plan)
+	}
+	spec := plan.Desired[0]
+	existing := NewLinkInstance(spec, LinkStateUp, now)
+	existing.RemoteGeneration = 1
+	existing.InitiatorRole = InitiatorRoleConverged
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs:       []SAState{{Name: existing.IKEName, Established: true}},
+		Now:       now,
+		Roles:     plan.Roles,
+	})
+
+	action := firstAction(result, ReconcileActionPrepareRotate)
+	if action == nil || action.Spec == nil {
+		t.Fatalf("expected prepare_rotate, got %+v", result.Actions)
+	}
+	if action.Spec.Direction != DirectionInbound {
+		t.Fatalf("staged direction = %q, want inbound", action.Spec.Direction)
+	}
+	if len(action.Spec.ContactPoints) != 0 {
+		t.Fatalf("staged contacts = %+v, want responder-only config", action.Spec.ContactPoints)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.RotatePhase != RotatePhasePreparing || inst.StagedGeneration != 2 {
+		t.Fatalf("instance = %+v", inst)
 	}
 }
 

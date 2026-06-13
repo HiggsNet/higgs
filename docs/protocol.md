@@ -584,7 +584,7 @@ flowchart TD
     H -->|adopt| U[LinkInstance = up]
     H -->|teardown| T[remove Higgs-owned resources]
     H -->|noop| N[keep current state]
-    H -->|prepare_rotate| PR[terminate old + load staged]
+    H -->|prepare_rotate| PR[load staged generation]
     H -->|commit_rotate| CR[unload old connection]
     H -->|rollback_rotate| RB[retain previous, backoff]
     H -->|cleanup_rotate| CL[remove stale staged artifacts]
