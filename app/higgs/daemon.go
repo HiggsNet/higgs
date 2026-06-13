@@ -121,7 +121,8 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer transport.Close()
+	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, func(c, e string, f map[string]any) { d.logWarn(c, e, f) })
+	defer stopRecv()
 	objectPullListener, err := startObjectPullServer(d)
 	if err != nil {
 		d.logError("object_pull", "server_start_failed", map[string]any{"error": err})
@@ -236,28 +237,47 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 			}
 		}
-		packet, err := receiveWithContext(ctx, transport, d.Sync.now().Add(250*time.Millisecond))
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			if isReceiveTimeout(err) || errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
-				continue
-			}
-			d.logWarn("transport", "receive_failed", map[string]any{"error": err})
+		// Wait for the next event. Use a dedicated receiver goroutine so UDP
+		// reads block until a packet arrives instead of polling every 250 ms.
+		wait := d.nextTimerWait(nextSync, nextEndpointPublish, nextIPsecReconcile, nextRoutingReconcile)
+		if wait <= 0 {
 			continue
 		}
-		result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
-		if result.Error != nil {
-			d.logWarn("gossip", "packet_failed", map[string]any{
-				"peer_id": packet.Message.PeerID,
-				"type":    packet.Message.Type,
-				"error":   result.Error,
-				"reason":  gossip.RejectReason(result.Error),
-			})
-		}
-		if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
-			lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case event := <-d.Events:
+			timer.Stop()
+			result, triggerSync, stop := d.handleEvent(event)
+			if event.Reply != nil {
+				event.Reply <- result
+			}
+			if stop {
+				return nil
+			}
+			if triggerSync {
+				nextSync = d.Sync.now()
+				forceSync = true
+				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+			}
+		case packet := <-packetCh:
+			timer.Stop()
+			result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
+			if result.Error != nil {
+				d.logWarn("gossip", "packet_failed", map[string]any{
+					"peer_id": packet.Message.PeerID,
+					"type":    packet.Message.Type,
+					"error":   result.Error,
+					"reason":  gossip.RejectReason(result.Error),
+				})
+			}
+			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
+				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+			}
+		case <-timer.C:
+			// Continue the loop; timers will be checked and fired at the top.
 		}
 	}
 }
@@ -1002,4 +1022,28 @@ func (d *DaemonService) logError(component, event string, fields map[string]any)
 	if d != nil && d.Log != nil {
 		d.Log.Error(component, event, fields)
 	}
+}
+
+// nextTimerWait returns the duration until the earliest non-zero deadline.
+// If no deadline is set, it returns a large value so the caller can wait
+// indefinitely for packets, events, or context cancellation. If a deadline is
+// already due, it returns 0 or a negative duration.
+func (d *DaemonService) nextTimerWait(deadlines ...time.Time) time.Duration {
+	now := d.Sync.now()
+	var earliest time.Time
+	for _, t := range deadlines {
+		if t.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || t.Before(earliest) {
+			earliest = t
+		}
+	}
+	if earliest.IsZero() {
+		return 24 * time.Hour
+	}
+	if !earliest.After(now) {
+		return 0
+	}
+	return earliest.Sub(now)
 }

@@ -409,7 +409,8 @@ func syncServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer transport.Close()
+	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, logger.Warn)
+	defer stopRecv()
 	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile { return syncRuntime.State }))
 	if err != nil {
 		return err
@@ -423,28 +424,21 @@ func syncServe(ctx context.Context) error {
 		"addr":    transport.LocalAddr(),
 	})
 	for {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil
-		}
-		packet, err := receiveWithContext(ctx, transport, time.Now().Add(time.Second))
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			if isReceiveTimeout(err) {
+		case packet := <-packetCh:
+			if packet == nil {
 				continue
 			}
-			logger.Warn("transport", "receive_failed", map[string]any{"error": err})
-			continue
-		}
-		if err := syncRuntime.handlePacket(packet); err != nil {
-			logger.Warn("gossip", "packet_failed", map[string]any{
-				"peer_id": packet.Message.PeerID,
-				"type":    packet.Message.Type,
-				"reason":  gossip.RejectReason(err),
-				"error":   err,
-			})
-			continue
+			if err := syncRuntime.handlePacket(packet); err != nil {
+				logger.Warn("gossip", "packet_failed", map[string]any{
+					"peer_id": packet.Message.PeerID,
+					"type":    packet.Message.Type,
+					"reason":  gossip.RejectReason(err),
+					"error":   err,
+				})
+			}
 		}
 	}
 }
@@ -1470,6 +1464,10 @@ func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadli
 			return nil, ctx.Err()
 		}
 		readDeadline := deadline
+		// UDP reads are blocking syscalls.  We cap each read at 250 ms so the
+		// caller can respond to context cancellation and (in daemon mode) its
+		// own timers even when no gossip packets are arriving.  Timeouts are
+		// routine and are no longer logged by the transport.
 		shortDeadline := time.Now().Add(250 * time.Millisecond)
 		if shortDeadline.Before(readDeadline) {
 			readDeadline = shortDeadline

@@ -243,7 +243,11 @@ func (t *Transport) Receive() (*Packet, error) {
 	buf := make([]byte, t.maxMessageBytes+1)
 	n, addr, err := t.conn.ReadFromUDP(buf)
 	if err != nil {
-		t.logEvent(Event{Direction: "recv", Addr: udpAddrString(addr)}, err, start)
+		// Read deadlines are used by callers to poll for context cancellation
+		// and timers; timeouts are routine and should not pollute debug logs.
+		if !isNetworkTimeout(err) {
+			t.logEvent(Event{Direction: "recv", Addr: udpAddrString(addr)}, err, start)
+		}
 		return nil, err
 	}
 	event := Event{Direction: "recv", Addr: udpAddrString(addr), Bytes: n}
@@ -306,6 +310,13 @@ func (t *Transport) logEvent(event Event, err error, start time.Time) {
 		event.Reason = RejectReason(err)
 	}
 	t.log(event)
+}
+
+// isNetworkTimeout reports whether err is a network timeout from a
+// SetReadDeadline/SetWriteDeadline expiry.
+func isNetworkTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func udpAddrString(addr *net.UDPAddr) string {

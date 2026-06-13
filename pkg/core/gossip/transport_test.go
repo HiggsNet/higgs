@@ -311,3 +311,29 @@ func rawWireMessage(message *Message) ([]byte, error) {
 	data = append(data, payload...)
 	return data, nil
 }
+
+func TestReceiveTimeoutIsNotLogged(t *testing.T) {
+	var logged bool
+	transport, err := Listen(Config{
+		PeerID:     "test-local",
+		ListenAddr: "127.0.0.1:0",
+		Log: func(event Event) {
+			logged = true
+		},
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transport.Close()
+
+	if err := transport.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	if _, err := transport.Receive(); err == nil {
+		t.Fatalf("Receive should have timed out")
+	}
+	if logged {
+		t.Fatalf("timeout error was logged, want no log")
+	}
+}
