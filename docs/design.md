@@ -17,8 +17,8 @@
 2. seg6 用于封装复杂
 
 上层路由协议：
-1. babeld: babel
-2. bird: babel 或者 bgp
+1. **bird: babel**（Phase 5 默认后端）
+2. babeld: babel（历史参考，已不再作为主路径）
 
 控制平面主要功能：
 1. 节点之间建立起一套去中心化的最终一致的配置同步机制。权限通过ed25519密钥签名实现，权限细分为：准入（主签名节点的子密钥），核准ip（主密钥签名ip分配记录，子密钥继续签名分配），公布自己节点的信息（节点的子密钥签名自己的内容）。
@@ -40,9 +40,9 @@
 | 方向 | 决策 | 说明 |
 |------|------|------|
 | 配置同步机制 | **DNS 式层级作用域 (Zone) + Signed Merkle DAG + Gossip** | 整个系统的基石 |
-| 第一阶段传输 | **StrongSwan/IKEv2 + XFRM interface + Babeld** | 动态路由、多 peer、namespace 和撤销清理作为主线；WireGuard 后移为可选轻量传输驱动 |
+| 第一阶段传输 | **StrongSwan/IKEv2 + XFRM interface + BIRD Babel** | 动态路由、多 peer、namespace 和撤销清理作为主线；Phase 5 默认 BIRD 跑 Babel protocol；WireGuard 后移为可选轻量传输驱动 |
 | 跳频/多线路 | Phase 6 | 高级对抗/优化特性，待控制平面稳定后再做 |
-| 系统服务交互 | `vici`（StrongSwan）/ `netlink`（XFRM/路由/WG）/ `控制 socket`（babeld）/ `exec`（兜底） | 按组件分层 |
+| 系统服务交互 | `vici`（StrongSwan）/ `netlink`（XFRM/路由/WG）/ `birdc`（BIRD）/ `exec`（兜底） | 按组件分层 |
 
 ### 1.2 总体架构（核心 + 插件）
 
@@ -55,7 +55,7 @@
 │  pkg/core/   │ pkg/transport/│  pkg/routing/     │
 │              │   drivers     │    adapters        │
 ├──────────────┼───────────────┼───────────────────┤
-│ ✅ identity  │ ✅ ipsec      │ 🔲 babeld         │
+│ ✅ identity  │ ✅ ipsec      │ 🟨 bird           │
 │ ✅ gossip    │   (Phase 4)   │   (Phase 5)        │
 │ ✅ zone      │               │                   │
 │ 🔲 merkle   │               │                   │
@@ -523,7 +523,7 @@ type TransportLinkSpec struct {
 
 `LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、`tunnel_address` 分配策略（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
-netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `overlay.default_netns` 默认是 `kind=name, name=h2, create=true`；`ipsec.default_netns` 只作为旧配置兼容别名。link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；Phase 5 babeld 应运行在对应 `LinkGroupSpec.NetNS` 中，和 XFRM interface 看到同一张 overlay data-plane；只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
+netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `overlay.default_netns` 默认是 `kind=name, name=h2, create=true`；`ipsec.default_netns` 只作为旧配置兼容别名。link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；Phase 5 BIRD Babel daemon 应运行在对应 `LinkGroupSpec.NetNS` 中，和 XFRM interface 看到同一张 overlay data-plane；只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
 
 `pkg/transport/ipsec.ApplyTransportLink` 固化了第一版 apply 顺序：ensure namespace -> load StrongSwan connection -> ensure XFRM interface -> assign local tunnel address，并返回 `ApplyPlan` 供 dry-run、debug 和失败审计使用。StrongSwan provider 通过 VICI command 控制 charon：`load-conn` 加载 connection，`terminate` / `unload-conn` 做撤销清理，`list-sas` 做运行态观测；`swanctl` 只作为人工 debug 对照，不作为核心控制面的输出解析依赖。
 
@@ -824,7 +824,7 @@ type PeerView struct {
     Zone             ZonePath
     PublicKey        []byte         // wg pubkey
     TunnelAllowedIPs []netip.Prefix // WG 只放 tunnel IP /32 或 /128
-    AnnouncedRoutes  []netip.Prefix // 业务路由，交给 Babeld
+    AnnouncedRoutes  []netip.Prefix // 业务路由，交给 BIRD Babel
     Endpoints        []Endpoint
     Links            []TransportLink
 }
@@ -902,7 +902,7 @@ type PeerView struct {
 | StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot、root/container daemon-run gossip smoke 已实现 | CLI 进程级 smoke、重启恢复、撤销闭环 | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
 | XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
-| 路由协议 | _未实现_（Phase 5） | `babeld` + 控制 socket | Babel 更适合 mesh，自动邻居发现 |
+| 路由协议 | _未实现_（Phase 5） | `bird` + `birdc` | BIRD 跑 Babel protocol，支持 interface pattern 自动发现、多 routing table、IPv4/IPv6 双栈、平滑 filter 重载 |
 | 防火墙 | _未实现_（Phase 6） | `nftables` netlink | 现代 Linux 趋势 |
 
 ---
@@ -937,7 +937,7 @@ type PeerView struct {
 |------|--------|------|
 | StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 主体已完成：IPsec public record 公告、Address/Port/ContactPoint 模型、LinkPlanner + skip reason、LinkInstance reconcile（create/update/adopt/repair/teardown/noop）、dry-run/VICI SystemXFRMDriver provider、VICI IKE_SA/CHILD_SA bring-up（4.3）、daemon `Run` 循环 gossip 同步后真实 VICI/XFRM + tunnel ping（4.3）、daemon 级重启恢复及撤销闭环（4.3）、bounded break-before-make 端口轮换（4.4）、bidirectional takeover（4.5）。外部 `build/higgs daemon` 双 OS 进程 smoke 仍作为后续 hardening |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
-| Babeld 路由适配器 | `pkg/routing/babeld/` | 🔲 仅 doc.go |
+| BIRD 路由适配器 | `pkg/routing/bird/` | 🟨 仅 doc.go，待实现 |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
 | Delegation 撤销（tombstone） | `pkg/core/zone/` + `app/higgs/` | ✅ 已实现 |

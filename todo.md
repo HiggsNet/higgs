@@ -9,7 +9,7 @@
 - [x] **0.1 项目结构**
   - 入口目录：沿用当前 `app/higgs/`；后续如需要标准 Go 布局，再迁移到 `cmd/higgs/`
   - [x] 已创建：`pkg/core/zone/`, `pkg/crypto/`
-  - [x] 待创建：`pkg/core/{identity,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/babeld/`
+  - [x] 待创建：`pkg/core/{identity,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/bird/`
   - Go 版本已按当前依赖更新为 `go 1.25.0`
   - [x] 引入 Phase 0 依赖：`go.etcd.io/bbolt`, `golang.org/x/crypto`
   - `golang.zx2c4.com/wireguard/wgctrl`, `github.com/vishvananda/netlink` 延后到 WireGuard/路由阶段引入，避免 Phase 0 携带未使用依赖
@@ -582,7 +582,7 @@
 
 - [x] **4.4 有界短断端口轮换 / 低频 rotate（生产必需基座）**
   - 目标：把 `ipsec/ports` 的 current/previous grace 从“公告和 planner fallback”推进到系统可执行、可观测、可回滚的低频 rotate，支持运营商 QoS、端口迁移、NAT 映射变化和维护窗口中的受控重建；高频/对抗性 port hopping 仍留到 Phase 7。
-  - 明确当前边界：现在 `PlanPortRecord` 会发布 current + previous grace，peer planner 会在 current 失败/backoff 时回退 previous；StrongSwan/XFRM 系统路径选择的是 **bounded break-before-make**，`prepare_rotate` 会先 terminate/unload 旧 SA/connection，再加载并发起 staged connection，因此切换窗口内会出现短暂数据面中断。即使上层有 babeld 兜底，这也只能算“有界短断/可控重建”，不能称为真正平滑过渡。
+  - 明确当前边界：现在 `PlanPortRecord` 会发布 current + previous grace，peer planner 会在 current 失败/backoff 时回退 previous；StrongSwan/XFRM 系统路径选择的是 **bounded break-before-make**，`prepare_rotate` 会先 terminate/unload 旧 SA/connection，再加载并发起 staged connection，因此切换窗口内会出现短暂数据面中断。即使上层有 BIRD 兜底，这也只能算“有界短断/可控重建”，不能称为真正平滑过渡。
   - [x] 先做方案裁剪：
     - [x] Phase 4.4 首选实现 **staged reestablish over VICI**：对远端 current/previous ContactPoint 分别生成可审计 staged connection/action，先让新端口建立 SA，确认 `ListSAs` 后再清理旧 connection。理由：不引入 nftables/iptables ownership 和部署依赖，先把 StrongSwan/VICI 边界做完整。
     - [x] 外层 DNAT/redirect grace 延后为 Phase 6/7 防火墙集成：charon 保持稳定监听端口，nftables/iptables 把新旧 advertised 端口转发到当前 charon 端口；适合生产部署，但需要独立 owner token、规则恢复和 root 权限设计。
@@ -616,7 +616,7 @@
 
 - [ ] **4.4.x 真正平滑 rotate / staged transition（后续重要工作）**
   - 目标：在不先打断当前可用 SA 的前提下，把 current/previous grace 变成系统层可执行的 staged transition；用户可见语义应是 zero-downtime 或接近 zero-downtime 的切换，而不是 bounded break-before-make。
-  - 方案 A：为 staged generation 使用独立 XFRM interface/`if_id` 与独立 CHILD_SA，待新 SA established 且 tunnel/health check 通过后交给 Babel 层完成切换：新 link 以正常/更优 metric 加入，旧 link 在 grace 窗口内保留但调高 metric，等 Babel 邻居与路由收敛后再清理旧 generation。需要明确 route/interface ownership、babeld interface attach/detach 语义、双 interface 期间的 metric/邻居收敛、daemon restart recovery 和 stale generation cleanup。
+  - 方案 A：为 staged generation 使用独立 XFRM interface/`if_id` 与独立 CHILD_SA，待新 SA established 且 tunnel/health check 通过后交给 Babel 层完成切换：新 link 以正常/更优 metric 加入，旧 link 在 grace 窗口内保留但调高 metric，等 Babel 邻居与路由收敛后再清理旧 generation。需要明确 route/interface ownership、BIRD interface pattern 自动发现语义、双 interface 期间的 metric/邻居收敛、daemon restart recovery 和 stale generation cleanup。
     - [x] IPsec staged generation 必须派生独立 `TransportID`、XFRM `if_id` 和 interface name；`prepare_rotate` 不再 terminate 旧 SA，旧 generation 在 staged 建立期间保持可用。
     - [x] `LinkInstance` 持久化 staged interface/`if_id`，用于 debug、daemon restart recovery、rollback、stale cleanup 和 revocation teardown。
     - [x] staged SA established 后进入 `dual_running`/cutover 语义：IPsec 层确认新旧 generation 并行承载；旧 generation 默认继续保留 1h，可通过 `overlays[].reconcile.rotate_retention` 配置；Babel/route manager 的 metric 纳入/调高/收敛回调仍由下一条接入。
@@ -668,28 +668,74 @@
     - [x] root/system smoke：模拟 primary 侧 outbound 不可主动拨号但 responder 仍可达，验证 secondary 在 delay 后接管并建立 IKE_SA/CHILD_SA，tunnel ping 恢复；primary 恢复后 adopt 现有 SA，不抢回导致重连。
       - 2026-06-12 已加入 `TestStrongSwanBidirectionalTakeoverSmoke` 并接入 `make ipsec-xfrm-container-smoke`：container 内真实 netns/charon/VICI/XFRM 跑通 secondary takeover、`list-sas` adopt 和 tunnel ping；同时修正 planner 中 `DirectionInbound` 必须生成 responder/trap desired spec 的边界，避免真实 StrongSwan primary 没有对端 responder 配置。
 
-## Phase 5: Babeld 路由 + Route Authorization Filter（预计 2-3 周）
+## Phase 5: BIRD Babel 路由 + Route Authorization Filter（预计 3-4 周）
 
-**目标：** babeld 在 XFRM/TransportLink 接口上发现邻居、学习路由，且只接受被授权的前缀。
+**目标：** 在 Higgs 管理的 XFRM/TransportLink 接口上跑 Babel 协议，发现邻居、学习路由，并且只导入、导出经过 Zone/IPAM 授权的前缀；策略路由、路由表 ownership、debug 观测和 Phase 4 staged rotate cutover 形成闭环。
 
-- [ ] **5.1 Babeld 路由适配器**
-  - 启动 babeld 并通过控制 socket（`-G` Unix/TCP socket）发送命令
-  - 命令封装：`add interface <transport-iface>`、`flush interface <transport-iface>`
-  - 当 XFRM/TransportLink 接口建立/拆除时，动态通知 babeld 添加/移除接口
+**核心决策：**
+- 默认由 `higgs daemon` 拉起并监管 BIRD Babel daemon 子进程，和 IPsec/XFRM reconcile 处于同一个单 writer 事件循环。这样 state/apply 顺序、重启恢复、撤销清理、rotate cutover gate 都由 Higgs 统一控制。
+- **后端实现：BIRD**
+  - 项目已决定 Phase 5 默认采用 `bird` 跑 Babel protocol。详见 `docs/bird-babel-alternative-findings.md`。
+  - BIRD 支持 `interface "hgs*"` 自动发现 XFRM 接口、多 routing table、IPv4/IPv6 双栈、更平滑的 `birdc configure` filter 重载和更丰富的 filter 语言。
+  - 代价是体积更大、需要维护 `bird.conf` 生成器和 `birdc` CLI client。
+- 支持 `mode=external`：管理员用 systemd 启动 BIRD daemon，Higgs 只连接已存在的 birdc control socket 并校验 router-id、netns、routing table、interface ownership。该模式用于发行版集成/生产托管，但第一版 smoke 以 Higgs-owned 模式为主。
+- 每个 `LinkGroupSpec.NetNS` / overlay data-plane 启动一个 Babel daemon 实例；不同 netns 不共享 control socket。daemon 必须和对应 XFRM interface 处于同一 netns。
+- Babel router-id 是本地持久运行态，不进入 gossip：优先读取本地 state 中保存的 overlay router-id；不存在时从 `local zone + trusted root + overlay id` 确定性派生 64-bit id 并落盘。router-id 不等于 peer id，也不随接口/IP/端口变化而变化。
+- Phase 5 route source 分三层：`ipam/assignments/*` 表示谁拥有/可使用某地址或前缀；`routes/announcements/*` 表示节点想发布哪些业务前缀；本地 config 可有 `route.export_static` 作为临时/恢复 override。只有 assignment 与 announcement 同时通过授权校验的前缀才能导出或被远端导入。
+- 默认不接受 default route、underlay/transport endpoint 前缀、loopback/link-local/multicast、Higgs 保留 tunnel-address pool、未授权更宽聚合前缀；是否允许 `0.0.0.0/0` / `::/0` 必须以后续显式 policy record 开启。
+- Babel learned routes 不直接污染 main table。Phase 5 默认使用 per-overlay route table，例如 `higgs-overlay-<id>` 或配置 table id，再用 `ip rule` 把 overlay 源地址/mark 引到该表；main table 只保留到 XFRM tunnel peer 的必要直连/host route。
 
-- [ ] **5.2 Route Authorization Filter**
-  - 根据 active state 中的 `routes/announcements/*` 和 `ipam/assignments/*` 生成 prefix whitelist
-  - 为每个 peer/interface 生成 babeld `import filter`
-  - 拒绝 `0.0.0.0/0`、未授权前缀、他人网段
+- [ ] **5.0 Babel 运行模式与配置模型**
+  - 增加 `overlays[].routing` 配置：`enabled`、`protocol=bird`、`mode=managed|external|disabled`、`netns` 继承 LinkGroup、`control_socket`、`pid_file`、`router_id` override、`table`、`priority`、`metric_base`、`metric_staged`、`metric_draining`、`export_static`。
+  - managed 模式：daemon 在目标 netns 内启动 BIRD daemon，传入固定 router-id、control socket、pid/log 路径、routing table；daemon 退出时按 ownership 清理子进程和 socket。
+  - external 模式：daemon 只连接 control socket，不杀进程；启动 reconcile 时必须 dry-run/校验 router-id、table、netns、control socket 权限和是否允许动态接口控制。
+  - preflight：检测 BIRD binary、birdc control socket 能力、目标 netns、路由表写权限、`ip rule`/`ip route` 能力；`higgs debug preflight` 或现有 preflight 输出中加入 BIRD 段。
+  - owner 边界：control socket、pid file、运行目录、route table/rule、Higgs 管理接口名都带 overlay/group owner token；teardown 只清理 Higgs-owned 对象。
 
-- [ ] **5.3 本地路由注入**
-  - 通过 babeld 控制 socket 的 `install` / `uninstall` 注入本节点 AnnouncedRoutes
-  - 或通过 `redistribute` 配置让 babeld 自动学习
+- [ ] **5.1 Babel daemon control client 与 adapter**
+  - 在 `pkg/routing/bird/` 实现 BIRD adapter：config generator、birdc client、process manager、observed state parser。
+  - birdc client 能力：连接 control socket、执行 `configure`、`configure soft`、`reload in/out`、解析 `show protocols` / `show route` / `show interfaces` 输出、超时与重连。
+  - 定义纯函数 desired model：`BirdInstanceSpec`、`BirdInterfacePattern`、`BirdRoutePolicy`、`BirdExportRoute`、`BirdObservedState`、`BirdAction`。
+  - daemon reconcile 顺序：IPsec desired/up snapshot -> BIRD desired config -> route authorization -> policy route table/rule -> BIRD config apply (`birdc configure`) -> observe routes/neighbors -> 写入 debug snapshot。
+  - **BIRD 后端**：依赖 interface pattern（如 `"hgs*"`）自动发现新接口，Higgs 无需逐条 `interface`/`flush` 命令；teardown/revocation 时可直接 `birdc restart <proto>` 或等待接口消失后 BIRD 自动 retract。
+  - staged generation 接入：新旧 XFRM interface 同时存在时，新 interface 使用正常或更优 metric，旧 interface 提高 metric 进入 draining；只有观测到新 Babel neighbor 与关键路由收敛后，才向 IPsec reconcile 提供 `RotateCutoverReady=true`。
 
-- [ ] **5.4 闭环验证**
-  - 3+ 节点组网
-  - Babeld 在 XFRM/TransportLink 接口上发现邻居，交换路由
-  - 节点 A 尝试宣告未授权前缀时被其他节点过滤掉
+- [ ] **5.2 Route Authorization / IPAM 输入模型**
+  - 明确记录语义：`ipam/pools/*` 只授权管理者可分配的范围；`ipam/assignments/*` 把具体前缀分配给 Zone；`routes/announcements/*` 由被分配者或被授权子 Zone 宣告可达业务前缀。
+  - Phase 5 可先实现静态 assignment 解析；Phase 6 再扩展动态 IPAM 分配流程，但 record 格式和验证边界现在定死。
+  - 构建 `AuthorizedRouteSet`：输入为 verified active state、revocation set、本地 root trust、policy fallback；输出为 `zone -> allowed prefixes`、`zone -> announced prefixes`、`peer -> import whitelist`、`local export set`。
+  - 校验规则：announcement 必须由宣告 Zone 签名；前缀必须被同 Zone 或其父链授权；子 Zone 只能发布自己被分配的前缀或授权子前缀；重叠前缀按更具体优先但禁止两个未包含授权关系的 Zone 同时宣告同一前缀。
+  - 撤销/过期/签名失败的 assignment 和 announcement 不进入 desired route policy；历史记录只用于审计，不参与 filter。
+
+- [ ] **5.3 Import / Export Filter**
+  - 为每个 peer/interface 生成 import whitelist：只接受该 peer Zone 当前被授权宣告的前缀；拒绝 default route、bogon、underlay endpoint、Higgs tunnel address pool、未授权聚合和超过最大 prefix 数的 peer。
+  - **BIRD filter 重载**：filter 在 `bird.conf` 中定义，通过 `birdc configure [soft]` 重载；`configure soft` + `reload in/out` 可减少协议重启。BIRD 支持 `ifname` 匹配，天然可按 peer interface 做 whitelist，未授权路由在 import 阶段即被拒绝，不会进入 kernel table。
+  - **route-table auditor（可选兜底）**：当 BIRD filter 足够精确时可弱化或移除；否则仍周期性扫描 overlay table，清理异常残留的 learned route 并标记 policy violation。
+  - export 只发布本节点 `local export set`；第一版优先用 BIRD export filter，避免把整个 table 的管理员路由自动扩散出去。
+  - route change 时做差量 apply：新增授权前缀 install/export，撤销前缀 uninstall/flush；filter 变化后触发 route flush/重新学习，避免旧未授权路由残留。
+  - 记录 policy hit/miss 计数：accepted、rejected_unauthorized、rejected_default、rejected_bogon、rejected_revoked、route_flush_count。
+
+- [ ] **5.4 策略路由与路由表 ownership**
+  - 每个 overlay 使用独立 route table：配置支持数字 table id 和名称；daemon 可生成 `/run/higgs/rt_tables.d` 风格的诊断输出，但不直接改系统全局 `/etc/iproute2/rt_tables`。
+  - 安装 `ip rule`：按 overlay 源前缀、fwmark 或 iif/oif 将业务流量查 `higgs` route table；优先级由配置控制，默认低于管理员显式 rule，高于 main table fallback。
+  - XFRM tunnel peer host route/直连 route 与业务 learned route 分开：peer tunnel address route 可留在 main/overlay table 的 link-scope 直连项，业务前缀只由 Babel 管理。
+  - 处理多 overlay/table：不同 overlay 的 rule/table 不互相覆盖；同一业务前缀来自多个 Babel next-hop 时允许 ECMP，但只在同一 overlay/table 内合并。
+  - teardown/revocation 时按 owner token 删除 Higgs 创建的 table routes/rules；不删除管理员手工 rule。
+
+- [ ] **5.5 Operator / Debug 命令**
+  - `higgs debug babel`：显示每个 overlay/netns 的 BIRD mode、pid/socket、router-id、table、interfaces、neighbors、routes、最近 apply action/error。
+  - `higgs debug routes`：显示 local export set、authorized route set、per-peer import whitelist、learned route 来源、metric、installed table、policy reject reason。
+  - `higgs debug route <prefix>`：解释某前缀为什么被导出/接受/拒绝，列出 assignment、announcement、delegation/revocation、filter、babel route 和 kernel table 证据。
+  - `higgs debug links` 扩展 Babel 状态列：babel interface state、neighbor count、best route count、rotate drain metric、route cutover gate reason。
+  - daemon status/control socket 增加 `routing_reconcile` / `routing_reload`，支持不重启 daemon 重新生成 Babel filter 和策略路由。
+
+- [ ] **5.6 闭环验证**
+  - 单元测试：router-id 派生稳定；AuthorizedRouteSet 校验 assignment/announcement/撤销/重叠/default route；Babel desired diff；policy route rule/table ownership。
+  - dry-run smoke：两节点 XFRM `up` 后输出 Babel desired interface、export route、import whitelist 和 route table/rule apply plan。
+  - container root smoke：3 节点 netns + StrongSwan/XFRM + managed BIRD；A/B/C 发布授权 /32 或 /128，跨节点业务 ping 走 Babel learned route。
+  - negative smoke：节点尝试发布未分配前缀、default route、他人前缀或撤销后继续发布，其他节点 debug 显示 reject，kernel route table 中没有该路由。
+  - rotate smoke：staged XFRM generation 建立后，新 Babel neighbor/route 收敛前 `RotateCutoverReady=false`；收敛后旧 interface metric draining 并允许 IPsec commit。
+  - restart smoke：daemon/BIRD 重启后恢复 router-id、control socket、interfaces、export routes、policy route rules，并清理 stale Higgs-owned routes。
 
 ## Phase 6: IPAM/准入扩展/防火墙（预计 3-4 周）
 
@@ -708,7 +754,7 @@
 - [ ] **6.3 链路健康检测**
   - 在 XFRM/TransportLink 隧道上周期性发送 ICMP/自定义 keepalive
   - 检测 RTT、丢包率
-  - 链路异常时标记 down，从 babeld 接口中移除或降低优先级
+  - 链路异常时标记 down，从 BIRD interface pattern 中排除该接口或降低其优先级
 
 - [ ] **6.4 动态 Peer 管理**
   - 节点离线超时后，保留配置但标记 stale
@@ -724,7 +770,7 @@
 - [ ] **6.6 撤销后的传输与路由清理**
   - IKEv2/StrongSwan：删除被撤销 peer 的 connection/child SA 配置，主动 terminate 已建立 SA，移除对应 secret/cert/key reference
   - WireGuard（可选驱动）：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
-  - Babeld/BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
+  - BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
   - 防火墙：移除该 peer/subtree 的 nftables accept rules、set entries、rate-limit exceptions
   - IPAM/route authorization：被撤销 Zone 及其子树发布的 IP assignment、route announcement 立即从有效配置中剔除；历史记录仅用于审计
   - 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 IKEv2/WG/Babel/firewall/IPAM 对象，便于管理员确认影响范围
@@ -736,8 +782,8 @@
 
 - [ ] **7.1 多线路并行（Multipath）**
   - 一个 Peer 可建立多条 TransportLink（IKEv2/XFRM over 公网 + IKEv2/XFRM over 内网 + 可选 WG/GRE），并复用 Phase 4 的 overlay/provider、AddressCandidate、PortAdvertisement、ContactPoint 模型
-  - 每条链路独立运行 babeld 接口
-  - babeld 自动进行多路径负载均衡（Babel 原生支持 ECMP）
+  - 每条链路独立匹配 BIRD interface pattern
+  - BIRD 自动进行多路径负载均衡（Babel 原生支持 ECMP）
 
 - [ ] **7.2 高频 UDP 端口候选 / 对抗性 Port Hopping**
   - 目标：在 Phase 4.4 已具备低频平滑 rotate 后，再评估用于规避固定 UDP 五元组 QoS/丢包/限速的多 endpoint / 多 port probe、质量评分和定时/事件驱动 hopping。
@@ -805,6 +851,49 @@
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`
+
+## Phase 8: 应用层服务网格与代理（远期规划）
+
+**目标：** 在 Higgs L3 mesh 之上支持应用代理层的策略源站选路，让 Higgs 不仅提供节点间连通性，还能作为服务发现、策略分发和选路决策的基础设施。
+
+**设计原则：**
+- Higgs core 不直接实现 L7 代理，而是提供 **服务发现 + 策略分发 + 网络可达性**。
+- L7 代理以 **sidecar** 形态运行（如 Envoy、自研轻量代理），通过本地 API 从 Higgs daemon 订阅 backend 列表和策略。
+- 服务注册、backend 列表、选路策略走现有的 zone/record + capability + fallback 继承模型。
+
+- [ ] **8.1 服务与 upstream record schema**
+  - 定义 `services/<name>` 或 `proxy/upstreams/<name>` record 类型
+  - 字段包含：listeners、backends（zone + address + weight + health check）、selection policy、access policy
+  - 新增 capability：`write:service` / `write:proxy`
+  - 服务可按 zone 继承或覆盖：子 zone 可覆盖父 zone 的服务 backend 列表
+
+- [ ] **8.2 策略源站选路模型**
+  - 静态策略：round-robin、weighted、least-connections、hash(source_ip)
+  - 动态策略：基于节点健康/延迟/负载、地理位置、链路质量
+  - 请求特征匹配：按 L4（port/SNI）或 L7（HTTP path/header）路由到不同 backend
+  - 访问控制：只允许特定 zone/role 访问特定服务
+
+- [ ] **8.3 应用层健康检查与 metric**
+  - 从 ICMP/keepalive 链路健康检查扩展到 TCP/HTTP 应用层探测
+  - 定义 health record 或 runtime metric record 格式
+  - 节点间传播健康状态，sidecar 据此调整 backend 权重
+
+- [ ] **8.4 Higgs → sidecar 控制接口**
+  - daemon control socket 增加 `services` / `proxy` 查询/订阅 API
+  - sidecar 可获取：服务列表、backend 状态、当前生效策略、节点健康快照
+  - 支持 push（backend 变化时通知）和 pull（主动查询）
+
+- [ ] **8.5 sidecar 代理接入**
+  - 方案 A：集成 Envoy，通过 xDS-like 接口消费 Higgs 配置
+  - 方案 B：自研轻量 TCP/HTTP/SOCKS 代理，降低依赖
+  - sidecar 监听本地端口，根据策略选择 backend，通过 mesh tunnel 转发
+  - 与 netns 集成：sidecar 可运行在 Higgs overlay netns 中，直接访问 mesh 地址
+
+- [ ] **8.6 验证**
+  - container smoke：客户端 -> sidecar -> Higgs mesh -> 目标 backend
+  - negative smoke：未授权 zone 无法访问受保护服务
+  - 故障切换 smoke：backend 下线后 sidecar 自动切换到可用 backend
+  - 策略更新 smoke：修改 `services/<name>` record 后 sidecar 在不重启的情况下生效
 
 ## 下一步
 

@@ -937,7 +937,7 @@ overlays:
 
 配置语义：
 - `ipsec.accept` 会发布到 `ipsec/profile`，表示远端可以怎样尝试连接本节点。
-- `overlay.default_netns` 是本机默认 LinkGroup / overlay data-plane namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 和后续 babeld 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。`ipsec.default_netns` 仅作为旧配置兼容别名。
+- `overlay.default_netns` 是本机默认 LinkGroup / overlay data-plane namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 和后续 BIRD 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。`ipsec.default_netns` 仅作为旧配置兼容别名。
 - `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
 - `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
 - `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、`tunnel_address` 分配模式（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）和 reconcile/backoff 策略，不发布到 gossip。IPv6 默认 `derived-link-local`，IPv4 默认 `disabled`；旧字段 `tunnel_address_pool` 仍映射为 `sequential-pool` 兼容模式，但二者不可混用。

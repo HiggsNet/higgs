@@ -84,6 +84,28 @@ overlays:
       backoff:
         initial: 1s
         max: 1m
+    # Phase 5 routing configuration. Currently only BIRD is supported.
+    routing:
+      enabled: true
+      protocol: bird
+      mode: managed
+      # netns defaults to the overlay link group netns
+      control_socket: /run/higgs/bird-ipsec-main.ctl
+      pid_file: /run/higgs/bird-ipsec-main.pid
+      # router_id: 1.2.3.4       # optional override
+      table: 100
+      table_name: higgs_100
+      priority: 100
+      metric_base: 100
+      metric_staged: 200
+      metric_draining: 500
+      device_scan_time: 5
+      # auth:
+      #   enabled: true
+      #   algorithm: hmac sha256
+      #   password: "base64-or-hex-key"
+      #   key_id: 1
+
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
     deny:
