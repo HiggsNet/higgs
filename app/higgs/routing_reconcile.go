@@ -117,7 +117,7 @@ func (d *DaemonService) reconcileRoutingForGroup(ctx context.Context, group ipse
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
 
-	importSet := authorizedPrefixes(ars, nil)
+	importSet := assignmentPrefixes(ars)
 	exportSet := authorizedPrefixes(ars, []zone.ZonePath{d.Sync.State.ManagedZone})
 
 	configBytes, err := bird.DefaultConfigGenerator{}.Generate(spec, importSet, exportSet)
@@ -275,6 +275,21 @@ func authorizedPrefixes(ars *routing.AuthorizedRouteSet, zones []zone.ZonePath) 
 		for prefix := range prefixes {
 			out = append(out, prefix)
 		}
+	}
+	return out
+}
+
+// assignmentPrefixes returns all IPAM assignment prefixes from the authorized
+// route set. These prefixes form the import whitelist: the local BIRD instance
+// accepts any route advertised by overlay peers that falls within an assigned
+// prefix (the BIRD prefix list uses "+" to include more specific prefixes).
+func assignmentPrefixes(ars *routing.AuthorizedRouteSet) []netip.Prefix {
+	if ars == nil {
+		return nil
+	}
+	out := make([]netip.Prefix, 0, len(ars.Assignments))
+	for prefix := range ars.Assignments {
+		out = append(out, prefix)
 	}
 	return out
 }

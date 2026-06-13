@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -11,7 +11,7 @@ GO_MOD_CACHE ?= /tmp/higgs-gomodcache
 LDFLAGS := -s -w
 CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
-SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke
+SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke
 
 all: build
 
@@ -61,6 +61,10 @@ ipsec-xfrm-container-smoke:
 ipsec-dry-run-smoke:
 	$(GO_ENV) $(GO) test ./pkg/transport/ipsec
 	@echo "IPsec dry-run smoke passed"
+
+routing-dry-run-smoke:
+	$(GO_ENV) $(GO) test ./app/higgs -run TestRoutingDryRunSmoke -v
+	@echo "Routing dry-run smoke passed"
 
 ipsec-policy-smoke:
 	$(GO_ENV) $(GO) test ./pkg/transport/ipsec -run 'Test(ParseMeshPolicy|PlanTransportLinksAppliesMeshPolicyRules)'
@@ -857,4 +861,5 @@ help:
 	@echo "  delegation-revoke-smoke - Run delegation revocation convergence smoke test"
 	@echo "  object-pull-smoke - Run large-record object-pull over TCP smoke test"
 	@echo "  chunk-fallback-smoke - Run large-record UDP chunk fallback when TCP object pull is unreachable"
+	@echo "  routing-dry-run-smoke - Run Phase 5 routing dry-run smoke test"
 	@echo "  help    - Show this help message"

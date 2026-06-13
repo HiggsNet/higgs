@@ -132,12 +132,13 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		t.Fatalf("read generated config: %v", err)
 	}
 
-	// Import filter should contain both local and remote authorized prefixes.
-	if !strings.Contains(cfg, "10.0.0.0/24+") {
-		t.Errorf("import filter missing local prefix 10.0.0.0/24")
+	// Import filter should contain the IPAM assignment prefixes (authorized route
+	// space) for both local and remote zones.
+	if !strings.Contains(cfg, "10.0.0.0/16+") {
+		t.Errorf("import filter missing local assignment prefix 10.0.0.0/16")
 	}
-	if !strings.Contains(cfg, "10.1.0.0/24+") {
-		t.Errorf("import filter missing remote prefix 10.1.0.0/24")
+	if !strings.Contains(cfg, "10.1.0.0/16+") {
+		t.Errorf("import filter missing remote assignment prefix 10.1.0.0/16")
 	}
 
 	// Export filter should contain only the local prefix.
@@ -157,6 +158,107 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	// BIRD process should have been started with the generated config path.
 	if pm.startSpec.ConfigPath != inst.ConfigPath {
 		t.Errorf("Start config path = %q, want %q", pm.startSpec.ConfigPath, inst.ConfigPath)
+	}
+}
+
+func TestRoutingDryRunSmoke(t *testing.T) {
+	state, config := buildDryRunSmokeNetworkState(t)
+	now := time.Unix(4000, 0)
+
+	// Verify the route set authorizes the expected announcements without errors.
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) > 0 {
+		t.Fatalf("unexpected authorization errors: %+v", ars.Errors)
+	}
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "ipsec-main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+		Direction:       ipsec.DirectionOutbound,
+		Routing: ipsec.RoutingSpec{
+			Enabled: true,
+			Mode:    ipsec.RoutingModeManaged,
+		},
+	}}
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	client := &fakeBirdClient{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return client
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(latest.BirdInstances) != 1 {
+		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
+	}
+	inst := latest.BirdInstances["ipsec-main"]
+	if inst == nil {
+		t.Fatalf("missing bird instance state for overlay ipsec-main")
+	}
+	if inst.State == birdInstanceStateError {
+		t.Fatalf("bird instance state is error: %s", inst.LastError)
+	}
+	if inst.ConfigPath == "" {
+		t.Fatalf("ConfigPath is empty")
+	}
+
+	cfg, err := readFileString(inst.ConfigPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+
+	importIdx := strings.Index(cfg, "filter higgs_import_ipsec_main")
+	exportIdx := strings.Index(cfg, "filter higgs_export_ipsec_main")
+	if importIdx == -1 || exportIdx == -1 {
+		t.Fatalf("missing import/export filters")
+	}
+	importFilter := cfg[importIdx:exportIdx]
+	exportFilter := cfg[exportIdx:]
+
+	// Import filter should contain the authorized IPAM assignment prefixes.
+	if !strings.Contains(importFilter, "10.0.0.0/8+") {
+		t.Errorf("import filter missing authorized prefix 10.0.0.0/8+")
+	}
+	if !strings.Contains(importFilter, "10.1.0.0/16+") {
+		t.Errorf("import filter missing authorized prefix 10.1.0.0/16+")
+	}
+
+	// Export filter should contain only the local announcement.
+	if !strings.Contains(exportFilter, "10.0.1.0/24+") {
+		t.Errorf("export filter missing local prefix 10.0.1.0/24+")
+	}
+	if strings.Contains(exportFilter, "10.1.1.0/24") {
+		t.Errorf("export filter should not contain remote prefix 10.1.1.0/24")
+	}
+
+	// The reconcile run itself should not have recorded any error.
+	if latest.RoutingReconcile != nil && latest.RoutingReconcile.LastError != "" {
+		t.Errorf("unexpected routing reconcile error: %s", latest.RoutingReconcile.LastError)
 	}
 }
 
@@ -378,6 +480,139 @@ func buildTestNetworkStateForRouting(t *testing.T) (*stateFile, *syncConfigFile)
 	addRouteAssignment(t, state, "catofes.", "10.1.0.0/16", "node-b.catofes.", now, catofesPriv)
 	addRouteAnnouncement(t, state, "node-a.catofes.", "10.0.0.0/24", true, now, nodeAPriv)
 	addRouteAnnouncement(t, state, "node-b.catofes.", "10.1.0.0/24", true, now, nodeBPriv)
+
+	return state, config
+}
+
+func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile) {
+	t.Helper()
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root): %v", err)
+	}
+	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(catofes): %v", err)
+	}
+	nodeAPub, nodeAPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-a): %v", err)
+	}
+	nodeBPub, nodeBPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-b): %v", err)
+	}
+
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: rootPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate},
+			}},
+		}},
+	}
+	catofesAuthority := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: catofesPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate},
+			}},
+		}},
+	}
+	nodeAAuthority := &zone.ZoneAuthority{
+		Zone:      "node-a.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: nodeAPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+	nodeBAuthority := &zone.ZoneAuthority{
+		Zone:      "node-b.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: nodeBPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+
+	catofesDelegation := &zone.Delegation{
+		ZoneName:  "catofes.",
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *catofesAuthority,
+	}
+	if err := higgscrypto.SignDelegation(catofesDelegation, zone.RootZone, rootPriv); err != nil {
+		t.Fatalf("SignDelegation(catofes): %v", err)
+	}
+	nodeADelegation := &zone.Delegation{
+		ZoneName:  "node-a.catofes.",
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *nodeAAuthority,
+	}
+	if err := higgscrypto.SignDelegation(nodeADelegation, "catofes.", catofesPriv); err != nil {
+		t.Fatalf("SignDelegation(node-a): %v", err)
+	}
+	nodeBDelegation := &zone.Delegation{
+		ZoneName:  "node-b.catofes.",
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *nodeBAuthority,
+	}
+	if err := higgscrypto.SignDelegation(nodeBDelegation, "catofes.", catofesPriv); err != nil {
+		t.Fatalf("SignDelegation(node-b): %v", err)
+	}
+
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	ns.Zones["catofes."] = zone.NewZoneState("catofes.", catofesAuthority)
+	ns.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nodeAAuthority)
+	ns.Zones["node-b.catofes."] = zone.NewZoneState("node-b.catofes.", nodeBAuthority)
+	ns.Zones[zone.RootZone].Delegations["catofes."] = catofesDelegation
+	ns.Zones["catofes."].Delegations["node-a.catofes."] = nodeADelegation
+	ns.Zones["catofes."].Delegations["node-b.catofes."] = nodeBDelegation
+
+	configureValidation(ns)
+
+	now := time.Unix(123, 0)
+	if err := higgscrypto.VerifyChain(ns, "catofes.", now); err != nil {
+		t.Fatalf("VerifyChain(catofes): %v", err)
+	}
+	if err := higgscrypto.VerifyChain(ns, "node-a.catofes.", now); err != nil {
+		t.Fatalf("VerifyChain(node-a): %v", err)
+	}
+	if err := higgscrypto.VerifyChain(ns, "node-b.catofes.", now); err != nil {
+		t.Fatalf("VerifyChain(node-b): %v", err)
+	}
+
+	state := &stateFile{
+		ManagedZone:    "node-a.catofes.",
+		Network:        ns,
+		ZonePrivateKey: nodeAPriv,
+	}
+	config := &syncConfigFile{
+		PeerID:     "node-a.catofes.",
+		ListenAddr: "127.0.0.1:0",
+	}
+
+	// IPAM assignments in catofes. for the two leaf nodes.
+	addRouteAssignment(t, state, "catofes.", "10.0.0.0/8", "node-a.catofes.", now, catofesPriv)
+	addRouteAssignment(t, state, "catofes.", "10.1.0.0/16", "node-b.catofes.", now, catofesPriv)
+
+	// Active route announcements in the respective leaf zones.
+	addRouteAnnouncement(t, state, "node-a.catofes.", "10.0.1.0/24", true, now, nodeAPriv)
+	addRouteAnnouncement(t, state, "node-b.catofes.", "10.1.1.0/24", true, now, nodeBPriv)
 
 	return state, config
 }
