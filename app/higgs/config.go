@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	defaultConfigPath = "config.yaml"
-	defaultStateFile  = "higgs.db"
+	defaultConfigPath              = "config.yaml"
+	defaultStateFile               = "higgs.db"
+	defaultIPsecPortPreviousGrace  = 2 * time.Hour
+	defaultIPsecRotateRetentionSec = 3600
 )
 
 type appConfig struct {
@@ -161,8 +163,9 @@ type overlayGroupConfigYAML struct {
 }
 
 type overlayReconcileYAML struct {
-	Interval string             `yaml:"interval"`
-	Backoff  overlayBackoffYAML `yaml:"backoff"`
+	Interval        string             `yaml:"interval"`
+	RotateRetention string             `yaml:"rotate_retention"`
+	Backoff         overlayBackoffYAML `yaml:"backoff"`
 }
 
 type overlayBackoffYAML struct {
@@ -207,7 +210,7 @@ func defaultAppConfig() *appConfig {
 			Driver:             ipsecDriverDryRun,
 			PortMode:           ipsec.PortModeFixed,
 			PortRotateInterval: 0,
-			PortPreviousGrace:  gossip.DefaultEndpointGrace,
+			PortPreviousGrace:  defaultIPsecPortPreviousGrace,
 		},
 	}
 }
@@ -247,7 +250,7 @@ func normalizeAppConfig(config *appConfig) {
 		config.IPsec.PortMode = ipsec.PortModeFixed
 	}
 	if config.IPsec.PortPreviousGrace <= 0 {
-		config.IPsec.PortPreviousGrace = gossip.DefaultEndpointGrace
+		config.IPsec.PortPreviousGrace = defaultIPsecPortPreviousGrace
 	}
 }
 
@@ -422,6 +425,26 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.IPsec.LinkGroups = groups
 	}
+	if err := validateRotateWindows(config); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateRotateWindows(config *appConfig) error {
+	maxRetention := time.Duration(0)
+	for _, group := range config.IPsec.LinkGroups {
+		retention := group.Normalized().Reconcile.RotateRetentionSeconds
+		if retention == 0 {
+			retention = defaultIPsecRotateRetentionSec
+		}
+		if d := time.Duration(retention) * time.Second; d > maxRetention {
+			maxRetention = d
+		}
+	}
+	if maxRetention > 0 && config.IPsec.PortPreviousGrace < maxRetention {
+		return fmt.Errorf("ipsec.port_previous_grace %s must be at least overlays[].reconcile.rotate_retention %s", config.IPsec.PortPreviousGrace, maxRetention)
+	}
 	return nil
 }
 
@@ -555,6 +578,13 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, defaultNetNS ipsec.NetNS
 			return ipsec.LinkGroupSpec{}, err
 		}
 		group.Reconcile.IntervalSeconds = durationSeconds(d)
+	}
+	if overlay.Reconcile.RotateRetention != "" {
+		d, err := parseConfigDuration(overlay.Reconcile.RotateRetention, "reconcile.rotate_retention")
+		if err != nil {
+			return ipsec.LinkGroupSpec{}, err
+		}
+		group.Reconcile.RotateRetentionSeconds = durationSeconds(d)
 	}
 	if overlay.Reconcile.Backoff.Initial != "" {
 		d, err := parseConfigDuration(overlay.Reconcile.Backoff.Initial, "reconcile.backoff.initial")

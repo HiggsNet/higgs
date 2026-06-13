@@ -488,7 +488,7 @@ Phase 4.4 的平滑 rotate 协议边界：
 - `ipsec/ports` 的 `generation` 是轮换代数；current generation 变化表示进入新的端口世代。
 - `previous[].valid_until` 是旧端口 grace 窗口，不保证本地一定还在监听旧端口；只有当本机 rotate provider 明确支持 DNAT/dual connection/multi-socket grace 时，旧端口才是系统层可接收路径。
 - daemon 必须把 rotate phase 写入本地 `LinkInstance` 或 reconcile 摘要，例如 `preparing`、`dual-running`、`cutover`、`rollback`、`cleanup`，并把 selected ContactPoint、old/new generation、rollback deadline 暴露给 `higgs debug links`。
-- planner/reconcile 看到端口 generation 变化时，不应直接把旧 desired spec 替换成单个新 spec；应生成 staged rotate action，先让新端口路径建立或 DNAT 生效，再在 grace 结束后清理旧路径。
+- planner/reconcile 看到端口 generation 变化时，不应直接把旧 desired spec 替换成单个新 spec；应生成 staged rotate action，先让新端口路径建立或 DNAT 生效，再进入 dual-running 保留窗口。默认 `reconcile.rotate_retention: 1h`，窗口结束或后续 Babel/route manager 明确确认收敛后，由下一轮 reconcile 清理旧路径。daemon 重启后从落盘 rotate deadline、staged interface/if_id 和 `ListSAs` 恢复；若旧 SA 已不存在但 staged SA 已 established，则直接 promote staged generation。
 - 对 StrongSwan/XFRM provider，staged action 不能假设“同一 XFRM interface/同一 `if_id`/同一 traffic selector 下并行两条 CHILD_SA”一定可行；root/container smoke 已观测到该组合会被拒绝。协议层只要求 generation/phase/rollback 可审计，具体 provider 可选择 staged 独立 if_id、DNAT grace，或有界短中断 reestablish。
 - 失败时必须可回滚：新 current 端口 apply 失败、IKE/CHILD_SA 未建立、或质量指标恶化时，在 grace 内继续使用 previous/static fallback，并限制下一次探测/rotate 频率。
 
@@ -793,7 +793,7 @@ ipsec:
   ports:
     mode: range
     range: 30000-30999
-    grace: 10m
+    grace: 2h
 
 overlay:
   default_netns:
@@ -825,6 +825,9 @@ overlays:
       family: ipv6
     reconcile:
       interval: 30s
+      # After a staged rotate path is established, keep the old generation
+      # available during this local dual-running window. Default: 1h.
+      rotate_retention: 1h
       backoff:
         initial: 1s
         max: 60s

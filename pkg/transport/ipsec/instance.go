@@ -49,30 +49,32 @@ const (
 )
 
 type LinkInstance struct {
-	ID                string
-	GroupID           string
-	PeerZone          zone.ZonePath
-	TransportKind     string
-	TransportID       string
-	DesiredSpecHash   string
-	ActualState       string
-	InterfaceName     string
-	XFRMIfID          uint32
-	IKEName           string
-	ChildSAName       string
-	Endpoint          string
-	SelectedContact   ContactPoint
-	RemoteGeneration  uint64
-	StagedGeneration  uint64
-	RotatePhase       string
-	StagedIKEName     string
-	StagedChildSAName string
-	RotateDeadline    int64
-	LastError         string
-	FailureCount      int
-	BackoffUntil      int64
-	LastTransition    int64
-	Owner             ResourceOwner
+	ID                  string
+	GroupID             string
+	PeerZone            zone.ZonePath
+	TransportKind       string
+	TransportID         string
+	DesiredSpecHash     string
+	ActualState         string
+	InterfaceName       string
+	XFRMIfID            uint32
+	IKEName             string
+	ChildSAName         string
+	Endpoint            string
+	SelectedContact     ContactPoint
+	RemoteGeneration    uint64
+	StagedGeneration    uint64
+	RotatePhase         string
+	StagedIKEName       string
+	StagedChildSAName   string
+	StagedInterfaceName string
+	StagedXFRMIfID      uint32
+	RotateDeadline      int64
+	LastError           string
+	FailureCount        int
+	BackoffUntil        int64
+	LastTransition      int64
+	Owner               ResourceOwner
 
 	// Bidirectional takeover state (Phase 4.5).
 	InitiatorRole     string
@@ -92,13 +94,14 @@ type ResourceOwner struct {
 }
 
 type ReconcileInputs struct {
-	Desired      []TransportLinkSpec
-	Instances    map[string]LinkInstance
-	SAs          []SAState
-	Now          time.Time
-	Revoked      map[zone.ZonePath]bool
-	Roles        map[string]string
-	GroupBackoff map[string]BackoffPolicy
+	Desired              []TransportLinkSpec
+	Instances            map[string]LinkInstance
+	SAs                  []SAState
+	Now                  time.Time
+	Revoked              map[zone.ZonePath]bool
+	Roles                map[string]string
+	GroupBackoff         map[string]BackoffPolicy
+	GroupRotateRetention map[string]int
 }
 
 type ReconcileResult struct {
@@ -212,6 +215,8 @@ func contactGeneration(spec TransportLinkSpec) uint64 {
 func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
 	spec := base
 	spec.TransportID = RotateConnectionName(base.TransportID, generation)
+	spec.XFRMIfID = StableXFRMIfID(base.LocalZone, base.PeerZone, spec.TransportID)
+	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
 	var contacts []ContactPoint
 	for _, point := range base.ContactPoints {
 		if point.Generation == generation {
@@ -296,7 +301,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			existing.RemoteGeneration = desiredGen
 		}
 		if existing.RemoteGeneration != desiredGen {
-			result.handleRotate(id, spec, existing, in.SAs, now)
+			result.handleRotate(id, spec, existing, in.SAs, rotateRetentionForSpec(spec, in.GroupRotateRetention), now)
 			continue
 		}
 		existing = result.clearStagedIfIdle(existing, in.SAs, now)
@@ -460,7 +465,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	r.add(ReconcileActionCreate, &spec, &inst, reason)
 }
 
-func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, now time.Time) {
+func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, retention time.Duration, now time.Time) {
 	desiredGen := contactGeneration(spec)
 	if existing.StagedGeneration != 0 && existing.StagedGeneration != desiredGen {
 		inst := existing
@@ -476,11 +481,35 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	}
 	if existing.StagedGeneration == desiredGen {
 		stagedSA := findStagedSA(sas, existing)
+		stagedSpec := rotateSpec(spec, existing.StagedGeneration)
+		stagedInterfaceName := firstNonEmptyString(existing.StagedInterfaceName, stagedSpec.InterfaceName)
+		stagedXFRMIfID := firstNonZeroUint32(existing.StagedXFRMIfID, stagedSpec.XFRMIfID)
 		if stagedSA.Established {
+			oldSA := findInstanceSA(sas, existing)
+			if oldSA.Established && retention > 0 && (existing.RotatePhase != RotatePhaseDualRunning || existing.RotateDeadline == 0) {
+				inst := existing
+				inst.ActualState = LinkStateUp
+				inst.RotatePhase = RotatePhaseDualRunning
+				inst.RotateDeadline = now.Add(retention).Unix()
+				inst.LastTransition = now.Unix()
+				r.Instances[id] = inst
+				r.add(ReconcileActionNoop, &spec, &inst, "rotate retention active")
+				return
+			}
+			if oldSA.Established && existing.RotatePhase == RotatePhaseDualRunning && existing.RotateDeadline != 0 && now.Before(time.Unix(existing.RotateDeadline, 0)) {
+				inst := existing
+				inst.ActualState = LinkStateUp
+				inst.RotatePhase = RotatePhaseDualRunning
+				r.Instances[id] = inst
+				r.add(ReconcileActionNoop, &spec, &inst, "rotate retention active")
+				return
+			}
 			inst := existing
 			inst.RemoteGeneration = desiredGen
 			inst.IKEName = existing.StagedIKEName
 			inst.ChildSAName = existing.StagedChildSAName
+			inst.InterfaceName = stagedInterfaceName
+			inst.XFRMIfID = stagedXFRMIfID
 			inst.ActualState = LinkStateUp
 			inst.Endpoint = stagedSA.Endpoint
 			if point, ok := firstContactPointForGeneration(spec, desiredGen); ok {
@@ -491,7 +520,9 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedGeneration = 0
 			inst.StagedIKEName = ""
 			inst.StagedChildSAName = ""
-			inst.RotatePhase = RotatePhaseCutover
+			inst.StagedInterfaceName = ""
+			inst.StagedXFRMIfID = 0
+			inst.RotatePhase = RotatePhaseDualRunning
 			inst.RotateDeadline = 0
 			inst.FailureCount = 0
 			inst.BackoffUntil = 0
@@ -513,6 +544,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedGeneration = 0
 			inst.StagedIKEName = ""
 			inst.StagedChildSAName = ""
+			inst.StagedInterfaceName = ""
+			inst.StagedXFRMIfID = 0
 			inst.RotatePhase = RotatePhaseRollback
 			inst.RotateDeadline = 0
 			inst.LastError = "staged sa not established by deadline"
@@ -520,7 +553,6 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.BackoffUntil = now.Add(nextLinkBackoff(BackoffPolicy{}, inst.FailureCount)).Unix()
 			inst.LastTransition = now.Unix()
 			r.Instances[id] = inst
-			stagedSpec := rotateSpec(spec, existing.StagedGeneration)
 			r.add(ReconcileActionRollbackRotate, &stagedSpec, &inst, "staged sa deadline exceeded")
 			return
 		}
@@ -528,7 +560,6 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 		inst.RotatePhase = RotatePhaseTestingNew
 		inst.LastTransition = now.Unix()
 		r.Instances[id] = inst
-		stagedSpec := rotateSpec(spec, desiredGen)
 		r.add(ReconcileActionPrepareRotate, &stagedSpec, &inst, "awaiting staged sa")
 		return
 	}
@@ -536,11 +567,13 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	inst.StagedGeneration = desiredGen
 	inst.StagedIKEName = RotateConnectionName(existing.TransportID, desiredGen)
 	inst.StagedChildSAName = RotateChildSAName(existing.TransportID, desiredGen)
+	stagedSpec := rotateSpec(spec, desiredGen)
+	inst.StagedInterfaceName = stagedSpec.InterfaceName
+	inst.StagedXFRMIfID = stagedSpec.XFRMIfID
 	inst.RotatePhase = RotatePhasePreparing
 	inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
 	inst.LastTransition = now.Unix()
 	r.Instances[id] = inst
-	stagedSpec := rotateSpec(spec, desiredGen)
 	r.add(ReconcileActionPrepareRotate, &stagedSpec, &inst, "remote port generation changed")
 }
 
@@ -554,13 +587,17 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 		inst.RemoteGeneration = existing.StagedGeneration
 		inst.IKEName = existing.StagedIKEName
 		inst.ChildSAName = existing.StagedChildSAName
+		inst.InterfaceName = firstNonEmptyString(existing.StagedInterfaceName, existing.InterfaceName)
+		inst.XFRMIfID = firstNonZeroUint32(existing.StagedXFRMIfID, existing.XFRMIfID)
 		inst.ActualState = LinkStateUp
 		inst.Endpoint = stagedSA.Endpoint
 		inst.SelectedContact = ContactPoint{}
 		inst.StagedGeneration = 0
 		inst.StagedIKEName = ""
 		inst.StagedChildSAName = ""
-		inst.RotatePhase = RotatePhaseCutover
+		inst.StagedInterfaceName = ""
+		inst.StagedXFRMIfID = 0
+		inst.RotatePhase = RotatePhaseDualRunning
 		inst.RotateDeadline = 0
 		inst.LastTransition = now.Unix()
 		r.Instances[existing.ID] = inst
@@ -578,6 +615,8 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 	inst.StagedGeneration = 0
 	inst.StagedIKEName = ""
 	inst.StagedChildSAName = ""
+	inst.StagedInterfaceName = ""
+	inst.StagedXFRMIfID = 0
 	inst.RotatePhase = RotatePhaseIdle
 	inst.RotateDeadline = 0
 	r.Instances[existing.ID] = inst
@@ -658,6 +697,21 @@ func groupBackoffForSpec(spec TransportLinkSpec, groups map[string]BackoffPolicy
 	return groups[spec.OverlayID]
 }
 
+func rotateRetentionForSpec(spec TransportLinkSpec, groups map[string]int) time.Duration {
+	const defaultRotateRetention = time.Hour
+	if groups == nil {
+		return defaultRotateRetention
+	}
+	seconds, ok := groups[spec.OverlayID]
+	if !ok || seconds == 0 {
+		return defaultRotateRetention
+	}
+	if seconds < 0 {
+		return defaultRotateRetention
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 func takeoverDelayFor(policy BackoffPolicy, failureCount int) time.Duration {
 	if failureCount < 0 {
 		failureCount = 0
@@ -732,24 +786,12 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
-		plan := ApplyPlan{}
-		if action.Instance != nil && action.Instance.IKEName != "" && action.Instance.IKEName != action.Spec.TransportID {
-			plan.add("terminate_sa", action.Instance.IKEName, "break_before_make_rotate")
-			if ipsec == nil {
-				return plan, fmt.Errorf("ipsec driver is required")
-			}
-			if err := ipsec.TerminateSA(ctx, action.Instance.IKEName); err != nil {
-				return plan, fmt.Errorf("terminate old sa before rotate: %w", err)
-			}
-		}
-		stagedPlan, err := ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
-		plan.Operations = append(plan.Operations, stagedPlan.Operations...)
-		return plan, err
+		return ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
 	case ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
-		return TeardownConnectionOnly(ctx, ipsec, *action.Spec)
+		return TeardownTransportLink(ctx, ipsec, xfrm, *action.Spec)
 	case ReconcileActionTeardown:
 		if action.Spec != nil {
 			return TeardownTransportLink(ctx, ipsec, xfrm, *action.Spec)
@@ -773,11 +815,14 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			stagedSpec := TransportLinkSpec{
 				PeerZone:      action.Instance.PeerZone,
 				TransportID:   action.Instance.StagedIKEName,
-				InterfaceName: action.Instance.InterfaceName,
-				XFRMIfID:      action.Instance.XFRMIfID,
+				InterfaceName: firstNonEmptyString(action.Instance.StagedInterfaceName, action.Instance.InterfaceName),
+				XFRMIfID:      firstNonZeroUint32(action.Instance.StagedXFRMIfID, action.Instance.XFRMIfID),
 			}
 			if _, err := TeardownConnectionOnly(ctx, ipsec, stagedSpec); err != nil {
 				return ApplyPlan{}, err
+			}
+			if err := xfrm.DeleteInterface(ctx, stagedSpec.InterfaceName); err != nil {
+				return ApplyPlan{}, fmt.Errorf("delete staged interface: %w", err)
 			}
 		}
 		keySpec := TransportLinkSpec{
@@ -798,6 +843,24 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 	default:
 		return ApplyPlan{}, fmt.Errorf("unsupported reconcile action %q", action.Action)
 	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonZeroUint32(values ...uint32) uint32 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (r *ReconcileResult) add(action string, spec *TransportLinkSpec, inst *LinkInstance, reason string) {

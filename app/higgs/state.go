@@ -59,29 +59,31 @@ type ipsecPortRecordState struct {
 }
 
 type linkInstanceState struct {
-	ID                string         `json:"id"`
-	GroupID           string         `json:"group_id,omitempty"`
-	PeerZone          zone.ZonePath  `json:"peer_zone"`
-	TransportKind     string         `json:"transport_kind,omitempty"`
-	TransportID       string         `json:"transport_id,omitempty"`
-	DesiredSpecHash   string         `json:"desired_spec_hash,omitempty"`
-	ActualState       string         `json:"actual_state,omitempty"`
-	InterfaceName     string         `json:"interface_name,omitempty"`
-	XFRMIfID          uint32         `json:"xfrm_if_id,omitempty"`
-	IKEName           string         `json:"ike_name,omitempty"`
-	ChildSAName       string         `json:"child_sa_name,omitempty"`
-	Endpoint          string         `json:"endpoint,omitempty"`
-	RemoteGeneration  uint64         `json:"remote_generation,omitempty"`
-	StagedGeneration  uint64         `json:"staged_generation,omitempty"`
-	RotatePhase       string         `json:"rotate_phase,omitempty"`
-	StagedIKEName     string         `json:"staged_ike_name,omitempty"`
-	StagedChildSAName string         `json:"staged_child_sa_name,omitempty"`
-	RotateDeadline    int64          `json:"rotate_deadline,omitempty"`
-	LastError         string         `json:"last_error,omitempty"`
-	FailureCount      int            `json:"failure_count,omitempty"`
-	BackoffUntil      int64          `json:"backoff_until,omitempty"`
-	LastTransition    int64          `json:"last_transition,omitempty"`
-	Owner             linkOwnerState `json:"owner,omitempty"`
+	ID                  string         `json:"id"`
+	GroupID             string         `json:"group_id,omitempty"`
+	PeerZone            zone.ZonePath  `json:"peer_zone"`
+	TransportKind       string         `json:"transport_kind,omitempty"`
+	TransportID         string         `json:"transport_id,omitempty"`
+	DesiredSpecHash     string         `json:"desired_spec_hash,omitempty"`
+	ActualState         string         `json:"actual_state,omitempty"`
+	InterfaceName       string         `json:"interface_name,omitempty"`
+	XFRMIfID            uint32         `json:"xfrm_if_id,omitempty"`
+	IKEName             string         `json:"ike_name,omitempty"`
+	ChildSAName         string         `json:"child_sa_name,omitempty"`
+	Endpoint            string         `json:"endpoint,omitempty"`
+	RemoteGeneration    uint64         `json:"remote_generation,omitempty"`
+	StagedGeneration    uint64         `json:"staged_generation,omitempty"`
+	RotatePhase         string         `json:"rotate_phase,omitempty"`
+	StagedIKEName       string         `json:"staged_ike_name,omitempty"`
+	StagedChildSAName   string         `json:"staged_child_sa_name,omitempty"`
+	StagedInterfaceName string         `json:"staged_interface_name,omitempty"`
+	StagedXFRMIfID      uint32         `json:"staged_xfrm_if_id,omitempty"`
+	RotateDeadline      int64          `json:"rotate_deadline,omitempty"`
+	LastError           string         `json:"last_error,omitempty"`
+	FailureCount        int            `json:"failure_count,omitempty"`
+	BackoffUntil        int64          `json:"backoff_until,omitempty"`
+	LastTransition      int64          `json:"last_transition,omitempty"`
+	Owner               linkOwnerState `json:"owner,omitempty"`
 
 	// Phase 4.5 bidirectional takeover state.
 	InitiatorRole     string `json:"initiator_role,omitempty"`

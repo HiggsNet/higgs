@@ -19,6 +19,33 @@ func TestRotateConnectionNameStable(t *testing.T) {
 	}
 }
 
+func TestRotateSpecUsesIndependentXFRMInterface(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		TransportID:   "ipsec-main-ab",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 2,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	staged := rotateSpec(spec, 2)
+	if staged.TransportID != RotateConnectionName(spec.TransportID, 2) {
+		t.Fatalf("staged transport id = %q", staged.TransportID)
+	}
+	if staged.XFRMIfID == 0 || staged.XFRMIfID == spec.XFRMIfID {
+		t.Fatalf("staged if_id = %d, want independent from %d", staged.XFRMIfID, spec.XFRMIfID)
+	}
+	if staged.InterfaceName == "" || staged.InterfaceName == spec.InterfaceName {
+		t.Fatalf("staged interface = %q, want independent from %q", staged.InterfaceName, spec.InterfaceName)
+	}
+}
+
 func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
@@ -98,12 +125,18 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	if inst.StagedIKEName != RotateConnectionName(existing.TransportID, 2) {
 		t.Fatalf("staged ike name = %q", inst.StagedIKEName)
 	}
+	if inst.StagedInterfaceName == "" || inst.StagedInterfaceName == existing.InterfaceName {
+		t.Fatalf("staged interface = %q, want independent from %q", inst.StagedInterfaceName, existing.InterfaceName)
+	}
+	if inst.StagedXFRMIfID == 0 || inst.StagedXFRMIfID == existing.XFRMIfID {
+		t.Fatalf("staged if_id = %d, want independent from %d", inst.StagedXFRMIfID, existing.XFRMIfID)
+	}
 	if inst.RemoteGeneration != 1 {
 		t.Fatalf("remote generation changed before commit = %d", inst.RemoteGeneration)
 	}
 }
 
-func TestReconcileCommitRotateAfterStagedSAObserved(t *testing.T) {
+func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
@@ -148,9 +181,82 @@ func TestReconcileCommitRotateAfterStagedSAObserved(t *testing.T) {
 		Now: now,
 	})
 
+	action := firstAction(result, ReconcileActionNoop)
+	if action == nil {
+		t.Fatalf("expected noop while rotate retention is active, got %+v", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.RemoteGeneration != 1 {
+		t.Fatalf("remote generation changed during retention = %d", inst.RemoteGeneration)
+	}
+	if inst.StagedGeneration != 2 {
+		t.Fatalf("staged generation = %d, want retained staged generation", inst.StagedGeneration)
+	}
+	if inst.IKEName != existing.IKEName {
+		t.Fatalf("ike name = %q, want old generation %q", inst.IKEName, existing.IKEName)
+	}
+	if inst.InterfaceName != existing.InterfaceName {
+		t.Fatalf("interface = %q, want old interface %q", inst.InterfaceName, existing.InterfaceName)
+	}
+	if inst.RotatePhase != RotatePhaseDualRunning {
+		t.Fatalf("rotate phase = %q, want dual_running", inst.RotatePhase)
+	}
+	if inst.RotateDeadline != now.Add(time.Hour).Unix() {
+		t.Fatalf("rotate deadline = %d, want default 1h retention", inst.RotateDeadline)
+	}
+}
+
+func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: DefaultIKEPort},
+			NATT:       PortBinding{Advertised: 4501},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Direction:         DirectionOutbound,
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+	}
+	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	newSpec := plan.Desired[0]
+
+	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing.RemoteGeneration = 1
+	existing.StagedGeneration = 2
+	existing.StagedIKEName = RotateConnectionName(existing.TransportID, 2)
+	existing.StagedChildSAName = RotateChildSAName(existing.TransportID, 2)
+	stagedSpec := rotateSpec(newSpec, 2)
+	existing.StagedInterfaceName = stagedSpec.InterfaceName
+	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.RotatePhase = RotatePhaseDualRunning
+	existing.RotateDeadline = now.Add(-time.Second).Unix()
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{newSpec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{
+			{Name: existing.IKEName, Established: true},
+			{Name: existing.StagedIKEName, Established: true},
+		},
+		Now: now,
+	})
+
 	action := firstAction(result, ReconcileActionCommitRotate)
 	if action == nil {
-		t.Fatalf("expected commit_rotate action, got %+v", result.Actions)
+		t.Fatalf("expected commit_rotate after retention expiry, got %+v", result.Actions)
 	}
 	inst := result.Instances[existing.ID]
 	if inst.RemoteGeneration != 2 {
@@ -162,8 +268,68 @@ func TestReconcileCommitRotateAfterStagedSAObserved(t *testing.T) {
 	if inst.IKEName != RotateConnectionName(existing.TransportID, 2) {
 		t.Fatalf("ike name = %q, want rotated", inst.IKEName)
 	}
-	if inst.RotatePhase != RotatePhaseCutover {
-		t.Fatalf("rotate phase = %q, want cutover", inst.RotatePhase)
+	if inst.InterfaceName != stagedSpec.InterfaceName {
+		t.Fatalf("interface = %q, want promoted staged interface %q", inst.InterfaceName, stagedSpec.InterfaceName)
+	}
+	if inst.XFRMIfID != stagedSpec.XFRMIfID {
+		t.Fatalf("if_id = %d, want promoted staged if_id %d", inst.XFRMIfID, stagedSpec.XFRMIfID)
+	}
+}
+
+func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: DefaultIKEPort},
+			NATT:       PortBinding{Advertised: 4501},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		Direction:         DirectionOutbound,
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+	}
+	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	newSpec := plan.Desired[0]
+	stagedSpec := rotateSpec(newSpec, 2)
+
+	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing.RemoteGeneration = 1
+	existing.StagedGeneration = 2
+	existing.StagedIKEName = stagedSpec.TransportID
+	existing.StagedChildSAName = ChildSAName(stagedSpec)
+	existing.StagedInterfaceName = stagedSpec.InterfaceName
+	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.RotatePhase = RotatePhaseDualRunning
+	existing.RotateDeadline = now.Add(time.Hour).Unix()
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{newSpec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{
+			{Name: existing.StagedIKEName, Established: true},
+		},
+		Now: now,
+	})
+
+	action := firstAction(result, ReconcileActionCommitRotate)
+	if action == nil {
+		t.Fatalf("expected commit_rotate when old SA disappeared, got %+v", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.RemoteGeneration != 2 || inst.IKEName != stagedSpec.TransportID || inst.InterfaceName != stagedSpec.InterfaceName {
+		t.Fatalf("instance not promoted to staged generation: %+v", inst)
 	}
 }
 
@@ -319,7 +485,7 @@ func TestApplyReconcileActionPrepareRotateSkipsPrivateKeyLoad(t *testing.T) {
 	}
 }
 
-func TestApplyReconcileActionPrepareRotateTerminatesOldSA(t *testing.T) {
+func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 	spec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
 		PeerZone:      "node-b.catofes.",
@@ -352,18 +518,21 @@ func TestApplyReconcileActionPrepareRotateTerminatesOldSA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
-	if len(ipsecDrv.Terminated) != 1 || ipsecDrv.Terminated[0] != spec.TransportID {
-		t.Fatalf("terminated = %+v, want old SA %s", ipsecDrv.Terminated, spec.TransportID)
+	if len(ipsecDrv.Terminated) != 0 {
+		t.Fatalf("prepare_rotate terminated old SA: %+v", ipsecDrv.Terminated)
 	}
 	if len(ipsecDrv.Connections) != 1 || ipsecDrv.Connections[0].TransportID != stagedSpec.TransportID {
 		t.Fatalf("connections = %+v", ipsecDrv.Connections)
 	}
-	if len(plan.Operations) == 0 || plan.Operations[0].Action != "terminate_sa" {
-		t.Fatalf("plan operations = %+v, want terminate_sa first", plan.Operations)
+	if len(xfrmDrv.Interfaces) != 1 || xfrmDrv.Interfaces[0].InterfaceName != stagedSpec.InterfaceName {
+		t.Fatalf("interfaces = %+v, want staged interface %s", xfrmDrv.Interfaces, stagedSpec.InterfaceName)
+	}
+	if len(plan.Operations) == 0 || plan.Operations[0].Action == "terminate_sa" {
+		t.Fatalf("plan operations = %+v, want no old SA termination", plan.Operations)
 	}
 }
 
-func TestApplyReconcileActionCommitRotateOnlyUnloadsConnection(t *testing.T) {
+func TestApplyReconcileActionCommitRotateTeardownsOldGeneration(t *testing.T) {
 	oldSpec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
 		PeerZone:      "node-b.catofes.",
@@ -388,8 +557,8 @@ func TestApplyReconcileActionCommitRotateOnlyUnloadsConnection(t *testing.T) {
 	if len(ipsecDrv.Unloaded) != 1 || ipsecDrv.Unloaded[0] != oldSpec.TransportID {
 		t.Fatalf("unloaded = %+v", ipsecDrv.Unloaded)
 	}
-	if len(xfrmDrv.DeletedIFs) != 0 {
-		t.Fatalf("commit rotate should not delete interface: %+v", xfrmDrv.DeletedIFs)
+	if len(xfrmDrv.DeletedIFs) != 1 || xfrmDrv.DeletedIFs[0] != oldSpec.InterfaceName {
+		t.Fatalf("deleted interfaces = %+v", xfrmDrv.DeletedIFs)
 	}
 }
 
@@ -443,7 +612,7 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 
 	action := firstAction(result, ReconcileActionCommitRotate)
 	if action == nil {
-		t.Fatalf("expected commit_rotate after restart, got %+v", result.Actions)
+		t.Fatalf("expected commit_rotate after restart when old SA is missing, got %+v", result.Actions)
 	}
 	inst := result.Instances[existing.ID]
 	if inst.RemoteGeneration != 2 || inst.StagedGeneration != 0 {

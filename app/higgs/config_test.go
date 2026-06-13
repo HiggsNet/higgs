@@ -179,6 +179,7 @@ overlays:
     tunnel_address_pool: fd00:1234::/64
     reconcile:
       interval: 30s
+      rotate_retention: 1h
       backoff:
         initial: 1s
         max: 1m
@@ -204,7 +205,7 @@ overlays:
 	if group.TunnelAddressPool.String() != "fd00:1234::/64" {
 		t.Fatalf("tunnel pool = %s", group.TunnelAddressPool)
 	}
-	if group.Reconcile.IntervalSeconds != 30 || group.Reconcile.Backoff.InitialSeconds != 1 || group.Reconcile.Backoff.MaxSeconds != 60 {
+	if group.Reconcile.IntervalSeconds != 30 || group.Reconcile.RotateRetentionSeconds != 3600 || group.Reconcile.Backoff.InitialSeconds != 1 || group.Reconcile.Backoff.MaxSeconds != 60 {
 		t.Fatalf("reconcile = %+v", group.Reconcile)
 	}
 	if got := strings.Join(group.AddressSourceOrder, ","); got != "manual-dns,discovery" {
@@ -585,7 +586,7 @@ ipsec:
     from: 30000
     to: 30099
   port_rotate_interval: 24h
-  port_previous_grace: 10m
+  port_previous_grace: 2h
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -600,8 +601,34 @@ ipsec:
 	if config.IPsec.PortRotateInterval != 24*time.Hour {
 		t.Fatalf("PortRotateInterval = %s", config.IPsec.PortRotateInterval)
 	}
-	if config.IPsec.PortPreviousGrace != 10*time.Minute {
+	if config.IPsec.PortPreviousGrace != 2*time.Hour {
 		t.Fatalf("PortPreviousGrace = %s", config.IPsec.PortPreviousGrace)
+	}
+}
+
+func TestDefaultIPsecPortPreviousGraceIsLongerThanRotateRetention(t *testing.T) {
+	config := defaultAppConfig()
+	if config.IPsec.PortPreviousGrace != 2*time.Hour {
+		t.Fatalf("default PortPreviousGrace = %s, want 2h", config.IPsec.PortPreviousGrace)
+	}
+}
+
+func TestParseConfigYAMLRejectsPortGraceShorterThanRotateRetention(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  port_previous_grace: 10m
+overlays:
+  - name: ipsec-main
+    reconcile:
+      rotate_retention: 1h
+`
+	err := parseConfigYAML(input, config)
+	if err == nil {
+		t.Fatalf("parseConfigYAML unexpectedly succeeded")
+	}
+	if !strings.Contains(err.Error(), "ipsec.port_previous_grace") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -35,13 +35,14 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
 	result := ipsec.ReconcileLinkInstances(ipsec.ReconcileInputs{
-		Desired:      plan.Desired,
-		Instances:    linkInstancesToIPsec(d.Sync.State.LinkInstances),
-		SAs:          sas,
-		Now:          now,
-		Revoked:      revokedLinkPeers(d.Sync.State, now),
-		Roles:        plan.Roles,
-		GroupBackoff: groupBackoffMap(groups),
+		Desired:              plan.Desired,
+		Instances:            linkInstancesToIPsec(d.Sync.State.LinkInstances),
+		SAs:                  sas,
+		Now:                  now,
+		Revoked:              revokedLinkPeers(d.Sync.State, now),
+		Roles:                plan.Roles,
+		GroupBackoff:         groupBackoffMap(groups),
+		GroupRotateRetention: groupRotateRetentionMap(groups),
 	})
 	for _, action := range result.Actions {
 		switch action.Action {
@@ -187,28 +188,30 @@ func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.Link
 	out := make(map[string]ipsec.LinkInstance, len(in))
 	for id, inst := range in {
 		out[id] = ipsec.LinkInstance{
-			ID:                inst.ID,
-			GroupID:           inst.GroupID,
-			PeerZone:          inst.PeerZone,
-			TransportKind:     inst.TransportKind,
-			TransportID:       inst.TransportID,
-			DesiredSpecHash:   inst.DesiredSpecHash,
-			ActualState:       inst.ActualState,
-			InterfaceName:     inst.InterfaceName,
-			XFRMIfID:          inst.XFRMIfID,
-			IKEName:           inst.IKEName,
-			ChildSAName:       inst.ChildSAName,
-			Endpoint:          inst.Endpoint,
-			RemoteGeneration:  inst.RemoteGeneration,
-			StagedGeneration:  inst.StagedGeneration,
-			RotatePhase:       inst.RotatePhase,
-			StagedIKEName:     inst.StagedIKEName,
-			StagedChildSAName: inst.StagedChildSAName,
-			RotateDeadline:    inst.RotateDeadline,
-			LastError:         inst.LastError,
-			FailureCount:      inst.FailureCount,
-			BackoffUntil:      inst.BackoffUntil,
-			LastTransition:    inst.LastTransition,
+			ID:                  inst.ID,
+			GroupID:             inst.GroupID,
+			PeerZone:            inst.PeerZone,
+			TransportKind:       inst.TransportKind,
+			TransportID:         inst.TransportID,
+			DesiredSpecHash:     inst.DesiredSpecHash,
+			ActualState:         inst.ActualState,
+			InterfaceName:       inst.InterfaceName,
+			XFRMIfID:            inst.XFRMIfID,
+			IKEName:             inst.IKEName,
+			ChildSAName:         inst.ChildSAName,
+			Endpoint:            inst.Endpoint,
+			RemoteGeneration:    inst.RemoteGeneration,
+			StagedGeneration:    inst.StagedGeneration,
+			RotatePhase:         inst.RotatePhase,
+			StagedIKEName:       inst.StagedIKEName,
+			StagedChildSAName:   inst.StagedChildSAName,
+			StagedInterfaceName: inst.StagedInterfaceName,
+			StagedXFRMIfID:      inst.StagedXFRMIfID,
+			RotateDeadline:      inst.RotateDeadline,
+			LastError:           inst.LastError,
+			FailureCount:        inst.FailureCount,
+			BackoffUntil:        inst.BackoffUntil,
+			LastTransition:      inst.LastTransition,
 			Owner: ipsec.ResourceOwner{
 				Manager:     inst.Owner.Manager,
 				GroupID:     inst.Owner.GroupID,
@@ -234,28 +237,30 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 	out := make(map[string]linkInstanceState, len(in))
 	for id, inst := range in {
 		out[id] = linkInstanceState{
-			ID:                inst.ID,
-			GroupID:           inst.GroupID,
-			PeerZone:          inst.PeerZone,
-			TransportKind:     inst.TransportKind,
-			TransportID:       inst.TransportID,
-			DesiredSpecHash:   inst.DesiredSpecHash,
-			ActualState:       inst.ActualState,
-			InterfaceName:     inst.InterfaceName,
-			XFRMIfID:          inst.XFRMIfID,
-			IKEName:           inst.IKEName,
-			ChildSAName:       inst.ChildSAName,
-			Endpoint:          inst.Endpoint,
-			RemoteGeneration:  inst.RemoteGeneration,
-			StagedGeneration:  inst.StagedGeneration,
-			RotatePhase:       inst.RotatePhase,
-			StagedIKEName:     inst.StagedIKEName,
-			StagedChildSAName: inst.StagedChildSAName,
-			RotateDeadline:    inst.RotateDeadline,
-			LastError:         inst.LastError,
-			FailureCount:      inst.FailureCount,
-			BackoffUntil:      inst.BackoffUntil,
-			LastTransition:    inst.LastTransition,
+			ID:                  inst.ID,
+			GroupID:             inst.GroupID,
+			PeerZone:            inst.PeerZone,
+			TransportKind:       inst.TransportKind,
+			TransportID:         inst.TransportID,
+			DesiredSpecHash:     inst.DesiredSpecHash,
+			ActualState:         inst.ActualState,
+			InterfaceName:       inst.InterfaceName,
+			XFRMIfID:            inst.XFRMIfID,
+			IKEName:             inst.IKEName,
+			ChildSAName:         inst.ChildSAName,
+			Endpoint:            inst.Endpoint,
+			RemoteGeneration:    inst.RemoteGeneration,
+			StagedGeneration:    inst.StagedGeneration,
+			RotatePhase:         inst.RotatePhase,
+			StagedIKEName:       inst.StagedIKEName,
+			StagedChildSAName:   inst.StagedChildSAName,
+			StagedInterfaceName: inst.StagedInterfaceName,
+			StagedXFRMIfID:      inst.StagedXFRMIfID,
+			RotateDeadline:      inst.RotateDeadline,
+			LastError:           inst.LastError,
+			FailureCount:        inst.FailureCount,
+			BackoffUntil:        inst.BackoffUntil,
+			LastTransition:      inst.LastTransition,
 			Owner: linkOwnerState{
 				Manager:     inst.Owner.Manager,
 				GroupID:     inst.Owner.GroupID,
@@ -386,11 +391,20 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 		inst.LastTransition = now.Unix()
 	case ipsec.ReconcileActionRollbackRotate:
 		inst.ActualState = ipsec.LinkStateConnecting
+		inst.StagedGeneration = 0
+		inst.StagedIKEName = ""
+		inst.StagedChildSAName = ""
+		inst.StagedInterfaceName = ""
+		inst.StagedXFRMIfID = 0
+		inst.RotatePhase = ipsec.RotatePhaseIdle
+		inst.RotateDeadline = 0
 		inst.LastTransition = now.Unix()
 	case ipsec.ReconcileActionCleanupRotate:
 		inst.StagedGeneration = 0
 		inst.StagedIKEName = ""
 		inst.StagedChildSAName = ""
+		inst.StagedInterfaceName = ""
+		inst.StagedXFRMIfID = 0
 		inst.RotatePhase = ipsec.RotatePhaseIdle
 		inst.RotateDeadline = 0
 	}
@@ -411,6 +425,14 @@ func groupBackoffMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.BackoffPolic
 	out := make(map[string]ipsec.BackoffPolicy, len(groups))
 	for _, group := range groups {
 		out[group.ID] = group.Reconcile.Backoff
+	}
+	return out
+}
+
+func groupRotateRetentionMap(groups []ipsec.LinkGroupSpec) map[string]int {
+	out := make(map[string]int, len(groups))
+	for _, group := range groups {
+		out[group.ID] = group.Normalized().Reconcile.RotateRetentionSeconds
 	}
 	return out
 }

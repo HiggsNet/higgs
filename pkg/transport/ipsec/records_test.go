@@ -333,6 +333,9 @@ func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
 	if normalized.DefaultPathMode != PathModeFamilyRedundant {
 		t.Fatalf("path mode = %q", normalized.DefaultPathMode)
 	}
+	if normalized.Reconcile.RotateRetentionSeconds != 3600 {
+		t.Fatalf("rotate retention = %d, want 3600", normalized.Reconcile.RotateRetentionSeconds)
+	}
 	if len(normalized.AddressSourceOrder) != len(defaultAddressSourceOrder) {
 		t.Fatalf("address source order = %+v", normalized.AddressSourceOrder)
 	}

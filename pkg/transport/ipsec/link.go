@@ -64,8 +64,9 @@ type BackoffPolicy struct {
 }
 
 type ReconcilePolicy struct {
-	IntervalSeconds int
-	Backoff         BackoffPolicy
+	IntervalSeconds        int
+	RotateRetentionSeconds int
+	Backoff                BackoffPolicy
 }
 
 type LinkGroupSpec struct {
@@ -245,6 +246,9 @@ func (g LinkGroupSpec) Validate() error {
 	if g.Reconcile.Backoff.MaxSeconds != 0 && g.Reconcile.Backoff.InitialSeconds > g.Reconcile.Backoff.MaxSeconds {
 		return fmt.Errorf("backoff initial must not exceed max")
 	}
+	if g.Reconcile.RotateRetentionSeconds < 0 {
+		return fmt.Errorf("rotate retention must be non-negative")
+	}
 	spec := g.normalizedTunnelAddress()
 	switch spec.Mode {
 	case TunnelAddressDisabled, TunnelAddressDerivedLinkLocal, TunnelAddressDerivedPool, TunnelAddressSequentialPool:
@@ -271,6 +275,9 @@ func (g LinkGroupSpec) Normalized() LinkGroupSpec {
 	}
 	if out.Direction == "" {
 		out.Direction = DirectionOutbound
+	}
+	if out.Reconcile.RotateRetentionSeconds == 0 {
+		out.Reconcile.RotateRetentionSeconds = 3600
 	}
 	out.NetNS = out.NetNS.Normalized()
 	if len(out.AddressSourceOrder) == 0 {
