@@ -356,19 +356,37 @@ ipsec_address_source_order:
 - `previous`：端口轮换 grace 窗口内可回退的旧端口。
 - `range`：daemon 可在该范围内选择端口；也可配置固定端口。
 
-Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。这里需要区分两层能力：当前已实现的是“公告 + planner fallback”，即远端可以优先尝试 current，current 失败/backoff 时在 grace 内回退 previous；这不代表本机 StrongSwan 已经同时监听新旧两组端口，也不代表系统层已经做到无损 rotate。StrongSwan 自定义端口的第一版边界是 `charon.port` / `charon.port_nat_t` + connection `remote_port` + 必要时 reestablish；低频生产可用的平滑 rotate 提前到 Phase 4.4 设计和实现，高频/对抗性 port hopping、复杂多实例策略留到 Phase 7。
+Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。这里需要区分两层能力：公告/planner 层允许远端优先尝试 current，并在 current 失败/backoff 时于 grace 内回退 previous；但 `previous` 不代表本机 StrongSwan 单实例已经同时监听新旧两组入口端口。系统层 rotate 已进入 staged 数据面状态机：daemon/reconcile 会加载独立 staged CHILD_SA/XFRM interface，观测 established 后进入双 running 保留窗口。高频/对抗性 port hopping、DNAT/redirect grace 和复杂多实例 listener 策略留到 Phase 6/7。
 
-平滑 rotate 的 Phase 4.4 目标是把 current/previous grace 变成系统可执行的 staged transition，而不只是远端选择候选端口。
+平滑 rotate 的 Phase 4.4 目标是把 current/previous grace 变成系统可执行的 staged transition，而不只是远端选择候选端口。这里的 staged 可以按“预备/影子链路”理解：先在旧链路旁边搭一条新 generation 的候选 IPsec/XFRM 链路，确认新链路真的 established 后，再决定保留双 running、切换或回滚；它不是第三种端口，也不是立即替换旧链路。Phase 4.4 的早期 root/container 验证先跑通了 **bounded break-before-make**：旧 SA/connection 可被显式清理后再建立新 connection，证明 deadline/backoff/rollback 和 VICI/XFRM 观测闭环可用。后续 4.4.x 已把主线推进为 staged generation：新 generation 使用独立 `TransportID`、XFRM `if_id` 和 interface，`prepare_rotate` 不再要求先拆旧 SA。
 
-Phase 4.4 最终选择的是 **bounded break-before-make** 路径。原因是 root/container 实验已证明：若 staged CHILD_SA 继续复用同一 peer traffic selector 和同一 XFRM `if_id`，StrongSwan/内核策略会拒绝并行建立两条 CHILD_SA。真正无中断平滑切换后续只能走 staged generation 使用独立 XFRM interface/if_id 后切换 route，或通过 Phase 6/7 的 DNAT/redirect grace 由防火墙层管理新旧端口转发。
+当前端口 rotate 必须按两层理解：
 
-当前 rotate 流程分两层：
-1. 4.4 root/container 已验证的是 bounded break-before-make：旧 generation 可被显式清理后再建立新 connection，证明 deadline/backoff/rollback 和 VICI/XFRM 观测闭环可用。
-2. 4.4.x staged transition 使用独立 `TransportID`、XFRM `if_id` 和 interface；`prepare_rotate` 不再要求先拆旧 SA。primary/outbound 或 secondary-takeover owner 会加载可主动建立的 staged connection；`inbound` / `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
-3. 下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`/`commit_rotate`；旧 generation 默认按 `rotate_retention` 保留，后续交给 Babel/route manager 接管 metric 收敛再清理。
-4. 若 staged SA 在 deadline 前未建立，执行 `rollback_rotate` 并进入 backoff；旧 generation 保持可用。
+1. **入口端口公告层**：`ipsec/ports.current.generation` 表示远端应优先尝试的新入口端口；`previous[].valid_until` 只表示远端还能尝试旧入口端口，不保证本机 StrongSwan 单实例已经同时监听 old/current。真正的 inbound 入口无断切换仍需要后续 DNAT/redirect grace 或多 listener 能力。
+2. **XFRM 数据面预备层**：reconcile 发现远端 generation 变化后，派生 staged connection/CHILD_SA/interface，也就是“先并排试建的新链路”。primary/outbound 或 secondary-takeover owner 会主动建立 staged generation；`inbound` / `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
+3. **双 running 保留层**：下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`。旧 generation 默认按 `overlays[].reconcile.rotate_retention` 保留 1h，给 Babel/route manager 后续 metric 收敛和回滚使用；保留窗口内 secondary-standby 不会因 takeover delay 到期而抢拨。
+4. **回滚和清理层**：staged SA 在 prepare deadline 前未建立则 `rollback_rotate`，只清 staged artifacts、保留旧 generation 并进入 backoff；retention 到期或旧 SA 已不存在且 staged SA 已 established，则 `commit_rotate` promote staged generation 并清理旧 connection/interface。
 
-`LinkInstance` 记录 selected ContactPoint、remote/staged port generation、rotation phase（`idle`、`preparing`、`testing_new`、`dual_running`、`cutover`、`rollback`、`cleanup`）、staged ike/child name、rollback deadline 和最近 rotate error；`higgs debug links` 可显示当前 rotate phase、staged generation、deadline 和 error。staged connection/child 名称稳定可推导：`RotateConnectionName(transportID, generation)` / `RotateChildSAName(transportID, generation)`。revocation/policy deny/transport key mismatch 仍走强制 teardown，不进入 rotate 状态机。
+endpoint 改变由外层 reconcile 先归类：如果 ContactPoint 地址/DNS 解析结果变化但 port generation 不变，它是普通 desired spec 变化，走 `update` / `repair`，不进入 rotate 子状态机；如果 endpoint 改变同时伴随 `ipsec/ports.current.generation` 改变，则新的 endpoint 会进入 staged spec，rotate 子状态机用这条候选新链路测试新地址/端口，旧链路在 testing/retention 窗口内保持可用。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle: remote_generation == desired_generation
+    Idle --> Preparing: desired generation changes
+    Preparing --> TestingNew: prepare_rotate applied
+    TestingNew --> DualRunning: staged SA observed
+    TestingNew --> Rollback: prepare deadline exceeded
+    DualRunning --> DualRunning: rotate_retention active
+    DualRunning --> Cutover: retention expired
+    DualRunning --> Cutover: old SA already gone
+    Cutover --> Idle: commit_rotate promotes staged generation
+    Rollback --> Idle: rollback_rotate clears staged artifacts
+    Preparing --> Cleanup: stale staged generation
+    TestingNew --> Cleanup: stale staged generation
+    Cleanup --> Idle: cleanup_rotate
+```
+
+`LinkInstance` 记录 selected ContactPoint、remote/staged port generation、rotation phase（`idle`、`preparing`、`testing_new`、`dual_running`、`cutover`、`rollback`、`cleanup`）、staged ike/child name、staged interface/if_id、rollback/retention deadline 和最近 rotate error；`higgs debug links` 可显示当前 rotate phase、staged generation、staged interface、deadline 和 error。staged connection/child 名称稳定可推导：`RotateConnectionName(transportID, generation)` / `RotateChildSAName(transportID, generation)`。revocation/policy deny/transport key mismatch 仍走强制 teardown，不进入 rotate 状态机。
 
 #### 2.4.3 本地 MeshPolicy rule DSL
 
@@ -532,7 +550,16 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 
 #### 2.4.7 Bidirectional 首拨失败接管（Phase 4.5）
 
-双方都配置 `direction=bidirectional` 且 `accept=bidirectional` 时，先用稳定 tie-break（peer zone 字典序）选出 primary initiator，避免正常情况下双向同时拨号。但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 需要有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。
+双方都配置 `direction=bidirectional` 且 `accept=bidirectional` 时，先用稳定 tie-break（peer zone 字典序）选出 primary initiator，避免正常情况下双向同时拨号。选主只解决“正常情况下谁先拨”这个问题，不改变信任关系，也不把 secondary 排除出链路：secondary 仍会规划 desired spec 并加载 responder/trap 配置，保证 primary 拨过来时能接住。
+
+选主规则是纯本地、确定性的，两端无需额外协商：
+
+1. 每个节点用自己的 zone 和 peer zone 做字符串比较。
+2. 字典序较小的一侧得到 `initiator_role=primary`，负责主动 initiate。
+3. 字典序较大的一侧得到 `initiator_role=secondary-standby`，初始 reconcile 返回 `noop/bidirectional_standby`，只等待对端拨入。
+4. 如果任意一侧已经通过 `ListSAs` 观测到匹配 SA，则优先 adopt，角色进入 `converged`，不再纠结谁先拨。
+
+例如 `node-a.catofes.` 与 `node-b.catofes.` 都是 bidirectional 时，`node-a.catofes.` 字典序更小，所以 A 是 primary；B 是 secondary-standby。A 主动拨 B，B 只加载 responder/trap。若 A 长时间无法建立 IKE_SA/CHILD_SA，B 才能按下面的 takeover 规则临时接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达、单侧防火墙或单侧 NAT 映射异常上。
 
 **接管不引入新 gossip record：** 4.5 不新增 signed health record。secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。Phase 6/7 再考虑低频 signed/runtime health hint。
 
@@ -545,6 +572,8 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 - `secondary-takeover`：接管激活中。
 - `converged`：已有匹配 SA，双方退出接管状态机。
 - `cooldown`：接管失败后冷却期。
+
+`outbound` / `inbound` 不走这套双向选主：`outbound` 本来就是主动方；`inbound` 本来只接收。`bidirectional + remote accept=inbound` 也不需要 tie-break，因为远端只声明接收，本机可以直接作为主动方。
 
 `TransportLinkSpec` 增加 `InitiatorRole`（hash 中排除）；`LinkInstance` 记录 `InitiatorRole`、`TakeoverPhase`、`TakeoverStartedAt`、`TakeoverUntil`、`LastTakeoverError`、`ObservedInitiator`。
 

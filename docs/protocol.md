@@ -481,16 +481,72 @@ DNS 不是天然最高优先级。动态 DNS 很多时候只是 public reflector
 
 `pkg/transport/ipsec.PlanPortRecord` 是第一版本地端口选择边界：未配置时发布标准 500/4500；固定端口按配置发布；范围端口按 `generation` 稳定选择一组 IKE/NAT-T 端口；轮换时把上一代 `current` 带入 `previous` 并设置 grace `valid_until`。peer 端只把未过期的 `current` / `previous` 与 address candidates 组合成 `ContactPoint`，不把端口写死到地址里。
 
-UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它们写死。StrongSwan 当前的实际边界是：`charon.port` / `charon.port_nat_t` 控制本地监听端口，`swanctl.conf` connection 的 `remote_port` 可指定远端端口；自定义 server port 通常走 NAT-T socket，MOBIKE 默认可能把会话漂移到 NAT-T 端口。当前已实现的是公告和 planner 层的 current/previous grace，不是系统层平滑 rotate：`BuildStrongSwanConnection` 仍只从 `TransportLinkSpec.ContactPoints[0]` 选择一个 `remote_port`，daemon 也没有让 charon 同时监听新旧两组端口。低频生产可用的平滑 rotate 提前到 Phase 4.4，Phase 7 只保留高频/对抗性 port hopping。
+UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它们写死。StrongSwan 当前的实际边界是：`charon.port` / `charon.port_nat_t` 控制本地监听端口，`swanctl.conf` connection 的 `remote_port` 可指定远端端口；自定义 server port 通常走 NAT-T socket，MOBIKE 默认可能把会话漂移到 NAT-T 端口。当前已经实现的系统 rotate 是 **staged 数据面 generation**：daemon/reconcile 为新 generation 加载独立 CHILD_SA/XFRM interface，观测 staged SA 后进入双 running 保留窗口。staged 的意思是“预备/影子”：先在旧链路旁边搭一条候选新链路，确认可用后再切换、保留或回滚；它不是第三种端口。但这仍不等于本机 StrongSwan 单实例能同时监听 old/current advertised inbound 端口。入口端口双接收需要后续 DNAT/redirect grace 或多 listener 能力，Phase 7 只保留高频/对抗性 port hopping。
 
-Phase 4.4 的平滑 rotate 协议边界：
+Phase 4.4/4.4.x 的端口 rotate 状态机分为两层协议语义：
 
-- `ipsec/ports` 的 `generation` 是轮换代数；current generation 变化表示进入新的端口世代。
-- `previous[].valid_until` 是旧端口 grace 窗口，不保证本地一定还在监听旧端口；只有当本机 rotate provider 明确支持 DNAT/dual connection/multi-socket grace 时，旧端口才是系统层可接收路径。
-- daemon 必须把 rotate phase 写入本地 `LinkInstance` 或 reconcile 摘要，例如 `preparing`、`dual-running`、`cutover`、`rollback`、`cleanup`，并把 selected ContactPoint、old/new generation、rollback deadline 暴露给 `higgs debug links`。
-- planner/reconcile 看到端口 generation 变化时，不应直接把旧 desired spec 替换成单个新 spec；应生成 staged rotate action，先让新端口路径建立或 DNAT 生效，再进入 dual-running 保留窗口。默认 `reconcile.rotate_retention: 1h`，窗口结束或后续 Babel/route manager 明确确认收敛后，由下一轮 reconcile 清理旧路径。daemon 重启后从落盘 rotate deadline、staged interface/if_id 和 `ListSAs` 恢复；若旧 SA 已不存在但 staged SA 已 established，则直接 promote staged generation。
-- 对 StrongSwan/XFRM provider，staged action 不能假设“同一 XFRM interface/同一 `if_id`/同一 traffic selector 下并行两条 CHILD_SA”一定可行；root/container smoke 已观测到该组合会被拒绝。协议层只要求 generation/phase/rollback 可审计，具体 provider 可选择 staged 独立 if_id、DNAT grace，或有界短中断 reestablish。
-- 失败时必须可回滚：新 current 端口 apply 失败、IKE/CHILD_SA 未建立、或质量指标恶化时，在 grace 内继续使用 previous/static fallback，并限制下一次探测/rotate 频率。
+- **入口端口 generation**：`ipsec/ports.current.generation` 是远端 planner 看到的新入口端口代数。`previous[].valid_until` 是旧入口端口的公告 grace，表示远端还可以尝试 old port；它不保证本机 StrongSwan 单实例正在同时监听 old/current。真正让 inbound 入口无断接收 old/current，需要后续 DNAT/redirect grace 或多 listener 能力。
+- **数据面 staged generation**：reconcile 看到远端 generation 变化时，不直接覆盖现有 `LinkInstance`，而是派生 staged `TransportLinkSpec`。staged spec 是“预备新链路”的规格，使用独立 `TransportID`、XFRM `if_id` 和 interface；旧 SA/interface 在 staged 建立期间保持可用。
+
+当前代码中的状态、动作和持久化字段如下：
+
+| Phase | 进入条件 | Reconcile action / reason | 系统动作 | 退出条件 |
+|-------|----------|---------------------------|----------|----------|
+| idle | `RemoteGeneration == desired generation` 且无 staged generation | `noop` / 常规 create-update-repair-adopt 路径 | 保持或修复当前 generation | 远端 `ipsec/ports.current.generation` 改变 |
+| preparing | 远端 generation 改变，且无现存 staged generation | `prepare_rotate` / `remote port generation changed` | 生成 staged connection/CHILD_SA/interface；primary/outbound/takeover owner 主动 initiate，inbound/standby 只加载 responder/trap | 下一轮进入 `testing_new`，或发现 stale staged generation |
+| testing_new | staged generation 已落盘但 VICI `ListSAs` 尚未观测到 staged SA | `prepare_rotate` / `awaiting staged sa` | 重试/确认 staged config，不拆旧 generation | staged SA established -> `dual_running`；deadline 超时 -> `rollback` |
+| dual_running | staged SA established，旧 SA 仍存在，`rotate_retention` 未到期 | `noop` / `rotate retention active` | 新旧 generation 并行；旧 generation 保留给 Babel/route manager 收敛和回滚 | retention 到期，或旧 SA 已不存在 |
+| cutover | staged SA established，且无需继续保留旧 generation | `commit_rotate` / `staged sa established` | promote staged generation 为当前 generation；terminate/unload/delete 旧 connection/interface | 回到 idle |
+| rollback | staged SA 在 prepare deadline 前未建立，或 apply 失败进入 backoff | `rollback_rotate` / `staged sa deadline exceeded` | 只清 staged artifacts，旧 generation 保持可用，记录 `LastError`、`FailureCount`、`BackoffUntil` | backoff 到期后可重新 prepare |
+| cleanup | staged generation 与当前 desired generation 不一致，或 spec 更新留下旧 rotated connection | `cleanup_rotate` / `stale staged generation` 或 `old rotated connection after spec update` | 清理过期 staged/旧 connection，不 promote | 回到 idle 或重新 prepare |
+
+状态机图：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Preparing: desired generation changes
+    Preparing --> TestingNew: prepare_rotate applied
+    Preparing --> Cleanup: staged generation becomes stale
+    TestingNew --> TestingNew: awaiting staged SA
+    TestingNew --> DualRunning: staged SA established and old SA still exists
+    TestingNew --> Cutover: staged SA established and old SA missing
+    TestingNew --> Rollback: prepare deadline exceeded
+    TestingNew --> Cleanup: staged generation becomes stale
+    DualRunning --> DualRunning: rotate_retention active
+    DualRunning --> Cutover: retention expired
+    DualRunning --> Cutover: old SA disappears
+    Cutover --> Idle: staged generation promoted
+    Rollback --> Idle: staged artifacts removed and backoff recorded
+    Cleanup --> Idle: stale artifacts removed
+```
+
+Initiator/direction 规则：
+
+- `outbound` 或 bidirectional primary 负责主动建立 staged generation。
+- `inbound` 和 `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
+- `secondary-takeover` 已拥有 takeover lease 时按主动 owner 处理，可以 staged initiate。
+- `secondary-standby` 在 staged/`dual_running` deadline 未到期时返回 `rotate_staged_active` / `rotate_retention_active` noop，不会因为 takeover delay 到期而抢拨；只有当前 owner 超时且没有可用 staged/old SA 时，才回到 4.5 takeover 逻辑。
+
+持久化和观测字段：
+
+- `RemoteGeneration`：当前已采用的远端 port generation。
+- `StagedGeneration`：正在测试或保留的 staged port generation。
+- `RotatePhase`：`preparing`、`testing_new`、`dual_running`、`rollback`、`cleanup` 或空值 idle。
+- `StagedIKEName` / `StagedChildSAName`：由 `RotateConnectionName(transportID, generation)` 和 `RotateChildSAName(transportID, generation)` 派生。
+- `StagedInterfaceName` / `StagedXFRMIfID`：staged generation 独立 XFRM 数据面身份。
+- `RotateDeadline`：在 `testing_new` 中表示 prepare timeout；在 `dual_running` 中表示旧 generation retention 截止时间。
+- `LastError`、`FailureCount`、`BackoffUntil`：rollback/apply failure 后的节流和诊断信息。
+
+配置窗口要分清职责：`ipsec.port_previous_grace` 覆盖“远端还能尝试旧入口端口”的窗口；`overlays[].reconcile.rotate_retention` 覆盖“本地新旧 XFRM/Babel 数据面并行”的窗口，默认 1h。配置校验要求 previous grace 至少覆盖 rotate retention。revocation、policy deny、record expiry、transport key/profile mismatch 仍走强制 teardown，不进入 rotate 状态机。
+
+endpoint 变化与 rotate 的关系由 reconcile 的判断顺序决定：
+
+1. `contactGeneration(spec)` 取 desired ContactPoint 的 generation。
+2. 如果 `LinkInstance.RemoteGeneration != desired generation`，进入 `handleRotate`。此时 staged spec 从最新 desired spec 派生，因此同时变化的 address/DNS/port 会一起进入 staged ContactPoint。
+3. 如果 generation 没变，再比较 `TransportLinkSpecHash(spec)`。ContactPoint 地址、DNS 解析结果、端口、tunnel/interface 等普通 spec 字段变化会改变 hash，触发 `update` / `repair`，不进入 rotate。
+
+因此：endpoint-only 变化是外层 reconcile update；endpoint + generation 变化是 rotate staged transition；revocation/policy/key/profile 失效仍优先 teardown。
 
 ### 6.5 `ipsec/transport-key`
 
@@ -639,6 +695,48 @@ teardown 的第一版顺序固定为 `TeardownTransportLink` / `PlanTeardown`：
 | `bidirectional` | `inbound` | 主动拨号 |
 | `bidirectional` | `bidirectional` | 用 peer id/zone 的稳定排序决定首拨方 |
 | `outbound` | `none` | 不自动建链 |
+
+Bidirectional 选主只在“本地 effective direction 是 `bidirectional`，且远端 profile `accept=bidirectional`”时启用。算法不需要网络协商，双方只要看到同一对 zone 名称就会得到互补结论：
+
+```text
+if local_zone < peer_zone:
+    local role = primary
+else:
+    local role = secondary-standby
+```
+
+例子：
+
+| 本地节点 | 对端节点 | 比较结果 | 本地 initiator_role | 初始行为 |
+|----------|----------|----------|---------------------|----------|
+| `node-a.catofes.` | `node-b.catofes.` | `node-a... < node-b...` | `primary` | 主动 initiate |
+| `node-b.catofes.` | `node-a.catofes.` | `node-b... > node-a...` | `secondary-standby` | `noop/bidirectional_standby`，只加载 responder/trap |
+
+选主结果写入 `TransportLinkSpec.InitiatorRole`，但该字段不进入 `TransportLinkSpecHash`。这意味着 standby、takeover、converged 这些运行态角色变化不会被误判为 desired spec 变化，也不会无意义触发 update。
+
+角色状态机：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Primary: local_zone < peer_zone
+    [*] --> Standby: local_zone > peer_zone
+    Primary --> Converged: matching SA observed
+    Standby --> Converged: matching SA observed
+    Standby --> Takeover: takeover delay elapsed and no SA
+    Takeover --> Converged: matching SA observed
+    Takeover --> Cooldown: takeover timeout or apply failure
+    Cooldown --> Standby: cooldown expired
+    Converged --> Converged: adopt existing SA
+    Converged --> Standby: SA missing on secondary side
+```
+
+Takeover 是连通性失败处理，不是重新选举：
+
+- `primary` 仍是稳定排序选出的默认主动方。
+- `secondary-standby` 只有在本地长期看不到匹配 SA、takeover delay 到期、仍有可拨 ContactPoint、且没有 revocation/policy/key/profile 失败时，才进入 `secondary-takeover`。
+- `secondary-takeover` 有 lease，避免刚接管就被 primary 抢回；失败后进入 cooldown，避免紧密重试。
+- 一旦任意一侧观测到 matching SA，reconcile 优先 adopt，角色进入 `converged`。
+- primary 后续恢复时如果 SA 已存在，只 adopt，不立即拆掉 secondary takeover 建好的链路。
 
 NAT 组合：
 - 公网 inbound 节点 + NAT/outbound-only 节点：NAT 后节点主动拨公网节点是第一版主路径。

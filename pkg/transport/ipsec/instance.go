@@ -776,6 +776,9 @@ func shouldSecondaryTakeover(inst LinkInstance, role string, spec TransportLinkS
 	if inst.TakeoverPhase == TakeoverPhaseCooldown && now.Before(time.Unix(inst.TakeoverUntil, 0)) {
 		return false, "takeover_cooldown_active"
 	}
+	if suppress, reason := suppressTakeoverDuringRotate(inst, now); suppress {
+		return false, reason
+	}
 	if len(spec.ContactPoints) == 0 {
 		return false, "takeover_no_contact_point"
 	}
@@ -796,6 +799,21 @@ func shouldSecondaryTakeover(inst LinkInstance, role string, spec TransportLinkS
 		}
 	}
 	return true, "secondary_takeover"
+}
+
+func suppressTakeoverDuringRotate(inst LinkInstance, now time.Time) (bool, string) {
+	if inst.RotateDeadline == 0 || !now.Before(time.Unix(inst.RotateDeadline, 0)) {
+		return false, ""
+	}
+	switch inst.RotatePhase {
+	case RotatePhaseDualRunning:
+		return true, "rotate_retention_active"
+	case RotatePhasePreparing, RotatePhaseTestingNew:
+		if inst.StagedGeneration != 0 {
+			return true, "rotate_staged_active"
+		}
+	}
+	return false, ""
 }
 
 func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, action ReconcileAction, netns NetNSSpec) (ApplyPlan, error) {
