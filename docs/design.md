@@ -1,8 +1,8 @@
 # Higgs Mesh VPN 控制平面设计
 
 > **文档状态（2026-06）**
-> Phase 0–3 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现：4.0 admin 写操作 daemon 化与 auto-join 配置化身份初始化，4.1 StrongSwan/XFRM 控制模块，4.2 链路实例管理（planner / reconciler / LinkInstance），4.3 最小闭环（driver 层真实 VICI IKE_SA/CHILD_SA + tunnel ping、daemon reconcile 级真实 StrongSwan/XFRM bring-up、daemon `Run` 循环级 gossip 同步 + VICI/XFRM bring-up + 重启恢复 + 撤销闭环），4.4 bounded break-before-make 端口轮换，4.5 bidirectional takeover——均通过 root/container smoke 验证。
+> Phase 0–4 已落地实现，Phase 5 路由授权与 BIRD Babel adapter 第一版已实现。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 第一版已实现 route announcement / IPAM record、AuthorizedRouteSet、BIRD config generator / birdc client / process manager、daemon routing reconcile、`higgs route` 与 `higgs debug babel/routes/route` CLI，并通过 `make routing-dry-run-smoke` 验证。
 
 ## 原始需求摘要
 
@@ -902,12 +902,12 @@ type PeerView struct {
 | StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot、root/container daemon-run gossip smoke 已实现 | CLI 进程级 smoke、重启恢复、撤销闭环 | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
 | XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
-| 路由协议 | _未实现_（Phase 5） | `bird` + `birdc` | BIRD 跑 Babel protocol，支持 interface pattern 自动发现、多 routing table、IPv4/IPv6 双栈、平滑 filter 重载 |
+| 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug babel/routes/route` 已落地；container root smoke、per-peer whitelist、策略路由、rotate cutover gate 后续补齐 |
 | 防火墙 | _未实现_（Phase 6） | `nftables` netlink | 现代 Linux 趋势 |
 
 ---
 
-## 六、当前实现现状（Phase 0–4.2）
+## 六、当前实现现状（Phase 0–5 第一版）
 
 ### 已落地
 
@@ -928,8 +928,10 @@ type PeerView struct {
 | Peer 动态发现（endpoint record 扫描、TTL/grace 管理） | `pkg/core/gossip/` | ✅ 完整 |
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
 | Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ 已实现，admin 写入和 IPsec state-change hook 已接入 |
-| CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db） | `app/higgs/` | ✅ 完整 |
-| 配置文件（YAML + 环境变量覆盖） | `app/higgs/config.go` | ✅ 完整 |
+| CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db / route） | `app/higgs/` | ✅ 完整 |
+| 配置文件（YAML + 环境变量覆盖，含 overlays[].routing） | `app/higgs/config.go` | ✅ 完整 |
+| Route Announcement / IPAM record 解析与校验 | `pkg/routing/records.go` | ✅ 完整 |
+| AuthorizedRouteSet（assignment/announcement 授权、重叠裁决） | `pkg/routing/authorization.go` | ✅ 第一版完整 |
 
 ### 进行中/预留（Phase 4+）
 
@@ -937,11 +939,11 @@ type PeerView struct {
 |------|--------|------|
 | StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 主体已完成：IPsec public record 公告、Address/Port/ContactPoint 模型、LinkPlanner + skip reason、LinkInstance reconcile（create/update/adopt/repair/teardown/noop）、dry-run/VICI SystemXFRMDriver provider、VICI IKE_SA/CHILD_SA bring-up（4.3）、daemon `Run` 循环 gossip 同步后真实 VICI/XFRM + tunnel ping（4.3）、daemon 级重启恢复及撤销闭环（4.3）、bounded break-before-make 端口轮换（4.4）、bidirectional takeover（4.5）。外部 `build/higgs daemon` 双 OS 进程 smoke 仍作为后续 hardening |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
-| BIRD 路由适配器 | `pkg/routing/bird/` | 🟨 仅 doc.go，待实现 |
+| BIRD 路由适配器 | `pkg/routing/bird/` | 🟨 第一版已落地：config generator、filter renderer、router-id derivation、birdc client、process manager、preflight；真实 BIRD bring-up 和 container smoke 待验证 |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
 | Delegation 撤销（tombstone） | `pkg/core/zone/` + `app/higgs/` | ✅ 已实现 |
-| 细粒度 Capability 执行 | `pkg/crypto/sign.go` | ⚠️ 结构已定义，校验仅检查 PermDelegate/PermWrite |
+| 细粒度 Capability 执行 | `pkg/crypto/sign.go` | ⚠️ 结构已定义，校验仅检查 PermDelegate/PermWrite；`route.announcement` 已映射到 `PermWriteRoute` |
 | Public IP Reflector | `pkg/core/gossip/discovery.go` | ✅ HTTP client + local smoke |
 
 ---
