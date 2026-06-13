@@ -1186,10 +1186,13 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	for _, want := range []string{
 		"planned_desired_links: 1",
 		"actual_sas: 1",
-		"desired_hash=",
-		"if_id=",
-		"sa=established",
-		"sa_remote=198.51.100.20",
+		"  planner:\n",
+		"    desired_hash: ",
+		"  xfrm:\n",
+		"    if_id: ",
+		"  strongswan:\n",
+		"    sa_state: established",
+		"    remote_endpoint: 198.51.100.20",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)
@@ -1358,11 +1361,11 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	}
 	output := out.String()
 	for _, want := range []string{
-		"state=up",
-		"sa=established",
-		"sa_local_id=node-a.catofes.",
-		"sa_remote_id=node-b.catofes.",
-		"sa_reqid=1001",
+		"  state: up",
+		"    sa_state: established",
+		"    local_identity: node-a.catofes.",
+		"    remote_identity: node-b.catofes.",
+		"    reqid: 1001",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)

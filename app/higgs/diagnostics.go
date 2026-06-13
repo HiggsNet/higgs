@@ -169,42 +169,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		if desiredHash == "" {
 			desiredHash = inst.DesiredSpecHash
 		}
-		fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=%s state=%s if=%s if_id=%d child_sa=%s local_tunnel=%s peer_tunnel=%s endpoint=%s sa=%s sa_local=%s sa_remote=%s sa_local_id=%s sa_remote_id=%s sa_reqid=%d rotate_phase=%s remote_gen=%d staged_gen=%d staged_ike=%s staged_if=%s staged_if_id=%d rotate_deadline=%s initiator_role=%s takeover_phase=%s takeover_until=%s observed_initiator=%s owner=%s failures=%d backoff=%s error=%s takeover_error=%s\n",
-			inst.ID,
-			dash(inst.GroupID),
-			inst.PeerZone,
-			dash(shortHash(desiredHash)),
-			dash(shortHash(inst.DesiredSpecHash)),
-			dash(inst.ActualState),
-			dash(inst.InterfaceName),
-			inst.XFRMIfID,
-			dash(inst.ChildSAName),
-			dash(desired.LocalTunnelAddr),
-			dash(desired.PeerTunnelAddr),
-			dash(inst.Endpoint),
-			formatSAState(sa),
-			dash(sa.LocalEndpoint),
-			dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)),
-			dash(sa.LocalIdentity),
-			dash(sa.RemoteIdentity),
-			sa.ReqID,
-			dash(inst.RotatePhase),
-			inst.RemoteGeneration,
-			inst.StagedGeneration,
-			dash(inst.StagedIKEName),
-			dash(inst.StagedInterfaceName),
-			inst.StagedXFRMIfID,
-			formatUnixTime(inst.RotateDeadline),
-			dash(inst.InitiatorRole),
-			dash(inst.TakeoverPhase),
-			formatUnixTime(inst.TakeoverUntil),
-			dash(inst.ObservedInitiator),
-			dash(inst.Owner.Manager),
-			inst.FailureCount,
-			formatUnixTime(inst.BackoffUntil),
-			dash(inst.LastError),
-			dash(inst.LastTakeoverError),
-		)
+		printDebugLinkInstance(w, inst, desired, sa, desiredHash)
 	}
 	if len(ids) == 0 && len(plannedDesired) > 0 {
 		plannedIDs := make([]string, 0, len(plannedDesired))
@@ -214,17 +179,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		sort.Strings(plannedIDs)
 		for _, id := range plannedIDs {
 			desired := plannedDesired[id]
-			fmt.Fprintf(w, "- id=%s group=%s peer=%s desired_hash=%s actual_hash=- state=missing if=%s if_id=%d child_sa=- local_tunnel=%s peer_tunnel=%s endpoint=%s sa=- sa_endpoint=- owner=- failures=0 backoff=- error=-\n",
-				desired.InstanceID,
-				dash(desired.GroupID),
-				desired.PeerZone,
-				dash(shortHash(desired.DesiredSpecHash)),
-				dash(desired.InterfaceName),
-				desired.XFRMIfID,
-				dash(desired.LocalTunnelAddr),
-				dash(desired.PeerTunnelAddr),
-				dash(desired.Endpoint),
-			)
+			printDebugMissingLink(w, desired)
 		}
 	}
 	fmt.Fprintf(w, "actions: %d\n", len(reconcile.Actions))
@@ -247,6 +202,74 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		)
 	}
 	return nil
+}
+
+func printDebugLinkInstance(w io.Writer, inst linkInstanceState, desired desiredLinkState, sa linkSAState, desiredHash string) {
+	fmt.Fprintf(w, "\nlink %s\n", inst.ID)
+	fmt.Fprintf(w, "  peer: %s\n", inst.PeerZone)
+	fmt.Fprintf(w, "  group: %s\n", dash(inst.GroupID))
+	fmt.Fprintf(w, "  state: %s\n", dash(inst.ActualState))
+	fmt.Fprintf(w, "  planner:\n")
+	fmt.Fprintf(w, "    desired_hash: %s\n", dash(shortHash(desiredHash)))
+	fmt.Fprintf(w, "    actual_hash: %s\n", dash(shortHash(inst.DesiredSpecHash)))
+	fmt.Fprintf(w, "    endpoint: %s\n", dash(firstNonEmpty(desired.Endpoint, inst.Endpoint)))
+	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(desired.LocalTunnelAddr))
+	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(desired.PeerTunnelAddr))
+	fmt.Fprintf(w, "  xfrm:\n")
+	fmt.Fprintf(w, "    interface: %s\n", dash(inst.InterfaceName))
+	fmt.Fprintf(w, "    if_id: %d\n", inst.XFRMIfID)
+	fmt.Fprintf(w, "  strongswan:\n")
+	fmt.Fprintf(w, "    child_sa: %s\n", dash(inst.ChildSAName))
+	fmt.Fprintf(w, "    sa_state: %s\n", formatSAState(sa))
+	fmt.Fprintf(w, "    local_endpoint: %s\n", dash(sa.LocalEndpoint))
+	fmt.Fprintf(w, "    remote_endpoint: %s\n", dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)))
+	fmt.Fprintf(w, "    local_identity: %s\n", dash(sa.LocalIdentity))
+	fmt.Fprintf(w, "    remote_identity: %s\n", dash(sa.RemoteIdentity))
+	fmt.Fprintf(w, "    reqid: %s\n", formatUint32OrDash(sa.ReqID))
+	fmt.Fprintf(w, "    observed_if_id: %s\n", formatUint32OrDash(sa.XFRMIfID))
+	fmt.Fprintf(w, "  rotation:\n")
+	fmt.Fprintf(w, "    phase: %s\n", dash(inst.RotatePhase))
+	fmt.Fprintf(w, "    remote_generation: %d\n", inst.RemoteGeneration)
+	fmt.Fprintf(w, "    staged_generation: %d\n", inst.StagedGeneration)
+	fmt.Fprintf(w, "    staged_ike: %s\n", dash(inst.StagedIKEName))
+	fmt.Fprintf(w, "    staged_interface: %s\n", dash(inst.StagedInterfaceName))
+	fmt.Fprintf(w, "    staged_if_id: %s\n", formatUint32OrDash(inst.StagedXFRMIfID))
+	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(inst.RotateDeadline))
+	fmt.Fprintf(w, "  takeover:\n")
+	fmt.Fprintf(w, "    initiator_role: %s\n", dash(inst.InitiatorRole))
+	fmt.Fprintf(w, "    phase: %s\n", dash(inst.TakeoverPhase))
+	fmt.Fprintf(w, "    until: %s\n", formatUnixTime(inst.TakeoverUntil))
+	fmt.Fprintf(w, "    observed_initiator: %s\n", dash(inst.ObservedInitiator))
+	fmt.Fprintf(w, "  health:\n")
+	fmt.Fprintf(w, "    owner: %s\n", dash(inst.Owner.Manager))
+	fmt.Fprintf(w, "    failures: %d\n", inst.FailureCount)
+	fmt.Fprintf(w, "    backoff_until: %s\n", formatUnixTime(inst.BackoffUntil))
+	fmt.Fprintf(w, "    last_error: %s\n", dash(inst.LastError))
+	fmt.Fprintf(w, "    takeover_error: %s\n", dash(inst.LastTakeoverError))
+}
+
+func printDebugMissingLink(w io.Writer, desired desiredLinkState) {
+	fmt.Fprintf(w, "\nlink %s\n", desired.InstanceID)
+	fmt.Fprintf(w, "  peer: %s\n", desired.PeerZone)
+	fmt.Fprintf(w, "  group: %s\n", dash(desired.GroupID))
+	fmt.Fprintf(w, "  state: missing\n")
+	fmt.Fprintf(w, "  planner:\n")
+	fmt.Fprintf(w, "    desired_hash: %s\n", dash(shortHash(desired.DesiredSpecHash)))
+	fmt.Fprintf(w, "    actual_hash: -\n")
+	fmt.Fprintf(w, "    endpoint: %s\n", dash(desired.Endpoint))
+	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(desired.LocalTunnelAddr))
+	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(desired.PeerTunnelAddr))
+	fmt.Fprintf(w, "  xfrm:\n")
+	fmt.Fprintf(w, "    interface: %s\n", dash(desired.InterfaceName))
+	fmt.Fprintf(w, "    if_id: %d\n", desired.XFRMIfID)
+	fmt.Fprintf(w, "  strongswan:\n")
+	fmt.Fprintf(w, "    child_sa: -\n")
+	fmt.Fprintf(w, "    sa_state: -\n")
+	fmt.Fprintf(w, "  health:\n")
+	fmt.Fprintf(w, "    owner: -\n")
+	fmt.Fprintf(w, "    failures: 0\n")
+	fmt.Fprintf(w, "    backoff_until: -\n")
+	fmt.Fprintf(w, "    last_error: -\n")
 }
 
 func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {
@@ -280,6 +303,13 @@ func formatSAState(sa linkSAState) string {
 		return "established"
 	}
 	return "present"
+}
+
+func formatUint32OrDash(value uint32) string {
+	if value == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", value)
 }
 
 func shortHash(hash string) string {
