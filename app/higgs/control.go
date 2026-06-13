@@ -9,10 +9,32 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing"
 )
+
+type routesDumpResponse struct {
+	LocalZone   zone.ZonePath                  `json:"local_zone"`
+	ExportSet   []string                       `json:"export_set"`
+	Authorized  map[string][]string            `json:"authorized"`
+	Assignments map[string]routeAssignmentInfo `json:"assignments"`
+	Errors      []routeAuthorizationErrorJSON  `json:"errors"`
+}
+
+type routeAssignmentInfo struct {
+	Source     string `json:"source"`
+	AssignedTo string `json:"assigned_to"`
+}
+
+type routeAuthorizationErrorJSON struct {
+	Zone   string `json:"zone"`
+	Prefix string `json:"prefix,omitempty"`
+	Code   string `json:"code"`
+	Detail string `json:"detail"`
+}
 
 const controlSocketName = "higgs.sock"
 
@@ -30,17 +52,20 @@ type controlRequest struct {
 }
 
 type controlResponse struct {
-	OK            bool              `json:"ok"`
-	Error         string            `json:"error,omitempty"`
-	PeerID        string            `json:"peer_id,omitempty"`
-	LinkInstances int               `json:"link_instances,omitempty"`
-	DesiredLinks  int               `json:"desired_links,omitempty"`
-	LastLinkError string            `json:"last_link_error,omitempty"`
-	Version       uint64            `json:"version,omitempty"`
-	Message       string            `json:"message,omitempty"`
-	Zone          zone.ZonePath     `json:"zone,omitempty"`
-	RootPublicKey ed25519.PublicKey `json:"root_public_key,omitempty"`
-	JoinBundle    *joinBundle       `json:"join_bundle,omitempty"`
+	OK               bool                          `json:"ok"`
+	Error            string                        `json:"error,omitempty"`
+	PeerID           string                        `json:"peer_id,omitempty"`
+	LinkInstances    int                           `json:"link_instances,omitempty"`
+	DesiredLinks     int                           `json:"desired_links,omitempty"`
+	LastLinkError    string                        `json:"last_link_error,omitempty"`
+	LastRoutingError string                        `json:"last_routing_error,omitempty"`
+	Version          uint64                        `json:"version,omitempty"`
+	Message          string                        `json:"message,omitempty"`
+	Zone             zone.ZonePath                 `json:"zone,omitempty"`
+	RootPublicKey    ed25519.PublicKey             `json:"root_public_key,omitempty"`
+	JoinBundle       *joinBundle                   `json:"join_bundle,omitempty"`
+	BirdInstances    map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
+	RoutesDump       *routesDumpResponse           `json:"routes_dump,omitempty"`
 }
 
 func controlSocketPath(config *appConfig) string {
@@ -88,6 +113,71 @@ func daemonStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 		return nil, false, nil
 	}
 	return response, true, err
+}
+
+func birdStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "bird_status"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func routesDumpViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "routes_dump"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func buildRoutesDumpResponse(managedZone zone.ZonePath, ars *routing.AuthorizedRouteSet) *routesDumpResponse {
+	if ars == nil {
+		return &routesDumpResponse{LocalZone: managedZone}
+	}
+	exportSet := make([]string, 0)
+	for p := range ars.Announced[managedZone] {
+		exportSet = append(exportSet, p.String())
+	}
+	sort.Strings(exportSet)
+	authorized := make(map[string][]string, len(ars.Announced))
+	for z, prefixes := range ars.Announced {
+		ps := make([]string, 0, len(prefixes))
+		for p := range prefixes {
+			ps = append(ps, p.String())
+		}
+		sort.Strings(ps)
+		authorized[string(z)] = ps
+	}
+	assignments := make(map[string]routeAssignmentInfo, len(ars.Assignments))
+	for p, entry := range ars.Assignments {
+		assignments[p.String()] = routeAssignmentInfo{
+			Source:     string(entry.Source),
+			AssignedTo: string(entry.AssignedTo),
+		}
+	}
+	errors := make([]routeAuthorizationErrorJSON, 0, len(ars.Errors))
+	for _, e := range ars.Errors {
+		prefix := ""
+		if e.Prefix.IsValid() {
+			prefix = e.Prefix.String()
+		}
+		errors = append(errors, routeAuthorizationErrorJSON{
+			Zone:   string(e.Zone),
+			Prefix: prefix,
+			Code:   e.Code,
+			Detail: e.Detail,
+		})
+	}
+	return &routesDumpResponse{
+		LocalZone:   managedZone,
+		ExportSet:   exportSet,
+		Authorized:  authorized,
+		Assignments: assignments,
+		Errors:      errors,
+	}
 }
 
 func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {

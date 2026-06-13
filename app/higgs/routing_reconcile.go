@@ -51,8 +51,15 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	}
 
 	now := d.Sync.now()
+	if d.Sync.State.RoutingReconcile == nil {
+		d.Sync.State.RoutingReconcile = &routingReconcileState{}
+	}
+	d.Sync.State.RoutingReconcile.LastRunUnix = now.Unix()
+
 	ars, err := routing.BuildAuthorizedRouteSet(d.Sync.State.Network, now)
 	if err != nil {
+		d.Sync.State.RoutingReconcile.LastError = err.Error()
+		_ = d.Sync.saveState()
 		return fmt.Errorf("build authorized route set: %w", err)
 	}
 
@@ -73,6 +80,12 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 		if err := d.reconcileRoutingForGroup(ctx, group, ars, dataDir, now); err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+
+	if firstErr != nil {
+		d.Sync.State.RoutingReconcile.LastError = firstErr.Error()
+	} else {
+		d.Sync.State.RoutingReconcile.LastError = ""
 	}
 
 	if err := d.Sync.saveState(); err != nil {

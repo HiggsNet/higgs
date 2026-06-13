@@ -122,6 +122,10 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 	if reconcile == nil {
 		reconcile = &ipsecReconcileState{}
 	}
+	var birdInstances map[string]*BirdInstanceState
+	if state != nil {
+		birdInstances = state.BirdInstances
+	}
 	plannedDesired := map[string]desiredLinkState{}
 	if rt != nil && rt.Config != nil && state != nil && state.Network != nil && !state.ManagedZone.IsRoot() && state.ManagedZone.Valid() && len(rt.Config.IPsec.LinkGroups) > 0 {
 		plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: rt.Now()})
@@ -169,7 +173,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		if desiredHash == "" {
 			desiredHash = inst.DesiredSpecHash
 		}
-		printDebugLinkInstance(w, inst, desired, sa, desiredHash)
+		printDebugLinkInstance(w, rt, state, birdInstances, inst, desired, sa, desiredHash)
 	}
 	if len(ids) == 0 && len(plannedDesired) > 0 {
 		plannedIDs := make([]string, 0, len(plannedDesired))
@@ -179,7 +183,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		sort.Strings(plannedIDs)
 		for _, id := range plannedIDs {
 			desired := plannedDesired[id]
-			printDebugMissingLink(w, desired)
+			printDebugMissingLink(w, rt, birdInstances, desired)
 		}
 	}
 	fmt.Fprintf(w, "actions: %d\n", len(reconcile.Actions))
@@ -204,7 +208,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 	return nil
 }
 
-func printDebugLinkInstance(w io.Writer, inst linkInstanceState, desired desiredLinkState, sa linkSAState, desiredHash string) {
+func printDebugLinkInstance(w io.Writer, rt *Runtime, state *stateFile, birdInstances map[string]*BirdInstanceState, inst linkInstanceState, desired desiredLinkState, sa linkSAState, desiredHash string) {
 	fmt.Fprintf(w, "\nlink %s\n", inst.ID)
 	fmt.Fprintf(w, "  peer: %s\n", inst.PeerZone)
 	fmt.Fprintf(w, "  group: %s\n", dash(inst.GroupID))
@@ -246,9 +250,46 @@ func printDebugLinkInstance(w io.Writer, inst linkInstanceState, desired desired
 	fmt.Fprintf(w, "    backoff_until: %s\n", formatUnixTime(inst.BackoffUntil))
 	fmt.Fprintf(w, "    last_error: %s\n", dash(inst.LastError))
 	fmt.Fprintf(w, "    takeover_error: %s\n", dash(inst.LastTakeoverError))
+	fmt.Fprintf(w, "  routing:\n")
+	birdState, neighborCount, bestRouteCount := debugLinkRoutingState(rt, birdInstances, inst.GroupID)
+	fmt.Fprintf(w, "    bird_state: %s\n", birdState)
+	fmt.Fprintf(w, "    bird_neighbors: %s\n", neighborCount)
+	fmt.Fprintf(w, "    bird_best_routes: %s\n", bestRouteCount)
 }
 
-func printDebugMissingLink(w io.Writer, desired desiredLinkState) {
+func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceState, groupID string) (state, neighborCount, bestRouteCount string) {
+	state = "-"
+	neighborCount = "-"
+	bestRouteCount = "-"
+	if rt == nil || rt.Config == nil || groupID == "" {
+		return
+	}
+	group := linkGroupByID(rt.Config.IPsec.LinkGroups, groupID)
+	if group == nil || !group.Routing.Enabled {
+		return
+	}
+	state = "pending"
+	if birdInstances != nil {
+		if inst := birdInstances[groupID]; inst != nil {
+			state = inst.State
+			if state == "" {
+				state = "pending"
+			}
+		}
+	}
+	return
+}
+
+func linkGroupByID(groups []ipsec.LinkGroupSpec, id string) *ipsec.LinkGroupSpec {
+	for i := range groups {
+		if groups[i].ID == id {
+			return &groups[i]
+		}
+	}
+	return nil
+}
+
+func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*BirdInstanceState, desired desiredLinkState) {
 	fmt.Fprintf(w, "\nlink %s\n", desired.InstanceID)
 	fmt.Fprintf(w, "  peer: %s\n", desired.PeerZone)
 	fmt.Fprintf(w, "  group: %s\n", dash(desired.GroupID))
@@ -270,6 +311,11 @@ func printDebugMissingLink(w io.Writer, desired desiredLinkState) {
 	fmt.Fprintf(w, "    failures: 0\n")
 	fmt.Fprintf(w, "    backoff_until: -\n")
 	fmt.Fprintf(w, "    last_error: -\n")
+	fmt.Fprintf(w, "  routing:\n")
+	birdState, neighborCount, bestRouteCount := debugLinkRoutingState(rt, birdInstances, desired.GroupID)
+	fmt.Fprintf(w, "    bird_state: %s\n", birdState)
+	fmt.Fprintf(w, "    bird_neighbors: %s\n", neighborCount)
+	fmt.Fprintf(w, "    bird_best_routes: %s\n", bestRouteCount)
 }
 
 func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {

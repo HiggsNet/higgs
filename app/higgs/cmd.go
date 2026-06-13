@@ -385,6 +385,31 @@ func cmdDebug() *cli.Command {
 					return debugLinks()
 				},
 			},
+			{
+				Name:  "babel",
+				Usage: "Show BIRD/Babel routing instance state",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugBabel(ctx, cmd)
+				},
+			},
+			{
+				Name:  "routes",
+				Usage: "Show authorized route set",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugRoutes(ctx, cmd)
+				},
+			},
+			{
+				Name:      "route",
+				Usage:     "Explain a specific route prefix",
+				UsageText: "higgs debug route <prefix>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return cli.Exit("usage: higgs debug route <prefix>", 1)
+					}
+					return debugRoute(ctx, cmd)
+				},
+			},
 		},
 	}
 }

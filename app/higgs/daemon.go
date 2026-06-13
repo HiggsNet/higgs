@@ -12,6 +12,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -407,6 +408,36 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "shutdown scheduled"})
+	case "bird_status":
+		var instances map[string]*BirdInstanceState
+		var lastRoutingError string
+		if d.Sync.State != nil {
+			instances = d.Sync.State.BirdInstances
+			if d.Sync.State.RoutingReconcile != nil {
+				lastRoutingError = d.Sync.State.RoutingReconcile.LastError
+			}
+		}
+		writeControlResponse(conn, controlResponse{
+			OK:               true,
+			BirdInstances:    instances,
+			LastRoutingError: lastRoutingError,
+			Message:          "bird status",
+		})
+	case "routes_dump":
+		if d.Sync.State == nil || d.Sync.State.Network == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
+			return
+		}
+		ars, err := routing.BuildAuthorizedRouteSet(d.Sync.State.Network, d.Sync.now())
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeControlResponse(conn, controlResponse{
+			OK:         true,
+			RoutesDump: buildRoutesDumpResponse(d.Sync.State.ManagedZone, ars),
+			Message:    "routes dump",
+		})
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}

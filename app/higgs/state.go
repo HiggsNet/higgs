@@ -16,29 +16,31 @@ const defaultStatePath = ".higgs.db"
 const cliMetaKey = "cli_state"
 
 type stateFile struct {
-	ManagedZone       zone.ZonePath                 `json:"managed_zone"`
-	IdentityKeyPath   string                        `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey            `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey            `json:"zone_private_key"`
-	Network           *zone.NetworkState            `json:"network"`
+	ManagedZone       zone.ZonePath      `json:"managed_zone"`
+	IdentityKeyPath   string             `json:"identity_key_path,omitempty"`
+	RootPrivateKey    ed25519.PrivateKey `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
+	Network           *zone.NetworkState `json:"network"`
 	SyncPeers         map[string]syncPeerState
 	IPsecTransportKey *ipsecTransportKeyState
 	IPsecPortRecord   *ipsecPortRecordState
 	LinkInstances     map[string]linkInstanceState
 	IPsecReconcile    *ipsecReconcileState
+	RoutingReconcile  *routingReconcileState
 	BirdInstances     map[string]*BirdInstanceState
 }
 
 type stateMeta struct {
-	ManagedZone       zone.ZonePath                `json:"managed_zone"`
-	IdentityKeyPath   string                       `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey           `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey           `json:"zone_private_key"`
-	SyncPeers         map[string]syncPeerState     `json:"sync_peers,omitempty"`
-	IPsecTransportKey *ipsecTransportKeyState      `json:"ipsec_transport_key,omitempty"`
-	IPsecPortRecord   *ipsecPortRecordState        `json:"ipsec_port_record,omitempty"`
-	LinkInstances     map[string]linkInstanceState `json:"link_instances,omitempty"`
-	IPsecReconcile    *ipsecReconcileState         `json:"ipsec_reconcile,omitempty"`
+	ManagedZone       zone.ZonePath                 `json:"managed_zone"`
+	IdentityKeyPath   string                        `json:"identity_key_path,omitempty"`
+	RootPrivateKey    ed25519.PrivateKey            `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey            `json:"zone_private_key"`
+	SyncPeers         map[string]syncPeerState      `json:"sync_peers,omitempty"`
+	IPsecTransportKey *ipsecTransportKeyState       `json:"ipsec_transport_key,omitempty"`
+	IPsecPortRecord   *ipsecPortRecordState         `json:"ipsec_port_record,omitempty"`
+	LinkInstances     map[string]linkInstanceState  `json:"link_instances,omitempty"`
+	IPsecReconcile    *ipsecReconcileState          `json:"ipsec_reconcile,omitempty"`
+	RoutingReconcile  *routingReconcileState        `json:"routing_reconcile,omitempty"`
 	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
 }
 
@@ -51,6 +53,11 @@ type BirdInstanceState struct {
 	LastConfigHash string `json:"last_config_hash"`
 	LastError      string `json:"last_error"`
 	State          string `json:"state"` // pending, running, degraded, error
+}
+
+type routingReconcileState struct {
+	LastRunUnix int64  `json:"last_run_unix,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
 }
 
 type ipsecTransportKeyState struct {
@@ -349,6 +356,7 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		IPsecPortRecord:   meta.IPsecPortRecord,
 		LinkInstances:     meta.LinkInstances,
 		IPsecReconcile:    meta.IPsecReconcile,
+		RoutingReconcile:  meta.RoutingReconcile,
 		BirdInstances:     meta.BirdInstances,
 	}
 	if state.Network == nil || len(state.Network.Zones) == 0 {
@@ -398,6 +406,7 @@ func saveStateAt(path string, state *stateFile) error {
 		IPsecPortRecord:   state.IPsecPortRecord,
 		LinkInstances:     state.LinkInstances,
 		IPsecReconcile:    state.IPsecReconcile,
+		RoutingReconcile:  state.RoutingReconcile,
 		BirdInstances:     state.BirdInstances,
 	}
 	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
