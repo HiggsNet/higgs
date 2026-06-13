@@ -92,10 +92,10 @@ overlays:
       # netns defaults to the overlay link group netns
       control_socket: /run/higgs/bird-ipsec-main.ctl
       pid_file: /run/higgs/bird-ipsec-main.pid
-      # router_id: 1.2.3.4       # optional override
-      table: 100
-      table_name: higgs_100
-      priority: 100
+      # router_id: 1.2.3.4       # 仅迁移/恢复时覆盖；默认从 local zone + trusted root + overlay id 确定性派生
+      table: main                # 独立 netns 时默认 main 即可；非 main table 才需要 table_name / priority
+      # table_name: higgs_100
+      # priority: 100
       metric_base: 100
       metric_staged: 200
       metric_draining: 500

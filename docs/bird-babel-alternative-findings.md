@@ -70,6 +70,30 @@ babel_if_notify(struct proto *P, unsigned flags, struct iface *iface)
 
 这意味着 Higgs 的 IPsec reconcile 只需要做它本来该做的事：创建/删除/上/下 XFRM 接口。BIRD 会自动感知并启用/停用 Babel，不需要 Higgs 再维护一个 "已加入 BIRD 的接口集合"。
 
+## 网络命名空间启动模型
+
+BIRD **没有内置的 namespace 切换能力**，配置里也没有 `namespace` 之类的指令可以让一个 BIRD 进程同时管理多个 netns 的接口。要让 BIRD 的数据面落在目标 netns，必须**把 BIRD 进程本身启动在目标 netns 内**。
+
+推荐做法：
+
+```bash
+# named netns
+ip netns add h2
+ip netns exec h2 bird -c /run/higgs/bird-ipsec-main.conf -s /run/higgs/bird-ipsec-main.ctl
+
+# 或 systemd service
+NetworkNamespacePath=/run/netns/h2
+ExecStart=/usr/sbin/bird -f -c /run/higgs/bird-ipsec-main.conf -s /run/higgs/bird-ipsec-main.ctl
+```
+
+要点：
+
+- BIRD 启动后通过 netlink 看到的接口、地址、路由都是它所在 netns 的，因此 BIRD daemon 必须与对应 XFRM interface 处于同一 netns。
+- `birdc` 通过 Unix domain socket 与 BIRD 通信；socket 是文件系统对象，可以在不同 netns 间访问（只要 mount namespace 共享路径），但 BIRD 回复的 `show interfaces` / `show route` 等状态反映的是 BIRD 自身 netns 的数据。
+- 每个 `LinkGroupSpec.NetNS` / overlay data-plane 必须启动**独立的 BIRD 实例**和**独立的 control socket**，不同 netns 不能共享同一个 BIRD 实例或 socket。
+- Higgs daemon 的 BIRD Process Manager 负责：创建/确保目标 named netns、生成 `bird.conf`、在目标 netns 内 `exec` BIRD、维护 pid/control socket 路径、退出时按 ownership 清理。
+- netns 切换需要 `CAP_SYS_ADMIN` / root 或 privileged container；XFRM/link 操作需要 `CAP_NET_ADMIN`。preflight 必须在启动 BIRD 前检查这些权限。
+
 ## Higgs 配置模型
 
 ### `overlays[].routing` 配置段
@@ -87,10 +111,10 @@ overlays:
       netns: h2                  # 默认继承 LinkGroupSpec.NetNS
       control_socket: /run/higgs/bird-ipsec-main.ctl
       pid_file: /run/higgs/bird-ipsec-main.pid
-      router_id: 1.2.3.4         # 可选，默认从本地 zone + overlay id 确定性派生
-      table: 100                 # kernel table id 或名称
-      table_name: higgs_100      # BIRD 内部 table 名，可选
-      priority: 100              # ip rule priority
+      router_id: 1.2.3.4         # 可选，默认从 local zone + trusted root + overlay id 确定性派生
+      table: main                # kernel routing table；独立 netns 时默认 main 即可
+      # table_name: higgs_100    # BIRD 内部 table 名；非 main table 时才需要
+      # priority: 100            # ip rule 优先级；仅在非 main table 或共享 netns 策略路由时生效
       metric_base: 100           # 正常接口的 Babel metric
       metric_staged: 200         # staged generation 接口的 metric
       metric_draining: 500       # draining 旧 generation 接口的 metric
@@ -113,10 +137,10 @@ overlays:
 | `netns` | string | 否 | BIRD daemon 运行的 netns，默认继承 LinkGroup |
 | `control_socket` | string | 是 | birdc UNIX control socket 路径 |
 | `pid_file` | string | 是 | BIRD pid 文件路径 |
-| `router_id` | string | 否 | 覆盖默认 router-id |
-| `table` | int/string | 是 | kernel routing table id 或名称 |
-| `table_name` | string | 否 | BIRD 内部 table 名 |
-| `priority` | int | 否 | `ip rule` 优先级 |
+| `router_id` | string | 否 | 仅迁移/恢复时覆盖；默认从 `local zone + trusted root + overlay id` 确定性派生 64-bit id，持久化后不再变化 |
+| `table` | int/string | 否 | kernel routing table id 或名称；默认 `main`（即该 netns 的 main table） |
+| `table_name` | string | 否 | BIRD 内部 table 名；使用非 main table 时才需要 |
+| `priority` | int | 否 | `ip rule` 优先级；仅在非 main table 或共享 netns 策略路由时生效 |
 | `metric_base` | int | 否 | 默认 Babel metric |
 | `metric_staged` | int | 否 | staged generation 接口 metric |
 | `metric_draining` | int | 否 | draining generation 接口 metric |

@@ -680,14 +680,18 @@
   - 代价是体积更大、需要维护 `bird.conf` 生成器和 `birdc` CLI client。
 - 支持 `mode=external`：管理员用 systemd 启动 BIRD daemon，Higgs 只连接已存在的 birdc control socket 并校验 router-id、netns、routing table、interface ownership。该模式用于发行版集成/生产托管，但第一版 smoke 以 Higgs-owned 模式为主。
 - 每个 `LinkGroupSpec.NetNS` / overlay data-plane 启动一个 Babel daemon 实例；不同 netns 不共享 control socket。daemon 必须和对应 XFRM interface 处于同一 netns。
+  - BIRD 自身不能切换 netns，必须由 Higgs Process Manager 在目标 netns 内启动（如 `ip netns exec <ns> bird ...` 或 systemd `NetworkNamespacePath`）。
 - Babel router-id 是本地持久运行态，不进入 gossip：优先读取本地 state 中保存的 overlay router-id；不存在时从 `local zone + trusted root + overlay id` 确定性派生 64-bit id 并落盘。router-id 不等于 peer id，也不随接口/IP/端口变化而变化。
+  - 正常场景禁止管理员手工配置 router-id；配置中的 `router_id` 只保留为迁移/恢复覆盖，且加载时必须校验与派生值一致或给出明确警告。
 - Phase 5 route source 分三层：`ipam/assignments/*` 表示谁拥有/可使用某地址或前缀；`routes/announcements/*` 表示节点想发布哪些业务前缀；本地 config 可有 `route.export_static` 作为临时/恢复 override。只有 assignment 与 announcement 同时通过授权校验的前缀才能导出或被远端导入。
+- 默认 overlay 业务前缀池应通过 root/父 Zone 的 `policy/default-ip-pool` 或 `ipam/pools/*` 统一声明，而不是硬编码在代码里。默认建议使用私有/ULA 空间（如 `fd00::/48`）并配合独立 route table/netns 使用，避免污染 host main table；若使用公网可路由前缀（如 `2001:da8::/48`），必须通过 IPAM assignment 显式授权，并在 import/export filter 中校验，防止误泄漏到公网。
 - 默认不接受 default route、underlay/transport endpoint 前缀、loopback/link-local/multicast、Higgs 保留 tunnel-address pool、未授权更宽聚合前缀；是否允许 `0.0.0.0/0` / `::/0` 必须以后续显式 policy record 开启。
-- Babel learned routes 不直接污染 main table。Phase 5 默认使用 per-overlay route table，例如 `higgs-overlay-<id>` 或配置 table id，再用 `ip rule` 把 overlay 源地址/mark 引到该表；main table 只保留到 XFRM tunnel peer 的必要直连/host route。
+- Babel learned routes 不直接污染 host main table。当 overlay 使用独立 netns 时，BIRD 直接把路由写入该 netns 的 main table 即可，netns 本身就是隔离边界，**不需要额外配置独立 route table / `ip rule`**。
+- per-overlay route table / `ip rule` 只作为可选能力保留：当多个 overlay 共享同一个 netns、或管理员显式需要策略路由、或 `mode=external` 接入手动部署的 BIRD 时才启用。默认 `table: main`（即该 netns 的 table 254），`priority` 仅在该 overlay 使用非 main table 时生效。
 
 - [ ] **5.0 Babel 运行模式与配置模型**
-  - 增加 `overlays[].routing` 配置：`enabled`、`protocol=bird`、`mode=managed|external|disabled`、`netns` 继承 LinkGroup、`control_socket`、`pid_file`、`router_id` override、`table`、`priority`、`metric_base`、`metric_staged`、`metric_draining`、`export_static`。
-  - managed 模式：daemon 在目标 netns 内启动 BIRD daemon，传入固定 router-id、control socket、pid/log 路径、routing table；daemon 退出时按 ownership 清理子进程和 socket。
+  - 增加 `overlays[].routing` 配置：`enabled`、`protocol=bird`、`mode=managed|external|disabled`、`netns` 继承 LinkGroup、`control_socket`、`pid_file`、`router_id` override、`table`（可选，默认 main）、`priority`（可选，仅非 main table 时生效）、`metric_base`、`metric_staged`、`metric_draining`、`export_static`。
+  - managed 模式：daemon 在目标 netns 内启动 BIRD daemon，传入固定 router-id、control socket、pid/log 路径、routing table（默认该 netns 的 main table）；daemon 退出时按 ownership 清理子进程和 socket。
   - external 模式：daemon 只连接 control socket，不杀进程；启动 reconcile 时必须 dry-run/校验 router-id、table、netns、control socket 权限和是否允许动态接口控制。
   - preflight：检测 BIRD binary、birdc control socket 能力、目标 netns、路由表写权限、`ip rule`/`ip route` 能力；`higgs debug preflight` 或现有 preflight 输出中加入 BIRD 段。
   - owner 边界：control socket、pid file、运行目录、route table/rule、Higgs 管理接口名都带 overlay/group owner token；teardown 只清理 Higgs-owned 对象。
