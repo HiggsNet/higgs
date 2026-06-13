@@ -193,9 +193,11 @@ provider apply。这证明 daemon publish/gossip/planner/reconcile 边界已接�
 root/container smoke 现在已经覆盖 daemon `Run` 循环下的对端 `ipsec/*` record
 同步、真实 VICI IKE_SA/CHILD_SA bring-up 和 tunnel ping；daemon reconcile 级
 smoke 还覆盖启动恢复观测现有 SA、唯一 SA 断言、revocation teardown、VICI SA
-消失、XFRM interface 删除和 tunnel ping 失败。它们仍是 Go 测试内的 daemon
+消失、XFRM interface 删除、tunnel ping 失败、bounded break-before-make 端口
+轮换（4.4）和 bidirectional takeover（4.5）。它们仍是 Go 测试内的 daemon
 service，不是外部 `build/higgs daemon` OS 进程；后续如果需要继续收紧，可以把同一
-断言扩展到 CLI 进程启动和双外部 daemon 进程的 gossip revocation 传播。
+断言扩展到 CLI 进程启动和双外部 daemon 进程的 gossip revocation 传播。外部
+OS 进程级 smoke 不阻塞 Phase 4 闭环，属于后续 hardening/7.8 生产化阶段。
 
 ## 3. 最小手工 StrongSwan 健康检查
 

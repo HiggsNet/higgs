@@ -2,7 +2,7 @@
 
 > **文档状态（2026-06）**
 > Phase 0–3 已落地实现。本文档同时承担设计规格说明与实现参考的角色。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已进入实现阶段：record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / XFRM preflight 已落地，driver 层真实 StrongSwan/VICI IKE/CHILD_SA + tunnel ping 已在 4.3 验证，daemon `Run` 循环级 gossip 同步后的真实 VICI/XFRM bring-up 和 tunnel ping 已进入 root/container smoke。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现：4.0 admin 写操作 daemon 化与 auto-join 配置化身份初始化，4.1 StrongSwan/XFRM 控制模块，4.2 链路实例管理（planner / reconciler / LinkInstance），4.3 最小闭环（driver 层真实 VICI IKE_SA/CHILD_SA + tunnel ping、daemon reconcile 级真实 StrongSwan/XFRM bring-up、daemon `Run` 循环级 gossip 同步 + VICI/XFRM bring-up + 重启恢复 + 撤销闭环），4.4 bounded break-before-make 端口轮换，4.5 bidirectional takeover——均通过 root/container smoke 验证。
 
 ## 原始需求摘要
 
@@ -55,7 +55,7 @@
 │  pkg/core/   │ pkg/transport/│  pkg/routing/     │
 │              │   drivers     │    adapters        │
 ├──────────────┼───────────────┼───────────────────┤
-│ ✅ identity  │ 🟨 ipsec      │ 🔲 babeld         │
+│ ✅ identity  │ ✅ ipsec      │ 🔲 babeld         │
 │ ✅ gossip    │   (Phase 4)   │   (Phase 5)        │
 │ ✅ zone      │               │                   │
 │ 🔲 merkle   │               │                   │
@@ -358,13 +358,16 @@ ipsec_address_source_order:
 
 Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。这里需要区分两层能力：当前已实现的是“公告 + planner fallback”，即远端可以优先尝试 current，current 失败/backoff 时在 grace 内回退 previous；这不代表本机 StrongSwan 已经同时监听新旧两组端口，也不代表系统层已经做到无损 rotate。StrongSwan 自定义端口的第一版边界是 `charon.port` / `charon.port_nat_t` + connection `remote_port` + 必要时 reestablish；低频生产可用的平滑 rotate 提前到 Phase 4.4 设计和实现，高频/对抗性 port hopping、复杂多实例策略留到 Phase 7。
 
-平滑 rotate 的 Phase 4.4 目标是把 current/previous grace 变成系统可执行的 staged transition，而不只是远端选择候选端口。当前优先考虑三种实现路径：
+平滑 rotate 的 Phase 4.4 目标是把 current/previous grace 变成系统可执行的 staged transition，而不只是远端选择候选端口。
 
-- 外层 DNAT/redirect grace：charon 保持稳定监听端口，系统防火墙在 grace 窗口内把新旧 advertised 端口都转发到当前监听端口，grace 后清理旧规则。
-- 双 connection / staged reestablish：为新旧端口加载可区分的临时 StrongSwan connection，先确认新 SA，再终止旧 SA。root/container 实验已证明，若 staged CHILD_SA 继续复用同一 peer traffic selector 和同一 XFRM `if_id`，StrongSwan/内核策略会拒绝并行建立；因此该路径必须进一步选择“staged 独立 XFRM interface/if_id 后切换 route”，或退化为有边界的 break-before-make。
-- 多 charon/socket 实例：新旧监听端口并行，grace 后清理旧实例；部署成本最高，作为后备方案。
+Phase 4.4 最终选择的是 **bounded break-before-make** 路径。原因是 root/container 实验已证明：若 staged CHILD_SA 继续复用同一 peer traffic selector 和同一 XFRM `if_id`，StrongSwan/内核策略会拒绝并行建立两条 CHILD_SA。真正无中断平滑切换后续只能走 staged generation 使用独立 XFRM interface/if_id 后切换 route，或通过 Phase 6/7 的 DNAT/redirect grace 由防火墙层管理新旧端口转发。
 
-无论选择哪条路径，`LinkInstance` 都需要记录 selected ContactPoint、port generation、rotate phase、旧/新端口 owner、rollback deadline 和最近 rotate error；`higgs debug links` 应能说明当前处于 preparing、dual-running、cutover、rollback 还是 cleanup，避免端口轮换变成不可解释的连接抖动。
+当前实现的 bounded break-before-make 流程：
+1. `prepare_rotate`：先 terminate/unload 旧 IKE_SA/CHILD_SA，再加载/发起 staged connection（复用共享 XFRM interface）。
+2. 下一轮 reconcile 通过 VICI `list-sas` 观测到新 SA established 后执行 `commit_rotate`，卸载旧 connection，通过 tunnel ping 验证恢复。
+3. 若 staged SA 在 deadline 前未建立，执行 `rollback_rotate` 并进入 backoff。
+
+`LinkInstance` 记录 selected ContactPoint、remote/staged port generation、rotation phase（`idle`、`preparing`、`testing_new`、`dual_running`、`cutover`、`rollback`、`cleanup`）、staged ike/child name、rollback deadline 和最近 rotate error；`higgs debug links` 可显示当前 rotate phase、staged generation、deadline 和 error。staged connection/child 名称稳定可推导：`RotateConnectionName(transportID, generation)` / `RotateChildSAName(transportID, generation)`。revocation/policy deny/transport key mismatch 仍走强制 teardown，不进入 rotate 状态机。
 
 #### 2.4.3 本地 MeshPolicy rule DSL
 
@@ -525,6 +528,39 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 撤销或删除 link 时使用 `TeardownTransportLink` 的可审计顺序：先 terminate IKE_SA/CHILD_SA，再 unload StrongSwan connection，最后删除通过 `LinkInstance.Owner` 校验的 Higgs 管理 XFRM interface。daemon 在 teardown 成功后删除本地持久化 `LinkInstance`，让后续 state-change 或 restart reconcile 看到一个干净的 no-desired/no-instance 状态，而不是重复执行同一个 teardown。
 
 撤销优先级最高：peer Zone 或父 delegation tombstone 后，LinkPlanner 必须立即停止输出该 peer 的 specs，并要求 provider teardown 已存在 SA/interface；teardown 成功后本地 `LinkInstance` 被移除，避免 endpoint fallback、rekey 或下一轮 reconcile 把撤销 peer 重新拉起。
+
+#### 2.4.7 Bidirectional 首拨失败接管（Phase 4.5）
+
+双方都配置 `direction=bidirectional` 且 `accept=bidirectional` 时，先用稳定 tie-break（peer zone 字典序）选出 primary initiator，避免正常情况下双向同时拨号。但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 需要有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。
+
+**接管不引入新 gossip record：** 4.5 不新增 signed health record。secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。Phase 6/7 再考虑低频 signed/runtime health hint。
+
+**Planner 角色模型：**
+
+`ShouldInitiate` 保持稳定 tie-break，但 planner 输出 initiator role：
+
+- `primary`：字典序较小侧，正常主动拨号。
+- `secondary-standby`：字典序较大侧，reconcile 初始 noop，reason `bidirectional_standby`。
+- `secondary-takeover`：接管激活中。
+- `converged`：已有匹配 SA，双方退出接管状态机。
+- `cooldown`：接管失败后冷却期。
+
+`TransportLinkSpec` 增加 `InitiatorRole`（hash 中排除）；`LinkInstance` 记录 `InitiatorRole`、`TakeoverPhase`、`TakeoverStartedAt`、`TakeoverUntil`、`LastTakeoverError`、`ObservedInitiator`。
+
+**接管触发条件（保守边界）：**
+
+- 双方 profile 都必须 `accept=bidirectional`，本地 rule/effective direction 也是 `bidirectional`；`outbound/inbound` 不参与 takeover。
+- primary 连续失败次数、`connecting` 超时或长期未观测到匹配 SA 达到阈值后，secondary 才可接管；`takeoverDelay` 从 `LinkGroupSpec.Reconcile.Backoff` 派生，至少 2-3 个 backoff 周期，最小 60s。
+- secondary 接管前复用 planner 已过滤的 ContactPoint；缺少 ContactPoint 时返回 `takeover_no_contact_point`。
+- revocation、record 过期、transport key/profile mismatch、policy deny 时禁止 takeover；这些属于信任/授权失败，不是连通性失败。
+
+**Reconcile/Adopt 规则：**
+
+- 已有匹配 SA 时优先 adopt，无论当前角色都进入 `up` 并标记 `converged`。
+- takeover 有 lease（默认 5min）与 cooldown（默认 2min）：secondary 接管成功后维持稳定窗口；takeover 超时或失败后进入 cooldown，期间不反复 apply；cooldown 过期后可 retry。
+- primary 后续恢复时若已有 SA 则 adopt，不会立刻抢回主动权导致重连风暴。
+
+**Debug 输出：** `higgs debug links` 显示 `initiator_role`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_error`。reconcile noop reason 区分 `bidirectional_standby`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_cooldown_active`、`secondary_takeover_pending`。
 
 ### 2.5 签名规范（必须无歧义）
 
@@ -869,7 +905,7 @@ type PeerView struct {
 
 | 模块 | 包路径 | 状态 |
 |------|--------|------|
-| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 record / ContactPoint / planner / LinkInstance reconcile / dry-run driver / VICI boundary / XFRM preflight / daemon debug / daemon-run gossip + IKE/CHILD_SA/tunnel ping smoke 已创建；重启恢复和撤销闭环待补强 |
+| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 主体已完成：IPsec public record 公告、Address/Port/ContactPoint 模型、LinkPlanner + skip reason、LinkInstance reconcile（create/update/adopt/repair/teardown/noop）、dry-run/VICI SystemXFRMDriver provider、VICI IKE_SA/CHILD_SA bring-up（4.3）、daemon `Run` 循环 gossip 同步后真实 VICI/XFRM + tunnel ping（4.3）、daemon 级重启恢复及撤销闭环（4.3）、bounded break-before-make 端口轮换（4.4）、bidirectional takeover（4.5）。外部 `build/higgs daemon` 双 OS 进程 smoke 仍作为后续 hardening |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
 | Babeld 路由适配器 | `pkg/routing/babeld/` | 🔲 仅 doc.go |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |

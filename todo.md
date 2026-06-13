@@ -580,9 +580,9 @@
     - [x] dry-run 测试：`ApplyPlan` / `debug links` 显示 scoped link-local address；sequential pool 仍输出旧式地址。
     - [x] root smoke：link-local 模式 XFRM interface 分配 scoped tunnel address，`ping6`/`route` 显式带 interface；新增 `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke` 覆盖 IPv4 derived-pool。
 
-- [x] **4.4 平滑端口轮换 / 低频 rotate（生产必需）**
-  - 目标：把 `ipsec/ports` 的 current/previous grace 从“公告和 planner fallback”推进到可执行的低频平滑 rotate，支持运营商 QoS、端口迁移、NAT 映射变化和维护窗口中的不中断或低中断切换；高频/对抗性 port hopping 仍留到 Phase 7。
-  - 明确当前边界：现在 `PlanPortRecord` 会发布 current + previous grace，peer planner 会在 current 失败/backoff 时回退 previous；但 StrongSwan apply 当前一次只加载 `TransportLinkSpec.ContactPoints[0]` 对应的一个 `remote_port`，本机 charon 也没有同时监听新旧两组端口，因此还不是平滑 rotate。
+- [x] **4.4 有界短断端口轮换 / 低频 rotate（生产必需基座）**
+  - 目标：把 `ipsec/ports` 的 current/previous grace 从“公告和 planner fallback”推进到系统可执行、可观测、可回滚的低频 rotate，支持运营商 QoS、端口迁移、NAT 映射变化和维护窗口中的受控重建；高频/对抗性 port hopping 仍留到 Phase 7。
+  - 明确当前边界：现在 `PlanPortRecord` 会发布 current + previous grace，peer planner 会在 current 失败/backoff 时回退 previous；StrongSwan/XFRM 系统路径选择的是 **bounded break-before-make**，`prepare_rotate` 会先 terminate/unload 旧 SA/connection，再加载并发起 staged connection，因此切换窗口内会出现短暂数据面中断。即使上层有 babeld 兜底，这也只能算“有界短断/可控重建”，不能称为真正平滑过渡。
   - [x] 先做方案裁剪：
     - [x] Phase 4.4 首选实现 **staged reestablish over VICI**：对远端 current/previous ContactPoint 分别生成可审计 staged connection/action，先让新端口建立 SA，确认 `ListSAs` 后再清理旧 connection。理由：不引入 nftables/iptables ownership 和部署依赖，先把 StrongSwan/VICI 边界做完整。
     - [x] 外层 DNAT/redirect grace 延后为 Phase 6/7 防火墙集成：charon 保持稳定监听端口，nftables/iptables 把新旧 advertised 端口转发到当前 charon 端口；适合生产部署，但需要独立 owner token、规则恢复和 root 权限设计。
@@ -610,9 +610,16 @@
     - [x] app 单测：`publishIPsecRecords` 按 `port_rotate_interval` 自动推进 generation，并保留 previous grace。
     - [x] 配置单测：`ipsec.port_mode` / `port_range` / `port_rotate_interval` / `port_previous_grace` 解析与校验。
     - [x] daemon 级单测：`notifyStateChanged` 触发 reconcile 后生成 `prepare_rotate`，`LinkInstance` 正确记录 staged generation/ike name。
-    - [x] root smoke：已选择 B) bounded break-before-make 作为 Phase 4.4 可执行系统路径：`prepare_rotate` 先终止旧 SA，再加载/发起 staged connection，下一轮 observe 到新 SA 后 commit 清理旧 connection，并通过 tunnel ping 验证恢复；`TestDaemonStrongSwanPortRotationSmoke` 已接入 `make ipsec-xfrm-smoke` / `make ipsec-xfrm-container-smoke`，并在 privileged container 中完成复验。
+    - [x] root smoke：已选择 B) bounded break-before-make 作为 Phase 4.4 可执行系统路径：`prepare_rotate` 先终止旧 SA，再加载/发起 staged connection，下一轮 observe 到新 SA 后 commit 清理旧 connection，并通过 tunnel ping 验证恢复；`TestDaemonStrongSwanPortRotationSmoke` 已接入 `make ipsec-xfrm-smoke` / `make ipsec-xfrm-container-smoke`，并在 privileged container 中完成复验。该验证证明的是 deadline/backoff/rollback 管理下的短断恢复，不是 zero-downtime rotate。
     - [x] container smoke 全量回归：`TestDaemonStrongSwanPortRotationSmoke` 通过；`TestSystemXFRMDriverPeerTunnelPingSmoke` 因容器/LXC 内 IPv6/xfrm 邻居解析限制失败，判定为与 4.4 无关的既有环境问题，已在容器 smoke 中通过 `HIGGS_IPSEC_XFRM_SMOKE_CONTAINER=1` 跳过该用例，其余 XFRM/StrongSwan/daemon smoke 继续运行。
       - 2026-06-12 container root 实验确认：共享 XFRM interface/同一 if_id/同一 traffic selector 下，“先建 staged CHILD_SA 再清旧 SA”会被 StrongSwan/内核策略拒绝，VICI `initiate` 返回 `establishing CHILD_SA ... failed`；真正无中断平滑切换后续只能走 A) staged generation 使用独立 XFRM interface/if_id，commit 时切换 route，或 C) Phase 6/7 DNAT/redirect grace，由防火墙 owner 管理新旧端口转发。
+
+- [ ] **4.4.x 真正平滑 rotate / staged transition（后续重要工作）**
+  - 目标：在不先打断当前可用 SA 的前提下，把 current/previous grace 变成系统层可执行的 staged transition；用户可见语义应是 zero-downtime 或接近 zero-downtime 的切换，而不是 bounded break-before-make。
+  - 方案 A：为 staged generation 使用独立 XFRM interface/`if_id` 与独立 CHILD_SA，待新 SA established 且 tunnel/health check 通过后切换 route，再清理旧 generation。需要明确 route ownership、babeld interface 切换语义、双 interface 期间的 metric/邻居收敛、daemon restart recovery 和 stale generation cleanup。
+  - 方案 B：在 Phase 6/7 防火墙层实现 DNAT/redirect grace：charon 保持稳定监听端口，nftables/iptables owner 规则把 previous/current advertised 端口转发到当前监听端口；需要规则 owner token、preflight、规则恢复、撤销清理和与 NAT-T/MOBIKE 行为的边界说明。
+  - 决策点：A 更贴近 StrongSwan/XFRM route-based 模型，但会把 link/interface generation 暴露给 babeld/route 管理；B 对上层 interface 更稳定，但引入 firewall root 权限和规则生命周期。进入实现前需要用 root/container smoke 先证明 chosen path 能并行承载新旧路径。
+  - 验证要求：root/container smoke 必须覆盖旧 SA 保持可用、新 SA 并行建立、切换期间连续 tunnel ping 或允许的最大丢包窗口、失败回滚仍保持旧路径、daemon 重启恢复、revocation/policy deny 仍强制 teardown。
 
 - [x] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
   - 目标：双方 `direction=bidirectional` 且双方 `accept=bidirectional` 时，仍先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。

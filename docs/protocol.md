@@ -584,6 +584,10 @@ flowchart TD
     H -->|adopt| U[LinkInstance = up]
     H -->|teardown| T[remove Higgs-owned resources]
     H -->|noop| N[keep current state]
+    H -->|prepare_rotate| PR[terminate old + load staged]
+    H -->|commit_rotate| CR[unload old connection]
+    H -->|rollback_rotate| RB[retain previous, backoff]
+    H -->|cleanup_rotate| CL[remove stale staged artifacts]
 
     I --> K{apply result}
     K -->|success| C1[LinkInstance = connecting]
@@ -611,7 +615,7 @@ daemon 已经把这条链路接入 state-change hook。启动进入主循环前�
 
 观测层由 reconcile 摘要和 `higgs debug links` 提供。reconcile 摘要保存最近 desired spec 快照和 SA 快照；`higgs debug links` 会用当前 active state + `LinkGroupSpec` 重算 desired links，并和已落盘 instance、上次 SA/CHILD_SA、endpoint、spec hash、backoff、last error 并排展示。SA 快照保留 VICI `list-sas` 中的 local/remote identity、local/remote endpoint、CHILD_SA name、reqid 和 XFRM if_id，供后续系统 smoke 与 `swanctl --list-sas` 做字段级交叉检查。
 
-当前默认 daemon 仍使用 dry-run driver。显式 root/container smoke 已覆盖真实 StrongSwan/VICI apply、XFRM interface 实际状态观测，以及两个 daemon service 在 `Run` 循环中自动发布并 gossip 同步 `ipsec/*` records 后触发 IKE/CHILD_SA bring-up 和 tunnel ping。外部 CLI daemon 进程级 smoke、重启恢复和 revocation teardown 仍是后续 hardening。
+当前默认 daemon 仍使用 dry-run driver。显式 root/container smoke 已覆盖真实 StrongSwan/VICI apply、XFRM interface 实际状态观测，以及两个 daemon service 在 `Run` 循环中自动发布并 gossip 同步 `ipsec/*` records 后触发 IKE/CHILD_SA bring-up 和 tunnel ping。daemon service 级重启恢复（观测已有 SA、唯一 SA 断言、继续 tunnel ping）和 revocation teardown（terminate/unload/delete interface、清空 `LinkInstance`、tunnel ping 失败）已在 root/container smoke 中完成；外部 `build/higgs daemon` 双 OS 进程级验证和 gossip revocation 传播仍作为后续 hardening。
 
 `ResourceOwner` 当前包含 `manager`、`group_id`、`instance_id`、`transport_id` 和派生 `token`。当 persisted instance 不再出现在 desired set 中时，reconcile 会先验证 owner；无法证明属于 Higgs 的实例会保留为 noop，并在 reason 中说明 retained unmanaged resource。`ApplyReconcileAction` 对 instance-only teardown 再执行同样校验，因此 revocation/restart recovery 只能自动删除可追溯到 `LinkGroupSpec` + `LinkInstance` 的资源。
 
