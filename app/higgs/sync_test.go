@@ -630,6 +630,41 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 	}
 }
 
+func TestSnapshotRecordMessagesPrioritizesActiveRecord(t *testing.T) {
+	snapshot := &gossip.ZoneSnapshot{
+		Zone: "node-b.catofes.",
+		Records: map[string]*zone.Record{
+			"identity": {
+				Zone:    "node-b.catofes.",
+				Key:     "identity",
+				Version: 2,
+				Value:   []byte("node-b-restarted"),
+			},
+		},
+		RecordHistory: map[string][]*zone.Record{
+			"identity": {
+				{
+					Zone:    "node-b.catofes.",
+					Key:     "identity",
+					Version: 1,
+					Value:   []byte("node-b"),
+				},
+			},
+		},
+	}
+
+	records := snapshotRecordMessages(snapshot)
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2", len(records))
+	}
+	if records[0].Record == nil || records[0].Record.Version != 2 || string(records[0].Record.Value) != "node-b-restarted" {
+		t.Fatalf("first record = %#v, want active v2", records[0].Record)
+	}
+	if records[1].Record == nil || records[1].Record.Version != 1 || string(records[1].Record.Value) != "node-b" {
+		t.Fatalf("second record = %#v, want history v1", records[1].Record)
+	}
+}
+
 func TestSyncRuntimeTransportConfigUsesInjectedDeps(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	knownAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001}

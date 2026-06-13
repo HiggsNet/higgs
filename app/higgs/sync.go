@@ -410,6 +410,14 @@ func syncServe(ctx context.Context) error {
 		return err
 	}
 	defer transport.Close()
+	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile { return syncRuntime.State }))
+	if err != nil {
+		return err
+	}
+	if objectPullListener != nil {
+		defer objectPullListener.Close()
+		logger.Info("object_pull", "serve_started", map[string]any{"addr": objectPullListener.Addr()})
+	}
 	logger.Info("sync", "serve_started", map[string]any{
 		"peer_id": config.PeerID,
 		"addr":    transport.LocalAddr(),
@@ -460,6 +468,13 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	defer transport.Close()
+	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile { return syncRuntime.State }))
+	if err != nil {
+		return err
+	}
+	if objectPullListener != nil {
+		defer objectPullListener.Close()
+	}
 	return syncRuntime.syncRound(context.Background(), peerID, defaultSyncRoundTimeout)
 }
 
@@ -1314,6 +1329,7 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 	awaitingQuiet := false
 	var remoteDigests []gossip.ZoneDigest
 	udpPhase := true
+	peerNeedsLocalZones := false
 
 	for sr.now().Before(deadline) {
 		if ctx.Err() != nil {
@@ -1332,6 +1348,7 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 			if udpPhase {
 				// UDP quiet reached; move to object-pull phase.
 				udpPhase = false
+				sentFallbackFetch := false
 				if len(remoteDigests) > 0 {
 					fetch := fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())
 					for _, path := range fetch {
@@ -1356,20 +1373,31 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 									"via":     "object_pull",
 								})
 							}
-						} else if pullErr != nil && debugLogEnabled(sr.Config) {
-							sr.logger().Debug("object_pull", "pull_failed", map[string]any{
-								"peer_id": peerID,
-								"zone":    path,
-								"error":   pullErr,
-							})
+						} else if pullErr != nil {
+							if debugLogEnabled(sr.Config) {
+								sr.logger().Debug("object_pull", "pull_failed", map[string]any{
+									"peer_id": peerID,
+									"zone":    path,
+									"error":   pullErr,
+								})
+							}
+							if sendErr := sr.Transport.Send(peerID, &gossip.Message{
+								Type:      gossip.MessageFetchZone,
+								FetchZone: &gossip.FetchZone{Zone: path, ChunkFallback: true},
+							}); sendErr != nil {
+								err = sendErr
+								return err
+							}
+							sentFallbackFetch = true
 						}
 					}
-					if len(fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())) == 0 {
+					if len(fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())) == 0 && !peerNeedsLocalZones {
 						return nil
 					}
 				}
-				// After object pull, continue waiting for any late UDP ANNOUNCE.
-				awaitingQuiet = true
+				// After object pull, continue waiting for either a late UDP ANNOUNCE
+				// or the response to the explicit UDP fallback fetch.
+				awaitingQuiet = !sentFallbackFetch
 				continue
 			}
 			// Second quiet period after object pull.
@@ -1399,6 +1427,9 @@ func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout tim
 			remoteDigests = packet.Message.Pong.Zones
 		}
 		peerRequestedZones := packet.Message.Pong != nil && len(packet.Message.Pong.FetchZones) > 0
+		if peerRequestedZones {
+			peerNeedsLocalZones = true
+		}
 		if err = sr.handlePacketUntil(packet, deadline); err != nil {
 			sr.logger().Warn("gossip", "peer_packet_failed", map[string]any{
 				"peer_id": packet.Message.PeerID,
@@ -2078,8 +2109,14 @@ func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapsh
 	type keyedRecord struct {
 		key    string
 		record *zone.Record
+		active bool
 	}
 	var records []keyedRecord
+	for key, record := range snapshot.Records {
+		if record != nil {
+			records = append(records, keyedRecord{key: key, record: record, active: true})
+		}
+	}
 	for key, history := range snapshot.RecordHistory {
 		for _, record := range history {
 			if record != nil {
@@ -2087,14 +2124,12 @@ func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapsh
 			}
 		}
 	}
-	for key, record := range snapshot.Records {
-		if record != nil {
-			records = append(records, keyedRecord{key: key, record: record})
-		}
-	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].key != records[j].key {
 			return records[i].key < records[j].key
+		}
+		if records[i].active != records[j].active {
+			return records[i].active
 		}
 		if records[i].record.Version != records[j].record.Version {
 			return records[i].record.Version < records[j].record.Version

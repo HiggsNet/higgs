@@ -114,7 +114,11 @@ func ApplyRecordSnapshot(ns *zone.NetworkState, snapshot *RecordSnapshot, now ti
 	if err := higgscrypto.VerifyChain(ns, snapshot.Zone, now); err != nil {
 		return fmt.Errorf("%w: %v", ErrUntrustedZone, err)
 	}
-	return ns.PutAt(cloneRecord(snapshot.Record), now)
+	err := ns.PutAt(cloneRecord(snapshot.Record), now)
+	if errors.Is(err, zone.ErrStaleRecord) || errors.Is(err, zone.ErrRecordConflict) {
+		return nil
+	}
+	return err
 }
 
 func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits) (*ApplyResult, error) {
