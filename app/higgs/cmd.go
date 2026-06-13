@@ -21,6 +21,7 @@ func rootCommand() *cli.Command {
 			cmdDelegate(),
 			cmdZone(),
 			cmdRecord(),
+			cmdRoute(),
 			cmdVerify(),
 			cmdDaemon(),
 			cmdSync(),
@@ -212,6 +213,41 @@ func cmdRecord() *cli.Command {
 						recordType = cmd.Args().Get(3)
 					}
 					return putRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), []byte(cmd.Args().Get(2)), recordType)
+				},
+			},
+		},
+	}
+}
+
+func cmdRoute() *cli.Command {
+	return &cli.Command{
+		Name:  "route",
+		Usage: "Route announcement commands",
+		Commands: []*cli.Command{
+			{
+				Name:      "announce",
+				Usage:     "Announce a route prefix",
+				UsageText: "higgs route announce <zone> <prefix>",
+				Description: "Announce a CIDR prefix from the specified zone.\n" +
+					"The prefix is canonicalized before storage (e.g. 10.0.1.1/24 becomes 10.0.1.0/24).",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 2 {
+						return cli.Exit("usage: higgs route announce <zone> <prefix>", 1)
+					}
+					return announceRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+				},
+			},
+			{
+				Name:      "withdraw",
+				Usage:     "Withdraw a route prefix",
+				UsageText: "higgs route withdraw <zone> <prefix>",
+				Description: "Withdraw a previously announced CIDR prefix from the specified zone.\n" +
+					"The prefix is canonicalized before lookup.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 2 {
+						return cli.Exit("usage: higgs route withdraw <zone> <prefix>", 1)
+					}
+					return withdrawRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
 				},
 			},
 		},
