@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,7 @@ type QuotaConfig struct {
 
 type PeerQuotas struct {
 	config    QuotaConfig
+	mu        sync.Mutex
 	peers     map[string]*quotaBucket
 	nextPrune time.Time
 }
@@ -56,6 +58,8 @@ func (pq *PeerQuotas) Allow(peerID string, bytes int64, objects int64, now time.
 	if bytes < 0 || objects < 0 {
 		return ErrQuotaExceeded
 	}
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 	pq.pruneExpired(now)
 	bucket := pq.peers[peerID]
 	if bucket == nil {

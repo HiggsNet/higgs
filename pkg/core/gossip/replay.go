@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -12,6 +13,7 @@ var (
 
 type ReplayWindow struct {
 	Window    time.Duration
+	mu        sync.Mutex
 	seen      map[string]map[uint64]int64
 	nextPrune time.Time
 }
@@ -39,6 +41,8 @@ func (rw *ReplayWindow) Check(peerID string, nonce uint64, timestamp int64, now 
 		return ErrMessageExpired
 	}
 
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.pruneExpired(now)
 	rw.prune(peerID, now)
 	if rw.seen[peerID] == nil {
