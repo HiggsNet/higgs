@@ -394,3 +394,103 @@ func TestVerifyChainRejectsWrongRootKey(t *testing.T) {
 		t.Fatalf("VerifyChain accepted delegation signed by an untrusted root key")
 	}
 }
+
+func TestVerifyRecordIPAMRequiresAllocateIPCapability(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	record := &zone.Record{
+		Zone:      "catofes.",
+		Key:       "ipam/pools/10.0.0.0_16",
+		Type:      "ipam.pool",
+		Value:     []byte(`{"version":1,"prefix":"10.0.0.0/16","delegated_to":"catofes."}`),
+		Version:   1,
+		Timestamp: 123,
+	}
+	if err := SignRecord(record, priv); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+
+	// Authority with PermAllocateIP should accept the pool record.
+	authorityWithPerm := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermAllocateIP},
+			}},
+		}},
+	}
+	if err := VerifyRecord(record, authorityWithPerm, time.Unix(123, 0)); err != nil {
+		t.Fatalf("VerifyRecord with PermAllocateIP: %v", err)
+	}
+
+	// Authority with only PermWriteRoute should reject the pool record.
+	authorityWithoutPerm := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWriteRoute},
+			}},
+		}},
+	}
+	if err := VerifyRecord(record, authorityWithoutPerm, time.Unix(123, 0)); err == nil {
+		t.Fatalf("VerifyRecord accepted ipam.pool without PermAllocateIP")
+	}
+}
+
+func TestVerifyRecordIPAMAssignmentRequiresAllocateIPCapability(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	record := &zone.Record{
+		Zone:      "catofes.",
+		Key:       "ipam/assignments/10.0.0.0_24",
+		Type:      "ipam.assignment",
+		Value:     []byte(`{"version":1,"prefix":"10.0.0.0/24","assigned_to":"pek.catofes."}`),
+		Version:   1,
+		Timestamp: 123,
+	}
+	if err := SignRecord(record, priv); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+
+	authorityWithPerm := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermAllocateIP},
+			}},
+		}},
+	}
+	if err := VerifyRecord(record, authorityWithPerm, time.Unix(123, 0)); err != nil {
+		t.Fatalf("VerifyRecord with PermAllocateIP: %v", err)
+	}
+
+	authorityWithoutPerm := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWriteRoute},
+			}},
+		}},
+	}
+	if err := VerifyRecord(record, authorityWithoutPerm, time.Unix(123, 0)); err == nil {
+		t.Fatalf("VerifyRecord accepted ipam.assignment without PermAllocateIP")
+	}
+}

@@ -885,10 +885,10 @@
   - [x] 非法重叠进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_overlap`。
   - [x] 单元测试覆盖同 Zone 层级、兄弟冲突、相同 assignee 重叠、跨 Zone 合法/非法。
 
-- [ ] **6.1.3 权限模型**
-  - [ ] `pkg/crypto/sign.go` 将 `ipam.pool` / `ipam.assignment` 映射到 `PermAllocateIP`。
-  - [ ] 写入 pool/assignment 时校验 Zone authority 是否具备 `PermAllocateIP`。
-  - [ ] 单元测试覆盖 capability 校验。
+- [x] **6.1.3 权限模型**
+  - [x] `pkg/crypto/sign.go` 将 `ipam.pool` / `ipam.assignment` 映射到 `PermAllocateIP`。
+  - [x] 写入 pool/assignment 时校验 Zone authority 是否具备 `PermAllocateIP`（或通用 `PermWrite`）。
+  - [x] 单元测试覆盖 capability 校验。
 
 - [ ] **6.1.4 `higgs ipam` CLI**
   - [ ] `higgs ipam pool create <zone> <prefix> --delegated-to <zone>`

@@ -375,6 +375,8 @@ func typePermission(recordType string) zone.Permission {
 		return zone.PermWriteWireGuard
 	case "route.announcement":
 		return zone.PermWriteRoute
+	case "ipam.pool", "ipam.assignment":
+		return zone.PermAllocateIP
 	default:
 		return ""
 	}
