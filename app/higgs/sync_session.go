@@ -435,31 +435,42 @@ func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error)
 }
 
 func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction, error) {
-	if s.State != SyncSessionObjectPulling {
+	// Only process results for zones that are still in flight. A zone may be
+	// removed from objectPullInflight early if an announce arrived first, or if
+	// a concurrent result for the same zone was already processed.
+	if !s.objectPullInflight[e.Zone] {
 		return nil, nil
 	}
 	delete(s.objectPullInflight, e.Zone)
+
+	var actions []SyncAction
+
 	if e.Err != nil {
-		s.State = SyncSessionChunkFallback
 		s.chunkFallbackZones[e.Zone] = true
-		return []SyncAction{
-			SendFetchZoneAction{PeerID: e.PeerID, Zone: e.Zone, ChunkFallback: true},
-		}, nil
-	}
-	if e.Snapshot != nil {
+		actions = append(actions, SendFetchZoneAction{PeerID: e.PeerID, Zone: e.Zone, ChunkFallback: true})
+	} else if e.Snapshot != nil {
 		s.pendingZones[e.Snapshot.Zone] = false
 		delete(s.pendingZones, e.Snapshot.Zone)
-		if s.pendingEmpty() {
-			s.State = SyncSessionCompleted
-			return []SyncAction{
-				ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true},
-				SaveStateAction{Reason: fmt.Sprintf("sync completed after object pull from %s", e.PeerID)},
-			}, nil
-		}
-		s.State = SyncSessionAwaitingAnnounce
-		return []SyncAction{ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true}}, nil
+		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true})
 	}
-	return nil, nil
+
+	// Don't change state until all concurrent object pulls have reported back.
+	if len(s.objectPullInflight) > 0 {
+		return actions, nil
+	}
+
+	// If any zone failed over to UDP chunk fallback, stay in that state so
+	// onObjectChunk can process the response. Otherwise complete if nothing is
+	// left to fetch, or wait for UDP announces for the remaining zones.
+	if len(s.chunkFallbackZones) > 0 {
+		s.State = SyncSessionChunkFallback
+	} else if s.pendingEmpty() {
+		s.State = SyncSessionCompleted
+		actions = append(actions, SaveStateAction{Reason: fmt.Sprintf("sync completed after object pull from %s", e.PeerID)})
+	} else {
+		s.State = SyncSessionAwaitingAnnounce
+	}
+	return actions, nil
 }
 
 func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {

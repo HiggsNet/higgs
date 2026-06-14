@@ -189,6 +189,95 @@ func TestSyncSessionQuietTimeoutStartsObjectPull(t *testing.T) {
 	assertActionTypes(t, actions, []string{"StartObjectPullAction", "StartObjectPullAction"})
 }
 
+func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&PongReceivedEvent{
+		PeerID:       "peer-a",
+		Pong:         &gossip.Pong{},
+		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
+	}, now)
+	_, _ = s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
+
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling, got %s", s.State)
+	}
+
+	// First result returns while the second pull is still in flight. The
+	// session must stay in object_pulling so the second result is not dropped.
+	actions1, err := s.OnEvent(&ObjectPullResultEvent{
+		PeerID:   "peer-a",
+		Zone:     "catofes.",
+		Snapshot: &gossip.ZoneSnapshot{Zone: "catofes."},
+	}, now)
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling after first concurrent result, got %s", s.State)
+	}
+	assertActionTypes(t, actions1, []string{"ApplySnapshotAction"})
+
+	// Second result returns; both snapshots should be applied and session completes.
+	actions2, err := s.OnEvent(&ObjectPullResultEvent{
+		PeerID:   "peer-a",
+		Zone:     "node-a.catofes.",
+		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
+	}, now)
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionCompleted {
+		t.Fatalf("expected state completed, got %s", s.State)
+	}
+	assertActionTypes(t, actions2, []string{"ApplySnapshotAction", "SaveStateAction"})
+}
+
+func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&PongReceivedEvent{
+		PeerID:       "peer-a",
+		Pong:         &gossip.Pong{},
+		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
+	}, now)
+	_, _ = s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
+
+	// First pull fails. We request chunk fallback but stay in object_pulling
+	// because another pull is still in flight.
+	actions1, err := s.OnEvent(&ObjectPullResultEvent{
+		PeerID: "peer-a",
+		Zone:   "catofes.",
+		Err:    errors.New("tcp unreachable"),
+	}, now)
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling after first error with in-flight pull, got %s", s.State)
+	}
+	assertActionTypes(t, actions1, []string{"SendFetchZoneAction"})
+
+	// Second pull succeeds. Because a zone needs chunk fallback, we transition
+	// to chunk_fallback instead of completed.
+	actions2, err := s.OnEvent(&ObjectPullResultEvent{
+		PeerID:   "peer-a",
+		Zone:     "node-a.catofes.",
+		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
+	}, now)
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionChunkFallback {
+		t.Fatalf("expected state chunk_fallback, got %s", s.State)
+	}
+	assertActionTypes(t, actions2, []string{"ApplySnapshotAction"})
+}
+
 func TestSyncSessionObjectPullSuccess(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
