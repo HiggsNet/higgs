@@ -475,6 +475,10 @@ func buildTestNetworkStateForRouting(t *testing.T) (*stateFile, *syncConfigFile)
 		ListenAddr: "127.0.0.1:0",
 	}
 
+	// Pool delegations covering the assignments below.
+	addIPAMPool(t, state, "catofes.", "10.0.0.0/16", "catofes.", now, catofesPriv)
+	addIPAMPool(t, state, "catofes.", "10.1.0.0/16", "catofes.", now, catofesPriv)
+
 	// Assign prefixes and announce routes.
 	addRouteAssignment(t, state, "catofes.", "10.0.0.0/16", "node-a.catofes.", now, catofesPriv)
 	addRouteAssignment(t, state, "catofes.", "10.1.0.0/16", "node-b.catofes.", now, catofesPriv)
@@ -606,6 +610,10 @@ func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile) {
 		ListenAddr: "127.0.0.1:0",
 	}
 
+	// Pool delegations covering the assignments below.
+	addIPAMPool(t, state, "catofes.", "10.0.0.0/8", "catofes.", now, catofesPriv)
+	addIPAMPool(t, state, "catofes.", "10.1.0.0/16", "catofes.", now, catofesPriv)
+
 	// IPAM assignments in catofes. for the two leaf nodes.
 	addRouteAssignment(t, state, "catofes.", "10.0.0.0/8", "node-a.catofes.", now, catofesPriv)
 	addRouteAssignment(t, state, "catofes.", "10.1.0.0/16", "node-b.catofes.", now, catofesPriv)
@@ -615,6 +623,28 @@ func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile) {
 	addRouteAnnouncement(t, state, "node-b.catofes.", "10.1.1.0/24", true, now, nodeBPriv)
 
 	return state, config
+}
+
+func addIPAMPool(t *testing.T, state *stateFile, source zone.ZonePath, prefix string, delegatedTo zone.ZonePath, now time.Time, signer ed25519.PrivateKey) {
+	t.Helper()
+	canonical, err := routing.CanonicalizePrefix(prefix)
+	if err != nil {
+		t.Fatalf("invalid prefix %q: %v", prefix, err)
+	}
+	key, err := routing.NormalizeIPAMPoolKey(prefix)
+	if err != nil {
+		t.Fatalf("normalize pool key: %v", err)
+	}
+	record := routing.IPAMPoolRecord{Version: 1, Prefix: canonical, DelegatedTo: delegatedTo}
+	value, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("marshal pool: %v", err)
+	}
+	signed, err := buildSignedRecordAt(signingState(state, signer), source, key, value, routing.RecordTypeIPAMPool, now)
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt: %v", err)
+	}
+	state.Network.Zones[source].Records[key] = signed
 }
 
 func addRouteAssignment(t *testing.T, state *stateFile, source zone.ZonePath, prefix string, assignedTo zone.ZonePath, now time.Time, signer ed25519.PrivateKey) {

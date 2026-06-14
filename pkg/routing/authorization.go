@@ -73,6 +73,9 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 		for key, rec := range zs.Records {
 			switch {
 			case strings.HasPrefix(key, RecordKeyPrefixIPAMPools):
+				if revoked {
+					continue
+				}
 				pool, err := ParseIPAMPoolRecord(rec)
 				if err != nil {
 					ars.addError(path, netip.Prefix{}, "ipam_pool_invalid", err.Error())
@@ -88,6 +91,9 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 				}
 
 			case strings.HasPrefix(key, RecordKeyPrefixIPAMAssignments):
+				if revoked {
+					continue
+				}
 				assignment, err := ParseIPAMAssignmentRecord(rec)
 				if err != nil {
 					ars.addError(path, netip.Prefix{}, "ipam_assignment_invalid", err.Error())
@@ -125,6 +131,9 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 			}
 		}
 	}
+
+	// Validate assignments against pools before authorizing announcements.
+	validateAssignmentPools(ars, ns)
 
 	// Authorize pending announcements against assignments.
 	var authorized []*RouteEntry
@@ -214,6 +223,39 @@ func IsInDelegationChain(ns *zone.NetworkState, candidate, target zone.ZonePath)
 		return false
 	}
 	return true
+}
+
+// validateAssignmentPools removes assignments that are not covered by a valid
+// pool delegation. An assignment in zone Z is valid only if there exists a pool
+// in Z or one of its ancestor zones whose prefix contains the assignment prefix
+// and whose delegated_to is Z or an ancestor of Z.
+func validateAssignmentPools(ars *AuthorizedRouteSet, ns *zone.NetworkState) {
+	for prefix, entry := range ars.Assignments {
+		if isAssignmentPoolValid(ars, ns, entry) {
+			continue
+		}
+		ars.addError(entry.Source, prefix, "ipam_assignment_pool_mismatch",
+			fmt.Sprintf("assignment %s has no covering pool delegation", prefix))
+		delete(ars.Assignments, prefix)
+	}
+}
+
+func isAssignmentPoolValid(ars *AuthorizedRouteSet, ns *zone.NetworkState, assignment *AssignmentEntry) bool {
+	z := assignment.Source
+	for _, ancestor := range z.Ancestors() {
+		for _, pool := range ars.Pools {
+			if pool.Source != ancestor {
+				continue
+			}
+			if !containsPrefix(pool.Prefix, assignment.Prefix) {
+				continue
+			}
+			if IsZoneAncestor(pool.DelegatedTo, z) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findAssignmentForPrefix finds an assignment that authorizes prefix within

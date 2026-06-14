@@ -873,11 +873,11 @@
 - assignment 默认不能继续细分，除非获得者另外持有覆盖该前缀的 pool。
 - tunnel address 默认继续走 `derived-link-local`，业务地址 / SRv6 SID 完全由 IPAM 分配。
 
-- [ ] **6.1.1 Pool Enforcement**
-  - [ ] 在 `BuildAuthorizedRouteSet` 中校验每个 `ipam/assignments/<prefix>` 是否被同 Zone 或祖先 Zone 的 `ipam/pools/<pool_prefix>` 覆盖。
-  - [ ] pool 的 `delegated_to` 必须是 assignment 所在 Zone 或其祖先。
-  - [ ] 非法 assignment 进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_pool_mismatch`。
-  - [ ] 单元测试覆盖合法/非法案例。
+- [x] **6.1.1 Pool Enforcement**
+  - [x] 在 `BuildAuthorizedRouteSet` 中校验每个 `ipam/assignments/<prefix>` 是否被同 Zone 或祖先 Zone 的 `ipam/pools/<pool_prefix>` 覆盖。
+  - [x] pool 的 `delegated_to` 必须是 assignment 所在 Zone 或其祖先。
+  - [x] 非法 assignment 进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_pool_mismatch`。
+  - [x] 单元测试覆盖合法/非法案例。
 
 - [ ] **6.1.2 Assignment 重叠检测**
   - [ ] 同 Zone 内：允许层级分配（`assigned_to` 为祖先/后代），禁止兄弟 Zone 重叠。
