@@ -116,7 +116,9 @@ func TestSyncRoundFallsBackToObjectPull(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			stateA.Lock()
 			_ = srA.handlePacket(packet)
+			stateA.Unlock()
 		}
 	}()
 
@@ -222,7 +224,9 @@ func TestSyncRoundReportsUnreachableObjectPull(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			stateA.Lock()
 			_ = srA.handlePacket(packet)
+			stateA.Unlock()
 		}
 	}()
 

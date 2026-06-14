@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -16,6 +17,7 @@ const defaultStatePath = ".higgs.db"
 const cliMetaKey = "cli_state"
 
 type stateFile struct {
+	mu                sync.RWMutex       `json:"-"`
 	ManagedZone       zone.ZonePath      `json:"managed_zone"`
 	IdentityKeyPath   string             `json:"identity_key_path,omitempty"`
 	RootPrivateKey    ed25519.PrivateKey `json:"root_private_key"`
@@ -28,6 +30,42 @@ type stateFile struct {
 	IPsecReconcile    *ipsecReconcileState
 	RoutingReconcile  *routingReconcileState
 	BirdInstances     map[string]*BirdInstanceState
+}
+
+// Lock acquires the write lock for this state file. All state mutations must
+// be performed while holding the write lock.
+func (s *stateFile) Lock() {
+	s.mu.Lock()
+}
+
+// Unlock releases the write lock for this state file.
+func (s *stateFile) Unlock() {
+	s.mu.Unlock()
+}
+
+// RLock acquires the read lock for this state file. All reads of mutable
+// state fields from non-event-loop goroutines must hold the read lock.
+func (s *stateFile) RLock() {
+	s.mu.RLock()
+}
+
+// RUnlock releases the read lock for this state file.
+func (s *stateFile) RUnlock() {
+	s.mu.RUnlock()
+}
+
+// WithLock runs fn while holding the write lock.
+func (s *stateFile) WithLock(fn func()) {
+	s.Lock()
+	defer s.Unlock()
+	fn()
+}
+
+// WithRLock runs fn while holding the read lock.
+func (s *stateFile) WithRLock(fn func()) {
+	s.RLock()
+	defer s.RUnlock()
+	fn()
 }
 
 type stateMeta struct {

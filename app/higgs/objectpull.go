@@ -233,14 +233,16 @@ func objectPullClientDeadlineUntil(deadline time.Time, maxTimeout time.Duration)
 
 // objectPullLookup returns a function that can be passed to objectPullTCPServe.
 // It accepts a getter so that the daemon can reload state without invalidating
-// the closure.
+// the closure. The returned handler holds the state read lock while reading
+// Network and SyncPeers.
 func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 	return func(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		state := getState()
 		if state == nil || state.Network == nil || req == nil || !req.Zone.Valid() {
 			return &gossip.ObjectPullResponse{Error: "invalid request"}
 		}
-		configureValidation(state.Network)
+		state.RLock()
+		defer state.RUnlock()
 		now := time.Now()
 		switch req.Type {
 		case gossip.ObjectPullZone:
@@ -331,6 +333,10 @@ func isObjectPullUnreachable(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
+// recordObjectPullAttempt records an object pull attempt for a peer. The
+// caller must hold the write lock on state; this function is called from
+// object-pull workers and from the sync round, both of which acquire the lock
+// before mutating peer stats.
 func recordObjectPullAttempt(state *stateFile, peerID, object string, zoneName zone.ZonePath, key string, now time.Time) {
 	if state == nil || peerID == "" {
 		return
@@ -350,6 +356,8 @@ func recordObjectPullAttempt(state *stateFile, peerID, object string, zoneName z
 	state.SyncPeers[peerID] = peerState
 }
 
+// recordObjectPullResult records the result of an object pull for a peer. The
+// caller must hold the write lock on state.
 func recordObjectPullResult(state *stateFile, peerID, object string, zoneName zone.ZonePath, key string, bytes int, err error, unreachable bool, now time.Time) {
 	if state == nil || peerID == "" {
 		return
@@ -557,8 +565,52 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 	if state == nil {
 		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: errors.New("state not available")}
 	}
-	snapshot, err := tryObjectPullTCP(state, p.config, req.PeerID, req.Zone)
-	return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Snapshot: snapshot, Err: err}
+	// Resolve the peer address while holding a read lock, then release the lock
+	// before the blocking TCP pull so the event loop and other workers are not
+	// blocked during network I/O. Stats are recorded on the current state with a
+	// brief write lock after the pull completes.
+	state.RLock()
+	addr := resolvePeerTCPAddr(state, p.config, req.PeerID)
+	state.RUnlock()
+	if addr == "" {
+		err := fmt.Errorf("no TCP address for peer %s", req.PeerID)
+		if cur := p.getState(); cur != nil {
+			cur.Lock()
+			recordObjectPullResult(cur, req.PeerID, "zone", req.Zone, "", 0, err, true, time.Now())
+			cur.Unlock()
+		}
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
+	}
+	if cur := p.getState(); cur != nil {
+		cur.Lock()
+		recordObjectPullAttempt(cur, req.PeerID, "zone", req.Zone, "", time.Now())
+		cur.Unlock()
+	}
+	resp, err := pullObjectTCPForPeerUntil(req.PeerID, addr, &gossip.ObjectPullRequest{
+		Type: gossip.ObjectPullZone,
+		Zone: req.Zone,
+	}, time.Time{})
+	respBytes := 0
+	if resp != nil {
+		respBytes = encodedObjectPullResponseSize(resp)
+	}
+	unreachable := isObjectPullUnreachable(err)
+	if cur := p.getState(); cur != nil {
+		cur.Lock()
+		recordObjectPullResult(cur, req.PeerID, "zone", req.Zone, "", respBytes, err, unreachable, time.Now())
+		cur.Unlock()
+	}
+	if err != nil {
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
+	}
+	if resp == nil || !resp.OK {
+		err := fmt.Errorf("object pull failed: %s", resp.Error)
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
+	}
+	if resp.Snapshot == nil {
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: errors.New("object pull returned empty snapshot")}
+	}
+	return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Snapshot: resp.Snapshot, Err: nil}
 }
 
 // objectPullResultToEvent converts a worker result to the SyncEvent consumed by

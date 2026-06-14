@@ -38,6 +38,11 @@ type DaemonService struct {
 	objectPullPool    *objectPullPool
 	timerManager      *TimerManager
 
+	// stateUnlock tracks the unlock function for the stateFile currently locked
+	// by the event loop. It is updated by lockState and setState so that deferred
+	// unlocks always release the correct stateFile pointer after setState swaps it.
+	stateUnlock func()
+
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager birdProcessManager
 	birdClientFactory  func(socketPath string, timeout time.Duration) birdClient
@@ -104,6 +109,9 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	if rt != nil {
 		socketPath = controlSocketPath(rt.Config)
 	}
+	if state != nil && state.Network != nil && state.Network.RecordVerifier == nil {
+		configureValidation(state.Network)
+	}
 	d := &DaemonService{
 		Sync:              newSyncRuntime(state, config, nil, rt),
 		Interval:          interval,
@@ -164,10 +172,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	nextIPsecReconcile := nextIPsecReconcileTime(d.Sync.now(), ipsecReconcileInterval)
 	routingReconcileInterval := d.routingReconcileInterval()
 	nextRoutingReconcile := nextRoutingReconcileTime(d.Sync.now(), routingReconcileInterval)
-	lastObservedDigests := gossip.ZoneDigests(d.Sync.State.Network)
+	lastObservedDigests := d.zoneDigests()
+	d.Sync.State.Lock()
 	d.Sync.updateDiscoveredPeers()
 	d.recoverIPsecLinksOnStart(ctx)
 	d.recoverRoutingOnStart(ctx)
+	d.Sync.State.Unlock()
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -205,6 +215,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			forceSync = true
 			d.Sync.updateDiscoveredPeers()
 			d.notifyStateChanged()
+			// setState acquired the lock on the new state; release it before the
+			// next iteration so handleEvent can lock the current state.
+			d.releaseStateLock()
 		}
 		if !now.Before(nextEndpointPublish) {
 			result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
@@ -214,7 +227,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if triggerSync {
 				nextSync = now
 				forceSync = true
-				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+				lastObservedDigests = d.zoneDigests()
 			}
 			interval := d.Sync.Config.ReflectorInterval
 			if interval <= 0 {
@@ -235,8 +248,8 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if d.flushRoutingReconcile(ctx) {
 				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 			}
-			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
-				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
+				lastObservedDigests = d.zoneDigests()
 			}
 			nextSync = now.Add(d.Interval)
 			forceSync = false
@@ -276,7 +289,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if triggerSync {
 				nextSync = d.Sync.now()
 				forceSync = true
-				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+				lastObservedDigests = d.zoneDigests()
 			}
 		case packet := <-packetCh:
 			timer.Stop()
@@ -289,14 +302,14 @@ func (d *DaemonService) Run(ctx context.Context) error {
 					"reason":  gossip.RejectReason(result.Error),
 				})
 			}
-			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
-				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
+				lastObservedDigests = d.zoneDigests()
 			}
 		case event := <-d.syncEvents:
 			timer.Stop()
 			d.handleSyncEvent(ctx, event)
-			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
-				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
+				lastObservedDigests = d.zoneDigests()
 			}
 		case result := <-d.objectPullResults:
 			timer.Stop()
@@ -366,12 +379,22 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 	switch request.Method {
 	case "status":
+		var linkInstances int
+		var desiredLinks int
+		var lastLinkError string
+		if d.Sync.State != nil {
+			d.Sync.State.RLock()
+			linkInstances = len(d.Sync.State.LinkInstances)
+			desiredLinks = desiredIPsecLinks(d.Sync.State)
+			lastLinkError = lastIPsecReconcileError(d.Sync.State)
+			d.Sync.State.RUnlock()
+		}
 		writeControlResponse(conn, controlResponse{
 			OK:            true,
 			PeerID:        d.Sync.Config.PeerID,
-			LinkInstances: len(d.Sync.State.LinkInstances),
-			DesiredLinks:  desiredIPsecLinks(d.Sync.State),
-			LastLinkError: lastIPsecReconcileError(d.Sync.State),
+			LinkInstances: linkInstances,
+			DesiredLinks:  desiredLinks,
+			LastLinkError: lastLinkError,
 			Message:       "daemon online",
 		})
 	case "record_put":
@@ -464,10 +487,12 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		var instances map[string]*BirdInstanceState
 		var lastRoutingError string
 		if d.Sync.State != nil {
+			d.Sync.State.RLock()
 			instances = d.Sync.State.BirdInstances
 			if d.Sync.State.RoutingReconcile != nil {
 				lastRoutingError = d.Sync.State.RoutingReconcile.LastError
 			}
+			d.Sync.State.RUnlock()
 		}
 		writeControlResponse(conn, controlResponse{
 			OK:               true,
@@ -480,14 +505,18 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
+		d.Sync.State.RLock()
 		ars, err := routing.BuildAuthorizedRouteSet(d.Sync.State.Network, d.Sync.now())
 		if err != nil {
+			d.Sync.State.RUnlock()
 			writeControlResponse(conn, controlError(err))
 			return
 		}
+		routesDump := buildRoutesDumpResponse(d.Sync.State.ManagedZone, ars)
+		d.Sync.State.RUnlock()
 		writeControlResponse(conn, controlResponse{
 			OK:         true,
-			RoutesDump: buildRoutesDumpResponse(d.Sync.State.ManagedZone, ars),
+			RoutesDump: routesDump,
 			Message:    "routes dump",
 		})
 	default:
@@ -539,6 +568,8 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 }
 
 func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
+	unlock := d.lockState()
+	defer unlock()
 	switch event.Type {
 	case daemonEventRecordPut:
 		version, err := d.handleRecordPutEvent(event.RecordPut)
@@ -697,6 +728,15 @@ func (d *DaemonService) handleRootInitEvent() ([]byte, error) {
 	return nil, errors.New("root init via daemon is only valid before a daemon has loaded state; stop the daemon and run root init as recovery/direct initialization")
 }
 
+// processPacketEvent locks the current state and then dispatches to
+// handlePacketEvent. It is used by tests and other callers that bypass the
+// main Events channel.
+func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
+	unlock := d.lockState()
+	defer unlock()
+	return d.handlePacketEvent(packet, ctx)
+}
+
 func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Context) error {
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
@@ -739,16 +779,24 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	digestsBeforeRound := gossip.ZoneDigests(d.Sync.State.Network)
 	var syncErr error
 	peers := outboundSyncPeersAt(d.Sync.State, d.Sync.Config, d.Sync.now())
+	peerBackoffs := make(map[string]time.Duration, len(peers))
+	for _, peerID := range peers {
+		peerBackoffs[peerID] = backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now())
+	}
 	d.logDebug("sync", "timer_started", map[string]any{
 		"peer_count": len(peers),
 		"force":      force,
 	})
+	// Release the event-loop lock before the synchronous round; syncRound
+	// acquires and releases its own lock around state mutations and may block
+	// on network I/O.
+	d.releaseStateLock()
 	for _, peerID := range peers {
-		if !force && backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now()) > 0 {
+		if !force && peerBackoffs[peerID] > 0 {
 			d.logDebug("sync", "round_skipped", map[string]any{
 				"peer_id": peerID,
 				"reason":  "backoff",
-				"backoff": backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now()),
+				"backoff": peerBackoffs[peerID],
 			})
 			continue
 		}
@@ -765,11 +813,24 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 			})
 		}
 	}
+	// Reacquire the event-loop lock for post-round state mutations. The pointer
+	// is still the one set above because no other goroutine replaces it.
+	unlock := d.lockState()
+	defer unlock()
 	if syncStateChanged(d.Sync.State, digestsBeforeRound) {
 		d.Sync.updateDiscoveredPeers()
 		d.notifyStateChanged()
 	}
 	return syncErr
+}
+
+func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+		return nil
+	}
+	d.Sync.State.RLock()
+	defer d.Sync.State.RUnlock()
+	return gossip.ZoneDigests(d.Sync.State.Network)
 }
 
 func (d *DaemonService) logSyncRoundError(peerID string, err error, duration time.Duration) {
@@ -784,7 +845,11 @@ func (d *DaemonService) logSyncRoundError(peerID string, err error, duration tim
 		"error":       err,
 		"duration_ms": duration.Milliseconds(),
 	}
-	addPeerLogFields(fields, d.Sync.State, peerID, now)
+	if d.Sync.State != nil {
+		d.Sync.State.RLock()
+		addPeerLogFields(fields, d.Sync.State, peerID, now)
+		d.Sync.State.RUnlock()
+	}
 	key := "sync_round|" + peerID + "|" + reason + "|" + err.Error()
 	if suppressed, ok := d.LogLimiter.Allow(key, now); ok {
 		if suppressed > 0 {
@@ -836,8 +901,63 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	return record.Version, nil
 }
 
+// lockState acquires the write lock on the current Sync.State and stores the
+// matching unlock function in d.stateUnlock. The returned function must be
+// called once to release the lock. It is safe to call when Sync.State is nil.
+func (d *DaemonService) lockState() func() {
+	d.stateUnlock = nil
+	if d == nil || d.Sync == nil || d.Sync.State == nil {
+		return func() {}
+	}
+	d.Sync.State.Lock()
+	if d.Sync.State.Network != nil && d.Sync.State.Network.RecordVerifier == nil {
+		configureValidation(d.Sync.State.Network)
+	}
+	d.stateUnlock = d.Sync.State.Unlock
+	return func() {
+		if d.stateUnlock != nil {
+			d.stateUnlock()
+			d.stateUnlock = nil
+		}
+	}
+}
+
+// setState replaces the current state pointer. When called from the event loop
+// (i.e. d.stateUnlock is non-nil because lockState acquired the current state
+// lock), setState transfers the write lock from the old state to the new state,
+// releases the old lock, and updates d.stateUnlock so that the deferred unlock
+// from lockState releases the new state. When called without an event-loop
+// lock tracked, setState simply assigns the pointer; callers that need
+// synchronization must acquire the lock separately.
+// releaseStateLock releases the state lock currently tracked by d.stateUnlock
+// and clears the tracker. It is used by event handlers that need to drop the
+// event-loop lock before a sub-operation (such as the synchronous syncRound)
+// acquires its own lock.
+func (d *DaemonService) releaseStateLock() {
+	if d != nil && d.stateUnlock != nil {
+		d.stateUnlock()
+		d.stateUnlock = nil
+	}
+}
+
 func (d *DaemonService) setState(state *stateFile) {
+	if d == nil || d.Sync == nil || d.Sync.State == state {
+		return
+	}
+	if d.stateUnlock == nil {
+		d.Sync.State = state
+		return
+	}
+	state.Lock()
+	if state.Network != nil && state.Network.RecordVerifier == nil {
+		configureValidation(state.Network)
+	}
+	old := d.Sync.State
 	d.Sync.State = state
+	if old != nil {
+		old.Unlock()
+	}
+	d.stateUnlock = state.Unlock
 }
 
 func (d *DaemonService) notifyStateChanged() {
@@ -927,8 +1047,13 @@ func (d *DaemonService) ipsecReconcileInterval() time.Duration {
 	}
 	groups := d.Sync.App.Config.IPsec.LinkGroups
 	if len(groups) == 0 {
-		if d.Sync.State != nil && len(d.Sync.State.LinkInstances) > 0 {
-			return defaultIPsecReconcileInterval
+		if d.Sync.State != nil {
+			d.Sync.State.RLock()
+			hasLinks := len(d.Sync.State.LinkInstances) > 0
+			d.Sync.State.RUnlock()
+			if hasLinks {
+				return defaultIPsecReconcileInterval
+			}
 		}
 		return 0
 	}

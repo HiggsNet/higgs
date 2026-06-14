@@ -203,6 +203,8 @@ func TestResolvePeerTCPAddrPrefersObservedOverPrivateSignedEndpoint(t *testing.T
 
 func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
+	state.Lock()
+	defer state.Unlock()
 	_, err := tryObjectPullTCP(state, &syncConfigFile{}, "node-b.catofes.", "node-b.catofes.")
 	if err == nil {
 		t.Fatalf("tryObjectPullTCP succeeded without a TCP address")
@@ -244,6 +246,8 @@ func TestObjectPullExpiredDeadlineRecordsUnreachable(t *testing.T) {
 		},
 	}
 
+	state.Lock()
+	defer state.Unlock()
 	_, err := tryObjectPullTCPUntil(state, config, "node-b.catofes.", "node-b.catofes.", time.Now().Add(-time.Millisecond))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("tryObjectPullTCPUntil error = %v, want DeadlineExceeded", err)

@@ -151,6 +151,8 @@ func localSnapshotsForPong(ns *zone.NetworkState, zones []zone.ZonePath) []*goss
 }
 
 func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
+	unlock := d.lockState()
+	defer unlock()
 	peerID := syncEventPeerID(event)
 	if peerID == "" {
 		d.logDebug("sync", "event_dropped", map[string]any{"reason": "no_peer_id"})
@@ -400,6 +402,8 @@ func zoneStateFromSnapshot(snapshot *gossip.ZoneSnapshot) *zone.ZoneState {
 	return zs
 }
 
+// recordPeerBackoff mutates state.SyncPeers. The caller must hold the write lock
+// on state.
 func recordPeerBackoff(state *stateFile, peerID string, err error, now time.Time) {
 	if state == nil || peerID == "" {
 		return

@@ -1293,7 +1293,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	serviceA.IPsecDriver = driverA
 	serviceA.XFRMDriver = driverA
 
-	stateB := *stateA
+	stateB := cloneStateFile(stateA)
 	stateB.ManagedZone = "node-b.catofes."
 	stateB.LinkInstances = nil
 	stateB.IPsecReconcile = nil
@@ -1306,11 +1306,11 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rtB.SaveState(&stateB); err != nil {
+	if err := rtB.SaveState(stateB); err != nil {
 		t.Fatalf("SaveState(node-b): %v", err)
 	}
 	driverB := &observedIPsecDriver{}
-	serviceB := newDaemonService(rtB, &stateB, &configB, time.Second)
+	serviceB := newDaemonService(rtB, stateB, &configB, time.Second)
 	serviceB.IPsecDriver = driverB
 	serviceB.XFRMDriver = driverB
 
@@ -2136,7 +2136,7 @@ func serveDaemonPackets(ctx context.Context, service *DaemonService, transport *
 			if err != nil {
 				continue
 			}
-			_ = service.handlePacketEvent(packet, serveCtx)
+			_ = service.processPacketEvent(packet, serveCtx)
 		}
 	}()
 	return done, cancel

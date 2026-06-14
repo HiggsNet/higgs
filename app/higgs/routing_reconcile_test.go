@@ -662,9 +662,9 @@ func addRouteAnnouncement(t *testing.T, state *stateFile, path zone.ZonePath, pr
 }
 
 func signingState(state *stateFile, signer ed25519.PrivateKey) *stateFile {
-	copy := *state
-	copy.ZonePrivateKey = signer
-	return &copy
+	out := cloneStateFile(state)
+	out.ZonePrivateKey = signer
+	return out
 }
 
 func readFileString(path string) (string, error) {
