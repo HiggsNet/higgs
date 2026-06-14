@@ -1454,8 +1454,15 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	serveA, stopA := serveDaemonPackets(ctx, serviceA, transportA)
-	serveB, stopB := serveDaemonPackets(ctx, serviceB, transportB)
+	// Background packet service is only used by the event-loop sync path; the
+	// legacy syncRound performs its own transport.Receive and would otherwise
+	// race with this goroutine for packets.
+	var serveA, serveB <-chan struct{}
+	var stopA, stopB context.CancelFunc
+	if serviceA.eventLoopSync {
+		serveA, stopA = serveDaemonPackets(ctx, serviceA, transportA)
+		serveB, stopB = serveDaemonPackets(ctx, serviceB, transportB)
+	}
 
 	var syncErrs [2]error
 	var wg sync.WaitGroup
@@ -1470,10 +1477,14 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	}()
 	wg.Wait()
 
-	stopA()
-	<-serveA
-	stopB()
-	<-serveB
+	if stopA != nil {
+		stopA()
+		<-serveA
+	}
+	if stopB != nil {
+		stopB()
+		<-serveB
+	}
 
 	if err := syncErrs[0]; err != nil {
 		t.Fatalf("sync node-b from node-a: %v", err)

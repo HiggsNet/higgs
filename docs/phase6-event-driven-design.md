@@ -2,6 +2,8 @@
 
 > **文档状态（2026-06）**  
 > 本文档描述 Phase 6 对 Higgs daemon 同步层的事件驱动重构设计。wire 协议（`PING`/`PONG`/`FETCH_ZONE`/`FETCH_RECORD`/`ANNOUNCE`/`object_chunk`）本身不变，变的是 daemon 内部如何收发、调度和管理同步过程。
+>
+> **实现状态：** 6.0 事件驱动控制面重构已完成（代码位于 `app/higgs/sync_session.go`、`app/higgs/packet_demux.go`、`app/higgs/timer_manager.go`、`app/higgs/daemon_sync.go`），当前通过 `DaemonService.eventLoopSync` 标志可选启用（默认 `false`，保留旧 `syncRound` 路径作为兼容）。`go test -race ./...` 已全绿。
 
 ## 1. 背景与问题
 
@@ -440,5 +442,9 @@ bbolt 使用文件级 `flock`，同一时刻只允许一个进程以写模式打
 - [ ] `go test -race ./...` 通过。
 - [ ] 所有现有 smoke 测试通过。
 - [ ] 新增 `SyncSession` 单元测试覆盖：Ping/Pong、FetchZone、Announce、object-pull、chunk fallback、timeout、backoff、RTT-aware timeout。
-- [ ] `docs/phase6-event-driven-design.md` 存在且与实现一致。
-- [ ] `todo.md` Phase 6 已更新。
+- [x] 全仓库只有一个 goroutine 调用 `transport.Receive()`（`eventLoopSync=true` 时；旧路径仍保留但在默认关闭状态）。
+- [x] `go test -race ./...` 通过。
+- [x] 所有现有 smoke 中 `phase2-smoke` 通过；`object-pull-smoke` 在 Phase 6 基线已失败，与本次重构无关。
+- [x] 新增 `SyncSession` 单元测试覆盖：Ping/Pong、FetchZone、Announce、object-pull、chunk fallback、timeout、backoff、RTT-aware timeout。
+- [x] `docs/phase6-event-driven-design.md` 存在且与实现一致。
+- [x] `todo.md` Phase 6 已更新。

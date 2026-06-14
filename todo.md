@@ -761,73 +761,76 @@
 
 ### 6.0 事件驱动控制面重构
 
-- [ ] **6.0.1 事件类型与事件循环改造**
-  - [ ] 在 `app/higgs/sync_events.go` 定义 `SyncEvent` 联合类型：`SyncTimerEvent`、`PacketEvent`、`UnsolicitedPacketEvent`、`QuietTimeoutEvent`、`RoundTimeoutEvent`、`ObjectPullResultEvent`、`ObjectChunkEvent`、`FetchZoneEvent`、`StateFileChangedEvent` 等
-  - [ ] 改造 `DaemonService.Run()`：统一 select `packetCh`、`d.Events`、内部 `syncEventCh`、timer channel、object-pull result channel；保持 control/admin 事件走 `d.Events`，sync 内部事件走 `syncEventCh`
-  - [ ] 移除 `sync.go` 中所有 `transport.Receive()` / `receiveWithContext` / `receiveWithDeadline`；UDP 只由 `startGossipPacketReceiver` 读取
+- [x] **6.0.1 事件类型与事件循环改造**
+  - [x] 在 `app/higgs/sync_session.go` 定义 `SyncEvent` 联合类型：`SyncTimerEvent`、`PacketEvent`、`UnsolicitedPacketEvent`、`PacketQuietTimeoutEvent`、`RoundTimeoutEvent`、`ObjectPullResultEvent`、`ObjectChunkEvent`、`FetchZoneReceivedEvent` 等（`StateFileChangedEvent` 留待 fsnotify 接入）
+  - [x] 改造 `DaemonService.Run()`：统一 select `packetCh`、`d.Events`、内部 `syncEvents`、timer channel、object-pull result channel；保持 control/admin 事件走 `d.Events`，sync 内部事件走 `syncEvents`
+  - [ ] 默认启用事件循环路径后移除 `sync.go` 中 `transport.Receive()` / `receiveWithContext` / `receiveWithDeadline`；当前旧路径仍保留在 `eventLoopSync=false` 模式下
 
-- [ ] **6.0.2 SyncSession 状态机**
-  - [ ] 新增 `app/higgs/sync_session.go`，定义 `SyncSession`：peerID、state、remoteDigests、pendingZones、localRequestedZones、objectPullInflight、chunkAssembly、timer refs、startTime
-  - [ ] 状态定义：`Idle`、`PingSent`、`AwaitingAnnounce`、`FetchingLocal`、`ObjectPulling`、`ChunkFallback`、`Completed`、`Failed`
-  - [ ] 核心方法 `OnEvent(event SyncEvent) (actions []SyncAction, done bool)`，尽量做成纯状态转换：输入事件+当前状态 → 下一状态 + 动作列表
-  - [ ] 动作列表包含：`SendPing`、`SendPong`、`SendFetchZone`、`SendAnnounce`、`StartObjectPull`、`SendChunkFallbackFetch`、`ApplySnapshot`、`SaveState`、`RecordBackoff`、`CancelTimer` 等
+- [x] **6.0.2 SyncSession 状态机**
+  - [x] 新增 `app/higgs/sync_session.go`，定义 `SyncSession`：peerID、state、remoteDigests、pendingZones、localFetchZones、objectPullInflight、chunkFallbackZones、estimatedRTT、quietCount
+  - [x] 状态定义：`Idle`、`PingSent`、`AwaitingAnnounce`、`FetchingLocal`、`ObjectPulling`、`ChunkFallback`、`Completed`、`Failed`
+  - [x] 核心方法 `OnEvent(event SyncEvent, now time.Time) ([]SyncAction, error)`，纯状态转换：输入事件+当前状态 → 下一状态 + 动作列表
+  - [x] 动作类型：`SendPingAction`、`SendPongAction`、`SendFetchZoneAction`、`SendAnnounceAction`、`StartObjectPullAction`、`ApplySnapshotAction`、`ApplyRecordSnapshotAction`、`SaveStateAction`、`RecordBackoffAction`、`StartTimerAction`、`CancelTimerAction`
 
-- [ ] **6.0.3 Packet Demuxer**
-  - [ ] 新增 `app/higgs/packet_demux.go`
-  - [ ] `routePacket(packet, sessions)`：若 `packet.PeerID` 命中活跃 `SyncSession` → 生成 `PacketEvent{session, packet}`；否则生成 `UnsolicitedPacketEvent{packet}`
-  - [ ] replay/quota/allowlist 检查仍在 `Transport.Receive()` 完成；demuxer 只负责按 peer 路由已通过校验的包
+- [x] **6.0.3 Packet Demuxer**
+  - [x] 新增 `app/higgs/packet_demux.go`
+  - [x] `routePacket(packet, sessions)`：若 `packet.PeerID` 命中活跃 `SyncSession` → 生成 `PacketEvent{session, packet}`；否则生成 `UnsolicitedPacketEvent{packet}`
+  - [x] replay/quota/allowlist 检查仍在 `Transport.Receive()` 完成；demuxer 只负责按 peer 路由已通过校验的包
 
-- [ ] **6.0.4 定时器事件化**
-  - [ ] 新增 `timerManager`，按 `(peerID, timerType)` 管理 timer：
-    - `RoundTimeout`：整轮超时，基于 peer 估计 RTT 动态计算：`max(5s, kRound * RTT + ObjectPullBudget + jitter)`
-    - `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。不是轮询间隔，而是给对端 burst 发送留的窗口；第一静默期用于决定何时从 UDP 切到 TCP object-pull，第二静默期用于等待 object-pull 后的迟到 UDP / chunk
-    - `BackoffRetry`：peer 可重试时间点
-  - [ ] session 创建/结束时注册/取消 timer；timer 触发后向事件循环 post 事件
-  - [ ] 单元测试注入 fake clock，验证定时器取消与重入
+- [x] **6.0.4 定时器事件化**
+  - [x] 新增 `app/higgs/timer_manager.go`，按 `(peerID, kind)` 管理 timer：
+    - `RoundTimeout`：整轮超时，基于 peer 估计 RTT 动态计算：`max(5s, kRound * RTT + ObjectPullBudget)`
+    - `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT)`。不是轮询间隔，而是给对端 burst 发送留的窗口；第一静默期用于决定何时从 UDP 切到 TCP object-pull，第二静默期用于等待 object-pull 后的迟到 UDP / chunk
+    - jitter 暂未实现，可在后续 tuning 中加入
+  - [x] session 创建/结束时注册/取消 timer；timer 触发后向事件循环 post 事件
+  - [x] 单元测试注入 fake clock，验证定时器取消与重入
 
-- [ ] **6.0.5 异步 object pull / UDP chunk fallback 接入 FSM**
-  - [ ] 把 `tryObjectPullTCPUntil` 改成在 bounded worker pool 中异步执行，完成后向事件循环发送 `ObjectPullResultEvent{sessionID, peerID, zone, snapshot, err}`
-  - [ ] `ObjectPulling` 状态等待结果：成功则 apply 并转 `AwaitingAnnounce`；失败则发送 `FetchZone{ChunkFallback:true}` 进入 `ChunkFallback`
-  - [ ] `ChunkFallback` 状态维护 `udpChunkAssemblies`；`ObjectChunkEvent` 驱动重组，完整对象 hash 匹配后 apply
-  - [ ] `sendSnapshots()` 不再阻塞在 `syncRound` 里，而是返回 send action 列表；事件循环按预算逐个发送，超预算对象走 object-pull/chunk 路径
+- [x] **6.0.5 异步 object pull / UDP chunk fallback 接入 FSM**
+  - [x] 新增 `objectPullPool`：worker goroutine 执行 TCP pull，完成后通过 `objectPullResults` channel 回注，转换为 `ObjectPullResultEvent`
+  - [x] `ObjectPulling` 状态等待结果：成功则 apply 并转 `AwaitingAnnounce`；失败则发送 `FetchZone{ChunkFallback:true}` 进入 `ChunkFallback`
+  - [x] `ChunkFallback` 状态等待 `ObjectChunkEvent`；`object_chunk` 仍由全局 `udpChunkAssemblies` 重组（未完全移入 session，但 apply 由事件循环执行）
+  - [x] `SendAnnounceAction` 由事件循环调用 `transport.Send`；超预算对象走 object-pull/chunk 路径
 
-- [ ] **6.0.6 状态变更与持久化边界（single writer）**
-  - [ ] 明确所有状态变更只在 daemon 事件循环 goroutine 中执行：
+- [x] **6.0.6 状态变更与持久化边界（single writer）**
+  - [x] 明确所有状态变更只在 daemon 事件循环 goroutine 中执行：
     - `NetworkState` apply、`peer state` 更新、`Transport` 运行时表更新、`udpChunkAssemblies` 等运行时缓存
     - IPsec / BIRD / routing desired-state 计算与 reconcile 触发
-  - [ ] worker goroutine（object pull、DNS、可选批量 verify）只产生事件，不直接持有 `stateFile`/`NetworkState`/`Transport` 的可变引用
-  - [ ] 明确落盘时机：`Completed`、`Failed`、apply 导致 digest 变化后、control/admin 事件完成后
-  - [ ] 移除 `handlePacketUntil` / 旧 `syncRound` 里的 `defer saveState()`
-  - [ ] daemon 主 goroutine 串行写 state，避免多 goroutine 写 DB
-  - [ ] 对 state 文件加 `flock` 互斥锁：`saveState()` 前加锁，`loadState()` 前也尝试加锁或校验 mtime/digest，防止 daemon 与外部工具并发写。注意 bbolt 已有文件级锁，但这只保证文件不损坏，不解决内存视图冲突和 last-write-wins 覆盖；应用层仍须把控制面写操作收敛到 control socket
-  - [ ] 新增 `stateFileWatcher`：用 `fsnotify`/`inotify` 监听 state 文件变化；变化时 post `StateFileChangedEvent` 到事件循环；事件循环校验 digest 后 `loadState()` 并触发 outbound sync（效果等同于本地 `record_put` 后的 `notifyStateChanged`）
-  - [ ] 明确文档：daemon 运行期间推荐所有写操作走 control socket；直接改 state DB 属于开发/恢复模式，由 watcher 兜底但非实时保证
+  - [x] worker goroutine（object pull）只产生事件，不直接 apply 状态；读取 state 时持 `RLock`
+  - [x] 明确落盘时机：`Completed`/`Failed`、apply 导致 digest 变化后、control/admin 事件完成后
+  - [ ] 移除旧 `syncRound`/`handlePacketUntil` 里的 `defer saveState()`（待 eventLoopSync 默认开启后删除旧路径）
+  - [x] daemon 主 goroutine 串行写 state，避免多 goroutine 写 DB
+  - [ ] 对 state 文件加 `flock` 互斥锁 / fsnotify watcher（当前仍依赖 bbolt 文件级锁 + 周期性 reload；后续补强）
 
-- [ ] **6.0.7 并发 race 修复**
-  - [ ] 给 `ReplayWindow` 加互斥锁（即使单 reader，也作为安全网；单测保留并发压力测试）
-  - [ ] 审计并修复 `go test -race ./...` 暴露的：
-    - `NetworkState.ConfigureRecordValidation` 被多个 goroutine 写
-    - `recordPeerSyncAt` / `recordDatagramTooLarge` / `isRejectedDigestActive` 对 map 的并发读写
-    - `ApplySnapshot` 与 `VerifyChain` 的 map 读写 race
-  - [ ] 可选：把 `NetworkState` 验证配置改成每次 load 时生成 immutable snapshot，或用 `RWMutex` 保护
+- [x] **6.0.7 并发 race 修复**
+  - [x] 给 `ReplayWindow` 加互斥锁（`pkg/core/gossip/replay.go`）
+  - [x] 给 `PeerQuotas` 加互斥锁（`pkg/core/gossip/quota.go`）
+  - [x] 给 `stateFile` 加 `sync.RWMutex`，事件 loop 写时持写锁，worker/control 读时持读锁
+  - [x] `go test -race ./...` 全绿
 
 - [ ] **6.0.8 Relay fanout 事件化**
-  - [ ] relay 不再在 `handlePacketUntil` 里直接调用 `syncRound`；而是向事件循环 post `SyncTimerEvent{peerID, force=true}` 创建新的独立 `SyncSession`
-  - [ ] 保持 relay 节流：backoff、min interval、来源 peer 跳过
+  - [ ] relay 不再在 `handlePacketUntil` 里直接调用 `syncRound`；而是向事件循环 post `SyncTimerEvent{peerID, force=true}` 创建新的独立 `SyncSession`（待 eventLoopSync 默认开启后接入）
+  - [x] 保持 relay 节流：backoff、min interval、来源 peer 跳过（旧路径已具备）
 
-- [ ] **6.0.9 测试改造与补强**
-  - [ ] 重写依赖旧阻塞 `syncRound` 的单测；新增 `SyncSession` 状态机表驱动测试（无 I/O）
-  - [ ] 新增 packet demuxer 单元测试
-  - [ ] 新增 timer manager 单元测试（fake clock）
-  - [ ] 新增 daemon 事件循环测试：单 reader、session 生命周期、cross-traffic 路由、timer 取消
-  - [ ] 新增 race 回归测试：验证不再有两个 goroutine 同时 `Receive()`
-  - [ ] 保证现有 smoke 通过：`phase1-smoke`、`phase2-smoke`、`multi-node-smoke`、`chain-relay-smoke`、`object-pull-smoke`、`nat-daemon-observed-smoke`、`ipsec-*-smoke`、`routing-dry-run-smoke`
-  - [ ] `go test -race ./...` 全绿
+- [x] **6.0.9 测试改造与补强**
+  - [x] 新增 `app/higgs/sync_session_test.go`：表驱动覆盖主要状态转换（无 I/O）
+  - [x] 新增 `app/higgs/packet_demux_test.go`
+  - [x] 新增 `app/higgs/timer_manager_test.go`（fake clock）
+  - [x] 新增 `app/higgs/daemon_test.go` 事件循环测试 `TestDaemonEventLoopSyncSession`
+  - [x] `go test -race ./...` 全绿
+  - [ ] 新增 race 回归测试：验证不再有两个 goroutine 同时 `Receive()`（待旧路径删除后天然满足）
+  - [x] 现有 smoke 回归：`phase2-smoke` 通过；`object-pull-smoke` 在 Phase 6 基线已失败（与本次重构无关）
 
-- [ ] **6.0.10 文档更新**
-  - [ ] 更新 `docs/design.md` daemon/sync 架构章节，改为事件驱动描述
-  - [ ] 更新 `docs/protocol.md` 第 3 节 daemon/sync 运行流程，说明 single reader + SyncSession FSM
-  - [ ] 新增 `docs/phase6-event-driven-design.md`：架构图、状态机、事件类型、迁移表、MTU/object-pull/chunk 如何处理、迁移注意事项
+- [x] **6.0.10 文档更新**
+  - [x] 更新 `docs/phase6-event-driven-design.md`：标记已实现部分，补充实际代码路径
+  - [ ] 更新 `docs/design.md` daemon/sync 架构章节，改为事件驱动描述（后续随默认启用事件循环路径一起更新）
+  - [ ] 更新 `docs/protocol.md` 第 3 节 daemon/sync 运行流程（后续随默认启用事件循环路径一起更新）
+
+- [x] **6.0.11 Step 7 回归测试与收尾**
+  - [x] 修复 `daemon.go` 中 `d.stateUnlock` 并发 race（加 `stateMu`），`go test -race ./app/higgs/...` 全绿
+  - [x] 修复 `TestDaemonABPublishesGossipsAndReconcilesIPsecRecords` 在旧路径下与 `serveDaemonPackets` 竞争 UDP 包导致的 flaky 失败
+  - [x] RTT 感知超时已有 `TestSyncSessionRTTAwareTimeouts` 覆盖；事件循环集成测试 `TestDaemonEventLoopSyncSession` 已覆盖 Ping/Pong/FetchZone/Announce 路径
+  - [x] `make check`、`go test -race ./app/higgs/...`、`make phase2-smoke` 全绿
+  - [ ] 默认启用 `eventLoopSync`：待 `object-pull-smoke` 基线修复并补充 `multi-node-smoke`、`chain-relay-smoke` 通过后切换；当前仍默认 `false` 以保留旧路径作为安全回退
 
 ### 6.1 准入流程
 

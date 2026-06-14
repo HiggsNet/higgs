@@ -303,4 +303,3 @@ func buildRouteTestRuntimeWithCapability(t *testing.T, routeCap bool) (*Runtime,
 	}
 	return rt, managed
 }
-

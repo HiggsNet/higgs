@@ -49,7 +49,7 @@ func (*SyncTimerEvent) isSyncEvent() {}
 type PongReceivedEvent struct {
 	PeerID         string
 	Pong           *gossip.Pong
-	MissingZones   []zone.ZonePath    // zones local needs from peer
+	MissingZones   []zone.ZonePath        // zones local needs from peer
 	LocalSnapshots []*gossip.ZoneSnapshot // snapshots for zones peer requested from us
 }
 

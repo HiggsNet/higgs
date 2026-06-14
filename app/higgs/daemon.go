@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -41,6 +42,8 @@ type DaemonService struct {
 	// stateUnlock tracks the unlock function for the stateFile currently locked
 	// by the event loop. It is updated by lockState and setState so that deferred
 	// unlocks always release the correct stateFile pointer after setState swaps it.
+	// stateMu protects stateUnlock and must be held when reading or writing it.
+	stateMu     sync.Mutex
 	stateUnlock func()
 
 	// Test overrides for BIRD routing reconcile.
@@ -905,7 +908,6 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 // matching unlock function in d.stateUnlock. The returned function must be
 // called once to release the lock. It is safe to call when Sync.State is nil.
 func (d *DaemonService) lockState() func() {
-	d.stateUnlock = nil
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		return func() {}
 	}
@@ -913,11 +915,17 @@ func (d *DaemonService) lockState() func() {
 	if d.Sync.State.Network != nil && d.Sync.State.Network.RecordVerifier == nil {
 		configureValidation(d.Sync.State.Network)
 	}
-	d.stateUnlock = d.Sync.State.Unlock
+	fn := d.Sync.State.Unlock
+	d.stateMu.Lock()
+	d.stateUnlock = fn
+	d.stateMu.Unlock()
 	return func() {
-		if d.stateUnlock != nil {
-			d.stateUnlock()
-			d.stateUnlock = nil
+		d.stateMu.Lock()
+		fn := d.stateUnlock
+		d.stateUnlock = nil
+		d.stateMu.Unlock()
+		if fn != nil {
+			fn()
 		}
 	}
 }
@@ -934,9 +942,15 @@ func (d *DaemonService) lockState() func() {
 // event-loop lock before a sub-operation (such as the synchronous syncRound)
 // acquires its own lock.
 func (d *DaemonService) releaseStateLock() {
-	if d != nil && d.stateUnlock != nil {
-		d.stateUnlock()
-		d.stateUnlock = nil
+	if d == nil {
+		return
+	}
+	d.stateMu.Lock()
+	fn := d.stateUnlock
+	d.stateUnlock = nil
+	d.stateMu.Unlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -944,6 +958,8 @@ func (d *DaemonService) setState(state *stateFile) {
 	if d == nil || d.Sync == nil || d.Sync.State == state {
 		return
 	}
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
 	if d.stateUnlock == nil {
 		d.Sync.State = state
 		return

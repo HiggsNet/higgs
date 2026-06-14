@@ -43,9 +43,9 @@ func (r PreflightResult) Errors() []string {
 }
 
 type preflightChecker struct {
-	GOOS      string
-	LookPath  func(string) (string, error)
-	Command   func(context.Context, string, ...string) ([]byte, error)
+	GOOS     string
+	LookPath func(string) (string, error)
+	Command  func(context.Context, string, ...string) ([]byte, error)
 }
 
 // BirdPreflight checks for BIRD binary and ip netns availability.

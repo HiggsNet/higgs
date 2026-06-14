@@ -227,18 +227,18 @@ func findAssignmentForPrefix(ars *AuthorizedRouteSet, z zone.ZonePath, prefix ne
 			if !containsPrefix(entry.Prefix, prefix) {
 				continue
 			}
-                // The assignment must be usable by the announcing zone.
-                // Valid cases:
-                //   1. AssignedTo == z (self-announcement)
-                //   2. AssignedTo is an ancestor of z (z announces a sub-prefix
-                //      assigned to an ancestor)
-                //   3. AssignedTo is a descendant of z AND the assignment record
-                //      itself lives in z (parent aggregate of a child-assigned prefix)
-                assignedToUsable := IsZoneAncestor(entry.AssignedTo, z) ||
-                    (IsZoneAncestor(z, entry.AssignedTo) && entry.Source == z)
-                if assignedToUsable {
-                    return entry
-                }
+			// The assignment must be usable by the announcing zone.
+			// Valid cases:
+			//   1. AssignedTo == z (self-announcement)
+			//   2. AssignedTo is an ancestor of z (z announces a sub-prefix
+			//      assigned to an ancestor)
+			//   3. AssignedTo is a descendant of z AND the assignment record
+			//      itself lives in z (parent aggregate of a child-assigned prefix)
+			assignedToUsable := IsZoneAncestor(entry.AssignedTo, z) ||
+				(IsZoneAncestor(z, entry.AssignedTo) && entry.Source == z)
+			if assignedToUsable {
+				return entry
+			}
 		}
 	}
 	return nil

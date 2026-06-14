@@ -26,7 +26,7 @@ const (
 // It intentionally mirrors transport/ipsec.NetNSSpec so callers can copy
 // the overlay netns config without conversion.
 type NetNSSpec struct {
-	Kind   string `yaml:"kind" json:"kind"`     // "host", "name", or "path"
+	Kind   string `yaml:"kind" json:"kind"` // "host", "name", or "path"
 	Name   string `yaml:"name,omitempty" json:"name,omitempty"`
 	Path   string `yaml:"path,omitempty" json:"path,omitempty"`
 	Create bool   `yaml:"create,omitempty" json:"create,omitempty"`
@@ -115,10 +115,10 @@ type BirdConfig struct {
 	// KernelTableID is the numeric kernel table id, or 0 for the default.
 	KernelTableID uint32
 
-	Kernel         KernelProtocolBlock
-	Babel          BabelProtocolBlock
-	ImportFilters  []FilterBlock
-	ExportFilters  []FilterBlock
+	Kernel        KernelProtocolBlock
+	Babel         BabelProtocolBlock
+	ImportFilters []FilterBlock
+	ExportFilters []FilterBlock
 }
 
 // KernelProtocolBlock describes one "protocol kernel { ... }" block.
