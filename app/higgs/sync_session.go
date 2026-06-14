@@ -410,6 +410,13 @@ func (s *SyncSession) onPacketQuietTimeout(e *PacketQuietTimeoutEvent, now time.
 				SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
 			}, nil
 		}
+	case SyncSessionFetchingLocal:
+		// We already sent the zones the peer requested and have no missing
+		// zones of our own. If the UDP path has been quiet, the peer has had
+		// enough time to ask for more; complete the round so a new session
+		// can be started to pull updates from the peer.
+		s.State = SyncSessionCompleted
+		return []SyncAction{SaveStateAction{Reason: fmt.Sprintf("sync completed after quiet timeout from %s", e.PeerID)}}, nil
 	}
 	return nil, nil
 }

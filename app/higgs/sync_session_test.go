@@ -272,6 +272,35 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	assertActionTypes(t, actions, []string{"ApplySnapshotAction", "SaveStateAction"})
 }
 
+func TestSyncSessionFetchingLocalCompletesOnQuietTimeout(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
+	snap := &gossip.ZoneSnapshot{Zone: "catofes."}
+
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: local}, now)
+	now = now.Add(10 * time.Millisecond)
+
+	_, _ = s.OnEvent(&PongReceivedEvent{
+		PeerID:         "peer-a",
+		Pong:           &gossip.Pong{Zones: local, FetchZones: []zone.ZonePath{"catofes."}},
+		MissingZones:   nil,
+		LocalSnapshots: []*gossip.ZoneSnapshot{snap},
+	}, now)
+	if s.State != SyncSessionFetchingLocal {
+		t.Fatalf("expected state fetching_local, got %s", s.State)
+	}
+
+	actions, err := s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionCompleted {
+		t.Fatalf("expected state completed, got %s", s.State)
+	}
+	assertActionTypes(t, actions, []string{"SaveStateAction"})
+}
+
 func TestSyncSessionRoundTimeout(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)

@@ -122,6 +122,7 @@ stateDiagram-v2
     end note
 
     FetchingLocal --> FetchingLocal : FetchZoneReceived
+    FetchingLocal --> Completed : PacketQuietTimeout
 
     ObjectPulling --> AwaitingAnnounce : ObjectPullResultEvent{ok}
     ObjectPulling --> Completed : ObjectPullResultEvent{ok}
@@ -153,7 +154,7 @@ stateDiagram-v2
   - 第一静默期（`PacketQuietTimeout`）满后仍有缺失 → `ObjectPulling`，走异步 TCP object pull；
   - 第二静默期仍无进展或 `RoundTimeoutEvent` 触发 → `Failed`。
 - `ObjectPulling` 成功 → 回到 `AwaitingAnnounce` 或 `Completed`；失败 → `ChunkFallback`，改走 UDP chunk 回退。
-- `FetchingLocal` 只负责“对端向本节点要数据”，收到新的 `FETCH_ZONE` 就继续发送 `ANNOUNCE`，不影响本端拉取流程。
+- `FetchingLocal` 只负责“对端向本节点要数据”，收到新的 `FETCH_ZONE` 就继续发送 `ANNOUNCE`；当 `PacketQuietTimeout` 触发且本端没有缺失 zone 时，会话进入 `Completed`，以便下一轮同步重新从对端拉取更新。
 
 ### 3.4 状态转换表
 
@@ -172,6 +173,7 @@ stateDiagram-v2
 | `ObjectPullResultEvent{ok}` | `ObjectPulling` | `AwaitingAnnounce` | apply snapshot；若还有 pending 继续等 |
 | `ObjectPullResultEvent{err}` | `ObjectPulling` | `ChunkFallback` | 发送 `FETCH_ZONE{ChunkFallback:true}` |
 | `ObjectChunkEvent{complete}` | `ChunkFallback` | `AwaitingAnnounce` / `Completed` | 重组完成、apply |
+| `PacketQuietTimeout` | `FetchingLocal` | `Completed` | 已发送对端请求的 zones 且 UDP 静默期满，结束本轮 |
 | `PacketQuietTimeout` (2nd+) | `AwaitingAnnounce` / `ObjectPulling` / `ChunkFallback` | `Completed` / `Failed` | 第二静默期结束（等待 object-pull 后的迟到 UDP / chunk），结束本轮 |
 | `RoundTimeoutEvent` | 任意活跃状态 | `Failed` | 记录 backoff、last_error、save state |
 | `UnsolicitedPacketEvent` | 任意 | 不变 | 路由到通用 `handlePacketUntil` |
