@@ -1064,8 +1064,9 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 		return sr.clearPublishedEndpointRecord()
 	}
 	port := listenPortFromAddr(config.ListenAddr)
-	endpoints, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
-	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(config.Reflectors)) > 0 {
+	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
+	endpoints, reflectorErr := collectSyncLocalEndpoints(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
+	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
 		sr.logger().Warn("endpoint", "reflector_failed", map[string]any{"error": reflectorErr})
 	}
 	now := sr.now()
@@ -1102,6 +1103,70 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 		return err
 	}
 	return sr.saveState()
+}
+
+// filterEndpointDiscoveryInputs returns the advertise addresses and reflectors
+// to use when publishing local endpoints, respecting the endpoint_discovery
+// configuration. loopback_only suppresses public IP reflectors and interface
+// scans, keeping only loopback addresses and explicit loopback advertise_addrs.
+// advertise_only uses only explicit advertise_addrs.
+//
+// When endpoint_discovery is unset, the daemon auto-detects loopback-only test
+// deployments: if every configured bootstrap peer uses a loopback address, it
+// behaves like loopback_only to avoid publishing unreachable public IPs that
+// would starve loopback bootstrap paths.
+func filterEndpointDiscoveryInputs(config *syncConfigFile, port uint16) (advertiseAddrs, reflectors []string) {
+	mode := strings.ToLower(strings.TrimSpace(config.EndpointDiscovery))
+	if mode == "" && allBootstrapAddrsLoopback(config.Bootstrap) {
+		mode = "loopback_only"
+	}
+	switch mode {
+	case "advertise_only":
+		return config.AdvertiseAddrs, nil
+	case "loopback_only":
+		for _, addr := range config.AdvertiseAddrs {
+			if host, _, err := net.SplitHostPort(addr); err == nil && isLoopbackIP(host) {
+				advertiseAddrs = append(advertiseAddrs, addr)
+			}
+		}
+		// Derive loopback endpoints from listen_addr. If listen_addr is not a
+		// specific loopback address, fall back to the well-known loopback IPs.
+		if host, _, err := net.SplitHostPort(config.ListenAddr); err == nil && isLoopbackIP(host) {
+			advertiseAddrs = append(advertiseAddrs, net.JoinHostPort(host, strconv.Itoa(int(port))))
+		} else {
+			advertiseAddrs = append(advertiseAddrs, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+			advertiseAddrs = append(advertiseAddrs, net.JoinHostPort("::1", strconv.Itoa(int(port))))
+		}
+		return advertiseAddrs, nil
+	case "", "all":
+		return config.AdvertiseAddrs, config.Reflectors
+	default:
+		return config.AdvertiseAddrs, config.Reflectors
+	}
+}
+
+func allBootstrapAddrsLoopback(peers []syncConfigPeer) bool {
+	if len(peers) == 0 {
+		return false
+	}
+	for _, peer := range peers {
+		if peer.Addr == "" {
+			return false
+		}
+		host, _, err := net.SplitHostPort(peer.Addr)
+		if err != nil {
+			host = peer.Addr
+		}
+		if !isLoopbackIP(host) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLoopbackIP(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (sr *SyncRuntime) clearPublishedEndpointRecord() error {
@@ -1203,18 +1268,7 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 		if len(entries) == 0 {
 			continue
 		}
-		var addrs []*net.UDPAddr
-		for _, entry := range sortedEndpointEntriesForDial(entries) {
-			addr, err := entry.UDPAddr()
-			if err != nil {
-				continue
-			}
-			addrs = appendUDPAddrOnce(addrs, addr)
-		}
-		addrs = appendRecentSuccessfulDiscoveredAddr(addrs, state.SyncPeers[peerID], config.EndpointGrace, now)
-		if bootstrapAddr := bootstrapPeers[peerID]; bootstrapAddr != nil {
-			addrs = appendUDPAddrOnce(addrs, bootstrapAddr)
-		}
+		addrs := buildPeerAddrs(peerID, entries, bootstrapPeers[peerID], state.SyncPeers[peerID], config.EndpointGrace, config.EndpointSourceOrder, now)
 		if len(addrs) == 0 {
 			continue
 		}
@@ -1265,6 +1319,81 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 			sr.logger().Warn("endpoint", "discovered_peer_save_failed", map[string]any{"error": err})
 		}
 	}
+}
+
+// buildPeerAddrs merges bootstrap and discovered endpoint addresses according
+// to the configured source order. Bootstrap addresses are never displaced by
+// discovered addresses of a lower-priority source, preventing automatic
+// endpoint discovery from overriding administrator-configured loopback/bootstrap
+// addresses.
+func buildPeerAddrs(peerID string, entries []gossip.EndpointEntry, bootstrapAddr *net.UDPAddr, peerState syncPeerState, grace time.Duration, sourceOrder []string, now time.Time) []*net.UDPAddr {
+	if len(sourceOrder) == 0 {
+		sourceOrder = []string{"advertise", "bootstrap", "reflector", "interface"}
+	}
+
+	bySource := make(map[string][]*net.UDPAddr)
+	for _, entry := range sortedEndpointEntriesForDial(entries) {
+		addr, err := entry.UDPAddr()
+		if err != nil {
+			continue
+		}
+		src := strings.ToLower(entry.Source)
+		if src == "" {
+			src = "interface"
+		}
+		bySource[src] = appendUDPAddrOnce(bySource[src], addr)
+	}
+	if recent := appendRecentSuccessfulDiscoveredAddr(nil, peerState, grace, now); len(recent) > 0 {
+		// Recent successful discovered addresses are treated as a high-priority
+		// discovered source so they are not lost during churn.
+		bySource["recent"] = recent
+	}
+
+	var addrs []*net.UDPAddr
+	seen := make(map[string]bool)
+	for _, source := range sourceOrder {
+		switch source {
+		case "bootstrap":
+			if bootstrapAddr != nil && !seen[bootstrapAddr.String()] {
+				copied := *bootstrapAddr
+				addrs = append(addrs, &copied)
+				seen[bootstrapAddr.String()] = true
+			}
+		case "recent":
+			for _, addr := range bySource["recent"] {
+				if !seen[addr.String()] {
+					addrs = append(addrs, addr)
+					seen[addr.String()] = true
+				}
+			}
+		default:
+			for _, addr := range bySource[source] {
+				if !seen[addr.String()] {
+					addrs = append(addrs, addr)
+					seen[addr.String()] = true
+				}
+			}
+		}
+	}
+
+	// If a configured source order omitted bootstrap or recent, still append
+	// any remaining unseen addresses at the end as a safety net.
+	for _, source := range []string{"recent", "bootstrap", "advertise", "reflector", "interface"} {
+		if source == "bootstrap" && bootstrapAddr != nil && !seen[bootstrapAddr.String()] {
+			copied := *bootstrapAddr
+			addrs = append(addrs, &copied)
+			seen[bootstrapAddr.String()] = true
+			continue
+		}
+		for _, addr := range bySource[source] {
+			if !seen[addr.String()] {
+				addrs = append(addrs, addr)
+				seen[addr.String()] = true
+			}
+		}
+	}
+
+	return addrs
 }
 
 func appendRecentSuccessfulDiscoveredAddr(addrs []*net.UDPAddr, peerState syncPeerState, grace time.Duration, now time.Time) []*net.UDPAddr {
@@ -1347,6 +1476,11 @@ func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeo
 		recordPeerSyncAt(sr.State, peerID, err, sr.now())
 		if err != nil {
 			recordObservedPathFailure(sr.State, peerID)
+			if sr.Transport != nil {
+				if lastAddr := sr.Transport.LastSendAddr(peerID); lastAddr != nil {
+					sr.Transport.RecordAddrFailure(peerID, lastAddr)
+				}
+			}
 		}
 		if saveErr := sr.saveState(); err == nil && saveErr != nil {
 			err = saveErr

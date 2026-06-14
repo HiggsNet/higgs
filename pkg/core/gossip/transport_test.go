@@ -337,3 +337,138 @@ func TestReceiveTimeoutIsNotLogged(t *testing.T) {
 		t.Fatalf("timeout error was logged, want no log")
 	}
 }
+
+func TestSendPrefersSuccessfulAddrAndDeprioritizesBackoff(t *testing.T) {
+	now := time.Unix(1000, 0)
+	transport := &Transport{
+		clock:           func() time.Time { return now },
+		maxMessageBytes: DefaultMaxMessage,
+	}
+	transport.SetPeerAddrs("peer-a", []*net.UDPAddr{
+		{IP: net.ParseIP("203.0.113.10"), Port: 1234},
+		{IP: net.ParseIP("127.0.0.1"), Port: 1234},
+	})
+
+	// Initially both addresses are unknown; order is preserved.
+	addrs := transport.sendAddrsFor("peer-a")
+	if len(addrs) != 2 {
+		t.Fatalf("sendAddrsFor = %d addrs, want 2", len(addrs))
+	}
+
+	// Mark the public address as failing.
+	transport.RecordAddrFailure("peer-a", &net.UDPAddr{IP: net.ParseIP("203.0.113.10"), Port: 1234})
+	transport.RecordAddrFailure("peer-a", &net.UDPAddr{IP: net.ParseIP("203.0.113.10"), Port: 1234})
+
+	addrs = transport.sendAddrsFor("peer-a")
+	if addrs[0].IP.String() != "127.0.0.1" {
+		t.Fatalf("first addr after backoff = %v, want 127.0.0.1", addrs[0])
+	}
+
+	// Mark loopback as successful; it should stay at the front.
+	transport.RecordAddrSuccess("peer-a", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234})
+	addrs = transport.sendAddrsFor("peer-a")
+	if addrs[0].IP.String() != "127.0.0.1" {
+		t.Fatalf("first addr after success = %v, want 127.0.0.1", addrs[0])
+	}
+
+	// After the backoff expires, the public address moves back up.
+	now = now.Add(addrFailureBackoffMax).Add(time.Second)
+	addrs = transport.sendAddrsFor("peer-a")
+	if addrs[0].IP.String() != "127.0.0.1" {
+		t.Fatalf("first addr after backoff expiry should still prefer successful addr")
+	}
+}
+
+func TestSendOrdersByReachabilityRank(t *testing.T) {
+	now := time.Unix(1000, 0)
+	transport := &Transport{
+		clock:           func() time.Time { return now },
+		maxMessageBytes: DefaultMaxMessage,
+	}
+	transport.SetPeerAddrs("peer-a", []*net.UDPAddr{
+		{IP: net.ParseIP("127.0.0.1"), Port: 1000},
+		{IP: net.ParseIP("127.0.0.1"), Port: 1001},
+		{IP: net.ParseIP("127.0.0.1"), Port: 1002},
+	})
+
+	addrs := transport.sendAddrsFor("peer-a")
+	if len(addrs) != 3 {
+		t.Fatalf("sendAddrsFor = %d addrs, want 3", len(addrs))
+	}
+
+	// Mark the second address as recently successful; it should move to front.
+	transport.RecordAddrSuccess("peer-a", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1001})
+	addrs = transport.sendAddrsFor("peer-a")
+	if addrs[0].Port != 1001 {
+		t.Fatalf("first addr = %v, want port 1001", addrs[0])
+	}
+}
+
+func TestReceiveRecordsAddrSuccess(t *testing.T) {
+	now := time.Unix(1000, 0)
+	transport, err := Listen(Config{
+		PeerID:     "node-b",
+		ListenAddr: "127.0.0.1:0",
+		KnownPeers: map[string]*net.UDPAddr{
+			"node-a": nil,
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transport.Close()
+
+	message := &Message{
+		Version:   WireVersion,
+		Type:      MessagePing,
+		PeerID:    "node-a",
+		Nonce:     1,
+		Timestamp: now.Unix(),
+		Ping:      &Ping{},
+	}
+	if err := sendRawMessage(transport.LocalAddr(), message); err != nil {
+		t.Fatalf("sendRawMessage: %v", err)
+	}
+	packet, err := transport.Receive()
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if transport.AddrFailureCount("node-a", packet.Addr) != 0 {
+		t.Fatalf("failure count after receive = %d, want 0", transport.AddrFailureCount("node-a", packet.Addr))
+	}
+}
+
+func TestLastSendAddr(t *testing.T) {
+	transportA, err := Listen(Config{PeerID: "node-a", ListenAddr: "127.0.0.1:0"})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transportA.Close()
+	transportB, err := Listen(Config{PeerID: "node-b", ListenAddr: "127.0.0.1:0"})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transportB.Close()
+
+	transportA.SetPeerAddrs("node-b", []*net.UDPAddr{transportB.LocalAddr()})
+	if err := transportA.Send("node-b", &Message{Type: MessagePing, Ping: &Ping{}}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got := transportA.LastSendAddr("node-b"); got == nil || got.String() != transportB.LocalAddr().String() {
+		t.Fatalf("LastSendAddr = %v, want %v", got, transportB.LocalAddr())
+	}
+}
+
+func TestRemovePeerClearsAddrState(t *testing.T) {
+	transport := &Transport{clock: time.Now}
+	transport.SetPeerAddrs("peer-a", []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: 1234}})
+	transport.RecordAddrSuccess("peer-a", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234})
+	transport.RemovePeer("peer-a")
+	if transport.LastSendAddr("peer-a") != nil {
+		t.Fatalf("LastSendAddr after RemovePeer should be nil")
+	}
+}

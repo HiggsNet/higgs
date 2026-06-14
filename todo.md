@@ -848,28 +848,29 @@
 
 **治本方案：**
 
-- [ ] **6.0.12.1 `Transport.Send()` 地址尝试可达性反馈**
-  - 问题：UDP `WriteToUDP` 对无监听者的目标地址也能返回成功，无法区分"包被收到"和"包被路由丢弃"
-  - 方向：不要求 `Send()` 层面做可达性判断（UDP 天然无连接），改为在 `SyncSession` 层面基于实际响应（Pong/Announce）来标记地址成功/失败
-  - `Transport` 增加 per-peer per-address 的成功/失败计数与 backoff：某个地址连续 N 次无响应后降低优先级，让后续尝试 fallback 到下一地址
-  - 地址尝试顺序改为 round-robin 或 success-weighted：不要永远卡在第一个"看起来成功"但实际不可达的地址上
-  - 长期无响应的 discovered 地址自动降级到列表末尾，让 bootstrap 地址有机会被尝试
+- [x] **6.0.12.1 `Transport.Send()` 地址尝试可达性反馈**
+  - `Transport` 增加 per-peer per-address 的 `addrState`（成功/失败计数、last success/failure、backoff until）
+  - `Receive()` 对通过验证的包调用 `RecordAddrSuccess(peerID, sourceAddr)`
+  - 上层 sync round / SyncSession 完成或超时时调用 `RecordAddrFailure(peerID, LastSendAddr())`
+  - `Send()` 按状态排序候选地址：recent success > unknown > 有失败记录 > backoff，避免永远卡在第一个"看起来成功"但实际不可达的地址
+  - 连续失败 2 次后进入指数 backoff（500ms ~ 30s），超时或 hash 变化后恢复
 
-- [ ] **6.0.12.2 `updateDiscoveredPeers()` 地址合并策略改进**
-  - 当前行为：`SetPeerAddrs` 完全替换地址列表，bootstrap 地址追加在末尾
-  - 改进方向：支持配置化的地址来源优先级（`advertise > bootstrap > discovered > reflector > local`），但同类型来源不互相覆盖
-  - 对 loopback/私有地址的 discovered endpoint，在不明确知道网络拓扑时不自动提升到 bootstrap 地址之前
-  - 保留 bootstrap 地址至少与 discovered 地址同等优先级，不因自动发现而完全架空管理员显式配置
+- [x] **6.0.12.2 `updateDiscoveredPeers()` 地址合并策略改进**
+  - 新增 `endpoint_source_order` 配置，默认 `bootstrap, advertise, reflector, interface`
+  - `buildPeerAddrs` 按来源分组后按配置顺序与 bootstrap 地址合并，同类型来源内部保留原有优先级/last observed 排序
+  - bootstrap 地址不再被追加到列表末尾，默认优先级高于 discovered public/reflector/interface 地址
+  - 最近成功过的 discovered 地址作为 `recent` 源保留，避免正常 churn 时丢失可用路径
 
-- [ ] **6.0.12.3 在单机 loopback 测试场景中抑制公网 endpoint 发布**
-  - daemon 在检测到所有 bootstrap peer 都是 loopback 地址时，自动跳过 public IP reflector 查询和 interface 扫描，只发布 `listen_addr`
-  - 或提供 `endpoint_discovery: loopback_only` 等配置选项，让测试/开发环境显式关闭公网发现
-  - `publish_endpoints: false` 已经可以实现，但粒度较粗（连 `listen_addr` 也不发布），后续可细化为 `endpoint_sources: [advertise]` 等形式
+- [x] **6.0.12.3 在单机 loopback 测试场景中抑制公网 endpoint 发布**
+  - 新增 `endpoint_discovery` 配置：`loopback_only` / `advertise_only` / `all`
+  - `loopback_only` 只使用 loopback `listen_addr` 与 loopback `advertise_addrs`，跳过 reflector 和 interface scan
+  - `advertise_only` 只使用显式 `advertise_addrs`
+  - 未配置时自动检测：当所有 bootstrap peer 都是 loopback 地址时，默认按 `loopback_only` 处理，避免多公网接口测试机把包发到不可达公网地址
 
-- [ ] **6.0.12.4 集成测试环境隔离**
-  - `make chain-relay-smoke` 已通过 `publish_endpoints: false` 修复
-  - 复查其他 smoke 是否需要同样的保护：`phase1-smoke`、`phase2-smoke`、`multi-node-smoke` 等所有纯 loopback 测试
-  - 若后续 smoke 需要同时验证 endpoint discovery 功能，应使用独立的 `discovery-smoke` 等专项测试，普通测试保持 loopback-only
+- [x] **6.0.12.4 集成测试环境隔离**
+  - 依赖自动 loopback-only 检测，`phase1-smoke`、`phase2-smoke`、`multi-node-smoke` 等纯 loopback 测试默认不再发布公网 endpoint
+  - `chain-relay-smoke` 已移除 `publish_endpoints: false` 治标配置，改由自动 loopback-only 检测保护
+  - endpoint discovery 专项能力仍由 `discovery-smoke` / `reflector-smoke` 覆盖
 
 ### 6.1 准入流程
 

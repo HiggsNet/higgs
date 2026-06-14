@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -457,6 +458,13 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 	peerID := session.PeerID
 	d.timerManager.CancelAll(peerID)
 	recordPeerSyncAt(d.Sync.State, peerID, session.lastError, d.Sync.now())
+	// Only mark the last-used address as failing for timeout-like errors; do
+	// not penalize the address for internal/event handling failures.
+	if session.lastError != nil && d.Sync.Transport != nil && strings.Contains(session.lastError.Error(), "timeout") {
+		if lastAddr := d.Sync.Transport.LastSendAddr(peerID); lastAddr != nil {
+			d.Sync.Transport.RecordAddrFailure(peerID, lastAddr)
+		}
+	}
 	if session.State == SyncSessionCompleted && changed {
 		if d.Sync.Transport != nil {
 			d.Sync.updateDiscoveredPeers()

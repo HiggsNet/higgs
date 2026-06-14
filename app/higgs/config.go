@@ -47,6 +47,8 @@ type appConfig struct {
 	EndpointTTL          time.Duration
 	EndpointGrace        time.Duration
 	PublishEndpoints     bool
+	EndpointDiscovery    string
+	EndpointSourceOrder  []string
 	FilterPrivateIPv4    bool
 	Overlay              overlayConfig
 	IPsec                ipsecConfig
@@ -87,12 +89,14 @@ type configYAML struct {
 	Reflector      string           `yaml:"reflector"`
 	Reflectors     configStringList `yaml:"reflectors"`
 
-	ReflectorInterval   string `yaml:"reflector_interval"`
-	ReflectorTimeout    string `yaml:"reflector_timeout"`
-	EndpointTTL         string `yaml:"endpoint_ttl"`
-	EndpointGrace       string `yaml:"endpoint_grace"`
-	EndpointGracePeriod string `yaml:"endpoint_grace_period"`
-	PublishEndpoints    *bool  `yaml:"publish_endpoints"`
+	ReflectorInterval   string           `yaml:"reflector_interval"`
+	ReflectorTimeout    string           `yaml:"reflector_timeout"`
+	EndpointTTL         string           `yaml:"endpoint_ttl"`
+	EndpointGrace       string           `yaml:"endpoint_grace"`
+	EndpointGracePeriod string           `yaml:"endpoint_grace_period"`
+	PublishEndpoints    *bool            `yaml:"publish_endpoints"`
+	EndpointDiscovery   string           `yaml:"endpoint_discovery"`
+	EndpointSourceOrder configStringList `yaml:"endpoint_source_order"`
 
 	FilterPrivateIPv4 bool                     `yaml:"filter_private_ipv4"`
 	Overlay           overlayDefaultsYAML      `yaml:"overlay"`
@@ -211,16 +215,17 @@ func loadAppConfig() (*appConfig, error) {
 
 func defaultAppConfig() *appConfig {
 	return &appConfig{
-		DataDir:           ".",
-		ListenPort:        gossip.DefaultPort,
-		MaxMessageBytes:   gossip.DefaultMaxMessage,
-		MaxSyncZones:      gossip.DefaultSyncLimits().MaxZones,
-		MaxSyncRecords:    gossip.DefaultSyncLimits().MaxRecords,
-		ReflectorInterval: 5 * time.Minute,
-		ReflectorTimeout:  3 * time.Second,
-		EndpointTTL:       time.Hour,
-		EndpointGrace:     gossip.DefaultEndpointGrace,
-		PublishEndpoints:  true,
+		DataDir:             ".",
+		ListenPort:          gossip.DefaultPort,
+		MaxMessageBytes:     gossip.DefaultMaxMessage,
+		MaxSyncZones:        gossip.DefaultSyncLimits().MaxZones,
+		MaxSyncRecords:      gossip.DefaultSyncLimits().MaxRecords,
+		ReflectorInterval:   5 * time.Minute,
+		ReflectorTimeout:    3 * time.Second,
+		EndpointTTL:         time.Hour,
+		EndpointGrace:       gossip.DefaultEndpointGrace,
+		PublishEndpoints:    true,
+		EndpointSourceOrder: []string{"advertise", "bootstrap", "reflector", "interface"},
 		Overlay: overlayConfig{
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
@@ -383,6 +388,12 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	}
 	if file.PublishEndpoints != nil {
 		config.PublishEndpoints = *file.PublishEndpoints
+	}
+	if file.EndpointDiscovery != "" {
+		config.EndpointDiscovery = file.EndpointDiscovery
+	}
+	if len(file.EndpointSourceOrder) > 0 {
+		config.EndpointSourceOrder = normalizeEndpointSourceOrder([]string(file.EndpointSourceOrder))
 	}
 	config.FilterPrivateIPv4 = file.FilterPrivateIPv4
 	if netnsConfigured(file.IPsec.DefaultNetNS) {
@@ -711,6 +722,24 @@ func parseConfigDuration(value, name string) (time.Duration, error) {
 	return d, nil
 }
 
+func normalizeEndpointSourceOrder(order []string) []string {
+	valid := map[string]bool{"bootstrap": true, "advertise": true, "reflector": true, "interface": true}
+	seen := make(map[string]bool)
+	var out []string
+	for _, s := range order {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" || !valid[s] || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return []string{"advertise", "bootstrap", "reflector", "interface"}
+	}
+	return out
+}
+
 func durationSeconds(d time.Duration) int {
 	if d <= 0 {
 		return 0
@@ -794,6 +823,8 @@ func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFil
 		EndpointTTL:            config.EndpointTTL,
 		EndpointGrace:          config.EndpointGrace,
 		DisableEndpointPublish: !config.PublishEndpoints,
+		EndpointDiscovery:      config.EndpointDiscovery,
+		EndpointSourceOrder:    config.EndpointSourceOrder,
 		FilterPrivateIPv4:      config.FilterPrivateIPv4,
 	}
 }

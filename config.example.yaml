@@ -24,6 +24,23 @@ reflector_timeout: 3s
 endpoint_ttl: 1h
 endpoint_grace: 10m
 
+# Endpoint discovery mode controls which local addresses are published as signed
+# sync/endpoint/udp records:
+#   all (default)         - use advertise_addrs, reflectors, and interface scan
+#   loopback_only         - only loopback listen_addr / loopback advertise_addrs
+#   advertise_only        - only explicit advertise_addrs
+# When unset and all bootstrap peers are loopback, the daemon auto-detects a
+# loopback-only deployment and behaves like loopback_only.
+endpoint_discovery: all
+
+# Address source priority used when merging bootstrap addresses with discovered
+# endpoint records for outbound gossip. Default: advertise, bootstrap, reflector, interface.
+# endpoint_source_order:
+#   - advertise
+#   - bootstrap
+#   - reflector
+#   - interface
+
 # When true, RFC1918 IPv4 addresses (10.x, 172.16.x, 192.168.x) discovered
 # from local network interfaces are excluded from the advertised endpoint list.
 filter_private_ipv4: false

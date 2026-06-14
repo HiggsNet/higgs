@@ -296,6 +296,8 @@ type syncConfigFile struct {
 	EndpointTTL            time.Duration    `json:"endpoint_ttl,omitempty"`
 	EndpointGrace          time.Duration    `json:"endpoint_grace,omitempty"`
 	DisableEndpointPublish bool             `json:"disable_endpoint_publish,omitempty"`
+	EndpointDiscovery      string           `json:"endpoint_discovery,omitempty"`
+	EndpointSourceOrder    []string         `json:"endpoint_source_order,omitempty"`
 	FilterPrivateIPv4      bool             `json:"filter_private_ipv4,omitempty"`
 }
 

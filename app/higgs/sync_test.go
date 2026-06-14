@@ -1274,3 +1274,127 @@ func skipRestrictedSocket(t *testing.T, err error) {
 		t.Skipf("UDP sockets are not permitted in this environment: %v", err)
 	}
 }
+
+func TestBuildPeerAddrsPutsAdvertiseBeforeBootstrap(t *testing.T) {
+	now := time.Now()
+	bootstrap := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}
+	entries := []gossip.EndpointEntry{
+		{Address: "203.0.113.10", Port: 33434, Source: "reflector", Priority: 50},
+		{Address: "10.0.0.5", Port: 33434, Source: "interface", Priority: 10},
+		{Address: "198.51.100.2", Port: 33434, Source: "advertise", Priority: 100},
+	}
+
+	addrs := buildPeerAddrs("peer-a", entries, bootstrap, syncPeerState{}, time.Minute, nil, now)
+	if len(addrs) != 4 {
+		t.Fatalf("addrs = %d, want 4", len(addrs))
+	}
+	if addrs[0].String() != "198.51.100.2:33434" {
+		t.Fatalf("first addr = %v, want advertise 198.51.100.2:33434", addrs[0])
+	}
+	if addrs[1].String() != bootstrap.String() {
+		t.Fatalf("second addr = %v, want bootstrap %v", addrs[1], bootstrap)
+	}
+}
+
+func TestBuildPeerAddrsRespectsSourceOrder(t *testing.T) {
+	now := time.Now()
+	bootstrap := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}
+	entries := []gossip.EndpointEntry{
+		{Address: "203.0.113.10", Port: 33434, Source: "reflector"},
+		{Address: "198.51.100.2", Port: 33434, Source: "advertise"},
+	}
+
+	addrs := buildPeerAddrs("peer-a", entries, bootstrap, syncPeerState{}, time.Minute, []string{"bootstrap", "advertise", "reflector"}, now)
+	if len(addrs) != 3 {
+		t.Fatalf("addrs = %d, want 3", len(addrs))
+	}
+	if addrs[0].String() != bootstrap.String() {
+		t.Fatalf("first addr = %v, want bootstrap", addrs[0])
+	}
+	if addrs[1].String() != "198.51.100.2:33434" {
+		t.Fatalf("second addr = %v, want advertise 198.51.100.2:33434", addrs[1])
+	}
+}
+
+func TestFilterEndpointDiscoveryInputsLoopbackOnly(t *testing.T) {
+	config := &syncConfigFile{
+		ListenAddr:        ":33434",
+		AdvertiseAddrs:    []string{"127.0.0.1:33434", "203.0.113.10:33434"},
+		Reflectors:        []string{"auto"},
+		EndpointDiscovery: "loopback_only",
+	}
+	advertise, reflectors := filterEndpointDiscoveryInputs(config, 33434)
+	if len(reflectors) != 0 {
+		t.Fatalf("reflectors = %v, want empty", reflectors)
+	}
+	foundPublic := false
+	for _, addr := range advertise {
+		if strings.Contains(addr, "203.0.113.10") {
+			foundPublic = true
+		}
+	}
+	if foundPublic {
+		t.Fatalf("public advertise addr should be filtered in loopback_only: %v", advertise)
+	}
+	if len(advertise) == 0 {
+		t.Fatalf("expected at least one loopback advertise addr")
+	}
+}
+
+func TestFilterEndpointDiscoveryInputsAdvertiseOnly(t *testing.T) {
+	config := &syncConfigFile{
+		ListenAddr:        "127.0.0.1:33434",
+		AdvertiseAddrs:    []string{"203.0.113.10:33434"},
+		Reflectors:        []string{"auto"},
+		EndpointDiscovery: "advertise_only",
+	}
+	advertise, reflectors := filterEndpointDiscoveryInputs(config, 33434)
+	if len(reflectors) != 0 {
+		t.Fatalf("reflectors = %v, want empty", reflectors)
+	}
+	if len(advertise) != 1 || advertise[0] != "203.0.113.10:33434" {
+		t.Fatalf("advertise = %v, want [203.0.113.10:33434]", advertise)
+	}
+}
+
+func TestFilterEndpointDiscoveryInputsAutoLoopbackBootstrap(t *testing.T) {
+	config := &syncConfigFile{
+		ListenAddr: ":33434",
+		Bootstrap: []syncConfigPeer{
+			{ID: "peer-a", Addr: "127.0.0.1:33435"},
+		},
+		AdvertiseAddrs: []string{"203.0.113.10:33434"},
+		Reflectors:     []string{"auto"},
+	}
+	advertise, reflectors := filterEndpointDiscoveryInputs(config, 33434)
+	if len(reflectors) != 0 {
+		t.Fatalf("auto loopback-only should suppress reflectors")
+	}
+	foundPublic := false
+	for _, addr := range advertise {
+		if strings.Contains(addr, "203.0.113.10") {
+			foundPublic = true
+		}
+	}
+	if foundPublic {
+		t.Fatalf("auto loopback-only should filter public advertise addrs: %v", advertise)
+	}
+}
+
+func TestFilterEndpointDiscoveryInputsAutoPublicBootstrap(t *testing.T) {
+	config := &syncConfigFile{
+		ListenAddr: ":33434",
+		Bootstrap: []syncConfigPeer{
+			{ID: "peer-a", Addr: "203.0.113.10:33435"},
+		},
+		AdvertiseAddrs: []string{"203.0.113.10:33434"},
+		Reflectors:     []string{"auto"},
+	}
+	advertise, reflectors := filterEndpointDiscoveryInputs(config, 33434)
+	if len(reflectors) == 0 {
+		t.Fatalf("auto with public bootstrap should keep reflectors")
+	}
+	if len(advertise) != 1 || advertise[0] != "203.0.113.10:33434" {
+		t.Fatalf("advertise = %v, want [203.0.113.10:33434]", advertise)
+	}
+}

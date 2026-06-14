@@ -548,6 +548,26 @@ signed endpoint record 表示长期、可传播、由 Zone 签名的可达地址
 
 纯 NAT/outbound-only 节点可以设置 `publish_endpoints: false`，避免把 interface scan 或 reflector 候选发布成 signed direct endpoint。
 
+对于单机 loopback 测试或明确只想发布本地地址的场景，可以使用更细粒度的 `endpoint_discovery` 控制：
+
+- `endpoint_discovery: all`（默认）：使用 `advertise_addrs`、公网 reflector 和本机网卡扫描。
+- `endpoint_discovery: loopback_only`：只发布 loopback 的 `listen_addr` 和 loopback 的 `advertise_addrs`，跳过 reflector 和网卡扫描。
+- `endpoint_discovery: advertise_only`：只发布显式配置的 `advertise_addrs`。
+
+当配置未设置 `endpoint_discovery` 且所有 `bootstrap` peer 都是 loopback 地址时，daemon 会自动按 `loopback_only` 处理，避免在多公网接口机器上把包错发到不可达的公网地址。
+
+发送端地址选择也可通过 `endpoint_source_order` 调整，例如把管理员显式配置的 bootstrap 地址排在自动发现的地址之前：
+
+```yaml
+endpoint_source_order:
+  - bootstrap
+  - advertise
+  - reflector
+  - interface
+```
+
+`Transport.Send()` 会基于实际收到响应的地址记录成功/失败状态，连续无响应的地址会短暂 backoff，让后续尝试有机会 fallback 到 bootstrap 或其他候选地址。
+
 daemon 收到已准入 peer 的 UDP 包后，会先完成传输层 replay/quota/wire 校验，再由上层按 trust chain 和 record/snapshot 签名验证消息内容。处理成功后，packet 的源地址会被记录为本地短期 `observed_addr`，用于回复、后续 outbound sync 和周期 keepalive/PING。这个地址只保存在本节点 peer state / runtime path table 中，不会写入对外传播的 signed endpoint record。
 
 可以用下面命令排查 NAT path：

@@ -42,12 +42,32 @@ type Transport struct {
 	lastSeenMu      sync.RWMutex
 	observedPaths   map[string]observedPath // verified short-lived inbound UDP paths
 	observedMu      sync.RWMutex
+	addrStates      map[string]map[string]*addrState // per-peer per-address reachability state
+	addrStateMu     sync.RWMutex
+	lastSentAddr    map[string]string // per-peer last successfully-written address
+	lastSentMu      sync.RWMutex
 	maxMessageBytes int
 	replay          *ReplayWindow
 	quotas          *PeerQuotas
 	clock           Clock
 	log             func(Event)
 }
+
+type addrState struct {
+	SuccessCount int
+	FailureCount int
+	LastSuccess  time.Time
+	LastFailure  time.Time
+	BackoffUntil time.Time
+	LastAttempt  time.Time
+}
+
+const (
+	addrFailureBackoffThreshold = 2
+	addrFailureBackoffBase      = 500 * time.Millisecond
+	addrFailureBackoffMax       = 30 * time.Second
+	addrSuccessResetAfter       = 2 * time.Minute
+)
 
 type Packet struct {
 	Message *Message
@@ -160,32 +180,7 @@ func (t *Transport) Send(peerID string, message *Message) error {
 		event.Zones, event.Records = MessageObjectCounts(message)
 	}
 
-	t.outboundMu.RLock()
-	addrs := appendUDPAddrCopies(nil, t.outboundAddrs[peerID]...)
-	t.outboundMu.RUnlock()
-
-	t.observedMu.RLock()
-	if observed := t.activeObservedPath(peerID); len(observed.Paths) > 0 {
-		observedAddrs := make([]*net.UDPAddr, 0, len(observed.Paths))
-		for _, path := range observed.Paths {
-			observedAddrs = append(observedAddrs, path.Addr)
-		}
-		if observed.PreferFirst {
-			addrs = appendUDPAddrCopies(observedAddrs, addrs...)
-		} else {
-			addrs = appendUDPAddrCopies(addrs, observedAddrs...)
-		}
-	}
-	t.observedMu.RUnlock()
-
-	if len(addrs) == 0 {
-		t.lastSeenMu.RLock()
-		if lastAddr := t.lastSeenAddrs[peerID]; lastAddr != nil {
-			addrs = appendUDPAddrCopies(addrs, lastAddr)
-		}
-		t.lastSeenMu.RUnlock()
-	}
-
+	addrs := t.sendAddrsFor(peerID)
 	if len(addrs) == 0 {
 		t.logEvent(event, ErrUnknownPeer, start)
 		return ErrUnknownPeer
@@ -226,16 +221,98 @@ func (t *Transport) Send(peerID string, message *Message) error {
 	}
 
 	var lastErr error
+	var sentAddr *net.UDPAddr
 	for _, addr := range addrs {
 		event.Addr = addr.String()
+		t.recordAddrAttempt(peerID, addr.String())
 		_, lastErr = t.conn.WriteToUDP(data, addr)
 		if lastErr == nil {
-			t.logEvent(event, nil, start)
-			return nil
+			sentAddr = addr
+			break
 		}
+	}
+	if sentAddr != nil {
+		t.lastSentMu.Lock()
+		if t.lastSentAddr == nil {
+			t.lastSentAddr = make(map[string]string)
+		}
+		t.lastSentAddr[peerID] = sentAddr.String()
+		t.lastSentMu.Unlock()
+		t.logEvent(event, nil, start)
+		return nil
 	}
 	t.logEvent(event, lastErr, start)
 	return lastErr
+}
+
+// sendAddrsFor returns the candidate addresses for a peer ordered by
+// reachability state. Successful and recently-attempted addresses come first;
+// addresses in backoff are moved to the end. The ordering rotates so that a
+// single unreachable address at the head does not permanently starve the rest.
+func (t *Transport) sendAddrsFor(peerID string) []*net.UDPAddr {
+	if t == nil || peerID == "" {
+		return nil
+	}
+
+	var outbound, observed []*net.UDPAddr
+	var preferObservedFirst bool
+
+	t.outboundMu.RLock()
+	outbound = appendUDPAddrCopies(nil, t.outboundAddrs[peerID]...)
+	t.outboundMu.RUnlock()
+
+	t.observedMu.RLock()
+	if obs := t.activeObservedPath(peerID); len(obs.Paths) > 0 {
+		observed = make([]*net.UDPAddr, 0, len(obs.Paths))
+		for _, path := range obs.Paths {
+			observed = append(observed, path.Addr)
+		}
+		preferObservedFirst = obs.PreferFirst
+	}
+	t.observedMu.RUnlock()
+
+	t.lastSeenMu.RLock()
+	lastSeen := t.lastSeenAddrs[peerID]
+	t.lastSeenMu.RUnlock()
+
+	var addrs []*net.UDPAddr
+	if preferObservedFirst {
+		addrs = appendUDPAddrCopies(addrs, observed...)
+		addrs = appendUDPAddrCopies(addrs, outbound...)
+	} else {
+		addrs = appendUDPAddrCopies(addrs, outbound...)
+		addrs = appendUDPAddrCopies(addrs, observed...)
+	}
+	if len(addrs) == 0 && lastSeen != nil {
+		addrs = appendUDPAddrCopies(addrs, lastSeen)
+	}
+	if len(addrs) == 0 {
+		return nil
+	}
+
+	now := t.now()
+	sort.SliceStable(addrs, func(i, j int) bool {
+		return addrSendRank(addrs[i], peerID, t, now) < addrSendRank(addrs[j], peerID, t, now)
+	})
+
+	return addrs
+}
+
+func addrSendRank(addr *net.UDPAddr, peerID string, t *Transport, now time.Time) int {
+	state := t.getAddrState(peerID, addr.String())
+	if state == nil {
+		return 1
+	}
+	if !state.BackoffUntil.IsZero() && now.Before(state.BackoffUntil) {
+		return 3
+	}
+	if !state.LastSuccess.IsZero() && now.Sub(state.LastSuccess) < addrSuccessResetAfter {
+		return 0
+	}
+	if state.FailureCount > 0 {
+		return 2
+	}
+	return 1
 }
 
 func (t *Transport) Receive() (*Packet, error) {
@@ -284,6 +361,7 @@ func (t *Transport) Receive() (*Packet, error) {
 	copied := *addr
 	t.lastSeenAddrs[message.PeerID] = &copied
 	t.lastSeenMu.Unlock()
+	t.RecordAddrSuccess(message.PeerID, addr)
 	t.logEvent(event, nil, start)
 	return &Packet{Message: message, Addr: addr, Bytes: n}, nil
 }
@@ -586,6 +664,14 @@ func (t *Transport) RemovePeer(peerID string) {
 	t.observedMu.Lock()
 	delete(t.observedPaths, peerID)
 	t.observedMu.Unlock()
+
+	t.addrStateMu.Lock()
+	delete(t.addrStates, peerID)
+	t.addrStateMu.Unlock()
+
+	t.lastSentMu.Lock()
+	delete(t.lastSentAddr, peerID)
+	t.lastSentMu.Unlock()
 }
 
 // SetPeers initializes both the inbound allowlist and the outbound address
@@ -621,11 +707,145 @@ func (t *Transport) KnownPeerIDs() []string {
 	return out
 }
 
+// LastSendAddr returns the address that was most recently written
+// successfully for the peer. It is used by the upper layer to mark an address
+// as failing when no response is received.
+func (t *Transport) LastSendAddr(peerID string) *net.UDPAddr {
+	if t == nil || peerID == "" {
+		return nil
+	}
+	t.lastSentMu.RLock()
+	addrStr := t.lastSentAddr[peerID]
+	t.lastSentMu.RUnlock()
+	if addrStr == "" {
+		return nil
+	}
+	addr, err := net.ResolveUDPAddr("udp", addrStr)
+	if err != nil {
+		return nil
+	}
+	return addr
+}
+
 func (t *Transport) now() time.Time {
 	if t != nil && t.clock != nil {
 		return t.clock()
 	}
 	return time.Now()
+}
+
+func (t *Transport) getAddrState(peerID, addr string) *addrState {
+	if t == nil {
+		return nil
+	}
+	t.addrStateMu.RLock()
+	defer t.addrStateMu.RUnlock()
+	if t.addrStates == nil {
+		return nil
+	}
+	return t.addrStates[peerID][addr]
+}
+
+func (t *Transport) recordAddrAttempt(peerID, addr string) {
+	if t == nil || peerID == "" || addr == "" {
+		return
+	}
+	t.addrStateMu.Lock()
+	defer t.addrStateMu.Unlock()
+	if t.addrStates == nil {
+		t.addrStates = make(map[string]map[string]*addrState)
+	}
+	if t.addrStates[peerID] == nil {
+		t.addrStates[peerID] = make(map[string]*addrState)
+	}
+	state := t.addrStates[peerID][addr]
+	if state == nil {
+		state = &addrState{}
+		t.addrStates[peerID][addr] = state
+	}
+	state.LastAttempt = t.now()
+}
+
+// RecordAddrSuccess marks an address as recently reachable for a peer.
+func (t *Transport) RecordAddrSuccess(peerID string, addr *net.UDPAddr) {
+	if t == nil || peerID == "" || addr == nil {
+		return
+	}
+	addrStr := addr.String()
+	t.addrStateMu.Lock()
+	defer t.addrStateMu.Unlock()
+	if t.addrStates == nil {
+		t.addrStates = make(map[string]map[string]*addrState)
+	}
+	if t.addrStates[peerID] == nil {
+		t.addrStates[peerID] = make(map[string]*addrState)
+	}
+	state := t.addrStates[peerID][addrStr]
+	if state == nil {
+		state = &addrState{}
+		t.addrStates[peerID][addrStr] = state
+	}
+	now := t.now()
+	state.SuccessCount++
+	state.LastSuccess = now
+	state.FailureCount = 0
+	state.BackoffUntil = time.Time{}
+}
+
+// RecordAddrFailure marks an address as failing for a peer. After repeated
+// failures the address enters a short backoff and is deprioritized by Send.
+func (t *Transport) RecordAddrFailure(peerID string, addr *net.UDPAddr) {
+	if t == nil || peerID == "" || addr == nil {
+		return
+	}
+	addrStr := addr.String()
+	t.addrStateMu.Lock()
+	defer t.addrStateMu.Unlock()
+	if t.addrStates == nil {
+		t.addrStates = make(map[string]map[string]*addrState)
+	}
+	if t.addrStates[peerID] == nil {
+		t.addrStates[peerID] = make(map[string]*addrState)
+	}
+	state := t.addrStates[peerID][addrStr]
+	if state == nil {
+		state = &addrState{}
+		t.addrStates[peerID][addrStr] = state
+	}
+	now := t.now()
+	state.FailureCount++
+	state.LastFailure = now
+	if state.FailureCount >= addrFailureBackoffThreshold {
+		backoff := addrFailureBackoffBase * time.Duration(1<<minInt(state.FailureCount-addrFailureBackoffThreshold, 6))
+		if backoff > addrFailureBackoffMax {
+			backoff = addrFailureBackoffMax
+		}
+		state.BackoffUntil = now.Add(backoff)
+	}
+}
+
+// AddrFailureCount returns the number of consecutive failures recorded for a
+// peer address.
+func (t *Transport) AddrFailureCount(peerID string, addr *net.UDPAddr) int {
+	state := t.getAddrState(peerID, addrString(addr))
+	if state == nil {
+		return 0
+	}
+	return state.FailureCount
+}
+
+func addrString(addr *net.UDPAddr) string {
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func appendUDPAddrCopies(addrs []*net.UDPAddr, more ...*net.UDPAddr) []*net.UDPAddr {

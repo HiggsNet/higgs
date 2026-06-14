@@ -586,8 +586,9 @@ func debugEndpoints() error {
 		return err
 	}
 	port := listenPortFromAddr(config.ListenAddr)
-	candidates, reflectorErr := collectSyncLocalEndpoints(port, config.AdvertiseAddrs, config.Reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
-	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(config.Reflectors)) > 0 {
+	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
+	candidates, reflectorErr := collectSyncLocalEndpoints(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
+	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
 		fmt.Printf("reflector_error: %v\n", reflectorErr)
 	}
 	fmt.Printf("local_candidates: %d\n", len(candidates))
