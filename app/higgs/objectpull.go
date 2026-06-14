@@ -458,3 +458,116 @@ func startObjectPullServer(d *DaemonService) (net.Listener, error) {
 	}
 	return listener, nil
 }
+
+// ObjectPullRequest is a work item submitted to the async object-pull pool.
+type ObjectPullRequest struct {
+	PeerID string
+	Zone   zone.ZonePath
+}
+
+// ObjectPullResult is delivered back to the daemon event loop when an async
+// object pull finishes. The event loop applies the snapshot; workers must not
+// mutate NetworkState directly.
+type ObjectPullResult struct {
+	PeerID   string
+	Zone     zone.ZonePath
+	Snapshot *gossip.ZoneSnapshot
+	Err      error
+}
+
+// objectPullPool runs a fixed number of workers that perform TCP object pulls
+// asynchronously and return results on the event loop channel.
+type objectPullPool struct {
+	getState func() *stateFile
+	config   *syncConfigFile
+	requests chan ObjectPullRequest
+	results  chan<- ObjectPullResult
+	workers  int
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+}
+
+// newObjectPullPool creates a pool. Start must be called before submitting work.
+func newObjectPullPool(getState func() *stateFile, config *syncConfigFile, results chan<- ObjectPullResult, workers int) *objectPullPool {
+	if workers <= 0 {
+		workers = maxObjectPullConcurrency
+	}
+	return &objectPullPool{
+		getState: getState,
+		config:   config,
+		requests: make(chan ObjectPullRequest),
+		results:  results,
+		workers:  workers,
+	}
+}
+
+// Start launches the worker goroutines.
+func (p *objectPullPool) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	p.cancel = cancel
+	for i := 0; i < p.workers; i++ {
+		p.wg.Add(1)
+		go p.worker(ctx)
+	}
+}
+
+// Stop signals workers to exit and waits for them.
+func (p *objectPullPool) Stop() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.wg.Wait()
+}
+
+// Submit enqueues a pull request. It returns false if the context is canceled
+// or the request channel is full.
+func (p *objectPullPool) Submit(ctx context.Context, req ObjectPullRequest) bool {
+	select {
+	case p.requests <- req:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+func (p *objectPullPool) worker(ctx context.Context) {
+	defer p.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case req, ok := <-p.requests:
+			if !ok {
+				return
+			}
+			result := p.doPull(ctx, req)
+			select {
+			case p.results <- result:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) ObjectPullResult {
+	state := p.getState()
+	if state == nil {
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: errors.New("state not available")}
+	}
+	snapshot, err := tryObjectPullTCP(state, p.config, req.PeerID, req.Zone)
+	return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Snapshot: snapshot, Err: err}
+}
+
+// objectPullResultToEvent converts a worker result to the SyncEvent consumed by
+// the daemon event loop.
+func objectPullResultToEvent(res ObjectPullResult) SyncEvent {
+	return &ObjectPullResultEvent{
+		PeerID:   res.PeerID,
+		Zone:     res.Zone,
+		Snapshot: res.Snapshot,
+		Err:      res.Err,
+	}
+}
