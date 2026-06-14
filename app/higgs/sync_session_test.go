@@ -457,6 +457,59 @@ func assertActionTypes(t *testing.T, actions []SyncAction, want []string) {
 	}
 }
 
+func TestSyncSessionAnnounceAcceptsSkeletonAndStaysPending(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&PongReceivedEvent{
+		PeerID:       "peer-a",
+		Pong:         &gossip.Pong{},
+		MissingZones: []zone.ZonePath{"node-a.catofes."},
+	}, now)
+
+	authority := &zone.ZoneAuthority{
+		Zone:      "node-a.catofes.",
+		Epoch:     1,
+		Keys:      []zone.AuthorizedKey{{Key: make([]byte, 32)}},
+		Threshold: 1,
+	}
+
+	// Advertised digest includes records, so a skeleton (authority only) will not
+	// match it.
+	fullZS := zone.NewZoneState("node-a.catofes.", authority)
+	fullZS.Records["identity"] = &zone.Record{Key: "identity", Value: []byte("node-a")}
+	s.expectedDigests["node-a.catofes."] = gossip.ZoneDigest{
+		Zone:     "node-a.catofes.",
+		RootHash: gossip.ZoneRoot(fullZS),
+	}
+
+	skeleton := &gossip.ZoneSnapshot{
+		Zone:      "node-a.catofes.",
+		Authority: authority,
+	}
+
+	actions, err := s.OnEvent(&AnnounceReceivedEvent{
+		PeerID: "peer-a",
+		Announce: &gossip.Announce{
+			Snapshots: []gossip.ZoneSnapshot{*skeleton},
+		},
+	}, now)
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionAwaitingAnnounce {
+		t.Fatalf("expected state awaiting_announce, got %s", s.State)
+	}
+	if _, ok := s.pendingZones["node-a.catofes."]; !ok {
+		t.Fatalf("expected node-a.catofes. to remain pending after skeleton")
+	}
+	if _, ok := s.expectedDigests["node-a.catofes."]; !ok {
+		t.Fatalf("expected node-a.catofes. expected digest to remain after skeleton")
+	}
+	assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
+}
+
 func actionType(a SyncAction) string {
 	switch a.(type) {
 	case SendPingAction:

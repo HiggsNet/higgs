@@ -345,12 +345,23 @@ func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction
 	for i := range e.Announce.Snapshots {
 		snap := &e.Announce.Snapshots[i]
 		expected, ok := s.expectedDigests[snap.Zone]
+		isSkeleton := len(snap.Records) == 0 && len(snap.RecordHistory) == 0
 		if ok && !bytes.Equal(expected.RootHash, gossip.ZoneRoot(zoneStateFromSnapshot(snap))) {
-			// Stale or incomplete announce (e.g. UDP skeleton). Keep the zone
-			// pending so object pull / chunk fallback can finish the sync.
-			continue
+			if !isSkeleton {
+				// Stale or incomplete announce. Keep the zone pending so object
+				// pull / chunk fallback can finish the sync.
+				continue
+			}
+			// UDP skeletons intentionally omit records, so their root hash will
+			// not match the full-zone digest advertised in the PONG. Apply the
+			// skeleton for authority/parent proof but keep the zone pending so
+			// subsequent record datagrams can populate it.
 		}
 		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: snap, RelaxedLimits: false})
+		if ok && isSkeleton && !bytes.Equal(expected.RootHash, gossip.ZoneRoot(zoneStateFromSnapshot(snap))) {
+			// Skeleton applied; remain pending for records.
+			continue
+		}
 		delete(s.pendingZones, snap.Zone)
 		delete(s.objectPullInflight, snap.Zone)
 		delete(s.chunkFallbackZones, snap.Zone)
@@ -367,6 +378,39 @@ func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction
 		s.State = SyncSessionAwaitingAnnounce
 	}
 	return actions, nil
+}
+
+// reconcilePendingWithState removes pending zones whose local root hash now
+// matches the digest advertised by the peer. This is needed because UDP
+// skeletons and split record datagrams populate a zone incrementally rather
+// than in a single announce.
+func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAction {
+	if ns == nil {
+		return nil
+	}
+	for z := range s.pendingZones {
+		expected, ok := s.expectedDigests[z]
+		if !ok {
+			continue
+		}
+		zs := ns.Zones[z]
+		if zs == nil {
+			continue
+		}
+		if bytes.Equal(expected.RootHash, gossip.ZoneRoot(zs)) {
+			delete(s.pendingZones, z)
+			delete(s.expectedDigests, z)
+			delete(s.objectPullInflight, z)
+			delete(s.chunkFallbackZones, z)
+		}
+	}
+	if s.pendingEmpty() && (s.State == SyncSessionAwaitingAnnounce ||
+		s.State == SyncSessionObjectPulling ||
+		s.State == SyncSessionChunkFallback) {
+		s.State = SyncSessionCompleted
+		return []SyncAction{SaveStateAction{Reason: "sync completed after pending zones reconciled with local state"}}
+	}
+	return nil
 }
 
 func (s *SyncSession) onPacketQuietTimeout(e *PacketQuietTimeoutEvent, now time.Time) ([]SyncAction, error) {

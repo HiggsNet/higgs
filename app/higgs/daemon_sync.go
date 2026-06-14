@@ -331,6 +331,14 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 		}
 	}
 
+	// UDP skeletons and split record datagrams may leave a zone pending even
+	// though the local state now matches the peer's advertised digest. Reconcile
+	// so the session can complete without waiting for an unnecessary object pull.
+	if !session.Done() {
+		reconcileActions := session.reconcilePendingWithState(d.Sync.State.Network)
+		actions = append(actions, reconcileActions...)
+	}
+
 	// Third pass: send messages. For FETCH_ZONE requests whose full snapshot
 	// cannot fit in a UDP datagram, also queue an async object pull so we are
 	// not dependent on the peer's UDP announce/chunk fallback path.
