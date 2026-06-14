@@ -92,9 +92,10 @@ Phase 6 的结构性修复是：**单一 UDP reader + 显式 per-peer 同步会�
 | 事件 | 当前状态 | 下一状态 | 动作 |
 |------|----------|----------|------|
 | `SyncTimerEvent` | `Idle` | `PingSent` | 发送 `PING`；启动 `RoundTimeout` |
-| `PongReceived` | `PingSent` | `AwaitingAnnounce` | 计算缺失 zones，发送 `FETCH_ZONE` |
+| `PongReceived` | `PingSent` | `AwaitingAnnounce` | 计算缺失 zones，发送 `FETCH_ZONE`；**重置并启动 `PacketQuietTimeout`** |
 | `PongReceived` | `PingSent` | `FetchingLocal` | 对方请求本节点 zones，发送 snapshots |
 | `PongReceived` | `PingSent` | `Completed` | 无差异，无需拉取 |
+| `PacketEvent{PING}` | `PingSent` | `AwaitingAnnounce` | 入站 `PING` 携带对方 digests，对活跃 session 等价于 `PongReceived`；同时旧路径会回一个 `PONG` |
 | `FetchZoneReceived` | `Idle`/`AwaitingAnnounce` | `FetchingLocal` | 按预算打包发送 snapshots |
 | `AnnounceReceived` | `AwaitingAnnounce` | `AwaitingAnnounce` | apply；若仍有 pending zones 继续等 |
 | `AnnounceReceived` | `AwaitingAnnounce` | `Completed` | apply；全部补齐 |
@@ -142,6 +143,7 @@ func routePacket(
 - 只按 `peer_id` 路由，不解释 message type。
 - `SyncSession` 内部再按 message type 处理。
 - 未命中活跃 session 的包走通用 unsolicited 路径（`handlePacketUntil`）。
+- **特殊处理 `PING`**：`handlePacketEventSyncSession` 收到命中活跃 session 的 `PING` 时，会把它转成 `PongReceivedEvent` 喂给 session（因为 `PING` 已经携带对方 digests），同时仍调用旧 `handlePacket` 回一个 `PONG`。这解决了对端先启动、本端初始 `PING` 丢失时的单向收敛问题。
 
 ### 4.2 Timer Manager
 
@@ -247,6 +249,12 @@ PacketQuietTimeout(peer) = max(
     kQuiet * estimatedRTT(peer) + jitter  // kQuiet 默认 3，jitter 0~200ms
 )
 ```
+
+**计时器重启时机**：
+
+- `SyncTimerEvent` 进入 `PingSent` 时启动初始 `PacketQuietTimeout`。
+- 收到 `PongReceived` 并进入 `AwaitingAnnounce` 时**重置 `quietCount` 并重新启动 `PacketQuietTimeout`**。这能避免“本端 `PING` 过早发出、quiet timer 在 `PONG` 到达前已触发”导致后续无 timer  fallback 到 object pull 的问题。
+- 后续在 `AwaitingAnnounce` 收到不完整/stale 的 `ANNOUNCE` 时保持现有 timer 继续运行；若 timer 再次触发则进入 `Failed`。
 
 示例：
 

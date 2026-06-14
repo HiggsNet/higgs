@@ -86,7 +86,7 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	if s.State != SyncSessionAwaitingAnnounce {
 		t.Fatalf("expected state awaiting_announce, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SendFetchZoneAction"})
+	assertActionTypes(t, actions, []string{"SendFetchZoneAction", "StartTimerAction"})
 	if actions[0].(SendFetchZoneAction).Zone != "node-a.catofes." {
 		t.Fatalf("unexpected fetch zone: %v", actions[0])
 	}

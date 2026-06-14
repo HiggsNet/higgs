@@ -294,6 +294,7 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 	// We need zones from peer.
 	if len(e.MissingZones) > 0 {
 		s.State = SyncSessionAwaitingAnnounce
+		s.quietCount = 0
 		for _, z := range e.MissingZones {
 			s.pendingZones[z] = true
 			actions = append(actions, SendFetchZoneAction{PeerID: e.PeerID, Zone: z})
@@ -303,6 +304,7 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 				s.expectedDigests[d.Zone] = d
 			}
 		}
+		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())})
 		return actions, nil
 	}
 

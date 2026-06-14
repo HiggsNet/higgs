@@ -80,7 +80,17 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 		msg := ev.Packet.Message
 		switch msg.Type {
 		case gossip.MessagePing:
-			// Treat pings as unsolicited so the existing Pong path remains.
+			// A inbound ping carries the peer's zone digests, which is enough
+			// for our active session to decide what to pull. This is important
+			// when the local session's own initial ping was lost (e.g. the peer
+			// was not yet listening): without this, the session would stay in
+			// ping_sent until the round timer fires and never converge.
+			if msg.Ping != nil {
+				_ = d.postSyncEvent(&PongReceivedEvent{
+					PeerID: msg.PeerID,
+					Pong:   &gossip.Pong{Zones: msg.Ping.Zones},
+				})
+			}
 			return d.Sync.handlePacket(packet)
 		case gossip.MessagePong:
 			if msg.Pong == nil {
