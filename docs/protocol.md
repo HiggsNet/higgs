@@ -103,12 +103,14 @@ higgs daemon --interval 5
 
 这是 Phase 3 后推荐的本机长期运行模式，结合了入站服务、定期出站同步、节点发现、endpoint publish 和本机 control socket。daemon 是本节点 state DB 的唯一长期 writer：CLI 写入、同步 apply、endpoint publish、manual trigger 和 timer tick 都经由同一个事件处理边界串行执行。
 
-1. **事件队列** — `record_put`、UDP packet、remote announce applied、endpoint publish timer、outbound sync timer、manual `sync_trigger`、`shutdown` 都进入 daemon event handler。事件处理函数负责串行落盘、更新 peer state、触发 relay 或唤醒下一轮 outbound sync。
-2. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。这样 daemon 停止期间的恢复写入、新委托或外部修复可以在 daemon 重启后生效。
-3. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
-4. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点执行 sync round。由 local `record_put` 或 manual trigger 唤醒的轮次会绕过旧 backoff 一次，确保本地新写入能立即尝试传播。
-5. **入站接收** — 出站轮次之间，节点以 `250ms` 的超时轮询套接字，处理任何数据包。如果数据包包含的 `ANNOUNCE` 改变了本地状态，则记录来源 peer 并触发**中继**（见 §4.3）。
-6. **Control socket** — daemon 默认监听 Unix domain socket，路径为 `HIGGS_CONTROL_SOCKET`、root 下 `/run/higgs/higgs.sock`，或 `<data_dir>/higgs.sock` fallback。API 包含 `status`、`record_put`、`delegate_issue`、`delegate_revoke`、`join_accept`、`sync_trigger`、`reload`、`shutdown`。`reload` 重新读取 `config.yaml`、刷新本地 sync/log/IPsec overlay 配置并触发一次 reconcile；如果 reload 会改变 daemon 当前 state DB 路径或 control socket 路径，则返回错误并要求重启后切换。socket 文件权限为 `0600`，第一版只作为本机控制面，不提供远程管理入口。
+1. **单一 UDP reader** — `startGossipPacketReceiver` 是唯一调用 `transport.Receive()` 的 goroutine。所有 UDP 包先经过 replay/quota/allowlist 校验，再进入 Packet Demuxer。Demuxer 按 `peer_id` 把包路由到活跃的 `SyncSession`，未命中的包作为 unsolicited 处理。这避免了两个 goroutine 抢 socket 导致的 race 和响应丢失。
+2. **事件队列** — `record_put`、UDP packet（经 demuxer 后的事件）、remote announce applied、endpoint publish timer、outbound sync timer、object-pull result、timer timeout、manual `sync_trigger`、`shutdown` 都进入 daemon event handler。事件处理函数负责串行落盘、更新 peer state、触发 relay 或唤醒下一轮 outbound sync。
+3. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。这样 daemon 停止期间的恢复写入、新委托或外部修复可以在 daemon 重启后生效。
+4. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
+5. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点创建 `SyncSession`。由 local `record_put` 或 manual trigger 唤醒的轮次会绕过旧 backoff 一次，确保本地新写入能立即尝试传播。
+6. **入站接收与 SyncSession FSM** — 收到 `PONG`/`ANNOUNCE`/`FETCH_ZONE`/`object_chunk` 后，demuxer 把包交给对应 peer 的 `SyncSession`。状态机决定下一步动作：继续等待、发送 `FETCH_ZONE`、发送 snapshots、启动异步 TCP object pull、进入 UDP chunk fallback、或结束本轮。超时从 socket read deadline 改为显式 timer 事件（`RoundTimeout`、`QuietTimeout`），并基于每个 peer 的估计 RTT 动态调整，避免高延迟链路被固定 250ms 静默期误杀。
+7. **中继** — 如果 `ANNOUNCE` 改变了本地状态，daemon 记录来源 peer 并向其他已知 peer post `SyncTimerEvent` 创建独立 session 进行 relay（见 §4.3）。
+8. **Control socket** — daemon 默认监听 Unix domain socket，路径为 `HIGGS_CONTROL_SOCKET`、root 下 `/run/higgs/higgs.sock`，或 `<data_dir>/higgs.sock` fallback。API 包含 `status`、`record_put`、`delegate_issue`、`delegate_revoke`、`join_accept`、`sync_trigger`、`reload`、`shutdown`。`reload` 重新读取 `config.yaml`、刷新本地 sync/log/IPsec overlay 配置并触发一次 reconcile；如果 reload 会改变 daemon 当前 state DB 路径或 control socket 路径，则返回错误并要求重启后切换。socket 文件权限为 `0600`，第一版只作为本机控制面，不提供远程管理入口。
 
 CLI 在检测到 daemon control socket 可用时，会优先作为 client 提交写命令。例如 `record put` 会由 daemon 签名、写 DB 并触发 outbound sync；`delegate issue` 会把 base64 join request 交给持有父 Zone 私钥的 daemon，由 daemon 签发 delegation、写 DB，并把 bundle 作为 base64 文本包返回给 CLI 打印或写入可选文件。join bundle 只携带 root 到目标 Zone 的最小 authority chain 和每一跳 direct delegation proof；父 Zone 的 records、record history、兄弟 delegation table 不进入 bundle，后续通过普通同步获取。`delegate revoke` 由 daemon 串行写入 signed revocation/tombstone、清理 peer state 并触发后续同步；`join accept` 在 daemon 已运行时通过 control API 导入 bundle，避免运行态旧 snapshot 覆盖。daemon 不存在时这些命令保留直接写 DB 的开发/恢复模式，并输出明确提示。`root init` 是 daemon 启动前的离线初始化；如果已有 daemon 加载了 state，control API 会拒绝重置 root state。
 
@@ -122,10 +124,12 @@ higgs sync run --interval 5
 
 daemon / `sync run` 的核心循环包括：
 
-1. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。
-2. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
-3. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点执行 sync round。
-4. **入站接收** — 出站轮次之间，节点以 `250ms` 的超时轮询套接字，处理任何数据包。如果数据包包含的 `ANNOUNCE` 改变了本地状态，则触发**中继**（见 §4.3）。
+1. **单一 UDP reader** — `startGossipPacketReceiver`  goroutine 阻塞在 `transport.Receive()`，所有包经 demuxer 分发。
+2. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。
+3. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
+4. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点创建 `SyncSession`。
+5. **事件驱动 SyncSession FSM** — `PONG`/`ANNOUNCE`/`FETCH_ZONE`/`object_chunk` 等包驱动 per-peer 状态机；TCP object pull 在 worker pool 异步执行，结果作为事件回注事件循环；超时使用显式 timer 事件。
+6. **入站接收与中继** — 如果 `ANNOUNCE` 改变了本地状态，则触发**中继**（见 §4.3），为其他 peer 创建独立 sync session。
 
 ### 3.5 MTU-safe object pull
 

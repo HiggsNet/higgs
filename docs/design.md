@@ -927,7 +927,7 @@ type PeerView struct {
 | Relay fanout（变更后对其他 peer 触发轻量 sync） | `app/higgs/sync.go` | ✅ 完整 |
 | Peer 动态发现（endpoint record 扫描、TTL/grace 管理） | `pkg/core/gossip/` | ✅ 完整 |
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
-| Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ 已实现，admin 写入和 IPsec state-change hook 已接入 |
+| Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ 已实现，admin 写入和 IPsec state-change hook 已接入；Phase 6 将进一步改为事件驱动 + per-peer SyncSession FSM |
 | CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db / route） | `app/higgs/` | ✅ 完整 |
 | 配置文件（YAML + 环境变量覆盖，含 overlays[].routing） | `app/higgs/config.go` | ✅ 完整 |
 | Route Announcement / IPAM record 解析与校验 | `pkg/routing/records.go` | ✅ 完整 |
@@ -947,5 +947,85 @@ type PeerView struct {
 | Public IP Reflector | `pkg/core/gossip/discovery.go` | ✅ HTTP client + local smoke |
 
 ---
+
+## 七、Phase 6 事件驱动 Daemon 设计要点
+
+Phase 6 将把 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」。这是结构性重构，不改变 gossip wire 协议，但会改变 daemon 内部的事件调度、超时和状态持久化边界。
+
+### 7.1 为什么必须重构
+
+当前实现里，`startGossipPacketReceiver` 开的专门收包 goroutine 与 `syncRound` 里直接调 `transport.Receive()` 会在同一个 UDP socket 上并发读包。这导致两类故障：
+
+1. **并发 map race**：`ReplayWindow.prune()` 与另一个 goroutine 的 `ReplayWindow.Check()` 同时访问 `seen` map，触发 `fatal error: concurrent map iteration and map write`。
+2. **响应被抢**：`syncRound` 等待的 `PONG`/`ANNOUNCE` 可能被专门收包 goroutine 截胡并 buffer 到 `packetCh`，而 `syncRound` 阻塞时 daemon 主循环无法处理 `packetCh`，造成无意义 timeout。
+
+给 `ReplayWindow` 加锁只能避免 crash，不能解决第二类设计缺陷。因此 Phase 6 改为单一 reader。
+
+### 7.2 新架构
+
+```text
+UDP socket
+    │
+    ▼
+startGossipPacketReceiver  (唯一调用 transport.Receive() 的 goroutine)
+    │
+    ▼
+Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
+```
+
+- **唯一 reader**：所有 UDP 包先经过 replay/quota/allowlist 校验，再进入 demuxer。
+- **Demuxer**：按 `peer_id` 把包路由到对应 `SyncSession`，未命中则作为 unsolicited 包处理。
+- **SyncSession FSM**：每个目标 peer 一个会话，显式状态包括 `Idle`、`PingSent`、`AwaitingAnnounce`、`FetchingLocal`、`ObjectPulling`、`ChunkFallback`、`Completed`、`Failed`。
+- **事件循环**：daemon 主 goroutine 在 `packetCh`、`d.Events`、内部 `syncEventCh`、timer channel、object-pull result channel 之间 select，纯分发，不阻塞 I/O。
+
+### 7.3 状态机与超时
+
+超时从「socket read deadline」改为「显式 timer 事件」：
+
+- `RoundTimeout`：整轮超时，基于 peer 估计 RTT 动态计算：`max(5s, kRound * RTT + ObjectPullBudget + jitter)`。
+- `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。它不是轮询间隔，而是给对端 burst 发送留的窗口：第一静默期决定是否从 UDP 切换到 TCP object-pull；第二静默期等待 object-pull 后的迟到 UDP / chunk。跨国 RTT 600ms 时静默期自动放到约 2s，不会过早切 TCP。
+- `BackoffRetry`：peer 可再次尝试的时间点。
+
+状态转换由事件驱动。例如：
+
+```text
+SyncTimerEvent ──► PingSent ──► PongReceived ──► AwaitingAnnounce
+                                    │
+                                    ▼
+                          QuietTimeout (1st)
+                                    │
+                                    ▼
+                            ObjectPulling ──► ObjectPullResultEvent
+                                    │
+                                    ▼
+                          ChunkFallback ──► ObjectChunkEvent
+                                    │
+                                    ▼
+                          Completed / Failed
+```
+
+### 7.4 MTU / TCP Pull / UDP Chunk 的集成
+
+重构后这些能力作为 FSM 事件处理：
+
+- 发送 snapshot 超预算 → 发 digest-only `ANNOUNCE`，触发对端 `ObjectPulling`。
+- TCP object pull 改为异步 worker pool，完成后 post `ObjectPullResultEvent`。
+- TCP 不可达 → 进入 `ChunkFallback`，发送 `FETCH_ZONE{ChunkFallback:true}`，接收 `object_chunk` 事件驱动重组。
+
+### 7.5 状态变更与持久化边界
+
+所有状态变更只允许在 daemon 事件循环 goroutine 中发生。`SyncSession` 的 FSM 核心只读当前状态并输出动作列表，动作由事件循环统一执行。可以在 worker goroutine 中执行的只有：UDP 读包、TCP object pull I/O、DNS 解析、可选的批量 crypto verify；这些 worker 必须以事件形式把结果回注事件循环，禁止直接持有 `stateFile`、`NetworkState` 或 `Transport` 的可变引用。
+
+旧代码在 `handlePacketUntil` / `syncRound` 里用 `defer saveState()`，落盘时机隐式。新设计只在明确状态转换时落盘：
+
+- `Completed` / `Failed`
+- 应用 `ANNOUNCE` 后 digest 发生变化
+- control/admin 事件处理完成后
+
+所有落盘仍在 daemon 主 goroutine 串行执行。
+
+### 7.6 文档与实现
+
+详细设计见 `../docs/phase6-event-driven-design.md`，可执行任务见 `../todo.md` Phase 6。
 
 实施路线与各 Phase 任务见 `../todo.md`。

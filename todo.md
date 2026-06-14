@@ -745,44 +745,127 @@
   - [ ] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）留到 Phase 5 后续。
   - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
 
-## Phase 6: IPAM/准入扩展/防火墙（预计 3-4 周）
+## Phase 6: 事件驱动 Daemon / 同步状态机重构（预计 4-5 周）
 
-**目标：** 支持动态准入、IP 分配、链路健康、防火墙规则。
+**目标：** 把当前 daemon 从「阻塞式 syncRound + 双 UDP 收包 goroutine」重构成单一事件循环 + 每个 peer 的显式同步会话状态机。以此为基座，再落地 IPAM/准入/防火墙/链路健康等控制面特性。
 
-- [ ] **6.1 准入流程**
-  - 新节点生成密钥对 → 向管理员申请 delegation
-  - 管理员在父 Zone 创建 `nodeX.parent.` delegation
-  - Gossip 全网传播后，新节点自动被所有节点识别并建立 IKEv2/IPsec TransportLink
+**根因：** 当前 `startGossipPacketReceiver` 开的专门收包 goroutine 与 `syncRound` 里直接调 `transport.Receive()` 会在同一个 UDP socket 上并发读包。这不仅导致 `ReplayWindow` 的 `concurrent map iteration and map write` 崩溃，还会让 sync round 等待的 Pong/Announce 被另一 goroutine 截胡、buffer 到 `packetCh`，造成无意义 timeout。给 `ReplayWindow` 加锁只能避免 crash，不能解决响应被抢的设计缺陷。
 
-- [ ] **6.2 IP 分配管理（IPAM）**
-  - 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
-  - 节点查询自己的 Zone fallback 路径，汇总所有分配到的 IPs
-  - 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
+**重构后核心形态：**
+- 只有 `startGossipPacketReceiver` 一个 goroutine 读 UDP；
+- 所有 packet 经 demuxer 分发到对应 `SyncSession` 或作为 unsolicited 处理；
+- daemon 主循环只 select 事件、调度状态机、执行 send/save；
+- `syncRound` 被替换为 `SyncSession` FSM；
+- object pull / UDP chunk fallback / MTU 打包都变成 FSM 事件与状态转换；
+- 顺带修复 `go test -race ./...` 暴露的 `NetworkState`/`recordPeerSyncAt` 等既有 race。
 
-- [ ] **6.3 链路健康检测**
-  - 在 XFRM/TransportLink 隧道上周期性发送 ICMP/自定义 keepalive
-  - 检测 RTT、丢包率
-  - 链路异常时标记 down，从 BIRD interface pattern 中排除该接口或降低其优先级
+### 6.0 事件驱动控制面重构
 
-- [ ] **6.4 动态 Peer 管理**
-  - 节点离线超时后，保留配置但标记 stale
-  - 长期离线后自动清理 IKEv2/IPsec SA、XFRM interface 和路由
-  - 节点信息变更（endpoint、key/cert rotate、端口候选变化）自动更新传输配置
-  - 节点 Zone 被撤销后标记 revoked，高优先级触发传输层/路由层/防火墙 apply，不等待普通健康检查超时
+- [ ] **6.0.1 事件类型与事件循环改造**
+  - [ ] 在 `app/higgs/sync_events.go` 定义 `SyncEvent` 联合类型：`SyncTimerEvent`、`PacketEvent`、`UnsolicitedPacketEvent`、`QuietTimeoutEvent`、`RoundTimeoutEvent`、`ObjectPullResultEvent`、`ObjectChunkEvent`、`FetchZoneEvent` 等
+  - [ ] 改造 `DaemonService.Run()`：统一 select `packetCh`、`d.Events`、内部 `syncEventCh`、timer channel、object-pull result channel；保持 control/admin 事件走 `d.Events`，sync 内部事件走 `syncEventCh`
+  - [ ] 移除 `sync.go` 中所有 `transport.Receive()` / `receiveWithContext` / `receiveWithDeadline`；UDP 只由 `startGossipPacketReceiver` 读取
 
-- [ ] **6.5 防火墙规则同步**
-  - 基于已同步的 Zone 中所有合法节点的 TunnelAllowedIPs
-  - 通过 `nftables` netlink 接口生成 accept 规则，默认 drop
-  - 节点或子树被撤销后立即移除对应 allow rules，避免已撤销节点继续访问 overlay
+- [ ] **6.0.2 SyncSession 状态机**
+  - [ ] 新增 `app/higgs/sync_session.go`，定义 `SyncSession`：peerID、state、remoteDigests、pendingZones、localRequestedZones、objectPullInflight、chunkAssembly、timer refs、startTime
+  - [ ] 状态定义：`Idle`、`PingSent`、`AwaitingAnnounce`、`FetchingLocal`、`ObjectPulling`、`ChunkFallback`、`Completed`、`Failed`
+  - [ ] 核心方法 `OnEvent(event SyncEvent) (actions []SyncAction, done bool)`，尽量做成纯状态转换：输入事件+当前状态 → 下一状态 + 动作列表
+  - [ ] 动作列表包含：`SendPing`、`SendPong`、`SendFetchZone`、`SendAnnounce`、`StartObjectPull`、`SendChunkFallbackFetch`、`ApplySnapshot`、`SaveState`、`RecordBackoff`、`CancelTimer` 等
 
-- [ ] **6.6 撤销后的传输与路由清理**
-  - IKEv2/StrongSwan：删除被撤销 peer 的 connection/child SA 配置，主动 terminate 已建立 SA，移除对应 secret/cert/key reference
-  - WireGuard（可选驱动）：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
-  - BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
-  - 防火墙：移除该 peer/subtree 的 nftables accept rules、set entries、rate-limit exceptions
-  - IPAM/route authorization：被撤销 Zone 及其子树发布的 IP assignment、route announcement 立即从有效配置中剔除；历史记录仅用于审计
-  - 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 IKEv2/WG/Babel/firewall/IPAM 对象，便于管理员确认影响范围
-  - 增加集成测试：撤销节点后，控制平面状态先收敛，随后本机 IKEv2/WG/Babel/firewall 配置全部清理完成
+- [ ] **6.0.3 Packet Demuxer**
+  - [ ] 新增 `app/higgs/packet_demux.go`
+  - [ ] `routePacket(packet, sessions)`：若 `packet.PeerID` 命中活跃 `SyncSession` → 生成 `PacketEvent{session, packet}`；否则生成 `UnsolicitedPacketEvent{packet}`
+  - [ ] replay/quota/allowlist 检查仍在 `Transport.Receive()` 完成；demuxer 只负责按 peer 路由已通过校验的包
+
+- [ ] **6.0.4 定时器事件化**
+  - [ ] 新增 `timerManager`，按 `(peerID, timerType)` 管理 timer：
+    - `RoundTimeout`：整轮超时，基于 peer 估计 RTT 动态计算：`max(5s, kRound * RTT + ObjectPullBudget + jitter)`
+    - `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。不是轮询间隔，而是给对端 burst 发送留的窗口；第一静默期用于决定何时从 UDP 切到 TCP object-pull，第二静默期用于等待 object-pull 后的迟到 UDP / chunk
+    - `BackoffRetry`：peer 可重试时间点
+  - [ ] session 创建/结束时注册/取消 timer；timer 触发后向事件循环 post 事件
+  - [ ] 单元测试注入 fake clock，验证定时器取消与重入
+
+- [ ] **6.0.5 异步 object pull / UDP chunk fallback 接入 FSM**
+  - [ ] 把 `tryObjectPullTCPUntil` 改成在 bounded worker pool 中异步执行，完成后向事件循环发送 `ObjectPullResultEvent{sessionID, peerID, zone, snapshot, err}`
+  - [ ] `ObjectPulling` 状态等待结果：成功则 apply 并转 `AwaitingAnnounce`；失败则发送 `FetchZone{ChunkFallback:true}` 进入 `ChunkFallback`
+  - [ ] `ChunkFallback` 状态维护 `udpChunkAssemblies`；`ObjectChunkEvent` 驱动重组，完整对象 hash 匹配后 apply
+  - [ ] `sendSnapshots()` 不再阻塞在 `syncRound` 里，而是返回 send action 列表；事件循环按预算逐个发送，超预算对象走 object-pull/chunk 路径
+
+- [ ] **6.0.6 状态变更与持久化边界（single writer）**
+  - [ ] 明确所有状态变更只在 daemon 事件循环 goroutine 中执行：
+    - `NetworkState` apply、`peer state` 更新、`Transport` 运行时表更新、`udpChunkAssemblies` 等运行时缓存
+    - IPsec / BIRD / routing desired-state 计算与 reconcile 触发
+  - [ ] worker goroutine（object pull、DNS、可选批量 verify）只产生事件，不直接持有 `stateFile`/`NetworkState`/`Transport` 的可变引用
+  - [ ] 明确落盘时机：`Completed`、`Failed`、apply 导致 digest 变化后、control/admin 事件完成后
+  - [ ] 移除 `handlePacketUntil` / 旧 `syncRound` 里的 `defer saveState()`
+  - [ ] daemon 主 goroutine 串行写 state，避免多 goroutine 写 DB
+
+- [ ] **6.0.7 并发 race 修复**
+  - [ ] 给 `ReplayWindow` 加互斥锁（即使单 reader，也作为安全网；单测保留并发压力测试）
+  - [ ] 审计并修复 `go test -race ./...` 暴露的：
+    - `NetworkState.ConfigureRecordValidation` 被多个 goroutine 写
+    - `recordPeerSyncAt` / `recordDatagramTooLarge` / `isRejectedDigestActive` 对 map 的并发读写
+    - `ApplySnapshot` 与 `VerifyChain` 的 map 读写 race
+  - [ ] 可选：把 `NetworkState` 验证配置改成每次 load 时生成 immutable snapshot，或用 `RWMutex` 保护
+
+- [ ] **6.0.8 Relay fanout 事件化**
+  - [ ] relay 不再在 `handlePacketUntil` 里直接调用 `syncRound`；而是向事件循环 post `SyncTimerEvent{peerID, force=true}` 创建新的独立 `SyncSession`
+  - [ ] 保持 relay 节流：backoff、min interval、来源 peer 跳过
+
+- [ ] **6.0.9 测试改造与补强**
+  - [ ] 重写依赖旧阻塞 `syncRound` 的单测；新增 `SyncSession` 状态机表驱动测试（无 I/O）
+  - [ ] 新增 packet demuxer 单元测试
+  - [ ] 新增 timer manager 单元测试（fake clock）
+  - [ ] 新增 daemon 事件循环测试：单 reader、session 生命周期、cross-traffic 路由、timer 取消
+  - [ ] 新增 race 回归测试：验证不再有两个 goroutine 同时 `Receive()`
+  - [ ] 保证现有 smoke 通过：`phase1-smoke`、`phase2-smoke`、`multi-node-smoke`、`chain-relay-smoke`、`object-pull-smoke`、`nat-daemon-observed-smoke`、`ipsec-*-smoke`、`routing-dry-run-smoke`
+  - [ ] `go test -race ./...` 全绿
+
+- [ ] **6.0.10 文档更新**
+  - [ ] 更新 `docs/design.md` daemon/sync 架构章节，改为事件驱动描述
+  - [ ] 更新 `docs/protocol.md` 第 3 节 daemon/sync 运行流程，说明 single reader + SyncSession FSM
+  - [ ] 新增 `docs/phase6-event-driven-design.md`：架构图、状态机、事件类型、迁移表、MTU/object-pull/chunk 如何处理、迁移注意事项
+
+### 6.1 准入流程
+
+- [ ] 新节点生成密钥对 → 向管理员申请 delegation
+- [ ] 管理员在父 Zone 创建 `nodeX.parent.` delegation
+- [ ] Gossip 全网传播后，新节点自动被所有节点识别并建立 IKEv2/IPsec TransportLink
+
+### 6.2 IP 分配管理（IPAM）
+
+- [ ] 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
+- [ ] 节点查询自己的 Zone fallback 路径，汇总所有分配到的 IPs
+- [ ] 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
+
+### 6.3 链路健康检测
+
+- [ ] 在 XFRM/TransportLink 隧道上周期性发送 ICMP/自定义 keepalive
+- [ ] 检测 RTT、丢包率
+- [ ] 链路异常时标记 down，从 BIRD interface pattern 中排除该接口或降低其优先级
+
+### 6.4 动态 Peer 管理
+
+- [ ] 节点离线超时后，保留配置但标记 stale
+- [ ] 长期离线后自动清理 IKEv2/IPsec SA、XFRM interface 和路由
+- [ ] 节点信息变更（endpoint、key/cert rotate、端口候选变化）自动更新传输配置
+- [ ] 节点 Zone 被撤销后标记 revoked，高优先级触发传输层/路由层/防火墙 apply，不等待普通健康检查超时
+
+### 6.5 防火墙规则同步
+
+- [ ] 基于已同步的 Zone 中所有合法节点的 TunnelAllowedIPs
+- [ ] 通过 `nftables` netlink 接口生成 accept 规则，默认 drop
+- [ ] 节点或子树被撤销后立即移除对应 allow rules，避免已撤销节点继续访问 overlay
+
+### 6.6 撤销后的传输与路由清理
+
+- [ ] IKEv2/StrongSwan：删除被撤销 peer 的 connection/child SA 配置，主动 terminate 已建立 SA，移除对应 secret/cert/key reference
+- [ ] WireGuard（可选驱动）：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
+- [ ] BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
+- [ ] 防火墙：移除该 peer/subtree 的 nftables accept rules、set entries、rate-limit exceptions
+- [ ] IPAM/route authorization：被撤销 Zone 及其子树发布的 IP assignment、route announcement 立即从有效配置中剔除；历史记录仅用于审计
+- [ ] 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 IKEv2/WG/Babel/firewall/IPAM 对象，便于管理员确认影响范围
+- [ ] 增加集成测试：撤销节点后，控制平面状态先收敛，随后本机 IKEv2/WG/Babel/firewall 配置全部清理完成
 
 ## Phase 7: 健壮性与高级特性（预计 4-6 周）
 
