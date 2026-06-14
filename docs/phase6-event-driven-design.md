@@ -83,6 +83,7 @@ Phase 6 的结构性修复是：**单一 UDP reader + 显式 per-peer 同步会�
 | `RoundTimeoutEvent{peerID}` | 整轮超时 timer 触发；基于该 peer 估计 RTT 动态计算 |
 | `ObjectPullResultEvent{sessionID, zone, snapshot, err}` | 异步 TCP object pull 完成 |
 | `ObjectChunkEvent{sessionID, zone, chunk}` | 收到 `object_chunk` 且匹配活跃 transfer |
+| `StateFileChangedEvent{}` | fsnotify/inotify 检测到 state 文件被外部程序修改 |
 
 ### 3.3 状态转换表
 
@@ -287,7 +288,7 @@ ObjectPullBudget 默认 5s（单个大 zone 的 TCP 传输预算）
 
 ## 6. Daemon Event Loop 语义（回答：本地更新、落盘、并发安全）
 
-### 5.1 单 goroutine 串行处理
+### 6.1 单 goroutine 串行处理
 
 daemon 主循环每次从 channel 取出一个事件，处理到完成，再取下一个。因此：
 
@@ -295,7 +296,7 @@ daemon 主循环每次从 channel 取出一个事件，处理到完成，再取�
 - 读取本地 digest/records 构造 `PING`/`ANNOUNCE` 时，状态不会被并发修改。
 - 不需要对 `NetworkState` 加锁；事件循环就是锁。
 
-### 5.2 本地 endpoint / record 更新如何触发 announce
+### 6.2 本地 endpoint / record 更新如何触发 announce
 
 以公网 IP 变化为例：
 
@@ -306,7 +307,7 @@ daemon 主循环每次从 channel 取出一个事件，处理到完成，再取�
 
 整个流程从 IP 发现、签名、写 state、落盘到触发 outbound sync，全在事件循环里完成。
 
-### 5.3 收到远端 ANNOUNCE 如何落盘
+### 6.3 收到远端 ANNOUNCE 如何落盘
 
 1. UDP reader 把包交给 Packet Demuxer。
 2. Demuxer 路由到对应 `SyncSession`。
@@ -315,7 +316,7 @@ daemon 主循环每次从 channel 取出一个事件，处理到完成，再取�
 5. 若 digest 变化 → 事件循环执行 `saveState()`。
 6. 同时触发 `notifyStateChanged`，向其他 peer post relay session。
 
-### 5.4 发送时如何保证本地数据不被同时改
+### 6.4 发送时如何保证本地数据不被同时改
 
 事件循环构造 `PING`/`ANNOUNCE` 时，读取的是当前 `NetworkState` 的一致视图。因为：
 
@@ -324,6 +325,57 @@ daemon 主循环每次从 channel 取出一个事件，处理到完成，再取�
 - 本地 `record put`、timer 事件、远端 packet 事件都排队处理。
 
 如果本地更新事件在「构造 PING」之前被处理，PING 携带新 digest；如果在之后被处理，则本轮 PING 携带旧 digest，下一轮或 relay 会传播新状态。这是最终一致性，不是 bug。
+
+### 6.5 CLI 命令如何进入事件循环
+
+CLI 有两种工作模式：
+
+**daemon 运行时（推荐）：**
+
+1. CLI 检测到 control socket 存在（`HIGGS_CONTROL_SOCKET`、/run/higgs/higgs.sock 或 data_dir/higgs.sock）。
+2. 通过 Unix domain socket 发送控制请求（`record_put`、`delegate_issue`、`delegate_revoke`、`join_accept`、`sync_trigger`、`reload`、`shutdown` 等）。
+3. control server goroutine `serveControl` 收到请求后，把请求封装成 `daemonEvent`，通过 `d.Events` channel 排进 daemon 主循环。
+4. 主循环串行处理该事件：
+   - `record_put` / `delegate_issue` / `delegate_revoke` / `join_accept`：先 `loadState()`，在内存中修改，签名，写回 `NetworkState`，`saveState()`，然后 `notifyStateChanged()` 触发 outbound sync。
+   - `sync_trigger`：把 `nextSync` 重置为 now，forceSync=true，立即开始一轮同步。
+   - `reload`：重新读 config，校验 state path / control socket path 没变，加载最新 state，触发 reconcile。
+5. 处理完成后通过 `event.Reply` channel 把结果写回 control conn，CLI 收到响应。
+
+这样所有写操作都走事件循环，保证 single-writer。
+
+**daemon 未运行时（恢复/开发模式）：**
+
+1. CLI 没找到 control socket，退化为直接读写 state DB。
+2. 这是离线操作，不进入任何事件循环；下次 daemon 启动或周期性 reload 时才能发现这些变更。
+3. 不建议在 daemon 运行期间使用此模式，否则可能和 daemon 的内存状态/写盘竞争。
+
+### 6.6 外部程序直接改 state 文件怎么办
+
+**当前行为（旧代码）：**
+
+daemon 每轮 sync（默认 5s）调用 `reloadStateIfChanged()` 比较磁盘 digest 与内存 digest；如果不同则加载最新 state。因此外部直接改 state 文件最多延迟一个 sync interval 才会被 daemon 感知。
+
+**问题：**
+
+- 延迟不可控：本地更新后可能要等 5s 才传播。
+- 写冲突风险：daemon 正在 `saveState()` 时外部程序同时写文件，可能产生损坏或覆盖。
+- 不触发即时 relay：外部写入后，在 daemon 下次 reload 前，其他 peer 不会收到更新。
+
+**Phase 6 推荐方案：**
+
+1. **首选路径**：所有写操作都通过 control socket 交给 daemon。CLI 已经默认这样工作。
+2. **监控兜底**：daemon 对 state 文件路径加 `fsnotify` / `inotify` watcher。
+   - 文件内容变化（mtime/size/digest 任一变化）→ post `StateFileChangedEvent` 到事件循环。
+   - 事件循环收到后 `loadState()`，若 digest 变化则 `notifyStateChanged()`，立即触发 outbound sync 和 relay。
+3. **并发保护**：
+   - daemon `saveState()` 前先对 state 文件加 `flock`（互斥锁）。
+   - 外部工具如果也遵守 `flock`，可避免并发写；不遵守则至少 daemon 写期间不会被覆盖。
+   - reload 前再次比较 digest/mtime，发现文件在内存状态生成后又被改动才重新加载，避免无意义重载。
+4. **明确不支持**：多个 writer 同时绕过 control socket 直接写 state DB 是未定义行为；文档会写明「daemon 运行期间请通过 control socket 写入」。
+
+**状态机角度：**
+
+`StateFileChangedEvent` 对同步状态机的影响等同于本地 `record_put` 完成后的 `notifyStateChanged()`：事件循环为所有需要同步的 peer post `SyncTimerEvent`，启动新的 `SyncSession` 把新 digest 发出去。
 
 ## 7. 与现有组件的关系
 

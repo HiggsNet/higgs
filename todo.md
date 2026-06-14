@@ -762,7 +762,7 @@
 ### 6.0 事件驱动控制面重构
 
 - [ ] **6.0.1 事件类型与事件循环改造**
-  - [ ] 在 `app/higgs/sync_events.go` 定义 `SyncEvent` 联合类型：`SyncTimerEvent`、`PacketEvent`、`UnsolicitedPacketEvent`、`QuietTimeoutEvent`、`RoundTimeoutEvent`、`ObjectPullResultEvent`、`ObjectChunkEvent`、`FetchZoneEvent` 等
+  - [ ] 在 `app/higgs/sync_events.go` 定义 `SyncEvent` 联合类型：`SyncTimerEvent`、`PacketEvent`、`UnsolicitedPacketEvent`、`QuietTimeoutEvent`、`RoundTimeoutEvent`、`ObjectPullResultEvent`、`ObjectChunkEvent`、`FetchZoneEvent`、`StateFileChangedEvent` 等
   - [ ] 改造 `DaemonService.Run()`：统一 select `packetCh`、`d.Events`、内部 `syncEventCh`、timer channel、object-pull result channel；保持 control/admin 事件走 `d.Events`，sync 内部事件走 `syncEventCh`
   - [ ] 移除 `sync.go` 中所有 `transport.Receive()` / `receiveWithContext` / `receiveWithDeadline`；UDP 只由 `startGossipPacketReceiver` 读取
 
@@ -799,6 +799,9 @@
   - [ ] 明确落盘时机：`Completed`、`Failed`、apply 导致 digest 变化后、control/admin 事件完成后
   - [ ] 移除 `handlePacketUntil` / 旧 `syncRound` 里的 `defer saveState()`
   - [ ] daemon 主 goroutine 串行写 state，避免多 goroutine 写 DB
+  - [ ] 对 state 文件加 `flock` 互斥锁：`saveState()` 前加锁，`loadState()` 前也尝试加锁或校验 mtime/digest，防止 daemon 与外部工具并发写
+  - [ ] 新增 `stateFileWatcher`：用 `fsnotify`/`inotify` 监听 state 文件变化；变化时 post `StateFileChangedEvent` 到事件循环；事件循环校验 digest 后 `loadState()` 并触发 outbound sync（效果等同于本地 `record_put` 后的 `notifyStateChanged`）
+  - [ ] 明确文档：daemon 运行期间推荐所有写操作走 control socket；直接改 state DB 属于开发/恢复模式，由 watcher 兜底但非实时保证
 
 - [ ] **6.0.7 并发 race 修复**
   - [ ] 给 `ReplayWindow` 加互斥锁（即使单 reader，也作为安全网；单测保留并发压力测试）
