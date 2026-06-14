@@ -455,10 +455,10 @@ chain-relay-smoke: build
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c" "$$tmp/d"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'peer_id: node-admin' 'listen_addr: 127.0.0.1:33473' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'peer_id: zone-catofes-admin' 'listen_addr: 127.0.0.1:33478' > "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33474' 'bootstrap:' '  - id: node-b.catofes.' '    addr: 127.0.0.1:33475' > "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33475' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33474' '  - id: node-c.catofes.' '    addr: 127.0.0.1:33476' > "$$tmp/b/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/c" 'peer_id: node-c.catofes.' 'listen_addr: 127.0.0.1:33476' 'bootstrap:' '  - id: node-b.catofes.' '    addr: 127.0.0.1:33475' '  - id: node-d.catofes.' '    addr: 127.0.0.1:33477' > "$$tmp/c/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/d" 'peer_id: node-d.catofes.' 'listen_addr: 127.0.0.1:33477' 'bootstrap:' '  - id: node-c.catofes.' '    addr: 127.0.0.1:33476' > "$$tmp/d/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'peer_id: node-a.catofes.' 'listen_addr: 127.0.0.1:33474' 'publish_endpoints: false' 'bootstrap:' '  - id: node-b.catofes.' '    addr: 127.0.0.1:33475' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'peer_id: node-b.catofes.' 'listen_addr: 127.0.0.1:33475' 'publish_endpoints: false' 'bootstrap:' '  - id: node-a.catofes.' '    addr: 127.0.0.1:33474' '  - id: node-c.catofes.' '    addr: 127.0.0.1:33476' > "$$tmp/b/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/c" 'peer_id: node-c.catofes.' 'listen_addr: 127.0.0.1:33476' 'publish_endpoints: false' 'bootstrap:' '  - id: node-b.catofes.' '    addr: 127.0.0.1:33475' '  - id: node-d.catofes.' '    addr: 127.0.0.1:33477' > "$$tmp/c/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/d" 'peer_id: node-d.catofes.' 'listen_addr: 127.0.0.1:33477' 'publish_endpoints: false' 'bootstrap:' '  - id: node-c.catofes.' '    addr: 127.0.0.1:33476' > "$$tmp/d/config.yaml"; \
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
 	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
 	for node in catofes a b c d; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \

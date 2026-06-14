@@ -87,27 +87,96 @@ Phase 6 的结构性修复是：**单一 UDP reader + 显式 per-peer 同步会�
 | `ObjectChunkEvent{sessionID, zone, chunk}` | 收到 `object_chunk` 且匹配活跃 transfer |
 | `StateFileChangedEvent{}` | fsnotify/inotify 检测到 state 文件被外部程序修改 |
 
-### 3.3 状态转换表
+### 3.3 状态机图
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+
+    Idle --> PingSent : SyncTimerEvent
+    note right of Idle
+      周期触发 / 手动 trigger / relay 唤醒
+    end note
+
+    PingSent --> AwaitingAnnounce : PongReceived
+    PingSent --> AwaitingAnnounce : PacketEvent{PING}
+    PingSent --> FetchingLocal : PongReceived
+    PingSent --> Completed : PongReceived
+    PingSent --> FetchingLocal : FetchZoneReceived
+    note right of PingSent
+      PING 等价于 PONG，旧路径同时回 PONG；<br/>
+      对端请求本地 zones 时发送 ANNOUNCE；<br/>
+      无差异则直接 Completed
+    end note
+
+    AwaitingAnnounce --> FetchingLocal : FetchZoneReceived
+    AwaitingAnnounce --> AwaitingAnnounce : FetchZoneReceived
+    AwaitingAnnounce --> ObjectPulling : PacketQuietTimeout(1st)
+    AwaitingAnnounce --> Completed : PacketQuietTimeout
+    AwaitingAnnounce --> AwaitingAnnounce : AnnounceReceived
+    AwaitingAnnounce --> Completed : AnnounceReceived
+    note right of AwaitingAnnounce
+      已发 FETCH_ZONE / ANNOUNCE；<br/>
+      第一静默期满 → ObjectPulling；<br/>
+      pending 为空 / 全部补齐 → Completed
+    end note
+
+    FetchingLocal --> FetchingLocal : FetchZoneReceived
+
+    ObjectPulling --> AwaitingAnnounce : ObjectPullResultEvent{ok}
+    ObjectPulling --> Completed : ObjectPullResultEvent{ok}
+    ObjectPulling --> ChunkFallback : ObjectPullResultEvent{err}
+
+    ChunkFallback --> AwaitingAnnounce : ObjectChunkEvent{complete}
+    ChunkFallback --> Completed : ObjectChunkEvent{complete}
+    ChunkFallback --> Failed : ObjectChunkEvent{err}
+
+    PingSent --> Failed : RoundTimeoutEvent
+    AwaitingAnnounce --> Failed : RoundTimeoutEvent / PacketQuietTimeout(2nd+)
+    ObjectPulling --> Failed : RoundTimeoutEvent / PacketQuietTimeout(2nd+)
+    ChunkFallback --> Failed : RoundTimeoutEvent / PacketQuietTimeout(2nd+)
+
+    Completed --> [*]
+    Failed --> [*]
+```
+
+**图释（中文）：**
+
+- 每个 peer 的同步会话从 `Idle` 开始，由 `SyncTimerEvent` 触发进入 `PingSent`，本节点发送 `PING` 并启动 round / packet_quiet 两个 timer。
+- 在 `PingSent` 状态下收到 `PONG`（或等价的入站 `PING`）后，分三条路：
+  1. 自己有缺失 zones → `AwaitingAnnounce`，发送 `FETCH_ZONE`，并**重置 `quietCount`、重启 packet_quiet timer**；
+  2. 对端请求本节点 zones → `FetchingLocal`，发送 `ANNOUNCE`；
+  3. 双方无差异 → `Completed`。
+- `AwaitingAnnounce` 是“等待对端数据”的核心状态：
+  - 收到完整 `ANNOUNCE` 且补齐全部缺失 → `Completed`；
+  - 收到不完整或 stale 的 `ANNOUNCE` → 继续留在 `AwaitingAnnounce`；
+  - 第一静默期（`PacketQuietTimeout`）满后仍有缺失 → `ObjectPulling`，走异步 TCP object pull；
+  - 第二静默期仍无进展或 `RoundTimeoutEvent` 触发 → `Failed`。
+- `ObjectPulling` 成功 → 回到 `AwaitingAnnounce` 或 `Completed`；失败 → `ChunkFallback`，改走 UDP chunk 回退。
+- `FetchingLocal` 只负责“对端向本节点要数据”，收到新的 `FETCH_ZONE` 就继续发送 `ANNOUNCE`，不影响本端拉取流程。
+
+### 3.4 状态转换表
 
 | 事件 | 当前状态 | 下一状态 | 动作 |
 |------|----------|----------|------|
-| `SyncTimerEvent` | `Idle` | `PingSent` | 发送 `PING`；启动 `RoundTimeout` |
-| `PongReceived` | `PingSent` | `AwaitingAnnounce` | 计算缺失 zones，发送 `FETCH_ZONE`；**重置并启动 `PacketQuietTimeout`** |
+| `SyncTimerEvent` | `Idle` | `PingSent` | 发送 `PING`；启动 `RoundTimeout` 与初始 `PacketQuietTimeout` |
+| `PongReceived` | `PingSent` | `AwaitingAnnounce` | 计算缺失 zones，发送 `FETCH_ZONE`；**重置 `quietCount` 并重启 `PacketQuietTimeout`** |
 | `PongReceived` | `PingSent` | `FetchingLocal` | 对方请求本节点 zones，发送 snapshots |
 | `PongReceived` | `PingSent` | `Completed` | 无差异，无需拉取 |
 | `PacketEvent{PING}` | `PingSent` | `AwaitingAnnounce` | 入站 `PING` 携带对方 digests，对活跃 session 等价于 `PongReceived`；同时旧路径会回一个 `PONG` |
-| `FetchZoneReceived` | `Idle`/`AwaitingAnnounce` | `FetchingLocal` | 按预算打包发送 snapshots |
-| `AnnounceReceived` | `AwaitingAnnounce` | `AwaitingAnnounce` | apply；若仍有 pending zones 继续等 |
-| `AnnounceReceived` | `AwaitingAnnounce` | `Completed` | apply；全部补齐 |
+| `FetchZoneReceived` | `Idle` / `PingSent` | `FetchingLocal` | 按预算打包发送 snapshots |
+| `FetchZoneReceived` | `AwaitingAnnounce` | `AwaitingAnnounce` | 发送 snapshots，继续等待本端缺失数据 |
+| `AnnounceReceived` | `AwaitingAnnounce` / `ObjectPulling` / `ChunkFallback` | `AwaitingAnnounce` | apply；若仍有 pending zones 继续等 |
+| `AnnounceReceived` | `AwaitingAnnounce` / `ObjectPulling` / `ChunkFallback` | `Completed` | apply；全部补齐 |
 | `PacketQuietTimeout` (1st) | `AwaitingAnnounce` | `ObjectPulling` | 已发 `FETCH_ZONE`/snapshots，UDP 静默期满且仍有缺失，启动异步 TCP pull |
 | `ObjectPullResultEvent{ok}` | `ObjectPulling` | `AwaitingAnnounce` | apply snapshot；若还有 pending 继续等 |
 | `ObjectPullResultEvent{err}` | `ObjectPulling` | `ChunkFallback` | 发送 `FETCH_ZONE{ChunkFallback:true}` |
-| `ObjectChunkEvent{complete}` | `ChunkFallback` | `AwaitingAnnounce`/`Completed` | 重组完成、apply |
-| `PacketQuietTimeout` (2nd) | `AwaitingAnnounce`/`ObjectPulling`/`ChunkFallback` | `Completed`/`Failed` | 第二静默期结束（等待 object-pull 后的迟到 UDP / chunk），结束本轮 |
+| `ObjectChunkEvent{complete}` | `ChunkFallback` | `AwaitingAnnounce` / `Completed` | 重组完成、apply |
+| `PacketQuietTimeout` (2nd+) | `AwaitingAnnounce` / `ObjectPulling` / `ChunkFallback` | `Completed` / `Failed` | 第二静默期结束（等待 object-pull 后的迟到 UDP / chunk），结束本轮 |
 | `RoundTimeoutEvent` | 任意活跃状态 | `Failed` | 记录 backoff、last_error、save state |
 | `UnsolicitedPacketEvent` | 任意 | 不变 | 路由到通用 `handlePacketUntil` |
 
-### 3.4 动作（Actions）
+### 3.5 动作（Actions）
 
 `SyncSession.OnEvent` 返回的动作由 daemon 事件循环执行：
 
@@ -298,6 +367,72 @@ ObjectPullBudget 默认 5s（单个大 zone 的 TCP 传输预算）
 因此 **250ms 这个读超时将消失**，取而代之的是基于 RTT 的 timer 事件。
 
 ## 6. Daemon Event Loop 语义（回答：本地更新、落盘、并发安全）
+
+### 6.0 Run 主循环流程
+
+`DaemonService.Run` 启动后会拉起若干辅助 goroutine，但**所有状态变更都收敛到主 goroutine 的单一循环**中：
+
+```text
+初始化
+  ├── 打开 UDP Transport
+  ├── startGossipPacketReceiver()     # 单 goroutine 读 UDP → packetCh
+  ├── startObjectPullServer()         # TCP object pull 监听
+  ├── objectPullPool.Start()          # 异步 object pull worker pool
+  └── startControlServer()            # Unix socket control server
+        ↓
+主循环 for {
+  1. processEvents() 先把 d.Events 里已有的控制事件全部 drain 处理完
+  2. 检查并触发：endpoint publish timer / sync timer / IPsec reconcile / routing reconcile
+  3. reloadStateIfChanged() 检查外部是否改动了 state DB
+  4. nextTimerWait() 计算到下一个 timer 的等待时间
+  5. select { 等待事件或 timer }
+     ├── d.Events          # control/admin 事件（record_put / delegate / join / sync_trigger 等）
+     ├── packetCh          # UDP gossip 包
+     ├── d.syncEvents      # SyncSession 产生的事件（PongReceived / FetchZoneReceived / Timer 事件等）
+     ├── d.objectPullResults # TCP object pull 完成结果 → 转成 syncEvents
+     └── timer.C           # 到达下一个计划 timer 时间，回到循环顶部触发
+}
+```
+
+#### 6.0.1 为什么要先 `processEvents()` drain 一轮？
+
+`processEvents()` 在主循环体开头做一个**非阻塞 drain**：把 `d.Events` channel 里已经排队的事件全部处理完再检查 timer。这样可以保证：
+
+- 控制事件（如 `sync_trigger`）立即生效，不会被下一轮 sync timer 的精度影响；
+- `record_put`、delegate 等事件触发 `notifyStateChanged()` 后，紧接着的 sync timer 能看到最新 digest；
+- 避免“收到事件 → 先 sleep 等 timer → 再处理”的延迟。
+
+`processEvents()` 内部设置 `d.drainingEvents = true`，处理完后再 `flushIPsecReconcile()` / `flushRoutingReconcile()`，把 drain 期间累积的 IPsec/routing 变更一次性 reconcile。
+
+#### 6.0.2 主循环 select 的 five cases
+
+| case | 来源 | 处理方式 |
+|------|------|----------|
+| `d.Events` | control socket / CLI / 内部 admin 事件 | `handleEvent()` 在锁内串行处理；若 `event.Reply != nil` 把结果写回；`stop=true` 时退出循环 |
+| `packetCh` | `startGossipPacketReceiver` | 包装成 `daemonEventPacket`，交给 `handlePacketEvent()`；错误只记录统计 |
+| `d.syncEvents` | `SyncSession` FSM / `TimerManager` | `handleSyncEvent()` 在锁内驱动对应 peer 的 session，执行返回的 actions |
+| `d.objectPullResults` | object pull worker pool | 通过 `objectPullResultToEvent()` 转成 `ObjectPullResultEvent` 再塞进 `d.syncEvents`；channel 满则丢弃并记录 warning |
+| `timer.C` | `nextTimerWait()` 计算的等待时间 | 回到循环顶部，由下一步的 timer 检查逻辑触发 sync / endpoint / reconcile |
+
+#### 6.0.3 Timer 调度策略
+
+主循环维护多个 `next*Time` 时间点：
+
+- `nextSync`：下一次 outbound sync 触发时间；可被控制事件、`sync_trigger`、state 文件变化、endpoint publish 重置为 `now`。
+- `nextEndpointPublish`：下一次本地 endpoint 发现与发布；默认 5 分钟。
+- `nextIPsecReconcile` / `nextRoutingReconcile`：周期性 reconcile；也会被 `ipsecDirty` / `routingDirty` 即时触发。
+
+`nextTimerWait()` 取这些时间点中最近的一个与当前时间差值，作为 select 的等待上限。这样**不需要为每个 timer 单独启 goroutine**，所有 timer 都通过同一个 `time.Timer` 等待，到期后回到循环顶部统一处理。
+
+#### 6.0.4 事件处理的并发边界
+
+- **主 goroutine**：唯一写状态、`saveState()`、apply snapshot、修改 `NetworkState` 的 goroutine。
+- **UDP reader goroutine**：只读 socket，把包 push 到 `packetCh`，不碰状态。
+- **Control server goroutine**：只 accept Unix socket conn，把请求包装成 `daemonEvent` push 到 `d.Events`，不碰状态。
+- **Object pull workers**：只做 TCP 网络 I/O 和序列化/反序列化，结果 push 到 `d.objectPullResults`，不碰状态。
+- **Timer goroutine**：`TimerManager` 内部 goroutine 只在 timer 到期时向 `d.syncEvents` post 事件，不碰状态。
+
+因此，**任何 worker 都不持有 `stateFile` 或 `NetworkState` 的可变引用**，单 writer 模型成立。
 
 ### 6.1 单 goroutine 串行处理
 

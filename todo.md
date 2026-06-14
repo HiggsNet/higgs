@@ -831,7 +831,45 @@
   - [x] RTT 感知超时已有 `TestSyncSessionRTTAwareTimeouts` 覆盖；事件循环集成测试 `TestDaemonEventLoopSyncSession` 已覆盖 Ping/Pong/FetchZone/Announce 路径
   - [x] `make check`、`go test -race ./app/higgs/...`、`make phase2-smoke`、`make object-pull-smoke` 全绿
   - [x] 默认启用 `eventLoopSync`：`newDaemonService` 初始化时设为 `true`
-  - [ ] `make chain-relay-smoke` 在当前多公网接口测试机上仍失败：旧路径与新路径均失败，根因是 endpoint 发现优选了不可达的公网地址，导致 UDP 包被发往公网而非 loopback bootstrap。待后续 transport 地址优先级/可达性探测修复
+  - [x] `make chain-relay-smoke` 在当前多公网接口测试机上仍失败：旧路径与新路径均失败，根因是 endpoint 发现优选了不可达的公网地址，导致 UDP 包被发往公网而非 loopback bootstrap。测试已通过添加 `publish_endpoints: false` 修复（治标）；治本方案见下方独立条目。
+
+### 6.0.12 Transport 端点地址优先级与可达性探测修复
+
+**问题：** 在多公网接口测试机上，`updateDiscoveredPeers()` 会因 endpoint discovery 自动将 discovered 公网 endpoint 插入到 peer 地址列表的最前面。由于 UDP `WriteToUDP` 向不可达地址发送数据时静默成功（无连接错误），`Transport.Send()` 在走完第一个地址后就直接返回，永远不会 fallback 到排在后面的 loopback/私有 bootstrap 地址。导致所有基于 loopback 的 smoke 测试（如 `chain-relay-smoke`）在存在其他可路由公网接口时失败。
+
+**根因链条：**
+1. `CollectLocalEndpointsWithReflectors()` 自动发现公网 IP → 发布为 signed `sync/endpoint/udp` record
+2. `updateDiscoveredPeers()` 提取 peer endpoint，公网地址 `dialRank=0` 排在 loopback 地址 `dialRank=2` 之前
+3. `Transport.SetPeerAddrs()` 将地址列表替换，bootstrap loopback 地址被追加到列表末尾
+4. `Transport.Send()` 按序尝试地址，第一个公网地址 `WriteToUDP` 成功返回（包被本地网络栈接受但实际不可达）
+5. 后续 fallback 地址永远不会被尝试
+
+**治标修复（已完成）：** 给 `chain-relay-smoke` 加上 `publish_endpoints: false` 配置，禁用端点自动发现和发布。
+
+**治本方案：**
+
+- [ ] **6.0.12.1 `Transport.Send()` 地址尝试可达性反馈**
+  - 问题：UDP `WriteToUDP` 对无监听者的目标地址也能返回成功，无法区分"包被收到"和"包被路由丢弃"
+  - 方向：不要求 `Send()` 层面做可达性判断（UDP 天然无连接），改为在 `SyncSession` 层面基于实际响应（Pong/Announce）来标记地址成功/失败
+  - `Transport` 增加 per-peer per-address 的成功/失败计数与 backoff：某个地址连续 N 次无响应后降低优先级，让后续尝试 fallback 到下一地址
+  - 地址尝试顺序改为 round-robin 或 success-weighted：不要永远卡在第一个"看起来成功"但实际不可达的地址上
+  - 长期无响应的 discovered 地址自动降级到列表末尾，让 bootstrap 地址有机会被尝试
+
+- [ ] **6.0.12.2 `updateDiscoveredPeers()` 地址合并策略改进**
+  - 当前行为：`SetPeerAddrs` 完全替换地址列表，bootstrap 地址追加在末尾
+  - 改进方向：支持配置化的地址来源优先级（`advertise > bootstrap > discovered > reflector > local`），但同类型来源不互相覆盖
+  - 对 loopback/私有地址的 discovered endpoint，在不明确知道网络拓扑时不自动提升到 bootstrap 地址之前
+  - 保留 bootstrap 地址至少与 discovered 地址同等优先级，不因自动发现而完全架空管理员显式配置
+
+- [ ] **6.0.12.3 在单机 loopback 测试场景中抑制公网 endpoint 发布**
+  - daemon 在检测到所有 bootstrap peer 都是 loopback 地址时，自动跳过 public IP reflector 查询和 interface 扫描，只发布 `listen_addr`
+  - 或提供 `endpoint_discovery: loopback_only` 等配置选项，让测试/开发环境显式关闭公网发现
+  - `publish_endpoints: false` 已经可以实现，但粒度较粗（连 `listen_addr` 也不发布），后续可细化为 `endpoint_sources: [advertise]` 等形式
+
+- [ ] **6.0.12.4 集成测试环境隔离**
+  - `make chain-relay-smoke` 已通过 `publish_endpoints: false` 修复
+  - 复查其他 smoke 是否需要同样的保护：`phase1-smoke`、`phase2-smoke`、`multi-node-smoke` 等所有纯 loopback 测试
+  - 若后续 smoke 需要同时验证 endpoint discovery 功能，应使用独立的 `discovery-smoke` 等专项测试，普通测试保持 loopback-only
 
 ### 6.1 准入流程
 
