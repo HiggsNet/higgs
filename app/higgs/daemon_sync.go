@@ -1,0 +1,416 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
+)
+
+// runtimeClock wraps a Runtime-style func() time.Time into the Clock interface.
+type runtimeClock struct {
+	now func() time.Time
+}
+
+func (c *runtimeClock) Now() time.Time { return c.now() }
+
+func (c *runtimeClock) NewTimer(d time.Duration) Timer {
+	return &realTimer{Timer: time.NewTimer(d)}
+}
+
+// EnableEventLoopSync switches the daemon to the event-driven SyncSession sync
+// path. It is intended for tests and future configuration; the default remains
+// the old synchronous path. If clock is nil, d.Sync.App.Clock is used when
+// available, otherwise the real system clock.
+func (d *DaemonService) EnableEventLoopSync(clock Clock) {
+	d.eventLoopSync = true
+	if clock == nil {
+		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Clock != nil {
+			clock = &runtimeClock{now: d.Sync.App.Clock}
+		} else {
+			clock = NewRealClock()
+		}
+	}
+	d.timerManager = NewTimerManager(clock, d.syncEvents)
+}
+
+func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool) error {
+	now := d.Sync.now()
+	peers := outboundSyncPeersAt(d.Sync.State, d.Sync.Config, now)
+	d.logDebug("sync", "event_loop_timer", map[string]any{
+		"peer_count": len(peers),
+		"force":      force,
+	})
+	for _, peerID := range peers {
+		if !force && backoffRemaining(d.Sync.State.SyncPeers[peerID], now) > 0 {
+			d.logDebug("sync", "event_loop_skipped", map[string]any{
+				"peer_id": peerID,
+				"reason":  "backoff",
+			})
+			continue
+		}
+		if existing, ok := d.syncSessions[peerID]; ok && !existing.Done() {
+			d.logDebug("sync", "event_loop_skipped", map[string]any{
+				"peer_id": peerID,
+				"reason":  "session_active",
+			})
+			continue
+		}
+		d.syncSessions[peerID] = NewSyncSession(peerID)
+		event := &SyncTimerEvent{
+			PeerID:       peerID,
+			LocalDigests: gossip.ZoneDigests(d.Sync.State.Network),
+		}
+		select {
+		case d.syncEvents <- event:
+		default:
+			d.logWarn("sync", "event_loop_full", map[string]any{"peer_id": peerID})
+		}
+	}
+	return nil
+}
+
+func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx context.Context) error {
+	event := routePacket(packet, d.syncSessions)
+	switch ev := event.(type) {
+	case *PacketEvent:
+		msg := ev.Packet.Message
+		switch msg.Type {
+		case gossip.MessagePing:
+			// Treat pings as unsolicited so the existing Pong path remains.
+			return d.Sync.handlePacket(packet)
+		case gossip.MessagePong:
+			if msg.Pong == nil {
+				return nil
+			}
+			return d.postSyncEvent(&PongReceivedEvent{
+				PeerID:         msg.PeerID,
+				Pong:           msg.Pong,
+				MissingZones:   gossip.FetchList(d.Sync.State.Network, msg.Pong.Zones),
+				LocalSnapshots: localSnapshotsForPong(d.Sync.State.Network, msg.Pong.FetchZones),
+			})
+		case gossip.MessageFetchZone:
+			if msg.FetchZone == nil {
+				return nil
+			}
+			var snap *gossip.ZoneSnapshot
+			if s, err := gossip.Snapshot(d.Sync.State.Network, msg.FetchZone.Zone); err == nil {
+				snap = s
+			}
+			return d.postSyncEvent(&FetchZoneReceivedEvent{
+				PeerID:   msg.PeerID,
+				Zone:     msg.FetchZone.Zone,
+				Snapshot: snap,
+			})
+		case gossip.MessageAnnounce:
+			if msg.Announce == nil {
+				return nil
+			}
+			return d.postSyncEvent(&AnnounceReceivedEvent{
+				PeerID:   msg.PeerID,
+				Announce: msg.Announce,
+			})
+		case gossip.MessageObjectChunk:
+			// Object chunks still use the global UDP chunk assembly store.
+			return d.Sync.handleObjectChunk(msg, syncLimits(d.Sync.Config))
+		default:
+			return d.Sync.handlePacket(packet)
+		}
+	case *UnsolicitedPacketEvent:
+		return d.Sync.handlePacket(packet)
+	default:
+		return d.Sync.handlePacket(packet)
+	}
+}
+
+func (d *DaemonService) postSyncEvent(event SyncEvent) error {
+	select {
+	case d.syncEvents <- event:
+		return nil
+	default:
+		d.logWarn("sync", "event_dropped", map[string]any{"reason": "sync_events_full"})
+		return errors.New("sync event channel full")
+	}
+}
+
+func localSnapshotsForPong(ns *zone.NetworkState, zones []zone.ZonePath) []*gossip.ZoneSnapshot {
+	if ns == nil || len(zones) == 0 {
+		return nil
+	}
+	var out []*gossip.ZoneSnapshot
+	for _, z := range zones {
+		snap, err := gossip.Snapshot(ns, z)
+		if err != nil {
+			continue
+		}
+		out = append(out, snap)
+	}
+	return out
+}
+
+func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
+	peerID := syncEventPeerID(event)
+	if peerID == "" {
+		d.logDebug("sync", "event_dropped", map[string]any{"reason": "no_peer_id"})
+		return
+	}
+	session := d.syncSessions[peerID]
+	if session == nil {
+		d.logDebug("sync", "event_dropped", map[string]any{
+			"peer_id": peerID,
+			"reason":  "no_session",
+		})
+		return
+	}
+	actions, err := session.OnEvent(event, d.Sync.now())
+	if err != nil {
+		d.logWarn("sync", "session_event_error", map[string]any{
+			"peer_id": peerID,
+			"error":   err,
+		})
+		session.State = SyncSessionFailed
+		session.lastError = err
+	}
+	changed := d.executeSyncActions(ctx, session, actions)
+	if session.Done() {
+		d.completeSyncSession(session, changed)
+	}
+}
+
+func syncEventPeerID(event SyncEvent) string {
+	switch e := event.(type) {
+	case *SyncTimerEvent:
+		return e.PeerID
+	case *PongReceivedEvent:
+		return e.PeerID
+	case *FetchZoneReceivedEvent:
+		return e.PeerID
+	case *AnnounceReceivedEvent:
+		return e.PeerID
+	case *PacketQuietTimeoutEvent:
+		return e.PeerID
+	case *RoundTimeoutEvent:
+		return e.PeerID
+	case *ObjectPullResultEvent:
+		return e.PeerID
+	case *ObjectChunkEvent:
+		return e.PeerID
+	}
+	return ""
+}
+
+func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSession, actions []SyncAction) bool {
+	if len(actions) == 0 {
+		return false
+	}
+	peerID := session.PeerID
+	now := d.Sync.now()
+	configureValidation(d.Sync.State.Network)
+
+	var changed bool
+	limits := syncLimits(d.Sync.Config)
+
+	// First pass: apply snapshots and records.
+	for _, action := range actions {
+		switch a := action.(type) {
+		case ApplySnapshotAction:
+			if a.Snapshot == nil {
+				continue
+			}
+			_, err := gossip.ApplySnapshot(d.Sync.State.Network, a.Snapshot, now, limits)
+			if err != nil {
+				recordRejectedDigest(d.Sync.State, peerID, digestForSnapshot(a.Snapshot), gossip.RejectReason(err), now)
+				d.logWarn("sync", "zone_apply_failed", map[string]any{
+					"peer_id": peerID,
+					"zone":    a.Snapshot.Zone,
+					"reason":  gossip.RejectReason(err),
+					"error":   err,
+				})
+				continue
+			}
+			clearRejectedDigest(d.Sync.State, peerID, a.Snapshot.Zone)
+			changed = true
+			d.logInfo("sync", "zone_applied", map[string]any{
+				"peer_id": peerID,
+				"zone":    a.Snapshot.Zone,
+				"via":     "event_loop",
+			})
+		case ApplyRecordSnapshotAction:
+			if a.Record == nil || a.Record.Record == nil {
+				continue
+			}
+			err := gossip.ApplyRecordSnapshot(d.Sync.State.Network, a.Record, now)
+			if err != nil {
+				recordRejectedRecord(d.Sync.State, peerID, a.Record, gossip.RejectReason(err), now)
+				d.logWarn("sync", "record_apply_failed", map[string]any{
+					"peer_id": peerID,
+					"zone":    a.Record.Zone,
+					"key":     a.Record.Record.Key,
+					"reason":  gossip.RejectReason(err),
+					"error":   err,
+				})
+				continue
+			}
+			normalizeSyncPeers(d.Sync.State)
+			peerState := d.Sync.State.SyncPeers[peerID]
+			if peerState.RejectedDigests != nil {
+				delete(peerState.RejectedDigests, rejectedRecordKey(a.Record.Zone, a.Record.Record.Key))
+				d.Sync.State.SyncPeers[peerID] = peerState
+			}
+			changed = true
+		}
+	}
+
+	// Second pass: persist once if any apply succeeded.
+	if changed {
+		if err := d.Sync.saveState(); err != nil {
+			d.logWarn("sync", "save_failed", map[string]any{"peer_id": peerID, "error": err})
+		}
+	}
+
+	// Third pass: send messages.
+	for _, action := range actions {
+		switch a := action.(type) {
+		case SendPingAction:
+			d.sendSyncMessage(peerID, &gossip.Message{
+				Type: gossip.MessagePing,
+				Ping: &gossip.Ping{Zones: a.Digests},
+			})
+		case SendPongAction:
+			d.sendSyncMessage(peerID, &gossip.Message{
+				Type: gossip.MessagePong,
+				Pong: &gossip.Pong{Zones: a.Digests, FetchZones: a.FetchZones},
+			})
+		case SendFetchZoneAction:
+			d.sendSyncMessage(peerID, &gossip.Message{
+				Type:      gossip.MessageFetchZone,
+				FetchZone: &gossip.FetchZone{Zone: a.Zone, ChunkFallback: a.ChunkFallback},
+			})
+		case SendAnnounceAction:
+			announce := &gossip.Announce{}
+			if len(a.Snapshots) > 0 {
+				announce.Snapshots = make([]gossip.ZoneSnapshot, 0, len(a.Snapshots))
+				for _, snap := range a.Snapshots {
+					if snap != nil {
+						announce.Snapshots = append(announce.Snapshots, *snap)
+					}
+				}
+			}
+			if len(a.Records) > 0 {
+				announce.Records = make([]gossip.RecordSnapshot, 0, len(a.Records))
+				for _, rec := range a.Records {
+					if rec != nil {
+						announce.Records = append(announce.Records, *rec)
+					}
+				}
+			}
+			d.sendSyncMessage(peerID, &gossip.Message{
+				Type:     gossip.MessageAnnounce,
+				Announce: announce,
+			})
+		}
+	}
+
+	// Fourth pass: start async object pulls.
+	for _, action := range actions {
+		if a, ok := action.(StartObjectPullAction); ok {
+			d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: a.PeerID, Zone: a.Zone})
+		}
+	}
+
+	// Fifth pass: timer actions.
+	for _, action := range actions {
+		switch a := action.(type) {
+		case StartTimerAction:
+			d.timerManager.Start(a.PeerID, a.Kind, a.Deadline)
+		case CancelTimerAction:
+			d.timerManager.Cancel(a.PeerID, a.Kind)
+		}
+	}
+
+	// Final pass: backoff and save-state actions.
+	for _, action := range actions {
+		switch a := action.(type) {
+		case RecordBackoffAction:
+			recordPeerBackoff(d.Sync.State, a.PeerID, a.Err, now)
+		case SaveStateAction:
+			if err := d.Sync.saveState(); err != nil {
+				d.logWarn("sync", "save_failed", map[string]any{
+					"peer_id": peerID,
+					"reason":  a.Reason,
+					"error":   err,
+				})
+			}
+		}
+	}
+
+	return changed
+}
+
+func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
+	if d.Sync == nil || d.Sync.Transport == nil {
+		return
+	}
+	if err := d.Sync.Transport.Send(peerID, msg); err != nil {
+		d.logDebug("sync", "send_failed", map[string]any{
+			"peer_id": peerID,
+			"type":    msg.Type,
+			"error":   err,
+		})
+	}
+}
+
+func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) {
+	peerID := session.PeerID
+	d.timerManager.CancelAll(peerID)
+	recordPeerSyncAt(d.Sync.State, peerID, session.lastError, d.Sync.now())
+	if session.State == SyncSessionCompleted && changed {
+		if d.Sync.Transport != nil {
+			d.Sync.updateDiscoveredPeers()
+		}
+		d.notifyStateChanged()
+		if err := d.Sync.saveState(); err != nil {
+			d.logWarn("sync", "session_save_failed", map[string]any{"peer_id": peerID, "error": err})
+		}
+	}
+	delete(d.syncSessions, peerID)
+}
+
+func digestForSnapshot(snapshot *gossip.ZoneSnapshot) gossip.ZoneDigest {
+	if snapshot == nil {
+		return gossip.ZoneDigest{}
+	}
+	return gossip.ZoneDigest{
+		Zone:     snapshot.Zone,
+		RootHash: gossip.ZoneRoot(zoneStateFromSnapshot(snapshot)),
+	}
+}
+
+func zoneStateFromSnapshot(snapshot *gossip.ZoneSnapshot) *zone.ZoneState {
+	if snapshot == nil {
+		return nil
+	}
+	zs := zone.NewZoneState(snapshot.Zone, snapshot.Authority)
+	zs.Delegations = snapshot.Delegations
+	zs.Revocations = snapshot.Revocations
+	zs.Records = snapshot.Records
+	zs.RecordHistory = snapshot.RecordHistory
+	return zs
+}
+
+func recordPeerBackoff(state *stateFile, peerID string, err error, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	peerState.LastAttemptUnix = now.Unix()
+	if err != nil {
+		peerState.LastError = err.Error()
+	}
+	backoff := time.Duration(1<<minInt(peerState.FailureCount, 6)) * time.Second
+	peerState.BackoffUntilUnix = now.Add(backoff).Unix()
+	state.SyncPeers[peerID] = peerState
+}

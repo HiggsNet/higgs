@@ -3144,3 +3144,126 @@ func controlRequestViaPipe(t *testing.T, service *DaemonService, request control
 	<-done
 	return response
 }
+
+func TestDaemonEventLoopSyncSession(t *testing.T) {
+	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
+	now := time.Now()
+
+	recordA, err := buildSignedRecordAt(stateA, "node-a.catofes.", "event-loop-test", []byte("from-a"), "policy.string", now)
+	if err != nil {
+		t.Fatalf("build record for A: %v", err)
+	}
+	if err := stateA.Network.Put(recordA); err != nil {
+		t.Fatalf("put record on A: %v", err)
+	}
+	recordB, err := buildSignedRecordAt(stateB, "node-b.catofes.", "event-loop-test", []byte("from-b"), "policy.string", now)
+	if err != nil {
+		t.Fatalf("build record for B: %v", err)
+	}
+	if err := stateB.Network.Put(recordB); err != nil {
+		t.Fatalf("put record on B: %v", err)
+	}
+
+	transportA, err := gossip.Listen(gossip.Config{PeerID: configA.PeerID, ListenAddr: configA.ListenAddr})
+	if err != nil {
+		t.Fatalf("Listen(A): %v", err)
+	}
+	defer transportA.Close()
+	transportB, err := gossip.Listen(gossip.Config{PeerID: configB.PeerID, ListenAddr: configB.ListenAddr})
+	if err != nil {
+		t.Fatalf("Listen(B): %v", err)
+	}
+	defer transportB.Close()
+	transportA.AddPeer(configB.PeerID, transportB.LocalAddr())
+	transportB.AddPeer(configA.PeerID, transportA.LocalAddr())
+	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
+	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
+
+	rtA := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
+		Clock:     func() time.Time { return now },
+	}
+	rtB := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rtA.SaveState(stateA); err != nil {
+		t.Fatalf("SaveState(A): %v", err)
+	}
+	if err := rtB.SaveState(stateB); err != nil {
+		t.Fatalf("SaveState(B): %v", err)
+	}
+
+	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
+	serviceA.Sync.Transport = transportA
+	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
+	serviceB.Sync.Transport = transportB
+
+	fc := newFakeClock(now)
+	serviceA.EnableEventLoopSync(fc)
+	serviceB.EnableEventLoopSync(fc)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Start sessions in both directions through the event-loop timer handler.
+	if err := serviceA.handleSyncTimerEvent(ctx, true); err != nil {
+		t.Fatalf("handleSyncTimerEvent(A): %v", err)
+	}
+	if err := serviceB.handleSyncTimerEvent(ctx, true); err != nil {
+		t.Fatalf("handleSyncTimerEvent(B): %v", err)
+	}
+
+	pumpEventLoopSync(ctx, []*DaemonService{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
+
+	if _, ok := serviceA.syncSessions[configB.PeerID]; ok {
+		t.Fatalf("session for B still active on A")
+	}
+	if _, ok := serviceB.syncSessions[configA.PeerID]; ok {
+		t.Fatalf("session for A still active on B")
+	}
+
+	latestA, err := rtA.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(A): %v", err)
+	}
+	latestB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(B): %v", err)
+	}
+	if latestA.Network.Zones["node-b.catofes."] == nil || latestA.Network.Zones["node-b.catofes."].Records["event-loop-test"] == nil {
+		t.Fatalf("record from B did not appear on A")
+	}
+	if latestB.Network.Zones["node-a.catofes."] == nil || latestB.Network.Zones["node-a.catofes."].Records["event-loop-test"] == nil {
+		t.Fatalf("record from A did not appear on B")
+	}
+}
+
+func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transports []*gossip.Transport) {
+	for {
+		processed := false
+		for _, svc := range services {
+			if !svc.eventLoopSync {
+				continue
+			}
+			select {
+			case ev := <-svc.syncEvents:
+				svc.handleSyncEvent(ctx, ev)
+				processed = true
+			default:
+			}
+		}
+		for i, tr := range transports {
+			packet, err := receiveWithContext(ctx, tr, time.Now().Add(10*time.Millisecond))
+			if err == nil {
+				services[i].handlePacketEvent(packet, ctx)
+				processed = true
+			}
+		}
+		if !processed {
+			return
+		}
+	}
+}

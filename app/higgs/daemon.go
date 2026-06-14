@@ -31,6 +31,13 @@ type DaemonService struct {
 	ipsecDirty        bool
 	routingDirty      bool
 
+	eventLoopSync     bool
+	syncSessions      map[string]*SyncSession
+	syncEvents        chan SyncEvent
+	objectPullResults chan ObjectPullResult
+	objectPullPool    *objectPullPool
+	timerManager      *TimerManager
+
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager birdProcessManager
 	birdClientFactory  func(socketPath string, timeout time.Duration) birdClient
@@ -97,7 +104,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	if rt != nil {
 		socketPath = controlSocketPath(rt.Config)
 	}
-	return &DaemonService{
+	d := &DaemonService{
 		Sync:              newSyncRuntime(state, config, nil, rt),
 		Interval:          interval,
 		ControlSocketPath: socketPath,
@@ -105,6 +112,12 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 	}
+	d.syncSessions = make(map[string]*SyncSession)
+	d.syncEvents = make(chan SyncEvent, 64)
+	d.objectPullResults = make(chan ObjectPullResult, 64)
+	d.objectPullPool = newObjectPullPool(func() *stateFile { return d.Sync.State }, d.Sync.Config, d.objectPullResults, 0)
+	d.timerManager = NewTimerManager(NewRealClock(), d.syncEvents)
+	return d
 }
 
 func (d *DaemonService) Run(ctx context.Context) error {
@@ -129,6 +142,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	}
 	if objectPullListener != nil {
 		defer objectPullListener.Close()
+	}
+	if d.eventLoopSync {
+		d.objectPullPool.Start(ctx)
 	}
 	stopControl, err := d.startControlServer(ctx)
 	if err != nil {
@@ -275,6 +291,22 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			}
 			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
 				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+			}
+		case event := <-d.syncEvents:
+			timer.Stop()
+			d.handleSyncEvent(ctx, event)
+			if !sameZoneDigests(lastObservedDigests, gossip.ZoneDigests(d.Sync.State.Network)) {
+				lastObservedDigests = gossip.ZoneDigests(d.Sync.State.Network)
+			}
+		case result := <-d.objectPullResults:
+			timer.Stop()
+			select {
+			case d.syncEvents <- objectPullResultToEvent(result):
+			default:
+				d.logWarn("sync", "object_pull_result_dropped", map[string]any{
+					"peer_id": result.PeerID,
+					"zone":    result.Zone,
+				})
 			}
 		case <-timer.C:
 			// Continue the loop; timers will be checked and fired at the top.
@@ -669,6 +701,9 @@ func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Con
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
+	if d.eventLoopSync {
+		return d.handlePacketEventSyncSession(packet, ctx)
+	}
 	digestsBefore := gossip.ZoneDigests(d.Sync.State.Network)
 	if err := d.Sync.handlePacket(packet); err != nil {
 		return err
@@ -698,6 +733,9 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	}
 	d.setState(latest)
 	d.Sync.updateDiscoveredPeers()
+	if d.eventLoopSync {
+		return d.handleSyncTimerEventLoop(ctx, force)
+	}
 	digestsBeforeRound := gossip.ZoneDigests(d.Sync.State.Network)
 	var syncErr error
 	peers := outboundSyncPeersAt(d.Sync.State, d.Sync.Config, d.Sync.now())
