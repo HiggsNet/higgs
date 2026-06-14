@@ -100,7 +100,7 @@ func issueDelegation(requestInput string, outPath string) error {
 		fmt.Printf("wrote join bundle: %s\n", outPath)
 		return nil
 	}
-	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; issuing delegation directly")
+	logControlFallback("delegate_issue")
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -209,7 +209,7 @@ func revokeDelegation(path zone.ZonePath, reason string) error {
 		fmt.Printf("revoked delegation for %s via daemon\n", path)
 		return nil
 	}
-	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; revoking delegation directly")
+	logControlFallback("delegate_revoke")
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func acceptJoinBundle(bundleInput string, keyPath string) error {
 		fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
 		return nil
 	}
-	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; accepting join bundle directly")
+	logControlFallback("join_accept")
 	result, err := acceptJoinBundleInState(rt, &bundle, key)
 	if err != nil {
 		return err

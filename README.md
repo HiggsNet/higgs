@@ -327,7 +327,7 @@ daemon 启动后，`record put` 会优先通过本机 control socket 提交给 d
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record put node-a.catofes. identity node-a
 ```
 
-如果 daemon 不在，CLI 会明确提示 `daemon control socket unavailable; writing state directly`，并保留直接写 DB 的开发/恢复模式。下次 daemon 启动时会重新加载该状态并继续同步。
+如果 daemon 不在，CLI 会回退到直接写 DB 的开发/恢复模式，并输出 warning 级别结构化日志 `component=control event=fallback operation=record_put reason="daemon control socket unavailable"`。下次 daemon 启动时会重新加载该状态并继续同步。
 
 ### 双节点完整同步脚本
 

@@ -120,6 +120,17 @@ func (l *appLogger) Debug(component, event string, fields map[string]any) {
 	l.write(logLevelDebug, component, event, fields)
 }
 
+// logControlFallback logs a structured warning when a CLI command falls back
+// to direct state manipulation because the daemon control socket is not
+// available. The fallback is still functional, but operating without the
+// daemon is abnormal and should be visible at the default log level.
+func logControlFallback(operation string) {
+	newAppLogger(nil).Warn("control", "fallback", map[string]any{
+		"operation": operation,
+		"reason":    "daemon control socket unavailable",
+	})
+}
+
 func (l *appLogger) Info(component, event string, fields map[string]any) {
 	l.write(logLevelInfo, component, event, fields)
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -80,7 +79,7 @@ func submitRouteRecord(rt *Runtime, path zone.ZonePath, key string, value []byte
 		fmt.Printf("%s route %s/%s version %d via daemon\n", routeOpVerb(active), path, key, version)
 		return nil
 	}
-	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; writing state directly")
+	logControlFallback("route_submit")
 	return putRouteRecordDirect(rt, path, key, value, active, state)
 }
 

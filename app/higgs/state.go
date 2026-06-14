@@ -436,7 +436,7 @@ func saveStateAt(path string, state *stateFile) error {
 	if state != nil && state.Network != nil && state.ManagedZone.Valid() {
 		if zs := state.Network.Zones[state.ManagedZone]; zs != nil {
 			logger := newAppLogger(nil)
-			logger.Info("state", "save", map[string]any{
+			logger.Debug("state", "save", map[string]any{
 				"path":         path,
 				"managed_zone": state.ManagedZone.String(),
 				"records":      len(zs.Records),

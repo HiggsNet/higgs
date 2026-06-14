@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/ed25519"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -22,7 +21,7 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string) 
 		fmt.Printf("put %s/%s version %d via daemon\n", path, key, version)
 		return nil
 	}
-	fmt.Fprintln(os.Stderr, "daemon control socket unavailable; writing state directly")
+	logControlFallback("record_put")
 	return putRecordDirect(rt, path, key, value, recordType)
 }
 
