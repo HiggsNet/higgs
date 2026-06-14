@@ -472,3 +472,171 @@ func TestPoolEnforcementNoPool(t *testing.T) {
 		t.Fatalf("expected invalid assignment to be removed")
 	}
 }
+
+func TestAssignmentOverlapSameZoneHierarchicalValid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addZone(ns, "node1.pek.catofes.", "pek.catofes.")
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/16"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/16", AssignedTo: "pek.catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.1.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "node1.pek.catofes."})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", ars.Errors)
+	}
+	if len(ars.Assignments) != 2 {
+		t.Fatalf("expected 2 assignments, got %d", len(ars.Assignments))
+	}
+}
+
+func TestAssignmentOverlapSameZoneSiblingInvalid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addZone(ns, "sh.catofes.", "catofes.")
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/16"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/16", AssignedTo: "pek.catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.1.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "sh.catofes."})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if !hasCode(ars.Errors, "ipam_assignment_overlap") {
+		t.Fatalf("expected ipam_assignment_overlap error, got %+v", ars.Errors)
+	}
+	if len(ars.Assignments) != 0 {
+		t.Fatalf("expected overlapping assignments to be removed, got %d", len(ars.Assignments))
+	}
+}
+
+func TestAssignmentOverlapSameZoneSameAssigneeInvalid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/16"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/16", AssignedTo: "pek.catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.1.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "pek.catofes."})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if !hasCode(ars.Errors, "ipam_assignment_overlap") {
+		t.Fatalf("expected ipam_assignment_overlap error, got %+v", ars.Errors)
+	}
+}
+
+func TestAssignmentOverlapCrossZoneDelegationChainValid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/16"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/16", AssignedTo: "pek.catofes."})),
+	)
+	addRecords(ns, "pek.catofes.",
+		mkRecord("pek.catofes.", mustKeyPool("10.0.1.0/24"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes."})),
+		mkRecord("pek.catofes.", mustKeyAssignment("10.0.1.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "pek.catofes."})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", ars.Errors)
+	}
+	if len(ars.Assignments) != 2 {
+		t.Fatalf("expected 2 assignments, got %d", len(ars.Assignments))
+	}
+}
+
+func TestAssignmentOverlapCrossZoneSiblingInvalid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addZone(ns, "sh.catofes.", "catofes.")
+	addRecords(ns, "pek.catofes.",
+		mkRecord("pek.catofes.", mustKeyPool("10.0.0.0/23"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/23", DelegatedTo: "pek.catofes."})),
+		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/23"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/23", AssignedTo: "pek.catofes."})),
+	)
+	addRecords(ns, "sh.catofes.",
+		mkRecord("sh.catofes.", mustKeyPool("10.0.0.0/24"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/24", DelegatedTo: "sh.catofes."})),
+		mkRecord("sh.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes."})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if !hasCode(ars.Errors, "ipam_assignment_overlap") {
+		t.Fatalf("expected ipam_assignment_overlap error, got %+v", ars.Errors)
+	}
+	if len(ars.Assignments) != 0 {
+		t.Fatalf("expected overlapping assignments to be removed, got %d", len(ars.Assignments))
+	}
+}
+
+func TestAssignmentOverlapCrossZoneNoContainmentValid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes."})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/16"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/16", AssignedTo: "pek.catofes."})),
+	)
+	addRecords(ns, "pek.catofes.",
+		mkRecord("pek.catofes.", mustKeyPool("10.1.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.1.0.0/16", DelegatedTo: "pek.catofes."})),
+		mkRecord("pek.catofes.", mustKeyAssignment("10.1.0.0/16"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.1.0.0/16", AssignedTo: "pek.catofes."})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("unexpected errors for non-overlapping assignments: %+v", ars.Errors)
+	}
+	if len(ars.Assignments) != 2 {
+		t.Fatalf("expected 2 assignments, got %d", len(ars.Assignments))
+	}
+}

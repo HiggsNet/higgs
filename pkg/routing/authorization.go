@@ -65,7 +65,9 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 		Pools:       make(map[netip.Prefix]*PoolEntry),
 	}
 
-	var pending []*RouteEntry
+	var pendingRoutes []*RouteEntry
+	var pendingAssignments []*AssignmentEntry
+	var pendingPools []*PoolEntry
 
 	for path, zs := range ns.Zones {
 		revoked := ns.IsZoneRevoked(path, now)
@@ -82,13 +84,13 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 					continue
 				}
 				p := mustParsePrefix(pool.Prefix)
-				ars.Pools[p] = &PoolEntry{
+				pendingPools = append(pendingPools, &PoolEntry{
 					Prefix:      p,
 					DelegatedTo: pool.DelegatedTo,
 					Source:      path,
 					Record:      rec,
 					Pool:        pool,
-				}
+				})
 
 			case strings.HasPrefix(key, RecordKeyPrefixIPAMAssignments):
 				if revoked {
@@ -100,13 +102,13 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 					continue
 				}
 				p := mustParsePrefix(assignment.Prefix)
-				ars.Assignments[p] = &AssignmentEntry{
+				pendingAssignments = append(pendingAssignments, &AssignmentEntry{
 					Prefix:     p,
 					AssignedTo: assignment.AssignedTo,
 					Source:     path,
 					Record:     rec,
 					Assignment: assignment,
-				}
+				})
 
 			case strings.HasPrefix(key, RecordKeyPrefixRoutes):
 				ann, err := ParseRouteAnnouncementRecord(rec)
@@ -122,7 +124,7 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 					continue
 				}
 				p := mustParsePrefix(ann.Prefix)
-				pending = append(pending, &RouteEntry{
+				pendingRoutes = append(pendingRoutes, &RouteEntry{
 					Record:       rec,
 					Source:       path,
 					Prefix:       p,
@@ -132,12 +134,26 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 		}
 	}
 
-	// Validate assignments against pools before authorizing announcements.
-	validateAssignmentPools(ars, ns)
+	// Pools are indexed by prefix for quick lookup during assignment validation.
+	for _, pool := range pendingPools {
+		ars.Pools[pool.Prefix] = pool
+	}
+
+	// Validate assignments against pools and detect overlaps before authorizing
+	// announcements.
+	validAssignments := validateAssignmentPools(pendingAssignments, ars, ns)
+	validAssignments, badAssignments := validateAssignmentOverlaps(validAssignments, ns)
+	for entry := range badAssignments {
+		ars.addError(entry.Source, entry.Prefix, "ipam_assignment_overlap",
+			fmt.Sprintf("assignment %s overlaps with another assignment outside the delegation chain", entry.Prefix))
+	}
+	for _, entry := range validAssignments {
+		ars.Assignments[entry.Prefix] = entry
+	}
 
 	// Authorize pending announcements against assignments.
 	var authorized []*RouteEntry
-	for _, entry := range pending {
+	for _, entry := range pendingRoutes {
 		if assignment := findAssignmentForPrefix(ars, entry.Source, entry.Prefix); assignment != nil {
 			authorized = append(authorized, entry)
 		} else {
@@ -229,15 +245,17 @@ func IsInDelegationChain(ns *zone.NetworkState, candidate, target zone.ZonePath)
 // pool delegation. An assignment in zone Z is valid only if there exists a pool
 // in Z or one of its ancestor zones whose prefix contains the assignment prefix
 // and whose delegated_to is Z or an ancestor of Z.
-func validateAssignmentPools(ars *AuthorizedRouteSet, ns *zone.NetworkState) {
-	for prefix, entry := range ars.Assignments {
+func validateAssignmentPools(assignments []*AssignmentEntry, ars *AuthorizedRouteSet, ns *zone.NetworkState) []*AssignmentEntry {
+	valid := make([]*AssignmentEntry, 0, len(assignments))
+	for _, entry := range assignments {
 		if isAssignmentPoolValid(ars, ns, entry) {
+			valid = append(valid, entry)
 			continue
 		}
-		ars.addError(entry.Source, prefix, "ipam_assignment_pool_mismatch",
-			fmt.Sprintf("assignment %s has no covering pool delegation", prefix))
-		delete(ars.Assignments, prefix)
+		ars.addError(entry.Source, entry.Prefix, "ipam_assignment_pool_mismatch",
+			fmt.Sprintf("assignment %s has no covering pool delegation", entry.Prefix))
 	}
+	return valid
 }
 
 func isAssignmentPoolValid(ars *AuthorizedRouteSet, ns *zone.NetworkState, assignment *AssignmentEntry) bool {
@@ -256,6 +274,55 @@ func isAssignmentPoolValid(ars *AuthorizedRouteSet, ns *zone.NetworkState, assig
 		}
 	}
 	return false
+}
+
+// validateAssignmentOverlaps rejects assignments whose prefixes overlap unless
+// the overlap is authorized by the delegation chain. It returns the kept
+// assignments and a set of rejected assignments for error reporting.
+func validateAssignmentOverlaps(assignments []*AssignmentEntry, ns *zone.NetworkState) (kept []*AssignmentEntry, bad map[*AssignmentEntry]bool) {
+	bad = make(map[*AssignmentEntry]bool)
+	for i := 0; i < len(assignments); i++ {
+		for j := i + 1; j < len(assignments); j++ {
+			a, b := assignments[i], assignments[j]
+			if !a.Prefix.Overlaps(b.Prefix) {
+				continue
+			}
+			if isAssignmentOverlapAllowed(ns, a, b) {
+				continue
+			}
+			bad[a] = true
+			bad[b] = true
+		}
+	}
+
+	if len(bad) == 0 {
+		return assignments, bad
+	}
+
+	kept = make([]*AssignmentEntry, 0, len(assignments)-len(bad))
+	for _, entry := range assignments {
+		if bad[entry] {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept, bad
+}
+
+func isAssignmentOverlapAllowed(ns *zone.NetworkState, a, b *AssignmentEntry) bool {
+	// Same zone: allow hierarchical assignments where one assigned_to is a
+	// strict ancestor of the other.
+	if a.Source == b.Source {
+		if a.AssignedTo != b.AssignedTo && (IsZoneAncestor(a.AssignedTo, b.AssignedTo) || IsZoneAncestor(b.AssignedTo, a.AssignedTo)) {
+			return true
+		}
+		return false
+	}
+
+	// Different zones: require containment and delegation-chain relationship.
+	contained := containsPrefix(a.Prefix, b.Prefix) || containsPrefix(b.Prefix, a.Prefix)
+	inChain := IsInDelegationChain(ns, a.Source, b.Source) || IsInDelegationChain(ns, b.Source, a.Source)
+	return contained && inChain
 }
 
 // findAssignmentForPrefix finds an assignment that authorizes prefix within

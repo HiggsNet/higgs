@@ -241,8 +241,8 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	exportFilter := cfg[exportIdx:]
 
 	// Import filter should contain the authorized IPAM assignment prefixes.
-	if !strings.Contains(importFilter, "10.0.0.0/8+") {
-		t.Errorf("import filter missing authorized prefix 10.0.0.0/8+")
+	if !strings.Contains(importFilter, "10.0.0.0/16+") {
+		t.Errorf("import filter missing authorized prefix 10.0.0.0/16+")
 	}
 	if !strings.Contains(importFilter, "10.1.0.0/16+") {
 		t.Errorf("import filter missing authorized prefix 10.1.0.0/16+")
@@ -611,11 +611,11 @@ func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile) {
 	}
 
 	// Pool delegations covering the assignments below.
-	addIPAMPool(t, state, "catofes.", "10.0.0.0/8", "catofes.", now, catofesPriv)
+	addIPAMPool(t, state, "catofes.", "10.0.0.0/16", "catofes.", now, catofesPriv)
 	addIPAMPool(t, state, "catofes.", "10.1.0.0/16", "catofes.", now, catofesPriv)
 
 	// IPAM assignments in catofes. for the two leaf nodes.
-	addRouteAssignment(t, state, "catofes.", "10.0.0.0/8", "node-a.catofes.", now, catofesPriv)
+	addRouteAssignment(t, state, "catofes.", "10.0.0.0/16", "node-a.catofes.", now, catofesPriv)
 	addRouteAssignment(t, state, "catofes.", "10.1.0.0/16", "node-b.catofes.", now, catofesPriv)
 
 	// Active route announcements in the respective leaf zones.

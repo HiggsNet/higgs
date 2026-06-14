@@ -879,11 +879,11 @@
   - [x] 非法 assignment 进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_pool_mismatch`。
   - [x] 单元测试覆盖合法/非法案例。
 
-- [ ] **6.1.2 Assignment 重叠检测**
-  - [ ] 同 Zone 内：允许层级分配（`assigned_to` 为祖先/后代），禁止兄弟 Zone 重叠。
-  - [ ] 跨 Zone：只允许同一条委派链上的祖先/后代 Zone 之间存在包含关系。
-  - [ ] 非法重叠进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_overlap`。
-  - [ ] 单元测试覆盖同 Zone 层级、兄弟冲突、跨 Zone 合法/非法。
+- [x] **6.1.2 Assignment 重叠检测**
+  - [x] 同 Zone 内：允许层级分配（`assigned_to` 为严格祖先/后代），禁止兄弟 Zone 重叠。
+  - [x] 跨 Zone：只允许同一条委派链上的祖先/后代 Zone 之间存在包含关系。
+  - [x] 非法重叠进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_overlap`。
+  - [x] 单元测试覆盖同 Zone 层级、兄弟冲突、相同 assignee 重叠、跨 Zone 合法/非法。
 
 - [ ] **6.1.3 权限模型**
   - [ ] `pkg/crypto/sign.go` 将 `ipam.pool` / `ipam.assignment` 映射到 `PermAllocateIP`。
