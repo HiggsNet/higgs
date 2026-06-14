@@ -745,19 +745,11 @@
   - [ ] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）留到 Phase 5 后续。
   - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
 
-## Phase 6: 事件驱动 Daemon / 同步状态机重构（预计 4-5 周）
+## Phase 6: IPAM / 准入 / 链路健康 / 防火墙（预计 4-5 周）
 
-**目标：** 把当前 daemon 从「阻塞式 syncRound + 双 UDP 收包 goroutine」重构成单一事件循环 + 每个 peer 的显式同步会话状态机。以此为基座，再落地 IPAM/准入/防火墙/链路健康等控制面特性。
+**状态：** 6.0 事件驱动控制面重构已完成（默认启用 event loop + SyncSession FSM，`go test -race` 全绿）。本章从 6.1 起进入 IPAM 闭环、准入自动化、链路健康检测、动态 peer 管理、防火墙同步和撤销清理。
 
-**根因：** 当前 `startGossipPacketReceiver` 开的专门收包 goroutine 与 `syncRound` 里直接调 `transport.Receive()` 会在同一个 UDP socket 上并发读包。这不仅导致 `ReplayWindow` 的 `concurrent map iteration and map write` 崩溃，还会让 sync round 等待的 Pong/Announce 被另一 goroutine 截胡、buffer 到 `packetCh`，造成无意义 timeout。给 `ReplayWindow` 加锁只能避免 crash，不能解决响应被抢的设计缺陷。
-
-**重构后核心形态：**
-- 只有 `startGossipPacketReceiver` 一个 goroutine 读 UDP；
-- 所有 packet 经 demuxer 分发到对应 `SyncSession` 或作为 unsolicited 处理；
-- daemon 主循环只 select 事件、调度状态机、执行 send/save；
-- `syncRound` 被替换为 `SyncSession` FSM；
-- object pull / UDP chunk fallback / MTU 打包都变成 FSM 事件与状态转换；
-- 顺带修复 `go test -race ./...` 暴露的 `NetworkState`/`recordPeerSyncAt` 等既有 race。
+**目标：** 在事件驱动 daemon 基座上，落地 IPAM/准入/防火墙/链路健康等控制面特性。先补齐 IPAM 语义（6.1），再基于清晰的 IPAM 模型实现准入后的自动建链（6.2），然后逐步补齐健康检测、动态 peer 管理、防火墙和撤销清理。
 
 ### 6.0 事件驱动控制面重构
 
@@ -872,17 +864,54 @@
   - `chain-relay-smoke` 已移除 `publish_endpoints: false` 治标配置，改由自动 loopback-only 检测保护
   - endpoint discovery 专项能力仍由 `discovery-smoke` / `reflector-smoke` 覆盖
 
-### 6.1 准入流程
+### 6.1 IPAM 闭环
+
+**设计文档：** `docs/phase6-ipam-design.md`
+
+**核心决策：**
+- `ipam/pools/*` 是**分配权**，`ipam/assignments/*` 是**使用权**，严格分离。
+- assignment 默认不能继续细分，除非获得者另外持有覆盖该前缀的 pool。
+- tunnel address 默认继续走 `derived-link-local`，业务地址 / SRv6 SID 完全由 IPAM 分配。
+
+- [ ] **6.1.1 Pool Enforcement**
+  - [ ] 在 `BuildAuthorizedRouteSet` 中校验每个 `ipam/assignments/<prefix>` 是否被同 Zone 或祖先 Zone 的 `ipam/pools/<pool_prefix>` 覆盖。
+  - [ ] pool 的 `delegated_to` 必须是 assignment 所在 Zone 或其祖先。
+  - [ ] 非法 assignment 进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_pool_mismatch`。
+  - [ ] 单元测试覆盖合法/非法案例。
+
+- [ ] **6.1.2 Assignment 重叠检测**
+  - [ ] 同 Zone 内：允许层级分配（`assigned_to` 为祖先/后代），禁止兄弟 Zone 重叠。
+  - [ ] 跨 Zone：只允许同一条委派链上的祖先/后代 Zone 之间存在包含关系。
+  - [ ] 非法重叠进入 `AuthorizedRouteSet.Errors`，错误码 `ipam_assignment_overlap`。
+  - [ ] 单元测试覆盖同 Zone 层级、兄弟冲突、跨 Zone 合法/非法。
+
+- [ ] **6.1.3 权限模型**
+  - [ ] `pkg/crypto/sign.go` 将 `ipam.pool` / `ipam.assignment` 映射到 `PermAllocateIP`。
+  - [ ] 写入 pool/assignment 时校验 Zone authority 是否具备 `PermAllocateIP`。
+  - [ ] 单元测试覆盖 capability 校验。
+
+- [ ] **6.1.4 `higgs ipam` CLI**
+  - [ ] `higgs ipam pool create <zone> <prefix> --delegated-to <zone>`
+  - [ ] `higgs ipam assign <zone> <prefix> --to <zone>`
+  - [ ] `higgs ipam revoke assignment <zone> <prefix>`
+  - [ ] `higgs ipam revoke pool <zone> <prefix>`
+  - [ ] `higgs ipam assigned [--zone <zone>]`：查询本节点或指定 Zone 分配到的前缀。
+  - [ ] daemon 运行时所有写操作通过 control socket 提交。
+
+- [ ] **6.1.5 节点自查询分配 IP 与自动宣告（可选）**
+  - [ ] 节点从本 Zone 到 root 的 fallback 路径汇总 `assigned_to` 等于本 Zone 的 assignment。
+  - [ ] 新增配置项 `ipam.auto_announce_assigned_ips`，默认 `false`。
+  - [ ] 开启时，节点自动为每个分配到的前缀发布 `routes/announcements/*`。
+
+- [ ] **6.1.6 集成验证**
+  - [ ] smoke：`higgs ipam pool create` / `assign` / `route announce` + BIRD filter 导入/导出验证。
+  - [ ] smoke：撤销 assignment 后，对应 announcement 从 authorized route set 中剔除。
+
+### 6.2 准入流程自动化
 
 - [ ] 新节点生成密钥对 → 向管理员申请 delegation
 - [ ] 管理员在父 Zone 创建 `nodeX.parent.` delegation
 - [ ] Gossip 全网传播后，新节点自动被所有节点识别并建立 IKEv2/IPsec TransportLink
-
-### 6.2 IP 分配管理（IPAM）
-
-- [ ] 拆分语义：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`
-- [ ] 节点查询自己的 Zone fallback 路径，汇总所有分配到的 IPs
-- [ ] 冲突检测：按 ownership + version-chain 裁决，禁止仅按时间戳
 
 ### 6.3 链路健康检测
 
