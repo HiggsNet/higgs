@@ -355,6 +355,17 @@ CLI 有两种工作模式：
 
 daemon 每轮 sync（默认 5s）调用 `reloadStateIfChanged()` 比较磁盘 digest 与内存 digest；如果不同则加载最新 state。因此外部直接改 state 文件最多延迟一个 sync interval 才会被 daemon 感知。
 
+**bbolt 的锁能做什么、不能做什么：**
+
+bbolt 使用文件级 `flock`，同一时刻只允许一个进程以写模式打开 DB。因此：
+
+- ✅ **能防止文件损坏**：两个 higgs 进程不会同时把不一致的数据刷进同一个 bbolt 文件。
+- ❌ **不能解决语义冲突**：进程 A 打开 DB、读入内存、修改、保存；进程 B 同时也打开 DB 会被阻塞，等 A 释放锁后才能写。B 写入的是基于「A 保存前旧状态」的修改，A 的内存状态却不会自动刷新，下一次 A 保存就可能覆盖 B 的更新（last-write-wins）。
+- ❌ **不能同步内存视图**：daemon 的 `NetworkState` 缓存在内存中，另一个进程写 DB 后 daemon 不会立刻知道，必须靠 reload / watcher。
+- ❌ **可能阻塞**：当前 `OpenBoltStore` 使用默认 options（`bolt.Open(path, mode, nil)`），`Timeout` 为 0 表示无限等待。如果 daemon 正在保存，CLI 直接写 DB 会挂起直到锁释放。
+
+所以 bbolt 的锁只是「文件不损坏」的底线，不是「可以随便多写」的通行证。
+
 **问题：**
 
 - 延迟不可控：本地更新后可能要等 5s 才传播。

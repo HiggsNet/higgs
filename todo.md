@@ -799,7 +799,7 @@
   - [ ] 明确落盘时机：`Completed`、`Failed`、apply 导致 digest 变化后、control/admin 事件完成后
   - [ ] 移除 `handlePacketUntil` / 旧 `syncRound` 里的 `defer saveState()`
   - [ ] daemon 主 goroutine 串行写 state，避免多 goroutine 写 DB
-  - [ ] 对 state 文件加 `flock` 互斥锁：`saveState()` 前加锁，`loadState()` 前也尝试加锁或校验 mtime/digest，防止 daemon 与外部工具并发写
+  - [ ] 对 state 文件加 `flock` 互斥锁：`saveState()` 前加锁，`loadState()` 前也尝试加锁或校验 mtime/digest，防止 daemon 与外部工具并发写。注意 bbolt 已有文件级锁，但这只保证文件不损坏，不解决内存视图冲突和 last-write-wins 覆盖；应用层仍须把控制面写操作收敛到 control socket
   - [ ] 新增 `stateFileWatcher`：用 `fsnotify`/`inotify` 监听 state 文件变化；变化时 post `StateFileChangedEvent` 到事件循环；事件循环校验 digest 后 `loadState()` 并触发 outbound sync（效果等同于本地 `record_put` 后的 `notifyStateChanged`）
   - [ ] 明确文档：daemon 运行期间推荐所有写操作走 control socket；直接改 state DB 属于开发/恢复模式，由 watcher 兜底但非实时保证
 
