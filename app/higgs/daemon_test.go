@@ -1423,6 +1423,10 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
 	serviceA.Sync.Transport = transportA
 	serviceB.Sync.Transport = transportB
+	// This test exercises the synchronous syncRound path; disable the event-loop
+	// path so handleSyncTimerEvent drives the round directly.
+	serviceA.eventLoopSync = false
+	serviceB.eventLoopSync = false
 	serviceA.IPsecDriver = driverA
 	serviceA.XFRMDriver = driverA
 	serviceB.IPsecDriver = driverB

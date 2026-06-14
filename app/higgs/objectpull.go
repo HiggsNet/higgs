@@ -253,6 +253,12 @@ func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest
 			if err != nil {
 				return &gossip.ObjectPullResponse{Error: err.Error()}
 			}
+			logger := newAppLogger(nil)
+			logger.Info("object_pull", "lookup_snapshot", map[string]any{
+				"zone":    req.Zone.String(),
+				"records": len(snapshot.Records),
+				"bytes":   encodedZoneSnapshotSize(snapshot),
+			})
 			return &gossip.ObjectPullResponse{OK: true, Snapshot: snapshot}
 		case gossip.ObjectPullRecord:
 			if req.Key == "" {
@@ -312,6 +318,14 @@ func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID stri
 
 func encodedObjectPullResponseSize(resp *gossip.ObjectPullResponse) int {
 	data, err := gossip.EncodeObjectPullResponse(resp)
+	if err != nil {
+		return 0
+	}
+	return len(data)
+}
+
+func encodedZoneSnapshotSize(snapshot *gossip.ZoneSnapshot) int {
+	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
 	if err != nil {
 		return 0
 	}
@@ -561,6 +575,7 @@ func (p *objectPullPool) worker(ctx context.Context) {
 }
 
 func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) ObjectPullResult {
+	logger := newAppLogger(nil)
 	state := p.getState()
 	if state == nil {
 		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: errors.New("state not available")}
@@ -574,6 +589,7 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 	state.RUnlock()
 	if addr == "" {
 		err := fmt.Errorf("no TCP address for peer %s", req.PeerID)
+		logger.Info("object_pull", "worker_no_addr", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String()})
 		if cur := p.getState(); cur != nil {
 			cur.Lock()
 			recordObjectPullResult(cur, req.PeerID, "zone", req.Zone, "", 0, err, true, time.Now())
@@ -581,6 +597,7 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 		}
 		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
 	}
+	logger.Info("object_pull", "worker_start", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "addr": addr})
 	if cur := p.getState(); cur != nil {
 		cur.Lock()
 		recordObjectPullAttempt(cur, req.PeerID, "zone", req.Zone, "", time.Now())
@@ -594,6 +611,7 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 	if resp != nil {
 		respBytes = encodedObjectPullResponseSize(resp)
 	}
+	logger.Info("object_pull", "worker_done", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "ok": err == nil && resp != nil && resp.OK && resp.Snapshot != nil, "bytes": respBytes, "error": errString(err)})
 	unreachable := isObjectPullUnreachable(err)
 	if cur := p.getState(); cur != nil {
 		cur.Lock()
@@ -611,6 +629,13 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: errors.New("object pull returned empty snapshot")}
 	}
 	return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Snapshot: resp.Snapshot, Err: nil}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // objectPullResultToEvent converts a worker result to the SyncEvent consumed by

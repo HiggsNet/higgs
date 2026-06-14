@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
@@ -49,8 +50,8 @@ func (*SyncTimerEvent) isSyncEvent() {}
 type PongReceivedEvent struct {
 	PeerID         string
 	Pong           *gossip.Pong
-	MissingZones   []zone.ZonePath        // zones local needs from peer
-	LocalSnapshots []*gossip.ZoneSnapshot // snapshots for zones peer requested from us
+	MissingZones   []zone.ZonePath        // populated by the event loop before OnEvent
+	LocalSnapshots []*gossip.ZoneSnapshot // populated by the event loop before OnEvent
 }
 
 func (*PongReceivedEvent) isSyncEvent() {}
@@ -58,7 +59,7 @@ func (*PongReceivedEvent) isSyncEvent() {}
 type FetchZoneReceivedEvent struct {
 	PeerID   string
 	Zone     zone.ZonePath
-	Snapshot *gossip.ZoneSnapshot // nil if local does not have / will not serve this zone
+	Snapshot *gossip.ZoneSnapshot // populated by the event loop before OnEvent
 }
 
 func (*FetchZoneReceivedEvent) isSyncEvent() {}
@@ -144,8 +145,9 @@ type StartObjectPullAction struct {
 func (StartObjectPullAction) isSyncAction() {}
 
 type ApplySnapshotAction struct {
-	PeerID   string
-	Snapshot *gossip.ZoneSnapshot
+	PeerID        string
+	Snapshot      *gossip.ZoneSnapshot
+	RelaxedLimits bool // set for object-pull / chunk-fallback snapshots
 }
 
 func (ApplySnapshotAction) isSyncAction() {}
@@ -199,6 +201,9 @@ type SyncSession struct {
 	objectPullInflight map[zone.ZonePath]bool
 	// chunkFallbackZones tracks zones we are trying to receive via UDP chunk.
 	chunkFallbackZones map[zone.ZonePath]bool
+	// expectedDigests maps pending zones to the remote root hash advertised in
+	// the PONG. Used to detect stale or incomplete UDP announces.
+	expectedDigests map[zone.ZonePath]gossip.ZoneDigest
 
 	// RTT estimation.
 	estimatedRTT time.Duration
@@ -259,6 +264,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.localFetchZones = make(map[zone.ZonePath]bool)
 	s.objectPullInflight = make(map[zone.ZonePath]bool)
 	s.chunkFallbackZones = make(map[zone.ZonePath]bool)
+	s.expectedDigests = make(map[zone.ZonePath]gossip.ZoneDigest)
 
 	return []SyncAction{
 		SendPingAction{PeerID: e.PeerID, Digests: e.LocalDigests},
@@ -291,6 +297,11 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 		for _, z := range e.MissingZones {
 			s.pendingZones[z] = true
 			actions = append(actions, SendFetchZoneAction{PeerID: e.PeerID, Zone: z})
+		}
+		if e.Pong != nil {
+			for _, d := range e.Pong.Zones {
+				s.expectedDigests[d.Zone] = d
+			}
 		}
 		return actions, nil
 	}
@@ -331,10 +342,17 @@ func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction
 	var actions []SyncAction
 	for i := range e.Announce.Snapshots {
 		snap := &e.Announce.Snapshots[i]
-		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: snap})
+		expected, ok := s.expectedDigests[snap.Zone]
+		if ok && !bytes.Equal(expected.RootHash, gossip.ZoneRoot(zoneStateFromSnapshot(snap))) {
+			// Stale or incomplete announce (e.g. UDP skeleton). Keep the zone
+			// pending so object pull / chunk fallback can finish the sync.
+			continue
+		}
+		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: snap, RelaxedLimits: false})
 		delete(s.pendingZones, snap.Zone)
 		delete(s.objectPullInflight, snap.Zone)
 		delete(s.chunkFallbackZones, snap.Zone)
+		delete(s.expectedDigests, snap.Zone)
 	}
 	for i := range e.Announce.Records {
 		rec := &e.Announce.Records[i]
@@ -425,12 +443,12 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 		if s.pendingEmpty() {
 			s.State = SyncSessionCompleted
 			return []SyncAction{
-				ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot},
+				ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true},
 				SaveStateAction{Reason: fmt.Sprintf("sync completed after object pull from %s", e.PeerID)},
 			}, nil
 		}
 		s.State = SyncSessionAwaitingAnnounce
-		return []SyncAction{ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot}}, nil
+		return []SyncAction{ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true}}, nil
 	}
 	return nil, nil
 }
@@ -453,12 +471,12 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 		if s.pendingEmpty() {
 			s.State = SyncSessionCompleted
 			return []SyncAction{
-				ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot},
+				ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true},
 				SaveStateAction{Reason: fmt.Sprintf("sync completed after chunk fallback from %s", e.PeerID)},
 			}, nil
 		}
 		s.State = SyncSessionAwaitingAnnounce
-		return []SyncAction{ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot}}, nil
+		return []SyncAction{ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true}}, nil
 	}
 	return nil, nil
 }

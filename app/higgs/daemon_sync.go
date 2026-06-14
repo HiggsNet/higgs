@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -86,23 +87,16 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 				return nil
 			}
 			return d.postSyncEvent(&PongReceivedEvent{
-				PeerID:         msg.PeerID,
-				Pong:           msg.Pong,
-				MissingZones:   gossip.FetchList(d.Sync.State.Network, msg.Pong.Zones),
-				LocalSnapshots: localSnapshotsForPong(d.Sync.State.Network, msg.Pong.FetchZones),
+				PeerID: msg.PeerID,
+				Pong:   msg.Pong,
 			})
 		case gossip.MessageFetchZone:
 			if msg.FetchZone == nil {
 				return nil
 			}
-			var snap *gossip.ZoneSnapshot
-			if s, err := gossip.Snapshot(d.Sync.State.Network, msg.FetchZone.Zone); err == nil {
-				snap = s
-			}
 			return d.postSyncEvent(&FetchZoneReceivedEvent{
-				PeerID:   msg.PeerID,
-				Zone:     msg.FetchZone.Zone,
-				Snapshot: snap,
+				PeerID: msg.PeerID,
+				Zone:   msg.FetchZone.Zone,
 			})
 		case gossip.MessageAnnounce:
 			if msg.Announce == nil {
@@ -166,6 +160,21 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		})
 		return
 	}
+	// Enrich packet-derived events with current-state derivations right before
+	// the FSM consumes them, so stale snapshots are not used after state changes
+	// (e.g. a record_put that arrived while the event was queued).
+	switch e := event.(type) {
+	case *PongReceivedEvent:
+		if e.Pong != nil {
+			e.MissingZones = fetchListForPeer(d.Sync.State, peerID, e.Pong.Zones, d.Sync.now())
+			e.LocalSnapshots = localSnapshotsForPong(d.Sync.State.Network, e.Pong.FetchZones)
+		}
+	case *FetchZoneReceivedEvent:
+		if s, err := gossip.Snapshot(d.Sync.State.Network, e.Zone); err == nil {
+			e.Snapshot = s
+		}
+	}
+	oldState := session.State
 	actions, err := session.OnEvent(event, d.Sync.now())
 	if err != nil {
 		d.logWarn("sync", "session_event_error", map[string]any{
@@ -174,6 +183,16 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		})
 		session.State = SyncSessionFailed
 		session.lastError = err
+	}
+	if session.State != oldState {
+		d.logInfo("sync", "session_state_changed", map[string]any{
+			"peer_id":   peerID,
+			"event":     fmt.Sprintf("%T", event),
+			"old_state": oldState,
+			"new_state": session.State,
+			"pending":   len(session.pendingZones),
+			"inflight":  len(session.objectPullInflight),
+		})
 	}
 	changed := d.executeSyncActions(ctx, session, actions)
 	if session.Done() {
@@ -221,7 +240,21 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 			if a.Snapshot == nil {
 				continue
 			}
-			_, err := gossip.ApplySnapshot(d.Sync.State.Network, a.Snapshot, now, limits)
+			if a.Snapshot.Zone == d.Sync.State.ManagedZone {
+				// Never accept a snapshot for our own managed zone from a peer;
+				// we are the authority for it.
+				d.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
+					"peer_id": peerID,
+					"zone":    a.Snapshot.Zone,
+				})
+				continue
+			}
+			applyLimits := limits
+			if a.RelaxedLimits {
+				applyLimits = limits
+				applyLimits.MaxBytes = 8 << 20
+			}
+			result, err := gossip.ApplySnapshot(d.Sync.State.Network, a.Snapshot, now, applyLimits)
 			if err != nil {
 				recordRejectedDigest(d.Sync.State, peerID, digestForSnapshot(a.Snapshot), gossip.RejectReason(err), now)
 				d.logWarn("sync", "zone_apply_failed", map[string]any{
@@ -235,12 +268,22 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 			clearRejectedDigest(d.Sync.State, peerID, a.Snapshot.Zone)
 			changed = true
 			d.logInfo("sync", "zone_applied", map[string]any{
-				"peer_id": peerID,
-				"zone":    a.Snapshot.Zone,
-				"via":     "event_loop",
+				"peer_id":     peerID,
+				"zone":        a.Snapshot.Zone,
+				"records":     result.Records,
+				"delegations": result.Delegation,
+				"via":         "event_loop",
 			})
 		case ApplyRecordSnapshotAction:
 			if a.Record == nil || a.Record.Record == nil {
+				continue
+			}
+			if a.Record.Zone == d.Sync.State.ManagedZone {
+				d.logDebug("sync", "skipping_own_zone_record", map[string]any{
+					"peer_id": peerID,
+					"zone":    a.Record.Zone,
+					"key":     a.Record.Record.Key,
+				})
 				continue
 			}
 			err := gossip.ApplyRecordSnapshot(d.Sync.State.Network, a.Record, now)
@@ -272,7 +315,16 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 		}
 	}
 
-	// Third pass: send messages.
+	// Third pass: send messages. For FETCH_ZONE requests whose full snapshot
+	// cannot fit in a UDP datagram, also queue an async object pull so we are
+	// not dependent on the peer's UDP announce/chunk fallback path.
+	var eagerPulls []zone.ZonePath
+	budget := gossip.DefaultMaxMessage
+	if d.Sync.Transport != nil {
+		if m := d.Sync.Transport.MaxMessageBytes(); m > 0 {
+			budget = m
+		}
+	}
 	for _, action := range actions {
 		switch a := action.(type) {
 		case SendPingAction:
@@ -290,6 +342,10 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				Type:      gossip.MessageFetchZone,
 				FetchZone: &gossip.FetchZone{Zone: a.Zone, ChunkFallback: a.ChunkFallback},
 			})
+			if a.Zone != d.Sync.State.ManagedZone && !session.objectPullInflight[a.Zone] && zoneSnapshotExceedsBudget(d.Sync.State.Network, a.Zone, budget) {
+				eagerPulls = append(eagerPulls, a.Zone)
+				session.objectPullInflight[a.Zone] = true
+			}
 		case SendAnnounceAction:
 			announce := &gossip.Announce{}
 			if len(a.Snapshots) > 0 {
@@ -308,6 +364,12 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 					}
 				}
 			}
+			d.logInfo("sync", "sending_announce", map[string]any{
+				"peer_id":          peerID,
+				"zones":            len(announce.Snapshots),
+				"records":          len(announce.Records),
+				"snapshot_records": snapshotRecordsCount(announce.Snapshots),
+			})
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type:     gossip.MessageAnnounce,
 				Announce: announce,
@@ -316,6 +378,9 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	}
 
 	// Fourth pass: start async object pulls.
+	for _, path := range eagerPulls {
+		d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: peerID, Zone: path})
+	}
 	for _, action := range actions {
 		if a, ok := action.(StartObjectPullAction); ok {
 			d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: a.PeerID, Zone: a.Zone})
@@ -373,11 +438,65 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 			d.Sync.updateDiscoveredPeers()
 		}
 		d.notifyStateChanged()
+		d.relaySyncToPeers(peerID)
 		if err := d.Sync.saveState(); err != nil {
 			d.logWarn("sync", "session_save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
 	}
 	delete(d.syncSessions, peerID)
+}
+
+func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
+	now := d.Sync.now()
+	relayed := 0
+	for _, peerID := range outboundSyncPeersAt(d.Sync.State, d.Sync.Config, now) {
+		if peerID == sourcePeerID {
+			continue
+		}
+		if relayed >= maxRelayFanoutPerUpdate {
+			recordRelaySuppression(d.Sync.State, peerID, "relay_fanout_limited", now)
+			continue
+		}
+		allowed, reason := shouldRelayToPeer(d.Sync.State.SyncPeers[peerID], peerID, sourcePeerID, now)
+		if !allowed {
+			recordRelaySuppression(d.Sync.State, peerID, reason, now)
+			continue
+		}
+		relayed++
+		if existing, ok := d.syncSessions[peerID]; ok && !existing.Done() {
+			continue
+		}
+		d.syncSessions[peerID] = NewSyncSession(peerID)
+		select {
+		case d.syncEvents <- &SyncTimerEvent{PeerID: peerID, LocalDigests: gossip.ZoneDigests(d.Sync.State.Network)}:
+		default:
+			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
+		}
+		recordRelaySuccess(d.Sync.State, peerID, sourcePeerID, now)
+	}
+}
+
+func snapshotRecordsCount(snapshots []gossip.ZoneSnapshot) int {
+	n := 0
+	for i := range snapshots {
+		n += len(snapshots[i].Records)
+	}
+	return n
+}
+
+func zoneSnapshotExceedsBudget(ns *zone.NetworkState, path zone.ZonePath, budget int) bool {
+	if ns == nil || budget <= 0 {
+		return false
+	}
+	snapshot, err := gossip.Snapshot(ns, path)
+	if err != nil {
+		return false
+	}
+	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
+	if err != nil {
+		return false
+	}
+	return len(data) > budget
 }
 
 func digestForSnapshot(snapshot *gossip.ZoneSnapshot) gossip.ZoneDigest {

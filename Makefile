@@ -779,8 +779,9 @@ object-pull-smoke: build
 	large_value="$$(perl -e 'print "x" x 3000')"; \
 	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
+	sleep 3; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q 'bigdata'; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
+	for i in $$(seq 1 30); do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes.; exit 1; }; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \

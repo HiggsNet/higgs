@@ -122,7 +122,7 @@ higgs sync run --interval 5
 
 `sync run` 保留为开发/兼容入口，当前内部委托给 daemon service，避免维护两套长期运行主循环。语义与 `daemon` 的 gossip 主路径保持一致，但新的本机单 writer/control socket 运行形态应优先使用 `higgs daemon`。
 
-daemon / `sync run` 的核心循环包括：
+daemon / `sync run` 的核心循环（事件循环路径已默认启用，`eventLoopSync = true`）包括：
 
 1. **单一 UDP reader** — `startGossipPacketReceiver`  goroutine 阻塞在 `transport.Receive()`，所有包经 demuxer 分发。
 2. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。

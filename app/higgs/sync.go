@@ -588,6 +588,10 @@ func fetchListForPeer(state *stateFile, peerID string, remote []gossip.ZoneDiges
 	}
 	out := fetch[:0]
 	for _, path := range fetch {
+		if path == state.ManagedZone {
+			// Never fetch our own managed zone from a peer; we are the authority.
+			continue
+		}
 		rootHash := remoteByZone[path]
 		if isRejectedDigestActive(state, peerID, path, rootHash, now) {
 			continue

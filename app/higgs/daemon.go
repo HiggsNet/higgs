@@ -123,6 +123,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 	}
+	d.eventLoopSync = true
 	d.syncSessions = make(map[string]*SyncSession)
 	d.syncEvents = make(chan SyncEvent, 64)
 	d.objectPullResults = make(chan ObjectPullResult, 64)
@@ -893,6 +894,13 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	}
 	if err := d.Sync.State.Network.Put(record); err != nil {
 		return 0, err
+	}
+	if zs := d.Sync.State.Network.Zones[event.Zone]; zs != nil {
+		d.logInfo("daemon", "record_put_persist", map[string]any{
+			"zone":         event.Zone,
+			"key":          event.Key,
+			"record_count": len(zs.Records),
+		})
 	}
 	if err := d.Sync.saveState(); err != nil {
 		return 0, err

@@ -950,7 +950,7 @@ type PeerView struct {
 
 ## 七、Phase 6 事件驱动 Daemon 设计要点
 
-Phase 6 将把 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」。这是结构性重构，不改变 gossip wire 协议，但会改变 daemon 内部的事件调度、超时和状态持久化边界。
+Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并默认启用（`eventLoopSync = true`）。旧 `syncRound` 路径仍保留在 `eventLoopSync = false` 模式下作为应急回退。这是结构性重构，不改变 gossip wire 协议，但改变了 daemon 内部的事件调度、超时和状态持久化边界。
 
 ### 7.1 为什么必须重构
 

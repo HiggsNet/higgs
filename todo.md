@@ -807,9 +807,9 @@
   - [x] 给 `stateFile` 加 `sync.RWMutex`，事件 loop 写时持写锁，worker/control 读时持读锁
   - [x] `go test -race ./...` 全绿
 
-- [ ] **6.0.8 Relay fanout 事件化**
-  - [ ] relay 不再在 `handlePacketUntil` 里直接调用 `syncRound`；而是向事件循环 post `SyncTimerEvent{peerID, force=true}` 创建新的独立 `SyncSession`（待 eventLoopSync 默认开启后接入）
-  - [x] 保持 relay 节流：backoff、min interval、来源 peer 跳过（旧路径已具备）
+- [x] **6.0.8 Relay fanout 事件化**
+  - [x] relay 不再在 `handlePacketUntil` 里直接调用 `syncRound`；`completeSyncSession` 成功后调用 `relaySyncToPeers`，为其他 peer 创建独立 `SyncSession` 并向事件循环 post `SyncTimerEvent`
+  - [x] 保持 relay 节流：backoff、min interval、来源 peer 跳过
 
 - [x] **6.0.9 测试改造与补强**
   - [x] 新增 `app/higgs/sync_session_test.go`：表驱动覆盖主要状态转换（无 I/O）
@@ -822,15 +822,16 @@
 
 - [x] **6.0.10 文档更新**
   - [x] 更新 `docs/phase6-event-driven-design.md`：标记已实现部分，补充实际代码路径
-  - [ ] 更新 `docs/design.md` daemon/sync 架构章节，改为事件驱动描述（后续随默认启用事件循环路径一起更新）
-  - [ ] 更新 `docs/protocol.md` 第 3 节 daemon/sync 运行流程（后续随默认启用事件循环路径一起更新）
+  - [x] 更新 `docs/design.md` daemon/sync 架构章节，改为事件驱动描述
+  - [x] 更新 `docs/protocol.md` 第 3 节 daemon/sync 运行流程
 
 - [x] **6.0.11 Step 7 回归测试与收尾**
   - [x] 修复 `daemon.go` 中 `d.stateUnlock` 并发 race（加 `stateMu`），`go test -race ./app/higgs/...` 全绿
   - [x] 修复 `TestDaemonABPublishesGossipsAndReconcilesIPsecRecords` 在旧路径下与 `serveDaemonPackets` 竞争 UDP 包导致的 flaky 失败
   - [x] RTT 感知超时已有 `TestSyncSessionRTTAwareTimeouts` 覆盖；事件循环集成测试 `TestDaemonEventLoopSyncSession` 已覆盖 Ping/Pong/FetchZone/Announce 路径
-  - [x] `make check`、`go test -race ./app/higgs/...`、`make phase2-smoke` 全绿
-  - [ ] 默认启用 `eventLoopSync`：待 `object-pull-smoke` 基线修复并补充 `multi-node-smoke`、`chain-relay-smoke` 通过后切换；当前仍默认 `false` 以保留旧路径作为安全回退
+  - [x] `make check`、`go test -race ./app/higgs/...`、`make phase2-smoke`、`make object-pull-smoke` 全绿
+  - [x] 默认启用 `eventLoopSync`：`newDaemonService` 初始化时设为 `true`
+  - [ ] `make chain-relay-smoke` 在当前多公网接口测试机上仍失败：旧路径与新路径均失败，根因是 endpoint 发现优选了不可达的公网地址，导致 UDP 包被发往公网而非 loopback bootstrap。待后续 transport 地址优先级/可达性探测修复
 
 ### 6.1 准入流程
 
