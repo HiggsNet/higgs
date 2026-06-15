@@ -903,9 +903,9 @@
   - [ ] 新增配置项 `ipam.auto_announce_assigned_ips`，默认 `false`。
   - [ ] 开启时，节点自动为每个分配到的前缀发布 `routes/announcements/*`。
 
-- [ ] **6.1.6 集成验证**
-  - [ ] smoke：`higgs ipam pool create` / `assign` / `route announce` + BIRD filter 导入/导出验证。
-  - [ ] smoke：撤销 assignment 后，对应 announcement 从 authorized route set 中剔除。
+- [x] **6.1.6 集成验证**
+  - [x] smoke：`higgs ipam pool create` / `assign` / `route announce` + BIRD filter 导入/导出验证（`TestIPAMRoutingSmoke`，`make routing-dry-run-smoke`）。
+  - [x] smoke：撤销 assignment 后，对应 announcement 从 authorized route set 与 BIRD export filter 中剔除（`TestRoutingDryRunSmokeRevokeAssignment`，`make routing-dry-run-smoke`）。
 
 ### 6.2 准入流程自动化
 
