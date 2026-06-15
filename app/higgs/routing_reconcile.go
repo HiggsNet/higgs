@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -76,6 +77,20 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	}
 
 	var firstErr error
+	if err := d.autoAnnounceAssignedIPs(ars); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	// If auto-announce is enabled, it may have mutated Sync.State with new
+	// route announcements. Rebuild the authorized route set so BIRD import/export
+	// filters reflect the latest announcements.
+	if d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
+		ars, err = routing.BuildAuthorizedRouteSet(d.Sync.State.Network, now)
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
+		}
+	}
+
 	for _, group := range groups {
 		if err := d.reconcileRoutingForGroup(ctx, group, ars, dataDir, now); err != nil && firstErr == nil {
 			firstErr = err
@@ -323,4 +338,102 @@ func isDryRunConnectError(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "dial") || strings.Contains(msg, "no such file") || strings.Contains(msg, "connection refused")
+}
+
+// autoAnnounceAssignedIPs publishes or withdraws routes/announcements/* records
+// for every IPAM assignment whose assigned_to equals this node's managed zone.
+// It runs inside the daemon's single-writer reconcile path and directly mutates
+// d.Sync.State; callers must save the state afterwards.
+func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet) error {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+		return nil
+	}
+	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
+		return nil
+	}
+	managedZone := d.Sync.State.ManagedZone
+	if managedZone.IsRoot() || !managedZone.Valid() {
+		return nil
+	}
+
+	localAssigned := make(map[netip.Prefix]struct{})
+	for prefix, entry := range ars.Assignments {
+		if entry.AssignedTo == managedZone {
+			localAssigned[prefix] = struct{}{}
+		}
+	}
+
+	localAnnounced := make(map[netip.Prefix]bool)
+	zs := d.Sync.State.Network.Zones[managedZone]
+	if zs != nil {
+		for key, rec := range zs.Records {
+			if !strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {
+				continue
+			}
+			ann, err := routing.ParseRouteAnnouncementRecord(rec)
+			if err != nil {
+				continue
+			}
+			p, err := netip.ParsePrefix(ann.Prefix)
+			if err != nil {
+				continue
+			}
+			localAnnounced[p] = ann.Active
+		}
+	}
+
+	for prefix := range localAssigned {
+		if active, ok := localAnnounced[prefix]; ok && active {
+			continue
+		}
+		if err := d.putRouteAnnouncement(managedZone, prefix, true); err != nil {
+			return fmt.Errorf("auto-announce %s: %w", prefix, err)
+		}
+		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{
+			"zone":   managedZone,
+			"prefix": prefix.String(),
+		})
+	}
+
+	for prefix, active := range localAnnounced {
+		if !active {
+			continue
+		}
+		if _, ok := localAssigned[prefix]; ok {
+			continue
+		}
+		if err := d.putRouteAnnouncement(managedZone, prefix, false); err != nil {
+			return fmt.Errorf("auto-withdraw %s: %w", prefix, err)
+		}
+		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{
+			"zone":   managedZone,
+			"prefix": prefix.String(),
+		})
+	}
+
+	return nil
+}
+
+// putRouteAnnouncement signs and writes a routes/announcements/* record into
+// the current in-memory state. It must be called from the daemon's single-writer
+// path where d.Sync.State is already locked/mutable.
+func (d *DaemonService) putRouteAnnouncement(path zone.ZonePath, prefix netip.Prefix, active bool) error {
+	canonical := prefix.Masked().String()
+	key, err := routing.NormalizeRouteAnnouncementKey(canonical)
+	if err != nil {
+		return err
+	}
+	record := routing.RouteAnnouncementRecord{Version: 1, Prefix: canonical, Active: active}
+	value, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal route announcement: %w", err)
+	}
+	rec, err := buildSignedRecordAt(d.Sync.State, path, key, value, routing.RecordTypeRouteAnnouncement, d.Sync.now())
+	if err != nil {
+		return fmt.Errorf("build signed route record: %w", err)
+	}
+	if err := d.Sync.State.Network.Put(rec); err != nil {
+		return fmt.Errorf("put route record: %w", err)
+	}
+	return nil
 }

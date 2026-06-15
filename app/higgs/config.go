@@ -52,6 +52,7 @@ type appConfig struct {
 	FilterPrivateIPv4    bool
 	Overlay              overlayConfig
 	IPsec                ipsecConfig
+	IPAM                 ipamConfig
 }
 
 type configYAML struct {
@@ -101,6 +102,7 @@ type configYAML struct {
 	FilterPrivateIPv4 bool                     `yaml:"filter_private_ipv4"`
 	Overlay           overlayDefaultsYAML      `yaml:"overlay"`
 	IPsec             ipsecConfigYAML          `yaml:"ipsec"`
+	IPAM              ipamConfigYAML           `yaml:"ipam"`
 	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
 }
 
@@ -141,6 +143,14 @@ type ipsecConfigYAML struct {
 	PortRange          ipsec.PortRange `yaml:"port_range"`
 	PortRotateInterval string          `yaml:"port_rotate_interval"`
 	PortPreviousGrace  string          `yaml:"port_previous_grace"`
+}
+
+type ipamConfig struct {
+	AutoAnnounceAssignedIPs bool
+}
+
+type ipamConfigYAML struct {
+	AutoAnnounceAssignedIPs *bool `yaml:"auto_announce_assigned_ips"`
 }
 
 type tunnelAddressConfigYAML struct {
@@ -235,6 +245,9 @@ func defaultAppConfig() *appConfig {
 			PortMode:           ipsec.PortModeFixed,
 			PortRotateInterval: 0,
 			PortPreviousGrace:  defaultIPsecPortPreviousGrace,
+		},
+		IPAM: ipamConfig{
+			AutoAnnounceAssignedIPs: false,
 		},
 	}
 }
@@ -457,6 +470,9 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	}
 	if err := validateRotateWindows(config); err != nil {
 		return err
+	}
+	if file.IPAM.AutoAnnounceAssignedIPs != nil {
+		config.IPAM.AutoAnnounceAssignedIPs = *file.IPAM.AutoAnnounceAssignedIPs
 	}
 	return nil
 }

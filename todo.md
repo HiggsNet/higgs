@@ -898,14 +898,31 @@
   - [x] `higgs ipam assigned [--zone <zone>]`：查询 authorized assignments，可按 source 或 assigned_to zone 过滤。
   - [x] daemon 运行时所有写操作优先通过 control socket 提交，不可用时 fallback 直接写 DB 并告警。
 
-- [ ] **6.1.5 节点自查询分配 IP 与自动宣告（可选）**
-  - [ ] 节点从本 Zone 到 root 的 fallback 路径汇总 `assigned_to` 等于本 Zone 的 assignment。
-  - [ ] 新增配置项 `ipam.auto_announce_assigned_ips`，默认 `false`。
-  - [ ] 开启时，节点自动为每个分配到的前缀发布 `routes/announcements/*`。
+- [x] **6.1.5 节点自查询分配 IP 与自动宣告（可选）**
+  - 设计文档：`docs/phase6-ipam-design.md` 第 9.2 节。
+  - [x] 新增顶层配置 `ipam.auto_announce_assigned_ips`，默认 `false`。
+  - [x] `app/higgs/config.go`：定义 `IPAMConfig` / `ipamConfigYAML` 并接入解析。
+  - [x] `app/higgs/routing_reconcile.go`：在 `reconcileRouting()` 中接入 `autoAnnounceAssignedIPs`。
+  - [x] 实现自查询：遍历 `ars.Assignments`，筛选 `AssignedTo == ManagedZone` 且合法的前缀。
+  - [x] 实现差集：发布缺失的 announcements，撤回已失效的 announcements。
+  - [x] 写入路径收敛到 daemon 单 writer；CLI 非 daemon 模式不自动写。
+  - [x] 单元测试：开启/关闭、前缀补齐/撤回、非法 assignment 不宣告。
+  - [x] smoke：开启后 BIRD export filter 自动包含本节点分配前缀。
 
 - [x] **6.1.6 集成验证**
   - [x] smoke：`higgs ipam pool create` / `assign` / `route announce` + BIRD filter 导入/导出验证（`TestIPAMRoutingSmoke`，`make routing-dry-run-smoke`）。
   - [x] smoke：撤销 assignment 后，对应 announcement 从 authorized route set 与 BIRD export filter 中剔除（`TestRoutingDryRunSmokeRevokeAssignment`，`make routing-dry-run-smoke`）。
+
+- [ ] **6.1.7 veth 上行与主网络 BIRD 集成（可选）**
+  - 设计文档：`docs/phase6-ipam-design.md` 第 13 章。
+  - [ ] 新增 `overlays[].routing.upstream` 配置段。
+  - [ ] `app/higgs/config.go`：解析 `routing.upstream` 并接入 `RoutingSpec`。
+  - [ ] veth pair 创建/维护/清理（`create_veth` 为 true 时）。
+  - [ ] `pkg/routing/bird/generator.go`：支持多 `interface` 段（XFRM tunnel + veth）。
+  - [ ] `pkg/routing/bird/generator.go`：支持 `protocol static` 生成本节点分配前缀的路由。
+  - [ ] import/export/kernel filter 细化：reject 默认路由、白名单前缀、来源限制。
+  - [ ] 单元测试：多接口 config 渲染、static route 生成、filter 白名单。
+  - [ ] smoke：veth + BIRD 与主网络 babel 邻居建立、前缀双向可达。
 
 ### 6.2 准入流程自动化
 

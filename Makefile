@@ -63,7 +63,7 @@ ipsec-dry-run-smoke:
 	@echo "IPsec dry-run smoke passed"
 
 routing-dry-run-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(RoutingDryRunSmoke|IPAMRoutingSmoke)' -v
+	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(RoutingDryRunSmoke|IPAMRoutingSmoke|AutoAnnounceAssignedIPsRoutingSmoke)' -v
 	@echo "Routing dry-run smoke passed"
 
 ipsec-policy-smoke:

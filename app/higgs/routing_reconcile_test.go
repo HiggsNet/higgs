@@ -346,6 +346,85 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 	_ = signers
 }
 
+func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
+	state, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	rt.Config.IPAM.AutoAnnounceAssignedIPs = true
+	now := rt.Now()
+
+	// Publish pool and assignment as the catofes. administrator.
+	// The assignment is for node-a.catofes., so auto-announce should pick it up.
+	if err := runWithZonePrivateKey(rt, signers["catofes."], func() error {
+		if err := createIPAMPoolWithRuntime(rt, "catofes.", "10.0.0.0/16", "catofes."); err != nil {
+			return err
+		}
+		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/24", "node-a.catofes.")
+	}); err != nil {
+		t.Fatalf("catofes IPAM writes: %v", err)
+	}
+
+	// Reload state to see records written by the CLI functions.
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState after CLI writes: %v", err)
+	}
+	// Restore the managed-zone signing key; runWithZonePrivateKey left the
+	// state with the catofes. administrator key.
+	state.ZonePrivateKey = signers["node-a.catofes."]
+
+	// Reconcile routing and let auto-announce publish the route.
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+
+	// Verify the route announcement record was auto-published.
+	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
+	rec := service.Sync.State.Network.Zones["node-a.catofes."].Records[key]
+	if rec == nil {
+		t.Fatalf("expected auto-published announcement for 10.0.0.0/24")
+	}
+	ann, err := routing.ParseRouteAnnouncementRecord(rec)
+	if err != nil {
+		t.Fatalf("ParseRouteAnnouncementRecord: %v", err)
+	}
+	if !ann.Active {
+		t.Fatalf("expected active auto-published announcement")
+	}
+	if ann.Prefix != "10.0.0.0/24" {
+		t.Fatalf("expected prefix 10.0.0.0/24, got %s", ann.Prefix)
+	}
+
+	// Verify the BIRD export filter includes the auto-announced prefix.
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["ipsec-main"]
+	if inst == nil || inst.ConfigPath == "" {
+		t.Fatalf("missing bird instance state or config path")
+	}
+	cfg, err := readFileString(inst.ConfigPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	exportIdx := strings.Index(cfg, "filter higgs_export_ipsec_main")
+	if exportIdx == -1 {
+		t.Fatalf("missing export filter")
+	}
+	exportFilter := cfg[exportIdx:]
+	if !strings.Contains(exportFilter, "10.0.0.0/24+") {
+		t.Errorf("export filter missing auto-announced prefix 10.0.0.0/24+")
+	}
+
+	_ = now
+}
+
 func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	state, config, signers := buildDryRunSmokeNetworkState(t)
 	now := time.Unix(4000, 0)
@@ -1137,4 +1216,247 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
+}
+
+func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
+	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
+	rt.Config.IPAM.AutoAnnounceAssignedIPs = false
+
+	service := newDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
+	}
+	if len(state.Network.Zones["node-a.catofes."].Records) != 0 {
+		t.Fatalf("expected no announcements when disabled, got %d", len(state.Network.Zones["node-a.catofes."].Records))
+	}
+}
+
+func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
+	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
+
+	service := newDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
+	}
+
+	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
+	rec := state.Network.Zones["node-a.catofes."].Records[key]
+	if rec == nil {
+		t.Fatalf("expected announcement record for %s", key)
+	}
+	ann, err := routing.ParseRouteAnnouncementRecord(rec)
+	if err != nil {
+		t.Fatalf("ParseRouteAnnouncementRecord: %v", err)
+	}
+	if !ann.Active {
+		t.Fatalf("expected active announcement, got active=false")
+	}
+	if ann.Prefix != "10.0.0.0/24" {
+		t.Fatalf("expected prefix 10.0.0.0/24, got %s", ann.Prefix)
+	}
+}
+
+func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
+	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", nil, map[string]bool{"10.0.0.0/24": true})
+
+	service := newDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
+	}
+
+	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
+	rec := state.Network.Zones["node-a.catofes."].Records[key]
+	if rec == nil {
+		t.Fatalf("expected withdrawal record for %s", key)
+	}
+	ann, err := routing.ParseRouteAnnouncementRecord(rec)
+	if err != nil {
+		t.Fatalf("ParseRouteAnnouncementRecord: %v", err)
+	}
+	if ann.Active {
+		t.Fatalf("expected withdrawn announcement, got active=true")
+	}
+}
+
+func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
+	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, map[string]bool{"10.0.0.0/24": true})
+
+	service := newDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
+	}
+
+	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
+	rec := state.Network.Zones["node-a.catofes."].Records[key]
+	if rec == nil {
+		t.Fatalf("expected announcement record for %s", key)
+	}
+	if rec.Version != 1 {
+		t.Fatalf("expected no rewrite, version=%d", rec.Version)
+	}
+}
+
+func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
+	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"192.168.0.0/24"}, nil)
+
+	service := newDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) == 0 {
+		t.Fatalf("expected authorization errors for un-pooled assignment")
+	}
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
+	}
+
+	key, _ := routing.NormalizeRouteAnnouncementKey("192.168.0.0/24")
+	if state.Network.Zones["node-a.catofes."].Records[key] != nil {
+		t.Fatalf("expected no announcement for invalid assignment")
+	}
+}
+
+func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*stateFile, *Runtime) {
+	t.Helper()
+	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root): %v", err)
+	}
+	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(catofes): %v", err)
+	}
+	managedPub, managedPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(managed): %v", err)
+	}
+
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: rootPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate},
+			}},
+		}},
+	}
+	catofesAuthority := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: catofesPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate, zone.PermAllocateIP},
+			}},
+		}},
+	}
+	managedAuthority := &zone.ZoneAuthority{
+		Zone:      managedZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: managedPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite, zone.PermWriteRoute},
+			}},
+		}},
+	}
+
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	ns.Zones["catofes."] = zone.NewZoneState("catofes.", catofesAuthority)
+	ns.Zones[managedZone] = zone.NewZoneState(managedZone, managedAuthority)
+
+	catofesDelegation := testSignedDelegation(t, "catofes.", *catofesAuthority, zone.RootZone, rootPriv)
+	managedDelegation := testSignedDelegation(t, managedZone, *managedAuthority, "catofes.", catofesPriv)
+	ns.Zones[zone.RootZone].Delegations["catofes."] = catofesDelegation
+	ns.Zones["catofes."].Delegations[managedZone] = managedDelegation
+
+	poolRecord := routing.IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true}
+	poolValue, err := json.Marshal(poolRecord)
+	if err != nil {
+		t.Fatalf("marshal pool: %v", err)
+	}
+	poolKey, err := routing.NormalizeIPAMPoolKey("10.0.0.0/16")
+	if err != nil {
+		t.Fatalf("normalize pool key: %v", err)
+	}
+	poolRec, err := buildSignedRecordAt(&stateFile{Network: ns, ZonePrivateKey: catofesPriv, RootPrivateKey: rootPriv}, "catofes.", poolKey, poolValue, routing.RecordTypeIPAMPool, time.Unix(1, 0))
+	if err != nil {
+		t.Fatalf("sign pool: %v", err)
+	}
+	ns.Zones["catofes."].Records[poolKey] = poolRec
+
+	for _, prefix := range assignments {
+		assignRecord := routing.IPAMAssignmentRecord{Version: 1, Prefix: prefix, AssignedTo: managedZone, Active: true}
+		assignValue, err := json.Marshal(assignRecord)
+		if err != nil {
+			t.Fatalf("marshal assignment: %v", err)
+		}
+		assignKey, err := routing.NormalizeIPAMAssignmentKey(prefix)
+		if err != nil {
+			t.Fatalf("normalize assignment key: %v", err)
+		}
+		assignRec, err := buildSignedRecordAt(&stateFile{Network: ns, ZonePrivateKey: catofesPriv, RootPrivateKey: rootPriv}, "catofes.", assignKey, assignValue, routing.RecordTypeIPAMAssignment, time.Unix(1, 0))
+		if err != nil {
+			t.Fatalf("sign assignment: %v", err)
+		}
+		ns.Zones["catofes."].Records[assignKey] = assignRec
+	}
+
+	for prefix, active := range announcements {
+		annRecord := routing.RouteAnnouncementRecord{Version: 1, Prefix: prefix, Active: active}
+		annValue, err := json.Marshal(annRecord)
+		if err != nil {
+			t.Fatalf("marshal announcement: %v", err)
+		}
+		annKey, err := routing.NormalizeRouteAnnouncementKey(prefix)
+		if err != nil {
+			t.Fatalf("normalize announcement key: %v", err)
+		}
+		annRec, err := buildSignedRecordAt(&stateFile{Network: ns, ZonePrivateKey: managedPriv, RootPrivateKey: rootPriv}, managedZone, annKey, annValue, routing.RecordTypeRouteAnnouncement, time.Unix(1, 0))
+		if err != nil {
+			t.Fatalf("sign announcement: %v", err)
+		}
+		ns.Zones[managedZone].Records[annKey] = annRec
+	}
+
+	configureValidation(ns)
+	for _, path := range []zone.ZonePath{"catofes.", managedZone} {
+		if err := higgscrypto.VerifyChain(ns, path, time.Unix(1000, 0)); err != nil {
+			t.Fatalf("VerifyChain(%s): %v", path, err)
+		}
+	}
+
+	state := &stateFile{
+		ManagedZone:    managedZone,
+		Network:        ns,
+		ZonePrivateKey: managedPriv,
+		RootPrivateKey: rootPriv,
+	}
+	rt := &Runtime{
+		Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
+		Clock:  func() time.Time { return time.Unix(1000, 0) },
+	}
+	return state, rt
 }
