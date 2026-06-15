@@ -83,6 +83,9 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 					ars.addError(path, netip.Prefix{}, "ipam_pool_invalid", err.Error())
 					continue
 				}
+				if !pool.Active {
+					continue
+				}
 				p := mustParsePrefix(pool.Prefix)
 				pendingPools = append(pendingPools, &PoolEntry{
 					Prefix:      p,
@@ -99,6 +102,9 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 				assignment, err := ParseIPAMAssignmentRecord(rec)
 				if err != nil {
 					ars.addError(path, netip.Prefix{}, "ipam_assignment_invalid", err.Error())
+					continue
+				}
+				if !assignment.Active {
 					continue
 				}
 				p := mustParsePrefix(assignment.Prefix)

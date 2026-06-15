@@ -22,6 +22,7 @@ func rootCommand() *cli.Command {
 			cmdZone(),
 			cmdRecord(),
 			cmdRoute(),
+			cmdIPAM(),
 			cmdVerify(),
 			cmdDaemon(),
 			cmdSync(),

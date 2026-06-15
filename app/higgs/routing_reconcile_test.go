@@ -635,7 +635,7 @@ func addIPAMPool(t *testing.T, state *stateFile, source zone.ZonePath, prefix st
 	if err != nil {
 		t.Fatalf("normalize pool key: %v", err)
 	}
-	record := routing.IPAMPoolRecord{Version: 1, Prefix: canonical, DelegatedTo: delegatedTo}
+	record := routing.IPAMPoolRecord{Version: 1, Prefix: canonical, DelegatedTo: delegatedTo, Active: true}
 	value, err := json.Marshal(record)
 	if err != nil {
 		t.Fatalf("marshal pool: %v", err)
@@ -657,7 +657,7 @@ func addRouteAssignment(t *testing.T, state *stateFile, source zone.ZonePath, pr
 	if err != nil {
 		t.Fatalf("normalize assignment key: %v", err)
 	}
-	record := routing.IPAMAssignmentRecord{Version: 1, Prefix: canonical, AssignedTo: assignedTo}
+	record := routing.IPAMAssignmentRecord{Version: 1, Prefix: canonical, AssignedTo: assignedTo, Active: true}
 	value, err := json.Marshal(record)
 	if err != nil {
 		t.Fatalf("marshal assignment: %v", err)

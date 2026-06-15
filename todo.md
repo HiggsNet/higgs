@@ -887,16 +887,16 @@
 
 - [x] **6.1.3 权限模型**
   - [x] `pkg/crypto/sign.go` 将 `ipam.pool` / `ipam.assignment` 映射到 `PermAllocateIP`。
-  - [x] 写入 pool/assignment 时校验 Zone authority 是否具备 `PermAllocateIP`（或通用 `PermWrite`）。
+  - [x] 写入 pool/assignment 时校验 Zone authority 是否具备 `PermAllocateIP`。
   - [x] 单元测试覆盖 capability 校验。
 
-- [ ] **6.1.4 `higgs ipam` CLI**
-  - [ ] `higgs ipam pool create <zone> <prefix> --delegated-to <zone>`
-  - [ ] `higgs ipam assign <zone> <prefix> --to <zone>`
-  - [ ] `higgs ipam revoke assignment <zone> <prefix>`
-  - [ ] `higgs ipam revoke pool <zone> <prefix>`
-  - [ ] `higgs ipam assigned [--zone <zone>]`：查询本节点或指定 Zone 分配到的前缀。
-  - [ ] daemon 运行时所有写操作通过 control socket 提交。
+- [x] **6.1.4 `higgs ipam` CLI**
+  - [x] `higgs ipam pool create <zone> <prefix> --delegated-to <zone>`
+  - [x] `higgs ipam assign <zone> <prefix> --to <zone>`
+  - [x] `higgs ipam revoke assignment <zone> <prefix>`
+  - [x] `higgs ipam revoke pool <zone> <prefix>`
+  - [x] `higgs ipam assigned [--zone <zone>]`：查询 authorized assignments，可按 source 或 assigned_to zone 过滤。
+  - [x] daemon 运行时所有写操作优先通过 control socket 提交，不可用时 fallback 直接写 DB 并告警。
 
 - [ ] **6.1.5 节点自查询分配 IP 与自动宣告（可选）**
   - [ ] 节点从本 Zone 到 root 的 fallback 路径汇总 `assigned_to` 等于本 Zone 的 assignment。

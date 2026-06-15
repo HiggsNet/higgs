@@ -227,6 +227,7 @@ func TestParseIPAMPoolRecord(t *testing.T) {
 		Version:     1,
 		Prefix:      "10.0.1.0/24",
 		DelegatedTo: "pek.catofes.",
+		Active:      true,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -274,6 +275,7 @@ func TestParseIPAMPoolRecord(t *testing.T) {
 			Version:     1,
 			Prefix:      "10.0.1.0/24",
 			DelegatedTo: "",
+			Active:      true,
 		})
 		bad := *record
 		bad.Value = value
@@ -288,6 +290,7 @@ func TestParseIPAMAssignmentRecord(t *testing.T) {
 		Version:    1,
 		Prefix:     "10.0.1.1/24",
 		AssignedTo: "pek.catofes.",
+		Active:     true,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -335,6 +338,7 @@ func TestParseIPAMAssignmentRecord(t *testing.T) {
 			Version:    1,
 			Prefix:     "10.0.1.0/24",
 			AssignedTo: "",
+			Active:     true,
 		})
 		bad := *record
 		bad.Value = value
@@ -362,7 +366,7 @@ func TestRecordValidationHelpers(t *testing.T) {
 	})
 
 	t.Run("IPAMPoolRecord.Validate", func(t *testing.T) {
-		r := IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes."}
+		r := IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes.", Active: true}
 		if err := r.Validate("catofes."); err != nil {
 			t.Fatalf("valid record failed: %v", err)
 		}
@@ -373,7 +377,7 @@ func TestRecordValidationHelpers(t *testing.T) {
 	})
 
 	t.Run("IPAMAssignmentRecord.Validate", func(t *testing.T) {
-		r := IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "pek.catofes."}
+		r := IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "pek.catofes.", Active: true}
 		if err := r.Validate("catofes."); err != nil {
 			t.Fatalf("valid record failed: %v", err)
 		}

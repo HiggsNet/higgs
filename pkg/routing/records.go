@@ -35,6 +35,7 @@ type IPAMPoolRecord struct {
 	Version     int           `json:"version"`      // schema version, 1
 	Prefix      string        `json:"prefix"`       // canonical CIDR prefix
 	DelegatedTo zone.ZonePath `json:"delegated_to"` // zone that receives delegation
+	Active      bool          `json:"active"`       // true=delegated, false=revoked
 }
 
 // IPAMAssignmentRecord represents an assignment of a prefix to a specific zone.
@@ -42,6 +43,7 @@ type IPAMAssignmentRecord struct {
 	Version    int           `json:"version"`     // schema version, 1
 	Prefix     string        `json:"prefix"`      // canonical CIDR prefix
 	AssignedTo zone.ZonePath `json:"assigned_to"` // zone that may announce the prefix
+	Active     bool          `json:"active"`      // true=assigned, false=revoked
 }
 
 // CanonicalizePrefix parses a CIDR and returns its canonical form (masked network address).
