@@ -720,7 +720,7 @@
   - [x] BIRD import filter 接受所有已分配 IPAM 空间内的前缀（使用 `+` 包含更具体路由），拒绝 default route、bogon、未授权聚合。
   - [x] BIRD export filter 只发布本节点 `local export set`（本地 Zone 的 authorized announcements）。
   - [x] filter 变化时重写 bird.conf 并 `birdc configure`；后续可优化为 soft + reload in/out。
-  - [ ] per-peer/interface import whitelist 和 policy hit/miss 计数留到 Phase 5 后续 / Phase 6。
+  - [ ] ~~per-peer/interface import whitelist~~ 已废弃：Babel 多跳传播与 per-interface filter 冲突，见 `docs/phase5-7-per-netns-bird-design.md` 6.3 节。替代方案为控制面交叉审计（Phase 7 后续）。
   - [ ] route-table auditor 作为可选兜底留到后续。
 
 - [x] **5.4 策略路由与路由表 ownership（第一版）**
@@ -746,19 +746,28 @@
   - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
 
 - [ ] **5.7 BIRD 从 per-overlay 改为 per-netns（配置模型重构）**
-  - 设计文档：`docs/design.md` Phase 5 netns 章节、`docs/phase6-ipam-design.md` 第 13 章。
+  - 设计文档：`docs/phase5-7-per-netns-bird-design.md`（完整调研与安全分析）、`docs/design.md` Phase 5 netns 章节、`docs/phase6-ipam-design.md` 第 13 章。
   - **核心决策：** 一个 netns 内只运行一个 BIRD 实例，同一 netns 下的所有 overlay 共享该实例；routing 配置从 `overlays[].routing` 上提到 `routing.instances[]` / `netns` 层级。
+  - **Router-ID 派生：** `StableRouterID(localZone, rootTrust, netnsName)`，第三个参数从 overlayID 改为 netns 标识；同一节点不同 netns 的 BIRD 必须有不同 Router-ID，不同节点因 zone 不同也自然不同。netns name 通过 `routing/netns` record  announce，供对端审计时反推 Router-ID。
+  - **安全设计结论（见设计文档 6.x 节）：**
+    - per-peer/interface import filter 因 Babel 多跳传播冲突而废弃（6.3 节）。
+    - BIRD filter 基于 `babel_router_id` 来源验证不可行：BIRD 2.x 源码未注册该 filter 动态属性（6.5 节）。
+    - 恶意前缀宣告防护的唯一可行方案为控制面交叉审计（Phase 7 后续），Phase 5.7 保持全局 import filter。
   - [ ] 新增顶层 `netns:` 配置段，定义默认 netns 列表（如 `netns.default.kind/name/create`）。
   - [ ] 移除 `overlay.default_netns` 与 `ipsec.default_netns` 旧配置；`overlays[]` 通过 `netns: <name>` 显式指定归属 netns。
-  - [ ] 新增顶层 `routing.instances[]`：每个实例绑定一个 netns，包含 enabled/protocol/mode/control_socket/pid_file/config_file/table/metrics/interface_pattern/auth/upstream 等。
-  - [ ] `pkg/transport/ipsec`：从 `LinkGroupSpec` 中移除 `Routing` 字段；`TransportLinkSpec` 保留 `NetNS`。
-  - [ ] `app/higgs/config.go`：解析新 `netns` / `routing.instances` 配置，校验每个 overlay 引用的 netns 存在。
-  - [ ] `app/higgs/state.go`：`BirdInstances` key 从 overlay ID 改为 netns name；`BirdInstanceState` 增加 `NetNSName`。
-  - [ ] `pkg/routing/bird/types.go`：`BirdInstanceSpec` 用 netns 标识替换或补充 `OverlayID`；相关路径/命名改为 netns 派生。
-  - [ ] `pkg/routing/bird/generator.go`：config 内部 table/protocol/filter 命名改用 netns name。
+  - [ ] 新增顶层 `routing.instances[]`：每个实例绑定一个 netns，包含 enabled/protocol/mode/control_socket/pid_file/config_file/table/metrics/interface_pattern 等。
+  - [ ] `pkg/transport/ipsec/link.go`：从 `LinkGroupSpec` 中移除 `Routing` 字段；`TransportLinkSpec` 保留 `NetNS`。
+  - [ ] `pkg/routing/bird/routerid.go`：`StableRouterID` 改为 `(localZone, rootTrust, netnsName)` 三个参数；`netnsName` 使用 `NetNSSpec.Target()`，path netns 要求配置 `router_id_label`。
+  - [ ] `pkg/routing/records.go`：新增 `routing.netns.v1` record 类型、key `routing/netns`、解析函数；schema 包含 `version` 和 `netns` 列表。
+  - [ ] `app/higgs/ipsec_publish.go`（或独立文件）：daemon 在发布 IPsec records 时同步发布本节点 `routing/netns` record；记录值从 `routing.instances[].netns` 推导。
+  - [ ] `app/higgs/config.go`：解析新 `netns` / `routing.instances` 配置，校验每个 overlay 引用的 netns 存在；path netns 用于 routing 时必须设置 `router_id_label`。
+  - [ ] `app/higgs/state.go`：`BirdInstances` key 从 overlay ID 改为 netns name；`BirdInstanceState.OverlayID` 改为 `NetNSName`。
+  - [ ] `pkg/routing/bird/types.go`：`BirdInstanceSpec.OverlayID` 改为 `NetNSName`；增加 `InterfacePatterns []string` 支持多 overlay 接口合并。
+  - [ ] `pkg/routing/bird/generator.go`：config 内部 table/protocol/filter 命名改用 netns name；支持多 interface pattern。
   - [ ] `app/higgs/routing_reconcile.go`：按 netns 分组 overlays，每个 netns 生成一个 BIRD 实例；合并该 netns 下所有 overlay 的接口 pattern。
   - [ ] `app/higgs/daemon.go` / `control.go` / `diagnostics.go` / `debug_routing.go`：`bird_status`、`debug babel`、`debug links` 输出按 netns 展示实例，并列出该 netns 下的 overlays。
-  - [ ] 测试改造：`routing_reconcile_test.go` 与 `pkg/routing/bird/generator_test.go` 中 BIRD 实例查找、filter/table 名称断言改为 netns 维度。
+  - [ ] `pkg/routing/bird/preflight.go`：增加 BIRD 版本检查，断言 >= 2.0（项目依赖 BIRD 2.x 语法）。
+  - [ ] 测试改造：`routing_reconcile_test.go`、`pkg/routing/bird/generator_test.go`、`debug_routing_test.go` 中 BIRD 实例查找、filter/table 名称断言改为 netns 维度。
   - [ ] smoke：`make routing-dry-run-smoke` 覆盖多 overlay 共享同一 netns 场景。
 
 ## Phase 6: IPAM / 准入 / 链路健康 / 防火墙（预计 4-5 周）
@@ -939,6 +948,20 @@
   - [ ] import/export/kernel filter 细化：reject 默认路由、白名单前缀、来源限制。
   - [ ] 单元测试：多接口 config 渲染、static route 生成、filter 白名单。
   - [ ] smoke：veth + BIRD 与主网络 babel 邻居建立、前缀双向可达。
+
+- [ ] **6.1.8 IPAM Anycast / 共享前缀分配（可选 / 后续）**
+  - 设计文档：`docs/phase6-ipam-design.md` 待补充。
+  - **问题：** 当前 IPAM assignment 重叠检测禁止多个 Zone 持有同一前缀，与 Anycast（多节点同 IP 高可用）冲突。
+  - **目标：** 在 IPAM 层引入 shared/anycast 语义，允许多个 Zone 合法持有同一前缀的 assignment，同时保持现有防冲突规则对非 anycast 场景有效。
+  - 候选方案：
+    - 新增 `ipam.anycast` record 类型或 `assignment.shared` 字段。
+    - 允许同一前缀分配给多个 Zone，但这些 Zone 必须被共同策略显式授权。
+    - 在 `BuildAuthorizedRouteSet` 中识别 anycast assignment，跳过兄弟 Zone 重叠检查。
+  - [ ] 调研并确定 anycast assignment 的 schema 和授权模型。
+  - [ ] 更新 `BuildAuthorizedRouteSet` 和重叠检测逻辑，支持 anycast exception。
+  - [ ] 更新 `higgs ipam` CLI，支持创建/撤销 anycast assignment。
+  - [ ] 单元测试：多 Zone 同前缀 anycast、非 anycast 重叠仍拒绝、撤销后路由收敛。
+  - [ ] smoke：多节点宣告同一 anycast 前缀，验证 Babel ECMP 和故障切换。
 
 ### 6.2 准入流程自动化
 
