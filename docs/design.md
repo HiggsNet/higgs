@@ -3,6 +3,8 @@
 > **文档状态（2026-06）**
 > Phase 0–4 已落地实现，Phase 5 路由授权与 BIRD Babel adapter 第一版已实现。
 > 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 第一版已实现 route announcement / IPAM record、AuthorizedRouteSet、BIRD config generator / birdc client / process manager、daemon routing reconcile、`higgs route` 与 `higgs debug babel/routes/route` CLI，并通过 `make routing-dry-run-smoke` 验证。
+> 
+> **待调整：** BIRD 实例应从「每个 overlay 一个 BIRD」改为「每个 netns 一个 BIRD」。同一 netns 内的多个 overlay 共享同一路由守护进程，routing 配置从 `overlays[].routing` 上提到 `routing.instances[]` / `netns` 层级。详见下文 Phase 5 / netns 章节。
 
 ## 原始需求摘要
 
@@ -393,9 +395,28 @@ stateDiagram-v2
 为了避免复杂 YAML selector，第一版 MeshPolicy 可以使用小型 URI rule 语言。URI 只用于本地配置，不作为签名协议格式；解析后内部仍落为结构化对象。
 
 ```yaml
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+
+routing:
+  instances:
+    - netns: h2
+      enabled: true
+      protocol: bird
+      mode: managed
+      control_socket: /run/higgs/bird-h2.ctl
+      pid_file: /run/higgs/bird-h2.pid
+      table: main
+      metric_base: 100
+      interface_pattern: "hgs*"
+
 overlays:
   - name: ipsec-main
     provider: strongswan
+    netns: h2
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
       - "strongswan://edge.catofes.?accept=bidirectional&family=dual"
@@ -523,7 +544,9 @@ type TransportLinkSpec struct {
 
 `LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、`tunnel_address` 分配策略（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
-netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `overlay.default_netns` 默认是 `kind=name, name=h2, create=true`；`ipsec.default_netns` 只作为旧配置兼容别名。link group 可覆盖为 `host`、named netns 或 netns path。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address；Phase 5 BIRD Babel daemon 应运行在对应 `LinkGroupSpec.NetNS` 中，和 XFRM interface 看到同一张 overlay data-plane；只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
+netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `netns.default` 默认是 `kind=name, name=h2, create=true`；旧名 `overlay.default_netns` / `ipsec.default_netns` 将被移除。link group 通过 `netns: <name>` 指定归属 netns，可覆盖默认值。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address。
+
+**Phase 5 BIRD Babel daemon 以 netns 为边界，而不是 overlay。** 同一 netns 内的所有 overlay 共享一个 BIRD 实例；BIRD 通过 `interface_pattern`（如 `hgs*`）自动发现该 netns 下的所有 XFRM / veth 接口，统一维护一张路由表。routing 配置（table、metric、filter、control socket、pid file 等）从 `overlays[].routing` 上提到 `routing.instances[]`，每个实例绑定一个 netns。这样多个 overlay 的链路可以共同贡献 Babel 邻居和 ECMP 路径，而不会被拆成多个独立的 BIRD 实例。只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
 
 `pkg/transport/ipsec.ApplyTransportLink` 固化了第一版 apply 顺序：ensure namespace -> load StrongSwan connection -> ensure XFRM interface -> assign local tunnel address，并返回 `ApplyPlan` 供 dry-run、debug 和失败审计使用。StrongSwan provider 通过 VICI command 控制 charon：`load-conn` 加载 connection，`terminate` / `unload-conn` 做撤销清理，`list-sas` 做运行态观测；`swanctl` 只作为人工 debug 对照，不作为核心控制面的输出解析依赖。
 
@@ -532,7 +555,7 @@ netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 
 daemon 已接入这条 reconcile 链路：
 - state 变化后，从 active state + overlay 配置生成 desired links，查询 IPsec driver `ListSAs`，读取/保存本地 `LinkInstance`，并记录最近 action/skip 摘要。
 - 启动进入主循环前，会主动执行一次 IPsec reconcile，用 active state、本地 `LinkGroupSpec`、已持久化 `LinkInstance` 和 driver SA 快照恢复 link state，而不是等待下一次 record/reload 事件。
-- `reload` control event 会重新读取本地 `config.yaml`，刷新 `overlays:`、`connect/deny`、`overlay.default_netns`、`ipsec.driver` / `ipsec.vici_socket`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。
+- `reload` control event 会重新读取本地 `config.yaml`，刷新 `overlays:`、`connect/deny`、`netns.*`、`routing.instances:*`、`ipsec.driver` / `ipsec.vici_socket`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。
 - daemon drain event 队列时会合并多次 state change，同一轮 record/admin/remote apply 或 config reload 只触发一次 IPsec `ListSAs` + reconcile/apply，避免同一个 peer/group 被短时间重复加载。
 - daemon sync tick 后也会做一次 IPsec observe/reconcile，用 driver `ListSAs` 把已由 StrongSwan 建立的 `connecting` link 推进到 `up`；默认频率跟随 daemon interval，root smoke 可用更短 interval 加速验证。
 
@@ -929,7 +952,7 @@ type PeerView struct {
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
 | Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ 已实现，admin 写入和 IPsec state-change hook 已接入；Phase 6 将进一步改为事件驱动 + per-peer SyncSession FSM |
 | CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db / route） | `app/higgs/` | ✅ 完整 |
-| 配置文件（YAML + 环境变量覆盖，含 overlays[].routing） | `app/higgs/config.go` | ✅ 完整 |
+| 配置文件（YAML + 环境变量覆盖；`overlays[].routing` 将移除，改为 `netns` + `routing.instances[]`） | `app/higgs/config.go` | 🟨 待按 per-netns BIRD 调整 |
 | Route Announcement / IPAM record 解析与校验 | `pkg/routing/records.go` | ✅ 完整 |
 | AuthorizedRouteSet（assignment/announcement 授权、重叠裁决） | `pkg/routing/authorization.go` | ✅ 第一版完整 |
 

@@ -340,15 +340,25 @@ higgs ipam assigned [--zone <zone>]
 
 ### 13.2 veth 生命周期与配置
 
-建议在 `overlays[].routing` 下增加可选 `upstream` 配置段：
+BIRD 以 netns 为边界运行，veth 上行配置属于 netns 级别的 routing 实例，而不是某个 overlay。建议在 `routing.instances[].upstream` 下增加可选配置段：
 
 ```yaml
-overlays:
-  - id: ipsec-main
-    routing:
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+
+routing:
+  instances:
+    - netns: h2
       enabled: true
       protocol: bird
       mode: managed
+      control_socket: /run/higgs/bird-h2.ctl
+      pid_file: /run/higgs/bird-h2.pid
+      table: main
+      metric_base: 100
       interface_pattern: "hgs*"            # XFRM tunnel 接口
       upstream:
         enabled: true
@@ -358,11 +368,17 @@ overlays:
         peer_netns: ""                     # 空表示主网络（init netns）
         ipv4_ll: "169.254.0.1/30"          # 可选：veth 两端 IPv4 link-local
         ipv6_ll: "fe80::1/64"              # 可选：veth 两端 IPv6 link-local
+
+overlays:
+  - id: ipsec-main
+    netns: h2
+    # routing 不再在 overlay 层级配置
 ```
 
 - `interface` 与 `peer_interface` 组成一对 veth；Higgs 在 reconcile 时确保存在、up、地址正确。
 - 如果管理员已手工创建 veth，可设置 `create_veth: false`，Higgs 只负责在 BIRD config 中引用它。
 - veth 上的 Babel 邻居发现需要接口具备 IPv6 link-local 地址；若只有 IPv4 地址，需改用单播 `neighbor` 配置或额外分配 link-local。
+- 同一 netns 下的所有 overlay 共享同一个 BIRD 实例和同一个 `upstream` 配置。
 
 ### 13.3 BIRD 多接口监听
 

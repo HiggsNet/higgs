@@ -745,6 +745,22 @@
   - [ ] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）留到 Phase 5 后续。
   - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
 
+- [ ] **5.7 BIRD 从 per-overlay 改为 per-netns（配置模型重构）**
+  - 设计文档：`docs/design.md` Phase 5 netns 章节、`docs/phase6-ipam-design.md` 第 13 章。
+  - **核心决策：** 一个 netns 内只运行一个 BIRD 实例，同一 netns 下的所有 overlay 共享该实例；routing 配置从 `overlays[].routing` 上提到 `routing.instances[]` / `netns` 层级。
+  - [ ] 新增顶层 `netns:` 配置段，定义默认 netns 列表（如 `netns.default.kind/name/create`）。
+  - [ ] 移除 `overlay.default_netns` 与 `ipsec.default_netns` 旧配置；`overlays[]` 通过 `netns: <name>` 显式指定归属 netns。
+  - [ ] 新增顶层 `routing.instances[]`：每个实例绑定一个 netns，包含 enabled/protocol/mode/control_socket/pid_file/config_file/table/metrics/interface_pattern/auth/upstream 等。
+  - [ ] `pkg/transport/ipsec`：从 `LinkGroupSpec` 中移除 `Routing` 字段；`TransportLinkSpec` 保留 `NetNS`。
+  - [ ] `app/higgs/config.go`：解析新 `netns` / `routing.instances` 配置，校验每个 overlay 引用的 netns 存在。
+  - [ ] `app/higgs/state.go`：`BirdInstances` key 从 overlay ID 改为 netns name；`BirdInstanceState` 增加 `NetNSName`。
+  - [ ] `pkg/routing/bird/types.go`：`BirdInstanceSpec` 用 netns 标识替换或补充 `OverlayID`；相关路径/命名改为 netns 派生。
+  - [ ] `pkg/routing/bird/generator.go`：config 内部 table/protocol/filter 命名改用 netns name。
+  - [ ] `app/higgs/routing_reconcile.go`：按 netns 分组 overlays，每个 netns 生成一个 BIRD 实例；合并该 netns 下所有 overlay 的接口 pattern。
+  - [ ] `app/higgs/daemon.go` / `control.go` / `diagnostics.go` / `debug_routing.go`：`bird_status`、`debug babel`、`debug links` 输出按 netns 展示实例，并列出该 netns 下的 overlays。
+  - [ ] 测试改造：`routing_reconcile_test.go` 与 `pkg/routing/bird/generator_test.go` 中 BIRD 实例查找、filter/table 名称断言改为 netns 维度。
+  - [ ] smoke：`make routing-dry-run-smoke` 覆盖多 overlay 共享同一 netns 场景。
+
 ## Phase 6: IPAM / 准入 / 链路健康 / 防火墙（预计 4-5 周）
 
 **状态：** 6.0 事件驱动控制面重构已完成（默认启用 event loop + SyncSession FSM，`go test -race` 全绿）。本章从 6.1 起进入 IPAM 闭环、准入自动化、链路健康检测、动态 peer 管理、防火墙同步和撤销清理。
