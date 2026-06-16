@@ -11,7 +11,7 @@ import (
 func testBirdInstanceSpec() BirdInstanceSpec {
 	return BirdInstanceSpec{
 		RouterID:          0x01020304,
-		OverlayID:         "ipsec-main",
+		NetNSName:         "ipsec-main",
 		ControlSocketPath: "/run/higgs/bird-ipsec-main.ctl",
 		PIDFilePath:       "/run/higgs/bird-ipsec-main.pid",
 		ConfigPath:        "/etc/higgs/bird-ipsec-main.conf",
@@ -134,7 +134,7 @@ func TestStableRouterIDDeterministic(t *testing.T) {
 func TestDefaultsApplied(t *testing.T) {
 	spec := BirdInstanceSpec{
 		RouterID:          0x01020304,
-		OverlayID:         "ipsec-main",
+		NetNSName:         "ipsec-main",
 		ControlSocketPath: "/run/higgs/bird-ipsec-main.ctl",
 		PIDFilePath:       "/run/higgs/bird-ipsec-main.pid",
 		ConfigPath:        "/etc/higgs/bird-ipsec-main.conf",

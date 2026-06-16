@@ -45,7 +45,7 @@ func fakeBirdBinary(t *testing.T) string {
 func managedSpec(tmp string) BirdInstanceSpec {
 	return BirdInstanceSpec{
 		Mode:              BirdModeManaged,
-		OverlayID:         "test-overlay",
+		NetNSName:         "test-overlay",
 		RouterID:          1,
 		ConfigPath:        filepath.Join(tmp, "bird.conf"),
 		ControlSocketPath: filepath.Join(tmp, "bird.ctl"),
@@ -127,7 +127,7 @@ func TestExecProcessManagerStartRejectsNonManagedModes(t *testing.T) {
 	pm := NewExecProcessManager("")
 
 	for _, mode := range []BirdMode{BirdModeExternal, BirdModeDisabled} {
-		spec := BirdInstanceSpec{Mode: mode, OverlayID: "x"}
+		spec := BirdInstanceSpec{Mode: mode, NetNSName: "x"}
 		err := pm.Start(context.Background(), spec)
 		if err == nil {
 			t.Errorf("expected error for mode %q", mode)

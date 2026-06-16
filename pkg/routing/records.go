@@ -19,7 +19,18 @@ const (
 
 	RecordTypeIPAMAssignment       = "ipam.assignment"
 	RecordKeyPrefixIPAMAssignments = "ipam/assignments/"
+
+	RecordTypeRoutingNetns = "routing.netns.v1"
+	RecordKeyRoutingNetns  = "routing/netns"
 )
+
+// RoutingNetnsRecord announces the network namespaces a node uses for routing.
+// Other nodes use this to reverse-derive Router-ID → (zone, netns) for
+// control-plane cross-audit of learned Babel routes.
+type RoutingNetnsRecord struct {
+	Version int      `json:"version"` // schema version, 1
+	Netns   []string `json:"netns"`   // stable netns names (e.g. ["h2", "host"])
+}
 
 // RouteAnnouncementRecord represents a route announcement or withdrawal
 // under the routes/announcements/<prefix> key.

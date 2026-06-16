@@ -83,14 +83,15 @@ type stateMeta struct {
 }
 
 type BirdInstanceState struct {
-	OverlayID      string `json:"overlay_id"`
-	ConfigPath     string `json:"config_path"`
-	ControlSocket  string `json:"control_socket"`
-	PIDFile        string `json:"pid_file"`
-	RouterID       uint32 `json:"router_id"`
-	LastConfigHash string `json:"last_config_hash"`
-	LastError      string `json:"last_error"`
-	State          string `json:"state"` // pending, running, degraded, error
+	NetNSName      string   `json:"netns_name"`
+	Overlays       []string `json:"overlays,omitempty"`
+	ConfigPath     string   `json:"config_path"`
+	ControlSocket  string   `json:"control_socket"`
+	PIDFile        string   `json:"pid_file"`
+	RouterID       uint32   `json:"router_id"`
+	LastConfigHash string   `json:"last_config_hash"`
+	LastError      string   `json:"last_error"`
+	State          string   `json:"state"` // pending, running, degraded, error
 }
 
 type routingReconcileState struct {

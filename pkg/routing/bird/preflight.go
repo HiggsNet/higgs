@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -67,6 +68,10 @@ func (c preflightChecker) Run(ctx context.Context) PreflightResult {
 	birdPath, err := c.LookPath("bird")
 	out.add("bird-binary", err == nil, false, detailForPath("bird", birdPath, err))
 
+	if versionDetail := c.checkBirdVersion(ctx, birdPath, err); versionDetail != "" {
+		out.add("bird-version", true, false, versionDetail)
+	}
+
 	birdcPath, err := c.LookPath("birdc")
 	out.add("birdc-binary", err == nil, false, detailForPath("birdc", birdcPath, err))
 
@@ -102,6 +107,51 @@ func (c preflightChecker) commandSucceeds(ctx context.Context, name string, args
 
 func (r *PreflightResult) add(name string, ok bool, skipped bool, detail string) {
 	r.Checks = append(r.Checks, PreflightCheck{Name: name, OK: ok, Skipped: skipped, Detail: detail})
+}
+
+// checkBirdVersion runs `bird --version` and asserts >= 2.0. Returns a detail
+// string if the check was performed, or empty if bird is not found.
+func (c preflightChecker) checkBirdVersion(ctx context.Context, birdPath string, lookErr error) string {
+	if lookErr != nil || birdPath == "" {
+		return ""
+	}
+	output, err := c.Command(ctx, "bird", "--version")
+	if err != nil {
+		return fmt.Sprintf("bird version check failed: %v", err)
+	}
+	version := parseBirdVersion(string(output))
+	if version == "" {
+		return fmt.Sprintf("bird version not parseable: %s", string(output))
+	}
+	major := parseBirdMajorVersion(version)
+	if major < 2 {
+		return fmt.Sprintf("bird version %s < 2.0 (Higgs requires BIRD 2.x)", version)
+	}
+	return fmt.Sprintf("bird version %s", version)
+}
+
+// parseBirdVersion extracts the version string from `bird --version` output.
+func parseBirdVersion(output string) string {
+	// Typical: "BIRD version 2.16" or "BIRD version 3.0.1"
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "BIRD version ") {
+			return strings.TrimPrefix(line, "BIRD version ")
+		}
+	}
+	return strings.TrimSpace(output)
+}
+
+// parseBirdMajorVersion returns the major version number (e.g. 2 for "2.16").
+func parseBirdMajorVersion(version string) int {
+	parts := strings.SplitN(version, ".", 2)
+	if len(parts) == 0 {
+		return 0
+	}
+	var major int
+	_, _ = fmt.Sscanf(parts[0], "%d", &major)
+	return major
 }
 
 func detailForPath(name, path string, err error) string {

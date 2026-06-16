@@ -91,8 +91,8 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 	state, _ := buildTestNetworkStateForRouting(t)
 	state.BirdInstances = map[string]*BirdInstanceState{
-		"main": {
-			OverlayID:      "main",
+		"h2": {
+			NetNSName:      "h2",
 			RouterID:       12345,
 			ControlSocket:  "/run/higgs/bird/bird-main.ctl",
 			ConfigPath:     "/run/higgs/bird/bird-main.conf",
@@ -111,11 +111,16 @@ func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 		Direction:       ipsec.DirectionOutbound,
-		Routing: ipsec.RoutingSpec{
-			Enabled: true,
-			Mode:    ipsec.RoutingModeManaged,
-		},
 	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true},
+	}}
+	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{
+		ID:      "main",
+		NetNS:   "h2",
+		Enabled: true,
+		Mode:    ipsec.RoutingModeManaged,
+	}}}
 	rt := &Runtime{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
@@ -131,8 +136,11 @@ func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 	}
 	out := buf.String()
 
-	if !strings.Contains(out, "overlay main") {
-		t.Errorf("expected overlay main, got:\n%s", out)
+	if !strings.Contains(out, "netns h2") {
+		t.Errorf("expected netns h2, got:\n%s", out)
+	}
+	if !strings.Contains(out, "instance_id: main") {
+		t.Errorf("expected instance_id main, got:\n%s", out)
 	}
 	if !strings.Contains(out, "mode: managed") {
 		t.Errorf("expected mode managed, got:\n%s", out)

@@ -62,8 +62,8 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 		return fmt.Errorf("bird process manager only supports mode %q, got %q", BirdModeManaged, spec.Mode)
 	}
 
-	if spec.OverlayID == "" {
-		return errors.New("bird instance overlay_id is required")
+	if spec.NetNSName == "" {
+		return errors.New("bird instance netns_name is required")
 	}
 
 	for _, p := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {

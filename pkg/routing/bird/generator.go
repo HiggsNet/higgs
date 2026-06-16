@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -54,17 +55,40 @@ func applyDefaults(spec BirdInstanceSpec) BirdInstanceSpec {
 		spec.LogTarget = defaultLogTarget
 	}
 	if spec.InternalTableName == "" {
-		spec.InternalTableName = defaultInternalTableName(spec.OverlayID)
+		spec.InternalTableName = defaultInternalTableName(spec.NetNSName)
+	}
+	// Merge legacy InterfacePattern into InterfacePatterns.
+	if spec.InterfacePattern != "" {
+		spec.InterfacePatterns = mergeInterfacePatterns(spec.InterfacePatterns, spec.InterfacePattern)
+		spec.InterfacePattern = ""
+	}
+	if len(spec.InterfacePatterns) == 0 {
+		spec.InterfacePatterns = []string{"hgs*"}
 	}
 	return spec
+}
+
+func mergeInterfacePatterns(patterns []string, extra string) []string {
+	seen := make(map[string]bool, len(patterns)+1)
+	var out []string
+	for _, p := range patterns {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if !seen[extra] {
+		out = append(out, extra)
+	}
+	return out
 }
 
 func validateSpec(spec BirdInstanceSpec) error {
 	if spec.RouterID == 0 {
 		return fmt.Errorf("bird: router id is required")
 	}
-	if spec.OverlayID == "" {
-		return fmt.Errorf("bird: overlay id is required")
+	if spec.NetNSName == "" {
+		return fmt.Errorf("bird: netns name is required")
 	}
 	switch spec.Mode {
 	case BirdModeManaged, BirdModeExternal:
@@ -92,7 +116,7 @@ func validateSpec(spec BirdInstanceSpec) error {
 }
 
 func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) BirdConfig {
-	suffix := sanitizeOverlayID(spec.OverlayID)
+	suffix := sanitizeNetNSName(spec.NetNSName)
 	internalTable := spec.InternalTableName
 	kernelName := "higgs_kern_" + suffix
 	babelName := "higgs_babel_" + suffix
@@ -115,6 +139,11 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 		Body: RenderFilter(exportFilterName, exportSet, spec.BogonPrefixes),
 	}
 
+	interfacePatterns := spec.InterfacePatterns
+	if len(interfacePatterns) == 0 {
+		interfacePatterns = []string{"hgs*"}
+	}
+
 	return BirdConfig{
 		RouterID:       spec.RouterID,
 		LogTarget:      spec.LogTarget,
@@ -135,7 +164,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			Name:             babelName,
 			IPv4Table:        internalTable,
 			IPv6Table:        internalTable,
-			InterfacePattern: spec.InterfacePattern,
+			InterfacePattern: renderInterfacePatterns(interfacePatterns),
 			TypeTunnel:       true,
 			MetricBase:       spec.MetricBase,
 			MetricStaged:     spec.MetricStaged,
@@ -147,6 +176,16 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 		ImportFilters: []FilterBlock{importFilter},
 		ExportFilters: []FilterBlock{exportFilter},
 	}
+}
+
+// renderInterfacePatterns renders multiple BIRD interface patterns as a
+// space-separated list of quoted strings, e.g. "hgs*" "wg*".
+func renderInterfacePatterns(patterns []string) string {
+	quoted := make([]string, len(patterns))
+	for i, p := range patterns {
+		quoted[i] = fmt.Sprintf("%q", p)
+	}
+	return strings.Join(quoted, " ")
 }
 
 func renderConfig(cfg BirdConfig) ([]byte, error) {
@@ -224,7 +263,7 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		}
 	}
 	if cfg.Babel.InterfacePattern != "" {
-		fmt.Fprintf(&b, "    interface %q {\n", cfg.Babel.InterfacePattern)
+		fmt.Fprintf(&b, "    interface %s {\n", cfg.Babel.InterfacePattern)
 		if cfg.Babel.TypeTunnel {
 			fmt.Fprintln(&b, "        type tunnel;")
 		}
@@ -250,9 +289,11 @@ func formatRouterID(id uint32) string {
 	)
 }
 
-func sanitizeOverlayID(id string) string {
+// sanitizeNetNSName replaces non-alphanumeric characters in a netns name with
+// underscores for use in BIRD identifiers (table/protocol/filter names).
+func sanitizeNetNSName(name string) string {
 	var b strings.Builder
-	for _, r := range id {
+	for _, r := range name {
 		switch {
 		case r >= 'a' && r <= 'z':
 			b.WriteRune(r)
@@ -266,11 +307,31 @@ func sanitizeOverlayID(id string) string {
 	}
 	s := b.String()
 	if s == "" {
-		s = "overlay"
+		s = "netns"
 	}
 	return s
 }
 
-func defaultInternalTableName(overlayID string) string {
-	return "higgs_" + sanitizeOverlayID(overlayID)
+// sanitizeOverlayID is retained for backward compatibility with existing
+// tests and code that may still reference overlay-based naming.
+func sanitizeOverlayID(id string) string {
+	return sanitizeNetNSName(id)
+}
+
+func defaultInternalTableName(netnsName string) string {
+	return "higgs_" + sanitizeNetNSName(netnsName)
+}
+
+// sortedUniqueStrings returns a sorted, de-duplicated copy of the input.
+func sortedUniqueStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

@@ -264,13 +264,26 @@ func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceSt
 	if rt == nil || rt.Config == nil || groupID == "" {
 		return
 	}
-	group := linkGroupByID(rt.Config.IPsec.LinkGroups, groupID)
-	if group == nil || !group.Routing.Enabled {
+	// In the per-netns model, routing is configured at the netns level.
+	// Map the overlay groupID → netns name and look up the BIRD instance by netns.
+	netnsName := routingNetnsNameForLinkInstance(rt, groupID)
+	if netnsName == "" {
+		return
+	}
+	// Check if there's a routing instance for this netns.
+	hasRoutingInstance := false
+	for _, inst := range rt.Config.Routing.Instances {
+		if inst.NetNS == netnsName && inst.Enabled {
+			hasRoutingInstance = true
+			break
+		}
+	}
+	if !hasRoutingInstance {
 		return
 	}
 	state = "pending"
 	if birdInstances != nil {
-		if inst := birdInstances[groupID]; inst != nil {
+		if inst := birdInstances[netnsName]; inst != nil {
 			state = inst.State
 			if state == "" {
 				state = "pending"

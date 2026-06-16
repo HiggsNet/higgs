@@ -49,44 +49,48 @@ func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *contr
 			instances[id] = inst
 		}
 	}
-	groups := []ipsec.LinkGroupSpec{}
+	routingInstances := []RoutingInstance{}
 	if rt != nil && rt.Config != nil {
-		groups = rt.Config.IPsec.LinkGroups
+		routingInstances = rt.Config.Routing.Instances
 	}
-	if len(groups) == 0 {
+	if len(routingInstances) == 0 {
 		fmt.Fprintln(w, "routing: not configured")
 		return nil
 	}
 	if response != nil && response.LastRoutingError != "" {
 		fmt.Fprintf(w, "last_reconcile_error: %s\n", response.LastRoutingError)
 	}
-	for _, group := range groups {
-		inst := instances[group.ID]
-		mode := group.Routing.Mode
+	for _, inst := range routingInstances {
+		mode := inst.Mode
 		if mode == "" {
 			mode = "managed"
 		}
-		if !group.Routing.Enabled {
+		if !inst.Enabled {
 			mode = "disabled"
 		}
-		fmt.Fprintf(w, "overlay %s\n", group.ID)
+		fmt.Fprintf(w, "netns %s\n", inst.NetNS)
+		fmt.Fprintf(w, "  instance_id: %s\n", inst.ID)
 		fmt.Fprintf(w, "  mode: %s\n", mode)
-		if !group.Routing.Enabled {
+		if !inst.Enabled {
 			fmt.Fprintln(w, "  state: disabled")
 			continue
 		}
-		if inst != nil {
-			fmt.Fprintf(w, "  router_id: %d\n", inst.RouterID)
-			fmt.Fprintf(w, "  control_socket: %s\n", dash(inst.ControlSocket))
-			fmt.Fprintf(w, "  config_path: %s\n", dash(inst.ConfigPath))
-			fmt.Fprintf(w, "  pid_file: %s\n", dash(inst.PIDFile))
-			fmt.Fprintf(w, "  last_config_hash: %s\n", dash(shortHash(inst.LastConfigHash)))
-			state := inst.State
-			if state == "" {
-				state = "pending"
+		bi := instances[inst.NetNS]
+		if bi != nil {
+			fmt.Fprintf(w, "  router_id: %d\n", bi.RouterID)
+			fmt.Fprintf(w, "  control_socket: %s\n", dash(bi.ControlSocket))
+			fmt.Fprintf(w, "  config_path: %s\n", dash(bi.ConfigPath))
+			fmt.Fprintf(w, "  pid_file: %s\n", dash(bi.PIDFile))
+			fmt.Fprintf(w, "  last_config_hash: %s\n", dash(shortHash(bi.LastConfigHash)))
+			if len(bi.Overlays) > 0 {
+				fmt.Fprintf(w, "  overlays: %s\n", strings.Join(bi.Overlays, ", "))
 			}
-			fmt.Fprintf(w, "  state: %s\n", state)
-			fmt.Fprintf(w, "  last_error: %s\n", dash(inst.LastError))
+			st := bi.State
+			if st == "" {
+				st = "pending"
+			}
+			fmt.Fprintf(w, "  state: %s\n", st)
+			fmt.Fprintf(w, "  last_error: %s\n", dash(bi.LastError))
 		} else {
 			fmt.Fprintln(w, "  router_id: -")
 			fmt.Fprintln(w, "  control_socket: -")
@@ -264,3 +268,27 @@ func writeDebugRoute(w io.Writer, prefix netip.Prefix, dump *routesDumpResponse)
 	}
 	return nil
 }
+
+// routingNetnsForOverlay returns the netns name for a given overlay group ID.
+// Used by debug links routing state lookup.
+func routingNetnsForOverlay(rt *Runtime, overlayID string) string {
+	if rt == nil || rt.Config == nil {
+		return ""
+	}
+	// Find the overlay group, resolve its netns name.
+	for _, group := range rt.Config.IPsec.LinkGroups {
+		if group.ID == overlayID {
+			return resolveOverlayNetNSName(group, rt.Config.Overlay.DefaultNetNS)
+		}
+	}
+	return ""
+}
+
+// routingNetnsNameForLinkInstance returns the netns name for a link instance.
+// LinkInstance.GroupID = overlay ID; we map overlay → netns via config.
+func routingNetnsNameForLinkInstance(rt *Runtime, groupID string) string {
+	return routingNetnsForOverlay(rt, groupID)
+}
+
+// _ ensures import is used
+var _ = ipsec.NetNSName

@@ -85,6 +85,35 @@ ipsec:
   # port_rotate_interval: 24h
   # port_previous_grace: 10m
 
+# Phase 5.7: Top-level netns definitions. Named network namespaces are shared
+# by all overlays and routing instances that reference them.
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+
+# Phase 5.7: Per-netns routing instances. One netns = one BIRD instance.
+# Routing config has moved from overlays[].routing to this top-level section.
+routing:
+  instances:
+    - id: main
+      netns: h2
+      enabled: true
+      protocol: bird
+      mode: managed
+      # control_socket: /run/higgs/bird-h2.ctl    # defaults to <data_dir>/bird/bird-<netns>.ctl
+      # pid_file: /run/higgs/bird-h2.pid          # defaults to <data_dir>/bird/bird-<netns>.pid
+      # config_file: /run/higgs/bird-h2.conf      # defaults to <data_dir>/bird/bird-<netns>.conf
+      table: main                # independent netns default: main (table 254)
+      metric_base: 100
+      metric_staged: 200
+      metric_draining: 500
+      interface_pattern: hgs*
+      # router_id_label: foo-netns  # required only for path netns
+      ecmp: true
+      ecmp_limit: 16
+
 overlays:
   - id: ipsec-main
     name: ipsec-main
@@ -109,40 +138,9 @@ overlays:
       backoff:
         initial: 1s
         max: 1m
-    # Phase 5 routing configuration. Currently only BIRD is supported.
-    routing:
-      enabled: true
-      protocol: bird
-      mode: managed
-      # netns defaults to the overlay link group netns
-      control_socket: /run/higgs/bird-ipsec-main.ctl
-      pid_file: /run/higgs/bird-ipsec-main.pid
-      # router_id: 1.2.3.4       # 仅迁移/恢复时覆盖；默认从 local zone + trusted root + overlay id 确定性派生
-      table: main                # 独立 netns 时默认 main 即可；非 main table 才需要 table_name / priority
-      # table_name: higgs_100
-      # priority: 100
-      metric_base: 100
-      metric_staged: 200
-      metric_draining: 500
-      device_scan_time: 5
-      # auth:
-      #   enabled: true
-      #   algorithm: hmac sha256
-      #   password: "base64-or-hex-key"
-      #   key_id: 1
-      #
-      # Optional upstream veth peering with the host/main network. Allows BIRD
-      # to exchange Babel routes with another BIRD/babeld running outside the
-      # mesh netns and exposes assigned prefixes to users on the host network.
-      # upstream:
-      #   enabled: true
-      #   interface: "hgs-upstream0"      # veth end inside the mesh netns
-      #   create_veth: true               # let Higgs create the veth pair
-      #   peer_interface: "hgs-upstream1" # veth end in the host/main network
-      #   peer_netns: ""                  # empty means init (host) netns
-      #   ipv4_ll: "169.254.0.1/30"
-      #   ipv6_ll: "fe80::1/64"
-
+    # Phase 5.7: routing is now configured at the top level under routing.instances[].
+    # This overlay shares the BIRD instance in netns "h2" with other overlays
+    # that use the same netns.
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
     deny:

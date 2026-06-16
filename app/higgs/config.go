@@ -53,6 +53,8 @@ type appConfig struct {
 	Overlay              overlayConfig
 	IPsec                ipsecConfig
 	IPAM                 ipamConfig
+	Netns                netnsConfig
+	Routing              routingConfig
 }
 
 type configYAML struct {
@@ -103,6 +105,8 @@ type configYAML struct {
 	Overlay           overlayDefaultsYAML      `yaml:"overlay"`
 	IPsec             ipsecConfigYAML          `yaml:"ipsec"`
 	IPAM              ipamConfigYAML           `yaml:"ipam"`
+	Netns             *netnsConfigYAML         `yaml:"netns"`
+	Routing           *routingInstancesYAML    `yaml:"routing"`
 	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
 }
 
@@ -172,27 +176,8 @@ type overlayGroupConfigYAML struct {
 	TunnelAddressPool  string                  `yaml:"tunnel_address_pool"`
 	TunnelAddress      tunnelAddressConfigYAML `yaml:"tunnel_address"`
 	Reconcile          overlayReconcileYAML    `yaml:"reconcile"`
-	Routing            routingConfigYAML       `yaml:"routing"`
 	Connect            configStringList        `yaml:"connect"`
 	Deny               configStringList        `yaml:"deny"`
-}
-
-type routingConfigYAML struct {
-	Enabled          bool            `yaml:"enabled"`
-	Protocol         string          `yaml:"protocol"`
-	Mode             string          `yaml:"mode"`
-	NetNS            ipsec.NetNSSpec `yaml:"netns"`
-	ControlSocket    string          `yaml:"control_socket"`
-	PIDFile          string          `yaml:"pid_file"`
-	ConfigFile       string          `yaml:"config_file"`
-	RouterID         uint32          `yaml:"router_id"`
-	TableID          string          `yaml:"table"`
-	MetricBase       uint            `yaml:"metric_base"`
-	MetricStaged     uint            `yaml:"metric_staged"`
-	MetricDraining   uint            `yaml:"metric_draining"`
-	ECMP             *bool           `yaml:"ecmp"`
-	ECMPLimit        uint            `yaml:"ecmp_limit"`
-	InterfacePattern string          `yaml:"interface_pattern"`
 }
 
 type overlayReconcileYAML struct {
@@ -461,6 +446,16 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		config.Overlay.DefaultNetNS = netns
 	}
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
+	// Parse top-level netns section, falling back to overlay.default_netns.
+	config.Netns = parseNetnsConfig(file.Netns, config.Overlay.DefaultNetNS)
+	// Parse routing.instances[], if any.
+	if file.Routing != nil {
+		var err error
+		config.Routing, err = parseRoutingConfigInstances(file.Routing.Instances, config.Netns, config.DataDir)
+		if err != nil {
+			return err
+		}
+	}
 	if len(file.Overlays) > 0 {
 		groups, err := parseOverlayConfigs(file.Overlays, config.Overlay.DefaultNetNS)
 		if err != nil {
@@ -563,31 +558,6 @@ func parseTunnelAddressConfig(cfg tunnelAddressConfigYAML) (ipsec.TunnelAddressS
 	}, nil
 }
 
-func parseRoutingConfig(cfg routingConfigYAML, groupNetNS ipsec.NetNSSpec) ipsec.RoutingSpec {
-	routing := ipsec.RoutingSpec{
-		Enabled:          cfg.Enabled,
-		Protocol:         cfg.Protocol,
-		Mode:             cfg.Mode,
-		NetNS:            cfg.NetNS,
-		ControlSocket:    cfg.ControlSocket,
-		PIDFile:          cfg.PIDFile,
-		ConfigFile:       cfg.ConfigFile,
-		RouterID:         cfg.RouterID,
-		TableID:          cfg.TableID,
-		MetricBase:       cfg.MetricBase,
-		MetricStaged:     cfg.MetricStaged,
-		MetricDraining:   cfg.MetricDraining,
-		ECMPLimit:        cfg.ECMPLimit,
-		InterfacePattern: cfg.InterfacePattern,
-	}
-	if cfg.ECMP != nil {
-		routing.ECMP = *cfg.ECMP
-	} else {
-		routing.ECMP = true
-	}
-	return routing.Normalized(groupNetNS)
-}
-
 func parseOverlayConfigs(overlays []overlayGroupConfigYAML, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
 	groups := make([]ipsec.LinkGroupSpec, 0, len(overlays))
 	for i, overlay := range overlays {
@@ -671,7 +641,6 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, defaultNetNS ipsec.NetNS
 		}
 		group.Reconcile.Backoff.MaxSeconds = durationSeconds(d)
 	}
-	group.Routing = parseRoutingConfig(overlay.Routing, group.NetNS)
 	if err := group.Validate(); err != nil {
 		return ipsec.LinkGroupSpec{}, err
 	}

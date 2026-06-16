@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,8 +44,9 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || d.Sync.State == nil {
 		return nil
 	}
-	groups := routingEnabledGroups(d.Sync.App.Config.IPsec.LinkGroups)
-	if len(groups) == 0 {
+	config := d.Sync.App.Config
+	routingInstances := config.Routing.Instances
+	if len(routingInstances) == 0 {
 		return nil
 	}
 	if d.Sync.State.ManagedZone.IsRoot() || !d.Sync.State.ManagedZone.Valid() {
@@ -64,7 +66,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 		return fmt.Errorf("build authorized route set: %w", err)
 	}
 
-	dataDir := d.Sync.App.Config.DataDir
+	dataDir := config.DataDir
 	if dataDir == "" {
 		dataDir = "."
 	}
@@ -84,15 +86,18 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	// If auto-announce is enabled, it may have mutated Sync.State with new
 	// route announcements. Rebuild the authorized route set so BIRD import/export
 	// filters reflect the latest announcements.
-	if d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
+	if config.IPAM.AutoAnnounceAssignedIPs {
 		ars, err = routing.BuildAuthorizedRouteSet(d.Sync.State.Network, now)
 		if err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
 		}
 	}
 
-	for _, group := range groups {
-		if err := d.reconcileRoutingForGroup(ctx, group, ars, dataDir, now); err != nil && firstErr == nil {
+	// Build per-netns overlay groups for interface pattern merging.
+	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups, config.Overlay.DefaultNetNS)
+
+	for _, inst := range routingInstances {
+		if err := d.reconcileRoutingForInstance(ctx, inst, ars, dataDir, overlayByNetns, config, now); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -109,25 +114,52 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	return firstErr
 }
 
-func (d *DaemonService) reconcileRoutingForGroup(ctx context.Context, group ipsec.LinkGroupSpec, ars *routing.AuthorizedRouteSet, dataDir string, now time.Time) error {
-	overlayID := group.ID
-	instState := d.Sync.State.BirdInstances[overlayID]
+// netnsOverlayGroup holds the overlays sharing a single netns/BIRD instance.
+type netnsOverlayGroup struct {
+	NetNSName string
+	Overlays  []string
+	Spec      ipsec.NetNSSpec
+}
+
+func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNSSpec) map[string]*netnsOverlayGroup {
+	out := make(map[string]*netnsOverlayGroup)
+	for _, group := range groups {
+		netnsName := resolveOverlayNetNSName(group, defaultNetNS)
+		ng, ok := out[netnsName]
+		if !ok {
+			ng = &netnsOverlayGroup{NetNSName: netnsName}
+			netns := group.NetNS.Normalized()
+			if netns.Kind == "" || (netns.Kind == ipsec.NetNSName && netns.Name == "") {
+				netns = defaultNetNS.Normalized()
+			}
+			ng.Spec = netns
+			out[netnsName] = ng
+		}
+		ng.Overlays = append(ng.Overlays, group.ID)
+	}
+	return out
+}
+
+func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time) error {
+	netnsName := inst.NetNS
+	instState := d.Sync.State.BirdInstances[netnsName]
 	if instState == nil {
-		instState = &BirdInstanceState{OverlayID: overlayID}
-		d.Sync.State.BirdInstances[overlayID] = instState
+		instState = &BirdInstanceState{NetNSName: netnsName}
+		d.Sync.State.BirdInstances[netnsName] = instState
 	}
 
-	routerID := group.Routing.RouterID
-	if routerID == 0 {
-		if instState.RouterID != 0 {
-			routerID = instState.RouterID
-		} else {
-			routerID = bird.StableRouterID(d.Sync.State.ManagedZone, rootTrustHash(d.Sync.State.Network), overlayID)
-		}
+	// Record which overlays share this instance.
+	overlays := []string{}
+	if ng, ok := overlayByNetns[netnsName]; ok {
+		overlays = ng.Overlays
 	}
+	instState.Overlays = overlays
+
+	routerIDLabel := netnsRouterIDLabel(netnsName, config.Netns, inst)
+	routerID := bird.StableRouterID(d.Sync.State.ManagedZone, rootTrustHash(d.Sync.State.Network), routerIDLabel)
 	instState.RouterID = routerID
 
-	spec := buildBirdInstanceSpec(group, routerID, dataDir, overlayID)
+	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
@@ -139,13 +171,13 @@ func (d *DaemonService) reconcileRoutingForGroup(ctx context.Context, group ipse
 	if err != nil {
 		instState.State = birdInstanceStateError
 		instState.LastError = err.Error()
-		return fmt.Errorf("generate bird config for overlay %q: %w", overlayID, err)
+		return fmt.Errorf("generate bird config for netns %q: %w", netnsName, err)
 	}
 
 	configHash := fmt.Sprintf("%x", sha256.Sum256(configBytes))
 	configChanged := instState.LastConfigHash == "" || instState.LastConfigHash != configHash
 
-	mode := bird.BirdMode(group.Routing.Mode)
+	mode := bird.BirdMode(inst.Mode)
 	if mode == "" {
 		mode = bird.BirdModeManaged
 	}
@@ -161,12 +193,12 @@ func (d *DaemonService) reconcileRoutingForGroup(ctx context.Context, group ipse
 			if err := os.MkdirAll(filepath.Dir(spec.ConfigPath), 0o700); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastError = err.Error()
-				return fmt.Errorf("create bird config dir for overlay %q: %w", overlayID, err)
+				return fmt.Errorf("create bird config dir for netns %q: %w", netnsName, err)
 			}
 			if err := os.WriteFile(spec.ConfigPath, configBytes, 0o600); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastError = err.Error()
-				return fmt.Errorf("write bird config for overlay %q: %w", overlayID, err)
+				return fmt.Errorf("write bird config for netns %q: %w", netnsName, err)
 			}
 		}
 
@@ -178,9 +210,8 @@ func (d *DaemonService) reconcileRoutingForGroup(ctx context.Context, group ipse
 			if err := pm.Start(ctx, spec); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastError = err.Error()
-				// In dry-run / no bird binary scenarios, still generate config and update state but do not fail hard.
 				if !isDryRunMissingBirdError(err) {
-					return fmt.Errorf("start bird for overlay %q: %w", overlayID, err)
+					return fmt.Errorf("start bird for netns %q: %w", netnsName, err)
 				}
 			} else {
 				instState.State = birdInstanceStateRunning
@@ -191,7 +222,7 @@ func (d *DaemonService) reconcileRoutingForGroup(ctx context.Context, group ipse
 				instState.State = birdInstanceStateDegraded
 				instState.LastError = err.Error()
 				if !isDryRunConnectError(err) {
-					return fmt.Errorf("configure bird for overlay %q: %w", overlayID, err)
+					return fmt.Errorf("configure bird for netns %q: %w", netnsName, err)
 				}
 			} else {
 				instState.State = birdInstanceStateRunning
@@ -204,7 +235,7 @@ func (d *DaemonService) reconcileRoutingForGroup(ctx context.Context, group ipse
 			instState.State = birdInstanceStateError
 			instState.LastError = err.Error()
 			if !isDryRunConnectError(err) {
-				return fmt.Errorf("bird status for overlay %q: %w", overlayID, err)
+				return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
 			}
 		} else {
 			instState.State = birdInstanceStateRunning
@@ -228,42 +259,65 @@ func (d *DaemonService) newBirdClient(socketPath string) birdClient {
 	return bird.NewClient(socketPath, 10*time.Second)
 }
 
-func buildBirdInstanceSpec(group ipsec.LinkGroupSpec, routerID uint32, dataDir, overlayID string) bird.BirdInstanceSpec {
-	routing := group.Routing
-	netns := routing.NetNS
-	if netns.Kind == "" && netns.Name == "" && netns.Path == "" {
-		netns = group.NetNS.Normalized()
+func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, dataDir string, ng *netnsOverlayGroup, netnsCfg netnsConfig) bird.BirdInstanceSpec {
+	netnsSpec := ipsec.NetNSSpec{}
+	if s, ok := netnsCfg.Names[inst.NetNS]; ok {
+		netnsSpec = s
+	}
+	if ng != nil {
+		netnsSpec = ng.Spec
 	}
 
-	mode := bird.BirdMode(routing.Mode)
+	// Build interface patterns: merge the instance default + any overlay-specific patterns.
+	// Currently all overlays use "hgs*" by default, so the instance pattern suffices.
+	interfacePatterns := []string{}
+	if inst.InterfacePat != "" {
+		interfacePatterns = append(interfacePatterns, inst.InterfacePat)
+	}
+
+	overlays := []string{}
+	if ng != nil {
+		overlays = ng.Overlays
+	}
+
+	mode := bird.BirdMode(inst.Mode)
 	if mode == "" {
 		mode = bird.BirdModeManaged
 	}
 
-	configDir := filepath.Join(dataDir, "bird")
 	return bird.BirdInstanceSpec{
 		RouterID:          routerID,
-		OverlayID:         overlayID,
-		NetNS:             bird.NetNSSpec{Kind: netns.Kind, Name: netns.Name, Path: netns.Path, Create: netns.Create},
-		ControlSocketPath: firstNonEmpty(routing.ControlSocket, filepath.Join(configDir, fmt.Sprintf("bird-%s.ctl", overlayID))),
-		PIDFilePath:       firstNonEmpty(routing.PIDFile, filepath.Join(configDir, fmt.Sprintf("bird-%s.pid", overlayID))),
-		ConfigPath:        firstNonEmpty(routing.ConfigFile, filepath.Join(configDir, fmt.Sprintf("bird-%s.conf", overlayID))),
-		TableID:           routing.TableID,
-		MetricBase:        routing.MetricBase,
-		MetricStaged:      routing.MetricStaged,
-		MetricDraining:    routing.MetricDraining,
-		InterfacePattern:  routing.InterfacePattern,
+		NetNSName:         inst.NetNS,
+		Overlays:          overlays,
+		NetNS:             bird.NetNSSpec{Kind: netnsSpec.Kind, Name: netnsSpec.Name, Path: netnsSpec.Path, Create: netnsSpec.Create},
+		ControlSocketPath: inst.ControlSocket,
+		PIDFilePath:       inst.PIDFile,
+		ConfigPath:        inst.ConfigFile,
+		TableID:           inst.TableID,
+		MetricBase:        inst.MetricBase,
+		MetricStaged:      inst.MetricStaged,
+		MetricDraining:    inst.MetricDraining,
+		InterfacePatterns: interfacePatterns,
 		Mode:              mode,
-		ECMP:              routing.ECMP,
-		ECMPLimit:         routing.ECMPLimit,
+		ECMP:              inst.ECMP,
+		ECMPLimit:         inst.ECMPLimit,
 	}
 }
 
 func routingEnabledGroups(groups []ipsec.LinkGroupSpec) []ipsec.LinkGroupSpec {
-	var out []ipsec.LinkGroupSpec
-	for _, group := range groups {
-		if group.Routing.Enabled {
-			out = append(out, group)
+	// This function is retained for backward compatibility but in the per-netns
+	// model, routing enablement is determined by routing.instances[], not overlays[].
+	return groups
+}
+
+func routingInstancesEnabled(config *appConfig) []RoutingInstance {
+	if config == nil {
+		return nil
+	}
+	var out []RoutingInstance
+	for _, inst := range config.Routing.Instances {
+		if inst.Enabled && inst.Mode != ipsec.RoutingModeDisabled {
+			out = append(out, inst)
 		}
 	}
 	return out
@@ -328,7 +382,6 @@ func isDryRunMissingBirdError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	// ExecProcessManager returns "bird binary not found on PATH" when bird is absent.
 	return strings.Contains(msg, "bird binary not found") || strings.Contains(msg, "no such file") || strings.Contains(msg, "executable file not found")
 }
 
@@ -436,4 +489,76 @@ func (d *DaemonService) putRouteAnnouncement(path zone.ZonePath, prefix netip.Pr
 		return fmt.Errorf("put route record: %w", err)
 	}
 	return nil
+}
+
+// publishRoutingNetnsRecord publishes a routing/netns record listing the netns
+// names this node uses for routing. This allows other nodes to reverse-derive
+// Router-ID → (zone, netns) for control-plane cross-audit.
+func (d *DaemonService) publishRoutingNetnsRecord() error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return nil
+	}
+	config := d.Sync.App.Config
+	if d.Sync.State.ManagedZone == zone.RootZone || !d.Sync.State.ManagedZone.Valid() || len(d.Sync.State.ZonePrivateKey) == 0 {
+		return nil
+	}
+	if len(config.Routing.Instances) == 0 {
+		return nil
+	}
+	netnsNames := routingNetnsNames(config.Routing)
+	if len(netnsNames) == 0 {
+		return nil
+	}
+	record := routing.RoutingNetnsRecord{Version: 1, Netns: netnsNames}
+	value, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal routing/netns record: %w", err)
+	}
+	updated, err := putSignedRoutingNetnsRecord(d.Sync.State, d.Sync.State.ManagedZone, value, d.Sync.now())
+	if err != nil {
+		return fmt.Errorf("put routing/netns record: %w", err)
+	}
+	if updated {
+		d.logInfo("routing", "published_netns_record", map[string]any{
+			"zone":  d.Sync.State.ManagedZone,
+			"netns": netnsNames,
+		})
+	}
+	return nil
+}
+
+func putSignedRoutingNetnsRecord(state *stateFile, path zone.ZonePath, value []byte, now time.Time) (bool, error) {
+	zs := state.Network.Zones[path]
+	if zs != nil {
+		if existing := zs.Records[routing.RecordKeyRoutingNetns]; existing != nil && bytesEqual(existing.Value, value) {
+			return false, nil
+		}
+	}
+	rec, err := buildSignedRecordAt(state, path, routing.RecordKeyRoutingNetns, value, routing.RecordTypeRoutingNetns, now)
+	if err != nil {
+		return false, err
+	}
+	if err := state.Network.Put(rec); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// sortedNetnsNames returns sorted netns names for deterministic output.
+func sortedNetnsNames(names []string) []string {
+	out := append([]string(nil), names...)
+	sort.Strings(out)
+	return out
 }

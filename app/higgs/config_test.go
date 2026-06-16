@@ -675,7 +675,7 @@ func writeRuntimeConfig(t *testing.T, path string, dataDir string, rootKey ed255
 	}
 }
 
-func TestParseConfigYAMLOverlayRouting(t *testing.T) {
+func TestParseConfigYAMLRoutingInstances(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
 overlay:
@@ -683,18 +683,22 @@ overlay:
     kind: name
     name: h2
     create: true
-overlays:
-  - name: ipsec-main
-    provider: strongswan
-    routing:
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: h2
       enabled: true
       protocol: bird
       mode: external
-      control_socket: /run/higgs/bird-ipsec-main.ctl
-      pid_file: /run/higgs/bird-ipsec-main.pid
-      config_file: /etc/higgs/bird-ipsec-main.conf
-      router_id: 16909060
-      table: 254
+      control_socket: /run/higgs/bird-main.ctl
+      pid_file: /run/higgs/bird-main.pid
+      config_file: /etc/higgs/bird-main.conf
+      table: "254"
       metric_base: 150
       metric_staged: 250
       metric_draining: 550
@@ -706,103 +710,105 @@ overlays:
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if len(config.IPsec.LinkGroups) != 1 {
-		t.Fatalf("LinkGroups len = %d, want 1", len(config.IPsec.LinkGroups))
+	if len(config.Routing.Instances) != 1 {
+		t.Fatalf("Routing.Instances len = %d, want 1", len(config.Routing.Instances))
 	}
-	group := config.IPsec.LinkGroups[0]
-	if !group.Routing.Enabled {
-		t.Fatalf("Routing.Enabled = false, want true")
+	inst := config.Routing.Instances[0]
+	if inst.ID != "main" {
+		t.Fatalf("inst.ID = %q, want main", inst.ID)
 	}
-	if group.Routing.Protocol != "bird" {
-		t.Fatalf("Routing.Protocol = %q, want bird", group.Routing.Protocol)
+	if inst.NetNS != "h2" {
+		t.Fatalf("inst.NetNS = %q, want h2", inst.NetNS)
 	}
-	if group.Routing.Mode != ipsec.RoutingModeExternal {
-		t.Fatalf("Routing.Mode = %q, want external", group.Routing.Mode)
+	if !inst.Enabled {
+		t.Fatalf("inst.Enabled = false, want true")
 	}
-	if group.Routing.ControlSocket != "/run/higgs/bird-ipsec-main.ctl" {
-		t.Fatalf("Routing.ControlSocket = %q", group.Routing.ControlSocket)
+	if inst.Protocol != "bird" {
+		t.Fatalf("inst.Protocol = %q, want bird", inst.Protocol)
 	}
-	if group.Routing.PIDFile != "/run/higgs/bird-ipsec-main.pid" {
-		t.Fatalf("Routing.PIDFile = %q", group.Routing.PIDFile)
+	if inst.Mode != ipsec.RoutingModeExternal {
+		t.Fatalf("inst.Mode = %q, want external", inst.Mode)
 	}
-	if group.Routing.ConfigFile != "/etc/higgs/bird-ipsec-main.conf" {
-		t.Fatalf("Routing.ConfigFile = %q", group.Routing.ConfigFile)
+	if inst.ControlSocket != "/run/higgs/bird-main.ctl" {
+		t.Fatalf("inst.ControlSocket = %q", inst.ControlSocket)
 	}
-	if group.Routing.RouterID != 16909060 {
-		t.Fatalf("Routing.RouterID = %d, want 16909060", group.Routing.RouterID)
+	if inst.PIDFile != "/run/higgs/bird-main.pid" {
+		t.Fatalf("inst.PIDFile = %q", inst.PIDFile)
 	}
-	if group.Routing.TableID != "254" {
-		t.Fatalf("Routing.TableID = %q, want 254", group.Routing.TableID)
+	if inst.ConfigFile != "/etc/higgs/bird-main.conf" {
+		t.Fatalf("inst.ConfigFile = %q", inst.ConfigFile)
 	}
-	if group.Routing.MetricBase != 150 {
-		t.Fatalf("Routing.MetricBase = %d, want 150", group.Routing.MetricBase)
+	if inst.TableID != "254" {
+		t.Fatalf("inst.TableID = %q, want 254", inst.TableID)
 	}
-	if group.Routing.MetricStaged != 250 {
-		t.Fatalf("Routing.MetricStaged = %d, want 250", group.Routing.MetricStaged)
+	if inst.MetricBase != 150 {
+		t.Fatalf("inst.MetricBase = %d, want 150", inst.MetricBase)
 	}
-	if group.Routing.MetricDraining != 550 {
-		t.Fatalf("Routing.MetricDraining = %d, want 550", group.Routing.MetricDraining)
+	if inst.MetricStaged != 250 {
+		t.Fatalf("inst.MetricStaged = %d, want 250", inst.MetricStaged)
 	}
-	if group.Routing.ECMP {
-		t.Fatalf("Routing.ECMP = true, want false")
+	if inst.MetricDraining != 550 {
+		t.Fatalf("inst.MetricDraining = %d, want 550", inst.MetricDraining)
 	}
-	if group.Routing.ECMPLimit != 8 {
-		t.Fatalf("Routing.ECMPLimit = %d, want 8", group.Routing.ECMPLimit)
+	if inst.ECMP {
+		t.Fatalf("inst.ECMP = true, want false")
 	}
-	if group.Routing.InterfacePattern != "hgs*" {
-		t.Fatalf("Routing.InterfacePattern = %q, want hgs*", group.Routing.InterfacePattern)
+	if inst.ECMPLimit != 8 {
+		t.Fatalf("inst.ECMPLimit = %d, want 8", inst.ECMPLimit)
 	}
-	// NetNS should be inherited from the link group default.
-	if group.Routing.NetNS.Kind != ipsec.NetNSName || group.Routing.NetNS.Name != "h2" {
-		t.Fatalf("Routing.NetNS = %+v, want h2 name netns", group.Routing.NetNS)
+	if inst.InterfacePat != "hgs*" {
+		t.Fatalf("inst.InterfacePat = %q, want hgs*", inst.InterfacePat)
 	}
 }
 
-func TestParseConfigYAMLOverlayRoutingDefaults(t *testing.T) {
+func TestParseConfigYAMLRoutingInstancesDefaults(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-overlay:
-  default_netns:
+netns:
+  default:
     kind: name
     name: h2
     create: true
-overlays:
-  - name: ipsec-main
-    provider: strongswan
-    routing:
+routing:
+  instances:
+    - id: main
+      netns: h2
       enabled: true
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	group := config.IPsec.LinkGroups[0]
-	if group.Routing.Mode != ipsec.RoutingModeManaged {
-		t.Fatalf("Routing.Mode = %q, want managed", group.Routing.Mode)
+	if len(config.Routing.Instances) != 1 {
+		t.Fatalf("Routing.Instances len = %d, want 1", len(config.Routing.Instances))
 	}
-	if group.Routing.Protocol != "bird" {
-		t.Fatalf("Routing.Protocol = %q, want bird", group.Routing.Protocol)
+	inst := config.Routing.Instances[0]
+	if inst.Mode != ipsec.RoutingModeManaged {
+		t.Fatalf("inst.Mode = %q, want managed", inst.Mode)
 	}
-	if group.Routing.TableID != "main" {
-		t.Fatalf("Routing.TableID = %q, want main", group.Routing.TableID)
+	if inst.Protocol != "bird" {
+		t.Fatalf("inst.Protocol = %q, want bird", inst.Protocol)
 	}
-	if group.Routing.MetricBase != 100 {
-		t.Fatalf("Routing.MetricBase = %d, want 100", group.Routing.MetricBase)
+	if inst.TableID != "main" {
+		t.Fatalf("inst.TableID = %q, want main", inst.TableID)
 	}
-	if group.Routing.MetricStaged != 200 {
-		t.Fatalf("Routing.MetricStaged = %d, want 200", group.Routing.MetricStaged)
+	if inst.MetricBase != 100 {
+		t.Fatalf("inst.MetricBase = %d, want 100", inst.MetricBase)
 	}
-	if group.Routing.MetricDraining != 500 {
-		t.Fatalf("Routing.MetricDraining = %d, want 500", group.Routing.MetricDraining)
+	if inst.MetricStaged != 200 {
+		t.Fatalf("inst.MetricStaged = %d, want 200", inst.MetricStaged)
 	}
-	if !group.Routing.ECMP {
-		t.Fatalf("Routing.ECMP = false, want true")
+	if inst.MetricDraining != 500 {
+		t.Fatalf("inst.MetricDraining = %d, want 500", inst.MetricDraining)
 	}
-	if group.Routing.ECMPLimit != 16 {
-		t.Fatalf("Routing.ECMPLimit = %d, want 16", group.Routing.ECMPLimit)
+	if !inst.ECMP {
+		t.Fatalf("inst.ECMP = false, want true")
 	}
-	if group.Routing.InterfacePattern != "hgs*" {
-		t.Fatalf("Routing.InterfacePattern = %q, want hgs*", group.Routing.InterfacePattern)
+	if inst.ECMPLimit != 16 {
+		t.Fatalf("inst.ECMPLimit = %d, want 16", inst.ECMPLimit)
+	}
+	if inst.InterfacePat != "hgs*" {
+		t.Fatalf("inst.InterfacePat = %q, want hgs*", inst.InterfacePat)
 	}
 }
 

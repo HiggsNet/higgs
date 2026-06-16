@@ -875,6 +875,9 @@ func (d *DaemonService) handleEndpointTimerEvent() error {
 	if err := d.Sync.publishIPsecRecords(); err != nil {
 		return err
 	}
+	if err := d.publishRoutingNetnsRecord(); err != nil {
+		return err
+	}
 	d.notifyStateChanged()
 	return nil
 }
@@ -1030,21 +1033,11 @@ func (d *DaemonService) routingReconcileInterval() time.Duration {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return 0
 	}
-	groups := routingEnabledGroups(d.Sync.App.Config.IPsec.LinkGroups)
-	if len(groups) == 0 {
+	instances := routingInstancesEnabled(d.Sync.App.Config)
+	if len(instances) == 0 {
 		return 0
 	}
-	var interval time.Duration
-	for _, group := range groups {
-		groupInterval := defaultRoutingReconcileInterval
-		if group.Reconcile.IntervalSeconds > 0 {
-			groupInterval = time.Duration(group.Reconcile.IntervalSeconds) * time.Second
-		}
-		if interval == 0 || groupInterval < interval {
-			interval = groupInterval
-		}
-	}
-	return interval
+	return defaultRoutingReconcileInterval
 }
 
 func nextRoutingReconcileTime(now time.Time, interval time.Duration) time.Time {

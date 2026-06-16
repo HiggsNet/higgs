@@ -43,14 +43,20 @@ type BabelAuthSpec struct {
 }
 
 // BirdInstanceSpec is the complete configuration for one BIRD instance
-// bound to one overlay / netns.
+// bound to one network namespace. In the per-netns model, one netns has
+// exactly one BIRD instance, shared by all overlays in that netns.
 type BirdInstanceSpec struct {
 	// RouterID is the 32-bit BIRD router id. It is rendered as an IPv4
 	// dotted-quad in bird.conf. Use StableRouterID to derive it.
 	RouterID uint32 `yaml:"router_id" json:"router_id"`
 
-	// OverlayID identifies the Higgs overlay this instance serves.
-	OverlayID string `yaml:"overlay_id" json:"overlay_id"`
+	// NetNSName identifies the network namespace this BIRD instance serves.
+	// In the per-netns model, this replaces the former OverlayID.
+	NetNSName string `yaml:"netns_name" json:"netns_name"`
+
+	// Overlays lists the overlay IDs sharing this BIRD instance. This is
+	// informational/debug metadata; it does not affect config generation.
+	Overlays []string `yaml:"overlays,omitempty" json:"overlays,omitempty"`
 
 	// NetNS is the network namespace where the BIRD daemon must run.
 	NetNS NetNSSpec `yaml:"netns" json:"netns"`
@@ -74,8 +80,14 @@ type BirdInstanceSpec struct {
 	MetricStaged   uint `yaml:"metric_staged" json:"metric_staged"`
 	MetricDraining uint `yaml:"metric_draining" json:"metric_draining"`
 
-	// InterfacePattern is the BIRD interface glob, e.g. "hgs*".
-	InterfacePattern string `yaml:"interface_pattern" json:"interface_pattern"`
+	// InterfacePatterns are the BIRD interface globs, e.g. ["hgs*"].
+	// Multiple patterns allow one BIRD instance to discover interfaces from
+	// multiple overlays sharing the same netns.
+	InterfacePatterns []string `yaml:"interface_patterns,omitempty" json:"interface_patterns,omitempty"`
+
+	// InterfacePattern is retained for backward compatibility. When non-empty,
+	// it is appended to InterfacePatterns. New code should use InterfacePatterns.
+	InterfacePattern string `yaml:"interface_pattern,omitempty" json:"interface_pattern,omitempty"`
 
 	// Mode selects managed / external / disabled behavior.
 	Mode BirdMode `yaml:"mode" json:"mode"`
