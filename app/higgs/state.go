@@ -13,7 +13,6 @@ import (
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
-const defaultStatePath = ".higgs.db"
 const cliMetaKey = "cli_state"
 
 type stateFile struct {

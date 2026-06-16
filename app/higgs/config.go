@@ -21,7 +21,8 @@ import (
 
 const (
 	defaultConfigPath              = "/etc/higgs/config.yaml"
-	defaultStateFile               = "/etc/higgs/higgs.db"
+	defaultDataDir                 = "/etc/higgs"
+	defaultStateFile               = "higgs.db"
 	defaultIPsecPortPreviousGrace  = 2 * time.Hour
 	defaultIPsecRotateRetentionSec = 3600
 )
@@ -210,7 +211,7 @@ func loadAppConfig() (*appConfig, error) {
 
 func defaultAppConfig() *appConfig {
 	return &appConfig{
-		DataDir:             ".",
+		DataDir:             defaultDataDir,
 		ListenPort:          gossip.DefaultPort,
 		MaxMessageBytes:     gossip.DefaultMaxMessage,
 		MaxSyncZones:        gossip.DefaultSyncLimits().MaxZones,
@@ -239,14 +240,10 @@ func defaultAppConfig() *appConfig {
 
 func normalizeAppConfig(config *appConfig) {
 	if config.DataDir == "" {
-		config.DataDir = "."
+		config.DataDir = defaultDataDir
 	}
 	if config.StatePath == "" {
-		if config.DataDir == "." {
-			config.StatePath = defaultStatePath
-		} else {
-			config.StatePath = filepath.Join(config.DataDir, defaultStateFile)
-		}
+		config.StatePath = filepath.Join(config.DataDir, defaultStateFile)
 	}
 	if config.ListenPort == 0 {
 		config.ListenPort = gossip.DefaultPort
