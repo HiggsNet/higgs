@@ -111,6 +111,38 @@ type BirdInstanceSpec struct {
 
 	// BogonPrefixes are rejected before any accept logic in rendered filters.
 	BogonPrefixes []netip.Prefix `yaml:"bogon_prefixes,omitempty" json:"bogon_prefixes,omitempty"`
+
+	// Upstream enables veth-based peering with the main network.
+	// When non-nil and enabled, the generator emits a second Babel interface
+	// block for the veth and optionally a protocol static block.
+	Upstream *UpstreamSpec `yaml:"upstream,omitempty" json:"upstream,omitempty"`
+
+	// StaticRoutes specifies static routes to announce via the upstream
+	// interface. Each prefix is routed via the upstream interface name.
+	StaticRoutes []StaticRouteSpec `yaml:"static_routes,omitempty" json:"static_routes,omitempty"`
+}
+
+// UpstreamSpec configures a veth-based Babel peering with the main network.
+type UpstreamSpec struct {
+	// Interface is the veth endpoint inside the mesh netns.
+	Interface string `yaml:"interface" json:"interface"`
+
+	// InterfacePattern is the BIRD interface glob for upstream interfaces.
+	// Defaults to "hgs-upstream*".
+	InterfacePattern string `yaml:"interface_pattern,omitempty" json:"interface_pattern,omitempty"`
+}
+
+// StaticRouteSpec describes a static route for the BIRD protocol static block.
+type StaticRouteSpec struct {
+	// Prefix is the CIDR to announce.
+	Prefix netip.Prefix `yaml:"prefix" json:"prefix"`
+
+	// Via is the interface name for "via" routes. When empty, the route
+	// is a blackhole route.
+	Via string `yaml:"via,omitempty" json:"via,omitempty"`
+
+	// Blackhole forces a blackhole route even if Via is set.
+	Blackhole bool `yaml:"blackhole,omitempty" json:"blackhole,omitempty"`
 }
 
 // BirdConfig is a structured model of the desired BIRD configuration.
@@ -127,10 +159,26 @@ type BirdConfig struct {
 	// KernelTableID is the numeric kernel table id, or 0 for the default.
 	KernelTableID uint32
 
-	Kernel        KernelProtocolBlock
-	Babel         BabelProtocolBlock
-	ImportFilters []FilterBlock
-	ExportFilters []FilterBlock
+	Kernel         KernelProtocolBlock
+	Babel          BabelProtocolBlock
+	ImportFilters  []FilterBlock
+	ExportFilters  []FilterBlock
+	StaticRoutes   []StaticRouteBlock
+	UpstreamFilter  *FilterBlock // optional kernel export filter for upstream
+}
+
+// StaticRouteBlock describes one "protocol static { route ... }" block.
+type StaticRouteBlock struct {
+	Name        string
+	IPv4Routes  []StaticRoute
+	IPv6Routes  []StaticRoute
+}
+
+// StaticRoute is a single route line within a protocol static block.
+type StaticRoute struct {
+	Prefix   netip.Prefix
+	Via      string // interface name for "via" routes; empty for blackhole
+	Blackhole bool
 }
 
 // KernelProtocolBlock describes one "protocol kernel { ... }" block.
@@ -156,6 +204,17 @@ type BabelProtocolBlock struct {
 	ECMP             bool
 	ECMPLimit        uint
 	Auth             *BabelAuthSpec
+	UpstreamBlock    *BabelInterfaceBlock // optional second interface block for veth upstream
+}
+
+// BabelInterfaceBlock describes one "interface ... { ... }" block inside a
+// Babel protocol. The primary XFRM tunnel block is rendered inline in
+// BabelProtocolBlock; the upstream veth block uses this separate struct
+// because it must NOT have type tunnel.
+type BabelInterfaceBlock struct {
+	InterfacePattern string
+	TypeTunnel       bool
+	MetricBase       uint
 }
 
 // FilterBlock is a named BIRD filter function.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/netip"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -48,6 +49,19 @@ type RoutingInstance struct {
 	InterfacePat   string
 	RouterIDLabel  string   // required for path netns
 	Overlays       []string // overlays that share this instance (auto-derived)
+	Upstream       *UpstreamConfig
+}
+
+// UpstreamConfig holds optional veth upstream configuration that connects
+// the mesh netns to the main network (init netns or another ns).
+type UpstreamConfig struct {
+	Enabled       bool
+	Interface     string // mesh netns side of the veth pair
+	CreateVeth    bool   // if true, Higgs creates and maintains the veth pair
+	PeerInterface string // main network side of the veth pair
+	PeerNetns     string // empty = init/main netns
+	IPv4LL        string // optional IPv4 link-local for the mesh side
+	IPv6LL        string // optional IPv6 link-local for the mesh side
 }
 
 // routingInstancesYAML is the raw YAML model for the top-level `routing:` section.
@@ -56,22 +70,34 @@ type routingInstancesYAML struct {
 }
 
 type routingInstanceYAML struct {
-	ID             string `yaml:"id"`
-	NetNS          string `yaml:"netns"`
-	Enabled        *bool  `yaml:"enabled"`
-	Protocol       string `yaml:"protocol"`
-	Mode           string `yaml:"mode"`
-	ControlSocket  string `yaml:"control_socket"`
-	PIDFile        string `yaml:"pid_file"`
-	ConfigFile     string `yaml:"config_file"`
-	TableID        string `yaml:"table"`
-	MetricBase     uint   `yaml:"metric_base"`
-	MetricStaged   uint   `yaml:"metric_staged"`
-	MetricDraining uint   `yaml:"metric_draining"`
-	ECMP           *bool  `yaml:"ecmp"`
-	ECMPLimit      uint   `yaml:"ecmp_limit"`
-	InterfacePat   string `yaml:"interface_pattern"`
-	RouterIDLabel  string `yaml:"router_id_label"`
+	ID             string             `yaml:"id"`
+	NetNS          string             `yaml:"netns"`
+	Enabled        *bool              `yaml:"enabled"`
+	Protocol       string             `yaml:"protocol"`
+	Mode           string             `yaml:"mode"`
+	ControlSocket  string             `yaml:"control_socket"`
+	PIDFile        string             `yaml:"pid_file"`
+	ConfigFile     string             `yaml:"config_file"`
+	TableID        string             `yaml:"table"`
+	MetricBase     uint               `yaml:"metric_base"`
+	MetricStaged   uint               `yaml:"metric_staged"`
+	MetricDraining uint               `yaml:"metric_draining"`
+	ECMP           *bool              `yaml:"ecmp"`
+	ECMPLimit      uint               `yaml:"ecmp_limit"`
+	InterfacePat   string             `yaml:"interface_pattern"`
+	RouterIDLabel  string             `yaml:"router_id_label"`
+	Upstream       *upstreamConfigYAML `yaml:"upstream"`
+}
+
+// upstreamConfigYAML is the raw YAML model for routing.instances[].upstream.
+type upstreamConfigYAML struct {
+	Enabled       *bool  `yaml:"enabled"`
+	Interface     string `yaml:"interface"`
+	CreateVeth    *bool  `yaml:"create_veth"`
+	PeerInterface string `yaml:"peer_interface"`
+	PeerNetns     string `yaml:"peer_netns"`
+	IPv4LL        string `yaml:"ipv4_ll"`
+	IPv6LL        string `yaml:"ipv6_ll"`
 }
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
@@ -199,6 +225,11 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		configFile = filepath.Join(configDir, fmt.Sprintf("bird-%s.conf", yi.NetNS))
 	}
 
+	upstream, err := parseUpstreamConfig(yi.Upstream)
+	if err != nil {
+		return RoutingInstance{}, fmt.Errorf("upstream: %w", err)
+	}
+
 	return RoutingInstance{
 		ID:             yi.ID,
 		NetNS:          yi.NetNS,
@@ -216,7 +247,55 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		ECMPLimit:      ecmpLimit,
 		InterfacePat:   ifacePat,
 		RouterIDLabel:  yi.RouterIDLabel,
+		Upstream:       upstream,
 	}, nil
+}
+
+func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
+	if yu == nil {
+		return nil, nil
+	}
+	enabled := true
+	if yu.Enabled != nil {
+		enabled = *yu.Enabled
+	}
+	if !enabled {
+		return &UpstreamConfig{Enabled: false}, nil
+	}
+
+	uc := &UpstreamConfig{
+		Enabled:       true,
+		Interface:     strings.TrimSpace(yu.Interface),
+		PeerInterface: strings.TrimSpace(yu.PeerInterface),
+		PeerNetns:     strings.TrimSpace(yu.PeerNetns),
+		IPv4LL:        strings.TrimSpace(yu.IPv4LL),
+		IPv6LL:        strings.TrimSpace(yu.IPv6LL),
+	}
+	if yu.CreateVeth != nil {
+		uc.CreateVeth = *yu.CreateVeth
+	}
+
+	// Default interface name when upstream is enabled but not specified.
+	if uc.Interface == "" {
+		uc.Interface = "hgs-upstream0"
+	}
+	if uc.PeerInterface == "" {
+		uc.PeerInterface = "hgs-upstream1"
+	}
+
+	// Validate IPv4/IPv6 link-local if provided.
+	if uc.IPv4LL != "" {
+		if _, err := netip.ParsePrefix(uc.IPv4LL); err != nil {
+			return nil, fmt.Errorf("invalid ipv4_ll %q: %w", uc.IPv4LL, err)
+		}
+	}
+	if uc.IPv6LL != "" {
+		if _, err := netip.ParsePrefix(uc.IPv6LL); err != nil {
+			return nil, fmt.Errorf("invalid ipv6_ll %q: %w", uc.IPv6LL, err)
+		}
+	}
+
+	return uc, nil
 }
 
 func oneOfRoutingMode(mode string) bool {

@@ -122,6 +122,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	babelName := "higgs_babel_" + suffix
 	importFilterName := "higgs_import_" + suffix
 	exportFilterName := "higgs_export_" + suffix
+	staticName := "higgs_static_" + suffix
 
 	var kernelTableID uint32
 	if spec.TableID != defaultTableID {
@@ -142,6 +143,39 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	interfacePatterns := spec.InterfacePatterns
 	if len(interfacePatterns) == 0 {
 		interfacePatterns = []string{"hgs*"}
+	}
+
+	// Determine if upstream is enabled and build upstream interface block.
+	var upstreamBlock *BabelInterfaceBlock
+	if spec.Upstream != nil {
+		pat := spec.Upstream.InterfacePattern
+		if pat == "" {
+			pat = "hgs-upstream*"
+		}
+		upstreamBlock = &BabelInterfaceBlock{
+			InterfacePattern: pat,
+			TypeTunnel:       false, // veth does NOT use type tunnel
+			MetricBase:       spec.MetricBase,
+		}
+	}
+
+	// Build static route block if any static routes are specified.
+	var staticBlocks []StaticRouteBlock
+	if len(spec.StaticRoutes) > 0 {
+		block := StaticRouteBlock{Name: staticName}
+		for _, sr := range spec.StaticRoutes {
+			route := StaticRoute{
+				Prefix:    sr.Prefix,
+				Via:       sr.Via,
+				Blackhole: sr.Blackhole,
+			}
+			if sr.Prefix.Addr().Is4() {
+				block.IPv4Routes = append(block.IPv4Routes, route)
+			} else {
+				block.IPv6Routes = append(block.IPv6Routes, route)
+			}
+		}
+		staticBlocks = append(staticBlocks, block)
 	}
 
 	return BirdConfig{
@@ -172,9 +206,11 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			ECMP:             spec.ECMP,
 			ECMPLimit:        spec.ECMPLimit,
 			Auth:             spec.BabelAuth,
+			UpstreamBlock:    upstreamBlock,
 		},
 		ImportFilters: []FilterBlock{importFilter},
 		ExportFilters: []FilterBlock{exportFilter},
+		StaticRoutes:  staticBlocks,
 	}
 }
 
@@ -275,9 +311,55 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		}
 		fmt.Fprintln(&b, "    };")
 	}
+	// Upstream veth interface block (no type tunnel).
+	if cfg.Babel.UpstreamBlock != nil {
+		ub := cfg.Babel.UpstreamBlock
+		fmt.Fprintf(&b, "    interface %q {\n", ub.InterfacePattern)
+		// Do NOT emit "type tunnel" for veth — it uses default multicast/unicast.
+		fmt.Fprintf(&b, "        rxcost %d;\n", ub.MetricBase)
+		fmt.Fprintln(&b, "        hello interval 4 s;")
+		fmt.Fprintln(&b, "        update interval 4 s;")
+		fmt.Fprintln(&b, "    };")
+	}
 	fmt.Fprintln(&b, "}")
 
+	// Static route blocks.
+	for _, sr := range cfg.StaticRoutes {
+		renderStaticRouteBlock(&b, sr, cfg.IPv4Table, cfg.IPv6Table)
+	}
+
 	return b.Bytes(), nil
+}
+
+// renderStaticRouteBlock renders one "protocol static { ... }" block.
+func renderStaticRouteBlock(b *bytes.Buffer, sr StaticRouteBlock, ipv4Table, ipv6Table string) {
+	fmt.Fprintf(b, "\nprotocol static %s {\n", sr.Name)
+	if ipv4Table != "" && len(sr.IPv4Routes) > 0 {
+		fmt.Fprintf(b, "    ipv4 { table %s; };\n", ipv4Table)
+		for _, r := range sr.IPv4Routes {
+			renderStaticRouteLine(b, r)
+		}
+	}
+	if ipv6Table != "" && len(sr.IPv6Routes) > 0 {
+		fmt.Fprintf(b, "    ipv6 { table %s; };\n", ipv6Table)
+		for _, r := range sr.IPv6Routes {
+			renderStaticRouteLine(b, r)
+		}
+	}
+	fmt.Fprintln(b, "}")
+}
+
+func renderStaticRouteLine(b *bytes.Buffer, r StaticRoute) {
+	if r.Blackhole {
+		fmt.Fprintf(b, "    route %s blackhole;\n", r.Prefix.String())
+		return
+	}
+	if r.Via != "" {
+		fmt.Fprintf(b, "    route %s via \"%s\";\n", r.Prefix.String(), r.Via)
+		return
+	}
+	// No via and no blackhole: default to blackhole for safety.
+	fmt.Fprintf(b, "    route %s blackhole;\n", r.Prefix.String())
 }
 
 func formatRouterID(id uint32) string {

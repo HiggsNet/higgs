@@ -33,6 +33,12 @@ type birdProcessManager interface {
 	IsRunning(ctx context.Context) bool
 }
 
+// vethManager is the subset of bird.VethManager used by the daemon.
+type vethManager interface {
+	EnsureVethPair(ctx context.Context, spec bird.VethSpec) error
+	DeleteVethPair(ctx context.Context, spec bird.VethSpec) error
+}
+
 // birdClient is the subset of bird.Client used by the daemon.
 type birdClient interface {
 	Status(ctx context.Context) (*bird.BirdObservedState, error)
@@ -159,10 +165,31 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 	routerID := bird.StableRouterID(d.Sync.State.ManagedZone, rootTrustHash(d.Sync.State.Network), routerIDLabel)
 	instState.RouterID = routerID
 
-	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns)
+	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns, ars, d.Sync.State.ManagedZone)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
+
+	// Ensure veth pair for upstream if configured and create_veth is true.
+	if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.CreateVeth {
+		vspec := bird.VethSpec{
+			MeshInterface: inst.Upstream.Interface,
+			PeerInterface: inst.Upstream.PeerInterface,
+			MeshNetns:     netnsName,
+			PeerNetns:     inst.Upstream.PeerNetns,
+			MeshIPv4LL:    inst.Upstream.IPv4LL,
+			MeshIPv6LL:    inst.Upstream.IPv6LL,
+		}
+		vm := d.vethManager
+		if vm == nil {
+			vm = bird.NewExecVethManager()
+		}
+		if err := vm.EnsureVethPair(ctx, vspec); err != nil {
+			instState.State = birdInstanceStateError
+			instState.LastError = fmt.Sprintf("ensure veth: %s", err)
+			// Non-fatal in dry-run: continue with BIRD config generation.
+		}
+	}
 
 	importSet := assignmentPrefixes(ars)
 	exportSet := authorizedPrefixes(ars, []zone.ZonePath{d.Sync.State.ManagedZone})
@@ -259,7 +286,7 @@ func (d *DaemonService) newBirdClient(socketPath string) birdClient {
 	return bird.NewClient(socketPath, 10*time.Second)
 }
 
-func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, dataDir string, ng *netnsOverlayGroup, netnsCfg netnsConfig) bird.BirdInstanceSpec {
+func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, dataDir string, ng *netnsOverlayGroup, netnsCfg netnsConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
 	netnsSpec := ipsec.NetNSSpec{}
 	if s, ok := netnsCfg.Names[inst.NetNS]; ok {
 		netnsSpec = s
@@ -285,7 +312,7 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, dataDi
 		mode = bird.BirdModeManaged
 	}
 
-	return bird.BirdInstanceSpec{
+	spec := bird.BirdInstanceSpec{
 		RouterID:          routerID,
 		NetNSName:         inst.NetNS,
 		Overlays:          overlays,
@@ -302,6 +329,32 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, dataDi
 		ECMP:              inst.ECMP,
 		ECMPLimit:         inst.ECMPLimit,
 	}
+
+	// Wire upstream config into BIRD spec.
+	if inst.Upstream != nil && inst.Upstream.Enabled {
+		spec.Upstream = &bird.UpstreamSpec{
+			Interface: inst.Upstream.Interface,
+		}
+	}
+
+	// Build static routes for local assigned prefixes.
+	if ars != nil && managedZone.Valid() {
+		for prefix, entry := range ars.Assignments {
+			if entry.AssignedTo != managedZone {
+				continue
+			}
+			via := ""
+			if inst.Upstream != nil && inst.Upstream.Enabled {
+				via = inst.Upstream.Interface
+			}
+			spec.StaticRoutes = append(spec.StaticRoutes, bird.StaticRouteSpec{
+				Prefix: prefix,
+				Via:    via,
+			})
+		}
+	}
+
+	return spec
 }
 
 func routingEnabledGroups(groups []ipsec.LinkGroupSpec) []ipsec.LinkGroupSpec {

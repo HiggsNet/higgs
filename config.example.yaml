@@ -113,6 +113,18 @@ routing:
       # router_id_label: foo-netns  # required only for path netns
       ecmp: true
       ecmp_limit: 16
+      # Phase 6.1.7: Optional veth upstream for main-network Babel peering.
+      # When enabled, BIRD listens on a second interface (veth) in addition
+      # to XFRM tunnel interfaces. A protocol static block is generated for
+      # local IPAM assignments routed via the upstream interface.
+      upstream:
+        enabled: false
+        interface: hgs-upstream0       # mesh netns side of the veth pair
+        create_veth: true              # Higgs creates and maintains the veth pair
+        peer_interface: hgs-upstream1  # main network side
+        peer_netns: ""                 # empty = init/main netns
+        ipv4_ll: "169.254.0.1/30"      # optional IPv4 link-local for mesh side
+        ipv6_ll: "fe80::1/64"          # optional IPv6 link-local for mesh side
 
 overlays:
   - id: ipsec-main

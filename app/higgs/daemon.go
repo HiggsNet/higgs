@@ -49,6 +49,7 @@ type DaemonService struct {
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager birdProcessManager
 	birdClientFactory  func(socketPath string, timeout time.Duration) birdClient
+	vethManager        vethManager
 }
 
 type DaemonHooks struct {

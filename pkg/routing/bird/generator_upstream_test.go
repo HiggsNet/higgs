@@ -1,0 +1,186 @@
+package bird
+
+import (
+	"net/netip"
+	"strings"
+	"testing"
+)
+
+func TestGenerateWithUpstreamInterface(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.NetNSName = "h2"
+	spec.Upstream = &UpstreamSpec{
+		Interface: "hgs-upstream0",
+	}
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+
+	// Must have the primary XFRM tunnel interface block with type tunnel.
+	if !strings.Contains(s, `interface "hgs*" {`) {
+		t.Errorf("missing primary interface block with hgs*\n%s", s)
+	}
+	if !strings.Contains(s, "type tunnel;") {
+		t.Errorf("missing type tunnel in primary interface block\n%s", s)
+	}
+
+	// Must have the upstream veth interface block WITHOUT type tunnel.
+	if !strings.Contains(s, `interface "hgs-upstream*" {`) {
+		t.Errorf("missing upstream interface block\n%s", s)
+	}
+	// Count type tunnel occurrences: should be exactly 1 (only in primary block).
+	if cnt := strings.Count(s, "type tunnel;"); cnt != 1 {
+		t.Errorf("expected exactly 1 'type tunnel;' but got %d in:\n%s", cnt, s)
+	}
+}
+
+func TestGenerateWithoutUpstreamNoExtraInterface(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.NetNSName = "h2"
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+
+	// Should NOT have any upstream interface block.
+	if strings.Contains(s, "hgs-upstream") {
+		t.Errorf("upstream interface block present when not configured\n%s", s)
+	}
+	// Must still have the primary interface block.
+	if !strings.Contains(s, `interface "hgs*" {`) {
+		t.Errorf("missing primary interface block\n%s", s)
+	}
+}
+
+func TestGenerateWithStaticRoutes(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.NetNSName = "h2"
+	spec.StaticRoutes = []StaticRouteSpec{
+		{
+			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
+			Via:    "hgs-upstream0",
+		},
+		{
+			Prefix: netip.MustParsePrefix("2001:db8:1::/48"),
+			Via:    "hgs-upstream0",
+		},
+	}
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+
+	// Must have a protocol static block.
+	if !strings.Contains(s, "protocol static higgs_static_h2 {") {
+		t.Errorf("missing protocol static block\n%s", s)
+	}
+	// Must have the IPv4 route via the upstream interface.
+	if !strings.Contains(s, `route 10.0.0.0/24 via "hgs-upstream0";`) {
+		t.Errorf("missing IPv4 static route via interface\n%s", s)
+	}
+	// Must have the IPv6 route via the upstream interface.
+	if !strings.Contains(s, `route 2001:db8:1::/48 via "hgs-upstream0";`) {
+		t.Errorf("missing IPv6 static route via interface\n%s", s)
+	}
+}
+
+func TestGenerateWithBlackholeStaticRoute(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.NetNSName = "h2"
+	spec.StaticRoutes = []StaticRouteSpec{
+		{
+			Prefix:    netip.MustParsePrefix("10.0.0.0/24"),
+			Blackhole: true,
+		},
+	}
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+
+	if !strings.Contains(s, "route 10.0.0.0/24 blackhole;") {
+		t.Errorf("missing blackhole static route\n%s", s)
+	}
+}
+
+func TestGenerateWithStaticRouteNoVia(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.NetNSName = "h2"
+	spec.StaticRoutes = []StaticRouteSpec{
+		{
+			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
+		},
+	}
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+
+	// Without Via, should default to blackhole for safety.
+	if !strings.Contains(s, "route 10.0.0.0/24 blackhole;") {
+		t.Errorf("static route without via should default to blackhole\n%s", s)
+	}
+}
+
+func TestGenerateWithoutStaticRoutesNoStaticBlock(t *testing.T) {
+	spec := testBirdInstanceSpec()
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+
+	if strings.Contains(s, "protocol static") {
+		t.Errorf("static protocol block present when no static routes\n%s", s)
+	}
+}
+
+func TestGenerateWithUpstreamAndStaticRoutes(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.NetNSName = "h2"
+	spec.Upstream = &UpstreamSpec{
+		Interface: "hgs-upstream0",
+	}
+	spec.StaticRoutes = []StaticRouteSpec{
+		{
+			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
+			Via:    "hgs-upstream0",
+		},
+	}
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+
+	// Both upstream interface block and static routes.
+	if !strings.Contains(s, `interface "hgs-upstream*" {`) {
+		t.Errorf("missing upstream interface block\n%s", s)
+	}
+	if !strings.Contains(s, "protocol static") {
+		t.Errorf("missing protocol static block\n%s", s)
+	}
+	if !strings.Contains(s, `route 10.0.0.0/24 via "hgs-upstream0";`) {
+		t.Errorf("missing static route via upstream interface\n%s", s)
+	}
+}

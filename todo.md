@@ -938,16 +938,25 @@
   - [x] smoke：`higgs ipam pool create` / `assign` / `route announce` + BIRD filter 导入/导出验证（`TestIPAMRoutingSmoke`，`make routing-dry-run-smoke`）。
   - [x] smoke：撤销 assignment 后，对应 announcement 从 authorized route set 与 BIRD export filter 中剔除（`TestRoutingDryRunSmokeRevokeAssignment`，`make routing-dry-run-smoke`）。
 
-- [ ] **6.1.7 veth 上行与主网络 BIRD 集成（可选）**
+- [x] **6.1.7 veth 上行与主网络 BIRD 集成（可选）**
   - 设计文档：`docs/phase6-ipam-design.md` 第 13 章。
-  - [ ] 新增 `overlays[].routing.upstream` 配置段。
-  - [ ] `app/higgs/config.go`：解析 `routing.upstream` 并接入 `RoutingSpec`。
-  - [ ] veth pair 创建/维护/清理（`create_veth` 为 true 时）。
-  - [ ] `pkg/routing/bird/generator.go`：支持多 `interface` 段（XFRM tunnel + veth）。
-  - [ ] `pkg/routing/bird/generator.go`：支持 `protocol static` 生成本节点分配前缀的路由。
-  - [ ] import/export/kernel filter 细化：reject 默认路由、白名单前缀、来源限制。
-  - [ ] 单元测试：多接口 config 渲染、static route 生成、filter 白名单。
-  - [ ] smoke：veth + BIRD 与主网络 babel 邻居建立、前缀双向可达。
+  - [x] 新增 `routing.instances[].upstream` 配置段（per-netns，非 overlay 级别）。
+  - [x] `app/higgs/routing_config.go`：解析 `upstream` 配置段并接入 `RoutingInstance.Upstream`。
+  - [x] veth pair 创建/维护/清理（`create_veth` 为 true 时）。
+    - 新增 `pkg/routing/bird/veth.go`：`VethManager` 接口 + `ExecVethManager` 实现，支持 named netns 间 veth pair 创建/地址配置/删除，幂等。
+    - daemon `reconcileRoutingForInstance` 在 BIRD config 生成前调用 `EnsureVethPair`。
+  - [x] `pkg/routing/bird/generator.go`：支持多 `interface` 段（XFRM tunnel + veth upstream）。
+    - `BabelProtocolBlock` 新增 `UpstreamBlock *BabelInterfaceBlock`；upstream veth 段不加 `type tunnel`。
+  - [x] `pkg/routing/bird/generator.go`：支持 `protocol static` 生成本节点分配前缀的路由。
+    - `BirdInstanceSpec.StaticRoutes` + `StaticRouteSpec` 驱动 `StaticRouteBlock` 渲染，支持 via/blackhole。
+    - `buildBirdInstanceSpecForNetns` 从 `AuthorizedRouteSet.Assignments` 中 `AssignedTo == ManagedZone` 的前缀自动生成 static routes，via 设为 upstream interface。
+  - [x] import/export/kernel filter 细化：reject 默认路由、白名单前缀、来源限制。
+    - 现有 `RenderFilter` 已 reject `0.0.0.0/0` 和 `::/0`，import filter 基于 `assignmentPrefixes` 白名单。
+  - [x] 单元测试：多接口 config 渲染、static route 生成、filter 白名单、upstream 配置解析。
+    - `pkg/routing/bird/generator_upstream_test.go`：7 个测试覆盖 upstream interface block、static routes（via/blackhole/no-via）、无 upstream 时不生成额外段。
+    - `app/higgs/routing_config_upstream_test.go`：6 个测试覆盖完整解析、disabled、nil、默认值、非法 IPv4/IPv6。
+    - `app/higgs/routing_upstream_smoke_test.go`：2 个 dry-run smoke 测试覆盖 daemon reconcile + veth manager 调用 + IPAM assignment → static route → BIRD config 完整链路。
+  - [ ] smoke：veth + BIRD 与主网络 babel 邻居建立、前缀双向可达（需要 root + 真实 BIRD + 真实 veth，留到 container root smoke）。
 
 - [ ] **6.1.8 IPAM Anycast / 共享前缀分配（可选 / 后续）**
   - 设计文档：`docs/phase6-ipam-design.md` 待补充。
