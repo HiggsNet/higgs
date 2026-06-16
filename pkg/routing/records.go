@@ -55,6 +55,7 @@ type IPAMAssignmentRecord struct {
 	Prefix     string        `json:"prefix"`      // canonical CIDR prefix
 	AssignedTo zone.ZonePath `json:"assigned_to"` // zone that may announce the prefix
 	Active     bool          `json:"active"`      // true=assigned, false=revoked
+	Shared     bool          `json:"shared,omitempty"` // anycast: allow multiple zones to hold the same prefix
 }
 
 // CanonicalizePrefix parses a CIDR and returns its canonical form (masked network address).

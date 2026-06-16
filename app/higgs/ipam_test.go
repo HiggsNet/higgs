@@ -81,7 +81,7 @@ func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {
 func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes."); err != nil {
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestRevokeAlreadyRevokedPoolFails(t *testing.T) {
 
 func TestRevokeAlreadyRevokedAssignmentFails(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes."); err != nil {
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 	if err := revokeIPAMAssignmentWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
@@ -239,7 +239,7 @@ func TestListIPAMAssignments(t *testing.T) {
 	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", "catofes."); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes."); err != nil {
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
@@ -254,6 +254,54 @@ func TestListIPAMAssignments(t *testing.T) {
 	err := listIPAMAssignmentsWithRuntime(rt, "other.catofes.")
 	if err != nil {
 		t.Fatalf("listIPAMAssignments with non-matching filter failed: %v", err)
+	}
+}
+
+func TestSharedAssignmentRoundTrip(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", true); err != nil {
+		t.Fatalf("assignIPAM shared failed: %v", err)
+	}
+
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState after assign: %v", err)
+	}
+	key, err := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
+	if err != nil {
+		t.Fatalf("NormalizeIPAMAssignmentKey: %v", err)
+	}
+	rec := state.Network.Zones[managed].Records[key]
+	if rec == nil {
+		t.Fatalf("assignment record not found")
+	}
+	var assignment routing.IPAMAssignmentRecord
+	if err := json.Unmarshal(rec.Value, &assignment); err != nil {
+		t.Fatalf("unmarshal assignment: %v", err)
+	}
+	if !assignment.Shared {
+		t.Fatalf("expected Shared=true, got false")
+	}
+
+	// Revoke and verify Shared flag is preserved in the revocation record.
+	if err := revokeIPAMAssignmentWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+		t.Fatalf("revokeIPAMAssignment failed: %v", err)
+	}
+
+	state, err = rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState after revoke: %v", err)
+	}
+	rec = state.Network.Zones[managed].Records[key]
+	if err := json.Unmarshal(rec.Value, &assignment); err != nil {
+		t.Fatalf("unmarshal revoke: %v", err)
+	}
+	if assignment.Active {
+		t.Fatalf("expected Active=false after revoke")
+	}
+	if !assignment.Shared {
+		t.Fatalf("expected Shared=true preserved after revoke")
 	}
 }
 

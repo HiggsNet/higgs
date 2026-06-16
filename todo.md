@@ -958,19 +958,31 @@
     - `app/higgs/routing_upstream_smoke_test.go`：2 个 dry-run smoke 测试覆盖 daemon reconcile + veth manager 调用 + IPAM assignment → static route → BIRD config 完整链路。
   - [ ] smoke：veth + BIRD 与主网络 babel 邻居建立、前缀双向可达（需要 root + 真实 BIRD + 真实 veth，留到 container root smoke）。
 
-- [ ] **6.1.8 IPAM Anycast / 共享前缀分配（可选 / 后续）**
-  - 设计文档：`docs/phase6-ipam-design.md` 待补充。
+- [x] **6.1.8 IPAM Anycast / 共享前缀分配（可选 / 后续）**
+  - 设计文档：`docs/phase6-ipam-design.md` 第 14 章。
   - **问题：** 当前 IPAM assignment 重叠检测禁止多个 Zone 持有同一前缀，与 Anycast（多节点同 IP 高可用）冲突。
   - **目标：** 在 IPAM 层引入 shared/anycast 语义，允许多个 Zone 合法持有同一前缀的 assignment，同时保持现有防冲突规则对非 anycast 场景有效。
   - 候选方案：
     - 新增 `ipam.anycast` record 类型或 `assignment.shared` 字段。
     - 允许同一前缀分配给多个 Zone，但这些 Zone 必须被共同策略显式授权。
     - 在 `BuildAuthorizedRouteSet` 中识别 anycast assignment，跳过兄弟 Zone 重叠检查。
-  - [ ] 调研并确定 anycast assignment 的 schema 和授权模型。
-  - [ ] 更新 `BuildAuthorizedRouteSet` 和重叠检测逻辑，支持 anycast exception。
-  - [ ] 更新 `higgs ipam` CLI，支持创建/撤销 anycast assignment。
-  - [ ] 单元测试：多 Zone 同前缀 anycast、非 anycast 重叠仍拒绝、撤销后路由收敛。
+  - [x] 调研并确定 anycast assignment 的 schema 和授权模型。
+    - 采用 `assignment.shared` 字段方案：在 `IPAMAssignmentRecord` 新增 `Shared bool` 字段（默认 `false`，向后兼容）。
+  - [x] 更新 `BuildAuthorizedRouteSet` 和重叠检测逻辑，支持 anycast exception。
+    - `isAssignmentOverlapAllowed`：双方 `Shared=true` 时跳过兄弟 Zone 重叠检查。
+    - `resolveOverlaps`：双方 route announcement 由 shared assignment 授权时允许重叠。
+    - `findAssignmentForPrefix` 改为遍历 `AllAssignments`（含 anycast 重复）。
+    - `AuthorizedRouteSet` 新增 `AllAssignments` 字段，CLI/BIRD 列举应使用它。
+  - [x] 更新 `higgs ipam` CLI，支持创建/撤销 anycast assignment。
+    - `higgs ipam assign <zone> <prefix> --to <zone> --shared`
+    - 撤销时保留原 record 的 `shared` 字段值。
+  - [x] 单元测试：多 Zone 同前缀 anycast、非 anycast 重叠仍拒绝、撤销后路由收敛。
+    - `TestAnycastAssignmentOverlapCrossZoneValid`：两个 sibling Zone 持有同一 shared assignment，无错误。
+    - `TestAnycastAssignmentOnlyOneSharedStillRejected`：只有一方 shared 时仍拒绝重叠。
+    - `TestAnycastRouteAnnouncementOverlapValid`：两个 Zone 宣告同一 anycast 前缀，route overlap 允许。
+    - `TestSharedAssignmentRoundTrip`：CLI 创建 shared assignment 并撤销，`Shared` 字段保持正确。
   - [ ] smoke：多节点宣告同一 anycast 前缀，验证 Babel ECMP 和故障切换。
+    - 留到 container root smoke（Phase 5 后续）。
 
 ### 6.2 准入流程自动化
 

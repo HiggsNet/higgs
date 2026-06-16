@@ -634,9 +634,120 @@ func TestAssignmentOverlapCrossZoneNoContainmentValid(t *testing.T) {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
 	if len(ars.Errors) != 0 {
-		t.Fatalf("unexpected errors for non-overlapping assignments: %+v", ars.Errors)
+		t.Fatalf("expected no errors for non-overlapping assignments: %+v", ars.Errors)
 	}
 	if len(ars.Assignments) != 2 {
 		t.Fatalf("expected 2 assignments, got %d", len(ars.Assignments))
+	}
+}
+
+func TestAnycastAssignmentOverlapCrossZoneValid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addZone(ns, "sh.catofes.", "catofes.")
+	// Parent pool delegates to catofes. subtree; both siblings create shared
+	// assignments for the same anycast prefix in their own zones.
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
+	)
+	addRecords(ns, "pek.catofes.",
+		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true})),
+	)
+	addRecords(ns, "sh.catofes.",
+		mkRecord("sh.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes.", Active: true, Shared: true})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("expected no errors for anycast shared assignments: %+v", ars.Errors)
+	}
+	// Both assignments should be kept (they share the same prefix, but AllAssignments has both).
+	count := 0
+	for _, entry := range ars.AllAssignments {
+		if entry.Prefix == netip.MustParsePrefix("10.0.0.0/24") {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 anycast assignments for 10.0.0.0/24, got %d", count)
+	}
+}
+
+func TestAnycastAssignmentOnlyOneSharedStillRejected(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addZone(ns, "sh.catofes.", "catofes.")
+	// Parent pool delegates to catofes. subtree.
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
+	)
+	// pek has shared=true, sh has shared=false; overlap should still be rejected.
+	addRecords(ns, "pek.catofes.",
+		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true})),
+	)
+	addRecords(ns, "sh.catofes.",
+		mkRecord("sh.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes.", Active: true})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if !hasCode(ars.Errors, "ipam_assignment_overlap") {
+		t.Fatalf("expected ipam_assignment_overlap when only one side is shared, got %+v", ars.Errors)
+	}
+}
+
+func TestAnycastRouteAnnouncementOverlapValid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addZone(ns, "sh.catofes.", "catofes.")
+	// Parent pool delegates to catofes. subtree.
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
+	)
+	// Both siblings have shared assignments and route announcements.
+	addRecords(ns, "pek.catofes.",
+		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true})),
+		mkRecord("pek.catofes.", mustKeyRoute("10.0.0.0/24"), RecordTypeRouteAnnouncement,
+			mustJSON(RouteAnnouncementRecord{Version: 1, Prefix: "10.0.0.0/24", Active: true})),
+	)
+	addRecords(ns, "sh.catofes.",
+		mkRecord("sh.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes.", Active: true, Shared: true})),
+		mkRecord("sh.catofes.", mustKeyRoute("10.0.0.0/24"), RecordTypeRouteAnnouncement,
+			mustJSON(RouteAnnouncementRecord{Version: 1, Prefix: "10.0.0.0/24", Active: true})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("expected no errors for anycast route announcements: %+v", ars.Errors)
+	}
+	// Both zones should have their announcements authorized.
+	if ars.Announced["pek.catofes."] == nil || ars.Announced["pek.catofes."][netip.MustParsePrefix("10.0.0.0/24")] == nil {
+		t.Fatalf("expected pek.catofes. announcement to be authorized")
+	}
+	if ars.Announced["sh.catofes."] == nil || ars.Announced["sh.catofes."][netip.MustParsePrefix("10.0.0.0/24")] == nil {
+		t.Fatalf("expected sh.catofes. announcement to be authorized")
 	}
 }

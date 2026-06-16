@@ -59,20 +59,23 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:      "assign",
 				Usage:     "Assign a prefix to a zone",
-				UsageText: "higgs ipam assign <zone> <prefix> --to <zone>",
+				UsageText: "higgs ipam assign <zone> <prefix> --to <zone> [--shared]",
 				Description: "Assign a CIDR prefix to a zone so it may announce routes within it.\n" +
-					"The prefix is canonicalized before storage.",
+					"The prefix is canonicalized before storage.\n" +
+					"--shared marks this as an anycast assignment, allowing multiple zones to hold the same prefix.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "to", Usage: "Zone that receives the assignment", Required: true},
+					&cli.BoolFlag{Name: "shared", Usage: "Mark as anycast/shared assignment (allows prefix overlap with other shared assignments)", Value: false},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
-						return cli.Exit("usage: higgs ipam assign <zone> <prefix> --to <zone>", 1)
+						return cli.Exit("usage: higgs ipam assign <zone> <prefix> --to <zone> [--shared]", 1)
 					}
 					return assignIPAM(
 						zone.ZonePath(cmd.Args().Get(0)),
 						cmd.Args().Get(1),
 						zone.ZonePath(cmd.String("to")),
+						cmd.Bool("shared"),
 					)
 				},
 			},
@@ -143,16 +146,16 @@ func createIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, d
 	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMPool, true, "created")
 }
 
-func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath) error {
+func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	return assignIPAMWithRuntime(rt, path, prefix, assignedTo)
+	return assignIPAMWithRuntime(rt, path, prefix, assignedTo, shared)
 }
 
-func assignIPAMWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath) error {
-	canonical, key, value, err := prepareIPAMAssignmentRecord(prefix, assignedTo, true)
+func assignIPAMWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool) error {
+	canonical, key, value, err := prepareIPAMAssignmentRecord(prefix, assignedTo, true, shared)
 	if err != nil {
 		return err
 	}
@@ -188,11 +191,11 @@ func revokeIPAMAssignment(path zone.ZonePath, prefix string) error {
 }
 
 func revokeIPAMAssignmentWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) error {
-	canonical, key, assignedTo, err := currentIPAMAssignmentInfo(rt, path, prefix)
+	canonical, key, assignedTo, shared, err := currentIPAMAssignmentInfo(rt, path, prefix)
 	if err != nil {
 		return err
 	}
-	value, err := marshalIPAMAssignmentRecord(canonical, assignedTo, false)
+	value, err := marshalIPAMAssignmentRecord(canonical, assignedTo, false, shared)
 	if err != nil {
 		return err
 	}
@@ -215,7 +218,7 @@ func prepareIPAMPoolRecord(prefix string, delegatedTo zone.ZonePath, active bool
 	return canonical, key, value, nil
 }
 
-func prepareIPAMAssignmentRecord(prefix string, assignedTo zone.ZonePath, active bool) (canonical, key string, value []byte, err error) {
+func prepareIPAMAssignmentRecord(prefix string, assignedTo zone.ZonePath, active bool, shared bool) (canonical, key string, value []byte, err error) {
 	canonical, err = routing.CanonicalizePrefix(prefix)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("invalid prefix %q: %w", prefix, err)
@@ -224,7 +227,7 @@ func prepareIPAMAssignmentRecord(prefix string, assignedTo zone.ZonePath, active
 	if err != nil {
 		return "", "", nil, fmt.Errorf("normalize assignment key for %q: %w", prefix, err)
 	}
-	value, err = marshalIPAMAssignmentRecord(canonical, assignedTo, active)
+	value, err = marshalIPAMAssignmentRecord(canonical, assignedTo, active, shared)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -240,8 +243,8 @@ func marshalIPAMPoolRecord(canonical string, delegatedTo zone.ZonePath, active b
 	return value, nil
 }
 
-func marshalIPAMAssignmentRecord(canonical string, assignedTo zone.ZonePath, active bool) ([]byte, error) {
-	record := routing.IPAMAssignmentRecord{Version: 1, Prefix: canonical, AssignedTo: assignedTo, Active: active}
+func marshalIPAMAssignmentRecord(canonical string, assignedTo zone.ZonePath, active bool, shared bool) ([]byte, error) {
+	record := routing.IPAMAssignmentRecord{Version: 1, Prefix: canonical, AssignedTo: assignedTo, Active: active, Shared: shared}
 	value, err := json.Marshal(record)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ipam assignment record: %w", err)
@@ -280,35 +283,35 @@ func currentIPAMPoolInfo(rt *Runtime, path zone.ZonePath, prefix string) (canoni
 	return canonical, key, pool.DelegatedTo, nil
 }
 
-func currentIPAMAssignmentInfo(rt *Runtime, path zone.ZonePath, prefix string) (canonical, key string, assignedTo zone.ZonePath, err error) {
+func currentIPAMAssignmentInfo(rt *Runtime, path zone.ZonePath, prefix string) (canonical, key string, assignedTo zone.ZonePath, shared bool, err error) {
 	canonical, err = routing.CanonicalizePrefix(prefix)
 	if err != nil {
-		return "", "", "", fmt.Errorf("invalid prefix %q: %w", prefix, err)
+		return "", "", "", false, fmt.Errorf("invalid prefix %q: %w", prefix, err)
 	}
 	key, err = routing.NormalizeIPAMAssignmentKey(prefix)
 	if err != nil {
-		return "", "", "", fmt.Errorf("normalize assignment key for %q: %w", prefix, err)
+		return "", "", "", false, fmt.Errorf("normalize assignment key for %q: %w", prefix, err)
 	}
 	state, err := rt.LoadState()
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", false, err
 	}
 	zs := state.Network.Zones[path]
 	if zs == nil {
-		return "", "", "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+		return "", "", "", false, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
 	current := zs.Records[key]
 	if current == nil {
-		return "", "", "", fmt.Errorf("no active ipam.assignment for %s in %s", canonical, path)
+		return "", "", "", false, fmt.Errorf("no active ipam.assignment for %s in %s", canonical, path)
 	}
 	assignment, err := routing.ParseIPAMAssignmentRecord(current)
 	if err != nil {
-		return "", "", "", fmt.Errorf("current assignment record for %s is invalid: %w", canonical, err)
+		return "", "", "", false, fmt.Errorf("current assignment record for %s is invalid: %w", canonical, err)
 	}
 	if !assignment.Active {
-		return "", "", "", fmt.Errorf("assignment %s in %s is already revoked", canonical, path)
+		return "", "", "", false, fmt.Errorf("assignment %s in %s is already revoked", canonical, path)
 	}
-	return canonical, key, assignment.AssignedTo, nil
+	return canonical, key, assignment.AssignedTo, assignment.Shared, nil
 }
 
 func submitIPAMRecord(rt *Runtime, path zone.ZonePath, key string, value []byte, canonical string, recordType string, active bool, op string) error {
@@ -438,10 +441,11 @@ func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error
 		Prefix     string `json:"prefix"`
 		Source     string `json:"source"`
 		AssignedTo string `json:"assigned_to"`
+		Shared     bool   `json:"shared,omitempty"`
 	}
-	rows := make([]assignmentRow, 0, len(ars.Assignments))
+	rows := make([]assignmentRow, 0, len(ars.AllAssignments))
 	filter := string(filterZone)
-	for _, entry := range ars.Assignments {
+	for _, entry := range ars.AllAssignments {
 		if filter != "" && string(entry.Source) != filter && string(entry.AssignedTo) != filter {
 			continue
 		}
@@ -449,6 +453,7 @@ func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error
 			Prefix:     entry.Prefix.String(),
 			Source:     string(entry.Source),
 			AssignedTo: string(entry.AssignedTo),
+			Shared:     entry.Shared,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {

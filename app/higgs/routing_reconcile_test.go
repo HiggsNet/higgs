@@ -268,7 +268,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 		if err := createIPAMPoolWithRuntime(rt, "catofes.", "10.0.0.0/16", "catofes."); err != nil {
 			return err
 		}
-		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/16", "node-a.catofes.")
+		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/16", "node-a.catofes.", false)
 	}); err != nil {
 		t.Fatalf("catofes IPAM writes: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 		if err := createIPAMPoolWithRuntime(rt, "catofes.", "10.0.0.0/16", "catofes."); err != nil {
 			return err
 		}
-		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/24", "node-a.catofes.")
+		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/24", "node-a.catofes.", false)
 	}); err != nil {
 		t.Fatalf("catofes IPAM writes: %v", err)
 	}

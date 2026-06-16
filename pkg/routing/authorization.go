@@ -13,10 +13,11 @@ import (
 
 // RouteEntry represents an active, authorized route announcement.
 type RouteEntry struct {
-	Record       *zone.Record
-	Source       zone.ZonePath
-	Prefix       netip.Prefix
-	Announcement *RouteAnnouncementRecord
+	Record           *zone.Record
+	Source           zone.ZonePath
+	Prefix           netip.Prefix
+	Announcement     *RouteAnnouncementRecord
+	SharedAssignment bool // backed by an anycast/shared IPAM assignment
 }
 
 // AssignmentEntry represents an active IPAM assignment record.
@@ -26,6 +27,7 @@ type AssignmentEntry struct {
 	Source     zone.ZonePath
 	Record     *zone.Record
 	Assignment *IPAMAssignmentRecord
+	Shared     bool // anycast assignment: overlaps with other shared assignments are allowed
 }
 
 // PoolEntry represents an active IPAM pool record.
@@ -48,9 +50,14 @@ type RouteAuthorizationError struct {
 // AuthorizedRouteSet is the result of reconciling announcements with IPAM state.
 type AuthorizedRouteSet struct {
 	Announced   map[zone.ZonePath]map[netip.Prefix]*RouteEntry
-	Assignments map[netip.Prefix]*AssignmentEntry
-	Pools       map[netip.Prefix]*PoolEntry
-	Errors      []RouteAuthorizationError
+	Assignments map[netip.Prefix]*AssignmentEntry // one representative entry per prefix (for quick lookup)
+	// AllAssignments contains every valid assignment including anycast/shared
+	// duplicates that share the same prefix. Consumers that must enumerate all
+	// assignments (CLI listing, auto-announce, BIRD static routes) should
+	// iterate this slice instead of the Assignments map.
+	AllAssignments []*AssignmentEntry
+	Pools          map[netip.Prefix]*PoolEntry
+	Errors         []RouteAuthorizationError
 }
 
 // BuildAuthorizedRouteSet builds an authorized route set from verified active state.
@@ -114,6 +121,7 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 					Source:     path,
 					Record:     rec,
 					Assignment: assignment,
+					Shared:     assignment.Shared,
 				})
 
 			case strings.HasPrefix(key, RecordKeyPrefixRoutes):
@@ -153,14 +161,22 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 		ars.addError(entry.Source, entry.Prefix, "ipam_assignment_overlap",
 			fmt.Sprintf("assignment %s overlaps with another assignment outside the delegation chain", entry.Prefix))
 	}
+
+	// Store all valid assignments (including anycast duplicates sharing the
+	// same prefix) and a representative in the prefix-keyed map for quick
+	// lookups.
+	ars.AllAssignments = validAssignments
 	for _, entry := range validAssignments {
-		ars.Assignments[entry.Prefix] = entry
+		if existing := ars.Assignments[entry.Prefix]; existing == nil || (existing.Shared && !entry.Shared) {
+			ars.Assignments[entry.Prefix] = entry
+		}
 	}
 
 	// Authorize pending announcements against assignments.
 	var authorized []*RouteEntry
 	for _, entry := range pendingRoutes {
 		if assignment := findAssignmentForPrefix(ars, entry.Source, entry.Prefix); assignment != nil {
+			entry.SharedAssignment = assignment.Shared
 			authorized = append(authorized, entry)
 		} else {
 			ars.addError(entry.Source, entry.Prefix, "route_unauthorized_no_assignment", "no matching assignment")
@@ -316,6 +332,15 @@ func validateAssignmentOverlaps(assignments []*AssignmentEntry, ns *zone.Network
 }
 
 func isAssignmentOverlapAllowed(ns *zone.NetworkState, a, b *AssignmentEntry) bool {
+	// Anycast/shared assignments: allow overlap when both sides are marked
+	// shared. This enables multiple zones to legitimately hold the same
+	// prefix (e.g. anycast service IPs). A single shared assignment does not
+	// exempt the other side from normal overlap rules if the other is not
+	// also shared.
+	if a.Shared && b.Shared {
+		return true
+	}
+
 	// Same zone: allow hierarchical assignments where one assigned_to is a
 	// strict ancestor of the other.
 	if a.Source == b.Source {
@@ -332,10 +357,12 @@ func isAssignmentOverlapAllowed(ns *zone.NetworkState, a, b *AssignmentEntry) bo
 }
 
 // findAssignmentForPrefix finds an assignment that authorizes prefix within
-// zone z or one of its ancestor zones.
+// zone z or one of its ancestor zones. It searches AllAssignments (including
+// anycast/shared duplicates) so that multiple zones holding the same prefix
+// are all checked.
 func findAssignmentForPrefix(ars *AuthorizedRouteSet, z zone.ZonePath, prefix netip.Prefix) *AssignmentEntry {
 	for _, ancestor := range z.Ancestors() {
-		for _, entry := range ars.Assignments {
+		for _, entry := range ars.AllAssignments {
 			if entry.Source != ancestor {
 				continue
 			}
@@ -382,6 +409,13 @@ func resolveOverlaps(entries []*RouteEntry, ars *AuthorizedRouteSet, ns *zone.Ne
 		for j := i + 1; j < len(entries); j++ {
 			a, b := entries[i], entries[j]
 			if !a.Prefix.Overlaps(b.Prefix) {
+				continue
+			}
+
+			// Anycast/shared announcements: allow overlap when both sides are
+			// backed by shared assignments. Babel ECMP handles multipath to
+			// the same prefix from multiple zones.
+			if a.SharedAssignment && b.SharedAssignment {
 				continue
 			}
 

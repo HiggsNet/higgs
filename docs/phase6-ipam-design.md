@@ -486,3 +486,72 @@ filter higgs_kernel_export {
 - **主网络 BIRD 配置冲突**：主网络中如果已有 BIRD/babeld 实例，需确保 router-id、interface、port 不冲突，filter 方向正确。
 - **多 overlay 场景**：每个 overlay 的 BIRD 实例是否共享同一个 veth？建议先按 overlay 独立，避免路由表和 Babel 邻居互相污染。
 - **type tunnel 不要应用到 veth**：BIRD 的 `type tunnel` 会让 Babel 把邻居视为单向 tunnel，veth 上应使用默认模式。
+
+## 14. Anycast / 共享前缀分配
+
+### 14.1 问题
+
+当前 IPAM assignment 重叠检测禁止多个 Zone 持有同一前缀。这与 Anycast（多节点同 IP 高可用）冲突。
+
+### 14.2 目标
+
+在 IPAM 层引入 shared/anycast 语义，允许多个 Zone 合法持有同一前缀的 assignment，同时保持现有防冲突规则对非 anycast 场景有效。
+
+### 14.3 Schema 变更
+
+`ipam.assignment` record 新增 `shared` 字段（可选，默认 `false`）：
+
+```json
+{
+  "version": 1,
+  "prefix": "10.0.0.1/32",
+  "assigned_to": "node-a.catofes.",
+  "active": true,
+  "shared": true
+}
+```
+
+- `shared=false`（默认）：行为与之前完全一致，不允许多 Zone 重叠。
+- `shared=true`：该 assignment 被标记为 anycast，允许与其他同样标记为 `shared=true` 的 assignment 重叠。
+
+向后兼容：旧 record 不含 `shared` 字段，解析时默认为 `false`，行为不变。
+
+### 14.4 重叠检测规则
+
+在 `BuildAuthorizedRouteSet` 的 `validateAssignmentOverlaps` 中：
+
+1. 如果两个 assignment 前缀重叠，且**双方都标记为 `shared=true`**，则允许重叠（跳过兄弟 Zone 检查）。
+2. 如果只有一方标记为 `shared`，或双方都未标记，则继续应用现有重叠检测规则（同 Zone 层级、跨 Zone 委派链）。
+
+### 14.5 Route Announcement 重叠
+
+在 `resolveOverlaps` 中，如果两个 route announcement 前缀重叠，且它们**都由 shared assignment 授权**（`RouteEntry.SharedAssignment == true`），则允许重叠。Babel ECMP 会自动处理多路径到同一前缀的流量分发。
+
+### 14.6 CLI 支持
+
+```bash
+# 创建 anycast assignment
+higgs ipam assign <zone> <prefix> --to <zone> --shared
+
+# 撤销 anycast assignment（与普通撤销相同）
+higgs ipam revoke assignment <zone> <prefix>
+```
+
+`--shared` 标志默认为 `false`。撤销操作会保留原 record 的 `shared` 字段值。
+
+### 14.7 授权模型
+
+Anycast assignment 的授权模型与普通 assignment 完全一致：
+- 必须由具备 `PermAllocateIP` 的 Zone authority 签名。
+- 必须被同 Zone 或祖先 Zone 的 pool 覆盖。
+- Pool enforcement 规则不变。
+
+`shared` 字段只是一个语义标记，不影响权限验证，只影响重叠检测。
+
+### 14.8 AllAssignments
+
+`AuthorizedRouteSet` 新增 `AllAssignments []*AssignmentEntry` 字段，包含所有有效的 assignment（包括 anycast 重复）。原有的 `Assignments map[netip.Prefix]*AssignmentEntry` 保留一个前缀一个代表条目（用于快速查找）。需要枚举所有 assignment 的消费者（CLI 列表、自动宣告、BIRD static route）应遍历 `AllAssignments`。
+
+### 14.9 与 Babel ECMP 的关系
+
+Babel 原生支持 ECMP（`ecmp on limit 16` 已在 bird.conf 中启用）。当多个 Zone 宣告同一 anycast 前缀时，BIRD 自动学习到多条路由并通过 ECMP 分发流量。节点故障后 Babel 自动收敛，流量切换到剩余的 anycast 节点。
