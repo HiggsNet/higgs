@@ -66,6 +66,61 @@ func TestLoadStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	}
 }
 
+func TestTryAdoptAutoJoinDelegationCreatesManagedZone(t *testing.T) {
+	dir := t.TempDir()
+	state, keyPath := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
+	key, err := readPrivateKeyFile(keyPath)
+	if err != nil {
+		t.Fatalf("readPrivateKeyFile: %v", err)
+	}
+	if !autoJoinPending(state) {
+		t.Fatalf("state should start pending")
+	}
+
+	adopted, err := tryAdoptAutoJoinDelegation(state, time.Unix(1000, 0))
+	if err != nil {
+		t.Fatalf("tryAdoptAutoJoinDelegation: %v", err)
+	}
+	if !adopted {
+		t.Fatalf("adopted = false, want true")
+	}
+	if autoJoinPending(state) {
+		t.Fatalf("state still pending after adoption")
+	}
+	zs := state.Network.Zones[state.ManagedZone]
+	if zs == nil || zs.Authority == nil {
+		t.Fatalf("managed zone was not created")
+	}
+	if !authorityHasKey(zs.Authority, key.PublicKey) {
+		t.Fatalf("managed zone authority missing local key")
+	}
+	if len(zs.ParentProof) != 1 || zs.ParentProof[0].ZoneName != state.ManagedZone {
+		t.Fatalf("parent proof = %#v, want direct proof for managed zone", zs.ParentProof)
+	}
+	if err := higgscrypto.VerifyChain(state.Network, state.ManagedZone, time.Unix(1000, 0)); err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+}
+
+func TestTryAdoptAutoJoinDelegationIgnoresKeyMismatch(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", false)
+
+	adopted, err := tryAdoptAutoJoinDelegation(state, time.Unix(1000, 0))
+	if err != nil {
+		t.Fatalf("tryAdoptAutoJoinDelegation: %v", err)
+	}
+	if adopted {
+		t.Fatalf("adopted = true, want false")
+	}
+	if state.Network.Zones[state.ManagedZone] != nil {
+		t.Fatalf("managed zone should not be created for mismatched delegation")
+	}
+	if !autoJoinPending(state) {
+		t.Fatalf("state should remain pending")
+	}
+}
+
 func TestLoadStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	dir := t.TempDir()
 	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
@@ -144,6 +199,88 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("matching reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
+}
+
+func buildPendingAutoJoinState(t *testing.T, dir string, managed zone.ZonePath, matchingDelegation bool) (*stateFile, string) {
+	t.Helper()
+	keyPath, pub := writeTestPrivateKey(t, dir, "identity")
+	if !matchingDelegation {
+		_, pub = writeTestPrivateKey(t, dir, "other")
+	}
+	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root): %v", err)
+	}
+	parentPub, parentPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(parent): %v", err)
+	}
+	parent := managed.Parent()
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: rootPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
+			}},
+		}},
+	}
+	parentAuthority := &zone.ZoneAuthority{
+		Zone:      parent,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: parentPub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
+			}},
+		}},
+	}
+	childAuthority := &zone.ZoneAuthority{
+		Zone:      managed,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate},
+			}},
+		}},
+	}
+	parentDelegation := &zone.Delegation{
+		ZoneName:  parent,
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *parentAuthority,
+	}
+	if err := higgscrypto.SignDelegation(parentDelegation, zone.RootZone, rootPriv); err != nil {
+		t.Fatalf("SignDelegation(parent): %v", err)
+	}
+	childDelegation := &zone.Delegation{
+		ZoneName:  managed,
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *childAuthority,
+	}
+	if err := higgscrypto.SignDelegation(childDelegation, parent, parentPriv); err != nil {
+		t.Fatalf("SignDelegation(child): %v", err)
+	}
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	ns.Zones[zone.RootZone].Delegations[parent] = parentDelegation
+	ns.Zones[parent] = zone.NewZoneState(parent, parentAuthority)
+	ns.Zones[parent].ParentProof = []*zone.Delegation{cloneDelegationForJoinBundle(parentDelegation)}
+	ns.Zones[parent].Delegations[managed] = childDelegation
+	configureValidation(ns)
+	key, err := readPrivateKeyFile(keyPath)
+	if err != nil {
+		t.Fatalf("readPrivateKeyFile: %v", err)
+	}
+	return &stateFile{
+		ManagedZone:    managed,
+		ZonePrivateKey: key.PrivateKey,
+		Network:        ns,
+	}, keyPath
 }
 
 func buildIdentityState(t *testing.T, dir string, managed zone.ZonePath) (*stateFile, string) {

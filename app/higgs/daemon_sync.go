@@ -291,6 +291,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				"delegations": result.Delegation,
 				"via":         "event_loop",
 			})
+			d.tryAdoptAutoJoinAfterSync(peerID, "event_loop", now, &changed)
 		case ApplyRecordSnapshotAction:
 			if a.Record == nil || a.Record.Record == nil {
 				continue
@@ -439,6 +440,30 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	}
 
 	return changed
+}
+
+func (d *DaemonService) tryAdoptAutoJoinAfterSync(peerID, via string, now time.Time, changed *bool) {
+	adopted, err := tryAdoptAutoJoinDelegation(d.Sync.State, now)
+	if err != nil {
+		d.logWarn("auto_join", "adopt_failed", map[string]any{
+			"peer_id": peerID,
+			"zone":    d.Sync.State.ManagedZone,
+			"via":     via,
+			"error":   err,
+		})
+		return
+	}
+	if !adopted {
+		return
+	}
+	if changed != nil {
+		*changed = true
+	}
+	d.logInfo("auto_join", "adopted", map[string]any{
+		"peer_id": peerID,
+		"zone":    d.Sync.State.ManagedZone,
+		"via":     via,
+	})
 }
 
 func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {

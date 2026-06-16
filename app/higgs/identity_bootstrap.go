@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -174,6 +175,41 @@ func autoJoinPending(state *stateFile) bool {
 	}
 	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
 	return !authorityHasKey(zs.Authority, pub)
+}
+
+func tryAdoptAutoJoinDelegation(state *stateFile, now time.Time) (bool, error) {
+	if !autoJoinPending(state) || len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
+		return false, nil
+	}
+	if state.Network.Zones[state.ManagedZone] != nil {
+		return false, nil
+	}
+	parent := state.ManagedZone.Parent()
+	parentState := state.Network.Zones[parent]
+	if parentState == nil || parentState.Authority == nil {
+		return false, nil
+	}
+	delegation := parentState.Delegations[state.ManagedZone]
+	if delegation == nil {
+		return false, nil
+	}
+	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	if delegation.ZoneName != state.ManagedZone || delegation.Authority.Zone != state.ManagedZone || !authorityHasKey(&delegation.Authority, pub) {
+		return false, nil
+	}
+	if err := higgscrypto.VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
+		return false, err
+	}
+
+	zs := zone.NewZoneState(state.ManagedZone, cloneAuthorityForJoinBundle(&delegation.Authority))
+	zs.ParentProof = []*zone.Delegation{cloneDelegationForJoinBundle(delegation)}
+	state.Network.Zones[state.ManagedZone] = zs
+	configureValidation(state.Network)
+	if err := higgscrypto.VerifyChain(state.Network, state.ManagedZone, now); err != nil {
+		delete(state.Network.Zones, state.ManagedZone)
+		return false, err
+	}
+	return true, nil
 }
 
 func logAutoJoinPending(logger *appLogger, state *stateFile) {

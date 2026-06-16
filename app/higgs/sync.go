@@ -1105,6 +1105,28 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 	return sr.saveState()
 }
 
+func (sr *SyncRuntime) tryAdoptAutoJoinAfterSync(peerID, via string) bool {
+	adopted, err := tryAdoptAutoJoinDelegation(sr.State, sr.now())
+	if err != nil {
+		sr.logger().Warn("auto_join", "adopt_failed", map[string]any{
+			"peer_id": peerID,
+			"zone":    sr.State.ManagedZone,
+			"via":     via,
+			"error":   err,
+		})
+		return false
+	}
+	if !adopted {
+		return false
+	}
+	sr.logger().Info("auto_join", "adopted", map[string]any{
+		"peer_id": peerID,
+		"zone":    sr.State.ManagedZone,
+		"via":     via,
+	})
+	return true
+}
+
 // filterEndpointDiscoveryInputs returns the advertise addresses and reflectors
 // to use when publishing local endpoints, respecting the endpoint_discovery
 // configuration. loopback_only suppresses public IP reflectors and interface
@@ -1551,6 +1573,7 @@ func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeo
 									})
 								} else {
 									clearRejectedDigest(sr.State, peerID, path)
+									sr.tryAdoptAutoJoinAfterSync(peerID, "object_pull")
 									sr.logger().Info("sync", "zone_applied", map[string]any{
 										"peer_id": peerID,
 										"zone":    path,
@@ -1849,6 +1872,9 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 			"delegations": result.Delegation,
 			"via":         "udp_announce",
 		})
+		if sr.tryAdoptAutoJoinAfterSync(message.PeerID, "udp_announce") {
+			changed = true
+		}
 	}
 	for _, record := range message.Announce.Records {
 		if isRejectedRecordActive(state, message.PeerID, &record, "", sr.now()) {
@@ -1889,6 +1915,7 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 		if err := sr.saveState(); err != nil {
 			return err
 		}
+		changed = false
 	}
 	for _, path := range fetchListForPeer(state, message.PeerID, message.Announce.Zones, sr.now()) {
 		snapshot, pullErr := tryObjectPullTCPUntil(state, sr.Config, message.PeerID, path, deadline)
@@ -1923,6 +1950,7 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 			}
 			clearRejectedDigest(state, message.PeerID, path)
 			changed = true
+			sr.tryAdoptAutoJoinAfterSync(message.PeerID, "object_pull")
 			sr.logger().Info("sync", "zone_applied", map[string]any{
 				"peer_id":     message.PeerID,
 				"zone":        result.Zone,
@@ -1940,6 +1968,11 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 			Type:      gossip.MessageFetchZone,
 			FetchZone: fetch,
 		}); err != nil {
+			return err
+		}
+	}
+	if changed {
+		if err := sr.saveState(); err != nil {
 			return err
 		}
 	}
@@ -1977,6 +2010,7 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 		}
 		clearRejectedDigest(sr.State, message.PeerID, chunk.Zone)
 		recordDatagramChunkFallback(sr.State, message.PeerID)
+		sr.tryAdoptAutoJoinAfterSync(message.PeerID, "udp_chunks")
 		sr.logger().Info("sync", "zone_applied", map[string]any{
 			"peer_id":     message.PeerID,
 			"zone":        result.Zone,
