@@ -164,11 +164,16 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopControl()
-	d.logInfo("daemon", "started", map[string]any{
+	startFields := map[string]any{
 		"peer_id":  d.Sync.Config.PeerID,
 		"addr":     transport.LocalAddr(),
 		"interval": d.Interval,
-	})
+	}
+	if d.Sync.App != nil {
+		startFields["config_path"] = configPath()
+		startFields["state_path"] = d.Sync.App.StatePath
+	}
+	d.logInfo("daemon", "started", startFields)
 	logAutoJoinPending(d.Log, d.Sync.State)
 
 	nextSync := d.Sync.now()
