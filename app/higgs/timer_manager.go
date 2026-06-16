@@ -193,30 +193,29 @@ func (tm *TimerManager) CancelAll(peerID string) {
 }
 
 func (tm *TimerManager) waitAndPost(key timerKey, timer Timer, peerID, kind string) {
-	select {
-	case firedAt := <-timer.C():
-		tm.mu.Lock()
-		// Only post if this timer is still the current one for the key.
-		if cur, ok := tm.timers[key]; ok && cur == timer {
-			delete(tm.timers, key)
-		}
-		tm.mu.Unlock()
-
-		var ev SyncEvent
-		switch kind {
-		case "round":
-			ev = &RoundTimeoutEvent{PeerID: peerID}
-		case "packet_quiet":
-			ev = &PacketQuietTimeoutEvent{PeerID: peerID}
-		default:
-			return
-		}
-		// Use non-blocking send so a stale timer cannot block shutdown.
-		select {
-		case tm.events <- ev:
-		case <-time.After(5 * time.Second):
-			// Event loop may have stopped; drop.
-			_ = firedAt
-		}
+	firedAt := <-timer.C()
+	tm.mu.Lock()
+	// Only post if this timer is still the current one for the key.
+	if cur, ok := tm.timers[key]; ok && cur == timer {
+		delete(tm.timers, key)
 	}
+	tm.mu.Unlock()
+
+	var ev SyncEvent
+	switch kind {
+	case "round":
+		ev = &RoundTimeoutEvent{PeerID: peerID}
+	case "packet_quiet":
+		ev = &PacketQuietTimeoutEvent{PeerID: peerID}
+	default:
+		return
+	}
+	// Use non-blocking send so a stale timer cannot block shutdown.
+	select {
+	case tm.events <- ev:
+	case <-time.After(5 * time.Second):
+		// Event loop may have stopped; drop.
+		_ = firedAt
+	}
+
 }

@@ -85,7 +85,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	}
 
 	var firstErr error
-	if err := d.autoAnnounceAssignedIPs(ars); err != nil && firstErr == nil {
+	if err := d.autoAnnounceAssignedIPs(ars); err != nil {
 		firstErr = err
 	}
 

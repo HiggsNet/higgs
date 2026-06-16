@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	defaultConfigPath              = "config.yaml"
-	defaultStateFile               = "higgs.db"
+	defaultConfigPath              = "/etc/higgs/config.yaml"
+	defaultStateFile               = "/etc/higgs/higgs.db"
 	defaultIPsecPortPreviousGrace  = 2 * time.Hour
 	defaultIPsecRotateRetentionSec = 3600
 )
