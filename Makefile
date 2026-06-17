@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -57,6 +57,15 @@ ipsec-xfrm-smoke: build
 
 ipsec-xfrm-container-smoke:
 	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/ipsec-xfrm-container-smoke.sh
+
+bird-babel-preflight:
+	@docs/scripts/bird-babel-preflight.sh
+
+bird-babel-smoke: build
+	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/bird-babel-smoke.sh
+
+bird-babel-container-smoke:
+	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/bird-babel-container-smoke.sh
 
 ipsec-dry-run-smoke:
 	$(GO_ENV) $(GO) test ./pkg/transport/ipsec
@@ -859,8 +868,18 @@ help:
 	@echo "  reflector-smoke - Run public IP reflector endpoint smoke test"
 	@echo "  bootstrap-join-smoke - Run new-node bootstrap admission smoke test"
 	@echo "  nat-observed-smoke - Run NAT-style verified observed UDP path smoke test"
+	@echo "  nat-daemon-observed-smoke - Run daemon-based NAT observed path smoke test"
+	@echo "  admin-daemon-smoke - Run admin daemon delegation issue/revoke smoke test"
 	@echo "  delegation-revoke-smoke - Run delegation revocation convergence smoke test"
 	@echo "  object-pull-smoke - Run large-record object-pull over TCP smoke test"
 	@echo "  chunk-fallback-smoke - Run large-record UDP chunk fallback when TCP object pull is unreachable"
+	@echo "  ipsec-policy-smoke - Run IPsec mesh policy URI rule planner smoke test"
+	@echo "  ipsec-dry-run-smoke - Run IPsec planner + fake driver reconcile smoke test"
 	@echo "  routing-dry-run-smoke - Run Phase 5 routing dry-run smoke test"
+	@echo "  ipsec-xfrm-preflight - Check root/netns/XFRM/StrongSwan prerequisites"
+	@echo "  ipsec-xfrm-smoke - Run real StrongSwan/XFRM smoke (requires root, NOT in smoke-all)"
+	@echo "  ipsec-xfrm-container-smoke - Run StrongSwan/XFRM smoke in privileged container"
+	@echo "  bird-babel-preflight - Check root/netns/BIRD prerequisites"
+	@echo "  bird-babel-smoke - Run real BIRD/Babel smoke (requires root, NOT in smoke-all)"
+	@echo "  bird-babel-container-smoke - Run BIRD/Babel smoke in privileged container"
 	@echo "  help    - Show this help message"

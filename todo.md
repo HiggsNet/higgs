@@ -742,7 +742,7 @@
 - [x] **5.6 闭环验证（第一版）**
   - [x] 单元测试：`StableRouterID`、`AuthorizedRouteSet`（assignment/announcement/撤销/重叠/default route）、BIRD config/filter、birdc client、process manager、daemon routing reconcile。
   - [x] dry-run smoke：`make routing-dry-run-smoke` 验证两节点 route authorization + BIRD config 生成。
-  - [ ] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）留到 Phase 5 后续。
+  - [x] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）：已增加 `make bird-babel-smoke` / `make bird-babel-container-smoke` 基础设施和 Go root smoke 测试骨架（`HIGGS_BIRD_SMOKE=1`），覆盖 managed BIRD lifecycle、两节点 Babel 邻居+路由学习、daemon routing reconcile、veth upstream。完整 3 节点 + StrongSwan/XFRM + managed BIRD 联合 smoke 仍待后续接入。
   - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
 
 - [x] **5.7 BIRD 从 per-overlay 改为 per-netns（配置模型重构）**
