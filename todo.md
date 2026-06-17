@@ -956,7 +956,7 @@
     - `pkg/routing/bird/generator_upstream_test.go`：7 个测试覆盖 upstream interface block、static routes（via/blackhole/no-via）、无 upstream 时不生成额外段。
     - `app/higgs/routing_config_upstream_test.go`：6 个测试覆盖完整解析、disabled、nil、默认值、非法 IPv4/IPv6。
     - `app/higgs/routing_upstream_smoke_test.go`：2 个 dry-run smoke 测试覆盖 daemon reconcile + veth manager 调用 + IPAM assignment → static route → BIRD config 完整链路。
-  - [ ] smoke：veth + BIRD 与主网络 babel 邻居建立、前缀双向可达（需要 root + 真实 BIRD + 真实 veth，留到 container root smoke）。
+  - [x] smoke：veth + BIRD 与主网络 babel 邻居建立、前缀双向可达（`TestBIRDUpstreamBabelRootSmoke`，`make bird-babel-smoke` / `make bird-babel-container-smoke`）：创建 overlay netns ← veth → host ns，两端各起 BIRD Babel，host 宣告 `172.16.1.0/24`，overlay 宣告 `172.16.2.0/24`，验证双向学习。
 
 - [x] **6.1.8 IPAM Anycast / 共享前缀分配（可选 / 后续）**
   - 设计文档：`docs/phase6-ipam-design.md` 第 14 章。

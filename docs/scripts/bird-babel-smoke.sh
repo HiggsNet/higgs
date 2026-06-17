@@ -38,6 +38,13 @@ HIGGS_BIRD_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/routing/bird -run '^TestBabelTwoNodeRootSmoke$' -count=1 -v
 
+# Test 2b: veth upstream BIRD Babel neighbor + bidirectional prefix exchange
+HIGGS_BIRD_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./pkg/routing/bird -run '^TestBIRDUpstreamBabelRootSmoke$' -count=1 -v
+
 # Test 3: Daemon routing reconcile with real BIRD in a netns
 HIGGS_BIRD_SMOKE=1 \
   GOCACHE="$go_cache" \
@@ -52,4 +59,4 @@ HIGGS_BIRD_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonBIRDUpstreamRootSmoke$' -count=1 -v
 
-printf 'bird/babel smoke passed (preflight + managed BIRD lifecycle + two-node Babel exchange + daemon routing reconcile + veth upstream)\n'
+printf 'bird/babel smoke passed (preflight + managed BIRD lifecycle + two-node Babel exchange + upstream Babel bidirectional prefix exchange + daemon routing reconcile + veth upstream)\n'

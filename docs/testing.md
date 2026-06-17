@@ -185,6 +185,9 @@ container smoke 会：
   (`app/higgs/bird_root_smoke_test.go`)
 - `TestDaemonBIRDUpstreamRootSmoke` — veth upstream + BIRD config 验证
   (`app/higgs/bird_root_smoke_test.go`)
+- `TestBIRDUpstreamBabelRootSmoke` — veth 跨 netns (host ← veth → overlay)
+  BIRD Babel 邻居建立 + 前缀双向可达（6.1.7 场景）
+  (`pkg/routing/bird/root_smoke_test.go`)
 
 **环境变量：**
 - `HIGGS_BIRD_SMOKE=1` — gate Go 测试

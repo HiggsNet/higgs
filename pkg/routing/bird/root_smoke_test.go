@@ -279,6 +279,186 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 	t.Logf("Babel two-node root smoke: B learned route 10.0.1.0/24 from A")
 }
 
+// TestBIRDUpstreamBabelRootSmoke tests the 6.1.7 scenario: a veth pair
+// connects an overlay netns to the host (main) network, BIRD instances
+// on both sides establish a Babel neighbor over the veth, and prefixes
+// are exchanged bidirectionally.
+//
+// Topology:
+//   host ns (10.99.2.1/30) ←veth→ overlay ns (10.99.2.2/30)
+//
+// Host announces 172.16.1.0/24, overlay announces 172.16.2.0/24.
+// After convergence, both sides should have learned each other's prefix.
+func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
+		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD upstream Babel smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	overlayNS := "higgs-bird-up-" + suffix
+	vethHost := "hguph" + suffix[len(suffix)-4:]
+	vethOverlay := "hgupo" + suffix[len(suffix)-4:]
+	tmpHost := t.TempDir()
+	tmpOverlay := t.TempDir()
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", overlayNS).Run()
+		_ = exec.Command("ip", "link", "del", vethHost).Run()
+	})
+
+	// Create the overlay netns.
+	if err := exec.CommandContext(ctx, "ip", "netns", "add", overlayNS).Run(); err != nil {
+		t.Fatalf("ip netns add %s: %v", overlayNS, err)
+	}
+
+	// Create veth pair: vethHost stays in host ns, vethOverlay goes to overlay ns.
+	if err := exec.CommandContext(ctx, "ip", "link", "add", vethHost, "type", "veth", "peer", "name", vethOverlay).Run(); err != nil {
+		t.Fatalf("create veth pair: %v", err)
+	}
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethOverlay, "netns", overlayNS).Run()
+
+	// Configure interfaces.
+	steps := [][]string{
+		{"link", "set", "lo", "up"},
+		{"addr", "add", "10.99.2.1/30", "dev", vethHost},
+		{"link", "set", vethHost, "up"},
+		{"netns", "exec", overlayNS, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", overlayNS, "ip", "addr", "add", "10.99.2.2/30", "dev", vethOverlay},
+		{"netns", "exec", overlayNS, "ip", "link", "set", vethOverlay, "up"},
+	}
+	for _, args := range steps {
+		out, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ip %s: %v\noutput: %s", strings.Join(args, " "), err, string(out))
+		}
+	}
+
+	// Prepare BIRD config for the host side (runs in host ns directly).
+	hostCfgPath := filepath.Join(tmpHost, "bird.conf")
+	hostSocketPath := filepath.Join(tmpHost, "bird.ctl")
+	hostPIDPath := filepath.Join(tmpHost, "bird.pid")
+	hostCfg := generateMinimalBabelConfig(BirdInstanceSpec{
+		RouterID:          0x0a630201, // 10.99.2.1
+		ConfigPath:        hostCfgPath,
+	}, vethHost, "172.16.1.0/24")
+	if err := os.WriteFile(hostCfgPath, []byte(hostCfg), 0644); err != nil {
+		t.Fatalf("write host config: %v", err)
+	}
+
+	// Prepare BIRD config for the overlay side (runs inside overlay ns).
+	overlayCfgPath := filepath.Join(tmpOverlay, "bird.conf")
+	overlaySocketPath := filepath.Join(tmpOverlay, "bird.ctl")
+	overlayPIDPath := filepath.Join(tmpOverlay, "bird.pid")
+	overlayCfg := generateMinimalBabelConfig(BirdInstanceSpec{
+		RouterID:   0x0a630202, // 10.99.2.2
+		ConfigPath: overlayCfgPath,
+	}, vethOverlay, "172.16.2.0/24")
+	if err := os.WriteFile(overlayCfgPath, []byte(overlayCfg), 0644); err != nil {
+		t.Fatalf("write overlay config: %v", err)
+	}
+
+	// Start BIRD in host ns (directly, not via ExecProcessManager since
+	// we're in host ns already).
+	hostBird := exec.CommandContext(ctx, "bird",
+		"-c", hostCfgPath,
+		"-s", hostSocketPath,
+		"-P", hostPIDPath,
+	)
+	if err := hostBird.Start(); err != nil {
+		t.Fatalf("start host BIRD: %v", err)
+	}
+	go func() { _ = hostBird.Wait() }()
+	t.Cleanup(func() {
+		_ = exec.Command("birdc", "-s", hostSocketPath, "down").Run()
+		_ = hostBird.Process.Kill()
+		_ = hostBird.Wait()
+		_ = os.Remove(hostCfgPath)
+		_ = os.Remove(hostSocketPath)
+		_ = os.Remove(hostPIDPath)
+	})
+
+	// Start BIRD in overlay ns via ip netns exec.
+	overlaySpec := BirdInstanceSpec{
+		RouterID:          0x0a630202,
+		NetNSName:         overlayNS,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: overlayNS, Create: false},
+		ControlSocketPath: overlaySocketPath,
+		PIDFilePath:       overlayPIDPath,
+		ConfigPath:        overlayCfgPath,
+		TableID:           "main",
+		InterfacePatterns: []string{vethOverlay},
+	}
+	overlayPM := NewExecProcessManager("")
+	overlayPM.socketWaitTimeout = 5 * time.Second
+	if err := overlayPM.Start(ctx, overlaySpec); err != nil {
+		t.Fatalf("start overlay BIRD: %v", err)
+	}
+	t.Cleanup(func() { _ = overlayPM.Stop(context.Background(), overlaySpec) })
+
+	// Wait for host BIRD control socket.
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(hostSocketPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if _, err := os.Stat(hostSocketPath); err != nil {
+		t.Fatalf("host BIRD control socket not found: %v", err)
+	}
+
+	// Dump diagnostics on failure.
+	dumpOnFail := func() {
+		t.Logf("--- host BIRD protocols ---")
+		out, _ := exec.CommandContext(ctx, "birdc", "-s", hostSocketPath, "show", "protocols", "all").CombinedOutput()
+		t.Logf("%s", string(out))
+		routes, _ := exec.CommandContext(ctx, "birdc", "-s", hostSocketPath, "show", "route").CombinedOutput()
+		t.Logf("--- host BIRD routes ---\n%s", string(routes))
+		t.Logf("--- overlay BIRD protocols ---")
+		out2, _ := exec.CommandContext(ctx, "birdc", "-s", overlaySocketPath, "show", "protocols", "all").CombinedOutput()
+		t.Logf("%s", string(out2))
+		routes2, _ := exec.CommandContext(ctx, "birdc", "-s", overlaySocketPath, "show", "route").CombinedOutput()
+		t.Logf("--- overlay BIRD routes ---\n%s", string(routes2))
+	}
+	defer func() {
+		if t.Failed() {
+			dumpOnFail()
+		}
+	}()
+
+	// Poll for host BIRD to learn overlay's prefix 172.16.2.0/24.
+	hostLearned := false
+	for i := 0; i < 40; i++ {
+		out, err := exec.CommandContext(ctx, "birdc", "-s", hostSocketPath, "show", "route").CombinedOutput()
+		if err == nil && strings.Contains(string(out), "172.16.2.0/24") {
+			hostLearned = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !hostLearned {
+		t.Fatal("host BIRD did not learn route 172.16.2.0/24 from overlay within 20s")
+	}
+
+	// Poll for overlay BIRD to learn host's prefix 172.16.1.0/24.
+	overlayLearned := false
+	for i := 0; i < 40; i++ {
+		out, err := exec.CommandContext(ctx, "birdc", "-s", overlaySocketPath, "show", "route").CombinedOutput()
+		if err == nil && strings.Contains(string(out), "172.16.1.0/24") {
+			overlayLearned = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !overlayLearned {
+		t.Fatal("overlay BIRD did not learn route 172.16.1.0/24 from host within 20s")
+	}
+
+	t.Logf("BIRD upstream Babel root smoke: host learned 172.16.2.0/24, overlay learned 172.16.1.0/24")
+}
+
 // generateMinimalBabelConfig produces a minimal BIRD 2.x config that:
 // - Uses the given interface for Babel (without type tunnel)
 // - Announces the given prefix via protocol static
