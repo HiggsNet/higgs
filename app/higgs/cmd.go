@@ -434,6 +434,21 @@ func cmdDebug() *cli.Command {
 					return debugPeers(ctx)
 				},
 			},
+			{
+				Name:  "revoke-impact",
+				Usage: "Show revocation impact and cleanup status for revoked zones",
+				Description: "Display the affected subtree, link instances, sync peers, " +
+					"configured-but-revoked peers, IPAM prefixes and per-layer cleanup status " +
+					"for every currently-revoked zone.",
+				UsageText: "higgs debug revoke-impact [zone]",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					zoneArg := ""
+					if cmd.Args().Len() > 0 {
+						zoneArg = cmd.Args().First()
+					}
+					return debugRevokeImpact(ctx, zoneArg)
+				},
+			},
 		},
 	}
 }

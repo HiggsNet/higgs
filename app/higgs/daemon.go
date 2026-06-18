@@ -574,6 +574,20 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			PeerStatuses: peerStatuses,
 			Message:      "peers status",
 		})
+	case "revoke_status":
+		if d.Sync.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
+			return
+		}
+		d.Sync.State.RLock()
+		impacts := AllRevocationImpact(d.Sync.State, d.Sync.Config, d.Sync.now())
+		d.Sync.State.RUnlock()
+		writeControlResponse(conn, controlResponse{
+			OK:               true,
+			PeerID:           d.Sync.Config.PeerID,
+			RevocationImpact: impacts,
+			Message:          "revoke status",
+		})
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}
@@ -601,9 +615,15 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 	d.drainingEvents = true
 	defer func() {
 		d.drainingEvents = false
-		ipsecFlushed = d.flushIPsecReconcile(ctx)
-		routingFlushed = d.flushRoutingReconcile(ctx)
+		// Phase 6.5 deny-first order: revocation cleanup → firewall → routing
+		// → IPsec → revocation cleanup again. This ensures revoked prefixes
+		// and peer entries are removed from allow sets before any layer can
+		// re-accept traffic from the revoked subtree.
+		d.flushRevocationCleanup()
 		firewallFlushed = d.flushFirewallReconcile(ctx)
+		routingFlushed = d.flushRoutingReconcile(ctx)
+		ipsecFlushed = d.flushIPsecReconcile(ctx)
+		d.flushRevocationCleanup()
 	}()
 	for {
 		select {
@@ -1043,6 +1063,14 @@ func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
 		d.Hooks.OnStateChanged(d.Sync.State)
 	}
+	// Phase 6.5: clean gossip peer cache for revoked zones before triggering
+	// layer reconciles. This ensures revoked peers don't appear as discovered
+	// endpoints, observed paths or object-pull candidates when the downstream
+	// layers recompute desired state. The deny-first cleanup happens before
+	// firewall/routing/IPsec flush so that allow sets and desired links are
+	// computed without revoked entries.
+	d.flushRevocationCleanup()
+
 	if d.drainingEvents {
 		d.ipsecDirty = true
 		d.routingDirty = true
@@ -1052,9 +1080,30 @@ func (d *DaemonService) notifyStateChanged() {
 	d.ipsecDirty = true
 	d.routingDirty = true
 	d.firewallDirty = true
-	d.flushIPsecReconcile(context.Background())
-	d.flushRoutingReconcile(context.Background())
 	d.flushFirewallReconcile(context.Background())
+	d.flushRoutingReconcile(context.Background())
+	d.flushIPsecReconcile(context.Background())
+	// Gossip peer cache cleanup runs again after teardown to ensure observed
+	// paths discovered/refreshed during the flush are cleared.
+	d.flushRevocationCleanup()
+}
+
+// flushRevocationCleanup clears runtime-relevant fields from SyncPeers entries
+// whose zone is currently revoked. This implements Phase 6.5.5 gossip peer
+// cache cleanup: revoked peers must not maintain discovered endpoints,
+// observed paths, backoff or object-pull candidates. The entry itself is
+// retained with a "revoked" marker for diagnostics; it is removed via the
+// normal offline cleanup policy after the cleanup_after retention window.
+func (d *DaemonService) flushRevocationCleanup() {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+		return
+	}
+	now := d.Sync.now()
+	revokedZones := CollectAllRevokedZones(d.Sync.State, now)
+	if len(revokedZones) == 0 {
+		return
+	}
+	CleanupRevokedPeerCache(d.Sync.State, revokedZones)
 }
 
 func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {

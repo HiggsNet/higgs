@@ -69,6 +69,7 @@ type controlResponse struct {
 	Admission         *admissionDiagnosis           `json:"admission,omitempty"`
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
 	PeerStatuses      []PeerStatusInfo              `json:"peer_statuses,omitempty"`
+	RevocationImpact  []RevocationImpact            `json:"revocation_impact,omitempty"`
 }
 
 func controlSocketPath(config *appConfig) string {

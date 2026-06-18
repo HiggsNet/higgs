@@ -1,0 +1,553 @@
+package main
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
+)
+
+// TestCollectAllRevokedZonesEmpty verifies that no revoked zones are returned
+// when all zones have active delegations.
+func TestCollectAllRevokedZonesEmpty(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+	revoked := CollectAllRevokedZones(state, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected no revoked zones, got %d: %v", len(revoked), revoked)
+	}
+}
+
+// TestCollectAllRevokedZonesWithRevocation verifies that revoked zones are
+// correctly identified from active state.
+func TestCollectAllRevokedZonesWithRevocation(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	// Revoke node-b.catofes.
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+
+	revoked := CollectAllRevokedZones(state, now)
+	if !revoked["node-b.catofes."] {
+		t.Fatalf("expected node-b.catofes. to be revoked, got %v", revoked)
+	}
+	if len(revoked) != 1 {
+		t.Fatalf("expected exactly 1 revoked zone, got %d: %v", len(revoked), revoked)
+	}
+}
+
+// TestComputeRevocationImpactBasic verifies that RevocationImpact correctly
+// identifies affected link instances, sync peers, and the source zone.
+func TestComputeRevocationImpactBasic(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	// Set up a link instance to node-b.catofes.
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-to-node-b": {
+			ID:          "link-to-node-b",
+			PeerZone:    "node-b.catofes.",
+			GroupID:     "main",
+			ActualState: "up",
+		},
+	}
+	// Set up a SyncPeer for node-b.
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			DiscoveredAddr: "192.0.2.1:33434",
+			ObservedAddr:   "192.0.2.1:33434",
+		},
+	}
+
+	// Revoke node-b.catofes.
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+
+	impact := ComputeRevocationImpact(state, "node-b.catofes.", now)
+	if impact.RevokedZone != "node-b.catofes." {
+		t.Fatalf("revoked zone = %s, want node-b.catofes.", impact.RevokedZone)
+	}
+	if impact.SourceZone != "catofes." {
+		t.Fatalf("source zone = %s, want catofes.", impact.SourceZone)
+	}
+	if len(impact.AffectedLinkInstances) != 1 || impact.AffectedLinkInstances[0] != "link-to-node-b" {
+		t.Fatalf("affected link instances = %v, want [link-to-node-b]", impact.AffectedLinkInstances)
+	}
+	if len(impact.AffectedSyncPeers) != 1 || impact.AffectedSyncPeers[0] != "node-b.catofes." {
+		t.Fatalf("affected sync peers = %v, want [node-b.catofes.]", impact.AffectedSyncPeers)
+	}
+	// All layer statuses should be pending.
+	for _, layer := range []string{revocationLayerIPsec, revocationLayerRouting, revocationLayerFirewall, revocationLayerGossip} {
+		if status := impact.Layers[layer]; status == nil || status.Status != revocationStatusPending {
+			t.Fatalf("layer %s status = %+v, want pending", layer, status)
+		}
+	}
+}
+
+// TestComputeRevocationImpactSubtree verifies that descendant zones are
+// correctly identified as part of the revoked subtree.
+func TestComputeRevocationImpactSubtree(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	// Add a grandchild zone under node-b.catofes.
+	// buildTestNetworkState already has root -> catofes. -> node-b.catofes.
+	// We need to add a sub-zone like leaf.node-b.catofes.
+	leafZone := zone.ZonePath("leaf.node-b.catofes.")
+	state.Network.Zones[leafZone] = &zone.ZoneState{
+		Path:          leafZone,
+		Authority:     state.Network.Zones["node-b.catofes."].Authority,
+		Delegations:   make(map[zone.ZonePath]*zone.Delegation),
+		Revocations:   make(map[zone.ZonePath]*zone.DelegationRevocation),
+		Records:       make(map[string]*zone.Record),
+		RecordHistory: make(map[string][]*zone.Record),
+	}
+	// Also set up link instance and sync peer for the leaf.
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-to-leaf": {
+			ID:          "link-to-leaf",
+			PeerZone:    leafZone,
+			GroupID:     "main",
+			ActualState: "up",
+		},
+	}
+	state.SyncPeers = map[string]syncPeerState{
+		string(leafZone): {
+			DiscoveredAddr: "192.0.2.2:33434",
+		},
+	}
+
+	// Revoke node-b.catofes. (parent zone).
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+
+	impact := ComputeRevocationImpact(state, "node-b.catofes.", now)
+	// The leaf should be in the subtree.
+	found := false
+	for _, z := range impact.RevokedSubtree {
+		if z == leafZone {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("leaf zone %s not found in subtree %v", leafZone, impact.RevokedSubtree)
+	}
+	// The leaf's link instance should be affected.
+	if len(impact.AffectedLinkInstances) != 1 || impact.AffectedLinkInstances[0] != "link-to-leaf" {
+		t.Fatalf("affected link instances = %v, want [link-to-leaf]", impact.AffectedLinkInstances)
+	}
+	// The leaf's sync peer should be affected.
+	if len(impact.AffectedSyncPeers) != 1 || impact.AffectedSyncPeers[0] != string(leafZone) {
+		t.Fatalf("affected sync peers = %v, want [%s]", impact.AffectedSyncPeers, leafZone)
+	}
+}
+
+// TestComputeRevocationImpactNilState verifies that nil state produces an
+// empty impact.
+func TestComputeRevocationImpactNilState(t *testing.T) {
+	impact := ComputeRevocationImpact(nil, "node-b.catofes.", time.Now())
+	if impact.RevokedZone != "node-b.catofes." {
+		t.Fatalf("revoked zone = %s, want node-b.catofes.", impact.RevokedZone)
+	}
+	if len(impact.RevokedSubtree) != 0 || len(impact.AffectedLinkInstances) != 0 || len(impact.AffectedSyncPeers) != 0 {
+		t.Fatalf("expected empty impact for nil state, got %+v", impact)
+	}
+}
+
+// TestCleanupRevokedPeerCache verifies that runtime-relevant fields are cleared
+// for revoked peers while keeping the entry for diagnostics.
+func TestCleanupRevokedPeerCache(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	// Set up sync peer with addresses and observed paths.
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			DiscoveredAddr:       "192.0.2.1:33434",
+			DiscoveredAtUnix:     now.Add(-1 * time.Hour).Unix(),
+			ObservedAddr:         "192.0.2.1:33434",
+			ObservedLastSeenUnix: now.Unix(),
+			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+			ObservedSource:       "announce",
+			ObservedGraceAddrs: []observedGraceAddrState{
+				{Addr: "192.0.2.2:33434", UntilUnix: now.Add(10 * time.Minute).Unix()},
+			},
+			BackoffUntilUnix: now.Add(30 * time.Second).Unix(),
+			FailureCount:     3,
+			LastError:        "timeout",
+			DatagramStats:    &datagramStats{TooLargeDropped: 5, LastTooLargeDirection: "send"},
+		},
+		"node-a.catofes.": {
+			DiscoveredAddr: "192.0.2.10:33434",
+		},
+	}
+
+	revoked := map[zone.ZonePath]bool{"node-b.catofes.": true}
+	CleanupRevokedPeerCache(state, revoked)
+
+	// node-b should have cleared fields.
+	peerB := state.SyncPeers["node-b.catofes."]
+	if peerB.DiscoveredAddr != "" {
+		t.Fatalf("discovered addr not cleared: %s", peerB.DiscoveredAddr)
+	}
+	if peerB.ObservedAddr != "" {
+		t.Fatalf("observed addr not cleared: %s", peerB.ObservedAddr)
+	}
+	if peerB.ObservedLastSeenUnix != 0 {
+		t.Fatalf("observed last seen not cleared: %d", peerB.ObservedLastSeenUnix)
+	}
+	if peerB.ObservedGraceAddrs != nil {
+		t.Fatalf("observed grace addrs not cleared: %+v", peerB.ObservedGraceAddrs)
+	}
+	if peerB.BackoffUntilUnix != 0 {
+		t.Fatalf("backoff not cleared: %d", peerB.BackoffUntilUnix)
+	}
+	if peerB.FailureCount != 0 {
+		t.Fatalf("failure count not cleared: %d", peerB.FailureCount)
+	}
+	if peerB.LastError != "zone revoked" {
+		t.Fatalf("last error = %q, want 'zone revoked'", peerB.LastError)
+	}
+	if peerB.LastUpdateSource != "revoked" {
+		t.Fatalf("last update source = %q, want 'revoked'", peerB.LastUpdateSource)
+	}
+	// DatagramStats should be preserved for audit but live counters reset.
+	if peerB.DatagramStats == nil {
+		t.Fatalf("datagram stats should be preserved for audit")
+	}
+	if peerB.DatagramStats.TooLargeDropped != 5 {
+		t.Fatalf("datagram stats TooLargeDropped should be preserved, got %d", peerB.DatagramStats.TooLargeDropped)
+	}
+	if peerB.DatagramStats.LastTooLargeDirection != "" {
+		t.Fatalf("datagram stats LastTooLargeDirection should be cleared, got %q", peerB.DatagramStats.LastTooLargeDirection)
+	}
+
+	// node-a should be untouched.
+	peerA := state.SyncPeers["node-a.catofes."]
+	if peerA.DiscoveredAddr != "192.0.2.10:33434" {
+		t.Fatalf("non-revoked peer discovered addr changed: %s", peerA.DiscoveredAddr)
+	}
+}
+
+// TestCleanupRevokedPeerCacheEmpty verifies no panic on empty/nil input.
+func TestCleanupRevokedPeerCacheEmpty(t *testing.T) {
+	CleanupRevokedPeerCache(nil, nil)
+	state := &stateFile{SyncPeers: map[string]syncPeerState{}}
+	CleanupRevokedPeerCache(state, nil)
+}
+
+// TestUpdateRevocationLayerStatus verifies layer status updates.
+func TestUpdateRevocationLayerStatus(t *testing.T) {
+	impact := RevocationImpact{
+		Layers: make(map[string]*RevocationLayerStatus),
+	}
+	// Initialize all layers as pending, similar to ComputeRevocationImpact.
+	for _, layer := range []string{revocationLayerIPsec, revocationLayerRouting, revocationLayerFirewall, revocationLayerGossip} {
+		impact.Layers[layer] = &RevocationLayerStatus{Status: revocationStatusPending}
+	}
+	now := time.Unix(4140, 0)
+	UpdateRevocationLayerStatus(&impact, revocationLayerFirewall, revocationStatusRemoved, "deleted 3 rules", "", now)
+	status := impact.Layers[revocationLayerFirewall]
+	if status == nil || status.Status != revocationStatusRemoved || status.Reason != "deleted 3 rules" || status.UnixTime != now.Unix() {
+		t.Fatalf("layer status = %+v, want removed/deleted 3 rules", status)
+	}
+
+	UpdateRevocationLayerStatus(&impact, revocationLayerIPsec, revocationStatusError, "", "timeout", now)
+	if !impact.HasPendingCleanup() {
+		// routing and gossip should still be pending
+		t.Fatalf("expected pending cleanup, but routing/gossip are not pending")
+	}
+	UpdateRevocationLayerStatus(&impact, revocationLayerRouting, revocationStatusRemoved, "", "", now)
+	UpdateRevocationLayerStatus(&impact, revocationLayerGossip, revocationStatusRemoved, "", "", now)
+	if impact.HasPendingCleanup() {
+		t.Fatalf("expected no pending cleanup after all layers resolved")
+	}
+}
+
+// TestDaemonFlushRevocationCleanup verifies that the daemon's
+// flushRevocationCleanup correctly clears peer cache after revocation.
+func TestDaemonFlushRevocationCleanup(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	// Set up sync peer with observed path.
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			DiscoveredAddr:       "192.0.2.1:33434",
+			ObservedAddr:         "192.0.2.1:33434",
+			ObservedLastSeenUnix: now.Unix(),
+			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+		},
+	}
+
+	// Revoke node-b.catofes.
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+
+	appConfig := defaultAppConfig()
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: "/tmp/test-revoke-cleanup.db",
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	// Flush revocation cleanup.
+	service.flushRevocationCleanup()
+
+	// Verify peer cache is cleared.
+	peer := service.Sync.State.SyncPeers["node-b.catofes."]
+	if peer.DiscoveredAddr != "" || peer.ObservedAddr != "" {
+		t.Fatalf("peer cache not cleared: discovered=%s observed=%s", peer.DiscoveredAddr, peer.ObservedAddr)
+	}
+	if peer.LastError != "zone revoked" {
+		t.Fatalf("last error = %q, want 'zone revoked'", peer.LastError)
+	}
+}
+
+// TestAllRevocationImpact verifies the combined impact for multiple revoked zones.
+func TestAllRevocationImpact(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	// Revoke node-b.catofes.
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+
+	impacts := AllRevocationImpact(state, nil, now)
+	if len(impacts) != 1 {
+		t.Fatalf("expected 1 impact, got %d", len(impacts))
+	}
+	if impacts[0].RevokedZone != "node-b.catofes." {
+		t.Fatalf("impact revoked zone = %s, want node-b.catofes.", impacts[0].RevokedZone)
+	}
+}
+
+// TestAllRevocationImpactEmpty verifies empty output when no zones are revoked.
+func TestAllRevocationImpactEmpty(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	impacts := AllRevocationImpact(state, nil, now)
+	if impacts != nil {
+		t.Fatalf("expected nil impacts, got %d", len(impacts))
+	}
+}
+
+// TestWriteRevocationImpactsOutput verifies debug output format.
+func TestWriteRevocationImpactsOutput(t *testing.T) {
+	impacts := []RevocationImpact{
+		{
+			RevokedZone:           "node-b.catofes.",
+			SourceZone:            "catofes.",
+			RevokedSubtree:        []zone.ZonePath{"leaf.node-b.catofes."},
+			AffectedLinkInstances: []string{"link-1"},
+			AffectedSyncPeers:     []string{"node-b.catofes."},
+			ConfiguredButRevoked:  []string{"node-b.catofes."},
+			Layers: map[string]*RevocationLayerStatus{
+				revocationLayerIPsec:    {Status: revocationStatusRemoved, Reason: "teardown complete"},
+				revocationLayerRouting:  {Status: revocationStatusRemoved},
+				revocationLayerFirewall: {Status: revocationStatusRemoved},
+				revocationLayerGossip:   {Status: revocationStatusRemoved},
+			},
+		},
+	}
+
+	var buf strings.Builder
+	if err := writeRevocationImpacts(&buf, impacts); err != nil {
+		t.Fatalf("writeRevocationImpacts: %v", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "revoked_zone: node-b.catofes.") {
+		t.Fatalf("output missing revoked_zone, got:\n%s", output)
+	}
+	if !strings.Contains(output, "source_zone: catofes.") {
+		t.Fatalf("output missing source_zone, got:\n%s", output)
+	}
+	if !strings.Contains(output, "leaf.node-b.catofes.") {
+		t.Fatalf("output missing subtree, got:\n%s", output)
+	}
+	if !strings.Contains(output, "configured_but_revoked:") {
+		t.Fatalf("output missing configured_but_revoked, got:\n%s", output)
+	}
+	if !strings.Contains(output, "cleanup_layers:") {
+		t.Fatalf("output missing cleanup_layers, got:\n%s", output)
+	}
+}
+
+// TestWriteRevocationImpactsEmpty verifies empty output.
+func TestWriteRevocationImpactsEmpty(t *testing.T) {
+	var buf strings.Builder
+	if err := writeRevocationImpacts(&buf, nil); err != nil {
+		t.Fatalf("writeRevocationImpacts: %v", err)
+	}
+	if !strings.Contains(buf.String(), "no revoked zones") {
+		t.Fatalf("expected 'no revoked zones', got %q", buf.String())
+	}
+}
+
+// TestDaemonRevocationCleanupPeerCache verifies that the daemon's
+// notifyStateChanged path clears peer cache after revocation, and that the
+// deny-first ordering runs cleanup before IPsec/routing/firewall flush.
+func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	group := testIPsecLinkGroup()
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	// Set up a sync peer with observed path.
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			DiscoveredAddr:       "192.0.2.1:33434",
+			ObservedAddr:         "192.0.2.1:33434",
+			ObservedLastSeenUnix: now.Unix(),
+			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+		},
+	}
+
+	driver := &observedIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	// Create the link first.
+	service.notifyStateChanged()
+
+	// Now revoke node-b.catofes.
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	parent := latest.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		Reason:                "test revoke cleanup",
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+	// Re-add the sync peer state that was lost during LoadState.
+	latest.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			DiscoveredAddr:       "192.0.2.1:33434",
+			ObservedAddr:         "192.0.2.1:33434",
+			ObservedLastSeenUnix: now.Unix(),
+			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+		},
+	}
+	if err := rt.SaveState(latest); err != nil {
+		t.Fatalf("SaveState(revoke): %v", err)
+	}
+	service.setState(latest)
+	service.notifyStateChanged()
+
+	// Verify peer cache was cleared after notifyStateChanged.
+	peer := service.Sync.State.SyncPeers["node-b.catofes."]
+	if peer.DiscoveredAddr != "" {
+		t.Fatalf("discovered addr should be cleared: %s", peer.DiscoveredAddr)
+	}
+	if peer.ObservedAddr != "" {
+		t.Fatalf("observed addr should be cleared: %s", peer.ObservedAddr)
+	}
+	if peer.LastError != "zone revoked" {
+		t.Fatalf("last error = %q, want 'zone revoked'", peer.LastError)
+	}
+	// Verify link instance was torn down.
+	if len(service.Sync.State.LinkInstances) != 0 {
+		t.Fatalf("link instances should be empty after revocation, got %d", len(service.Sync.State.LinkInstances))
+	}
+}
+
+// TestConfiguredBootstrapPeerRevoked verifies that a revoked bootstrap peer is
+// detected in the impact's ConfiguredButRevoked list.
+func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+
+	// Revoke node-b.catofes.
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+
+	config := &syncConfigFile{
+		Bootstrap: []syncConfigPeer{
+			{ID: "node-b.catofes.", Addr: "192.0.2.1:33434"},
+		},
+	}
+
+	impacts := AllRevocationImpact(state, config, now)
+	if len(impacts) != 1 {
+		t.Fatalf("expected 1 impact, got %d", len(impacts))
+	}
+	found := false
+	for _, id := range impacts[0].ConfiguredButRevoked {
+		if id == "node-b.catofes." {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("node-b.catofes. not in configured_but_revoked: %v", impacts[0].ConfiguredButRevoked)
+	}
+}

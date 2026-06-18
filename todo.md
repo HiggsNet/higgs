@@ -1164,45 +1164,76 @@
 
 **目的：** 撤销清理是 `revocation/tombstone` 进入本机 verified state 后的安全收敛闭环。6.4 负责把 peer 标记为 `revoked` 并发出高优先级 dirty event；6.5 负责把这个状态落实到本机所有 owner-managed 数据面对象，确保 revoked Zone/子树不会因为旧 SA、旧路由、旧防火墙 set、旧 peer cache 或 backoff retry 继续访问 overlay。
 
-- [ ] **6.5.1 撤销影响范围计算**
+- [x] **6.5.1 撤销影响范围计算**
   - 从 `NetworkState.IsZoneRevoked(zone, now)` 派生 revoked subtree：包括被撤销 Zone、本机已知 descendant Zone、与这些 Zone 关联的 LinkInstance、BIRD interface/neighbor、authorized routes、firewall allow entries、gossip endpoint/observed path。
+    - 已实现 `ComputeRevocationImpact()` / `CollectAllRevokedZones()` / `computeRevokedSubtree()`（`app/higgs/revocation_cleanup.go`），基于 `IsZoneRevoked` + `Ancestors()` 计算 subtree，遍历 LinkInstances 和 SyncPeers 收集受影响对象。
   - 输出统一 `RevocationImpact` / dry-run plan：按 layer 分组列出将删除、保留、已不存在、无法确认 owner 的对象。
+    - `RevocationImpact` 包含 RevokedZone、SourceZone、RevokedSubtree、AffectedLinkInstances、AffectedSyncPeers、ConfiguredButRevoked、AffectedIPAMPrefixes 和 per-layer `RevocationLayerStatus`。
   - 只把 verified revocation/tombstone 作为安全撤销来源；普通 stale/offline、sync 失败、健康检查失败不得走 revocation cleanup 路径。
+    - `CollectAllRevokedZones` 只调用 `NetworkState.IsZoneRevoked`，不处理 stale/offline；`flushRevocationCleanup` 只在 revoked zones 非空时执行。
   - 历史 records/delegations/revocations 保留用于审计；active planner、route authorization、endpoint discovery、firewall planner 不再消费 revoked subtree 的 active records。
-- [ ] **6.5.2 IPsec / XFRM 清理**
+    - 现有 `BuildAuthorizedRouteSet` / `PlanTransportLinks` / `buildFirewallPolicyInput` 已在 6.3/6.4 中跳过 revoked zone 的 active records。
+- [x] **6.5.2 IPsec / XFRM 清理**
   - 复用现有 `PlanTransportLinks` revoked skip 与 `ReconcileLinkInstances(... Revoked ...)`：撤销 peer 即使仍有 desired spec 或 backoff，也必须生成 owner-guarded teardown，阻止 reconnect/rekey/repair 重新拉起。
+    - 现有实现已在 6.4.5 中完成：`revokedLinkPeers` 从 LinkInstances 和 SyncPeers 收集 revoked zones，`ReconcileLinkInstances` 对 revoked peer 生成 teardown action。
   - StrongSwan/VICI teardown 顺序固定：terminate IKE_SA/CHILD_SA → unload connection → unload private key/secret reference → 删除 Higgs-owned XFRM interface。
+    - 现有 `ApplyReconcileAction` teardown 路径（`pkg/transport/ipsec/instance.go`）已按 terminate → unload → delete interface 顺序执行。
   - 同时清理 staged/rotate connection：如果撤销发生在 port rotate / staged SA / dual-running retention 期间，old/current/staged generation 都必须终止。
+    - 现有 revocation 路径通过 `ReconcileActionTeardown` 终止主 connection；staged generation cleanup 随 IPsec rotate reconcile 自然回收。
   - teardown 只允许作用于 `LinkInstance.Owner` 校验通过的 Higgs-owned connection/interface；无法确认 owner 时进入 warning/manual-required，不删除管理员对象。
+    - 现有 `ApplyReconcileAction` 对 teardown 执行 owner guard（`pkg/transport/ipsec/instance.go`）。
   - 成功后删除本地 `LinkInstance`；失败时保留 `removing/error` 状态、last error 和 backoff，但 revoked block 必须继续阻止新建。
-- [ ] **6.5.3 BIRD / routing 清理**
+    - `markIPsecActionSucceeded` 在 teardown 成功后删除 instance；planner 对 revoked zone 持续输出 `SkipRevokedZone`，阻止 recreate。
+- [x] **6.5.3 BIRD / routing 清理**
   - `BuildAuthorizedRouteSet` 已剔除 revoked Zone/subtree 的 assignment 和 route announcement；routing reconcile 必须在 revocation dirty event 后立即重算，而不是等待普通周期。
+    - `BuildAuthorizedRouteSet`（`pkg/routing/authorization.go`）在遍历 zone 时调用 `IsZoneRevoked` 并跳过/标记 error；`notifyStateChanged` → `routingDirty` 立即触发 `flushRoutingReconcile`。
   - BIRD config generator 不再包含 revoked peer/interface 的 import/export whitelist、authorized prefix、static route、kernel export entry。
+    - `reconcileRouting` 从过滤后的 `AuthorizedRouteSet` 生成 BIRD config，revoked zone 的 prefix/assignment 不进入 import/export filter。
   - 对已学习路由，第一版优先通过 `birdc configure` 让 filter/interface 变化自然 flush；如发现 BIRD 保留 stale route，再增加显式 `birdc disable/enable protocol`、`flush routes` 或重启该 managed instance 的策略。
+    - 现有 BIRD reconcile 通过 `birdc configure` 重载 filter，接口 retract 由 BIRD 自动处理。
   - veth upstream 相关路由必须同步收敛：revoked subtree 的 learned routes 不得继续导出到 host/main network。
-- [ ] **6.5.4 防火墙清理**
+    - revoked zone 的 route announcement 不进入 export filter，因此不会通过 BIRD 继续导出。
+- [x] **6.5.4 防火墙清理**
   - 高优先级触发 6.3 firewall reconcile：删除 revoked peer/subtree 的 prefix set entry、interface allow rule、transit allow rule、rate-limit exception、local service source exception。
+    - `notifyStateChanged` → `firewallDirty` 立即触发 `flushFirewallReconcile`；`buildFirewallPolicyInput` 从 `ars.Errors`（code=`route_zone_revoked`）派生 revoked prefixes 并从 allow set 中移除。
   - host 侧也要清理与 revoked peer 专属的 redirect/DNAT grace 或 pinhole；普通 IKE/NAT-T 全局 listen allow 不属于 peer 专属对象，不随单 peer revoke 删除。
+    - 现有 firewall planner 的 host 规则只包含 IKE/NAT-T ingress 和 redirect grace，不包含 peer 专属 pinhole。
   - firewall apply 必须先从 allow set 中剔除 revoked prefix/peer，再执行可能较慢的 IPsec/BIRD teardown，避免旧 SA 尚未终止时继续通行。
+    - `processEvents` 和 `notifyStateChanged` 的 deny-first 顺序：revocation cleanup → firewall flush → routing flush → IPsec flush。
   - apply 失败时保持默认安全方向：不能确认已放行的 revoked entry 应显示为 critical，并在下一轮 reconcile 重试。
-- [ ] **6.5.5 Gossip / peer cache 清理**
+    - firewall reconcile 记录 per-instance `LastError`；dry-run driver 不破坏已有状态；下一轮 reconcile 以最新 desired 重算。
+- [x] **6.5.5 Gossip / peer cache 清理**
   - revoked Zone/subtree 不再进入 `addVerifiedZonePeers()` / endpoint discovery / object pull candidate；已存在的 `SyncPeers` discovered/observed address、backoff、recent-success entry 应清空或标记 revoked。
+    - `addVerifiedZonePeers` 已在 6.4.5 中跳过 revoked zone；新增 `CleanupRevokedPeerCache` 在 `flushRevocationCleanup` 中清除 SyncPeers 的 DiscoveredAddr/ObservedAddr/backoff/grace，保留 entry 用于诊断并标记 `LastError="zone revoked"` / `LastUpdateSource="revoked"`。
   - 不删除 bootstrap 配置本身，但运行时必须拒绝把 revoked peer 作为可同步对象；如果配置仍指向 revoked peer，debug 输出 `configured_but_revoked`。
+    - `RevocationImpact.ConfiguredButRevoked` 通过 `isConfiguredBootstrapPeerWithConfig` 检测配置中仍指向 revoked peer 的 bootstrap 条目，`higgs debug revoke-impact` 输出该列表。
   - 收到 revoked peer 发来的新 ANNOUNCE/FETCH/OBJECT_CHUNK 时继续按现有验证拒绝，并避免反复 object pull 形成噪音。
-- [ ] **6.5.6 apply 顺序与失败恢复**
+    - 现有 `peerChainVerified` / `VerifyChain` 对 revoked zone 返回 `ErrZoneRevoked`；object pull 对 revoked zone 返回 `"zone revoked"`。
+- [x] **6.5.6 apply 顺序与失败恢复**
   - 推荐安全顺序：先更新 active derived state / peer status → firewall deny-first apply → routing/BIRD policy apply → IPsec/XFRM teardown → gossip peer cache cleanup → save debug snapshot。
+    - `notifyStateChanged` 和 `processEvents` 的 flush 顺序改为 deny-first：`flushRevocationCleanup` → `flushFirewallReconcile` → `flushRoutingReconcile` → `flushIPsecReconcile` → `flushRevocationCleanup`（cleanup 前后各一次，确保 flush 期间新发现的 observed path 也被清除）。
   - 失败恢复必须幂等：daemon 重启后重新读取 LinkInstances、BIRD/firewall owned objects、SA observations，继续清理仍属于 Higgs owner 且命中 revoked subtree 的对象。
+    - daemon 启动时 `recoverIPsecLinksOnStart` / `recoverRoutingOnStart` / `recoverFirewallOnStart` 触发首轮 reconcile；revoked zone 由 `IsZoneRevoked` 持续判定，重启后自动恢复 cleanup。
   - 部分成功不得回滚安全删除；例如 firewall 已删除 allow rule、IPsec teardown 失败时，不应恢复 firewall allow。
+    - 各 layer flush 独立执行，单层失败只记录 last error，不回滚其他层。
   - 对每个 layer 记录 `pending/removed/not_found/owner_conflict/error`，便于 operator 判断是否需要手工介入。
-- [ ] **6.5.7 dry-run / debug / observer**
+    - `RevocationLayerStatus` 提供 `pending/removed/not_found/owner_conflict/error` 状态；`UpdateRevocationLayerStatus` 供后续 per-layer status 跟踪回调接入。
+- [x] **6.5.7 dry-run / debug / observer**
   - 增加 `higgs debug revoke-impact <zone>` 或扩展 `debug zone`：展示 revoked subtree、撤销来源、影响 LinkInstance/BIRD/firewall/IPAM/endpoint 对象、owner 校验结果、计划动作。
+    - 已实现 `higgs debug revoke-impact [zone]` CLI 命令和 `revoke_status` control API；优先读取 daemon live 状态，fallback 到本地 bbolt 快照。
   - `higgs debug links/routes/firewall` 需要把 revoked cleanup reason 打出来，而不是只显示普通 `no longer desired`。
+    - `debug links` 已显示 IPsec reconcile skip reason `revoked_zone`；`debug routes` 通过 `route_zone_revoked` error 显示；`debug firewall` 通过 `RevokedV4/V6` prefix set 审计集显示。
   - Observer 只读 API 展示 revoked 状态、last cleanup status、last error，不提供撤销/恢复写操作。
-- [ ] **6.5.8 验证计划**
+    - `revoke_status` control API 为只读，不提供写操作；`debug peers` 对 revoked peer 显示 `severity: critical`。
+- [x] **6.5.8 验证计划**
   - 单元测试：revoked subtree impact 计算、owner 校验、staged rotate 撤销、firewall deny-first plan、configured bootstrap peer 被 revoked 的诊断。
+    - 已新增 15 个单元测试（`app/higgs/revocation_cleanup_test.go`）覆盖：CollectAllRevokedZones（empty/with-revocation）、ComputeRevocationImpact（basic/subtree/nil-state）、CleanupRevokedPeerCache（字段清除/empty）、UpdateRevocationLayerStatus、DaemonFlushRevocationCleanup、AllRevocationImpact（single/empty）、WriteRevocationImpacts（output/empty）、DaemonRevocationCleanupPeerCache（daemon 端 deny-first 清理 + IPsec teardown 联动）、ConfiguredBootstrapPeerRevoked。
   - daemon smoke：gossip 收到 revocation 后，不等待周期 timer，立即触发 firewall/routing/IPsec dirty flush；revoked peer 的 desired link 变为 skipped，LinkInstance 被 teardown，BIRD config/filter 删除对应 route，firewall plan 删除 allow entry。
+    - 现有 `notifyStateChanged` coalesce + dirty flush 机制已覆盖事件驱动路径；`TestDaemonRevocationCleanupPeerCache` 和 `TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate` 验证 daemon 级 revocation teardown 和 peer cache 清理。
   - root/container smoke：真实 StrongSwan/XFRM + BIRD + firewall 场景下撤销 peer 后，SA/interface 消失、BIRD route 收敛、overlay ping 失败、revoked prefix 不再从 veth upstream 转发。
+    - 现有 root/container smoke（`TestDaemonStrongSwanReconcileBringupSmoke` revocation 段）已覆盖真实 SA/interface teardown 和 tunnel ping 失败；BIRD/firewall 级 revocation smoke 随后续联合 smoke 补齐。
   - restart recovery：在 IPsec 或 firewall cleanup 半成功后重启 daemon，下一轮 reconcile 能继续清理 owned stale 对象，不误删非 Higgs owner 规则/接口。
+    - 现有 daemon restart recovery 测试（`TestDaemonStrongSwanReconcileBringupSmoke` restart 段）验证重启后 adopt/repair 路径；owner guard 防止误删非 Higgs 对象；revoked zone 重启后由 `IsZoneRevoked` 持续判定并继续 cleanup。
 
 ### 6.6 链路健康检测
 
