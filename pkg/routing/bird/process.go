@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -119,6 +120,16 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 		_ = cmd.Process.Kill()
 		pm.resetState()
 		return fmt.Errorf("waiting for control socket: %w", err)
+	}
+
+	// BIRD daemonizes and the original process (or the ip netns exec wrapper)
+	// exits. Read the real daemon PID from BIRD's pidfile so IsRunning/Stop
+	// target the correct process. The pidfile may be created empty before BIRD
+	// writes the PID, so retry briefly.
+	if daemonPID := pm.waitForPidFile(ctx, spec.PIDFilePath); daemonPID > 0 {
+		pm.mu.Lock()
+		pm.pid = daemonPID
+		pm.mu.Unlock()
 	}
 
 	return nil
@@ -293,7 +304,41 @@ func ensureNamedNetNSWithRunner(
 	return nil
 }
 
-// processIsRunning reports whether a process with the given pid is alive.
+func readPidFile(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, err
+	}
+	return pid, nil
+}
+
+func (pm *ExecProcessManager) waitForPidFile(ctx context.Context, path string) int {
+	deadline := time.Now().Add(pm.socketWaitTimeout)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if pid, err := readPidFile(path); err == nil && pid > 0 {
+			return pid
+		}
+		if err := ctx.Err(); err != nil {
+			return 0
+		}
+		if time.Now().After(deadline) {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			return 0
+		case <-ticker.C:
+		}
+	}
+}
+
 func processIsRunning(pid int) bool {
 	if pid <= 0 {
 		return false

@@ -119,8 +119,11 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	}
 
 	// Assert default route rejection in filters.
-	if !strings.Contains(cfgStr, "if net ~ [ 0.0.0.0/0, ::/0 ] then reject;") {
-		t.Errorf("BIRD config missing default route rejection\n%s", cfgStr)
+	if !strings.Contains(cfgStr, "if net ~ [ 0.0.0.0/0 ] then reject;") {
+		t.Errorf("BIRD config missing IPv4 default route rejection\n%s", cfgStr)
+	}
+	if !strings.Contains(cfgStr, "if net ~ [ ::/0 ] then reject;") {
+		t.Errorf("BIRD config missing IPv6 default route rejection\n%s", cfgStr)
 	}
 }
 

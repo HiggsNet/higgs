@@ -118,7 +118,11 @@ func validateSpec(spec BirdInstanceSpec) error {
 func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) BirdConfig {
 	suffix := sanitizeNetNSName(spec.NetNSName)
 	internalTable := spec.InternalTableName
+	ipv4Table := internalTable + "4"
+	ipv6Table := internalTable + "6"
 	kernelName := "higgs_kern_" + suffix
+	kernelName4 := kernelName + "4"
+	kernelName6 := kernelName + "6"
 	babelName := "higgs_babel_" + suffix
 	importFilterName := "higgs_import_" + suffix
 	exportFilterName := "higgs_export_" + suffix
@@ -183,21 +187,29 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 		LogTarget:      spec.LogTarget,
 		ListenSocket:   spec.ControlSocketPath,
 		DeviceScanTime: spec.DeviceScanTime,
-		IPv4Table:      internalTable,
-		IPv6Table:      internalTable,
+		IPv4Table:      ipv4Table,
+		IPv6Table:      ipv6Table,
 		KernelTableID:  kernelTableID,
-		Kernel: KernelProtocolBlock{
-			Name:          kernelName,
-			IPv4Table:     internalTable,
-			IPv6Table:     internalTable,
-			KernelTableID: kernelTableID,
-			Learn:         false,
-			Persist:       false,
+		Kernel: []KernelProtocolBlock{
+			{
+				Name:          kernelName4,
+				IPv4Table:     ipv4Table,
+				KernelTableID: kernelTableID,
+				Learn:         false,
+				Persist:       false,
+			},
+			{
+				Name:          kernelName6,
+				IPv6Table:     ipv6Table,
+				KernelTableID: kernelTableID,
+				Learn:         false,
+				Persist:       false,
+			},
 		},
 		Babel: BabelProtocolBlock{
 			Name:             babelName,
-			IPv4Table:        internalTable,
-			IPv6Table:        internalTable,
+			IPv4Table:        ipv4Table,
+			IPv6Table:        ipv6Table,
 			InterfacePattern: renderInterfacePatterns(interfacePatterns),
 			TypeTunnel:       true,
 			MetricBase:       spec.MetricBase,
@@ -246,18 +258,20 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		fmt.Fprintln(&b)
 	}
 
-	fmt.Fprintf(&b, "protocol kernel %s {\n", cfg.Kernel.Name)
-	if cfg.Kernel.IPv4Table != "" {
-		fmt.Fprintf(&b, "    ipv4 { table %s; export all; };\n", cfg.Kernel.IPv4Table)
+	for _, kp := range cfg.Kernel {
+		fmt.Fprintf(&b, "protocol kernel %s {\n", kp.Name)
+		if kp.IPv4Table != "" {
+			fmt.Fprintf(&b, "    ipv4 { table %s; export all; };\n", kp.IPv4Table)
+		}
+		if kp.IPv6Table != "" {
+			fmt.Fprintf(&b, "    ipv6 { table %s; export all; };\n", kp.IPv6Table)
+		}
+		if kp.KernelTableID != 0 {
+			fmt.Fprintf(&b, "    kernel table %d;\n", kp.KernelTableID)
+		}
+		fmt.Fprintln(&b, "}")
+		fmt.Fprintln(&b)
 	}
-	if cfg.Kernel.IPv6Table != "" {
-		fmt.Fprintf(&b, "    ipv6 { table %s; export all; };\n", cfg.Kernel.IPv6Table)
-	}
-	if cfg.Kernel.KernelTableID != 0 {
-		fmt.Fprintf(&b, "    kernel table %d;\n", cfg.Kernel.KernelTableID)
-	}
-	fmt.Fprintln(&b, "}")
-	fmt.Fprintln(&b)
 
 	for _, f := range cfg.ImportFilters {
 		fmt.Fprintln(&b, f.Body)
@@ -291,13 +305,10 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		}
 		fmt.Fprintln(&b, "    };")
 	}
-	if cfg.Babel.ECMP {
-		if cfg.Babel.ECMPLimit > 0 {
-			fmt.Fprintf(&b, "    ecmp on limit %d;\n", cfg.Babel.ECMPLimit)
-		} else {
-			fmt.Fprintln(&b, "    ecmp on;")
-		}
-	}
+	// Note: BIRD 2.19.x does not accept an "ecmp" directive inside the
+	// Babel protocol block, so ECMP/Limit fields from the spec are currently
+	// ignored during rendering. The struct fields are retained for future
+	// BIRD versions or alternative backends.
 	if cfg.Babel.InterfacePattern != "" {
 		fmt.Fprintf(&b, "    interface %s {\n", cfg.Babel.InterfacePattern)
 		if cfg.Babel.TypeTunnel {

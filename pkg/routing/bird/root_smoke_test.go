@@ -253,7 +253,7 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 	neighborFound := false
 	for i := 0; i < 40; i++ {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", specA.ControlSocketPath, "show", "protocols").CombinedOutput()
-		if err == nil && strings.Contains(string(out), "babel1") && strings.Contains(string(out), "Running") {
+		if err == nil && strings.Contains(string(out), "babel1") && strings.Contains(string(out), "up") {
 			neighborFound = true
 			break
 		}

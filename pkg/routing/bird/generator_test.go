@@ -55,10 +55,10 @@ func TestGenerateManagedConfig(t *testing.T) {
 	if !strings.Contains(s, "scan time 5;") {
 		t.Error("missing default device scan time")
 	}
-	if !strings.Contains(s, "ipv4 table higgs_ipsec_main;") {
+	if !strings.Contains(s, "ipv4 table higgs_ipsec_main4;") {
 		t.Error("missing ipv4 table declaration")
 	}
-	if !strings.Contains(s, "ipv6 table higgs_ipsec_main;") {
+	if !strings.Contains(s, "ipv6 table higgs_ipsec_main6;") {
 		t.Error("missing ipv6 table declaration")
 	}
 	if !strings.Contains(s, "protocol kernel higgs_kern_ipsec_main") {
@@ -98,8 +98,11 @@ func TestRenderFilter(t *testing.T) {
 	if !strings.Contains(filter, "filter test_filter {") {
 		t.Error("missing filter declaration")
 	}
-	if !strings.Contains(filter, "if net ~ [ 0.0.0.0/0, ::/0 ] then reject;") {
-		t.Error("missing default route rejection")
+	if !strings.Contains(filter, "if net ~ [ 0.0.0.0/0 ] then reject;") {
+		t.Error("missing IPv4 default route rejection")
+	}
+	if !strings.Contains(filter, "if net ~ [ ::/0 ] then reject;") {
+		t.Error("missing IPv6 default route rejection")
 	}
 	if !strings.Contains(filter, "192.168.0.0/16+") {
 		t.Error("missing bogon rejection with more-specific")

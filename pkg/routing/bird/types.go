@@ -159,7 +159,7 @@ type BirdConfig struct {
 	// KernelTableID is the numeric kernel table id, or 0 for the default.
 	KernelTableID uint32
 
-	Kernel         KernelProtocolBlock
+	Kernel         []KernelProtocolBlock
 	Babel          BabelProtocolBlock
 	ImportFilters  []FilterBlock
 	ExportFilters  []FilterBlock

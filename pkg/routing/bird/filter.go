@@ -16,7 +16,8 @@ func RenderFilter(name string, prefixes []netip.Prefix, bogons []netip.Prefix) s
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "filter %s {\n", name)
-	b.WriteString("    if net ~ [ 0.0.0.0/0, ::/0 ] then reject;\n")
+	b.WriteString("    if net ~ [ 0.0.0.0/0 ] then reject;\n")
+	b.WriteString("    if net ~ [ ::/0 ] then reject;\n")
 	writeRejectList(&b, v4Bogons)
 	writeRejectList(&b, v6Bogons)
 	writeAcceptList(&b, v4Prefixes)
