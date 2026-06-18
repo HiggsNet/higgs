@@ -31,7 +31,8 @@ make smoke-all（不要求 root 的 smoke）
 ├── chunk-fallback-smoke     — TCP 不可达时 UDP chunk fallback
 ├── ipsec-policy-smoke       — IPsec mesh policy URI rule planner
 ├── ipsec-dry-run-smoke      — IPsec planner + fake driver reconcile
-└── routing-dry-run-smoke    — Phase 5 路由授权 + BIRD config 生成
+├── routing-dry-run-smoke    — Phase 5 路由授权 + BIRD config 生成
+└── firewall-dry-run-smoke   — Phase 6.3 防火墙 planner + backend 选择 dry-run
 
 需要 root / privileged container（默认不在 smoke-all 中）
 ├── ipsec-xfrm-smoke         — 真实 StrongSwan/XFRM/netns/charon
@@ -99,6 +100,78 @@ make smoke-all（不要求 root 的 smoke）
 | `make ipsec-policy-smoke` | MeshPolicy URI rule 解析 + connect/deny rule planner |
 | `make ipsec-dry-run-smoke` | IPsec planner + fake driver 完整 reconcile（不碰 root） |
 | `make routing-dry-run-smoke` | 路由授权 + IPAM + BIRD config 生成 |
+| `make firewall-dry-run-smoke` | Phase 6.3 防火墙 planner + nft/iptables driver + config reconcile dry-run |
+
+## Phase 6 单元测试（防火墙 / Peer 生命周期 / 撤销清理）
+
+Phase 6 的单元测试集中在 `pkg/firewall` 和 `app/higgs` 两个包，不需要 root，
+可直接用 `go test` 或 `make check` 运行。
+
+### 防火墙（Phase 6.3）
+
+测试文件：
+- `pkg/firewall/planner_test.go` — planner：overlay/host/transit/hooks/forwarding/redirect grace/owner diff/hash
+- `pkg/firewall/nft_driver_test.go` — nftables driver：preflight/apply/list-owned/netns/delete-stale
+- `pkg/firewall/iptables_driver_test.go` — iptables fallback driver：preflight/apply/list-owned/delete-stale/parse
+
+运行方式：
+```bash
+make firewall-dry-run-smoke
+# 等价于
+go test ./pkg/firewall
+go test ./app/higgs -run 'Test(ParseConfigYAMLFirewall|TestFirewallInstancesEnabled|TestFirewallInstanceSpecFromConfig|TestReconcileFirewall|TestDebugFirewall)' -v
+```
+
+### Peer 生命周期（Phase 6.4）
+
+测试文件：`app/higgs/peer_state_test.go`
+
+覆盖：
+- 派生状态机：revoked / active / connecting / stale / offline / cleanup / policy_denied / config_error
+- 阈值判定：`stale_after` / `offline_after` / `cleanup_after`
+- hard change / reconnect 阻断
+- `collectRevokedPeerZones` 覆盖 LinkInstances 与 SyncPeers
+- `PeerLifecycleConfig` YAML 解析与校验
+- `higgs debug peers` 输出
+
+运行方式：
+```bash
+go test ./app/higgs -run 'TestDerivePeerStatus|TestPeerStatus|TestShouldBlockReconnect|TestCollectRevokedPeerZones|TestParsePeerLifecycleConfig|TestWriteDebugPeers|TestRevokedLinkPeers' -v
+```
+
+### 撤销清理（Phase 6.5）
+
+测试文件：`app/higgs/revocation_cleanup_test.go`
+
+覆盖：
+- `ComputeRevocationImpact` / `AllRevocationImpact` / `CollectAllRevokedZones`
+- revoked subtree 影响计算
+- `CleanupRevokedPeerCache` 字段清理
+- per-layer `RevocationLayerStatus`
+- daemon deny-first flush 顺序
+- configured-but-revoked bootstrap 诊断
+- `higgs debug revoke-impact` 输出
+
+运行方式：
+```bash
+go test ./app/higgs -run 'TestRevocation|TestCollectAllRevokedZones|TestCleanupRevokedPeerCache|TestConfiguredBootstrapPeerRevoked|TestWriteRevocationImpacts|TestDaemonFlushRevocationCleanup|TestDaemonRevocationCleanupPeerCache' -v
+```
+
+### 调试命令
+
+Phase 6 新增以下只读调试命令，均通过 control socket 与 daemon 交互：
+
+```bash
+# 查看防火墙 backend、netns/host 规则、generation、last error
+higgs debug firewall
+
+# 查看每个 peer 的派生生命周期状态
+higgs debug peers
+
+# 查看当前 revoked zone 的影响范围与 per-layer 清理状态
+higgs debug revoke-impact
+higgs debug revoke-impact <zone>
+```
 
 ## Root / Privileged Container Smoke
 
@@ -139,7 +212,7 @@ container smoke 会：
 - `TestStrongSwanDriverIKEBringupSmoke` — 双 charon netns IKE_SA/CHILD_SA + tunnel ping
 - `TestStrongSwanBidirectionalTakeoverSmoke` — bidirectional secondary takeover
 - `TestDaemonReconcileUsesSystemXFRMDriverSmoke` — daemon reconcile 创建 XFRM interface
-- `TestDaemonStrongSwanReconcileBringupSmoke` — daemon + VICI + XFRM 完整建链 + 撤销
+- `TestDaemonStrongSwanReconcileBringupSmoke` — daemon + VICI + XFRM 完整建链 + 撤销 teardown（验证 Phase 6.5 IPsec/XFRM 清理路径）
 - `TestDaemonStrongSwanPortRotationSmoke` — 端口轮换 bounded break-before-make
 - `TestDaemonRunGossipStrongSwanBringupSmoke` — daemon Run 循环自动发布 + gossip + 建链
 - `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke` — derived-pool tunnel address
