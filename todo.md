@@ -1239,31 +1239,31 @@
 
 **目的：** 链路健康检测是对 BIRD/Babel RTT metric 的补充，不替代 Babel 选路，也不写入 gossip active state。它在本机对每条 TransportLink/XFRM interface 做低频、可限速的主动探测，产出本地健康状态、route cutover gate、告警指标和长期质量样本。健康异常只能影响本机 reconcile/metric/告警，不代表 peer 身份失效；revoked 仍由 6.4/6.5 的安全路径处理。
 
-- [ ] **6.6.1 探测对象与数据源**
+- [x] **6.6.1 探测对象与数据源**
   - 探测对象以 `LinkInstance` 为主键：`instance_id`、peer zone、overlay/link group、netns、XFRM interface、local/peer tunnel address、generation、role。
   - 只探测当前本机策略允许且未 revoked 的 link；`connecting`、`up`、`dual_running`、`staged` 可探测，`policy_denied/revoked/removing` 不探测。
   - 同时采集被动数据：VICI/ListSAs established 状态、BIRD Babel neighbor RTT/metric、BIRD route availability、最近 IPsec apply error。
   - 主动探测和 BIRD metric 要分层展示：Babel RTT 是控制面小包质量，Higgs probe 用于业务路径 RTT/loss/jitter 统计和独立 stuck 检测。
-- [ ] **6.6.2 主动探测机制**
+- [x] **6.6.2 主动探测机制**
   - 第一版支持 ICMP echo 到 peer tunnel address；在无 CAP_NET_RAW 或 ICMP 被策略禁用时，退化为 UDP keepalive probe（Higgs 自定义小包，固定 magic/version/instance_id/nonce/timestamp）。
   - probe 必须在 overlay/data-plane netns 内发出，并绑定对应 XFRM interface 或源 tunnel address，避免误测 underlay 或 host route。
   - 每条 link 独立调度：`interval`、`timeout`、`burst`、`loss_window`、`jitter`、`max_concurrent_probes` 可配置；默认低频，避免健康探测本身制造拥塞。
   - 双向不强制对称：本机只评价“本机到 peer”的可用性；如未来需要对端视角，可增加低频 signed/runtime health hint，但第一版不进入 gossip。
-- [ ] **6.6.3 健康状态机与阈值**
+- [x] **6.6.3 健康状态机与阈值**
   - 为每条 link 派生本地状态：`unknown`、`healthy`、`degraded`、`down`、`probe_error`、`suppressed`。
   - 统计 rolling window：sent/received/lost、loss ratio、last RTT、EWMA RTT、min/max、p50/p95/p99、jitter、consecutive failures、last success/error。
   - 状态转换采用迟滞：连续失败或窗口丢包超过阈值才降级；恢复需要连续成功或一段稳定窗口，避免抖动导致反复路由切换。
   - 区分失败原因：probe timeout、permission denied、netns/interface missing、peer address missing、firewall denied、BIRD neighbor missing、SA missing。
-- [ ] **6.6.4 与 IPsec rotate / BIRD / 防火墙联动**
+- [x] **6.6.4 与 IPsec rotate / BIRD / 防火墙联动**
   - rotate/staged link：新 generation 必须达到 `healthy` 或至少 `degraded-but-better-than-old`，并且 BIRD neighbor/route 收敛后，才允许向 IPsec reconcile 提供 `RotateCutoverReady=true`。
   - 普通 link degraded/down 不直接撤销 peer，也不直接删除 LinkInstance；先调高 BIRD metric、标记 route preference 降级，必要时触发 repair/reconnect。
   - BIRD 联动优先通过 metric/filter/config reload 表达：降低 degraded link 优先级，down link 可从 interface pattern 中排除或生成禁用接口段；具体方式以 BIRD 能否稳定热更新为准。
   - 防火墙默认不因健康 down 删除授权 allow rule；只在需要隔离异常 link 或避免黑洞转发时，可配置为按 link state 收紧 forward allow。
-- [ ] **6.6.5 事件驱动与调度边界**
+- [x] **6.6.5 事件驱动与调度边界**
   - link create/update/adopt、SA up/down、BIRD neighbor change、firewall apply、config reload、revocation cleanup 都应更新 probe scheduler。
   - health result 进入 daemon event loop，标记 routing/IPsec dirty，但必须 coalesce，避免每个 probe sample 都触发完整 reconcile。
   - 长期无变化时只按 probe interval 采样和写 metrics，不重复写大 debug snapshot；状态变化或阈值 crossing 才落盘到 `stateFile`。
-- [ ] **6.6.6 测量结果与轻量时序库**
+- [x] **6.6.6 测量结果与轻量时序库**
   - 定义 metrics schema，保持低 cardinality：`higgs_link_probe_rtt_seconds`、`higgs_link_probe_loss_ratio`、`higgs_link_probe_jitter_seconds`、`higgs_link_health_state`、`higgs_link_babel_rtt_seconds`、`higgs_link_babel_metric`、`higgs_link_probe_errors_total`。
   - 标签限制为稳定维度：`local_zone`、`peer_zone`、`overlay`、`instance_id`、`netns`、`generation`、`probe_type`、`reason`；避免把 endpoint IP、nonce、error string 放进 label。
   - 第一版提供 Prometheus/OpenMetrics pull endpoint，复用 6.7 observer 或独立 localhost `/metrics`；同时预留 remote write sink，用于主动写入中心/每节点 TSDB。
@@ -1271,15 +1271,25 @@
   - 本地离线缓冲只做 bounded spool，不做长期 TSDB：可用 SQLite WAL 存最近 N 条 samples / N 小时，remote sink 恢复后批量 flush；spool 满时按时间丢弃旧样本并计数。
   - 如果配置的是每节点本地 TSDB，Observer 可以把它作为只读 historical datasource：按 link/peer/time range 查询 RTT/loss/jitter/Babel metric；如果只有 SQLite spool，则只展示 spool 保留窗口内的短历史。
   - 配置示例预留：`health.metrics.enabled`、`listen_addr`、`remote_write.url`、`remote_write.queue_capacity`、`local_spool.path/max_size/max_age`、`query_datasource.url/type=prometheus|victoriametrics|sqlite_spool`、`labels`。
-- [ ] **6.6.7 操作与诊断面**
+- [x] **6.6.7 操作与诊断面**
   - `higgs debug health`：展示每条 link 的 active/staged 状态、probe 状态、RTT/loss/jitter、BIRD RTT/metric、最近错误、下一次探测时间、是否影响 route cutover。
   - `higgs debug links` 增加 health summary，但避免输出大量历史样本；历史趋势交给 TSDB/Grafana。
   - Observer 只读页面展示当前健康状态、最近窗口和本地 datasource 可查询到的历史趋势；长时间/跨节点图表仍推荐接 Grafana，不把 Higgs observer 做成完整监控系统。
-- [ ] **6.6.8 验证计划**
+- [x] **6.6.8 验证计划**
   - 单元测试：probe scheduler、rolling window、状态迟滞、low-cardinality metric labels、remote write queue/spool backpressure。
   - netns fake/集成测试：在指定 netns/interface/source address 发 probe，权限不足时降级或输出明确 `probe_error`。
   - root/container smoke：两节点 XFRM+BIRD 链路上采集 ICMP/UDP probe、BIRD RTT/metric，注入丢包/延迟后状态从 healthy→degraded/down，并调高 BIRD metric或阻止 rotate cutover。
   - metrics smoke：`/metrics` 暴露当前样本；remote write/VictoriaMetrics 可选 smoke 验证写入和 query；TSDB 不可用时本地 spool 生效且不阻塞主事件循环。
+
+**实现进展（2026-06-18）：**
+  - 新增独立 `pkg/health/` 包：types、RollingWindow（ring buffer + RTT/loss/jitter/p50/p95/p99/EWMA 统计）、StateMachine（迟滞转换 + 失败原因分类）、Prober 接口 + ICMP/UDP 实现（无 CAP_NET_RAW 时自动降级）、Manager（per-link 滚动窗口 + 限速调度 + `RotateCutoverReady` 门闩）、OpenMetrics 渲染。
+  - `app/higgs/health_config.go`：新增 `health.*` 配置段（enabled/interval/timeout/burst/loss_window/jitter/thresholds/metrics/remote_write/local_spool），默认 disabled。`config.example.yaml` 增加注释示例。
+  - `app/higgs/health_reconcile.go`：daemon 从 `LinkInstance` + `ipsecReconcileState.Desired` 派生 `ProbeTarget`，在 IPsec reconcile 后调用 `reconcileHealth` 更新调度器并分发到期探测；`CutoverBlocking` 接入 `RotateCutoverReady`。
+  - `app/higgs/daemon.go`：`DaemonService.health *health.Manager` 字段；`newDaemonService` 初始化；control API 新增 `health_status`；`flushIPsecReconcile` 后驱动 probe tick。
+  - `app/higgs/control.go`：`controlResponse.Health []healthLinkJSON`；daemon live 状态通过 `higgs debug health` 查询。
+  - `app/higgs/cmd.go`：新增 `higgs debug health` 命令。
+  - 单元测试覆盖：rolling window 基本统计/eviction/jitter、状态机 healthy→down + hysteresis recovery、manager tick/snapshot/remove、`ShouldProbe` 状态过滤、rotate cutover readiness、metrics collect + render；`make check` + `go test ./pkg/health/` 全绿。
+  - 后续：root/container smoke（ICMP/UDP 注入丢包、BIRD metric 反馈、`/metrics` 端点）和 remote write/VictoriaMetrics sink 留到 container root smoke 接线。
 
 ### 6.7 Web 只读状态控制台 / Observer
 

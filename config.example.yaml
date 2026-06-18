@@ -170,6 +170,32 @@ overlays:
     deny:
       - "strongswan://*.lab.catofes."
 
+# Phase 6.6: Link health probing (optional, default disabled). When enabled,
+# the daemon probes each TransportLink/XFRM interface with ICMP echo (or UDP
+# keepalive fallback when CAP_NET_RAW is unavailable) and maintains a local
+# rolling-window health state. Health never replaces Babel route selection or
+# writes into gossip active state; it only affects local reconcile, route
+# cutover gate and metrics. See `higgs debug health` and `/metrics`.
+# health:
+#   enabled: false
+#   interval: 5s
+#   timeout: 1s
+#   burst: 3
+#   loss_window: 20
+#   jitter: 500ms
+#   max_concurrent_probes: 8
+#   fail_threshold_consecutive: 3
+#   loss_threshold: "0.2"
+#   down_loss_threshold: "0.6"
+#   recover_consecutive: 5
+#   metrics:
+#     enabled: false
+#     listen_addr: "127.0.0.1:9717"
+#     # remote_write_url: http://victoriametrics:8428/api/v1/write
+#     # remote_write_queue_capacity: 1024
+#     # local_spool_path: <data_dir>/health-spool
+#     # local_spool_max_age: 6h
+
 # Phase 6.3: Firewall rule sync (optional). Default disabled unless
 # firewall.instances[] is present. Each instance is scoped to a netns (overlay
 # data-plane) or to the host (IKE/NAT-T entry ports + port rotate redirect

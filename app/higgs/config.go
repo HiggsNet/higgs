@@ -58,6 +58,7 @@ type appConfig struct {
 	Routing              routingConfig
 	Firewall             firewallConfig
 	PeerLifecycle        PeerLifecycleConfig
+	Health               healthConfig
 }
 
 type configYAML struct {
@@ -112,6 +113,7 @@ type configYAML struct {
 	Routing           *routingInstancesYAML    `yaml:"routing"`
 	Firewall          *firewallConfigYAML      `yaml:"firewall"`
 	PeerLifecycle     *peerLifecycleYAML       `yaml:"peer_lifecycle"`
+	Health            *healthConfigYAML        `yaml:"health"`
 	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
 }
 
@@ -247,6 +249,7 @@ func defaultAppConfig() *appConfig {
 		IPAM: ipamConfig{
 			AutoAnnounceAssignedIPs: false,
 		},
+		Health: defaultHealthConfig(),
 	}
 }
 
@@ -492,6 +495,13 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 			return err
 		}
 		config.PeerLifecycle = pl
+	}
+	if file.Health != nil {
+		hc, err := parseHealthConfig(file.Health)
+		if err != nil {
+			return err
+		}
+		config.Health = hc
 	}
 	return nil
 }

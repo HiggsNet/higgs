@@ -449,6 +449,14 @@ func cmdDebug() *cli.Command {
 					return debugRevokeImpact(ctx, zoneArg)
 				},
 			},
+			{
+				Name:        "health",
+				Usage:       "Show link health probe state",
+				Description: "Display per-link health state, probe RTT/loss/jitter and rotate cutover gate.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugHealth()
+				},
+			},
 		},
 	}
 }

@@ -70,6 +70,74 @@ type controlResponse struct {
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
 	PeerStatuses      []PeerStatusInfo              `json:"peer_statuses,omitempty"`
 	RevocationImpact  []RevocationImpact            `json:"revocation_impact,omitempty"`
+	Health            []healthLinkJSON              `json:"health,omitempty"`
+}
+
+// healthLinkJSON is the JSON representation of health.LinkHealth for the
+// control API. It keeps time.Duration fields as millisecond integers for
+// compact serialization.
+type healthLinkJSON struct {
+	InstanceID      string `json:"instance_id"`
+	State           string `json:"state"`
+	ProbeType       string `json:"probe_type"`
+	Sent            int    `json:"sent"`
+	Received        int    `json:"received"`
+	Lost            int    `json:"lost"`
+	LossRatio       int    `json:"loss_ratio_pct"`
+	LastRTTMs       int64  `json:"last_rtt_ms"`
+	EWMARTTMs       int64  `json:"ewma_rtt_ms"`
+	P50RTTMs        int64  `json:"p50_rtt_ms"`
+	P95RTTMs        int64  `json:"p95_rtt_ms"`
+	P99RTTMs        int64  `json:"p99_rtt_ms"`
+	JitterMs        int64  `json:"jitter_ms"`
+	ConsecutiveFail int    `json:"consecutive_fail"`
+	LastError       string `json:"last_error,omitempty"`
+	NextProbeUnix   int64  `json:"next_probe_unix,omitempty"`
+	CutoverBlocking bool   `json:"cutover_blocking,omitempty"`
+}
+
+func healthLinkJSONFromHealth(h healthLinkHealthView) healthLinkJSON {
+	return healthLinkJSON{
+		InstanceID:      h.InstanceID,
+		State:           h.State,
+		ProbeType:       h.ProbeType,
+		Sent:            h.Sent,
+		Received:        h.Received,
+		Lost:            h.Lost,
+		LossRatio:       int(h.LossRatio * 100),
+		LastRTTMs:       h.LastRTT.Milliseconds(),
+		EWMARTTMs:       h.EWMARTT.Milliseconds(),
+		P50RTTMs:        h.P50RTT.Milliseconds(),
+		P95RTTMs:        h.P95RTT.Milliseconds(),
+		P99RTTMs:        h.P99RTT.Milliseconds(),
+		JitterMs:        h.Jitter.Milliseconds(),
+		ConsecutiveFail: h.ConsecutiveFail,
+		LastError:       h.LastError,
+		NextProbeUnix:   h.NextProbeUnix,
+		CutoverBlocking: h.CutoverBlocking,
+	}
+}
+
+// healthLinkHealthView is a local view type used to convert health.LinkHealth
+// without importing pkg/health in control.go (kept for layered imports).
+type healthLinkHealthView struct {
+	InstanceID      string
+	State           string
+	ProbeType       string
+	Sent            int
+	Received        int
+	Lost            int
+	LossRatio       float64
+	LastRTT         time.Duration
+	EWMARTT         time.Duration
+	P50RTT          time.Duration
+	P95RTT          time.Duration
+	P99RTT          time.Duration
+	Jitter          time.Duration
+	ConsecutiveFail int
+	LastError       string
+	NextProbeUnix   int64
+	CutoverBlocking bool
 }
 
 func controlSocketPath(config *appConfig) string {

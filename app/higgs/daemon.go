@@ -13,6 +13,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -26,6 +27,7 @@ type DaemonService struct {
 	IPsecDriver       ipsec.IPsecDriver
 	XFRMDriver        ipsec.XFRMDriver
 	closeIPsecDriver  func() error
+	health            *health.Manager
 	Log               *appLogger
 	LogLimiter        *repeatedLogLimiter
 	drainingEvents    bool
@@ -131,7 +133,22 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	d.objectPullResults = make(chan ObjectPullResult, 64)
 	d.objectPullPool = newObjectPullPool(func() *stateFile { return d.Sync.State }, d.Sync.Config, d.objectPullResults, 0)
 	d.timerManager = NewTimerManager(NewRealClock(), d.syncEvents)
+	d.configureHealthManager()
 	return d
+}
+
+// configureHealthManager initializes the health probe manager from app config.
+// When health probing is disabled (the default), d.health remains nil and all
+// health-related operations become no-ops.
+func (d *DaemonService) configureHealthManager() {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return
+	}
+	cfg := d.Sync.App.Config.Health
+	if !cfg.Enabled {
+		return
+	}
+	d.health = newHealthManager(cfg, nil)
 }
 
 func (d *DaemonService) Run(ctx context.Context) error {
@@ -587,6 +604,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			PeerID:           d.Sync.Config.PeerID,
 			RevocationImpact: impacts,
 			Message:          "revoke status",
+		})
+	case "health_status":
+		writeControlResponse(conn, controlResponse{
+			OK:      true,
+			PeerID:  d.Sync.Config.PeerID,
+			Health:  d.healthStatusResponse(),
+			Message: "health status",
 		})
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
@@ -1159,6 +1183,10 @@ func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
 	if err := d.reconcileIPsecLinks(ctx); err != nil {
 		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
 	}
+	// Phase 6.6: after IPsec reconcile, refresh health probe targets and
+	// dispatch any due probes. This keeps the probe scheduler in sync with
+	// link create/update/teardown without adding a separate timer path.
+	d.reconcileHealth(ctx)
 	return true
 }
 
