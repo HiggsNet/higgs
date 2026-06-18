@@ -171,6 +171,23 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if err != nil {
 		return TransportLinkSpec{}, false, PlanSkip{}, err
 	}
+	if ns.Zones[local] != nil {
+		localRecords, err := ExtractNodeRecords(ns, local, now)
+		if err != nil {
+			return TransportLinkSpec{}, false, PlanSkip{}, err
+		}
+		if localRecords.Ports != nil && localRecords.Ports.Current != nil {
+			spec.LocalIKEPort = dialPort(localRecords.Ports.Current.IKE)
+			if group.Direction == DirectionInbound {
+				spec.Generation = localRecords.Ports.Current.Generation
+			}
+		}
+	}
+	if group.Direction != DirectionInbound {
+		if point, ok := firstContactPoint(contacts); ok {
+			spec.Generation = point.Generation
+		}
+	}
 	spec.InitiatorRole = role
 	return spec, true, PlanSkip{}, nil
 }

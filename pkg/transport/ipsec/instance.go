@@ -206,6 +206,9 @@ func (o ResourceOwner) Validate(instance LinkInstance) error {
 }
 
 func contactGeneration(spec TransportLinkSpec) uint64 {
+	if spec.Generation != 0 {
+		return spec.Generation
+	}
 	point, ok := firstContactPoint(spec.ContactPoints)
 	if !ok {
 		return 0
@@ -554,7 +557,7 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedChildSAName = ""
 			inst.StagedInterfaceName = ""
 			inst.StagedXFRMIfID = 0
-			inst.RotatePhase = RotatePhaseDualRunning
+			inst.RotatePhase = RotatePhaseIdle
 			inst.RotateDeadline = 0
 			inst.FailureCount = 0
 			inst.BackoffUntil = 0

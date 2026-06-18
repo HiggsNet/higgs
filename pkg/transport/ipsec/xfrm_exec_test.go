@@ -227,10 +227,10 @@ func TestSystemXFRMDriverPeerTunnelPingSmoke(t *testing.T) {
 	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
 	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
 
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping6", "-c", "1", "-W", "2", addrB.String()+"%"+iface); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-6", "-c", "1", "-W", "2", addrB.String()+"%"+iface); err != nil {
 		t.Fatalf("tunnel ping A->B failed: %v\n%s", err, string(out))
 	}
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping6", "-c", "1", "-W", "2", addrA.String()+"%"+iface); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping", "-6", "-c", "1", "-W", "2", addrA.String()+"%"+iface); err != nil {
 		t.Fatalf("tunnel ping B->A failed: %v\n%s", err, string(out))
 	}
 }

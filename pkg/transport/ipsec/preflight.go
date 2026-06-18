@@ -72,7 +72,7 @@ func (c PreflightChecker) Run(ctx context.Context, opts PreflightOptions) Prefli
 	out.addCommand(ctx, c, "swanctl", "swanctl")
 	out.addCommand(ctx, c, "charon", "charon")
 	out.add("kernel-xfrm", c.fileExists("/proc/net/xfrm_stat") || c.fileExists("/proc/net/xfrm_policy"), false, "requires Linux XFRM support")
-	out.add("iproute2-xfrm-interface", c.commandSucceeds(ctx, "ip", "link", "help", "xfrm"), false, "requires ip link type xfrm support")
+	out.add("iproute2-xfrm-interface", c.xfrmInterfaceSupported(ctx), false, "requires kernel support for ip link type xfrm (check CONFIG_XFRM_INTERFACE)")
 	if opts.RequireUDP {
 		err := c.ListenUDP(ctx, opts.IKEPort)
 		out.add("udp-ike-port", err == nil, false, udpPortDetail(opts.IKEPort, err))
@@ -169,6 +169,19 @@ func (c PreflightChecker) commandSucceeds(ctx context.Context, name string, args
 		return false
 	}
 	_, err := c.Command(ctx, name, args...)
+	return err == nil
+}
+
+func (c PreflightChecker) xfrmInterfaceSupported(ctx context.Context) bool {
+	if c.Command == nil {
+		return false
+	}
+	ns := fmt.Sprintf("higgs-xfrm-preflight-%d", time.Now().UnixNano())
+	if _, err := c.Command(ctx, "ip", "netns", "add", ns); err != nil {
+		return false
+	}
+	defer func() { _, _ = c.Command(ctx, "ip", "netns", "delete", ns) }()
+	_, err := c.Command(ctx, "ip", "netns", "exec", ns, "ip", "link", "add", "hgsxfrmtest", "type", "xfrm", "if_id", "1")
 	return err == nil
 }
 

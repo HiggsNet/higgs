@@ -22,9 +22,6 @@ func TestPreflightReportsMissingRuntimeDependencies(t *testing.T) {
 	checker := fakePreflightChecker(false)
 	checker.Stat = func(string) error { return errors.New("missing") }
 	checker.Command = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "ip" && strings.Join(args, " ") == "link help xfrm" {
-			return nil, errors.New("unsupported")
-		}
 		return nil, errors.New("missing")
 	}
 	checker.ReadFile = func(string) ([]byte, error) { return nil, errors.New("missing") }

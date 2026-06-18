@@ -224,10 +224,10 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
 	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
 
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping6", "-c", "1", "-W", "3", addrB.String()); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-6", "-c", "1", "-W", "3", addrB.String()); err != nil {
 		t.Fatalf("tunnel ping A->B failed: %v\n%s", err, string(out))
 	}
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping6", "-c", "1", "-W", "3", addrA.String()); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping", "-6", "-c", "1", "-W", "3", addrA.String()); err != nil {
 		t.Fatalf("tunnel ping B->A failed: %v\n%s", err, string(out))
 	}
 
@@ -454,7 +454,7 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 
 	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
 	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping6", "-c", "1", "-W", "3", addrA.String()); err != nil {
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping", "-6", "-c", "1", "-W", "3", addrA.String()); err != nil {
 		t.Fatalf("takeover tunnel ping B->A failed: %v\n%s", err, string(out))
 	}
 
@@ -504,6 +504,10 @@ func writeStrongSwanConf(viciSocket string) (string, error) {
 	_, err = fmt.Fprintf(f, `charon {
 	install_routes = no
 	install_virtual_ip = no
+	uniqueids = no
+	stderr {
+		default = 2
+	}
 	plugins {
 		vici {
 			socket = unix://%s

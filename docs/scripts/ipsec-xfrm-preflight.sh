@@ -37,7 +37,7 @@ check "swanctl command" command -v swanctl
 check "charon command" command -v charon
 check "ping command" command -v ping
 check "kernel xfrm" sh -c 'test -e /proc/net/xfrm_stat || test -e /proc/net/xfrm_policy'
-check "xfrm interface support" ip link help xfrm
+check "xfrm interface support" sh -c 'set -e; ns="higgs-xfrm-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" ip link add hgsxfrmtest type xfrm if_id 1'
 check "named netns create/delete" sh -c 'set -e; ns="higgs-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" true'
 
 if [ "$check_udp" = "1" ]; then

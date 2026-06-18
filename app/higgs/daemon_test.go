@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -333,16 +334,6 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 		_ = os.Remove(logA.Name())
 		_ = os.Remove(logB.Name())
 	}()
-	defer func() {
-		if t.Failed() {
-			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer dumpCancel()
-			logDaemonTestFile(t, "charon A", logA.Name())
-			logDaemonTestFile(t, "charon B", logB.Name())
-			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
-		}
-	}()
-
 	clientA, err := waitDaemonTestVICI(ctx, viciA)
 	if err != nil {
 		t.Fatalf("connect to charon A VICI: %v", err)
@@ -353,6 +344,17 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 		t.Fatalf("connect to charon B VICI: %v", err)
 	}
 	defer clientB.Close()
+	defer func() {
+		if t.Failed() {
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dumpCancel()
+			logDaemonTestFile(t, "charon A", logA.Name())
+			logDaemonTestFile(t, "charon B", logB.Name())
+			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
+			dumpDaemonVICISAs(t, dumpCtx, viciA, "A")
+			dumpDaemonVICISAs(t, dumpCtx, viciB, "B")
+		}
+	}()
 
 	now := time.Unix(4140, 0)
 	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
@@ -368,10 +370,12 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	groupA := testIPsecLinkGroup()
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
 	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
+	groupA.Reconcile.RotateRetentionSeconds = 0
 	groupB := testIPsecLinkGroup()
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.Direction = ipsec.DirectionInbound
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
+	groupB.Reconcile.RotateRetentionSeconds = 0
 	rtA := &Runtime{
 		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
 		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
@@ -570,16 +574,6 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 		_ = os.Remove(logA.Name())
 		_ = os.Remove(logB.Name())
 	}()
-	defer func() {
-		if t.Failed() {
-			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer dumpCancel()
-			logDaemonTestFile(t, "charon A", logA.Name())
-			logDaemonTestFile(t, "charon B", logB.Name())
-			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
-		}
-	}()
-
 	clientA, err := waitDaemonTestVICI(ctx, viciA)
 	if err != nil {
 		t.Fatalf("connect to charon A VICI: %v", err)
@@ -590,6 +584,17 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 		t.Fatalf("connect to charon B VICI: %v", err)
 	}
 	defer clientB.Close()
+	defer func() {
+		if t.Failed() {
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dumpCancel()
+			logDaemonTestFile(t, "charon A", logA.Name())
+			logDaemonTestFile(t, "charon B", logB.Name())
+			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
+			dumpDaemonVICISAs(t, dumpCtx, viciA, "A")
+			dumpDaemonVICISAs(t, dumpCtx, viciB, "B")
+		}
+	}()
 
 	now := time.Unix(4140, 0)
 	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
@@ -748,16 +753,6 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 		_ = os.Remove(logA.Name())
 		_ = os.Remove(logB.Name())
 	}()
-	defer func() {
-		if t.Failed() {
-			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer dumpCancel()
-			logDaemonTestFile(t, "charon A", logA.Name())
-			logDaemonTestFile(t, "charon B", logB.Name())
-			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
-		}
-	}()
-
 	clientA, err := waitDaemonTestVICI(ctx, viciA)
 	if err != nil {
 		t.Fatalf("connect to charon A VICI: %v", err)
@@ -768,6 +763,17 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 		t.Fatalf("connect to charon B VICI: %v", err)
 	}
 	defer clientB.Close()
+	defer func() {
+		if t.Failed() {
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dumpCancel()
+			logDaemonTestFile(t, "charon A", logA.Name())
+			logDaemonTestFile(t, "charon B", logB.Name())
+			dumpDaemonSystemState(t, dumpCtx, nsA, nsB)
+			dumpDaemonVICISAs(t, dumpCtx, viciA, "A")
+			dumpDaemonVICISAs(t, dumpCtx, viciB, "B")
+		}
+	}()
 
 	now := time.Unix(4140, 0)
 	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
@@ -848,53 +854,129 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
 	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 
+	// Rotate both peers to a new IKE generation on a non-default port. Using
+	// a different local/remote port forces StrongSwan to create independent
+	// IKE_SAs for the staged connection instead of adding a child to the
+	// existing IKE_SA.
+	const rotIKEPort uint16 = 4500
 	rotateA := latestA
-	updateDaemonTestPortRecord(t, rotateA.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, ipsec.DefaultIKEPort, now.Add(time.Minute))
+	rotateB := latestB
+	updateDaemonTestPortRecord(t, rotateA.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, rotIKEPort, now.Add(time.Minute))
+	updateDaemonTestPortRecord(t, rotateB.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, rotIKEPort, now.Add(time.Minute))
 	if err := rtA.SaveState(rotateA); err != nil {
 		t.Fatalf("SaveState(node-a rotated peer ports): %v", err)
 	}
+	if err := rtB.SaveState(rotateB); err != nil {
+		t.Fatalf("SaveState(node-b rotated local ports): %v", err)
+	}
+	serviceB.setState(rotateB)
+	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.setState(rotateA)
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	preparedA, err := rtA.LoadState()
 	if err != nil {
 		t.Fatalf("LoadState(node-a prepared rotate): %v", err)
 	}
-	inst := preparedA.LinkInstances[ipsec.LinkInstanceID(specA)]
-	if inst.RotatePhase != ipsec.RotatePhaseTestingNew || inst.StagedGeneration != 2 {
-		t.Fatalf("prepared rotate instance = %+v, want testing_new generation 2", inst)
+	preparedB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b prepared rotate): %v", err)
 	}
-	stagedIKE := ipsec.RotateConnectionName(inst.TransportID, 2)
-	if inst.StagedIKEName != stagedIKE {
-		t.Fatalf("staged ike = %q, want %q", inst.StagedIKEName, stagedIKE)
+	rotSpecA := daemonSystemDesiredSpec(t, preparedA, groupA, now.Add(time.Minute))
+	rotSpecB := daemonSystemDesiredSpec(t, preparedB, groupB, now.Add(time.Minute))
+	t.Logf("DEBUG rotate specA generation=%d localikeport=%d", rotSpecA.Generation, rotSpecA.LocalIKEPort)
+	t.Logf("DEBUG rotate specB generation=%d localikeport=%d", rotSpecB.Generation, rotSpecB.LocalIKEPort)
+	instA := preparedA.LinkInstances[ipsec.LinkInstanceID(specA)]
+	if instA.RotatePhase != ipsec.RotatePhaseTestingNew || instA.StagedGeneration != 2 {
+		t.Fatalf("prepared rotate instance A = %+v, want testing_new generation 2", instA)
 	}
-	if err := waitDaemonTestSA(ctx, clientA, stagedIKE); err != nil {
+	instB := preparedB.LinkInstances[ipsec.LinkInstanceID(specB)]
+	if instB.RotatePhase != ipsec.RotatePhaseTestingNew || instB.StagedGeneration != 2 {
+		t.Fatalf("prepared rotate instance B = %+v, want testing_new generation 2", instB)
+	}
+	stagedIKEA := ipsec.RotateConnectionName(instA.TransportID, 2)
+	stagedIKEB := ipsec.RotateConnectionName(instB.TransportID, 2)
+	if instA.StagedIKEName != stagedIKEA {
+		t.Fatalf("staged ike A = %q, want %q", instA.StagedIKEName, stagedIKEA)
+	}
+	if instB.StagedIKEName != stagedIKEB {
+		t.Fatalf("staged ike B = %q, want %q", instB.StagedIKEName, stagedIKEB)
+	}
+	if err := waitDaemonTestSA(ctx, clientA, stagedIKEA); err != nil {
 		t.Fatalf("wait for staged daemon SA on A: %v", err)
 	}
+	if err := waitDaemonTestSA(ctx, clientB, stagedIKEB); err != nil {
+		t.Fatalf("wait for staged daemon SA on B: %v", err)
+	}
 
+	// Simulate that the staged SAs have been observed and the rotate retention
+	// window has expired, so the next reconcile commits the rotation.
+	for id, inst := range preparedA.LinkInstances {
+		inst.RotatePhase = ipsec.RotatePhaseDualRunning
+		inst.RotateDeadline = now.Add(-time.Second).Unix()
+		preparedA.LinkInstances[id] = inst
+	}
+	for id, inst := range preparedB.LinkInstances {
+		inst.RotatePhase = ipsec.RotatePhaseDualRunning
+		inst.RotateDeadline = now.Add(-time.Second).Unix()
+		preparedB.LinkInstances[id] = inst
+	}
 	serviceA.setState(preparedA)
 	serviceA.recoverIPsecLinksOnStart(ctx)
+	serviceB.setState(preparedB)
+	serviceB.recoverIPsecLinksOnStart(ctx)
 	committedA, err := rtA.LoadState()
 	if err != nil {
 		t.Fatalf("LoadState(node-a committed rotate): %v", err)
 	}
-	rotatedSpecA := daemonSystemDesiredSpec(t, committedA, groupA, now.Add(time.Minute))
-	assertDaemonSystemLinkUp(t, committedA, rotatedSpecA)
-	committedInst := committedA.LinkInstances[ipsec.LinkInstanceID(rotatedSpecA)]
-	if committedInst.RotatePhase != ipsec.RotatePhaseIdle || committedInst.StagedGeneration != 0 {
-		t.Fatalf("committed rotate instance = %+v, want idle with no staged generation", committedInst)
+	committedB, err := rtB.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(node-b committed rotate): %v", err)
 	}
-	if committedInst.IKEName != stagedIKE || committedInst.RemoteGeneration != 2 {
-		t.Fatalf("committed rotate instance = %+v, want ike=%s remote_generation=2", committedInst, stagedIKE)
+	rotatedSpecA := daemonSystemDesiredSpec(t, committedA, groupA, now.Add(time.Minute))
+	rotatedSpecB := daemonSystemDesiredSpec(t, committedB, groupB, now.Add(time.Minute))
+	assertDaemonSystemLinkUp(t, committedA, rotatedSpecA)
+	assertDaemonSystemLinkUp(t, committedB, rotatedSpecB)
+	committedInstA := committedA.LinkInstances[ipsec.LinkInstanceID(rotatedSpecA)]
+	if committedInstA.RotatePhase != ipsec.RotatePhaseIdle || committedInstA.StagedGeneration != 0 {
+		t.Fatalf("committed rotate instance A = %+v, want idle with no staged generation", committedInstA)
+	}
+	if committedInstA.IKEName != stagedIKEA || committedInstA.RemoteGeneration != 2 {
+		t.Fatalf("committed rotate instance A = %+v, want ike=%s remote_generation=2", committedInstA, stagedIKEA)
+	}
+	committedInstB := committedB.LinkInstances[ipsec.LinkInstanceID(rotatedSpecB)]
+	if committedInstB.RotatePhase != ipsec.RotatePhaseIdle || committedInstB.StagedGeneration != 0 {
+		t.Fatalf("committed rotate instance B = %+v, want idle with no staged generation", committedInstB)
+	}
+	if committedInstB.IKEName != stagedIKEB || committedInstB.RemoteGeneration != 2 {
+		t.Fatalf("committed rotate instance B = %+v, want ike=%s remote_generation=2", committedInstB, stagedIKEB)
 	}
 	if err := waitDaemonTestNoSA(ctx, clientA, specA.TransportID); err != nil {
 		t.Fatalf("old daemon SA on A after rotate commit: %v", err)
 	}
-	if count, err := daemonTestEstablishedSACount(ctx, clientA, stagedIKE); err != nil {
+	if err := waitDaemonTestNoSA(ctx, clientB, specB.TransportID); err != nil {
+		t.Fatalf("old daemon SA on B after rotate commit: %v", err)
+	}
+	if count, err := daemonTestEstablishedSACount(ctx, clientA, stagedIKEA); err != nil {
 		t.Fatalf("count staged SA on A after commit: %v", err)
 	} else if count != 1 {
-		t.Fatalf("staged SA count after commit = %d, want 1", count)
+		t.Fatalf("staged SA count on A after commit = %d, want 1", count)
 	}
+	if count, err := daemonTestEstablishedSACount(ctx, clientB, stagedIKEB); err != nil {
+		t.Fatalf("count staged SA on B after commit: %v", err)
+	} else if count != 1 {
+		t.Fatalf("staged SA count on B after commit = %d, want 1", count)
+	}
+	// After commit the active XFRM interface is the staged one; the desired
+	// spec still carries the base transport ID/interface, so use the committed
+	// instance's interface for routes and pings.
+	rotatedSpecA.InterfaceName = committedInstA.InterfaceName
+	rotatedSpecA.XFRMIfID = committedInstA.XFRMIfID
+	rotatedSpecB.InterfaceName = committedInstB.InterfaceName
+	rotatedSpecB.XFRMIfID = committedInstB.XFRMIfID
+	addTunnelRoute(t, ctx, nsA, rotatedSpecA)
+	addTunnelRoute(t, ctx, nsB, rotatedSpecB)
 	pingTunnelAddr(t, ctx, nsA, rotatedSpecA.PeerTunnelAddr, rotatedSpecA.InterfaceName)
+	pingTunnelAddr(t, ctx, nsB, rotatedSpecB.PeerTunnelAddr, rotatedSpecB.InterfaceName)
 }
 
 func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
@@ -2223,7 +2305,7 @@ func pingTunnelAddr(t *testing.T, ctx context.Context, ns string, target netip.A
 		runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping", "-c", "1", "-W", "3", target.String())
 		return
 	}
-	runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping6", "-c", "1", "-W", "3", target.String()+"%"+iface)
+	runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping", "-6", "-c", "1", "-W", "3", target.String()+"%"+iface)
 }
 
 func pingTunnelAddrShouldFail(t *testing.T, ctx context.Context, ns string, target netip.Addr, iface string) []byte {
@@ -2232,7 +2314,7 @@ func pingTunnelAddrShouldFail(t *testing.T, ctx context.Context, ns string, targ
 	if target.Is4() {
 		cmdArgs = []string{"netns", "exec", ns, "ping", "-c", "1", "-W", "1", target.String()}
 	} else {
-		cmdArgs = []string{"netns", "exec", ns, "ping6", "-c", "1", "-W", "1", target.String() + "%" + iface}
+		cmdArgs = []string{"netns", "exec", ns, "ping", "-6", "-c", "1", "-W", "1", target.String() + "%" + iface}
 	}
 	out, err := appExecCommand(ctx, "ip", cmdArgs...)
 	if err == nil {
@@ -2250,6 +2332,10 @@ func writeDaemonStrongSwanConf(viciSocket string) (string, error) {
 	_, err = fmt.Fprintf(f, `charon {
 	install_routes = no
 	install_virtual_ip = no
+	uniqueids = no
+	stderr {
+		default = 2
+	}
 	plugins {
 		vici {
 			socket = unix://%s
@@ -2265,7 +2351,7 @@ func writeDaemonStrongSwanConf(viciSocket string) (string, error) {
 
 func startDaemonTestCharonInNetNS(ctx context.Context, t *testing.T, ns, piddir, conf string, logFile *os.File) *exec.Cmd {
 	t.Helper()
-	script := fmt.Sprintf("mkdir -p /run && mount --bind %s /run && STRONGSWAN_CONF=%s exec charon", piddir, conf)
+	script := fmt.Sprintf("mkdir -p /run && mount --bind %s /run && STRONGSWAN_CONF=%s exec charon --debug-cfg 2 --debug-ike 2 --debug-mgr 2", piddir, conf)
 	cmd := exec.CommandContext(ctx, "unshare", "-m", "ip", "netns", "exec", ns, "bash", "-c", script)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -2634,6 +2720,34 @@ func dumpDaemonSystemState(t *testing.T, ctx context.Context, namespaces ...stri
 	} else {
 		t.Logf("swanctl --list-sas failed: %v\n%s", err, string(out))
 	}
+}
+
+func dumpDaemonVICISAs(t *testing.T, ctx context.Context, viciSocket, label string) {
+	t.Helper()
+	client, err := ipsec.NewGoviciClient(viciSocket)
+	if err != nil {
+		t.Logf("vici connect %s: %v", label, err)
+		return
+	}
+	defer client.Close()
+	events, err := client.CallStreaming(ctx, "list-sas", "list-sa", nil)
+	if err != nil {
+		t.Logf("vici list-sas %s: %v", label, err)
+		return
+	}
+	t.Logf("--- vici list-sas %s ---", label)
+	for _, event := range events {
+		t.Logf("%s", formatDaemonVICIEvent(event))
+	}
+}
+
+func formatDaemonVICIEvent(event map[string]any) string {
+	var parts []string
+	for k, v := range event {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
 }
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {

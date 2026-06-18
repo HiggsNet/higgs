@@ -104,7 +104,14 @@ type TransportLinkSpec struct {
 	// LocalAddress is the local underlay address used for the IKE endpoint.
 	// If empty, the IPsec daemon binds to any address.
 	LocalAddress string
-	NetNS        string
+	// LocalIKEPort is the local UDP port the IPsec daemon binds to for IKE.
+	// If zero, the provider default (500 for IKEv2) is used.
+	LocalIKEPort uint16
+	// Generation is the current port/contact generation for this link.
+	// For outbound links it is derived from the peer's contact point; for
+	// inbound links it is derived from the local port record.
+	Generation uint64
+	NetNS      string
 
 	// LocalPrivateKey is the raw private key material for the local transport
 	// identity. The driver is responsible for loading it into the IPsec daemon.
@@ -129,6 +136,8 @@ type TransportLinkOptions struct {
 	NetNS           string
 	LocalTunnelAddr netip.Addr
 	PeerTunnelAddr  netip.Addr
+	LocalIKEPort    uint16
+	Generation      uint64
 }
 
 func NewTransportLinkSpec(local, peer zone.ZonePath, overlayID, transportID string, records *NodeRecords, contacts []ContactPoint) (TransportLinkSpec, error) {
@@ -178,6 +187,8 @@ func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string
 		LocalTunnelAddr: opts.LocalTunnelAddr,
 		PeerTunnelAddr:  opts.PeerTunnelAddr,
 		NetNS:           opts.NetNS,
+		LocalIKEPort:    opts.LocalIKEPort,
+		Generation:      opts.Generation,
 	}, nil
 }
 

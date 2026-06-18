@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -133,6 +134,9 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 	if hasPoint {
 		conn["remote_port"] = fmt.Sprintf("%d", chooseIKEPort(point))
 	}
+	if spec.LocalIKEPort != 0 {
+		conn["local_port"] = fmt.Sprintf("%d", spec.LocalIKEPort)
+	}
 	return conn, nil
 }
 
@@ -240,7 +244,7 @@ func parseSAStates(event map[string]any) []SAState {
 		for childName, childRaw := range children {
 			child, _ := childRaw.(map[string]any)
 			childState := state
-			childState.ChildSA = childName
+			childState.ChildSA = stripChildSAReqidSuffix(childName)
 			childState.XFRMIfID = firstUint32(child["if-id-out"], child["if-id-in"])
 			childState.ReqID = uint32Value(child["reqid"])
 			childState.Established = true
@@ -252,6 +256,16 @@ func parseSAStates(event map[string]any) []SAState {
 		}
 	}
 	return states
+}
+
+// stripChildSAReqidSuffix removes the StrongSwan VICI child-sa reqid suffix
+// (e.g. "ipsec-foo-child{2}" -> "ipsec-foo-child") so that state comparisons
+// can use the configured child name.
+func stripChildSAReqidSuffix(name string) string {
+	if i := strings.LastIndex(name, "{"); i >= 0 {
+		return name[:i]
+	}
+	return name
 }
 
 func stringValue(v any) string {
