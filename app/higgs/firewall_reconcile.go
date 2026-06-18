@@ -150,6 +150,9 @@ func (d *DaemonService) firewallDriverInstance() firewallDriver {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
+	if d.firewallDriver != nil {
+		return d.firewallDriver
+	}
 	// Determine the effective backend from config + preflight.
 	instances := firewallInstancesEnabled(d.Sync.App.Config)
 	if len(instances) == 0 {
@@ -312,6 +315,7 @@ func (d *DaemonService) flushFirewallReconcile(ctx context.Context) bool {
 		return false
 	}
 	d.firewallDirty = false
+	d.noteReconcileFlush("firewall")
 	if err := d.reconcileFirewall(ctx); err != nil {
 		d.logWarn("firewall", "reconcile_failed", map[string]any{"error": err})
 	}

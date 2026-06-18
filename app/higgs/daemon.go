@@ -53,10 +53,12 @@ type DaemonService struct {
 	birdProcessManager birdProcessManager
 	birdClientFactory  func(socketPath string, timeout time.Duration) birdClient
 	vethManager        vethManager
+	firewallDriver     firewallDriver
 }
 
 type DaemonHooks struct {
-	OnStateChanged func(*stateFile)
+	OnStateChanged   func(*stateFile)
+	OnReconcileFlush func(layer string)
 }
 
 type daemonEventType string
@@ -1112,6 +1114,12 @@ func (d *DaemonService) notifyStateChanged() {
 	d.flushRevocationCleanup()
 }
 
+func (d *DaemonService) noteReconcileFlush(layer string) {
+	if d != nil && d.Hooks.OnReconcileFlush != nil {
+		d.Hooks.OnReconcileFlush(layer)
+	}
+}
+
 // flushRevocationCleanup clears runtime-relevant fields from SyncPeers entries
 // whose zone is currently revoked. This implements Phase 6.5.5 gossip peer
 // cache cleanup: revoked peers must not maintain discovered endpoints,
@@ -1127,6 +1135,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 	if len(revokedZones) == 0 {
 		return
 	}
+	d.noteReconcileFlush("revocation_cleanup")
 	CleanupRevokedPeerCache(d.Sync.State, revokedZones)
 }
 
@@ -1151,6 +1160,7 @@ func (d *DaemonService) flushRoutingReconcile(ctx context.Context) bool {
 		return false
 	}
 	d.routingDirty = false
+	d.noteReconcileFlush("routing")
 	if err := d.reconcileRouting(ctx); err != nil {
 		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
 	}
@@ -1180,6 +1190,7 @@ func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
 		return false
 	}
 	d.ipsecDirty = false
+	d.noteReconcileFlush("ipsec")
 	if err := d.reconcileIPsecLinks(ctx); err != nil {
 		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
 	}

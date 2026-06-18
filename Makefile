@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke peer-lifecycle-smoke revocation-cleanup-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -98,6 +98,12 @@ peer-lifecycle-smoke:
 revocation-cleanup-smoke:
 	$(GO_ENV) $(GO) test ./app/higgs -run 'TestRevocation|TestCollectAllRevokedZones|TestCleanupRevokedPeerCache|TestConfiguredBootstrapPeerRevoked|TestWriteRevocationImpacts|TestDaemonFlushRevocationCleanup|TestDaemonRevocationCleanupPeerCache|TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate' -v
 	@echo "Revocation cleanup smoke passed"
+
+revocation-data-plane-smoke: build
+	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/revocation-data-plane-smoke.sh
+
+revocation-data-plane-container-smoke:
+	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/revocation-data-plane-container-smoke.sh
 
 # Smoke 目标约定：
 # - 每个 smoke 都在 $TMPDIR 下创建独立目录，避免重复运行时复用密钥、
@@ -901,6 +907,8 @@ help:
 	@echo "  firewall-container-smoke - Run firewall smoke in privileged container"
 	@echo "  peer-lifecycle-smoke - Run Phase 6.4 peer lifecycle unit smoke test"
 	@echo "  revocation-cleanup-smoke - Run Phase 6.5 revocation impact + deny-first cleanup smoke test"
+	@echo "  revocation-data-plane-smoke - Run combined Phase 6.5 firewall+BIRD+StrongSwan smoke (requires root, NOT in smoke-all)"
+	@echo "  revocation-data-plane-container-smoke - Run combined Phase 6.5 smoke in privileged container"
 	@echo "  ipsec-xfrm-preflight - Check root/netns/XFRM/StrongSwan prerequisites"
 	@echo "  ipsec-xfrm-smoke - Run real StrongSwan/XFRM smoke (requires root, NOT in smoke-all)"
 	@echo "  ipsec-xfrm-container-smoke - Run StrongSwan/XFRM smoke in privileged container"

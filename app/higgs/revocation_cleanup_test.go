@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"net/netip"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -511,6 +515,175 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	if len(service.Sync.State.LinkInstances) != 0 {
 		t.Fatalf("link instances should be empty after revocation, got %d", len(service.Sync.State.LinkInstances))
 	}
+}
+
+type captureFirewallDriver struct {
+	firewall.DryRunDriver
+	desired []*firewall.FirewallDesiredState
+}
+
+func (d *captureFirewallDriver) Apply(ctx context.Context, plan firewall.FirewallPlan, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+	d.desired = append(d.desired, desired)
+	return d.DryRunDriver.Apply(ctx, plan, desired)
+}
+
+// TestRevocationDenyFirstCombinedSmoke verifies the Phase 6.5 cross-layer
+// revocation path in one daemon flow: firewall is flushed before routing and
+// IPsec, BIRD retracts the revoked route, and IPsec tears down the revoked
+// peer link without recreating it.
+func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4140, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+		ID:                "h2",
+		NetNS:             "h2",
+		Enabled:           true,
+		Mode:              firewall.ModeManaged,
+		Backend:           firewall.BackendNone,
+		DefaultPolicy:     firewall.DefaultPolicyDrop,
+		XFRMTunnelPattern: "hgs*",
+		Forwarding:        firewall.ForwardingPolicy{Transit: true},
+	}}
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	ipsecDriver := &observedIPsecDriver{}
+	firewallDriver := &captureFirewallDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = ipsecDriver
+	service.XFRMDriver = ipsecDriver
+	service.firewallDriver = firewallDriver
+	service.birdProcessManager = &fakeBirdProcessManager{running: false}
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	service.notifyStateChanged()
+	if len(service.Sync.State.LinkInstances) != 1 {
+		t.Fatalf("initial link instances = %d, want 1", len(service.Sync.State.LinkInstances))
+	}
+	initialFirewall := lastFirewallDesired(t, firewallDriver)
+	if !prefixIn(initialFirewall.Prefixes.MeshAuthorizedV4, "10.1.0.0/24") {
+		t.Fatalf("initial firewall authorized prefixes = %v, want node-b route", initialFirewall.Prefixes.MeshAuthorizedV4)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(initial): %v", err)
+	}
+	initialBirdCfg := readBirdConfigForNetns(t, latest, "h2")
+	if !strings.Contains(initialBirdCfg, "10.1.0.0/24+") {
+		t.Fatalf("initial BIRD config missing transit export for node-b route:\n%s", initialBirdCfg)
+	}
+
+	parent := latest.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		Reason:                "combined revocation smoke",
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+	latest.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			DiscoveredAddr:       "192.0.2.1:33434",
+			ObservedAddr:         "192.0.2.1:33434",
+			ObservedLastSeenUnix: now.Unix(),
+			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+		},
+	}
+	if err := rt.SaveState(latest); err != nil {
+		t.Fatalf("SaveState(revoked): %v", err)
+	}
+	service.setState(latest)
+
+	var order []string
+	service.Hooks.OnReconcileFlush = func(layer string) {
+		order = append(order, layer)
+	}
+	firewallDriver.desired = nil
+	service.notifyStateChanged()
+
+	wantOrder := []string{"revocation_cleanup", "firewall", "routing", "ipsec", "revocation_cleanup"}
+	if !reflect.DeepEqual(order, wantOrder) {
+		t.Fatalf("flush order = %v, want %v", order, wantOrder)
+	}
+
+	revokedFirewall := lastFirewallDesired(t, firewallDriver)
+	if prefixIn(revokedFirewall.Prefixes.MeshAuthorizedV4, "10.1.0.0/24") {
+		t.Fatalf("revoked node-b prefixes still authorized by firewall: %v", revokedFirewall.Prefixes.MeshAuthorizedV4)
+	}
+	if !prefixIn(revokedFirewall.Prefixes.RevokedV4, "10.1.0.0/24") {
+		t.Fatalf("revoked node-b route missing from firewall audit set: %v", revokedFirewall.Prefixes.RevokedV4)
+	}
+
+	if len(service.Sync.State.LinkInstances) != 0 {
+		t.Fatalf("link instances should be empty after revocation, got %d", len(service.Sync.State.LinkInstances))
+	}
+	if len(ipsecDriver.Terminated) == 0 || len(ipsecDriver.Unloaded) == 0 || len(ipsecDriver.DeletedIFs) == 0 {
+		t.Fatalf("ipsec teardown incomplete: terminated=%v unloaded=%v deleted_ifs=%v", ipsecDriver.Terminated, ipsecDriver.Unloaded, ipsecDriver.DeletedIFs)
+	}
+	if peer := service.Sync.State.SyncPeers["node-b.catofes."]; peer.DiscoveredAddr != "" || peer.ObservedAddr != "" || peer.LastError != "zone revoked" {
+		t.Fatalf("revoked peer cache not cleaned: %+v", peer)
+	}
+
+	latest, err = rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(revoked): %v", err)
+	}
+	revokedBirdCfg := readBirdConfigForNetns(t, latest, "h2")
+	if strings.Contains(revokedBirdCfg, "10.1.0.0/24") {
+		t.Fatalf("BIRD config still exports revoked node-b route:\n%s", revokedBirdCfg)
+	}
+}
+
+func lastFirewallDesired(t *testing.T, driver *captureFirewallDriver) *firewall.FirewallDesiredState {
+	t.Helper()
+	if driver == nil || len(driver.desired) == 0 {
+		t.Fatal("firewall driver did not receive desired state")
+	}
+	return driver.desired[len(driver.desired)-1]
+}
+
+func prefixIn(prefixes []netip.Prefix, want string) bool {
+	prefix := netip.MustParsePrefix(want)
+	for _, got := range prefixes {
+		if got == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+func readBirdConfigForNetns(t *testing.T, state *stateFile, netns string) string {
+	t.Helper()
+	if state == nil || state.BirdInstances == nil || state.BirdInstances[netns] == nil {
+		t.Fatalf("missing BIRD instance for netns %s", netns)
+	}
+	path := state.BirdInstances[netns].ConfigPath
+	if path == "" {
+		t.Fatalf("empty BIRD config path for netns %s", netns)
+	}
+	cfg, err := readFileString(path)
+	if err != nil {
+		t.Fatalf("read BIRD config %s: %v", path, err)
+	}
+	return cfg
 }
 
 // TestConfiguredBootstrapPeerRevoked verifies that a revoked bootstrap peer is

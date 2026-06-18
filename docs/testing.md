@@ -37,6 +37,8 @@ make smoke-all（不要求 root 的 smoke）
 └── revocation-cleanup-smoke — Phase 6.5 撤销影响计算 + deny-first 清理
 
 需要 root / privileged container（默认不在 smoke-all 中）
+├── revocation-data-plane-smoke — Phase 6.5 组合数据面：firewall + BIRD + StrongSwan/XFRM + deny-first
+├── revocation-data-plane-container-smoke — 自动 privileged container 版
 ├── ipsec-xfrm-smoke         — 真实 StrongSwan/XFRM/netns/charon
 ├── ipsec-xfrm-container-smoke — 自动 privileged container 版
 ├── bird-babel-smoke         — 真实 BIRD/Babel/netns
@@ -121,6 +123,40 @@ higgs debug revoke-impact <zone>  # 单个 zone
 
 以下 smoke 测试需要真实的 Linux root 权限、named netns、XFRM 接口和/或
 BIRD/StrongSwan 运行时。它们**不包含在 `make smoke-all` 中**。
+
+### Phase 6.5 Revocation Data Plane
+
+这个目标把 Phase 6.5 需要的真实子系统 smoke 串成一个组合门禁：
+
+```bash
+sudo make revocation-data-plane-smoke
+```
+
+在 privileged container 中自动运行：
+
+```bash
+make revocation-data-plane-container-smoke
+```
+
+它依次运行：
+1. `make firewall-smoke` — 真实 nftables/iptables backend 与内核 netfilter 规则接受度
+2. `make bird-babel-smoke` — 真实 BIRD/Babel netns 路由进程、邻居和前缀传播
+3. IPsec/XFRM revocation 子集 — `ipsec-xfrm-preflight`、`TestStrongSwanDriverIKEBringupSmoke`、`TestDaemonStrongSwanReconcileBringupSmoke`
+4. `make revocation-cleanup-smoke` — daemon revocation deny-first flush 顺序、peer cache/IPsec/routing/firewall 清理
+
+这个入口是“组合验证 lane”：它把真实内核/守护进程依赖放在同一个 privileged
+环境里跑，并验证 revocation cleanup 的 deny-first 顺序。它还不是单个跨层 ping/counter
+Go 测试；如果后续需要更细的“撤销后 overlay ping 立即失败 + BIRD route retract”
+断言，可以在这个 lane 内继续追加专门的 root integration test。
+
+IPsec 部分刻意只跑 revocation 相关的真实建链/teardown 子集；完整端口轮换、
+daemon run gossip、derived pool 等仍由 `make ipsec-xfrm-smoke` 独立覆盖。
+
+**环境变量：**
+- `HIGGS_REVOCATION_DATA_PLANE_IMAGE` — 基础镜像（默认 `ubuntu:24.04`）
+- `HIGGS_REVOCATION_DATA_PLANE_REBUILD_IMAGE=1` — 强制重建缓存镜像
+- `HIGGS_REVOCATION_DATA_PLANE_CACHE_PREFIX` — Go cache volume 前缀
+- `HIGGS_CONTAINER_RUNTIME` — `docker` 或 `podman`
 
 ### IPsec / XFRM / StrongSwan
 

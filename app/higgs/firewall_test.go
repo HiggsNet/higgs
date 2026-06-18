@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/firewall"
+	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestParseConfigYAMLFirewallOverlay(t *testing.T) {
@@ -204,6 +208,100 @@ func TestReconcileFirewall_NoInstances(t *testing.T) {
 	}
 	if err := d.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall with no instances: %v", err)
+	}
+}
+
+func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(6000, 0)
+	state.ManagedZone = "node-b.catofes."
+	state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, state.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
+		Version: 1,
+		Mode:    ipsec.PortModeFixed,
+		Current: &ipsec.PortSelection{
+			Generation: 3,
+			IKE:        ipsec.PortBinding{Local: 1500, Advertised: 1500},
+			NATT:       ipsec.PortBinding{Local: 14500, Advertised: 14500},
+		},
+		Previous: []ipsec.PortSelection{
+			{
+				Generation: 2,
+				IKE:        ipsec.PortBinding{Local: 1400, Advertised: 1400},
+				NATT:       ipsec.PortBinding{Local: 14400, Advertised: 14400},
+				ValidUntil: now.Add(time.Minute).Unix(),
+			},
+			{
+				Generation: 1,
+				IKE:        ipsec.PortBinding{Local: 1300, Advertised: 1300},
+				NATT:       ipsec.PortBinding{Local: 14300, Advertised: 14300},
+				ValidUntil: now.Add(-time.Second).Unix(),
+			},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	oldNow := nowFunc
+	nowFunc = func() time.Time { return now }
+	t.Cleanup(func() { nowFunc = oldNow })
+
+	input := buildFirewallPolicyInput(
+		firewall.FirewallInstanceSpec{ID: "host", IsHost: true},
+		&routing.AuthorizedRouteSet{},
+		state,
+		defaultAppConfig(),
+	)
+	if len(input.AdvertisedPreviousIKEPorts) != 1 || input.AdvertisedPreviousIKEPorts[0] != 1400 {
+		t.Fatalf("previous IKE ports = %v, want [1400]", input.AdvertisedPreviousIKEPorts)
+	}
+	if len(input.AdvertisedPreviousNATTPorts) != 1 || input.AdvertisedPreviousNATTPorts[0] != 14400 {
+		t.Fatalf("previous NAT-T ports = %v, want [14400]", input.AdvertisedPreviousNATTPorts)
+	}
+}
+
+func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	appConfig := defaultAppConfig()
+	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+		ID:            "h2",
+		NetNS:         "h2",
+		Enabled:       true,
+		Mode:          firewall.ModeManaged,
+		Backend:       firewall.BackendNone,
+		DefaultPolicy: firewall.DefaultPolicyDrop,
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(7000, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	if service.firewallReconcileInterval() != defaultFirewallReconcileInterval {
+		t.Fatalf("firewall interval = %s, want %s", service.firewallReconcileInterval(), defaultFirewallReconcileInterval)
+	}
+	base := time.Unix(7000, 0)
+	if got := nextFirewallReconcileTime(base, 5*time.Second); !got.Equal(base.Add(5 * time.Second)) {
+		t.Fatalf("nextFirewallReconcileTime = %s, want %s", got, base.Add(5*time.Second))
+	}
+	if got := nextFirewallReconcileTime(base, 0); !got.IsZero() {
+		t.Fatalf("nextFirewallReconcileTime disabled = %s, want zero", got)
+	}
+	if service.flushFirewallReconcile(context.Background()) {
+		t.Fatal("flushFirewallReconcile should be false when not dirty")
+	}
+
+	service.recoverFirewallOnStart(context.Background())
+	if service.firewallDirty {
+		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
+	}
+	if state.FirewallReconcile == nil || state.FirewallReconcile.Instances["h2"] == nil {
+		t.Fatalf("firewall reconcile state missing after recover: %+v", state.FirewallReconcile)
+	}
+	entry := state.FirewallReconcile.Instances["h2"]
+	if entry.PolicyHash == "" || entry.OwnedObjects == 0 || entry.LastRunUnix != 7000 {
+		t.Fatalf("firewall reconcile entry = %+v, want hash/objects/last run", entry)
 	}
 }
 
