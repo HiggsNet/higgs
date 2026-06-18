@@ -1107,6 +1107,7 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 
 func (sr *SyncRuntime) tryAdoptAutoJoinAfterSync(peerID, via string) bool {
 	adopted, err := tryAdoptAutoJoinDelegation(sr.State, sr.now())
+	recordAdoptionResult(sr.State, adopted, err, sr.now())
 	if err != nil {
 		sr.logger().Warn("auto_join", "adopt_failed", map[string]any{
 			"peer_id": peerID,
@@ -1117,6 +1118,7 @@ func (sr *SyncRuntime) tryAdoptAutoJoinAfterSync(peerID, via string) bool {
 		return false
 	}
 	if !adopted {
+		recordBootstrapSyncSuccess(sr.State, peerID, sr.Config, sr.now())
 		return false
 	}
 	sr.logger().Info("auto_join", "adopted", map[string]any{

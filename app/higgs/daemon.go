@@ -174,6 +174,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		startFields["state_path"] = d.Sync.App.StatePath
 	}
 	d.logInfo("daemon", "started", startFields)
+	if d.Sync.State != nil {
+		updateAdmissionOnPending(d.Sync.State, d.Sync.now())
+	}
 	logAutoJoinPending(d.Log, d.Sync.State)
 
 	nextSync := d.Sync.now()
@@ -528,6 +531,20 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			OK:         true,
 			RoutesDump: routesDump,
 			Message:    "routes dump",
+		})
+	case "admission_status":
+		if d.Sync.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
+			return
+		}
+		d.Sync.State.RLock()
+		diagnosis := diagnoseAutoJoinAdmission(d.Sync.State, d.Sync.now())
+		d.Sync.State.RUnlock()
+		writeControlResponse(conn, controlResponse{
+			OK:        true,
+			PeerID:    d.Sync.Config.PeerID,
+			Admission: &diagnosis,
+			Message:   "admission status",
 		})
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))

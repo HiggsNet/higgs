@@ -444,6 +444,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 
 func (d *DaemonService) tryAdoptAutoJoinAfterSync(peerID, via string, now time.Time, changed *bool) {
 	adopted, err := tryAdoptAutoJoinDelegation(d.Sync.State, now)
+	recordAdoptionResult(d.Sync.State, adopted, err, now)
 	if err != nil {
 		d.logWarn("auto_join", "adopt_failed", map[string]any{
 			"peer_id": peerID,
@@ -454,6 +455,8 @@ func (d *DaemonService) tryAdoptAutoJoinAfterSync(peerID, via string, now time.T
 		return
 	}
 	if !adopted {
+		// Record bootstrap sync success for pending diagnostics.
+		recordBootstrapSyncSuccess(d.Sync.State, peerID, d.Sync.Config, now)
 		return
 	}
 	if changed != nil {

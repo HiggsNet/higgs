@@ -66,6 +66,7 @@ type controlResponse struct {
 	JoinBundle       *joinBundle                   `json:"join_bundle,omitempty"`
 	BirdInstances    map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
 	RoutesDump       *routesDumpResponse           `json:"routes_dump,omitempty"`
+	Admission        *admissionDiagnosis           `json:"admission,omitempty"`
 }
 
 func controlSocketPath(config *appConfig) string {
@@ -127,6 +128,15 @@ func birdStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 func routesDumpViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "routes_dump"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func admissionStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "admission_status"})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}

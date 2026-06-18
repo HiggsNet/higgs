@@ -411,6 +411,13 @@ func cmdDebug() *cli.Command {
 					return debugRoute(ctx, cmd)
 				},
 			},
+			{
+				Name:  "admission",
+				Usage: "Show auto-join admission diagnostics",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugAdmission()
+				},
+			},
 		},
 	}
 }

@@ -29,6 +29,7 @@ type stateFile struct {
 	IPsecReconcile    *ipsecReconcileState
 	RoutingReconcile  *routingReconcileState
 	BirdInstances     map[string]*BirdInstanceState
+	Admission         *admissionState `json:"admission,omitempty"`
 }
 
 // Lock acquires the write lock for this state file. All state mutations must
@@ -79,6 +80,33 @@ type stateMeta struct {
 	IPsecReconcile    *ipsecReconcileState          `json:"ipsec_reconcile,omitempty"`
 	RoutingReconcile  *routingReconcileState        `json:"routing_reconcile,omitempty"`
 	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
+	Admission         *admissionState               `json:"admission,omitempty"`
+}
+
+// admissionState tracks auto-join admission diagnostics. It is persisted so
+// that pending reasons survive daemon restarts and operators can inspect
+// why a node has not yet been adopted.
+type admissionState struct {
+	// Pending is true when the node is waiting for delegation adoption.
+	Pending bool `json:"pending,omitempty"`
+	// PendingSinceUnix is when the node first entered pending state.
+	PendingSinceUnix int64 `json:"pending_since_unix,omitempty"`
+	// AdoptedAtUnix is when the node was most recently adopted (0 = never).
+	AdoptedAtUnix int64 `json:"adopted_at_unix,omitempty"`
+	// LastAdoptionError records the most recent adoption failure.
+	LastAdoptionError string `json:"last_adoption_error,omitempty"`
+	// LastBootstrapSyncUnix tracks the most recent successful bootstrap peer
+	// sync round while pending (0 = never synced).
+	LastBootstrapSyncUnix int64 `json:"last_bootstrap_sync_unix,omitempty"`
+	// JoinRequestB64 is the base64-encoded join request that the parent zone
+	// admin needs to sign a delegation for.
+	JoinRequestB64 string `json:"join_request_b64,omitempty"`
+	// PendingReason is the structured diagnostic reason for the current
+	// pending state (e.g. missing_parent_zone, missing_delegation,
+	// delegation_key_mismatch, verify_chain_failed, no_bootstrap_sync).
+	PendingReason string `json:"pending_reason,omitempty"`
+	// PendingReasonDetail provides additional context for the pending reason.
+	PendingReasonDetail string `json:"pending_reason_detail,omitempty"`
 }
 
 type BirdInstanceState struct {
@@ -398,6 +426,7 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		IPsecReconcile:    meta.IPsecReconcile,
 		RoutingReconcile:  meta.RoutingReconcile,
 		BirdInstances:     meta.BirdInstances,
+		Admission:         meta.Admission,
 	}
 	if state.Network == nil || len(state.Network.Zones) == 0 {
 		if err := store.Close(); err != nil {
@@ -458,6 +487,7 @@ func saveStateAt(path string, state *stateFile) error {
 		IPsecReconcile:    state.IPsecReconcile,
 		RoutingReconcile:  state.RoutingReconcile,
 		BirdInstances:     state.BirdInstances,
+		Admission:         state.Admission,
 	}
 	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
 		return err

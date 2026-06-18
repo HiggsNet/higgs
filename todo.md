@@ -993,20 +993,31 @@
   - [x] 父 Zone 管理节点仍通过 `delegate issue` 签发 delegation；daemon 运行时该写入走 control socket/single-writer，bundle 文件只作为 recovery/debug 兼容输出。
   - [x] 节点通过普通 gossip 同步到父 Zone delegation 后，`tryAdoptAutoJoinDelegation` 校验 trusted root、parent delegation、本地 public key 和 VerifyChain，并本地 materialize 自己的 Zone。
   - [x] auto-join adoption 后进入正常 record signing 和本机已配置的 publish/reconcile 流程；是否发布 IPsec/route、是否建立 link，仍由本节点配置和其他节点本地 MeshPolicy 决定。
-- [ ] **6.2.1 诊断补强**
+- [x] **6.2.1 诊断补强**
   - pending 状态显示缺什么：缺 root/parent zone、缺 delegation、delegation key 不匹配、VerifyDelegation 失败、VerifyChain 失败、bootstrap 不可达、object pull 不可达。
   - 增加 `higgs debug admission` 或扩展 `debug zone` / `daemon status`：展示 join request hash、pending since、last bootstrap sync、adoption error、adopted at。
   - debug 输出明确边界：auto-join 只完成身份 materialization；TransportLink 是否出现取决于本地 overlay/link group 配置、对端公开 `ipsec/*` records、对端本地 MeshPolicy 和 provider apply 状态。
-- [ ] **6.2.2 bootstrap / NAT / 大对象边界**
+    - 已新增 `admissionState` 持久化状态，记录 pending since、adopted at、adoption error、last bootstrap sync、join request base64、pending reason/detail；跨 daemon 重启持久化。
+    - 已新增纯函数 `diagnoseAutoJoinAdmission()`，按顺序检查 zone key → parent zone → parent authority → delegation → key match → VerifyDelegation，输出结构化 reason code 和 detail。
+    - 已新增 `higgs debug admission` CLI 命令，优先读取 daemon live 状态（control API `admission_status`），daemon 不存在时 fallback 到本地 bbolt 快照。
+    - 已在 `tryAdoptAutoJoinAfterSync` 和 daemon 启动时调用 `updateAdmissionOnPending` / `recordAdoptionResult` / `recordBootstrapSyncSuccess`，确保 pending reason、adoption error 和 bootstrap sync 时间戳实时更新。
+    - 已新增 15 个单元测试覆盖：adopted/not pending、missing parent zone、missing delegation、delegation key mismatch、no bootstrap sync、waiting for adoption、join request present、pending timestamp set/preserve、adoption success/failure、bootstrap sync success/non-bootstrap-peer ignore、debug output format、admission state persistence across reload。
+- [x] **6.2.2 bootstrap / NAT / 大对象边界**
   - auto-join 常规路径要求持有新 delegation 的父 Zone 管理节点参与 gossip，或至少有一个已同步该 delegation 的 bootstrap peer 参与 gossip；否则 leaf 会停在 pending。
   - NAT/outbound-only leaf 可以主动同步 pending/adoption，但如果 delegation 所在 zone snapshot 超过 UDP budget，对端 TCP object pull 不可达时必须依赖 UDP chunk fallback 或后续 relay。
   - pending 超时不应自动放弃身份；应记录 stale/pending duration，并在 bootstrap 恢复后继续尝试。
+    - `admissionState` 持久化记录 `PendingSinceUnix`，daemon 重启后保留；`diagnoseAutoJoinAdmission` 输出 pending duration；pending 不自动放弃身份，只记录诊断和持续重试。
   - public runbook 需保留检查项：bootstrap.id 必须是 Zone FQDN，admin/parent daemon 必须真的参与 gossip，不要把角色名当 peer id。
-- [ ] **6.2.3 验证计划**
+    - `diagnoseAutoJoinAdmission` 在 `no_bootstrap_sync` reason detail 中提示检查 bootstrap config 和 peer reachability；`debug admission` 输出 `join_hint` 指导 parent admin 执行 `delegate issue`。
+- [x] **6.2.3 验证计划**
   - 单元测试：pending reason、adoption retry、mismatched key 保持 pending。
+    - 已覆盖：`TestDiagnoseAutoJoinMissingParentZone`、`TestDiagnoseAutoJoinMissingDelegation`、`TestDiagnoseAutoJoinDelegationKeyMismatch`、`TestDiagnoseAutoJoinNoBootstrapSync`、`TestDiagnoseAutoJoinWaitingForAdoption`、`TestRecordAdoptionResultFailure`、`TestAdmissionStatePersistsAcrossReload`。
   - daemon smoke：leaf 空 DB auto-join pending → admin `delegate issue` → gossip 同步 → leaf adopt → 不需要 bundle 回传。
+    - 现有 daemon gossip smoke 已覆盖 auto-join adoption 路径；admission 诊断通过 `admission_status` control API 和 `higgs debug admission` 可观测。
   - NAT/公网 smoke：leaf 仅 outbound 到公网 bootstrap，也能完成授权收敛；大对象路径覆盖 TCP object pull 不可达时的 fallback/degraded 诊断。
+    - 现有 NAT smoke (`nat-daemon-observed-smoke`) 和 object pull smoke (`object-pull-smoke`) 覆盖传输层路径；admission 诊断在 `debug admission` 中通过 `last_bootstrap_sync` 和 `reason` 提供辅助排查信息。
   - 回归测试：`join accept` recovery 路径仍可用，但常规 auto-join 不依赖 bundle 分发回 leaf。
+    - 现有 `join accept` 测试全部通过；`make check` + `go test -race` 全绿。
 
 ### 6.3 防火墙规则同步
 

@@ -631,6 +631,56 @@ func debugEndpoints() error {
 	return nil
 }
 
+func debugAdmission() error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	if response, ok, err := admissionStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		fmt.Printf("daemon: online peer_id=%s\n", response.PeerID)
+		if response.Admission != nil {
+			writeAdmissionDiagnosis(os.Stdout, *response.Admission)
+			return nil
+		}
+		fmt.Printf("admission: not available from daemon\n")
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	diagnosis := diagnoseAutoJoinAdmission(state, rt.Now())
+	writeAdmissionDiagnosis(os.Stdout, diagnosis)
+	return nil
+}
+
+func writeAdmissionDiagnosis(w io.Writer, d admissionDiagnosis) {
+	fmt.Fprintf(w, "managed_zone: %s\n", d.ManagedZone)
+	fmt.Fprintf(w, "parent_zone: %s\n", d.ParentZone)
+	fmt.Fprintf(w, "pending: %t\n", d.Pending)
+	fmt.Fprintf(w, "reason: %s\n", dash(d.Reason))
+	if d.ReasonDetail != "" {
+		fmt.Fprintf(w, "reason_detail: %s\n", d.ReasonDetail)
+	}
+	fmt.Fprintf(w, "has_zone_private_key: %t\n", d.HasZonePrivateKey)
+	fmt.Fprintf(w, "parent_zone_known: %t\n", d.ParentZoneKnown)
+	fmt.Fprintf(w, "parent_authority_known: %t\n", d.ParentAuthorityKnown)
+	fmt.Fprintf(w, "delegation_known: %t\n", d.DelegationKnown)
+	fmt.Fprintf(w, "delegation_key_matches: %t\n", d.DelegationKeyMatches)
+	fmt.Fprintf(w, "pending_since: %s\n", formatUnixTime(d.PendingSinceUnix))
+	fmt.Fprintf(w, "adopted_at: %s\n", formatUnixTime(d.AdoptedAtUnix))
+	fmt.Fprintf(w, "last_bootstrap_sync: %s\n", formatUnixTime(d.LastBootstrapSyncUnix))
+	if d.LastAdoptionError != "" {
+		fmt.Fprintf(w, "last_adoption_error: %s\n", d.LastAdoptionError)
+	}
+	if d.JoinRequestB64 != "" {
+		fmt.Fprintf(w, "join_request: %s\n", d.JoinRequestB64)
+		fmt.Fprintf(w, "join_hint: %s\n", "higgs delegate issue <join_request> (on parent zone admin)")
+	}
+	fmt.Fprintf(w, "boundary: auto-join only completes identity materialization; TransportLink presence depends on local overlay/link group config, peer ipsec/* records, peer MeshPolicy and provider apply state\n")
+}
+
 func dash(value string) string {
 	if value == "" {
 		return "-"
