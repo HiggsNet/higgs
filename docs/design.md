@@ -926,7 +926,7 @@ type PeerView struct {
 | XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
 | 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug babel/routes/route` 已落地；container root smoke、per-peer whitelist、策略路由、rotate cutover gate 后续补齐 |
-| 防火墙 | _未实现_（Phase 6） | `nftables` netlink | 现代 Linux 趋势 |
+| 防火墙 | _未实现_（Phase 6.3） | `nftables` netlink 优先，iptables 兜底 | 设计见 `docs/phase6-firewall-design.md`；主策略在 overlay netns，host 只做最小入口/NAT |
 
 ---
 
@@ -963,6 +963,7 @@ type PeerView struct {
 | StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 主体已完成：IPsec public record 公告、Address/Port/ContactPoint 模型、LinkPlanner + skip reason、LinkInstance reconcile（create/update/adopt/repair/teardown/noop）、dry-run/VICI SystemXFRMDriver provider、VICI IKE_SA/CHILD_SA bring-up（4.3）、daemon `Run` 循环 gossip 同步后真实 VICI/XFRM + tunnel ping（4.3）、daemon 级重启恢复及撤销闭环（4.3）、bounded break-before-make 端口轮换（4.4）、bidirectional takeover（4.5）。外部 `build/higgs daemon` 双 OS 进程 smoke 仍作为后续 hardening |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
 | BIRD 路由适配器 | `pkg/routing/bird/` | 🟨 第一版已落地：config generator、filter renderer、router-id derivation、birdc client、process manager、preflight；真实 BIRD bring-up 和 container smoke 待验证 |
+| Firewall 规则同步 | `pkg/firewall/`（建议） + `app/higgs/firewall_reconcile.go`（建议） | 🔲 设计见 `docs/phase6-firewall-design.md`；按 netns 生成 owner-bound filter/NAT plan，nftables 优先、iptables 兜底 |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
 | Delegation 撤销（tombstone） | `pkg/core/zone/` + `app/higgs/` | ✅ 已实现 |

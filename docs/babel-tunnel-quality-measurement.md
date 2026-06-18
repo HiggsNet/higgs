@@ -21,7 +21,7 @@ BIRD 的 Babel `type tunnel` 与 babeld 的 `type tunnel` **在 RTT 测量原理
 - ❌ 不测乱序、应用层 QoS、NAT/QoS 降级细节。
 - ❌ RTT 基于 Babel 控制面小包，可能与真实业务流质量有偏差。
 
-对 Higgs Phase 5 来说，Babel 的 RTT/loss 信号足够做 **路径排序、active/backup 选择、rotate cutover 健康判断**；若需要更细粒度的质量评估（如带宽探测、持续丢包率、RTT 分位数），仍需 Higgs 自有的链路健康探测层（见 `todo.md` 6.3 链路健康检测）。
+对 Higgs Phase 5 来说，Babel 的 RTT/loss 信号足够做 **路径排序、active/backup 选择、rotate cutover 健康判断**；若需要更细粒度的质量评估（如带宽探测、持续丢包率、RTT 分位数），仍需 Higgs 自有的链路健康探测层（见 `todo.md` 6.6 链路健康检测）。
 
 ## 2. 核心机制对比
 
@@ -159,7 +159,7 @@ interface hgsxxxx
 ### 5.3 建议
 
 - **Phase 5 主路径**：继续用 BIRD 的 `type tunnel` + `rtt cost` + `link quality yes`，通过 `birdc show babel neigh` 获取 RTT/metric，作为 cutover 与选路的默认信号。
-- **补充探测层**：在 `todo.md` 6.3 "链路健康检测" 中规划的周期性 ICMP/自定义 keepalive 仍然需要，用于：
+- **补充探测层**：在 `todo.md` 6.6 "链路健康检测" 中规划的周期性 ICMP/自定义 keepalive 仍然需要，用于：
   - 测量真实业务路径的 RTT 分位数与丢包率；
   - 检测 Babel 控制面小包无法暴露的 QoS 劣化；
   - 在 Babel metric 尚未收敛或 stuck 时提供独立的健康信号。

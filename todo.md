@@ -770,11 +770,11 @@
   - [x] 测试改造：`routing_reconcile_test.go`、`pkg/routing/bird/generator_test.go`、`debug_routing_test.go` 中 BIRD 实例查找、filter/table 名称断言改为 netns 维度。
   - [x] smoke：`make routing-dry-run-smoke` 覆盖多 overlay 共享同一 netns 场景。
 
-## Phase 6: IPAM / 准入 / 链路健康 / 防火墙（预计 4-5 周）
+## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（预计 4-5 周）
 
-**状态：** 6.0 事件驱动控制面重构已完成（默认启用 event loop + SyncSession FSM，`go test -race` 全绿）。本章从 6.1 起进入 IPAM 闭环、准入自动化、链路健康检测、动态 peer 管理、防火墙同步和撤销清理。
+**状态：** 6.0 事件驱动控制面重构已完成（默认启用 event loop + SyncSession FSM，`go test -race` 全绿）。本章从 6.1 起进入 IPAM 闭环、防火墙同步、动态 peer 管理、撤销清理和链路健康检测；auto-join 准入基线已完成，后续只保留诊断补强。
 
-**目标：** 在事件驱动 daemon 基座上，落地 IPAM/准入/防火墙/链路健康等控制面特性。先补齐 IPAM 语义（6.1），再基于清晰的 IPAM 模型实现准入后的自动建链（6.2），然后逐步补齐健康检测、动态 peer 管理、防火墙和撤销清理。
+**目标：** 在事件驱动 daemon 基座上，落地 IPAM/防火墙/链路健康等控制面特性。先补齐 IPAM 语义（6.1），再逐步补齐防火墙 apply 面、动态 peer 状态协调、撤销清理和链路健康检测。新节点是否建链仍由各节点本地 overlay/link group/MeshPolicy 配置决定，不由准入流程自动调整。
 
 ### 6.0 事件驱动控制面重构
 
@@ -984,40 +984,266 @@
   - [ ] smoke：多节点宣告同一 anycast 前缀，验证 Babel ECMP 和故障切换。
     - 留到 container root smoke（Phase 5 后续）。
 
-### 6.2 准入流程自动化
+### 6.2 Auto-join 准入基线与诊断
 
-- [ ] 新节点生成密钥对 → 向管理员申请 delegation
-- [ ] 管理员在父 Zone 创建 `nodeX.parent.` delegation
-- [ ] Gossip 全网传播后，新节点自动被所有节点识别并建立 IKEv2/IPsec TransportLink
+- [x] **6.2.0 当前 auto-join 基线（已完成）**
+  - [x] 空 DB 首次启动时，配置同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和 bootstrap peer，即可创建最小 bootstrap state，不再要求手工 `join accept <bundle> <key>`。
+  - [x] auto-join pending 节点不会发布 endpoint/IPsec/route 等本机 record；daemon 日志打印可提交给父 Zone 管理节点的 base64 `join_request`。
+  - [x] `higgs join request --from-config` 可从 `managed_zone` + `identity.key_path` 生成同等 join request，便于保存/提交。
+  - [x] 父 Zone 管理节点仍通过 `delegate issue` 签发 delegation；daemon 运行时该写入走 control socket/single-writer，bundle 文件只作为 recovery/debug 兼容输出。
+  - [x] 节点通过普通 gossip 同步到父 Zone delegation 后，`tryAdoptAutoJoinDelegation` 校验 trusted root、parent delegation、本地 public key 和 VerifyChain，并本地 materialize 自己的 Zone。
+  - [x] auto-join adoption 后进入正常 record signing 和本机已配置的 publish/reconcile 流程；是否发布 IPsec/route、是否建立 link，仍由本节点配置和其他节点本地 MeshPolicy 决定。
+- [ ] **6.2.1 诊断补强**
+  - pending 状态显示缺什么：缺 root/parent zone、缺 delegation、delegation key 不匹配、VerifyDelegation 失败、VerifyChain 失败、bootstrap 不可达、object pull 不可达。
+  - 增加 `higgs debug admission` 或扩展 `debug zone` / `daemon status`：展示 join request hash、pending since、last bootstrap sync、adoption error、adopted at。
+  - debug 输出明确边界：auto-join 只完成身份 materialization；TransportLink 是否出现取决于本地 overlay/link group 配置、对端公开 `ipsec/*` records、对端本地 MeshPolicy 和 provider apply 状态。
+- [ ] **6.2.2 bootstrap / NAT / 大对象边界**
+  - auto-join 常规路径要求持有新 delegation 的父 Zone 管理节点参与 gossip，或至少有一个已同步该 delegation 的 bootstrap peer 参与 gossip；否则 leaf 会停在 pending。
+  - NAT/outbound-only leaf 可以主动同步 pending/adoption，但如果 delegation 所在 zone snapshot 超过 UDP budget，对端 TCP object pull 不可达时必须依赖 UDP chunk fallback 或后续 relay。
+  - pending 超时不应自动放弃身份；应记录 stale/pending duration，并在 bootstrap 恢复后继续尝试。
+  - public runbook 需保留检查项：bootstrap.id 必须是 Zone FQDN，admin/parent daemon 必须真的参与 gossip，不要把角色名当 peer id。
+- [ ] **6.2.3 验证计划**
+  - 单元测试：pending reason、adoption retry、mismatched key 保持 pending。
+  - daemon smoke：leaf 空 DB auto-join pending → admin `delegate issue` → gossip 同步 → leaf adopt → 不需要 bundle 回传。
+  - NAT/公网 smoke：leaf 仅 outbound 到公网 bootstrap，也能完成授权收敛；大对象路径覆盖 TCP object pull 不可达时的 fallback/degraded 诊断。
+  - 回归测试：`join accept` recovery 路径仍可用，但常规 auto-join 不依赖 bundle 分发回 leaf。
 
-### 6.3 链路健康检测
+### 6.3 防火墙规则同步
 
-- [ ] 在 XFRM/TransportLink 隧道上周期性发送 ICMP/自定义 keepalive
-- [ ] 检测 RTT、丢包率
-- [ ] 链路异常时标记 down，从 BIRD interface pattern 中排除该接口或降低其优先级
+**设计文档：** `docs/phase6-firewall-design.md`
+
+- [ ] **6.3.1 策略边界与 owner 模型**
+  - 防火墙主策略按 `routing.instances[]` / netns 维度生成；默认在 overlay/data-plane netns 内过滤 XFRM、veth upstream、BIRD 学习路由对应的数据面流量。
+  - host netns 只处理必须落在 host 的入口能力：IKE/NAT-T 监听端口、端口 rotate 的 DNAT/redirect grace、必要的 outer UDP/TCP allow rules；不得默认接管 host 全局防火墙。
+  - 每个规则集都必须带 Higgs owner token / table-chain 命名前缀 / generation id；reconcile 只增删自己拥有的对象，避免覆盖管理员手写规则。
+  - 定义 dry-run diff：展示将创建/删除的 table、chain、set、rule、NAT redirect 和默认策略，供 `higgs debug` / 后续 apply 确认使用。
+- [ ] **6.3.2 配置模型与可扩展 hook**
+  - 新增 `firewall.instances[]` 或 netns 级 `firewall` 配置：`enabled`、`mode=managed|external|disabled`、`backend=auto|nft|iptables|none`、`default_policy=drop|accept`、`netns`、`priority`、`owner_prefix`、`allow_hooks`、`nat_hooks`。
+  - 预留 hook 层：管理员可在 Higgs 生成链之前/之后插入自定义 chain，或声明额外 allow/drop/nat 片段；Higgs 负责顺序、优先级和冲突检测，不把自定义规则内联进核心生成器。
+  - 外部托管模式下 Higgs 只生成 desired-state/dry-run，并可校验 owner chain 是否存在；不直接修改管理员负责的防火墙。
+- [ ] **6.3.3 overlay netns 数据面过滤**
+  - 从 `AuthorizedRouteSet.AllAssignments`、合法 route announcements、有效 peer/zone、当前 up/staged/draining link 计算允许通过 overlay 的 prefix set；不再沿用旧的 `TunnelAllowedIPs` 作为唯一来源。
+  - 默认 drop 未授权的 forwarded/input traffic，只允许：本节点合法 assigned prefixes、本地服务明确开放端口、BIRD/Babel 控制流量、健康检查/keepalive、已授权 peer/subtree 的 overlay prefix。
+  - 区分接口角色：XFRM tunnel interface、veth upstream、loopback、本机服务入口分别生成 chain；跨 veth 进入/离开主网络的流量必须走显式 policy。
+  - 支持 IPv4/IPv6 双栈、anycast/shared assignment、撤销后的 set entry 即时删除。
+- [ ] **6.3.4 节点转发能力与 BIRD 联动**
+  - 新增 zone/route 级转发意图 record 或配置字段（如 `routing/forwarding`）：节点可声明 `transit=true|false`、允许转发的 prefix/peer/subtree、可选质量/metric hint。
+  - BIRD export/import 生成器必须读取转发意图：非 transit 节点只宣告本节点 assigned/local prefixes，不替其他节点转发 learned routes；transit 节点才允许在 policy 范围内转发 Babel learned routes。
+  - 防火墙 forward chain 与 BIRD 策略使用同一份 forwarding policy：BIRD 不宣告的转发路径，防火墙也不得放行；BIRD 允许作为 transit 的路径，防火墙同步放行对应 prefix/interface 组合。
+  - 后续预留 gossip 控制信号：源节点可声明某些中继不要转发自己的路由，用于规避质量差、计费昂贵或不可信的链路；第一版先以静态 record/config 为准。
+- [ ] **6.3.5 host 端口与 NAT 最小侵入**
+  - 为 Phase 4.4/端口动态调整补 `redirect/DNAT grace`：old/current advertised IKE/NAT-T 端口在 grace 窗口内转发到当前 charon 监听端口，窗口结束后删除旧端口规则。
+  - host 规则只允许绑定到 Higgs 配置的 listen/advertise 端口、协议和本机地址；遇到已有非 Higgs owner 规则或端口冲突必须报错/降级，不静默覆盖。
+  - 明确 NAT-T/MOBIKE/StrongSwan 行为边界：防火墙只做入口端口兼容，不承担 SA 平滑切换语义；真实 SA 生命周期仍由 IPsec provider/VICI reconcile 管理。
+- [ ] **6.3.6 backend 兼容性：nftables 优先，iptables 兜底**
+  - backend `auto`：优先探测 nftables netlink 能力；不可用时检测 iptables/ip6tables，区分 legacy 与 nft shim；两者都不可用则进入 dry-run/disabled 并给出 preflight 错误。
+  - 抽象 `FirewallDriver`：`Plan()`、`Apply()`、`ListOwned()`、`DeleteStale()`、`Preflight()`；nft driver 第一优先，iptables driver 只覆盖第一版所需 filter/nat 能力。
+  - 避免混用同一 owner 的 nft 与 iptables backend；backend 切换必须先 dry-run 展示旧 backend 清理和新 backend 创建计划。
+  - preflight 输出内核/工具版本、netns 能力、CAP_NET_ADMIN、nft/iptables 可用性、是否存在冲突 owner chain。
+- [ ] **6.3.7 revoke / restart / rollback 语义**
+  - 节点或子树被撤销后，高优先级触发 firewall reconcile，立即删除对应 set entries、forward allow rules、rate-limit exceptions、host redirect grace rules。
+  - daemon 重启后先 `ListOwned()` 采纳仍匹配当前 state 的规则，再删除 stale generation；不得在无法确认 owner 时清理管理员规则。
+  - apply 失败时保持旧 generation 可用并报告 last error；部分成功必须可恢复，下一轮 reconcile 能继续收敛。
+- [ ] **6.3.8 验证与操作面**
+  - 单元测试覆盖 policy planner、owner/stale 计算、revocation diff、nft/iptables backend 选择、hook ordering、forwarding policy 与 BIRD policy 一致性。
+  - dry-run smoke：无 root 环境下生成 netns filter + host NAT plan，并验证撤销节点后 plan 会删除对应规则。
+  - root/container smoke：创建 overlay netns + veth + BIRD，验证默认 drop、合法 prefix 放行、非法 prefix/drop、revocation 后立即断流、port rotate redirect grace 生效。
+  - `higgs debug firewall`：展示 backend、netns/host owned objects、generation、last apply error、policy summary、pending diff。
 
 ### 6.4 动态 Peer 管理
 
-- [ ] 节点离线超时后，保留配置但标记 stale
-- [ ] 长期离线后自动清理 IKEv2/IPsec SA、XFRM interface 和路由
-- [ ] 节点信息变更（endpoint、key/cert rotate、端口候选变化）自动更新传输配置
-- [ ] 节点 Zone 被撤销后标记 revoked，高优先级触发传输层/路由层/防火墙 apply，不等待普通健康检查超时
+**目的：** 动态 Peer 管理不是自动准入、不是替节点管理员决定要和谁建链，也不是链路质量探测本身；它负责把“已通过信任链验证的 peer 状态变化”整理成稳定的本地运行态，并按优先级触发传输层、路由层、防火墙层 reconcile。这样 endpoint/端口/key/profile 变化、离线超时、撤销等事件不会散落在各个模块里各自处理。
 
-### 6.5 防火墙规则同步
+- [ ] **6.4.1 Peer 状态模型与输入来源**
+  - 输入来源只使用已验证或本地可信的数据：Zone/delegation/revocation、endpoint/ipsec/route records、本机 overlay/link group/MeshPolicy 配置、SyncPeers 最近同步结果、LinkInstances/SA/BIRD/firewall apply 观测。
+  - 定义本地派生状态：`eligible`（信任链和本地策略允许）、`discovered`（已有可用 endpoint/能力记录）、`connecting`、`active`、`stale`、`offline`、`policy_denied`、`config_error`、`revoked`。
+  - 明确区分控制面同步可达性与 overlay 数据面可达性：gossip 能同步不代表 IPsec/BIRD 已可用，IPsec 仍 up 也不代表 peer 的最新 control-plane state 正常。
+  - 该状态只影响本机 desired-state/reconcile；不写入 gossip active state，不替其他节点发布判断。
+- [ ] **6.4.2 stale / offline / cleanup 策略**
+  - 短期离线只标记 `stale`：保留已知 endpoint、desired link、BIRD/firewall 配置，并降低重试频率或展示告警，避免网络抖动导致反复拆建。
+  - 超过 `offline_after` 后进入 `offline`：停止主动新建连接或进入低频 backoff；是否保留已存在 SA/路由由本地 cleanup policy 决定。
+  - 超过 `cleanup_after` 后才清理长期无效的 IKEv2/IPsec SA、XFRM interface、BIRD neighbor/interface state、firewall 临时规则；清理必须只作用于 Higgs owner 对象。
+  - 阈值按全局和 link group 可配置：`stale_after`、`offline_after`、`cleanup_after`、是否允许 `keep_sa_while_stale`，默认保守不因短暂离线拆链。
+- [ ] **6.4.3 endpoint / key / profile / 端口变化处理**
+  - endpoint、observed path、advertised IKE/NAT-T 端口变化后，更新 TransportLink desired hash，并触发 IPsec provider reconcile；端口 rotate 与 6.3 host NAT grace 联动。
+  - peer transport public key、证书/身份材料、IPsec profile、link group 或 netns 变化视为需要 teardown/recreate 的硬变化；不得在旧 SA 上静默复用不匹配的身份。
+  - route announcement、IPAM assignment、forwarding intent 变化触发 BIRD policy 和 firewall forward policy 重新生成，但不自动改变本机 MeshPolicy。
+  - public key 作为 Zone 身份的一部分不可原地变更；如果 delegation key 变了，应按新节点/新 Zone 身份处理，旧身份走撤销或过期清理。
+- [ ] **6.4.4 reconcile fanout 与顺序**
+  - 以事件驱动为主：gossip apply / zone digest 变化、config reload、本机 endpoint/IPsec record republish、peer endpoint/port/profile/key 变化、revocation/tombstone、LinkInstance apply result、SA/BIRD/firewall observation 变化，都应标记对应 peer 或模块 dirty。
+  - daemon event loop 将 dirty peer/module 在短窗口内 coalesce 成一轮本地 reconcile：先计算 peer snapshot，再生成 IPsec desired links、routing/BIRD desired policy、firewall desired policy。
+  - 周期 timer 退为兜底机制：用于发现外部系统漂移、漏事件、长期 stale/offline cleanup、全量 audit；不再依赖 30s 轮询作为 endpoint/port/revocation 的主要响应路径。
+  - dirty scope 应尽量细化到 peer/group/netns/module；第一版可先全量重算 desired state，但必须保留 reason/changed peer，以便后续做 peer 级增量 diff。
+  - 传输层负责连接和 XFRM interface 生命周期；路由层只消费已允许的 interface/prefix policy；防火墙层使用同一份授权/转发策略放行或阻断数据面。
+  - 每轮 reconcile 记录 generation、reason、changed peer、planned actions 和 last error，避免 endpoint 抖动时多个模块重复抢写。
+  - 如果某层 apply 失败，不回滚其他非冲突层的安全收敛；下一轮以 persisted desired/actual snapshot 继续修复。
+- [ ] **6.4.5 revoked 高优先级路径**
+  - revocation 不是 `stale/offline` 的一种；一旦 Zone 或子树被撤销，立即标记 `revoked`，停止主动连接、清除 backoff 中的重连任务，并阻止旧 observed endpoint 重新进入 planner。
+  - 高优先级触发 6.5 撤销清理和 6.3 防火墙 apply：先从有效 peer/route/firewall allow set 中剔除，再终止 SA/删除接口/flush 路由。
+  - revoked 状态必须覆盖健康检查结果：即使 SA 仍 up 或 keepalive 仍通，也不得继续允许 overlay 访问。
+  - debug/dry-run 需要展示撤销来源、影响 peer/subtree、将删除的 LinkInstance/BIRD/firewall 对象。
+- [ ] **6.4.6 操作与诊断面**
+  - 增加 `higgs debug peers` 或扩展 `higgs debug links`：展示每个 peer 的状态、reason、last_seen、last_sync、last_endpoint_change、last_reconcile、desired/actual link 数、pending cleanup timer。
+  - 输出 MeshPolicy 决策原因：本地策略允许/拒绝、缺 endpoint、缺 ipsec record、profile 不匹配、netns 不可用、backend apply 失败。
+  - 对 stale/offline/revoked 使用不同严重级别，避免 operator 把临时离线误判为安全撤销。
+- [ ] **6.4.7 验证计划**
+  - 单元测试覆盖状态转换、stale/offline 阈值、endpoint/port 变化、profile/key 硬变化、policy_denied、revocation 覆盖 stale/offline。
+  - daemon smoke：peer endpoint/port/profile/key 变化后无需等待周期 timer，事件 coalesce 后立即更新 IPsec desired；revoked 后立即触发 IPsec/BIRD/firewall plan。
+  - fallback smoke：禁用或错过事件触发时，长周期 observe/audit timer 仍能发现 SA/BIRD/firewall 漂移并恢复；长期 offline 后只清理 Higgs owner 对象。
+  - 性能/规模测试：大量 peer 无变化时事件驱动路径不重复写大 snapshot；频繁 gossip apply 被 coalesce，避免每个 record 都触发完整 apply。
+  - dry-run 测试：展示某 peer 从 active→stale→offline→cleanup 或 active→revoked 时各层将执行的动作。
 
-- [ ] 基于已同步的 Zone 中所有合法节点的 TunnelAllowedIPs
-- [ ] 通过 `nftables` netlink 接口生成 accept 规则，默认 drop
-- [ ] 节点或子树被撤销后立即移除对应 allow rules，避免已撤销节点继续访问 overlay
+### 6.5 撤销后的传输与路由清理
 
-### 6.6 撤销后的传输与路由清理
+**目的：** 撤销清理是 `revocation/tombstone` 进入本机 verified state 后的安全收敛闭环。6.4 负责把 peer 标记为 `revoked` 并发出高优先级 dirty event；6.5 负责把这个状态落实到本机所有 owner-managed 数据面对象，确保 revoked Zone/子树不会因为旧 SA、旧路由、旧防火墙 set、旧 peer cache 或 backoff retry 继续访问 overlay。
 
-- [ ] IKEv2/StrongSwan：删除被撤销 peer 的 connection/child SA 配置，主动 terminate 已建立 SA，移除对应 secret/cert/key reference
-- [ ] WireGuard（可选驱动）：删除被撤销 peer 的 public key、endpoint、AllowedIPs、persistent keepalive，并撤销相关 tunnel address
-- [ ] BIRD：移除被撤销 peer/interface 的邻居关系、import filter whitelist、已学习路由，必要时触发 route flush
-- [ ] 防火墙：移除该 peer/subtree 的 nftables accept rules、set entries、rate-limit exceptions
-- [ ] IPAM/route authorization：被撤销 Zone 及其子树发布的 IP assignment、route announcement 立即从有效配置中剔除；历史记录仅用于审计
-- [ ] 增加 apply dry-run 输出：撤销某 Zone 会删除哪些 IKEv2/WG/Babel/firewall/IPAM 对象，便于管理员确认影响范围
-- [ ] 增加集成测试：撤销节点后，控制平面状态先收敛，随后本机 IKEv2/WG/Babel/firewall 配置全部清理完成
+- [ ] **6.5.1 撤销影响范围计算**
+  - 从 `NetworkState.IsZoneRevoked(zone, now)` 派生 revoked subtree：包括被撤销 Zone、本机已知 descendant Zone、与这些 Zone 关联的 LinkInstance、BIRD interface/neighbor、authorized routes、firewall allow entries、gossip endpoint/observed path。
+  - 输出统一 `RevocationImpact` / dry-run plan：按 layer 分组列出将删除、保留、已不存在、无法确认 owner 的对象。
+  - 只把 verified revocation/tombstone 作为安全撤销来源；普通 stale/offline、sync 失败、健康检查失败不得走 revocation cleanup 路径。
+  - 历史 records/delegations/revocations 保留用于审计；active planner、route authorization、endpoint discovery、firewall planner 不再消费 revoked subtree 的 active records。
+- [ ] **6.5.2 IPsec / XFRM 清理**
+  - 复用现有 `PlanTransportLinks` revoked skip 与 `ReconcileLinkInstances(... Revoked ...)`：撤销 peer 即使仍有 desired spec 或 backoff，也必须生成 owner-guarded teardown，阻止 reconnect/rekey/repair 重新拉起。
+  - StrongSwan/VICI teardown 顺序固定：terminate IKE_SA/CHILD_SA → unload connection → unload private key/secret reference → 删除 Higgs-owned XFRM interface。
+  - 同时清理 staged/rotate connection：如果撤销发生在 port rotate / staged SA / dual-running retention 期间，old/current/staged generation 都必须终止。
+  - teardown 只允许作用于 `LinkInstance.Owner` 校验通过的 Higgs-owned connection/interface；无法确认 owner 时进入 warning/manual-required，不删除管理员对象。
+  - 成功后删除本地 `LinkInstance`；失败时保留 `removing/error` 状态、last error 和 backoff，但 revoked block 必须继续阻止新建。
+- [ ] **6.5.3 BIRD / routing 清理**
+  - `BuildAuthorizedRouteSet` 已剔除 revoked Zone/subtree 的 assignment 和 route announcement；routing reconcile 必须在 revocation dirty event 后立即重算，而不是等待普通周期。
+  - BIRD config generator 不再包含 revoked peer/interface 的 import/export whitelist、authorized prefix、static route、kernel export entry。
+  - 对已学习路由，第一版优先通过 `birdc configure` 让 filter/interface 变化自然 flush；如发现 BIRD 保留 stale route，再增加显式 `birdc disable/enable protocol`、`flush routes` 或重启该 managed instance 的策略。
+  - veth upstream 相关路由必须同步收敛：revoked subtree 的 learned routes 不得继续导出到 host/main network。
+- [ ] **6.5.4 防火墙清理**
+  - 高优先级触发 6.3 firewall reconcile：删除 revoked peer/subtree 的 prefix set entry、interface allow rule、transit allow rule、rate-limit exception、local service source exception。
+  - host 侧也要清理与 revoked peer 专属的 redirect/DNAT grace 或 pinhole；普通 IKE/NAT-T 全局 listen allow 不属于 peer 专属对象，不随单 peer revoke 删除。
+  - firewall apply 必须先从 allow set 中剔除 revoked prefix/peer，再执行可能较慢的 IPsec/BIRD teardown，避免旧 SA 尚未终止时继续通行。
+  - apply 失败时保持默认安全方向：不能确认已放行的 revoked entry 应显示为 critical，并在下一轮 reconcile 重试。
+- [ ] **6.5.5 Gossip / peer cache 清理**
+  - revoked Zone/subtree 不再进入 `addVerifiedZonePeers()` / endpoint discovery / object pull candidate；已存在的 `SyncPeers` discovered/observed address、backoff、recent-success entry 应清空或标记 revoked。
+  - 不删除 bootstrap 配置本身，但运行时必须拒绝把 revoked peer 作为可同步对象；如果配置仍指向 revoked peer，debug 输出 `configured_but_revoked`。
+  - 收到 revoked peer 发来的新 ANNOUNCE/FETCH/OBJECT_CHUNK 时继续按现有验证拒绝，并避免反复 object pull 形成噪音。
+- [ ] **6.5.6 apply 顺序与失败恢复**
+  - 推荐安全顺序：先更新 active derived state / peer status → firewall deny-first apply → routing/BIRD policy apply → IPsec/XFRM teardown → gossip peer cache cleanup → save debug snapshot。
+  - 失败恢复必须幂等：daemon 重启后重新读取 LinkInstances、BIRD/firewall owned objects、SA observations，继续清理仍属于 Higgs owner 且命中 revoked subtree 的对象。
+  - 部分成功不得回滚安全删除；例如 firewall 已删除 allow rule、IPsec teardown 失败时，不应恢复 firewall allow。
+  - 对每个 layer 记录 `pending/removed/not_found/owner_conflict/error`，便于 operator 判断是否需要手工介入。
+- [ ] **6.5.7 dry-run / debug / observer**
+  - 增加 `higgs debug revoke-impact <zone>` 或扩展 `debug zone`：展示 revoked subtree、撤销来源、影响 LinkInstance/BIRD/firewall/IPAM/endpoint 对象、owner 校验结果、计划动作。
+  - `higgs debug links/routes/firewall` 需要把 revoked cleanup reason 打出来，而不是只显示普通 `no longer desired`。
+  - Observer 只读 API 展示 revoked 状态、last cleanup status、last error，不提供撤销/恢复写操作。
+- [ ] **6.5.8 验证计划**
+  - 单元测试：revoked subtree impact 计算、owner 校验、staged rotate 撤销、firewall deny-first plan、configured bootstrap peer 被 revoked 的诊断。
+  - daemon smoke：gossip 收到 revocation 后，不等待周期 timer，立即触发 firewall/routing/IPsec dirty flush；revoked peer 的 desired link 变为 skipped，LinkInstance 被 teardown，BIRD config/filter 删除对应 route，firewall plan 删除 allow entry。
+  - root/container smoke：真实 StrongSwan/XFRM + BIRD + firewall 场景下撤销 peer 后，SA/interface 消失、BIRD route 收敛、overlay ping 失败、revoked prefix 不再从 veth upstream 转发。
+  - restart recovery：在 IPsec 或 firewall cleanup 半成功后重启 daemon，下一轮 reconcile 能继续清理 owned stale 对象，不误删非 Higgs owner 规则/接口。
+
+### 6.6 链路健康检测
+
+**目的：** 链路健康检测是对 BIRD/Babel RTT metric 的补充，不替代 Babel 选路，也不写入 gossip active state。它在本机对每条 TransportLink/XFRM interface 做低频、可限速的主动探测，产出本地健康状态、route cutover gate、告警指标和长期质量样本。健康异常只能影响本机 reconcile/metric/告警，不代表 peer 身份失效；revoked 仍由 6.4/6.5 的安全路径处理。
+
+- [ ] **6.6.1 探测对象与数据源**
+  - 探测对象以 `LinkInstance` 为主键：`instance_id`、peer zone、overlay/link group、netns、XFRM interface、local/peer tunnel address、generation、role。
+  - 只探测当前本机策略允许且未 revoked 的 link；`connecting`、`up`、`dual_running`、`staged` 可探测，`policy_denied/revoked/removing` 不探测。
+  - 同时采集被动数据：VICI/ListSAs established 状态、BIRD Babel neighbor RTT/metric、BIRD route availability、最近 IPsec apply error。
+  - 主动探测和 BIRD metric 要分层展示：Babel RTT 是控制面小包质量，Higgs probe 用于业务路径 RTT/loss/jitter 统计和独立 stuck 检测。
+- [ ] **6.6.2 主动探测机制**
+  - 第一版支持 ICMP echo 到 peer tunnel address；在无 CAP_NET_RAW 或 ICMP 被策略禁用时，退化为 UDP keepalive probe（Higgs 自定义小包，固定 magic/version/instance_id/nonce/timestamp）。
+  - probe 必须在 overlay/data-plane netns 内发出，并绑定对应 XFRM interface 或源 tunnel address，避免误测 underlay 或 host route。
+  - 每条 link 独立调度：`interval`、`timeout`、`burst`、`loss_window`、`jitter`、`max_concurrent_probes` 可配置；默认低频，避免健康探测本身制造拥塞。
+  - 双向不强制对称：本机只评价“本机到 peer”的可用性；如未来需要对端视角，可增加低频 signed/runtime health hint，但第一版不进入 gossip。
+- [ ] **6.6.3 健康状态机与阈值**
+  - 为每条 link 派生本地状态：`unknown`、`healthy`、`degraded`、`down`、`probe_error`、`suppressed`。
+  - 统计 rolling window：sent/received/lost、loss ratio、last RTT、EWMA RTT、min/max、p50/p95/p99、jitter、consecutive failures、last success/error。
+  - 状态转换采用迟滞：连续失败或窗口丢包超过阈值才降级；恢复需要连续成功或一段稳定窗口，避免抖动导致反复路由切换。
+  - 区分失败原因：probe timeout、permission denied、netns/interface missing、peer address missing、firewall denied、BIRD neighbor missing、SA missing。
+- [ ] **6.6.4 与 IPsec rotate / BIRD / 防火墙联动**
+  - rotate/staged link：新 generation 必须达到 `healthy` 或至少 `degraded-but-better-than-old`，并且 BIRD neighbor/route 收敛后，才允许向 IPsec reconcile 提供 `RotateCutoverReady=true`。
+  - 普通 link degraded/down 不直接撤销 peer，也不直接删除 LinkInstance；先调高 BIRD metric、标记 route preference 降级，必要时触发 repair/reconnect。
+  - BIRD 联动优先通过 metric/filter/config reload 表达：降低 degraded link 优先级，down link 可从 interface pattern 中排除或生成禁用接口段；具体方式以 BIRD 能否稳定热更新为准。
+  - 防火墙默认不因健康 down 删除授权 allow rule；只在需要隔离异常 link 或避免黑洞转发时，可配置为按 link state 收紧 forward allow。
+- [ ] **6.6.5 事件驱动与调度边界**
+  - link create/update/adopt、SA up/down、BIRD neighbor change、firewall apply、config reload、revocation cleanup 都应更新 probe scheduler。
+  - health result 进入 daemon event loop，标记 routing/IPsec dirty，但必须 coalesce，避免每个 probe sample 都触发完整 reconcile。
+  - 长期无变化时只按 probe interval 采样和写 metrics，不重复写大 debug snapshot；状态变化或阈值 crossing 才落盘到 `stateFile`。
+- [ ] **6.6.6 测量结果与轻量时序库**
+  - 定义 metrics schema，保持低 cardinality：`higgs_link_probe_rtt_seconds`、`higgs_link_probe_loss_ratio`、`higgs_link_probe_jitter_seconds`、`higgs_link_health_state`、`higgs_link_babel_rtt_seconds`、`higgs_link_babel_metric`、`higgs_link_probe_errors_total`。
+  - 标签限制为稳定维度：`local_zone`、`peer_zone`、`overlay`、`instance_id`、`netns`、`generation`、`probe_type`、`reason`；避免把 endpoint IP、nonce、error string 放进 label。
+  - 第一版提供 Prometheus/OpenMetrics pull endpoint，复用 6.7 observer 或独立 localhost `/metrics`；同时预留 remote write sink，用于主动写入中心/每节点 TSDB。
+  - TSDB 选型：默认推荐 **VictoriaMetrics single-node** 作为轻量外部时序库，可中心部署，也可每节点部署；原因是单 binary/容器部署、支持 Prometheus scrape/remote write/PromQL-compatible query、资源占用适合中小规模。Prometheus server 可作为兼容方案，但更偏 pull + 本地 TSDB/告警；InfluxDB/TimescaleDB 暂不作为默认主线。
+  - 本地离线缓冲只做 bounded spool，不做长期 TSDB：可用 SQLite WAL 存最近 N 条 samples / N 小时，remote sink 恢复后批量 flush；spool 满时按时间丢弃旧样本并计数。
+  - 如果配置的是每节点本地 TSDB，Observer 可以把它作为只读 historical datasource：按 link/peer/time range 查询 RTT/loss/jitter/Babel metric；如果只有 SQLite spool，则只展示 spool 保留窗口内的短历史。
+  - 配置示例预留：`health.metrics.enabled`、`listen_addr`、`remote_write.url`、`remote_write.queue_capacity`、`local_spool.path/max_size/max_age`、`query_datasource.url/type=prometheus|victoriametrics|sqlite_spool`、`labels`。
+- [ ] **6.6.7 操作与诊断面**
+  - `higgs debug health`：展示每条 link 的 active/staged 状态、probe 状态、RTT/loss/jitter、BIRD RTT/metric、最近错误、下一次探测时间、是否影响 route cutover。
+  - `higgs debug links` 增加 health summary，但避免输出大量历史样本；历史趋势交给 TSDB/Grafana。
+  - Observer 只读页面展示当前健康状态、最近窗口和本地 datasource 可查询到的历史趋势；长时间/跨节点图表仍推荐接 Grafana，不把 Higgs observer 做成完整监控系统。
+- [ ] **6.6.8 验证计划**
+  - 单元测试：probe scheduler、rolling window、状态迟滞、low-cardinality metric labels、remote write queue/spool backpressure。
+  - netns fake/集成测试：在指定 netns/interface/source address 发 probe，权限不足时降级或输出明确 `probe_error`。
+  - root/container smoke：两节点 XFRM+BIRD 链路上采集 ICMP/UDP probe、BIRD RTT/metric，注入丢包/延迟后状态从 healthy→degraded/down，并调高 BIRD metric或阻止 rotate cutover。
+  - metrics smoke：`/metrics` 暴露当前样本；remote write/VictoriaMetrics 可选 smoke 验证写入和 query；TSDB 不可用时本地 spool 生效且不阻塞主事件循环。
+
+### 6.7 Web 只读状态控制台 / Observer
+
+**设计文档：** `docs/web-status-dashboard-design.md`
+
+**定位判断：**
+- 适合纳入当前路线，但必须保持为**只读观察面**：第一版不提供 record put、delegate、reload、shutdown、rotate、force sync 等写操作，避免绕开 daemon single-writer/control socket 边界。
+- 默认关闭、默认只监听 `127.0.0.1`；远程访问先依赖 SSH tunnel / 反向代理，不在第一版自建公网认证面。
+- 先实现 daemon live snapshot；离线 DB viewer、Web 控制操作、多节点集中视图放到后续阶段。
+- BIRD 深度视图分层处理：第一版只展示当前 `stateFile.BirdInstances` / `bird_status` 可得字段；`birdc show protocols/routes/neighbors` 解析和控制面路由 vs 数据面路由交叉视图，等真实 BIRD 观测补齐后再做。
+
+- [ ] **6.7.1 配置与启动边界**
+  - [ ] 在 `appConfig` 中新增 `observer` 配置段：`enabled`、`bind_addr`、`port`、`ui_path`、可选 `event_buffer_seconds`。
+  - [ ] `config.example.yaml` 增加默认关闭示例；配置解析保持 `KnownFields`，非法监听地址/端口给出明确错误。
+  - [ ] `DaemonService.Run` 在 daemon 上下文中可选启动 observer HTTP server，并随 daemon context 退出优雅关闭。
+  - [ ] observer 不持有写路径；所有 snapshot 读取必须通过 `stateFile.RLock()` 或现有只读 helper，复杂派生结果先拷贝后释放锁。
+  - [ ] 单元测试覆盖默认关闭、localhost 默认值、非法配置、daemon context cancel 后 HTTP server 退出。
+
+- [ ] **6.7.2 只读 REST Snapshot API**
+  - [ ] 定义统一响应包装 `{ok,error,data}`，并保证错误不泄露私钥、VICI secret、完整本地 key material。
+  - [ ] 实现 `GET /api/v1/status`：peer id、managed zone、known zones/peers、link/desired link 数、last link/routing error、最近 sync/reconcile 时间。
+  - [ ] 实现 `GET /api/v1/zones`、`/api/v1/zones/{zone}`：Zone 树摘要、record/delegation/revocation 计数、revoked 状态、root hash；详情页提供 records/delegations/revocations 的结构化只读 JSON。
+  - [ ] 实现 `GET /api/v1/peers`、`/api/v1/peers/{peer_id}`：复用 `SyncPeers`、bootstrap/discovered endpoint、observed path、backoff、datagram/object-pull 统计。
+  - [ ] 实现 `GET /api/v1/links`、`/api/v1/links/{link_id}`：复用 `LinkInstances`、desired link snapshot、IPsec reconcile action/skip reason、SA observation、rotate/takeover 字段。
+  - [ ] 实现 `GET /api/v1/health`、`/api/v1/health/{link_id}`：返回当前 health window、probe 状态、BIRD RTT/metric、cutover gate、最近错误。
+  - [ ] 实现 `GET /api/v1/health/{link_id}/series?metric=...&range=...&step=...`：只读查询本地 TSDB 或 SQLite spool；未配置 datasource 时返回明确 `not_configured`，不得阻塞 live snapshot。
+  - [ ] 实现 `GET /api/v1/routes`：复用 `routing.BuildAuthorizedRouteSet(state.Network, now)`，返回 authorized prefixes、assignments/all assignments、pools、errors、本地 export set。
+  - [ ] 实现 `GET /api/v1/bird`：复用 `stateFile.BirdInstances` 和 `last_routing_error`，仅承诺 managed BIRD 实例状态，不提前承诺 learned routes/neighbors。
+  - [ ] API 单测覆盖空状态、revoked zone、IPsec connecting/up/rotate、health datasource missing、TSDB query timeout、route authorization error、BIRD error、敏感字段过滤。
+
+- [ ] **6.7.3 静态 UI MVP**
+  - [ ] 使用 Go `embed` 内嵌 `app/higgs/web/` 静态资源；第一版优先原生 HTML/CSS/JS，不引入 Node.js 构建链。
+  - [ ] 页面布局采用左侧导航 + 主内容区：Overview、Gossip、Zones、Overlay、Health、Route、BIRD。
+  - [ ] Overview 展示本节点身份、Zone/Peer/Link/Route/BIRD 摘要、最近错误和刷新状态。
+  - [ ] Gossip/Zones/Overlay/Health/Route/BIRD 页面先做表格、过滤、详情抽屉、原始 JSON 查看；按钮仅限刷新、复制 JSON、过滤，不提供写操作。
+  - [ ] Health 页面展示每条 link 的当前状态、RTT/loss/jitter/Babel metric、最近错误、cutover gate；若本地 datasource 可用，展示短时间 sparkline/折线图。
+  - [ ] UI 对 API failure、daemon restarting、empty state、SSE 不可用等状态有明确展示。
+  - [ ] 前端静态测试可先用 `httptest` + golden HTML/API contract；如引入浏览器测试，再补 Playwright smoke。
+
+- [ ] **6.7.4 SSE 事件与轮询降级**
+  - [ ] 实现 `GET /api/v1/events`，基于 `http.Flusher` 输出 `text/event-stream`。
+  - [ ] SSE hub 只推轻量通知：`state_changed`、`peer_updated`、`link_updated`、`health_updated`、`route_changed`、`bird_updated`、`connected`；详情由前端重新拉取 REST snapshot。
+  - [ ] daemon 在 state digest 变化、sync peer 更新、IPsec reconcile 完成、routing/BIRD reconcile 完成后发送通知；事件发送不得阻塞主事件循环。
+  - [ ] 限制 subscriber 数量和单客户端队列长度；慢客户端丢事件并让前端轮询补齐。
+  - [ ] 前端 EventSource 断开后自动切到轮询，并在恢复后回到 live 状态。
+  - [ ] 单元测试覆盖连接、断开、慢消费者、daemon shutdown、事件不阻塞 reconcile。
+
+- [ ] **6.7.5 Overlay/Zone 拓扑与诊断增强**
+  - [ ] Overlay 页面基于 `/api/v1/links` 生成本节点与 peers 的链路图，节点为 peer zone，边为 TransportLink，颜色区分 `pending/connecting/up/down/revoked/error`，并叠加 health summary。
+  - [ ] Health 页面可从本地 VictoriaMetrics/Prometheus-compatible datasource 或 SQLite spool 拉取测量序列；跨节点集中视图由外部 TSDB/Grafana 负责，Observer 只展示本节点配置的数据源。
+  - [ ] Zone 页面增加 delegation/revocation 树形视图，revoked 子树必须醒目标识且不被误显示为健康。
+  - [ ] Route 页面先展示授权前缀、IPAM assignment/pool、route authorization errors；前缀树/路径分析作为增强项。
+  - [ ] BIRD 页面在真实 `birdc` protocols/routes/neighbors 解析落地前，只显示实例级状态、router-id、netns、table、socket、last error。
+  - [ ] 增加 operator 诊断字段：每个页面都能复制对应 REST JSON 和推荐 CLI 对照命令（例如 `higgs debug links`、`higgs debug babel`、`higgs debug routes`）。
+
+- [ ] **6.7.6 安全、验证与文档**
+  - [ ] 明确第一版 observer 只读；HTTP handler 不注册任何 POST/PUT/PATCH/DELETE 写接口。
+  - [ ] 默认监听 localhost，若配置 `0.0.0.0` 或非 loopback 地址，启动日志必须提示需要外部访问控制。
+  - [ ] 增加 `make observer-smoke`：启动测试 daemon/httptest server，验证主要 API JSON、静态 UI 可访问、默认关闭不监听端口。
+  - [ ] `make check` 覆盖 observer 单测；如后续引入前端依赖，需把无 Node.js 环境的验证路径保留。
+  - [ ] 更新 `README.md` / `docs/testing.md`：如何启用 observer、如何通过 SSH tunnel 访问、哪些字段来自 live daemon、哪些 BIRD 深度字段仍未实现。
+  - [ ] 更新 `docs/web-status-dashboard-design.md` 状态，从设计草案标注为“MVP 已排入 todo”，并同步第一版边界：只读、本地监听、无认证、无控制操作。
 
 ## Phase 7: 健壮性与高级特性（预计 4-6 周）
 
@@ -1078,7 +1304,16 @@
   - 增加 backpressure 和去重：按 digest/record version 去重，限制每 peer 传播频率，避免 relay 成为广播放大器
   - 增加 smoke：普通节点只配置 relay 作为 bootstrap，也能通过 relay 获取其他节点 signed endpoint 和 zone data，随后建立直接 gossip 连接
 
-- [ ] **7.9 Daemon / 本地控制接口生产化**
+- [ ] **7.9 可选 Admission 管理面**
+  - 目标：在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交；不进入 Phase 6 主线，默认不实现自动审批。
+  - 第一版 admission 仍不引入新的公网 request 协议，也不让 leaf 自动把 join request 写入 gossip active state；常规传输继续走 daemon 日志、`higgs join request --from-config` 输出文件、SSH/scp、工单或本地 stdin。
+  - 本地 pending request inbox：支持从文件/stdin/control API 导入多个 join request，按 `zone`、public key fingerprint、request hash 去重，并记录 rejected/expired request。
+  - 审核命令候选：`higgs join pending`、`higgs join approve <request-id>`、`higgs join reject <request-id>`；approve 后调用现有 `delegate issue` 写入 delegation。
+  - admission policy 仅覆盖父 Zone 有权签发/写入的对象：允许的 child zone glob、默认 delegation capabilities、是否允许 auto-approve、max pending/max approved、可选初始 IPAM assignment、node role/tag record、route policy hint、非 transit forwarding intent。
+  - 不在 admission policy 中配置本机 MeshPolicy / link group / connect-deny override；这些是每个节点的本地策略，只能由该节点本地配置或后续专门的本地控制面调整。
+  - 如确需网络化提交，可另设受限 admission relay/control endpoint：必须 rate limit、只进本地 pending inbox、不写 active state、不参与普通 gossip relay，并默认关闭。
+
+- [ ] **7.10 Daemon / 本地控制接口生产化**
   - [ ] 在 Phase 3 最小 daemon 基础上完善运行形态：`higgs daemon` 常驻负责 gossip 同步、active state 更新、IKEv2/WG/Babel/firewall apply
   - [ ] CLI 默认作为 daemon client，通过本地控制接口查询状态或提交操作；直接写 DB 模式仅保留为 debug/recovery
   - [ ] 完善 Unix domain socket 控制接口，默认仅本机 root/admin 用户可访问
@@ -1090,7 +1325,7 @@
   - [ ] daemon 生命周期：启动、优雅停止、reload、状态持久化、崩溃恢复
   - [ ] systemd service 示例和 socket 路径约定，如 `/run/higgs/higgs.sock`
 
-- [ ] **7.10 运维与可观测性**
+- [ ] **7.11 运维与可观测性**
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`

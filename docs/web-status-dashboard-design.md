@@ -37,6 +37,7 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 | **Gossip / Zone DB** | `stateFile.Network` (`*zone.NetworkState`) | `higgs debug zone`、CLI `zone show`、control `routes_dump` | 高：Zone 树、Record、Delegation、Revocation 均可导出 |
 | **Peer 同步状态** | `stateFile.SyncPeers` (`map[string]syncPeerState`) | `higgs sync status --verbose`、`higgs debug peer` | 高：同步时间、backoff、observed path、datagram/object pull 统计均已结构化 |
 | **Overlay / IPsec** | `stateFile.LinkInstances`、`IPsecReconcile` | `higgs debug links` | 高：desired/actual SA、rotate/takeover、reconcile actions 均已结构化 |
+| **链路健康** | `HealthState`（规划）+ 本地 TSDB / SQLite spool（规划） | `higgs debug health`（规划）、6.6 metrics datasource | 中：当前状态可来自 daemon，历史趋势可从本地 datasource 只读查询 |
 | **Route 授权** | `routing.AuthorizedRouteSet` | control `routes_dump`、`higgs debug routes/route` | 高：可导出为 JSON |
 | **BIRD 路由** | `stateFile.BirdInstances` | control `bird_status`、`higgs debug babel` | 中：当前仅有 BIRD 进程状态，未来需补充 `birdc show route/protocols/neighbors` 解析 |
 | **配置** | `appConfig` / `syncConfigFile` | 配置文件、CLI | 中：用于呈现本地 managed zone、listen addr、overlay 分组等 |
@@ -63,7 +64,7 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 
 ## 3. 设计原则
 
-1. **分层清晰**：页面按照 Gossip（数据/信任）、Overlay（链路/IPsec）、Route（路由/BIRD）三层组织，每层内部再细分列表、详情、拓扑。
+1. **分层清晰**：页面按照 Gossip（数据/信任）、Overlay（链路/IPsec）、Health（链路质量）、Route（路由/BIRD）组织，每层内部再细分列表、详情、拓扑。
 2. **状态优先于控制**：第一版所有按钮/操作均为「查看详情」、「复制 JSON」、「刷新」、「过滤」，不触发任何状态变更。
 3. **实时但不强制**：默认通过 SSE 推送增量事件；页面首次加载和手动刷新时通过 REST 拉取全量快照；SSE 断开后可自动降级为轮询。
 4. **本地优先、远程可选**：HTTP server 默认监听 localhost，管理员可通过反向代理或 SSH tunnel 远程访问；未来可补充 TLS / mTLS / 静态 token。
@@ -78,8 +79,8 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Browser / Web Dashboard                       │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-│  │ Overview │ │ Gossip   │ │ Overlay  │ │ Route    │ │ Events   │  │
-│  │ Dashboard│ │ View     │ │ View     │ │ View     │ │ Timeline │  │
+│  │ Overview │ │ Gossip   │ │ Overlay  │ │ Health   │ │ Route    │  │
+│  │ Dashboard│ │ View     │ │ View     │ │ View     │ │ View     │  │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘  │
 └───────┼────────────┼────────────┼────────────┼────────────┼────────┘
         │            │            │            │            │
@@ -98,6 +99,10 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 │  │              Daemon Control Socket / State Lock               │   │
 │  │   (复用 d.Sync.State.RLock/RUnlock, control socket, DB load)  │   │
 │  └───────────────────────────────────────────────────────────────┘   │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │ Optional Health Metrics Query                                 │   │
+│  │ local VictoriaMetrics/Prometheus-compatible API or SQLite spool│   │
+│  └───────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -106,17 +111,19 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 | 组件 | 职责 | 备注 |
 |------|------|------|
 | **HTTP Observer** | 可选子服务，监听 `127.0.0.1:<port>`（默认 8080） | 通过 `config.yaml` 中的 `observer` 段启用；未配置则不启动 |
-| **REST Handlers** | 提供 `/api/v1/status`、`/api/v1/zones`、`/api/v1/peers`、`/api/v1/links`、`/api/v1/routes`、`/api/v1/events` 等端点 | 返回 JSON，字段与内部结构保持一致 |
-| **SSE Hub** | 维护客户端长连接，将 daemon 内部事件（state changed、sync、reconcile）转发为 SSE | 事件类型：`state_changed`、`peer_updated`、`link_updated`、`route_changed` |
+| **REST Handlers** | 提供 `/api/v1/status`、`/api/v1/zones`、`/api/v1/peers`、`/api/v1/links`、`/api/v1/health`、`/api/v1/routes`、`/api/v1/events` 等端点 | 返回 JSON，字段与内部结构保持一致 |
+| **SSE Hub** | 维护客户端长连接，将 daemon 内部事件（state changed、sync、reconcile、health change）转发为 SSE | 事件类型：`state_changed`、`peer_updated`、`link_updated`、`health_updated`、`route_changed` |
 | **State Snapshotter** | 在事件触发时读取 `stateFile` 并生成视图模型 | 必须持有 RLock，避免阻塞事件循环 |
+| **Health Metrics Query** | 可选只读查询 6.6 本地 VictoriaMetrics/Prometheus-compatible datasource 或 SQLite spool | 未配置时 API 返回 `not_configured`，不影响 live dashboard |
 | **Static File Server** | 托管前端静态资源（HTML/JS/CSS/WASM） | 可与 HTTP Observer 同端口，前缀 `/` 或 `/ui` |
 
 ### 4.2 与现有代码的集成点
 
 1. **状态读取**：通过 `DaemonService.Sync.State.RLock()` 读取 `stateFile` 的各个字段；与 CLI 命令保持一致。
 2. **路由授权**：调用 `routing.BuildAuthorizedRouteSet(state.Network, now)` 生成授权视图（与 `routes_dump` 相同）。
-3. **事件订阅**：复用 `DaemonHooks.OnStateChanged` 或在事件循环中向 SSE hub 发送通知；不侵入业务事件处理。
-4. **配置加载**：在 `appConfig` 中新增 `observerConfig` 段，解析后传给 `newDaemonService`。
+3. **健康历史**：如果 6.6 配置了本地 query datasource，Observer 只读查询 link health series；如果只有 SQLite spool，则只查询 spool 保留窗口。
+4. **事件订阅**：复用 `DaemonHooks.OnStateChanged` 或在事件循环中向 SSE hub 发送通知；不侵入业务事件处理。
+5. **配置加载**：在 `appConfig` 中新增 `observerConfig` 段，解析后传给 `newDaemonService`。
 
 ---
 
@@ -264,7 +271,46 @@ GET /api/v1/link-groups
 }
 ```
 
-#### 5.2.4 Route 层
+#### 5.2.4 Health 层
+
+```text
+GET /api/v1/health
+GET /api/v1/health/:link_id
+GET /api/v1/health/:link_id/series?metric=rtt|loss|jitter|babel_rtt|babel_metric&range=1h&step=30s
+```
+
+`/api/v1/health` 返回 daemon 当前窗口中的链路健康状态：
+
+```json
+{
+  "datasource": {
+    "configured": true,
+    "type": "victoriametrics",
+    "local": true,
+    "series_window": "24h"
+  },
+  "links": [
+    {
+      "link_id": "ipsec-a-b",
+      "peer_zone": "node-b.catofes.",
+      "group_id": "h2",
+      "state": "healthy",
+      "probe_type": "icmp",
+      "rtt_ms": 42.5,
+      "loss_ratio": 0.0,
+      "jitter_ms": 3.1,
+      "babel_rtt_ms": 45,
+      "babel_metric": 128,
+      "cutover_ready": true,
+      "last_error": ""
+    }
+  ]
+}
+```
+
+`/series` 只读查询 6.6 配置的本地 datasource。优先查询本机 VictoriaMetrics / Prometheus-compatible API；未配置外部 datasource 时，可退化读取 SQLite spool 的短期样本。该接口不得把前端传入的任意 PromQL 直接透传给 TSDB；第一版只允许固定 metric 枚举、固定 label filter 和受限 time range，避免 Observer 变成通用 TSDB proxy。
+
+#### 5.2.5 Route 层
 
 ```text
 GET /api/v1/routes
@@ -323,6 +369,7 @@ GET /api/v1/events
 | `state_changed` | daemon 检测到 Zone digest 变化 | `{ "global_root": "...", "changed_zones": [...] }` |
 | `peer_updated` | SyncPeers 中某 peer 状态更新 | `{ "peer_id": "..." }` |
 | `link_updated` | IPsec reconcile 完成 | `{ "link_id": "...", "state": "..." }` |
+| `health_updated` | 链路健康状态跨阈值或 datasource 状态变化 | `{ "link_id": "...", "state": "..." }` |
 | `route_changed` | routes_dump 结果变化 | `{ "export_set_count": N }` |
 | `bird_updated` | BIRD reconcile 完成 | `{ "netns": "...", "state": "..." }` |
 
@@ -348,6 +395,7 @@ GET /api/v1/events
 │  Overview│  主内容区：                                       │
 │  Gossip  │  - 统计卡片                                       │
 │  Overlay │  - 列表 / 表格                                    │
+│  Health  │  - 短历史趋势                                     │
 │  Route   │  - 拓扑图                                         │
 │  Zones   │  - 详情抽屉                                       │
 │  Events  │                                                 │
@@ -363,6 +411,7 @@ GET /api/v1/events
 | **Gossip** | Peer 列表、同步状态、Observed path、backoff、统计 | 表格 + 单 peer 详情抽屉 |
 | **Zones** | Zone 层级树、Record 列表、Delegation / Revocation 链 | 树形图 + 详情面板 |
 | **Overlay** | Link 实例、desired vs actual、SA 状态、rotate/takeover、group 过滤 | 表格 + 拓扑图（节点=peer，边=link，颜色=状态） |
+| **Health** | Link 当前健康、RTT/loss/jitter、BIRD RTT/metric、cutover gate、本地 TSDB/spool 短历史 | 表格 + sparkline/折线图 + 详情抽屉 |
 | **Route** | 授权路由表、本地 export、IPAM assignments、授权错误 | 表格 + 前缀树/拓扑 + 错误列表 |
 | **BIRD** | BIRD 实例状态、协议/邻居/路由（未来） | 表格 + 状态徽章 |
 | **Events** | 实时事件流、过滤、时间线 | 滚动时间线 |
@@ -370,10 +419,10 @@ GET /api/v1/events
 ### 6.3 关键交互
 
 1. **实时指示器**：顶部显示 SSE 连接状态（connected / disconnected / polling）。
-2. **时间范围**：事件页支持最近 5min / 30min / 1h / 24h 过滤。
+2. **时间范围**：事件页和 Health 页支持最近 5min / 30min / 1h / 24h 过滤；Health 历史受本地 datasource/spool 保留窗口限制。
 3. **状态徽章**：healthy、degraded、error、pending、missing 等状态使用颜色编码。
 4. **详情抽屉**：点击表格行或拓扑节点，右侧滑出详情面板，展示原始 JSON 和结构化字段。
-5. **过滤与搜索**：按 Zone、peer、link group、route prefix、状态码过滤。
+5. **过滤与搜索**：按 Zone、peer、link group、route prefix、health 状态、错误原因过滤。
 6. **原始数据**：每个页面提供「View JSON」按钮，可直接查看后端 API 返回。
 7. **预留操作位**：详情抽屉底部预留操作按钮区（如「Force Sync Peer」、「Rotate Link」、「Reload Config」），第一版置灰并显示 tooltip「控制功能未启用」。
 
@@ -482,21 +531,24 @@ GET /api/v1/events
    - `/api/v1/routes`
    - `/api/v1/bird`
 4. 实现静态文件服务，内嵌基础前端页面。
-5. 前端实现：Overview、Gossip、Zones、Overlay、Route、BIRD 基础表格视图。
+5. 前端实现：Overview、Gossip、Zones、Overlay、Health、Route、BIRD 基础表格视图。
+6. Health 页面第一版展示当前窗口；若 datasource 已配置，再展示 link 级 sparkline。
 
 ### Phase 2：实时事件与拓扑图
 
 1. 实现 SSE hub，监听 daemon 状态变更事件。
 2. 前端接入 EventSource，实现页面自动刷新和事件时间线。
 3. 在 Overlay 页面集成 Sigma.js 拓扑图。
-4. 增加详情抽屉和原始 JSON 查看。
+4. 在 Health 页面接入 `/api/v1/health/:link_id/series`，展示 RTT/loss/jitter/Babel metric 短历史。
+5. 增加详情抽屉和原始 JSON 查看。
 
 ### Phase 3：路由与 BIRD 深度集成
 
 1. 实现 birdc 输出解析（protocols / neighbors / routes）。
 2. 新增 `/api/v1/bird/protocols`、`/api/v1/bird/neighbors`、`/api/v1/bird/routes`。
 3. 在 Route 页面增加「控制面路由 vs 数据面学习路由」对比视图。
-4. 增加前缀树 / 路径分析图。
+4. 在 Health 页面把 BIRD neighbor RTT/metric 与 Higgs probe RTT/loss 放在同一 link 详情里对比。
+5. 增加前缀树 / 路径分析图。
 
 ### Phase 4：控制与安全（未来）
 

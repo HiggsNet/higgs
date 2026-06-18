@@ -1,5 +1,9 @@
 # Phase 6.1 IPAM 闭环设计
 
+相关设计：
+
+- Phase 6.3 firewall 规则同步见 [phase6-firewall-design.md](phase6-firewall-design.md)。Firewall planner 消费本文件定义的 `AuthorizedRouteSet`、`AllAssignments`、route announcements 和 anycast/shared assignment 派生结果。
+
 ## 1. 目标
 
 补齐 Phase 5 路由授权中未完成的 IPAM 语义，实现：
