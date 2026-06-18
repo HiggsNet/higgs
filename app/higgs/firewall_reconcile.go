@@ -219,13 +219,11 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 
 	// Phase 6.3.7: derive revoked prefixes from the route authorization errors.
 	// Any prefix in a revoked zone is excluded from allow sets (deny-first).
-	if ars != nil {
-		revokedSet := make(map[string]bool)
-		for _, e := range ars.Errors {
-			if e.Code == "route_zone_revoked" {
-				input.Revoked = append(input.Revoked, e.Prefix)
-				revokedSet[e.Prefix.String()] = true
-			}
+	revokedSet := make(map[string]bool)
+	for _, e := range ars.Errors {
+		if e.Code == "route_zone_revoked" {
+			input.Revoked = append(input.Revoked, e.Prefix)
+			revokedSet[e.Prefix.String()] = true
 		}
 	}
 
@@ -346,19 +344,3 @@ func (d *DaemonService) recoverFirewallOnStart(ctx context.Context) {
 	d.firewallDirty = true
 	d.flushFirewallReconcile(ctx)
 }
-
-// assignmentPrefixesLocal returns assignment prefixes (import whitelist).
-// This mirrors routing_reconcile.go's assignmentPrefixes but is local to avoid
-// import cycles in the firewall path.
-func assignmentPrefixesLocal(ars *routing.AuthorizedRouteSet) []netip.Prefix {
-	if ars == nil {
-		return nil
-	}
-	out := make([]netip.Prefix, 0, len(ars.Assignments))
-	for prefix := range ars.Assignments {
-		out = append(out, prefix)
-	}
-	return out
-}
-
-var _ = zone.RootZone

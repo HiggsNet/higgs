@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke peer-lifecycle-smoke revocation-cleanup-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -83,6 +83,13 @@ firewall-dry-run-smoke:
 	$(GO_ENV) $(GO) test ./pkg/firewall
 	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ParseConfigYAMLFirewall|TestFirewallInstancesEnabled|TestFirewallInstanceSpecFromConfig|TestReconcileFirewall|TestDebugFirewall)' -v
 	@echo "Firewall dry-run smoke passed"
+
+firewall-smoke: build
+	@HIGGS_FIREWALL_SMOKE=1 $(GO_ENV) $(GO) test ./pkg/firewall -run 'TestFirewallBackendsRootSmoke' -count=1 -v
+	@echo "Firewall root smoke passed"
+
+firewall-container-smoke:
+	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/firewall-container-smoke.sh
 
 peer-lifecycle-smoke:
 	$(GO_ENV) $(GO) test ./app/higgs -run 'TestDerivePeerStatus|TestPeerStatus|TestShouldBlockReconnect|TestCollectRevokedPeerZones|TestParsePeerLifecycleConfig|TestWriteDebugPeers|TestRevokedLinkPeers|TestDaemonRemoteAppliedEventUpdatesPeerState' -v
@@ -890,6 +897,8 @@ help:
 	@echo "  ipsec-dry-run-smoke - Run IPsec planner + fake driver reconcile smoke test"
 	@echo "  routing-dry-run-smoke - Run Phase 5 routing dry-run smoke test"
 	@echo "  firewall-dry-run-smoke - Run Phase 6.3 firewall planner + config dry-run smoke test"
+	@echo "  firewall-smoke - Run real nftables/iptables firewall smoke (requires root, NOT in smoke-all)"
+	@echo "  firewall-container-smoke - Run firewall smoke in privileged container"
 	@echo "  peer-lifecycle-smoke - Run Phase 6.4 peer lifecycle unit smoke test"
 	@echo "  revocation-cleanup-smoke - Run Phase 6.5 revocation impact + deny-first cleanup smoke test"
 	@echo "  ipsec-xfrm-preflight - Check root/netns/XFRM/StrongSwan prerequisites"

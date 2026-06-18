@@ -175,13 +175,13 @@ func buildNFTApplyCommands(plan FirewallPlan, desired *FirewallDesiredState) [][
 
 	// Create sets for mesh prefixes.
 	if len(desired.Prefixes.MeshAuthorizedV4) > 0 {
-		commands = append(commands, []string{"add", "set", "inet", tableName, tableName + "_mesh_v4", "{ type ipv4_addr; }"})
+		commands = append(commands, []string{"add", "set", "inet", tableName, tableName + "_mesh_v4", "{ type ipv4_addr; flags interval; }"})
 		for _, p := range desired.Prefixes.MeshAuthorizedV4 {
 			commands = append(commands, []string{"add", "element", "inet", tableName, tableName + "_mesh_v4", "{ " + p.String() + " }"})
 		}
 	}
 	if len(desired.Prefixes.MeshAuthorizedV6) > 0 {
-		commands = append(commands, []string{"add", "set", "inet", tableName, tableName + "_mesh_v6", "{ type ipv6_addr; }"})
+		commands = append(commands, []string{"add", "set", "inet", tableName, tableName + "_mesh_v6", "{ type ipv6_addr; flags interval; }"})
 		for _, p := range desired.Prefixes.MeshAuthorizedV6 {
 			commands = append(commands, []string{"add", "element", "inet", tableName, tableName + "_mesh_v6", "{ " + p.String() + " }"})
 		}
@@ -258,9 +258,9 @@ func renderNFTRule(r Rule) string {
 	case ProtoUDP:
 		parts = append(parts, "udp")
 	case ProtoICMP:
-		parts = append(parts, "icmp")
+		parts = append(parts, "ip protocol icmp")
 	case ProtoICMPv6:
-		parts = append(parts, "icmpv6")
+		parts = append(parts, "ip6 nexthdr icmpv6")
 	}
 	if r.Port > 0 && (r.Proto == ProtoTCP || r.Proto == ProtoUDP) {
 		parts = append(parts, fmt.Sprintf("dport %d", r.Port))
@@ -352,7 +352,7 @@ func nftProtoName(proto string) string {
 }
 
 func quoteNFTVal(s string) string {
-	if strings.ContainsAny(s, " *?\"") {
+	if strings.ContainsAny(s, " *?+\"") {
 		return "\"" + strings.ReplaceAll(s, "\"", "\\\"") + "\""
 	}
 	return s

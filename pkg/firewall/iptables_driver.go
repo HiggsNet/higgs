@@ -3,6 +3,7 @@ package firewall
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"strings"
 )
@@ -190,28 +191,24 @@ func buildIPTablesOverlayCommands(tableName, marker string, desired *FirewallDes
 	var commands []iptablesCommand
 
 	chainName := tableName + "_INPUT"
-	commands = append(commands, iptablesCommand{"iptables", []string{"-N", chainName, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"iptables", []string{"-N", chainName}})
 	for _, r := range desired.InputRules {
-		commands = append(commands, iptablesCommand{"iptables", iptablesRuleArgs(chainName, r, marker)})
+		commands = append(commands, iptablesRuleCommands(chainName, r, marker)...)
 	}
 	// Jump from INPUT to Higgs chain.
 	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
 
 	fwdChain := tableName + "_FORWARD"
-	commands = append(commands, iptablesCommand{"iptables", []string{"-N", fwdChain, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"iptables", []string{"-N", fwdChain}})
 	for _, r := range desired.ForwardRules {
-		args := append([]string{"-A", fwdChain}, iptablesMatchArgs(r)...)
-		args = append(args, "-j", strings.ToUpper(r.Action), "-m", "comment", "--comment", marker+":"+r.Comment)
-		commands = append(commands, iptablesCommand{"iptables", args})
+		commands = append(commands, iptablesRuleCommands(fwdChain, r, marker)...)
 	}
 	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "FORWARD", "-j", fwdChain, "-m", "comment", "--comment", marker}})
 
 	outChain := tableName + "_OUTPUT"
-	commands = append(commands, iptablesCommand{"iptables", []string{"-N", outChain, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"iptables", []string{"-N", outChain}})
 	for _, r := range desired.OutputRules {
-		args := append([]string{"-A", outChain}, iptablesMatchArgs(r)...)
-		args = append(args, "-j", strings.ToUpper(r.Action), "-m", "comment", "--comment", marker+":"+r.Comment)
-		commands = append(commands, iptablesCommand{"iptables", args})
+		commands = append(commands, iptablesRuleCommands(outChain, r, marker)...)
 	}
 	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "OUTPUT", "-j", outChain, "-m", "comment", "--comment", marker}})
 
@@ -222,7 +219,7 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 	var commands []iptablesCommand
 
 	chainName := tableName + "_INPUT"
-	commands = append(commands, iptablesCommand{"iptables", []string{"-N", chainName, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"iptables", []string{"-N", chainName}})
 	for _, hi := range desired.HostIngress {
 		args := []string{"-A", chainName, "-p", iptablesProto(hi.Proto)}
 		if hi.Port > 0 {
@@ -252,15 +249,45 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 	return commands
 }
 
-func iptablesRuleArgs(chain string, r Rule, marker string) []string {
-	args := []string{"-A", chain}
-	args = append(args, iptablesMatchArgs(r)...)
-	args = append(args, "-j", strings.ToUpper(r.Action))
-	args = append(args, "-m", "comment", "--comment", marker+":"+r.Comment)
-	return args
+func iptablesRuleCommands(chain string, r Rule, marker string) []iptablesCommand {
+	var commands []iptablesCommand
+	for _, match := range iptablesMatchArgSets(r) {
+		args := append([]string{"-A", chain}, match...)
+		args = append(args, "-j", strings.ToUpper(r.Action))
+		args = append(args, "-m", "comment", "--comment", marker+":"+r.Comment)
+		commands = append(commands, iptablesCommand{"iptables", args})
+	}
+	return commands
 }
 
-func iptablesMatchArgs(r Rule) []string {
+func iptablesMatchArgSets(r Rule) [][]string {
+	base := iptablesBaseMatchArgs(r)
+	srcs := r.Src
+	dsts := r.Dst
+	if len(srcs) == 0 {
+		srcs = []netip.Prefix{netip.Prefix{}}
+	}
+	if len(dsts) == 0 {
+		dsts = []netip.Prefix{netip.Prefix{}}
+	}
+
+	var out [][]string
+	for _, src := range srcs {
+		for _, dst := range dsts {
+			args := append([]string{}, base...)
+			if src.IsValid() {
+				args = append(args, "-s", src.String())
+			}
+			if dst.IsValid() {
+				args = append(args, "-d", dst.String())
+			}
+			out = append(out, args)
+		}
+	}
+	return out
+}
+
+func iptablesBaseMatchArgs(r Rule) []string {
 	var args []string
 	if r.Proto != "" && r.Proto != "icmp" && r.Proto != "ipv6-icmp" {
 		args = append(args, "-p", iptablesProto(r.Proto))
@@ -273,14 +300,6 @@ func iptablesMatchArgs(r Rule) []string {
 	}
 	if r.IfaceOut != "" {
 		args = append(args, "-o", r.IfaceOut)
-	}
-	for _, p := range r.Src {
-		args = append(args, "-s", p.String())
-		break
-	}
-	for _, p := range r.Dst {
-		args = append(args, "-d", p.String())
-		break
 	}
 	return args
 }
