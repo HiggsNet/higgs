@@ -62,10 +62,16 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 	return desired, nil
 }
 
-// buildPrefixSets partitions prefixes by family and purpose.
+// buildPrefixSets partitions prefixes by family and purpose. Revoked prefixes
+// (6.3.3 / 6.3.7 deny-first) are filtered out so they never appear in allow
+// sets, and are also exposed in RevokedV4/V6 for audit / explicit drop rules.
 func buildPrefixSets(input FirewallPolicyInput) PrefixSets {
+	revokedSet := buildRevokedSet(input.Revoked)
 	var out PrefixSets
 	for _, p := range dedupSorted(input.LocalAssigned) {
+		if revokedSet[p.String()] {
+			continue
+		}
 		if p.Addr().Is4() {
 			out.LocalAssignedV4 = append(out.LocalAssignedV4, p)
 		} else {
@@ -73,11 +79,31 @@ func buildPrefixSets(input FirewallPolicyInput) PrefixSets {
 		}
 	}
 	for _, p := range dedupSorted(input.MeshAuthorized) {
+		if revokedSet[p.String()] {
+			continue
+		}
 		if p.Addr().Is4() {
 			out.MeshAuthorizedV4 = append(out.MeshAuthorizedV4, p)
 		} else {
 			out.MeshAuthorizedV6 = append(out.MeshAuthorizedV6, p)
 		}
+	}
+	// Audit-only revoked sets.
+	for _, p := range dedupSorted(input.Revoked) {
+		if p.Addr().Is4() {
+			out.RevokedV4 = append(out.RevokedV4, p)
+		} else {
+			out.RevokedV6 = append(out.RevokedV6, p)
+		}
+	}
+	return out
+}
+
+// buildRevokedSet returns a set of revoked prefix strings for fast lookup.
+func buildRevokedSet(revoked []netip.Prefix) map[string]bool {
+	out := make(map[string]bool, len(revoked))
+	for _, p := range revoked {
+		out[p.String()] = true
 	}
 	return out
 }
@@ -397,6 +423,12 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 	}
 	for _, p := range desired.Prefixes.MeshAuthorizedV6 {
 		fmt.Fprintln(h, "mav6", p.String())
+	}
+	for _, p := range desired.Prefixes.RevokedV4 {
+		fmt.Fprintln(h, "rev4", p.String())
+	}
+	for _, p := range desired.Prefixes.RevokedV6 {
+		fmt.Fprintln(h, "rev6", p.String())
 	}
 	for _, r := range desired.InputRules {
 		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Comment)

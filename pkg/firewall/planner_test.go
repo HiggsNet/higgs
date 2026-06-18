@@ -449,6 +449,92 @@ func TestBuildDesiredState_Hooks(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredState_RevokedPrefixesExcluded(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+	}
+	input := FirewallPolicyInput{
+		LocalAssigned:  []netip.Prefix{mustPrefix(t, "10.42.0.0/24"), mustPrefix(t, "10.99.0.0/24")},
+		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24"), mustPrefix(t, "10.99.0.0/24")},
+		Revoked:        []netip.Prefix{mustPrefix(t, "10.99.0.0/24")},
+		Forwarding:     ForwardingPolicy{Transit: true},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	// Revoked prefix should not appear in allow sets
+	for _, p := range desired.Prefixes.LocalAssignedV4 {
+		if p.String() == "10.99.0.0/24" {
+			t.Error("revoked prefix 10.99.0.0/24 appeared in LocalAssignedV4")
+		}
+	}
+	for _, p := range desired.Prefixes.MeshAuthorizedV4 {
+		if p.String() == "10.99.0.0/24" {
+			t.Error("revoked prefix 10.99.0.0/24 appeared in MeshAuthorizedV4")
+		}
+	}
+	// Revoked prefix should appear in audit set
+	foundRevoked := false
+	for _, p := range desired.Prefixes.RevokedV4 {
+		if p.String() == "10.99.0.0/24" {
+			foundRevoked = true
+		}
+	}
+	if !foundRevoked {
+		t.Error("revoked prefix 10.99.0.0/24 missing from RevokedV4 audit set")
+	}
+}
+
+func TestBuildDesiredState_RevokedHashChanges(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+	}
+	base := FirewallPolicyInput{
+		LocalAssigned: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
+	}
+	withRevoked := FirewallPolicyInput{
+		LocalAssigned: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
+		Revoked:       []netip.Prefix{mustPrefix(t, "10.99.0.0/24")},
+	}
+	d1, _ := BuildDesiredState(spec, base)
+	d2, _ := BuildDesiredState(spec, withRevoked)
+	if DesiredStateHash(d1) == DesiredStateHash(d2) {
+		t.Error("hash should change when revoked prefix is added")
+	}
+}
+
+func TestBuildDesiredState_TransitDenyPrefixes(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+	}
+	input := FirewallPolicyInput{
+		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24"), mustPrefix(t, "10.99.0.0/24")},
+		Forwarding: ForwardingPolicy{
+			Transit:      true,
+			DenyPrefixes: []netip.Prefix{mustPrefix(t, "10.99.0.0/24")},
+		},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	// Transit rule should not include denied prefix
+	for _, r := range desired.ForwardRules {
+		if r.Comment != "xfrm transit (transit enabled)" {
+			continue
+		}
+		for _, p := range r.Src {
+			if p.String() == "10.99.0.0/24" {
+				t.Error("denied prefix 10.99.0.0/24 appeared in transit accept rule")
+			}
+		}
+	}
+}
+
 func TestBuildDesiredState_DefaultPolicyAccept(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,

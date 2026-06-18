@@ -1039,16 +1039,24 @@
     - `Hooks` 支持 pre/post input/forward/output 和 host pre/post prerouting/input；planner 按固定顺序插入 jump 规则，不管理 hook chain 内部规则。
   - 外部托管模式下 Higgs 只生成 desired-state/dry-run，并可校验 owner chain 是否存在；不直接修改管理员负责的防火墙。
     - `mode=external` 走 planner + dry-run driver，不修改系统；`mode=disabled` 不生成任何规则。
-- [ ] **6.3.3 overlay netns 数据面过滤**
+- [x] **6.3.3 overlay netns 数据面过滤**
   - 从 `AuthorizedRouteSet.AllAssignments`、合法 route announcements、有效 peer/zone、当前 up/staged/draining link 计算允许通过 overlay 的 prefix set；不再沿用旧的 `TunnelAllowedIPs` 作为唯一来源。
+    - `buildFirewallPolicyInput` 从 `ars.Assignments`（AssignedTo==managed zone）派生 local assigned，从 `ars.Announced` 派生 mesh authorized，从 `LinkInstances` 派生 live interfaces，从 routing upstream config 派生 upstream interfaces。
   - 默认 drop 未授权的 forwarded/input traffic，只允许：本节点合法 assigned prefixes、本地服务明确开放端口、BIRD/Babel 控制流量、健康检查/keepalive、已授权 peer/subtree 的 overlay prefix。
+    - overlay chain 生成 loopback accept → pre_input hook → babel control → icmp → established → local services → mesh authorized → post_input hook → default policy（drop/accept）。
   - 区分接口角色：XFRM tunnel interface、veth upstream、loopback、本机服务入口分别生成 chain；跨 veth 进入/离开主网络的流量必须走显式 policy。
+    - forward chain 区分 `xfrmPat`（`hgs*`）、`upstreamPats`（`hgs-upstream*`）、`lo`；XFRM→upstream 和 upstream→XFRM 各有显式 accept rule。
   - 支持 IPv4/IPv6 双栈、anycast/shared assignment、撤销后的 set entry 即时删除。
-- [ ] **6.3.4 节点转发能力与 BIRD 联动**
+    - `PrefixSets` 按 V4/V6 分离；`buildPrefixSets` 排除 revoked prefix（deny-first）；revoked prefix 进入 `RevokedV4/V6` 审计集，不出现在 `LocalAssigned/MeshAuthorized`。
+- [x] **6.3.4 节点转发能力与 BIRD 联动**
   - 新增 zone/route 级转发意图 record 或配置字段（如 `routing/forwarding`）：节点可声明 `transit=true|false`、允许转发的 prefix/peer/subtree、可选质量/metric hint。
+    - `firewall.instances[].forwarding` 配置段（transit/allow_prefixes/deny_prefixes/allow_peers/deny_peers/metric_hint）作为第一版转发意图来源。
   - BIRD export/import 生成器必须读取转发意图：非 transit 节点只宣告本节点 assigned/local prefixes，不替其他节点转发 learned routes；transit 节点才允许在 policy 范围内转发 Babel learned routes。
+    - `buildRoutingExportSet` 从 matching firewall instance 读取 forwarding policy；非 transit 只 export local assigned，transit export authorized prefixes 经 `filterAuthorizedByPolicy` 过滤。
   - 防火墙 forward chain 与 BIRD 策略使用同一份 forwarding policy：BIRD 不宣告的转发路径，防火墙也不得放行；BIRD 允许作为 transit 的路径，防火墙同步放行对应 prefix/interface 组合。
+    - firewall planner 的 `buildOverlayRules` 和 routing reconcile 的 `buildRoutingExportSet` 共用 `firewall.ForwardingPolicy`；`IsTransitPrefixAllowed` 在两侧一致。
   - 后续预留 gossip 控制信号：源节点可声明某些中继不要转发自己的路由，用于规避质量差、计费昂贵或不可信的链路；第一版先以静态 record/config 为准。
+    - 第一版使用本地 config；后续可升级为 signed `routing/forwarding` record，`netnsForwardingPolicy` 可扩展为先读 record 再 fallback config。
 - [ ] **6.3.5 host 端口与 NAT 最小侵入**
   - 为 Phase 4.4/端口动态调整补 `redirect/DNAT grace`：old/current advertised IKE/NAT-T 端口在 grace 窗口内转发到当前 charon 监听端口，窗口结束后删除旧端口规则。
   - host 规则只允许绑定到 Higgs 配置的 listen/advertise 端口、协议和本机地址；遇到已有非 Higgs owner 规则或端口冲突必须报错/降级，不静默覆盖。
@@ -1058,10 +1066,13 @@
   - 抽象 `FirewallDriver`：`Plan()`、`Apply()`、`ListOwned()`、`DeleteStale()`、`Preflight()`；nft driver 第一优先，iptables driver 只覆盖第一版所需 filter/nat 能力。
   - 避免混用同一 owner 的 nft 与 iptables backend；backend 切换必须先 dry-run 展示旧 backend 清理和新 backend 创建计划。
   - preflight 输出内核/工具版本、netns 能力、CAP_NET_ADMIN、nft/iptables 可用性、是否存在冲突 owner chain。
-- [ ] **6.3.7 revoke / restart / rollback 语义**
+- [x] **6.3.7 revoke / restart / rollback 语义**
   - 节点或子树被撤销后，高优先级触发 firewall reconcile，立即删除对应 set entries、forward allow rules、rate-limit exceptions、host redirect grace rules。
+    - `buildFirewallPolicyInput` 从 `ars.Errors`（code=`route_zone_revoked`）派生 revoked prefixes；planner 的 `buildPrefixSets` 将 revoked prefixes 从 allow sets 中移除（deny-first）并放入 `RevokedV4/V6` 审计集；revocation dirty event 通过 `notifyStateChanged` → `firewallDirty` 立即触发 reconcile。
   - daemon 重启后先 `ListOwned()` 采纳仍匹配当前 state 的规则，再删除 stale generation；不得在无法确认 owner 时清理管理员规则。
+    - `recoverFirewallOnStart` 在 daemon 启动时触发首轮 reconcile；`PlanDiff` 从 `ListOwned()` 读取已存在 owner 对象，匹配 desired 则 adopt，stale 则 delete；非 owner 对象不会被触碰。
   - apply 失败时保持旧 generation 可用并报告 last error；部分成功必须可恢复，下一轮 reconcile 能继续收敛。
+    - `reconcileFirewall` 记录 per-instance `firewallInstanceReconcileStateEntry`（generation/policy_hash/last_error）；apply 失败时 `firstErr` 写入 `FirewallReconcile.LastError`，下一轮 reconcile 以最新 desired 重算；DryRunDriver apply 不会破坏已有状态。
 - [ ] **6.3.8 验证与操作面**
   - 单元测试覆盖 policy planner、owner/stale 计算、revocation diff、nft/iptables backend 选择、hook ordering、forwarding policy 与 BIRD policy 一致性。
   - dry-run smoke：无 root 环境下生成 netns filter + host NAT plan，并验证撤销节点后 plan 会删除对应规则。

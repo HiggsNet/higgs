@@ -198,6 +198,18 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 		}
 	}
 
+	// Phase 6.3.7: derive revoked prefixes from the route authorization errors.
+	// Any prefix in a revoked zone is excluded from allow sets (deny-first).
+	if ars != nil {
+		revokedSet := make(map[string]bool)
+		for _, e := range ars.Errors {
+			if e.Code == "route_zone_revoked" {
+				input.Revoked = append(input.Revoked, e.Prefix)
+				revokedSet[e.Prefix.String()] = true
+			}
+		}
+	}
+
 	// Advertised previous ports (for host redirect grace).
 	if spec.IsHost && state.IPsecPortRecord != nil {
 		// Placeholder: actual previous port set comes from ipsec/ports record.

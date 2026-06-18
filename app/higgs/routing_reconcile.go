@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -192,7 +193,12 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 	}
 
 	importSet := assignmentPrefixes(ars)
-	exportSet := authorizedPrefixes(ars, []zone.ZonePath{d.Sync.State.ManagedZone})
+	// Phase 6.3.4: BIRD export set must use the same forwarding policy as the
+	// firewall. A non-transit node only exports its own local assigned prefixes;
+	// a transit node exports authorized prefixes filtered by the forwarding
+	// policy allow/deny lists. Both BIRD and firewall consume the same policy
+	// so they never disagree on which transit paths are allowed.
+	exportSet := buildRoutingExportSet(ars, d.Sync.State.ManagedZone, config, netnsName)
 
 	configBytes, err := bird.DefaultConfigGenerator{}.Generate(spec, importSet, exportSet)
 	if err != nil {
@@ -371,6 +377,56 @@ func routingInstancesEnabled(config *appConfig) []RoutingInstance {
 	for _, inst := range config.Routing.Instances {
 		if inst.Enabled && inst.Mode != ipsec.RoutingModeDisabled {
 			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// buildRoutingExportSet computes the BIRD export set using the forwarding policy
+// shared with the firewall planner (Phase 6.3.4). When no firewall forwarding
+// policy is configured for the given netns, it falls back to the legacy
+// behavior of exporting all authorized prefixes from the managed zone. When a
+// non-transit policy is present, only local assigned prefixes are exported;
+// when transit=true, authorized prefixes are filtered by allow/deny lists.
+func buildRoutingExportSet(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath, config *appConfig, netnsName string) []netip.Prefix {
+	localExport := authorizedPrefixes(ars, []zone.ZonePath{managedZone})
+	policy := netnsForwardingPolicy(config, netnsName)
+	if policy == nil || !policy.Transit {
+		// Non-transit or no policy: only export local assigned prefixes.
+		return localExport
+	}
+	// Transit: export all authorized prefixes filtered by the policy.
+	allAuthorized := authorizedPrefixes(ars, nil)
+	if len(policy.AllowPrefixes) == 0 && len(policy.DenyPrefixes) == 0 {
+		return allAuthorized
+	}
+	return filterAuthorizedByPolicy(allAuthorized, policy)
+}
+
+// netnsForwardingPolicy returns the forwarding policy from the firewall
+// instance matching the given netns, or nil if none configured.
+func netnsForwardingPolicy(config *appConfig, netnsName string) *firewall.ForwardingPolicy {
+	if config == nil {
+		return nil
+	}
+	for _, fi := range config.Firewall.Instances {
+		if fi.NetNS == netnsName && !fi.IsHost {
+			return &fi.Forwarding
+		}
+	}
+	return nil
+}
+
+// filterAuthorizedByPolicy applies allow/deny prefix lists from a forwarding
+// policy to a set of authorized prefixes.
+func filterAuthorizedByPolicy(prefixes []netip.Prefix, policy *firewall.ForwardingPolicy) []netip.Prefix {
+	if policy == nil {
+		return prefixes
+	}
+	var out []netip.Prefix
+	for _, p := range prefixes {
+		if firewall.IsTransitPrefixAllowed(*policy, p) {
+			out = append(out, p)
 		}
 	}
 	return out

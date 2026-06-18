@@ -102,6 +102,11 @@ type PrefixSets struct {
 	LocalAssignedV6  []netip.Prefix
 	MeshAuthorizedV4 []netip.Prefix
 	MeshAuthorizedV6 []netip.Prefix
+	// RevokedV4/V6 are audit-only: prefixes removed from allow sets due to
+	// zone/subtree revocation (6.3.3 / 6.3.7 deny-first). They never appear in
+	// LocalAssigned/MeshAuthorized.
+	RevokedV4 []netip.Prefix
+	RevokedV6 []netip.Prefix
 }
 
 // ForwardingPolicy is shared by BIRD and firewall to decide transit behavior.
