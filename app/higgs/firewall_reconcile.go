@@ -10,6 +10,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 const defaultFirewallReconcileInterval = 30 * time.Second
@@ -146,9 +147,27 @@ func (d *DaemonService) getOrCreateFirewallEntry(id string) *firewallInstanceRec
 // firewallDriverInstance returns the configured firewall driver, or nil to
 // fall back to dry-run.
 func (d *DaemonService) firewallDriverInstance() firewallDriver {
-	// First version always uses dry-run. Real nft/iptables drivers are
-	// wired in once root smoke validation is added.
-	return nil
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return nil
+	}
+	// Determine the effective backend from config + preflight.
+	instances := firewallInstancesEnabled(d.Sync.App.Config)
+	if len(instances) == 0 {
+		return nil
+	}
+	// Use the first enabled instance's backend as the global selection.
+	backend := instances[0].Backend
+	pf := firewall.PreflightProbe(context.Background())
+	resolved := firewall.ResolveBackend(backend, pf)
+	switch resolved {
+	case firewall.BackendNFT:
+		return firewall.NewNFTDriver()
+	case firewall.BackendIptables:
+		return firewall.NewIPTablesDriver()
+	default:
+		// dry-run / none
+		return nil
+	}
 }
 
 // buildFirewallPolicyInput assembles the verified derived state for the planner.
@@ -211,13 +230,59 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	}
 
 	// Advertised previous ports (for host redirect grace).
-	if spec.IsHost && state.IPsecPortRecord != nil {
-		// Placeholder: actual previous port set comes from ipsec/ports record.
-		// The first version does not wire full port record parsing here.
+	// Extract previous IKE/NAT-T ports from the active state's signed
+	// ipsec/ports record so the host firewall can redirect old advertised
+	// ports to the current charon listen port during the grace window
+	// (Phase 6.3.5).
+	if spec.IsHost && state.Network != nil && state.ManagedZone.Valid() {
+		now := time.Now()
+		if d := nowFunc(); !d.IsZero() {
+			now = d
+		}
+		input.AdvertisedPreviousIKEPorts, input.AdvertisedPreviousNATTPorts = extractPreviousPortsFromNetwork(state.Network, state.ManagedZone, now)
 	}
 
 	return input
 }
+
+// extractPreviousPortsFromNetwork reads the signed ipsec/ports record from the
+// managed zone's active state and returns the previous-generation IKE and NAT-T
+// advertised ports that are still within the grace window. These ports are used
+// by the host firewall planner to generate DNAT/redirect rules.
+func extractPreviousPortsFromNetwork(network *zone.NetworkState, managedZone zone.ZonePath, now time.Time) ([]uint16, []uint16) {
+	if network == nil || !managedZone.Valid() {
+		return nil, nil
+	}
+	zs, ok := network.Zones[managedZone]
+	if !ok || zs == nil {
+		return nil, nil
+	}
+	record := zs.Records[ipsec.RecordKeyPorts]
+	if record == nil {
+		return nil, nil
+	}
+	pr, err := ipsec.ParsePortRecord(record)
+	if err != nil || pr == nil {
+		return nil, nil
+	}
+	var ikePorts, nattPorts []uint16
+	for _, sel := range pr.Previous {
+		// Check if still within grace window.
+		if sel.ValidUntil > 0 && now.Unix() > sel.ValidUntil {
+			continue
+		}
+		if sel.IKE.Advertised > 0 {
+			ikePorts = append(ikePorts, sel.IKE.Advertised)
+		}
+		if sel.NATT.Advertised > 0 {
+			nattPorts = append(nattPorts, sel.NATT.Advertised)
+		}
+	}
+	return ikePorts, nattPorts
+}
+
+// nowFunc returns the current time. Overridable in tests.
+var nowFunc = func() time.Time { return time.Time{} }
 
 // firewallListenAddrs derives host listen addresses from config.
 func firewallListenAddrs(config *appConfig) []netip.Addr {

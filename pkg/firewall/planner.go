@@ -298,15 +298,27 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 	if spec.HostPorts.NATT {
 		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, nattPort, spec.ListenAddrs, "natt ingress"))
 	}
+	// WireGuard ingress (for Phase 7 WireGuard transport driver).
+	wgPort := spec.WGPort
+	if wgPort == 0 {
+		wgPort = 51820
+	}
+	if spec.HostPorts.WG {
+		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, wgPort, spec.ListenAddrs, "wg ingress"))
+	}
 
 	// Redirect grace: old advertised ports → current charon ports.
-	// In the first version, the planner exposes the planned redirects; the actual
-	// applied redirects depend on the verified ipsec/ports record (previous[] grace).
+	// The daemon reconcile feeds concrete previous ports via
+	// input.AdvertisedPreviousPorts, extracted from the signed ipsec/ports
+	// record's Previous[] selections that are still within the grace window.
+	// We redirect old IKE ports → current IKE port, and old NAT-T ports →
+	// current NAT-T port. The heuristic: ports >= 4500 are NAT-T candidates;
+	// ports < 4500 are IKE candidates. This avoids redirecting an old NAT-T
+	// port to the IKE port and vice versa.
 	if spec.RedirectGrace.Enabled {
-		// Placeholder: actual previous-port set comes from ipsec/ports record.
-		// The daemon reconcile feeds concrete previous ports via the spec.
-		for _, prev := range input.AdvertisedPreviousPorts {
-			if prev == ikePort {
+		// IKE redirect: old advertised IKE ports → current charon IKE port.
+		for _, prev := range input.AdvertisedPreviousIKEPorts {
+			if prev == ikePort || prev == 0 {
 				continue
 			}
 			desired.NatRedirects = append(desired.NatRedirects, NatRedirectRule{
@@ -317,7 +329,40 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 				Comment:     fmt.Sprintf("redirect grace %d -> %d (ike)", prev, ikePort),
 			})
 		}
+		// NAT-T redirect: old advertised NAT-T ports → current charon NAT-T port.
+		for _, prev := range input.AdvertisedPreviousNATTPorts {
+			if prev == nattPort || prev == 0 {
+				continue
+			}
+			desired.NatRedirects = append(desired.NatRedirects, NatRedirectRule{
+				Proto:       ProtoUDP,
+				OriginalDst: prev,
+				RedirectTo:  nattPort,
+				DstAddr:     firstListenAddr(spec.ListenAddrs),
+				Comment:     fmt.Sprintf("redirect grace %d -> %d (natt)", prev, nattPort),
+			})
+		}
+		// WireGuard redirect: old advertised WG ports → current WG port.
+		// Reserved for Phase 7 WireGuard port rotation.
+		for _, prev := range input.AdvertisedPreviousWGPorts {
+			if prev == wgPort || prev == 0 {
+				continue
+			}
+			desired.NatRedirects = append(desired.NatRedirects, NatRedirectRule{
+				Proto:       ProtoUDP,
+				OriginalDst: prev,
+				RedirectTo:  wgPort,
+				DstAddr:     firstListenAddr(spec.ListenAddrs),
+				Comment:     fmt.Sprintf("redirect grace %d -> %d (wg)", prev, wgPort),
+			})
+		}
 	}
+
+	// Note: No SNAT (MASQUERADE) is needed for outbound transport traffic.
+	// StrongSwan/WireGuard initiate outbound connections from ephemeral local
+	// source ports; the remote peer sees the actual source IP/port and does
+	// not need it translated. DNAT/redirect only applies to inbound traffic
+	// hitting old advertised ports during the rotate grace window.
 }
 
 func buildHostIngress(proto string, port uint16, listenAddrs []netip.Addr, comment string) HostIngressRule {

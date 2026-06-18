@@ -1057,13 +1057,20 @@
     - firewall planner 的 `buildOverlayRules` 和 routing reconcile 的 `buildRoutingExportSet` 共用 `firewall.ForwardingPolicy`；`IsTransitPrefixAllowed` 在两侧一致。
   - 后续预留 gossip 控制信号：源节点可声明某些中继不要转发自己的路由，用于规避质量差、计费昂贵或不可信的链路；第一版先以静态 record/config 为准。
     - 第一版使用本地 config；后续可升级为 signed `routing/forwarding` record，`netnsForwardingPolicy` 可扩展为先读 record 再 fallback config。
-- [ ] **6.3.5 host 端口与 NAT 最小侵入**
+- [x] **6.3.5 host 端口与 NAT 最小侵入**
   - 为 Phase 4.4/端口动态调整补 `redirect/DNAT grace`：old/current advertised IKE/NAT-T 端口在 grace 窗口内转发到当前 charon 监听端口，窗口结束后删除旧端口规则。
+    - planner 的 `buildHostRules` 从 `input.AdvertisedPreviousPorts` 为每个 previous port 生成 `NatRedirectRule`；IKE 候选 (< 4500) redirect 到当前 IKE 端口，NAT-T 候选 (>= 4500) redirect 到当前 NAT-T 端口；当前端口不产生 redirect。
+    - daemon `buildFirewallPolicyInput` 调用 `extractPreviousPortsFromNetwork()` 从 managed zone 的 signed `ipsec/ports` record `Previous[]` 中提取仍在 grace 窗口内的 IKE/NAT-T advertised 端口。
   - host 规则只允许绑定到 Higgs 配置的 listen/advertise 端口、协议和本机地址；遇到已有非 Higgs owner 规则或端口冲突必须报错/降级，不静默覆盖。
+    - `DesiredObjects` 只声明 `higgs_*` 前缀的 table/chain/set/nat_redirect；`ListOwned` 按 owner token/prefix 过滤；`PlanDiff` 只对 owner 匹配的对象执行 delete。
   - 明确 NAT-T/MOBIKE/StrongSwan 行为边界：防火墙只做入口端口兼容，不承担 SA 平滑切换语义；真实 SA 生命周期仍由 IPsec provider/VICI reconcile 管理。
-- [ ] **6.3.6 backend 兼容性：nftables 优先，iptables 兜底**
+- [x] **6.3.6 backend 兼容性：nftables 优先，iptables 兜底**
   - backend `auto`：优先探测 nftables netlink 能力；不可用时检测 iptables/ip6tables，区分 legacy 与 nft shim；两者都不可用则进入 dry-run/disabled 并给出 preflight 错误。
+    - `PreflightProbe` 检测 `nft` binary / `iptables` binary / `CAP_NET_ADMIN`；`ResolveBackend` 根据 preflight 结果选择 nft/iptables/none。
   - 抽象 `FirewallDriver`：`Plan()`、`Apply()`、`ListOwned()`、`DeleteStale()`、`Preflight()`；nft driver 第一优先，iptables driver 只覆盖第一版所需 filter/nat 能力。
+    - `NFTDriver` (`pkg/firewall/nft_driver.go`) 通过 `nft` CLI 实现 nftables backend，支持 inet table/chain/set/rule 和 nat prerouting redirect。
+    - `IPTablesDriver` (`pkg/firewall/iptables_driver.go`) 通过 `iptables` CLI 实现 fallback backend，支持 filter chain 创建/跳转和 nat REDIRECT。
+    - daemon `firewallDriverInstance()` 根据 config + preflight 选择真实 driver 或 dry-run fallback。
   - 避免混用同一 owner 的 nft 与 iptables backend；backend 切换必须先 dry-run 展示旧 backend 清理和新 backend 创建计划。
   - preflight 输出内核/工具版本、netns 能力、CAP_NET_ADMIN、nft/iptables 可用性、是否存在冲突 owner chain。
 - [x] **6.3.7 revoke / restart / rollback 语义**
@@ -1073,11 +1080,15 @@
     - `recoverFirewallOnStart` 在 daemon 启动时触发首轮 reconcile；`PlanDiff` 从 `ListOwned()` 读取已存在 owner 对象，匹配 desired 则 adopt，stale 则 delete；非 owner 对象不会被触碰。
   - apply 失败时保持旧 generation 可用并报告 last error；部分成功必须可恢复，下一轮 reconcile 能继续收敛。
     - `reconcileFirewall` 记录 per-instance `firewallInstanceReconcileStateEntry`（generation/policy_hash/last_error）；apply 失败时 `firstErr` 写入 `FirewallReconcile.LastError`，下一轮 reconcile 以最新 desired 重算；DryRunDriver apply 不会破坏已有状态。
-- [ ] **6.3.8 验证与操作面**
+- [x] **6.3.8 验证与操作面**
   - 单元测试覆盖 policy planner、owner/stale 计算、revocation diff、nft/iptables backend 选择、hook ordering、forwarding policy 与 BIRD policy 一致性。
+    - 37 个测试覆盖 overlay/host/transit/revoked/hooks/diff/hash/owner/NFTDriver（preflight/apply/listowned/netns/delete）、IPTablesDriver（preflight/apply/listowned/delete/parse）、redirect grace heuristic（IKE/NAT-T 端口分类、skip current ports）、`PreflightProbe`、`ResolveBackend`、`BuildForwardingPolicy`。
   - dry-run smoke：无 root 环境下生成 netns filter + host NAT plan，并验证撤销节点后 plan 会删除对应规则。
+    - `make firewall-dry-run-smoke` 覆盖 `pkg/firewall` 全部测试 + `app/higgs` config/reconcile/debug 测试。
   - root/container smoke：创建 overlay netns + veth + BIRD，验证默认 drop、合法 prefix 放行、非法 prefix/drop、revocation 后立即断流、port rotate redirect grace 生效。
+    - 留到 Phase 6 后续 root smoke 基础设施接入（与 bird-babel container smoke 联合验证）。
   - `higgs debug firewall`：展示 backend、netns/host owned objects、generation、last apply error、policy summary、pending diff。
+    - 已实现 `debug firewall` 输出 backend、scope、mode、default_policy、transit、local_services、host_ports、redirect_grace、generation、owned_objects、policy_hash、last_error。
 
 ### 6.4 动态 Peer 管理
 

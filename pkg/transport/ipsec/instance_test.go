@@ -91,7 +91,7 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	plan2, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan2, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
 		Direction:         DirectionBidirectional,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestReconcileSecondaryStandbyDoesNotTakeoverDuringRotateRetention(t *testin
 		Direction:         DirectionBidirectional,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) 
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -560,7 +560,7 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestApplyReconcileActionPrepareRotateSkipsPrivateKeyLoad(t *testing.T) {
 	stagedSpec := rotateSpec(spec, 2)
 	ipsecDrv := &DryRunDriver{}
 	xfrmDrv := &DryRunDriver{}
-	_, err := ApplyReconcileAction(nil, ipsecDrv, xfrmDrv, ReconcileAction{
+	_, err := ApplyReconcileAction(context.TODO(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionPrepareRotate,
 		Spec:   &stagedSpec,
 	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
@@ -750,7 +750,7 @@ func TestApplyReconcileActionCommitRotateTeardownsOldGeneration(t *testing.T) {
 	}
 	ipsecDrv := &DryRunDriver{}
 	xfrmDrv := &DryRunDriver{}
-	_, err := ApplyReconcileAction(nil, ipsecDrv, xfrmDrv, ReconcileAction{
+	_, err := ApplyReconcileAction(context.TODO(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionCommitRotate,
 		Spec:   &oldSpec,
 	}, NetNSSpec{})
@@ -789,7 +789,7 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -840,7 +840,7 @@ func TestReconcileNormalUpdateWhenNoGenerationChange(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -855,7 +855,7 @@ func TestReconcileNormalUpdateWhenNoGenerationChange(t *testing.T) {
 		}},
 		UpdatedAt: now.Unix(),
 	})
-	plan2, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan2, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -890,7 +890,7 @@ func TestReconcileRotateUsesUpdatedEndpointWhenGenerationChanges(t *testing.T) {
 		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
-	plan, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -917,7 +917,7 @@ func TestReconcileRotateUsesUpdatedEndpointWhenGenerationChanges(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	plan2, err := PlanTransportLinks(nil, ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan2, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -960,7 +960,7 @@ func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
-	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -995,7 +995,7 @@ func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, base)
 	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
-	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -1050,7 +1050,7 @@ func TestReconcileSecondaryTakeoverCooldownPreventsRetry(t *testing.T) {
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, base)
 	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
-	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -1102,7 +1102,7 @@ func TestReconcileTakeoverAdoptsExistingSA(t *testing.T) {
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
-	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -1143,7 +1143,7 @@ func TestReconcileTakeoverForbiddenByRevocation(t *testing.T) {
 		RevokedAt:  now.Add(-time.Minute).Unix(),
 	}
 	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
-	plan, err := PlanTransportLinks(nil, ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}

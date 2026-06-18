@@ -310,6 +310,49 @@ current charon listen port
 - 如果 host 上已有非 Higgs owner 规则占用相同端口或 chain priority，apply 必须失败或降级为 dry-run，不覆盖。
 - host rule 应绑定本地配置的 listen address / advertise address / protocol，避免无意开放全部地址。
 
+### 9.1 为什么只需要 DNAT/redirect，不需要 SNAT/MASQUERADE（待 root smoke 验证）
+
+> **状态：分析阶段，尚未在 root/container smoke 中实际验证。**
+
+当前设计只对**入方向**（prerouting）做 DNAT/redirect grace，不对**出方向**做 SNAT/MASQUERADE。原因如下：
+
+**StrongSwan (IKEv2/IPsec)：**
+
+- **出方向** IKE 包由 charon 发起，源端口是 charon 选择的**临时本地端口**（通常不是 500，由内核/charon 随机选择）。
+- 远端 peer 看到的是真实的源 IP + 临时源端口，不需要翻译。
+- **入方向** IKE 包由远端 peer 发起，目标端口是本节点公告的 advertised port（500/4500 或 range 端口）。
+- 端口 rotate 时，远端 peer 可能在 grace 窗口内仍向旧 advertised port 发包；本节点用 DNAT/redirect 把旧端口流量转到当前 charon 监听端口。
+- 因此只需要 prerouting DNAT/redirect，不需要 postrouting SNAT。
+
+**WireGuard：**
+
+- **出方向** WG 包由内核发起，源端口是内核选择的临时端口。
+- 远端 peer 同样看到真实源 IP + 临时端口。
+- **入方向** WG 包目标端口是本节点公告的 listen port。
+- 端口 rotate 时同理只需要 prerouting redirect。
+
+**验证计划：**
+
+- root/container smoke 中端口 rotate 时，抓包确认：
+  1. 出方向包源端口确实是临时端口，不是 advertised port。
+  2. DNAT/redirect 只影响入方向到旧 advertised port 的包。
+  3. 不存在需要 SNAT 的场景。
+- 如果发现某些 NAT 环境下出方向也需要端口翻译（例如对称 NAT 需要固定源端口），再补充 SNAT/MASQUERADE 规则。
+
+### 9.2 WireGuard 端口轮换准备
+
+防火墙模型已为 Phase 7 WireGuard 端口轮换做好准备：
+
+- `HostPortConfig` 支持 `WG bool` 字段，控制是否开放 WireGuard 入口端口。
+- `FirewallInstanceSpec` 支持 `WGPort uint16` 字段（默认 51820）。
+- `FirewallPolicyInput` 支持 `AdvertisedPreviousWGPorts []uint16` 字段。
+- `buildHostRules` 已实现 WireGuard ingress 规则生成和 WireGuard redirect grace 逻辑。
+
+Phase 7 实现 WireGuard 端口轮换时，只需要：
+1. 在 WireGuard 的 gossip record（如 `wireguard/ports`）中发布 current/previous 端口。
+2. 在 daemon `buildFirewallPolicyInput` 中从该 record 提取 previous WG ports 填入 `AdvertisedPreviousWGPorts`。
+3. planner 已自动处理 WG redirect grace。
+
 ## 10. Backend 兼容性
 
 ### 10.1 nftables

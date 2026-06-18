@@ -41,11 +41,16 @@ type LocalService struct {
 	Sources []netip.Prefix // empty = allow from authorized mesh prefixes
 }
 
-// HostPortConfig controls which IKE/NAT-T entry ports are opened on the host.
+// HostPortConfig controls which entry ports are opened on the host for inbound
+// transport connections (IKE, NAT-T, WireGuard, etc.).
 type HostPortConfig struct {
-	IKE  bool
-	NATT bool
+	IKE  bool // UDP 500
+	NATT bool // UDP 4500
+	WG   bool // WireGuard listen port (configurable)
 }
+
+// WGPort is the WireGuard listen port for HostPortConfig.WG.
+// Default 51820 if not set.
 
 // RedirectGrace enables the old/current advertised port → current charon
 // listen port DNAT/redirect grace window on the host.
@@ -77,6 +82,7 @@ type FirewallInstanceSpec struct {
 	ListenAddrs    []netip.Addr // host listen/advertise addresses to bind rules
 	CharonIKEPort  uint16       // current charon IKE listen port (default 500)
 	CharonNATTPort uint16       // current charon NAT-T listen port (default 4500)
+	WGPort         uint16       // current WireGuard listen port (default 51820)
 
 	// Hooks: admin custom chains that Higgs jumps to but does not manage.
 	Hooks Hooks
@@ -136,9 +142,16 @@ type FirewallPolicyInput struct {
 	LiveInterfaces []string
 	// Upstream interfaces.
 	UpstreamInterfaces []string
-	// AdvertisedPreviousPorts are the old/current advertised IKE ports still
+	// AdvertisedPreviousIKEPorts are the old/current advertised IKE ports still
 	// within the redirect grace window (from ipsec/ports record).
-	AdvertisedPreviousPorts []uint16
+	AdvertisedPreviousIKEPorts []uint16
+	// AdvertisedPreviousNATTPorts are the old/current advertised NAT-T ports
+	// still within the redirect grace window (from ipsec/ports record).
+	AdvertisedPreviousNATTPorts []uint16
+	// AdvertisedPreviousWGPorts are the old/current advertised WireGuard ports
+	// still within the redirect grace window (from wireguard/ports record or
+	// config). Reserved for Phase 7 WireGuard port rotation.
+	AdvertisedPreviousWGPorts []uint16
 }
 
 // FirewallDesiredState is the backend-agnostic desired rule model.

@@ -138,7 +138,7 @@ func TestBuildDesiredState_HostInstance(t *testing.T) {
 		RedirectGrace: RedirectGrace{Enabled: true},
 	}
 	input := FirewallPolicyInput{
-		AdvertisedPreviousPorts: []uint16{4500},
+		AdvertisedPreviousNATTPorts: []uint16{4500},
 	}
 	desired, err := BuildDesiredState(spec, input)
 	if err != nil {
