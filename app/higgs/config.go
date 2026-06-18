@@ -56,6 +56,7 @@ type appConfig struct {
 	IPAM                 ipamConfig
 	Netns                netnsConfig
 	Routing              routingConfig
+	Firewall             firewallConfig
 }
 
 type configYAML struct {
@@ -108,6 +109,7 @@ type configYAML struct {
 	IPAM              ipamConfigYAML           `yaml:"ipam"`
 	Netns             *netnsConfigYAML         `yaml:"netns"`
 	Routing           *routingInstancesYAML    `yaml:"routing"`
+	Firewall          *firewallConfigYAML      `yaml:"firewall"`
 	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
 }
 
@@ -449,6 +451,14 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	if file.Routing != nil {
 		var err error
 		config.Routing, err = parseRoutingConfigInstances(file.Routing.Instances, config.Netns, config.DataDir)
+		if err != nil {
+			return err
+		}
+	}
+	// Parse firewall.instances[], if any.
+	if file.Firewall != nil {
+		var err error
+		config.Firewall, err = parseFirewallConfig(file.Firewall, config.Netns, config.DataDir)
 		if err != nil {
 			return err
 		}

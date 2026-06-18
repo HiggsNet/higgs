@@ -418,6 +418,13 @@ func cmdDebug() *cli.Command {
 					return debugAdmission()
 				},
 			},
+			{
+				Name:  "firewall",
+				Usage: "Show firewall reconcile state and owned objects",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugFirewall(ctx, cmd)
+				},
+			},
 		},
 	}
 }

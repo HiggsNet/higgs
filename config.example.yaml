@@ -157,3 +157,41 @@ overlays:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
     deny:
       - "strongswan://*.lab.catofes."
+
+# Phase 6.3: Firewall rule sync (optional). Default disabled unless
+# firewall.instances[] is present. Each instance is scoped to a netns (overlay
+# data-plane) or to the host (IKE/NAT-T entry ports + port rotate redirect
+# grace). Default mode=managed with backend=auto and default_policy=drop.
+firewall:
+  instances:
+    - id: h2
+      netns: h2
+      enabled: true
+      mode: managed
+      backend: auto
+      default_policy: drop
+      xfrm_tunnel_pattern: "hgs*"
+      # Explicit overlay netns services to allow under default drop.
+      # local_services:
+      #   - proto: tcp
+      #     port: 8080
+      #     sources:
+      #       - 10.42.0.0/16
+      # Forwarding/transit policy shared by BIRD and firewall.
+      forwarding:
+        transit: false
+        # allow_prefixes:
+        #   - 10.42.0.0/16
+        # deny_prefixes:
+        #   - 10.99.0.0/24
+
+    - id: host-ipsec
+      host: true
+      enabled: true
+      mode: managed
+      backend: auto
+      host_ports:
+        ike: true
+        natt: true
+      redirect_grace:
+        enabled: true

@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -11,7 +11,7 @@ GO_MOD_CACHE ?= /tmp/higgs-gomodcache
 LDFLAGS := -s -w
 CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
-SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke
+SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke
 
 all: build
 
@@ -78,6 +78,11 @@ routing-dry-run-smoke:
 ipsec-policy-smoke:
 	$(GO_ENV) $(GO) test ./pkg/transport/ipsec -run 'Test(ParseMeshPolicy|PlanTransportLinksAppliesMeshPolicyRules)'
 	@echo "IPsec policy smoke passed"
+
+firewall-dry-run-smoke:
+	$(GO_ENV) $(GO) test ./pkg/firewall
+	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ParseConfigYAMLFirewall|TestFirewallInstancesEnabled|TestFirewallInstanceSpecFromConfig|TestReconcileFirewall|TestDebugFirewall)' -v
+	@echo "Firewall dry-run smoke passed"
 
 # Smoke 目标约定：
 # - 每个 smoke 都在 $TMPDIR 下创建独立目录，避免重复运行时复用密钥、
@@ -876,6 +881,7 @@ help:
 	@echo "  ipsec-policy-smoke - Run IPsec mesh policy URI rule planner smoke test"
 	@echo "  ipsec-dry-run-smoke - Run IPsec planner + fake driver reconcile smoke test"
 	@echo "  routing-dry-run-smoke - Run Phase 5 routing dry-run smoke test"
+	@echo "  firewall-dry-run-smoke - Run Phase 6.3 firewall planner + config dry-run smoke test"
 	@echo "  ipsec-xfrm-preflight - Check root/netns/XFRM/StrongSwan prerequisites"
 	@echo "  ipsec-xfrm-smoke - Run real StrongSwan/XFRM smoke (requires root, NOT in smoke-all)"
 	@echo "  ipsec-xfrm-container-smoke - Run StrongSwan/XFRM smoke in privileged container"

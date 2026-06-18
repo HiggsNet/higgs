@@ -52,21 +52,22 @@ type controlRequest struct {
 }
 
 type controlResponse struct {
-	OK               bool                          `json:"ok"`
-	Error            string                        `json:"error,omitempty"`
-	PeerID           string                        `json:"peer_id,omitempty"`
-	LinkInstances    int                           `json:"link_instances,omitempty"`
-	DesiredLinks     int                           `json:"desired_links,omitempty"`
-	LastLinkError    string                        `json:"last_link_error,omitempty"`
-	LastRoutingError string                        `json:"last_routing_error,omitempty"`
-	Version          uint64                        `json:"version,omitempty"`
-	Message          string                        `json:"message,omitempty"`
-	Zone             zone.ZonePath                 `json:"zone,omitempty"`
-	RootPublicKey    ed25519.PublicKey             `json:"root_public_key,omitempty"`
-	JoinBundle       *joinBundle                   `json:"join_bundle,omitempty"`
-	BirdInstances    map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
-	RoutesDump       *routesDumpResponse           `json:"routes_dump,omitempty"`
-	Admission        *admissionDiagnosis           `json:"admission,omitempty"`
+	OK                bool                          `json:"ok"`
+	Error             string                        `json:"error,omitempty"`
+	PeerID            string                        `json:"peer_id,omitempty"`
+	LinkInstances     int                           `json:"link_instances,omitempty"`
+	DesiredLinks      int                           `json:"desired_links,omitempty"`
+	LastLinkError     string                        `json:"last_link_error,omitempty"`
+	LastRoutingError  string                        `json:"last_routing_error,omitempty"`
+	Version           uint64                        `json:"version,omitempty"`
+	Message           string                        `json:"message,omitempty"`
+	Zone              zone.ZonePath                 `json:"zone,omitempty"`
+	RootPublicKey     ed25519.PublicKey             `json:"root_public_key,omitempty"`
+	JoinBundle        *joinBundle                   `json:"join_bundle,omitempty"`
+	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
+	RoutesDump        *routesDumpResponse           `json:"routes_dump,omitempty"`
+	Admission         *admissionDiagnosis           `json:"admission,omitempty"`
+	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
 }
 
 func controlSocketPath(config *appConfig) string {

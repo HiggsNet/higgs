@@ -1775,7 +1775,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		},
 	}
 
-	syncNow, shutdown, ipsecFlushed, _ := service.processEvents(context.Background())
+	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background())
 	if !syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}

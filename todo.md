@@ -1023,15 +1023,22 @@
 
 **设计文档：** `docs/phase6-firewall-design.md`
 
-- [ ] **6.3.1 策略边界与 owner 模型**
+- [x] **6.3.1 策略边界与 owner 模型**
   - 防火墙主策略按 `routing.instances[]` / netns 维度生成；默认在 overlay/data-plane netns 内过滤 XFRM、veth upstream、BIRD 学习路由对应的数据面流量。
+    - `firewall.instances[]` 与 `routing.instances[]` 对齐，overlay 实例按 netns 生成 input/forward/output chain；host 实例独立生成 IKE/NAT-T ingress 和 redirect grace。
   - host netns 只处理必须落在 host 的入口能力：IKE/NAT-T 监听端口、端口 rotate 的 DNAT/redirect grace、必要的 outer UDP/TCP allow rules；不得默认接管 host 全局防火墙。
+    - `FirewallInstanceSpec.IsHost` 路径只生成 `HostIngress`（IKE 500 / NAT-T 4500）和可选 `NatRedirect`（previous → current），不生成 overlay forward chain。
   - 每个规则集都必须带 Higgs owner token / table-chain 命名前缀 / generation id；reconcile 只增删自己拥有的对象，避免覆盖管理员手写规则。
+    - `OwnerToken` 派生稳定 token；`DesiredObjects` 输出 `higgs_<scope>` 前缀的 table/chain/set；`PlanDiff` 仅按 desired/observed owner 对象集合做 create/adopt/delete，`ListOwned` 只读取 Higgs-owned 对象。
   - 定义 dry-run diff：展示将创建/删除的 table、chain、set、rule、NAT redirect 和默认策略，供 `higgs debug` / 后续 apply 确认使用。
-- [ ] **6.3.2 配置模型与可扩展 hook**
+    - `FirewallPlan.Actions` 以 create/adopt/delete 输出每个对象及 reason；`debug firewall` 展示 backend、mode、default_policy、transit、local_services、generation、owned_objects、policy_hash、last_error。
+- [x] **6.3.2 配置模型与可扩展 hook**
   - 新增 `firewall.instances[]` 或 netns 级 `firewall` 配置：`enabled`、`mode=managed|external|disabled`、`backend=auto|nft|iptables|none`、`default_policy=drop|accept`、`netns`、`priority`、`owner_prefix`、`allow_hooks`、`nat_hooks`。
+    - `firewallConfig` + `firewallInstanceYAML` 支持 id/netns/host/enabled/mode/backend/default_policy/owner_prefix/xfrm_tunnel_pattern/upstream_patterns/local_services/host_ports/redirect_grace/hooks/forwarding；校验 mode/backend/default_policy 合法性。
   - 预留 hook 层：管理员可在 Higgs 生成链之前/之后插入自定义 chain，或声明额外 allow/drop/nat 片段；Higgs 负责顺序、优先级和冲突检测，不把自定义规则内联进核心生成器。
+    - `Hooks` 支持 pre/post input/forward/output 和 host pre/post prerouting/input；planner 按固定顺序插入 jump 规则，不管理 hook chain 内部规则。
   - 外部托管模式下 Higgs 只生成 desired-state/dry-run，并可校验 owner chain 是否存在；不直接修改管理员负责的防火墙。
+    - `mode=external` 走 planner + dry-run driver，不修改系统；`mode=disabled` 不生成任何规则。
 - [ ] **6.3.3 overlay netns 数据面过滤**
   - 从 `AuthorizedRouteSet.AllAssignments`、合法 route announcements、有效 peer/zone、当前 up/staged/draining link 计算允许通过 overlay 的 prefix set；不再沿用旧的 `TunnelAllowedIPs` 作为唯一来源。
   - 默认 drop 未授权的 forwarded/input traffic，只允许：本节点合法 assigned prefixes、本地服务明确开放端口、BIRD/Babel 控制流量、健康检查/keepalive、已授权 peer/subtree 的 overlay prefix。

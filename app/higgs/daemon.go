@@ -31,6 +31,7 @@ type DaemonService struct {
 	drainingEvents    bool
 	ipsecDirty        bool
 	routingDirty      bool
+	firewallDirty     bool
 
 	eventLoopSync     bool
 	syncSessions      map[string]*SyncSession
@@ -190,6 +191,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.Sync.updateDiscoveredPeers()
 	d.recoverIPsecLinksOnStart(ctx)
 	d.recoverRoutingOnStart(ctx)
+	d.recoverFirewallOnStart(ctx)
 	d.Sync.State.Unlock()
 	var forceSync bool
 	for {
@@ -197,10 +199,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			return nil
 		}
 		now := d.Sync.now()
-		syncNow, shutdown, ipsecFlushed, routingFlushed := d.processEvents(ctx)
+		syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed := d.processEvents(ctx)
 		if shutdown {
 			return nil
 		}
+		_ = firewallFlushed
 		if syncNow {
 			nextSync = now
 			forceSync = true
@@ -546,6 +549,19 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			Admission: &diagnosis,
 			Message:   "admission status",
 		})
+	case "firewall_status":
+		if d.Sync.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
+			return
+		}
+		d.Sync.State.RLock()
+		fwSnapshot := d.Sync.State.FirewallReconcile
+		d.Sync.State.RUnlock()
+		writeControlResponse(conn, controlResponse{
+			OK:                true,
+			FirewallReconcile: fwSnapshot,
+			Message:           "firewall status",
+		})
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}
@@ -569,12 +585,13 @@ func (d *DaemonService) enqueueEvent(ctx context.Context, event daemonEvent) dae
 	}
 }
 
-func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool, ipsecFlushed bool, routingFlushed bool) {
+func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool, ipsecFlushed bool, routingFlushed bool, firewallFlushed bool) {
 	d.drainingEvents = true
 	defer func() {
 		d.drainingEvents = false
 		ipsecFlushed = d.flushIPsecReconcile(ctx)
 		routingFlushed = d.flushRoutingReconcile(ctx)
+		firewallFlushed = d.flushFirewallReconcile(ctx)
 	}()
 	for {
 		select {
@@ -586,10 +603,10 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 			syncNow = syncNow || triggerSync
 			shutdown = shutdown || stop
 			if shutdown {
-				return syncNow, shutdown, ipsecFlushed, routingFlushed
+				return syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed
 			}
 		default:
-			return syncNow, shutdown, ipsecFlushed, routingFlushed
+			return syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed
 		}
 	}
 }
@@ -1017,12 +1034,15 @@ func (d *DaemonService) notifyStateChanged() {
 	if d.drainingEvents {
 		d.ipsecDirty = true
 		d.routingDirty = true
+		d.firewallDirty = true
 		return
 	}
 	d.ipsecDirty = true
 	d.routingDirty = true
+	d.firewallDirty = true
 	d.flushIPsecReconcile(context.Background())
 	d.flushRoutingReconcile(context.Background())
+	d.flushFirewallReconcile(context.Background())
 }
 
 func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {

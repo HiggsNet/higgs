@@ -28,6 +28,7 @@ type stateFile struct {
 	LinkInstances     map[string]linkInstanceState
 	IPsecReconcile    *ipsecReconcileState
 	RoutingReconcile  *routingReconcileState
+	FirewallReconcile *firewallReconcileState
 	BirdInstances     map[string]*BirdInstanceState
 	Admission         *admissionState `json:"admission,omitempty"`
 }
@@ -79,8 +80,25 @@ type stateMeta struct {
 	LinkInstances     map[string]linkInstanceState  `json:"link_instances,omitempty"`
 	IPsecReconcile    *ipsecReconcileState          `json:"ipsec_reconcile,omitempty"`
 	RoutingReconcile  *routingReconcileState        `json:"routing_reconcile,omitempty"`
+	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
 	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
 	Admission         *admissionState               `json:"admission,omitempty"`
+}
+
+// firewallReconcileState persists firewall reconcile diagnostics per instance.
+type firewallReconcileState struct {
+	Backend     string                                          `json:"backend,omitempty"`
+	Instances   map[string]*firewallInstanceReconcileStateEntry `json:"instances,omitempty"`
+	LastRunUnix int64                                           `json:"last_run_unix,omitempty"`
+	LastError   string                                          `json:"last_error,omitempty"`
+}
+
+type firewallInstanceReconcileStateEntry struct {
+	Generation   uint64 `json:"generation,omitempty"`
+	LastRunUnix  int64  `json:"last_run_unix,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	PolicyHash   string `json:"policy_hash,omitempty"`
+	OwnedObjects int    `json:"owned_objects,omitempty"`
 }
 
 // admissionState tracks auto-join admission diagnostics. It is persisted so
@@ -425,6 +443,7 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		LinkInstances:     meta.LinkInstances,
 		IPsecReconcile:    meta.IPsecReconcile,
 		RoutingReconcile:  meta.RoutingReconcile,
+		FirewallReconcile: meta.FirewallReconcile,
 		BirdInstances:     meta.BirdInstances,
 		Admission:         meta.Admission,
 	}
@@ -486,6 +505,7 @@ func saveStateAt(path string, state *stateFile) error {
 		LinkInstances:     state.LinkInstances,
 		IPsecReconcile:    state.IPsecReconcile,
 		RoutingReconcile:  state.RoutingReconcile,
+		FirewallReconcile: state.FirewallReconcile,
 		BirdInstances:     state.BirdInstances,
 		Admission:         state.Admission,
 	}

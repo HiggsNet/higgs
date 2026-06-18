@@ -70,22 +70,22 @@ type routingInstancesYAML struct {
 }
 
 type routingInstanceYAML struct {
-	ID             string             `yaml:"id"`
-	NetNS          string             `yaml:"netns"`
-	Enabled        *bool              `yaml:"enabled"`
-	Protocol       string             `yaml:"protocol"`
-	Mode           string             `yaml:"mode"`
-	ControlSocket  string             `yaml:"control_socket"`
-	PIDFile        string             `yaml:"pid_file"`
-	ConfigFile     string             `yaml:"config_file"`
-	TableID        string             `yaml:"table"`
-	MetricBase     uint               `yaml:"metric_base"`
-	MetricStaged   uint               `yaml:"metric_staged"`
-	MetricDraining uint               `yaml:"metric_draining"`
-	ECMP           *bool              `yaml:"ecmp"`
-	ECMPLimit      uint               `yaml:"ecmp_limit"`
-	InterfacePat   string             `yaml:"interface_pattern"`
-	RouterIDLabel  string             `yaml:"router_id_label"`
+	ID             string              `yaml:"id"`
+	NetNS          string              `yaml:"netns"`
+	Enabled        *bool               `yaml:"enabled"`
+	Protocol       string              `yaml:"protocol"`
+	Mode           string              `yaml:"mode"`
+	ControlSocket  string              `yaml:"control_socket"`
+	PIDFile        string              `yaml:"pid_file"`
+	ConfigFile     string              `yaml:"config_file"`
+	TableID        string              `yaml:"table"`
+	MetricBase     uint                `yaml:"metric_base"`
+	MetricStaged   uint                `yaml:"metric_staged"`
+	MetricDraining uint                `yaml:"metric_draining"`
+	ECMP           *bool               `yaml:"ecmp"`
+	ECMPLimit      uint                `yaml:"ecmp_limit"`
+	InterfacePat   string              `yaml:"interface_pattern"`
+	RouterIDLabel  string              `yaml:"router_id_label"`
 	Upstream       *upstreamConfigYAML `yaml:"upstream"`
 }
 

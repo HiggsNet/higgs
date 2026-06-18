@@ -41,18 +41,18 @@ func TestExecProcessManagerRootSmoke(t *testing.T) {
 	}
 
 	spec := BirdInstanceSpec{
-		RouterID:           0x0a000001, // 10.0.0.1
-		NetNSName:          nsName,
-		Mode:               BirdModeManaged,
-		NetNS:              NetNSSpec{Kind: "name", Name: nsName, Create: false},
-		ControlSocketPath:  filepath.Join(tmpDir, "bird.ctl"),
-		PIDFilePath:        filepath.Join(tmpDir, "bird.pid"),
-		ConfigPath:         filepath.Join(tmpDir, "bird.conf"),
-		TableID:            "main",
-		InterfacePatterns:  []string{"hgs*"},
-		MetricBase:         100,
-		MetricStaged:       200,
-		MetricDraining:     500,
+		RouterID:          0x0a000001, // 10.0.0.1
+		NetNSName:         nsName,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsName, Create: false},
+		ControlSocketPath: filepath.Join(tmpDir, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpDir, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpDir, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{"hgs*"},
+		MetricBase:        100,
+		MetricStaged:      200,
+		MetricDraining:    500,
 	}
 
 	// Generate a minimal BIRD config.
@@ -172,32 +172,32 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 
 	// Prepare BIRD configs for both sides.
 	specA := BirdInstanceSpec{
-		RouterID:           0x0a630101, // 10.99.1.1
-		NetNSName:          nsA,
-		Mode:               BirdModeManaged,
-		NetNS:              NetNSSpec{Kind: "name", Name: nsA, Create: false},
-		ControlSocketPath:  filepath.Join(tmpA, "bird.ctl"),
-		PIDFilePath:        filepath.Join(tmpA, "bird.pid"),
-		ConfigPath:         filepath.Join(tmpA, "bird.conf"),
-		TableID:            "main",
-		InterfacePatterns:  []string{vethA},
-		MetricBase:         100,
-		MetricStaged:       200,
-		MetricDraining:     500,
+		RouterID:          0x0a630101, // 10.99.1.1
+		NetNSName:         nsA,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsA, Create: false},
+		ControlSocketPath: filepath.Join(tmpA, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpA, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpA, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{vethA},
+		MetricBase:        100,
+		MetricStaged:      200,
+		MetricDraining:    500,
 	}
 	specB := BirdInstanceSpec{
-		RouterID:           0x0a630102, // 10.99.1.2
-		NetNSName:          nsB,
-		Mode:               BirdModeManaged,
-		NetNS:              NetNSSpec{Kind: "name", Name: nsB, Create: false},
-		ControlSocketPath:  filepath.Join(tmpB, "bird.ctl"),
-		PIDFilePath:        filepath.Join(tmpB, "bird.pid"),
-		ConfigPath:         filepath.Join(tmpB, "bird.conf"),
-		TableID:            "main",
-		InterfacePatterns:  []string{vethB},
-		MetricBase:         100,
-		MetricStaged:       200,
-		MetricDraining:     500,
+		RouterID:          0x0a630102, // 10.99.1.2
+		NetNSName:         nsB,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsB, Create: false},
+		ControlSocketPath: filepath.Join(tmpB, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpB, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpB, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{vethB},
+		MetricBase:        100,
+		MetricStaged:      200,
+		MetricDraining:    500,
 	}
 
 	// The BIRD config generator normally targets "hgs*" tunnel interfaces.
@@ -285,7 +285,8 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 // are exchanged bidirectionally.
 //
 // Topology:
-//   host ns (10.99.2.1/30) ←veth→ overlay ns (10.99.2.2/30)
+//
+//	host ns (10.99.2.1/30) ←veth→ overlay ns (10.99.2.2/30)
 //
 // Host announces 172.16.1.0/24, overlay announces 172.16.2.0/24.
 // After convergence, both sides should have learned each other's prefix.
@@ -340,8 +341,8 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 	hostSocketPath := filepath.Join(tmpHost, "bird.ctl")
 	hostPIDPath := filepath.Join(tmpHost, "bird.pid")
 	hostCfg := generateMinimalBabelConfig(BirdInstanceSpec{
-		RouterID:          0x0a630201, // 10.99.2.1
-		ConfigPath:        hostCfgPath,
+		RouterID:   0x0a630201, // 10.99.2.1
+		ConfigPath: hostCfgPath,
 	}, vethHost, "172.16.1.0/24")
 	if err := os.WriteFile(hostCfgPath, []byte(hostCfg), 0644); err != nil {
 		t.Fatalf("write host config: %v", err)

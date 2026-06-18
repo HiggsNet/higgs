@@ -164,20 +164,20 @@ type BirdConfig struct {
 	ImportFilters  []FilterBlock
 	ExportFilters  []FilterBlock
 	StaticRoutes   []StaticRouteBlock
-	UpstreamFilter  *FilterBlock // optional kernel export filter for upstream
+	UpstreamFilter *FilterBlock // optional kernel export filter for upstream
 }
 
 // StaticRouteBlock describes one "protocol static { route ... }" block.
 type StaticRouteBlock struct {
-	Name        string
-	IPv4Routes  []StaticRoute
-	IPv6Routes  []StaticRoute
+	Name       string
+	IPv4Routes []StaticRoute
+	IPv6Routes []StaticRoute
 }
 
 // StaticRoute is a single route line within a protocol static block.
 type StaticRoute struct {
-	Prefix   netip.Prefix
-	Via      string // interface name for "via" routes; empty for blackhole
+	Prefix    netip.Prefix
+	Via       string // interface name for "via" routes; empty for blackhole
 	Blackhole bool
 }
 
