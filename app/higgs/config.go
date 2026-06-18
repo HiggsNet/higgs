@@ -57,6 +57,7 @@ type appConfig struct {
 	Netns                netnsConfig
 	Routing              routingConfig
 	Firewall             firewallConfig
+	PeerLifecycle        PeerLifecycleConfig
 }
 
 type configYAML struct {
@@ -110,7 +111,16 @@ type configYAML struct {
 	Netns             *netnsConfigYAML         `yaml:"netns"`
 	Routing           *routingInstancesYAML    `yaml:"routing"`
 	Firewall          *firewallConfigYAML      `yaml:"firewall"`
+	PeerLifecycle     *peerLifecycleYAML       `yaml:"peer_lifecycle"`
 	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
+}
+
+// peerLifecycleYAML is the YAML representation of PeerLifecycleConfig.
+type peerLifecycleYAML struct {
+	StaleAfter       string `yaml:"stale_after"`
+	OfflineAfter     string `yaml:"offline_after"`
+	CleanupAfter     string `yaml:"cleanup_after"`
+	KeepSAWhileStale *bool  `yaml:"keep_sa_while_stale"`
 }
 
 type configStringList []string
@@ -476,7 +486,66 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	if file.IPAM.AutoAnnounceAssignedIPs != nil {
 		config.IPAM.AutoAnnounceAssignedIPs = *file.IPAM.AutoAnnounceAssignedIPs
 	}
+	if file.PeerLifecycle != nil {
+		pl, err := parsePeerLifecycleConfig(file.PeerLifecycle)
+		if err != nil {
+			return err
+		}
+		config.PeerLifecycle = pl
+	}
 	return nil
+}
+
+// parsePeerLifecycleConfig parses the peer_lifecycle YAML section with validation.
+func parsePeerLifecycleConfig(y *peerLifecycleYAML) (PeerLifecycleConfig, error) {
+	def := defaultPeerLifecycleConfig()
+	out := PeerLifecycleConfig{
+		StaleAfter:       def.StaleAfter,
+		OfflineAfter:     def.OfflineAfter,
+		CleanupAfter:     def.CleanupAfter,
+		KeepSAWhileStale: def.KeepSAWhileStale,
+	}
+	if y.StaleAfter != "" {
+		d, err := parseConfigDuration(y.StaleAfter, "peer_lifecycle.stale_after")
+		if err != nil {
+			return PeerLifecycleConfig{}, err
+		}
+		if d <= 0 {
+			return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.stale_after must be positive, got %s", d)
+		}
+		out.StaleAfter = d
+	}
+	if y.OfflineAfter != "" {
+		d, err := parseConfigDuration(y.OfflineAfter, "peer_lifecycle.offline_after")
+		if err != nil {
+			return PeerLifecycleConfig{}, err
+		}
+		if d <= 0 {
+			return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.offline_after must be positive, got %s", d)
+		}
+		out.OfflineAfter = d
+	}
+	if y.CleanupAfter != "" {
+		d, err := parseConfigDuration(y.CleanupAfter, "peer_lifecycle.cleanup_after")
+		if err != nil {
+			return PeerLifecycleConfig{}, err
+		}
+		if d <= 0 {
+			return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.cleanup_after must be positive, got %s", d)
+		}
+		out.CleanupAfter = d
+	}
+	if y.KeepSAWhileStale != nil {
+		out.KeepSAWhileStale = *y.KeepSAWhileStale
+	}
+	// Validate threshold ordering: stale < offline < cleanup.
+	if out.StaleAfter >= out.OfflineAfter {
+		return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.stale_after %s must be less than offline_after %s", out.StaleAfter, out.OfflineAfter)
+	}
+	if out.OfflineAfter >= out.CleanupAfter {
+		return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.offline_after %s must be less than cleanup_after %s", out.OfflineAfter, out.CleanupAfter)
+	}
+	return out, nil
 }
 
 func validateRotateWindows(config *appConfig) error {

@@ -45,6 +45,18 @@ endpoint_discovery: all
 # from local network interfaces are excluded from the advertised endpoint list.
 filter_private_ipv4: false
 
+# Phase 6.4: Dynamic peer management lifecycle thresholds. A peer that has not
+# been seen for stale_after is marked stale (retains SA and config, reduced
+# reconnect frequency). Beyond offline_after it enters low-frequency backoff.
+# Beyond cleanup_after Higgs owner-managed SA/interface/route/firewall entries
+# are cleaned up. Revoked peers are always cleaned up immediately regardless of
+# these thresholds.
+# peer_lifecycle:
+#   stale_after: 2m
+#   offline_after: 10m
+#   cleanup_after: 1h
+#   keep_sa_while_stale: true
+
 # Phase 6 IPAM configuration.
 ipam:
   # When true, the daemon automatically publishes routes/announcements/* for

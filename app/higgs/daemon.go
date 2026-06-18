@@ -562,6 +562,18 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			FirewallReconcile: fwSnapshot,
 			Message:           "firewall status",
 		})
+	case "peers_status":
+		if d.Sync.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
+			return
+		}
+		peerStatuses := d.peerStatusSnapshotForControl()
+		writeControlResponse(conn, controlResponse{
+			OK:           true,
+			PeerID:       d.Sync.Config.PeerID,
+			PeerStatuses: peerStatuses,
+			Message:      "peers status",
+		})
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}

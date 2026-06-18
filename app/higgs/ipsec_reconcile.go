@@ -280,16 +280,10 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 }
 
 func revokedLinkPeers(state *stateFile, now time.Time) map[zone.ZonePath]bool {
-	out := map[zone.ZonePath]bool{}
-	if state == nil || state.Network == nil {
-		return out
-	}
-	for _, inst := range state.LinkInstances {
-		if state.Network.IsZoneRevoked(inst.PeerZone, now) {
-			out[inst.PeerZone] = true
-		}
-	}
-	return out
+	// Phase 6.4.5: use the comprehensive revoked peer zone collector that
+	// covers both LinkInstances and SyncPeers, so that revocation is detected
+	// even for peers that don't have an active link instance yet.
+	return collectRevokedPeerZones(state, now)
 }
 
 func injectIPsecKeyMaterial(state *stateFile, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {

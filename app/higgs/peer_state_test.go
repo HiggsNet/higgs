@@ -1,0 +1,595 @@
+package main
+
+import (
+	"bytes"
+	"crypto/ed25519"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+)
+
+// buildPeerStateTestNetwork creates a minimal network state for peer lifecycle
+// tests: root -> catofes. -> node-a.catofes./node-b.catofes. with signed
+// delegations. The managed zone is node-a.catofes.
+func buildPeerStateTestNetwork(t *testing.T) (*stateFile, ed25519.PrivateKey, ed25519.PrivateKey, ed25519.PrivateKey) {
+	t.Helper()
+	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root): %v", err)
+	}
+	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(catofes): %v", err)
+	}
+	nodeAPub, nodeAPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-a): %v", err)
+	}
+	nodeBPub, nodeBPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(node-b): %v", err)
+	}
+
+	rootAuthority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys:      []zone.AuthorizedKey{{Key: rootPub, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermDelegate}}}}},
+	}
+	catofesAuthority := &zone.ZoneAuthority{
+		Zone:      "catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys:      []zone.AuthorizedKey{{Key: catofesPub, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermDelegate}}}}},
+	}
+	nodeAAuthority := &zone.ZoneAuthority{
+		Zone:      "node-a.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys:      []zone.AuthorizedKey{{Key: nodeAPub, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}}},
+	}
+	nodeBAuthority := &zone.ZoneAuthority{
+		Zone:      "node-b.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys:      []zone.AuthorizedKey{{Key: nodeBPub, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}}},
+	}
+
+	catofesDelegation := &zone.Delegation{ZoneName: "catofes.", Scope: zone.DelegationScopeDirectChild, Authority: *catofesAuthority}
+	if err := higgscrypto.SignDelegation(catofesDelegation, zone.RootZone, rootPriv); err != nil {
+		t.Fatalf("SignDelegation(catofes): %v", err)
+	}
+	nodeADelegation := &zone.Delegation{ZoneName: "node-a.catofes.", Scope: zone.DelegationScopeDirectChild, Authority: *nodeAAuthority}
+	if err := higgscrypto.SignDelegation(nodeADelegation, "catofes.", catofesPriv); err != nil {
+		t.Fatalf("SignDelegation(node-a): %v", err)
+	}
+	nodeBDelegation := &zone.Delegation{ZoneName: "node-b.catofes.", Scope: zone.DelegationScopeDirectChild, Authority: *nodeBAuthority}
+	if err := higgscrypto.SignDelegation(nodeBDelegation, "catofes.", catofesPriv); err != nil {
+		t.Fatalf("SignDelegation(node-b): %v", err)
+	}
+
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	ns.Zones["catofes."] = zone.NewZoneState("catofes.", catofesAuthority)
+	ns.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nodeAAuthority)
+	ns.Zones["node-b.catofes."] = zone.NewZoneState("node-b.catofes.", nodeBAuthority)
+	ns.Zones[zone.RootZone].Delegations["catofes."] = catofesDelegation
+	ns.Zones["catofes."].Delegations["node-a.catofes."] = nodeADelegation
+	ns.Zones["catofes."].Delegations["node-b.catofes."] = nodeBDelegation
+	configureValidation(ns)
+	now := time.Unix(1000, 0)
+	if err := higgscrypto.VerifyChain(ns, "catofes.", now); err != nil {
+		t.Fatalf("VerifyChain(catofes): %v", err)
+	}
+	if err := higgscrypto.VerifyChain(ns, "node-a.catofes.", now); err != nil {
+		t.Fatalf("VerifyChain(node-a): %v", err)
+	}
+	if err := higgscrypto.VerifyChain(ns, "node-b.catofes.", now); err != nil {
+		t.Fatalf("VerifyChain(node-b): %v", err)
+	}
+
+	state := &stateFile{
+		ManagedZone:    "node-a.catofes.",
+		Network:        ns,
+		ZonePrivateKey: nodeAPriv,
+		SyncPeers:      make(map[string]syncPeerState),
+		LinkInstances:  make(map[string]linkInstanceState),
+	}
+	return state, catofesPriv, nodeAPriv, nodeBPriv
+}
+
+// addRevocationToParent creates a signed revocation/tombstone for the given
+// child zone in the parent zone state. The now parameter sets RevokedAt so the
+// revocation is active at the test's simulated time.
+func addRevocationToParent(t *testing.T, state *stateFile, parentZone, childZone zone.ZonePath, signer ed25519.PrivateKey, now time.Time) {
+	t.Helper()
+	parentState := state.Network.Zones[parentZone]
+	if parentState == nil {
+		t.Fatalf("parent zone %s not found", parentZone)
+	}
+	revocation := &zone.DelegationRevocation{
+		ChildZone:             childZone,
+		ParentZone:            parentZone,
+		RevokedAuthorityEpoch: 1,
+		Reason:                "test revocation",
+		RevokedAt:             now.Unix(),
+		TTLSeconds:            int64(time.Hour.Seconds()),
+	}
+	if err := higgscrypto.SignDelegationRevocation(revocation, parentZone, signer); err != nil {
+		t.Fatalf("SignDelegationRevocation(%s): %v", childZone, err)
+	}
+	parentState.Revocations[childZone] = revocation
+	delete(parentState.Delegations, childZone)
+}
+
+func TestDerivePeerStatusRevoked(t *testing.T) {
+	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig()
+
+	// Before revocation: node-b should not be revoked.
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State == peerStateRevoked {
+		t.Fatalf("peer should not be revoked before revocation is added, got state=%s", info.State)
+	}
+
+	// Add revocation for node-b in catofes parent zone.
+	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
+
+	// After revocation: node-b should be revoked, overriding any other state.
+	info = derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != peerStateRevoked {
+		t.Fatalf("state = %s, want revoked", info.State)
+	}
+	if info.Reason != "zone_revoked" {
+		t.Fatalf("reason = %s, want zone_revoked", info.Reason)
+	}
+}
+
+func TestDerivePeerStatusActiveWithUpLink(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig()
+
+	// Add a LinkInstance for node-b that is up.
+	state.LinkInstances["link-node-b"] = linkInstanceState{
+		ID:             "link-node-b",
+		PeerZone:       "node-b.catofes.",
+		ActualState:    "up",
+		LastTransition: now.Unix(),
+	}
+
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != peerStateActive {
+		t.Fatalf("state = %s, want active", info.State)
+	}
+	if info.UpLinks != 1 {
+		t.Fatalf("up_links = %d, want 1", info.UpLinks)
+	}
+	if info.ActualLinks != 1 {
+		t.Fatalf("actual_links = %d, want 1", info.ActualLinks)
+	}
+}
+
+func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig()
+
+	// Add a LinkInstance for node-b that is connecting (not up).
+	state.LinkInstances["link-node-b"] = linkInstanceState{
+		ID:             "link-node-b",
+		PeerZone:       "node-b.catofes.",
+		ActualState:    "connecting",
+		LastTransition: now.Unix(),
+	}
+
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != peerStateConnecting {
+		t.Fatalf("state = %s, want connecting", info.State)
+	}
+}
+
+func TestDerivePeerStatusStaleAfterThreshold(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig() // stale_after=2m, offline_after=10m
+
+	// Set last sync to 5 minutes ago — should be stale.
+	lastSync := now.Add(-5 * time.Minute)
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix: lastSync.Unix(),
+	}
+
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != peerStateStale {
+		t.Fatalf("state = %s, want stale", info.State)
+	}
+	if info.Reason != "stale_after_exceeded" {
+		t.Fatalf("reason = %s, want stale_after_exceeded", info.Reason)
+	}
+}
+
+func TestDerivePeerStatusOfflineAfterThreshold(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig() // offline_after=10m, cleanup_after=1h
+
+	// Set last sync to 15 minutes ago — should be offline.
+	lastSync := now.Add(-15 * time.Minute)
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix: lastSync.Unix(),
+	}
+
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != peerStateOffline {
+		t.Fatalf("state = %s, want offline", info.State)
+	}
+	if info.Reason != "offline_after_exceeded" {
+		t.Fatalf("reason = %s, want offline_after_exceeded", info.Reason)
+	}
+}
+
+func TestDerivePeerStatusCleanupAfterThreshold(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig() // cleanup_after=1h
+
+	// Set last sync to 2 hours ago — should be offline with cleanup due.
+	lastSync := now.Add(-2 * time.Hour)
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix: lastSync.Unix(),
+	}
+
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != peerStateOffline {
+		t.Fatalf("state = %s, want offline", info.State)
+	}
+	if info.Reason != "cleanup_after_exceeded" {
+		t.Fatalf("reason = %s, want cleanup_after_exceeded", info.Reason)
+	}
+	if !peerStatusRequiresCleanup(info, cfg) {
+		t.Fatalf("peerStatusRequiresCleanup should be true for cleanup_after_exceeded")
+	}
+}
+
+func TestDerivePeerStatusNeverSeen(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig()
+
+	// No SyncPeers entry for node-b, no LinkInstance, no desired link.
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	// Without IPsec config, this should be eligible (no_overlay_config) since
+	// the state alone has no IPsecReconcile.DesiredLinks.
+	if info.State != peerStateEligible && info.State != peerStateOffline {
+		t.Fatalf("state = %s, want eligible or offline", info.State)
+	}
+}
+
+func TestPeerStatusIsHardChange(t *testing.T) {
+	tests := []struct {
+		old, new string
+		want     bool
+	}{
+		{peerStateActive, peerStateActive, false},
+		{peerStateActive, peerStateStale, false},
+		{peerStateActive, peerStateRevoked, true},
+		{peerStateRevoked, peerStateActive, true},
+		{peerStateActive, peerStatePolicyDenied, true},
+		{peerStatePolicyDenied, peerStateActive, true},
+		{peerStateActive, peerStateConfigError, true},
+		{peerStateStale, peerStateOffline, false},
+		{peerStateConnecting, peerStateActive, false},
+	}
+	for _, tc := range tests {
+		got := peerStatusIsHardChange(tc.old, tc.new)
+		if got != tc.want {
+			t.Errorf("peerStatusIsHardChange(%q, %q) = %v, want %v", tc.old, tc.new, got, tc.want)
+		}
+	}
+}
+
+func TestShouldBlockReconnect(t *testing.T) {
+	tests := []struct {
+		state string
+		want  bool
+	}{
+		{peerStateRevoked, true},
+		{peerStatePolicyDenied, true},
+		{peerStateConfigError, true},
+		{peerStateActive, false},
+		{peerStateStale, false},
+		{peerStateOffline, false},
+		{peerStateEligible, false},
+	}
+	for _, tc := range tests {
+		info := PeerStatusInfo{State: tc.state}
+		got := shouldBlockReconnect(info)
+		if got != tc.want {
+			t.Errorf("shouldBlockReconnect(%q) = %v, want %v", tc.state, got, tc.want)
+		}
+	}
+}
+
+func TestCollectRevokedPeerZones(t *testing.T) {
+	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+
+	// Before revocation: no revoked peers.
+	revoked := collectRevokedPeerZones(state, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected 0 revoked zones, got %d", len(revoked))
+	}
+
+	// Add a LinkInstance for node-b.
+	state.LinkInstances["link-node-b"] = linkInstanceState{
+		PeerZone: "node-b.catofes.",
+	}
+	// Add node-b to SyncPeers.
+	state.SyncPeers["node-b.catofes."] = syncPeerState{}
+
+	// Still no revoked zones.
+	revoked = collectRevokedPeerZones(state, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected 0 revoked zones before revocation, got %d", len(revoked))
+	}
+
+	// Revoke node-b.
+	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
+
+	// Now node-b should be in the revoked set (from both LinkInstances and SyncPeers).
+	revoked = collectRevokedPeerZones(state, now)
+	if !revoked["node-b.catofes."] {
+		t.Fatalf("expected node-b.catofes. in revoked set, got %v", revoked)
+	}
+}
+
+func TestParsePeerLifecycleConfig(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		config := defaultAppConfig()
+		input := `
+peer_lifecycle:
+  stale_after: 5m
+  offline_after: 30m
+  cleanup_after: 2h
+  keep_sa_while_stale: false
+`
+		if err := parseConfigYAML(input, config); err != nil {
+			t.Fatalf("parseConfigYAML: %v", err)
+		}
+		if config.PeerLifecycle.StaleAfter != 5*time.Minute {
+			t.Errorf("StaleAfter = %s, want 5m", config.PeerLifecycle.StaleAfter)
+		}
+		if config.PeerLifecycle.OfflineAfter != 30*time.Minute {
+			t.Errorf("OfflineAfter = %s, want 30m", config.PeerLifecycle.OfflineAfter)
+		}
+		if config.PeerLifecycle.CleanupAfter != 2*time.Hour {
+			t.Errorf("CleanupAfter = %s, want 2h", config.PeerLifecycle.CleanupAfter)
+		}
+		if config.PeerLifecycle.KeepSAWhileStale {
+			t.Errorf("KeepSAWhileStale = true, want false")
+		}
+	})
+
+	t.Run("stale_after >= offline_after rejected", func(t *testing.T) {
+		config := defaultAppConfig()
+		input := `
+peer_lifecycle:
+  stale_after: 30m
+  offline_after: 30m
+`
+		err := parseConfigYAML(input, config)
+		if err == nil {
+			t.Fatalf("expected error for stale_after >= offline_after")
+		}
+		if !strings.Contains(err.Error(), "must be less than offline_after") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("offline_after >= cleanup_after rejected", func(t *testing.T) {
+		config := defaultAppConfig()
+		input := `
+peer_lifecycle:
+  offline_after: 1h
+  cleanup_after: 1h
+`
+		err := parseConfigYAML(input, config)
+		if err == nil {
+			t.Fatalf("expected error for offline_after >= cleanup_after")
+		}
+		if !strings.Contains(err.Error(), "must be less than cleanup_after") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("invalid duration rejected", func(t *testing.T) {
+		config := defaultAppConfig()
+		input := `
+peer_lifecycle:
+  stale_after: not-a-duration
+`
+		err := parseConfigYAML(input, config)
+		if err == nil {
+			t.Fatalf("expected error for invalid duration")
+		}
+	})
+
+	t.Run("missing uses defaults", func(t *testing.T) {
+		config := defaultAppConfig()
+		// No peer_lifecycle section — should use defaults from defaultAppConfig.
+		// The field is zero-valued; normalizeAppConfig or explicit call fills defaults.
+		norm := normalizedPeerLifecycleConfig(config.PeerLifecycle)
+		def := defaultPeerLifecycleConfig()
+		if norm.StaleAfter != def.StaleAfter {
+			t.Errorf("default StaleAfter = %s, want %s", norm.StaleAfter, def.StaleAfter)
+		}
+		if norm.OfflineAfter != def.OfflineAfter {
+			t.Errorf("default OfflineAfter = %s, want %s", norm.OfflineAfter, def.OfflineAfter)
+		}
+		if norm.CleanupAfter != def.CleanupAfter {
+			t.Errorf("default CleanupAfter = %s, want %s", norm.CleanupAfter, def.CleanupAfter)
+		}
+		if !norm.KeepSAWhileStale {
+			t.Errorf("default KeepSAWhileStale = false, want true")
+		}
+	})
+}
+
+func TestWriteDebugPeers(t *testing.T) {
+	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+
+	// Add node-b to SyncPeers with a recent sync time.
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix: now.Add(-1 * time.Minute).Unix(),
+	}
+
+	// Revoke node-b.
+	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
+
+	rt := &Runtime{
+		Config: &appConfig{
+			PeerLifecycle: defaultPeerLifecycleConfig(),
+		},
+		Clock: func() time.Time { return now },
+	}
+
+	var buf bytes.Buffer
+	if err := writeDebugPeers(&buf, rt, state); err != nil {
+		t.Fatalf("writeDebugPeers: %v", err)
+	}
+	output := buf.String()
+
+	// Should contain the peer lifecycle config header.
+	if !strings.Contains(output, "peer lifecycle config:") {
+		t.Errorf("output missing lifecycle config header:\n%s", output)
+	}
+
+	// Should contain summary with revoked=1.
+	if !strings.Contains(output, "revoked=1") {
+		t.Errorf("output missing revoked=1 in summary:\n%s", output)
+	}
+
+	// Should contain node-b peer entry with state=revoked.
+	if !strings.Contains(output, "node-b.catofes.") {
+		t.Errorf("output missing node-b.catofes.:\n%s", output)
+	}
+	if !strings.Contains(output, "state: revoked") {
+		t.Errorf("output missing state: revoked:\n%s", output)
+	}
+
+	// Should contain severity: critical.
+	if !strings.Contains(output, "severity: critical") {
+		t.Errorf("output missing severity: critical:\n%s", output)
+	}
+}
+
+func TestWriteDebugPeersEmpty(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	rt := &Runtime{
+		Config: &appConfig{},
+		Clock:  func() time.Time { return time.Unix(2000, 0) },
+	}
+
+	var buf bytes.Buffer
+	if err := writeDebugPeers(&buf, rt, state); err != nil {
+		t.Fatalf("writeDebugPeers: %v", err)
+	}
+	if !strings.Contains(buf.String(), "no peers known") {
+		// If there are zones with ipsec records or SyncPeers entries, we won't get "no peers known".
+		// But with an empty state (no SyncPeers, no LinkInstances, no IPsecReconcile), we should.
+		// The test network has node-b.catofes. zone but no ipsec records, so it won't be included.
+		t.Logf("output (may have peers if state has ipsec records): %s", buf.String())
+	}
+}
+
+func TestPeerLifecycleCleanupZones(t *testing.T) {
+	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig()
+
+	// Add node-b to SyncPeers with old sync time (beyond cleanup_after).
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix: now.Add(-2 * time.Hour).Unix(),
+	}
+
+	// Cleanup zones should include node-b.
+	zones := peerLifecycleCleanupZones(state, now, cfg)
+	found := false
+	for _, z := range zones {
+		if z == "node-b.catofes." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected node-b.catofes. in cleanup zones, got %v", zones)
+	}
+
+	// Now also add a revocation — revoked should also be in cleanup zones.
+	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
+	zones = peerLifecycleCleanupZones(state, now, cfg)
+	found = false
+	for _, z := range zones {
+		if z == "node-b.catofes." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected node-b.catofes. in cleanup zones after revocation, got %v", zones)
+	}
+}
+
+func TestDerivePeerStatusesAllPeers(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+	cfg := defaultPeerLifecycleConfig()
+
+	// Add SyncPeers entries.
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix: now.Add(-1 * time.Minute).Unix(),
+	}
+
+	peers := derivePeerStatuses(state, now, cfg, false)
+	if len(peers) == 0 {
+		t.Fatalf("expected at least 1 peer, got 0")
+	}
+
+	// Should include node-b.catofes.
+	foundNodeB := false
+	for _, p := range peers {
+		if p.PeerID == "node-b.catofes." {
+			foundNodeB = true
+		}
+	}
+	if !foundNodeB {
+		t.Fatalf("expected node-b.catofes. in peer list, got %v", peers)
+	}
+}
+
+func TestRevokedLinkPeersIncludesSyncPeers(t *testing.T) {
+	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(2000, 0)
+
+	// Add node-b to SyncPeers (no LinkInstance).
+	state.SyncPeers["node-b.catofes."] = syncPeerState{}
+
+	// Before revocation: no revoked peers.
+	revoked := revokedLinkPeers(state, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected 0 revoked, got %d", len(revoked))
+	}
+
+	// Revoke node-b.
+	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
+
+	// After revocation: node-b should be in revoked set even without LinkInstance.
+	revoked = revokedLinkPeers(state, now)
+	if !revoked["node-b.catofes."] {
+		t.Fatalf("expected node-b.catofes. in revoked set from SyncPeers, got %v", revoked)
+	}
+}

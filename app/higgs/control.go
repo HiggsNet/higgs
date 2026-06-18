@@ -68,6 +68,7 @@ type controlResponse struct {
 	RoutesDump        *routesDumpResponse           `json:"routes_dump,omitempty"`
 	Admission         *admissionDiagnosis           `json:"admission,omitempty"`
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
+	PeerStatuses      []PeerStatusInfo              `json:"peer_statuses,omitempty"`
 }
 
 func controlSocketPath(config *appConfig) string {

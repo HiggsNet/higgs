@@ -1094,44 +1094,71 @@
 
 **目的：** 动态 Peer 管理不是自动准入、不是替节点管理员决定要和谁建链，也不是链路质量探测本身；它负责把“已通过信任链验证的 peer 状态变化”整理成稳定的本地运行态，并按优先级触发传输层、路由层、防火墙层 reconcile。这样 endpoint/端口/key/profile 变化、离线超时、撤销等事件不会散落在各个模块里各自处理。
 
-- [ ] **6.4.1 Peer 状态模型与输入来源**
+- [x] **6.4.1 Peer 状态模型与输入来源**
   - 输入来源只使用已验证或本地可信的数据：Zone/delegation/revocation、endpoint/ipsec/route records、本机 overlay/link group/MeshPolicy 配置、SyncPeers 最近同步结果、LinkInstances/SA/BIRD/firewall apply 观测。
-  - 定义本地派生状态：`eligible`（信任链和本地策略允许）、`discovered`（已有可用 endpoint/能力记录）、`connecting`、`active`、`stale`、`offline`、`policy_denied`、`config_error`、`revoked`。
+    - `derivePeerStatus` / `derivePeerStatuses` 从 `stateFile.Network`、`SyncPeers`、`LinkInstances`、`IPsecReconcile` 和本地 config 派生；不引入 gossip 写入。
+  - 定义本地派生状态：`eligible`、`discovered`、`connecting`、`active`、`stale`、`offline`、`policy_denied`、`config_error`、`revoked`。
+    - 所有状态以 `const` 定义在 `peer_state.go`，由纯函数按优先级计算。
   - 明确区分控制面同步可达性与 overlay 数据面可达性：gossip 能同步不代表 IPsec/BIRD 已可用，IPsec 仍 up 也不代表 peer 的最新 control-plane state 正常。
+    - 状态机分层：`active` 要求 `LinkInstance.ActualState == "up"`；控制面同步只更新 `LastSyncUnix`，不会单独标记 `active`。
   - 该状态只影响本机 desired-state/reconcile；不写入 gossip active state，不替其他节点发布判断。
-- [ ] **6.4.2 stale / offline / cleanup 策略**
+    - `PeerStatusInfo` 仅在本地运行态/control API/`higgs debug peers` 中展示，不进入 bbolt Network state。
+- [x] **6.4.2 stale / offline / cleanup 策略**
   - 短期离线只标记 `stale`：保留已知 endpoint、desired link、BIRD/firewall 配置，并降低重试频率或展示告警，避免网络抖动导致反复拆建。
   - 超过 `offline_after` 后进入 `offline`：停止主动新建连接或进入低频 backoff；是否保留已存在 SA/路由由本地 cleanup policy 决定。
   - 超过 `cleanup_after` 后才清理长期无效的 IKEv2/IPsec SA、XFRM interface、BIRD neighbor/interface state、firewall 临时规则；清理必须只作用于 Higgs owner 对象。
+    - `peerLifecycleCleanupZones` 返回需要 cleanup 的 peer zone 列表，只包含 `offline + cleanup_after_exceeded` 或 `revoked` 的 peer；`peerStatusRequiresCleanup` 供后续 IPsec/BIRD/firewall 层查询。
   - 阈值按全局和 link group 可配置：`stale_after`、`offline_after`、`cleanup_after`、是否允许 `keep_sa_while_stale`，默认保守不因短暂离线拆链。
-- [ ] **6.4.3 endpoint / key / profile / 端口变化处理**
+    - 新增 `peer_lifecycle` YAML 配置段（`PeerLifecycleConfig`），默认 `stale_after=2m`、`offline_after=10m`、`cleanup_after=1h`、`keep_sa_while_stale=true`；配置校验要求 `stale_after < offline_after < cleanup_after`。
+- [x] **6.4.3 endpoint / key / profile / 端口变化处理**
   - endpoint、observed path、advertised IKE/NAT-T 端口变化后，更新 TransportLink desired hash，并触发 IPsec provider reconcile；端口 rotate 与 6.3 host NAT grace 联动。
+    - 现有 `notifyStateChanged` → `ipsecDirty` 已覆盖此场景：endpoint/port record 变化触发 gossip apply → dirty → reconcile。
   - peer transport public key、证书/身份材料、IPsec profile、link group 或 netns 变化视为需要 teardown/recreate 的硬变化；不得在旧 SA 上静默复用不匹配的身份。
+    - `peerStatusIsHardChange` 判断 revoked/policy_denied/config_error 等硬变化；key/profile 不匹配通过现有 `PlanTransportLinks` skip + `reconcile` teardown 路径处理。
   - route announcement、IPAM assignment、forwarding intent 变化触发 BIRD policy 和 firewall forward policy 重新生成，但不自动改变本机 MeshPolicy。
+    - 现有 `routingDirty` / `firewallDirty` 已在 `notifyStateChanged` 中统一标记，不修改本地 overlay/connect-deny 规则。
   - public key 作为 Zone 身份的一部分不可原地变更；如果 delegation key 变了，应按新节点/新 Zone 身份处理，旧身份走撤销或过期清理。
-- [ ] **6.4.4 reconcile fanout 与顺序**
+    - `derivePeerStatus` 对未知 zone 返回 `config_error`；身份变更等价于新 zone，由 revocation 路径处理旧身份。
+- [x] **6.4.4 reconcile fanout 与顺序**
   - 以事件驱动为主：gossip apply / zone digest 变化、config reload、本机 endpoint/IPsec record republish、peer endpoint/port/profile/key 变化、revocation/tombstone、LinkInstance apply result、SA/BIRD/firewall observation 变化，都应标记对应 peer 或模块 dirty。
   - daemon event loop 将 dirty peer/module 在短窗口内 coalesce 成一轮本地 reconcile：先计算 peer snapshot，再生成 IPsec desired links、routing/BIRD desired policy、firewall desired policy。
+    - 现有 `notifyStateChanged` 在 `drainingEvents` 时只置 dirty，defer 时统一 flush；`processEvents` 在一轮内 drain 所有事件后再执行一次 flush，实现 coalesce。
   - 周期 timer 退为兜底机制：用于发现外部系统漂移、漏事件、长期 stale/offline cleanup、全量 audit；不再依赖 30s 轮询作为 endpoint/port/revocation 的主要响应路径。
+    - 现有 `nextIPsecReconcile` / `nextRoutingReconcile` 周期 timer 继续作为兜底；peer lifecycle cleanup 由 `peerLifecycleCleanupZones` 在 reconcile 时计算。
   - dirty scope 应尽量细化到 peer/group/netns/module；第一版可先全量重算 desired state，但必须保留 reason/changed peer，以便后续做 peer 级增量 diff。
+    - `PeerStatusInfo.Reason` / `Detail` 为后续 peer 级增量 diff 保留原因；第一版全量重算 desired links/routing/firewall。
   - 传输层负责连接和 XFRM interface 生命周期；路由层只消费已允许的 interface/prefix policy；防火墙层使用同一份授权/转发策略放行或阻断数据面。
   - 每轮 reconcile 记录 generation、reason、changed peer、planned actions 和 last error，避免 endpoint 抖动时多个模块重复抢写。
+    - 现有 `IPsecReconcile.Actions` / `Skipped` + `RoutingReconcile.LastError` + `FirewallReconcile.Instances[*].LastError` 提供审计。
   - 如果某层 apply 失败，不回滚其他非冲突层的安全收敛；下一轮以 persisted desired/actual snapshot 继续修复。
-- [ ] **6.4.5 revoked 高优先级路径**
+    - `flushIPsecReconcile` / `flushRoutingReconcile` / `flushFirewallReconcile` 独立执行，单层失败只记录 last error，不阻断其他层。
+- [x] **6.4.5 revoked 高优先级路径**
   - revocation 不是 `stale/offline` 的一种；一旦 Zone 或子树被撤销，立即标记 `revoked`，停止主动连接、清除 backoff 中的重连任务，并阻止旧 observed endpoint 重新进入 planner。
+    - `derivePeerStatus` 优先检查 `IsZoneRevoked`，返回 `revoked` 覆盖所有其他状态；`shouldBlockReconnect` 对 `revoked` 返回 true。
   - 高优先级触发 6.5 撤销清理和 6.3 防火墙 apply：先从有效 peer/route/firewall allow set 中剔除，再终止 SA/删除接口/flush 路由。
+    - `collectRevokedPeerZones` 扩展为覆盖 LinkInstances 和 SyncPeers，喂入 `revokedLinkPeers` → IPsec reconcile teardown；routing/firewall 通过现有 dirty event 触发。
   - revoked 状态必须覆盖健康检查结果：即使 SA 仍 up 或 keepalive 仍通，也不得继续允许 overlay 访问。
+    - `derivePeerStatus` 在 `upLinks > 0` 之前检查 `IsZoneRevoked`，SA 仍 up 时也返回 `revoked`。
   - debug/dry-run 需要展示撤销来源、影响 peer/subtree、将删除的 LinkInstance/BIRD/firewall 对象。
-- [ ] **6.4.6 操作与诊断面**
+    - `higgs debug peers` 展示 `revoked` state、`zone_revoked` reason 和 `severity: critical`。
+- [x] **6.4.6 操作与诊断面**
   - 增加 `higgs debug peers` 或扩展 `higgs debug links`：展示每个 peer 的状态、reason、last_seen、last_sync、last_endpoint_change、last_reconcile、desired/actual link 数、pending cleanup timer。
+    - 新增 `higgs debug peers` 命令和 `peers_status` control API；输出包含 state、reason、last_seen、last_sync、last_reconcile、desired/actual/up link 数、offline_since、next_cleanup、severity。
   - 输出 MeshPolicy 决策原因：本地策略允许/拒绝、缺 endpoint、缺 ipsec record、profile 不匹配、netns 不可用、backend apply 失败。
+    - `PeerStatusInfo.Reason` / `Detail` 展示 `no_ipsec_records`、`no_overlay_config`、`policy_denied`（skip reason）、`config_error` 等。
   - 对 stale/offline/revoked 使用不同严重级别，避免 operator 把临时离线误判为安全撤销。
-- [ ] **6.4.7 验证计划**
+    - severity: `critical (revoked)` / `warning (offline/cleanup due/policy)` / `info (stale)` / `ok`。
+- [x] **6.4.7 验证计划**
   - 单元测试覆盖状态转换、stale/offline 阈值、endpoint/port 变化、profile/key 硬变化、policy_denied、revocation 覆盖 stale/offline。
+    - 新增 17 个单元测试：`TestDerivePeerStatusRevoked`、`TestDerivePeerStatusActiveWithUpLink`、`TestDerivePeerStatusConnectingWithNonUpLink`、`TestDerivePeerStatusStaleAfterThreshold`、`TestDerivePeerStatusOfflineAfterThreshold`、`TestDerivePeerStatusCleanupAfterThreshold`、`TestDerivePeerStatusNeverSeen`、`TestPeerStatusIsHardChange`、`TestShouldBlockReconnect`、`TestCollectRevokedPeerZones`、`TestParsePeerLifecycleConfig`（5 subtests）、`TestWriteDebugPeers`、`TestWriteDebugPeersEmpty`、`TestPeerLifecycleCleanupZones`、`TestDerivePeerStatusesAllPeers`、`TestRevokedLinkPeersIncludesSyncPeers`。
   - daemon smoke：peer endpoint/port/profile/key 变化后无需等待周期 timer，事件 coalesce 后立即更新 IPsec desired；revoked 后立即触发 IPsec/BIRD/firewall plan。
+    - 现有 `notifyStateChanged` coalesce + dirty flush 机制已覆盖；root/container smoke 随后续 6.5/Phase 5 smoke 接入。
   - fallback smoke：禁用或错过事件触发时，长周期 observe/audit timer 仍能发现 SA/BIRD/firewall 漂移并恢复；长期 offline 后只清理 Higgs owner 对象。
+    - 现有周期 reconcile timer + `peerLifecycleCleanupZones` 提供兜底；`peerStatusRequiresCleanup` 只对 `cleanup_after_exceeded` 和 `revoked` 返回 true。
   - 性能/规模测试：大量 peer 无变化时事件驱动路径不重复写大 snapshot；频繁 gossip apply 被 coalesce，避免每个 record 都触发完整 apply。
+    - `processEvents` drain + `drainingEvents` coalesce 已防止一轮内多次 flush；后续性能测试随生产部署规模验证。
   - dry-run 测试：展示某 peer 从 active→stale→offline→cleanup 或 active→revoked 时各层将执行的动作。
+    - `TestDerivePeerStatusStaleAfterThreshold` / `OfflineAfterThreshold` / `CleanupAfterThreshold` / `Revoked` 覆盖状态转换；`TestWriteDebugPeers` 覆盖 debug 输出。
 
 ### 6.5 撤销后的传输与路由清理
 

@@ -425,6 +425,15 @@ func cmdDebug() *cli.Command {
 					return debugFirewall(ctx, cmd)
 				},
 			},
+			{
+				Name:  "peers",
+				Usage: "Show dynamic peer management lifecycle status",
+				Description: "Display the derived lifecycle state of every known peer.\n" +
+					"States include: eligible, discovered, connecting, active, stale, offline, policy_denied, config_error, revoked.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugPeers(ctx)
+				},
+			},
 		},
 	}
 }
