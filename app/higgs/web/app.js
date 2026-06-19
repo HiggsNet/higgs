@@ -1,0 +1,378 @@
+'use strict';
+
+// Higgs Observer - Read-only Web Status Console
+// Native JS SPA, no build step required.
+
+const API_BASE = '/api/v1';
+let pollTimer = null;
+let eventSource = null;
+let currentPage = 'overview';
+let connectionMode = 'disconnected';
+
+// ===== API Helpers =====
+
+async function fetchAPI(endpoint) {
+    const resp = await fetch(API_BASE + endpoint);
+    if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    }
+    const body = await resp.json();
+    if (!body.ok) {
+        throw new Error(body.error || 'API error');
+    }
+    return body.data;
+}
+
+// ===== SSE Connection =====
+
+function connectSSE() {
+    if (eventSource) {
+        eventSource.close();
+    }
+    try {
+        eventSource = new EventSource(API_BASE + '/events');
+        eventSource.addEventListener('connected', () => {
+            setConnectionMode('connected');
+        });
+        eventSource.addEventListener('state_changed', () => refreshCurrentPage());
+        eventSource.addEventListener('peer_updated', () => refreshCurrentPage());
+        eventSource.addEventListener('link_updated', () => refreshCurrentPage());
+        eventSource.addEventListener('health_updated', () => refreshCurrentPage());
+        eventSource.addEventListener('route_changed', () => refreshCurrentPage());
+        eventSource.addEventListener('bird_updated', () => refreshCurrentPage());
+        eventSource.onerror = () => {
+            setConnectionMode('polling');
+            eventSource.close();
+            eventSource = null;
+            // Retry SSE after 10s
+            setTimeout(() => {
+                if (connectionMode === 'polling') connectSSE();
+            }, 10000);
+        };
+    } catch (e) {
+        setConnectionMode('polling');
+    }
+}
+
+function setConnectionMode(mode) {
+    connectionMode = mode;
+    const el = document.getElementById('connection-status');
+    if (mode === 'connected') {
+        el.textContent = 'Live';
+        el.className = 'status-connected';
+        stopPolling();
+    } else if (mode === 'polling') {
+        el.textContent = 'Polling';
+        el.className = 'status-polling';
+        startPolling();
+    } else {
+        el.textContent = 'Disconnected';
+        el.className = 'status-disconnected';
+    }
+}
+
+function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => refreshCurrentPage(), 5000);
+}
+
+function stopPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+// ===== Routing =====
+
+function handleHashChange() {
+    const hash = window.location.hash.slice(1) || '/';
+    const parts = hash.split('/').filter(Boolean);
+    const page = parts[0] || 'overview';
+    currentPage = page;
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.classList.toggle('active', link.dataset.page === page);
+    });
+    refreshCurrentPage();
+}
+
+function refreshCurrentPage() {
+    switch (currentPage) {
+        case 'overview': renderOverview(); break;
+        case 'gossip': renderGossip(); break;
+        case 'zones': renderZones(); break;
+        case 'overlay': renderOverlay(); break;
+        case 'health': renderHealth(); break;
+        case 'routes': renderRoutes(); break;
+        case 'bird': renderBird(); break;
+        default: renderOverview();
+    }
+}
+
+// ===== Render Helpers =====
+
+function esc(s) {
+    if (s == null) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function formatTime(unix) {
+    if (!unix || unix === 0) return '-';
+    const d = new Date(unix * 1000);
+    return d.toLocaleTimeString();
+}
+
+function stateBadge(state) {
+    const cls = {
+        'up': 'badge-green', 'healthy': 'badge-green', 'running': 'badge-green', 'established': 'badge-green',
+        'connecting': 'badge-yellow', 'degraded': 'badge-yellow', 'stale': 'badge-yellow', 'pending': 'badge-yellow', 'polling': 'badge-yellow',
+        'down': 'badge-red', 'error': 'badge-red', 'revoked': 'badge-red', 'offline': 'badge-red', 'failed': 'badge-red',
+    };
+    return `<span class="badge ${cls[state] || 'badge-gray'}">${esc(state || 'unknown')}</span>`;
+}
+
+function card(label, value, valueClass) {
+    return `<div class="card"><div class="card-label">${esc(label)}</div><div class="card-value ${valueClass||''}">${esc(value)}</div></div>`;
+}
+
+function emptyState(msg) {
+    return `<div class="empty-state">${esc(msg || 'No data available')}</div>`;
+}
+
+function jsonViewer(obj) {
+    return `<div class="json-viewer">${esc(JSON.stringify(obj, null, 2))}</div>`;
+}
+
+// ===== Page Renderers =====
+
+async function renderOverview() {
+    const content = document.getElementById('content');
+    try {
+        const status = await fetchAPI('/status');
+        const zones = status.known_zones || 0;
+        const peers = status.known_peers || 0;
+        const links = status.link_instances || 0;
+        content.innerHTML = `
+            <h1>Overview</h1>
+            <div class="card-grid">
+                ${card('Peer ID', status.peer_id || '-')}
+                ${card('Managed Zone', status.managed_zone || '-')}
+                ${card('Zones', zones)}
+                ${card('Peers', peers)}
+                ${card('Links', links)}
+                ${card('Desired Links', status.desired_links || 0)}
+            </div>
+            <h2>Status</h2>
+            <table>
+                <tr><th>Listen Addr</th><td>${esc(status.listen_addr || '-')}</td></tr>
+                <tr><th>Last Sync</th><td>${formatTime(status.last_sync_unix)}</td></tr>
+                <tr><th>Last Reconcile</th><td>${formatTime(status.last_reconcile_unix)}</td></tr>
+                <tr><th>Last Link Error</th><td>${esc(status.last_link_error || '-')}</td></tr>
+                <tr><th>Last Routing Error</th><td>${esc(status.last_routing_error || '-')}</td></tr>
+            </table>
+        `;
+    } catch (e) {
+        content.innerHTML = `<div class="error-msg">Failed to load status: ${esc(e.message)}</div>`;
+    }
+}
+
+async function renderGossip() {
+    const content = document.getElementById('content');
+    try {
+        const data = await fetchAPI('/peers');
+        const peers = data.peers || [];
+        if (peers.length === 0) {
+            content.innerHTML = `<h1>Gossip</h1>${emptyState('No peers known')}`;
+            return;
+        }
+        let rows = peers.map(p => `
+            <tr>
+                <td>${esc(p.peer_id)}</td>
+                <td>${formatTime(p.last_sync_unix)}</td>
+                <td>${p.failure_count || 0}</td>
+                <td>${esc(p.last_error || '-')}</td>
+                <td>${esc(p.discovered_addr || '-')}</td>
+                <td>${esc(p.observed_addr || '-')}</td>
+            </tr>`).join('');
+        content.innerHTML = `
+            <h1>Gossip Peers</h1>
+            <table>
+                <tr><th>Peer ID</th><th>Last Sync</th><th>Failures</th><th>Last Error</th><th>Discovered Addr</th><th>Observed Addr</th></tr>
+                ${rows}
+            </table>`;
+    } catch (e) {
+        content.innerHTML = `<div class="error-msg">Failed to load peers: ${esc(e.message)}</div>`;
+    }
+}
+
+async function renderZones() {
+    const content = document.getElementById('content');
+    try {
+        const data = await fetchAPI('/zones');
+        const zones = data.zones || [];
+        if (zones.length === 0) {
+            content.innerHTML = `<h1>Zones</h1>${emptyState('No zones known')}`;
+            return;
+        }
+        let rows = zones.map(z => `
+            <tr>
+                <td>${esc(z.path)}</td>
+                <td>${z.records}</td>
+                <td>${z.delegations}</td>
+                <td>${z.revocations}</td>
+                <td>${z.revoked ? stateBadge('revoked') : stateBadge('healthy')}</td>
+                <td><code>${esc(z.root_hash ? z.root_hash.substring(0,16)+'...' : '-')}</code></td>
+            </tr>`).join('');
+        content.innerHTML = `
+            <h1>Zones</h1>
+            <table>
+                <tr><th>Path</th><th>Records</th><th>Delegations</th><th>Revocations</th><th>Status</th><th>Root Hash</th></tr>
+                ${rows}
+            </table>
+            <h2>Global Root</h2>
+            <div class="json-viewer">${esc(data.global_root || '-')}</div>`;
+    } catch (e) {
+        content.innerHTML = `<div class="error-msg">Failed to load zones: ${esc(e.message)}</div>`;
+    }
+}
+
+async function renderOverlay() {
+    const content = document.getElementById('content');
+    try {
+        const data = await fetchAPI('/links');
+        const instances = data.instances || [];
+        if (instances.length === 0) {
+            content.innerHTML = `<h1>Overlay</h1>${emptyState('No link instances')}</div>`;
+            return;
+        }
+        let rows = instances.map(li => `
+            <tr>
+                <td>${esc(li.id || '-')}</td>
+                <td>${esc(li.peer_zone || '-')}</td>
+                <td>${esc(li.group_id || '-')}</td>
+                <td>${stateBadge(li.actual_state)}</td>
+                <td>${esc(li.interface_name || '-')}</td>
+                <td>${esc(li.endpoint || '-')}</td>
+                <td>${esc(li.rotate_phase || 'idle')}</td>
+                <td>${li.failure_count || 0}</td>
+            </tr>`).join('');
+        content.innerHTML = `
+            <h1>Overlay Links</h1>
+            <table>
+                <tr><th>Link ID</th><th>Peer Zone</th><th>Group</th><th>State</th><th>Interface</th><th>Endpoint</th><th>Rotate</th><th>Failures</th></tr>
+                ${rows}
+            </table>`;
+    } catch (e) {
+        content.innerHTML = `<div class="error-msg">Failed to load links: ${esc(e.message)}</div>`;
+    }
+}
+
+async function renderHealth() {
+    const content = document.getElementById('content');
+    try {
+        const data = await fetchAPI('/health');
+        const links = data.links || [];
+        if (links.length === 0) {
+            content.innerHTML = `<h1>Health</h1>${emptyState('No health data available')}`;
+            return;
+        }
+        let rows = links.map(h => `
+            <tr>
+                <td>${esc(h.instance_id || '-')}</td>
+                <td>${stateBadge(h.state)}</td>
+                <td>${esc(h.probe_type || '-')}</td>
+                <td>${h.last_rtt_ms || 0}ms</td>
+                <td>${h.loss_ratio_pct || 0}%</td>
+                <td>${h.jitter_ms || 0}ms</td>
+                <td>${h.cutover_blocking ? 'Yes' : 'No'}</td>
+                <td>${esc(h.last_error || '-')}</td>
+            </tr>`).join('');
+        content.innerHTML = `
+            <h1>Link Health</h1>
+            <table>
+                <tr><th>Link ID</th><th>State</th><th>Probe</th><th>RTT</th><th>Loss</th><th>Jitter</th><th>Cutover Block</th><th>Error</th></tr>
+                ${rows}
+            </table>`;
+    } catch (e) {
+        content.innerHTML = `<div class="error-msg">Failed to load health: ${esc(e.message)}</div>`;
+    }
+}
+
+async function renderRoutes() {
+    const content = document.getElementById('content');
+    try {
+        const data = await fetchAPI('/routes');
+        const exportSet = data.export_set || [];
+        const authorized = data.authorized || {};
+        const assignments = data.assignments || {};
+        const errors = data.errors || [];
+        let zoneRows = Object.entries(authorized).map(([zone, prefixes]) => `
+            <tr><td>${esc(zone)}</td><td>${prefixes.map(p => esc(p)).join(', ')}</td></tr>`).join('');
+        let assignRows = Object.entries(assignments).map(([prefix, info]) => `
+            <tr><td>${esc(prefix)}</td><td>${esc(info.source || '-')}</td><td>${esc(info.assigned_to || '-')}</td></tr>`).join('');
+        let errorRows = errors.map(e => `
+            <tr><td>${esc(e.zone)}</td><td>${esc(e.prefix || '-')}</td><td>${esc(e.code)}</td><td>${esc(e.detail)}</td></tr>`).join('');
+        content.innerHTML = `
+            <h1>Route Authorization</h1>
+            <h2>Local Export Set</h2>
+            <div>${exportSet.map(p => `<span class="badge badge-green">${esc(p)}</span> `).join('') || emptyState('No exports')}</div>
+            <h2>Authorized Prefixes by Zone</h2>
+            <table><tr><th>Zone</th><th>Prefixes</th></tr>${zoneRows || emptyRow(2)}</table>
+            <h2>IPAM Assignments</h2>
+            <table><tr><th>Prefix</th><th>Source</th><th>Assigned To</th></tr>${assignRows || emptyRow(3)}</table>
+            <h2>Authorization Errors (${errors.length})</h2>
+            <table><tr><th>Zone</th><th>Prefix</th><th>Code</th><th>Detail</th></tr>${errorRows || emptyRow(4)}</table>`;
+    } catch (e) {
+        content.innerHTML = `<div class="error-msg">Failed to load routes: ${esc(e.message)}</div>`;
+    }
+}
+
+function emptyRow(cols) {
+    return `<tr><td colspan="${cols}" style="text-align:center;color:var(--text-dim);">No entries</td></tr>`;
+}
+
+async function renderBird() {
+    const content = document.getElementById('content');
+    try {
+        const data = await fetchAPI('/bird');
+        const instances = data.instances || {};
+        const instanceList = Object.entries(instances);
+        if (instanceList.length === 0) {
+            content.innerHTML = `<h1>BIRD</h1>${emptyState('No BIRD instances configured')}`;
+            return;
+        }
+        let rows = instanceList.map(([name, inst]) => `
+            <tr>
+                <td>${esc(name)}</td>
+                <td>${esc(inst.netns_name || '-')}</td>
+                <td>${stateBadge(inst.state)}</td>
+                <td>${inst.router_id || '-'}</td>
+                <td>${esc(inst.last_error || '-')}</td>
+            </tr>`).join('');
+        content.innerHTML = `
+            <h1>BIRD Instances</h1>
+            <table>
+                <tr><th>Name</th><th>NetNS</th><th>State</th><th>Router ID</th><th>Last Error</th></tr>
+                ${rows}
+            </table>
+            <div class="detail-section">
+                <h3>CLI Reference</h3>
+                <code>higgs debug babel</code>
+            </div>`;
+    } catch (e) {
+        content.innerHTML = `<div class="error-msg">Failed to load BIRD: ${esc(e.message)}</div>`;
+    }
+}
+
+// ===== Init =====
+
+window.addEventListener('hashchange', handleHashChange);
+window.addEventListener('load', () => {
+    handleHashChange();
+    connectSSE();
+});

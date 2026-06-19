@@ -695,6 +695,50 @@ build/higgs db dump [zone]
 build/higgs db stats
 ```
 
+## Web 状态控制台（Observer）
+
+Phase 6.7 提供只读 HTTP observer，默认关闭。
+
+### 启用方式
+
+在 `config.yaml` 中：
+
+```yaml
+observer:
+  enabled: true
+  bind_addr: "127.0.0.1"  # 默认 loopback
+  port: 8080
+```
+
+### 访问
+
+- 浏览器打开 `http://127.0.0.1:8080` 查看静态 UI（Overview、Zones、Peers、Links、Health、Routes、BIRD）。
+- REST API：`GET /api/v1/status`、`/api/v1/zones`、`/api/v1/peers`、`/api/v1/links`、`/api/v1/health`、`/api/v1/routes`、`/api/v1/bird`。
+- SSE 事件流：`GET /api/v1/events`（state/peer/link/health/route/bird 变化通知）。
+
+### 远程访问
+
+Observer 默认只监听 `127.0.0.1`，不提供认证。远程访问请使用 SSH tunnel：
+
+```bash
+ssh -L 8080:127.0.0.1:8080 user@node
+```
+
+如果配置 `bind_addr: 0.0.0.0`，daemon 启动时会输出警告，提醒需要外部访问控制。
+
+### 数据来源
+
+- 所有数据来自 daemon live state（stateFile），通过 `RLock` 只读访问。
+- BIRD 页面第一版只显示实例级状态（router-id、netns、table、socket、last error）；`birdc show protocols/routes/neighbors` 深度字段尚未实现。
+- Health 页面当前展示 live snapshot；TSDB sparkline 待 6.6 health 数据源接入。
+
+### 安全边界
+
+- Observer 是**纯只读**的，不注册任何 POST/PUT/PATCH/DELETE 写接口。
+- 不泄露私钥、VICI secret 或完整本地 key material。
+
+运行 observer smoke：`make observer-smoke`
+
 ## 当前限制
 
 - CLI 目前为了开发便利，把私钥保存在本地 bbolt metadata 中。底层 identity 包已有加密私钥 helper，但 CLI 尚未强制使用加密存储。

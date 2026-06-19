@@ -1,7 +1,16 @@
 # Higgs Web 状态控制台设计
 
-> **文档状态**：设计草案（2026-06）  
+> **文档状态**：MVP 已实现（Phase 6.7，2026-06）
 > **目标**：为 Higgs 守护进程提供一套只读为主的 Web 状态可视化面板，降低调试和运维时阅读文本日志 / CLI 输出的门槛，同时为未来可能扩展的远程控制预留接口和交互空间。
+
+> **第一版实现边界（已落地）：**
+> - **只读**：不提供 record put、delegate、reload、shutdown、rotate、force sync 等写操作。
+> - **本地监听**：默认关闭，启用后默认只监听 `127.0.0.1`；远程访问依赖 SSH tunnel / 反向代理。
+> - **无认证**：不在第一版自建公网认证面。
+> - **Daemon live snapshot**：所有数据来自 daemon 运行态 `stateFile`，通过 `RLock` 只读访问。
+> - **BIRD 深度字段**：第一版只展示 `stateFile.BirdInstances` / `bird_status` 可得字段；`birdc show protocols/routes/neighbors` 解析等后续补齐。
+> - **代码位置**：`app/higgs/observer_config.go`、`observer_server.go`、`observer_sse.go`、`web/`。
+> - **验证**：`make observer-smoke`（31 个测试覆盖 config/API/SSE/static FS/HTTP handler routing/loopback HTTP start/static UI escaping）。
 
 ---
 
@@ -580,10 +589,10 @@ GET /api/v1/events
 
 ---
 
-## 13. 待决策问题
+## 13. 待决策问题（MVP 已决策）
 
-1. 前端技术栈是否接受原生 JS + Sigma.js，还是坚持使用 Vue/React？
-2. HTTP observer 是否默认启用？建议默认禁用，由用户显式开启。
-3. 是否需要独立的 `higgs observer` 离线诊断子命令？
-4. SSE 事件是否需要持久化/回放，还是仅做实时通知？
-5. 拓扑图是否需要在第一版就实现，还是先以表格为主？
+1. ~~前端技术栈是否接受原生 JS + Sigma.js，还是坚持使用 Vue/React？~~ **已决策**：第一版采用原生 HTML/CSS/JS，不引入 Node.js 构建链；拓扑图库后续增强时再引入。
+2. ~~HTTP observer 是否默认启用？建议默认禁用，由用户显式开启。~~ **已决策**：默认关闭（`observer.enabled: false`），启用后默认监听 `127.0.0.1:8080`。
+3. ~~是否需要独立的 `higgs observer` 离线诊断子命令？~~ **延后**：第一版只提供 daemon 内嵌 observer；离线 DB viewer 放到后续阶段。
+4. ~~SSE 事件是否需要持久化/回放，还是仅做实时通知？~~ **已决策**：仅做实时通知，不持久化；前端 EventSource 断开后自动降级为轮询。
+5. ~~拓扑图是否需要在第一版就实现，还是先以表格为主？~~ **已决策**：第一版以表格 + raw JSON 为主，可视化拓扑图留到后续增强。

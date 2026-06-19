@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Higgs Observer</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+    <nav id="sidebar">
+        <div class="logo">Higgs Observer</div>
+        <ul>
+            <li><a href="#/" class="nav-link active" data-page="overview">Overview</a></li>
+            <li><a href="#/gossip" class="nav-link" data-page="gossip">Gossip</a></li>
+            <li><a href="#/zones" class="nav-link" data-page="zones">Zones</a></li>
+            <li><a href="#/overlay" class="nav-link" data-page="overlay">Overlay</a></li>
+            <li><a href="#/health" class="nav-link" data-page="health">Health</a></li>
+            <li><a href="#/routes" class="nav-link" data-page="routes">Route</a></li>
+            <li><a href="#/bird" class="nav-link" data-page="bird">BIRD</a></li>
+        </ul>
+        <div id="connection-status" class="status-disconnected">Disconnected</div>
+    </nav>
+    <main id="content">
+        <div id="loading">Loading...</div>
+    </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

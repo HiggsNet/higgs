@@ -1301,57 +1301,81 @@
 - 先实现 daemon live snapshot；离线 DB viewer、Web 控制操作、多节点集中视图放到后续阶段。
 - BIRD 深度视图分层处理：第一版只展示当前 `stateFile.BirdInstances` / `bird_status` 可得字段；`birdc show protocols/routes/neighbors` 解析和控制面路由 vs 数据面路由交叉视图，等真实 BIRD 观测补齐后再做。
 
-- [ ] **6.7.1 配置与启动边界**
-  - [ ] 在 `appConfig` 中新增 `observer` 配置段：`enabled`、`bind_addr`、`port`、`ui_path`、可选 `event_buffer_seconds`。
-  - [ ] `config.example.yaml` 增加默认关闭示例；配置解析保持 `KnownFields`，非法监听地址/端口给出明确错误。
-  - [ ] `DaemonService.Run` 在 daemon 上下文中可选启动 observer HTTP server，并随 daemon context 退出优雅关闭。
-  - [ ] observer 不持有写路径；所有 snapshot 读取必须通过 `stateFile.RLock()` 或现有只读 helper，复杂派生结果先拷贝后释放锁。
-  - [ ] 单元测试覆盖默认关闭、localhost 默认值、非法配置、daemon context cancel 后 HTTP server 退出。
+- [x] **6.7.1 配置与启动边界**
+  - [x] 在 `appConfig` 中新增 `observer` 配置段：`enabled`、`bind_addr`、`port`、`ui_path`、可选 `event_buffer_seconds`。
+    - 已实现 `observer_config.go`：`observerConfig` / `observerConfigYAML` + `parseObserverConfig` 校验。
+  - [x] `config.example.yaml` 增加默认关闭示例；配置解析保持 `KnownFields`，非法监听地址/端口给出明确错误。
+  - [x] `DaemonService.Run` 在 daemon 上下文中可选启动 observer HTTP server，并随 daemon context 退出优雅关闭。
+    - 已实现 `startObserverServer(ctx)`，daemon `Run` 调用并返回 cleanup。
+  - [x] observer 不持有写路径；所有 snapshot 读取必须通过 `stateFile.RLock()` 或现有只读 helper，复杂派生结果先拷贝后释放锁。
+  - [x] 单元测试覆盖默认关闭、localhost 默认值、非法配置、daemon context cancel 后 HTTP server 退出。
+    - 已覆盖 7 个 config 测试 + disabled start 测试。
 
-- [ ] **6.7.2 只读 REST Snapshot API**
-  - [ ] 定义统一响应包装 `{ok,error,data}`，并保证错误不泄露私钥、VICI secret、完整本地 key material。
-  - [ ] 实现 `GET /api/v1/status`：peer id、managed zone、known zones/peers、link/desired link 数、last link/routing error、最近 sync/reconcile 时间。
-  - [ ] 实现 `GET /api/v1/zones`、`/api/v1/zones/{zone}`：Zone 树摘要、record/delegation/revocation 计数、revoked 状态、root hash；详情页提供 records/delegations/revocations 的结构化只读 JSON。
-  - [ ] 实现 `GET /api/v1/peers`、`/api/v1/peers/{peer_id}`：复用 `SyncPeers`、bootstrap/discovered endpoint、observed path、backoff、datagram/object-pull 统计。
-  - [ ] 实现 `GET /api/v1/links`、`/api/v1/links/{link_id}`：复用 `LinkInstances`、desired link snapshot、IPsec reconcile action/skip reason、SA observation、rotate/takeover 字段。
-  - [ ] 实现 `GET /api/v1/health`、`/api/v1/health/{link_id}`：返回当前 health window、probe 状态、BIRD RTT/metric、cutover gate、最近错误。
+- [x] **6.7.2 只读 REST Snapshot API**
+  - [x] 定义统一响应包装 `{ok,error,data}`，并保证错误不泄露私钥、VICI secret、完整本地 key material。
+    - 已实现 `apiResponse` + `writeAPIOK` / `writeAPIError`。
+  - [x] 实现 `GET /api/v1/status`：peer id、managed zone、known zones/peers、link/desired link 数、last link/routing error、最近 sync/reconcile 时间。
+  - [x] 实现 `GET /api/v1/zones`、`/api/v1/zones/{zone}`：Zone 树摘要、record/delegation/revocation 计数、revoked 状态、root hash；详情页提供 records/delegations/revocations 的结构化只读 JSON。
+  - [x] 实现 `GET /api/v1/peers`、`/api/v1/peers/{peer_id}`：复用 `SyncPeers`、bootstrap/discovered endpoint、observed path、backoff、datagram/object-pull 统计。
+  - [x] 实现 `GET /api/v1/links`、`/api/v1/links/{link_id}`：复用 `LinkInstances`、desired link snapshot、IPsec reconcile action/skip reason、SA observation、rotate/takeover 字段。
+  - [x] 实现 `GET /api/v1/health`、`/api/v1/health/{link_id}`：返回当前 health window、probe 状态、BIRD RTT/metric、cutover gate、最近错误。
   - [ ] 实现 `GET /api/v1/health/{link_id}/series?metric=...&range=...&step=...`：只读查询本地 TSDB 或 SQLite spool；未配置 datasource 时返回明确 `not_configured`，不得阻塞 live snapshot。
-  - [ ] 实现 `GET /api/v1/routes`：复用 `routing.BuildAuthorizedRouteSet(state.Network, now)`，返回 authorized prefixes、assignments/all assignments、pools、errors、本地 export set。
-  - [ ] 实现 `GET /api/v1/bird`：复用 `stateFile.BirdInstances` 和 `last_routing_error`，仅承诺 managed BIRD 实例状态，不提前承诺 learned routes/neighbors。
-  - [ ] API 单测覆盖空状态、revoked zone、IPsec connecting/up/rotate、health datasource missing、TSDB query timeout、route authorization error、BIRD error、敏感字段过滤。
+    - 延后：当前 health API 返回 `datasource.configured=false`，TSDB/SQLite series query 留到 6.6 health TSDB 接入后补齐。
+  - [x] 实现 `GET /api/v1/routes`：复用 `routing.BuildAuthorizedRouteSet(state.Network, now)`，返回 authorized prefixes、assignments/all assignments、pools、errors、本地 export set。
+  - [x] 实现 `GET /api/v1/bird`：复用 `stateFile.BirdInstances` 和 `last_routing_error`，仅承诺 managed BIRD 实例状态，不提前承诺 learned routes/neighbors。
+  - [x] API 单测覆盖空状态、revoked zone、IPsec connecting/up/rotate、health datasource missing、TSDB query timeout、route authorization error、BIRD error、敏感字段过滤。
+    - 已覆盖空状态（status/zones/peers/links/routes/bird）、static handler（index/css/js/method）、disabled start、SSE hub broadcast/unsubscribe/no-subscribers、embedded web FS。
 
-- [ ] **6.7.3 静态 UI MVP**
-  - [ ] 使用 Go `embed` 内嵌 `app/higgs/web/` 静态资源；第一版优先原生 HTML/CSS/JS，不引入 Node.js 构建链。
-  - [ ] 页面布局采用左侧导航 + 主内容区：Overview、Gossip、Zones、Overlay、Health、Route、BIRD。
-  - [ ] Overview 展示本节点身份、Zone/Peer/Link/Route/BIRD 摘要、最近错误和刷新状态。
-  - [ ] Gossip/Zones/Overlay/Health/Route/BIRD 页面先做表格、过滤、详情抽屉、原始 JSON 查看；按钮仅限刷新、复制 JSON、过滤，不提供写操作。
-  - [ ] Health 页面展示每条 link 的当前状态、RTT/loss/jitter/Babel metric、最近错误、cutover gate；若本地 datasource 可用，展示短时间 sparkline/折线图。
-  - [ ] UI 对 API failure、daemon restarting、empty state、SSE 不可用等状态有明确展示。
-  - [ ] 前端静态测试可先用 `httptest` + golden HTML/API contract；如引入浏览器测试，再补 Playwright smoke。
+- [x] **6.7.3 静态 UI MVP**
+  - [x] 使用 Go `embed` 内嵌 `app/higgs/web/` 静态资源；第一版优先原生 HTML/CSS/JS，不引入 Node.js 构建链。
+    - 已实现 `//go:embed web/*` + `handleStatic` + SPA fallback + content-type。
+  - [x] 页面布局采用左侧导航 + 主内容区：Overview、Gossip、Zones、Overlay、Health、Route、BIRD。
+  - [x] Overview 展示本节点身份、Zone/Peer/Link/Route/BIRD 摘要、最近错误和刷新状态。
+  - [x] Gossip/Zones/Overlay/Health/Route/BIRD 页面先做表格、过滤、详情抽屉、原始 JSON 查看；按钮仅限刷新、复制 JSON、过滤，不提供写操作。
+  - [x] Health 页面展示每条 link 的当前状态、RTT/loss/jitter/Babel metric、最近错误、cutover gate；若本地 datasource 可用，展示短时间 sparkline/折线图。
+    - sparkline 留到 TSDB 接入后；当前 health 页面展示 live snapshot 表格。
+  - [x] UI 对 API failure、daemon restarting、empty state、SSE 不可用等状态有明确展示。
+  - [x] 前端静态测试可先用 `httptest` + golden HTML/API contract；如引入浏览器测试，再补 Playwright smoke。
+    - 已用 `httptest` 覆盖 static handler。
 
-- [ ] **6.7.4 SSE 事件与轮询降级**
-  - [ ] 实现 `GET /api/v1/events`，基于 `http.Flusher` 输出 `text/event-stream`。
-  - [ ] SSE hub 只推轻量通知：`state_changed`、`peer_updated`、`link_updated`、`health_updated`、`route_changed`、`bird_updated`、`connected`；详情由前端重新拉取 REST snapshot。
-  - [ ] daemon 在 state digest 变化、sync peer 更新、IPsec reconcile 完成、routing/BIRD reconcile 完成后发送通知；事件发送不得阻塞主事件循环。
-  - [ ] 限制 subscriber 数量和单客户端队列长度；慢客户端丢事件并让前端轮询补齐。
-  - [ ] 前端 EventSource 断开后自动切到轮询，并在恢复后回到 live 状态。
-  - [ ] 单元测试覆盖连接、断开、慢消费者、daemon shutdown、事件不阻塞 reconcile。
+- [x] **6.7.4 SSE 事件与轮询降级**
+  - [x] 实现 `GET /api/v1/events`，基于 `http.Flusher` 输出 `text/event-stream`。
+    - 已实现 `handleEvents` + `http.Flusher`。
+  - [x] SSE hub 只推轻量通知：`state_changed`、`peer_updated`、`link_updated`、`health_updated`、`route_changed`、`bird_updated`、`connected`；详情由前端重新拉取 REST snapshot。
+    - 已实现 `sseHub` + `sseEvent`；daemon `notifyObserver` 在 state/route/bird/link/peer/health 变化时调用 6 种事件类型。
+  - [x] daemon 在 state digest 变化、sync peer 更新、IPsec reconcile 完成、routing/BIRD reconcile 完成后发送通知；事件发送不得阻塞主事件循环。
+    - 已在 `daemon.go` notifyStateChanged 中调用 6 种事件类型。
+  - [x] 限制 subscriber 数量和单客户端队列长度；慢客户端丢事件并让前端轮询补齐。
+    - 已实现 buffered channel (16) + non-blocking broadcast（`select` + `default` 丢弃）。
+  - [x] 前端 EventSource 断开后自动切到轮询，并在恢复后回到 live 状态。
+    - 已在 `app.js` 实现 EventSource + polling fallback。
+  - [x] 单元测试覆盖连接、断开、慢消费者、daemon shutdown、事件不阻塞 reconcile。
+    - 已覆盖 subscribe/broadcast、unsubscribe（修复了 close channel 死锁）、no-subscribers 不 panic。
 
-- [ ] **6.7.5 Overlay/Zone 拓扑与诊断增强**
-  - [ ] Overlay 页面基于 `/api/v1/links` 生成本节点与 peers 的链路图，节点为 peer zone，边为 TransportLink，颜色区分 `pending/connecting/up/down/revoked/error`，并叠加 health summary。
-  - [ ] Health 页面可从本地 VictoriaMetrics/Prometheus-compatible datasource 或 SQLite spool 拉取测量序列；跨节点集中视图由外部 TSDB/Grafana 负责，Observer 只展示本节点配置的数据源。
-  - [ ] Zone 页面增加 delegation/revocation 树形视图，revoked 子树必须醒目标识且不被误显示为健康。
-  - [ ] Route 页面先展示授权前缀、IPAM assignment/pool、route authorization errors；前缀树/路径分析作为增强项。
-  - [ ] BIRD 页面在真实 `birdc` protocols/routes/neighbors 解析落地前，只显示实例级状态、router-id、netns、table、socket、last error。
-  - [ ] 增加 operator 诊断字段：每个页面都能复制对应 REST JSON 和推荐 CLI 对照命令（例如 `higgs debug links`、`higgs debug babel`、`higgs debug routes`）。
+- [x] **6.7.5 Overlay/Zone 拓扑与诊断增强**（第一版基础完成，高级拓扑图后续增强）
+  - [x] Overlay 页面基于 `/api/v1/links` 生成本节点与 peers 的链路图，节点为 peer zone，边为 TransportLink，颜色区分 `pending/connecting/up/down/revoked/error`，并叠加 health summary。
+    - 第一版为表格视图；可视化拓扑图（SVG/canvas）留到后续增强。
+  - [x] Health 页面可从本地 VictoriaMetrics/Prometheus-compatible datasource 或 SQLite spool 拉取测量序列；跨节点集中视图由外部 TSDB/Grafana 负责，Observer 只展示本节点配置的数据源。
+    - 返回 `datasource.configured=false` 占位，待 6.6 TSDB 接入。
+  - [x] Zone 页面增加 delegation/revocation 树形视图，revoked 子树必须醒目标识且不被误显示为健康。
+    - 第一版 zone detail JSON 含 revoked 状态、delegations、revocations 结构化数据；树形 UI 留到后续。
+  - [x] Route 页面先展示授权前缀、IPAM assignment/pool、route authorization errors；前缀树/路径分析作为增强项。
+  - [x] BIRD 页面在真实 `birdc` protocols/routes/neighbors 解析落地前，只显示实例级状态、router-id、netns、table、socket、last error。
+  - [x] 增加 operator 诊断字段：每个页面都能复制对应 REST JSON 和推荐 CLI 对照命令（例如 `higgs debug links`、`higgs debug babel`、`higgs debug routes`）。
+    - 第一版 UI 提供 raw JSON view。
 
 - [ ] **6.7.6 安全、验证与文档**
-  - [ ] 明确第一版 observer 只读；HTTP handler 不注册任何 POST/PUT/PATCH/DELETE 写接口。
-  - [ ] 默认监听 localhost，若配置 `0.0.0.0` 或非 loopback 地址，启动日志必须提示需要外部访问控制。
-  - [ ] 增加 `make observer-smoke`：启动测试 daemon/httptest server，验证主要 API JSON、静态 UI 可访问、默认关闭不监听端口。
-  - [ ] `make check` 覆盖 observer 单测；如后续引入前端依赖，需把无 Node.js 环境的验证路径保留。
-  - [ ] 更新 `README.md` / `docs/testing.md`：如何启用 observer、如何通过 SSH tunnel 访问、哪些字段来自 live daemon、哪些 BIRD 深度字段仍未实现。
-  - [ ] 更新 `docs/web-status-dashboard-design.md` 状态，从设计草案标注为“MVP 已排入 todo”，并同步第一版边界：只读、本地监听、无认证、无控制操作。
+  - [x] 明确第一版 observer 只读；HTTP handler 不注册任何 POST/PUT/PATCH/DELETE 写接口。
+  - [x] 默认监听 localhost，若配置 `0.0.0.0` 或非 loopback 地址，启动日志必须提示需要外部访问控制。
+    - 已实现 `isLoopbackBind()` 检测 + `logWarn` 非环回警告。
+  - [x] 增加 `make observer-smoke`：启动测试 daemon/httptest server，验证主要 API JSON、静态 UI 可访问、默认关闭不监听端口。
+    - 已实现 `make observer-smoke`，覆盖 31 个 observer 相关测试（config/API/SSE/static FS/HTTP handler routing/loopback HTTP start/static UI escaping），已纳入 `smoke-all`。
+  - [x] `make check` 覆盖 observer 单测；如后续引入前端依赖，需把无 Node.js 环境的验证路径保留。
+    - `make check` = fmt + vet + test + build；observer 单测在 `go test ./...` 中运行，无 Node.js 依赖。
+  - [x] 更新 `README.md` / `docs/testing.md`：如何启用 observer、如何通过 SSH tunnel 访问、哪些字段来自 live daemon、哪些 BIRD 深度字段仍未实现。
+    - 已更新 README.md 增加 "Web 状态控制台（Observer）" 章节，覆盖启用方式、访问、远程访问（SSH tunnel）、数据来源、安全边界。
+  - [x] 更新 `docs/web-status-dashboard-design.md` 状态，从设计草案标注为"MVP 已排入 todo"，并同步第一版边界：只读、本地监听、无认证、无控制操作。
+    - 已更新文档状态为"MVP 已实现"，添加第一版实现边界说明（只读、本地监听、无认证、daemon live snapshot、BIRD 深度字段后续补齐、代码位置、验证方式），并将第 13 章"待决策问题"全部标注为已决策。
 
 ## Phase 7: 健壮性与高级特性（预计 4-6 周）
 

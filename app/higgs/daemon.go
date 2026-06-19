@@ -28,6 +28,7 @@ type DaemonService struct {
 	XFRMDriver        ipsec.XFRMDriver
 	closeIPsecDriver  func() error
 	health            *health.Manager
+	observerHub       *sseHub
 	Log               *appLogger
 	LogLimiter        *repeatedLogLimiter
 	drainingEvents    bool
@@ -184,6 +185,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopControl()
+	stopObserver, err := d.startObserverServer(ctx)
+	if err != nil {
+		return err
+	}
+	defer stopObserver()
 	startFields := map[string]any{
 		"peer_id":  d.Sync.Config.PeerID,
 		"addr":     transport.LocalAddr(),
@@ -1089,6 +1095,8 @@ func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
 		d.Hooks.OnStateChanged(d.Sync.State)
 	}
+	// Phase 6.7: notify the read-only observer so it can push SSE events.
+	d.notifyObserver("state_changed", nil)
 	// Phase 6.5: clean gossip peer cache for revoked zones before triggering
 	// layer reconciles. This ensures revoked peers don't appear as discovered
 	// endpoints, observed paths or object-pull candidates when the downstream
@@ -1107,11 +1115,16 @@ func (d *DaemonService) notifyStateChanged() {
 	d.routingDirty = true
 	d.firewallDirty = true
 	d.flushFirewallReconcile(context.Background())
+	d.notifyObserver("route_changed", nil)
+	d.notifyObserver("bird_updated", nil)
 	d.flushRoutingReconcile(context.Background())
 	d.flushIPsecReconcile(context.Background())
+	d.notifyObserver("link_updated", nil)
 	// Gossip peer cache cleanup runs again after teardown to ensure observed
 	// paths discovered/refreshed during the flush are cleared.
 	d.flushRevocationCleanup()
+	d.notifyObserver("peer_updated", nil)
+	d.notifyObserver("health_updated", nil)
 }
 
 func (d *DaemonService) noteReconcileFlush(layer string) {

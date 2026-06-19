@@ -233,3 +233,14 @@ firewall:
         natt: true
       redirect_grace:
         enabled: true
+
+# Phase 6.7: Read-only web status observer (optional, default disabled).
+# When enabled, serves a read-only HTTP API and static UI for daemon live
+# state visualization. Default binds to localhost only; remote access
+# requires SSH tunnel or reverse proxy with external access control.
+# observer:
+#   enabled: false
+#   bind_addr: "127.0.0.1"
+#   port: 8080
+#   # ui_path: ""  # static resource prefix; empty means root
+#   # event_buffer_seconds: 0  # SSE event buffer; 0 means no buffering

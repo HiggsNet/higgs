@@ -59,6 +59,7 @@ type appConfig struct {
 	Firewall             firewallConfig
 	PeerLifecycle        PeerLifecycleConfig
 	Health               healthConfig
+	Observer             observerConfig
 }
 
 type configYAML struct {
@@ -114,6 +115,7 @@ type configYAML struct {
 	Firewall          *firewallConfigYAML      `yaml:"firewall"`
 	PeerLifecycle     *peerLifecycleYAML       `yaml:"peer_lifecycle"`
 	Health            *healthConfigYAML        `yaml:"health"`
+	Observer          *observerConfigYAML      `yaml:"observer"`
 	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
 }
 
@@ -249,7 +251,8 @@ func defaultAppConfig() *appConfig {
 		IPAM: ipamConfig{
 			AutoAnnounceAssignedIPs: false,
 		},
-		Health: defaultHealthConfig(),
+		Health:   defaultHealthConfig(),
+		Observer: defaultObserverConfig(),
 	}
 }
 
@@ -502,6 +505,13 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 			return err
 		}
 		config.Health = hc
+	}
+	if file.Observer != nil {
+		oc, err := parseObserverConfig(file.Observer)
+		if err != nil {
+			return err
+		}
+		config.Observer = oc
 	}
 	return nil
 }
