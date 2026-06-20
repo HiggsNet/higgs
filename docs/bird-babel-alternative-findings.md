@@ -105,7 +105,7 @@ overlays:
     provider: strongswan
     # ... existing overlay fields ...
     routing:
-      enabled: true              # false 时禁用该 overlay 路由
+      # disabled: true           # 临时保留配置但不启用该 overlay 路由
       provider: bird             # Phase 5 仅支持 bird provider
       mode: managed              # managed | external | disabled
       netns: h2                  # 默认继承 LinkGroupSpec.NetNS

@@ -13,7 +13,6 @@ instances:
   - id: main
     netns: h2
     upstream:
-      enabled: true
       create_veth: true
       upstream_interface: hgs-2host
       downstream_interface: hgs-2higgs
@@ -77,7 +76,6 @@ instances:
   - id: main
     netns: h2
     upstream:
-      enabled: true
       interface: hgs-2host
       peer_interface: hgs-upstream1
       ipv4_ll: "169.254.0.1/30"
@@ -110,7 +108,6 @@ instances:
   - id: main
     netns: h2
     upstream:
-      enabled: true
       upstream_interface: hgs-2host
       interface: hgs-other0
 `
@@ -133,7 +130,7 @@ instances:
   - id: main
     netns: h2
     upstream:
-      enabled: false
+      disabled: true
 `
 	var yamlCfg routingInstancesYAML
 	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
@@ -185,8 +182,7 @@ func TestParseUpstreamConfigDefaults(t *testing.T) {
 instances:
   - id: main
     netns: h2
-    upstream:
-      enabled: true
+    upstream: {}
 `
 	var yamlCfg routingInstancesYAML
 	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
@@ -218,7 +214,6 @@ instances:
   - id: main
     netns: h2
     upstream:
-      enabled: true
       upstream_ipv4_ll: "not-a-cidr"
 `
 	var yamlCfg routingInstancesYAML
@@ -241,7 +236,6 @@ instances:
   - id: main
     netns: h2
     upstream:
-      enabled: true
       downstream_ipv6_ll: "not-a-cidr"
 `
 	var yamlCfg routingInstancesYAML

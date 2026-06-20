@@ -254,13 +254,11 @@ func (m *Manager) RotateCutoverReadiness() map[string]bool
 
 ```yaml
 health:
-  enabled: true
   interval: 5s
   timeout: 1s
   burst: 3
   loss_window: 20
   metrics:
-    enabled: true
     listen_addr: "127.0.0.1:9717"
     remote_write_url: http://victoriametrics:8428/api/v1/write
     remote_write_queue_capacity: 1024

@@ -18,7 +18,7 @@ Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zon
 - Endpoint discovery 使用 `bootstrap`、signed endpoint record、显式 `advertise_addrs`、reflector 和短期 `observed_addr`，但 discovery/reachability 不替代 trust chain。
 - IPsec/XFRM 由本地 `overlays:` policy 和 verified `ipsec/*` records 推导 desired links；默认 `ipsec.driver: strongswan` 会连接已有 charon VICI socket，开发/CI 可显式设为 `dry-run`。
 - Routing 已采用 per-netns BIRD/Babel 模型：一个 netns 对应一个 BIRD 实例，同一 netns 下的 overlay 共享 Babel 邻居和路由表。
-- Firewall、health probe、read-only observer 都是可选运行时层，默认保持关闭或保守配置。
+- Firewall、health probe、read-only observer 都是可选运行时层；未声明配置段时保持关闭，声明后可用 `disabled: true` 暂时保留但不启用。
 
 当前 gossip 使用 UDP 和 MessagePack wire codec：
 
@@ -87,9 +87,9 @@ trusted_root_public_key: <base64-ed25519-public-key>
 - `overlays[]`：本地 link group policy，描述要和哪些 peer 建立哪类 overlay；`overlays[].netns` 引用 `netns` 中声明的名字，省略时使用 `netns.default`。它不通过 gossip 发布；当其中有 `provider: strongswan` 的 link group 时，daemon 才会发布本节点 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records。
 - `routing.instances[]`：per-netns routing provider；当前 `provider: bird` 表示由 Higgs 管 BIRD 进程，并在生成的 `bird.conf` 里运行 Babel。BIRD 自身不能切换 netns，必须由 Higgs process manager 在目标 netns 内启动。
 - `ipam.auto_announce_assigned_ips`：是否把分配给本 `managed_zone` 的 IPAM assignment 自动发布为 route announcement。
-- `firewall.instances[]`：per-netns 或 host firewall 规则同步；默认建议先保持 disabled，确认策略后再启用。
-- `health`：本地 link health probe 与 metrics，默认关闭。
-- `observer`：只读 HTTP 状态控制台，默认关闭且建议绑定 loopback。
+- `firewall.instances[]`：per-netns 或 host firewall 规则同步；声明 instance 即表示启用，确认策略前可设 `disabled: true` 或 `mode: disabled`。
+- `health`：本地 link health probe 与 metrics；声明 `health:` 即启用，未声明时关闭。
+- `observer`：只读 HTTP 状态控制台；声明 `observer:` 即启用，未声明时关闭，建议绑定 loopback。
 
 完整带注释模板见 [config.example.yaml](config.example.yaml)。
 
@@ -754,7 +754,7 @@ build/higgs db stats
 
 ## Web 状态控制台（Observer）
 
-Phase 6.7 提供只读 HTTP observer，默认关闭。
+Phase 6.7 提供只读 HTTP observer；未声明 `observer:` 时默认关闭。
 
 ### 启用方式
 
@@ -762,7 +762,6 @@ Phase 6.7 提供只读 HTTP observer，默认关闭。
 
 ```yaml
 observer:
-  enabled: true
   bind_addr: "127.0.0.1"  # 默认 loopback
   port: 8080
 ```

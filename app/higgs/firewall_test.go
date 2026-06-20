@@ -25,7 +25,6 @@ firewall:
   instances:
     - id: h2
       netns: h2
-      enabled: true
       mode: managed
       backend: auto
       default_policy: drop
@@ -82,8 +81,7 @@ firewall:
       host_ports:
         ike: true
         natt: true
-      redirect_grace:
-        enabled: true
+      redirect_grace: {}
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -106,6 +104,31 @@ firewall:
 	}
 	if !inst.RedirectGrace.Enabled {
 		t.Error("redirect grace should be enabled")
+	}
+}
+
+func TestParseConfigYAMLFirewallDisabled(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+firewall:
+  instances:
+    - id: h2
+      netns: h2
+      disabled: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if len(config.Firewall.Instances) != 1 {
+		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
+	}
+	if config.Firewall.Instances[0].Enabled {
+		t.Fatal("firewall instance should be disabled")
 	}
 }
 

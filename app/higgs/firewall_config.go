@@ -49,6 +49,7 @@ type firewallInstanceYAML struct {
 	NetNS         string `yaml:"netns"`
 	Host          *bool  `yaml:"host"`
 	Enabled       *bool  `yaml:"enabled"`
+	Disabled      *bool  `yaml:"disabled"`
 	Mode          string `yaml:"mode"`
 	Backend       string `yaml:"backend"`
 	DefaultPolicy string `yaml:"default_policy"`
@@ -79,7 +80,8 @@ type hostPortsYAML struct {
 }
 
 type redirectGraceYAML struct {
-	Enabled *bool `yaml:"enabled"`
+	Enabled  *bool `yaml:"enabled"`
+	Disabled *bool `yaml:"disabled"`
 }
 
 type hooksYAML struct {
@@ -142,9 +144,9 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig) (Firew
 		}
 	}
 
-	enabled := true
-	if yi.Enabled != nil {
-		enabled = *yi.Enabled
+	enabled, err := enabledFromPresence("firewall.instances[].enabled", "firewall.instances[].disabled", true, yi.Enabled, yi.Disabled)
+	if err != nil {
+		return FirewallInstanceConfig{}, err
 	}
 
 	mode := yi.Mode
@@ -199,8 +201,12 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig) (Firew
 	}
 
 	redirectGrace := firewall.RedirectGrace{}
-	if yi.RedirectGrace != nil && yi.RedirectGrace.Enabled != nil {
-		redirectGrace.Enabled = *yi.RedirectGrace.Enabled
+	if yi.RedirectGrace != nil {
+		enabled, err := enabledFromPresence("firewall.instances[].redirect_grace.enabled", "firewall.instances[].redirect_grace.disabled", true, yi.RedirectGrace.Enabled, yi.RedirectGrace.Disabled)
+		if err != nil {
+			return FirewallInstanceConfig{}, err
+		}
+		redirectGrace.Enabled = enabled
 	}
 
 	hooks := firewall.Hooks{}

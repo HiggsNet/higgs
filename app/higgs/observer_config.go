@@ -9,8 +9,9 @@ import (
 // status observer (Phase 6.7). It maps to the observer.* YAML section.
 //
 // The observer provides a read-only HTTP server that serves REST snapshot APIs
-// and a static UI for visualising daemon live state. It is disabled by default
-// and must be explicitly enabled via observer.enabled: true.
+// and a static UI for visualising daemon live state. It is disabled when the
+// observer section is absent; a present observer section enables it unless
+// observer.disabled: true (or legacy observer.enabled: false) is set.
 type observerConfig struct {
 	Enabled            bool
 	BindAddr           string
@@ -22,6 +23,7 @@ type observerConfig struct {
 // observerConfigYAML is the YAML representation of observerConfig.
 type observerConfigYAML struct {
 	Enabled            *bool  `yaml:"enabled"`
+	Disabled           *bool  `yaml:"disabled"`
 	BindAddr           string `yaml:"bind_addr"`
 	Port               *int   `yaml:"port"`
 	UIPath             string `yaml:"ui_path"`
@@ -49,9 +51,11 @@ func parseObserverConfig(y *observerConfigYAML) (observerConfig, error) {
 	if y == nil {
 		return out, nil
 	}
-	if y.Enabled != nil {
-		out.Enabled = *y.Enabled
+	enabled, err := enabledFromPresence("observer.enabled", "observer.disabled", true, y.Enabled, y.Disabled)
+	if err != nil {
+		return observerConfig{}, err
 	}
+	out.Enabled = enabled
 	if y.BindAddr != "" {
 		addr := strings.TrimSpace(y.BindAddr)
 		if addr == "" {

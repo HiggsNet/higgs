@@ -981,3 +981,18 @@ func configuredKnownPeers(config *syncConfigFile) map[string]*net.UDPAddr {
 	}
 	return peers
 }
+
+func enabledFromPresence(enabledName, disabledName string, presentDefault bool, enabled, disabled *bool) (bool, error) {
+	out := presentDefault
+	if enabled != nil {
+		out = *enabled
+	}
+	if disabled != nil {
+		disabledValue := *disabled
+		if enabled != nil && *enabled == disabledValue {
+			return false, fmt.Errorf("%s conflicts with %s", enabledName, disabledName)
+		}
+		out = !disabledValue
+	}
+	return out, nil
+}

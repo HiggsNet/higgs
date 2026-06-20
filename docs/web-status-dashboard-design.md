@@ -144,7 +144,7 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 
 ```yaml
 observer:
-  enabled: false
+  disabled: true
   bind_addr: "127.0.0.1"
   port: 8080
   ui_path: "/ui"          # 静态资源前缀，空字符串表示根路径
@@ -502,7 +502,7 @@ GET /api/v1/events
 
 ### 9.1 默认安全
 
-- HTTP Observer 默认 **禁用**（`observer.enabled: false`）。
+- 未声明 `observer:` 时 HTTP Observer 默认禁用；声明后可用 `observer.disabled: true` 临时关闭。
 - 启用后默认监听 `127.0.0.1:8080`，不暴露到公网。
 - 第一版不实现认证；管理员通过本地访问、SSH tunnel、或反向代理的 mTLS 保护。
 - 所有 API 只读，不写状态。
@@ -592,7 +592,7 @@ GET /api/v1/events
 ## 13. 待决策问题（MVP 已决策）
 
 1. ~~前端技术栈是否接受原生 JS + Sigma.js，还是坚持使用 Vue/React？~~ **已决策**：第一版采用原生 HTML/CSS/JS，不引入 Node.js 构建链；拓扑图库后续增强时再引入。
-2. ~~HTTP observer 是否默认启用？建议默认禁用，由用户显式开启。~~ **已决策**：默认关闭（`observer.enabled: false`），启用后默认监听 `127.0.0.1:8080`。
+2. ~~HTTP observer 是否默认启用？建议默认禁用，由用户显式开启。~~ **已决策**：未声明 `observer:` 时默认关闭；声明后默认监听 `127.0.0.1:8080`，可用 `disabled: true` 暂停。
 3. ~~是否需要独立的 `higgs observer` 离线诊断子命令？~~ **延后**：第一版只提供 daemon 内嵌 observer；离线 DB viewer 放到后续阶段。
 4. ~~SSE 事件是否需要持久化/回放，还是仅做实时通知？~~ **已决策**：仅做实时通知，不持久化；前端 EventSource 断开后自动降级为轮询。
 5. ~~拓扑图是否需要在第一版就实现，还是先以表格为主？~~ **已决策**：第一版以表格 + raw JSON 为主，可视化拓扑图留到后续增强。

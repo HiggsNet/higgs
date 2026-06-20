@@ -874,7 +874,6 @@ bootstrap:
     addr: 203.0.113.10:33434
 
 ipsec:
-  enabled: true
   provider: strongswan
   accept: inbound
 

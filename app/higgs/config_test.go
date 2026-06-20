@@ -802,7 +802,6 @@ routing:
   instances:
     - id: main
       netns: h2
-      enabled: true
       provider: bird
       mode: external
       control_socket: /run/higgs/bird-main.ctl
@@ -926,7 +925,6 @@ routing:
   instances:
     - id: main
       netns: h2
-      enabled: true
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -962,6 +960,52 @@ routing:
 	}
 	if inst.InterfacePat != "hgs*" {
 		t.Fatalf("inst.InterfacePat = %q, want hgs*", inst.InterfacePat)
+	}
+}
+
+func TestParseConfigYAMLRoutingInstanceDisabled(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: h2
+      disabled: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if len(config.Routing.Instances) != 1 {
+		t.Fatalf("Routing.Instances len = %d, want 1", len(config.Routing.Instances))
+	}
+	if config.Routing.Instances[0].Enabled {
+		t.Fatalf("routing instance should be disabled")
+	}
+}
+
+func TestParseConfigYAMLRejectsConflictingEnabledDisabled(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: h2
+      enabled: true
+      disabled: true
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatal("parseConfigYAML should reject conflicting enabled/disabled")
 	}
 }
 

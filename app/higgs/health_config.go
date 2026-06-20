@@ -33,6 +33,7 @@ type healthConfig struct {
 // healthConfigYAML is the YAML representation of healthConfig.
 type healthConfigYAML struct {
 	Enabled            *bool              `yaml:"enabled"`
+	Disabled           *bool              `yaml:"disabled"`
 	Interval           string             `yaml:"interval"`
 	Timeout            string             `yaml:"timeout"`
 	Burst              *int               `yaml:"burst"`
@@ -48,6 +49,7 @@ type healthConfigYAML struct {
 
 type healthMetricsYAML struct {
 	Enabled          *bool  `yaml:"enabled"`
+	Disabled         *bool  `yaml:"disabled"`
 	ListenAddr       string `yaml:"listen_addr"`
 	RemoteWriteURL   string `yaml:"remote_write_url"`
 	RemoteWriteQueue *int   `yaml:"remote_write_queue_capacity"`
@@ -82,9 +84,11 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 	if y == nil {
 		return out, nil
 	}
-	if y.Enabled != nil {
-		out.Enabled = *y.Enabled
+	enabled, err := enabledFromPresence("health.enabled", "health.disabled", true, y.Enabled, y.Disabled)
+	if err != nil {
+		return healthConfig{}, err
 	}
+	out.Enabled = enabled
 	if y.Interval != "" {
 		d, err := parseConfigDuration(y.Interval, "health.interval")
 		if err != nil {
@@ -160,9 +164,11 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 		out.RecoverConsecutive = *y.RecoverConsecutive
 	}
 	if y.Metrics != nil {
-		if y.Metrics.Enabled != nil {
-			out.MetricsEnabled = *y.Metrics.Enabled
+		metricsEnabled, err := enabledFromPresence("health.metrics.enabled", "health.metrics.disabled", true, y.Metrics.Enabled, y.Metrics.Disabled)
+		if err != nil {
+			return healthConfig{}, err
 		}
+		out.MetricsEnabled = metricsEnabled
 		if y.Metrics.ListenAddr != "" {
 			out.MetricsListenAddr = y.Metrics.ListenAddr
 		}

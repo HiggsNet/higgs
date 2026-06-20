@@ -32,10 +32,8 @@ func TestParseObserverConfigDefault(t *testing.T) {
 }
 
 func TestParseObserverConfigEnabled(t *testing.T) {
-	enabled := true
 	port := 9090
 	cfg, err := parseObserverConfig(&observerConfigYAML{
-		Enabled:  &enabled,
 		BindAddr: "0.0.0.0",
 		Port:     &port,
 	})
@@ -53,6 +51,17 @@ func TestParseObserverConfigEnabled(t *testing.T) {
 	}
 	if cfg.isLoopbackBind() {
 		t.Error("0.0.0.0 should not be loopback")
+	}
+}
+
+func TestParseObserverConfigDisabled(t *testing.T) {
+	disabled := true
+	cfg, err := parseObserverConfig(&observerConfigYAML{Disabled: &disabled})
+	if err != nil {
+		t.Fatalf("parseObserverConfig error: %v", err)
+	}
+	if cfg.Enabled {
+		t.Error("observer should be disabled")
 	}
 }
 
@@ -92,7 +101,6 @@ func TestObserverConfigListenAddr(t *testing.T) {
 
 func TestObserverConfigFromYAML(t *testing.T) {
 	yaml := `observer:
-  enabled: true
   bind_addr: "127.0.0.1"
   port: 8080
 `

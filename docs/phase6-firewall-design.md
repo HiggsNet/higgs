@@ -97,7 +97,6 @@ reconcile 原则：
 firewall:
   instances:
     - id: h2
-      enabled: true
       mode: managed          # managed | external | disabled
       backend: auto          # auto | nft | iptables | none
       netns: h2
@@ -118,19 +117,18 @@ firewall:
             - 10.42.0.0/16
 
     - id: host-ipsec
-      enabled: true
       mode: managed
       backend: auto
       netns: host
       host_ports:
         ike: true
         natt: true
-      redirect_grace:
-        enabled: true
+      redirect_grace: {}
 ```
 
 字段语义：
 
+- `firewall.instances[]` 中声明 instance 即表示启用；临时保留但关闭时设 `disabled: true` 或 `mode: disabled`。
 - `mode=managed`：Higgs 负责 plan/apply/recover owned rules。
 - `mode=external`：Higgs 只生成 desired-state 和 dry-run diff，可校验 hook/owner chain 是否存在。
 - `mode=disabled` 或 `backend=none`：不生成规则，可用于开发、非 Linux、或管理员完全手工管理场景。

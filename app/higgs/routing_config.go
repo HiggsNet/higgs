@@ -77,6 +77,7 @@ type routingInstanceYAML struct {
 	ID             string              `yaml:"id"`
 	NetNS          string              `yaml:"netns"`
 	Enabled        *bool               `yaml:"enabled"`
+	Disabled       *bool               `yaml:"disabled"`
 	Provider       string              `yaml:"provider"`
 	Protocol       string              `yaml:"protocol"`
 	Mode           string              `yaml:"mode"`
@@ -97,6 +98,7 @@ type routingInstanceYAML struct {
 // upstreamConfigYAML is the raw YAML model for routing.instances[].upstream.
 type upstreamConfigYAML struct {
 	Enabled             *bool  `yaml:"enabled"`
+	Disabled            *bool  `yaml:"disabled"`
 	UpstreamInterface   string `yaml:"upstream_interface"`
 	DownstreamInterface string `yaml:"downstream_interface"`
 	Interface           string `yaml:"interface"`
@@ -195,9 +197,9 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		return RoutingInstance{}, fmt.Errorf("router_id_label is required when netns uses path mode")
 	}
 
-	enabled := true
-	if yi.Enabled != nil {
-		enabled = *yi.Enabled
+	enabled, err := enabledFromPresence("routing.instances[].enabled", "routing.instances[].disabled", true, yi.Enabled, yi.Disabled)
+	if err != nil {
+		return RoutingInstance{}, err
 	}
 
 	mode := yi.Mode
@@ -293,9 +295,9 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 	if yu == nil {
 		return nil, nil
 	}
-	enabled := true
-	if yu.Enabled != nil {
-		enabled = *yu.Enabled
+	enabled, err := enabledFromPresence("routing.instances[].upstream.enabled", "routing.instances[].upstream.disabled", true, yu.Enabled, yu.Disabled)
+	if err != nil {
+		return nil, err
 	}
 	if !enabled {
 		return &UpstreamConfig{Enabled: false}, nil

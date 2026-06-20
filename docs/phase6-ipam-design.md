@@ -356,7 +356,6 @@ netns:
 routing:
   instances:
     - netns: h2
-      enabled: true
       provider: bird
       mode: managed
       control_socket: /run/higgs/bird-h2.ctl
@@ -365,7 +364,6 @@ routing:
       metric_base: 100
       interface_pattern: "hgs*"            # XFRM tunnel 接口
       upstream:
-        enabled: true
         create_veth: true                  # 是否由 Higgs 创建并维护 veth pair
         upstream_interface: "hgs-2host"       # mesh netns 内的 veth 端
         downstream_interface: "hgs-2higgs"    # 主网络端（init netns 或其他 ns）

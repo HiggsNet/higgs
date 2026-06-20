@@ -404,7 +404,6 @@ netns:
 routing:
   instances:
     - netns: h2
-      enabled: true
       provider: bird
       mode: managed
       control_socket: /run/higgs/bird-h2.ctl

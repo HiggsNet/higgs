@@ -2,8 +2,9 @@
 #
 # Copy this file to config.yaml and fill the identity/trust fields for the
 # node you are running. The default runtime is deliberately conservative:
-# gossip works as an unprivileged process, while IPsec/XFRM, BIRD, firewall,
-# health probes, and the observer are opt-in operational layers.
+# gossip works as an unprivileged process. Runtime layers such as IPsec/XFRM,
+# BIRD, firewall, health probes, and the observer are enabled by declaring their
+# config blocks; set disabled: true to keep a block without reconciling it.
 
 # -----------------------------------------------------------------------------
 # 1. Local identity, state, and gossip
@@ -186,7 +187,7 @@ routing:
   instances:
     - id: main
       netns: default
-      # enabled: true
+      # disabled: true
       # provider is the managed routing backend. "bird" runs BIRD with a Babel
       # protocol stanza inside the generated bird.conf; babeld is not supported.
       # provider: bird
@@ -202,7 +203,7 @@ routing:
       # Optional veth upstream for main-network Babel peering. Higgs starts BIRD
       # in the target netns; BIRD itself cannot switch namespaces after start.
       # upstream:
-      #   enabled: true
+      #   disabled: true
       #   create_veth: true
       #   upstream_interface: hgs-2host     # mesh netns side, toward host
       #   downstream_interface: hgs-2higgs  # peer_netns / host side, toward Higgs
@@ -220,7 +221,7 @@ firewall:
   instances:
     - id: h2
       netns: default
-      # enabled: false
+      # disabled: true
       # mode: managed
       # backend: auto
       # default_policy: drop
@@ -234,17 +235,17 @@ firewall:
 
     - id: host-ipsec
       host: true
-      # enabled: false
+      # disabled: true
       # mode: managed
       # backend: auto
       # host_ports:
       #   ike: true
       #   natt: true
       # redirect_grace:
-      #   enabled: true
+      #   disabled: true
 
 # health:
-#   enabled: false
+#   disabled: true
 #   interval: 5s
 #   timeout: 1s
 #   burst: 3
@@ -256,7 +257,7 @@ firewall:
 #   down_loss_threshold: "0.6"
 #   recover_consecutive: 5
 #   metrics:
-#     enabled: false
+#     disabled: true
 #     listen_addr: 127.0.0.1:9717
 #     remote_write_url: http://victoriametrics:8428/api/v1/write
 #     remote_write_queue_capacity: 1024
@@ -264,7 +265,7 @@ firewall:
 #     local_spool_max_age: 6h
 
 # observer:
-#   enabled: false
+#   disabled: true
 #   bind_addr: 127.0.0.1
 #   port: 8080
 #   ui_path: ""
