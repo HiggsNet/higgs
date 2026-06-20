@@ -41,12 +41,14 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 		Mode:         ipsec.RoutingModeManaged,
 		InterfacePat: "hgs*",
 		Upstream: &upstreamConfigYAML{
-			Enabled:       boolPtr(true),
-			Interface:     "hgs-upstream0",
-			CreateVeth:    boolPtr(true),
-			PeerInterface: "hgs-upstream1",
-			IPv4LL:        "169.254.0.1/30",
-			IPv6LL:        "fe80::1/64",
+			Enabled:             boolPtr(true),
+			UpstreamInterface:   "hgs-2host",
+			CreateVeth:          boolPtr(true),
+			DownstreamInterface: "hgs-2higgs",
+			UpstreamIPv4LL:      "169.254.0.1/30",
+			DownstreamIPv4LL:    "169.254.0.2/30",
+			UpstreamIPv6LL:      "fe80::1/64",
+			DownstreamIPv6LL:    "fe80::2/64",
 		},
 	}}
 	appConfig.Routing, _ = parseRoutingConfigInstances(upstreamYAML, appConfig.Netns, appConfig.DataDir)
@@ -82,6 +84,15 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	if !fakeVM.ensureCalled {
 		t.Error("vethManager.EnsureVethPair was not called during reconcile")
 	}
+	if fakeVM.ensureSpec.MeshInterface != "hgs-2host" || fakeVM.ensureSpec.PeerInterface != "hgs-2higgs" {
+		t.Fatalf("veth interfaces = %q/%q", fakeVM.ensureSpec.MeshInterface, fakeVM.ensureSpec.PeerInterface)
+	}
+	if fakeVM.ensureSpec.MeshIPv4LL != "169.254.0.1/30" || fakeVM.ensureSpec.PeerIPv4LL != "169.254.0.2/30" {
+		t.Fatalf("veth IPv4 LL = %q/%q", fakeVM.ensureSpec.MeshIPv4LL, fakeVM.ensureSpec.PeerIPv4LL)
+	}
+	if fakeVM.ensureSpec.MeshIPv6LL != "fe80::1/64" || fakeVM.ensureSpec.PeerIPv6LL != "fe80::2/64" {
+		t.Fatalf("veth IPv6 LL = %q/%q", fakeVM.ensureSpec.MeshIPv6LL, fakeVM.ensureSpec.PeerIPv6LL)
+	}
 
 	// Read the generated config and verify upstream interface + static route support.
 	latest, err := rt.LoadState()
@@ -104,7 +115,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	cfgStr := string(cfgBytes)
 
 	// Assert upstream interface block exists.
-	if !strings.Contains(cfgStr, `interface "hgs-upstream*" {`) {
+	if !strings.Contains(cfgStr, `interface "hgs-2host*" {`) {
 		t.Errorf("BIRD config missing upstream interface block\n%s", cfgStr)
 	}
 
@@ -210,7 +221,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 		InterfacePat: "hgs*",
 		Upstream: &upstreamConfigYAML{
 			Enabled:   boolPtr(true),
-			Interface: "hgs-upstream0",
+			Interface: "hgs-2host",
 			IPv6LL:    "fe80::1/64",
 		},
 	}}
@@ -235,8 +246,8 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	for _, sr := range spec.StaticRoutes {
 		if sr.Prefix == assignmentPrefix {
 			foundAssignment = true
-			if sr.Via != "hgs-upstream0" {
-				t.Errorf("static route via = %q, want hgs-upstream0", sr.Via)
+			if sr.Via != "hgs-2host" {
+				t.Errorf("static route via = %q, want hgs-2host", sr.Via)
 			}
 		}
 	}
@@ -256,7 +267,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	if !strings.Contains(cfgStr, "protocol static") {
 		t.Errorf("BIRD config missing protocol static block\n%s", cfgStr)
 	}
-	if !strings.Contains(cfgStr, `route 10.42.0.0/24 via "hgs-upstream0";`) {
+	if !strings.Contains(cfgStr, `route 10.42.0.0/24 via "hgs-2host";`) {
 		t.Errorf("BIRD config missing static route for 10.42.0.0/24\n%s", cfgStr)
 	}
 
@@ -270,10 +281,12 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 type fakeVethManager struct {
 	ensureCalled bool
 	deleteCalled bool
+	ensureSpec   bird.VethSpec
 }
 
 func (m *fakeVethManager) EnsureVethPair(ctx context.Context, spec bird.VethSpec) error {
 	m.ensureCalled = true
+	m.ensureSpec = spec
 	return nil
 }
 

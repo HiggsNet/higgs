@@ -154,7 +154,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	if spec.Upstream != nil {
 		pat := spec.Upstream.InterfacePattern
 		if pat == "" {
-			pat = "hgs-upstream*"
+			pat = "hgs-2host*"
 		}
 		upstreamBlock = &BabelInterfaceBlock{
 			InterfacePattern: pat,

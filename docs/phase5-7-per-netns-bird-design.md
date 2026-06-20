@@ -47,7 +47,7 @@ overlays:
   - id: ipsec-main
     routing:
       enabled: true
-      protocol: bird
+      provider: bird
       mode: managed
       control_socket: /run/higgs/bird-ipsec-main.ctl
       pid_file: /run/higgs/bird-ipsec-main.pid
@@ -102,7 +102,7 @@ routing:
     - id: main
       netns: default            # 引用 netns.default
       enabled: true
-      protocol: bird
+      provider: bird
       mode: managed
       control_socket: /run/higgs/bird-main.ctl
       pid_file: /run/higgs/bird-main.pid

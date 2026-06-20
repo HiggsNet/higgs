@@ -55,13 +55,15 @@ type RoutingInstance struct {
 // UpstreamConfig holds optional veth upstream configuration that connects
 // the mesh netns to the main network (init netns or another ns).
 type UpstreamConfig struct {
-	Enabled       bool
-	Interface     string // mesh netns side of the veth pair
-	CreateVeth    bool   // if true, Higgs creates and maintains the veth pair
-	PeerInterface string // main network side of the veth pair
-	PeerNetns     string // empty = init/main netns
-	IPv4LL        string // optional IPv4 link-local for the mesh side
-	IPv6LL        string // optional IPv6 link-local for the mesh side
+	Enabled          bool
+	Interface        string // mesh netns side of the veth pair
+	CreateVeth       bool   // if true, Higgs creates and maintains the veth pair
+	PeerInterface    string // main network side of the veth pair
+	PeerNetns        string // empty = init/main netns
+	IPv4LL           string // optional IPv4 link-local for the mesh side
+	IPv6LL           string // optional IPv6 link-local for the mesh side
+	DownstreamIPv4LL string // optional IPv4 link-local for the peer side
+	DownstreamIPv6LL string // optional IPv6 link-local for the peer side
 }
 
 // routingInstancesYAML is the raw YAML model for the top-level `routing:` section.
@@ -73,6 +75,7 @@ type routingInstanceYAML struct {
 	ID             string              `yaml:"id"`
 	NetNS          string              `yaml:"netns"`
 	Enabled        *bool               `yaml:"enabled"`
+	Provider       string              `yaml:"provider"`
 	Protocol       string              `yaml:"protocol"`
 	Mode           string              `yaml:"mode"`
 	ControlSocket  string              `yaml:"control_socket"`
@@ -91,13 +94,19 @@ type routingInstanceYAML struct {
 
 // upstreamConfigYAML is the raw YAML model for routing.instances[].upstream.
 type upstreamConfigYAML struct {
-	Enabled       *bool  `yaml:"enabled"`
-	Interface     string `yaml:"interface"`
-	CreateVeth    *bool  `yaml:"create_veth"`
-	PeerInterface string `yaml:"peer_interface"`
-	PeerNetns     string `yaml:"peer_netns"`
-	IPv4LL        string `yaml:"ipv4_ll"`
-	IPv6LL        string `yaml:"ipv6_ll"`
+	Enabled             *bool  `yaml:"enabled"`
+	UpstreamInterface   string `yaml:"upstream_interface"`
+	DownstreamInterface string `yaml:"downstream_interface"`
+	Interface           string `yaml:"interface"`
+	CreateVeth          *bool  `yaml:"create_veth"`
+	PeerInterface       string `yaml:"peer_interface"`
+	PeerNetns           string `yaml:"peer_netns"`
+	UpstreamIPv4LL      string `yaml:"upstream_ipv4_ll"`
+	UpstreamIPv6LL      string `yaml:"upstream_ipv6_ll"`
+	DownstreamIPv4LL    string `yaml:"downstream_ipv4_ll"`
+	DownstreamIPv6LL    string `yaml:"downstream_ipv6_ll"`
+	IPv4LL              string `yaml:"ipv4_ll"`
+	IPv6LL              string `yaml:"ipv6_ll"`
 }
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
@@ -175,12 +184,18 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 	if !oneOfRoutingMode(mode) {
 		return RoutingInstance{}, fmt.Errorf("unsupported routing mode %q", mode)
 	}
-	protocol := yi.Protocol
-	if protocol == "" {
-		protocol = "bird"
+	provider := yi.Provider
+	if provider == "" {
+		provider = yi.Protocol
 	}
-	if protocol != "bird" {
-		return RoutingInstance{}, fmt.Errorf("unsupported routing protocol %q", protocol)
+	if yi.Provider != "" && yi.Protocol != "" && yi.Provider != yi.Protocol {
+		return RoutingInstance{}, fmt.Errorf("routing provider %q conflicts with legacy protocol %q", yi.Provider, yi.Protocol)
+	}
+	if provider == "" {
+		provider = "bird"
+	}
+	if provider != "bird" {
+		return RoutingInstance{}, fmt.Errorf("unsupported routing provider %q", provider)
 	}
 	tableID := yi.TableID
 	if tableID == "" {
@@ -234,7 +249,7 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		ID:             yi.ID,
 		NetNS:          yi.NetNS,
 		Enabled:        enabled,
-		Protocol:       protocol,
+		Protocol:       provider,
 		Mode:           mode,
 		ControlSocket:  controlSocket,
 		PIDFile:        pidFile,
@@ -263,13 +278,32 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 		return &UpstreamConfig{Enabled: false}, nil
 	}
 
+	upstreamInterface, err := mergeAliasField("upstream_interface", strings.TrimSpace(yu.UpstreamInterface), "interface", strings.TrimSpace(yu.Interface))
+	if err != nil {
+		return nil, err
+	}
+	downstreamInterface, err := mergeAliasField("downstream_interface", strings.TrimSpace(yu.DownstreamInterface), "peer_interface", strings.TrimSpace(yu.PeerInterface))
+	if err != nil {
+		return nil, err
+	}
+	upstreamIPv4, err := mergeAliasField("upstream_ipv4_ll", strings.TrimSpace(yu.UpstreamIPv4LL), "ipv4_ll", strings.TrimSpace(yu.IPv4LL))
+	if err != nil {
+		return nil, err
+	}
+	upstreamIPv6, err := mergeAliasField("upstream_ipv6_ll", strings.TrimSpace(yu.UpstreamIPv6LL), "ipv6_ll", strings.TrimSpace(yu.IPv6LL))
+	if err != nil {
+		return nil, err
+	}
+
 	uc := &UpstreamConfig{
-		Enabled:       true,
-		Interface:     strings.TrimSpace(yu.Interface),
-		PeerInterface: strings.TrimSpace(yu.PeerInterface),
-		PeerNetns:     strings.TrimSpace(yu.PeerNetns),
-		IPv4LL:        strings.TrimSpace(yu.IPv4LL),
-		IPv6LL:        strings.TrimSpace(yu.IPv6LL),
+		Enabled:          true,
+		Interface:        upstreamInterface,
+		PeerInterface:    downstreamInterface,
+		PeerNetns:        strings.TrimSpace(yu.PeerNetns),
+		IPv4LL:           upstreamIPv4,
+		IPv6LL:           upstreamIPv6,
+		DownstreamIPv4LL: strings.TrimSpace(yu.DownstreamIPv4LL),
+		DownstreamIPv6LL: strings.TrimSpace(yu.DownstreamIPv6LL),
 	}
 	if yu.CreateVeth != nil {
 		uc.CreateVeth = *yu.CreateVeth
@@ -277,25 +311,47 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 
 	// Default interface name when upstream is enabled but not specified.
 	if uc.Interface == "" {
-		uc.Interface = "hgs-upstream0"
+		uc.Interface = "hgs-2host"
 	}
 	if uc.PeerInterface == "" {
-		uc.PeerInterface = "hgs-upstream1"
+		uc.PeerInterface = "hgs-2higgs"
 	}
 
 	// Validate IPv4/IPv6 link-local if provided.
-	if uc.IPv4LL != "" {
-		if _, err := netip.ParsePrefix(uc.IPv4LL); err != nil {
-			return nil, fmt.Errorf("invalid ipv4_ll %q: %w", uc.IPv4LL, err)
-		}
+	if err := validateOptionalPrefix("upstream_ipv4_ll", uc.IPv4LL); err != nil {
+		return nil, err
 	}
-	if uc.IPv6LL != "" {
-		if _, err := netip.ParsePrefix(uc.IPv6LL); err != nil {
-			return nil, fmt.Errorf("invalid ipv6_ll %q: %w", uc.IPv6LL, err)
-		}
+	if err := validateOptionalPrefix("upstream_ipv6_ll", uc.IPv6LL); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalPrefix("downstream_ipv4_ll", uc.DownstreamIPv4LL); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalPrefix("downstream_ipv6_ll", uc.DownstreamIPv6LL); err != nil {
+		return nil, err
 	}
 
 	return uc, nil
+}
+
+func mergeAliasField(primaryName, primary, legacyName, legacy string) (string, error) {
+	if primary != "" && legacy != "" && primary != legacy {
+		return "", fmt.Errorf("%s %q conflicts with legacy %s %q", primaryName, primary, legacyName, legacy)
+	}
+	if primary != "" {
+		return primary, nil
+	}
+	return legacy, nil
+}
+
+func validateOptionalPrefix(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, err := netip.ParsePrefix(value); err != nil {
+		return fmt.Errorf("invalid %s %q: %w", field, value, err)
+	}
+	return nil
 }
 
 func oneOfRoutingMode(mode string) bool {

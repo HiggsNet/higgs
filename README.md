@@ -1,20 +1,24 @@
 # Higgs
 
-Higgs 是一个实验性的“信任优先”网络配置系统。当前实现已经覆盖本地 Zone 状态、ED25519 签名、Delegation 信任链、bbolt 持久化、节点准入工具，以及 Phase 2 的多节点 UDP gossip 同步。
+Higgs 是一个实验性的“信任优先”网络配置系统。它把可验证的 Zone 状态作为控制面事实来源，再由 daemon 将已验证状态收敛到本机 gossip、IPsec/XFRM、BIRD/Babel、firewall、health 和 observer 等运行时层。
 
 详细设计见 [docs/design.md](docs/design.md)。可执行任务路线见 [todo.md](todo.md)。
 
-## 当前设计
+## 当前架构
 
-Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zone 的已签名 `Delegation`，以及本 Zone 内的已签名 Records。节点只有在能从本地信任的 root authority 验证到目标 Zone 时，才接受远端状态。
+Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zone 的已签名 `Delegation`，以及本 Zone 内的已签名 Records。节点只有在能从本地信任的 root authority 验证到目标 Zone 时，才接受远端状态。远端数据先进入验证路径，验签和 delegation chain 通过后才提升为 active state。
 
-当前信任模型：
+主要组件：
 
 - Root Zone `.` 持有根 authority 公钥。
 - 父 Zone 通过签名 `Delegation` 委派子 Zone。
-- 每个 Zone authority 包含一个或多个 ED25519 公钥。当前实现仍只支持 `threshold=1`。
+- 每个 Zone authority 包含一个或多个 ED25519 公钥。当前实现只支持 `threshold=1`。
 - Record 必须由该 Zone authority 授权的 key 签名。
-- Gossip 收到的数据先视为不可信；信任链和签名验证通过后，才提升到 active state。
+- `daemon` 是推荐的长期运行入口：加载一次 config/state，执行 UDP gossip、endpoint publish、object pull、relay fanout，并在同一个 writer 边界内处理本机 CLI 写入。
+- Endpoint discovery 使用 `bootstrap`、signed endpoint record、显式 `advertise_addrs`、reflector 和短期 `observed_addr`，但 discovery/reachability 不替代 trust chain。
+- IPsec/XFRM 由本地 `overlays:` policy 和 verified `ipsec/*` records 推导 desired links；默认 `ipsec.driver: strongswan` 会连接已有 charon VICI socket，开发/CI 可显式设为 `dry-run`。
+- Routing 已采用 per-netns BIRD/Babel 模型：一个 netns 对应一个 BIRD 实例，同一 netns 下的 overlay 共享 Babel 邻居和路由表。
+- Firewall、health probe、read-only observer 都是可选运行时层，默认保持关闭或保守配置。
 
 当前 gossip 使用 UDP 和 MessagePack wire codec：
 
@@ -32,37 +36,63 @@ Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zon
 
 默认读取 `./config.yaml`。如果要在同一个 checkout 下运行多个节点，可以用 `HIGGS_CONFIG=/path/to/config.yaml` 指定配置文件。
 
-示例：
+最小 gossip/daemon 配置：
 
 ```yaml
 data_dir: .higgs
-peer_id: node-a
-listen_addr: 127.0.0.1:33434
+managed_zone: node-a.catofes.
+identity:
+  key_path: .higgs/identity.key.json
+peer_id: node-a.catofes.
+listen_addr: 0.0.0.0:33434
 max_datagram_bytes: 1200
 max_sync_zones: 16
 max_sync_records: 1024
 log_level: info
 
 bootstrap:
-  - id: node-b
+  - id: node-b.catofes.
     addr: 127.0.0.1:33435
 
 trusted_root_public_key: <base64-ed25519-public-key>
 ```
 
-字段说明：
+基础字段：
 
 - `data_dir`：本地状态目录。bbolt 数据库位于 `<data_dir>/higgs.db`。
-- `peer_id`：gossip peer ID。
+- `managed_zone`：本节点负责的 Zone，通常也是运行时 peer identity。
+- `identity.key_path`：本节点 ED25519 key 文件。配置引用路径，不在 YAML 内嵌私钥。
+- `peer_id`：gossip peer ID。普通节点建议使用 Zone FQDN，例如 `node-a.catofes.`。
 - `listen_addr`：UDP gossip 监听地址。也可以用 `listen_port`。
-- `max_datagram_bytes` / `target_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。旧字段 `max_message_bytes` 仍兼容读取，但公网推荐保持 1200；调大只适合实验或已知 MTU 的内网诊断。
-- `max_sync_zones`：单次 `ANNOUNCE` 最多携带的 Zone snapshot 数，默认 `16`。
-- `max_sync_records`：单个 Zone snapshot 或 record announce 最多携带的 record 数，默认 `1024`。
-- `log_level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。默认运行日志写入 stderr，格式为 `ts=... level=... component=... event=...`，会标明 `gossip` / `sync` / `transport` / `endpoint` / `object_pull` 等类别。设置为 `debug` 会输出更详细的收发包、relay、backoff、object pull 等诊断字段；周期同步里的重复超时会按 peer 和原因汇总，下一次输出时带 `suppressed=N`。
 - `bootstrap`：已知 gossip peer。未知 peer ID 或地址会被拒绝。
 - `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。CLI 默认输出 base64 编码的裸 32-byte Ed25519 public key；配置仍兼容读取 hex。
+- `max_datagram_bytes` / `target_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。旧字段 `max_message_bytes` 仍兼容读取。
+- `max_sync_zones` / `max_sync_records`：单次 announce/snapshot 的对象数量限制。
+- `log_level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。debug 会输出收发包、relay、backoff、object pull 等诊断字段。
 
-模板见 [config.example.yaml](config.example.yaml)。
+运行时与发现字段：
+
+- `advertise_addrs`：管理员显式发布的地址，优先级高于自动发现。
+- `reflectors` / `reflector_interval` / `reflector_timeout`：公网 IP reflector。`auto` 使用内置列表，`off` 禁用公网 reflector。
+- `endpoint_discovery`：`all`、`loopback_only` 或 `advertise_only`。未设置且 bootstrap 全是 loopback 时，daemon 自动按 `loopback_only` 处理。
+- `publish_endpoints`：是否发布 signed endpoint record。NAT/CGNAT outbound-only 节点可设为 `false`。
+- `endpoint_source_order`：出站 gossip 地址选择优先级，常见值为 `advertise`、`bootstrap`、`reflector`、`interface`。
+- `filter_private_ipv4`：默认 `true`，接口扫描时不发布 RFC1918 IPv4；私网实验需要发布内网地址时设为 `false`。
+- `peer_lifecycle`：stale/offline/cleanup 阈值；revoked peer 始终立即清理 Higgs-owned 数据面状态。
+
+数据平面字段：
+
+- `overlay.default_netns`：overlay 数据平面的默认 namespace，是当前权威配置入口。`ipsec.default_netns` 只作为旧配置兼容别名。
+- `ipsec.driver`：默认 `strongswan`，daemon 使用 VICI + XFRM，需要已有 charon、VICI socket 和 Linux netns/XFRM 权限；无特权开发/CI 可设为 `dry-run`。`ipsec:` 本身只配置本机 provider，不会单独发布 `ipsec/*` capability records。
+- `overlays[]`：本地 link group policy，描述要和哪些 peer 建立哪类 overlay。它不通过 gossip 发布；当其中有 `provider: strongswan` 的 link group 时，daemon 才会发布本节点 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records。
+- `netns`：命名 namespace 定义，供 overlays、routing 和 firewall 引用。
+- `routing.instances[]`：per-netns routing provider；当前 `provider: bird` 表示由 Higgs 管 BIRD 进程，并在生成的 `bird.conf` 里运行 Babel。BIRD 自身不能切换 netns，必须由 Higgs process manager 在目标 netns 内启动。
+- `ipam.auto_announce_assigned_ips`：是否把分配给本 `managed_zone` 的 IPAM assignment 自动发布为 route announcement。
+- `firewall.instances[]`：per-netns 或 host firewall 规则同步；默认建议先保持 disabled，确认策略后再启用。
+- `health`：本地 link health probe 与 metrics，默认关闭。
+- `observer`：只读 HTTP 状态控制台，默认关闭且建议绑定 loopback。
+
+完整带注释模板见 [config.example.yaml](config.example.yaml)。
 
 ## 构建与测试
 
@@ -85,11 +115,35 @@ make chain-relay-smoke
 make discovery-smoke
 make reflector-smoke
 make bootstrap-join-smoke
+make nat-observed-smoke
+make nat-daemon-observed-smoke
 make delegation-revoke-smoke
 make object-pull-smoke
+make chunk-fallback-smoke
+make ipsec-policy-smoke
+make ipsec-dry-run-smoke
+make routing-dry-run-smoke
+make firewall-dry-run-smoke
+make peer-lifecycle-smoke
+make revocation-cleanup-smoke
+make observer-smoke
 ```
 
 `make join-smoke` 和 `make reflector-smoke` 不依赖真实 UDP peer。其他 gossip smoke 会启动本地 UDP peer，因此运行环境需要允许本地 UDP socket。
+
+真实系统/特权数据面 smoke 是显式目标，不纳入普通 `make check`：
+
+```bash
+make ipsec-xfrm-preflight
+sudo make ipsec-xfrm-smoke
+make ipsec-xfrm-container-smoke
+make bird-babel-preflight
+sudo make bird-babel-smoke
+make bird-babel-container-smoke
+sudo make firewall-smoke
+make firewall-container-smoke
+make revocation-data-plane-container-smoke
+```
 
 ## 同步诊断
 
@@ -315,11 +369,11 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync status
 长期运行两个节点时，推荐让两端都运行 `daemon`：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs daemon --interval 5
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs daemon --interval 5
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs daemon
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs daemon
 ```
 
-daemon 会定期比较摘要，也会在收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。`sync run` 保留为兼容入口，行为尽量复用同一套 daemon service。
+daemon 默认每 60 秒做一次出站摘要比较，也会在本地写入、收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。`--interval 5` 这类短周期更适合 smoke 或交互调试；长期节点通常保持默认即可。`sync run` 保留为兼容入口，行为尽量复用同一套 daemon service。
 
 daemon 启动后，`record put` 会优先通过本机 control socket 提交给 daemon，由 daemon 签名、落盘并触发 outbound sync：
 
@@ -664,13 +718,17 @@ make object-pull-smoke
 
 真实公网多节点 daemon gossip 测试见 [docs/public-internet-test.md](docs/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
 
-## 下一步方向
+## 当前数据面现状
 
 Phase 3 的最小 daemon / 单 writer 边界已经收敛，Phase 4.0 的 admin 写操作 daemon 化也已经落地：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交 `record put`、`delegate issue`、`delegate revoke` 和 `join accept`，daemon 不存在时保留直接写 DB 的开发/恢复模式。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
-Phase 4 StrongSwan/IKEv2 + XFRM interface 控制模块已完整实现（4.0–4.5）。核心链路落在 `pkg/transport/ipsec`：planner 从 verified active state + 本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`；reconciler 结合持久化 `LinkInstance`、driver `ListSAs` 和 revocation 输入，判定 create/update/adopt/repair/teardown/noop，同时支持 port rotation（prepare_rotate/commit_rotate/rollback_rotate/cleanup_rotate）和 bidirectional takeover（standby/takeover/converged/cooldown）状态机。daemon 已在启动恢复、state change 和 config reload 时接入这条链路。
+StrongSwan/IKEv2 + XFRM interface 控制模块已完整实现主路径。核心链路落在 `pkg/transport/ipsec`：planner 从 verified active state + 本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`；reconciler 结合持久化 `LinkInstance`、driver `ListSAs` 和 revocation 输入，判定 create/update/adopt/repair/teardown/noop，同时支持 bounded port rotation 和 bidirectional takeover 状态机。daemon 已在启动恢复、state change 和 config reload 时接入这条链路。
 
 `LinkInstance` 记录 desired hash、实际状态、XFRM `if_id`、IKE/CHILD_SA、endpoint、owner、backoff、rotation phase、takeover phase 等完整状态。`higgs debug links` 展示 desired vs actual links、SA/CHILD_SA、endpoint、spec hash、initiator_role、takeover_phase、rotate_phase、backoff 和错误。显式 `make ipsec-xfrm-smoke` 和 `make ipsec-xfrm-container-smoke` 已验证：preflight、XFRM lifecycle、driver 层 VICI IKE_SA/CHILD_SA bring-up + tunnel ping（4.3）、daemon reconcile 级 StrongSwan/XFRM bring-up + 重启恢复 + 撤销闭环（4.3）、daemon `Run` 循环 gossip 同步后 VICI/XFRM 建链（4.3）、IPv4 derived-pool tunnel address（4.3.1）、bounded break-before-make 端口轮换（4.4）、bidirectional takeover（4.5）。外部 CLI `build/higgs daemon` 双 OS 进程级 smoke 属于后续 hardening/7.8 生产化阶段；WireGuard 后移为可选轻量传输驱动。
+
+Routing 已从 per-overlay BIRD 改为 per-netns BIRD：`netns:` 定义 namespace，`routing.instances[]` 定义每个 netns 内的 BIRD/Babel 实例，多个 overlay 可以共享同一个 Babel control plane。BIRD 进程必须由 Higgs 在目标 netns 内启动；BIRD 本身不能运行后再切换 namespace。真实 BIRD/Babel 行为由 `make bird-babel-smoke` / `make bird-babel-container-smoke` 验证，常规非 root 路径由 `make routing-dry-run-smoke` 覆盖。
+
+Firewall、peer lifecycle 和 revocation cleanup 已接入 daemon reconcile 边界。`firewall.instances[]` 可描述 overlay netns 和 host IPsec 端口规则；revocation cleanup 按 deny-first 思路撤销 peer 的 firewall/routing/IPsec/peer-cache 状态。普通覆盖见 `make firewall-dry-run-smoke`、`make peer-lifecycle-smoke`、`make revocation-cleanup-smoke`，真实组合数据面见 `make revocation-data-plane-container-smoke`。
 
 ## CLI 汇总
 
@@ -745,5 +803,7 @@ ssh -L 8080:127.0.0.1:8080 user@node
 - 当前只支持 authority `threshold=1`。
 - Delegation scope 只支持 `direct-child`。
 - Gossip 当前默认使用 MessagePack framing，并短期兼容读取旧 JSON v1；没有接入 protobuf 生成代码。
-- 当前同步保证是连通、可达、至少有 bootstrap 或 signed endpoint 发现路径时的最终一致性；复杂 NAT、无稳定 bootstrap、长期网络分区仍需要后续 discovery/relay 能力补强。
-- StrongSwan/IKEv2 + XFRM interface 已有 planner/reconcile/dry-run 基础；真实系统 apply smoke、WireGuard fallback、Babel、route authorization filter、防火墙应用仍在后续阶段。
+- 当前同步保证是连通、可达、至少有 bootstrap、signed endpoint、observed UDP path 或后续 relay 路径时的最终一致性；复杂 NAT、无稳定 bootstrap、长期网络分区仍需要更完整的 relay/discovery server 能力。
+- `ipsec.driver: strongswan`、BIRD/Babel 和 firewall real backend 都依赖 Linux 权限、内核能力和系统服务；普通 `make check` 不证明宿主机具备这些能力，需要显式 privileged smoke。
+- BIRD import filter 当前按授权前缀集合过滤，不做实时 per-peer Router-ID 来源证明；更强的恶意前缀来源审计依赖 daemon 观测/交叉验证或未来 BIRD 扩展。
+- Observer 是只读、无内置认证的本机状态面板；远程访问应通过 SSH tunnel 或带认证的反向代理。

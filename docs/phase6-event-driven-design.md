@@ -501,7 +501,7 @@ CLI 有两种工作模式：
 
 **当前行为（旧代码）：**
 
-daemon 每轮 sync（默认 5s）调用 `reloadStateIfChanged()` 比较磁盘 digest 与内存 digest；如果不同则加载最新 state。因此外部直接改 state 文件最多延迟一个 sync interval 才会被 daemon 感知。
+daemon 每轮 sync（默认 60s；`sync run` 兼容命令默认 5s）调用 `reloadStateIfChanged()` 比较磁盘 digest 与内存 digest；如果不同则加载最新 state。因此外部直接改 state 文件最多延迟一个 sync interval 才会被 daemon 感知。
 
 **bbolt 的锁能做什么、不能做什么：**
 

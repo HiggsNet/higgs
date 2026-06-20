@@ -66,7 +66,8 @@ type daemonEventType string
 
 const (
 	controlConnDeadline                           = 10 * time.Second
-	defaultIPsecReconcileInterval                 = 30 * time.Second
+	defaultDaemonInterval                         = 60 * time.Second
+	defaultIPsecReconcileInterval                 = time.Minute
 	daemonEventRecordPut          daemonEventType = "record_put"
 	daemonEventDelegateIssue      daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke     daemonEventType = "delegate_revoke"
@@ -113,7 +114,7 @@ type daemonEventResult struct {
 
 func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
 	if interval <= 0 {
-		interval = 5 * time.Second
+		interval = defaultDaemonInterval
 	}
 	var socketPath string
 	if rt != nil {
@@ -1290,12 +1291,15 @@ type configuredIPsecDrivers struct {
 func newConfiguredIPsecDrivers(config ipsecConfig) (configuredIPsecDrivers, error) {
 	driver := config.Driver
 	if driver == "" {
-		driver = ipsecDriverDryRun
+		driver = ipsecDriverStrongSwan
 	}
 	switch driver {
 	case ipsecDriverDryRun:
 		return configuredIPsecDrivers{}, nil
 	case ipsecDriverStrongSwan:
+		if len(config.LinkGroups) == 0 {
+			return configuredIPsecDrivers{}, nil
+		}
 		client, err := ipsec.NewGoviciClient(config.VICISocket)
 		if err != nil {
 			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)

@@ -98,7 +98,7 @@ higgs sync once <peer-id>
 ### 3.3 `daemon` — 本机长期运行与单 writer
 
 ```
-higgs daemon --interval 5
+higgs daemon
 ```
 
 这是 Phase 3 后推荐的本机长期运行模式，结合了入站服务、定期出站同步、节点发现、endpoint publish 和本机 control socket。daemon 是本节点 state DB 的唯一长期 writer：CLI 写入、同步 apply、endpoint publish、manual trigger 和 timer tick 都经由同一个事件处理边界串行执行。
@@ -107,7 +107,7 @@ higgs daemon --interval 5
 2. **事件队列** — `record_put`、UDP packet（经 demuxer 后的事件）、remote announce applied、endpoint publish timer、outbound sync timer、object-pull result、timer timeout、manual `sync_trigger`、`shutdown` 都进入 daemon event handler。事件处理函数负责串行落盘、更新 peer state、触发 relay 或唤醒下一轮 outbound sync。
 3. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。这样 daemon 停止期间的恢复写入、新委托或外部修复可以在 daemon 重启后生效。
 4. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
-5. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点创建 `SyncSession`。由 local `record_put` 或 manual trigger 唤醒的轮次会绕过旧 backoff 一次，确保本地新写入能立即尝试传播。
+5. **出站同步轮次** — 每隔 `interval`（daemon 默认 `60s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点创建 `SyncSession`。由 local `record_put`、收到远端更新后的 relay fanout 或 manual trigger 唤醒的轮次会绕过旧 backoff 一次，确保新写入不必等待完整周期。`--interval 5` 这类短周期主要用于 smoke 或交互调试。
 6. **入站接收与 SyncSession FSM** — 收到 `PONG`/`ANNOUNCE`/`FETCH_ZONE`/`object_chunk` 后，demuxer 把包交给对应 peer 的 `SyncSession`。状态机决定下一步动作：继续等待、发送 `FETCH_ZONE`、发送 snapshots、启动异步 TCP object pull、进入 UDP chunk fallback、或结束本轮。超时从 socket read deadline 改为显式 timer 事件（`RoundTimeout`、`QuietTimeout`），并基于每个 peer 的估计 RTT 动态调整，避免高延迟链路被固定 250ms 静默期误杀。
 7. **中继** — 如果 `ANNOUNCE` 改变了本地状态，daemon 记录来源 peer 并向其他已知 peer post `SyncTimerEvent` 创建独立 session 进行 relay（见 §4.3）。
 8. **Control socket** — daemon 默认监听 Unix domain socket，路径为 `HIGGS_CONTROL_SOCKET`、root 下 `/run/higgs/higgs.sock`，或 `<data_dir>/higgs.sock` fallback。API 包含 `status`、`record_put`、`delegate_issue`、`delegate_revoke`、`join_accept`、`sync_trigger`、`reload`、`shutdown`。`reload` 重新读取 `config.yaml`、刷新本地 sync/log/IPsec overlay 配置并触发一次 reconcile；如果 reload 会改变 daemon 当前 state DB 路径或 control socket 路径，则返回错误并要求重启后切换。socket 文件权限为 `0600`，第一版只作为本机控制面，不提供远程管理入口。
@@ -127,7 +127,7 @@ daemon / `sync run` 的核心循环（事件循环路径已默认启用，`event
 1. **单一 UDP reader** — `startGossipPacketReceiver`  goroutine 阻塞在 `transport.Receive()`，所有包经 demuxer 分发。
 2. **状态重载** — 每次出站同步前，如果磁盘上的区域摘要与上次观察到的不同，节点会重新加载状态。
 3. **端点发布** — 每隔 `reflector_interval`（默认 `5m`），节点收集自身网络端点，签名一份 `sync/endpoint/udp` 记录，并写入其管理的区域。
-4. **出站同步轮次** — 每隔 `interval`（默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点创建 `SyncSession`。
+4. **出站同步轮次** — 每隔 `interval`（daemon 默认 `60s`，`sync run` 兼容命令默认 `5s`），节点遍历所有已知节点（bootstrap + 发现），对未处于退避状态的每个节点创建 `SyncSession`。
 5. **事件驱动 SyncSession FSM** — `PONG`/`ANNOUNCE`/`FETCH_ZONE`/`object_chunk` 等包驱动 per-peer 状态机；TCP object pull 在 worker pool 异步执行，结果作为事件回注事件循环；超时使用显式 timer 事件。
 6. **入站接收与中继** — 如果 `ANNOUNCE` 改变了本地状态，则触发**中继**（见 §4.3），为其他 peer 创建独立 sync session。
 
@@ -675,7 +675,7 @@ daemon 已经把这条链路接入 state-change hook。启动进入主循环前�
 
 观测层由 reconcile 摘要和 `higgs debug links` 提供。reconcile 摘要保存最近 desired spec 快照和 SA 快照；`higgs debug links` 会用当前 active state + `LinkGroupSpec` 重算 desired links，并和已落盘 instance、上次 SA/CHILD_SA、endpoint、spec hash、backoff、last error 并排展示。SA 快照保留 VICI `list-sas` 中的 local/remote identity、local/remote endpoint、CHILD_SA name、reqid 和 XFRM if_id，供后续系统 smoke 与 `swanctl --list-sas` 做字段级交叉检查。
 
-当前默认 daemon 仍使用 dry-run driver。显式 root/container smoke 已覆盖真实 StrongSwan/VICI apply、XFRM interface 实际状态观测，以及两个 daemon service 在 `Run` 循环中自动发布并 gossip 同步 `ipsec/*` records 后触发 IKE/CHILD_SA bring-up 和 tunnel ping。daemon service 级重启恢复（观测已有 SA、唯一 SA 断言、继续 tunnel ping）和 revocation teardown（terminate/unload/delete interface、清空 `LinkInstance`、tunnel ping 失败）已在 root/container smoke 中完成；外部 `build/higgs daemon` 双 OS 进程级验证和 gossip revocation 传播仍作为后续 hardening。
+默认 `ipsec.driver` 为 `strongswan`，但没有本地 `overlays:` link group 时 daemon 不会初始化 VICI/XFRM driver，也不会发布 `ipsec/*` records；非 root 开发/CI 可显式配置 `dry-run`。显式 root/container smoke 已覆盖真实 StrongSwan/VICI apply、XFRM interface 实际状态观测，以及两个 daemon service 在 `Run` 循环中自动发布并 gossip 同步 `ipsec/*` records 后触发 IKE/CHILD_SA bring-up 和 tunnel ping。daemon service 级重启恢复（观测已有 SA、唯一 SA 断言、继续 tunnel ping）和 revocation teardown（terminate/unload/delete interface、清空 `LinkInstance`、tunnel ping 失败）已在 root/container smoke 中完成；外部 `build/higgs daemon` 双 OS 进程级验证和 gossip revocation 传播仍作为后续 hardening。
 
 `ResourceOwner` 当前包含 `manager`、`group_id`、`instance_id`、`transport_id` 和派生 `token`。当 persisted instance 不再出现在 desired set 中时，reconcile 会先验证 owner；无法证明属于 Higgs 的实例会保留为 noop，并在 reason 中说明 retained unmanaged resource。`ApplyReconcileAction` 对 instance-only teardown 再执行同样校验，因此 revocation/restart recovery 只能自动删除可追溯到 `LinkGroupSpec` + `LinkInstance` 的资源。
 
@@ -826,7 +826,7 @@ overlays:
 
 ```yaml
 peer_id: node-a
-listen_addr: 127.0.0.1:33434
+listen_addr: 0.0.0.0:33434
 max_datagram_bytes: 1200
 max_sync_zones: 16
 max_sync_records: 1024
@@ -850,7 +850,7 @@ endpoint_grace: 10m
 
 | 键 | 默认值 | 含义 |
 |-----|---------|---------|
-| `listen_addr` | `:33434` | UDP 绑定地址 |
+| `listen_addr` | `0.0.0.0:33434` | UDP 绑定地址 |
 | `max_datagram_bytes` / `target_datagram_bytes` | `1200` | 单个 gossip UDP datagram 的安全预算；旧 `max_message_bytes` 仍兼容读取 |
 | `max_sync_zones` | `16` | 每个 `ANNOUNCE` 快照的最大区域数 |
 | `max_sync_records` | `1024` | 每个 `ANNOUNCE` 的最大记录数 |
@@ -860,6 +860,7 @@ endpoint_grace: 10m
 | `reflector_timeout` | `3s` | 单个 reflector HTTP 请求超时；失败会尝试后续 reflector |
 | `endpoint_ttl` | `1h` | 写入端点记录的 TTL |
 | `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
+| `filter_private_ipv4` | `true` | 接口扫描时过滤 RFC1918 IPv4；私网实验可显式设为 `false` |
 
 Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：`managed_zone` + `identity.key_path` 声明本节点不可变身份，配置文件只引用 ED25519 私钥文件路径，不内嵌私钥；本机 `ipsec` 负责本节点公开能力和地址/端口来源，`overlay.default_netns` 负责 overlay data-plane 默认 namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
 
@@ -913,7 +914,8 @@ overlays:
       create: true
     default_path_mode: family-redundant
     direction: outbound
-    max_peers: 64
+    # max_peers defaults to unlimited; set a positive value to cap peers.
+    max_peers: 256
     max_links_per_peer: 2
     # Tunnel address allocation mode. Modes:
     #   derived-link-local  IPv6 fe80::/64 scoped link-local (default for IPv6)
@@ -926,13 +928,15 @@ overlays:
       mode: derived-link-local
       family: ipv6
     reconcile:
-      interval: 30s
+      interval: 1m
       # After a staged rotate path is established, keep the old generation
       # available during this local dual-running window. Default: 1h.
       rotate_retention: 1h
+      # Retry throttle after failed provider apply, not normal reconcile
+      # frequency. Defaults are exponential 1s..1m.
       backoff:
         initial: 1s
-        max: 60s
+        max: 1m
     connect:
       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
     deny:

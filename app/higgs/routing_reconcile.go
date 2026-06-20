@@ -180,6 +180,8 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 			PeerNetns:     inst.Upstream.PeerNetns,
 			MeshIPv4LL:    inst.Upstream.IPv4LL,
 			MeshIPv6LL:    inst.Upstream.IPv6LL,
+			PeerIPv4LL:    inst.Upstream.DownstreamIPv4LL,
+			PeerIPv6LL:    inst.Upstream.DownstreamIPv6LL,
 		}
 		vm := d.vethManager
 		if vm == nil {

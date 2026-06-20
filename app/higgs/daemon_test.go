@@ -26,11 +26,21 @@ import (
 
 func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
 	service := newDaemonService(&Runtime{}, &stateFile{}, &syncConfigFile{}, 0)
-	if service.Interval != 5*time.Second {
-		t.Fatalf("default interval = %s, want 5s", service.Interval)
+	if service.Interval != defaultDaemonInterval {
+		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
 	}
 	if service.Sync == nil {
 		t.Fatal("sync runtime is nil")
+	}
+}
+
+func TestConfiguredStrongSwanDriverWithoutLinkGroupsIsNoop(t *testing.T) {
+	drivers, err := newConfiguredIPsecDrivers(ipsecConfig{Driver: ipsecDriverStrongSwan})
+	if err != nil {
+		t.Fatalf("newConfiguredIPsecDrivers: %v", err)
+	}
+	if drivers.ipsecDriver != nil || drivers.xfrmDriver != nil || drivers.close != nil {
+		t.Fatalf("drivers = %+v, want no-op without link groups", drivers)
 	}
 }
 
@@ -1887,6 +1897,8 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 
 	reloadedConfig := strings.Join([]string{
 		"data_dir: " + dataDir,
+		"ipsec:",
+		"  driver: dry-run",
 		"overlays:",
 		"  - id: main",
 		"    provider: strongswan",

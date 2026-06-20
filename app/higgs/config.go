@@ -106,7 +106,7 @@ type configYAML struct {
 	EndpointDiscovery   string           `yaml:"endpoint_discovery"`
 	EndpointSourceOrder configStringList `yaml:"endpoint_source_order"`
 
-	FilterPrivateIPv4 bool                     `yaml:"filter_private_ipv4"`
+	FilterPrivateIPv4 *bool                    `yaml:"filter_private_ipv4"`
 	Overlay           overlayDefaultsYAML      `yaml:"overlay"`
 	IPsec             ipsecConfigYAML          `yaml:"ipsec"`
 	IPAM              ipamConfigYAML           `yaml:"ipam"`
@@ -238,12 +238,13 @@ func defaultAppConfig() *appConfig {
 		EndpointGrace:       gossip.DefaultEndpointGrace,
 		PublishEndpoints:    true,
 		EndpointSourceOrder: []string{"advertise", "bootstrap", "reflector", "interface"},
+		FilterPrivateIPv4:   true,
 		Overlay: overlayConfig{
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
 		IPsec: ipsecConfig{
 			DefaultNetNS:       ipsec.NetNSSpec{}.Normalized(),
-			Driver:             ipsecDriverDryRun,
+			Driver:             ipsecDriverStrongSwan,
 			PortMode:           ipsec.PortModeFixed,
 			PortRotateInterval: 0,
 			PortPreviousGrace:  defaultIPsecPortPreviousGrace,
@@ -267,7 +268,7 @@ func normalizeAppConfig(config *appConfig) {
 		config.ListenPort = gossip.DefaultPort
 	}
 	if config.ListenAddr == "" {
-		config.ListenAddr = fmt.Sprintf(":%d", config.ListenPort)
+		config.ListenAddr = fmt.Sprintf("0.0.0.0:%d", config.ListenPort)
 	}
 	if config.MaxMessageBytes <= 0 {
 		config.MaxMessageBytes = gossip.DefaultMaxMessage
@@ -281,7 +282,7 @@ func normalizeAppConfig(config *appConfig) {
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	if config.IPsec.Driver == "" {
-		config.IPsec.Driver = ipsecDriverDryRun
+		config.IPsec.Driver = ipsecDriverStrongSwan
 	}
 	if config.IPsec.PortMode == "" {
 		config.IPsec.PortMode = ipsec.PortModeFixed
@@ -330,7 +331,7 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.ListenPort = *file.ListenPort
 		if config.ListenAddr == "" {
-			config.ListenAddr = fmt.Sprintf(":%d", *file.ListenPort)
+			config.ListenAddr = fmt.Sprintf("0.0.0.0:%d", *file.ListenPort)
 		}
 	}
 	config.Bootstrap = append(config.Bootstrap, file.Bootstrap...)
@@ -408,7 +409,9 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 	if len(file.EndpointSourceOrder) > 0 {
 		config.EndpointSourceOrder = normalizeEndpointSourceOrder([]string(file.EndpointSourceOrder))
 	}
-	config.FilterPrivateIPv4 = file.FilterPrivateIPv4
+	if file.FilterPrivateIPv4 != nil {
+		config.FilterPrivateIPv4 = *file.FilterPrivateIPv4
+	}
 	if netnsConfigured(file.IPsec.DefaultNetNS) {
 		netns := file.IPsec.DefaultNetNS.Normalized()
 		if err := netns.Validate(); err != nil {

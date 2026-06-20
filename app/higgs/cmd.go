@@ -284,7 +284,7 @@ func cmdDaemon() *cli.Command {
 		Usage:       "Run the local Higgs daemon",
 		Description: "Run gossip serving and periodic outbound sync through the Phase 3 daemon service.",
 		Flags: []cli.Flag{
-			&cli.IntFlag{Name: "interval", Value: 60, Usage: "Outbound sync interval in seconds"},
+			&cli.IntFlag{Name: "interval", Value: int(defaultDaemonInterval.Seconds()), Usage: "Outbound sync interval in seconds"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 0 {

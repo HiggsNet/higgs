@@ -174,11 +174,11 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 		Mode:         ipsec.RoutingModeManaged,
 		InterfacePat: "hgs*",
 		Upstream: &upstreamConfigYAML{
-			Enabled:       boolPtr(true),
-			Interface:     upstreamIface,
-			CreateVeth:    boolPtr(false), // already created manually
-			PeerInterface: peerIface,
-			IPv4LL:        "169.254.0.2/30",
+			Enabled:             boolPtr(true),
+			UpstreamInterface:   upstreamIface,
+			CreateVeth:          boolPtr(false), // already created manually
+			DownstreamInterface: peerIface,
+			UpstreamIPv4LL:      "169.254.0.2/30",
 		},
 	}}
 	appConfig.Routing, _ = parseRoutingConfigInstances(routingYAML, appConfig.Netns, dataDir)

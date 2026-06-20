@@ -36,6 +36,12 @@ type VethSpec struct {
 
 	// MeshIPv6LL is the optional IPv6 CIDR for the mesh endpoint.
 	MeshIPv6LL string
+
+	// PeerIPv4LL is the optional IPv4 CIDR for the peer endpoint.
+	PeerIPv4LL string
+
+	// PeerIPv6LL is the optional IPv6 CIDR for the peer endpoint.
+	PeerIPv6LL string
 }
 
 // ExecVethManager implements VethManager using the `ip` command.
@@ -154,6 +160,35 @@ func (m *ExecVethManager) ensureAddresses(ctx context.Context, spec VethSpec) er
 			}
 		}
 	}
+	if spec.PeerIPv4LL != "" {
+		if err := m.ensurePeerAddress(ctx, spec, spec.PeerIPv4LL, "ipv4"); err != nil {
+			return err
+		}
+	}
+	if spec.PeerIPv6LL != "" {
+		if err := m.ensurePeerAddress(ctx, spec, spec.PeerIPv6LL, "ipv6"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ExecVethManager) ensurePeerAddress(ctx context.Context, spec VethSpec, cidr, family string) error {
+	if spec.PeerNetns == "" {
+		existing, err := m.getAddr(ctx, spec.PeerInterface)
+		if err == nil && !strings.Contains(existing, cidr) {
+			if err := m.run(ctx, "ip", "addr", "replace", cidr, "dev", spec.PeerInterface); err != nil {
+				return fmt.Errorf("set peer %s: %w", family, err)
+			}
+		}
+		return nil
+	}
+	existing, err := m.getAddrInNetns(ctx, spec.PeerNetns, spec.PeerInterface)
+	if err == nil && !strings.Contains(existing, cidr) {
+		if err := m.runInNetns(ctx, spec.PeerNetns, "ip", "addr", "replace", cidr, "dev", spec.PeerInterface); err != nil {
+			return fmt.Errorf("set peer %s: %w", family, err)
+		}
+	}
 	return nil
 }
 
@@ -169,6 +204,15 @@ func (m *ExecVethManager) ifaceExists(ctx context.Context, iface string) bool {
 
 func (m *ExecVethManager) getAddrInNetns(ctx context.Context, netns, iface string) (string, error) {
 	cmd := m.runner(ctx, "ip", "netns", "exec", netns, "ip", "addr", "show", iface)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func (m *ExecVethManager) getAddr(ctx context.Context, iface string) (string, error) {
+	cmd := m.runner(ctx, "ip", "addr", "show", iface)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err

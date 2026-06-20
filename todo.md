@@ -1109,7 +1109,7 @@
   - 超过 `cleanup_after` 后才清理长期无效的 IKEv2/IPsec SA、XFRM interface、BIRD neighbor/interface state、firewall 临时规则；清理必须只作用于 Higgs owner 对象。
     - `peerLifecycleCleanupZones` 返回需要 cleanup 的 peer zone 列表，只包含 `offline + cleanup_after_exceeded` 或 `revoked` 的 peer；`peerStatusRequiresCleanup` 供后续 IPsec/BIRD/firewall 层查询。
   - 阈值按全局和 link group 可配置：`stale_after`、`offline_after`、`cleanup_after`、是否允许 `keep_sa_while_stale`，默认保守不因短暂离线拆链。
-    - 新增 `peer_lifecycle` YAML 配置段（`PeerLifecycleConfig`），默认 `stale_after=2m`、`offline_after=10m`、`cleanup_after=1h`、`keep_sa_while_stale=true`；配置校验要求 `stale_after < offline_after < cleanup_after`。
+    - 新增 `peer_lifecycle` YAML 配置段（`PeerLifecycleConfig`），默认 `stale_after=15m`、`offline_after=12h`、`cleanup_after=48h`、`keep_sa_while_stale=true`；配置校验要求 `stale_after < offline_after < cleanup_after`。
 - [x] **6.4.3 endpoint / key / profile / 端口变化处理**
   - endpoint、observed path、advertised IKE/NAT-T 端口变化后，更新 TransportLink desired hash，并触发 IPsec provider reconcile；端口 rotate 与 6.3 host NAT grace 联动。
     - 现有 `notifyStateChanged` → `ipsecDirty` 已覆盖此场景：endpoint/port record 变化触发 gossip apply → dirty → reconcile。

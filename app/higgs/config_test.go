@@ -42,7 +42,7 @@ trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 	if config.StatePath != "/tmp/higgs-a/higgs.db" {
 		t.Fatalf("StatePath = %q, want /tmp/higgs-a/higgs.db", config.StatePath)
 	}
-	if config.PeerID != "node-a" || config.ListenAddr != ":33434" {
+	if config.PeerID != "node-a" || config.ListenAddr != "0.0.0.0:33434" {
 		t.Fatalf("peer/listen = %q/%q", config.PeerID, config.ListenAddr)
 	}
 	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b" || config.Bootstrap[0].Addr != "127.0.0.1:33435" {
@@ -68,6 +68,50 @@ trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 	}
 	if config.Overlay.DefaultNetNS.Name != ipsec.DefaultNetNSName || !config.Overlay.DefaultNetNS.Create {
 		t.Fatalf("Overlay.DefaultNetNS = %+v", config.Overlay.DefaultNetNS)
+	}
+}
+
+func TestParseConfigExampleYAML(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("read config.example.yaml: %v", err)
+	}
+	config := defaultAppConfig()
+	if err := parseConfigYAML(string(data), config); err != nil {
+		t.Fatalf("parse config.example.yaml: %v", err)
+	}
+	if config.PeerID == "" {
+		t.Fatal("config.example.yaml should set peer_id")
+	}
+	if len(config.IPsec.LinkGroups) != 0 {
+		t.Fatal("config.example.yaml should not enable overlay link groups by default")
+	}
+	if len(config.Routing.Instances) == 0 {
+		t.Fatal("config.example.yaml should include a routing instance example")
+	}
+}
+
+func TestConfigDefaultsForListenAndPrivateIPv4Filter(t *testing.T) {
+	config := defaultAppConfig()
+	normalizeAppConfig(config)
+	if config.ListenAddr != "0.0.0.0:33434" {
+		t.Fatalf("ListenAddr = %q, want 0.0.0.0:33434", config.ListenAddr)
+	}
+	if !config.FilterPrivateIPv4 {
+		t.Fatal("FilterPrivateIPv4 = false, want true")
+	}
+	if config.IPsec.Driver != ipsecDriverStrongSwan {
+		t.Fatalf("IPsec.Driver = %q, want strongswan", config.IPsec.Driver)
+	}
+}
+
+func TestParseConfigYAMLCanDisablePrivateIPv4Filter(t *testing.T) {
+	config := defaultAppConfig()
+	if err := parseConfigYAML("filter_private_ipv4: false\n", config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if config.FilterPrivateIPv4 {
+		t.Fatal("FilterPrivateIPv4 = true, want false")
 	}
 }
 
@@ -693,7 +737,7 @@ routing:
     - id: main
       netns: h2
       enabled: true
-      protocol: bird
+      provider: bird
       mode: external
       control_socket: /run/higgs/bird-main.ctl
       pid_file: /run/higgs/bird-main.pid
@@ -758,6 +802,49 @@ routing:
 	}
 	if inst.InterfacePat != "hgs*" {
 		t.Fatalf("inst.InterfacePat = %q, want hgs*", inst.InterfacePat)
+	}
+}
+
+func TestParseConfigYAMLRoutingInstancesAcceptsLegacyProtocolAlias(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: h2
+      protocol: bird
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if got := config.Routing.Instances[0].Protocol; got != "bird" {
+		t.Fatalf("Protocol = %q, want bird", got)
+	}
+}
+
+func TestParseConfigYAMLRoutingInstancesRejectsProviderProtocolConflict(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: h2
+      provider: bird
+      protocol: babeld
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatal("parseConfigYAML should reject conflicting routing provider/protocol")
 	}
 }
 

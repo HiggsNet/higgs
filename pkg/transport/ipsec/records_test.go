@@ -333,6 +333,9 @@ func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
 	if normalized.DefaultPathMode != PathModeFamilyRedundant {
 		t.Fatalf("path mode = %q", normalized.DefaultPathMode)
 	}
+	if normalized.MaxPeers != 0 {
+		t.Fatalf("max peers = %d, want unlimited default", normalized.MaxPeers)
+	}
 	if normalized.Reconcile.RotateRetentionSeconds != 3600 {
 		t.Fatalf("rotate retention = %d, want 3600", normalized.Reconcile.RotateRetentionSeconds)
 	}

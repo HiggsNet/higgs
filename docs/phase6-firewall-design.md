@@ -36,7 +36,7 @@ host netns
 overlay netns (for example h2)
   ├─ XFRM tunnel interfaces: hgs*
   ├─ BIRD Babel instance
-  ├─ optional veth upstream: hgs-upstream*
+  ├─ optional veth upstream: hgs-2host*
   └─ Higgs-owned input/forward/output policy
 ```
 
@@ -205,7 +205,7 @@ anycast/shared assignment 需要保留多个 assignment entry 的来源信息。
 不同接口角色必须分开处理：
 
 - `xfrm_tunnel`：如 `hgs*`，mesh peer 之间的数据面。
-- `upstream_veth`：如 `hgs-upstream*`，overlay netns 与 host/main network 的出入口。
+- `upstream_veth`：如 `hgs-2host*`，overlay netns 与 host/main network 的出入口。
 - `loopback`：本机服务。
 - `underlay`：通常不在 overlay netns 内处理；host 入口另见第 9 节。
 

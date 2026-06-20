@@ -128,7 +128,7 @@ type UpstreamSpec struct {
 	Interface string `yaml:"interface" json:"interface"`
 
 	// InterfacePattern is the BIRD interface glob for upstream interfaces.
-	// Defaults to "hgs-upstream*".
+	// Defaults to "hgs-2host*".
 	InterfacePattern string `yaml:"interface_pattern,omitempty" json:"interface_pattern,omitempty"`
 }
 

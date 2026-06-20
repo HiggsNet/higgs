@@ -340,7 +340,7 @@ higgs ipam assigned [--zone <zone>]
 | 层面 | 作用 | BIRD 中对应机制 |
 |---|---|---|
 | **数据面 veth** | 把 mesh netns 内的前缀暴露给主网络，让主网络/other users 可达 | `protocol static` + kernel export / Babel export |
-| **控制面 Babel peering** | 让 BIRD 通过 veth 与主网络中的另一个 BIRD/babeld 交换路由 | Babel `interface "hgs-upstream*" { ... }` |
+| **控制面 Babel peering** | 让 BIRD 通过 veth 与主网络中的另一个 BIRD/babeld 交换路由 | Babel `interface "hgs-2host*" { ... }` |
 
 ### 13.2 veth 生命周期与配置
 
@@ -357,7 +357,7 @@ routing:
   instances:
     - netns: h2
       enabled: true
-      protocol: bird
+      provider: bird
       mode: managed
       control_socket: /run/higgs/bird-h2.ctl
       pid_file: /run/higgs/bird-h2.pid
@@ -366,12 +366,14 @@ routing:
       interface_pattern: "hgs*"            # XFRM tunnel 接口
       upstream:
         enabled: true
-        interface: "hgs-upstream0"         # mesh netns 内的 veth 端
         create_veth: true                  # 是否由 Higgs 创建并维护 veth pair
-        peer_interface: "hgs-upstream1"    # 主网络端（init netns 或其他 ns）
+        upstream_interface: "hgs-2host"       # mesh netns 内的 veth 端
+        downstream_interface: "hgs-2higgs"    # 主网络端（init netns 或其他 ns）
         peer_netns: ""                     # 空表示主网络（init netns）
-        ipv4_ll: "169.254.0.1/30"          # 可选：veth 两端 IPv4 link-local
-        ipv6_ll: "fe80::1/64"              # 可选：veth 两端 IPv6 link-local
+        upstream_ipv4_ll: "169.254.0.1/30"
+        downstream_ipv4_ll: "169.254.0.2/30"
+        upstream_ipv6_ll: "fe80::1/64"
+        downstream_ipv6_ll: "fe80::2/64"
 
 overlays:
   - id: ipsec-main
@@ -379,7 +381,7 @@ overlays:
     # routing 不再在 overlay 层级配置
 ```
 
-- `interface` 与 `peer_interface` 组成一对 veth；Higgs 在 reconcile 时确保存在、up、地址正确。
+- `upstream_interface` 与 `downstream_interface` 组成一对 veth；Higgs 在 reconcile 时确保存在、up、两端地址正确。旧字段 `interface` / `peer_interface` 仍作为兼容别名读取。
 - 如果管理员已手工创建 veth，可设置 `create_veth: false`，Higgs 只负责在 BIRD config 中引用它。
 - veth 上的 Babel 邻居发现需要接口具备 IPv6 link-local 地址；若只有 IPv4 地址，需改用单播 `neighbor` 配置或额外分配 link-local。
 - 同一 netns 下的所有 overlay 共享同一个 BIRD 实例和同一个 `upstream` 配置。
@@ -394,14 +396,14 @@ protocol babel higgs_babel_xxx {
     ipv6 { table higgs_xxx; import filter higgs_import_xxx; export filter higgs_export_xxx; };
 
     interface "hgs*" { type tunnel; rxcost 100; hello interval 4 s; update interval 4 s; };
-    interface "hgs-upstream*" { rxcost 100; hello interval 4 s; update interval 4 s; };
+    interface "hgs-2host*" { rxcost 100; hello interval 4 s; update interval 4 s; };
 }
 ```
 
 关键区别：
 
 - `hgs*` 是 XFRM/IPsec tunnel，必须使用 `type tunnel`。
-- `hgs-upstream*` 是 veth，使用默认多播/单播邻居模式，**不要**加 `type tunnel`。
+- `hgs-2host*` 是 veth，使用默认多播/单播邻居模式，**不要**加 `type tunnel`。
 
 ### 13.4 用 static protocol 宣告分配前缀
 
@@ -410,7 +412,7 @@ protocol babel higgs_babel_xxx {
 ```bird
 protocol static higgs_static_xxx {
     ipv4;
-    route 10.0.0.0/24 via "hgs-upstream0";
+    route 10.0.0.0/24 via "hgs-2host";
 }
 ```
 

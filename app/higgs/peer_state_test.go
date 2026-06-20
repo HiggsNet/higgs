@@ -196,10 +196,10 @@ func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
 func TestDerivePeerStatusStaleAfterThreshold(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig() // stale_after=2m, offline_after=10m
+	cfg := defaultPeerLifecycleConfig() // stale_after=15m, offline_after=12h
 
-	// Set last sync to 5 minutes ago — should be stale.
-	lastSync := now.Add(-5 * time.Minute)
+	// Set last sync to 20 minutes ago; should be stale but not offline.
+	lastSync := now.Add(-20 * time.Minute)
 	state.SyncPeers["node-b.catofes."] = syncPeerState{
 		LastSyncUnix: lastSync.Unix(),
 	}
@@ -216,10 +216,10 @@ func TestDerivePeerStatusStaleAfterThreshold(t *testing.T) {
 func TestDerivePeerStatusOfflineAfterThreshold(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig() // offline_after=10m, cleanup_after=1h
+	cfg := defaultPeerLifecycleConfig() // offline_after=12h, cleanup_after=48h
 
-	// Set last sync to 15 minutes ago — should be offline.
-	lastSync := now.Add(-15 * time.Minute)
+	// Set last sync to 13 hours ago; should be offline but not cleanup due.
+	lastSync := now.Add(-13 * time.Hour)
 	state.SyncPeers["node-b.catofes."] = syncPeerState{
 		LastSyncUnix: lastSync.Unix(),
 	}
@@ -236,10 +236,10 @@ func TestDerivePeerStatusOfflineAfterThreshold(t *testing.T) {
 func TestDerivePeerStatusCleanupAfterThreshold(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig() // cleanup_after=1h
+	cfg := defaultPeerLifecycleConfig() // cleanup_after=48h
 
-	// Set last sync to 2 hours ago — should be offline with cleanup due.
-	lastSync := now.Add(-2 * time.Hour)
+	// Set last sync to 49 hours ago; should be offline with cleanup due.
+	lastSync := now.Add(-49 * time.Hour)
 	state.SyncPeers["node-b.catofes."] = syncPeerState{
 		LastSyncUnix: lastSync.Unix(),
 	}
@@ -515,7 +515,7 @@ func TestPeerLifecycleCleanupZones(t *testing.T) {
 
 	// Add node-b to SyncPeers with old sync time (beyond cleanup_after).
 	state.SyncPeers["node-b.catofes."] = syncPeerState{
-		LastSyncUnix: now.Add(-2 * time.Hour).Unix(),
+		LastSyncUnix: now.Add(-49 * time.Hour).Unix(),
 	}
 
 	// Cleanup zones should include node-b.

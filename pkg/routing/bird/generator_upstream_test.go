@@ -10,7 +10,7 @@ func TestGenerateWithUpstreamInterface(t *testing.T) {
 	spec := testBirdInstanceSpec()
 	spec.NetNSName = "h2"
 	spec.Upstream = &UpstreamSpec{
-		Interface: "hgs-upstream0",
+		Interface: "hgs-2host",
 	}
 
 	gen := DefaultConfigGenerator{}
@@ -29,7 +29,7 @@ func TestGenerateWithUpstreamInterface(t *testing.T) {
 	}
 
 	// Must have the upstream veth interface block WITHOUT type tunnel.
-	if !strings.Contains(s, `interface "hgs-upstream*" {`) {
+	if !strings.Contains(s, `interface "hgs-2host*" {`) {
 		t.Errorf("missing upstream interface block\n%s", s)
 	}
 	// Count type tunnel occurrences: should be exactly 1 (only in primary block).
@@ -50,7 +50,7 @@ func TestGenerateWithoutUpstreamNoExtraInterface(t *testing.T) {
 	s := string(cfg)
 
 	// Should NOT have any upstream interface block.
-	if strings.Contains(s, "hgs-upstream") {
+	if strings.Contains(s, "hgs-2host") {
 		t.Errorf("upstream interface block present when not configured\n%s", s)
 	}
 	// Must still have the primary interface block.
@@ -65,11 +65,11 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
-			Via:    "hgs-upstream0",
+			Via:    "hgs-2host",
 		},
 		{
 			Prefix: netip.MustParsePrefix("2001:db8:1::/48"),
-			Via:    "hgs-upstream0",
+			Via:    "hgs-2host",
 		},
 	}
 
@@ -85,11 +85,11 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 		t.Errorf("missing protocol static block\n%s", s)
 	}
 	// Must have the IPv4 route via the upstream interface.
-	if !strings.Contains(s, `route 10.0.0.0/24 via "hgs-upstream0";`) {
+	if !strings.Contains(s, `route 10.0.0.0/24 via "hgs-2host";`) {
 		t.Errorf("missing IPv4 static route via interface\n%s", s)
 	}
 	// Must have the IPv6 route via the upstream interface.
-	if !strings.Contains(s, `route 2001:db8:1::/48 via "hgs-upstream0";`) {
+	if !strings.Contains(s, `route 2001:db8:1::/48 via "hgs-2host";`) {
 		t.Errorf("missing IPv6 static route via interface\n%s", s)
 	}
 }
@@ -157,12 +157,12 @@ func TestGenerateWithUpstreamAndStaticRoutes(t *testing.T) {
 	spec := testBirdInstanceSpec()
 	spec.NetNSName = "h2"
 	spec.Upstream = &UpstreamSpec{
-		Interface: "hgs-upstream0",
+		Interface: "hgs-2host",
 	}
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
-			Via:    "hgs-upstream0",
+			Via:    "hgs-2host",
 		},
 	}
 
@@ -174,13 +174,13 @@ func TestGenerateWithUpstreamAndStaticRoutes(t *testing.T) {
 	s := string(cfg)
 
 	// Both upstream interface block and static routes.
-	if !strings.Contains(s, `interface "hgs-upstream*" {`) {
+	if !strings.Contains(s, `interface "hgs-2host*" {`) {
 		t.Errorf("missing upstream interface block\n%s", s)
 	}
 	if !strings.Contains(s, "protocol static") {
 		t.Errorf("missing protocol static block\n%s", s)
 	}
-	if !strings.Contains(s, `route 10.0.0.0/24 via "hgs-upstream0";`) {
+	if !strings.Contains(s, `route 10.0.0.0/24 via "hgs-2host";`) {
 		t.Errorf("missing static route via upstream interface\n%s", s)
 	}
 }

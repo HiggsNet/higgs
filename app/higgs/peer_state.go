@@ -54,9 +54,9 @@ type PeerLifecycleConfig struct {
 // network blips do not cause link teardown.
 func defaultPeerLifecycleConfig() PeerLifecycleConfig {
 	return PeerLifecycleConfig{
-		StaleAfter:       2 * time.Minute,
-		OfflineAfter:     10 * time.Minute,
-		CleanupAfter:     1 * time.Hour,
+		StaleAfter:       15 * time.Minute,
+		OfflineAfter:     12 * time.Hour,
+		CleanupAfter:     48 * time.Hour,
 		KeepSAWhileStale: true,
 	}
 }

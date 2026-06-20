@@ -1,80 +1,97 @@
-data_dir: .higgs
-# Optional Phase 4.0.1 identity overlay. For a new node, set managed_zone,
-# trusted_root_public_key, identity.key_path, and at least one bootstrap peer;
-# the first daemon/CLI state load creates a pending bootstrap state and prints
-# the join request instead of embedding a private key in config.yaml.
+# Higgs example configuration.
+#
+# Copy this file to config.yaml and fill the identity/trust fields for the
+# node you are running. The default runtime is deliberately conservative:
+# gossip works as an unprivileged process, while IPsec/XFRM, BIRD, firewall,
+# health probes, and the observer are opt-in operational layers.
+
+# -----------------------------------------------------------------------------
+# 1. Local identity, state, and gossip
+# -----------------------------------------------------------------------------
+
+# Default data_dir is /etc/higgs. Use a relative path for local development.
+# data_dir: .higgs
+
+# For a joined daemon node, prefer the zone FQDN as managed_zone and peer_id.
+# The first load with managed_zone + identity.key_path can create a pending
+# bootstrap state and print a join request instead of embedding private key
+# material in config.yaml.
 # managed_zone: node-a.catofes.
 # identity:
 #   key_path: .higgs/identity.key.json
-peer_id: node-a
-listen_addr: 127.0.0.1:33434
 
-# Conservative datagram budget (default 1200 bytes). Higgs gossip does not rely
-# on IP fragmentation. Raising this above 1200 is only recommended for lab or
-# known-safe private networks; the public-internet default is 1200.
-max_datagram_bytes: 1200
-max_sync_zones: 16
-max_sync_records: 1024
-# Supported levels: debug, info, warn, error. Use debug for per-packet gossip
-# and transport diagnostics.
-log_level: info
-reflectors: auto
-reflector_interval: 5m
-reflector_timeout: 3s
-endpoint_ttl: 1h
-endpoint_grace: 10m
-
-# Endpoint discovery mode controls which local addresses are published as signed
-# sync/endpoint/udp records:
-#   all (default)         - use advertise_addrs, reflectors, and interface scan
-#   loopback_only         - only loopback listen_addr / loopback advertise_addrs
-#   advertise_only        - only explicit advertise_addrs
-# When unset and all bootstrap peers are loopback, the daemon auto-detects a
-# loopback-only deployment and behaves like loopback_only.
-endpoint_discovery: all
-
-# Address source priority used when merging bootstrap addresses with discovered
-# endpoint records for outbound gossip. Default: advertise, bootstrap, reflector, interface.
-# endpoint_source_order:
-#   - advertise
-#   - bootstrap
-#   - reflector
-#   - interface
-
-# When true, RFC1918 IPv4 addresses (10.x, 172.16.x, 192.168.x) discovered
-# from local network interfaces are excluded from the advertised endpoint list.
-filter_private_ipv4: false
-
-# Phase 6.4: Dynamic peer management lifecycle thresholds. A peer that has not
-# been seen for stale_after is marked stale (retains SA and config, reduced
-# reconnect frequency). Beyond offline_after it enters low-frequency backoff.
-# Beyond cleanup_after Higgs owner-managed SA/interface/route/firewall entries
-# are cleaned up. Revoked peers are always cleaned up immediately regardless of
-# these thresholds.
-# peer_lifecycle:
-#   stale_after: 2m
-#   offline_after: 10m
-#   cleanup_after: 1h
-#   keep_sa_while_stale: true
-
-# Phase 6 IPAM configuration.
-ipam:
-  # When true, the daemon automatically publishes routes/announcements/* for
-  # every IPAM assignment whose assigned_to equals this node's managed_zone.
-  # Defaults to false so administrators keep explicit control over which
-  # prefixes are announced.
-  auto_announce_assigned_ips: false
+peer_id: node-a.catofes.
+listen_addr: 0.0.0.0:33434
 
 bootstrap:
-  - id: node-b
+  - id: node-b.catofes.
     addr: 127.0.0.1:33435
 
 # Base64 encoded raw 32-byte ED25519 public key for the trusted root zone.
 # CLI output uses base64; existing hex values are still accepted.
 trusted_root_public_key:
 
-# Phase 4 local overlay data-plane defaults. Link groups are local policy and
-# are not published through gossip.
+# -----------------------------------------------------------------------------
+# 2. Gossip limits, logging, and endpoint discovery
+# -----------------------------------------------------------------------------
+
+# Public-internet safe defaults. Higgs does not depend on IP fragmentation.
+# max_datagram_bytes: 1200
+# max_sync_zones: 16
+# max_sync_records: 1024
+
+# Supported levels: debug, info, warn, error. HIGGS_LOG_LEVEL overrides this.
+# log_level: info
+
+# Explicit publish addresses are preferred over reflector/interface discovery.
+# advertise_addrs:
+#   - 203.0.113.10:33434
+
+# Endpoint discovery modes:
+#   all             advertise_addrs + reflectors + interface scan
+#   loopback_only   only loopback listen/advertise addresses
+#   advertise_only  only explicit advertise_addrs
+# If unset and all bootstrap peers are loopback, daemon treats this as
+# loopback_only automatically.
+# endpoint_discovery: all
+# publish_endpoints: true
+
+# reflectors: auto
+# reflector_interval: 5m
+# reflector_timeout: 3s
+# endpoint_ttl: 1h
+# endpoint_grace: 10m
+
+# Address source priority for outbound gossip endpoint selection.
+# endpoint_source_order:
+#   - advertise
+#   - bootstrap
+#   - reflector
+#   - interface
+
+# Exclude RFC1918 IPv4 addresses found by interface scan from signed endpoint
+# publication. Set false for private-network labs that intentionally publish
+# RFC1918 addresses.
+# filter_private_ipv4: true
+
+# Dynamic peer lifecycle. Stale/offline peers are retained with lower retry
+# pressure; cleanup_after removes Higgs-owned SA/interface/route/firewall state.
+# peer_lifecycle:
+#   stale_after: 15m
+#   offline_after: 12h
+#   cleanup_after: 48h
+#   keep_sa_while_stale: true
+
+# -----------------------------------------------------------------------------
+# 3. Overlay namespace, IPsec, and link policy
+# -----------------------------------------------------------------------------
+
+# overlay.default_netns is the authoritative data-plane namespace default.
+# ipsec.default_netns is accepted only as an old compatibility alias.
+# If the whole default_netns block is omitted, Higgs defaults to creating the
+# named namespace "h2". If kind/name are written explicitly, keep create: true
+# when you want Higgs to create the namespace; set create: false only for an
+# externally managed pre-existing namespace.
 overlay:
   default_netns:
     kind: name
@@ -82,142 +99,142 @@ overlay:
     create: true
 
 ipsec:
-  # Default is dry-run so normal daemon runs never require root, charon, VICI,
-  # or XFRM privileges. Set to strongswan only on a prepared system-smoke host.
-  driver: dry-run
-  # Optional; empty uses strongSwan/govici's default VICI socket path.
-  vici_socket:
-  # Port rotation mode. "fixed" (default) keeps IKE/NAT-T on their default or
-  # listen_addr-derived ports. "range" selects ports deterministically from the
-  # configured range and advances generation per port_rotate_interval.
-  port_mode: fixed
+  # This section configures the local IPsec provider. It does not, by itself,
+  # publish IPsec capability records. Higgs publishes ipsec/* records only
+  # when a local overlay/link group below selects provider: strongswan.
+  #
+  # Default driver is strongswan. For unprivileged development or CI without
+  # charon/VICI/XFRM, explicitly set driver: dry-run.
+  # driver: strongswan
+  # Higgs does not start charon; strongswan mode connects to an existing VICI
+  # socket from a system-managed or externally started charon process. Empty
+  # uses govici/strongSwan's default socket path.
+  # vici_socket: /run/charon.vici
+
+  # fixed keeps IKE/NAT-T on the default or listen_addr-derived ports. range
+  # selects deterministic ports from port_range and publishes previous ports
+  # during grace.
+  # port_mode: fixed
   # port_range:
   #   from: 30000
   #   to: 30099
   # port_rotate_interval: 24h
   # port_previous_grace: 10m
 
-# Phase 5.7: Top-level netns definitions. Named network namespaces are shared
-# by all overlays and routing instances that reference them.
+# Uncomment an overlay/link group to participate in the StrongSwan mesh. This
+# is the switch that makes the daemon publish signed ipsec/profile,
+# ipsec/addresses, ipsec/ports, and ipsec/transport-key records for this node.
+# Future providers such as WireGuard should be configured as their own provider
+# family, not under the ipsec: provider settings.
+#
+# overlays:
+#   - id: ipsec-main
+#     name: ipsec-main
+#     # provider defaults to strongswan. It is the overlay transport provider,
+#     # not the generic "ipsec" record namespace name.
+#     # provider: strongswan
+#     # default_path_mode: family-redundant
+#     # direction: outbound
+#     # address_source_order:
+#     #   - manual-address
+#     #   - manual-dns
+#     #   - discovery
+#     #   - reflector
+#     # max_peers defaults to unlimited. Set a positive value to cap selected
+#     # peers in this link group.
+#     # max_peers: 256
+#     # max_links_per_peer: 2
+#
+#     # tunnel_address defaults to IPv6 derived-link-local, so this block is
+#     # usually unnecessary. Modes:
+#     #   derived-link-local  deterministic IPv6 fe80::/64 scoped address
+#     #   derived-pool        deterministic address from tunnel_address.pool
+#     #   sequential-pool     legacy index-based allocation
+#     #   disabled            no tunnel address
+#     # tunnel_address:
+#     #   mode: derived-pool
+#     #   family: ipv6
+#     #   pool: fd00:4242::/64
+#
+#     # reconcile is mostly event-driven; interval is only the periodic safety
+#     # sweep for SA observation/recovery. Defaults: interval 1m,
+#     # rotate_retention 1h. Backoff is retry throttle after failed provider
+#     # apply, not normal reconcile frequency; default is exponential 1s..1m,
+#     # and the next attempt still waits for an event or safety sweep.
+#     # reconcile:
+#     #   interval: 1m
+#     #   rotate_retention: 1h
+#     #   backoff:
+#     #     initial: 1s
+#     #     max: 1m
+#
+#     connect:
+#       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+#     deny:
+#       - "strongswan://*.lab.catofes."
+
+# -----------------------------------------------------------------------------
+# 4. Per-netns BIRD/Babel routing and IPAM
+# -----------------------------------------------------------------------------
+
+# Named network namespaces are shared by overlays, BIRD instances, and firewall
+# instances that reference them.
 netns:
   default:
     kind: name
     name: h2
     create: true
 
-# Phase 5.7: Per-netns routing instances. One netns = one BIRD instance.
-# Routing config has moved from overlays[].routing to this top-level section.
+# ipam:
+#   # When true, daemon publishes routes/announcements/* for IPAM assignments
+#   # whose assigned_to equals managed_zone. Defaults false for explicit control.
+#   auto_announce_assigned_ips: false
+
 routing:
   instances:
     - id: main
       netns: h2
-      enabled: true
-      protocol: bird
-      mode: managed
-      # control_socket: /run/higgs/bird-h2.ctl    # defaults to <data_dir>/bird/bird-<netns>.ctl
-      # pid_file: /run/higgs/bird-h2.pid          # defaults to <data_dir>/bird/bird-<netns>.pid
-      # config_file: /run/higgs/bird-h2.conf      # defaults to <data_dir>/bird/bird-<netns>.conf
-      table: main                # independent netns default: main (table 254)
-      metric_base: 100
-      metric_staged: 200
-      metric_draining: 500
-      interface_pattern: hgs*
-      # router_id_label: foo-netns  # required only for path netns
-      ecmp: true
-      ecmp_limit: 16
-      # Phase 6.1.7: Optional veth upstream for main-network Babel peering.
-      # When enabled, BIRD listens on a second interface (veth) in addition
-      # to XFRM tunnel interfaces. A protocol static block is generated for
-      # local IPAM assignments routed via the upstream interface.
-      upstream:
-        enabled: false
-        interface: hgs-upstream0       # mesh netns side of the veth pair
-        create_veth: true              # Higgs creates and maintains the veth pair
-        peer_interface: hgs-upstream1  # main network side
-        peer_netns: ""                 # empty = init/main netns
-        ipv4_ll: "169.254.0.1/30"      # optional IPv4 link-local for mesh side
-        ipv6_ll: "fe80::1/64"          # optional IPv6 link-local for mesh side
+      # enabled: true
+      # provider is the managed routing backend. "bird" runs BIRD with a Babel
+      # protocol stanza inside the generated bird.conf; babeld is not supported.
+      # provider: bird
+      # mode: managed
+      # table: main
+      # metric_base: 100
+      # metric_staged: 200
+      # metric_draining: 500
+      # interface_pattern: hgs*
+      # ECMP knobs are parsed for future/alternate backends, but current BIRD
+      # rendering does not emit Babel ECMP directives; leave them unset here.
 
-overlays:
-  - id: ipsec-main
-    name: ipsec-main
-    provider: strongswan
-    default_path_mode: family-redundant
-    direction: outbound
-    address_source_order: manual-address, manual-dns, discovery, reflector
-    max_peers: 64
-    max_links_per_peer: 2
-    # Tunnel address allocation mode. Modes:
-    #   derived-link-local  IPv6 fe80::/64 scoped link-local (default for IPv6)
-    #   derived-pool        Deterministic host from the configured pool
-    #   sequential-pool     Legacy index-based allocation (testing/migration only)
-    #   disabled            No tunnel address assigned (default for IPv4)
-    # Legacy field tunnel_address_pool maps to sequential-pool and cannot be used
-    # together with tunnel_address.
-    tunnel_address:
-      mode: derived-link-local
-      family: ipv6
-    reconcile:
-      interval: 30s
-      backoff:
-        initial: 1s
-        max: 1m
-    # Phase 5.7: routing is now configured at the top level under routing.instances[].
-    # This overlay shares the BIRD instance in netns "h2" with other overlays
-    # that use the same netns.
-    connect:
-      - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
-    deny:
-      - "strongswan://*.lab.catofes."
+      # Optional veth upstream for main-network Babel peering. Higgs starts BIRD
+      # in the target netns; BIRD itself cannot switch namespaces after start.
+      # upstream:
+      #   enabled: true
+      #   create_veth: true
+      #   upstream_interface: hgs-2host     # mesh netns side, toward host
+      #   downstream_interface: hgs-2higgs  # peer_netns / host side, toward Higgs
+      #   peer_netns: ""          # empty = init/main netns
+      #   upstream_ipv4_ll: 169.254.0.1/30
+      #   downstream_ipv4_ll: 169.254.0.2/30
+      #   upstream_ipv6_ll: fe80::1/64
+      #   downstream_ipv6_ll: fe80::2/64
 
-# Phase 6.6: Link health probing (optional, default disabled). When enabled,
-# the daemon probes each TransportLink/XFRM interface with ICMP echo (or UDP
-# keepalive fallback when CAP_NET_RAW is unavailable) and maintains a local
-# rolling-window health state. Health never replaces Babel route selection or
-# writes into gossip active state; it only affects local reconcile, route
-# cutover gate and metrics. See `higgs debug health` and `/metrics`.
-# health:
-#   enabled: false
-#   interval: 5s
-#   timeout: 1s
-#   burst: 3
-#   loss_window: 20
-#   jitter: 500ms
-#   max_concurrent_probes: 8
-#   fail_threshold_consecutive: 3
-#   loss_threshold: "0.2"
-#   down_loss_threshold: "0.6"
-#   recover_consecutive: 5
-#   metrics:
-#     enabled: false
-#     listen_addr: "127.0.0.1:9717"
-#     # remote_write_url: http://victoriametrics:8428/api/v1/write
-#     # remote_write_queue_capacity: 1024
-#     # local_spool_path: <data_dir>/health-spool
-#     # local_spool_max_age: 6h
+# -----------------------------------------------------------------------------
+# 5. Firewall, health probes, and read-only observer
+# -----------------------------------------------------------------------------
 
-# Phase 6.3: Firewall rule sync (optional). Default disabled unless
-# firewall.instances[] is present. Each instance is scoped to a netns (overlay
-# data-plane) or to the host (IKE/NAT-T entry ports + port rotate redirect
-# grace). Default mode=managed with backend=auto and default_policy=drop.
 firewall:
   instances:
     - id: h2
       netns: h2
-      enabled: true
-      mode: managed
-      backend: auto
-      default_policy: drop
-      xfrm_tunnel_pattern: "hgs*"
-      # Explicit overlay netns services to allow under default drop.
-      # local_services:
-      #   - proto: tcp
-      #     port: 8080
-      #     sources:
-      #       - 10.42.0.0/16
-      # Forwarding/transit policy shared by BIRD and firewall.
+      enabled: false
+      # mode: managed
+      # backend: auto
+      # default_policy: drop
+      # xfrm_tunnel_pattern: hgs*
       forwarding:
-        transit: false
+        # transit: false
         # allow_prefixes:
         #   - 10.42.0.0/16
         # deny_prefixes:
@@ -225,22 +242,38 @@ firewall:
 
     - id: host-ipsec
       host: true
-      enabled: true
-      mode: managed
-      backend: auto
-      host_ports:
-        ike: true
-        natt: true
-      redirect_grace:
-        enabled: true
+      enabled: false
+      # mode: managed
+      # backend: auto
+      # host_ports:
+      #   ike: true
+      #   natt: true
+      # redirect_grace:
+      #   enabled: true
 
-# Phase 6.7: Read-only web status observer (optional, default disabled).
-# When enabled, serves a read-only HTTP API and static UI for daemon live
-# state visualization. Default binds to localhost only; remote access
-# requires SSH tunnel or reverse proxy with external access control.
-# observer:
-#   enabled: false
-#   bind_addr: "127.0.0.1"
-#   port: 8080
-#   # ui_path: ""  # static resource prefix; empty means root
-#   # event_buffer_seconds: 0  # SSE event buffer; 0 means no buffering
+health:
+  # enabled: false
+  # interval: 5s
+  # timeout: 1s
+  # burst: 3
+  # loss_window: 20
+  # jitter: 500ms
+  # max_concurrent_probes: 8
+  # fail_threshold_consecutive: 3
+  # loss_threshold: "0.2"
+  # down_loss_threshold: "0.6"
+  # recover_consecutive: 5
+  # metrics:
+  #   enabled: false
+  #   listen_addr: 127.0.0.1:9717
+  #   remote_write_url: http://victoriametrics:8428/api/v1/write
+  #   remote_write_queue_capacity: 1024
+  #   local_spool_path: .higgs/health-spool
+  #   local_spool_max_age: 6h
+
+observer:
+  # enabled: false
+  # bind_addr: 127.0.0.1
+  # port: 8080
+  # ui_path: ""
+  # event_buffer_seconds: 0

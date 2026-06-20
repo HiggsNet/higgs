@@ -106,7 +106,7 @@ overlays:
     # ... existing overlay fields ...
     routing:
       enabled: true              # false 时禁用该 overlay 路由
-      protocol: bird             # Phase 5 仅支持 bird
+      provider: bird             # Phase 5 仅支持 bird provider
       mode: managed              # managed | external | disabled
       netns: h2                  # 默认继承 LinkGroupSpec.NetNS
       control_socket: /run/higgs/bird-ipsec-main.ctl

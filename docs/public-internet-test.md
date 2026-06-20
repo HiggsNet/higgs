@@ -237,7 +237,7 @@ After=network-online.target
 [Service]
 WorkingDirectory=/opt/higgs
 Environment=HIGGS_CONFIG=/home/higgs/.higgs-public/node-a/config.yaml
-ExecStart=/opt/higgs/build/higgs daemon --interval 5
+ExecStart=/opt/higgs/build/higgs daemon
 Restart=always
 RestartSec=3
 

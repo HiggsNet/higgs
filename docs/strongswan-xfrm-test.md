@@ -167,8 +167,9 @@ charon 实例、两个 named netns、veth underlay、XFRM interface、tunnel add
 tunnel IP 双向 `ping` 成功。该测试证明 StrongSwan/XFRM/VICI 数据面闭环已打通，但它
 位于 driver 层，不经过完整 daemon/gossip 路径。
 
-daemon 默认仍使用 `ipsec.driver: dry-run`，不会触碰 root namespace、charon 或
-XFRM。系统 smoke 主机可以在 `config.yaml` 中显式配置：
+daemon 默认使用 `ipsec.driver: strongswan`，但没有本地 `overlays:` link group 时
+不会初始化 VICI/XFRM driver，也不会触碰 root namespace、charon 或 XFRM。系统 smoke
+主机启用 StrongSwan link group 时可以在 `config.yaml` 中显式配置：
 
 ```yaml
 ipsec:
