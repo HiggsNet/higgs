@@ -669,7 +669,7 @@ flowchart TD
 
 持久化层用 `LinkInstance` 记录本机已经知道的 link 实例：desired spec hash、实际状态、XFRM if_id、IKE/CHILD_SA 名称、endpoint、Higgs owner、failure count、backoff_until 和 last_error。`ReconcileLinkInstances` 再把 desired spec、持久化 instance、driver `ListSAs` 观测和 revocation 输入放在一起，产生 `create`、`update`、`adopt`、`repair`、`teardown` 或 `noop` action。
 
-daemon 已经把这条链路接入 state-change hook。启动进入主循环前，daemon 会先用当前 active state、本地 `LinkGroupSpec`、持久化 `LinkInstance` 和 driver SA 快照跑一次 reconcile，恢复 link state；事件队列 drain 时会合并多次 state change，让同一轮 record/admin/remote apply 或 config reload 只触发一次 IPsec `ListSAs` + reconcile/apply。每个 daemon sync tick 后还会执行一次 IPsec observe/reconcile，用 driver `ListSAs` 把 StrongSwan 已建立的 `connecting` link 推进到 `up`。`reload` 会重新读取本地 `config.yaml`，刷新 `overlays:`、`connect/deny`、`overlay.default_netns`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。
+daemon 已经把这条链路接入 state-change hook。启动进入主循环前，daemon 会先用当前 active state、本地 `LinkGroupSpec`、持久化 `LinkInstance` 和 driver SA 快照跑一次 reconcile，恢复 link state；事件队列 drain 时会合并多次 state change，让同一轮 record/admin/remote apply 或 config reload 只触发一次 IPsec `ListSAs` + reconcile/apply。每个 daemon sync tick 后还会执行一次 IPsec observe/reconcile，用 driver `ListSAs` 把 StrongSwan 已建立的 `connecting` link 推进到 `up`。`reload` 会重新读取本地 `config.yaml`，刷新 `netns:`、`overlays:`、`connect/deny`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。
 
 状态语义上，create/update/repair apply 成功后实例进入 `connecting`，表示 provider 配置已经应用，但还没有观测到 IKE_SA/CHILD_SA；后续 driver `ListSAs` 看到匹配 connection/CHILD_SA 后才进入 `up`。apply 失败会先落盘 backoff 状态，backoff 未到期时返回 `noop/apply backoff active`，到期后 error/degraded link 再进入 repair。teardown 成功会从本地持久化状态移除对应 `LinkInstance`，因此 link group 删除、record 过期或 peer revocation 不会留下 `removing` 实例在后续轮次反复 teardown。
 
@@ -862,7 +862,7 @@ endpoint_grace: 10m
 | `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
 | `filter_private_ipv4` | `true` | 接口扫描时过滤 RFC1918 IPv4；私网实验可显式设为 `false` |
 
-Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：`managed_zone` + `identity.key_path` 声明本节点不可变身份，配置文件只引用 ED25519 私钥文件路径，不内嵌私钥；本机 `ipsec` 负责本节点公开能力和地址/端口来源，`overlay.default_netns` 负责 overlay data-plane 默认 namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
+Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：`managed_zone` + `identity.key_path` 声明本节点不可变身份，配置文件只引用 ED25519 私钥文件路径，不内嵌私钥；本机 `ipsec` 负责本节点公开能力和地址/端口来源，`netns` 负责声明本机 network namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
 
 ```yaml
 managed_zone: node-a.catofes.
@@ -898,8 +898,8 @@ ipsec:
     range: 30000-30999
     grace: 2h
 
-overlay:
-  default_netns:
+netns:
+  default:
     kind: name
     name: h2
     create: true
@@ -908,10 +908,7 @@ overlays:
   - name: ipsec-main
     id: ipsec-main
     provider: strongswan
-    netns:
-      kind: name
-      name: h2
-      create: true
+    netns: default
     default_path_mode: family-redundant
     direction: outbound
     # max_peers defaults to unlimited; set a positive value to cap peers.
@@ -945,11 +942,11 @@ overlays:
 
 配置语义：
 - `ipsec.accept` 会发布到 `ipsec/profile`，表示远端可以怎样尝试连接本节点。
-- `overlay.default_netns` 是本机默认 LinkGroup / overlay data-plane namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 和后续 BIRD 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。`ipsec.default_netns` 仅作为旧配置兼容别名。
+- `netns.default` 是本机默认 LinkGroup / overlay data-plane namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 和后续 BIRD 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。`overlay.default_netns` / `ipsec.default_netns` 仅作为旧配置兼容别名。
 - `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
 - `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
 - `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、`tunnel_address` 分配模式（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）和 reconcile/backoff 策略，不发布到 gossip。IPv6 默认 `derived-link-local`，IPv4 默认 `disabled`；旧字段 `tunnel_address_pool` 仍映射为 `sequential-pool` 兼容模式，但二者不可混用。
-- `overlays[].netns` 可以覆盖默认 namespace；`kind: host` 明确表示不隔离，`kind: path` 只引用已有 namespace path，不隐式创建。
+- `overlays[].netns` 引用 `netns:` 中声明的名字；省略时使用 `netns.default`。旧配置中内联 `kind/name/path/create` 的写法仍兼容读取。
 - `overlays[].connect/deny` 是 link group 内的本地 MeshPolicy rule，不发布到 gossip。
 - `address_source_order` 只影响本地选择和排序；远端也会按自己的本地配置重新排序。
 

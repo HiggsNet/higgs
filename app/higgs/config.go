@@ -184,7 +184,7 @@ type overlayGroupConfigYAML struct {
 	ID                 string                  `yaml:"id"`
 	Name               string                  `yaml:"name"`
 	Provider           string                  `yaml:"provider"`
-	NetNS              ipsec.NetNSSpec         `yaml:"netns"`
+	NetNS              netnsRefYAML            `yaml:"netns"`
 	DefaultPathMode    string                  `yaml:"default_path_mode"`
 	Direction          string                  `yaml:"direction"`
 	AddressSourceOrder configStringList        `yaml:"address_source_order"`
@@ -206,6 +206,30 @@ type overlayReconcileYAML struct {
 type overlayBackoffYAML struct {
 	Initial string `yaml:"initial"`
 	Max     string `yaml:"max"`
+}
+
+type netnsRefYAML struct {
+	Ref        string
+	Spec       ipsec.NetNSSpec
+	InlineSpec bool
+}
+
+func (n *netnsRefYAML) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		n.Ref = strings.TrimSpace(node.Value)
+		return nil
+	case yaml.MappingNode:
+		var spec ipsec.NetNSSpec
+		if err := node.Decode(&spec); err != nil {
+			return err
+		}
+		n.Spec = spec
+		n.InlineSpec = true
+		return nil
+	default:
+		return fmt.Errorf("netns must be a reference string or netns spec object")
+	}
 }
 
 func loadAppConfig() (*appConfig, error) {
@@ -464,7 +488,7 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		config.Overlay.DefaultNetNS = netns
 	}
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
-	// Parse top-level netns section, falling back to overlay.default_netns.
+	// Parse top-level netns section, falling back to legacy overlay.default_netns.
 	config.Netns = parseNetnsConfig(file.Netns, config.Overlay.DefaultNetNS)
 	// Parse routing.instances[], if any.
 	if file.Routing != nil {
@@ -483,7 +507,7 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 	}
 	if len(file.Overlays) > 0 {
-		groups, err := parseOverlayConfigs(file.Overlays, config.Overlay.DefaultNetNS)
+		groups, err := parseOverlayConfigs(file.Overlays, config.Netns, config.Overlay.DefaultNetNS)
 		if err != nil {
 			return err
 		}
@@ -657,10 +681,10 @@ func parseTunnelAddressConfig(cfg tunnelAddressConfigYAML) (ipsec.TunnelAddressS
 	}, nil
 }
 
-func parseOverlayConfigs(overlays []overlayGroupConfigYAML, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
+func parseOverlayConfigs(overlays []overlayGroupConfigYAML, netnsCfg netnsConfig, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
 	groups := make([]ipsec.LinkGroupSpec, 0, len(overlays))
 	for i, overlay := range overlays {
-		group, err := parseOverlayConfig(overlay, defaultNetNS)
+		group, err := parseOverlayConfig(overlay, netnsCfg, defaultNetNS)
 		if err != nil {
 			return nil, fmt.Errorf("overlays[%d]: %w", i, err)
 		}
@@ -669,12 +693,16 @@ func parseOverlayConfigs(overlays []overlayGroupConfigYAML, defaultNetNS ipsec.N
 	return groups, nil
 }
 
-func parseOverlayConfig(overlay overlayGroupConfigYAML, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
+func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg netnsConfig, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
+	netns, err := resolveNetNSRef(overlay.NetNS, netnsCfg, defaultNetNS)
+	if err != nil {
+		return ipsec.LinkGroupSpec{}, fmt.Errorf("netns: %w", err)
+	}
 	group := ipsec.LinkGroupSpec{
 		ID:                 overlay.ID,
 		Name:               overlay.Name,
 		Provider:           overlay.Provider,
-		NetNS:              overlay.NetNS,
+		NetNS:              netns,
 		DefaultPathMode:    overlay.DefaultPathMode,
 		Direction:          overlay.Direction,
 		AddressSourceOrder: append([]string(nil), overlay.AddressSourceOrder...),
@@ -683,9 +711,6 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, defaultNetNS ipsec.NetNS
 	}
 	if group.ID == "" {
 		group.ID = group.Name
-	}
-	if group.NetNS.Kind == "" && group.NetNS.Name == "" && group.NetNS.Path == "" && !group.NetNS.Create {
-		group.NetNS = defaultNetNS
 	}
 	if overlay.MaxPeers != nil {
 		group.MaxPeers = *overlay.MaxPeers
@@ -750,6 +775,35 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, defaultNetNS ipsec.NetNS
 		return ipsec.LinkGroupSpec{}, fmt.Errorf("deny: %w", err)
 	}
 	return group.Normalized(), nil
+}
+
+func resolveNetNSRef(ref netnsRefYAML, netnsCfg netnsConfig, fallback ipsec.NetNSSpec) (ipsec.NetNSSpec, error) {
+	if ref.Ref != "" {
+		spec, ok := netnsCfg.Names[ref.Ref]
+		if !ok {
+			return ipsec.NetNSSpec{}, fmt.Errorf("unknown netns %q", ref.Ref)
+		}
+		return spec, nil
+	}
+	if ref.InlineSpec {
+		spec := ref.Spec.Normalized()
+		if err := spec.Validate(); err != nil {
+			return ipsec.NetNSSpec{}, err
+		}
+		return spec, nil
+	}
+	key := netnsCfg.Default
+	if key == "" {
+		key = "default"
+	}
+	if spec, ok := netnsCfg.Names[key]; ok {
+		return spec, nil
+	}
+	spec := fallback.Normalized()
+	if err := spec.Validate(); err != nil {
+		return ipsec.NetNSSpec{}, err
+	}
+	return spec, nil
 }
 
 func (list *configStringList) UnmarshalYAML(node *yaml.Node) error {

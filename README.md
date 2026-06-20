@@ -82,10 +82,9 @@ trusted_root_public_key: <base64-ed25519-public-key>
 
 数据平面字段：
 
-- `overlay.default_netns`：overlay 数据平面的默认 namespace，是当前权威配置入口。`ipsec.default_netns` 只作为旧配置兼容别名。
+- `netns`：命名 network namespace 定义，`netns.default` 是 overlay link group 的默认归属；`overlay.default_netns` / `ipsec.default_netns` 只作为旧配置兼容别名。
 - `ipsec.driver`：默认 `strongswan`，daemon 使用 VICI + XFRM，需要已有 charon、VICI socket 和 Linux netns/XFRM 权限；无特权开发/CI 可设为 `dry-run`。`ipsec:` 本身只配置本机 provider，不会单独发布 `ipsec/*` capability records。
-- `overlays[]`：本地 link group policy，描述要和哪些 peer 建立哪类 overlay。它不通过 gossip 发布；当其中有 `provider: strongswan` 的 link group 时，daemon 才会发布本节点 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records。
-- `netns`：命名 namespace 定义，供 overlays、routing 和 firewall 引用。
+- `overlays[]`：本地 link group policy，描述要和哪些 peer 建立哪类 overlay；`overlays[].netns` 引用 `netns` 中声明的名字，省略时使用 `netns.default`。它不通过 gossip 发布；当其中有 `provider: strongswan` 的 link group 时，daemon 才会发布本节点 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records。
 - `routing.instances[]`：per-netns routing provider；当前 `provider: bird` 表示由 Higgs 管 BIRD 进程，并在生成的 `bird.conf` 里运行 Babel。BIRD 自身不能切换 netns，必须由 Higgs process manager 在目标 netns 内启动。
 - `ipam.auto_announce_assigned_ips`：是否把分配给本 `managed_zone` 的 IPAM assignment 自动发布为 route announcement。
 - `firewall.instances[]`：per-netns 或 host firewall 规则同步；默认建议先保持 disabled，确认策略后再启用。

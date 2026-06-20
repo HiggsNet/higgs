@@ -15,6 +15,8 @@ type netnsConfig struct {
 	// Names maps netns name → spec. The name is used as the stable key
 	// referenced by overlays and routing instances.
 	Names map[string]ipsec.NetNSSpec
+	// Default is the preferred default reference key.
+	Default string
 }
 
 // netnsConfigYAML is the raw YAML model for the top-level `netns:` section.
@@ -114,17 +116,13 @@ func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) netnsC
 	cfg := netnsConfig{Names: make(map[string]ipsec.NetNSSpec)}
 	if yamlCfg == nil {
 		n := fallback.Normalized()
-		cfg.Names[n.Target()] = n
+		addNetnsSpec(&cfg, "default", n)
 		return cfg
 	}
 	if yamlCfg.Default != nil {
 		n := yamlCfg.Default.Normalized()
 		if err := n.Validate(); err == nil {
-			name := n.Target()
-			if name == "" {
-				name = ipsec.NetNSHost
-			}
-			cfg.Names[name] = n
+			addNetnsSpec(&cfg, "default", n)
 		}
 	}
 	for name, spec := range yamlCfg.Entries {
@@ -134,13 +132,38 @@ func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) netnsC
 				name = n.Target()
 			}
 			cfg.Names[name] = n
+			if name == "default" && cfg.Default == "" {
+				cfg.Default = name
+			}
 		}
 	}
 	if len(cfg.Names) == 0 {
 		n := fallback.Normalized()
-		cfg.Names[n.Target()] = n
+		addNetnsSpec(&cfg, "default", n)
+	}
+	if cfg.Default == "" {
+		cfg.Default = "default"
 	}
 	return cfg
+}
+
+func addNetnsSpec(cfg *netnsConfig, name string, spec ipsec.NetNSSpec) {
+	if cfg.Names == nil {
+		cfg.Names = make(map[string]ipsec.NetNSSpec)
+	}
+	if name == "" {
+		name = spec.Target()
+	}
+	if name == "" {
+		name = ipsec.NetNSHost
+	}
+	cfg.Names[name] = spec
+	if name == "default" {
+		cfg.Default = name
+		if target := spec.Target(); target != "" {
+			cfg.Names[target] = spec
+		}
+	}
 }
 
 // parseRoutingConfigInstances parses `routing.instances[]` into routingConfig.

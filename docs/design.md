@@ -544,7 +544,7 @@ type TransportLinkSpec struct {
 
 `LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、方向、address source 优先级、最大 peer/link 数、`tunnel_address` 分配策略（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。
 
-netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `netns.default` 默认是 `kind=name, name=h2, create=true`；旧名 `overlay.default_netns` / `ipsec.default_netns` 将被移除。link group 通过 `netns: <name>` 指定归属 netns，可覆盖默认值。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address。
+netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `netns.default` 默认是 `kind=name, name=h2, create=true`；旧名 `overlay.default_netns` / `ipsec.default_netns` 仅作为兼容别名读取。link group 通过 `netns: <name>` 引用已声明的 netns，省略时使用 `netns.default`。provider apply 时先 `EnsureNamespace`，再创建/移动 XFRM interface 和分配 tunnel address。
 
 **Phase 5 BIRD Babel daemon 以 netns 为边界，而不是 overlay。** 同一 netns 内的所有 overlay 共享一个 BIRD 实例；BIRD 通过 `interface_pattern`（如 `hgs*`）自动发现该 netns 下的所有 XFRM / veth 接口，统一维护一张路由表。routing 配置（table、metric、filter、control socket、pid file 等）从 `overlays[].routing` 上提到 `routing.instances[]`，每个实例绑定一个 netns。这样多个 overlay 的链路可以共同贡献 Babel 邻居和 ECMP 路径，而不会被拆成多个独立的 BIRD 实例。只有显式声明且带 Higgs 归属边界的 named ns 会被自动创建，path/host 不隐式创建。
 

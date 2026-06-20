@@ -207,14 +207,15 @@ overlay:
 func TestParseConfigYAMLOverlays(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-overlay:
-  default_netns:
+netns:
+  default:
     kind: name
     name: h2
     create: true
 overlays:
   - name: ipsec-main
     provider: strongswan
+    netns: default
     default_path_mode: family-redundant
     direction: outbound
     address_source_order: manual-dns, discovery
@@ -257,6 +258,71 @@ overlays:
 	}
 	if len(group.ConnectRules) != 1 || len(group.DenyRules) != 1 {
 		t.Fatalf("rules = connect:%v deny:%v", group.ConnectRules, group.DenyRules)
+	}
+}
+
+func TestParseConfigYAMLOverlayUsesDefaultNetNSReference(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	group := config.IPsec.LinkGroups[0]
+	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "h2" || !group.NetNS.Create {
+		t.Fatalf("group netns = %+v, want netns.default h2", group.NetNS)
+	}
+}
+
+func TestParseConfigYAMLOverlayAcceptsLegacyInlineNetNS(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+    netns:
+      kind: name
+      name: legacy-h2
+      create: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	group := config.IPsec.LinkGroups[0]
+	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "legacy-h2" || !group.NetNS.Create {
+		t.Fatalf("group netns = %+v, want inline legacy-h2", group.NetNS)
+	}
+}
+
+func TestParseConfigYAMLOverlayRejectsUnknownNetNSReference(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+overlays:
+  - name: ipsec-main
+    provider: strongswan
+    netns: missing
+`
+	err := parseConfigYAML(input, config)
+	if err == nil {
+		t.Fatal("expected unknown overlay netns reference error")
+	}
+	if !strings.Contains(err.Error(), `unknown netns "missing"`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

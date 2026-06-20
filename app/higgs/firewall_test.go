@@ -109,6 +109,29 @@ firewall:
 	}
 }
 
+func TestParseConfigYAMLFirewallRejectsHostNetnsConflict(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+firewall:
+  instances:
+    - id: ambiguous
+      host: true
+      netns: h2
+`
+	err := parseConfigYAML(input, config)
+	if err == nil {
+		t.Fatal("expected error for host/netns conflict")
+	}
+	if !strings.Contains(err.Error(), "host: true conflicts with netns") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseConfigYAMLFirewallInvalidMode(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

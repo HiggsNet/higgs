@@ -128,6 +128,9 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig) (Firew
 	if yi.Host != nil {
 		isHost = *yi.Host
 	}
+	if isHost && yi.NetNS != "" {
+		return FirewallInstanceConfig{}, fmt.Errorf("host: true conflicts with netns %q; choose either host: true or netns", yi.NetNS)
+	}
 	if yi.NetNS == "" && !isHost {
 		return FirewallInstanceConfig{}, fmt.Errorf("netns is required (reference a name from the netns section, or set host: true)")
 	}

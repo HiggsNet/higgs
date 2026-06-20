@@ -439,7 +439,7 @@
   - [x] 做运行依赖检测：VICI socket / `charon` 可用性、strongSwan XFRM 支持、Linux kernel/iproute2 XFRM interface 支持、`CAP_NET_ADMIN`/root 权限、UDP 500/4500 或自定义端口可用性
   - [x] 稳定派生 XFRM `if_id` 与 interface name：基于 local zone + peer zone + transport id hash，`if_id` 使用 32-bit 值，接口名满足 Linux 15 字符限制并处理冲突
   - [x] 第一版默认一条 peer link 一个 XFRM interface；后续再评估 shared XFRM interface 或 in/out 分离 interface
-  - [x] 定义 netns 配置来源：`config.yaml` 暴露 `overlay.default_netns`，link group 可声明 `host`、netns name 或 netns path；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 XFRM/Babel overlay data-plane 默认落在 host ns；`ipsec.default_netns` 仅保留为旧配置兼容别名
+  - [x] 定义 netns 配置来源：`config.yaml` 暴露 `netns.default` / `netns.names`，link group 通过 `overlays[].netns` 引用声明的 netns；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 XFRM/Babel overlay data-plane 默认落在 host ns；`overlay.default_netns` / `ipsec.default_netns` 仅保留为旧配置兼容别名
   - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
   - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、在目标 named netns 内创建 XFRM interface、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
     - 已增加 `SystemXFRMDriver`：通过 `ip`/iproute2 执行 named netns ensure、XFRM interface create/up、address replace 和 delete；named netns 下直接执行 `ip netns exec <ns> ip link add ... type xfrm`，避免依赖 host-side link move；path netns 第一版只做存在性检查，需 bind 到 `/var/run/netns` 后按 named netns 管理。
@@ -451,14 +451,14 @@
 - [x] **4.2 链路实例管理**
   - [x] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition
   - [x] 定义本地 `MeshPolicy` / `LinkGroupSpec` 持久化来源：优先作为本机 daemon 配置/DB policy，不通过 gossip 公开；policy 描述“哪些 group 连接哪些 peer/overlay/provider/netns”，而不是列举每个已发现节点的手工 link
-    - 已在 `config.yaml` 增加本地 `overlay.default_netns` / `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `overlay.default_netns`，支持 provider、netns、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串；`ipsec.default_netns` 保留为旧配置兼容别名。
+    - 已在 `config.yaml` 增加本地 `netns:` / `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `netns.default`，支持 provider、netns 引用、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串；旧式内联 netns 和 `overlay.default_netns` / `ipsec.default_netns` 保留为兼容读取。
   - [x] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、direction、max_peers、allow/deny 顺序
     - 已新增 `ParseMeshPolicyRule` / `ParseMeshPolicyRules`：支持 `strongswan://*.catofes.`, `strongswan://role=edge`, `strongswan://tag=lab` 三类目标，校验 `accept`、`family`、`source`、`mode`、`direction`、`max_peers`，并提供 zone glob/exact 匹配；`config.yaml overlays[].connect/deny` 现在会在加载时校验 rule 字符串。示例默认使用 zone glob（如 `*.lab.catofes.`），`role/tag` 等待本地 peer label 来源接入后再作为常规示例。
   - [x] daemon 从 active state 的 peer profile/address/port records + 本地 MeshPolicy/LinkGroupSpec 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/ipsec profile/address/port/transport key/mesh policy/group/netns 变化
     - [x] 新增纯 planner：从 verified active state 的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并输出结构化 skip reason；daemon state-change hook 后续接入该 planner。
     - [x] planner 已实际消费 `LinkGroupSpec.ConnectRules` / `DenyRules`：zone glob/exact rule 可按远端 accept intent、address family、address source、path mode、direction、max_peers 选择 peer 并覆盖 group 默认值；deny 命中返回 `policy_denied`，connect 未命中返回 `policy_no_match`。`role/tag` 已解析但暂不匹配，等待本地 peer label 来源接入。
     - [x] daemon state-change hook 已接入 dry-run reconcile：从 active state + 本地 `LinkGroupSpec` 生成 desired links，更新持久化 `LinkInstance`，记录 action/skip 摘要；真实 StrongSwan/XFRM driver 接入留到 4.3 系统 smoke。
-    - [x] daemon `reload` control event 已重新读取 `config.yaml`，刷新本地 sync/log/IPsec overlay 配置，并触发一次 reconcile；`overlays:`、`connect/deny`、`overlay.default_netns` 或 link group 删除会立即进入 create/update/teardown 判定。热 reload 明确拒绝切换 state DB/control socket 路径，避免运行中的 daemon 半路换库或迁移监听入口。
+    - [x] daemon `reload` control event 已重新读取 `config.yaml`，刷新本地 sync/log/IPsec overlay 配置，并触发一次 reconcile；`netns:`、`overlays:`、`connect/deny` 或 link group 删除会立即进入 create/update/teardown 判定。热 reload 明确拒绝切换 state DB/control socket 路径，避免运行中的 daemon 半路换库或迁移监听入口。
   - [x] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair
     - [x] 新增可测试 reconcile 核心：对 desired spec、持久化 `LinkInstance`、driver SA 观测执行 create/update/adopt/repair/teardown 判定，并提供 `ApplyReconcileAction` 复用现有 StrongSwan/XFRM fake driver。
     - [x] daemon 侧新增第一版 dry-run reconcile loop：state 变化后执行 create/update/repair/teardown 的 fake apply plan，noop/adopt 不触发系统动作，并将最近 reconcile 结果落盘供 debug 使用。
@@ -754,7 +754,7 @@
     - BIRD filter 基于 `babel_router_id` 来源验证不可行：BIRD 2.x 源码未注册该 filter 动态属性（6.5 节）。
     - 恶意前缀宣告防护的唯一可行方案为控制面交叉审计（Phase 7 后续），Phase 5.7 保持全局 import filter。
   - [x] 新增顶层 `netns:` 配置段，定义默认 netns 列表（如 `netns.default.kind/name/create`）。
-  - [x] 移除 `overlay.default_netns` 与 `ipsec.default_netns` 旧配置；`overlays[]` 通过 `netns: <name>` 显式指定归属 netns。
+  - [x] 推荐使用 `netns.default` / `overlays[].netns: <name>` 引用模型；`overlay.default_netns`、`ipsec.default_netns` 和旧式内联 `overlays[].netns` 仅作为兼容读取。
   - [x] 新增顶层 `routing.instances[]`：每个实例绑定一个 netns，包含 enabled/protocol/mode/control_socket/pid_file/config_file/table/metrics/interface_pattern 等。
   - [x] `pkg/transport/ipsec/link.go`：从 `LinkGroupSpec` 中移除 `Routing` 字段；`TransportLinkSpec` 保留 `NetNS`。
   - [x] `pkg/routing/bird/routerid.go`：`StableRouterID` 改为 `(localZone, rootTrust, netnsName)` 三个参数；`netnsName` 使用 `NetNSSpec.Target()`，path netns 要求配置 `router_id_label`。
