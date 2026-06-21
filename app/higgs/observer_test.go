@@ -54,6 +54,24 @@ func TestParseObserverConfigEnabled(t *testing.T) {
 	}
 }
 
+func TestParseObserverConfigListen(t *testing.T) {
+	cfg, err := parseObserverConfig(&observerConfigYAML{
+		Listen: "127.0.0.1:9090",
+	})
+	if err != nil {
+		t.Fatalf("parseObserverConfig error: %v", err)
+	}
+	if !cfg.Enabled {
+		t.Error("observer should be enabled")
+	}
+	if cfg.BindAddr != "127.0.0.1" {
+		t.Errorf("bind_addr = %q, want 127.0.0.1", cfg.BindAddr)
+	}
+	if cfg.Port != 9090 {
+		t.Errorf("port = %d, want 9090", cfg.Port)
+	}
+}
+
 func TestParseObserverConfigDisabled(t *testing.T) {
 	disabled := true
 	cfg, err := parseObserverConfig(&observerConfigYAML{Disabled: &disabled})
@@ -62,6 +80,17 @@ func TestParseObserverConfigDisabled(t *testing.T) {
 	}
 	if cfg.Enabled {
 		t.Error("observer should be disabled")
+	}
+}
+
+func TestParseObserverConfigRejectsMixedListenAndPort(t *testing.T) {
+	port := 8080
+	_, err := parseObserverConfig(&observerConfigYAML{
+		Listen: "127.0.0.1:9090",
+		Port:   &port,
+	})
+	if err == nil {
+		t.Error("expected error for mixed listen and port")
 	}
 }
 
@@ -101,8 +130,7 @@ func TestObserverConfigListenAddr(t *testing.T) {
 
 func TestObserverConfigFromYAML(t *testing.T) {
 	yaml := `observer:
-  bind_addr: "127.0.0.1"
-  port: 8080
+  listen: "127.0.0.1:8080"
 `
 	config := defaultAppConfig()
 	if err := parseConfigYAML(yaml, config); err != nil {
@@ -448,7 +476,7 @@ func TestObserverStartObserverServerDisabled(t *testing.T) {
 			App: &Runtime{Config: &appConfig{Observer: observerConfig{Enabled: false}}},
 		},
 	}
-	stop, err := d.startObserverServer(nil)
+	stop, err := d.startObserverServer(context.TODO())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

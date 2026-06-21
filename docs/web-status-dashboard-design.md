@@ -145,8 +145,7 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 ```yaml
 observer:
   disabled: true
-  bind_addr: "127.0.0.1"
-  port: 8080
+  listen: "127.0.0.1:8080"
   ui_path: "/ui"          # 静态资源前缀，空字符串表示根路径
   # 未来控制接口预留：
   # auth:

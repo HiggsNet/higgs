@@ -762,8 +762,7 @@ Phase 6.7 提供只读 HTTP observer；未声明 `observer:` 时默认关闭。
 
 ```yaml
 observer:
-  bind_addr: "127.0.0.1"  # 默认 loopback
-  port: 8080
+  listen: "127.0.0.1:8080"  # 默认 loopback
 ```
 
 ### 访问
@@ -780,7 +779,7 @@ Observer 默认只监听 `127.0.0.1`，不提供认证。远程访问请使用 S
 ssh -L 8080:127.0.0.1:8080 user@node
 ```
 
-如果配置 `bind_addr: 0.0.0.0`，daemon 启动时会输出警告，提醒需要外部访问控制。
+如果配置 `listen: "0.0.0.0:8080"`，daemon 启动时会输出警告，提醒需要外部访问控制。
 
 ### 数据来源
 

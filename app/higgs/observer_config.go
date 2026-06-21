@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 )
 
@@ -24,6 +26,7 @@ type observerConfig struct {
 type observerConfigYAML struct {
 	Enabled            *bool  `yaml:"enabled"`
 	Disabled           *bool  `yaml:"disabled"`
+	Listen             string `yaml:"listen"`
 	BindAddr           string `yaml:"bind_addr"`
 	Port               *int   `yaml:"port"`
 	UIPath             string `yaml:"ui_path"`
@@ -56,6 +59,24 @@ func parseObserverConfig(y *observerConfigYAML) (observerConfig, error) {
 		return observerConfig{}, err
 	}
 	out.Enabled = enabled
+	if y.Listen != "" {
+		if y.BindAddr != "" || y.Port != nil {
+			return observerConfig{}, fmt.Errorf("observer.listen cannot be combined with observer.bind_addr or observer.port")
+		}
+		host, portText, err := net.SplitHostPort(strings.TrimSpace(y.Listen))
+		if err != nil {
+			return observerConfig{}, fmt.Errorf("invalid observer.listen %q: %w", y.Listen, err)
+		}
+		if strings.TrimSpace(host) == "" {
+			return observerConfig{}, fmt.Errorf("observer.listen host must not be empty")
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil || port <= 0 || port > 65535 {
+			return observerConfig{}, fmt.Errorf("observer.listen port must be between 1 and 65535, got %q", portText)
+		}
+		out.BindAddr = host
+		out.Port = port
+	}
 	if y.BindAddr != "" {
 		addr := strings.TrimSpace(y.BindAddr)
 		if addr == "" {
@@ -87,7 +108,7 @@ func parseObserverConfig(y *observerConfigYAML) (observerConfig, error) {
 
 // listenAddr returns the full listen address (host:port) for the observer.
 func (c observerConfig) listenAddr() string {
-	return fmt.Sprintf("%s:%d", c.BindAddr, c.Port)
+	return net.JoinHostPort(c.BindAddr, strconv.Itoa(c.Port))
 }
 
 // isLoopbackBind returns true when the bind address is loopback, meaning the
