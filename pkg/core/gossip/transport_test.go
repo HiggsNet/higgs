@@ -169,6 +169,7 @@ func TestReceiveRejectsMessageTooLarge(t *testing.T) {
 
 func TestReceiveRejectsQuotaExceeded(t *testing.T) {
 	now := time.Unix(1000, 0)
+	var event Event
 	transport, err := Listen(Config{
 		PeerID:     "node-b",
 		ListenAddr: "127.0.0.1:0",
@@ -182,6 +183,9 @@ func TestReceiveRejectsQuotaExceeded(t *testing.T) {
 			ObjectBurst: 1,
 		}),
 		Clock: func() time.Time { return now },
+		Log: func(e Event) {
+			event = e
+		},
 	})
 	if err != nil {
 		skipRestrictedSocket(t, err)
@@ -201,6 +205,9 @@ func TestReceiveRejectsQuotaExceeded(t *testing.T) {
 	}
 	if _, err := transport.Receive(); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("Receive = %v, want ErrQuotaExceeded", err)
+	}
+	if event.Reason != "quota" || event.QuotaRequestedBytes == 0 || event.QuotaAvailableBytes != 1 || event.QuotaObjectBurst != 1 {
+		t.Fatalf("quota event = %#v, want reason and quota diagnostics", event)
 	}
 }
 

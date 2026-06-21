@@ -49,6 +49,11 @@ max_datagram_bytes: 1200
 max_sync_zones: 16
 max_sync_records: 1024
 log_level: info
+log:
+  mode: stderr
+  # mode can also be file, syslog, stderr+file, or stderr+syslog.
+  # file: /var/log/higgs.log
+  # syslog_facility: daemon
 
 bootstrap:
   - id: node-b.catofes.
@@ -68,7 +73,8 @@ trusted_root_public_key: <base64-ed25519-public-key>
 - `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。CLI 默认输出 base64 编码的裸 32-byte Ed25519 public key；配置仍兼容读取 hex。
 - `max_datagram_bytes` / `target_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。旧字段 `max_message_bytes` 仍兼容读取。
 - `max_sync_zones` / `max_sync_records`：单次 announce/snapshot 的对象数量限制。
-- `log_level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。debug 会输出收发包、relay、backoff、object pull 等诊断字段。
+- `log_level` / `log.level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。debug 会输出收发包、relay、backoff、object pull 等诊断字段。
+- `log.mode`：日志输出模式，默认 `stderr`。可设为 `file`、`syslog`、`stderr+file` 或 `stderr+syslog`；文件模式使用 `log.file`，syslog 模式可用 `log.syslog_facility` 指定 facility。
 
 运行时与发现字段：
 
@@ -160,7 +166,7 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-b.catofes.
 HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync once node-b
 ```
 
-debug log 输出到 stderr，字段包含消息方向、peer ID、message type、zone/record 数量、字节数、耗时，以及 reject reason（如 `unknown_peer`、`addr_mismatch`、`message_too_large`、`replay`、`quota`、`verify_failed`、`unsupported_wire_version`）。
+debug log 默认输出到 stderr，可通过 `log.mode` 复制到文件或 syslog。字段包含消息方向、peer ID、message type、zone/record 数量、字节数、耗时，以及 reject reason（如 `unknown_peer`、`addr_mismatch`、`message_too_large`、`replay`、`quota`、`verify_failed`、`unsupported_wire_version`）。当 reason 为 `quota` 时，会额外输出本次请求消耗、bucket 剩余量、byte/object rate 和 burst，便于判断是大包、对象数还是短时间重试触发限流。
 
 ## 创建独立管理节点
 

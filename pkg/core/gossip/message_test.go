@@ -120,6 +120,14 @@ func TestPeerQuotas(t *testing.T) {
 	}
 	if err := quotas.Allow("node-a", 2, 1, now); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("Allow(over quota) = %v, want ErrQuotaExceeded", err)
+	} else {
+		var quotaErr *QuotaExceededError
+		if !errors.As(err, &quotaErr) {
+			t.Fatalf("Allow(over quota) did not return QuotaExceededError: %T", err)
+		}
+		if quotaErr.RequestedBytes != 2 || quotaErr.AvailableBytes != 1 || quotaErr.RequestedObjects != 1 || quotaErr.AvailableObjects != 0 {
+			t.Fatalf("quota diagnostics = %#v, want requested 2/1 available 1/0", quotaErr)
+		}
 	}
 	if err := quotas.Allow("node-a", 10, 1, now.Add(time.Second)); err != nil {
 		t.Fatalf("Allow(refilled): %v", err)

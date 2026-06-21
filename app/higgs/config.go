@@ -41,6 +41,7 @@ type appConfig struct {
 	MaxSyncZones         int
 	MaxSyncRecords       int
 	LogLevel             string
+	Log                  logConfig
 	AdvertiseAddrs       []string
 	Reflectors           []string
 	ReflectorInterval    time.Duration
@@ -90,7 +91,8 @@ type configYAML struct {
 	MaxSyncZones        *int `yaml:"max_sync_zones"`
 	MaxSyncRecords      *int `yaml:"max_sync_records"`
 
-	LogLevel string `yaml:"log_level"`
+	LogLevel string        `yaml:"log_level"`
+	Log      logConfigYAML `yaml:"log"`
 
 	AdvertiseAddr  string           `yaml:"advertise_addr"`
 	AdvertiseAddrs configStringList `yaml:"advertise_addrs"`
@@ -135,6 +137,20 @@ type identityConfig struct {
 
 type identityYAML struct {
 	KeyPath string `yaml:"key_path"`
+}
+
+type logConfig struct {
+	Level          string
+	Mode           string
+	File           string
+	SyslogFacility string
+}
+
+type logConfigYAML struct {
+	Level          string `yaml:"level"`
+	Mode           string `yaml:"mode"`
+	File           string `yaml:"file"`
+	SyslogFacility string `yaml:"syslog_facility"`
 }
 
 type overlayConfig struct {
@@ -311,6 +327,18 @@ func normalizeAppConfig(config *appConfig) {
 	if config.MaxSyncRecords <= 0 {
 		config.MaxSyncRecords = gossip.DefaultSyncLimits().MaxRecords
 	}
+	if config.Log.Level == "" {
+		config.Log.Level = config.LogLevel
+	}
+	if config.LogLevel == "" {
+		config.LogLevel = config.Log.Level
+	}
+	if config.Log.Mode == "" {
+		config.Log.Mode = string(logModeStderr)
+	}
+	if config.Log.SyslogFacility == "" {
+		config.Log.SyslogFacility = "daemon"
+	}
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	if config.IPsec.Driver == "" {
@@ -413,6 +441,23 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	}
 	if file.LogLevel != "" {
 		config.LogLevel = strings.ToLower(file.LogLevel)
+	}
+	if file.Log.Level != "" {
+		config.Log.Level = strings.ToLower(file.Log.Level)
+		config.LogLevel = config.Log.Level
+	}
+	if file.Log.Mode != "" {
+		mode := parseLogMode(file.Log.Mode)
+		if !isValidLogMode(file.Log.Mode) {
+			return fmt.Errorf("invalid log.mode: %s", file.Log.Mode)
+		}
+		config.Log.Mode = string(mode)
+	}
+	if file.Log.File != "" {
+		config.Log.File = file.Log.File
+	}
+	if file.Log.SyslogFacility != "" {
+		config.Log.SyslogFacility = strings.ToLower(strings.TrimSpace(file.Log.SyslogFacility))
 	}
 	if file.AdvertiseAddr != "" {
 		config.AdvertiseAddrs = append(config.AdvertiseAddrs, file.AdvertiseAddr)
@@ -999,6 +1044,9 @@ func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFil
 		MaxSyncZones:           config.MaxSyncZones,
 		MaxSyncRecords:         config.MaxSyncRecords,
 		LogLevel:               config.LogLevel,
+		LogMode:                config.Log.Mode,
+		LogFile:                config.Log.File,
+		LogSyslogFacility:      config.Log.SyslogFacility,
 		AdvertiseAddrs:         config.AdvertiseAddrs,
 		Reflectors:             config.Reflectors,
 		ReflectorInterval:      config.ReflectorInterval,

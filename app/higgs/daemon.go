@@ -337,12 +337,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			timer.Stop()
 			result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
 			if result.Error != nil {
-				d.logWarn("gossip", "packet_failed", map[string]any{
+				d.logWarn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
 					"peer_id": packet.Message.PeerID,
 					"type":    packet.Message.Type,
 					"error":   result.Error,
 					"reason":  gossip.RejectReason(result.Error),
-				})
+				}, result.Error))
 			}
 			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
 				lastObservedDigests = d.zoneDigests()

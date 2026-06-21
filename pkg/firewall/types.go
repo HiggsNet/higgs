@@ -52,8 +52,10 @@ type HostPortConfig struct {
 // WGPort is the WireGuard listen port for HostPortConfig.WG.
 // Default 51820 if not set.
 
-// RedirectGrace enables the old/current advertised port → current charon
-// listen port DNAT/redirect grace window on the host.
+// RedirectGrace enables advertised port → current charon listen port
+// DNAT/redirect rules on the host. Current advertised ports keep port_range
+// usable when charon listens on stable 500/4500; previous ports keep rotate
+// grace alive during the configured window.
 type RedirectGrace struct {
 	Enabled bool
 }
@@ -142,14 +144,20 @@ type FirewallPolicyInput struct {
 	LiveInterfaces []string
 	// Upstream interfaces.
 	UpstreamInterfaces []string
-	// AdvertisedPreviousIKEPorts are the old/current advertised IKE ports still
-	// within the redirect grace window (from ipsec/ports record).
+	// AdvertisedCurrentIKEPorts are the currently advertised IKE entry ports
+	// from the local signed ipsec/ports record.
+	AdvertisedCurrentIKEPorts []uint16
+	// AdvertisedCurrentNATTPorts are the currently advertised NAT-T entry ports
+	// from the local signed ipsec/ports record.
+	AdvertisedCurrentNATTPorts []uint16
+	// AdvertisedPreviousIKEPorts are old advertised IKE ports still within the
+	// redirect grace window (from ipsec/ports record).
 	AdvertisedPreviousIKEPorts []uint16
-	// AdvertisedPreviousNATTPorts are the old/current advertised NAT-T ports
-	// still within the redirect grace window (from ipsec/ports record).
+	// AdvertisedPreviousNATTPorts are old advertised NAT-T ports still within
+	// the redirect grace window (from ipsec/ports record).
 	AdvertisedPreviousNATTPorts []uint16
-	// AdvertisedPreviousWGPorts are the old/current advertised WireGuard ports
-	// still within the redirect grace window (from wireguard/ports record or
+	// AdvertisedPreviousWGPorts are old advertised WireGuard ports still within
+	// the redirect grace window (from wireguard/ports record or
 	// config). Reserved for Phase 7 WireGuard port rotation.
 	AdvertisedPreviousWGPorts []uint16
 }
@@ -188,7 +196,8 @@ type HostIngressRule struct {
 	Comment string
 }
 
-// NatRedirectRule redirects an old advertised port to the current charon port.
+// NatRedirectRule redirects an advertised entry port to the current local
+// listener port.
 type NatRedirectRule struct {
 	Proto       string
 	OriginalDst uint16

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/syslog"
 	"os"
 	"sort"
 	"strconv"
@@ -25,16 +27,29 @@ const (
 )
 
 type appLogger struct {
-	level logLevel
-	out   io.Writer
-	now   func() time.Time
+	level    logLevel
+	out      io.Writer
+	now      func() time.Time
+	mode     logMode
+	file     string
+	facility string
 }
+
+type logMode string
+
+const (
+	logModeStderr       logMode = "stderr"
+	logModeFile         logMode = "file"
+	logModeSyslog       logMode = "syslog"
+	logModeStderrFile   logMode = "stderr+file"
+	logModeStderrSyslog logMode = "stderr+syslog"
+)
 
 func newAppLogger(config *syncConfigFile) *appLogger {
 	level := logLevelInfo
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("HIGGS_LOG_LEVEL")))
 	if raw == "" && config != nil {
-		raw = strings.ToLower(strings.TrimSpace(config.LogLevel))
+		raw = strings.ToLower(strings.TrimSpace(config.effectiveLogLevel()))
 	}
 	switch logLevel(raw) {
 	case logLevelDebug, logLevelInfo, logLevelWarn, logLevelError:
@@ -42,7 +57,53 @@ func newAppLogger(config *syncConfigFile) *appLogger {
 	default:
 		// Keep unknown values non-fatal so existing configs continue to run.
 	}
-	return &appLogger{level: level, out: os.Stderr, now: time.Now}
+	mode := logModeStderr
+	file := ""
+	facility := "daemon"
+	if config != nil {
+		mode = parseLogMode(config.LogMode)
+		file = strings.TrimSpace(config.LogFile)
+		if strings.TrimSpace(config.LogSyslogFacility) != "" {
+			facility = strings.TrimSpace(config.LogSyslogFacility)
+		}
+	}
+	return &appLogger{level: level, out: os.Stderr, now: time.Now, mode: mode, file: file, facility: facility}
+}
+
+func (c *syncConfigFile) effectiveLogLevel() string {
+	if c == nil {
+		return ""
+	}
+	if strings.TrimSpace(c.LogLevel) != "" {
+		return c.LogLevel
+	}
+	return ""
+}
+
+func parseLogMode(raw string) logMode {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "stderr", "console":
+		return logModeStderr
+	case "file":
+		return logModeFile
+	case "syslog":
+		return logModeSyslog
+	case "stderr+file", "console+file":
+		return logModeStderrFile
+	case "stderr+syslog", "console+syslog":
+		return logModeStderrSyslog
+	default:
+		return logModeStderr
+	}
+}
+
+func isValidLogMode(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "stderr", "console", "file", "syslog", "stderr+file", "console+file", "stderr+syslog", "console+syslog":
+		return true
+	default:
+		return false
+	}
 }
 
 func logLevelRank(level logLevel) int {
@@ -169,6 +230,67 @@ func (l *appLogger) write(level logLevel, component, event string, fields map[st
 			base[k] = v
 		}
 	}
+	line := renderLogLine(base)
+	l.writeLine(level, line)
+}
+
+func (l *appLogger) writeLine(level logLevel, line []byte) {
+	if len(line) == 0 {
+		return
+	}
+	if l.mode == "" {
+		l.mode = logModeStderr
+	}
+	switch l.mode {
+	case logModeStderr, logModeStderrFile, logModeStderrSyslog:
+		l.writeStderrLine(line)
+	}
+	switch l.mode {
+	case logModeFile, logModeStderrFile:
+		l.writeFileLine(line)
+	case logModeSyslog, logModeStderrSyslog:
+		l.writeSyslogLine(level, line)
+	}
+}
+
+func (l *appLogger) writeStderrLine(line []byte) {
+	out := l.out
+	if out == nil {
+		out = os.Stderr
+	}
+	fmt.Fprintln(out, string(line))
+}
+
+func (l *appLogger) writeFileLine(line []byte) {
+	if l.file == "" {
+		l.writeSinkError("log file path is empty")
+		return
+	}
+	file, err := os.OpenFile(l.file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		l.writeSinkError(err.Error())
+		return
+	}
+	_, _ = file.Write(append(line, '\n'))
+	_ = file.Close()
+}
+
+func (l *appLogger) writeSyslogLine(level logLevel, line []byte) {
+	if err := writeSyslogLine(level, l.facility, string(line)); err != nil {
+		l.writeSinkError(err.Error())
+	}
+}
+
+func (l *appLogger) writeSinkError(err string) {
+	out := l.out
+	if out == nil {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "ts=%s level=error component=log event=sink_failed error=%s\n", time.Now().UTC().Format(time.RFC3339Nano), quoteLogValue(err))
+}
+
+func renderLogLine(base map[string]any) []byte {
+	var buf bytes.Buffer
 	keys := make([]string, 0, len(base))
 	for key := range base {
 		keys = append(keys, key)
@@ -179,7 +301,7 @@ func (l *appLogger) write(level logLevel, component, event string, fields map[st
 	first := true
 	for _, key := range preferred {
 		if _, ok := base[key]; ok {
-			first = writeLogField(out, first, key, base[key])
+			first = writeLogField(&buf, first, key, base[key])
 			written[key] = true
 		}
 	}
@@ -187,9 +309,9 @@ func (l *appLogger) write(level logLevel, component, event string, fields map[st
 		if written[key] {
 			continue
 		}
-		first = writeLogField(out, first, key, base[key])
+		first = writeLogField(&buf, first, key, base[key])
 	}
-	fmt.Fprintln(out)
+	return buf.Bytes()
 }
 
 func writeLogField(out io.Writer, first bool, key string, value any) bool {
@@ -221,6 +343,92 @@ func quoteLogValue(value any) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+func writeSyslogLine(level logLevel, facility, line string) error {
+	writer, err := syslog.New(syslogFacility(facility)|syslog.LOG_INFO, "higgs")
+	if err != nil {
+		return err
+	}
+	defer writer.Close()
+	switch level {
+	case logLevelDebug:
+		return writer.Debug(line)
+	case logLevelWarn:
+		return writer.Warning(line)
+	case logLevelError:
+		return writer.Err(line)
+	default:
+		return writer.Info(line)
+	}
+}
+
+func syslogFacility(raw string) syslog.Priority {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "auth":
+		return syslog.LOG_AUTH
+	case "authpriv":
+		return syslog.LOG_AUTHPRIV
+	case "cron":
+		return syslog.LOG_CRON
+	case "daemon", "":
+		return syslog.LOG_DAEMON
+	case "ftp":
+		return syslog.LOG_FTP
+	case "kern":
+		return syslog.LOG_KERN
+	case "local0":
+		return syslog.LOG_LOCAL0
+	case "local1":
+		return syslog.LOG_LOCAL1
+	case "local2":
+		return syslog.LOG_LOCAL2
+	case "local3":
+		return syslog.LOG_LOCAL3
+	case "local4":
+		return syslog.LOG_LOCAL4
+	case "local5":
+		return syslog.LOG_LOCAL5
+	case "local6":
+		return syslog.LOG_LOCAL6
+	case "local7":
+		return syslog.LOG_LOCAL7
+	case "lpr":
+		return syslog.LOG_LPR
+	case "mail":
+		return syslog.LOG_MAIL
+	case "news":
+		return syslog.LOG_NEWS
+	case "syslog":
+		return syslog.LOG_SYSLOG
+	case "user":
+		return syslog.LOG_USER
+	case "uucp":
+		return syslog.LOG_UUCP
+	default:
+		return syslog.LOG_DAEMON
+	}
+}
+
+func addGossipErrorFields(fields map[string]any, err error) map[string]any {
+	if fields == nil {
+		fields = make(map[string]any)
+	}
+	var quotaErr *gossip.QuotaExceededError
+	if errors.As(err, &quotaErr) && quotaErr != nil {
+		fields["quota_requested_bytes"] = quotaErr.RequestedBytes
+		fields["quota_requested_objects"] = quotaErr.RequestedObjects
+		fields["quota_available_bytes"] = quotaErr.AvailableBytes
+		fields["quota_available_objects"] = quotaErr.AvailableObjects
+		fields["quota_byte_rate"] = quotaErr.ByteRate
+		fields["quota_byte_burst"] = quotaErr.ByteBurst
+		fields["quota_object_rate"] = quotaErr.ObjectRate
+		fields["quota_object_burst"] = quotaErr.ObjectBurst
+		if quotaErr.LastRefillUnixNano > 0 {
+			fields["quota_last_refill"] = time.Unix(0, quotaErr.LastRefillUnixNano).UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return fields
 }
 
 type repeatedLogLimiter struct {

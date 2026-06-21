@@ -43,6 +43,15 @@ trusted_root_public_key:
 
 # Supported levels: debug, info, warn, error. HIGGS_LOG_LEVEL overrides this.
 # log_level: info
+#
+# Runtime logs default to stderr. Set log.mode when a daemon should also copy
+# structured logs to a file or syslog. Supported modes: stderr, file, syslog,
+# stderr+file, stderr+syslog.
+# log:
+#   level: info
+#   mode: stderr+file
+#   file: /var/log/higgs.log
+#   syslog_facility: daemon
 
 # Explicit publish addresses are preferred over reflector/interface discovery.
 # advertise_addrs:

@@ -558,6 +558,8 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 		"max_sync_zones":    "8",
 		"max_sync_records":  "64",
 		"log_level":         "debug",
+		"log.mode":          "stderr+file",
+		"log.file":          filepath.Join(dir, "higgs.log"),
 	})
 	t.Setenv("HIGGS_CONFIG", configPath)
 
@@ -579,6 +581,9 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	}
 	if !debugLogEnabled(config) {
 		t.Fatalf("config log_level=debug should enable debug logs")
+	}
+	if config.LogMode != "stderr+file" || config.LogFile != filepath.Join(dir, "higgs.log") {
+		t.Fatalf("log output config = mode %q file %q, want stderr+file/%s", config.LogMode, config.LogFile, filepath.Join(dir, "higgs.log"))
 	}
 	t.Setenv("HIGGS_LOG_LEVEL", "info")
 	if debugLogEnabled(config) {
@@ -835,6 +840,16 @@ func writeRuntimeConfig(t *testing.T, path string, dataDir string, rootKey ed255
 	for _, key := range []string{"max_message_bytes", "max_sync_zones", "max_sync_records", "log_level"} {
 		if value := extra[key]; value != "" {
 			lines = append(lines, key+": "+value)
+		}
+	}
+	if value := extra["log.mode"]; value != "" {
+		lines = append(lines, "log:")
+		lines = append(lines, "  mode: "+value)
+		if file := extra["log.file"]; file != "" {
+			lines = append(lines, "  file: "+file)
+		}
+		if level := extra["log.level"]; level != "" {
+			lines = append(lines, "  level: "+level)
 		}
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {

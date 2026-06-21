@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +74,29 @@ func TestAppLoggerFiltersByLevel(t *testing.T) {
 	}
 	if !strings.Contains(line, "event=round_failed") {
 		t.Fatalf("warn logger did not emit warn line: %q", line)
+	}
+}
+
+func TestAppLoggerWritesToConfiguredFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "higgs.log")
+	var stderr bytes.Buffer
+	logger := newAppLogger(&syncConfigFile{LogMode: "stderr+file", LogFile: path}).withOutput(&stderr).withNow(func() time.Time {
+		return time.Unix(100, 0).UTC()
+	})
+
+	logger.Warn("gossip", "packet_failed", map[string]any{"peer_id": "node-a.catofes.", "reason": "quota"})
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(log): %v", err)
+	}
+	line := string(data)
+	if !strings.Contains(line, "component=gossip") || !strings.Contains(line, "event=packet_failed") || !strings.Contains(line, "reason=quota") {
+		t.Fatalf("file log line = %q, want structured packet failure", line)
+	}
+	if !strings.Contains(stderr.String(), "event=packet_failed") {
+		t.Fatalf("stderr log line = %q, want duplicate console output", stderr.String())
 	}
 }
 

@@ -230,56 +230,62 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 		}
 	}
 
-	// Advertised previous ports (for host redirect grace).
-	// Extract previous IKE/NAT-T ports from the active state's signed
-	// ipsec/ports record so the host firewall can redirect old advertised
-	// ports to the current charon listen port during the grace window
-	// (Phase 6.3.5).
+	// Advertised current/previous ports for host redirect. Current advertised
+	// ports keep ipsec.port_mode=range usable while charon listens on stable
+	// 500/4500; previous ports keep rotate grace alive during the configured
+	// window.
 	if spec.IsHost && state.Network != nil && state.ManagedZone.Valid() {
 		now := time.Now()
 		if d := nowFunc(); !d.IsZero() {
 			now = d
 		}
-		input.AdvertisedPreviousIKEPorts, input.AdvertisedPreviousNATTPorts = extractPreviousPortsFromNetwork(state.Network, state.ManagedZone, now)
+		input.AdvertisedCurrentIKEPorts, input.AdvertisedCurrentNATTPorts, input.AdvertisedPreviousIKEPorts, input.AdvertisedPreviousNATTPorts = extractIPsecRedirectPortsFromNetwork(state.Network, state.ManagedZone, now)
 	}
 
 	return input
 }
 
-// extractPreviousPortsFromNetwork reads the signed ipsec/ports record from the
-// managed zone's active state and returns the previous-generation IKE and NAT-T
-// advertised ports that are still within the grace window. These ports are used
+// extractIPsecRedirectPortsFromNetwork reads the signed ipsec/ports record from
+// the managed zone's active state and returns current advertised ports plus
+// previous-generation ports still within the grace window. These ports are used
 // by the host firewall planner to generate DNAT/redirect rules.
-func extractPreviousPortsFromNetwork(network *zone.NetworkState, managedZone zone.ZonePath, now time.Time) ([]uint16, []uint16) {
+func extractIPsecRedirectPortsFromNetwork(network *zone.NetworkState, managedZone zone.ZonePath, now time.Time) (currentIKE []uint16, currentNATT []uint16, previousIKE []uint16, previousNATT []uint16) {
 	if network == nil || !managedZone.Valid() {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	zs, ok := network.Zones[managedZone]
 	if !ok || zs == nil {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	record := zs.Records[ipsec.RecordKeyPorts]
 	if record == nil {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	pr, err := ipsec.ParsePortRecord(record)
 	if err != nil || pr == nil {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
-	var ikePorts, nattPorts []uint16
+	if pr.Current != nil {
+		if pr.Current.IKE.Advertised > 0 {
+			currentIKE = append(currentIKE, pr.Current.IKE.Advertised)
+		}
+		if pr.Current.NATT.Advertised > 0 {
+			currentNATT = append(currentNATT, pr.Current.NATT.Advertised)
+		}
+	}
 	for _, sel := range pr.Previous {
 		// Check if still within grace window.
 		if sel.ValidUntil > 0 && now.Unix() > sel.ValidUntil {
 			continue
 		}
 		if sel.IKE.Advertised > 0 {
-			ikePorts = append(ikePorts, sel.IKE.Advertised)
+			previousIKE = append(previousIKE, sel.IKE.Advertised)
 		}
 		if sel.NATT.Advertised > 0 {
-			nattPorts = append(nattPorts, sel.NATT.Advertised)
+			previousNATT = append(previousNATT, sel.NATT.Advertised)
 		}
 	}
-	return ikePorts, nattPorts
+	return currentIKE, currentNATT, previousIKE, previousNATT
 }
 
 // nowFunc returns the current time. Overridable in tests.

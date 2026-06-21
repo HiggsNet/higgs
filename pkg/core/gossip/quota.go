@@ -16,6 +16,27 @@ type QuotaConfig struct {
 	PeerTTL     time.Duration
 }
 
+type QuotaExceededError struct {
+	PeerID             string
+	RequestedBytes     int64
+	RequestedObjects   int64
+	AvailableBytes     int64
+	AvailableObjects   int64
+	ByteRate           int64
+	ByteBurst          int64
+	ObjectRate         int64
+	ObjectBurst        int64
+	LastRefillUnixNano int64
+}
+
+func (e *QuotaExceededError) Error() string {
+	return ErrQuotaExceeded.Error()
+}
+
+func (e *QuotaExceededError) Unwrap() error {
+	return ErrQuotaExceeded
+}
+
 type PeerQuotas struct {
 	config    QuotaConfig
 	mu        sync.Mutex
@@ -72,7 +93,18 @@ func (pq *PeerQuotas) Allow(peerID string, bytes int64, objects int64, now time.
 	}
 	pq.refill(bucket, now)
 	if bytes > bucket.bytes || objects > bucket.objects {
-		return ErrQuotaExceeded
+		return &QuotaExceededError{
+			PeerID:             peerID,
+			RequestedBytes:     bytes,
+			RequestedObjects:   objects,
+			AvailableBytes:     bucket.bytes,
+			AvailableObjects:   bucket.objects,
+			ByteRate:           pq.config.ByteRate,
+			ByteBurst:          pq.config.ByteBurst,
+			ObjectRate:         pq.config.ObjectRate,
+			ObjectBurst:        pq.config.ObjectBurst,
+			LastRefillUnixNano: bucket.last.UnixNano(),
+		}
 	}
 	bucket.bytes -= bytes
 	bucket.objects -= objects

@@ -181,6 +181,36 @@ func TestBuildDesiredState_HostRedirectGraceHeuristic(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredState_HostRedirectCurrentAndPreviousPorts(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID:            "host",
+		NetNS:         "host",
+		IsHost:        true,
+		Enabled:       true,
+		Mode:          ModeManaged,
+		HostPorts:     HostPortConfig{IKE: true, NATT: true},
+		RedirectGrace: RedirectGrace{Enabled: true},
+	}
+	input := FirewallPolicyInput{
+		AdvertisedCurrentIKEPorts:   []uint16{30001},
+		AdvertisedCurrentNATTPorts:  []uint16{30002},
+		AdvertisedPreviousIKEPorts:  []uint16{29001},
+		AdvertisedPreviousNATTPorts: []uint16{29002},
+		AdvertisedPreviousWGPorts:   []uint16{},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if len(desired.NatRedirects) != 4 {
+		t.Fatalf("expected 4 NAT redirect rules, got %d: %+v", len(desired.NatRedirects), desired.NatRedirects)
+	}
+	assertNatRedirect(t, desired, 30001, 500, "redirect current")
+	assertNatRedirect(t, desired, 30002, 4500, "redirect current")
+	assertNatRedirect(t, desired, 29001, 500, "redirect grace")
+	assertNatRedirect(t, desired, 29002, 4500, "redirect grace")
+}
+
 func TestBuildDesiredState_HostRedirectGraceSkipCurrentPorts(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID:            "host",
@@ -202,4 +232,14 @@ func TestBuildDesiredState_HostRedirectGraceSkipCurrentPorts(t *testing.T) {
 	if len(desired.NatRedirects) != 0 {
 		t.Errorf("expected 0 redirect rules for current ports, got %d", len(desired.NatRedirects))
 	}
+}
+
+func assertNatRedirect(t *testing.T, desired *FirewallDesiredState, original, target uint16, comment string) {
+	t.Helper()
+	for _, nr := range desired.NatRedirects {
+		if nr.OriginalDst == original && nr.RedirectTo == target && strings.Contains(nr.Comment, comment) {
+			return
+		}
+	}
+	t.Fatalf("missing redirect %d -> %d comment containing %q in %+v", original, target, comment, desired.NatRedirects)
 }

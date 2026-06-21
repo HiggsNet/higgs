@@ -86,6 +86,16 @@ type Event struct {
 	Duration  time.Duration
 	Error     string
 	Reason    string
+
+	QuotaRequestedBytes     int64
+	QuotaRequestedObjects   int64
+	QuotaAvailableBytes     int64
+	QuotaAvailableObjects   int64
+	QuotaByteRate           int64
+	QuotaByteBurst          int64
+	QuotaObjectRate         int64
+	QuotaObjectBurst        int64
+	QuotaLastRefillUnixNano int64
 }
 
 type observedPath struct {
@@ -386,8 +396,28 @@ func (t *Transport) logEvent(event Event, err error, start time.Time) {
 	if err != nil {
 		event.Error = err.Error()
 		event.Reason = RejectReason(err)
+		ApplyQuotaDiagnostics(&event, err)
 	}
 	t.log(event)
+}
+
+func ApplyQuotaDiagnostics(event *Event, err error) {
+	if event == nil || err == nil {
+		return
+	}
+	var quotaErr *QuotaExceededError
+	if !errors.As(err, &quotaErr) || quotaErr == nil {
+		return
+	}
+	event.QuotaRequestedBytes = quotaErr.RequestedBytes
+	event.QuotaRequestedObjects = quotaErr.RequestedObjects
+	event.QuotaAvailableBytes = quotaErr.AvailableBytes
+	event.QuotaAvailableObjects = quotaErr.AvailableObjects
+	event.QuotaByteRate = quotaErr.ByteRate
+	event.QuotaByteBurst = quotaErr.ByteBurst
+	event.QuotaObjectRate = quotaErr.ObjectRate
+	event.QuotaObjectBurst = quotaErr.ObjectBurst
+	event.QuotaLastRefillUnixNano = quotaErr.LastRefillUnixNano
 }
 
 // isNetworkTimeout reports whether err is a network timeout from a

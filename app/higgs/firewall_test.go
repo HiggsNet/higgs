@@ -295,6 +295,12 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 		state,
 		defaultAppConfig(),
 	)
+	if len(input.AdvertisedCurrentIKEPorts) != 1 || input.AdvertisedCurrentIKEPorts[0] != 1500 {
+		t.Fatalf("current IKE ports = %v, want [1500]", input.AdvertisedCurrentIKEPorts)
+	}
+	if len(input.AdvertisedCurrentNATTPorts) != 1 || input.AdvertisedCurrentNATTPorts[0] != 14500 {
+		t.Fatalf("current NAT-T ports = %v, want [14500]", input.AdvertisedCurrentNATTPorts)
+	}
 	if len(input.AdvertisedPreviousIKEPorts) != 1 || input.AdvertisedPreviousIKEPorts[0] != 1400 {
 		t.Fatalf("previous IKE ports = %v, want [1400]", input.AdvertisedPreviousIKEPorts)
 	}

@@ -434,12 +434,12 @@ func syncServe(ctx context.Context) error {
 				continue
 			}
 			if err := syncRuntime.handlePacket(packet); err != nil {
-				logger.Warn("gossip", "packet_failed", map[string]any{
+				logger.Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
 					"peer_id": packet.Message.PeerID,
 					"type":    packet.Message.Type,
 					"reason":  gossip.RejectReason(err),
 					"error":   err,
-				})
+				}, err))
 			}
 		}
 	}
@@ -1623,12 +1623,12 @@ func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeo
 			}
 			if packet.Message.PeerID != peerID {
 				if handleErr := sr.handlePacketUntil(packet, deadline); handleErr != nil {
-					sr.logger().Warn("gossip", "packet_failed", map[string]any{
+					sr.logger().Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
 						"peer_id": packet.Message.PeerID,
 						"type":    packet.Message.Type,
 						"reason":  gossip.RejectReason(handleErr),
 						"error":   handleErr,
-					})
+					}, handleErr))
 				}
 				return
 			}
@@ -1642,12 +1642,12 @@ func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeo
 				peerNeedsLocalZones = true
 			}
 			if err = sr.handlePacketUntil(packet, deadline); err != nil {
-				sr.logger().Warn("gossip", "peer_packet_failed", map[string]any{
+				sr.logger().Warn("gossip", "peer_packet_failed", addGossipErrorFields(map[string]any{
 					"peer_id": packet.Message.PeerID,
 					"type":    packet.Message.Type,
 					"reason":  gossip.RejectReason(err),
 					"error":   err,
-				})
+				}, err))
 				return
 			}
 			if peerRequestedZones {
@@ -1775,6 +1775,7 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 				Reason:    reason,
 				Error:     err.Error(),
 			}
+			gossip.ApplyQuotaDiagnostics(&event, err)
 			if config != nil {
 				if logger := syncDebugLogger(config); logger != nil {
 					logger(event)
