@@ -528,6 +528,78 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	}
 }
 
+func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
+	srv := newTestObserverServer()
+	now := time.Unix(1000, 0)
+	srv.daemon.Sync.App.Clock = func() time.Time { return now }
+	srv.daemon.Sync.Config.PeerID = "node-a.catofes."
+	srv.daemon.Sync.Config.Bootstrap = []syncConfigPeer{
+		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
+		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
+	}
+	srv.daemon.Sync.State.ManagedZone = "node-a.catofes."
+	srv.daemon.Sync.State.Network = zone.NewNetworkState()
+	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "node-a.catofes.", "127.0.0.1", 33434, now)
+	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
+	rr := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var resp apiResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	peers := data["peers"].([]any)
+	if len(peers) != 1 {
+		t.Fatalf("peers len = %d, want 1: %#v", len(peers), peers)
+	}
+	peer := peers[0].(map[string]any)
+	if peer["peer_id"] != "node-b.catofes." {
+		t.Fatalf("peer_id = %v, want node-b.catofes.; peers=%#v", peer["peer_id"], peers)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/peers/node-a.catofes.", nil)
+	rr = httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("self peer status code = %d, want %d; body=%s", rr.Code, http.StatusNotFound, rr.Body.String())
+	}
+}
+
+func addObserverEndpointZone(t *testing.T, ns *zone.NetworkState, path zone.ZonePath, ip string, port uint16, now time.Time) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(%s): %v", path, err)
+	}
+	authority := &zone.ZoneAuthority{Zone: path, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: pub}}}
+	zs := zone.NewZoneState(path, authority)
+	value := gossip.EndpointRecordBytes([]gossip.LocalEndpoint{{
+		IP:       net.ParseIP(ip),
+		Port:     port,
+		Scope:    "loopback",
+		Priority: 100,
+		Source:   gossip.SourceAdvertise,
+	}}, now)
+	record := &zone.Record{
+		Zone:      path,
+		Key:       gossip.EndpointRecordKeyUDP,
+		Type:      "sync.endpoint",
+		Value:     value,
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(record, priv); err != nil {
+		t.Fatalf("SignRecord(%s): %v", path, err)
+	}
+	zs.Records[gossip.EndpointRecordKeyUDP] = record
+	ns.Zones[path] = zs
+}
+
 func TestObserverLinksAPIEmpty(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)

@@ -530,14 +530,23 @@ func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
 	peerFilter = strings.TrimSuffix(peerFilter, "/")
 	peerIDs := make([]string, 0, len(state.SyncPeers))
 	for id := range state.SyncPeers {
+		if isLocalObserverPeer(id, d.Sync.Config, state) {
+			continue
+		}
 		peerIDs = append(peerIDs, id)
 	}
 	for _, peer := range configuredBootstrapPeers(d.Sync.Config) {
+		if isLocalObserverPeer(peer.ID, d.Sync.Config, state) {
+			continue
+		}
 		if _, ok := state.SyncPeers[peer.ID]; !ok {
 			peerIDs = append(peerIDs, peer.ID)
 		}
 	}
 	for id := range gossip.ExtractPeerEndpointsAt(state.Network, d.Sync.now()) {
+		if isLocalObserverPeer(id, d.Sync.Config, state) {
+			continue
+		}
 		if _, ok := state.SyncPeers[id]; !ok {
 			peerIDs = append(peerIDs, id)
 		}
@@ -546,7 +555,7 @@ func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
 	// Single peer detail
 	if peerFilter != "" {
 		ps, ok := state.SyncPeers[peerFilter]
-		if !ok && !peerKnownFromConfigOrDiscovery(peerFilter, d.Sync.Config, state.Network, d.Sync.now()) {
+		if isLocalObserverPeer(peerFilter, d.Sync.Config, state) || (!ok && !peerKnownFromConfigOrDiscovery(peerFilter, d.Sync.Config, state.Network, d.Sync.now())) {
 			writeAPIError(w, http.StatusNotFound, fmt.Errorf("peer not found"))
 			return
 		}
@@ -602,6 +611,16 @@ func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *
 		ObjectPullStats:       ps.ObjectPullStats,
 		RejectedDigests:       ps.RejectedDigests,
 	}
+}
+
+func isLocalObserverPeer(peerID string, config *syncConfigFile, state *stateFile) bool {
+	if peerID == "" {
+		return false
+	}
+	if config != nil && peerID == config.PeerID {
+		return true
+	}
+	return state != nil && peerID == string(state.ManagedZone)
 }
 
 func configuredBootstrapPeers(config *syncConfigFile) []syncConfigPeer {
