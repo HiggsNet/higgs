@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -274,6 +275,53 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 	}
 	if ad, ok := byID["endpoint-4"]; !ok || ad.Source != ipsec.SourceDiscovery || ad.Address != "203.0.113.50" || ad.Reachability != ipsec.ReachabilityPublic {
 		t.Fatalf("public interface mapping unexpected: %+v", byID["endpoint-4"])
+	}
+}
+
+func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	now := time.Unix(5000, 0)
+
+	er := gossip.EndpointRecord{
+		Endpoints: []gossip.EndpointEntry{
+			{Address: "203.0.113.10", Port: 33434, Source: "advertise", Scope: "advertise", Priority: 100, LastObserved: now.Unix()},
+			{Address: "198.51.100.20", Port: 33434, Source: "reflector", Scope: "global", Priority: 50, LastObserved: now.Unix()},
+		},
+		TTL:       int64(time.Hour / time.Second),
+		UpdatedAt: now.Unix(),
+	}
+	data, _ := json.Marshal(er)
+	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
+		Zone:      state.ManagedZone,
+		Key:       gossip.EndpointRecordKeyUDP,
+		Type:      "sync.endpoint",
+		Value:     data,
+		Timestamp: now.Unix(),
+	}
+
+	config := defaultAppConfig()
+	config.ListenAddr = "0.0.0.0:33434"
+
+	record1 := localIPsecAddressRecord(config, state, now)
+	first, _ := json.Marshal(record1)
+
+	// Simulate gossip endpoint record being refreshed 5 minutes later with the
+	// same addresses but newer LastObserved/UpdatedAt timestamps.
+	later := now.Add(5 * time.Minute)
+	er.UpdatedAt = later.Unix()
+	for i := range er.Endpoints {
+		er.Endpoints[i].LastObserved = later.Unix()
+	}
+	data, _ = json.Marshal(er)
+	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Value = data
+	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Timestamp = later.Unix()
+
+	record2 := localIPsecAddressRecord(config, state, later)
+	second, _ := json.Marshal(record2)
+
+	if !bytes.Equal(first, second) {
+		t.Fatalf("ipsec address record changed after gossip refresh:\nfirst:  %s\nsecond: %s", first, second)
 	}
 }
 

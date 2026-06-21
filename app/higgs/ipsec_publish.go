@@ -335,7 +335,10 @@ func ipsecAddressesFromGossipEndpoints(state *stateFile, seen map[string]bool, t
 			Priority:     ep.Priority,
 			Reachability: reachability,
 			TTLSeconds:   ttlSeconds,
-			LastObserved: ep.LastObserved,
+			// Do not copy LastObserved from gossip endpoints. The IPsec record
+			// has its own UpdatedAt/TTL; copying endpoint timestamps would make
+			// the record change every gossip publish cycle even when the set of
+			// addresses is unchanged.
 		})
 		nextID++
 	}
