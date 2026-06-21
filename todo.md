@@ -1005,6 +1005,7 @@
 - [x] **6.2.2 bootstrap / NAT / 大对象边界**
   - auto-join 常规路径要求持有新 delegation 的父 Zone 管理节点参与 gossip，或至少有一个已同步该 delegation 的 bootstrap peer 参与 gossip；否则 leaf 会停在 pending。
   - NAT/outbound-only leaf 可以主动同步 pending/adoption，但如果 delegation 所在 zone snapshot 超过 UDP budget，对端 TCP object pull 不可达时必须依赖 UDP chunk fallback 或后续 relay。
+  - [x] 管理节点 DB 丢失后的显式恢复入口：`higgs recovery pull-zone <zone> --from <peer-id>` 通过 TCP object pull 拉取 peer 保存的 signed `ZoneSnapshot`，绕过普通 sync 对本机 `managed_zone` 的保护性跳过，但仍经 signature / delegation-chain / trusted root 校验后才合并；深层 Zone 可用 `higgs recovery pull-chain <zone> --from <peer-id>` 按 `.` 到目标 Zone 的顺序逐层恢复；远端缺失对象不删除本地对象，revocation 继续优先覆盖 delegation。
   - pending 超时不应自动放弃身份；应记录 stale/pending duration，并在 bootstrap 恢复后继续尝试。
     - `admissionState` 持久化记录 `PendingSinceUnix`，daemon 重启后保留；`diagnoseAutoJoinAdmission` 输出 pending duration；pending 不自动放弃身份，只记录诊断和持续重试。
   - public runbook 需保留检查项：bootstrap.id 必须是 Zone FQDN，admin/parent daemon 必须真的参与 gossip，不要把角色名当 peer id。

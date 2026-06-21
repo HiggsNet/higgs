@@ -26,6 +26,7 @@ func rootCommand() *cli.Command {
 			cmdVerify(),
 			cmdDaemon(),
 			cmdSync(),
+			cmdRecovery(),
 			cmdDebug(),
 			cmdDB(),
 		},

@@ -715,6 +715,20 @@ make object-pull-smoke
 
 排查 MTU / 大包问题时，`higgs sync status --verbose` 和 `higgs debug peer <peer-id>` 会显示当前 datagram 预算、最近 oversized UDP 对象、digest-only announce 次数以及 UDP chunk fallback 计数。大对象优先走未压缩 MessagePack object pull，UDP chunk fallback 只在 object pull 不可达时兜底；通用压缩仅作为后续 object pull 优化候选，不用于默认 UDP 小包。
 
+如果管理节点丢失本地 DB，但网络里仍有 peer 保存过该 Zone 的 signed snapshot，可以显式从 peer 恢复一次：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs recovery pull-zone catofes. --from node-a.catofes.
+```
+
+更深层的 delegated zone 可以用 chain 恢复，命令会按 `.` 到目标 Zone 的顺序逐层拉取：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery pull-chain node-b.pek.catofes. --from node-a.catofes.
+```
+
+这些命令绕过普通 sync 对本机 `managed_zone` 的保护性跳过逻辑，但仍使用 TCP object pull 获取 `ZoneSnapshot`，并通过现有 signature / delegation-chain 验证后才合并入本地 DB。恢复 `.` 时，如果配置了 `trusted_root_public_key`，拉到的 root authority 必须包含该 trusted key；如果没有配置 trusted root，则 root recovery 不允许改变本地 root authority。远端 snapshot 缺失的本地对象不会被删除，revocation 仍按现有优先级覆盖对应 delegation。
+
 真实公网多节点 daemon gossip 测试见 [docs/public-internet-test.md](docs/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
 
 ## 当前数据面现状
@@ -746,6 +760,8 @@ build/higgs sync status [--verbose]
 build/higgs sync serve
 build/higgs sync once <peer-id>
 build/higgs sync run [--interval seconds]
+build/higgs recovery pull-zone <zone> --from <peer-id>
+build/higgs recovery pull-chain <zone> --from <peer-id>
 build/higgs debug peer <peer-id>
 build/higgs debug zone <zone>
 build/higgs db dump [zone]
