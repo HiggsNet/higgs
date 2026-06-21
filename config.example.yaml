@@ -135,7 +135,7 @@ ipsec:
 #     # link group should use another declared netns.
 #     # netns: default
 #     # default_path_mode: family-redundant
-#     # direction: outbound
+#     # direction: double
 #     # address_source_order:
 #     #   - manual-address
 #     #   - manual-dns
@@ -170,7 +170,7 @@ ipsec:
 #     #     max: 1m
 #
 #     connect:
-#       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+#       - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=double"
 #     deny:
 #       - "strongswan://*.lab.catofes."
 

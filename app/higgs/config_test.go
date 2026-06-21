@@ -234,7 +234,7 @@ overlays:
     provider: strongswan
     netns: default
     default_path_mode: family-redundant
-    direction: outbound
+    direction: double
     address_source_order: manual-dns, discovery
     max_peers: 64
     max_links_per_peer: 2
@@ -272,6 +272,9 @@ overlays:
 	}
 	if got := strings.Join(group.AddressSourceOrder, ","); got != "manual-dns,discovery" {
 		t.Fatalf("AddressSourceOrder = %q", got)
+	}
+	if group.Direction != ipsec.DirectionBidirectional {
+		t.Fatalf("Direction = %q, want %q", group.Direction, ipsec.DirectionBidirectional)
 	}
 	if len(group.ConnectRules) != 1 || len(group.DenyRules) != 1 {
 		t.Fatalf("rules = connect:%v deny:%v", group.ConnectRules, group.DenyRules)

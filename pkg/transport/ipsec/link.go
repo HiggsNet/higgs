@@ -16,6 +16,7 @@ const (
 	DirectionInbound       = "inbound"
 	DirectionOutbound      = "outbound"
 	DirectionBidirectional = "bidirectional"
+	DirectionDouble        = "double"
 
 	NetNSHost        = "host"
 	NetNSName        = "name"
@@ -33,6 +34,15 @@ const (
 	InitiatorRoleConverged         = "converged"
 	InitiatorRoleCooldown          = "cooldown"
 )
+
+func NormalizeDirection(direction string) string {
+	switch direction {
+	case DirectionDouble:
+		return DirectionBidirectional
+	default:
+		return direction
+	}
+}
 
 type MeshPolicy struct {
 	OverlayID       string
@@ -229,6 +239,7 @@ func (g LinkGroupSpec) Validate() error {
 	if direction == "" {
 		direction = DirectionOutbound
 	}
+	direction = NormalizeDirection(direction)
 	if !oneOf(direction, DirectionInbound, DirectionOutbound, DirectionBidirectional) {
 		return fmt.Errorf("unsupported link group direction %q", direction)
 	}
@@ -287,6 +298,7 @@ func (g LinkGroupSpec) Normalized() LinkGroupSpec {
 	if out.Direction == "" {
 		out.Direction = DirectionOutbound
 	}
+	out.Direction = NormalizeDirection(out.Direction)
 	if out.Reconcile.RotateRetentionSeconds == 0 {
 		out.Reconcile.RotateRetentionSeconds = 3600
 	}

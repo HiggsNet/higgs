@@ -41,6 +41,16 @@ func TestParseMeshPolicyRuleRoleAndTagTargets(t *testing.T) {
 	}
 }
 
+func TestParseMeshPolicyRuleDirectionDoubleAlias(t *testing.T) {
+	rule, err := ParseMeshPolicyRule("strongswan://*.catofes.?direction=double")
+	if err != nil {
+		t.Fatalf("ParseMeshPolicyRule: %v", err)
+	}
+	if rule.Direction != DirectionBidirectional {
+		t.Fatalf("Direction = %q, want %q", rule.Direction, DirectionBidirectional)
+	}
+}
+
 func TestParseMeshPolicyRuleRejectsUnsupportedValues(t *testing.T) {
 	for _, raw := range []string{
 		"wireguard://*.catofes.",

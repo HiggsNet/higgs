@@ -77,7 +77,7 @@ func ParseMeshPolicyRule(raw string) (MeshPolicyRule, error) {
 	rule.Accept = firstQuery(query, "accept")
 	rule.Family = firstQuery(query, "family")
 	rule.PathMode = firstQuery(query, "mode")
-	rule.Direction = firstQuery(query, "direction")
+	rule.Direction = NormalizeDirection(firstQuery(query, "direction"))
 	if rawSources := firstQuery(query, "source"); rawSources != "" {
 		for _, source := range strings.Split(rawSources, ",") {
 			source = strings.TrimSpace(source)
