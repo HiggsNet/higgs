@@ -144,6 +144,24 @@ func TestObserverConfigFromYAML(t *testing.T) {
 	}
 }
 
+func TestObserverConfigFromEmptyYAMLSection(t *testing.T) {
+	yaml := `observer:
+`
+	config := defaultAppConfig()
+	if err := parseConfigYAML(yaml, config); err != nil {
+		t.Fatalf("parseConfigYAML error: %v", err)
+	}
+	if !config.Observer.Enabled {
+		t.Error("empty observer section should enable observer")
+	}
+	if config.Observer.BindAddr != "127.0.0.1" {
+		t.Errorf("bind_addr = %q, want 127.0.0.1", config.Observer.BindAddr)
+	}
+	if config.Observer.Port != 8080 {
+		t.Errorf("port = %d, want 8080", config.Observer.Port)
+	}
+}
+
 func TestObserverConfigKnownFields(t *testing.T) {
 	yaml := `observer:
   unknown_field: true

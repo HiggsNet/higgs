@@ -22,6 +22,18 @@ func TestParseHealthConfigEnabledByPresence(t *testing.T) {
 	}
 }
 
+func TestHealthConfigFromEmptyYAMLSection(t *testing.T) {
+	yaml := `health:
+`
+	config := defaultAppConfig()
+	if err := parseConfigYAML(yaml, config); err != nil {
+		t.Fatalf("parseConfigYAML error: %v", err)
+	}
+	if !config.Health.Enabled {
+		t.Fatal("empty health section should enable health")
+	}
+}
+
 func TestParseHealthConfigDisabled(t *testing.T) {
 	disabled := true
 	cfg, err := parseHealthConfig(&healthConfigYAML{Disabled: &disabled})

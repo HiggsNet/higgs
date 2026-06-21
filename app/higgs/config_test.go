@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -88,6 +89,22 @@ func TestParseConfigExampleYAML(t *testing.T) {
 	}
 	if len(config.Routing.Instances) == 0 {
 		t.Fatal("config.example.yaml should include a routing instance example")
+	}
+}
+
+func TestLoadAppConfigRejectsMissingExplicitConfig(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing.yaml")
+	t.Setenv("HIGGS_CONFIG", missingPath)
+
+	config, err := loadAppConfig()
+	if err == nil {
+		t.Fatalf("loadAppConfig returned nil error and config %#v for missing explicit config", config)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("loadAppConfig error = %v, want not-exist error", err)
+	}
+	if !strings.Contains(err.Error(), missingPath) {
+		t.Fatalf("loadAppConfig error = %q, want path %q", err.Error(), missingPath)
 	}
 }
 

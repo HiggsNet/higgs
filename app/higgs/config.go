@@ -234,13 +234,14 @@ func (n *netnsRefYAML) UnmarshalYAML(node *yaml.Node) error {
 
 func loadAppConfig() (*appConfig, error) {
 	config := defaultAppConfig()
-	data, err := os.ReadFile(configPath())
+	path, explicit := selectedConfigPath()
+	data, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) && !explicit {
 			normalizeAppConfig(config)
 			return config, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	if err := parseConfigYAML(string(data), config); err != nil {
 		return nil, err
@@ -320,16 +321,35 @@ func parseConfigYAML(input string, config *appConfig) error {
 	if strings.TrimSpace(input) == "" {
 		return nil
 	}
+	topLevelKeys, err := yamlTopLevelKeys(input)
+	if err != nil {
+		return fmt.Errorf("config.yaml: %w", err)
+	}
 	var file configYAML
 	decoder := yaml.NewDecoder(strings.NewReader(input))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&file); err != nil {
 		return fmt.Errorf("config.yaml: %w", err)
 	}
-	return applyConfigYAML(config, file)
+	return applyConfigYAML(config, file, topLevelKeys)
 }
 
-func applyConfigYAML(config *appConfig, file configYAML) error {
+func yamlTopLevelKeys(input string) (map[string]bool, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(input), &root); err != nil {
+		return nil, err
+	}
+	keys := make(map[string]bool)
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return keys, nil
+	}
+	for i := 0; i+1 < len(root.Content[0].Content); i += 2 {
+		keys[root.Content[0].Content[i].Value] = true
+	}
+	return keys, nil
+}
+
+func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string]bool) error {
 	if value := firstNonEmpty(file.DataDir, file.DatabaseDir, file.DBDir); value != "" {
 		config.DataDir = value
 		config.StatePath = ""
@@ -526,15 +546,23 @@ func applyConfigYAML(config *appConfig, file configYAML) error {
 		}
 		config.PeerLifecycle = pl
 	}
-	if file.Health != nil {
-		hc, err := parseHealthConfig(file.Health)
+	if topLevelKeys["health"] {
+		health := file.Health
+		if health == nil {
+			health = &healthConfigYAML{}
+		}
+		hc, err := parseHealthConfig(health)
 		if err != nil {
 			return err
 		}
 		config.Health = hc
 	}
-	if file.Observer != nil {
-		oc, err := parseObserverConfig(file.Observer)
+	if topLevelKeys["observer"] {
+		observer := file.Observer
+		if observer == nil {
+			observer = &observerConfigYAML{}
+		}
+		oc, err := parseObserverConfig(observer)
 		if err != nil {
 			return err
 		}
@@ -912,10 +940,15 @@ func decodePublicKey(value string) (ed25519.PublicKey, error) {
 }
 
 func configPath() string {
+	path, _ := selectedConfigPath()
+	return path
+}
+
+func selectedConfigPath() (string, bool) {
 	if path := os.Getenv("HIGGS_CONFIG"); path != "" {
-		return path
+		return path, true
 	}
-	return defaultConfigPath
+	return defaultConfigPath, false
 }
 
 func configuredStatePath() (string, error) {
