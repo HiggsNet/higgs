@@ -46,6 +46,44 @@ func TestRotateSpecUsesIndependentXFRMInterface(t *testing.T) {
 	}
 }
 
+func TestTransportLinkSpecHashIgnoresRuntimeQuality(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		TransportID:   "ipsec-main-ab",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+		ContactPoints: []ContactPoint{{
+			Address:      "198.51.100.20",
+			Family:       FamilyIPv4,
+			Generation:   2,
+			IKEPort:      DefaultIKEPort,
+			NATTPort:     DefaultNATTPort,
+			Successes:    5,
+			Failures:     2,
+			BackoffUntil: now.Add(time.Minute),
+			LastError:    "timeout",
+			RankReason:   "recent success",
+		}},
+	}
+	base := TransportLinkSpecHash(spec)
+
+	spec.ContactPoints[0].Successes = 10
+	spec.ContactPoints[0].Failures = 0
+	spec.ContactPoints[0].BackoffUntil = now.Add(2 * time.Minute)
+	spec.ContactPoints[0].LastError = ""
+	spec.ContactPoints[0].RankReason = "best"
+	if got := TransportLinkSpecHash(spec); got != base {
+		t.Fatalf("hash changed after quality updates: %q != %q", got, base)
+	}
+
+	spec.ContactPoints[0].Address = "198.51.100.21"
+	if got := TransportLinkSpecHash(spec); got == base {
+		t.Fatalf("hash unchanged after address change")
+	}
+}
+
 func TestRotateSpecForSecondaryStandbyUsesInboundTrap(t *testing.T) {
 	spec := TransportLinkSpec{
 		LocalZone:     "node-b.catofes.",

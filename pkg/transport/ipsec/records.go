@@ -482,6 +482,11 @@ func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now ti
 			if err != nil {
 				return nil, fmt.Errorf("resolve address %s host %q: %w", address.ID, address.Host, err)
 			}
+			// Sort resolved IPs so family-redundant selection is deterministic
+			// even if the OS resolver returns addresses in varying order.
+			sort.SliceStable(resolved, func(i, j int) bool {
+				return resolved[i].String() < resolved[j].String()
+			})
 			for _, ipAddr := range resolved {
 				ip := ipAddr.IP
 				if ip == nil {

@@ -138,6 +138,55 @@ func TestResolveAddressCandidatesExpandsManualDNSRuntimeOnly(t *testing.T) {
 	}
 }
 
+func TestResolveAddressCandidatesDeterministicDespiteDNSOrder(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	addresses := &AddressRecord{
+		Version: 1,
+		Addresses: []AddressAdvertisement{{
+			ID:           "dns-main",
+			Source:       SourceManualDNS,
+			Host:         "node-a.example.com",
+			Families:     []string{FamilyIPv4},
+			Priority:     80,
+			Reachability: ReachabilityPublic,
+			TTLSeconds:   300,
+		}},
+		UpdatedAt: now.Unix(),
+	}
+	// Resolver returns two IPv4 addresses in one order.
+	first, err := ResolveAddressCandidates(context.Background(), addresses, now, AddressCandidateOptions{
+		DNSResolver: staticDNSResolver{
+			"node-a.example.com": {
+				{IP: net.ParseIP("198.51.100.20")},
+				{IP: net.ParseIP("198.51.100.10")},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressCandidates: %v", err)
+	}
+	// Resolver returns the same two IPv4 addresses in reverse order.
+	second, err := ResolveAddressCandidates(context.Background(), addresses, now, AddressCandidateOptions{
+		DNSResolver: staticDNSResolver{
+			"node-a.example.com": {
+				{IP: net.ParseIP("198.51.100.10")},
+				{IP: net.ParseIP("198.51.100.20")},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressCandidates: %v", err)
+	}
+	// After sorting resolved IPs, the first candidate should be the same
+	// regardless of the order returned by the resolver.
+	if len(first) != 2 || len(second) != 2 {
+		t.Fatalf("unexpected candidate counts: %d / %d", len(first), len(second))
+	}
+	if first[0].Address != second[0].Address {
+		t.Fatalf("first candidate depends on DNS order: %q vs %q", first[0].Address, second[0].Address)
+	}
+}
+
 func TestContactPointSelectionFallsBackFromBackoffCurrentPort(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	addresses := &AddressRecord{

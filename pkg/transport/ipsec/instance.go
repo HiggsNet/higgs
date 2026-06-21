@@ -160,10 +160,19 @@ func LinkInstanceID(spec TransportLinkSpec) string {
 }
 
 func TransportLinkSpecHash(spec TransportLinkSpec) string {
-	// Runtime role metadata must not change the desired spec hash; otherwise
-	// standby -> takeover -> converged transitions would emit unnecessary
-	// update actions for an otherwise identical configuration.
+	// Runtime metadata must not change the desired spec hash; otherwise
+	// standby -> takeover -> converged transitions and per-address
+	// success/failure/backoff fluctuations would emit unnecessary update
+	// actions for an otherwise identical StrongSwan configuration.
 	spec.InitiatorRole = ""
+	for i := range spec.ContactPoints {
+		cp := &spec.ContactPoints[i]
+		cp.Successes = 0
+		cp.Failures = 0
+		cp.BackoffUntil = time.Time{}
+		cp.LastError = ""
+		cp.RankReason = ""
+	}
 	data, err := json.Marshal(spec)
 	if err != nil {
 		panic(fmt.Sprintf("marshal transport link spec: %v", err))

@@ -24,6 +24,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		var err error
 		plan, err = ipsec.PlanTransportLinks(ctx, d.Sync.State.Network, d.Sync.State.ManagedZone, groups, ipsec.LinkPlannerOptions{
 			Now:                 now,
+			DNSResolver:         net.DefaultResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(now),
 		})
 		if err != nil {
