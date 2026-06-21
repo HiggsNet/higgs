@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
 // ===== Observer Config Tests =====
@@ -341,6 +346,87 @@ func TestObserverZonesAPIEmpty(t *testing.T) {
 	}
 }
 
+func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
+	srv := newTestObserverServer()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	authority := &zone.ZoneAuthority{
+		Zone:      "node-a.catofes.",
+		Epoch:     7,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+				KeyPrefix:   "identity",
+			}},
+		}},
+	}
+	active := &zone.Record{
+		Zone:      "node-a.catofes.",
+		Key:       "identity",
+		Type:      "policy.string",
+		Value:     []byte(`{"name":"node-a"}`),
+		Version:   2,
+		Timestamp: 20,
+	}
+	if err := higgscrypto.SignRecord(active, priv); err != nil {
+		t.Fatalf("SignRecord(active): %v", err)
+	}
+	old := &zone.Record{
+		Zone:      "node-a.catofes.",
+		Key:       "identity",
+		Type:      "policy.string",
+		Value:     []byte("old"),
+		Version:   1,
+		Timestamp: 10,
+	}
+	if err := higgscrypto.SignRecord(old, priv); err != nil {
+		t.Fatalf("SignRecord(old): %v", err)
+	}
+	zs := zone.NewZoneState("node-a.catofes.", authority)
+	zs.Records["identity"] = active
+	zs.RecordHistory["identity"] = []*zone.Record{old}
+	srv.daemon.Sync.State.Network = &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{
+		"node-a.catofes.": zs,
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/node-a.catofes.", nil)
+	rr := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var resp apiResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	if data["authority_hash"] == "" {
+		t.Fatalf("authority_hash should be present: %#v", data)
+	}
+	authorityData := data["authority"].(map[string]any)
+	if authorityData["epoch"] != float64(7) {
+		t.Fatalf("authority epoch = %v, want 7", authorityData["epoch"])
+	}
+	records := data["records"].([]any)
+	if len(records) != 1 {
+		t.Fatalf("records len = %d, want 1", len(records))
+	}
+	record := records[0].(map[string]any)
+	if record["value"].(string) != `{"name":"node-a"}` {
+		t.Fatalf("record value = %v", record["value"])
+	}
+	if record["value_json"] == nil || record["record_hash"] == "" || record["signature"] == "" {
+		t.Fatalf("record should include parsed JSON, hash and signature: %#v", record)
+	}
+	if data["history_count"] != float64(1) {
+		t.Fatalf("history_count = %v, want 1", data["history_count"])
+	}
+}
+
 func TestObserverPeersAPIEmpty(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
@@ -357,6 +443,88 @@ func TestObserverPeersAPIEmpty(t *testing.T) {
 	peers := data["peers"].([]any)
 	if len(peers) != 0 {
 		t.Errorf("peers count = %d, want 0", len(peers))
+	}
+}
+
+func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
+	srv := newTestObserverServer()
+	now := time.Unix(1000, 0)
+	srv.daemon.Sync.App.Clock = func() time.Time { return now }
+	srv.daemon.Sync.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
+	srv.daemon.Sync.State.Network = zone.NewNetworkState()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	authority := &zone.ZoneAuthority{Zone: "node-b.catofes.", Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: pub}}}
+	zs := zone.NewZoneState("node-b.catofes.", authority)
+	endpointValue := gossip.EndpointRecordBytes([]gossip.LocalEndpoint{{
+		IP:       net.ParseIP("203.0.113.20"),
+		Port:     33434,
+		Scope:    "global",
+		Priority: 100,
+		Source:   gossip.SourceAdvertise,
+	}}, now)
+	endpointRecord := &zone.Record{
+		Zone:      "node-b.catofes.",
+		Key:       gossip.EndpointRecordKeyUDP,
+		Type:      "sync.endpoint",
+		Value:     endpointValue,
+		Version:   1,
+		Timestamp: now.Unix(),
+	}
+	if err := higgscrypto.SignRecord(endpointRecord, priv); err != nil {
+		t.Fatalf("SignRecord(endpoint): %v", err)
+	}
+	zs.Records[gossip.EndpointRecordKeyUDP] = endpointRecord
+	srv.daemon.Sync.State.Network.Zones["node-b.catofes."] = zs
+	srv.daemon.Sync.State.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix:         900,
+		LastRelayUnix:        920,
+		LastUpdateSource:     "announce",
+		LastRelaySuppression: "relay_fanout_limited",
+		DiscoveredAddr:       "203.0.113.20:33434",
+		ObservedAddr:         "198.51.100.9:33434",
+		ObservedSource:       "verified_packet",
+		ObservedGraceAddrs:   []observedGraceAddrState{{Addr: "198.51.100.8:33434", UntilUnix: 1100}},
+		DatagramStats:        &datagramStats{ChunkFallbacks: 2},
+		ObjectPullStats:      &objectPullStats{Attempts: 3, Successes: 2},
+		RejectedDigests:      map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers/node-b.catofes.", nil)
+	rr := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var resp apiResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	if data["configured_addr"] != "192.0.2.10:33434" {
+		t.Fatalf("configured_addr = %v", data["configured_addr"])
+	}
+	if data["last_update_source"] != "announce" || data["last_relay_suppression"] != "relay_fanout_limited" {
+		t.Fatalf("peer diagnostics missing: %#v", data)
+	}
+	endpoints := data["endpoints"].([]any)
+	if len(endpoints) < 3 {
+		t.Fatalf("endpoints len = %d, want at least 3: %#v", len(endpoints), endpoints)
+	}
+	var sawSigned, sawObserved bool
+	for _, item := range endpoints {
+		ep := item.(map[string]any)
+		if ep["addr"] == "203.0.113.20:33434" && ep["source"] == "advertise" {
+			sawSigned = true
+		}
+		if ep["addr"] == "198.51.100.9:33434" && ep["source"] == "verified_packet" {
+			sawObserved = true
+		}
+	}
+	if !sawSigned || !sawObserved {
+		t.Fatalf("missing signed/observed endpoints: %#v", endpoints)
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -292,51 +293,222 @@ func (s *observerServer) handleZones(w http.ResponseWriter, r *http.Request) {
 func zoneDetailJSON(zs *zone.ZoneState, ns *zone.NetworkState, path zone.ZonePath, now time.Time) map[string]any {
 	revoked := ns.IsZoneRevoked(path, now)
 	records := make([]map[string]any, 0, len(zs.Records))
-	for key, rec := range zs.Records {
-		records = append(records, map[string]any{
-			"key":     key,
-			"version": rec.Version,
-			"type":    rec.Type,
-		})
+	recordKeys := make([]string, 0, len(zs.Records))
+	for key := range zs.Records {
+		recordKeys = append(recordKeys, key)
+	}
+	sort.Strings(recordKeys)
+	for _, key := range recordKeys {
+		records = append(records, recordJSON(zs.Records[key], len(zs.RecordHistory[key])))
 	}
 	delegations := make([]map[string]any, 0, len(zs.Delegations))
-	for childPath, del := range zs.Delegations {
-		delegations = append(delegations, map[string]any{
-			"child":           string(childPath),
-			"authority_epoch": del.AuthorityEpoch,
-		})
+	delegationPaths := make([]zone.ZonePath, 0, len(zs.Delegations))
+	for childPath := range zs.Delegations {
+		delegationPaths = append(delegationPaths, childPath)
+	}
+	sort.Slice(delegationPaths, func(i, j int) bool { return delegationPaths[i] < delegationPaths[j] })
+	for _, childPath := range delegationPaths {
+		delegations = append(delegations, delegationJSON(zs.Delegations[childPath]))
 	}
 	revocations := make([]map[string]any, 0, len(zs.Revocations))
-	for childPath, rev := range zs.Revocations {
-		revocations = append(revocations, map[string]any{
-			"child":      string(childPath),
-			"reason":     rev.Reason,
-			"revoked_at": rev.RevokedAt,
+	revocationPaths := make([]zone.ZonePath, 0, len(zs.Revocations))
+	for childPath := range zs.Revocations {
+		revocationPaths = append(revocationPaths, childPath)
+	}
+	sort.Slice(revocationPaths, func(i, j int) bool { return revocationPaths[i] < revocationPaths[j] })
+	for _, childPath := range revocationPaths {
+		revocations = append(revocations, revocationJSON(zs.Revocations[childPath]))
+	}
+	history := make([]map[string]any, 0)
+	historyKeys := make([]string, 0, len(zs.RecordHistory))
+	for key := range zs.RecordHistory {
+		historyKeys = append(historyKeys, key)
+	}
+	sort.Strings(historyKeys)
+	for _, key := range historyKeys {
+		versions := zs.RecordHistory[key]
+		for i := len(versions) - 1; i >= 0; i-- {
+			history = append(history, recordJSON(versions[i], 0))
+		}
+	}
+	return map[string]any{
+		"path":             string(path),
+		"parent":           string(path.Parent()),
+		"authority":        authorityJSON(zs.Authority),
+		"authority_hash":   hexOrEmpty(authorityHash(zs.Authority)),
+		"parent_proof":     delegationsJSON(zs.ParentProof),
+		"records":          records,
+		"record_history":   history,
+		"delegations":      delegations,
+		"revocations":      revocations,
+		"revoked":          revoked,
+		"record_count":     len(zs.Records),
+		"history_count":    len(history),
+		"delegation_count": len(zs.Delegations),
+		"revocation_count": len(zs.Revocations),
+		"merkle_root":      hexOrEmpty(zs.MerkleRoot),
+	}
+}
+
+func recordJSON(rec *zone.Record, historyCount int) map[string]any {
+	if rec == nil {
+		return map[string]any{}
+	}
+	out := map[string]any{
+		"zone":          string(rec.Zone),
+		"key":           rec.Key,
+		"version":       rec.Version,
+		"type":          rec.Type,
+		"value":         string(rec.Value),
+		"value_b64":     base64.StdEncoding.EncodeToString(rec.Value),
+		"value_hash":    hexOrEmpty(rec.ValueHash),
+		"record_hash":   hexOrEmpty(higgscrypto.RecordHash(rec)),
+		"prev_hash":     hexOrEmpty(rec.PrevHash),
+		"timestamp":     rec.Timestamp,
+		"signed_by":     hexOrEmpty(rec.SignedBy),
+		"signature":     hexOrEmpty(rec.Signature),
+		"history_count": historyCount,
+	}
+	var parsed any
+	if len(rec.Value) > 0 && json.Unmarshal(rec.Value, &parsed) == nil {
+		out["value_json"] = parsed
+	}
+	return out
+}
+
+func authorityJSON(authority *zone.ZoneAuthority) map[string]any {
+	if authority == nil {
+		return nil
+	}
+	keys := make([]map[string]any, 0, len(authority.Keys))
+	for _, key := range authority.Keys {
+		caps := make([]map[string]any, 0, len(key.Capabilities))
+		for _, cap := range key.Capabilities {
+			perms := make([]string, 0, len(cap.Permissions))
+			for _, perm := range cap.Permissions {
+				perms = append(perms, string(perm))
+			}
+			caps = append(caps, map[string]any{
+				"permissions": perms,
+				"key_prefix":  cap.KeyPrefix,
+			})
+		}
+		keys = append(keys, map[string]any{
+			"key":          hexOrEmpty(key.Key),
+			"key_id":       hexOrEmpty(higgscrypto.KeyID(key.Key)),
+			"not_before":   key.NotBefore,
+			"not_after":    key.NotAfter,
+			"capabilities": caps,
 		})
 	}
 	return map[string]any{
-		"path":         string(path),
-		"records":      records,
-		"delegations":  delegations,
-		"revocations":  revocations,
-		"revoked":      revoked,
-		"record_count": len(zs.Records),
+		"zone":      string(authority.Zone),
+		"epoch":     authority.Epoch,
+		"threshold": authority.Threshold,
+		"keys":      keys,
 	}
+}
+
+func delegationJSON(del *zone.Delegation) map[string]any {
+	if del == nil {
+		return nil
+	}
+	expiresAt := ""
+	if del.ExpiresAt != nil {
+		expiresAt = del.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return map[string]any{
+		"child":           string(del.ZoneName),
+		"scope":           string(del.Scope),
+		"authority_epoch": del.AuthorityEpoch,
+		"authority_hash":  hexOrEmpty(del.AuthorityHash),
+		"authority":       authorityJSON(&del.Authority),
+		"expires_at":      expiresAt,
+		"signed_by":       hexOrEmpty(del.SignedBy),
+		"signature":       hexOrEmpty(del.Signature),
+	}
+}
+
+func delegationsJSON(delegations []*zone.Delegation) []map[string]any {
+	out := make([]map[string]any, 0, len(delegations))
+	for _, del := range delegations {
+		out = append(out, delegationJSON(del))
+	}
+	return out
+}
+
+func revocationJSON(rev *zone.DelegationRevocation) map[string]any {
+	if rev == nil {
+		return nil
+	}
+	return map[string]any{
+		"child":                   string(rev.ChildZone),
+		"parent":                  string(rev.ParentZone),
+		"revoked_authority_epoch": rev.RevokedAuthorityEpoch,
+		"revoked_authority_hash":  hexOrEmpty(rev.RevokedAuthorityHash),
+		"reason":                  rev.Reason,
+		"revoked_at":              rev.RevokedAt,
+		"ttl_seconds":             rev.TTLSeconds,
+		"grace_seconds":           rev.GraceSeconds,
+		"signed_by":               hexOrEmpty(rev.SignedBy),
+		"signature":               hexOrEmpty(rev.Signature),
+	}
+}
+
+func authorityHash(authority *zone.ZoneAuthority) []byte {
+	if authority == nil {
+		return nil
+	}
+	return higgscrypto.AuthorityHash(authority)
+}
+
+func hexOrEmpty(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(data)
 }
 
 // peerJSON is the per-peer view for /api/v1/peers
 type peerJSON struct {
-	PeerID            string           `json:"peer_id"`
-	LastSyncUnix      int64            `json:"last_sync_unix"`
-	LastAttemptUnix   int64            `json:"last_attempt_unix"`
-	BackoffUntilUnix  int64            `json:"backoff_until_unix"`
-	FailureCount      int              `json:"failure_count"`
-	LastError         string           `json:"last_error,omitempty"`
-	DiscoveredAddr    string           `json:"discovered_addr,omitempty"`
-	ObservedAddr      string           `json:"observed_addr,omitempty"`
-	ObservedUntilUnix int64            `json:"observed_until_unix,omitempty"`
-	DatagramStats     *datagramStats   `json:"datagram_stats,omitempty"`
-	ObjectPullStats   *objectPullStats `json:"object_pull_stats,omitempty"`
+	PeerID                string                         `json:"peer_id"`
+	Source                string                         `json:"source,omitempty"`
+	ConfiguredAddr        string                         `json:"configured_addr,omitempty"`
+	LastSyncUnix          int64                          `json:"last_sync_unix"`
+	LastAttemptUnix       int64                          `json:"last_attempt_unix"`
+	BackoffUntilUnix      int64                          `json:"backoff_until_unix"`
+	LastRelayUnix         int64                          `json:"last_relay_unix,omitempty"`
+	FailureCount          int                            `json:"failure_count"`
+	LastError             string                         `json:"last_error,omitempty"`
+	LastUpdateSource      string                         `json:"last_update_source,omitempty"`
+	LastRelaySuppression  string                         `json:"last_relay_suppression,omitempty"`
+	LastRelaySuppressedAt int64                          `json:"last_relay_suppressed_at,omitempty"`
+	DiscoveredAddr        string                         `json:"discovered_addr,omitempty"`
+	DiscoveredAtUnix      int64                          `json:"discovered_at_unix,omitempty"`
+	ObservedAddr          string                         `json:"observed_addr,omitempty"`
+	ObservedFirstSeenUnix int64                          `json:"observed_first_seen_unix,omitempty"`
+	ObservedLastSeenUnix  int64                          `json:"observed_last_seen_unix,omitempty"`
+	ObservedLastSyncUnix  int64                          `json:"observed_last_sync_unix,omitempty"`
+	ObservedUntilUnix     int64                          `json:"observed_until_unix,omitempty"`
+	ObservedSource        string                         `json:"observed_source,omitempty"`
+	ObservedFailureCount  int                            `json:"observed_failure_count,omitempty"`
+	ObservedGraceAddrs    []observedGraceAddrState       `json:"observed_grace_addrs,omitempty"`
+	Endpoints             []peerEndpointJSON             `json:"endpoints,omitempty"`
+	DatagramStats         *datagramStats                 `json:"datagram_stats,omitempty"`
+	ObjectPullStats       *objectPullStats               `json:"object_pull_stats,omitempty"`
+	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
+}
+
+type peerEndpointJSON struct {
+	Addr         string `json:"addr"`
+	Address      string `json:"address,omitempty"`
+	Port         uint16 `json:"port,omitempty"`
+	Protocol     string `json:"protocol,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Priority     int    `json:"priority,omitempty"`
+	LastObserved int64  `json:"last_observed,omitempty"`
+	Selected     bool   `json:"selected,omitempty"`
 }
 
 // handlePeers implements GET /api/v1/peers and GET /api/v1/peers/{peer_id}
@@ -360,39 +532,164 @@ func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
 	for id := range state.SyncPeers {
 		peerIDs = append(peerIDs, id)
 	}
+	for _, peer := range configuredBootstrapPeers(d.Sync.Config) {
+		if _, ok := state.SyncPeers[peer.ID]; !ok {
+			peerIDs = append(peerIDs, peer.ID)
+		}
+	}
+	for id := range gossip.ExtractPeerEndpointsAt(state.Network, d.Sync.now()) {
+		if _, ok := state.SyncPeers[id]; !ok {
+			peerIDs = append(peerIDs, id)
+		}
+	}
 	sort.Strings(peerIDs)
 	// Single peer detail
 	if peerFilter != "" {
 		ps, ok := state.SyncPeers[peerFilter]
-		if !ok {
+		if !ok && !peerKnownFromConfigOrDiscovery(peerFilter, d.Sync.Config, state.Network, d.Sync.now()) {
 			writeAPIError(w, http.StatusNotFound, fmt.Errorf("peer not found"))
 			return
 		}
-		writeAPIOK(w, peerJSONFromState(peerFilter, ps))
+		writeAPIOK(w, peerJSONFromState(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()))
 		return
 	}
 	// All peers
 	peers := make([]peerJSON, 0, len(peerIDs))
+	seen := make(map[string]bool, len(peerIDs))
 	for _, id := range peerIDs {
-		peers = append(peers, peerJSONFromState(id, state.SyncPeers[id]))
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		peers = append(peers, peerJSONFromState(id, state.SyncPeers[id], d.Sync.Config, state.Network, d.Sync.now()))
 	}
 	writeAPIOK(w, map[string]any{"peers": peers})
 }
 
-func peerJSONFromState(id string, ps syncPeerState) peerJSON {
-	return peerJSON{
-		PeerID:            id,
-		LastSyncUnix:      ps.LastSyncUnix,
-		LastAttemptUnix:   ps.LastAttemptUnix,
-		BackoffUntilUnix:  ps.BackoffUntilUnix,
-		FailureCount:      ps.FailureCount,
-		LastError:         ps.LastError,
-		DiscoveredAddr:    ps.DiscoveredAddr,
-		ObservedAddr:      ps.ObservedAddr,
-		ObservedUntilUnix: ps.ObservedUntilUnix,
-		DatagramStats:     ps.DatagramStats,
-		ObjectPullStats:   ps.ObjectPullStats,
+func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) peerJSON {
+	configuredAddr := bootstrapAddrForPeer(config, id)
+	source := "discovered"
+	if configuredAddr != "" {
+		source = "bootstrap"
+	} else if ps.ObservedAddr != "" {
+		source = "observed"
 	}
+	return peerJSON{
+		PeerID:                id,
+		Source:                source,
+		ConfiguredAddr:        configuredAddr,
+		LastSyncUnix:          ps.LastSyncUnix,
+		LastAttemptUnix:       ps.LastAttemptUnix,
+		BackoffUntilUnix:      ps.BackoffUntilUnix,
+		LastRelayUnix:         ps.LastRelayUnix,
+		FailureCount:          ps.FailureCount,
+		LastError:             ps.LastError,
+		LastUpdateSource:      ps.LastUpdateSource,
+		LastRelaySuppression:  ps.LastRelaySuppression,
+		LastRelaySuppressedAt: ps.LastRelaySuppressedAt,
+		DiscoveredAddr:        ps.DiscoveredAddr,
+		DiscoveredAtUnix:      ps.DiscoveredAtUnix,
+		ObservedAddr:          ps.ObservedAddr,
+		ObservedFirstSeenUnix: ps.ObservedFirstSeenUnix,
+		ObservedLastSeenUnix:  ps.ObservedLastSeenUnix,
+		ObservedLastSyncUnix:  ps.ObservedLastSyncUnix,
+		ObservedUntilUnix:     ps.ObservedUntilUnix,
+		ObservedSource:        ps.ObservedSource,
+		ObservedFailureCount:  ps.ObservedFailureCount,
+		ObservedGraceAddrs:    ps.ObservedGraceAddrs,
+		Endpoints:             peerEndpointsJSON(id, ps, config, ns, now),
+		DatagramStats:         ps.DatagramStats,
+		ObjectPullStats:       ps.ObjectPullStats,
+		RejectedDigests:       ps.RejectedDigests,
+	}
+}
+
+func configuredBootstrapPeers(config *syncConfigFile) []syncConfigPeer {
+	if config == nil {
+		return nil
+	}
+	return config.Bootstrap
+}
+
+func bootstrapAddrForPeer(config *syncConfigFile, peerID string) string {
+	if config == nil {
+		return ""
+	}
+	for _, peer := range config.Bootstrap {
+		if peer.ID == peerID {
+			return peer.Addr
+		}
+	}
+	return ""
+}
+
+func peerKnownFromConfigOrDiscovery(peerID string, config *syncConfigFile, ns *zone.NetworkState, now time.Time) bool {
+	if bootstrapAddrForPeer(config, peerID) != "" {
+		return true
+	}
+	_, ok := gossip.ExtractPeerEndpointsAt(ns, now)[peerID]
+	return ok
+}
+
+func peerEndpointsJSON(peerID string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) []peerEndpointJSON {
+	var out []peerEndpointJSON
+	appendEndpoint := func(ep peerEndpointJSON) {
+		if ep.Addr == "" {
+			if ep.Address != "" && ep.Port != 0 {
+				ep.Addr = fmt.Sprintf("%s:%d", ep.Address, ep.Port)
+			}
+		}
+		for i := range out {
+			if out[i].Addr == ep.Addr && out[i].Source == ep.Source {
+				if ep.Selected {
+					out[i].Selected = true
+				}
+				return
+			}
+		}
+		out = append(out, ep)
+	}
+	if addr := bootstrapAddrForPeer(config, peerID); addr != "" {
+		appendEndpoint(peerEndpointJSON{Addr: addr, Source: "bootstrap", Protocol: "udp", Selected: ps.DiscoveredAddr == addr})
+	}
+	discovered := gossip.ExtractPeerEndpointsAt(ns, now)
+	for _, ep := range discovered[peerID] {
+		protocol := ep.Protocol
+		if protocol == "" {
+			protocol = "udp"
+		}
+		addr := fmt.Sprintf("%s:%d", ep.Address, ep.Port)
+		appendEndpoint(peerEndpointJSON{
+			Addr:         addr,
+			Address:      ep.Address,
+			Port:         ep.Port,
+			Protocol:     protocol,
+			Scope:        ep.Scope,
+			Source:       firstNonEmpty(ep.Source, "signed"),
+			Priority:     ep.Priority,
+			LastObserved: ep.LastObserved,
+			Selected:     ps.DiscoveredAddr == addr,
+		})
+	}
+	if ps.DiscoveredAddr != "" {
+		appendEndpoint(peerEndpointJSON{Addr: ps.DiscoveredAddr, Source: "selected", Protocol: "udp", Selected: true})
+	}
+	if ps.ObservedAddr != "" {
+		appendEndpoint(peerEndpointJSON{Addr: ps.ObservedAddr, Source: firstNonEmpty(ps.ObservedSource, "observed"), Protocol: "udp", Selected: ps.DiscoveredAddr == ""})
+	}
+	for _, grace := range ps.ObservedGraceAddrs {
+		appendEndpoint(peerEndpointJSON{Addr: grace.Addr, Source: "observed_grace", Protocol: "udp"})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Selected != out[j].Selected {
+			return out[i].Selected
+		}
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return out[i].Addr < out[j].Addr
+	})
+	return out
 }
 
 // handleLinks implements GET /api/v1/links and GET /api/v1/links/{link_id}

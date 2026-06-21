@@ -8,6 +8,8 @@ let pollTimer = null;
 let eventSource = null;
 let currentPage = 'overview';
 let connectionMode = 'disconnected';
+let selectedZone = null;
+let selectedPeer = null;
 
 // ===== API Helpers =====
 
@@ -124,7 +126,7 @@ function esc(s) {
 function formatTime(unix) {
     if (!unix || unix === 0) return '-';
     const d = new Date(unix * 1000);
-    return d.toLocaleTimeString();
+    return d.toLocaleString();
 }
 
 function stateBadge(state) {
@@ -146,6 +148,69 @@ function emptyState(msg) {
 
 function jsonViewer(obj) {
     return `<div class="json-viewer">${esc(JSON.stringify(obj, null, 2))}</div>`;
+}
+
+function shortHash(s) {
+    if (!s) return '-';
+    return s.length > 18 ? `${s.substring(0, 18)}...` : s;
+}
+
+function kvTable(rows) {
+    return `<table class="kv-table">${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`).join('')}</table>`;
+}
+
+function compactList(items, renderer) {
+    if (!items || items.length === 0) return emptyState('No entries');
+    return items.map(renderer).join('');
+}
+
+function diagnosticsList(peer) {
+    const items = [];
+    if (peer.last_error) items.push(['Last Error', peer.last_error]);
+    if (peer.last_update_source) items.push(['Update Source', peer.last_update_source]);
+    if (peer.last_relay_suppression) items.push(['Relay Suppression', peer.last_relay_suppression]);
+    if (peer.observed_failure_count) items.push(['Observed Failures', peer.observed_failure_count]);
+    if (peer.datagram_stats) items.push(['Datagram Stats', JSON.stringify(peer.datagram_stats)]);
+    if (peer.object_pull_stats) items.push(['Object Pull Stats', JSON.stringify(peer.object_pull_stats)]);
+    if (peer.rejected_digests && Object.keys(peer.rejected_digests).length) items.push(['Rejected Digests', JSON.stringify(peer.rejected_digests)]);
+    if (!items.length) return emptyState('No diagnostics recorded');
+    return kvTable(items.map(([k, v]) => [k, `<code>${esc(v)}</code>`]));
+}
+
+function recordTable(records) {
+    if (!records || records.length === 0) return emptyState('No records');
+    return `
+        <table>
+            <tr><th>Key</th><th>Version</th><th>Type</th><th>Value</th><th>Record Hash</th><th>Signed By</th></tr>
+            ${records.map(r => `
+                <tr>
+                    <td><code>${esc(r.key || '-')}</code></td>
+                    <td>${r.version || 0}</td>
+                    <td>${esc(r.type || '-')}</td>
+                    <td class="value-cell">${esc(r.value || '')}</td>
+                    <td><code title="${esc(r.record_hash || '')}">${esc(shortHash(r.record_hash))}</code></td>
+                    <td><code title="${esc(r.signed_by || '')}">${esc(shortHash(r.signed_by))}</code></td>
+                </tr>
+                <tr class="subrow"><td colspan="6">${jsonViewer(r)}</td></tr>`).join('')}
+        </table>`;
+}
+
+function endpointTable(endpoints) {
+    if (!endpoints || endpoints.length === 0) return emptyState('No endpoints');
+    return `
+        <table>
+            <tr><th>Addr</th><th>Source</th><th>Protocol</th><th>Scope</th><th>Priority</th><th>Last Observed</th><th>Selected</th></tr>
+            ${endpoints.map(ep => `
+                <tr>
+                    <td><code>${esc(ep.addr || '-')}</code></td>
+                    <td>${esc(ep.source || '-')}</td>
+                    <td>${esc(ep.protocol || '-')}</td>
+                    <td>${esc(ep.scope || '-')}</td>
+                    <td>${ep.priority || 0}</td>
+                    <td>${formatTime(ep.last_observed)}</td>
+                    <td>${ep.selected ? stateBadge('healthy') : '-'}</td>
+                </tr>`).join('')}
+        </table>`;
 }
 
 // ===== Page Renderers =====
@@ -191,22 +256,60 @@ async function renderGossip() {
             return;
         }
         let rows = peers.map(p => `
-            <tr>
+            <tr class="click-row ${selectedPeer === p.peer_id ? 'selected-row' : ''}" data-peer="${esc(p.peer_id)}">
                 <td>${esc(p.peer_id)}</td>
+                <td>${esc(p.source || '-')}</td>
                 <td>${formatTime(p.last_sync_unix)}</td>
                 <td>${p.failure_count || 0}</td>
                 <td>${esc(p.last_error || '-')}</td>
+                <td>${esc(p.configured_addr || '-')}</td>
                 <td>${esc(p.discovered_addr || '-')}</td>
                 <td>${esc(p.observed_addr || '-')}</td>
             </tr>`).join('');
         content.innerHTML = `
             <h1>Gossip Peers</h1>
             <table>
-                <tr><th>Peer ID</th><th>Last Sync</th><th>Failures</th><th>Last Error</th><th>Discovered Addr</th><th>Observed Addr</th></tr>
+                <tr><th>Peer ID</th><th>Source</th><th>Last Sync</th><th>Failures</th><th>Last Error</th><th>Bootstrap</th><th>Discovered</th><th>Observed</th></tr>
                 ${rows}
-            </table>`;
+            </table>
+            <div id="peer-detail">${selectedPeer ? '<div class="empty-state">Loading peer detail...</div>' : emptyState('Select a peer to inspect endpoints and diagnostics')}</div>`;
+        document.querySelectorAll('[data-peer]').forEach(row => {
+            row.addEventListener('click', () => {
+                selectedPeer = row.dataset.peer;
+                renderGossip();
+            });
+        });
+        if (selectedPeer) renderPeerDetail(selectedPeer);
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load peers: ${esc(e.message)}</div>`;
+    }
+}
+
+async function renderPeerDetail(peerID) {
+    const el = document.getElementById('peer-detail');
+    if (!el) return;
+    try {
+        const peer = await fetchAPI(`/peers/${encodeURIComponent(peerID)}`);
+        el.innerHTML = `
+            <section class="detail-panel">
+                <h2>${esc(peer.peer_id)}</h2>
+                ${kvTable([
+                    ['Source', esc(peer.source || '-')],
+                    ['Bootstrap Addr', `<code>${esc(peer.configured_addr || '-')}</code>`],
+                    ['Discovered Addr', `<code>${esc(peer.discovered_addr || '-')}</code>`],
+                    ['Observed Addr', `<code>${esc(peer.observed_addr || '-')}</code>`],
+                    ['Observed Window', `${formatTime(peer.observed_first_seen_unix)} to ${formatTime(peer.observed_until_unix)}`],
+                    ['Last Attempt', formatTime(peer.last_attempt_unix)],
+                    ['Backoff Until', formatTime(peer.backoff_until_unix)],
+                    ['Last Relay', formatTime(peer.last_relay_unix)],
+                ])}
+                <h2>Endpoints</h2>
+                ${endpointTable(peer.endpoints || [])}
+                <h2>Diagnostics</h2>
+                ${diagnosticsList(peer)}
+            </section>`;
+    } catch (e) {
+        el.innerHTML = `<div class="error-msg">Failed to load peer detail: ${esc(e.message)}</div>`;
     }
 }
 
@@ -220,13 +323,13 @@ async function renderZones() {
             return;
         }
         let rows = zones.map(z => `
-            <tr>
+            <tr class="click-row ${selectedZone === z.path ? 'selected-row' : ''}" data-zone="${esc(z.path)}">
                 <td>${esc(z.path)}</td>
                 <td>${z.records}</td>
                 <td>${z.delegations}</td>
                 <td>${z.revocations}</td>
                 <td>${z.revoked ? stateBadge('revoked') : stateBadge('healthy')}</td>
-                <td><code>${esc(z.root_hash ? z.root_hash.substring(0,16)+'...' : '-')}</code></td>
+                <td><code title="${esc(z.root_hash || '')}">${esc(shortHash(z.root_hash))}</code></td>
             </tr>`).join('');
         content.innerHTML = `
             <h1>Zones</h1>
@@ -235,9 +338,50 @@ async function renderZones() {
                 ${rows}
             </table>
             <h2>Global Root</h2>
-            <div class="json-viewer">${esc(data.global_root || '-')}</div>`;
+            <div class="json-viewer">${esc(data.global_root || '-')}</div>
+            <div id="zone-detail">${selectedZone ? '<div class="empty-state">Loading zone detail...</div>' : emptyState('Select a zone to inspect authority, records and proofs')}</div>`;
+        document.querySelectorAll('[data-zone]').forEach(row => {
+            row.addEventListener('click', () => {
+                selectedZone = row.dataset.zone;
+                renderZones();
+            });
+        });
+        if (selectedZone) renderZoneDetail(selectedZone);
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load zones: ${esc(e.message)}</div>`;
+    }
+}
+
+async function renderZoneDetail(path) {
+    const el = document.getElementById('zone-detail');
+    if (!el) return;
+    try {
+        const z = await fetchAPI(`/zones/${encodeURIComponent(path)}`);
+        el.innerHTML = `
+            <section class="detail-panel">
+                <h2>${esc(z.path)}</h2>
+                ${kvTable([
+                    ['Parent', esc(z.parent || '-')],
+                    ['Status', z.revoked ? stateBadge('revoked') : stateBadge('healthy')],
+                    ['Authority Hash', `<code>${esc(z.authority_hash || '-')}</code>`],
+                    ['Merkle Root', `<code>${esc(z.merkle_root || '-')}</code>`],
+                    ['Counts', `${z.record_count || 0} records, ${z.history_count || 0} historical, ${z.delegation_count || 0} delegations, ${z.revocation_count || 0} revocations`],
+                ])}
+                <h2>Authority</h2>
+                ${jsonViewer(z.authority || {})}
+                <h2>Active Records</h2>
+                ${recordTable(z.records || [])}
+                <h2>Record History</h2>
+                ${recordTable(z.record_history || [])}
+                <h2>Delegations</h2>
+                ${compactList(z.delegations || [], d => jsonViewer(d))}
+                <h2>Parent Proof</h2>
+                ${compactList(z.parent_proof || [], d => jsonViewer(d))}
+                <h2>Revocations</h2>
+                ${compactList(z.revocations || [], r => jsonViewer(r))}
+            </section>`;
+    } catch (e) {
+        el.innerHTML = `<div class="error-msg">Failed to load zone detail: ${esc(e.message)}</div>`;
     }
 }
 

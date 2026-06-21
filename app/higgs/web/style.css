@@ -107,6 +107,12 @@ th {
 td { font-size: 13px; }
 
 tr:hover { background: rgba(255,255,255,0.03); }
+.click-row { cursor: pointer; }
+.selected-row { background: rgba(0,173,181,0.12); }
+.subrow td {
+    padding-top: 0;
+    background: rgba(0,0,0,0.12);
+}
 
 .badge {
     display: inline-block;
@@ -166,3 +172,26 @@ tr:hover { background: rgba(255,255,255,0.03); }
 
 .detail-section { margin-bottom: 20px; }
 .detail-section h3 { color: var(--accent); margin-bottom: 8px; font-size: 14px; }
+
+.detail-panel {
+    border-top: 1px solid var(--border);
+    margin-top: 16px;
+    padding-top: 16px;
+}
+
+.kv-table th {
+    width: 180px;
+    white-space: nowrap;
+}
+
+.value-cell {
+    max-width: 360px;
+    overflow-wrap: anywhere;
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+}
+
+code {
+    font-family: 'Monaco', 'Courier New', monospace;
+    overflow-wrap: anywhere;
+}
