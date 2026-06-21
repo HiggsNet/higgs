@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -152,7 +153,7 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 	if key == nil {
 		return nil, fmt.Errorf("transport key record is required")
 	}
-	addresses := localIPsecAddressRecord(config)
+	addresses := localIPsecAddressRecord(config, state, now)
 	ports, err := localIPsecPortRecord(config, state, now)
 	if err != nil {
 		return nil, err
@@ -176,46 +177,199 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 	}, nil
 }
 
-func localIPsecAddressRecord(config *appConfig) ipsec.AddressRecord {
+func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time) ipsec.AddressRecord {
 	record := ipsec.AddressRecord{Version: 1}
 	seen := map[string]bool{}
-	for i, candidate := range append([]string(nil), config.AdvertiseAddrs...) {
+	priority := 100
+	nextID := 1
+
+	addAddress := func(ad ipsec.AddressAdvertisement) {
+		if ad.ID == "" {
+			ad.ID = fmt.Sprintf("addr-%d", nextID)
+			nextID++
+		}
+		if ad.TTLSeconds == 0 {
+			ad.TTLSeconds = int64(config.EndpointTTL.Seconds())
+		}
+		record.Addresses = append(record.Addresses, ad)
+		priority--
+	}
+
+	// 1. IPsec-specific manual addresses (highest priority).
+	for _, candidate := range config.IPsec.AnnounceAddrs {
 		addr, _ := splitAdvertiseAddress(candidate)
 		if addr == "" || seen[addr] {
 			continue
 		}
-		seen[addr] = true
 		family := ipsecFamily(addr)
 		if family == "" {
 			continue
 		}
-		record.Addresses = append(record.Addresses, ipsec.AddressAdvertisement{
-			ID:           fmt.Sprintf("advertise-%d", i+1),
+		seen[addr] = true
+		addAddress(ipsec.AddressAdvertisement{
+			ID:           fmt.Sprintf("announce-%d", nextID),
 			Source:       ipsec.SourceManualAddress,
 			Address:      addr,
 			Family:       family,
-			Priority:     100 - i,
+			Priority:     priority,
 			Reachability: ipsecReachability(addr),
-			TTLSeconds:   int64(config.EndpointTTL.Seconds()),
 		})
 	}
+
+	// 2. Top-level advertise addresses (backward compatibility).
+	for _, candidate := range config.AdvertiseAddrs {
+		addr, _ := splitAdvertiseAddress(candidate)
+		if addr == "" || seen[addr] {
+			continue
+		}
+		family := ipsecFamily(addr)
+		if family == "" {
+			continue
+		}
+		seen[addr] = true
+		addAddress(ipsec.AddressAdvertisement{
+			ID:           fmt.Sprintf("advertise-%d", nextID),
+			Source:       ipsec.SourceManualAddress,
+			Address:      addr,
+			Family:       family,
+			Priority:     priority,
+			Reachability: ipsecReachability(addr),
+		})
+	}
+
+	// 3. Manual DNS names.
+	for _, host := range config.IPsec.AnnounceDNS {
+		host = strings.TrimSpace(host)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		addAddress(ipsec.AddressAdvertisement{
+			ID:           fmt.Sprintf("dns-%d", nextID),
+			Source:       ipsec.SourceManualDNS,
+			Host:         host,
+			Families:     []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6},
+			Priority:     priority,
+			Reachability: ipsec.ReachabilityPublic,
+		})
+	}
+
+	// 4. Follow gossip endpoints (reflector / interface discovery).
+	if config.IPsec.PublishFromEndpoints {
+		for _, ad := range ipsecAddressesFromGossipEndpoints(state, seen, int64(config.EndpointTTL.Seconds()), now) {
+			addAddress(ad)
+		}
+	}
+
+	// 5. Fallback to listen_addr host.
 	if len(record.Addresses) == 0 {
 		host, _ := splitAdvertiseAddress(config.ListenAddr)
 		if host != "" && host != "0.0.0.0" && host != "::" {
 			if family := ipsecFamily(host); family != "" {
-				record.Addresses = append(record.Addresses, ipsec.AddressAdvertisement{
+				addAddress(ipsec.AddressAdvertisement{
 					ID:           "listen",
 					Source:       ipsec.SourceLocal,
 					Address:      host,
 					Family:       family,
-					Priority:     10,
+					Priority:     priority,
 					Reachability: ipsecReachability(host),
-					TTLSeconds:   int64(config.EndpointTTL.Seconds()),
 				})
 			}
 		}
 	}
 	return record
+}
+
+// ipsecAddressesFromGossipEndpoints reads the local sync/endpoint/udp record
+// and converts its entries into IPsec AddressAdvertisement values.
+// The seen set is updated for each converted address.
+func ipsecAddressesFromGossipEndpoints(state *stateFile, seen map[string]bool, ttlSeconds int64, now time.Time) []ipsec.AddressAdvertisement {
+	if state == nil || state.ManagedZone == "" || seen == nil {
+		return nil
+	}
+	zs := state.Network.Zones[state.ManagedZone]
+	if zs == nil {
+		return nil
+	}
+	record := zs.Records[gossip.EndpointRecordKeyUDP]
+	if record == nil {
+		return nil
+	}
+	var er gossip.EndpointRecord
+	if err := json.Unmarshal(record.Value, &er); err != nil {
+		return nil
+	}
+	var out []ipsec.AddressAdvertisement
+	nextID := 1
+	for _, ep := range er.Endpoints {
+		addr := ep.Address
+		if addr == "" || seen[addr] {
+			continue
+		}
+		family := ipsecFamily(addr)
+		if family == "" {
+			continue
+		}
+		// Skip expired grace entries; the endpoint record itself already
+		// applies TTL/grace, but re-check here to avoid publishing stale
+		// addresses if the record was read before LocalEndpointsToRecord
+		// filtered it.
+		if ep.LastObserved != 0 {
+			ttl := time.Duration(er.TTL) * time.Second
+			if ttl <= 0 {
+				ttl = gossip.DefaultEndpointTTL
+			}
+			grace := time.Duration(er.GraceSeconds) * time.Second
+			expiresAt := time.Unix(ep.LastObserved, 0).Add(ttl + grace)
+			if now.After(expiresAt) {
+				continue
+			}
+		}
+		seen[addr] = true
+		source, reachability := mapGossipEndpointSourceToIPsec(ep)
+		out = append(out, ipsec.AddressAdvertisement{
+			ID:           fmt.Sprintf("endpoint-%d", nextID),
+			Source:       source,
+			Address:      addr,
+			Family:       family,
+			Priority:     ep.Priority,
+			Reachability: reachability,
+			TTLSeconds:   ttlSeconds,
+			LastObserved: ep.LastObserved,
+		})
+		nextID++
+	}
+	return out
+}
+
+// mapGossipEndpointSourceToIPsec maps a gossip EndpointEntry to an IPsec
+// address source and reachability classification.
+func mapGossipEndpointSourceToIPsec(ep gossip.EndpointEntry) (source, reachability string) {
+	switch strings.Split(ep.Source, "+")[0] {
+	case "advertise":
+		source = ipsec.SourceManualAddress
+	case "reflector":
+		source = ipsec.SourceReflector
+	case "interface":
+		if ep.Scope == "global" {
+			source = ipsec.SourceDiscovery
+		} else {
+			source = ipsec.SourceLocal
+		}
+	default:
+		source = ipsec.SourceDiscovery
+	}
+	ip := net.ParseIP(ep.Address)
+	if ip == nil {
+		reachability = ipsec.ReachabilityUnknown
+		return
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		reachability = ipsec.ReachabilityPrivate
+	} else {
+		reachability = ipsec.ReachabilityPublic
+	}
+	return
 }
 
 func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*ipsec.PortRecord, error) {

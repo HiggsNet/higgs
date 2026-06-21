@@ -146,24 +146,30 @@ type overlayDefaultsYAML struct {
 }
 
 type ipsecConfig struct {
-	DefaultNetNS       ipsec.NetNSSpec
-	LinkGroups         []ipsec.LinkGroupSpec
-	Driver             string
-	VICISocket         string
-	PortMode           string
-	PortRange          ipsec.PortRange
-	PortRotateInterval time.Duration
-	PortPreviousGrace  time.Duration
+	DefaultNetNS         ipsec.NetNSSpec
+	LinkGroups           []ipsec.LinkGroupSpec
+	Driver               string
+	VICISocket           string
+	PortMode             string
+	PortRange            ipsec.PortRange
+	PortRotateInterval   time.Duration
+	PortPreviousGrace    time.Duration
+	AnnounceAddrs        []string
+	AnnounceDNS          []string
+	PublishFromEndpoints bool
 }
 
 type ipsecConfigYAML struct {
-	DefaultNetNS       ipsec.NetNSSpec `yaml:"default_netns"`
-	Driver             string          `yaml:"driver"`
-	VICISocket         string          `yaml:"vici_socket"`
-	PortMode           string          `yaml:"port_mode"`
-	PortRange          ipsec.PortRange `yaml:"port_range"`
-	PortRotateInterval string          `yaml:"port_rotate_interval"`
-	PortPreviousGrace  string          `yaml:"port_previous_grace"`
+	DefaultNetNS         ipsec.NetNSSpec  `yaml:"default_netns"`
+	Driver               string           `yaml:"driver"`
+	VICISocket           string           `yaml:"vici_socket"`
+	PortMode             string           `yaml:"port_mode"`
+	PortRange            ipsec.PortRange  `yaml:"port_range"`
+	PortRotateInterval   string           `yaml:"port_rotate_interval"`
+	PortPreviousGrace    string           `yaml:"port_previous_grace"`
+	AnnounceAddrs        configStringList `yaml:"announce_addrs"`
+	AnnounceDNS          configStringList `yaml:"announce_dns"`
+	PublishFromEndpoints *bool            `yaml:"publish_from_endpoints"`
 }
 
 type ipamConfig struct {
@@ -268,11 +274,12 @@ func defaultAppConfig() *appConfig {
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
 		IPsec: ipsecConfig{
-			DefaultNetNS:       ipsec.NetNSSpec{}.Normalized(),
-			Driver:             ipsecDriverStrongSwan,
-			PortMode:           ipsec.PortModeFixed,
-			PortRotateInterval: 0,
-			PortPreviousGrace:  defaultIPsecPortPreviousGrace,
+			DefaultNetNS:         ipsec.NetNSSpec{}.Normalized(),
+			Driver:               ipsecDriverStrongSwan,
+			PortMode:             ipsec.PortModeFixed,
+			PortRotateInterval:   0,
+			PortPreviousGrace:    defaultIPsecPortPreviousGrace,
+			PublishFromEndpoints: true,
 		},
 		IPAM: ipamConfig{
 			AutoAnnounceAssignedIPs: false,
@@ -499,6 +506,11 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 			return err
 		}
 		config.IPsec.PortPreviousGrace = d
+	}
+	config.IPsec.AnnounceAddrs = append(config.IPsec.AnnounceAddrs, file.IPsec.AnnounceAddrs...)
+	config.IPsec.AnnounceDNS = append(config.IPsec.AnnounceDNS, file.IPsec.AnnounceDNS...)
+	if file.IPsec.PublishFromEndpoints != nil {
+		config.IPsec.PublishFromEndpoints = *file.IPsec.PublishFromEndpoints
 	}
 	if netnsConfigured(file.Overlay.DefaultNetNS) {
 		netns := file.Overlay.DefaultNetNS.Normalized()

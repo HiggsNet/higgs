@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -21,7 +22,10 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	plan := ipsec.LinkPlan{}
 	if len(groups) > 0 {
 		var err error
-		plan, err = ipsec.PlanTransportLinks(ctx, d.Sync.State.Network, d.Sync.State.ManagedZone, groups, ipsec.LinkPlannerOptions{Now: now})
+		plan, err = ipsec.PlanTransportLinks(ctx, d.Sync.State.Network, d.Sync.State.ManagedZone, groups, ipsec.LinkPlannerOptions{
+			Now:                 now,
+			ContactPointQuality: d.buildIPsecContactPointQuality(now),
+		})
 		if err != nil {
 			d.recordIPsecReconcileError(now.Unix(), err)
 			return err
@@ -98,6 +102,77 @@ func (d *DaemonService) recordIPsecReconcileError(unix int64, err error) {
 	state.LastRunUnix = unix
 	state.LastError = err.Error()
 	d.Sync.State.IPsecReconcile = state
+}
+
+// buildIPsecContactPointQuality builds a per-peer, per-contact-point quality
+// map from the gossip transport's runtime reachability state. This lets the
+// IPsec planner deprioritize addresses that are currently in backoff or have
+// recent failures, matching the gossip transport's own dialing preferences.
+func (d *DaemonService) buildIPsecContactPointQuality(now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
+	if d == nil || d.Sync == nil || d.Sync.Transport == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+		return nil
+	}
+	transport := d.Sync.Transport
+	ns := d.Sync.State.Network
+	out := make(map[zone.ZonePath]map[string]ipsec.ContactPointQuality)
+
+	for _, peerID := range transport.KnownPeerIDs() {
+		peerPath := zone.ZonePath(peerID)
+		if !peerPath.Valid() || peerPath.IsRoot() || peerPath == d.Sync.State.ManagedZone {
+			continue
+		}
+		states := transport.PeerAddrStates(peerID)
+		if len(states) == 0 {
+			continue
+		}
+		records, err := ipsec.ExtractNodeRecords(ns, peerPath, now)
+		if err != nil || records.Addresses == nil || records.Ports == nil {
+			continue
+		}
+		portAds := ipsec.PortAdvertisements(records.Ports, now)
+		if len(portAds) == 0 {
+			continue
+		}
+
+		inner := make(map[string]ipsec.ContactPointQuality)
+		for addrStr, st := range states {
+			udpAddr, err := net.ResolveUDPAddr("udp", addrStr)
+			if err != nil {
+				continue
+			}
+			ip := udpAddr.IP.String()
+			for _, ad := range records.Addresses.Addresses {
+				if ad.Address != ip {
+					continue
+				}
+				for _, port := range portAds {
+					key := ipsec.ContactPoint{
+						AddressID:  ad.ID,
+						Address:    ad.Address,
+						Generation: port.Generation,
+						IKEPort:    contactDialPort(port.IKE),
+						NATTPort:   contactDialPort(port.NATT),
+					}.Key()
+					inner[key] = ipsec.ContactPointQuality{
+						Successes:    st.SuccessCount,
+						Failures:     st.FailureCount,
+						BackoffUntil: st.BackoffUntil,
+					}
+				}
+			}
+		}
+		if len(inner) > 0 {
+			out[peerPath] = inner
+		}
+	}
+	return out
+}
+
+func contactDialPort(binding ipsec.PortBinding) uint16 {
+	if binding.Observed != 0 {
+		return binding.Observed
+	}
+	return binding.Advertised
 }
 
 func summarizeIPsecReconcile(unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) *ipsecReconcileState {

@@ -119,6 +119,18 @@ ipsec:
   # port_rotate_interval: 24h
   # port_previous_grace: 10m
 
+  # IPsec-specific addresses and DNS names to publish, independent of the
+  # top-level advertise_addrs used for gossip. announce_addrs are published as
+  # manual-address; announce_dns are published as manual-dns and resolved by
+  # peers. publish_from_endpoints (default true) also publishes addresses from
+  # gossip endpoint discovery (reflector + interface scan) as discovery/reflector
+  # /local sources.
+  # announce_addrs:
+  #   - 203.0.113.10:4500
+  # announce_dns:
+  #   - vpn.example.com
+  # publish_from_endpoints: true
+
 # Uncomment an overlay/link group to participate in the StrongSwan mesh. This
 # is the switch that makes the daemon publish signed ipsec/profile,
 # ipsec/addresses, ipsec/ports, and ipsec/transport-key records for this node.

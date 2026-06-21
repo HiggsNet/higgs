@@ -198,6 +198,43 @@ ipsec:
 	}
 }
 
+func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
+	config := defaultAppConfig()
+	input := `ipsec:
+  announce_addrs:
+    - 203.0.113.10:4500
+    - "[2001:db8::10]:4500"
+  announce_dns:
+    - vpn.example.com
+    - vpn6.example.com
+  publish_from_endpoints: false
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if len(config.IPsec.AnnounceAddrs) != 2 || config.IPsec.AnnounceAddrs[0] != "203.0.113.10:4500" || config.IPsec.AnnounceAddrs[1] != "[2001:db8::10]:4500" {
+		t.Fatalf("AnnounceAddrs = %v", config.IPsec.AnnounceAddrs)
+	}
+	if len(config.IPsec.AnnounceDNS) != 2 || config.IPsec.AnnounceDNS[0] != "vpn.example.com" || config.IPsec.AnnounceDNS[1] != "vpn6.example.com" {
+		t.Fatalf("AnnounceDNS = %v", config.IPsec.AnnounceDNS)
+	}
+	if config.IPsec.PublishFromEndpoints {
+		t.Fatalf("PublishFromEndpoints = true, want false")
+	}
+}
+
+func TestParseConfigYAMLIPsecPublishFromEndpointsDefaultsToTrue(t *testing.T) {
+	config := defaultAppConfig()
+	if err := parseConfigYAML("", config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if !config.IPsec.PublishFromEndpoints {
+		t.Fatalf("PublishFromEndpoints = false, want true")
+	}
+}
+
 func TestParseConfigYAMLOverlayDefaultNetNSOverridesLegacyIPsecDefault(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

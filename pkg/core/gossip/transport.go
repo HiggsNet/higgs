@@ -834,6 +834,46 @@ func (t *Transport) AddrFailureCount(peerID string, addr *net.UDPAddr) int {
 	return state.FailureCount
 }
 
+// AddrQuality is a read-only snapshot of the transport's reachability state
+// for a single peer address.
+type AddrQuality struct {
+	SuccessCount int
+	FailureCount int
+	LastSuccess  time.Time
+	LastFailure  time.Time
+	BackoffUntil time.Time
+	LastAttempt  time.Time
+}
+
+// PeerAddrStates returns a snapshot of all known address reachability states
+// for a peer. The map keys are the address strings returned by net.UDPAddr.String.
+func (t *Transport) PeerAddrStates(peerID string) map[string]AddrQuality {
+	if t == nil {
+		return nil
+	}
+	t.addrStateMu.RLock()
+	defer t.addrStateMu.RUnlock()
+	pm := t.addrStates[peerID]
+	if len(pm) == 0 {
+		return nil
+	}
+	out := make(map[string]AddrQuality, len(pm))
+	for addr, s := range pm {
+		if s == nil {
+			continue
+		}
+		out[addr] = AddrQuality{
+			SuccessCount: s.SuccessCount,
+			FailureCount: s.FailureCount,
+			LastSuccess:  s.LastSuccess,
+			LastFailure:  s.LastFailure,
+			BackoffUntil: s.BackoffUntil,
+			LastAttempt:  s.LastAttempt,
+		}
+	}
+	return out
+}
+
 func addrString(addr *net.UDPAddr) string {
 	if addr == nil {
 		return ""
