@@ -202,7 +202,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		session.lastError = err
 	}
 	if session.State != oldState {
-		d.logInfo("sync", "session_state_changed", map[string]any{
+		d.logDebug("sync", "session_state_changed", map[string]any{
 			"peer_id":   peerID,
 			"event":     fmt.Sprintf("%T", event),
 			"old_state": oldState,

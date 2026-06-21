@@ -254,7 +254,7 @@ func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest
 				return &gossip.ObjectPullResponse{Error: err.Error()}
 			}
 			logger := newAppLogger(nil)
-			logger.Info("object_pull", "lookup_snapshot", map[string]any{
+			logger.Debug("object_pull", "lookup_snapshot", map[string]any{
 				"zone":    req.Zone.String(),
 				"records": len(snapshot.Records),
 				"bytes":   encodedZoneSnapshotSize(snapshot),
@@ -597,7 +597,7 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 		}
 		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
 	}
-	logger.Info("object_pull", "worker_start", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "addr": addr})
+	logger.Debug("object_pull", "worker_start", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "addr": addr})
 	if cur := p.getState(); cur != nil {
 		cur.Lock()
 		recordObjectPullAttempt(cur, req.PeerID, "zone", req.Zone, "", time.Now())
@@ -611,7 +611,7 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 	if resp != nil {
 		respBytes = encodedObjectPullResponseSize(resp)
 	}
-	logger.Info("object_pull", "worker_done", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "ok": err == nil && resp != nil && resp.OK && resp.Snapshot != nil, "bytes": respBytes, "error": errString(err)})
+	logger.Debug("object_pull", "worker_done", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "ok": err == nil && resp != nil && resp.OK && resp.Snapshot != nil, "bytes": respBytes, "error": errString(err)})
 	unreachable := isObjectPullUnreachable(err)
 	if cur := p.getState(); cur != nil {
 		cur.Lock()
