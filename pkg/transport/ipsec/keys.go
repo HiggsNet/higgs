@@ -154,9 +154,20 @@ func PEMEncodePrivateKey(der []byte) ([]byte, error) {
 }
 
 // PEMEncodePublicKey encodes a DER public key as PKIX PEM.
-func PEMEncodePublicKey(der []byte) ([]byte, error) {
-	if len(der) == 0 {
+func PEMEncodePublicKey(publicKey []byte) ([]byte, error) {
+	if len(publicKey) == 0 {
 		return nil, fmt.Errorf("empty public key DER")
+	}
+	der := publicKey
+	if _, err := x509.ParsePKIXPublicKey(der); err != nil {
+		if len(publicKey) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("parse public key DER: %w", err)
+		}
+		var marshalErr error
+		der, marshalErr = x509.MarshalPKIXPublicKey(ed25519.PublicKey(publicKey))
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal ed25519 public key: %w", marshalErr)
+		}
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
 }

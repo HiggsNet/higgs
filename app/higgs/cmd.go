@@ -374,6 +374,25 @@ func cmdDebug() *cli.Command {
 				},
 			},
 			{
+				Name:      "records",
+				Usage:     "List active records in local state",
+				UsageText: "higgs debug records [zone] [--prefix key-prefix] [--values]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "prefix", Usage: "Only show records whose key has this prefix"},
+					&cli.BoolFlag{Name: "values", Usage: "Print record values"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs debug records [zone] [--prefix key-prefix] [--values]", 1)
+					}
+					zoneArg := zone.ZonePath("")
+					if cmd.Args().Len() == 1 {
+						zoneArg = zone.ZonePath(cmd.Args().First())
+					}
+					return debugRecords(zoneArg, cmd.String("prefix"), cmd.Bool("values"))
+				},
+			},
+			{
 				Name:  "endpoints",
 				Usage: "Show local endpoint candidates and discovered peer endpoints",
 				Action: func(ctx context.Context, cmd *cli.Command) error {

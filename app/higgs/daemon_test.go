@@ -1458,6 +1458,13 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 		"    local_identity: node-a.catofes.",
 		"    remote_identity: node-b.catofes.",
 		"    reqid: 1001",
+		"    config:\n",
+		"      connection: ",
+		"      local_id: node-a.catofes.",
+		"      remote_id: node-b.catofes.",
+		"      peer_public_key: ",
+		"      child_start_action: start",
+		"      child_if_id_out: ",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)

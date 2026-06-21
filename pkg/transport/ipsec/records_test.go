@@ -3,7 +3,9 @@ package ipsec
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net"
 	"net/netip"
 	"strings"
@@ -649,6 +651,21 @@ func TestGenerateTransportKeyRecordUsesIndependentEd25519Key(t *testing.T) {
 	publicKey, err := DecodeTransportPublicKey(*record)
 	if err != nil {
 		t.Fatalf("DecodeTransportPublicKey: %v", err)
+	}
+	publicPEM, err := PEMEncodePublicKey(publicKey)
+	if err != nil {
+		t.Fatalf("PEMEncodePublicKey: %v", err)
+	}
+	block, _ := pem.Decode(publicPEM)
+	if block == nil {
+		t.Fatalf("public key PEM did not decode")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParsePKIXPublicKey: %v", err)
+	}
+	if _, ok := parsed.(ed25519.PublicKey); !ok {
+		t.Fatalf("parsed public key type = %T, want ed25519.PublicKey", parsed)
 	}
 	if string(publicKey) == string(zonePub) {
 		t.Fatalf("transport key reused zone signing key")

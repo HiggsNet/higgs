@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -127,11 +129,14 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		birdInstances = state.BirdInstances
 	}
 	plannedDesired := map[string]desiredLinkState{}
+	plannedSpecs := map[string]ipsec.TransportLinkSpec{}
 	if rt != nil && rt.Config != nil && state != nil && state.Network != nil && !state.ManagedZone.IsRoot() && state.ManagedZone.Valid() && len(rt.Config.IPsec.LinkGroups) > 0 {
 		plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: rt.Now()})
 		if err != nil {
 			fmt.Fprintf(w, "desired_plan_error: %s\n", err)
 		} else {
+			desired := injectIPsecKeyMaterial(state, plan.Desired)
+			plan.Desired = desired
 			for _, spec := range plan.Desired {
 				item := desiredLinkState{
 					InstanceID:      ipsec.LinkInstanceID(spec),
@@ -146,6 +151,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 					PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
 				}
 				plannedDesired[item.InstanceID] = item
+				plannedSpecs[item.InstanceID] = spec
 			}
 		}
 	}
@@ -168,12 +174,17 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		if planned, ok := plannedDesired[id]; ok {
 			desired = planned
 		}
+		spec, hasSpec := plannedSpecs[id]
 		sa := actualSAs[id]
 		desiredHash := desired.DesiredSpecHash
 		if desiredHash == "" {
 			desiredHash = inst.DesiredSpecHash
 		}
-		printDebugLinkInstance(w, rt, state, birdInstances, inst, desired, sa, desiredHash)
+		var specPtr *ipsec.TransportLinkSpec
+		if hasSpec {
+			specPtr = &spec
+		}
+		printDebugLinkInstance(w, rt, state, birdInstances, inst, desired, sa, desiredHash, specPtr)
 	}
 	if len(ids) == 0 && len(plannedDesired) > 0 {
 		plannedIDs := make([]string, 0, len(plannedDesired))
@@ -183,7 +194,12 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		sort.Strings(plannedIDs)
 		for _, id := range plannedIDs {
 			desired := plannedDesired[id]
-			printDebugMissingLink(w, rt, birdInstances, desired)
+			spec, hasSpec := plannedSpecs[id]
+			var specPtr *ipsec.TransportLinkSpec
+			if hasSpec {
+				specPtr = &spec
+			}
+			printDebugMissingLink(w, rt, birdInstances, desired, specPtr)
 		}
 	}
 	fmt.Fprintf(w, "actions: %d\n", len(reconcile.Actions))
@@ -208,7 +224,7 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 	return nil
 }
 
-func printDebugLinkInstance(w io.Writer, rt *Runtime, state *stateFile, birdInstances map[string]*BirdInstanceState, inst linkInstanceState, desired desiredLinkState, sa linkSAState, desiredHash string) {
+func printDebugLinkInstance(w io.Writer, rt *Runtime, state *stateFile, birdInstances map[string]*BirdInstanceState, inst linkInstanceState, desired desiredLinkState, sa linkSAState, desiredHash string, spec *ipsec.TransportLinkSpec) {
 	fmt.Fprintf(w, "\nlink %s\n", inst.ID)
 	fmt.Fprintf(w, "  peer: %s\n", inst.PeerZone)
 	fmt.Fprintf(w, "  group: %s\n", dash(inst.GroupID))
@@ -231,6 +247,7 @@ func printDebugLinkInstance(w io.Writer, rt *Runtime, state *stateFile, birdInst
 	fmt.Fprintf(w, "    remote_identity: %s\n", dash(sa.RemoteIdentity))
 	fmt.Fprintf(w, "    reqid: %s\n", formatUint32OrDash(sa.ReqID))
 	fmt.Fprintf(w, "    observed_if_id: %s\n", formatUint32OrDash(sa.XFRMIfID))
+	printDebugStrongSwanConfig(w, spec)
 	fmt.Fprintf(w, "  rotation:\n")
 	fmt.Fprintf(w, "    phase: %s\n", dash(inst.RotatePhase))
 	fmt.Fprintf(w, "    remote_generation: %d\n", inst.RemoteGeneration)
@@ -302,7 +319,7 @@ func linkGroupByID(groups []ipsec.LinkGroupSpec, id string) *ipsec.LinkGroupSpec
 	return nil
 }
 
-func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*BirdInstanceState, desired desiredLinkState) {
+func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*BirdInstanceState, desired desiredLinkState, spec *ipsec.TransportLinkSpec) {
 	fmt.Fprintf(w, "\nlink %s\n", desired.InstanceID)
 	fmt.Fprintf(w, "  peer: %s\n", desired.PeerZone)
 	fmt.Fprintf(w, "  group: %s\n", dash(desired.GroupID))
@@ -319,6 +336,7 @@ func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*B
 	fmt.Fprintf(w, "  strongswan:\n")
 	fmt.Fprintf(w, "    child_sa: -\n")
 	fmt.Fprintf(w, "    sa_state: -\n")
+	printDebugStrongSwanConfig(w, spec)
 	fmt.Fprintf(w, "  health:\n")
 	fmt.Fprintf(w, "    owner: -\n")
 	fmt.Fprintf(w, "    failures: 0\n")
@@ -329,6 +347,89 @@ func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*B
 	fmt.Fprintf(w, "    bird_state: %s\n", birdState)
 	fmt.Fprintf(w, "    bird_neighbors: %s\n", neighborCount)
 	fmt.Fprintf(w, "    bird_best_routes: %s\n", bestRouteCount)
+}
+
+func printDebugStrongSwanConfig(w io.Writer, spec *ipsec.TransportLinkSpec) {
+	fmt.Fprintf(w, "    config:\n")
+	if spec == nil {
+		fmt.Fprintf(w, "      load_conn: -\n")
+		return
+	}
+	conn, err := ipsec.BuildStrongSwanConnection(*spec)
+	if err != nil {
+		fmt.Fprintf(w, "      load_conn_error: %s\n", err)
+		return
+	}
+	childName := ipsec.ChildSAName(*spec)
+	local, _ := conn["local"].(map[string]any)
+	remote, _ := conn["remote"].(map[string]any)
+	children, _ := conn["children"].(map[string]any)
+	child, _ := children[childName].(map[string]any)
+	fmt.Fprintf(w, "      connection: %s\n", dash(spec.TransportID))
+	fmt.Fprintf(w, "      version: %s\n", dash(debugString(conn["version"])))
+	fmt.Fprintf(w, "      local_addrs: %s\n", debugStringList(conn["local_addrs"]))
+	fmt.Fprintf(w, "      remote_addrs: %s\n", debugStringList(conn["remote_addrs"]))
+	fmt.Fprintf(w, "      local_port: %s\n", dash(debugString(conn["local_port"])))
+	fmt.Fprintf(w, "      remote_port: %s\n", dash(debugString(conn["remote_port"])))
+	fmt.Fprintf(w, "      local_auth: %s\n", dash(debugString(local["auth"])))
+	fmt.Fprintf(w, "      local_id: %s\n", dash(debugString(local["id"])))
+	fmt.Fprintf(w, "      remote_auth: %s\n", dash(debugString(remote["auth"])))
+	fmt.Fprintf(w, "      remote_id: %s\n", dash(debugString(remote["id"])))
+	fmt.Fprintf(w, "      local_key_algorithm: %s\n", dash(spec.LocalPrivateKeyAlgorithm))
+	fmt.Fprintf(w, "      local_private_key: %s\n", presentOrDash(len(spec.LocalPrivateKey) > 0))
+	fmt.Fprintf(w, "      peer_public_key: %s\n", presentOrDash(len(spec.PeerPublicKey) > 0))
+	fmt.Fprintf(w, "      child: %s\n", dash(childName))
+	fmt.Fprintf(w, "      child_mode: %s\n", dash(debugString(child["mode"])))
+	fmt.Fprintf(w, "      child_start_action: %s\n", dash(debugString(child["start_action"])))
+	fmt.Fprintf(w, "      child_local_ts: %s\n", debugStringList(child["local_ts"]))
+	fmt.Fprintf(w, "      child_remote_ts: %s\n", debugStringList(child["remote_ts"]))
+	fmt.Fprintf(w, "      child_if_id_in: %s\n", dash(debugString(child["if_id_in"])))
+	fmt.Fprintf(w, "      child_if_id_out: %s\n", dash(debugString(child["if_id_out"])))
+}
+
+func debugString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func debugStringList(value any) string {
+	switch v := value.(type) {
+	case []string:
+		if len(v) == 0 {
+			return "-"
+		}
+		return strings.Join(v, ",")
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			parts = append(parts, debugString(item))
+		}
+		if len(parts) == 0 {
+			return "-"
+		}
+		return strings.Join(parts, ",")
+	default:
+		s := debugString(value)
+		if s == "" {
+			return "-"
+		}
+		return s
+	}
+}
+
+func presentOrDash(ok bool) string {
+	if ok {
+		return "present"
+	}
+	return "-"
 }
 
 func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {
@@ -465,6 +566,101 @@ func debugZone(path zone.ZonePath) error {
 	fmt.Printf("verify: %s\n", verifyResult)
 	printDebugRecords("record", zs.Records)
 	return nil
+}
+
+func debugRecords(path zone.ZonePath, prefix string, values bool) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	return writeDebugRecords(os.Stdout, state, path, prefix, values)
+}
+
+func writeDebugRecords(w io.Writer, state *stateFile, path zone.ZonePath, prefix string, values bool) error {
+	if state == nil || state.Network == nil {
+		return fmt.Errorf("state is nil")
+	}
+	paths := make([]zone.ZonePath, 0, len(state.Network.Zones))
+	if path.Valid() {
+		if state.Network.Zones[path] == nil {
+			return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+		}
+		paths = append(paths, path)
+	} else {
+		for p := range state.Network.Zones {
+			paths = append(paths, p)
+		}
+		sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+	}
+	total := 0
+	for _, p := range paths {
+		total += countRecordsWithPrefix(state.Network.Zones[p].Records, prefix)
+	}
+	fmt.Fprintf(w, "zones: %d\n", len(paths))
+	fmt.Fprintf(w, "records: %d\n", total)
+	if prefix != "" {
+		fmt.Fprintf(w, "prefix: %s\n", prefix)
+	}
+	for _, p := range paths {
+		zs := state.Network.Zones[p]
+		if zs == nil {
+			continue
+		}
+		keys := make([]string, 0, len(zs.Records))
+		for key := range zs.Records {
+			if prefix == "" || strings.HasPrefix(key, prefix) {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		fmt.Fprintf(w, "\nzone %s\n", p)
+		fmt.Fprintf(w, "  records: %d\n", len(keys))
+		for _, key := range keys {
+			record := zs.Records[key]
+			if record == nil {
+				continue
+			}
+			fmt.Fprintf(w, "  record key=%s version=%d type=%s signed_by=%s timestamp=%s hash=%s\n",
+				key,
+				record.Version,
+				dash(record.Type),
+				shortKey(record.SignedBy),
+				formatUnixTime(record.Timestamp),
+				shortBytes(higgscrypto.RecordHash(record)),
+			)
+			if values {
+				fmt.Fprintf(w, "    value: %s\n", formatDebugRecordValue(record.Value))
+			}
+		}
+	}
+	return nil
+}
+
+func countRecordsWithPrefix(records map[string]*zone.Record, prefix string) int {
+	count := 0
+	for key, record := range records {
+		if record == nil {
+			continue
+		}
+		if prefix == "" || strings.HasPrefix(key, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func formatDebugRecordValue(value []byte) string {
+	var decoded any
+	if err := json.Unmarshal(value, &decoded); err == nil {
+		if data, err := json.Marshal(decoded); err == nil {
+			return string(data)
+		}
+	}
+	return string(value)
 }
 
 func bootstrapPeerSource(config *syncConfigFile, peerID string) (string, string) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -1160,6 +1161,29 @@ func TestDebugZoneOutput(t *testing.T) {
 		"verify: ok",
 		"record key=sync/endpoint/udp version=1 type=sync.endpoint",
 	)
+}
+
+func TestDebugRecordsOutputFiltersByPrefixAndPrintsValues(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	state, _ := buildTestNetworkState(t)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	var out bytes.Buffer
+	if err := writeDebugRecords(&out, state, "node-b.catofes.", "ipsec/", true); err != nil {
+		t.Fatalf("writeDebugRecords: %v", err)
+	}
+	output := out.String()
+	assertOutputContains(t, output,
+		"zones: 1",
+		"records: 4",
+		"prefix: ipsec/",
+		"zone node-b.catofes.",
+		"record key=ipsec/profile version=1 type=ipsec.profile.v1",
+		"record key=ipsec/transport-key version=1 type=ipsec.transport_key.v1",
+		"value: {",
+	)
+	if strings.Contains(output, "sync/endpoint/udp") {
+		t.Fatalf("debug records prefix leaked endpoint record:\n%s", output)
+	}
 }
 
 func prepareDiagnosticsState(t *testing.T) {
