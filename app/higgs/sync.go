@@ -1089,7 +1089,7 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 
 	if zs != nil {
 		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
-			if bytes.Equal(existing.Value, value) {
+			if bytes.Equal(existing.Value, value) || gossip.EndpointRecordEndpointsEqual(previous, recordValue) {
 				return nil
 			}
 		}

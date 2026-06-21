@@ -688,6 +688,39 @@ func endpointKey(ep EndpointEntry) string {
 	return fmt.Sprintf("%s/%s/%d", protocol, ep.Address, ep.Port)
 }
 
+// EndpointRecordEndpointsEqual reports whether two endpoint records describe
+// the same set of endpoints, ignoring timestamps and record metadata that
+// change every publish cycle.
+func EndpointRecordEndpointsEqual(a, b *EndpointRecord) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if len(a.Endpoints) != len(b.Endpoints) {
+		return false
+	}
+	counts := make(map[string]int, len(a.Endpoints))
+	for _, ep := range a.Endpoints {
+		counts[endpointCompareKey(ep)]++
+	}
+	for _, ep := range b.Endpoints {
+		counts[endpointCompareKey(ep)]--
+	}
+	for _, v := range counts {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func endpointCompareKey(ep EndpointEntry) string {
+	protocol := ep.Protocol
+	if protocol == "" {
+		protocol = "udp"
+	}
+	return fmt.Sprintf("%s/%s/%d/%s/%s/%d", protocol, ep.Address, ep.Port, ep.Scope, ep.Source, ep.Priority)
+}
+
 // EndpointRecordBytes marshals local endpoints into the record JSON value.
 func EndpointRecordBytes(endpoints []LocalEndpoint, now time.Time) []byte {
 	er := LocalEndpointsToRecord(endpoints, now)

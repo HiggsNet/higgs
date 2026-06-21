@@ -884,6 +884,56 @@ func TestReflectorEndpointPublishSmoke(t *testing.T) {
 	}
 }
 
+func TestEndpointPublishSkipsWhenEndpointsUnchanged(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = "node-b.catofes."
+	config.ListenAddr = "127.0.0.1:33434"
+	config.EndpointTTL = time.Hour
+	config.EndpointGrace = 10 * time.Minute
+
+	oldCollect := collectSyncLocalEndpoints
+	collectSyncLocalEndpoints = func(port uint16, advertiseAddrs, reflectors []string, timeout time.Duration, filterPrivateIPv4 bool) ([]gossip.LocalEndpoint, error) {
+		return []gossip.LocalEndpoint{{
+			IP:       net.ParseIP("198.51.100.10"),
+			Port:     port,
+			Scope:    "global",
+			Priority: 50,
+			Source:   gossip.SourceReflector,
+		}}, nil
+	}
+	defer func() { collectSyncLocalEndpoints = oldCollect }()
+	config.Reflectors = []string{"https://reflector.example"}
+
+	dir := t.TempDir()
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(dir, "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(1000, 0) },
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(first): %v", err)
+	}
+	first := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
+	if first == nil {
+		t.Fatal("first endpoint record missing")
+	}
+	if first.Version != 1 {
+		t.Fatalf("first version = %d, want 1", first.Version)
+	}
+
+	rt.Clock = func() time.Time { return time.Unix(1300, 0) }
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(second): %v", err)
+	}
+	second := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
+	if second.Version != first.Version {
+		t.Fatalf("second version = %d, want %d (unchanged)", second.Version, first.Version)
+	}
+}
+
 func TestEndpointPublishDisabledClearsExistingEndpoint(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
