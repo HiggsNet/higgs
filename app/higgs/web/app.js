@@ -164,6 +164,56 @@ function compactList(items, renderer) {
     return items.map(renderer).join('');
 }
 
+function addrForEndpoint(ep) {
+    if (!ep) return '-';
+    if (ep.addr) return ep.addr;
+    if (ep.address && ep.port) return `${ep.address}:${ep.port}`;
+    return ep.address || '-';
+}
+
+function endpointValueSummary(record) {
+    const value = record && record.value_json;
+    if (!value || !Array.isArray(value.endpoints)) return null;
+    const endpoints = value.endpoints;
+    const selected = endpoints
+        .slice()
+        .sort((a, b) => (b.priority || 0) - (a.priority || 0))[0];
+    const bits = [`${endpoints.length} endpoint${endpoints.length === 1 ? '' : 's'}`];
+    if (selected) bits.push(addrForEndpoint(selected));
+    if (value.source) bits.push(value.source);
+    return bits.join(' · ');
+}
+
+function recordValueSummary(record) {
+    const endpointSummary = endpointValueSummary(record);
+    if (endpointSummary) return endpointSummary;
+    if (record.value_json && typeof record.value_json === 'object') {
+        const keys = Object.keys(record.value_json);
+        return keys.length ? `{${keys.slice(0, 4).join(', ')}${keys.length > 4 ? ', ...' : ''}}` : '{}';
+    }
+    const value = record.value || '';
+    if (!value) return '-';
+    return value.length > 96 ? `${value.substring(0, 96)}...` : value;
+}
+
+function endpointValueTable(record) {
+    const value = record && record.value_json;
+    if (!value || !Array.isArray(value.endpoints) || value.endpoints.length === 0) return '';
+    return `
+        <table class="mini-table">
+            <tr><th>Addr</th><th>Protocol</th><th>Scope</th><th>Source</th><th>Priority</th><th>Last Observed</th></tr>
+            ${value.endpoints.map(ep => `
+                <tr>
+                    <td><code>${esc(addrForEndpoint(ep))}</code></td>
+                    <td>${esc(ep.protocol || 'udp')}</td>
+                    <td>${esc(ep.scope || '-')}</td>
+                    <td>${esc(ep.source || '-')}</td>
+                    <td>${ep.priority || 0}</td>
+                    <td>${formatTime(ep.last_observed)}</td>
+                </tr>`).join('')}
+        </table>`;
+}
+
 function diagnosticsList(peer) {
     const items = [];
     if (peer.last_error) items.push(['Last Error', peer.last_error]);
@@ -177,21 +227,61 @@ function diagnosticsList(peer) {
     return kvTable(items.map(([k, v]) => [k, `<code>${esc(v)}</code>`]));
 }
 
-function recordTable(records) {
+function groupRecordsByKey(records) {
+    const out = {};
+    (records || []).forEach(r => {
+        const key = r.key || '';
+        if (!out[key]) out[key] = [];
+        out[key].push(r);
+    });
+    Object.values(out).forEach(items => items.sort((a, b) => (b.version || 0) - (a.version || 0)));
+    return out;
+}
+
+function recordDetails(record, history) {
+    const endpointTableHTML = endpointValueTable(record);
+    return `
+        <details class="record-details">
+            <summary>Inspect record${history && history.length ? ` · ${history.length} historical` : ''}</summary>
+            ${endpointTableHTML}
+            <h3>Value</h3>
+            ${record.value_json ? jsonViewer(record.value_json) : `<div class="json-viewer">${esc(record.value || '')}</div>`}
+            ${history && history.length ? `
+                <h3>History</h3>
+                <table class="mini-table">
+                    <tr><th>Version</th><th>Type</th><th>Value</th><th>Record Hash</th><th>Signed By</th></tr>
+                    ${history.map(h => `
+                        <tr>
+                            <td>${h.version || 0}</td>
+                            <td>${esc(h.type || '-')}</td>
+                            <td class="value-cell">${esc(recordValueSummary(h))}</td>
+                            <td><code title="${esc(h.record_hash || '')}">${esc(shortHash(h.record_hash))}</code></td>
+                            <td><code title="${esc(h.signed_by || '')}">${esc(shortHash(h.signed_by))}</code></td>
+                        </tr>`).join('')}
+                </table>` : ''}
+            <h3>Raw Record</h3>
+            ${jsonViewer(record)}
+        </details>`;
+}
+
+function recordTable(records, historyByKey) {
     if (!records || records.length === 0) return emptyState('No records');
     return `
-        <table>
+        <table class="record-table">
             <tr><th>Key</th><th>Version</th><th>Type</th><th>Value</th><th>Record Hash</th><th>Signed By</th></tr>
-            ${records.map(r => `
+            ${records.map(r => {
+                const history = (historyByKey && historyByKey[r.key]) || [];
+                return `
                 <tr>
                     <td><code>${esc(r.key || '-')}</code></td>
                     <td>${r.version || 0}</td>
                     <td>${esc(r.type || '-')}</td>
-                    <td class="value-cell">${esc(r.value || '')}</td>
+                    <td class="value-cell">${esc(recordValueSummary(r))}</td>
                     <td><code title="${esc(r.record_hash || '')}">${esc(shortHash(r.record_hash))}</code></td>
                     <td><code title="${esc(r.signed_by || '')}">${esc(shortHash(r.signed_by))}</code></td>
                 </tr>
-                <tr class="subrow"><td colspan="6">${jsonViewer(r)}</td></tr>`).join('')}
+                <tr class="subrow"><td colspan="6">${recordDetails(r, history)}</td></tr>`;
+            }).join('')}
         </table>`;
 }
 
@@ -357,6 +447,7 @@ async function renderZoneDetail(path) {
     if (!el) return;
     try {
         const z = await fetchAPI(`/zones/${encodeURIComponent(path)}`);
+        const historyByKey = groupRecordsByKey(z.record_history || []);
         el.innerHTML = `
             <section class="detail-panel">
                 <h2>${esc(z.path)}</h2>
@@ -370,9 +461,7 @@ async function renderZoneDetail(path) {
                 <h2>Authority</h2>
                 ${jsonViewer(z.authority || {})}
                 <h2>Active Records</h2>
-                ${recordTable(z.records || [])}
-                <h2>Record History</h2>
-                ${recordTable(z.record_history || [])}
+                ${recordTable(z.records || [], historyByKey)}
                 <h2>Delegations</h2>
                 ${compactList(z.delegations || [], d => jsonViewer(d))}
                 <h2>Parent Proof</h2>

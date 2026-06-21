@@ -110,7 +110,7 @@ tr:hover { background: rgba(255,255,255,0.03); }
 .click-row { cursor: pointer; }
 .selected-row { background: rgba(0,173,181,0.12); }
 .subrow td {
-    padding-top: 0;
+    padding: 0 12px 8px;
     background: rgba(0,0,0,0.12);
 }
 
@@ -185,13 +185,49 @@ tr:hover { background: rgba(255,255,255,0.03); }
 }
 
 .value-cell {
-    max-width: 360px;
+    max-width: 420px;
     overflow-wrap: anywhere;
     font-family: 'Monaco', 'Courier New', monospace;
     font-size: 12px;
+    color: var(--text);
 }
 
 code {
     font-family: 'Monaco', 'Courier New', monospace;
     overflow-wrap: anywhere;
+}
+
+.record-table .subrow:hover { background: rgba(0,0,0,0.12); }
+
+.record-details {
+    padding: 8px 0 4px;
+}
+
+.record-details summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+
+.record-details h3 {
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: normal;
+    text-transform: uppercase;
+    margin: 12px 0 6px;
+}
+
+.mini-table {
+    margin: 8px 0 12px;
+}
+
+.mini-table th,
+.mini-table td {
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+.mini-table .value-cell {
+    max-width: 280px;
 }
