@@ -407,6 +407,18 @@ func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID s
 	if config == nil || targetPeerID == "" {
 		return ""
 	}
+	// Prefer the currently verified observed path. UDP reachability can learn a
+	// better public/NAT path than a stale signed or bootstrap endpoint, and TCP
+	// object pull uses the same numeric port on that path.
+	if state != nil {
+		peerState := state.SyncPeers[targetPeerID]
+		now := time.Now()
+		if observedPathActive(peerState, now) && peerChainVerified(state, targetPeerID, now) {
+			if tcp := objectPullTCPAddr(peerState.ObservedAddr); tcp != "" {
+				return tcp
+			}
+		}
+	}
 	// Prefer bootstrap address with the same numeric TCP port.
 	for _, peer := range config.Bootstrap {
 		if peer.ID == targetPeerID && peer.Addr != "" {
@@ -434,17 +446,6 @@ func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID s
 					}
 					continue
 				}
-				return tcp
-			}
-		}
-	}
-	// Last resort for first-contact bootstrap: a verified, short-lived observed
-	// UDP path can reach the peer before its signed endpoint record is synced.
-	if state != nil {
-		peerState := state.SyncPeers[targetPeerID]
-		now := time.Now()
-		if observedPathActive(peerState, now) && peerChainVerified(state, targetPeerID, now) {
-			if tcp := objectPullTCPAddr(peerState.ObservedAddr); tcp != "" {
 				return tcp
 			}
 		}

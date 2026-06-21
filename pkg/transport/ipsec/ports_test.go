@@ -42,8 +42,11 @@ func TestPlanPortRecordRangeIsStableByGeneration(t *testing.T) {
 	if record.Range == nil || record.Range.From != 30000 || record.Range.To != 30003 {
 		t.Fatalf("range = %+v", record.Range)
 	}
-	if record.Current.IKE.Local != 30001 || record.Current.NATT.Local != 30002 {
-		t.Fatalf("selected ports = %+v", record.Current)
+	if record.Current.IKE.Local != DefaultIKEPort || record.Current.NATT.Local != DefaultNATTPort {
+		t.Fatalf("local ports = %+v, want charon defaults", record.Current)
+	}
+	if record.Current.IKE.Advertised != 30001 || record.Current.NATT.Advertised != 30002 {
+		t.Fatalf("advertised ports = %+v, want selected range ports", record.Current)
 	}
 	again, err := PlanPortRecord(PortPlanOptions{
 		Mode:       PortModeRange,
@@ -54,7 +57,7 @@ func TestPlanPortRecordRangeIsStableByGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanPortRecord(again): %v", err)
 	}
-	if record.Current.IKE.Local != again.Current.IKE.Local || record.Current.NATT.Local != again.Current.NATT.Local {
+	if record.Current.IKE.Advertised != again.Current.IKE.Advertised || record.Current.NATT.Advertised != again.Current.NATT.Advertised {
 		t.Fatalf("range selection changed: %+v vs %+v", record.Current, again.Current)
 	}
 }

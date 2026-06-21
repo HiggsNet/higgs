@@ -361,6 +361,21 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	assertActionTypes(t, actions, []string{"ApplySnapshotAction", "SaveStateAction"})
 }
 
+func TestChunkFallbackFetchDoesNotStartEagerObjectPull(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	s.objectPullInflight = make(map[zone.ZonePath]bool)
+
+	action := SendFetchZoneAction{
+		PeerID:        "peer-a",
+		Zone:          "node-a.catofes.",
+		ChunkFallback: true,
+	}
+
+	if shouldStartEagerObjectPull(action, s, "local.catofes.", nil, 1200) {
+		t.Fatalf("chunk fallback fetch should not start another eager object pull")
+	}
+}
+
 func TestSyncSessionFetchingLocalCompletesOnQuietTimeout(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)

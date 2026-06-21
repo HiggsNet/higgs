@@ -118,9 +118,11 @@ ipsec:
   # uses govici/strongSwan's default socket path.
   # vici_socket: /run/charon.vici
 
-  # fixed keeps IKE/NAT-T on the default or listen_addr-derived ports. range
-  # selects deterministic ports from port_range and publishes previous ports
-  # during grace.
+  # fixed publishes the charon listener ports directly. range publishes
+  # deterministic advertised entry ports from port_range while charon keeps its
+  # stable local 500/4500 sockets; enable host firewall redirect_grace to DNAT
+  # those advertised entry ports back to charon. Previous advertised ports are
+  # published during grace.
   # port_mode: fixed
   # port_range:
   #   from: 30000

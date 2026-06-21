@@ -368,7 +368,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				Type:      gossip.MessageFetchZone,
 				FetchZone: &gossip.FetchZone{Zone: a.Zone, ChunkFallback: a.ChunkFallback},
 			})
-			if a.Zone != d.Sync.State.ManagedZone && !session.objectPullInflight[a.Zone] && zoneSnapshotExceedsBudget(d.Sync.State.Network, a.Zone, budget) {
+			if shouldStartEagerObjectPull(a, session, d.Sync.State.ManagedZone, d.Sync.State.Network, budget) {
 				eagerPulls = append(eagerPulls, a.Zone)
 				session.objectPullInflight[a.Zone] = true
 			}
@@ -440,6 +440,16 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	}
 
 	return changed
+}
+
+func shouldStartEagerObjectPull(action SendFetchZoneAction, session *SyncSession, managedZone zone.ZonePath, ns *zone.NetworkState, budget int) bool {
+	if action.ChunkFallback || session == nil || action.Zone == managedZone {
+		return false
+	}
+	if session.objectPullInflight[action.Zone] {
+		return false
+	}
+	return zoneSnapshotExceedsBudget(ns, action.Zone, budget)
 }
 
 func (d *DaemonService) tryAdoptAutoJoinAfterSync(peerID, via string, now time.Time, changed *bool) {

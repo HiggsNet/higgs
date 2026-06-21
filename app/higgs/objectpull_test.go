@@ -111,6 +111,29 @@ func TestResolvePeerTCPAddrPrefersBootstrap(t *testing.T) {
 	}
 }
 
+func TestResolvePeerTCPAddrPrefersObservedOverBootstrap(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Now()
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {
+			ObservedAddr:          "115.171.85.64:33400",
+			ObservedFirstSeenUnix: now.Unix(),
+			ObservedLastSeenUnix:  now.Unix(),
+			ObservedUntilUnix:     now.Add(time.Minute).Unix(),
+			ObservedSource:        string(gossip.MessageFetchZone),
+		},
+	}
+	config := &syncConfigFile{
+		Bootstrap: []syncConfigPeer{
+			{ID: "node-b.catofes.", Addr: "[240e:305:1e8f:2900::1]:33400"},
+		},
+	}
+
+	if got := resolvePeerTCPAddr(state, config, "node-b.catofes."); got != "115.171.85.64:33400" {
+		t.Fatalf("resolvePeerTCPAddr = %q, want observed public path", got)
+	}
+}
+
 func TestResolvePeerTCPAddrUsesSignedEndpoint(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)

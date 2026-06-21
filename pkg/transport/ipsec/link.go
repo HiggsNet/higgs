@@ -114,8 +114,10 @@ type TransportLinkSpec struct {
 	// LocalAddress is the local underlay address used for the IKE endpoint.
 	// If empty, the IPsec daemon binds to any address.
 	LocalAddress string
-	// LocalIKEPort is the local UDP port the IPsec daemon binds to for IKE.
-	// If zero, the provider default (500 for IKEv2) is used.
+	// LocalIKEPort is the local UDP port the IPsec daemon actually binds to
+	// for IKE. Leave zero when charon uses its default 500/4500 sockets.
+	// This is not the node's advertised entry port; advertised/range ports are
+	// handled as remote contact points and host firewall redirects.
 	LocalIKEPort uint16
 	// Generation is the current port/contact generation for this link.
 	// For outbound links it is derived from the peer's contact point; for

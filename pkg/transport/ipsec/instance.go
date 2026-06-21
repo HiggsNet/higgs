@@ -351,8 +351,26 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			}
 			continue
 		}
+		if sa.Established && existing.ActualState != LinkStateUp {
+			inst := existing
+			inst.ActualState = LinkStateUp
+			inst.Endpoint = sa.Endpoint
+			inst.FailureCount = 0
+			inst.BackoffUntil = 0
+			inst.LastError = ""
+			inst.LastTransition = now.Unix()
+			result.Instances[id] = inst
+			result.add(ReconcileActionAdopt, &spec, &inst, "driver state recovered")
+			continue
+		}
 		if inLinkBackoff(existing, now) {
 			result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
+			continue
+		}
+		if (existing.ActualState == LinkStateConfiguring || existing.ActualState == LinkStateConnecting) && !sa.Established {
+			inst := MarkLinkApplyFailure(existing, groupBackoffForSpec(spec, in.GroupBackoff), now, fmt.Errorf("waiting for established SA"))
+			result.Instances[id] = inst
+			result.add(ReconcileActionNoop, &spec, &inst, "awaiting established sa")
 			continue
 		}
 		if (existing.ActualState == LinkStateError || existing.ActualState == LinkStateDegraded) && !sa.Established {
@@ -372,14 +390,6 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			continue
 		}
 		inst := existing
-		if sa.Established && inst.ActualState != LinkStateUp {
-			inst.ActualState = LinkStateUp
-			inst.Endpoint = sa.Endpoint
-			inst.LastTransition = now.Unix()
-			result.Instances[id] = inst
-			result.add(ReconcileActionAdopt, &spec, &inst, "driver state recovered")
-			continue
-		}
 		result.add(ReconcileActionNoop, &spec, &inst, "")
 	}
 	for id, inst := range result.Instances {

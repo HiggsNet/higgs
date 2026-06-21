@@ -57,40 +57,48 @@ func PlanPortRecord(opts PortPlanOptions) (*PortRecord, error) {
 func plannedCurrentPortSelection(opts PortPlanOptions) (PortSelection, error) {
 	switch opts.Mode {
 	case "", PortModeFixed:
-		ike := opts.FixedIKE
-		if ike == 0 {
-			ike = DefaultIKEPort
+		localIKE := opts.FixedIKE
+		if localIKE == 0 {
+			localIKE = DefaultIKEPort
 		}
-		natt := opts.FixedNATT
-		if natt == 0 {
-			natt = DefaultNATTPort
+		localNATT := opts.FixedNATT
+		if localNATT == 0 {
+			localNATT = DefaultNATTPort
 		}
-		return newPlannedPortSelection(opts.Generation, ike, natt, opts.ObservedIKE, opts.ObservedNATT), nil
+		return newPlannedPortSelection(opts.Generation, localIKE, localNATT, localIKE, localNATT, opts.ObservedIKE, opts.ObservedNATT), nil
 	case PortModeRange:
 		if opts.Range == nil {
 			return PortSelection{}, fmt.Errorf("range mode requires range")
 		}
-		ike, natt, err := SelectPortsFromRange(*opts.Range, opts.Generation)
+		advertisedIKE, advertisedNATT, err := SelectPortsFromRange(*opts.Range, opts.Generation)
 		if err != nil {
 			return PortSelection{}, err
 		}
-		return newPlannedPortSelection(opts.Generation, ike, natt, opts.ObservedIKE, opts.ObservedNATT), nil
+		localIKE := opts.FixedIKE
+		if localIKE == 0 {
+			localIKE = DefaultIKEPort
+		}
+		localNATT := opts.FixedNATT
+		if localNATT == 0 {
+			localNATT = DefaultNATTPort
+		}
+		return newPlannedPortSelection(opts.Generation, localIKE, localNATT, advertisedIKE, advertisedNATT, opts.ObservedIKE, opts.ObservedNATT), nil
 	default:
 		return PortSelection{}, fmt.Errorf("unsupported port mode %q", opts.Mode)
 	}
 }
 
-func newPlannedPortSelection(generation uint64, ike, natt, observedIKE, observedNATT uint16) PortSelection {
+func newPlannedPortSelection(generation uint64, localIKE, localNATT, advertisedIKE, advertisedNATT, observedIKE, observedNATT uint16) PortSelection {
 	return PortSelection{
 		Generation: generation,
 		IKE: PortBinding{
-			Local:      ike,
-			Advertised: ike,
+			Local:      localIKE,
+			Advertised: advertisedIKE,
 			Observed:   observedIKE,
 		},
 		NATT: PortBinding{
-			Local:      natt,
-			Advertised: natt,
+			Local:      localNATT,
+			Advertised: advertisedNATT,
 			Observed:   observedNATT,
 		},
 	}

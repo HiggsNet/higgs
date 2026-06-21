@@ -234,6 +234,65 @@ func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) 
 	}
 }
 
+func TestPlanTransportLinksDoesNotUseAdvertisedLocalPortAsStrongSwanLocalPort(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-a.catofes."].Records[RecordKeyPorts] = record(t, "node-a.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeRange,
+		Range:   &PortRange{From: 33400, To: 33499},
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Local: DefaultIKEPort, Advertised: 33402},
+			NATT:       PortBinding{Local: DefaultNATTPort, Advertised: 33403},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeRange,
+		Range:   &PortRange{From: 30000, To: 30099},
+		Current: &PortSelection{
+			Generation: 7,
+			IKE:        PortBinding{Local: DefaultIKEPort, Advertised: 30001},
+			NATT:       PortBinding{Local: DefaultNATTPort, Advertised: 30002},
+		},
+		UpdatedAt: now.Unix(),
+	})
+
+	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional, DefaultPathMode: PathModeFamilyRedundant}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired len = %d, want 1; skips=%+v", len(plan.Desired), plan.Skipped)
+	}
+	spec := plan.Desired[0]
+	if spec.LocalIKEPort != 0 {
+		t.Fatalf("LocalIKEPort = %d, want zero so charon uses its actual listener", spec.LocalIKEPort)
+	}
+	if len(spec.ContactPoints) != 1 || spec.ContactPoints[0].IKEPort != 30001 {
+		t.Fatalf("remote contact points = %+v, want peer advertised port", spec.ContactPoints)
+	}
+	conn, err := BuildStrongSwanConnection(spec)
+	if err != nil {
+		t.Fatalf("BuildStrongSwanConnection: %v", err)
+	}
+	if got := conn["remote_port"]; got != "30001" {
+		t.Fatalf("remote_port = %v, want peer advertised port 30001", got)
+	}
+	if _, ok := conn["local_port"]; ok {
+		t.Fatalf("local_port should be omitted for advertised entry ports: %+v", conn)
+	}
+}
+
 func TestPlanTransportLinksSkipsBehindNATWithoutInboundEvidence(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
@@ -617,6 +676,92 @@ func TestReconcileLinkInstancesHonorsApplyBackoff(t *testing.T) {
 	cleared := MarkLinkApplySuccess(inst, now.Add(6*time.Second))
 	if cleared.FailureCount != 0 || cleared.BackoffUntil != 0 || cleared.LastError != "" {
 		t.Fatalf("cleared instance = %+v", cleared)
+	}
+}
+
+func TestReconcileLinkInstancesRetriesConnectingWithoutSAAfterBackoff(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ab",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+	}
+	inst := NewLinkInstance(spec, LinkStateConnecting, now)
+
+	waiting := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{inst.ID: inst},
+		Now:       now.Add(time.Second),
+		GroupBackoff: map[string]BackoffPolicy{
+			spec.OverlayID: {InitialSeconds: 2, MaxSeconds: 8},
+		},
+	})
+	if action := firstAction(waiting, ReconcileActionNoop); action == nil || action.Reason != "awaiting established sa" {
+		t.Fatalf("waiting actions = %+v", waiting.Actions)
+	}
+	waitingInst := waiting.Instances[inst.ID]
+	if waitingInst.ActualState != LinkStateError || waitingInst.FailureCount != 1 || waitingInst.BackoffUntil != now.Add(3*time.Second).Unix() {
+		t.Fatalf("waiting instance = %+v, want error with backoff", waitingInst)
+	}
+
+	duringBackoff := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{inst.ID: waitingInst},
+		Now:       now.Add(2 * time.Second),
+	})
+	if action := firstAction(duringBackoff, ReconcileActionNoop); action == nil || action.Reason != "apply backoff active" {
+		t.Fatalf("during backoff actions = %+v", duringBackoff.Actions)
+	}
+
+	afterBackoff := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{inst.ID: waitingInst},
+		Now:       now.Add(4 * time.Second),
+	})
+	if action := firstAction(afterBackoff, ReconcileActionRepair); action == nil || action.Reason != "previous apply failed" {
+		t.Fatalf("after backoff actions = %+v", afterBackoff.Actions)
+	}
+	if afterBackoff.Instances[inst.ID].ActualState != LinkStateDegraded {
+		t.Fatalf("after backoff instance = %+v, want degraded repair", afterBackoff.Instances[inst.ID])
+	}
+}
+
+func TestReconcileLinkInstancesEstablishedSAWinsOverBackoff(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ab",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+	}
+	inst := NewLinkInstance(spec, LinkStateConnecting, now)
+	inst = MarkLinkApplyFailure(inst, BackoffPolicy{InitialSeconds: 10, MaxSeconds: 10}, now, errors.New("waiting for established SA"))
+
+	recovered := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{inst.ID: inst},
+		SAs: []SAState{{
+			Name:        spec.TransportID,
+			ChildSA:     ChildSAName(spec),
+			XFRMIfID:    spec.XFRMIfID,
+			Endpoint:    "198.51.100.20",
+			Established: true,
+		}},
+		Now: now.Add(time.Second),
+	})
+	if action := firstAction(recovered, ReconcileActionAdopt); action == nil || action.Reason != "driver state recovered" {
+		t.Fatalf("recovered actions = %+v", recovered.Actions)
+	}
+	got := recovered.Instances[inst.ID]
+	if got.ActualState != LinkStateUp || got.FailureCount != 0 || got.BackoffUntil != 0 || got.LastError != "" {
+		t.Fatalf("recovered instance = %+v, want up with cleared backoff", got)
 	}
 }
 

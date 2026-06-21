@@ -1672,6 +1672,59 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 	}
 }
 
+func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4137, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	group := testIPsecLinkGroup()
+	group.Reconcile.Backoff = ipsec.BackoffPolicy{InitialSeconds: 1, MaxSeconds: 1}
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
+	}
+	spec := plan.Desired[0]
+	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateConnecting, now.Add(-time.Minute))
+	persisted = ipsec.MarkLinkApplyFailure(persisted, group.Reconcile.Backoff, now.Add(-2*time.Second), errors.New("waiting for established SA"))
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+		persisted.ID: persisted,
+	})
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &observedIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.recoverIPsecLinksOnStart(context.Background())
+
+	if driver.listCalls != 1 {
+		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
+	}
+	assertDryRunApply(t, driver, spec, group.NetNS)
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	if inst.ActualState != ipsec.LinkStateConnecting || inst.FailureCount != 0 || inst.BackoffUntil != 0 {
+		t.Fatalf("startup retried instance = %+v, want connecting with cleared backoff", inst)
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionRepair {
+		t.Fatalf("startup reconcile = %+v, want repair", latest.IPsecReconcile)
+	}
+}
+
 func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)

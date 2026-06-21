@@ -177,7 +177,6 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			return TransportLinkSpec{}, false, PlanSkip{}, err
 		}
 		if localRecords.Ports != nil && localRecords.Ports.Current != nil {
-			spec.LocalIKEPort = dialPort(localRecords.Ports.Current.IKE)
 			if group.Direction == DirectionInbound {
 				spec.Generation = localRecords.Ports.Current.Generation
 			}
