@@ -119,6 +119,7 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 		"local_addrs":  localAddrs,
 		"remote_addrs": []string{remoteAddr},
 		"encap":        "yes",
+		"mobike":       "no",
 		"local": map[string]any{
 			"auth": StrongSwanAuthPubkey,
 			"id":   localIdentity(spec),
@@ -235,6 +236,7 @@ func parseSAStates(event map[string]any) []SAState {
 		localHost := stringValue(body["local-host"])
 		localPort := stringValue(body["local-port"])
 		state.Peer = remoteHost
+		state.IKEState = stringValue(body["state"])
 		state.LocalIdentity = stringValue(body["local-id"])
 		state.RemoteIdentity = stringValue(body["remote-id"])
 		state.LocalEndpoint = joinEndpoint(localHost, localPort)
@@ -245,17 +247,22 @@ func parseSAStates(event map[string]any) []SAState {
 			child, _ := childRaw.(map[string]any)
 			childState := state
 			childState.ChildSA = stripChildSAReqidSuffix(childName)
+			childState.ChildState = stringValue(child["state"])
 			childState.XFRMIfID = firstUint32(child["if-id-out"], child["if-id-in"])
 			childState.ReqID = uint32Value(child["reqid"])
-			childState.Established = true
+			childState.Established = strongSwanSAEstablished(childState.IKEState, childState.ChildState)
 			states = append(states, childState)
 		}
 		if len(children) == 0 {
-			state.Established = true
+			state.Established = strongSwanSAEstablished(state.IKEState, "")
 			states = append(states, state)
 		}
 	}
 	return states
+}
+
+func strongSwanSAEstablished(ikeState, childState string) bool {
+	return strings.EqualFold(ikeState, "ESTABLISHED") || strings.EqualFold(childState, "INSTALLED")
 }
 
 // stripChildSAReqidSuffix removes the StrongSwan VICI child-sa reqid suffix

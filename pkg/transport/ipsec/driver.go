@@ -14,6 +14,8 @@ type SAState struct {
 	Name           string
 	Peer           string
 	ChildSA        string
+	IKEState       string
+	ChildState     string
 	XFRMIfID       uint32
 	ReqID          uint32
 	LocalIdentity  string

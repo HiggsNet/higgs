@@ -11,11 +11,13 @@ func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 			"remote-host": "2001:db8::20",
 			"remote-port": "4500",
 			"remote-id":   "node-b.catofes.",
+			"state":       "ESTABLISHED",
 			"child-sas": map[string]any{
 				"ipsec-main-ab-child": map[string]any{
 					"reqid":     "17",
 					"if-id-in":  "77",
 					"if-id-out": "78",
+					"state":     "INSTALLED",
 				},
 			},
 		},
@@ -35,5 +37,33 @@ func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 	}
 	if got.XFRMIfID != 78 || got.ReqID != 17 || !got.Established {
 		t.Fatalf("child fields = %+v", got)
+	}
+}
+
+func TestParseSAStatesDoesNotMarkConnectingIKEEstablished(t *testing.T) {
+	states := parseSAStates(map[string]any{
+		"ipsec-main-ab": map[string]any{
+			"local-host":  "198.51.100.10",
+			"local-port":  "4500",
+			"remote-host": "198.51.100.20",
+			"remote-port": "4500",
+			"state":       "CONNECTING",
+			"child-sas": map[string]any{
+				"ipsec-main-ab-child": map[string]any{
+					"reqid":     "17",
+					"if-id-out": "77",
+					"state":     "CREATED",
+				},
+			},
+		},
+	})
+	if len(states) != 1 {
+		t.Fatalf("states len = %d, want 1: %+v", len(states), states)
+	}
+	if states[0].Established {
+		t.Fatalf("connecting SA parsed as established: %+v", states[0])
+	}
+	if states[0].IKEState != "CONNECTING" || states[0].ChildState != "CREATED" {
+		t.Fatalf("states = %+v, want raw StrongSwan states preserved", states[0])
 	}
 }

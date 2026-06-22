@@ -233,6 +233,8 @@ type linkSAState struct {
 	Name           string `json:"name,omitempty"`
 	Peer           string `json:"peer,omitempty"`
 	ChildSA        string `json:"child_sa,omitempty"`
+	IKEState       string `json:"ike_state,omitempty"`
+	ChildState     string `json:"child_state,omitempty"`
 	XFRMIfID       uint32 `json:"xfrm_if_id,omitempty"`
 	ReqID          uint32 `json:"reqid,omitempty"`
 	LocalIdentity  string `json:"local_identity,omitempty"`

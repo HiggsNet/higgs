@@ -201,6 +201,8 @@ func summarizeIPsecReconcile(unix int64, desired []ipsec.TransportLinkSpec, sas 
 			Name:           sa.Name,
 			Peer:           sa.Peer,
 			ChildSA:        sa.ChildSA,
+			IKEState:       sa.IKEState,
+			ChildState:     sa.ChildState,
 			XFRMIfID:       sa.XFRMIfID,
 			ReqID:          sa.ReqID,
 			LocalIdentity:  sa.LocalIdentity,

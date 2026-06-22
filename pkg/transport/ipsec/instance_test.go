@@ -776,6 +776,54 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 	}
 }
 
+func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T) {
+	oldSpec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ab",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 1,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	newSpec := oldSpec
+	newSpec.ContactPoints = []ContactPoint{{
+		Address:    "198.51.100.20",
+		Family:     FamilyIPv4,
+		Generation: 2,
+		IKEPort:    30001,
+		NATTPort:   30002,
+	}}
+	inst := NewLinkInstance(oldSpec, LinkStateUp, time.Unix(4100, 0))
+
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	_, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action:   ReconcileActionUpdate,
+		Spec:     &newSpec,
+		Instance: &inst,
+	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Terminated) != 1 || ipsecDrv.Terminated[0] != oldSpec.TransportID {
+		t.Fatalf("terminated = %+v, want old %s", ipsecDrv.Terminated, oldSpec.TransportID)
+	}
+	if len(ipsecDrv.Unloaded) != 1 || ipsecDrv.Unloaded[0] != oldSpec.TransportID {
+		t.Fatalf("unloaded = %+v, want old %s", ipsecDrv.Unloaded, oldSpec.TransportID)
+	}
+	if len(ipsecDrv.Connections) != 1 || ipsecDrv.Connections[0].ContactPoints[0].IKEPort != 30001 {
+		t.Fatalf("connections = %+v, want new port spec", ipsecDrv.Connections)
+	}
+}
+
 func TestApplyReconcileActionCommitRotateTeardownsOldGeneration(t *testing.T) {
 	oldSpec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",

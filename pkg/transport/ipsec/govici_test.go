@@ -57,7 +57,7 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	if !ok {
 		t.Fatalf("connection missing from call input: %#v", session.callIn)
 	}
-	if conn["version"] != "2" || conn["remote_port"] != "4500" {
+	if conn["version"] != "2" || conn["remote_port"] != "4500" || conn["mobike"] != "no" {
 		t.Fatalf("connection scalar fields = %#v", conn)
 	}
 	children, ok := conn["children"].(map[string]any)
@@ -82,10 +82,12 @@ func TestGoviciClientStreamsListSAs(t *testing.T) {
 			"remote-host": "198.51.100.20",
 			"remote-port": "4500",
 			"remote-id":   "node-b.catofes.",
+			"state":       "ESTABLISHED",
 			"child-sas": map[string]any{
 				"ipsec-main-ab-child": map[string]any{
 					"reqid":     "17",
 					"if-id-out": "77",
+					"state":     "INSTALLED",
 				},
 			},
 		},
@@ -107,6 +109,8 @@ func TestGoviciClientStreamsListSAs(t *testing.T) {
 		Name:           "ipsec-main-ab",
 		Peer:           "198.51.100.20",
 		ChildSA:        "ipsec-main-ab-child",
+		IKEState:       "ESTABLISHED",
+		ChildState:     "INSTALLED",
 		XFRMIfID:       77,
 		ReqID:          17,
 		LocalIdentity:  "node-a.catofes.",
