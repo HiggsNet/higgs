@@ -55,11 +55,6 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		return fmt.Errorf("firewall build authorized route set: %w", err)
 	}
 
-	driver := d.firewallDriverInstance()
-	if driver == nil {
-		driver = firewall.NewDryRunDriver()
-	}
-
 	preflight := firewall.PreflightProbe(ctx)
 	d.Sync.State.FirewallReconcile.Backend = preflight.Backend
 
@@ -83,6 +78,20 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 				firstErr = fmt.Errorf("firewall instance %s: %w", instCfg.ID, err)
 			}
 			continue
+		}
+
+		driver, err := d.firewallDriverInstance(instCfg)
+		if err != nil {
+			entry := d.getOrCreateFirewallEntry(instCfg.ID)
+			entry.LastRunUnix = now.Unix()
+			entry.LastError = err.Error()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("firewall driver %s: %w", instCfg.ID, err)
+			}
+			continue
+		}
+		if driver == nil {
+			driver = firewall.NewDryRunDriver()
 		}
 
 		owner := firewall.Owner{
@@ -151,32 +160,59 @@ func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {
 	return spec.NetNS
 }
 
-// firewallDriverInstance returns the configured firewall driver, or nil to
-// fall back to dry-run.
-func (d *DaemonService) firewallDriverInstance() firewallDriver {
+// firewallDriverInstance returns the configured firewall driver for one
+// instance, or nil to fall back to dry-run.
+func (d *DaemonService) firewallDriverInstance(inst FirewallInstanceConfig) (firewallDriver, error) {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
-		return nil
+		return nil, nil
 	}
 	if d.firewallDriver != nil {
-		return d.firewallDriver
+		return d.firewallDriver, nil
 	}
-	// Determine the effective backend from config + preflight.
-	instances := firewallInstancesEnabled(d.Sync.App.Config)
-	if len(instances) == 0 {
-		return nil
-	}
-	// Use the first enabled instance's backend as the global selection.
-	backend := instances[0].Backend
 	pf := firewall.PreflightProbe(context.Background())
-	resolved := firewall.ResolveBackend(backend, pf)
+	resolved := firewall.ResolveBackend(inst.Backend, pf)
 	switch resolved {
 	case firewall.BackendNFT:
-		return firewall.NewNFTDriver()
+		netns, err := firewallDriverNetNS(inst, d.Sync.App.Config)
+		if err != nil {
+			return nil, err
+		}
+		driver := firewall.NewNFTDriver()
+		driver.NetNS = netns
+		return driver, nil
 	case firewall.BackendIptables:
-		return firewall.NewIPTablesDriver()
+		netns, err := firewallDriverNetNS(inst, d.Sync.App.Config)
+		if err != nil {
+			return nil, err
+		}
+		driver := firewall.NewIPTablesDriver()
+		driver.NetNS = netns
+		return driver, nil
 	default:
 		// dry-run / none
-		return nil
+		return nil, nil
+	}
+}
+
+func firewallDriverNetNS(inst FirewallInstanceConfig, config *appConfig) (string, error) {
+	if inst.IsHost {
+		return "", nil
+	}
+	if config == nil {
+		return "", nil
+	}
+	spec, ok := config.Netns.Names[inst.NetNS]
+	if !ok {
+		return "", fmt.Errorf("netns %q not found", inst.NetNS)
+	}
+	spec = spec.Normalized()
+	switch spec.Kind {
+	case ipsec.NetNSHost:
+		return "", nil
+	case ipsec.NetNSName:
+		return spec.Name, nil
+	default:
+		return "", fmt.Errorf("netns %q kind %q is not supported by firewall CLI drivers", inst.NetNS, spec.Kind)
 	}
 }
 

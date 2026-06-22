@@ -106,13 +106,13 @@ type forwardingYAML struct {
 	MetricHint    uint     `yaml:"metric_hint"`
 }
 
-func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, dataDir string) (firewallConfig, error) {
+func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig, dataDir string) (firewallConfig, error) {
 	cfg := firewallConfig{}
 	if yamlCfg == nil {
 		return cfg, nil
 	}
 	for i, yi := range yamlCfg.Instances {
-		inst, err := parseFirewallInstance(yi, netnsCfg)
+		inst, err := parseFirewallInstance(yi, netnsCfg, ipsecCfg)
 		if err != nil {
 			return firewallConfig{}, fmt.Errorf("firewall.instances[%d]: %w", i, err)
 		}
@@ -121,7 +121,7 @@ func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, data
 	return cfg, nil
 }
 
-func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig) (FirewallInstanceConfig, error) {
+func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig) (FirewallInstanceConfig, error) {
 	if yi.ID == "" {
 		return FirewallInstanceConfig{}, fmt.Errorf("id is required")
 	}
@@ -191,6 +191,11 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig) (Firew
 	}
 
 	hostPorts := firewall.HostPortConfig{}
+	rangeMode := isHost && ipsecCfg.PortMode == ipsec.PortModeRange
+	if rangeMode {
+		hostPorts.IKE = true
+		hostPorts.NATT = true
+	}
 	if yi.HostPorts != nil {
 		if yi.HostPorts.IKE != nil {
 			hostPorts.IKE = *yi.HostPorts.IKE
@@ -201,6 +206,9 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig) (Firew
 	}
 
 	redirectGrace := firewall.RedirectGrace{}
+	if rangeMode {
+		redirectGrace.Enabled = true
+	}
 	if yi.RedirectGrace != nil {
 		enabled, err := enabledFromPresence("firewall.instances[].redirect_grace.enabled", "firewall.instances[].redirect_grace.disabled", true, yi.RedirectGrace.Enabled, yi.RedirectGrace.Disabled)
 		if err != nil {

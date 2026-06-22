@@ -120,9 +120,11 @@ ipsec:
 
   # fixed publishes the charon listener ports directly. range publishes
   # deterministic advertised entry ports from port_range while charon keeps its
-  # stable local 500/4500 sockets; enable host firewall redirect_grace to DNAT
-  # those advertised entry ports back to charon. Previous advertised ports are
-  # published during grace.
+  # stable local 500/4500 sockets. In range mode, host firewall instances
+  # default host_ports.ike/natt and redirect_grace to enabled so advertised
+  # entry ports DNAT back to charon; explicitly disable them if another
+  # firewall manager owns those rules. Previous advertised ports are published
+  # during grace.
   # port_mode: fixed
   # port_range:
   #   from: 30000
@@ -261,9 +263,12 @@ firewall:
       # disabled: true
       # mode: managed
       # backend: auto
+      # In ipsec.port_mode=range, these host IPsec ingress/redirect settings
+      # default to enabled. Uncomment false/disabled values only if external
+      # firewall rules own IKE/NAT-T and advertised-port redirect.
       # host_ports:
-      #   ike: true
-      #   natt: true
+      #   ike: false
+      #   natt: false
       # redirect_grace:
       #   disabled: true
 

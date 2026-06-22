@@ -578,7 +578,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	// Parse firewall.instances[], if any.
 	if file.Firewall != nil {
 		var err error
-		config.Firewall, err = parseFirewallConfig(file.Firewall, config.Netns, config.DataDir)
+		config.Firewall, err = parseFirewallConfig(file.Firewall, config.Netns, config.IPsec, config.DataDir)
 		if err != nil {
 			return err
 		}

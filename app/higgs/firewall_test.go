@@ -107,6 +107,64 @@ firewall:
 	}
 }
 
+func TestParseConfigYAMLFirewallHostDefaultsForIPsecRange(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  port_mode: range
+  port_range:
+    from: 30000
+    to: 30099
+firewall:
+  instances:
+    - id: host-ipsec
+      host: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if len(config.Firewall.Instances) != 1 {
+		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
+	}
+	inst := config.Firewall.Instances[0]
+	if !inst.HostPorts.IKE || !inst.HostPorts.NATT {
+		t.Fatalf("range mode host ports = %+v, want IKE/NATT enabled by default", inst.HostPorts)
+	}
+	if !inst.RedirectGrace.Enabled {
+		t.Fatal("range mode should enable redirect_grace by default")
+	}
+}
+
+func TestParseConfigYAMLFirewallHostRangeDefaultsCanBeDisabled(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  port_mode: range
+  port_range:
+    from: 30000
+    to: 30099
+firewall:
+  instances:
+    - id: host-ipsec
+      host: true
+      host_ports:
+        ike: false
+        natt: false
+      redirect_grace:
+        disabled: true
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	inst := config.Firewall.Instances[0]
+	if inst.HostPorts.IKE || inst.HostPorts.NATT {
+		t.Fatalf("explicit host port disables ignored: %+v", inst.HostPorts)
+	}
+	if inst.RedirectGrace.Enabled {
+		t.Fatal("explicit redirect_grace disabled should override range default")
+	}
+}
+
 func TestParseConfigYAMLFirewallDisabled(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
@@ -363,6 +421,28 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 	}
 	if driver.owners[1].InstanceID != "host" {
 		t.Fatalf("host owner scope = %q, want host", driver.owners[1].InstanceID)
+	}
+}
+
+func TestFirewallDriverNetNSResolvesDefaultAlias(t *testing.T) {
+	appConfig := defaultAppConfig()
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"default": {Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		"h2":      {Kind: ipsec.NetNSName, Name: "h2", Create: true},
+	}}
+	got, err := firewallDriverNetNS(FirewallInstanceConfig{ID: "higgs", NetNS: "default"}, appConfig)
+	if err != nil {
+		t.Fatalf("firewallDriverNetNS: %v", err)
+	}
+	if got != "h2" {
+		t.Fatalf("driver netns = %q, want h2", got)
+	}
+	host, err := firewallDriverNetNS(FirewallInstanceConfig{ID: "host-ipsec", IsHost: true}, appConfig)
+	if err != nil {
+		t.Fatalf("host firewallDriverNetNS: %v", err)
+	}
+	if host != "" {
+		t.Fatalf("host driver netns = %q, want empty host namespace", host)
 	}
 }
 
