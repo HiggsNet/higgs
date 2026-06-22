@@ -485,7 +485,7 @@ DNS 不是天然最高优先级。动态 DNS 很多时候只是 public reflector
 
 `pkg/transport/ipsec.PlanPortRecord` 是第一版本地端口选择边界：未配置时发布标准 500/4500；固定端口按配置发布；范围端口按 `generation` 稳定选择一组 IKE/NAT-T 端口；轮换时把上一代 `current` 带入 `previous` 并设置 grace `valid_until`。peer 端只把未过期的 `current` / `previous` 与 address candidates 组合成 `ContactPoint`，不把端口写死到地址里。
 
-UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它们写死。StrongSwan 当前的实际边界是：`charon.port` / `charon.port_nat_t` 控制本地监听端口，`swanctl.conf` connection 的 `remote_port` 可指定远端端口；自定义 server port 通常走 NAT-T socket，MOBIKE 默认可能把会话漂移到 NAT-T 端口。当前已经实现的系统 rotate 是 **staged 数据面 generation**：daemon/reconcile 为新 generation 加载独立 CHILD_SA/XFRM interface，观测 staged SA 后进入双 running 保留窗口。staged 的意思是“预备/影子”：先在旧链路旁边搭一条候选新链路，确认可用后再切换、保留或回滚；它不是第三种端口。但这仍不等于本机 StrongSwan 单实例能同时监听 old/current advertised inbound 端口。入口端口双接收需要后续 DNAT/redirect grace 或多 listener 能力，Phase 7 只保留高频/对抗性 port hopping。
+UDP 500/4500 是 IKE/NAT-T 的传统默认值，但 Higgs 协议层不能把它们写死。StrongSwan 当前的实际边界是：`charon.port` / `charon.port_nat_t` 控制本地监听端口，`swanctl.conf` connection 的 `remote_port` 可指定远端端口；自定义 server port 是 NAT-T socket 语义，provider 应把 peer 的 NAT-T advertised/observed port 写入 `remote_port`，并保持 `encap=yes`，而不是把 IKE advertised port 当成 UDP-encapsulated ESP 的入口。MOBIKE 默认可能把会话漂移到 NAT-T 端口；Higgs 管理的 StrongSwan connection 会显式 `mobike=no`，减少端口观测歧义。当前已经实现的系统 rotate 是 **staged 数据面 generation**：daemon/reconcile 为新 generation 加载独立 CHILD_SA/XFRM interface，观测 staged SA 后进入双 running 保留窗口。staged 的意思是“预备/影子”：先在旧链路旁边搭一条候选新链路，确认可用后再切换、保留或回滚；它不是第三种端口。但这仍不等于本机 StrongSwan 单实例能同时监听 old/current advertised inbound 端口。入口端口双接收需要后续 DNAT/redirect grace 或多 listener 能力，Phase 7 只保留高频/对抗性 port hopping。
 
 Phase 4.4/4.4.x 的端口 rotate 状态机分为两层协议语义：
 

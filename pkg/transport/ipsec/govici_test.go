@@ -2,8 +2,10 @@ package ipsec
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/strongswan/govici/vici"
@@ -57,7 +59,7 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	if !ok {
 		t.Fatalf("connection missing from call input: %#v", session.callIn)
 	}
-	if conn["version"] != "2" || conn["remote_port"] != "4500" || conn["mobike"] != "no" {
+	if conn["version"] != "2" || conn["remote_port"] != "4500" || conn["encap"] != "yes" || conn["mobike"] != "no" {
 		t.Fatalf("connection scalar fields = %#v", conn)
 	}
 	children, ok := conn["children"].(map[string]any)
@@ -70,6 +72,67 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	}
 	if child["if_id_in"] != "77" || child["if_id_out"] != "77" {
 		t.Fatalf("child if_id fields = %#v", child)
+	}
+}
+
+func TestStrongSwanDriverLogsVICILoadConnectionConfig(t *testing.T) {
+	session := &fakeGoviciSession{}
+	client := &GoviciClient{Session: session}
+	spec := sampleStrongSwanSpec()
+	var gotEvent string
+	var gotFields map[string]any
+	driver := &StrongSwanDriver{
+		VICI: client,
+		LogConfig: func(event string, fields map[string]any) {
+			gotEvent = event
+			gotFields = fields
+		},
+	}
+
+	if err := driver.LoadConnection(context.Background(), spec); err != nil {
+		t.Fatalf("LoadConnection: %v", err)
+	}
+	if gotEvent != "vici_load_conn" {
+		t.Fatalf("event = %q, want vici_load_conn", gotEvent)
+	}
+	if gotFields["connection"] != spec.TransportID || gotFields["command"] != "load-conn" {
+		t.Fatalf("fields = %+v", gotFields)
+	}
+	configJSON, ok := gotFields["config_json"].(string)
+	if !ok || configJSON == "" {
+		t.Fatalf("config_json = %#v", gotFields["config_json"])
+	}
+	for _, want := range []string{spec.TransportID, `"remote_port":"4500"`, `"encap":"yes"`, `"mobike":"no"`, ChildSAName(spec)} {
+		if !strings.Contains(configJSON, want) {
+			t.Fatalf("config_json missing %q: %s", want, configJSON)
+		}
+	}
+}
+
+func TestSanitizeVICIConfigForLogRedactsKeyMaterial(t *testing.T) {
+	sanitized := sanitizeVICIConfigForLog(map[string]any{
+		"conn": map[string]any{
+			"local": map[string]any{
+				"pubkeys": []string{"-----BEGIN PUBLIC KEY-----\nsecret-ish\n-----END PUBLIC KEY-----"},
+			},
+			"remote": map[string]any{
+				"data": "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+			},
+		},
+	}).(map[string]any)
+	data, err := json.Marshal(sanitized)
+	if err != nil {
+		t.Fatalf("Marshal sanitized config: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "BEGIN") || strings.Contains(text, "secret") {
+		t.Fatalf("sanitized config leaked key material: %#v", sanitized)
+	}
+	conn := sanitized["conn"].(map[string]any)
+	local := conn["local"].(map[string]any)
+	remote := conn["remote"].(map[string]any)
+	if local["pubkeys"] != "present:1" || remote["data"] != "present" {
+		t.Fatalf("sanitized config = %#v", sanitized)
 	}
 }
 

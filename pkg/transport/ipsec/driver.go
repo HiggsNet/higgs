@@ -2,6 +2,7 @@ package ipsec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -80,8 +81,9 @@ type ApplyPlan struct {
 }
 
 type StrongSwanDriver struct {
-	VICI   VICIClient
-	KeyDir string
+	VICI      VICIClient
+	KeyDir    string
+	LogConfig func(event string, fields map[string]any)
 
 	keyIDs   map[string]string
 	keyIDsMu sync.Mutex
@@ -243,6 +245,7 @@ func (d *StrongSwanDriver) LoadConnection(ctx context.Context, spec TransportLin
 	if err != nil {
 		return err
 	}
+	d.logVICIConfig("vici_load_conn", spec.TransportID, msg)
 	_, err = d.VICI.Call(ctx, "load-conn", msg)
 	return err
 }
@@ -352,6 +355,77 @@ func (d *StrongSwanDriver) UnloadPrivateKey(ctx context.Context, id string) erro
 	}
 	_, err := d.VICI.Call(ctx, "unload-key", map[string]any{"id": keyID})
 	return err
+}
+
+func (d *StrongSwanDriver) logVICIConfig(event, connection string, msg map[string]any) {
+	if d == nil || d.LogConfig == nil {
+		return
+	}
+	sanitized := sanitizeVICIConfigForLog(msg)
+	fields := map[string]any{
+		"connection": connection,
+		"command":    "load-conn",
+		"config":     sanitized,
+	}
+	if data, err := json.Marshal(sanitized); err == nil {
+		fields["config_json"] = string(data)
+	}
+	d.LogConfig(event, fields)
+}
+
+func sanitizeVICIConfigForLog(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			switch key {
+			case "pubkeys", "privkey", "private_key", "data":
+				out[key] = redactVICIConfigValue(item)
+			default:
+				out[key] = sanitizeVICIConfigForLog(item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, sanitizeVICIConfigForLog(item))
+		}
+		return out
+	case []string:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, sanitizeVICIConfigForLog(item))
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func redactVICIConfigValue(value any) any {
+	switch v := value.(type) {
+	case []string:
+		if len(v) == 0 {
+			return nil
+		}
+		return fmt.Sprintf("present:%d", len(v))
+	case []any:
+		if len(v) == 0 {
+			return nil
+		}
+		return fmt.Sprintf("present:%d", len(v))
+	case string:
+		if v == "" {
+			return ""
+		}
+		return "present"
+	default:
+		if v == nil {
+			return nil
+		}
+		return "present"
+	}
 }
 
 func (p *ApplyPlan) add(action, target, detail string) {

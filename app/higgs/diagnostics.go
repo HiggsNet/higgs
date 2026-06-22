@@ -384,6 +384,7 @@ func printDebugStrongSwanConfig(w io.Writer, spec *ipsec.TransportLinkSpec) {
 	fmt.Fprintf(w, "      remote_addrs: %s\n", debugStringList(conn["remote_addrs"]))
 	fmt.Fprintf(w, "      local_port: %s\n", dash(debugString(conn["local_port"])))
 	fmt.Fprintf(w, "      remote_port: %s\n", dash(debugString(conn["remote_port"])))
+	fmt.Fprintf(w, "      encap: %s\n", dash(debugString(conn["encap"])))
 	fmt.Fprintf(w, "      mobike: %s\n", dash(debugString(conn["mobike"])))
 	fmt.Fprintf(w, "      local_auth: %s\n", dash(debugString(local["auth"])))
 	fmt.Fprintf(w, "      local_id: %s\n", dash(debugString(local["id"])))

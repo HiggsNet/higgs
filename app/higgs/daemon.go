@@ -753,7 +753,9 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	refreshIPsecDrivers := (d.IPsecDriver == nil && d.XFRMDriver == nil) || d.closeIPsecDriver != nil
 	if refreshIPsecDrivers {
 		var err error
-		ipsecDrivers, err = newConfiguredIPsecDrivers(config.IPsec)
+		ipsecDrivers, err = newConfiguredIPsecDrivers(config.IPsec, func(event string, fields map[string]any) {
+			d.logDebug("ipsec", event, fields)
+		})
 		if err != nil {
 			return err
 		}
@@ -1275,7 +1277,9 @@ func (d *DaemonService) configureIPsecDriversFromConfig() error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	drivers, err := newConfiguredIPsecDrivers(d.Sync.App.Config.IPsec)
+	drivers, err := newConfiguredIPsecDrivers(d.Sync.App.Config.IPsec, func(event string, fields map[string]any) {
+		d.logDebug("ipsec", event, fields)
+	})
 	if err != nil {
 		return err
 	}
@@ -1288,7 +1292,7 @@ type configuredIPsecDrivers struct {
 	close       func() error
 }
 
-func newConfiguredIPsecDrivers(config ipsecConfig) (configuredIPsecDrivers, error) {
+func newConfiguredIPsecDrivers(config ipsecConfig, logConfig func(event string, fields map[string]any)) (configuredIPsecDrivers, error) {
 	driver := config.Driver
 	if driver == "" {
 		driver = ipsecDriverStrongSwan
@@ -1305,7 +1309,7 @@ func newConfiguredIPsecDrivers(config ipsecConfig) (configuredIPsecDrivers, erro
 			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
 		return configuredIPsecDrivers{
-			ipsecDriver: &ipsec.StrongSwanDriver{VICI: client},
+			ipsecDriver: &ipsec.StrongSwanDriver{VICI: client, LogConfig: logConfig},
 			xfrmDriver:  ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
 			close:       client.Close,
 		}, nil

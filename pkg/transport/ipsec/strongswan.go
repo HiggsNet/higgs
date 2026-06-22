@@ -133,7 +133,11 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 		},
 	}
 	if hasPoint {
-		conn["remote_port"] = fmt.Sprintf("%d", chooseIKEPort(point))
+		remotePort := chooseStrongSwanRemotePort(point)
+		conn["remote_port"] = fmt.Sprintf("%d", remotePort)
+		if remotePort != DefaultIKEPort && spec.LocalIKEPort == 0 {
+			conn["local_port"] = fmt.Sprintf("%d", DefaultNATTPort)
+		}
 	}
 	if spec.LocalIKEPort != 0 {
 		conn["local_port"] = fmt.Sprintf("%d", spec.LocalIKEPort)
@@ -202,12 +206,12 @@ func strongSwanRemoteAddress(point ContactPoint, hasPoint bool) (string, error) 
 	return remoteAddr, nil
 }
 
-func chooseIKEPort(point ContactPoint) uint16 {
-	if point.IKEPort != 0 {
-		return point.IKEPort
-	}
+func chooseStrongSwanRemotePort(point ContactPoint) uint16 {
 	if point.NATTPort != 0 {
 		return point.NATTPort
+	}
+	if point.IKEPort != 0 {
+		return point.IKEPort
 	}
 	return DefaultIKEPort
 }

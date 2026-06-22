@@ -35,7 +35,7 @@ func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
 }
 
 func TestConfiguredStrongSwanDriverWithoutLinkGroupsIsNoop(t *testing.T) {
-	drivers, err := newConfiguredIPsecDrivers(ipsecConfig{Driver: ipsecDriverStrongSwan})
+	drivers, err := newConfiguredIPsecDrivers(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil)
 	if err != nil {
 		t.Fatalf("newConfiguredIPsecDrivers: %v", err)
 	}
@@ -2135,8 +2135,14 @@ func assertStrongSwanLoadConnMatchesSpec(t *testing.T, spec ipsec.TransportLinkS
 	if !ok {
 		t.Fatalf("load-conn message = %#v", msg)
 	}
-	if got := conn["remote_port"]; got != "500" {
-		t.Fatalf("remote_port = %#v, want 500", got)
+	if got := conn["remote_port"]; got != "4500" {
+		t.Fatalf("remote_port = %#v, want 4500", got)
+	}
+	if got := conn["encap"]; got != "yes" {
+		t.Fatalf("encap = %#v, want yes", got)
+	}
+	if got := conn["local_port"]; got != "4500" {
+		t.Fatalf("local_port = %#v, want 4500", got)
 	}
 	children, _ := conn["children"].(map[string]any)
 	child, _ := children[ipsec.ChildSAName(spec)].(map[string]any)

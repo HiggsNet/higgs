@@ -285,11 +285,14 @@ func TestPlanTransportLinksDoesNotUseAdvertisedLocalPortAsStrongSwanLocalPort(t 
 	if err != nil {
 		t.Fatalf("BuildStrongSwanConnection: %v", err)
 	}
-	if got := conn["remote_port"]; got != "30001" {
-		t.Fatalf("remote_port = %v, want peer advertised port 30001", got)
+	if got := conn["remote_port"]; got != "30002" {
+		t.Fatalf("remote_port = %v, want peer advertised NAT-T port 30002", got)
 	}
-	if _, ok := conn["local_port"]; ok {
-		t.Fatalf("local_port should be omitted for advertised entry ports: %+v", conn)
+	if got := conn["encap"]; got != "yes" {
+		t.Fatalf("encap = %v, want yes for NAT-T custom server port", got)
+	}
+	if got := conn["local_port"]; got != "4500" {
+		t.Fatalf("local_port = %v, want NAT-T source port 4500 for custom server port", got)
 	}
 }
 
