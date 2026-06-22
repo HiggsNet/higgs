@@ -46,6 +46,8 @@ const (
 	TakeoverPhaseDelay    = "delay"
 	TakeoverPhaseActive   = "active"
 	TakeoverPhaseCooldown = "cooldown"
+
+	defaultLinkEstablishGrace = 3 * time.Minute
 )
 
 type LinkInstance struct {
@@ -368,6 +370,14 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			continue
 		}
 		if (existing.ActualState == LinkStateConfiguring || existing.ActualState == LinkStateConnecting) && !sa.Established {
+			if saObserved(sa) {
+				result.add(ReconcileActionNoop, &spec, &existing, "awaiting in-progress sa")
+				continue
+			}
+			if linkEstablishing(existing, now) {
+				result.add(ReconcileActionNoop, &spec, &existing, "awaiting established sa")
+				continue
+			}
 			inst := MarkLinkApplyFailure(existing, groupBackoffForSpec(spec, in.GroupBackoff), now, fmt.Errorf("waiting for established SA"))
 			result.Instances[id] = inst
 			result.add(ReconcileActionNoop, &spec, &inst, "awaiting established sa")
@@ -749,6 +759,17 @@ func groupBackoffForSpec(spec TransportLinkSpec, groups map[string]BackoffPolicy
 		return BackoffPolicy{}
 	}
 	return groups[spec.OverlayID]
+}
+
+func saObserved(sa SAState) bool {
+	return sa.Name != "" || sa.ChildSA != "" || sa.IKEState != "" || sa.ChildState != "" || sa.XFRMIfID != 0 || sa.Endpoint != ""
+}
+
+func linkEstablishing(inst LinkInstance, now time.Time) bool {
+	if inst.LastTransition == 0 {
+		return false
+	}
+	return now.Before(time.Unix(inst.LastTransition, 0).Add(defaultLinkEstablishGrace))
 }
 
 func rotateRetentionForSpec(spec TransportLinkSpec, groups map[string]int) time.Duration {

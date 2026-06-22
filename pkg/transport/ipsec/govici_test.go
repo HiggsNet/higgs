@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/strongswan/govici/vici"
 )
@@ -44,6 +45,46 @@ func (s *fakeGoviciSession) Close() error {
 	return nil
 }
 
+type blockingGoviciSession struct{}
+
+func (s blockingGoviciSession) Call(ctx context.Context, _ string, _ *vici.Message) (*vici.Message, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (s blockingGoviciSession) CallStreaming(ctx context.Context, _ string, _ string, _ *vici.Message) iter.Seq2[*vici.Message, error] {
+	return func(yield func(*vici.Message, error) bool) {
+		<-ctx.Done()
+		yield(nil, ctx.Err())
+	}
+}
+
+func (s blockingGoviciSession) Close() error {
+	return nil
+}
+
+type blockingVICIClient struct {
+	calls   chan string
+	release chan struct{}
+}
+
+func (c *blockingVICIClient) Call(ctx context.Context, cmd string, _ map[string]any) (map[string]any, error) {
+	select {
+	case c.calls <- cmd:
+	default:
+	}
+	select {
+	case <-c.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *blockingVICIClient) CallStreaming(context.Context, string, string, map[string]any) ([]map[string]any, error) {
+	return nil, nil
+}
+
 func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	session := &fakeGoviciSession{}
 	client := &GoviciClient{Session: session}
@@ -73,6 +114,62 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	if child["if_id_in"] != "77" || child["if_id_out"] != "77" {
 		t.Fatalf("child if_id fields = %#v", child)
 	}
+}
+
+func TestStrongSwanDriverBoundsVICIOperation(t *testing.T) {
+	client := &GoviciClient{Session: blockingGoviciSession{}}
+	driver := &StrongSwanDriver{
+		VICI:             client,
+		OperationTimeout: 10 * time.Millisecond,
+	}
+
+	start := time.Now()
+	err := driver.LoadConnection(context.Background(), sampleStrongSwanSpec())
+	if err == nil {
+		t.Fatal("LoadConnection error = nil, want timeout")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("LoadConnection took too long: %s", time.Since(start))
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("LoadConnection error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestStrongSwanDriverInitiateChildAsyncReturnsAndCoalesces(t *testing.T) {
+	client := &blockingVICIClient{
+		calls:   make(chan string, 2),
+		release: make(chan struct{}),
+	}
+	driver := &StrongSwanDriver{
+		VICI:          client,
+		InitiateAsync: true,
+	}
+
+	start := time.Now()
+	if err := driver.InitiateChild(context.Background(), "ipsec-main-child"); err != nil {
+		t.Fatalf("InitiateChild: %v", err)
+	}
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatalf("InitiateChild blocked for %s", time.Since(start))
+	}
+	if err := driver.InitiateChild(context.Background(), "ipsec-main-child"); err != nil {
+		t.Fatalf("second InitiateChild: %v", err)
+	}
+	select {
+	case cmd := <-client.calls:
+		if cmd != "initiate" {
+			t.Fatalf("command = %q, want initiate", cmd)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for async initiate call")
+	}
+	select {
+	case cmd := <-client.calls:
+		t.Fatalf("unexpected duplicate async call %q", cmd)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(client.release)
 }
 
 func TestStrongSwanDriverLogsVICILoadConnectionConfig(t *testing.T) {

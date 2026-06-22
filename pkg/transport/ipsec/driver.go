@@ -3,12 +3,19 @@ package ipsec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+)
+
+const (
+	defaultVICIOperationTimeout     = 10 * time.Second
+	defaultVICIInitiateAsyncTimeout = 5 * time.Minute
 )
 
 type SAState struct {
@@ -82,12 +89,18 @@ type ApplyPlan struct {
 }
 
 type StrongSwanDriver struct {
-	VICI      VICIClient
-	KeyDir    string
-	LogConfig func(event string, fields map[string]any)
+	VICI                  VICIClient
+	KeyDir                string
+	LogConfig             func(event string, fields map[string]any)
+	OperationTimeout      time.Duration
+	InitiateAsync         bool
+	InitiateTimeout       time.Duration
+	InitiateClientFactory func() (VICIClient, func() error, error)
 
-	keyIDs   map[string]string
-	keyIDsMu sync.Mutex
+	keyIDs       map[string]string
+	keyIDsMu     sync.Mutex
+	initiateMu   sync.Mutex
+	initiateBusy map[string]struct{}
 }
 
 func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
@@ -199,6 +212,9 @@ func InitiateTransportChild(ctx context.Context, ipsec IPsecDriver, spec Transpo
 		plan.add("initiate_child", child, spec.TransportID)
 	}
 	if err := initiator.InitiateChild(ctx, child); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
 		return fmt.Errorf("initiate child: %w", err)
 	}
 	return nil
@@ -260,6 +276,8 @@ func (d *StrongSwanDriver) LoadConnection(ctx context.Context, spec TransportLin
 	if d.VICI == nil {
 		return fmt.Errorf("vici client is required")
 	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
 	msg, err := d.buildLoadConnMessage(spec)
 	if err != nil {
 		return err
@@ -276,6 +294,8 @@ func (d *StrongSwanDriver) UnloadConnection(ctx context.Context, id string) erro
 	if id == "" {
 		return fmt.Errorf("connection id is required")
 	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
 	_, err := d.VICI.Call(ctx, "unload-conn", map[string]any{"name": id})
 	return err
 }
@@ -287,6 +307,8 @@ func (d *StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("sa id is required")
 	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
 	_, err := d.VICI.Call(ctx, "terminate", map[string]any{"ike": id, "force": "yes"})
 	// Terminating an already-gone SA is a no-op: the caller just wants the
 	// SA gone before the next step (e.g. bounded break-before-make rotate).
@@ -303,14 +325,73 @@ func (d *StrongSwanDriver) InitiateChild(ctx context.Context, child string) erro
 	if child == "" {
 		return fmt.Errorf("child sa name is required")
 	}
+	if d.InitiateAsync {
+		return d.initiateChildAsync(ctx, child)
+	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
 	_, err := d.VICI.Call(ctx, "initiate", map[string]any{"child": child})
 	return err
+}
+
+func (d *StrongSwanDriver) initiateChildAsync(ctx context.Context, child string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if d.markInitiateBusy(child) {
+		return nil
+	}
+	client := d.VICI
+	var closeFn func() error
+	if d.InitiateClientFactory != nil {
+		var err error
+		client, closeFn, err = d.InitiateClientFactory()
+		if err != nil {
+			d.clearInitiateBusy(child)
+			return err
+		}
+	}
+	if client == nil {
+		d.clearInitiateBusy(child)
+		return fmt.Errorf("vici client is required")
+	}
+	go func() {
+		defer d.clearInitiateBusy(child)
+		callCtx, cancel := d.viciInitiateContext(ctx)
+		defer cancel()
+		if closeFn != nil {
+			defer func() { _ = closeFn() }()
+		}
+		_, _ = client.Call(callCtx, "initiate", map[string]any{"child": child})
+	}()
+	return nil
+}
+
+func (d *StrongSwanDriver) markInitiateBusy(child string) bool {
+	d.initiateMu.Lock()
+	defer d.initiateMu.Unlock()
+	if d.initiateBusy == nil {
+		d.initiateBusy = make(map[string]struct{})
+	}
+	if _, ok := d.initiateBusy[child]; ok {
+		return true
+	}
+	d.initiateBusy[child] = struct{}{}
+	return false
+}
+
+func (d *StrongSwanDriver) clearInitiateBusy(child string) {
+	d.initiateMu.Lock()
+	defer d.initiateMu.Unlock()
+	delete(d.initiateBusy, child)
 }
 
 func (d *StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {
 	if d.VICI == nil {
 		return nil, fmt.Errorf("vici client is required")
 	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
 	events, err := d.VICI.CallStreaming(ctx, "list-sas", "list-sa", nil)
 	if err != nil {
 		return nil, err
@@ -332,6 +413,8 @@ func (d *StrongSwanDriver) LoadPrivateKey(ctx context.Context, id string, key []
 	if len(key) == 0 {
 		return fmt.Errorf("private key data is required")
 	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
 	pemBytes, err := PEMEncodePrivateKey(key)
 	if err != nil {
 		return err
@@ -372,8 +455,38 @@ func (d *StrongSwanDriver) UnloadPrivateKey(ctx context.Context, id string) erro
 	if keyID == "" {
 		return nil
 	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
 	_, err := d.VICI.Call(ctx, "unload-key", map[string]any{"id": keyID})
 	return err
+}
+
+func (d *StrongSwanDriver) viciContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	timeout := defaultVICIOperationTimeout
+	if d != nil && d.OperationTimeout > 0 {
+		timeout = d.OperationTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (d *StrongSwanDriver) viciInitiateContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	timeout := defaultVICIInitiateAsyncTimeout
+	if d != nil && d.InitiateTimeout > 0 {
+		timeout = d.InitiateTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func (d *StrongSwanDriver) logVICIConfig(event, connection string, msg map[string]any) {

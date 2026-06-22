@@ -1308,10 +1308,22 @@ func newConfiguredIPsecDrivers(config ipsecConfig, logConfig func(event string, 
 		if err != nil {
 			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
+		initiateClientFactory := func() (ipsec.VICIClient, func() error, error) {
+			client, err := ipsec.NewGoviciClient(config.VICISocket)
+			if err != nil {
+				return nil, nil, err
+			}
+			return client, client.Close, nil
+		}
 		return configuredIPsecDrivers{
-			ipsecDriver: &ipsec.StrongSwanDriver{VICI: client, LogConfig: logConfig},
-			xfrmDriver:  ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
-			close:       client.Close,
+			ipsecDriver: &ipsec.StrongSwanDriver{
+				VICI:                  client,
+				LogConfig:             logConfig,
+				InitiateAsync:         true,
+				InitiateClientFactory: initiateClientFactory,
+			},
+			xfrmDriver: ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
+			close:      client.Close,
 		}, nil
 	default:
 		return configuredIPsecDrivers{}, fmt.Errorf("unsupported ipsec driver %q", driver)
