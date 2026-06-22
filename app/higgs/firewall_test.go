@@ -309,6 +309,63 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 	}
 }
 
+type captureFirewallOwnerDriver struct {
+	firewall.DryRunDriver
+	owners []firewall.Owner
+}
+
+func (d *captureFirewallOwnerDriver) ListOwned(ctx context.Context, owner firewall.Owner) (firewall.FirewallObservedState, error) {
+	d.owners = append(d.owners, owner)
+	return firewall.FirewallObservedState{}, nil
+}
+
+func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	appConfig := defaultAppConfig()
+	appConfig.Firewall.Instances = []FirewallInstanceConfig{
+		{
+			ID:            "higgs",
+			NetNS:         "default",
+			Enabled:       true,
+			Mode:          firewall.ModeManaged,
+			Backend:       firewall.BackendNone,
+			DefaultPolicy: firewall.DefaultPolicyDrop,
+		},
+		{
+			ID:        "host-ipsec",
+			NetNS:     "host",
+			IsHost:    true,
+			Enabled:   true,
+			Mode:      firewall.ModeManaged,
+			Backend:   firewall.BackendNone,
+			HostPorts: firewall.HostPortConfig{IKE: true, NATT: true},
+		},
+	}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(7000, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &captureFirewallOwnerDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.firewallDriver = driver
+	if err := service.reconcileFirewall(context.Background()); err != nil {
+		t.Fatalf("reconcileFirewall: %v", err)
+	}
+	if len(driver.owners) != 2 {
+		t.Fatalf("owners = %+v, want two instances", driver.owners)
+	}
+	if driver.owners[0].InstanceID != "default" {
+		t.Fatalf("overlay owner scope = %q, want default", driver.owners[0].InstanceID)
+	}
+	if driver.owners[1].InstanceID != "host" {
+		t.Fatalf("host owner scope = %q, want host", driver.owners[1].InstanceID)
+	}
+}
+
 func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	appConfig := defaultAppConfig()

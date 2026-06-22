@@ -143,9 +143,24 @@ func buildNFTApplyCommands(plan FirewallPlan, desired *FirewallDesiredState) [][
 
 	var commands [][]string
 
+	tableObserved := false
+	for _, a := range plan.Actions {
+		if a.Object.Kind == "table" && a.Object.Family == "inet" && a.Object.Name == tableName && (a.Action == "adopt" || a.Action == "delete") {
+			tableObserved = true
+			break
+		}
+	}
+	if tableObserved {
+		commands = append(commands, []string{"delete", "table", "inet", tableName})
+	}
+
 	// Process deletes first.
 	for _, a := range plan.Actions {
 		if a.Action != "delete" {
+			continue
+		}
+		if tableObserved {
+			// The table delete removes all chains, sets, and rules below it.
 			continue
 		}
 		switch a.Object.Kind {
@@ -158,15 +173,7 @@ func buildNFTApplyCommands(plan FirewallPlan, desired *FirewallDesiredState) [][
 		}
 	}
 
-	// Check if we need to create the table.
-	needTable := false
-	for _, a := range plan.Actions {
-		if (a.Action == "create" || a.Action == "update") && a.Object.Kind == "table" {
-			needTable = true
-			break
-		}
-	}
-	if !needTable {
+	if !desiredHasTable(desired, tableName) {
 		return commands
 	}
 
@@ -195,6 +202,15 @@ func buildNFTApplyCommands(plan FirewallPlan, desired *FirewallDesiredState) [][
 	}
 
 	return commands
+}
+
+func desiredHasTable(desired *FirewallDesiredState, tableName string) bool {
+	for _, ref := range DesiredObjects(desired) {
+		if ref.Kind == "table" && ref.Family == "inet" && ref.Name == tableName {
+			return true
+		}
+	}
+	return false
 }
 
 func buildNFTOverlayChainCommands(tableName string, desired *FirewallDesiredState) [][]string {

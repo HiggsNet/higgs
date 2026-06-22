@@ -87,7 +87,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 
 		owner := firewall.Owner{
 			Manager:     "higgs",
-			InstanceID:  instCfg.ID,
+			InstanceID:  firewallOwnerScope(spec),
 			OwnerPrefix: instCfg.OwnerPrefix,
 			Token:       firewall.OwnerToken(spec),
 		}
@@ -142,6 +142,13 @@ func (d *DaemonService) getOrCreateFirewallEntry(id string) *firewallInstanceRec
 		d.Sync.State.FirewallReconcile.Instances[id] = entry
 	}
 	return entry
+}
+
+func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {
+	if spec.IsHost {
+		return "host"
+	}
+	return spec.NetNS
 }
 
 // firewallDriverInstance returns the configured firewall driver, or nil to

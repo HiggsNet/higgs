@@ -119,6 +119,44 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	}
 }
 
+func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	d := &NFTDriver{Command: runner.run}
+	spec := FirewallInstanceSpec{
+		ID: "host-ipsec", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
+		OwnerPrefix: "higgs",
+		HostPorts:   HostPortConfig{IKE: true, NATT: true},
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("host-ipsec", desired, FirewallObservedState{Objects: []FirewallObjectRef{
+		{Kind: "table", Family: "inet", Name: "higgs_host"},
+		{Kind: "chain", Family: "inet", Name: "higgs_host_input"},
+	}})
+	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(runner.commands) < 2 {
+		t.Fatalf("commands = %v, want delete table then add table", runner.commands)
+	}
+	first := strings.Join(runner.commands[0].args, " ")
+	if first != "delete table inet higgs_host" {
+		t.Fatalf("first command = %q, want table delete", first)
+	}
+	foundAdd := false
+	for _, cmd := range runner.commands[1:] {
+		if strings.Join(cmd.args, " ") == "add table inet higgs_host" {
+			foundAdd = true
+			break
+		}
+	}
+	if !foundAdd {
+		t.Fatalf("missing table rebuild command: %+v", runner.commands)
+	}
+}
+
 func TestNFTDriver_ListOwned(t *testing.T) {
 	// Simulate nft list table output.
 	output := `table inet higgs_h2 {
