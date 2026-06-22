@@ -54,6 +54,7 @@ type XFRMDriver interface {
 
 type DryRunDriver struct {
 	Connections  []TransportLinkSpec
+	Initiated    []string
 	Unloaded     []string
 	Terminated   []string
 	Interfaces   []TransportLinkSpec
@@ -183,6 +184,24 @@ func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver,
 		}
 	}
 	return plan, nil
+}
+
+func InitiateTransportChild(ctx context.Context, ipsec IPsecDriver, spec TransportLinkSpec, plan *ApplyPlan) error {
+	if spec.Direction == DirectionInbound {
+		return nil
+	}
+	initiator, ok := ipsec.(ChildInitiator)
+	if !ok {
+		return nil
+	}
+	child := ChildSAName(spec)
+	if plan != nil {
+		plan.add("initiate_child", child, spec.TransportID)
+	}
+	if err := initiator.InitiateChild(ctx, child); err != nil {
+		return fmt.Errorf("initiate child: %w", err)
+	}
+	return nil
 }
 
 func tunnelAddressPrefix(addr netip.Addr) string {
@@ -434,6 +453,11 @@ func (p *ApplyPlan) add(action, target, detail string) {
 
 func (d *DryRunDriver) LoadConnection(_ context.Context, spec TransportLinkSpec) error {
 	d.Connections = append(d.Connections, spec)
+	return nil
+}
+
+func (d *DryRunDriver) InitiateChild(_ context.Context, child string) error {
+	d.Initiated = append(d.Initiated, child)
 	return nil
 }
 

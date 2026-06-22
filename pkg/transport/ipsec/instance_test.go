@@ -776,6 +776,41 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 	}
 }
 
+func TestApplyReconcileActionRepairInitiatesChild(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        77,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
+		ContactPoints: []ContactPoint{{
+			Address:  "198.51.100.20",
+			Family:   FamilyIPv4,
+			IKEPort:  DefaultIKEPort,
+			NATTPort: DefaultNATTPort,
+		}},
+	}
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action: ReconcileActionRepair,
+		Spec:   &spec,
+	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Initiated) != 1 || ipsecDrv.Initiated[0] != ChildSAName(spec) {
+		t.Fatalf("initiated = %+v", ipsecDrv.Initiated)
+	}
+	last := plan.Operations[len(plan.Operations)-1]
+	if last.Action != "initiate_child" || last.Target != ChildSAName(spec) {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
 func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T) {
 	oldSpec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",

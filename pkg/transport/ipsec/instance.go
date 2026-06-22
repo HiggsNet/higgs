@@ -860,11 +860,23 @@ func suppressTakeoverDuringRotate(inst LinkInstance, now time.Time) (bool, strin
 
 func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, action ReconcileAction, netns NetNSSpec) (ApplyPlan, error) {
 	switch action.Action {
-	case ReconcileActionCreate, ReconcileActionRepair:
+	case ReconcileActionCreate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
 		return ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+	case ReconcileActionRepair:
+		if action.Spec == nil {
+			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
+		}
+		plan, err := ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+		if err != nil {
+			return plan, err
+		}
+		if err := InitiateTransportChild(ctx, ipsec, *action.Spec, &plan); err != nil {
+			return plan, err
+		}
+		return plan, nil
 	case ReconcileActionUpdate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
