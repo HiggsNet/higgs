@@ -549,6 +549,8 @@ netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 
 
 `pkg/transport/ipsec.ApplyTransportLink` 固化了第一版 apply 顺序：ensure namespace -> load StrongSwan connection -> ensure XFRM interface -> assign local tunnel address，并返回 `ApplyPlan` 供 dry-run、debug 和失败审计使用。StrongSwan provider 通过 VICI command 控制 charon：`load-conn` 加载 connection，`terminate` / `unload-conn` 做撤销清理，`list-sas` 做运行态观测；`swanctl` 只作为人工 debug 对照，不作为核心控制面的输出解析依赖。
 
+为了避免 VICI 调用因 charon 无响应而无限挂起，所有 VICI 操作都附加可配置超时（默认 10s）。`InitiateChild` 默认使用独立 VICI client 在后台异步发起 CHILD_SA，reconcile 主路径立刻返回，同一 CHILD_SA 的并发异步请求会被合并；异步发起使用更长的超时（默认 5 分钟）以容忍 IKE 协商耗时。`LinkInstance` 进入 `connecting` 后，若已观测到部分 SA 状态或在 3 分钟建立宽限期内，reconcile 保持 noop 而不是立即进入 error/backoff，避免 StrongSwan 协商稍慢就被判定失败。repair 路径在重新 `load-conn` 并 ensure XFRM 后会显式调用 `InitiateTransportChild`，避免失败链路只反复更新 connection 配置而不重新发起 CHILD_SA。
+
 `pkg/transport/ipsec.PlanTransportLinks` / `ReconcileLinkInstances` 提供 Phase 4.2 的纯函数核心。主路径是：verified active state + 本地 `LinkGroupSpec` 先被 planner 转成 desired `TransportLinkSpec` 和 skip reason；reconciler 再把 desired spec、持久化 `LinkInstance`、driver `ListSAs` 快照和 revocation 输入放在一起，判定 create/update/adopt/repair/teardown/noop。
 
 daemon 已接入这条 reconcile 链路：
@@ -564,7 +566,7 @@ reconcile 摘要会持久化最近 desired `TransportLinkSpec` 快照和 driver 
 
 `LinkInstance.Owner` 是 daemon 自动清理资源的归属边界。新建实例会保存 `manager=higgs`、group id、instance id、transport id 和派生 owner token；reconcile 对“不再 desired”的旧实例只在 owner 字段与实例字段匹配、transport id 使用 `ipsec-*`、interface 使用 `hgs*` 命名时生成 teardown。apply 层对只有 persisted instance、没有 desired spec 的 teardown 再做一次同样校验，避免 daemon 误删管理员手工创建的 StrongSwan connection 或 XFRM interface。旧状态没有 token 时仍可通过 manager/group/instance/transport/name 校验迁移，带 token 的新状态会额外校验 token。
 
-StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对应一条 IKE connection 和一个 CHILD_SA，CHILD_SA 使用稳定 XFRM `if_id_in` / `if_id_out`，traffic selector 保持宽泛（IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`）。Phase 4 只证明 peer-to-peer tunnel link 可用；多前缀授权、route filter 和 Babel import/export 留给 Phase 5。
+StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对应一条 IKE connection 和一个 CHILD_SA，CHILD_SA 使用稳定 XFRM `if_id_in` / `if_id_out`，traffic selector 保持宽泛（IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`）。当 ContactPoint 使用自定义 NAT-T advertised/observed 端口时，StrongSwan 连接配置把该 NAT-T 端口写入 `remote_port`，并设置 `local_port=4500`、`encap=yes`，使初始 IKE 包走 NAT-T socket/non-ESP marker 路径；固定 500/4500 场景仍兼容。`load-conn` 调用会输出结构化 debug 日志，并自动脱敏 `pubkeys`/`privkey`/`data` 等敏感字段。Phase 4 只证明 peer-to-peer tunnel link 可用；多前缀授权、route filter 和 Babel import/export 留给 Phase 5。
 
 撤销或删除 link 时使用 `TeardownTransportLink` 的可审计顺序：先 terminate IKE_SA/CHILD_SA，再 unload StrongSwan connection，最后删除通过 `LinkInstance.Owner` 校验的 Higgs 管理 XFRM interface。daemon 在 teardown 成功后删除本地持久化 `LinkInstance`，让后续 state-change 或 restart reconcile 看到一个干净的 no-desired/no-instance 状态，而不是重复执行同一个 teardown。
 
@@ -925,7 +927,7 @@ type PeerView struct {
 | XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
 | 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug babel/routes/route` 已落地；container root smoke、per-peer whitelist、策略路由、rotate cutover gate 后续补齐 |
-| 防火墙 | _未实现_（Phase 6.3） | `nftables` netlink 优先，iptables 兜底 | 设计见 `docs/phase6-firewall-design.md`；主策略在 overlay netns，host 只做最小入口/NAT |
+| 防火墙 | 🟨 第一版已实现 | `nftables` 优先，`iptables` 兜底 | `pkg/firewall/` 已落地：按 instance/netns 生成 owner-bound filter/NAT plan，host ingress + redirect grace，nft/iptables CLI driver，dry-run/reconcile/debug；root/container smoke 待联合 BIRD 验证 |
 
 ---
 
@@ -962,7 +964,7 @@ type PeerView struct {
 | StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 主体已完成：IPsec public record 公告、Address/Port/ContactPoint 模型、LinkPlanner + skip reason、LinkInstance reconcile（create/update/adopt/repair/teardown/noop）、dry-run/VICI SystemXFRMDriver provider、VICI IKE_SA/CHILD_SA bring-up（4.3）、daemon `Run` 循环 gossip 同步后真实 VICI/XFRM + tunnel ping（4.3）、daemon 级重启恢复及撤销闭环（4.3）、bounded break-before-make 端口轮换（4.4）、bidirectional takeover（4.5）。外部 `build/higgs daemon` 双 OS 进程 smoke 仍作为后续 hardening |
 | WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
 | BIRD 路由适配器 | `pkg/routing/bird/` | 🟨 第一版已落地：config generator、filter renderer、router-id derivation、birdc client、process manager、preflight；真实 BIRD bring-up 和 container smoke 待验证 |
-| Firewall 规则同步 | `pkg/firewall/`（建议） + `app/higgs/firewall_reconcile.go`（建议） | 🔲 设计见 `docs/phase6-firewall-design.md`；按 netns 生成 owner-bound filter/NAT plan，nftables 优先、iptables 兜底 |
+| Firewall 规则同步 | `pkg/firewall/` + `app/higgs/firewall_reconcile.go` | 🟨 第一版已实现：overlay/host instance 按 netns 区分，nft/iptables CLI driver 在对应 netns 执行，owner scope 用 `host`/`<netns>`，apply 时重建 nft table 清除 stale rules；dry-run/reconcile/debug 已落地；root/container smoke 待联合 BIRD 验证 |
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
 | Delegation 撤销（tombstone） | `pkg/core/zone/` + `app/higgs/` | ✅ 已实现 |

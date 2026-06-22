@@ -51,7 +51,7 @@ overlay netns (for example h2)
 每个 Higgs 管理的对象必须带 owner 信息：
 
 - `owner_prefix`：默认 `higgs`。
-- `instance_id`：如 `h2`、`host-ipsec`。
+- `instance_id`：firewall 对象的 scope，host 实例固定为 `host`，overlay 实例为对应的 netns 名（如 `h2`），而不是配置里写的 instance id。这样 `id: host-ipsec` 的 host 实例也会归属到 `higgs_host`，`netns: default` 等别名也会解析到实际 netns 名。
 - `generation`：daemon 每次成功 apply 的 desired-state generation。
 - `manager=higgs` 标记：nftables 可用 comment/table 名称表达，iptables 用 chain 名称和 comment 表达。
 
@@ -88,6 +88,7 @@ reconcile 原则：
 2. 发现非 Higgs 规则冲突时报告错误，不静默覆盖。
 3. daemon 重启后先 `ListOwned()`，能匹配当前 desired state 的对象可以 adopt。
 4. stale generation 只能在 owner token 匹配时删除。
+5. nftables backend apply 时，如果观察到已存在同名的 Higgs-owned table，先执行 `delete table` 整体删除，再重新创建并渲染 desired state，避免历史 reconcile 留下的 stale 或 duplicate rules 累积。
 
 ## 4. 配置模型
 
@@ -400,6 +401,15 @@ firewall:
   host_nat: ok
   conflicts: []
 ```
+
+### 10.4 按 instance 解析 netns 与 driver
+
+daemon 为每个 `firewall.instances[]` 条目独立构造 driver 并解析目标 netns：
+
+- overlay instance（`host: false`）把 `netns` 字段解析为声明的 netns 名；`netns: default` 等别名会按 `config.netns.names` 解析到实际命名空间（如 `h2`），避免在 host 规则集中误建 `higgs_default`。
+- host instance（`host: true`）固定使用 host namespace，不参与 overlay netns 解析。
+- nftables/iptables CLI driver 会把 `ip netns exec <ns>` 或等效 netns 前缀应用到所有命令，使 overlay 规则真正下发到对应 netns。
+- 当 `ipsec.port_mode=range` 时，host firewall instance 默认启用 `host_ports.ike/natt` 和 `redirect_grace`，除非管理员显式关闭；这保证 advertised entry ports 能通过 DNAT 回到 charon 当前监听的 500/4500。
 
 ## 11. Driver Interface
 

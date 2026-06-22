@@ -483,6 +483,10 @@
     - [x] daemon event drain 期间合并多次 state change：record/admin/remote apply 仍串行落盘，但同一轮事件队列只触发一次 IPsec `ListSAs` + reconcile/apply，避免同一个 peer/group 在短时间内重复加载 connection/interface。
     - [x] config reload 与 state-change 使用同一条 dirty/reconcile 路径：同一轮事件中的多次 reload/record/admin/remote apply 会合并为一次 IPsec reconcile；reload 失败不会触发 sync。
     - [x] `reconcile.interval` 已接入 daemon 主循环：存在 IPsec link group 时按最短 group interval 周期触发一次 `ListSAs` + reconcile，用于发现 strongSwan/XFRM/SA 等系统层漂移；没有 link group 但仍有残留 `LinkInstance` 时继续按默认 30s 巡检以重试 teardown；state-change/sync/reload 触发后会重置下一次周期巡检时间。
+    - [x] VICI 操作增加可配置超时：普通 VICI call 默认 10s，避免调用挂起；`load-conn` 等操作在传入 context 无 deadline 时自动附加 timeout。
+    - [x] `InitiateChild` 支持异步模式：默认通过独立 VICI client 在后台发起 `initiate`，不阻塞 reconcile 主路径；同一 CHILD_SA 的并发异步发起请求合并，避免重复触发。
+    - [x] SA 建立引入宽限期：LinkInstance 进入 `connecting` 后，若已观测到部分 SA 状态或在 3 分钟建立宽限期内，reconcile 保持 noop 而非立即判定失败；宽限期过后仍未 established 才进入 repair/backoff。
+    - [x] repair 路径主动重试 CHILD_SA 建立：`ApplyReconcileAction` 对 `ReconcileActionRepair` 在重新 `load-conn` + ensure XFRM 后显式调用 `InitiateTransportChild`，避免失败链路只反复更新 connection 而不重新发起。
   - [x] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
     - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id 和派生 owner token；reconcile 对不再 desired 的 persisted instance 先校验 owner 字段、token、`ipsec-*` transport id 与 `hgs*` interface 命名，无法证明归属的资源保留为 noop，不自动 teardown。
     - [x] `ApplyReconcileAction` 对只有 `LinkInstance`、没有 desired spec 的 teardown 再执行 owner guard，防止 revocation/restart recovery 路径误删管理员手工 StrongSwan/XFRM 资源；旧状态无 token 时仍可凭 manager/group/instance/transport/name 匹配迁移。
@@ -523,6 +527,8 @@
     - [x] 已接入真实 govici 客户端边界：`GoviciClient` 使用 `github.com/strongswan/govici/vici` 连接 charon VICI socket，把现有 `StrongSwanDriver` 的 `load-conn` / `terminate` / `unload-conn` / streaming `list-sas` map 结构转换为 VICI message；单测覆盖 `load-conn` 嵌套 message 与 `list-sas` 事件解析，为后续系统 smoke 从 fake IPsec driver 切到真实 VICI driver 做准备。
     - [x] daemon 已支持通过 `config.yaml` 显式选择真实 StrongSwan/XFRM provider：默认 `ipsec.driver: dry-run` 保持非 root/无 charon 环境可运行；设置 `ipsec.driver: strongswan` 时启动或 `reload` 会创建真实 `GoviciClient` 和 `SystemXFRMDriver`，`ipsec.vici_socket` 可覆盖 charon VICI socket，连接失败会在启动/reload 阶段明确报错。
     - [x] daemon 已能在配置了 `overlays:` / link group 后自动发布本节点 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` records：transport key 独立于 Zone signing key 并持久化到本地 state meta，重复发布不会抖动 fingerprint 或 record version；地址使用本机 `advertise_addrs` / `listen_addr` 派生，端口使用当前 fixed IKE/NAT-T 边界。
+    - [x] StrongSwan connection 渲染对齐 NAT-T server-port 语义：当 ContactPoint 携带自定义 NAT-T advertised/observed 端口时，`remote_port` 写入 NAT-T 端口并保持 `encap=yes`，`local_port=4500`，使初始 IKE 包走 NAT-T socket/non-ESP marker 路径；固定 500/4500 场景仍兼容。
+    - [x] VICI `load-conn` 调用增加结构化 debug 日志，自动脱敏 `pubkeys`/`privkey`/`data` 等敏感字段，便于对比 provider config 与 charon log。
     - [x] 增加普通 Go 覆盖：两个 daemon 使用真实 root -> `catofes.` -> `node-a`/`node-b` 信任链，各自自动发布 signed `ipsec/*` records，经 UDP gossip 同步对端 Zone 后，从 verified active state + 本地 `LinkGroupSpec` 推导对端 `TransportLinkSpec` 并执行 dry-run apply；该测试证明完整 daemon publish/gossip/planner/reconcile 边界已闭合，但仍不触碰 root XFRM 或真实 VICI/IKE。
     - [x] 增加真实 StrongSwan/VICI driver 层 IKE bring-up 测试：`TestStrongSwanDriverIKEBringupSmoke` 在单测中启动两个隔离 charon 实例、两个 named netns、veth underlay、XFRM interface、tunnel address，通过 VICI `load-key`/`load-conn` 加载 Ed25519/ECDSA raw-public-key 认证与 connection，验证 IKE_SA/CHILD_SA 建立成功及 A/B tunnel IP 双向 `ping` 通；`TestStrongSwanDriverLoadsKeyAndConnection` 验证 VICI 公私钥加载与 `load-conn` 消息构造。该测试位于 driver 层，不经过完整 daemon/gossip，但证明 StrongSwan/XFRM/VICI 数据面闭环已打通。
     - [x] 增加真实 daemon reconcile + StrongSwan/VICI + XFRM bring-up 测试：`TestDaemonStrongSwanReconcileBringupSmoke` 在 root/container smoke 中启动两个 named netns、两个隔离 charon/VICI 实例和 veth underlay，构造已验证的 root -> `catofes.` -> `node-a`/`node-b` active state 与 signed `ipsec/*` records，让两个 daemon service 通过真实 `StrongSwanDriver` + `SystemXFRMDriver` 自动加载 private key/connection、创建 XFRM interface、分配 tunnel address、观测 VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 A/B tunnel IP 双向 `ping` 通。
@@ -1032,6 +1038,7 @@
     - `FirewallInstanceSpec.IsHost` 路径只生成 `HostIngress`（IKE 500 / NAT-T 4500）和可选 `NatRedirect`（previous → current），不生成 overlay forward chain。
   - 每个规则集都必须带 Higgs owner token / table-chain 命名前缀 / generation id；reconcile 只增删自己拥有的对象，避免覆盖管理员手写规则。
     - `OwnerToken` 派生稳定 token；`DesiredObjects` 输出 `higgs_<scope>` 前缀的 table/chain/set；`PlanDiff` 仅按 desired/observed owner 对象集合做 create/adopt/delete，`ListOwned` 只读取 Higgs-owned 对象。
+    - [x] firewall reconcile 的 owner `InstanceID` 使用 scope（host 实例为 `host`，overlay 实例为对应 netns 名），而不是配置中的 instance id；这样 `host-ipsec` 等实例也能正确映射到 `higgs_host` table，overlay 实例映射到 `higgs_<netns>` table。
   - 定义 dry-run diff：展示将创建/删除的 table、chain、set、rule、NAT redirect 和默认策略，供 `higgs debug` / 后续 apply 确认使用。
     - `FirewallPlan.Actions` 以 create/adopt/delete 输出每个对象及 reason；`debug firewall` 展示 backend、mode、default_policy、transit、local_services、generation、owned_objects、policy_hash、last_error。
 - [x] **6.3.2 配置模型与可扩展 hook**
@@ -1073,6 +1080,8 @@
     - `NFTDriver` (`pkg/firewall/nft_driver.go`) 通过 `nft` CLI 实现 nftables backend，支持 inet table/chain/set/rule 和 nat prerouting redirect。
     - `IPTablesDriver` (`pkg/firewall/iptables_driver.go`) 通过 `iptables` CLI 实现 fallback backend，支持 filter chain 创建/跳转和 nat REDIRECT。
     - daemon `firewallDriverInstance()` 根据 config + preflight 选择真实 driver 或 dry-run fallback。
+    - [x] daemon 为每个 firewall instance 独立解析 driver 与目标 netns：overlay instance 的 nft/iptables 在对应 netns 内执行；host instance 仍在 host namespace 执行；`netns: default` 等别名正确解析到实际命名空间，避免在 host 规则集中误建 `higgs_default`。
+    - [x] nftables backend apply 时若发现已存在 Higgs-owned table，先 `delete table` 再重建，清除可能因历史 reconcile 产生的 stale/duplicate rules，再渲染 desired state。
   - 避免混用同一 owner 的 nft 与 iptables backend；backend 切换必须先 dry-run 展示旧 backend 清理和新 backend 创建计划。
   - preflight 输出内核/工具版本、netns 能力、CAP_NET_ADMIN、nft/iptables 可用性、是否存在冲突 owner chain。
 - [x] **6.3.7 revoke / restart / rollback 语义**

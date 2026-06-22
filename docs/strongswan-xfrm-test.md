@@ -300,3 +300,19 @@ root/container smoke 已覆盖当前 daemon service 级恢复与撤销：
 
 Phase 4 只做到 peer-to-peer tunnel link 可用。Babel routing 和 prefix authorization
 仍属于 Phase 5。
+
+## 7. 近期 Provider 行为变更（排障时注意）
+
+以下变更已落地，运行 `make ipsec-xfrm-smoke` 或手工调试时应留意：
+
+1. **NAT-T server-port 对齐**：当对端 `ipsec/ports` 公告或 observed 端口为自定义 NAT-T 端口时，StrongSwan `load-conn` 的 `remote_port` 会使用该 NAT-T 端口，并设置 `local_port=4500`、`encap=yes`、`mobike=no`。这保证初始 IKE 包走 NAT-T socket/non-ESP marker 路径；固定 500/4500 场景仍兼容。
+
+2. **VICI 操作超时**：所有 VICI call 默认带 10s 超时，避免 charon 无响应时 reconcile 挂起。`load-conn` 等调用会输出结构化 debug 日志，敏感 key material 会被脱敏。
+
+3. **异步 CHILD_SA 发起**：`InitiateChild` 默认在后台通过独立 VICI client 异步执行，reconcile 主路径不等待 IKE 协商完成；同一 CHILD_SA 的并发请求会合并。若需要同步发起可关闭 `InitiateAsync`。
+
+4. **SA 建立宽限期**：`LinkInstance` 进入 `connecting` 后，如果已观测到部分 SA 状态或在 3 分钟宽限期内，reconcile 不会立即标记为 error/backoff；宽限期结束后仍未 established 才进入 repair。
+
+5. **repair 主动重试 CHILD_SA**：`ReconcileActionRepair` 在重新 `load-conn` + ensure XFRM 后会显式调用 `InitiateTransportChild`，避免失败链路只反复更新 connection 而不重新发起。
+
+6. **防火墙按 instance netns 执行**：如果配置了 `firewall.instances[]`，overlay instance 的 nft/iptables 命令会在对应 netns 内执行，host instance 仍在 host namespace；owner scope 使用 `host`/`<netns>` 而不是配置 id。nftables apply 会重建同名 Higgs table 以清除 stale rules。
