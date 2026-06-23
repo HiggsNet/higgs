@@ -312,8 +312,8 @@ overlays:
 	if len(group.ConnectRules) != 1 || len(group.DenyRules) != 1 {
 		t.Fatalf("rules = connect:%v deny:%v", group.ConnectRules, group.DenyRules)
 	}
-	if config.IPsec.Accept != ipsec.AcceptInbound {
-		t.Fatalf("IPsec.Accept = %q, want default inbound", config.IPsec.Accept)
+	if config.IPsec.Accept != ipsec.AcceptBidirectional {
+		t.Fatalf("IPsec.Accept = %q, want default bidirectional", config.IPsec.Accept)
 	}
 }
 

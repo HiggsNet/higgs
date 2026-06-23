@@ -112,8 +112,8 @@ ipsec:
   #
   # accept declares this node's inbound capability: none, inbound, or
   # bidirectional. It also determines whether this node initiates links.
-  # Default is inbound (accept incoming, do not initiate).
-  # accept: inbound
+  # Default is bidirectional (accept and initiate links).
+  # accept: bidirectional
   #
   # Default driver is strongswan. For unprivileged development or CI without
   # charon/VICI/XFRM, explicitly set driver: dry-run.

@@ -160,7 +160,7 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 	}
 	accept := config.IPsec.Accept
 	if accept == "" {
-		accept = ipsec.AcceptInbound
+		accept = ipsec.AcceptBidirectional
 	}
 	profile := ipsec.ProfileRecord{
 		Version:                 1,

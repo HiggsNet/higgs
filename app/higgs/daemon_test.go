@@ -1498,11 +1498,13 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
 		Clock:     time.Now,
 	}
+	rtA.Config.IPsec.Accept = ipsec.AcceptInbound
 	rtB := &Runtime{
 		Config:    testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "b"), "198.51.100.20:4500", group),
 		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
 		Clock:     time.Now,
 	}
+	rtB.Config.IPsec.Accept = ipsec.AcceptInbound
 	if err := rtA.SaveState(stateA); err != nil {
 		t.Fatalf("SaveState(node-a): %v", err)
 	}

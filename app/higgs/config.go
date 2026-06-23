@@ -293,7 +293,7 @@ func defaultAppConfig() *appConfig {
 		},
 		IPsec: ipsecConfig{
 			DefaultNetNS:         ipsec.NetNSSpec{}.Normalized(),
-			Accept:               ipsec.AcceptInbound,
+			Accept:               ipsec.AcceptBidirectional,
 			Driver:               ipsecDriverStrongSwan,
 			PortMode:             ipsec.PortModeFixed,
 			PortRotateInterval:   0,
@@ -345,7 +345,7 @@ func normalizeAppConfig(config *appConfig) {
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	if config.IPsec.Accept == "" {
-		config.IPsec.Accept = ipsec.AcceptInbound
+		config.IPsec.Accept = ipsec.AcceptBidirectional
 	}
 	if config.IPsec.Driver == "" {
 		config.IPsec.Driver = ipsecDriverStrongSwan

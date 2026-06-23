@@ -266,16 +266,16 @@ func canLoadResponder(localAccept string) bool {
 
 func localAcceptFromState(ns *zone.NetworkState, local zone.ZonePath, now time.Time) string {
 	if ns == nil || !local.Valid() {
-		return AcceptInbound
+		return AcceptBidirectional
 	}
 	records, err := ExtractNodeRecords(ns, local, now)
 	if err != nil {
-		return AcceptInbound
+		return AcceptBidirectional
 	}
 	if records.Profile != nil && records.Profile.Accept != "" {
 		return records.Profile.Accept
 	}
-	return AcceptInbound
+	return AcceptBidirectional
 }
 
 func localPortGeneration(ns *zone.NetworkState, local zone.ZonePath, now time.Time) uint64 {
