@@ -160,9 +160,9 @@ func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	}
 	// Staged connections rely on StrongSwan's start_action (start/trap) instead
 	// of an explicit vici initiate. This avoids racing with the auto-start that
-	// load-conn triggers for outbound/bidirectional children while still letting
-	// inbound children install a trap policy.
-	if spec.Direction != DirectionInbound {
+	// load-conn triggers for active initiators while still letting responders
+	// install a trap policy.
+	if IsActiveInitiatorRole(spec.InitiatorRole) {
 		child := ChildSAName(spec)
 		plan.add("initiate_child", child, spec.TransportID)
 	}
@@ -200,7 +200,7 @@ func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver,
 }
 
 func InitiateTransportChild(ctx context.Context, ipsec IPsecDriver, spec TransportLinkSpec, plan *ApplyPlan) error {
-	if spec.Direction == DirectionInbound {
+	if !IsActiveInitiatorRole(spec.InitiatorRole) {
 		return nil
 	}
 	initiator, ok := ipsec.(ChildInitiator)

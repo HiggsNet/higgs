@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -83,7 +84,7 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 				plan.skip(group.ID, peer, SkipRevokedZone, "")
 				continue
 			}
-			spec, ok, skip, err := planPeerLink(ctx, ns, local, peer, group, connectRules, denyRules, selectedPeers, linkIndex, now, opts)
+			specs, ok, skip, nextIndex, err := planPeerLink(ctx, ns, local, peer, group, connectRules, denyRules, selectedPeers, linkIndex, now, opts)
 			if err != nil {
 				plan.skip(group.ID, peer, SkipPlannerError, err.Error())
 				continue
@@ -92,55 +93,66 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 				plan.Skipped = append(plan.Skipped, skip)
 				continue
 			}
-			plan.Desired = append(plan.Desired, spec)
-			plan.Roles[LinkInstanceID(spec)] = spec.InitiatorRole
+			for _, spec := range specs {
+				plan.Desired = append(plan.Desired, spec)
+				plan.Roles[LinkInstanceID(spec)] = spec.InitiatorRole
+			}
 			selectedPeers++
-			linkIndex++
+			linkIndex = nextIndex
 		}
 	}
 	sort.SliceStable(plan.Desired, func(i, j int) bool {
 		if plan.Desired[i].OverlayID != plan.Desired[j].OverlayID {
 			return plan.Desired[i].OverlayID < plan.Desired[j].OverlayID
 		}
-		return plan.Desired[i].PeerZone < plan.Desired[j].PeerZone
+		if plan.Desired[i].PeerZone != plan.Desired[j].PeerZone {
+			return plan.Desired[i].PeerZone < plan.Desired[j].PeerZone
+		}
+		return plan.Desired[i].TransportID < plan.Desired[j].TransportID
 	})
 	return plan, nil
 }
 
-func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.ZonePath, group LinkGroupSpec, connectRules, denyRules []MeshPolicyRule, selectedPeers, linkIndex int, now time.Time, opts LinkPlannerOptions) (TransportLinkSpec, bool, PlanSkip, error) {
+func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.ZonePath, group LinkGroupSpec, connectRules, denyRules []MeshPolicyRule, selectedPeers, linkIndex int, now time.Time, opts LinkPlannerOptions) ([]TransportLinkSpec, bool, PlanSkip, int, error) {
 	records, err := ExtractNodeRecords(ns, peer, now)
 	if err != nil {
-		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingRecords, Detail: err.Error()}, nil
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingRecords, Detail: err.Error()}, linkIndex, nil
 	}
 	if records.Profile == nil || records.Addresses == nil || records.Ports == nil || records.TransportKey == nil {
-		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingRecords}, nil
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingRecords}, linkIndex, nil
 	}
 	effectiveGroup, ok, skip, err := applyMeshPolicyRules(group, peer, records, connectRules, denyRules)
 	if err != nil {
-		return TransportLinkSpec{}, false, PlanSkip{}, err
+		return nil, false, PlanSkip{}, linkIndex, err
 	}
 	if !ok {
-		return TransportLinkSpec{}, false, skip, nil
+		return nil, false, skip, linkIndex, nil
 	}
 	group = effectiveGroup
 	if group.MaxPeers > 0 && selectedPeers >= group.MaxPeers {
-		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMaxPeers}, nil
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMaxPeers}, linkIndex, nil
 	}
 	if !records.Profile.Enabled {
-		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipDisabledProfile}, nil
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipDisabledProfile}, linkIndex, nil
 	}
 	if !oneOf(group.DefaultPathMode, records.Profile.PathModes...) {
-		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedPathMode, Detail: group.DefaultPathMode}, nil
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedPathMode, Detail: group.DefaultPathMode}, linkIndex, nil
 	}
 	if !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {
-		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedFamily}, nil
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedFamily}, linkIndex, nil
 	}
-	role := InitiatorRoleForPeer(local, peer, group.Direction, records.Profile.Accept)
-	if role == "" {
-		return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipAcceptIntentMismatch, Detail: records.Profile.Accept}, nil
+	localAccept := localAcceptFromState(ns, local, now)
+	remoteAccept := records.Profile.Accept
+	role := InitiatorRoleForPeer(local, peer, localAccept, remoteAccept)
+	if role == "" && !canLoadResponder(localAccept) {
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipAcceptIntentMismatch, Detail: fmt.Sprintf("local=%s remote=%s", localAccept, remoteAccept)}, linkIndex, nil
 	}
+
 	var contacts []ContactPoint
-	if group.Direction != DirectionInbound {
+	// Both primary and secondary-standby need contact points: primary dials
+	// immediately, secondary-standby may need them for takeover. Responder-only
+	// roles (empty role) do not resolve remote contacts.
+	if role != "" {
 		allContacts, err := ResolveContactPoints(ctx, records.Addresses, records.Ports, now, AddressCandidateOptions{
 			DNSResolver:       opts.DNSResolver,
 			SourceOrder:       group.AddressSourceOrder,
@@ -150,7 +162,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			ContactQuality:    opts.ContactPointQuality[peer],
 		})
 		if err != nil {
-			return TransportLinkSpec{}, false, PlanSkip{}, err
+			return nil, false, PlanSkip{}, linkIndex, err
 		}
 		contacts = SelectContactPointsWithOptions(allContacts, group.DefaultPathMode, AddressCandidateOptions{
 			SourceOrder:    group.AddressSourceOrder,
@@ -160,35 +172,148 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		if remoteNeedsInboundNATEvidence(records.Profile) {
 			contacts = filterInboundNATEvidence(contacts)
 			if len(contacts) == 0 {
-				return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoInboundNATEvidence, Detail: natEvidenceDetail(records.Profile)}, nil
+				return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoInboundNATEvidence, Detail: natEvidenceDetail(records.Profile)}, linkIndex, nil
 			}
 		}
 		if len(contacts) == 0 {
-			return TransportLinkSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoContactPoints}, nil
+			return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoContactPoints}, linkIndex, nil
 		}
 	}
-	spec, err := NewTransportLinkSpecForGroup(local, peer, group, records, contacts, linkIndex)
-	if err != nil {
-		return TransportLinkSpec{}, false, PlanSkip{}, err
-	}
-	if ns.Zones[local] != nil {
-		localRecords, err := ExtractNodeRecords(ns, local, now)
-		if err != nil {
-			return TransportLinkSpec{}, false, PlanSkip{}, err
-		}
-		if localRecords.Ports != nil && localRecords.Ports.Current != nil {
-			if group.Direction == DirectionInbound {
-				spec.Generation = localRecords.Ports.Current.Generation
+
+	var specs []TransportLinkSpec
+	nextIndex := linkIndex
+	switch group.DefaultPathMode {
+	case PathModeFamilyRedundant:
+		byFamily := groupContactPointsByFamily(contacts)
+		if len(byFamily) == 0 {
+			// Responder-only spec (no contacts).
+			spec, err := newSpecForFamily(local, peer, group, records, nil, "", linkIndex)
+			if err != nil {
+				return nil, false, PlanSkip{}, linkIndex, err
 			}
+			spec.InitiatorRole = role
+			specs = append(specs, spec)
+			nextIndex = linkIndex + 1
+			break
+		}
+		familyIdx := 0
+		for _, family := range sortedFamilies(byFamily) {
+			familyContacts := byFamily[family]
+			spec, err := newSpecForFamily(local, peer, group, records, familyContacts, family, linkIndex+familyIdx)
+			if err != nil {
+				return nil, false, PlanSkip{}, linkIndex, err
+			}
+			spec.InitiatorRole = role
+			specs = append(specs, spec)
+			familyIdx++
+		}
+		nextIndex = linkIndex + len(byFamily)
+	default:
+		spec, err := newSpecForFamily(local, peer, group, records, contacts, "", linkIndex)
+		if err != nil {
+			return nil, false, PlanSkip{}, linkIndex, err
+		}
+		spec.InitiatorRole = role
+		specs = append(specs, spec)
+		nextIndex = linkIndex + 1
+	}
+
+	localGeneration := localPortGeneration(ns, local, now)
+	for i := range specs {
+		spec := &specs[i]
+		if IsActiveInitiatorRole(spec.InitiatorRole) {
+			if point, ok := firstContactPoint(spec.ContactPoints); ok {
+				spec.Generation = point.Generation
+			}
+		} else if localGeneration != 0 {
+			spec.Generation = localGeneration
 		}
 	}
-	if group.Direction != DirectionInbound {
-		if point, ok := firstContactPoint(contacts); ok {
-			spec.Generation = point.Generation
-		}
+	return specs, true, PlanSkip{}, nextIndex, nil
+}
+
+func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *NodeRecords, contacts []ContactPoint, family string, linkIndex int) (TransportLinkSpec, error) {
+	transportID := StableTransportID(local, peer, group.ID)
+	if family != "" {
+		transportID = StableTransportID(local, peer, group.ID, family)
 	}
-	spec.InitiatorRole = role
-	return spec, true, PlanSkip{}, nil
+	spec, err := NewTransportLinkSpecWithOptions(local, peer, group.ID, records, contacts, TransportLinkOptions{
+		TransportID:     transportID,
+		Provider:        group.Provider,
+		PathMode:        group.DefaultPathMode,
+		NetNS:           group.NetNS.Target(),
+		LocalTunnelAddr: netip.Addr{},
+		PeerTunnelAddr:  netip.Addr{},
+	})
+	if err != nil {
+		return TransportLinkSpec{}, err
+	}
+	localAddr, peerAddr, err := group.DeriveTunnelAddresses(local, peer, linkIndex)
+	if err != nil {
+		return TransportLinkSpec{}, err
+	}
+	if group.normalizedTunnelAddress().Mode == TunnelAddressSequentialPool && peer < local {
+		localAddr, peerAddr = peerAddr, localAddr
+	}
+	spec.LocalTunnelAddr = localAddr
+	spec.PeerTunnelAddr = peerAddr
+	return spec, nil
+}
+
+func canLoadResponder(localAccept string) bool {
+	return localAccept == AcceptInbound || localAccept == AcceptBidirectional
+}
+
+func localAcceptFromState(ns *zone.NetworkState, local zone.ZonePath, now time.Time) string {
+	if ns == nil || !local.Valid() {
+		return AcceptInbound
+	}
+	records, err := ExtractNodeRecords(ns, local, now)
+	if err != nil {
+		return AcceptInbound
+	}
+	if records.Profile != nil && records.Profile.Accept != "" {
+		return records.Profile.Accept
+	}
+	return AcceptInbound
+}
+
+func localPortGeneration(ns *zone.NetworkState, local zone.ZonePath, now time.Time) uint64 {
+	if ns == nil || ns.Zones[local] == nil {
+		return 0
+	}
+	records, err := ExtractNodeRecords(ns, local, now)
+	if err != nil {
+		return 0
+	}
+	if records.Ports != nil && records.Ports.Current != nil {
+		return records.Ports.Current.Generation
+	}
+	return 0
+}
+
+func groupContactPointsByFamily(contacts []ContactPoint) map[string][]ContactPoint {
+	out := map[string][]ContactPoint{}
+	for _, point := range contacts {
+		family := point.Family
+		if family == "" {
+			family = inferIPFamily(point.Address)
+		}
+		if family == "" {
+			continue
+		}
+		out[family] = append(out[family], point)
+	}
+	return out
+}
+
+func sortedFamilies(byFamily map[string][]ContactPoint) []string {
+	families := make([]string, 0, len(byFamily))
+	for family := range byFamily {
+		families = append(families, family)
+	}
+	sort.Strings(families)
+	return families
 }
 
 func applyMeshPolicyRules(group LinkGroupSpec, peer zone.ZonePath, records *NodeRecords, connectRules, denyRules []MeshPolicyRule) (LinkGroupSpec, bool, PlanSkip, error) {
@@ -238,9 +363,6 @@ func meshRuleMatchesPeer(rule MeshPolicyRule, peer zone.ZonePath, records *NodeR
 
 func applyMeshRuleToGroup(group LinkGroupSpec, rule MeshPolicyRule) LinkGroupSpec {
 	out := group
-	if rule.Direction != "" {
-		out.Direction = rule.Direction
-	}
 	if rule.PathMode != "" {
 		out.DefaultPathMode = rule.PathMode
 	}

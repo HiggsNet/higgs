@@ -62,11 +62,20 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		d.Sync.State.FirewallReconcile.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
 	}
 
-	listenAddrs := firewallListenAddrs(config)
 	charonIKE, charonNATT := firewallCharonPorts(config, d.Sync.State)
+
+	if len(instances) > 0 && preflight.NFTNetlink != "ok" && preflight.Iptables != "available" {
+		d.logWarn("firewall", "no_backend_available", map[string]any{
+			"nft":       preflight.NFTNetlink,
+			"iptables":  preflight.Iptables,
+			"net_admin": preflight.CAPNetAdmin,
+			"message":   "no nft or iptables command available; firewall rules will not be applied",
+		})
+	}
 
 	var firstErr error
 	for _, instCfg := range instances {
+		listenAddrs := firewallInstanceListenAddrs(config, instCfg)
 		spec := firewallInstanceSpecFromConfig(instCfg, listenAddrs, charonIKE, charonNATT)
 		input := buildFirewallPolicyInput(spec, ars, d.Sync.State, config)
 		desired, err := firewall.BuildDesiredState(spec, input)
@@ -350,6 +359,16 @@ func firewallListenAddrs(config *appConfig) []netip.Addr {
 		}
 	}
 	return out
+}
+
+// firewallInstanceListenAddrs returns the listen addresses for a specific
+// firewall instance. If the instance declares its own listen_addrs, those are
+// used; otherwise the top-level advertise_addrs are used as a fallback.
+func firewallInstanceListenAddrs(config *appConfig, inst FirewallInstanceConfig) []netip.Addr {
+	if len(inst.ListenAddrs) > 0 {
+		return inst.ListenAddrs
+	}
+	return firewallListenAddrs(config)
 }
 
 // firewallCharonPorts returns the current charon IKE/NAT-T listen ports.

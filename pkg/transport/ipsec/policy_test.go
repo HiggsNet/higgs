@@ -3,14 +3,14 @@ package ipsec
 import "testing"
 
 func TestParseMeshPolicyRuleZoneGlob(t *testing.T) {
-	rule, err := ParseMeshPolicyRule("strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound&max_peers=32")
+	rule, err := ParseMeshPolicyRule("strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&max_peers=32")
 	if err != nil {
 		t.Fatalf("ParseMeshPolicyRule: %v", err)
 	}
 	if rule.Provider != ProviderStrongSwan || rule.ZonePattern != "*.catofes." {
 		t.Fatalf("rule target = %+v", rule)
 	}
-	if rule.Accept != AcceptInbound || rule.Family != RuleFamilyDual || rule.PathMode != PathModeFamilyRedundant || rule.Direction != DirectionOutbound {
+	if rule.Accept != AcceptInbound || rule.Family != RuleFamilyDual || rule.PathMode != PathModeFamilyRedundant {
 		t.Fatalf("rule predicates = %+v", rule)
 	}
 	if len(rule.Sources) != 2 || rule.Sources[0] != SourceManualDNS || rule.Sources[1] != SourceDiscovery {
@@ -41,13 +41,9 @@ func TestParseMeshPolicyRuleRoleAndTagTargets(t *testing.T) {
 	}
 }
 
-func TestParseMeshPolicyRuleDirectionDoubleAlias(t *testing.T) {
-	rule, err := ParseMeshPolicyRule("strongswan://*.catofes.?direction=double")
-	if err != nil {
-		t.Fatalf("ParseMeshPolicyRule: %v", err)
-	}
-	if rule.Direction != DirectionBidirectional {
-		t.Fatalf("Direction = %q, want %q", rule.Direction, DirectionBidirectional)
+func TestParseMeshPolicyRuleRejectsDeprecatedDirection(t *testing.T) {
+	if _, err := ParseMeshPolicyRule("strongswan://*.catofes.?direction=outbound"); err == nil {
+		t.Fatalf("expected error for deprecated direction query")
 	}
 }
 

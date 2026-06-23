@@ -439,7 +439,7 @@ func TestWriteRevocationImpactsEmpty(t *testing.T) {
 func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	group := testIPsecLinkGroup()
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
@@ -534,7 +534,7 @@ func (d *captureFirewallDriver) Apply(ctx context.Context, plan firewall.Firewal
 func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	state, config := buildTestNetworkStateForRouting(t)
 	now := time.Unix(4140, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()

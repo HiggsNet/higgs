@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
 
@@ -33,6 +34,13 @@ type FirewallInstanceConfig struct {
 	HostPorts     firewall.HostPortConfig
 	RedirectGrace firewall.RedirectGrace
 
+	// ListenAddrs are the local addresses used for host ingress and DNAT/redirect
+	// rules. If empty, the top-level advertise_addrs are used. This is useful when
+	// the host is behind a gateway that DNATs public addresses to private addresses
+	// before packets reach the local firewall: rules must match the post-DNAT
+	// (local) destination address.
+	ListenAddrs []netip.Addr
+
 	Hooks firewall.Hooks
 
 	// Forwarding policy for this instance's overlay.
@@ -62,6 +70,7 @@ type firewallInstanceYAML struct {
 
 	HostPorts     *hostPortsYAML     `yaml:"host_ports"`
 	RedirectGrace *redirectGraceYAML `yaml:"redirect_grace"`
+	ListenAddrs   []string           `yaml:"listen_addrs"`
 
 	Hooks *hooksYAML `yaml:"hooks"`
 
@@ -217,6 +226,11 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		redirectGrace.Enabled = enabled
 	}
 
+	listenAddrs, err := parseFirewallListenAddrs(yi.ListenAddrs)
+	if err != nil {
+		return FirewallInstanceConfig{}, fmt.Errorf("listen_addrs: %w", err)
+	}
+
 	hooks := firewall.Hooks{}
 	if yi.Hooks != nil {
 		hooks = firewall.Hooks{
@@ -271,6 +285,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		LocalServices:     localServices,
 		HostPorts:         hostPorts,
 		RedirectGrace:     redirectGrace,
+		ListenAddrs:       listenAddrs,
 		Hooks:             hooks,
 		Forwarding:        forwarding,
 	}, nil
@@ -313,6 +328,33 @@ func parsePrefixList(items []string) ([]netip.Prefix, error) {
 			return nil, fmt.Errorf("invalid prefix %q: %w", s, err)
 		}
 		out = append(out, p.Masked())
+	}
+	return out, nil
+}
+
+// parseFirewallListenAddrs parses a list of listen addresses for host firewall
+// rules. Plain IPs are accepted; host:port forms have their host portion
+// extracted for use as a destination address match.
+func parseFirewallListenAddrs(items []string) ([]netip.Addr, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	var out []netip.Addr
+	for _, s := range items {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		addr := s
+		if host, _, err := net.SplitHostPort(s); err == nil {
+			addr = host
+		}
+		addr = strings.Trim(addr, "[]")
+		ip, err := netip.ParseAddr(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid listen address %q: %w", s, err)
+		}
+		out = append(out, ip)
 	}
 	return out, nil
 }

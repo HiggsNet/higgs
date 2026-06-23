@@ -247,8 +247,7 @@ func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
 
 func rotateSpecForRole(base TransportLinkSpec, generation uint64, role string) TransportLinkSpec {
 	spec := rotateSpec(base, generation)
-	if spec.Direction == DirectionInbound || role == InitiatorRoleSecondaryStandby {
-		spec.Direction = DirectionInbound
+	if !IsActiveInitiatorRole(role) {
 		spec.ContactPoints = nil
 	}
 	return spec

@@ -160,7 +160,7 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		OverlayID:                "main",
 		Provider:                 ProviderStrongSwan,
 		TransportID:              transportAtoB,
-		Direction:                DirectionOutbound,
+		InitiatorRole:            InitiatorRolePrimary,
 		PathMode:                 PathModeFamilyRedundant,
 		IKEIdentity:              "node-a.",
 		LocalAddress:             "192.0.2.1",
@@ -180,7 +180,7 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		OverlayID:                "main",
 		Provider:                 ProviderStrongSwan,
 		TransportID:              transportBtoA,
-		Direction:                DirectionOutbound,
+		InitiatorRole:            InitiatorRolePrimary,
 		PathMode:                 PathModeFamilyRedundant,
 		IKEIdentity:              "node-b.",
 		LocalAddress:             "192.0.2.2",
@@ -356,7 +356,6 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 	transportB := "ipsec-takeover-b"
 	group := LinkGroupSpec{
 		ID:                "main",
-		Direction:         DirectionBidirectional,
 		Provider:          ProviderStrongSwan,
 		TunnelAddressSpec: TunnelAddressSpec{Mode: TunnelAddressDerivedPool, Family: FamilyIPv6, Pool: netip.MustParsePrefix("fd00:4545::/64")},
 	}
@@ -371,7 +370,6 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		OverlayID:                group.ID,
 		Provider:                 ProviderStrongSwan,
 		TransportID:              transportA,
-		Direction:                DirectionBidirectional,
 		IKEIdentity:              "node-a.",
 		LocalAddress:             "192.0.2.5",
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.6", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
@@ -386,7 +384,7 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		InitiatorRole:            InitiatorRolePrimary,
 	}
 	specAInbound := specA
-	specAInbound.Direction = DirectionInbound
+	specAInbound.InitiatorRole = ""
 	specAInbound.ContactPoints = nil
 	specB := TransportLinkSpec{
 		LocalZone:                "node-b.",
@@ -394,7 +392,6 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		OverlayID:                group.ID,
 		Provider:                 ProviderStrongSwan,
 		TransportID:              transportB,
-		Direction:                DirectionBidirectional,
 		IKEIdentity:              "node-b.",
 		LocalAddress:             "192.0.2.6",
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.5", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},

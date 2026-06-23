@@ -70,7 +70,6 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
@@ -180,7 +179,6 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
@@ -473,7 +471,6 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
@@ -542,7 +539,6 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
@@ -592,7 +588,6 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 
 	rt := &Runtime{
@@ -1008,7 +1003,6 @@ func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFil
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
@@ -1159,7 +1153,6 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)

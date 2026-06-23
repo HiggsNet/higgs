@@ -525,10 +525,10 @@ stateDiagram-v2
     Cleanup --> Idle: stale artifacts removed
 ```
 
-Initiator/direction 规则：
+Initiator 规则：
 
-- `outbound` 或 bidirectional primary 负责主动建立 staged generation。
-- `inbound` 和 `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
+- `primary` 或 `secondary-takeover` 负责主动建立 staged generation。
+- `secondary-standby` 和 responder-only 角色只加载 responder/trap staged config，不主动拨号。
 - `secondary-takeover` 已拥有 takeover lease 时按主动 owner 处理，可以 staged initiate。
 - `secondary-standby` 在 staged/`dual_running` deadline 未到期时返回 `rotate_staged_active` / `rotate_retention_active` noop，不会因为 takeover delay 到期而抢拨；只有当前 owner 超时且没有可用 staged/old SA 时，才回到 4.5 takeover 逻辑。
 
@@ -663,7 +663,7 @@ flowchart TD
     M --> Z[higgs debug links]
 ```
 
-规划层只负责回答“应该尝试建哪些 link”。`PlanTransportLinks` 从 verified active state 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并应用 zone exact/glob connect/deny rule。缺少 `ipsec/*` record、profile disabled、policy 不匹配、accept/direction 不允许、地址族或 path mode 不支持、没有可拨 ContactPoint、NAT 后缺少公网证据等情况都会变成结构化 skip reason。`role` / `tag` selector 已完成解析，但在本地 peer label 来源接入前不会匹配。
+规划层只负责回答“应该尝试建哪些 link”。`PlanTransportLinks` 从 verified active state 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并应用 zone exact/glob connect/deny rule。缺少 `ipsec/*` record、profile disabled、policy 不匹配、accept 组合不兼容、地址族或 path mode 不支持、没有可拨 ContactPoint、NAT 后缺少公网证据等情况都会变成结构化 skip reason。`role` / `tag` selector 已完成解析，但在本地 peer label 来源接入前不会匹配。
 
 公告层由配置了 `overlays:` / link group 的 daemon 自动完成。本节点会发布 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records。transport key 独立于 Zone signing key，并持久化在本地 state meta 中，避免 daemon 重启或重复发布时造成 fingerprint / profile version 抖动。
 
@@ -690,17 +690,18 @@ VICI message 的 connection 形状保持接近 `swanctl.conf`：local/remote aut
 
 teardown 的第一版顺序固定为 `TeardownTransportLink` / `PlanTeardown`：terminate SA -> unload connection -> delete XFRM interface。对没有 desired spec、只来自 persisted `LinkInstance` 的 teardown，daemon 必须先通过 owner 校验；teardown 成功后 daemon 删除本地 persisted `LinkInstance`，让 restart/state-change reconcile 不会重复清理同一条已删除链路。
 
-方向组合：
+accept-only 角色组合：
 
-| 本地 direction | 远端 accept | 结果 |
-|----------------|-------------|------|
-| `outbound` | `inbound` / `bidirectional` | 主动拨号 |
-| `inbound` | 任意 | 只加载接收配置 |
+| 本节点 accept | 远端 accept | 本节点行为 |
+|---------------|-------------|-----------|
+| `none` | `inbound` / `bidirectional` | 主动拨号 |
+| `inbound` | 任意 | 只加载接收/trap 配置，不主动拨号 |
 | `bidirectional` | `inbound` | 主动拨号 |
-| `bidirectional` | `bidirectional` | 用 peer id/zone 的稳定排序决定首拨方 |
-| `outbound` | `none` | 不自动建链 |
+| `bidirectional` | `bidirectional` | 用 peer zone 字典序稳定排序决定首拨方 |
+| `bidirectional` | `none` | 加载接收/trap 配置，等待远端拨入 |
+| `none` / `inbound` | `none` | 不自动建链 |
 
-Bidirectional 选主只在“本地 effective direction 是 `bidirectional`，且远端 profile `accept=bidirectional`”时启用。算法不需要网络协商，双方只要看到同一对 zone 名称就会得到互补结论：
+`ipsec.accept` 在节点级配置并写入 `ipsec/profile`。Bidirectional 选主只在“本节点 `accept=bidirectional`，且远端 profile `accept=bidirectional`”时启用。算法不需要网络协商，双方只要看到同一对 zone 名称就会得到互补结论：
 
 ```text
 if local_zone < peer_zone:
@@ -756,7 +757,7 @@ overlays:
   - name: ipsec-main
     provider: strongswan
     connect:
-      - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+      - "strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant"
       - "strongswan://edge.catofes.?accept=bidirectional&family=dual"
     deny:
       - "strongswan://*.lab.catofes."
@@ -766,7 +767,6 @@ overlays:
 - zone glob / exact。
 - `role` / `tag` 作为本地 peer label 来源接入后的预留 selector；默认示例使用 zone glob / exact。
 - `accept`。
-- `direction`。
 - `family`。
 - `source`。
 - `mode`。
@@ -909,7 +909,6 @@ overlays:
     provider: strongswan
     netns: default
     default_path_mode: family-redundant
-    direction: outbound
     # max_peers defaults to unlimited; set a positive value to cap peers.
     max_peers: 256
     max_links_per_peer: 2
@@ -934,7 +933,7 @@ overlays:
         initial: 1s
         max: 1m
     connect:
-      - "strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&direction=outbound"
+      - "strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant"
     deny:
       - "strongswan://*.lab.catofes."
 ```
@@ -944,7 +943,7 @@ overlays:
 - `netns.default` 是本机默认 LinkGroup / overlay data-plane namespace；默认 `name:h2, create:true`，让 StrongSwan/XFRM tunnel interface 和后续 BIRD 明确落在 Higgs 管理的 namespace，而不是隐式进入 host ns。`overlay.default_netns` / `ipsec.default_netns` 仅作为旧配置兼容别名。
 - `ipsec.addresses` 是本节点可公告地址来源；DNS 源保留域名并定期 refresh。
 - `ipsec.ports` 控制本节点选择和公告 IKE/NAT-T 端口；端口与地址分离。
-- `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、方向、peer/link 上限、`tunnel_address` 分配模式（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）和 reconcile/backoff 策略，不发布到 gossip。IPv6 默认 `derived-link-local`，IPv4 默认 `disabled`；旧字段 `tunnel_address_pool` 仍映射为 `sequential-pool` 兼容模式，但二者不可混用。
+- `overlays[]` 是本地 `LinkGroupSpec` / MeshPolicy desired-state 边界，包含 provider、netns、path mode、peer/link 上限、`tunnel_address` 分配模式（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）和 reconcile/backoff 策略，不发布到 gossip。本节点角色由 `ipsec.accept` 与远端 `accept` 推导，不在 group 中配置方向。IPv6 默认 `derived-link-local`，IPv4 默认 `disabled`；旧字段 `tunnel_address_pool` 仍映射为 `sequential-pool` 兼容模式，但二者不可混用。
 - `overlays[].netns` 引用 `netns:` 中声明的名字；省略时使用 `netns.default`。旧配置中内联 `kind/name/path/create` 的写法仍兼容读取。
 - `overlays[].connect/deny` 是 link group 内的本地 MeshPolicy rule，不发布到 gossip。
 - `address_source_order` 只影响本地选择和排序；远端也会按自己的本地配置重新排序。

@@ -13,11 +13,6 @@ import (
 )
 
 const (
-	DirectionInbound       = "inbound"
-	DirectionOutbound      = "outbound"
-	DirectionBidirectional = "bidirectional"
-	DirectionDouble        = "double"
-
 	NetNSHost        = "host"
 	NetNSName        = "name"
 	NetNSPath        = "path"
@@ -35,19 +30,9 @@ const (
 	InitiatorRoleCooldown          = "cooldown"
 )
 
-func NormalizeDirection(direction string) string {
-	switch direction {
-	case DirectionDouble:
-		return DirectionBidirectional
-	default:
-		return direction
-	}
-}
-
 type MeshPolicy struct {
 	OverlayID       string
 	Provider        string
-	Direction       string
 	AddressFamilies []string
 	Sources         []string
 	PathMode        string
@@ -85,7 +70,6 @@ type LinkGroupSpec struct {
 	Provider           string
 	NetNS              NetNSSpec
 	DefaultPathMode    string
-	Direction          string
 	AddressSourceOrder []string
 	MaxPeers           int
 	MaxLinksPerPeer    int
@@ -102,7 +86,6 @@ type TransportLinkSpec struct {
 	OverlayID       string
 	Provider        string
 	TransportID     string
-	Direction       string
 	PathMode        string
 	IKEIdentity     string
 	AuthRef         string
@@ -143,7 +126,6 @@ type TransportLinkSpec struct {
 type TransportLinkOptions struct {
 	TransportID     string
 	Provider        string
-	Direction       string
 	PathMode        string
 	NetNS           string
 	LocalTunnelAddr netip.Addr
@@ -189,7 +171,6 @@ func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string
 		OverlayID:       overlayID,
 		Provider:        provider,
 		TransportID:     transportID,
-		Direction:       opts.Direction,
 		PathMode:        opts.PathMode,
 		IKEIdentity:     string(local),
 		AuthRef:         records.Profile.TransportKeyFingerprint,
@@ -218,7 +199,6 @@ func NewTransportLinkSpecForGroup(local, peer zone.ZonePath, group LinkGroupSpec
 	}
 	return NewTransportLinkSpecWithOptions(local, peer, group.ID, records, contacts, TransportLinkOptions{
 		Provider:        group.Provider,
-		Direction:       group.Direction,
 		PathMode:        group.DefaultPathMode,
 		NetNS:           group.NetNS.Target(),
 		LocalTunnelAddr: localAddr,
@@ -236,14 +216,6 @@ func (g LinkGroupSpec) Validate() error {
 	}
 	if provider != ProviderStrongSwan {
 		return fmt.Errorf("unsupported link group provider %q", provider)
-	}
-	direction := g.Direction
-	if direction == "" {
-		direction = DirectionOutbound
-	}
-	direction = NormalizeDirection(direction)
-	if !oneOf(direction, DirectionInbound, DirectionOutbound, DirectionBidirectional) {
-		return fmt.Errorf("unsupported link group direction %q", direction)
 	}
 	pathMode := g.DefaultPathMode
 	if pathMode == "" {
@@ -297,10 +269,6 @@ func (g LinkGroupSpec) Normalized() LinkGroupSpec {
 	if out.DefaultPathMode == "" {
 		out.DefaultPathMode = PathModeFamilyRedundant
 	}
-	if out.Direction == "" {
-		out.Direction = DirectionOutbound
-	}
-	out.Direction = NormalizeDirection(out.Direction)
 	if out.Reconcile.RotateRetentionSeconds == 0 {
 		out.Reconcile.RotateRetentionSeconds = 3600
 	}
@@ -658,8 +626,12 @@ func FormatScopedTunnelAddress(addr netip.Addr, ifName, netns string) string {
 	return s
 }
 
-func StableTransportID(local, peer zone.ZonePath, overlayID string) string {
-	hash := higgscrypto.Hash([]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(overlayID))
+func StableTransportID(local, peer zone.ZonePath, overlayID string, family ...string) string {
+	parts := [][]byte{[]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(overlayID)}
+	if len(family) > 0 && family[0] != "" {
+		parts = append(parts, []byte{0}, []byte(family[0]))
+	}
+	hash := higgscrypto.Hash(parts...)
 	return "ipsec-" + hex.EncodeToString(hash[:6])
 }
 
@@ -676,39 +648,32 @@ func StableInterfaceName(ifID uint32) string {
 	return fmt.Sprintf("hgs%x", ifID)
 }
 
-func ShouldInitiate(local, peer zone.ZonePath, direction, remoteAccept string) bool {
-	switch direction {
-	case DirectionOutbound:
-		return remoteAccept == AcceptInbound || remoteAccept == AcceptBidirectional
-	case DirectionInbound:
-		return false
-	case DirectionBidirectional:
-		switch remoteAccept {
-		case AcceptInbound:
-			return true
-		case AcceptBidirectional:
-			return strings.Compare(string(local), string(peer)) < 0
-		default:
-			return false
-		}
-	default:
-		return false
-	}
+// ShouldInitiate reports whether the local node should actively initiate a
+// CHILD_SA for this link under the accept-only role model. Only the primary
+// initiator (or an explicit secondary takeover) actively dials.
+func ShouldInitiate(local, peer zone.ZonePath, localAccept, remoteAccept string) bool {
+	return InitiatorRoleForPeer(local, peer, localAccept, remoteAccept) == InitiatorRolePrimary
 }
 
-// InitiatorRoleForPeer returns the local runtime role for a peer link.
-// DirectionInbound still participates by loading a responder/trap config; it
-// just never actively initiates. An empty role means policy/accept intent says
-// the local node should not participate in this link at all.
-func InitiatorRoleForPeer(local, peer zone.ZonePath, direction, remoteAccept string) string {
-	switch direction {
-	case DirectionOutbound:
+// InitiatorRoleForPeer returns the local runtime role for a peer link based
+// solely on the local and remote accept intents.
+//
+//   - local none + remote inbound/bidirectional  -> primary (local initiates)
+//   - local inbound                              -> "" (responder only)
+//   - local bidirectional + remote inbound       -> primary
+//   - local bidirectional + remote bidirectional -> primary if local<peer, else secondary-standby
+//   - local bidirectional + remote none          -> "" (responder only)
+//   - local none + remote none                   -> "" (no link)
+//
+// An empty role means this node does not actively initiate; it may still load
+// a responder/trap configuration when the local accept intent allows inbound.
+func InitiatorRoleForPeer(local, peer zone.ZonePath, localAccept, remoteAccept string) string {
+	switch localAccept {
+	case AcceptNone:
 		if remoteAccept == AcceptInbound || remoteAccept == AcceptBidirectional {
 			return InitiatorRolePrimary
 		}
-	case DirectionInbound:
-		return InitiatorRolePrimary
-	case DirectionBidirectional:
+	case AcceptBidirectional:
 		switch remoteAccept {
 		case AcceptInbound:
 			return InitiatorRolePrimary
@@ -720,6 +685,13 @@ func InitiatorRoleForPeer(local, peer zone.ZonePath, direction, remoteAccept str
 		}
 	}
 	return ""
+}
+
+// IsActiveInitiatorRole returns true for roles that should actively start a
+// CHILD_SA. Secondary-standby and empty roles only install responder/trap
+// policies.
+func IsActiveInitiatorRole(role string) bool {
+	return role == InitiatorRolePrimary || role == InitiatorRoleSecondaryTakeover
 }
 
 func addrAt(prefix netip.Prefix, offset uint64) (netip.Addr, bool) {

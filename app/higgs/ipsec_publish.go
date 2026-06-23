@@ -158,13 +158,17 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 	if err != nil {
 		return nil, err
 	}
+	accept := config.IPsec.Accept
+	if accept == "" {
+		accept = ipsec.AcceptInbound
+	}
 	profile := ipsec.ProfileRecord{
 		Version:                 1,
 		Enabled:                 true,
 		Provider:                ipsec.ProviderStrongSwan,
 		IKEIdentity:             string(managed),
 		TransportKeyFingerprint: key.Fingerprint,
-		Accept:                  ipsec.AcceptInbound,
+		Accept:                  accept,
 		AddressFamilies:         localIPsecFamilies(addresses),
 		PathModes:               localIPsecPathModes(config.IPsec.LinkGroups),
 		NAT:                     localIPsecNATProfile(addresses),
@@ -504,12 +508,18 @@ func localIPsecPathModes(groups []ipsec.LinkGroupSpec) []string {
 }
 
 func localIPsecNATProfile(record ipsec.AddressRecord) ipsec.NATProfile {
+	// Avoid claiming inbound reachability based solely on having a public
+	// address. Reflector-observed public addresses or static public IPs do not
+	// prove that IKE/NAT-T can be delivered to this host (firewall, DNAT,
+	// provider NAT). Keep the hint conservative and default to unknown.
+	hint := ipsec.NATHintUnknown
 	for _, address := range record.Addresses {
 		if address.Reachability == ipsec.ReachabilityPublic {
-			return ipsec.NATProfile{Hint: ipsec.NATHintPublic, InboundReachable: ipsec.NATReachableTrue}
+			hint = ipsec.NATHintPublic
+			break
 		}
 	}
-	return ipsec.NATProfile{Hint: ipsec.NATHintUnknown, InboundReachable: ipsec.NATReachableUnknown}
+	return ipsec.NATProfile{Hint: hint, InboundReachable: ipsec.NATReachableUnknown}
 }
 
 func splitAdvertiseAddress(value string) (string, uint16) {

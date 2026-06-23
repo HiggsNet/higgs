@@ -24,7 +24,6 @@ type MeshPolicyRule struct {
 	Family      string
 	Sources     []string
 	PathMode    string
-	Direction   string
 	MaxPeers    int
 }
 
@@ -77,7 +76,9 @@ func ParseMeshPolicyRule(raw string) (MeshPolicyRule, error) {
 	rule.Accept = firstQuery(query, "accept")
 	rule.Family = firstQuery(query, "family")
 	rule.PathMode = firstQuery(query, "mode")
-	rule.Direction = NormalizeDirection(firstQuery(query, "direction"))
+	if firstQuery(query, "direction") != "" {
+		return MeshPolicyRule{}, fmt.Errorf("mesh policy rule %q uses deprecated direction query; use ipsec.accept instead", raw)
+	}
 	if rawSources := firstQuery(query, "source"); rawSources != "" {
 		for _, source := range strings.Split(rawSources, ",") {
 			source = strings.TrimSpace(source)
@@ -127,9 +128,6 @@ func (r MeshPolicyRule) Validate() error {
 	}
 	if r.PathMode != "" && !oneOf(r.PathMode, PathModeFamilyRedundant, PathModeExhaustive) {
 		return fmt.Errorf("unsupported mesh policy mode %q", r.PathMode)
-	}
-	if r.Direction != "" && !oneOf(r.Direction, DirectionInbound, DirectionOutbound, DirectionBidirectional) {
-		return fmt.Errorf("unsupported mesh policy direction %q", r.Direction)
 	}
 	for _, source := range r.Sources {
 		if !oneOf(source, SourceManualAddress, SourceManualDNS, SourceDiscovery, SourceReflector, SourceLocal) {

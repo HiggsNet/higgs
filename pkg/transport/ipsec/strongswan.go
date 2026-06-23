@@ -102,7 +102,7 @@ func (d *StrongSwanDriver) materializePeerPublicKey(spec TransportLinkSpec) (str
 
 func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 	point, hasPoint := firstContactPoint(spec.ContactPoints)
-	if !hasPoint && spec.Direction != DirectionInbound {
+	if !hasPoint && IsActiveInitiatorRole(spec.InitiatorRole) {
 		return nil, fmt.Errorf("at least one contact point is required")
 	}
 	remoteAddr, err := strongSwanRemoteAddress(point, hasPoint)
@@ -162,7 +162,7 @@ func RotateChildSAName(transportID string, generation uint64) string {
 
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 	startAction := "start"
-	if spec.Direction == DirectionInbound {
+	if !IsActiveInitiatorRole(spec.InitiatorRole) {
 		startAction = "trap"
 	}
 	return map[string]any{

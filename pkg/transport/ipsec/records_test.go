@@ -378,9 +378,6 @@ func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
 	if normalized.Provider != ProviderStrongSwan {
 		t.Fatalf("provider = %q", normalized.Provider)
 	}
-	if normalized.Direction != DirectionOutbound {
-		t.Fatalf("direction = %q", normalized.Direction)
-	}
 	if normalized.DefaultPathMode != PathModeFamilyRedundant {
 		t.Fatalf("path mode = %q", normalized.DefaultPathMode)
 	}
@@ -441,7 +438,7 @@ func TestNewTransportLinkSpecForGroupInheritsGroupBoundary(t *testing.T) {
 	if spec.OverlayID != group.ID || spec.Provider != ProviderStrongSwan {
 		t.Fatalf("spec group fields = %+v", spec)
 	}
-	if spec.Direction != DirectionOutbound || spec.PathMode != PathModeFamilyRedundant {
+	if spec.PathMode != PathModeFamilyRedundant {
 		t.Fatalf("spec planner fields = %+v", spec)
 	}
 	if spec.NetNS != "/run/netns/higgs-ipsec" {
@@ -732,14 +729,14 @@ func TestExtractNodeRecordsSkipsRevokedZone(t *testing.T) {
 }
 
 func TestShouldInitiateBidirectionalTieBreak(t *testing.T) {
-	if !ShouldInitiate("node-a.catofes.", "node-b.catofes.", DirectionBidirectional, AcceptBidirectional) {
+	if !ShouldInitiate("node-a.catofes.", "node-b.catofes.", AcceptBidirectional, AcceptBidirectional) {
 		t.Fatalf("node-a should initiate toward node-b")
 	}
-	if ShouldInitiate("node-b.catofes.", "node-a.catofes.", DirectionBidirectional, AcceptBidirectional) {
+	if ShouldInitiate("node-b.catofes.", "node-a.catofes.", AcceptBidirectional, AcceptBidirectional) {
 		t.Fatalf("node-b should not initiate toward node-a")
 	}
-	if ShouldInitiate("node-a.catofes.", "node-b.catofes.", DirectionOutbound, AcceptNone) {
-		t.Fatalf("outbound should not initiate toward accept=none")
+	if ShouldInitiate("node-a.catofes.", "node-b.catofes.", AcceptBidirectional, AcceptNone) {
+		t.Fatalf("bidirectional should not initiate toward accept=none")
 	}
 }
 
@@ -839,11 +836,11 @@ func TestBuildStrongSwanConnectionUsesRouteBasedChildSA(t *testing.T) {
 
 func TestBuildStrongSwanConnectionAllowsInboundWithoutContactPoint(t *testing.T) {
 	spec := TransportLinkSpec{
-		LocalZone:   "node-a.catofes.",
-		PeerZone:    "node-b.catofes.",
-		TransportID: "ipsec-main",
-		Direction:   DirectionInbound,
-		XFRMIfID:    77,
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		TransportID:   "ipsec-main",
+		InitiatorRole: "",
+		XFRMIfID:      77,
 	}
 	msg, err := BuildLoadConnMessage(spec)
 	if err != nil {

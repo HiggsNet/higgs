@@ -71,7 +71,7 @@ func TestStrongSwanDriverLoadsKeyAndConnection(t *testing.T) {
 		OverlayID:                "main",
 		Provider:                 ProviderStrongSwan,
 		TransportID:              transportID,
-		Direction:                DirectionOutbound,
+		InitiatorRole:            InitiatorRolePrimary,
 		PathMode:                 PathModeFamilyRedundant,
 		IKEIdentity:              "node-a.catofes.",
 		ContactPoints:            []ContactPoint{{Address: "127.0.0.1", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},

@@ -451,12 +451,12 @@
 - [x] **4.2 链路实例管理**
   - [x] 定义 `LinkInstance` 运行态模型：link id、peer zone、transport kind、desired spec hash、actual state、XFRM interface、`if_id`、IKE_SA/CHILD_SA id、endpoint in use、last error、last transition
   - [x] 定义本地 `MeshPolicy` / `LinkGroupSpec` 持久化来源：优先作为本机 daemon 配置/DB policy，不通过 gossip 公开；policy 描述“哪些 group 连接哪些 peer/overlay/provider/netns”，而不是列举每个已发现节点的手工 link
-    - 已在 `config.yaml` 增加本地 `netns:` / `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `netns.default`，支持 provider、netns 引用、path mode、direction、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串；旧式内联 netns 和 `overlay.default_netns` / `ipsec.default_netns` 保留为兼容读取。
-  - [x] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、direction、max_peers、allow/deny 顺序
-    - 已新增 `ParseMeshPolicyRule` / `ParseMeshPolicyRules`：支持 `strongswan://*.catofes.`, `strongswan://role=edge`, `strongswan://tag=lab` 三类目标，校验 `accept`、`family`、`source`、`mode`、`direction`、`max_peers`，并提供 zone glob/exact 匹配；`config.yaml overlays[].connect/deny` 现在会在加载时校验 rule 字符串。示例默认使用 zone glob（如 `*.lab.catofes.`），`role/tag` 等待本地 peer label 来源接入后再作为常规示例。
+    - 已在 `config.yaml` 增加本地 `netns:` / `overlays:` 配置来源，解析为 `[]ipsec.LinkGroupSpec` 并保存在 `appConfig.IPsec.LinkGroups`；link group 默认继承 `netns.default`，支持 provider、netns 引用、path mode、address source order、max peers/link、tunnel address pool、reconcile/backoff，以及本地 connect/deny rule 字符串；旧式内联 netns 和 `overlay.default_netns` / `ipsec.default_netns` 保留为兼容读取。本节点 initiator 角色由 `ipsec.accept` 与远端 `accept` 推导，group 中不再配置 direction。
+  - [x] 设计简化 rule DSL：例如 `strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant`；第一版支持 zone glob/exact、role/tag、远端 accept intent、address family、address source、path mode、max_peers、allow/deny 顺序
+    - 已新增 `ParseMeshPolicyRule` / `ParseMeshPolicyRules`：支持 `strongswan://*.catofes.`, `strongswan://role=edge`, `strongswan://tag=lab` 三类目标，校验 `accept`、`family`、`source`、`mode`、`max_peers`，并提供 zone glob/exact 匹配；`config.yaml overlays[].connect/deny` 现在会在加载时校验 rule 字符串。示例默认使用 zone glob（如 `*.lab.catofes.`），`role/tag` 等待本地 peer label 来源接入后再作为常规示例。rule 中不再出现 `direction`；若旧配置包含 `direction`，加载时给出明确弃用警告或报错。
   - [x] daemon 从 active state 的 peer profile/address/port records + 本地 MeshPolicy/LinkGroupSpec 推导 desired `TransportLinkSpec` 集合，监听 zone/delegation/revocation/ipsec profile/address/port/transport key/mesh policy/group/netns 变化
     - [x] 新增纯 planner：从 verified active state 的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并输出结构化 skip reason；daemon state-change hook 后续接入该 planner。
-    - [x] planner 已实际消费 `LinkGroupSpec.ConnectRules` / `DenyRules`：zone glob/exact rule 可按远端 accept intent、address family、address source、path mode、direction、max_peers 选择 peer 并覆盖 group 默认值；deny 命中返回 `policy_denied`，connect 未命中返回 `policy_no_match`。`role/tag` 已解析但暂不匹配，等待本地 peer label 来源接入。
+    - [x] planner 已实际消费 `LinkGroupSpec.ConnectRules` / `DenyRules`：zone glob/exact rule 可按远端 accept intent、address family、address source、path mode、max_peers 选择 peer 并覆盖 group 默认值；deny 命中返回 `policy_denied`，connect 未命中返回 `policy_no_match`。`role/tag` 已解析但暂不匹配，等待本地 peer label 来源接入。role 推导不再使用 rule 的 `direction`。
     - [x] daemon state-change hook 已接入 dry-run reconcile：从 active state + 本地 `LinkGroupSpec` 生成 desired links，更新持久化 `LinkInstance`，记录 action/skip 摘要；真实 StrongSwan/XFRM driver 接入留到 4.3 系统 smoke。
     - [x] daemon `reload` control event 已重新读取 `config.yaml`，刷新本地 sync/log/IPsec overlay 配置，并触发一次 reconcile；`netns:`、`overlays:`、`connect/deny` 或 link group 删除会立即进入 create/update/teardown 判定。热 reload 明确拒绝切换 state DB/control socket 路径，避免运行中的 daemon 半路换库或迁移监听入口。
   - [x] 实现 reconcile loop：新增 link -> apply；spec 变化 -> update/reload；record 过期或 peer 不再可信 -> terminate/remove；driver 实际状态漂移 -> repair
@@ -465,7 +465,7 @@
     - [x] daemon 侧 teardown 成功后会从持久化 `LinkInstance` 集合移除对应实例；link group 被删除、peer record 过期或 peer 不再可信时，不会把 `removing` 状态遗留到下一轮反复 teardown。
   - [x] 设计状态机：`pending`、`configuring`、`connecting`、`up`、`degraded`、`stale`、`removing`、`down`、`error`
     - [x] daemon apply 成功后将 create/update/repair 的 `LinkInstance` 从 `configuring` 推进到 `connecting`，表示 StrongSwan/XFRM provider 配置已应用、正在等待 IKE_SA/CHILD_SA；后续 `ListSAs` 观测到匹配 SA 后才进入 `up`。
-  - [x] 实现公开 accept intent 与本地 direction 的组合规则：本地 `outbound` 只能主动连接远端 `inbound`/`bidirectional`；本地 `inbound` 只加载接收配置；双方 `bidirectional` 时使用稳定 tie-break（如 peer zone 字典序）避免重复主动拨号；首拨方长期失败后的对端接管策略拆到 Phase 4.5 设计和实现
+  - [x] 实现 accept-only 角色规则：本节点 `accept=none` 且远端 `accept=inbound|bidirectional` 时主动拨远端；本节点 `accept=inbound` 时只加载接收/trap 配置；双方 `accept=bidirectional` 时使用稳定 tie-break（peer zone 字典序）避免重复主动拨号；首拨方长期失败后的对端接管策略拆到 Phase 4.5 设计和实现。旧的本地 `direction` 字段将彻底移除。
   - [x] 实现 path mode：`family-redundant` 每个地址族最多选择一条 ContactPoint（双栈时 IPv4 一条 + IPv6 一条）；`exhaustive` 尽量连接所有候选（调试/特殊高可用）；后续如需单条再引入 `preferred-only`，避免使用语义模糊的 `single-best`
   - [x] ContactPoint candidates 支持排序和回退：按 address source priority、address reachability、端口 generation、连接成功率、失败/backoff、IPv4/IPv6 策略综合排序；记录失败率和最近失败原因
     - [x] 已在纯 planner/model 层加入 `ContactPointQuality`：daemon 可按 peer/contact 注入 successes/failures/backoff/last_error，planner 生成的 `TransportLinkSpec` 会保留排序原因，并在 current 端口处于 backoff 时回退 previous grace 端口。
@@ -501,6 +501,51 @@
     - [x] `daemon status` control response 增加 link instance 数、desired link 数和最近 reconcile error；新增 `higgs debug links` 输出持久化 link、最近 action/skip、interface、`if_id`、endpoint、owner、failure count、backoff 与最近错误。
     - [x] daemon reconcile 摘要持久化最近 desired `TransportLinkSpec` 快照和 driver `ListSAs` 观测；`higgs debug links` 会重新按当前 active state + `LinkGroupSpec` 规划 desired links，并与已落盘 `LinkInstance` / 最近 SA 快照并排展示 desired hash、actual hash、CHILD_SA、SA endpoint、backoff 和 apply error，便于排查“应该建什么”和“实际 StrongSwan 看到什么”的差异。
   - [x] 增加 fake driver 单元测试：create/update/delete/revoke/restart recovery；真实 StrongSwan/XFRM smoke 留到 4.3
+
+- [x] **4.2.x accept-only initiator model（消除双 initiator race）**
+  - 目标：彻底移除 MeshPolicy / connect rule / link group 中的 `direction`，本节点角色仅由 `ipsec.accept` 与远端 `accept` 决定，避免 `direction=double` + `accept=inbound` 导致的双端同时主动拨号。
+  - 配置：
+    - 新增顶层/overlay 级 `ipsec.accept`，可选 `none` / `inbound` / `bidirectional`，默认 `inbound`。
+    - 从 `MeshPolicyRule`、`LinkGroupSpec`、`TransportLinkSpec` 中删除 `Direction` 字段；connect URL 不再解析 `direction`。
+    - 旧配置或 rule 中若仍出现 `direction`，加载时给出明确弃用警告或报错（建议改为 `ipsec.accept`）。
+  - 角色推导：
+    - 本节点 `accept=none` + 远端 `accept=inbound|bidirectional` → `primary`（主动拨）。
+    - 本节点 `accept=inbound` → 不主动拨，role 为空，生成 responder/trap 配置。
+    - 双方 `accept=bidirectional` → 用 peer zone 字典序 tie-break，小的一方 `primary`，大的一方 `secondary-standby`；失败后可按 4.5 接管。
+    - 本节点 `accept=bidirectional` + 远端 `accept=none` → 加载 responder/trap，等待远端拨入。
+  - StrongSwan 渲染：
+    - `primary` / `secondary-takeover` 设置 `start_action=start`（或按需 initiate）。
+    - 非主动 role 设置 `start_action=trap` 或仅 responder，不主动发起 CHILD_SA。
+  - IPsec record 公告：
+    - `app/higgs/ipsec_publish.go` 把本地 `ipsec.accept` 写入 `ProfileRecord.Accept`，不再硬编码 `inbound`。
+  - NAT reachability hint 保守化（同一次改造顺带修复）：
+    - `localIPsecNATProfile` 不能仅凭存在 public address 就标记 `inbound_reachable=true`；只有管理员显式声明或 reflector/observed 证据才标记 reachable，默认 `unknown`。
+  - 测试：
+    - planner 角色矩阵单测覆盖全部 accept 组合。
+    - config 解析单测：合法 `ipsec.accept`、非法值、旧 `direction` 弃用警告/报错。
+    - StrongSwan `BuildStrongSwanConnection` 单测：主动 role 生成 `start_action=start`，非主动 role 生成 `start_action=trap`。
+    - dry-run smoke：A/B 配置不同 accept 时只由应主动的一侧生成 initiate action。
+
+- [x] **4.2.y IPv4/IPv6 双链路实现（family-redundant 真正双栈）**
+  - 目标：`family-redundant` 模式下，两个双栈节点之间同时存在一条 IPv4 link 和一条 IPv6 link，地址族级冗余。
+  - 当前限制：
+    - `BuildStrongSwanConnection` 只取首个 ContactPoint，`max_links_per_peer` 未实现，双栈节点之间只有一条 link。
+  - 实现要点：
+    - `SelectContactPointsWithOptions(family-redundant)` 按 family 分组，返回每个 family 最高排序 ContactPoint。
+    - `PlanTransportLinks` 为每个可用 family 生成独立 `TransportLinkSpec`。
+    - `TransportLinkSpec.TransportID` 引入 family/link index 派生，例如 `StableTransportID(local, peer, overlayID, family)`。
+    - 每个 spec 拥有独立 XFRM `if_id` 和 interface name（如 `hgs<hash_v4>` 和 `hgs<hash_v6>`），15 字符限制内处理冲突。
+    - `ReconcileLinkInstances` 按 `TransportID` 而不是按 peer 匹配 desired/current；每个 link 有独立 `LinkInstance`、generation、rotate phase 和 takeover 状态。
+    - 防火墙规则继续按 interface pattern（`hgs*`）匹配多个 XFRM interface；overlay 链的 forward/input 规则覆盖所有 link interface。
+    - BIRD/Babel 在多个 `hgs*` interface 上发现同一 peer 的多个邻居；ECMP 或 metric preference 由 Phase 5 路由层处理，但 IPsec reconcile 必须能独立管理每个 link。
+  - 边界：
+    - `max_links_per_peer` 继续保留语义，但 Phase 4 先实现 family-redundant 两条；超出 family 数量的候选仍丢弃。
+    - IPv4/IPv6 共享同一组 ports record；未来可扩展为 per-family ports，但不在本次改造。
+  - 测试：
+    - planner 单测：双栈 peer 在 `family-redundant` 下生成 IPv4 + IPv6 两条 spec；单栈 peer 只生成一条。
+    - 稳定 ID 单测：同一 peer、不同 family 的 `TransportID`/`if_id`/interface name 不同；重启后不变。
+    - reconcile 单测：按 `TransportID` 独立 create/adopt/teardown，删除一条 family link 不影响另一条。
+    - dry-run smoke：双栈 A/B 之间 desired links 包含 4 条（每对节点 2 条），并能独立解释每条 skip reason。
 
 - [x] **4.3 最小闭环验证**
   - [x] 增加 `make ipsec-policy-smoke`：不要求 root/StrongSwan/XFRM，验证 URI rule/link group + 远端 accept intent + address/port 分离公告能自动选择匹配 peer，不需要手写每个 link
@@ -629,10 +674,10 @@
     - [x] staged SA established 后进入 `dual_running`/cutover 语义：IPsec 层确认新旧 generation 并行承载；旧 generation 默认继续保留 1h，可通过 `overlays[].reconcile.rotate_retention` 配置；Babel/route manager 的 metric 纳入/调高/收敛回调仍由下一条接入。
     - [x] 旧 generation cleanup 由 retention 到期后的下一轮 reconcile 执行；daemon 重启后从落盘 `LinkInstance.rotate_deadline`、staged interface/`if_id` 和 `ListSAs` 恢复，若旧 SA 已不存在但 staged SA 已 established，则立即 promote staged generation 并清旧残留。
     - [x] 失败路径必须保持旧 generation：staged 建立超时、apply 失败或健康检查失败时只清 staged connection/interface，旧 SA/interface/route 继续保留并进入 backoff。
-    - [x] 明确 direction/initiator 规则：`outbound` 或当前 bidirectional active initiator 负责主动建立 staged generation；`inbound` / `secondary-standby` 只准备 responder/trap staged config，不主动拨号，避免 rotate 触发双向同时拨号。
-      - 2026-06-13 已在 `ReconcileLinkInstances` 中接入：secondary-standby/converged 观测到远端 port generation 变化时仍会生成 `prepare_rotate`，但 staged spec 被改写为 `direction=inbound`、无 ContactPoint，只加载 responder/trap；primary 和 secondary-takeover owner 保留主动 staged 建立语义。
+    - [x] 明确 accept-only initiator 规则：当前 primary 或 secondary-takeover owner 负责主动建立 staged generation；`accept=inbound` / `secondary-standby` 只准备 responder/trap staged config，不主动拨号，避免 rotate 触发双向同时拨号。
+      - 2026-06-13 已在 `ReconcileLinkInstances` 中接入：secondary-standby/converged 观测到远端 port generation 变化时仍会生成 `prepare_rotate`，但 staged spec 被改写为无 ContactPoint 的 responder/trap，只加载 responder/trap；primary 和 secondary-takeover owner 保留主动 staged 建立语义。
     - [ ] inbound 端 rotate advertised/listen port 时，真正平滑依赖 responder 侧能在 retention/grace 窗口同时接收 old/current port；若 StrongSwan 单实例无法双 listen，则 A 只能保持旧 SA/XFRM link，不能单独保证新旧端口监听无断，需 DNAT/redirect grace 或多实例 listener 作为 Phase 6/7 能力。
-    - [x] bidirectional 双端同时 rotate 时沿用 4.5 的 primary/secondary-takeover：primary 或 takeover owner 负责 staged initiate，standby 只加载 responder；takeover 不应在 `dual_running` 保留窗口内抢拨，除非当前 owner 超时且无 established staged SA。
+    - [x] bidirectional 双端同时 rotate 时沿用 4.5 的 primary/secondary-takeover：primary 或 takeover owner 负责 staged initiate，standby 只加载 responder；takeover 不应在 `dual_running` 保留窗口内抢拨，除非当前 owner 超时且无 established staged SA。rotate 不再依赖本地 `direction`。
       - 2026-06-13 已补 reconcile 守卫：secondary-standby 在 staged/`dual_running` rotate deadline 未到期时返回 `rotate_staged_active` / `rotate_retention_active` noop，不触发 takeover；新增单测覆盖超过 takeover delay 但仍处于 retention 窗口时保持 standby。
     - [x] 后续 Phase 5 接 Babel 时增加 route manager 回调/状态输入，避免 IPsec reconcile 在 Babel 尚未收敛前过早清理旧 generation。
       - 2026-06-13 已在 `ReconcileInputs` 增加 `RotateCutoverReady` per-instance 门闩：默认未接 route manager 时沿用 retention 到期 commit；Phase 5 route/Babel manager 可显式置为 false，让 `dual_running` 即使 retention 到期也继续保留旧 generation，直到 Babel metric/邻居/路由收敛后再允许 `commit_rotate`。
@@ -646,8 +691,8 @@
   - 验证要求：root/container smoke 必须覆盖旧 SA 保持可用、新 SA 并行建立、切换期间连续 tunnel ping 或允许的最大丢包窗口、失败回滚仍保持旧路径、daemon 重启恢复、revocation/policy deny 仍强制 teardown。
 
 - [x] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
-  - 目标：双方 `direction=bidirectional` 且双方 `accept=bidirectional` 时，仍先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。
-  - 明确当前边界：当前 `ShouldInitiate(local, peer, bidirectional, bidirectional)` 只用 zone 字典序决定首拨方；失败后 primary 进入本地 `LinkInstance` backoff/repair，secondary 仍返回 `accept_intent_mismatch` / 不主动拨。也就是说“稳定首拨 + 本地重试”已实现，“对端接管”尚未实现。
+  - 目标：双方 `accept=bidirectional` 时，先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。
+  - 明确当前边界：当前 `InitiatorRoleForPeer` 在双方 `accept=bidirectional` 时只用 zone 字典序决定首拨方；失败后 primary 进入本地 `LinkInstance` backoff/repair，secondary 仍返回 `accept_intent_mismatch` / 不主动拨。也就是说“稳定首拨 + 本地重试”已实现，“对端接管”尚未实现。
   - [x] 先做纯本地 runtime takeover：
     - 4.5 不新增 signed health record；secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。
     - Phase 6/7 再考虑低频 signed/runtime health hint；如果以后发布 health hint，必须防止瞬时网络抖动造成 gossip 风暴，也不能让第三方伪造失败诱导错误接管。
@@ -656,7 +701,7 @@
     - `TransportLinkSpec` 增加 `InitiatorRole`（hash 中排除）；`LinkInstance` 记录 `InitiatorRole`、`TakeoverPhase`、`TakeoverStartedAt`、`TakeoverUntil`、`LastTakeoverError`、`ObservedInitiator`。
     - 初始状态：双方 `bidirectional` 且都 `accept=bidirectional` 时，字典序小的一侧为 `primary` 并生成 create/repair；另一侧为 `secondary-standby`，产生 desired spec 但 reconcile 初始 noop，reason `bidirectional_standby`。
   - [x] 接管触发条件需要保守：
-    - 必须双方 profile 都是 `accept=bidirectional`，本地 rule/effective direction 也是 `bidirectional`；`outbound/inbound` 不参与 takeover。
+    - 必须双方 profile 都是 `accept=bidirectional`；其他 accept 组合不参与 takeover。
     - primary 连续失败次数、`connecting` 超时或长期未观测到匹配 SA 达到阈值后，secondary 才可接管；`takeoverDelay` 从 `LinkGroupSpec.Reconcile.Backoff` 派生（至少 2-3 个 backoff 周期），最小 60s。
     - secondary 接管前复用 planner 已过滤的 ContactPoint；缺少 ContactPoint 时返回 `takeover_no_contact_point`。
     - revocation、record 过期、transport key/profile mismatch、policy deny 时禁止 takeover；这些属于信任/授权失败，不是连通性失败。

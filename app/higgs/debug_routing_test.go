@@ -110,7 +110,6 @@ func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 		Provider:        ipsec.ProviderStrongSwan,
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-		Direction:       ipsec.DirectionOutbound,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
 		"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true},

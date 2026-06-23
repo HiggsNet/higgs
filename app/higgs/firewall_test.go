@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -162,6 +163,81 @@ firewall:
 	}
 	if inst.RedirectGrace.Enabled {
 		t.Fatal("explicit redirect_grace disabled should override range default")
+	}
+}
+
+func TestParseConfigYAMLFirewallHostListenAddrs(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+firewall:
+  instances:
+    - id: host-ipsec
+      host: true
+      listen_addrs:
+        - 172.17.16.168
+        - "[2408:400a:101:3801:6cbd:8fb4:ae31:750a]:4500"
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if len(config.Firewall.Instances) != 1 {
+		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
+	}
+	inst := config.Firewall.Instances[0]
+	if len(inst.ListenAddrs) != 2 {
+		t.Fatalf("expected 2 listen addrs, got %d: %+v", len(inst.ListenAddrs), inst.ListenAddrs)
+	}
+	if inst.ListenAddrs[0].String() != "172.17.16.168" {
+		t.Errorf("listen addr[0] = %s, want 172.17.16.168", inst.ListenAddrs[0])
+	}
+	if inst.ListenAddrs[1].String() != "2408:400a:101:3801:6cbd:8fb4:ae31:750a" {
+		t.Errorf("listen addr[1] = %s, want 2408:400a:101:3801:6cbd:8fb4:ae31:750a", inst.ListenAddrs[1])
+	}
+}
+
+func TestParseConfigYAMLFirewallHostListenAddrsInvalid(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+firewall:
+  instances:
+    - id: host-ipsec
+      host: true
+      listen_addrs:
+        - not-an-address
+`
+	err := parseConfigYAML(input, config)
+	if err == nil {
+		t.Fatal("expected error for invalid listen_addrs")
+	}
+	if !strings.Contains(err.Error(), "listen_addrs") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFirewallInstanceListenAddrsOverride(t *testing.T) {
+	config := defaultAppConfig()
+	config.AdvertiseAddrs = []string{"203.0.113.10"}
+	inst := FirewallInstanceConfig{
+		ID:     "host-ipsec",
+		IsHost: true,
+		ListenAddrs: func() []netip.Addr {
+			ip, _ := netip.ParseAddr("172.17.16.168")
+			return []netip.Addr{ip}
+		}(),
+	}
+	got := firewallInstanceListenAddrs(config, inst)
+	if len(got) != 1 || got[0].String() != "172.17.16.168" {
+		t.Fatalf("expected instance listen addrs to override advertise_addrs, got %+v", got)
+	}
+}
+
+func TestFirewallInstanceListenAddrsFallback(t *testing.T) {
+	config := defaultAppConfig()
+	config.AdvertiseAddrs = []string{"203.0.113.10"}
+	inst := FirewallInstanceConfig{ID: "host-ipsec", IsHost: true}
+	got := firewallInstanceListenAddrs(config, inst)
+	if len(got) != 1 || got[0].String() != "203.0.113.10" {
+		t.Fatalf("expected fallback to advertise_addrs, got %+v", got)
 	}
 }
 

@@ -271,7 +271,6 @@ overlays:
     provider: strongswan
     netns: default
     default_path_mode: family-redundant
-    direction: double
     address_source_order: manual-dns, discovery
     max_peers: 64
     max_links_per_peer: 2
@@ -310,11 +309,49 @@ overlays:
 	if got := strings.Join(group.AddressSourceOrder, ","); got != "manual-dns,discovery" {
 		t.Fatalf("AddressSourceOrder = %q", got)
 	}
-	if group.Direction != ipsec.DirectionBidirectional {
-		t.Fatalf("Direction = %q, want %q", group.Direction, ipsec.DirectionBidirectional)
-	}
 	if len(group.ConnectRules) != 1 || len(group.DenyRules) != 1 {
 		t.Fatalf("rules = connect:%v deny:%v", group.ConnectRules, group.DenyRules)
+	}
+	if config.IPsec.Accept != ipsec.AcceptInbound {
+		t.Fatalf("IPsec.Accept = %q, want default inbound", config.IPsec.Accept)
+	}
+}
+
+func TestParseConfigYAMLIPsecAccept(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  accept: bidirectional
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.IPsec.Accept != ipsec.AcceptBidirectional {
+		t.Fatalf("IPsec.Accept = %q, want bidirectional", config.IPsec.Accept)
+	}
+}
+
+func TestParseConfigYAMLIPsecAcceptInvalid(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  accept: both
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("expected error for invalid ipsec.accept")
+	}
+}
+
+func TestParseConfigYAMLOverlayDirectionDeprecated(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+overlays:
+  - name: ipsec-main
+    direction: outbound
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("expected error for deprecated overlays[].direction")
 	}
 }
 

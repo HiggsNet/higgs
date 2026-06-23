@@ -164,6 +164,7 @@ type overlayDefaultsYAML struct {
 type ipsecConfig struct {
 	DefaultNetNS         ipsec.NetNSSpec
 	LinkGroups           []ipsec.LinkGroupSpec
+	Accept               string
 	Driver               string
 	VICISocket           string
 	PortMode             string
@@ -177,6 +178,7 @@ type ipsecConfig struct {
 
 type ipsecConfigYAML struct {
 	DefaultNetNS         ipsec.NetNSSpec  `yaml:"default_netns"`
+	Accept               string           `yaml:"accept"`
 	Driver               string           `yaml:"driver"`
 	VICISocket           string           `yaml:"vici_socket"`
 	PortMode             string           `yaml:"port_mode"`
@@ -291,6 +293,7 @@ func defaultAppConfig() *appConfig {
 		},
 		IPsec: ipsecConfig{
 			DefaultNetNS:         ipsec.NetNSSpec{}.Normalized(),
+			Accept:               ipsec.AcceptInbound,
 			Driver:               ipsecDriverStrongSwan,
 			PortMode:             ipsec.PortModeFixed,
 			PortRotateInterval:   0,
@@ -341,6 +344,9 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
+	if config.IPsec.Accept == "" {
+		config.IPsec.Accept = ipsec.AcceptInbound
+	}
 	if config.IPsec.Driver == "" {
 		config.IPsec.Driver = ipsecDriverStrongSwan
 	}
@@ -521,6 +527,15 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 			return err
 		}
 		config.IPsec.Driver = driver
+	}
+	if file.IPsec.Accept != "" {
+		accept := strings.ToLower(strings.TrimSpace(file.IPsec.Accept))
+		switch accept {
+		case ipsec.AcceptNone, ipsec.AcceptInbound, ipsec.AcceptBidirectional:
+			config.IPsec.Accept = accept
+		default:
+			return fmt.Errorf("invalid ipsec.accept %q", file.IPsec.Accept)
+		}
 	}
 	if file.IPsec.VICISocket != "" {
 		config.IPsec.VICISocket = file.IPsec.VICISocket
@@ -783,13 +798,15 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg netnsConfig, de
 	if err != nil {
 		return ipsec.LinkGroupSpec{}, fmt.Errorf("netns: %w", err)
 	}
+	if overlay.Direction != "" {
+		return ipsec.LinkGroupSpec{}, fmt.Errorf("overlays[].direction is deprecated; use ipsec.accept instead")
+	}
 	group := ipsec.LinkGroupSpec{
 		ID:                 overlay.ID,
 		Name:               overlay.Name,
 		Provider:           overlay.Provider,
 		NetNS:              netns,
 		DefaultPathMode:    overlay.DefaultPathMode,
-		Direction:          overlay.Direction,
 		AddressSourceOrder: append([]string(nil), overlay.AddressSourceOrder...),
 		ConnectRules:       append([]string(nil), overlay.Connect...),
 		DenyRules:          append([]string(nil), overlay.Deny...),

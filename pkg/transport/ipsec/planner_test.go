@@ -15,7 +15,7 @@ import (
 func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
@@ -23,7 +23,6 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	}}, now)
 	group := LinkGroupSpec{
 		ID:                "ipsec-main",
-		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
@@ -34,7 +33,7 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 		t.Fatalf("desired len = %d, skips = %+v", len(plan.Desired), plan.Skipped)
 	}
 	spec := plan.Desired[0]
-	if spec.PeerZone != "node-b.catofes." || spec.Direction != DirectionOutbound {
+	if spec.PeerZone != "node-b.catofes." || spec.InitiatorRole != InitiatorRolePrimary {
 		t.Fatalf("spec = %+v", spec)
 	}
 	if spec.IKEIdentity != "node-a.catofes." {
@@ -51,7 +50,7 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
@@ -59,7 +58,6 @@ func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 	}}, now)
 	group := LinkGroupSpec{
 		ID:                "ipsec-main",
-		Direction:         DirectionOutbound,
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
 	planA, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
@@ -89,7 +87,7 @@ func TestPlanTransportLinksHonorsBidirectionalTieBreakAndInboundAccept(t *testin
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks(a): %v", err)
@@ -122,7 +120,7 @@ func TestPlanTransportLinksKeepsInboundResponderDesired(t *testing.T) {
 		ID: "b-local", Source: SourceLocal, Address: "192.168.8.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionInbound}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -131,18 +129,18 @@ func TestPlanTransportLinksKeepsInboundResponderDesired(t *testing.T) {
 		t.Fatalf("inbound responder desired = %+v skips=%+v, want one", plan.Desired, plan.Skipped)
 	}
 	spec := plan.Desired[0]
-	if spec.Direction != DirectionInbound || len(spec.ContactPoints) != 0 {
+	if IsActiveInitiatorRole(spec.InitiatorRole) || len(spec.ContactPoints) != 0 {
 		t.Fatalf("inbound responder spec = %+v, want trap-style spec without contact points", spec)
 	}
-	if plan.Roles[spec.TransportID] != InitiatorRolePrimary {
-		t.Fatalf("inbound responder role = %q, want apply-capable role", plan.Roles[spec.TransportID])
+	if plan.Roles[spec.TransportID] != "" {
+		t.Fatalf("inbound responder role = %q, want empty responder role", plan.Roles[spec.TransportID])
 	}
 }
 
 func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
@@ -157,7 +155,7 @@ func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) 
 		ParentZone: "catofes.",
 		RevokedAt:  now.Add(-time.Minute).Unix(),
 	}
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -176,7 +174,7 @@ func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) 
 func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
@@ -206,7 +204,7 @@ func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) 
 		IKEPort:    500,
 		NATTPort:   4500,
 	}.Key()
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound, DefaultPathMode: PathModeExhaustive}
+	group := LinkGroupSpec{ID: "ipsec-main", DefaultPathMode: PathModeExhaustive}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{
 		Now: now,
 		ContactPointQuality: map[zone.ZonePath]map[string]ContactPointQuality{
@@ -266,7 +264,7 @@ func TestPlanTransportLinksDoesNotUseAdvertisedLocalPortAsStrongSwanLocalPort(t 
 		UpdatedAt: now.Unix(),
 	})
 
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionBidirectional, DefaultPathMode: PathModeFamilyRedundant}
+	group := LinkGroupSpec{ID: "ipsec-main", DefaultPathMode: PathModeFamilyRedundant}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -299,15 +297,15 @@ func TestPlanTransportLinksDoesNotUseAdvertisedLocalPortAsStrongSwanLocalPort(t 
 func TestPlanTransportLinksSkipsBehindNATWithoutInboundEvidence(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
 		ID: "b-lan", Source: SourceLocal, Address: "192.168.8.20", Priority: 100, Reachability: ReachabilityPrivate, TTLSeconds: 300,
 	}}, now)
-	setIPsecNATProfile(t, ns, "node-b.catofes.", NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
+	setIPsecNATProfile(t, ns, "node-b.catofes.", AcceptInbound, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
 
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{
 		Now:               now,
 		AllowPrivateLocal: true,
@@ -326,15 +324,15 @@ func TestPlanTransportLinksSkipsBehindNATWithoutInboundEvidence(t *testing.T) {
 func TestPlanTransportLinksAllowsNATOutboundToPublicPeer(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-lan", Source: SourceLocal, Address: "192.168.8.10", Priority: 100, Reachability: ReachabilityPrivate, TTLSeconds: 300,
 	}}, now)
-	setIPsecNATProfile(t, ns, "node-a.catofes.", NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
+	setIPsecNATProfile(t, ns, "node-a.catofes.", AcceptNone, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -350,13 +348,13 @@ func TestPlanTransportLinksAllowsNATOutboundToPublicPeer(t *testing.T) {
 func TestPlanTransportLinksAllowsNATObservedExternalPort(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
 		ID: "b-observed", Source: SourceReflector, Address: "203.0.113.20", Priority: 100, Reachability: ReachabilityNATObserved, TTLSeconds: 300,
 	}}, now)
-	setIPsecNATProfile(t, ns, "node-b.catofes.", NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableUnknown}, now)
+	setIPsecNATProfile(t, ns, "node-b.catofes.", AcceptInbound, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableUnknown}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
 		Version: 1,
 		Mode:    PortModeFixed,
@@ -369,7 +367,7 @@ func TestPlanTransportLinksAllowsNATObservedExternalPort(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	})
 
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -386,7 +384,7 @@ func TestPlanTransportLinksAllowsNATObservedExternalPort(t *testing.T) {
 func TestPlanTransportLinksAppliesMeshPolicyRules(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{
@@ -405,7 +403,7 @@ func TestPlanTransportLinksAppliesMeshPolicyRules(t *testing.T) {
 
 	group := LinkGroupSpec{
 		ID:           "ipsec-main",
-		ConnectRules: []string{"strongswan://*.catofes.?accept=inbound&source=discovery&mode=exhaustive&direction=outbound&max_peers=1"},
+		ConnectRules: []string{"strongswan://*.catofes.?accept=inbound&source=discovery&mode=exhaustive&max_peers=1"},
 		DenyRules:    []string{"strongswan://node-d.catofes."},
 	}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
@@ -436,7 +434,7 @@ func TestPlanTransportLinksAppliesMeshPolicyRules(t *testing.T) {
 func TestPlanTransportLinksDryRunDualStackModes(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{
@@ -446,22 +444,28 @@ func TestPlanTransportLinksDryRunDualStackModes(t *testing.T) {
 		{ID: "b-v6-backup", Source: SourceManualAddress, Address: "2001:db8::21", Priority: 10, Reachability: ReachabilityPublic, TTLSeconds: 300},
 	}, now)
 
-	group := LinkGroupSpec{ID: "ipsec-main", Direction: DirectionOutbound, DefaultPathMode: PathModeFamilyRedundant}
+	group := LinkGroupSpec{ID: "ipsec-main", DefaultPathMode: PathModeFamilyRedundant}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks(family): %v", err)
 	}
-	if len(plan.Desired) != 1 {
-		t.Fatalf("desired len = %d skips=%+v", len(plan.Desired), plan.Skipped)
+	if len(plan.Desired) != 2 {
+		t.Fatalf("desired len = %d skips=%+v, want one spec per family", len(plan.Desired), plan.Skipped)
 	}
-	points := plan.Desired[0].ContactPoints
-	if len(points) != 2 || !familiesInOrder(points, FamilyIPv4, FamilyIPv6) {
-		t.Fatalf("family-redundant contacts = %+v, want one IPv4 and one IPv6", points)
-	}
-	for _, point := range points {
-		if point.RankReason == "" {
-			t.Fatalf("contact missing rank reason: %+v", point)
+	for _, spec := range plan.Desired {
+		if spec.InitiatorRole != InitiatorRolePrimary {
+			t.Fatalf("spec role = %q, want primary", spec.InitiatorRole)
 		}
+		if len(spec.ContactPoints) != 1 {
+			t.Fatalf("family-redundant contacts = %+v, want one per spec", spec.ContactPoints)
+		}
+		if spec.ContactPoints[0].RankReason == "" {
+			t.Fatalf("contact missing rank reason: %+v", spec.ContactPoints[0])
+		}
+	}
+	families := []string{plan.Desired[0].ContactPoints[0].Family, plan.Desired[1].ContactPoints[0].Family}
+	if families[0] != FamilyIPv4 || families[1] != FamilyIPv6 {
+		t.Fatalf("family order = %v, want [ipv4, ipv6]", families)
 	}
 
 	group.DefaultPathMode = PathModeExhaustive
@@ -474,10 +478,48 @@ func TestPlanTransportLinksDryRunDualStackModes(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksFamilyRedundantStableIDsDifferPerFamily(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{
+		{ID: "b-v4", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
+		{ID: "b-v6", Source: SourceManualAddress, Address: "2001:db8::20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
+	}, now)
+
+	group := LinkGroupSpec{ID: "ipsec-main", DefaultPathMode: PathModeFamilyRedundant}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 2 {
+		t.Fatalf("desired len = %d, want 2", len(plan.Desired))
+	}
+	ids := map[string]bool{}
+	ifIDs := map[uint32]bool{}
+	ifNames := map[string]bool{}
+	for _, spec := range plan.Desired {
+		if ids[spec.TransportID] {
+			t.Fatalf("duplicate TransportID %q", spec.TransportID)
+		}
+		if ids[spec.InterfaceName] {
+			t.Fatalf("duplicate InterfaceName %q", spec.InterfaceName)
+		}
+		if ifIDs[spec.XFRMIfID] {
+			t.Fatalf("duplicate XFRMIfID %d", spec.XFRMIfID)
+		}
+		ids[spec.TransportID] = true
+		ifIDs[spec.XFRMIfID] = true
+		ifNames[spec.InterfaceName] = true
+	}
+}
+
 func TestPlanTransportLinksDryRunDNSRefreshUpdatesContactPoint(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
@@ -486,7 +528,6 @@ func TestPlanTransportLinksDryRunDNSRefreshUpdatesContactPoint(t *testing.T) {
 
 	group := LinkGroupSpec{
 		ID:                 "ipsec-main",
-		Direction:          DirectionOutbound,
 		AddressSourceOrder: []string{SourceManualDNS},
 	}
 	first, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{
@@ -811,7 +852,7 @@ func TestReconcileLinkInstancesEstablishedSAWinsOverBackoff(t *testing.T) {
 	}
 }
 
-func setIPsecNATProfile(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, nat NATProfile, now time.Time) {
+func setIPsecNATProfile(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, accept string, nat NATProfile, now time.Time) {
 	t.Helper()
 	zs := ns.Zones[peer]
 	fingerprint := "fp-" + string(peer)
@@ -821,7 +862,7 @@ func setIPsecNATProfile(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath,
 		Provider:                ProviderStrongSwan,
 		IKEIdentity:             string(peer),
 		TransportKeyFingerprint: fingerprint,
-		Accept:                  AcceptInbound,
+		Accept:                  accept,
 		AddressFamilies:         []string{FamilyIPv4, FamilyIPv6},
 		PathModes:               []string{PathModeFamilyRedundant, PathModeExhaustive},
 		NAT:                     nat,
