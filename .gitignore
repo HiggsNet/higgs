@@ -6,3 +6,4 @@ build
 /higgs
 .public-test
 app/higgs/.higgs.db
+.claude
