@@ -15,8 +15,8 @@ func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 			"child-sas": map[string]any{
 				"ipsec-main-ab-child": map[string]any{
 					"reqid":     "17",
-					"if-id-in":  "77",
-					"if-id-out": "78",
+					"if-id-in":  "0",
+					"if-id-out": "4e",
 					"state":     "INSTALLED",
 				},
 			},
@@ -51,7 +51,7 @@ func TestParseSAStatesDoesNotMarkConnectingIKEEstablished(t *testing.T) {
 			"child-sas": map[string]any{
 				"ipsec-main-ab-child": map[string]any{
 					"reqid":     "17",
-					"if-id-out": "77",
+					"if-id-out": "4d",
 					"state":     "CREATED",
 				},
 			},

@@ -219,6 +219,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	}
 
 	localGeneration := localPortGeneration(ns, local, now)
+	localIKE := localIKEPortFromState(ns, local, now)
 	for i := range specs {
 		spec := &specs[i]
 		if IsActiveInitiatorRole(spec.InitiatorRole) {
@@ -227,6 +228,9 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			}
 		} else if localGeneration != 0 {
 			spec.Generation = localGeneration
+		}
+		if localIKE != 0 {
+			spec.LocalIKEPort = localIKE
 		}
 	}
 	return specs, true, PlanSkip{}, nextIndex, nil
@@ -288,6 +292,31 @@ func localPortGeneration(ns *zone.NetworkState, local zone.ZonePath, now time.Ti
 	}
 	if records.Ports != nil && records.Ports.Current != nil {
 		return records.Ports.Current.Generation
+	}
+	return 0
+}
+
+func localIKEPortFromState(ns *zone.NetworkState, local zone.ZonePath, now time.Time) uint16 {
+	if ns == nil || ns.Zones[local] == nil {
+		return 0
+	}
+	records, err := ExtractNodeRecords(ns, local, now)
+	if err != nil {
+		return 0
+	}
+	return localIKEPort(records)
+}
+
+func localIKEPort(records *NodeRecords) uint16 {
+	if records == nil || records.Ports == nil || records.Ports.Current == nil {
+		return 0
+	}
+	binding := records.Ports.Current.IKE
+	// Local is the port charon actually binds to. If it is non-default,
+	// tell StrongSwan explicitly. If it is the default IKE port, leave
+	// LocalIKEPort zero so charon uses its normal listener.
+	if binding.Local != 0 && binding.Local != DefaultIKEPort {
+		return binding.Local
 	}
 	return 0
 }

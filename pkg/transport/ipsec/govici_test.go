@@ -246,7 +246,7 @@ func TestGoviciClientStreamsListSAs(t *testing.T) {
 			"child-sas": map[string]any{
 				"ipsec-main-ab-child": map[string]any{
 					"reqid":     "17",
-					"if-id-out": "77",
+					"if-id-out": "4d",
 					"state":     "INSTALLED",
 				},
 			},

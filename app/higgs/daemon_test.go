@@ -378,10 +378,12 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
 
 	groupA := testIPsecLinkGroup()
+	groupA.ConnectRules = nil
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
 	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupA.Reconcile.RotateRetentionSeconds = 0
 	groupB := testIPsecLinkGroup()
+	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB.Reconcile.RotateRetentionSeconds = 0
@@ -618,9 +620,11 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 
 	pool := netip.MustParsePrefix("10.88.0.0/24")
 	groupA := testIPsecLinkGroup()
+	groupA.ConnectRules = nil
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
 	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedPool, Family: ipsec.FamilyIPv4, Pool: pool}
 	groupB := testIPsecLinkGroup()
+	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedPool, Family: ipsec.FamilyIPv4, Pool: pool}
 
@@ -795,9 +799,11 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
 
 	groupA := testIPsecLinkGroup()
+	groupA.ConnectRules = nil
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
 	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB := testIPsecLinkGroup()
+	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	rtA := &Runtime{
@@ -861,13 +867,14 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
 	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 
-	// Rotate both peers to a new IKE generation on a non-default port. Using
-	// a different local/remote port forces StrongSwan to create independent
-	// IKE_SAs for the staged connection instead of adding a child to the
-	// existing IKE_SA.
-	const rotIKEPort uint16 = 4500
+	// Rotate both peers to generation 2 on IKE port 500. The initial base
+	// connection uses NAT-T port 4500, so the staged connection on port 500
+	// gets independent IKE_SAs on both sides.
+	const rotIKEPort uint16 = ipsec.DefaultIKEPort
 	rotateA := latestA
 	rotateB := latestB
+	updateDaemonTestPortRecord(t, rotateA.Network.Zones["node-a.catofes."], "node-a.catofes.", 2, rotIKEPort, now.Add(time.Minute))
+	updateDaemonTestPortRecord(t, rotateB.Network.Zones["node-a.catofes."], "node-a.catofes.", 2, rotIKEPort, now.Add(time.Minute))
 	updateDaemonTestPortRecord(t, rotateA.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, rotIKEPort, now.Add(time.Minute))
 	updateDaemonTestPortRecord(t, rotateB.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, rotIKEPort, now.Add(time.Minute))
 	if err := rtA.SaveState(rotateA); err != nil {
@@ -890,8 +897,15 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	}
 	rotSpecA := daemonSystemDesiredSpec(t, preparedA, groupA, now.Add(time.Minute))
 	rotSpecB := daemonSystemDesiredSpec(t, preparedB, groupB, now.Add(time.Minute))
-	t.Logf("DEBUG rotate specA generation=%d localikeport=%d", rotSpecA.Generation, rotSpecA.LocalIKEPort)
+	t.Logf("DEBUG rotate specA role=%s gen=%d localikeport=%d", rotSpecA.InitiatorRole, rotSpecA.Generation, rotSpecA.LocalIKEPort)
+	t.Logf("DEBUG rotate specB role=%s gen=%d localikeport=%d", rotSpecB.InitiatorRole, rotSpecB.Generation, rotSpecB.LocalIKEPort)
 	t.Logf("DEBUG rotate specB generation=%d localikeport=%d", rotSpecB.Generation, rotSpecB.LocalIKEPort)
+	if preparedA.IPsecReconcile != nil {
+		t.Logf("DEBUG preparedA actions=%+v", preparedA.IPsecReconcile.Actions)
+	}
+	if preparedB.IPsecReconcile != nil {
+		t.Logf("DEBUG preparedB actions=%+v", preparedB.IPsecReconcile.Actions)
+	}
 	instA := preparedA.LinkInstances[ipsec.LinkInstanceID(specA)]
 	if instA.RotatePhase != ipsec.RotatePhaseTestingNew || instA.StagedGeneration != 2 {
 		t.Fatalf("prepared rotate instance A = %+v, want testing_new generation 2", instA)
@@ -941,16 +955,24 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	}
 	rotatedSpecA := daemonSystemDesiredSpec(t, committedA, groupA, now.Add(time.Minute))
 	rotatedSpecB := daemonSystemDesiredSpec(t, committedB, groupB, now.Add(time.Minute))
+	// After commit the active XFRM interface and IKE name are the staged ones;
+	// update the spec to match the committed instance before checking link state.
+	committedInstA := committedA.LinkInstances[ipsec.LinkInstanceID(rotatedSpecA)]
+	rotatedSpecA.InterfaceName = committedInstA.InterfaceName
+	rotatedSpecA.XFRMIfID = committedInstA.XFRMIfID
+	committedInstB := committedB.LinkInstances[ipsec.LinkInstanceID(rotatedSpecB)]
+	rotatedSpecB.InterfaceName = committedInstB.InterfaceName
+	rotatedSpecB.XFRMIfID = committedInstB.XFRMIfID
+	t.Logf("DEBUG assert A inst=%+v spec.XFRMIfID=%d", committedA.LinkInstances[ipsec.LinkInstanceID(rotatedSpecA)], rotatedSpecA.XFRMIfID)
+	t.Logf("DEBUG assert B inst=%+v spec.XFRMIfID=%d", committedB.LinkInstances[ipsec.LinkInstanceID(rotatedSpecB)], rotatedSpecB.XFRMIfID)
 	assertDaemonSystemLinkUp(t, committedA, rotatedSpecA)
 	assertDaemonSystemLinkUp(t, committedB, rotatedSpecB)
-	committedInstA := committedA.LinkInstances[ipsec.LinkInstanceID(rotatedSpecA)]
 	if committedInstA.RotatePhase != ipsec.RotatePhaseIdle || committedInstA.StagedGeneration != 0 {
 		t.Fatalf("committed rotate instance A = %+v, want idle with no staged generation", committedInstA)
 	}
 	if committedInstA.IKEName != stagedIKEA || committedInstA.RemoteGeneration != 2 {
 		t.Fatalf("committed rotate instance A = %+v, want ike=%s remote_generation=2", committedInstA, stagedIKEA)
 	}
-	committedInstB := committedB.LinkInstances[ipsec.LinkInstanceID(rotatedSpecB)]
 	if committedInstB.RotatePhase != ipsec.RotatePhaseIdle || committedInstB.StagedGeneration != 0 {
 		t.Fatalf("committed rotate instance B = %+v, want idle with no staged generation", committedInstB)
 	}
@@ -973,13 +995,6 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	} else if count != 1 {
 		t.Fatalf("staged SA count on B after commit = %d, want 1", count)
 	}
-	// After commit the active XFRM interface is the staged one; the desired
-	// spec still carries the base transport ID/interface, so use the committed
-	// instance's interface for routes and pings.
-	rotatedSpecA.InterfaceName = committedInstA.InterfaceName
-	rotatedSpecA.XFRMIfID = committedInstA.XFRMIfID
-	rotatedSpecB.InterfaceName = committedInstB.InterfaceName
-	rotatedSpecB.XFRMIfID = committedInstB.XFRMIfID
 	addTunnelRoute(t, ctx, nsA, rotatedSpecA)
 	addTunnelRoute(t, ctx, nsB, rotatedSpecB)
 	pingTunnelAddr(t, ctx, nsA, rotatedSpecA.PeerTunnelAddr, rotatedSpecA.InterfaceName)
@@ -1088,9 +1103,11 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: gossipA}}
 
 	groupA := testIPsecLinkGroup()
+	groupA.ConnectRules = nil
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
 	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB := testIPsecLinkGroup()
+	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	rtA := &Runtime{
@@ -2612,6 +2629,7 @@ func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.Zone
 	if ikePort == 0 {
 		ikePort = ipsec.DefaultIKEPort
 	}
+	nattPort := ikePort
 	previous := ipsec.PortSelection{
 		Generation: 1,
 		IKE:        ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort},
@@ -2623,8 +2641,8 @@ func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.Zone
 		Mode:    ipsec.PortModeFixed,
 		Current: &ipsec.PortSelection{
 			Generation: generation,
-			IKE:        ipsec.PortBinding{Advertised: ikePort},
-			NATT:       ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort},
+			IKE:        ipsec.PortBinding{Local: ikePort, Advertised: ikePort},
+			NATT:       ipsec.PortBinding{Local: nattPort, Advertised: nattPort},
 			ValidUntil: now.Add(time.Hour).Unix(),
 		},
 		Previous:  []ipsec.PortSelection{previous},

@@ -147,6 +147,14 @@ func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	if err := xfrm.EnsureNamespace(ctx, netns); err != nil {
 		return plan, fmt.Errorf("ensure namespace: %w", err)
 	}
+	// Unload the base connection before loading the staged one. This prevents
+	// StrongSwan from matching incoming rotation packets against the base
+	// config and creating the staged IKE_SA under the wrong connection name.
+	// The base IKE_SA remains established because we only unload the config.
+	baseName := BaseConnectionName(spec.TransportID)
+	if baseName != spec.TransportID {
+		_ = ipsec.UnloadConnection(ctx, baseName)
+	}
 	if err := ipsec.LoadConnection(ctx, spec); err != nil {
 		return plan, fmt.Errorf("load connection: %w", err)
 	}
@@ -297,6 +305,11 @@ func (d *StrongSwanDriver) UnloadConnection(ctx context.Context, id string) erro
 	ctx, cancel := d.viciContext(ctx)
 	defer cancel()
 	_, err := d.VICI.Call(ctx, "unload-conn", map[string]any{"name": id})
+	// Idempotent: the connection may already be gone (e.g., unloaded during
+	// prepare rotation or manually removed by an operator).
+	if err != nil && strings.Contains(err.Error(), "not found") {
+		return nil
+	}
 	return err
 }
 

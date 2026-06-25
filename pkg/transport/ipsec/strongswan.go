@@ -156,6 +156,16 @@ func RotateConnectionName(transportID string, generation uint64) string {
 	return transportID + "-rot-" + strconv.FormatUint(generation, 10)
 }
 
+// BaseConnectionName returns the original connection name for a rotated
+// connection name produced by RotateConnectionName. If the transport ID is not
+// a rotated name, it is returned unchanged.
+func BaseConnectionName(transportID string) string {
+	if i := strings.LastIndex(transportID, "-rot-"); i >= 0 {
+		return transportID[:i]
+	}
+	return transportID
+}
+
 func RotateChildSAName(transportID string, generation uint64) string {
 	return RotateConnectionName(transportID, generation) + "-child"
 }
@@ -163,6 +173,9 @@ func RotateChildSAName(transportID string, generation uint64) string {
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 	startAction := "start"
 	if !IsActiveInitiatorRole(spec.InitiatorRole) {
+		// responder-only, secondary-standby and takeover all install a trap
+		// policy so that matching traffic (or the initiator's IKE_AUTH)
+		// brings up the child without an explicit create action.
 		startAction = "trap"
 	}
 	return map[string]any{
@@ -252,7 +265,7 @@ func parseSAStates(event map[string]any) []SAState {
 			childState := state
 			childState.ChildSA = stripChildSAReqidSuffix(childName)
 			childState.ChildState = stringValue(child["state"])
-			childState.XFRMIfID = firstUint32(child["if-id-out"], child["if-id-in"])
+			childState.XFRMIfID = firstHexUint32(child["if-id-out"], child["if-id-in"])
 			childState.ReqID = uint32Value(child["reqid"])
 			childState.Established = strongSwanSAEstablished(childState.IKEState, childState.ChildState)
 			states = append(states, childState)
@@ -329,6 +342,33 @@ func uint32Value(v any) uint32 {
 func firstUint32(values ...any) uint32 {
 	for _, value := range values {
 		if parsed := uint32Value(value); parsed != 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func hexUint32Value(v any) uint32 {
+	switch value := v.(type) {
+	case string:
+		parsed, err := strconv.ParseUint(value, 16, 32)
+		if err == nil {
+			return uint32(parsed)
+		}
+	case []byte:
+		parsed, err := strconv.ParseUint(string(value), 16, 32)
+		if err == nil {
+			return uint32(parsed)
+		}
+	default:
+		return uint32Value(v)
+	}
+	return 0
+}
+
+func firstHexUint32(values ...any) uint32 {
+	for _, value := range values {
+		if parsed := hexUint32Value(value); parsed != 0 {
 			return parsed
 		}
 	}

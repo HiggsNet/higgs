@@ -380,11 +380,10 @@ func mapGossipEndpointSourceToIPsec(ep gossip.EndpointEntry) (source, reachabili
 }
 
 func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*ipsec.PortRecord, error) {
+	// IPsec ports are independent of the gossip listen address. Use the IKEv2
+	// defaults unless the configuration explicitly requests a different mode.
 	ike := uint16(ipsec.DefaultIKEPort)
 	natt := uint16(ipsec.DefaultNATTPort)
-	if port := listenPortFromAddr(config.ListenAddr); port != 0 && port != uint16(ipsec.DefaultIKEPort) {
-		natt = port
-	}
 	previous := previousIPsecPortRecord(state)
 	mode := config.IPsec.PortMode
 	if mode == "" {
