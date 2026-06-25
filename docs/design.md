@@ -46,6 +46,21 @@
 | 跳频/多线路 | Phase 6 | 高级对抗/优化特性，待控制平面稳定后再做 |
 | 系统服务交互 | `vici`（StrongSwan）/ `netlink`（XFRM/路由/WG）/ `birdc`（BIRD）/ `exec`（兜底） | 按组件分层 |
 
+### 1.1.1 文档分工
+
+本仓库里与 gossip 相关的文档按读者分工：
+
+- `docs/gossip-protocol.md` 是 gossip canonical 规范，面向 operator、实现者和测试作者。它描述 wire message、catalog sync、object pull、UDP chunk fallback、endpoint discovery、NAT observed path 和 trust boundary 的当前规则/目标规则。
+- `docs/protocol.md` 是控制面协议总览，保留 IPsec / overlay signed record 规范，并链接到 gossip 专文。
+- 本文 `docs/design.md` 是架构设计，面向长期维护者和 AI agent。它描述为什么要这样分层、哪些边界不能混、哪些历史设计已经被后续实现替代。
+- 代码附近的测试和 smoke 是可执行规范。如果本文与 `docs/gossip-protocol.md` 冲突，以 `docs/gossip-protocol.md` 的当前协议规则和已通过测试为准，然后回头修本文。
+
+gossip 维护时尤其要避免三种混淆：
+
+- **身份与可达性混淆**：Zone trust chain / record signature 决定身份和授权；bootstrap、signed endpoint、reflector、DNS、observed UDP path 只提供联系候选。
+- **hint 与完整对象混淆**：`announce` 首先是 digest hint，可以携带小而完整的 payload；不能把多条 UDP record announce 当成事务或完整性保证。
+- **bulk path 与 fallback 混淆**：大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时兜底。
+
 ### 1.2 总体架构（核心 + 插件）
 
 ```
@@ -725,14 +740,14 @@ Sign(
   ```
 - 旧版本记录在 `RecordHistory` 中保留有限窗口作为审计/调试 log，但 active state 只使用每个 key 的 latest non-conflict record；普通同步主路径不维护 pending 补前驱状态
 
-**Gossip 协议：**
-- `PING`: 携带 `map[zone_name]zone_root_hash`（类似交换各自持有的 zone 版本摘要）
-- `PONG`: 返回对方缺失/过时的 zone 列表
-- `FETCH_ZONE`: 请求某个 Zone 的完整内容（或按 Merkle path 请求差异分支）
-- `FETCH_RECORD`: 请求单条 record 内容
-- `ANNOUNCE`: 主动广播某个 Zone 的更新（低频次）
+**Gossip 架构边界：**
+- 详细 wire / sync 规则见 `docs/gossip-protocol.md`。
+- UDP control path 只负责 bounded summary、catalog page、fetch request、state-change hint 和小而完整的 opportunistic payload。
+- TCP object pull 是完整 Zone snapshot / record 的 bulk 主路径；UDP chunk fallback 是 TCP pull 的兜底，不是默认 bulk path。
+- Catalog sync 负责回答“双方有哪些 Zone digest 不同”；object sync 负责拉取不同 Zone 的完整对象。
+- 收到 skeleton、digest-only announce 或部分 record 后，session 必须保持 pending；只有本地 `ZoneRoot` 与期望 digest 匹配，或者完整 object pull/chunk apply 成功后，该 Zone 才算完成。
 
-**Gossip 安全边界（Phase 1 必需）**
+**Gossip 安全边界**
 - 仅接受 bootstrap 列表、已验证节点、显式 allowlist 节点的同步连接
 - `FETCH_ZONE` 前先验证 zone path 是否位于可信根树下
 - 限制单次同步资源：最大 Zone 数、最大 Record 数、最大字节数
@@ -740,12 +755,11 @@ Sign(
 - 状态分层必须明确：`untrusted received data` -> `verified candidate state` -> `active network state`
 
 **同步流程：**
-1. 节点 A 连接节点 B，交换各自的 zone hash 映射表
-2. A 发现 B 有更新的 `catofes.`（hash 不同）
-3. A 向 B 请求 `catofes.` 的完整内容（Phase 1 先 whole-zone sync，不先做 Merkle diff）
-4. 数据进入 quarantine store
-5. 本地逐条验证签名链（Delegation → Authority → Record）
-6. 验证通过 → 提升到 active store → 重新计算本地 hash → 继续 Gossip
+1. 节点 A/B 交换 catalog summary；如果 `catalog_root` 一致，本轮结束。
+2. 如果 root 不同，双方通过 bounded catalog pages 定位不同 Zone digest。
+3. 对不同 Zone，接收方通过 object pull 拉取完整 Zone snapshot；TCP 不可达时才请求 UDP chunk fallback。
+4. 数据进入 candidate state，本地逐条验证签名链（Delegation → Authority → Record）。
+5. 验证通过且 root digest 匹配 → 提升到 active store → 重新计算本地 hash → 继续 Gossip。
 
 **并发与冲突：**
 - Zone 天然有单一持有者，同一 Zone 内的写入冲突应由该持有者避免。
@@ -1001,7 +1015,7 @@ type PeerView struct {
 | Relay fanout（变更后对其他 peer 触发轻量 sync） | `app/higgs/sync.go` | ✅ 完整 |
 | Peer 动态发现（endpoint record 扫描、TTL/grace 管理） | `pkg/core/gossip/` | ✅ 完整 |
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
-| Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` | ✅ 已实现，admin 写入和 IPsec state-change hook 已接入；Phase 6 将进一步改为事件驱动 + per-peer SyncSession FSM |
+| Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` / `app/higgs/daemon_sync.go` | ✅ 已实现，admin 写入、IPsec state-change hook、单 UDP reader、事件循环和 per-peer `SyncSession` FSM 已接入 |
 | CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db / route） | `app/higgs/` | ✅ 完整 |
 | 配置文件（YAML + 环境变量覆盖；`overlays[].routing` 将移除，改为 `netns` + `routing.instances[]`） | `app/higgs/config.go` | 🟨 待按 per-netns BIRD 调整 |
 | Route Announcement / IPAM record 解析与校验 | `pkg/routing/records.go` | ✅ 完整 |
@@ -1058,10 +1072,22 @@ Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
 超时从「socket read deadline」改为「显式 timer 事件」：
 
 - `RoundTimeout`：整轮超时，基于 peer 估计 RTT 动态计算：`max(5s, kRound * RTT + ObjectPullBudget + jitter)`。
-- `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。它不是轮询间隔，而是给对端 burst 发送留的窗口：第一静默期决定是否从 UDP 切换到 TCP object-pull；第二静默期等待 object-pull 后的迟到 UDP / chunk。跨国 RTT 600ms 时静默期自动放到约 2s，不会过早切 TCP。
+- `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。它不是轮询间隔，也不应是 oversized object 的主发现机制。digest mismatch 应尽快触发 object pull；quiet timeout 只用于丢包、迟到 UDP payload 或 fallback 收尾。
 - `BackoffRetry`：peer 可再次尝试的时间点。
 
-状态转换由事件驱动。例如：
+当前已实现的 `SyncSession` 仍以完整 `ZoneDigest[]` 的 `PING` / `PONG` 为入口，状态含义如下：
+
+| 状态 | 含义 |
+|------|------|
+| `Idle` | 没有活跃 round，等待 `SyncTimerEvent`。 |
+| `PingSent` | 已发送本地 digest 列表，等待对端 `PONG` 或入站 `PING` 派生出的 `PongReceivedEvent`。 |
+| `FetchingLocal` | 对端请求本地 Zone，已发送 bounded `ANNOUNCE` / snapshot，等待 quiet timeout 结束本轮。 |
+| `AwaitingAnnounce` | 已发现对端有本地缺失或 root 不同的 Zone，已发 `FETCH_ZONE`，等待对端小 payload / skeleton / digest hint。 |
+| `ObjectPulling` | UDP 静默或 digest-only/skeleton 未补齐后，异步 TCP object pull 正在拉完整 snapshot。 |
+| `ChunkFallback` | TCP object pull 失败后，已请求 `FETCH_ZONE{ChunkFallback:true}`，等待 UDP chunk 重组完成。 |
+| `Completed` / `Failed` | 终态，触发持久化、backoff 或后续 state-change hook。 |
+
+当前实现的简化转换是：
 
 ```text
 SyncTimerEvent ──► PingSent ──► PongReceived ──► AwaitingAnnounce
@@ -1079,13 +1105,40 @@ SyncTimerEvent ──► PingSent ──► PongReceived ──► AwaitingAnnou
                           Completed / Failed
 ```
 
+Phase 3.6.8 的 catalog sync 会调整这条状态机。原因是 `PING` / `PONG` 不再承诺携带完整 digest list，`AwaitingAnnounce` 也不能继续承担“发现差异、等待小 payload、等待完整对象”三种职责。目标状态机应拆成：
+
+| 目标状态 | 作用 |
+|----------|------|
+| `SummarySent`（可复用/替代 `PingSent`） | 交换 `CatalogSummary`；若 `catalog_root` 相同直接完成。 |
+| `CatalogDiffing` | 通过 `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` 分页比较 sorted catalog，积累需要 object sync 的 Zone digest。 |
+| `ObjectPulling` | 对 page diff 得出的缺失/不同 Zone 启动 TCP object pull；不等待 announce 来承载完整对象。 |
+| `ChunkFallback` | 仅在 TCP pull 失败且有 verified observed UDP path 时请求 UDP chunk fallback。 |
+| `ServingPeerFetch`（可由 `FetchingLocal` 扩展） | 响应对端 catalog diff 后的 `FETCH_ZONE` / object pull 请求。 |
+
+对应事件也要扩展为 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，动作扩展为 `SendFetchCatalogPageAction`、`SendCatalogPageAction`。迁移后的主路径应是：
+
+```text
+SyncTimerEvent
+  -> SummarySent
+  -> CatalogSummaryReceived
+       -> Completed                 (catalog_root 相同)
+       -> CatalogDiffing            (catalog_root 不同)
+  -> CatalogPageReceived*           (bounded page diff)
+  -> ObjectPulling                  (按 diff 拉完整 Zone snapshot)
+  -> ChunkFallback                  (仅 TCP 不可达时)
+  -> Completed / Failed
+```
+
+`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，可以携带小而完整的 opportunistic payload，但不能作为 catalog diff 或完整对象事务的 correctness baseline。收到 skeleton、digest-only announce 或部分 record 后，session 必须保持 pending；只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
+
 ### 7.4 MTU / TCP Pull / UDP Chunk 的集成
 
 重构后这些能力作为 FSM 事件处理：
 
-- 发送 snapshot 超预算 → 发 digest-only `ANNOUNCE`，触发对端 `ObjectPulling`。
+- 发送 snapshot 超预算 → 发 digest-only `ANNOUNCE` 或 skeleton hint，接收方基于 digest mismatch 触发 TCP object pull。
 - TCP object pull 改为异步 worker pool，完成后 post `ObjectPullResultEvent`。
 - TCP 不可达 → 进入 `ChunkFallback`，发送 `FETCH_ZONE{ChunkFallback:true}`，接收 `object_chunk` 事件驱动重组。
+- 多条 UDP record announce 不能作为完整 Zone 事务；如果一个 Zone 需要拆成多条 record datagram 才能达到目标 root，正确路径是 object pull，record announce 只能作为小对象优化。
 
 ### 7.5 状态变更与持久化边界
 

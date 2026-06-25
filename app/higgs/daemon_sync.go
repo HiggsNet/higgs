@@ -373,33 +373,75 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				session.objectPullInflight[a.Zone] = true
 			}
 		case SendAnnounceAction:
-			announce := &gossip.Announce{}
-			if len(a.Snapshots) > 0 {
-				announce.Snapshots = make([]gossip.ZoneSnapshot, 0, len(a.Snapshots))
-				for _, snap := range a.Snapshots {
-					if snap != nil {
-						announce.Snapshots = append(announce.Snapshots, *snap)
-					}
+			zones := make([]zone.ZonePath, 0, len(a.Snapshots))
+			for _, snap := range a.Snapshots {
+				if snap != nil {
+					zones = append(zones, snap.Zone)
+				}
+			}
+			plan := planSnapshotDatagrams(d.Sync.State.Network, zones, budget, d.Sync.now())
+			var announces []*gossip.Announce
+			var recordAnnounces []*gossip.Announce
+			var deferredRecords int
+			for _, announce := range plan.Announces {
+				if len(announce.Records) > 0 {
+					recordAnnounces = append(recordAnnounces, announce)
+					continue
+				}
+				announces = append(announces, announce)
+			}
+			// 方案B：单条 UDP 能装下的 record announce 直接发；需要拆成多条 datagram
+			// 的 record 集合走 TCP object pull / chunk fallback，避免中间态时序抖动。
+			if len(recordAnnounces) == 1 {
+				announces = append(announces, recordAnnounces...)
+			} else if len(recordAnnounces) > 1 {
+				for _, ann := range recordAnnounces {
+					deferredRecords += len(ann.Records)
 				}
 			}
 			if len(a.Records) > 0 {
-				announce.Records = make([]gossip.RecordSnapshot, 0, len(a.Records))
-				for _, rec := range a.Records {
-					if rec != nil {
-						announce.Records = append(announce.Records, *rec)
-					}
-				}
+				// Stand-alone record updates are handled via the same pull path so
+				// the behaviour matches snapshot-derived records.
+				deferredRecords += len(a.Records)
 			}
-			d.logInfo("sync", "sending_announce", map[string]any{
-				"peer_id":          peerID,
-				"zones":            len(announce.Snapshots),
-				"records":          len(announce.Records),
-				"snapshot_records": snapshotRecordsCount(announce.Snapshots),
-			})
-			d.sendSyncMessage(peerID, &gossip.Message{
-				Type:     gossip.MessageAnnounce,
-				Announce: announce,
-			})
+			if deferredRecords > 0 {
+				d.logDebug("sync", "records_deferred_to_pull", map[string]any{
+					"peer_id": peerID,
+					"count":   deferredRecords,
+					"reason":  "udp_budget",
+				})
+			}
+			for _, oversized := range plan.Oversized {
+				if oversized.Object == "zone_skeleton" {
+					recordDatagramDigestOnly(d.Sync.State, peerID)
+				}
+				recordDatagramTooLarge(d.Sync.State, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
+				d.logDebug("transport", "datagram_too_large", map[string]any{
+					"peer_id": peerID,
+					"object":  oversized.Object,
+					"zone":    oversized.Zone,
+					"key":     oversized.Key,
+					"bytes":   oversized.Size,
+					"limit":   budget,
+					"via":     "event_loop",
+				})
+			}
+			for _, announce := range announces {
+				if announce == nil {
+					continue
+				}
+				d.logInfo("sync", "sending_announce", map[string]any{
+					"peer_id":          peerID,
+					"zones":            len(announce.Snapshots),
+					"records":          len(announce.Records),
+					"snapshot_records": snapshotRecordsCount(announce.Snapshots),
+					"digests":          len(announce.Zones),
+				})
+				d.sendSyncMessage(peerID, &gossip.Message{
+					Type:     gossip.MessageAnnounce,
+					Announce: announce,
+				})
+			}
 		}
 	}
 

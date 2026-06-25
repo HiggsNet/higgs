@@ -3416,7 +3416,24 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 		t.Fatalf("handleSyncTimerEvent(B): %v", err)
 	}
 
-	pumpEventLoopSync(ctx, []*DaemonService{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
+	// Pump events, then advance the fake clock to fire any pending timers
+	// (e.g. packet-quiet timeouts that trigger object pull). Repeat until all
+	// sessions have completed.
+	for {
+		pumpEventLoopSync(ctx, []*DaemonService{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
+		aActive := false
+		if s, ok := serviceA.syncSessions[configB.PeerID]; ok && !s.Done() {
+			aActive = true
+		}
+		bActive := false
+		if s, ok := serviceB.syncSessions[configA.PeerID]; ok && !s.Done() {
+			bActive = true
+		}
+		if !aActive && !bActive {
+			break
+		}
+		fc.Advance(5 * time.Second)
+	}
 
 	if _, ok := serviceA.syncSessions[configB.PeerID]; ok {
 		t.Fatalf("session for B still active on A")

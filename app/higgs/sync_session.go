@@ -201,6 +201,16 @@ type SyncSession struct {
 	objectPullInflight map[zone.ZonePath]bool
 	// chunkFallbackZones tracks zones we are trying to receive via UDP chunk.
 	chunkFallbackZones map[zone.ZonePath]bool
+	// skeletonPending marks zones for which we received a UDP skeleton. Such
+	// zones stay pending until we either receive records via UDP or finish an
+	// object pull / chunk fallback. This prevents the local state from
+	// accidentally matching a stale expected digest and declaring the zone done
+	// while records are still missing.
+	skeletonPending map[zone.ZonePath]bool
+	// recordsReceived marks zones for which at least one record snapshot has
+	// been applied since the skeleton was received. Once records have arrived,
+	// normal root-hash reconciliation can complete the zone.
+	recordsReceived map[zone.ZonePath]bool
 	// expectedDigests maps pending zones to the remote root hash advertised in
 	// the PONG. Used to detect stale or incomplete UDP announces.
 	expectedDigests map[zone.ZonePath]gossip.ZoneDigest
@@ -225,6 +235,8 @@ func NewSyncSession(peerID string) *SyncSession {
 		localFetchZones:    make(map[zone.ZonePath]bool),
 		objectPullInflight: make(map[zone.ZonePath]bool),
 		chunkFallbackZones: make(map[zone.ZonePath]bool),
+		skeletonPending:    make(map[zone.ZonePath]bool),
+		recordsReceived:    make(map[zone.ZonePath]bool),
 		estimatedRTT:       InitialRTT,
 	}
 }
@@ -264,6 +276,8 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.localFetchZones = make(map[zone.ZonePath]bool)
 	s.objectPullInflight = make(map[zone.ZonePath]bool)
 	s.chunkFallbackZones = make(map[zone.ZonePath]bool)
+	s.skeletonPending = make(map[zone.ZonePath]bool)
+	s.recordsReceived = make(map[zone.ZonePath]bool)
 	s.expectedDigests = make(map[zone.ZonePath]gossip.ZoneDigest)
 
 	return []SyncAction{
@@ -336,9 +350,15 @@ func (s *SyncSession) onFetchZoneReceived(e *FetchZoneReceivedEvent) ([]SyncActi
 }
 
 func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction, error) {
-	if s.State != SyncSessionAwaitingAnnounce &&
+	// Accept announces while we are actively waiting for or pulling data from the
+	// peer, and also while we are sending local zones to the peer (the peer may
+	// send its own announces concurrently). Idle/completed/failed sessions should
+	// ignore stale/relay traffic.
+	if s.State != SyncSessionPingSent &&
+		s.State != SyncSessionAwaitingAnnounce &&
 		s.State != SyncSessionObjectPulling &&
-		s.State != SyncSessionChunkFallback {
+		s.State != SyncSessionChunkFallback &&
+		s.State != SyncSessionFetchingLocal {
 		return nil, nil
 	}
 	var actions []SyncAction
@@ -352,17 +372,20 @@ func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction
 				// pull / chunk fallback can finish the sync.
 				continue
 			}
-			// UDP skeletons intentionally omit records, so their root hash will
-			// not match the full-zone digest advertised in the PONG. Apply the
-			// skeleton for authority/parent proof but keep the zone pending so
-			// subsequent record datagrams can populate it.
 		}
 		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: snap, RelaxedLimits: false})
-		if ok && isSkeleton && !bytes.Equal(expected.RootHash, gossip.ZoneRoot(zoneStateFromSnapshot(snap))) {
-			// Skeleton applied; remain pending for records.
+		if isSkeleton {
+			// UDP skeletons intentionally omit records. Keep the zone pending
+			// until records arrive or an object pull / chunk fallback completes.
+			// Records received for a previous version of this zone are no longer
+			// authoritative once a new skeleton arrives.
+			s.skeletonPending[snap.Zone] = true
+			delete(s.recordsReceived, snap.Zone)
 			continue
 		}
 		delete(s.pendingZones, snap.Zone)
+		delete(s.skeletonPending, snap.Zone)
+		delete(s.recordsReceived, snap.Zone)
 		delete(s.objectPullInflight, snap.Zone)
 		delete(s.chunkFallbackZones, snap.Zone)
 		delete(s.expectedDigests, snap.Zone)
@@ -370,6 +393,7 @@ func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction
 	for i := range e.Announce.Records {
 		rec := &e.Announce.Records[i]
 		actions = append(actions, ApplyRecordSnapshotAction{PeerID: e.PeerID, Record: rec})
+		s.recordsReceived[rec.Zone] = true
 	}
 	if s.pendingEmpty() {
 		s.State = SyncSessionCompleted
@@ -389,6 +413,13 @@ func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAct
 		return nil
 	}
 	for z := range s.pendingZones {
+		if s.skeletonPending[z] {
+			// We only have a UDP skeleton for this zone. Don't reconcile it away
+			// until records arrive via UDP or an object pull / chunk fallback
+			// completes. This prevents stale record datagrams or a coincidental
+			// local root-hash match from hiding a real requirement.
+			continue
+		}
 		expected, ok := s.expectedDigests[z]
 		if !ok {
 			continue
@@ -399,6 +430,8 @@ func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAct
 		}
 		if bytes.Equal(expected.RootHash, gossip.ZoneRoot(zs)) {
 			delete(s.pendingZones, z)
+			delete(s.skeletonPending, z)
+			delete(s.recordsReceived, z)
 			delete(s.expectedDigests, z)
 			delete(s.objectPullInflight, z)
 			delete(s.chunkFallbackZones, z)
@@ -495,6 +528,8 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 	} else if e.Snapshot != nil {
 		s.pendingZones[e.Snapshot.Zone] = false
 		delete(s.pendingZones, e.Snapshot.Zone)
+		delete(s.skeletonPending, e.Snapshot.Zone)
+		delete(s.recordsReceived, e.Snapshot.Zone)
 		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true})
 	}
 
@@ -532,6 +567,8 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 	if e.Snapshot != nil {
 		delete(s.chunkFallbackZones, e.Snapshot.Zone)
 		delete(s.pendingZones, e.Snapshot.Zone)
+		delete(s.skeletonPending, e.Snapshot.Zone)
+		delete(s.recordsReceived, e.Snapshot.Zone)
 		if s.pendingEmpty() {
 			s.State = SyncSessionCompleted
 			return []SyncAction{

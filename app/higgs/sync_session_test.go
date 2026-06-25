@@ -156,7 +156,12 @@ func TestSyncSessionAnnounceAppliesAndCompletes(t *testing.T) {
 	actions, err := s.OnEvent(&AnnounceReceivedEvent{
 		PeerID: "peer-a",
 		Announce: &gossip.Announce{
-			Snapshots: []gossip.ZoneSnapshot{{Zone: "node-a.catofes."}},
+			Snapshots: []gossip.ZoneSnapshot{{
+				Zone: "node-a.catofes.",
+				Records: map[string]*zone.Record{
+					"identity": {Zone: "node-a.catofes.", Key: "identity", Value: []byte("node-a")},
+				},
+			}},
 		},
 	}, now)
 	if err != nil {
