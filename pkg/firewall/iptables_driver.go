@@ -122,9 +122,11 @@ func (d *IPTablesDriver) DeleteStale(ctx context.Context, refs []FirewallObjectR
 	for _, ref := range refs {
 		switch ref.Kind {
 		case "chain":
-			// Flush and delete the chain.
+			// Flush and delete the chain from both iptables and ip6tables.
 			_, _ = d.run(ctx, "iptables", "-F", ref.Name)
 			_, _ = d.run(ctx, "iptables", "-X", ref.Name)
+			_, _ = d.run(ctx, "ip6tables", "-F", ref.Name)
+			_, _ = d.run(ctx, "ip6tables", "-X", ref.Name)
 		case "table":
 			// iptables doesn't delete tables; just flush Higgs chains.
 		}
@@ -160,8 +162,11 @@ func buildIPTablesApplyCommands(plan FirewallPlan, desired *FirewallDesiredState
 		}
 		switch a.Object.Kind {
 		case "chain":
+			// Delete chain from both iptables and ip6tables.
 			commands = append(commands, iptablesCommand{"iptables", []string{"-F", a.Object.Name}})
 			commands = append(commands, iptablesCommand{"iptables", []string{"-X", a.Object.Name}})
+			commands = append(commands, iptablesCommand{"ip6tables", []string{"-F", a.Object.Name}})
+			commands = append(commands, iptablesCommand{"ip6tables", []string{"-X", a.Object.Name}})
 		}
 	}
 
@@ -191,26 +196,38 @@ func buildIPTablesOverlayCommands(tableName, marker string, desired *FirewallDes
 	var commands []iptablesCommand
 
 	chainName := tableName + "_INPUT"
+	// Create INPUT chain for both iptables and ip6tables.
 	commands = append(commands, iptablesCommand{"iptables", []string{"-N", chainName}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-N", chainName}})
+
 	for _, r := range desired.InputRules {
 		commands = append(commands, iptablesRuleCommands(chainName, r, marker)...)
 	}
 	// Jump from INPUT to Higgs chain.
 	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
 
 	fwdChain := tableName + "_FORWARD"
+	// Create FORWARD chain for both iptables and ip6tables.
 	commands = append(commands, iptablesCommand{"iptables", []string{"-N", fwdChain}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-N", fwdChain}})
+
 	for _, r := range desired.ForwardRules {
 		commands = append(commands, iptablesRuleCommands(fwdChain, r, marker)...)
 	}
 	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "FORWARD", "-j", fwdChain, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-I", "FORWARD", "-j", fwdChain, "-m", "comment", "--comment", marker}})
 
 	outChain := tableName + "_OUTPUT"
+	// Create OUTPUT chain for both iptables and ip6tables.
 	commands = append(commands, iptablesCommand{"iptables", []string{"-N", outChain}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-N", outChain}})
+
 	for _, r := range desired.OutputRules {
 		commands = append(commands, iptablesRuleCommands(outChain, r, marker)...)
 	}
 	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "OUTPUT", "-j", outChain, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-I", "OUTPUT", "-j", outChain, "-m", "comment", "--comment", marker}})
 
 	return commands
 }
@@ -219,7 +236,11 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 	var commands []iptablesCommand
 
 	chainName := tableName + "_INPUT"
+
+	// Create INPUT chain for both iptables and ip6tables.
 	commands = append(commands, iptablesCommand{"iptables", []string{"-N", chainName}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-N", chainName}})
+
 	for _, hi := range desired.HostIngress {
 		args := []string{"-A", chainName, "-p", iptablesProto(hi.Proto)}
 		if hi.Port > 0 {
@@ -228,12 +249,18 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 		if hi.DstAddr.IsValid() {
 			args = append(args, "-d", hi.DstAddr.String())
 		}
-		args = append(args, "-j", "ACCEPT", "-m", "comment", "--comment", marker+":"+hi.Comment)
-		commands = append(commands, iptablesCommand{"iptables", args})
-	}
-	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
+		acceptArgs := append(args, "-j", "ACCEPT", "-m", "comment", "--comment", marker+":"+hi.Comment)
 
-	// NAT redirect rules.
+		// Add rule to iptables (IPv4) and ip6tables (IPv6).
+		commands = append(commands, iptablesCommand{"iptables", acceptArgs})
+		commands = append(commands, iptablesCommand{"ip6tables", acceptArgs})
+	}
+
+	// Jump from INPUT to Higgs chain.
+	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
+	commands = append(commands, iptablesCommand{"ip6tables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
+
+	// NAT redirect rules for both IPv4 and IPv6.
 	for _, nr := range desired.NatRedirects {
 		args := []string{"-t", "nat", "-A", "PREROUTING", "-p", iptablesProto(nr.Proto)}
 		if nr.OriginalDst > 0 {
@@ -243,7 +270,10 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 			args = append(args, "-d", nr.DstAddr.String())
 		}
 		args = append(args, "-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", nr.RedirectTo), "-m", "comment", "--comment", marker+":"+nr.Comment)
+
+		// Add NAT rule to iptables (IPv4) and ip6tables (IPv6).
 		commands = append(commands, iptablesCommand{"iptables", args})
+		commands = append(commands, iptablesCommand{"ip6tables", args})
 	}
 
 	return commands
@@ -255,9 +285,45 @@ func iptablesRuleCommands(chain string, r Rule, marker string) []iptablesCommand
 		args := append([]string{"-A", chain}, match...)
 		args = append(args, "-j", strings.ToUpper(r.Action))
 		args = append(args, "-m", "comment", "--comment", marker+":"+r.Comment)
-		commands = append(commands, iptablesCommand{"iptables", args})
+
+		// Determine if this rule is for IPv4, IPv6, or both.
+		// If the rule contains ICMPv6 protocol, it's IPv6-only.
+		// Otherwise, check source/destination addresses.
+		binary := selectIPTablesBinaryForMatch(r, match)
+
+		commands = append(commands, iptablesCommand{binary, args})
 	}
 	return commands
+}
+
+// selectIPTablesBinaryForMatch determines whether to use iptables or ip6tables
+// based on the rule protocol and address match parameters.
+func selectIPTablesBinaryForMatch(r Rule, match []string) string {
+	// If the rule explicitly specifies ICMPv6, use ip6tables.
+	if r.Proto == ProtoICMPv6 || r.Proto == "ipv6-icmp" {
+		return "ip6tables"
+	}
+
+	// Check source/destination addresses in match args.
+	for i := 0; i < len(match)-1; i++ {
+		if match[i] == "-s" || match[i] == "-d" {
+			addr := match[i+1]
+			if ip, err := netip.ParseAddr(addr); err == nil {
+				if ip.Is6() {
+					return "ip6tables"
+				}
+			}
+			// If it's a prefix, check the address.
+			if prefix, err := netip.ParsePrefix(addr); err == nil {
+				if prefix.Addr().Is6() {
+					return "ip6tables"
+				}
+			}
+		}
+	}
+
+	// Default to iptables for IPv4 or dual-stack (inet semantics).
+	return "iptables"
 }
 
 func iptablesMatchArgSets(r Rule) [][]string {
