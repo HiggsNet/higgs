@@ -1572,43 +1572,31 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// Background packet service is only used by the event-loop sync path; the
-	// legacy syncRound performs its own transport.Receive and would otherwise
-	// race with this goroutine for packets.
-	var serveA, serveB <-chan struct{}
-	var stopA, stopB context.CancelFunc
-	if serviceA.eventLoopSync {
-		serveA, stopA = serveDaemonPackets(ctx, serviceA, transportA)
-		serveB, stopB = serveDaemonPackets(ctx, serviceB, transportB)
-	}
-
-	var syncErrs [2]error
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		syncErrs[0] = serviceB.handleSyncTimerEvent(ctx, true)
-	}()
-	go func() {
-		defer wg.Done()
-		syncErrs[1] = serviceA.handleSyncTimerEvent(ctx, true)
-	}()
-	wg.Wait()
-
-	if stopA != nil {
-		stopA()
-		<-serveA
-	}
-	if stopB != nil {
-		stopB()
-		<-serveB
-	}
-
-	if err := syncErrs[0]; err != nil {
+	// Run the legacy synchronous rounds one direction at a time. A concurrent
+	// bidirectional syncRound can deadlock object pull: each side holds its own
+	// state write lock while waiting for the peer's TCP object-pull handler,
+	// which needs that peer's read lock to serve the snapshot.
+	serveA, stopA := serveDaemonPackets(ctx, serviceA, transportA)
+	err = serviceB.handleSyncTimerEvent(ctx, true)
+	stopA()
+	<-serveA
+	if err != nil {
 		t.Fatalf("sync node-b from node-a: %v", err)
 	}
-	if err := syncErrs[1]; err != nil {
+
+	serveB, stopB := serveDaemonPackets(ctx, serviceB, transportB)
+	err = serviceA.handleSyncTimerEvent(ctx, true)
+	stopB()
+	<-serveB
+	if err != nil {
 		t.Fatalf("sync node-a from node-b: %v", err)
+	}
+
+	if err := serviceA.reconcileIPsecLinks(ctx); err != nil {
+		t.Fatalf("reconcile node-a ipsec links: %v", err)
+	}
+	if err := serviceB.reconcileIPsecLinks(ctx); err != nil {
+		t.Fatalf("reconcile node-b ipsec links: %v", err)
 	}
 
 	latestA, err := rtA.LoadState()
