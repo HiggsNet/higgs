@@ -725,6 +725,8 @@ func TestReconcileLinkInstancesHonorsApplyBackoff(t *testing.T) {
 
 func TestReconcileLinkInstancesRetriesConnectingWithoutSAAfterBackoff(t *testing.T) {
 	now := time.Unix(1717171717, 0)
+	policy := BackoffPolicy{InitialSeconds: 2, MaxSeconds: 8}
+	autostartGrace := nextLinkBackoff(policy, 1) + nextLinkBackoff(policy, 2)
 	spec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
 		PeerZone:      "node-b.catofes.",
@@ -741,7 +743,7 @@ func TestReconcileLinkInstancesRetriesConnectingWithoutSAAfterBackoff(t *testing
 		Instances: map[string]LinkInstance{inst.ID: inst},
 		Now:       now.Add(time.Second),
 		GroupBackoff: map[string]BackoffPolicy{
-			spec.OverlayID: {InitialSeconds: 2, MaxSeconds: 8},
+			spec.OverlayID: policy,
 		},
 	})
 	if action := firstAction(waiting, ReconcileActionNoop); action == nil || action.Reason != "awaiting established sa" {
@@ -755,23 +757,23 @@ func TestReconcileLinkInstancesRetriesConnectingWithoutSAAfterBackoff(t *testing
 	expired := ReconcileLinkInstances(ReconcileInputs{
 		Desired:   []TransportLinkSpec{spec},
 		Instances: map[string]LinkInstance{inst.ID: waitingInst},
-		Now:       now.Add(defaultLinkEstablishGrace + time.Second),
+		Now:       now.Add(autostartGrace + time.Second),
 		GroupBackoff: map[string]BackoffPolicy{
-			spec.OverlayID: {InitialSeconds: 2, MaxSeconds: 8},
+			spec.OverlayID: policy,
 		},
 	})
 	if action := firstAction(expired, ReconcileActionNoop); action == nil || action.Reason != "awaiting established sa" {
 		t.Fatalf("expired actions = %+v", expired.Actions)
 	}
 	expiredInst := expired.Instances[inst.ID]
-	if expiredInst.ActualState != LinkStateError || expiredInst.FailureCount != 1 || expiredInst.BackoffUntil != now.Add(defaultLinkEstablishGrace+3*time.Second).Unix() {
+	if expiredInst.ActualState != LinkStateError || expiredInst.FailureCount != 1 || expiredInst.BackoffUntil != now.Add(autostartGrace+3*time.Second).Unix() {
 		t.Fatalf("expired instance = %+v, want error with backoff", expiredInst)
 	}
 
 	duringBackoff := ReconcileLinkInstances(ReconcileInputs{
 		Desired:   []TransportLinkSpec{spec},
 		Instances: map[string]LinkInstance{inst.ID: expiredInst},
-		Now:       now.Add(defaultLinkEstablishGrace + 2*time.Second),
+		Now:       now.Add(autostartGrace + 2*time.Second),
 	})
 	if action := firstAction(duringBackoff, ReconcileActionNoop); action == nil || action.Reason != "apply backoff active" {
 		t.Fatalf("during backoff actions = %+v", duringBackoff.Actions)
@@ -780,7 +782,7 @@ func TestReconcileLinkInstancesRetriesConnectingWithoutSAAfterBackoff(t *testing
 	afterBackoff := ReconcileLinkInstances(ReconcileInputs{
 		Desired:   []TransportLinkSpec{spec},
 		Instances: map[string]LinkInstance{inst.ID: expiredInst},
-		Now:       now.Add(defaultLinkEstablishGrace + 4*time.Second),
+		Now:       now.Add(autostartGrace + 4*time.Second),
 	})
 	if action := firstAction(afterBackoff, ReconcileActionRepair); action == nil || action.Reason != "previous apply failed" {
 		t.Fatalf("after backoff actions = %+v", afterBackoff.Actions)
@@ -807,13 +809,26 @@ func TestReconcileLinkInstancesWaitsForObservedConnectingSA(t *testing.T) {
 		Desired:   []TransportLinkSpec{spec},
 		Instances: map[string]LinkInstance{inst.ID: inst},
 		SAs:       []SAState{{Name: spec.TransportID, IKEState: "CONNECTING"}},
-		Now:       now.Add(defaultLinkEstablishGrace + time.Minute),
+		Now:       now.Add(time.Minute),
 	})
 	if action := firstAction(result, ReconcileActionNoop); action == nil || action.Reason != "awaiting in-progress sa" {
 		t.Fatalf("actions = %+v", result.Actions)
 	}
 	if got := result.Instances[inst.ID]; got.ActualState != LinkStateConnecting || got.FailureCount != 0 {
 		t.Fatalf("instance = %+v, want connecting without failure", got)
+	}
+
+	expired := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{inst.ID: inst},
+		SAs:       []SAState{{Name: spec.TransportID, IKEState: "CONNECTING"}},
+		Now:       now.Add(defaultLinkEstablishGrace + time.Second),
+	})
+	if action := firstAction(expired, ReconcileActionNoop); action == nil || action.Reason != "awaiting in-progress sa" {
+		t.Fatalf("expired actions = %+v", expired.Actions)
+	}
+	if got := expired.Instances[inst.ID]; got.ActualState != LinkStateError || got.FailureCount != 1 {
+		t.Fatalf("expired instance = %+v, want in-progress timeout failure", got)
 	}
 }
 

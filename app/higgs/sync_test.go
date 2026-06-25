@@ -598,6 +598,7 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 		t.Fatalf("Listen(B): %v", err)
 	}
 	defer transportB.Close()
+	transportA.AddPeer(config.PeerID, transportB.LocalAddr())
 
 	localSummary, err := gossip.CatalogSummaryFor(state.Network, gossip.DefaultDatagramBudget)
 	if err != nil {

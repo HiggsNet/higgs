@@ -370,10 +370,16 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		}
 		if (existing.ActualState == LinkStateConfiguring || existing.ActualState == LinkStateConnecting) && !sa.Established {
 			if saObserved(sa) {
+				if !linkEstablishing(existing, now) {
+					inst := MarkLinkApplyFailure(existing, groupBackoffForSpec(spec, in.GroupBackoff), now, fmt.Errorf("waiting for in-progress SA"))
+					result.Instances[id] = inst
+					result.add(ReconcileActionNoop, &spec, &inst, "awaiting in-progress sa")
+					continue
+				}
 				result.add(ReconcileActionNoop, &spec, &existing, "awaiting in-progress sa")
 				continue
 			}
-			if linkEstablishing(existing, now) {
+			if linkAutostartEstablishing(existing, groupBackoffForSpec(spec, in.GroupBackoff), now) {
 				result.add(ReconcileActionNoop, &spec, &existing, "awaiting established sa")
 				continue
 			}
@@ -769,6 +775,14 @@ func linkEstablishing(inst LinkInstance, now time.Time) bool {
 		return false
 	}
 	return now.Before(time.Unix(inst.LastTransition, 0).Add(defaultLinkEstablishGrace))
+}
+
+func linkAutostartEstablishing(inst LinkInstance, policy BackoffPolicy, now time.Time) bool {
+	if inst.LastTransition == 0 {
+		return false
+	}
+	grace := nextLinkBackoff(policy, inst.FailureCount+1) + nextLinkBackoff(policy, inst.FailureCount+2)
+	return now.Before(time.Unix(inst.LastTransition, 0).Add(grace))
 }
 
 func rotateRetentionForSpec(spec TransportLinkSpec, groups map[string]int) time.Duration {
