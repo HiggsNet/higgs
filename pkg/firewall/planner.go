@@ -340,6 +340,10 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 	// hitting advertised entry ports.
 }
 
+// addNatRedirects creates DNAT redirect rules for port rotation.
+// It creates rules without specific DstAddr, so they match all addresses on
+// all interfaces. This supports IPv6 interfaces with multiple addresses,
+// as the redirect rule will apply to all of them without needing a per-address rule.
 func addNatRedirects(desired *FirewallDesiredState, ports []uint16, target uint16, reason, label string, listenAddrs []netip.Addr) {
 	seen := make(map[uint16]bool, len(desired.NatRedirects)+len(ports))
 	for _, existing := range desired.NatRedirects {
@@ -352,11 +356,14 @@ func addNatRedirects(desired *FirewallDesiredState, ports []uint16, target uint1
 			continue
 		}
 		seen[port] = true
+		// Leave DstAddr empty to match all addresses on all interfaces.
+		// This supports IPv6 multi-address scenarios and works for both IPv4 and IPv6
+		// in nftables inet tables. The redirect only changes the port, not the address.
 		desired.NatRedirects = append(desired.NatRedirects, NatRedirectRule{
 			Proto:       ProtoUDP,
 			OriginalDst: port,
 			RedirectTo:  target,
-			DstAddr:     firstListenAddr(listenAddrs),
+			DstAddr:     netip.Addr{}, // Empty to match all addresses
 			Comment:     fmt.Sprintf("%s %d -> %d (%s)", reason, port, target, label),
 		})
 	}
