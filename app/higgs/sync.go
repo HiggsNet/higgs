@@ -1834,6 +1834,14 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 				return err
 			}
 		}
+		if message.Ping.Summary != nil && !bytes.Equal(message.Ping.Summary.CatalogRoot, summary.CatalogRoot) {
+			if err := transport.Send(message.PeerID, &gossip.Message{
+				Type:             gossip.MessageFetchCatalogPage,
+				FetchCatalogPage: &gossip.FetchCatalogPage{},
+			}); err != nil {
+				return err
+			}
+		}
 		return nil
 	case gossip.MessagePong:
 		if message.Pong.Summary != nil {

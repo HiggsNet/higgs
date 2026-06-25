@@ -561,6 +561,89 @@ func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {
 	}
 }
 
+func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	config := &syncConfigFile{
+		PeerID:          "node-b.catofes.",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	}
+	now := time.Unix(2000, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+
+	transportA, err := gossip.Listen(gossip.Config{
+		PeerID:          "node-a.catofes.",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(A): %v", err)
+	}
+	defer transportA.Close()
+
+	transportB, err := gossip.Listen(gossip.Config{
+		PeerID:          config.PeerID,
+		ListenAddr:      config.ListenAddr,
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+		KnownPeers: map[string]*net.UDPAddr{
+			"node-a.catofes.": transportA.LocalAddr(),
+		},
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(B): %v", err)
+	}
+	defer transportB.Close()
+
+	localSummary, err := gossip.CatalogSummaryFor(state.Network, gossip.DefaultDatagramBudget)
+	if err != nil {
+		t.Fatalf("CatalogSummaryFor: %v", err)
+	}
+	remoteSummary := &gossip.CatalogSummary{
+		CatalogRoot: append([]byte(nil), localSummary.CatalogRoot...),
+		ZoneCount:   localSummary.ZoneCount,
+	}
+	remoteSummary.CatalogRoot[0] ^= 0xff
+
+	sr := newSyncRuntime(state, config, transportB, rt)
+	state.Lock()
+	err = sr.handlePacket(&gossip.Packet{
+		Addr: transportA.LocalAddr(),
+		Message: &gossip.Message{
+			Type:   gossip.MessagePing,
+			PeerID: "node-a.catofes.",
+			Ping:   &gossip.Ping{Summary: remoteSummary},
+		},
+	})
+	state.Unlock()
+	if err != nil {
+		t.Fatalf("handlePacket(Ping): %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	var sawFetch bool
+	for time.Now().Before(deadline) {
+		packet, err := receiveWithDeadline(transportA, time.Now().Add(100*time.Millisecond))
+		if err != nil {
+			if isReceiveTimeout(err) {
+				continue
+			}
+			t.Fatalf("receive A: %v", err)
+		}
+		if packet.Message.Type == gossip.MessageFetchCatalogPage {
+			sawFetch = true
+			break
+		}
+	}
+	if !sawFetch {
+		t.Fatalf("B did not request A catalog after different ping summary")
+	}
+}
+
 func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 	prepareStatePersistence(t)
 	udpChunkAssemblies = newChunkAssemblyStore()
