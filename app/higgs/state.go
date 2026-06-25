@@ -291,16 +291,22 @@ type observedGraceAddrState struct {
 }
 
 type datagramStats struct {
-	TooLargeDropped       int64  `json:"too_large_dropped,omitempty"`
-	DigestOnlyAnnounces   int64  `json:"digest_only_announces,omitempty"`
-	ChunkFallbacks        int64  `json:"chunk_fallbacks,omitempty"`
-	LastTooLargeUnix      int64  `json:"last_too_large_unix,omitempty"`
-	LastTooLargeDirection string `json:"last_too_large_direction,omitempty"`
-	LastTooLargeObject    string `json:"last_too_large_object,omitempty"`
-	LastTooLargeZone      string `json:"last_too_large_zone,omitempty"`
-	LastTooLargeKey       string `json:"last_too_large_key,omitempty"`
-	LastTooLargeBytes     int    `json:"last_too_large_bytes,omitempty"`
-	LastTooLargeLimit     int    `json:"last_too_large_limit,omitempty"`
+	TooLargeDropped           int64  `json:"too_large_dropped,omitempty"`
+	DigestOnlyAnnounces       int64  `json:"digest_only_announces,omitempty"`
+	ChunkFallbacks            int64  `json:"chunk_fallbacks,omitempty"`
+	LastCatalogUnix           int64  `json:"last_catalog_unix,omitempty"`
+	LastCatalogRootHex        string `json:"last_catalog_root_hex,omitempty"`
+	LastCatalogZoneCount      int    `json:"last_catalog_zone_count,omitempty"`
+	LastCatalogCursor         string `json:"last_catalog_cursor,omitempty"`
+	LastCatalogPageEntries    int    `json:"last_catalog_page_entries,omitempty"`
+	LastCatalogRejectedReason string `json:"last_catalog_rejected_reason,omitempty"`
+	LastTooLargeUnix          int64  `json:"last_too_large_unix,omitempty"`
+	LastTooLargeDirection     string `json:"last_too_large_direction,omitempty"`
+	LastTooLargeObject        string `json:"last_too_large_object,omitempty"`
+	LastTooLargeZone          string `json:"last_too_large_zone,omitempty"`
+	LastTooLargeKey           string `json:"last_too_large_key,omitempty"`
+	LastTooLargeBytes         int    `json:"last_too_large_bytes,omitempty"`
+	LastTooLargeLimit         int    `json:"last_too_large_limit,omitempty"`
 }
 
 type objectPullStats struct {

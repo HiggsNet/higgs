@@ -76,7 +76,7 @@ type Message struct {
 
 ### 3.1 为什么需要 catalog
 
-旧实现把完整 `ZoneDigest[]` 放进 `PING` / `PONG`。这在小网络可用，但 Zone 数增多后会超过 1200-byte datagram 预算，导致 `ErrMessageTooLarge`。当前实现已经把主同步入口改为 `CatalogSummary` + bounded catalog page；兼容字段仍可被旧路径读取，但新发送路径不再承诺完整 digest list。同类风险仍存在于 `PONG.FetchZones`、`ANNOUNCE.Zones`、`ANNOUNCE.Records` 等列表字段。
+旧实现把完整 `ZoneDigest[]` 放进 `PING` / `PONG`。这在小网络可用，但 Zone 数增多后会超过 1200-byte datagram 预算，导致 `ErrMessageTooLarge`。当前实现已经把主同步入口改为 `CatalogSummary` + bounded catalog page；兼容字段仍可被旧路径读取，但新发送路径不再承诺完整 digest list。`PONG.FetchZones` 和 `ANNOUNCE` digest / record 列表也会按 `max_datagram_bytes` 分页或降级为 hint / object pull。
 
 因此 gossip v1 的下一步规则是引入 **Catalog**：
 
@@ -232,13 +232,14 @@ NAT / observed path 规则：
 - MessagePack UDP framing 和 1200-byte budget。
 - `PING` / `PONG` 的 `CatalogSummary`、`FETCH_CATALOG_PAGE` / `CATALOG_PAGE` bounded catalog page。
 - `FETCH_ZONE` / `ANNOUNCE` / `OBJECT_CHUNK` 基础消息。
+- `PONG.FetchZones`、`ANNOUNCE.Zones`、`ANNOUNCE.Records` 的发送预算保护；单项超预算时 fail closed 并记录 datagram diagnostics。
 - TCP object pull 与 UDP chunk fallback。
 - daemon 单 reader、事件循环和 per-peer `SyncSession` FSM；状态已包含 `SummarySent`、`CatalogDiffing`、`ServingPeerFetch`、`ObjectPulling`、`ChunkFallback`。
+- `sync status --verbose` / `debug peer` 输出最近 catalog root、zone count、page cursor、page entries 和 rejected reason。
 
 仍需向本文收敛：
 
-- `PONG.FetchZones`、`ANNOUNCE.Zones`、`ANNOUNCE.Records` 需要全部按预算分页或降级为 hint。
-- `sync status --verbose` / `debug peer` 仍需展示 catalog root、zone count、最近 page cursor 和 page reject reason。
+- 后续大规模 catalog 可评估 Merkle range tree，当前第一版使用 sorted page cursor。
 - `announce` 应逐步从 payload carrier 收敛为 state-change hint + optional small payload。
 
 对应执行项见 `../todo.md` Phase 3.6.8。

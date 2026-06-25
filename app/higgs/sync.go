@@ -344,8 +344,23 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 
 func writeDatagramStats(w io.Writer, peerID string, peerState syncPeerState) {
 	stats := peerState.DatagramStats
-	if stats == nil || (stats.TooLargeDropped == 0 && stats.DigestOnlyAnnounces == 0 && stats.ChunkFallbacks == 0) {
+	if stats == nil || (stats.TooLargeDropped == 0 && stats.DigestOnlyAnnounces == 0 && stats.ChunkFallbacks == 0 && stats.LastCatalogUnix == 0 && stats.LastCatalogRejectedReason == "") {
 		return
+	}
+	if stats.LastCatalogUnix != 0 || stats.LastCatalogRejectedReason != "" {
+		lastCatalog := "-"
+		if stats.LastCatalogUnix != 0 {
+			lastCatalog = time.Unix(stats.LastCatalogUnix, 0).UTC().Format(time.RFC3339)
+		}
+		fmt.Fprintf(w, "catalog peer=%s root=%s zone_count=%d cursor=%s page_entries=%d last=%s rejected_reason=%s\n",
+			peerID,
+			dash(stats.LastCatalogRootHex),
+			stats.LastCatalogZoneCount,
+			dash(stats.LastCatalogCursor),
+			stats.LastCatalogPageEntries,
+			lastCatalog,
+			dash(stats.LastCatalogRejectedReason),
+		)
 	}
 	last := "-"
 	if stats.LastTooLargeUnix != 0 {
@@ -1809,10 +1824,17 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 			return err
 		}
 		fetch := fetchListForPeer(state, message.PeerID, message.Ping.Zones, sr.now())
-		return transport.Send(message.PeerID, &gossip.Message{
-			Type: gossip.MessagePong,
-			Pong: &gossip.Pong{Summary: summary, FetchZones: fetch},
-		})
+		pongs, oversized := packPongFetchZones(summary, fetch, transport.MaxMessageBytes())
+		for _, item := range oversized {
+			recordDatagramTooLarge(state, message.PeerID, "send", item.Object, item.Zone, item.Key, item.Size, transport.MaxMessageBytes(), sr.now())
+		}
+		recordCatalogSummary(state, message.PeerID, summary, sr.now())
+		for _, pong := range pongs {
+			if err := transport.Send(message.PeerID, &gossip.Message{Type: gossip.MessagePong, Pong: pong}); err != nil {
+				return err
+			}
+		}
+		return nil
 	case gossip.MessagePong:
 		if message.Pong.Summary != nil {
 			localSummary, err := gossip.CatalogSummaryFor(state.Network, transport.MaxMessageBytes())
@@ -1854,6 +1876,7 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 		page, err := gossip.CatalogPageFor(state.Network, message.FetchCatalogPage.Cursor, transport.MaxMessageBytes())
 		if err != nil {
 			recordDatagramTooLarge(state, message.PeerID, "send", "catalog_page", "", "", 0, transport.MaxMessageBytes(), sr.now())
+			recordCatalogReject(state, message.PeerID, message.FetchCatalogPage.Cursor, gossip.RejectReason(err), sr.now())
 			sr.logger().Warn("sync", "catalog_page_failed", map[string]any{
 				"peer_id": message.PeerID,
 				"cursor":  message.FetchCatalogPage.Cursor,
@@ -1861,11 +1884,13 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 			})
 			return nil
 		}
+		recordCatalogPage(state, message.PeerID, page, sr.now())
 		return transport.Send(message.PeerID, &gossip.Message{
 			Type:        gossip.MessageCatalogPage,
 			CatalogPage: page,
 		})
 	case gossip.MessageCatalogPage:
+		recordCatalogPage(state, message.PeerID, message.CatalogPage, sr.now())
 		for _, diff := range gossip.CatalogDiff(gossip.ZoneDigests(state.Network), message.CatalogPage.Entries) {
 			snapshot, pullErr := tryObjectPullTCPUntil(state, config, message.PeerID, diff.Zone, deadline)
 			if pullErr != nil {
@@ -2276,6 +2301,11 @@ func planSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget 
 			continue
 		}
 		digest := gossip.ZoneDigest{Zone: path, RootHash: gossip.ZoneRoot(zs)}
+		digestSize := announceWireSize(&gossip.Announce{Zones: []gossip.ZoneDigest{digest}})
+		if digestSize > budget {
+			oversized = append(oversized, oversizedDatagramObject{Object: "announce_digest", Zone: path, Size: digestSize})
+			continue
+		}
 		digests = append(digests, digest)
 
 		zoneRecords := snapshotRecordMessages(snapshot)
@@ -2319,6 +2349,9 @@ func packDigestAnnounces(digests []gossip.ZoneDigest, budget int) []*gossip.Anno
 	var current []gossip.ZoneDigest
 	for _, digest := range digests {
 		next := append(append([]gossip.ZoneDigest(nil), current...), digest)
+		if len(current) == 0 && announceWireSize(&gossip.Announce{Zones: next}) > budget {
+			continue
+		}
 		if len(current) > 0 && announceWireSize(&gossip.Announce{Zones: next}) > budget {
 			out = append(out, &gossip.Announce{Zones: current})
 			current = []gossip.ZoneDigest{digest}
@@ -2346,6 +2379,9 @@ func packSkeletonAnnounces(digests []gossip.ZoneDigest, skeletons []gossip.ZoneS
 				Zones:     appendZoneDigestOnce(nil, digestByZone[skeleton.Zone]),
 				Snapshots: []gossip.ZoneSnapshot{skeleton},
 			}
+			if announceWireSize(current) > budget {
+				current = &gossip.Announce{}
+			}
 			continue
 		}
 		current = next
@@ -2369,6 +2405,9 @@ func packRecordAnnounces(digests []gossip.ZoneDigest, records []gossip.RecordSna
 			current = &gossip.Announce{
 				Zones:   appendZoneDigestOnce(nil, digestByZone[record.Zone]),
 				Records: []gossip.RecordSnapshot{record},
+			}
+			if announceWireSize(current) > budget {
+				current = &gossip.Announce{}
 			}
 			continue
 		}
@@ -2506,6 +2545,50 @@ func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gos
 	return transport.Send(peerID, msg)
 }
 
+func packPongFetchZones(summary *gossip.CatalogSummary, zones []zone.ZonePath, budget int) ([]*gossip.Pong, []oversizedDatagramObject) {
+	if budget <= 0 {
+		budget = gossip.DefaultDatagramBudget
+	}
+	if len(zones) == 0 {
+		pong := &gossip.Pong{Summary: summary}
+		if messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: pong}) > budget {
+			return nil, []oversizedDatagramObject{{Object: "pong_summary", Size: messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: pong})}}
+		}
+		return []*gossip.Pong{pong}, nil
+	}
+	var out []*gossip.Pong
+	var oversized []oversizedDatagramObject
+	current := &gossip.Pong{Summary: summary}
+	for _, path := range zones {
+		next := &gossip.Pong{
+			Summary:    summary,
+			FetchZones: append(append([]zone.ZonePath(nil), current.FetchZones...), path),
+		}
+		if len(current.FetchZones) > 0 && messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: next}) > budget {
+			out = append(out, current)
+			current = &gossip.Pong{Summary: summary, FetchZones: []zone.ZonePath{path}}
+			continue
+		}
+		current = next
+		if len(current.FetchZones) == 1 && messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: current}) > budget {
+			oversized = append(oversized, oversizedDatagramObject{Object: "pong_fetch_zone", Zone: path, Size: messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: current})})
+			current = &gossip.Pong{Summary: summary}
+		}
+	}
+	if len(current.FetchZones) > 0 || len(out) == 0 {
+		out = append(out, current)
+	}
+	return out, oversized
+}
+
+func messageWireSize(msg *gossip.Message) int {
+	size, err := gossip.WireEncodeSize(msg)
+	if err != nil {
+		return 1 << 30
+	}
+	return size
+}
+
 // recordDatagramTooLarge mutates state.SyncPeers. The caller must hold the write
 // lock on state.
 func recordDatagramTooLarge(state *stateFile, peerID, direction, object string, zoneName zone.ZonePath, key string, size, limit int, now time.Time) {
@@ -2555,6 +2638,58 @@ func recordDatagramChunkFallback(state *stateFile, peerID string) {
 		peerState.DatagramStats = &datagramStats{}
 	}
 	peerState.DatagramStats.ChunkFallbacks++
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordCatalogSummary(state *stateFile, peerID string, summary *gossip.CatalogSummary, now time.Time) {
+	if state == nil || peerID == "" || summary == nil {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.DatagramStats == nil {
+		peerState.DatagramStats = &datagramStats{}
+	}
+	peerState.DatagramStats.LastCatalogUnix = now.Unix()
+	peerState.DatagramStats.LastCatalogRootHex = hex.EncodeToString(summary.CatalogRoot)
+	peerState.DatagramStats.LastCatalogZoneCount = summary.ZoneCount
+	peerState.DatagramStats.LastCatalogCursor = summary.NextCursor
+	if summary.FirstPage != nil {
+		peerState.DatagramStats.LastCatalogPageEntries = len(summary.FirstPage.Entries)
+	}
+	peerState.DatagramStats.LastCatalogRejectedReason = ""
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordCatalogPage(state *stateFile, peerID string, page *gossip.CatalogPage, now time.Time) {
+	if state == nil || peerID == "" || page == nil {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.DatagramStats == nil {
+		peerState.DatagramStats = &datagramStats{}
+	}
+	peerState.DatagramStats.LastCatalogUnix = now.Unix()
+	peerState.DatagramStats.LastCatalogRootHex = hex.EncodeToString(page.CatalogRoot)
+	peerState.DatagramStats.LastCatalogCursor = page.NextCursor
+	peerState.DatagramStats.LastCatalogPageEntries = len(page.Entries)
+	peerState.DatagramStats.LastCatalogRejectedReason = ""
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordCatalogReject(state *stateFile, peerID, cursor, reason string, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if peerState.DatagramStats == nil {
+		peerState.DatagramStats = &datagramStats{}
+	}
+	peerState.DatagramStats.LastCatalogUnix = now.Unix()
+	peerState.DatagramStats.LastCatalogCursor = cursor
+	peerState.DatagramStats.LastCatalogRejectedReason = reason
 	state.SyncPeers[peerID] = peerState
 }
 

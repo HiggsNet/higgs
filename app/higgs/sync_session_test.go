@@ -155,6 +155,36 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	}
 }
 
+func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := gossip.CatalogRoot(remote)
+
+	_, _ = s.OnEvent(&SyncTimerEvent{
+		PeerID:       "peer-a",
+		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(local), ZoneCount: 1},
+	}, now)
+	_, _ = s.OnEvent(&PongReceivedEvent{
+		PeerID: "peer-a",
+		Pong:   &gossip.Pong{Summary: &gossip.CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
+	}, now.Add(10*time.Millisecond))
+
+	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
+		PeerID:       "peer-a",
+		Page:         &gossip.CatalogPage{CatalogRoot: []byte("wrong-root"), Entries: remote},
+		LocalEntries: local,
+	}, now.Add(20*time.Millisecond))
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionFailed {
+		t.Fatalf("expected state failed, got %s", s.State)
+	}
+	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction"})
+}
+
 func TestSyncSessionPongPeerRequestsLocalZones(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)

@@ -212,11 +212,17 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	switch e := event.(type) {
 	case *PongReceivedEvent:
 		if e.Pong != nil {
+			if e.Pong.Summary != nil {
+				recordCatalogSummary(d.Sync.State, peerID, e.Pong.Summary, d.Sync.now())
+			}
 			e.MissingZones = fetchListForPeer(d.Sync.State, peerID, e.Pong.Zones, d.Sync.now())
 			e.LocalSnapshots = localSnapshotsForPong(d.Sync.State.Network, e.Pong.FetchZones)
 		}
+	case *CatalogSummaryReceivedEvent:
+		recordCatalogSummary(d.Sync.State, peerID, e.Summary, d.Sync.now())
 	case *CatalogPageReceivedEvent:
 		e.LocalEntries = gossip.ZoneDigests(d.Sync.State.Network)
+		recordCatalogPage(d.Sync.State, peerID, e.Page, d.Sync.now())
 	case *FetchZoneReceivedEvent:
 		if s, err := gossip.Snapshot(d.Sync.State.Network, e.Zone); err == nil {
 			e.Snapshot = s
@@ -394,10 +400,17 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				Ping: &gossip.Ping{Summary: a.Summary},
 			})
 		case SendPongAction:
-			d.sendSyncMessage(peerID, &gossip.Message{
-				Type: gossip.MessagePong,
-				Pong: &gossip.Pong{Summary: a.Summary, FetchZones: a.FetchZones},
-			})
+			pongs, oversized := packPongFetchZones(a.Summary, a.FetchZones, budget)
+			for _, item := range oversized {
+				recordDatagramTooLarge(d.Sync.State, peerID, "send", item.Object, item.Zone, item.Key, item.Size, budget, d.Sync.now())
+			}
+			recordCatalogSummary(d.Sync.State, peerID, a.Summary, d.Sync.now())
+			for _, pong := range pongs {
+				d.sendSyncMessage(peerID, &gossip.Message{
+					Type: gossip.MessagePong,
+					Pong: pong,
+				})
+			}
 		case SendFetchCatalogPageAction:
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type:             gossip.MessageFetchCatalogPage,
@@ -407,6 +420,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 			page, err := gossip.CatalogPageFor(d.Sync.State.Network, a.Cursor, budget)
 			if err != nil {
 				recordDatagramTooLarge(d.Sync.State, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
+				recordCatalogReject(d.Sync.State, peerID, a.Cursor, gossip.RejectReason(err), d.Sync.now())
 				d.logWarn("sync", "catalog_page_failed", map[string]any{
 					"peer_id": peerID,
 					"cursor":  a.Cursor,
@@ -414,6 +428,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				})
 				continue
 			}
+			recordCatalogPage(d.Sync.State, peerID, page, d.Sync.now())
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type:        gossip.MessageCatalogPage,
 				CatalogPage: page,
@@ -588,6 +603,19 @@ func (d *DaemonService) tryAdoptAutoJoinAfterSync(peerID, via string, now time.T
 
 func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
 	if d.Sync == nil || d.Sync.Transport == nil {
+		return
+	}
+	budget := d.syncDatagramBudget()
+	if size := messageWireSize(msg); size > budget {
+		object := string(msg.Type)
+		recordDatagramTooLarge(d.Sync.State, peerID, "send", object, "", "", size, budget, d.Sync.now())
+		d.logWarn("transport", "datagram_too_large", map[string]any{
+			"peer_id": peerID,
+			"type":    msg.Type,
+			"bytes":   size,
+			"limit":   budget,
+			"action":  "drop",
+		})
 		return
 	}
 	if err := d.Sync.Transport.Send(peerID, msg); err != nil {

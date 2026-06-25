@@ -508,6 +508,11 @@ func printDebugPeerDatagramStats(peerState syncPeerState) {
 	fmt.Printf("datagram_too_large_dropped: %d\n", stats.TooLargeDropped)
 	fmt.Printf("datagram_digest_only_announces: %d\n", stats.DigestOnlyAnnounces)
 	fmt.Printf("datagram_chunk_fallbacks: %d\n", stats.ChunkFallbacks)
+	fmt.Printf("catalog_root: %s\n", dash(stats.LastCatalogRootHex))
+	fmt.Printf("catalog_zone_count: %d\n", stats.LastCatalogZoneCount)
+	fmt.Printf("catalog_last_page_cursor: %s\n", dash(stats.LastCatalogCursor))
+	fmt.Printf("catalog_last_page_entries: %d\n", stats.LastCatalogPageEntries)
+	fmt.Printf("catalog_last_rejected_reason: %s\n", dash(stats.LastCatalogRejectedReason))
 	if stats.LastTooLargeUnix == 0 {
 		fmt.Printf("datagram_last_too_large: -\n")
 		return
