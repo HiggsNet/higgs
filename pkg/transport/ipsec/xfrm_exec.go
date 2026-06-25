@@ -15,6 +15,7 @@ type SystemXFRMDriver struct {
 	Command      CommandRunner
 	Stat         func(string) error
 	DefaultNetNS NetNSSpec
+	StateNetNS   NetNSSpec
 }
 
 func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
@@ -22,6 +23,7 @@ func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
 		Command:      execCommand,
 		Stat:         statPath,
 		DefaultNetNS: defaultNetNS.Normalized(),
+		StateNetNS:   NetNSSpec{Kind: NetNSHost},
 	}
 }
 
@@ -75,13 +77,17 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 	if d.linkExists(ctx, netns, spec.InterfaceName) {
 		return d.setLinkUp(ctx, netns, spec.InterfaceName)
 	}
-	if d.linkExists(ctx, NetNSSpec{Kind: NetNSHost}, spec.InterfaceName) {
-		if err := d.moveLink(ctx, spec.InterfaceName, netns); err != nil {
+	stateNetNS := d.stateNetNS()
+	if d.linkExists(ctx, stateNetNS, spec.InterfaceName) {
+		if err := d.moveLinkFrom(ctx, stateNetNS, spec.InterfaceName, netns); err != nil {
 			return err
 		}
 		return d.setLinkUp(ctx, netns, spec.InterfaceName)
 	}
-	if err := d.addXFRMInterface(ctx, netns, spec.InterfaceName, spec.XFRMIfID); err != nil {
+	if err := d.addXFRMInterface(ctx, stateNetNS, spec.InterfaceName, spec.XFRMIfID); err != nil {
+		return err
+	}
+	if err := d.moveLinkFrom(ctx, stateNetNS, spec.InterfaceName, netns); err != nil {
 		return err
 	}
 	return d.setLinkUp(ctx, netns, spec.InterfaceName)
@@ -127,6 +133,13 @@ func (d SystemXFRMDriver) specNetNS(spec TransportLinkSpec) (NetNSSpec, error) {
 	return ns.Normalized(), ns.Validate()
 }
 
+func (d SystemXFRMDriver) stateNetNS() NetNSSpec {
+	if d.StateNetNS.Kind == "" && d.StateNetNS.Name == "" && d.StateNetNS.Path == "" {
+		return NetNSSpec{Kind: NetNSHost}
+	}
+	return d.StateNetNS.Normalized()
+}
+
 func (d SystemXFRMDriver) netnsExists(ctx context.Context, name string) bool {
 	return d.commandSucceeds(ctx, "ip", "netns", "exec", name, "true")
 }
@@ -136,6 +149,33 @@ func (d SystemXFRMDriver) linkExists(ctx context.Context, netns NetNSSpec, name 
 		return d.commandSucceeds(ctx, "ip", "link", "show", "dev", name)
 	}
 	return d.commandSucceedsInNetNS(ctx, netns, "link", "show", "dev", name)
+}
+
+func (d SystemXFRMDriver) moveLinkFrom(ctx context.Context, source NetNSSpec, name string, target NetNSSpec) error {
+	source = source.Normalized()
+	target = target.Normalized()
+	if sameNetNS(source, target) {
+		return nil
+	}
+	switch source.Kind {
+	case NetNSHost:
+		return d.moveLink(ctx, name, target)
+	case NetNSName:
+		switch target.Kind {
+		case NetNSHost:
+			return d.runInNetNS(ctx, source, "link", "set", name, "netns", "1")
+		case NetNSName:
+			return d.runInNetNS(ctx, source, "link", "set", name, "netns", target.Name)
+		case NetNSPath:
+			return fmt.Errorf("moving links to path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", target.Path)
+		default:
+			return fmt.Errorf("unsupported netns kind %q", target.Kind)
+		}
+	case NetNSPath:
+		return fmt.Errorf("moving links from path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", source.Path)
+	default:
+		return fmt.Errorf("unsupported netns kind %q", source.Kind)
+	}
 }
 
 func (d SystemXFRMDriver) moveLink(ctx context.Context, name string, netns NetNSSpec) error {
@@ -149,6 +189,24 @@ func (d SystemXFRMDriver) moveLink(ctx context.Context, name string, netns NetNS
 		return fmt.Errorf("moving links to path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
 	default:
 		return fmt.Errorf("unsupported netns kind %q", netns.Kind)
+	}
+}
+
+func sameNetNS(a, b NetNSSpec) bool {
+	a = a.Normalized()
+	b = b.Normalized()
+	if a.Kind != b.Kind {
+		return false
+	}
+	switch a.Kind {
+	case NetNSHost:
+		return true
+	case NetNSName:
+		return a.Name == b.Name
+	case NetNSPath:
+		return a.Path == b.Path
+	default:
+		return false
 	}
 }
 

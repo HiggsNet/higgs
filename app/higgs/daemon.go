@@ -79,6 +79,7 @@ const (
 	daemonEventRemoteApplied      daemonEventType = "remote_announce_applied"
 	daemonEventSyncTrigger        daemonEventType = "sync_trigger"
 	daemonEventReloadConfig       daemonEventType = "reload_config"
+	daemonEventIPsecLifecycle     daemonEventType = "ipsec_lifecycle"
 	daemonEventShutdown           daemonEventType = "shutdown"
 )
 
@@ -92,6 +93,7 @@ type daemonEvent struct {
 	Reason       string
 	Packet       *gossip.Packet
 	SourcePeerID string
+	VICIEvent    ipsec.VICIEvent
 	ForceSync    bool
 	Context      context.Context
 	Reply        chan daemonEventResult
@@ -191,6 +193,8 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopObserver()
+	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(ctx)
+	defer stopIPsecEvents()
 	startFields := map[string]any{
 		"peer_id":  d.Sync.Config.PeerID,
 		"addr":     transport.LocalAddr(),
@@ -715,6 +719,9 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventReloadConfig:
 		err := d.handleReloadConfigEvent()
 		return daemonEventResult{Error: err}, err == nil, false
+	case daemonEventIPsecLifecycle:
+		d.handleIPsecLifecycleEvent(event.VICIEvent)
+		return daemonEventResult{}, false, false
 	case daemonEventShutdown:
 		return daemonEventResult{}, false, true
 	default:
@@ -1215,6 +1222,57 @@ func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
 	// link create/update/teardown without adding a separate timer path.
 	d.reconcileHealth(ctx)
 	return true
+}
+
+type ipsecLifecycleEventSubscriber interface {
+	SubscribeLifecycleEvents(context.Context) (<-chan ipsec.VICIEvent, func(), error)
+}
+
+func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
+	subscriber, ok := d.IPsecDriver.(ipsecLifecycleEventSubscriber)
+	if !ok || subscriber == nil {
+		return func() {}
+	}
+	events, stop, err := subscriber.SubscribeLifecycleEvents(ctx)
+	if err != nil {
+		d.logWarn("ipsec", "vici_event_subscribe_failed", map[string]any{"error": err})
+		return func() {}
+	}
+	go func() {
+		for ev := range events {
+			select {
+			case d.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ev}:
+			default:
+				d.logWarn("ipsec", "vici_event_dropped", map[string]any{
+					"reason":     "daemon_events_full",
+					"event_name": ev.Name,
+					"connection": ev.Connection,
+					"child":      ev.ChildSA,
+				})
+			}
+		}
+	}()
+	return func() {
+		if stop != nil {
+			stop()
+		}
+	}
+}
+
+func (d *DaemonService) handleIPsecLifecycleEvent(ev ipsec.VICIEvent) {
+	d.ipsecDirty = true
+	d.logDebug("ipsec", "vici_lifecycle_event", map[string]any{
+		"event_name": ev.Name,
+		"connection": ev.Connection,
+		"child":      ev.ChildSA,
+		"up":         ev.Up,
+		"xfrm_if_id": ev.XFRMIfID,
+		"reqid":      ev.ReqID,
+		"local_id":   ev.LocalIdentity,
+		"remote_id":  ev.RemoteIdentity,
+		"local_ep":   ev.LocalEndpoint,
+		"remote_ep":  ev.RemoteEndpoint,
+	})
 }
 
 func (d *DaemonService) ipsecReconcileInterval() time.Duration {

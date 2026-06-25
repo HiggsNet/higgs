@@ -73,6 +73,7 @@ func (c PreflightChecker) Run(ctx context.Context, opts PreflightOptions) Prefli
 	out.addCommand(ctx, c, "charon", "charon")
 	out.add("kernel-xfrm", c.fileExists("/proc/net/xfrm_stat") || c.fileExists("/proc/net/xfrm_policy"), false, "requires Linux XFRM support")
 	out.add("iproute2-xfrm-interface", c.xfrmInterfaceSupported(ctx), false, "requires kernel support for ip link type xfrm (check CONFIG_XFRM_INTERFACE)")
+	out.add("host-born-xfrm-netns-move", c.hostBornXFRMMoveSupported(ctx), false, "requires host-created XFRM interface to move into a named netns")
 	if opts.RequireUDP {
 		err := c.ListenUDP(ctx, opts.IKEPort)
 		out.add("udp-ike-port", err == nil, false, udpPortDetail(opts.IKEPort, err))
@@ -176,12 +177,33 @@ func (c PreflightChecker) xfrmInterfaceSupported(ctx context.Context) bool {
 	if c.Command == nil {
 		return false
 	}
-	ns := fmt.Sprintf("higgs-xfrm-preflight-%d", time.Now().UnixNano())
+	iface := fmt.Sprintf("hgsxfrmtest%d", time.Now().UnixNano()%1000000)
+	if _, err := c.Command(ctx, "ip", "link", "add", iface, "type", "xfrm", "if_id", "1"); err != nil {
+		return false
+	}
+	defer func() { _, _ = c.Command(ctx, "ip", "link", "delete", iface) }()
+	return true
+}
+
+func (c PreflightChecker) hostBornXFRMMoveSupported(ctx context.Context) bool {
+	if c.Command == nil {
+		return false
+	}
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	ns := "higgs-xfrm-preflight-" + suffix
+	iface := "hgsxfrm" + suffix[len(suffix)-6:]
 	if _, err := c.Command(ctx, "ip", "netns", "add", ns); err != nil {
 		return false
 	}
 	defer func() { _, _ = c.Command(ctx, "ip", "netns", "delete", ns) }()
-	_, err := c.Command(ctx, "ip", "netns", "exec", ns, "ip", "link", "add", "hgsxfrmtest", "type", "xfrm", "if_id", "1")
+	if _, err := c.Command(ctx, "ip", "link", "add", iface, "type", "xfrm", "if_id", "2"); err != nil {
+		return false
+	}
+	defer func() { _, _ = c.Command(ctx, "ip", "link", "delete", iface) }()
+	if _, err := c.Command(ctx, "ip", "link", "set", iface, "netns", ns); err != nil {
+		return false
+	}
+	_, err := c.Command(ctx, "ip", "netns", "exec", ns, "ip", "link", "show", "dev", iface)
 	return err == nil
 }
 

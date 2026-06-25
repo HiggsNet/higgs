@@ -30,7 +30,7 @@ func TestPreflightReportsMissingRuntimeDependencies(t *testing.T) {
 		t.Fatalf("Ready=true for missing dependencies")
 	}
 	errs := strings.Join(result.Errors(), "\n")
-	for _, want := range []string{"root-or-cap-net-admin", "vici-socket", "iproute2-ip", "swanctl", "charon", "kernel-xfrm", "iproute2-xfrm-interface"} {
+	for _, want := range []string{"root-or-cap-net-admin", "vici-socket", "iproute2-ip", "swanctl", "charon", "kernel-xfrm", "iproute2-xfrm-interface", "host-born-xfrm-netns-move"} {
 		if !strings.Contains(errs, want) {
 			t.Fatalf("errors %q do not contain %q", errs, want)
 		}

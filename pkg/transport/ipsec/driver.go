@@ -34,9 +34,27 @@ type SAState struct {
 	Established    bool
 }
 
+type VICIEvent struct {
+	Name           string
+	Connection     string
+	ChildSA        string
+	Up             bool
+	XFRMIfID       uint32
+	ReqID          uint32
+	LocalIdentity  string
+	RemoteIdentity string
+	LocalEndpoint  string
+	RemoteEndpoint string
+	Raw            map[string]any
+}
+
 type VICIClient interface {
 	Call(context.Context, string, map[string]any) (map[string]any, error)
 	CallStreaming(context.Context, string, string, map[string]any) ([]map[string]any, error)
+}
+
+type VICIEventClient interface {
+	SubscribeEvents(context.Context, ...string) (<-chan VICIEvent, func(), error)
 }
 
 type IPsecDriver interface {
@@ -414,6 +432,53 @@ func (d *StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {
 		states = append(states, parseSAStates(event)...)
 	}
 	return states, nil
+}
+
+func (d *StrongSwanDriver) SubscribeLifecycleEvents(ctx context.Context) (<-chan VICIEvent, func(), error) {
+	client, ok := d.VICI.(VICIEventClient)
+	if !ok {
+		return nil, nil, fmt.Errorf("vici client does not support lifecycle events")
+	}
+	return client.SubscribeEvents(ctx, "child-updown", "ike-updown")
+}
+
+func parseVICIEvent(name string, raw map[string]any) VICIEvent {
+	ev := VICIEvent{Name: name, Raw: raw}
+	if raw == nil {
+		return ev
+	}
+	ev.Connection = firstString(raw["ike"], raw["ike-name"], raw["conn"], raw["name"])
+	ev.ChildSA = stripChildSAReqidSuffix(firstString(raw["child"], raw["child-name"], raw["child-sa"]))
+	ev.Up = boolLike(raw["up"]) || strings.EqualFold(firstString(raw["state"]), "up") || strings.EqualFold(firstString(raw["child-state"]), "INSTALLED")
+	ev.XFRMIfID = firstUint32(raw["if_id_out"], raw["if-id-out"], raw["if_id_in"], raw["if-id-in"])
+	ev.ReqID = firstUint32(raw["reqid"], raw["req-id"])
+	ev.LocalIdentity = firstString(raw["local_id"], raw["local-id"], raw["local"])
+	ev.RemoteIdentity = firstString(raw["remote_id"], raw["remote-id"], raw["remote"])
+	ev.LocalEndpoint = joinEndpoint(firstString(raw["local-host"], raw["local_host"]), firstString(raw["local-port"], raw["local_port"]))
+	ev.RemoteEndpoint = joinEndpoint(firstString(raw["remote-host"], raw["remote_host"]), firstString(raw["remote-port"], raw["remote_port"]))
+	return ev
+}
+
+func firstString(values ...any) string {
+	for _, value := range values {
+		if s := stringValue(value); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func boolLike(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(v, "yes") || strings.EqualFold(v, "true") || v == "1"
+	case []byte:
+		return boolLike(string(v))
+	default:
+		return false
+	}
 }
 
 func (d *StrongSwanDriver) LoadPrivateKey(ctx context.Context, id string, key []byte, algorithm string) error {

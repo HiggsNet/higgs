@@ -20,6 +20,8 @@ type fakeGoviciSession struct {
 	streamIn     map[string]any
 	callOut      *vici.Message
 	streamEvents []*vici.Message
+	subscribed   []string
+	eventCh      chan<- vici.Event
 }
 
 func (s *fakeGoviciSession) Call(_ context.Context, cmd string, in *vici.Message) (*vici.Message, error) {
@@ -43,6 +45,21 @@ func (s *fakeGoviciSession) CallStreaming(_ context.Context, cmd string, event s
 
 func (s *fakeGoviciSession) Close() error {
 	return nil
+}
+
+func (s *fakeGoviciSession) Subscribe(events ...string) error {
+	s.subscribed = append(s.subscribed, events...)
+	return nil
+}
+
+func (s *fakeGoviciSession) NotifyEvents(ch chan<- vici.Event) {
+	s.eventCh = ch
+}
+
+func (s *fakeGoviciSession) StopEvents(ch chan<- vici.Event) {
+	if s.eventCh == ch {
+		s.eventCh = nil
+	}
 }
 
 type blockingGoviciSession struct{}
@@ -282,6 +299,47 @@ func TestGoviciClientStreamsListSAs(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(states, want) {
 		t.Fatalf("states:\n got %#v\nwant %#v", states, want)
+	}
+}
+
+func TestGoviciClientSubscribesAndParsesLifecycleEvents(t *testing.T) {
+	session := &fakeGoviciSession{}
+	client := &GoviciClient{Session: session}
+	events, stop, err := client.SubscribeEvents(context.Background(), "child-updown", "ike-updown")
+	if err != nil {
+		t.Fatalf("SubscribeEvents: %v", err)
+	}
+	defer stop()
+	if !reflect.DeepEqual(session.subscribed, []string{"child-updown", "ike-updown"}) {
+		t.Fatalf("subscribed = %+v", session.subscribed)
+	}
+	msg, err := vici.MarshalMessage(map[string]any{
+		"ike":         "ipsec-main-ab",
+		"child":       "ipsec-main-ab-child{2}",
+		"up":          "yes",
+		"if_id_out":   "77",
+		"reqid":       "17",
+		"local-id":    "node-a.catofes.",
+		"remote-id":   "node-b.catofes.",
+		"local-host":  "198.51.100.10",
+		"local-port":  "4500",
+		"remote-host": "198.51.100.20",
+		"remote-port": "4500",
+	})
+	if err != nil {
+		t.Fatalf("MarshalMessage: %v", err)
+	}
+	session.eventCh <- vici.Event{Name: "child-updown", Message: msg}
+	select {
+	case ev := <-events:
+		if ev.Name != "child-updown" || ev.Connection != "ipsec-main-ab" || ev.ChildSA != "ipsec-main-ab-child" || !ev.Up {
+			t.Fatalf("event = %+v", ev)
+		}
+		if ev.XFRMIfID != 77 || ev.ReqID != 17 || ev.RemoteEndpoint != "198.51.100.20:4500" {
+			t.Fatalf("event numeric/endpoint fields = %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for lifecycle event")
 	}
 }
 

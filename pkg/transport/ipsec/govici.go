@@ -14,6 +14,12 @@ type GoviciSession interface {
 	Close() error
 }
 
+type GoviciEventSession interface {
+	Subscribe(events ...string) error
+	NotifyEvents(chan<- vici.Event)
+	StopEvents(chan<- vici.Event)
+}
+
 type GoviciClient struct {
 	Session GoviciSession
 }
@@ -68,6 +74,32 @@ func (c *GoviciClient) Close() error {
 		return nil
 	}
 	return c.Session.Close()
+}
+
+func (c *GoviciClient) SubscribeEvents(_ context.Context, events ...string) (<-chan VICIEvent, func(), error) {
+	if c == nil || c.Session == nil {
+		return nil, nil, errMissingGoviciSession()
+	}
+	session, ok := c.Session.(GoviciEventSession)
+	if !ok {
+		return nil, nil, fmt.Errorf("govici session does not support event subscription")
+	}
+	if err := session.Subscribe(events...); err != nil {
+		return nil, nil, err
+	}
+	raw := make(chan vici.Event, 16)
+	out := make(chan VICIEvent, 16)
+	session.NotifyEvents(raw)
+	stop := func() {
+		session.StopEvents(raw)
+	}
+	go func() {
+		defer close(out)
+		for ev := range raw {
+			out <- parseVICIEvent(ev.Name, goviciMessageToMap(ev.Message))
+		}
+	}()
+	return out, stop, nil
 }
 
 func errMissingGoviciSession() error {

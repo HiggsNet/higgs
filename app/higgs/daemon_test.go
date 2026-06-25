@@ -405,10 +405,10 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	}
 	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
 	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
 	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
 	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
-	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
@@ -455,7 +455,7 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	}
 	restartServiceA := newDaemonService(rtA, restartedA, configA, time.Second)
 	restartServiceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	restartServiceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	restartServiceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
 	restartServiceA.recoverIPsecLinksOnStart(ctx)
 	recoveredA, err := rtA.LoadState()
 	if err != nil {
@@ -646,10 +646,10 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 	}
 	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
 	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
 	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
 	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
-	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
@@ -824,10 +824,10 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	}
 	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
 	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
 	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
 	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
-	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
@@ -1133,10 +1133,10 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 
 	serviceA := newDaemonService(rtA, stateA, configA, 200*time.Millisecond)
 	serviceA.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciA, clientA)
-	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
+	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
 	serviceB := newDaemonService(rtB, stateB, configB, 200*time.Millisecond)
 	serviceB.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciB, clientB)
-	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
+	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
 
 	runCtx, stopDaemons := context.WithCancel(ctx)
 	defer stopDaemons()
@@ -1874,6 +1874,53 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	}
 }
 
+func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4160, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:                 "main",
+		Provider:           ipsec.ProviderStrongSwan,
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+		AddressSourceOrder: []string{ipsec.SourceManualAddress},
+		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &countingIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: true, XFRMIfID: 77}}
+	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: false, XFRMIfID: 77}}
+
+	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background())
+	if syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
+	}
+	if !ipsecFlushed {
+		t.Fatalf("ipsecFlushed = false, want true")
+	}
+	if driver.listCalls != 1 {
+		t.Fatalf("ListSAs calls = %d, want one coalesced reconcile", driver.listCalls)
+	}
+	if len(driver.Connections) != 1 {
+		t.Fatalf("connections = %d, want one apply through reconcile", len(driver.Connections))
+	}
+	if len(driver.Interfaces) != 1 {
+		t.Fatalf("interfaces = %d, want one apply through xfrm reconcile", len(driver.Interfaces))
+	}
+}
+
 func TestDaemonIPsecReconcileInterval(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	appConfig := defaultAppConfig()
@@ -2427,6 +2474,12 @@ func writeDaemonStrongSwanConf(viciSocket string) (string, error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+func daemonTestXFRMDriver(defaultNetNS ipsec.NetNSSpec, stateNetNS string) ipsec.SystemXFRMDriver {
+	driver := ipsec.NewSystemXFRMDriver(defaultNetNS)
+	driver.StateNetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: stateNetNS, Create: false}
+	return driver
 }
 
 func startDaemonTestCharonInNetNS(ctx context.Context, t *testing.T, ns, piddir, conf string, logFile *os.File) *exec.Cmd {

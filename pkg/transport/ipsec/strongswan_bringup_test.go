@@ -139,8 +139,10 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		t.Fatalf("generate key B: %v", err)
 	}
 
-	const ifID = uint32(424244)
-	iface := "hgsike0"
+	const ifIDA = uint32(424244)
+	const ifIDB = uint32(424344)
+	ifaceA := "hgsikea0"
+	ifaceB := "hgsikeb0"
 	transportAtoB := "ipsec-ike-a-b"
 	transportBtoA := "ipsec-ike-b-a"
 
@@ -165,8 +167,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		IKEIdentity:              "node-a.",
 		LocalAddress:             "192.0.2.1",
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.2", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
-		XFRMIfID:                 ifID,
-		InterfaceName:            iface,
+		XFRMIfID:                 ifIDA,
+		InterfaceName:            ifaceA,
 		LocalTunnelAddr:          addrA,
 		PeerTunnelAddr:           addrB,
 		NetNS:                    nsA,
@@ -185,8 +187,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		IKEIdentity:              "node-b.",
 		LocalAddress:             "192.0.2.2",
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.1", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
-		XFRMIfID:                 ifID,
-		InterfaceName:            iface,
+		XFRMIfID:                 ifIDB,
+		InterfaceName:            ifaceB,
 		LocalTunnelAddr:          addrB,
 		PeerTunnelAddr:           addrA,
 		NetNS:                    nsB,
@@ -201,6 +203,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	ipsecB := &StrongSwanDriver{VICI: clientB, KeyDir: keyDirB}
 	xfrmA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: false})
 	xfrmB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: false})
+	xfrmA.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsA, Create: false}
+	xfrmB.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsB, Create: false}
 
 	if _, err := ApplyTransportLink(ctx, ipsecA, xfrmA, specA, NetNSSpec{Kind: NetNSName, Name: nsA}); err != nil {
 		t.Fatalf("apply transport link A: %v", err)
@@ -221,8 +225,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	}
 
 	// Add host routes so tunnel ping traverses the XFRM interface.
-	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
-	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
+	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", ifaceA)
+	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", ifaceB)
 
 	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-6", "-c", "1", "-W", "3", addrB.String()); err != nil {
 		t.Fatalf("tunnel ping A->B failed: %v\n%s", err, string(out))
@@ -350,8 +354,10 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		t.Fatalf("generate key B: %v", err)
 	}
 
-	const ifID = uint32(424245)
-	iface := "hgstake0"
+	const ifIDA = uint32(424245)
+	const ifIDB = uint32(424345)
+	ifaceA := "hgstakea0"
+	ifaceB := "hgstakeb0"
 	transportA := "ipsec-takeover-a"
 	transportB := "ipsec-takeover-b"
 	group := LinkGroupSpec{
@@ -373,8 +379,8 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		IKEIdentity:              "node-a.",
 		LocalAddress:             "192.0.2.5",
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.6", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
-		XFRMIfID:                 ifID,
-		InterfaceName:            iface,
+		XFRMIfID:                 ifIDA,
+		InterfaceName:            ifaceA,
 		LocalTunnelAddr:          addrA,
 		PeerTunnelAddr:           addrB,
 		NetNS:                    nsA,
@@ -395,8 +401,8 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		IKEIdentity:              "node-b.",
 		LocalAddress:             "192.0.2.6",
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.5", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
-		XFRMIfID:                 ifID,
-		InterfaceName:            iface,
+		XFRMIfID:                 ifIDB,
+		InterfaceName:            ifaceB,
 		LocalTunnelAddr:          addrB,
 		PeerTunnelAddr:           addrA,
 		NetNS:                    nsB,
@@ -410,6 +416,8 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 	ipsecB := &StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
 	xfrmA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: false})
 	xfrmB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: false})
+	xfrmA.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsA, Create: false}
+	xfrmB.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsB, Create: false}
 
 	if _, err := ApplyTransportLink(ctx, ipsecA, xfrmA, specAInbound, NetNSSpec{Kind: NetNSName, Name: nsA}); err != nil {
 		t.Fatalf("apply primary responder config: %v", err)
@@ -449,8 +457,8 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		t.Fatalf("wait for takeover SA on secondary: %v", err)
 	}
 
-	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", iface)
-	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", iface)
+	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", specA.InterfaceName)
+	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", specB.InterfaceName)
 	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping", "-6", "-c", "1", "-W", "3", addrA.String()); err != nil {
 		t.Fatalf("takeover tunnel ping B->A failed: %v\n%s", err, string(out))
 	}
