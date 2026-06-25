@@ -72,30 +72,17 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 	if err := d.EnsureNamespace(ctx, netns); err != nil {
 		return err
 	}
-	// If interface already exists in target netns, just bring it up.
 	if d.linkExists(ctx, netns, spec.InterfaceName) {
 		return d.setLinkUp(ctx, netns, spec.InterfaceName)
 	}
-	// If interface exists in host, move it to target netns.
 	if d.linkExists(ctx, NetNSSpec{Kind: NetNSHost}, spec.InterfaceName) {
 		if err := d.moveLink(ctx, spec.InterfaceName, netns); err != nil {
 			return err
 		}
 		return d.setLinkUp(ctx, netns, spec.InterfaceName)
 	}
-	// XFRM interfaces must be created in the host netns where charon runs,
-	// because XFRM state/policy are installed there by StrongSwan. The if_id
-	// matching only works when the interface is created in the same netns as
-	// the XFRM state/policy. We then move the interface to the target netns.
-	// This follows the swan-updown pattern: create in host, then move.
-	if err := d.addXFRMInterface(ctx, NetNSSpec{Kind: NetNSHost}, spec.InterfaceName, spec.XFRMIfID); err != nil {
+	if err := d.addXFRMInterface(ctx, netns, spec.InterfaceName, spec.XFRMIfID); err != nil {
 		return err
-	}
-	// Move the interface to the target netns if it's not host.
-	if netns.Kind != NetNSHost {
-		if err := d.moveLink(ctx, spec.InterfaceName, netns); err != nil {
-			return err
-		}
 	}
 	return d.setLinkUp(ctx, netns, spec.InterfaceName)
 }

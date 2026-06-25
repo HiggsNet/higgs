@@ -90,6 +90,50 @@ func TestIPTablesDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	}
 }
 
+func TestIPTablesDriver_HostAddressFamilyCommands(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	d := &IPTablesDriver{Command: runner.run}
+	spec := FirewallInstanceSpec{
+		ID:            "host",
+		NetNS:         "host",
+		IsHost:        true,
+		Enabled:       true,
+		Mode:          ModeManaged,
+		OwnerPrefix:   "higgs",
+		HostPorts:     HostPortConfig{IKE: true},
+		RedirectGrace: RedirectGrace{Enabled: true},
+		ListenAddrs: []netip.Addr{
+			netip.MustParseAddr("192.0.2.10"),
+			netip.MustParseAddr("2001:db8::10"),
+		},
+	}
+	input := FirewallPolicyInput{
+		AdvertisedCurrentIKEPorts: []uint16{30001},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("host", desired, FirewallObservedState{})
+	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	for _, cmd := range runner.commands {
+		args := strings.Join(cmd.args, " ")
+		if cmd.name == "iptables" && strings.Contains(args, "2001:db8::10") {
+			t.Fatalf("IPv6 address rendered into iptables command: %s %s", cmd.name, args)
+		}
+		if cmd.name == "ip6tables" && strings.Contains(args, "192.0.2.10") {
+			t.Fatalf("IPv4 address rendered into ip6tables command: %s %s", cmd.name, args)
+		}
+	}
+	assertCommandContains(t, runner.commands, "iptables", "-d 192.0.2.10")
+	assertCommandContains(t, runner.commands, "ip6tables", "-d 2001:db8::10")
+	assertCommandContains(t, runner.commands, "iptables", "--dport 30001 -d 192.0.2.10")
+	assertCommandContains(t, runner.commands, "ip6tables", "--dport 30001 -d 2001:db8::10")
+}
+
 func TestIPTablesDriver_ListOwned(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
@@ -211,6 +255,36 @@ func TestBuildDesiredState_HostRedirectCurrentAndPreviousPorts(t *testing.T) {
 	assertNatRedirect(t, desired, 29002, 4500, "redirect grace")
 }
 
+func TestBuildDesiredState_HostRedirectCoversAllListenAddrs(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID:            "host",
+		NetNS:         "host",
+		IsHost:        true,
+		Enabled:       true,
+		Mode:          ModeManaged,
+		HostPorts:     HostPortConfig{IKE: true},
+		RedirectGrace: RedirectGrace{Enabled: true},
+		ListenAddrs: []netip.Addr{
+			netip.MustParseAddr("192.0.2.10"),
+			netip.MustParseAddr("192.0.2.11"),
+			netip.MustParseAddr("2001:db8::10"),
+		},
+	}
+	input := FirewallPolicyInput{
+		AdvertisedCurrentIKEPorts: []uint16{30001},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if len(desired.NatRedirects) != 3 {
+		t.Fatalf("expected one redirect per listen addr, got %d: %+v", len(desired.NatRedirects), desired.NatRedirects)
+	}
+	assertNatRedirectAddr(t, desired, 30001, 500, "192.0.2.10")
+	assertNatRedirectAddr(t, desired, 30001, 500, "192.0.2.11")
+	assertNatRedirectAddr(t, desired, 30001, 500, "2001:db8::10")
+}
+
 func TestBuildDesiredState_HostRedirectGraceSkipCurrentPorts(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID:            "host",
@@ -234,6 +308,16 @@ func TestBuildDesiredState_HostRedirectGraceSkipCurrentPorts(t *testing.T) {
 	}
 }
 
+func assertCommandContains(t *testing.T, commands []executedCommand, binary, fragment string) {
+	t.Helper()
+	for _, cmd := range commands {
+		if cmd.name == binary && strings.Contains(strings.Join(cmd.args, " "), fragment) {
+			return
+		}
+	}
+	t.Fatalf("missing %s command containing %q in %+v", binary, fragment, commands)
+}
+
 func assertNatRedirect(t *testing.T, desired *FirewallDesiredState, original, target uint16, comment string) {
 	t.Helper()
 	for _, nr := range desired.NatRedirects {
@@ -242,4 +326,15 @@ func assertNatRedirect(t *testing.T, desired *FirewallDesiredState, original, ta
 		}
 	}
 	t.Fatalf("missing redirect %d -> %d comment containing %q in %+v", original, target, comment, desired.NatRedirects)
+}
+
+func assertNatRedirectAddr(t *testing.T, desired *FirewallDesiredState, original, target uint16, addr string) {
+	t.Helper()
+	want := netip.MustParseAddr(addr)
+	for _, nr := range desired.NatRedirects {
+		if nr.OriginalDst == original && nr.RedirectTo == target && nr.DstAddr == want {
+			return
+		}
+	}
+	t.Fatalf("missing redirect %d -> %d for %s in %+v", original, target, addr, desired.NatRedirects)
 }

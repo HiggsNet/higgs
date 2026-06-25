@@ -340,33 +340,43 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 	// hitting advertised entry ports.
 }
 
-// addNatRedirects creates DNAT redirect rules for port rotation.
-// It creates rules without specific DstAddr, so they match all addresses on
-// all interfaces. This supports IPv6 interfaces with multiple addresses,
-// as the redirect rule will apply to all of them without needing a per-address rule.
 func addNatRedirects(desired *FirewallDesiredState, ports []uint16, target uint16, reason, label string, listenAddrs []netip.Addr) {
-	seen := make(map[uint16]bool, len(desired.NatRedirects)+len(ports))
+	redirectAddrs := listenAddrs
+	if len(redirectAddrs) == 0 {
+		redirectAddrs = []netip.Addr{{}}
+	}
+	seen := make(map[string]bool, len(desired.NatRedirects)+len(ports)*len(redirectAddrs))
 	for _, existing := range desired.NatRedirects {
 		if existing.RedirectTo == target {
-			seen[existing.OriginalDst] = true
+			seen[natRedirectKey(existing.OriginalDst, target, existing.DstAddr)] = true
 		}
 	}
 	for _, port := range ports {
-		if port == 0 || port == target || seen[port] {
+		if port == 0 || port == target {
 			continue
 		}
-		seen[port] = true
-		// Leave DstAddr empty to match all addresses on all interfaces.
-		// This supports IPv6 multi-address scenarios and works for both IPv4 and IPv6
-		// in nftables inet tables. The redirect only changes the port, not the address.
-		desired.NatRedirects = append(desired.NatRedirects, NatRedirectRule{
-			Proto:       ProtoUDP,
-			OriginalDst: port,
-			RedirectTo:  target,
-			DstAddr:     netip.Addr{}, // Empty to match all addresses
-			Comment:     fmt.Sprintf("%s %d -> %d (%s)", reason, port, target, label),
-		})
+		for _, addr := range redirectAddrs {
+			key := natRedirectKey(port, target, addr)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			desired.NatRedirects = append(desired.NatRedirects, NatRedirectRule{
+				Proto:       ProtoUDP,
+				OriginalDst: port,
+				RedirectTo:  target,
+				DstAddr:     addr,
+				Comment:     fmt.Sprintf("%s %d -> %d (%s)", reason, port, target, label),
+			})
+		}
 	}
+}
+
+func natRedirectKey(original, target uint16, addr netip.Addr) string {
+	if !addr.IsValid() {
+		return fmt.Sprintf("%d/%d/*", original, target)
+	}
+	return fmt.Sprintf("%d/%d/%s", original, target, addr.String())
 }
 
 func buildHostIngress(proto string, port uint16, listenAddrs []netip.Addr, comment string) HostIngressRule {

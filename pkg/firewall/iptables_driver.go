@@ -251,9 +251,9 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 		}
 		acceptArgs := append(args, "-j", "ACCEPT", "-m", "comment", "--comment", marker+":"+hi.Comment)
 
-		// Add rule to iptables (IPv4) and ip6tables (IPv6).
-		commands = append(commands, iptablesCommand{"iptables", acceptArgs})
-		commands = append(commands, iptablesCommand{"ip6tables", acceptArgs})
+		for _, binary := range iptablesBinariesForAddr(hi.DstAddr) {
+			commands = append(commands, iptablesCommand{binary, acceptArgs})
+		}
 	}
 
 	// Jump from INPUT to Higgs chain.
@@ -271,9 +271,9 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 		}
 		args = append(args, "-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", nr.RedirectTo), "-m", "comment", "--comment", marker+":"+nr.Comment)
 
-		// Add NAT rule to iptables (IPv4) and ip6tables (IPv6).
-		commands = append(commands, iptablesCommand{"iptables", args})
-		commands = append(commands, iptablesCommand{"ip6tables", args})
+		for _, binary := range iptablesBinariesForAddr(nr.DstAddr) {
+			commands = append(commands, iptablesCommand{binary, args})
+		}
 	}
 
 	return commands
@@ -324,6 +324,16 @@ func selectIPTablesBinaryForMatch(r Rule, match []string) string {
 
 	// Default to iptables for IPv4 or dual-stack (inet semantics).
 	return "iptables"
+}
+
+func iptablesBinariesForAddr(addr netip.Addr) []string {
+	if !addr.IsValid() {
+		return []string{"iptables", "ip6tables"}
+	}
+	if addr.Is6() {
+		return []string{"ip6tables"}
+	}
+	return []string{"iptables"}
 }
 
 func iptablesMatchArgSets(r Rule) [][]string {
