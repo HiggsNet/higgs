@@ -16,7 +16,10 @@ type SyncSessionState string
 const (
 	SyncSessionIdle             SyncSessionState = "idle"
 	SyncSessionPingSent         SyncSessionState = "ping_sent"
+	SyncSessionSummarySent      SyncSessionState = "summary_sent"
+	SyncSessionCatalogDiffing   SyncSessionState = "catalog_diffing"
 	SyncSessionAwaitingAnnounce SyncSessionState = "awaiting_announce"
+	SyncSessionServingPeerFetch SyncSessionState = "serving_peer_fetch"
 	SyncSessionFetchingLocal    SyncSessionState = "fetching_local"
 	SyncSessionObjectPulling    SyncSessionState = "object_pulling"
 	SyncSessionChunkFallback    SyncSessionState = "chunk_fallback"
@@ -43,6 +46,7 @@ type SyncEvent interface {
 type SyncTimerEvent struct {
 	PeerID       string
 	LocalDigests []gossip.ZoneDigest
+	LocalSummary *gossip.CatalogSummary
 }
 
 func (*SyncTimerEvent) isSyncEvent() {}
@@ -55,6 +59,34 @@ type PongReceivedEvent struct {
 }
 
 func (*PongReceivedEvent) isSyncEvent() {}
+
+type CatalogSummaryReceivedEvent struct {
+	PeerID  string
+	Summary *gossip.CatalogSummary
+}
+
+func (*CatalogSummaryReceivedEvent) isSyncEvent() {}
+
+type CatalogPageReceivedEvent struct {
+	PeerID       string
+	Page         *gossip.CatalogPage
+	LocalEntries []gossip.ZoneDigest
+}
+
+func (*CatalogPageReceivedEvent) isSyncEvent() {}
+
+type FetchCatalogPageReceivedEvent struct {
+	PeerID string
+	Cursor string
+}
+
+func (*FetchCatalogPageReceivedEvent) isSyncEvent() {}
+
+type CatalogPageTimeoutEvent struct {
+	PeerID string
+}
+
+func (*CatalogPageTimeoutEvent) isSyncEvent() {}
 
 type FetchZoneReceivedEvent struct {
 	PeerID   string
@@ -109,6 +141,7 @@ type SyncAction interface {
 type SendPingAction struct {
 	PeerID  string
 	Digests []gossip.ZoneDigest
+	Summary *gossip.CatalogSummary
 }
 
 func (SendPingAction) isSyncAction() {}
@@ -116,6 +149,7 @@ func (SendPingAction) isSyncAction() {}
 type SendPongAction struct {
 	PeerID     string
 	Digests    []gossip.ZoneDigest
+	Summary    *gossip.CatalogSummary
 	FetchZones []zone.ZonePath
 }
 
@@ -136,6 +170,20 @@ type SendAnnounceAction struct {
 }
 
 func (SendAnnounceAction) isSyncAction() {}
+
+type SendFetchCatalogPageAction struct {
+	PeerID string
+	Cursor string
+}
+
+func (SendFetchCatalogPageAction) isSyncAction() {}
+
+type SendCatalogPageAction struct {
+	PeerID string
+	Cursor string
+}
+
+func (SendCatalogPageAction) isSyncAction() {}
 
 type StartObjectPullAction struct {
 	PeerID string
@@ -213,7 +261,10 @@ type SyncSession struct {
 	recordsReceived map[zone.ZonePath]bool
 	// expectedDigests maps pending zones to the remote root hash advertised in
 	// the PONG. Used to detect stale or incomplete UDP announces.
-	expectedDigests map[zone.ZonePath]gossip.ZoneDigest
+	expectedDigests   map[zone.ZonePath]gossip.ZoneDigest
+	localCatalogRoot  []byte
+	remoteCatalogRoot []byte
+	lastCatalogCursor string
 
 	// RTT estimation.
 	estimatedRTT time.Duration
@@ -248,6 +299,14 @@ func (s *SyncSession) OnEvent(event SyncEvent, now time.Time) ([]SyncAction, err
 		return s.onSyncTimer(e, now)
 	case *PongReceivedEvent:
 		return s.onPongReceived(e, now)
+	case *CatalogSummaryReceivedEvent:
+		return s.onCatalogSummaryReceived(e, now)
+	case *CatalogPageReceivedEvent:
+		return s.onCatalogPageReceived(e, now)
+	case *FetchCatalogPageReceivedEvent:
+		return s.onFetchCatalogPageReceived(e)
+	case *CatalogPageTimeoutEvent:
+		return s.onCatalogPageTimeout(e)
 	case *FetchZoneReceivedEvent:
 		return s.onFetchZoneReceived(e)
 	case *AnnounceReceivedEvent:
@@ -269,7 +328,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	if s.State != SyncSessionIdle {
 		return nil, nil
 	}
-	s.State = SyncSessionPingSent
+	s.State = SyncSessionSummarySent
 	s.pingSentAt = now
 	s.quietCount = 0
 	s.pendingZones = make(map[zone.ZonePath]bool)
@@ -279,20 +338,29 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.skeletonPending = make(map[zone.ZonePath]bool)
 	s.recordsReceived = make(map[zone.ZonePath]bool)
 	s.expectedDigests = make(map[zone.ZonePath]gossip.ZoneDigest)
+	s.localCatalogRoot = nil
+	if e.LocalSummary != nil {
+		s.localCatalogRoot = append([]byte(nil), e.LocalSummary.CatalogRoot...)
+	}
+	s.remoteCatalogRoot = nil
+	s.lastCatalogCursor = ""
 
 	return []SyncAction{
-		SendPingAction{PeerID: e.PeerID, Digests: e.LocalDigests},
+		SendPingAction{PeerID: e.PeerID, Digests: e.LocalDigests, Summary: e.LocalSummary},
 		StartTimerAction{PeerID: e.PeerID, Kind: "round", Deadline: now.Add(s.roundTimeout())},
 		StartTimerAction{PeerID: e.PeerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())},
 	}, nil
 }
 
 func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]SyncAction, error) {
-	if s.State != SyncSessionPingSent {
+	if s.State != SyncSessionPingSent && s.State != SyncSessionSummarySent {
 		return nil, nil
 	}
 	if !s.pingSentAt.IsZero() && now.After(s.pingSentAt) {
 		s.updateRTT(now.Sub(s.pingSentAt))
+	}
+	if e.Pong != nil && e.Pong.Summary != nil {
+		return s.handleCatalogSummary(e.PeerID, e.Pong.Summary, now)
 	}
 
 	var actions []SyncAction
@@ -331,6 +399,105 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 	return actions, nil
 }
 
+func (s *SyncSession) onCatalogSummaryReceived(e *CatalogSummaryReceivedEvent, now time.Time) ([]SyncAction, error) {
+	if e.Summary == nil {
+		return nil, nil
+	}
+	return s.handleCatalogSummary(e.PeerID, e.Summary, now)
+}
+
+func (s *SyncSession) handleCatalogSummary(peerID string, summary *gossip.CatalogSummary, now time.Time) ([]SyncAction, error) {
+	if summary == nil {
+		return nil, nil
+	}
+	if bytes.Equal(summary.CatalogRoot, s.remoteCatalogRoot) && s.State == SyncSessionCompleted {
+		return nil, nil
+	}
+	s.remoteCatalogRoot = append([]byte(nil), summary.CatalogRoot...)
+	if len(s.localCatalogRoot) > 0 && bytes.Equal(summary.CatalogRoot, s.localCatalogRoot) {
+		s.State = SyncSessionCompleted
+		return []SyncAction{SaveStateAction{Reason: "sync completed after matching catalog summary"}}, nil
+	}
+	if summary.ZoneCount == 0 || bytes.Equal(summary.CatalogRoot, gossip.CatalogRoot(nil)) {
+		s.State = SyncSessionCompleted
+		return []SyncAction{SaveStateAction{Reason: "sync completed after empty catalog summary"}}, nil
+	}
+	if summary.FirstPage != nil {
+		return s.onCatalogPageReceived(&CatalogPageReceivedEvent{PeerID: peerID, Page: summary.FirstPage}, now)
+	}
+	s.State = SyncSessionCatalogDiffing
+	s.quietCount = 0
+	s.lastCatalogCursor = ""
+	return []SyncAction{
+		SendFetchCatalogPageAction{PeerID: peerID},
+		StartTimerAction{PeerID: peerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())},
+	}, nil
+}
+
+func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now time.Time) ([]SyncAction, error) {
+	if e.Page == nil {
+		return nil, nil
+	}
+	if len(s.remoteCatalogRoot) > 0 && !bytes.Equal(e.Page.CatalogRoot, s.remoteCatalogRoot) {
+		s.State = SyncSessionFailed
+		s.lastError = errors.New("catalog page root mismatch")
+		return []SyncAction{
+			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
+			SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
+		}, nil
+	}
+	if len(s.remoteCatalogRoot) == 0 {
+		s.remoteCatalogRoot = append([]byte(nil), e.Page.CatalogRoot...)
+	}
+	s.State = SyncSessionCatalogDiffing
+	s.quietCount = 0
+	var actions []SyncAction
+	for _, diff := range gossip.CatalogDiff(e.LocalEntries, e.Page.Entries) {
+		s.pendingZones[diff.Zone] = true
+		s.expectedDigests[diff.Zone] = diff
+		if !s.objectPullInflight[diff.Zone] {
+			s.objectPullInflight[diff.Zone] = true
+			actions = append(actions, StartObjectPullAction{PeerID: e.PeerID, Zone: diff.Zone})
+		}
+	}
+	s.lastCatalogCursor = e.Page.NextCursor
+	if e.Page.NextCursor != "" {
+		actions = append(actions, SendFetchCatalogPageAction{PeerID: e.PeerID, Cursor: e.Page.NextCursor})
+		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())})
+		return actions, nil
+	}
+	if len(s.objectPullInflight) > 0 {
+		s.State = SyncSessionObjectPulling
+		return actions, nil
+	}
+	if s.pendingEmpty() {
+		s.State = SyncSessionCompleted
+		actions = append(actions, SaveStateAction{Reason: fmt.Sprintf("sync completed after catalog diff from %s", e.PeerID)})
+		return actions, nil
+	}
+	s.State = SyncSessionObjectPulling
+	return actions, nil
+}
+
+func (s *SyncSession) onFetchCatalogPageReceived(e *FetchCatalogPageReceivedEvent) ([]SyncAction, error) {
+	if s.State == SyncSessionIdle || s.State == SyncSessionCompleted || s.State == SyncSessionFailed {
+		s.State = SyncSessionServingPeerFetch
+	}
+	return []SyncAction{SendCatalogPageAction{PeerID: e.PeerID, Cursor: e.Cursor}}, nil
+}
+
+func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAction, error) {
+	if s.State != SyncSessionCatalogDiffing {
+		return nil, nil
+	}
+	s.State = SyncSessionFailed
+	s.lastError = errors.New("catalog page timeout")
+	return []SyncAction{
+		RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
+		SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: catalog page timeout", e.PeerID)},
+	}, nil
+}
+
 func (s *SyncSession) onFetchZoneReceived(e *FetchZoneReceivedEvent) ([]SyncAction, error) {
 	if e.Snapshot == nil {
 		return nil, nil
@@ -338,7 +505,7 @@ func (s *SyncSession) onFetchZoneReceived(e *FetchZoneReceivedEvent) ([]SyncActi
 	s.localFetchZones[e.Zone] = true
 	if s.State == SyncSessionIdle || s.State == SyncSessionPingSent || s.State == SyncSessionAwaitingAnnounce {
 		if s.State != SyncSessionAwaitingAnnounce {
-			s.State = SyncSessionFetchingLocal
+			s.State = SyncSessionServingPeerFetch
 		}
 		return []SyncAction{
 			SendAnnounceAction{PeerID: e.PeerID, Snapshots: []*gossip.ZoneSnapshot{e.Snapshot}},
@@ -355,10 +522,13 @@ func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction
 	// send its own announces concurrently). Idle/completed/failed sessions should
 	// ignore stale/relay traffic.
 	if s.State != SyncSessionPingSent &&
+		s.State != SyncSessionSummarySent &&
+		s.State != SyncSessionCatalogDiffing &&
 		s.State != SyncSessionAwaitingAnnounce &&
 		s.State != SyncSessionObjectPulling &&
 		s.State != SyncSessionChunkFallback &&
-		s.State != SyncSessionFetchingLocal {
+		s.State != SyncSessionFetchingLocal &&
+		s.State != SyncSessionServingPeerFetch {
 		return nil, nil
 	}
 	var actions []SyncAction
@@ -449,6 +619,17 @@ func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAct
 func (s *SyncSession) onPacketQuietTimeout(e *PacketQuietTimeoutEvent, now time.Time) ([]SyncAction, error) {
 	s.quietCount++
 	switch s.State {
+	case SyncSessionCatalogDiffing:
+		if len(s.objectPullInflight) > 0 {
+			s.State = SyncSessionObjectPulling
+			return nil, nil
+		}
+		s.State = SyncSessionFailed
+		s.lastError = errors.New("sync timed out waiting for catalog page")
+		return []SyncAction{
+			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
+			SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
+		}, nil
 	case SyncSessionAwaitingAnnounce:
 		if s.quietCount == 1 && !s.pendingEmpty() {
 			s.State = SyncSessionObjectPulling
@@ -487,7 +668,7 @@ func (s *SyncSession) onPacketQuietTimeout(e *PacketQuietTimeoutEvent, now time.
 				SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
 			}, nil
 		}
-	case SyncSessionFetchingLocal:
+	case SyncSessionFetchingLocal, SyncSessionServingPeerFetch:
 		// We already sent the zones the peer requested and have no missing
 		// zones of our own. If the UDP path has been quiet, the peer has had
 		// enough time to ask for more; complete the round so a new session

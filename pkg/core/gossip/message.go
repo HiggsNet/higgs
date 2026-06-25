@@ -18,12 +18,14 @@ const (
 type MessageType string
 
 const (
-	MessagePing        MessageType = "ping"
-	MessagePong        MessageType = "pong"
-	MessageFetchZone   MessageType = "fetch_zone"
-	MessageFetchRecord MessageType = "fetch_record"
-	MessageAnnounce    MessageType = "announce"
-	MessageObjectChunk MessageType = "object_chunk"
+	MessagePing             MessageType = "ping"
+	MessagePong             MessageType = "pong"
+	MessageFetchZone        MessageType = "fetch_zone"
+	MessageFetchRecord      MessageType = "fetch_record"
+	MessageFetchCatalogPage MessageType = "fetch_catalog_page"
+	MessageCatalogPage      MessageType = "catalog_page"
+	MessageAnnounce         MessageType = "announce"
+	MessageObjectChunk      MessageType = "object_chunk"
 )
 
 type Message struct {
@@ -33,12 +35,14 @@ type Message struct {
 	Nonce     uint64      `json:"nonce" msgpack:"n"`
 	Timestamp int64       `json:"timestamp" msgpack:"ts"`
 
-	Ping        *Ping        `json:"ping,omitempty" msgpack:"g,omitempty"`
-	Pong        *Pong        `json:"pong,omitempty" msgpack:"o,omitempty"`
-	FetchZone   *FetchZone   `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
-	FetchRecord *FetchRecord `json:"fetch_record,omitempty" msgpack:"r,omitempty"`
-	Announce    *Announce    `json:"announce,omitempty" msgpack:"a,omitempty"`
-	ObjectChunk *ObjectChunk `json:"object_chunk,omitempty" msgpack:"c,omitempty"`
+	Ping             *Ping             `json:"ping,omitempty" msgpack:"g,omitempty"`
+	Pong             *Pong             `json:"pong,omitempty" msgpack:"o,omitempty"`
+	FetchZone        *FetchZone        `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
+	FetchRecord      *FetchRecord      `json:"fetch_record,omitempty" msgpack:"r,omitempty"`
+	FetchCatalogPage *FetchCatalogPage `json:"fetch_catalog_page,omitempty" msgpack:"fc,omitempty"`
+	CatalogPage      *CatalogPage      `json:"catalog_page,omitempty" msgpack:"cp,omitempty"`
+	Announce         *Announce         `json:"announce,omitempty" msgpack:"a,omitempty"`
+	ObjectChunk      *ObjectChunk      `json:"object_chunk,omitempty" msgpack:"c,omitempty"`
 }
 
 type ZoneDigest struct {
@@ -47,12 +51,31 @@ type ZoneDigest struct {
 }
 
 type Ping struct {
-	Zones []ZoneDigest `json:"zones" msgpack:"z"`
+	Summary *CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
+	Zones   []ZoneDigest    `json:"zones,omitempty" msgpack:"z,omitempty"` // deprecated compatibility digest page
 }
 
 type Pong struct {
-	Zones      []ZoneDigest    `json:"zones,omitempty" msgpack:"z,omitempty"`
+	Summary    *CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
+	Zones      []ZoneDigest    `json:"zones,omitempty" msgpack:"z,omitempty"` // deprecated compatibility digest page
 	FetchZones []zone.ZonePath `json:"fetch_zones" msgpack:"fz"`
+}
+
+type CatalogSummary struct {
+	CatalogRoot []byte       `json:"catalog_root" msgpack:"r"`
+	ZoneCount   int          `json:"zone_count" msgpack:"z"`
+	FirstPage   *CatalogPage `json:"first_page,omitempty" msgpack:"p,omitempty"`
+	NextCursor  string       `json:"next_cursor,omitempty" msgpack:"c,omitempty"`
+}
+
+type FetchCatalogPage struct {
+	Cursor string `json:"cursor,omitempty" msgpack:"c,omitempty"`
+}
+
+type CatalogPage struct {
+	CatalogRoot []byte       `json:"catalog_root" msgpack:"r"`
+	Entries     []ZoneDigest `json:"entries" msgpack:"e"`
+	NextCursor  string       `json:"next_cursor,omitempty" msgpack:"c,omitempty"`
 }
 
 type FetchZone struct {
@@ -132,6 +155,8 @@ func validateMessage(message *Message) error {
 		message.Pong != nil,
 		message.FetchZone != nil,
 		message.FetchRecord != nil,
+		message.FetchCatalogPage != nil,
+		message.CatalogPage != nil,
 		message.Announce != nil,
 		message.ObjectChunk != nil,
 	} {
@@ -159,6 +184,19 @@ func validateMessage(message *Message) error {
 	case MessageFetchRecord:
 		if message.FetchRecord == nil || !message.FetchRecord.Zone.Valid() || message.FetchRecord.Key == "" {
 			return errors.New("fetch_record message has invalid selector")
+		}
+	case MessageFetchCatalogPage:
+		if message.FetchCatalogPage == nil {
+			return errors.New("fetch_catalog_page message missing body")
+		}
+	case MessageCatalogPage:
+		if message.CatalogPage == nil || len(message.CatalogPage.CatalogRoot) == 0 {
+			return errors.New("catalog_page message has invalid page")
+		}
+		for _, entry := range message.CatalogPage.Entries {
+			if !entry.Zone.Valid() || len(entry.RootHash) == 0 {
+				return errors.New("catalog_page message has invalid entry")
+			}
 		}
 	case MessageAnnounce:
 		if message.Announce == nil {

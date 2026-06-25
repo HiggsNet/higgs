@@ -1490,6 +1490,8 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	defer transportB.Close()
 	transportA.AddPeer(configB.PeerID, transportB.LocalAddr())
 	transportB.AddPeer(configA.PeerID, transportA.LocalAddr())
+	configA.ListenAddr = transportA.LocalAddr().String()
+	configB.ListenAddr = transportB.LocalAddr().String()
 	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
 
@@ -3407,6 +3409,24 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	listenerA, err := startObjectPullServer(serviceA)
+	if err != nil {
+		t.Fatalf("startObjectPullServer(A): %v", err)
+	}
+	if listenerA != nil {
+		defer listenerA.Close()
+	}
+	listenerB, err := startObjectPullServer(serviceB)
+	if err != nil {
+		t.Fatalf("startObjectPullServer(B): %v", err)
+	}
+	if listenerB != nil {
+		defer listenerB.Close()
+	}
+	serviceA.objectPullPool.Start(ctx)
+	defer serviceA.objectPullPool.Stop()
+	serviceB.objectPullPool.Start(ctx)
+	defer serviceB.objectPullPool.Stop()
 
 	// Start sessions in both directions through the event-loop timer handler.
 	if err := serviceA.handleSyncTimerEvent(ctx, true); err != nil {
@@ -3468,6 +3488,12 @@ func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transport
 			select {
 			case ev := <-svc.syncEvents:
 				svc.handleSyncEvent(ctx, ev)
+				processed = true
+			default:
+			}
+			select {
+			case res := <-svc.objectPullResults:
+				_ = svc.postSyncEvent(objectPullResultToEvent(res))
 				processed = true
 			default:
 			}

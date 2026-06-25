@@ -1,7 +1,7 @@
 # Higgs Gossip 协议
 
 > **文档状态（2026-06）**
-> 本文是 Higgs gossip 的 canonical 文档。它描述当前实现、已确认的问题，以及下一步要收敛到的 bounded UDP control + catalog sync 规则。若现有代码与本文的目标规则不一致，应以后续代码和测试向本文收敛。
+> 本文是 Higgs gossip 的 canonical 文档。它描述当前实现、已确认的问题，以及 bounded UDP control + catalog sync 规则。若现有代码与本文冲突，应以已通过测试的当前协议规则为准，然后回头修本文。
 
 本文面向两类读者：
 - 人类 operator / reviewer：理解 Higgs 如何同步 signed Zone state，如何处理 NAT、MTU 和大对象。
@@ -68,7 +68,7 @@ type Message struct {
 - body 字段数量不等于一。
 - wire size 超过本地 `max_datagram_bytes`。
 
-`FetchCatalogPage` / `CatalogPage` 是下一步目标消息，当前代码尚未完全实现。
+`FetchCatalogPage` / `CatalogPage` 已在当前 wire schema 中实现，用于替代 `PING` / `PONG` 上的完整 digest list。
 
 ---
 
@@ -76,7 +76,7 @@ type Message struct {
 
 ### 3.1 为什么需要 catalog
 
-当前实现把完整 `ZoneDigest[]` 放进 `PING` / `PONG`。这在小网络可用，但 Zone 数增多后会超过 1200-byte datagram 预算，导致 `ErrMessageTooLarge`。同类风险还存在于 `PONG.FetchZones`、`ANNOUNCE.Zones`、`ANNOUNCE.Records` 等列表字段。
+旧实现把完整 `ZoneDigest[]` 放进 `PING` / `PONG`。这在小网络可用，但 Zone 数增多后会超过 1200-byte datagram 预算，导致 `ErrMessageTooLarge`。当前实现已经把主同步入口改为 `CatalogSummary` + bounded catalog page；兼容字段仍可被旧路径读取，但新发送路径不再承诺完整 digest list。同类风险仍存在于 `PONG.FetchZones`、`ANNOUNCE.Zones`、`ANNOUNCE.Records` 等列表字段。
 
 因此 gossip v1 的下一步规则是引入 **Catalog**：
 
@@ -89,7 +89,7 @@ CatalogRoot = hash(sorted(zone_path + zone_root))
 
 ### 3.2 Summary round
 
-目标形态：
+当前形态：
 
 ```text
 PING { catalog_root, zone_count, optional first_page }
@@ -100,11 +100,10 @@ PONG { catalog_root, zone_count, optional first_page }
 
 ```go
 type CatalogSummary struct {
-    Root           []byte
-    ZoneCount      int
-    FirstPage      []ZoneDigest // optional, must fit budget
-    NextCursor     string       // optional
-    PageSizeHint   int          // optional diagnostic / tuning hint
+    CatalogRoot []byte
+    ZoneCount   int
+    FirstPage   *CatalogPage // optional, currently not emitted by default
+    NextCursor  string       // optional
 }
 ```
 
@@ -119,7 +118,7 @@ FETCH_CATALOG_PAGE { cursor }
 CATALOG_PAGE       { catalog_root, entries[], next_cursor }
 ```
 
-`cursor` 第一版可以是上一页最后一个 `zone_path`；下一页返回 `zone_path > cursor` 的有序 entries。`entries[]` 必须按 `max_datagram_bytes` 打包，不能超过预算。
+`cursor` 第一版是稳定的 sorted catalog offset，空 cursor 表示第一页。`entries[]` 必须按 `max_datagram_bytes` 打包，不能超过预算；如果单条 entry 都装不进一页，发送方 fail closed 并记录诊断。
 
 接收方对每页做本地 diff：
 
@@ -139,7 +138,7 @@ Merkle range tree 是把按 ZonePath 排序的 catalog 分成范围，每个范�
 
 ## 4. Object 同步
 
-发现不同 Zone 后，接收方请求完整对象：
+发现不同 Zone 后，接收方拉取完整对象：
 
 ```text
 FETCH_ZONE { zone, expected_root }
@@ -147,7 +146,7 @@ TCP object pull { zone, expected_root }
 OBJECT_PULL_RESPONSE { full ZoneSnapshot }
 ```
 
-`FETCH_ZONE` 是控制请求，不要求发送方把完整 snapshot 塞进 UDP。发送方可以用 `ANNOUNCE` 返回 digest hint 或小 payload，但接收方只在本地 root 对账成功后才算完成。
+`FETCH_ZONE` 是兼容控制请求和 UDP chunk fallback 请求，不要求发送方把完整 snapshot 塞进 UDP。当前 catalog 主路径在 page diff 得出不同 Zone 后立即启动 TCP object pull；发送方可以用 `ANNOUNCE` 返回 digest hint 或小 payload，但接收方只在本地 root 对账成功后才算完成。
 
 如果 TCP object pull 不可达，接收方可以请求：
 
@@ -231,15 +230,15 @@ NAT / observed path 规则：
 当前代码已经实现：
 
 - MessagePack UDP framing 和 1200-byte budget。
-- `PING` / `PONG` / `FETCH_ZONE` / `ANNOUNCE` / `OBJECT_CHUNK` 基础消息。
+- `PING` / `PONG` 的 `CatalogSummary`、`FETCH_CATALOG_PAGE` / `CATALOG_PAGE` bounded catalog page。
+- `FETCH_ZONE` / `ANNOUNCE` / `OBJECT_CHUNK` 基础消息。
 - TCP object pull 与 UDP chunk fallback。
-- daemon 单 reader、事件循环和 per-peer `SyncSession` FSM。
+- daemon 单 reader、事件循环和 per-peer `SyncSession` FSM；状态已包含 `SummarySent`、`CatalogDiffing`、`ServingPeerFetch`、`ObjectPulling`、`ChunkFallback`。
 
 仍需向本文收敛：
 
-- `PING` / `PONG` 仍携带完整 `ZoneDigest[]`，需要改为 `CatalogSummary` + page diff。
 - `PONG.FetchZones`、`ANNOUNCE.Zones`、`ANNOUNCE.Records` 需要全部按预算分页或降级为 hint。
-- `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` 尚未实现。
+- `sync status --verbose` / `debug peer` 仍需展示 catalog root、zone count、最近 page cursor 和 page reject reason。
 - `announce` 应逐步从 payload carrier 收敛为 state-change hint + optional small payload。
 
 对应执行项见 `../todo.md` Phase 3.6.8。

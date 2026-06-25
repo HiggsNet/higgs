@@ -1075,47 +1075,21 @@ Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
 - `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。它不是轮询间隔，也不应是 oversized object 的主发现机制。digest mismatch 应尽快触发 object pull；quiet timeout 只用于丢包、迟到 UDP payload 或 fallback 收尾。
 - `BackoffRetry`：peer 可再次尝试的时间点。
 
-当前已实现的 `SyncSession` 仍以完整 `ZoneDigest[]` 的 `PING` / `PONG` 为入口，状态含义如下：
+当前已实现的 `SyncSession` 以 `CatalogSummary` 的 `PING` / `PONG` 为入口，完整 digest list 只作为兼容读取字段保留。状态含义如下：
 
 | 状态 | 含义 |
 |------|------|
 | `Idle` | 没有活跃 round，等待 `SyncTimerEvent`。 |
-| `PingSent` | 已发送本地 digest 列表，等待对端 `PONG` 或入站 `PING` 派生出的 `PongReceivedEvent`。 |
+| `SummarySent` | 已发送本地 `CatalogSummary`，等待对端 `PONG` summary 或入站 `PING` 派生出的 summary 事件。 |
+| `CatalogDiffing` | 已发现 catalog root 不同，通过 `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` 分页比较 sorted catalog；page diff 出的不同 Zone 立即进入 object pull。 |
 | `FetchingLocal` | 对端请求本地 Zone，已发送 bounded `ANNOUNCE` / snapshot，等待 quiet timeout 结束本轮。 |
-| `AwaitingAnnounce` | 已发现对端有本地缺失或 root 不同的 Zone，已发 `FETCH_ZONE`，等待对端小 payload / skeleton / digest hint。 |
-| `ObjectPulling` | UDP 静默或 digest-only/skeleton 未补齐后，异步 TCP object pull 正在拉完整 snapshot。 |
+| `ServingPeerFetch` | 响应对端 catalog page / fetch 请求，发送本地 catalog page 或兼容小 payload。 |
+| `AwaitingAnnounce` | 兼容旧 hint / skeleton / digest-only 路径，等待对端小 payload 或 fallback 信号；不再作为 catalog diff 的 correctness baseline。 |
+| `ObjectPulling` | page diff 得出不同 Zone 后，异步 TCP object pull 正在拉完整 snapshot。 |
 | `ChunkFallback` | TCP object pull 失败后，已请求 `FETCH_ZONE{ChunkFallback:true}`，等待 UDP chunk 重组完成。 |
 | `Completed` / `Failed` | 终态，触发持久化、backoff 或后续 state-change hook。 |
 
 当前实现的简化转换是：
-
-```text
-SyncTimerEvent ──► PingSent ──► PongReceived ──► AwaitingAnnounce
-                                    │
-                                    ▼
-                          QuietTimeout (1st)
-                                    │
-                                    ▼
-                            ObjectPulling ──► ObjectPullResultEvent
-                                    │
-                                    ▼
-                          ChunkFallback ──► ObjectChunkEvent
-                                    │
-                                    ▼
-                          Completed / Failed
-```
-
-Phase 3.6.8 的 catalog sync 会调整这条状态机。原因是 `PING` / `PONG` 不再承诺携带完整 digest list，`AwaitingAnnounce` 也不能继续承担“发现差异、等待小 payload、等待完整对象”三种职责。目标状态机应拆成：
-
-| 目标状态 | 作用 |
-|----------|------|
-| `SummarySent`（可复用/替代 `PingSent`） | 交换 `CatalogSummary`；若 `catalog_root` 相同直接完成。 |
-| `CatalogDiffing` | 通过 `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` 分页比较 sorted catalog，积累需要 object sync 的 Zone digest。 |
-| `ObjectPulling` | 对 page diff 得出的缺失/不同 Zone 启动 TCP object pull；不等待 announce 来承载完整对象。 |
-| `ChunkFallback` | 仅在 TCP pull 失败且有 verified observed UDP path 时请求 UDP chunk fallback。 |
-| `ServingPeerFetch`（可由 `FetchingLocal` 扩展） | 响应对端 catalog diff 后的 `FETCH_ZONE` / object pull 请求。 |
-
-对应事件也要扩展为 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，动作扩展为 `SendFetchCatalogPageAction`、`SendCatalogPageAction`。迁移后的主路径应是：
 
 ```text
 SyncTimerEvent
@@ -1129,7 +1103,7 @@ SyncTimerEvent
   -> Completed / Failed
 ```
 
-`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，可以携带小而完整的 opportunistic payload，但不能作为 catalog diff 或完整对象事务的 correctness baseline。收到 skeleton、digest-only announce 或部分 record 后，session 必须保持 pending；只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
+对应事件包括 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，动作包括 `SendFetchCatalogPageAction`、`SendCatalogPageAction`。`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，可以携带小而完整的 opportunistic payload，但不能作为 catalog diff 或完整对象事务的 correctness baseline。收到 skeleton、digest-only announce 或部分 record 后，session 必须保持 pending；只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
 
 ### 7.4 MTU / TCP Pull / UDP Chunk 的集成
 

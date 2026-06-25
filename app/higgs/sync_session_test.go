@@ -18,8 +18,8 @@ func TestSyncSessionIdleToPingSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
-	if s.State != SyncSessionPingSent {
-		t.Fatalf("expected state ping_sent, got %s", s.State)
+	if s.State != SyncSessionSummarySent {
+		t.Fatalf("expected state summary_sent, got %s", s.State)
 	}
 
 	assertActionTypes(t, actions, []string{"SendPingAction", "StartTimerAction", "StartTimerAction"})
@@ -99,6 +99,62 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	}
 }
 
+func TestSyncSessionCatalogSummaryFetchesPages(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+	localRoot := gossip.CatalogRoot([]gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
+	remoteRoot := gossip.CatalogRoot([]gossip.ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
+
+	_, _ = s.OnEvent(&SyncTimerEvent{
+		PeerID:       "peer-a",
+		LocalSummary: &gossip.CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
+	}, now)
+	actions, err := s.OnEvent(&PongReceivedEvent{
+		PeerID: "peer-a",
+		Pong:   &gossip.Pong{Summary: &gossip.CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
+	}, now.Add(10*time.Millisecond))
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionCatalogDiffing {
+		t.Fatalf("expected state catalog_diffing, got %s", s.State)
+	}
+	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
+}
+
+func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := gossip.CatalogRoot(remote)
+
+	_, _ = s.OnEvent(&SyncTimerEvent{
+		PeerID:       "peer-a",
+		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(local), ZoneCount: 1},
+	}, now)
+	_, _ = s.OnEvent(&PongReceivedEvent{
+		PeerID: "peer-a",
+		Pong:   &gossip.Pong{Summary: &gossip.CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
+	}, now.Add(10*time.Millisecond))
+
+	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
+		PeerID:       "peer-a",
+		Page:         &gossip.CatalogPage{CatalogRoot: root, Entries: remote},
+		LocalEntries: local,
+	}, now.Add(20*time.Millisecond))
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling, got %s", s.State)
+	}
+	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
+	if !s.pendingZones["catofes."] || !s.objectPullInflight["catofes."] {
+		t.Fatalf("catalog diff did not mark zone pending/inflight")
+	}
+}
+
 func TestSyncSessionPongPeerRequestsLocalZones(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
@@ -136,8 +192,8 @@ func TestSyncSessionFetchZoneReceived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
-	if s.State != SyncSessionFetchingLocal {
-		t.Fatalf("expected state fetching_local, got %s", s.State)
+	if s.State != SyncSessionServingPeerFetch {
+		t.Fatalf("expected state serving_peer_fetch, got %s", s.State)
 	}
 	assertActionTypes(t, actions, []string{"SendAnnounceAction"})
 }
@@ -538,6 +594,10 @@ func actionType(a SyncAction) string {
 		return "SendPongAction"
 	case SendFetchZoneAction:
 		return "SendFetchZoneAction"
+	case SendFetchCatalogPageAction:
+		return "SendFetchCatalogPageAction"
+	case SendCatalogPageAction:
+		return "SendCatalogPageAction"
 	case SendAnnounceAction:
 		return "SendAnnounceAction"
 	case StartObjectPullAction:

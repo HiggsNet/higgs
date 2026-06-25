@@ -652,7 +652,7 @@ overlays:
 
 | 关注点 | 机制 |
 |---------|-----------|
-| **状态传播** | 基于摘要的选择性同步（`PING` → `PONG` → `FETCH_ZONE` → `ANNOUNCE`） |
+| **状态传播** | 基于 catalog 的选择性同步（`PING/PONG CatalogSummary` → `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` → TCP object pull；`ANNOUNCE` 作为 hint / 小 payload 优化） |
 | **收敛** | 每次应用变更后中继；gossip 式传递 |
 | **冲突解决** | 单调版本号；时间戳仅用于审计 |
 | **信任** | 完整委托链验证，追溯到受信任的根公钥 |

@@ -1511,9 +1511,13 @@ func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeo
 		}
 	}()
 	sr.seedObservedPeerPath(peerID)
+	summary, summaryErr := gossip.CatalogSummaryFor(sr.State.Network, sr.Transport.MaxMessageBytes())
+	if summaryErr != nil {
+		return summaryErr
+	}
 	if err := sr.Transport.Send(peerID, &gossip.Message{
 		Type: gossip.MessagePing,
-		Ping: &gossip.Ping{Zones: gossip.ZoneDigests(sr.State.Network)},
+		Ping: &gossip.Ping{Summary: summary},
 	}); err != nil {
 		return err
 	}
@@ -1634,8 +1638,15 @@ func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeo
 			}
 			var waitingForAnnounce bool
 			if packet.Message.Pong != nil {
-				waitingForAnnounce = len(gossip.FetchList(sr.State.Network, packet.Message.Pong.Zones)) > 0
+				if packet.Message.Pong.Summary != nil {
+					waitingForAnnounce = !bytes.Equal(packet.Message.Pong.Summary.CatalogRoot, summary.CatalogRoot)
+				} else {
+					waitingForAnnounce = len(gossip.FetchList(sr.State.Network, packet.Message.Pong.Zones)) > 0
+				}
 				remoteDigests = packet.Message.Pong.Zones
+			} else if packet.Message.CatalogPage != nil {
+				waitingForAnnounce = packet.Message.CatalogPage.NextCursor != ""
+				remoteDigests = append(remoteDigests, packet.Message.CatalogPage.Entries...)
 			}
 			peerRequestedZones := packet.Message.Pong != nil && len(packet.Message.Pong.FetchZones) > 0
 			if peerRequestedZones {
@@ -1651,6 +1662,9 @@ func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeo
 				return
 			}
 			if peerRequestedZones {
+				awaitingQuiet = true
+			}
+			if waitingForAnnounce {
 				awaitingQuiet = true
 			}
 			if packet.Message.Pong != nil && !waitingForAnnounce && !peerRequestedZones {
@@ -1790,12 +1804,29 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 	case gossip.MessagePing:
 		recordVerifiedObservedPath(state, message.PeerID, packet.Addr, message.Type, sr.now())
 		sr.seedObservedPeerPath(message.PeerID)
+		summary, err := gossip.CatalogSummaryFor(state.Network, transport.MaxMessageBytes())
+		if err != nil {
+			return err
+		}
 		fetch := fetchListForPeer(state, message.PeerID, message.Ping.Zones, sr.now())
 		return transport.Send(message.PeerID, &gossip.Message{
 			Type: gossip.MessagePong,
-			Pong: &gossip.Pong{Zones: gossip.ZoneDigests(state.Network), FetchZones: fetch},
+			Pong: &gossip.Pong{Summary: summary, FetchZones: fetch},
 		})
 	case gossip.MessagePong:
+		if message.Pong.Summary != nil {
+			localSummary, err := gossip.CatalogSummaryFor(state.Network, transport.MaxMessageBytes())
+			if err != nil {
+				return err
+			}
+			if bytes.Equal(message.Pong.Summary.CatalogRoot, localSummary.CatalogRoot) {
+				return nil
+			}
+			return transport.Send(message.PeerID, &gossip.Message{
+				Type:             gossip.MessageFetchCatalogPage,
+				FetchCatalogPage: &gossip.FetchCatalogPage{},
+			})
+		}
 		if len(message.Pong.FetchZones) == 0 {
 			for _, path := range fetchListForPeer(state, message.PeerID, message.Pong.Zones, sr.now()) {
 				if err := transport.Send(message.PeerID, &gossip.Message{
@@ -1817,6 +1848,52 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 			}); err != nil {
 				return err
 			}
+		}
+		return nil
+	case gossip.MessageFetchCatalogPage:
+		page, err := gossip.CatalogPageFor(state.Network, message.FetchCatalogPage.Cursor, transport.MaxMessageBytes())
+		if err != nil {
+			recordDatagramTooLarge(state, message.PeerID, "send", "catalog_page", "", "", 0, transport.MaxMessageBytes(), sr.now())
+			sr.logger().Warn("sync", "catalog_page_failed", map[string]any{
+				"peer_id": message.PeerID,
+				"cursor":  message.FetchCatalogPage.Cursor,
+				"error":   err,
+			})
+			return nil
+		}
+		return transport.Send(message.PeerID, &gossip.Message{
+			Type:        gossip.MessageCatalogPage,
+			CatalogPage: page,
+		})
+	case gossip.MessageCatalogPage:
+		for _, diff := range gossip.CatalogDiff(gossip.ZoneDigests(state.Network), message.CatalogPage.Entries) {
+			snapshot, pullErr := tryObjectPullTCPUntil(state, config, message.PeerID, diff.Zone, deadline)
+			if pullErr != nil {
+				if err := transport.Send(message.PeerID, &gossip.Message{
+					Type:      gossip.MessageFetchZone,
+					FetchZone: &gossip.FetchZone{Zone: diff.Zone, ChunkFallback: true},
+				}); err != nil {
+					return err
+				}
+				continue
+			}
+			if snapshot == nil {
+				continue
+			}
+			limits := syncLimits(config)
+			limits.MaxBytes = 8 << 20
+			if _, applyErr := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), limits); applyErr != nil {
+				recordRejectedDigest(state, message.PeerID, diff, gossip.RejectReason(applyErr), sr.now())
+				continue
+			}
+			clearRejectedDigest(state, message.PeerID, diff.Zone)
+			sr.tryAdoptAutoJoinAfterSync(message.PeerID, "catalog_object_pull")
+		}
+		if message.CatalogPage.NextCursor != "" {
+			return transport.Send(message.PeerID, &gossip.Message{
+				Type:             gossip.MessageFetchCatalogPage,
+				FetchCatalogPage: &gossip.FetchCatalogPage{Cursor: message.CatalogPage.NextCursor},
+			})
 		}
 		return nil
 	case gossip.MessageFetchZone:

@@ -61,9 +61,15 @@ func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool
 			continue
 		}
 		d.syncSessions[peerID] = NewSyncSession(peerID)
+		summary, err := gossip.CatalogSummaryFor(d.Sync.State.Network, d.syncDatagramBudget())
+		if err != nil {
+			d.logWarn("sync", "catalog_summary_failed", map[string]any{"peer_id": peerID, "error": err})
+			continue
+		}
 		event := &SyncTimerEvent{
 			PeerID:       peerID,
 			LocalDigests: gossip.ZoneDigests(d.Sync.State.Network),
+			LocalSummary: summary,
 		}
 		select {
 		case d.syncEvents <- event:
@@ -87,10 +93,17 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			// was not yet listening): without this, the session would stay in
 			// ping_sent until the round timer fires and never converge.
 			if msg.Ping != nil {
-				_ = d.postSyncEvent(&PongReceivedEvent{
-					PeerID: msg.PeerID,
-					Pong:   &gossip.Pong{Zones: msg.Ping.Zones},
-				})
+				if msg.Ping.Summary != nil {
+					_ = d.postSyncEvent(&CatalogSummaryReceivedEvent{
+						PeerID:  msg.PeerID,
+						Summary: msg.Ping.Summary,
+					})
+				} else {
+					_ = d.postSyncEvent(&PongReceivedEvent{
+						PeerID: msg.PeerID,
+						Pong:   &gossip.Pong{Zones: msg.Ping.Zones},
+					})
+				}
 			}
 			return d.Sync.handlePacket(packet)
 		case gossip.MessagePong:
@@ -114,6 +127,22 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			return d.postSyncEvent(&FetchZoneReceivedEvent{
 				PeerID: msg.PeerID,
 				Zone:   msg.FetchZone.Zone,
+			})
+		case gossip.MessageFetchCatalogPage:
+			if msg.FetchCatalogPage == nil {
+				return nil
+			}
+			return d.postSyncEvent(&FetchCatalogPageReceivedEvent{
+				PeerID: msg.PeerID,
+				Cursor: msg.FetchCatalogPage.Cursor,
+			})
+		case gossip.MessageCatalogPage:
+			if msg.CatalogPage == nil {
+				return nil
+			}
+			return d.postSyncEvent(&CatalogPageReceivedEvent{
+				PeerID: msg.PeerID,
+				Page:   msg.CatalogPage,
 			})
 		case gossip.MessageAnnounce:
 			if msg.Announce == nil {
@@ -186,6 +215,8 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 			e.MissingZones = fetchListForPeer(d.Sync.State, peerID, e.Pong.Zones, d.Sync.now())
 			e.LocalSnapshots = localSnapshotsForPong(d.Sync.State.Network, e.Pong.FetchZones)
 		}
+	case *CatalogPageReceivedEvent:
+		e.LocalEntries = gossip.ZoneDigests(d.Sync.State.Network)
 	case *FetchZoneReceivedEvent:
 		if s, err := gossip.Snapshot(d.Sync.State.Network, e.Zone); err == nil {
 			e.Snapshot = s
@@ -222,6 +253,14 @@ func syncEventPeerID(event SyncEvent) string {
 	case *SyncTimerEvent:
 		return e.PeerID
 	case *PongReceivedEvent:
+		return e.PeerID
+	case *CatalogSummaryReceivedEvent:
+		return e.PeerID
+	case *CatalogPageReceivedEvent:
+		return e.PeerID
+	case *FetchCatalogPageReceivedEvent:
+		return e.PeerID
+	case *CatalogPageTimeoutEvent:
 		return e.PeerID
 	case *FetchZoneReceivedEvent:
 		return e.PeerID
@@ -346,22 +385,38 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	// not dependent on the peer's UDP announce/chunk fallback path.
 	var eagerPulls []zone.ZonePath
 	budget := gossip.DefaultMaxMessage
-	if d.Sync.Transport != nil {
-		if m := d.Sync.Transport.MaxMessageBytes(); m > 0 {
-			budget = m
-		}
-	}
+	budget = d.syncDatagramBudget()
 	for _, action := range actions {
 		switch a := action.(type) {
 		case SendPingAction:
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type: gossip.MessagePing,
-				Ping: &gossip.Ping{Zones: a.Digests},
+				Ping: &gossip.Ping{Summary: a.Summary},
 			})
 		case SendPongAction:
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type: gossip.MessagePong,
-				Pong: &gossip.Pong{Zones: a.Digests, FetchZones: a.FetchZones},
+				Pong: &gossip.Pong{Summary: a.Summary, FetchZones: a.FetchZones},
+			})
+		case SendFetchCatalogPageAction:
+			d.sendSyncMessage(peerID, &gossip.Message{
+				Type:             gossip.MessageFetchCatalogPage,
+				FetchCatalogPage: &gossip.FetchCatalogPage{Cursor: a.Cursor},
+			})
+		case SendCatalogPageAction:
+			page, err := gossip.CatalogPageFor(d.Sync.State.Network, a.Cursor, budget)
+			if err != nil {
+				recordDatagramTooLarge(d.Sync.State, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
+				d.logWarn("sync", "catalog_page_failed", map[string]any{
+					"peer_id": peerID,
+					"cursor":  a.Cursor,
+					"error":   err,
+				})
+				continue
+			}
+			d.sendSyncMessage(peerID, &gossip.Message{
+				Type:        gossip.MessageCatalogPage,
+				CatalogPage: page,
 			})
 		case SendFetchZoneAction:
 			d.sendSyncMessage(peerID, &gossip.Message{
@@ -482,6 +537,16 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	}
 
 	return changed
+}
+
+func (d *DaemonService) syncDatagramBudget() int {
+	budget := gossip.DefaultMaxMessage
+	if d != nil && d.Sync != nil && d.Sync.Transport != nil {
+		if m := d.Sync.Transport.MaxMessageBytes(); m > 0 {
+			budget = m
+		}
+	}
+	return budget
 }
 
 func shouldStartEagerObjectPull(action SendFetchZoneAction, session *SyncSession, managedZone zone.ZonePath, ns *zone.NetworkState, budget int) bool {

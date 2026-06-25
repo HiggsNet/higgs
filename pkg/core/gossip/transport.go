@@ -469,6 +469,10 @@ func MessageObjectCounts(message *Message) (zones int, records int) {
 		return 1, 0
 	case message.FetchRecord != nil:
 		return 1, 1
+	case message.FetchCatalogPage != nil:
+		return 1, 0
+	case message.CatalogPage != nil:
+		return len(message.CatalogPage.Entries), 0
 	case message.Announce != nil:
 		records = len(message.Announce.Records)
 		for _, snapshot := range message.Announce.Snapshots {
@@ -496,6 +500,10 @@ func objectCost(message *Message) int64 {
 		return int64(len(message.Ping.Zones))
 	case message.Pong != nil:
 		return int64(len(message.Pong.FetchZones))
+	case message.FetchCatalogPage != nil:
+		return 1
+	case message.CatalogPage != nil:
+		return int64(len(message.CatalogPage.Entries))
 	case message.Announce != nil:
 		return int64(len(message.Announce.Zones))
 	case message.ObjectChunk != nil:
