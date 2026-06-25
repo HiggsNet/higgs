@@ -1115,12 +1115,14 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
 		Clock:     time.Now,
 	}
+	rtA.Config.IPsec.Accept = ipsec.AcceptNone
 	rtA.Config.ListenAddr = gossipA
 	rtB := &Runtime{
 		Config:    testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB),
 		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
 		Clock:     time.Now,
 	}
+	rtB.Config.IPsec.Accept = ipsec.AcceptInbound
 	rtB.Config.ListenAddr = gossipB
 	if err := rtA.SaveState(stateA); err != nil {
 		t.Fatalf("SaveState(node-a): %v", err)
@@ -1130,10 +1132,10 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	}
 
 	serviceA := newDaemonService(rtA, stateA, configA, 200*time.Millisecond)
-	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	serviceA.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciA, clientA)
 	serviceA.XFRMDriver = ipsec.NewSystemXFRMDriver(groupA.NetNS)
 	serviceB := newDaemonService(rtB, stateB, configB, 200*time.Millisecond)
-	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	serviceB.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciB, clientB)
 	serviceB.XFRMDriver = ipsec.NewSystemXFRMDriver(groupB.NetNS)
 
 	runCtx, stopDaemons := context.WithCancel(ctx)
@@ -2728,6 +2730,22 @@ func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, rtA, rtB
 		default:
 			time.Sleep(250 * time.Millisecond)
 		}
+	}
+}
+
+func newDaemonTestStrongSwanDriver(t *testing.T, viciSocket string, client ipsec.VICIClient) *ipsec.StrongSwanDriver {
+	t.Helper()
+	return &ipsec.StrongSwanDriver{
+		VICI:          client,
+		KeyDir:        t.TempDir(),
+		InitiateAsync: true,
+		InitiateClientFactory: func() (ipsec.VICIClient, func() error, error) {
+			initiateClient, err := ipsec.NewGoviciClient(viciSocket)
+			if err != nil {
+				return nil, nil, err
+			}
+			return initiateClient, initiateClient.Close, nil
+		},
 	}
 }
 
