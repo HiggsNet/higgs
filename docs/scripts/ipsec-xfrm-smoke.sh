@@ -11,6 +11,13 @@ dump_diagnostics() {
   ip link show type xfrm >&2 || true
   ip xfrm state >&2 || true
   ip xfrm policy >&2 || true
+  while read -r ns _; do
+    [ -n "$ns" ] || continue
+    printf '\n[ipsec-xfrm-smoke] namespace %s\n' "$ns" >&2
+    ip netns exec "$ns" ip link >&2 || true
+    ip netns exec "$ns" ip addr >&2 || true
+    ip netns exec "$ns" ip route >&2 || true
+  done < <(ip netns list 2>/dev/null || true)
   swanctl --list-sas >&2 || true
 }
 

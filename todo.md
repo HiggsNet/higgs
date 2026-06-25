@@ -644,20 +644,20 @@
     - [x] dry-run 测试：`ApplyPlan` / `debug links` 显示 scoped link-local address；sequential pool 仍输出旧式地址。
     - [x] root smoke：link-local 模式 XFRM interface 分配 scoped tunnel address，`ping6`/`route` 显式带 interface；新增 `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke` 覆盖 IPv4 derived-pool。
 
-- [ ] **4.3.2 host-born XFRM interface / 内嵌 VICI event 生命周期**
+- [x] **4.3.2 host-born XFRM interface / 内嵌 VICI event 生命周期**
   - 目标：借鉴 `swan-updown` 的关键原理，但不依赖外部 updown script；由 Higgs daemon 内嵌管理 StrongSwan CHILD_SA 与 XFRM interface 生命周期。详见 `docs/strongswan-xfrm-netns-lifecycle-design.md`。
   - 修正 namespace 模型：单 host charon 负责 IKE/NAT-T、VICI、XFRM state/policy；XFRM interface 必须先在 charon/state/policy 所在 host netns 创建，再 move 到 `TransportLinkSpec.NetNS` / overlay netns，地址和 BIRD/Babel 继续在 overlay netns 内配置。
   - 更新 `SystemXFRMDriver.EnsureInterface`：named netns 目标下改为 host `ip link add <iface> type xfrm if_id <id>` -> `ip link set <iface> netns <target>` -> target netns `ip link set dev <iface> up`；已有目标 netns interface 直接 adopt/up，已有 host 残留则 move 后 adopt。
   - 保持 `ApplyTransportLink` 高层顺序不变：ensure namespace -> load key -> load connection -> ensure interface -> assign address；变化只在真实 XFRM driver 的 interface 出生点和 move 语义。
-  - 第一版仍由 reconcile 驱动，后续再订阅 VICI `child-updown` / `ike-updown` 事件缩短收敛延迟；event handler 只能标记 dirty 或调用同一套幂等 lifecycle manager，不能绕过 desired spec、`LinkInstance` owner guard、revocation 和 restart recovery。
+  - 第一版仍由 reconcile 驱动；daemon 已订阅 VICI `child-updown` / `ike-updown` 事件缩短收敛延迟。event handler 只把 IPsec 标记为 dirty 并进入同一套幂等 reconcile，不能绕过 desired spec、`LinkInstance` owner guard、revocation 和 restart recovery。
   - 删除/恢复语义：teardown 优先从目标 overlay netns 删除 owner-managed interface，找不到时清 host 残留；daemon restart 后从 desired spec + `ListSAs` + link inspection adopt/move 既有 interface；revocation/policy deny/transport key mismatch 仍强制 terminate/unload/delete，且不能被 retry 拉起。
   - staged rotate 语义：base/staged generation 都使用独立 host-born XFRM interface/`if_id`，move 到同一 overlay netns 后交给 Babel metric/cutover gate；rollback 只清 staged，revocation 同时清 base/staged。
   - 验证：
-    - [ ] 单元测试锁住 `SystemXFRMDriver` 命令顺序和 adopt/move 分支。
-    - [ ] preflight 增加 host-born XFRM interface move 到 named netns 能力检查。
-    - [ ] root/container smoke 覆盖 host XFRM state/policy + moved XFRM interface in overlay netns + tunnel ping。
-    - [ ] daemon StrongSwan smoke 失败诊断输出 host `ip xfrm state/policy`、host XFRM links、overlay netns link/address/route。
-    - [ ] VICI event 阶段补 fake event 单测和 root smoke，确认 event 只触发幂等 reconcile，不形成第二 writer。
+    - [x] 单元测试锁住 `SystemXFRMDriver` 命令顺序和 adopt/move 分支。
+    - [x] preflight 增加 host-born XFRM interface move 到 named netns 能力检查。
+    - [x] root/container smoke 覆盖 host XFRM state/policy + moved XFRM interface in overlay netns + tunnel ping。
+    - [x] daemon StrongSwan smoke 失败诊断输出 host `ip xfrm state/policy`、host XFRM links、overlay netns link/address/route。
+    - [x] VICI event 阶段补 fake event 单测和 daemon event-loop coalesce 测试，确认 event 只触发幂等 reconcile，不形成第二 writer。
 
 - [x] **4.4 有界短断端口轮换 / 低频 rotate（生产必需基座）**
   - 目标：把 `ipsec/ports` 的 current/previous grace 从“公告和 planner fallback”推进到系统可执行、可观测、可回滚的低频 rotate，支持运营商 QoS、端口迁移、NAT 映射变化和维护窗口中的受控重建；高频/对抗性 port hopping 仍留到 Phase 7。
