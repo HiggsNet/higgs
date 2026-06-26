@@ -711,6 +711,68 @@ func peerEndpointsJSON(peerID string, ps syncPeerState, config *syncConfigFile, 
 	return out
 }
 
+type observerLinksResponse struct {
+	Instances    []observerLinkJSON `json:"instances"`
+	LastRunUnix  int64              `json:"last_run_unix,omitempty"`
+	DesiredLinks int                `json:"desired_links,omitempty"`
+	ActualSAs    int                `json:"actual_sas,omitempty"`
+	Actions      []linkActionState  `json:"actions,omitempty"`
+	Skipped      []linkSkipState    `json:"skipped,omitempty"`
+	LastError    string             `json:"last_error,omitempty"`
+}
+
+type observerLinkJSON struct {
+	ID              string               `json:"id"`
+	PeerZone        zone.ZonePath        `json:"peer_zone"`
+	GroupID         string               `json:"group_id,omitempty"`
+	TransportKind   string               `json:"transport_kind,omitempty"`
+	TransportID     string               `json:"transport_id,omitempty"`
+	State           string               `json:"state,omitempty"`
+	ActualState     string               `json:"actual_state,omitempty"`
+	Endpoint        string               `json:"endpoint,omitempty"`
+	InterfaceName   string               `json:"interface_name,omitempty"`
+	XFRMIfID        uint32               `json:"xfrm_if_id,omitempty"`
+	DesiredSpecHash string               `json:"desired_spec_hash,omitempty"`
+	Desired         *desiredLinkState    `json:"desired,omitempty"`
+	ActualSA        *linkSAState         `json:"actual_sa,omitempty"`
+	Health          *healthLinkJSON      `json:"health,omitempty"`
+	Routing         observerRoutingJSON  `json:"routing"`
+	Rotation        observerRotationJSON `json:"rotation"`
+	Takeover        observerTakeoverJSON `json:"takeover"`
+	Owner           linkOwnerState       `json:"owner,omitempty"`
+	FailureCount    int                  `json:"failure_count,omitempty"`
+	BackoffUntil    int64                `json:"backoff_until,omitempty"`
+	LastTransition  int64                `json:"last_transition,omitempty"`
+	LastError       string               `json:"last_error,omitempty"`
+	Raw             linkInstanceState    `json:"raw"`
+}
+
+type observerRoutingJSON struct {
+	BirdState      string `json:"bird_state,omitempty"`
+	BirdNeighbors  string `json:"bird_neighbors,omitempty"`
+	BirdBestRoutes string `json:"bird_best_routes,omitempty"`
+}
+
+type observerRotationJSON struct {
+	Phase               string `json:"phase,omitempty"`
+	RemoteGeneration    uint64 `json:"remote_generation,omitempty"`
+	StagedGeneration    uint64 `json:"staged_generation,omitempty"`
+	StagedIKEName       string `json:"staged_ike_name,omitempty"`
+	StagedChildSAName   string `json:"staged_child_sa_name,omitempty"`
+	StagedInterfaceName string `json:"staged_interface_name,omitempty"`
+	StagedXFRMIfID      uint32 `json:"staged_xfrm_if_id,omitempty"`
+	RotateDeadline      int64  `json:"rotate_deadline,omitempty"`
+}
+
+type observerTakeoverJSON struct {
+	InitiatorRole     string `json:"initiator_role,omitempty"`
+	Phase             string `json:"phase,omitempty"`
+	StartedAt         int64  `json:"started_at,omitempty"`
+	Until             int64  `json:"until,omitempty"`
+	ObservedInitiator string `json:"observed_initiator,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+}
+
 // handleLinks implements GET /api/v1/links and GET /api/v1/links/{link_id}
 func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -722,12 +784,20 @@ func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
 		writeAPIOK(w, map[string]any{"instances": []any{}})
 		return
 	}
+	healthByID := healthJSONByInstanceID(d.healthStatusResponse())
 	state := d.Sync.State
 	state.RLock()
 	defer state.RUnlock()
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/links")
 	linkFilter := strings.TrimPrefix(path, "/")
 	linkFilter = strings.TrimSuffix(linkFilter, "/")
+	reconcile := state.IPsecReconcile
+	desiredByID := map[string]desiredLinkState{}
+	saByID := map[string]linkSAState{}
+	if reconcile != nil {
+		desiredByID = desiredByInstanceID(reconcile.Desired)
+		saByID = saByInstanceID(reconcile.ActualSAs)
+	}
 	// Single link detail
 	if linkFilter != "" {
 		li, ok := state.LinkInstances[linkFilter]
@@ -735,26 +805,188 @@ func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusNotFound, fmt.Errorf("link not found"))
 			return
 		}
-		writeAPIOK(w, li)
+		writeAPIOK(w, observerLinkFromState(d, state, li, desiredByID, saByID, healthByID))
 		return
 	}
 	// All links
-	instances := make([]linkInstanceState, 0, len(state.LinkInstances))
-	for _, li := range state.LinkInstances {
-		instances = append(instances, li)
+	instances := make([]observerLinkJSON, 0, len(state.LinkInstances))
+	ids := make([]string, 0, len(state.LinkInstances))
+	for id := range state.LinkInstances {
+		ids = append(ids, id)
 	}
-	result := map[string]any{
-		"instances": instances,
+	sort.Strings(ids)
+	for _, id := range ids {
+		li := state.LinkInstances[id]
+		instances = append(instances, observerLinkFromState(d, state, li, desiredByID, saByID, healthByID))
 	}
-	if state.IPsecReconcile != nil {
-		result["last_run_unix"] = state.IPsecReconcile.LastRunUnix
-		result["desired_links"] = state.IPsecReconcile.DesiredLinks
-		result["actual_sas"] = len(state.IPsecReconcile.ActualSAs)
-		result["actions"] = state.IPsecReconcile.Actions
-		result["skipped"] = state.IPsecReconcile.Skipped
-		result["last_error"] = state.IPsecReconcile.LastError
+	result := observerLinksResponse{
+		Instances: instances,
+	}
+	if reconcile != nil {
+		result.LastRunUnix = reconcile.LastRunUnix
+		result.DesiredLinks = reconcile.DesiredLinks
+		result.ActualSAs = len(reconcile.ActualSAs)
+		result.Actions = reconcile.Actions
+		result.Skipped = reconcile.Skipped
+		result.LastError = reconcile.LastError
 	}
 	writeAPIOK(w, result)
+}
+
+func observerLinkFromState(d *DaemonService, state *stateFile, li linkInstanceState, desiredByID map[string]desiredLinkState, saByID map[string]linkSAState, healthByID map[string]healthLinkJSON) observerLinkJSON {
+	desired, hasDesired := desiredByID[li.ID]
+	sa, hasSA := saByID[li.ID]
+	health, hasHealth := healthByID[li.ID]
+	desiredPtr := (*desiredLinkState)(nil)
+	if hasDesired {
+		desiredPtr = &desired
+	}
+	saPtr := (*linkSAState)(nil)
+	if hasSA {
+		saPtr = &sa
+	}
+	healthPtr := (*healthLinkJSON)(nil)
+	if hasHealth {
+		healthPtr = &health
+	}
+	birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(observerRuntime(d), state.BirdInstances, li.GroupID)
+	return observerLinkJSON{
+		ID:              li.ID,
+		PeerZone:        li.PeerZone,
+		GroupID:         li.GroupID,
+		TransportKind:   li.TransportKind,
+		TransportID:     li.TransportID,
+		State:           firstNonEmpty(li.ActualState, "unknown"),
+		ActualState:     li.ActualState,
+		Endpoint:        firstNonEmpty(li.Endpoint, desired.Endpoint),
+		InterfaceName:   firstNonEmpty(li.InterfaceName, desired.InterfaceName),
+		XFRMIfID:        firstNonZeroUint32(li.XFRMIfID, desired.XFRMIfID),
+		DesiredSpecHash: firstNonEmpty(li.DesiredSpecHash, desired.DesiredSpecHash),
+		Desired:         desiredPtr,
+		ActualSA:        saPtr,
+		Health:          healthPtr,
+		Routing: observerRoutingJSON{
+			BirdState:      birdState,
+			BirdNeighbors:  birdNeighbors,
+			BirdBestRoutes: birdBestRoutes,
+		},
+		Rotation: observerRotationJSON{
+			Phase:               li.RotatePhase,
+			RemoteGeneration:    li.RemoteGeneration,
+			StagedGeneration:    li.StagedGeneration,
+			StagedIKEName:       li.StagedIKEName,
+			StagedChildSAName:   li.StagedChildSAName,
+			StagedInterfaceName: li.StagedInterfaceName,
+			StagedXFRMIfID:      li.StagedXFRMIfID,
+			RotateDeadline:      li.RotateDeadline,
+		},
+		Takeover: observerTakeoverJSON{
+			InitiatorRole:     li.InitiatorRole,
+			Phase:             li.TakeoverPhase,
+			StartedAt:         li.TakeoverStartedAt,
+			Until:             li.TakeoverUntil,
+			ObservedInitiator: li.ObservedInitiator,
+			LastError:         li.LastTakeoverError,
+		},
+		Owner:          li.Owner,
+		FailureCount:   li.FailureCount,
+		BackoffUntil:   li.BackoffUntil,
+		LastTransition: li.LastTransition,
+		LastError:      li.LastError,
+		Raw:            li,
+	}
+}
+
+func observerRuntime(d *DaemonService) *Runtime {
+	if d == nil || d.Sync == nil {
+		return nil
+	}
+	return d.Sync.App
+}
+
+func healthJSONByInstanceID(links []healthLinkJSON) map[string]healthLinkJSON {
+	out := make(map[string]healthLinkJSON, len(links))
+	for _, link := range links {
+		if link.InstanceID != "" {
+			out[link.InstanceID] = link
+		}
+	}
+	return out
+}
+
+func firstNonZeroUint32(values ...uint32) uint32 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) []map[string]any {
+	if d == nil || d.Sync == nil || d.Sync.State == nil {
+		out := make([]map[string]any, 0, len(links))
+		for _, link := range links {
+			out = append(out, map[string]any{"health": link})
+		}
+		return out
+	}
+	byID := healthJSONByInstanceID(links)
+	state := d.Sync.State
+	state.RLock()
+	defer state.RUnlock()
+	reconcile := state.IPsecReconcile
+	desiredByID := map[string]desiredLinkState{}
+	if reconcile != nil {
+		desiredByID = desiredByInstanceID(reconcile.Desired)
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	for id := range state.LinkInstances {
+		if _, ok := byID[id]; !ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	out := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		health, hasHealth := byID[id]
+		if !hasHealth {
+			health = healthLinkJSON{
+				InstanceID: id,
+				State:      "unknown",
+			}
+		}
+		inst, hasInst := state.LinkInstances[id]
+		desired, hasDesired := desiredByID[id]
+		item := map[string]any{"health": health}
+		if hasInst {
+			item["instance"] = inst
+			item["peer_zone"] = inst.PeerZone
+			item["group_id"] = inst.GroupID
+			item["interface_name"] = inst.InterfaceName
+			item["endpoint"] = inst.Endpoint
+			item["actual_state"] = inst.ActualState
+		}
+		if hasDesired {
+			item["desired"] = desired
+			if _, ok := item["peer_zone"]; !ok {
+				item["peer_zone"] = desired.PeerZone
+			}
+			if _, ok := item["group_id"]; !ok {
+				item["group_id"] = desired.GroupID
+			}
+			if _, ok := item["interface_name"]; !ok {
+				item["interface_name"] = desired.InterfaceName
+			}
+			item["local_tunnel_addr"] = desired.LocalTunnelAddr
+			item["peer_tunnel_addr"] = desired.PeerTunnelAddr
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // handleHealth implements GET /api/v1/health and GET /api/v1/health/{link_id}
@@ -765,14 +997,15 @@ func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	d := s.daemon
 	links := d.healthStatusResponse()
+	contextualLinks := healthLinksWithContext(d, links)
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/health")
 	linkFilter := strings.TrimPrefix(path, "/")
 	linkFilter = strings.TrimSuffix(linkFilter, "/")
 	// Single link health detail
 	if linkFilter != "" {
-		for _, h := range links {
-			if h.InstanceID == linkFilter {
-				writeAPIOK(w, h)
+		for _, item := range contextualLinks {
+			if h, ok := item["health"].(healthLinkJSON); ok && h.InstanceID == linkFilter {
+				writeAPIOK(w, item)
 				return
 			}
 		}
@@ -784,7 +1017,7 @@ func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 			"configured": false,
 			"type":       "none",
 		},
-		"links": links,
+		"links": contextualLinks,
 	})
 }
 

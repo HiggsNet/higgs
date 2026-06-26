@@ -303,6 +303,119 @@ function endpointTable(endpoints) {
         </table>`;
 }
 
+function healthValue(item) {
+    if (!item) return null;
+    return item.health || item;
+}
+
+function desiredValue(link) {
+    return (link && link.desired) || {};
+}
+
+function actualSAValue(link) {
+    return (link && link.actual_sa) || {};
+}
+
+function healthStateForLink(link) {
+    const h = healthValue(link && link.health);
+    return h ? h.state : '';
+}
+
+function pct(v) {
+    if (v == null || v === '') return '-';
+    return `${v}%`;
+}
+
+function ms(v) {
+    if (v == null || v === '' || v === 0) return '-';
+    return `${v}ms`;
+}
+
+function linkDetail(link) {
+    const desired = desiredValue(link);
+    const sa = actualSAValue(link);
+    const health = healthValue(link.health);
+    const routing = link.routing || {};
+    const rotation = link.rotation || {};
+    const takeover = link.takeover || {};
+    return `
+        <details class="record-details">
+            <summary>Inspect link diagnostics</summary>
+            <div class="detail-grid">
+                <section>
+                    <h3>Planner</h3>
+                    ${kvTable([
+                        ['Desired Hash', `<code title="${esc(desired.desired_spec_hash || '')}">${esc(shortHash(desired.desired_spec_hash || link.desired_spec_hash))}</code>`],
+                        ['Actual Hash', `<code title="${esc(link.desired_spec_hash || '')}">${esc(shortHash(link.desired_spec_hash))}</code>`],
+                        ['Endpoint', `<code>${esc(desired.endpoint || link.endpoint || '-')}</code>`],
+                        ['Local Tunnel', `<code>${esc(desired.local_tunnel_addr || '-')}</code>`],
+                        ['Peer Tunnel', `<code>${esc(desired.peer_tunnel_addr || '-')}</code>`],
+                    ])}
+                </section>
+                <section>
+                    <h3>StrongSwan</h3>
+                    ${kvTable([
+                        ['IKE', `<code>${esc(link.raw && link.raw.ike_name || sa.name || '-')}</code>`],
+                        ['Child SA', `<code>${esc(link.raw && link.raw.child_sa_name || sa.child_sa || '-')}</code>`],
+                        ['SA State', stateBadge(sa.established ? 'established' : (sa.child_state || sa.ike_state || '-'))],
+                        ['ReqID', esc(sa.reqid || '-')],
+                        ['Observed if_id', esc(sa.xfrm_if_id || '-')],
+                        ['Local Endpoint', `<code>${esc(sa.local_endpoint || '-')}</code>`],
+                        ['Remote Endpoint', `<code>${esc(sa.remote_endpoint || sa.endpoint || '-')}</code>`],
+                        ['Local Identity', `<code>${esc(sa.local_identity || '-')}</code>`],
+                        ['Remote Identity', `<code>${esc(sa.remote_identity || '-')}</code>`],
+                    ])}
+                </section>
+                <section>
+                    <h3>Health</h3>
+                    ${health ? kvTable([
+                        ['State', stateBadge(health.state)],
+                        ['Probe', esc(health.probe_type || '-')],
+                        ['Samples', `${health.sent || 0} sent, ${health.received || 0} received, ${health.lost || 0} lost`],
+                        ['Loss', pct(health.loss_ratio_pct)],
+                        ['RTT', `last ${ms(health.last_rtt_ms)}, ewma ${ms(health.ewma_rtt_ms)}, p95 ${ms(health.p95_rtt_ms)}`],
+                        ['Jitter', ms(health.jitter_ms)],
+                        ['Next Probe', formatTime(health.next_probe_unix)],
+                        ['Cutover Blocking', health.cutover_blocking ? 'Yes' : 'No'],
+                        ['Last Error', `<code>${esc(health.last_error || '-')}</code>`],
+                    ]) : emptyState('No live health sample')}
+                </section>
+                <section>
+                    <h3>Routing</h3>
+                    ${kvTable([
+                        ['BIRD State', stateBadge(routing.bird_state || '-')],
+                        ['Neighbors', esc(routing.bird_neighbors || '-')],
+                        ['Best Routes', esc(routing.bird_best_routes || '-')],
+                    ])}
+                </section>
+                <section>
+                    <h3>Rotation</h3>
+                    ${kvTable([
+                        ['Phase', esc(rotation.phase || 'idle')],
+                        ['Remote Generation', esc(rotation.remote_generation || 0)],
+                        ['Staged Generation', esc(rotation.staged_generation || 0)],
+                        ['Staged IKE', `<code>${esc(rotation.staged_ike_name || '-')}</code>`],
+                        ['Staged Child', `<code>${esc(rotation.staged_child_sa_name || '-')}</code>`],
+                        ['Staged Interface', `<code>${esc(rotation.staged_interface_name || '-')}</code>`],
+                        ['Deadline', formatTime(rotation.rotate_deadline)],
+                    ])}
+                </section>
+                <section>
+                    <h3>Takeover</h3>
+                    ${kvTable([
+                        ['Initiator Role', esc(takeover.initiator_role || '-')],
+                        ['Phase', esc(takeover.phase || '-')],
+                        ['Until', formatTime(takeover.until)],
+                        ['Observed Initiator', `<code>${esc(takeover.observed_initiator || '-')}</code>`],
+                        ['Last Error', `<code>${esc(takeover.last_error || '-')}</code>`],
+                    ])}
+                </section>
+            </div>
+            <h3>Raw JSON</h3>
+            ${jsonViewer(link)}
+        </details>`;
+}
+
 // ===== Page Renderers =====
 
 async function renderOverview() {
@@ -483,23 +596,45 @@ async function renderOverlay() {
             content.innerHTML = `<h1>Overlay</h1>${emptyState('No link instances')}</div>`;
             return;
         }
-        let rows = instances.map(li => `
+        let rows = instances.map(li => {
+            const desired = desiredValue(li);
+            const sa = actualSAValue(li);
+            const healthState = healthStateForLink(li);
+            const routing = li.routing || {};
+            return `
             <tr>
                 <td>${esc(li.id || '-')}</td>
                 <td>${esc(li.peer_zone || '-')}</td>
                 <td>${esc(li.group_id || '-')}</td>
-                <td>${stateBadge(li.actual_state)}</td>
-                <td>${esc(li.interface_name || '-')}</td>
-                <td>${esc(li.endpoint || '-')}</td>
-                <td>${esc(li.rotate_phase || 'idle')}</td>
+                <td>${stateBadge(li.state || li.actual_state)}</td>
+                <td>${stateBadge(healthState || 'unknown')}</td>
+                <td><code>${esc(li.interface_name || desired.interface_name || '-')}</code><br><span class="muted">if_id ${esc(li.xfrm_if_id || desired.xfrm_if_id || '-')}</span></td>
+                <td><code>${esc(li.endpoint || desired.endpoint || '-')}</code></td>
+                <td><code>${esc(desired.peer_tunnel_addr || '-')}</code></td>
+                <td>${stateBadge(sa.established ? 'established' : (sa.child_state || sa.ike_state || '-'))}</td>
+                <td>${stateBadge(routing.bird_state || '-')}</td>
+                <td>${esc((li.rotation && li.rotation.phase) || 'idle')}</td>
                 <td>${li.failure_count || 0}</td>
-            </tr>`).join('');
+            </tr>
+            <tr class="subrow"><td colspan="12">${linkDetail(li)}</td></tr>`;
+        }).join('');
         content.innerHTML = `
             <h1>Overlay Links</h1>
             <table>
-                <tr><th>Link ID</th><th>Peer Zone</th><th>Group</th><th>State</th><th>Interface</th><th>Endpoint</th><th>Rotate</th><th>Failures</th></tr>
+                <tr><th>Link ID</th><th>Peer Zone</th><th>Group</th><th>State</th><th>Health</th><th>Interface</th><th>Endpoint</th><th>Peer Tunnel</th><th>SA</th><th>Routing</th><th>Rotate</th><th>Failures</th></tr>
                 ${rows}
-            </table>`;
+            </table>
+            <h2>Reconcile</h2>
+            ${kvTable([
+                ['Last Run', formatTime(data.last_run_unix)],
+                ['Desired Links', esc(data.desired_links || 0)],
+                ['Actual SAs', esc(data.actual_sas || 0)],
+                ['Last Error', `<code>${esc(data.last_error || '-')}</code>`],
+            ])}
+            <h2>Actions</h2>
+            ${jsonViewer(data.actions || [])}
+            <h2>Skipped</h2>
+            ${jsonViewer(data.skipped || [])}`;
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load links: ${esc(e.message)}</div>`;
     }
@@ -514,21 +649,30 @@ async function renderHealth() {
             content.innerHTML = `<h1>Health</h1>${emptyState('No health data available')}`;
             return;
         }
-        let rows = links.map(h => `
+        let rows = links.map(item => {
+            const h = healthValue(item);
+            const desired = item.desired || {};
+            return `
             <tr>
                 <td>${esc(h.instance_id || '-')}</td>
+                <td>${esc(item.peer_zone || '-')}</td>
+                <td>${esc(item.group_id || '-')}</td>
+                <td><code>${esc(item.interface_name || desired.interface_name || '-')}</code></td>
+                <td><code>${esc(item.peer_tunnel_addr || desired.peer_tunnel_addr || '-')}</code></td>
                 <td>${stateBadge(h.state)}</td>
                 <td>${esc(h.probe_type || '-')}</td>
-                <td>${h.last_rtt_ms || 0}ms</td>
-                <td>${h.loss_ratio_pct || 0}%</td>
-                <td>${h.jitter_ms || 0}ms</td>
+                <td>${ms(h.last_rtt_ms)}</td>
+                <td>${pct(h.loss_ratio_pct)}</td>
+                <td>${ms(h.jitter_ms)}</td>
                 <td>${h.cutover_blocking ? 'Yes' : 'No'}</td>
                 <td>${esc(h.last_error || '-')}</td>
-            </tr>`).join('');
+            </tr>
+            <tr class="subrow"><td colspan="12">${jsonViewer(item)}</td></tr>`;
+        }).join('');
         content.innerHTML = `
             <h1>Link Health</h1>
             <table>
-                <tr><th>Link ID</th><th>State</th><th>Probe</th><th>RTT</th><th>Loss</th><th>Jitter</th><th>Cutover Block</th><th>Error</th></tr>
+                <tr><th>Link ID</th><th>Peer</th><th>Group</th><th>Interface</th><th>Peer Tunnel</th><th>State</th><th>Probe</th><th>RTT</th><th>Loss</th><th>Jitter</th><th>Cutover Block</th><th>Error</th></tr>
                 ${rows}
             </table>`;
     } catch (e) {

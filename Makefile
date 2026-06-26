@@ -106,7 +106,7 @@ revocation-data-plane-container-smoke:
 	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/revocation-data-plane-container-smoke.sh
 
 observer-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ParseObserverConfig|ObserverConfig|SSEHub|Observer(Status|Handler|Zones|Peers|Links|Routes|Bird|Events|Static|StartObserver|NotifyObserver)|Web(SubFS|AppEscapesHTML))' -v
+	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ParseObserverConfig|ObserverConfig|SSEHub|Observer(Status|Handler|Zones|Peers|Links|Health|Routes|Bird|Events|Static|StartObserver|NotifyObserver)|Web(SubFS|AppEscapesHTML))' -v
 	@echo "Observer smoke passed"
 
 # Smoke 目标约定：

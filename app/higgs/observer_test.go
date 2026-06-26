@@ -16,6 +16,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 // ===== Observer Config Tests =====
@@ -616,6 +617,146 @@ func TestObserverLinksAPIEmpty(t *testing.T) {
 	instances := data["instances"].([]any)
 	if len(instances) != 0 {
 		t.Errorf("instances count = %d, want 0", len(instances))
+	}
+}
+
+func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
+	srv := newTestObserverServer()
+	srv.daemon.Sync.App.Config = &appConfig{
+		IPsec: ipsecConfig{
+			LinkGroups: []ipsec.LinkGroupSpec{{
+				ID:    "blue",
+				NetNS: ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "hgs-blue"},
+			}},
+		},
+		Routing: routingConfig{
+			Instances: []RoutingInstance{{
+				Enabled: true,
+				NetNS:   "hgs-blue",
+			}},
+		},
+	}
+	state := srv.daemon.Sync.State
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-1": {
+			ID:              "link-1",
+			GroupID:         "blue",
+			PeerZone:        "node-b.catofes.",
+			ActualState:     "up",
+			InterfaceName:   "hgs0",
+			XFRMIfID:        42,
+			Endpoint:        "198.51.100.10:4500",
+			DesiredSpecHash: "abcdef0123456789",
+			ChildSAName:     "child-link-1",
+			InitiatorRole:   "primary",
+		},
+	}
+	state.IPsecReconcile = &ipsecReconcileState{
+		LastRunUnix:  123,
+		DesiredLinks: 1,
+		Desired: []desiredLinkState{{
+			InstanceID:      "link-1",
+			GroupID:         "blue",
+			PeerZone:        "node-b.catofes.",
+			DesiredSpecHash: "abcdef0123456789",
+			InterfaceName:   "hgs0",
+			XFRMIfID:        42,
+			Endpoint:        "198.51.100.10:4500",
+			LocalTunnelAddr: "fd00::1%hgs0",
+			PeerTunnelAddr:  "fd00::2%hgs0",
+		}},
+		ActualSAs: []linkSAState{{
+			Name:           "link-1",
+			ChildSA:        "child-link-1",
+			Established:    true,
+			ReqID:          77,
+			LocalIdentity:  "node-a.catofes.",
+			RemoteIdentity: "node-b.catofes.",
+		}},
+	}
+	state.BirdInstances = map[string]*BirdInstanceState{
+		"hgs-blue": {State: "running"},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
+	rr := httptest.NewRecorder()
+	srv.handleLinks(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var resp apiResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	instances := data["instances"].([]any)
+	if len(instances) != 1 {
+		t.Fatalf("instances count = %d, want 1", len(instances))
+	}
+	link := instances[0].(map[string]any)
+	if link["state"] != "up" {
+		t.Fatalf("state = %v, want up", link["state"])
+	}
+	desired := link["desired"].(map[string]any)
+	if desired["peer_tunnel_addr"] != "fd00::2%hgs0" {
+		t.Fatalf("peer_tunnel_addr = %v, want fd00::2%%hgs0", desired["peer_tunnel_addr"])
+	}
+	sa := link["actual_sa"].(map[string]any)
+	if sa["reqid"].(float64) != 77 || sa["remote_identity"] != "node-b.catofes." {
+		t.Fatalf("actual_sa = %#v, want reqid and remote identity", sa)
+	}
+	routing := link["routing"].(map[string]any)
+	if routing["bird_state"] != "running" {
+		t.Fatalf("bird_state = %v, want running", routing["bird_state"])
+	}
+}
+
+func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
+	srv := newTestObserverServer()
+	state := srv.daemon.Sync.State
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-1": {
+			ID:            "link-1",
+			GroupID:       "blue",
+			PeerZone:      "node-b.catofes.",
+			ActualState:   "up",
+			InterfaceName: "hgs0",
+			Endpoint:      "198.51.100.10:4500",
+		},
+	}
+	state.IPsecReconcile = &ipsecReconcileState{
+		Desired: []desiredLinkState{{
+			InstanceID:      "link-1",
+			GroupID:         "blue",
+			PeerZone:        "node-b.catofes.",
+			InterfaceName:   "hgs0",
+			LocalTunnelAddr: "fd00::1%hgs0",
+			PeerTunnelAddr:  "fd00::2%hgs0",
+		}},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	rr := httptest.NewRecorder()
+	srv.handleHealth(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var resp apiResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	links := data["links"].([]any)
+	if len(links) != 1 {
+		t.Fatalf("health links = %d, want 1", len(links))
+	}
+	item := links[0].(map[string]any)
+	if item["peer_zone"] != "node-b.catofes." || item["peer_tunnel_addr"] != "fd00::2%hgs0" {
+		t.Fatalf("health context = %#v, want peer and tunnel context", item)
+	}
+	health := item["health"].(map[string]any)
+	if health["state"] != "unknown" {
+		t.Fatalf("health state = %v, want unknown", health["state"])
 	}
 }
 

@@ -231,3 +231,19 @@ code {
 .mini-table .value-cell {
     max-width: 280px;
 }
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px 18px;
+    margin: 8px 0 12px;
+}
+
+.detail-grid section {
+    min-width: 0;
+}
+
+.muted {
+    color: var(--text-dim);
+    font-size: 12px;
+}
