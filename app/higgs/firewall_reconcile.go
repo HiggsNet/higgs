@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/netip"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -75,7 +73,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 
 	var firstErr error
 	for _, instCfg := range instances {
-		listenAddrs := firewallInstanceListenAddrs(config, instCfg)
+		listenAddrs := instCfg.ListenAddrs
 		spec := firewallInstanceSpecFromConfig(instCfg, listenAddrs, charonIKE, charonNATT)
 		input := buildFirewallPolicyInput(spec, ars, d.Sync.State, config)
 		desired, err := firewall.BuildDesiredState(spec, input)
@@ -342,34 +340,6 @@ func extractIPsecRedirectPortsFromNetwork(network *zone.NetworkState, managedZon
 
 // nowFunc returns the current time. Overridable in tests.
 var nowFunc = func() time.Time { return time.Time{} }
-
-// firewallListenAddrs derives host listen addresses from config.
-func firewallListenAddrs(config *appConfig) []netip.Addr {
-	var out []netip.Addr
-	for _, addr := range config.AdvertiseAddrs {
-		if ip, err := netip.ParseAddr(addr); err == nil {
-			out = append(out, ip)
-			continue
-		}
-		// Try host:port split
-		if host, _, err := net.SplitHostPort(addr); err == nil {
-			if ip, err := netip.ParseAddr(host); err == nil {
-				out = append(out, ip)
-			}
-		}
-	}
-	return out
-}
-
-// firewallInstanceListenAddrs returns the listen addresses for a specific
-// firewall instance. If the instance declares its own listen_addrs, those are
-// used; otherwise the top-level advertise_addrs are used as a fallback.
-func firewallInstanceListenAddrs(config *appConfig, inst FirewallInstanceConfig) []netip.Addr {
-	if len(inst.ListenAddrs) > 0 {
-		return inst.ListenAddrs
-	}
-	return firewallListenAddrs(config)
-}
 
 // firewallCharonPorts returns the current charon IKE/NAT-T listen ports.
 // First version: defaults (500/4500). Future: derive from ipsec port record.

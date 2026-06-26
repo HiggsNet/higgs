@@ -81,7 +81,7 @@ type FirewallInstanceSpec struct {
 	// Host-only inputs.
 	HostPorts      HostPortConfig
 	RedirectGrace  RedirectGrace
-	ListenAddrs    []netip.Addr // host listen/advertise addresses to bind rules
+	ListenAddrs    []netip.Addr // host listen addresses to bind rules (empty = no daddr binding)
 	CharonIKEPort  uint16       // current charon IKE listen port (default 500)
 	CharonNATTPort uint16       // current charon NAT-T listen port (default 4500)
 	WGPort         uint16       // current WireGuard listen port (default 51820)

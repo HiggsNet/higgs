@@ -292,11 +292,11 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 
 	// IKE ingress
 	if spec.HostPorts.IKE {
-		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, ikePort, spec.ListenAddrs, "ike ingress"))
+		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, ikePort, spec.ListenAddrs, "ike ingress")...)
 	}
 	// NAT-T ingress
 	if spec.HostPorts.NATT {
-		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, nattPort, spec.ListenAddrs, "natt ingress"))
+		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, nattPort, spec.ListenAddrs, "natt ingress")...)
 	}
 	// WireGuard ingress (for Phase 7 WireGuard transport driver).
 	wgPort := spec.WGPort
@@ -304,7 +304,7 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 		wgPort = 51820
 	}
 	if spec.HostPorts.WG {
-		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, wgPort, spec.ListenAddrs, "wg ingress"))
+		desired.HostIngress = append(desired.HostIngress, buildHostIngress(ProtoUDP, wgPort, spec.ListenAddrs, "wg ingress")...)
 	}
 
 	// Redirect advertised ports to the current local listener ports. Current
@@ -408,12 +408,19 @@ func natSourceKey(original, target, dstPort uint16, addr netip.Addr) string {
 	return fmt.Sprintf("%d/%d/%d/%s", original, target, dstPort, addrPart)
 }
 
-func buildHostIngress(proto string, port uint16, listenAddrs []netip.Addr, comment string) HostIngressRule {
-	rule := HostIngressRule{Proto: proto, Port: port, Comment: comment}
-	if len(listenAddrs) == 1 {
-		rule.DstAddr = listenAddrs[0]
+// buildHostIngress builds host ingress rule(s) for a service port. With no
+// listen_addrs it returns a single rule with no destination binding (matches
+// any local address); with one or more listen_addrs it returns one rule per
+// address, each scoped to its destination — mirroring addNatRedirects.
+func buildHostIngress(proto string, port uint16, listenAddrs []netip.Addr, comment string) []HostIngressRule {
+	if len(listenAddrs) == 0 {
+		return []HostIngressRule{{Proto: proto, Port: port, Comment: comment}}
 	}
-	return rule
+	rules := make([]HostIngressRule, 0, len(listenAddrs))
+	for _, addr := range listenAddrs {
+		rules = append(rules, HostIngressRule{Proto: proto, Port: port, DstAddr: addr, Comment: comment})
+	}
+	return rules
 }
 
 func firstListenAddr(addrs []netip.Addr) netip.Addr {

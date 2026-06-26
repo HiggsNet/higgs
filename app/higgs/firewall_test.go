@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -211,33 +210,6 @@ firewall:
 	}
 	if !strings.Contains(err.Error(), "listen_addrs") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestFirewallInstanceListenAddrsOverride(t *testing.T) {
-	config := defaultAppConfig()
-	config.AdvertiseAddrs = []string{"203.0.113.10"}
-	inst := FirewallInstanceConfig{
-		ID:     "host-ipsec",
-		IsHost: true,
-		ListenAddrs: func() []netip.Addr {
-			ip, _ := netip.ParseAddr("172.17.16.168")
-			return []netip.Addr{ip}
-		}(),
-	}
-	got := firewallInstanceListenAddrs(config, inst)
-	if len(got) != 1 || got[0].String() != "172.17.16.168" {
-		t.Fatalf("expected instance listen addrs to override advertise_addrs, got %+v", got)
-	}
-}
-
-func TestFirewallInstanceListenAddrsFallback(t *testing.T) {
-	config := defaultAppConfig()
-	config.AdvertiseAddrs = []string{"203.0.113.10"}
-	inst := FirewallInstanceConfig{ID: "host-ipsec", IsHost: true}
-	got := firewallInstanceListenAddrs(config, inst)
-	if len(got) != 1 || got[0].String() != "203.0.113.10" {
-		t.Fatalf("expected fallback to advertise_addrs, got %+v", got)
 	}
 }
 

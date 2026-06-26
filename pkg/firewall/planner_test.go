@@ -165,6 +165,71 @@ func TestBuildDesiredState_HostInstance(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredState_HostIngressListenAddrsBinding(t *testing.T) {
+	addrA := netip.MustParseAddr("192.0.2.10")
+	addrB := netip.MustParseAddr("2001:db8::10")
+
+	t.Run("empty binds no destination", func(t *testing.T) {
+		spec := FirewallInstanceSpec{
+			ID:            "host-ipsec",
+			NetNS:         "host",
+			IsHost:        true,
+			Enabled:       true,
+			Mode:          ModeManaged,
+			HostPorts:     HostPortConfig{IKE: true, NATT: true},
+			RedirectGrace: RedirectGrace{Enabled: true},
+		}
+		desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+		if err != nil {
+			t.Fatalf("BuildDesiredState: %v", err)
+		}
+		if len(desired.HostIngress) == 0 {
+			t.Fatal("expected host ingress rules")
+		}
+		for _, hi := range desired.HostIngress {
+			if hi.DstAddr.IsValid() {
+				t.Errorf("port %d: expected no daddr binding, got %s", hi.Port, hi.DstAddr)
+			}
+		}
+	})
+
+	t.Run("multiple addrs bind one rule per address", func(t *testing.T) {
+		spec := FirewallInstanceSpec{
+			ID:            "host-ipsec",
+			NetNS:         "host",
+			IsHost:        true,
+			Enabled:       true,
+			Mode:          ModeManaged,
+			HostPorts:     HostPortConfig{IKE: true},
+			ListenAddrs:   []netip.Addr{addrA, addrB},
+			RedirectGrace: RedirectGrace{Enabled: true},
+		}
+		desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+		if err != nil {
+			t.Fatalf("BuildDesiredState: %v", err)
+		}
+		// IKE only -> exactly one ingress rule per listen addr, in order.
+		var got []netip.Addr
+		for _, hi := range desired.HostIngress {
+			if hi.Port != defaultIKEPort {
+				t.Errorf("unexpected ingress port %d", hi.Port)
+				continue
+			}
+			if !hi.DstAddr.IsValid() {
+				t.Errorf("port %d: expected daddr binding, got none", hi.Port)
+				continue
+			}
+			got = append(got, hi.DstAddr)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 ingress rules (one per addr), got %d: %+v", len(got), got)
+		}
+		if !(got[0] == addrA && got[1] == addrB) {
+			t.Errorf("ingress addrs = %+v, want [%s %s]", got, addrA, addrB)
+		}
+	})
+}
+
 func TestBuildDesiredState_Disabled(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID:   "h2",

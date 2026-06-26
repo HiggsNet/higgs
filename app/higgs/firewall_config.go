@@ -34,11 +34,12 @@ type FirewallInstanceConfig struct {
 	HostPorts     firewall.HostPortConfig
 	RedirectGrace firewall.RedirectGrace
 
-	// ListenAddrs are the local addresses used for host ingress and DNAT/redirect
-	// rules. If empty, the top-level advertise_addrs are used. This is useful when
-	// the host is behind a gateway that DNATs public addresses to private addresses
-	// before packets reach the local firewall: rules must match the post-DNAT
-	// (local) destination address.
+	// ListenAddrs are the local addresses used to scope host ingress and
+	// DNAT/redirect rules to a destination address. Set this when the host is
+	// behind a gateway that DNATs a public address to a private address before
+	// packets reach the local firewall: rules must match the post-DNAT (local)
+	// destination address. If empty, no destination binding is applied and rules
+	// match any local address.
 	ListenAddrs []netip.Addr
 
 	Hooks firewall.Hooks
