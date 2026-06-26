@@ -509,6 +509,17 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		r.add(ReconcileActionRepair, &spec, &inst, "driver state missing after convergence")
 		return
 	}
+	if inst.ActualState == LinkStateError || inst.ActualState == LinkStateDegraded {
+		if inLinkBackoff(inst, now) {
+			r.add(ReconcileActionNoop, &spec, &inst, "apply backoff active")
+			return
+		}
+		inst.ActualState = LinkStateDegraded
+		inst.LastTransition = now.Unix()
+		r.Instances[id] = inst
+		r.add(ReconcileActionUpdate, &spec, &inst, "standby driver state missing")
+		return
+	}
 	ok, reason := shouldSecondaryTakeover(inst, InitiatorRoleSecondaryStandby, spec, sa, policy, now)
 	if !ok {
 		r.add(ReconcileActionNoop, &spec, &inst, reason)

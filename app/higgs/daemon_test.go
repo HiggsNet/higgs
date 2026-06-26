@@ -3493,6 +3493,32 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	}
 }
 
+func TestMarkIPsecActionSucceededKeepsSecondaryStandbyDownAfterUpdate(t *testing.T) {
+	now := time.Unix(5102, 0)
+	spec := ipsec.TransportLinkSpec{
+		LocalZone:     "node-b.catofes.",
+		PeerZone:      "node-a.catofes.",
+		OverlayID:     "main",
+		TransportID:   "ipsec-standby",
+		InterfaceName: "hgs-standby",
+		XFRMIfID:      5102,
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateDegraded, now)
+	inst.InitiatorRole = ipsec.InitiatorRoleSecondaryStandby
+	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
+
+	markIPsecActionSucceeded(instances, ipsec.ReconcileAction{
+		Action:   ipsec.ReconcileActionUpdate,
+		Spec:     &spec,
+		Instance: &inst,
+	}, now.Add(time.Second))
+
+	got := instances[inst.ID]
+	if got.ActualState != ipsec.LinkStateDown {
+		t.Fatalf("state = %q, want down for standby update", got.ActualState)
+	}
+}
+
 func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.LinkInstances = nil

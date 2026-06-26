@@ -1119,6 +1119,43 @@ func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
 	}
 }
 
+func TestReconcileSecondaryStandbyRepairsMissingDriverStateWithoutTakeover(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{ID: "ipsec-main"}
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	spec := plan.Desired[0]
+	inst := NewLinkInstance(spec, LinkStateDown, now.Add(-time.Minute))
+	inst.InitiatorRole = InitiatorRoleSecondaryStandby
+	inst.ActualState = LinkStateDegraded
+	inst.LastError = "xfrm namespace or interface missing"
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          now,
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionUpdate || result.Actions[0].Reason != "standby driver state missing" {
+		t.Fatalf("expected standby update, got %+v", result.Actions)
+	}
+	got := result.Instances[inst.ID]
+	if got.InitiatorRole != InitiatorRoleSecondaryStandby || got.TakeoverPhase != TakeoverPhaseIdle {
+		t.Fatalf("instance = %+v, want standby without takeover", got)
+	}
+}
+
 func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 	base := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

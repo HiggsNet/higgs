@@ -493,7 +493,11 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 	inst = ipsec.MarkLinkApplySuccess(inst, now)
 	switch action.Action {
 	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareRotate:
-		inst.ActualState = ipsec.LinkStateConnecting
+		if action.Action == ipsec.ReconcileActionUpdate && inst.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby {
+			inst.ActualState = ipsec.LinkStateDown
+		} else {
+			inst.ActualState = ipsec.LinkStateConnecting
+		}
 		inst.LastTransition = now.Unix()
 		if inst.StagedGeneration != 0 {
 			inst.RotatePhase = ipsec.RotatePhaseTestingNew
