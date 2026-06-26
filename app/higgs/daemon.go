@@ -79,6 +79,7 @@ const (
 	daemonEventRemoteApplied      daemonEventType = "remote_announce_applied"
 	daemonEventSyncTrigger        daemonEventType = "sync_trigger"
 	daemonEventReloadConfig       daemonEventType = "reload_config"
+	daemonEventIPsecCleanup       daemonEventType = "ipsec_cleanup"
 	daemonEventIPsecLifecycle     daemonEventType = "ipsec_lifecycle"
 	daemonEventShutdown           daemonEventType = "shutdown"
 )
@@ -108,6 +109,7 @@ type daemonRecordPut struct {
 
 type daemonEventResult struct {
 	Version       uint64
+	CleanedLinks  int
 	Zone          zone.ZonePath
 	RootPublicKey []byte
 	JoinBundle    *joinBundle
@@ -522,6 +524,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "config reloaded"})
+	case "ipsec_cleanup":
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecCleanup})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, CleanedLinks: result.CleanedLinks, Message: "ipsec links cleaned"})
 	case "shutdown":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventShutdown})
 		if result.Error != nil {
@@ -659,13 +668,16 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 		d.flushRevocationCleanup()
 		firewallFlushed = d.flushFirewallReconcile(ctx)
 		routingFlushed = d.flushRoutingReconcile(ctx)
-		ipsecFlushed = d.flushIPsecReconcile(ctx)
+		ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
 		d.flushRevocationCleanup()
 	}()
 	for {
 		select {
 		case event := <-d.Events:
 			result, triggerSync, stop := d.handleEvent(event)
+			if event.Type == daemonEventIPsecCleanup && result.Error == nil {
+				ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
+			}
 			if event.Reply != nil {
 				event.Reply <- result
 			}
@@ -719,6 +731,12 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventReloadConfig:
 		err := d.handleReloadConfigEvent()
 		return daemonEventResult{Error: err}, err == nil, false
+	case daemonEventIPsecCleanup:
+		cleaned, err := d.handleIPsecCleanupEvent(controlContext(event.Context))
+		if err == nil {
+			d.ipsecDirty = true
+		}
+		return daemonEventResult{CleanedLinks: cleaned, Error: err}, false, false
 	case daemonEventIPsecLifecycle:
 		d.handleIPsecLifecycleEvent(event.VICIEvent)
 		return daemonEventResult{}, false, false

@@ -133,6 +133,70 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 	}
 }
 
+func TestSystemXFRMDriverInspectsMissingNamedNamespace(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			if strings.Join(args, " ") == "netns exec h2 true" {
+				return nil, errors.New("missing")
+			}
+			return []byte("ok"), nil
+		},
+	}
+	state, err := driver.InspectLink(context.Background(), TransportLinkSpec{
+		InterfaceName: "hgs1",
+		XFRMIfID:      42,
+		NetNS:         "h2",
+	})
+	if err != nil {
+		t.Fatalf("InspectLink: %v", err)
+	}
+	if state.NamespaceExists || state.InterfaceExists {
+		t.Fatalf("state = %+v, want missing namespace and interface", state)
+	}
+	got := commandStrings(commands)
+	want := []string{"ip netns exec h2 true"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if strings.Join(args, " ") == "netns exec h2 true" {
+				return nil, errors.New("missing")
+			}
+			return []byte("ok"), nil
+		},
+	}
+	spec := TransportLinkSpec{
+		TransportID:   "ipsec-1",
+		InterfaceName: "hgs1",
+		XFRMIfID:      42,
+		NetNS:         "h2",
+	}
+	sas := []SAState{{
+		Name:        spec.TransportID,
+		ChildSA:     ChildSAName(spec),
+		XFRMIfID:    spec.XFRMIfID,
+		Established: true,
+	}}
+	filtered, missing, err := driver.FilterSAsWithMissingLinks(context.Background(), []TransportLinkSpec{spec}, sas)
+	if err != nil {
+		t.Fatalf("FilterSAsWithMissingLinks: %v", err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("filtered SAs = %+v, want matching SA suppressed", filtered)
+	}
+	if got := missing[LinkInstanceID(spec)]; got.TransportID != spec.TransportID {
+		t.Fatalf("missing = %+v, want spec %s", missing, spec.TransportID)
+	}
+}
+
 func TestSystemXFRMDriverIntegrationSmoke(t *testing.T) {
 	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
 		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system XFRM smoke")

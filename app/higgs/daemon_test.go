@@ -1376,6 +1376,70 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	}
 }
 
+func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4126, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	group := testIPsecLinkGroup()
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
+	}
+	spec := plan.Desired[0]
+	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now.Add(-time.Minute))
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+		persisted.ID: persisted,
+	})
+	driver := &observedIPsecDriver{
+		sas: []ipsec.SAState{{
+			Name:        spec.TransportID,
+			ChildSA:     ipsec.ChildSAName(spec),
+			XFRMIfID:    spec.XFRMIfID,
+			Endpoint:    "198.51.100.20",
+			Established: true,
+		}},
+		linkState: &ipsec.XFRMLinkState{
+			NetNS:           group.NetNS,
+			NamespaceExists: false,
+			InterfaceExists: false,
+		},
+	}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.recoverIPsecLinksOnStart(context.Background())
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionRepair {
+		t.Fatalf("startup reconcile = %+v, want repair", latest.IPsecReconcile)
+	}
+	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	if inst.ActualState != ipsec.LinkStateConnecting {
+		t.Fatalf("instance = %+v, want connecting after repair apply", inst)
+	}
+	assertDryRunApply(t, driver, spec, group.NetNS)
+	if len(latest.IPsecReconcile.ActualSAs) != 0 {
+		t.Fatalf("actual SAs = %+v, want missing xfrm link to suppress matching SA", latest.IPsecReconcile.ActualSAs)
+	}
+}
+
 func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	now := time.Unix(4130, 0)
 	stateA, configA := buildTestNetworkState(t)
@@ -2092,12 +2156,55 @@ func TestRootCommandIncludesDaemon(t *testing.T) {
 type observedIPsecDriver struct {
 	ipsec.DryRunDriver
 	sas       []ipsec.SAState
+	linkState *ipsec.XFRMLinkState
 	listCalls int
 }
 
 func (d *observedIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
 	d.listCalls++
 	return d.sas, nil
+}
+
+func (d *observedIPsecDriver) InspectLink(_ context.Context, spec ipsec.TransportLinkSpec) (ipsec.XFRMLinkState, error) {
+	if d.linkState != nil {
+		return *d.linkState, nil
+	}
+	return ipsec.XFRMLinkState{
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: spec.NetNS}.Normalized(),
+		NamespaceExists: true,
+		InterfaceExists: true,
+	}, nil
+}
+
+func (d *observedIPsecDriver) FilterSAsWithMissingLinks(ctx context.Context, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
+	missing := make(map[string]ipsec.TransportLinkSpec)
+	for _, spec := range desired {
+		state, err := d.InspectLink(ctx, spec)
+		if err != nil {
+			return nil, nil, err
+		}
+		if state.NamespaceExists && state.InterfaceExists {
+			continue
+		}
+		missing[ipsec.LinkInstanceID(spec)] = spec
+	}
+	if len(missing) == 0 {
+		return sas, missing, nil
+	}
+	filtered := sas[:0]
+	for _, sa := range sas {
+		drop := false
+		for _, spec := range missing {
+			if sa.Name == spec.TransportID || sa.ChildSA == ipsec.ChildSAName(spec) || sa.XFRMIfID == spec.XFRMIfID {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			filtered = append(filtered, sa)
+		}
+	}
+	return filtered, missing, nil
 }
 
 type countingIPsecDriver struct {
@@ -3344,6 +3451,135 @@ func TestDaemonRemoteAppliedEventUpdatesPeerState(t *testing.T) {
 	}
 	if got := latest.SyncPeers["node-a.catofes."].LastUpdateSource; got != "node-a.catofes." {
 		t.Fatalf("LastUpdateSource = %q, want node-a.catofes.", got)
+	}
+}
+
+func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(5100, 0)
+	spec := ipsec.TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "main",
+		TransportID:   "ipsec-cleanup",
+		InterfaceName: "hgs-clean0",
+		XFRMIfID:      5100,
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	driver := &ipsec.DryRunDriver{}
+
+	cleaned, err := cleanupIPsecLinkInstances(context.Background(), state, driver, driver, now)
+	if err != nil {
+		t.Fatalf("cleanupIPsecLinkInstances: %v", err)
+	}
+	if cleaned != 1 {
+		t.Fatalf("cleaned = %d, want 1", cleaned)
+	}
+	if len(state.LinkInstances) != 0 {
+		t.Fatalf("link instances = %+v, want empty", state.LinkInstances)
+	}
+	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID {
+		t.Fatalf("terminated = %+v, want %s", driver.Terminated, spec.TransportID)
+	}
+	if len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID {
+		t.Fatalf("unloaded = %+v, want %s", driver.Unloaded, spec.TransportID)
+	}
+	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
+		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
+	}
+	if state.IPsecReconcile == nil || state.IPsecReconcile.LastRunUnix != now.Unix() || state.IPsecReconcile.LastError != "" {
+		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp and no error", state.IPsecReconcile)
+	}
+}
+
+func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.LinkInstances = nil
+	now := time.Unix(5105, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	cleaned, err := recoveryCleanupIPsecDirect(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("recoveryCleanupIPsecDirect: %v", err)
+	}
+	if cleaned != 0 {
+		t.Fatalf("cleaned = %d, want 0", cleaned)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastRunUnix != now.Unix() {
+		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp", latest.IPsecReconcile)
+	}
+}
+
+func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(5110, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	appConfig := defaultAppConfig()
+	group := testIPsecLinkGroup()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
+	}
+	spec := plan.Desired[0]
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &observedIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	reply := make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Reply: reply}
+	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background())
+	result := <-reply
+	if result.Error != nil {
+		t.Fatalf("processEvents(ipsec_cleanup): %v", result.Error)
+	}
+	if result.CleanedLinks != 1 || syncNow || shutdown {
+		t.Fatalf("result=%+v syncNow=%v shutdown=%v, want one cleaned and no sync/shutdown", result, syncNow, shutdown)
+	}
+	if !ipsecFlushed {
+		t.Fatal("ipsec cleanup did not flush reconcile")
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("persisted link instances = %+v, want recreated link", latest.LinkInstances)
+	}
+	recreated := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	if recreated.ActualState != ipsec.LinkStateConnecting {
+		t.Fatalf("recreated instance = %+v, want connecting", recreated)
+	}
+	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID || len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID || len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
+		t.Fatalf("driver cleanup: terminated=%+v unloaded=%+v deleted=%+v", driver.Terminated, driver.Unloaded, driver.DeletedIFs)
+	}
+	if len(driver.Connections) != 1 || driver.Connections[0].TransportID != spec.TransportID || len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName {
+		t.Fatalf("driver recreate: connections=%+v interfaces=%+v", driver.Connections, driver.Interfaces)
 	}
 }
 

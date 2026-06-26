@@ -77,6 +77,20 @@ type XFRMDriver interface {
 	AssignAddress(context.Context, string, string) error
 }
 
+type XFRMLinkState struct {
+	NetNS           NetNSSpec
+	NamespaceExists bool
+	InterfaceExists bool
+}
+
+type XFRMLinkInspector interface {
+	InspectLink(context.Context, TransportLinkSpec) (XFRMLinkState, error)
+}
+
+type XFRMSAFilter interface {
+	FilterSAsWithMissingLinks(context.Context, []TransportLinkSpec, []SAState) ([]SAState, map[string]TransportLinkSpec, error)
+}
+
 type DryRunDriver struct {
 	Connections  []TransportLinkSpec
 	Initiated    []string

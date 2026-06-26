@@ -735,6 +735,14 @@ HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery pull-chain node-
 
 这些命令绕过普通 sync 对本机 `managed_zone` 的保护性跳过逻辑，但仍使用 TCP object pull 获取 `ZoneSnapshot`，并通过现有 signature / delegation-chain 验证后才合并入本地 DB。恢复 `.` 时，如果配置了 `trusted_root_public_key`，拉到的 root authority 必须包含该 trusted key；如果没有配置 trusted root，则 root recovery 不允许改变本地 root authority。远端 snapshot 缺失的本地对象不会被删除，revocation 仍按现有优先级覆盖对应 delegation。
 
+如果本机 StrongSwan/XFRM 状态出现不一致，可以显式清理当前 Higgs 管理的 IPsec link：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery cleanup-ipsec
+```
+
+该命令优先通过 daemon control socket 串行执行；daemon 不在线时才直接操作本地 state DB 和系统 driver。它只清理带有 Higgs `ResourceOwner` 证明、且命名符合 `ipsec-*` / `hgs*` 约束的连接和 interface，避免误删管理员手工管理的 IPsec/XFRM 资源。daemon 在线时，清理后会默认立即触发一次 IPsec reconcile，让 desired link 按当前配置重新收敛；daemon 不在线的 direct recovery 路径则等待下一次 daemon 启动恢复。
+
 真实公网多节点 daemon gossip 测试见 [docs/public-internet-test.md](docs/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
 
 ## 当前数据面现状
@@ -768,6 +776,7 @@ build/higgs sync once <peer-id>
 build/higgs sync run [--interval seconds]
 build/higgs recovery pull-zone <zone> --from <peer-id>
 build/higgs recovery pull-chain <zone> --from <peer-id>
+build/higgs recovery cleanup-ipsec
 build/higgs debug peer <peer-id>
 build/higgs debug zone <zone>
 build/higgs db dump [zone]

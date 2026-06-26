@@ -39,9 +39,16 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		d.recordIPsecReconcileError(now.Unix(), err)
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
+	instances := linkInstancesToIPsec(d.Sync.State.LinkInstances)
+	sas, missingXFRMLinks, err := d.filterSAsWithMissingXFRMLinks(ctx, xfrmDriver, plan.Desired, sas)
+	if err != nil {
+		d.recordIPsecReconcileError(now.Unix(), err)
+		return fmt.Errorf("inspect xfrm links: %w", err)
+	}
+	markMissingXFRMLinkInstances(instances, missingXFRMLinks, now)
 	result := ipsec.ReconcileLinkInstances(ipsec.ReconcileInputs{
 		Desired:              plan.Desired,
-		Instances:            linkInstancesToIPsec(d.Sync.State.LinkInstances),
+		Instances:            instances,
 		SAs:                  sas,
 		Now:                  now,
 		Revoked:              revokedLinkPeers(d.Sync.State, now),
@@ -74,6 +81,42 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
+}
+
+func (d *DaemonService) filterSAsWithMissingXFRMLinks(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
+	filter, ok := xfrmDriver.(ipsec.XFRMSAFilter)
+	if !ok {
+		return sas, nil, nil
+	}
+	filtered, missing, err := filter.FilterSAsWithMissingLinks(ctx, desired, sas)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, spec := range missing {
+		d.logDebug("ipsec", "xfrm_link_missing", map[string]any{
+			"instance_id": ipsec.LinkInstanceID(spec),
+			"peer":        spec.PeerZone,
+			"interface":   spec.InterfaceName,
+			"netns":       spec.NetNS,
+		})
+	}
+	return filtered, missing, nil
+}
+
+func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missing map[string]ipsec.TransportLinkSpec, now time.Time) {
+	if len(missing) == 0 {
+		return
+	}
+	for id := range missing {
+		inst, ok := instances[id]
+		if !ok {
+			continue
+		}
+		inst.ActualState = ipsec.LinkStateDegraded
+		inst.LastError = "xfrm namespace or interface missing"
+		inst.LastTransition = now.Unix()
+		instances[id] = inst
+	}
 }
 
 func (d *DaemonService) ipsecDrivers() (ipsec.IPsecDriver, ipsec.XFRMDriver) {

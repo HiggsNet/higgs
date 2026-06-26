@@ -56,6 +56,7 @@ type controlResponse struct {
 	Error             string                        `json:"error,omitempty"`
 	PeerID            string                        `json:"peer_id,omitempty"`
 	LinkInstances     int                           `json:"link_instances,omitempty"`
+	CleanedLinks      int                           `json:"cleaned_links,omitempty"`
 	DesiredLinks      int                           `json:"desired_links,omitempty"`
 	LastLinkError     string                        `json:"last_link_error,omitempty"`
 	LastRoutingError  string                        `json:"last_routing_error,omitempty"`

@@ -93,6 +93,73 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 	return d.setLinkUp(ctx, netns, spec.InterfaceName)
 }
 
+func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpec) (XFRMLinkState, error) {
+	if spec.InterfaceName == "" {
+		return XFRMLinkState{}, errors.New("interface name is required")
+	}
+	netns, err := d.specNetNS(spec)
+	if err != nil {
+		return XFRMLinkState{}, err
+	}
+	state := XFRMLinkState{NetNS: netns}
+	switch netns.Kind {
+	case NetNSHost:
+		state.NamespaceExists = true
+	case NetNSName:
+		state.NamespaceExists = d.netnsExists(ctx, netns.Name)
+	case NetNSPath:
+		stat := d.Stat
+		if stat == nil {
+			stat = statPath
+		}
+		state.NamespaceExists = stat(netns.Path) == nil
+	default:
+		return XFRMLinkState{}, fmt.Errorf("unsupported netns kind %q", netns.Kind)
+	}
+	if !state.NamespaceExists {
+		return state, nil
+	}
+	state.InterfaceExists = d.linkExists(ctx, netns, spec.InterfaceName)
+	return state, nil
+}
+
+func (d SystemXFRMDriver) FilterSAsWithMissingLinks(ctx context.Context, desired []TransportLinkSpec, sas []SAState) ([]SAState, map[string]TransportLinkSpec, error) {
+	if len(desired) == 0 {
+		return sas, nil, nil
+	}
+	missing := make(map[string]TransportLinkSpec)
+	for _, spec := range desired {
+		state, err := d.InspectLink(ctx, spec)
+		if err != nil {
+			return nil, nil, err
+		}
+		if state.NamespaceExists && state.InterfaceExists {
+			continue
+		}
+		missing[LinkInstanceID(spec)] = spec
+	}
+	if len(missing) == 0 || len(sas) == 0 {
+		return sas, missing, nil
+	}
+	filtered := sas[:0]
+	for _, sa := range sas {
+		if saMatchesAnyMissingLink(sa, missing) {
+			continue
+		}
+		filtered = append(filtered, sa)
+	}
+	return filtered, missing, nil
+}
+
+func saMatchesAnyMissingLink(sa SAState, missing map[string]TransportLinkSpec) bool {
+	for _, spec := range missing {
+		if sa.Name == spec.TransportID || sa.ChildSA == ChildSAName(spec) || (spec.XFRMIfID != 0 && sa.XFRMIfID == spec.XFRMIfID) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) error {
 	if name == "" {
 		return errors.New("interface name is required")
