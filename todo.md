@@ -1107,7 +1107,7 @@
   - 防火墙主策略按 `routing.instances[]` / netns 维度生成；默认在 overlay/data-plane netns 内过滤 XFRM、veth upstream、BIRD 学习路由对应的数据面流量。
     - `firewall.instances[]` 与 `routing.instances[]` 对齐，overlay 实例按 netns 生成 input/forward/output chain；host 实例独立生成 IKE/NAT-T ingress 和 redirect grace。
   - host netns 只处理必须落在 host 的入口能力：IKE/NAT-T 监听端口、端口 rotate 的 DNAT/redirect grace、必要的 outer UDP/TCP allow rules；不得默认接管 host 全局防火墙。
-    - `FirewallInstanceSpec.IsHost` 路径只生成 `HostIngress`（IKE 500 / NAT-T 4500）和可选 `NatRedirect`（previous → current），不生成 overlay forward chain。
+    - `FirewallInstanceSpec.IsHost` 路径只生成 `HostIngress`（IKE 500 / NAT-T 4500）、可选 `NatRedirect`（advertised current/previous → charon listener）和 `NatSource`（charon listener → current advertised source port），不生成 overlay forward chain。
   - 每个规则集都必须带 Higgs owner token / table-chain 命名前缀 / generation id；reconcile 只增删自己拥有的对象，避免覆盖管理员手写规则。
     - `OwnerToken` 派生稳定 token；`DesiredObjects` 输出 `higgs_<scope>` 前缀的 table/chain/set；`PlanDiff` 仅按 desired/observed owner 对象集合做 create/adopt/delete，`ListOwned` 只读取 Higgs-owned 对象。
     - [x] firewall reconcile 的 owner `InstanceID` 使用 scope（host 实例为 `host`，overlay 实例为对应 netns 名），而不是配置中的 instance id；这样 `host-ipsec` 等实例也能正确映射到 `higgs_host` table，overlay 实例映射到 `higgs_<netns>` table。
@@ -1140,11 +1140,11 @@
     - 第一版使用本地 config；后续可升级为 signed `routing/forwarding` record，`netnsForwardingPolicy` 可扩展为先读 record 再 fallback config。
 - [x] **6.3.5 host 端口与 NAT 最小侵入**
   - 为 Phase 4.4/端口动态调整补 `redirect/DNAT grace`：old/current advertised IKE/NAT-T 端口在 grace 窗口内转发到当前 charon 监听端口，窗口结束后删除旧端口规则。
-    - planner 的 `buildHostRules` 从 `input.AdvertisedPreviousPorts` 为每个 previous port 生成 `NatRedirectRule`；IKE 候选 (< 4500) redirect 到当前 IKE 端口，NAT-T 候选 (>= 4500) redirect 到当前 NAT-T 端口；当前端口不产生 redirect。
-    - daemon `buildFirewallPolicyInput` 调用 `extractPreviousPortsFromNetwork()` 从 managed zone 的 signed `ipsec/ports` record `Previous[]` 中提取仍在 grace 窗口内的 IKE/NAT-T advertised 端口。
+    - planner 的 `buildHostRules` 从 current/previous advertised ports 为每个入口端口生成 `NatRedirectRule`；同时为 current advertised IKE/NAT-T 端口生成 `NatSourceRule`，把 host-originated charon 500/4500 source port rewrite 到当前 advertised port；previous 只保留入方向 grace，不主动用于新出站流量。
+    - daemon `buildFirewallPolicyInput` 调用 `extractIPsecRedirectPortsFromNetwork()` 从 managed zone 的 signed `ipsec/ports` record `Current` / `Previous[]` 中提取 IKE/NAT-T advertised 端口，previous 只保留仍在 grace 窗口内的条目。
   - host 规则只允许绑定到 Higgs 配置的 listen/advertise 端口、协议和本机地址；遇到已有非 Higgs owner 规则或端口冲突必须报错/降级，不静默覆盖。
     - `DesiredObjects` 只声明 `higgs_*` 前缀的 table/chain/set/nat_redirect；`ListOwned` 按 owner token/prefix 过滤；`PlanDiff` 只对 owner 匹配的对象执行 delete。
-  - 明确 NAT-T/MOBIKE/StrongSwan 行为边界：防火墙只做入口端口兼容，不承担 SA 平滑切换语义；真实 SA 生命周期仍由 IPsec provider/VICI reconcile 管理。
+  - 明确 NAT-T/MOBIKE/StrongSwan 行为边界：防火墙只做 entry-port 兼容和 wire source-port rewrite，不承担 SA 平滑切换语义；真实 SA 生命周期仍由 IPsec provider/VICI reconcile 管理。
 - [x] **6.3.6 backend 兼容性：nftables 优先，iptables 兜底**
   - backend `auto`：优先探测 nftables netlink 能力；不可用时检测 iptables/ip6tables，区分 legacy 与 nft shim；两者都不可用则进入 dry-run/disabled 并给出 preflight 错误。
     - `PreflightProbe` 检测 `nft` binary / `iptables` binary / `CAP_NET_ADMIN`；`ResolveBackend` 根据 preflight 结果选择 nft/iptables/none。

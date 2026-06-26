@@ -119,6 +119,45 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	}
 }
 
+func TestNFTDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	d := &NFTDriver{Command: runner.run}
+	spec := FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
+		OwnerPrefix:   "higgs",
+		HostPorts:     HostPortConfig{IKE: true, NATT: true},
+		RedirectGrace: RedirectGrace{Enabled: true},
+	}
+	input := FirewallPolicyInput{
+		AdvertisedCurrentNATTPorts: []uint16{33403},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("host", desired, FirewallObservedState{})
+	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	foundPostrouting := false
+	foundMasquerade := false
+	for _, cmd := range runner.commands {
+		argsStr := strings.Join(cmd.args, " ")
+		if strings.Contains(argsStr, "postrouting") && strings.Contains(argsStr, "srcnat") {
+			foundPostrouting = true
+		}
+		if strings.Contains(argsStr, "sport 4500") && strings.Contains(argsStr, "masquerade to :33403") {
+			foundMasquerade = true
+		}
+	}
+	if !foundPostrouting {
+		t.Error("expected NAT postrouting chain creation")
+	}
+	if !foundMasquerade {
+		t.Error("expected NAT source-port rewrite rule")
+	}
+}
+
 func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &NFTDriver{Command: runner.run}

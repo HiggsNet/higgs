@@ -317,6 +317,8 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 		addNatRedirects(desired, input.AdvertisedPreviousIKEPorts, ikePort, "redirect grace", "ike", spec.ListenAddrs)
 		addNatRedirects(desired, input.AdvertisedCurrentNATTPorts, nattPort, "redirect current", "natt", spec.ListenAddrs)
 		addNatRedirects(desired, input.AdvertisedPreviousNATTPorts, nattPort, "redirect grace", "natt", spec.ListenAddrs)
+		addNatSourceRewrites(desired, input.AdvertisedCurrentIKEPorts, ikePort, "source current", "ike")
+		addNatSourceRewrites(desired, input.AdvertisedCurrentNATTPorts, nattPort, "source current", "natt")
 		// WireGuard redirect: old advertised WG ports → current WG port.
 		// Reserved for Phase 7 WireGuard port rotation.
 		for _, prev := range input.AdvertisedPreviousWGPorts {
@@ -332,12 +334,6 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 			})
 		}
 	}
-
-	// Note: No SNAT (MASQUERADE) is needed for outbound transport traffic.
-	// StrongSwan/WireGuard initiate outbound connections from ephemeral local
-	// source ports; the remote peer sees the actual source IP/port and does
-	// not need it translated. DNAT/redirect only applies to inbound traffic
-	// hitting advertised entry ports.
 }
 
 func addNatRedirects(desired *FirewallDesiredState, ports []uint16, target uint16, reason, label string, listenAddrs []netip.Addr) {
@@ -377,6 +373,39 @@ func natRedirectKey(original, target uint16, addr netip.Addr) string {
 		return fmt.Sprintf("%d/%d/*", original, target)
 	}
 	return fmt.Sprintf("%d/%d/%s", original, target, addr.String())
+}
+
+func addNatSourceRewrites(desired *FirewallDesiredState, ports []uint16, original uint16, reason, label string) {
+	seen := make(map[string]bool, len(desired.NatSources)+len(ports))
+	for _, existing := range desired.NatSources {
+		if existing.OriginalSrc == original {
+			seen[natSourceKey(existing.OriginalSrc, existing.RewriteTo, existing.DstPort, existing.DstAddr)] = true
+		}
+	}
+	for _, port := range ports {
+		if port == 0 || port == original {
+			continue
+		}
+		key := natSourceKey(original, port, 0, netip.Addr{})
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		desired.NatSources = append(desired.NatSources, NatSourceRule{
+			Proto:       ProtoUDP,
+			OriginalSrc: original,
+			RewriteTo:   port,
+			Comment:     fmt.Sprintf("%s %d -> %d (%s)", reason, original, port, label),
+		})
+	}
+}
+
+func natSourceKey(original, target, dstPort uint16, addr netip.Addr) string {
+	addrPart := "*"
+	if addr.IsValid() {
+		addrPart = addr.String()
+	}
+	return fmt.Sprintf("%d/%d/%d/%s", original, target, dstPort, addrPart)
 }
 
 func buildHostIngress(proto string, port uint16, listenAddrs []netip.Addr, comment string) HostIngressRule {
@@ -504,6 +533,9 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 	for _, r := range desired.NatRedirects {
 		fmt.Fprintln(h, "nat", r.Proto, r.OriginalDst, r.RedirectTo, r.DstAddr.String(), r.Comment)
 	}
+	for _, r := range desired.NatSources {
+		fmt.Fprintln(h, "snat", r.Proto, r.OriginalSrc, r.RewriteTo, r.DstPort, r.DstAddr.String(), r.Comment)
+	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
@@ -553,6 +585,9 @@ func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
 		}
 		if len(desired.NatRedirects) > 0 {
 			refs = append(refs, FirewallObjectRef{Kind: "nat_redirect", Family: "inet", Name: tableName + "_prerouting"})
+		}
+		if len(desired.NatSources) > 0 {
+			refs = append(refs, FirewallObjectRef{Kind: "nat_source", Family: "inet", Name: tableName + "_postrouting"})
 		}
 	}
 	return refs

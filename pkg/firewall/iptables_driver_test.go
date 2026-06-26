@@ -90,6 +90,29 @@ func TestIPTablesDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	}
 }
 
+func TestIPTablesDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	d := &IPTablesDriver{Command: runner.run}
+	spec := FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
+		OwnerPrefix:   "higgs",
+		HostPorts:     HostPortConfig{IKE: true, NATT: true},
+		RedirectGrace: RedirectGrace{Enabled: true},
+	}
+	input := FirewallPolicyInput{
+		AdvertisedCurrentNATTPorts: []uint16{33403},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("host", desired, FirewallObservedState{})
+	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	assertCommandContains(t, runner.commands, "iptables", "-t nat -A POSTROUTING -p udp --sport 4500 -j MASQUERADE --to-ports 33403")
+}
+
 func TestIPTablesDriver_HostAddressFamilyCommands(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
@@ -253,6 +276,8 @@ func TestBuildDesiredState_HostRedirectCurrentAndPreviousPorts(t *testing.T) {
 	assertNatRedirect(t, desired, 30002, 4500, "redirect current")
 	assertNatRedirect(t, desired, 29001, 500, "redirect grace")
 	assertNatRedirect(t, desired, 29002, 4500, "redirect grace")
+	assertNatSource(t, desired, 500, 30001, "source current")
+	assertNatSource(t, desired, 4500, 30002, "source current")
 }
 
 func TestBuildDesiredState_HostRedirectCoversAllListenAddrs(t *testing.T) {
@@ -306,6 +331,9 @@ func TestBuildDesiredState_HostRedirectGraceSkipCurrentPorts(t *testing.T) {
 	if len(desired.NatRedirects) != 0 {
 		t.Errorf("expected 0 redirect rules for current ports, got %d", len(desired.NatRedirects))
 	}
+	if len(desired.NatSources) != 0 {
+		t.Errorf("expected 0 source rewrite rules for current ports, got %d", len(desired.NatSources))
+	}
 }
 
 func assertCommandContains(t *testing.T, commands []executedCommand, binary, fragment string) {
@@ -337,4 +365,14 @@ func assertNatRedirectAddr(t *testing.T, desired *FirewallDesiredState, original
 		}
 	}
 	t.Fatalf("missing redirect %d -> %d for %s in %+v", original, target, addr, desired.NatRedirects)
+}
+
+func assertNatSource(t *testing.T, desired *FirewallDesiredState, original, target uint16, comment string) {
+	t.Helper()
+	for _, ns := range desired.NatSources {
+		if ns.OriginalSrc == original && ns.RewriteTo == target && strings.Contains(ns.Comment, comment) {
+			return
+		}
+	}
+	t.Fatalf("missing source rewrite %d -> %d comment containing %q in %+v", original, target, comment, desired.NatSources)
 }

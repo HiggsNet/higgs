@@ -171,6 +171,7 @@ type FirewallDesiredState struct {
 	OutputRules  []Rule
 	HostIngress  []HostIngressRule
 	NatRedirects []NatRedirectRule
+	NatSources   []NatSourceRule
 }
 
 // Rule is a single backend-agnostic firewall rule.
@@ -207,9 +208,20 @@ type NatRedirectRule struct {
 	Comment     string
 }
 
+// NatSourceRule rewrites host-originated transport source ports to the current
+// advertised entry port while charon keeps a stable local listener.
+type NatSourceRule struct {
+	Proto       string
+	OriginalSrc uint16
+	RewriteTo   uint16
+	DstPort     uint16
+	DstAddr     netip.Addr
+	Comment     string
+}
+
 // FirewallObjectRef references an owned object for stale deletion.
 type FirewallObjectRef struct {
-	Kind   string // table | chain | set | rule | nat_redirect
+	Kind   string // table | chain | set | rule | nat_redirect | nat_source
 	Family string // inet | ip | ip6
 	Name   string
 }

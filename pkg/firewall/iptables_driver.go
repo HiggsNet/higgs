@@ -276,6 +276,25 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 		}
 	}
 
+	// NAT source port rewrite rules for host-originated charon traffic.
+	for _, ns := range desired.NatSources {
+		args := []string{"-t", "nat", "-A", "POSTROUTING", "-p", iptablesProto(ns.Proto)}
+		if ns.OriginalSrc > 0 {
+			args = append(args, "--sport", fmt.Sprintf("%d", ns.OriginalSrc))
+		}
+		if ns.DstPort > 0 {
+			args = append(args, "--dport", fmt.Sprintf("%d", ns.DstPort))
+		}
+		if ns.DstAddr.IsValid() {
+			args = append(args, "-d", ns.DstAddr.String())
+		}
+		args = append(args, "-j", "MASQUERADE", "--to-ports", fmt.Sprintf("%d", ns.RewriteTo), "-m", "comment", "--comment", marker+":"+ns.Comment)
+
+		for _, binary := range iptablesBinariesForAddr(ns.DstAddr) {
+			commands = append(commands, iptablesCommand{binary, args})
+		}
+	}
+
 	return commands
 }
 

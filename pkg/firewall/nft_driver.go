@@ -256,6 +256,14 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 			commands = append(commands, []string{"add", "rule", "inet", tableName, preroutingChain, rule})
 		}
 	}
+	if len(desired.NatSources) > 0 {
+		postroutingChain := tableName + "_postrouting"
+		commands = append(commands, []string{"add", "chain", "inet", tableName, postroutingChain, "{ type nat hook postrouting priority srcnat; }"})
+		for _, ns := range desired.NatSources {
+			rule := renderNFTNatSourceRule(ns)
+			commands = append(commands, []string{"add", "rule", "inet", tableName, postroutingChain, rule})
+		}
+	}
 
 	return commands
 }
@@ -330,6 +338,29 @@ func renderNFTNatRedirectRule(nr NatRedirectRule) string {
 	parts = append(parts, fmt.Sprintf("redirect to :%d", nr.RedirectTo))
 	if nr.Comment != "" {
 		parts = append(parts, fmt.Sprintf("comment %s", quoteNFTVal(nr.Comment)))
+	}
+	return strings.Join(parts, " ")
+}
+
+func renderNFTNatSourceRule(ns NatSourceRule) string {
+	var parts []string
+	parts = append(parts, nftProtoName(ns.Proto))
+	if ns.OriginalSrc > 0 {
+		parts = append(parts, fmt.Sprintf("sport %d", ns.OriginalSrc))
+	}
+	if ns.DstPort > 0 {
+		parts = append(parts, fmt.Sprintf("dport %d", ns.DstPort))
+	}
+	if ns.DstAddr.IsValid() {
+		if ns.DstAddr.Is4() {
+			parts = append(parts, fmt.Sprintf("ip daddr %s", ns.DstAddr.String()))
+		} else {
+			parts = append(parts, fmt.Sprintf("ip6 daddr %s", ns.DstAddr.String()))
+		}
+	}
+	parts = append(parts, fmt.Sprintf("masquerade to :%d", ns.RewriteTo))
+	if ns.Comment != "" {
+		parts = append(parts, fmt.Sprintf("comment %s", quoteNFTVal(ns.Comment)))
 	}
 	return strings.Join(parts, " ")
 }

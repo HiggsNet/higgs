@@ -280,7 +280,7 @@ ForwardingPolicy
 
 后续可以通过 gossip 增加“源节点不希望某些中继转发自己的路由”的控制信号，用于规避质量差、费用高或不可信链路。第一版先不做实时 gossip hint。
 
-## 9. host 入口与 DNAT/redirect grace
+## 9. host 入口与 NAT/redirect grace
 
 host 侧只处理 Higgs 必须触碰的入口：
 
@@ -303,40 +303,33 @@ current charon listen port
 
 边界：
 
-- redirect grace 只解决 responder 入口端口兼容，不保证 CHILD_SA 无中断迁移。
+- redirect grace 解决 responder 入口端口兼容；postrouting source-port rewrite 让 initiator 出站包的 wire 源端口也匹配 current advertised port；二者都不保证 CHILD_SA 无中断迁移。
 - old/current port 的有效窗口必须来自 verified `ipsec/ports` record 和本地 port planner。
 - grace 结束后必须删除旧端口规则。
 - 如果 host 上已有非 Higgs owner 规则占用相同端口或 chain priority，apply 必须失败或降级为 dry-run，不覆盖。
 - host rule 应绑定本地配置的 listen address / advertise address / protocol，避免无意开放全部地址。
 
-### 9.1 为什么只需要 DNAT/redirect，不需要 SNAT/MASQUERADE（待 root smoke 验证）
+### 9.1 DNAT/redirect 与 source-port rewrite
 
-> **状态：分析阶段，尚未在 root/container smoke 中实际验证。**
+StrongSwan 单实例仍以稳定 `charon.port` / `charon.port_nat_t` 运行，通常是 UDP 500/4500。`ipsec.port_mode=range` 的 advertised entry port 是 Higgs 对外公布的 wire 入口，不要求 charon 自己绑定每个 generation 的端口。
 
-当前设计只对**入方向**（prerouting）做 DNAT/redirect grace，不对**出方向**做 SNAT/MASQUERADE。原因如下：
+防火墙在 host namespace 做两类 NAT：
 
-**StrongSwan (IKEv2/IPsec)：**
+- **入方向 prerouting**：current 和仍在 grace 窗口内的 previous advertised IKE/NAT-T ports redirect 到当前 charon 监听端口，保证远端拨 current/previous entry port 都能送达 charon。
+- **出方向 postrouting**：host-originated charon UDP source port（500/4500）masquerade/source-port rewrite 到 current advertised IKE/NAT-T port，让抓包和远端看到的 wire source port 与本节点当前公告一致。
 
-- **出方向** IKE 包由 charon 发起，源端口是 charon 选择的**临时本地端口**（通常不是 500，由内核/charon 随机选择）。
-- 远端 peer 看到的是真实的源 IP + 临时源端口，不需要翻译。
-- **入方向** IKE 包由远端 peer 发起，目标端口是本节点公告的 advertised port（500/4500 或 range 端口）。
-- 端口 rotate 时，远端 peer 可能在 grace 窗口内仍向旧 advertised port 发包；本节点用 DNAT/redirect 把旧端口流量转到当前 charon 监听端口。
-- 因此只需要 prerouting DNAT/redirect，不需要 postrouting SNAT。
+Previous ports 只用于入方向 grace；新出站流量始终 rewrite 到 current generation，避免延长旧 generation 的主动使用窗口。
 
-**WireGuard：**
+这仍然不是 StrongSwan per-connection listener。`swanctl --list-sas` / `ip xfrm state` 可能继续展示 charon 视角的 4500，而 tcpdump 在 underlay interface 上会看到 firewall rewrite 后的 advertised source port。
 
-- **出方向** WG 包由内核发起，源端口是内核选择的临时端口。
-- 远端 peer 同样看到真实源 IP + 临时端口。
-- **入方向** WG 包目标端口是本节点公告的 listen port。
-- 端口 rotate 时同理只需要 prerouting redirect。
+WireGuard 端口轮换仍预留到 Phase 7；如果后续复用该模型，应按 WireGuard 自身 socket/endpoint 行为重新验证是否需要 source-port rewrite。
 
 **验证计划：**
 
 - root/container smoke 中端口 rotate 时，抓包确认：
-  1. 出方向包源端口确实是临时端口，不是 advertised port。
-  2. DNAT/redirect 只影响入方向到旧 advertised port 的包。
-  3. 不存在需要 SNAT 的场景。
-- 如果发现某些 NAT 环境下出方向也需要端口翻译（例如对称 NAT 需要固定源端口），再补充 SNAT/MASQUERADE 规则。
+  1. 入方向 current/previous advertised ports 都能 redirect 到当前 charon listener。
+  2. 出方向 charon 500/4500 在 wire 上被 rewrite 为 current advertised source port。
+  3. `swanctl --list-sas` / `ip xfrm state` 与 tcpdump 端口视角差异可解释，不作为 wire-port 失败依据。
 
 ### 9.2 WireGuard 端口轮换准备
 
@@ -409,7 +402,7 @@ daemon 为每个 `firewall.instances[]` 条目独立构造 driver 并解析目�
 - overlay instance（`host: false`）把 `netns` 字段解析为声明的 netns 名；`netns: default` 等别名会按 `config.netns.names` 解析到实际命名空间（如 `h2`），避免在 host 规则集中误建 `higgs_default`。
 - host instance（`host: true`）固定使用 host namespace，不参与 overlay netns 解析。
 - nftables/iptables CLI driver 会把 `ip netns exec <ns>` 或等效 netns 前缀应用到所有命令，使 overlay 规则真正下发到对应 netns。
-- 当 `ipsec.port_mode=range` 时，host firewall instance 默认启用 `host_ports.ike/natt` 和 `redirect_grace`，除非管理员显式关闭；这保证 advertised entry ports 能通过 DNAT 回到 charon 当前监听的 500/4500。
+- 当 `ipsec.port_mode=range` 时，host firewall instance 默认启用 `host_ports.ike/natt` 和 `redirect_grace`，除非管理员显式关闭；这保证 advertised entry ports 能通过 DNAT 回到 charon 当前监听的 500/4500，并把出站 charon source ports rewrite 到 current advertised ports。
 
 ## 11. Driver Interface
 
