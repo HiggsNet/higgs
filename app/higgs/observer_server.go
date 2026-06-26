@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -15,21 +14,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 	"github.com/Catofes/higgs/pkg/routing"
 )
 
-//go:embed web/*
-var observerWebFS embed.FS
-
-// observerServer is the read-only HTTP observer for daemon live state.
-// It serves REST snapshot APIs, SSE events, and a static UI.
 type observerServer struct {
+	daemon   *DaemonService
+	config   observerConfig
+	provider *observerProvider
+	server   *observer.Server
+	hub      *observer.Hub
+}
+
+type observerProvider struct {
 	daemon *DaemonService
-	config observerConfig
-	hub    *sseHub
 }
 
 // newObserverServer creates a new read-only HTTP observer from the daemon
@@ -38,10 +39,22 @@ func newObserverServer(d *DaemonService, cfg observerConfig) *observerServer {
 	if !cfg.Enabled || d == nil {
 		return nil
 	}
+	provider := &observerProvider{daemon: d}
+	server := observer.NewServer(provider, observer.Config{
+		Enabled:            cfg.Enabled,
+		BindAddr:           cfg.BindAddr,
+		Port:               cfg.Port,
+		EventBufferSeconds: cfg.EventBufferSeconds,
+	})
+	if server == nil {
+		return nil
+	}
 	return &observerServer{
-		daemon: d,
-		config: cfg,
-		hub:    newSSEHub(),
+		daemon:   d,
+		config:   cfg,
+		provider: provider,
+		server:   server,
+		hub:      server.Hub(),
 	}
 }
 
@@ -66,12 +79,7 @@ func (d *DaemonService) startObserverServer(ctx context.Context) (func(), error)
 	if err != nil {
 		return nil, fmt.Errorf("observer listen %s: %w", addr, err)
 	}
-	httpServer := &http.Server{
-		Handler:      srv.handler(),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
+	httpServer := observer.DefaultHTTPServer(srv.handler())
 	go func() {
 		_ = httpServer.Serve(ln)
 	}()
@@ -95,62 +103,49 @@ func (d *DaemonService) notifyObserver(eventType string, payload any) {
 	if d == nil || d.observerHub == nil {
 		return
 	}
-	d.observerHub.broadcast(sseEvent{Type: eventType, Payload: payload})
+	d.observerHub.Broadcast(observer.Event{Type: eventType, Payload: payload})
 }
 
 // handler returns the HTTP handler for the observer, including REST APIs,
 // SSE events, and static UI.
 func (s *observerServer) handler() http.Handler {
-	mux := http.NewServeMux()
-	// REST API endpoints
-	mux.HandleFunc("/api/v1/status", s.handleStatus)
-	mux.HandleFunc("/api/v1/zones", s.handleZones)
-	mux.HandleFunc("/api/v1/zones/", s.handleZones)
-	mux.HandleFunc("/api/v1/peers", s.handlePeers)
-	mux.HandleFunc("/api/v1/peers/", s.handlePeers)
-	mux.HandleFunc("/api/v1/links", s.handleLinks)
-	mux.HandleFunc("/api/v1/links/", s.handleLinks)
-	mux.HandleFunc("/api/v1/health", s.handleHealth)
-	mux.HandleFunc("/api/v1/health/", s.handleHealth)
-	mux.HandleFunc("/api/v1/routes", s.handleRoutes)
-	mux.HandleFunc("/api/v1/bird", s.handleBird)
-	mux.HandleFunc("/api/v1/events", s.handleEvents)
-	// Static UI
-	mux.HandleFunc("/", s.handleStatic)
-	return mux
+	return s.server.Handler()
 }
 
-// apiResponse is the unified response wrapper for all REST endpoints.
-type apiResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-	Data  any    `json:"data"`
-}
+type apiResponse = observer.APIResponse
 
-func writeJSON(w http.ResponseWriter, statusCode int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeAPIOK(w http.ResponseWriter, data any) {
-	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: data})
-}
-
-func writeAPIError(w http.ResponseWriter, statusCode int, err error) {
-	writeJSON(w, statusCode, apiResponse{OK: false, Error: err.Error()})
-}
-
-// handleStatus implements GET /api/v1/status
 func (s *observerServer) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	d := s.daemon
+	s.server.HandleStatus(w, r)
+}
+func (s *observerServer) handleZones(w http.ResponseWriter, r *http.Request) {
+	s.server.HandleZones(w, r)
+}
+func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
+	s.server.HandlePeers(w, r)
+}
+func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
+	s.server.HandleLinks(w, r)
+}
+func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.server.HandleHealth(w, r)
+}
+func (s *observerServer) handleRoutes(w http.ResponseWriter, r *http.Request) {
+	s.server.HandleRoutes(w, r)
+}
+func (s *observerServer) handleBird(w http.ResponseWriter, r *http.Request) {
+	s.server.HandleBird(w, r)
+}
+func (s *observerServer) handleEvents(w http.ResponseWriter, r *http.Request) {
+	s.server.HandleEvents(w, r)
+}
+func (s *observerServer) handleStatic(w http.ResponseWriter, r *http.Request) {
+	s.server.HandleStatic(w, r)
+}
+
+func (p *observerProvider) Status() (any, error) {
+	d := p.daemon
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		writeAPIOK(w, map[string]any{"daemon_online": false})
-		return
+		return map[string]any{"daemon_online": false}, nil
 	}
 	state := d.Sync.State
 	state.RLock()
@@ -193,7 +188,7 @@ func (s *observerServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		listenAddr = d.Sync.Config.ListenAddr
 	}
 	managedZone = string(state.ManagedZone)
-	writeAPIOK(w, map[string]any{
+	return map[string]any{
 		"peer_id":             peerID,
 		"managed_zone":        managedZone,
 		"listen_addr":         listenAddr,
@@ -206,7 +201,7 @@ func (s *observerServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"last_routing_error":  lastRoutingError,
 		"last_sync_unix":      lastSyncUnix,
 		"last_reconcile_unix": lastReconcileUnix,
-	})
+	}, nil
 }
 
 // zoneSummaryJSON is the per-zone summary for /api/v1/zones
@@ -219,27 +214,16 @@ type zoneSummaryJSON struct {
 	RootHashHex string `json:"root_hash"`
 }
 
-// handleZones implements GET /api/v1/zones and GET /api/v1/zones/{zone}
-func (s *observerServer) handleZones(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	d := s.daemon
+func (p *observerProvider) Zones(zoneFilter string) (any, error) {
+	d := p.daemon
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		writeAPIOK(w, map[string]any{"zones": []any{}})
-		return
+		return map[string]any{"zones": []any{}}, nil
 	}
 	state := d.Sync.State
 	state.RLock()
 	defer state.RUnlock()
-	// Check for /api/v1/zones/{zone} pattern
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/zones")
-	zoneFilter := strings.TrimPrefix(path, "/")
-	zoneFilter = strings.TrimSuffix(zoneFilter, "/")
 	if state.Network == nil {
-		writeAPIOK(w, map[string]any{"zones": []any{}})
-		return
+		return map[string]any{"zones": []any{}}, nil
 	}
 	now := d.Sync.now()
 	// Single zone detail
@@ -247,11 +231,9 @@ func (s *observerServer) handleZones(w http.ResponseWriter, r *http.Request) {
 		zp := zone.ZonePath(zoneFilter)
 		zs := state.Network.Zones[zp]
 		if zs == nil {
-			writeAPIError(w, http.StatusNotFound, fmt.Errorf("zone not found"))
-			return
+			return nil, observer.Errorf(http.StatusNotFound, "zone not found")
 		}
-		writeAPIOK(w, zoneDetailJSON(zs, state.Network, zp, now))
-		return
+		return zoneDetailJSON(zs, state.Network, zp, now), nil
 	}
 	// All zones summary
 	zones := make([]zoneSummaryJSON, 0, len(state.Network.Zones))
@@ -284,10 +266,10 @@ func (s *observerServer) handleZones(w http.ResponseWriter, r *http.Request) {
 	if root := globalRootHash(digests); root != nil {
 		globalRoot = hex.EncodeToString(root)
 	}
-	writeAPIOK(w, map[string]any{
+	return map[string]any{
 		"zones":       zones,
 		"global_root": globalRoot,
-	})
+	}, nil
 }
 
 // zoneDetailJSON builds the detail view for a single zone
@@ -512,23 +494,14 @@ type peerEndpointJSON struct {
 	Selected     bool   `json:"selected,omitempty"`
 }
 
-// handlePeers implements GET /api/v1/peers and GET /api/v1/peers/{peer_id}
-func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	d := s.daemon
+func (p *observerProvider) Peers(peerFilter string) (any, error) {
+	d := p.daemon
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		writeAPIOK(w, map[string]any{"peers": []any{}})
-		return
+		return map[string]any{"peers": []any{}}, nil
 	}
 	state := d.Sync.State
 	state.RLock()
 	defer state.RUnlock()
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/peers")
-	peerFilter := strings.TrimPrefix(path, "/")
-	peerFilter = strings.TrimSuffix(peerFilter, "/")
 	peerIDs := make([]string, 0, len(state.SyncPeers))
 	for id := range state.SyncPeers {
 		if isLocalObserverPeer(id, d.Sync.Config, state) {
@@ -557,11 +530,9 @@ func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
 	if peerFilter != "" {
 		ps, ok := state.SyncPeers[peerFilter]
 		if isLocalObserverPeer(peerFilter, d.Sync.Config, state) || (!ok && !peerKnownFromConfigOrDiscovery(peerFilter, d.Sync.Config, state.Network, d.Sync.now())) {
-			writeAPIError(w, http.StatusNotFound, fmt.Errorf("peer not found"))
-			return
+			return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 		}
-		writeAPIOK(w, peerJSONFromState(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()))
-		return
+		return peerJSONFromState(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()), nil
 	}
 	// All peers
 	peers := make([]peerJSON, 0, len(peerIDs))
@@ -573,7 +544,7 @@ func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
 		seen[id] = true
 		peers = append(peers, peerJSONFromState(id, state.SyncPeers[id], d.Sync.Config, state.Network, d.Sync.now()))
 	}
-	writeAPIOK(w, map[string]any{"peers": peers})
+	return map[string]any{"peers": peers}, nil
 }
 
 func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) peerJSON {
@@ -774,24 +745,15 @@ type observerTakeoverJSON struct {
 	LastError         string `json:"last_error,omitempty"`
 }
 
-// handleLinks implements GET /api/v1/links and GET /api/v1/links/{link_id}
-func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	d := s.daemon
+func (p *observerProvider) Links(linkFilter string) (any, error) {
+	d := p.daemon
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		writeAPIOK(w, map[string]any{"instances": []any{}})
-		return
+		return map[string]any{"instances": []any{}}, nil
 	}
 	healthByID := healthJSONByInstanceID(d.healthStatusResponse())
 	state := d.Sync.State
 	state.RLock()
 	defer state.RUnlock()
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/links")
-	linkFilter := strings.TrimPrefix(path, "/")
-	linkFilter = strings.TrimSuffix(linkFilter, "/")
 	reconcile := state.IPsecReconcile
 	desiredByID := map[string]desiredLinkState{}
 	saByID := map[string]linkSAState{}
@@ -803,11 +765,9 @@ func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
 	if linkFilter != "" {
 		li, ok := state.LinkInstances[linkFilter]
 		if !ok {
-			writeAPIError(w, http.StatusNotFound, fmt.Errorf("link not found"))
-			return
+			return nil, observer.Errorf(http.StatusNotFound, "link not found")
 		}
-		writeAPIOK(w, observerLinkFromState(d, state, li, desiredByID, saByID, healthByID))
-		return
+		return observerLinkFromState(d, state, li, desiredByID, saByID, healthByID), nil
 	}
 	// All links
 	instances := make([]observerLinkJSON, 0, len(state.LinkInstances))
@@ -831,7 +791,7 @@ func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
 		result.Skipped = reconcile.Skipped
 		result.LastError = reconcile.LastError
 	}
-	writeAPIOK(w, result)
+	return result, nil
 }
 
 func observerLinkFromState(d *DaemonService, state *stateFile, li linkInstanceState, desiredByID map[string]desiredLinkState, saByID map[string]linkSAState, healthByID map[string]healthLinkJSON) observerLinkJSON {
@@ -990,78 +950,55 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) []map[stri
 	return out
 }
 
-// handleHealth implements GET /api/v1/health, GET /api/v1/health/{link_id},
-// and GET /api/v1/health/{link_id}/series.
-func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	d := s.daemon
+func (p *observerProvider) Health(linkFilter string) (any, error) {
+	d := p.daemon
 	links := d.healthStatusResponse()
 	contextualLinks := healthLinksWithContext(d, links)
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/health")
-	linkFilter := strings.TrimPrefix(path, "/")
-	linkFilter = strings.TrimSuffix(linkFilter, "/")
-	if strings.HasSuffix(linkFilter, "/series") {
-		linkID := strings.TrimSuffix(linkFilter, "/series")
-		linkID = strings.TrimSuffix(linkID, "/")
-		s.handleHealthSeries(w, r, linkID)
-		return
-	}
 	// Single link health detail
 	if linkFilter != "" {
 		for _, item := range contextualLinks {
 			if h, ok := item["health"].(healthLinkJSON); ok && h.InstanceID == linkFilter {
-				writeAPIOK(w, item)
-				return
+				return item, nil
 			}
 		}
-		writeAPIError(w, http.StatusNotFound, fmt.Errorf("health data not found for link %s", linkFilter))
-		return
+		return nil, observer.Errorf(http.StatusNotFound, "health data not found for link %s", linkFilter)
 	}
-	writeAPIOK(w, map[string]any{
+	return map[string]any{
 		"datasource": healthDatasourceInfo(observerAppConfig(d)),
 		"links":      contextualLinks,
-	})
+	}, nil
 }
 
-func (s *observerServer) handleHealthSeries(w http.ResponseWriter, r *http.Request, linkID string) {
-	config := observerAppConfig(s.daemon)
+func (p *observerProvider) HealthSeries(linkID string, query map[string]string) (any, error) {
+	config := observerAppConfig(p.daemon)
 	if config == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, fmt.Errorf("health datasource not configured"))
-		return
+		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not configured")
 	}
-	query := r.URL.Query()
-	rng, err := parseOptionalDuration(query.Get("range"), time.Hour, "range")
+	rng, err := parseOptionalDuration(query["range"], time.Hour, "range")
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err)
-		return
+		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
-	step, err := parseOptionalDuration(query.Get("step"), 30*time.Second, "step")
+	step, err := parseOptionalDuration(query["step"], 30*time.Second, "step")
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err)
-		return
+		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
 	result, err := queryHealthSpoolSeries(config, linkID, healthSeriesQuery{
-		Metric: query.Get("metric"),
+		Metric: query["metric"],
 		Range:  rng,
 		Step:   step,
-		Now:    observerNow(s.daemon),
+		Now:    observerNow(p.daemon),
 	})
 	if errors.Is(err, errHealthSpoolNotConfigured) {
-		writeAPIError(w, http.StatusServiceUnavailable, fmt.Errorf("health datasource not_configured"))
-		return
+		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not_configured")
 	}
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err)
-		return
+		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
-	writeAPIOK(w, map[string]any{
+	return map[string]any{
 		"datasource": healthDatasourceInfo(config),
 		"link_id":    linkID,
 		"series":     result,
-	})
+	}, nil
 }
 
 func observerAppConfig(d *DaemonService) *appConfig {
@@ -1092,35 +1029,23 @@ func parseOptionalDuration(raw string, fallback time.Duration, name string) (tim
 	return d, nil
 }
 
-// handleRoutes implements GET /api/v1/routes
-func (s *observerServer) handleRoutes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	d := s.daemon
+func (p *observerProvider) Routes() (any, error) {
+	d := p.daemon
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		writeAPIOK(w, &routesDumpResponse{})
-		return
+		return &routesDumpResponse{}, nil
 	}
 	state := d.Sync.State
 	state.RLock()
 	defer state.RUnlock()
 	now := d.Sync.now()
 	ars, _ := routing.BuildAuthorizedRouteSet(state.Network, now)
-	writeAPIOK(w, buildRoutesDumpResponse(state.ManagedZone, ars))
+	return buildRoutesDumpResponse(state.ManagedZone, ars), nil
 }
 
-// handleBird implements GET /api/v1/bird
-func (s *observerServer) handleBird(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	d := s.daemon
+func (p *observerProvider) Bird() (any, error) {
+	d := p.daemon
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		writeAPIOK(w, map[string]any{"instances": map[string]any{}})
-		return
+		return map[string]any{"instances": map[string]any{}}, nil
 	}
 	state := d.Sync.State
 	state.RLock()
@@ -1129,102 +1054,13 @@ func (s *observerServer) handleBird(w http.ResponseWriter, r *http.Request) {
 	if state.RoutingReconcile != nil {
 		lastRoutingError = state.RoutingReconcile.LastError
 	}
-	writeAPIOK(w, map[string]any{
+	return map[string]any{
 		"instances":          state.BirdInstances,
 		"last_routing_error": lastRoutingError,
-	})
-}
-
-// handleEvents implements GET /api/v1/events (SSE)
-func (s *observerServer) handleEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, fmt.Errorf("streaming not supported"))
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	// Send initial connected event
-	connected, _ := json.Marshal(sseEvent{Type: "connected", Payload: map[string]any{"client_id": "sse"}})
-	fmt.Fprintf(w, "event: connected\ndata: %s\n\n", connected)
-	flusher.Flush()
-	// Subscribe to events
-	ch, unsubscribe := s.hub.subscribe()
-	defer unsubscribe()
-	ctx := r.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-ch:
-			if !ok {
-				return
-			}
-			data, _ := json.Marshal(event)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
-			flusher.Flush()
-		}
-	}
-}
-
-// handleStatic serves the embedded static UI files.
-func (s *observerServer) handleStatic(w http.ResponseWriter, r *http.Request) {
-	// Only serve GET requests for static files
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// Don't serve API paths here
-	if strings.HasPrefix(r.URL.Path, "/api/") {
-		writeAPIError(w, http.StatusNotFound, fmt.Errorf("not found"))
-		return
-	}
-	// Get the path relative to web/
-	cleanPath := strings.TrimPrefix(r.URL.Path, "/")
-	if cleanPath == "" {
-		cleanPath = "index.html"
-	}
-	servedPath := cleanPath
-	data, err := observerWebFS.ReadFile("web/" + cleanPath)
-	if err != nil {
-		// SPA fallback: serve index.html for any non-file path
-		data, err = observerWebFS.ReadFile("web/index.html")
-		if err != nil {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		servedPath = "index.html"
-	}
-	// Set content type based on extension
-	contentType := "application/octet-stream"
-	switch {
-	case strings.HasSuffix(servedPath, ".html"):
-		contentType = "text/html; charset=utf-8"
-	case strings.HasSuffix(servedPath, ".css"):
-		contentType = "text/css; charset=utf-8"
-	case strings.HasSuffix(servedPath, ".js"):
-		contentType = "application/javascript; charset=utf-8"
-	case strings.HasSuffix(servedPath, ".json"):
-		contentType = "application/json; charset=utf-8"
-	case strings.HasSuffix(servedPath, ".svg"):
-		contentType = "image/svg+xml"
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	}, nil
 }
 
 // webSubFS returns the embedded web/ directory as an fs.FS for testing.
 func webSubFS() fs.FS {
-	sub, err := fs.Sub(observerWebFS, "web")
-	if err != nil {
-		return nil
-	}
-	return sub
+	return observer.WebSubFS()
 }

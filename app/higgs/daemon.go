@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/health"
@@ -29,7 +30,7 @@ type DaemonService struct {
 	closeIPsecDriver  func() error
 	health            *health.Manager
 	healthSpoolMu     sync.Mutex
-	observerHub       *sseHub
+	observerHub       *observer.Hub
 	Log               *appLogger
 	LogLimiter        *repeatedLogLimiter
 	drainingEvents    bool

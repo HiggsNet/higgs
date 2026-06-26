@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -182,14 +183,14 @@ func TestObserverConfigKnownFields(t *testing.T) {
 // ===== SSE Hub Tests =====
 
 func TestSSEHubSubscribeBroadcast(t *testing.T) {
-	hub := newSSEHub()
-	ch, unsubscribe := hub.subscribe()
+	hub := observer.NewHub()
+	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
-	if hub.subscriberCount() != 1 {
-		t.Errorf("subscriber count = %d, want 1", hub.subscriberCount())
+	if hub.SubscriberCount() != 1 {
+		t.Errorf("subscriber count = %d, want 1", hub.SubscriberCount())
 	}
-	event := sseEvent{Type: "test", Payload: map[string]any{"key": "value"}}
-	hub.broadcast(event)
+	event := observer.Event{Type: "test", Payload: map[string]any{"key": "value"}}
+	hub.Broadcast(event)
 	select {
 	case received := <-ch:
 		if received.Type != "test" {
@@ -201,20 +202,20 @@ func TestSSEHubSubscribeBroadcast(t *testing.T) {
 }
 
 func TestSSEHubUnsubscribe(t *testing.T) {
-	hub := newSSEHub()
-	_, unsubscribe := hub.subscribe()
-	if hub.subscriberCount() != 1 {
-		t.Errorf("count = %d, want 1", hub.subscriberCount())
+	hub := observer.NewHub()
+	_, unsubscribe := hub.Subscribe()
+	if hub.SubscriberCount() != 1 {
+		t.Errorf("count = %d, want 1", hub.SubscriberCount())
 	}
 	unsubscribe()
-	if hub.subscriberCount() != 0 {
-		t.Errorf("count after unsubscribe = %d, want 0", hub.subscriberCount())
+	if hub.SubscriberCount() != 0 {
+		t.Errorf("count after unsubscribe = %d, want 0", hub.SubscriberCount())
 	}
 }
 
 func TestSSEHubBroadcastNoSubscribers(t *testing.T) {
-	hub := newSSEHub()
-	hub.broadcast(sseEvent{Type: "test"}) // should not panic
+	hub := observer.NewHub()
+	hub.Broadcast(observer.Event{Type: "test"}) // should not panic
 }
 
 // ===== Observer Server HTTP Tests =====
@@ -227,11 +228,9 @@ func newTestObserverServer() *observerServer {
 			App:    &Runtime{Config: &appConfig{}},
 		},
 	}
-	return &observerServer{
-		daemon: d,
-		config: defaultObserverConfig(),
-		hub:    newSSEHub(),
-	}
+	cfg := defaultObserverConfig()
+	cfg.Enabled = true
+	return newObserverServer(d, cfg)
 }
 
 func newTestStateFile() *stateFile {
