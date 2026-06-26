@@ -3618,6 +3618,11 @@ func TestDaemonControlErrorResponses(t *testing.T) {
 		t.Fatalf("invalid record_put response = %#v, want error", response)
 	}
 
+	response = controlRequestViaPipe(t, service, controlRequest{Method: "record_get", Zone: "node-b.catofes."})
+	if response.OK || response.Error == "" {
+		t.Fatalf("invalid record_get response = %#v, want error", response)
+	}
+
 	response = controlRequestViaPipe(t, service, controlRequest{Method: "bogus"})
 	if response.OK || response.Error == "" {
 		t.Fatalf("unknown method response = %#v, want error", response)
@@ -3650,6 +3655,39 @@ func TestDaemonControlStatus(t *testing.T) {
 	}
 	if response.PeerID != config.PeerID || response.Message != "daemon online" {
 		t.Fatalf("status response = %#v", response)
+	}
+}
+
+func TestDaemonControlRecordGet(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	record, err := buildSignedRecordAt(state, "node-b.catofes.", "site/name", []byte(`{"name":"node-b"}`), "policy.json", time.Unix(1000, 0))
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt: %v", err)
+	}
+	if err := state.Network.Put(record); err != nil {
+		t.Fatalf("Put(record): %v", err)
+	}
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+
+	response := controlRequestViaPipe(t, service, controlRequest{
+		Method: "record_get",
+		Zone:   "node-b.catofes.",
+		Key:    "site/name",
+	})
+	if !response.OK {
+		t.Fatalf("record_get response = %#v", response)
+	}
+	if response.Record["key"] != "site/name" || response.Record["value"] != `{"name":"node-b"}` || response.Record["record_hash"] == "" {
+		t.Fatalf("record_get record = %#v", response.Record)
+	}
+
+	response = controlRequestViaPipe(t, service, controlRequest{
+		Method: "record_get",
+		Zone:   "node-b.catofes.",
+		Key:    "missing",
+	})
+	if response.OK || response.Error == "" {
+		t.Fatalf("missing record_get response = %#v, want error", response)
 	}
 }
 

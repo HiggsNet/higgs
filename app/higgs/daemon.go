@@ -466,6 +466,19 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
+	case "record_get":
+		if err := validateControlRecordGet(request); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		d.Sync.State.RLock()
+		record, err := lookupRecordJSON(d.Sync.State, zone.ZonePath(request.Zone), request.Key)
+		d.Sync.State.RUnlock()
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Record: record})
 	case "delegate_issue":
 		if err := validateControlDelegateIssue(request); err != nil {
 			writeControlResponse(conn, controlError(err))

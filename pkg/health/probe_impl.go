@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,7 +28,7 @@ type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	return cmd.Output()
+	return cmd.CombinedOutput()
 }
 
 // ICMProber implements Prober using ICMP echo. It requires CAP_NET_RAW (or
@@ -64,9 +65,12 @@ func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 	if burst <= 0 {
 		burst = 3
 	}
-	// Try raw ICMP socket first (fast path, in-process).
-	if rtt, ok := p.tryRawICMP(target, cfg.Timeout); ok {
-		return ProbeResult{InstanceID: target.InstanceID, RTT: rtt, Success: true}
+	// Try raw ICMP socket first only for unscoped targets. Scoped overlay
+	// probes must run inside the data-plane netns and bind the XFRM interface.
+	if target.NetNS == "" && target.InterfaceName == "" && !target.LocalTunnelAddr.IsValid() {
+		if rtt, ok := p.tryRawICMP(target, cfg.Timeout); ok {
+			return ProbeResult{InstanceID: target.InstanceID, RTT: rtt, Success: true}
+		}
 	}
 	// Fallback to ping/ping6 via exec in the target netns.
 	rtts := make([]time.Duration, 0, burst)
@@ -155,12 +159,23 @@ func (p *ICMProber) pingOnceExec(ctx context.Context, target ProbeTarget, timeou
 	if target.InterfaceName != "" {
 		args = append(args, "-I", target.InterfaceName)
 	}
-	args = append(args, target.PeerTunnelAddr.String())
+	args = append(args, pingTargetAddress(target))
 	start := time.Now()
-	if _, err := p.runner.Run(deadline, "ip", args); err != nil {
+	if out, err := p.runner.Run(deadline, "ip", args); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return 0, fmt.Errorf("%w: %s", err, msg)
+		}
 		return 0, err
 	}
 	return time.Since(start), nil
+}
+
+func pingTargetAddress(target ProbeTarget) string {
+	addr := target.PeerTunnelAddr.String()
+	if target.PeerTunnelAddr.Is6() && target.PeerTunnelAddr.IsLinkLocalUnicast() && target.InterfaceName != "" && !strings.Contains(addr, "%") {
+		addr += "%" + target.InterfaceName
+	}
+	return addr
 }
 
 func isPermissionError(s string) bool {

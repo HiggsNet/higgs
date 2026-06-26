@@ -2,7 +2,9 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -42,6 +44,54 @@ func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, 
 	}
 	fmt.Printf("put %s/%s version %d\n", path, key, record.Version)
 	return nil
+}
+
+func getRecord(path zone.ZonePath, key string) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	if record, ok, err := getRecordViaControl(rt, path, key); ok {
+		if err != nil {
+			return err
+		}
+		return writeRecordJSON(record)
+	}
+	logControlFallback("record_get")
+	return getRecordDirect(rt, path, key)
+}
+
+func getRecordDirect(rt *Runtime, path zone.ZonePath, key string) error {
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	record, err := lookupRecordJSON(state, path, key)
+	if err != nil {
+		return err
+	}
+	return writeRecordJSON(record)
+}
+
+func lookupRecordJSON(state *stateFile, path zone.ZonePath, key string) (map[string]any, error) {
+	if state == nil || state.Network == nil {
+		return nil, fmt.Errorf("state is nil")
+	}
+	zs := state.Network.Zones[path]
+	if zs == nil {
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	rec := zs.Records[key]
+	if rec == nil {
+		return nil, fmt.Errorf("record not found: %s/%s", path, key)
+	}
+	return recordJSON(rec, len(zs.RecordHistory[key])), nil
+}
+
+func writeRecordJSON(record map[string]any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(record)
 }
 
 func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {

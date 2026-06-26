@@ -72,6 +72,7 @@ type controlResponse struct {
 	PeerStatuses      []PeerStatusInfo              `json:"peer_statuses,omitempty"`
 	RevocationImpact  []RevocationImpact            `json:"revocation_impact,omitempty"`
 	Health            []healthLinkJSON              `json:"health,omitempty"`
+	Record            map[string]any                `json:"record,omitempty"`
 }
 
 // healthLinkJSON is the JSON representation of health.LinkHealth for the
@@ -280,6 +281,25 @@ func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []by
 	return response.Version, true, nil
 }
 
+func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string) (map[string]any, bool, error) {
+	socketPath := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(socketPath, controlRequest{
+		Method: "record_get",
+		Zone:   path.String(),
+		Key:    key,
+	})
+	if err != nil {
+		if isControlSocketUnavailable(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	if response.Record == nil {
+		return nil, true, errors.New("daemon record_get response missing record")
+	}
+	return response.Record, true, nil
+}
+
 func issueDelegationViaControl(rt *Runtime, request *joinRequest) (*joinBundle, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method:      "delegate_issue",
@@ -375,6 +395,13 @@ func validateControlRecordPut(request controlRequest) error {
 	}
 	if request.Type == "" {
 		return fmt.Errorf("record_put requires type")
+	}
+	return nil
+}
+
+func validateControlRecordGet(request controlRequest) error {
+	if zone.ZonePath(request.Zone) == "" || request.Key == "" {
+		return fmt.Errorf("record_get requires zone and key")
 	}
 	return nil
 }

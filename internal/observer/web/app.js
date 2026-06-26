@@ -150,6 +150,14 @@ function jsonViewer(obj) {
     return `<div class="json-viewer">${esc(JSON.stringify(obj, null, 2))}</div>`;
 }
 
+function foldedSection(summary, body, className) {
+    return `
+        <details class="${esc(className || 'record-details')}">
+            <summary>${summary}</summary>
+            ${body}
+        </details>`;
+}
+
 function shortHash(s) {
     if (!s) return '-';
     return s.length > 18 ? `${s.substring(0, 18)}...` : s;
@@ -416,6 +424,83 @@ function linkDetail(link) {
         </details>`;
 }
 
+function actionTable(actions) {
+    if (!actions || actions.length === 0) return emptyState('No actions');
+    return `
+        <table class="mini-table">
+            <tr><th>Action</th><th>Link ID</th><th>Peer</th><th>Group</th><th>Reason</th></tr>
+            ${actions.map(a => `
+                <tr>
+                    <td>${stateBadge(a.action || '-')}</td>
+                    <td><code>${esc(a.instance_id || '-')}</code></td>
+                    <td>${esc(a.peer_zone || '-')}</td>
+                    <td>${esc(a.group_id || '-')}</td>
+                    <td>${esc(a.reason || '-')}</td>
+                </tr>`).join('')}
+        </table>`;
+}
+
+function skippedTable(skipped) {
+    if (!skipped || skipped.length === 0) return emptyState('No skipped items');
+    return `
+        <table class="mini-table">
+            <tr><th>Group</th><th>Peer</th><th>Reason</th><th>Detail</th></tr>
+            ${skipped.map(s => `
+                <tr>
+                    <td>${esc(s.group_id || '-')}</td>
+                    <td>${esc(s.peer || '-')}</td>
+                    <td>${stateBadge(s.reason || '-')}</td>
+                    <td>${esc(s.detail || '-')}</td>
+                </tr>`).join('')}
+        </table>`;
+}
+
+function healthDetail(item) {
+    const h = healthValue(item) || {};
+    const desired = item.desired || {};
+    return foldedSection(
+        `Health diagnostics · ${esc(h.instance_id || '-')}`,
+        `<div class="detail-grid">
+            <section>
+                <h3>Probe</h3>
+                ${kvTable([
+                    ['State', stateBadge(h.state)],
+                    ['Probe', esc(h.probe_type || '-')],
+                    ['Samples', `${h.sent || 0} sent, ${h.received || 0} received, ${h.lost || 0} lost`],
+                    ['Loss', pct(h.loss_ratio_pct)],
+                    ['Consecutive Failures', esc(h.consecutive_fail || 0)],
+                    ['Cutover Blocking', h.cutover_blocking ? 'Yes' : 'No'],
+                    ['Next Probe', formatTime(h.next_probe_unix)],
+                    ['Last Error', `<code>${esc(h.last_error || '-')}</code>`],
+                ])}
+            </section>
+            <section>
+                <h3>Latency</h3>
+                ${kvTable([
+                    ['Last RTT', ms(h.last_rtt_ms)],
+                    ['EWMA RTT', ms(h.ewma_rtt_ms)],
+                    ['P50 RTT', ms(h.p50_rtt_ms)],
+                    ['P95 RTT', ms(h.p95_rtt_ms)],
+                    ['P99 RTT', ms(h.p99_rtt_ms)],
+                    ['Jitter', ms(h.jitter_ms)],
+                ])}
+            </section>
+            <section>
+                <h3>Link</h3>
+                ${kvTable([
+                    ['Peer', esc(item.peer_zone || '-')],
+                    ['Group', esc(item.group_id || '-')],
+                    ['Interface', `<code>${esc(item.interface_name || desired.interface_name || '-')}</code>`],
+                    ['Local Tunnel', `<code>${esc(item.local_tunnel_addr || desired.local_tunnel_addr || '-')}</code>`],
+                    ['Peer Tunnel', `<code>${esc(item.peer_tunnel_addr || desired.peer_tunnel_addr || '-')}</code>`],
+                    ['Endpoint', `<code>${esc(item.endpoint || desired.endpoint || '-')}</code>`],
+                ])}
+            </section>
+        </div>`,
+        'record-details health-details'
+    );
+}
+
 // ===== Page Renderers =====
 
 async function renderOverview() {
@@ -631,10 +716,8 @@ async function renderOverlay() {
                 ['Actual SAs', esc(data.actual_sas || 0)],
                 ['Last Error', `<code>${esc(data.last_error || '-')}</code>`],
             ])}
-            <h2>Actions</h2>
-            ${jsonViewer(data.actions || [])}
-            <h2>Skipped</h2>
-            ${jsonViewer(data.skipped || [])}`;
+            ${foldedSection(`Actions (${(data.actions || []).length})`, actionTable(data.actions || []), 'record-details reconcile-details')}
+            ${foldedSection(`Skipped (${(data.skipped || []).length})`, skippedTable(data.skipped || []), 'record-details reconcile-details')}`;
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load links: ${esc(e.message)}</div>`;
     }
@@ -670,7 +753,7 @@ async function renderHealth() {
                 <td>${h.cutover_blocking ? 'Yes' : 'No'}</td>
                 <td>${esc(h.last_error || '-')}</td>
             </tr>
-            <tr class="subrow"><td colspan="13">${jsonViewer(item)}</td></tr>`;
+            <tr class="subrow"><td colspan="13">${healthDetail(item)}</td></tr>`;
         }).join('');
         content.innerHTML = `
             <h1>Link Health</h1>

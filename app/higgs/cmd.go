@@ -217,6 +217,17 @@ func cmdRecord() *cli.Command {
 					return putRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), []byte(cmd.Args().Get(2)), recordType)
 				},
 			},
+			{
+				Name:      "get",
+				Usage:     "Get a record from a zone as JSON",
+				UsageText: "higgs record get <zone> <key>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 2 {
+						return cli.Exit("usage: higgs record get <zone> <key>", 1)
+					}
+					return getRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+				},
+			},
 		},
 	}
 }
