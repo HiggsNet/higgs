@@ -795,6 +795,25 @@ func TestApplyTransportLinkRecordsAuditablePlanAndOrder(t *testing.T) {
 	}
 }
 
+func TestApplyTransportLinkAssignsLinkLocalPrefixForBabel(t *testing.T) {
+	driver := &DryRunDriver{}
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		TransportID:     "ipsec-1",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           DefaultNetNSName,
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
+	}
+	if _, err := ApplyTransportLink(context.Background(), driver, driver, spec, NetNSSpec{}); err != nil {
+		t.Fatalf("ApplyTransportLink: %v", err)
+	}
+	if len(driver.Addresses) != 1 || driver.Addresses[0] != "hgs1=fe80::1234/64" {
+		t.Fatalf("address assignment = %+v", driver.Addresses)
+	}
+}
+
 func TestBuildStrongSwanConnectionUsesRouteBasedChildSA(t *testing.T) {
 	spec := TransportLinkSpec{
 		LocalZone:       "node-a.catofes.",

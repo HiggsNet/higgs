@@ -267,6 +267,9 @@ func tunnelAddressPrefix(addr netip.Addr) string {
 	bits := 32
 	if addr.Is6() {
 		bits = 128
+		if addr.IsLinkLocalUnicast() {
+			bits = 64
+		}
 	}
 	return netip.PrefixFrom(addr, bits).String()
 }

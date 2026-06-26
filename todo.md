@@ -636,7 +636,7 @@
   - [x] 接入 planner/reconcile/apply：
     - `NewTransportLinkSpecForGroup` 默认走 `DeriveTunnelAddresses`；legacy sequential mode 走旧顺序逻辑。
     - StrongSwan `BuildLoadConnMessage` 仍只根据 tunnel address family 选择宽泛 selector（IPv4 `0.0.0.0/0`、IPv6 `::/0`）。
-    - XFRM `AssignAddress` 对 IPv6 link-local 使用 host prefix `/128`；root smoke 的 `ping`/route 显式带 interface。
+    - XFRM interface 在 up 前设置 `addrgenmode none`，避免内核自动派生随机 link-local；`AssignAddress` 对 IPv6 link-local 使用 `/64`，peer route/selector 仍按对端 `/128` 精确匹配。
     - `higgs debug links` 展示 scoped local/remote tunnel address。
   - 验证：
     - [x] config 单测：新结构化配置、旧 `tunnel_address_pool` 兼容、同时配置冲突、非法 mode/family/prefix、IPv4 默认 disabled 都有断言。

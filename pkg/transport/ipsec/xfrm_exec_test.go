@@ -56,6 +56,7 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		"ip link show dev hgs1",
 		"ip link add hgs1 type xfrm if_id 42",
 		"ip link set hgs1 netns h2",
+		"ip netns exec h2 ip link set dev hgs1 addrgenmode none",
 		"ip netns exec h2 ip link set dev hgs1 up",
 		"ip netns exec h2 ip addr replace fd00:1234::1/64 dev hgs1",
 	}
@@ -126,6 +127,7 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 		"ip netns exec h2 ip link show dev hgs1",
 		"ip link show dev hgs1",
 		"ip link set hgs1 netns h2",
+		"ip netns exec h2 ip link set dev hgs1 addrgenmode none",
 		"ip netns exec h2 ip link set dev hgs1 up",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -320,10 +322,10 @@ func TestSystemXFRMDriverPeerTunnelPingSmoke(t *testing.T) {
 	if err := driverB.EnsureInterface(ctx, specB); err != nil {
 		t.Fatalf("EnsureInterface(B): %v", err)
 	}
-	if err := driverA.AssignAddress(ctx, iface, addrA.String()+"/128"); err != nil {
+	if err := driverA.AssignAddress(ctx, iface, addrA.String()+"/64"); err != nil {
 		t.Fatalf("AssignAddress(A): %v", err)
 	}
-	if err := driverB.AssignAddress(ctx, iface, addrB.String()+"/128"); err != nil {
+	if err := driverB.AssignAddress(ctx, iface, addrB.String()+"/64"); err != nil {
 		t.Fatalf("AssignAddress(B): %v", err)
 	}
 
