@@ -760,6 +760,52 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 	}
 }
 
+func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
+	srv := newTestObserverServer()
+	cfg := defaultHealthConfig()
+	cfg.MetricsEnabled = true
+	cfg.LocalSpoolPath = t.TempDir()
+	cfg.LocalSpoolMaxAge = time.Hour
+	srv.daemon.Sync.App.Config.Health = cfg
+	now := time.Unix(3000, 0)
+	srv.daemon.Sync.App.Clock = func() time.Time { return now }
+	if err := srv.daemon.appendHealthSpool(now, []healthLinkJSON{{
+		InstanceID: "link-1",
+		State:      "healthy",
+		ProbeType:  "icmp",
+		LastRTTMs:  42,
+		LossRatio:  0,
+		JitterMs:   3,
+	}}); err != nil {
+		t.Fatalf("appendHealthSpool: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/link-1/series?metric=rtt&range=5m&step=1m", nil)
+	rr := httptest.NewRecorder()
+	srv.handleHealth(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var resp apiResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	ds := data["datasource"].(map[string]any)
+	if ds["configured"] != true || ds["type"] != "local_spool" {
+		t.Fatalf("datasource = %#v, want configured local_spool", ds)
+	}
+	series := data["series"].(map[string]any)
+	points := series["points"].([]any)
+	if len(points) != 1 {
+		t.Fatalf("points = %#v, want 1 point", points)
+	}
+	point := points[0].(map[string]any)
+	if point["value"].(float64) != 42 {
+		t.Fatalf("point value = %v, want 42", point["value"])
+	}
+}
+
 func TestObserverRoutesAPI(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/routes", nil)

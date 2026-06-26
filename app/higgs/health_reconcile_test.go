@@ -1,0 +1,141 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/health"
+)
+
+func TestHealthTargetsParseScopedNetNS(t *testing.T) {
+	state := &stateFile{
+		ManagedZone: zone.ZonePath("node-a.catofes."),
+		LinkInstances: map[string]linkInstanceState{
+			"link-1": {ActualState: "up"},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         "blue",
+				PeerZone:        zone.ZonePath("node-b.catofes."),
+				InterfaceName:   "hgs0",
+				LocalTunnelAddr: "fd00::1%hgs0 netns=h2",
+				PeerTunnelAddr:  "fd00::2%hgs0 netns=h2",
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(state.ManagedZone))
+	if len(targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(targets))
+	}
+	target := targets[0]
+	if target.NetNS != "h2" {
+		t.Fatalf("target NetNS = %q, want h2", target.NetNS)
+	}
+	if got := target.PeerTunnelAddr.String(); got != "fd00::2" {
+		t.Fatalf("peer tunnel addr = %q, want fd00::2", got)
+	}
+	if got := target.LocalTunnelAddr.String(); got != "fd00::1" {
+		t.Fatalf("local tunnel addr = %q, want fd00::1", got)
+	}
+}
+
+func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
+	cfg := defaultHealthConfig()
+	cfg.Enabled = true
+	cfg.Interval = time.Nanosecond
+	cfg.Timeout = time.Nanosecond
+	cfg.Jitter = 0
+	cfg.FailThreshold = 1
+
+	d := &DaemonService{
+		Sync: &SyncRuntime{
+			App: &Runtime{Config: &appConfig{Health: cfg}},
+		},
+	}
+	d.configureHealthManager()
+	if d.health == nil {
+		t.Fatal("health manager was not configured")
+	}
+
+	now := time.Unix(100, 0)
+	d.health.SetTargets([]health.ProbeTarget{{
+		InstanceID: "link-1",
+		State:      "up",
+	}}, now)
+	if got := d.health.Tick(context.Background(), now.Add(time.Second)); got != 1 {
+		t.Fatalf("dispatched probes = %d, want 1", got)
+	}
+	snapshot := d.health.Snapshot(now.Add(time.Second))
+	if len(snapshot) != 1 {
+		t.Fatalf("snapshot links = %d, want 1", len(snapshot))
+	}
+	if strings.Contains(snapshot[0].LastError, "no prober configured") {
+		t.Fatalf("health manager used nop prober: last_error=%q", snapshot[0].LastError)
+	}
+	if snapshot[0].LastError != "peer address missing" {
+		t.Fatalf("last_error = %q, want peer address missing", snapshot[0].LastError)
+	}
+}
+
+func TestHealthLocalSpoolQuerySeries(t *testing.T) {
+	cfg := defaultHealthConfig()
+	cfg.MetricsEnabled = true
+	cfg.LocalSpoolPath = t.TempDir()
+	cfg.LocalSpoolMaxAge = time.Hour
+	appCfg := &appConfig{Health: cfg}
+	d := &DaemonService{
+		Sync: &SyncRuntime{
+			App: &Runtime{Config: appCfg},
+		},
+	}
+	now := time.Unix(2000, 0)
+	if err := d.appendHealthSpool(now.Add(-10*time.Minute), []healthLinkJSON{{
+		InstanceID: "link-1",
+		State:      "healthy",
+		ProbeType:  "icmp",
+		LastRTTMs:  10,
+		LossRatio:  0,
+		JitterMs:   1,
+		Sent:       3,
+		Received:   3,
+	}}); err != nil {
+		t.Fatalf("appendHealthSpool old: %v", err)
+	}
+	if err := d.appendHealthSpool(now, []healthLinkJSON{{
+		InstanceID: "link-1",
+		State:      "degraded",
+		ProbeType:  "icmp",
+		LastRTTMs:  20,
+		LossRatio:  25,
+		JitterMs:   2,
+		Sent:       4,
+		Received:   3,
+		Lost:       1,
+	}}); err != nil {
+		t.Fatalf("appendHealthSpool current: %v", err)
+	}
+
+	series, err := queryHealthSpoolSeries(appCfg, "link-1", healthSeriesQuery{
+		Metric: "rtt",
+		Range:  30 * time.Minute,
+		Step:   time.Minute,
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("queryHealthSpoolSeries: %v", err)
+	}
+	if series.Metric != "rtt" || series.Unit != "ms" {
+		t.Fatalf("series metadata = %s/%s, want rtt/ms", series.Metric, series.Unit)
+	}
+	if len(series.Points) != 2 {
+		t.Fatalf("points = %#v, want 2 points", series.Points)
+	}
+	if got := series.Points[1].Value; got != 20 {
+		t.Fatalf("latest rtt point = %v, want 20", got)
+	}
+}

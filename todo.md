@@ -1353,7 +1353,7 @@
   - TSDB 选型：默认推荐 **VictoriaMetrics single-node** 作为轻量外部时序库，可中心部署，也可每节点部署；原因是单 binary/容器部署、支持 Prometheus scrape/remote write/PromQL-compatible query、资源占用适合中小规模。Prometheus server 可作为兼容方案，但更偏 pull + 本地 TSDB/告警；InfluxDB/TimescaleDB 暂不作为默认主线。
   - 本地离线缓冲只做 bounded spool，不做长期 TSDB：可用 SQLite WAL 存最近 N 条 samples / N 小时，remote sink 恢复后批量 flush；spool 满时按时间丢弃旧样本并计数。
   - 如果配置的是每节点本地 TSDB，Observer 可以把它作为只读 historical datasource：按 link/peer/time range 查询 RTT/loss/jitter/Babel metric；如果只有 SQLite spool，则只展示 spool 保留窗口内的短历史。
-  - 配置示例预留：`health.metrics.enabled`、`listen_addr`、`remote_write.url`、`remote_write.queue_capacity`、`local_spool.path/max_size/max_age`、`query_datasource.url/type=prometheus|victoriametrics|sqlite_spool`、`labels`。
+  - 配置示例预留：`health.metrics.enabled`、`remote_write.url`、`remote_write.queue_capacity`、`local_spool.path/max_size/max_age`、`query_datasource.url/type=victoriametrics|sqlite_spool|file_spool`、`labels`。
 - [x] **6.6.7 操作与诊断面**
   - `higgs debug health`：展示每条 link 的 active/staged 状态、probe 状态、RTT/loss/jitter、BIRD RTT/metric、最近错误、下一次探测时间、是否影响 route cutover。
   - `higgs debug links` 增加 health summary，但避免输出大量历史样本；历史趋势交给 TSDB/Grafana。
@@ -1402,8 +1402,8 @@
   - [x] 实现 `GET /api/v1/peers`、`/api/v1/peers/{peer_id}`：复用 `SyncPeers`、bootstrap/discovered endpoint、observed path、backoff、datagram/object-pull 统计。
   - [x] 实现 `GET /api/v1/links`、`/api/v1/links/{link_id}`：复用 `LinkInstances`、desired link snapshot、IPsec reconcile action/skip reason、SA observation、rotate/takeover 字段。
   - [x] 实现 `GET /api/v1/health`、`/api/v1/health/{link_id}`：返回当前 health window、probe 状态、BIRD RTT/metric、cutover gate、最近错误。
-  - [ ] 实现 `GET /api/v1/health/{link_id}/series?metric=...&range=...&step=...`：只读查询本地 TSDB 或 SQLite spool；未配置 datasource 时返回明确 `not_configured`，不得阻塞 live snapshot。
-    - 延后：当前 health API 返回 `datasource.configured=false`，TSDB/SQLite series query 留到 6.6 health TSDB 接入后补齐。
+  - [x] 实现 `GET /api/v1/health/{link_id}/series?metric=...&range=...&step=...`：只读查询本地 spool；未配置 datasource 时返回明确 `not_configured`，不得阻塞 live snapshot。
+    - 已实现本地 file spool 第一版：daemon 在 probe tick 后写入 `health.metrics.local_spool_path/samples.jsonl`，observer 支持 `rtt/loss/jitter/state` 受限查询；外部 TSDB/push 集成后续补齐。
   - [x] 实现 `GET /api/v1/routes`：复用 `routing.BuildAuthorizedRouteSet(state.Network, now)`，返回 authorized prefixes、assignments/all assignments、pools、errors、本地 export set。
   - [x] 实现 `GET /api/v1/bird`：复用 `stateFile.BirdInstances` 和 `last_routing_error`，仅承诺 managed BIRD 实例状态，不提前承诺 learned routes/neighbors。
   - [x] API 单测覆盖空状态、revoked zone、IPsec connecting/up/rotate、health datasource missing、TSDB query timeout、route authorization error、BIRD error、敏感字段过滤。
@@ -1416,7 +1416,7 @@
   - [x] Overview 展示本节点身份、Zone/Peer/Link/Route/BIRD 摘要、最近错误和刷新状态。
   - [x] Gossip/Zones/Overlay/Health/Route/BIRD 页面先做表格、过滤、详情抽屉、原始 JSON 查看；按钮仅限刷新、复制 JSON、过滤，不提供写操作。
   - [x] Health 页面展示每条 link 的当前状态、RTT/loss/jitter/Babel metric、最近错误、cutover gate；若本地 datasource 可用，展示短时间 sparkline/折线图。
-    - sparkline 留到 TSDB 接入后；当前 health 页面展示 live snapshot 表格。
+    - 已接入本地 spool datasource，Health 页面在 datasource configured 时展示 RTT sparkline；未配置时保留 live snapshot 表格。
   - [x] UI 对 API failure、daemon restarting、empty state、SSE 不可用等状态有明确展示。
   - [x] 前端静态测试可先用 `httptest` + golden HTML/API contract；如引入浏览器测试，再补 Playwright smoke。
     - 已用 `httptest` 覆盖 static handler。
@@ -1439,7 +1439,7 @@
   - [x] Overlay 页面基于 `/api/v1/links` 生成本节点与 peers 的链路图，节点为 peer zone，边为 TransportLink，颜色区分 `pending/connecting/up/down/revoked/error`，并叠加 health summary。
     - 第一版为表格视图；可视化拓扑图（SVG/canvas）留到后续增强。
   - [x] Health 页面可从本地 VictoriaMetrics/Prometheus-compatible datasource 或 SQLite spool 拉取测量序列；跨节点集中视图由外部 TSDB/Grafana 负责，Observer 只展示本节点配置的数据源。
-    - 返回 `datasource.configured=false` 占位，待 6.6 TSDB 接入。
+    - 已实现本地 file spool 查询；VictoriaMetrics/Prometheus-compatible/push 集成后续补齐。
   - [x] Zone 页面增加 delegation/revocation 树形视图，revoked 子树必须醒目标识且不被误显示为健康。
     - 第一版 zone detail JSON 含 revoked 状态、delegations、revocations 结构化数据；树形 UI 留到后续。
   - [x] Route 页面先展示授权前缀、IPAM assignment/pool、route authorization errors；前缀树/路径分析作为增强项。

@@ -23,7 +23,6 @@ type healthConfig struct {
 	DownLossThreshold  float64
 	RecoverConsecutive int
 	MetricsEnabled     bool
-	MetricsListenAddr  string
 	RemoteWriteURL     string
 	RemoteWriteQueue   int
 	LocalSpoolPath     string
@@ -50,7 +49,6 @@ type healthConfigYAML struct {
 type healthMetricsYAML struct {
 	Enabled          *bool  `yaml:"enabled"`
 	Disabled         *bool  `yaml:"disabled"`
-	ListenAddr       string `yaml:"listen_addr"`
 	RemoteWriteURL   string `yaml:"remote_write_url"`
 	RemoteWriteQueue *int   `yaml:"remote_write_queue_capacity"`
 	LocalSpoolPath   string `yaml:"local_spool_path"`
@@ -73,7 +71,6 @@ func defaultHealthConfig() healthConfig {
 		DownLossThreshold:  h.DownLossThreshold,
 		RecoverConsecutive: h.RecoverConsecutive,
 		MetricsEnabled:     false,
-		MetricsListenAddr:  "127.0.0.1:9717",
 		RemoteWriteQueue:   1024,
 		LocalSpoolMaxAge:   6 * time.Hour,
 	}
@@ -169,9 +166,6 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 			return healthConfig{}, err
 		}
 		out.MetricsEnabled = metricsEnabled
-		if y.Metrics.ListenAddr != "" {
-			out.MetricsListenAddr = y.Metrics.ListenAddr
-		}
 		if y.Metrics.RemoteWriteURL != "" {
 			out.RemoteWriteURL = y.Metrics.RemoteWriteURL
 		}

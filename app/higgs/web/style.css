@@ -114,6 +114,19 @@ tr:hover { background: rgba(255,255,255,0.03); }
     background: rgba(0,0,0,0.12);
 }
 
+.sparkline {
+    width: 96px;
+    height: 24px;
+    display: block;
+}
+
+.sparkline polyline {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+
 .badge {
     display: inline-block;
     padding: 2px 8px;

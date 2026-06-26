@@ -28,6 +28,7 @@ type DaemonService struct {
 	XFRMDriver        ipsec.XFRMDriver
 	closeIPsecDriver  func() error
 	health            *health.Manager
+	healthSpoolMu     sync.Mutex
 	observerHub       *sseHub
 	Log               *appLogger
 	LogLimiter        *repeatedLogLimiter
@@ -156,7 +157,7 @@ func (d *DaemonService) configureHealthManager() {
 	if !cfg.Enabled {
 		return
 	}
-	d.health = newHealthManager(cfg, nil)
+	d.health = newHealthManager(cfg, health.NewICMProber(nil, health.NewUDPProber(nil)))
 }
 
 func (d *DaemonService) Run(ctx context.Context) error {

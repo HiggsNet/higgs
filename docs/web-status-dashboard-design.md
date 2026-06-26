@@ -293,9 +293,9 @@ GET /api/v1/health/:link_id/series?metric=rtt|loss|jitter|babel_rtt|babel_metric
 {
   "datasource": {
     "configured": true,
-    "type": "victoriametrics",
+    "type": "local_spool",
     "local": true,
-    "series_window": "24h"
+    "series_window": "6h"
   },
   "links": [
     {
@@ -316,7 +316,7 @@ GET /api/v1/health/:link_id/series?metric=rtt|loss|jitter|babel_rtt|babel_metric
 }
 ```
 
-`/series` 只读查询 6.6 配置的本地 datasource。优先查询本机 VictoriaMetrics / Prometheus-compatible API；未配置外部 datasource 时，可退化读取 SQLite spool 的短期样本。该接口不得把前端传入的任意 PromQL 直接透传给 TSDB；第一版只允许固定 metric 枚举、固定 label filter 和受限 time range，避免 Observer 变成通用 TSDB proxy。
+`/series` 只读查询 6.6 配置的本地 datasource。当前第一版读取 daemon 写入的本地 file spool（`health.metrics.local_spool_path/samples.jsonl`），支持 `rtt/loss/jitter/state` 的受限查询；后续可接本机 VictoriaMetrics / Prometheus-compatible API 或 push pipeline。该接口不得把前端传入的任意 PromQL 直接透传给 TSDB；第一版只允许固定 metric 枚举、固定 label filter 和受限 time range，避免 Observer 变成通用 TSDB proxy。
 
 #### 5.2.5 Route 层
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -51,9 +52,13 @@ func healthTargetsFromState(state *stateFile, localZone string) []health.ProbeTa
 			PeerZone:      string(d.PeerZone),
 			LocalZone:     localZone,
 			Overlay:       d.GroupID,
+			NetNS:         scopedNetNS(d.PeerTunnelAddr),
 			InterfaceName: d.InterfaceName,
 			Staged:        stagedMap[d.InstanceID],
 			State:         instanceState[d.InstanceID],
+		}
+		if peer.NetNS == "" {
+			peer.NetNS = scopedNetNS(d.LocalTunnelAddr)
 		}
 		if addr, err := netip.ParseAddr(stripScope(d.PeerTunnelAddr)); err == nil {
 			peer.PeerTunnelAddr = addr
@@ -78,6 +83,15 @@ func stripScope(s string) string {
 	return s
 }
 
+func scopedNetNS(s string) string {
+	for _, field := range strings.Fields(s) {
+		if netns, ok := strings.CutPrefix(field, "netns="); ok {
+			return strings.TrimSpace(netns)
+		}
+	}
+	return ""
+}
+
 // reconcileHealth updates the health manager with the current link targets,
 // ticks any due probes, and returns the number of probes dispatched. It is
 // meant to be called from the daemon event loop after IPsec reconcile.
@@ -95,7 +109,13 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	targets := healthTargetsFromState(d.Sync.State, localZone)
 	now := d.Sync.now()
 	d.health.SetTargets(targets, now)
-	return d.health.Tick(ctx, now)
+	dispatched := d.health.Tick(ctx, now)
+	if dispatched > 0 {
+		if err := d.appendHealthSpool(now, d.healthStatusResponse()); err != nil && !errors.Is(err, errHealthSpoolNotConfigured) {
+			d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
+		}
+	}
+	return dispatched
 }
 
 // healthStatusResponse builds the control API response for `health_status`.

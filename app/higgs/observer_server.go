@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -989,7 +990,8 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) []map[stri
 	return out
 }
 
-// handleHealth implements GET /api/v1/health and GET /api/v1/health/{link_id}
+// handleHealth implements GET /api/v1/health, GET /api/v1/health/{link_id},
+// and GET /api/v1/health/{link_id}/series.
 func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
@@ -1001,6 +1003,12 @@ func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/health")
 	linkFilter := strings.TrimPrefix(path, "/")
 	linkFilter = strings.TrimSuffix(linkFilter, "/")
+	if strings.HasSuffix(linkFilter, "/series") {
+		linkID := strings.TrimSuffix(linkFilter, "/series")
+		linkID = strings.TrimSuffix(linkID, "/")
+		s.handleHealthSeries(w, r, linkID)
+		return
+	}
 	// Single link health detail
 	if linkFilter != "" {
 		for _, item := range contextualLinks {
@@ -1013,12 +1021,75 @@ func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIOK(w, map[string]any{
-		"datasource": map[string]any{
-			"configured": false,
-			"type":       "none",
-		},
-		"links": contextualLinks,
+		"datasource": healthDatasourceInfo(observerAppConfig(d)),
+		"links":      contextualLinks,
 	})
+}
+
+func (s *observerServer) handleHealthSeries(w http.ResponseWriter, r *http.Request, linkID string) {
+	config := observerAppConfig(s.daemon)
+	if config == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, fmt.Errorf("health datasource not configured"))
+		return
+	}
+	query := r.URL.Query()
+	rng, err := parseOptionalDuration(query.Get("range"), time.Hour, "range")
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
+		return
+	}
+	step, err := parseOptionalDuration(query.Get("step"), 30*time.Second, "step")
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := queryHealthSpoolSeries(config, linkID, healthSeriesQuery{
+		Metric: query.Get("metric"),
+		Range:  rng,
+		Step:   step,
+		Now:    observerNow(s.daemon),
+	})
+	if errors.Is(err, errHealthSpoolNotConfigured) {
+		writeAPIError(w, http.StatusServiceUnavailable, fmt.Errorf("health datasource not_configured"))
+		return
+	}
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeAPIOK(w, map[string]any{
+		"datasource": healthDatasourceInfo(config),
+		"link_id":    linkID,
+		"series":     result,
+	})
+}
+
+func observerAppConfig(d *DaemonService) *appConfig {
+	if d == nil || d.Sync == nil || d.Sync.App == nil {
+		return nil
+	}
+	return d.Sync.App.Config
+}
+
+func observerNow(d *DaemonService) time.Time {
+	if d != nil && d.Sync != nil {
+		return d.Sync.now()
+	}
+	return time.Now()
+}
+
+func parseOptionalDuration(raw string, fallback time.Duration, name string) (time.Duration, error) {
+	if strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %q", name, raw)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be positive", name)
+	}
+	return d, nil
 }
 
 // handleRoutes implements GET /api/v1/routes

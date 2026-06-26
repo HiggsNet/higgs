@@ -259,11 +259,11 @@ health:
   burst: 3
   loss_window: 20
   metrics:
-    listen_addr: "127.0.0.1:9717"
-    remote_write_url: http://victoriametrics:8428/api/v1/write
-    remote_write_queue_capacity: 1024
     local_spool_path: <data_dir>/health-spool
     local_spool_max_age: 6h
+    # Optional future push integration.
+    remote_write_url: http://victoriametrics:8428/api/v1/write
+    remote_write_queue_capacity: 1024
 ```
 
 ### 8.4 TSDB 选型

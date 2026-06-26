@@ -649,9 +649,11 @@ async function renderHealth() {
             content.innerHTML = `<h1>Health</h1>${emptyState('No health data available')}`;
             return;
         }
+        const seriesByID = await fetchHealthRTTSeries(data.datasource, links);
         let rows = links.map(item => {
             const h = healthValue(item);
             const desired = item.desired || {};
+            const series = seriesByID[h.instance_id] || [];
             return `
             <tr>
                 <td>${esc(h.instance_id || '-')}</td>
@@ -664,20 +666,56 @@ async function renderHealth() {
                 <td>${ms(h.last_rtt_ms)}</td>
                 <td>${pct(h.loss_ratio_pct)}</td>
                 <td>${ms(h.jitter_ms)}</td>
+                <td>${sparkline(series)}</td>
                 <td>${h.cutover_blocking ? 'Yes' : 'No'}</td>
                 <td>${esc(h.last_error || '-')}</td>
             </tr>
-            <tr class="subrow"><td colspan="12">${jsonViewer(item)}</td></tr>`;
+            <tr class="subrow"><td colspan="13">${jsonViewer(item)}</td></tr>`;
         }).join('');
         content.innerHTML = `
             <h1>Link Health</h1>
             <table>
-                <tr><th>Link ID</th><th>Peer</th><th>Group</th><th>Interface</th><th>Peer Tunnel</th><th>State</th><th>Probe</th><th>RTT</th><th>Loss</th><th>Jitter</th><th>Cutover Block</th><th>Error</th></tr>
+                <tr><th>Link ID</th><th>Peer</th><th>Group</th><th>Interface</th><th>Peer Tunnel</th><th>State</th><th>Probe</th><th>RTT</th><th>Loss</th><th>Jitter</th><th>Trend</th><th>Cutover Block</th><th>Error</th></tr>
                 ${rows}
             </table>`;
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load health: ${esc(e.message)}</div>`;
     }
+}
+
+async function fetchHealthRTTSeries(datasource, links) {
+    if (!datasource || !datasource.configured) return {};
+    const entries = await Promise.all((links || []).map(async item => {
+        const h = healthValue(item);
+        if (!h.instance_id) return null;
+        try {
+            const data = await fetchAPI(`/health/${encodeURIComponent(h.instance_id)}/series?metric=rtt&range=30m&step=1m`);
+            const points = (data.series && data.series.points) || [];
+            return [h.instance_id, points.map(p => Number(p.value)).filter(v => Number.isFinite(v))];
+        } catch (e) {
+            return [h.instance_id, []];
+        }
+    }));
+    const out = {};
+    entries.forEach(entry => {
+        if (entry) out[entry[0]] = entry[1];
+    });
+    return out;
+}
+
+function sparkline(values) {
+    if (!values || values.length === 0) return '-';
+    const width = 96;
+    const height = 24;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = Math.max(1, max - min);
+    const points = values.map((v, i) => {
+        const x = values.length === 1 ? width : (i / (values.length - 1)) * width;
+        const y = height - ((v - min) / span) * (height - 4) - 2;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<svg class="sparkline" viewBox="0 0 ${width} ${height}" role="img"><polyline points="${points}"></polyline></svg>`;
 }
 
 async function renderRoutes() {

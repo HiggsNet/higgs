@@ -297,11 +297,12 @@ firewall:
 #   recover_consecutive: 5
 #   metrics:
 #     disabled: true
-#     listen_addr: 127.0.0.1:9717
-#     remote_write_url: http://victoriametrics:8428/api/v1/write
-#     remote_write_queue_capacity: 1024
+#     # Local spool is used by observer /api/v1/health/<link_id>/series.
 #     local_spool_path: .higgs/health-spool
 #     local_spool_max_age: 6h
+#     # Optional future push integration.
+#     remote_write_url: http://victoriametrics:8428/api/v1/write
+#     remote_write_queue_capacity: 1024
 
 # observer:
 #   disabled: true
