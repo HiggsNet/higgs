@@ -1,6 +1,6 @@
 # Higgs Web 状态控制台设计
 
-> **文档状态**：MVP 已实现（Phase 6.7，2026-06）
+> **文档状态**：MVP 已实现（Phase 6.7，2026-06）。后续 `app/higgs` 模块化路线见 [app/higgs 模块化设计](app-higgs-modularization-design.md)。
 > **目标**：为 Higgs 守护进程提供一套只读为主的 Web 状态可视化面板，降低调试和运维时阅读文本日志 / CLI 输出的门槛，同时为未来可能扩展的远程控制预留接口和交互空间。
 
 > **第一版实现边界（已落地）：**
@@ -100,11 +100,11 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 ┌───────▼─────────────────────────────────────────────────────────────┐
 │                    Higgs Daemon HTTP Observer                        │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │
-│  │ REST Handlers   │  │ SSE Hub           │  │ State Snapshotter   │  │
-│  │ /api/v1/...     │  │ /events           │  │ (live from daemon)  │  │
+│  │ REST Handlers   │  │ SSE Hub          │  │ HTTP JSON Presenter │  │
+│  │ /api/v1/...     │  │ /events          │  │ (observer adapter)  │  │
 │  └────────┬────────┘  └────────┬────────┘  └──────────┬──────────┘  │
 │           │                    │                       │             │
-│  ┌────────▼────────────────────▼───────────────────────▼─────────┐   │
+│  ┌────────▼──────────────────────────────────────────────────────┐   │
 │  │              Daemon Control Socket / State Lock               │   │
 │  │   (复用 d.Sync.State.RLock/RUnlock, control socket, DB load)  │   │
 │  └───────────────────────────────────────────────────────────────┘   │
@@ -133,6 +133,10 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 3. **健康历史**：如果 6.6 配置了本地 query datasource，Observer 只读查询 link health series；如果只有 SQLite spool，则只查询 spool 保留窗口。
 4. **事件订阅**：复用 `DaemonHooks.OnStateChanged` 或在事件循环中向 SSE hub 发送通知；不侵入业务事件处理。
 5. **配置加载**：在 `appConfig` 中新增 `observerConfig` 段，解析后传给 `newDaemonService`。
+
+### 4.3 与 Inspect / Diagnostics 的关系
+
+Observer 后续应消费共享的只读诊断模型，而不是在 HTTP handler 中重复实现与 CLI debug 相同的状态解释逻辑。跨 Observer、CLI debug、diagnostics，以及 health、routing、revocation、peer lifecycle 等 `app/higgs` 子系统的模块化路线见 [app/higgs 模块化设计](app-higgs-modularization-design.md)。
 
 ---
 
