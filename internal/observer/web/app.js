@@ -10,6 +10,7 @@ let currentPage = 'overview';
 let connectionMode = 'disconnected';
 let selectedZone = null;
 let selectedPeer = null;
+const foldState = new Map();
 
 // ===== API Helpers =====
 
@@ -99,6 +100,7 @@ function handleHashChange() {
 }
 
 function refreshCurrentPage() {
+    rememberFoldState();
     switch (currentPage) {
         case 'overview': renderOverview(); break;
         case 'gossip': renderGossip(); break;
@@ -150,9 +152,34 @@ function jsonViewer(obj) {
     return `<div class="json-viewer">${esc(JSON.stringify(obj, null, 2))}</div>`;
 }
 
-function foldedSection(summary, body, className) {
+function foldKey(key) {
+    return `${currentPage}:${key}`;
+}
+
+function foldAttr(key) {
+    return key ? ` data-fold-key="${esc(foldKey(key))}"` : '';
+}
+
+function rememberFoldState(root) {
+    const el = root || document.getElementById('content');
+    if (!el) return;
+    el.querySelectorAll('details[data-fold-key]').forEach(detail => {
+        foldState.set(detail.dataset.foldKey, detail.open);
+    });
+}
+
+function restoreFoldState(root) {
+    const el = root || document.getElementById('content');
+    if (!el) return;
+    el.querySelectorAll('details[data-fold-key]').forEach(detail => {
+        const key = detail.dataset.foldKey;
+        if (foldState.has(key)) detail.open = foldState.get(key);
+    });
+}
+
+function foldedSection(summary, body, className, key) {
     return `
-        <details class="${esc(className || 'record-details')}">
+        <details class="${esc(className || 'record-details')}"${foldAttr(key)}>
             <summary>${summary}</summary>
             ${body}
         </details>`;
@@ -246,10 +273,10 @@ function groupRecordsByKey(records) {
     return out;
 }
 
-function recordDetails(record, history) {
+function recordDetails(record, history, zonePath) {
     const endpointTableHTML = endpointValueTable(record);
     return `
-        <details class="record-details">
+        <details class="record-details"${foldAttr(`zone:${zonePath || ''}:record:${record.key || ''}`)}>
             <summary>Inspect record${history && history.length ? ` · ${history.length} historical` : ''}</summary>
             ${endpointTableHTML}
             <h3>Value</h3>
@@ -272,7 +299,7 @@ function recordDetails(record, history) {
         </details>`;
 }
 
-function recordTable(records, historyByKey) {
+function recordTable(records, historyByKey, zonePath) {
     if (!records || records.length === 0) return emptyState('No records');
     return `
         <table class="record-table">
@@ -288,7 +315,7 @@ function recordTable(records, historyByKey) {
                     <td><code title="${esc(r.record_hash || '')}">${esc(shortHash(r.record_hash))}</code></td>
                     <td><code title="${esc(r.signed_by || '')}">${esc(shortHash(r.signed_by))}</code></td>
                 </tr>
-                <tr class="subrow"><td colspan="6">${recordDetails(r, history)}</td></tr>`;
+                <tr class="subrow"><td colspan="6">${recordDetails(r, history, zonePath)}</td></tr>`;
             }).join('')}
         </table>`;
 }
@@ -347,7 +374,7 @@ function linkDetail(link) {
     const rotation = link.rotation || {};
     const takeover = link.takeover || {};
     return `
-        <details class="record-details">
+        <details class="record-details"${foldAttr(`link:${link.id || link.instance_id || ''}`)}>
             <summary>Inspect link diagnostics</summary>
             <div class="detail-grid">
                 <section>
@@ -497,7 +524,8 @@ function healthDetail(item) {
                 ])}
             </section>
         </div>`,
-        'record-details health-details'
+        'record-details health-details',
+        `health:${h.instance_id || ''}`
     );
 }
 
@@ -659,7 +687,7 @@ async function renderZoneDetail(path) {
                 <h2>Authority</h2>
                 ${jsonViewer(z.authority || {})}
                 <h2>Active Records</h2>
-                ${recordTable(z.records || [], historyByKey)}
+                ${recordTable(z.records || [], historyByKey, z.path || path)}
                 <h2>Delegations</h2>
                 ${compactList(z.delegations || [], d => jsonViewer(d))}
                 <h2>Parent Proof</h2>
@@ -667,6 +695,7 @@ async function renderZoneDetail(path) {
                 <h2>Revocations</h2>
                 ${compactList(z.revocations || [], r => jsonViewer(r))}
             </section>`;
+        restoreFoldState(el);
     } catch (e) {
         el.innerHTML = `<div class="error-msg">Failed to load zone detail: ${esc(e.message)}</div>`;
     }
@@ -716,8 +745,9 @@ async function renderOverlay() {
                 ['Actual SAs', esc(data.actual_sas || 0)],
                 ['Last Error', `<code>${esc(data.last_error || '-')}</code>`],
             ])}
-            ${foldedSection(`Actions (${(data.actions || []).length})`, actionTable(data.actions || []), 'record-details reconcile-details')}
-            ${foldedSection(`Skipped (${(data.skipped || []).length})`, skippedTable(data.skipped || []), 'record-details reconcile-details')}`;
+            ${foldedSection(`Actions (${(data.actions || []).length})`, actionTable(data.actions || []), 'record-details reconcile-details', 'reconcile:actions')}
+            ${foldedSection(`Skipped (${(data.skipped || []).length})`, skippedTable(data.skipped || []), 'record-details reconcile-details', 'reconcile:skipped')}`;
+        restoreFoldState(content);
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load links: ${esc(e.message)}</div>`;
     }
@@ -761,6 +791,7 @@ async function renderHealth() {
                 <tr><th>Link ID</th><th>Peer</th><th>Group</th><th>Interface</th><th>Peer Tunnel</th><th>State</th><th>Probe</th><th>RTT</th><th>Loss</th><th>Jitter</th><th>Trend</th><th>Cutover Block</th><th>Error</th></tr>
                 ${rows}
             </table>`;
+        restoreFoldState(content);
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load health: ${esc(e.message)}</div>`;
     }

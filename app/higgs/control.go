@@ -45,6 +45,7 @@ type controlRequest struct {
 	Value       []byte          `json:"value,omitempty"`
 	ValueText   string          `json:"value_text,omitempty"`
 	Type        string          `json:"type,omitempty"`
+	History     int             `json:"history,omitempty"`
 	Reason      string          `json:"reason,omitempty"`
 	JoinRequest *joinRequest    `json:"join_request,omitempty"`
 	JoinBundle  *joinBundle     `json:"join_bundle,omitempty"`
@@ -281,12 +282,13 @@ func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []by
 	return response.Version, true, nil
 }
 
-func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string) (map[string]any, bool, error) {
+func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history int) (map[string]any, bool, error) {
 	socketPath := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(socketPath, controlRequest{
-		Method: "record_get",
-		Zone:   path.String(),
-		Key:    key,
+		Method:  "record_get",
+		Zone:    path.String(),
+		Key:     key,
+		History: history,
 	})
 	if err != nil {
 		if isControlSocketUnavailable(err) {
@@ -402,6 +404,9 @@ func validateControlRecordPut(request controlRequest) error {
 func validateControlRecordGet(request controlRequest) error {
 	if zone.ZonePath(request.Zone) == "" || request.Key == "" {
 		return fmt.Errorf("record_get requires zone and key")
+	}
+	if request.History < 0 {
+		return fmt.Errorf("record_get history must be >= 0")
 	}
 	return nil
 }

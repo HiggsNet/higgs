@@ -220,12 +220,15 @@ func cmdRecord() *cli.Command {
 			{
 				Name:      "get",
 				Usage:     "Get a record from a zone as JSON",
-				UsageText: "higgs record get <zone> <key>",
+				UsageText: "higgs record get <zone> <key> [--history=N]",
+				Flags: []cli.Flag{
+					&cli.IntFlag{Name: "history", Usage: "Include up to N previous versions in record_history"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
 						return cli.Exit("usage: higgs record get <zone> <key>", 1)
 					}
-					return getRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+					return getRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Int("history"))
 				},
 			},
 		},

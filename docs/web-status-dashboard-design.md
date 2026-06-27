@@ -46,7 +46,7 @@ Higgs 控制平面目前具备较完整的运行时状态模型，但可观测�
 | **Gossip / Zone DB** | `stateFile.Network` (`*zone.NetworkState`) | `higgs debug zone`、CLI `zone show`、control `routes_dump` | 高：Zone 树、Record、Delegation、Revocation 均可导出 |
 | **Peer 同步状态** | `stateFile.SyncPeers` (`map[string]syncPeerState`) | `higgs sync status --verbose`、`higgs debug peer` | 高：同步时间、backoff、observed path、datagram/object pull 统计均已结构化 |
 | **Overlay / IPsec** | `stateFile.LinkInstances`、`IPsecReconcile` | `higgs debug links` | 高：desired/actual SA、rotate/takeover、reconcile actions 均已结构化 |
-| **链路健康** | `HealthState`（规划）+ 本地 TSDB / SQLite spool（规划） | `higgs debug health`（规划）、6.6 metrics datasource | 中：当前状态可来自 daemon，历史趋势可从本地 datasource 只读查询 |
+| **链路健康** | `HealthState` + 本地 health file spool（可选） | `higgs debug health`、`/api/v1/health`、`/api/v1/health/:link_id/series` | 中：当前状态来自 daemon；配置 `health.metrics.local_spool_path` 后可只读查询短历史 |
 | **Route 授权** | `routing.AuthorizedRouteSet` | control `routes_dump`、`higgs debug routes/route` | 高：可导出为 JSON |
 | **BIRD 路由** | `stateFile.BirdInstances` | control `bird_status`、`higgs debug babel` | 中：当前仅有 BIRD 进程状态，未来需补充 `birdc show route/protocols/neighbors` 解析 |
 | **配置** | `appConfig` / `syncConfigFile` | 配置文件、CLI | 中：用于呈现本地 managed zone、listen addr、overlay 分组等 |
@@ -284,7 +284,7 @@ GET /api/v1/link-groups
 ```text
 GET /api/v1/health
 GET /api/v1/health/:link_id
-GET /api/v1/health/:link_id/series?metric=rtt|loss|jitter|babel_rtt|babel_metric&range=1h&step=30s
+GET /api/v1/health/:link_id/series?metric=rtt|loss|jitter|state&range=1h&step=30s
 ```
 
 `/api/v1/health` 返回 daemon 当前窗口中的链路健康状态：
@@ -316,7 +316,7 @@ GET /api/v1/health/:link_id/series?metric=rtt|loss|jitter|babel_rtt|babel_metric
 }
 ```
 
-`/series` 只读查询 6.6 配置的本地 datasource。当前第一版读取 daemon 写入的本地 file spool（`health.metrics.local_spool_path/samples.jsonl`），支持 `rtt/loss/jitter/state` 的受限查询；后续可接本机 VictoriaMetrics / Prometheus-compatible API 或 push pipeline。该接口不得把前端传入的任意 PromQL 直接透传给 TSDB；第一版只允许固定 metric 枚举、固定 label filter 和受限 time range，避免 Observer 变成通用 TSDB proxy。
+`/series` 只读查询 6.6 配置的本地 datasource。当前第一版读取 daemon 写入的本地 file spool（`health.metrics.local_spool_path/samples.jsonl`），支持 `rtt/loss/jitter/state` 的受限查询；Babel RTT/metric 还没有进入本地 spool。后续可接本机 VictoriaMetrics / Prometheus-compatible API 或 push pipeline。该接口不得把前端传入的任意 PromQL 直接透传给 TSDB；第一版只允许固定 metric 枚举、固定 label filter 和受限 time range，避免 Observer 变成通用 TSDB proxy。
 
 #### 5.2.5 Route 层
 
@@ -540,14 +540,14 @@ GET /api/v1/events
    - `/api/v1/bird`
 4. 实现静态文件服务，内嵌基础前端页面。
 5. 前端实现：Overview、Gossip、Zones、Overlay、Health、Route、BIRD 基础表格视图。
-6. Health 页面第一版展示当前窗口；若 datasource 已配置，再展示 link 级 sparkline。
+6. Health 页面展示当前窗口；若本地 health spool 已配置，再展示 link 级 RTT sparkline。
 
 ### Phase 2：实时事件与拓扑图
 
 1. 实现 SSE hub，监听 daemon 状态变更事件。
 2. 前端接入 EventSource，实现页面自动刷新和事件时间线。
 3. 在 Overlay 页面集成 Sigma.js 拓扑图。
-4. 在 Health 页面接入 `/api/v1/health/:link_id/series`，展示 RTT/loss/jitter/Babel metric 短历史。
+4. 扩展 Health 页面历史视图，在已接入的 RTT sparkline 之外展示 loss/jitter/state；Babel RTT/metric 待 BIRD neighbor 指标进入 health datasource 后再接入。
 5. 增加详情抽屉和原始 JSON 查看。
 
 ### Phase 3：路由与 BIRD 深度集成

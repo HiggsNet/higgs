@@ -472,7 +472,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		d.Sync.State.RLock()
-		record, err := lookupRecordJSON(d.Sync.State, zone.ZonePath(request.Zone), request.Key)
+		record, err := lookupRecordJSON(d.Sync.State, zone.ZonePath(request.Zone), request.Key, request.History)
 		d.Sync.State.RUnlock()
 		if err != nil {
 			writeControlResponse(conn, controlError(err))

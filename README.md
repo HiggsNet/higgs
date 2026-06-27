@@ -799,7 +799,7 @@ observer:
 ### 访问
 
 - 浏览器打开 `http://127.0.0.1:8080` 查看静态 UI（Overview、Zones、Peers、Links、Health、Routes、BIRD）。
-- REST API：`GET /api/v1/status`、`/api/v1/zones`、`/api/v1/peers`、`/api/v1/links`、`/api/v1/health`、`/api/v1/routes`、`/api/v1/bird`。
+- REST API：`GET /api/v1/status`、`/api/v1/zones`、`/api/v1/peers`、`/api/v1/links`、`/api/v1/health`、`/api/v1/health/:link_id/series`、`/api/v1/routes`、`/api/v1/bird`。
 - SSE 事件流：`GET /api/v1/events`（state/peer/link/health/route/bird 变化通知）。
 
 ### 远程访问
@@ -816,7 +816,7 @@ ssh -L 8080:127.0.0.1:8080 user@node
 
 - 所有数据来自 daemon live state（stateFile），通过 `RLock` 只读访问。
 - BIRD 页面第一版只显示实例级状态（router-id、netns、table、socket、last error）；`birdc show protocols/routes/neighbors` 深度字段尚未实现。
-- Health 页面当前展示 live snapshot；TSDB sparkline 待 6.6 health 数据源接入。
+- Health 页面展示 live snapshot；如果配置了 `health.metrics.local_spool_path`，还会从本地 health spool 读取 `rtt/loss/jitter/state` 短历史，其中 UI 当前展示 link 级 RTT sparkline。未配置本地 spool 时只显示当前窗口。
 
 ### 安全边界
 

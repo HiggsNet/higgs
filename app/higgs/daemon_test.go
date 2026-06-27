@@ -3667,18 +3667,33 @@ func TestDaemonControlRecordGet(t *testing.T) {
 	if err := state.Network.Put(record); err != nil {
 		t.Fatalf("Put(record): %v", err)
 	}
+	record, err = buildSignedRecordAt(state, "node-b.catofes.", "site/name", []byte(`{"name":"node-b-2"}`), "policy.json", time.Unix(1001, 0))
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt(second): %v", err)
+	}
+	if err := state.Network.Put(record); err != nil {
+		t.Fatalf("Put(second record): %v", err)
+	}
 	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
 	response := controlRequestViaPipe(t, service, controlRequest{
-		Method: "record_get",
-		Zone:   "node-b.catofes.",
-		Key:    "site/name",
+		Method:  "record_get",
+		Zone:    "node-b.catofes.",
+		Key:     "site/name",
+		History: 1,
 	})
 	if !response.OK {
 		t.Fatalf("record_get response = %#v", response)
 	}
-	if response.Record["key"] != "site/name" || response.Record["value"] != `{"name":"node-b"}` || response.Record["record_hash"] == "" {
+	if response.Record["key"] != "site/name" || response.Record["value"] != `{"name":"node-b-2"}` || response.Record["record_hash"] == "" {
 		t.Fatalf("record_get record = %#v", response.Record)
+	}
+	history := response.Record["record_history"].([]any)
+	if len(history) != 1 {
+		t.Fatalf("record_get history len = %d, want 1", len(history))
+	}
+	if item := history[0].(map[string]any); item["value"] != `{"name":"node-b"}` {
+		t.Fatalf("record_get history = %#v", history)
 	}
 
 	response = controlRequestViaPipe(t, service, controlRequest{

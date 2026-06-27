@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestICMProberScopedLinkLocalUsesNetNSAndInterface(t *testing.T) {
+func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 	runner := &recordingCommandRunner{}
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
@@ -34,12 +34,17 @@ func TestICMProberScopedLinkLocalUsesNetNSAndInterface(t *testing.T) {
 	}
 	want := []string{
 		"netns", "exec", "h2",
-		"ping6", "-c", "1", "-W", "1",
+		"ping", "-6", "-n", "-c", "1",
 		"-I", "hgs431bcb9f",
 		"fe80::b09d:5f83:3e81:d064%hgs431bcb9f",
 	}
 	if !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command args = %#v, want %#v", runner.args, want)
+	}
+	for _, arg := range runner.args {
+		if arg == "ping6" || arg == "-W" {
+			t.Fatalf("command args include non-portable ping option: %#v", runner.args)
+		}
 	}
 }
 
@@ -66,6 +71,19 @@ func TestICMProberIncludesPingOutputInError(t *testing.T) {
 	}
 	if !strings.Contains(result.Error, "Network is unreachable") {
 		t.Fatalf("probe error = %q, want ping output", result.Error)
+	}
+}
+
+func TestPingTargetAddressScopesLinkLocal(t *testing.T) {
+	target := ProbeTarget{
+		InstanceID:     "link-1",
+		InterfaceName:  "hgs0",
+		PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
+		State:          "up",
+	}
+
+	if got := pingTargetAddress(target); got != "fe80::2%hgs0" {
+		t.Fatalf("ping target address = %q, want scoped link-local", got)
 	}
 }
 

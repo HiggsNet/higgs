@@ -46,34 +46,40 @@ func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, 
 	return nil
 }
 
-func getRecord(path zone.ZonePath, key string) error {
+func getRecord(path zone.ZonePath, key string, history int) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	if record, ok, err := getRecordViaControl(rt, path, key); ok {
+	if history < 0 {
+		return fmt.Errorf("history must be >= 0")
+	}
+	if record, ok, err := getRecordViaControl(rt, path, key, history); ok {
 		if err != nil {
 			return err
 		}
 		return writeRecordJSON(record)
 	}
 	logControlFallback("record_get")
-	return getRecordDirect(rt, path, key)
+	return getRecordDirect(rt, path, key, history)
 }
 
-func getRecordDirect(rt *Runtime, path zone.ZonePath, key string) error {
+func getRecordDirect(rt *Runtime, path zone.ZonePath, key string, history int) error {
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
 	}
-	record, err := lookupRecordJSON(state, path, key)
+	record, err := lookupRecordJSON(state, path, key, history)
 	if err != nil {
 		return err
 	}
 	return writeRecordJSON(record)
 }
 
-func lookupRecordJSON(state *stateFile, path zone.ZonePath, key string) (map[string]any, error) {
+func lookupRecordJSON(state *stateFile, path zone.ZonePath, key string, history int) (map[string]any, error) {
+	if history < 0 {
+		return nil, fmt.Errorf("history must be >= 0")
+	}
 	if state == nil || state.Network == nil {
 		return nil, fmt.Errorf("state is nil")
 	}
@@ -85,7 +91,28 @@ func lookupRecordJSON(state *stateFile, path zone.ZonePath, key string) (map[str
 	if rec == nil {
 		return nil, fmt.Errorf("record not found: %s/%s", path, key)
 	}
-	return recordJSON(rec, len(zs.RecordHistory[key])), nil
+	out := recordJSON(rec, len(zs.RecordHistory[key]))
+	if history > 0 {
+		out["record_history"] = recordHistoryJSON(zs.RecordHistory[key], history)
+	}
+	return out, nil
+}
+
+func recordHistoryJSON(records []*zone.Record, limit int) []map[string]any {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, limit)
+	if len(records) == 0 {
+		return out
+	}
+	if limit > len(records) {
+		limit = len(records)
+	}
+	for i := len(records) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, recordJSON(records[i], 0))
+	}
+	return out
 }
 
 func writeRecordJSON(record map[string]any) error {
