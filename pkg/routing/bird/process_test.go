@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,6 +133,30 @@ func TestExecProcessManagerStartRejectsNonManagedModes(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error for mode %q", mode)
 		}
+	}
+}
+
+func TestEnsureNamedNetNSAcceptsExistingNamespace(t *testing.T) {
+	runner := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", `echo 'Cannot create namespace file "/run/netns/higgs-test": File exists' >&2; exit 1`)
+	}
+
+	if err := ensureNamedNetNSWithRunner(context.Background(), "higgs-test", runner); err != nil {
+		t.Fatalf("expected existing netns to be accepted, got %v", err)
+	}
+}
+
+func TestEnsureNamedNetNSIncludesCommandOutputOnFailure(t *testing.T) {
+	runner := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", `echo 'mount --make-shared /run/netns failed' >&2; exit 1`)
+	}
+
+	err := ensureNamedNetNSWithRunner(context.Background(), "higgs-test", runner)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "mount --make-shared /run/netns failed") {
+		t.Fatalf("expected command output in error, got %v", err)
 	}
 }
 

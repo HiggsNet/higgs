@@ -291,13 +291,14 @@ func ensureNamedNetNSWithRunner(
 		return errors.New("netns name is empty")
 	}
 	cmd := runner(ctx, "ip", "netns", "add", name)
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			stderr := string(exitErr.Stderr)
-			if strings.Contains(stderr, "File exists") || strings.Contains(stderr, "already exists") {
-				return nil
-			}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "File exists") || strings.Contains(msg, "already exists") {
+			return nil
+		}
+		if msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
 		}
 		return err
 	}
