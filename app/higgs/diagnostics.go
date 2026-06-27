@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -133,90 +133,31 @@ func debugLinks() error {
 }
 
 func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
-	reconcile := state.IPsecReconcile
-	if reconcile == nil {
-		reconcile = &ipsecReconcileState{}
+	build := buildLinkInspection(rt, state, nil)
+	view := build.Inspection
+	if view.Summary.DesiredPlanError != "" {
+		fmt.Fprintf(w, "desired_plan_error: %s\n", view.Summary.DesiredPlanError)
 	}
-	var birdInstances map[string]*BirdInstanceState
-	if state != nil {
-		birdInstances = state.BirdInstances
-	}
-	plannedDesired := map[string]desiredLinkState{}
-	plannedSpecs := map[string]ipsec.TransportLinkSpec{}
-	if rt != nil && rt.Config != nil && state != nil && state.Network != nil && !state.ManagedZone.IsRoot() && state.ManagedZone.Valid() && len(rt.Config.IPsec.LinkGroups) > 0 {
-		plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: rt.Now()})
-		if err != nil {
-			fmt.Fprintf(w, "desired_plan_error: %s\n", err)
-		} else {
-			desired := injectIPsecKeyMaterial(state, plan.Desired)
-			plan.Desired = desired
-			for _, spec := range plan.Desired {
-				item := desiredLinkState{
-					InstanceID:      ipsec.LinkInstanceID(spec),
-					GroupID:         spec.OverlayID,
-					PeerZone:        spec.PeerZone,
-					TransportID:     spec.TransportID,
-					DesiredSpecHash: ipsec.TransportLinkSpecHash(spec),
-					InterfaceName:   spec.InterfaceName,
-					XFRMIfID:        spec.XFRMIfID,
-					Endpoint:        summarizeContactEndpoint(spec.ContactPoints),
-					LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS),
-					PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
-				}
-				plannedDesired[item.InstanceID] = item
-				plannedSpecs[item.InstanceID] = spec
-			}
-		}
-	}
-	lastDesired := desiredByInstanceID(reconcile.Desired)
-	actualSAs := saByInstanceID(reconcile.ActualSAs)
-	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(reconcile.LastRunUnix))
-	fmt.Fprintf(w, "desired_links: %d\n", reconcile.DesiredLinks)
-	fmt.Fprintf(w, "planned_desired_links: %d\n", len(plannedDesired))
-	fmt.Fprintf(w, "actual_sas: %d\n", len(reconcile.ActualSAs))
-	fmt.Fprintf(w, "last_error: %s\n", dash(reconcile.LastError))
-	ids := make([]string, 0, len(state.LinkInstances))
-	for id := range state.LinkInstances {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	fmt.Fprintf(w, "link_instances: %d\n", len(ids))
-	for _, id := range ids {
-		inst := state.LinkInstances[id]
-		desired := lastDesired[id]
-		if planned, ok := plannedDesired[id]; ok {
-			desired = planned
-		}
-		spec, hasSpec := plannedSpecs[id]
-		sa := actualSAs[id]
-		desiredHash := desired.DesiredSpecHash
-		if desiredHash == "" {
-			desiredHash = inst.DesiredSpecHash
-		}
+	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(view.Summary.LastRunUnix))
+	fmt.Fprintf(w, "desired_links: %d\n", view.Summary.DesiredLinks)
+	fmt.Fprintf(w, "planned_desired_links: %d\n", view.Summary.PlannedDesired)
+	fmt.Fprintf(w, "actual_sas: %d\n", view.Summary.ActualSAs)
+	fmt.Fprintf(w, "last_error: %s\n", dash(view.Summary.LastError))
+	fmt.Fprintf(w, "link_instances: %d\n", view.Summary.LinkInstances)
+	for _, link := range view.Links {
+		spec, hasSpec := build.PlannedSpecs[link.ID]
 		var specPtr *ipsec.TransportLinkSpec
 		if hasSpec {
 			specPtr = &spec
 		}
-		printDebugLinkInstance(w, rt, state, birdInstances, inst, desired, sa, desiredHash, specPtr)
-	}
-	if len(ids) == 0 && len(plannedDesired) > 0 {
-		plannedIDs := make([]string, 0, len(plannedDesired))
-		for id := range plannedDesired {
-			plannedIDs = append(plannedIDs, id)
+		if link.Missing {
+			printDebugMissingLink(w, link, specPtr)
+			continue
 		}
-		sort.Strings(plannedIDs)
-		for _, id := range plannedIDs {
-			desired := plannedDesired[id]
-			spec, hasSpec := plannedSpecs[id]
-			var specPtr *ipsec.TransportLinkSpec
-			if hasSpec {
-				specPtr = &spec
-			}
-			printDebugMissingLink(w, rt, birdInstances, desired, specPtr)
-		}
+		printDebugLinkInstance(w, link, specPtr)
 	}
-	fmt.Fprintf(w, "actions: %d\n", len(reconcile.Actions))
-	for _, action := range reconcile.Actions {
+	fmt.Fprintf(w, "actions: %d\n", len(view.Actions))
+	for _, action := range view.Actions {
 		fmt.Fprintf(w, "- action=%s instance=%s group=%s peer=%s reason=%s\n",
 			action.Action,
 			dash(action.InstanceID),
@@ -225,8 +166,8 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 			dash(action.Reason),
 		)
 	}
-	fmt.Fprintf(w, "skipped: %d\n", len(reconcile.Skipped))
-	for _, skip := range reconcile.Skipped {
+	fmt.Fprintf(w, "skipped: %d\n", len(view.Skipped))
+	for _, skip := range view.Skipped {
 		fmt.Fprintf(w, "- group=%s peer=%s reason=%s detail=%s\n",
 			dash(skip.GroupID),
 			skip.Peer,
@@ -237,22 +178,30 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 	return nil
 }
 
-func printDebugLinkInstance(w io.Writer, rt *Runtime, state *stateFile, birdInstances map[string]*BirdInstanceState, inst linkInstanceState, desired desiredLinkState, sa linkSAState, desiredHash string, spec *ipsec.TransportLinkSpec) {
-	fmt.Fprintf(w, "\nlink %s\n", inst.ID)
-	fmt.Fprintf(w, "  peer: %s\n", inst.PeerZone)
-	fmt.Fprintf(w, "  group: %s\n", dash(inst.GroupID))
-	fmt.Fprintf(w, "  state: %s\n", dash(inst.ActualState))
+func printDebugLinkInstance(w io.Writer, link inspect.LinkView, spec *ipsec.TransportLinkSpec) {
+	desired := inspect.DesiredLink{}
+	if link.Desired != nil {
+		desired = *link.Desired
+	}
+	sa := inspect.LinkSA{}
+	if link.ActualSA != nil {
+		sa = *link.ActualSA
+	}
+	fmt.Fprintf(w, "\nlink %s\n", link.ID)
+	fmt.Fprintf(w, "  peer: %s\n", link.PeerZone)
+	fmt.Fprintf(w, "  group: %s\n", dash(link.GroupID))
+	fmt.Fprintf(w, "  state: %s\n", dash(link.ActualState))
 	fmt.Fprintf(w, "  planner:\n")
-	fmt.Fprintf(w, "    desired_hash: %s\n", dash(shortHash(desiredHash)))
-	fmt.Fprintf(w, "    actual_hash: %s\n", dash(shortHash(inst.DesiredSpecHash)))
-	fmt.Fprintf(w, "    endpoint: %s\n", dash(firstNonEmpty(desired.Endpoint, inst.Endpoint)))
+	fmt.Fprintf(w, "    desired_hash: %s\n", dash(shortHash(desired.DesiredSpecHash)))
+	fmt.Fprintf(w, "    actual_hash: %s\n", dash(shortHash(link.DesiredSpecHash)))
+	fmt.Fprintf(w, "    endpoint: %s\n", dash(link.Endpoint))
 	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(desired.LocalTunnelAddr))
 	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(desired.PeerTunnelAddr))
 	fmt.Fprintf(w, "  xfrm:\n")
-	fmt.Fprintf(w, "    interface: %s\n", dash(inst.InterfaceName))
-	fmt.Fprintf(w, "    if_id: %d\n", inst.XFRMIfID)
+	fmt.Fprintf(w, "    interface: %s\n", dash(link.InterfaceName))
+	fmt.Fprintf(w, "    if_id: %d\n", link.XFRMIfID)
 	fmt.Fprintf(w, "  strongswan:\n")
-	fmt.Fprintf(w, "    child_sa: %s\n", dash(inst.ChildSAName))
+	fmt.Fprintf(w, "    child_sa: %s\n", dash(firstNonEmpty(sa.ChildSA, link.ChildSAName, specChildSAName(spec))))
 	fmt.Fprintf(w, "    sa_state: %s\n", formatSAState(sa))
 	fmt.Fprintf(w, "    local_endpoint: %s\n", dash(sa.LocalEndpoint))
 	fmt.Fprintf(w, "    remote_endpoint: %s\n", dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)))
@@ -262,29 +211,28 @@ func printDebugLinkInstance(w io.Writer, rt *Runtime, state *stateFile, birdInst
 	fmt.Fprintf(w, "    observed_if_id: %s\n", formatUint32OrDash(sa.XFRMIfID))
 	printDebugStrongSwanConfig(w, spec)
 	fmt.Fprintf(w, "  rotation:\n")
-	fmt.Fprintf(w, "    phase: %s\n", dash(inst.RotatePhase))
-	fmt.Fprintf(w, "    remote_generation: %d\n", inst.RemoteGeneration)
-	fmt.Fprintf(w, "    staged_generation: %d\n", inst.StagedGeneration)
-	fmt.Fprintf(w, "    staged_ike: %s\n", dash(inst.StagedIKEName))
-	fmt.Fprintf(w, "    staged_interface: %s\n", dash(inst.StagedInterfaceName))
-	fmt.Fprintf(w, "    staged_if_id: %s\n", formatUint32OrDash(inst.StagedXFRMIfID))
-	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(inst.RotateDeadline))
+	fmt.Fprintf(w, "    phase: %s\n", dash(link.Rotation.Phase))
+	fmt.Fprintf(w, "    remote_generation: %d\n", link.Rotation.RemoteGeneration)
+	fmt.Fprintf(w, "    staged_generation: %d\n", link.Rotation.StagedGeneration)
+	fmt.Fprintf(w, "    staged_ike: %s\n", dash(link.Rotation.StagedIKEName))
+	fmt.Fprintf(w, "    staged_interface: %s\n", dash(link.Rotation.StagedInterfaceName))
+	fmt.Fprintf(w, "    staged_if_id: %s\n", formatUint32OrDash(link.Rotation.StagedXFRMIfID))
+	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(link.Rotation.RotateDeadline))
 	fmt.Fprintf(w, "  takeover:\n")
-	fmt.Fprintf(w, "    initiator_role: %s\n", dash(inst.InitiatorRole))
-	fmt.Fprintf(w, "    phase: %s\n", dash(inst.TakeoverPhase))
-	fmt.Fprintf(w, "    until: %s\n", formatUnixTime(inst.TakeoverUntil))
-	fmt.Fprintf(w, "    observed_initiator: %s\n", dash(inst.ObservedInitiator))
+	fmt.Fprintf(w, "    initiator_role: %s\n", dash(link.Takeover.InitiatorRole))
+	fmt.Fprintf(w, "    phase: %s\n", dash(link.Takeover.Phase))
+	fmt.Fprintf(w, "    until: %s\n", formatUnixTime(link.Takeover.Until))
+	fmt.Fprintf(w, "    observed_initiator: %s\n", dash(link.Takeover.ObservedInitiator))
 	fmt.Fprintf(w, "  health:\n")
-	fmt.Fprintf(w, "    owner: %s\n", dash(inst.Owner.Manager))
-	fmt.Fprintf(w, "    failures: %d\n", inst.FailureCount)
-	fmt.Fprintf(w, "    backoff_until: %s\n", formatUnixTime(inst.BackoffUntil))
-	fmt.Fprintf(w, "    last_error: %s\n", dash(inst.LastError))
-	fmt.Fprintf(w, "    takeover_error: %s\n", dash(inst.LastTakeoverError))
+	fmt.Fprintf(w, "    owner: %s\n", dash(link.Owner.Manager))
+	fmt.Fprintf(w, "    failures: %d\n", link.FailureCount)
+	fmt.Fprintf(w, "    backoff_until: %s\n", formatUnixTime(link.BackoffUntil))
+	fmt.Fprintf(w, "    last_error: %s\n", dash(link.LastError))
+	fmt.Fprintf(w, "    takeover_error: %s\n", dash(link.Takeover.LastError))
 	fmt.Fprintf(w, "  routing:\n")
-	birdState, neighborCount, bestRouteCount := debugLinkRoutingState(rt, birdInstances, inst.GroupID)
-	fmt.Fprintf(w, "    bird_state: %s\n", birdState)
-	fmt.Fprintf(w, "    bird_neighbors: %s\n", neighborCount)
-	fmt.Fprintf(w, "    bird_best_routes: %s\n", bestRouteCount)
+	fmt.Fprintf(w, "    bird_state: %s\n", link.Routing.BirdState)
+	fmt.Fprintf(w, "    bird_neighbors: %s\n", link.Routing.BirdNeighbors)
+	fmt.Fprintf(w, "    bird_best_routes: %s\n", link.Routing.BirdBestRoutes)
 }
 
 func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceState, groupID string) (state, neighborCount, bestRouteCount string) {
@@ -332,10 +280,14 @@ func linkGroupByID(groups []ipsec.LinkGroupSpec, id string) *ipsec.LinkGroupSpec
 	return nil
 }
 
-func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*BirdInstanceState, desired desiredLinkState, spec *ipsec.TransportLinkSpec) {
-	fmt.Fprintf(w, "\nlink %s\n", desired.InstanceID)
-	fmt.Fprintf(w, "  peer: %s\n", desired.PeerZone)
-	fmt.Fprintf(w, "  group: %s\n", dash(desired.GroupID))
+func printDebugMissingLink(w io.Writer, link inspect.LinkView, spec *ipsec.TransportLinkSpec) {
+	desired := inspect.DesiredLink{}
+	if link.Desired != nil {
+		desired = *link.Desired
+	}
+	fmt.Fprintf(w, "\nlink %s\n", link.ID)
+	fmt.Fprintf(w, "  peer: %s\n", link.PeerZone)
+	fmt.Fprintf(w, "  group: %s\n", dash(link.GroupID))
 	fmt.Fprintf(w, "  state: missing\n")
 	fmt.Fprintf(w, "  planner:\n")
 	fmt.Fprintf(w, "    desired_hash: %s\n", dash(shortHash(desired.DesiredSpecHash)))
@@ -344,8 +296,8 @@ func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*B
 	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(desired.LocalTunnelAddr))
 	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(desired.PeerTunnelAddr))
 	fmt.Fprintf(w, "  xfrm:\n")
-	fmt.Fprintf(w, "    interface: %s\n", dash(desired.InterfaceName))
-	fmt.Fprintf(w, "    if_id: %d\n", desired.XFRMIfID)
+	fmt.Fprintf(w, "    interface: %s\n", dash(link.InterfaceName))
+	fmt.Fprintf(w, "    if_id: %d\n", link.XFRMIfID)
 	fmt.Fprintf(w, "  strongswan:\n")
 	fmt.Fprintf(w, "    child_sa: -\n")
 	fmt.Fprintf(w, "    sa_state: -\n")
@@ -356,10 +308,16 @@ func printDebugMissingLink(w io.Writer, rt *Runtime, birdInstances map[string]*B
 	fmt.Fprintf(w, "    backoff_until: -\n")
 	fmt.Fprintf(w, "    last_error: -\n")
 	fmt.Fprintf(w, "  routing:\n")
-	birdState, neighborCount, bestRouteCount := debugLinkRoutingState(rt, birdInstances, desired.GroupID)
-	fmt.Fprintf(w, "    bird_state: %s\n", birdState)
-	fmt.Fprintf(w, "    bird_neighbors: %s\n", neighborCount)
-	fmt.Fprintf(w, "    bird_best_routes: %s\n", bestRouteCount)
+	fmt.Fprintf(w, "    bird_state: %s\n", link.Routing.BirdState)
+	fmt.Fprintf(w, "    bird_neighbors: %s\n", link.Routing.BirdNeighbors)
+	fmt.Fprintf(w, "    bird_best_routes: %s\n", link.Routing.BirdBestRoutes)
+}
+
+func specChildSAName(spec *ipsec.TransportLinkSpec) string {
+	if spec == nil {
+		return ""
+	}
+	return ipsec.ChildSAName(*spec)
 }
 
 func printDebugStrongSwanConfig(w io.Writer, spec *ipsec.TransportLinkSpec) {
@@ -457,20 +415,7 @@ func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {
 	return out
 }
 
-func saByInstanceID(items []linkSAState) map[string]linkSAState {
-	out := map[string]linkSAState{}
-	for _, item := range items {
-		if item.Name != "" {
-			out[item.Name] = item
-		}
-		if item.ChildSA != "" {
-			out[item.ChildSA] = item
-		}
-	}
-	return out
-}
-
-func formatSAState(sa linkSAState) string {
+func formatSAState(sa inspect.LinkSA) string {
 	if sa.Name == "" && sa.ChildSA == "" {
 		return "-"
 	}
