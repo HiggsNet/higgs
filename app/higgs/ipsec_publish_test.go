@@ -128,17 +128,22 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	rt.Clock = func() time.Time { return now.Add(30 * time.Minute) }
 	sr.State = latest
-	if err := sr.publishIPsecRecords(); err != nil {
-		t.Fatalf("publishIPsecRecords(second): %v", err)
-	}
-	second, err := ipsec.ParsePortRecord(latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyPorts])
-	if err != nil {
-		t.Fatalf("ParsePortRecord(second): %v", err)
-	}
-	if second.Current.Generation != 1 {
-		t.Fatalf("generation advanced within interval = %d", second.Current.Generation)
+	for i, offset := range []time.Duration{30 * time.Minute, 55 * time.Minute} {
+		rt.Clock = func() time.Time { return now.Add(offset) }
+		if err := sr.publishIPsecRecords(); err != nil {
+			t.Fatalf("publishIPsecRecords(refresh %d): %v", i, err)
+		}
+		refreshed, err := ipsec.ParsePortRecord(latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyPorts])
+		if err != nil {
+			t.Fatalf("ParsePortRecord(refresh %d): %v", i, err)
+		}
+		if refreshed.Current.Generation != 1 {
+			t.Fatalf("generation advanced within interval = %d", refreshed.Current.Generation)
+		}
+		if refreshed.UpdatedAt != first.UpdatedAt {
+			t.Fatalf("unchanged generation updated_at = %d, want stable %d", refreshed.UpdatedAt, first.UpdatedAt)
+		}
 	}
 
 	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }

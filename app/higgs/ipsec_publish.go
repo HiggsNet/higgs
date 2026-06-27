@@ -64,13 +64,16 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 		if portRecord.Range != nil {
 			r = portRecord.Range
 		}
+		previousState := state.IPsecPortRecord
 		state.IPsecPortRecord = &ipsecPortRecordState{
 			Mode:       portRecord.Mode,
 			Range:      r,
 			Generation: portRecord.Current.Generation,
 			UpdatedAt:  portRecord.UpdatedAt,
 		}
-		changed = true
+		if previousState == nil || previousState.Mode != state.IPsecPortRecord.Mode || previousState.Generation != state.IPsecPortRecord.Generation || previousState.UpdatedAt != state.IPsecPortRecord.UpdatedAt || !ipsecPortRangesEqual(previousState.Range, state.IPsecPortRecord.Range) {
+			changed = true
+		}
 	}
 	if changed {
 		return sr.saveState()
@@ -384,7 +387,11 @@ func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*
 	// defaults unless the configuration explicitly requests a different mode.
 	ike := uint16(ipsec.DefaultIKEPort)
 	natt := uint16(ipsec.DefaultNATTPort)
-	previous := previousIPsecPortRecord(state)
+	existing := existingIPsecPortRecord(state)
+	previous := existing
+	if previous == nil {
+		previous = previousIPsecPortRecord(state)
+	}
 	mode := config.IPsec.PortMode
 	if mode == "" {
 		mode = ipsec.PortModeFixed
@@ -394,6 +401,9 @@ func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*
 	if mode == ipsec.PortModeRange {
 		portRange = &config.IPsec.PortRange
 		generation = nextPortGeneration(state, config, now)
+	}
+	if existing != nil && existing.Current != nil && existing.Current.Generation == generation && portRecordMatchesConfig(existing, mode, portRange) {
+		return existing, nil
 	}
 	return ipsec.PlanPortRecord(ipsec.PortPlanOptions{
 		Mode:          mode,
@@ -405,6 +415,21 @@ func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*
 		PreviousGrace: config.IPsec.PortPreviousGrace,
 		Now:           now,
 	})
+}
+
+func existingIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
+	if state == nil || state.Network == nil || !state.ManagedZone.Valid() {
+		return nil
+	}
+	zs := state.Network.Zones[state.ManagedZone]
+	if zs == nil || zs.Records == nil || zs.Records[ipsec.RecordKeyPorts] == nil {
+		return nil
+	}
+	record, err := ipsec.ParsePortRecord(zs.Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		return nil
+	}
+	return record
 }
 
 func previousIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
@@ -448,6 +473,30 @@ func nextPortGeneration(state *stateFile, config *appConfig, now time.Time) uint
 		return prev.Generation + 1
 	}
 	return prev.Generation
+}
+
+func portRecordMatchesConfig(record *ipsec.PortRecord, mode string, r *ipsec.PortRange) bool {
+	if record == nil {
+		return false
+	}
+	recordMode := record.Mode
+	if recordMode == "" {
+		recordMode = ipsec.PortModeFixed
+	}
+	if recordMode != mode {
+		return false
+	}
+	if mode != ipsec.PortModeRange {
+		return true
+	}
+	return ipsecPortRangesEqual(record.Range, r)
+}
+
+func ipsecPortRangesEqual(a, b *ipsec.PortRange) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.From == b.From && a.To == b.To
 }
 
 func putSignedIPsecRecordIfChanged(state *stateFile, path zone.ZonePath, key, recordType string, value any, now time.Time) (bool, error) {

@@ -363,7 +363,9 @@ function pct(v) {
 
 function ms(v) {
     if (v == null || v === '' || v === 0) return '-';
-    return `${v}ms`;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return `${esc(v)}ms`;
+    return `${n % 1 === 0 ? n : n.toFixed(1)}ms`;
 }
 
 function linkDetail(link) {
@@ -482,9 +484,12 @@ function skippedTable(skipped) {
         </table>`;
 }
 
-function healthDetail(item) {
+function healthDetail(item, datasource) {
     const h = healthValue(item) || {};
     const desired = item.desired || {};
+    const history = datasource && datasource.configured
+        ? healthHistoryPanel(h.instance_id)
+        : `<div class="muted">No local health history datasource configured.</div>`;
     return foldedSection(
         `Health diagnostics · ${esc(h.instance_id || '-')}`,
         `<div class="detail-grid">
@@ -523,10 +528,33 @@ function healthDetail(item) {
                     ['Endpoint', `<code>${esc(item.endpoint || desired.endpoint || '-')}</code>`],
                 ])}
             </section>
-        </div>`,
+        </div>
+        <section class="health-history-section">
+            <h3>RTT History</h3>
+            ${history}
+        </section>`,
         'record-details health-details',
         `health:${h.instance_id || ''}`
     );
+}
+
+function healthHistoryPanel(instanceID) {
+    if (!instanceID) return `<div class="muted">No link instance selected.</div>`;
+    return `
+        <div class="history-panel" data-link-id="${esc(instanceID)}">
+            <div class="history-toolbar" role="group" aria-label="RTT history range">
+                ${healthRangeButton('5m', '5m')}
+                ${healthRangeButton('30m', '30m', true)}
+                ${healthRangeButton('1h', '1h')}
+                ${healthRangeButton('6h', '6h')}
+                ${healthRangeButton('24h', '24h')}
+            </div>
+            <div class="health-chart-body muted">Open this section to load RTT history.</div>
+        </div>`;
+}
+
+function healthRangeButton(label, range, active) {
+    return `<button type="button" class="btn range-btn${active ? ' active' : ''}" data-health-range="${esc(range)}">${esc(label)}</button>`;
 }
 
 // ===== Page Renderers =====
@@ -783,7 +811,7 @@ async function renderHealth() {
                 <td>${h.cutover_blocking ? 'Yes' : 'No'}</td>
                 <td>${esc(h.last_error || '-')}</td>
             </tr>
-            <tr class="subrow"><td colspan="13">${healthDetail(item)}</td></tr>`;
+            <tr class="subrow"><td colspan="13">${healthDetail(item, data.datasource)}</td></tr>`;
         }).join('');
         content.innerHTML = `
             <h1>Link Health</h1>
@@ -792,6 +820,7 @@ async function renderHealth() {
                 ${rows}
             </table>`;
         restoreFoldState(content);
+        bindHealthHistory(content, data.datasource);
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load health: ${esc(e.message)}</div>`;
     }
@@ -830,6 +859,116 @@ function sparkline(values) {
         return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
     return `<svg class="sparkline" viewBox="0 0 ${width} ${height}" role="img"><polyline points="${points}"></polyline></svg>`;
+}
+
+function bindHealthHistory(root, datasource) {
+    if (!datasource || !datasource.configured) return;
+    root.querySelectorAll('details.health-details').forEach(detail => {
+        if (!detail.querySelector('.history-panel')) return;
+        detail.addEventListener('toggle', () => {
+            if (detail.open) loadHealthHistory(detail);
+        });
+        if (detail.open) loadHealthHistory(detail);
+    });
+    root.querySelectorAll('[data-health-range]').forEach(button => {
+        button.addEventListener('click', () => {
+            const detail = button.closest('details.health-details');
+            if (!detail) return;
+            detail.querySelectorAll('[data-health-range]').forEach(btn => btn.classList.toggle('active', btn === button));
+            loadHealthHistory(detail, button.dataset.healthRange);
+        });
+    });
+}
+
+async function loadHealthHistory(detail, range) {
+    const panel = detail.querySelector('.history-panel');
+    const body = detail.querySelector('.health-chart-body');
+    if (!panel || !body) return;
+    const linkID = panel.dataset.linkId || '';
+    const selectedRange = range || selectedHealthRange(detail);
+    const step = healthRangeStep(selectedRange);
+    const requestKey = `${linkID}:${selectedRange}:${step}`;
+    if (body.dataset.loadedKey === requestKey || body.dataset.loadingKey === requestKey) return;
+    body.dataset.loadingKey = requestKey;
+    body.classList.add('muted');
+    body.textContent = 'Loading RTT history...';
+    try {
+        const data = await fetchAPI(`/health/${encodeURIComponent(linkID)}/series?metric=rtt&range=${encodeURIComponent(selectedRange)}&step=${encodeURIComponent(step)}`);
+        const series = data.series || {};
+        body.classList.remove('muted');
+        body.innerHTML = healthChart(series.points || [], series.range || selectedRange, series.step || step);
+        body.dataset.loadedKey = requestKey;
+    } catch (e) {
+        delete body.dataset.loadedKey;
+        body.classList.add('muted');
+        body.textContent = `RTT history unavailable: ${e.message}`;
+    } finally {
+        delete body.dataset.loadingKey;
+    }
+}
+
+function selectedHealthRange(detail) {
+    const active = detail.querySelector('[data-health-range].active');
+    return active ? active.dataset.healthRange : '30m';
+}
+
+function healthRangeStep(range) {
+    switch (range) {
+        case '5m': return '10s';
+        case '30m': return '1m';
+        case '1h': return '2m';
+        case '6h': return '10m';
+        case '24h': return '30m';
+        default: return '1m';
+    }
+}
+
+function healthChart(points, range, step) {
+    const clean = (points || [])
+        .map(p => ({ts: Number(p.unix_ms), value: Number(p.value)}))
+        .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.value));
+    if (clean.length === 0) {
+        return `<div class="empty-state compact">No RTT samples for ${esc(range)}.</div>`;
+    }
+    const width = 720;
+    const height = 220;
+    const pad = {top: 18, right: 20, bottom: 34, left: 54};
+    const xs = clean.map(p => p.ts);
+    const ys = clean.map(p => p.value);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(0, Math.min(...ys));
+    const maxY = Math.max(...ys);
+    const xSpan = Math.max(1, maxX - minX);
+    const ySpan = Math.max(1, maxY - minY);
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const x = ts => pad.left + ((ts - minX) / xSpan) * plotW;
+    const y = value => pad.top + plotH - ((value - minY) / ySpan) * plotH;
+    const path = clean.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.ts).toFixed(1)} ${y(p.value).toFixed(1)}`).join(' ');
+    const latest = clean[clean.length - 1];
+    const avg = ys.reduce((sum, value) => sum + value, 0) / ys.length;
+    const yTicks = [minY, minY + ySpan / 2, maxY];
+    const start = new Date(minX).toLocaleTimeString();
+    const end = new Date(maxX).toLocaleTimeString();
+    return `
+        <div class="chart-meta">
+            <span>Latest ${ms(latest.value)}</span>
+            <span>Avg ${ms(avg)}</span>
+            <span>Max ${ms(maxY)}</span>
+            <span>${esc(range)} · ${esc(step)}</span>
+        </div>
+        <svg class="history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="RTT history chart">
+            ${yTicks.map(tick => `
+                <line class="chart-grid" x1="${pad.left}" y1="${y(tick).toFixed(1)}" x2="${width - pad.right}" y2="${y(tick).toFixed(1)}"></line>
+                <text class="chart-label" x="${pad.left - 8}" y="${(y(tick) + 4).toFixed(1)}" text-anchor="end">${esc(ms(tick))}</text>`).join('')}
+            <line class="chart-axis" x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}"></line>
+            <line class="chart-axis" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}"></line>
+            <path class="history-line" d="${path}"></path>
+            ${clean.map(p => `<circle class="history-point" cx="${x(p.ts).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.6"></circle>`).join('')}
+            <text class="chart-label" x="${pad.left}" y="${height - 10}" text-anchor="start">${esc(start)}</text>
+            <text class="chart-label" x="${width - pad.right}" y="${height - 10}" text-anchor="end">${esc(end)}</text>
+        </svg>`;
 }
 
 async function renderRoutes() {

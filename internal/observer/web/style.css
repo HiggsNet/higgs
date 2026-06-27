@@ -165,6 +165,7 @@ tr:hover { background: rgba(255,255,255,0.03); }
 }
 .btn:hover { background: var(--accent); color: #000; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
 
 .toolbar { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
 
@@ -259,4 +260,77 @@ code {
 .muted {
     color: var(--text-dim);
     font-size: 12px;
+}
+
+.empty-state.compact {
+    padding: 18px;
+}
+
+.history-panel {
+    margin: 8px 0 12px;
+}
+
+.history-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0 12px;
+}
+
+.range-btn {
+    min-width: 52px;
+    padding: 5px 10px;
+}
+
+.health-chart-body {
+    min-height: 268px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(0,0,0,0.16);
+    padding: 12px;
+    overflow-x: auto;
+}
+
+.chart-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 8px;
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+.history-chart {
+    width: 100%;
+    min-width: 560px;
+    height: 240px;
+    display: block;
+}
+
+.chart-grid {
+    stroke: rgba(255,255,255,0.08);
+    stroke-width: 1;
+}
+
+.chart-axis {
+    stroke: rgba(255,255,255,0.22);
+    stroke-width: 1;
+}
+
+.chart-label {
+    fill: var(--text-dim);
+    font-size: 11px;
+}
+
+.history-line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2.4;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.history-point {
+    fill: var(--accent);
+    opacity: 0.85;
 }
