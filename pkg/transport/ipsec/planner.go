@@ -2,7 +2,6 @@ package ipsec
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"net/netip"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
 const (
@@ -98,6 +96,9 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 			for _, spec := range specs {
 				plan.Desired = append(plan.Desired, spec)
 				plan.Roles[LinkInstanceID(spec)] = spec.InitiatorRole
+				if spec.TransportID != "" {
+					plan.Roles[spec.TransportID] = spec.InitiatorRole
+				}
 			}
 			selectedPeers++
 			linkIndex = nextIndex
@@ -188,14 +189,22 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	case PathModeFamilyRedundant:
 		byFamily := groupContactPointsByFamily(contacts)
 		if len(byFamily) == 0 {
-			// Responder-only spec (no contacts).
-			spec, err := newSpecForFamily(local, peer, group, records, nil, "", linkIndex)
-			if err != nil {
-				return nil, false, PlanSkip{}, linkIndex, err
+			// Responder-only specs do not carry contact points, but still need
+			// the same family path key the active side will derive from the
+			// group's allowed remote address sources.
+			families := responderPathFamilies(records, group.AddressSourceOrder)
+			if len(families) == 0 {
+				families = []string{""}
 			}
-			spec.InitiatorRole = role
-			specs = append(specs, spec)
-			nextIndex = linkIndex + 1
+			for i, family := range families {
+				spec, err := newSpecForFamily(local, peer, group, records, nil, family, linkIndex+i)
+				if err != nil {
+					return nil, false, PlanSkip{}, linkIndex, err
+				}
+				spec.InitiatorRole = role
+				specs = append(specs, spec)
+			}
+			nextIndex = linkIndex + len(families)
 			break
 		}
 		familyIdx := 0
@@ -239,11 +248,15 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 }
 
 func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *NodeRecords, contacts []ContactPoint, family string, linkIndex int) (TransportLinkSpec, error) {
-	transportID := StableTransportID(local, peer, group.ID)
+	pathKey := DefaultPathKey
 	if family != "" {
-		transportID = StableTransportID(local, peer, group.ID, family)
+		pathKey = "family:" + family
 	}
+	linkID := StableLinkID(local, peer, group.ID, pathKey)
+	transportID := RuntimeConnectionID(linkID, 0, group.Provider)
 	spec, err := NewTransportLinkSpecWithOptions(local, peer, group.ID, records, contacts, TransportLinkOptions{
+		LinkID:          linkID,
+		PathKey:         pathKey,
 		TransportID:     transportID,
 		Provider:        group.Provider,
 		PathMode:        group.DefaultPathMode,
@@ -254,12 +267,7 @@ func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *N
 	if err != nil {
 		return TransportLinkSpec{}, err
 	}
-	addressIndex := linkIndex
-	switch group.normalizedTunnelAddress().Mode {
-	case TunnelAddressDerivedLinkLocal, TunnelAddressDerivedPool:
-		addressIndex = stableTunnelAddressIndex(local, peer, group.ID, family)
-	}
-	localAddr, peerAddr, err := group.DeriveTunnelAddresses(local, peer, addressIndex)
+	localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, spec.AddressEpoch, linkIndex)
 	if err != nil {
 		return TransportLinkSpec{}, err
 	}
@@ -269,12 +277,6 @@ func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *N
 	spec.LocalTunnelAddr = localAddr
 	spec.PeerTunnelAddr = peerAddr
 	return spec, nil
-}
-
-func stableTunnelAddressIndex(local, peer zone.ZonePath, overlayID, family string) int {
-	lower, higher := sortedPair(local, peer)
-	hash := higgscrypto.Hash([]byte(lower), []byte{0}, []byte(higher), []byte{0}, []byte(overlayID), []byte{0}, []byte(family))
-	return int(binary.BigEndian.Uint32(hash[:4]) & 0x7fffffff)
 }
 
 func canLoadResponder(localAccept string) bool {
@@ -356,6 +358,35 @@ func sortedFamilies(byFamily map[string][]ContactPoint) []string {
 	}
 	sort.Strings(families)
 	return families
+}
+
+func responderPathFamilies(records *NodeRecords, allowedSources []string) []string {
+	if records == nil || records.Addresses == nil {
+		return nil
+	}
+	allowed := map[string]bool{}
+	for _, source := range allowedSources {
+		allowed[source] = true
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, address := range records.Addresses.Addresses {
+		if len(allowed) > 0 && !allowed[address.Source] {
+			continue
+		}
+		for _, family := range addressFamilies(address) {
+			if seen[family] {
+				continue
+			}
+			if len(records.Profile.AddressFamilies) > 0 && !oneOf(family, records.Profile.AddressFamilies...) {
+				continue
+			}
+			seen[family] = true
+			out = append(out, family)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func applyMeshPolicyRules(group LinkGroupSpec, peer zone.ZonePath, records *NodeRecords, connectRules, denyRules []MeshPolicyRule) (LinkGroupSpec, bool, PlanSkip, error) {

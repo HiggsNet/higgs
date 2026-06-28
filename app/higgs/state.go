@@ -167,6 +167,8 @@ type linkInstanceState struct {
 	GroupID             string         `json:"group_id,omitempty"`
 	PeerZone            zone.ZonePath  `json:"peer_zone"`
 	TransportKind       string         `json:"transport_kind,omitempty"`
+	LinkID              string         `json:"link_id,omitempty"`
+	PathKey             string         `json:"path_key,omitempty"`
 	TransportID         string         `json:"transport_id,omitempty"`
 	DesiredSpecHash     string         `json:"desired_spec_hash,omitempty"`
 	ActualState         string         `json:"actual_state,omitempty"`
@@ -202,6 +204,7 @@ type linkOwnerState struct {
 	Manager     string `json:"manager,omitempty"`
 	GroupID     string `json:"group_id,omitempty"`
 	InstanceID  string `json:"instance_id,omitempty"`
+	LinkID      string `json:"link_id,omitempty"`
 	TransportID string `json:"transport_id,omitempty"`
 	Token       string `json:"token,omitempty"`
 }
@@ -220,6 +223,8 @@ type desiredLinkState struct {
 	InstanceID      string        `json:"instance_id,omitempty"`
 	GroupID         string        `json:"group_id,omitempty"`
 	PeerZone        zone.ZonePath `json:"peer_zone,omitempty"`
+	LinkID          string        `json:"link_id,omitempty"`
+	PathKey         string        `json:"path_key,omitempty"`
 	TransportID     string        `json:"transport_id,omitempty"`
 	DesiredSpecHash string        `json:"desired_spec_hash,omitempty"`
 	InterfaceName   string        `json:"interface_name,omitempty"`

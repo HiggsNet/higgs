@@ -40,18 +40,21 @@
   - 验证要求：root/container smoke 必须覆盖旧 SA 保持可用、新 SA 并行建立、切换期间连续 tunnel ping 或允许的最大丢包窗口、失败回滚仍保持旧路径、daemon 重启恢复、revocation/policy deny 仍强制 teardown。
 
 - [ ] **4.x IPsec 链路身份重新分层**
-  - [ ] 引入无方向 `LinkID` / `PairID` 作为两节点同一逻辑 link 的唯一基础身份：`hash(sorted(local_zone, peer_zone), overlay_id, path_key)`；`path_key` 第一版为 `default` 或 `family:ipv4` / `family:ipv6`。
-  - [ ] `LinkInstance`、routing/debug/health read model 以稳定 `LinkID` 为主键；runtime connection、generation、interface 作为观测 label，避免 rotate 后历史断裂。
-  - [ ] 将 `TransportID` 降级为 runtime resource id：`RuntimeConnectionID = "ipsec-" + short(hash(LinkID, generation, provider, "runtime"))`，staged generation 使用 `-r<generation>` 短名；`ChildSAName = RuntimeConnectionID + "-child"`。
-  - [ ] XFRM 与 interface 从 runtime 派生：`XFRMIfID = uint32(hash(LinkID, generation, provider, "xfrm-if-id"))`，0 改为 1；`InterfaceName = hgs<8hex>`，保持 Linux 15 字符限制。
-  - [ ] owner token 从 `hash(LinkID, RuntimeConnectionID, "owner-token")` 派生，用于 create/adopt/cleanup/revocation 的 owner guard；兼容旧 `TransportID` owner token 的迁移/清理。
-  - [ ] `derived-link-local` / `derived-pool` 地址改为从 `LinkID + address_epoch + mode + pool? + lower/higher` 派生；`address_epoch=0` 为稳定地址，staged old/new 同 family 双 running 时用 generation 作为 epoch，尤其避免 `derived-pool` 地址复用。
-  - [ ] `derived-pool` 派生必须把 pool 纳入 hash：IPv4 跳过 network/broadcast/不可用 host，IPv6 跳过 pool base/不可用地址，通过 retry 处理候选不可用；两端 overlay intent 必须声明兼容 tunnel address mode/family/pool。
+  - [x] 引入无方向 `LinkID` / `PairID` 作为两节点同一逻辑 link 的唯一基础身份：`hash(sorted(local_zone, peer_zone), overlay_id, path_key)`；`path_key` 第一版为 `default` 或 `family:ipv4` / `family:ipv6`。
+  - [x] `LinkInstance`、routing/debug/health read model 以稳定 `LinkID` 为主键；runtime connection、generation、interface 作为观测 label，避免 rotate 后历史断裂。
+  - [x] 将 `TransportID` 降级为 runtime resource id：`RuntimeConnectionID = "ipsec-" + short(hash(LinkID, generation, provider, "runtime"))`，staged generation 使用 `-r<generation>` 短名；`ChildSAName = RuntimeConnectionID + "-child"`。
+  - [x] XFRM 与 interface 从 runtime 派生：`XFRMIfID = uint32(hash(LinkID, generation, provider, "xfrm-if-id"))`，0 改为 1；`InterfaceName = hgs<8hex>`，保持 Linux 15 字符限制。
+  - [x] owner token 从 `hash(LinkID, RuntimeConnectionID, "owner-token")` 派生，用于 create/adopt/cleanup/revocation 的 owner guard；兼容旧 `TransportID` owner token 的迁移/清理。
+  - [x] `derived-link-local` / `derived-pool` 地址改为从 `LinkID + address_epoch + mode + pool? + lower/higher` 派生；`address_epoch=0` 为稳定地址，staged old/new 同 family 双 running 时用 generation 作为 epoch，尤其避免 `derived-pool` 地址复用。
+  - [x] `derived-pool` 派生必须把 pool 纳入 hash：IPv4 跳过 network/broadcast/不可用 host，IPv6 跳过 pool base/不可用地址，通过 retry 处理候选不可用。
+  - [ ] 两端 overlay intent 必须声明兼容 tunnel address mode/family/pool。
   - [ ] `sequential-pool` 标为 legacy：保留兼容和迁移测试，但新设计、示例和文档默认使用 `derived-link-local` 或 `derived-pool`。
   - [ ] 新增 overlay/link intent 记录层，例如 `ipsec/overlays/<overlay_id>` / `ipsec.overlay_intent.v1`：节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 只表达本节点 StrongSwan/IPsec 能力；overlay intent 记录表达本节点愿意把这些节点能力用于哪个 `overlay_id/path_key`。
   - [ ] planner 只有在远端 capability 完整可信、本地 `connect` 选择 peer、远端 overlay intent 与本地 `overlay_id/path_key` 兼容时才输出 desired link；当前兼容期若缺少 overlay intent，应显式输出 warning/skip reason 或受配置开关控制。
-  - [ ] 补迁移策略：从旧 `TransportID`/directional address 状态恢复时能 adopt/cleanup 旧资源，重新写入 `LinkID`、runtime id、owner token、tunnel address；debug links 显示 old/new identity 对照。
+  - [x] 补迁移策略：从旧 `TransportID`/directional address 状态恢复时能 adopt/cleanup 旧资源，重新写入 `LinkID`、runtime id、owner token、tunnel address；debug links 显示 old/new identity 对照。
+    - 2026-06-28 已接入兼容迁移：reconcile 可按旧 instance key / 旧 `TransportID` 找回实例并改挂到 `LinkID`，owner token 接受旧 v1 并重写新 v2；`debug links` 显示 `link_id`、`path_key`、`runtime_id`。
   - [ ] 测试覆盖：双端同 overlay 得到相同 `LinkID` 和镜像 tunnel address；不同 overlay 不建链或给出明确 skip；family-redundant 产生不同 path_key；rotate gen N/N+1 runtime/if_id/interface/address_epoch 不冲突；derived-pool 双 running 不复用地址；daemon restart 可从 staged/current runtime 恢复。
+    - 2026-06-28 已覆盖核心 planner/instance、daemon dry-run bringup/SA observation、debug read model 和 `make check`；overlay intent record / 不同 overlay skip 仍随下一条协议记录层实现补齐。
 
 ## Phase 5: BIRD Babel 路由 + Route Authorization Filter（归档后仅保留后续项）
 

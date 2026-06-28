@@ -55,6 +55,8 @@ type LinkInstance struct {
 	GroupID             string
 	PeerZone            zone.ZonePath
 	TransportKind       string
+	LinkID              string
+	PathKey             string
 	TransportID         string
 	DesiredSpecHash     string
 	ActualState         string
@@ -91,6 +93,7 @@ type ResourceOwner struct {
 	Manager     string
 	GroupID     string
 	InstanceID  string
+	LinkID      string
 	TransportID string
 	Token       string
 }
@@ -128,6 +131,8 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 		GroupID:         spec.OverlayID,
 		PeerZone:        spec.PeerZone,
 		TransportKind:   spec.Provider,
+		LinkID:          LinkInstanceID(spec),
+		PathKey:         spec.PathKey,
 		TransportID:     spec.TransportID,
 		DesiredSpecHash: TransportLinkSpecHash(spec),
 		ActualState:     state,
@@ -142,8 +147,9 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 			Manager:     "higgs",
 			GroupID:     spec.OverlayID,
 			InstanceID:  LinkInstanceID(spec),
+			LinkID:      LinkInstanceID(spec),
 			TransportID: spec.TransportID,
-			Token:       ResourceOwnerToken(spec.OverlayID, LinkInstanceID(spec), spec.TransportID),
+			Token:       ResourceOwnerToken(LinkInstanceID(spec), spec.TransportID),
 		},
 	}
 	if point, ok := firstContactPoint(spec.ContactPoints); ok {
@@ -155,10 +161,59 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 }
 
 func LinkInstanceID(spec TransportLinkSpec) string {
+	if spec.LinkID != "" {
+		return spec.LinkID
+	}
 	if spec.TransportID != "" {
 		return spec.TransportID
 	}
-	return StableTransportID(spec.LocalZone, spec.PeerZone, spec.OverlayID)
+	pathKey := spec.PathKey
+	if pathKey == "" {
+		pathKey = DefaultPathKey
+	}
+	return StableLinkID(spec.LocalZone, spec.PeerZone, spec.OverlayID, pathKey)
+}
+
+func findMigratableLinkInstance(instances map[string]LinkInstance, spec TransportLinkSpec) (LinkInstance, bool) {
+	legacyIDs := []string{
+		spec.TransportID,
+		LegacyStableTransportID(spec.LocalZone, spec.PeerZone, spec.OverlayID),
+	}
+	if spec.PathKey != "" && strings.HasPrefix(spec.PathKey, "family:") {
+		legacyIDs = append(legacyIDs, LegacyStableTransportID(spec.LocalZone, spec.PeerZone, spec.OverlayID, strings.TrimPrefix(spec.PathKey, "family:")))
+	}
+	for _, id := range legacyIDs {
+		if id == "" || id == LinkInstanceID(spec) {
+			continue
+		}
+		if inst, ok := instances[id]; ok && migratableInstanceMatches(inst, spec) {
+			return inst, true
+		}
+	}
+	for _, inst := range instances {
+		if migratableInstanceMatches(inst, spec) {
+			return inst, true
+		}
+	}
+	return LinkInstance{}, false
+}
+
+func migratableInstanceMatches(inst LinkInstance, spec TransportLinkSpec) bool {
+	if inst.LinkID != "" && inst.LinkID != LinkInstanceID(spec) {
+		return false
+	}
+	if inst.GroupID != "" && inst.GroupID != spec.OverlayID {
+		return false
+	}
+	if inst.PeerZone != "" && inst.PeerZone != spec.PeerZone {
+		return false
+	}
+	if inst.TransportKind != "" && inst.TransportKind != spec.Provider {
+		return false
+	}
+	return inst.TransportID == spec.TransportID ||
+		inst.TransportID == LegacyStableTransportID(spec.LocalZone, spec.PeerZone, spec.OverlayID) ||
+		(strings.HasPrefix(spec.PathKey, "family:") && inst.TransportID == LegacyStableTransportID(spec.LocalZone, spec.PeerZone, spec.OverlayID, strings.TrimPrefix(spec.PathKey, "family:")))
 }
 
 func TransportLinkSpecHash(spec TransportLinkSpec) string {
@@ -183,7 +238,12 @@ func TransportLinkSpecHash(spec TransportLinkSpec) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func ResourceOwnerToken(groupID, instanceID, transportID string) string {
+func ResourceOwnerToken(linkID, runtimeConnectionID string) string {
+	sum := higgscrypto.Hash([]byte("higgs.ipsec.owner.v2"), []byte{0}, []byte(linkID), []byte{0}, []byte(runtimeConnectionID), []byte{0}, []byte("owner-token"))
+	return hex.EncodeToString(sum[:8])
+}
+
+func LegacyResourceOwnerToken(groupID, instanceID, transportID string) string {
 	sum := higgscrypto.Hash([]byte("higgs.ipsec.owner.v1"), []byte{0}, []byte(groupID), []byte{0}, []byte(instanceID), []byte{0}, []byte(transportID))
 	return hex.EncodeToString(sum[:8])
 }
@@ -204,7 +264,12 @@ func (o ResourceOwner) Validate(instance LinkInstance) error {
 	if o.TransportID != instance.TransportID {
 		return fmt.Errorf("owner transport %q does not match instance transport %q", o.TransportID, instance.TransportID)
 	}
-	if o.Token != "" && o.Token != ResourceOwnerToken(o.GroupID, o.InstanceID, o.TransportID) {
+	if o.LinkID != "" && instance.LinkID != "" && o.LinkID != instance.LinkID {
+		return fmt.Errorf("owner link %q does not match instance link %q", o.LinkID, instance.LinkID)
+	}
+	wantToken := ResourceOwnerToken(firstNonEmptyString(instance.LinkID, o.InstanceID), o.TransportID)
+	legacyToken := LegacyResourceOwnerToken(o.GroupID, o.InstanceID, o.TransportID)
+	if o.Token != "" && o.Token != wantToken && o.Token != legacyToken {
 		return fmt.Errorf("resource owner token mismatch")
 	}
 	if instance.TransportID != "" && !strings.HasPrefix(instance.TransportID, "ipsec-") {
@@ -229,8 +294,15 @@ func contactGeneration(spec TransportLinkSpec) uint64 {
 
 func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
 	spec := base
+	spec.Generation = generation
+	spec.AddressEpoch = generation
 	spec.TransportID = RotateConnectionName(base.TransportID, generation)
-	spec.XFRMIfID = StableXFRMIfID(base.LocalZone, base.PeerZone, spec.TransportID)
+	if spec.LinkID != "" {
+		spec.TransportID = RuntimeConnectionID(spec.LinkID, generation, spec.Provider)
+		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, generation, spec.Provider)
+	} else {
+		spec.XFRMIfID = StableXFRMIfID(base.LocalZone, base.PeerZone, spec.TransportID)
+	}
 	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
 	var contacts []ContactPoint
 	for _, point := range base.ContactPoints {
@@ -284,6 +356,20 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	}
 	for id, spec := range desiredByID {
 		existing, exists := result.Instances[id]
+		if !exists {
+			existing, exists = findMigratableLinkInstance(result.Instances, spec)
+			if exists {
+				delete(result.Instances, existing.ID)
+				existing.ID = id
+				existing.LinkID = id
+				existing.PathKey = spec.PathKey
+				existing.Owner.InstanceID = id
+				existing.Owner.LinkID = id
+				existing.Owner.TransportID = existing.TransportID
+				existing.Owner.Token = ResourceOwnerToken(id, existing.TransportID)
+				result.Instances[id] = existing
+			}
+		}
 		if in.Revoked[spec.PeerZone] {
 			inst := existing
 			if !exists {
@@ -295,7 +381,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			result.add(ReconcileActionTeardown, nil, &inst, "peer revoked")
 			continue
 		}
-		role := roleForSpec(id, in.Roles)
+		role := roleForSpec(id, spec, in.Roles)
 		if role == InitiatorRoleSecondaryStandby {
 			sa := findInstanceSA(in.SAs, existing)
 			if !sa.Established {
@@ -645,9 +731,9 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	}
 	inst := existing
 	inst.StagedGeneration = desiredGen
-	inst.StagedIKEName = RotateConnectionName(existing.TransportID, desiredGen)
-	inst.StagedChildSAName = RotateChildSAName(existing.TransportID, desiredGen)
 	stagedSpec := rotateSpecForRole(spec, desiredGen, initiatorRole)
+	inst.StagedIKEName = stagedSpec.TransportID
+	inst.StagedChildSAName = ChildSAName(stagedSpec)
 	inst.StagedInterfaceName = stagedSpec.InterfaceName
 	inst.StagedXFRMIfID = stagedSpec.XFRMIfID
 	inst.RotatePhase = RotatePhasePreparing
@@ -760,12 +846,17 @@ func inLinkBackoff(inst LinkInstance, now time.Time) bool {
 	return now.Before(time.Unix(inst.BackoffUntil, 0))
 }
 
-func roleForSpec(id string, roles map[string]string) string {
+func roleForSpec(id string, spec TransportLinkSpec, roles map[string]string) string {
 	if roles == nil {
 		return InitiatorRolePrimary
 	}
 	if role := roles[id]; role != "" {
 		return role
+	}
+	if spec.TransportID != "" {
+		if role := roles[spec.TransportID]; role != "" {
+			return role
+		}
 	}
 	return InitiatorRolePrimary
 }

@@ -11,12 +11,16 @@ import (
 
 func TestRotateConnectionNameStable(t *testing.T) {
 	base := "ipsec-deadbeef"
-	if got := RotateConnectionName(base, 3); got != "ipsec-deadbeef-rot-3" {
+	if got := RotateConnectionName(base, 3); got != "ipsec-deadbeef-r3" {
 		t.Fatalf("RotateConnectionName = %q", got)
 	}
-	if got := RotateChildSAName(base, 3); got != "ipsec-deadbeef-rot-3-child" {
+	if got := RotateChildSAName(base, 3); got != "ipsec-deadbeef-r3-child" {
 		t.Fatalf("RotateChildSAName = %q", got)
 	}
+}
+
+func stagedRuntimeID(inst LinkInstance, generation uint64) string {
+	return RuntimeConnectionID(firstNonEmptyString(inst.LinkID, inst.ID), generation, inst.TransportKind)
 }
 
 func TestRotateSpecUsesIndependentXFRMInterface(t *testing.T) {
@@ -180,8 +184,8 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	if action.Spec == nil {
 		t.Fatalf("prepare_rotate action missing spec")
 	}
-	if action.Spec.TransportID != RotateConnectionName(existing.TransportID, 2) {
-		t.Fatalf("staged transport id = %q, want %q", action.Spec.TransportID, RotateConnectionName(existing.TransportID, 2))
+	if action.Spec.TransportID != RuntimeConnectionID(existing.LinkID, 2, existing.TransportKind) {
+		t.Fatalf("staged transport id = %q, want %q", action.Spec.TransportID, RuntimeConnectionID(existing.LinkID, 2, existing.TransportKind))
 	}
 	inst := result.Instances[existing.ID]
 	if inst.RotatePhase != RotatePhasePreparing {
@@ -190,7 +194,7 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	if inst.StagedGeneration != 2 {
 		t.Fatalf("staged generation = %d, want 2", inst.StagedGeneration)
 	}
-	if inst.StagedIKEName != RotateConnectionName(existing.TransportID, 2) {
+	if inst.StagedIKEName != RuntimeConnectionID(existing.LinkID, 2, existing.TransportKind) {
 		t.Fatalf("staged ike name = %q", inst.StagedIKEName)
 	}
 	if inst.StagedInterfaceName == "" || inst.StagedInterfaceName == existing.InterfaceName {
@@ -295,8 +299,8 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 	existing := NewLinkInstance(newSpec, LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = RotateConnectionName(existing.TransportID, 2)
-	existing.StagedChildSAName = RotateChildSAName(existing.TransportID, 2)
+	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	existing.RotatePhase = RotatePhaseTestingNew
 	existing.RotateDeadline = now.Add(time.Minute).Unix()
 
@@ -414,8 +418,8 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	existing := NewLinkInstance(newSpec, LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = RotateConnectionName(existing.TransportID, 2)
-	existing.StagedChildSAName = RotateChildSAName(existing.TransportID, 2)
+	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	stagedSpec := rotateSpec(newSpec, 2)
 	existing.StagedInterfaceName = stagedSpec.InterfaceName
 	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
@@ -443,7 +447,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	if inst.StagedGeneration != 0 {
 		t.Fatalf("staged generation not cleared = %d", inst.StagedGeneration)
 	}
-	if inst.IKEName != RotateConnectionName(existing.TransportID, 2) {
+	if inst.IKEName != stagedRuntimeID(existing, 2) {
 		t.Fatalf("ike name = %q, want rotated", inst.IKEName)
 	}
 	if inst.InterfaceName != stagedSpec.InterfaceName {
@@ -611,8 +615,8 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 	existing := NewLinkInstance(newSpec, LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = RotateConnectionName(existing.TransportID, 2)
-	existing.StagedChildSAName = RotateChildSAName(existing.TransportID, 2)
+	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	existing.RotatePhase = RotatePhaseTestingNew
 	existing.RotateDeadline = now.Add(-time.Second).Unix()
 
@@ -671,8 +675,8 @@ func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 	existing := NewLinkInstance(newSpec, LinkStateUp, now)
 	existing.RemoteGeneration = 2
 	existing.StagedGeneration = 3 // stale; desired is 5
-	existing.StagedIKEName = RotateConnectionName(existing.TransportID, 3)
-	existing.StagedChildSAName = RotateChildSAName(existing.TransportID, 3)
+	existing.StagedIKEName = stagedRuntimeID(existing, 3)
+	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	existing.RotatePhase = RotatePhaseTestingNew
 
 	result := ReconcileLinkInstances(ReconcileInputs{
@@ -686,7 +690,7 @@ func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 	if action == nil {
 		t.Fatalf("expected cleanup_rotate action, got %+v", result.Actions)
 	}
-	if action.Spec == nil || action.Spec.TransportID != RotateConnectionName(existing.TransportID, 3) {
+	if action.Spec == nil || action.Spec.TransportID != stagedRuntimeID(existing, 3) {
 		t.Fatalf("cleanup spec = %+v", action.Spec)
 	}
 	inst := result.Instances[existing.ID]
@@ -931,8 +935,8 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 	existing.IKEName = existing.TransportID
 	existing.ChildSAName = ChildSAName(newSpec)
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = RotateConnectionName(existing.TransportID, 2)
-	existing.StagedChildSAName = RotateChildSAName(existing.TransportID, 2)
+	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	existing.RotatePhase = RotatePhaseTestingNew
 	existing.RotateDeadline = now.Add(time.Minute).Unix()
 
@@ -1113,7 +1117,7 @@ func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
 	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "bidirectional_standby" {
 		t.Fatalf("expected standby noop, got %+v", result.Actions)
 	}
-	inst := result.Instances[spec.TransportID]
+	inst := result.Instances[LinkInstanceID(spec)]
 	if inst.ActualState != LinkStateDown || inst.InitiatorRole != InitiatorRoleSecondaryStandby {
 		t.Fatalf("instance = %+v", inst)
 	}
@@ -1180,7 +1184,7 @@ func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 		Roles:        plan.Roles,
 		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
 	})
-	inst := result.Instances[spec.TransportID]
+	inst := result.Instances[LinkInstanceID(spec)]
 	// Before delay has passed, takeover is suppressed.
 	result = ReconcileLinkInstances(ReconcileInputs{
 		Desired:      []TransportLinkSpec{spec},
@@ -1205,7 +1209,7 @@ func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionCreate || result.Actions[0].Reason != "secondary_takeover" {
 		t.Fatalf("expected secondary_takeover create, got %+v", result.Actions)
 	}
-	inst = result.Instances[spec.TransportID]
+	inst = result.Instances[LinkInstanceID(spec)]
 	if inst.InitiatorRole != InitiatorRoleSecondaryTakeover || inst.ActualState != LinkStateConfiguring || inst.TakeoverPhase != TakeoverPhaseActive {
 		t.Fatalf("instance = %+v", inst)
 	}
@@ -1239,7 +1243,7 @@ func TestReconcileSecondaryTakeoverCooldownPreventsRetry(t *testing.T) {
 		Roles:        plan.Roles,
 		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
 	})
-	inst = result.Instances[spec.TransportID]
+	inst = result.Instances[LinkInstanceID(spec)]
 	if inst.InitiatorRole != InitiatorRoleSecondaryTakeover {
 		t.Fatalf("expected takeover, got %+v", inst)
 	}
@@ -1292,7 +1296,7 @@ func TestReconcileTakeoverAdoptsExistingSA(t *testing.T) {
 	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionAdopt {
 		t.Fatalf("expected adopt, got %+v", result.Actions)
 	}
-	inst = result.Instances[spec.TransportID]
+	inst = result.Instances[LinkInstanceID(spec)]
 	if inst.ActualState != LinkStateUp || inst.InitiatorRole != InitiatorRoleConverged || inst.Endpoint != "198.51.100.10:500" {
 		t.Fatalf("instance = %+v", inst)
 	}

@@ -188,7 +188,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	if inst.StagedGeneration != 2 {
 		t.Fatalf("staged generation = %d, want 2", inst.StagedGeneration)
 	}
-	if inst.StagedIKEName != ipsec.RotateConnectionName(inst.TransportID, 2) {
+	if inst.StagedIKEName != ipsec.RuntimeConnectionID(inst.LinkID, 2, inst.TransportKind) {
 		t.Fatalf("staged ike name = %q", inst.StagedIKEName)
 	}
 	foundPrepare := false
@@ -914,8 +914,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	if instB.RotatePhase != ipsec.RotatePhaseTestingNew || instB.StagedGeneration != 2 {
 		t.Fatalf("prepared rotate instance B = %+v, want testing_new generation 2", instB)
 	}
-	stagedIKEA := ipsec.RotateConnectionName(instA.TransportID, 2)
-	stagedIKEB := ipsec.RotateConnectionName(instB.TransportID, 2)
+	stagedIKEA := ipsec.RuntimeConnectionID(instA.LinkID, 2, instA.TransportKind)
+	stagedIKEB := ipsec.RuntimeConnectionID(instB.LinkID, 2, instB.TransportKind)
 	if instA.StagedIKEName != stagedIKEA {
 		t.Fatalf("staged ike A = %q, want %q", instA.StagedIKEName, stagedIKEA)
 	}
@@ -1503,8 +1503,11 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	if specA.PeerZone != "node-b.catofes." || specB.PeerZone != "node-a.catofes." {
 		t.Fatalf("A/B peer zones = %s/%s", specA.PeerZone, specB.PeerZone)
 	}
-	if specA.TransportID == specB.TransportID || specA.XFRMIfID == specB.XFRMIfID {
-		t.Fatalf("A/B links should use direction-specific transport identity: A=%+v B=%+v", specA, specB)
+	if specA.LinkID == "" || specA.LinkID != specB.LinkID {
+		t.Fatalf("A/B links should share stable link identity: A=%+v B=%+v", specA, specB)
+	}
+	if specA.TransportID != specB.TransportID || specA.XFRMIfID != specB.XFRMIfID {
+		t.Fatalf("A/B runtime ids should be mirrored per host namespace: A=%+v B=%+v", specA, specB)
 	}
 
 	driverA.sas = []ipsec.SAState{observedSAForSpec(specA, "10.44.0.1:500", "203.0.113.10:500", 1001)}
@@ -2249,6 +2252,8 @@ func singleDesiredSpec(t *testing.T, state *stateFile) ipsec.TransportLinkSpec {
 		PeerZone:        desired.PeerZone,
 		OverlayID:       desired.GroupID,
 		Provider:        ipsec.ProviderStrongSwan,
+		LinkID:          desired.LinkID,
+		PathKey:         desired.PathKey,
 		TransportID:     desired.TransportID,
 		InterfaceName:   desired.InterfaceName,
 		XFRMIfID:        desired.XFRMIfID,

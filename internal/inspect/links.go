@@ -39,6 +39,8 @@ type LinkView struct {
 	PeerZone        string
 	GroupID         string
 	TransportKind   string
+	LinkID          string
+	PathKey         string
 	TransportID     string
 	State           string
 	ActualState     string
@@ -66,6 +68,8 @@ type LinkInstance struct {
 	GroupID             string
 	PeerZone            string
 	TransportKind       string
+	LinkID              string
+	PathKey             string
 	TransportID         string
 	DesiredSpecHash     string
 	ActualState         string
@@ -99,6 +103,7 @@ type LinkOwner struct {
 	Manager     string `json:"manager,omitempty"`
 	GroupID     string `json:"group_id,omitempty"`
 	InstanceID  string `json:"instance_id,omitempty"`
+	LinkID      string `json:"link_id,omitempty"`
 	TransportID string `json:"transport_id,omitempty"`
 	Token       string `json:"token,omitempty"`
 }
@@ -107,6 +112,8 @@ type DesiredLink struct {
 	InstanceID      string `json:"instance_id,omitempty"`
 	GroupID         string `json:"group_id,omitempty"`
 	PeerZone        string `json:"peer_zone,omitempty"`
+	LinkID          string `json:"link_id,omitempty"`
+	PathKey         string `json:"path_key,omitempty"`
 	TransportID     string `json:"transport_id,omitempty"`
 	DesiredSpecHash string `json:"desired_spec_hash,omitempty"`
 	InterfaceName   string `json:"interface_name,omitempty"`
@@ -218,7 +225,7 @@ func BuildLinks(input LinkInput) LinkInspection {
 			desired = planned
 			hasDesired = true
 		}
-		links = append(links, linkFromInstance(inst, desired, hasDesired, sas[id], health[id]))
+		links = append(links, linkFromInstance(inst, desired, hasDesired, linkSAForView(id, inst, desired, sas), health[id]))
 	}
 	if len(ids) == 0 && len(plannedDesired) > 0 {
 		plannedIDs := make([]string, 0, len(plannedDesired))
@@ -249,6 +256,18 @@ func BuildLinks(input LinkInput) LinkInspection {
 	}
 }
 
+func linkSAForView(id string, inst LinkInstance, desired DesiredLink, sas map[string]*LinkSA) *LinkSA {
+	for _, key := range []string{id, inst.TransportID, inst.ChildSAName, desired.TransportID} {
+		if key == "" {
+			continue
+		}
+		if sa := sas[key]; sa != nil {
+			return sa
+		}
+	}
+	return nil
+}
+
 func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, sa *LinkSA, health *LinkHealth) LinkView {
 	var desiredPtr *DesiredLink
 	if hasDesired {
@@ -260,6 +279,8 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 		PeerZone:        inst.PeerZone,
 		GroupID:         inst.GroupID,
 		TransportKind:   inst.TransportKind,
+		LinkID:          inst.LinkID,
+		PathKey:         inst.PathKey,
 		TransportID:     inst.TransportID,
 		State:           firstNonEmpty(inst.ActualState, "unknown"),
 		ActualState:     inst.ActualState,
@@ -304,6 +325,8 @@ func missingLinkFromDesired(desired DesiredLink) LinkView {
 		ID:              desired.InstanceID,
 		PeerZone:        desired.PeerZone,
 		GroupID:         desired.GroupID,
+		LinkID:          desired.LinkID,
+		PathKey:         desired.PathKey,
 		TransportID:     desired.TransportID,
 		State:           "missing",
 		Endpoint:        desired.Endpoint,

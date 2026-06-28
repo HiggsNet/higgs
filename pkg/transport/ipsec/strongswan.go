@@ -153,7 +153,7 @@ func ChildSAName(spec TransportLinkSpec) string {
 }
 
 func RotateConnectionName(transportID string, generation uint64) string {
-	return transportID + "-rot-" + strconv.FormatUint(generation, 10)
+	return transportID + "-r" + strconv.FormatUint(generation, 10)
 }
 
 // BaseConnectionName returns the original connection name for a rotated
@@ -162,6 +162,14 @@ func RotateConnectionName(transportID string, generation uint64) string {
 func BaseConnectionName(transportID string) string {
 	if i := strings.LastIndex(transportID, "-rot-"); i >= 0 {
 		return transportID[:i]
+	}
+	if i := strings.LastIndex(transportID, "-r"); i >= 0 {
+		suffix := transportID[i+2:]
+		if suffix != "" {
+			if _, err := strconv.ParseUint(suffix, 10, 64); err == nil {
+				return transportID[:i]
+			}
+		}
 	}
 	return transportID
 }

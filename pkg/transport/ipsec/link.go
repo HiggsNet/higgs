@@ -17,6 +17,7 @@ const (
 	NetNSName        = "name"
 	NetNSPath        = "path"
 	DefaultNetNSName = "h2"
+	DefaultPathKey   = "default"
 
 	TunnelAddressDerivedLinkLocal TunnelAddressMode = "derived-link-local"
 	TunnelAddressDerivedPool      TunnelAddressMode = "derived-pool"
@@ -85,6 +86,8 @@ type TransportLinkSpec struct {
 	PeerZone        zone.ZonePath
 	OverlayID       string
 	Provider        string
+	LinkID          string
+	PathKey         string
 	TransportID     string
 	PathMode        string
 	IKEIdentity     string
@@ -106,7 +109,11 @@ type TransportLinkSpec struct {
 	// For outbound links it is derived from the peer's contact point; for
 	// inbound links it is derived from the local port record.
 	Generation uint64
-	NetNS      string
+	// AddressEpoch scopes tunnel address derivation. Epoch zero is the stable
+	// address; staged same-family generations can use their generation as an
+	// epoch to avoid address reuse while both generations are running.
+	AddressEpoch uint64
+	NetNS        string
 
 	// LocalPrivateKey is the raw private key material for the local transport
 	// identity. The driver is responsible for loading it into the IPsec daemon.
@@ -124,6 +131,8 @@ type TransportLinkSpec struct {
 }
 
 type TransportLinkOptions struct {
+	LinkID          string
+	PathKey         string
 	TransportID     string
 	Provider        string
 	PathMode        string
@@ -132,6 +141,7 @@ type TransportLinkOptions struct {
 	PeerTunnelAddr  netip.Addr
 	LocalIKEPort    uint16
 	Generation      uint64
+	AddressEpoch    uint64
 }
 
 func NewTransportLinkSpec(local, peer zone.ZonePath, overlayID, transportID string, records *NodeRecords, contacts []ContactPoint) (TransportLinkSpec, error) {
@@ -145,9 +155,6 @@ func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string
 		return TransportLinkSpec{}, fmt.Errorf("overlay id is required")
 	}
 	transportID := opts.TransportID
-	if transportID == "" {
-		transportID = StableTransportID(local, peer, overlayID)
-	}
 	if records == nil || records.Profile == nil {
 		return TransportLinkSpec{}, fmt.Errorf("ipsec profile is required")
 	}
@@ -164,12 +171,25 @@ func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string
 	if records.TransportKey != nil && records.Profile.TransportKeyFingerprint != records.TransportKey.Fingerprint {
 		return TransportLinkSpec{}, fmt.Errorf("transport key fingerprint mismatch")
 	}
-	ifID := StableXFRMIfID(local, peer, transportID)
+	pathKey := opts.PathKey
+	if pathKey == "" {
+		pathKey = DefaultPathKey
+	}
+	linkID := opts.LinkID
+	if linkID == "" {
+		linkID = StableLinkID(local, peer, overlayID, pathKey)
+	}
+	if transportID == "" {
+		transportID = RuntimeConnectionID(linkID, opts.Generation, provider)
+	}
+	ifID := RuntimeXFRMIfID(linkID, opts.Generation, provider)
 	return TransportLinkSpec{
 		LocalZone:       local,
 		PeerZone:        peer,
 		OverlayID:       overlayID,
 		Provider:        provider,
+		LinkID:          linkID,
+		PathKey:         pathKey,
 		TransportID:     transportID,
 		PathMode:        opts.PathMode,
 		IKEIdentity:     string(local),
@@ -182,6 +202,7 @@ func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string
 		NetNS:           opts.NetNS,
 		LocalIKEPort:    opts.LocalIKEPort,
 		Generation:      opts.Generation,
+		AddressEpoch:    opts.AddressEpoch,
 	}, nil
 }
 
@@ -190,7 +211,9 @@ func NewTransportLinkSpecForGroup(local, peer zone.ZonePath, group LinkGroupSpec
 		return TransportLinkSpec{}, err
 	}
 	group = group.Normalized()
-	localAddr, peerAddr, err := group.DeriveTunnelAddresses(local, peer, linkIndex)
+	pathKey := DefaultPathKey
+	linkID := StableLinkID(local, peer, group.ID, pathKey)
+	localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 0, linkIndex)
 	if err != nil {
 		return TransportLinkSpec{}, err
 	}
@@ -198,6 +221,8 @@ func NewTransportLinkSpecForGroup(local, peer zone.ZonePath, group LinkGroupSpec
 		localAddr, peerAddr = peerAddr, localAddr
 	}
 	return NewTransportLinkSpecWithOptions(local, peer, group.ID, records, contacts, TransportLinkOptions{
+		LinkID:          linkID,
+		PathKey:         pathKey,
 		Provider:        group.Provider,
 		PathMode:        group.DefaultPathMode,
 		NetNS:           group.NetNS.Target(),
@@ -288,8 +313,17 @@ func (g LinkGroupSpec) TunnelAddresses(linkIndex int) (netip.Addr, netip.Addr, e
 }
 
 func (g LinkGroupSpec) DeriveTunnelAddresses(local, peer zone.ZonePath, linkIndex int) (netip.Addr, netip.Addr, error) {
-	if linkIndex < 0 {
+	pathKey := DefaultPathKey
+	linkID := StableLinkID(local, peer, g.ID, pathKey)
+	return g.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, uint64(linkIndex), linkIndex)
+}
+
+func (g LinkGroupSpec) DeriveTunnelAddressesForLink(local, peer zone.ZonePath, linkID, pathKey string, addressEpoch uint64, legacyIndex int) (netip.Addr, netip.Addr, error) {
+	if legacyIndex < 0 {
 		return netip.Addr{}, netip.Addr{}, fmt.Errorf("link index must be non-negative")
+	}
+	if linkID == "" {
+		linkID = StableLinkID(local, peer, g.ID, pathKey)
 	}
 	spec := g.normalizedTunnelAddress()
 	switch spec.Mode {
@@ -300,11 +334,11 @@ func (g LinkGroupSpec) DeriveTunnelAddresses(local, peer zone.ZonePath, linkInde
 		if !pool.IsValid() {
 			pool = g.TunnelAddressPool
 		}
-		return tunnelAddressesSequential(pool, linkIndex)
+		return tunnelAddressesSequential(pool, legacyIndex)
 	case TunnelAddressDerivedLinkLocal:
-		return deriveLinkLocalAddresses(local, peer, g.ID, g.Provider, linkIndex)
+		return deriveLinkLocalAddresses(local, peer, linkID, addressEpoch)
 	case TunnelAddressDerivedPool:
-		return derivePoolAddresses(local, peer, g.ID, g.Provider, spec.Pool, linkIndex)
+		return derivePoolAddresses(local, peer, linkID, addressEpoch, spec.Pool)
 	default:
 		return netip.Addr{}, netip.Addr{}, fmt.Errorf("unsupported tunnel address mode %q", spec.Mode)
 	}
@@ -359,15 +393,14 @@ func tunnelAddressesSequential(pool netip.Prefix, linkIndex int) (netip.Addr, ne
 	return local, peer, nil
 }
 
-func deriveLinkLocalAddresses(local, peer zone.ZonePath, overlayID, provider string, linkIndex int) (netip.Addr, netip.Addr, error) {
+func deriveLinkLocalAddresses(local, peer zone.ZonePath, linkID string, addressEpoch uint64) (netip.Addr, netip.Addr, error) {
 	const maxRetry = 64
 	prefix := netip.MustParsePrefix("fe80::/64")
-	lower, higher := sortedPair(local, peer)
-	lowerID, err := deriveInterfaceID(lower, higher, overlayID, provider, FamilyIPv6, string(TunnelAddressDerivedLinkLocal), linkIndex, "lower", maxRetry)
+	lowerID, err := deriveInterfaceID(linkID, addressEpoch, FamilyIPv6, string(TunnelAddressDerivedLinkLocal), "", "lower", maxRetry)
 	if err != nil {
 		return netip.Addr{}, netip.Addr{}, err
 	}
-	higherID, err := deriveInterfaceID(lower, higher, overlayID, provider, FamilyIPv6, string(TunnelAddressDerivedLinkLocal), linkIndex, "higher", maxRetry)
+	higherID, err := deriveInterfaceID(linkID, addressEpoch, FamilyIPv6, string(TunnelAddressDerivedLinkLocal), "", "higher", maxRetry)
 	if err != nil {
 		return netip.Addr{}, netip.Addr{}, err
 	}
@@ -385,17 +418,16 @@ func deriveLinkLocalAddresses(local, peer zone.ZonePath, overlayID, provider str
 	return localAddr, peerAddr, nil
 }
 
-func derivePoolAddresses(local, peer zone.ZonePath, overlayID, provider string, pool netip.Prefix, linkIndex int) (netip.Addr, netip.Addr, error) {
+func derivePoolAddresses(local, peer zone.ZonePath, linkID string, addressEpoch uint64, pool netip.Prefix) (netip.Addr, netip.Addr, error) {
 	if !pool.IsValid() {
 		return netip.Addr{}, netip.Addr{}, fmt.Errorf("derived-pool requires a valid pool")
 	}
 	const maxRetry = 256
-	lower, higher := sortedPair(local, peer)
-	localAddr, err := derivePoolAddr(lower, higher, overlayID, provider, pool, linkIndex, "lower", maxRetry)
+	localAddr, err := derivePoolAddr(linkID, addressEpoch, pool, "lower", maxRetry)
 	if err != nil {
 		return netip.Addr{}, netip.Addr{}, err
 	}
-	peerAddr, err := derivePoolAddr(lower, higher, overlayID, provider, pool, linkIndex, "higher", maxRetry)
+	peerAddr, err := derivePoolAddr(linkID, addressEpoch, pool, "higher", maxRetry)
 	if err != nil {
 		return netip.Addr{}, netip.Addr{}, err
 	}
@@ -405,17 +437,17 @@ func derivePoolAddresses(local, peer zone.ZonePath, overlayID, provider string, 
 	return localAddr, peerAddr, nil
 }
 
-func deriveInterfaceID(lower, higher zone.ZonePath, overlayID, provider, family, mode string, linkIndex int, role string, maxRetry int) (uint64, error) {
+func deriveInterfaceID(linkID string, addressEpoch uint64, family, mode, pool, role string, maxRetry int) (uint64, error) {
 	for retry := 0; retry < maxRetry; retry++ {
 		hash := higgscrypto.Hash(
-			[]byte(overlayID),
-			[]byte(lower),
-			[]byte(higher),
+			[]byte("higgs.ipsec.tunnel-address.v2"),
+			[]byte(linkID),
+			[]byte(fmt.Sprintf("%d", addressEpoch)),
 			[]byte(family),
 			[]byte(mode),
-			[]byte(provider),
+			[]byte(pool),
 			[]byte(role),
-			[]byte(fmt.Sprintf("%d:%d", linkIndex, retry)),
+			[]byte(fmt.Sprintf("%d", retry)),
 		)
 		id := binary.BigEndian.Uint64(hash[:8])
 		if id == 0 {
@@ -423,10 +455,10 @@ func deriveInterfaceID(lower, higher zone.ZonePath, overlayID, provider, family,
 		}
 		return id, nil
 	}
-	return 0, fmt.Errorf("exhausted retries deriving interface id for %s/%s", overlayID, role)
+	return 0, fmt.Errorf("exhausted retries deriving interface id for %s/%s", linkID, role)
 }
 
-func derivePoolAddr(lower, higher zone.ZonePath, overlayID, provider string, pool netip.Prefix, linkIndex int, role string, maxRetry int) (netip.Addr, error) {
+func derivePoolAddr(linkID string, addressEpoch uint64, pool netip.Prefix, role string, maxRetry int) (netip.Addr, error) {
 	bits := pool.Bits()
 	if pool.Addr().Is4() {
 		if bits < 1 || bits > 30 {
@@ -436,14 +468,14 @@ func derivePoolAddr(lower, higher zone.ZonePath, overlayID, provider string, poo
 		mask := uint32(1)<<hostBits - 1
 		for retry := 0; retry < maxRetry; retry++ {
 			hash := higgscrypto.Hash(
-				[]byte(overlayID),
-				[]byte(lower),
-				[]byte(higher),
+				[]byte("higgs.ipsec.tunnel-address.v2"),
+				[]byte(linkID),
+				[]byte(fmt.Sprintf("%d", addressEpoch)),
 				[]byte(FamilyIPv4),
 				[]byte(string(TunnelAddressDerivedPool)),
-				[]byte(provider),
+				[]byte(pool.String()),
 				[]byte(role),
-				[]byte(fmt.Sprintf("%d:%d", linkIndex, retry)),
+				[]byte(fmt.Sprintf("%d", retry)),
 			)
 			host := binary.BigEndian.Uint32(hash[:4]) & mask
 			addr := pool.Masked().Addr().As4()
@@ -470,14 +502,14 @@ func derivePoolAddr(lower, higher zone.ZonePath, overlayID, provider string, poo
 	hostMask.Sub(hostMask, big.NewInt(1))
 	for retry := 0; retry < maxRetry; retry++ {
 		hash := higgscrypto.Hash(
-			[]byte(overlayID),
-			[]byte(lower),
-			[]byte(higher),
+			[]byte("higgs.ipsec.tunnel-address.v2"),
+			[]byte(linkID),
+			[]byte(fmt.Sprintf("%d", addressEpoch)),
 			[]byte(FamilyIPv6),
 			[]byte(string(TunnelAddressDerivedPool)),
-			[]byte(provider),
+			[]byte(pool.String()),
 			[]byte(role),
-			[]byte(fmt.Sprintf("%d:%d", linkIndex, retry)),
+			[]byte(fmt.Sprintf("%d", retry)),
 		)
 		host := big.NewInt(0).SetBytes(hash[:16])
 		host.And(host, hostMask)
@@ -627,6 +659,77 @@ func FormatScopedTunnelAddress(addr netip.Addr, ifName, netns string) string {
 }
 
 func StableTransportID(local, peer zone.ZonePath, overlayID string, family ...string) string {
+	pathKey := DefaultPathKey
+	if len(family) > 0 && family[0] != "" {
+		pathKey = "family:" + family[0]
+	}
+	return RuntimeConnectionID(StableLinkID(local, peer, overlayID, pathKey), 0, ProviderStrongSwan)
+}
+
+func StableLinkID(local, peer zone.ZonePath, overlayID, pathKey string) string {
+	if pathKey == "" {
+		pathKey = DefaultPathKey
+	}
+	lower, higher := sortedPair(local, peer)
+	hash := higgscrypto.Hash(
+		[]byte("higgs.ipsec.link.v1"),
+		[]byte{0},
+		[]byte(lower),
+		[]byte{0},
+		[]byte(higher),
+		[]byte{0},
+		[]byte(overlayID),
+		[]byte{0},
+		[]byte(pathKey),
+	)
+	return "link-" + hex.EncodeToString(hash[:8])
+}
+
+func RuntimeConnectionID(linkID string, generation uint64, provider string) string {
+	if provider == "" {
+		provider = ProviderStrongSwan
+	}
+	hash := higgscrypto.Hash(
+		[]byte("higgs.ipsec.runtime.v1"),
+		[]byte{0},
+		[]byte(linkID),
+		[]byte{0},
+		[]byte(fmt.Sprintf("%d", generation)),
+		[]byte{0},
+		[]byte(provider),
+		[]byte{0},
+		[]byte("runtime"),
+	)
+	name := "ipsec-" + hex.EncodeToString(hash[:6])
+	if generation != 0 {
+		name += "-r" + fmt.Sprintf("%d", generation)
+	}
+	return name
+}
+
+func RuntimeXFRMIfID(linkID string, generation uint64, provider string) uint32 {
+	if provider == "" {
+		provider = ProviderStrongSwan
+	}
+	hash := higgscrypto.Hash(
+		[]byte("higgs.ipsec.xfrm.v1"),
+		[]byte{0},
+		[]byte(linkID),
+		[]byte{0},
+		[]byte(fmt.Sprintf("%d", generation)),
+		[]byte{0},
+		[]byte(provider),
+		[]byte{0},
+		[]byte("xfrm-if-id"),
+	)
+	ifID := binary.BigEndian.Uint32(hash[:4])
+	if ifID == 0 {
+		return 1
+	}
+	return ifID
+}
+
+func LegacyStableTransportID(local, peer zone.ZonePath, overlayID string, family ...string) string {
 	parts := [][]byte{[]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(overlayID)}
 	if len(family) > 0 && family[0] != "" {
 		parts = append(parts, []byte{0}, []byte(family[0]))
