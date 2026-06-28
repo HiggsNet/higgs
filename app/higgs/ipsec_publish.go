@@ -165,6 +165,7 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 	if accept == "" {
 		accept = ipsec.AcceptBidirectional
 	}
+	families := localIPsecFamilies(addresses)
 	profile := ipsec.ProfileRecord{
 		Version:                 1,
 		Enabled:                 true,
@@ -172,16 +173,67 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 		IKEIdentity:             string(managed),
 		TransportKeyFingerprint: key.Fingerprint,
 		Accept:                  accept,
-		AddressFamilies:         localIPsecFamilies(addresses),
+		AddressFamilies:         families,
 		PathModes:               localIPsecPathModes(config.IPsec.LinkGroups),
 		NAT:                     localIPsecNATProfile(addresses),
 	}
-	return []localIPsecRecord{
+	records := []localIPsecRecord{
 		{key: ipsec.RecordKeyTransportKey, recordType: ipsec.RecordTypeTransportKey, value: *key},
 		{key: ipsec.RecordKeyProfile, recordType: ipsec.RecordTypeProfile, value: profile},
 		{key: ipsec.RecordKeyAddresses, recordType: ipsec.RecordTypeAddresses, value: addresses},
 		{key: ipsec.RecordKeyPorts, recordType: ipsec.RecordTypePorts, value: ports},
-	}, nil
+	}
+	records = append(records, localIPsecOverlayIntentRecords(config, addresses, now)...)
+	return records, nil
+}
+
+func localIPsecOverlayIntentRecords(config *appConfig, addresses ipsec.AddressRecord, now time.Time) []localIPsecRecord {
+	if config == nil {
+		return nil
+	}
+	families := localIPsecFamilies(addresses)
+	var out []localIPsecRecord
+	for _, group := range config.IPsec.LinkGroups {
+		if err := group.Validate(); err != nil {
+			continue
+		}
+		group = group.Normalized()
+		pathKeys := localOverlayIntentPathKeys(group, families)
+		if len(pathKeys) == 0 {
+			continue
+		}
+		intent := ipsec.OverlayIntentRecord{
+			Version:       1,
+			OverlayID:     group.ID,
+			Provider:      group.Provider,
+			PathKeys:      pathKeys,
+			TunnelAddress: group.TunnelAddressSpec,
+			UpdatedAt:     now.Unix(),
+		}
+		out = append(out, localIPsecRecord{
+			key:        ipsec.OverlayIntentRecordKey(group.ID),
+			recordType: ipsec.RecordTypeOverlayIntent,
+			value:      intent,
+		})
+	}
+	return out
+}
+
+func localOverlayIntentPathKeys(group ipsec.LinkGroupSpec, families []string) []string {
+	switch group.DefaultPathMode {
+	case ipsec.PathModeExhaustive:
+		return []string{ipsec.DefaultPathKey}
+	case ipsec.PathModeFamilyRedundant:
+		var out []string
+		for _, family := range families {
+			if family == ipsec.FamilyIPv4 || family == ipsec.FamilyIPv6 {
+				out = append(out, "family:"+family)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time) ipsec.AddressRecord {

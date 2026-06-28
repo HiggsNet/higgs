@@ -48,9 +48,11 @@
   - [x] `derived-link-local` / `derived-pool` 地址改为从 `LinkID + address_epoch + mode + pool? + lower/higher` 派生；`address_epoch=0` 为稳定地址，staged old/new 同 family 双 running 时用 generation 作为 epoch，尤其避免 `derived-pool` 地址复用。
   - [x] `derived-pool` 派生必须把 pool 纳入 hash：IPv4 跳过 network/broadcast/不可用 host，IPv6 跳过 pool base/不可用地址，通过 retry 处理候选不可用。
   - [ ] 两端 overlay intent 必须声明兼容 tunnel address mode/family/pool。
-  - [ ] `sequential-pool` 标为 legacy：保留兼容和迁移测试，但新设计、示例和文档默认使用 `derived-link-local` 或 `derived-pool`。
-  - [ ] 新增 overlay/link intent 记录层，例如 `ipsec/overlays/<overlay_id>` / `ipsec.overlay_intent.v1`：节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 只表达本节点 StrongSwan/IPsec 能力；overlay intent 记录表达本节点愿意把这些节点能力用于哪个 `overlay_id/path_key`。
-  - [ ] planner 只有在远端 capability 完整可信、本地 `connect` 选择 peer、远端 overlay intent 与本地 `overlay_id/path_key` 兼容时才输出 desired link；当前兼容期若缺少 overlay intent，应显式输出 warning/skip reason 或受配置开关控制。
+  - [x] `sequential-pool` 标为 legacy：保留兼容和迁移测试，但新设计、示例和文档默认使用 `derived-link-local` 或 `derived-pool`。
+  - [x] 新增 overlay/link intent 记录层，例如 `ipsec/overlays/<overlay_id>` / `ipsec.overlay_intent.v1`：节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 只表达本节点 StrongSwan/IPsec 能力；overlay intent 记录表达本节点愿意把这些节点能力用于哪个 `overlay_id/path_key`。
+    - 2026-06-28 已接入：daemon 为每个本地 StrongSwan overlay 发布 signed `ipsec/overlays/<overlay_id>`；`family-redundant` 发布 `family:ipv4` / `family:ipv6` path key，`exhaustive` 发布 `default`。
+  - [x] planner 只有在远端 capability 完整可信、本地 `connect` 选择 peer、远端 overlay intent 与本地 `overlay_id/path_key` 兼容时才输出 desired link；当前兼容期若缺少 overlay intent，应显式输出 warning/skip reason 或受配置开关控制。
+    - 2026-06-28 已接入：缺 intent 输出 `missing_overlay_intent`，provider/path_key 不兼容输出 `overlay_intent_mismatch`。
   - [x] 补迁移策略：从旧 `TransportID`/directional address 状态恢复时能 adopt/cleanup 旧资源，重新写入 `LinkID`、runtime id、owner token、tunnel address；debug links 显示 old/new identity 对照。
     - 2026-06-28 已接入兼容迁移：reconcile 可按旧 instance key / 旧 `TransportID` 找回实例并改挂到 `LinkID`，owner token 接受旧 v1 并重写新 v2；`debug links` 显示 `link_id`、`path_key`、`runtime_id`。
   - [ ] 测试覆盖：双端同 overlay 得到相同 `LinkID` 和镜像 tunnel address；不同 overlay 不建链或给出明确 skip；family-redundant 产生不同 path_key；rotate gen N/N+1 runtime/if_id/interface/address_epoch 不冲突；derived-pool 双 running 不复用地址；daemon restart 可从 staged/current runtime 恢复。

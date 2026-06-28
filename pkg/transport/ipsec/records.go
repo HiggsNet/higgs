@@ -16,15 +16,17 @@ import (
 const (
 	ProviderStrongSwan = "strongswan"
 
-	RecordKeyProfile      = "ipsec/profile"
-	RecordKeyAddresses    = "ipsec/addresses"
-	RecordKeyPorts        = "ipsec/ports"
-	RecordKeyTransportKey = "ipsec/transport-key"
+	RecordKeyProfile       = "ipsec/profile"
+	RecordKeyAddresses     = "ipsec/addresses"
+	RecordKeyPorts         = "ipsec/ports"
+	RecordKeyTransportKey  = "ipsec/transport-key"
+	RecordKeyOverlayPrefix = "ipsec/overlays/"
 
-	RecordTypeProfile      = "ipsec.profile.v1"
-	RecordTypeAddresses    = "ipsec.addresses.v1"
-	RecordTypePorts        = "ipsec.ports.v1"
-	RecordTypeTransportKey = "ipsec.transport_key.v1"
+	RecordTypeProfile       = "ipsec.profile.v1"
+	RecordTypeAddresses     = "ipsec.addresses.v1"
+	RecordTypePorts         = "ipsec.ports.v1"
+	RecordTypeTransportKey  = "ipsec.transport_key.v1"
+	RecordTypeOverlayIntent = "ipsec.overlay_intent.v1"
 
 	AcceptNone          = "none"
 	AcceptInbound       = "inbound"
@@ -146,12 +148,23 @@ type TransportKeyRecord struct {
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
 }
 
+type OverlayIntentRecord struct {
+	Version       int               `json:"version"`
+	OverlayID     string            `json:"overlay_id"`
+	Provider      string            `json:"provider"`
+	PathKeys      []string          `json:"path_keys"`
+	TunnelAddress TunnelAddressSpec `json:"tunnel_address,omitempty"`
+	PolicyTags    []string          `json:"policy_tags,omitempty"`
+	UpdatedAt     int64             `json:"updated_at,omitempty"`
+}
+
 type NodeRecords struct {
-	Zone         zone.ZonePath
-	Profile      *ProfileRecord
-	Addresses    *AddressRecord
-	Ports        *PortRecord
-	TransportKey *TransportKeyRecord
+	Zone           zone.ZonePath
+	Profile        *ProfileRecord
+	Addresses      *AddressRecord
+	Ports          *PortRecord
+	TransportKey   *TransportKeyRecord
+	OverlayIntents map[string]*OverlayIntentRecord
 }
 
 type AddressCandidate struct {
@@ -259,6 +272,28 @@ func ParseTransportKeyRecord(record *zone.Record) (*TransportKeyRecord, error) {
 	return &key, nil
 }
 
+func OverlayIntentRecordKey(overlayID string) string {
+	return RecordKeyOverlayPrefix + overlayID
+}
+
+func ParseOverlayIntentRecord(record *zone.Record) (*OverlayIntentRecord, error) {
+	if record == nil {
+		return nil, errors.New("record is nil")
+	}
+	if !strings.HasPrefix(record.Key, RecordKeyOverlayPrefix) {
+		return nil, fmt.Errorf("unexpected record key %q, want %s<overlay_id>", record.Key, RecordKeyOverlayPrefix)
+	}
+	var intent OverlayIntentRecord
+	if err := parseIPsecRecord(record, record.Key, RecordTypeOverlayIntent, &intent); err != nil {
+		return nil, err
+	}
+	keyOverlay := strings.TrimPrefix(record.Key, RecordKeyOverlayPrefix)
+	if err := intent.Validate(keyOverlay); err != nil {
+		return nil, err
+	}
+	return &intent, nil
+}
+
 func ExtractNodeRecords(ns *zone.NetworkState, peer zone.ZonePath, now time.Time) (*NodeRecords, error) {
 	if ns == nil {
 		return nil, errors.New("network state is nil")
@@ -295,6 +330,19 @@ func ExtractNodeRecords(ns *zone.NetworkState, peer zone.ZonePath, now time.Time
 		if err != nil {
 			return nil, err
 		}
+	}
+	for key, record := range zs.Records {
+		if !strings.HasPrefix(key, RecordKeyOverlayPrefix) {
+			continue
+		}
+		intent, err := ParseOverlayIntentRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		if out.OverlayIntents == nil {
+			out.OverlayIntents = map[string]*OverlayIntentRecord{}
+		}
+		out.OverlayIntents[intent.OverlayID] = intent
 	}
 	return out, nil
 }
@@ -454,6 +502,57 @@ func (k TransportKeyRecord) Validate() error {
 	}
 	if k.NotAfter != 0 && k.NotBefore != 0 && k.NotAfter <= k.NotBefore {
 		return errors.New("not_after must be after not_before")
+	}
+	return nil
+}
+
+func (r OverlayIntentRecord) Validate(keyOverlayID string) error {
+	if r.Version != 1 {
+		return fmt.Errorf("unsupported ipsec overlay intent version %d", r.Version)
+	}
+	if r.OverlayID == "" {
+		return errors.New("overlay_id is required")
+	}
+	if keyOverlayID != "" && r.OverlayID != keyOverlayID {
+		return fmt.Errorf("overlay_id %q does not match record key overlay %q", r.OverlayID, keyOverlayID)
+	}
+	provider := r.Provider
+	if provider == "" {
+		provider = ProviderStrongSwan
+	}
+	if provider != ProviderStrongSwan {
+		return fmt.Errorf("unsupported overlay intent provider %q", provider)
+	}
+	if len(r.PathKeys) == 0 {
+		return errors.New("path_keys is required")
+	}
+	seen := map[string]bool{}
+	for _, pathKey := range r.PathKeys {
+		pathKey = strings.TrimSpace(pathKey)
+		if pathKey == "" {
+			return errors.New("path_keys must not contain empty values")
+		}
+		if seen[pathKey] {
+			return fmt.Errorf("duplicate path_key %q", pathKey)
+		}
+		seen[pathKey] = true
+		if pathKey == DefaultPathKey {
+			continue
+		}
+		if strings.HasPrefix(pathKey, "family:") && validFamily(strings.TrimPrefix(pathKey, "family:")) {
+			continue
+		}
+		return fmt.Errorf("unsupported path_key %q", pathKey)
+	}
+	if r.TunnelAddress.Mode != "" {
+		switch r.TunnelAddress.Mode {
+		case TunnelAddressDisabled, TunnelAddressDerivedLinkLocal, TunnelAddressDerivedPool, TunnelAddressSequentialPool:
+		default:
+			return fmt.Errorf("unsupported tunnel address mode %q", r.TunnelAddress.Mode)
+		}
+	}
+	if r.TunnelAddress.Family != "" && !validFamily(r.TunnelAddress.Family) {
+		return fmt.Errorf("unsupported tunnel address family %q", r.TunnelAddress.Family)
 	}
 	return nil
 }

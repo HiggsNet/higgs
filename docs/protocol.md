@@ -58,11 +58,11 @@ Phase 4 的关键边界：
 | `ipsec/addresses` | `ipsec.addresses.v1` | 公开地址来源与当前候选；包括 DNS 源、手工 IP、discovery、reflector、local |
 | `ipsec/ports` | `ipsec.ports.v1` | 公开 IKE/NAT-T 端口策略、当前端口、旧端口 grace、observed external port |
 | `ipsec/transport-key` | `ipsec.transport_key.v1` | 将 IKE public key / cert fingerprint 绑定到节点 Zone trust chain |
-| `ipsec/overlays/<overlay_id>` | `ipsec.overlay_intent.v1`（后续） | 公开本节点愿意把节点级 IPsec capability 用于哪个 overlay/path，避免本地 connect 只匹配节点能力造成 overlay 错配 |
+| `ipsec/overlays/<overlay_id>` | `ipsec.overlay_intent.v1` | 公开本节点愿意把节点级 IPsec capability 用于哪个 overlay/path，避免本地 connect 只匹配节点能力造成 overlay 错配 |
 
 这些记录必须由节点自身 Zone 签名，例如 `node-a.catofes.` 只能为自己的 `ipsec/*` 记录签名。父 Zone 的 delegation/revocation 仍然决定该节点是否被全网信任；一旦 Zone 被撤销，远端必须停止使用其 IPsec records，并 teardown 对应 LinkInstance。
 
-`ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 是节点级能力层；它们说明“这个节点能跑 IPsec、这些 endpoint/key 可用”。它们不应单独授权某个 overlay 建链。后续 `ipsec/overlays/<overlay_id>` 是 overlay/link intent 层；它说明“这个节点愿意在该 overlay/path 上使用节点级能力”。planner 应同时验证节点 capability、本地 connect/deny policy 和远端 overlay intent 后才建立 `TransportLinkSpec`。在该 record 实现前，参与同一 IPsec mesh 的两端必须通过运营约定保持 `overlays[].id` 一致，否则可能建立 SA 但派生出不兼容 tunnel address/LinkID。
+`ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 是节点级能力层；它们说明“这个节点能跑 IPsec、这些 endpoint/key 可用”。它们不单独授权某个 overlay 建链。`ipsec/overlays/<overlay_id>` 是 overlay/link intent 层；它说明“这个节点愿意在该 overlay/path 上使用节点级能力”。planner 必须同时验证节点 capability、本地 connect/deny policy 和远端 overlay intent 后才建立 `TransportLinkSpec`；缺少 intent 时输出 `missing_overlay_intent`，path/provider 不兼容时输出 `overlay_intent_mismatch`。
 
 下一版链路身份以 `LinkID` 为唯一基础 ID：`LinkID = hash(sorted(local_zone, peer_zone), overlay_id, path_key)`。`path_key` 第一版为 `default`、`family:ipv4` 或 `family:ipv6`；后续可扩展到多出口、多 provider 或显式 path index。`LinkID` 两端一致、无方向、不随 rotate generation 改变；`LinkInstance`、routing、health 和 debug 应以它为稳定主键。StrongSwan connection、CHILD_SA、XFRM `if_id`、interface name 和 owner token 都是 runtime 派生资源名，而不是逻辑身份本身：
 
@@ -305,13 +305,13 @@ transport private key 是 daemon 本地持久化材料，不进入 gossip。`ips
 
 这条路径有几个重要边界：
 
-- **信任边界**：远端 announce 本身不授权建链；只有已验证的 active state 中的 peer Zone、`ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 才能进入 planner。
+- **信任边界**：远端 announce 本身不授权建链；只有已验证的 active state 中的 peer Zone、节点级 `ipsec/profile` / `ipsec/addresses` / `ipsec/ports` / `ipsec/transport-key` 和匹配的 `ipsec/overlays/<overlay_id>` intent 才能进入 planner。
 - **本地策略边界**：远端声明 `enabled=true` / `accept=inbound` 只表示它愿意被尝试连接；本机是否连接仍由本地 `LinkGroupSpec` / MeshPolicy connect/deny rule 决定。
 - **可达性边界**：DNS、reflector、discovery、observed port 只提供 runtime ContactPoint 候选，不成为身份或授权依据；NAT 后 peer 如果没有 public/observed/映射等证据，会被 `no_inbound_nat_evidence` skip。
 - **幂等边界**：短时间收到 profile/address/port/key 多条 record 时，daemon 会把同一轮 state change 合并为一次 IPsec `ListSAs` + reconcile/apply，避免重复加载同一个 connection/interface。
 - **状态边界**：apply 成功只把 `LinkInstance` 推进到 `connecting`；必须后续 `ListSAs` 观测到匹配 IKE/CHILD_SA 后才进入 `up`。
 
-如果远端只发布了其中一部分记录，例如只有 `ipsec/profile` 但没有 `ipsec/transport-key` 或端口公告，planner 必须输出 `missing_ipsec_records`，不会创建 `TransportLinkSpec`。如果远端完整发布后又被父 Zone revocation/tombstone 撤销，planner 停止输出 desired spec，reconciler 对已有 Higgs-owned instance 生成 teardown，并阻止后续 endpoint fallback 或 backoff repair 把它重新拉起。
+如果远端只发布了其中一部分节点能力记录，例如只有 `ipsec/profile` 但没有 `ipsec/transport-key` 或端口公告，planner 必须输出 `missing_ipsec_records`，不会创建 `TransportLinkSpec`。如果节点能力完整但缺少当前 overlay 的 `ipsec/overlays/<overlay_id>`，planner 输出 `missing_overlay_intent`；如果 intent 的 provider/path_key 与本地 group 不兼容，输出 `overlay_intent_mismatch`。如果远端完整发布后又被父 Zone revocation/tombstone 撤销，planner 停止输出 desired spec，reconciler 对已有 Higgs-owned instance 生成 teardown，并阻止后续 endpoint fallback 或 backoff repair 把它重新拉起。
 
 ### 2.7 LinkPlanner 组合语义
 
@@ -325,14 +325,15 @@ LinkPlanner 输入：
 
 ```text
 1. 扫描 verified peer zones。
-2. 读取 peer ipsec/profile；过滤 enabled=false、accept 不匹配、本地 deny rule 命中的 peer。
-3. 读取 ipsec/addresses；解析 DNS 源，过滤过期/来源不允许/地址族不允许的候选。
-4. 读取 ipsec/ports；过滤过期端口，优先 current，grace 内保留 previous fallback。
-5. 组合 AddressCandidate + PortAdvertisement => ContactPoint。
-6. 根据 path mode 选择 ContactPoint：
+2. 读取 peer 节点级 IPsec records；缺 profile/address/port/transport-key 任一项则 skip。
+3. 读取 peer `ipsec/overlays/<overlay_id>` intent；缺少或 provider/path_key 不兼容则 skip。
+4. 读取 ipsec/addresses；解析 DNS 源，过滤过期/来源不允许/地址族不允许的候选。
+5. 读取 ipsec/ports；过滤过期端口，优先 current，grace 内保留 previous fallback。
+6. 组合 AddressCandidate + PortAdvertisement => ContactPoint。
+7. 根据 path mode 选择 ContactPoint：
    - family-redundant：每个地址族最多一条。
    - exhaustive：尽量保留所有允许候选。
-7. 输出 TransportLinkSpec 给 provider=strongswan。
+8. 输出 TransportLinkSpec 给 provider=strongswan。
 ```
 
 provider apply 的第一版可审计边界已经固定在 `ApplyTransportLink` / `ApplyPlan`：先确保目标 namespace，再加载 StrongSwan connection，然后确保 XFRM interface，最后分配本地 tunnel address。dry-run driver 记录同一顺序，使非 root 环境也能验证 desired config 推导和错误路径；真实 VICI/netlink provider 应保持同一操作顺序和 plan 输出。
@@ -378,7 +379,7 @@ flowchart TD
 
 规划层只负责回答“应该尝试建哪些 link”。`PlanTransportLinks` 从 verified active state 和本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`，并应用 zone exact/glob connect/deny rule。缺少 `ipsec/*` record、profile disabled、policy 不匹配、accept 组合不兼容、地址族或 path mode 不支持、没有可拨 ContactPoint、NAT 后缺少公网证据等情况都会变成结构化 skip reason。`role` / `tag` selector 已完成解析，但在本地 peer label 来源接入前不会匹配。
 
-公告层由配置了 `overlays:` / link group 的 daemon 自动完成。本节点会发布 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` records。transport key 独立于 Zone signing key，并持久化在本地 state meta 中，避免 daemon 重启或重复发布时造成 fingerprint / profile version 抖动。
+公告层由配置了 `overlays:` / link group 的 daemon 自动完成。本节点会发布 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和每个本地 StrongSwan overlay 对应的 `ipsec/overlays/<overlay_id>` intent records。transport key 独立于 Zone signing key，并持久化在本地 state meta 中，避免 daemon 重启或重复发布时造成 fingerprint / profile version 抖动。
 
 持久化层用 `LinkInstance` 记录本机已经知道的 link 实例：desired spec hash、实际状态、XFRM if_id、IKE/CHILD_SA 名称、endpoint、Higgs owner、failure count、backoff_until 和 last_error。`ReconcileLinkInstances` 再把 desired spec、持久化 instance、driver `ListSAs` 观测和 revocation 输入放在一起，产生 `create`、`update`、`adopt`、`repair`、`teardown` 或 `noop` action。
 

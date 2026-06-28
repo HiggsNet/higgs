@@ -12,19 +12,21 @@ import (
 )
 
 const (
-	SkipLocalZone            = "local_zone"
-	SkipRevokedZone          = "revoked_zone"
-	SkipMissingRecords       = "missing_ipsec_records"
-	SkipDisabledProfile      = "disabled_profile"
-	SkipUnsupportedPathMode  = "unsupported_path_mode"
-	SkipUnsupportedFamily    = "unsupported_address_family"
-	SkipAcceptIntentMismatch = "accept_intent_mismatch"
-	SkipNoContactPoints      = "no_contact_points"
-	SkipNoInboundNATEvidence = "no_inbound_nat_evidence"
-	SkipPolicyDenied         = "policy_denied"
-	SkipPolicyNoMatch        = "policy_no_match"
-	SkipMaxPeers             = "max_peers"
-	SkipPlannerError         = "planner_error"
+	SkipLocalZone             = "local_zone"
+	SkipRevokedZone           = "revoked_zone"
+	SkipMissingRecords        = "missing_ipsec_records"
+	SkipDisabledProfile       = "disabled_profile"
+	SkipUnsupportedPathMode   = "unsupported_path_mode"
+	SkipUnsupportedFamily     = "unsupported_address_family"
+	SkipAcceptIntentMismatch  = "accept_intent_mismatch"
+	SkipNoContactPoints       = "no_contact_points"
+	SkipNoInboundNATEvidence  = "no_inbound_nat_evidence"
+	SkipMissingOverlayIntent  = "missing_overlay_intent"
+	SkipOverlayIntentMismatch = "overlay_intent_mismatch"
+	SkipPolicyDenied          = "policy_denied"
+	SkipPolicyNoMatch         = "policy_no_match"
+	SkipMaxPeers              = "max_peers"
+	SkipPlannerError          = "planner_error"
 )
 
 type LinkPlannerOptions struct {
@@ -132,6 +134,13 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		return nil, false, skip, linkIndex, nil
 	}
 	group = effectiveGroup
+	intent := records.OverlayIntents[group.ID]
+	if intent == nil {
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingOverlayIntent, Detail: group.ID}, linkIndex, nil
+	}
+	if intent.Provider != "" && intent.Provider != group.Provider {
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipOverlayIntentMismatch, Detail: fmt.Sprintf("provider=%s", intent.Provider)}, linkIndex, nil
+	}
 	if group.MaxPeers > 0 && selectedPeers >= group.MaxPeers {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMaxPeers}, linkIndex, nil
 	}
@@ -243,6 +252,10 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		if localIKE != 0 {
 			spec.LocalIKEPort = localIKE
 		}
+	}
+	specs = filterSpecsByOverlayIntent(specs, intent)
+	if len(specs) == 0 {
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipOverlayIntentMismatch, Detail: fmt.Sprintf("path_keys=%v", intent.PathKeys)}, linkIndex, nil
 	}
 	return specs, true, PlanSkip{}, nextIndex, nil
 }
@@ -457,6 +470,23 @@ func sortedZones(ns *zone.NetworkState) []zone.ZonePath {
 		out = append(out, peer)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func filterSpecsByOverlayIntent(specs []TransportLinkSpec, intent *OverlayIntentRecord) []TransportLinkSpec {
+	if intent == nil {
+		return nil
+	}
+	allowed := map[string]bool{}
+	for _, pathKey := range intent.PathKeys {
+		allowed[pathKey] = true
+	}
+	out := make([]TransportLinkSpec, 0, len(specs))
+	for _, spec := range specs {
+		if allowed[spec.PathKey] {
+			out = append(out, spec)
+		}
+	}
 	return out
 }
 

@@ -1259,9 +1259,10 @@ func TestDebugRecordsOutputFiltersByPrefixAndPrintsValues(t *testing.T) {
 	output := out.String()
 	assertOutputContains(t, output,
 		"zones: 1",
-		"records: 4",
+		"records: 5",
 		"prefix: ipsec/",
 		"zone node-b.catofes.",
+		"record key=ipsec/overlays/main version=1 type=ipsec.overlay_intent.v1",
 		"record key=ipsec/profile version=1 type=ipsec.profile.v1",
 		"record key=ipsec/transport-key version=1 type=ipsec.transport_key.v1",
 		"value: {",

@@ -47,6 +47,53 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksRequiresOverlayIntent(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	delete(ns.Zones["node-b.catofes."].Records, OverlayIntentRecordKey("ipsec-main"))
+
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{{ID: "ipsec-main"}}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 0 || !hasSkip(plan.Skipped, "node-b.catofes.", SkipMissingOverlayIntent) {
+		t.Fatalf("plan desired=%+v skips=%+v, want missing overlay intent skip", plan.Desired, plan.Skipped)
+	}
+}
+
+func TestPlanTransportLinksSkipsOverlayIntentMismatch(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	delete(ns.Zones["node-b.catofes."].Records, OverlayIntentRecordKey("ipsec-main"))
+	ns.Zones["node-b.catofes."].Records[OverlayIntentRecordKey("ipsec-other")] = record(t, "node-b.catofes.", OverlayIntentRecordKey("ipsec-other"), RecordTypeOverlayIntent, OverlayIntentRecord{
+		Version:   1,
+		OverlayID: "ipsec-other",
+		Provider:  ProviderStrongSwan,
+		PathKeys:  []string{"family:ipv4"},
+		UpdatedAt: now.Unix(),
+	})
+
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{{ID: "ipsec-main"}}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 0 || !hasSkip(plan.Skipped, "node-b.catofes.", SkipMissingOverlayIntent) {
+		t.Fatalf("plan desired=%+v skips=%+v, want missing matching overlay intent skip", plan.Desired, plan.Skipped)
+	}
+}
+
 func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
@@ -995,6 +1042,14 @@ func addIPsecNode(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, accep
 		PublicKey:   "base64",
 		Fingerprint: fingerprint,
 		UpdatedAt:   now.Unix(),
+	})
+	zs.Records[OverlayIntentRecordKey("ipsec-main")] = record(t, peer, OverlayIntentRecordKey("ipsec-main"), RecordTypeOverlayIntent, OverlayIntentRecord{
+		Version:       1,
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		PathKeys:      []string{"family:ipv4", "family:ipv6", DefaultPathKey},
+		TunnelAddress: TunnelAddressSpec{Mode: TunnelAddressDerivedLinkLocal, Family: FamilyIPv6},
+		UpdatedAt:     now.Unix(),
 	})
 	ns.Zones[peer] = zs
 }

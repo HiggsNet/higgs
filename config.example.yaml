@@ -151,8 +151,9 @@ ipsec:
   # publish_from_endpoints: true
 
 # Uncomment an overlay/link group to participate in the StrongSwan mesh. This
-# is the switch that makes the daemon publish signed ipsec/profile,
-# ipsec/addresses, ipsec/ports, and ipsec/transport-key records for this node.
+# is the switch that makes the daemon publish signed node-level ipsec/profile,
+# ipsec/addresses, ipsec/ports, ipsec/transport-key records plus
+# ipsec/overlays/<overlay_id> intent records for this node.
 # Future providers such as WireGuard should be configured as their own provider
 # family, not under the ipsec: provider settings.
 #
@@ -180,7 +181,7 @@ ipsec:
 #     # usually unnecessary. Modes:
 #     #   derived-link-local  deterministic IPv6 fe80::/64 scoped address
 #     #   derived-pool        deterministic address from tunnel_address.pool
-#     #   sequential-pool     legacy index-based allocation
+#     #   sequential-pool     legacy index-based allocation for old configs/tests
 #     #   disabled            no tunnel address
 #     # tunnel_address:
 #     #   mode: derived-pool

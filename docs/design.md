@@ -248,6 +248,7 @@ node-a.catofes./ipsec/profile
 node-a.catofes./ipsec/addresses
 node-a.catofes./ipsec/ports
 node-a.catofes./ipsec/transport-key
+node-a.catofes./ipsec/overlays/<overlay_id>
 ```
 
 `ipsec/profile` 示例：
@@ -277,13 +278,13 @@ node-a.catofes./ipsec/transport-key
 
 NAT 字段只是 hint，不是安全事实。远端必须结合地址来源、端口公告、连接结果和本地策略判断是否可达。
 
-节点级 `ipsec/profile` 只应表达“这个节点具备 StrongSwan/IPsec 能力以及如何到达它”，不应同时表达“这个节点参与哪个 overlay”。否则本地 `overlays[].connect` 会把“远端节点能力”误当成“远端 overlay 意图”，导致两端 overlay id 不一致时仍可能建立 IKE/SA，但 tunnel address / LinkID 派生不一致。后续协议应增加独立的 overlay/link intent record，例如：
+节点级 `ipsec/profile` 只表达“这个节点具备 StrongSwan/IPsec 能力以及如何到达它”，不同时表达“这个节点参与哪个 overlay”。否则本地 `overlays[].connect` 会把“远端节点能力”误当成“远端 overlay 意图”，导致两端 overlay id 不一致时仍可能建立 IKE/SA，但 tunnel address / LinkID 派生不一致。当前协议使用独立的 overlay/link intent record：
 
 ```text
 node-a.catofes./ipsec/overlays/<overlay_id>
 ```
 
-该记录表达本节点愿意把节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 用于某个 overlay/path。最小字段包括 `overlay_id`、`provider`、支持的 `path_keys`（如 `default`、`family:ipv4`、`family:ipv6`）、可接受的 `tunnel_address` 模式/族、可选 `policy_tags` 和 `updated_at`。planner 以后必须同时满足三层条件才输出 desired link：远端节点级 IPsec capability 完整且可信、本地 `connect` 选择该 peer、远端发布了兼容同一 `overlay_id/path_key` 的 overlay intent。在该 record 落地前，overlay id 一致性仍是运营配置约定。
+该记录表达本节点愿意把节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 用于某个 overlay/path。最小字段包括 `overlay_id`、`provider`、支持的 `path_keys`（如 `default`、`family:ipv4`、`family:ipv6`）、可接受的 `tunnel_address` 模式/族、可选 `policy_tags` 和 `updated_at`。planner 必须同时满足三层条件才输出 desired link：远端节点级 IPsec capability 完整且可信、本地 `connect` 选择该 peer、远端发布了兼容同一 `overlay_id/path_key` 的 overlay intent。缺少 intent 会显示为 `missing_overlay_intent`，provider/path_key 不兼容会显示为 `overlay_intent_mismatch`。
 
 #### 2.4.2 地址与端口分离
 
@@ -549,7 +550,7 @@ gossip announce
   -> ApplyReconcileAction(create/update/repair/teardown)
 ```
 
-因此，远端新发布 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 后，只有这些记录已经通过 Zone trust chain 验证并进入本地 active state，才会被 LinkPlanner 使用。LinkPlanner 会重新扫描所有 verified peer zone：缺少任一 `ipsec/*` 记录、profile disabled、本地 connect/deny rule 不匹配、accept intent 不允许、地址族/path mode 不支持、没有可拨 ContactPoint、NAT 后缺少可验证公网证据，都会变成结构化 skip reason，而不是进入 apply。
+因此，远端新发布 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和 `ipsec/overlays/<overlay_id>` 后，只有这些记录已经通过 Zone trust chain 验证并进入本地 active state，才会被 LinkPlanner 使用。LinkPlanner 会重新扫描所有 verified peer zone：缺少任一节点级 IPsec record、缺少匹配 overlay intent、profile disabled、本地 connect/deny rule 不匹配、accept intent 不允许、地址族/path mode 不支持、没有可拨 ContactPoint、NAT 后缺少可验证公网证据，都会变成结构化 skip reason，而不是进入 apply。
 
 如果远端记录从“缺失/不匹配”变成“完整且匹配本地 MeshPolicy”，planner 会输出新的 `TransportLinkSpec`。reconciler 随后根据本地是否已有 `LinkInstance`、driver 是否已经能从 `ListSAs` 看到匹配 SA、desired spec hash 是否变化、是否处于 apply backoff，决定 `create`、`adopt`、`update`、`repair` 或 `noop`。daemon event drain 期间多次 state change 会合并为一次 IPsec `ListSAs` + reconcile/apply，所以同一轮收到 profile/address/port/key 多条 record 时不会对同一个 peer/group 重复加载 connection/interface。
 

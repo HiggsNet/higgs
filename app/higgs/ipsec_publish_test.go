@@ -35,7 +35,7 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 		t.Fatalf("publishIPsecRecords: %v", err)
 	}
 	zs := state.Network.Zones[state.ManagedZone]
-	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.RecordKeyTransportKey} {
+	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.RecordKeyTransportKey, ipsec.OverlayIntentRecordKey("main")} {
 		if zs.Records[key] == nil {
 			t.Fatalf("%s record missing", key)
 		}
@@ -70,6 +70,13 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	}
 	if ports.Current == nil || ports.Current.NATT.Advertised != 4500 {
 		t.Fatalf("ports = %+v, want natt 4500", ports)
+	}
+	intent, err := ipsec.ParseOverlayIntentRecord(zs.Records[ipsec.OverlayIntentRecordKey("main")])
+	if err != nil {
+		t.Fatalf("ParseOverlayIntentRecord: %v", err)
+	}
+	if intent.OverlayID != "main" || len(intent.PathKeys) == 0 {
+		t.Fatalf("overlay intent = %+v, want main path keys", intent)
 	}
 
 	latest, err := rt.LoadState()

@@ -2484,7 +2484,7 @@ func assertGossipedIPsecRecords(t *testing.T, state *stateFile, peer zone.ZonePa
 	if zs == nil {
 		t.Fatalf("zone %s missing after gossip", peer)
 	}
-	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.RecordKeyTransportKey} {
+	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.RecordKeyTransportKey, ipsec.OverlayIntentRecordKey("main")} {
 		if zs.Records[key] == nil {
 			t.Fatalf("%s missing for %s after gossip", key, peer)
 		}
@@ -2774,6 +2774,14 @@ func addDaemonTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZoneP
 		UpdatedAt: now.Unix(),
 	})
 	zs.Records[ipsec.RecordKeyTransportKey] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyTransportKey, ipsec.RecordTypeTransportKey, *key)
+	zs.Records[ipsec.OverlayIntentRecordKey("main")] = unsignedIPsecRecord(t, peer, ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{
+		Version:       1,
+		OverlayID:     "main",
+		Provider:      ipsec.ProviderStrongSwan,
+		PathKeys:      []string{"family:ipv4"},
+		TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6},
+		UpdatedAt:     now.Unix(),
+	})
 }
 
 func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, generation uint64, ikePort uint16, now time.Time) {
@@ -3156,6 +3164,14 @@ func addTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, n
 		PublicKey:   "base64",
 		Fingerprint: fingerprint,
 		UpdatedAt:   now.Unix(),
+	})
+	zs.Records[ipsec.OverlayIntentRecordKey("main")] = unsignedIPsecRecord(t, peer, ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{
+		Version:       1,
+		OverlayID:     "main",
+		Provider:      ipsec.ProviderStrongSwan,
+		PathKeys:      []string{"family:ipv4"},
+		TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6},
+		UpdatedAt:     now.Unix(),
 	})
 }
 
