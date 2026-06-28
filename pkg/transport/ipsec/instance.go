@@ -620,7 +620,9 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	inst.ActualState = LinkStateConfiguring
 	inst.DesiredSpecHash = TransportLinkSpecHash(spec)
 	r.Instances[id] = inst
-	r.add(ReconcileActionCreate, &spec, &inst, reason)
+	takeoverSpec := spec
+	takeoverSpec.InitiatorRole = InitiatorRoleSecondaryTakeover
+	r.add(ReconcileActionCreate, &takeoverSpec, &inst, reason)
 }
 
 func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, retention time.Duration, cutoverReady bool, now time.Time, initiatorRole string) {
@@ -1000,7 +1002,14 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
-		return ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+		plan, err := ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+		if err != nil {
+			return plan, err
+		}
+		if err := InitiateTransportChild(ctx, ipsec, *action.Spec, &plan); err != nil {
+			return plan, err
+		}
+		return plan, nil
 	case ReconcileActionRepair:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
@@ -1032,6 +1041,9 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 	case ReconcileActionPrepareRotate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
+		}
+		if action.Instance != nil && action.Instance.IKEName != "" && action.Instance.IKEName != action.Spec.TransportID {
+			_ = ipsec.UnloadConnection(ctx, action.Instance.IKEName)
 		}
 		return ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
 	case ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:

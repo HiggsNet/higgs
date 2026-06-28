@@ -822,6 +822,42 @@ func TestApplyReconcileActionRepairInitiatesChild(t *testing.T) {
 	}
 }
 
+func TestApplyReconcileActionCreateInitiatesActiveChild(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        77,
+		InitiatorRole:   InitiatorRoleSecondaryTakeover,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
+		ContactPoints: []ContactPoint{{
+			Address:  "198.51.100.20",
+			Family:   FamilyIPv4,
+			IKEPort:  DefaultIKEPort,
+			NATTPort: DefaultNATTPort,
+		}},
+	}
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action: ReconcileActionCreate,
+		Spec:   &spec,
+	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Initiated) != 1 || ipsecDrv.Initiated[0] != ChildSAName(spec) {
+		t.Fatalf("initiated = %+v", ipsecDrv.Initiated)
+	}
+	last := plan.Operations[len(plan.Operations)-1]
+	if last.Action != "initiate_child" || last.Target != ChildSAName(spec) {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
 func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T) {
 	oldSpec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
@@ -867,6 +903,44 @@ func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T)
 	}
 	if len(ipsecDrv.Connections) != 1 || ipsecDrv.Connections[0].ContactPoints[0].IKEPort != 30001 {
 		t.Fatalf("connections = %+v, want new port spec", ipsecDrv.Connections)
+	}
+}
+
+func TestApplyReconcileActionPrepareRotateUnloadsBaseConfig(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		LinkID:          "link-stable",
+		TransportID:     RuntimeConnectionID("link-stable", 2, ProviderStrongSwan),
+		InterfaceName:   "hgs2",
+		XFRMIfID:        78,
+		InitiatorRole:   InitiatorRolePrimary,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::2"),
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 2,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	inst := LinkInstance{IKEName: RuntimeConnectionID("link-stable", 0, ProviderStrongSwan)}
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	if _, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action:   ReconcileActionPrepareRotate,
+		Spec:     &spec,
+		Instance: &inst,
+	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true}); err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if !stringSliceContains(ipsecDrv.Unloaded, inst.IKEName) {
+		t.Fatalf("unloaded = %+v, want base config %s", ipsecDrv.Unloaded, inst.IKEName)
+	}
+	if len(ipsecDrv.Terminated) != 0 {
+		t.Fatalf("prepare_rotate terminated old SA: %+v", ipsecDrv.Terminated)
 	}
 }
 
@@ -1209,6 +1283,9 @@ func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionCreate || result.Actions[0].Reason != "secondary_takeover" {
 		t.Fatalf("expected secondary_takeover create, got %+v", result.Actions)
 	}
+	if result.Actions[0].Spec == nil || result.Actions[0].Spec.InitiatorRole != InitiatorRoleSecondaryTakeover {
+		t.Fatalf("takeover action spec = %+v, want secondary takeover role", result.Actions[0].Spec)
+	}
 	inst = result.Instances[LinkInstanceID(spec)]
 	if inst.InitiatorRole != InitiatorRoleSecondaryTakeover || inst.ActualState != LinkStateConfiguring || inst.TakeoverPhase != TakeoverPhaseActive {
 		t.Fatalf("instance = %+v", inst)
@@ -1325,4 +1402,13 @@ func TestReconcileTakeoverForbiddenByRevocation(t *testing.T) {
 	if len(plan.Desired) != 0 {
 		t.Fatalf("planner should skip revoked peer")
 	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

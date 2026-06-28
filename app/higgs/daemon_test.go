@@ -895,17 +895,6 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState(node-b prepared rotate): %v", err)
 	}
-	rotSpecA := daemonSystemDesiredSpec(t, preparedA, groupA, now.Add(time.Minute))
-	rotSpecB := daemonSystemDesiredSpec(t, preparedB, groupB, now.Add(time.Minute))
-	t.Logf("DEBUG rotate specA role=%s gen=%d localikeport=%d", rotSpecA.InitiatorRole, rotSpecA.Generation, rotSpecA.LocalIKEPort)
-	t.Logf("DEBUG rotate specB role=%s gen=%d localikeport=%d", rotSpecB.InitiatorRole, rotSpecB.Generation, rotSpecB.LocalIKEPort)
-	t.Logf("DEBUG rotate specB generation=%d localikeport=%d", rotSpecB.Generation, rotSpecB.LocalIKEPort)
-	if preparedA.IPsecReconcile != nil {
-		t.Logf("DEBUG preparedA actions=%+v", preparedA.IPsecReconcile.Actions)
-	}
-	if preparedB.IPsecReconcile != nil {
-		t.Logf("DEBUG preparedB actions=%+v", preparedB.IPsecReconcile.Actions)
-	}
 	instA := preparedA.LinkInstances[ipsec.LinkInstanceID(specA)]
 	if instA.RotatePhase != ipsec.RotatePhaseTestingNew || instA.StagedGeneration != 2 {
 		t.Fatalf("prepared rotate instance A = %+v, want testing_new generation 2", instA)
@@ -963,8 +952,6 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	committedInstB := committedB.LinkInstances[ipsec.LinkInstanceID(rotatedSpecB)]
 	rotatedSpecB.InterfaceName = committedInstB.InterfaceName
 	rotatedSpecB.XFRMIfID = committedInstB.XFRMIfID
-	t.Logf("DEBUG assert A inst=%+v spec.XFRMIfID=%d", committedA.LinkInstances[ipsec.LinkInstanceID(rotatedSpecA)], rotatedSpecA.XFRMIfID)
-	t.Logf("DEBUG assert B inst=%+v spec.XFRMIfID=%d", committedB.LinkInstances[ipsec.LinkInstanceID(rotatedSpecB)], rotatedSpecB.XFRMIfID)
 	assertDaemonSystemLinkUp(t, committedA, rotatedSpecA)
 	assertDaemonSystemLinkUp(t, committedB, rotatedSpecB)
 	if committedInstA.RotatePhase != ipsec.RotatePhaseIdle || committedInstA.StagedGeneration != 0 {

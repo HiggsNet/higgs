@@ -412,8 +412,18 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		InitiatorRole:            InitiatorRoleSecondaryStandby,
 	}
 
-	ipsecA := &StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	ipsecB := &StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	ipsecA := &StrongSwanDriver{
+		VICI:                  clientA,
+		KeyDir:                t.TempDir(),
+		InitiateAsync:         true,
+		InitiateClientFactory: testVICIClientFactory(viciA),
+	}
+	ipsecB := &StrongSwanDriver{
+		VICI:                  clientB,
+		KeyDir:                t.TempDir(),
+		InitiateAsync:         true,
+		InitiateClientFactory: testVICIClientFactory(viciB),
+	}
 	xfrmA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: false})
 	xfrmB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: false})
 	xfrmA.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsA, Create: false}
@@ -563,6 +573,16 @@ func waitForVICI(ctx context.Context, socket string) (*GoviciClient, error) {
 		default:
 			time.Sleep(100 * time.Millisecond)
 		}
+	}
+}
+
+func testVICIClientFactory(socket string) func() (VICIClient, func() error, error) {
+	return func() (VICIClient, func() error, error) {
+		client, err := NewGoviciClient(socket)
+		if err != nil {
+			return nil, nil, err
+		}
+		return client, client.Close, nil
 	}
 }
 

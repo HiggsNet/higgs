@@ -323,6 +323,13 @@ func TestSystemXFRMDriverPeerTunnelPingSmoke(t *testing.T) {
 
 	driverA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: true})
 	driverB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: true})
+	// This smoke models two nodes on one kernel. A real two-node deployment can
+	// reuse the same deterministic XFRM if_id on each host, but a single host
+	// state namespace cannot create two XFRM interfaces with the same if_id.
+	// Keep the state namespace isolated per simulated node; the preceding
+	// integration smoke covers the host-born create-and-move lifecycle.
+	driverA.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsA, Create: false}
+	driverB.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsB, Create: false}
 
 	group := LinkGroupSpec{
 		ID:                "ipsec-main",
