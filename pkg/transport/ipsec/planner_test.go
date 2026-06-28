@@ -78,6 +78,40 @@ func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksMirrorsDerivedTunnelAddressesForPeerPair(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Family: FamilyIPv4, Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Family: FamilyIPv4, Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{
+		ID: "ipsec-main",
+		TunnelAddressSpec: TunnelAddressSpec{
+			Mode:   TunnelAddressDerivedLinkLocal,
+			Family: FamilyIPv6,
+		},
+	}
+	planA, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(a): %v", err)
+	}
+	planB, err := PlanTransportLinks(context.Background(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(b): %v", err)
+	}
+	if len(planA.Desired) != 1 || len(planB.Desired) != 1 {
+		t.Fatalf("desired A/B = %+v / %+v", planA.Desired, planB.Desired)
+	}
+	a := planA.Desired[0]
+	b := planB.Desired[0]
+	if a.LocalTunnelAddr != b.PeerTunnelAddr || a.PeerTunnelAddr != b.LocalTunnelAddr {
+		t.Fatalf("derived tunnel addresses are not mirrored: A local=%s peer=%s, B local=%s peer=%s", a.LocalTunnelAddr, a.PeerTunnelAddr, b.LocalTunnelAddr, b.PeerTunnelAddr)
+	}
+}
+
 func TestPlanTransportLinksDerivedTunnelAddressStableWhenEarlierPeerAdded(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

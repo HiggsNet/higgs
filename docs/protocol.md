@@ -58,8 +58,23 @@ Phase 4 的关键边界：
 | `ipsec/addresses` | `ipsec.addresses.v1` | 公开地址来源与当前候选；包括 DNS 源、手工 IP、discovery、reflector、local |
 | `ipsec/ports` | `ipsec.ports.v1` | 公开 IKE/NAT-T 端口策略、当前端口、旧端口 grace、observed external port |
 | `ipsec/transport-key` | `ipsec.transport_key.v1` | 将 IKE public key / cert fingerprint 绑定到节点 Zone trust chain |
+| `ipsec/overlays/<overlay_id>` | `ipsec.overlay_intent.v1`（后续） | 公开本节点愿意把节点级 IPsec capability 用于哪个 overlay/path，避免本地 connect 只匹配节点能力造成 overlay 错配 |
 
 这些记录必须由节点自身 Zone 签名，例如 `node-a.catofes.` 只能为自己的 `ipsec/*` 记录签名。父 Zone 的 delegation/revocation 仍然决定该节点是否被全网信任；一旦 Zone 被撤销，远端必须停止使用其 IPsec records，并 teardown 对应 LinkInstance。
+
+`ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 是节点级能力层；它们说明“这个节点能跑 IPsec、这些 endpoint/key 可用”。它们不应单独授权某个 overlay 建链。后续 `ipsec/overlays/<overlay_id>` 是 overlay/link intent 层；它说明“这个节点愿意在该 overlay/path 上使用节点级能力”。planner 应同时验证节点 capability、本地 connect/deny policy 和远端 overlay intent 后才建立 `TransportLinkSpec`。在该 record 实现前，参与同一 IPsec mesh 的两端必须通过运营约定保持 `overlays[].id` 一致，否则可能建立 SA 但派生出不兼容 tunnel address/LinkID。
+
+下一版链路身份以 `LinkID` 为唯一基础 ID：`LinkID = hash(sorted(local_zone, peer_zone), overlay_id, path_key)`。`path_key` 第一版为 `default`、`family:ipv4` 或 `family:ipv6`；后续可扩展到多出口、多 provider 或显式 path index。`LinkID` 两端一致、无方向、不随 rotate generation 改变；`LinkInstance`、routing、health 和 debug 应以它为稳定主键。StrongSwan connection、CHILD_SA、XFRM `if_id`、interface name 和 owner token 都是 runtime 派生资源名，而不是逻辑身份本身：
+
+```text
+RuntimeConnectionID = "ipsec-" + short(hash(LinkID, generation, provider, "runtime"))
+ChildSAName         = RuntimeConnectionID + "-child"
+XFRMIfID            = uint32(hash(LinkID, generation, provider, "xfrm-if-id"))
+InterfaceName       = "hgs" + hex(XFRMIfID)
+OwnerToken          = hash(LinkID, RuntimeConnectionID, "owner-token")
+```
+
+`"runtime"`、`"xfrm-if-id"`、`"owner-token"` 等字符串是 domain separator。实际系统资源名必须使用短名：StrongSwan connection/CHILD_SA 用 `ipsec-<12hex>` / `ipsec-<12hex>-r<generation>` 一类格式，Linux XFRM interface 继续使用 `hgs<8hex>`，满足接口名长度限制。Tunnel address 从 `LinkID + address_epoch + mode + pool? + lower/higher` 派生；`address_epoch=0` 表示稳定地址，staged rotate 若需要 old/new 同 family 双 running 则使用 generation 作为 address epoch，避免 `derived-pool` 在同一 netns 复用旧地址。`sequential-pool` 仅作为 legacy 兼容模式保留。
 
 ### 2.2 `ipsec/profile`
 

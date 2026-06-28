@@ -272,7 +272,8 @@ func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *N
 }
 
 func stableTunnelAddressIndex(local, peer zone.ZonePath, overlayID, family string) int {
-	hash := higgscrypto.Hash([]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(overlayID), []byte{0}, []byte(family))
+	lower, higher := sortedPair(local, peer)
+	hash := higgscrypto.Hash([]byte(lower), []byte{0}, []byte(higher), []byte{0}, []byte(overlayID), []byte{0}, []byte(family))
 	return int(binary.BigEndian.Uint32(hash[:4]) & 0x7fffffff)
 }
 

@@ -277,6 +277,14 @@ node-a.catofes./ipsec/transport-key
 
 NAT 字段只是 hint，不是安全事实。远端必须结合地址来源、端口公告、连接结果和本地策略判断是否可达。
 
+节点级 `ipsec/profile` 只应表达“这个节点具备 StrongSwan/IPsec 能力以及如何到达它”，不应同时表达“这个节点参与哪个 overlay”。否则本地 `overlays[].connect` 会把“远端节点能力”误当成“远端 overlay 意图”，导致两端 overlay id 不一致时仍可能建立 IKE/SA，但 tunnel address / LinkID 派生不一致。后续协议应增加独立的 overlay/link intent record，例如：
+
+```text
+node-a.catofes./ipsec/overlays/<overlay_id>
+```
+
+该记录表达本节点愿意把节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 用于某个 overlay/path。最小字段包括 `overlay_id`、`provider`、支持的 `path_keys`（如 `default`、`family:ipv4`、`family:ipv6`）、可接受的 `tunnel_address` 模式/族、可选 `policy_tags` 和 `updated_at`。planner 以后必须同时满足三层条件才输出 desired link：远端节点级 IPsec capability 完整且可信、本地 `connect` 选择该 peer、远端发布了兼容同一 `overlay_id/path_key` 的 overlay intent。在该 record 落地前，overlay id 一致性仍是运营配置约定。
+
 #### 2.4.2 地址与端口分离
 
 IPsec endpoint 不应直接建模为单个 `ip:port`。端口后续可能在配置范围内动态选择、短期保留旧端口、甚至做较快 rotate；地址也可能来自 DNS、discovery、reflector 或本地接口扫描。Phase 4 使用三层模型：
@@ -607,6 +615,20 @@ type TransportLinkSpec struct {
 ```
 
 `LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、address source 优先级、最大 peer/link 数、`tunnel_address` 分配策略（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。本节点 initiator 角色由本节点 `ipsec.accept` 与远端 `accept` 推导，不在 group 中配置 direction。
+
+逻辑链路身份应从 runtime 资源名中拆出来。唯一基础身份是 `LinkID` / `PairID`：它表示“两节点之间同一条逻辑 link”，使用无方向输入派生，例如 `hash(sorted(local_zone, peer_zone), overlay_id, path_key)`；其中 `path_key` 当前可为 `default` 或 `family:ipv4` / `family:ipv6`，后续可扩展到多出口、多 provider 或显式 path index。`LinkID` 两端一致、无方向、不随 rotate generation 改变；它应成为 `LinkInstance`、routing/debug/health 观测的稳定主键。
+
+其他 ID 都是从 `LinkID` 派生的资源名或观测 label，不再重新承担逻辑身份：
+- `RuntimeConnectionID`：StrongSwan connection 名，使用短名如 `ipsec-<12hex>` / `ipsec-<12hex>-r<generation>`，由 `short(hash(LinkID, generation, provider, "runtime"))` 派生；`"runtime"` 是 domain separator，避免与地址、owner token、if_id 等派生空间混用。connection 名可以两端相同，因为它只在本机 charon/VICI 配置命名空间内使用；本机方向性由 `local_zone`、`peer_zone`、initiator role、endpoint 字段表达，不塞进名字。
+- `ChildSAName`：`RuntimeConnectionID + "-child"`。
+- `XFRMIfID`：`uint32(hash(LinkID, generation, provider, "xfrm-if-id"))`，值为 0 时改为 1；staged generation 因 generation 不同而获得独立 if_id。
+- `InterfaceName`：继续使用 Linux 安全短名 `hgs<8hex>`，从 `XFRMIfID` 派生，保持低于 15 字符接口名限制。
+- `OwnerToken`：从 `hash(LinkID, RuntimeConnectionID, "owner-token")` 派生，用于 owner-guarded cleanup/adoption。
+- `HealthSeriesID` / routing link key：以稳定 `LinkID` 为主键，generation、runtime connection、interface 作为 label，避免 rotate 后观测历史断裂。
+
+Tunnel address 也只从 `LinkID` 派生。统一输入是 `derive(LinkID, address_epoch, mode, pool?, role)`；`role` 为 sorted peer pair 中的 `lower` / `higher`，当前节点若是 higher 则交换 local/peer。`address_epoch=0` 表示普通稳定地址；当 rotate 需要 old/new 同 family 双 running 时，尤其是 `derived-pool`，staged generation 使用 `address_epoch=<generation>`，避免同一 netns 中 staged interface 复用旧 tunnel address。`derived-link-local` 从 `fe80::/64` 派生后 64-bit interface-id；`derived-pool` 把 pool 纳入 hash，IPv4 跳过 network/broadcast/不可用 host，IPv6 跳过 pool base/不可用地址，并通过 retry 处理候选不可用。`sequential-pool` 保留为 legacy：它依赖 planner link index，适合兼容旧配置，不应作为新的分布式稳定派生主线。`disabled` 不派生 tunnel address，只适用于不需要 tunnel IP health/Babel 的 transport 场景。
+
+`overlay_id` 是 `LinkID` 的一部分，因此两端必须用相同 overlay id 才能表示同一条逻辑链路。当前 `connect`/`deny` 规则只匹配远端已签名的 IPsec capability/profile/address/port/key 记录和远端 zone 名，远端本地 `overlays[].id` 并不会发布；因此如果两台机器把同一 mesh 配成不同 overlay id，planner 仍可能各自选中对方并加载 StrongSwan 连接，IKE/SA 也可能 established，但两端派生出的 tunnel address/LinkID 不一致，最终形成“控制面看似 up、数据面不通”的错配。后续应把 overlay/link intent 纳入可验证记录或握手前检查，让 `connect` 只选择明确兼容同一 overlay id/path_key 的 peer；在此之前，运营配置必须保持参与同一 IPsec mesh 的 `overlays[].id` 一致。
 
 netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 的 `netns.default` 默认是 `kind=name, name=h2, create=true`；旧名 `overlay.default_netns` / `ipsec.default_netns` 仅作为兼容别名读取。link group 通过 `netns: <name>` 引用已声明的 netns，省略时使用 `netns.default`。provider apply 时先 `EnsureNamespace`，再在 charon/state/policy 所在 host netns 创建 XFRM interface，move 到目标 overlay netns 后分配 tunnel address；已有目标 netns interface 会直接 adopt/up，host 残留会先 move 再 adopt。
 
