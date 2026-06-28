@@ -575,14 +575,20 @@ func putSignedIPsecRecordIfChanged(state *stateFile, path zone.ZonePath, key, re
 func localIPsecFamilies(record ipsec.AddressRecord) []string {
 	seen := map[string]bool{}
 	var out []string
+	add := func(family string) {
+		if (family == ipsec.FamilyIPv4 || family == ipsec.FamilyIPv6) && !seen[family] {
+			seen[family] = true
+			out = append(out, family)
+		}
+	}
 	for _, address := range record.Addresses {
 		family := address.Family
 		if family == "" {
 			family = ipsecFamily(address.Address)
 		}
-		if family != "" && !seen[family] {
-			seen[family] = true
-			out = append(out, family)
+		add(family)
+		for _, family := range address.Families {
+			add(family)
 		}
 	}
 	if len(out) == 0 {

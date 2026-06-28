@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -235,6 +236,51 @@ func TestLocalIPsecAddressRecordAnnounceDNS(t *testing.T) {
 	}
 	if len(ad.Families) != 2 || ad.Families[0] != ipsec.FamilyIPv4 || ad.Families[1] != ipsec.FamilyIPv6 {
 		t.Fatalf("families = %v, want [ipv4 ipv6]", ad.Families)
+	}
+}
+
+func TestLocalIPsecOverlayIntentUsesDNSFamilies(t *testing.T) {
+	now := time.Unix(5000, 0)
+	config := defaultAppConfig()
+	config.ListenAddr = "0.0.0.0:4500"
+	config.IPsec.AnnounceDNS = []string{"vpn.example.com"}
+	config.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+
+	records, err := localIPsecRecords(config, &stateFile{}, "node-a.catofes.", &ipsec.TransportKeyRecord{
+		Version:     1,
+		Kind:        ipsec.TransportKeyRawPublicKey,
+		Algorithm:   ipsec.AlgorithmEd25519,
+		Fingerprint: "sha256:test",
+		UpdatedAt:   now.Unix(),
+	}, now)
+	if err != nil {
+		t.Fatalf("localIPsecRecords: %v", err)
+	}
+
+	var profile *ipsec.ProfileRecord
+	var intent *ipsec.OverlayIntentRecord
+	for _, record := range records {
+		switch value := record.value.(type) {
+		case ipsec.ProfileRecord:
+			profile = &value
+		case ipsec.OverlayIntentRecord:
+			if record.key == ipsec.OverlayIntentRecordKey("main") {
+				intent = &value
+			}
+		}
+	}
+	if profile == nil {
+		t.Fatalf("profile record missing")
+	}
+	if !reflect.DeepEqual(profile.AddressFamilies, []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6}) {
+		t.Fatalf("profile address families = %v, want [ipv4 ipv6]", profile.AddressFamilies)
+	}
+	if intent == nil {
+		t.Fatalf("overlay intent record missing")
+	}
+	wantPathKeys := []string{"family:" + ipsec.FamilyIPv4, "family:" + ipsec.FamilyIPv6}
+	if !reflect.DeepEqual(intent.PathKeys, wantPathKeys) {
+		t.Fatalf("overlay path keys = %v, want %v", intent.PathKeys, wantPathKeys)
 	}
 }
 
