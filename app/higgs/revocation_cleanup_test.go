@@ -441,6 +441,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	now := time.Unix(4140, 0)
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
@@ -535,10 +536,12 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	state, config := buildTestNetworkStateForRouting(t)
 	now := time.Unix(4140, 0)
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{

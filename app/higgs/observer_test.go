@@ -570,6 +570,40 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 	}
 }
 
+func TestObserverPeersAPISortsByZonePath(t *testing.T) {
+	srv := newTestObserverServer()
+	now := time.Unix(1000, 0)
+	srv.daemon.Sync.App.Clock = func() time.Time { return now }
+	srv.daemon.Sync.State.ManagedZone = "node-a.catofes."
+	srv.daemon.Sync.Config.PeerID = string(srv.daemon.Sync.State.ManagedZone)
+	srv.daemon.Sync.State.Network = zone.NewNetworkState()
+	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "zeta.other.", "127.0.0.1", 33439, now)
+	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
+	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "alpha.catofes.", "127.0.0.1", 33436, now)
+	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "branch.alpha.catofes.", "127.0.0.1", 33437, now)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
+	rr := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var resp apiResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	peers := data["peers"].([]any)
+	var got []string
+	for _, item := range peers {
+		got = append(got, item.(map[string]any)["peer_id"].(string))
+	}
+	want := []string{"alpha.catofes.", "branch.alpha.catofes.", "node-b.catofes.", "zeta.other."}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("peer order = %v, want %v", got, want)
+	}
+}
+
 func addObserverEndpointZone(t *testing.T, ns *zone.NetworkState, path zone.ZonePath, ip string, port uint16, now time.Time) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)

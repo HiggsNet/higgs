@@ -311,7 +311,7 @@ transport private key 是 daemon 本地持久化材料，不进入 gossip。`ips
 - **幂等边界**：短时间收到 profile/address/port/key 多条 record 时，daemon 会把同一轮 state change 合并为一次 IPsec `ListSAs` + reconcile/apply，避免重复加载同一个 connection/interface。
 - **状态边界**：apply 成功只把 `LinkInstance` 推进到 `connecting`；必须后续 `ListSAs` 观测到匹配 IKE/CHILD_SA 后才进入 `up`。
 
-如果远端只发布了其中一部分节点能力记录，例如只有 `ipsec/profile` 但没有 `ipsec/transport-key` 或端口公告，planner 必须输出 `missing_ipsec_records`，不会创建 `TransportLinkSpec`。如果节点能力完整但缺少当前 overlay 的 `ipsec/overlays/<overlay_id>`，planner 输出 `missing_overlay_intent`；如果 intent 的 provider/path_key 与本地 group 不兼容，输出 `overlay_intent_mismatch`。如果远端完整发布后又被父 Zone revocation/tombstone 撤销，planner 停止输出 desired spec，reconciler 对已有 Higgs-owned instance 生成 teardown，并阻止后续 endpoint fallback 或 backoff repair 把它重新拉起。
+如果远端只发布了其中一部分节点能力记录，例如只有 `ipsec/profile` 但没有 `ipsec/transport-key` 或端口公告，planner 必须输出 `missing_ipsec_records`，不会创建 `TransportLinkSpec`。如果节点能力完整但缺少当前 overlay 的 `ipsec/overlays/<overlay_id>`，planner 输出 `missing_overlay_intent`；如果 intent 的 provider/path_key 或 tunnel address mode/family/pool 与本地 group 不兼容，输出 `overlay_intent_mismatch`。如果远端完整发布后又被父 Zone revocation/tombstone 撤销，planner 停止输出 desired spec，reconciler 对已有 Higgs-owned instance 生成 teardown，并阻止后续 endpoint fallback 或 backoff repair 把它重新拉起。
 
 ### 2.7 LinkPlanner 组合语义
 
@@ -326,7 +326,7 @@ LinkPlanner 输入：
 ```text
 1. 扫描 verified peer zones。
 2. 读取 peer 节点级 IPsec records；缺 profile/address/port/transport-key 任一项则 skip。
-3. 读取 peer `ipsec/overlays/<overlay_id>` intent；缺少或 provider/path_key 不兼容则 skip。
+3. 读取 peer `ipsec/overlays/<overlay_id>` intent；缺少或 provider/path_key/tunnel address 不兼容则 skip。
 4. 读取 ipsec/addresses；解析 DNS 源，过滤过期/来源不允许/地址族不允许的候选。
 5. 读取 ipsec/ports；过滤过期端口，优先 current，grace 内保留 previous fallback。
 6. 组合 AddressCandidate + PortAdvertisement => ContactPoint。

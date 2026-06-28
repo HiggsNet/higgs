@@ -216,6 +216,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	ns := "higgs-daemon-xfrm-" + time.Now().UTC().Format("20060102150405")
 	group := testIPsecLinkGroup()
 	group.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: ns, Create: true}
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
@@ -1368,6 +1369,7 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	now := time.Unix(4126, 0)
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
@@ -1435,6 +1437,8 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	addTestIPsecRecords(t, stateA.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	group := testIPsecLinkGroup()
 	group.ConnectRules = nil
+	setTestIPsecOverlayIntent(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, stateA.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfigA := defaultAppConfig()
 	appConfigA.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rtA := &Runtime{
@@ -1685,6 +1689,7 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 	now := time.Unix(4135, 0)
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
@@ -1737,6 +1742,7 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	group := testIPsecLinkGroup()
 	group.Reconcile.Backoff = ipsec.BackoffPolicy{InitialSeconds: 1, MaxSeconds: 1}
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
@@ -1789,6 +1795,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	now := time.Unix(4140, 0)
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
@@ -2771,6 +2778,22 @@ func addDaemonTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZoneP
 	})
 }
 
+func setTestIPsecOverlayIntent(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, group ipsec.LinkGroupSpec, now time.Time) {
+	t.Helper()
+	if zs == nil {
+		t.Fatalf("missing zone state for %s", peer)
+	}
+	group = group.Normalized()
+	zs.Records[ipsec.OverlayIntentRecordKey(group.ID)] = unsignedIPsecRecord(t, peer, ipsec.OverlayIntentRecordKey(group.ID), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{
+		Version:       1,
+		OverlayID:     group.ID,
+		Provider:      group.Provider,
+		PathKeys:      []string{"family:ipv4"},
+		TunnelAddress: group.TunnelAddressSpec,
+		UpdatedAt:     now.Unix(),
+	})
+}
+
 func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, generation uint64, ikePort uint16, now time.Time) {
 	t.Helper()
 	if zs == nil {
@@ -3561,6 +3584,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
 	appConfig := defaultAppConfig()
 	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {

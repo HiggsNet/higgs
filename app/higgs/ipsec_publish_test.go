@@ -79,6 +79,9 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	if intent.OverlayID != "main" || len(intent.PathKeys) == 0 {
 		t.Fatalf("overlay intent = %+v, want main path keys", intent)
 	}
+	if intent.TunnelAddress.Mode != ipsec.TunnelAddressSequentialPool || intent.TunnelAddress.Family != ipsec.FamilyIPv4 || intent.TunnelAddress.Pool.String() != "10.44.0.0/29" {
+		t.Fatalf("overlay tunnel address = %+v, want sequential-pool ipv4 10.44.0.0/29", intent.TunnelAddress)
+	}
 
 	latest, err := rt.LoadState()
 	if err != nil {
@@ -281,6 +284,9 @@ func TestLocalIPsecOverlayIntentUsesDNSFamilies(t *testing.T) {
 	wantPathKeys := []string{"family:" + ipsec.FamilyIPv4, "family:" + ipsec.FamilyIPv6}
 	if !reflect.DeepEqual(intent.PathKeys, wantPathKeys) {
 		t.Fatalf("overlay path keys = %v, want %v", intent.PathKeys, wantPathKeys)
+	}
+	if intent.TunnelAddress.Mode != ipsec.TunnelAddressSequentialPool || intent.TunnelAddress.Family != ipsec.FamilyIPv4 || intent.TunnelAddress.Pool.String() != "10.44.0.0/29" {
+		t.Fatalf("overlay tunnel address = %+v, want sequential-pool ipv4 10.44.0.0/29", intent.TunnelAddress)
 	}
 }
 

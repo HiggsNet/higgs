@@ -242,7 +242,7 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	for p := range state.Network.Zones {
 		paths = append(paths, p)
 	}
-	sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+	sort.Slice(paths, func(i, j int) bool { return observerZoneLess(string(paths[i]), string(paths[j])) })
 	for _, p := range paths {
 		zs := state.Network.Zones[p]
 		if zs == nil {
@@ -526,7 +526,7 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 			peerIDs = append(peerIDs, id)
 		}
 	}
-	sort.Strings(peerIDs)
+	sort.Slice(peerIDs, func(i, j int) bool { return observerZoneLess(peerIDs[i], peerIDs[j]) })
 	// Single peer detail
 	if peerFilter != "" {
 		ps, ok := state.SyncPeers[peerFilter]
@@ -584,6 +584,38 @@ func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *
 		ObjectPullStats:       ps.ObjectPullStats,
 		RejectedDigests:       ps.RejectedDigests,
 	}
+}
+
+func observerZoneLess(a, b string) bool {
+	aLabels, aOK := observerZoneLabels(a)
+	bLabels, bOK := observerZoneLabels(b)
+	if !aOK || !bOK {
+		return a < b
+	}
+	for i := 0; i < len(aLabels) && i < len(bLabels); i++ {
+		if aLabels[i] != bLabels[i] {
+			return aLabels[i] < bLabels[i]
+		}
+	}
+	if len(aLabels) != len(bLabels) {
+		return len(aLabels) < len(bLabels)
+	}
+	return a < b
+}
+
+func observerZoneLabels(path string) ([]string, bool) {
+	zp := zone.ZonePath(path)
+	if !zp.Valid() {
+		return nil, false
+	}
+	if zp.IsRoot() {
+		return nil, true
+	}
+	labels := strings.Split(strings.TrimSuffix(path, "."), ".")
+	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
+		labels[i], labels[j] = labels[j], labels[i]
+	}
+	return labels, true
 }
 
 func isLocalObserverPeer(peerID string, config *syncConfigFile, state *stateFile) bool {

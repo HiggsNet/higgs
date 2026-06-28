@@ -284,7 +284,7 @@ NAT 字段只是 hint，不是安全事实。远端必须结合地址来源、�
 node-a.catofes./ipsec/overlays/<overlay_id>
 ```
 
-该记录表达本节点愿意把节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 用于某个 overlay/path。最小字段包括 `overlay_id`、`provider`、支持的 `path_keys`（如 `default`、`family:ipv4`、`family:ipv6`）、可接受的 `tunnel_address` 模式/族、可选 `policy_tags` 和 `updated_at`。planner 必须同时满足三层条件才输出 desired link：远端节点级 IPsec capability 完整且可信、本地 `connect` 选择该 peer、远端发布了兼容同一 `overlay_id/path_key` 的 overlay intent。缺少 intent 会显示为 `missing_overlay_intent`，provider/path_key 不兼容会显示为 `overlay_intent_mismatch`。
+该记录表达本节点愿意把节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports` 和 `ipsec/transport-key` 用于某个 overlay/path。最小字段包括 `overlay_id`、`provider`、支持的 `path_keys`（如 `default`、`family:ipv4`、`family:ipv6`）、可接受的 `tunnel_address` mode/family/pool、可选 `policy_tags` 和 `updated_at`。`tunnel_address` 是必填兼容声明：`derived-pool` / `sequential-pool` 必须带同 family 的 pool，两端 mode/family/pool 不一致时不能建链。planner 必须同时满足三层条件才输出 desired link：远端节点级 IPsec capability 完整且可信、本地 `connect` 选择该 peer、远端发布了兼容同一 `overlay_id/path_key` 和 tunnel address 策略的 overlay intent。缺少 intent 会显示为 `missing_overlay_intent`，provider/path_key/tunnel address 不兼容会显示为 `overlay_intent_mismatch`。
 
 #### 2.4.2 地址与端口分离
 

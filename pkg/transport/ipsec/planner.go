@@ -141,6 +141,9 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if intent.Provider != "" && intent.Provider != group.Provider {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipOverlayIntentMismatch, Detail: fmt.Sprintf("provider=%s", intent.Provider)}, linkIndex, nil
 	}
+	if !overlayIntentTunnelAddressCompatible(group, intent) {
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipOverlayIntentMismatch, Detail: fmt.Sprintf("tunnel_address=%s/%s/%s", intent.TunnelAddress.Mode, intent.TunnelAddress.Family, intent.TunnelAddress.Pool)}, linkIndex, nil
+	}
 	if group.MaxPeers > 0 && selectedPeers >= group.MaxPeers {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMaxPeers}, linkIndex, nil
 	}
@@ -488,6 +491,23 @@ func filterSpecsByOverlayIntent(specs []TransportLinkSpec, intent *OverlayIntent
 		}
 	}
 	return out
+}
+
+func overlayIntentTunnelAddressCompatible(group LinkGroupSpec, intent *OverlayIntentRecord) bool {
+	if intent == nil {
+		return false
+	}
+	local := group.normalizedTunnelAddress()
+	remote := intent.TunnelAddress
+	if local.Mode != remote.Mode || local.Family != remote.Family {
+		return false
+	}
+	switch local.Mode {
+	case TunnelAddressDerivedPool, TunnelAddressSequentialPool:
+		return local.Pool == remote.Pool
+	default:
+		return true
+	}
 }
 
 func (p *LinkPlan) skip(groupID string, peer zone.ZonePath, reason, detail string) {

@@ -125,10 +125,7 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -227,10 +224,7 @@ func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -286,10 +280,7 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -348,10 +339,7 @@ func TestReconcileSecondaryStandbyDoesNotTakeoverDuringRotateRetention(t *testin
 	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -405,10 +393,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -477,10 +462,7 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -543,10 +525,7 @@ func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) 
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -602,10 +581,7 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -662,10 +638,7 @@ func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -993,10 +966,7 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -1046,10 +1016,7 @@ func TestReconcileNormalUpdateWhenNoGenerationChange(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -1098,10 +1065,7 @@ func TestReconcileRotateUsesUpdatedEndpointWhenGenerationChanges(t *testing.T) {
 	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	group := LinkGroupSpec{
-		ID:                "ipsec-main",
-		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
-	}
+	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)

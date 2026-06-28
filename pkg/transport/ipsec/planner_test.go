@@ -25,6 +25,7 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 		ID:                "ipsec-main",
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
+	setOverlayIntentTunnelAddress(t, ns, "node-b.catofes.", group.normalizedTunnelAddress(), now)
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
@@ -78,11 +79,12 @@ func TestPlanTransportLinksSkipsOverlayIntentMismatch(t *testing.T) {
 	}}, now)
 	delete(ns.Zones["node-b.catofes."].Records, OverlayIntentRecordKey("ipsec-main"))
 	ns.Zones["node-b.catofes."].Records[OverlayIntentRecordKey("ipsec-other")] = record(t, "node-b.catofes.", OverlayIntentRecordKey("ipsec-other"), RecordTypeOverlayIntent, OverlayIntentRecord{
-		Version:   1,
-		OverlayID: "ipsec-other",
-		Provider:  ProviderStrongSwan,
-		PathKeys:  []string{"family:ipv4"},
-		UpdatedAt: now.Unix(),
+		Version:       1,
+		OverlayID:     "ipsec-other",
+		Provider:      ProviderStrongSwan,
+		PathKeys:      []string{"family:ipv4"},
+		TunnelAddress: TunnelAddressSpec{Mode: TunnelAddressDerivedLinkLocal, Family: FamilyIPv6},
+		UpdatedAt:     now.Unix(),
 	})
 
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{{ID: "ipsec-main"}}, LinkPlannerOptions{Now: now})
@@ -107,6 +109,9 @@ func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 		ID:                "ipsec-main",
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 	}
+	tunnel := group.normalizedTunnelAddress()
+	setOverlayIntentTunnelAddress(t, ns, "node-a.catofes.", tunnel, now)
+	setOverlayIntentTunnelAddress(t, ns, "node-b.catofes.", tunnel, now)
 	planA, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks(a): %v", err)
@@ -122,6 +127,33 @@ func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 	b := planB.Desired[0]
 	if a.LocalTunnelAddr != b.PeerTunnelAddr || a.PeerTunnelAddr != b.LocalTunnelAddr {
 		t.Fatalf("tunnel addresses are not mirrored: A local=%s peer=%s, B local=%s peer=%s", a.LocalTunnelAddr, a.PeerTunnelAddr, b.LocalTunnelAddr, b.PeerTunnelAddr)
+	}
+}
+
+func TestPlanTransportLinksSkipsOverlayIntentTunnelAddressMismatch(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{
+		ID: "ipsec-main",
+		TunnelAddressSpec: TunnelAddressSpec{
+			Mode:   TunnelAddressDerivedPool,
+			Family: FamilyIPv4,
+			Pool:   netip.MustParsePrefix("10.44.0.0/29"),
+		},
+	}
+
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 0 || !hasSkip(plan.Skipped, "node-b.catofes.", SkipOverlayIntentMismatch) {
+		t.Fatalf("plan desired=%+v skips=%+v, want overlay tunnel address mismatch skip", plan.Desired, plan.Skipped)
 	}
 }
 
@@ -1052,6 +1084,22 @@ func addIPsecNode(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, accep
 		UpdatedAt:     now.Unix(),
 	})
 	ns.Zones[peer] = zs
+}
+
+func setOverlayIntentTunnelAddress(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, tunnel TunnelAddressSpec, now time.Time) {
+	t.Helper()
+	zs := ns.Zones[peer]
+	if zs == nil {
+		t.Fatalf("zone %s not found", peer)
+	}
+	zs.Records[OverlayIntentRecordKey("ipsec-main")] = record(t, peer, OverlayIntentRecordKey("ipsec-main"), RecordTypeOverlayIntent, OverlayIntentRecord{
+		Version:       1,
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		PathKeys:      []string{"family:ipv4", "family:ipv6", DefaultPathKey},
+		TunnelAddress: tunnel,
+		UpdatedAt:     now.Unix(),
+	})
 }
 
 func hasSkip(skips []PlanSkip, peer zone.ZonePath, reason string) bool {

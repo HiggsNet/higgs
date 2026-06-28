@@ -848,3 +848,53 @@
   - [x] `pkg/routing/bird/preflight.go`：增加 BIRD 版本检查，断言 >= 2.0（项目依赖 BIRD 2.x 语法）。
   - [x] 测试改造：`routing_reconcile_test.go`、`pkg/routing/bird/generator_test.go`、`debug_routing_test.go` 中 BIRD 实例查找、filter/table 名称断言改为 netns 维度。
   - [x] smoke：`make routing-dry-run-smoke` 覆盖多 overlay 共享同一 netns 场景。
+
+## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（已完成主线归档）
+
+**归档状态：** Phase 6 主线 6.0-6.7.6 已从主 `todo.md` 移出；主 TODO 只保留未闭环后续项和 6.7.7 `app/higgs` 模块化重构。完整实现细节可回看对应设计文档：`docs/phase6-event-driven-design.md`、`docs/phase6-ipam-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`。
+
+- [x] **6.0 事件驱动控制面重构**
+  - [x] 默认启用 event loop + `SyncSession` FSM；packet demux、timer manager、异步 object pull、UDP chunk fallback、relay fanout 均接入事件循环。
+  - [x] daemon 主 goroutine 成为 single writer；`ReplayWindow`、`PeerQuotas`、`stateFile` race 修复完成，`go test -race` 基线通过。
+  - [x] endpoint 地址优先级与可达性探测修复：`Transport.Send()` 记录 per-address success/failure/backoff，`updateDiscoveredPeers()` 支持 source order，loopback smoke 自动抑制公网 endpoint 发布。
+  - [x] 文档同步到 `docs/phase6-event-driven-design.md`、`docs/design.md` 和 `docs/protocol.md`。
+
+- [x] **6.1 IPAM 闭环**
+  - [x] 实现 pool/assignment 分离、pool enforcement、assignment 重叠检测和 `PermAllocateIP` 权限模型。
+  - [x] 增加 `higgs ipam` CLI：pool create、assign、revoke assignment/pool、assigned 查询。
+  - [x] 支持 `ipam.auto_announce_assigned_ips` 自动宣告本节点合法 assignment，并随撤销收敛。
+  - [x] 支持 routing upstream / veth pair / BIRD static route 集成，`TestBIRDUpstreamBabelRootSmoke` 覆盖 overlay netns 与 host ns BIRD Babel 互通。
+  - [x] anycast/shared assignment 第一版落地：`IPAMAssignmentRecord.Shared`、授权/重叠例外、CLI `--shared`、单测覆盖 shared route announcement。
+
+- [x] **6.2 Auto-join 准入基线与诊断**
+  - [x] 空 DB + config 首启可创建 pending bootstrap state，普通 gossip 同步到 parent delegation 后自动 materialize 本地 Zone。
+  - [x] pending 节点不发布 endpoint/IPsec/route 本机记录；`higgs join request --from-config` 可生成等价 join request。
+  - [x] 增加 `admissionState` 持久化、`diagnoseAutoJoinAdmission()`、`higgs debug admission` 和 `admission_status` control API。
+  - [x] 增加 `higgs recovery pull-zone` / `pull-chain`，用于管理节点 DB 丢失后按 trust chain 拉取恢复。
+
+- [x] **6.3 防火墙规则同步**
+  - [x] 新增 `firewall.instances[]` 配置、owner token/table-chain 命名、dry-run diff、hook、managed/external/disabled 模式。
+  - [x] overlay netns 生成 input/forward/output policy；host netns 只管理 IKE/NAT-T ingress 与 port rotate redirect grace。
+  - [x] forwarding policy 与 BIRD export/import 共享，revocation deny-first 从 allow set 中剔除 revoked prefix。
+  - [x] nftables backend 优先、iptables fallback、per-instance netns 执行、owned stale cleanup 和 `higgs debug firewall` 操作面已完成。
+
+- [x] **6.4 动态 Peer 管理**
+  - [x] 本地派生 peer 状态：eligible、discovered、connecting、active、stale、offline、policy_denied、config_error、revoked。
+  - [x] 支持 stale/offline/cleanup 阈值、endpoint/profile/key/port 变化 dirty fanout、revocation 高优先级路径。
+  - [x] 增加 `higgs debug peers` 和 `peers_status` control API，展示 reason、severity、last sync/reconcile、cleanup timer。
+
+- [x] **6.5 撤销后的传输与路由清理**
+  - [x] 计算 `RevocationImpact`，覆盖 IPsec/XFRM、BIRD/routing、防火墙、gossip peer cache 和 configured bootstrap 诊断。
+  - [x] deny-first 顺序落地：revocation cleanup -> firewall -> routing -> IPsec -> peer cache cleanup，单层失败不回滚安全删除。
+  - [x] 增加 `higgs debug revoke-impact`、`revoke_status` control API、debug links/routes/firewall 的 revoked reason 展示。
+
+- [x] **6.6 链路健康检测**
+  - [x] 新增 `pkg/health`：rolling window、状态机、ICMP/UDP prober、manager、OpenMetrics 渲染和 rotate cutover gate。
+  - [x] daemon 接入 `health.*` 配置、`health_status` control API、`higgs debug health`、health probe tick 与 `RotateCutoverReady` 门闩。
+  - [x] 本地 metrics/spool schema 与低基数标签边界已定义；长期 TSDB 默认推荐 VictoriaMetrics single-node。
+
+- [x] **6.7 Observer 只读状态控制台 MVP**
+  - [x] 新增 `observer` 配置、daemon 内 HTTP server、localhost 默认监听、非 loopback 警告和优雅退出。
+  - [x] REST API 覆盖 status、zones、peers、links、health、health series、本地 routes、BIRD；统一 `{ok,error,data}` 响应并过滤敏感字段。
+  - [x] Go embed 静态 UI、SSE `/api/v1/events`、轮询 fallback、Health sparkline、本地 spool 查询、raw JSON view 已完成。
+  - [x] `make observer-smoke` 纳入 `smoke-all`；README 和 `docs/web-status-dashboard-design.md` 已标注 MVP 已实现与只读安全边界。

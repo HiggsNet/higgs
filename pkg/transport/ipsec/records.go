@@ -544,15 +544,30 @@ func (r OverlayIntentRecord) Validate(keyOverlayID string) error {
 		}
 		return fmt.Errorf("unsupported path_key %q", pathKey)
 	}
-	if r.TunnelAddress.Mode != "" {
-		switch r.TunnelAddress.Mode {
-		case TunnelAddressDisabled, TunnelAddressDerivedLinkLocal, TunnelAddressDerivedPool, TunnelAddressSequentialPool:
-		default:
-			return fmt.Errorf("unsupported tunnel address mode %q", r.TunnelAddress.Mode)
-		}
+	switch r.TunnelAddress.Mode {
+	case TunnelAddressDisabled, TunnelAddressDerivedLinkLocal, TunnelAddressDerivedPool, TunnelAddressSequentialPool:
+		// ok
+	case "":
+		return errors.New("tunnel_address.mode is required")
+	default:
+		return fmt.Errorf("unsupported tunnel address mode %q", r.TunnelAddress.Mode)
+	}
+	if r.TunnelAddress.Mode != TunnelAddressDisabled && r.TunnelAddress.Family == "" {
+		return errors.New("tunnel_address.family is required")
 	}
 	if r.TunnelAddress.Family != "" && !validFamily(r.TunnelAddress.Family) {
 		return fmt.Errorf("unsupported tunnel address family %q", r.TunnelAddress.Family)
+	}
+	if (r.TunnelAddress.Mode == TunnelAddressDerivedPool || r.TunnelAddress.Mode == TunnelAddressSequentialPool) && !r.TunnelAddress.Pool.IsValid() {
+		return fmt.Errorf("tunnel address mode %q requires a pool", r.TunnelAddress.Mode)
+	}
+	if r.TunnelAddress.Pool.IsValid() && r.TunnelAddress.Family != "" {
+		if r.TunnelAddress.Pool.Addr().Is4() && r.TunnelAddress.Family != FamilyIPv4 {
+			return fmt.Errorf("tunnel address family %q does not match pool %s", r.TunnelAddress.Family, r.TunnelAddress.Pool)
+		}
+		if r.TunnelAddress.Pool.Addr().Is6() && r.TunnelAddress.Family != FamilyIPv6 {
+			return fmt.Errorf("tunnel address family %q does not match pool %s", r.TunnelAddress.Family, r.TunnelAddress.Pool)
+		}
 	}
 	return nil
 }
