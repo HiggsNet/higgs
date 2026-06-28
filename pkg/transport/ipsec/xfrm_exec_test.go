@@ -32,6 +32,9 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 			if strings.Join(args, " ") == "link show dev hgs1" {
 				return nil, errors.New("missing")
 			}
+			if strings.Join(args, " ") == "netns exec h2 ip -6 -o addr show dev hgs1" {
+				return nil, nil
+			}
 			return []byte("ok"), nil
 		},
 	}
@@ -58,7 +61,38 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		"ip link set hgs1 netns h2",
 		"ip netns exec h2 ip link set dev hgs1 addrgenmode none",
 		"ip netns exec h2 ip link set dev hgs1 up",
+		"ip netns exec h2 ip -6 -o addr show dev hgs1",
 		"ip netns exec h2 ip addr replace fd00:1234::1/64 dev hgs1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestSystemXFRMDriverAssignAddressPrunesStaleSameFamilyAddresses(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2"},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			if strings.Join(args, " ") == "netns exec h2 ip -6 -o addr show dev hgs1" {
+				return []byte(strings.Join([]string{
+					"7: hgs1    inet6 fe80::dead/64 scope link",
+					"7: hgs1    inet6 fe80::1234/64 scope link",
+				}, "\n")), nil
+			}
+			return []byte("ok"), nil
+		},
+	}
+
+	if err := driver.AssignAddress(context.Background(), "hgs1", "fe80::1234/64"); err != nil {
+		t.Fatalf("AssignAddress: %v", err)
+	}
+	got := commandStrings(commands)
+	want := []string{
+		"ip netns exec h2 ip -6 -o addr show dev hgs1",
+		"ip netns exec h2 ip addr del fe80::dead/64 dev hgs1",
+		"ip netns exec h2 ip addr replace fe80::1234/64 dev hgs1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)

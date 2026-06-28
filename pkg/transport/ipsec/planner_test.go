@@ -78,6 +78,44 @@ func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksDerivedTunnelAddressStableWhenEarlierPeerAdded(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-c.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "c-public", Source: SourceManualAddress, Address: "198.51.100.30", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		TunnelAddressSpec: TunnelAddressSpec{Mode: TunnelAddressDerivedLinkLocal, Family: FamilyIPv6},
+	}
+
+	first, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(first): %v", err)
+	}
+	firstSpec := desiredSpecForPeer(t, first, "node-c.catofes.")
+
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	second, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(second): %v", err)
+	}
+	secondSpec := desiredSpecForPeer(t, second, "node-c.catofes.")
+
+	if firstSpec.InterfaceName != secondSpec.InterfaceName || firstSpec.XFRMIfID != secondSpec.XFRMIfID {
+		t.Fatalf("interface changed: first=%s/%d second=%s/%d", firstSpec.InterfaceName, firstSpec.XFRMIfID, secondSpec.InterfaceName, secondSpec.XFRMIfID)
+	}
+	if firstSpec.LocalTunnelAddr != secondSpec.LocalTunnelAddr || firstSpec.PeerTunnelAddr != secondSpec.PeerTunnelAddr {
+		t.Fatalf("derived tunnel addresses changed after adding earlier peer: first=%s/%s second=%s/%s",
+			firstSpec.LocalTunnelAddr, firstSpec.PeerTunnelAddr, secondSpec.LocalTunnelAddr, secondSpec.PeerTunnelAddr)
+	}
+}
+
 func TestPlanTransportLinksHonorsBidirectionalTieBreakAndInboundAccept(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
@@ -934,6 +972,17 @@ func hasSkip(skips []PlanSkip, peer zone.ZonePath, reason string) bool {
 		}
 	}
 	return false
+}
+
+func desiredSpecForPeer(t *testing.T, plan LinkPlan, peer zone.ZonePath) TransportLinkSpec {
+	t.Helper()
+	for _, spec := range plan.Desired {
+		if spec.PeerZone == peer {
+			return spec
+		}
+	}
+	t.Fatalf("desired spec for peer %s not found: %+v", peer, plan.Desired)
+	return TransportLinkSpec{}
 }
 
 func familiesInOrder(points []ContactPoint, families ...string) bool {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strings"
@@ -191,7 +192,57 @@ func (d SystemXFRMDriver) AssignAddress(ctx context.Context, name, address strin
 		return errors.New("address is required")
 	}
 	netns := d.DefaultNetNS.Normalized()
+	if err := d.pruneInterfaceAddresses(ctx, netns, name, address); err != nil {
+		return err
+	}
 	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", name)
+}
+
+func (d SystemXFRMDriver) pruneInterfaceAddresses(ctx context.Context, netns NetNSSpec, name, target string) error {
+	targetPrefix, err := netip.ParsePrefix(target)
+	if err != nil {
+		return fmt.Errorf("parse assigned address %q: %w", target, err)
+	}
+	family := "-4"
+	if targetPrefix.Addr().Is6() {
+		family = "-6"
+	}
+	addrs, err := d.interfaceAddresses(ctx, netns, name, family)
+	if err != nil {
+		return err
+	}
+	targetAddr := targetPrefix.Addr()
+	for _, addr := range addrs {
+		prefix, err := netip.ParsePrefix(addr)
+		if err != nil {
+			continue
+		}
+		if prefix.Addr() == targetAddr {
+			continue
+		}
+		if err := d.runInNetNS(ctx, netns, "addr", "del", addr, "dev", name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d SystemXFRMDriver) interfaceAddresses(ctx context.Context, netns NetNSSpec, name, family string) ([]string, error) {
+	out, err := d.outputInNetNS(ctx, netns, family, "-o", "addr", "show", "dev", name)
+	if err != nil {
+		return nil, err
+	}
+	var addrs []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		for i, field := range fields {
+			if (field == "inet" || field == "inet6") && i+1 < len(fields) {
+				addrs = append(addrs, fields[i+1])
+				break
+			}
+		}
+	}
+	return addrs, nil
 }
 
 func (d SystemXFRMDriver) specNetNS(spec TransportLinkSpec) (NetNSSpec, error) {
@@ -300,15 +351,20 @@ func (d SystemXFRMDriver) disableIPv6AddrGen(ctx context.Context, netns NetNSSpe
 }
 
 func (d SystemXFRMDriver) runInNetNS(ctx context.Context, netns NetNSSpec, args ...string) error {
+	_, err := d.outputInNetNS(ctx, netns, args...)
+	return err
+}
+
+func (d SystemXFRMDriver) outputInNetNS(ctx context.Context, netns NetNSSpec, args ...string) ([]byte, error) {
 	netns = netns.Normalized()
 	if netns.Kind == NetNSHost {
-		return d.run(ctx, "ip", args...)
+		return d.output(ctx, "ip", args...)
 	}
 	if netns.Kind == NetNSPath {
-		return fmt.Errorf("path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
+		return nil, fmt.Errorf("path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
 	}
 	full := append([]string{"netns", "exec", netns.Name, "ip"}, args...)
-	return d.run(ctx, "ip", full...)
+	return d.output(ctx, "ip", full...)
 }
 
 func (d SystemXFRMDriver) commandSucceedsInNetNS(ctx context.Context, netns NetNSSpec, args ...string) bool {
@@ -328,6 +384,11 @@ func (d SystemXFRMDriver) commandSucceeds(ctx context.Context, name string, args
 }
 
 func (d SystemXFRMDriver) run(ctx context.Context, name string, args ...string) error {
+	_, err := d.output(ctx, name, args...)
+	return err
+}
+
+func (d SystemXFRMDriver) output(ctx context.Context, name string, args ...string) ([]byte, error) {
 	runner := d.Command
 	if runner == nil {
 		runner = execCommand
@@ -336,11 +397,11 @@ func (d SystemXFRMDriver) run(ctx context.Context, name string, args ...string) 
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
 		if detail == "" {
-			return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+			return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 		}
-		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, detail)
+		return nil, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, detail)
 	}
-	return nil
+	return out, nil
 }
 
 func execCommand(ctx context.Context, name string, args ...string) ([]byte, error) {

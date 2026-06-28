@@ -2,6 +2,7 @@ package ipsec
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/netip"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
 const (
@@ -252,7 +254,12 @@ func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *N
 	if err != nil {
 		return TransportLinkSpec{}, err
 	}
-	localAddr, peerAddr, err := group.DeriveTunnelAddresses(local, peer, linkIndex)
+	addressIndex := linkIndex
+	switch group.normalizedTunnelAddress().Mode {
+	case TunnelAddressDerivedLinkLocal, TunnelAddressDerivedPool:
+		addressIndex = stableTunnelAddressIndex(local, peer, group.ID, family)
+	}
+	localAddr, peerAddr, err := group.DeriveTunnelAddresses(local, peer, addressIndex)
 	if err != nil {
 		return TransportLinkSpec{}, err
 	}
@@ -262,6 +269,11 @@ func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *N
 	spec.LocalTunnelAddr = localAddr
 	spec.PeerTunnelAddr = peerAddr
 	return spec, nil
+}
+
+func stableTunnelAddressIndex(local, peer zone.ZonePath, overlayID, family string) int {
+	hash := higgscrypto.Hash([]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(overlayID), []byte{0}, []byte(family))
+	return int(binary.BigEndian.Uint32(hash[:4]) & 0x7fffffff)
 }
 
 func canLoadResponder(localAccept string) bool {

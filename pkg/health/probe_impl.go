@@ -91,8 +91,8 @@ func (p *ICMProber) pingOnceExec(ctx context.Context, target ProbeTarget, timeou
 		args = append(args, "-6")
 	}
 	args = append(args, "-n", "-c", "1")
-	if target.InterfaceName != "" {
-		args = append(args, "-I", target.InterfaceName)
+	if source := pingSourceAddress(target); source != "" {
+		args = append(args, "-I", source)
 	}
 	args = append(args, pingTargetAddress(target))
 	start := time.Now()
@@ -111,6 +111,17 @@ func pingTargetAddress(target ProbeTarget) string {
 		addr += "%" + target.InterfaceName
 	}
 	return addr
+}
+
+func pingSourceAddress(target ProbeTarget) string {
+	if target.LocalTunnelAddr.IsValid() {
+		addr := target.LocalTunnelAddr.String()
+		if target.LocalTunnelAddr.Is6() && target.LocalTunnelAddr.IsLinkLocalUnicast() && target.InterfaceName != "" && !strings.Contains(addr, "%") {
+			addr += "%" + target.InterfaceName
+		}
+		return addr
+	}
+	return target.InterfaceName
 }
 
 // udpMagic is a fixed magic header for Higgs UDP keepalive probes.
