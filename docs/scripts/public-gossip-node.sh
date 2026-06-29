@@ -67,8 +67,9 @@ root_init() {
   mkdir -p "$dir"
   {
     printf 'data_dir: %s\n' "$dir"
-    printf 'peer_id: node-admin\n'
-    printf 'listen_addr: 127.0.0.1:33433\n'
+    printf 'gossip:\n'
+    printf '  peer_id: node-admin\n'
+    printf '  listen_addr: 127.0.0.1:33433\n'
   } >"$(config_path "$dir")"
   HIGGS_CONFIG="$(config_path "$dir")" "$bin" root init
   HIGGS_CONFIG="$(config_path "$dir")" "$bin" root pubkey
@@ -86,26 +87,30 @@ write_config() {
   mkdir -p "$dir"
   {
     printf 'data_dir: %s\n' "$dir"
-    if [ "${CONFIG_MANAGED_ZONE:-}" != "" ]; then
-      printf 'managed_zone: %s\n' "$CONFIG_MANAGED_ZONE"
-    fi
-    if [ "${CONFIG_IDENTITY_KEY_PATH:-}" != "" ]; then
-      printf 'identity:\n'
-      printf '  key_path: %s\n' "$CONFIG_IDENTITY_KEY_PATH"
-    fi
-    printf 'peer_id: %s\n' "$peer_id"
-    printf 'listen_addr: %s\n' "$listen_addr"
-    printf 'advertise_addr: %s\n' "$advertise_addr"
     printf 'trusted_root_public_key: %s\n' "$root_key"
+    printf 'gossip:\n'
+    if [ "${CONFIG_MANAGED_ZONE:-}" != "" ]; then
+      printf '  init:\n'
+      printf '    managed_zone: %s\n' "$CONFIG_MANAGED_ZONE"
+      if [ "${CONFIG_IDENTITY_KEY_PATH:-}" != "" ]; then
+        printf '    key_path: %s\n' "$CONFIG_IDENTITY_KEY_PATH"
+      fi
+    elif [ "${CONFIG_IDENTITY_KEY_PATH:-}" != "" ]; then
+      printf '  init:\n'
+      printf '    key_path: %s\n' "$CONFIG_IDENTITY_KEY_PATH"
+    fi
+    printf '  peer_id: %s\n' "$peer_id"
+    printf '  listen_addr: %s\n' "$listen_addr"
+    printf '  advertise_addr: %s\n' "$advertise_addr"
     if [ "$#" -gt 0 ]; then
-      printf 'bootstrap:\n'
+      printf '  bootstrap:\n'
       while [ "$#" -gt 0 ]; do
         if [ "$#" -lt 2 ]; then
           printf 'bootstrap arguments must be pairs: <id> <addr>\n' >&2
           exit 1
         fi
-        printf '  - id: %s\n' "$1"
-        printf '    addr: %s\n' "$2"
+        printf '    - id: %s\n' "$1"
+        printf '      addr: %s\n' "$2"
         shift 2
       done
     fi

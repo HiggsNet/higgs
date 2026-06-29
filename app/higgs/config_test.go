@@ -23,18 +23,19 @@ func TestParseConfigYAML(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
 data_dir: /tmp/higgs-a
-peer_id: node-a
-listen_port: 33434
-max_message_bytes: 32768
-max_sync_zones: 8
-max_sync_records: 512
-endpoint_grace: 2m
-reflector_timeout: 1500ms
-publish_endpoints: false
-bootstrap:
-  - id: node-b
-    addr: 127.0.0.1:33435
 trusted_root_public_key: ` + hex.EncodeToString(pub) + `
+gossip:
+  peer_id: node-a
+  listen_port: 33434
+  max_datagram_bytes: 32768
+  max_sync_zones: 8
+  max_sync_records: 512
+  endpoint_grace: 2m
+  reflector_timeout: 1500ms
+  publish_endpoints: false
+  bootstrap:
+    - id: node-b
+      addr: 127.0.0.1:33435
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -124,7 +125,7 @@ func TestConfigDefaultsForListenAndPrivateIPv4Filter(t *testing.T) {
 
 func TestParseConfigYAMLCanDisablePrivateIPv4Filter(t *testing.T) {
 	config := defaultAppConfig()
-	if err := parseConfigYAML("filter_private_ipv4: false\n", config); err != nil {
+	if err := parseConfigYAML("gossip:\n  filter_private_ipv4: false\n", config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	if config.FilterPrivateIPv4 {
@@ -463,15 +464,16 @@ overlay:
 func TestParseConfigYAMLLists(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-advertise_addrs:
-  - 127.0.0.1:33434
-  - 10.0.0.2:33434
-reflectors:
-  - 198.51.100.10:33434
-  - 198.51.100.11:33434
-bootstrap:
-  - id: node-b
-    addr: 127.0.0.1:33435
+gossip:
+  advertise_addrs:
+    - 127.0.0.1:33434
+    - 10.0.0.2:33434
+  reflectors:
+    - 198.51.100.10:33434
+    - 198.51.100.11:33434
+  bootstrap:
+    - id: node-b
+      addr: 127.0.0.1:33435
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -487,9 +489,78 @@ bootstrap:
 	}
 }
 
+func TestParseConfigYAMLGossipSection(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+gossip:
+  init:
+    managed_zone: node-a.catofes.
+    key_path: /var/lib/higgs/identity.key.json
+  peer_id: node-a.catofes.
+  listen_addr: 0.0.0.0:33434
+  max_datagram_bytes: 1200
+  max_sync_zones: 16
+  max_sync_records: 1024
+  advertise_addrs:
+    - 203.0.113.10:33434
+  endpoint_discovery: all
+  publish_endpoints: false
+  reflectors: auto
+  reflector_interval: 5m
+  reflector_timeout: 3s
+  endpoint_ttl: 1h
+  endpoint_grace: 10m
+  endpoint_source_order:
+    - bootstrap
+    - advertise
+  filter_private_ipv4: false
+  bootstrap:
+    - id: node-b.catofes.
+      addr: 203.0.113.20:33434
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.ManagedZone.String() != "node-a.catofes." {
+		t.Fatalf("ManagedZone = %q", config.ManagedZone)
+	}
+	if config.Identity.KeyPath != "/var/lib/higgs/identity.key.json" {
+		t.Fatalf("Identity.KeyPath = %q", config.Identity.KeyPath)
+	}
+	if config.PeerID != "node-a.catofes." || config.ListenAddr != "0.0.0.0:33434" {
+		t.Fatalf("peer/listen = %q/%q", config.PeerID, config.ListenAddr)
+	}
+	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b.catofes." || config.Bootstrap[0].Addr != "203.0.113.20:33434" {
+		t.Fatalf("Bootstrap = %#v", config.Bootstrap)
+	}
+	if config.MaxMessageBytes != 1200 || config.MaxSyncZones != 16 || config.MaxSyncRecords != 1024 {
+		t.Fatalf("sync limits = %d/%d/%d", config.MaxMessageBytes, config.MaxSyncZones, config.MaxSyncRecords)
+	}
+	if got := strings.Join(config.AdvertiseAddrs, ","); got != "203.0.113.10:33434" {
+		t.Fatalf("AdvertiseAddrs = %q", got)
+	}
+	if len(config.Reflectors) != len(gossip.DefaultPublicIPReflectors()) {
+		t.Fatalf("Reflectors = %d, want auto preset", len(config.Reflectors))
+	}
+	if config.ReflectorInterval != 5*time.Minute || config.ReflectorTimeout != 3*time.Second {
+		t.Fatalf("reflector timers = %s/%s", config.ReflectorInterval, config.ReflectorTimeout)
+	}
+	if config.EndpointTTL != time.Hour || config.EndpointGrace != 10*time.Minute {
+		t.Fatalf("endpoint timers = %s/%s", config.EndpointTTL, config.EndpointGrace)
+	}
+	if config.EndpointDiscovery != "all" || config.PublishEndpoints || config.FilterPrivateIPv4 {
+		t.Fatalf("endpoint flags = discovery:%q publish:%t filter:%t", config.EndpointDiscovery, config.PublishEndpoints, config.FilterPrivateIPv4)
+	}
+	if got := strings.Join(config.EndpointSourceOrder, ","); got != "bootstrap,advertise" {
+		t.Fatalf("EndpointSourceOrder = %q", got)
+	}
+}
+
 func TestParseConfigYAMLKeepsCommaSeparatedAdvertiseAddrs(t *testing.T) {
 	config := defaultAppConfig()
-	input := `advertise_addrs: 127.0.0.1:33434, 10.0.0.2:33434`
+	input := `gossip:
+  advertise_addrs: 127.0.0.1:33434, 10.0.0.2:33434`
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
@@ -500,7 +571,8 @@ func TestParseConfigYAMLKeepsCommaSeparatedAdvertiseAddrs(t *testing.T) {
 
 func TestParseConfigYAMLExpandsAutoReflectors(t *testing.T) {
 	config := defaultAppConfig()
-	input := `reflectors: auto, https://custom.example/ip`
+	input := `gossip:
+  reflectors: auto, https://custom.example/ip`
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
@@ -519,12 +591,32 @@ func TestParseConfigYAMLRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestParseConfigYAMLRejectsLegacyTopLevelGossipFields(t *testing.T) {
+	for _, input := range []string{
+		"managed_zone: node-a.catofes.\n",
+		"identity:\n  key_path: keys/node-a.json\n",
+		"peer_id: node-a\n",
+		"listen_addr: 127.0.0.1:0\n",
+		"bootstrap:\n  - id: node-b\n    addr: 127.0.0.1:33435\n",
+		"max_datagram_bytes: 1200\n",
+		"advertise_addrs:\n  - 203.0.113.10:33434\n",
+		"endpoint_discovery: all\n",
+		"publish_endpoints: false\n",
+		"filter_private_ipv4: false\n",
+	} {
+		config := defaultAppConfig()
+		if err := parseConfigYAML(input, config); err == nil {
+			t.Fatalf("parseConfigYAML(%q) should reject legacy top-level gossip field", input)
+		}
+	}
+}
+
 func TestParseConfigYAMLRejectsExplicitZeroLimits(t *testing.T) {
 	for _, input := range []string{
-		"listen_port: 0\n",
-		"max_message_bytes: 0\n",
-		"max_sync_zones: 0\n",
-		"max_sync_records: 0\n",
+		"gossip:\n  listen_port: 0\n",
+		"gossip:\n  max_datagram_bytes: 0\n",
+		"gossip:\n  max_sync_zones: 0\n",
+		"gossip:\n  max_sync_records: 0\n",
 	} {
 		config := defaultAppConfig()
 		if err := parseConfigYAML(input, config); err == nil {
@@ -591,12 +683,12 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 	writeRuntimeConfig(t, configPath, filepath.Join(dir, "data"), nil, map[string]string{
-		"max_message_bytes": "4096",
-		"max_sync_zones":    "8",
-		"max_sync_records":  "64",
-		"log_level":         "debug",
-		"log.mode":          "stderr+file",
-		"log.file":          filepath.Join(dir, "higgs.log"),
+		"max_datagram_bytes": "4096",
+		"max_sync_zones":     "8",
+		"max_sync_records":   "64",
+		"log.level":          "debug",
+		"log.mode":           "stderr+file",
+		"log.file":           filepath.Join(dir, "higgs.log"),
 	})
 	t.Setenv("HIGGS_CONFIG", configPath)
 
@@ -617,14 +709,14 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 		t.Fatalf("limits = %#v, want 4096/8/64", limits)
 	}
 	if !debugLogEnabled(config) {
-		t.Fatalf("config log_level=debug should enable debug logs")
+		t.Fatalf("config log.level=debug should enable debug logs")
 	}
 	if config.LogMode != "stderr+file" || config.LogFile != filepath.Join(dir, "higgs.log") {
 		t.Fatalf("log output config = mode %q file %q, want stderr+file/%s", config.LogMode, config.LogFile, filepath.Join(dir, "higgs.log"))
 	}
 	t.Setenv("HIGGS_LOG_LEVEL", "info")
 	if debugLogEnabled(config) {
-		t.Fatalf("HIGGS_LOG_LEVEL should override config log_level")
+		t.Fatalf("HIGGS_LOG_LEVEL should override config log.level")
 	}
 	t.Setenv("HIGGS_LOG_LEVEL", "debug")
 	config.LogLevel = "info"
@@ -870,23 +962,26 @@ func writeRuntimeConfig(t *testing.T, path string, dataDir string, rootKey ed255
 	t.Helper()
 	var lines []string
 	lines = append(lines, "data_dir: "+dataDir)
-	lines = append(lines, "listen_addr: 127.0.0.1:0")
+	lines = append(lines, "gossip:")
+	lines = append(lines, "  listen_addr: 127.0.0.1:0")
 	if len(rootKey) > 0 {
 		lines = append(lines, "trusted_root_public_key: "+hex.EncodeToString(rootKey))
 	}
-	for _, key := range []string{"max_message_bytes", "max_sync_zones", "max_sync_records", "log_level"} {
+	for _, key := range []string{"max_datagram_bytes", "max_sync_zones", "max_sync_records"} {
 		if value := extra[key]; value != "" {
-			lines = append(lines, key+": "+value)
+			lines = append(lines, "  "+key+": "+value)
 		}
 	}
-	if value := extra["log.mode"]; value != "" {
+	if value := extra["log.level"]; value != "" || extra["log.mode"] != "" {
 		lines = append(lines, "log:")
-		lines = append(lines, "  mode: "+value)
-		if file := extra["log.file"]; file != "" {
-			lines = append(lines, "  file: "+file)
+		if mode := extra["log.mode"]; mode != "" {
+			lines = append(lines, "  mode: "+mode)
+			if file := extra["log.file"]; file != "" {
+				lines = append(lines, "  file: "+file)
+			}
 		}
-		if level := extra["log.level"]; level != "" {
-			lines = append(lines, "  level: "+level)
+		if value != "" {
+			lines = append(lines, "  level: "+value)
 		}
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
@@ -1121,10 +1216,11 @@ routing:
 func TestParseConfigYAMLEndpointDiscovery(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-endpoint_discovery: loopback_only
-endpoint_source_order:
-  - bootstrap
-  - advertise
+gossip:
+  endpoint_discovery: loopback_only
+  endpoint_source_order:
+    - bootstrap
+    - advertise
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -1141,11 +1237,12 @@ endpoint_source_order:
 func TestParseConfigYAMLInvalidEndpointSourceOrderIgnored(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-endpoint_source_order:
-  - bootstrap
-  - unknown
-  - advertise
-  - bootstrap
+gossip:
+  endpoint_source_order:
+    - bootstrap
+    - unknown
+    - advertise
+    - bootstrap
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)

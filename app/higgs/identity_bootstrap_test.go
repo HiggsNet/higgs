@@ -15,9 +15,10 @@ import (
 func TestParseConfigYAMLIdentity(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-managed_zone: node-b.catofes.
-identity:
-  key_path: keys/node-b.json
+gossip:
+  init:
+    managed_zone: node-b.catofes.
+    key_path: keys/node-b.json
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -367,9 +368,10 @@ func writeIdentityConfig(t *testing.T, path, dataDir string, managed zone.ZonePa
 	t.Helper()
 	data := strings.Join([]string{
 		"data_dir: " + dataDir,
-		"managed_zone: " + string(managed),
-		"identity:",
-		"  key_path: " + keyPath,
+		"gossip:",
+		"  init:",
+		"    managed_zone: " + string(managed),
+		"    key_path: " + keyPath,
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {

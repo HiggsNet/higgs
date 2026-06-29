@@ -1282,14 +1282,15 @@ func prepareDiagnosticsState(t *testing.T) {
 	}
 	config := strings.Join([]string{
 		"data_dir: " + dataDir,
-		"peer_id: node-a.catofes.",
-		"listen_addr: 127.0.0.1:0",
-		"max_message_bytes: 4096",
-		"max_sync_zones: 8",
-		"max_sync_records: 64",
-		"bootstrap:",
-		"  - id: node-b.catofes.",
-		"    addr: 127.0.0.1:9999",
+		"gossip:",
+		"  peer_id: node-a.catofes.",
+		"  listen_addr: 127.0.0.1:0",
+		"  max_datagram_bytes: 4096",
+		"  max_sync_zones: 8",
+		"  max_sync_records: 64",
+		"  bootstrap:",
+		"    - id: node-b.catofes.",
+		"      addr: 127.0.0.1:9999",
 		"",
 	}, "\n")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {

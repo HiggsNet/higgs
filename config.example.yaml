@@ -13,76 +13,75 @@
 # Default data_dir is /etc/higgs. Use a relative path for local development.
 # data_dir: .higgs
 
-# For a joined daemon node, prefer the zone FQDN as managed_zone and peer_id.
-# The first load with managed_zone + identity.key_path can create a pending
-# bootstrap state and print a join request instead of embedding private key
-# material in config.yaml.
-# managed_zone: node-a.catofes.
-# identity:
-#   key_path: .higgs/identity.key.json
-
-peer_id: node-a.catofes.
-listen_addr: 0.0.0.0:33434
-
-bootstrap:
-  - id: node-b.catofes.
-    addr: 127.0.0.1:33435
-
 # Base64 encoded raw 32-byte ED25519 public key for the trusted root zone.
 # CLI output uses base64; existing hex values are still accepted.
 trusted_root_public_key:
 
 # -----------------------------------------------------------------------------
-# 2. Gossip limits, logging, and endpoint discovery
+# 2. Gossip identity, peers, limits, and endpoint discovery
 # -----------------------------------------------------------------------------
 
-# Public-internet safe defaults. Higgs does not depend on IP fragmentation.
-# max_datagram_bytes: 1200
-# max_sync_zones: 16
-# max_sync_records: 1024
+gossip:
+  # For a joined daemon node, prefer the zone FQDN as managed_zone and peer_id.
+  # The first load with init.managed_zone + init.key_path can create a pending
+  # bootstrap state and print a join request instead of embedding private key
+  # material in config.yaml.
+  # init:
+  #   managed_zone: node-a.catofes.
+  #   key_path: .higgs/identity.key.json
 
-# Supported levels: debug, info, warn, error. HIGGS_LOG_LEVEL overrides this.
-# log_level: info
-#
+  peer_id: node-a.catofes.
+  listen_addr: 0.0.0.0:33434
+
+  bootstrap:
+    - id: node-b.catofes.
+      addr: 127.0.0.1:33435
+
+  # Public-internet safe defaults. Higgs does not depend on IP fragmentation.
+  # max_datagram_bytes: 1200
+  # max_sync_zones: 16
+  # max_sync_records: 1024
+
+  # Explicit publish addresses are preferred over reflector/interface discovery.
+  # advertise_addrs:
+  #   - 203.0.113.10:33434
+
+  # Endpoint discovery modes:
+  #   all             advertise_addrs + reflectors + interface scan
+  #   loopback_only   only loopback listen/advertise addresses
+  #   advertise_only  only explicit advertise_addrs
+  # If unset and all bootstrap peers are loopback, daemon treats this as
+  # loopback_only automatically.
+  # endpoint_discovery: all
+  # publish_endpoints: true
+
+  # reflectors: auto
+  # reflector_interval: 5m
+  # reflector_timeout: 3s
+  # endpoint_ttl: 1h
+  # endpoint_grace: 10m
+
+  # Address source priority for outbound gossip endpoint selection.
+  # endpoint_source_order:
+  #   - advertise
+  #   - bootstrap
+  #   - reflector
+  #   - interface
+
+  # Exclude RFC1918 IPv4 addresses found by interface scan from signed endpoint
+  # publication. Set false for private-network labs that intentionally publish
+  # RFC1918 addresses.
+  # filter_private_ipv4: true
+
 # Runtime logs default to stderr. Set log.mode when a daemon should also copy
 # structured logs to a file or syslog. Supported modes: stderr, file, syslog,
 # stderr+file, stderr+syslog.
+# Supported levels: debug, info, warn, error. HIGGS_LOG_LEVEL overrides this.
 # log:
 #   level: info
 #   mode: stderr+file
 #   file: /var/log/higgs.log
 #   syslog_facility: daemon
-
-# Explicit publish addresses are preferred over reflector/interface discovery.
-# advertise_addrs:
-#   - 203.0.113.10:33434
-
-# Endpoint discovery modes:
-#   all             advertise_addrs + reflectors + interface scan
-#   loopback_only   only loopback listen/advertise addresses
-#   advertise_only  only explicit advertise_addrs
-# If unset and all bootstrap peers are loopback, daemon treats this as
-# loopback_only automatically.
-# endpoint_discovery: all
-# publish_endpoints: true
-
-# reflectors: auto
-# reflector_interval: 5m
-# reflector_timeout: 3s
-# endpoint_ttl: 1h
-# endpoint_grace: 10m
-
-# Address source priority for outbound gossip endpoint selection.
-# endpoint_source_order:
-#   - advertise
-#   - bootstrap
-#   - reflector
-#   - interface
-
-# Exclude RFC1918 IPv4 addresses found by interface scan from signed endpoint
-# publication. Set false for private-network labs that intentionally publish
-# RFC1918 addresses.
-# filter_private_ipv4: true
 
 # Dynamic peer lifecycle. Stale/offline peers are retained with lower retry
 # pressure; cleanup_after removes Higgs-owned SA/interface/route/firewall state.
@@ -139,7 +138,7 @@ ipsec:
   # port_previous_grace: 10m
 
   # IPsec-specific addresses and DNS names to publish, independent of the
-  # top-level advertise_addrs used for gossip. announce_addrs are published as
+  # gossip.advertise_addrs used for gossip. announce_addrs are published as
   # manual-address; announce_dns are published as manual-dns and resolved by
   # peers. publish_from_endpoints (default true) also publishes addresses from
   # gossip endpoint discovery (reflector + interface scan) as discovery/reflector
@@ -270,7 +269,7 @@ firewall:
       # mode: managed
       # backend: auto
       # Listen addresses used for host ingress and DNAT/redirect rules.
-      # Defaults to top-level advertise_addrs. Set this when the host is behind
+      # Defaults to gossip.advertise_addrs. Set this when the host is behind
       # a gateway that DNATs public addresses to local addresses before packets
       # reach the local firewall; rules must then match the post-DNAT local IP.
       # listen_addrs:

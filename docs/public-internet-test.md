@@ -27,7 +27,7 @@ Phase 4.0 已经让 admin 管理写操作优先进入 daemon 单 writer/control 
 
 如果对应目录的 daemon 已运行，CLI 会通过本机 control socket 提交请求，并由 daemon 串行写 DB；如果 daemon 不存在，则保留 direct 写 DB 的开发/恢复模式并输出提示。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
-Phase 4.0.1 增加了 auto-join / 配置化身份初始化。普通公网节点的 `config.yaml` 只要同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和至少一个 bootstrap peer，就可以在空 DB 首次启动时创建最小 bootstrap state。此时节点还没有本 Zone authority，daemon 会处于 `auto_join pending`，不会发布本机 record；admin 根据 join request 签发 delegation 后，节点会通过普通 gossip 从 bootstrap peer 同步 root 到本 Zone 的 authority/delegation chain。验证 trusted root、delegation chain 和本地 identity public key 都匹配后，节点才进入正常 record signing、endpoint publish 和后续 transport reconcile。
+Phase 4.0.1 增加了 auto-join / 配置化身份初始化。普通公网节点的 `config.yaml` 只要同时提供 `gossip.init.managed_zone`、`trusted_root_public_key`、`gossip.init.key_path` 和至少一个 `gossip.bootstrap` peer，就可以在空 DB 首次启动时创建最小 bootstrap state。此时节点还没有本 Zone authority，daemon 会处于 `auto_join pending`，不会发布本机 record；admin 根据 join request 签发 delegation 后，节点会通过普通 gossip 从 bootstrap peer 同步 root 到本 Zone 的 authority/delegation chain。验证 trusted root、delegation chain 和本地 identity public key 都匹配后，节点才进入正常 record signing、endpoint publish 和后续 transport reconcile。
 
 `join accept <bundle> <key>` 仍保留为 recovery/debug 兼容路径；公网常规测试不再需要把 bundle 分发回每个节点。
 
@@ -166,9 +166,9 @@ node-c 同理，把 Zone 和公网地址改成 `node-c.catofes.` / `203.0.113.12
 
 每次 `node-init` 都会写入：
 
-- `managed_zone: <zone>`
-- `identity.key_path: <dir>/<node>.key.json`
-- `peer_id: <zone>`
+- `gossip.init.managed_zone: <zone>`
+- `gossip.init.key_path: <dir>/<node>.key.json`
+- `gossip.peer_id: <zone>`
 
 并输出：
 
@@ -307,7 +307,8 @@ docs/scripts/public-gossip-node.sh node-init \
 在 `node-b/config.yaml` 里加：
 
 ```yaml
-publish_endpoints: false
+gossip:
+  publish_endpoints: false
 ```
 
 这个设置应在 NAT 节点首次启动 daemon 前加入。如果节点已经发布过 `sync/endpoint/udp` record，旧 record 仍会留在本地 Zone snapshot 里；测试时建议重新初始化该节点目录，或先用一个小的、明确可达的 endpoint record 覆盖它。不要把 reflector 得到的公网 IP 当成可被主动拨入的 signed endpoint，除非已经配置端口映射。
@@ -410,14 +411,14 @@ docs/scripts/public-gossip-node.sh verify <dir> <zone>
 ## 排障 Checklist
 
 - UDP 端口是否在云安全组和本机防火墙都放通。
-- `advertise_addr` 是否是其他公网节点能访问的地址，而不是 `0.0.0.0` 或内网地址。
+- `gossip.advertise_addr` 是否是其他公网节点能访问的地址，而不是 `0.0.0.0` 或内网地址。
 - 每个节点的 `trusted_root_public_key` 是否完全相同。
-- auto-join 节点的 `managed_zone`、`peer_id` 和 `identity.key_path` 是否指向同一个 Zone 身份；`identity.key_path` 的 public key 必须和 admin 签发的 join request public key 一致。
-- `bootstrap.id` 是否等于对端 `peer_id`，通常是 Zone FQDN，如 `catofes.` 或 `node-a.catofes.`；不要把 `zone-catofes-admin` 这类角色名当成公网 gossip `peer_id`。
+- auto-join 节点的 `gossip.init.managed_zone`、`gossip.peer_id` 和 `gossip.init.key_path` 是否指向同一个 Zone 身份；`gossip.init.key_path` 的 public key 必须和 admin 签发的 join request public key 一致。
+- `gossip.bootstrap[].id` 是否等于对端 `gossip.peer_id`，通常是 Zone FQDN，如 `catofes.` 或 `node-a.catofes.`；不要把 `zone-catofes-admin` 这类角色名当成公网 gossip `peer_id`。
 - 如果一直 `auto_join pending`，先确认 admin 已经对对应 request 执行 `delegate issue`，并且持有新 delegation 的 admin/peer 真的参与 gossip 或能被 bootstrap 到。
 - TCP object pull 端口是否放通；默认和对端 UDP gossip 使用同一个数字端口。日志里如果同时出现 `exceeds datagram budget`、重复 `fetch_zone` 和 `quota`，先检查 TCP object pull 连通性；对 NAT/outbound-only peer，再检查是否出现 `applied zone ... via UDP chunks` 和 `chunk_fallbacks`。
 - 节点时钟是否同步。
 - daemon 是否真的在线：`sync status --verbose` 顶部应出现 `daemon: online peer_id=...`。
-- 如果公网 IP 会变化，使用 `reflectors: auto`，但要记住远端只信任本节点签名发布后的 endpoint record。
+- 如果公网 IP 会变化，使用 `gossip.reflectors: auto`，但要记住远端只信任本节点签名发布后的 endpoint record。
 - NAT / CGNAT 节点没有端口映射时，不要把 reflector IP 当成可被主动拨入的 direct endpoint；先看公网 peer 上的 `observed_addr` / `observed_status` 是否 active。
-- 公网 gossip 不依赖 IP fragmentation；保持默认 `max_datagram_bytes: 1200`。大 record / snapshot 应通过 object pull 收敛，不要把调大 UDP datagram 当成公网修复方式。
+- 公网 gossip 不依赖 IP fragmentation；保持默认 `gossip.max_datagram_bytes: 1200`。大 record / snapshot 应通过 object pull 收敛，不要把调大 UDP datagram 当成公网修复方式。

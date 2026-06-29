@@ -64,61 +64,27 @@ type appConfig struct {
 }
 
 type configYAML struct {
-	DataDir     string `yaml:"data_dir"`
-	DatabaseDir string `yaml:"database_dir"`
-	DBDir       string `yaml:"db_dir"`
+	DataDir string `yaml:"data_dir"`
 
-	StatePath    string `yaml:"state_path"`
-	DatabasePath string `yaml:"database_path"`
-	DBPath       string `yaml:"db_path"`
-
-	ManagedZone string       `yaml:"managed_zone"`
-	Identity    identityYAML `yaml:"identity"`
-
-	PeerID     string `yaml:"peer_id"`
-	ListenAddr string `yaml:"listen_addr"`
-	ListenPort *int   `yaml:"listen_port"`
-
-	Bootstrap []syncConfigPeer `yaml:"bootstrap"`
+	StatePath string `yaml:"state_path"`
 
 	TrustedRootPublicKey string `yaml:"trusted_root_public_key"`
 	RootPublicKey        string `yaml:"root_public_key"`
 	TrustedRootKey       string `yaml:"trusted_root_key"`
 
-	MaxMessageBytes     *int `yaml:"max_message_bytes"`
-	MaxDatagramBytes    *int `yaml:"max_datagram_bytes"`
-	TargetDatagramBytes *int `yaml:"target_datagram_bytes"`
-	MaxSyncZones        *int `yaml:"max_sync_zones"`
-	MaxSyncRecords      *int `yaml:"max_sync_records"`
+	Log logConfigYAML `yaml:"log"`
 
-	LogLevel string        `yaml:"log_level"`
-	Log      logConfigYAML `yaml:"log"`
-
-	AdvertiseAddr  string           `yaml:"advertise_addr"`
-	AdvertiseAddrs configStringList `yaml:"advertise_addrs"`
-	Reflector      string           `yaml:"reflector"`
-	Reflectors     configStringList `yaml:"reflectors"`
-
-	ReflectorInterval   string           `yaml:"reflector_interval"`
-	ReflectorTimeout    string           `yaml:"reflector_timeout"`
-	EndpointTTL         string           `yaml:"endpoint_ttl"`
-	EndpointGrace       string           `yaml:"endpoint_grace"`
-	EndpointGracePeriod string           `yaml:"endpoint_grace_period"`
-	PublishEndpoints    *bool            `yaml:"publish_endpoints"`
-	EndpointDiscovery   string           `yaml:"endpoint_discovery"`
-	EndpointSourceOrder configStringList `yaml:"endpoint_source_order"`
-
-	FilterPrivateIPv4 *bool                    `yaml:"filter_private_ipv4"`
-	Overlay           overlayDefaultsYAML      `yaml:"overlay"`
-	IPsec             ipsecConfigYAML          `yaml:"ipsec"`
-	IPAM              ipamConfigYAML           `yaml:"ipam"`
-	Netns             *netnsConfigYAML         `yaml:"netns"`
-	Routing           *routingInstancesYAML    `yaml:"routing"`
-	Firewall          *firewallConfigYAML      `yaml:"firewall"`
-	PeerLifecycle     *peerLifecycleYAML       `yaml:"peer_lifecycle"`
-	Health            *healthConfigYAML        `yaml:"health"`
-	Observer          *observerConfigYAML      `yaml:"observer"`
-	Overlays          []overlayGroupConfigYAML `yaml:"overlays"`
+	Overlay       overlayDefaultsYAML      `yaml:"overlay"`
+	IPsec         ipsecConfigYAML          `yaml:"ipsec"`
+	IPAM          ipamConfigYAML           `yaml:"ipam"`
+	Netns         *netnsConfigYAML         `yaml:"netns"`
+	Routing       *routingInstancesYAML    `yaml:"routing"`
+	Firewall      *firewallConfigYAML      `yaml:"firewall"`
+	PeerLifecycle *peerLifecycleYAML       `yaml:"peer_lifecycle"`
+	Health        *healthConfigYAML        `yaml:"health"`
+	Observer      *observerConfigYAML      `yaml:"observer"`
+	Overlays      []overlayGroupConfigYAML `yaml:"overlays"`
+	Gossip        gossipConfigYAML         `yaml:"gossip"`
 }
 
 // peerLifecycleYAML is the YAML representation of PeerLifecycleConfig.
@@ -137,6 +103,42 @@ type identityConfig struct {
 
 type identityYAML struct {
 	KeyPath string `yaml:"key_path"`
+}
+
+type gossipConfigYAML struct {
+	Init gossipInitYAML `yaml:"init"`
+
+	PeerID     string `yaml:"peer_id"`
+	ListenAddr string `yaml:"listen_addr"`
+	ListenPort *int   `yaml:"listen_port"`
+
+	Bootstrap []syncConfigPeer `yaml:"bootstrap"`
+
+	MaxDatagramBytes *int `yaml:"max_datagram_bytes"`
+	MaxSyncZones     *int `yaml:"max_sync_zones"`
+	MaxSyncRecords   *int `yaml:"max_sync_records"`
+
+	AdvertiseAddr  string           `yaml:"advertise_addr"`
+	AdvertiseAddrs configStringList `yaml:"advertise_addrs"`
+	Reflector      string           `yaml:"reflector"`
+	Reflectors     configStringList `yaml:"reflectors"`
+
+	ReflectorInterval   string           `yaml:"reflector_interval"`
+	ReflectorTimeout    string           `yaml:"reflector_timeout"`
+	EndpointTTL         string           `yaml:"endpoint_ttl"`
+	EndpointGrace       string           `yaml:"endpoint_grace"`
+	EndpointGracePeriod string           `yaml:"endpoint_grace_period"`
+	PublishEndpoints    *bool            `yaml:"publish_endpoints"`
+	EndpointDiscovery   string           `yaml:"endpoint_discovery"`
+	EndpointSourceOrder configStringList `yaml:"endpoint_source_order"`
+
+	FilterPrivateIPv4 *bool `yaml:"filter_private_ipv4"`
+}
+
+type gossipInitYAML struct {
+	ManagedZone string       `yaml:"managed_zone"`
+	KeyPath     string       `yaml:"key_path"`
+	Identity    identityYAML `yaml:"identity"`
 }
 
 type logConfig struct {
@@ -390,29 +392,22 @@ func yamlTopLevelKeys(input string) (map[string]bool, error) {
 	return keys, nil
 }
 
-func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string]bool) error {
-	if value := firstNonEmpty(file.DataDir, file.DatabaseDir, file.DBDir); value != "" {
-		config.DataDir = value
-		config.StatePath = ""
-	}
-	if value := firstNonEmpty(file.StatePath, file.DatabasePath, file.DBPath); value != "" {
-		config.StatePath = value
-	}
-	if file.ManagedZone != "" {
-		path := zone.ZonePath(strings.TrimSpace(file.ManagedZone))
+func applyGossipConfigYAML(config *appConfig, file gossipConfigYAML, prefix string) error {
+	if file.Init.ManagedZone != "" {
+		path := zone.ZonePath(strings.TrimSpace(file.Init.ManagedZone))
 		if !path.Valid() || path == zone.RootZone {
-			return fmt.Errorf("invalid managed_zone: %s", file.ManagedZone)
+			return fmt.Errorf("invalid %sinit.managed_zone: %s", prefix, file.Init.ManagedZone)
 		}
 		config.ManagedZone = path
 	}
-	if file.Identity.KeyPath != "" {
-		config.Identity.KeyPath = file.Identity.KeyPath
+	if value := firstNonEmpty(file.Init.KeyPath, file.Init.Identity.KeyPath); value != "" {
+		config.Identity.KeyPath = value
 	}
 	config.PeerID = firstNonEmpty(file.PeerID, config.PeerID)
 	config.ListenAddr = firstNonEmpty(file.ListenAddr, config.ListenAddr)
 	if file.ListenPort != nil {
 		if *file.ListenPort <= 0 || *file.ListenPort > 65535 {
-			return fmt.Errorf("invalid listen_port: %d", *file.ListenPort)
+			return fmt.Errorf("invalid %slisten_port: %d", prefix, *file.ListenPort)
 		}
 		config.ListenPort = *file.ListenPort
 		if config.ListenAddr == "" {
@@ -420,33 +415,80 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 	}
 	config.Bootstrap = append(config.Bootstrap, file.Bootstrap...)
+	if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxDatagramBytes, prefix+"max_datagram_bytes"); err != nil {
+		return err
+	}
+	if err := applyPositiveInt(&config.MaxSyncZones, file.MaxSyncZones, prefix+"max_sync_zones"); err != nil {
+		return err
+	}
+	if err := applyPositiveInt(&config.MaxSyncRecords, file.MaxSyncRecords, prefix+"max_sync_records"); err != nil {
+		return err
+	}
+	if file.AdvertiseAddr != "" {
+		config.AdvertiseAddrs = append(config.AdvertiseAddrs, file.AdvertiseAddr)
+	}
+	config.AdvertiseAddrs = append(config.AdvertiseAddrs, file.AdvertiseAddrs...)
+	if file.Reflector != "" {
+		config.Reflectors = append(config.Reflectors, file.Reflector)
+	}
+	config.Reflectors = append(config.Reflectors, file.Reflectors...)
+	if file.ReflectorInterval != "" {
+		d, err := parseConfigDuration(file.ReflectorInterval, prefix+"reflector_interval")
+		if err != nil {
+			return err
+		}
+		config.ReflectorInterval = d
+	}
+	if file.ReflectorTimeout != "" {
+		d, err := parseConfigDuration(file.ReflectorTimeout, prefix+"reflector_timeout")
+		if err != nil {
+			return err
+		}
+		config.ReflectorTimeout = d
+	}
+	if file.EndpointTTL != "" {
+		d, err := parseConfigDuration(file.EndpointTTL, prefix+"endpoint_ttl")
+		if err != nil {
+			return err
+		}
+		config.EndpointTTL = d
+	}
+	if value := firstNonEmpty(file.EndpointGrace, file.EndpointGracePeriod); value != "" {
+		d, err := parseConfigDuration(value, prefix+"endpoint_grace")
+		if err != nil {
+			return err
+		}
+		config.EndpointGrace = d
+	}
+	if file.PublishEndpoints != nil {
+		config.PublishEndpoints = *file.PublishEndpoints
+	}
+	if file.EndpointDiscovery != "" {
+		config.EndpointDiscovery = file.EndpointDiscovery
+	}
+	if len(file.EndpointSourceOrder) > 0 {
+		config.EndpointSourceOrder = normalizeEndpointSourceOrder([]string(file.EndpointSourceOrder))
+	}
+	if file.FilterPrivateIPv4 != nil {
+		config.FilterPrivateIPv4 = *file.FilterPrivateIPv4
+	}
+	return nil
+}
+
+func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string]bool) error {
+	if file.DataDir != "" {
+		config.DataDir = file.DataDir
+		config.StatePath = ""
+	}
+	if file.StatePath != "" {
+		config.StatePath = file.StatePath
+	}
 	if value := firstNonEmpty(file.TrustedRootPublicKey, file.RootPublicKey, file.TrustedRootKey); value != "" {
 		key, err := decodePublicKey(value)
 		if err != nil {
 			return err
 		}
 		config.TrustedRootPublicKey = key
-	}
-	// max_datagram_bytes / target_datagram_bytes take precedence over legacy max_message_bytes.
-	if file.MaxDatagramBytes != nil {
-		if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxDatagramBytes, "max_datagram_bytes"); err != nil {
-			return err
-		}
-	} else if file.TargetDatagramBytes != nil {
-		if err := applyPositiveInt(&config.MaxMessageBytes, file.TargetDatagramBytes, "target_datagram_bytes"); err != nil {
-			return err
-		}
-	} else if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxMessageBytes, "max_message_bytes"); err != nil {
-		return err
-	}
-	if err := applyPositiveInt(&config.MaxSyncZones, file.MaxSyncZones, "max_sync_zones"); err != nil {
-		return err
-	}
-	if err := applyPositiveInt(&config.MaxSyncRecords, file.MaxSyncRecords, "max_sync_records"); err != nil {
-		return err
-	}
-	if file.LogLevel != "" {
-		config.LogLevel = strings.ToLower(file.LogLevel)
 	}
 	if file.Log.Level != "" {
 		config.Log.Level = strings.ToLower(file.Log.Level)
@@ -465,55 +507,12 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	if file.Log.SyslogFacility != "" {
 		config.Log.SyslogFacility = strings.ToLower(strings.TrimSpace(file.Log.SyslogFacility))
 	}
-	if file.AdvertiseAddr != "" {
-		config.AdvertiseAddrs = append(config.AdvertiseAddrs, file.AdvertiseAddr)
+	if topLevelKeys["gossip"] {
+		if err := applyGossipConfigYAML(config, file.Gossip, "gossip."); err != nil {
+			return err
+		}
 	}
-	config.AdvertiseAddrs = append(config.AdvertiseAddrs, file.AdvertiseAddrs...)
-	if file.Reflector != "" {
-		config.Reflectors = append(config.Reflectors, file.Reflector)
-	}
-	config.Reflectors = append(config.Reflectors, file.Reflectors...)
 	config.Reflectors = gossip.ResolvePublicIPReflectors(config.Reflectors)
-	if file.ReflectorInterval != "" {
-		d, err := parseConfigDuration(file.ReflectorInterval, "reflector_interval")
-		if err != nil {
-			return err
-		}
-		config.ReflectorInterval = d
-	}
-	if file.ReflectorTimeout != "" {
-		d, err := parseConfigDuration(file.ReflectorTimeout, "reflector_timeout")
-		if err != nil {
-			return err
-		}
-		config.ReflectorTimeout = d
-	}
-	if file.EndpointTTL != "" {
-		d, err := parseConfigDuration(file.EndpointTTL, "endpoint_ttl")
-		if err != nil {
-			return err
-		}
-		config.EndpointTTL = d
-	}
-	if value := firstNonEmpty(file.EndpointGrace, file.EndpointGracePeriod); value != "" {
-		d, err := parseConfigDuration(value, "endpoint_grace")
-		if err != nil {
-			return err
-		}
-		config.EndpointGrace = d
-	}
-	if file.PublishEndpoints != nil {
-		config.PublishEndpoints = *file.PublishEndpoints
-	}
-	if file.EndpointDiscovery != "" {
-		config.EndpointDiscovery = file.EndpointDiscovery
-	}
-	if len(file.EndpointSourceOrder) > 0 {
-		config.EndpointSourceOrder = normalizeEndpointSourceOrder([]string(file.EndpointSourceOrder))
-	}
-	if file.FilterPrivateIPv4 != nil {
-		config.FilterPrivateIPv4 = *file.FilterPrivateIPv4
-	}
 	if netnsConfigured(file.IPsec.DefaultNetNS) {
 		netns := file.IPsec.DefaultNetNS.Normalized()
 		if err := netns.Validate(); err != nil {

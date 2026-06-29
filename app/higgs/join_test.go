@@ -217,7 +217,7 @@ func writeConfig(t *testing.T, path string, dataDir string) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	content := "data_dir: " + dataDir + "\nlisten_addr: 127.0.0.1:0\n"
+	content := "data_dir: " + dataDir + "\ngossip:\n  listen_addr: 127.0.0.1:0\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

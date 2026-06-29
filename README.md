@@ -40,50 +40,51 @@ Higgs 的状态按 Zone 组织。每个 Zone 包含 `ZoneAuthority`、对子 Zon
 
 ```yaml
 data_dir: .higgs
-managed_zone: node-a.catofes.
-identity:
-  key_path: .higgs/identity.key.json
-peer_id: node-a.catofes.
-listen_addr: 0.0.0.0:33434
-max_datagram_bytes: 1200
-max_sync_zones: 16
-max_sync_records: 1024
-log_level: info
+trusted_root_public_key: <base64-ed25519-public-key>
+
+gossip:
+  init:
+    managed_zone: node-a.catofes.
+    key_path: .higgs/identity.key.json
+  peer_id: node-a.catofes.
+  listen_addr: 0.0.0.0:33434
+  max_datagram_bytes: 1200
+  max_sync_zones: 16
+  max_sync_records: 1024
+  bootstrap:
+    - id: node-b.catofes.
+      addr: 127.0.0.1:33435
+
 log:
+  level: info
   mode: stderr
   # mode can also be file, syslog, stderr+file, or stderr+syslog.
   # file: /var/log/higgs.log
   # syslog_facility: daemon
-
-bootstrap:
-  - id: node-b.catofes.
-    addr: 127.0.0.1:33435
-
-trusted_root_public_key: <base64-ed25519-public-key>
 ```
 
 基础字段：
 
 - `data_dir`：本地状态目录。bbolt 数据库位于 `<data_dir>/higgs.db`。
-- `managed_zone`：本节点负责的 Zone，通常也是运行时 peer identity。
-- `identity.key_path`：本节点 ED25519 key 文件。配置引用路径，不在 YAML 内嵌私钥。
-- `peer_id`：gossip peer ID。普通节点建议使用 Zone FQDN，例如 `node-a.catofes.`。
-- `listen_addr`：UDP gossip 监听地址。也可以用 `listen_port`。
-- `bootstrap`：已知 gossip peer。未知 peer ID 或地址会被拒绝。
 - `trusted_root_public_key`：期望的 root authority 公钥。设置后，本地状态必须匹配该公钥。CLI 默认输出 base64 编码的裸 32-byte Ed25519 public key；配置仍兼容读取 hex。
-- `max_datagram_bytes` / `target_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。旧字段 `max_message_bytes` 仍兼容读取。
-- `max_sync_zones` / `max_sync_records`：单次 announce/snapshot 的对象数量限制。
-- `log_level` / `log.level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。debug 会输出收发包、relay、backoff、object pull 等诊断字段。
+- `gossip.init.managed_zone`：本节点负责的 Zone，通常也是运行时 peer identity。
+- `gossip.init.key_path`：本节点 ED25519 key 文件。配置引用路径，不在 YAML 内嵌私钥。
+- `gossip.peer_id`：gossip peer ID。普通节点建议使用 Zone FQDN，例如 `node-a.catofes.`。
+- `gossip.listen_addr`：UDP gossip 监听地址。也可以用 `gossip.listen_port`。
+- `gossip.bootstrap`：已知 gossip peer。未知 peer ID 或地址会被拒绝。
+- `gossip.max_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。
+- `gossip.max_sync_zones` / `gossip.max_sync_records`：单次 announce/snapshot 的对象数量限制。
+- `log.level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。debug 会输出收发包、relay、backoff、object pull 等诊断字段。
 - `log.mode`：日志输出模式，默认 `stderr`。可设为 `file`、`syslog`、`stderr+file` 或 `stderr+syslog`；文件模式使用 `log.file`，syslog 模式可用 `log.syslog_facility` 指定 facility。
 
 运行时与发现字段：
 
-- `advertise_addrs`：管理员显式发布的地址，优先级高于自动发现。
-- `reflectors` / `reflector_interval` / `reflector_timeout`：公网 IP reflector。`auto` 使用内置列表，`off` 禁用公网 reflector。
-- `endpoint_discovery`：`all`、`loopback_only` 或 `advertise_only`。未设置且 bootstrap 全是 loopback 时，daemon 自动按 `loopback_only` 处理。
-- `publish_endpoints`：是否发布 signed endpoint record。NAT/CGNAT outbound-only 节点可设为 `false`。
-- `endpoint_source_order`：出站 gossip 地址选择优先级，常见值为 `advertise`、`bootstrap`、`reflector`、`interface`。
-- `filter_private_ipv4`：默认 `true`，接口扫描时不发布 RFC1918 IPv4；私网实验需要发布内网地址时设为 `false`。
+- `gossip.advertise_addrs`：管理员显式发布的地址，优先级高于自动发现。
+- `gossip.reflectors` / `gossip.reflector_interval` / `gossip.reflector_timeout`：公网 IP reflector。`auto` 使用内置列表，`off` 禁用公网 reflector。
+- `gossip.endpoint_discovery`：`all`、`loopback_only` 或 `advertise_only`。未设置且 bootstrap 全是 loopback 时，daemon 自动按 `loopback_only` 处理。
+- `gossip.publish_endpoints`：是否发布 signed endpoint record。NAT/CGNAT outbound-only 节点可设为 `false`。
+- `gossip.endpoint_source_order`：出站 gossip 地址选择优先级，常见值为 `advertise`、`bootstrap`、`reflector`、`interface`。
+- `gossip.filter_private_ipv4`：默认 `true`，接口扫描时不发布 RFC1918 IPv4；私网实验需要发布内网地址时设为 `false`。
 - `peer_lifecycle`：stale/offline/cleanup 阈值；revoked peer 始终立即清理 Higgs-owned 数据面状态。
 
 数据平面字段：
@@ -176,8 +177,9 @@ debug log 默认输出到 stderr，可通过 `log.mode` 复制到文件或 syslo
 mkdir -p /tmp/higgs-admin
 cat >/tmp/higgs-admin/config.yaml <<'EOF'
 data_dir: /tmp/higgs-admin
-peer_id: node-admin
-listen_addr: 127.0.0.1:33433
+gossip:
+  peer_id: node-admin
+  listen_addr: 127.0.0.1:33433
 EOF
 
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root init
@@ -201,9 +203,10 @@ HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root pubkey
 mkdir -p /tmp/higgs-catofes
 cat >/tmp/higgs-catofes/config.yaml <<'EOF'
 data_dir: /tmp/higgs-catofes
-peer_id: zone-catofes-admin
-listen_addr: 127.0.0.1:33436
 trusted_root_public_key: <root-public-key-from-node-admin>
+gossip:
+  peer_id: zone-catofes-admin
+  listen_addr: 127.0.0.1:33436
 EOF
 ```
 
@@ -243,12 +246,13 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs verify catofes.
 mkdir -p /tmp/higgs-a
 cat >/tmp/higgs-a/config.yaml <<'EOF'
 data_dir: /tmp/higgs-a
-peer_id: node-a
-listen_addr: 127.0.0.1:33434
-bootstrap:
-  - id: node-b
-    addr: 127.0.0.1:33435
 trusted_root_public_key: <root-public-key-from-node-admin>
+gossip:
+  peer_id: node-a
+  listen_addr: 127.0.0.1:33434
+  bootstrap:
+    - id: node-b
+      addr: 127.0.0.1:33435
 EOF
 ```
 
@@ -278,12 +282,13 @@ node B 的流程相同。创建 B 的配置：
 mkdir -p /tmp/higgs-b
 cat >/tmp/higgs-b/config.yaml <<'EOF'
 data_dir: /tmp/higgs-b
-peer_id: node-b
-listen_addr: 127.0.0.1:33435
-bootstrap:
-  - id: node-a
-    addr: 127.0.0.1:33434
 trusted_root_public_key: <root-public-key-from-node-admin>
+gossip:
+  peer_id: node-b
+  listen_addr: 127.0.0.1:33435
+  bootstrap:
+    - id: node-a
+      addr: 127.0.0.1:33434
 EOF
 ```
 
@@ -403,32 +408,36 @@ mkdir -p "$tmp/admin" "$tmp/catofes" "$tmp/a" "$tmp/b"
 
 printf '%s\n' \
   "data_dir: $tmp/admin" \
-  "peer_id: node-admin" \
-  "listen_addr: 127.0.0.1:33443" \
+  "gossip:" \
+  "  peer_id: node-admin" \
+  "  listen_addr: 127.0.0.1:33443" \
   > "$tmp/admin/config.yaml"
 
 printf '%s\n' \
   "data_dir: $tmp/catofes" \
-  "peer_id: zone-catofes-admin" \
-  "listen_addr: 127.0.0.1:33446" \
+  "gossip:" \
+  "  peer_id: zone-catofes-admin" \
+  "  listen_addr: 127.0.0.1:33446" \
   > "$tmp/catofes/config.yaml"
 
 printf '%s\n' \
   "data_dir: $tmp/a" \
-  "peer_id: node-a" \
-  "listen_addr: 127.0.0.1:33444" \
-  "bootstrap:" \
-  "  - id: node-b" \
-  "    addr: 127.0.0.1:33445" \
+  "gossip:" \
+  "  peer_id: node-a" \
+  "  listen_addr: 127.0.0.1:33444" \
+  "  bootstrap:" \
+  "    - id: node-b" \
+  "      addr: 127.0.0.1:33445" \
   > "$tmp/a/config.yaml"
 
 printf '%s\n' \
   "data_dir: $tmp/b" \
-  "peer_id: node-b" \
-  "listen_addr: 127.0.0.1:33445" \
-  "bootstrap:" \
-  "  - id: node-a" \
-  "    addr: 127.0.0.1:33444" \
+  "gossip:" \
+  "  peer_id: node-b" \
+  "  listen_addr: 127.0.0.1:33445" \
+  "  bootstrap:" \
+  "    - id: node-a" \
+  "      addr: 127.0.0.1:33444" \
   > "$tmp/b/config.yaml"
 
 HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root init >/dev/null
@@ -495,11 +504,11 @@ tmp="${TMPDIR:-/tmp}/higgs-readme-three-node"
 rm -rf "$tmp"
 mkdir -p "$tmp/admin" "$tmp/catofes" "$tmp/a" "$tmp/b" "$tmp/c"
 
-printf '%s\n' "data_dir: $tmp/admin" "peer_id: node-admin" "listen_addr: 127.0.0.1:33453" > "$tmp/admin/config.yaml"
-printf '%s\n' "data_dir: $tmp/catofes" "peer_id: zone-catofes-admin" "listen_addr: 127.0.0.1:33456" > "$tmp/catofes/config.yaml"
-printf '%s\n' "data_dir: $tmp/a" "peer_id: node-a" "listen_addr: 127.0.0.1:33454" "bootstrap:" "  - id: node-b" "    addr: 127.0.0.1:33455" "  - id: node-c" "    addr: 127.0.0.1:33457" > "$tmp/a/config.yaml"
-printf '%s\n' "data_dir: $tmp/b" "peer_id: node-b" "listen_addr: 127.0.0.1:33455" "bootstrap:" "  - id: node-a" "    addr: 127.0.0.1:33454" > "$tmp/b/config.yaml"
-printf '%s\n' "data_dir: $tmp/c" "peer_id: node-c" "listen_addr: 127.0.0.1:33457" "bootstrap:" "  - id: node-a" "    addr: 127.0.0.1:33454" > "$tmp/c/config.yaml"
+printf '%s\n' "data_dir: $tmp/admin" "gossip:" "  peer_id: node-admin" "  listen_addr: 127.0.0.1:33453" > "$tmp/admin/config.yaml"
+printf '%s\n' "data_dir: $tmp/catofes" "gossip:" "  peer_id: zone-catofes-admin" "  listen_addr: 127.0.0.1:33456" > "$tmp/catofes/config.yaml"
+printf '%s\n' "data_dir: $tmp/a" "gossip:" "  peer_id: node-a" "  listen_addr: 127.0.0.1:33454" "  bootstrap:" "    - id: node-b" "      addr: 127.0.0.1:33455" "    - id: node-c" "      addr: 127.0.0.1:33457" > "$tmp/a/config.yaml"
+printf '%s\n' "data_dir: $tmp/b" "gossip:" "  peer_id: node-b" "  listen_addr: 127.0.0.1:33455" "  bootstrap:" "    - id: node-a" "      addr: 127.0.0.1:33454" > "$tmp/b/config.yaml"
+printf '%s\n' "data_dir: $tmp/c" "gossip:" "  peer_id: node-c" "  listen_addr: 127.0.0.1:33457" "  bootstrap:" "    - id: node-a" "      addr: 127.0.0.1:33454" > "$tmp/c/config.yaml"
 
 HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root init >/dev/null
 root_key="$(HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root pubkey)"
@@ -562,14 +571,15 @@ make chain-relay-smoke
 节点可以通过公网 reflector 自动发现自己的公网 IP，然后用本 Zone 私钥签名发布到 `sync/endpoint/udp`。Reflector 只是本机自发现输入；其他节点只信任已经进入 verified active state 的 signed endpoint record。
 
 ```yaml
-reflectors: auto
-reflector_interval: 5m
-reflector_timeout: 3s
-endpoint_ttl: 1h
-endpoint_grace: 10m
+gossip:
+  reflectors: auto
+  reflector_interval: 5m
+  reflector_timeout: 3s
+  endpoint_ttl: 1h
+  endpoint_grace: 10m
 ```
 
-`reflectors: auto` 会展开内置列表：
+`gossip.reflectors: auto` 会展开内置列表：
 
 ```text
 https://api.ipify.org
@@ -588,41 +598,44 @@ https://v6.yinghualuo.cn/bejson
 也可以混合自定义与内置列表：
 
 ```yaml
-reflectors:
-  - https://your-reflector.example/ip
-  - auto
+gossip:
+  reflectors:
+    - https://your-reflector.example/ip
+    - auto
 ```
 
 如果不希望访问公网 reflector，可设置：
 
 ```yaml
-reflectors: off
+gossip:
+  reflectors: off
 ```
 
-解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `advertise_addrs` 和本机 interface scan 的候选，并在 daemon / `sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
+解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `gossip.reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `gossip.advertise_addrs` 和本机 interface scan 的候选，并在 daemon / `sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
 
 ### NAT 后节点与 observed UDP path
 
-signed endpoint record 表示长期、可传播、由 Zone 签名的可达地址；NAT 映射不是这种地址。节点如果在家庭 NAT、CGNAT 或没有端口映射的网络后面，通常只能主动向公网 bootstrap/peer 发起 UDP，同步不能假设其他节点可以主动拨入它的 `listen_addr`。
+signed endpoint record 表示长期、可传播、由 Zone 签名的可达地址；NAT 映射不是这种地址。节点如果在家庭 NAT、CGNAT 或没有端口映射的网络后面，通常只能主动向公网 bootstrap/peer 发起 UDP，同步不能假设其他节点可以主动拨入它的 `gossip.listen_addr`。
 
-纯 NAT/outbound-only 节点可以设置 `publish_endpoints: false`，避免把 interface scan 或 reflector 候选发布成 signed direct endpoint。
+纯 NAT/outbound-only 节点可以设置 `gossip.publish_endpoints: false`，避免把 interface scan 或 reflector 候选发布成 signed direct endpoint。
 
-对于单机 loopback 测试或明确只想发布本地地址的场景，可以使用更细粒度的 `endpoint_discovery` 控制：
+对于单机 loopback 测试或明确只想发布本地地址的场景，可以使用更细粒度的 `gossip.endpoint_discovery` 控制：
 
-- `endpoint_discovery: all`（默认）：使用 `advertise_addrs`、公网 reflector 和本机网卡扫描。
-- `endpoint_discovery: loopback_only`：只发布 loopback 的 `listen_addr` 和 loopback 的 `advertise_addrs`，跳过 reflector 和网卡扫描。
-- `endpoint_discovery: advertise_only`：只发布显式配置的 `advertise_addrs`。
+- `gossip.endpoint_discovery: all`（默认）：使用 `gossip.advertise_addrs`、公网 reflector 和本机网卡扫描。
+- `gossip.endpoint_discovery: loopback_only`：只发布 loopback 的 `gossip.listen_addr` 和 loopback 的 `gossip.advertise_addrs`，跳过 reflector 和网卡扫描。
+- `gossip.endpoint_discovery: advertise_only`：只发布显式配置的 `gossip.advertise_addrs`。
 
-当配置未设置 `endpoint_discovery` 且所有 `bootstrap` peer 都是 loopback 地址时，daemon 会自动按 `loopback_only` 处理，避免在多公网接口机器上把包错发到不可达的公网地址。
+当配置未设置 `gossip.endpoint_discovery` 且所有 `gossip.bootstrap` peer 都是 loopback 地址时，daemon 会自动按 `loopback_only` 处理，避免在多公网接口机器上把包错发到不可达的公网地址。
 
-发送端地址选择也可通过 `endpoint_source_order` 调整，例如把管理员显式配置的 bootstrap 地址排在自动发现的地址之前：
+发送端地址选择也可通过 `gossip.endpoint_source_order` 调整，例如把管理员显式配置的 bootstrap 地址排在自动发现的地址之前：
 
 ```yaml
-endpoint_source_order:
-  - bootstrap
-  - advertise
-  - reflector
-  - interface
+gossip:
+  endpoint_source_order:
+    - bootstrap
+    - advertise
+    - reflector
+    - interface
 ```
 
 `Transport.Send()` 会基于实际收到响应的地址记录成功/失败状态，连续无响应的地址会短暂 backoff，让后续尝试有机会 fallback 到 bootstrap 或其他候选地址。

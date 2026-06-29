@@ -539,53 +539,56 @@ overlays:
 影响 gossip 行为的 `config.yaml` 关键配置项：
 
 ```yaml
-peer_id: node-a
-listen_addr: 0.0.0.0:33434
-max_datagram_bytes: 1200
-max_sync_zones: 16
-max_sync_records: 1024
-log_level: info
+gossip:
+  peer_id: node-a
+  listen_addr: 0.0.0.0:33434
+  max_datagram_bytes: 1200
+  max_sync_zones: 16
+  max_sync_records: 1024
 
-# 静态 bootstrap 节点（始终允许）
-bootstrap:
-  - id: node-b
-    addr: 127.0.0.1:33435
+  # 静态 bootstrap 节点（始终允许）
+  bootstrap:
+    - id: node-b
+      addr: 127.0.0.1:33435
 
-# 可选：显式公告地址（覆盖接口扫描）
-advertise_addrs: "10.0.0.1,10.0.0.2"
+  # 可选：显式公告地址（覆盖接口扫描）
+  advertise_addrs:
+    - 10.0.0.1:33434
+    - 10.0.0.2:33434
 
-# 可选：公网 IP 反射器；auto 展开内置 ddns-go 风格 reflector 列表
-reflectors: auto
-reflector_interval: 5m
-reflector_timeout: 3s
-endpoint_ttl: 1h
-endpoint_grace: 10m
+  # 可选：公网 IP 反射器；auto 展开内置 ddns-go 风格 reflector 列表
+  reflectors: auto
+  reflector_interval: 5m
+  reflector_timeout: 3s
+  endpoint_ttl: 1h
+  endpoint_grace: 10m
 ```
 
 | 键 | 默认值 | 含义 |
 |-----|---------|---------|
-| `listen_addr` | `0.0.0.0:33434` | UDP 绑定地址 |
-| `max_datagram_bytes` / `target_datagram_bytes` | `1200` | 单个 gossip UDP datagram 的安全预算；旧 `max_message_bytes` 仍兼容读取 |
-| `max_sync_zones` | `16` | 每个 `ANNOUNCE` 快照的最大区域数 |
-| `max_sync_records` | `1024` | 每个 `ANNOUNCE` 的最大记录数 |
-| `advertise_addrs` | （自动） | 以逗号分隔的 IP，发布到端点记录 |
-| `reflectors` | `[]` | 公网 IP reflector URL 列表；设为 `auto` 使用内置列表，设为 `none`/`off` 禁用 |
-| `reflector_interval` | `5m` | 重新发布本地端点的间隔 |
-| `reflector_timeout` | `3s` | 单个 reflector HTTP 请求超时；失败会尝试后续 reflector |
-| `endpoint_ttl` | `1h` | 写入端点记录的 TTL |
-| `endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
-| `filter_private_ipv4` | `true` | 接口扫描时过滤 RFC1918 IPv4；私网实验可显式设为 `false` |
+| `gossip.listen_addr` | `0.0.0.0:33434` | UDP 绑定地址 |
+| `gossip.max_datagram_bytes` | `1200` | 单个 gossip UDP datagram 的安全预算 |
+| `gossip.max_sync_zones` | `16` | 每个 `ANNOUNCE` 快照的最大区域数 |
+| `gossip.max_sync_records` | `1024` | 每个 `ANNOUNCE` 的最大记录数 |
+| `gossip.advertise_addrs` | （自动） | 显式发布到端点记录的地址列表 |
+| `gossip.reflectors` | `[]` | 公网 IP reflector URL 列表；设为 `auto` 使用内置列表，设为 `none`/`off` 禁用 |
+| `gossip.reflector_interval` | `5m` | 重新发布本地端点的间隔 |
+| `gossip.reflector_timeout` | `3s` | 单个 reflector HTTP 请求超时；失败会尝试后续 reflector |
+| `gossip.endpoint_ttl` | `1h` | 写入端点记录的 TTL |
+| `gossip.endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
+| `gossip.filter_private_ipv4` | `true` | 接口扫描时过滤 RFC1918 IPv4；私网实验可显式设为 `false` |
 
-Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：`managed_zone` + `identity.key_path` 声明本节点不可变身份，配置文件只引用 ED25519 私钥文件路径，不内嵌私钥；本机 `ipsec` 负责本节点公开能力和地址/端口来源，`netns` 负责声明本机 network namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
+Phase 4 当前的 IPsec/overlay 配置形状如下。字段细节以 `app/higgs/config.go` 的解析结构为准，但语义边界已经稳定：`gossip.init.managed_zone` + `gossip.init.key_path` 声明本节点不可变身份，配置文件只引用 ED25519 私钥文件路径，不内嵌私钥；本机 `ipsec` 负责本节点公开能力和地址/端口来源，`netns` 负责声明本机 network namespace，`overlays[]` 负责本机 LinkGroup/MeshPolicy desired-state。
 
 ```yaml
-managed_zone: node-a.catofes.
-identity:
-  key_path: .higgs/identity.key.json
 trusted_root_public_key: "<base64-or-hex-root-public-key>"
-bootstrap:
-  - id: catofes.
-    addr: 203.0.113.10:33434
+gossip:
+  init:
+    managed_zone: node-a.catofes.
+    key_path: .higgs/identity.key.json
+  bootstrap:
+    - id: catofes.
+      addr: 203.0.113.10:33434
 
 ipsec:
   provider: strongswan
