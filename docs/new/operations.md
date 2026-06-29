@@ -2,66 +2,20 @@
 
 本文整理当前实现下最常用的运行、检查和恢复路径。它面向 operator：先让节点安全跑起来，再知道出问题时从哪里看。
 
-命令示例默认使用本仓库构建出的 `build/higgs`。部署后如果已经安装到 PATH，可以把 `build/higgs` 换成 `higgs`。
-
-## 构建与基础验证
-
-常规开发验证：
-
-```bash
-make check
-```
-
-它会执行格式化、`go vet`、`go test ./...` 和构建。Makefile 默认使用 `/tmp/higgs-gocache` 与 `/tmp/higgs-gomodcache`，便于在受限环境里复用缓存。
-
-只构建：
-
-```bash
-make build
-```
-
-常用轻量 smoke：
-
-```bash
-make join-smoke
-make phase2-smoke
-make phase2-run-smoke
-make phase3-daemon-smoke
-make object-pull-smoke
-make ipsec-dry-run-smoke
-make routing-dry-run-smoke
-make firewall-dry-run-smoke
-make observer-smoke
-```
-
-真实数据面 smoke 需要系统能力、root 或容器环境，默认不放进 `make check`：
-
-```bash
-make ipsec-xfrm-preflight
-sudo make ipsec-xfrm-smoke
-make ipsec-xfrm-container-smoke
-
-make bird-babel-preflight
-sudo make bird-babel-smoke
-make bird-babel-container-smoke
-
-sudo make firewall-smoke
-make firewall-container-smoke
-make revocation-data-plane-container-smoke
-```
+命令示例默认使用已安装到 PATH 的 `higgs`。
 
 ## 配置选择
 
 默认配置路径是 `/etc/higgs/config.yaml`。多节点实验时应显式指定：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync status
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync status
 ```
 
 如果用 `sudo` 排查系统数据面，注意保留环境变量：
 
 ```bash
-sudo -E env HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug links
+sudo -E env HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs debug links
 ```
 
 否则 root 进程可能读取 `/etc/higgs/config.yaml` 或另一个状态库，导致 debug 输出和你以为的节点不一致。
@@ -73,28 +27,28 @@ sudo -E env HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug links
 Root admin 只管理 `.`：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root init
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root pubkey
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs root init
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs root pubkey
 ```
 
 一级管理 Zone 先生成 key 和 join request：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs keygen /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join request catofes. /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs keygen /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join request catofes. /tmp/catofes.key.json
 ```
 
 把 request 交给 root admin 签发：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate issue <request-payload>
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate issue <request-payload>
 ```
 
 再把 bundle 交回管理 Zone：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept <bundle-payload> /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs verify catofes.
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept <bundle-payload> /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs verify catofes.
 ```
 
 普通节点重复同样流程，只是 delegation 由 `catofes.` 管理节点签发，而不是 root admin 直接签发。
@@ -106,13 +60,13 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs verify catofes.
 推荐长期运行入口是 `higgs daemon`：
 
 ```bash
-HIGGS_CONFIG=/etc/higgs/config.yaml build/higgs daemon
+HIGGS_CONFIG=/etc/higgs/config.yaml higgs daemon
 ```
 
-开发或 smoke 中常指定较长 interval，靠事件触发同步：
+临时排障时可以指定较短 interval，靠事件触发同步：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs daemon --interval 60
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs daemon --interval 60
 ```
 
 daemon 做这些事：
@@ -128,30 +82,30 @@ CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在�
 
 ## 手动同步
 
-长期运行用 daemon。排障或 smoke 可用手动同步命令。
+长期运行用 daemon。排障时可用手动同步命令。
 
 查看同步状态：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync status --verbose
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync status --verbose
 ```
 
 对某个 peer 执行一次同步：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync once node-b.catofes.
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync once node-b.catofes.
 ```
 
 启动兼容的被动 UDP 服务：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync serve
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml higgs sync serve
 ```
 
 旧的常驻同步入口仍可用，但 daemon 是推荐入口：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync run --interval 5
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync run --interval 5
 ```
 
 `sync once` 如果输出 pending zones，通常表示对端已返回摘要，但还有对象需要继续拉取；再跑一轮或交给 daemon 后台收敛。
@@ -161,38 +115,38 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync run --interval 5
 基础状态：
 
 ```bash
-build/higgs sync status --verbose
-build/higgs zone show node-b.catofes.
-build/higgs verify node-b.catofes.
+higgs sync status --verbose
+higgs zone show node-b.catofes.
+higgs verify node-b.catofes.
 ```
 
 Gossip 和 peer：
 
 ```bash
-build/higgs debug peer node-b.catofes.
-build/higgs debug peers
-build/higgs debug zone node-b.catofes.
-build/higgs debug records node-b.catofes. --prefix endpoints/
-build/higgs debug endpoints
+higgs debug peer node-b.catofes.
+higgs debug peers
+higgs debug zone node-b.catofes.
+higgs debug records node-b.catofes. --prefix endpoints/
+higgs debug endpoints
 ```
 
 数据面：
 
 ```bash
-build/higgs debug links
-build/higgs debug routes
-build/higgs debug route 10.42.0.0/24
-build/higgs debug babel
-build/higgs debug firewall
-build/higgs debug health
-build/higgs debug revoke-impact node-b.catofes.
+higgs debug links
+higgs debug routes
+higgs debug route 10.42.0.0/24
+higgs debug babel
+higgs debug firewall
+higgs debug health
+higgs debug revoke-impact node-b.catofes.
 ```
 
 底层数据库：
 
 ```bash
-build/higgs db stats
-build/higgs db dump
+higgs db stats
+higgs db dump
 ```
 
 `debug` 命令通常会优先读取 daemon live state；daemon 不在线时读取本地状态文件和最近一次 runtime snapshot。
@@ -202,7 +156,7 @@ build/higgs db dump
 临时打开：
 
 ```bash
-HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs daemon
+HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs daemon
 ```
 
 或写入配置：
@@ -256,8 +210,8 @@ health:
 先从 Higgs 自己的视角看：
 
 ```bash
-HIGGS_CONFIG=/etc/higgs/config.yaml build/higgs debug links
-HIGGS_CONFIG=/etc/higgs/config.yaml build/higgs debug endpoints
+HIGGS_CONFIG=/etc/higgs/config.yaml higgs debug links
+HIGGS_CONFIG=/etc/higgs/config.yaml higgs debug endpoints
 ```
 
 再看系统状态：
@@ -292,10 +246,10 @@ ip netns exec h2 ip -6 route
 先看 Higgs read model：
 
 ```bash
-build/higgs debug routes
-build/higgs debug route 10.42.0.0/24
-build/higgs debug babel
-build/higgs debug links
+higgs debug routes
+higgs debug route 10.42.0.0/24
+higgs debug babel
+higgs debug links
 ```
 
 再看 BIRD：
@@ -313,7 +267,7 @@ birdc -s /var/lib/higgs/bird/bird-default.ctl show route all
 Higgs 视角：
 
 ```bash
-build/higgs debug firewall
+higgs debug firewall
 ```
 
 系统视角：
@@ -338,19 +292,19 @@ Higgs 只应管理带 owner 边界的规则。发现规则残留时，先确认�
 从 peer 显式拉回某个 Zone：
 
 ```bash
-build/higgs recovery pull-zone node-b.catofes. --from node-b.catofes.
+higgs recovery pull-zone node-b.catofes. --from node-b.catofes.
 ```
 
 拉回某个 Zone 及祖先链：
 
 ```bash
-build/higgs recovery pull-chain node-b.catofes. --from node-b.catofes.
+higgs recovery pull-chain node-b.catofes. --from node-b.catofes.
 ```
 
 清理本机 Higgs 管理的 IPsec 链路：
 
 ```bash
-sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml build/higgs recovery cleanup-ipsec
+sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs recovery cleanup-ipsec
 ```
 
 `cleanup-ipsec` 会优先走 daemon；daemon 不在线时直接读取本地状态并调用配置的 IPsec/XFRM driver。它会拒绝清理无法验证为 Higgs-owned 的 link。
@@ -362,9 +316,9 @@ sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml build/higgs recovery cleanup-ips
 先查：
 
 ```bash
-build/higgs sync status --verbose
-build/higgs debug endpoints
-build/higgs debug peer <peer-id>
+higgs sync status --verbose
+higgs debug endpoints
+higgs debug peer <peer-id>
 ```
 
 重点确认 `peer_id`、bootstrap 地址、`publish_endpoints`、endpoint discovery mode、trusted root，以及命令是否读了正确的 `HIGGS_CONFIG`。
@@ -374,8 +328,8 @@ build/higgs debug peer <peer-id>
 先确认本地是否写入、签名是否有效：
 
 ```bash
-build/higgs zone show <zone>
-build/higgs verify <zone>
+higgs zone show <zone>
+higgs verify <zone>
 ```
 
 再看同步状态和 debug log。大对象或 UDP 受限环境下，object pull / UDP chunk fallback 可能是关键路径。
@@ -406,5 +360,6 @@ sudo -E env | rg 'HIGGS_CONFIG|HIGGS_STATE|HIGGS_CONTROL_SOCKET'
 1. `docs/new/overall.md`
 2. `docs/new/config.md`
 3. `docs/new/operations.md`
+4. `docs/new/testing.md`
 
 再按问题进入模块文档：gossip、transport、routing、firewall、health、observer。

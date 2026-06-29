@@ -32,7 +32,8 @@ Higgs 是一个 mesh VPN 控制平面。它不把某个节点的本地配置当�
 | `health.md` | 链路探测、BIRD 观测、metric/cutover gate、metrics 输出 |
 | `observer.md` | 只读 Web/API 控制台、SSE、inspect read model 和 CLI debug 复用 |
 | `config.md` | 用户配置文件结构、默认值和常见部署形态 |
-| `operations.md` | 常用命令、smoke、排障路径和恢复操作 |
+| `operations.md` | 常用运行命令、排障路径和恢复操作 |
+| `testing.md` | `make check`、轻量 smoke 和真实数据面 smoke 的验证入口 |
 
 ## 模块总览
 
