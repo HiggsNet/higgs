@@ -452,7 +452,7 @@ func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*
 	var portRange *ipsec.PortRange
 	if mode == ipsec.PortModeRange {
 		portRange = &config.IPsec.PortRange
-		generation = nextPortGeneration(state, config, now)
+		generation = nextPortGeneration(state, existing, config, now)
 	}
 	if existing != nil && existing.Current != nil && existing.Current.Generation == generation && portRecordMatchesConfig(existing, mode, portRange) {
 		return existing, nil
@@ -509,11 +509,14 @@ func previousIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
 	return record
 }
 
-func nextPortGeneration(state *stateFile, config *appConfig, now time.Time) uint64 {
-	if state == nil || state.IPsecPortRecord == nil {
+func nextPortGeneration(state *stateFile, existing *ipsec.PortRecord, config *appConfig, now time.Time) uint64 {
+	prev := ipsecPortRecordStateFromMeta(state)
+	if prev == nil {
+		prev = ipsecPortRecordStateFromRecord(existing)
+	}
+	if prev == nil {
 		return 1
 	}
-	prev := state.IPsecPortRecord
 	if config.IPsec.PortRotateInterval <= 0 {
 		return prev.Generation
 	}
@@ -525,6 +528,29 @@ func nextPortGeneration(state *stateFile, config *appConfig, now time.Time) uint
 		return prev.Generation + 1
 	}
 	return prev.Generation
+}
+
+func ipsecPortRecordStateFromMeta(state *stateFile) *ipsecPortRecordState {
+	if state == nil || state.IPsecPortRecord == nil {
+		return nil
+	}
+	return state.IPsecPortRecord
+}
+
+func ipsecPortRecordStateFromRecord(record *ipsec.PortRecord) *ipsecPortRecordState {
+	if record == nil || record.Current == nil {
+		return nil
+	}
+	state := &ipsecPortRecordState{
+		Mode:       record.Mode,
+		Generation: record.Current.Generation,
+		UpdatedAt:  record.UpdatedAt,
+	}
+	if record.Range != nil {
+		r := *record.Range
+		state.Range = &r
+	}
+	return state
 }
 
 func portRecordMatchesConfig(record *ipsec.PortRecord, mode string, r *ipsec.PortRange) bool {

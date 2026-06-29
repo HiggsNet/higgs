@@ -123,7 +123,7 @@ netns:
   #   create: true
 ```
 
-`default` 是 overlay link group 的默认 netns。其他名字，例如 `edge`，与 `default` 并列声明，供 `overlays[].netns`、`routing.instances[].netns` 和 `firewall.instances[].netns` 引用。
+`default` 是 overlay link group、routing instance 和非 host firewall instance 的默认 netns。其他名字，例如 `edge`，与 `default` 并列声明，供 `overlays[].netns`、`routing.instances[].netns` 和 `firewall.instances[].netns` 引用。
 
 ## IPsec Provider
 
@@ -211,7 +211,7 @@ ipam:
 routing:
   instances:
     - id: main
-      netns: default
+      # netns: default
       provider: bird
       mode: managed
       table: main
@@ -223,7 +223,7 @@ routing:
 
 字段说明：
 
-- `routing.instances[].netns` 必须引用顶层 `netns`。
+- `routing.instances[].netns` 引用顶层 `netns`；省略时使用 `netns.default`。
 - `provider` 当前只支持 `bird`。
 - `mode` 可为 `managed`、`external`、`disabled`。
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
@@ -238,7 +238,7 @@ Firewall 配置按 instance 声明。instance 可以绑定某个 netns，也可�
 firewall:
   instances:
     - id: h2
-      netns: default
+      # netns: default
       mode: managed
       backend: auto
       default_policy: drop
@@ -258,6 +258,7 @@ firewall:
 
 - `backend` 可为 `auto`、`nft`、`iptables`、`none`。
 - `mode` 可为 `managed`、`external`、`disabled`。
+- 非 host instance 的 `netns` 引用顶层 `netns`；省略时使用 `netns.default`。
 - netns instance 默认匹配 `hgs*` XFRM tunnel interface。
 - host instance 用于 ingress、IKE/NAT-T 端口和 range 模式 redirect grace。
 - 当 `ipsec.port_mode=range` 且存在 host firewall instance 时，host IPsec ports 和 redirect grace 默认启用；如果这些规则由外部防火墙管理，应显式关闭。

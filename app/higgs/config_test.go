@@ -1143,6 +1143,40 @@ routing:
 	}
 }
 
+func TestParseConfigYAMLRoutingInstanceDefaultsToDefaultNetNS(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+routing:
+  instances:
+    - id: main
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if len(config.Routing.Instances) != 1 {
+		t.Fatalf("Routing.Instances len = %d, want 1", len(config.Routing.Instances))
+	}
+	inst := config.Routing.Instances[0]
+	if inst.NetNS != "default" {
+		t.Fatalf("inst.NetNS = %q, want default", inst.NetNS)
+	}
+	if inst.ControlSocket != filepath.Join(config.DataDir, "bird", "bird-default.ctl") {
+		t.Fatalf("inst.ControlSocket = %q, want default-derived path", inst.ControlSocket)
+	}
+	if inst.PIDFile != filepath.Join(config.DataDir, "bird", "bird-default.pid") {
+		t.Fatalf("inst.PIDFile = %q, want default-derived path", inst.PIDFile)
+	}
+	if inst.ConfigFile != filepath.Join(config.DataDir, "bird", "bird-default.conf") {
+		t.Fatalf("inst.ConfigFile = %q, want default-derived path", inst.ConfigFile)
+	}
+}
+
 func TestParseConfigYAMLRoutingInstanceDisabled(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

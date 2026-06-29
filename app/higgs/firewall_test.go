@@ -69,6 +69,34 @@ firewall:
 	}
 }
 
+func TestParseConfigYAMLFirewallOverlayDefaultsToDefaultNetNS(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+firewall:
+  instances:
+    - id: h2
+      mode: managed
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if len(config.Firewall.Instances) != 1 {
+		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
+	}
+	inst := config.Firewall.Instances[0]
+	if inst.NetNS != "default" {
+		t.Fatalf("NetNS = %s, want default", inst.NetNS)
+	}
+	if inst.IsHost {
+		t.Fatal("defaulted netns instance should not be host")
+	}
+}
+
 func TestParseConfigYAMLFirewallHost(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

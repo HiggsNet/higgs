@@ -187,7 +187,7 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		return RoutingInstance{}, fmt.Errorf("id is required")
 	}
 	if yi.NetNS == "" {
-		return RoutingInstance{}, fmt.Errorf("netns is required (reference a name from the netns section)")
+		yi.NetNS = "default"
 	}
 	spec, ok := netnsCfg.Names[yi.NetNS]
 	if !ok {

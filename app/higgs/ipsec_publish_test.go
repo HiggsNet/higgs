@@ -173,6 +173,52 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	}
 }
 
+func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(5000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = "198.51.100.10:4500"
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	appConfig.IPsec.PortMode = ipsec.PortModeRange
+	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
+	appConfig.IPsec.PortRotateInterval = time.Hour
+	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords(first): %v", err)
+	}
+	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(first): %v", err)
+	}
+	state.IPsecPortRecord = nil
+
+	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords(second): %v", err)
+	}
+	rotated, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(rotated): %v", err)
+	}
+	if rotated.Current.Generation != first.Current.Generation+1 {
+		t.Fatalf("generation = %d, want %d", rotated.Current.Generation, first.Current.Generation+1)
+	}
+	if len(rotated.Previous) == 0 || rotated.Previous[0].Generation != first.Current.Generation {
+		t.Fatalf("previous grace missing: %+v", rotated.Previous)
+	}
+	if state.IPsecPortRecord == nil || state.IPsecPortRecord.Generation != rotated.Current.Generation {
+		t.Fatalf("port meta not restored: %+v", state.IPsecPortRecord)
+	}
+}
+
 func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."

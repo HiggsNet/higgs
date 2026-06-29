@@ -96,8 +96,9 @@ gossip:
 # -----------------------------------------------------------------------------
 
 # Network namespaces are declared once here and referenced by overlays, BIRD
-# routing instances, and firewall instances. `default` is the implicit netns for
-# overlay link groups when overlays[].netns is omitted.
+# routing instances, and firewall instances. `default` is the implicit netns
+# for overlay link groups, routing instances, and non-host firewall instances
+# when their netns field is omitted.
 netns:
   default:
     kind: name
@@ -216,7 +217,9 @@ ipsec:
 routing:
   instances:
     - id: main
-      netns: default
+      # netns defaults to netns.default. Set a reference only when this BIRD
+      # instance should run in another declared netns.
+      # netns: default
       # disabled: true
       # provider is the managed routing backend. "bird" runs BIRD with a Babel
       # protocol stanza inside the generated bird.conf; babeld is not supported.
@@ -250,7 +253,8 @@ routing:
 firewall:
   instances:
     - id: h2
-      netns: default
+      # Non-host firewall instances default to netns.default.
+      # netns: default
       # disabled: true
       # mode: managed
       # backend: auto
