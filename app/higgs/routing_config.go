@@ -23,8 +23,8 @@ type netnsConfig struct {
 type netnsConfigYAML struct {
 	// Default is the optional default netns, equivalent to a named entry.
 	Default *ipsec.NetNSSpec `yaml:"default"`
-	// Entries is a map of named netns definitions.
-	Entries map[string]ipsec.NetNSSpec `yaml:"names"`
+	// Entries is a map of named netns definitions, declared alongside default.
+	Entries map[string]ipsec.NetNSSpec `yaml:",inline"`
 }
 
 // routingConfig holds top-level routing instance definitions.
@@ -79,7 +79,6 @@ type routingInstanceYAML struct {
 	Enabled        *bool               `yaml:"enabled"`
 	Disabled       *bool               `yaml:"disabled"`
 	Provider       string              `yaml:"provider"`
-	Protocol       string              `yaml:"protocol"`
 	Mode           string              `yaml:"mode"`
 	ControlSocket  string              `yaml:"control_socket"`
 	PIDFile        string              `yaml:"pid_file"`
@@ -114,29 +113,31 @@ type upstreamConfigYAML struct {
 }
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
-func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) netnsConfig {
+func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) (netnsConfig, error) {
 	cfg := netnsConfig{Names: make(map[string]ipsec.NetNSSpec)}
 	if yamlCfg == nil {
 		n := fallback.Normalized()
 		addNetnsSpec(&cfg, "default", n)
-		return cfg
+		return cfg, nil
 	}
 	if yamlCfg.Default != nil {
 		n := yamlCfg.Default.Normalized()
-		if err := n.Validate(); err == nil {
-			addNetnsSpec(&cfg, "default", n)
+		if err := n.Validate(); err != nil {
+			return cfg, fmt.Errorf("netns.default: %w", err)
 		}
+		addNetnsSpec(&cfg, "default", n)
 	}
 	for name, spec := range yamlCfg.Entries {
 		n := spec.Normalized()
-		if err := n.Validate(); err == nil {
-			if name == "" {
-				name = n.Target()
-			}
-			cfg.Names[name] = n
-			if name == "default" && cfg.Default == "" {
-				cfg.Default = name
-			}
+		if err := n.Validate(); err != nil {
+			return cfg, fmt.Errorf("netns.%s: %w", name, err)
+		}
+		if name == "" {
+			name = n.Target()
+		}
+		cfg.Names[name] = n
+		if name == "default" && cfg.Default == "" {
+			cfg.Default = name
 		}
 	}
 	if len(cfg.Names) == 0 {
@@ -146,7 +147,7 @@ func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) netnsC
 	if cfg.Default == "" {
 		cfg.Default = "default"
 	}
-	return cfg
+	return cfg, nil
 }
 
 func addNetnsSpec(cfg *netnsConfig, name string, spec ipsec.NetNSSpec) {
@@ -210,12 +211,6 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		return RoutingInstance{}, fmt.Errorf("unsupported routing mode %q", mode)
 	}
 	provider := yi.Provider
-	if provider == "" {
-		provider = yi.Protocol
-	}
-	if yi.Provider != "" && yi.Protocol != "" && yi.Provider != yi.Protocol {
-		return RoutingInstance{}, fmt.Errorf("routing provider %q conflicts with legacy protocol %q", yi.Provider, yi.Protocol)
-	}
 	if provider == "" {
 		provider = "bird"
 	}

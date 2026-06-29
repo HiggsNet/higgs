@@ -31,7 +31,7 @@ gossip:
   #   key_path: .higgs/identity.key.json
 
   peer_id: node-a.catofes.
-  listen_addr: 0.0.0.0:33434
+  listen_addr: "[::]:33434"
 
   bootstrap:
     - id: node-b.catofes.
@@ -140,14 +140,14 @@ ipsec:
   # IPsec-specific addresses and DNS names to publish, independent of the
   # gossip.advertise_addrs used for gossip. announce_addrs are published as
   # manual-address; announce_dns are published as manual-dns and resolved by
-  # peers. publish_from_endpoints (default true) also publishes addresses from
+  # peers. announce_gossip_endpoints (default true) also publishes addresses from
   # gossip endpoint discovery (reflector + interface scan) as discovery/reflector
   # /local sources.
   # announce_addrs:
   #   - 203.0.113.10:4500
   # announce_dns:
   #   - vpn.example.com
-  # publish_from_endpoints: true
+  # announce_gossip_endpoints: true
 
 # Uncomment an overlay/link group to participate in the StrongSwan mesh. This
 # is the switch that makes the daemon publish signed node-level ipsec/profile,

@@ -26,7 +26,7 @@ data_dir: /tmp/higgs-a
 trusted_root_public_key: ` + hex.EncodeToString(pub) + `
 gossip:
   peer_id: node-a
-  listen_port: 33434
+  listen_addr: 0.0.0.0:33434
   max_datagram_bytes: 32768
   max_sync_zones: 8
   max_sync_records: 512
@@ -112,8 +112,8 @@ func TestLoadAppConfigRejectsMissingExplicitConfig(t *testing.T) {
 func TestConfigDefaultsForListenAndPrivateIPv4Filter(t *testing.T) {
 	config := defaultAppConfig()
 	normalizeAppConfig(config)
-	if config.ListenAddr != "0.0.0.0:33434" {
-		t.Fatalf("ListenAddr = %q, want 0.0.0.0:33434", config.ListenAddr)
+	if config.ListenAddr != "[::]:33434" {
+		t.Fatalf("ListenAddr = %q, want [::]:33434", config.ListenAddr)
 	}
 	if !config.FilterPrivateIPv4 {
 		t.Fatal("FilterPrivateIPv4 = false, want true")
@@ -133,11 +133,11 @@ func TestParseConfigYAMLCanDisablePrivateIPv4Filter(t *testing.T) {
 	}
 }
 
-func TestParseConfigYAMLOverlayDefaultNetNS(t *testing.T) {
+func TestParseConfigYAMLNetNSDefault(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-overlay:
-  default_netns:
+netns:
+  default:
     kind: name
     name: h2
     create: true
@@ -154,21 +154,24 @@ overlay:
 	}
 }
 
-func TestParseConfigYAMLLegacyIPsecDefaultNetNS(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
+func TestParseConfigYAMLRejectsLegacyDefaultNetNS(t *testing.T) {
+	for _, input := range []string{`
 ipsec:
   default_netns:
     kind: name
     name: legacy-h2
     create: true
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	normalizeAppConfig(config)
-	if config.Overlay.DefaultNetNS.Name != "legacy-h2" || config.IPsec.DefaultNetNS.Name != "legacy-h2" {
-		t.Fatalf("default netns = overlay:%+v ipsec:%+v", config.Overlay.DefaultNetNS, config.IPsec.DefaultNetNS)
+`, `
+overlay:
+  default_netns:
+    kind: name
+    name: legacy-h2
+    create: true
+`} {
+		config := defaultAppConfig()
+		if err := parseConfigYAML(input, config); err == nil {
+			t.Fatalf("parseConfigYAML should reject legacy default_netns: %s", input)
+		}
 	}
 }
 
@@ -208,7 +211,7 @@ func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
   announce_dns:
     - vpn.example.com
     - vpn6.example.com
-  publish_from_endpoints: false
+  announce_gossip_endpoints: false
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -220,42 +223,44 @@ func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
 	if len(config.IPsec.AnnounceDNS) != 2 || config.IPsec.AnnounceDNS[0] != "vpn.example.com" || config.IPsec.AnnounceDNS[1] != "vpn6.example.com" {
 		t.Fatalf("AnnounceDNS = %v", config.IPsec.AnnounceDNS)
 	}
-	if config.IPsec.PublishFromEndpoints {
-		t.Fatalf("PublishFromEndpoints = true, want false")
+	if config.IPsec.AnnounceGossipEndpoints {
+		t.Fatalf("AnnounceGossipEndpoints = true, want false")
 	}
 }
 
-func TestParseConfigYAMLIPsecPublishFromEndpointsDefaultsToTrue(t *testing.T) {
+func TestParseConfigYAMLIPsecAnnounceGossipEndpointsDefaultsToTrue(t *testing.T) {
 	config := defaultAppConfig()
 	if err := parseConfigYAML("", config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if !config.IPsec.PublishFromEndpoints {
-		t.Fatalf("PublishFromEndpoints = false, want true")
+	if !config.IPsec.AnnounceGossipEndpoints {
+		t.Fatalf("AnnounceGossipEndpoints = false, want true")
 	}
 }
 
-func TestParseConfigYAMLOverlayDefaultNetNSOverridesLegacyIPsecDefault(t *testing.T) {
+func TestParseConfigYAMLNetNSNamedSiblings(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-ipsec:
-  default_netns:
+netns:
+  default:
     kind: name
-    name: legacy-h2
+    name: h2
     create: true
-overlay:
-  default_netns:
+  edge:
     kind: name
-    name: overlay-h2
+    name: edge
     create: true
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if config.Overlay.DefaultNetNS.Name != "overlay-h2" || config.IPsec.DefaultNetNS.Name != "overlay-h2" {
+	if config.Overlay.DefaultNetNS.Name != "h2" || config.IPsec.DefaultNetNS.Name != "h2" {
 		t.Fatalf("default netns = overlay:%+v ipsec:%+v", config.Overlay.DefaultNetNS, config.IPsec.DefaultNetNS)
+	}
+	if spec, ok := config.Netns.Names["edge"]; !ok || spec.Name != "edge" || !spec.Create {
+		t.Fatalf("netns.edge = %+v, ok=%t", spec, ok)
 	}
 }
 
@@ -448,16 +453,16 @@ overlays:
 	}
 }
 
-func TestParseConfigYAMLRejectsInvalidOverlayDefaultNetNS(t *testing.T) {
+func TestParseConfigYAMLRejectsInvalidNetNSDefault(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-overlay:
-  default_netns:
+netns:
+  default:
     kind: host
     create: true
 `
 	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject overlay host netns create")
+		t.Fatalf("parseConfigYAML should reject host netns create")
 	}
 }
 
@@ -597,6 +602,7 @@ func TestParseConfigYAMLRejectsLegacyTopLevelGossipFields(t *testing.T) {
 		"identity:\n  key_path: keys/node-a.json\n",
 		"peer_id: node-a\n",
 		"listen_addr: 127.0.0.1:0\n",
+		"gossip:\n  listen_port: 33434\n",
 		"bootstrap:\n  - id: node-b\n    addr: 127.0.0.1:33435\n",
 		"max_datagram_bytes: 1200\n",
 		"advertise_addrs:\n  - 203.0.113.10:33434\n",
@@ -613,7 +619,6 @@ func TestParseConfigYAMLRejectsLegacyTopLevelGossipFields(t *testing.T) {
 
 func TestParseConfigYAMLRejectsExplicitZeroLimits(t *testing.T) {
 	for _, input := range []string{
-		"gossip:\n  listen_port: 0\n",
 		"gossip:\n  max_datagram_bytes: 0\n",
 		"gossip:\n  max_sync_zones: 0\n",
 		"gossip:\n  max_sync_records: 0\n",
@@ -992,11 +997,6 @@ func writeRuntimeConfig(t *testing.T, path string, dataDir string, rootKey ed255
 func TestParseConfigYAMLRoutingInstances(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
-overlay:
-  default_netns:
-    kind: name
-    name: h2
-    create: true
 netns:
   default:
     kind: name
@@ -1074,7 +1074,7 @@ routing:
 	}
 }
 
-func TestParseConfigYAMLRoutingInstancesAcceptsLegacyProtocolAlias(t *testing.T) {
+func TestParseConfigYAMLRoutingInstancesRejectsLegacyProtocolAlias(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
 netns:
@@ -1088,32 +1088,8 @@ routing:
       netns: h2
       protocol: bird
 `
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	normalizeAppConfig(config)
-	if got := config.Routing.Instances[0].Protocol; got != "bird" {
-		t.Fatalf("Protocol = %q, want bird", got)
-	}
-}
-
-func TestParseConfigYAMLRoutingInstancesRejectsProviderProtocolConflict(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: h2
-    create: true
-routing:
-  instances:
-    - id: main
-      netns: h2
-      provider: bird
-      protocol: babeld
-`
 	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatal("parseConfigYAML should reject conflicting routing provider/protocol")
+		t.Fatal("parseConfigYAML should reject routing.instances[].protocol")
 	}
 }
 

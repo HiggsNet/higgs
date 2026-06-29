@@ -314,7 +314,7 @@ func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time)
 	}
 
 	// 4. Follow gossip endpoints (reflector / interface discovery).
-	if config.IPsec.PublishFromEndpoints {
+	if config.IPsec.AnnounceGossipEndpoints {
 		for _, ad := range ipsecAddressesFromGossipEndpoints(state, seen, int64(config.EndpointTTL.Seconds()), now) {
 			addAddress(ad)
 		}

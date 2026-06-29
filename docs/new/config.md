@@ -31,7 +31,7 @@ trusted_root_public_key: <base64-ed25519-public-key>
 
 gossip:
   peer_id: node-a.catofes.
-  listen_addr: 0.0.0.0:33434
+  listen_addr: "[::]:33434"
   bootstrap:
     - id: node-b.catofes.
       addr: 203.0.113.20:33434
@@ -46,7 +46,7 @@ gossip:
 - `gossip.init.managed_zone`：本节点负责写入的 Zone，普通节点通常就是自己的 FQDN。
 - `gossip.init.key_path`：本节点写 record 用的 ED25519 私钥路径。私钥不写进 YAML。
 - `gossip.peer_id`：gossip peer ID。现代配置建议等于 `gossip.init.managed_zone`。
-- `gossip.listen_addr` / `gossip.listen_port`：本地 UDP gossip 监听地址。默认端口是 `33434`。
+- `gossip.listen_addr`：本地 UDP gossip 监听地址，默认 `[::]:33434`，通常同时接收 IPv4 和 IPv6。
 - `gossip.bootstrap`：启动时允许联系的已知 peer。运行中还会从 verified endpoint record 更新 peer 地址。
 
 ## Gossip 与发现
@@ -57,36 +57,41 @@ Gossip 相关配置控制 UDP 消息大小、对象同步和 endpoint 发布。
 
 ```yaml
 gossip:
-  max_datagram_bytes: 1200
-  max_sync_zones: 16
-  max_sync_records: 1024
-
   advertise_addrs:
     - 203.0.113.10:33434
 
-  endpoint_discovery: all
-  publish_endpoints: true
-  reflectors: auto
-  reflector_interval: 5m
-  reflector_timeout: 3s
-  endpoint_ttl: 1h
-  endpoint_grace: 10m
-  endpoint_source_order:
-    - advertise
-    - bootstrap
-    - reflector
-    - interface
-  filter_private_ipv4: true
+  # max_datagram_bytes: 1200
+  # max_sync_zones: 16
+  # max_sync_records: 1024
+
+  # endpoint_discovery: all
+  # publish_endpoints: true
+
+  # reflectors: auto
+  # reflector_interval: 5m
+  # reflector_timeout: 3s
+
+  # endpoint_ttl: 1h
+  # endpoint_grace: 10m
+  # endpoint_source_order:
+  #   - advertise
+  #   - bootstrap
+  #   - reflector
+  #   - interface
+  # filter_private_ipv4: true
 ```
 
-边界说明：
+字段说明：
 
-- `gossip.advertise_addrs` 是 gossip endpoint，不是 IPsec endpoint。
-- `gossip.endpoint_discovery` 可设为 `all`、`loopback_only` 或 `advertise_only`。
-- 如果未设置 `gossip.endpoint_discovery` 且 bootstrap 都是 loopback，daemon 会自动按 `loopback_only` 处理，避免本地 smoke 发布无关接口地址。
-- `gossip.publish_endpoints: false` 适合 outbound-only 或 NAT/CGNAT 节点；它仍可主动连接 bootstrap 或已知 peer。
-- `gossip.filter_private_ipv4: true` 会过滤接口扫描得到的 RFC1918 IPv4。私网实验需要发布内网地址时再设为 `false`。
-- `gossip.max_datagram_bytes` 设置单个 gossip UDP datagram 的最大字节预算。
+- `gossip.advertise_addrs`：管理员显式发布的 gossip endpoint，优先级高于 reflector 和接口扫描；它不是 IPsec endpoint，IPsec 地址使用 `ipsec.announce_addrs` / `ipsec.announce_dns`。
+- `gossip.max_datagram_bytes`：单个 gossip UDP datagram 的最大字节预算。公网环境不应依赖 IP fragmentation，大对象和大 snapshot 应通过 object pull 收敛。
+- `gossip.max_sync_zones` / `gossip.max_sync_records`：单次 announce/snapshot 携带的 Zone 和 record 数量上限。
+- `gossip.endpoint_discovery`：endpoint 发现模式，可设为 `all`、`loopback_only` 或 `advertise_only`。如果未设置且 bootstrap 都是 loopback，daemon 会自动按 `loopback_only` 处理，避免本地 smoke 发布无关接口地址。
+- `gossip.publish_endpoints`：是否发布本节点 signed endpoint record。`false` 适合 outbound-only 或 NAT/CGNAT 节点；禁用发布后，本节点仍可主动连接 bootstrap 或已知 peer。
+- `gossip.reflectors` / `gossip.reflector_interval` / `gossip.reflector_timeout`：公网 IP reflector 来源、刷新间隔和单次请求超时。`reflectors: auto` 使用内置列表；`off` / `none` 禁用公网 reflector。
+- `gossip.endpoint_ttl` / `gossip.endpoint_grace`：signed endpoint record 的 TTL，以及 endpoint 变化后继续保留旧地址的窗口。
+- `gossip.endpoint_source_order`：出站连接候选地址的来源优先级，常见值是 `advertise`、`bootstrap`、`reflector`、`interface`。
+- `gossip.filter_private_ipv4`：是否过滤接口扫描得到的 RFC1918 IPv4，默认 `true`。私网实验需要发布内网地址时再设为 `false`。
 
 ## 日志
 
@@ -112,14 +117,13 @@ netns:
     kind: name
     name: h2
     create: true
-  names:
-    edge:
-      kind: name
-      name: edge
-      create: true
+  # edge:
+  #   kind: name
+  #   name: edge
+  #   create: true
 ```
 
-`default` 是 overlay link group 的默认 netns。旧字段 `overlay.default_netns` / `ipsec.default_netns` 仍兼容，但新配置应使用顶层 `netns`。
+`default` 是 overlay link group 的默认 netns。其他名字，例如 `edge`，与 `default` 并列声明，供 `overlays[].netns`、`routing.instances[].netns` 和 `firewall.instances[].netns` 引用。
 
 ## IPsec Provider
 
@@ -128,17 +132,17 @@ netns:
 ```yaml
 ipsec:
   accept: bidirectional
-  driver: strongswan
+  # driver: strongswan
   vici_socket: /run/charon.vici
 
   port_mode: fixed
-  port_previous_grace: 2h
+  # port_previous_grace: 2h
 
   announce_addrs:
     - 203.0.113.10:4500
   announce_dns:
     - vpn-a.example.com
-  publish_from_endpoints: true
+  announce_gossip_endpoints: true
 ```
 
 主要字段：
@@ -150,7 +154,7 @@ ipsec:
 - `port_rotate_interval`：range 模式下 advertised port 的轮换周期；为 0 时不主动轮换。
 - `port_previous_grace`：旧 advertised port 保留窗口，必须覆盖 overlay rotate retention。
 - `announce_addrs` / `announce_dns`：IPsec 专用地址或 DNS 发布来源，独立于 `gossip.advertise_addrs`。
-- `publish_from_endpoints`：是否把 gossip endpoint discovery 的地址也作为 IPsec 地址候选来源，默认 true。
+- `announce_gossip_endpoints`：是否把 gossip endpoint discovery 的地址也作为 IPsec 地址候选来源，默认 true。
 
 ## Overlay Link Policy
 
@@ -162,20 +166,20 @@ overlays:
     provider: strongswan
     netns: default
     default_path_mode: family-redundant
-    max_peers: 256
-    max_links_per_peer: 2
+    # max_peers: 256
+    # max_links_per_peer: 2
 
     tunnel_address:
       mode: derived-pool
       family: ipv6
       pool: fd00:4242::/64
 
-    reconcile:
-      interval: 1m
-      rotate_retention: 1h
-      backoff:
-        initial: 1s
-        max: 1m
+    # reconcile:
+    #   interval: 1m
+    #   rotate_retention: 1h
+    #   backoff:
+    #     initial: 1s
+    #     max: 1m
 
     connect:
       - "strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant"
@@ -183,13 +187,18 @@ overlays:
       - "strongswan://*.lab.catofes."
 ```
 
-常用边界：
+字段说明：
 
-- `provider` 当前主线是 `strongswan`。
-- `netns` 引用顶层 `netns` 的名字；省略时用 `netns.default`。
-- `connect` / `deny` 是本机规则，不公开给远端。
-- `tunnel_address` 默认 IPv6 `derived-link-local`。新配置优先用 `derived-link-local` 或 `derived-pool`，`sequential-pool` 只作为旧兼容。
-- `reconcile.interval` 是安全扫频，不是每次变更的唯一触发；daemon 也会按事件触发 reconcile。
+- `id` / `name`：overlay link group 标识。`id` 是推荐字段，并会用于发布 `ipsec/overlays/<id>` intent；两端要进入同一个 overlay，必须配置相同的 `id`，否则 planner 会认为缺少对应 overlay intent。
+- `provider`：数据面 provider，当前主线是 `strongswan`。只有配置了使用 `strongswan` 的 overlay 后，daemon 才会发布本节点 signed `ipsec/*` records。
+- `netns`：引用顶层 `netns` 中声明的名字；省略时使用 `netns.default`。
+- `default_path_mode`：远端候选地址的建链模式，常用 `family-redundant`，按 IPv4/IPv6 family 选 contact point；`exhaustive` 会保留更多候选。
+- `max_peers` / `max_links_per_peer`：限制本 group 参与的 peer 数量和每个 peer 的 link 数量。
+- `tunnel_address`：隧道接口地址分配方式。IPv6 默认 `derived-link-local`；显式地址池优先用 `derived-pool`。`sequential-pool` 只适合旧配置迁移或测试。
+- `reconcile.interval`：周期安全扫频，用于 SA 观察和恢复；它不是每次变更的唯一触发，daemon 也会按 state/config/VICI 事件触发 reconcile。
+- `reconcile.rotate_retention`：staged rotate 成功后，本地继续保留旧 generation 的窗口。
+- `reconcile.backoff`：provider apply 失败后的重试退避，不是正常 reconcile 频率。
+- `connect` / `deny`：本机 mesh policy 规则，只影响本节点想和哪些 peer 建链，不公开给远端。
 
 ## Routing 与 IPAM
 
@@ -215,7 +224,7 @@ routing:
 字段说明：
 
 - `routing.instances[].netns` 必须引用顶层 `netns`。
-- `provider` 当前只支持 `bird`。`protocol` 是旧别名，不能和 `provider` 冲突。
+- `provider` 当前只支持 `bird`。
 - `mode` 可为 `managed`、`external`、`disabled`。
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
 - `upstream` 可让 Higgs 创建 veth，把 mesh netns 接到主网络或另一个 namespace。
@@ -289,19 +298,11 @@ observer:
   event_buffer_seconds: 0
 ```
 
-也可以拆成：
-
-```yaml
-observer:
-  bind_addr: 127.0.0.1
-  port: 8080
-```
-
-`listen` 不能和 `bind_addr` / `port` 同时使用。Observer 是只读 HTTP/API 控制台，建议默认绑定 loopback，再由 SSH tunnel、反向代理或内网 ACL 暴露。
+Observer 是只读 HTTP/API 控制台，建议默认绑定 loopback，再由 SSH tunnel、反向代理或内网 ACL 暴露。
 
 ## Peer Lifecycle
 
-`peer_lifecycle` 控制 peer 长期离线或撤销后的本机清理策略。
+`peer_lifecycle` 控制本机如何看待长期未同步、未观测到的 peer，以及何时清理 Higgs-owned runtime 资源。它不删除 gossip 数据库里的 Zone records，也不会向全网同步“删除 peer”的状态。
 
 ```yaml
 peer_lifecycle:
@@ -311,7 +312,14 @@ peer_lifecycle:
   keep_sa_while_stale: true
 ```
 
-约束是 `stale_after < offline_after < cleanup_after`。被撤销的 peer 会走更主动的 Higgs-owned 数据面清理路径。
+字段说明：
+
+- `stale_after`：超过这个时间未同步/未观测到 peer 后，本机把它标记为 `stale`。默认仍保留已有 SA，避免短暂网络抖动就拆链。
+- `offline_after`：超过这个时间后，本机把 peer 标记为 `offline`，新的主动连接和重试会更保守。
+- `cleanup_after`：长期 offline 后，本机可以清理 Higgs-owned 数据面资源，例如 IPsec SA、XFRM interface、routing/firewall 状态和 peer cache 里的可达地址。
+- `keep_sa_while_stale`：peer 只是 `stale` 时是否保留已有 SA，默认 `true`。
+
+约束是 `stale_after < offline_after < cleanup_after`。被撤销的 peer 会走更主动的本机清理路径；revocation 本身是 signed state，会继续通过 gossip 同步和保留用于验证/审计。
 
 ## 常见配置边界
 

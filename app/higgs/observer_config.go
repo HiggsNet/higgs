@@ -27,8 +27,6 @@ type observerConfigYAML struct {
 	Enabled            *bool  `yaml:"enabled"`
 	Disabled           *bool  `yaml:"disabled"`
 	Listen             string `yaml:"listen"`
-	BindAddr           string `yaml:"bind_addr"`
-	Port               *int   `yaml:"port"`
 	UIPath             string `yaml:"ui_path"`
 	EventBufferSeconds *int   `yaml:"event_buffer_seconds"`
 }
@@ -60,9 +58,6 @@ func parseObserverConfig(y *observerConfigYAML) (observerConfig, error) {
 	}
 	out.Enabled = enabled
 	if y.Listen != "" {
-		if y.BindAddr != "" || y.Port != nil {
-			return observerConfig{}, fmt.Errorf("observer.listen cannot be combined with observer.bind_addr or observer.port")
-		}
 		host, portText, err := net.SplitHostPort(strings.TrimSpace(y.Listen))
 		if err != nil {
 			return observerConfig{}, fmt.Errorf("invalid observer.listen %q: %w", y.Listen, err)
@@ -76,19 +71,6 @@ func parseObserverConfig(y *observerConfigYAML) (observerConfig, error) {
 		}
 		out.BindAddr = host
 		out.Port = port
-	}
-	if y.BindAddr != "" {
-		addr := strings.TrimSpace(y.BindAddr)
-		if addr == "" {
-			return observerConfig{}, fmt.Errorf("observer.bind_addr must not be empty")
-		}
-		out.BindAddr = addr
-	}
-	if y.Port != nil {
-		if *y.Port <= 0 || *y.Port > 65535 {
-			return observerConfig{}, fmt.Errorf("observer.port must be between 1 and 65535, got %d", *y.Port)
-		}
-		out.Port = *y.Port
 	}
 	if y.UIPath != "" {
 		uiPath := strings.TrimSpace(y.UIPath)

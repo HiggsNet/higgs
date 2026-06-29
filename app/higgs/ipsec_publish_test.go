@@ -316,7 +316,7 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 
 	config := defaultAppConfig()
 	config.ListenAddr = "0.0.0.0:33434"
-	// PublishFromEndpoints defaults to true.
+	// AnnounceGossipEndpoints defaults to true.
 
 	record := localIPsecAddressRecord(config, state, now)
 	if len(record.Addresses) != 4 {
@@ -428,7 +428,7 @@ func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
 	}
 }
 
-func TestLocalIPsecAddressRecordPublishFromEndpointsDisabled(t *testing.T) {
+func TestLocalIPsecAddressRecordAnnounceGossipEndpointsDisabled(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
 	now := time.Unix(5000, 0)
@@ -450,7 +450,7 @@ func TestLocalIPsecAddressRecordPublishFromEndpointsDisabled(t *testing.T) {
 	}
 
 	config := defaultAppConfig()
-	config.IPsec.PublishFromEndpoints = false
+	config.IPsec.AnnounceGossipEndpoints = false
 	config.ListenAddr = "198.51.100.10:33434"
 
 	record := localIPsecAddressRecord(config, state, now)

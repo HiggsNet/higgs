@@ -34,7 +34,6 @@ type appConfig struct {
 	Identity             identityConfig
 	PeerID               string
 	ListenAddr           string
-	ListenPort           int
 	Bootstrap            []syncConfigPeer
 	TrustedRootPublicKey ed25519.PublicKey
 	MaxMessageBytes      int
@@ -110,7 +109,6 @@ type gossipConfigYAML struct {
 
 	PeerID     string `yaml:"peer_id"`
 	ListenAddr string `yaml:"listen_addr"`
-	ListenPort *int   `yaml:"listen_port"`
 
 	Bootstrap []syncConfigPeer `yaml:"bootstrap"`
 
@@ -159,37 +157,34 @@ type overlayConfig struct {
 	DefaultNetNS ipsec.NetNSSpec
 }
 
-type overlayDefaultsYAML struct {
-	DefaultNetNS ipsec.NetNSSpec `yaml:"default_netns"`
-}
+type overlayDefaultsYAML struct{}
 
 type ipsecConfig struct {
-	DefaultNetNS         ipsec.NetNSSpec
-	LinkGroups           []ipsec.LinkGroupSpec
-	Accept               string
-	Driver               string
-	VICISocket           string
-	PortMode             string
-	PortRange            ipsec.PortRange
-	PortRotateInterval   time.Duration
-	PortPreviousGrace    time.Duration
-	AnnounceAddrs        []string
-	AnnounceDNS          []string
-	PublishFromEndpoints bool
+	DefaultNetNS            ipsec.NetNSSpec
+	LinkGroups              []ipsec.LinkGroupSpec
+	Accept                  string
+	Driver                  string
+	VICISocket              string
+	PortMode                string
+	PortRange               ipsec.PortRange
+	PortRotateInterval      time.Duration
+	PortPreviousGrace       time.Duration
+	AnnounceAddrs           []string
+	AnnounceDNS             []string
+	AnnounceGossipEndpoints bool
 }
 
 type ipsecConfigYAML struct {
-	DefaultNetNS         ipsec.NetNSSpec  `yaml:"default_netns"`
-	Accept               string           `yaml:"accept"`
-	Driver               string           `yaml:"driver"`
-	VICISocket           string           `yaml:"vici_socket"`
-	PortMode             string           `yaml:"port_mode"`
-	PortRange            ipsec.PortRange  `yaml:"port_range"`
-	PortRotateInterval   string           `yaml:"port_rotate_interval"`
-	PortPreviousGrace    string           `yaml:"port_previous_grace"`
-	AnnounceAddrs        configStringList `yaml:"announce_addrs"`
-	AnnounceDNS          configStringList `yaml:"announce_dns"`
-	PublishFromEndpoints *bool            `yaml:"publish_from_endpoints"`
+	Accept                  string           `yaml:"accept"`
+	Driver                  string           `yaml:"driver"`
+	VICISocket              string           `yaml:"vici_socket"`
+	PortMode                string           `yaml:"port_mode"`
+	PortRange               ipsec.PortRange  `yaml:"port_range"`
+	PortRotateInterval      string           `yaml:"port_rotate_interval"`
+	PortPreviousGrace       string           `yaml:"port_previous_grace"`
+	AnnounceAddrs           configStringList `yaml:"announce_addrs"`
+	AnnounceDNS             configStringList `yaml:"announce_dns"`
+	AnnounceGossipEndpoints *bool            `yaml:"announce_gossip_endpoints"`
 }
 
 type ipamConfig struct {
@@ -279,7 +274,7 @@ func loadAppConfig() (*appConfig, error) {
 func defaultAppConfig() *appConfig {
 	return &appConfig{
 		DataDir:             defaultDataDir,
-		ListenPort:          gossip.DefaultPort,
+		ListenAddr:          fmt.Sprintf("[::]:%d", gossip.DefaultPort),
 		MaxMessageBytes:     gossip.DefaultMaxMessage,
 		MaxSyncZones:        gossip.DefaultSyncLimits().MaxZones,
 		MaxSyncRecords:      gossip.DefaultSyncLimits().MaxRecords,
@@ -294,13 +289,13 @@ func defaultAppConfig() *appConfig {
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
 		IPsec: ipsecConfig{
-			DefaultNetNS:         ipsec.NetNSSpec{}.Normalized(),
-			Accept:               ipsec.AcceptBidirectional,
-			Driver:               ipsecDriverStrongSwan,
-			PortMode:             ipsec.PortModeFixed,
-			PortRotateInterval:   0,
-			PortPreviousGrace:    defaultIPsecPortPreviousGrace,
-			PublishFromEndpoints: true,
+			DefaultNetNS:            ipsec.NetNSSpec{}.Normalized(),
+			Accept:                  ipsec.AcceptBidirectional,
+			Driver:                  ipsecDriverStrongSwan,
+			PortMode:                ipsec.PortModeFixed,
+			PortRotateInterval:      0,
+			PortPreviousGrace:       defaultIPsecPortPreviousGrace,
+			AnnounceGossipEndpoints: true,
 		},
 		IPAM: ipamConfig{
 			AutoAnnounceAssignedIPs: false,
@@ -317,11 +312,8 @@ func normalizeAppConfig(config *appConfig) {
 	if config.StatePath == "" {
 		config.StatePath = filepath.Join(config.DataDir, defaultStateFile)
 	}
-	if config.ListenPort == 0 {
-		config.ListenPort = gossip.DefaultPort
-	}
 	if config.ListenAddr == "" {
-		config.ListenAddr = fmt.Sprintf("0.0.0.0:%d", config.ListenPort)
+		config.ListenAddr = fmt.Sprintf("[::]:%d", gossip.DefaultPort)
 	}
 	if config.MaxMessageBytes <= 0 {
 		config.MaxMessageBytes = gossip.DefaultMaxMessage
@@ -405,15 +397,6 @@ func applyGossipConfigYAML(config *appConfig, file gossipConfigYAML, prefix stri
 	}
 	config.PeerID = firstNonEmpty(file.PeerID, config.PeerID)
 	config.ListenAddr = firstNonEmpty(file.ListenAddr, config.ListenAddr)
-	if file.ListenPort != nil {
-		if *file.ListenPort <= 0 || *file.ListenPort > 65535 {
-			return fmt.Errorf("invalid %slisten_port: %d", prefix, *file.ListenPort)
-		}
-		config.ListenPort = *file.ListenPort
-		if config.ListenAddr == "" {
-			config.ListenAddr = fmt.Sprintf("0.0.0.0:%d", *file.ListenPort)
-		}
-	}
 	config.Bootstrap = append(config.Bootstrap, file.Bootstrap...)
 	if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxDatagramBytes, prefix+"max_datagram_bytes"); err != nil {
 		return err
@@ -513,13 +496,6 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 	}
 	config.Reflectors = gossip.ResolvePublicIPReflectors(config.Reflectors)
-	if netnsConfigured(file.IPsec.DefaultNetNS) {
-		netns := file.IPsec.DefaultNetNS.Normalized()
-		if err := netns.Validate(); err != nil {
-			return fmt.Errorf("ipsec.default_netns: %w", err)
-		}
-		config.Overlay.DefaultNetNS = netns
-	}
 	if file.IPsec.Driver != "" {
 		driver, err := parseIPsecDriver(file.IPsec.Driver)
 		if err != nil {
@@ -568,22 +544,17 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	}
 	config.IPsec.AnnounceAddrs = append(config.IPsec.AnnounceAddrs, file.IPsec.AnnounceAddrs...)
 	config.IPsec.AnnounceDNS = append(config.IPsec.AnnounceDNS, file.IPsec.AnnounceDNS...)
-	if file.IPsec.PublishFromEndpoints != nil {
-		config.IPsec.PublishFromEndpoints = *file.IPsec.PublishFromEndpoints
-	}
-	if netnsConfigured(file.Overlay.DefaultNetNS) {
-		netns := file.Overlay.DefaultNetNS.Normalized()
-		if err := netns.Validate(); err != nil {
-			return fmt.Errorf("overlay.default_netns: %w", err)
-		}
-		config.Overlay.DefaultNetNS = netns
+	if file.IPsec.AnnounceGossipEndpoints != nil {
+		config.IPsec.AnnounceGossipEndpoints = *file.IPsec.AnnounceGossipEndpoints
 	}
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
-	// Parse top-level netns section, falling back to legacy overlay.default_netns.
-	config.Netns = parseNetnsConfig(file.Netns, config.Overlay.DefaultNetNS)
+	var err error
+	config.Netns, err = parseNetnsConfig(file.Netns, config.Overlay.DefaultNetNS)
+	if err != nil {
+		return err
+	}
 	// Parse routing.instances[], if any.
 	if file.Routing != nil {
-		var err error
 		config.Routing, err = parseRoutingConfigInstances(file.Routing.Instances, config.Netns, config.DataDir)
 		if err != nil {
 			return err

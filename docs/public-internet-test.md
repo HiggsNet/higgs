@@ -136,7 +136,7 @@ root_key="<paste root_public_key>"
 docs/scripts/public-gossip-node.sh node-init \
   "$HOME/.higgs-public/node-a" \
   node-a.catofes. \
-  0.0.0.0:33434 \
+  "[::]:33434" \
   203.0.113.10:33434 \
   "$root_key" \
   catofes. 203.0.113.9:33435 \
@@ -154,7 +154,7 @@ root_key="<paste root_public_key>"
 docs/scripts/public-gossip-node.sh node-init \
   "$HOME/.higgs-public/node-b" \
   node-b.catofes. \
-  0.0.0.0:33434 \
+  "[::]:33434" \
   203.0.113.11:33434 \
   "$root_key" \
   catofes. 203.0.113.9:33435 \
@@ -297,7 +297,7 @@ docs/scripts/public-gossip-node.sh verify "$HOME/.higgs-public/node-b" node-a.ca
 docs/scripts/public-gossip-node.sh node-init \
   "$HOME/.higgs-public/node-b" \
   node-b.catofes. \
-  0.0.0.0:33434 \
+  "[::]:33434" \
   "" \
   "$root_key" \
   catofes. 203.0.113.9:33435 \

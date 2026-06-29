@@ -39,10 +39,8 @@ func TestParseObserverConfigDefault(t *testing.T) {
 }
 
 func TestParseObserverConfigEnabled(t *testing.T) {
-	port := 9090
 	cfg, err := parseObserverConfig(&observerConfigYAML{
-		BindAddr: "0.0.0.0",
-		Port:     &port,
+		Listen: "0.0.0.0:9090",
 	})
 	if err != nil {
 		t.Fatalf("parseObserverConfig error: %v", err)
@@ -90,21 +88,9 @@ func TestParseObserverConfigDisabled(t *testing.T) {
 	}
 }
 
-func TestParseObserverConfigRejectsMixedListenAndPort(t *testing.T) {
-	port := 8080
-	_, err := parseObserverConfig(&observerConfigYAML{
-		Listen: "127.0.0.1:9090",
-		Port:   &port,
-	})
-	if err == nil {
-		t.Error("expected error for mixed listen and port")
-	}
-}
-
 func TestParseObserverConfigInvalidPort(t *testing.T) {
-	port := 70000
 	_, err := parseObserverConfig(&observerConfigYAML{
-		Port: &port,
+		Listen: "127.0.0.1:70000",
 	})
 	if err == nil {
 		t.Error("expected error for invalid port")
