@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/netip"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -534,6 +535,83 @@ func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
 	}
 	if record.Addresses[1].Address != "198.51.100.20" || record.Addresses[1].Source != ipsec.SourceReflector {
 		t.Fatalf("second address unexpected: %+v", record.Addresses[1])
+	}
+}
+
+func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(5000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = "198.51.100.10:4500"
+	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords: %v", err)
+	}
+	key := ipsec.OverlayIntentRecordKey("main")
+	first := state.Network.Zones[state.ManagedZone].Records[key]
+	if first == nil {
+		t.Fatalf("overlay intent record missing")
+	}
+	firstIntent, err := ipsec.ParseOverlayIntentRecord(first)
+	if err != nil {
+		t.Fatalf("ParseOverlayIntentRecord: %v", err)
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	sr.State = latest
+	rt.Clock = func() time.Time { return now.Add(5 * time.Minute) }
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords(second): %v", err)
+	}
+	second := latest.Network.Zones[latest.ManagedZone].Records[key]
+	if second == nil {
+		t.Fatalf("overlay intent record missing after re-publish")
+	}
+	secondIntent, err := ipsec.ParseOverlayIntentRecord(second)
+	if err != nil {
+		t.Fatalf("ParseOverlayIntentRecord(second): %v", err)
+	}
+	if second.Timestamp != first.Timestamp {
+		t.Fatalf("overlay intent timestamp changed from %d to %d", first.Timestamp, second.Timestamp)
+	}
+	if secondIntent.UpdatedAt != firstIntent.UpdatedAt {
+		t.Fatalf("overlay intent updated_at changed from %d to %d", firstIntent.UpdatedAt, secondIntent.UpdatedAt)
+	}
+
+	appConfig.IPsec.LinkGroups[0].TunnelAddressSpec.Pool = netip.MustParsePrefix("10.45.0.0/29")
+	rt.Clock = func() time.Time { return now.Add(10 * time.Minute) }
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords(third): %v", err)
+	}
+	third := latest.Network.Zones[latest.ManagedZone].Records[key]
+	if third == nil {
+		t.Fatalf("overlay intent record missing after config change")
+	}
+	thirdIntent, err := ipsec.ParseOverlayIntentRecord(third)
+	if err != nil {
+		t.Fatalf("ParseOverlayIntentRecord(third): %v", err)
+	}
+	if third.Timestamp <= second.Timestamp {
+		t.Fatalf("overlay intent timestamp did not advance after config change: %d -> %d", second.Timestamp, third.Timestamp)
+	}
+	if thirdIntent.UpdatedAt <= secondIntent.UpdatedAt {
+		t.Fatalf("overlay intent updated_at did not advance after config change: %d -> %d", secondIntent.UpdatedAt, thirdIntent.UpdatedAt)
 	}
 }
 

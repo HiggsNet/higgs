@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -227,11 +228,11 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 		{key: ipsec.RecordKeyAddresses, recordType: ipsec.RecordTypeAddresses, value: addresses},
 		{key: ipsec.RecordKeyPorts, recordType: ipsec.RecordTypePorts, value: ports},
 	}
-	records = append(records, localIPsecOverlayIntentRecords(config, addresses, now)...)
+	records = append(records, localIPsecOverlayIntentRecords(config, state, addresses, now)...)
 	return records, nil
 }
 
-func localIPsecOverlayIntentRecords(config *appConfig, addresses ipsec.AddressRecord, now time.Time) []localIPsecRecord {
+func localIPsecOverlayIntentRecords(config *appConfig, state *stateFile, addresses ipsec.AddressRecord, now time.Time) []localIPsecRecord {
 	if config == nil {
 		return nil
 	}
@@ -254,6 +255,12 @@ func localIPsecOverlayIntentRecords(config *appConfig, addresses ipsec.AddressRe
 			TunnelAddress: group.TunnelAddressSpec,
 			UpdatedAt:     now.Unix(),
 		}
+		// Preserve the existing timestamp when the overlay intent has not
+		// actually changed. Otherwise the record would be re-published on every
+		// reconcile cycle just because UpdatedAt moved forward.
+		if existing := existingOverlayIntentRecord(state, group.ID); existing != nil && overlayIntentContentEqual(existing, &intent) {
+			intent.UpdatedAt = existing.UpdatedAt
+		}
 		out = append(out, localIPsecRecord{
 			key:        ipsec.OverlayIntentRecordKey(group.ID),
 			recordType: ipsec.RecordTypeOverlayIntent,
@@ -261,6 +268,44 @@ func localIPsecOverlayIntentRecords(config *appConfig, addresses ipsec.AddressRe
 		})
 	}
 	return out
+}
+
+func existingOverlayIntentRecord(state *stateFile, overlayID string) *ipsec.OverlayIntentRecord {
+	if state == nil || state.Network == nil || !state.ManagedZone.Valid() {
+		return nil
+	}
+	zs := state.Network.Zones[state.ManagedZone]
+	if zs == nil {
+		return nil
+	}
+	record := zs.Records[ipsec.OverlayIntentRecordKey(overlayID)]
+	if record == nil {
+		return nil
+	}
+	intent, err := ipsec.ParseOverlayIntentRecord(record)
+	if err != nil {
+		return nil
+	}
+	return intent
+}
+
+func overlayIntentContentEqual(a, b *ipsec.OverlayIntentRecord) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Version != b.Version || a.OverlayID != b.OverlayID || a.Provider != b.Provider {
+		return false
+	}
+	if !slices.Equal(a.PathKeys, b.PathKeys) {
+		return false
+	}
+	if a.TunnelAddress != b.TunnelAddress {
+		return false
+	}
+	if !slices.Equal(a.PolicyTags, b.PolicyTags) {
+		return false
+	}
+	return true
 }
 
 func localOverlayIntentPathKeys(group ipsec.LinkGroupSpec, families []string) []string {
