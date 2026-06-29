@@ -120,6 +120,7 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 		"remote_addrs": []string{remoteAddr},
 		"encap":        "yes",
 		"mobike":       "no",
+		"unique":       "never",
 		"local": map[string]any{
 			"auth": StrongSwanAuthPubkey,
 			"id":   localIdentity(spec),

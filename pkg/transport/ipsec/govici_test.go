@@ -117,7 +117,7 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	if !ok {
 		t.Fatalf("connection missing from call input: %#v", session.callIn)
 	}
-	if conn["version"] != "2" || conn["remote_port"] != "4500" || conn["encap"] != "yes" || conn["mobike"] != "no" {
+	if conn["version"] != "2" || conn["remote_port"] != "4500" || conn["encap"] != "yes" || conn["mobike"] != "no" || conn["unique"] != "never" {
 		t.Fatalf("connection scalar fields = %#v", conn)
 	}
 	children, ok := conn["children"].(map[string]any)
@@ -216,7 +216,7 @@ func TestStrongSwanDriverLogsVICILoadConnectionConfig(t *testing.T) {
 	if !ok || configJSON == "" {
 		t.Fatalf("config_json = %#v", gotFields["config_json"])
 	}
-	for _, want := range []string{spec.TransportID, `"remote_port":"4500"`, `"encap":"yes"`, `"mobike":"no"`, ChildSAName(spec)} {
+	for _, want := range []string{spec.TransportID, `"remote_port":"4500"`, `"encap":"yes"`, `"mobike":"no"`, `"unique":"never"`, ChildSAName(spec)} {
 		if !strings.Contains(configJSON, want) {
 			t.Fatalf("config_json missing %q: %s", want, configJSON)
 		}

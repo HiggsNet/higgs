@@ -840,6 +840,9 @@ func TestBuildStrongSwanConnectionUsesRouteBasedChildSA(t *testing.T) {
 	if conn["remote_port"] != "4500" {
 		t.Fatalf("remote_port = %v", conn["remote_port"])
 	}
+	if conn["unique"] != "never" {
+		t.Fatalf("unique = %v, want never", conn["unique"])
+	}
 	children := conn["children"].(map[string]any)
 	child := children["ipsec-main-child"].(map[string]any)
 	if child["mode"] != StrongSwanChildMode || child["if_id_in"] != "77" || child["if_id_out"] != "77" {

@@ -75,6 +75,7 @@ type LinkInstance struct {
 	ActualState         string
 	InterfaceName       string
 	XFRMIfID            uint32
+	IKEName             string
 	ChildSAName         string
 	Endpoint            string
 	RemoteGeneration    uint64
@@ -257,7 +258,7 @@ func BuildLinks(input LinkInput) LinkInspection {
 }
 
 func linkSAForView(id string, inst LinkInstance, desired DesiredLink, sas map[string]*LinkSA) *LinkSA {
-	for _, key := range []string{id, inst.TransportID, inst.ChildSAName, desired.TransportID} {
+	for _, key := range []string{id, inst.IKEName, inst.ChildSAName, inst.TransportID, desired.TransportID} {
 		if key == "" {
 			continue
 		}

@@ -440,8 +440,8 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		}
 		if sa.Established && existing.ActualState != LinkStateUp {
 			inst := existing
+			inst = syncInstanceRuntimeFromSA(inst, sa)
 			inst.ActualState = LinkStateUp
-			inst.Endpoint = sa.Endpoint
 			inst.FailureCount = 0
 			inst.BackoffUntil = 0
 			inst.LastError = ""
@@ -449,6 +449,15 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			result.Instances[id] = inst
 			result.add(ReconcileActionAdopt, &spec, &inst, "driver state recovered")
 			continue
+		}
+		if sa.Established {
+			inst := syncInstanceRuntimeFromSA(existing, sa)
+			if instanceRuntimeChanged(existing, inst) {
+				inst.LastTransition = now.Unix()
+				result.Instances[id] = inst
+				result.add(ReconcileActionAdopt, &spec, &inst, "driver runtime metadata recovered")
+				continue
+			}
 		}
 		if inLinkBackoff(existing, now) {
 			result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
@@ -511,27 +520,33 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 
 func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, rotateCutover map[string]bool, now time.Time) {
 	policy := groupBackoffForSpec(spec, groupBackoff)
+	if exists {
+		desiredGen := contactGeneration(spec)
+		if existing.RemoteGeneration == 0 {
+			existing.RemoteGeneration = desiredGen
+		}
+		if existing.RemoteGeneration != desiredGen && (sa.Established || existing.StagedGeneration != 0 || existing.RotatePhase != RotatePhaseIdle) {
+			rotateRole := InitiatorRoleSecondaryStandby
+			if existing.InitiatorRole == InitiatorRoleSecondaryTakeover {
+				rotateRole = InitiatorRoleSecondaryTakeover
+			}
+			r.handleRotate(id, spec, existing, sas, rotateRetentionForSpec(spec, groupRotateRetention), rotateCutoverReady(id, rotateCutover), now, rotateRole)
+			return
+		}
+	}
 	if sa.Established {
 		if exists {
 			desiredGen := contactGeneration(spec)
 			if existing.RemoteGeneration == 0 {
 				existing.RemoteGeneration = desiredGen
 			}
-			if existing.RemoteGeneration != desiredGen {
-				rotateRole := InitiatorRoleSecondaryStandby
-				if existing.InitiatorRole == InitiatorRoleSecondaryTakeover {
-					rotateRole = InitiatorRoleSecondaryTakeover
-				}
-				r.handleRotate(id, spec, existing, sas, rotateRetentionForSpec(spec, groupRotateRetention), rotateCutoverReady(id, rotateCutover), now, rotateRole)
-				return
-			}
 		}
 		inst := existing
 		if !exists {
 			inst = NewLinkInstance(spec, LinkStateUp, now)
 		}
+		inst = syncInstanceRuntimeFromSA(inst, sa)
 		inst.ActualState = LinkStateUp
-		inst.Endpoint = sa.Endpoint
 		inst.DesiredSpecHash = TransportLinkSpecHash(spec)
 		inst.InitiatorRole = InitiatorRoleConverged
 		inst.TakeoverPhase = TakeoverPhaseIdle
@@ -814,6 +829,31 @@ func MarkLinkApplySuccess(inst LinkInstance, now time.Time) LinkInstance {
 	inst.LastError = ""
 	inst.LastTransition = now.Unix()
 	return inst
+}
+
+func syncInstanceRuntimeFromSA(inst LinkInstance, sa SAState) LinkInstance {
+	if sa.Name != "" {
+		inst.IKEName = sa.Name
+	}
+	if inst.ChildSAName == "" && sa.ChildSA != "" {
+		inst.ChildSAName = sa.ChildSA
+	}
+	if sa.XFRMIfID != 0 {
+		inst.XFRMIfID = sa.XFRMIfID
+		inst.InterfaceName = StableInterfaceName(sa.XFRMIfID)
+	}
+	if sa.Endpoint != "" {
+		inst.Endpoint = sa.Endpoint
+	}
+	return inst
+}
+
+func instanceRuntimeChanged(a, b LinkInstance) bool {
+	return a.IKEName != b.IKEName ||
+		a.ChildSAName != b.ChildSAName ||
+		a.XFRMIfID != b.XFRMIfID ||
+		a.InterfaceName != b.InterfaceName ||
+		a.Endpoint != b.Endpoint
 }
 
 func nextLinkBackoff(policy BackoffPolicy, failureCount int) time.Duration {

@@ -562,6 +562,121 @@ func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) 
 	}
 }
 
+func TestReconcileSecondaryConvergedCommitsRotateWhenOldSADisappears(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-a.catofes."].Records[RecordKeyPorts] = record(t, "node-a.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: DefaultIKEPort},
+			NATT:       PortBinding{Advertised: 4501},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	group := LinkGroupSpec{ID: "ipsec-main"}
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 || plan.Roles[plan.Desired[0].TransportID] != InitiatorRoleSecondaryStandby {
+		t.Fatalf("expected one secondary-standby desired spec: %+v", plan)
+	}
+	newSpec := plan.Desired[0]
+	newSpec.Generation = 2
+	stagedSpec := rotateSpecForRole(newSpec, 2, InitiatorRoleSecondaryStandby)
+
+	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing.RemoteGeneration = 1
+	existing.InitiatorRole = InitiatorRoleConverged
+	existing.StagedGeneration = 2
+	existing.StagedIKEName = stagedSpec.TransportID
+	existing.StagedChildSAName = ChildSAName(stagedSpec)
+	existing.StagedInterfaceName = stagedSpec.InterfaceName
+	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.RotatePhase = RotatePhaseTestingNew
+	existing.RotateDeadline = now.Add(-time.Minute).Unix()
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{newSpec},
+		Instances:    map[string]LinkInstance{existing.ID: existing},
+		SAs:          []SAState{{Name: existing.StagedIKEName, Established: true, Endpoint: "198.51.100.20:4501"}},
+		Now:          now,
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+
+	action := firstAction(result, ReconcileActionCommitRotate)
+	if action == nil {
+		t.Fatalf("expected commit_rotate when secondary old SA disappeared, got %+v", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.RemoteGeneration != 2 || inst.StagedGeneration != 0 || inst.IKEName != stagedSpec.TransportID {
+		t.Fatalf("instance not promoted to staged generation: %+v", inst)
+	}
+	if inst.InterfaceName != stagedSpec.InterfaceName || inst.XFRMIfID != stagedSpec.XFRMIfID {
+		t.Fatalf("staged xfrm not promoted: %+v", inst)
+	}
+}
+
+func TestReconcileRecoversRotatedRuntimeMetadataFromSA(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		LinkID:        "link-stable",
+		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
+		InterfaceName: "hgs-old",
+		XFRMIfID:      1001,
+		Generation:    2,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 2,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	stagedSpec := rotateSpec(spec, 2)
+	existing := NewLinkInstance(spec, LinkStateUp, now)
+	existing.RemoteGeneration = 2
+	existing.IKEName = stagedSpec.TransportID
+	existing.ChildSAName = ChildSAName(stagedSpec)
+	existing.InterfaceName = spec.InterfaceName
+	existing.XFRMIfID = spec.XFRMIfID
+	existing.DesiredSpecHash = TransportLinkSpecHash(spec)
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{{
+			Name:        stagedSpec.TransportID,
+			ChildSA:     ChildSAName(stagedSpec),
+			XFRMIfID:    stagedSpec.XFRMIfID,
+			Endpoint:    "198.51.100.20:4500",
+			Established: true,
+		}},
+		Now: now,
+	})
+
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionAdopt || result.Actions[0].Reason != "driver runtime metadata recovered" {
+		t.Fatalf("expected runtime metadata recovery adopt, got %+v", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.InterfaceName != stagedSpec.InterfaceName || inst.XFRMIfID != stagedSpec.XFRMIfID {
+		t.Fatalf("runtime metadata not recovered: %+v, want interface %s if_id %d", inst, stagedSpec.InterfaceName, stagedSpec.XFRMIfID)
+	}
+}
+
 func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

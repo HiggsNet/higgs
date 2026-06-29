@@ -75,3 +75,26 @@ func TestBuildLinksShowsMissingPlannedLinksWhenNoInstancesExist(t *testing.T) {
 		t.Fatalf("link = %+v, want missing planned link", link)
 	}
 }
+
+func TestBuildLinksMatchesRotatedRuntimeSAByIKEName(t *testing.T) {
+	got := BuildLinks(LinkInput{
+		Instances: []LinkInstance{{
+			ID:          "link-a",
+			TransportID: "ipsec-base",
+			IKEName:     "ipsec-base-r2",
+			ActualState: "up",
+		}},
+		ActualSAs: []LinkSA{{
+			Name:        "ipsec-base-r2",
+			ChildSA:     "ipsec-base-r2-child",
+			Established: true,
+		}},
+	})
+
+	if len(got.Links) != 1 {
+		t.Fatalf("links = %d, want 1", len(got.Links))
+	}
+	if got.Links[0].ActualSA == nil || got.Links[0].ActualSA.Name != "ipsec-base-r2" {
+		t.Fatalf("actual sa = %+v, want rotated runtime SA", got.Links[0].ActualSA)
+	}
+}

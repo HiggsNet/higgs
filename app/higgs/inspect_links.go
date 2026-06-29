@@ -71,6 +71,7 @@ func inspectLinkInstance(rt *Runtime, state *stateFile, inst linkInstanceState) 
 		ActualState:         inst.ActualState,
 		InterfaceName:       inst.InterfaceName,
 		XFRMIfID:            inst.XFRMIfID,
+		IKEName:             inst.IKEName,
 		ChildSAName:         inst.ChildSAName,
 		Endpoint:            inst.Endpoint,
 		RemoteGeneration:    inst.RemoteGeneration,
