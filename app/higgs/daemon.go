@@ -53,10 +53,11 @@ type DaemonService struct {
 	stateUnlock func()
 
 	// Test overrides for BIRD routing reconcile.
-	birdProcessManager birdProcessManager
-	birdClientFactory  func(socketPath string, timeout time.Duration) birdClient
-	vethManager        vethManager
-	firewallDriver     firewallDriver
+	birdProcessManager  birdProcessManager
+	birdProcessManagers map[string]birdProcessManager
+	birdClientFactory   func(socketPath string, timeout time.Duration) birdClient
+	vethManager         vethManager
+	firewallDriver      firewallDriver
 }
 
 type DaemonHooks struct {

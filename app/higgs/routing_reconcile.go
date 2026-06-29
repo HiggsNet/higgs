@@ -239,7 +239,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 
 		pm := d.birdProcessManager
 		if pm == nil {
-			pm = bird.NewExecProcessManager("")
+			pm = d.routingProcessManagerForNetNS(netnsName)
 		}
 		if !pm.IsRunning(ctx) {
 			if err := pm.Start(ctx, spec); err != nil {
@@ -285,6 +285,18 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 		instState.LastError = ""
 	}
 	return nil
+}
+
+func (d *DaemonService) routingProcessManagerForNetNS(netnsName string) birdProcessManager {
+	if d.birdProcessManagers == nil {
+		d.birdProcessManagers = make(map[string]birdProcessManager)
+	}
+	pm := d.birdProcessManagers[netnsName]
+	if pm == nil {
+		pm = bird.NewExecProcessManager("")
+		d.birdProcessManagers[netnsName] = pm
+	}
+	return pm
 }
 
 func (d *DaemonService) newBirdClient(socketPath string) birdClient {

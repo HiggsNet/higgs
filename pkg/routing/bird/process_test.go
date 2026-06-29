@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,33 @@ func TestExecProcessManagerStartRejectsNonManagedModes(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error for mode %q", mode)
 		}
+	}
+}
+
+func TestExecProcessManagerStartAdoptsExistingPidfile(t *testing.T) {
+	tmp := t.TempDir()
+	mr := &mockRunner{}
+	pm := NewExecProcessManager(fakeBirdBinary(t))
+	pm.runner = mr.run
+
+	spec := managedSpec(tmp)
+	spec.NetNS = NetNSSpec{Kind: "host"}
+
+	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
+		t.Fatalf("write socket: %v", err)
+	}
+	if err := os.WriteFile(spec.PIDFilePath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		t.Fatalf("write pidfile: %v", err)
+	}
+
+	if err := pm.Start(context.Background(), spec); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if pm.pid != os.Getpid() {
+		t.Fatalf("adopted pid = %d, want %d", pm.pid, os.Getpid())
+	}
+	if len(mr.cmds) != 0 {
+		t.Fatalf("expected no process spawn after adopt, got %+v", mr.cmds)
 	}
 }
 

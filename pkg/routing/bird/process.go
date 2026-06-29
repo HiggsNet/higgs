@@ -78,6 +78,10 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 		return err
 	}
 
+	if pm.adoptExisting(spec) {
+		return nil
+	}
+
 	args := []string{
 		"-c", spec.ConfigPath,
 		"-s", spec.ControlSocketPath,
@@ -190,6 +194,21 @@ func (pm *ExecProcessManager) resolveBinary() (string, error) {
 		return pm.birdBinary, nil
 	}
 	return findBirdBinary()
+}
+
+func (pm *ExecProcessManager) adoptExisting(spec BirdInstanceSpec) bool {
+	pid, err := readPidFile(spec.PIDFilePath)
+	if err != nil || pid <= 0 {
+		return false
+	}
+	if !processIsRunning(pid) || !fileExists(spec.ControlSocketPath) {
+		return false
+	}
+	pm.mu.Lock()
+	pm.pid = pid
+	pm.spec = spec
+	pm.mu.Unlock()
+	return true
 }
 
 func (pm *ExecProcessManager) resetState() {
