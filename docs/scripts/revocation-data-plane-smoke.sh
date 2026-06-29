@@ -20,9 +20,21 @@ dump_diagnostics() {
   ip link show type xfrm >&2 || true
   ip xfrm state >&2 || true
   ip xfrm policy >&2 || true
-  nft list ruleset >&2 || true
-  iptables -S >&2 || true
-  swanctl --list-sas >&2 || true
+  if command -v nft >/dev/null 2>&1; then
+    nft list ruleset >&2 || true
+  else
+    printf '[skip] nft diagnostics: command not found\n' >&2
+  fi
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -S >&2 || true
+  else
+    printf '[skip] iptables diagnostics: command not found\n' >&2
+  fi
+  if command -v swanctl >/dev/null 2>&1; then
+    swanctl --list-sas >&2 || true
+  else
+    printf '[skip] swanctl diagnostics: command not found\n' >&2
+  fi
 }
 
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then dump_diagnostics; fi; exit "$rc"' EXIT
