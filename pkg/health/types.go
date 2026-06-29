@@ -26,6 +26,7 @@ const (
 // ProbeTarget describes the target of a health probe for a single link
 // generation. It is derived from LinkInstance and TransportLinkSpec.
 type ProbeTarget struct {
+	ProbeID         string
 	InstanceID      string
 	GroupID         string
 	PeerZone        string
@@ -36,6 +37,7 @@ type ProbeTarget struct {
 	LocalTunnelAddr netip.Addr
 	PeerTunnelAddr  netip.Addr
 	Generation      uint64
+	ProbeRole       string
 	Role            string
 	State           string // LinkInstance state (connecting/up/degraded/...)
 	Staged          bool
@@ -107,16 +109,21 @@ type MetricsLabels struct {
 	LocalZone  string
 	PeerZone   string
 	Overlay    string
+	ProbeID    string
 	InstanceID string
 	NetNS      string
 	Generation string
+	ProbeRole  string
 	ProbeType  string
 	Reason     string
 }
 
 // LinkHealth is the computed health snapshot for a link.
 type LinkHealth struct {
+	ProbeID         string
 	InstanceID      string
+	ProbeRole       string
+	InterfaceName   string
 	State           string
 	ProbeType       string
 	Sent            int

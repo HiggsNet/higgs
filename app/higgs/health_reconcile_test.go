@@ -44,6 +44,49 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 	}
 }
 
+func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
+	state := &stateFile{
+		ManagedZone: zone.ZonePath("node-a.catofes."),
+		LinkInstances: map[string]linkInstanceState{
+			"link-1": {
+				ActualState:         "up",
+				InterfaceName:       "hgs-old",
+				StagedGeneration:    2,
+				RotatePhase:         "testing_new",
+				StagedInterfaceName: "hgs-new",
+			},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         "blue",
+				PeerZone:        zone.ZonePath("node-b.catofes."),
+				InterfaceName:   "hgs-desired",
+				LocalTunnelAddr: "fe80::1%hgs-desired netns=h2",
+				PeerTunnelAddr:  "fe80::2%hgs-desired netns=h2",
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(state.ManagedZone))
+	if len(targets) != 2 {
+		t.Fatalf("targets = %d, want 2", len(targets))
+	}
+	byRole := map[string]health.ProbeTarget{}
+	for _, target := range targets {
+		byRole[target.ProbeRole] = target
+	}
+	if old := byRole["old"]; old.InterfaceName != "hgs-old" || old.ProbeID != "link-1#old" || old.Staged {
+		t.Fatalf("old target = %+v, want old interface without staged flag", old)
+	}
+	if staged := byRole["staged"]; staged.InterfaceName != "hgs-new" || staged.ProbeID != "link-1#staged" || !staged.Staged {
+		t.Fatalf("staged target = %+v, want staged interface", staged)
+	}
+	if staged := byRole["staged"]; staged.State != "up" {
+		t.Fatalf("staged target state = %q, want up", staged.State)
+	}
+}
+
 func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 	cfg := defaultHealthConfig()
 	cfg.Enabled = true
@@ -137,5 +180,62 @@ func TestHealthLocalSpoolQuerySeries(t *testing.T) {
 	}
 	if got := series.Points[1].Value; got != 20 {
 		t.Fatalf("latest rtt point = %v, want 20", got)
+	}
+}
+
+func TestHealthLocalSpoolQueryKeepsRotateProbeLines(t *testing.T) {
+	cfg := defaultHealthConfig()
+	cfg.MetricsEnabled = true
+	cfg.LocalSpoolPath = t.TempDir()
+	cfg.LocalSpoolMaxAge = time.Hour
+	appCfg := &appConfig{Health: cfg}
+	now := time.Unix(4000, 0)
+	d := &DaemonService{
+		Sync: &SyncRuntime{
+			App: &Runtime{Config: appCfg},
+		},
+	}
+	if err := d.appendHealthSpool(now, []healthLinkJSON{
+		{
+			ProbeID:    "link-1#old",
+			InstanceID: "link-1",
+			ProbeRole:  "old",
+			State:      "healthy",
+			ProbeType:  "icmp",
+			LastRTTMs:  30,
+		},
+		{
+			ProbeID:    "link-1#staged",
+			InstanceID: "link-1",
+			ProbeRole:  "staged",
+			State:      "healthy",
+			ProbeType:  "icmp",
+			LastRTTMs:  12,
+		},
+	}); err != nil {
+		t.Fatalf("appendHealthSpool: %v", err)
+	}
+
+	series, err := queryHealthSpoolSeries(appCfg, "link-1", healthSeriesQuery{
+		Metric: "rtt",
+		Range:  time.Minute,
+		Step:   time.Minute,
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("queryHealthSpoolSeries: %v", err)
+	}
+	if len(series.Lines) != 2 {
+		t.Fatalf("lines = %#v, want old and staged", series.Lines)
+	}
+	got := map[string]float64{}
+	for _, line := range series.Lines {
+		if len(line.Points) != 1 {
+			t.Fatalf("line %#v points = %d, want 1", line, len(line.Points))
+		}
+		got[line.ProbeRole] = line.Points[0].Value
+	}
+	if got["old"] != 30 || got["staged"] != 12 {
+		t.Fatalf("line values = %#v, want old=30 staged=12", got)
 	}
 }

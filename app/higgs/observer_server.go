@@ -823,16 +823,6 @@ func observerRuntime(d *DaemonService) *Runtime {
 	return d.Sync.App
 }
 
-func healthJSONByInstanceID(links []healthLinkJSON) map[string]healthLinkJSON {
-	out := make(map[string]healthLinkJSON, len(links))
-	for _, link := range links {
-		if link.InstanceID != "" {
-			out[link.InstanceID] = link
-		}
-	}
-	return out
-}
-
 func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) []map[string]any {
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		out := make([]map[string]any, 0, len(links))
@@ -841,7 +831,6 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) []map[stri
 		}
 		return out
 	}
-	byID := healthJSONByInstanceID(links)
 	state := d.Sync.State
 	state.RLock()
 	defer state.RUnlock()
@@ -850,53 +839,68 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) []map[stri
 	if reconcile != nil {
 		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
+	healthBaseIDs := map[string]bool{}
+	out := make([]map[string]any, 0, len(links)+len(state.LinkInstances))
+	for _, health := range links {
+		if health.InstanceID == "" {
+			continue
+		}
+		healthBaseIDs[health.InstanceID] = true
+		out = append(out, healthContextItem(health, state.LinkInstances[health.InstanceID], desiredByID[health.InstanceID]))
 	}
+	ids := make([]string, 0, len(state.LinkInstances))
 	for id := range state.LinkInstances {
-		if _, ok := byID[id]; !ok {
+		if !healthBaseIDs[id] {
 			ids = append(ids, id)
 		}
 	}
 	sort.Strings(ids)
-	out := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
-		health, hasHealth := byID[id]
-		if !hasHealth {
-			health = healthLinkJSON{
-				InstanceID: id,
-				State:      "unknown",
-			}
+		health := healthLinkJSON{
+			InstanceID: id,
+			State:      "unknown",
 		}
-		inst, hasInst := state.LinkInstances[id]
-		desired, hasDesired := desiredByID[id]
-		item := map[string]any{"health": health}
-		if hasInst {
-			item["instance"] = inst
-			item["peer_zone"] = inst.PeerZone
-			item["group_id"] = inst.GroupID
-			item["interface_name"] = inst.InterfaceName
-			item["endpoint"] = inst.Endpoint
-			item["actual_state"] = inst.ActualState
-		}
-		if hasDesired {
-			item["desired"] = desired
-			if _, ok := item["peer_zone"]; !ok {
-				item["peer_zone"] = desired.PeerZone
-			}
-			if _, ok := item["group_id"]; !ok {
-				item["group_id"] = desired.GroupID
-			}
-			if _, ok := item["interface_name"]; !ok {
-				item["interface_name"] = desired.InterfaceName
-			}
-			item["local_tunnel_addr"] = desired.LocalTunnelAddr
-			item["peer_tunnel_addr"] = desired.PeerTunnelAddr
-		}
-		out = append(out, item)
+		out = append(out, healthContextItem(health, state.LinkInstances[id], desiredByID[id]))
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		hi := out[i]["health"].(healthLinkJSON)
+		hj := out[j]["health"].(healthLinkJSON)
+		if hi.InstanceID != hj.InstanceID {
+			return hi.InstanceID < hj.InstanceID
+		}
+		return hi.ProbeRole < hj.ProbeRole
+	})
 	return out
+}
+
+func healthContextItem(health healthLinkJSON, inst linkInstanceState, desired desiredLinkState) map[string]any {
+	item := map[string]any{"health": health}
+	if inst.ID != "" {
+		item["instance"] = inst
+		item["peer_zone"] = inst.PeerZone
+		item["group_id"] = inst.GroupID
+		item["interface_name"] = firstNonEmpty(health.InterfaceName, inst.InterfaceName)
+		item["endpoint"] = inst.Endpoint
+		item["actual_state"] = inst.ActualState
+	}
+	if desired.InstanceID != "" {
+		item["desired"] = desired
+		if _, ok := item["peer_zone"]; !ok {
+			item["peer_zone"] = desired.PeerZone
+		}
+		if _, ok := item["group_id"]; !ok {
+			item["group_id"] = desired.GroupID
+		}
+		if _, ok := item["interface_name"]; !ok {
+			item["interface_name"] = firstNonEmpty(health.InterfaceName, desired.InterfaceName)
+		}
+		item["local_tunnel_addr"] = desired.LocalTunnelAddr
+		item["peer_tunnel_addr"] = desired.PeerTunnelAddr
+	}
+	if _, ok := item["interface_name"]; !ok && health.InterfaceName != "" {
+		item["interface_name"] = health.InterfaceName
+	}
+	return item
 }
 
 func (p *observerProvider) Health(linkFilter string) (any, error) {
@@ -906,7 +910,7 @@ func (p *observerProvider) Health(linkFilter string) (any, error) {
 	// Single link health detail
 	if linkFilter != "" {
 		for _, item := range contextualLinks {
-			if h, ok := item["health"].(healthLinkJSON); ok && h.InstanceID == linkFilter {
+			if h, ok := item["health"].(healthLinkJSON); ok && (h.InstanceID == linkFilter || h.ProbeID == linkFilter) {
 				return item, nil
 			}
 		}
@@ -932,10 +936,11 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
 	result, err := queryHealthSpoolSeries(config, linkID, healthSeriesQuery{
-		Metric: query["metric"],
-		Range:  rng,
-		Step:   step,
-		Now:    observerNow(p.daemon),
+		Metric:    query["metric"],
+		ProbeRole: query["probe_role"],
+		Range:     rng,
+		Step:      step,
+		Now:       observerNow(p.daemon),
 	})
 	if errors.Is(err, errHealthSpoolNotConfigured) {
 		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not_configured")

@@ -80,7 +80,10 @@ type controlResponse struct {
 // control API. It keeps time.Duration fields as millisecond integers for
 // compact serialization.
 type healthLinkJSON struct {
+	ProbeID         string `json:"probe_id,omitempty"`
 	InstanceID      string `json:"instance_id"`
+	ProbeRole       string `json:"probe_role,omitempty"`
+	InterfaceName   string `json:"interface_name,omitempty"`
 	State           string `json:"state"`
 	ProbeType       string `json:"probe_type"`
 	Sent            int    `json:"sent"`
@@ -101,7 +104,10 @@ type healthLinkJSON struct {
 
 func healthLinkJSONFromHealth(h healthLinkHealthView) healthLinkJSON {
 	return healthLinkJSON{
+		ProbeID:         h.ProbeID,
 		InstanceID:      h.InstanceID,
+		ProbeRole:       h.ProbeRole,
+		InterfaceName:   h.InterfaceName,
 		State:           h.State,
 		ProbeType:       h.ProbeType,
 		Sent:            h.Sent,
@@ -124,7 +130,10 @@ func healthLinkJSONFromHealth(h healthLinkHealthView) healthLinkJSON {
 // healthLinkHealthView is a local view type used to convert health.LinkHealth
 // without importing pkg/health in control.go (kept for layered imports).
 type healthLinkHealthView struct {
+	ProbeID         string
 	InstanceID      string
+	ProbeRole       string
+	InterfaceName   string
 	State           string
 	ProbeType       string
 	Sent            int

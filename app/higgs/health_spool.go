@@ -17,21 +17,30 @@ const healthSpoolSamplesFile = "samples.jsonl"
 var errHealthSpoolNotConfigured = errors.New("health local spool not configured")
 
 type healthSpoolSample struct {
-	UnixMs       int64  `json:"unix_ms"`
-	InstanceID   string `json:"instance_id"`
-	State        string `json:"state"`
-	ProbeType    string `json:"probe_type,omitempty"`
-	RTTMs        int64  `json:"rtt_ms,omitempty"`
-	LossRatioPct int    `json:"loss_ratio_pct"`
-	JitterMs     int64  `json:"jitter_ms,omitempty"`
-	Sent         int    `json:"sent,omitempty"`
-	Received     int    `json:"received,omitempty"`
-	Lost         int    `json:"lost,omitempty"`
+	UnixMs        int64  `json:"unix_ms"`
+	ProbeID       string `json:"probe_id,omitempty"`
+	InstanceID    string `json:"instance_id"`
+	ProbeRole     string `json:"probe_role,omitempty"`
+	InterfaceName string `json:"interface_name,omitempty"`
+	State         string `json:"state"`
+	ProbeType     string `json:"probe_type,omitempty"`
+	RTTMs         int64  `json:"rtt_ms,omitempty"`
+	LossRatioPct  int    `json:"loss_ratio_pct"`
+	JitterMs      int64  `json:"jitter_ms,omitempty"`
+	Sent          int    `json:"sent,omitempty"`
+	Received      int    `json:"received,omitempty"`
+	Lost          int    `json:"lost,omitempty"`
 }
 
 type healthSeriesPoint struct {
 	UnixMs int64   `json:"unix_ms"`
 	Value  float64 `json:"value"`
+}
+
+type healthSeriesLine struct {
+	ProbeID   string              `json:"probe_id,omitempty"`
+	ProbeRole string              `json:"probe_role,omitempty"`
+	Points    []healthSeriesPoint `json:"points"`
 }
 
 type healthSeriesResult struct {
@@ -41,14 +50,16 @@ type healthSeriesResult struct {
 	Step      string              `json:"step"`
 	Window    string              `json:"window"`
 	Points    []healthSeriesPoint `json:"points"`
+	Lines     []healthSeriesLine  `json:"lines,omitempty"`
 	Truncated bool                `json:"truncated,omitempty"`
 }
 
 type healthSeriesQuery struct {
-	Metric string
-	Range  time.Duration
-	Step   time.Duration
-	Now    time.Time
+	Metric    string
+	ProbeRole string
+	Range     time.Duration
+	Step      time.Duration
+	Now       time.Time
 }
 
 func healthSpoolConfigured(cfg healthConfig) bool {
@@ -112,16 +123,19 @@ func (d *DaemonService) appendHealthSpool(now time.Time, links []healthLinkJSON)
 			continue
 		}
 		if err := enc.Encode(healthSpoolSample{
-			UnixMs:       now.UnixMilli(),
-			InstanceID:   link.InstanceID,
-			State:        link.State,
-			ProbeType:    link.ProbeType,
-			RTTMs:        link.LastRTTMs,
-			LossRatioPct: link.LossRatio,
-			JitterMs:     link.JitterMs,
-			Sent:         link.Sent,
-			Received:     link.Received,
-			Lost:         link.Lost,
+			UnixMs:        now.UnixMilli(),
+			ProbeID:       link.ProbeID,
+			InstanceID:    link.InstanceID,
+			ProbeRole:     link.ProbeRole,
+			InterfaceName: link.InterfaceName,
+			State:         link.State,
+			ProbeType:     link.ProbeType,
+			RTTMs:         link.LastRTTMs,
+			LossRatioPct:  link.LossRatio,
+			JitterMs:      link.JitterMs,
+			Sent:          link.Sent,
+			Received:      link.Received,
+			Lost:          link.Lost,
 		}); err != nil {
 			_ = f.Close()
 			return err
@@ -168,7 +182,11 @@ func queryHealthSpoolSeries(config *appConfig, linkID string, q healthSeriesQuer
 	if err != nil {
 		return healthSeriesResult{}, err
 	}
+	if q.ProbeRole != "" {
+		samples = filterHealthSamplesByProbeRole(samples, q.ProbeRole)
+	}
 	points := bucketHealthSamples(samples, metric, since, q.Step)
+	lines := bucketHealthSamplesByLine(samples, metric, since, q.Step)
 	return healthSeriesResult{
 		Metric: metric,
 		Unit:   unit,
@@ -176,6 +194,7 @@ func queryHealthSpoolSeries(config *appConfig, linkID string, q healthSeriesQuer
 		Step:   q.Step.String(),
 		Window: config.Health.LocalSpoolMaxAge.String(),
 		Points: points,
+		Lines:  lines,
 	}, nil
 }
 
@@ -194,6 +213,16 @@ func normalizeHealthSeriesMetric(metric string) (string, string, error) {
 	default:
 		return "", "", fmt.Errorf("unsupported health series metric %q", metric)
 	}
+}
+
+func filterHealthSamplesByProbeRole(samples []healthSpoolSample, role string) []healthSpoolSample {
+	out := make([]healthSpoolSample, 0, len(samples))
+	for _, sample := range samples {
+		if sample.ProbeRole == role {
+			out = append(out, sample)
+		}
+	}
+	return out
 }
 
 func readHealthSpoolSamples(path string, since, until time.Time, linkID string) ([]healthSpoolSample, error) {
@@ -226,6 +255,42 @@ func readHealthSpoolSamples(path string, since, until time.Time, linkID string) 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UnixMs < out[j].UnixMs })
 	return out, nil
+}
+
+func bucketHealthSamplesByLine(samples []healthSpoolSample, metric string, start time.Time, step time.Duration) []healthSeriesLine {
+	if len(samples) == 0 {
+		return []healthSeriesLine{}
+	}
+	byLine := map[string][]healthSpoolSample{}
+	meta := map[string]healthSpoolSample{}
+	for _, sample := range samples {
+		key := sample.ProbeID
+		if key == "" {
+			key = healthProbeID(sample.InstanceID, sample.ProbeRole)
+		}
+		if key == "" {
+			key = sample.InstanceID
+		}
+		byLine[key] = append(byLine[key], sample)
+		if _, ok := meta[key]; !ok {
+			meta[key] = sample
+		}
+	}
+	keys := make([]string, 0, len(byLine))
+	for key := range byLine {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]healthSeriesLine, 0, len(keys))
+	for _, key := range keys {
+		sample := meta[key]
+		lines = append(lines, healthSeriesLine{
+			ProbeID:   key,
+			ProbeRole: sample.ProbeRole,
+			Points:    bucketHealthSamples(byLine[key], metric, start, step),
+		})
+	}
+	return lines
 }
 
 func bucketHealthSamples(samples []healthSpoolSample, metric string, start time.Time, step time.Duration) []healthSeriesPoint {

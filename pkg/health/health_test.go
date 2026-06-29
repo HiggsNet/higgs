@@ -190,6 +190,55 @@ func TestManagerRotateCutoverReadiness(t *testing.T) {
 	}
 }
 
+func TestManagerKeepsRotateProbeTargetsSeparate(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Second, Timeout: 100 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 4}
+	hyst := DefaultHysteresisConfig()
+	prober := &fakeProber{rtt: 5 * time.Millisecond, success: true}
+	m := NewManager(cfg, hyst, prober)
+	now := time.Now()
+	m.SetTargets([]ProbeTarget{
+		{
+			ProbeID:        "link1#old",
+			InstanceID:     "link1",
+			ProbeRole:      "old",
+			InterfaceName:  "hgs-old",
+			PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
+			State:          "up",
+		},
+		{
+			ProbeID:        "link1#staged",
+			InstanceID:     "link1",
+			ProbeRole:      "staged",
+			InterfaceName:  "hgs-new",
+			PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
+			State:          "up",
+			Staged:         true,
+		},
+	}, now)
+	m.mu.Lock()
+	m.nextProbe["link1#old"] = now.Add(-time.Second)
+	m.nextProbe["link1#staged"] = now.Add(-time.Second)
+	m.mu.Unlock()
+	if dispatched := m.Tick(context.Background(), now); dispatched != 2 {
+		t.Fatalf("dispatched = %d, want 2", dispatched)
+	}
+	snapshot := m.Snapshot(now)
+	if len(snapshot) != 2 {
+		t.Fatalf("snapshot len = %d, want 2", len(snapshot))
+	}
+	byRole := map[string]LinkHealth{}
+	for _, h := range snapshot {
+		byRole[h.ProbeRole] = h
+	}
+	if byRole["old"].InterfaceName != "hgs-old" || byRole["staged"].InterfaceName != "hgs-new" {
+		t.Fatalf("snapshot by role = %#v, want old/new interfaces", byRole)
+	}
+	readiness := m.RotateCutoverReadiness()
+	if ready, ok := readiness["link1"]; !ok || !ready {
+		t.Fatalf("readiness = %#v, want base link ready", readiness)
+	}
+}
+
 func TestManagerRemoveTarget(t *testing.T) {
 	cfg := DefaultProbeConfig()
 	hyst := DefaultHysteresisConfig()

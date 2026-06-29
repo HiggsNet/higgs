@@ -184,7 +184,10 @@ func inspectLinkHealth(items []healthLinkJSON) []inspect.LinkHealth {
 	out := make([]inspect.LinkHealth, 0, len(items))
 	for _, item := range items {
 		out = append(out, inspect.LinkHealth{
+			ProbeID:         item.ProbeID,
 			InstanceID:      item.InstanceID,
+			ProbeRole:       item.ProbeRole,
+			InterfaceName:   item.InterfaceName,
 			State:           item.State,
 			ProbeType:       item.ProbeType,
 			Sent:            item.Sent,
@@ -287,7 +290,10 @@ func healthFromInspect(item *inspect.LinkHealth) *healthLinkJSON {
 		return nil
 	}
 	return &healthLinkJSON{
+		ProbeID:         item.ProbeID,
 		InstanceID:      item.InstanceID,
+		ProbeRole:       item.ProbeRole,
+		InterfaceName:   item.InterfaceName,
 		State:           item.State,
 		ProbeType:       item.ProbeType,
 		Sent:            item.Sent,

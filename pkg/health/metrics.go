@@ -60,7 +60,7 @@ func CollectMetrics(healths []LinkHealth, now time.Time) MetricsSnapshot {
 			Labels: base,
 		})
 		// Counter: total probe errors.
-		snap.Errors[h.InstanceID] = 0 // populated by Manager.ErrorsTotal; placeholder for structure
+		snap.Errors[metricErrorKey(h)] = 0 // populated by Manager.ErrorsTotal; placeholder for structure
 	}
 	return snap
 }
@@ -88,7 +88,11 @@ func RenderOpenMetrics(w io.Writer, snap MetricsSnapshot, errorsTotal map[string
 	fmt.Fprintf(&b, "# TYPE higgs_link_probe_errors_total counter\n")
 	// We need labels for errors; reconstruct from samples.
 	for _, s := range byName["higgs_link_health_state"] {
-		total := errorsTotal[s.Labels.InstanceID]
+		key := s.Labels.ProbeID
+		if key == "" {
+			key = s.Labels.InstanceID
+		}
+		total := errorsTotal[key]
 		if total == 0 {
 			continue
 		}
@@ -97,6 +101,13 @@ func RenderOpenMetrics(w io.Writer, snap MetricsSnapshot, errorsTotal map[string
 		fmt.Fprintf(&b, " %d\n", total)
 	}
 	io.WriteString(w, b.String())
+}
+
+func metricErrorKey(h LinkHealth) string {
+	if h.ProbeID != "" {
+		return h.ProbeID
+	}
+	return h.InstanceID
 }
 
 func metricMeta(name string) (help string, typ string) {
@@ -149,9 +160,11 @@ func writeLabels(b *strings.Builder, labels MetricsLabels) {
 	writeLabel("local_zone", labels.LocalZone)
 	writeLabel("peer_zone", labels.PeerZone)
 	writeLabel("overlay", labels.Overlay)
+	writeLabel("probe_id", labels.ProbeID)
 	writeLabel("instance_id", labels.InstanceID)
 	writeLabel("netns", labels.NetNS)
 	writeLabel("generation", labels.Generation)
+	writeLabel("probe_role", labels.ProbeRole)
 	writeLabel("probe_type", labels.ProbeType)
 	writeLabel("reason", labels.Reason)
 	b.WriteByte('}')

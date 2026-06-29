@@ -141,7 +141,10 @@ type LinkSA struct {
 }
 
 type LinkHealth struct {
+	ProbeID         string `json:"probe_id,omitempty"`
 	InstanceID      string `json:"instance_id"`
+	ProbeRole       string `json:"probe_role,omitempty"`
+	InterfaceName   string `json:"interface_name,omitempty"`
 	State           string `json:"state"`
 	ProbeType       string `json:"probe_type"`
 	Sent            int    `json:"sent"`
@@ -368,7 +371,12 @@ func healthByID(items []LinkHealth) map[string]*LinkHealth {
 	for i := range items {
 		item := &items[i]
 		if item.InstanceID != "" {
-			out[item.InstanceID] = item
+			if _, exists := out[item.InstanceID]; !exists || item.ProbeRole == "" || item.ProbeRole == "active" || item.ProbeRole == "staged" {
+				out[item.InstanceID] = item
+			}
+		}
+		if item.ProbeID != "" {
+			out[item.ProbeID] = item
 		}
 	}
 	return out

@@ -300,6 +300,25 @@ code {
     font-size: 12px;
 }
 
+.chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 8px;
+    color: var(--text);
+    font-size: 12px;
+}
+
+.legend-swatch {
+    display: inline-block;
+    width: 18px;
+    height: 3px;
+    margin-right: 5px;
+    vertical-align: middle;
+    border-radius: 2px;
+    background: var(--accent);
+}
+
 .history-chart {
     width: 100%;
     min-width: 560px;
@@ -333,4 +352,28 @@ code {
 .history-point {
     fill: var(--accent);
     opacity: 0.85;
+}
+
+.history-line.line-1,
+.history-point.line-1,
+.legend-swatch.line-1 {
+    stroke: var(--green);
+    fill: var(--green);
+    background: var(--green);
+}
+
+.history-line.line-2,
+.history-point.line-2,
+.legend-swatch.line-2 {
+    stroke: var(--yellow);
+    fill: var(--yellow);
+    background: var(--yellow);
+}
+
+.history-line.line-3,
+.history-point.line-3,
+.legend-swatch.line-3 {
+    stroke: #ff6f91;
+    fill: #ff6f91;
+    background: #ff6f91;
 }

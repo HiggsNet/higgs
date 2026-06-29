@@ -29,46 +29,73 @@ func healthTargetsFromState(state *stateFile, localZone string) []health.ProbeTa
 	if state == nil || state.IPsecReconcile == nil {
 		return nil
 	}
-	// Build a lookup of staged status per instance from LinkInstances.
-	stagedMap := map[string]bool{}
+	instanceMap := map[string]linkInstanceState{}
 	if state.LinkInstances != nil {
 		for id, inst := range state.LinkInstances {
-			if inst.StagedGeneration != 0 || inst.RotatePhase != "" {
-				stagedMap[id] = true
-			}
-		}
-	}
-	instanceState := map[string]string{}
-	if state.LinkInstances != nil {
-		for id, inst := range state.LinkInstances {
-			instanceState[id] = inst.ActualState
+			instanceMap[id] = inst
 		}
 	}
 	var targets []health.ProbeTarget
 	for _, d := range state.IPsecReconcile.Desired {
-		peer := health.ProbeTarget{
+		inst := instanceMap[d.InstanceID]
+		base := health.ProbeTarget{
 			InstanceID:    d.InstanceID,
 			GroupID:       d.GroupID,
 			PeerZone:      string(d.PeerZone),
 			LocalZone:     localZone,
 			Overlay:       d.GroupID,
 			NetNS:         scopedNetNS(d.PeerTunnelAddr),
-			InterfaceName: d.InterfaceName,
-			Staged:        stagedMap[d.InstanceID],
-			State:         instanceState[d.InstanceID],
+			InterfaceName: firstNonEmpty(inst.InterfaceName, d.InterfaceName),
+			Generation:    inst.RemoteGeneration,
+			ProbeRole:     "active",
+			State:         inst.ActualState,
 		}
-		if peer.NetNS == "" {
-			peer.NetNS = scopedNetNS(d.LocalTunnelAddr)
+		if base.NetNS == "" {
+			base.NetNS = scopedNetNS(d.LocalTunnelAddr)
 		}
 		if addr, err := netip.ParseAddr(stripScope(d.PeerTunnelAddr)); err == nil {
-			peer.PeerTunnelAddr = addr
+			base.PeerTunnelAddr = addr
 		}
 		if addr, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr)); err == nil {
-			peer.LocalTunnelAddr = addr
+			base.LocalTunnelAddr = addr
 		}
-		targets = append(targets, peer)
+		if shouldProbeStagedInterface(inst) {
+			oldTarget := base
+			oldTarget.ProbeID = healthProbeID(d.InstanceID, "old")
+			oldTarget.ProbeRole = "old"
+			oldTarget.InterfaceName = firstNonEmpty(inst.InterfaceName, d.InterfaceName)
+			oldTarget.Generation = inst.RemoteGeneration
+			targets = append(targets, oldTarget)
+
+			stagedTarget := base
+			stagedTarget.ProbeID = healthProbeID(d.InstanceID, "staged")
+			stagedTarget.ProbeRole = "staged"
+			stagedTarget.InterfaceName = inst.StagedInterfaceName
+			stagedTarget.Generation = inst.StagedGeneration
+			stagedTarget.Staged = true
+			targets = append(targets, stagedTarget)
+			continue
+		}
+		targets = append(targets, base)
 	}
 	return targets
+}
+
+func shouldProbeStagedInterface(inst linkInstanceState) bool {
+	if inst.StagedGeneration != 0 && inst.StagedInterfaceName != "" {
+		switch inst.RotatePhase {
+		case "preparing", "testing_new", "dual_running", "cutover":
+			return true
+		}
+	}
+	return false
+}
+
+func healthProbeID(instanceID, role string) string {
+	if role == "" || role == "active" {
+		return instanceID
+	}
+	return instanceID + "#" + role
 }
 
 // stripScope removes the %iface and netns=... suffixes from a scoped tunnel
@@ -128,7 +155,10 @@ func (d *DaemonService) healthStatusResponse() []healthLinkJSON {
 	out := make([]healthLinkJSON, 0, len(snapshot))
 	for _, h := range snapshot {
 		view := healthLinkHealthView{
+			ProbeID:         h.ProbeID,
 			InstanceID:      h.InstanceID,
+			ProbeRole:       h.ProbeRole,
+			InterfaceName:   h.InterfaceName,
 			State:           h.State,
 			ProbeType:       h.ProbeType,
 			Sent:            h.Sent,
@@ -144,7 +174,7 @@ func (d *DaemonService) healthStatusResponse() []healthLinkJSON {
 			ConsecutiveFail: h.ConsecutiveFail,
 			LastError:       h.LastError,
 			NextProbeUnix:   h.NextProbeAt.Unix(),
-			CutoverBlocking: d.health.CutoverBlocking(h.InstanceID),
+			CutoverBlocking: h.CutoverBlocking,
 		}
 		out = append(out, healthLinkJSONFromHealth(view))
 	}
@@ -174,11 +204,16 @@ func debugHealth() error {
 	}
 	fmt.Printf("Link health (%d links):\n", len(targets))
 	// Sort by instance ID for stable output.
-	sort.Slice(targets, func(i, j int) bool { return targets[i].InstanceID < targets[j].InstanceID })
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].InstanceID != targets[j].InstanceID {
+			return targets[i].InstanceID < targets[j].InstanceID
+		}
+		return targets[i].ProbeRole < targets[j].ProbeRole
+	})
 	for _, t := range targets {
 		fmt.Printf("  %s\n", t.InstanceID)
 		fmt.Printf("    peer=%s overlay=%s\n", t.PeerZone, t.Overlay)
-		fmt.Printf("    interface=%s local=%s peer_addr=%s\n", t.InterfaceName, t.LocalTunnelAddr, t.PeerTunnelAddr)
+		fmt.Printf("    probe_id=%s role=%s interface=%s local=%s peer_addr=%s\n", t.ProbeID, firstNonEmpty(t.ProbeRole, "active"), t.InterfaceName, t.LocalTunnelAddr, t.PeerTunnelAddr)
 		fmt.Printf("    state=%s staged=%v\n", t.State, t.Staged)
 	}
 	// Health manager output (when daemon live).
@@ -192,7 +227,7 @@ func debugHealth() error {
 }
 
 func printHealthLinkJSON(l healthLinkJSON) {
-	fmt.Printf("  %s: state=%s probe=%s\n", l.InstanceID, l.State, l.ProbeType)
+	fmt.Printf("  %s: state=%s role=%s probe=%s\n", firstNonEmpty(l.ProbeID, l.InstanceID), l.State, firstNonEmpty(l.ProbeRole, "active"), l.ProbeType)
 	if l.Sent > 0 {
 		fmt.Printf("    sent=%d received=%d lost=%d loss=%d%%\n", l.Sent, l.Received, l.Lost, l.LossRatio)
 	}

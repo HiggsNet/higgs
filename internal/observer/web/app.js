@@ -491,11 +491,13 @@ function healthDetail(item, datasource) {
         ? healthHistoryPanel(h.instance_id)
         : `<div class="muted">No local health history datasource configured.</div>`;
     return foldedSection(
-        `Health diagnostics · ${esc(h.instance_id || '-')}`,
+        `Health diagnostics · ${esc(h.instance_id || '-')}${h.probe_role ? ` · ${esc(h.probe_role)}` : ''}`,
         `<div class="detail-grid">
             <section>
                 <h3>Probe</h3>
                 ${kvTable([
+                    ['Probe ID', `<code>${esc(h.probe_id || h.instance_id || '-')}</code>`],
+                    ['Role', esc(h.probe_role || 'active')],
                     ['State', stateBadge(h.state)],
                     ['Probe', esc(h.probe_type || '-')],
                     ['Samples', `${h.sent || 0} sent, ${h.received || 0} received, ${h.lost || 0} lost`],
@@ -522,7 +524,7 @@ function healthDetail(item, datasource) {
                 ${kvTable([
                     ['Peer', esc(item.peer_zone || '-')],
                     ['Group', esc(item.group_id || '-')],
-                    ['Interface', `<code>${esc(item.interface_name || desired.interface_name || '-')}</code>`],
+                    ['Interface', `<code>${esc(h.interface_name || item.interface_name || desired.interface_name || '-')}</code>`],
                     ['Local Tunnel', `<code>${esc(item.local_tunnel_addr || desired.local_tunnel_addr || '-')}</code>`],
                     ['Peer Tunnel', `<code>${esc(item.peer_tunnel_addr || desired.peer_tunnel_addr || '-')}</code>`],
                     ['Endpoint', `<code>${esc(item.endpoint || desired.endpoint || '-')}</code>`],
@@ -534,7 +536,7 @@ function healthDetail(item, datasource) {
             ${history}
         </section>`,
         'record-details health-details',
-        `health:${h.instance_id || ''}`
+        `health:${h.probe_id || h.instance_id || ''}`
     );
 }
 
@@ -800,10 +802,10 @@ async function renderHealth() {
                 <td>${esc(h.instance_id || '-')}</td>
                 <td>${esc(item.peer_zone || '-')}</td>
                 <td>${esc(item.group_id || '-')}</td>
-                <td><code>${esc(item.interface_name || desired.interface_name || '-')}</code></td>
+                <td><code>${esc(h.interface_name || item.interface_name || desired.interface_name || '-')}</code></td>
                 <td><code>${esc(item.peer_tunnel_addr || desired.peer_tunnel_addr || '-')}</code></td>
                 <td>${stateBadge(h.state)}</td>
-                <td>${esc(h.probe_type || '-')}</td>
+                <td>${esc(h.probe_role || 'active')} / ${esc(h.probe_type || '-')}</td>
                 <td>${ms(h.last_rtt_ms)}</td>
                 <td>${pct(h.loss_ratio_pct)}</td>
                 <td>${ms(h.jitter_ms)}</td>
@@ -896,7 +898,7 @@ async function loadHealthHistory(detail, range) {
         const data = await fetchAPI(`/health/${encodeURIComponent(linkID)}/series?metric=rtt&range=${encodeURIComponent(selectedRange)}&step=${encodeURIComponent(step)}`);
         const series = data.series || {};
         body.classList.remove('muted');
-        body.innerHTML = healthChart(series.points || [], series.range || selectedRange, series.step || step);
+        body.innerHTML = healthChart(series, series.range || selectedRange, series.step || step);
         body.dataset.loadedKey = requestKey;
     } catch (e) {
         delete body.dataset.loadedKey;
@@ -923,18 +925,17 @@ function healthRangeStep(range) {
     }
 }
 
-function healthChart(points, range, step) {
-    const clean = (points || [])
-        .map(p => ({ts: Number(p.unix_ms), value: Number(p.value)}))
-        .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.value));
-    if (clean.length === 0) {
+function healthChart(series, range, step) {
+    const lines = healthChartLines(series);
+    const all = lines.flatMap(line => line.points);
+    if (all.length === 0) {
         return `<div class="empty-state compact">No RTT samples for ${esc(range)}.</div>`;
     }
     const width = 720;
     const height = 220;
     const pad = {top: 18, right: 20, bottom: 34, left: 54};
-    const xs = clean.map(p => p.ts);
-    const ys = clean.map(p => p.value);
+    const xs = all.map(p => p.ts);
+    const ys = all.map(p => p.value);
     const minX = Math.min(...xs);
     const maxX = Math.max(...xs);
     const minY = Math.min(0, Math.min(...ys));
@@ -945,8 +946,8 @@ function healthChart(points, range, step) {
     const plotH = height - pad.top - pad.bottom;
     const x = ts => pad.left + ((ts - minX) / xSpan) * plotW;
     const y = value => pad.top + plotH - ((value - minY) / ySpan) * plotH;
-    const path = clean.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.ts).toFixed(1)} ${y(p.value).toFixed(1)}`).join(' ');
-    const latest = clean[clean.length - 1];
+    const pathFor = points => points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.ts).toFixed(1)} ${y(p.value).toFixed(1)}`).join(' ');
+    const latest = all.reduce((max, point) => !max || point.ts > max.ts ? point : max, null);
     const avg = ys.reduce((sum, value) => sum + value, 0) / ys.length;
     const yTicks = [minY, minY + ySpan / 2, maxY];
     const start = new Date(minX).toLocaleTimeString();
@@ -958,17 +959,37 @@ function healthChart(points, range, step) {
             <span>Max ${ms(maxY)}</span>
             <span>${esc(range)} · ${esc(step)}</span>
         </div>
+        <div class="chart-legend">
+            ${lines.map((line, i) => `<span><i class="legend-swatch line-${i % 4}"></i>${esc(line.label)}</span>`).join('')}
+        </div>
         <svg class="history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="RTT history chart">
             ${yTicks.map(tick => `
                 <line class="chart-grid" x1="${pad.left}" y1="${y(tick).toFixed(1)}" x2="${width - pad.right}" y2="${y(tick).toFixed(1)}"></line>
                 <text class="chart-label" x="${pad.left - 8}" y="${(y(tick) + 4).toFixed(1)}" text-anchor="end">${esc(ms(tick))}</text>`).join('')}
             <line class="chart-axis" x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}"></line>
             <line class="chart-axis" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}"></line>
-            <path class="history-line" d="${path}"></path>
-            ${clean.map(p => `<circle class="history-point" cx="${x(p.ts).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.6"></circle>`).join('')}
+            ${lines.map((line, i) => `
+                <path class="history-line line-${i % 4}" d="${pathFor(line.points)}"></path>
+                ${line.points.map(p => `<circle class="history-point line-${i % 4}" cx="${x(p.ts).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.6"></circle>`).join('')}
+            `).join('')}
             <text class="chart-label" x="${pad.left}" y="${height - 10}" text-anchor="start">${esc(start)}</text>
             <text class="chart-label" x="${width - pad.right}" y="${height - 10}" text-anchor="end">${esc(end)}</text>
         </svg>`;
+}
+
+function healthChartLines(series) {
+    const rawLines = (series && Array.isArray(series.lines) && series.lines.length > 0)
+        ? series.lines
+        : [{probe_role: 'active', points: (series && series.points) || []}];
+    return rawLines.map(line => {
+        const points = (line.points || [])
+            .map(p => ({ts: Number(p.unix_ms), value: Number(p.value)}))
+            .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.value));
+        return {
+            label: line.probe_role || line.probe_id || 'active',
+            points,
+        };
+    }).filter(line => line.points.length > 0);
 }
 
 async function renderRoutes() {

@@ -71,10 +71,11 @@ func (m *Manager) SetTargets(targets []ProbeTarget, now time.Time) {
 		if !t.ShouldProbe() {
 			continue
 		}
-		newMap[t.InstanceID] = t
-		if _, ok := m.targets[t.InstanceID]; !ok {
-			m.windows[t.InstanceID] = NewRollingWindow(m.lossWindow())
-			m.nextProbe[t.InstanceID] = now.Add(m.jitteredInterval())
+		id := targetKey(t)
+		newMap[id] = t
+		if _, ok := m.targets[id]; !ok {
+			m.windows[id] = NewRollingWindow(m.lossWindow())
+			m.nextProbe[id] = now.Add(m.jitteredInterval())
 		}
 	}
 	for id := range m.targets {
@@ -98,14 +99,15 @@ func (m *Manager) UpsertTarget(t ProbeTarget, now time.Time) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.targets[t.InstanceID]; !ok {
-		m.windows[t.InstanceID] = NewRollingWindow(m.lossWindow())
-		m.nextProbe[t.InstanceID] = now.Add(m.jitteredInterval())
+	id := targetKey(t)
+	if _, ok := m.targets[id]; !ok {
+		m.windows[id] = NewRollingWindow(m.lossWindow())
+		m.nextProbe[id] = now.Add(m.jitteredInterval())
 	}
-	m.targets[t.InstanceID] = t
+	m.targets[id] = t
 }
 
-// RemoveTarget removes a target and resets its state.
+// RemoveTarget removes a target by probe ID and resets its state.
 func (m *Manager) RemoveTarget(instanceID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -240,15 +242,20 @@ func (m *Manager) Snapshot(now time.Time) []LinkHealth {
 			LocalZone:  t.LocalZone,
 			PeerZone:   t.PeerZone,
 			Overlay:    t.Overlay,
-			InstanceID: id,
+			ProbeID:    id,
+			InstanceID: t.InstanceID,
 			NetNS:      t.NetNS,
 			Generation: generationLabel(t.Generation),
+			ProbeRole:  t.ProbeRole,
 			ProbeType:  m.prober.Type(),
 			Reason:     m.lastReason[id],
 		}
 		next := m.nextProbe[id]
 		h := LinkHealth{
-			InstanceID:      id,
+			ProbeID:         id,
+			InstanceID:      t.InstanceID,
+			ProbeRole:       t.ProbeRole,
+			InterfaceName:   t.InterfaceName,
 			State:           m.states.State(id),
 			ProbeType:       m.prober.Type(),
 			Sent:            snap.Sent,
@@ -267,11 +274,17 @@ func (m *Manager) Snapshot(now time.Time) []LinkHealth {
 			LastSuccess:     snap.LastSuccess,
 			LastError:       m.lastReason[id],
 			NextProbeAt:     next,
+			CutoverBlocking: t.Staged && m.cutoverBlockingLocked(id),
 			Labels:          labels,
 		}
 		out = append(out, h)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].InstanceID < out[j].InstanceID })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].InstanceID != out[j].InstanceID {
+			return out[i].InstanceID < out[j].InstanceID
+		}
+		return out[i].ProbeID < out[j].ProbeID
+	})
 	return out
 }
 
@@ -292,14 +305,19 @@ func (m *Manager) HealthFor(instanceID string, now time.Time) (LinkHealth, bool)
 		LocalZone:  t.LocalZone,
 		PeerZone:   t.PeerZone,
 		Overlay:    t.Overlay,
-		InstanceID: instanceID,
+		ProbeID:    instanceID,
+		InstanceID: t.InstanceID,
 		NetNS:      t.NetNS,
 		Generation: generationLabel(t.Generation),
+		ProbeRole:  t.ProbeRole,
 		ProbeType:  m.prober.Type(),
 		Reason:     m.lastReason[instanceID],
 	}
 	return LinkHealth{
-		InstanceID:      instanceID,
+		ProbeID:         instanceID,
+		InstanceID:      t.InstanceID,
+		ProbeRole:       t.ProbeRole,
+		InterfaceName:   t.InterfaceName,
 		State:           m.states.State(instanceID),
 		ProbeType:       m.prober.Type(),
 		Sent:            snap.Sent,
@@ -318,6 +336,7 @@ func (m *Manager) HealthFor(instanceID string, now time.Time) (LinkHealth, bool)
 		LastSuccess:     snap.LastSuccess,
 		LastError:       m.lastReason[instanceID],
 		NextProbeAt:     m.nextProbe[instanceID],
+		CutoverBlocking: t.Staged && m.cutoverBlockingLocked(instanceID),
 		Labels:          labels,
 	}, true
 }
@@ -326,18 +345,19 @@ func (m *Manager) HealthFor(instanceID string, now time.Time) (LinkHealth, bool)
 // blocks IPsec rotate cutover (6.6.4). A link blocks cutover when its health is
 // not healthy and not better-than-old.
 func (m *Manager) CutoverBlocking(instanceID string) bool {
-	h, ok := m.HealthFor(instanceID, time.Now())
-	if !ok {
-		return true
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for id, target := range m.targets {
+		if target.InstanceID != instanceID || !target.Staged {
+			continue
+		}
+		found = true
+		if m.cutoverBlockingLocked(id) {
+			return true
+		}
 	}
-	switch h.State {
-	case HealthStateHealthy:
-		return false
-	case HealthStateDegraded:
-		return false
-	default:
-		return true
-	}
+	return !found
 }
 
 // RotateCutoverReadiness returns a map suitable for ipsec.ReconcileInputs.RotateCutoverReady.
@@ -350,7 +370,7 @@ func (m *Manager) RotateCutoverReadiness() map[string]bool {
 		if !t.Staged {
 			continue
 		}
-		out[id] = !m.cutoverBlockingLocked(id)
+		out[t.InstanceID] = !m.cutoverBlockingLocked(id)
 	}
 	return out
 }
@@ -407,4 +427,11 @@ func uint64ToString(n uint64) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+func targetKey(t ProbeTarget) string {
+	if t.ProbeID != "" {
+		return t.ProbeID
+	}
+	return t.InstanceID
 }
