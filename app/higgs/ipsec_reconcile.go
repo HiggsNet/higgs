@@ -57,6 +57,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		GroupRotateRetention: groupRotateRetentionMap(groups),
 	})
 	for _, action := range result.Actions {
+		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair,
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate,
@@ -81,6 +82,45 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
+}
+
+func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any {
+	fields := map[string]any{
+		"action": action.Action,
+		"reason": action.Reason,
+	}
+	if id := actionInstanceID(action); id != "" {
+		fields["instance_id"] = id
+	}
+	if action.Spec != nil {
+		fields["peer"] = action.Spec.PeerZone.String()
+		fields["group"] = action.Spec.OverlayID
+		fields["transport_id"] = action.Spec.TransportID
+		fields["remote_generation"] = action.Spec.Generation
+		fields["interface"] = action.Spec.InterfaceName
+		if len(action.Spec.ContactPoints) > 0 {
+			cp := action.Spec.ContactPoints[0]
+			fields["endpoint_address"] = firstNonEmpty(cp.Address, cp.Host)
+			fields["endpoint_ike_port"] = cp.IKEPort
+			fields["endpoint_natt_port"] = cp.NATTPort
+			fields["endpoint_current"] = cp.Current
+			fields["endpoint_source"] = cp.Source
+		}
+	}
+	if action.Instance != nil {
+		fields["peer"] = action.Instance.PeerZone.String()
+		fields["group"] = action.Instance.GroupID
+		fields["transport_id"] = action.Instance.TransportID
+		fields["remote_generation"] = action.Instance.RemoteGeneration
+		fields["staged_generation"] = action.Instance.StagedGeneration
+		fields["rotate_phase"] = action.Instance.RotatePhase
+		fields["rotate_deadline"] = action.Instance.RotateDeadline
+		fields["ike_name"] = action.Instance.IKEName
+		fields["staged_ike"] = action.Instance.StagedIKEName
+		fields["interface"] = action.Instance.InterfaceName
+		fields["staged_interface"] = action.Instance.StagedInterfaceName
+	}
+	return fields
 }
 
 func (d *DaemonService) filterSAsWithMissingXFRMLinks(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {

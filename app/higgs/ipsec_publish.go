@@ -65,6 +65,7 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 			r = portRecord.Range
 		}
 		previousState := state.IPsecPortRecord
+		sr.logger().Debug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, previousState, portRecord, now))
 		state.IPsecPortRecord = &ipsecPortRecordState{
 			Mode:       portRecord.Mode,
 			Range:      r,
@@ -79,6 +80,49 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 		return sr.saveState()
 	}
 	return nil
+}
+
+func ipsecPortPublishLogFields(config *appConfig, previous *ipsecPortRecordState, record *ipsec.PortRecord, now time.Time) map[string]any {
+	fields := map[string]any{
+		"now": now.Unix(),
+	}
+	if config != nil {
+		fields["rotate_interval_seconds"] = int64(config.IPsec.PortRotateInterval.Seconds())
+		fields["previous_grace_seconds"] = int64(config.IPsec.PortPreviousGrace.Seconds())
+	}
+	if previous != nil {
+		fields["meta_mode"] = previous.Mode
+		fields["meta_generation"] = previous.Generation
+		fields["meta_updated_at"] = previous.UpdatedAt
+		if previous.Range != nil {
+			fields["meta_range"] = fmt.Sprintf("%d-%d", previous.Range.From, previous.Range.To)
+		}
+		if config != nil && config.IPsec.PortRotateInterval > 0 && previous.UpdatedAt > 0 {
+			dueAt := time.Unix(previous.UpdatedAt, 0).Add(config.IPsec.PortRotateInterval)
+			fields["rotate_due_at"] = dueAt.Unix()
+			fields["rotate_due"] = !now.Before(dueAt)
+		}
+	} else {
+		fields["meta_generation"] = 0
+	}
+	if record != nil {
+		fields["record_mode"] = record.Mode
+		fields["record_updated_at"] = record.UpdatedAt
+		if record.Range != nil {
+			fields["record_range"] = fmt.Sprintf("%d-%d", record.Range.From, record.Range.To)
+		}
+		if record.Current != nil {
+			fields["record_generation"] = record.Current.Generation
+			fields["record_ike_advertised"] = record.Current.IKE.Advertised
+			fields["record_natt_advertised"] = record.Current.NATT.Advertised
+		}
+		if len(record.Previous) > 0 {
+			fields["previous_count"] = len(record.Previous)
+			fields["previous_generation"] = record.Previous[0].Generation
+			fields["previous_valid_until"] = record.Previous[0].ValidUntil
+		}
+	}
+	return fields
 }
 
 type localIPsecRecord struct {
