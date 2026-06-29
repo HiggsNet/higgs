@@ -139,6 +139,7 @@ higgs debug route 10.42.0.0/24
 higgs debug babel
 higgs debug firewall
 higgs debug health
+higgs debug rotate-port
 higgs debug revoke-impact node-b.catofes.
 ```
 

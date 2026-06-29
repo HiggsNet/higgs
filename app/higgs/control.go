@@ -74,6 +74,7 @@ type controlResponse struct {
 	RevocationImpact  []RevocationImpact            `json:"revocation_impact,omitempty"`
 	Health            []healthLinkJSON              `json:"health,omitempty"`
 	Record            map[string]any                `json:"record,omitempty"`
+	PortRotate        *manualPortRotateResult       `json:"port_rotate,omitempty"`
 }
 
 // healthLinkJSON is the JSON representation of health.LinkHealth for the
@@ -309,6 +310,21 @@ func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history in
 		return nil, true, errors.New("daemon record_get response missing record")
 	}
 	return response.Record, true, nil
+}
+
+func rotateIPsecPortViaControl(rt *Runtime) (*manualPortRotateResult, bool, error) {
+	socketPath := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(socketPath, controlRequest{Method: "ipsec_rotate_port"})
+	if err != nil {
+		if isControlSocketUnavailable(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	if response.PortRotate == nil {
+		return nil, true, errors.New("daemon ipsec_rotate_port response missing result")
+	}
+	return response.PortRotate, true, nil
 }
 
 func issueDelegationViaControl(rt *Runtime, request *joinRequest) (*joinBundle, bool, error) {

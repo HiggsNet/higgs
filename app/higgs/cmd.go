@@ -491,6 +491,23 @@ func cmdDebug() *cli.Command {
 					return debugHealth()
 				},
 			},
+			{
+				Name:      "rotate-port",
+				Usage:     "Manually rotate the local advertised IPsec ports",
+				UsageText: "higgs debug rotate-port [--direct]",
+				Description: "Ask the running daemon to force the local ipsec/ports record to the next generation. " +
+					"Requires ipsec.port_mode=range, preserves the previous generation for ipsec.port_previous_grace, " +
+					"and triggers sync plus firewall/IPsec reconcile. --direct writes the local DB only for recovery.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon sync or data-plane reconcile"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs debug rotate-port [--direct]", 1)
+					}
+					return debugRotatePort(cmd.Bool("direct"))
+				},
+			},
 		},
 	}
 }

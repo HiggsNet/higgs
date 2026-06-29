@@ -82,6 +82,7 @@ const (
 	daemonEventSyncTrigger        daemonEventType = "sync_trigger"
 	daemonEventReloadConfig       daemonEventType = "reload_config"
 	daemonEventIPsecCleanup       daemonEventType = "ipsec_cleanup"
+	daemonEventIPsecPortRotate    daemonEventType = "ipsec_port_rotate"
 	daemonEventIPsecLifecycle     daemonEventType = "ipsec_lifecycle"
 	daemonEventShutdown           daemonEventType = "shutdown"
 )
@@ -115,6 +116,7 @@ type daemonEventResult struct {
 	Zone          zone.ZonePath
 	RootPublicKey []byte
 	JoinBundle    *joinBundle
+	PortRotate    *manualPortRotateResult
 	Error         error
 }
 
@@ -546,6 +548,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, CleanedLinks: result.CleanedLinks, Message: "ipsec links cleaned"})
+	case "ipsec_rotate_port":
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecPortRotate})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, PortRotate: result.PortRotate, Message: "ipsec port rotate scheduled"})
 	case "shutdown":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventShutdown})
 		if result.Error != nil {
@@ -752,6 +761,9 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 			d.ipsecDirty = true
 		}
 		return daemonEventResult{CleanedLinks: cleaned, Error: err}, false, false
+	case daemonEventIPsecPortRotate:
+		result, err := d.handleIPsecPortRotateEvent()
+		return daemonEventResult{PortRotate: result, Error: err}, err == nil, false
 	case daemonEventIPsecLifecycle:
 		d.handleIPsecLifecycleEvent(event.VICIEvent)
 		return daemonEventResult{}, false, false
@@ -1060,6 +1072,26 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	}
 	d.notifyStateChanged()
 	return record.Version, nil
+}
+
+func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return nil, err
+	}
+	d.setState(latest)
+	result, err := forceLocalIPsecPortRotate(d.Sync.App.Config, d.Sync.State, d.Sync.now())
+	if err != nil {
+		return nil, err
+	}
+	if err := d.Sync.saveState(); err != nil {
+		return nil, err
+	}
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return result, nil
 }
 
 // lockState acquires the write lock on the current Sync.State and stores the

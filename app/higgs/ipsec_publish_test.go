@@ -219,6 +219,69 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 	}
 }
 
+func TestForceLocalIPsecPortRotateAdvancesRangeGeneration(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(5000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	appConfig.IPsec.PortMode = ipsec.PortModeRange
+	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
+	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords(first): %v", err)
+	}
+	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(first): %v", err)
+	}
+
+	result, err := forceLocalIPsecPortRotate(appConfig, state, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("forceLocalIPsecPortRotate: %v", err)
+	}
+	rotated, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(rotated): %v", err)
+	}
+	if rotated.Current.Generation != first.Current.Generation+1 {
+		t.Fatalf("generation = %d, want %d", rotated.Current.Generation, first.Current.Generation+1)
+	}
+	if len(rotated.Previous) != 1 || rotated.Previous[0].Generation != first.Current.Generation {
+		t.Fatalf("previous grace = %+v, want generation %d", rotated.Previous, first.Current.Generation)
+	}
+	if rotated.Previous[0].ValidUntil != now.Add(time.Minute).Add(2*time.Hour).Unix() {
+		t.Fatalf("previous valid_until = %d, want %d", rotated.Previous[0].ValidUntil, now.Add(time.Minute).Add(2*time.Hour).Unix())
+	}
+	if state.IPsecPortRecord == nil || state.IPsecPortRecord.Generation != rotated.Current.Generation {
+		t.Fatalf("port meta = %+v, want generation %d", state.IPsecPortRecord, rotated.Current.Generation)
+	}
+	if result.PreviousGeneration != first.Current.Generation || result.CurrentGeneration != rotated.Current.Generation {
+		t.Fatalf("result = %+v, want previous %d current %d", result, first.Current.Generation, rotated.Current.Generation)
+	}
+	if result.CurrentIKE != rotated.Current.IKE.Advertised || result.CurrentNATT != rotated.Current.NATT.Advertised {
+		t.Fatalf("result ports = %+v, rotated = %+v", result, rotated.Current)
+	}
+}
+
+func TestForceLocalIPsecPortRotateRejectsFixedMode(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.PortMode = ipsec.PortModeFixed
+
+	if _, err := forceLocalIPsecPortRotate(appConfig, state, time.Unix(5000, 0)); err == nil {
+		t.Fatalf("forceLocalIPsecPortRotate error = nil, want fixed mode rejection")
+	}
+}
+
 func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."

@@ -3070,6 +3070,76 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	}
 }
 
+func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(2000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	appConfig.IPsec.PortMode = ipsec.PortModeRange
+	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
+	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	sr := newSyncRuntime(state, config, nil, rt)
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords: %v", err)
+	}
+	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(first): %v", err)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	driver := &countingIPsecDriver{}
+	service := newDaemonService(rt, latest, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+	reply := make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventIPsecPortRotate, Reply: reply}
+
+	syncNow, shutdown, ipsecFlushed, _, firewallFlushed := service.processEvents(context.Background())
+	if !syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	if !firewallFlushed || !ipsecFlushed {
+		t.Fatalf("firewallFlushed/ipsecFlushed = %v/%v, want true/true", firewallFlushed, ipsecFlushed)
+	}
+	result := <-reply
+	if result.Error != nil {
+		t.Fatalf("ipsec port rotate event: %v", result.Error)
+	}
+	if result.PortRotate == nil || result.PortRotate.CurrentGeneration != first.Current.Generation+1 {
+		t.Fatalf("port rotate result = %+v, want generation %d", result.PortRotate, first.Current.Generation+1)
+	}
+	if driver.listCalls != 1 {
+		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
+	}
+	rotatedState, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(rotated): %v", err)
+	}
+	rotated, err := ipsec.ParsePortRecord(rotatedState.Network.Zones[rotatedState.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil {
+		t.Fatalf("ParsePortRecord(rotated): %v", err)
+	}
+	if rotated.Current.Generation != first.Current.Generation+1 {
+		t.Fatalf("generation = %d, want %d", rotated.Current.Generation, first.Current.Generation+1)
+	}
+	if len(rotated.Previous) != 1 || rotated.Previous[0].Generation != first.Current.Generation {
+		t.Fatalf("previous grace = %+v, want generation %d", rotated.Previous, first.Current.Generation)
+	}
+}
+
 func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(3000, 0)
