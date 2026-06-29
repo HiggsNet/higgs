@@ -1429,6 +1429,99 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	}
 }
 
+func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4128, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
+	}
+	baseSpec := plan.Desired[0]
+	updateDaemonTestPortRecord(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, ipsec.DefaultNATTPort, now.Add(time.Minute))
+	rotatedPlan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(rotated): %v", err)
+	}
+	if len(rotatedPlan.Desired) != 1 {
+		t.Fatalf("rotated desired links = %d, want 1", len(rotatedPlan.Desired))
+	}
+	rotatedDesired := rotatedPlan.Desired[0]
+	rotatedIKE := ipsec.RuntimeConnectionID(ipsec.LinkInstanceID(rotatedDesired), 2, rotatedDesired.Provider)
+	rotatedIfID := ipsec.RuntimeXFRMIfID(ipsec.LinkInstanceID(rotatedDesired), 2, rotatedDesired.Provider)
+	rotatedInterface := ipsec.StableInterfaceName(rotatedIfID)
+	persisted := ipsec.NewLinkInstance(rotatedDesired, ipsec.LinkStateUp, now)
+	persisted.RemoteGeneration = 2
+	persisted.IKEName = rotatedIKE
+	persisted.ChildSAName = rotatedIKE + "-child"
+	persisted.InterfaceName = rotatedInterface
+	persisted.XFRMIfID = rotatedIfID
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+		persisted.ID: persisted,
+	})
+	driver := &observedIPsecDriver{
+		sas: []ipsec.SAState{{
+			Name:        rotatedIKE,
+			ChildSA:     rotatedIKE + "-child",
+			XFRMIfID:    rotatedIfID,
+			Endpoint:    "203.0.113.10",
+			Established: true,
+		}},
+		linkStates: map[string]ipsec.XFRMLinkState{
+			baseSpec.InterfaceName: {
+				NetNS:           group.NetNS,
+				NamespaceExists: true,
+				InterfaceExists: false,
+			},
+			rotatedInterface: {
+				NetNS:           group.NetNS,
+				NamespaceExists: true,
+				InterfaceExists: true,
+			},
+		},
+	}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now.Add(time.Minute) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	service.recoverIPsecLinksOnStart(context.Background())
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.ActualSAs) != 1 {
+		t.Fatalf("startup reconcile actual SAs = %+v, want rotated SA retained", latest.IPsecReconcile)
+	}
+	for _, action := range latest.IPsecReconcile.Actions {
+		if action.Action == ipsec.ReconcileActionRepair {
+			t.Fatalf("startup reconcile action = %+v, want no repair for existing rotated xfrm link", action)
+		}
+	}
+	inst := latest.LinkInstances[ipsec.LinkInstanceID(rotatedDesired)]
+	if inst.InterfaceName != rotatedInterface || inst.XFRMIfID != rotatedIfID || inst.RemoteGeneration != 2 {
+		t.Fatalf("instance = %+v, want rotated runtime interface %s/%d generation 2", inst, rotatedInterface, rotatedIfID)
+	}
+	if len(driver.Interfaces) != 0 {
+		t.Fatalf("interfaces applied = %+v, want no repair apply", driver.Interfaces)
+	}
+}
+
 func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	now := time.Unix(4130, 0)
 	stateA, configA := buildTestNetworkState(t)
@@ -2152,9 +2245,10 @@ func TestRootCommandIncludesDaemon(t *testing.T) {
 
 type observedIPsecDriver struct {
 	ipsec.DryRunDriver
-	sas       []ipsec.SAState
-	linkState *ipsec.XFRMLinkState
-	listCalls int
+	sas        []ipsec.SAState
+	linkState  *ipsec.XFRMLinkState
+	linkStates map[string]ipsec.XFRMLinkState
+	listCalls  int
 }
 
 func (d *observedIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
@@ -2163,6 +2257,16 @@ func (d *observedIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) 
 }
 
 func (d *observedIPsecDriver) InspectLink(_ context.Context, spec ipsec.TransportLinkSpec) (ipsec.XFRMLinkState, error) {
+	if d.linkStates != nil {
+		if state, ok := d.linkStates[spec.InterfaceName]; ok {
+			return state, nil
+		}
+		return ipsec.XFRMLinkState{
+			NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: spec.NetNS}.Normalized(),
+			NamespaceExists: true,
+			InterfaceExists: false,
+		}, nil
+	}
 	if d.linkState != nil {
 		return *d.linkState, nil
 	}

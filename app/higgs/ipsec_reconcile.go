@@ -40,7 +40,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
 	instances := linkInstancesToIPsec(d.Sync.State.LinkInstances)
-	sas, missingXFRMLinks, err := d.filterSAsWithMissingXFRMLinks(ctx, xfrmDriver, plan.Desired, sas)
+	sas, missingXFRMLinks, err := d.filterSAsWithMissingXFRMLinks(ctx, xfrmDriver, plan.Desired, instances, sas)
 	if err != nil {
 		d.recordIPsecReconcileError(now.Unix(), err)
 		return fmt.Errorf("inspect xfrm links: %w", err)
@@ -123,7 +123,10 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 	return fields
 }
 
-func (d *DaemonService) filterSAsWithMissingXFRMLinks(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
+func (d *DaemonService) filterSAsWithMissingXFRMLinks(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, sas []ipsec.SAState) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
+	if inspector, ok := xfrmDriver.(ipsec.XFRMLinkInspector); ok && len(instances) > 0 {
+		return d.filterSAsWithMissingRuntimeLinks(ctx, inspector, desired, instances, sas)
+	}
 	filter, ok := xfrmDriver.(ipsec.XFRMSAFilter)
 	if !ok {
 		return sas, nil, nil
@@ -141,6 +144,100 @@ func (d *DaemonService) filterSAsWithMissingXFRMLinks(ctx context.Context, xfrmD
 		})
 	}
 	return filtered, missing, nil
+}
+
+func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, inspector ipsec.XFRMLinkInspector, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, sas []ipsec.SAState) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
+	if len(desired) == 0 {
+		return sas, nil, nil
+	}
+	missing := make(map[string]ipsec.TransportLinkSpec)
+	missingCandidates := make(map[string][]ipsec.TransportLinkSpec)
+	for _, spec := range desired {
+		id := ipsec.LinkInstanceID(spec)
+		candidates := xfrmLinkInspectCandidates(spec, instances[id])
+		found := false
+		for _, candidate := range candidates {
+			state, err := inspector.InspectLink(ctx, candidate)
+			if err != nil {
+				return nil, nil, err
+			}
+			if state.NamespaceExists && state.InterfaceExists {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		missing[id] = spec
+		missingCandidates[id] = candidates
+		d.logDebug("ipsec", "xfrm_link_missing", map[string]any{
+			"instance_id": id,
+			"peer":        spec.PeerZone,
+			"interface":   spec.InterfaceName,
+			"netns":       spec.NetNS,
+		})
+	}
+	if len(missing) == 0 || len(sas) == 0 {
+		return sas, missing, nil
+	}
+	filtered := sas[:0]
+	for _, sa := range sas {
+		if saMatchesMissingXFRMCandidate(sa, missingCandidates) {
+			continue
+		}
+		filtered = append(filtered, sa)
+	}
+	return filtered, missing, nil
+}
+
+func xfrmLinkInspectCandidates(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance) []ipsec.TransportLinkSpec {
+	candidates := []ipsec.TransportLinkSpec{spec}
+	if inst.InterfaceName != "" || inst.XFRMIfID != 0 {
+		active := spec
+		if inst.InterfaceName != "" {
+			active.InterfaceName = inst.InterfaceName
+		}
+		if inst.XFRMIfID != 0 {
+			active.XFRMIfID = inst.XFRMIfID
+		}
+		if !containsXFRMInspectCandidate(candidates, active) {
+			candidates = append(candidates, active)
+		}
+	}
+	if inst.StagedInterfaceName != "" || inst.StagedXFRMIfID != 0 {
+		staged := spec
+		if inst.StagedInterfaceName != "" {
+			staged.InterfaceName = inst.StagedInterfaceName
+		}
+		if inst.StagedXFRMIfID != 0 {
+			staged.XFRMIfID = inst.StagedXFRMIfID
+		}
+		if !containsXFRMInspectCandidate(candidates, staged) {
+			candidates = append(candidates, staged)
+		}
+	}
+	return candidates
+}
+
+func containsXFRMInspectCandidate(candidates []ipsec.TransportLinkSpec, candidate ipsec.TransportLinkSpec) bool {
+	for _, existing := range candidates {
+		if existing.InterfaceName == candidate.InterfaceName && existing.XFRMIfID == candidate.XFRMIfID {
+			return true
+		}
+	}
+	return false
+}
+
+func saMatchesMissingXFRMCandidate(sa ipsec.SAState, missing map[string][]ipsec.TransportLinkSpec) bool {
+	for _, candidates := range missing {
+		for _, spec := range candidates {
+			if sa.Name == spec.TransportID || sa.ChildSA == ipsec.ChildSAName(spec) || (spec.XFRMIfID != 0 && sa.XFRMIfID == spec.XFRMIfID) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missing map[string]ipsec.TransportLinkSpec, now time.Time) {
