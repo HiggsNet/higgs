@@ -82,6 +82,21 @@ func (p *ICMProber) pingOnceExec(ctx context.Context, target ProbeTarget, timeou
 	}
 	deadline, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	args := pingArgs(target, true)
+	start := time.Now()
+	if out, err := p.runner.Run(deadline, "ip", args); err != nil {
+		if shouldRetryWithoutPingSource(target, out) {
+			if out, err := p.runner.Run(deadline, "ip", pingArgs(target, false)); err != nil {
+				return 0, pingExecError(err, out)
+			}
+			return time.Since(start), nil
+		}
+		return 0, pingExecError(err, out)
+	}
+	return time.Since(start), nil
+}
+
+func pingArgs(target ProbeTarget, includeSource bool) []string {
 	args := []string{}
 	if target.NetNS != "" {
 		args = append(args, "netns", "exec", target.NetNS)
@@ -91,18 +106,25 @@ func (p *ICMProber) pingOnceExec(ctx context.Context, target ProbeTarget, timeou
 		args = append(args, "-6")
 	}
 	args = append(args, "-n", "-c", "1")
-	if source := pingSourceAddress(target); source != "" {
+	if source := pingSourceAddress(target); includeSource && source != "" {
 		args = append(args, "-I", source)
 	}
 	args = append(args, pingTargetAddress(target))
-	start := time.Now()
-	if out, err := p.runner.Run(deadline, "ip", args); err != nil {
-		if msg := strings.TrimSpace(string(out)); msg != "" {
-			return 0, fmt.Errorf("%w: %s", err, msg)
-		}
-		return 0, err
+	return args
+}
+
+func pingExecError(err error, out []byte) error {
+	if msg := strings.TrimSpace(string(out)); msg != "" {
+		return fmt.Errorf("%w: %s", err, msg)
 	}
-	return time.Since(start), nil
+	return err
+}
+
+func shouldRetryWithoutPingSource(target ProbeTarget, out []byte) bool {
+	return target.PeerTunnelAddr.Is6() &&
+		target.PeerTunnelAddr.IsLinkLocalUnicast() &&
+		target.InterfaceName != "" &&
+		strings.Contains(string(out), "bind icmp socket: Invalid argument")
 }
 
 func pingTargetAddress(target ProbeTarget) string {
@@ -115,9 +137,6 @@ func pingTargetAddress(target ProbeTarget) string {
 
 func pingSourceAddress(target ProbeTarget) string {
 	if target.PeerTunnelAddr.Is6() && target.PeerTunnelAddr.IsLinkLocalUnicast() && target.InterfaceName != "" {
-		if target.LocalTunnelAddr.IsValid() {
-			return target.LocalTunnelAddr.String()
-		}
 		return target.InterfaceName
 	}
 	if target.LocalTunnelAddr.IsValid() {

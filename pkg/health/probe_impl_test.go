@@ -35,7 +35,7 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 	want := []string{
 		"netns", "exec", "h2",
 		"ping", "-6", "-n", "-c", "1",
-		"-I", "fe80::7888:86ec:66e0:2620",
+		"-I", "hgs431bcb9f",
 		"fe80::b09d:5f83:3e81:d064%hgs431bcb9f",
 	}
 	if !reflect.DeepEqual(runner.args, want) {
@@ -74,6 +74,51 @@ func TestICMProberIncludesPingOutputInError(t *testing.T) {
 	}
 }
 
+func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T) {
+	runner := &scriptedCommandRunner{
+		results: []commandResult{
+			{
+				out: []byte("ping: bind icmp socket: Invalid argument\n"),
+				err: errors.New("exit status 2"),
+			},
+			{},
+		},
+	}
+	prober := NewICMProber(runner, nil)
+	target := ProbeTarget{
+		InstanceID:      "link-1",
+		NetNS:           "h2",
+		InterfaceName:   "hgs0",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
+		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
+		State:           "up",
+	}
+
+	result := prober.Probe(context.Background(), target, ProbeConfig{
+		Timeout: 50 * time.Millisecond,
+		Burst:   1,
+	})
+	if !result.Success {
+		t.Fatalf("probe success = false, error=%q", result.Error)
+	}
+	want := [][]string{
+		{
+			"netns", "exec", "h2",
+			"ping", "-6", "-n", "-c", "1",
+			"-I", "hgs0",
+			"fe80::2%hgs0",
+		},
+		{
+			"netns", "exec", "h2",
+			"ping", "-6", "-n", "-c", "1",
+			"fe80::2%hgs0",
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("command calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestPingTargetAddressScopesLinkLocal(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:     "link-1",
@@ -87,7 +132,7 @@ func TestPingTargetAddressScopesLinkLocal(t *testing.T) {
 	}
 }
 
-func TestPingSourceAddressUsesScopedLocalTunnelAddressForLinkLocalTarget(t *testing.T) {
+func TestPingSourceAddressUsesInterfaceForLinkLocalTarget(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:      "link-1",
 		InterfaceName:   "hgs0",
@@ -96,8 +141,8 @@ func TestPingSourceAddressUsesScopedLocalTunnelAddressForLinkLocalTarget(t *test
 		State:           "up",
 	}
 
-	if got := pingSourceAddress(target); got != "fe80::1" {
-		t.Fatalf("ping source address = %q, want local tunnel address", got)
+	if got := pingSourceAddress(target); got != "hgs0" {
+		t.Fatalf("ping source address = %q, want interface", got)
 	}
 }
 
@@ -139,4 +184,24 @@ func (r *recordingCommandRunner) Run(ctx context.Context, name string, args []st
 	r.name = name
 	r.args = append([]string(nil), args...)
 	return r.out, r.err
+}
+
+type commandResult struct {
+	out []byte
+	err error
+}
+
+type scriptedCommandRunner struct {
+	calls   [][]string
+	results []commandResult
+}
+
+func (r *scriptedCommandRunner) Run(ctx context.Context, name string, args []string) ([]byte, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(r.results) == 0 {
+		return nil, nil
+	}
+	result := r.results[0]
+	r.results = r.results[1:]
+	return result.out, result.err
 }
