@@ -327,6 +327,9 @@ func (d *DaemonService) buildIPsecContactPointQuality(now time.Time) map[zone.Zo
 					continue
 				}
 				for _, port := range portAds {
+					if !ipsecQualityAddrPortMatches(udpAddr.Port, port) {
+						continue
+					}
 					key := ipsec.ContactPoint{
 						AddressID:  ad.ID,
 						Address:    ad.Address,
@@ -347,6 +350,13 @@ func (d *DaemonService) buildIPsecContactPointQuality(now time.Time) map[zone.Zo
 		}
 	}
 	return out
+}
+
+func ipsecQualityAddrPortMatches(addrPort int, port ipsec.PortAdvertisement) bool {
+	if addrPort <= 0 {
+		return false
+	}
+	return addrPort == int(contactDialPort(port.IKE)) || addrPort == int(contactDialPort(port.NATT))
 }
 
 func contactDialPort(binding ipsec.PortBinding) uint16 {

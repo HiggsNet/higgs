@@ -125,8 +125,8 @@ func printDebugRotateLink(w io.Writer, link inspect.LinkView, spec *ipsec.Transp
 	fmt.Fprintf(w, "  path_key: %s\n", dash(link.PathKey))
 	fmt.Fprintf(w, "  rotate:\n")
 	fmt.Fprintf(w, "    phase: %s\n", dash(link.Rotation.Phase))
-	fmt.Fprintf(w, "    remote_generation: %d\n", link.Rotation.RemoteGeneration)
-	fmt.Fprintf(w, "    staged_generation: %d\n", link.Rotation.StagedGeneration)
+	fmt.Fprintf(w, "    port_generation select/runtime/staged: %s\n", debugPortGenerationSummary(spec, link.Rotation))
+	fmt.Fprintf(w, "    port local/remote/runtime/staged: %s\n", debugPortSummary(spec, link.Endpoint, link.Endpoint, link.Rotation.StagedGeneration))
 	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(link.Rotation.RotateDeadline))
 	fmt.Fprintf(w, "    last_error: %s\n", dash(link.LastError))
 	printDebugRotateRuntime(w, "current", rotateRuntimeCurrent(link, spec))
@@ -144,6 +144,7 @@ func printDebugRotateLink(w io.Writer, link inspect.LinkView, spec *ipsec.Transp
 type rotateRuntimeView struct {
 	State           string
 	Generation      uint64
+	Port            string
 	RuntimeID       string
 	ChildSAName     string
 	InterfaceName   string
@@ -161,6 +162,7 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 	out := rotateRuntimeView{
 		State:         "expected_current",
 		Generation:    link.Rotation.RemoteGeneration,
+		Port:          debugEndpointPort(link.Endpoint),
 		RuntimeID:     link.TransportID,
 		ChildSAName:   link.ChildSAName,
 		InterfaceName: link.InterfaceName,
@@ -172,11 +174,13 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 		out.InterfaceName = firstNonEmpty(out.InterfaceName, link.Desired.InterfaceName)
 		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, link.Desired.XFRMIfID)
 		out.Endpoint = firstNonEmpty(out.Endpoint, link.Desired.Endpoint)
+		out.Port = firstNonEmpty(out.Port, debugEndpointPort(link.Desired.Endpoint))
 		out.LocalTunnelAddr = link.Desired.LocalTunnelAddr
 		out.PeerTunnelAddr = link.Desired.PeerTunnelAddr
 	}
 	if spec != nil {
 		out.Generation = firstNonZeroUint64(out.Generation, spec.Generation)
+		out.Port = firstNonEmpty(debugRemotePort(spec, ""), out.Port)
 		out.RuntimeID = firstNonEmpty(out.RuntimeID, spec.TransportID)
 		out.ChildSAName = firstNonEmpty(out.ChildSAName, ipsec.ChildSAName(*spec))
 		out.InterfaceName = firstNonEmpty(out.InterfaceName, spec.InterfaceName)
@@ -196,6 +200,7 @@ func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec) r
 	out := rotateRuntimeView{
 		State:         "expected_new",
 		Generation:    generation,
+		Port:          debugStagedPort(spec, generation),
 		RuntimeID:     link.Rotation.StagedIKEName,
 		ChildSAName:   link.Rotation.StagedChildSAName,
 		InterfaceName: link.Rotation.StagedInterfaceName,
@@ -221,7 +226,7 @@ func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec) r
 func printDebugRotateRuntime(w io.Writer, label string, runtime rotateRuntimeView) {
 	fmt.Fprintf(w, "  %s:\n", label)
 	fmt.Fprintf(w, "    state: %s\n", dash(runtime.State))
-	fmt.Fprintf(w, "    generation: %d\n", runtime.Generation)
+	fmt.Fprintf(w, "    port: %s\n", dash(runtime.Port))
 	fmt.Fprintf(w, "    runtime_id: %s\n", dash(runtime.RuntimeID))
 	fmt.Fprintf(w, "    child_sa: %s\n", dash(runtime.ChildSAName))
 	fmt.Fprintf(w, "    interface: %s\n", dash(runtime.InterfaceName))
