@@ -324,7 +324,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	appConfig := defaultAppConfig()
 	rt := &Runtime{
 		Config:    appConfig,
-		StatePath: "/tmp/test-revoke-cleanup.db",
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
 		Clock:     func() time.Time { return now },
 	}
 	if err := rt.SaveState(state); err != nil {

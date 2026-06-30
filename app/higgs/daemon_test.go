@@ -628,6 +628,10 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedPool, Family: ipsec.FamilyIPv4, Pool: pool}
+	setTestIPsecOverlayIntent(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", groupA, now)
+	setTestIPsecOverlayIntent(t, stateA.Network.Zones["node-b.catofes."], "node-b.catofes.", groupB, now)
+	setTestIPsecOverlayIntent(t, stateB.Network.Zones["node-a.catofes."], "node-a.catofes.", groupA, now)
+	setTestIPsecOverlayIntent(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", groupB, now)
 
 	rtA := &Runtime{
 		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
