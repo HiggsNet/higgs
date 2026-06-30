@@ -1277,7 +1277,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		t.Fatalf("ipsec reconcile detail = %+v, want desired and actual sa snapshots", latest.IPsecReconcile)
 	}
 	var out bytes.Buffer
-	if err := writeDebugLinks(&out, rt, latest); err != nil {
+	if err := writeDebugLinks(&out, rt, latest, ""); err != nil {
 		t.Fatalf("writeDebugLinks: %v", err)
 	}
 	output := out.String()
@@ -1616,7 +1616,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	assertSingleLinkUpFromSA(t, latestA, specA, driverA.sas[0])
 	assertSingleLinkUpFromSA(t, latestB, specB, driverB.sas[0])
 	var out bytes.Buffer
-	if err := writeDebugLinks(&out, rtA, latestA); err != nil {
+	if err := writeDebugLinks(&out, rtA, latestA, ""); err != nil {
 		t.Fatalf("writeDebugLinks(node-a): %v", err)
 	}
 	output := out.String()

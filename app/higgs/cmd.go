@@ -414,10 +414,21 @@ func cmdDebug() *cli.Command {
 				},
 			},
 			{
-				Name:  "links",
-				Usage: "Show IPsec link instances and reconcile state",
+				Name:      "links",
+				Usage:     "Show IPsec link instances and reconcile state",
+				UsageText: "higgs debug links [--filter peer-or-link]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show links matching peer zone, instance id, link_id, runtime id, interface, or SA name"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return debugLinks()
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs debug links [--filter peer-or-link]", 1)
+					}
+					filter := cmd.String("filter")
+					if cmd.Args().Len() == 1 {
+						filter = cmd.Args().First()
+					}
+					return debugLinks(filter)
 				},
 			},
 			{
@@ -506,6 +517,26 @@ func cmdDebug() *cli.Command {
 						return cli.Exit("usage: higgs debug rotate-port [--direct]", 1)
 					}
 					return debugRotatePort(cmd.Bool("direct"))
+				},
+			},
+			{
+				Name:      "rotate",
+				Usage:     "Show rotate runtime expectations and observed SAs",
+				UsageText: "higgs debug rotate [--filter peer-or-link]",
+				Description: "Print current and staged generation runtime names, XFRM interface ids, tunnel addresses, " +
+					"stored reconcile SAs and live StrongSwan SAs for links involved in port/data-plane rotate debugging.",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show links matching peer zone, instance id, link_id, runtime id, interface, or SA name"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs debug rotate [--filter peer-or-link]", 1)
+					}
+					filter := cmd.String("filter")
+					if cmd.Args().Len() == 1 {
+						filter = cmd.Args().First()
+					}
+					return debugRotate(ctx, filter)
 				},
 			},
 		},

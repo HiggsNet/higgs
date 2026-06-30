@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -48,6 +53,286 @@ func debugRotatePort(direct bool) error {
 	}
 	printManualPortRotateResult("direct", result)
 	return nil
+}
+
+func debugRotate(ctx context.Context, filter string) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	var liveSAs []linkSAState
+	var liveErr error
+	if rt.Config != nil && rt.Config.IPsec.Driver != ipsecDriverDryRun {
+		drivers, err := newIPsecCleanupDrivers(rt.Config)
+		if err != nil {
+			liveErr = err
+		} else {
+			if drivers.close != nil {
+				defer drivers.close()
+			}
+			if drivers.ipsecDriver != nil {
+				sas, err := drivers.ipsecDriver.ListSAs(ctx)
+				if err != nil {
+					liveErr = err
+				} else {
+					liveSAs = linkSAStatesFromIPsecSAs(sas)
+				}
+			}
+		}
+	}
+	return writeDebugRotate(os.Stdout, rt, state, filter, liveSAs, liveErr)
+}
+
+func writeDebugRotate(w io.Writer, rt *Runtime, state *stateFile, filter string, liveSAs []linkSAState, liveErr error) error {
+	build := buildLinkInspection(rt, state, nil)
+	links := filterLinkViews(build.Inspection.Links, filter)
+	storedSAs := []linkSAState(nil)
+	if state != nil && state.IPsecReconcile != nil {
+		storedSAs = state.IPsecReconcile.ActualSAs
+	}
+	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(build.Inspection.Summary.LastRunUnix))
+	fmt.Fprintf(w, "link_instances: %d\n", build.Inspection.Summary.LinkInstances)
+	if strings.TrimSpace(filter) != "" {
+		fmt.Fprintf(w, "filter: %s\n", filter)
+		fmt.Fprintf(w, "matched_links: %d\n", len(links))
+	}
+	fmt.Fprintf(w, "stored_sas: %d\n", len(storedSAs))
+	fmt.Fprintf(w, "live_sas: %d\n", len(liveSAs))
+	if liveErr != nil {
+		fmt.Fprintf(w, "live_sa_error: %s\n", liveErr)
+	}
+	for _, link := range links {
+		spec, hasSpec := build.PlannedSpecs[link.ID]
+		var specPtr *ipsec.TransportLinkSpec
+		if hasSpec {
+			specPtr = &spec
+		}
+		printDebugRotateLink(w, link, specPtr, storedSAs, liveSAs)
+	}
+	return nil
+}
+
+func printDebugRotateLink(w io.Writer, link inspect.LinkView, spec *ipsec.TransportLinkSpec, storedSAs, liveSAs []linkSAState) {
+	fmt.Fprintf(w, "\nlink %s\n", link.ID)
+	fmt.Fprintf(w, "  peer: %s\n", link.PeerZone)
+	fmt.Fprintf(w, "  group: %s\n", dash(link.GroupID))
+	fmt.Fprintf(w, "  link_id: %s\n", dash(link.LinkID))
+	fmt.Fprintf(w, "  path_key: %s\n", dash(link.PathKey))
+	fmt.Fprintf(w, "  rotate:\n")
+	fmt.Fprintf(w, "    phase: %s\n", dash(link.Rotation.Phase))
+	fmt.Fprintf(w, "    remote_generation: %d\n", link.Rotation.RemoteGeneration)
+	fmt.Fprintf(w, "    staged_generation: %d\n", link.Rotation.StagedGeneration)
+	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(link.Rotation.RotateDeadline))
+	fmt.Fprintf(w, "    last_error: %s\n", dash(link.LastError))
+	printDebugRotateRuntime(w, "current", rotateRuntimeCurrent(link, spec))
+	staged := rotateRuntimeStaged(link, spec)
+	if !staged.empty() {
+		printDebugRotateRuntime(w, "staged", staged)
+	} else {
+		fmt.Fprintf(w, "  staged:\n")
+		fmt.Fprintf(w, "    state: absent\n")
+	}
+	printDebugRotateSAs(w, "stored_matching_sas", link, storedSAs)
+	printDebugRotateSAs(w, "live_matching_sas", link, liveSAs)
+}
+
+type rotateRuntimeView struct {
+	State           string
+	Generation      uint64
+	RuntimeID       string
+	ChildSAName     string
+	InterfaceName   string
+	XFRMIfID        uint32
+	Endpoint        string
+	LocalTunnelAddr string
+	PeerTunnelAddr  string
+}
+
+func (v rotateRuntimeView) empty() bool {
+	return v.RuntimeID == "" && v.ChildSAName == "" && v.InterfaceName == "" && v.XFRMIfID == 0 && v.State == ""
+}
+
+func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) rotateRuntimeView {
+	out := rotateRuntimeView{
+		State:         "expected_current",
+		Generation:    link.Rotation.RemoteGeneration,
+		RuntimeID:     link.TransportID,
+		ChildSAName:   link.ChildSAName,
+		InterfaceName: link.InterfaceName,
+		XFRMIfID:      link.XFRMIfID,
+		Endpoint:      link.Endpoint,
+	}
+	if link.Desired != nil {
+		out.RuntimeID = firstNonEmpty(out.RuntimeID, link.Desired.TransportID)
+		out.InterfaceName = firstNonEmpty(out.InterfaceName, link.Desired.InterfaceName)
+		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, link.Desired.XFRMIfID)
+		out.Endpoint = firstNonEmpty(out.Endpoint, link.Desired.Endpoint)
+		out.LocalTunnelAddr = link.Desired.LocalTunnelAddr
+		out.PeerTunnelAddr = link.Desired.PeerTunnelAddr
+	}
+	if spec != nil {
+		out.Generation = firstNonZeroUint64(out.Generation, spec.Generation)
+		out.RuntimeID = firstNonEmpty(out.RuntimeID, spec.TransportID)
+		out.ChildSAName = firstNonEmpty(out.ChildSAName, ipsec.ChildSAName(*spec))
+		out.InterfaceName = firstNonEmpty(out.InterfaceName, spec.InterfaceName)
+		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, spec.XFRMIfID)
+		out.Endpoint = firstNonEmpty(out.Endpoint, summarizeContactEndpoint(spec.ContactPoints))
+		out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
+		out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS))
+	}
+	return out
+}
+
+func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec) rotateRuntimeView {
+	generation := link.Rotation.StagedGeneration
+	if generation == 0 {
+		return rotateRuntimeView{}
+	}
+	out := rotateRuntimeView{
+		State:         "expected_new",
+		Generation:    generation,
+		RuntimeID:     link.Rotation.StagedIKEName,
+		ChildSAName:   link.Rotation.StagedChildSAName,
+		InterfaceName: link.Rotation.StagedInterfaceName,
+		XFRMIfID:      link.Rotation.StagedXFRMIfID,
+	}
+	linkID := link.LinkID
+	provider := ipsec.ProviderStrongSwan
+	if spec != nil {
+		linkID = firstNonEmpty(linkID, spec.LinkID)
+		provider = firstNonEmpty(spec.Provider, provider)
+	}
+	if linkID != "" {
+		out.RuntimeID = firstNonEmpty(out.RuntimeID, ipsec.RuntimeConnectionID(linkID, generation, provider))
+		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, ipsec.RuntimeXFRMIfID(linkID, generation, provider))
+		out.InterfaceName = firstNonEmpty(out.InterfaceName, ipsec.StableInterfaceName(out.XFRMIfID))
+	}
+	if out.RuntimeID != "" {
+		out.ChildSAName = firstNonEmpty(out.ChildSAName, out.RuntimeID+"-child")
+	}
+	return out
+}
+
+func printDebugRotateRuntime(w io.Writer, label string, runtime rotateRuntimeView) {
+	fmt.Fprintf(w, "  %s:\n", label)
+	fmt.Fprintf(w, "    state: %s\n", dash(runtime.State))
+	fmt.Fprintf(w, "    generation: %d\n", runtime.Generation)
+	fmt.Fprintf(w, "    runtime_id: %s\n", dash(runtime.RuntimeID))
+	fmt.Fprintf(w, "    child_sa: %s\n", dash(runtime.ChildSAName))
+	fmt.Fprintf(w, "    interface: %s\n", dash(runtime.InterfaceName))
+	fmt.Fprintf(w, "    if_id: %s\n", formatUint32OrDash(runtime.XFRMIfID))
+	fmt.Fprintf(w, "    endpoint: %s\n", dash(runtime.Endpoint))
+	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(runtime.LocalTunnelAddr))
+	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(runtime.PeerTunnelAddr))
+}
+
+func printDebugRotateSAs(w io.Writer, label string, link inspect.LinkView, sas []linkSAState) {
+	matches := matchingRotateSAs(link, sas)
+	fmt.Fprintf(w, "  %s: %d\n", label, len(matches))
+	for _, sa := range matches {
+		fmt.Fprintf(w, "    - name=%s child=%s state=%s if_id=%s reqid=%s local=%s remote=%s identities=%s/%s\n",
+			dash(sa.Name),
+			dash(sa.ChildSA),
+			formatSAState(inspectLinkSA(sa)),
+			formatUint32OrDash(sa.XFRMIfID),
+			formatUint32OrDash(sa.ReqID),
+			dash(sa.LocalEndpoint),
+			dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)),
+			dash(sa.LocalIdentity),
+			dash(sa.RemoteIdentity),
+		)
+	}
+}
+
+func matchingRotateSAs(link inspect.LinkView, sas []linkSAState) []linkSAState {
+	out := make([]linkSAState, 0, len(sas))
+	for _, sa := range sas {
+		if rotateSAMatchesLink(link, sa) {
+			out = append(out, sa)
+		}
+	}
+	return out
+}
+
+func rotateSAMatchesLink(link inspect.LinkView, sa linkSAState) bool {
+	if sa.XFRMIfID != 0 && (sa.XFRMIfID == link.XFRMIfID || sa.XFRMIfID == link.Rotation.StagedXFRMIfID) {
+		return true
+	}
+	return nonEmptyMatches(link.ID, sa.Name, sa.ChildSA) ||
+		nonEmptyMatches(link.TransportID, sa.Name, sa.ChildSA) ||
+		nonEmptyMatches(link.ChildSAName, sa.Name, sa.ChildSA) ||
+		nonEmptyMatches(link.Rotation.StagedIKEName, sa.Name, sa.ChildSA) ||
+		nonEmptyMatches(link.Rotation.StagedChildSAName, sa.Name, sa.ChildSA)
+}
+
+func nonEmptyMatches(filter string, values ...string) bool {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return false
+	}
+	return stringMatchesFilter(filter, values...)
+}
+
+func inspectLinkSA(item linkSAState) inspect.LinkSA {
+	return inspect.LinkSA{
+		Name:           item.Name,
+		Peer:           item.Peer,
+		ChildSA:        item.ChildSA,
+		IKEState:       item.IKEState,
+		ChildState:     item.ChildState,
+		XFRMIfID:       item.XFRMIfID,
+		ReqID:          item.ReqID,
+		LocalIdentity:  item.LocalIdentity,
+		RemoteIdentity: item.RemoteIdentity,
+		LocalEndpoint:  item.LocalEndpoint,
+		RemoteEndpoint: item.RemoteEndpoint,
+		Endpoint:       item.Endpoint,
+		Established:    item.Established,
+	}
+}
+
+func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []linkSAState {
+	out := make([]linkSAState, 0, len(sas))
+	for _, sa := range sas {
+		out = append(out, linkSAState{
+			Name:           sa.Name,
+			Peer:           sa.Peer,
+			ChildSA:        sa.ChildSA,
+			IKEState:       sa.IKEState,
+			ChildState:     sa.ChildState,
+			XFRMIfID:       sa.XFRMIfID,
+			ReqID:          sa.ReqID,
+			LocalIdentity:  sa.LocalIdentity,
+			RemoteIdentity: sa.RemoteIdentity,
+			LocalEndpoint:  sa.LocalEndpoint,
+			RemoteEndpoint: sa.RemoteEndpoint,
+			Endpoint:       sa.Endpoint,
+			Established:    sa.Established,
+		})
+	}
+	return out
+}
+
+func firstNonZeroUint64(values ...uint64) uint64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonZeroUint32(values ...uint32) uint32 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func printManualPortRotateResult(mode string, result *manualPortRotateResult) {

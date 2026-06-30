@@ -110,7 +110,7 @@ func debugPeer(peerID string) error {
 	return nil
 }
 
-func debugLinks() error {
+func debugLinks(filter string) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -129,12 +129,15 @@ func debugLinks() error {
 	if err != nil {
 		return err
 	}
-	return writeDebugLinks(os.Stdout, rt, state)
+	return writeDebugLinks(os.Stdout, rt, state, filter)
 }
 
-func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
+func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) error {
 	build := buildLinkInspection(rt, state, nil)
 	view := build.Inspection
+	view.Links = filterLinkViews(view.Links, filter)
+	view.Actions = filterLinkActions(view.Actions, filter)
+	view.Skipped = filterLinkSkips(view.Skipped, filter)
 	if view.Summary.DesiredPlanError != "" {
 		fmt.Fprintf(w, "desired_plan_error: %s\n", view.Summary.DesiredPlanError)
 	}
@@ -144,6 +147,10 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 	fmt.Fprintf(w, "actual_sas: %d\n", view.Summary.ActualSAs)
 	fmt.Fprintf(w, "last_error: %s\n", dash(view.Summary.LastError))
 	fmt.Fprintf(w, "link_instances: %d\n", view.Summary.LinkInstances)
+	if strings.TrimSpace(filter) != "" {
+		fmt.Fprintf(w, "filter: %s\n", filter)
+		fmt.Fprintf(w, "matched_links: %d\n", len(view.Links))
+	}
 	for _, link := range view.Links {
 		spec, hasSpec := build.PlannedSpecs[link.ID]
 		var specPtr *ipsec.TransportLinkSpec
@@ -176,6 +183,106 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile) error {
 		)
 	}
 	return nil
+}
+
+func filterLinkViews(links []inspect.LinkView, filter string) []inspect.LinkView {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return links
+	}
+	out := make([]inspect.LinkView, 0, len(links))
+	for _, link := range links {
+		if linkMatchesFilter(link, filter) {
+			out = append(out, link)
+		}
+	}
+	return out
+}
+
+func filterLinkActions(actions []inspect.LinkAction, filter string) []inspect.LinkAction {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return actions
+	}
+	out := make([]inspect.LinkAction, 0, len(actions))
+	for _, action := range actions {
+		if stringMatchesFilter(filter, action.InstanceID, action.GroupID, action.PeerZone, action.Action, action.Reason) {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+func filterLinkSkips(skips []inspect.LinkSkip, filter string) []inspect.LinkSkip {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return skips
+	}
+	out := make([]inspect.LinkSkip, 0, len(skips))
+	for _, skip := range skips {
+		if stringMatchesFilter(filter, skip.GroupID, skip.Peer, skip.Reason, skip.Detail) {
+			out = append(out, skip)
+		}
+	}
+	return out
+}
+
+func linkMatchesFilter(link inspect.LinkView, filter string) bool {
+	values := []string{
+		link.ID,
+		link.PeerZone,
+		link.GroupID,
+		link.TransportKind,
+		link.LinkID,
+		link.PathKey,
+		link.TransportID,
+		link.Endpoint,
+		link.InterfaceName,
+		link.ChildSAName,
+		link.Rotation.Phase,
+		link.Rotation.StagedIKEName,
+		link.Rotation.StagedChildSAName,
+		link.Rotation.StagedInterfaceName,
+		link.Takeover.InitiatorRole,
+		link.Takeover.ObservedInitiator,
+	}
+	if link.Desired != nil {
+		values = append(values,
+			link.Desired.InstanceID,
+			link.Desired.PeerZone,
+			link.Desired.GroupID,
+			link.Desired.LinkID,
+			link.Desired.PathKey,
+			link.Desired.TransportID,
+			link.Desired.InterfaceName,
+			link.Desired.Endpoint,
+		)
+	}
+	if link.ActualSA != nil {
+		values = append(values,
+			link.ActualSA.Name,
+			link.ActualSA.Peer,
+			link.ActualSA.ChildSA,
+			link.ActualSA.LocalIdentity,
+			link.ActualSA.RemoteIdentity,
+			link.ActualSA.LocalEndpoint,
+			link.ActualSA.RemoteEndpoint,
+			link.ActualSA.Endpoint,
+		)
+	}
+	if link.Health != nil {
+		values = append(values, link.Health.InstanceID, link.Health.ProbeID, link.Health.InterfaceName, link.Health.State)
+	}
+	return stringMatchesFilter(filter, values...)
+}
+
+func stringMatchesFilter(filter string, values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), filter) {
+			return true
+		}
+	}
+	return false
 }
 
 func printDebugLinkInstance(w io.Writer, link inspect.LinkView, spec *ipsec.TransportLinkSpec) {
