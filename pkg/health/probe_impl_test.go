@@ -35,7 +35,7 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 	want := []string{
 		"netns", "exec", "h2",
 		"ping", "-6", "-n", "-c", "1",
-		"-I", "hgs431bcb9f",
+		"-I", "fe80::7888:86ec:66e0:2620%hgs431bcb9f",
 		"fe80::b09d:5f83:3e81:d064%hgs431bcb9f",
 	}
 	if !reflect.DeepEqual(runner.args, want) {
@@ -105,7 +105,7 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 		{
 			"netns", "exec", "h2",
 			"ping", "-6", "-n", "-c", "1",
-			"-I", "hgs0",
+			"-I", "fe80::1%hgs0",
 			"fe80::2%hgs0",
 		},
 		{
@@ -132,7 +132,7 @@ func TestPingTargetAddressScopesLinkLocal(t *testing.T) {
 	}
 }
 
-func TestPingSourceAddressUsesInterfaceForLinkLocalTarget(t *testing.T) {
+func TestPingSourceAddressPrefersLocalTunnelAddressForLinkLocalTarget(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:      "link-1",
 		InterfaceName:   "hgs0",
@@ -141,8 +141,8 @@ func TestPingSourceAddressUsesInterfaceForLinkLocalTarget(t *testing.T) {
 		State:           "up",
 	}
 
-	if got := pingSourceAddress(target); got != "hgs0" {
-		t.Fatalf("ping source address = %q, want interface", got)
+	if got := pingSourceAddress(target); got != "fe80::1%hgs0" {
+		t.Fatalf("ping source address = %q, want scoped local tunnel address", got)
 	}
 }
 

@@ -136,9 +136,6 @@ func pingTargetAddress(target ProbeTarget) string {
 }
 
 func pingSourceAddress(target ProbeTarget) string {
-	if target.PeerTunnelAddr.Is6() && target.PeerTunnelAddr.IsLinkLocalUnicast() && target.InterfaceName != "" {
-		return target.InterfaceName
-	}
 	if target.LocalTunnelAddr.IsValid() {
 		addr := target.LocalTunnelAddr.String()
 		if target.LocalTunnelAddr.Is6() && target.LocalTunnelAddr.IsLinkLocalUnicast() && target.InterfaceName != "" && !strings.Contains(addr, "%") {

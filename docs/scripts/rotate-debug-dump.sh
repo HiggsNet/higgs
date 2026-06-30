@@ -7,6 +7,7 @@ LOG_FILE="${HIGGS_LOG_FILE:-}"
 HIGGS_PID="${HIGGS_PID:-}"
 CONFIG_FILE="${HIGGS_CONFIG_FILE:-/etc/higgs/config.yaml}"
 LINES="${HIGGS_DEBUG_LINES:-300}"
+NETNS_LIST="${HIGGS_NETNS_LIST:-}"
 
 section() {
   printf '\n===== %s =====\n' "$1"
@@ -35,6 +36,14 @@ higgs_pids() {
       print $1
     }
   '
+}
+
+netns_names() {
+  if [ -n "$NETNS_LIST" ]; then
+    printf '%s\n' "$NETNS_LIST" | tr ',' '\n'
+    return
+  fi
+  ip netns list 2>/dev/null | awk '{print $1}'
 }
 
 section "time"
@@ -67,8 +76,26 @@ section "xfrm links and state"
 run ip -d link show type xfrm
 run ip xfrm state
 run ip xfrm policy
+run cat /proc/net/xfrm_stat
 run ip route show table all
+run ip -6 route show table all
 run ip rule show
+
+NETNS_NAMES="$(netns_names | tr '\n' ' ')"
+printf 'matched_netns: %s\n' "${NETNS_NAMES:-none}"
+for ns in $NETNS_NAMES; do
+  section "netns $ns links routes xfrm"
+  run ip netns exec "$ns" ip -d link show type xfrm
+  run ip netns exec "$ns" ip -s link show
+  run ip netns exec "$ns" ip addr show
+  run ip netns exec "$ns" ip route show table all
+  run ip netns exec "$ns" ip -6 route show table all
+  run ip netns exec "$ns" ip neigh show
+  run ip netns exec "$ns" ip -6 neigh show
+  run ip netns exec "$ns" ip xfrm state
+  run ip netns exec "$ns" ip xfrm policy
+  run ip netns exec "$ns" cat /proc/net/xfrm_stat
+done
 
 section "higgs logs"
 if [ -n "$LOG_FILE" ]; then
