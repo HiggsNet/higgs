@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/health"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 // newHealthManager creates a health.Manager from app config. Returns nil when
@@ -25,7 +27,7 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 // healthTargetsFromState derives ProbeTargets from the current desired link
 // snapshot and persisted LinkInstances. Only links with a valid peer tunnel
 // address and probeable state are returned.
-func healthTargetsFromState(state *stateFile, localZone string) []health.ProbeTarget {
+func healthTargetsFromState(state *stateFile, localZone string, groups []ipsec.LinkGroupSpec) []health.ProbeTarget {
 	if state == nil || state.IPsecReconcile == nil {
 		return nil
 	}
@@ -59,6 +61,10 @@ func healthTargetsFromState(state *stateFile, localZone string) []health.ProbeTa
 		if addr, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr)); err == nil {
 			base.LocalTunnelAddr = addr
 		}
+		if local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.RemoteGeneration, groups); ok {
+			base.LocalTunnelAddr = local
+			base.PeerTunnelAddr = peer
+		}
 		if shouldProbeStagedInterface(inst) {
 			oldTarget := base
 			oldTarget.ProbeID = healthProbeID(d.InstanceID, "old")
@@ -72,6 +78,10 @@ func healthTargetsFromState(state *stateFile, localZone string) []health.ProbeTa
 			stagedTarget.ProbeRole = "staged"
 			stagedTarget.InterfaceName = inst.StagedInterfaceName
 			stagedTarget.Generation = inst.StagedGeneration
+			if local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.StagedGeneration, groups); ok {
+				stagedTarget.LocalTunnelAddr = local
+				stagedTarget.PeerTunnelAddr = peer
+			}
 			stagedTarget.Staged = true
 			targets = append(targets, stagedTarget)
 			continue
@@ -79,6 +89,65 @@ func healthTargetsFromState(state *stateFile, localZone string) []health.ProbeTa
 		targets = append(targets, base)
 	}
 	return targets
+}
+
+func derivedHealthTunnelAddrs(d desiredLinkState, localZone string, generation uint64, groups []ipsec.LinkGroupSpec) (netip.Addr, netip.Addr, bool) {
+	if generation == 0 {
+		return netip.Addr{}, netip.Addr{}, false
+	}
+	group, ok := healthGroupByID(groups, d.GroupID)
+	if !ok {
+		return netip.Addr{}, netip.Addr{}, false
+	}
+	if sequentialHealthTunnelAddress(group) {
+		return desiredHealthTunnelAddrs(d)
+	}
+	local := zone.ZonePath(localZone)
+	if !local.Valid() || local.IsRoot() || !d.PeerZone.Valid() || d.PeerZone.IsRoot() {
+		return netip.Addr{}, netip.Addr{}, false
+	}
+	linkID := d.LinkID
+	if linkID == "" {
+		linkID = d.InstanceID
+	}
+	pathKey := d.PathKey
+	if pathKey == "" {
+		pathKey = ipsec.DefaultPathKey
+	}
+	localAddr, peerAddr, err := group.Normalized().DeriveTunnelAddressesForLink(local, d.PeerZone, linkID, pathKey, generation, 0)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, false
+	}
+	return localAddr, peerAddr, true
+}
+
+func healthGroupByID(groups []ipsec.LinkGroupSpec, id string) (ipsec.LinkGroupSpec, bool) {
+	for _, group := range groups {
+		if group.ID == id {
+			return group, true
+		}
+	}
+	return ipsec.LinkGroupSpec{}, false
+}
+
+func sequentialHealthTunnelAddress(group ipsec.LinkGroupSpec) bool {
+	group = group.Normalized()
+	if group.TunnelAddressSpec.Mode == ipsec.TunnelAddressSequentialPool {
+		return true
+	}
+	return group.TunnelAddressSpec.Mode == "" && (group.TunnelAddressSpec.Pool.IsValid() || group.TunnelAddressPool.IsValid())
+}
+
+func desiredHealthTunnelAddrs(d desiredLinkState) (netip.Addr, netip.Addr, bool) {
+	peer, err := netip.ParseAddr(stripScope(d.PeerTunnelAddr))
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, false
+	}
+	local, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr))
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, false
+	}
+	return local, peer, true
 }
 
 func shouldProbeStagedInterface(inst linkInstanceState) bool {
@@ -133,7 +202,11 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	if d.Sync.State != nil {
 		localZone = string(d.Sync.State.ManagedZone)
 	}
-	targets := healthTargetsFromState(d.Sync.State, localZone)
+	var groups []ipsec.LinkGroupSpec
+	if d.Sync.App != nil && d.Sync.App.Config != nil {
+		groups = d.Sync.App.Config.IPsec.LinkGroups
+	}
+	targets := healthTargetsFromState(d.Sync.State, localZone, groups)
 	now := d.Sync.now()
 	d.health.SetTargets(targets, now)
 	dispatched := d.health.Tick(ctx, now)
@@ -197,7 +270,12 @@ func debugHealth() error {
 	}
 	// Reconstruct targets and print from state.
 	localZone := string(state.ManagedZone)
-	targets := healthTargetsFromState(state, localZone)
+	rtConfig := rt.Config
+	var groups []ipsec.LinkGroupSpec
+	if rtConfig != nil {
+		groups = rtConfig.IPsec.LinkGroups
+	}
+	targets := healthTargetsFromState(state, localZone, groups)
 	if len(targets) == 0 {
 		fmt.Println("No link instances to probe.")
 		return nil

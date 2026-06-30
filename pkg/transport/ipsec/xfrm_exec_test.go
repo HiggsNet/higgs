@@ -48,7 +48,7 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 	if err := driver.EnsureInterface(context.Background(), spec); err != nil {
 		t.Fatalf("EnsureInterface: %v", err)
 	}
-	if err := driver.AssignAddress(context.Background(), "hgs1", "fd00:1234::1/64"); err != nil {
+	if err := driver.AssignAddress(context.Background(), spec, "fd00:1234::1/64"); err != nil {
 		t.Fatalf("AssignAddress: %v", err)
 	}
 	got := commandStrings(commands)
@@ -85,7 +85,8 @@ func TestSystemXFRMDriverAssignAddressPrunesStaleSameFamilyAddresses(t *testing.
 		},
 	}
 
-	if err := driver.AssignAddress(context.Background(), "hgs1", "fe80::1234/64"); err != nil {
+	spec := TransportLinkSpec{InterfaceName: "hgs1", NetNS: "h2"}
+	if err := driver.AssignAddress(context.Background(), spec, "fe80::1234/64"); err != nil {
 		t.Fatalf("AssignAddress: %v", err)
 	}
 	got := commandStrings(commands)
@@ -93,6 +94,32 @@ func TestSystemXFRMDriverAssignAddressPrunesStaleSameFamilyAddresses(t *testing.
 		"ip netns exec h2 ip -6 -o addr show dev hgs1",
 		"ip netns exec h2 ip addr del fe80::dead/64 dev hgs1",
 		"ip netns exec h2 ip addr replace fe80::1234/64 dev hgs1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestSystemXFRMDriverAssignAddressUsesSpecNamespace(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "default"},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			if strings.Join(args, " ") == "netns exec overlay ip -6 -o addr show dev hgs1" {
+				return []byte(""), nil
+			}
+			return []byte("ok"), nil
+		},
+	}
+	spec := TransportLinkSpec{InterfaceName: "hgs1", NetNS: "overlay"}
+	if err := driver.AssignAddress(context.Background(), spec, "fe80::1234/64"); err != nil {
+		t.Fatalf("AssignAddress: %v", err)
+	}
+	got := commandStrings(commands)
+	want := []string{
+		"ip netns exec overlay ip -6 -o addr show dev hgs1",
+		"ip netns exec overlay ip addr replace fe80::1234/64 dev hgs1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -258,7 +285,7 @@ func TestSystemXFRMDriverIntegrationSmoke(t *testing.T) {
 	if err := driver.EnsureInterface(ctx, spec); err != nil {
 		t.Fatalf("EnsureInterface: %v", err)
 	}
-	if err := driver.AssignAddress(ctx, iface, "fd00:4242::1/64"); err != nil {
+	if err := driver.AssignAddress(ctx, spec, "fd00:4242::1/64"); err != nil {
 		t.Fatalf("AssignAddress: %v", err)
 	}
 	if _, err := execCommand(ctx, "ip", "netns", "exec", ns, "ip", "link", "show", "dev", iface); err != nil {
@@ -363,10 +390,12 @@ func TestSystemXFRMDriverPeerTunnelPingSmoke(t *testing.T) {
 	if err := driverB.EnsureInterface(ctx, specB); err != nil {
 		t.Fatalf("EnsureInterface(B): %v", err)
 	}
-	if err := driverA.AssignAddress(ctx, iface, addrA.String()+"/64"); err != nil {
+	specA.InterfaceName = iface
+	if err := driverA.AssignAddress(ctx, specA, addrA.String()+"/64"); err != nil {
 		t.Fatalf("AssignAddress(A): %v", err)
 	}
-	if err := driverB.AssignAddress(ctx, iface, addrB.String()+"/64"); err != nil {
+	specB.InterfaceName = iface
+	if err := driverB.AssignAddress(ctx, specB, addrB.String()+"/64"); err != nil {
 		t.Fatalf("AssignAddress(B): %v", err)
 	}
 

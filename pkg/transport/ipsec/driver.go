@@ -74,7 +74,7 @@ type XFRMDriver interface {
 	EnsureNamespace(context.Context, NetNSSpec) error
 	EnsureInterface(context.Context, TransportLinkSpec) error
 	DeleteInterface(context.Context, string) error
-	AssignAddress(context.Context, string, string) error
+	AssignAddress(context.Context, TransportLinkSpec, string) error
 }
 
 type XFRMLinkState struct {
@@ -194,7 +194,7 @@ func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 		return plan, fmt.Errorf("ensure interface: %w", err)
 	}
 	if spec.LocalTunnelAddr.IsValid() {
-		if err := xfrm.AssignAddress(ctx, spec.InterfaceName, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
+		if err := xfrm.AssignAddress(ctx, spec, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
 			return plan, fmt.Errorf("assign address: %w", err)
 		}
 	}
@@ -232,7 +232,7 @@ func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver,
 		return plan, fmt.Errorf("ensure interface: %w", err)
 	}
 	if spec.LocalTunnelAddr.IsValid() {
-		if err := xfrm.AssignAddress(ctx, spec.InterfaceName, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
+		if err := xfrm.AssignAddress(ctx, spec, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
 			return plan, fmt.Errorf("assign address: %w", err)
 		}
 	}
@@ -708,7 +708,7 @@ func (d *DryRunDriver) DeleteInterface(_ context.Context, name string) error {
 	return nil
 }
 
-func (d *DryRunDriver) AssignAddress(_ context.Context, name, address string) error {
-	d.Addresses = append(d.Addresses, name+"="+address)
+func (d *DryRunDriver) AssignAddress(_ context.Context, spec TransportLinkSpec, address string) error {
+	d.Addresses = append(d.Addresses, spec.InterfaceName+"="+address)
 	return nil
 }

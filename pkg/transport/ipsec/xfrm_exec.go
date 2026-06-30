@@ -184,18 +184,21 @@ func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) erro
 	return nil
 }
 
-func (d SystemXFRMDriver) AssignAddress(ctx context.Context, name, address string) error {
-	if name == "" {
+func (d SystemXFRMDriver) AssignAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
+	if spec.InterfaceName == "" {
 		return errors.New("interface name is required")
 	}
 	if address == "" {
 		return errors.New("address is required")
 	}
-	netns := d.DefaultNetNS.Normalized()
-	if err := d.pruneInterfaceAddresses(ctx, netns, name, address); err != nil {
+	netns, err := d.specNetNS(spec)
+	if err != nil {
 		return err
 	}
-	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", name)
+	if err := d.pruneInterfaceAddresses(ctx, netns, spec.InterfaceName, address); err != nil {
+		return err
+	}
+	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
 }
 
 func (d SystemXFRMDriver) pruneInterfaceAddresses(ctx context.Context, netns NetNSSpec, name, target string) error {

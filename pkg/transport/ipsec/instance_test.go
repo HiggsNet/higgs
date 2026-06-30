@@ -850,6 +850,7 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 		TransportID:   "ipsec-main-ab",
 		InterfaceName: "hgs1",
 		XFRMIfID:      77,
+		InitiatorRole: InitiatorRolePrimary,
 		ContactPoints: []ContactPoint{{
 			Address:    "198.51.100.20",
 			Family:     FamilyIPv4,
@@ -885,6 +886,43 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 	}
 	if len(plan.Operations) == 0 || plan.Operations[0].Action == "terminate_sa" {
 		t.Fatalf("plan operations = %+v, want no old SA termination", plan.Operations)
+	}
+}
+
+func TestApplyReconcileActionPrepareResponderRotateTerminatesOldSA(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:     "node-b.catofes.",
+		PeerZone:      "node-a.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ba",
+		InterfaceName: "hgs-old",
+		XFRMIfID:      77,
+	}
+	stagedSpec := rotateSpecForRole(spec, 2, InitiatorRoleSecondaryStandby)
+	inst := NewLinkInstance(spec, LinkStateUp, time.Unix(4100, 0))
+	inst.IKEName = spec.TransportID
+	inst.StagedIKEName = stagedSpec.TransportID
+	inst.StagedGeneration = 2
+
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	_, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action:   ReconcileActionPrepareRotate,
+		Spec:     &stagedSpec,
+		Instance: &inst,
+	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Terminated) != 1 || ipsecDrv.Terminated[0] != spec.TransportID {
+		t.Fatalf("terminated = %+v, want old %s", ipsecDrv.Terminated, spec.TransportID)
+	}
+	if len(ipsecDrv.Unloaded) == 0 || ipsecDrv.Unloaded[0] != spec.TransportID {
+		t.Fatalf("unloaded = %+v, want old %s", ipsecDrv.Unloaded, spec.TransportID)
+	}
+	if len(ipsecDrv.Connections) != 1 || ipsecDrv.Connections[0].TransportID != stagedSpec.TransportID {
+		t.Fatalf("connections = %+v, want staged %s", ipsecDrv.Connections, stagedSpec.TransportID)
 	}
 }
 

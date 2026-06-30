@@ -8,6 +8,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/health"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestHealthTargetsParseScopedNetNS(t *testing.T) {
@@ -28,7 +29,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 		},
 	}
 
-	targets := healthTargetsFromState(state, string(state.ManagedZone))
+	targets := healthTargetsFromState(state, string(state.ManagedZone), nil)
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -68,7 +69,7 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		},
 	}
 
-	targets := healthTargetsFromState(state, string(state.ManagedZone))
+	targets := healthTargetsFromState(state, string(state.ManagedZone), nil)
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want 2", len(targets))
 	}
@@ -84,6 +85,63 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 	}
 	if staged := byRole["staged"]; staged.State != "up" {
 		t.Fatalf("staged target state = %q, want up", staged.State)
+	}
+}
+
+func TestHealthTargetsDeriveRotateTunnelAddressesByGeneration(t *testing.T) {
+	local := zone.ZonePath("node-a.catofes.")
+	peer := zone.ZonePath("node-b.catofes.")
+	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
+	linkID := "link-1"
+	pathKey := "family:ipv4"
+	oldLocal, oldPeer, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 1, 0)
+	if err != nil {
+		t.Fatalf("derive old tunnel addresses: %v", err)
+	}
+	newLocal, newPeer, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 2, 0)
+	if err != nil {
+		t.Fatalf("derive staged tunnel addresses: %v", err)
+	}
+	state := &stateFile{
+		ManagedZone: local,
+		LinkInstances: map[string]linkInstanceState{
+			linkID: {
+				ID:                  linkID,
+				ActualState:         "up",
+				InterfaceName:       "hgs-old",
+				RemoteGeneration:    1,
+				StagedGeneration:    2,
+				RotatePhase:         "testing_new",
+				StagedInterfaceName: "hgs-new",
+			},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      linkID,
+				GroupID:         group.ID,
+				PeerZone:        peer,
+				LinkID:          linkID,
+				PathKey:         pathKey,
+				InterfaceName:   "hgs-new",
+				LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(newLocal, "hgs-new", "h2"),
+				PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(newPeer, "hgs-new", "h2"),
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(local), []ipsec.LinkGroupSpec{group})
+	if len(targets) != 2 {
+		t.Fatalf("targets = %d, want 2", len(targets))
+	}
+	byRole := map[string]health.ProbeTarget{}
+	for _, target := range targets {
+		byRole[target.ProbeRole] = target
+	}
+	if old := byRole["old"]; old.InterfaceName != "hgs-old" || old.LocalTunnelAddr != oldLocal || old.PeerTunnelAddr != oldPeer {
+		t.Fatalf("old target = %+v, want iface hgs-old local=%s peer=%s", old, oldLocal, oldPeer)
+	}
+	if staged := byRole["staged"]; staged.InterfaceName != "hgs-new" || staged.LocalTunnelAddr != newLocal || staged.PeerTunnelAddr != newPeer {
+		t.Fatalf("staged target = %+v, want iface hgs-new local=%s peer=%s", staged, newLocal, newPeer)
 	}
 }
 

@@ -752,7 +752,7 @@ func TestDryRunDriverRecordsApplyOrderInputs(t *testing.T) {
 	if err := driver.EnsureInterface(context.Background(), spec); err != nil {
 		t.Fatalf("EnsureInterface: %v", err)
 	}
-	if err := driver.AssignAddress(context.Background(), "hgs1", "fd00::1/64"); err != nil {
+	if err := driver.AssignAddress(context.Background(), spec, "fd00::1/64"); err != nil {
 		t.Fatalf("AssignAddress: %v", err)
 	}
 	if len(driver.Namespaces) != 1 || len(driver.Connections) != 1 || len(driver.Interfaces) != 1 || len(driver.Addresses) != 1 {
