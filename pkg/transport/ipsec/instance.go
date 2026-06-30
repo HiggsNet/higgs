@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -334,6 +335,9 @@ func findStagedSA(states []SAState, inst LinkInstance) SAState {
 		return SAState{}
 	}
 	for _, state := range states {
+		if !saMatchesPathKey(state, inst.PathKey) {
+			continue
+		}
 		if state.Name == inst.StagedIKEName || state.ChildSA == inst.StagedChildSAName {
 			return state
 		}
@@ -1187,6 +1191,9 @@ func (r *ReconcileResult) add(action string, spec *TransportLinkSpec, inst *Link
 func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 	childName := ChildSAName(spec)
 	for _, state := range states {
+		if !saMatchesPathKey(state, spec.PathKey) {
+			continue
+		}
 		if state.Name == spec.TransportID || state.ChildSA == childName || (spec.XFRMIfID != 0 && state.XFRMIfID == spec.XFRMIfID) {
 			return state
 		}
@@ -1196,6 +1203,9 @@ func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 
 func findInstanceSA(states []SAState, inst LinkInstance) SAState {
 	for _, state := range states {
+		if !saMatchesPathKey(state, inst.PathKey) {
+			continue
+		}
 		if state.Name == inst.IKEName || state.ChildSA == inst.ChildSAName {
 			return state
 		}
@@ -1204,6 +1214,51 @@ func findInstanceSA(states []SAState, inst LinkInstance) SAState {
 		}
 	}
 	return SAState{}
+}
+
+func saMatchesPathKey(sa SAState, pathKey string) bool {
+	family := pathKeyFamily(pathKey)
+	if family == "" {
+		return true
+	}
+	endpointFamily := saEndpointFamily(sa)
+	return endpointFamily == "" || endpointFamily == family
+}
+
+func pathKeyFamily(pathKey string) string {
+	if !strings.HasPrefix(pathKey, "family:") {
+		return ""
+	}
+	family := strings.TrimPrefix(pathKey, "family:")
+	if validFamily(family) {
+		return family
+	}
+	return ""
+}
+
+func saEndpointFamily(sa SAState) string {
+	endpoint := firstNonEmptyString(sa.RemoteEndpoint, sa.Endpoint)
+	host := endpointHost(endpoint)
+	if host == "" {
+		return ""
+	}
+	return inferIPFamily(host)
+}
+
+func endpointHost(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(endpoint); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	if strings.HasPrefix(endpoint, "[") {
+		if end := strings.Index(endpoint, "]"); end > 1 {
+			return endpoint[1:end]
+		}
+	}
+	return endpoint
 }
 
 func sameSARuntime(a, b SAState) bool {

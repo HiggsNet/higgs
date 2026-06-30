@@ -105,7 +105,7 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 	if !hasPoint && IsActiveInitiatorRole(spec.InitiatorRole) {
 		return nil, fmt.Errorf("at least one contact point is required")
 	}
-	remoteAddr, err := strongSwanRemoteAddress(point, hasPoint)
+	remoteAddr, err := strongSwanRemoteAddress(spec, point, hasPoint)
 	if err != nil {
 		return nil, err
 	}
@@ -211,8 +211,14 @@ func firstContactPoint(points []ContactPoint) (ContactPoint, bool) {
 	return points[0], true
 }
 
-func strongSwanRemoteAddress(point ContactPoint, hasPoint bool) (string, error) {
+func strongSwanRemoteAddress(spec TransportLinkSpec, point ContactPoint, hasPoint bool) (string, error) {
 	if !hasPoint {
+		switch pathKeyFamily(spec.PathKey) {
+		case FamilyIPv4:
+			return "%any4", nil
+		case FamilyIPv6:
+			return "%any6", nil
+		}
 		return "%any", nil
 	}
 	remoteAddr := point.Address

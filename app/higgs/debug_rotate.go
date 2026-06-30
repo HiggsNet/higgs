@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -259,6 +260,9 @@ func matchingRotateSAs(link inspect.LinkView, sas []linkSAState) []linkSAState {
 }
 
 func rotateSAMatchesLink(link inspect.LinkView, sa linkSAState) bool {
+	if !linkSAMatchesPathKey(link, sa) {
+		return false
+	}
 	if sa.XFRMIfID != 0 && (sa.XFRMIfID == link.XFRMIfID || sa.XFRMIfID == link.Rotation.StagedXFRMIfID) {
 		return true
 	}
@@ -267,6 +271,51 @@ func rotateSAMatchesLink(link inspect.LinkView, sa linkSAState) bool {
 		nonEmptyMatches(link.ChildSAName, sa.Name, sa.ChildSA) ||
 		nonEmptyMatches(link.Rotation.StagedIKEName, sa.Name, sa.ChildSA) ||
 		nonEmptyMatches(link.Rotation.StagedChildSAName, sa.Name, sa.ChildSA)
+}
+
+func linkSAMatchesPathKey(link inspect.LinkView, sa linkSAState) bool {
+	family := debugPathKeyFamily(link.PathKey)
+	if family == "" {
+		return true
+	}
+	endpointFamily := debugSAEndpointFamily(sa)
+	return endpointFamily == "" || endpointFamily == family
+}
+
+func debugPathKeyFamily(pathKey string) string {
+	if !strings.HasPrefix(pathKey, "family:") {
+		return ""
+	}
+	family := strings.TrimPrefix(pathKey, "family:")
+	if family == ipsec.FamilyIPv4 || family == ipsec.FamilyIPv6 {
+		return family
+	}
+	return ""
+}
+
+func debugSAEndpointFamily(sa linkSAState) string {
+	endpoint := firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)
+	host := debugEndpointHost(endpoint)
+	if host == "" {
+		return ""
+	}
+	return ipsecFamily(host)
+}
+
+func debugEndpointHost(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(endpoint); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	if strings.HasPrefix(endpoint, "[") {
+		if end := strings.Index(endpoint, "]"); end > 1 {
+			return endpoint[1:end]
+		}
+	}
+	return endpoint
 }
 
 func nonEmptyMatches(filter string, values ...string) bool {

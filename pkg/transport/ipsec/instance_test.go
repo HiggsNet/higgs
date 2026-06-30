@@ -526,6 +526,68 @@ func TestReconcileCommitsRotateWhenStagedSAAlreadyCurrent(t *testing.T) {
 	}
 }
 
+func TestReconcileMatchesSameRuntimeSAByPathFamily(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		LinkID:          StableLinkID("node-a.catofes.", "node-b.catofes.", "ipsec-main", "family:ipv4"),
+		PathKey:         "family:ipv4",
+		TransportID:     "ipsec-same-runtime",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        77,
+		Generation:      3,
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
+		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 3,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   4501,
+		}},
+	}
+	existing := NewLinkInstance(spec, LinkStateUp, now)
+	existing.PathKey = "family:ipv4"
+	existing.RemoteGeneration = 3
+	existing.Endpoint = "[2001:db8::20]:4501"
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{
+			{
+				Name:           spec.TransportID,
+				ChildSA:        ChildSAName(spec),
+				XFRMIfID:       spec.XFRMIfID,
+				RemoteEndpoint: "[2001:db8::20]:4501",
+				Endpoint:       "[2001:db8::20]:4501",
+				Established:    true,
+			},
+			{
+				Name:           spec.TransportID,
+				ChildSA:        ChildSAName(spec),
+				XFRMIfID:       spec.XFRMIfID,
+				RemoteEndpoint: "198.51.100.20:4501",
+				Endpoint:       "198.51.100.20:4501",
+				Established:    true,
+			},
+		},
+		Now: now,
+	})
+
+	action := firstAction(result, ReconcileActionAdopt)
+	if action == nil {
+		t.Fatalf("expected adopt from matching IPv4 SA, got %+v", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.Endpoint != "198.51.100.20:4501" {
+		t.Fatalf("endpoint = %q, want IPv4 SA endpoint", inst.Endpoint)
+	}
+}
+
 func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

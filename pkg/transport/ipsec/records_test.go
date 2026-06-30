@@ -886,6 +886,40 @@ func TestBuildStrongSwanConnectionAllowsInboundWithoutContactPoint(t *testing.T)
 	}
 }
 
+func TestBuildStrongSwanConnectionRestrictsInboundFamilyPath(t *testing.T) {
+	tests := []struct {
+		pathKey string
+		want    string
+	}{
+		{"family:ipv4", "%any4"},
+		{"family:ipv6", "%any6"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.pathKey, func(t *testing.T) {
+			spec := TransportLinkSpec{
+				LocalZone:     "node-a.catofes.",
+				PeerZone:      "node-b.catofes.",
+				PathKey:       tc.pathKey,
+				TransportID:   "ipsec-main",
+				InitiatorRole: "",
+				XFRMIfID:      77,
+			}
+			msg, err := BuildLoadConnMessage(spec)
+			if err != nil {
+				t.Fatalf("BuildLoadConnMessage: %v", err)
+			}
+			conn := msg["ipsec-main"].(map[string]any)
+			addrs := conn["remote_addrs"].([]string)
+			if len(addrs) != 1 || addrs[0] != tc.want {
+				t.Fatalf("remote_addrs = %+v, want %s", addrs, tc.want)
+			}
+			if _, ok := conn["remote_port"]; ok {
+				t.Fatalf("inbound connection should not force remote_port: %+v", conn)
+			}
+		})
+	}
+}
+
 func TestStrongSwanDriverCallsVICIWithoutSwanctlParsing(t *testing.T) {
 	client := &recordingVICIClient{}
 	driver := &StrongSwanDriver{VICI: client}

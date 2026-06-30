@@ -38,6 +38,7 @@ func TestFilterLinkViewsMatchesPeerAndRuntimeFields(t *testing.T) {
 func TestRotateSAMatchesCurrentAndStagedRuntime(t *testing.T) {
 	link := inspect.LinkView{
 		ID:          "ipsec-main/node-a.catofes.",
+		PathKey:     "family:ipv4",
 		TransportID: "ipsec-current",
 		XFRMIfID:    1001,
 		Rotation: inspect.LinkRotation{
@@ -51,6 +52,9 @@ func TestRotateSAMatchesCurrentAndStagedRuntime(t *testing.T) {
 	}
 	if !rotateSAMatchesLink(link, linkSAState{Name: "ipsec-current-r2", XFRMIfID: 2002}) {
 		t.Fatalf("staged SA did not match link")
+	}
+	if rotateSAMatchesLink(link, linkSAState{Name: "ipsec-current", XFRMIfID: 1001, RemoteEndpoint: "[2001:db8::20]:4500"}) {
+		t.Fatalf("wrong-family SA matched link")
 	}
 	if rotateSAMatchesLink(link, linkSAState{Name: "ipsec-other", XFRMIfID: 3003}) {
 		t.Fatalf("unrelated SA matched link")
