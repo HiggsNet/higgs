@@ -707,6 +707,13 @@ func RuntimeConnectionID(linkID string, generation uint64, provider string) stri
 	return name
 }
 
+func runtimeGenerationForPortGeneration(generation uint64) uint64 {
+	if generation <= 1 {
+		return 0
+	}
+	return generation
+}
+
 func RuntimeXFRMIfID(linkID string, generation uint64, provider string) uint32 {
 	if provider == "" {
 		provider = ProviderStrongSwan

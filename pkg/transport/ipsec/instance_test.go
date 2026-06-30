@@ -23,6 +23,20 @@ func stagedRuntimeID(inst LinkInstance, generation uint64) string {
 	return RuntimeConnectionID(firstNonEmptyString(inst.LinkID, inst.ID), generation, inst.TransportKind)
 }
 
+func runtimeSpecForPortGeneration(spec TransportLinkSpec, generation uint64) TransportLinkSpec {
+	spec.Generation = generation
+	runtimeGeneration := runtimeGenerationForPortGeneration(generation)
+	spec.AddressEpoch = runtimeGeneration
+	if spec.LinkID != "" {
+		spec.TransportID = RuntimeConnectionID(spec.LinkID, runtimeGeneration, spec.Provider)
+		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, runtimeGeneration, spec.Provider)
+	} else {
+		spec.XFRMIfID = StableXFRMIfID(spec.LocalZone, spec.PeerZone, spec.TransportID)
+	}
+	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
+	return spec
+}
+
 func TestRotateSpecUsesIndependentXFRMInterface(t *testing.T) {
 	spec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
@@ -287,7 +301,7 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 	}
 	newSpec := plan.Desired[0]
 
-	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedRuntimeID(existing, 2)
@@ -400,7 +414,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	}
 	newSpec := plan.Desired[0]
 
-	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedRuntimeID(existing, 2)
@@ -470,7 +484,7 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 	newSpec := plan.Desired[0]
 	stagedSpec := rotateSpec(newSpec, 2)
 
-	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedSpec.TransportID
@@ -533,7 +547,7 @@ func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) 
 	newSpec := plan.Desired[0]
 	stagedSpec := rotateSpec(newSpec, 2)
 
-	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedSpec.TransportID
@@ -593,7 +607,7 @@ func TestReconcileSecondaryConvergedCommitsRotateWhenOldSADisappears(t *testing.
 	newSpec.Generation = 2
 	stagedSpec := rotateSpecForRole(newSpec, 2, InitiatorRoleSecondaryStandby)
 
-	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.InitiatorRole = InitiatorRoleConverged
 	existing.StagedGeneration = 2
@@ -703,7 +717,7 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 	}
 	newSpec := plan.Desired[0]
 
-	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedRuntimeID(existing, 2)
@@ -1089,7 +1103,7 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 	newSpec := plan.Desired[0]
 
 	// Simulate a persisted instance in the testing_new phase after daemon restart.
-	existing := NewLinkInstance(newSpec, LinkStateUp, now)
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.IKEName = existing.TransportID
 	existing.ChildSAName = ChildSAName(newSpec)

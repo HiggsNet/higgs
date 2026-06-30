@@ -48,6 +48,61 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksDerivesRuntimeNamesFromActiveGeneration(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{ID: "ipsec-main"}
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	base := plan.Desired[0]
+	if base.Generation != 1 {
+		t.Fatalf("base generation = %d, want advertised generation 1", base.Generation)
+	}
+	if base.TransportID != RuntimeConnectionID(base.LinkID, 0, base.Provider) {
+		t.Fatalf("base transport id = %q, want baseline %q", base.TransportID, RuntimeConnectionID(base.LinkID, 0, base.Provider))
+	}
+	if base.XFRMIfID != RuntimeXFRMIfID(base.LinkID, 0, base.Provider) || base.InterfaceName != StableInterfaceName(RuntimeXFRMIfID(base.LinkID, 0, base.Provider)) {
+		t.Fatalf("base runtime = transport %q if_id %d interface %q", base.TransportID, base.XFRMIfID, base.InterfaceName)
+	}
+
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: DefaultIKEPort},
+			NATT:       PortBinding{Advertised: 4501},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		UpdatedAt: now.Unix(),
+	})
+	plan, err = PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks after rotate: %v", err)
+	}
+	rotated := plan.Desired[0]
+	if rotated.Generation != 2 || contactGeneration(rotated) != 2 {
+		t.Fatalf("rotated generation = %d contact = %d, want 2", rotated.Generation, contactGeneration(rotated))
+	}
+	if rotated.TransportID != RuntimeConnectionID(rotated.LinkID, 2, rotated.Provider) {
+		t.Fatalf("rotated transport id = %q, want %q", rotated.TransportID, RuntimeConnectionID(rotated.LinkID, 2, rotated.Provider))
+	}
+	if rotated.XFRMIfID != RuntimeXFRMIfID(rotated.LinkID, 2, rotated.Provider) || rotated.InterfaceName != StableInterfaceName(RuntimeXFRMIfID(rotated.LinkID, 2, rotated.Provider)) {
+		t.Fatalf("rotated runtime = transport %q if_id %d interface %q", rotated.TransportID, rotated.XFRMIfID, rotated.InterfaceName)
+	}
+	if rotated.AddressEpoch != 2 {
+		t.Fatalf("rotated address epoch = %d, want 2", rotated.AddressEpoch)
+	}
+}
+
 func TestPlanTransportLinksRequiresOverlayIntent(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

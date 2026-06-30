@@ -196,6 +196,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	}
 
 	var specs []TransportLinkSpec
+	var specLinkIndexes []int
 	nextIndex := linkIndex
 	switch group.DefaultPathMode {
 	case PathModeFamilyRedundant:
@@ -215,6 +216,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 				}
 				spec.InitiatorRole = role
 				specs = append(specs, spec)
+				specLinkIndexes = append(specLinkIndexes, linkIndex+i)
 			}
 			nextIndex = linkIndex + len(families)
 			break
@@ -228,6 +230,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			}
 			spec.InitiatorRole = role
 			specs = append(specs, spec)
+			specLinkIndexes = append(specLinkIndexes, linkIndex+familyIdx)
 			familyIdx++
 		}
 		nextIndex = linkIndex + len(byFamily)
@@ -238,6 +241,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		}
 		spec.InitiatorRole = role
 		specs = append(specs, spec)
+		specLinkIndexes = append(specLinkIndexes, linkIndex)
 		nextIndex = linkIndex + 1
 	}
 
@@ -254,6 +258,9 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		}
 		if localIKE != 0 {
 			spec.LocalIKEPort = localIKE
+		}
+		if err := applyRuntimeGeneration(spec, group, specLinkIndexes[i]); err != nil {
+			return nil, false, PlanSkip{}, linkIndex, err
 		}
 	}
 	specs = filterSpecsByOverlayIntent(specs, intent)
@@ -293,6 +300,28 @@ func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *N
 	spec.LocalTunnelAddr = localAddr
 	spec.PeerTunnelAddr = peerAddr
 	return spec, nil
+}
+
+func applyRuntimeGeneration(spec *TransportLinkSpec, group LinkGroupSpec, linkIndex int) error {
+	runtimeGeneration := runtimeGenerationForPortGeneration(spec.Generation)
+	spec.AddressEpoch = runtimeGeneration
+	if spec.LinkID != "" {
+		spec.TransportID = RuntimeConnectionID(spec.LinkID, runtimeGeneration, spec.Provider)
+		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, runtimeGeneration, spec.Provider)
+	} else {
+		spec.XFRMIfID = StableXFRMIfID(spec.LocalZone, spec.PeerZone, spec.TransportID)
+	}
+	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
+	localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(spec.LocalZone, spec.PeerZone, spec.LinkID, spec.PathKey, spec.AddressEpoch, linkIndex)
+	if err != nil {
+		return err
+	}
+	if group.normalizedTunnelAddress().Mode == TunnelAddressSequentialPool && spec.PeerZone < spec.LocalZone {
+		localAddr, peerAddr = peerAddr, localAddr
+	}
+	spec.LocalTunnelAddr = localAddr
+	spec.PeerTunnelAddr = peerAddr
+	return nil
 }
 
 func canLoadResponder(localAccept string) bool {
