@@ -5,6 +5,7 @@ HIGGS_BIN="${HIGGS_BIN:-build/higgs}"
 FILTER="${HIGGS_ROTATE_FILTER:-}"
 LOG_FILE="${HIGGS_LOG_FILE:-}"
 HIGGS_PID="${HIGGS_PID:-}"
+CONFIG_FILE="${HIGGS_CONFIG_FILE:-/etc/higgs/config.yaml}"
 LINES="${HIGGS_DEBUG_LINES:-300}"
 
 section() {
@@ -41,9 +42,11 @@ run date -Is
 run uname -a
 
 section "higgs process"
-run ps -eo pid=,ppid=,stat=,etime=,args=
 PIDS="$(higgs_pids | tr '\n' ' ')"
 printf 'matched_build_higgs_pids: %s\n' "${PIDS:-none}"
+
+section "higgs config"
+run sed -n 1,240p "$CONFIG_FILE"
 
 section "higgs status"
 run "$HIGGS_BIN" debug peers
@@ -51,8 +54,8 @@ higgs_debug links
 run "$HIGGS_BIN" debug health
 higgs_debug rotate
 
-section "higgs db rotate records"
-run "$HIGGS_BIN" db dump
+section "higgs active ipsec records"
+run "$HIGGS_BIN" debug records --prefix ipsec/ --values
 
 section "strongswan status"
 run swanctl --stats
@@ -82,4 +85,4 @@ else
 fi
 
 section "strongswan logs"
-run journalctl -u strongswan -u strongswan-starter -u charon -n "$LINES" --no-pager
+run journalctl -u strongswan-swanctl.service -u strongswan -u strongswan-starter -u charon -n "$LINES" --no-pager

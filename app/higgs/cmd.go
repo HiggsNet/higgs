@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -537,6 +538,31 @@ func cmdDebug() *cli.Command {
 						filter = cmd.Args().First()
 					}
 					return debugRotate(ctx, filter)
+				},
+			},
+			{
+				Name:      "ping",
+				Usage:     "Ping the remote StrongSwan peer over each IPsec SA for a zone",
+				UsageText: "higgs debug ping <zone> [--count N] [--timeout D] [--family ipv4|ipv6] [--role active|old|staged]",
+				Description: "Send ICMP echo requests to the peer tunnel address of every IPsec link instance " +
+					"matching the peer zone, across IPv4/IPv6 and across both the old and new SA during a rotate. " +
+					"Runs in the CLI process (requires root/CAP_NET_RAW and netns access).",
+				Flags: []cli.Flag{
+					&cli.IntFlag{Name: "count", Aliases: []string{"c"}, Usage: "ICMP requests per target (default 4, or health.burst)"},
+					&cli.DurationFlag{Name: "timeout", Usage: "Per-request timeout (default 1s, or health.timeout)"},
+					&cli.StringFlag{Name: "family", Usage: "Restrict to ipv4 or ipv6"},
+					&cli.StringFlag{Name: "role", Usage: "Restrict to SA role: active, old, or staged"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return cli.Exit("usage: higgs debug ping <zone> [--count N] [--timeout D] [--family ipv4|ipv6] [--role active|old|staged]", 1)
+					}
+					return debugPing(ctx, zone.ZonePath(cmd.Args().First()), pingFlags{
+						count:   cmd.Int("count"),
+						timeout: cmd.Duration("timeout"),
+						family:  strings.ToLower(strings.TrimSpace(cmd.String("family"))),
+						role:    strings.ToLower(strings.TrimSpace(cmd.String("role"))),
+					})
 				},
 			},
 		},
