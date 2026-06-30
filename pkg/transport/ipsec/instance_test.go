@@ -457,6 +457,75 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	}
 }
 
+func TestReconcileCommitsRotateWhenStagedSAAlreadyCurrent(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
+		Version: 1,
+		Mode:    PortModeFixed,
+		Current: &PortSelection{
+			Generation: 2,
+			IKE:        PortBinding{Advertised: DefaultIKEPort},
+			NATT:       PortBinding{Advertised: 4501},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{ID: "ipsec-main"}
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	newSpec := plan.Desired[0]
+
+	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	stagedSpec := rotateSpec(newSpec, 2)
+	existing.RemoteGeneration = 1
+	existing.IKEName = stagedSpec.TransportID
+	existing.ChildSAName = ChildSAName(stagedSpec)
+	existing.InterfaceName = stagedSpec.InterfaceName
+	existing.XFRMIfID = stagedSpec.XFRMIfID
+	existing.StagedGeneration = 2
+	existing.StagedIKEName = stagedSpec.TransportID
+	existing.StagedChildSAName = ChildSAName(stagedSpec)
+	existing.StagedInterfaceName = stagedSpec.InterfaceName
+	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.RotatePhase = RotatePhaseDualRunning
+	existing.RotateDeadline = now.Add(time.Hour).Unix()
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{newSpec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{{
+			Name:        stagedSpec.TransportID,
+			ChildSA:     ChildSAName(stagedSpec),
+			XFRMIfID:    stagedSpec.XFRMIfID,
+			Established: true,
+		}},
+		Now: now,
+	})
+
+	action := firstAction(result, ReconcileActionNoop)
+	if action == nil || action.Reason != "staged sa already current" {
+		t.Fatalf("expected noop self-heal action, got %+v", result.Actions)
+	}
+	if firstAction(result, ReconcileActionCommitRotate) != nil {
+		t.Fatalf("unexpected commit_rotate for already-current staged SA: %+v", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.RemoteGeneration != 2 || inst.StagedGeneration != 0 || inst.RotatePhase != RotatePhaseIdle {
+		t.Fatalf("instance not self-healed: %+v", inst)
+	}
+	if inst.IKEName != stagedSpec.TransportID || inst.InterfaceName != stagedSpec.InterfaceName || inst.XFRMIfID != stagedSpec.XFRMIfID {
+		t.Fatalf("runtime not preserved: %+v", inst)
+	}
+}
+
 func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

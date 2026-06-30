@@ -295,11 +295,15 @@ func contactGeneration(spec TransportLinkSpec) uint64 {
 func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
 	spec := base
 	spec.Generation = generation
-	spec.AddressEpoch = generation
-	spec.TransportID = RotateConnectionName(base.TransportID, generation)
+	runtimeGeneration := runtimeGenerationForPortGeneration(generation)
+	spec.AddressEpoch = runtimeGeneration
+	spec.TransportID = base.TransportID
+	if runtimeGeneration != 0 {
+		spec.TransportID = RotateConnectionName(base.TransportID, runtimeGeneration)
+	}
 	if spec.LinkID != "" {
-		spec.TransportID = RuntimeConnectionID(spec.LinkID, generation, spec.Provider)
-		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, generation, spec.Provider)
+		spec.TransportID = RuntimeConnectionID(spec.LinkID, runtimeGeneration, spec.Provider)
+		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, runtimeGeneration, spec.Provider)
 	} else {
 		spec.XFRMIfID = StableXFRMIfID(base.LocalZone, base.PeerZone, spec.TransportID)
 	}
@@ -661,6 +665,11 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 		stagedXFRMIfID := firstNonZeroUint32(existing.StagedXFRMIfID, stagedSpec.XFRMIfID)
 		if stagedSA.Established {
 			oldSA := findInstanceSA(sas, existing)
+			oldSAWasStaged := false
+			if sameSARuntime(oldSA, stagedSA) {
+				oldSAWasStaged = true
+				oldSA = SAState{}
+			}
 			if oldSA.Established && retention > 0 && (existing.RotatePhase != RotatePhaseDualRunning || existing.RotateDeadline == 0) {
 				inst := existing
 				inst.ActualState = LinkStateUp
@@ -712,6 +721,10 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.LastError = ""
 			inst.LastTransition = now.Unix()
 			r.Instances[id] = inst
+			if oldSAWasStaged {
+				r.add(ReconcileActionNoop, &spec, &inst, "staged sa already current")
+				return
+			}
 			oldSpec := TransportLinkSpec{
 				PeerZone:      existing.PeerZone,
 				TransportID:   existing.IKEName,
@@ -1191,6 +1204,19 @@ func findInstanceSA(states []SAState, inst LinkInstance) SAState {
 		}
 	}
 	return SAState{}
+}
+
+func sameSARuntime(a, b SAState) bool {
+	if !saObserved(a) || !saObserved(b) {
+		return false
+	}
+	if a.Name != "" && b.Name != "" && a.Name == b.Name {
+		return true
+	}
+	if a.ChildSA != "" && b.ChildSA != "" && a.ChildSA == b.ChildSA {
+		return true
+	}
+	return a.XFRMIfID != 0 && b.XFRMIfID != 0 && a.XFRMIfID == b.XFRMIfID
 }
 
 func firstContactPointForGeneration(spec TransportLinkSpec, generation uint64) (ContactPoint, bool) {
