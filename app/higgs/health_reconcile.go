@@ -61,16 +61,16 @@ func healthTargetsFromState(state *stateFile, localZone string, groups []ipsec.L
 		if addr, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr)); err == nil {
 			base.LocalTunnelAddr = addr
 		}
-		if local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.RemoteGeneration, groups); ok {
-			base.LocalTunnelAddr = local
-			base.PeerTunnelAddr = peer
-		}
 		if shouldProbeStagedInterface(inst) {
 			oldTarget := base
 			oldTarget.ProbeID = healthProbeID(d.InstanceID, "old")
 			oldTarget.ProbeRole = "old"
 			oldTarget.InterfaceName = firstNonEmpty(inst.InterfaceName, d.InterfaceName)
 			oldTarget.Generation = inst.RemoteGeneration
+			if local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.RemoteGeneration, groups); ok {
+				oldTarget.LocalTunnelAddr = local
+				oldTarget.PeerTunnelAddr = peer
+			}
 			targets = append(targets, oldTarget)
 
 			stagedTarget := base

@@ -88,6 +88,50 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 	}
 }
 
+func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) {
+	local := zone.ZonePath("less.catofes.")
+	peer := zone.ZonePath("more.catofes.")
+	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
+	state := &stateFile{
+		ManagedZone: local,
+		LinkInstances: map[string]linkInstanceState{
+			"link-1": {
+				ID:               "link-1",
+				ActualState:      "up",
+				InterfaceName:    "hgsa0f3bb66",
+				RemoteGeneration: 1,
+			},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         group.ID,
+				PeerZone:        peer,
+				LinkID:          "link-1",
+				PathKey:         "family:ipv4",
+				InterfaceName:   "hgsa0f3bb66",
+				LocalTunnelAddr: "fe80::7454:3eca:1ff:6f5a%hgsa0f3bb66 netns=h2",
+				PeerTunnelAddr:  "fe80::91eb:8d94:108b:d6d%hgsa0f3bb66 netns=h2",
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(local), []ipsec.LinkGroupSpec{group})
+	if len(targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(targets))
+	}
+	target := targets[0]
+	if got := target.LocalTunnelAddr.String(); got != "fe80::7454:3eca:1ff:6f5a" {
+		t.Fatalf("local tunnel addr = %q, want persisted desired address", got)
+	}
+	if got := target.PeerTunnelAddr.String(); got != "fe80::91eb:8d94:108b:d6d" {
+		t.Fatalf("peer tunnel addr = %q, want persisted desired address", got)
+	}
+	if target.InterfaceName != "hgsa0f3bb66" || target.NetNS != "h2" {
+		t.Fatalf("target scope = iface %q netns %q, want hgsa0f3bb66/h2", target.InterfaceName, target.NetNS)
+	}
+}
+
 func TestHealthTargetsDeriveRotateTunnelAddressesByGeneration(t *testing.T) {
 	local := zone.ZonePath("node-a.catofes.")
 	peer := zone.ZonePath("node-b.catofes.")
