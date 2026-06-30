@@ -1083,15 +1083,7 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
 		if action.Instance != nil && action.Instance.IKEName != "" && action.Instance.IKEName != action.Spec.TransportID {
-			oldSpec := TransportLinkSpec{
-				PeerZone:    action.Instance.PeerZone,
-				TransportID: action.Instance.IKEName,
-			}
-			if IsActiveInitiatorRole(action.Spec.InitiatorRole) {
-				_ = ipsec.UnloadConnection(ctx, action.Instance.IKEName)
-			} else if _, err := TeardownConnectionOnly(ctx, ipsec, oldSpec); err != nil {
-				return ApplyPlan{}, err
-			}
+			_ = ipsec.UnloadConnection(ctx, action.Instance.IKEName)
 		}
 		return ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
 	case ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:

@@ -238,6 +238,250 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	t.Logf("IKE bring-up succeeded; bidirectional tunnel ping passed")
 }
 
+// TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke verifies the rotation
+// assumption that unloading an old responder config does not terminate the
+// already established IKE/CHILD SA. It then loads a staged config with a new
+// if_id and logs whether StrongSwan establishes the staged SA while the old SA
+// is still alive.
+func TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke(t *testing.T) {
+	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UTC().Format("20060102150405")
+	nsA := "higgs-unload-a-" + suffix
+	nsB := "higgs-unload-b-" + suffix
+	viciA := "/tmp/charon-" + nsA + ".vici"
+	viciB := "/tmp/charon-" + nsB + ".vici"
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", nsA).Run()
+		_ = exec.Command("ip", "netns", "delete", nsB).Run()
+		_ = os.Remove(viciA)
+		_ = os.Remove(viciB)
+	})
+
+	runIP(t, ctx, "netns", "add", nsA)
+	runIP(t, ctx, "netns", "add", nsB)
+	runIP(t, ctx, "link", "add", "hgunloada", "type", "veth", "peer", "name", "hgunloadb")
+	runIP(t, ctx, "link", "set", "hgunloada", "netns", nsA)
+	runIP(t, ctx, "link", "set", "hgunloadb", "netns", nsB)
+	for _, args := range [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.9/30", "dev", "hgunloada"},
+		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.10/30", "dev", "hgunloadb"},
+		{"netns", "exec", nsA, "ip", "link", "set", "hgunloada", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "hgunloadb", "up"},
+	} {
+		runIP(t, ctx, args...)
+	}
+
+	confA, err := writeStrongSwanConf(viciA)
+	if err != nil {
+		t.Fatalf("write strongswan.conf A: %v", err)
+	}
+	confB, err := writeStrongSwanConf(viciB)
+	if err != nil {
+		t.Fatalf("write strongswan.conf B: %v", err)
+	}
+	piddirA, err := os.MkdirTemp("", "higgs-unload-piddir-a-*")
+	if err != nil {
+		t.Fatalf("create piddir A: %v", err)
+	}
+	piddirB, err := os.MkdirTemp("", "higgs-unload-piddir-b-*")
+	if err != nil {
+		t.Fatalf("create piddir B: %v", err)
+	}
+	logA, err := os.CreateTemp("", "higgs-unload-charon-a-*.log")
+	if err != nil {
+		t.Fatalf("create log A: %v", err)
+	}
+	logB, err := os.CreateTemp("", "higgs-unload-charon-b-*.log")
+	if err != nil {
+		t.Fatalf("create log B: %v", err)
+	}
+
+	charonA := startCharonInNetNS(ctx, t, nsA, piddirA, confA, logA)
+	charonB := startCharonInNetNS(ctx, t, nsB, piddirB, confB, logB)
+	defer func() {
+		_ = charonA.Process.Kill()
+		_ = charonB.Process.Kill()
+		_ = charonA.Wait()
+		_ = charonB.Wait()
+		_ = os.Remove(confA)
+		_ = os.Remove(confB)
+		_ = os.RemoveAll(piddirA)
+		_ = os.RemoveAll(piddirB)
+		_ = logA.Close()
+		_ = logB.Close()
+		_ = os.Remove(logA.Name())
+		_ = os.Remove(logB.Name())
+	}()
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		_ = logA.Sync()
+		_ = logB.Sync()
+		if data, err := os.ReadFile(logA.Name()); err == nil {
+			t.Logf("--- unload charon A log ---\n%s", string(data))
+		}
+		if data, err := os.ReadFile(logB.Name()); err == nil {
+			t.Logf("--- unload charon B log ---\n%s", string(data))
+		}
+	}()
+
+	clientA, err := waitForVICI(ctx, viciA)
+	if err != nil {
+		t.Fatalf("connect to charon A VICI: %v", err)
+	}
+	defer clientA.Close()
+	clientB, err := waitForVICI(ctx, viciB)
+	if err != nil {
+		t.Fatalf("connect to charon B VICI: %v", err)
+	}
+	defer clientB.Close()
+
+	localPrivA, localPubA, err := generateECDSAKeyPair()
+	if err != nil {
+		t.Fatalf("generate key A: %v", err)
+	}
+	localPrivB, localPubB, err := generateECDSAKeyPair()
+	if err != nil {
+		t.Fatalf("generate key B: %v", err)
+	}
+
+	group := LinkGroupSpec{
+		ID:                "main",
+		Provider:          ProviderStrongSwan,
+		TunnelAddressSpec: TunnelAddressSpec{Mode: TunnelAddressDerivedPool, Family: FamilyIPv6, Pool: netip.MustParsePrefix("fd00:4646::/64")},
+	}
+	linkID := StableLinkID("node-a.", "node-b.", group.ID, DefaultPathKey)
+	addrA, addrB, err := group.DeriveTunnelAddressesForLink("node-a.", "node-b.", linkID, DefaultPathKey, 0, 0)
+	if err != nil {
+		t.Fatalf("derive base tunnel addresses: %v", err)
+	}
+	stagedAddrA, stagedAddrB, err := group.DeriveTunnelAddressesForLink("node-a.", "node-b.", linkID, DefaultPathKey, 2, 0)
+	if err != nil {
+		t.Fatalf("derive staged tunnel addresses: %v", err)
+	}
+
+	specA := TransportLinkSpec{
+		LocalZone:                "node-a.",
+		PeerZone:                 "node-b.",
+		OverlayID:                group.ID,
+		Provider:                 ProviderStrongSwan,
+		TransportID:              "ipsec-unload-a-b",
+		IKEIdentity:              "node-a.",
+		LocalAddress:             "192.0.2.9",
+		ContactPoints:            []ContactPoint{{Address: "192.0.2.10", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
+		XFRMIfID:                 424446,
+		InterfaceName:            "hgsunloada0",
+		LocalTunnelAddr:          addrA,
+		PeerTunnelAddr:           addrB,
+		NetNS:                    nsA,
+		LocalPrivateKey:          localPrivA,
+		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
+		PeerPublicKey:            localPubB,
+		InitiatorRole:            InitiatorRolePrimary,
+	}
+	specB := TransportLinkSpec{
+		LocalZone:                "node-b.",
+		PeerZone:                 "node-a.",
+		OverlayID:                group.ID,
+		Provider:                 ProviderStrongSwan,
+		TransportID:              "ipsec-unload-b-a",
+		IKEIdentity:              "node-b.",
+		LocalAddress:             "192.0.2.10",
+		XFRMIfID:                 424546,
+		InterfaceName:            "hgsunloadb0",
+		LocalTunnelAddr:          addrB,
+		PeerTunnelAddr:           addrA,
+		NetNS:                    nsB,
+		LocalPrivateKey:          localPrivB,
+		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
+		PeerPublicKey:            localPubA,
+	}
+
+	ipsecA := &StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
+	ipsecB := &StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
+	xfrmA := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsA, Create: false})
+	xfrmB := NewSystemXFRMDriver(NetNSSpec{Kind: NetNSName, Name: nsB, Create: false})
+	xfrmA.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsA, Create: false}
+	xfrmB.StateNetNS = NetNSSpec{Kind: NetNSName, Name: nsB, Create: false}
+
+	if _, err := ApplyTransportLink(ctx, ipsecB, xfrmB, specB, NetNSSpec{Kind: NetNSName, Name: nsB}); err != nil {
+		t.Fatalf("apply responder link B: %v", err)
+	}
+	if _, err := ApplyTransportLink(ctx, ipsecA, xfrmA, specA, NetNSSpec{Kind: NetNSName, Name: nsA}); err != nil {
+		t.Fatalf("apply initiator link A: %v", err)
+	}
+	if err := waitForSA(ctx, clientA, specA.TransportID); err != nil {
+		t.Fatalf("wait for base SA on A: %v", err)
+	}
+	if err := waitForSA(ctx, clientB, specB.TransportID); err != nil {
+		t.Fatalf("wait for base SA on B: %v", err)
+	}
+
+	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", specA.InterfaceName)
+	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", specB.InterfaceName)
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-6", "-c", "1", "-W", "3", addrB.String()); err != nil {
+		t.Fatalf("base tunnel ping A->B failed: %v\n%s", err, string(out))
+	}
+
+	if err := ipsecB.UnloadConnection(ctx, specB.TransportID); err != nil {
+		t.Fatalf("unload responder base config: %v", err)
+	}
+	if err := waitForSA(ctx, clientB, specB.TransportID); err != nil {
+		t.Fatalf("base SA disappeared after unload-conn on responder: %v", err)
+	}
+	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-6", "-c", "1", "-W", "3", addrB.String()); err != nil {
+		t.Fatalf("base tunnel ping after responder unload-conn failed: %v\n%s", err, string(out))
+	}
+	t.Logf("unload-conn on responder kept the established base SA and data plane alive")
+
+	stagedA := specA
+	stagedA.TransportID = RotateConnectionName(specA.TransportID, 2)
+	stagedA.XFRMIfID = 424447
+	stagedA.InterfaceName = "hgsunloada2"
+	stagedA.LocalTunnelAddr = stagedAddrA
+	stagedA.PeerTunnelAddr = stagedAddrB
+	stagedB := specB
+	stagedB.TransportID = RotateConnectionName(specB.TransportID, 2)
+	stagedB.XFRMIfID = 424547
+	stagedB.InterfaceName = "hgsunloadb2"
+	stagedB.LocalTunnelAddr = stagedAddrB
+	stagedB.PeerTunnelAddr = stagedAddrA
+
+	if _, err := ApplyStagedConnection(ctx, ipsecB, xfrmB, stagedB, NetNSSpec{Kind: NetNSName, Name: nsB}); err != nil {
+		t.Fatalf("apply staged responder link B: %v", err)
+	}
+	if _, err := ApplyStagedConnection(ctx, ipsecA, xfrmA, stagedA, NetNSSpec{Kind: NetNSName, Name: nsA}); err != nil {
+		t.Fatalf("apply staged initiator link A: %v", err)
+	}
+
+	stagedCtx, stagedCancel := context.WithTimeout(ctx, 8*time.Second)
+	defer stagedCancel()
+	errA := waitForSA(stagedCtx, clientA, stagedA.TransportID)
+	errB := waitForSA(stagedCtx, clientB, stagedB.TransportID)
+	if errA != nil || errB != nil {
+		t.Logf("staged SA not observed while base SA remained alive: A=%v B=%v", errA, errB)
+		return
+	}
+	sasB, err := ipsecB.ListSAs(ctx)
+	if err != nil {
+		t.Fatalf("list staged SAs on B: %v", err)
+	}
+	if !hasEstablishedSAWithIfID(sasB, stagedB.TransportID, stagedB.XFRMIfID) {
+		t.Logf("staged SA name appeared on B, but not with staged if_id %d: %+v", stagedB.XFRMIfID, sasB)
+		return
+	}
+	t.Logf("staged SA established with staged if_id while base SA stayed alive")
+}
+
 // TestStrongSwanBidirectionalTakeoverSmoke exercises the Phase 4.5 takeover
 // path with real StrongSwan/VICI/XFRM. The primary side is loaded as a
 // responder-only trap to model "primary outbound cannot initiate, but inbound
@@ -630,6 +874,15 @@ func saEstablished(raw map[string]any) bool {
 			if stringValue(child["state"]) == "INSTALLED" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func hasEstablishedSAWithIfID(sas []SAState, name string, ifID uint32) bool {
+	for _, sa := range sas {
+		if sa.Name == name && sa.XFRMIfID == ifID && sa.Established {
+			return true
 		}
 	}
 	return false

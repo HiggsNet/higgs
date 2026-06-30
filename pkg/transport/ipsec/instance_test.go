@@ -889,7 +889,7 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 	}
 }
 
-func TestApplyReconcileActionPrepareResponderRotateTerminatesOldSA(t *testing.T) {
+func TestApplyReconcileActionPrepareResponderRotateKeepsOldSA(t *testing.T) {
 	spec := TransportLinkSpec{
 		LocalZone:     "node-b.catofes.",
 		PeerZone:      "node-a.catofes.",
@@ -915,8 +915,8 @@ func TestApplyReconcileActionPrepareResponderRotateTerminatesOldSA(t *testing.T)
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
-	if len(ipsecDrv.Terminated) != 1 || ipsecDrv.Terminated[0] != spec.TransportID {
-		t.Fatalf("terminated = %+v, want old %s", ipsecDrv.Terminated, spec.TransportID)
+	if len(ipsecDrv.Terminated) != 0 {
+		t.Fatalf("prepare_rotate terminated old SA: %+v", ipsecDrv.Terminated)
 	}
 	if len(ipsecDrv.Unloaded) == 0 || ipsecDrv.Unloaded[0] != spec.TransportID {
 		t.Fatalf("unloaded = %+v, want old %s", ipsecDrv.Unloaded, spec.TransportID)
