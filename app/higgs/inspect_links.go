@@ -10,9 +10,13 @@ import (
 )
 
 type linkInspectionBuild struct {
-	Inspection   inspect.LinkInspection
-	PlannedSpecs map[string]ipsec.TransportLinkSpec
-	PlanError    error
+	Inspection        inspect.LinkInspection
+	PlannedSpecs      map[string]ipsec.TransportLinkSpec
+	ReplannedDesired  int
+	ReplanIgnored     bool
+	LastDesiredLinks  int
+	DesiredPlanSource string
+	PlanError         error
 }
 
 func buildLinkInspection(rt *Runtime, state *stateFile, health []healthLinkJSON) linkInspectionBuild {
@@ -39,13 +43,47 @@ func buildLinkInspection(rt *Runtime, state *stateFile, health []healthLinkJSON)
 		input.Instances = append(input.Instances, inspectLinkInstance(rt, state, inst))
 	}
 	planned, specs, planErr := plannedInspectDesiredLinks(rt, state)
-	input.PlannedDesired = planned
-	plannedSpecs = specs
+	replannedDesired := len(planned)
+	lastDesiredLinks := lastReconcileDesiredLinks(reconcile)
+	desiredPlanSource := "live"
+	replanIgnored := shouldIgnorePartialReplan(reconcile, replannedDesired, planErr)
+	if replanIgnored {
+		desiredPlanSource = "last_reconcile"
+	} else {
+		input.PlannedDesired = planned
+		plannedSpecs = specs
+	}
 	inspection := inspect.BuildLinks(input)
 	if planErr != nil {
 		inspection.Summary.DesiredPlanError = planErr.Error()
 	}
-	return linkInspectionBuild{Inspection: inspection, PlannedSpecs: plannedSpecs, PlanError: planErr}
+	return linkInspectionBuild{
+		Inspection:        inspection,
+		PlannedSpecs:      plannedSpecs,
+		ReplannedDesired:  replannedDesired,
+		ReplanIgnored:     replanIgnored,
+		LastDesiredLinks:  lastDesiredLinks,
+		DesiredPlanSource: desiredPlanSource,
+		PlanError:         planErr,
+	}
+}
+
+func lastReconcileDesiredLinks(reconcile *ipsecReconcileState) int {
+	if reconcile == nil {
+		return 0
+	}
+	if len(reconcile.Desired) > 0 {
+		return len(reconcile.Desired)
+	}
+	return reconcile.DesiredLinks
+}
+
+func shouldIgnorePartialReplan(reconcile *ipsecReconcileState, replannedDesired int, planErr error) bool {
+	if planErr != nil {
+		return true
+	}
+	lastDesiredLinks := lastReconcileDesiredLinks(reconcile)
+	return lastDesiredLinks > 0 && replannedDesired < lastDesiredLinks
 }
 
 func sortedLinkInstanceIDs(instances map[string]linkInstanceState) []string {

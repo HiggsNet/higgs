@@ -144,7 +144,11 @@ func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) 
 	}
 	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(view.Summary.LastRunUnix))
 	fmt.Fprintf(w, "desired_links: %d\n", view.Summary.DesiredLinks)
-	fmt.Fprintf(w, "planned_desired_links: %d\n", view.Summary.PlannedDesired)
+	fmt.Fprintf(w, "planned_desired_links: %d\n", build.ReplannedDesired)
+	if build.ReplanIgnored {
+		fmt.Fprintf(w, "planned_desired_status: ignored_partial last_reconcile_desired=%d\n", build.LastDesiredLinks)
+	}
+	fmt.Fprintf(w, "desired_source: %s\n", dash(build.DesiredPlanSource))
 	fmt.Fprintf(w, "actual_sas: %d\n", view.Summary.ActualSAs)
 	fmt.Fprintf(w, "last_error: %s\n", dash(view.Summary.LastError))
 	fmt.Fprintf(w, "link_instances: %d\n", view.Summary.LinkInstances)
@@ -550,7 +554,7 @@ func formatUint32OrDash(value uint32) string {
 }
 
 func debugPortGenerationSummary(spec *ipsec.TransportLinkSpec, rotation inspect.LinkRotation) string {
-	return fmt.Sprintf("%d/%d/%d", debugSelectedGeneration(spec), rotation.RemoteGeneration, rotation.StagedGeneration)
+	return fmt.Sprintf("%s/%d/%d", debugSelectedGeneration(spec), rotation.RemoteGeneration, rotation.StagedGeneration)
 }
 
 func debugPortSummary(spec *ipsec.TransportLinkSpec, selectedEndpoint, runtimeEndpoint string, stagedGeneration uint64) string {
@@ -562,11 +566,11 @@ func debugPortSummary(spec *ipsec.TransportLinkSpec, selectedEndpoint, runtimeEn
 	)
 }
 
-func debugSelectedGeneration(spec *ipsec.TransportLinkSpec) uint64 {
+func debugSelectedGeneration(spec *ipsec.TransportLinkSpec) string {
 	if spec == nil {
-		return 0
+		return "-"
 	}
-	return spec.Generation
+	return fmt.Sprintf("%d", spec.Generation)
 }
 
 func debugLocalPort(spec *ipsec.TransportLinkSpec) string {

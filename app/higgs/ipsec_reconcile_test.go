@@ -19,6 +19,9 @@ func TestDebugIPsecPortsPreferContactAndRuntimeEndpoints(t *testing.T) {
 	if got := debugPortGenerationSummary(spec, inspect.LinkRotation{RemoteGeneration: 1, StagedGeneration: 2}); got != "3/1/2" {
 		t.Fatalf("port generation summary = %q", got)
 	}
+	if got := debugPortGenerationSummary(nil, inspect.LinkRotation{RemoteGeneration: 3}); got != "-/3/0" {
+		t.Fatalf("missing spec port generation summary = %q", got)
+	}
 	if got := debugPortSummary(spec, "198.51.100.20:4500", "198.51.100.20:33403", 2); got != "4500/33403/33403/33401" {
 		t.Fatalf("port summary = %q", got)
 	}

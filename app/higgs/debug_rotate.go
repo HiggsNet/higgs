@@ -97,6 +97,11 @@ func writeDebugRotate(w io.Writer, rt *Runtime, state *stateFile, filter string,
 	}
 	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(build.Inspection.Summary.LastRunUnix))
 	fmt.Fprintf(w, "link_instances: %d\n", build.Inspection.Summary.LinkInstances)
+	fmt.Fprintf(w, "planned_desired_links: %d\n", build.ReplannedDesired)
+	if build.ReplanIgnored {
+		fmt.Fprintf(w, "planned_desired_status: ignored_partial last_reconcile_desired=%d\n", build.LastDesiredLinks)
+	}
+	fmt.Fprintf(w, "desired_source: %s\n", dash(build.DesiredPlanSource))
 	if strings.TrimSpace(filter) != "" {
 		fmt.Fprintf(w, "filter: %s\n", filter)
 		fmt.Fprintf(w, "matched_links: %d\n", len(links))
