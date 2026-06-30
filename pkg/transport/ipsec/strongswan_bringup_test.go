@@ -213,10 +213,15 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		t.Fatalf("apply transport link B: %v", err)
 	}
 
-	// Wait until both sides report an established SA. Both connections use
-	// start_action=start, so after both configs are loaded the side that
-	// initiates second (B) will find a matching responder on A; A then
-	// processes B's request and also ends up with an established SA.
+	if err := InitiateTransportChild(ctx, ipsecA, specA, nil); err != nil {
+		t.Fatalf("initiate child A: %v", err)
+	}
+	if err := InitiateTransportChild(ctx, ipsecB, specB, nil); err != nil {
+		t.Fatalf("initiate child B: %v", err)
+	}
+
+	// Wait until both sides report an established SA. The loaded children use
+	// trap policies; Higgs triggers establishment explicitly through VICI.
 	if err := waitForSA(ctx, clientA, transportAtoB); err != nil {
 		t.Fatalf("wait for SA on A: %v", err)
 	}

@@ -180,13 +180,10 @@ func RotateChildSAName(transportID string, generation uint64) string {
 }
 
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
-	startAction := "start"
-	if !IsActiveInitiatorRole(spec.InitiatorRole) {
-		// responder-only, secondary-standby and takeover all install a trap
-		// policy so that matching traffic (or the initiator's IKE_AUTH)
-		// brings up the child without an explicit create action.
-		startAction = "trap"
-	}
+	// Higgs drives active CHILD_SA establishment through its explicit VICI
+	// initiate path. Keeping the loaded child as a trap avoids racing
+	// StrongSwan autostart against our own initiate during rotate/repair.
+	startAction := "trap"
 	return map[string]any{
 		"mode":         StrongSwanChildMode,
 		"local_ts":     broadTrafficSelectors(spec.LocalTunnelAddr),

@@ -131,6 +131,9 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	if child["if_id_in"] != "77" || child["if_id_out"] != "77" {
 		t.Fatalf("child if_id fields = %#v", child)
 	}
+	if child["start_action"] != "trap" {
+		t.Fatalf("child start_action = %#v, want trap", child["start_action"])
+	}
 }
 
 func TestStrongSwanDriverBoundsVICIOperation(t *testing.T) {

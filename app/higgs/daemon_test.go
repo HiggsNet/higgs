@@ -1631,7 +1631,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 		"      local_id: node-a.catofes.",
 		"      remote_id: node-b.catofes.",
 		"      peer_public_key: ",
-		"      child_start_action: start",
+		"      child_start_action: trap",
 		"      child_if_id_out: ",
 	} {
 		if !strings.Contains(output, want) {
