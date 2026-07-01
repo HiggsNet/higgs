@@ -129,3 +129,43 @@ func TestBoltStoreLoadRestoresLatestActiveRecord(t *testing.T) {
 		t.Fatalf("oldest loaded history version = %d, want 2", got)
 	}
 }
+
+func TestBoltStoreSaveNetworkDeletesRemovedZoneBuckets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "higgs.db")
+	store, err := OpenBoltStore(path, 0o600)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	ns := NewNetworkState()
+	ns.Zones[RootZone] = NewZoneState(RootZone, &ZoneAuthority{
+		Zone:      RootZone,
+		Epoch:     1,
+		Threshold: 1,
+	})
+	ns.Zones["node1.catofes."] = NewZoneState("node1.catofes.", &ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+	})
+	if err := store.SaveNetwork(ns); err != nil {
+		t.Fatalf("SaveNetwork(initial): %v", err)
+	}
+
+	delete(ns.Zones, "node1.catofes.")
+	if err := store.SaveNetwork(ns); err != nil {
+		t.Fatalf("SaveNetwork(delete): %v", err)
+	}
+
+	got, err := store.LoadNetwork()
+	if err != nil {
+		t.Fatalf("LoadNetwork: %v", err)
+	}
+	if got.Zones["node1.catofes."] != nil {
+		t.Fatalf("removed zone bucket was loaded again")
+	}
+	if got.Zones[RootZone] == nil {
+		t.Fatalf("root zone was unexpectedly removed")
+	}
+}

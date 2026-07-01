@@ -61,6 +61,25 @@ func (s *BoltStore) SaveNetwork(ns *NetworkState) error {
 			return err
 		}
 
+		var staleBuckets [][]byte
+		if err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
+			path, ok := parseZoneBucket(name)
+			if !ok {
+				return nil
+			}
+			if ns.Zones[path] == nil {
+				staleBuckets = append(staleBuckets, append([]byte(nil), name...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, name := range staleBuckets {
+			if err := tx.DeleteBucket(name); err != nil {
+				return err
+			}
+		}
+
 		for path, zs := range ns.Zones {
 			if zs == nil {
 				continue

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -63,8 +64,8 @@ func TestPlanPurgeRevokedZones_AllCollectsSubtreeAndRefs(t *testing.T) {
 
 	// Local runtime residue pointing at the revoked zones.
 	state.LinkInstances = map[string]linkInstanceState{
-		"link-b":    {ID: "link-b", PeerZone: "node-b.catofes."},
-		"link-leaf": {ID: "link-leaf", PeerZone: "leaf.node-b.catofes."},
+		"link-b":     {ID: "link-b", PeerZone: "node-b.catofes."},
+		"link-leaf":  {ID: "link-leaf", PeerZone: "leaf.node-b.catofes."},
 		"link-other": {ID: "link-other", PeerZone: "node-c.catofes."},
 	}
 	state.SyncPeers = map[string]syncPeerState{
@@ -203,6 +204,37 @@ func TestExecutePurgePlan_DeletesAndPreservesTombstone(t *testing.T) {
 	}
 	if _, ok := state.SyncPeers["node-c.catofes."]; !ok {
 		t.Errorf("unrelated sync peer must remain")
+	}
+}
+
+func TestExecutePurgePlan_PersistedDeletionDoesNotReloadZone(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(123, 0)
+	addRevocationTombstoneForTest(t, state, "node-b.catofes.", "catofes.")
+
+	path := filepath.Join(t.TempDir(), "higgs.db")
+	rt := &Runtime{Config: defaultAppConfig(), StatePath: path, Clock: func() time.Time { return now }}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState(initial): %v", err)
+	}
+	plan, err := planPurgeRevokedZones(state, now, "")
+	if err != nil {
+		t.Fatalf("planPurgeRevokedZones: %v", err)
+	}
+	executePurgePlan(state, plan)
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState(purged): %v", err)
+	}
+
+	got, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got.Network.Zones["node-b.catofes."] != nil {
+		t.Fatalf("purged zone reloaded from stale bucket")
+	}
+	if got.Network.Zones["catofes."].Revocations["node-b.catofes."] == nil {
+		t.Fatalf("parent revocation tombstone was not preserved")
 	}
 }
 
