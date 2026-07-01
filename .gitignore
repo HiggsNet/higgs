@@ -7,3 +7,5 @@ build
 .public-test
 app/higgs/.higgs.db
 .claude
+.codex
+.agents

@@ -24,6 +24,34 @@ make build
 make test
 ```
 
+需要查看 skip 原因或更完整日志时运行：
+
+```bash
+make test-verbose
+```
+
+## 如何选择验证层级
+
+日常开发不要一上来跑完整 smoke。按改动边界从小到大选择：
+
+| 改动类型 | 推荐入口 |
+|----------|----------|
+| 纯 Go 逻辑、record、zone、crypto、parser | `make test`，必要时加对应 package 的 `go test ./path -run ...`。 |
+| 配置字段、CLI 输入输出、daemon control path | 先跑 focused Go 测试，再跑覆盖该路径的轻量 smoke。 |
+| gossip/sync/object pull/NAT observed | 跑对应轻量 smoke；做阶段 readiness 判断时再扩到 `make smoke-all`。 |
+| IPsec planner、routing planner、firewall planner | 先跑 dry-run smoke；只有触碰真实系统 apply/reconcile 时才跑真实数据面 smoke。 |
+| Observer API/UI/inspect 输出 | `make observer-smoke`。 |
+| XFRM、StrongSwan、BIRD、nftables/iptables、netns | 先跑 preflight，再跑 root 或 container 数据面 smoke。 |
+
+做提交前的最低门槛通常是：
+
+```bash
+make check
+git diff --check
+```
+
+如果改动影响多个运行时边界，再补对应 smoke。不要用一个 sandbox 里的 socket 权限失败替代代码判断；先确认它是不是环境限制。
+
 ## 轻量 Smoke
 
 轻量 smoke 不要求 root、真实 StrongSwan、真实 BIRD 或系统 firewall 数据面。部分目标会启动本地 UDP/TCP socket，因此受限 sandbox 里可能失败；失败时先区分产品回归和运行环境限制。
@@ -132,6 +160,22 @@ sudo make revocation-data-plane-smoke
 make revocation-data-plane-container-smoke
 ```
 
+container 目标默认使用 Docker，也可以切到 Podman：
+
+```bash
+HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
+```
+
+这些目标会按需构建并复用缓存镜像和 Go cache volume。常用覆盖项：
+
+| 变量 | 说明 |
+|------|------|
+| `HIGGS_CONTAINER_RUNTIME` | 容器运行时，默认 `docker`。 |
+| `HIGGS_CONTAINER_USERNS` | Docker 默认使用 `host` user namespace；设为空可禁用该参数做对比。 |
+| `HIGGS_IPSEC_XFRM_IMAGE` / `HIGGS_BIRD_IMAGE` / `HIGGS_FIREWALL_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_IMAGE` | 数据面 smoke 的基础镜像，默认 `ubuntu:24.04`。 |
+| `HIGGS_IPSEC_XFRM_REBUILD_IMAGE` / `HIGGS_BIRD_REBUILD_IMAGE` / `HIGGS_FIREWALL_REBUILD_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_REBUILD_IMAGE` | 设为 `1` 时强制重建对应缓存镜像。 |
+| `GO_CACHE` / `GO_MOD_CACHE` | Makefile 侧 Go cache 目录，默认 `/tmp/higgs-gocache` 和 `/tmp/higgs-gomodcache`。 |
+
 真实数据面目标说明：
 
 | 目标 | 说明 |
@@ -156,5 +200,16 @@ smoke 失败时先看目标属于哪一层：
 - object pull / chunk fallback 失败，区分 TCP object pull、UDP chunk repair 和外部端口阻断工具是否真的可用。
 - dry-run 目标失败，通常是代码或测试 fixture 回归，不应归因于宿主系统能力。
 - root/container smoke 失败，先看 preflight、容器权限、charon/VICI、BIRD、nftables/iptables 和 netns/XFRM 诊断输出。
+
+优先收集这些证据再改代码：
+
+| 场景 | 证据 |
+|------|------|
+| sync/gossip 不收敛 | 每个节点日志、`sync status --verbose`、`zone show`、record history、catalog/object pull 计数。 |
+| daemon 行为异常 | control socket 是否在线、`sync status --verbose` 里的 daemon 状态、daemon 日志和本地 state DB。 |
+| IPsec/XFRM 异常 | preflight 输出、`debug links`、`debug health`、`swanctl --list-sas`、`ip xfrm state`、XFRM interface/address/route。 |
+| routing/BIRD 异常 | generated BIRD config、`debug routing`、BIRD control socket、neighbor 和 best route 输出。 |
+| firewall/revocation 异常 | planned rules、实际 nftables/iptables 规则、revocation impacts、peer cache 和 link teardown 日志。 |
+| sandbox/CI 异常 | `Operation not permitted`、`socket: operation not permitted`、容器 privileged 能力、Seccomp/NoNewPrivs 状态。 |
 
 如果一个 smoke 目标开始频繁失败，不要只按名称判断它过期。先用日志、状态库、generated config、系统规则和 runtime counters 判断是产品 bug、测试夹具不适合当前流程，还是运行环境能力不足。

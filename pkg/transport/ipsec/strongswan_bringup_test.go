@@ -111,6 +111,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		if data, err := os.ReadFile(logB.Name()); err == nil {
 			t.Logf("%s", string(data))
 		}
+		dumpStrongSwanSmokeDiagnostics(t, ctx, nsA, viciA, "A")
+		dumpStrongSwanSmokeDiagnostics(t, ctx, nsB, viciB, "B")
 	}
 	defer func() {
 		if t.Failed() {
@@ -196,6 +198,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
 		PeerPublicKey:            localPubA,
 	}
+	specB.ContactPoints = nil
+	specB.InitiatorRole = ""
 
 	keyDirA := t.TempDir()
 	keyDirB := t.TempDir()
@@ -215,9 +219,6 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 
 	if err := InitiateTransportChild(ctx, ipsecA, specA, nil); err != nil {
 		t.Fatalf("initiate child A: %v", err)
-	}
-	if err := InitiateTransportChild(ctx, ipsecB, specB, nil); err != nil {
-		t.Fatalf("initiate child B: %v", err)
 	}
 
 	// Wait until both sides report an established SA. The loaded children use
@@ -857,6 +858,30 @@ func waitForSA(ctx context.Context, client *GoviciClient, name string) error {
 		default:
 			time.Sleep(200 * time.Millisecond)
 		}
+	}
+}
+
+func dumpStrongSwanSmokeDiagnostics(t *testing.T, ctx context.Context, ns, viciSocket, label string) {
+	t.Helper()
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{name: "swanctl list conns", args: []string{"netns", "exec", ns, "swanctl", "--uri", "unix://" + viciSocket, "--list-conns"}},
+		{name: "swanctl list sas", args: []string{"netns", "exec", ns, "swanctl", "--uri", "unix://" + viciSocket, "--list-sas"}},
+		{name: "xfrm state", args: []string{"netns", "exec", ns, "ip", "xfrm", "state"}},
+		{name: "xfrm policy", args: []string{"netns", "exec", ns, "ip", "xfrm", "policy"}},
+		{name: "links", args: []string{"netns", "exec", ns, "ip", "link", "show"}},
+		{name: "addresses", args: []string{"netns", "exec", ns, "ip", "addr", "show"}},
+		{name: "routes", args: []string{"netns", "exec", ns, "ip", "route", "show", "table", "all"}},
+	}
+	for _, cmd := range commands {
+		out, err := execCommand(ctx, "ip", cmd.args...)
+		if err != nil {
+			t.Logf("--- strongSwan smoke %s %s failed: %v ---\n%s", label, cmd.name, err, string(out))
+			continue
+		}
+		t.Logf("--- strongSwan smoke %s %s ---\n%s", label, cmd.name, string(out))
 	}
 }
 
