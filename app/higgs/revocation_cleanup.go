@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -259,6 +260,124 @@ func CollectAllRevokedZones(state *stateFile, now time.Time) map[zone.ZonePath]b
 		}
 	}
 	return out
+}
+
+// purgePlan describes the local state that a manual revoked-zone GC would
+// remove. It is computed without mutating state so the CLI can print a dry-run
+// preview and reuse the same logic when applying.
+type purgePlan struct {
+	// Zones are the revoked zone paths whose ZoneState bodies will be deleted
+	// from Network.Zones, sorted ascending. Includes descendant subtrees.
+	Zones []zone.ZonePath `json:"zones,omitempty"`
+	// LinkInstances lists LinkInstance IDs whose PeerZone is in Zones.
+	LinkInstances []string `json:"link_instances,omitempty"`
+	// SyncPeers lists peer IDs (zone FQDNs) whose SyncPeers entries are removed.
+	SyncPeers []string `json:"sync_peers,omitempty"`
+	// ManagedZoneSkipped lists revoked zones excluded because they overlap the
+	// local node's ManagedZone identity chain (self/ancestor/descendant).
+	// Reported for transparency; never deleted.
+	ManagedZoneSkipped []zone.ZonePath `json:"managed_zone_skipped,omitempty"`
+}
+
+// overlapsLocalIdentity reports whether z is the local node's managed zone or
+// an ancestor/descendant of it. Such zones form this node's own identity chain
+// and must never be purged locally.
+func overlapsLocalIdentity(z, managed zone.ZonePath) bool {
+	if managed == "" || managed == zone.RootZone || !z.Valid() {
+		return false
+	}
+	if z == managed {
+		return true
+	}
+	// z is a child of managed, or z is a parent of managed.
+	return isZoneDescendantOf(z, managed) || isZoneDescendantOf(managed, z)
+}
+
+// planPurgeRevokedZones computes the local state to remove for revoked zones
+// without mutating state. When target is empty every currently-revoked zone is
+// considered; otherwise only target (which must itself be revoked) and its
+// descendant subtree are considered. Zones overlapping the local node's
+// ManagedZone identity chain are never planned for removal.
+func planPurgeRevokedZones(state *stateFile, now time.Time, target zone.ZonePath) (*purgePlan, error) {
+	plan := &purgePlan{}
+	if state == nil || state.Network == nil {
+		return plan, nil
+	}
+
+	// Determine the candidate revoked-zone set.
+	var candidates map[zone.ZonePath]bool
+	if target == "" {
+		candidates = CollectAllRevokedZones(state, now)
+	} else {
+		if !target.Valid() || target == zone.RootZone {
+			return nil, fmt.Errorf("invalid purge zone: %s", target)
+		}
+		if !state.Network.IsZoneRevoked(target, now) {
+			return nil, fmt.Errorf("zone is not revoked: %s", target)
+		}
+		if overlapsLocalIdentity(target, state.ManagedZone) {
+			return nil, fmt.Errorf("refusing to purge local identity zone: %s", target)
+		}
+		candidates = map[zone.ZonePath]bool{target: true}
+		for _, z := range computeRevokedSubtree(state.Network, target, now) {
+			candidates[z] = true
+		}
+	}
+
+	// Safety filter: never delete anything overlapping the local identity chain.
+	for z := range candidates {
+		if overlapsLocalIdentity(z, state.ManagedZone) {
+			plan.ManagedZoneSkipped = append(plan.ManagedZoneSkipped, z)
+			delete(candidates, z)
+		}
+	}
+
+	zones := make([]zone.ZonePath, 0, len(candidates))
+	for z := range candidates {
+		zones = append(zones, z)
+	}
+	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
+	plan.Zones = zones
+
+	for id, inst := range state.LinkInstances {
+		if candidates[inst.PeerZone] {
+			plan.LinkInstances = append(plan.LinkInstances, id)
+		}
+	}
+	sort.Strings(plan.LinkInstances)
+
+	for peerID := range state.SyncPeers {
+		if candidates[zone.ZonePath(peerID)] {
+			plan.SyncPeers = append(plan.SyncPeers, peerID)
+		}
+	}
+	sort.Strings(plan.SyncPeers)
+
+	sort.Slice(plan.ManagedZoneSkipped, func(i, j int) bool {
+		return plan.ManagedZoneSkipped[i] < plan.ManagedZoneSkipped[j]
+	})
+	return plan, nil
+}
+
+// executePurgePlan performs the hard deletions described by plan on state. It
+// removes the revoked ZoneState bodies from Network.Zones, the matching
+// LinkInstances, and the matching SyncPeers entries. It deliberately leaves
+// parent Revocations tombstones in place (required to enforce the epoch-bump
+// invariant on any future re-delegation) and does not touch records in any
+// still-valid zone, which gossip would re-sync anyway.
+func executePurgePlan(state *stateFile, plan *purgePlan) {
+	if state == nil || plan == nil {
+		return
+	}
+	for _, z := range plan.Zones {
+		delete(state.Network.Zones, z)
+	}
+	for _, id := range plan.LinkInstances {
+		delete(state.LinkInstances, id)
+	}
+	for _, peerID := range plan.SyncPeers {
+		delete(state.SyncPeers, peerID)
+	}
 }
 
 // UpdateRevocationLayerStatus records the cleanup status for a layer in the

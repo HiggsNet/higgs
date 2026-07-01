@@ -53,6 +53,7 @@ type controlRequest struct {
 	PrivateKey  *privateKeyFile      `json:"private_key,omitempty"`
 	Permissions []zone.Permission    `json:"permissions,omitempty"`
 	Snapshot    *gossip.ZoneSnapshot `json:"snapshot,omitempty"`
+	Apply       bool                 `json:"apply,omitempty"`
 }
 
 type controlResponse struct {
@@ -81,6 +82,7 @@ type controlResponse struct {
 	RecordsApplied    int                           `json:"records_applied,omitempty"`
 	Delegations       int                           `json:"delegations,omitempty"`
 	Revocations       int                           `json:"revocations,omitempty"`
+	PurgePlan         *purgePlan                    `json:"purge_plan,omitempty"`
 }
 
 // healthLinkJSON is the JSON representation of health.LinkHealth for the
@@ -382,6 +384,18 @@ func revokeDelegationViaControl(rt *Runtime, path zone.ZonePath, reason string) 
 		Reason: reason,
 	})
 	return ok, err
+}
+
+func purgeRevokedViaControl(rt *Runtime, apply bool, target zone.ZonePath) (*purgePlan, bool, error) {
+	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+		Method: "recovery_purge_revoked",
+		Zone:   target.String(),
+		Apply:  apply,
+	})
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return response.PurgePlan, true, nil
 }
 
 func acceptJoinBundleViaControl(rt *Runtime, bundle *joinBundle, key *privateKeyFile) (bool, error) {

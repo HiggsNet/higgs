@@ -92,6 +92,28 @@ func cmdRecovery() *cli.Command {
 					return recoveryCleanupIPsec(ctx)
 				},
 			},
+			{
+				Name:      "purge-revoked",
+				Usage:     "Remove revoked zones' local residue (dry-run by default)",
+				UsageText: "higgs recovery purge-revoked [--zone <zone>] [--apply]",
+				Description: "Hard-delete the local residue of revoked zones: their ZoneState bodies in the DB, " +
+					"plus LinkInstances and SyncPeers entries pointing at them.\n" +
+					"Without --apply this only prints a preview and changes nothing. " +
+					"Without --zone every currently-revoked zone is targeted; with --zone only that zone " +
+					"(which must be revoked) and its descendant subtree are targeted. " +
+					"Parent revocation tombstones are always preserved so revoked names cannot be re-delegated " +
+					"at a stale epoch, and the local node's own managed-zone identity chain is never touched.",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "zone", Usage: "Limit the purge to a single revoked zone (and its subtree)"},
+					&cli.BoolFlag{Name: "apply", Usage: "Actually delete; without it the command only prints a preview"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs recovery purge-revoked [--zone <zone>] [--apply]", 1)
+					}
+					return recoveryPurgeRevoked(cmd.Bool("apply"), zone.ZonePath(cmd.String("zone")))
+				},
+			},
 		},
 	}
 }
@@ -315,4 +337,74 @@ func validateRecoveryRootSnapshot(rt *Runtime, state *stateFile, snapshot *gossi
 		return errors.New("root recovery snapshot changes local root authority without trusted_root_public_key")
 	}
 	return nil
+}
+
+func recoveryPurgeRevoked(apply bool, target zone.ZonePath) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	// Only --apply talks to the daemon so the running node can observe the
+	// deletion and reconcile (tear down orphaned IPsec, etc.). A dry-run is a
+	// pure local computation and never reaches the daemon.
+	if apply {
+		plan, controlled, err := purgeRevokedViaControl(rt, apply, target)
+		if err != nil {
+			return err
+		}
+		if controlled {
+			printPurgePlan(plan, " via daemon")
+			return nil
+		}
+		logControlFallback("recovery_purge_revoked")
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	state.Lock()
+	defer state.Unlock()
+	plan, err := planPurgeRevokedZones(state, rt.Now(), target)
+	if err != nil {
+		return err
+	}
+	if apply {
+		executePurgePlan(state, plan)
+		if err := rt.SaveState(state); err != nil {
+			return err
+		}
+	}
+	printPurgePlan(plan, purgePlanSuffix(apply))
+	if !apply {
+		fmt.Println("(dry-run; pass --apply to delete)")
+	}
+	return nil
+}
+
+func purgePlanSuffix(apply bool) string {
+	if apply {
+		return " applied"
+	}
+	return ""
+}
+
+func printPurgePlan(plan *purgePlan, suffix string) {
+	if plan == nil {
+		fmt.Printf("purge plan%s: unavailable\n", suffix)
+		return
+	}
+	fmt.Printf("purge plan%s: zones=%d link_instances=%d sync_peers=%d\n",
+		suffix, len(plan.Zones), len(plan.LinkInstances), len(plan.SyncPeers))
+	for _, z := range plan.Zones {
+		fmt.Printf("  zone %s\n", z)
+	}
+	for _, id := range plan.LinkInstances {
+		fmt.Printf("  link_instance %s\n", id)
+	}
+	for _, peerID := range plan.SyncPeers {
+		fmt.Printf("  sync_peer %s\n", peerID)
+	}
+	for _, z := range plan.ManagedZoneSkipped {
+		fmt.Printf("  skipped (local identity) %s\n", z)
+	}
 }

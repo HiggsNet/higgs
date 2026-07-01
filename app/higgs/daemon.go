@@ -68,26 +68,27 @@ type DaemonHooks struct {
 type daemonEventType string
 
 const (
-	controlConnDeadline                           = 10 * time.Second
-	defaultDaemonInterval                         = 60 * time.Second
-	defaultIPsecReconcileInterval                 = time.Minute
-	daemonEventRecordPut          daemonEventType = "record_put"
-	daemonEventDelegateIssue      daemonEventType = "delegate_issue"
-	daemonEventDelegateRevoke     daemonEventType = "delegate_revoke"
-	daemonEventAuthorityGrant     daemonEventType = "authority_grant"
-	daemonEventRecoveryImportZone daemonEventType = "recovery_import_zone"
-	daemonEventJoinAccept         daemonEventType = "join_accept"
-	daemonEventRootInit           daemonEventType = "root_init"
-	daemonEventPacket             daemonEventType = "packet"
-	daemonEventSyncTimer          daemonEventType = "timer_sync"
-	daemonEventEndpointTimer      daemonEventType = "timer_endpoint_publish"
-	daemonEventRemoteApplied      daemonEventType = "remote_announce_applied"
-	daemonEventSyncTrigger        daemonEventType = "sync_trigger"
-	daemonEventReloadConfig       daemonEventType = "reload_config"
-	daemonEventIPsecCleanup       daemonEventType = "ipsec_cleanup"
-	daemonEventIPsecPortRotate    daemonEventType = "ipsec_port_rotate"
-	daemonEventIPsecLifecycle     daemonEventType = "ipsec_lifecycle"
-	daemonEventShutdown           daemonEventType = "shutdown"
+	controlConnDeadline                             = 10 * time.Second
+	defaultDaemonInterval                           = 60 * time.Second
+	defaultIPsecReconcileInterval                   = time.Minute
+	daemonEventRecordPut            daemonEventType = "record_put"
+	daemonEventDelegateIssue        daemonEventType = "delegate_issue"
+	daemonEventDelegateRevoke       daemonEventType = "delegate_revoke"
+	daemonEventAuthorityGrant       daemonEventType = "authority_grant"
+	daemonEventRecoveryImportZone   daemonEventType = "recovery_import_zone"
+	daemonEventRecoveryPurgeRevoked daemonEventType = "recovery_purge_revoked"
+	daemonEventJoinAccept           daemonEventType = "join_accept"
+	daemonEventRootInit             daemonEventType = "root_init"
+	daemonEventPacket               daemonEventType = "packet"
+	daemonEventSyncTimer            daemonEventType = "timer_sync"
+	daemonEventEndpointTimer        daemonEventType = "timer_endpoint_publish"
+	daemonEventRemoteApplied        daemonEventType = "remote_announce_applied"
+	daemonEventSyncTrigger          daemonEventType = "sync_trigger"
+	daemonEventReloadConfig         daemonEventType = "reload_config"
+	daemonEventIPsecCleanup         daemonEventType = "ipsec_cleanup"
+	daemonEventIPsecPortRotate      daemonEventType = "ipsec_port_rotate"
+	daemonEventIPsecLifecycle       daemonEventType = "ipsec_lifecycle"
+	daemonEventShutdown             daemonEventType = "shutdown"
 )
 
 type daemonEvent struct {
@@ -100,6 +101,7 @@ type daemonEvent struct {
 	Snapshot     *gossip.ZoneSnapshot
 	Zone         zone.ZonePath
 	Reason       string
+	Apply        bool
 	Packet       *gossip.Packet
 	SourcePeerID string
 	VICIEvent    ipsec.VICIEvent
@@ -125,6 +127,7 @@ type daemonEventResult struct {
 	Records       int
 	Delegations   int
 	Revocations   int
+	Purge         *purgePlan
 	Error         error
 }
 
@@ -554,6 +557,17 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Zone: result.Zone})
+	case "recovery_purge_revoked":
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type:  daemonEventRecoveryPurgeRevoked,
+			Zone:  zone.ZonePath(request.Zone),
+			Apply: request.Apply,
+		})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, PurgePlan: result.Purge})
 	case "join_accept":
 		if err := validateControlJoinAccept(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -793,6 +807,13 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventDelegateRevoke:
 		err := d.handleDelegateRevokeEvent(event.Zone, event.Reason)
 		return daemonEventResult{Zone: event.Zone, Error: err}, err == nil, false
+	case daemonEventRecoveryPurgeRevoked:
+		plan, err := d.handleRecoveryPurgeRevokedEvent(event.Zone, event.Apply)
+		if err != nil {
+			return daemonEventResult{Error: err}, false, false
+		}
+		// State only changes when applying; dry-run just reports the plan.
+		return daemonEventResult{Purge: plan}, event.Apply, false
 	case daemonEventJoinAccept:
 		result, err := d.handleJoinAcceptEvent(event.JoinBundle, event.PrivateKey)
 		if err != nil {
@@ -973,6 +994,34 @@ func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason str
 	}
 	d.notifyStateChanged()
 	return nil
+}
+
+// handleRecoveryPurgeRevokedEvent runs the manual revoked-zone GC. It always
+// computes the plan (returned for reporting); when apply is true it also
+// executes the deletions, persists, and notifies subsystems so the running node
+// reconciles (e.g. tears down orphaned IPsec for removed link instances).
+func (d *DaemonService) handleRecoveryPurgeRevokedEvent(target zone.ZonePath, apply bool) (*purgePlan, error) {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return nil, err
+	}
+	d.setState(latest)
+	plan, err := planPurgeRevokedZones(d.Sync.State, d.Sync.App.Now(), target)
+	if err != nil {
+		return nil, err
+	}
+	if !apply {
+		return plan, nil
+	}
+	executePurgePlan(d.Sync.State, plan)
+	if err := d.Sync.saveState(); err != nil {
+		return nil, err
+	}
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return plan, nil
 }
 
 func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
