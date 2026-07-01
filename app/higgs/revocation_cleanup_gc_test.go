@@ -37,7 +37,7 @@ func TestOverlapsLocalIdentity(t *testing.T) {
 		want bool
 	}{
 		{"self", "node-a.catofes.", true},
-		{"descendant", "eth0.node-a.catofes.", true},
+		{"descendant", "eth0.node-a.catofes.", false},
 		{"ancestor", "catofes.", true},
 		{"root ancestor", zone.RootZone, true},
 		{"unrelated", "node-b.catofes.", false},
@@ -139,6 +139,24 @@ func TestPlanPurgeRevokedZones_RefusesLocalIdentity(t *testing.T) {
 	}
 	if zonePathContains(plan.Zones, "node-a.catofes.") {
 		t.Errorf("managed zone must never appear in Zones to delete: %v", plan.Zones)
+	}
+}
+
+func TestPlanPurgeRevokedZones_AllowsRevokedChildOfManagedZone(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(123, 0)
+	state.ManagedZone = "catofes."
+	addRevocationTombstoneForTest(t, state, "node-b.catofes.", "catofes.")
+
+	plan, err := planPurgeRevokedZones(state, now, "")
+	if err != nil {
+		t.Fatalf("planPurgeRevokedZones(all): %v", err)
+	}
+	if !equalZonePaths(plan.Zones, []zone.ZonePath{"node-b.catofes."}) {
+		t.Errorf("Zones = %v, want revoked child of managed zone", plan.Zones)
+	}
+	if len(plan.ManagedZoneSkipped) != 0 {
+		t.Errorf("ManagedZoneSkipped = %v, want empty", plan.ManagedZoneSkipped)
 	}
 }
 

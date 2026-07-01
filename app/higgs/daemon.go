@@ -1369,16 +1369,39 @@ func (d *DaemonService) noteReconcileFlush(layer string) {
 // retained with a "revoked" marker for diagnostics; it is removed via the
 // normal offline cleanup policy after the cleanup_after retention window.
 func (d *DaemonService) flushRevocationCleanup() {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+	if d == nil || d.Sync == nil || d.Sync.State == nil {
+		return
+	}
+	state := d.Sync.State
+	if d.hasStateLock() {
+		d.flushRevocationCleanupLocked(state)
+		return
+	}
+	state.Lock()
+	defer state.Unlock()
+	d.flushRevocationCleanupLocked(state)
+}
+
+func (d *DaemonService) hasStateLock() bool {
+	if d == nil {
+		return false
+	}
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+	return d.stateUnlock != nil
+}
+
+func (d *DaemonService) flushRevocationCleanupLocked(state *stateFile) {
+	if d == nil || d.Sync == nil || state == nil || state.Network == nil {
 		return
 	}
 	now := d.Sync.now()
-	revokedZones := CollectAllRevokedZones(d.Sync.State, now)
+	revokedZones := CollectAllRevokedZones(state, now)
 	if len(revokedZones) == 0 {
 		return
 	}
 	d.noteReconcileFlush("revocation_cleanup")
-	CleanupRevokedPeerCache(d.Sync.State, revokedZones)
+	CleanupRevokedPeerCache(state, revokedZones)
 }
 
 func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {

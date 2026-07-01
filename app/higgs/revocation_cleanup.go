@@ -273,15 +273,16 @@ type purgePlan struct {
 	LinkInstances []string `json:"link_instances,omitempty"`
 	// SyncPeers lists peer IDs (zone FQDNs) whose SyncPeers entries are removed.
 	SyncPeers []string `json:"sync_peers,omitempty"`
-	// ManagedZoneSkipped lists revoked zones excluded because they overlap the
-	// local node's ManagedZone identity chain (self/ancestor/descendant).
+	// ManagedZoneSkipped lists revoked zones excluded because they are the
+	// local node's ManagedZone or one of its ancestors.
 	// Reported for transparency; never deleted.
 	ManagedZoneSkipped []zone.ZonePath `json:"managed_zone_skipped,omitempty"`
 }
 
 // overlapsLocalIdentity reports whether z is the local node's managed zone or
-// an ancestor/descendant of it. Such zones form this node's own identity chain
-// and must never be purged locally.
+// an ancestor of it. Such zones form this node's own identity chain and must
+// never be purged locally. Descendant zones can still be purged when their
+// delegations are revoked.
 func overlapsLocalIdentity(z, managed zone.ZonePath) bool {
 	if managed == "" || managed == zone.RootZone || !z.Valid() {
 		return false
@@ -289,15 +290,15 @@ func overlapsLocalIdentity(z, managed zone.ZonePath) bool {
 	if z == managed {
 		return true
 	}
-	// z is a child of managed, or z is a parent of managed.
-	return isZoneDescendantOf(z, managed) || isZoneDescendantOf(managed, z)
+	// z is a parent of managed.
+	return isZoneDescendantOf(managed, z)
 }
 
 // planPurgeRevokedZones computes the local state to remove for revoked zones
 // without mutating state. When target is empty every currently-revoked zone is
 // considered; otherwise only target (which must itself be revoked) and its
 // descendant subtree are considered. Zones overlapping the local node's
-// ManagedZone identity chain are never planned for removal.
+// ManagedZone or its ancestor chain are never planned for removal.
 func planPurgeRevokedZones(state *stateFile, now time.Time, target zone.ZonePath) (*purgePlan, error) {
 	plan := &purgePlan{}
 	if state == nil || state.Network == nil {

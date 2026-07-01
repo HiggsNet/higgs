@@ -345,6 +345,56 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	}
 }
 
+func TestDaemonFlushRevocationCleanupTakesStateLock(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {DiscoveredAddr: "192.0.2.1:33434"},
+	}
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	state.Lock()
+	done := make(chan struct{})
+	go func() {
+		service.flushRevocationCleanup()
+		close(done)
+	}()
+	select {
+	case <-done:
+		state.Unlock()
+		t.Fatalf("flushRevocationCleanup returned while state write lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	state.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("flushRevocationCleanup did not complete after state unlock")
+	}
+	if got := state.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "" {
+		t.Fatalf("discovered addr = %q, want cleared", got)
+	}
+}
+
 // TestAllRevocationImpact verifies the combined impact for multiple revoked zones.
 func TestAllRevocationImpact(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
