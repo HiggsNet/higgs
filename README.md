@@ -247,6 +247,15 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes
 
 首次 `join accept` 仍需要传入 `key.json`；已经加入的管理端接受 authority refresh bundle 时可以省略 key，CLI 会使用本地 state meta 中的 `zone_private_key` 校验并合并 authority 更新。
 
+离线 root admin 写入的 root Zone records 可以通过 signed snapshot 文件交给在线管理端，而不需要让 root daemon 上线：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs recovery export-zone . /tmp/root-zone.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs recovery import-zone /tmp/root-zone.b64
+```
+
+`recovery import-zone` 会优先通过本机 daemon control socket 导入，输出中的 `via daemon` 表示在线 daemon 已经接收并保存了 snapshot；旧版本命令在 daemon 运行时直接写 DB 可能会被 daemon 的旧内存状态覆盖。
+
 ## 加入普通节点
 
 普通节点都通过 join 流程加入。下面用 `node-a.catofes.` 和 `node-b.catofes.` 举例。它们的 delegation 由 `zone-catofes-admin` 签发，而不是由 root admin 直接签发。
@@ -800,6 +809,8 @@ build/higgs sync status [--verbose]
 build/higgs sync serve
 build/higgs sync once <peer-id>
 build/higgs sync run [--interval seconds]
+build/higgs recovery export-zone <zone> [snapshot.b64]
+build/higgs recovery import-zone <snapshot-b64|snapshot-file>
 build/higgs recovery pull-zone <zone> --from <peer-id>
 build/higgs recovery pull-chain <zone> --from <peer-id>
 build/higgs recovery cleanup-ipsec

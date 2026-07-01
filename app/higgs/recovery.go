@@ -19,6 +19,32 @@ func cmdRecovery() *cli.Command {
 		Usage: "Explicit state recovery commands",
 		Commands: []*cli.Command{
 			{
+				Name:      "export-zone",
+				Usage:     "Export a signed zone snapshot to a file or stdout",
+				UsageText: "higgs recovery export-zone <zone> [snapshot.b64]",
+				Description: "Export the active ZoneSnapshot from the local state as base64 JSON.\n" +
+					"This is useful when an offline root/admin node needs to carry signed records to an online peer.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
+						return cli.Exit("usage: higgs recovery export-zone <zone> [snapshot.b64]", 1)
+					}
+					return recoveryExportZone(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+				},
+			},
+			{
+				Name:      "import-zone",
+				Usage:     "Import a signed zone snapshot from a file or payload",
+				UsageText: "higgs recovery import-zone <snapshot-b64|snapshot-file>",
+				Description: "Import a signed ZoneSnapshot into the local state after normal signature and delegation-chain verification.\n" +
+					"This accepts snapshots created by recovery export-zone.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return cli.Exit("usage: higgs recovery import-zone <snapshot-b64|snapshot-file>", 1)
+					}
+					return recoveryImportZone(cmd.Args().First())
+				},
+			},
+			{
 				Name:      "pull-zone",
 				Usage:     "Recover a signed zone snapshot from a peer",
 				UsageText: "higgs recovery pull-zone <zone> --from <peer-id>",
@@ -68,6 +94,78 @@ func cmdRecovery() *cli.Command {
 			},
 		},
 	}
+}
+
+func recoveryExportZone(path zone.ZonePath, outPath string) error {
+	if !path.Valid() {
+		return zone.ErrInvalidZonePath
+	}
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	snapshot, err := gossip.Snapshot(state.Network, path)
+	if err != nil {
+		return err
+	}
+	if outPath == "" {
+		text, err := encodeBase64JSON(snapshot)
+		if err != nil {
+			return err
+		}
+		fmt.Println(text)
+		return nil
+	}
+	if err := writeBase64JSONFile(outPath, 0o644, snapshot); err != nil {
+		return err
+	}
+	fmt.Printf("exported zone %s snapshot: %s\n", path, outPath)
+	return nil
+}
+
+func recoveryImportZone(input string) error {
+	var snapshot gossip.ZoneSnapshot
+	if err := readBase64JSONOrJSON(input, &snapshot); err != nil {
+		return err
+	}
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	if result, revocations, ok, err := importRecoveryZoneViaControl(rt, &snapshot); err != nil {
+		return err
+	} else if ok {
+		printRecoveryImportResult(result, revocations, " via daemon")
+		return nil
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	state.Lock()
+	defer state.Unlock()
+	result, err := applyRecoveryZoneSnapshot(rt, state, &snapshot)
+	if err != nil {
+		return err
+	}
+	if err := rt.SaveState(state); err != nil {
+		return err
+	}
+	revocations := 0
+	if zs := state.Network.Zones[result.Zone]; zs != nil {
+		revocations = len(zs.Revocations)
+	}
+	printRecoveryImportResult(result, revocations, "")
+	return nil
+}
+
+func printRecoveryImportResult(result *gossip.ApplyResult, revocations int, suffix string) {
+	fmt.Printf("imported zone %s snapshot%s: records_applied=%d delegations=%d revocations=%d\n",
+		result.Zone, suffix, result.Records, result.Delegation, revocations)
 }
 
 func recoveryPullZone(ctx context.Context, path zone.ZonePath, peerID string, timeout time.Duration) error {

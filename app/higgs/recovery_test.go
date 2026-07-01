@@ -2,12 +2,14 @@ package main
 
 import (
 	"crypto/ed25519"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing"
 )
 
 func TestRecoveryChainZonesRootToLeaf(t *testing.T) {
@@ -48,6 +50,137 @@ func TestRecoveryApplySnapshotRestoresManagedZoneDelegations(t *testing.T) {
 	}
 	if target.Network.Zones["catofes."].Delegations["node-b.catofes."] == nil {
 		t.Fatalf("node-b delegation was not restored")
+	}
+}
+
+func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
+	dir := t.TempDir()
+	adminConfig := filepath.Join(dir, "admin.yaml")
+	catofesConfig := filepath.Join(dir, "catofes.yaml")
+	catofesKeyPath := filepath.Join(dir, "catofes.key.json")
+	catofesRequestPath := filepath.Join(dir, "catofes.request.b64")
+	catofesBundlePath := filepath.Join(dir, "catofes.bundle.b64")
+	rootSnapshotPath := filepath.Join(dir, "root.snapshot.b64")
+
+	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
+	t.Setenv("HIGGS_CONFIG", adminConfig)
+	if err := initRootState(); err != nil {
+		t.Fatalf("initRootState(admin): %v", err)
+	}
+
+	writeConfig(t, catofesConfig, filepath.Join(dir, "catofes"))
+	t.Setenv("HIGGS_CONFIG", catofesConfig)
+	if err := keygen(catofesKeyPath); err != nil {
+		t.Fatalf("keygen(catofes): %v", err)
+	}
+	if err := createJoinRequest("catofes.", catofesKeyPath, catofesRequestPath); err != nil {
+		t.Fatalf("createJoinRequest(catofes): %v", err)
+	}
+	t.Setenv("HIGGS_CONFIG", adminConfig)
+	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil); err != nil {
+		t.Fatalf("issueDelegation(catofes): %v", err)
+	}
+	if err := createIPAMPool(".", "2a0d:2905::/32", "."); err != nil {
+		t.Fatalf("createIPAMPool(root): %v", err)
+	}
+	if err := recoveryExportZone(zone.RootZone, rootSnapshotPath); err != nil {
+		t.Fatalf("recoveryExportZone(root): %v", err)
+	}
+
+	t.Setenv("HIGGS_CONFIG", catofesConfig)
+	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath); err != nil {
+		t.Fatalf("acceptJoinBundle(catofes): %v", err)
+	}
+	if err := recoveryImportZone(rootSnapshotPath); err != nil {
+		t.Fatalf("recoveryImportZone(root): %v", err)
+	}
+	state, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState(catofes): %v", err)
+	}
+	key, err := routing.NormalizeIPAMPoolKey("2a0d:2905::/32")
+	if err != nil {
+		t.Fatalf("NormalizeIPAMPoolKey: %v", err)
+	}
+	if state.Network.Zones[zone.RootZone].Records[key] == nil {
+		t.Fatalf("imported root snapshot missing IPAM pool record %s", key)
+	}
+}
+
+func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
+	dir := t.TempDir()
+	adminConfig := filepath.Join(dir, "admin.yaml")
+	catofesConfig := filepath.Join(dir, "catofes.yaml")
+	catofesKeyPath := filepath.Join(dir, "catofes.key.json")
+	catofesRequestPath := filepath.Join(dir, "catofes.request.b64")
+	catofesBundlePath := filepath.Join(dir, "catofes.bundle.b64")
+
+	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
+	t.Setenv("HIGGS_CONFIG", adminConfig)
+	if err := initRootState(); err != nil {
+		t.Fatalf("initRootState(admin): %v", err)
+	}
+
+	writeConfig(t, catofesConfig, filepath.Join(dir, "catofes"))
+	t.Setenv("HIGGS_CONFIG", catofesConfig)
+	if err := keygen(catofesKeyPath); err != nil {
+		t.Fatalf("keygen(catofes): %v", err)
+	}
+	if err := createJoinRequest("catofes.", catofesKeyPath, catofesRequestPath); err != nil {
+		t.Fatalf("createJoinRequest(catofes): %v", err)
+	}
+	t.Setenv("HIGGS_CONFIG", adminConfig)
+	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil); err != nil {
+		t.Fatalf("issueDelegation(catofes): %v", err)
+	}
+	if err := createIPAMPool(".", "2a0d:2905::/32", "."); err != nil {
+		t.Fatalf("createIPAMPool(root): %v", err)
+	}
+	adminState, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState(admin): %v", err)
+	}
+	snapshot, err := gossip.Snapshot(adminState.Network, zone.RootZone)
+	if err != nil {
+		t.Fatalf("Snapshot(root): %v", err)
+	}
+
+	t.Setenv("HIGGS_CONFIG", catofesConfig)
+	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath); err != nil {
+		t.Fatalf("acceptJoinBundle(catofes): %v", err)
+	}
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime(catofes): %v", err)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(catofes): %v", err)
+	}
+	config, err := rt.SyncConfig(state)
+	if err != nil {
+		t.Fatalf("SyncConfig(catofes): %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	result, _, _ := service.handleEvent(daemonEvent{
+		Type:     daemonEventRecoveryImportZone,
+		Snapshot: snapshot,
+	})
+	if result.Error != nil {
+		t.Fatalf("handle recovery import event: %v", result.Error)
+	}
+
+	reloaded, err := loadState()
+	if err != nil {
+		t.Fatalf("reload catofes state: %v", err)
+	}
+	key, err := routing.NormalizeIPAMPoolKey("2a0d:2905::/32")
+	if err != nil {
+		t.Fatalf("NormalizeIPAMPoolKey: %v", err)
+	}
+	if reloaded.Network.Zones[zone.RootZone].Records[key] == nil {
+		t.Fatalf("daemon import missing IPAM pool record %s", key)
 	}
 }
 

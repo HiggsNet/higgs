@@ -64,6 +64,18 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.
 
 首次 `join accept` 仍需要传入 `key.json`；已经加入的管理端接受 authority refresh bundle 时可以省略 key，CLI 会使用本地 state meta 中的 `zone_private_key` 校验并保留原有本地状态。
 
+如果 root admin 保持离线，它写入的 root Zone records 不会自动进入在线 gossip 网络。可以把 root Zone signed snapshot 导出成文件，再交给在线管理端导入：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create . 2a0d:2905::/32 --delegated-to .
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create . 2a0d:2905::/58 --delegated-to catofes.
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs recovery export-zone . root-zone.b64
+
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone root-zone.b64
+```
+
+`export-zone` / `import-zone` 搬运的是已签名 Zone snapshot，不搬运 root 私钥；导入端仍会按 trusted root、delegation chain 和 record signature 做验证。`import-zone` 会优先通过本机 daemon control socket 导入，输出里出现 `via daemon` 表示写入已经进入在线 daemon 的内存状态和 DB；如果使用旧版本命令，在线 daemon 可能把直接 DB 写入覆盖掉，先停 daemon 再导入。
+
 ## 启动 Daemon
 
 推荐长期运行入口是 `higgs daemon`：

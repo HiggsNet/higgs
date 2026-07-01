@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
 )
@@ -39,18 +40,19 @@ type routeAuthorizationErrorJSON struct {
 const controlSocketName = "higgs.sock"
 
 type controlRequest struct {
-	Method      string            `json:"method"`
-	Zone        string            `json:"zone,omitempty"`
-	Key         string            `json:"key,omitempty"`
-	Value       []byte            `json:"value,omitempty"`
-	ValueText   string            `json:"value_text,omitempty"`
-	Type        string            `json:"type,omitempty"`
-	History     int               `json:"history,omitempty"`
-	Reason      string            `json:"reason,omitempty"`
-	JoinRequest *joinRequest      `json:"join_request,omitempty"`
-	JoinBundle  *joinBundle       `json:"join_bundle,omitempty"`
-	PrivateKey  *privateKeyFile   `json:"private_key,omitempty"`
-	Permissions []zone.Permission `json:"permissions,omitempty"`
+	Method      string               `json:"method"`
+	Zone        string               `json:"zone,omitempty"`
+	Key         string               `json:"key,omitempty"`
+	Value       []byte               `json:"value,omitempty"`
+	ValueText   string               `json:"value_text,omitempty"`
+	Type        string               `json:"type,omitempty"`
+	History     int                  `json:"history,omitempty"`
+	Reason      string               `json:"reason,omitempty"`
+	JoinRequest *joinRequest         `json:"join_request,omitempty"`
+	JoinBundle  *joinBundle          `json:"join_bundle,omitempty"`
+	PrivateKey  *privateKeyFile      `json:"private_key,omitempty"`
+	Permissions []zone.Permission    `json:"permissions,omitempty"`
+	Snapshot    *gossip.ZoneSnapshot `json:"snapshot,omitempty"`
 }
 
 type controlResponse struct {
@@ -76,6 +78,9 @@ type controlResponse struct {
 	Health            []healthLinkJSON              `json:"health,omitempty"`
 	Record            map[string]any                `json:"record,omitempty"`
 	PortRotate        *manualPortRotateResult       `json:"port_rotate,omitempty"`
+	RecordsApplied    int                           `json:"records_applied,omitempty"`
+	Delegations       int                           `json:"delegations,omitempty"`
+	Revocations       int                           `json:"revocations,omitempty"`
 }
 
 // healthLinkJSON is the JSON representation of health.LinkHealth for the
@@ -355,6 +360,21 @@ func grantAuthorityViaControl(rt *Runtime, path zone.ZonePath, permissions []zon
 	return response.JoinBundle, true, nil
 }
 
+func importRecoveryZoneViaControl(rt *Runtime, snapshot *gossip.ZoneSnapshot) (*gossip.ApplyResult, int, bool, error) {
+	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+		Method:   "recovery_import_zone",
+		Snapshot: snapshot,
+	})
+	if err != nil || !ok {
+		return nil, 0, ok, err
+	}
+	return &gossip.ApplyResult{
+		Zone:       response.Zone,
+		Records:    response.RecordsApplied,
+		Delegation: response.Delegations,
+	}, response.Revocations, true, nil
+}
+
 func revokeDelegationViaControl(rt *Runtime, path zone.ZonePath, reason string) (bool, error) {
 	_, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method: "delegate_revoke",
@@ -469,6 +489,16 @@ func validateControlAuthorityGrant(request controlRequest) error {
 		if _, err := parseAuthorityPermission(string(permission)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateControlRecoveryImportZone(request controlRequest) error {
+	if request.Snapshot == nil {
+		return errors.New("recovery_import_zone requires snapshot")
+	}
+	if !request.Snapshot.Zone.Valid() {
+		return fmt.Errorf("invalid recovery zone: %s", request.Snapshot.Zone)
 	}
 	return nil
 }

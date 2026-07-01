@@ -75,6 +75,7 @@ const (
 	daemonEventDelegateIssue      daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke     daemonEventType = "delegate_revoke"
 	daemonEventAuthorityGrant     daemonEventType = "authority_grant"
+	daemonEventRecoveryImportZone daemonEventType = "recovery_import_zone"
 	daemonEventJoinAccept         daemonEventType = "join_accept"
 	daemonEventRootInit           daemonEventType = "root_init"
 	daemonEventPacket             daemonEventType = "packet"
@@ -96,6 +97,7 @@ type daemonEvent struct {
 	JoinBundle   *joinBundle
 	PrivateKey   *privateKeyFile
 	Permissions  []zone.Permission
+	Snapshot     *gossip.ZoneSnapshot
 	Zone         zone.ZonePath
 	Reason       string
 	Packet       *gossip.Packet
@@ -120,6 +122,9 @@ type daemonEventResult struct {
 	RootPublicKey []byte
 	JoinBundle    *joinBundle
 	PortRotate    *manualPortRotateResult
+	Records       int
+	Delegations   int
+	Revocations   int
 	Error         error
 }
 
@@ -514,6 +519,26 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Zone: result.Zone, JoinBundle: result.JoinBundle})
+	case "recovery_import_zone":
+		if err := validateControlRecoveryImportZone(request); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type:     daemonEventRecoveryImportZone,
+			Snapshot: request.Snapshot,
+		})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{
+			OK:             true,
+			Zone:           result.Zone,
+			RecordsApplied: result.Records,
+			Delegations:    result.Delegations,
+			Revocations:    result.Revocations,
+		})
 	case "delegate_revoke":
 		if err := validateControlDelegateRevoke(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -754,6 +779,17 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 			return daemonEventResult{Error: err}, false, false
 		}
 		return daemonEventResult{Zone: event.Zone, JoinBundle: bundle}, true, false
+	case daemonEventRecoveryImportZone:
+		result, revocations, err := d.handleRecoveryImportZoneEvent(event.Snapshot)
+		if err != nil {
+			return daemonEventResult{Error: err}, false, false
+		}
+		return daemonEventResult{
+			Zone:        result.Zone,
+			Records:     result.Records,
+			Delegations: result.Delegation,
+			Revocations: revocations,
+		}, true, false
 	case daemonEventDelegateRevoke:
 		err := d.handleDelegateRevokeEvent(event.Zone, event.Reason)
 		return daemonEventResult{Zone: event.Zone, Error: err}, err == nil, false
@@ -894,6 +930,30 @@ func (d *DaemonService) handleAuthorityGrantEvent(path zone.ZonePath, permission
 	}
 	d.notifyStateChanged()
 	return bundle, nil
+}
+
+func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *gossip.ZoneSnapshot) (*gossip.ApplyResult, int, error) {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return nil, 0, err
+	}
+	d.setState(latest)
+	result, err := applyRecoveryZoneSnapshot(d.Sync.App, d.Sync.State, snapshot)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := d.Sync.saveState(); err != nil {
+		return nil, 0, err
+	}
+	revocations := 0
+	if zs := d.Sync.State.Network.Zones[result.Zone]; zs != nil {
+		revocations = len(zs.Revocations)
+	}
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return result, revocations, nil
 }
 
 func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason string) error {
