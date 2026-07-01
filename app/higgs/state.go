@@ -139,9 +139,45 @@ type BirdInstanceState struct {
 	State          string   `json:"state"` // pending, running, degraded, error
 }
 
+func cloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstanceState {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]*BirdInstanceState, len(in))
+	for id, inst := range in {
+		if inst == nil {
+			continue
+		}
+		copyInst := *inst
+		if inst.Overlays != nil {
+			copyInst.Overlays = append([]string(nil), inst.Overlays...)
+		}
+		out[id] = &copyInst
+	}
+	return out
+}
+
 type routingReconcileState struct {
 	LastRunUnix int64  `json:"last_run_unix,omitempty"`
 	LastError   string `json:"last_error,omitempty"`
+}
+
+func cloneFirewallReconcileState(in *firewallReconcileState) *firewallReconcileState {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.Instances != nil {
+		out.Instances = make(map[string]*firewallInstanceReconcileStateEntry, len(in.Instances))
+		for id, entry := range in.Instances {
+			if entry == nil {
+				continue
+			}
+			copyEntry := *entry
+			out.Instances[id] = &copyEntry
+		}
+	}
+	return &out
 }
 
 type ipsecTransportKeyState struct {

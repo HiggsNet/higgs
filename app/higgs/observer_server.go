@@ -145,10 +145,13 @@ func (s *observerServer) handleStatic(w http.ResponseWriter, r *http.Request) {
 
 func (p *observerProvider) Status() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		return map[string]any{"daemon_online": false}, nil
 	}
-	state := d.Sync.State
+	state := d.currentState()
+	if state == nil {
+		return map[string]any{"daemon_online": false}, nil
+	}
 	state.RLock()
 	defer state.RUnlock()
 	var linkInstances int
@@ -217,10 +220,13 @@ type zoneSummaryJSON struct {
 
 func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		return map[string]any{"zones": []any{}}, nil
 	}
-	state := d.Sync.State
+	state := d.currentState()
+	if state == nil {
+		return map[string]any{"zones": []any{}}, nil
+	}
 	state.RLock()
 	defer state.RUnlock()
 	if state.Network == nil {
@@ -497,10 +503,13 @@ type peerEndpointJSON struct {
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		return map[string]any{"peers": []any{}}, nil
 	}
-	state := d.Sync.State
+	state := d.currentState()
+	if state == nil {
+		return map[string]any{"peers": []any{}}, nil
+	}
 	state.RLock()
 	defer state.RUnlock()
 	peerIDs := make([]string, 0, len(state.SyncPeers))
@@ -754,10 +763,13 @@ type observerLinkJSON struct {
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		return map[string]any{"instances": []any{}}, nil
 	}
-	state := d.Sync.State
+	state := d.currentState()
+	if state == nil {
+		return map[string]any{"instances": []any{}}, nil
+	}
 	state.RLock()
 	defer state.RUnlock()
 	build := buildLinkInspection(observerRuntime(d), state, d.healthStatusResponse())
@@ -824,14 +836,21 @@ func observerRuntime(d *DaemonService) *Runtime {
 }
 
 func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) []map[string]any {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		out := make([]map[string]any, 0, len(links))
 		for _, link := range links {
 			out = append(out, map[string]any{"health": link})
 		}
 		return out
 	}
-	state := d.Sync.State
+	state := d.currentState()
+	if state == nil {
+		out := make([]map[string]any, 0, len(links))
+		for _, link := range links {
+			out = append(out, map[string]any{"health": link})
+		}
+		return out
+	}
 	state.RLock()
 	defer state.RUnlock()
 	reconcile := state.IPsecReconcile
@@ -985,10 +1004,13 @@ func parseOptionalDuration(raw string, fallback time.Duration, name string) (tim
 
 func (p *observerProvider) Routes() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		return &routesDumpResponse{}, nil
 	}
-	state := d.Sync.State
+	state := d.currentState()
+	if state == nil {
+		return &routesDumpResponse{}, nil
+	}
 	state.RLock()
 	defer state.RUnlock()
 	now := d.Sync.now()
@@ -998,10 +1020,13 @@ func (p *observerProvider) Routes() (any, error) {
 
 func (p *observerProvider) Bird() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		return map[string]any{"instances": map[string]any{}}, nil
 	}
-	state := d.Sync.State
+	state := d.currentState()
+	if state == nil {
+		return map[string]any{"instances": map[string]any{}}, nil
+	}
 	state.RLock()
 	defer state.RUnlock()
 	lastRoutingError := ""
@@ -1009,7 +1034,7 @@ func (p *observerProvider) Bird() (any, error) {
 		lastRoutingError = state.RoutingReconcile.LastError
 	}
 	return map[string]any{
-		"instances":          state.BirdInstances,
+		"instances":          cloneBirdInstances(state.BirdInstances),
 		"last_routing_error": lastRoutingError,
 	}, nil
 }

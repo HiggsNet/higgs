@@ -141,18 +141,22 @@ func formatDuration(d time.Duration) string {
 // control API response. It is called from the control handler when the
 // `peers_status` method is invoked.
 func (d *DaemonService) peerStatusSnapshotForControl() []PeerStatusInfo {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
 		return nil
 	}
-	d.Sync.State.RLock()
-	defer d.Sync.State.RUnlock()
+	state := d.currentState()
+	if state == nil {
+		return nil
+	}
+	state.RLock()
+	defer state.RUnlock()
 	now := d.Sync.now()
 	cfg := PeerLifecycleConfig{}
 	if d.Sync.App != nil && d.Sync.App.Config != nil {
 		cfg = d.Sync.App.Config.PeerLifecycle
 	}
 	hasOverlay := d.Sync.App != nil && d.Sync.App.Config != nil && len(d.Sync.App.Config.IPsec.LinkGroups) > 0
-	return derivePeerStatuses(d.Sync.State, now, cfg, hasOverlay)
+	return derivePeerStatuses(state, now, cfg, hasOverlay)
 }
 
 // peerLifecycleCleanupZones returns peer zones that should have their Higgs

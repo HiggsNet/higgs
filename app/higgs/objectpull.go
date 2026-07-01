@@ -238,11 +238,14 @@ func objectPullClientDeadlineUntil(deadline time.Time, maxTimeout time.Duration)
 func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 	return func(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		state := getState()
-		if state == nil || state.Network == nil || req == nil || !req.Zone.Valid() {
+		if state == nil || req == nil || !req.Zone.Valid() {
 			return &gossip.ObjectPullResponse{Error: "invalid request"}
 		}
 		state.RLock()
 		defer state.RUnlock()
+		if state.Network == nil {
+			return &gossip.ObjectPullResponse{Error: "invalid request"}
+		}
 		now := time.Now()
 		switch req.Type {
 		case gossip.ObjectPullZone:
@@ -472,7 +475,7 @@ func startObjectPullServer(d *DaemonService) (net.Listener, error) {
 	if addr == "" {
 		return nil, nil
 	}
-	listener, err := objectPullTCPServe(addr, objectPullLookup(func() *stateFile { return d.Sync.State }))
+	listener, err := objectPullTCPServe(addr, objectPullLookup(func() *stateFile { return d.currentState() }))
 	if err != nil {
 		return nil, err
 	}
@@ -486,23 +489,24 @@ func startObjectPullServer(d *DaemonService) (net.Listener, error) {
 type ObjectPullRequest struct {
 	PeerID string
 	Zone   zone.ZonePath
+	Addr   string
 }
 
 // ObjectPullResult is delivered back to the daemon event loop when an async
 // object pull finishes. The event loop applies the snapshot; workers must not
 // mutate NetworkState directly.
 type ObjectPullResult struct {
-	PeerID   string
-	Zone     zone.ZonePath
-	Snapshot *gossip.ZoneSnapshot
-	Err      error
+	PeerID      string
+	Zone        zone.ZonePath
+	Snapshot    *gossip.ZoneSnapshot
+	Bytes       int
+	Unreachable bool
+	Err         error
 }
 
 // objectPullPool runs a fixed number of workers that perform TCP object pulls
 // asynchronously and return results on the event loop channel.
 type objectPullPool struct {
-	getState func() *stateFile
-	config   *syncConfigFile
 	requests chan ObjectPullRequest
 	results  chan<- ObjectPullResult
 	workers  int
@@ -511,13 +515,11 @@ type objectPullPool struct {
 }
 
 // newObjectPullPool creates a pool. Start must be called before submitting work.
-func newObjectPullPool(getState func() *stateFile, config *syncConfigFile, results chan<- ObjectPullResult, workers int) *objectPullPool {
+func newObjectPullPool(results chan<- ObjectPullResult, workers int) *objectPullPool {
 	if workers <= 0 {
 		workers = maxObjectPullConcurrency
 	}
 	return &objectPullPool{
-		getState: getState,
-		config:   config,
 		requests: make(chan ObjectPullRequest),
 		results:  results,
 		workers:  workers,
@@ -577,33 +579,13 @@ func (p *objectPullPool) worker(ctx context.Context) {
 
 func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) ObjectPullResult {
 	logger := newAppLogger(nil)
-	state := p.getState()
-	if state == nil {
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: errors.New("state not available")}
-	}
-	// Resolve the peer address while holding a read lock, then release the lock
-	// before the blocking TCP pull so the event loop and other workers are not
-	// blocked during network I/O. Stats are recorded on the current state with a
-	// brief write lock after the pull completes.
-	state.RLock()
-	addr := resolvePeerTCPAddr(state, p.config, req.PeerID)
-	state.RUnlock()
+	addr := req.Addr
 	if addr == "" {
 		err := fmt.Errorf("no TCP address for peer %s", req.PeerID)
 		logger.Info("object_pull", "worker_no_addr", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String()})
-		if cur := p.getState(); cur != nil {
-			cur.Lock()
-			recordObjectPullResult(cur, req.PeerID, "zone", req.Zone, "", 0, err, true, time.Now())
-			cur.Unlock()
-		}
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err, Unreachable: true}
 	}
 	logger.Debug("object_pull", "worker_start", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "addr": addr})
-	if cur := p.getState(); cur != nil {
-		cur.Lock()
-		recordObjectPullAttempt(cur, req.PeerID, "zone", req.Zone, "", time.Now())
-		cur.Unlock()
-	}
 	resp, err := pullObjectTCPForPeerUntil(req.PeerID, addr, &gossip.ObjectPullRequest{
 		Type: gossip.ObjectPullZone,
 		Zone: req.Zone,
@@ -614,22 +596,17 @@ func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) Obje
 	}
 	logger.Debug("object_pull", "worker_done", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "ok": err == nil && resp != nil && resp.OK && resp.Snapshot != nil, "bytes": respBytes, "error": errString(err)})
 	unreachable := isObjectPullUnreachable(err)
-	if cur := p.getState(); cur != nil {
-		cur.Lock()
-		recordObjectPullResult(cur, req.PeerID, "zone", req.Zone, "", respBytes, err, unreachable, time.Now())
-		cur.Unlock()
-	}
 	if err != nil {
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Bytes: respBytes, Unreachable: unreachable, Err: err}
 	}
 	if resp == nil || !resp.OK {
 		err := fmt.Errorf("object pull failed: %s", resp.Error)
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err}
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Bytes: respBytes, Err: err}
 	}
 	if resp.Snapshot == nil {
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: errors.New("object pull returned empty snapshot")}
+		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Bytes: respBytes, Err: errors.New("object pull returned empty snapshot")}
 	}
-	return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Snapshot: resp.Snapshot, Err: nil}
+	return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Snapshot: resp.Snapshot, Bytes: respBytes, Err: nil}
 }
 
 func errString(err error) string {

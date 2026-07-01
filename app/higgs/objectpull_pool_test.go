@@ -36,21 +36,14 @@ func TestObjectPullPoolPullsZoneAsync(t *testing.T) {
 	}
 	defer listener.Close()
 
-	// Point bootstrap at the listener so the pool can resolve the TCP address.
-	config := &syncConfigFile{
-		Bootstrap: []syncConfigPeer{
-			{ID: "node-b.catofes.", Addr: listener.Addr().String()},
-		},
-	}
-
 	results := make(chan ObjectPullResult, 1)
-	pool := newObjectPullPool(func() *stateFile { return state }, config, results, 1)
+	pool := newObjectPullPool(results, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pool.Start(ctx)
 	defer pool.Stop()
 
-	if !pool.Submit(ctx, ObjectPullRequest{PeerID: "node-b.catofes.", Zone: "node-b.catofes."}) {
+	if !pool.Submit(ctx, ObjectPullRequest{PeerID: "node-b.catofes.", Zone: "node-b.catofes.", Addr: listener.Addr().String()}) {
 		t.Fatal("pool submit returned false")
 	}
 
@@ -71,21 +64,14 @@ func TestObjectPullPoolPullsZoneAsync(t *testing.T) {
 }
 
 func TestObjectPullPoolReturnsErrorForUnreachable(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	config := &syncConfigFile{
-		Bootstrap: []syncConfigPeer{
-			{ID: "node-b.catofes.", Addr: "127.0.0.1:1"}, // unreachable port
-		},
-	}
-
 	results := make(chan ObjectPullResult, 1)
-	pool := newObjectPullPool(func() *stateFile { return state }, config, results, 1)
+	pool := newObjectPullPool(results, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pool.Start(ctx)
 	defer pool.Stop()
 
-	if !pool.Submit(ctx, ObjectPullRequest{PeerID: "node-b.catofes.", Zone: "node-b.catofes."}) {
+	if !pool.Submit(ctx, ObjectPullRequest{PeerID: "node-b.catofes.", Zone: "node-b.catofes.", Addr: "127.0.0.1:1"}) {
 		t.Fatal("pool submit returned false")
 	}
 

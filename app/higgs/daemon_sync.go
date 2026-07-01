@@ -517,11 +517,11 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 
 	// Fourth pass: start async object pulls.
 	for _, path := range eagerPulls {
-		d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: peerID, Zone: path})
+		d.submitObjectPull(ctx, peerID, path, now)
 	}
 	for _, action := range actions {
 		if a, ok := action.(StartObjectPullAction); ok {
-			d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: a.PeerID, Zone: a.Zone})
+			d.submitObjectPull(ctx, a.PeerID, a.Zone, now)
 		}
 	}
 
@@ -552,6 +552,36 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	}
 
 	return changed
+}
+
+func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, path zone.ZonePath, now time.Time) {
+	if d == nil || d.objectPullPool == nil || d.Sync == nil || d.Sync.State == nil {
+		return
+	}
+	addr := resolvePeerTCPAddr(d.Sync.State, d.Sync.Config, peerID)
+	if addr == "" {
+		err := fmt.Errorf("no TCP address for peer %s", peerID)
+		recordObjectPullResult(d.Sync.State, peerID, "zone", path, "", 0, err, true, now)
+		d.enqueueObjectPullResult(ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true})
+		return
+	}
+	recordObjectPullAttempt(d.Sync.State, peerID, "zone", path, "", now)
+	if !d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: peerID, Zone: path, Addr: addr}) {
+		err := errors.New("object pull submit failed")
+		recordObjectPullResult(d.Sync.State, peerID, "zone", path, "", 0, err, true, now)
+		d.enqueueObjectPullResult(ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true})
+	}
+}
+
+func (d *DaemonService) enqueueObjectPullResult(result ObjectPullResult) {
+	select {
+	case d.syncEvents <- objectPullResultToEvent(result):
+	default:
+		d.logWarn("sync", "object_pull_result_dropped", map[string]any{
+			"peer_id": result.PeerID,
+			"zone":    result.Zone,
+		})
+	}
 }
 
 func (d *DaemonService) syncDatagramBudget() int {
