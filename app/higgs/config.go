@@ -46,6 +46,7 @@ type appConfig struct {
 	ReflectorInterval    time.Duration
 	ReflectorTimeout     time.Duration
 	EndpointTTL          time.Duration
+	EndpointRefresh      time.Duration
 	EndpointGrace        time.Duration
 	PublishEndpoints     bool
 	EndpointDiscovery    string
@@ -124,6 +125,7 @@ type gossipConfigYAML struct {
 	ReflectorInterval   string           `yaml:"reflector_interval"`
 	ReflectorTimeout    string           `yaml:"reflector_timeout"`
 	EndpointTTL         string           `yaml:"endpoint_ttl"`
+	EndpointRefresh     string           `yaml:"endpoint_refresh"`
 	EndpointGrace       string           `yaml:"endpoint_grace"`
 	EndpointGracePeriod string           `yaml:"endpoint_grace_period"`
 	PublishEndpoints    *bool            `yaml:"publish_endpoints"`
@@ -280,7 +282,8 @@ func defaultAppConfig() *appConfig {
 		MaxSyncRecords:      gossip.DefaultSyncLimits().MaxRecords,
 		ReflectorInterval:   5 * time.Minute,
 		ReflectorTimeout:    3 * time.Second,
-		EndpointTTL:         time.Hour,
+		EndpointTTL:         gossip.DefaultEndpointTTL,
+		EndpointRefresh:     gossip.DefaultEndpointRefresh,
 		EndpointGrace:       gossip.DefaultEndpointGrace,
 		PublishEndpoints:    true,
 		EndpointSourceOrder: []string{"advertise", "bootstrap", "reflector", "interface"},
@@ -349,6 +352,15 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	if config.IPsec.PortPreviousGrace <= 0 {
 		config.IPsec.PortPreviousGrace = defaultIPsecPortPreviousGrace
+	}
+	if config.EndpointTTL <= 0 {
+		config.EndpointTTL = gossip.DefaultEndpointTTL
+	}
+	if config.EndpointRefresh <= 0 {
+		config.EndpointRefresh = gossip.DefaultEndpointRefresh
+	}
+	if config.EndpointGrace <= 0 {
+		config.EndpointGrace = gossip.DefaultEndpointGrace
 	}
 }
 
@@ -435,6 +447,13 @@ func applyGossipConfigYAML(config *appConfig, file gossipConfigYAML, prefix stri
 			return err
 		}
 		config.EndpointTTL = d
+	}
+	if file.EndpointRefresh != "" {
+		d, err := parseConfigDuration(file.EndpointRefresh, prefix+"endpoint_refresh")
+		if err != nil {
+			return err
+		}
+		config.EndpointRefresh = d
 	}
 	if value := firstNonEmpty(file.EndpointGrace, file.EndpointGracePeriod); value != "" {
 		d, err := parseConfigDuration(value, prefix+"endpoint_grace")
@@ -1039,6 +1058,7 @@ func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFil
 		ReflectorInterval:      config.ReflectorInterval,
 		ReflectorTimeout:       config.ReflectorTimeout,
 		EndpointTTL:            config.EndpointTTL,
+		EndpointRefresh:        config.EndpointRefresh,
 		EndpointGrace:          config.EndpointGrace,
 		DisableEndpointPublish: !config.PublishEndpoints,
 		EndpointDiscovery:      config.EndpointDiscovery,

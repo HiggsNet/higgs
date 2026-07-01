@@ -356,6 +356,7 @@ type syncConfigFile struct {
 	ReflectorInterval      time.Duration    `json:"reflector_interval,omitempty"`
 	ReflectorTimeout       time.Duration    `json:"reflector_timeout,omitempty"`
 	EndpointTTL            time.Duration    `json:"endpoint_ttl,omitempty"`
+	EndpointRefresh        time.Duration    `json:"endpoint_refresh,omitempty"`
 	EndpointGrace          time.Duration    `json:"endpoint_grace,omitempty"`
 	DisableEndpointPublish bool             `json:"disable_endpoint_publish,omitempty"`
 	EndpointDiscovery      string           `json:"endpoint_discovery,omitempty"`

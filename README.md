@@ -575,7 +575,8 @@ gossip:
   reflectors: auto
   reflector_interval: 5m
   reflector_timeout: 3s
-  endpoint_ttl: 1h
+  endpoint_ttl: 3h
+  endpoint_refresh: 30m
   endpoint_grace: 10m
 ```
 

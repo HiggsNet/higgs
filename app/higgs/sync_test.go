@@ -970,12 +970,13 @@ func TestReflectorEndpointPublishSmoke(t *testing.T) {
 	}
 }
 
-func TestEndpointPublishSkipsWhenEndpointsUnchanged(t *testing.T) {
+func TestEndpointPublishRefreshesStableEndpointsAfterInterval(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
 	config.PeerID = "node-b.catofes."
 	config.ListenAddr = "127.0.0.1:33434"
 	config.EndpointTTL = time.Hour
+	config.EndpointRefresh = 30 * time.Minute
 	config.EndpointGrace = 10 * time.Minute
 
 	oldCollect := collectSyncLocalEndpoints
@@ -1017,6 +1018,19 @@ func TestEndpointPublishSkipsWhenEndpointsUnchanged(t *testing.T) {
 	second := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
 	if second.Version != first.Version {
 		t.Fatalf("second version = %d, want %d (unchanged)", second.Version, first.Version)
+	}
+
+	rt.Clock = func() time.Time { return time.Unix(2800, 0) }
+	if err := sr.publishEndpointRecord(); err != nil {
+		t.Fatalf("publishEndpointRecord(third): %v", err)
+	}
+	third := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
+	if third.Version != first.Version+1 {
+		t.Fatalf("third version = %d, want %d (lease refreshed)", third.Version, first.Version+1)
+	}
+	refreshed := endpointRecordFromState(t, state, "node-b.catofes.")
+	if refreshed.UpdatedAt != 2800 {
+		t.Fatalf("refreshed updated_at = %d, want 2800", refreshed.UpdatedAt)
 	}
 }
 

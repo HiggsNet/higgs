@@ -560,7 +560,8 @@ gossip:
   reflectors: auto
   reflector_interval: 5m
   reflector_timeout: 3s
-  endpoint_ttl: 1h
+  endpoint_ttl: 3h
+  endpoint_refresh: 30m
   endpoint_grace: 10m
 ```
 
@@ -574,7 +575,8 @@ gossip:
 | `gossip.reflectors` | `[]` | 公网 IP reflector URL 列表；设为 `auto` 使用内置列表，设为 `none`/`off` 禁用 |
 | `gossip.reflector_interval` | `5m` | 重新发布本地端点的间隔 |
 | `gossip.reflector_timeout` | `3s` | 单个 reflector HTTP 请求超时；失败会尝试后续 reflector |
-| `gossip.endpoint_ttl` | `1h` | 写入端点记录的 TTL |
+| `gossip.endpoint_ttl` | `3h` | 写入端点记录的 TTL |
+| `gossip.endpoint_refresh` | `30m` | 地址集合不变时刷新端点租约的间隔 |
 | `gossip.endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
 | `gossip.filter_private_ipv4` | `true` | 接口扫描时过滤 RFC1918 IPv4；私网实验可显式设为 `false` |
 

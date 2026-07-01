@@ -71,7 +71,8 @@ gossip:
   # reflector_interval: 5m
   # reflector_timeout: 3s
 
-  # endpoint_ttl: 1h
+  # endpoint_ttl: 3h
+  # endpoint_refresh: 30m
   # endpoint_grace: 10m
   # endpoint_source_order:
   #   - advertise
@@ -89,7 +90,7 @@ gossip:
 - `gossip.endpoint_discovery`：endpoint 发现模式，可设为 `all`、`loopback_only` 或 `advertise_only`。如果未设置且 bootstrap 都是 loopback，daemon 会自动按 `loopback_only` 处理，避免本地 smoke 发布无关接口地址。
 - `gossip.publish_endpoints`：是否发布本节点 signed endpoint record。`false` 适合 outbound-only 或 NAT/CGNAT 节点；禁用发布后，本节点仍可主动连接 bootstrap 或已知 peer。
 - `gossip.reflectors` / `gossip.reflector_interval` / `gossip.reflector_timeout`：公网 IP reflector 来源、刷新间隔和单次请求超时。`reflectors: auto` 使用内置列表；`off` / `none` 禁用公网 reflector。
-- `gossip.endpoint_ttl` / `gossip.endpoint_grace`：signed endpoint record 的 TTL，以及 endpoint 变化后继续保留旧地址的窗口。
+- `gossip.endpoint_ttl` / `gossip.endpoint_refresh` / `gossip.endpoint_grace`：signed endpoint record 的可用窗口、地址集合不变时的低频续租间隔，以及 endpoint 变化后继续保留旧地址的窗口。
 - `gossip.endpoint_source_order`：出站连接候选地址的来源优先级，常见值是 `advertise`、`bootstrap`、`reflector`、`interface`。
 - `gossip.filter_private_ipv4`：是否过滤接口扫描得到的 RFC1918 IPv4，默认 `true`。私网实验需要发布内网地址时再设为 `false`。
 

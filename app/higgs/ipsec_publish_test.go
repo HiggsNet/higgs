@@ -450,6 +450,11 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 	if ad, ok := byID["endpoint-4"]; !ok || ad.Source != ipsec.SourceDiscovery || ad.Address != "203.0.113.50" || ad.Reachability != ipsec.ReachabilityPublic {
 		t.Fatalf("public interface mapping unexpected: %+v", byID["endpoint-4"])
 	}
+	for _, ad := range record.Addresses {
+		if ad.TTLSeconds != 0 || ad.LastObserved != 0 {
+			t.Fatalf("ipsec address %s carried endpoint lease fields: ttl=%d last_observed=%d", ad.ID, ad.TTLSeconds, ad.LastObserved)
+		}
+	}
 }
 
 func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {

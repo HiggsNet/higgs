@@ -1104,7 +1104,7 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 
 	if zs != nil {
 		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
-			if bytes.Equal(existing.Value, value) || gossip.EndpointRecordEndpointsEqual(previous, recordValue) {
+			if bytes.Equal(existing.Value, value) || (gossip.EndpointRecordEndpointsEqual(previous, recordValue) && !endpointRefreshDue(previous, now, config.EndpointRefresh)) {
 				return nil
 			}
 		}
@@ -1118,6 +1118,27 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 		return err
 	}
 	return sr.saveState()
+}
+
+func endpointRefreshDue(previous *gossip.EndpointRecord, now time.Time, refresh time.Duration) bool {
+	if previous == nil || len(previous.Endpoints) == 0 {
+		return true
+	}
+	if refresh <= 0 {
+		refresh = gossip.DefaultEndpointRefresh
+	}
+	base := previous.UpdatedAt
+	if base == 0 {
+		for _, ep := range previous.Endpoints {
+			if ep.LastObserved > base {
+				base = ep.LastObserved
+			}
+		}
+	}
+	if base == 0 {
+		return true
+	}
+	return !now.Before(time.Unix(base, 0).Add(refresh))
 }
 
 func (sr *SyncRuntime) tryAdoptAutoJoinAfterSync(peerID, via string) bool {

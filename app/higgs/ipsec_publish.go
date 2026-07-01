@@ -336,9 +336,6 @@ func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time)
 			ad.ID = fmt.Sprintf("addr-%d", nextID)
 			nextID++
 		}
-		if ad.TTLSeconds == 0 {
-			ad.TTLSeconds = int64(config.EndpointTTL.Seconds())
-		}
 		record.Addresses = append(record.Addresses, ad)
 		priority--
 	}
@@ -404,7 +401,7 @@ func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time)
 
 	// 4. Follow gossip endpoints (reflector / interface discovery).
 	if config.IPsec.AnnounceGossipEndpoints {
-		for _, ad := range ipsecAddressesFromGossipEndpoints(state, seen, int64(config.EndpointTTL.Seconds()), now) {
+		for _, ad := range ipsecAddressesFromGossipEndpoints(state, seen, now) {
 			addAddress(ad)
 		}
 	}
@@ -431,7 +428,7 @@ func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time)
 // ipsecAddressesFromGossipEndpoints reads the local sync/endpoint/udp record
 // and converts its entries into IPsec AddressAdvertisement values.
 // The seen set is updated for each converted address.
-func ipsecAddressesFromGossipEndpoints(state *stateFile, seen map[string]bool, ttlSeconds int64, now time.Time) []ipsec.AddressAdvertisement {
+func ipsecAddressesFromGossipEndpoints(state *stateFile, seen map[string]bool, now time.Time) []ipsec.AddressAdvertisement {
 	if state == nil || state.ManagedZone == "" || seen == nil {
 		return nil
 	}
@@ -482,10 +479,9 @@ func ipsecAddressesFromGossipEndpoints(state *stateFile, seen map[string]bool, t
 			Family:       family,
 			Priority:     ep.Priority,
 			Reachability: reachability,
-			TTLSeconds:   ttlSeconds,
 			// Do not copy LastObserved from gossip endpoints. The IPsec record
-			// has its own UpdatedAt/TTL; copying endpoint timestamps would make
-			// the record change every gossip publish cycle even when the set of
+			// has declaration semantics; copying endpoint timestamps would make
+			// the record change every gossip lease renewal even when the set of
 			// addresses is unchanged.
 		})
 		nextID++

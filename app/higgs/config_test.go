@@ -513,7 +513,8 @@ gossip:
   reflectors: auto
   reflector_interval: 5m
   reflector_timeout: 3s
-  endpoint_ttl: 1h
+  endpoint_ttl: 3h
+  endpoint_refresh: 30m
   endpoint_grace: 10m
   endpoint_source_order:
     - bootstrap
@@ -551,8 +552,8 @@ gossip:
 	if config.ReflectorInterval != 5*time.Minute || config.ReflectorTimeout != 3*time.Second {
 		t.Fatalf("reflector timers = %s/%s", config.ReflectorInterval, config.ReflectorTimeout)
 	}
-	if config.EndpointTTL != time.Hour || config.EndpointGrace != 10*time.Minute {
-		t.Fatalf("endpoint timers = %s/%s", config.EndpointTTL, config.EndpointGrace)
+	if config.EndpointTTL != 3*time.Hour || config.EndpointRefresh != 30*time.Minute || config.EndpointGrace != 10*time.Minute {
+		t.Fatalf("endpoint timers = %s/%s/%s", config.EndpointTTL, config.EndpointRefresh, config.EndpointGrace)
 	}
 	if config.EndpointDiscovery != "all" || config.PublishEndpoints || config.FilterPrivateIPv4 {
 		t.Fatalf("endpoint flags = discovery:%q publish:%t filter:%t", config.EndpointDiscovery, config.PublishEndpoints, config.FilterPrivateIPv4)

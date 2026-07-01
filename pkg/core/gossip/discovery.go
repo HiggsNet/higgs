@@ -22,7 +22,9 @@ const (
 	// EndpointRecordKeyUDP is the well-known key for UDP gossip endpoints.
 	EndpointRecordKeyUDP = "sync/endpoint/udp"
 	// DefaultEndpointTTL is used when an endpoint record does not carry a TTL.
-	DefaultEndpointTTL = time.Hour
+	DefaultEndpointTTL = 3 * time.Hour
+	// DefaultEndpointRefresh is the stable-address lease renewal cadence.
+	DefaultEndpointRefresh = 30 * time.Minute
 	// DefaultEndpointGrace is the old-address retention window after an endpoint changes.
 	DefaultEndpointGrace = 10 * time.Minute
 )
