@@ -59,8 +59,10 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs verify catofes.
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs authority grant catofes. allocate-ip catofes-authority.b64
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.b64 /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.b64
 ```
+
+首次 `join accept` 仍需要传入 `key.json`；已经加入的管理端接受 authority refresh bundle 时可以省略 key，CLI 会使用本地 state meta 中的 `zone_private_key` 校验并保留原有本地状态。
 
 ## 启动 Daemon
 

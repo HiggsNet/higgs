@@ -293,7 +293,7 @@ func acceptJoinBundle(bundleInput string, keyPath string) error {
 	if err := readBase64JSONOrJSON(bundleInput, &bundle); err != nil {
 		return err
 	}
-	key, err := readPrivateKeyFile(keyPath)
+	key, err := optionalJoinAcceptKey(rt, keyPath)
 	if err != nil {
 		return err
 	}
@@ -322,6 +322,13 @@ func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFil
 	}
 	if bundle.Network == nil {
 		return nil, errors.New("join bundle network is nil")
+	}
+	if key == nil {
+		var err error
+		key, err = joinAcceptKeyFromState(rt, bundle.Zone)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := validatePrivateKeyFile(key); err != nil {
 		return nil, err
@@ -361,6 +368,35 @@ func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFil
 		return nil, err
 	}
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: bundle.RootPublicKey}, nil
+}
+
+func optionalJoinAcceptKey(rt *Runtime, keyPath string) (*privateKeyFile, error) {
+	if keyPath != "" {
+		return readPrivateKeyFile(keyPath)
+	}
+	return nil, nil
+}
+
+func joinAcceptKeyFromState(rt *Runtime, expectedZone zone.ZonePath) (*privateKeyFile, error) {
+	if rt == nil {
+		return nil, errors.New("join accept requires key.json when no runtime is available")
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return nil, fmt.Errorf("join accept requires key.json because existing state could not be loaded: %w", err)
+	}
+	if state.ManagedZone != expectedZone {
+		return nil, fmt.Errorf("join accept requires key.json because existing state manages %s, not %s", state.ManagedZone, expectedZone)
+	}
+	if len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
+		return nil, errors.New("join accept requires key.json because existing state has no zone_private_key")
+	}
+	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	return &privateKeyFile{
+		Type:       "higgs.ed25519.private.v1",
+		PublicKey:  pub,
+		PrivateKey: state.ZonePrivateKey,
+	}, nil
 }
 
 func mergeJoinBundleNetwork(dst *zone.NetworkState, src *zone.NetworkState) {

@@ -485,7 +485,7 @@ func validateControlJoinAccept(request controlRequest) error {
 		return errors.New("join_accept requires join_bundle")
 	}
 	if request.PrivateKey == nil {
-		return errors.New("join_accept requires private_key")
+		return nil
 	}
 	return validatePrivateKeyFile(request.PrivateKey)
 }

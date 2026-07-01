@@ -130,10 +130,10 @@ func cmdJoin() *cli.Command {
 			{
 				Name:      "accept",
 				Usage:     "Accept a join bundle",
-				UsageText: "higgs join accept <bundle-b64|bundle-file> <key.json>",
+				UsageText: "higgs join accept <bundle-b64|bundle-file> [key.json]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 2 {
-						return cli.Exit("usage: higgs join accept <bundle-b64|bundle-file> <key.json>", 1)
+					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
+						return cli.Exit("usage: higgs join accept <bundle-b64|bundle-file> [key.json]", 1)
 					}
 					return acceptJoinBundle(cmd.Args().Get(0), cmd.Args().Get(1))
 				},

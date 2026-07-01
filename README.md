@@ -242,8 +242,10 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs verify catofes.
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs authority grant catofes. allocate-ip /tmp/catofes-authority.b64
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes-authority.b64 /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes-authority.b64
 ```
+
+首次 `join accept` 仍需要传入 `key.json`；已经加入的管理端接受 authority refresh bundle 时可以省略 key，CLI 会使用本地 state meta 中的 `zone_private_key` 校验并合并 authority 更新。
 
 ## 加入普通节点
 
@@ -788,7 +790,7 @@ build/higgs root pubkey
 build/higgs keygen <key.json>
 build/higgs join request <zone> <key.json> [request.b64]
 build/higgs delegate issue [--cap write,delegate,allocate-ip] <request-b64|request-file> [bundle.b64]
-build/higgs join accept <bundle-b64|bundle-file> <key.json>
+build/higgs join accept <bundle-b64|bundle-file> [key.json]
 build/higgs authority grant <zone> <permission>[,<permission>...] [bundle.b64]
 build/higgs zone show <zone>
 build/higgs record put <zone> <key> <value> [type]

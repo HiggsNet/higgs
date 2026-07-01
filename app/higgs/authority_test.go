@@ -93,7 +93,7 @@ func TestAuthorityGrantReissuesChildDelegation(t *testing.T) {
 	}
 
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
-	if err := acceptJoinBundle(grantBundlePath, catofesKeyPath); err != nil {
+	if err := acceptJoinBundle(grantBundlePath, ""); err != nil {
 		t.Fatalf("acceptJoinBundle(grant): %v", err)
 	}
 	childState, err := loadState()
