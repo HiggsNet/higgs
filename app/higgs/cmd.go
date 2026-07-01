@@ -20,6 +20,7 @@ func rootCommand() *cli.Command {
 			cmdKeygen(),
 			cmdJoin(),
 			cmdDelegate(),
+			cmdAuthority(),
 			cmdZone(),
 			cmdRecord(),
 			cmdRoute(),
@@ -149,12 +150,19 @@ func cmdDelegate() *cli.Command {
 			{
 				Name:      "issue",
 				Usage:     "Issue a delegation from a join request",
-				UsageText: "higgs delegate issue <request-b64|request-file> [bundle.b64]",
+				UsageText: "higgs delegate issue [--cap <permissions>] <request-b64|request-file> [bundle.b64]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "cap", Usage: "Comma-separated permissions for the delegated authority"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
 						return cli.Exit("usage: higgs delegate issue <request-b64|request-file> [bundle.b64]", 1)
 					}
-					return issueDelegation(cmd.Args().Get(0), cmd.Args().Get(1))
+					permissions, err := parseOptionalAuthorityPermissions(cmd.String("cap"))
+					if err != nil {
+						return err
+					}
+					return issueDelegation(cmd.Args().Get(0), cmd.Args().Get(1), permissions)
 				},
 			},
 			{
@@ -174,6 +182,39 @@ func cmdDelegate() *cli.Command {
 			},
 		},
 	}
+}
+
+func cmdAuthority() *cli.Command {
+	return &cli.Command{
+		Name:  "authority",
+		Usage: "Zone authority management commands",
+		Commands: []*cli.Command{
+			{
+				Name:      "grant",
+				Usage:     "Grant permissions to an existing authority",
+				UsageText: "higgs authority grant <zone> <permission>[,<permission>...] [bundle.b64]",
+				Description: "Increase the target authority epoch and add permissions to its authorized keys.\n" +
+					"For non-root zones this must be run by the parent zone admin because the parent delegation is re-signed.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() < 2 || cmd.Args().Len() > 3 {
+						return cli.Exit("usage: higgs authority grant <zone> <permission>[,<permission>...] [bundle.b64]", 1)
+					}
+					permissions, err := parseAuthorityPermissions([]string{cmd.Args().Get(1)})
+					if err != nil {
+						return err
+					}
+					return grantAuthority(zone.ZonePath(cmd.Args().Get(0)), permissions, cmd.Args().Get(2))
+				},
+			},
+		},
+	}
+}
+
+func parseOptionalAuthorityPermissions(raw string) ([]zone.Permission, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	return parseAuthorityPermissions([]string{raw})
 }
 
 func cmdZone() *cli.Command {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -67,7 +68,7 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 	return nil
 }
 
-func issueDelegation(requestInput string, outPath string) error {
+func issueDelegation(requestInput string, outPath string, permissions []zone.Permission) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -79,7 +80,7 @@ func issueDelegation(requestInput string, outPath string) error {
 	if err := validateJoinRequest(&request); err != nil {
 		return err
 	}
-	bundle, controlled, err := issueDelegationViaControl(rt, &request)
+	bundle, controlled, err := issueDelegationViaControl(rt, &request, permissions)
 	if err != nil {
 		return err
 	}
@@ -105,7 +106,7 @@ func issueDelegation(requestInput string, outPath string) error {
 	if err != nil {
 		return err
 	}
-	result, err := issueDelegationInState(rt, state, &request)
+	result, err := issueDelegationInState(rt, state, &request, permissions)
 	if err != nil {
 		return err
 	}
@@ -129,7 +130,7 @@ func issueDelegation(requestInput string, outPath string) error {
 	return nil
 }
 
-func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest) (*delegationIssueResult, error) {
+func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
@@ -154,10 +155,8 @@ func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest)
 		Epoch:     authorityEpoch,
 		Threshold: higgscrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
-			Key: request.PublicKey,
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate},
-			}},
+			Key:          request.PublicKey,
+			Capabilities: delegationCapabilities(permissions),
 		}},
 	}
 	delegation := &zone.Delegation{
@@ -194,6 +193,15 @@ func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest)
 		Network:       bundleNetwork,
 	}
 	return &delegationIssueResult{Zone: request.Zone, Bundle: &bundle}, nil
+}
+
+func delegationCapabilities(permissions []zone.Permission) []zone.Capability {
+	if len(permissions) == 0 {
+		return defaultDelegationCapabilities()
+	}
+	out := append([]zone.Permission(nil), permissions...)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return []zone.Capability{{Permissions: out}}
 }
 
 func revokeDelegation(path zone.ZonePath, reason string) error {
@@ -335,10 +343,57 @@ func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFil
 		ZonePrivateKey: key.PrivateKey,
 		Network:        bundle.Network,
 	}
+	if existing, err := rt.LoadState(); err == nil && existing.ManagedZone == bundle.Zone {
+		state = existing
+		state.ManagedZone = bundle.Zone
+		state.ZonePrivateKey = key.PrivateKey
+		if state.Network == nil {
+			state.Network = zone.NewNetworkState()
+		}
+		mergeJoinBundleNetwork(state.Network, bundle.Network)
+		configureValidation(state.Network)
+		normalizeState(state.Network)
+		if err := higgscrypto.VerifyChain(state.Network, bundle.Zone, rt.Now()); err != nil {
+			return nil, err
+		}
+	}
 	if err := rt.SaveState(state); err != nil {
 		return nil, err
 	}
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: bundle.RootPublicKey}, nil
+}
+
+func mergeJoinBundleNetwork(dst *zone.NetworkState, src *zone.NetworkState) {
+	if dst == nil || src == nil {
+		return
+	}
+	if dst.Zones == nil {
+		dst.Zones = make(map[zone.ZonePath]*zone.ZoneState)
+	}
+	for path, source := range src.Zones {
+		if source == nil {
+			continue
+		}
+		target := dst.Zones[path]
+		if target == nil {
+			dst.Zones[path] = source
+			continue
+		}
+		target.Authority = source.Authority
+		target.ParentProof = source.ParentProof
+		if target.Delegations == nil {
+			target.Delegations = make(map[zone.ZonePath]*zone.Delegation)
+		}
+		for child, delegation := range source.Delegations {
+			target.Delegations[child] = delegation
+		}
+		if target.Revocations == nil {
+			target.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
+		}
+		for child, revocation := range source.Revocations {
+			target.Revocations[child] = revocation
+		}
+	}
 }
 
 func cleanupRevokedPeerState(state *stateFile, revoked zone.ZonePath) {

@@ -39,7 +39,7 @@ func TestJoinFlow(t *testing.T) {
 		t.Fatalf("createJoinRequest(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", adminConfig)
-	if err := issueDelegation(catofesRequestPath, catofesBundlePath); err != nil {
+	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil); err != nil {
 		t.Fatalf("issueDelegation(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
@@ -65,10 +65,10 @@ func TestJoinFlow(t *testing.T) {
 	if err := createJoinRequest("node-a.catofes.", siblingKeyPath, siblingRequestPath); err != nil {
 		t.Fatalf("createJoinRequest(node-a): %v", err)
 	}
-	if err := issueDelegation(siblingRequestPath, siblingBundlePath); err != nil {
+	if err := issueDelegation(siblingRequestPath, siblingBundlePath, nil); err != nil {
 		t.Fatalf("issueDelegation(node-a): %v", err)
 	}
-	if err := issueDelegation(requestPath, bundlePath); err != nil {
+	if err := issueDelegation(requestPath, bundlePath, nil); err != nil {
 		t.Fatalf("issueDelegation: %v", err)
 	}
 	var bundle joinBundle
@@ -153,7 +153,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadState(admin): %v", err)
 	}
-	result, err := issueDelegationInState(rt, state, &request)
+	result, err := issueDelegationInState(rt, state, &request, nil)
 	if err != nil {
 		t.Fatalf("issueDelegationInState: %v", err)
 	}

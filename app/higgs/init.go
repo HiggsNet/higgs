@@ -39,10 +39,8 @@ func initRootStateInRuntime(rt *Runtime) (ed25519.PublicKey, error) {
 		Epoch:     1,
 		Threshold: higgscrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
-			Key: rootPub,
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
-			}},
+			Key:          rootPub,
+			Capabilities: defaultRootCapabilities(),
 		}},
 	}
 	ns := zone.NewNetworkState()
@@ -77,10 +75,8 @@ func initState(managedZone zone.ZonePath) error {
 		Epoch:     1,
 		Threshold: higgscrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
-			Key: rootPub,
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
-			}},
+			Key:          rootPub,
+			Capabilities: defaultRootCapabilities(),
 		}},
 	}
 	ns := zone.NewNetworkState()
@@ -92,10 +88,8 @@ func initState(managedZone zone.ZonePath) error {
 			Epoch:     1,
 			Threshold: higgscrypto.SupportedThreshold,
 			Keys: []zone.AuthorizedKey{{
-				Key: zonePub,
-				Capabilities: []zone.Capability{{
-					Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate},
-				}},
+				Key:          zonePub,
+				Capabilities: defaultDelegationCapabilities(),
 			}},
 		}
 		ns.Zones[path] = zone.NewZoneState(path, authority)

@@ -74,6 +74,7 @@ const (
 	daemonEventRecordPut          daemonEventType = "record_put"
 	daemonEventDelegateIssue      daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke     daemonEventType = "delegate_revoke"
+	daemonEventAuthorityGrant     daemonEventType = "authority_grant"
 	daemonEventJoinAccept         daemonEventType = "join_accept"
 	daemonEventRootInit           daemonEventType = "root_init"
 	daemonEventPacket             daemonEventType = "packet"
@@ -94,6 +95,7 @@ type daemonEvent struct {
 	JoinRequest  *joinRequest
 	JoinBundle   *joinBundle
 	PrivateKey   *privateKeyFile
+	Permissions  []zone.Permission
 	Zone         zone.ZonePath
 	Reason       string
 	Packet       *gossip.Packet
@@ -490,6 +492,22 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		result := d.enqueueEvent(ctx, daemonEvent{
 			Type:        daemonEventDelegateIssue,
 			JoinRequest: request.JoinRequest,
+			Permissions: request.Permissions,
+		})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Zone: result.Zone, JoinBundle: result.JoinBundle})
+	case "authority_grant":
+		if err := validateControlAuthorityGrant(request); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type:        daemonEventAuthorityGrant,
+			Zone:        zone.ZonePath(request.Zone),
+			Permissions: request.Permissions,
 		})
 		if result.Error != nil {
 			writeControlResponse(conn, controlError(result.Error))
@@ -725,11 +743,17 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		version, err := d.handleRecordPutEvent(event.RecordPut)
 		return daemonEventResult{Version: version, Error: err}, err == nil, false
 	case daemonEventDelegateIssue:
-		result, err := d.handleDelegateIssueEvent(event.JoinRequest)
+		result, err := d.handleDelegateIssueEvent(event.JoinRequest, event.Permissions)
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
 		return daemonEventResult{Zone: result.Zone, JoinBundle: result.Bundle}, true, false
+	case daemonEventAuthorityGrant:
+		bundle, err := d.handleAuthorityGrantEvent(event.Zone, event.Permissions)
+		if err != nil {
+			return daemonEventResult{Error: err}, false, false
+		}
+		return daemonEventResult{Zone: event.Zone, JoinBundle: bundle}, true, false
 	case daemonEventDelegateRevoke:
 		err := d.handleDelegateRevokeEvent(event.Zone, event.Reason)
 		return daemonEventResult{Zone: event.Zone, Error: err}, err == nil, false
@@ -832,13 +856,13 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	return nil
 }
 
-func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest) (*delegationIssueResult, error) {
+func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
 	latest, err := d.Sync.loadState()
 	if err != nil {
 		return nil, err
 	}
 	d.setState(latest)
-	result, err := issueDelegationInState(d.Sync.App, d.Sync.State, request)
+	result, err := issueDelegationInState(d.Sync.App, d.Sync.State, request, permissions)
 	if err != nil {
 		return nil, err
 	}
@@ -850,6 +874,26 @@ func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest) (*delegat
 	}
 	d.notifyStateChanged()
 	return result, nil
+}
+
+func (d *DaemonService) handleAuthorityGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return nil, err
+	}
+	d.setState(latest)
+	bundle, err := grantAuthorityInState(d.Sync.App, d.Sync.State, path, permissions)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.Sync.saveState(); err != nil {
+		return nil, err
+	}
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return bundle, nil
 }
 
 func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason string) error {

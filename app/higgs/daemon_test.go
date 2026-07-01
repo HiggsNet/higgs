@@ -3548,7 +3548,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey(catofes): %v", err)
 	}
-	catofesIssue, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "catofes.", PublicKey: catofesPub})
+	catofesIssue, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "catofes.", PublicKey: catofesPub}, nil)
 	if err != nil {
 		t.Fatalf("handleDelegateIssueEvent(catofes): %v", err)
 	}
@@ -3560,7 +3560,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey(node-b): %v", err)
 	}
-	if _, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "node-b.catofes.", PublicKey: nodeBPub}); err != nil {
+	if _, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "node-b.catofes.", PublicKey: nodeBPub}, nil); err != nil {
 		t.Fatalf("handleDelegateIssueEvent(node-b): %v", err)
 	}
 

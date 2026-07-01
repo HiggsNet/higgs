@@ -39,17 +39,18 @@ type routeAuthorizationErrorJSON struct {
 const controlSocketName = "higgs.sock"
 
 type controlRequest struct {
-	Method      string          `json:"method"`
-	Zone        string          `json:"zone,omitempty"`
-	Key         string          `json:"key,omitempty"`
-	Value       []byte          `json:"value,omitempty"`
-	ValueText   string          `json:"value_text,omitempty"`
-	Type        string          `json:"type,omitempty"`
-	History     int             `json:"history,omitempty"`
-	Reason      string          `json:"reason,omitempty"`
-	JoinRequest *joinRequest    `json:"join_request,omitempty"`
-	JoinBundle  *joinBundle     `json:"join_bundle,omitempty"`
-	PrivateKey  *privateKeyFile `json:"private_key,omitempty"`
+	Method      string            `json:"method"`
+	Zone        string            `json:"zone,omitempty"`
+	Key         string            `json:"key,omitempty"`
+	Value       []byte            `json:"value,omitempty"`
+	ValueText   string            `json:"value_text,omitempty"`
+	Type        string            `json:"type,omitempty"`
+	History     int               `json:"history,omitempty"`
+	Reason      string            `json:"reason,omitempty"`
+	JoinRequest *joinRequest      `json:"join_request,omitempty"`
+	JoinBundle  *joinBundle       `json:"join_bundle,omitempty"`
+	PrivateKey  *privateKeyFile   `json:"private_key,omitempty"`
+	Permissions []zone.Permission `json:"permissions,omitempty"`
 }
 
 type controlResponse struct {
@@ -327,16 +328,29 @@ func rotateIPsecPortViaControl(rt *Runtime) (*manualPortRotateResult, bool, erro
 	return response.PortRotate, true, nil
 }
 
-func issueDelegationViaControl(rt *Runtime, request *joinRequest) (*joinBundle, bool, error) {
+func issueDelegationViaControl(rt *Runtime, request *joinRequest, permissions []zone.Permission) (*joinBundle, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method:      "delegate_issue",
 		JoinRequest: request,
+		Permissions: permissions,
 	})
 	if err != nil || !ok {
 		return nil, ok, err
 	}
 	if response.JoinBundle == nil {
 		return nil, true, errors.New("daemon delegate_issue response missing join bundle")
+	}
+	return response.JoinBundle, true, nil
+}
+
+func grantAuthorityViaControl(rt *Runtime, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, bool, error) {
+	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+		Method:      "authority_grant",
+		Zone:        path.String(),
+		Permissions: permissions,
+	})
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	return response.JoinBundle, true, nil
 }
@@ -441,6 +455,22 @@ func validateControlDelegateIssue(request controlRequest) error {
 		return errors.New("delegate_issue requires join_request")
 	}
 	return validateJoinRequest(request.JoinRequest)
+}
+
+func validateControlAuthorityGrant(request controlRequest) error {
+	path := zone.ZonePath(request.Zone)
+	if !path.Valid() {
+		return fmt.Errorf("invalid authority zone: %s", request.Zone)
+	}
+	if len(request.Permissions) == 0 {
+		return errors.New("authority_grant requires permissions")
+	}
+	for _, permission := range request.Permissions {
+		if _, err := parseAuthorityPermission(string(permission)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateControlDelegateRevoke(request controlRequest) error {

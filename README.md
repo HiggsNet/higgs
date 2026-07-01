@@ -191,6 +191,8 @@ HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root pubkey
 - Root Zone `.` 的 root authority
 - 保存在本地 bbolt 状态库中的 root 私钥
 
+Root authority 默认拥有当前所有内建权限，包括 `delegate`、`write`、`write:route` 和 `allocate-ip`。Root admin 因此可以声明全网 IPAM pool，并把子 pool 委派给一级管理 Zone。
+
 `root pubkey` 输出的根公钥应写入普通节点的 `trusted_root_public_key`。
 
 这个节点的状态库里只保存 root 私钥。普通节点和 `catofes.` 管理节点都不应复制这个 DB，也不应接触 root 私钥。
@@ -220,7 +222,7 @@ CATOFES_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join r
 把 `CATOFES_REQUEST` 的 base64 内容复制给 `node-admin`，由根域 `.` 签发 `catofes.` 的 delegation：
 
 ```bash
-CATOFES_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate issue "$CATOFES_REQUEST")
+CATOFES_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate issue --cap write,delegate,allocate-ip "$CATOFES_REQUEST")
 ```
 
 把 `CATOFES_BUNDLE` 的 base64 内容交还给 `zone-catofes-admin`：
@@ -235,6 +237,13 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs verify catofes.
 - `node-admin` 只持有 `.` 的私钥。
 - `zone-catofes-admin` 持有 `catofes.` 的私钥。
 - `node-a`、`node-b` 等业务节点由 `zone-catofes-admin` 委派。
+
+如果已有 delegation 缺少后续新增的 capability，不需要重建整个网络。由父 Zone 管理端提升子 Zone authority epoch 并重签 delegation，再把生成的 bundle 交给子 Zone 管理端接受即可：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs authority grant catofes. allocate-ip /tmp/catofes-authority.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes-authority.b64 /tmp/catofes.key.json
+```
 
 ## 加入普通节点
 
@@ -761,7 +770,7 @@ HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery cleanup-ipsec
 
 ## 当前数据面现状
 
-Phase 3 的最小 daemon / 单 writer 边界已经收敛，Phase 4.0 的 admin 写操作 daemon 化也已经落地：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交 `record put`、`delegate issue`、`delegate revoke` 和 `join accept`，daemon 不存在时保留直接写 DB 的开发/恢复模式。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
+Phase 3 的最小 daemon / 单 writer 边界已经收敛，Phase 4.0 的 admin 写操作 daemon 化也已经落地：`higgs daemon` 常驻负责 gossip 同步、endpoint publish、active state 更新和本机 control socket 写入；CLI 在 daemon 存在时优先作为 client 提交 `record put`、`delegate issue`、`authority grant`、`delegate revoke` 和 `join accept`，daemon 不存在时保留直接写 DB 的开发/恢复模式。`root init` 仍是 daemon 启动前的离线初始化；已有 daemon 加载 state 时会拒绝 root 重置。
 
 StrongSwan/IKEv2 + XFRM interface 控制模块已完整实现主路径。核心链路落在 `pkg/transport/ipsec`：planner 从 verified active state + 本地 `LinkGroupSpec` 推导 desired `TransportLinkSpec`；reconciler 结合持久化 `LinkInstance`、driver `ListSAs` 和 revocation 输入，判定 create/update/adopt/repair/teardown/noop，同时支持 bounded port rotation 和 bidirectional takeover 状态机。daemon 已在启动恢复、state change 和 config reload 时接入这条链路。
 
@@ -778,8 +787,9 @@ build/higgs root init
 build/higgs root pubkey
 build/higgs keygen <key.json>
 build/higgs join request <zone> <key.json> [request.b64]
-build/higgs delegate issue <request-b64|request-file> [bundle.b64]
+build/higgs delegate issue [--cap write,delegate,allocate-ip] <request-b64|request-file> [bundle.b64]
 build/higgs join accept <bundle-b64|bundle-file> <key.json>
+build/higgs authority grant <zone> <permission>[,<permission>...] [bundle.b64]
 build/higgs zone show <zone>
 build/higgs record put <zone> <key> <value> [type]
 build/higgs verify <zone>

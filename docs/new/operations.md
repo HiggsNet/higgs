@@ -41,7 +41,7 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join request catofes. /tmp/cat
 把 request 交给 root admin 签发：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate issue <request-payload>
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate issue --cap write,delegate,allocate-ip <request-payload>
 ```
 
 再把 bundle 交回管理 Zone：
@@ -54,6 +54,13 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs verify catofes.
 普通节点重复同样流程，只是 delegation 由 `catofes.` 管理节点签发，而不是 root admin 直接签发。
 
 当前 CLI 支持复制粘贴 base64 payload；需要落盘时也兼容旧 JSON 文件路径。
+
+`root init` 创建的 root authority 默认拥有当前所有内建权限，包括 `delegate`、`write`、`write:route` 和 `allocate-ip`。子 Zone 默认只获得 `write,delegate`；如果一个管理 Zone 需要分配 IPAM pool/assignment，应在 `delegate issue` 时显式加 `--cap write,delegate,allocate-ip`。已有 delegation 可由父 Zone 管理端原地升级：
+
+```bash
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs authority grant catofes. allocate-ip catofes-authority.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.b64 /tmp/catofes.key.json
+```
 
 ## 启动 Daemon
 
