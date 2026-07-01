@@ -148,6 +148,31 @@ function emptyState(msg) {
     return `<div class="empty-state">${esc(msg || 'No data available')}</div>`;
 }
 
+function tableWrap(html) {
+    return `<div class="table-wrap">${html}</div>`;
+}
+
+function entityField(label, value) {
+    return `<div class="entity-field"><div class="entity-field-label">${esc(label)}</div><div class="entity-field-value">${value}</div></div>`;
+}
+
+function entityCard(title, subtitle, fields, details, options) {
+    options = options || {};
+    const clickable = options.clickable ? ' clickable' : '';
+    const selected = options.selected ? ' selected' : '';
+    const dataAttr = options.dataKey ? ` data-${options.dataAttr || 'key'}="${esc(options.dataKey)}"` : '';
+    const body = details ? `<div class="entity-card-details">${details}</div>` : '';
+    return `
+        <div class="entity-card${clickable}${selected}"${dataAttr}>
+            <div class="entity-header">
+                <span class="entity-title">${esc(title || '')}</span>
+                ${subtitle ? `<span class="entity-subtitle">${subtitle}</span>` : ''}
+            </div>
+            <div class="entity-meta${options.wide ? ' wide' : ''}">${fields.join('')}</div>
+            ${body}
+        </div>`;
+}
+
 function jsonViewer(obj) {
     return `<div class="json-viewer">${esc(JSON.stringify(obj, null, 2))}</div>`;
 }
@@ -301,7 +326,7 @@ function recordDetails(record, history, zonePath) {
 
 function recordTable(records, historyByKey, zonePath) {
     if (!records || records.length === 0) return emptyState('No records');
-    return `
+    return tableWrap(`
         <table class="record-table">
             <tr><th>Key</th><th>Version</th><th>Type</th><th>Value</th><th>Record Hash</th><th>Signed By</th></tr>
             ${records.map(r => {
@@ -317,12 +342,12 @@ function recordTable(records, historyByKey, zonePath) {
                 </tr>
                 <tr class="subrow"><td colspan="6">${recordDetails(r, history, zonePath)}</td></tr>`;
             }).join('')}
-        </table>`;
+        </table>`);
 }
 
 function endpointTable(endpoints) {
     if (!endpoints || endpoints.length === 0) return emptyState('No endpoints');
-    return `
+    return tableWrap(`
         <table>
             <tr><th>Addr</th><th>Source</th><th>Protocol</th><th>Scope</th><th>Priority</th><th>Last Observed</th><th>Selected</th></tr>
             ${endpoints.map(ep => `
@@ -335,7 +360,7 @@ function endpointTable(endpoints) {
                     <td>${formatTime(ep.last_observed)}</td>
                     <td>${ep.selected ? stateBadge('healthy') : '-'}</td>
                 </tr>`).join('')}
-        </table>`;
+        </table>`);
 }
 
 function healthValue(item) {
@@ -579,13 +604,13 @@ async function renderOverview() {
                 ${card('Desired Links', status.desired_links || 0)}
             </div>
             <h2>Status</h2>
-            <table>
+            ${tableWrap(`<table>
                 <tr><th>Listen Addr</th><td>${esc(status.listen_addr || '-')}</td></tr>
                 <tr><th>Last Sync</th><td>${formatTime(status.last_sync_unix)}</td></tr>
                 <tr><th>Last Reconcile</th><td>${formatTime(status.last_reconcile_unix)}</td></tr>
                 <tr><th>Last Link Error</th><td>${esc(status.last_link_error || '-')}</td></tr>
                 <tr><th>Last Routing Error</th><td>${esc(status.last_routing_error || '-')}</td></tr>
-            </table>
+            </table>`)}
         `;
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load status: ${esc(e.message)}</div>`;
@@ -601,27 +626,26 @@ async function renderGossip() {
             content.innerHTML = `<h1>Gossip</h1>${emptyState('No peers known')}`;
             return;
         }
-        let rows = peers.map(p => `
-            <tr class="click-row ${selectedPeer === p.peer_id ? 'selected-row' : ''}" data-peer="${esc(p.peer_id)}">
-                <td>${esc(p.peer_id)}</td>
-                <td>${esc(p.source || '-')}</td>
-                <td>${formatTime(p.last_sync_unix)}</td>
-                <td>${p.failure_count || 0}</td>
-                <td>${esc(p.last_error || '-')}</td>
-                <td>${esc(p.configured_addr || '-')}</td>
-                <td>${esc(p.discovered_addr || '-')}</td>
-                <td>${esc(p.observed_addr || '-')}</td>
-            </tr>`).join('');
+        const cards = peers.map(p => entityCard(
+            p.peer_id,
+            `${esc(p.source || '-')} · synced ${formatTime(p.last_sync_unix)}`,
+            [
+                entityField('Failures', p.failure_count || 0),
+                entityField('Last Error', `<code>${esc(p.last_error || '-')}</code>`),
+                entityField('Bootstrap', `<code>${esc(p.configured_addr || '-')}</code>`),
+                entityField('Discovered', `<code>${esc(p.discovered_addr || '-')}</code>`),
+                entityField('Observed', `<code>${esc(p.observed_addr || '-')}</code>`),
+            ],
+            null,
+            { clickable: true, dataAttr: 'peer', dataKey: p.peer_id, selected: selectedPeer === p.peer_id }
+        )).join('');
         content.innerHTML = `
             <h1>Gossip Peers</h1>
-            <table>
-                <tr><th>Peer ID</th><th>Source</th><th>Last Sync</th><th>Failures</th><th>Last Error</th><th>Bootstrap</th><th>Discovered</th><th>Observed</th></tr>
-                ${rows}
-            </table>
+            <div class="entity-list">${cards}</div>
             <div id="peer-detail">${selectedPeer ? '<div class="empty-state">Loading peer detail...</div>' : emptyState('Select a peer to inspect endpoints and diagnostics')}</div>`;
-        document.querySelectorAll('[data-peer]').forEach(row => {
-            row.addEventListener('click', () => {
-                selectedPeer = row.dataset.peer;
+        document.querySelectorAll('[data-peer]').forEach(card => {
+            card.addEventListener('click', () => {
+                selectedPeer = card.dataset.peer;
                 renderGossip();
             });
         });
@@ -679,10 +703,10 @@ async function renderZones() {
             </tr>`).join('');
         content.innerHTML = `
             <h1>Zones</h1>
-            <table>
+            ${tableWrap(`<table>
                 <tr><th>Path</th><th>Records</th><th>Delegations</th><th>Revocations</th><th>Status</th><th>Root Hash</th></tr>
                 ${rows}
-            </table>
+            </table>`)}
             <h2>Global Root</h2>
             <div class="json-viewer">${esc(data.global_root || '-')}</div>
             <div id="zone-detail">${selectedZone ? '<div class="empty-state">Loading zone detail...</div>' : emptyState('Select a zone to inspect authority, records and proofs')}</div>`;
@@ -740,34 +764,34 @@ async function renderOverlay() {
             content.innerHTML = `<h1>Overlay</h1>${emptyState('No link instances')}</div>`;
             return;
         }
-        let rows = instances.map(li => {
+        const cards = instances.map(li => {
             const desired = desiredValue(li);
             const sa = actualSAValue(li);
             const healthState = healthStateForLink(li);
             const routing = li.routing || {};
-            return `
-            <tr>
-                <td>${esc(li.id || '-')}</td>
-                <td>${esc(li.peer_zone || '-')}</td>
-                <td>${esc(li.group_id || '-')}</td>
-                <td>${stateBadge(li.state || li.actual_state)}</td>
-                <td>${stateBadge(healthState || 'unknown')}</td>
-                <td><code>${esc(li.interface_name || desired.interface_name || '-')}</code><br><span class="muted">if_id ${esc(li.xfrm_if_id || desired.xfrm_if_id || '-')}</span></td>
-                <td><code>${esc(li.endpoint || desired.endpoint || '-')}</code></td>
-                <td><code>${esc(desired.peer_tunnel_addr || '-')}</code></td>
-                <td>${stateBadge(sa.established ? 'established' : (sa.child_state || sa.ike_state || '-'))}</td>
-                <td>${stateBadge(routing.bird_state || '-')}</td>
-                <td>${esc((li.rotation && li.rotation.phase) || 'idle')}</td>
-                <td>${li.failure_count || 0}</td>
-            </tr>
-            <tr class="subrow"><td colspan="12">${linkDetail(li)}</td></tr>`;
+            const iface = li.interface_name || desired.interface_name || '-';
+            const ifId = li.xfrm_if_id || desired.xfrm_if_id || '-';
+            return entityCard(
+                li.id || '-',
+                `${esc(li.peer_zone || '-')} · ${esc(li.group_id || '-')}`,
+                [
+                    entityField('State', stateBadge(li.state || li.actual_state)),
+                    entityField('Health', stateBadge(healthState || 'unknown')),
+                    entityField('Interface', `<code>${esc(iface)}</code><br><span class="muted">if_id ${esc(ifId)}</span>`),
+                    entityField('Endpoint', `<code>${esc(li.endpoint || desired.endpoint || '-')}</code>`),
+                    entityField('Peer Tunnel', `<code>${esc(desired.peer_tunnel_addr || '-')}</code>`),
+                    entityField('SA', stateBadge(sa.established ? 'established' : (sa.child_state || sa.ike_state || '-'))),
+                    entityField('Routing', stateBadge(routing.bird_state || '-')),
+                    entityField('Rotate', esc((li.rotation && li.rotation.phase) || 'idle')),
+                    entityField('Failures', li.failure_count || 0),
+                ],
+                linkDetail(li),
+                { wide: true }
+            );
         }).join('');
         content.innerHTML = `
             <h1>Overlay Links</h1>
-            <table>
-                <tr><th>Link ID</th><th>Peer Zone</th><th>Group</th><th>State</th><th>Health</th><th>Interface</th><th>Endpoint</th><th>Peer Tunnel</th><th>SA</th><th>Routing</th><th>Rotate</th><th>Failures</th></tr>
-                ${rows}
-            </table>
+            <div class="entity-list">${cards}</div>
             <h2>Reconcile</h2>
             ${kvTable([
                 ['Last Run', formatTime(data.last_run_unix)],
@@ -793,34 +817,32 @@ async function renderHealth() {
             return;
         }
         const seriesByID = await fetchHealthRTTSeries(data.datasource, links);
-        let rows = links.map(item => {
+        const cards = links.map(item => {
             const h = healthValue(item);
             const desired = item.desired || {};
             const series = seriesByID[h.instance_id] || [];
-            return `
-            <tr>
-                <td>${esc(h.instance_id || '-')}</td>
-                <td>${esc(item.peer_zone || '-')}</td>
-                <td>${esc(item.group_id || '-')}</td>
-                <td><code>${esc(h.interface_name || item.interface_name || desired.interface_name || '-')}</code></td>
-                <td><code>${esc(item.peer_tunnel_addr || desired.peer_tunnel_addr || '-')}</code></td>
-                <td>${stateBadge(h.state)}</td>
-                <td>${esc(h.probe_role || 'active')} / ${esc(h.probe_type || '-')}</td>
-                <td>${ms(h.last_rtt_ms)}</td>
-                <td>${pct(h.loss_ratio_pct)}</td>
-                <td>${ms(h.jitter_ms)}</td>
-                <td>${sparkline(series)}</td>
-                <td>${h.cutover_blocking ? 'Yes' : 'No'}</td>
-                <td>${esc(h.last_error || '-')}</td>
-            </tr>
-            <tr class="subrow"><td colspan="13">${healthDetail(item, data.datasource)}</td></tr>`;
+            return entityCard(
+                h.instance_id || '-',
+                `${esc(item.peer_zone || '-')} · ${esc(item.group_id || '-')}`,
+                [
+                    entityField('Interface', `<code>${esc(h.interface_name || item.interface_name || desired.interface_name || '-')}</code>`),
+                    entityField('Peer Tunnel', `<code>${esc(item.peer_tunnel_addr || desired.peer_tunnel_addr || '-')}</code>`),
+                    entityField('State', stateBadge(h.state)),
+                    entityField('Probe', `${esc(h.probe_role || 'active')} / ${esc(h.probe_type || '-')}`),
+                    entityField('RTT', ms(h.last_rtt_ms)),
+                    entityField('Loss', pct(h.loss_ratio_pct)),
+                    entityField('Jitter', ms(h.jitter_ms)),
+                    entityField('Trend', sparkline(series)),
+                    entityField('Cutover Block', h.cutover_blocking ? 'Yes' : 'No'),
+                    entityField('Error', `<code>${esc(h.last_error || '-')}</code>`),
+                ],
+                healthDetail(item, data.datasource),
+                { wide: true }
+            );
         }).join('');
         content.innerHTML = `
             <h1>Link Health</h1>
-            <table>
-                <tr><th>Link ID</th><th>Peer</th><th>Group</th><th>Interface</th><th>Peer Tunnel</th><th>State</th><th>Probe</th><th>RTT</th><th>Loss</th><th>Jitter</th><th>Trend</th><th>Cutover Block</th><th>Error</th></tr>
-                ${rows}
-            </table>`;
+            <div class="entity-list">${cards}</div>`;
         restoreFoldState(content);
         bindHealthHistory(content, data.datasource);
     } catch (e) {
@@ -1011,11 +1033,11 @@ async function renderRoutes() {
             <h2>Local Export Set</h2>
             <div>${exportSet.map(p => `<span class="badge badge-green">${esc(p)}</span> `).join('') || emptyState('No exports')}</div>
             <h2>Authorized Prefixes by Zone</h2>
-            <table><tr><th>Zone</th><th>Prefixes</th></tr>${zoneRows || emptyRow(2)}</table>
+            ${tableWrap(`<table><tr><th>Zone</th><th>Prefixes</th></tr>${zoneRows || emptyRow(2)}</table>`)}
             <h2>IPAM Assignments</h2>
-            <table><tr><th>Prefix</th><th>Source</th><th>Assigned To</th></tr>${assignRows || emptyRow(3)}</table>
+            ${tableWrap(`<table><tr><th>Prefix</th><th>Source</th><th>Assigned To</th></tr>${assignRows || emptyRow(3)}</table>`)}
             <h2>Authorization Errors (${errors.length})</h2>
-            <table><tr><th>Zone</th><th>Prefix</th><th>Code</th><th>Detail</th></tr>${errorRows || emptyRow(4)}</table>`;
+            ${tableWrap(`<table><tr><th>Zone</th><th>Prefix</th><th>Code</th><th>Detail</th></tr>${errorRows || emptyRow(4)}</table>`)}`;
     } catch (e) {
         content.innerHTML = `<div class="error-msg">Failed to load routes: ${esc(e.message)}</div>`;
     }
@@ -1045,10 +1067,10 @@ async function renderBird() {
             </tr>`).join('');
         content.innerHTML = `
             <h1>BIRD Instances</h1>
-            <table>
+            ${tableWrap(`<table>
                 <tr><th>Name</th><th>NetNS</th><th>State</th><th>Router ID</th><th>Last Error</th></tr>
                 ${rows}
-            </table>
+            </table>`)}
             <div class="detail-section">
                 <h3>CLI Reference</h3>
                 <code>higgs debug babel</code>
