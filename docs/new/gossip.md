@@ -516,10 +516,10 @@ stateDiagram-v2
 | `PongReceivedEvent` | 收到 `PONG`；或收到不带 `Summary` 的 `PING`（被转换为此事件） |
 | `CatalogSummaryReceivedEvent` | 收到带 `Summary` 的 `PING` |
 | `CatalogPageReceivedEvent` | 收到 `CATALOG_PAGE` |
-| `FetchCatalogPageReceivedEvent` | 收到 `FETCH_CATALOG_PAGE`；目标状态下迁出 FSM，改为 responder 事件 |
+| `FetchCatalogPageReceivedEvent` | 旧 FSM 事件；目标状态下 `FETCH_CATALOG_PAGE` 已迁出 FSM，改为 daemon direct responder |
 | `CatalogPageTimeoutEvent` | catalog page 请求超时 |
-| `FetchZoneReceivedEvent` | 收到 `FETCH_ZONE`；目标状态下仅保留 chunk fallback responder 或删除普通路径 |
-| `AnnounceReceivedEvent` | 收到 `ANNOUNCE`；目标状态下作为 hint 唤醒 active pull，不直接 apply snapshot/record |
+| `FetchZoneReceivedEvent` | 旧 FSM 事件；目标状态下普通 `FETCH_ZONE` 已迁出 FSM，chunk fallback 仍走 responder/旧发送路径 |
+| `AnnounceReceivedEvent` | 旧 FSM 事件；目标状态下 daemon 将 `ANNOUNCE` 当作 hint 唤醒 active pull，不直接 apply snapshot/record |
 | `PacketQuietTimeoutEvent` | UDP 静默期 timer 触发 |
 | `RoundTimeoutEvent` | 整轮超时 timer 触发 |
 | `ObjectPullResultEvent` | 异步 TCP object pull 完成 |
@@ -806,7 +806,7 @@ Packet → routePacket()
 | FETCH_ZONE (chunk) | 走旧 handlePacket 路径 |
 | FETCH_CATALOG_PAGE | direct read-only responder；不进入 active `SyncSession` |
 | CATALOG_PAGE | `CatalogPageReceivedEvent` |
-| ANNOUNCE | `AnnounceReceivedEvent` |
+| ANNOUNCE | hint ingress：没有活跃 session 时创建 active pull；已有 session 时记录 follow-up hint，不改当前 FSM |
 | OBJECT_CHUNK | 走全局 chunk assembly |
 
 ### 11.4 TimerManager

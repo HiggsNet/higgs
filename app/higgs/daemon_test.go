@@ -4185,6 +4185,8 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	defer transportB.Close()
 	transportA.AddPeer(configB.PeerID, transportB.LocalAddr())
 	transportB.AddPeer(configA.PeerID, transportA.LocalAddr())
+	configA.ListenAddr = transportA.LocalAddr().String()
+	configB.ListenAddr = transportB.LocalAddr().String()
 	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
 
@@ -4335,6 +4337,109 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	}
 	if got := len(service.syncEvents); got != 0 {
 		t.Fatalf("fetch zone queued %d sync events, want none", got)
+	}
+}
+
+func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "state.db"),
+		Clock:     func() time.Time { return now },
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.EnableEventLoopSync(newFakeClock(now))
+
+	record, err := buildSignedRecordAt(state, "node-b.catofes.", "announce-hint-test", []byte("do-not-apply-directly"), "policy.string", now)
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt: %v", err)
+	}
+	err = service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		Type:   gossip.MessageAnnounce,
+		PeerID: "peer-a",
+		Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{{
+			Zone:   "node-b.catofes.",
+			Record: record,
+		}}},
+	}}, context.Background())
+	if err != nil {
+		t.Fatalf("process announce: %v", err)
+	}
+	if state.Network.Zones["node-b.catofes."].Records["announce-hint-test"] != nil {
+		t.Fatal("announce record was applied directly; want hint-only ingress")
+	}
+	session := service.syncSessions["peer-a"]
+	if session == nil || session.State != SyncSessionIdle {
+		t.Fatalf("announce hint session = %+v, want idle session queued for active pull", session)
+	}
+	if got := len(service.syncEvents); got != 1 {
+		t.Fatalf("announce hint queued %d events, want one sync timer", got)
+	}
+	ev := <-service.syncEvents
+	timer, ok := ev.(*SyncTimerEvent)
+	if !ok {
+		t.Fatalf("announce hint event = %T, want SyncTimerEvent", ev)
+	}
+	if timer.PeerID != "peer-a" || timer.LocalSummary == nil {
+		t.Fatalf("announce hint timer = %+v, want peer-a with local summary", timer)
+	}
+}
+
+func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "state.db"),
+		Clock:     func() time.Time { return now },
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.EnableEventLoopSync(newFakeClock(now))
+
+	peerID := "peer-a"
+	session := NewSyncSession(peerID)
+	_, _ = session.OnEvent(&SyncTimerEvent{
+		PeerID:       peerID,
+		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(nil), ZoneCount: 0},
+	}, now)
+	if session.State != SyncSessionSummarySent {
+		t.Fatalf("expected setup state summary_sent, got %s", session.State)
+	}
+	service.syncSessions[peerID] = session
+
+	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		Type:     gossip.MessageAnnounce,
+		PeerID:   peerID,
+		Announce: &gossip.Announce{},
+	}}, context.Background())
+	if err != nil {
+		t.Fatalf("process announce: %v", err)
+	}
+	if session.State != SyncSessionSummarySent {
+		t.Fatalf("announce changed active session state to %s", session.State)
+	}
+	if got := len(service.syncEvents); got != 0 {
+		t.Fatalf("active announce queued %d sync events, want none", got)
+	}
+	if !service.pendingSyncHints[peerID] {
+		t.Fatal("active announce did not record a follow-up hint")
+	}
+	session.State = SyncSessionCompleted
+	service.completeSyncSession(session, false)
+	if service.pendingSyncHints[peerID] {
+		t.Fatal("follow-up hint was not consumed after session completion")
+	}
+	if got := len(service.syncEvents); got != 1 {
+		t.Fatalf("follow-up hint queued %d sync events, want one", got)
+	}
+	ev := <-service.syncEvents
+	timer, ok := ev.(*SyncTimerEvent)
+	if !ok {
+		t.Fatalf("follow-up hint event = %T, want SyncTimerEvent", ev)
+	}
+	if timer.PeerID != peerID || timer.LocalSummary == nil {
+		t.Fatalf("follow-up hint timer = %+v, want peer with local summary", timer)
 	}
 }
 

@@ -139,13 +139,7 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 				Page:   msg.CatalogPage,
 			})
 		case gossip.MessageAnnounce:
-			if msg.Announce == nil {
-				return nil
-			}
-			return d.postSyncEvent(&AnnounceReceivedEvent{
-				PeerID:   msg.PeerID,
-				Announce: msg.Announce,
-			})
+			return d.handleAnnounceHint(msg.PeerID)
 		case gossip.MessageObjectChunk:
 			// Object chunks still use the global UDP chunk assembly store.
 			return d.Sync.handleObjectChunk(msg, syncLimits(d.Sync.Config))
@@ -153,10 +147,60 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			return d.Sync.handlePacket(packet)
 		}
 	case *UnsolicitedPacketEvent:
+		if packet != nil && packet.Message != nil && packet.Message.Type == gossip.MessageAnnounce {
+			return d.handleAnnounceHint(packet.Message.PeerID)
+		}
 		return d.Sync.handlePacket(packet)
 	default:
 		return d.Sync.handlePacket(packet)
 	}
+}
+
+func (d *DaemonService) handleAnnounceHint(peerID string) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || peerID == "" {
+		return nil
+	}
+	if existing, ok := d.syncSessions[peerID]; ok && existing != nil && !existing.Done() {
+		if d.pendingSyncHints == nil {
+			d.pendingSyncHints = make(map[string]bool)
+		}
+		d.pendingSyncHints[peerID] = true
+		d.logDebug("sync", "announce_hint_suppressed", map[string]any{
+			"peer_id": peerID,
+			"reason":  "session_active",
+		})
+		return nil
+	}
+	return d.startHintedSyncSession(peerID, "announce_hint")
+}
+
+func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || peerID == "" {
+		return nil
+	}
+	summary, err := gossip.CatalogSummaryFor(d.Sync.State.Network, d.syncDatagramBudget())
+	if err != nil {
+		d.logWarn("sync", "catalog_summary_failed", map[string]any{
+			"peer_id": peerID,
+			"reason":  reason,
+			"error":   err,
+		})
+		return nil
+	}
+	d.syncSessions[peerID] = NewSyncSession(peerID)
+	if err := d.postSyncEvent(&SyncTimerEvent{
+		PeerID:       peerID,
+		LocalDigests: gossip.ZoneDigests(d.Sync.State.Network),
+		LocalSummary: summary,
+	}); err != nil {
+		delete(d.syncSessions, peerID)
+		return err
+	}
+	d.logDebug("sync", "hinted_sync_started", map[string]any{
+		"peer_id": peerID,
+		"reason":  reason,
+	})
+	return nil
 }
 
 func (d *DaemonService) postSyncEvent(event SyncEvent) error {
@@ -726,6 +770,10 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 		}
 	}
 	delete(d.syncSessions, peerID)
+	if d.pendingSyncHints != nil && d.pendingSyncHints[peerID] {
+		delete(d.pendingSyncHints, peerID)
+		_ = d.startHintedSyncSession(peerID, "announce_hint_followup")
+	}
 }
 
 func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {

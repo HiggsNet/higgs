@@ -92,7 +92,7 @@
   - [x] 先加 W-001 回归测试：`SummarySent`/等待 `PONG` 时收到 `FETCH_CATALOG_PAGE` 或普通读取请求，active session 不能变成 `ServingPeerFetch`，后续 `PONG` 必须继续处理。
   - [x] 把 `FetchCatalogPageReceivedEvent` 从 `SyncSession.OnEvent` 中迁出，改为 daemon 只读 responder action/handler；保留 catalog page budget、诊断和发送错误记录。
   - [x] 把普通 `FETCH_ZONE` 兼容响应从主 FSM 迁出；现代路径优先走 TCP object pull，UDP `FETCH_ZONE{chunk_fallback:true}` 仅作为 TCP 不可达后的 chunk fallback 请求。
-  - [ ] 将 `ANNOUNCE` 处理收敛为 hint：不再把 snapshot/record announce 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
+  - [x] 将 `ANNOUNCE` 处理收敛为 hint：不再把 snapshot/record announce 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
   - [ ] 删除或停用旧兼容字段路径：`Ping.Zones`、`Pong.Zones`、`Pong.FetchZones`、`SendPongAction.FetchZones`、`FetchingLocal`、`ServingPeerFetch`、eager object pull。
   - [ ] 更新观测面：`sync status --verbose` / `debug peer` 区分 active pull、read-only responder、hint suppressed/accepted、object pull/chunk fallback 结果。
   - [ ] 验证：`go test ./app/higgs ./pkg/core/gossip`、`make phase2-smoke`、`make chain-relay-smoke`、`make object-pull-smoke`；最后再跑 `make check`。

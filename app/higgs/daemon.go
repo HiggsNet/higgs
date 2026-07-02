@@ -40,6 +40,7 @@ type DaemonService struct {
 
 	eventLoopSync     bool
 	syncSessions      map[string]*SyncSession
+	pendingSyncHints  map[string]bool
 	syncEvents        chan SyncEvent
 	objectPullResults chan ObjectPullResult
 	objectPullPool    *objectPullPool
@@ -154,6 +155,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	}
 	d.eventLoopSync = true
 	d.syncSessions = make(map[string]*SyncSession)
+	d.pendingSyncHints = make(map[string]bool)
 	d.syncEvents = make(chan SyncEvent, 64)
 	d.objectPullResults = make(chan ObjectPullResult, 64)
 	d.objectPullPool = newObjectPullPool(d.objectPullResults, 0)
