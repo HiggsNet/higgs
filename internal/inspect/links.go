@@ -47,6 +47,8 @@ type LinkView struct {
 	Endpoint        string
 	InterfaceName   string
 	XFRMIfID        uint32
+	LocalTunnelAddr string
+	PeerTunnelAddr  string
 	ChildSAName     string
 	DesiredSpecHash string
 	Desired         *DesiredLink
@@ -64,40 +66,44 @@ type LinkView struct {
 }
 
 type LinkInstance struct {
-	ID                  string
-	GroupID             string
-	PeerZone            string
-	TransportKind       string
-	LinkID              string
-	PathKey             string
-	TransportID         string
-	DesiredSpecHash     string
-	ActualState         string
-	InterfaceName       string
-	XFRMIfID            uint32
-	IKEName             string
-	ChildSAName         string
-	Endpoint            string
-	RemoteGeneration    uint64
-	StagedGeneration    uint64
-	RotatePhase         string
-	StagedIKEName       string
-	StagedChildSAName   string
-	StagedInterfaceName string
-	StagedXFRMIfID      uint32
-	RotateDeadline      int64
-	LastError           string
-	FailureCount        int
-	BackoffUntil        int64
-	LastTransition      int64
-	Owner               LinkOwner
-	InitiatorRole       string
-	TakeoverPhase       string
-	TakeoverStartedAt   int64
-	TakeoverUntil       int64
-	LastTakeoverError   string
-	ObservedInitiator   string
-	Routing             LinkRouting
+	ID                    string
+	GroupID               string
+	PeerZone              string
+	TransportKind         string
+	LinkID                string
+	PathKey               string
+	TransportID           string
+	DesiredSpecHash       string
+	ActualState           string
+	InterfaceName         string
+	XFRMIfID              uint32
+	LocalTunnelAddr       string
+	PeerTunnelAddr        string
+	IKEName               string
+	ChildSAName           string
+	Endpoint              string
+	RemoteGeneration      uint64
+	StagedGeneration      uint64
+	RotatePhase           string
+	StagedIKEName         string
+	StagedChildSAName     string
+	StagedInterfaceName   string
+	StagedXFRMIfID        uint32
+	StagedLocalTunnelAddr string
+	StagedPeerTunnelAddr  string
+	RotateDeadline        int64
+	LastError             string
+	FailureCount          int
+	BackoffUntil          int64
+	LastTransition        int64
+	Owner                 LinkOwner
+	InitiatorRole         string
+	TakeoverPhase         string
+	TakeoverStartedAt     int64
+	TakeoverUntil         int64
+	LastTakeoverError     string
+	ObservedInitiator     string
+	Routing               LinkRouting
 }
 
 type LinkOwner struct {
@@ -170,14 +176,16 @@ type LinkRouting struct {
 }
 
 type LinkRotation struct {
-	Phase               string `json:"phase,omitempty"`
-	RemoteGeneration    uint64 `json:"remote_generation,omitempty"`
-	StagedGeneration    uint64 `json:"staged_generation,omitempty"`
-	StagedIKEName       string `json:"staged_ike_name,omitempty"`
-	StagedChildSAName   string `json:"staged_child_sa_name,omitempty"`
-	StagedInterfaceName string `json:"staged_interface_name,omitempty"`
-	StagedXFRMIfID      uint32 `json:"staged_xfrm_if_id,omitempty"`
-	RotateDeadline      int64  `json:"rotate_deadline,omitempty"`
+	Phase                 string `json:"phase,omitempty"`
+	RemoteGeneration      uint64 `json:"remote_generation,omitempty"`
+	StagedGeneration      uint64 `json:"staged_generation,omitempty"`
+	StagedIKEName         string `json:"staged_ike_name,omitempty"`
+	StagedChildSAName     string `json:"staged_child_sa_name,omitempty"`
+	StagedInterfaceName   string `json:"staged_interface_name,omitempty"`
+	StagedXFRMIfID        uint32 `json:"staged_xfrm_if_id,omitempty"`
+	StagedLocalTunnelAddr string `json:"staged_local_tunnel_addr,omitempty"`
+	StagedPeerTunnelAddr  string `json:"staged_peer_tunnel_addr,omitempty"`
+	RotateDeadline        int64  `json:"rotate_deadline,omitempty"`
 }
 
 type LinkTakeover struct {
@@ -291,6 +299,8 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 		Endpoint:        firstNonEmpty(inst.Endpoint, desired.Endpoint),
 		InterfaceName:   firstNonEmpty(inst.InterfaceName, desired.InterfaceName),
 		XFRMIfID:        firstNonZeroUint32(inst.XFRMIfID, desired.XFRMIfID),
+		LocalTunnelAddr: firstNonEmpty(inst.LocalTunnelAddr, desired.LocalTunnelAddr),
+		PeerTunnelAddr:  firstNonEmpty(inst.PeerTunnelAddr, desired.PeerTunnelAddr),
 		ChildSAName:     inst.ChildSAName,
 		DesiredSpecHash: firstNonEmpty(inst.DesiredSpecHash, desired.DesiredSpecHash),
 		Desired:         desiredPtr,
@@ -298,14 +308,16 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 		Health:          health,
 		Routing:         inst.Routing,
 		Rotation: LinkRotation{
-			Phase:               inst.RotatePhase,
-			RemoteGeneration:    inst.RemoteGeneration,
-			StagedGeneration:    inst.StagedGeneration,
-			StagedIKEName:       inst.StagedIKEName,
-			StagedChildSAName:   inst.StagedChildSAName,
-			StagedInterfaceName: inst.StagedInterfaceName,
-			StagedXFRMIfID:      inst.StagedXFRMIfID,
-			RotateDeadline:      inst.RotateDeadline,
+			Phase:                 inst.RotatePhase,
+			RemoteGeneration:      inst.RemoteGeneration,
+			StagedGeneration:      inst.StagedGeneration,
+			StagedIKEName:         inst.StagedIKEName,
+			StagedChildSAName:     inst.StagedChildSAName,
+			StagedInterfaceName:   inst.StagedInterfaceName,
+			StagedXFRMIfID:        inst.StagedXFRMIfID,
+			StagedLocalTunnelAddr: inst.StagedLocalTunnelAddr,
+			StagedPeerTunnelAddr:  inst.StagedPeerTunnelAddr,
+			RotateDeadline:        inst.RotateDeadline,
 		},
 		Takeover: LinkTakeover{
 			InitiatorRole:     inst.InitiatorRole,

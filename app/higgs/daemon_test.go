@@ -1287,7 +1287,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		"  planner:\n",
 		"    desired_hash: ",
 		"  xfrm:\n",
-		"    if_id: ",
+		"    interface: ",
 		"  strongswan:\n",
 		"    sa_state: established",
 		"    remote_endpoint: 198.51.100.20",

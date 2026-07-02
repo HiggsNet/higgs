@@ -214,6 +214,12 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	if inst.StagedXFRMIfID == 0 || inst.StagedXFRMIfID == existing.XFRMIfID {
 		t.Fatalf("staged if_id = %d, want independent from %d", inst.StagedXFRMIfID, existing.XFRMIfID)
 	}
+	if inst.LocalTunnelAddr != existing.LocalTunnelAddr || inst.PeerTunnelAddr != existing.PeerTunnelAddr {
+		t.Fatalf("active tunnel addrs changed before commit: local=%s peer=%s", inst.LocalTunnelAddr, inst.PeerTunnelAddr)
+	}
+	if inst.StagedLocalTunnelAddr != action.Spec.LocalTunnelAddr || inst.StagedPeerTunnelAddr != action.Spec.PeerTunnelAddr {
+		t.Fatalf("staged tunnel addrs = %s/%s, want %s/%s", inst.StagedLocalTunnelAddr, inst.StagedPeerTunnelAddr, action.Spec.LocalTunnelAddr, action.Spec.PeerTunnelAddr)
+	}
 	if inst.RemoteGeneration != 1 {
 		t.Fatalf("remote generation changed before commit = %d", inst.RemoteGeneration)
 	}

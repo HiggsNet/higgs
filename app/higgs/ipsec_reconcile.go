@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -458,32 +459,36 @@ func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.Link
 	out := make(map[string]ipsec.LinkInstance, len(in))
 	for id, inst := range in {
 		out[id] = ipsec.LinkInstance{
-			ID:                  inst.ID,
-			GroupID:             inst.GroupID,
-			PeerZone:            inst.PeerZone,
-			TransportKind:       inst.TransportKind,
-			LinkID:              inst.LinkID,
-			PathKey:             inst.PathKey,
-			TransportID:         inst.TransportID,
-			DesiredSpecHash:     inst.DesiredSpecHash,
-			ActualState:         inst.ActualState,
-			InterfaceName:       inst.InterfaceName,
-			XFRMIfID:            inst.XFRMIfID,
-			IKEName:             inst.IKEName,
-			ChildSAName:         inst.ChildSAName,
-			Endpoint:            inst.Endpoint,
-			RemoteGeneration:    inst.RemoteGeneration,
-			StagedGeneration:    inst.StagedGeneration,
-			RotatePhase:         inst.RotatePhase,
-			StagedIKEName:       inst.StagedIKEName,
-			StagedChildSAName:   inst.StagedChildSAName,
-			StagedInterfaceName: inst.StagedInterfaceName,
-			StagedXFRMIfID:      inst.StagedXFRMIfID,
-			RotateDeadline:      inst.RotateDeadline,
-			LastError:           inst.LastError,
-			FailureCount:        inst.FailureCount,
-			BackoffUntil:        inst.BackoffUntil,
-			LastTransition:      inst.LastTransition,
+			ID:                    inst.ID,
+			GroupID:               inst.GroupID,
+			PeerZone:              inst.PeerZone,
+			TransportKind:         inst.TransportKind,
+			LinkID:                inst.LinkID,
+			PathKey:               inst.PathKey,
+			TransportID:           inst.TransportID,
+			DesiredSpecHash:       inst.DesiredSpecHash,
+			ActualState:           inst.ActualState,
+			InterfaceName:         inst.InterfaceName,
+			XFRMIfID:              inst.XFRMIfID,
+			LocalTunnelAddr:       parseStateAddr(inst.LocalTunnelAddr),
+			PeerTunnelAddr:        parseStateAddr(inst.PeerTunnelAddr),
+			IKEName:               inst.IKEName,
+			ChildSAName:           inst.ChildSAName,
+			Endpoint:              inst.Endpoint,
+			RemoteGeneration:      inst.RemoteGeneration,
+			StagedGeneration:      inst.StagedGeneration,
+			RotatePhase:           inst.RotatePhase,
+			StagedIKEName:         inst.StagedIKEName,
+			StagedChildSAName:     inst.StagedChildSAName,
+			StagedInterfaceName:   inst.StagedInterfaceName,
+			StagedXFRMIfID:        inst.StagedXFRMIfID,
+			StagedLocalTunnelAddr: parseStateAddr(inst.StagedLocalTunnelAddr),
+			StagedPeerTunnelAddr:  parseStateAddr(inst.StagedPeerTunnelAddr),
+			RotateDeadline:        inst.RotateDeadline,
+			LastError:             inst.LastError,
+			FailureCount:          inst.FailureCount,
+			BackoffUntil:          inst.BackoffUntil,
+			LastTransition:        inst.LastTransition,
 			Owner: ipsec.ResourceOwner{
 				Manager:     inst.Owner.Manager,
 				GroupID:     inst.Owner.GroupID,
@@ -510,32 +515,36 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 	out := make(map[string]linkInstanceState, len(in))
 	for id, inst := range in {
 		out[id] = linkInstanceState{
-			ID:                  inst.ID,
-			GroupID:             inst.GroupID,
-			PeerZone:            inst.PeerZone,
-			TransportKind:       inst.TransportKind,
-			LinkID:              inst.LinkID,
-			PathKey:             inst.PathKey,
-			TransportID:         inst.TransportID,
-			DesiredSpecHash:     inst.DesiredSpecHash,
-			ActualState:         inst.ActualState,
-			InterfaceName:       inst.InterfaceName,
-			XFRMIfID:            inst.XFRMIfID,
-			IKEName:             inst.IKEName,
-			ChildSAName:         inst.ChildSAName,
-			Endpoint:            inst.Endpoint,
-			RemoteGeneration:    inst.RemoteGeneration,
-			StagedGeneration:    inst.StagedGeneration,
-			RotatePhase:         inst.RotatePhase,
-			StagedIKEName:       inst.StagedIKEName,
-			StagedChildSAName:   inst.StagedChildSAName,
-			StagedInterfaceName: inst.StagedInterfaceName,
-			StagedXFRMIfID:      inst.StagedXFRMIfID,
-			RotateDeadline:      inst.RotateDeadline,
-			LastError:           inst.LastError,
-			FailureCount:        inst.FailureCount,
-			BackoffUntil:        inst.BackoffUntil,
-			LastTransition:      inst.LastTransition,
+			ID:                    inst.ID,
+			GroupID:               inst.GroupID,
+			PeerZone:              inst.PeerZone,
+			TransportKind:         inst.TransportKind,
+			LinkID:                inst.LinkID,
+			PathKey:               inst.PathKey,
+			TransportID:           inst.TransportID,
+			DesiredSpecHash:       inst.DesiredSpecHash,
+			ActualState:           inst.ActualState,
+			InterfaceName:         inst.InterfaceName,
+			XFRMIfID:              inst.XFRMIfID,
+			LocalTunnelAddr:       formatStateAddr(inst.LocalTunnelAddr),
+			PeerTunnelAddr:        formatStateAddr(inst.PeerTunnelAddr),
+			IKEName:               inst.IKEName,
+			ChildSAName:           inst.ChildSAName,
+			Endpoint:              inst.Endpoint,
+			RemoteGeneration:      inst.RemoteGeneration,
+			StagedGeneration:      inst.StagedGeneration,
+			RotatePhase:           inst.RotatePhase,
+			StagedIKEName:         inst.StagedIKEName,
+			StagedChildSAName:     inst.StagedChildSAName,
+			StagedInterfaceName:   inst.StagedInterfaceName,
+			StagedXFRMIfID:        inst.StagedXFRMIfID,
+			StagedLocalTunnelAddr: formatStateAddr(inst.StagedLocalTunnelAddr),
+			StagedPeerTunnelAddr:  formatStateAddr(inst.StagedPeerTunnelAddr),
+			RotateDeadline:        inst.RotateDeadline,
+			LastError:             inst.LastError,
+			FailureCount:          inst.FailureCount,
+			BackoffUntil:          inst.BackoffUntil,
+			LastTransition:        inst.LastTransition,
 			Owner: linkOwnerState{
 				Manager:     inst.Owner.Manager,
 				GroupID:     inst.Owner.GroupID,
@@ -553,6 +562,24 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 		}
 	}
 	return out
+}
+
+func parseStateAddr(s string) netip.Addr {
+	if s == "" {
+		return netip.Addr{}
+	}
+	addr, err := netip.ParseAddr(stripScope(s))
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr
+}
+
+func formatStateAddr(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return ""
+	}
+	return addr.String()
 }
 
 func revokedLinkPeers(state *stateFile, now time.Time) map[zone.ZonePath]bool {
@@ -670,6 +697,8 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 		inst.StagedChildSAName = ""
 		inst.StagedInterfaceName = ""
 		inst.StagedXFRMIfID = 0
+		inst.StagedLocalTunnelAddr = netip.Addr{}
+		inst.StagedPeerTunnelAddr = netip.Addr{}
 		inst.RotatePhase = ipsec.RotatePhaseIdle
 		inst.RotateDeadline = 0
 		inst.LastTransition = now.Unix()
@@ -679,6 +708,8 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 		inst.StagedChildSAName = ""
 		inst.StagedInterfaceName = ""
 		inst.StagedXFRMIfID = 0
+		inst.StagedLocalTunnelAddr = netip.Addr{}
+		inst.StagedPeerTunnelAddr = netip.Addr{}
 		inst.RotatePhase = ipsec.RotatePhaseIdle
 		inst.RotateDeadline = 0
 	}

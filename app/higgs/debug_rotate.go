@@ -156,7 +156,7 @@ func printDebugRotateLink(w io.Writer, link inspect.LinkView, spec *ipsec.Transp
 	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(link.Rotation.RotateDeadline))
 	fmt.Fprintf(w, "    last_error: %s\n", dash(link.LastError))
 	printDebugRotateRuntime(w, "current", rotateRuntimeCurrent(link, spec))
-	staged := rotateRuntimeStaged(link, spec)
+	staged := rotateRuntimeStaged(link, spec, append(storedSAs, liveSAs...))
 	if !staged.empty() {
 		printDebugRotateRuntime(w, "staged", staged)
 	} else {
@@ -186,14 +186,16 @@ func (v rotateRuntimeView) empty() bool {
 
 func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) rotateRuntimeView {
 	out := rotateRuntimeView{
-		State:         "expected_current",
-		Generation:    link.Rotation.RemoteGeneration,
-		Port:          debugEndpointPort(link.Endpoint),
-		RuntimeID:     link.TransportID,
-		ChildSAName:   link.ChildSAName,
-		InterfaceName: link.InterfaceName,
-		XFRMIfID:      link.XFRMIfID,
-		Endpoint:      link.Endpoint,
+		State:           "expected_current",
+		Generation:      link.Rotation.RemoteGeneration,
+		Port:            debugEndpointPort(link.Endpoint),
+		RuntimeID:       link.TransportID,
+		ChildSAName:     link.ChildSAName,
+		InterfaceName:   link.InterfaceName,
+		XFRMIfID:        link.XFRMIfID,
+		Endpoint:        link.Endpoint,
+		LocalTunnelAddr: link.LocalTunnelAddr,
+		PeerTunnelAddr:  link.PeerTunnelAddr,
 	}
 	if link.Desired != nil {
 		out.RuntimeID = firstNonEmpty(out.RuntimeID, link.Desired.TransportID)
@@ -201,12 +203,12 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, link.Desired.XFRMIfID)
 		out.Endpoint = firstNonEmpty(out.Endpoint, link.Desired.Endpoint)
 		out.Port = firstNonEmpty(out.Port, debugEndpointPort(link.Desired.Endpoint))
-		out.LocalTunnelAddr = link.Desired.LocalTunnelAddr
-		out.PeerTunnelAddr = link.Desired.PeerTunnelAddr
+		out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, link.Desired.LocalTunnelAddr)
+		out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, link.Desired.PeerTunnelAddr)
 	}
 	if spec != nil {
 		out.Generation = firstNonZeroUint64(out.Generation, spec.Generation)
-		out.Port = firstNonEmpty(debugRemotePort(spec, ""), out.Port)
+		out.Port = firstNonEmpty(out.Port, debugRemotePort(spec, ""))
 		out.RuntimeID = firstNonEmpty(out.RuntimeID, spec.TransportID)
 		out.ChildSAName = firstNonEmpty(out.ChildSAName, ipsec.ChildSAName(*spec))
 		out.InterfaceName = firstNonEmpty(out.InterfaceName, spec.InterfaceName)
@@ -218,19 +220,21 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 	return out
 }
 
-func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec) rotateRuntimeView {
+func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, sas []linkSAState) rotateRuntimeView {
 	generation := link.Rotation.StagedGeneration
 	if generation == 0 {
 		return rotateRuntimeView{}
 	}
 	out := rotateRuntimeView{
-		State:         "expected_new",
-		Generation:    generation,
-		Port:          debugStagedPort(spec, generation),
-		RuntimeID:     link.Rotation.StagedIKEName,
-		ChildSAName:   link.Rotation.StagedChildSAName,
-		InterfaceName: link.Rotation.StagedInterfaceName,
-		XFRMIfID:      link.Rotation.StagedXFRMIfID,
+		State:           "expected_new",
+		Generation:      generation,
+		Port:            debugStagedPort(spec, generation),
+		RuntimeID:       link.Rotation.StagedIKEName,
+		ChildSAName:     link.Rotation.StagedChildSAName,
+		InterfaceName:   link.Rotation.StagedInterfaceName,
+		XFRMIfID:        link.Rotation.StagedXFRMIfID,
+		LocalTunnelAddr: link.Rotation.StagedLocalTunnelAddr,
+		PeerTunnelAddr:  link.Rotation.StagedPeerTunnelAddr,
 	}
 	linkID := link.LinkID
 	provider := ipsec.ProviderStrongSwan
@@ -246,7 +250,24 @@ func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec) r
 	if out.RuntimeID != "" {
 		out.ChildSAName = firstNonEmpty(out.ChildSAName, out.RuntimeID+"-child")
 	}
+	if sa, ok := stagedSAForRuntime(out, sas); ok {
+		out.Endpoint = firstNonEmpty(out.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint))
+		out.Port = firstNonEmpty(out.Port, debugEndpointPort(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)))
+	}
 	return out
+}
+
+func stagedSAForRuntime(runtime rotateRuntimeView, sas []linkSAState) (linkSAState, bool) {
+	for _, sa := range sas {
+		if runtime.XFRMIfID != 0 && sa.XFRMIfID == runtime.XFRMIfID {
+			return sa, true
+		}
+		if nonEmptyMatches(runtime.RuntimeID, sa.Name, sa.ChildSA) ||
+			nonEmptyMatches(runtime.ChildSAName, sa.Name, sa.ChildSA) {
+			return sa, true
+		}
+	}
+	return linkSAState{}, false
 }
 
 func printDebugRotateRuntime(w io.Writer, label string, runtime rotateRuntimeView) {
@@ -255,8 +276,7 @@ func printDebugRotateRuntime(w io.Writer, label string, runtime rotateRuntimeVie
 	fmt.Fprintf(w, "    port: %s\n", dash(runtime.Port))
 	fmt.Fprintf(w, "    runtime_id: %s\n", dash(runtime.RuntimeID))
 	fmt.Fprintf(w, "    child_sa: %s\n", dash(runtime.ChildSAName))
-	fmt.Fprintf(w, "    interface: %s\n", dash(runtime.InterfaceName))
-	fmt.Fprintf(w, "    if_id: %s\n", formatUint32OrDash(runtime.XFRMIfID))
+	fmt.Fprintf(w, "    interface: %s\n", formatInterfaceWithIfID(runtime.InterfaceName, runtime.XFRMIfID))
 	fmt.Fprintf(w, "    endpoint: %s\n", dash(runtime.Endpoint))
 	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(runtime.LocalTunnelAddr))
 	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(runtime.PeerTunnelAddr))

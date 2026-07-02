@@ -332,11 +332,10 @@ func printDebugLinkInstance(w io.Writer, link inspect.LinkView, spec *ipsec.Tran
 	fmt.Fprintf(w, "    desired_hash: %s\n", dash(shortHash(desired.DesiredSpecHash)))
 	fmt.Fprintf(w, "    actual_hash: %s\n", dash(shortHash(link.DesiredSpecHash)))
 	fmt.Fprintf(w, "    endpoint: %s\n", dash(link.Endpoint))
-	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(desired.LocalTunnelAddr))
-	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(desired.PeerTunnelAddr))
+	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(link.LocalTunnelAddr))
+	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(link.PeerTunnelAddr))
 	fmt.Fprintf(w, "  xfrm:\n")
-	fmt.Fprintf(w, "    interface: %s\n", dash(link.InterfaceName))
-	fmt.Fprintf(w, "    if_id: %d\n", link.XFRMIfID)
+	fmt.Fprintf(w, "    interface: %s\n", formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID))
 	fmt.Fprintf(w, "  strongswan:\n")
 	fmt.Fprintf(w, "    child_sa: %s\n", dash(firstNonEmpty(sa.ChildSA, link.ChildSAName, specChildSAName(spec))))
 	fmt.Fprintf(w, "    sa_state: %s\n", formatSAState(sa))
@@ -345,15 +344,14 @@ func printDebugLinkInstance(w io.Writer, link inspect.LinkView, spec *ipsec.Tran
 	fmt.Fprintf(w, "    local_identity: %s\n", dash(sa.LocalIdentity))
 	fmt.Fprintf(w, "    remote_identity: %s\n", dash(sa.RemoteIdentity))
 	fmt.Fprintf(w, "    reqid: %s\n", formatUint32OrDash(sa.ReqID))
-	fmt.Fprintf(w, "    observed_if_id: %s\n", formatUint32OrDash(sa.XFRMIfID))
+	fmt.Fprintf(w, "    observed_interface: %s\n", formatDerivedInterfaceWithIfID(sa.XFRMIfID))
 	printDebugStrongSwanConfig(w, spec)
 	fmt.Fprintf(w, "  rotation:\n")
 	fmt.Fprintf(w, "    phase: %s\n", dash(link.Rotation.Phase))
 	fmt.Fprintf(w, "    port_generation select/runtime/staged: %s\n", debugPortGenerationSummary(spec, link.Rotation))
 	fmt.Fprintf(w, "    port local/remote/runtime/staged: %s\n", debugPortSummary(spec, link.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint), link.Rotation.StagedGeneration))
 	fmt.Fprintf(w, "    staged_ike: %s\n", dash(link.Rotation.StagedIKEName))
-	fmt.Fprintf(w, "    staged_interface: %s\n", dash(link.Rotation.StagedInterfaceName))
-	fmt.Fprintf(w, "    staged_if_id: %s\n", formatUint32OrDash(link.Rotation.StagedXFRMIfID))
+	fmt.Fprintf(w, "    staged_interface: %s\n", formatInterfaceWithIfID(link.Rotation.StagedInterfaceName, link.Rotation.StagedXFRMIfID))
 	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(link.Rotation.RotateDeadline))
 	fmt.Fprintf(w, "  takeover:\n")
 	fmt.Fprintf(w, "    initiator_role: %s\n", dash(link.Takeover.InitiatorRole))
@@ -433,8 +431,7 @@ func printDebugMissingLink(w io.Writer, link inspect.LinkView, spec *ipsec.Trans
 	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(desired.LocalTunnelAddr))
 	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(desired.PeerTunnelAddr))
 	fmt.Fprintf(w, "  xfrm:\n")
-	fmt.Fprintf(w, "    interface: %s\n", dash(link.InterfaceName))
-	fmt.Fprintf(w, "    if_id: %d\n", link.XFRMIfID)
+	fmt.Fprintf(w, "    interface: %s\n", formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID))
 	fmt.Fprintf(w, "  strongswan:\n")
 	fmt.Fprintf(w, "    child_sa: -\n")
 	fmt.Fprintf(w, "    sa_state: -\n")
@@ -493,8 +490,40 @@ func printDebugStrongSwanConfig(w io.Writer, spec *ipsec.TransportLinkSpec) {
 	fmt.Fprintf(w, "      child_start_action: %s\n", dash(debugString(child["start_action"])))
 	fmt.Fprintf(w, "      child_local_ts: %s\n", debugStringList(child["local_ts"]))
 	fmt.Fprintf(w, "      child_remote_ts: %s\n", debugStringList(child["remote_ts"]))
-	fmt.Fprintf(w, "      child_if_id_in: %s\n", dash(debugString(child["if_id_in"])))
-	fmt.Fprintf(w, "      child_if_id_out: %s\n", dash(debugString(child["if_id_out"])))
+	fmt.Fprintf(w, "      child_if_id_in: %s\n", formatDebugChildIfID(child["if_id_in"]))
+	fmt.Fprintf(w, "      child_if_id_out: %s\n", formatDebugChildIfID(child["if_id_out"]))
+}
+
+func formatInterfaceWithIfID(name string, ifID uint32) string {
+	if name == "" && ifID == 0 {
+		return "-"
+	}
+	if name == "" {
+		name = ipsec.StableInterfaceName(ifID)
+	}
+	if ifID == 0 {
+		return dash(name)
+	}
+	return fmt.Sprintf("%s(%d)", name, ifID)
+}
+
+func formatDerivedInterfaceWithIfID(ifID uint32) string {
+	if ifID == 0 {
+		return "-"
+	}
+	return formatInterfaceWithIfID(ipsec.StableInterfaceName(ifID), ifID)
+}
+
+func formatDebugChildIfID(value any) string {
+	s := debugString(value)
+	if s == "" {
+		return "-"
+	}
+	var id uint32
+	if _, err := fmt.Sscanf(s, "%d", &id); err == nil && id != 0 {
+		return formatDerivedInterfaceWithIfID(id)
+	}
+	return dash(s)
 }
 
 func debugString(value any) string {

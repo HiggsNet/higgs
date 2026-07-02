@@ -50,11 +50,15 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		ManagedZone: zone.ZonePath("node-a.catofes."),
 		LinkInstances: map[string]linkInstanceState{
 			"link-1": {
-				ActualState:         "up",
-				InterfaceName:       "hgs-old",
-				StagedGeneration:    2,
-				RotatePhase:         "testing_new",
-				StagedInterfaceName: "hgs-new",
+				ActualState:           "up",
+				InterfaceName:         "hgs-old",
+				LocalTunnelAddr:       "fe80::10",
+				PeerTunnelAddr:        "fe80::20",
+				StagedGeneration:      2,
+				RotatePhase:           "testing_new",
+				StagedInterfaceName:   "hgs-new",
+				StagedLocalTunnelAddr: "fe80::11",
+				StagedPeerTunnelAddr:  "fe80::21",
 			},
 		},
 		IPsecReconcile: &ipsecReconcileState{
@@ -80,8 +84,14 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 	if old := byRole["old"]; old.InterfaceName != "hgs-old" || old.ProbeID != "link-1#old" || old.Staged {
 		t.Fatalf("old target = %+v, want old interface without staged flag", old)
 	}
+	if old := byRole["old"]; old.LocalTunnelAddr.String() != "fe80::10" || old.PeerTunnelAddr.String() != "fe80::20" {
+		t.Fatalf("old target addrs = %s/%s, want persisted old runtime addrs", old.LocalTunnelAddr, old.PeerTunnelAddr)
+	}
 	if staged := byRole["staged"]; staged.InterfaceName != "hgs-new" || staged.ProbeID != "link-1#staged" || !staged.Staged {
 		t.Fatalf("staged target = %+v, want staged interface", staged)
+	}
+	if staged := byRole["staged"]; staged.LocalTunnelAddr.String() != "fe80::11" || staged.PeerTunnelAddr.String() != "fe80::21" {
+		t.Fatalf("staged target addrs = %s/%s, want persisted staged runtime addrs", staged.LocalTunnelAddr, staged.PeerTunnelAddr)
 	}
 	if staged := byRole["staged"]; staged.State != "up" {
 		t.Fatalf("staged target state = %q, want up", staged.State)

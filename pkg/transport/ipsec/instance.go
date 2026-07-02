@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -52,34 +53,38 @@ const (
 )
 
 type LinkInstance struct {
-	ID                  string
-	GroupID             string
-	PeerZone            zone.ZonePath
-	TransportKind       string
-	LinkID              string
-	PathKey             string
-	TransportID         string
-	DesiredSpecHash     string
-	ActualState         string
-	InterfaceName       string
-	XFRMIfID            uint32
-	IKEName             string
-	ChildSAName         string
-	Endpoint            string
-	SelectedContact     ContactPoint
-	RemoteGeneration    uint64
-	StagedGeneration    uint64
-	RotatePhase         string
-	StagedIKEName       string
-	StagedChildSAName   string
-	StagedInterfaceName string
-	StagedXFRMIfID      uint32
-	RotateDeadline      int64
-	LastError           string
-	FailureCount        int
-	BackoffUntil        int64
-	LastTransition      int64
-	Owner               ResourceOwner
+	ID                    string
+	GroupID               string
+	PeerZone              zone.ZonePath
+	TransportKind         string
+	LinkID                string
+	PathKey               string
+	TransportID           string
+	DesiredSpecHash       string
+	ActualState           string
+	InterfaceName         string
+	XFRMIfID              uint32
+	LocalTunnelAddr       netip.Addr
+	PeerTunnelAddr        netip.Addr
+	IKEName               string
+	ChildSAName           string
+	Endpoint              string
+	SelectedContact       ContactPoint
+	RemoteGeneration      uint64
+	StagedGeneration      uint64
+	RotatePhase           string
+	StagedIKEName         string
+	StagedChildSAName     string
+	StagedInterfaceName   string
+	StagedXFRMIfID        uint32
+	StagedLocalTunnelAddr netip.Addr
+	StagedPeerTunnelAddr  netip.Addr
+	RotateDeadline        int64
+	LastError             string
+	FailureCount          int
+	BackoffUntil          int64
+	LastTransition        int64
+	Owner                 ResourceOwner
 
 	// Bidirectional takeover state (Phase 4.5).
 	InitiatorRole     string
@@ -139,6 +144,8 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 		ActualState:     state,
 		InterfaceName:   spec.InterfaceName,
 		XFRMIfID:        spec.XFRMIfID,
+		LocalTunnelAddr: spec.LocalTunnelAddr,
+		PeerTunnelAddr:  spec.PeerTunnelAddr,
 		IKEName:         spec.TransportID,
 		ChildSAName:     ChildSAName(spec),
 		Endpoint:        endpointForSpec(spec),
@@ -428,6 +435,10 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			continue
 		}
 		existing = result.clearStagedIfIdle(existing, in.SAs, now)
+		if existing.StagedGeneration == 0 && existing.RemoteGeneration == desiredGen {
+			existing = syncInstanceDesiredRuntime(existing, spec)
+			result.Instances[id] = existing
+		}
 		sa := findInstanceSA(in.SAs, existing)
 		specHash := TransportLinkSpecHash(spec)
 		if existing.DesiredSpecHash != specHash {
@@ -586,6 +597,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 			inst = NewLinkInstance(spec, LinkStateUp, now)
 		}
 		inst = syncInstanceRuntimeFromSA(inst, sa)
+		inst = syncInstanceDesiredRuntime(inst, spec)
 		inst.ActualState = LinkStateUp
 		inst.DesiredSpecHash = TransportLinkSpecHash(spec)
 		inst.InitiatorRole = InitiatorRoleConverged
@@ -738,6 +750,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.ChildSAName = existing.StagedChildSAName
 			inst.InterfaceName = stagedInterfaceName
 			inst.XFRMIfID = stagedXFRMIfID
+			inst.LocalTunnelAddr = firstValidAddr(existing.StagedLocalTunnelAddr, stagedSpec.LocalTunnelAddr)
+			inst.PeerTunnelAddr = firstValidAddr(existing.StagedPeerTunnelAddr, stagedSpec.PeerTunnelAddr)
 			inst.ActualState = LinkStateUp
 			inst.Endpoint = stagedSA.Endpoint
 			if point, ok := firstContactPointForGeneration(spec, desiredGen); ok {
@@ -750,6 +764,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedChildSAName = ""
 			inst.StagedInterfaceName = ""
 			inst.StagedXFRMIfID = 0
+			inst.StagedLocalTunnelAddr = netip.Addr{}
+			inst.StagedPeerTunnelAddr = netip.Addr{}
 			inst.RotatePhase = RotatePhaseIdle
 			inst.RotateDeadline = 0
 			inst.FailureCount = 0
@@ -778,6 +794,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedChildSAName = ""
 			inst.StagedInterfaceName = ""
 			inst.StagedXFRMIfID = 0
+			inst.StagedLocalTunnelAddr = netip.Addr{}
+			inst.StagedPeerTunnelAddr = netip.Addr{}
 			inst.RotatePhase = RotatePhaseRollback
 			inst.RotateDeadline = 0
 			inst.LastError = "staged sa not established by deadline"
@@ -802,6 +820,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	inst.StagedChildSAName = ChildSAName(stagedSpec)
 	inst.StagedInterfaceName = stagedSpec.InterfaceName
 	inst.StagedXFRMIfID = stagedSpec.XFRMIfID
+	inst.StagedLocalTunnelAddr = stagedSpec.LocalTunnelAddr
+	inst.StagedPeerTunnelAddr = stagedSpec.PeerTunnelAddr
 	inst.RotatePhase = RotatePhasePreparing
 	inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
 	inst.LastTransition = now.Unix()
@@ -821,6 +841,8 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 		inst.ChildSAName = existing.StagedChildSAName
 		inst.InterfaceName = firstNonEmptyString(existing.StagedInterfaceName, existing.InterfaceName)
 		inst.XFRMIfID = firstNonZeroUint32(existing.StagedXFRMIfID, existing.XFRMIfID)
+		inst.LocalTunnelAddr = existing.StagedLocalTunnelAddr
+		inst.PeerTunnelAddr = existing.StagedPeerTunnelAddr
 		inst.ActualState = LinkStateUp
 		inst.Endpoint = stagedSA.Endpoint
 		inst.SelectedContact = ContactPoint{}
@@ -829,6 +851,8 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 		inst.StagedChildSAName = ""
 		inst.StagedInterfaceName = ""
 		inst.StagedXFRMIfID = 0
+		inst.StagedLocalTunnelAddr = netip.Addr{}
+		inst.StagedPeerTunnelAddr = netip.Addr{}
 		inst.RotatePhase = RotatePhaseDualRunning
 		inst.RotateDeadline = 0
 		inst.LastTransition = now.Unix()
@@ -849,6 +873,8 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 	inst.StagedChildSAName = ""
 	inst.StagedInterfaceName = ""
 	inst.StagedXFRMIfID = 0
+	inst.StagedLocalTunnelAddr = netip.Addr{}
+	inst.StagedPeerTunnelAddr = netip.Addr{}
 	inst.RotatePhase = RotatePhaseIdle
 	inst.RotateDeadline = 0
 	r.Instances[existing.ID] = inst
@@ -897,11 +923,29 @@ func syncInstanceRuntimeFromSA(inst LinkInstance, sa SAState) LinkInstance {
 	return inst
 }
 
+func syncInstanceDesiredRuntime(inst LinkInstance, spec TransportLinkSpec) LinkInstance {
+	if spec.InterfaceName != "" {
+		inst.InterfaceName = spec.InterfaceName
+	}
+	if spec.XFRMIfID != 0 {
+		inst.XFRMIfID = spec.XFRMIfID
+	}
+	if spec.LocalTunnelAddr.IsValid() {
+		inst.LocalTunnelAddr = spec.LocalTunnelAddr
+	}
+	if spec.PeerTunnelAddr.IsValid() {
+		inst.PeerTunnelAddr = spec.PeerTunnelAddr
+	}
+	return inst
+}
+
 func instanceRuntimeChanged(a, b LinkInstance) bool {
 	return a.IKEName != b.IKEName ||
 		a.ChildSAName != b.ChildSAName ||
 		a.XFRMIfID != b.XFRMIfID ||
 		a.InterfaceName != b.InterfaceName ||
+		a.LocalTunnelAddr != b.LocalTunnelAddr ||
+		a.PeerTunnelAddr != b.PeerTunnelAddr ||
 		a.Endpoint != b.Endpoint
 }
 
@@ -1232,6 +1276,15 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstValidAddr(values ...netip.Addr) netip.Addr {
+	for _, value := range values {
+		if value.IsValid() {
+			return value
+		}
+	}
+	return netip.Addr{}
 }
 
 func firstNonZeroUint32(values ...uint32) uint32 {

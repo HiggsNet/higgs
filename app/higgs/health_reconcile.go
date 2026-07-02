@@ -61,26 +61,34 @@ func healthTargetsFromState(state *stateFile, localZone string, groups []ipsec.L
 		if addr, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr)); err == nil {
 			base.LocalTunnelAddr = addr
 		}
+		desiredBase := base
+		applyStateTunnelAddrs(&base, inst.LocalTunnelAddr, inst.PeerTunnelAddr)
 		if shouldProbeStagedInterface(inst) {
 			oldTarget := base
 			oldTarget.ProbeID = healthProbeID(d.InstanceID, "old")
 			oldTarget.ProbeRole = "old"
 			oldTarget.InterfaceName = firstNonEmpty(inst.InterfaceName, d.InterfaceName)
 			oldTarget.Generation = inst.RemoteGeneration
-			if local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.RemoteGeneration, groups); ok {
-				oldTarget.LocalTunnelAddr = local
-				oldTarget.PeerTunnelAddr = peer
+			if !applyStateTunnelAddrs(&oldTarget, inst.LocalTunnelAddr, inst.PeerTunnelAddr) {
+				local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.RemoteGeneration, groups)
+				if ok {
+					oldTarget.LocalTunnelAddr = local
+					oldTarget.PeerTunnelAddr = peer
+				}
 			}
 			targets = append(targets, oldTarget)
 
-			stagedTarget := base
+			stagedTarget := desiredBase
 			stagedTarget.ProbeID = healthProbeID(d.InstanceID, "staged")
 			stagedTarget.ProbeRole = "staged"
 			stagedTarget.InterfaceName = inst.StagedInterfaceName
 			stagedTarget.Generation = inst.StagedGeneration
-			if local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.StagedGeneration, groups); ok {
-				stagedTarget.LocalTunnelAddr = local
-				stagedTarget.PeerTunnelAddr = peer
+			if !applyStateTunnelAddrs(&stagedTarget, inst.StagedLocalTunnelAddr, inst.StagedPeerTunnelAddr) {
+				local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.StagedGeneration, groups)
+				if ok {
+					stagedTarget.LocalTunnelAddr = local
+					stagedTarget.PeerTunnelAddr = peer
+				}
 			}
 			stagedTarget.Staged = true
 			targets = append(targets, stagedTarget)
@@ -89,6 +97,22 @@ func healthTargetsFromState(state *stateFile, localZone string, groups []ipsec.L
 		targets = append(targets, base)
 	}
 	return targets
+}
+
+func applyStateTunnelAddrs(target *health.ProbeTarget, localAddr, peerAddr string) bool {
+	if target == nil {
+		return false
+	}
+	updated := false
+	if local, err := netip.ParseAddr(stripScope(localAddr)); err == nil {
+		target.LocalTunnelAddr = local
+		updated = true
+	}
+	if peer, err := netip.ParseAddr(stripScope(peerAddr)); err == nil {
+		target.PeerTunnelAddr = peer
+		updated = true
+	}
+	return updated
 }
 
 func derivedHealthTunnelAddrs(d desiredLinkState, localZone string, generation uint64, groups []ipsec.LinkGroupSpec) (netip.Addr, netip.Addr, bool) {
