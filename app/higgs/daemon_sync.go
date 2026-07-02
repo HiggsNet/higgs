@@ -352,6 +352,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		recordCatalogSummary(d.Sync.State, peerID, e.Summary, d.Sync.now())
 	case *CatalogPageReceivedEvent:
 		e.LocalEntries = gossip.ZoneDigests(d.Sync.State.Network)
+		e.Page = filterRemoteCatalogPage(d.Sync.State, peerID, e.Page, d.Sync.now())
 		recordCatalogPage(d.Sync.State, peerID, e.Page, d.Sync.now())
 	}
 	oldState := session.State
@@ -378,6 +379,21 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	if session.Done() {
 		d.completeSyncSession(session, changed)
 	}
+}
+
+func filterRemoteCatalogPage(state *stateFile, peerID string, page *gossip.CatalogPage, now time.Time) *gossip.CatalogPage {
+	if page == nil || state == nil || len(page.Entries) == 0 {
+		return page
+	}
+	filtered := *page
+	filtered.Entries = make([]gossip.ZoneDigest, 0, len(page.Entries))
+	for _, entry := range page.Entries {
+		if shouldSkipRemoteZone(state, peerID, entry.Zone, entry.RootHash, now) {
+			continue
+		}
+		filtered.Entries = append(filtered.Entries, entry)
+	}
+	return &filtered
 }
 
 func syncEventPeerID(event SyncEvent) string {

@@ -317,6 +317,17 @@ func TestRejectedDigestCacheSkipsSameRootWithinTTL(t *testing.T) {
 	}
 }
 
+func TestFetchListForPeerSkipsManagedZone(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	now := time.Unix(1000, 0)
+	digest := gossip.ZoneDigest{Zone: state.ManagedZone, RootHash: []byte("remote-root")}
+
+	if got := fetchListForPeer(state, "zone-catofes-admin", []gossip.ZoneDigest{digest}, now); len(got) != 0 {
+		t.Fatalf("fetchListForPeer(managed zone) = %v, want skipped", got)
+	}
+}
+
 func TestRejectedDigestCacheAllowsRootChangeAndExpiry(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	now := time.Unix(1000, 0)
@@ -330,6 +341,61 @@ func TestRejectedDigestCacheAllowsRootChangeAndExpiry(t *testing.T) {
 	}
 	if got := fetchListForPeer(state, "node-b.catofes.", []gossip.ZoneDigest{oldDigest}, now.Add(rejectedDigestTTL+time.Second)); len(got) != 1 {
 		t.Fatalf("fetchListForPeer(expired) = %v, want retry", got)
+	}
+}
+
+func TestHandleAnnounceSkipsManagedZoneSnapshotAndRecord(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	now := time.Unix(2000, 0)
+	record, err := buildSignedRecordAt(state, state.ManagedZone, "remote-own-record", []byte("remote"), "policy.string", now)
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt: %v", err)
+	}
+	snapshot, err := gossip.Snapshot(state.Network, state.ManagedZone)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	snapshot.Records["remote-own-record"] = record
+
+	rt := &Runtime{Clock: func() time.Time { return now }}
+	sr := newSyncRuntime(state, config, nil, rt)
+	err = sr.handleAnnounce(&gossip.Message{
+		Type:   gossip.MessageAnnounce,
+		PeerID: "zone-catofes-admin",
+		Announce: &gossip.Announce{
+			Snapshots: []gossip.ZoneSnapshot{*snapshot},
+			Records: []gossip.RecordSnapshot{{
+				Zone:   state.ManagedZone,
+				Record: record,
+			}},
+		},
+	}, syncLimits(config))
+	if err != nil {
+		t.Fatalf("handleAnnounce: %v", err)
+	}
+	if got := state.Network.Zones[state.ManagedZone].Records["remote-own-record"]; got != nil {
+		t.Fatalf("managed zone record was applied from remote announce: %+v", got)
+	}
+}
+
+func TestFilterRemoteCatalogPageSkipsManagedZone(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	page := &gossip.CatalogPage{Entries: []gossip.ZoneDigest{
+		{Zone: state.ManagedZone, RootHash: []byte("remote-own-root")},
+		{Zone: "catofes.", RootHash: []byte("remote-parent-root")},
+	}}
+
+	filtered := filterRemoteCatalogPage(state, "zone-catofes-admin", page, time.Unix(1000, 0))
+	if filtered == page {
+		t.Fatal("filterRemoteCatalogPage returned original page, want filtered copy")
+	}
+	if len(filtered.Entries) != 1 || filtered.Entries[0].Zone != "catofes." {
+		t.Fatalf("filtered entries = %+v, want only catofes.", filtered.Entries)
+	}
+	if len(page.Entries) != 2 {
+		t.Fatalf("original page was mutated: %+v", page.Entries)
 	}
 }
 

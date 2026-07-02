@@ -603,17 +603,23 @@ func fetchListForPeer(state *stateFile, peerID string, remote []gossip.ZoneDiges
 	}
 	out := fetch[:0]
 	for _, path := range fetch {
-		if path == state.ManagedZone {
-			// Never fetch our own managed zone from a peer; we are the authority.
-			continue
-		}
-		rootHash := remoteByZone[path]
-		if isRejectedDigestActive(state, peerID, path, rootHash, now) {
+		if shouldSkipRemoteZone(state, peerID, path, remoteByZone[path], now) {
 			continue
 		}
 		out = append(out, path)
 	}
 	return out
+}
+
+func shouldSkipRemoteZone(state *stateFile, peerID string, path zone.ZonePath, rootHash []byte, now time.Time) bool {
+	if state == nil {
+		return true
+	}
+	if path == state.ManagedZone {
+		// Never fetch or apply our own managed zone from a peer; we are the authority.
+		return true
+	}
+	return isRejectedDigestActive(state, peerID, path, rootHash, now)
 }
 
 func isRejectedDigestActive(state *stateFile, peerID string, path zone.ZonePath, rootHash []byte, now time.Time) bool {
@@ -1921,6 +1927,9 @@ func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Ti
 	case gossip.MessageCatalogPage:
 		recordCatalogPage(state, message.PeerID, message.CatalogPage, sr.now())
 		for _, diff := range gossip.CatalogDiff(gossip.ZoneDigests(state.Network), message.CatalogPage.Entries) {
+			if shouldSkipRemoteZone(state, message.PeerID, diff.Zone, diff.RootHash, sr.now()) {
+				continue
+			}
 			snapshot, pullErr := tryObjectPullTCPUntil(state, config, message.PeerID, diff.Zone, deadline)
 			if pullErr != nil {
 				if err := transport.Send(message.PeerID, &gossip.Message{
@@ -1986,6 +1995,14 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 		return gossip.ErrZoneSnapshotTooLarge
 	}
 	for _, snapshot := range message.Announce.Snapshots {
+		if snapshot.Zone == state.ManagedZone {
+			sr.logger().Debug("sync", "skipping_own_zone_snapshot", map[string]any{
+				"peer_id": message.PeerID,
+				"zone":    snapshot.Zone,
+				"via":     "udp_announce",
+			})
+			continue
+		}
 		result, err := gossip.ApplySnapshot(state.Network, &snapshot, sr.now(), limits)
 		if err != nil {
 			recordRejectedDigest(state, message.PeerID, digestForZone(message.Announce.Zones, snapshot.Zone), gossip.RejectReason(err), sr.now())
@@ -2011,6 +2028,18 @@ func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossi
 		}
 	}
 	for _, record := range message.Announce.Records {
+		if record.Zone == state.ManagedZone {
+			key := ""
+			if record.Record != nil {
+				key = record.Record.Key
+			}
+			sr.logger().Debug("sync", "skipping_own_zone_record", map[string]any{
+				"peer_id": message.PeerID,
+				"zone":    record.Zone,
+				"key":     key,
+			})
+			continue
+		}
 		if isRejectedRecordActive(state, message.PeerID, &record, "", sr.now()) {
 			continue
 		}
