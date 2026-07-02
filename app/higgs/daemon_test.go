@@ -4285,6 +4285,59 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 }
 
+func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "state.db"),
+		Clock:     func() time.Time { return now },
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.EnableEventLoopSync(newFakeClock(now))
+
+	peerID := "peer-a"
+	session := NewSyncSession(peerID)
+	_, _ = session.OnEvent(&SyncTimerEvent{
+		PeerID:       peerID,
+		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(nil), ZoneCount: 0},
+	}, now)
+	if session.State != SyncSessionSummarySent {
+		t.Fatalf("expected setup state summary_sent, got %s", session.State)
+	}
+	service.syncSessions[peerID] = session
+
+	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		Type:             gossip.MessageFetchCatalogPage,
+		PeerID:           peerID,
+		FetchCatalogPage: &gossip.FetchCatalogPage{},
+	}}, context.Background())
+	if err != nil {
+		t.Fatalf("process fetch catalog page: %v", err)
+	}
+	if session.State != SyncSessionSummarySent {
+		t.Fatalf("fetch catalog page changed active session state to %s", session.State)
+	}
+	if got := len(service.syncEvents); got != 0 {
+		t.Fatalf("fetch catalog page queued %d sync events, want none", got)
+	}
+
+	err = service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		Type:      gossip.MessageFetchZone,
+		PeerID:    peerID,
+		FetchZone: &gossip.FetchZone{Zone: "catofes."},
+	}}, context.Background())
+	if err != nil {
+		t.Fatalf("process fetch zone: %v", err)
+	}
+	if session.State != SyncSessionSummarySent {
+		t.Fatalf("fetch zone changed active session state to %s", session.State)
+	}
+	if got := len(service.syncEvents); got != 0 {
+		t.Fatalf("fetch zone queued %d sync events, want none", got)
+	}
+}
+
 func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transports []*gossip.Transport) {
 	for {
 		processed := false

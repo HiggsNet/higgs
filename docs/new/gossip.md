@@ -74,6 +74,29 @@ Gossip 运行于事件驱动的 daemon 架构中：
 - **串行事件处理**：所有状态变更经 daemon event loop 串行处理，无需额外锁
 - **FSM 无 I/O**：`SyncSession.OnEvent` 不执行 I/O，只返回 `SyncAction` 由事件循环执行
 
+### 1.5 目标重构：读写分离与 hint 语义
+
+当前实现仍保留了早期兼容路径：`PONG.FetchZones`、`FETCH_ZONE -> ANNOUNCE`、UDP snapshot/record announce、`ServingPeerFetch` / `FetchingLocal` 等逻辑混在同一个 `SyncSession` 状态机中。这让一个 per-peer session 同时表达两件事：
+
+- **主动读路径**：本节点正在向 peer 拉取 catalog / object。
+- **被动服务路径**：peer 正在向本节点请求 catalog page / object。
+
+后续重构目标是把这两条路径拆开：
+
+| 路径 | 职责 | 是否改变 `SyncSession` 主状态 |
+|------|------|------------------------------|
+| Active pull FSM | 发起 `PING`，比较 catalog，启动 TCP object pull / UDP chunk fallback，apply 验证后的对象 | 是 |
+| Read-only responder | 响应 `FETCH_CATALOG_PAGE`、TCP object pull、必要时响应 UDP chunk fallback | 否 |
+| Hint ingress | 接收 `ANNOUNCE` / relay hint，决定是否唤醒一次 active pull | 否；最多创建或唤醒主动同步 |
+
+最终语义：
+
+- `FETCH_*` 是只读请求，响应方直接从本地 verified state 读数据并返回，不进入“服务中”会话状态。
+- `ANNOUNCE` 只表示“我这里可能有新 digest/object”，不作为完整同步的正确性前提。
+- 大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时传完整对象。
+- 收到 hint 不触发 relay；只有本地 active state 真正 apply 成功并发生变化后，才按 relay 规则通知其他 peer。
+- 旧协议兼容字段逐步删除：`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 不再参与现代同步状态机。
+
 ---
 
 ## 2. 核心数据结构
@@ -154,13 +177,13 @@ type Message struct {
 ```go
 type Ping struct {
     Summary *CatalogSummary // 当前节点的 catalog 摘要
-    Zones   []ZoneDigest    // (已废弃) 兼容旧协议的 digest list
+    Zones   []ZoneDigest    // (legacy) 旧协议 digest list，待删除
 }
 
 type Pong struct {
     Summary    *CatalogSummary // 当前节点的 catalog 摘要
-    Zones      []ZoneDigest    // (已废弃) 兼容旧协议的 digest list
-    FetchZones []ZonePath      // 本节点需要的 zone 列表
+    Zones      []ZoneDigest    // (legacy) 旧协议 digest list，待删除
+    FetchZones []ZonePath      // (legacy) 旧协议反向请求列表，待删除
 }
 
 type FetchCatalogPage struct {
@@ -180,8 +203,8 @@ type FetchRecord struct {
 
 type Announce struct {
     Zones     []ZoneDigest     // zone digest hint（bounded）
-    Snapshots []ZoneSnapshot   // 完整 zone snapshot（小 payload 优化）
-    Records   []RecordSnapshot // 记录 snapshot（小 payload 优化）
+    Snapshots []ZoneSnapshot   // legacy 小 payload 优化，目标状态不再依赖
+    Records   []RecordSnapshot // legacy 小 payload 优化，目标状态不再依赖
 }
 
 type ObjectChunk struct {
@@ -306,15 +329,31 @@ Phase 3: Object Pull（对象拉取）
 
 **分页前提**：每页 `entries[]` 打包后的 wire size 不得超过 datagram budget（默认 1200 bytes）。如果单条 entry 都装不进一页，发送方 `fail closed` 并记录诊断。
 
-### 4.3 同时服务对端
+### 4.3 同时服务对端（目标语义）
 
-当节点正在等待对端数据时，可能同时收到对端的 `FETCH_CATALOG_PAGE` 或 `FETCH_ZONE` 请求。
+当节点正在主动同步 peer 时，仍可能收到同一个 peer 的读取请求，例如 `FETCH_CATALOG_PAGE` 或 object pull 请求。目标行为是：
 
-处理规则：
-- 如果 session 在 `AwaitingAnnounce`、`CatalogDiffing`、`ObjectPulling` 等活跃同步状态：**不改 state**，只管响应请求，继续等自己的数据
-- 如果 session 在 `Idle` 或 `PingSent`：进入 `ServingPeerFetch`，发完响应后在 `PacketQuietTimeout` 时结束
+- responder 直接读取本地 verified state 并返回响应。
+- responder 不修改 active pull FSM 的 state、pending zones、quiet count 或 object pull inflight 集合。
+- 如果主动 FSM 正在等待 `PONG`、`CATALOG_PAGE` 或 object pull 结果，它继续等待自己的事件。
+- responder 的错误只记录为发送/读取诊断，不把主动同步轮次标记为失败。
 
-⚠️ **注意**：从 `PingSent` 进入 `ServingPeerFetch` 后，对方后续的 `PONG` 会被忽略（因为 `onPongReceived` 只接受 `PingSent` / `SummarySent` 状态）。会导致这轮错失对方 catalog，但 gossip 多轮收敛特性保证下一轮周期同步会补上。详见 [`warning.md`](warning.md#w-001)。
+这意味着 `ServingPeerFetch` / `FetchingLocal` 不应继续作为主 FSM 状态存在。它们表达的是“别人正在读我”，不是“我主动读别人”的进度。
+
+### 4.4 Hint 与主动同步
+
+`ANNOUNCE` 是 hint，不是对象同步主路径。现代路径应按以下方式处理：
+
+```
+收到 ANNOUNCE / relay hint
+  → 校验消息基本格式、peer、quota、防重放
+  → 记录 hint digest / source / time
+  → 如果没有活跃 session，创建或唤醒 active pull FSM
+  → active pull 通过 catalog diff + object pull 获取完整对象
+  → apply 成功且 active state 变化后，才触发 relay
+```
+
+`ANNOUNCE` 可以保留 bounded digest 信息，用于低成本唤醒和观测；不应依赖 UDP announce 中的 snapshot/records 才能完成正确同步。
 
 ---
 
@@ -340,6 +379,7 @@ Phase 3: Object Pull（对象拉取）
 - 4 字节大端长度前缀 + payload
 - 请求大小上限 1 MiB，响应大小上限 8 MiB
 - 完成后对 snapshot 做完整签名和信任链验证
+- 对发送方而言，这是只读响应：读取本地 verified snapshot，编码返回，不改变 active sync FSM。
 
 ### 5.2 UDP Chunk Fallback（兜底路径）
 
@@ -367,27 +407,22 @@ Phase 3: Object Pull（对象拉取）
 - 校验通过后再做 root hash / 签名验证
 - 缺少任意 chunk → 丢弃，等下次重新请求
 
-### 5.3 Eager Object Pull
+### 5.3 旧 UDP snapshot/record announce 路径（待删除）
 
-当事件循环执行 `SendFetchZoneAction`（响应旧协议 PONG 的 `FetchZones` 请求）时，对于超出 datagram budget 的 zone snapshot，会**在发送 UDP FETCH_ZONE 消息的同时立即发起异步 TCP object pull**，不等待静默期结束。这避免了先等 UDP announce 超时（至少 250ms）才启动 TCP pull 的延迟。
+旧路径中，`PONG.FetchZones` 会让对端发送 `FETCH_ZONE`，响应方再用 `ANNOUNCE` 携带 snapshot/record；如果 UDP 放不下，还会通过 eager object pull 提前启动 TCP 拉取。这套链路有两个问题：
 
-触发条件（[daemon_sync.go:597-605](app/higgs/daemon_sync.go#L597-L605)）：
+- `FETCH_ZONE`/`ANNOUNCE` 同时承担读取响应、hint 和兼容传输，语义混杂。
+- `ServingPeerFetch` / `FetchingLocal` 会污染主动同步 FSM，造成时序问题。
 
-```go
-func shouldStartEagerObjectPull(...) bool {
-    if action.ChunkFallback { return false }   // chunk fallback 要等 UDP
-    if 已经在拉 { return false }
-    return zoneSnapshotExceedsBudget(zone)      // 只有 UDP 装不下的才触发
-}
-```
-
-⚠️ **注意**：在新 catalog 协议路径（PONG 带 Summary → CatalogDiffing → `StartObjectPullAction`）下，TCP pull 直接从 FSM 动作启动，不存在"静默期等待"的问题，不需要此优化。Eager pull 主要作用于**旧协议兼容路径**和**TCP pull 失败后的 chunk fallback 回退**（但后者不会触发，见 `ChunkFallback` 判断）。
+目标状态下，现代同步不再走 `PONG.FetchZones -> FETCH_ZONE -> ANNOUNCE snapshot`。对象获取统一由 active pull FSM 启动 TCP object pull；TCP 不可达时再请求 UDP chunk fallback。`ANNOUNCE` 只保留 hint 语义。
 
 ---
 
 ## 6. SyncSession 状态机
 
-每个对端 peer 同时最多拥有一个 `SyncSession` 实例。状态机不执行 I/O，只根据事件推导动作列表，由 daemon 事件循环统一执行。
+每个对端 peer 同时最多拥有一个 active pull `SyncSession` 实例。状态机不执行 I/O，只根据事件推导动作列表，由 daemon 事件循环统一执行。
+
+Responder 不属于 `SyncSession` 主状态机。入站 `FETCH_CATALOG_PAGE`、TCP object pull 和 UDP chunk fallback 响应由 daemon 的只读 responder 路径处理。
 
 ### 6.1 状态定义
 
@@ -398,10 +433,8 @@ func shouldStartEagerObjectPull(...) bool {
 │ Idle             │ 没有活跃同步会话                                  │
 │ SummarySent      │ 已发 PING（携带 CatalogSummary），等待对方响应      │
 │ CatalogDiffing   │ 双方 catalog root 不同，正在逐页比较              │
-│ AwaitingAnnounce │ 部分数据已到达（announce / object pull），但仍有 pending zone 未就绪，等待剩余数据；此为"同步中"状态，而非"等第一轮响应"           │
-│ ServingPeerFetch │ 对方在请求本节点的数据，本会话只负责服务            │
-│ FetchingLocal    │ 对方请求了本节点的 zone，本会话正在发送数据         │
-│ ObjectPulling    │ 静默期到，正在异步 TCP object pull                │
+│ AwaitingAnnounce │ legacy/过渡状态：等待 UDP announce 或兼容路径剩余数据；目标状态下应删除或仅作 hint 等待                 │
+│ ObjectPulling    │ 正在异步 TCP object pull                         │
 │ ChunkFallback    │ TCP pull 失败，等待 UDP chunk                    │
 │ Completed        │ 本轮同步成功结束                                  │
 │ Failed           │ 超时、错误或正在 backoff                          │
@@ -421,8 +454,7 @@ stateDiagram-v2
 
     SummarySent --> CatalogDiffing : PONG/CatalogSummary (root differs)
     SummarySent --> Completed : PONG/CatalogSummary (root matches / empty)
-    SummarySent --> AwaitingAnnounce : PONG (need zones) ⚠️ 旧协议路径
-    SummarySent --> FetchingLocal : PONG (peer needs local data)
+    SummarySent --> AwaitingAnnounce : PONG (need zones) ⚠️ legacy
     SummarySent --> Failed : RoundTimeoutEvent
 
     CatalogDiffing --> CatalogDiffing : CatalogPageReceived (has next)
@@ -448,12 +480,33 @@ stateDiagram-v2
     ChunkFallback --> Completed : PacketQuietTimeout (2nd+, pending empty)
     ChunkFallback --> Failed : PacketQuietTimeout (2nd+, pending not empty)
 
-    FetchingLocal --> Completed : PacketQuietTimeout
-    ServingPeerFetch --> Completed : PacketQuietTimeout
-
     Completed --> [*]
     Failed --> [*]
 ```
+
+目标状态机应进一步收敛为：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> SummarySent : SyncTimerEvent / HintWakeEvent
+    SummarySent --> Completed : PONG summary matches / empty
+    SummarySent --> CatalogDiffing : PONG summary differs
+    SummarySent --> Failed : RoundTimeoutEvent
+    CatalogDiffing --> CatalogDiffing : CatalogPageReceived (has next)
+    CatalogDiffing --> ObjectPulling : CatalogPageReceived (diffs pending)
+    CatalogDiffing --> Completed : CatalogPageReceived (no diffs)
+    CatalogDiffing --> Failed : catalog timeout / root mismatch
+    ObjectPulling --> Completed : all object pulls applied
+    ObjectPulling --> ChunkFallback : TCP pull unavailable
+    ObjectPulling --> Failed : object pull hard failure / timeout
+    ChunkFallback --> Completed : chunks assembled and applied
+    ChunkFallback --> Failed : chunk timeout / hash mismatch / quota
+    Completed --> [*]
+    Failed --> [*]
+```
+
+目标状态机不包含 `ServingPeerFetch` / `FetchingLocal`，也不需要因为收到 `FETCH_*` 而改变 active pull 状态。
 
 ### 6.3 事件列表
 
@@ -463,10 +516,10 @@ stateDiagram-v2
 | `PongReceivedEvent` | 收到 `PONG`；或收到不带 `Summary` 的 `PING`（被转换为此事件） |
 | `CatalogSummaryReceivedEvent` | 收到带 `Summary` 的 `PING` |
 | `CatalogPageReceivedEvent` | 收到 `CATALOG_PAGE` |
-| `FetchCatalogPageReceivedEvent` | 收到 `FETCH_CATALOG_PAGE` |
+| `FetchCatalogPageReceivedEvent` | 收到 `FETCH_CATALOG_PAGE`；目标状态下迁出 FSM，改为 responder 事件 |
 | `CatalogPageTimeoutEvent` | catalog page 请求超时 |
-| `FetchZoneReceivedEvent` | 收到 `FETCH_ZONE` |
-| `AnnounceReceivedEvent` | 收到 `ANNOUNCE` |
+| `FetchZoneReceivedEvent` | 收到 `FETCH_ZONE`；目标状态下仅保留 chunk fallback responder 或删除普通路径 |
+| `AnnounceReceivedEvent` | 收到 `ANNOUNCE`；目标状态下作为 hint 唤醒 active pull，不直接 apply snapshot/record |
 | `PacketQuietTimeoutEvent` | UDP 静默期 timer 触发 |
 | `RoundTimeoutEvent` | 整轮超时 timer 触发 |
 | `ObjectPullResultEvent` | 异步 TCP object pull 完成 |
@@ -492,7 +545,7 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 - **第 1 次**: 认为 UDP burst 结束；若有 pending zones，从 `AwaitingAnnounce` → `ObjectPulling`
 - **第 2 次及以上**: 认为 object pull / chunk fallback 后的迟到窗口也结束；pending 为空则 `Completed`，否则 `Failed`
 
-在新 catalog 协议下，`AwaitingAnnounce` 只在"部分完成后还差数据"时进入，不再来自 PONG 的直接响应，因此 QuietCount 更多是"拉完一批等下一批"的超时兜底。
+在目标 catalog 协议下，`AwaitingAnnounce` 应尽量消失：主动同步以 catalog diff 和 object pull 为准，hint 只负责唤醒，不负责完成同步。
 
 每次有效数据到达（PONG、catalog page、announce）都会重置 `quietCount = 0`。
 
@@ -749,9 +802,9 @@ Packet → routePacket()
 | PING (有 Summary) | `CatalogSummaryReceivedEvent` |
 | PING (无 Summary) | 回退到 `PongReceivedEvent` |
 | PONG | `PongReceivedEvent` |
-| FETCH_ZONE (非 chunk) | `FetchZoneReceivedEvent` |
+| FETCH_ZONE (非 chunk) | direct read-only responder；不进入 active `SyncSession` |
 | FETCH_ZONE (chunk) | 走旧 handlePacket 路径 |
-| FETCH_CATALOG_PAGE | `FetchCatalogPageReceivedEvent` |
+| FETCH_CATALOG_PAGE | direct read-only responder；不进入 active `SyncSession` |
 | CATALOG_PAGE | `CatalogPageReceivedEvent` |
 | ANNOUNCE | `AnnounceReceivedEvent` |
 | OBJECT_CHUNK | 走全局 chunk assembly |

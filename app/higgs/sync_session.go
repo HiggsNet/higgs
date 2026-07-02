@@ -480,9 +480,6 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 }
 
 func (s *SyncSession) onFetchCatalogPageReceived(e *FetchCatalogPageReceivedEvent) ([]SyncAction, error) {
-	if s.State == SyncSessionIdle || s.State == SyncSessionCompleted || s.State == SyncSessionFailed {
-		s.State = SyncSessionServingPeerFetch
-	}
 	return []SyncAction{SendCatalogPageAction{PeerID: e.PeerID, Cursor: e.Cursor}}, nil
 }
 
@@ -503,14 +500,6 @@ func (s *SyncSession) onFetchZoneReceived(e *FetchZoneReceivedEvent) ([]SyncActi
 		return nil, nil
 	}
 	s.localFetchZones[e.Zone] = true
-	if s.State == SyncSessionIdle || s.State == SyncSessionPingSent || s.State == SyncSessionAwaitingAnnounce {
-		if s.State != SyncSessionAwaitingAnnounce {
-			s.State = SyncSessionServingPeerFetch
-		}
-		return []SyncAction{
-			SendAnnounceAction{PeerID: e.PeerID, Snapshots: []*gossip.ZoneSnapshot{e.Snapshot}},
-		}, nil
-	}
 	return []SyncAction{
 		SendAnnounceAction{PeerID: e.PeerID, Snapshots: []*gossip.ZoneSnapshot{e.Snapshot}},
 	}, nil

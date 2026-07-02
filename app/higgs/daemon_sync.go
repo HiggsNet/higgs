@@ -120,22 +120,16 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			}
 			// Chunk fallback requests need the legacy sendSnapshots path, which
 			// knows how to split oversized zone snapshots into UDP object chunks.
-			// The event-loop path only emits a single announce and cannot chunk.
+			// Keep them out of the active pull FSM as a read-only responder path.
 			if msg.FetchZone.ChunkFallback {
 				return d.Sync.handlePacket(packet)
 			}
-			return d.postSyncEvent(&FetchZoneReceivedEvent{
-				PeerID: msg.PeerID,
-				Zone:   msg.FetchZone.Zone,
-			})
+			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
 		case gossip.MessageFetchCatalogPage:
 			if msg.FetchCatalogPage == nil {
 				return nil
 			}
-			return d.postSyncEvent(&FetchCatalogPageReceivedEvent{
-				PeerID: msg.PeerID,
-				Cursor: msg.FetchCatalogPage.Cursor,
-			})
+			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
 		case gossip.MessageCatalogPage:
 			if msg.CatalogPage == nil {
 				return nil
@@ -173,6 +167,120 @@ func (d *DaemonService) postSyncEvent(event SyncEvent) error {
 		d.logWarn("sync", "event_dropped", map[string]any{"reason": "sync_events_full"})
 		return errors.New("sync event channel full")
 	}
+}
+
+func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil {
+		return nil
+	}
+	budget := d.syncDatagramBudget()
+	page, err := gossip.CatalogPageFor(d.Sync.State.Network, cursor, budget)
+	if err != nil {
+		recordDatagramTooLarge(d.Sync.State, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
+		recordCatalogReject(d.Sync.State, peerID, cursor, gossip.RejectReason(err), d.Sync.now())
+		d.logWarn("sync", "catalog_page_failed", map[string]any{
+			"peer_id": peerID,
+			"cursor":  cursor,
+			"error":   err,
+			"via":     "responder",
+		})
+		return nil
+	}
+	recordCatalogPage(d.Sync.State, peerID, page, d.Sync.now())
+	d.sendSyncMessage(peerID, &gossip.Message{
+		Type:        gossip.MessageCatalogPage,
+		CatalogPage: page,
+	})
+	return nil
+}
+
+func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+		return nil
+	}
+	snap, err := gossip.Snapshot(d.Sync.State.Network, path)
+	if err != nil {
+		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
+			"peer_id": peerID,
+			"zone":    path,
+			"error":   err,
+			"via":     "responder",
+		})
+		return nil
+	}
+	return d.respondAnnounceSnapshots(peerID, []*gossip.ZoneSnapshot{snap})
+}
+
+func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gossip.ZoneSnapshot) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || len(snapshots) == 0 {
+		return nil
+	}
+	budget := d.syncDatagramBudget()
+	zones := make([]zone.ZonePath, 0, len(snapshots))
+	for _, snap := range snapshots {
+		if snap != nil {
+			zones = append(zones, snap.Zone)
+		}
+	}
+	plan := planSnapshotDatagrams(d.Sync.State.Network, zones, budget, d.Sync.now())
+	var announces []*gossip.Announce
+	var recordAnnounces []*gossip.Announce
+	var deferredRecords int
+	for _, announce := range plan.Announces {
+		if len(announce.Records) > 0 {
+			recordAnnounces = append(recordAnnounces, announce)
+			continue
+		}
+		announces = append(announces, announce)
+	}
+	if len(recordAnnounces) == 1 {
+		announces = append(announces, recordAnnounces...)
+	} else if len(recordAnnounces) > 1 {
+		for _, ann := range recordAnnounces {
+			deferredRecords += len(ann.Records)
+		}
+	}
+	if deferredRecords > 0 {
+		d.logDebug("sync", "records_deferred_to_pull", map[string]any{
+			"peer_id": peerID,
+			"count":   deferredRecords,
+			"reason":  "udp_budget",
+			"via":     "responder",
+		})
+	}
+	for _, oversized := range plan.Oversized {
+		if oversized.Object == "zone_skeleton" {
+			recordDatagramDigestOnly(d.Sync.State, peerID)
+		}
+		recordDatagramTooLarge(d.Sync.State, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
+		d.logDebug("transport", "datagram_too_large", map[string]any{
+			"peer_id": peerID,
+			"object":  oversized.Object,
+			"zone":    oversized.Zone,
+			"key":     oversized.Key,
+			"bytes":   oversized.Size,
+			"limit":   budget,
+			"via":     "responder",
+		})
+	}
+	for _, announce := range announces {
+		if announce == nil {
+			continue
+		}
+		d.logInfo("sync", "sending_announce", map[string]any{
+			"peer_id":          peerID,
+			"zones":            len(announce.Snapshots),
+			"records":          len(announce.Records),
+			"snapshot_records": snapshotRecordsCount(announce.Snapshots),
+			"digests":          len(announce.Zones),
+			"via":              "responder",
+		})
+		d.sendSyncMessage(peerID, &gossip.Message{
+			Type:     gossip.MessageAnnounce,
+			Announce: announce,
+		})
+	}
+	return nil
 }
 
 func localSnapshotsForPong(ns *zone.NetworkState, zones []zone.ZonePath) []*gossip.ZoneSnapshot {
@@ -443,75 +551,14 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				session.objectPullInflight[a.Zone] = true
 			}
 		case SendAnnounceAction:
-			zones := make([]zone.ZonePath, 0, len(a.Snapshots))
-			for _, snap := range a.Snapshots {
-				if snap != nil {
-					zones = append(zones, snap.Zone)
-				}
-			}
-			plan := planSnapshotDatagrams(d.Sync.State.Network, zones, budget, d.Sync.now())
-			var announces []*gossip.Announce
-			var recordAnnounces []*gossip.Announce
-			var deferredRecords int
-			for _, announce := range plan.Announces {
-				if len(announce.Records) > 0 {
-					recordAnnounces = append(recordAnnounces, announce)
-					continue
-				}
-				announces = append(announces, announce)
-			}
-			// 方案B：单条 UDP 能装下的 record announce 直接发；需要拆成多条 datagram
-			// 的 record 集合走 TCP object pull / chunk fallback，避免中间态时序抖动。
-			if len(recordAnnounces) == 1 {
-				announces = append(announces, recordAnnounces...)
-			} else if len(recordAnnounces) > 1 {
-				for _, ann := range recordAnnounces {
-					deferredRecords += len(ann.Records)
-				}
-			}
 			if len(a.Records) > 0 {
-				// Stand-alone record updates are handled via the same pull path so
-				// the behaviour matches snapshot-derived records.
-				deferredRecords += len(a.Records)
-			}
-			if deferredRecords > 0 {
 				d.logDebug("sync", "records_deferred_to_pull", map[string]any{
 					"peer_id": peerID,
-					"count":   deferredRecords,
+					"count":   len(a.Records),
 					"reason":  "udp_budget",
 				})
 			}
-			for _, oversized := range plan.Oversized {
-				if oversized.Object == "zone_skeleton" {
-					recordDatagramDigestOnly(d.Sync.State, peerID)
-				}
-				recordDatagramTooLarge(d.Sync.State, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
-				d.logDebug("transport", "datagram_too_large", map[string]any{
-					"peer_id": peerID,
-					"object":  oversized.Object,
-					"zone":    oversized.Zone,
-					"key":     oversized.Key,
-					"bytes":   oversized.Size,
-					"limit":   budget,
-					"via":     "event_loop",
-				})
-			}
-			for _, announce := range announces {
-				if announce == nil {
-					continue
-				}
-				d.logInfo("sync", "sending_announce", map[string]any{
-					"peer_id":          peerID,
-					"zones":            len(announce.Snapshots),
-					"records":          len(announce.Records),
-					"snapshot_records": snapshotRecordsCount(announce.Snapshots),
-					"digests":          len(announce.Zones),
-				})
-				d.sendSyncMessage(peerID, &gossip.Message{
-					Type:     gossip.MessageAnnounce,
-					Announce: announce,
-				})
-			}
+			_ = d.respondAnnounceSnapshots(peerID, a.Snapshots)
 		}
 	}
 

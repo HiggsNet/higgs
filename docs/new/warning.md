@@ -7,6 +7,8 @@
 
 ## W-001: ServingPeerFetch 导致 PONG 被丢弃
 
+> **定位**：这是当前实现的时序风险记录，不是推荐按最小补丁实现的方案。后续应把它作为 gossip 读写分离重构的一个验证用例：`FETCH_*` 响应路径不应改变 active pull FSM 状态，`ANNOUNCE` 回到 hint 语义。
+
 ### 问题描述
 
 当 SyncSession 处于 `PingSent` 状态时，如果对方先发来 `FETCH_ZONE` 请求，FSM 会将 state 切换为 `ServingPeerFetch`。这导致对方后续回复的 `PONG` 被 `onPongReceived` 丢弃，因为该 handler 只接受 `PingSent` / `SummarySent` 状态。
@@ -57,9 +59,9 @@
 2. 对方在处理 PING 过程中先发 FETCH_ZONE（而不是等 PONG 之后的 announce 路径）
 3. FETCH_ZONE 在 PONG 之前到达本节点
 
-### 修复思路
+### 旧修复思路（不作为主线）
 
-**方案 A（最小改动）**：`onPongReceived` 放宽 state 判断，支持 ServingPeerFetch：
+**方案 A（最小改动，不推荐作为主线）**：`onPongReceived` 放宽 state 判断，支持 ServingPeerFetch：
 
 ```go
 func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]SyncAction, error) {
@@ -73,7 +75,16 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 
 **方案 B（语义清晰）**：`onFetchZoneReceived` 在 PingSent 时不改 state，只记录 pendingZones，等 PONG 处理完后再统一发送 announce。但和现有 FSM 的事件驱动模型冲突——action 必须由 `OnEvent` 返回，不能延迟。
 
-**方案 C（最彻底）**：拆分 FSM，让"我要拉的数据"和"对方要拉的数据"走两个独立的子状态机，不共享一个 state。改动量大。
+**方案 C（主线方向）**：拆分 FSM，让"我要拉的数据"和"对方要拉的数据"不共享一个 state。进一步说，响应对方读取请求不应该是一个会话子状态，而应该是 daemon 的只读 responder 路径。
+
+目标设计见 [`gossip.md`](gossip.md#15-目标重构读写分离与-hint-语义)。
+
+### 重构验收点
+
+- `FETCH_CATALOG_PAGE` 到达时，若本地 active session 正在等待 `PONG`，session 仍保持等待 `PONG` 的状态。
+- 普通 `FETCH_ZONE` 或 TCP object pull 响应不进入 `ServingPeerFetch` / `FetchingLocal`。
+- `ANNOUNCE` 不直接承担完整对象同步；它只唤醒 catalog diff + object pull。
+- 删除旧 `Pong.FetchZones` 兼容路径后，W-001 的时序窗口自然消失。
 
 ### 状态
 
