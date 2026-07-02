@@ -98,11 +98,6 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 						PeerID:  msg.PeerID,
 						Summary: msg.Ping.Summary,
 					})
-				} else {
-					_ = d.postSyncEvent(&PongReceivedEvent{
-						PeerID: msg.PeerID,
-						Pong:   &gossip.Pong{Zones: msg.Ping.Zones},
-					})
 				}
 			}
 			return d.Sync.handlePacket(packet)
@@ -327,21 +322,6 @@ func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gos
 	return nil
 }
 
-func localSnapshotsForPong(ns *zone.NetworkState, zones []zone.ZonePath) []*gossip.ZoneSnapshot {
-	if ns == nil || len(zones) == 0 {
-		return nil
-	}
-	var out []*gossip.ZoneSnapshot
-	for _, z := range zones {
-		snap, err := gossip.Snapshot(ns, z)
-		if err != nil {
-			continue
-		}
-		out = append(out, snap)
-	}
-	return out
-}
-
 func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	unlock := d.lockState()
 	defer unlock()
@@ -367,18 +347,12 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 			if e.Pong.Summary != nil {
 				recordCatalogSummary(d.Sync.State, peerID, e.Pong.Summary, d.Sync.now())
 			}
-			e.MissingZones = fetchListForPeer(d.Sync.State, peerID, e.Pong.Zones, d.Sync.now())
-			e.LocalSnapshots = localSnapshotsForPong(d.Sync.State.Network, e.Pong.FetchZones)
 		}
 	case *CatalogSummaryReceivedEvent:
 		recordCatalogSummary(d.Sync.State, peerID, e.Summary, d.Sync.now())
 	case *CatalogPageReceivedEvent:
 		e.LocalEntries = gossip.ZoneDigests(d.Sync.State.Network)
 		recordCatalogPage(d.Sync.State, peerID, e.Page, d.Sync.now())
-	case *FetchZoneReceivedEvent:
-		if s, err := gossip.Snapshot(d.Sync.State.Network, e.Zone); err == nil {
-			e.Snapshot = s
-		}
 	}
 	oldState := session.State
 	actions, err := session.OnEvent(event, d.Sync.now())
@@ -416,13 +390,7 @@ func syncEventPeerID(event SyncEvent) string {
 		return e.PeerID
 	case *CatalogPageReceivedEvent:
 		return e.PeerID
-	case *FetchCatalogPageReceivedEvent:
-		return e.PeerID
 	case *CatalogPageTimeoutEvent:
-		return e.PeerID
-	case *FetchZoneReceivedEvent:
-		return e.PeerID
-	case *AnnounceReceivedEvent:
 		return e.PeerID
 	case *PacketQuietTimeoutEvent:
 		return e.PeerID
@@ -489,37 +457,6 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				"via":         "event_loop",
 			})
 			d.tryAdoptAutoJoinAfterSync(peerID, "event_loop", now, &changed)
-		case ApplyRecordSnapshotAction:
-			if a.Record == nil || a.Record.Record == nil {
-				continue
-			}
-			if a.Record.Zone == d.Sync.State.ManagedZone {
-				d.logDebug("sync", "skipping_own_zone_record", map[string]any{
-					"peer_id": peerID,
-					"zone":    a.Record.Zone,
-					"key":     a.Record.Record.Key,
-				})
-				continue
-			}
-			err := gossip.ApplyRecordSnapshot(d.Sync.State.Network, a.Record, now)
-			if err != nil {
-				recordRejectedRecord(d.Sync.State, peerID, a.Record, gossip.RejectReason(err), now)
-				d.logWarn("sync", "record_apply_failed", map[string]any{
-					"peer_id": peerID,
-					"zone":    a.Record.Zone,
-					"key":     a.Record.Record.Key,
-					"reason":  gossip.RejectReason(err),
-					"error":   err,
-				})
-				continue
-			}
-			normalizeSyncPeers(d.Sync.State)
-			peerState := d.Sync.State.SyncPeers[peerID]
-			if peerState.RejectedDigests != nil {
-				delete(peerState.RejectedDigests, rejectedRecordKey(a.Record.Zone, a.Record.Record.Key))
-				d.Sync.State.SyncPeers[peerID] = peerState
-			}
-			changed = true
 		}
 	}
 
@@ -530,18 +467,14 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 		}
 	}
 
-	// UDP skeletons and split record datagrams may leave a zone pending even
-	// though the local state now matches the peer's advertised digest. Reconcile
-	// so the session can complete without waiting for an unnecessary object pull.
+	// Applied object-pull or chunk-fallback snapshots may leave a zone pending
+	// until the FSM sees local state again. Reconcile before sending more I/O.
 	if !session.Done() {
 		reconcileActions := session.reconcilePendingWithState(d.Sync.State.Network)
 		actions = append(actions, reconcileActions...)
 	}
 
-	// Third pass: send messages. For FETCH_ZONE requests whose full snapshot
-	// cannot fit in a UDP datagram, also queue an async object pull so we are
-	// not dependent on the peer's UDP announce/chunk fallback path.
-	var eagerPulls []zone.ZonePath
+	// Third pass: send messages.
 	budget := gossip.DefaultMaxMessage
 	budget = d.syncDatagramBudget()
 	for _, action := range actions {
@@ -551,18 +484,6 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				Type: gossip.MessagePing,
 				Ping: &gossip.Ping{Summary: a.Summary},
 			})
-		case SendPongAction:
-			pongs, oversized := packPongFetchZones(a.Summary, a.FetchZones, budget)
-			for _, item := range oversized {
-				recordDatagramTooLarge(d.Sync.State, peerID, "send", item.Object, item.Zone, item.Key, item.Size, budget, d.Sync.now())
-			}
-			recordCatalogSummary(d.Sync.State, peerID, a.Summary, d.Sync.now())
-			for _, pong := range pongs {
-				d.sendSyncMessage(peerID, &gossip.Message{
-					Type: gossip.MessagePong,
-					Pong: pong,
-				})
-			}
 		case SendFetchCatalogPageAction:
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type:             gossip.MessageFetchCatalogPage,
@@ -586,30 +507,22 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				CatalogPage: page,
 			})
 		case SendFetchZoneAction:
+			if !a.ChunkFallback {
+				d.logDebug("sync", "fetch_zone_ignored", map[string]any{
+					"peer_id": peerID,
+					"zone":    a.Zone,
+					"reason":  "ordinary_fetch_zone_disabled",
+				})
+				continue
+			}
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type:      gossip.MessageFetchZone,
 				FetchZone: &gossip.FetchZone{Zone: a.Zone, ChunkFallback: a.ChunkFallback},
 			})
-			if shouldStartEagerObjectPull(a, session, d.Sync.State.ManagedZone, d.Sync.State.Network, budget) {
-				eagerPulls = append(eagerPulls, a.Zone)
-				session.objectPullInflight[a.Zone] = true
-			}
-		case SendAnnounceAction:
-			if len(a.Records) > 0 {
-				d.logDebug("sync", "records_deferred_to_pull", map[string]any{
-					"peer_id": peerID,
-					"count":   len(a.Records),
-					"reason":  "udp_budget",
-				})
-			}
-			_ = d.respondAnnounceSnapshots(peerID, a.Snapshots)
 		}
 	}
 
 	// Fourth pass: start async object pulls.
-	for _, path := range eagerPulls {
-		d.submitObjectPull(ctx, peerID, path, now)
-	}
 	for _, action := range actions {
 		if a, ok := action.(StartObjectPullAction); ok {
 			d.submitObjectPull(ctx, a.PeerID, a.Zone, now)
@@ -683,16 +596,6 @@ func (d *DaemonService) syncDatagramBudget() int {
 		}
 	}
 	return budget
-}
-
-func shouldStartEagerObjectPull(action SendFetchZoneAction, session *SyncSession, managedZone zone.ZonePath, ns *zone.NetworkState, budget int) bool {
-	if action.ChunkFallback || session == nil || action.Zone == managedZone {
-		return false
-	}
-	if session.objectPullInflight[action.Zone] {
-		return false
-	}
-	return zoneSnapshotExceedsBudget(ns, action.Zone, budget)
 }
 
 func (d *DaemonService) tryAdoptAutoJoinAfterSync(peerID, via string, now time.Time, changed *bool) {

@@ -93,9 +93,9 @@
   - [x] 把 `FetchCatalogPageReceivedEvent` 从 `SyncSession.OnEvent` 中迁出，改为 daemon 只读 responder action/handler；保留 catalog page budget、诊断和发送错误记录。
   - [x] 把普通 `FETCH_ZONE` 兼容响应从主 FSM 迁出；现代路径优先走 TCP object pull，UDP `FETCH_ZONE{chunk_fallback:true}` 仅作为 TCP 不可达后的 chunk fallback 请求。
   - [x] 将 `ANNOUNCE` 处理收敛为 hint：不再把 snapshot/record announce 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
-  - [ ] 删除或停用旧兼容字段路径：`Ping.Zones`、`Pong.Zones`、`Pong.FetchZones`、`SendPongAction.FetchZones`、`FetchingLocal`、`ServingPeerFetch`、eager object pull。
+  - [x] 删除或停用旧兼容字段路径：现代 event-loop 不再使用 `Ping.Zones`、`Pong.Zones`、`Pong.FetchZones`、`SendPongAction`、`FetchingLocal`、`ServingPeerFetch`、eager object pull；wire codec 与旧 `sync.go` receive 路径留到 6.0 默认事件循环收尾统一删除。
   - [ ] 更新观测面：`sync status --verbose` / `debug peer` 区分 active pull、read-only responder、hint suppressed/accepted、object pull/chunk fallback 结果。
-  - [ ] 验证：`go test ./app/higgs ./pkg/core/gossip`、`make phase2-smoke`、`make chain-relay-smoke`、`make object-pull-smoke`；最后再跑 `make check`。
+  - [x] 验证：`go test ./app/higgs ./pkg/core/gossip`、`make phase2-smoke`、`make chain-relay-smoke`、`make object-pull-smoke`；最后再跑 `make check`。
 - [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
 - [ ] 6.1.8 anycast smoke：多节点宣告同一 anycast 前缀，验证 Babel ECMP 和故障切换。
 - [ ] 6.3 firewall root/container 联合 smoke：overlay netns + veth + BIRD 下验证 default drop、合法 prefix 放行、非法 prefix drop、revocation 断流、port rotate redirect grace。

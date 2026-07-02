@@ -48,10 +48,9 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 	now = now.Add(100 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
-		PeerID:         "peer-a",
-		Pong:           &gossip.Pong{Zones: digests},
-		MissingZones:   nil,
-		LocalSnapshots: nil,
+		PeerID:       "peer-a",
+		Pong:         &gossip.Pong{Zones: digests},
+		MissingZones: nil,
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -75,10 +74,9 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	now = now.Add(50 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
-		PeerID:         "peer-a",
-		Pong:           &gossip.Pong{Zones: remote},
-		MissingZones:   []zone.ZonePath{"node-a.catofes."},
-		LocalSnapshots: nil,
+		PeerID:       "peer-a",
+		Pong:         &gossip.Pong{Zones: remote},
+		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -86,10 +84,7 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	if s.State != SyncSessionAwaitingAnnounce {
 		t.Fatalf("expected state awaiting_announce, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SendFetchZoneAction", "StartTimerAction"})
-	if actions[0].(SendFetchZoneAction).Zone != "node-a.catofes." {
-		t.Fatalf("unexpected fetch zone: %v", actions[0])
-	}
+	assertActionTypes(t, actions, []string{"StartTimerAction"})
 	// Initial RTT is 1s; a 50ms sample should pull the estimate down toward the sample.
 	if s.EstimatedRTT() >= InitialRTT {
 		t.Fatalf("expected RTT estimate to decrease from initial %v, got %v", InitialRTT, s.EstimatedRTT())
@@ -122,7 +117,7 @@ func TestSyncSessionCatalogSummaryFetchesPages(t *testing.T) {
 	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
 }
 
-func TestSyncSessionResponderEventsDoNotStealActivePullState(t *testing.T) {
+func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 	localRoot := gossip.CatalogRoot([]gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
@@ -136,27 +131,16 @@ func TestSyncSessionResponderEventsDoNotStealActivePullState(t *testing.T) {
 		t.Fatalf("expected state summary_sent, got %s", s.State)
 	}
 
-	actions, err := s.OnEvent(&FetchCatalogPageReceivedEvent{PeerID: "peer-a"}, now.Add(5*time.Millisecond))
-	if err != nil {
-		t.Fatalf("OnEvent(fetch catalog page): %v", err)
+	actions, err := s.OnEvent(&PacketEvent{}, now.Add(5*time.Millisecond))
+	if err == nil {
+		t.Fatal("PacketEvent unexpectedly entered SyncSession")
 	}
 	if s.State != SyncSessionSummarySent {
-		t.Fatalf("fetch catalog page changed active pull state to %s", s.State)
+		t.Fatalf("responder packet changed active pull state to %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SendCatalogPageAction"})
-
-	actions, err = s.OnEvent(&FetchZoneReceivedEvent{
-		PeerID:   "peer-a",
-		Zone:     "catofes.",
-		Snapshot: &gossip.ZoneSnapshot{Zone: "catofes."},
-	}, now.Add(6*time.Millisecond))
-	if err != nil {
-		t.Fatalf("OnEvent(fetch zone): %v", err)
+	if len(actions) != 0 {
+		t.Fatalf("responder packet returned actions: %+v", actions)
 	}
-	if s.State != SyncSessionSummarySent {
-		t.Fatalf("fetch zone changed active pull state to %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"SendAnnounceAction"})
 
 	actions, err = s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
@@ -232,80 +216,6 @@ func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 		t.Fatalf("expected state failed, got %s", s.State)
 	}
 	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction"})
-}
-
-func TestSyncSessionPongPeerRequestsLocalZones(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	now := time.Unix(1000, 0)
-	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
-
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: local}, now)
-	now = now.Add(10 * time.Millisecond)
-
-	snap := &gossip.ZoneSnapshot{Zone: "catofes."}
-	actions, err := s.OnEvent(&PongReceivedEvent{
-		PeerID:         "peer-a",
-		Pong:           &gossip.Pong{Zones: local, FetchZones: []zone.ZonePath{"catofes."}},
-		MissingZones:   nil,
-		LocalSnapshots: []*gossip.ZoneSnapshot{snap},
-	}, now)
-	if err != nil {
-		t.Fatalf("OnEvent error: %v", err)
-	}
-	if s.State != SyncSessionFetchingLocal {
-		t.Fatalf("expected state fetching_local, got %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"SendAnnounceAction"})
-	ann := actions[0].(SendAnnounceAction)
-	if len(ann.Snapshots) != 1 || ann.Snapshots[0].Zone != "catofes." {
-		t.Fatalf("unexpected announce snapshots: %+v", ann.Snapshots)
-	}
-}
-
-func TestSyncSessionFetchZoneReceived(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	now := time.Unix(1000, 0)
-
-	snap := &gossip.ZoneSnapshot{Zone: "catofes."}
-	actions, err := s.OnEvent(&FetchZoneReceivedEvent{PeerID: "peer-a", Zone: "catofes.", Snapshot: snap}, now)
-	if err != nil {
-		t.Fatalf("OnEvent error: %v", err)
-	}
-	if s.State != SyncSessionIdle {
-		t.Fatalf("expected state idle, got %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"SendAnnounceAction"})
-}
-
-func TestSyncSessionAnnounceAppliesAndCompletes(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	now := time.Unix(1000, 0)
-
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
-		MissingZones: []zone.ZonePath{"node-a.catofes."},
-	}, now)
-
-	actions, err := s.OnEvent(&AnnounceReceivedEvent{
-		PeerID: "peer-a",
-		Announce: &gossip.Announce{
-			Snapshots: []gossip.ZoneSnapshot{{
-				Zone: "node-a.catofes.",
-				Records: map[string]*zone.Record{
-					"identity": {Zone: "node-a.catofes.", Key: "identity", Value: []byte("node-a")},
-				},
-			}},
-		},
-	}, now)
-	if err != nil {
-		t.Fatalf("OnEvent error: %v", err)
-	}
-	if s.State != SyncSessionCompleted {
-		t.Fatalf("expected state completed, got %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"ApplySnapshotAction", "SaveStateAction"})
 }
 
 func TestSyncSessionQuietTimeoutStartsObjectPull(t *testing.T) {
@@ -501,50 +411,6 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	assertActionTypes(t, actions, []string{"ApplySnapshotAction", "SaveStateAction"})
 }
 
-func TestChunkFallbackFetchDoesNotStartEagerObjectPull(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	s.objectPullInflight = make(map[zone.ZonePath]bool)
-
-	action := SendFetchZoneAction{
-		PeerID:        "peer-a",
-		Zone:          "node-a.catofes.",
-		ChunkFallback: true,
-	}
-
-	if shouldStartEagerObjectPull(action, s, "local.catofes.", nil, 1200) {
-		t.Fatalf("chunk fallback fetch should not start another eager object pull")
-	}
-}
-
-func TestSyncSessionFetchingLocalCompletesOnQuietTimeout(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	now := time.Unix(1000, 0)
-	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
-	snap := &gossip.ZoneSnapshot{Zone: "catofes."}
-
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: local}, now)
-	now = now.Add(10 * time.Millisecond)
-
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:         "peer-a",
-		Pong:           &gossip.Pong{Zones: local, FetchZones: []zone.ZonePath{"catofes."}},
-		MissingZones:   nil,
-		LocalSnapshots: []*gossip.ZoneSnapshot{snap},
-	}, now)
-	if s.State != SyncSessionFetchingLocal {
-		t.Fatalf("expected state fetching_local, got %s", s.State)
-	}
-
-	actions, err := s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
-	if err != nil {
-		t.Fatalf("OnEvent error: %v", err)
-	}
-	if s.State != SyncSessionCompleted {
-		t.Fatalf("expected state completed, got %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"SaveStateAction"})
-}
-
 func TestSyncSessionRoundTimeout(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
@@ -612,79 +478,20 @@ func assertActionTypes(t *testing.T, actions []SyncAction, want []string) {
 	}
 }
 
-func TestSyncSessionAnnounceAcceptsSkeletonAndStaysPending(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	now := time.Unix(1000, 0)
-
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
-		MissingZones: []zone.ZonePath{"node-a.catofes."},
-	}, now)
-
-	authority := &zone.ZoneAuthority{
-		Zone:      "node-a.catofes.",
-		Epoch:     1,
-		Keys:      []zone.AuthorizedKey{{Key: make([]byte, 32)}},
-		Threshold: 1,
-	}
-
-	// Advertised digest includes records, so a skeleton (authority only) will not
-	// match it.
-	fullZS := zone.NewZoneState("node-a.catofes.", authority)
-	fullZS.Records["identity"] = &zone.Record{Key: "identity", Value: []byte("node-a")}
-	s.expectedDigests["node-a.catofes."] = gossip.ZoneDigest{
-		Zone:     "node-a.catofes.",
-		RootHash: gossip.ZoneRoot(fullZS),
-	}
-
-	skeleton := &gossip.ZoneSnapshot{
-		Zone:      "node-a.catofes.",
-		Authority: authority,
-	}
-
-	actions, err := s.OnEvent(&AnnounceReceivedEvent{
-		PeerID: "peer-a",
-		Announce: &gossip.Announce{
-			Snapshots: []gossip.ZoneSnapshot{*skeleton},
-		},
-	}, now)
-	if err != nil {
-		t.Fatalf("OnEvent error: %v", err)
-	}
-	if s.State != SyncSessionAwaitingAnnounce {
-		t.Fatalf("expected state awaiting_announce, got %s", s.State)
-	}
-	if _, ok := s.pendingZones["node-a.catofes."]; !ok {
-		t.Fatalf("expected node-a.catofes. to remain pending after skeleton")
-	}
-	if _, ok := s.expectedDigests["node-a.catofes."]; !ok {
-		t.Fatalf("expected node-a.catofes. expected digest to remain after skeleton")
-	}
-	assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
-}
-
 func actionType(a SyncAction) string {
 	switch a.(type) {
 	case SendPingAction:
 		return "SendPingAction"
-	case SendPongAction:
-		return "SendPongAction"
 	case SendFetchZoneAction:
 		return "SendFetchZoneAction"
 	case SendFetchCatalogPageAction:
 		return "SendFetchCatalogPageAction"
 	case SendCatalogPageAction:
 		return "SendCatalogPageAction"
-	case SendAnnounceAction:
-		return "SendAnnounceAction"
 	case StartObjectPullAction:
 		return "StartObjectPullAction"
 	case ApplySnapshotAction:
 		return "ApplySnapshotAction"
-	case ApplyRecordSnapshotAction:
-		return "ApplyRecordSnapshotAction"
 	case SaveStateAction:
 		return "SaveStateAction"
 	case RecordBackoffAction:

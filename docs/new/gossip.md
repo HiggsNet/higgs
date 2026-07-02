@@ -76,7 +76,7 @@ Gossip 运行于事件驱动的 daemon 架构中：
 
 ### 1.5 目标重构：读写分离与 hint 语义
 
-当前实现仍保留了早期兼容路径：`PONG.FetchZones`、`FETCH_ZONE -> ANNOUNCE`、UDP snapshot/record announce、`ServingPeerFetch` / `FetchingLocal` 等逻辑混在同一个 `SyncSession` 状态机中。这让一个 per-peer session 同时表达两件事：
+早期实现把 `PONG.FetchZones`、`FETCH_ZONE -> ANNOUNCE`、UDP snapshot/record announce、`ServingPeerFetch` / `FetchingLocal` 等逻辑混在同一个 `SyncSession` 状态机中。这会让一个 per-peer session 同时表达两件事：
 
 - **主动读路径**：本节点正在向 peer 拉取 catalog / object。
 - **被动服务路径**：peer 正在向本节点请求 catalog page / object。
@@ -95,7 +95,7 @@ Gossip 运行于事件驱动的 daemon 架构中：
 - `ANNOUNCE` 只表示“我这里可能有新 digest/object”，不作为完整同步的正确性前提。
 - 大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时传完整对象。
 - 收到 hint 不触发 relay；只有本地 active state 真正 apply 成功并发生变化后，才按 relay 规则通知其他 peer。
-- 旧协议兼容字段逐步删除：`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 不再参与现代同步状态机。
+- 旧协议兼容字段逐步删除：`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 不再参与现代 event-loop 同步状态机；wire codec 和旧 `sync.go` receive 路径在 6.0 默认事件循环后删除。
 
 ---
 
@@ -263,12 +263,12 @@ higgs.gossip.m1\n<msgpack payload with version=1>
 | 类型 | 值 | 方向 | 用途 |
 |------|-----|------|------|
 | `ping` | 主动 | 双向 | 发起同步、携带 CatalogSummary |
-| `pong` | 响应 | 双向 | 响应 ping、携带 FetchZones |
+| `pong` | 响应 | 双向 | 响应 ping、携带 CatalogSummary |
 | `fetch_catalog_page` | 请求 | 双向 | 请求 catalog 分页 |
 | `catalog_page` | 响应 | 双向 | 返回 catalog 分页数据 |
-| `fetch_zone` | 请求 | 双向 | 请求 zone snapshot |
+| `fetch_zone` | 请求 | 双向 | UDP chunk fallback 请求；普通 snapshot 请求为旧路径 |
 | `fetch_record` | 请求 | 双向 | 请求单条 record |
-| `announce` | 主动 | 双向 | 主动推送 zone/record 数据 |
+| `announce` | 主动 | 双向 | hint ingress；不作为正确性主路径 |
 | `object_chunk` | 主动 | 双向 | UDP 分片传输大对象 |
 
 ---
@@ -407,14 +407,14 @@ Phase 3: Object Pull（对象拉取）
 - 校验通过后再做 root hash / 签名验证
 - 缺少任意 chunk → 丢弃，等下次重新请求
 
-### 5.3 旧 UDP snapshot/record announce 路径（待删除）
+### 5.3 旧 UDP snapshot/record announce 路径（event-loop 已停用）
 
 旧路径中，`PONG.FetchZones` 会让对端发送 `FETCH_ZONE`，响应方再用 `ANNOUNCE` 携带 snapshot/record；如果 UDP 放不下，还会通过 eager object pull 提前启动 TCP 拉取。这套链路有两个问题：
 
 - `FETCH_ZONE`/`ANNOUNCE` 同时承担读取响应、hint 和兼容传输，语义混杂。
 - `ServingPeerFetch` / `FetchingLocal` 会污染主动同步 FSM，造成时序问题。
 
-目标状态下，现代同步不再走 `PONG.FetchZones -> FETCH_ZONE -> ANNOUNCE snapshot`。对象获取统一由 active pull FSM 启动 TCP object pull；TCP 不可达时再请求 UDP chunk fallback。`ANNOUNCE` 只保留 hint 语义。
+当前 event-loop 路径已经不再走 `PONG.FetchZones -> FETCH_ZONE -> ANNOUNCE snapshot`，`Ping.Zones` / `Pong.Zones` 也不再驱动 active pull。对象获取统一由 active pull FSM 启动 TCP object pull；TCP 不可达时再请求 UDP chunk fallback。`ANNOUNCE` 只保留 hint 语义。wire codec 和旧 `sync.go` receive/deadline 路径仍暂时保留，随 6.0 默认事件循环收尾删除。
 
 ---
 
@@ -513,13 +513,10 @@ stateDiagram-v2
 | 事件 | 来源 |
 |------|------|
 | `SyncTimerEvent` | 周期 timer / 手动 trigger / relay 唤醒 |
-| `PongReceivedEvent` | 收到 `PONG`；或收到不带 `Summary` 的 `PING`（被转换为此事件） |
+| `PongReceivedEvent` | 收到带 `Summary` 的 `PONG`；无 `Summary` 的旧 digest 字段不再驱动现代 FSM |
 | `CatalogSummaryReceivedEvent` | 收到带 `Summary` 的 `PING` |
 | `CatalogPageReceivedEvent` | 收到 `CATALOG_PAGE` |
-| `FetchCatalogPageReceivedEvent` | 旧 FSM 事件；目标状态下 `FETCH_CATALOG_PAGE` 已迁出 FSM，改为 daemon direct responder |
 | `CatalogPageTimeoutEvent` | catalog page 请求超时 |
-| `FetchZoneReceivedEvent` | 旧 FSM 事件；目标状态下普通 `FETCH_ZONE` 已迁出 FSM，chunk fallback 仍走 responder/旧发送路径 |
-| `AnnounceReceivedEvent` | 旧 FSM 事件；目标状态下 daemon 将 `ANNOUNCE` 当作 hint 唤醒 active pull，不直接 apply snapshot/record |
 | `PacketQuietTimeoutEvent` | UDP 静默期 timer 触发 |
 | `RoundTimeoutEvent` | 整轮超时 timer 触发 |
 | `ObjectPullResultEvent` | 异步 TCP object pull 完成 |

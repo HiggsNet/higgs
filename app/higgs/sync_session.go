@@ -19,8 +19,6 @@ const (
 	SyncSessionSummarySent      SyncSessionState = "summary_sent"
 	SyncSessionCatalogDiffing   SyncSessionState = "catalog_diffing"
 	SyncSessionAwaitingAnnounce SyncSessionState = "awaiting_announce"
-	SyncSessionServingPeerFetch SyncSessionState = "serving_peer_fetch"
-	SyncSessionFetchingLocal    SyncSessionState = "fetching_local"
 	SyncSessionObjectPulling    SyncSessionState = "object_pulling"
 	SyncSessionChunkFallback    SyncSessionState = "chunk_fallback"
 	SyncSessionCompleted        SyncSessionState = "completed"
@@ -52,10 +50,9 @@ type SyncTimerEvent struct {
 func (*SyncTimerEvent) isSyncEvent() {}
 
 type PongReceivedEvent struct {
-	PeerID         string
-	Pong           *gossip.Pong
-	MissingZones   []zone.ZonePath        // populated by the event loop before OnEvent
-	LocalSnapshots []*gossip.ZoneSnapshot // populated by the event loop before OnEvent
+	PeerID       string
+	Pong         *gossip.Pong
+	MissingZones []zone.ZonePath // populated by the event loop before OnEvent
 }
 
 func (*PongReceivedEvent) isSyncEvent() {}
@@ -75,33 +72,11 @@ type CatalogPageReceivedEvent struct {
 
 func (*CatalogPageReceivedEvent) isSyncEvent() {}
 
-type FetchCatalogPageReceivedEvent struct {
-	PeerID string
-	Cursor string
-}
-
-func (*FetchCatalogPageReceivedEvent) isSyncEvent() {}
-
 type CatalogPageTimeoutEvent struct {
 	PeerID string
 }
 
 func (*CatalogPageTimeoutEvent) isSyncEvent() {}
-
-type FetchZoneReceivedEvent struct {
-	PeerID   string
-	Zone     zone.ZonePath
-	Snapshot *gossip.ZoneSnapshot // populated by the event loop before OnEvent
-}
-
-func (*FetchZoneReceivedEvent) isSyncEvent() {}
-
-type AnnounceReceivedEvent struct {
-	PeerID   string
-	Announce *gossip.Announce
-}
-
-func (*AnnounceReceivedEvent) isSyncEvent() {}
 
 type PacketQuietTimeoutEvent struct {
 	PeerID string
@@ -146,15 +121,6 @@ type SendPingAction struct {
 
 func (SendPingAction) isSyncAction() {}
 
-type SendPongAction struct {
-	PeerID     string
-	Digests    []gossip.ZoneDigest
-	Summary    *gossip.CatalogSummary
-	FetchZones []zone.ZonePath
-}
-
-func (SendPongAction) isSyncAction() {}
-
 type SendFetchZoneAction struct {
 	PeerID        string
 	Zone          zone.ZonePath
@@ -162,14 +128,6 @@ type SendFetchZoneAction struct {
 }
 
 func (SendFetchZoneAction) isSyncAction() {}
-
-type SendAnnounceAction struct {
-	PeerID    string
-	Snapshots []*gossip.ZoneSnapshot
-	Records   []*gossip.RecordSnapshot
-}
-
-func (SendAnnounceAction) isSyncAction() {}
 
 type SendFetchCatalogPageAction struct {
 	PeerID string
@@ -199,13 +157,6 @@ type ApplySnapshotAction struct {
 }
 
 func (ApplySnapshotAction) isSyncAction() {}
-
-type ApplyRecordSnapshotAction struct {
-	PeerID string
-	Record *gossip.RecordSnapshot
-}
-
-func (ApplyRecordSnapshotAction) isSyncAction() {}
 
 type SaveStateAction struct {
 	Reason string
@@ -243,22 +194,10 @@ type SyncSession struct {
 
 	// pendingZones are zones we believe the peer has and we need.
 	pendingZones map[zone.ZonePath]bool
-	// localFetchZones are zones the peer has explicitly requested from us.
-	localFetchZones map[zone.ZonePath]bool
 	// objectPullInflight tracks zones with an outstanding async TCP pull.
 	objectPullInflight map[zone.ZonePath]bool
 	// chunkFallbackZones tracks zones we are trying to receive via UDP chunk.
 	chunkFallbackZones map[zone.ZonePath]bool
-	// skeletonPending marks zones for which we received a UDP skeleton. Such
-	// zones stay pending until we either receive records via UDP or finish an
-	// object pull / chunk fallback. This prevents the local state from
-	// accidentally matching a stale expected digest and declaring the zone done
-	// while records are still missing.
-	skeletonPending map[zone.ZonePath]bool
-	// recordsReceived marks zones for which at least one record snapshot has
-	// been applied since the skeleton was received. Once records have arrived,
-	// normal root-hash reconciliation can complete the zone.
-	recordsReceived map[zone.ZonePath]bool
 	// expectedDigests maps pending zones to the remote root hash advertised in
 	// the PONG. Used to detect stale or incomplete UDP announces.
 	expectedDigests   map[zone.ZonePath]gossip.ZoneDigest
@@ -283,11 +222,8 @@ func NewSyncSession(peerID string) *SyncSession {
 		PeerID:             peerID,
 		State:              SyncSessionIdle,
 		pendingZones:       make(map[zone.ZonePath]bool),
-		localFetchZones:    make(map[zone.ZonePath]bool),
 		objectPullInflight: make(map[zone.ZonePath]bool),
 		chunkFallbackZones: make(map[zone.ZonePath]bool),
-		skeletonPending:    make(map[zone.ZonePath]bool),
-		recordsReceived:    make(map[zone.ZonePath]bool),
 		estimatedRTT:       InitialRTT,
 	}
 }
@@ -303,14 +239,8 @@ func (s *SyncSession) OnEvent(event SyncEvent, now time.Time) ([]SyncAction, err
 		return s.onCatalogSummaryReceived(e, now)
 	case *CatalogPageReceivedEvent:
 		return s.onCatalogPageReceived(e, now)
-	case *FetchCatalogPageReceivedEvent:
-		return s.onFetchCatalogPageReceived(e)
 	case *CatalogPageTimeoutEvent:
 		return s.onCatalogPageTimeout(e)
-	case *FetchZoneReceivedEvent:
-		return s.onFetchZoneReceived(e)
-	case *AnnounceReceivedEvent:
-		return s.onAnnounceReceived(e)
 	case *PacketQuietTimeoutEvent:
 		return s.onPacketQuietTimeout(e, now)
 	case *RoundTimeoutEvent:
@@ -332,11 +262,8 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.pingSentAt = now
 	s.quietCount = 0
 	s.pendingZones = make(map[zone.ZonePath]bool)
-	s.localFetchZones = make(map[zone.ZonePath]bool)
 	s.objectPullInflight = make(map[zone.ZonePath]bool)
 	s.chunkFallbackZones = make(map[zone.ZonePath]bool)
-	s.skeletonPending = make(map[zone.ZonePath]bool)
-	s.recordsReceived = make(map[zone.ZonePath]bool)
 	s.expectedDigests = make(map[zone.ZonePath]gossip.ZoneDigest)
 	s.localCatalogRoot = nil
 	if e.LocalSummary != nil {
@@ -365,26 +292,12 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 
 	var actions []SyncAction
 
-	// Peer asked us for zones: respond with announces.
-	if len(e.LocalSnapshots) > 0 {
-		for _, snap := range e.LocalSnapshots {
-			s.localFetchZones[snap.Zone] = true
-		}
-		actions = append(actions, SendAnnounceAction{PeerID: e.PeerID, Snapshots: e.LocalSnapshots})
-	}
-
 	// We need zones from peer.
 	if len(e.MissingZones) > 0 {
 		s.State = SyncSessionAwaitingAnnounce
 		s.quietCount = 0
 		for _, z := range e.MissingZones {
 			s.pendingZones[z] = true
-			actions = append(actions, SendFetchZoneAction{PeerID: e.PeerID, Zone: z})
-		}
-		if e.Pong != nil {
-			for _, d := range e.Pong.Zones {
-				s.expectedDigests[d.Zone] = d
-			}
 		}
 		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())})
 		return actions, nil
@@ -393,8 +306,6 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 	if len(actions) == 0 {
 		s.State = SyncSessionCompleted
 		actions = append(actions, SaveStateAction{Reason: "sync completed after pong, no differences"})
-	} else {
-		s.State = SyncSessionFetchingLocal
 	}
 	return actions, nil
 }
@@ -479,10 +390,6 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	return actions, nil
 }
 
-func (s *SyncSession) onFetchCatalogPageReceived(e *FetchCatalogPageReceivedEvent) ([]SyncAction, error) {
-	return []SyncAction{SendCatalogPageAction{PeerID: e.PeerID, Cursor: e.Cursor}}, nil
-}
-
 func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAction, error) {
 	if s.State != SyncSessionCatalogDiffing {
 		return nil, nil
@@ -495,90 +402,14 @@ func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAc
 	}, nil
 }
 
-func (s *SyncSession) onFetchZoneReceived(e *FetchZoneReceivedEvent) ([]SyncAction, error) {
-	if e.Snapshot == nil {
-		return nil, nil
-	}
-	s.localFetchZones[e.Zone] = true
-	return []SyncAction{
-		SendAnnounceAction{PeerID: e.PeerID, Snapshots: []*gossip.ZoneSnapshot{e.Snapshot}},
-	}, nil
-}
-
-func (s *SyncSession) onAnnounceReceived(e *AnnounceReceivedEvent) ([]SyncAction, error) {
-	// Accept announces while we are actively waiting for or pulling data from the
-	// peer, and also while we are sending local zones to the peer (the peer may
-	// send its own announces concurrently). Idle/completed/failed sessions should
-	// ignore stale/relay traffic.
-	if s.State != SyncSessionPingSent &&
-		s.State != SyncSessionSummarySent &&
-		s.State != SyncSessionCatalogDiffing &&
-		s.State != SyncSessionAwaitingAnnounce &&
-		s.State != SyncSessionObjectPulling &&
-		s.State != SyncSessionChunkFallback &&
-		s.State != SyncSessionFetchingLocal &&
-		s.State != SyncSessionServingPeerFetch {
-		return nil, nil
-	}
-	var actions []SyncAction
-	for i := range e.Announce.Snapshots {
-		snap := &e.Announce.Snapshots[i]
-		expected, ok := s.expectedDigests[snap.Zone]
-		isSkeleton := len(snap.Records) == 0 && len(snap.RecordHistory) == 0
-		if ok && !bytes.Equal(expected.RootHash, gossip.ZoneRoot(zoneStateFromSnapshot(snap))) {
-			if !isSkeleton {
-				// Stale or incomplete announce. Keep the zone pending so object
-				// pull / chunk fallback can finish the sync.
-				continue
-			}
-		}
-		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: snap, RelaxedLimits: false})
-		if isSkeleton {
-			// UDP skeletons intentionally omit records. Keep the zone pending
-			// until records arrive or an object pull / chunk fallback completes.
-			// Records received for a previous version of this zone are no longer
-			// authoritative once a new skeleton arrives.
-			s.skeletonPending[snap.Zone] = true
-			delete(s.recordsReceived, snap.Zone)
-			continue
-		}
-		delete(s.pendingZones, snap.Zone)
-		delete(s.skeletonPending, snap.Zone)
-		delete(s.recordsReceived, snap.Zone)
-		delete(s.objectPullInflight, snap.Zone)
-		delete(s.chunkFallbackZones, snap.Zone)
-		delete(s.expectedDigests, snap.Zone)
-	}
-	for i := range e.Announce.Records {
-		rec := &e.Announce.Records[i]
-		actions = append(actions, ApplyRecordSnapshotAction{PeerID: e.PeerID, Record: rec})
-		s.recordsReceived[rec.Zone] = true
-	}
-	if s.pendingEmpty() {
-		s.State = SyncSessionCompleted
-		actions = append(actions, SaveStateAction{Reason: fmt.Sprintf("sync completed after announce from %s", e.PeerID)})
-	} else {
-		s.State = SyncSessionAwaitingAnnounce
-	}
-	return actions, nil
-}
-
 // reconcilePendingWithState removes pending zones whose local root hash now
-// matches the digest advertised by the peer. This is needed because UDP
-// skeletons and split record datagrams populate a zone incrementally rather
-// than in a single announce.
+// matches the digest advertised by the peer after object pull or chunk fallback
+// has applied a snapshot.
 func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAction {
 	if ns == nil {
 		return nil
 	}
 	for z := range s.pendingZones {
-		if s.skeletonPending[z] {
-			// We only have a UDP skeleton for this zone. Don't reconcile it away
-			// until records arrive via UDP or an object pull / chunk fallback
-			// completes. This prevents stale record datagrams or a coincidental
-			// local root-hash match from hiding a real requirement.
-			continue
-		}
 		expected, ok := s.expectedDigests[z]
 		if !ok {
 			continue
@@ -589,8 +420,6 @@ func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAct
 		}
 		if bytes.Equal(expected.RootHash, gossip.ZoneRoot(zs)) {
 			delete(s.pendingZones, z)
-			delete(s.skeletonPending, z)
-			delete(s.recordsReceived, z)
 			delete(s.expectedDigests, z)
 			delete(s.objectPullInflight, z)
 			delete(s.chunkFallbackZones, z)
@@ -657,13 +486,6 @@ func (s *SyncSession) onPacketQuietTimeout(e *PacketQuietTimeoutEvent, now time.
 				SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
 			}, nil
 		}
-	case SyncSessionFetchingLocal, SyncSessionServingPeerFetch:
-		// We already sent the zones the peer requested and have no missing
-		// zones of our own. If the UDP path has been quiet, the peer has had
-		// enough time to ask for more; complete the round so a new session
-		// can be started to pull updates from the peer.
-		s.State = SyncSessionCompleted
-		return []SyncAction{SaveStateAction{Reason: fmt.Sprintf("sync completed after quiet timeout from %s", e.PeerID)}}, nil
 	}
 	return nil, nil
 }
@@ -698,8 +520,6 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 	} else if e.Snapshot != nil {
 		s.pendingZones[e.Snapshot.Zone] = false
 		delete(s.pendingZones, e.Snapshot.Zone)
-		delete(s.skeletonPending, e.Snapshot.Zone)
-		delete(s.recordsReceived, e.Snapshot.Zone)
 		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true})
 	}
 
@@ -737,8 +557,6 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 	if e.Snapshot != nil {
 		delete(s.chunkFallbackZones, e.Snapshot.Zone)
 		delete(s.pendingZones, e.Snapshot.Zone)
-		delete(s.skeletonPending, e.Snapshot.Zone)
-		delete(s.recordsReceived, e.Snapshot.Zone)
 		if s.pendingEmpty() {
 			s.State = SyncSessionCompleted
 			return []SyncAction{
