@@ -2,8 +2,13 @@ package ipsec
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"iter"
+	"net"
+	"strings"
+	"sync"
 
 	"github.com/strongswan/govici/vici"
 )
@@ -24,6 +29,15 @@ type GoviciClient struct {
 	Session GoviciSession
 }
 
+type VICIClientFactory func() (VICIClient, func() error, error)
+
+type ReconnectingVICIClient struct {
+	mu      sync.Mutex
+	factory VICIClientFactory
+	client  VICIClient
+	closeFn func() error
+}
+
 func NewGoviciClient(socketPath string) (*GoviciClient, error) {
 	var opts []vici.SessionOption
 	if socketPath != "" {
@@ -34,6 +48,32 @@ func NewGoviciClient(socketPath string) (*GoviciClient, error) {
 		return nil, err
 	}
 	return &GoviciClient{Session: session}, nil
+}
+
+func NewReconnectingGoviciClient(socketPath string) (*ReconnectingVICIClient, error) {
+	factory := func() (VICIClient, func() error, error) {
+		client, err := NewGoviciClient(socketPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		return client, client.Close, nil
+	}
+	client, closeFn, err := factory()
+	if err != nil {
+		return nil, err
+	}
+	return &ReconnectingVICIClient{factory: factory, client: client, closeFn: closeFn}, nil
+}
+
+func NewReconnectingVICIClient(factory VICIClientFactory) (*ReconnectingVICIClient, error) {
+	if factory == nil {
+		return nil, fmt.Errorf("vici client factory is required")
+	}
+	client, closeFn, err := factory()
+	if err != nil {
+		return nil, err
+	}
+	return &ReconnectingVICIClient{factory: factory, client: client, closeFn: closeFn}, nil
 }
 
 func (c *GoviciClient) Call(ctx context.Context, cmd string, in map[string]any) (map[string]any, error) {
@@ -76,6 +116,112 @@ func (c *GoviciClient) Close() error {
 	return c.Session.Close()
 }
 
+func (c *ReconnectingVICIClient) Call(ctx context.Context, cmd string, in map[string]any) (map[string]any, error) {
+	client, err := c.current()
+	if err != nil {
+		return nil, err
+	}
+	out, err := client.Call(ctx, cmd, in)
+	if !isVICIReconnectError(err) {
+		return out, err
+	}
+	client, reconnectErr := c.reconnect(client)
+	if reconnectErr != nil {
+		return nil, fmt.Errorf("%w; reconnect vici: %v", err, reconnectErr)
+	}
+	return client.Call(ctx, cmd, in)
+}
+
+func (c *ReconnectingVICIClient) CallStreaming(ctx context.Context, cmd string, event string, in map[string]any) ([]map[string]any, error) {
+	client, err := c.current()
+	if err != nil {
+		return nil, err
+	}
+	out, err := client.CallStreaming(ctx, cmd, event, in)
+	if !isVICIReconnectError(err) {
+		return out, err
+	}
+	client, reconnectErr := c.reconnect(client)
+	if reconnectErr != nil {
+		return nil, fmt.Errorf("%w; reconnect vici: %v", err, reconnectErr)
+	}
+	return client.CallStreaming(ctx, cmd, event, in)
+}
+
+func (c *ReconnectingVICIClient) SubscribeEvents(ctx context.Context, events ...string) (<-chan VICIEvent, func(), error) {
+	client, err := c.current()
+	if err != nil {
+		return nil, nil, err
+	}
+	subscriber, ok := client.(VICIEventClient)
+	if !ok {
+		return nil, nil, fmt.Errorf("vici client does not support event subscription")
+	}
+	out, stop, err := subscriber.SubscribeEvents(ctx, events...)
+	if !isVICIReconnectError(err) {
+		return out, stop, err
+	}
+	client, reconnectErr := c.reconnect(client)
+	if reconnectErr != nil {
+		return nil, nil, fmt.Errorf("%w; reconnect vici: %v", err, reconnectErr)
+	}
+	subscriber, ok = client.(VICIEventClient)
+	if !ok {
+		return nil, nil, fmt.Errorf("vici client does not support event subscription")
+	}
+	return subscriber.SubscribeEvents(ctx, events...)
+}
+
+func (c *ReconnectingVICIClient) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	closeFn := c.closeFn
+	c.client = nil
+	c.closeFn = nil
+	c.mu.Unlock()
+	if closeFn != nil {
+		return closeFn()
+	}
+	return nil
+}
+
+func (c *ReconnectingVICIClient) current() (VICIClient, error) {
+	if c == nil {
+		return nil, errMissingGoviciSession()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil {
+		return nil, errMissingGoviciSession()
+	}
+	return c.client, nil
+}
+
+func (c *ReconnectingVICIClient) reconnect(stale VICIClient) (VICIClient, error) {
+	if c == nil {
+		return nil, errMissingGoviciSession()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != stale && c.client != nil {
+		return c.client, nil
+	}
+	if c.closeFn != nil {
+		_ = c.closeFn()
+	}
+	client, closeFn, err := c.factory()
+	if err != nil {
+		c.client = nil
+		c.closeFn = nil
+		return nil, err
+	}
+	c.client = client
+	c.closeFn = closeFn
+	return client, nil
+}
+
 func (c *GoviciClient) SubscribeEvents(_ context.Context, events ...string) (<-chan VICIEvent, func(), error) {
 	if c == nil || c.Session == nil {
 		return nil, nil, errMissingGoviciSession()
@@ -104,6 +250,29 @@ func (c *GoviciClient) SubscribeEvents(_ context.Context, events ...string) (<-c
 
 func errMissingGoviciSession() error {
 	return fmt.Errorf("govici session is required")
+}
+
+func isVICIReconnectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	for _, token := range []string{
+		"broken pipe",
+		"connection reset",
+		"connection refused",
+		"use of closed network connection",
+		"transport endpoint is not connected",
+		"unexpected eof",
+	} {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func goviciMarshal(in map[string]any) (*vici.Message, error) {

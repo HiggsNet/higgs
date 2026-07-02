@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"reflect"
 	"strings"
@@ -102,6 +103,26 @@ func (c *blockingVICIClient) CallStreaming(context.Context, string, string, map[
 	return nil, nil
 }
 
+type scriptedVICIClient struct {
+	callErr   error
+	streamOut []map[string]any
+	streamErr error
+}
+
+func (c *scriptedVICIClient) Call(context.Context, string, map[string]any) (map[string]any, error) {
+	if c.callErr != nil {
+		return nil, c.callErr
+	}
+	return nil, nil
+}
+
+func (c *scriptedVICIClient) CallStreaming(context.Context, string, string, map[string]any) ([]map[string]any, error) {
+	if c.streamErr != nil {
+		return nil, c.streamErr
+	}
+	return c.streamOut, nil
+}
+
 func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	session := &fakeGoviciSession{}
 	client := &GoviciClient{Session: session}
@@ -190,6 +211,41 @@ func TestStrongSwanDriverInitiateChildAsyncReturnsAndCoalesces(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 	close(client.release)
+}
+
+func TestReconnectingVICIClientRetriesStreamingAfterBrokenPipe(t *testing.T) {
+	closed := 0
+	factoryCalls := 0
+	client, err := NewReconnectingVICIClient(func() (VICIClient, func() error, error) {
+		factoryCalls++
+		if factoryCalls == 1 {
+			return &scriptedVICIClient{streamErr: errors.New("write unix @->/run/charon.vici: write: broken pipe")}, func() error {
+				closed++
+				return nil
+			}, nil
+		}
+		return &scriptedVICIClient{streamOut: []map[string]any{{"ipsec-main-ab": map[string]any{"state": "ESTABLISHED"}}}}, func() error {
+			closed++
+			return nil
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewReconnectingVICIClient: %v", err)
+	}
+
+	events, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil)
+	if err != nil {
+		t.Fatalf("CallStreaming: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want one event after reconnect", events)
+	}
+	if factoryCalls != 2 {
+		t.Fatalf("factory calls = %d, want 2", factoryCalls)
+	}
+	if closed != 1 {
+		t.Fatalf("closed = %d, want stale client closed once", closed)
+	}
 }
 
 func TestStrongSwanDriverLogsVICILoadConnectionConfig(t *testing.T) {

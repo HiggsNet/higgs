@@ -1654,7 +1654,7 @@ func newConfiguredIPsecDrivers(config ipsecConfig, logConfig func(event string, 
 		if len(config.LinkGroups) == 0 {
 			return configuredIPsecDrivers{}, nil
 		}
-		client, err := ipsec.NewGoviciClient(config.VICISocket)
+		client, err := ipsec.NewReconnectingGoviciClient(config.VICISocket)
 		if err != nil {
 			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
