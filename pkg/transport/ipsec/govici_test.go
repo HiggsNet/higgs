@@ -305,6 +305,43 @@ func TestGoviciClientStreamsListSAs(t *testing.T) {
 	}
 }
 
+func TestGoviciClientStreamsListConnections(t *testing.T) {
+	event, err := vici.MarshalMessage(map[string]any{
+		"ipsec-main-ab": map[string]any{
+			"remote_addrs": []string{"198.51.100.20"},
+			"remote_port":  "4500",
+			"local": map[string]any{
+				"id": "node-a.catofes.",
+			},
+			"remote": map[string]any{
+				"id": "node-b.catofes.",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("MarshalMessage: %v", err)
+	}
+	session := &fakeGoviciSession{streamEvents: []*vici.Message{event}}
+	client := &GoviciClient{Session: session}
+
+	states, err := (&StrongSwanDriver{VICI: client}).ListConnections(context.Background())
+	if err != nil {
+		t.Fatalf("ListConnections: %v", err)
+	}
+	if session.streamCmd != "list-conns" || session.streamEvent != "list-conn" {
+		t.Fatalf("stream command = %q/%q", session.streamCmd, session.streamEvent)
+	}
+	want := []ConnectionState{{
+		Name:           "ipsec-main-ab",
+		LocalIdentity:  "node-a.catofes.",
+		RemoteIdentity: "node-b.catofes.",
+		RemoteEndpoint: "198.51.100.20:4500",
+	}}
+	if !reflect.DeepEqual(states, want) {
+		t.Fatalf("states:\n got %#v\nwant %#v", states, want)
+	}
+}
+
 func TestGoviciClientSubscribesAndParsesLifecycleEvents(t *testing.T) {
 	session := &fakeGoviciSession{}
 	client := &GoviciClient{Session: session}

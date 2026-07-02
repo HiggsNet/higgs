@@ -34,6 +34,13 @@ type SAState struct {
 	Established    bool
 }
 
+type ConnectionState struct {
+	Name           string
+	LocalIdentity  string
+	RemoteIdentity string
+	RemoteEndpoint string
+}
+
 type VICIEvent struct {
 	Name           string
 	Connection     string
@@ -66,6 +73,10 @@ type IPsecDriver interface {
 	UnloadPrivateKey(ctx context.Context, id string) error
 }
 
+type ConnectionLister interface {
+	ListConnections(context.Context) ([]ConnectionState, error)
+}
+
 type ChildInitiator interface {
 	InitiateChild(context.Context, string) error
 }
@@ -92,16 +103,17 @@ type XFRMSAFilter interface {
 }
 
 type DryRunDriver struct {
-	Connections  []TransportLinkSpec
-	Initiated    []string
-	Unloaded     []string
-	Terminated   []string
-	Interfaces   []TransportLinkSpec
-	Namespaces   []NetNSSpec
-	DeletedIFs   []string
-	Addresses    []string
-	PrivateKeys  []DryRunPrivateKey
-	UnloadedKeys []string
+	Connections       []TransportLinkSpec
+	LoadedConnections []ConnectionState
+	Initiated         []string
+	Unloaded          []string
+	Terminated        []string
+	Interfaces        []TransportLinkSpec
+	Namespaces        []NetNSSpec
+	DeletedIFs        []string
+	Addresses         []string
+	PrivateKeys       []DryRunPrivateKey
+	UnloadedKeys      []string
 }
 
 type DryRunPrivateKey struct {
@@ -451,6 +463,23 @@ func (d *StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {
 	return states, nil
 }
 
+func (d *StrongSwanDriver) ListConnections(ctx context.Context) ([]ConnectionState, error) {
+	if d.VICI == nil {
+		return nil, fmt.Errorf("vici client is required")
+	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
+	events, err := d.VICI.CallStreaming(ctx, "list-conns", "list-conn", nil)
+	if err != nil {
+		return nil, err
+	}
+	states := make([]ConnectionState, 0, len(events))
+	for _, event := range events {
+		states = append(states, parseConnectionStates(event)...)
+	}
+	return states, nil
+}
+
 func (d *StrongSwanDriver) SubscribeLifecycleEvents(ctx context.Context) (<-chan VICIEvent, func(), error) {
 	client, ok := d.VICI.(VICIEventClient)
 	if !ok {
@@ -681,6 +710,18 @@ func (d *DryRunDriver) TerminateSA(_ context.Context, id string) error {
 
 func (d *DryRunDriver) ListSAs(context.Context) ([]SAState, error) {
 	return nil, nil
+}
+
+func (d *DryRunDriver) ListConnections(context.Context) ([]ConnectionState, error) {
+	out := append([]ConnectionState(nil), d.LoadedConnections...)
+	for _, spec := range d.Connections {
+		out = append(out, ConnectionState{
+			Name:           spec.TransportID,
+			LocalIdentity:  string(spec.LocalZone),
+			RemoteIdentity: string(spec.PeerZone),
+		})
+	}
+	return out, nil
 }
 
 func (d *DryRunDriver) LoadPrivateKey(_ context.Context, id string, key []byte, algorithm string) error {

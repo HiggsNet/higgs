@@ -102,6 +102,7 @@ type daemonEvent struct {
 	Zone         zone.ZonePath
 	Reason       string
 	Apply        bool
+	Orphans      bool
 	Packet       *gossip.Packet
 	SourcePeerID string
 	VICIEvent    ipsec.VICIEvent
@@ -118,17 +119,18 @@ type daemonRecordPut struct {
 }
 
 type daemonEventResult struct {
-	Version       uint64
-	CleanedLinks  int
-	Zone          zone.ZonePath
-	RootPublicKey []byte
-	JoinBundle    *joinBundle
-	PortRotate    *manualPortRotateResult
-	Records       int
-	Delegations   int
-	Revocations   int
-	Purge         *purgePlan
-	Error         error
+	Version        uint64
+	CleanedLinks   int
+	CleanedOrphans int
+	Zone           zone.ZonePath
+	RootPublicKey  []byte
+	JoinBundle     *joinBundle
+	PortRotate     *manualPortRotateResult
+	Records        int
+	Delegations    int
+	Revocations    int
+	Purge          *purgePlan
+	Error          error
 }
 
 func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
@@ -601,12 +603,12 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "config reloaded"})
 	case "ipsec_cleanup":
-		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecCleanup})
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecCleanup, Orphans: request.Orphans})
 		if result.Error != nil {
 			writeControlResponse(conn, controlError(result.Error))
 			return
 		}
-		writeControlResponse(conn, controlResponse{OK: true, CleanedLinks: result.CleanedLinks, Message: "ipsec links cleaned"})
+		writeControlResponse(conn, controlResponse{OK: true, CleanedLinks: result.CleanedLinks, CleanedOrphans: result.CleanedOrphans, Message: "ipsec links cleaned"})
 	case "ipsec_rotate_port":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecPortRotate})
 		if result.Error != nil {
@@ -848,11 +850,11 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		err := d.handleReloadConfigEvent()
 		return daemonEventResult{Error: err}, err == nil, false
 	case daemonEventIPsecCleanup:
-		cleaned, err := d.handleIPsecCleanupEvent(controlContext(event.Context))
+		cleaned, orphans, err := d.handleIPsecCleanupEvent(controlContext(event.Context), event.Orphans)
 		if err == nil {
 			d.ipsecDirty = true
 		}
-		return daemonEventResult{CleanedLinks: cleaned, Error: err}, false, false
+		return daemonEventResult{CleanedLinks: cleaned, CleanedOrphans: orphans, Error: err}, false, false
 	case daemonEventIPsecPortRotate:
 		result, err := d.handleIPsecPortRotateEvent()
 		return daemonEventResult{PortRotate: result, Error: err}, err == nil, false

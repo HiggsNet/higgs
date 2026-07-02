@@ -82,14 +82,17 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "cleanup-ipsec",
 				Usage:     "Tear down locally managed IPsec links",
-				UsageText: "higgs recovery cleanup-ipsec",
+				UsageText: "higgs recovery cleanup-ipsec [--orphans]",
 				Description: "Explicitly terminate Higgs-managed StrongSwan connections and delete their XFRM interfaces.\n" +
 					"This is intended for local recovery after system networking state becomes inconsistent.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "orphans", Usage: "Also terminate/unload Higgs-named StrongSwan connections not referenced by local state"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs recovery cleanup-ipsec", 1)
+						return cli.Exit("usage: higgs recovery cleanup-ipsec [--orphans]", 1)
 					}
-					return recoveryCleanupIPsec(ctx)
+					return recoveryCleanupIPsec(ctx, cmd.Bool("orphans"))
 				},
 			},
 			{

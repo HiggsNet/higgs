@@ -290,6 +290,51 @@ func parseSAStates(event map[string]any) []SAState {
 	return states
 }
 
+func parseConnectionStates(event map[string]any) []ConnectionState {
+	var states []ConnectionState
+	for name, raw := range event {
+		body, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		state := ConnectionState{Name: name}
+		local, _ := body["local"].(map[string]any)
+		remote, _ := body["remote"].(map[string]any)
+		state.LocalIdentity = firstString(body["local-id"], body["local_id"], local["id"])
+		state.RemoteIdentity = firstString(body["remote-id"], body["remote_id"], remote["id"])
+		state.RemoteEndpoint = firstConnectionRemoteEndpoint(body)
+		states = append(states, state)
+	}
+	return states
+}
+
+func firstConnectionRemoteEndpoint(body map[string]any) string {
+	host := firstString(body["remote-host"], body["remote_host"])
+	if host == "" {
+		host = firstStringFromList(body["remote_addrs"], body["remote-addrs"])
+	}
+	port := firstString(body["remote-port"], body["remote_port"])
+	return joinEndpoint(host, port)
+}
+
+func firstStringFromList(values ...any) string {
+	for _, value := range values {
+		switch v := value.(type) {
+		case []string:
+			if len(v) > 0 {
+				return v[0]
+			}
+		case []any:
+			if len(v) > 0 {
+				if s := stringValue(v[0]); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func strongSwanSAEstablished(ikeState, childState string) bool {
 	return strings.EqualFold(ikeState, "ESTABLISHED") || strings.EqualFold(childState, "INSTALLED")
 }

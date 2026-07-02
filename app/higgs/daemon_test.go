@@ -3802,12 +3802,15 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	cleaned, err := recoveryCleanupIPsecDirect(context.Background(), rt)
+	cleaned, orphans, err := recoveryCleanupIPsecDirect(context.Background(), rt, false)
 	if err != nil {
 		t.Fatalf("recoveryCleanupIPsecDirect: %v", err)
 	}
 	if cleaned != 0 {
 		t.Fatalf("cleaned = %d, want 0", cleaned)
+	}
+	if orphans != 0 {
+		t.Fatalf("orphans = %d, want 0", orphans)
 	}
 	latest, err := rt.LoadState()
 	if err != nil {
@@ -3815,6 +3818,42 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	}
 	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastRunUnix != now.Unix() {
 		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp", latest.IPsecReconcile)
+	}
+}
+
+func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedHiggsConnections(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	now := time.Unix(5111, 0)
+	spec := ipsec.TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "main",
+		TransportID:   "ipsec-managed",
+		InterfaceName: "hgs-managed",
+		XFRMIfID:      5111,
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	driver := &ipsec.DryRunDriver{
+		LoadedConnections: []ipsec.ConnectionState{
+			{Name: "ipsec-managed"},
+			{Name: "ipsec-orphan-r3"},
+			{Name: "manual-vpn"},
+		},
+	}
+
+	cleaned, err := cleanupIPsecOrphanConnections(context.Background(), state, driver)
+	if err != nil {
+		t.Fatalf("cleanupIPsecOrphanConnections: %v", err)
+	}
+	if cleaned != 1 {
+		t.Fatalf("cleaned = %d, want 1", cleaned)
+	}
+	if len(driver.Terminated) != 1 || driver.Terminated[0] != "ipsec-orphan-r3" {
+		t.Fatalf("terminated = %+v, want orphan only", driver.Terminated)
+	}
+	if len(driver.Unloaded) != 1 || driver.Unloaded[0] != "ipsec-orphan-r3" {
+		t.Fatalf("unloaded = %+v, want orphan only", driver.Unloaded)
 	}
 }
 
@@ -3878,6 +3917,43 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 	if len(driver.Connections) != 1 || driver.Connections[0].TransportID != spec.TransportID || len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName {
 		t.Fatalf("driver recreate: connections=%+v interfaces=%+v", driver.Connections, driver.Interfaces)
+	}
+}
+
+func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.LinkInstances = nil
+	now := time.Unix(5112, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &ipsec.DryRunDriver{
+		LoadedConnections: []ipsec.ConnectionState{{Name: "ipsec-orphan-r3"}},
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	reply := make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Orphans: true, Reply: reply}
+	_, _, ipsecFlushed, _, _ := service.processEvents(context.Background())
+	result := <-reply
+	if result.Error != nil {
+		t.Fatalf("processEvents(ipsec_cleanup --orphans): %v", result.Error)
+	}
+	if result.CleanedLinks != 0 || result.CleanedOrphans != 1 {
+		t.Fatalf("result = %+v, want one orphan only", result)
+	}
+	if !ipsecFlushed {
+		t.Fatal("ipsec cleanup did not flush reconcile")
+	}
+	if len(driver.Terminated) != 1 || driver.Terminated[0] != "ipsec-orphan-r3" || len(driver.Unloaded) != 1 || driver.Unloaded[0] != "ipsec-orphan-r3" {
+		t.Fatalf("driver cleanup: terminated=%+v unloaded=%+v", driver.Terminated, driver.Unloaded)
 	}
 }
 

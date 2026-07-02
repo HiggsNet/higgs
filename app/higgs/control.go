@@ -54,6 +54,7 @@ type controlRequest struct {
 	Permissions []zone.Permission    `json:"permissions,omitempty"`
 	Snapshot    *gossip.ZoneSnapshot `json:"snapshot,omitempty"`
 	Apply       bool                 `json:"apply,omitempty"`
+	Orphans     bool                 `json:"orphans,omitempty"`
 }
 
 type controlResponse struct {
@@ -62,6 +63,7 @@ type controlResponse struct {
 	PeerID            string                        `json:"peer_id,omitempty"`
 	LinkInstances     int                           `json:"link_instances,omitempty"`
 	CleanedLinks      int                           `json:"cleaned_links,omitempty"`
+	CleanedOrphans    int                           `json:"cleaned_orphans,omitempty"`
 	DesiredLinks      int                           `json:"desired_links,omitempty"`
 	LastLinkError     string                        `json:"last_link_error,omitempty"`
 	LastRoutingError  string                        `json:"last_routing_error,omitempty"`

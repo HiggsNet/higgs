@@ -5,83 +5,99 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
-func recoveryCleanupIPsec(ctx context.Context) error {
+func recoveryCleanupIPsec(ctx context.Context, includeOrphans bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	if response, ok, err := cleanupIPsecViaControl(rt); err != nil {
+	if response, ok, err := cleanupIPsecViaControl(rt, includeOrphans); err != nil {
 		return err
 	} else if ok {
-		fmt.Printf("cleaned %d ipsec link(s) via daemon\n", response.CleanedLinks)
+		fmt.Printf("cleaned %d ipsec link(s), %d orphan connection(s) via daemon\n", response.CleanedLinks, response.CleanedOrphans)
 		return nil
 	}
-	cleaned, err := recoveryCleanupIPsecDirect(ctx, rt)
+	cleaned, orphans, err := recoveryCleanupIPsecDirect(ctx, rt, includeOrphans)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("cleaned %d ipsec link(s) directly\n", cleaned)
+	fmt.Printf("cleaned %d ipsec link(s), %d orphan connection(s) directly\n", cleaned, orphans)
 	return nil
 }
 
-func cleanupIPsecViaControl(rt *Runtime) (*controlResponse, bool, error) {
+func cleanupIPsecViaControl(rt *Runtime, includeOrphans bool) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "ipsec_cleanup"})
+	response, err := sendControlRequest(path, controlRequest{Method: "ipsec_cleanup", Orphans: includeOrphans})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}
 	return response, true, err
 }
 
-func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime) (int, error) {
+func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans bool) (int, int, error) {
 	if rt == nil {
-		return 0, errors.New("runtime is nil")
+		return 0, 0, errors.New("runtime is nil")
 	}
 	state, err := rt.LoadState()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	state.Lock()
 	defer state.Unlock()
-	if len(state.LinkInstances) == 0 {
+	if len(state.LinkInstances) == 0 && !includeOrphans {
 		markIPsecCleanupSnapshot(state, rt.Now())
 		if err := rt.SaveState(state); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
-		return 0, nil
+		return 0, 0, nil
 	}
 	drivers, err := newIPsecCleanupDrivers(rt.Config)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if drivers.close != nil {
 		defer func() { _ = drivers.close() }()
 	}
-	cleaned, err := cleanupIPsecLinkInstances(ctx, state, drivers.ipsecDriver, drivers.xfrmDriver, rt.Now())
+	cleaned := 0
+	if len(state.LinkInstances) > 0 {
+		cleaned, err = cleanupIPsecLinkInstances(ctx, state, drivers.ipsecDriver, drivers.xfrmDriver, rt.Now())
+		if err != nil {
+			return cleaned, 0, err
+		}
+	} else {
+		markIPsecCleanupSnapshot(state, rt.Now())
+	}
+	orphans := 0
+	if includeOrphans {
+		orphans, err = cleanupIPsecOrphanConnections(ctx, state, drivers.ipsecDriver)
+		if err != nil {
+			return cleaned, orphans, err
+		}
+	}
 	if err != nil {
-		return cleaned, err
+		return cleaned, orphans, err
 	}
 	if err := rt.SaveState(state); err != nil {
-		return cleaned, err
+		return cleaned, orphans, err
 	}
-	return cleaned, nil
+	return cleaned, orphans, nil
 }
 
-func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context) (int, error) {
+func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrphans bool) (int, int, error) {
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.App == nil {
-		return 0, errors.New("daemon service is not initialized")
+		return 0, 0, errors.New("daemon service is not initialized")
 	}
-	if len(d.Sync.State.LinkInstances) == 0 {
+	if len(d.Sync.State.LinkInstances) == 0 && !includeOrphans {
 		markIPsecCleanupSnapshot(d.Sync.State, d.Sync.now())
 		if err := d.Sync.saveState(); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
-		return 0, nil
+		return 0, 0, nil
 	}
 	ipsecDriver := d.IPsecDriver
 	xfrmDriver := d.XFRMDriver
@@ -89,7 +105,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context) (int, error
 	if ipsecDriver == nil || xfrmDriver == nil {
 		drivers, err := newIPsecCleanupDrivers(d.Sync.App.Config)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		ipsecDriver = drivers.ipsecDriver
 		xfrmDriver = drivers.xfrmDriver
@@ -98,14 +114,27 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context) (int, error
 	if closeFn != nil {
 		defer func() { _ = closeFn() }()
 	}
-	cleaned, err := cleanupIPsecLinkInstances(ctx, d.Sync.State, ipsecDriver, xfrmDriver, d.Sync.now())
-	if err != nil {
-		return cleaned, err
+	cleaned := 0
+	var err error
+	if len(d.Sync.State.LinkInstances) > 0 {
+		cleaned, err = cleanupIPsecLinkInstances(ctx, d.Sync.State, ipsecDriver, xfrmDriver, d.Sync.now())
+		if err != nil {
+			return cleaned, 0, err
+		}
+	} else {
+		markIPsecCleanupSnapshot(d.Sync.State, d.Sync.now())
+	}
+	orphans := 0
+	if includeOrphans {
+		orphans, err = cleanupIPsecOrphanConnections(ctx, d.Sync.State, ipsecDriver)
+		if err != nil {
+			return cleaned, orphans, err
+		}
 	}
 	if err := d.Sync.saveState(); err != nil {
-		return cleaned, err
+		return cleaned, orphans, err
 	}
-	return cleaned, nil
+	return cleaned, orphans, nil
 }
 
 func newIPsecCleanupDrivers(config *appConfig) (configuredIPsecDrivers, error) {
@@ -206,6 +235,51 @@ func cleanupIPsecLinkInstancesByID(ctx context.Context, state *stateFile, ids []
 		markIPsecCleanupSnapshot(state, now)
 	}
 	return cleaned, nil
+}
+
+func cleanupIPsecOrphanConnections(ctx context.Context, state *stateFile, ipsecDriver ipsec.IPsecDriver) (int, error) {
+	lister, ok := ipsecDriver.(ipsec.ConnectionLister)
+	if !ok {
+		return 0, fmt.Errorf("ipsec driver does not support listing loaded connections")
+	}
+	conns, err := lister.ListConnections(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list ipsec connections: %w", err)
+	}
+	keep := managedIPsecConnectionNames(state)
+	cleaned := 0
+	for _, conn := range conns {
+		if !isHiggsIPsecConnectionName(conn.Name) || keep[conn.Name] {
+			continue
+		}
+		if err := ipsecDriver.TerminateSA(ctx, conn.Name); err != nil {
+			return cleaned, fmt.Errorf("terminate orphan ipsec connection %s: %w", conn.Name, err)
+		}
+		if err := ipsecDriver.UnloadConnection(ctx, conn.Name); err != nil {
+			return cleaned, fmt.Errorf("unload orphan ipsec connection %s: %w", conn.Name, err)
+		}
+		cleaned++
+	}
+	return cleaned, nil
+}
+
+func managedIPsecConnectionNames(state *stateFile) map[string]bool {
+	out := make(map[string]bool)
+	if state == nil {
+		return out
+	}
+	for _, inst := range linkInstancesToIPsec(state.LinkInstances) {
+		for _, name := range []string{inst.TransportID, inst.IKEName, inst.StagedIKEName} {
+			if name != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out
+}
+
+func isHiggsIPsecConnectionName(name string) bool {
+	return strings.HasPrefix(name, "ipsec-")
 }
 
 func markIPsecCleanupSnapshot(state *stateFile, now time.Time) {
