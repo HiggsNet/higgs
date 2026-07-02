@@ -822,6 +822,146 @@ func TestReconcileRecoversRotatedRuntimeMetadataFromSA(t *testing.T) {
 	}
 }
 
+func TestReconcileUpdatesWhenEstablishedSAEndpointPortIsStale(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		LinkID:        "link-stable",
+		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
+		InterfaceName: "hgs1",
+		XFRMIfID:      1001,
+		Generation:    1,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 1,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	existing := NewLinkInstance(spec, LinkStateUp, now)
+	existing.DesiredSpecHash = TransportLinkSpecHash(spec)
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{{
+			Name:           spec.TransportID,
+			ChildSA:        ChildSAName(spec),
+			XFRMIfID:       spec.XFRMIfID,
+			RemoteEndpoint: "198.51.100.20:14500",
+			Endpoint:       "198.51.100.20:14500",
+			Established:    true,
+		}},
+		Now: now,
+	})
+
+	action := firstAction(result, ReconcileActionUpdate)
+	if action == nil || action.Reason != "driver endpoint mismatch" {
+		t.Fatalf("actions = %+v, want update for stale endpoint port", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.ActualState != LinkStateConfiguring || inst.Endpoint != "198.51.100.20" {
+		t.Fatalf("instance = %+v, want reconfigured desired endpoint", inst)
+	}
+}
+
+func TestReconcileDoesNotAdoptEstablishedSAWithWrongRemoteIdentity(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-new.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		LinkID:        "link-stable",
+		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
+		InterfaceName: "hgs1",
+		XFRMIfID:      1001,
+		Generation:    1,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 1,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired: []TransportLinkSpec{spec},
+		SAs: []SAState{{
+			Name:           spec.TransportID,
+			ChildSA:        ChildSAName(spec),
+			XFRMIfID:       spec.XFRMIfID,
+			LocalIdentity:  string(spec.LocalZone),
+			RemoteIdentity: "node-old.catofes.",
+			Endpoint:       "198.51.100.20:4500",
+			Established:    true,
+		}},
+		Now: now,
+	})
+
+	action := firstAction(result, ReconcileActionCreate)
+	if action == nil || action.Reason != "missing instance" {
+		t.Fatalf("actions = %+v, want create instead of adopting wrong identity", result.Actions)
+	}
+	inst := result.Instances[LinkInstanceID(spec)]
+	if inst.ActualState != LinkStateConfiguring {
+		t.Fatalf("instance = %+v, want configuring", inst)
+	}
+}
+
+func TestReconcileUpdatesWhenEstablishedSAIdentityIsStale(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-new.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		LinkID:        "link-stable",
+		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
+		InterfaceName: "hgs1",
+		XFRMIfID:      1001,
+		Generation:    1,
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 1,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	existing := NewLinkInstance(spec, LinkStateUp, now)
+	existing.DesiredSpecHash = TransportLinkSpecHash(spec)
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{{
+			Name:           spec.TransportID,
+			ChildSA:        ChildSAName(spec),
+			XFRMIfID:       spec.XFRMIfID,
+			LocalIdentity:  string(spec.LocalZone),
+			RemoteIdentity: "node-old.catofes.",
+			Endpoint:       "198.51.100.20:4500",
+			Established:    true,
+		}},
+		Now: now,
+	})
+
+	action := firstAction(result, ReconcileActionUpdate)
+	if action == nil || action.Reason != "driver identity mismatch" {
+		t.Fatalf("actions = %+v, want update for stale identity", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.ActualState != LinkStateConfiguring {
+		t.Fatalf("instance = %+v, want configuring", inst)
+	}
+}
+
 func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

@@ -169,6 +169,45 @@ func cleanupIPsecLinkInstances(ctx context.Context, state *stateFile, ipsecDrive
 	return cleaned, nil
 }
 
+func cleanupIPsecLinkInstancesByID(ctx context.Context, state *stateFile, ids []string, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver, now time.Time) (int, error) {
+	if state == nil {
+		return 0, errors.New("state is nil")
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if ipsecDriver == nil {
+		return 0, errors.New("ipsec driver is nil")
+	}
+	if xfrmDriver == nil {
+		return 0, errors.New("xfrm driver is nil")
+	}
+	instances := linkInstancesToIPsec(state.LinkInstances)
+	sortedIDs := append([]string(nil), ids...)
+	sort.Strings(sortedIDs)
+	cleaned := 0
+	for _, id := range sortedIDs {
+		inst, ok := instances[id]
+		if !ok {
+			continue
+		}
+		if err := inst.Owner.Validate(inst); err != nil {
+			return cleaned, fmt.Errorf("refuse cleanup of unmanaged ipsec link %s: %w", id, err)
+		}
+		action := ipsec.ReconcileAction{Action: ipsec.ReconcileActionTeardown, Instance: &inst}
+		if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, ipsec.NetNSSpec{}); err != nil {
+			return cleaned, fmt.Errorf("cleanup ipsec link %s: %w", id, err)
+		}
+		delete(instances, id)
+		cleaned++
+	}
+	state.LinkInstances = linkInstancesFromIPsec(instances)
+	if cleaned > 0 {
+		markIPsecCleanupSnapshot(state, now)
+	}
+	return cleaned, nil
+}
+
 func markIPsecCleanupSnapshot(state *stateFile, now time.Time) {
 	if state.IPsecReconcile == nil {
 		state.IPsecReconcile = &ipsecReconcileState{}

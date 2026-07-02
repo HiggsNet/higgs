@@ -111,7 +111,7 @@ func cmdRecovery() *cli.Command {
 					if cmd.Args().Len() != 0 {
 						return cli.Exit("usage: higgs recovery purge-revoked [--zone <zone>] [--apply]", 1)
 					}
-					return recoveryPurgeRevoked(cmd.Bool("apply"), zone.ZonePath(cmd.String("zone")))
+					return recoveryPurgeRevoked(ctx, cmd.Bool("apply"), zone.ZonePath(cmd.String("zone")))
 				},
 			},
 		},
@@ -339,7 +339,7 @@ func validateRecoveryRootSnapshot(rt *Runtime, state *stateFile, snapshot *gossi
 	return nil
 }
 
-func recoveryPurgeRevoked(apply bool, target zone.ZonePath) error {
+func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -369,6 +369,9 @@ func recoveryPurgeRevoked(apply bool, target zone.ZonePath) error {
 		return err
 	}
 	if apply {
+		if err := cleanupPurgePlanIPsecLinks(ctx, rt, state, plan); err != nil {
+			return err
+		}
 		executePurgePlan(state, plan)
 		if err := rt.SaveState(state); err != nil {
 			return err
@@ -379,6 +382,24 @@ func recoveryPurgeRevoked(apply bool, target zone.ZonePath) error {
 		fmt.Println("(dry-run; pass --apply to delete)")
 	}
 	return nil
+}
+
+func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *Runtime, state *stateFile, plan *purgePlan) error {
+	if plan == nil || len(plan.LinkInstances) == 0 {
+		return nil
+	}
+	if rt == nil {
+		return errors.New("runtime is nil")
+	}
+	drivers, err := newIPsecCleanupDrivers(rt.Config)
+	if err != nil {
+		return err
+	}
+	if drivers.close != nil {
+		defer func() { _ = drivers.close() }()
+	}
+	_, err = cleanupIPsecLinkInstancesByID(ctx, state, plan.LinkInstances, drivers.ipsecDriver, drivers.xfrmDriver, rt.Now())
+	return err
 }
 
 func purgePlanSuffix(apply bool) string {

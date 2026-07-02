@@ -818,7 +818,7 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		err := d.handleDelegateRevokeEvent(event.Zone, event.Reason)
 		return daemonEventResult{Zone: event.Zone, Error: err}, err == nil, false
 	case daemonEventRecoveryPurgeRevoked:
-		plan, err := d.handleRecoveryPurgeRevokedEvent(event.Zone, event.Apply)
+		plan, err := d.handleRecoveryPurgeRevokedEvent(controlContext(event.Context), event.Zone, event.Apply)
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
@@ -1010,7 +1010,7 @@ func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason str
 // computes the plan (returned for reporting); when apply is true it also
 // executes the deletions, persists, and notifies subsystems so the running node
 // reconciles (e.g. tears down orphaned IPsec for removed link instances).
-func (d *DaemonService) handleRecoveryPurgeRevokedEvent(target zone.ZonePath, apply bool) (*purgePlan, error) {
+func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zone.ZonePath, apply bool) (*purgePlan, error) {
 	latest, err := d.Sync.loadState()
 	if err != nil {
 		return nil, err
@@ -1023,6 +1023,9 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(target zone.ZonePath, ap
 	if !apply {
 		return plan, nil
 	}
+	if err := d.cleanupPurgePlanIPsecLinks(ctx, plan); err != nil {
+		return nil, err
+	}
 	executePurgePlan(d.Sync.State, plan)
 	if err := d.Sync.saveState(); err != nil {
 		return nil, err
@@ -1032,6 +1035,32 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(target zone.ZonePath, ap
 	}
 	d.notifyStateChanged()
 	return plan, nil
+}
+
+func (d *DaemonService) cleanupPurgePlanIPsecLinks(ctx context.Context, plan *purgePlan) error {
+	if plan == nil || len(plan.LinkInstances) == 0 {
+		return nil
+	}
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.App == nil {
+		return errors.New("daemon service is not initialized")
+	}
+	ipsecDriver := d.IPsecDriver
+	xfrmDriver := d.XFRMDriver
+	var closeFn func() error
+	if ipsecDriver == nil || xfrmDriver == nil {
+		drivers, err := newIPsecCleanupDrivers(d.Sync.App.Config)
+		if err != nil {
+			return err
+		}
+		ipsecDriver = drivers.ipsecDriver
+		xfrmDriver = drivers.xfrmDriver
+		closeFn = drivers.close
+	}
+	if closeFn != nil {
+		defer func() { _ = closeFn() }()
+	}
+	_, err := cleanupIPsecLinkInstancesByID(ctx, d.Sync.State, plan.LinkInstances, ipsecDriver, xfrmDriver, d.Sync.now())
+	return err
 }
 
 func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {

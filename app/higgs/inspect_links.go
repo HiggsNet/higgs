@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"sort"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -144,7 +145,10 @@ func plannedInspectDesiredLinks(rt *Runtime, state *stateFile) ([]inspect.Desire
 	if rt == nil || rt.Config == nil || state == nil || state.Network == nil || state.ManagedZone.IsRoot() || !state.ManagedZone.Valid() || len(rt.Config.IPsec.LinkGroups) == 0 {
 		return nil, specs, nil
 	}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: rt.Now()})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{
+		Now:         rt.Now(),
+		DNSResolver: net.DefaultResolver,
+	})
 	if err != nil {
 		return nil, specs, err
 	}

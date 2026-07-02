@@ -3702,6 +3702,68 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	}
 }
 
+func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(5101, 0)
+	addRevocationTombstoneForTest(t, state, "node-b.catofes.", "catofes.")
+	spec := ipsec.TransportLinkSpec{
+		LocalZone:     state.ManagedZone,
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "main",
+		TransportID:   "ipsec-purge-revoked",
+		InterfaceName: "hgs-purge0",
+		XFRMIfID:      5101,
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	state.SyncPeers = map[string]syncPeerState{"node-b.catofes.": {}}
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &ipsec.DryRunDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("handleRecoveryPurgeRevokedEvent: %v", err)
+	}
+	if len(plan.LinkInstances) != 1 || plan.LinkInstances[0] != inst.ID {
+		t.Fatalf("plan link instances = %+v, want %s", plan.LinkInstances, inst.ID)
+	}
+	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID {
+		t.Fatalf("terminated = %+v, want %s", driver.Terminated, spec.TransportID)
+	}
+	if len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID {
+		t.Fatalf("unloaded = %+v, want %s", driver.Unloaded, spec.TransportID)
+	}
+	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
+		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if latest.Network.Zones["node-b.catofes."] != nil {
+		t.Fatalf("revoked zone still present after purge")
+	}
+	if _, ok := latest.LinkInstances[inst.ID]; ok {
+		t.Fatalf("revoked link instance still present after purge")
+	}
+	if _, ok := latest.SyncPeers["node-b.catofes."]; ok {
+		t.Fatalf("revoked sync peer still present after purge")
+	}
+	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastRunUnix != now.Unix() {
+		t.Fatalf("ipsec cleanup snapshot = %+v, want timestamp", latest.IPsecReconcile)
+	}
+}
+
 func TestMarkIPsecActionSucceededKeepsSecondaryStandbyDownAfterUpdate(t *testing.T) {
 	now := time.Unix(5102, 0)
 	spec := ipsec.TransportLinkSpec{

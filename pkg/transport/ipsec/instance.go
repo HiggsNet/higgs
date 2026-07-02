@@ -338,6 +338,9 @@ func findStagedSA(states []SAState, inst LinkInstance) SAState {
 		if !saMatchesPathKey(state, inst.PathKey) {
 			continue
 		}
+		if !saIdentityMatchesInstance(state, inst) {
+			continue
+		}
 		if state.Name == inst.StagedIKEName || state.ChildSA == inst.StagedChildSAName {
 			return state
 		}
@@ -395,6 +398,9 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			if !sa.Established {
 				sa = findMatchingSA(in.SAs, spec)
 			}
+			if sa.Established && !saIdentityMatchesSpec(sa, spec) {
+				sa = SAState{}
+			}
 			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, in.GroupBackoff, in.GroupRotateRetention, in.RotateCutoverReady, now)
 			continue
 		}
@@ -444,6 +450,32 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 				}
 				result.add(ReconcileActionCleanupRotate, &oldSpec, &inst, "old rotated connection after spec update")
 			}
+			continue
+		}
+		if sa.Established && !saIdentityMatchesSpec(sa, spec) {
+			if inLinkBackoff(existing, now) {
+				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
+				continue
+			}
+			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
+			inst.FailureCount = existing.FailureCount
+			inst.BackoffUntil = existing.BackoffUntil
+			inst.LastError = existing.LastError
+			result.Instances[id] = inst
+			result.add(ReconcileActionUpdate, &spec, &inst, "driver identity mismatch")
+			continue
+		}
+		if sa.Established && !saEndpointMatchesSpec(sa, spec) {
+			if inLinkBackoff(existing, now) {
+				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
+				continue
+			}
+			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
+			inst.FailureCount = existing.FailureCount
+			inst.BackoffUntil = existing.BackoffUntil
+			inst.LastError = existing.LastError
+			result.Instances[id] = inst
+			result.add(ReconcileActionUpdate, &spec, &inst, "driver endpoint mismatch")
 			continue
 		}
 		if sa.Established && existing.ActualState != LinkStateUp {
@@ -873,6 +905,38 @@ func instanceRuntimeChanged(a, b LinkInstance) bool {
 		a.Endpoint != b.Endpoint
 }
 
+func saEndpointMatchesSpec(sa SAState, spec TransportLinkSpec) bool {
+	endpoint := firstNonEmptyString(sa.RemoteEndpoint, sa.Endpoint)
+	if endpoint == "" || len(spec.ContactPoints) == 0 {
+		return true
+	}
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return true
+	}
+	for _, point := range spec.ContactPoints {
+		if !contactHostMatches(host, point) {
+			continue
+		}
+		if portMatchesContactPoint(port, point) {
+			return true
+		}
+	}
+	return false
+}
+
+func contactHostMatches(host string, point ContactPoint) bool {
+	if point.Address != "" && host == point.Address {
+		return true
+	}
+	return point.Host != "" && host == point.Host
+}
+
+func portMatchesContactPoint(port string, point ContactPoint) bool {
+	return (point.NATTPort != 0 && port == fmt.Sprintf("%d", point.NATTPort)) ||
+		(point.IKEPort != 0 && port == fmt.Sprintf("%d", point.IKEPort))
+}
+
 func nextLinkBackoff(policy BackoffPolicy, failureCount int) time.Duration {
 	if failureCount < 1 {
 		failureCount = 1
@@ -1194,6 +1258,9 @@ func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 		if !saMatchesPathKey(state, spec.PathKey) {
 			continue
 		}
+		if !saIdentityMatchesSpec(state, spec) {
+			continue
+		}
 		if state.Name == spec.TransportID || state.ChildSA == childName || (spec.XFRMIfID != 0 && state.XFRMIfID == spec.XFRMIfID) {
 			return state
 		}
@@ -1223,6 +1290,23 @@ func saMatchesPathKey(sa SAState, pathKey string) bool {
 	}
 	endpointFamily := saEndpointFamily(sa)
 	return endpointFamily == "" || endpointFamily == family
+}
+
+func saIdentityMatchesSpec(sa SAState, spec TransportLinkSpec) bool {
+	if sa.RemoteIdentity != "" && spec.PeerZone != "" && sa.RemoteIdentity != string(spec.PeerZone) {
+		return false
+	}
+	if sa.LocalIdentity != "" && spec.LocalZone != "" && sa.LocalIdentity != string(spec.LocalZone) {
+		return false
+	}
+	return true
+}
+
+func saIdentityMatchesInstance(sa SAState, inst LinkInstance) bool {
+	if sa.RemoteIdentity != "" && inst.PeerZone != "" && sa.RemoteIdentity != string(inst.PeerZone) {
+		return false
+	}
+	return true
 }
 
 func pathKeyFamily(pathKey string) string {
