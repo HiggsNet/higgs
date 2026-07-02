@@ -4006,6 +4006,68 @@ func TestDaemonControlStatus(t *testing.T) {
 	}
 }
 
+func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-1": {
+			ID:            "link-1",
+			GroupID:       "main",
+			PeerZone:      "node-b.catofes.",
+			TransportKind: "ipsec",
+			LinkID:        "stable-link",
+			TransportID:   "runtime-r3",
+			ActualState:   "up",
+			InterfaceName: "hgsabc123",
+			XFRMIfID:      42,
+			IKEName:       "runtime-r3",
+			ChildSAName:   "runtime-r3-child",
+			Endpoint:      "198.51.100.2:4500",
+		},
+	}
+	state.IPsecReconcile = &ipsecReconcileState{
+		LastRunUnix:  1234,
+		DesiredLinks: 1,
+		Desired: []desiredLinkState{{
+			InstanceID:      "link-1",
+			GroupID:         "main",
+			PeerZone:        "node-b.catofes.",
+			LinkID:          "stable-link",
+			TransportID:     "runtime-r3",
+			DesiredSpecHash: "desired-hash",
+			InterfaceName:   "hgsabc123",
+			XFRMIfID:        42,
+			Endpoint:        "203.0.113.9:33403",
+			LocalTunnelAddr: "fd00::1%hgsabc123",
+			PeerTunnelAddr:  "fd00::2%hgsabc123",
+		}},
+		ActualSAs: []linkSAState{{
+			Name:           "runtime-r3",
+			ChildSA:        "runtime-r3-child",
+			RemoteEndpoint: "203.0.113.9:33403",
+			Established:    true,
+		}},
+	}
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+
+	response := controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
+	if !response.OK || response.Links == nil {
+		t.Fatalf("links_status response = %#v", response)
+	}
+	if response.Links.DesiredPlanSource != "last_reconcile" || response.Links.ReplannedDesired != 1 {
+		t.Fatalf("links_status source/count = %q/%d, want last_reconcile/1", response.Links.DesiredPlanSource, response.Links.ReplannedDesired)
+	}
+	if len(response.Links.ActualSAs) != 1 {
+		t.Fatalf("links_status actual_sas = %d, want 1", len(response.Links.ActualSAs))
+	}
+	links := response.Links.Inspection.Links
+	if len(links) != 1 || links[0].Desired == nil {
+		t.Fatalf("links_status links = %+v, want desired snapshot", links)
+	}
+	if got := links[0].Desired.Endpoint; got != "203.0.113.9:33403" {
+		t.Fatalf("links_status desired endpoint = %q, want reconcile snapshot endpoint", got)
+	}
+}
+
 func TestDaemonControlRecordGet(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	record, err := buildSignedRecordAt(state, "node-b.catofes.", "site/name", []byte(`{"name":"node-b"}`), "policy.json", time.Unix(1000, 0))

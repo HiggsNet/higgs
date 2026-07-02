@@ -126,6 +126,18 @@ func cmdIPAM() *cli.Command {
 					return listIPAMAssignments(zone.ZonePath(cmd.String("zone")))
 				},
 			},
+			{
+				Name:        "mine",
+				Usage:       "Show IPAM prefixes and pools for the local managed zone",
+				UsageText:   "higgs ipam mine",
+				Description: "Print the local managed zone's authorized IPAM assignments and usable pools as JSON.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs ipam mine", 1)
+					}
+					return showLocalIPAM()
+				},
+			},
 		},
 	}
 }
@@ -471,4 +483,138 @@ func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error
 	}
 	fmt.Println(string(out))
 	return nil
+}
+
+func showLocalIPAM() error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	return showLocalIPAMWithRuntime(rt)
+}
+
+func showLocalIPAMWithRuntime(rt *Runtime) error {
+	report, err := buildIPAMMineReport(rt)
+	if err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
+type ipamMineReport struct {
+	ManagedZone string                  `json:"managed_zone"`
+	Assignments []ipamMineAssignmentRow `json:"assignments"`
+	Pools       []ipamMinePoolRow       `json:"pools"`
+}
+
+type ipamMineAssignmentRow struct {
+	Prefix string `json:"prefix"`
+	Source string `json:"source"`
+	Shared bool   `json:"shared,omitempty"`
+}
+
+type ipamMinePoolRow struct {
+	Prefix      string   `json:"prefix"`
+	Source      string   `json:"source"`
+	DelegatedTo string   `json:"delegated_to"`
+	Relation    []string `json:"relation"`
+}
+
+func buildIPAMMineReport(rt *Runtime) (*ipamMineReport, error) {
+	state, err := rt.LoadState()
+	if err != nil {
+		return nil, err
+	}
+	if state.ManagedZone == "" || !state.ManagedZone.Valid() {
+		return nil, fmt.Errorf("managed_zone is not set")
+	}
+	if state.Network == nil {
+		return nil, fmt.Errorf("network state is nil")
+	}
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if err != nil {
+		return nil, err
+	}
+
+	managed := state.ManagedZone
+	report := &ipamMineReport{
+		ManagedZone: string(managed),
+		Assignments: []ipamMineAssignmentRow{},
+		Pools:       []ipamMinePoolRow{},
+	}
+	for _, entry := range ars.AllAssignments {
+		if entry.AssignedTo != managed {
+			continue
+		}
+		report.Assignments = append(report.Assignments, ipamMineAssignmentRow{
+			Prefix: entry.Prefix.String(),
+			Source: string(entry.Source),
+			Shared: entry.Shared,
+		})
+	}
+	for _, entry := range ars.Pools {
+		relation := localIPAMPoolRelation(entry, managed)
+		if len(relation) == 0 {
+			continue
+		}
+		report.Pools = append(report.Pools, ipamMinePoolRow{
+			Prefix:      entry.Prefix.String(),
+			Source:      string(entry.Source),
+			DelegatedTo: string(entry.DelegatedTo),
+			Relation:    relation,
+		})
+	}
+	sort.Slice(report.Assignments, func(i, j int) bool {
+		return comparePrefixStrings(report.Assignments[i].Prefix, report.Assignments[j].Prefix) < 0
+	})
+	sort.Slice(report.Pools, func(i, j int) bool {
+		if cmp := comparePrefixStrings(report.Pools[i].Prefix, report.Pools[j].Prefix); cmp != 0 {
+			return cmp < 0
+		}
+		if report.Pools[i].Source != report.Pools[j].Source {
+			return report.Pools[i].Source < report.Pools[j].Source
+		}
+		return report.Pools[i].DelegatedTo < report.Pools[j].DelegatedTo
+	})
+	return report, nil
+}
+
+func localIPAMPoolRelation(entry *routing.PoolEntry, managed zone.ZonePath) []string {
+	if entry == nil {
+		return nil
+	}
+	var relation []string
+	if entry.Source == managed {
+		relation = append(relation, "published_by_managed_zone")
+	}
+	if entry.DelegatedTo == managed {
+		relation = append(relation, "delegated_to_managed_zone")
+	}
+	if routing.IsZoneAncestor(entry.DelegatedTo, managed) {
+		relation = append(relation, "usable_by_managed_zone")
+	}
+	return relation
+}
+
+func comparePrefixStrings(a, b string) int {
+	pa, errA := netip.ParsePrefix(a)
+	pb, errB := netip.ParsePrefix(b)
+	if errA != nil || errB != nil {
+		return strings.Compare(a, b)
+	}
+	if cmp := strings.Compare(pa.Addr().String(), pb.Addr().String()); cmp != 0 {
+		return cmp
+	}
+	if pa.Bits() < pb.Bits() {
+		return -1
+	}
+	if pa.Bits() > pb.Bits() {
+		return 1
+	}
+	return 0
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -61,6 +62,22 @@ func debugRotate(ctx context.Context, filter string) error {
 	if err != nil {
 		return err
 	}
+	if response, ok, err := linksStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		if response.Links == nil {
+			return errors.New("daemon links_status response missing links")
+		}
+		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d last_link_error=%s\n",
+			response.PeerID,
+			response.Links.Inspection.Summary.LinkInstances,
+			response.Links.Inspection.Summary.DesiredLinks,
+			dash(response.Links.Inspection.Summary.LastError),
+		)
+		build := linkInspectionBuildFromControl(response.Links)
+		storedSAs := append([]linkSAState(nil), response.Links.ActualSAs...)
+		return writeDebugRotateFromBuild(os.Stdout, build, filter, storedSAs, nil, nil, "daemon_sas", "direct_live_sas")
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -90,11 +107,15 @@ func debugRotate(ctx context.Context, filter string) error {
 
 func writeDebugRotate(w io.Writer, rt *Runtime, state *stateFile, filter string, liveSAs []linkSAState, liveErr error) error {
 	build := buildLinkInspection(rt, state, nil)
-	links := filterLinkViews(build.Inspection.Links, filter)
 	storedSAs := []linkSAState(nil)
 	if state != nil && state.IPsecReconcile != nil {
 		storedSAs = state.IPsecReconcile.ActualSAs
 	}
+	return writeDebugRotateFromBuild(w, build, filter, storedSAs, liveSAs, liveErr, "stored_sas", "live_sas")
+}
+
+func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter string, storedSAs, liveSAs []linkSAState, liveErr error, storedLabel, liveLabel string) error {
+	links := filterLinkViews(build.Inspection.Links, filter)
 	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(build.Inspection.Summary.LastRunUnix))
 	fmt.Fprintf(w, "link_instances: %d\n", build.Inspection.Summary.LinkInstances)
 	fmt.Fprintf(w, "planned_desired_links: %d\n", build.ReplannedDesired)
@@ -106,8 +127,8 @@ func writeDebugRotate(w io.Writer, rt *Runtime, state *stateFile, filter string,
 		fmt.Fprintf(w, "filter: %s\n", filter)
 		fmt.Fprintf(w, "matched_links: %d\n", len(links))
 	}
-	fmt.Fprintf(w, "stored_sas: %d\n", len(storedSAs))
-	fmt.Fprintf(w, "live_sas: %d\n", len(liveSAs))
+	fmt.Fprintf(w, "%s: %d\n", storedLabel, len(storedSAs))
+	fmt.Fprintf(w, "%s: %d\n", liveLabel, len(liveSAs))
 	if liveErr != nil {
 		fmt.Fprintf(w, "live_sa_error: %s\n", liveErr)
 	}

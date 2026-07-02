@@ -694,6 +694,25 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			FirewallReconcile: fwSnapshot,
 			Message:           "firewall status",
 		})
+	case "links_status":
+		state := d.currentState()
+		if state == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
+			return
+		}
+		state.RLock()
+		build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
+		links := linkInspectionControlFromBuild(build)
+		if state.IPsecReconcile != nil {
+			links.ActualSAs = append([]linkSAState(nil), state.IPsecReconcile.ActualSAs...)
+		}
+		state.RUnlock()
+		writeControlResponse(conn, controlResponse{
+			OK:      true,
+			PeerID:  d.Sync.Config.PeerID,
+			Links:   links,
+			Message: "links status",
+		})
 	case "peers_status":
 		if d.currentState() == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))

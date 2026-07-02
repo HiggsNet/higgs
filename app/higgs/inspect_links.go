@@ -21,6 +21,24 @@ type linkInspectionBuild struct {
 }
 
 func buildLinkInspection(rt *Runtime, state *stateFile, health []healthLinkJSON) linkInspectionBuild {
+	return buildLinkInspectionWithOptions(rt, state, health, true, "live")
+}
+
+func buildLinkInspectionFromReconcile(rt *Runtime, state *stateFile, health []healthLinkJSON) linkInspectionBuild {
+	return buildLinkInspectionWithOptions(rt, state, health, false, "last_reconcile")
+}
+
+func linkInspectionControlFromBuild(build linkInspectionBuild) *linkInspectionControl {
+	return &linkInspectionControl{
+		Inspection:        build.Inspection,
+		ReplannedDesired:  build.ReplannedDesired,
+		ReplanIgnored:     build.ReplanIgnored,
+		LastDesiredLinks:  build.LastDesiredLinks,
+		DesiredPlanSource: build.DesiredPlanSource,
+	}
+}
+
+func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []healthLinkJSON, allowReplan bool, planSource string) linkInspectionBuild {
 	input := inspect.LinkInput{}
 	plannedSpecs := map[string]ipsec.TransportLinkSpec{}
 	if state == nil {
@@ -43,16 +61,24 @@ func buildLinkInspection(rt *Runtime, state *stateFile, health []healthLinkJSON)
 		inst := state.LinkInstances[id]
 		input.Instances = append(input.Instances, inspectLinkInstance(rt, state, inst))
 	}
-	planned, specs, planErr := plannedInspectDesiredLinks(rt, state)
-	replannedDesired := len(planned)
 	lastDesiredLinks := lastReconcileDesiredLinks(reconcile)
-	desiredPlanSource := "live"
-	replanIgnored := shouldIgnorePartialReplan(reconcile, replannedDesired, planErr)
-	if replanIgnored {
-		desiredPlanSource = "last_reconcile"
-	} else {
-		input.PlannedDesired = planned
-		plannedSpecs = specs
+	replannedDesired := lastDesiredLinks
+	desiredPlanSource := planSource
+	var replanIgnored bool
+	var planErr error
+	if allowReplan {
+		var planned []inspect.DesiredLink
+		var specs map[string]ipsec.TransportLinkSpec
+		planned, specs, planErr = plannedInspectDesiredLinks(rt, state)
+		replannedDesired = len(planned)
+		desiredPlanSource = "live"
+		replanIgnored = shouldIgnorePartialReplan(reconcile, replannedDesired, planErr)
+		if replanIgnored {
+			desiredPlanSource = "last_reconcile"
+		} else {
+			input.PlannedDesired = planned
+			plannedSpecs = specs
+		}
 	}
 	inspection := inspect.BuildLinks(input)
 	if planErr != nil {

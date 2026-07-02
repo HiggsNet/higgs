@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
@@ -76,6 +77,7 @@ type controlResponse struct {
 	RoutesDump        *routesDumpResponse           `json:"routes_dump,omitempty"`
 	Admission         *admissionDiagnosis           `json:"admission,omitempty"`
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
+	Links             *linkInspectionControl        `json:"links,omitempty"`
 	PeerStatuses      []PeerStatusInfo              `json:"peer_statuses,omitempty"`
 	RevocationImpact  []RevocationImpact            `json:"revocation_impact,omitempty"`
 	Health            []healthLinkJSON              `json:"health,omitempty"`
@@ -85,6 +87,15 @@ type controlResponse struct {
 	Delegations       int                           `json:"delegations,omitempty"`
 	Revocations       int                           `json:"revocations,omitempty"`
 	PurgePlan         *purgePlan                    `json:"purge_plan,omitempty"`
+}
+
+type linkInspectionControl struct {
+	Inspection        inspect.LinkInspection `json:"inspection"`
+	ReplannedDesired  int                    `json:"replanned_desired"`
+	ReplanIgnored     bool                   `json:"replan_ignored,omitempty"`
+	LastDesiredLinks  int                    `json:"last_desired_links,omitempty"`
+	DesiredPlanSource string                 `json:"desired_plan_source,omitempty"`
+	ActualSAs         []linkSAState          `json:"actual_sas,omitempty"`
 }
 
 // healthLinkJSON is the JSON representation of health.LinkHealth for the
@@ -231,6 +242,15 @@ func routesDumpViaControl(rt *Runtime) (*controlResponse, bool, error) {
 func admissionStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "admission_status"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "links_status"})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}

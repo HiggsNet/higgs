@@ -257,6 +257,45 @@ func TestListIPAMAssignments(t *testing.T) {
 	}
 }
 
+func TestBuildIPAMMineReport(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+
+	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", managed); err != nil {
+		t.Fatalf("createIPAMPool failed: %v", err)
+	}
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", managed, false); err != nil {
+		t.Fatalf("assignIPAM failed: %v", err)
+	}
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.2.0/24", "node.pek.catofes.", false); err != nil {
+		t.Fatalf("assignIPAM other failed: %v", err)
+	}
+
+	report, err := buildIPAMMineReport(rt)
+	if err != nil {
+		t.Fatalf("buildIPAMMineReport failed: %v", err)
+	}
+	if report.ManagedZone != string(managed) {
+		t.Fatalf("ManagedZone = %q, want %q", report.ManagedZone, managed)
+	}
+	if len(report.Assignments) != 1 {
+		t.Fatalf("Assignments len = %d, want 1: %+v", len(report.Assignments), report.Assignments)
+	}
+	if report.Assignments[0].Prefix != "10.0.1.0/24" || report.Assignments[0].Source != string(managed) {
+		t.Fatalf("Assignments[0] = %+v, want local 10.0.1.0/24", report.Assignments[0])
+	}
+	if len(report.Pools) != 1 {
+		t.Fatalf("Pools len = %d, want 1: %+v", len(report.Pools), report.Pools)
+	}
+	if report.Pools[0].Prefix != "10.0.0.0/16" || report.Pools[0].DelegatedTo != string(managed) {
+		t.Fatalf("Pools[0] = %+v, want local pool", report.Pools[0])
+	}
+	for _, want := range []string{"published_by_managed_zone", "delegated_to_managed_zone", "usable_by_managed_zone"} {
+		if !stringSliceContains(report.Pools[0].Relation, want) {
+			t.Fatalf("pool relation = %v, want %s", report.Pools[0].Relation, want)
+		}
+	}
+}
+
 func TestSharedAssignmentRoundTrip(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
@@ -303,6 +342,15 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 	if !assignment.Shared {
 		t.Fatalf("expected Shared=true preserved after revoke")
 	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func buildIPAMTestRuntime(t *testing.T) (*Runtime, zone.ZonePath) {

@@ -772,7 +772,7 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	}
 	state.RLock()
 	defer state.RUnlock()
-	build := buildLinkInspection(observerRuntime(d), state, d.healthStatusResponse())
+	build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
 	view := build.Inspection
 	// Single link detail
 	if linkFilter != "" {

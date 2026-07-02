@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -116,15 +117,19 @@ func debugLinks(filter string) error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := daemonStatusViaControl(rt); err != nil {
+	if response, ok, err := linksStatusViaControl(rt); err != nil {
 		return err
 	} else if ok {
+		if response.Links == nil {
+			return errors.New("daemon links_status response missing links")
+		}
 		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d last_link_error=%s\n",
 			response.PeerID,
-			response.LinkInstances,
-			response.DesiredLinks,
-			dash(response.LastLinkError),
+			response.Links.Inspection.Summary.LinkInstances,
+			response.Links.Inspection.Summary.DesiredLinks,
+			dash(response.Links.Inspection.Summary.LastError),
 		)
+		return writeDebugLinksFromBuild(os.Stdout, linkInspectionBuildFromControl(response.Links), filter)
 	}
 	state, err := rt.LoadState()
 	if err != nil {
@@ -135,6 +140,23 @@ func debugLinks(filter string) error {
 
 func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) error {
 	build := buildLinkInspection(rt, state, nil)
+	return writeDebugLinksFromBuild(w, build, filter)
+}
+
+func linkInspectionBuildFromControl(in *linkInspectionControl) linkInspectionBuild {
+	if in == nil {
+		return linkInspectionBuild{}
+	}
+	return linkInspectionBuild{
+		Inspection:        in.Inspection,
+		ReplannedDesired:  in.ReplannedDesired,
+		ReplanIgnored:     in.ReplanIgnored,
+		LastDesiredLinks:  in.LastDesiredLinks,
+		DesiredPlanSource: in.DesiredPlanSource,
+	}
+}
+
+func writeDebugLinksFromBuild(w io.Writer, build linkInspectionBuild, filter string) error {
 	view := build.Inspection
 	view.Links = filterLinkViews(view.Links, filter)
 	view.Actions = filterLinkActions(view.Actions, filter)
