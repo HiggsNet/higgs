@@ -142,16 +142,12 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 	}
 }
 
-func TestHealthTargetsDeriveRotateTunnelAddressesByGeneration(t *testing.T) {
+func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *testing.T) {
 	local := zone.ZonePath("node-a.catofes.")
 	peer := zone.ZonePath("node-b.catofes.")
 	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
 	linkID := "link-1"
 	pathKey := "family:ipv4"
-	oldLocal, oldPeer, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 1, 0)
-	if err != nil {
-		t.Fatalf("derive old tunnel addresses: %v", err)
-	}
 	newLocal, newPeer, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 2, 0)
 	if err != nil {
 		t.Fatalf("derive staged tunnel addresses: %v", err)
@@ -184,18 +180,8 @@ func TestHealthTargetsDeriveRotateTunnelAddressesByGeneration(t *testing.T) {
 	}
 
 	targets := healthTargetsFromState(state, string(local), []ipsec.LinkGroupSpec{group})
-	if len(targets) != 2 {
-		t.Fatalf("targets = %d, want 2", len(targets))
-	}
-	byRole := map[string]health.ProbeTarget{}
-	for _, target := range targets {
-		byRole[target.ProbeRole] = target
-	}
-	if old := byRole["old"]; old.InterfaceName != "hgs-old" || old.LocalTunnelAddr != oldLocal || old.PeerTunnelAddr != oldPeer {
-		t.Fatalf("old target = %+v, want iface hgs-old local=%s peer=%s", old, oldLocal, oldPeer)
-	}
-	if staged := byRole["staged"]; staged.InterfaceName != "hgs-new" || staged.LocalTunnelAddr != newLocal || staged.PeerTunnelAddr != newPeer {
-		t.Fatalf("staged target = %+v, want iface hgs-new local=%s peer=%s", staged, newLocal, newPeer)
+	if len(targets) != 0 {
+		t.Fatalf("targets = %+v, want no guessed rotate probes without persisted runtime tunnel addrs", targets)
 	}
 }
 

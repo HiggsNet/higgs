@@ -1488,6 +1488,7 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 				NetNS:           group.NetNS,
 				NamespaceExists: true,
 				InterfaceExists: true,
+				Addresses:       []netip.Prefix{netip.PrefixFrom(rotatedDesired.LocalTunnelAddr, 128)},
 			},
 		},
 	}
@@ -2274,11 +2275,15 @@ func (d *observedIPsecDriver) InspectLink(_ context.Context, spec ipsec.Transpor
 	if d.linkState != nil {
 		return *d.linkState, nil
 	}
-	return ipsec.XFRMLinkState{
+	state := ipsec.XFRMLinkState{
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: spec.NetNS}.Normalized(),
 		NamespaceExists: true,
 		InterfaceExists: true,
-	}, nil
+	}
+	if spec.LocalTunnelAddr.IsValid() {
+		state.Addresses = []netip.Prefix{netip.PrefixFrom(spec.LocalTunnelAddr, 128)}
+	}
+	return state, nil
 }
 
 func (d *observedIPsecDriver) FilterSAsWithMissingLinks(ctx context.Context, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
@@ -2288,7 +2293,7 @@ func (d *observedIPsecDriver) FilterSAsWithMissingLinks(ctx context.Context, des
 		if err != nil {
 			return nil, nil, err
 		}
-		if state.NamespaceExists && state.InterfaceExists {
+		if xfrmLinkStateMatchesCandidate(state, spec) {
 			continue
 		}
 		missing[ipsec.LinkInstanceID(spec)] = spec

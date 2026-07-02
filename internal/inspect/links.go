@@ -286,6 +286,12 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 		desiredCopy := desired
 		desiredPtr = &desiredCopy
 	}
+	localTunnel := inst.LocalTunnelAddr
+	peerTunnel := inst.PeerTunnelAddr
+	if linkInstanceMatchesDesiredRuntime(inst, desired) {
+		localTunnel = firstNonEmpty(localTunnel, desired.LocalTunnelAddr)
+		peerTunnel = firstNonEmpty(peerTunnel, desired.PeerTunnelAddr)
+	}
 	return LinkView{
 		ID:              inst.ID,
 		PeerZone:        inst.PeerZone,
@@ -299,8 +305,8 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 		Endpoint:        firstNonEmpty(inst.Endpoint, desired.Endpoint),
 		InterfaceName:   firstNonEmpty(inst.InterfaceName, desired.InterfaceName),
 		XFRMIfID:        firstNonZeroUint32(inst.XFRMIfID, desired.XFRMIfID),
-		LocalTunnelAddr: firstNonEmpty(inst.LocalTunnelAddr, desired.LocalTunnelAddr),
-		PeerTunnelAddr:  firstNonEmpty(inst.PeerTunnelAddr, desired.PeerTunnelAddr),
+		LocalTunnelAddr: localTunnel,
+		PeerTunnelAddr:  peerTunnel,
 		ChildSAName:     inst.ChildSAName,
 		DesiredSpecHash: firstNonEmpty(inst.DesiredSpecHash, desired.DesiredSpecHash),
 		Desired:         desiredPtr,
@@ -333,6 +339,19 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 		LastTransition: inst.LastTransition,
 		LastError:      inst.LastError,
 	}
+}
+
+func linkInstanceMatchesDesiredRuntime(inst LinkInstance, desired DesiredLink) bool {
+	if desired.InterfaceName != "" && inst.InterfaceName != "" && desired.InterfaceName != inst.InterfaceName {
+		return false
+	}
+	if desired.XFRMIfID != 0 && inst.XFRMIfID != 0 && desired.XFRMIfID != inst.XFRMIfID {
+		return false
+	}
+	if desired.TransportID != "" && inst.TransportID != "" && desired.TransportID != inst.TransportID {
+		return false
+	}
+	return true
 }
 
 func missingLinkFromDesired(desired DesiredLink) LinkView {

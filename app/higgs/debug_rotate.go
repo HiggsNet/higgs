@@ -203,8 +203,10 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, link.Desired.XFRMIfID)
 		out.Endpoint = firstNonEmpty(out.Endpoint, link.Desired.Endpoint)
 		out.Port = firstNonEmpty(out.Port, debugEndpointPort(link.Desired.Endpoint))
-		out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, link.Desired.LocalTunnelAddr)
-		out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, link.Desired.PeerTunnelAddr)
+		if rotateRuntimeMatchesDesired(out, *link.Desired) {
+			out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, link.Desired.LocalTunnelAddr)
+			out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, link.Desired.PeerTunnelAddr)
+		}
 	}
 	if spec != nil {
 		out.Generation = firstNonZeroUint64(out.Generation, spec.Generation)
@@ -214,10 +216,38 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 		out.InterfaceName = firstNonEmpty(out.InterfaceName, spec.InterfaceName)
 		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, spec.XFRMIfID)
 		out.Endpoint = firstNonEmpty(out.Endpoint, summarizeContactEndpoint(spec.ContactPoints))
-		out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
-		out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS))
+		if rotateRuntimeMatchesSpec(out, *spec) {
+			out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
+			out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS))
+		}
 	}
 	return out
+}
+
+func rotateRuntimeMatchesDesired(runtime rotateRuntimeView, desired inspect.DesiredLink) bool {
+	if desired.InterfaceName != "" && runtime.InterfaceName != "" && desired.InterfaceName != runtime.InterfaceName {
+		return false
+	}
+	if desired.XFRMIfID != 0 && runtime.XFRMIfID != 0 && desired.XFRMIfID != runtime.XFRMIfID {
+		return false
+	}
+	if desired.TransportID != "" && runtime.RuntimeID != "" && desired.TransportID != runtime.RuntimeID {
+		return false
+	}
+	return true
+}
+
+func rotateRuntimeMatchesSpec(runtime rotateRuntimeView, spec ipsec.TransportLinkSpec) bool {
+	if spec.InterfaceName != "" && runtime.InterfaceName != "" && spec.InterfaceName != runtime.InterfaceName {
+		return false
+	}
+	if spec.XFRMIfID != 0 && runtime.XFRMIfID != 0 && spec.XFRMIfID != runtime.XFRMIfID {
+		return false
+	}
+	if spec.TransportID != "" && runtime.RuntimeID != "" && spec.TransportID != runtime.RuntimeID {
+		return false
+	}
+	return true
 }
 
 func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, sas []linkSAState) rotateRuntimeView {

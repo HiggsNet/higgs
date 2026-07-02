@@ -37,11 +37,15 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 		LinkInstances: map[string]linkInstanceState{
 			"link-b": {ActualState: "up"},
 			"link-c": {
-				ActualState:         "up",
-				InterfaceName:       "hgs-old",
-				StagedGeneration:    2,
-				RotatePhase:         "testing_new",
-				StagedInterfaceName: "hgs-new",
+				ActualState:           "up",
+				InterfaceName:         "hgs-old",
+				LocalTunnelAddr:       "fd00::1",
+				PeerTunnelAddr:        "fd00::2",
+				StagedGeneration:      2,
+				RotatePhase:           "testing_new",
+				StagedInterfaceName:   "hgs-new",
+				StagedLocalTunnelAddr: "fd00::3",
+				StagedPeerTunnelAddr:  "fd00::4",
 			},
 		},
 		IPsecReconcile: &ipsecReconcileState{

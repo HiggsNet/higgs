@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -61,40 +60,47 @@ func healthTargetsFromState(state *stateFile, localZone string, groups []ipsec.L
 		if addr, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr)); err == nil {
 			base.LocalTunnelAddr = addr
 		}
-		desiredBase := base
 		applyStateTunnelAddrs(&base, inst.LocalTunnelAddr, inst.PeerTunnelAddr)
 		if shouldProbeStagedInterface(inst) {
-			oldTarget := base
-			oldTarget.ProbeID = healthProbeID(d.InstanceID, "old")
-			oldTarget.ProbeRole = "old"
-			oldTarget.InterfaceName = firstNonEmpty(inst.InterfaceName, d.InterfaceName)
-			oldTarget.Generation = inst.RemoteGeneration
-			if !applyStateTunnelAddrs(&oldTarget, inst.LocalTunnelAddr, inst.PeerTunnelAddr) {
-				local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.RemoteGeneration, groups)
-				if ok {
-					oldTarget.LocalTunnelAddr = local
-					oldTarget.PeerTunnelAddr = peer
-				}
+			oldTarget := health.ProbeTarget{
+				InstanceID:    d.InstanceID,
+				GroupID:       d.GroupID,
+				PeerZone:      string(d.PeerZone),
+				LocalZone:     localZone,
+				Overlay:       d.GroupID,
+				NetNS:         base.NetNS,
+				ProbeID:       healthProbeID(d.InstanceID, "old"),
+				ProbeRole:     "old",
+				InterfaceName: firstNonEmpty(inst.InterfaceName, d.InterfaceName),
+				Generation:    inst.RemoteGeneration,
+				State:         inst.ActualState,
 			}
-			targets = append(targets, oldTarget)
+			if applyStateTunnelAddrs(&oldTarget, inst.LocalTunnelAddr, inst.PeerTunnelAddr) && probeTargetHasTunnelAddrs(oldTarget) {
+				targets = append(targets, oldTarget)
+			}
 
-			stagedTarget := desiredBase
-			stagedTarget.ProbeID = healthProbeID(d.InstanceID, "staged")
-			stagedTarget.ProbeRole = "staged"
-			stagedTarget.InterfaceName = inst.StagedInterfaceName
-			stagedTarget.Generation = inst.StagedGeneration
-			if !applyStateTunnelAddrs(&stagedTarget, inst.StagedLocalTunnelAddr, inst.StagedPeerTunnelAddr) {
-				local, peer, ok := derivedHealthTunnelAddrs(d, localZone, inst.StagedGeneration, groups)
-				if ok {
-					stagedTarget.LocalTunnelAddr = local
-					stagedTarget.PeerTunnelAddr = peer
-				}
+			stagedTarget := health.ProbeTarget{
+				InstanceID:    d.InstanceID,
+				GroupID:       d.GroupID,
+				PeerZone:      string(d.PeerZone),
+				LocalZone:     localZone,
+				Overlay:       d.GroupID,
+				NetNS:         base.NetNS,
+				ProbeID:       healthProbeID(d.InstanceID, "staged"),
+				ProbeRole:     "staged",
+				InterfaceName: inst.StagedInterfaceName,
+				Generation:    inst.StagedGeneration,
+				State:         inst.ActualState,
+				Staged:        true,
 			}
-			stagedTarget.Staged = true
-			targets = append(targets, stagedTarget)
+			if applyStateTunnelAddrs(&stagedTarget, inst.StagedLocalTunnelAddr, inst.StagedPeerTunnelAddr) && probeTargetHasTunnelAddrs(stagedTarget) {
+				targets = append(targets, stagedTarget)
+			}
 			continue
 		}
-		targets = append(targets, base)
+		if probeTargetHasTunnelAddrs(base) {
+			targets = append(targets, base)
+		}
 	}
 	return targets
 }
@@ -115,63 +121,8 @@ func applyStateTunnelAddrs(target *health.ProbeTarget, localAddr, peerAddr strin
 	return updated
 }
 
-func derivedHealthTunnelAddrs(d desiredLinkState, localZone string, generation uint64, groups []ipsec.LinkGroupSpec) (netip.Addr, netip.Addr, bool) {
-	if generation == 0 {
-		return netip.Addr{}, netip.Addr{}, false
-	}
-	group, ok := healthGroupByID(groups, d.GroupID)
-	if !ok {
-		return netip.Addr{}, netip.Addr{}, false
-	}
-	if sequentialHealthTunnelAddress(group) {
-		return desiredHealthTunnelAddrs(d)
-	}
-	local := zone.ZonePath(localZone)
-	if !local.Valid() || local.IsRoot() || !d.PeerZone.Valid() || d.PeerZone.IsRoot() {
-		return netip.Addr{}, netip.Addr{}, false
-	}
-	linkID := d.LinkID
-	if linkID == "" {
-		linkID = d.InstanceID
-	}
-	pathKey := d.PathKey
-	if pathKey == "" {
-		pathKey = ipsec.DefaultPathKey
-	}
-	localAddr, peerAddr, err := group.Normalized().DeriveTunnelAddressesForLink(local, d.PeerZone, linkID, pathKey, generation, 0)
-	if err != nil {
-		return netip.Addr{}, netip.Addr{}, false
-	}
-	return localAddr, peerAddr, true
-}
-
-func healthGroupByID(groups []ipsec.LinkGroupSpec, id string) (ipsec.LinkGroupSpec, bool) {
-	for _, group := range groups {
-		if group.ID == id {
-			return group, true
-		}
-	}
-	return ipsec.LinkGroupSpec{}, false
-}
-
-func sequentialHealthTunnelAddress(group ipsec.LinkGroupSpec) bool {
-	group = group.Normalized()
-	if group.TunnelAddressSpec.Mode == ipsec.TunnelAddressSequentialPool {
-		return true
-	}
-	return group.TunnelAddressSpec.Mode == "" && (group.TunnelAddressSpec.Pool.IsValid() || group.TunnelAddressPool.IsValid())
-}
-
-func desiredHealthTunnelAddrs(d desiredLinkState) (netip.Addr, netip.Addr, bool) {
-	peer, err := netip.ParseAddr(stripScope(d.PeerTunnelAddr))
-	if err != nil {
-		return netip.Addr{}, netip.Addr{}, false
-	}
-	local, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr))
-	if err != nil {
-		return netip.Addr{}, netip.Addr{}, false
-	}
-	return local, peer, true
+func probeTargetHasTunnelAddrs(target health.ProbeTarget) bool {
+	return target.LocalTunnelAddr.IsValid() && target.PeerTunnelAddr.IsValid()
 }
 
 func shouldProbeStagedInterface(inst linkInstanceState) bool {

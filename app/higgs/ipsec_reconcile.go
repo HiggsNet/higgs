@@ -162,7 +162,7 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 			if err != nil {
 				return nil, nil, err
 			}
-			if state.NamespaceExists && state.InterfaceExists {
+			if xfrmLinkStateMatchesCandidate(state, candidate) {
 				found = true
 				break
 			}
@@ -192,6 +192,21 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 	return filtered, missing, nil
 }
 
+func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {
+	if !state.NamespaceExists || !state.InterfaceExists {
+		return false
+	}
+	if !spec.LocalTunnelAddr.IsValid() {
+		return true
+	}
+	for _, prefix := range state.Addresses {
+		if prefix.Addr() == spec.LocalTunnelAddr {
+			return true
+		}
+	}
+	return false
+}
+
 func xfrmLinkInspectCandidates(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance) []ipsec.TransportLinkSpec {
 	candidates := []ipsec.TransportLinkSpec{spec}
 	if inst.InterfaceName != "" || inst.XFRMIfID != 0 {
@@ -202,6 +217,8 @@ func xfrmLinkInspectCandidates(spec ipsec.TransportLinkSpec, inst ipsec.LinkInst
 		if inst.XFRMIfID != 0 {
 			active.XFRMIfID = inst.XFRMIfID
 		}
+		active.LocalTunnelAddr = inst.LocalTunnelAddr
+		active.PeerTunnelAddr = inst.PeerTunnelAddr
 		if !containsXFRMInspectCandidate(candidates, active) {
 			candidates = append(candidates, active)
 		}
@@ -214,6 +231,8 @@ func xfrmLinkInspectCandidates(spec ipsec.TransportLinkSpec, inst ipsec.LinkInst
 		if inst.StagedXFRMIfID != 0 {
 			staged.XFRMIfID = inst.StagedXFRMIfID
 		}
+		staged.LocalTunnelAddr = inst.StagedLocalTunnelAddr
+		staged.PeerTunnelAddr = inst.StagedPeerTunnelAddr
 		if !containsXFRMInspectCandidate(candidates, staged) {
 			candidates = append(candidates, staged)
 		}

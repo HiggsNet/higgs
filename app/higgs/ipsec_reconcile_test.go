@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -33,6 +34,25 @@ func TestDebugIPsecPortsPreferContactAndRuntimeEndpoints(t *testing.T) {
 	}
 	if got := debugEndpointPort("[2001:db8::1]:4500"); got != "4500" {
 		t.Fatalf("endpoint port = %q", got)
+	}
+}
+
+func TestXFRMLinkStateMatchesCandidateRequiresLocalTunnelAddress(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{
+		InterfaceName:   "hgs1",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
+	}
+	state := ipsec.XFRMLinkState{
+		NamespaceExists: true,
+		InterfaceExists: true,
+		Addresses:       []netip.Prefix{netip.MustParsePrefix("fe80::9999/64")},
+	}
+	if xfrmLinkStateMatchesCandidate(state, spec) {
+		t.Fatalf("candidate matched with wrong interface address")
+	}
+	state.Addresses = []netip.Prefix{netip.MustParsePrefix("fe80::1234/64")}
+	if !xfrmLinkStateMatchesCandidate(state, spec) {
+		t.Fatalf("candidate did not match expected interface address")
 	}
 }
 

@@ -260,6 +260,88 @@ func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	}
 }
 
+func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMAddressMissing(t *testing.T) {
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch strings.Join(args, " ") {
+			case "netns exec h2 true", "netns exec h2 ip link show dev hgs1":
+				return []byte("ok"), nil
+			case "netns exec h2 ip -4 -o addr show dev hgs1":
+				return nil, nil
+			case "netns exec h2 ip -6 -o addr show dev hgs1":
+				return []byte("7: hgs1 inet6 fe80::9999/64 scope link\n"), nil
+			default:
+				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
+			}
+		},
+	}
+	spec := TransportLinkSpec{
+		TransportID:     "ipsec-1",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           "h2",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
+	}
+	sas := []SAState{{
+		Name:        spec.TransportID,
+		ChildSA:     ChildSAName(spec),
+		XFRMIfID:    spec.XFRMIfID,
+		Established: true,
+	}}
+	filtered, missing, err := driver.FilterSAsWithMissingLinks(context.Background(), []TransportLinkSpec{spec}, sas)
+	if err != nil {
+		t.Fatalf("FilterSAsWithMissingLinks: %v", err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("filtered SAs = %+v, want matching SA suppressed", filtered)
+	}
+	if got := missing[LinkInstanceID(spec)]; got.TransportID != spec.TransportID {
+		t.Fatalf("missing = %+v, want spec %s", missing, spec.TransportID)
+	}
+}
+
+func TestSystemXFRMDriverRetainsEstablishedSAWhenXFRMAddressMatches(t *testing.T) {
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch strings.Join(args, " ") {
+			case "netns exec h2 true", "netns exec h2 ip link show dev hgs1":
+				return []byte("ok"), nil
+			case "netns exec h2 ip -4 -o addr show dev hgs1":
+				return nil, nil
+			case "netns exec h2 ip -6 -o addr show dev hgs1":
+				return []byte("7: hgs1 inet6 fe80::1234/64 scope link\n"), nil
+			default:
+				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
+			}
+		},
+	}
+	spec := TransportLinkSpec{
+		TransportID:     "ipsec-1",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           "h2",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
+	}
+	sas := []SAState{{
+		Name:        spec.TransportID,
+		ChildSA:     ChildSAName(spec),
+		XFRMIfID:    spec.XFRMIfID,
+		Established: true,
+	}}
+	filtered, missing, err := driver.FilterSAsWithMissingLinks(context.Background(), []TransportLinkSpec{spec}, sas)
+	if err != nil {
+		t.Fatalf("FilterSAsWithMissingLinks: %v", err)
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("filtered SAs = %+v, want SA retained", filtered)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("missing = %+v, want none", missing)
+	}
+}
+
 func TestSystemXFRMDriverIntegrationSmoke(t *testing.T) {
 	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
 		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system XFRM smoke")

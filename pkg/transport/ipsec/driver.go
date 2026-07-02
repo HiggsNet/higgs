@@ -92,6 +92,7 @@ type XFRMLinkState struct {
 	NetNS           NetNSSpec
 	NamespaceExists bool
 	InterfaceExists bool
+	Addresses       []netip.Prefix
 }
 
 type XFRMLinkInspector interface {

@@ -130,6 +130,12 @@ func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpe
 		return state, nil
 	}
 	state.InterfaceExists = d.linkExists(ctx, netns, spec.InterfaceName)
+	if state.InterfaceExists {
+		state.Addresses, err = d.inspectInterfaceAddresses(ctx, netns, spec.InterfaceName)
+		if err != nil {
+			return XFRMLinkState{}, err
+		}
+	}
 	return state, nil
 }
 
@@ -143,7 +149,7 @@ func (d SystemXFRMDriver) FilterSAsWithMissingLinks(ctx context.Context, desired
 		if err != nil {
 			return nil, nil, err
 		}
-		if state.NamespaceExists && state.InterfaceExists {
+		if xfrmLinkStateMatchesSpec(state, spec) {
 			continue
 		}
 		missing[LinkInstanceID(spec)] = spec
@@ -159,6 +165,39 @@ func (d SystemXFRMDriver) FilterSAsWithMissingLinks(ctx context.Context, desired
 		filtered = append(filtered, sa)
 	}
 	return filtered, missing, nil
+}
+
+func (d SystemXFRMDriver) inspectInterfaceAddresses(ctx context.Context, netns NetNSSpec, name string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for _, family := range []string{"-4", "-6"} {
+		addrs, err := d.interfaceAddresses(ctx, netns, name, family)
+		if err != nil {
+			return nil, err
+		}
+		for _, addr := range addrs {
+			prefix, err := netip.ParsePrefix(addr)
+			if err != nil {
+				continue
+			}
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes, nil
+}
+
+func xfrmLinkStateMatchesSpec(state XFRMLinkState, spec TransportLinkSpec) bool {
+	if !state.NamespaceExists || !state.InterfaceExists {
+		return false
+	}
+	if !spec.LocalTunnelAddr.IsValid() {
+		return true
+	}
+	for _, prefix := range state.Addresses {
+		if prefix.Addr() == spec.LocalTunnelAddr {
+			return true
+		}
+	}
+	return false
 }
 
 func saMatchesAnyMissingLink(sa SAState, missing map[string]TransportLinkSpec) bool {
