@@ -1276,8 +1276,7 @@ func (d *DaemonService) currentState() *stateFile {
 // synchronization must acquire the lock separately.
 // releaseStateLock releases the state lock currently tracked by d.stateUnlock
 // and clears the tracker. It is used by event handlers that need to drop the
-// event-loop lock before a sub-operation (such as the synchronous syncRound)
-// acquires its own lock.
+// event-loop lock before a sub-operation that acquires its own lock.
 func (d *DaemonService) releaseStateLock() {
 	if d == nil {
 		return

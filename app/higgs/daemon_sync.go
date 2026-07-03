@@ -116,8 +116,8 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			if msg.FetchZone == nil {
 				return nil
 			}
-			// Chunk fallback requests need the legacy sendSnapshots path, which
-			// knows how to split oversized zone snapshots into UDP object chunks.
+			// Chunk fallback requests use sendSnapshots, which knows how to split
+			// oversized zone snapshots into UDP object chunks.
 			// Keep them out of the active pull FSM as a read-only responder path.
 			if msg.FetchZone.ChunkFallback {
 				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)

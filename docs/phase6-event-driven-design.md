@@ -48,7 +48,7 @@ Phase 6 的结构性修复是：**单一 UDP reader + 显式 per-peer 同步会�
                             │ actions
 ┌───────────────────────────▼─────────────────────────────────┐
 │              SyncSession per target peer                    │
-│  Idle → PingSent → AwaitingAnnounce → ObjectPulling → ...   │
+│  Idle → SummarySent → CatalogDiffing → ObjectPulling → ...  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,26 +66,33 @@ Phase 6 的结构性修复是：**单一 UDP reader + 显式 per-peer 同步会�
 | 状态 | 含义 |
 |------|------|
 | `Idle` | 该 peer 没有活跃同步会话 |
-| `PingSent` | 已发 `PING`，等 `PONG` |
-| `AwaitingAnnounce` | 需要从对方拉 zone/record，已发 `FETCH_ZONE` 或对方 `PONG` 承诺有数据 |
-| `FetchingLocal` | 对方请求了本节点的 zone，正在发送 snapshots |
-| `ObjectPulling` | UDP 静默期已到，正在异步 TCP object pull |
+| `PingSent` | 旧入口保留状态；现代路径通常直接进入 `SummarySent` |
+| `SummarySent` | 已发 `PING` 和本地 `CatalogSummary`，等待对端 summary |
+| `CatalogDiffing` | catalog root 不同，正在分页请求 / 接收 catalog page |
+| `AwaitingAnnounce` | 等待小 payload、迟到 UDP 或 fallback 收尾；不作为正确性主路径 |
+| `ObjectPulling` | catalog diff 发现差异后，正在异步 TCP object pull |
 | `ChunkFallback` | TCP pull 失败或不可达，已发 `FETCH_ZONE{ChunkFallback:true}`，等 UDP chunk |
 | `Completed` | 本轮同步成功结束 |
 | `Failed` | 超时、错误或被 backoff |
+
+只读 responder 不属于 `SyncSession` 状态。`FETCH_CATALOG_PAGE`、普通 `FETCH_ZONE`、TCP object pull 和 UDP chunk fallback 响应都直接读取本地 verified state，不改变 active pull FSM。
 
 ### 3.2 事件
 
 | 事件 | 来源 |
 |------|------|
 | `SyncTimerEvent{peerID}` | daemon 周期 timer / manual trigger / relay 唤醒 |
-| `PacketEvent{session, packet}` | demuxer 把包路由给活跃 session |
-| `UnsolicitedPacketEvent{packet}` | demuxer 把包路由给通用处理路径 |
+| `PongReceivedEvent{peerID, pong}` | 收到带 `CatalogSummary` 的 `PONG` |
+| `CatalogSummaryReceivedEvent{peerID, summary}` | 收到带 `CatalogSummary` 的 `PING` |
+| `CatalogPageReceivedEvent{peerID, page}` | 收到 `CATALOG_PAGE` |
+| `CatalogPageTimeoutEvent{peerID}` | catalog page 请求超时 |
 | `PacketQuietTimeoutEvent{peerID}` | UDP 静默期 timer 触发；基于该 peer 估计 RTT 动态计算，给对端留 burst 窗口，避免过早切 TCP/object-pull 或结束 round |
 | `RoundTimeoutEvent{peerID}` | 整轮超时 timer 触发；基于该 peer 估计 RTT 动态计算 |
 | `ObjectPullResultEvent{sessionID, zone, snapshot, err}` | 异步 TCP object pull 完成 |
 | `ObjectChunkEvent{sessionID, zone, chunk}` | 收到 `object_chunk` 且匹配活跃 transfer |
 | `StateFileChangedEvent{}` | fsnotify/inotify 检测到 state 文件被外部程序修改 |
+
+`ANNOUNCE` 是 hint ingress；收到 hint 后只创建或唤醒 active pull，不直接作为完整对象同步事件。
 
 ### 3.3 状态机图
 
@@ -93,36 +100,30 @@ Phase 6 的结构性修复是：**单一 UDP reader + 显式 per-peer 同步会�
 stateDiagram-v2
     [*] --> Idle
 
-    Idle --> PingSent : SyncTimerEvent
+    Idle --> SummarySent : SyncTimerEvent / HintWakeEvent
     note right of Idle
       周期触发 / 手动 trigger / relay 唤醒
     end note
 
-    PingSent --> AwaitingAnnounce : PongReceived
-    PingSent --> AwaitingAnnounce : PacketEvent{PING}
-    PingSent --> FetchingLocal : PongReceived
-    PingSent --> Completed : PongReceived
-    PingSent --> FetchingLocal : FetchZoneReceived
-    note right of PingSent
-      PING 等价于 PONG，旧路径同时回 PONG；<br/>
-      对端请求本地 zones 时发送 ANNOUNCE；<br/>
-      无差异则直接 Completed
+    SummarySent --> Completed : CatalogSummary(root matches / empty)
+    SummarySent --> CatalogDiffing : CatalogSummary(root differs)
+    SummarySent --> Failed : RoundTimeoutEvent
+    note right of SummarySent
+      发送 PING；启动 round + packet_quiet timer
     end note
 
-    AwaitingAnnounce --> FetchingLocal : FetchZoneReceived
-    AwaitingAnnounce --> AwaitingAnnounce : FetchZoneReceived
+    CatalogDiffing --> CatalogDiffing : CatalogPageReceived(has next cursor)
+    CatalogDiffing --> ObjectPulling : CatalogPageReceived(diffs pending)
+    CatalogDiffing --> Completed : CatalogPageReceived(no diffs)
+    CatalogDiffing --> Failed : CatalogPageTimeout / root mismatch
+
     AwaitingAnnounce --> ObjectPulling : PacketQuietTimeout(1st)
-    AwaitingAnnounce --> Completed : PacketQuietTimeout
-    AwaitingAnnounce --> AwaitingAnnounce : AnnounceReceived
-    AwaitingAnnounce --> Completed : AnnounceReceived
+    AwaitingAnnounce --> Completed : PacketQuietTimeout(pending empty)
+    AwaitingAnnounce --> Failed : PacketQuietTimeout(pending not empty)
     note right of AwaitingAnnounce
-      已发 FETCH_ZONE / ANNOUNCE；<br/>
-      第一静默期满 → ObjectPulling；<br/>
-      pending 为空 / 全部补齐 → Completed
+      仅用于小 payload、迟到 UDP 或 fallback 收尾；<br/>
+      catalog diff/object pull 是正确性主路径
     end note
-
-    FetchingLocal --> FetchingLocal : FetchZoneReceived
-    FetchingLocal --> Completed : PacketQuietTimeout
 
     ObjectPulling --> AwaitingAnnounce : ObjectPullResultEvent{ok}
     ObjectPulling --> Completed : ObjectPullResultEvent{ok}
@@ -132,7 +133,6 @@ stateDiagram-v2
     ChunkFallback --> Completed : ObjectChunkEvent{complete}
     ChunkFallback --> Failed : ObjectChunkEvent{err}
 
-    PingSent --> Failed : RoundTimeoutEvent
     AwaitingAnnounce --> Failed : RoundTimeoutEvent / PacketQuietTimeout(2nd+)
     ObjectPulling --> Failed : RoundTimeoutEvent / PacketQuietTimeout(2nd+)
     ChunkFallback --> Failed : RoundTimeoutEvent / PacketQuietTimeout(2nd+)
@@ -143,30 +143,23 @@ stateDiagram-v2
 
 **图释（中文）：**
 
-- 每个 peer 的同步会话从 `Idle` 开始，由 `SyncTimerEvent` 触发进入 `PingSent`，本节点发送 `PING` 并启动 round / packet_quiet 两个 timer。
-- 在 `PingSent` 状态下收到 `PONG`（或等价的入站 `PING`）后，分三条路：
-  1. 自己有缺失 zones → `AwaitingAnnounce`，发送 `FETCH_ZONE`，并**重置 `quietCount`、重启 packet_quiet timer**；
-  2. 对端请求本节点 zones → `FetchingLocal`，发送 `ANNOUNCE`；
-  3. 双方无差异 → `Completed`。
-- `AwaitingAnnounce` 是“等待对端数据”的核心状态：
-  - 收到完整 `ANNOUNCE` 且补齐全部缺失 → `Completed`；
-  - 收到不完整或 stale 的 `ANNOUNCE` → 继续留在 `AwaitingAnnounce`；
-  - 第一静默期（`PacketQuietTimeout`）满后仍有缺失 → `ObjectPulling`，走异步 TCP object pull；
-  - 第二静默期仍无进展或 `RoundTimeoutEvent` 触发 → `Failed`。
-- `ObjectPulling` 成功 → 回到 `AwaitingAnnounce` 或 `Completed`；失败 → `ChunkFallback`，改走 UDP chunk 回退。
-- `FetchingLocal` 只负责“对端向本节点要数据”，收到新的 `FETCH_ZONE` 就继续发送 `ANNOUNCE`；当 `PacketQuietTimeout` 触发且本端没有缺失 zone 时，会话进入 `Completed`，以便下一轮同步重新从对端拉取更新。
+- 每个 peer 的 active pull 会话从 `Idle` 开始，由周期、手动触发或 hint 唤醒进入 `SummarySent`。
+- `SummarySent` 收到对端 catalog summary 后，如果 root 一致则完成；如果不同则进入 `CatalogDiffing`。
+- `CatalogDiffing` 逐页请求 catalog page，并立即为不同 zone 启动 TCP object pull。
+- `ObjectPulling` 成功 apply 后完成或回到 `AwaitingAnnounce` 收尾；TCP 不可达时进入 `ChunkFallback`。
+- `FETCH_*` 响应不进入这张状态机，由只读 responder 处理。
 
 ### 3.4 状态转换表
 
 | 事件 | 当前状态 | 下一状态 | 动作 |
 |------|----------|----------|------|
-| `SyncTimerEvent` | `Idle` | `PingSent` | 发送 `PING`；启动 `RoundTimeout` 与初始 `PacketQuietTimeout` |
-| `PongReceived` | `PingSent` | `AwaitingAnnounce` | 计算缺失 zones，发送 `FETCH_ZONE`；**重置 `quietCount` 并重启 `PacketQuietTimeout`** |
-| `PongReceived` | `PingSent` | `FetchingLocal` | 对方请求本节点 zones，发送 snapshots |
-| `PongReceived` | `PingSent` | `Completed` | 无差异，无需拉取 |
-| `PacketEvent{PING}` | `PingSent` | `AwaitingAnnounce` | 入站 `PING` 携带对方 digests，对活跃 session 等价于 `PongReceived`；同时旧路径会回一个 `PONG` |
-| `FetchZoneReceived` | 任意 | 不改变 active FSM | read-only responder 直接读 verified state；普通请求回 snapshot，chunk fallback 请求回 object chunks |
-| `AnnounceReceived` | 任意 | 不直接 apply | 作为 hint 记录并唤醒 active pull；正确性路径仍走 catalog diff + object pull/chunk fallback |
+| `SyncTimerEvent` | `Idle` | `SummarySent` | 发送 `PING`；启动 `RoundTimeout` 与初始 `PacketQuietTimeout` |
+| `CatalogSummaryReceived` / `PongReceived` | `SummarySent` | `Completed` | catalog root 一致或为空，无需拉取 |
+| `CatalogSummaryReceived` / `PongReceived` | `SummarySent` | `CatalogDiffing` | catalog root 不同，发送 `FETCH_CATALOG_PAGE` |
+| `CatalogPageReceived` | `CatalogDiffing` | `CatalogDiffing` / `ObjectPulling` / `Completed` | diff 当前页；有下一页继续请求；有差异则启动 object pull |
+| `CatalogPageTimeoutEvent` | `CatalogDiffing` | `Failed` | 记录 backoff、last_error、save state |
+| 入站 `FETCH_ZONE` | 任意 | 不改变 active FSM | read-only responder 直接读 verified state；普通请求回 snapshot，chunk fallback 请求回 object chunks |
+| 入站 `ANNOUNCE` | 任意 | 不直接 apply | 作为 hint 记录并唤醒 active pull；正确性路径仍走 catalog diff + object pull/chunk fallback |
 | `PacketQuietTimeout` (1st) | `AwaitingAnnounce` | `ObjectPulling` | catalog diff 后仍有缺失，UDP 静默期满，启动异步 TCP pull |
 | `ObjectPullResultEvent{ok}` | `ObjectPulling` | `AwaitingAnnounce` | apply snapshot；若还有 pending 继续等 |
 | `ObjectPullResultEvent{err}` | `ObjectPulling` | `ChunkFallback` | 发送 `FETCH_ZONE{ChunkFallback:true}` |
@@ -318,9 +311,9 @@ PacketQuietTimeout(peer) = max(
 
 **计时器重启时机**：
 
-- `SyncTimerEvent` 进入 `PingSent` 时启动初始 `PacketQuietTimeout`。
-- 收到 `PongReceived` 并进入 `AwaitingAnnounce` 时**重置 `quietCount` 并重新启动 `PacketQuietTimeout`**。这能避免“本端 `PING` 过早发出、quiet timer 在 `PONG` 到达前已触发”导致后续无 timer  fallback 到 object pull 的问题。
-- 后续在 `AwaitingAnnounce` 收到不完整/stale 的 `ANNOUNCE` 时保持现有 timer 继续运行；若 timer 再次触发则进入 `Failed`。
+- `SyncTimerEvent` 进入 `SummarySent` 时启动初始 `PacketQuietTimeout`。
+- 收到 `PONG` / catalog summary 后会校准 RTT；若 catalog root 不同，进入 `CatalogDiffing` 并重启 `PacketQuietTimeout`，避免 summary 往返期间的 timer 过早触发。
+- 收到 catalog page、object pull 结果或 chunk fallback 结果后，按当前 pending 状态推进并重置静默窗口；`ANNOUNCE` 只作为 hint 唤醒主动同步，不承担对象 apply。
 
 示例：
 
@@ -331,7 +324,7 @@ PacketQuietTimeout(peer) = max(
 | 200ms（跨洲光纤） | 850ms + jitter |
 | 600ms（跨国/拥塞） | 2.0s + jitter |
 
-含义：发出 `FETCH_ZONE` 后，若在 `PacketQuietTimeout` 内没再收到任何该 peer 的 UDP 包，才认为 burst 结束。高 RTT 链路不会过早进入 TCP object-pull。
+含义：发出 `PING` / `FETCH_CATALOG_PAGE` 或等待 object pull / chunk fallback 结果后，若在 `PacketQuietTimeout` 内没再收到该 peer 的有效进展事件，才认为本轮 burst 结束。高 RTT 链路不会过早进入 TCP object-pull 或失败收尾。
 
 ### 5.3 整轮超时 `RoundTimeout`
 
@@ -385,7 +378,7 @@ ObjectPullBudget 默认 5s（单个大 zone 的 TCP 传输预算）
   5. select { 等待事件或 timer }
      ├── d.Events          # control/admin 事件（record_put / delegate / join / sync_trigger 等）
      ├── packetCh          # UDP gossip 包
-     ├── d.syncEvents      # SyncSession 产生的事件（PongReceived / FetchZoneReceived / Timer 事件等）
+     ├── d.syncEvents      # SyncSession 产生的事件（PongReceived / CatalogPageReceived / Timer / ObjectPullResult 等）
      ├── d.objectPullResults # TCP object pull 完成结果 → 转成 syncEvents
      └── timer.C           # 到达下一个计划 timer 时间，回到循环顶部触发
 }
@@ -575,17 +568,13 @@ bbolt 使用文件级 `flock`，同一时刻只允许一个进程以写模式打
 4. **Daemon 事件循环测试**：fake transport + fake clock，验证单 reader、session 生命周期、cross-traffic。
 5. **RTT-aware timeout 测试**：fake clock 下模拟 RTT 600ms，验证 `PacketQuietTimeout` 自动放大到 2s 左右，不提前触发 TCP object-pull。
 6. **Race 回归测试**：启动两个 goroutine 同时 `Receive()` 应该不再发生；已有 `TestReplayWindowConcurrentCheck`。
-7. **现有 smoke 全量回归**：`phase2-smoke`、`object-pull-smoke` 通过；`chain-relay-smoke` 在当前多公网接口测试机上因 discovered 公网地址不可达而失败，旧路径同样失败，与事件循环重构无关。
+7. **现有 smoke 全量回归**：`phase2-smoke`、`object-pull-smoke`、`chain-relay-smoke`、`nat-observed-smoke` 均通过。
 
 ## 11. 验收标准
 
 - [x] 全仓库只有一个 goroutine 调用 `transport.Receive()`（event-loop 唯一路径）。
-- [x] `go test -race ./...` 通过。
-- [ ] 所有现有 smoke 测试通过（`chain-relay-smoke` 受测试机多公网接口环境影响，旧路径同样失败）。
-- [x] 新增 `SyncSession` 单元测试覆盖：Ping/Pong、FetchZone、Announce、object-pull、chunk fallback、timeout、backoff、RTT-aware timeout。
-- [x] 全仓库只有一个 goroutine 调用 `transport.Receive()`（旧 `eventLoopSync=false` 回退已删除）。
-- [x] `go test -race ./...` 通过。
-- [x] 所有现有 smoke 中 `phase2-smoke`、`object-pull-smoke` 通过；`chain-relay-smoke` 在当前多公网接口测试机上因 discovered 公网地址不可达而失败，旧路径同样失败，与本次重构无关。
-- [x] 新增 `SyncSession` 单元测试覆盖：Ping/Pong、FetchZone、Announce、object-pull、chunk fallback、timeout、backoff、RTT-aware timeout。
+- [x] 旧 `eventLoopSync=false` / `syncRound` 回退路径已删除。
+- [x] `SyncSession` 单元测试覆盖：summary/catalog diff、object-pull、chunk fallback、timeout、backoff、RTT-aware timeout。
+- [x] smoke 覆盖：`phase2-smoke`、`object-pull-smoke`、`chain-relay-smoke`、`nat-observed-smoke`。
 - [x] `docs/phase6-event-driven-design.md` 存在且与实现一致。
 - [x] `todo.md` Phase 6 已更新。

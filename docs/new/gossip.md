@@ -40,7 +40,7 @@ Higgs gossip 仅传播**已签名的 Zone 状态**。任何进入 active state �
 ### 1.3 硬规则
 
 - UDP datagram 默认预算 **1200 bytes**；任何 UDP message 都必须先按 wire size 预算打包。
-- 所有 list 都必须 bounded：catalog page、announce digest、records 都不能假设一包装得下；旧 `Ping/Pong` digest list 与 `Pong.FetchZones` 已删除。
+- 所有 list 都必须 bounded：catalog page、announce digest、records 都不能假设一包装得下；旧 Ping/Pong digest/fetch list 已删除。
 - `announce` 是 hint，可以携带小而完整的 payload；不能依赖多条 UDP record announce 才完成一个 Zone。
 - 大对象默认走 TCP object pull；UDP chunk fallback 只在 TCP pull 明确失败或不可达后使用。
 - relay 只在本地 verified active state 实际变化后触发；收到 hint 本身不是 relay 条件。
@@ -74,14 +74,12 @@ Gossip 运行于事件驱动的 daemon 架构中：
 - **串行事件处理**：所有状态变更经 daemon event loop 串行处理，无需额外锁
 - **FSM 无 I/O**：`SyncSession.OnEvent` 不执行 I/O，只返回 `SyncAction` 由事件循环执行
 
-### 1.5 目标重构：读写分离与 hint 语义
+### 1.5 当前结构：读写分离与 hint 语义
 
-早期实现把 `PONG.FetchZones`、`FETCH_ZONE -> ANNOUNCE`、UDP snapshot/record announce、`ServingPeerFetch` / `FetchingLocal` 等逻辑混在同一个 `SyncSession` 状态机中。这会让一个 per-peer session 同时表达两件事：
+当前 gossip 同步把主动读取、只读响应和 hint 入口拆成三条路径，避免一个 per-peer session 同时表达“我正在读对方”和“对方正在读我”：
 
 - **主动读路径**：本节点正在向 peer 拉取 catalog / object。
 - **被动服务路径**：peer 正在向本节点请求 catalog page / object。
-
-后续重构目标是把这两条路径拆开：
 
 | 路径 | 职责 | 是否改变 `SyncSession` 主状态 |
 |------|------|------------------------------|
@@ -89,13 +87,11 @@ Gossip 运行于事件驱动的 daemon 架构中：
 | Read-only responder | 响应 `FETCH_CATALOG_PAGE`、TCP object pull、必要时响应 UDP chunk fallback | 否 |
 | Hint ingress | 接收 `ANNOUNCE` / relay hint，决定是否唤醒一次 active pull | 否；最多创建或唤醒主动同步 |
 
-最终语义：
-
 - `FETCH_*` 是只读请求，响应方直接从本地 verified state 读数据并返回，不进入“服务中”会话状态。
 - `ANNOUNCE` 只表示“我这里可能有新 digest/object”，不作为完整同步的正确性前提。
 - 大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时传完整对象。
 - 收到 hint 不触发 relay；只有本地 active state 真正 apply 成功并发生变化后，才按 relay 规则通知其他 peer。
-- 旧协议兼容字段已删除：`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 不再出现在 wire 类型中；旧 `sync.go` receive/deadline 路径也已移除，event-loop 是 daemon 与 `sync once` 的唯一收包调度模型。
+- 旧协议兼容字段已删除：Ping/Pong 不再携带完整 digest/fetch list；旧 `sync.go` receive/deadline 路径也已移除，event-loop 是 daemon 与 `sync once` 的唯一收包调度模型。
 
 ---
 
@@ -200,8 +196,8 @@ type FetchRecord struct {
 
 type Announce struct {
     Zones     []ZoneDigest     // zone digest hint（bounded）
-    Snapshots []ZoneSnapshot   // legacy 小 payload 优化，目标状态不再依赖
-    Records   []RecordSnapshot // legacy 小 payload 优化，目标状态不再依赖
+    Snapshots []ZoneSnapshot   // bounded 小 payload；不作为正确性主路径
+    Records   []RecordSnapshot // bounded 小 payload；不作为正确性主路径
 }
 
 type ObjectChunk struct {
@@ -263,7 +259,7 @@ higgs.gossip.m1\n<msgpack payload with version=1>
 | `pong` | 响应 | 双向 | 响应 ping、携带 CatalogSummary |
 | `fetch_catalog_page` | 请求 | 双向 | 请求 catalog 分页 |
 | `catalog_page` | 响应 | 双向 | 返回 catalog 分页数据 |
-| `fetch_zone` | 请求 | 双向 | UDP chunk fallback 请求；普通 snapshot 请求为旧路径 |
+| `fetch_zone` | 请求 | 双向 | UDP chunk fallback 请求；普通 snapshot 请求仅作为只读兼容响应 |
 | `fetch_record` | 请求 | 双向 | 请求单条 record |
 | `announce` | 主动 | 双向 | hint ingress；不作为正确性主路径 |
 | `object_chunk` | 主动 | 双向 | UDP 分片传输大对象 |
@@ -335,7 +331,7 @@ Phase 3: Object Pull（对象拉取）
 - 如果主动 FSM 正在等待 `PONG`、`CATALOG_PAGE` 或 object pull 结果，它继续等待自己的事件。
 - responder 的错误只记录为发送/读取诊断，不把主动同步轮次标记为失败。
 
-这意味着 `ServingPeerFetch` / `FetchingLocal` 不应继续作为主 FSM 状态存在。它们表达的是“别人正在读我”，不是“我主动读别人”的进度。
+这意味着“别人正在读我”不会进入 active pull FSM；它只是 daemon responder 的一次只读 I/O。
 
 ### 4.4 Hint 与主动同步
 
@@ -404,17 +400,6 @@ Phase 3: Object Pull（对象拉取）
 - 校验通过后再做 root hash / 签名验证
 - 缺少任意 chunk → 丢弃，等下次重新请求
 
-### 5.3 旧 UDP snapshot/record announce 路径（event-loop 已停用）
-
-旧路径中，`PONG.FetchZones` 会让对端发送 `FETCH_ZONE`，响应方再用 `ANNOUNCE` 携带 snapshot/record；如果 UDP 放不下，还会通过 eager object pull 提前启动 TCP 拉取。这套链路有两个问题：
-
-- `FETCH_ZONE`/`ANNOUNCE` 同时承担读取响应、hint 和兼容传输，语义混杂。
-- `ServingPeerFetch` / `FetchingLocal` 会污染主动同步 FSM，造成时序问题。
-
-当前路径已经不再走 `PONG.FetchZones -> FETCH_ZONE -> ANNOUNCE snapshot`，`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 也已从 wire 类型删除。对象获取统一由 active pull FSM 启动 TCP object pull；TCP 不可达时再请求 UDP chunk fallback。`ANNOUNCE` 只保留 hint 语义；旧 `sync.go` receive/deadline 路径已删除，daemon 和 `sync once` 都通过同一套 event-loop pump 收包。
-
----
-
 ## 6. SyncSession 状态机
 
 每个对端 peer 同时最多拥有一个 active pull `SyncSession` 实例。状态机不执行 I/O，只根据事件推导动作列表，由 daemon 事件循环统一执行。
@@ -428,9 +413,10 @@ Responder 不属于 `SyncSession` 主状态机。入站 `FETCH_CATALOG_PAGE`、T
 │                         SyncSession States                          │
 ├──────────────────┬──────────────────────────────────────────────────┤
 │ Idle             │ 没有活跃同步会话                                  │
+│ PingSent         │ 旧入口保留状态；现代路径通常直接进入 SummarySent    │
 │ SummarySent      │ 已发 PING（携带 CatalogSummary），等待对方响应      │
 │ CatalogDiffing   │ 双方 catalog root 不同，正在逐页比较              │
-│ AwaitingAnnounce │ legacy/过渡状态：等待 UDP announce 或兼容路径剩余数据；目标状态下应删除或仅作 hint 等待                 │
+│ AwaitingAnnounce │ 等待旧小 payload、迟到 UDP 或 fallback 收尾；不作为主路径 │
 │ ObjectPulling    │ 正在异步 TCP object pull                         │
 │ ChunkFallback    │ TCP pull 失败，等待 UDP chunk                    │
 │ Completed        │ 本轮同步成功结束                                  │
@@ -451,7 +437,7 @@ stateDiagram-v2
 
     SummarySent --> CatalogDiffing : PONG/CatalogSummary (root differs)
     SummarySent --> Completed : PONG/CatalogSummary (root matches / empty)
-    SummarySent --> AwaitingAnnounce : PONG (need zones) ⚠️ legacy
+    SummarySent --> AwaitingAnnounce : compatibility event (missing zones)
     SummarySent --> Failed : RoundTimeoutEvent
 
     CatalogDiffing --> CatalogDiffing : CatalogPageReceived (has next)
@@ -459,8 +445,6 @@ stateDiagram-v2
     CatalogDiffing --> Completed : CatalogPageReceived (last, no diffs)
     CatalogDiffing --> Failed : CatalogPageTimeoutEvent
 
-    AwaitingAnnounce --> AwaitingAnnounce : AnnounceReceived (incomplete)
-    AwaitingAnnounce --> Completed : AnnounceReceived (pending empty)
     AwaitingAnnounce --> ObjectPulling : PacketQuietTimeout (1st)
     AwaitingAnnounce --> Completed : PacketQuietTimeout (2nd+, pending empty)
     AwaitingAnnounce --> Failed : PacketQuietTimeout (2nd+, pending not empty)
@@ -481,36 +465,14 @@ stateDiagram-v2
     Failed --> [*]
 ```
 
-目标状态机应进一步收敛为：
-
-```mermaid
-stateDiagram-v2
-    [*] --> Idle
-    Idle --> SummarySent : SyncTimerEvent / HintWakeEvent
-    SummarySent --> Completed : PONG summary matches / empty
-    SummarySent --> CatalogDiffing : PONG summary differs
-    SummarySent --> Failed : RoundTimeoutEvent
-    CatalogDiffing --> CatalogDiffing : CatalogPageReceived (has next)
-    CatalogDiffing --> ObjectPulling : CatalogPageReceived (diffs pending)
-    CatalogDiffing --> Completed : CatalogPageReceived (no diffs)
-    CatalogDiffing --> Failed : catalog timeout / root mismatch
-    ObjectPulling --> Completed : all object pulls applied
-    ObjectPulling --> ChunkFallback : TCP pull unavailable
-    ObjectPulling --> Failed : object pull hard failure / timeout
-    ChunkFallback --> Completed : chunks assembled and applied
-    ChunkFallback --> Failed : chunk timeout / hash mismatch / quota
-    Completed --> [*]
-    Failed --> [*]
-```
-
-目标状态机不包含 `ServingPeerFetch` / `FetchingLocal`，也不需要因为收到 `FETCH_*` 而改变 active pull 状态。
+状态机不包含“服务对端读取”的状态，也不需要因为收到 `FETCH_*` 而改变 active pull 状态。
 
 ### 6.3 事件列表
 
 | 事件 | 来源 |
 |------|------|
 | `SyncTimerEvent` | 周期 timer / 手动 trigger / relay 唤醒 |
-| `PongReceivedEvent` | 收到带 `Summary` 的 `PONG`；无 `Summary` 的旧 digest 字段不再驱动现代 FSM |
+| `PongReceivedEvent` | 收到带 `Summary` 的 `PONG` |
 | `CatalogSummaryReceivedEvent` | 收到带 `Summary` 的 `PING` |
 | `CatalogPageReceivedEvent` | 收到 `CATALOG_PAGE` |
 | `CatalogPageTimeoutEvent` | catalog page 请求超时 |
@@ -539,9 +501,9 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 - **第 1 次**: 认为 UDP burst 结束；若有 pending zones，从 `AwaitingAnnounce` → `ObjectPulling`
 - **第 2 次及以上**: 认为 object pull / chunk fallback 后的迟到窗口也结束；pending 为空则 `Completed`，否则 `Failed`
 
-在目标 catalog 协议下，`AwaitingAnnounce` 应尽量消失：主动同步以 catalog diff 和 object pull 为准，hint 只负责唤醒，不负责完成同步。
+现代主路径以 catalog diff 和 object pull 为准；`AwaitingAnnounce` 只用于小 payload、迟到 UDP 或 fallback 收尾。hint 只负责唤醒主动同步，不负责完成同步。
 
-每次有效数据到达（PONG、catalog page、announce）都会重置 `quietCount = 0`。
+每次有效数据到达（PONG、catalog page、object pull/chunk result）都会重置 `quietCount = 0`。
 
 ### 6.6 动作执行顺序
 

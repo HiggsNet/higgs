@@ -1062,11 +1062,11 @@ type PeerView struct {
 
 ## 七、Phase 6 事件驱动 Daemon 设计要点
 
-Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并删除旧 `syncRound` 回退路径。`PING/PONG` wire 类型也已收敛为 catalog summary，不再携带旧 `Zones` / `FetchZones` 兼容字段。daemon 与 `sync once` 都通过同一套 event-loop pump 处理收包、超时和状态持久化。
+Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并删除旧 `syncRound` 回退路径。`PING/PONG` wire 类型也已收敛为 catalog summary，不再携带旧 digest/fetch 兼容字段。daemon 与 `sync once` 都通过同一套 event-loop pump 处理收包、超时和状态持久化。
 
 ### 7.1 为什么必须重构
 
-当前实现里，`startGossipPacketReceiver` 开的专门收包 goroutine 与 `syncRound` 里直接调 `transport.Receive()` 会在同一个 UDP socket 上并发读包。这导致两类故障：
+旧实现里，`startGossipPacketReceiver` 开的专门收包 goroutine 与 `syncRound` 里直接调 `transport.Receive()` 会在同一个 UDP socket 上并发读包。这导致两类故障：
 
 1. **并发 map race**：`ReplayWindow.prune()` 与另一个 goroutine 的 `ReplayWindow.Check()` 同时访问 `seen` map，触发 `fatal error: concurrent map iteration and map write`。
 2. **响应被抢**：`syncRound` 等待的 `PONG`/`ANNOUNCE` 可能被专门收包 goroutine 截胡并 buffer 到 `packetCh`，而 `syncRound` 阻塞时 daemon 主循环无法处理 `packetCh`，造成无意义 timeout。
@@ -1087,7 +1087,7 @@ Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
 
 - **唯一 reader**：所有 UDP 包先经过 replay/quota/allowlist 校验，再进入 demuxer。
 - **Demuxer**：按 `peer_id` 把包路由到对应 `SyncSession`，未命中则作为 unsolicited 包处理。
-- **SyncSession FSM**：每个目标 peer 一个会话，显式状态包括 `Idle`、`PingSent`、`AwaitingAnnounce`、`FetchingLocal`、`ObjectPulling`、`ChunkFallback`、`Completed`、`Failed`。
+- **SyncSession FSM**：每个目标 peer 一个 active pull 会话，现代路径以 `SummarySent -> CatalogDiffing -> ObjectPulling/ChunkFallback -> Completed/Failed` 为主；只读 responder 不属于 FSM 状态。
 - **事件循环**：daemon 主 goroutine 在 `packetCh`、`d.Events`、内部 `syncEventCh`、timer channel、object-pull result channel 之间 select，纯分发，不阻塞 I/O。
 
 ### 7.3 状态机与超时
@@ -1098,16 +1098,14 @@ Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
 - `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。它不是轮询间隔，也不应是 oversized object 的主发现机制。digest mismatch 应尽快触发 object pull；quiet timeout 只用于丢包、迟到 UDP payload 或 fallback 收尾。
 - `BackoffRetry`：peer 可再次尝试的时间点。
 
-当前已实现的 `SyncSession` 以 `CatalogSummary` 的 `PING` / `PONG` 为入口，完整 digest list 只作为兼容读取字段保留。状态含义如下：
+当前已实现的 `SyncSession` 以 `CatalogSummary` 的 `PING` / `PONG` 为入口，状态含义如下：
 
 | 状态 | 含义 |
 |------|------|
 | `Idle` | 没有活跃 round，等待 `SyncTimerEvent`。 |
 | `SummarySent` | 已发送本地 `CatalogSummary`，等待对端 `PONG` summary 或入站 `PING` 派生出的 summary 事件。 |
 | `CatalogDiffing` | 已发现 catalog root 不同，通过 `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` 分页比较 sorted catalog；page diff 出的不同 Zone 立即进入 object pull。 |
-| `FetchingLocal` | 对端请求本地 Zone，已发送 bounded `ANNOUNCE` / snapshot，等待 quiet timeout 结束本轮。 |
-| `ServingPeerFetch` | 响应对端 catalog page / fetch 请求，发送本地 catalog page 或兼容小 payload。 |
-| `AwaitingAnnounce` | 兼容旧 hint / skeleton / digest-only 路径，等待对端小 payload 或 fallback 信号；不再作为 catalog diff 的 correctness baseline。 |
+| `AwaitingAnnounce` | 等待小 payload、迟到 UDP 或 fallback 收尾；不再作为 catalog diff 的 correctness baseline。 |
 | `ObjectPulling` | page diff 得出不同 Zone 后，异步 TCP object pull 正在拉完整 snapshot。 |
 | `ChunkFallback` | TCP object pull 失败后，已请求 `FETCH_ZONE{ChunkFallback:true}`，等待 UDP chunk 重组完成。 |
 | `Completed` / `Failed` | 终态，触发持久化、backoff 或后续 state-change hook。 |

@@ -394,10 +394,10 @@
   - [x] 定义并实现 `CatalogSummary`：`catalog_root`、`zone_count`、可选 bounded `first_page` / `next_cursor`；`PING` / `PONG` 不再承诺携带完整 `ZoneDigest[]`。
   - [x] 新增 bounded catalog page 消息：`FETCH_CATALOG_PAGE{cursor}` 与 `CATALOG_PAGE{catalog_root, entries[], next_cursor}`；`entries[]` 必须按 `max_datagram_bytes` 打包，单页超预算时 fail closed 并输出诊断。
   - [x] 同步状态机改为 summary -> catalog page diff -> object pull：catalog root 相同直接完成；root 不同则分页 diff，发现 Zone digest 不同后再 `FETCH_ZONE` / TCP object pull。
-    - [x] `SyncSession` 需要拆分当前过宽的 `AwaitingAnnounce`：新增/替代 `SummarySent`、`CatalogDiffing`、`ServingPeerFetch` 等状态，让 `ANNOUNCE` 只作为 wakeup/hint 或小 payload 优化。
+    - [x] `SyncSession` 拆分为 active pull FSM、只读 responder 和 hint ingress；`ANNOUNCE` 只作为 wakeup/hint 或小 payload 优化。
     - [x] 新增 catalog 事件/action：`CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`、`SendFetchCatalogPageAction`、`SendCatalogPageAction`；`ObjectPulling` / `ChunkFallback` 继续作为完整对象传输阶段。
     - [x] `PacketQuietTimeout` 只用于 UDP hint/page quiet 和 fallback 收尾，不能再作为“发现 digest mismatch 后才启动 object pull”的主路径；page diff 得出的不同 Zone 应立即进入 object pull。
-  - [x] 所有 list 型 UDP 字段统一预算化：`Ping/Pong` digest page、`Pong.FetchZones`、`Announce.Zones`、`Announce.Records` 均不得生成超过 `max_datagram_bytes` 的 datagram。
+  - [x] 所有 list 型 UDP 字段统一预算化：Ping/Pong summary、catalog page、announce digest/records 均不得生成超过 `max_datagram_bytes` 的 datagram。
   - [x] 测试：构造大量 Zone 导致旧 full-digest `PING` 超过 1200 bytes 的场景，验证 catalog page sync 能收敛；覆盖 cursor 稳定性、空 page、单个过长 ZonePath、page root 不一致、恶意/乱序 page。
   - [x] 文档/诊断：`sync status --verbose` / `debug peer` 显示 catalog root、zone count、最近 catalog page cursor、page oversized / rejected reason。
 
