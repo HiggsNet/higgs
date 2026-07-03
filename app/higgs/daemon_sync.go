@@ -441,8 +441,6 @@ func syncEventPeerID(event SyncEvent) string {
 		return e.PeerID
 	case *CatalogPageTimeoutEvent:
 		return e.PeerID
-	case *PacketQuietTimeoutEvent:
-		return e.PeerID
 	case *RoundTimeoutEvent:
 		return e.PeerID
 	case *ObjectPullResultEvent:

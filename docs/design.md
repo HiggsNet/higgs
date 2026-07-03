@@ -1095,7 +1095,7 @@ Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
 超时从「socket read deadline」改为「显式 timer 事件」：
 
 - `RoundTimeout`：整轮超时，基于 peer 估计 RTT 动态计算：`max(5s, kRound * RTT + ObjectPullBudget + jitter)`。
-- `PacketQuietTimeout`：UDP 静默期，基于 peer 估计 RTT 动态计算：`max(250ms, kQuiet * RTT + jitter)`。它不是轮询间隔，也不应是 oversized object 的主发现机制。digest mismatch 应尽快触发 object pull；quiet timeout 只用于丢包、迟到 UDP payload 或 fallback 收尾。
+- `CatalogPageTimeout`：catalog page 请求超时，基于 peer 估计 RTT 动态计算：`max(250ms, kCatalogPage * RTT + jitter)`。
 - `BackoffRetry`：peer 可再次尝试的时间点。
 
 当前已实现的 `SyncSession` 以 `CatalogSummary` 的 `PING` / `PONG` 为入口，状态含义如下：
@@ -1105,7 +1105,6 @@ Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
 | `Idle` | 没有活跃 round，等待 `SyncTimerEvent`。 |
 | `SummarySent` | 已发送本地 `CatalogSummary`，等待对端 `PONG` summary 或入站 `PING` 派生出的 summary 事件。 |
 | `CatalogDiffing` | 已发现 catalog root 不同，通过 `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` 分页比较 sorted catalog；page diff 出的不同 Zone 立即进入 object pull。 |
-| `AwaitingAnnounce` | 等待 object pull / chunk fallback 后的迟到事件与 quiet 收尾；不再作为 catalog diff 的 correctness baseline。 |
 | `ObjectPulling` | page diff 得出不同 Zone 后，异步 TCP object pull 正在拉完整 snapshot。 |
 | `ChunkFallback` | TCP object pull 失败后，已请求 `FETCH_ZONE{ChunkFallback:true}`，等待 UDP chunk 重组完成。 |
 | `Completed` / `Failed` | 终态，触发持久化、backoff 或后续 state-change hook。 |

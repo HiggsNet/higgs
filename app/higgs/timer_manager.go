@@ -205,8 +205,8 @@ func (tm *TimerManager) waitAndPost(key timerKey, timer Timer, peerID, kind stri
 	switch kind {
 	case "round":
 		ev = &RoundTimeoutEvent{PeerID: peerID}
-	case "packet_quiet":
-		ev = &PacketQuietTimeoutEvent{PeerID: peerID}
+	case "catalog_page":
+		ev = &CatalogPageTimeoutEvent{PeerID: peerID}
 	default:
 		return
 	}

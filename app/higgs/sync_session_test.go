@@ -22,7 +22,7 @@ func TestSyncSessionIdleToPingSent(t *testing.T) {
 		t.Fatalf("expected state summary_sent, got %s", s.State)
 	}
 
-	assertActionTypes(t, actions, []string{"SendPingAction", "StartTimerAction", "StartTimerAction"})
+	assertActionTypes(t, actions, []string{"SendPingAction", "StartTimerAction"})
 
 	ping := actions[0].(SendPingAction)
 	if len(ping.Digests) != 1 || ping.Digests[0].Zone != "catofes." {
@@ -30,12 +30,11 @@ func TestSyncSessionIdleToPingSent(t *testing.T) {
 	}
 
 	round := actions[1].(StartTimerAction)
-	quiet := actions[2].(StartTimerAction)
-	if round.Kind != "round" || quiet.Kind != "packet_quiet" {
-		t.Fatalf("expected round and packet_quiet timers, got %s and %s", round.Kind, quiet.Kind)
+	if round.Kind != "round" {
+		t.Fatalf("expected round timer, got %s", round.Kind)
 	}
-	if !round.Deadline.After(quiet.Deadline) {
-		t.Fatalf("round deadline %v should be after quiet deadline %v", round.Deadline, quiet.Deadline)
+	if !round.Deadline.After(now) {
+		t.Fatalf("round deadline %v should be after now %v", round.Deadline, now)
 	}
 }
 
@@ -77,10 +76,10 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
-	if s.State != SyncSessionAwaitingAnnounce {
-		t.Fatalf("expected state awaiting_announce, got %s", s.State)
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"StartTimerAction"})
+	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
 	// Initial RTT is 1s; a 50ms sample should pull the estimate down toward the sample.
 	if s.EstimatedRTT() >= InitialRTT {
 		t.Fatalf("expected RTT estimate to decrease from initial %v, got %v", InitialRTT, s.EstimatedRTT())
@@ -214,18 +213,16 @@ func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction"})
 }
 
-func TestSyncSessionQuietTimeoutStartsObjectPull(t *testing.T) {
+func TestSyncSessionPongMissingZonesStartsObjectPull(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
+	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &gossip.Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes.", "node-b.catofes."},
 	}, now)
-
-	actions, err := s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
@@ -245,7 +242,6 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 		Pong:         &gossip.Pong{},
 		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
 	}, now)
-	_, _ = s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
 
 	if s.State != SyncSessionObjectPulling {
 		t.Fatalf("expected state object_pulling, got %s", s.State)
@@ -291,7 +287,6 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 		Pong:         &gossip.Pong{},
 		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
 	}, now)
-	_, _ = s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
 
 	// First pull fails. We request chunk fallback but stay in object_pulling
 	// because another pull is still in flight.
@@ -334,7 +329,6 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 		Pong:         &gossip.Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
-	_, _ = s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
 
 	actions, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
@@ -360,7 +354,6 @@ func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
 		Pong:         &gossip.Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
-	_, _ = s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
 
 	actions, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID: "peer-a",
@@ -390,7 +383,6 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 		Pong:         &gossip.Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
-	_, _ = s.OnEvent(&PacketQuietTimeoutEvent{PeerID: "peer-a"}, now)
 	_, _ = s.OnEvent(&ObjectPullResultEvent{PeerID: "peer-a", Zone: "node-a.catofes.", Err: errors.New("tcp unreachable")}, now)
 
 	actions, err := s.OnEvent(&ObjectChunkEvent{
@@ -430,13 +422,13 @@ func TestSyncSessionRTTAwareTimeouts(t *testing.T) {
 	// Simulate a 600ms RTT.
 	_, _ = s.OnEvent(&PongReceivedEvent{PeerID: "peer-a", Pong: &gossip.Pong{}}, now.Add(600*time.Millisecond))
 
-	quiet := s.packetQuietTimeout()
-	expectedMin := time.Duration(kQuietMultiplier) * 600 * time.Millisecond
-	if quiet < expectedMin {
-		t.Fatalf("quiet timeout %v should be >= %v", quiet, expectedMin)
+	catalogPage := s.catalogPageTimeout()
+	expectedMin := time.Duration(kCatalogPageTimeoutMultiplier) * 600 * time.Millisecond
+	if catalogPage < expectedMin {
+		t.Fatalf("catalog page timeout %v should be >= %v", catalogPage, expectedMin)
 	}
-	if quiet < MinPacketQuietTimeout {
-		t.Fatalf("quiet timeout %v should respect min %v", quiet, MinPacketQuietTimeout)
+	if catalogPage < MinCatalogPageTimeout {
+		t.Fatalf("catalog page timeout %v should respect min %v", catalogPage, MinCatalogPageTimeout)
 	}
 
 	round := s.roundTimeout()

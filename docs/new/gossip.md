@@ -416,7 +416,6 @@ Responder 不属于 `SyncSession` 主状态机。入站 `FETCH_CATALOG_PAGE`、T
 │ PingSent         │ 旧入口保留状态；现代路径通常直接进入 SummarySent    │
 │ SummarySent      │ 已发 PING（携带 CatalogSummary），等待对方响应      │
 │ CatalogDiffing   │ 双方 catalog root 不同，正在逐页比较              │
-│ AwaitingAnnounce │ 等待 object pull / chunk fallback 后的 quiet 收尾；不作为主路径 │
 │ ObjectPulling    │ 正在异步 TCP object pull                         │
 │ ChunkFallback    │ TCP pull 失败，等待 UDP chunk                    │
 │ Completed        │ 本轮同步成功结束                                  │
@@ -437,7 +436,7 @@ stateDiagram-v2
 
     SummarySent --> CatalogDiffing : PONG/CatalogSummary (root differs)
     SummarySent --> Completed : PONG/CatalogSummary (root matches / empty)
-    SummarySent --> AwaitingAnnounce : compatibility event (missing zones)
+    SummarySent --> ObjectPulling : compatibility event (missing zones)
     SummarySent --> Failed : RoundTimeoutEvent
 
     CatalogDiffing --> CatalogDiffing : CatalogPageReceived (has next)
@@ -445,21 +444,15 @@ stateDiagram-v2
     CatalogDiffing --> Completed : CatalogPageReceived (last, no diffs)
     CatalogDiffing --> Failed : CatalogPageTimeoutEvent
 
-    AwaitingAnnounce --> ObjectPulling : PacketQuietTimeout (1st)
-    AwaitingAnnounce --> Completed : PacketQuietTimeout (2nd+, pending empty)
-    AwaitingAnnounce --> Failed : PacketQuietTimeout (2nd+, pending not empty)
-
-    ObjectPulling --> AwaitingAnnounce : ObjectPullResultEvent (ok, still pending)
+    ObjectPulling --> ObjectPulling : ObjectPullResultEvent (ok, still pending)
     ObjectPulling --> Completed : ObjectPullResultEvent (ok, pending empty)
     ObjectPulling --> ChunkFallback : ObjectPullResultEvent (err)
-    ObjectPulling --> Completed : PacketQuietTimeout (2nd+, pending empty)
-    ObjectPulling --> Failed : PacketQuietTimeout (2nd+, pending not empty)
+    ObjectPulling --> Failed : RoundTimeoutEvent
 
-    ChunkFallback --> AwaitingAnnounce : ObjectChunkEvent (ok, still pending)
+    ChunkFallback --> ChunkFallback : ObjectChunkEvent (ok, still pending)
     ChunkFallback --> Completed : ObjectChunkEvent (ok, pending empty)
     ChunkFallback --> Failed : ObjectChunkEvent (err)
-    ChunkFallback --> Completed : PacketQuietTimeout (2nd+, pending empty)
-    ChunkFallback --> Failed : PacketQuietTimeout (2nd+, pending not empty)
+    ChunkFallback --> Failed : RoundTimeoutEvent
 
     Completed --> [*]
     Failed --> [*]
@@ -476,7 +469,6 @@ stateDiagram-v2
 | `CatalogSummaryReceivedEvent` | 收到带 `Summary` 的 `PING` |
 | `CatalogPageReceivedEvent` | 收到 `CATALOG_PAGE` |
 | `CatalogPageTimeoutEvent` | catalog page 请求超时 |
-| `PacketQuietTimeoutEvent` | UDP 静默期 timer 触发 |
 | `RoundTimeoutEvent` | 整轮超时 timer 触发 |
 | `ObjectPullResultEvent` | 异步 TCP object pull 完成 |
 | `ObjectChunkEvent` | UDP chunk fallback 完成或失败 |
@@ -486,7 +478,7 @@ stateDiagram-v2
 FSM 使用 RTT 感知的超时计算，避免在网络延迟高时过早超时：
 
 ```
-PacketQuietTimeout(peer) = max(250ms, 3 × estimatedRTT(peer))
+CatalogPageTimeout(peer) = max(250ms, 3 × estimatedRTT(peer))
 RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 ```
 
@@ -494,16 +486,11 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 - 收到 `PONG` 后根据 `PONG_received_at - PING_sent_at` 更新 RTT
 - RTT 使用指数加权移动平均（EWMA）：`new_rtt = (7 × old_rtt + sample) / 8`
 
-### 6.5 QuietCount 机制
+### 6.5 Catalog Page Timeout
 
-`quietCount` 跟踪 PacketQuietTimeout 的触发次数：
+`CatalogPageTimeout` 只约束 catalog page 请求等待时间。对象传输阶段不再使用 UDP quiet 作为完成条件：TCP object pull 或 UDP chunk fallback 必须返回明确结果；否则由整轮 `RoundTimeout` 结束本轮。
 
-- **第 1 次**: 认为 UDP burst 结束；若有 pending zones，从 `AwaitingAnnounce` → `ObjectPulling`
-- **第 2 次及以上**: 认为 object pull / chunk fallback 后的迟到窗口也结束；pending 为空则 `Completed`，否则 `Failed`
-
-现代主路径以 catalog diff 和 object pull 为准；`AwaitingAnnounce` 只用于 object pull / chunk fallback 后的迟到事件与 quiet 收尾。hint 只负责唤醒主动同步，不负责完成同步。
-
-每次有效数据到达（PONG、catalog page、object pull/chunk result）都会重置 `quietCount = 0`。
+现代主路径以 catalog diff 和 object pull 为准。hint 只负责唤醒主动同步，不负责完成同步。
 
 ### 6.6 动作执行顺序
 
@@ -772,8 +759,7 @@ Packet → routePacket()
 | Timer 类型 | 用途 | 超时计算 |
 |------------|------|----------|
 | `round` | 整轮超时 | `max(5s, 5 × RTT) + 5s` |
-| `packet_quiet` | UDP 静默检测 | `max(250ms, 3 × RTT)` |
-| `catalog_page` | catalog 分页超时 | 同 round timer |
+| `catalog_page` | catalog 分页超时 | `max(250ms, 3 × RTT)` |
 
 当 session 完成或失败时，所有关联 timer 被取消。
 

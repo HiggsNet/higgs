@@ -14,26 +14,25 @@ import (
 type SyncSessionState string
 
 const (
-	SyncSessionIdle             SyncSessionState = "idle"
-	SyncSessionPingSent         SyncSessionState = "ping_sent"
-	SyncSessionSummarySent      SyncSessionState = "summary_sent"
-	SyncSessionCatalogDiffing   SyncSessionState = "catalog_diffing"
-	SyncSessionAwaitingAnnounce SyncSessionState = "awaiting_announce"
-	SyncSessionObjectPulling    SyncSessionState = "object_pulling"
-	SyncSessionChunkFallback    SyncSessionState = "chunk_fallback"
-	SyncSessionCompleted        SyncSessionState = "completed"
-	SyncSessionFailed           SyncSessionState = "failed"
+	SyncSessionIdle           SyncSessionState = "idle"
+	SyncSessionPingSent       SyncSessionState = "ping_sent"
+	SyncSessionSummarySent    SyncSessionState = "summary_sent"
+	SyncSessionCatalogDiffing SyncSessionState = "catalog_diffing"
+	SyncSessionObjectPulling  SyncSessionState = "object_pulling"
+	SyncSessionChunkFallback  SyncSessionState = "chunk_fallback"
+	SyncSessionCompleted      SyncSessionState = "completed"
+	SyncSessionFailed         SyncSessionState = "failed"
 )
 
 // RTT-aware timeout defaults. These match docs/phase6-event-driven-design.md.
 const (
-	MinPacketQuietTimeout = 250 * time.Millisecond
+	MinCatalogPageTimeout = 250 * time.Millisecond
 	MinRoundTimeout       = 5 * time.Second
 	ObjectPullBudget      = 5 * time.Second
 	InitialRTT            = 1 * time.Second
 
-	kQuietMultiplier = 3
-	kRoundMultiplier = 5
+	kCatalogPageTimeoutMultiplier = 3
+	kRoundMultiplier              = 5
 )
 
 // SyncEvent is an event delivered to a SyncSession by the daemon event loop.
@@ -77,12 +76,6 @@ type CatalogPageTimeoutEvent struct {
 }
 
 func (*CatalogPageTimeoutEvent) isSyncEvent() {}
-
-type PacketQuietTimeoutEvent struct {
-	PeerID string
-}
-
-func (*PacketQuietTimeoutEvent) isSyncEvent() {}
 
 type RoundTimeoutEvent struct {
 	PeerID string
@@ -210,9 +203,6 @@ type SyncSession struct {
 	rttVariance  time.Duration
 	pingSentAt   time.Time
 
-	// quietCount counts PacketQuietTimeout firings in the active round.
-	quietCount int
-
 	lastError error
 }
 
@@ -241,8 +231,6 @@ func (s *SyncSession) OnEvent(event SyncEvent, now time.Time) ([]SyncAction, err
 		return s.onCatalogPageReceived(e, now)
 	case *CatalogPageTimeoutEvent:
 		return s.onCatalogPageTimeout(e)
-	case *PacketQuietTimeoutEvent:
-		return s.onPacketQuietTimeout(e, now)
 	case *RoundTimeoutEvent:
 		return s.onRoundTimeout(e)
 	case *ObjectPullResultEvent:
@@ -260,7 +248,6 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	}
 	s.State = SyncSessionSummarySent
 	s.pingSentAt = now
-	s.quietCount = 0
 	s.pendingZones = make(map[zone.ZonePath]bool)
 	s.objectPullInflight = make(map[zone.ZonePath]bool)
 	s.chunkFallbackZones = make(map[zone.ZonePath]bool)
@@ -275,7 +262,6 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	return []SyncAction{
 		SendPingAction{PeerID: e.PeerID, Digests: e.LocalDigests, Summary: e.LocalSummary},
 		StartTimerAction{PeerID: e.PeerID, Kind: "round", Deadline: now.Add(s.roundTimeout())},
-		StartTimerAction{PeerID: e.PeerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())},
 	}, nil
 }
 
@@ -294,12 +280,14 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 
 	// We need zones from peer.
 	if len(e.MissingZones) > 0 {
-		s.State = SyncSessionAwaitingAnnounce
-		s.quietCount = 0
+		s.State = SyncSessionObjectPulling
 		for _, z := range e.MissingZones {
 			s.pendingZones[z] = true
+			if !s.objectPullInflight[z] {
+				s.objectPullInflight[z] = true
+				actions = append(actions, StartObjectPullAction{PeerID: e.PeerID, Zone: z})
+			}
 		}
-		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())})
 		return actions, nil
 	}
 
@@ -337,11 +325,10 @@ func (s *SyncSession) handleCatalogSummary(peerID string, summary *gossip.Catalo
 		return s.onCatalogPageReceived(&CatalogPageReceivedEvent{PeerID: peerID, Page: summary.FirstPage}, now)
 	}
 	s.State = SyncSessionCatalogDiffing
-	s.quietCount = 0
 	s.lastCatalogCursor = ""
 	return []SyncAction{
 		SendFetchCatalogPageAction{PeerID: peerID},
-		StartTimerAction{PeerID: peerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())},
+		StartTimerAction{PeerID: peerID, Kind: "catalog_page", Deadline: now.Add(s.catalogPageTimeout())},
 	}, nil
 }
 
@@ -361,7 +348,6 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 		s.remoteCatalogRoot = append([]byte(nil), e.Page.CatalogRoot...)
 	}
 	s.State = SyncSessionCatalogDiffing
-	s.quietCount = 0
 	var actions []SyncAction
 	for _, diff := range gossip.CatalogDiff(e.LocalEntries, e.Page.Entries) {
 		s.pendingZones[diff.Zone] = true
@@ -374,7 +360,7 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	s.lastCatalogCursor = e.Page.NextCursor
 	if e.Page.NextCursor != "" {
 		actions = append(actions, SendFetchCatalogPageAction{PeerID: e.PeerID, Cursor: e.Page.NextCursor})
-		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: "packet_quiet", Deadline: now.Add(s.packetQuietTimeout())})
+		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: "catalog_page", Deadline: now.Add(s.catalogPageTimeout())})
 		return actions, nil
 	}
 	if len(s.objectPullInflight) > 0 {
@@ -425,69 +411,12 @@ func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAct
 			delete(s.chunkFallbackZones, z)
 		}
 	}
-	if s.pendingEmpty() && (s.State == SyncSessionAwaitingAnnounce ||
-		s.State == SyncSessionObjectPulling ||
+	if s.pendingEmpty() && (s.State == SyncSessionObjectPulling ||
 		s.State == SyncSessionChunkFallback) {
 		s.State = SyncSessionCompleted
 		return []SyncAction{SaveStateAction{Reason: "sync completed after pending zones reconciled with local state"}}
 	}
 	return nil
-}
-
-func (s *SyncSession) onPacketQuietTimeout(e *PacketQuietTimeoutEvent, now time.Time) ([]SyncAction, error) {
-	s.quietCount++
-	switch s.State {
-	case SyncSessionCatalogDiffing:
-		if len(s.objectPullInflight) > 0 {
-			s.State = SyncSessionObjectPulling
-			return nil, nil
-		}
-		s.State = SyncSessionFailed
-		s.lastError = errors.New("sync timed out waiting for catalog page")
-		return []SyncAction{
-			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-			SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
-		}, nil
-	case SyncSessionAwaitingAnnounce:
-		if s.quietCount == 1 && !s.pendingEmpty() {
-			s.State = SyncSessionObjectPulling
-			var actions []SyncAction
-			for z := range s.pendingZones {
-				if s.objectPullInflight[z] {
-					continue
-				}
-				s.objectPullInflight[z] = true
-				actions = append(actions, StartObjectPullAction{PeerID: e.PeerID, Zone: z})
-			}
-			return actions, nil
-		}
-		if s.quietCount >= 2 {
-			if s.pendingEmpty() {
-				s.State = SyncSessionCompleted
-				return []SyncAction{SaveStateAction{Reason: fmt.Sprintf("sync completed after quiet timeout from %s", e.PeerID)}}, nil
-			}
-			s.State = SyncSessionFailed
-			s.lastError = errors.New("sync timed out with pending zones after UDP quiet period")
-			return []SyncAction{
-				RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-				SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
-			}, nil
-		}
-	case SyncSessionObjectPulling, SyncSessionChunkFallback:
-		if s.quietCount >= 2 {
-			if s.pendingEmpty() {
-				s.State = SyncSessionCompleted
-				return []SyncAction{SaveStateAction{Reason: fmt.Sprintf("sync completed after post-pull quiet timeout from %s", e.PeerID)}}, nil
-			}
-			s.State = SyncSessionFailed
-			s.lastError = errors.New("sync timed out with pending zones after object pull/chunk fallback")
-			return []SyncAction{
-				RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-				SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
-			}, nil
-		}
-	}
-	return nil, nil
 }
 
 func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error) {
@@ -499,7 +428,7 @@ func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error)
 	return []SyncAction{
 		RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
 		SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: round timeout", e.PeerID)},
-		CancelTimerAction{PeerID: e.PeerID, Kind: "packet_quiet"},
+		CancelTimerAction{PeerID: e.PeerID, Kind: "catalog_page"},
 	}, nil
 }
 
@@ -530,14 +459,20 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 
 	// If any zone failed over to UDP chunk fallback, stay in that state so
 	// onObjectChunk can process the response. Otherwise complete if nothing is
-	// left to fetch, or wait for UDP announces for the remaining zones.
+	// left to fetch; a remaining pending zone without inflight work is a hard
+	// error, not a reason to wait for ANNOUNCE payloads.
 	if len(s.chunkFallbackZones) > 0 {
 		s.State = SyncSessionChunkFallback
 	} else if s.pendingEmpty() {
 		s.State = SyncSessionCompleted
 		actions = append(actions, SaveStateAction{Reason: fmt.Sprintf("sync completed after object pull from %s", e.PeerID)})
 	} else {
-		s.State = SyncSessionAwaitingAnnounce
+		s.State = SyncSessionFailed
+		s.lastError = errors.New("sync has pending zones after object pull without fallback")
+		actions = append(actions,
+			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
+			SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError)},
+		)
 	}
 	return actions, nil
 }
@@ -564,7 +499,11 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 				SaveStateAction{Reason: fmt.Sprintf("sync completed after chunk fallback from %s", e.PeerID)},
 			}, nil
 		}
-		s.State = SyncSessionAwaitingAnnounce
+		if len(s.chunkFallbackZones) > 0 {
+			s.State = SyncSessionChunkFallback
+		} else {
+			s.State = SyncSessionFailed
+		}
 		return []SyncAction{ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true}}, nil
 	}
 	return nil, nil
@@ -583,10 +522,10 @@ func (s *SyncSession) EstimatedRTT() time.Duration {
 	return s.estimatedRTT
 }
 
-func (s *SyncSession) packetQuietTimeout() time.Duration {
-	d := time.Duration(kQuietMultiplier) * s.EstimatedRTT()
-	if d < MinPacketQuietTimeout {
-		d = MinPacketQuietTimeout
+func (s *SyncSession) catalogPageTimeout() time.Duration {
+	d := time.Duration(kCatalogPageTimeoutMultiplier) * s.EstimatedRTT()
+	if d < MinCatalogPageTimeout {
+		d = MinCatalogPageTimeout
 	}
 	return d
 }

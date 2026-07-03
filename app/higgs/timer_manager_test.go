@@ -27,25 +27,25 @@ func TestTimerManagerPostsRoundTimeout(t *testing.T) {
 	}
 }
 
-func TestTimerManagerPostsPacketQuietTimeout(t *testing.T) {
+func TestTimerManagerPostsCatalogPageTimeout(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
 	events := make(chan SyncEvent, 1)
 	tm := NewTimerManager(clock, events)
 
-	tm.Start("peer-a", "packet_quiet", clock.Now().Add(250*time.Millisecond))
+	tm.Start("peer-a", "catalog_page", clock.Now().Add(250*time.Millisecond))
 	clock.Advance(250 * time.Millisecond)
 
 	select {
 	case ev := <-events:
-		qt, ok := ev.(*PacketQuietTimeoutEvent)
+		qt, ok := ev.(*CatalogPageTimeoutEvent)
 		if !ok {
-			t.Fatalf("expected PacketQuietTimeoutEvent, got %T", ev)
+			t.Fatalf("expected CatalogPageTimeoutEvent, got %T", ev)
 		}
 		if qt.PeerID != "peer-a" {
 			t.Fatalf("unexpected peer id: %s", qt.PeerID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for packet quiet timeout event")
+		t.Fatal("timed out waiting for catalog page timeout event")
 	}
 }
 
@@ -95,7 +95,7 @@ func TestTimerManagerCancelAllForPeer(t *testing.T) {
 	tm := NewTimerManager(clock, events)
 
 	tm.Start("peer-a", "round", clock.Now().Add(5*time.Second))
-	tm.Start("peer-a", "packet_quiet", clock.Now().Add(250*time.Millisecond))
+	tm.Start("peer-a", "catalog_page", clock.Now().Add(250*time.Millisecond))
 	tm.CancelAll("peer-a")
 	clock.Advance(10 * time.Second)
 
