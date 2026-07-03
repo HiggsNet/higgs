@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,12 +23,10 @@ func (c *runtimeClock) NewTimer(d time.Duration) Timer {
 	return &realTimer{Timer: time.NewTimer(d)}
 }
 
-// EnableEventLoopSync switches the daemon to the event-driven SyncSession sync
-// path. It is intended for tests and future configuration; the default remains
-// the old synchronous path. If clock is nil, d.Sync.App.Clock is used when
-// available, otherwise the real system clock.
+// EnableEventLoopSync configures the event-loop SyncSession clock. The
+// event-loop sync path is the only daemon sync path; this helper remains for
+// tests that need a fake clock.
 func (d *DaemonService) EnableEventLoopSync(clock Clock) {
-	d.eventLoopSync = true
 	if clock == nil {
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Clock != nil {
 			clock = &runtimeClock{now: d.Sync.App.Clock}
@@ -81,6 +80,10 @@ func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool
 }
 
 func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx context.Context) error {
+	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil && d.Sync.State != nil {
+		recordVerifiedObservedPath(d.Sync.State, packet.Message.PeerID, packet.Addr, packet.Message.Type, d.Sync.now())
+		d.Sync.seedObservedPeerPath(packet.Message.PeerID)
+	}
 	event := routePacket(packet, d.syncSessions)
 	switch ev := event.(type) {
 	case *PacketEvent:
@@ -100,7 +103,7 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 					})
 				}
 			}
-			return d.Sync.handlePacket(packet)
+			return d.respondPing(msg.PeerID, msg.Ping)
 		case gossip.MessagePong:
 			if msg.Pong == nil {
 				return nil
@@ -117,7 +120,7 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			// knows how to split oversized zone snapshots into UDP object chunks.
 			// Keep them out of the active pull FSM as a read-only responder path.
 			if msg.FetchZone.ChunkFallback {
-				return d.Sync.handlePacket(packet)
+				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
 			}
 			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
 		case gossip.MessageFetchCatalogPage:
@@ -139,16 +142,70 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			// Object chunks still use the global UDP chunk assembly store.
 			return d.Sync.handleObjectChunk(msg, syncLimits(d.Sync.Config))
 		default:
-			return d.Sync.handlePacket(packet)
+			return nil
 		}
 	case *UnsolicitedPacketEvent:
-		if packet != nil && packet.Message != nil && packet.Message.Type == gossip.MessageAnnounce {
-			return d.handleAnnounceHint(packet.Message.PeerID)
+		if packet == nil || packet.Message == nil {
+			return nil
 		}
-		return d.Sync.handlePacket(packet)
+		msg := packet.Message
+		switch msg.Type {
+		case gossip.MessagePing:
+			if msg.Ping == nil {
+				return nil
+			}
+			if err := d.respondPing(msg.PeerID, msg.Ping); err != nil {
+				return err
+			}
+			if msg.Ping.Summary != nil {
+				return d.handleAnnounceHint(msg.PeerID)
+			}
+			return nil
+		case gossip.MessageFetchZone:
+			if msg.FetchZone == nil {
+				return nil
+			}
+			if msg.FetchZone.ChunkFallback {
+				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
+			}
+			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
+		case gossip.MessageFetchCatalogPage:
+			if msg.FetchCatalogPage == nil {
+				return nil
+			}
+			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
+		case gossip.MessageAnnounce:
+			return d.handleAnnounceHint(msg.PeerID)
+		case gossip.MessageObjectChunk:
+			return d.Sync.handleObjectChunk(msg, syncLimits(d.Sync.Config))
+		default:
+			return nil
+		}
 	default:
-		return d.Sync.handlePacket(packet)
+		return nil
 	}
+}
+
+func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || d.Sync.Transport == nil || ping == nil {
+		return nil
+	}
+	summary, err := gossip.CatalogSummaryFor(d.Sync.State.Network, d.syncDatagramBudget())
+	if err != nil {
+		return err
+	}
+	recordCatalogSummary(d.Sync.State, peerID, summary, d.Sync.now())
+	d.sendSyncMessage(peerID, &gossip.Message{
+		Type: gossip.MessagePong,
+		Pong: &gossip.Pong{Summary: summary},
+	})
+	if ping.Summary != nil && !bytes.Equal(ping.Summary.CatalogRoot, summary.CatalogRoot) {
+		d.sendSyncMessage(peerID, &gossip.Message{
+			Type:             gossip.MessageFetchCatalogPage,
+			FetchCatalogPage: &gossip.FetchCatalogPage{},
+		})
+	}
+	return nil
 }
 
 func (d *DaemonService) handleAnnounceHint(peerID string) error {
@@ -248,6 +305,13 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 		return nil
 	}
 	return d.respondAnnounceSnapshots(peerID, []*gossip.ZoneSnapshot{snap})
+}
+
+func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil {
+		return nil
+	}
+	return d.Sync.sendSnapshots(peerID, []zone.ZonePath{path}, true)
 }
 
 func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gossip.ZoneSnapshot) error {

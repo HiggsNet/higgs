@@ -24,7 +24,7 @@ Higgs gossip 只传播已签名的 Zone 状态。进入 active state 的数据�
 硬规则：
 
 - UDP datagram 默认预算是 `1200` bytes；任何 UDP message 都必须先按 wire size 预算打包。
-- 所有 list 都必须 bounded：Zone digest list、FetchZones、announce digest、records、catalog page 都不能假设一包装得下。
+- 所有 list 都必须 bounded：announce digest、records、catalog page 都不能假设一包装得下；旧 `Ping/Pong` digest list 与 `Pong.FetchZones` 已删除。
 - `announce` 是 hint，可以携带小而完整的 payload；不能依赖多条 UDP record announce 才完成一个 Zone。
 - 大对象默认走 TCP object pull；UDP chunk fallback 只在 TCP pull 明确失败或不可达后使用。
 - relay 只在本地 verified active state 实际变化后触发；收到 hint 本身不是 relay 条件。
@@ -76,7 +76,7 @@ type Message struct {
 
 ### 3.1 为什么需要 catalog
 
-旧实现把完整 `ZoneDigest[]` 放进 `PING` / `PONG`。这在小网络可用，但 Zone 数增多后会超过 1200-byte datagram 预算，导致 `ErrMessageTooLarge`。当前实现已经把主同步入口改为 `CatalogSummary` + bounded catalog page；兼容字段仍可被旧路径读取，但新发送路径不再承诺完整 digest list。`PONG.FetchZones` 和 `ANNOUNCE` digest / record 列表也会按 `max_datagram_bytes` 分页或降级为 hint / object pull。
+旧实现把完整 `ZoneDigest[]` 放进 `PING` / `PONG`。这在小网络可用，但 Zone 数增多后会超过 1200-byte datagram 预算，导致 `ErrMessageTooLarge`。当前实现已经把主同步入口改为 `CatalogSummary` + bounded catalog page；旧 `Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 兼容字段已删除。`ANNOUNCE` 只保留 hint 语义；实际对象同步由 TCP object pull 和必要时的 UDP chunk fallback 完成。
 
 因此 gossip v1 的下一步规则是引入 **Catalog**：
 
@@ -399,8 +399,8 @@ PacketQuietTimeout(peer) = max(
 
 - MessagePack UDP framing 和 1200-byte budget。
 - `PING` / `PONG` 的 `CatalogSummary`、`FETCH_CATALOG_PAGE` / `CATALOG_PAGE` bounded catalog page。
-- `FETCH_ZONE` / `ANNOUNCE` / `OBJECT_CHUNK` 基础消息。
-- `PONG.FetchZones`、`ANNOUNCE.Zones`、`ANNOUNCE.Records` 的发送预算保护；单项超预算时 fail closed 并记录 datagram diagnostics。
+- `FETCH_ZONE` / `ANNOUNCE` / `OBJECT_CHUNK` 基础消息；`FETCH_ZONE` 只作为只读响应或 UDP chunk fallback 请求，不再由 `PONG.FetchZones` 驱动。
+- `ANNOUNCE.Zones`、`ANNOUNCE.Records` 的发送预算保护；单项超预算时 fail closed 并记录 datagram diagnostics。
 - TCP object pull 与 UDP chunk fallback。
 - daemon 单 reader、事件循环和 per-peer `SyncSession` FSM；完整状态机见第 7 节。
 - `sync status --verbose` / `debug peer` 输出最近 catalog root、zone count、page cursor、page entries 和 rejected reason。

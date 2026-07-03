@@ -20,10 +20,10 @@ func TestMarshalUnmarshalPing(t *testing.T) {
 		PeerID:    "node-a",
 		Nonce:     1,
 		Timestamp: 123,
-		Ping: &Ping{Zones: []ZoneDigest{{
-			Zone:     "catofes.",
-			RootHash: []byte{1, 2, 3},
-		}}},
+		Ping: &Ping{Summary: &CatalogSummary{
+			CatalogRoot: []byte{1, 2, 3},
+			ZoneCount:   1,
+		}},
 	}
 
 	data, err := MarshalMessage(message)
@@ -34,11 +34,11 @@ func TestMarshalUnmarshalPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnmarshalMessage: %v", err)
 	}
-	if got.Type != MessagePing || got.PeerID != "node-a" || len(got.Ping.Zones) != 1 {
+	if got.Type != MessagePing || got.PeerID != "node-a" || got.Ping.Summary == nil {
 		t.Fatalf("decoded message = %#v", got)
 	}
-	if got.Ping.Zones[0].Zone != "catofes." || !bytes.Equal(got.Ping.Zones[0].RootHash, []byte{1, 2, 3}) {
-		t.Fatalf("decoded digest = %#v", got.Ping.Zones[0])
+	if got.Ping.Summary.ZoneCount != 1 || !bytes.Equal(got.Ping.Summary.CatalogRoot, []byte{1, 2, 3}) {
+		t.Fatalf("decoded summary = %#v", got.Ping.Summary)
 	}
 }
 

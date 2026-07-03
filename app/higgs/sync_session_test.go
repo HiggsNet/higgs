@@ -49,7 +49,7 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{Zones: digests},
+		Pong:         &gossip.Pong{},
 		MissingZones: nil,
 	}, now)
 	if err != nil {
@@ -65,17 +65,13 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
-	remote := []gossip.ZoneDigest{
-		{Zone: "catofes.", RootHash: []byte("h1")},
-		{Zone: "node-a.catofes.", RootHash: []byte("h2")},
-	}
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: local}, now)
 	now = now.Add(50 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{Zones: remote},
+		Pong:         &gossip.Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
 	if err != nil {

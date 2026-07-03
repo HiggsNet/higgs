@@ -1,13 +1,13 @@
 # SyncSession 时序警告
 
 > **文档状态：2026-07**  
-> 记录已知的 SyncSession FSM 时序问题，供后续 review 或流程重构时参考。
+> 记录曾经出现过的 SyncSession FSM 时序问题，供后续 review 或流程重构时参考。
 
 ---
 
 ## W-001: ServingPeerFetch 导致 PONG 被丢弃
 
-> **定位**：这是当前实现的时序风险记录，不是推荐按最小补丁实现的方案。后续应把它作为 gossip 读写分离重构的一个验证用例：`FETCH_*` 响应路径不应改变 active pull FSM 状态，`ANNOUNCE` 回到 hint 语义。
+> **定位**：这是历史时序风险记录。当前实现已完成 gossip 读写分离：`FETCH_*` 响应路径不改变 active pull FSM 状态，`ANNOUNCE` 回到 hint 语义，旧 `Pong.FetchZones` wire 字段已删除。
 
 ### 问题描述
 
@@ -25,7 +25,7 @@
   │  → state = ServingPeerFetch        │
   │  → 我发 ANNOUNCE 响应              │
   │                                    │
-  │◀──── PONG(含他的 catalog + FetchZones) │
+  │◀──── PONG(含他的 catalog summary) │
   │  → onPongReceived                  │
   │  → state(ServingPeerFetch) 不在    │
   │    [PingSent, SummarySent]         │
@@ -40,16 +40,15 @@
 
 | 影响 | 严重程度 | 说明 |
 |------|----------|------|
-| 本轮 PONG 丢失 | ⚠️ 轻度 | 对方的 FetchZones 和 catalog 未处理 |
+| 本轮 PONG 丢失 | ⚠️ 轻度 | 对方的 catalog summary 未处理 |
 | 对方拿到的数据 | ✅ 正常 | 我发的 ANNOUNCE 已送达 |
 | 最终一致性 | ✅ 保证 | 下一轮周期 sync timer（默认 60s）会重新发起 |
 | 数据丢失 | ❌ 不会 | Gossip 多轮收敛特性保证最终到达 |
 
 ### 涉及代码
 
-- [sync_session.go:482-486](app/higgs/sync_session.go#L482-L486) — `onFetchCatalogPageReceived` 在 Idle 等状态将 state 改为 ServingPeerFetch
-- [sync_session.go:501-517](app/higgs/sync_session.go#L501-L517) — `onFetchZoneReceived` 在 PingSent 等状态将 state 改为 ServingPeerFetch
-- [sync_session.go:355-357](app/higgs/sync_session.go#L355-L357) — `onPongReceived` 只接受 PingSent / SummarySent，其他状态忽略
+- 历史代码：`onFetchCatalogPageReceived` / `onFetchZoneReceived` 曾把 active session 改成 `ServingPeerFetch`。
+- 当前代码：`FETCH_CATALOG_PAGE`、普通 `FETCH_ZONE`、TCP object pull 均由 daemon read-only responder 处理，不进入 `SyncSession` active state。
 
 ### 触发条件
 
@@ -88,9 +87,9 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 
 ### 状态
 
-- [ ] 已确认
-- [ ] 已修复
-- [ ] 已验证
+- [x] 已确认
+- [x] 已修复
+- [x] 已验证
 
 ---
 

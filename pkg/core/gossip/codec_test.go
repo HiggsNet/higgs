@@ -16,10 +16,10 @@ func TestMsgpackCodecRoundTrip(t *testing.T) {
 		PeerID:    "node-a",
 		Nonce:     42,
 		Timestamp: 1717171717,
-		Ping: &Ping{Zones: []ZoneDigest{{
-			Zone:     "catofes.",
-			RootHash: []byte{1, 2, 3, 4},
-		}}},
+		Ping: &Ping{Summary: &CatalogSummary{
+			CatalogRoot: []byte{1, 2, 3, 4},
+			ZoneCount:   1,
+		}},
 	}
 	codec := msgpackCodec{}
 	data, err := encodeMessage(codec, message)
@@ -36,8 +36,8 @@ func TestMsgpackCodecRoundTrip(t *testing.T) {
 	if got.Type != MessagePing || got.PeerID != "node-a" || got.Nonce != 42 {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
-	if len(got.Ping.Zones) != 1 || got.Ping.Zones[0].Zone != "catofes." {
-		t.Fatalf("digest mismatch: %+v", got.Ping.Zones)
+	if got.Ping.Summary == nil || got.Ping.Summary.ZoneCount != 1 || !bytes.Equal(got.Ping.Summary.CatalogRoot, []byte{1, 2, 3, 4}) {
+		t.Fatalf("summary mismatch: %+v", got.Ping.Summary)
 	}
 }
 
@@ -47,10 +47,7 @@ func TestJSONCodecBackwardCompat(t *testing.T) {
 		PeerID:    "node-b",
 		Nonce:     7,
 		Timestamp: 1717171717,
-		Pong: &Pong{
-			Zones:      []ZoneDigest{{Zone: "catofes.", RootHash: []byte{5}}},
-			FetchZones: []zone.ZonePath{"test."},
-		},
+		Pong:      &Pong{Summary: &CatalogSummary{CatalogRoot: []byte{5}, ZoneCount: 1}},
 	}
 	codec := jsonCodec{}
 	data, err := encodeMessage(codec, message)
@@ -64,7 +61,7 @@ func TestJSONCodecBackwardCompat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeMessage: %v", err)
 	}
-	if got.Type != MessagePong || len(got.Pong.FetchZones) != 1 {
+	if got.Type != MessagePong || got.Pong.Summary == nil || got.Pong.Summary.ZoneCount != 1 {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 }
@@ -124,10 +121,7 @@ func BenchmarkPingJSON(b *testing.B) {
 		PeerID:    "node-a.catofes.",
 		Nonce:     123456789,
 		Timestamp: 1717171717,
-		Ping: &Ping{Zones: []ZoneDigest{
-			{Zone: "catofes.", RootHash: make([]byte, 32)},
-			{Zone: "node-a.catofes.", RootHash: make([]byte, 32)},
-		}},
+		Ping:      &Ping{Summary: &CatalogSummary{CatalogRoot: make([]byte, 32), ZoneCount: 2}},
 	}
 	codec := jsonCodec{}
 	b.ResetTimer()
@@ -142,10 +136,7 @@ func BenchmarkPingMsgpack(b *testing.B) {
 		PeerID:    "node-a.catofes.",
 		Nonce:     123456789,
 		Timestamp: 1717171717,
-		Ping: &Ping{Zones: []ZoneDigest{
-			{Zone: "catofes.", RootHash: make([]byte, 32)},
-			{Zone: "node-a.catofes.", RootHash: make([]byte, 32)},
-		}},
+		Ping:      &Ping{Summary: &CatalogSummary{CatalogRoot: make([]byte, 32), ZoneCount: 2}},
 	}
 	codec := msgpackCodec{}
 	b.ResetTimer()
@@ -206,12 +197,12 @@ func TestTypicalMessagePackSizesBeatJSON(t *testing.T) {
 		message *Message
 	}{
 		{
-			name:    "ping digests",
-			message: commonWireMessage(MessagePing, &Ping{Zones: []ZoneDigest{digest}}, nil, nil, nil, nil),
+			name:    "ping summary",
+			message: commonWireMessage(MessagePing, &Ping{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil, nil),
 		},
 		{
-			name:    "pong fetch zones",
-			message: commonWireMessage(MessagePong, nil, &Pong{Zones: []ZoneDigest{digest}, FetchZones: []zone.ZonePath{"catofes.", "node-a.catofes."}}, nil, nil, nil),
+			name:    "pong summary",
+			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
 		},
 		{
 			name:    "fetch zone",
@@ -296,11 +287,11 @@ func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 	}{
 		{
 			name:    "ping",
-			message: commonWireMessage(MessagePing, &Ping{Zones: []ZoneDigest{digest}}, nil, nil, nil, nil),
+			message: commonWireMessage(MessagePing, &Ping{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil, nil),
 		},
 		{
 			name:    "pong",
-			message: commonWireMessage(MessagePong, nil, &Pong{Zones: []ZoneDigest{digest}, FetchZones: []zone.ZonePath{"catofes."}}, nil, nil, nil),
+			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
 		},
 		{
 			name: "metadata snapshot",

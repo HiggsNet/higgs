@@ -293,11 +293,11 @@ transport private key 是 daemon 本地持久化材料，不进入 gossip。`ips
 远端节点如果之前没有广播 StrongSwan/IPsec 能力，现在开始广播完整且可连接的 `ipsec/*` records，本机处理顺序如下：
 
 ```text
-1. gossip 收到 announce。
-2. SyncRuntime.handleAnnounceUntil 处理 snapshot / record / digest。
-3. ApplySnapshot 或 ApplyRecordSnapshot 验证 Zone trust chain、record 签名、版本和 revocation 边界。
-4. 只有 verified active state digest 发生变化时，daemon 才进入 remote-applied/state-changed 路径。
-5. daemon 调用 notifyStateChanged；事件队列 drain 期间只标记 ipsecDirty，队列结束后统一 flush。
+1. gossip 收到 announce hint 或 catalog summary 差异。
+2. event-loop 唤醒 per-peer SyncSession，拉取 catalog page 并启动 TCP object pull / UDP chunk fallback。
+3. ApplySnapshot 验证 Zone trust chain、record 签名、版本和 revocation 边界。
+4. 只有 verified active state digest 发生变化时，daemon 才调用 notifyStateChanged。
+5. 事件队列 drain 期间只标记 ipsecDirty，队列结束后统一 flush。
 6. reconcileIPsecLinks 读取本地 LinkGroupSpec，调用 PlanTransportLinks 重算 desired links。
 7. ReconcileLinkInstances 对比 desired spec、持久化 LinkInstance、driver ListSAs 观测和 revoked peers。
 8. create/update/repair/teardown 动作进入 ApplyReconcileAction；adopt/noop 不触发系统 apply。

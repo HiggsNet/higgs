@@ -40,7 +40,7 @@ Higgs gossip 仅传播**已签名的 Zone 状态**。任何进入 active state �
 ### 1.3 硬规则
 
 - UDP datagram 默认预算 **1200 bytes**；任何 UDP message 都必须先按 wire size 预算打包。
-- 所有 list 都必须 bounded：Zone digest list、FetchZones、announce digest、records、catalog page 都不能假设一包装得下。
+- 所有 list 都必须 bounded：catalog page、announce digest、records 都不能假设一包装得下；旧 `Ping/Pong` digest list 与 `Pong.FetchZones` 已删除。
 - `announce` 是 hint，可以携带小而完整的 payload；不能依赖多条 UDP record announce 才完成一个 Zone。
 - 大对象默认走 TCP object pull；UDP chunk fallback 只在 TCP pull 明确失败或不可达后使用。
 - relay 只在本地 verified active state 实际变化后触发；收到 hint 本身不是 relay 条件。
@@ -95,7 +95,7 @@ Gossip 运行于事件驱动的 daemon 架构中：
 - `ANNOUNCE` 只表示“我这里可能有新 digest/object”，不作为完整同步的正确性前提。
 - 大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时传完整对象。
 - 收到 hint 不触发 relay；只有本地 active state 真正 apply 成功并发生变化后，才按 relay 规则通知其他 peer。
-- 旧协议兼容字段逐步删除：`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 不再参与现代 event-loop 同步状态机；wire codec 和旧 `sync.go` receive 路径在 6.0 默认事件循环后删除。
+- 旧协议兼容字段已删除：`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 不再出现在 wire 类型中；旧 `sync.go` receive/deadline 路径也已移除，event-loop 是 daemon 与 `sync once` 的唯一收包调度模型。
 
 ---
 
@@ -177,13 +177,10 @@ type Message struct {
 ```go
 type Ping struct {
     Summary *CatalogSummary // 当前节点的 catalog 摘要
-    Zones   []ZoneDigest    // (legacy) 旧协议 digest list，待删除
 }
 
 type Pong struct {
-    Summary    *CatalogSummary // 当前节点的 catalog 摘要
-    Zones      []ZoneDigest    // (legacy) 旧协议 digest list，待删除
-    FetchZones []ZonePath      // (legacy) 旧协议反向请求列表，待删除
+    Summary *CatalogSummary // 当前节点的 catalog 摘要
 }
 
 type FetchCatalogPage struct {
@@ -414,7 +411,7 @@ Phase 3: Object Pull（对象拉取）
 - `FETCH_ZONE`/`ANNOUNCE` 同时承担读取响应、hint 和兼容传输，语义混杂。
 - `ServingPeerFetch` / `FetchingLocal` 会污染主动同步 FSM，造成时序问题。
 
-当前 event-loop 路径已经不再走 `PONG.FetchZones -> FETCH_ZONE -> ANNOUNCE snapshot`，`Ping.Zones` / `Pong.Zones` 也不再驱动 active pull。对象获取统一由 active pull FSM 启动 TCP object pull；TCP 不可达时再请求 UDP chunk fallback。`ANNOUNCE` 只保留 hint 语义。wire codec 和旧 `sync.go` receive/deadline 路径仍暂时保留，随 6.0 默认事件循环收尾删除。
+当前路径已经不再走 `PONG.FetchZones -> FETCH_ZONE -> ANNOUNCE snapshot`，`Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` 也已从 wire 类型删除。对象获取统一由 active pull FSM 启动 TCP object pull；TCP 不可达时再请求 UDP chunk fallback。`ANNOUNCE` 只保留 hint 语义；旧 `sync.go` receive/deadline 路径已删除，daemon 和 `sync once` 都通过同一套 event-loop pump 收包。
 
 ---
 

@@ -1,9 +1,9 @@
 # Phase 6: Event-Driven Daemon / Sync State Machine Design
 
 > **文档状态（2026-06）**  
-> 本文档描述 Phase 6 对 Higgs daemon 同步层的事件驱动重构设计。wire 协议（`PING`/`PONG`/`FETCH_ZONE`/`FETCH_RECORD`/`ANNOUNCE`/`object_chunk`）本身不变，变的是 daemon 内部如何收发、调度和管理同步过程。
+> 本文档描述 Phase 6 对 Higgs daemon 同步层的事件驱动重构设计。当前 wire 协议保留 `PING`/`PONG`/`FETCH_ZONE`/`FETCH_RECORD`/`FETCH_CATALOG_PAGE`/`CATALOG_PAGE`/`ANNOUNCE`/`object_chunk`，但 `PING/PONG` 已收敛为 catalog summary，不再携带旧 digest / fetch list 兼容字段。
 >
-> **实现状态：** 6.0 事件驱动控制面重构已完成（代码位于 `app/higgs/sync_session.go`、`app/higgs/packet_demux.go`、`app/higgs/timer_manager.go`、`app/higgs/daemon_sync.go`），`DaemonService.eventLoopSync` 已默认启用（`true`），旧 `syncRound` 路径保留在 `eventLoopSync=false` 模式下作为应急回退。`go test -race ./...` 已全绿。
+> **实现状态：** 6.0 事件驱动控制面重构已完成（代码位于 `app/higgs/sync_session.go`、`app/higgs/packet_demux.go`、`app/higgs/timer_manager.go`、`app/higgs/daemon_sync.go`），event-loop 是 daemon 与 `sync once` 的唯一收包调度路径；旧 `syncRound` / `handlePacketUntil` 回退路径已删除。
 
 ## 1. 背景与问题
 
@@ -165,29 +165,24 @@ stateDiagram-v2
 | `PongReceived` | `PingSent` | `FetchingLocal` | 对方请求本节点 zones，发送 snapshots |
 | `PongReceived` | `PingSent` | `Completed` | 无差异，无需拉取 |
 | `PacketEvent{PING}` | `PingSent` | `AwaitingAnnounce` | 入站 `PING` 携带对方 digests，对活跃 session 等价于 `PongReceived`；同时旧路径会回一个 `PONG` |
-| `FetchZoneReceived` | `Idle` / `PingSent` | `FetchingLocal` | 按预算打包发送 snapshots |
-| `FetchZoneReceived` | `AwaitingAnnounce` | `AwaitingAnnounce` | 发送 snapshots，继续等待本端缺失数据 |
-| `AnnounceReceived` | `AwaitingAnnounce` / `ObjectPulling` / `ChunkFallback` | `AwaitingAnnounce` | apply；若仍有 pending zones 继续等 |
-| `AnnounceReceived` | `AwaitingAnnounce` / `ObjectPulling` / `ChunkFallback` | `Completed` | apply；全部补齐 |
-| `PacketQuietTimeout` (1st) | `AwaitingAnnounce` | `ObjectPulling` | 已发 `FETCH_ZONE`/snapshots，UDP 静默期满且仍有缺失，启动异步 TCP pull |
+| `FetchZoneReceived` | 任意 | 不改变 active FSM | read-only responder 直接读 verified state；普通请求回 snapshot，chunk fallback 请求回 object chunks |
+| `AnnounceReceived` | 任意 | 不直接 apply | 作为 hint 记录并唤醒 active pull；正确性路径仍走 catalog diff + object pull/chunk fallback |
+| `PacketQuietTimeout` (1st) | `AwaitingAnnounce` | `ObjectPulling` | catalog diff 后仍有缺失，UDP 静默期满，启动异步 TCP pull |
 | `ObjectPullResultEvent{ok}` | `ObjectPulling` | `AwaitingAnnounce` | apply snapshot；若还有 pending 继续等 |
 | `ObjectPullResultEvent{err}` | `ObjectPulling` | `ChunkFallback` | 发送 `FETCH_ZONE{ChunkFallback:true}` |
 | `ObjectChunkEvent{complete}` | `ChunkFallback` | `AwaitingAnnounce` / `Completed` | 重组完成、apply |
-| `PacketQuietTimeout` | `FetchingLocal` | `Completed` | 已发送对端请求的 zones 且 UDP 静默期满，结束本轮 |
 | `PacketQuietTimeout` (2nd+) | `AwaitingAnnounce` / `ObjectPulling` / `ChunkFallback` | `Completed` / `Failed` | 第二静默期结束（等待 object-pull 后的迟到 UDP / chunk），结束本轮 |
 | `RoundTimeoutEvent` | 任意活跃状态 | `Failed` | 记录 backoff、last_error、save state |
-| `UnsolicitedPacketEvent` | 任意 | 不变 | 路由到通用 `handlePacketUntil` |
+| `UnsolicitedPacketEvent` | 任意 | 不变 | 路由到 event-loop unsolicited responder / hint ingress |
 
 ### 3.5 动作（Actions）
 
 `SyncSession.OnEvent` 返回的动作由 daemon 事件循环执行：
 
 - `SendPing{peerID}`
-- `SendPong{peerID, zones, fetchZones}`
 - `SendFetchZone{peerID, zone, chunkFallback}`
-- `SendAnnounce{peerID, snapshots, records}`
 - `StartObjectPull{sessionID, peerID, zone}`
-- `ApplySnapshot{snapshot}` / `ApplyRecordSnapshot{record}`
+- `ApplySnapshot{snapshot}`
 - `SaveState{reason}`
 - `RecordBackoff{peerID, err}`
 - `StartTimer{peerID, kind, deadline}` / `CancelTimer{peerID, kind}`
@@ -213,8 +208,8 @@ func routePacket(
 
 - 只按 `peer_id` 路由，不解释 message type。
 - `SyncSession` 内部再按 message type 处理。
-- 未命中活跃 session 的包走通用 unsolicited 路径（`handlePacketUntil`）。
-- **特殊处理 `PING`**：`handlePacketEventSyncSession` 收到命中活跃 session 的 `PING` 时，会把它转成 `PongReceivedEvent` 喂给 session（因为 `PING` 已经携带对方 digests），同时仍调用旧 `handlePacket` 回一个 `PONG`。这解决了对端先启动、本端初始 `PING` 丢失时的单向收敛问题。
+- 未命中活跃 session 的包走 event-loop unsolicited 路径：`PING`/`FETCH_*` 由只读 responder 处理，`ANNOUNCE` 进入 hint ingress。
+- **特殊处理 `PING`**：`handlePacketEventSyncSession` 收到命中活跃 session 的 `PING` 时，会把 summary 转成 `CatalogSummaryReceivedEvent`，同时直接回 `PONG` summary。若 summary 不同，本端会请求对端 catalog page。
 
 ### 4.2 Timer Manager
 
@@ -289,7 +284,7 @@ func startObjectPullWorker(
 
 接收侧：
 
-1. 收到 `ANNOUNCE`，`handleAnnounceUntil` 直接 apply 小数据；遇到缺失/超预算 zone 则 emit `ObjectPullNeeded`。
+1. 收到 `ANNOUNCE` hint 后唤醒 active pull，由 catalog diff 判断缺失对象。
 2. FSM 进入 `ObjectPulling`，启动异步 TCP pull。
 3. TCP 失败 → 进入 `ChunkFallback`，发送 `FETCH_ZONE{ChunkFallback:true}`。
 4. 收到 `object_chunk` → `ObjectChunkEvent`；在 `ChunkFallback` 状态重组；完整后 apply。
@@ -545,7 +540,7 @@ bbolt 使用文件级 `flock`，同一时刻只允许一个进程以写模式打
 | `ReplayWindow` | 加互斥锁作为安全网；单 reader 后理论上无并发，但保留锁和 race 测试 |
 | `PeerQuotas` | 仍在 `Transport.Receive()` / `Send()` 中检查，无需大改 |
 | `objectPullTCPServe` | 不变，仍是独立 TCP server goroutine |
-| `handlePacketUntil` | 保留给 unsolicited / cross-traffic 包；不再用于同步轮次 |
+| unsolicited responder / hint ingress | event-loop 内处理 unsolicited `PING`、`FETCH_*`、`ANNOUNCE`；不再依赖旧 `handlePacketUntil` |
 | `relaySync` | 改为 post `SyncTimerEvent` 创建独立 session |
 | `sync once` CLI | 仍可工作：创建 session，block on `session.Done()` channel |
 
@@ -584,11 +579,11 @@ bbolt 使用文件级 `flock`，同一时刻只允许一个进程以写模式打
 
 ## 11. 验收标准
 
-- [x] 全仓库只有一个 goroutine 调用 `transport.Receive()`（默认 `eventLoopSync=true`）。
+- [x] 全仓库只有一个 goroutine 调用 `transport.Receive()`（event-loop 唯一路径）。
 - [x] `go test -race ./...` 通过。
 - [ ] 所有现有 smoke 测试通过（`chain-relay-smoke` 受测试机多公网接口环境影响，旧路径同样失败）。
 - [x] 新增 `SyncSession` 单元测试覆盖：Ping/Pong、FetchZone、Announce、object-pull、chunk fallback、timeout、backoff、RTT-aware timeout。
-- [x] 全仓库只有一个 goroutine 调用 `transport.Receive()`（默认 `eventLoopSync=true`；旧路径仍保留在 `eventLoopSync=false` 模式下）。
+- [x] 全仓库只有一个 goroutine 调用 `transport.Receive()`（旧 `eventLoopSync=false` 回退已删除）。
 - [x] `go test -race ./...` 通过。
 - [x] 所有现有 smoke 中 `phase2-smoke`、`object-pull-smoke` 通过；`chain-relay-smoke` 在当前多公网接口测试机上因 discovered 公网地址不可达而失败，旧路径同样失败，与本次重构无关。
 - [x] 新增 `SyncSession` 单元测试覆盖：Ping/Pong、FetchZone、Announce、object-pull、chunk fallback、timeout、backoff、RTT-aware timeout。

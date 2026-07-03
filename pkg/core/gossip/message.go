@@ -52,13 +52,10 @@ type ZoneDigest struct {
 
 type Ping struct {
 	Summary *CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
-	Zones   []ZoneDigest    `json:"zones,omitempty" msgpack:"z,omitempty"` // deprecated compatibility digest page
 }
 
 type Pong struct {
-	Summary    *CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
-	Zones      []ZoneDigest    `json:"zones,omitempty" msgpack:"z,omitempty"` // deprecated compatibility digest page
-	FetchZones []zone.ZonePath `json:"fetch_zones" msgpack:"fz"`
+	Summary *CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
 }
 
 type CatalogSummary struct {

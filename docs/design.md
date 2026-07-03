@@ -539,11 +539,11 @@ overlays:
 远端节点从“不支持/未广播 StrongSwan”变成“广播可连接”时，本机不会因为收到某个字符串就立即修改系统网络。当前 daemon 的处理路径是：
 
 ```text
-gossip announce
-  -> SyncRuntime.handleAnnounceUntil
-  -> VerifyChain / VerifyRecord / ApplySnapshot 或 ApplyRecordSnapshot
+gossip announce hint / catalog summary diff
+  -> event-loop SyncSession 拉取 catalog page
+  -> TCP object pull / UDP chunk fallback
+  -> VerifyChain / VerifyRecord / ApplySnapshot
   -> verified active state digest 发生变化
-  -> DaemonService.handleRemoteAppliedEvent
   -> notifyStateChanged
   -> PlanTransportLinks(active state + 本地 LinkGroupSpec)
   -> ReconcileLinkInstances(desired + persisted LinkInstance + driver ListSAs)
@@ -1062,7 +1062,7 @@ type PeerView struct {
 
 ## 七、Phase 6 事件驱动 Daemon 设计要点
 
-Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并默认启用（`eventLoopSync = true`）。旧 `syncRound` 路径仍保留在 `eventLoopSync = false` 模式下作为应急回退。这是结构性重构，不改变 gossip wire 协议，但改变了 daemon 内部的事件调度、超时和状态持久化边界。
+Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并删除旧 `syncRound` 回退路径。`PING/PONG` wire 类型也已收敛为 catalog summary，不再携带旧 `Zones` / `FetchZones` 兼容字段。daemon 与 `sync once` 都通过同一套 event-loop pump 处理收包、超时和状态持久化。
 
 ### 7.1 为什么必须重构
 

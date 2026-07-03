@@ -81,7 +81,7 @@
 **状态：** 6.0-6.7.6 主线已完成并归档到 [docs/roadmap-archive.md](docs/roadmap-archive.md)：事件驱动 daemon/sync FSM、endpoint 可达性修复、IPAM 闭环、auto-join 诊断、防火墙同步、动态 peer 管理、撤销清理、链路健康检测、Observer 只读控制台 MVP 均已落地。当前 Phase 6 只保留未闭环后续项与 6.7.7 模块化重构。
 
 **剩余后续：**
-- [ ] 6.0 事件循环收尾：默认启用事件循环路径后删除旧 `sync.go` receive/deadline 路径，移除旧 `syncRound` / `handlePacketUntil` 的 `defer saveState()`，补“不会双 goroutine Receive”race 回归。
+- [x] 6.0 事件循环收尾：event-loop 已成为唯一默认 daemon/sync 路径；旧 `sync.go` receive/deadline 路径、`syncRound`、`handlePacket`/`handleAnnounce` 兼容 receive 入口、旧 `Ping.Zones` / `Pong.Zones` / `Pong.FetchZones` wire 字段已删除。
 - [ ] **6.0.x Gossip SyncSession 读写分离 / hint 语义重构**
   - **设计文档：** `docs/new/gossip.md#15-目标重构读写分离与-hint-语义`；已知时序风险见 `docs/new/warning.md#w-001-servingpeerfetch-导致-pong-被丢弃`。
   - 目标：把 active pull FSM、只读 responder 和 hint ingress 拆开，避免一个 per-peer `SyncSession.State` 同时表达“我正在读对方”和“对方正在读我”。
@@ -93,7 +93,7 @@
   - [x] 把 `FetchCatalogPageReceivedEvent` 从 `SyncSession.OnEvent` 中迁出，改为 daemon 只读 responder action/handler；保留 catalog page budget、诊断和发送错误记录。
   - [x] 把普通 `FETCH_ZONE` 兼容响应从主 FSM 迁出；现代路径优先走 TCP object pull，UDP `FETCH_ZONE{chunk_fallback:true}` 仅作为 TCP 不可达后的 chunk fallback 请求。
   - [x] 将 `ANNOUNCE` 处理收敛为 hint：不再把 snapshot/record announce 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
-  - [x] 删除或停用旧兼容字段路径：现代 event-loop 不再使用 `Ping.Zones`、`Pong.Zones`、`Pong.FetchZones`、`SendPongAction`、`FetchingLocal`、`ServingPeerFetch`、eager object pull；wire codec 与旧 `sync.go` receive 路径留到 6.0 默认事件循环收尾统一删除。
+  - [x] 删除旧兼容字段路径：现代 event-loop 不再使用 `Ping.Zones`、`Pong.Zones`、`Pong.FetchZones`、`SendPongAction`、`FetchingLocal`、`ServingPeerFetch`、eager object pull；wire codec 与旧 `sync.go` receive 路径已随 6.0 事件循环收尾删除。
   - [ ] 更新观测面：`sync status --verbose` / `debug peer` 区分 active pull、read-only responder、hint suppressed/accepted、object pull/chunk fallback 结果。
   - [x] 验证：`go test ./app/higgs ./pkg/core/gossip`、`make phase2-smoke`、`make chain-relay-smoke`、`make object-pull-smoke`；最后再跑 `make check`。
 - [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。

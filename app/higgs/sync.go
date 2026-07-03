@@ -24,6 +24,7 @@ import (
 
 const relayMinInterval = time.Second
 const defaultSyncRoundTimeout = 5 * time.Second
+const syncOnceResponderQuiet = 500 * time.Millisecond
 const maxRelayFanoutPerUpdate = 8
 const rejectedDigestTTL = 10 * time.Minute
 const observedPathTTL = 3 * time.Minute
@@ -420,15 +421,16 @@ func syncServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	syncRuntime := newSyncRuntime(state, config, nil, rt)
 	logger := newAppLogger(config)
-	transport, err := syncRuntime.openTransport()
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	transport, err := service.Sync.openTransport()
 	if err != nil {
 		return err
 	}
 	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, logger.Warn)
 	defer stopRecv()
-	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile { return syncRuntime.State }))
+	service.Sync.Transport = transport
+	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile { return service.currentState() }))
 	if err != nil {
 		return err
 	}
@@ -436,6 +438,8 @@ func syncServe(ctx context.Context) error {
 		defer objectPullListener.Close()
 		logger.Info("object_pull", "serve_started", map[string]any{"addr": objectPullListener.Addr()})
 	}
+	service.objectPullPool.Start(ctx)
+	defer service.objectPullPool.Stop()
 	logger.Info("sync", "serve_started", map[string]any{
 		"peer_id": config.PeerID,
 		"addr":    transport.LocalAddr(),
@@ -448,7 +452,7 @@ func syncServe(ctx context.Context) error {
 			if packet == nil {
 				continue
 			}
-			if err := syncRuntime.handlePacket(packet); err != nil {
+			if err := service.processPacketEvent(packet, ctx); err != nil {
 				logger.Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
 					"peer_id": packet.Message.PeerID,
 					"type":    packet.Message.Type,
@@ -456,6 +460,13 @@ func syncServe(ctx context.Context) error {
 					"error":   err,
 				}, err))
 			}
+		case event := <-service.syncEvents:
+			service.handleSyncEvent(ctx, event)
+		case result := <-service.objectPullResults:
+			unlock := service.lockState()
+			recordObjectPullResult(service.Sync.State, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, service.Sync.now())
+			unlock()
+			service.enqueueObjectPullResult(result)
 		}
 	}
 }
@@ -473,20 +484,85 @@ func syncOnce(peerID string) error {
 	if err != nil {
 		return err
 	}
-	syncRuntime := newSyncRuntime(state, config, nil, rt)
-	transport, err := syncRuntime.openTransport()
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	transport, err := service.Sync.openTransport()
 	if err != nil {
 		return err
 	}
 	defer transport.Close()
-	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile { return syncRuntime.State }))
+	service.Sync.Transport = transport
+	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile { return service.currentState() }))
 	if err != nil {
 		return err
 	}
 	if objectPullListener != nil {
 		defer objectPullListener.Close()
 	}
-	return syncRuntime.syncRound(context.Background(), peerID, defaultSyncRoundTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
+	defer cancel()
+	service.objectPullPool.Start(ctx)
+	defer service.objectPullPool.Stop()
+	service.Sync.updateDiscoveredPeers()
+	if err := service.startHintedSyncSession(peerID, "sync_once"); err != nil {
+		return err
+	}
+	var responderQuietUntil time.Time
+	for {
+		drained := false
+		if _, ok := service.syncSessions[peerID]; !ok && len(service.syncEvents) == 0 && len(service.objectPullResults) == 0 {
+			drained = true
+			if responderQuietUntil.IsZero() {
+				responderQuietUntil = time.Now().Add(syncOnceResponderQuiet)
+			}
+			if !time.Now().Before(responderQuietUntil) {
+				return nil
+			}
+		} else {
+			responderQuietUntil = time.Time{}
+		}
+		select {
+		case <-ctx.Done():
+			if session := service.syncSessions[peerID]; session != nil && len(session.pendingZones) > 0 {
+				pending := make([]zone.ZonePath, 0, len(session.pendingZones))
+				for path := range session.pendingZones {
+					pending = append(pending, path)
+				}
+				return &syncPendingZonesError{zones: pending}
+			}
+			return errors.New("sync receive timed out")
+		case event := <-service.syncEvents:
+			responderQuietUntil = time.Time{}
+			service.handleSyncEvent(ctx, event)
+		case result := <-service.objectPullResults:
+			responderQuietUntil = time.Time{}
+			unlock := service.lockState()
+			recordObjectPullResult(service.Sync.State, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, service.Sync.now())
+			unlock()
+			service.enqueueObjectPullResult(result)
+		default:
+			deadline := time.Now().Add(100 * time.Millisecond)
+			if drained && !responderQuietUntil.IsZero() && responderQuietUntil.Before(deadline) {
+				deadline = responderQuietUntil
+			}
+			packet, err := receiveWithContext(ctx, transport, deadline)
+			if err == nil {
+				responderQuietUntil = time.Time{}
+				if handleErr := service.processPacketEvent(packet, ctx); handleErr != nil {
+					return handleErr
+				}
+				continue
+			}
+			if ctx.Err() != nil {
+				continue
+			}
+			if drained && !responderQuietUntil.IsZero() && !time.Now().Before(responderQuietUntil) {
+				return nil
+			}
+			if !isReceiveTimeout(err) {
+				return err
+			}
+		}
+	}
 }
 
 func syncRun(ctx context.Context, interval time.Duration) error {
@@ -547,46 +623,6 @@ func sameZoneDigests(a, b []gossip.ZoneDigest) bool {
 		}
 	}
 	return true
-}
-
-func (sr *SyncRuntime) relay(ctx context.Context, sourcePeerID string) error {
-	now := sr.now()
-	updatedPeerState := false
-	relayed := 0
-	for _, peerID := range outboundSyncPeersAt(sr.State, sr.Config, now) {
-		if peerID == sourcePeerID {
-			continue
-		}
-		if relayed >= maxRelayFanoutPerUpdate {
-			recordRelaySuppression(sr.State, peerID, "relay_fanout_limited", now)
-			updatedPeerState = true
-			continue
-		}
-		allowed, reason := shouldRelayToPeer(sr.State.SyncPeers[peerID], peerID, sourcePeerID, now)
-		if !allowed {
-			recordRelaySuppression(sr.State, peerID, reason, now)
-			updatedPeerState = true
-			continue
-		}
-		relayed++
-		if err := sr.syncRoundLocked(ctx, peerID, defaultSyncRoundTimeout); err != nil {
-			fields := map[string]any{
-				"peer_id":     peerID,
-				"source_peer": sourcePeerID,
-				"reason":      syncErrorReason(err),
-				"error":       err,
-			}
-			addPeerLogFields(fields, sr.State, peerID, now)
-			sr.logger().Warn("sync", "relay_round_failed", fields)
-			continue
-		}
-		recordRelaySuccess(sr.State, peerID, sourcePeerID, now)
-		updatedPeerState = true
-	}
-	if updatedPeerState {
-		return sr.saveState()
-	}
-	return nil
 }
 
 func fetchListForPeer(state *stateFile, peerID string, remote []gossip.ZoneDigest, now time.Time) []zone.ZonePath {
@@ -1523,224 +1559,6 @@ func endpointEntryIsPrivate(entry gossip.EndpointEntry) bool {
 	return endpointDialRank(entry) == 2
 }
 
-// syncRound performs a synchronous sync round with peerID. It acquires and
-// releases the write lock on sr.State. Callers that already hold the lock
-// should use syncRoundLocked.
-func (sr *SyncRuntime) syncRound(ctx context.Context, peerID string, timeout time.Duration) error {
-	if sr != nil && sr.State != nil {
-		sr.State.Lock()
-		defer sr.State.Unlock()
-	}
-	return sr.syncRoundLocked(ctx, peerID, timeout)
-}
-
-func (sr *SyncRuntime) syncRoundLocked(ctx context.Context, peerID string, timeout time.Duration) (err error) {
-	if sr == nil || sr.State == nil {
-		return errors.New("sync runtime not initialized")
-	}
-	defer func() {
-		recordPeerSyncAt(sr.State, peerID, err, sr.now())
-		if err != nil {
-			recordObservedPathFailure(sr.State, peerID)
-			if sr.Transport != nil {
-				if lastAddr := sr.Transport.LastSendAddr(peerID); lastAddr != nil {
-					sr.Transport.RecordAddrFailure(peerID, lastAddr)
-				}
-			}
-		}
-		if saveErr := sr.saveState(); err == nil && saveErr != nil {
-			err = saveErr
-		}
-	}()
-	sr.seedObservedPeerPath(peerID)
-	summary, summaryErr := gossip.CatalogSummaryFor(sr.State.Network, sr.Transport.MaxMessageBytes())
-	if summaryErr != nil {
-		return summaryErr
-	}
-	if err := sr.Transport.Send(peerID, &gossip.Message{
-		Type: gossip.MessagePing,
-		Ping: &gossip.Ping{Summary: summary},
-	}); err != nil {
-		return err
-	}
-
-	deadline := sr.now().Add(timeout)
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	awaitingQuiet := false
-	var remoteDigests []gossip.ZoneDigest
-	udpPhase := true
-	peerNeedsLocalZones := false
-
-	// Release the write lock before the blocking receive loop so that other
-	// goroutines (e.g. the test packet server) can acquire it while we wait on
-	// the network. Each iteration reacquires the lock to process a packet or
-	// timeout, then releases it again before the next receive.
-	sr.State.Unlock()
-	for sr.now().Before(deadline) {
-		if ctx.Err() != nil {
-			sr.State.Lock()
-			err = ctx.Err()
-			return err
-		}
-		readDeadline := deadline
-		if awaitingQuiet {
-			quietDeadline := time.Now().Add(250 * time.Millisecond)
-			if quietDeadline.Before(readDeadline) {
-				readDeadline = quietDeadline
-			}
-		}
-		packet, receiveErr := receiveWithDeadline(sr.Transport, readDeadline)
-
-		breakLoop := false
-		done := false
-		sr.State.Lock()
-		func() {
-			defer sr.State.Unlock()
-			if receiveErr != nil && isReceiveTimeout(receiveErr) && awaitingQuiet {
-				if udpPhase {
-					// UDP quiet reached; move to object-pull phase.
-					udpPhase = false
-					sentFallbackFetch := false
-					if len(remoteDigests) > 0 {
-						fetch := fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())
-						for _, path := range fetch {
-							if snapshot, pullErr := tryObjectPullTCPUntil(sr.State, sr.Config, peerID, path, deadline); pullErr == nil && snapshot != nil {
-								// Object pull uses TCP; relax the byte limit because the object
-								// already passed the 8 MiB response cap in the pull layer.
-								limits := syncLimits(sr.Config)
-								limits.MaxBytes = 8 << 20
-								if _, applyErr := gossip.ApplySnapshot(sr.State.Network, snapshot, sr.now(), limits); applyErr != nil {
-									recordRejectedDigest(sr.State, peerID, digestForZone(remoteDigests, path), gossip.RejectReason(applyErr), sr.now())
-									sr.logger().Warn("object_pull", "apply_failed", map[string]any{
-										"peer_id": peerID,
-										"zone":    path,
-										"reason":  gossip.RejectReason(applyErr),
-										"error":   applyErr,
-									})
-								} else {
-									clearRejectedDigest(sr.State, peerID, path)
-									sr.tryAdoptAutoJoinAfterSync(peerID, "object_pull")
-									sr.logger().Info("sync", "zone_applied", map[string]any{
-										"peer_id": peerID,
-										"zone":    path,
-										"via":     "object_pull",
-									})
-								}
-							} else if pullErr != nil {
-								if debugLogEnabled(sr.Config) {
-									sr.logger().Debug("object_pull", "pull_failed", map[string]any{
-										"peer_id": peerID,
-										"zone":    path,
-										"error":   pullErr,
-									})
-								}
-								if sendErr := sr.Transport.Send(peerID, &gossip.Message{
-									Type:      gossip.MessageFetchZone,
-									FetchZone: &gossip.FetchZone{Zone: path, ChunkFallback: true},
-								}); sendErr != nil {
-									err = sendErr
-									return
-								}
-								sentFallbackFetch = true
-							}
-						}
-						if len(fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())) == 0 && !peerNeedsLocalZones {
-							done = true
-							return
-						}
-					}
-					// After object pull, continue waiting for either a late UDP ANNOUNCE
-					// or the response to the explicit UDP fallback fetch.
-					awaitingQuiet = !sentFallbackFetch
-					return
-				}
-				// Second quiet period after object pull.
-				breakLoop = true
-				return
-			}
-			if receiveErr != nil && isReceiveTimeout(receiveErr) && sr.now().Before(deadline) {
-				return
-			}
-			if receiveErr != nil {
-				err = receiveErr
-				return
-			}
-			if packet.Message.PeerID != peerID {
-				if handleErr := sr.handlePacketUntil(packet, deadline); handleErr != nil {
-					sr.logger().Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
-						"peer_id": packet.Message.PeerID,
-						"type":    packet.Message.Type,
-						"reason":  gossip.RejectReason(handleErr),
-						"error":   handleErr,
-					}, handleErr))
-				}
-				return
-			}
-			var waitingForAnnounce bool
-			if packet.Message.Pong != nil {
-				if packet.Message.Pong.Summary != nil {
-					waitingForAnnounce = !bytes.Equal(packet.Message.Pong.Summary.CatalogRoot, summary.CatalogRoot)
-				} else {
-					waitingForAnnounce = len(gossip.FetchList(sr.State.Network, packet.Message.Pong.Zones)) > 0
-				}
-				remoteDigests = packet.Message.Pong.Zones
-			} else if packet.Message.CatalogPage != nil {
-				waitingForAnnounce = packet.Message.CatalogPage.NextCursor != ""
-				remoteDigests = append(remoteDigests, packet.Message.CatalogPage.Entries...)
-			}
-			peerRequestedZones := packet.Message.Pong != nil && len(packet.Message.Pong.FetchZones) > 0
-			if peerRequestedZones {
-				peerNeedsLocalZones = true
-			}
-			if err = sr.handlePacketUntil(packet, deadline); err != nil {
-				sr.logger().Warn("gossip", "peer_packet_failed", addGossipErrorFields(map[string]any{
-					"peer_id": packet.Message.PeerID,
-					"type":    packet.Message.Type,
-					"reason":  gossip.RejectReason(err),
-					"error":   err,
-				}, err))
-				return
-			}
-			if peerRequestedZones {
-				awaitingQuiet = true
-			}
-			if waitingForAnnounce {
-				awaitingQuiet = true
-			}
-			if packet.Message.Pong != nil && !waitingForAnnounce && !peerRequestedZones {
-				udpPhase = false
-				awaitingQuiet = true
-				return
-			}
-			if packet.Message.Announce != nil {
-				awaitingQuiet = true
-			}
-		}()
-		if err != nil {
-			sr.State.Lock()
-			return err
-		}
-		if done {
-			sr.State.Lock()
-			return nil
-		}
-		if breakLoop {
-			break
-		}
-	}
-	sr.State.Lock()
-	if len(remoteDigests) > 0 {
-		pending := fetchListForPeer(sr.State, peerID, remoteDigests, sr.now())
-		if len(pending) > 0 {
-			err = &syncPendingZonesError{zones: pending}
-			return err
-		}
-	}
-	return nil
-}
-
 func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1801,345 +1619,6 @@ func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
 		return 0
 	}
 	return until.Sub(now)
-}
-
-func (sr *SyncRuntime) handlePacket(packet *gossip.Packet) (err error) {
-	return sr.handlePacketUntil(packet, time.Time{})
-}
-
-func (sr *SyncRuntime) handlePacketUntil(packet *gossip.Packet, deadline time.Time) (err error) {
-	state := sr.State
-	transport := sr.Transport
-	config := sr.Config
-	configureValidation(state.Network)
-	message := packet.Message
-	defer func() {
-		if err == nil {
-			recordVerifiedObservedPath(state, message.PeerID, packet.Addr, message.Type, sr.now())
-			sr.seedObservedPeerPath(message.PeerID)
-		}
-		recordPeerSyncAt(state, message.PeerID, err, sr.now())
-		if err != nil && debugLogEnabled(config) {
-			reason := gossip.RejectReason(err)
-			if reason == "invalid_message" {
-				reason = "verify_failed"
-			}
-			event := gossip.Event{
-				Direction: "handle",
-				PeerID:    message.PeerID,
-				Type:      message.Type,
-				Reason:    reason,
-				Error:     err.Error(),
-			}
-			gossip.ApplyQuotaDiagnostics(&event, err)
-			if config != nil {
-				if logger := syncDebugLogger(config); logger != nil {
-					logger(event)
-				}
-			}
-		}
-		if saveErr := sr.saveState(); err == nil && saveErr != nil {
-			err = saveErr
-		}
-	}()
-	switch message.Type {
-	case gossip.MessagePing:
-		recordVerifiedObservedPath(state, message.PeerID, packet.Addr, message.Type, sr.now())
-		sr.seedObservedPeerPath(message.PeerID)
-		summary, err := gossip.CatalogSummaryFor(state.Network, transport.MaxMessageBytes())
-		if err != nil {
-			return err
-		}
-		fetch := fetchListForPeer(state, message.PeerID, message.Ping.Zones, sr.now())
-		pongs, oversized := packPongFetchZones(summary, fetch, transport.MaxMessageBytes())
-		for _, item := range oversized {
-			recordDatagramTooLarge(state, message.PeerID, "send", item.Object, item.Zone, item.Key, item.Size, transport.MaxMessageBytes(), sr.now())
-		}
-		recordCatalogSummary(state, message.PeerID, summary, sr.now())
-		for _, pong := range pongs {
-			if err := transport.Send(message.PeerID, &gossip.Message{Type: gossip.MessagePong, Pong: pong}); err != nil {
-				return err
-			}
-		}
-		if message.Ping.Summary != nil && !bytes.Equal(message.Ping.Summary.CatalogRoot, summary.CatalogRoot) {
-			if err := transport.Send(message.PeerID, &gossip.Message{
-				Type:             gossip.MessageFetchCatalogPage,
-				FetchCatalogPage: &gossip.FetchCatalogPage{},
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
-	case gossip.MessagePong:
-		if message.Pong.Summary != nil {
-			localSummary, err := gossip.CatalogSummaryFor(state.Network, transport.MaxMessageBytes())
-			if err != nil {
-				return err
-			}
-			if bytes.Equal(message.Pong.Summary.CatalogRoot, localSummary.CatalogRoot) {
-				return nil
-			}
-			return transport.Send(message.PeerID, &gossip.Message{
-				Type:             gossip.MessageFetchCatalogPage,
-				FetchCatalogPage: &gossip.FetchCatalogPage{},
-			})
-		}
-		if len(message.Pong.FetchZones) == 0 {
-			for _, path := range fetchListForPeer(state, message.PeerID, message.Pong.Zones, sr.now()) {
-				if err := transport.Send(message.PeerID, &gossip.Message{
-					Type:      gossip.MessageFetchZone,
-					FetchZone: &gossip.FetchZone{Zone: path},
-				}); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		if err := sr.sendSnapshots(message.PeerID, message.Pong.FetchZones, false); err != nil {
-			return err
-		}
-		for _, path := range fetchListForPeer(state, message.PeerID, message.Pong.Zones, sr.now()) {
-			if err := transport.Send(message.PeerID, &gossip.Message{
-				Type:      gossip.MessageFetchZone,
-				FetchZone: &gossip.FetchZone{Zone: path},
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
-	case gossip.MessageFetchCatalogPage:
-		page, err := gossip.CatalogPageFor(state.Network, message.FetchCatalogPage.Cursor, transport.MaxMessageBytes())
-		if err != nil {
-			recordDatagramTooLarge(state, message.PeerID, "send", "catalog_page", "", "", 0, transport.MaxMessageBytes(), sr.now())
-			recordCatalogReject(state, message.PeerID, message.FetchCatalogPage.Cursor, gossip.RejectReason(err), sr.now())
-			sr.logger().Warn("sync", "catalog_page_failed", map[string]any{
-				"peer_id": message.PeerID,
-				"cursor":  message.FetchCatalogPage.Cursor,
-				"error":   err,
-			})
-			return nil
-		}
-		recordCatalogPage(state, message.PeerID, page, sr.now())
-		return transport.Send(message.PeerID, &gossip.Message{
-			Type:        gossip.MessageCatalogPage,
-			CatalogPage: page,
-		})
-	case gossip.MessageCatalogPage:
-		recordCatalogPage(state, message.PeerID, message.CatalogPage, sr.now())
-		for _, diff := range gossip.CatalogDiff(gossip.ZoneDigests(state.Network), message.CatalogPage.Entries) {
-			if shouldSkipRemoteZone(state, message.PeerID, diff.Zone, diff.RootHash, sr.now()) {
-				continue
-			}
-			snapshot, pullErr := tryObjectPullTCPUntil(state, config, message.PeerID, diff.Zone, deadline)
-			if pullErr != nil {
-				if err := transport.Send(message.PeerID, &gossip.Message{
-					Type:      gossip.MessageFetchZone,
-					FetchZone: &gossip.FetchZone{Zone: diff.Zone, ChunkFallback: true},
-				}); err != nil {
-					return err
-				}
-				continue
-			}
-			if snapshot == nil {
-				continue
-			}
-			limits := syncLimits(config)
-			limits.MaxBytes = 8 << 20
-			if _, applyErr := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), limits); applyErr != nil {
-				recordRejectedDigest(state, message.PeerID, diff, gossip.RejectReason(applyErr), sr.now())
-				continue
-			}
-			clearRejectedDigest(state, message.PeerID, diff.Zone)
-			sr.tryAdoptAutoJoinAfterSync(message.PeerID, "catalog_object_pull")
-		}
-		if message.CatalogPage.NextCursor != "" {
-			return transport.Send(message.PeerID, &gossip.Message{
-				Type:             gossip.MessageFetchCatalogPage,
-				FetchCatalogPage: &gossip.FetchCatalogPage{Cursor: message.CatalogPage.NextCursor},
-			})
-		}
-		return nil
-	case gossip.MessageFetchZone:
-		return sr.sendSnapshots(message.PeerID, []zone.ZonePath{message.FetchZone.Zone}, message.FetchZone.ChunkFallback)
-	case gossip.MessageFetchRecord:
-		return sr.sendRecord(message.PeerID, message.FetchRecord)
-	case gossip.MessageAnnounce:
-		return sr.handleAnnounceUntil(message, syncLimits(config), deadline)
-	case gossip.MessageObjectChunk:
-		return sr.handleObjectChunk(message, syncLimits(config))
-	default:
-		return nil
-	}
-}
-
-func handleAnnounce(state *stateFile, transport *gossip.Transport, message *gossip.Message, limits gossip.SyncLimits) error {
-	config, err := loadSyncConfig(state)
-	if err != nil {
-		return err
-	}
-	return newSyncRuntime(state, config, transport, nil).handleAnnounce(message, limits)
-}
-
-func (sr *SyncRuntime) handleAnnounce(message *gossip.Message, limits gossip.SyncLimits) error {
-	return sr.handleAnnounceUntil(message, limits, time.Time{})
-}
-
-func (sr *SyncRuntime) handleAnnounceUntil(message *gossip.Message, limits gossip.SyncLimits, deadline time.Time) error {
-	state := sr.State
-	transport := sr.Transport
-	var changed bool
-	if limits.MaxZones > 0 && len(message.Announce.Snapshots) > limits.MaxZones {
-		return gossip.ErrZoneSnapshotTooLarge
-	}
-	if limits.MaxRecords > 0 && len(message.Announce.Records) > limits.MaxRecords {
-		return gossip.ErrZoneSnapshotTooLarge
-	}
-	for _, snapshot := range message.Announce.Snapshots {
-		if snapshot.Zone == state.ManagedZone {
-			sr.logger().Debug("sync", "skipping_own_zone_snapshot", map[string]any{
-				"peer_id": message.PeerID,
-				"zone":    snapshot.Zone,
-				"via":     "udp_announce",
-			})
-			continue
-		}
-		result, err := gossip.ApplySnapshot(state.Network, &snapshot, sr.now(), limits)
-		if err != nil {
-			recordRejectedDigest(state, message.PeerID, digestForZone(message.Announce.Zones, snapshot.Zone), gossip.RejectReason(err), sr.now())
-			sr.logger().Warn("sync", "zone_apply_failed", map[string]any{
-				"peer_id": message.PeerID,
-				"zone":    snapshot.Zone,
-				"reason":  gossip.RejectReason(err),
-				"error":   err,
-			})
-			return err
-		}
-		clearRejectedDigest(state, message.PeerID, snapshot.Zone)
-		changed = true
-		sr.logger().Info("sync", "zone_applied", map[string]any{
-			"peer_id":     message.PeerID,
-			"zone":        result.Zone,
-			"records":     result.Records,
-			"delegations": result.Delegation,
-			"via":         "udp_announce",
-		})
-		if sr.tryAdoptAutoJoinAfterSync(message.PeerID, "udp_announce") {
-			changed = true
-		}
-	}
-	for _, record := range message.Announce.Records {
-		if record.Zone == state.ManagedZone {
-			key := ""
-			if record.Record != nil {
-				key = record.Record.Key
-			}
-			sr.logger().Debug("sync", "skipping_own_zone_record", map[string]any{
-				"peer_id": message.PeerID,
-				"zone":    record.Zone,
-				"key":     key,
-			})
-			continue
-		}
-		if isRejectedRecordActive(state, message.PeerID, &record, "", sr.now()) {
-			continue
-		}
-		err := gossip.ApplyRecordSnapshot(state.Network, &record, sr.now())
-		if err != nil {
-			if errors.Is(err, gossip.ErrUntrustedZone) {
-				sr.logger().Debug("sync", "record_waiting_for_zone", map[string]any{
-					"peer_id": message.PeerID,
-					"zone":    record.Zone,
-					"key":     record.Record.Key,
-					"error":   err,
-				})
-				if transport != nil {
-					if sendErr := transport.Send(message.PeerID, &gossip.Message{
-						Type:      gossip.MessageFetchZone,
-						FetchZone: &gossip.FetchZone{Zone: record.Zone},
-					}); sendErr != nil {
-						return sendErr
-					}
-				}
-				continue
-			}
-			recordRejectedRecord(state, message.PeerID, &record, gossip.RejectReason(err), sr.now())
-			sr.logger().Warn("sync", "record_apply_failed", map[string]any{
-				"peer_id": message.PeerID,
-				"zone":    record.Zone,
-				"key":     record.Record.Key,
-				"reason":  gossip.RejectReason(err),
-				"error":   err,
-			})
-			return err
-		}
-		changed = true
-	}
-	if changed {
-		if err := sr.saveState(); err != nil {
-			return err
-		}
-		changed = false
-	}
-	for _, path := range fetchListForPeer(state, message.PeerID, message.Announce.Zones, sr.now()) {
-		snapshot, pullErr := tryObjectPullTCPUntil(state, sr.Config, message.PeerID, path, deadline)
-		if pullErr == nil && snapshot != nil {
-			pullLimits := limits
-			pullLimits.MaxBytes = 8 << 20
-			result, applyErr := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), pullLimits)
-			if applyErr != nil {
-				if errors.Is(applyErr, gossip.ErrUntrustedZone) {
-					sr.logger().Debug("object_pull", "waiting_for_trust_chain", map[string]any{
-						"peer_id": message.PeerID,
-						"zone":    path,
-						"reason":  gossip.RejectReason(applyErr),
-						"error":   applyErr,
-					})
-					if err := transport.Send(message.PeerID, &gossip.Message{
-						Type:      gossip.MessageFetchZone,
-						FetchZone: &gossip.FetchZone{Zone: path, ChunkFallback: true},
-					}); err != nil {
-						return err
-					}
-					continue
-				}
-				sr.logger().Warn("object_pull", "apply_failed", map[string]any{
-					"peer_id": message.PeerID,
-					"zone":    path,
-					"reason":  gossip.RejectReason(applyErr),
-					"error":   applyErr,
-				})
-				recordRejectedDigest(state, message.PeerID, digestForZone(message.Announce.Zones, path), gossip.RejectReason(applyErr), sr.now())
-				return applyErr
-			}
-			clearRejectedDigest(state, message.PeerID, path)
-			changed = true
-			sr.tryAdoptAutoJoinAfterSync(message.PeerID, "object_pull")
-			sr.logger().Info("sync", "zone_applied", map[string]any{
-				"peer_id":     message.PeerID,
-				"zone":        result.Zone,
-				"records":     result.Records,
-				"delegations": result.Delegation,
-				"via":         "object_pull",
-			})
-			continue
-		}
-		fetch := &gossip.FetchZone{Zone: path}
-		if pullErr != nil {
-			fetch.ChunkFallback = true
-		}
-		if err := transport.Send(message.PeerID, &gossip.Message{
-			Type:      gossip.MessageFetchZone,
-			FetchZone: fetch,
-		}); err != nil {
-			return err
-		}
-	}
-	if changed {
-		if err := sr.saveState(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.SyncLimits) error {
@@ -2601,42 +2080,6 @@ func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gos
 		return nil
 	}
 	return transport.Send(peerID, msg)
-}
-
-func packPongFetchZones(summary *gossip.CatalogSummary, zones []zone.ZonePath, budget int) ([]*gossip.Pong, []oversizedDatagramObject) {
-	if budget <= 0 {
-		budget = gossip.DefaultDatagramBudget
-	}
-	if len(zones) == 0 {
-		pong := &gossip.Pong{Summary: summary}
-		if messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: pong}) > budget {
-			return nil, []oversizedDatagramObject{{Object: "pong_summary", Size: messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: pong})}}
-		}
-		return []*gossip.Pong{pong}, nil
-	}
-	var out []*gossip.Pong
-	var oversized []oversizedDatagramObject
-	current := &gossip.Pong{Summary: summary}
-	for _, path := range zones {
-		next := &gossip.Pong{
-			Summary:    summary,
-			FetchZones: append(append([]zone.ZonePath(nil), current.FetchZones...), path),
-		}
-		if len(current.FetchZones) > 0 && messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: next}) > budget {
-			out = append(out, current)
-			current = &gossip.Pong{Summary: summary, FetchZones: []zone.ZonePath{path}}
-			continue
-		}
-		current = next
-		if len(current.FetchZones) == 1 && messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: current}) > budget {
-			oversized = append(oversized, oversizedDatagramObject{Object: "pong_fetch_zone", Zone: path, Size: messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: current})})
-			current = &gossip.Pong{Summary: summary}
-		}
-	}
-	if len(current.FetchZones) > 0 || len(out) == 0 {
-		out = append(out, current)
-	}
-	return out, oversized
 }
 
 func messageWireSize(msg *gossip.Message) int {

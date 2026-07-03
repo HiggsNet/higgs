@@ -38,7 +38,6 @@ type DaemonService struct {
 	routingDirty      bool
 	firewallDirty     bool
 
-	eventLoopSync     bool
 	syncSessions      map[string]*SyncSession
 	pendingSyncHints  map[string]bool
 	syncEvents        chan SyncEvent
@@ -83,7 +82,6 @@ const (
 	daemonEventPacket               daemonEventType = "packet"
 	daemonEventSyncTimer            daemonEventType = "timer_sync"
 	daemonEventEndpointTimer        daemonEventType = "timer_endpoint_publish"
-	daemonEventRemoteApplied        daemonEventType = "remote_announce_applied"
 	daemonEventSyncTrigger          daemonEventType = "sync_trigger"
 	daemonEventReloadConfig         daemonEventType = "reload_config"
 	daemonEventIPsecCleanup         daemonEventType = "ipsec_cleanup"
@@ -93,23 +91,22 @@ const (
 )
 
 type daemonEvent struct {
-	Type         daemonEventType
-	RecordPut    *daemonRecordPut
-	JoinRequest  *joinRequest
-	JoinBundle   *joinBundle
-	PrivateKey   *privateKeyFile
-	Permissions  []zone.Permission
-	Snapshot     *gossip.ZoneSnapshot
-	Zone         zone.ZonePath
-	Reason       string
-	Apply        bool
-	Orphans      bool
-	Packet       *gossip.Packet
-	SourcePeerID string
-	VICIEvent    ipsec.VICIEvent
-	ForceSync    bool
-	Context      context.Context
-	Reply        chan daemonEventResult
+	Type        daemonEventType
+	RecordPut   *daemonRecordPut
+	JoinRequest *joinRequest
+	JoinBundle  *joinBundle
+	PrivateKey  *privateKeyFile
+	Permissions []zone.Permission
+	Snapshot    *gossip.ZoneSnapshot
+	Zone        zone.ZonePath
+	Reason      string
+	Apply       bool
+	Orphans     bool
+	Packet      *gossip.Packet
+	VICIEvent   ipsec.VICIEvent
+	ForceSync   bool
+	Context     context.Context
+	Reply       chan daemonEventResult
 }
 
 type daemonRecordPut struct {
@@ -153,7 +150,6 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 	}
-	d.eventLoopSync = true
 	d.syncSessions = make(map[string]*SyncSession)
 	d.pendingSyncHints = make(map[string]bool)
 	d.syncEvents = make(chan SyncEvent, 64)
@@ -201,9 +197,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if objectPullListener != nil {
 		defer objectPullListener.Close()
 	}
-	if d.eventLoopSync {
-		d.objectPullPool.Start(ctx)
-	}
+	d.objectPullPool.Start(ctx)
 	stopControl, err := d.startControlServer(ctx)
 	if err != nil {
 		return err
@@ -863,8 +857,6 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventEndpointTimer:
 		err := d.handleEndpointTimerEvent()
 		return daemonEventResult{Error: err}, err == nil, false
-	case daemonEventRemoteApplied:
-		return daemonEventResult{Error: d.handleRemoteAppliedEvent(controlContext(event.Context), event.SourcePeerID)}, false, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
 	case daemonEventReloadConfig:
@@ -1120,29 +1112,7 @@ func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Con
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
-	if d.eventLoopSync {
-		return d.handlePacketEventSyncSession(packet, ctx)
-	}
-	digestsBefore := gossip.ZoneDigests(d.Sync.State.Network)
-	if err := d.Sync.handlePacket(packet); err != nil {
-		return err
-	}
-	if packet.Message.Announce != nil && syncStateChanged(d.Sync.State, digestsBefore) {
-		return d.handleRemoteAppliedEvent(ctx, packet.Message.PeerID)
-	}
-	return nil
-}
-
-func (d *DaemonService) handleRemoteAppliedEvent(ctx context.Context, sourcePeerID string) error {
-	recordUpdateSource(d.Sync.State, sourcePeerID)
-	if d.Sync.Transport != nil {
-		d.Sync.updateDiscoveredPeers()
-	}
-	d.notifyStateChanged()
-	if err := d.Sync.relay(ctx, sourcePeerID); err != nil {
-		return fmt.Errorf("sync relay source=%s: %w", sourcePeerID, err)
-	}
-	return d.Sync.saveState()
+	return d.handlePacketEventSyncSession(packet, ctx)
 }
 
 func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {
@@ -1152,55 +1122,7 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	}
 	d.setState(latest)
 	d.Sync.updateDiscoveredPeers()
-	if d.eventLoopSync {
-		return d.handleSyncTimerEventLoop(ctx, force)
-	}
-	digestsBeforeRound := gossip.ZoneDigests(d.Sync.State.Network)
-	var syncErr error
-	peers := outboundSyncPeersAt(d.Sync.State, d.Sync.Config, d.Sync.now())
-	peerBackoffs := make(map[string]time.Duration, len(peers))
-	for _, peerID := range peers {
-		peerBackoffs[peerID] = backoffRemaining(d.Sync.State.SyncPeers[peerID], d.Sync.now())
-	}
-	d.logDebug("sync", "timer_started", map[string]any{
-		"peer_count": len(peers),
-		"force":      force,
-	})
-	// Release the event-loop lock before the synchronous round; syncRound
-	// acquires and releases its own lock around state mutations and may block
-	// on network I/O.
-	d.releaseStateLock()
-	for _, peerID := range peers {
-		if !force && peerBackoffs[peerID] > 0 {
-			d.logDebug("sync", "round_skipped", map[string]any{
-				"peer_id": peerID,
-				"reason":  "backoff",
-				"backoff": peerBackoffs[peerID],
-			})
-			continue
-		}
-		start := d.Sync.now()
-		if err := d.Sync.syncRound(ctx, peerID, defaultSyncRoundTimeout); err != nil {
-			d.logSyncRoundError(peerID, err, d.Sync.now().Sub(start))
-			if syncErr == nil {
-				syncErr = err
-			}
-		} else {
-			d.logDebug("sync", "round_completed", map[string]any{
-				"peer_id":     peerID,
-				"duration_ms": d.Sync.now().Sub(start).Milliseconds(),
-			})
-		}
-	}
-	// Reacquire the event-loop lock for post-round state mutations. The pointer
-	// is still the one set above because no other goroutine replaces it.
-	unlock := d.lockState()
-	defer unlock()
-	if syncStateChanged(d.Sync.State, digestsBeforeRound) {
-		d.Sync.updateDiscoveredPeers()
-		d.notifyStateChanged()
-	}
-	return syncErr
+	return d.handleSyncTimerEventLoop(ctx, force)
 }
 
 func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {

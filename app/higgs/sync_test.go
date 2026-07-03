@@ -358,22 +358,14 @@ func TestHandleAnnounceSkipsManagedZoneSnapshotAndRecord(t *testing.T) {
 	}
 	snapshot.Records["remote-own-record"] = record
 
-	rt := &Runtime{Clock: func() time.Time { return now }}
-	sr := newSyncRuntime(state, config, nil, rt)
-	err = sr.handleAnnounce(&gossip.Message{
-		Type:   gossip.MessageAnnounce,
-		PeerID: "zone-catofes-admin",
-		Announce: &gossip.Announce{
-			Snapshots: []gossip.ZoneSnapshot{*snapshot},
-			Records: []gossip.RecordSnapshot{{
-				Zone:   state.ManagedZone,
-				Record: record,
-			}},
-		},
-	}, syncLimits(config))
-	if err != nil {
-		t.Fatalf("handleAnnounce: %v", err)
-	}
+	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	session := NewSyncSession("zone-catofes-admin")
+	state.Lock()
+	service.executeSyncActions(context.Background(), session, []SyncAction{
+		ApplySnapshotAction{PeerID: "zone-catofes-admin", Snapshot: snapshot},
+	})
+	state.Unlock()
 	if got := state.Network.Zones[state.ManagedZone].Records["remote-own-record"]; got != nil {
 		t.Fatalf("managed zone record was applied from remote announce: %+v", got)
 	}
@@ -414,24 +406,20 @@ func TestHandleAnnounceRecordsRejectedDigestOnVerifyFailure(t *testing.T) {
 		t.Fatalf("SignRecord: %v", err)
 	}
 	badRecord.Value = []byte("tampered")
-	digest := gossip.ZoneDigest{Zone: "node-b.catofes.", RootHash: []byte("bad-root")}
-	message := &gossip.Message{
-		Type:   gossip.MessageAnnounce,
-		PeerID: "node-b.catofes.",
-		Announce: &gossip.Announce{
-			Zones: []gossip.ZoneDigest{digest},
-			Snapshots: []gossip.ZoneSnapshot{{
-				Zone:      "node-b.catofes.",
-				Authority: state.Network.Zones["node-b.catofes."].Authority,
-				Records:   map[string]*zone.Record{"bad": badRecord},
-			}},
-		},
+	snapshot := &gossip.ZoneSnapshot{
+		Zone:      "node-b.catofes.",
+		Authority: state.Network.Zones["node-b.catofes."].Authority,
+		Records:   map[string]*zone.Record{"bad": badRecord},
 	}
-	sr := newSyncRuntime(state, config, nil, &Runtime{Clock: func() time.Time { return now }})
-
-	if err := sr.handleAnnounce(message, gossip.DefaultSyncLimits()); err == nil {
-		t.Fatalf("handleAnnounce succeeded, want verify failure")
-	}
+	digest := digestForSnapshot(snapshot)
+	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	session := NewSyncSession("node-b.catofes.")
+	state.Lock()
+	service.executeSyncActions(context.Background(), session, []SyncAction{
+		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
+	})
+	state.Unlock()
 	if !isRejectedDigestActive(state, "node-b.catofes.", "node-b.catofes.", digest.RootHash, now.Add(time.Minute)) {
 		t.Fatalf("rejected digest was not recorded")
 	}
@@ -676,19 +664,13 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 	}
 	remoteSummary.CatalogRoot[0] ^= 0xff
 
-	sr := newSyncRuntime(state, config, transportB, rt)
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service.Sync.Transport = transportB
 	state.Lock()
-	err = sr.handlePacket(&gossip.Packet{
-		Addr: transportA.LocalAddr(),
-		Message: &gossip.Message{
-			Type:   gossip.MessagePing,
-			PeerID: "node-a.catofes.",
-			Ping:   &gossip.Ping{Summary: remoteSummary},
-		},
-	})
+	err = service.respondPing("node-a.catofes.", &gossip.Ping{Summary: remoteSummary})
 	state.Unlock()
 	if err != nil {
-		t.Fatalf("handlePacket(Ping): %v", err)
+		t.Fatalf("respondPing: %v", err)
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -1250,22 +1232,6 @@ func TestAppendRecentSuccessfulDiscoveredAddrExpires(t *testing.T) {
 	addrs := appendRecentSuccessfulDiscoveredAddr(nil, peerState, 10*time.Minute, now)
 	if len(addrs) != 0 {
 		t.Fatalf("addrs = %#v, want expired fallback to be dropped", addrs)
-	}
-}
-
-func TestHandleAnnounceRejectsSnapshotZoneLimit(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	message := &gossip.Message{
-		Type: gossip.MessageAnnounce,
-		Announce: &gossip.Announce{Snapshots: []gossip.ZoneSnapshot{
-			{Zone: "catofes."},
-			{Zone: "node-b.catofes."},
-		}},
-	}
-
-	err := handleAnnounce(state, nil, message, gossip.SyncLimits{MaxZones: 1, MaxRecords: 1024, MaxBytes: gossip.DefaultMaxMessage})
-	if !errors.Is(err, gossip.ErrZoneSnapshotTooLarge) {
-		t.Fatalf("handleAnnounce = %v, want ErrZoneSnapshotTooLarge", err)
 	}
 }
 

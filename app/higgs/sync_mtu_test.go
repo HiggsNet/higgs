@@ -241,13 +241,6 @@ func TestCatalogSyncAvoidsOversizedFullDigestPing(t *testing.T) {
 			RootHash: bytes.Repeat([]byte{byte(i)}, 32),
 		})
 	}
-	fullDigestSize := messageWireSize(&gossip.Message{
-		Type: gossip.MessagePing,
-		Ping: &gossip.Ping{Zones: digests},
-	})
-	if fullDigestSize <= gossip.DefaultDatagramBudget {
-		t.Fatalf("full digest ping size=%d, want > %d", fullDigestSize, gossip.DefaultDatagramBudget)
-	}
 	summary := &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(digests), ZoneCount: len(digests)}
 	summarySize := messageWireSize(&gossip.Message{
 		Type: gossip.MessagePing,
@@ -269,30 +262,5 @@ func TestCatalogSyncAvoidsOversizedFullDigestPing(t *testing.T) {
 			break
 		}
 		cursor = page.NextCursor
-	}
-}
-
-func TestPackPongFetchZonesWithinBudget(t *testing.T) {
-	var zones []zone.ZonePath
-	for i := 0; i < 120; i++ {
-		zones = append(zones, zone.ZonePath("node-"+string(rune('a'+i%26))+"-"+string(rune('a'+i/26))+".catofes."))
-	}
-	summary := &gossip.CatalogSummary{CatalogRoot: bytes.Repeat([]byte{1}, 32), ZoneCount: 1}
-	pongs, oversized := packPongFetchZones(summary, zones, 300)
-	if len(oversized) != 0 {
-		t.Fatalf("oversized = %#v, want none", oversized)
-	}
-	if len(pongs) < 2 {
-		t.Fatalf("pongs = %d, want multiple bounded pages", len(pongs))
-	}
-	var total int
-	for _, pong := range pongs {
-		total += len(pong.FetchZones)
-		if size := messageWireSize(&gossip.Message{Type: gossip.MessagePong, Pong: pong}); size > 300 {
-			t.Fatalf("pong size=%d exceeds budget", size)
-		}
-	}
-	if total != len(zones) {
-		t.Fatalf("packed fetch zones=%d, want %d", total, len(zones))
 	}
 }

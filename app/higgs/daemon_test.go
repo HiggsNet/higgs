@@ -1695,10 +1695,6 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
 	serviceA.Sync.Transport = transportA
 	serviceB.Sync.Transport = transportB
-	// This test exercises the synchronous syncRound path; disable the event-loop
-	// path so handleSyncTimerEvent drives the round directly.
-	serviceA.eventLoopSync = false
-	serviceB.eventLoopSync = false
 	serviceA.IPsecDriver = driverA
 	serviceA.XFRMDriver = driverA
 	serviceB.IPsecDriver = driverB
@@ -1730,24 +1726,33 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// Run the legacy synchronous rounds one direction at a time. A concurrent
-	// bidirectional syncRound can deadlock object pull: each side holds its own
-	// state write lock while waiting for the peer's TCP object-pull handler,
-	// which needs that peer's read lock to serve the snapshot.
-	serveA, stopA := serveDaemonPackets(ctx, serviceA, transportA)
-	err = serviceB.handleSyncTimerEvent(ctx, true)
-	stopA()
-	<-serveA
-	if err != nil {
-		t.Fatalf("sync node-b from node-a: %v", err)
-	}
+	serviceA.objectPullPool.Start(ctx)
+	defer serviceA.objectPullPool.Stop()
+	serviceB.objectPullPool.Start(ctx)
+	defer serviceB.objectPullPool.Stop()
 
-	serveB, stopB := serveDaemonPackets(ctx, serviceB, transportB)
-	err = serviceA.handleSyncTimerEvent(ctx, true)
-	stopB()
-	<-serveB
-	if err != nil {
-		t.Fatalf("sync node-a from node-b: %v", err)
+	if err := serviceB.handleSyncTimerEvent(ctx, true); err != nil {
+		t.Fatalf("start sync node-b from node-a: %v", err)
+	}
+	if err := serviceA.handleSyncTimerEvent(ctx, true); err != nil {
+		t.Fatalf("start sync node-a from node-b: %v", err)
+	}
+	for {
+		pumpEventLoopSync(ctx, []*DaemonService{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
+		aActive := false
+		if s, ok := serviceA.syncSessions[configB.PeerID]; ok && !s.Done() {
+			aActive = true
+		}
+		bActive := false
+		if s, ok := serviceB.syncSessions[configA.PeerID]; ok && !s.Done() {
+			bActive = true
+		}
+		if !aActive && !bActive {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("event-loop sync timed out: %v", ctx.Err())
+		}
 	}
 
 	if err := serviceA.reconcileIPsecLinks(ctx); err != nil {
@@ -3630,44 +3635,6 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	}
 }
 
-func TestDaemonRemoteAppliedEventUpdatesPeerState(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
-		Clock:     func() time.Time { return time.Unix(5000, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newDaemonService(rt, state, config, time.Second)
-	var hookCalled bool
-	service.Hooks.OnStateChanged = func(*stateFile) {
-		hookCalled = true
-	}
-
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{
-		Type:         daemonEventRemoteApplied,
-		SourcePeerID: "node-a.catofes.",
-	})
-	if result.Error != nil {
-		t.Fatalf("handleEvent(remote_applied): %v", result.Error)
-	}
-	if syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
-	}
-	if !hookCalled {
-		t.Fatal("state changed hook was not called")
-	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	if got := latest.SyncPeers["node-a.catofes."].LastUpdateSource; got != "node-a.catofes." {
-		t.Fatalf("LastUpdateSource = %q, want node-a.catofes.", got)
-	}
-}
-
 func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	now := time.Unix(5100, 0)
@@ -4447,9 +4414,6 @@ func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transport
 	for {
 		processed := false
 		for _, svc := range services {
-			if !svc.eventLoopSync {
-				continue
-			}
 			select {
 			case ev := <-svc.syncEvents:
 				svc.handleSyncEvent(ctx, ev)
