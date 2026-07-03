@@ -37,7 +37,7 @@ func (d *DaemonService) EnableEventLoopSync(clock Clock) {
 	d.timerManager = NewTimerManager(clock, d.syncEvents)
 }
 
-func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool) error {
+func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) error {
 	now := d.Sync.now()
 	peers := outboundSyncPeersAt(d.Sync.State, d.Sync.Config, now)
 	d.logDebug("sync", "event_loop_timer", map[string]any{
@@ -79,7 +79,7 @@ func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool
 	return nil
 }
 
-func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx context.Context) error {
+func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ context.Context) error {
 	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil && d.Sync.State != nil {
 		recordVerifiedObservedPath(d.Sync.State, packet.Message.PeerID, packet.Addr, packet.Message.Type, d.Sync.now())
 		d.Sync.seedObservedPeerPath(packet.Message.PeerID)
@@ -754,21 +754,6 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 		}
 		recordRelaySuccess(d.Sync.State, peerID, sourcePeerID, now)
 	}
-}
-
-func zoneSnapshotExceedsBudget(ns *zone.NetworkState, path zone.ZonePath, budget int) bool {
-	if ns == nil || budget <= 0 {
-		return false
-	}
-	snapshot, err := gossip.Snapshot(ns, path)
-	if err != nil {
-		return false
-	}
-	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
-	if err != nil {
-		return false
-	}
-	return len(data) > budget
 }
 
 func digestForSnapshot(snapshot *gossip.ZoneSnapshot) gossip.ZoneDigest {

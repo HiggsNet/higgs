@@ -6,7 +6,6 @@ import (
 	"sort"
 
 	"github.com/Catofes/higgs/internal/inspect"
-	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -319,68 +318,3 @@ func inspectLinkOwner(owner linkOwnerState) inspect.LinkOwner {
 	}
 }
 
-func desiredLinkFromInspect(item inspect.DesiredLink) desiredLinkState {
-	return desiredLinkState{
-		InstanceID:      item.InstanceID,
-		GroupID:         item.GroupID,
-		PeerZone:        zone.ZonePath(item.PeerZone),
-		LinkID:          item.LinkID,
-		PathKey:         item.PathKey,
-		TransportID:     item.TransportID,
-		DesiredSpecHash: item.DesiredSpecHash,
-		InterfaceName:   item.InterfaceName,
-		XFRMIfID:        item.XFRMIfID,
-		Endpoint:        item.Endpoint,
-		LocalTunnelAddr: item.LocalTunnelAddr,
-		PeerTunnelAddr:  item.PeerTunnelAddr,
-	}
-}
-
-func linkSAFromInspect(item *inspect.LinkSA) *linkSAState {
-	if item == nil {
-		return nil
-	}
-	return &linkSAState{
-		Name:           item.Name,
-		Peer:           item.Peer,
-		ChildSA:        item.ChildSA,
-		IKEState:       item.IKEState,
-		ChildState:     item.ChildState,
-		XFRMIfID:       item.XFRMIfID,
-		ReqID:          item.ReqID,
-		LocalIdentity:  item.LocalIdentity,
-		RemoteIdentity: item.RemoteIdentity,
-		LocalEndpoint:  item.LocalEndpoint,
-		RemoteEndpoint: item.RemoteEndpoint,
-		Endpoint:       item.Endpoint,
-		Established:    item.Established,
-	}
-}
-
-func healthFromInspect(item *inspect.LinkHealth) *healthLinkJSON {
-	if item == nil {
-		return nil
-	}
-	return &healthLinkJSON{
-		ProbeID:         item.ProbeID,
-		InstanceID:      item.InstanceID,
-		ProbeRole:       item.ProbeRole,
-		InterfaceName:   item.InterfaceName,
-		State:           item.State,
-		ProbeType:       item.ProbeType,
-		Sent:            item.Sent,
-		Received:        item.Received,
-		Lost:            item.Lost,
-		LossRatio:       item.LossRatio,
-		LastRTTMs:       item.LastRTTMs,
-		EWMARTTMs:       item.EWMARTTMs,
-		P50RTTMs:        item.P50RTTMs,
-		P95RTTMs:        item.P95RTTMs,
-		P99RTTMs:        item.P99RTTMs,
-		JitterMs:        item.JitterMs,
-		ConsecutiveFail: item.ConsecutiveFail,
-		LastError:       item.LastError,
-		NextProbeUnix:   item.NextProbeUnix,
-		CutoverBlocking: item.CutoverBlocking,
-	}
-}

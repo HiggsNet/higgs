@@ -116,7 +116,7 @@ type forwardingYAML struct {
 	MetricHint    uint     `yaml:"metric_hint"`
 }
 
-func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig, dataDir string) (firewallConfig, error) {
+func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig, _ string) (firewallConfig, error) {
 	cfg := firewallConfig{}
 	if yamlCfg == nil {
 		return cfg, nil

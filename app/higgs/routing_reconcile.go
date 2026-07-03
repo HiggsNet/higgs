@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -147,7 +146,7 @@ func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNS
 	return out
 }
 
-func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time) error {
+func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, _ time.Time) error {
 	netnsName := inst.NetNS
 	instState := d.Sync.State.BirdInstances[netnsName]
 	if instState == nil {
@@ -306,7 +305,7 @@ func (d *DaemonService) newBirdClient(socketPath string) birdClient {
 	return bird.NewClient(socketPath, 10*time.Second)
 }
 
-func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, dataDir string, ng *netnsOverlayGroup, netnsCfg netnsConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
+func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ string, ng *netnsOverlayGroup, netnsCfg netnsConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
 	netnsSpec := ipsec.NetNSSpec{}
 	if s, ok := netnsCfg.Names[inst.NetNS]; ok {
 		netnsSpec = s
@@ -375,12 +374,6 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, dataDi
 	}
 
 	return spec
-}
-
-func routingEnabledGroups(groups []ipsec.LinkGroupSpec) []ipsec.LinkGroupSpec {
-	// This function is retained for backward compatibility but in the per-netns
-	// model, routing enablement is determined by routing.instances[], not overlays[].
-	return groups
 }
 
 func routingInstancesEnabled(config *appConfig) []RoutingInstance {
@@ -679,9 +672,3 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// sortedNetnsNames returns sorted netns names for deterministic output.
-func sortedNetnsNames(names []string) []string {
-	out := append([]string(nil), names...)
-	sort.Strings(out)
-	return out
-}

@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -26,7 +25,7 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 // healthTargetsFromState derives ProbeTargets from the current desired link
 // snapshot and persisted LinkInstances. Only links with a valid peer tunnel
 // address and probeable state are returned.
-func healthTargetsFromState(state *stateFile, localZone string, groups []ipsec.LinkGroupSpec) []health.ProbeTarget {
+func healthTargetsFromState(state *stateFile, localZone string, _ []ipsec.LinkGroupSpec) []health.ProbeTarget {
 	if state == nil || state.IPsecReconcile == nil {
 		return nil
 	}
@@ -296,27 +295,6 @@ func printHealthLinkJSON(l healthLinkJSON) {
 	}
 }
 
-func printHealthSummary(h health.LinkHealth) {
-	fmt.Printf("  %s: state=%s probe=%s\n", h.InstanceID, h.State, h.ProbeType)
-	if h.Sent > 0 {
-		fmt.Printf("    sent=%d received=%d lost=%d loss=%.1f%%\n", h.Sent, h.Received, h.Lost, h.LossRatio*100)
-	}
-	if h.LastRTT > 0 {
-		fmt.Printf("    rtt last=%s ewma=%s p50=%s p95=%s p99=%s jitter=%s\n",
-			h.LastRTT.Round(time.Microsecond),
-			h.EWMARTT.Round(time.Microsecond),
-			h.P50RTT.Round(time.Microsecond),
-			h.P95RTT.Round(time.Microsecond),
-			h.P99RTT.Round(time.Microsecond),
-			h.Jitter.Round(time.Microsecond))
-	}
-	if h.LastError != "" {
-		fmt.Printf("    last_error=%s consecutive_fail=%d\n", h.LastError, h.ConsecutiveFail)
-	}
-	if h.CutoverBlocking {
-		fmt.Printf("    cutover_blocking=true\n")
-	}
-}
 
 // liveDaemonHealthSnapshot reads health state from a running daemon via the
 // control socket. Returns nil if the daemon is not running.

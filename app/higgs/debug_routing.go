@@ -14,7 +14,7 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func debugBabel(ctx context.Context, cmd *cli.Command) error {
+func debugBabel(_ context.Context, _ *cli.Command) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -104,7 +104,7 @@ func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *contr
 	return nil
 }
 
-func debugRoutes(ctx context.Context, cmd *cli.Command) error {
+func debugRoutes(_ context.Context, _ *cli.Command) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -160,7 +160,7 @@ func writeDebugRoutes(w io.Writer, dump *routesDumpResponse) error {
 	return nil
 }
 
-func debugRoute(ctx context.Context, cmd *cli.Command) error {
+func debugRoute(_ context.Context, cmd *cli.Command) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err

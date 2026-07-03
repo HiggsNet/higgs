@@ -370,7 +370,7 @@ func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFil
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: bundle.RootPublicKey}, nil
 }
 
-func optionalJoinAcceptKey(rt *Runtime, keyPath string) (*privateKeyFile, error) {
+func optionalJoinAcceptKey(_ *Runtime, keyPath string) (*privateKeyFile, error) {
 	if keyPath != "" {
 		return readPrivateKeyFile(keyPath)
 	}

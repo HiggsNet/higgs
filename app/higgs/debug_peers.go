@@ -14,7 +14,7 @@ import (
 // debugPeers implements `higgs debug peers`: it prints the derived lifecycle
 // status of every known peer, including state, reason, last sync, link counts
 // and cleanup timers. It prioritizes daemon live state when available.
-func debugPeers(ctx context.Context) error {
+func debugPeers(_ context.Context) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err

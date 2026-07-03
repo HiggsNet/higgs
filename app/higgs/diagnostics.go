@@ -406,15 +406,6 @@ func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceSt
 	return
 }
 
-func linkGroupByID(groups []ipsec.LinkGroupSpec, id string) *ipsec.LinkGroupSpec {
-	for i := range groups {
-		if groups[i].ID == id {
-			return &groups[i]
-		}
-	}
-	return nil
-}
-
 func printDebugMissingLink(w io.Writer, link inspect.LinkView, spec *ipsec.TransportLinkSpec) {
 	desired := inspect.DesiredLink{}
 	if link.Desired != nil {

@@ -2,10 +2,7 @@ package gossip
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"testing"
-
-	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
 func TestMsgpackCodecRoundTrip(t *testing.T) {
@@ -254,55 +251,3 @@ func commonWireMessage(messageType MessageType, ping *Ping, pong *Pong, fetchZon
 	}
 }
 
-func sampleWireAuthority(path zone.ZonePath) *zone.ZoneAuthority {
-	return &zone.ZoneAuthority{
-		Zone:      path,
-		Epoch:     1,
-		Threshold: 1,
-		Keys: []zone.AuthorizedKey{{
-			Key: make(ed25519.PublicKey, ed25519.PublicKeySize),
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate},
-			}},
-		}},
-	}
-}
-
-func sampleWireDelegation(path zone.ZonePath) *zone.Delegation {
-	return &zone.Delegation{
-		ZoneName:       path,
-		Scope:          zone.DelegationScopeDirectChild,
-		AuthorityEpoch: 1,
-		AuthorityHash:  make([]byte, 32),
-		Authority:      *sampleWireAuthority(path),
-		SignedBy:       make(ed25519.PublicKey, ed25519.PublicKeySize),
-		Signature:      make([]byte, ed25519.SignatureSize),
-	}
-}
-
-func sampleWireRevocation(path zone.ZonePath) *zone.DelegationRevocation {
-	return &zone.DelegationRevocation{
-		ChildZone:             path,
-		ParentZone:            "catofes.",
-		RevokedAuthorityEpoch: 1,
-		RevokedAuthorityHash:  make([]byte, 32),
-		Reason:                "key rotation",
-		RevokedAt:             1717171717,
-		SignedBy:              make(ed25519.PublicKey, ed25519.PublicKeySize),
-		Signature:             make([]byte, ed25519.SignatureSize),
-	}
-}
-
-func sampleWireRecord(key string, value []byte) *zone.Record {
-	return &zone.Record{
-		Zone:      "node-a.catofes.",
-		Key:       key,
-		Type:      "test.record",
-		Value:     value,
-		ValueHash: make([]byte, 32),
-		Version:   1,
-		Timestamp: 1717171717,
-		SignedBy:  make(ed25519.PublicKey, ed25519.PublicKeySize),
-		Signature: make([]byte, ed25519.SignatureSize),
-	}
-}

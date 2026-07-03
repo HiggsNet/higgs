@@ -577,7 +577,7 @@ func (p *objectPullPool) worker(ctx context.Context) {
 	}
 }
 
-func (p *objectPullPool) doPull(ctx context.Context, req ObjectPullRequest) ObjectPullResult {
+func (p *objectPullPool) doPull(_ context.Context, req ObjectPullRequest) ObjectPullResult {
 	logger := newAppLogger(nil)
 	addr := req.Addr
 	if addr == "" {

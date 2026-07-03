@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 
 	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/urfave/cli/v3"
 )
 
-func debugFirewall(ctx context.Context, cmd *cli.Command) error {
+func debugFirewall(_ context.Context, _ *cli.Command) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -42,7 +41,7 @@ func debugFirewallWithRuntime(rt *Runtime, w io.Writer) error {
 	return writeDebugFirewall(w, rt, instances, snapshot)
 }
 
-func writeDebugFirewall(w io.Writer, rt *Runtime, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) error {
+func writeDebugFirewall(w io.Writer, _ *Runtime, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) error {
 	if len(instances) == 0 {
 		fmt.Fprintln(w, "firewall: not configured")
 		return nil
@@ -122,12 +121,3 @@ func defaultStr(value, fallback string) string {
 	return value
 }
 
-// sortedFirewallInstanceIDs returns sorted instance IDs for deterministic output.
-func sortedFirewallInstanceIDs(instances []FirewallInstanceConfig) []string {
-	ids := make([]string, 0, len(instances))
-	for _, inst := range instances {
-		ids = append(ids, inst.ID)
-	}
-	sort.Strings(ids)
-	return ids
-}

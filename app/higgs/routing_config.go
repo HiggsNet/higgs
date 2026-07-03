@@ -393,15 +393,6 @@ func resolveOverlayNetNSName(group ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNS
 	return name
 }
 
-// routingInstancesByNetNS groups routing instances by netns name.
-func routingInstancesByNetNS(cfg routingConfig) map[string]*RoutingInstance {
-	out := make(map[string]*RoutingInstance)
-	for i := range cfg.Instances {
-		out[cfg.Instances[i].NetNS] = &cfg.Instances[i]
-	}
-	return out
-}
-
 // routingNetnsNames returns sorted unique netns names used by routing instances.
 func routingNetnsNames(cfg routingConfig) []string {
 	seen := make(map[string]bool)

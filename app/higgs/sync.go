@@ -580,10 +580,6 @@ func (sr *SyncRuntime) reloadStateIfChanged(previous []gossip.ZoneDigest) (*stat
 	return latest, false, nil
 }
 
-func syncStateChanged(state *stateFile, before []gossip.ZoneDigest) bool {
-	return !sameZoneDigests(before, gossip.ZoneDigests(state.Network))
-}
-
 func zonePathStrings(paths []zone.ZonePath) []string {
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
@@ -790,15 +786,6 @@ func rejectedRecordKey(path zone.ZonePath, key string) string {
 	return "record:" + path.String() + ":" + key
 }
 
-func digestForZone(digests []gossip.ZoneDigest, path zone.ZonePath) gossip.ZoneDigest {
-	for _, digest := range digests {
-		if digest.Zone == path {
-			return digest
-		}
-	}
-	return gossip.ZoneDigest{Zone: path}
-}
-
 func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now time.Time) (bool, string) {
 	switch {
 	case peerID == "":
@@ -812,18 +799,6 @@ func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now
 	default:
 		return true, ""
 	}
-}
-
-// recordUpdateSource mutates state.SyncPeers. The caller must hold the write
-// lock on state.
-func recordUpdateSource(state *stateFile, sourcePeerID string) {
-	if state == nil || sourcePeerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[sourcePeerID]
-	peerState.LastUpdateSource = sourcePeerID
-	state.SyncPeers[sourcePeerID] = peerState
 }
 
 // recordRelaySuccess mutates state.SyncPeers. The caller must hold the write
@@ -1428,7 +1403,7 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 // discovered addresses of a lower-priority source, preventing automatic
 // endpoint discovery from overriding administrator-configured loopback/bootstrap
 // addresses.
-func buildPeerAddrs(peerID string, entries []gossip.EndpointEntry, bootstrapAddr *net.UDPAddr, peerState syncPeerState, grace time.Duration, sourceOrder []string, now time.Time) []*net.UDPAddr {
+func buildPeerAddrs(_ string, entries []gossip.EndpointEntry, bootstrapAddr *net.UDPAddr, peerState syncPeerState, grace time.Duration, sourceOrder []string, now time.Time) []*net.UDPAddr {
 	if len(sourceOrder) == 0 {
 		sourceOrder = []string{"advertise", "bootstrap", "reflector", "interface"}
 	}
@@ -1875,35 +1850,6 @@ func announceWireSize(announce *gossip.Announce) int {
 	return size
 }
 
-func cloneAnnounce(announce *gossip.Announce) *gossip.Announce {
-	if announce == nil {
-		return &gossip.Announce{}
-	}
-	return &gossip.Announce{
-		Zones: append([]gossip.ZoneDigest(nil), announce.Zones...),
-	}
-}
-
-func digestMap(digests []gossip.ZoneDigest) map[zone.ZonePath]gossip.ZoneDigest {
-	out := make(map[zone.ZonePath]gossip.ZoneDigest, len(digests))
-	for _, digest := range digests {
-		out[digest.Zone] = digest
-	}
-	return out
-}
-
-func appendZoneDigestOnce(digests []gossip.ZoneDigest, digest gossip.ZoneDigest) []gossip.ZoneDigest {
-	if !digest.Zone.Valid() {
-		return digests
-	}
-	for _, existing := range digests {
-		if existing.Zone == digest.Zone {
-			return digests
-		}
-	}
-	return append(digests, digest)
-}
-
 func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapshot {
 	if snapshot == nil {
 		return nil
@@ -1948,52 +1894,6 @@ func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapsh
 	return out
 }
 
-func (sr *SyncRuntime) sendRecord(peerID string, fetch *gossip.FetchRecord) error {
-	if sr == nil {
-		return nil
-	}
-	return sendRecordWithStats(sr.State, sr.State.Network, sr.Transport, peerID, fetch, sr.now(), sr.logger())
-}
-
-func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord, now time.Time, logger *appLogger) error {
-	if ns == nil || fetch == nil {
-		return nil
-	}
-	if ns.IsZoneRevoked(fetch.Zone, now) {
-		return nil
-	}
-	zs := ns.Zones[fetch.Zone]
-	if zs == nil {
-		return nil
-	}
-	msg := &gossip.Message{
-		Type:     gossip.MessageAnnounce,
-		Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{{Zone: fetch.Zone, RootHash: gossip.ZoneRoot(zs)}}},
-	}
-	if size, err := gossip.WireEncodeSize(msg); err != nil || size > transport.MaxMessageBytes() {
-		zoneName := zone.ZonePath("")
-		key := ""
-		if fetch != nil {
-			zoneName = fetch.Zone
-			key = fetch.Key
-		}
-		recordDatagramTooLarge(state, peerID, "send", "record", zoneName, key, size, transport.MaxMessageBytes(), now)
-		if logger != nil && logger.debugEnabled() {
-			logger.Debug("transport", "datagram_too_large", map[string]any{
-				"peer_id": peerID,
-				"object":  "record",
-				"zone":    zoneName,
-				"key":     key,
-				"bytes":   size,
-				"limit":   transport.MaxMessageBytes(),
-				"action":  "skip_udp",
-			})
-		}
-		return nil
-	}
-	return transport.Send(peerID, msg)
-}
-
 func messageWireSize(msg *gossip.Message) int {
 	size, err := gossip.WireEncodeSize(msg)
 	if err != nil {
@@ -2021,21 +1921,6 @@ func recordDatagramTooLarge(state *stateFile, peerID, direction, object string, 
 	peerState.DatagramStats.LastTooLargeKey = key
 	peerState.DatagramStats.LastTooLargeBytes = size
 	peerState.DatagramStats.LastTooLargeLimit = limit
-	state.SyncPeers[peerID] = peerState
-}
-
-// recordDatagramDigestOnly mutates state.SyncPeers. The caller must hold the
-// write lock on state.
-func recordDatagramDigestOnly(state *stateFile, peerID string) {
-	if state == nil || peerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	peerState.DatagramStats.DigestOnlyAnnounces++
 	state.SyncPeers[peerID] = peerState
 }
 
@@ -2104,10 +1989,6 @@ func recordCatalogReject(state *stateFile, peerID, cursor, reason string, now ti
 	peerState.DatagramStats.LastCatalogCursor = cursor
 	peerState.DatagramStats.LastCatalogRejectedReason = reason
 	state.SyncPeers[peerID] = peerState
-}
-
-func loadSyncConfig(state *stateFile) (*syncConfigFile, error) {
-	return configuredSyncConfig(state)
 }
 
 func syncLimits(config *syncConfigFile) gossip.SyncLimits {

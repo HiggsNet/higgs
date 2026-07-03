@@ -462,10 +462,6 @@ func loadState() (*stateFile, error) {
 	return rt.LoadState()
 }
 
-func loadStateAt(path string, trustRoot ed25519.PublicKey) (*stateFile, error) {
-	return loadStateAtWithConfig(path, &appConfig{TrustedRootPublicKey: trustRoot})
-}
-
 func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 	if config == nil {
 		config = defaultAppConfig()

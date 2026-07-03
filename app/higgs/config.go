@@ -928,10 +928,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func netnsConfigured(spec ipsec.NetNSSpec) bool {
-	return spec.Kind != "" || spec.Name != "" || spec.Path != "" || spec.Create
-}
-
 func applyPositiveInt(target *int, value *int, name string) error {
 	if value == nil {
 		return nil
@@ -1027,14 +1023,6 @@ func configuredStatePath() (string, error) {
 
 func statePathOverride() string {
 	return os.Getenv("HIGGS_STATE")
-}
-
-func configuredSyncConfig(state *stateFile) (*syncConfigFile, error) {
-	config, err := loadAppConfig()
-	if err != nil {
-		return nil, err
-	}
-	return syncConfigFromAppConfig(config, state), nil
 }
 
 func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFile {

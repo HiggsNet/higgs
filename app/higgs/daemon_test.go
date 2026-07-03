@@ -2569,27 +2569,6 @@ func testDaemonIPsecAppConfig(dataDir, advertiseAddr string, group ipsec.LinkGro
 	return config
 }
 
-func serveDaemonPackets(ctx context.Context, service *DaemonService, transport *gossip.Transport) (<-chan struct{}, context.CancelFunc) {
-	serveCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-serveCtx.Done():
-				return
-			default:
-			}
-			packet, err := receiveWithContext(serveCtx, transport, time.Now().Add(100*time.Millisecond))
-			if err != nil {
-				continue
-			}
-			_ = service.processPacketEvent(packet, serveCtx)
-		}
-	}()
-	return done, cancel
-}
-
 func assertGossipedIPsecRecords(t *testing.T, state *stateFile, peer zone.ZonePath) {
 	t.Helper()
 	zs := state.Network.Zones[peer]

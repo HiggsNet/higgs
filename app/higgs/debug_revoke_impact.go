@@ -25,7 +25,7 @@ func revokeStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 // the revocation impact (affected subtree, link instances, sync peers,
 // configured-but-revoked peers, IPAM prefixes and per-layer cleanup status)
 // for all currently-revoked zones, or for a single zone if specified.
-func debugRevokeImpact(ctx context.Context, zoneArg string) error {
+func debugRevokeImpact(_ context.Context, zoneArg string) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err

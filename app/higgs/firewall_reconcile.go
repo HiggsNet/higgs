@@ -343,7 +343,7 @@ var nowFunc = func() time.Time { return time.Time{} }
 
 // firewallCharonPorts returns the current charon IKE/NAT-T listen ports.
 // First version: defaults (500/4500). Future: derive from ipsec port record.
-func firewallCharonPorts(config *appConfig, state *stateFile) (uint16, uint16) {
+func firewallCharonPorts(_ *appConfig, _ *stateFile) (uint16, uint16) {
 	return 500, 4500
 }
 

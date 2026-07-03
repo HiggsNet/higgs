@@ -1134,32 +1134,6 @@ func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
 	return gossip.ZoneDigests(d.Sync.State.Network)
 }
 
-func (d *DaemonService) logSyncRoundError(peerID string, err error, duration time.Duration) {
-	if err == nil {
-		return
-	}
-	now := d.Sync.now()
-	reason := syncErrorReason(err)
-	fields := map[string]any{
-		"peer_id":     peerID,
-		"reason":      reason,
-		"error":       err,
-		"duration_ms": duration.Milliseconds(),
-	}
-	if d.Sync.State != nil {
-		d.Sync.State.RLock()
-		addPeerLogFields(fields, d.Sync.State, peerID, now)
-		d.Sync.State.RUnlock()
-	}
-	key := "sync_round|" + peerID + "|" + reason + "|" + err.Error()
-	if suppressed, ok := d.LogLimiter.Allow(key, now); ok {
-		if suppressed > 0 {
-			fields["suppressed"] = suppressed
-		}
-		d.logWarn("sync", "round_failed", fields)
-	}
-}
-
 func (d *DaemonService) handleEndpointTimerEvent() error {
 	latest, err := d.Sync.loadState()
 	if err != nil {

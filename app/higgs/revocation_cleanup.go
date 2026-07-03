@@ -137,7 +137,7 @@ func ComputeRevocationImpact(state *stateFile, revokedZone zone.ZonePath, now ti
 // in the active state. A descendant is any zone path that starts with
 // revokedZone as a parent prefix. The revoked zone itself is not included in
 // the result (only strict descendants).
-func computeRevokedSubtree(ns *zone.NetworkState, revokedZone zone.ZonePath, now time.Time) []zone.ZonePath {
+func computeRevokedSubtree(ns *zone.NetworkState, revokedZone zone.ZonePath, _ time.Time) []zone.ZonePath {
 	if ns == nil || !revokedZone.Valid() {
 		return nil
 	}
@@ -170,7 +170,7 @@ func computeRevokedSubtree(ns *zone.NetworkState, revokedZone zone.ZonePath, now
 
 // isConfiguredBootstrapPeer checks if a peer ID appears in the bootstrap
 // config. This is a best-effort check using the sync config embedded in state.
-func isConfiguredBootstrapPeer(state *stateFile, peerID string) bool {
+func isConfiguredBootstrapPeer(_ *stateFile, _ string) bool {
 	// The sync config is not directly in stateFile, but bootstrap peers are
 	// accessible via the Runtime/App config. Since this function is called
 	// from a pure state context, we check if the peer appears in SyncPeers

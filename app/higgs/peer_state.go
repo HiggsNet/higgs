@@ -380,7 +380,7 @@ func hasPeerIPsecRecords(zs *zone.ZoneState) bool {
 // long-term invalid SA/interface/route/firewall entries should be cleaned up.
 // Only offline (beyond cleanup_after) and revoked states trigger cleanup;
 // stale peers retain their SA per KeepSAWhileStale.
-func peerStatusRequiresCleanup(info PeerStatusInfo, cfg PeerLifecycleConfig) bool {
+func peerStatusRequiresCleanup(info PeerStatusInfo, _ PeerLifecycleConfig) bool {
 	switch info.State {
 	case peerStateRevoked:
 		return true

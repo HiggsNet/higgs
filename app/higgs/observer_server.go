@@ -61,7 +61,7 @@ func newObserverServer(d *DaemonService, cfg observerConfig) *observerServer {
 
 // startObserverServer starts the HTTP observer if enabled. It returns a
 // cleanup function that gracefully shuts down the server.
-func (d *DaemonService) startObserverServer(ctx context.Context) (func(), error) {
+func (d *DaemonService) startObserverServer(_ context.Context) (func(), error) {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return func() {}, nil
 	}
