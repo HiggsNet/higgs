@@ -103,7 +103,6 @@ log:
   level: info
   mode: stderr+file
   file: /var/log/higgs.log
-  syslog_facility: daemon
 ```
 
 支持级别是 `debug`、`info`、`warn`、`error`。`HIGGS_LOG_LEVEL=debug` 可以临时覆盖配置，常用于排查 gossip、object pull、relay、IPsec reconcile 和限流原因。

@@ -60,7 +60,6 @@ log:
   mode: stderr
   # mode can also be file, syslog, stderr+file, or stderr+syslog.
   # file: /var/log/higgs.log
-  # syslog_facility: daemon
 ```
 
 基础字段：
@@ -75,7 +74,7 @@ log:
 - `gossip.max_datagram_bytes`：单个 gossip UDP datagram 的安全预算，默认 `1200`。
 - `gossip.max_sync_zones` / `gossip.max_sync_records`：单次 announce/snapshot 的对象数量限制。
 - `log.level`：日志级别，支持 `debug` / `info` / `warn` / `error`，也可用 `HIGGS_LOG_LEVEL` 覆盖。debug 会输出收发包、relay、backoff、object pull 等诊断字段。
-- `log.mode`：日志输出模式，默认 `stderr`。可设为 `file`、`syslog`、`stderr+file` 或 `stderr+syslog`；文件模式使用 `log.file`，syslog 模式可用 `log.syslog_facility` 指定 facility。
+- `log.mode`：日志输出模式，默认 `stderr`。可设为 `file`、`syslog`、`stderr+file` 或 `stderr+syslog`；文件模式使用 `log.file`。
 
 运行时与发现字段：
 

@@ -82,7 +82,6 @@ gossip:
 #   level: info
 #   mode: stderr+file
 #   file: /var/log/higgs.log
-#   syslog_facility: daemon
 
 # Dynamic peer lifecycle. Stale/offline peers are retained with lower retry
 # pressure; cleanup_after removes Higgs-owned SA/interface/route/firewall state.
