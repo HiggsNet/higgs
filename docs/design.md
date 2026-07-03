@@ -232,7 +232,7 @@ VICI + XFRM apply
 
 **Public NodeProfile / IPsec profile（可 gossip 公开）**
 - 节点可以公开“我支持 IPsec，我愿意被哪些类型的 peer 尝试连接，我有哪些候选地址/端口”。
-- 公开的是能力和 accept intent，不是完整连接清单。这样可让远端自动决定是否匹配自己的 MeshPolicy，同时避免泄露完整拓扑。
+- 公开的是能力和 role intent，不是完整连接清单。这样可让远端自动决定是否匹配自己的 MeshPolicy，同时避免泄露完整拓扑。
 
 **OverlayProvider（具体系统驱动）**
 - `provider=strongswan` 是 Phase 4 唯一实现目标，负责把 `TransportLinkSpec` 转成 VICI connection/secret、XFRM interface、地址和清理动作。
@@ -260,7 +260,7 @@ node-a.catofes./ipsec/overlays/<overlay_id>
   "provider": "strongswan",
   "ike_identity": "node-a.catofes.",
   "transport_key_fingerprint": "b2:...",
-  "accept": "inbound",
+  "role": "in",
   "address_families": ["ipv6", "ipv4"],
   "path_modes": ["family-redundant", "exhaustive"],
   "nat": {
@@ -271,10 +271,10 @@ node-a.catofes./ipsec/overlays/<overlay_id>
 }
 ```
 
-`accept` 由本节点通过配置项 `ipsec.accept` 设置并写入 `ipsec/profile`，作为节点级能力声明广播给所有 peer。含义：
-- `none`：不接受自动 mesh 拨入；本节点只主动拨出。
-- `inbound`：本节点愿意接受匹配 policy 的远端主动拨入，但自身不主动拨出。
-- `bidirectional`：本节点既可接受拨入，也可主动拨出；双方都是 `bidirectional` 时用稳定 tie-break 避免重复拨号。
+`role` 由本节点通过配置项 `ipsec.role` 设置并写入 `ipsec/profile`，作为节点级能力声明广播给所有 peer。含义：
+- `out`：本节点只主动拨出，不接收自动 mesh 拨入。
+- `in`：本节点愿意接受匹配 policy 的远端主动拨入，但自身不主动拨出。
+- `both`：本节点既可接受拨入，也可主动拨出；双方都是 `both` 时用稳定 tie-break 避免重复拨号。
 
 NAT 字段只是 hint，不是安全事实。远端必须结合地址来源、端口公告、连接结果和本地策略判断是否可达。
 
@@ -441,8 +441,8 @@ overlays:
     provider: strongswan
     netns: h2
     connect:
-      - "strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant"
-      - "strongswan://edge.catofes.?accept=bidirectional&family=dual"
+      - "strongswan://*.catofes.?role=both&family=dual&source=manual-dns,discovery&mode=family-redundant"
+      - "strongswan://edge.catofes.?role=both&family=dual"
     deny:
       - "strongswan://*.lab.catofes."
 ```
@@ -450,7 +450,7 @@ overlays:
 第一版 predicate 集合应保持克制：
 - zone glob / exact：`*.catofes.`、`node-a.catofes.`
 - label selector：`role=edge`、`tag=lab`，仅在本机已有 peer label/tag 来源后使用；示例默认使用 zone glob，避免把未实现的 tag 来源误认为远端声明。
-- 远端公开意图：`accept=none|inbound|bidirectional`
+- 远端公开意图：`role=out|in|both`
 - 地址族：`family=ipv4|ipv6|dual`
 - 地址来源：`source=manual-address|manual-dns|discovery|reflector|local`
 - 路径模式：`mode=family-redundant|exhaustive`
@@ -458,22 +458,19 @@ overlays:
 
 规则评估顺序为 deny 优先，然后按 connect 顺序匹配。正则表达式可后续作为高级能力加入，但默认使用 glob/suffix/label，便于审计。
 
-当前 planner 已把 zone glob/exact connect/deny rule 接入 `TransportLinkSpec` 推导：rule 可按远端 `accept`、地址族、地址来源、path mode 和 `max_peers` 过滤 peer；`role` / `tag` selector 已解析但在本地 peer label 来源接入前不会匹配。`direction` 已从 MeshPolicy rule 和 overlay 配置中移除，本节点角色完全由本节点 `ipsec.accept` 和对端 `accept` 决定。
+当前 planner 已把 zone glob/exact connect/deny rule 接入 `TransportLinkSpec` 推导：rule 可按远端 `role`、地址族、地址来源、path mode 和 `max_peers` 过滤 peer；`role` / `tag` selector 已解析但在本地 peer label 来源接入前不会匹配。`direction` 已从 MeshPolicy rule 和 overlay 配置中移除，本节点角色完全由本节点 `ipsec.role` 和对端 `role` 决定。
 
-#### 2.4.4 accept intent、双栈与 NAT 处理
+#### 2.4.4 role intent、双栈与 NAT 处理
 
-`ipsec.accept` 是本节点对外广播的能力声明，同时决定本节点在 mesh 中的角色。实际建链只由“本节点 accept”和“远端 accept”共同决定，不再依赖额外的 `direction` 字段。
+`ipsec.role` 是本节点对外广播的能力声明，同时决定本节点在 mesh 中的角色。实际建链只由“本节点 role”和“远端 role”共同决定，不再依赖额外的 `direction` 字段。
 
-##### accept-only 角色规则
+##### role-only 角色规则
 
-| 本节点 accept | 远端 accept | 本节点行为 |
-|---------------|-------------|-----------|
-| `none` | `inbound` / `bidirectional` | 主动拨远端 |
-| `inbound` | 任意 | 只加载接收/trap 配置，不主动拨 |
-| `bidirectional` | `inbound` | 主动拨远端 |
-| `bidirectional` | `bidirectional` | 按 peer zone 字典序 tie-break，字典序小的一方主动拨 |
-| `bidirectional` | `none` | 加载接收/trap 配置，等待远端主动拨入 |
-| `none` / `inbound` | `none` | 不建链 |
+| 本机 \ 远端 | `out` | `in` | `both` |
+|-------------|-------|------|--------|
+| `out` | 不建链 | 主动拨远端 | 主动拨远端 |
+| `in` | 不建链 | 只响应（双方都不主动，无法建链） | 只响应（等待对方建链） |
+| `both` | 只响应（远端主动拨） | 主动拨远端 | 字典序小的一方主动拨，另一方响应 |
 
 任意 peer 对之间最多只有一方主动拨，彻底避免双 initiator race。
 
@@ -481,17 +478,17 @@ overlays:
 
 ```yaml
 ipsec:
-  accept: bidirectional   # 本节点能力：既能收也能发
+  role: both   # 本节点能力：既能收也能发
 
 overlays:
   - name: ipsec-main
     provider: strongswan
     netns: h2
     connect:
-      - "strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant"
+      - "strongswan://*.catofes.?role=both&family=dual&source=manual-dns,discovery&mode=family-redundant"
 ```
 
-`ipsec.accept` 默认值为 `inbound`，保持对旧配置的向后兼容；如果配置文件或 MeshPolicy rule 中仍出现 `direction`，启动时报错或给出明确弃用警告。
+`ipsec.role` 默认值为 `both`。如果配置文件或 MeshPolicy rule 中仍出现 `direction` 或旧的 `accept` 查询，启动时报错。
 
 ##### 双栈 path mode
 
@@ -532,7 +529,7 @@ overlays:
    - IPv4 和 IPv6 可以使用同一组 ports record，也可以未来扩展为 per-family ports。
    - staged generation、rotate retention、takeover 都按 link 独立。
 
-该设计保留 `max_links_per_peer` 字段的语义，但当前先按单链路实现；双链路作为后续增强，不阻塞 accept-only 改造。
+该设计保留 `max_links_per_peer` 字段的语义，但当前先按单链路实现；双链路作为后续增强，不阻塞 role-only 模型。
 
 #### 2.4.5 远端公告到本机 reconcile 的运行流程
 
@@ -550,7 +547,7 @@ gossip announce hint / catalog summary diff
   -> ApplyReconcileAction(create/update/repair/teardown)
 ```
 
-因此，远端新发布 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和 `ipsec/overlays/<overlay_id>` 后，只有这些记录已经通过 Zone trust chain 验证并进入本地 active state，才会被 LinkPlanner 使用。LinkPlanner 会重新扫描所有 verified peer zone：缺少任一节点级 IPsec record、缺少匹配 overlay intent、profile disabled、本地 connect/deny rule 不匹配、accept intent 不允许、地址族/path mode 不支持、没有可拨 ContactPoint、NAT 后缺少可验证公网证据，都会变成结构化 skip reason，而不是进入 apply。
+因此，远端新发布 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 和 `ipsec/overlays/<overlay_id>` 后，只有这些记录已经通过 Zone trust chain 验证并进入本地 active state，才会被 LinkPlanner 使用。LinkPlanner 会重新扫描所有 verified peer zone：缺少任一节点级 IPsec record、缺少匹配 overlay intent、profile disabled、本地 connect/deny rule 不匹配、role intent 不允许、地址族/path mode 不支持、没有可拨 ContactPoint、NAT 后缺少可验证公网证据，都会变成结构化 skip reason，而不是进入 apply。
 
 如果远端记录从“缺失/不匹配”变成“完整且匹配本地 MeshPolicy”，planner 会输出新的 `TransportLinkSpec`。reconciler 随后根据本地是否已有 `LinkInstance`、driver 是否已经能从 `ListSAs` 看到匹配 SA、desired spec hash 是否变化、是否处于 apply backoff，决定 `create`、`adopt`、`update`、`repair` 或 `noop`。daemon event drain 期间多次 state change 会合并为一次 IPsec `ListSAs` + reconcile/apply，所以同一轮收到 profile/address/port/key 多条 record 时不会对同一个 peer/group 重复加载 connection/interface。
 
@@ -615,7 +612,7 @@ type TransportLinkSpec struct {
 }
 ```
 
-`LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、address source 优先级、最大 peer/link 数、`tunnel_address` 分配策略（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。本节点 initiator 角色由本节点 `ipsec.accept` 与远端 `accept` 推导，不在 group 中配置 direction。
+`LinkGroupSpec` 是 daemon 的 desired-state 边界，而不是 gossip 公开记录。一个 group 描述 overlay id/name、provider、目标 netns、默认 path mode、address source 优先级、最大 peer/link 数、`tunnel_address` 分配策略（`derived-link-local`、`derived-pool`、`sequential-pool`、`disabled`）以及 reconcile/backoff 策略；当前 daemon 已从一个 group 推导多条 `TransportLinkSpec`，避免把每个 peer link 都变成手工配置。本节点 initiator 角色由本节点 `ipsec.role` 与远端 `role` 推导，不在 group 中配置 direction。
 
 逻辑链路身份应从 runtime 资源名中拆出来。唯一基础身份是 `LinkID` / `PairID`：它表示“两节点之间同一条逻辑 link”，使用无方向输入派生，例如 `hash(sorted(local_zone, peer_zone), overlay_id, path_key)`；其中 `path_key` 当前可为 `default` 或 `family:ipv4` / `family:ipv6`，后续可扩展到多出口、多 provider 或显式 path index。`LinkID` 两端一致、无方向、不随 rotate generation 改变；它应成为 `LinkInstance`、routing/debug/health 观测的稳定主键。
 
@@ -662,7 +659,7 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 
 #### 2.4.7 Bidirectional 首拨失败接管（Phase 4.5）
 
-双方 `accept` 都是 `bidirectional` 时，先用稳定 tie-break（peer zone 字典序）选出 primary initiator，避免正常情况下双向同时拨号。选主只解决“正常情况下谁先拨”这个问题，不改变信任关系，也不把 secondary 排除出链路：secondary 仍会规划 desired spec 并加载 responder/trap 配置，保证 primary 拨过来时能接住。
+双方 `role` 都是 `both` 时，先用稳定 tie-break（peer zone 字典序）选出 primary initiator，避免正常情况下双向同时拨号。选主只解决“正常情况下谁先拨”这个问题，不改变信任关系，也不把 secondary 排除出链路：secondary 仍会规划 desired spec 并加载 responder/trap 配置，保证 primary 拨过来时能接住。
 
 选主规则是纯本地、确定性的，两端无需额外协商：
 
@@ -671,13 +668,13 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 3. 字典序较大的一侧得到 `initiator_role=secondary-standby`，初始 reconcile 返回 `noop/bidirectional_standby`，只等待对端拨入。
 4. 如果任意一侧已经通过 `ListSAs` 观测到匹配 SA，则优先 adopt，角色进入 `converged`，不再纠结谁先拨。
 
-例如 `node-a.catofes.` 与 `node-b.catofes.` 都是 `bidirectional` 时，`node-a.catofes.` 字典序更小，所以 A 是 primary；B 是 secondary-standby。A 主动拨 B，B 只加载 responder/trap。若 A 长时间无法建立 IKE_SA/CHILD_SA，B 才能按下面的 takeover 规则临时接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达、单侧防火墙或单侧 NAT 映射异常上。
+例如 `node-a.catofes.` 与 `node-b.catofes.` 都是 `both` 时，`node-a.catofes.` 字典序更小，所以 A 是 primary；B 是 secondary-standby。A 主动拨 B，B 只加载 responder/trap。若 A 长时间无法建立 IKE_SA/CHILD_SA，B 才能按下面的 takeover 规则临时接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达、单侧防火墙或单侧 NAT 映射异常上。
 
 **接管不引入新 gossip record：** 4.5 不新增 signed health record。secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。Phase 6/7 再考虑低频 signed/runtime health hint。
 
 **Planner 角色模型：**
 
-`InitiatorRoleForPeer` 只使用本节点 `ipsec.accept` 与远端 `accept`；双方都是 `bidirectional` 时使用稳定 tie-break，输出 initiator role：
+`InitiatorRoleForPeer` 只使用本节点 `ipsec.role` 与远端 `role`；双方都是 `both` 时使用稳定 tie-break，输出 initiator role：
 
 - `primary`：字典序较小侧，正常主动拨号。
 - `secondary-standby`：字典序较大侧，reconcile 初始 noop，reason `bidirectional_standby`。
@@ -685,13 +682,13 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 - `converged`：已有匹配 SA，双方退出接管状态机。
 - `cooldown`：接管失败后冷却期。
 
-当本节点 `accept=none` 且远端 `accept=inbound|bidirectional` 时，本节点总是 `primary`；本节点 `accept=inbound` 时从不主动拨号，role 为空。`bidirectional + remote accept=inbound` 也不需要 tie-break，因为远端只声明接收，本机可以直接作为主动方。
+当本节点 `role=out` 且远端 `role=in|both` 时，本节点总是 `primary`；本节点 `role=in` 时从不主动拨号，initiator role 为空。`both + remote role=in` 也不需要 tie-break，因为远端只声明接收，本机可以直接作为主动方。
 
 `TransportLinkSpec` 增加 `InitiatorRole`（hash 中排除）；`LinkInstance` 记录 `InitiatorRole`、`TakeoverPhase`、`TakeoverStartedAt`、`TakeoverUntil`、`LastTakeoverError`、`ObservedInitiator`。
 
 **接管触发条件（保守边界）：**
 
-- 双方 profile 都必须 `accept=bidirectional`；其他 accept 组合不参与 takeover。
+- 双方 profile 都必须 `role=both`；其他 role 组合不参与 takeover。
 - primary 连续失败次数、`connecting` 超时或长期未观测到匹配 SA 达到阈值后，secondary 才可接管；`takeoverDelay` 从 `LinkGroupSpec.Reconcile.Backoff` 派生，至少 2-3 个 backoff 周期，最小 60s。
 - secondary 接管前复用 planner 已过滤的 ContactPoint；缺少 ContactPoint 时返回 `takeover_no_contact_point`。
 - revocation、record 过期、transport key/profile mismatch、policy deny 时禁止 takeover；这些属于信任/授权失败，不是连通性失败。

@@ -20,7 +20,7 @@ type MeshPolicyRule struct {
 	ZonePattern string
 	Role        string
 	Tag         string
-	Accept      string
+	PeerRole    string
 	Family      string
 	Sources     []string
 	PathMode    string
@@ -73,11 +73,14 @@ func ParseMeshPolicyRule(raw string) (MeshPolicyRule, error) {
 		}
 	}
 	query := parsed.Query()
-	rule.Accept = firstQuery(query, "accept")
+	rule.PeerRole = firstQuery(query, "role")
 	rule.Family = firstQuery(query, "family")
 	rule.PathMode = firstQuery(query, "mode")
 	if firstQuery(query, "direction") != "" {
-		return MeshPolicyRule{}, fmt.Errorf("mesh policy rule %q uses deprecated direction query; use ipsec.accept instead", raw)
+		return MeshPolicyRule{}, fmt.Errorf("mesh policy rule %q uses deprecated direction query; use ipsec.role instead", raw)
+	}
+	if firstQuery(query, "accept") != "" {
+		return MeshPolicyRule{}, fmt.Errorf("mesh policy rule %q uses deprecated accept query; use role instead", raw)
 	}
 	if rawSources := firstQuery(query, "source"); rawSources != "" {
 		for _, source := range strings.Split(rawSources, ",") {
@@ -120,8 +123,8 @@ func (r MeshPolicyRule) Validate() error {
 	if r.ZonePattern == "" && r.Role == "" && r.Tag == "" {
 		return fmt.Errorf("mesh policy rule must target zone, role, or tag")
 	}
-	if r.Accept != "" && !oneOf(r.Accept, AcceptNone, AcceptInbound, AcceptBidirectional) {
-		return fmt.Errorf("unsupported mesh policy accept %q", r.Accept)
+	if r.PeerRole != "" && !oneOf(r.PeerRole, RoleOut, RoleIn, RoleBoth) {
+		return fmt.Errorf("unsupported mesh policy role %q", r.PeerRole)
 	}
 	if r.Family != "" && !oneOf(r.Family, RuleFamilyDual, FamilyIPv4, FamilyIPv6) {
 		return fmt.Errorf("unsupported mesh policy family %q", r.Family)

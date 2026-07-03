@@ -759,35 +759,35 @@ func StableInterfaceName(ifID uint32) string {
 }
 
 // ShouldInitiate reports whether the local node should actively initiate a
-// CHILD_SA for this link under the accept-only role model. Only the primary
+// CHILD_SA for this link under the out/in/both role model. Only the primary
 // initiator (or an explicit secondary takeover) actively dials.
-func ShouldInitiate(local, peer zone.ZonePath, localAccept, remoteAccept string) bool {
-	return InitiatorRoleForPeer(local, peer, localAccept, remoteAccept) == InitiatorRolePrimary
+func ShouldInitiate(local, peer zone.ZonePath, localRole, remoteRole string) bool {
+	return InitiatorRoleForPeer(local, peer, localRole, remoteRole) == InitiatorRolePrimary
 }
 
 // InitiatorRoleForPeer returns the local runtime role for a peer link based
-// solely on the local and remote accept intents.
+// solely on the local and remote IPsec roles.
 //
-//   - local none + remote inbound/bidirectional  -> primary (local initiates)
-//   - local inbound                              -> "" (responder only)
-//   - local bidirectional + remote inbound       -> primary
-//   - local bidirectional + remote bidirectional -> primary if local<peer, else secondary-standby
-//   - local bidirectional + remote none          -> "" (responder only)
-//   - local none + remote none                   -> "" (no link)
+//   - local out + remote in/both -> primary (local initiates)
+//   - local in                   -> "" (responder only)
+//   - local both + remote in     -> primary
+//   - local both + remote both   -> primary if local<peer, else secondary-standby
+//   - local both + remote out    -> "" (responder only)
+//   - local out + remote out     -> "" (no link)
 //
 // An empty role means this node does not actively initiate; it may still load
-// a responder/trap configuration when the local accept intent allows inbound.
-func InitiatorRoleForPeer(local, peer zone.ZonePath, localAccept, remoteAccept string) string {
-	switch localAccept {
-	case AcceptNone:
-		if remoteAccept == AcceptInbound || remoteAccept == AcceptBidirectional {
+// a responder/trap configuration when the local role allows inbound.
+func InitiatorRoleForPeer(local, peer zone.ZonePath, localRole, remoteRole string) string {
+	switch localRole {
+	case RoleOut:
+		if remoteRole == RoleIn || remoteRole == RoleBoth {
 			return InitiatorRolePrimary
 		}
-	case AcceptBidirectional:
-		switch remoteAccept {
-		case AcceptInbound:
+	case RoleBoth:
+		switch remoteRole {
+		case RoleIn:
 			return InitiatorRolePrimary
-		case AcceptBidirectional:
+		case RoleBoth:
 			if strings.Compare(string(local), string(peer)) < 0 {
 				return InitiatorRolePrimary
 			}

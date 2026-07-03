@@ -23,7 +23,7 @@ func TestParseIPsecRecordsAndBuildContactPoints(t *testing.T) {
 		Provider:                ProviderStrongSwan,
 		IKEIdentity:             "node-a.catofes.",
 		TransportKeyFingerprint: "b2",
-		Accept:                  AcceptInbound,
+		Role:                    RoleIn,
 		AddressFamilies:         []string{FamilyIPv6, FamilyIPv4},
 		PathModes:               []string{PathModeFamilyRedundant, PathModeExhaustive},
 		UpdatedAt:               now.Unix(),
@@ -332,7 +332,7 @@ func TestTransportKeyAndLinkSpec(t *testing.T) {
 			Provider:                ProviderStrongSwan,
 			IKEIdentity:             "node-a.catofes.",
 			TransportKeyFingerprint: "b2",
-			Accept:                  AcceptInbound,
+			Role:                    RoleIn,
 			AddressFamilies:         []string{FamilyIPv4},
 			PathModes:               []string{PathModeFamilyRedundant},
 		},
@@ -419,7 +419,7 @@ func TestNewTransportLinkSpecForGroupInheritsGroupBoundary(t *testing.T) {
 			Provider:                ProviderStrongSwan,
 			IKEIdentity:             "node-a.catofes.",
 			TransportKeyFingerprint: "b2",
-			Accept:                  AcceptInbound,
+			Role:                    RoleIn,
 			AddressFamilies:         []string{FamilyIPv4},
 			PathModes:               []string{PathModeFamilyRedundant},
 		},
@@ -773,14 +773,14 @@ func TestExtractNodeRecordsSkipsRevokedZone(t *testing.T) {
 }
 
 func TestShouldInitiateBidirectionalTieBreak(t *testing.T) {
-	if !ShouldInitiate("node-a.catofes.", "node-b.catofes.", AcceptBidirectional, AcceptBidirectional) {
+	if !ShouldInitiate("node-a.catofes.", "node-b.catofes.", RoleBoth, RoleBoth) {
 		t.Fatalf("node-a should initiate toward node-b")
 	}
-	if ShouldInitiate("node-b.catofes.", "node-a.catofes.", AcceptBidirectional, AcceptBidirectional) {
+	if ShouldInitiate("node-b.catofes.", "node-a.catofes.", RoleBoth, RoleBoth) {
 		t.Fatalf("node-b should not initiate toward node-a")
 	}
-	if ShouldInitiate("node-a.catofes.", "node-b.catofes.", AcceptBidirectional, AcceptNone) {
-		t.Fatalf("bidirectional should not initiate toward accept=none")
+	if ShouldInitiate("node-a.catofes.", "node-b.catofes.", RoleBoth, RoleOut) {
+		t.Fatalf("role=both should not initiate toward role=out")
 	}
 }
 
@@ -1037,7 +1037,7 @@ func validNodeRecords() *NodeRecords {
 			Provider:                ProviderStrongSwan,
 			IKEIdentity:             "node-a.catofes.",
 			TransportKeyFingerprint: "b2",
-			Accept:                  AcceptInbound,
+			Role:                    RoleIn,
 			AddressFamilies:         []string{FamilyIPv4},
 			PathModes:               []string{PathModeFamilyRedundant},
 		},

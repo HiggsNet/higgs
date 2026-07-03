@@ -28,9 +28,9 @@ const (
 	RecordTypeTransportKey  = "ipsec.transport_key.v1"
 	RecordTypeOverlayIntent = "ipsec.overlay_intent.v1"
 
-	AcceptNone          = "none"
-	AcceptInbound       = "inbound"
-	AcceptBidirectional = "bidirectional"
+	RoleOut  = "out"
+	RoleIn   = "in"
+	RoleBoth = "both"
 
 	FamilyIPv4 = "ipv4"
 	FamilyIPv6 = "ipv6"
@@ -78,7 +78,7 @@ type ProfileRecord struct {
 	Provider                string     `json:"provider"`
 	IKEIdentity             string     `json:"ike_identity"`
 	TransportKeyFingerprint string     `json:"transport_key_fingerprint"`
-	Accept                  string     `json:"accept"`
+	Role                    string     `json:"role"`
 	AddressFamilies         []string   `json:"address_families"`
 	PathModes               []string   `json:"path_modes"`
 	NAT                     NATProfile `json:"nat"`
@@ -363,8 +363,8 @@ func (p ProfileRecord) Validate(owner zone.ZonePath) error {
 	if p.TransportKeyFingerprint == "" {
 		return errors.New("transport_key_fingerprint is required")
 	}
-	if !oneOf(p.Accept, AcceptNone, AcceptInbound, AcceptBidirectional) {
-		return fmt.Errorf("unsupported accept intent %q", p.Accept)
+	if !oneOf(p.Role, RoleOut, RoleIn, RoleBoth) {
+		return fmt.Errorf("unsupported ipsec role %q", p.Role)
 	}
 	if p.NAT.Hint != "" && !oneOf(p.NAT.Hint, NATHintPublic, NATHintBehindNAT, NATHintUnknown) {
 		return fmt.Errorf("unsupported nat hint %q", p.NAT.Hint)

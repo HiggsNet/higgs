@@ -110,10 +110,10 @@ ipsec:
   # publish IPsec capability records. Higgs publishes ipsec/* records only
   # when a local overlay/link group below selects provider: strongswan.
   #
-  # accept declares this node's inbound capability: none, inbound, or
-  # bidirectional. It also determines whether this node initiates links.
-  # Default is bidirectional (accept and initiate links).
-  # accept: bidirectional
+  # role declares this node's IPsec mesh behavior: out, in, or both.
+  # It also determines whether this node initiates links.
+  # Default is both (accept and initiate links).
+  # role: both
   #
   # Default driver is strongswan. For unprivileged development or CI without
   # charon/VICI/XFRM, explicitly set driver: dry-run.
@@ -201,7 +201,7 @@ ipsec:
 #     #     max: 1m
 #
 #     connect:
-#       - "strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant"
+#       - "strongswan://*.catofes.?role=both&family=dual&source=manual-dns,discovery&mode=family-redundant"
 #     deny:
 #       - "strongswan://*.lab.catofes."
 

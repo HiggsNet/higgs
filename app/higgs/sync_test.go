@@ -1302,7 +1302,7 @@ func TestDebugZoneOutput(t *testing.T) {
 func TestDebugRecordsOutputFiltersByPrefixAndPrintsValues(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	state, _ := buildTestNetworkState(t)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	var out bytes.Buffer
 	if err := writeDebugRecords(&out, state, "node-b.catofes.", "ipsec/", true); err != nil {
 		t.Fatalf("writeDebugRecords: %v", err)

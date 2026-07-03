@@ -162,7 +162,7 @@ type overlayDefaultsYAML struct{}
 type ipsecConfig struct {
 	DefaultNetNS            ipsec.NetNSSpec
 	LinkGroups              []ipsec.LinkGroupSpec
-	Accept                  string
+	Role                    string
 	Driver                  string
 	VICISocket              string
 	PortMode                string
@@ -175,7 +175,8 @@ type ipsecConfig struct {
 }
 
 type ipsecConfigYAML struct {
-	Accept                  string           `yaml:"accept"`
+	Role                    string           `yaml:"role"`
+	DeprecatedAccept        string           `yaml:"accept"`
 	Driver                  string           `yaml:"driver"`
 	VICISocket              string           `yaml:"vici_socket"`
 	PortMode                string           `yaml:"port_mode"`
@@ -291,7 +292,7 @@ func defaultAppConfig() *appConfig {
 		},
 		IPsec: ipsecConfig{
 			DefaultNetNS:            ipsec.NetNSSpec{}.Normalized(),
-			Accept:                  ipsec.AcceptBidirectional,
+			Role:                    ipsec.RoleBoth,
 			Driver:                  ipsecDriverStrongSwan,
 			PortMode:                ipsec.PortModeFixed,
 			PortRotateInterval:      0,
@@ -336,8 +337,8 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
-	if config.IPsec.Accept == "" {
-		config.IPsec.Accept = ipsec.AcceptBidirectional
+	if config.IPsec.Role == "" {
+		config.IPsec.Role = ipsec.RoleBoth
 	}
 	if config.IPsec.Driver == "" {
 		config.IPsec.Driver = ipsecDriverStrongSwan
@@ -514,14 +515,17 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 		config.IPsec.Driver = driver
 	}
-	if file.IPsec.Accept != "" {
-		accept := strings.ToLower(strings.TrimSpace(file.IPsec.Accept))
-		switch accept {
-		case ipsec.AcceptNone, ipsec.AcceptInbound, ipsec.AcceptBidirectional:
-			config.IPsec.Accept = accept
+	if file.IPsec.Role != "" {
+		role := strings.ToLower(strings.TrimSpace(file.IPsec.Role))
+		switch role {
+		case ipsec.RoleOut, ipsec.RoleIn, ipsec.RoleBoth:
+			config.IPsec.Role = role
 		default:
-			return fmt.Errorf("invalid ipsec.accept %q", file.IPsec.Accept)
+			return fmt.Errorf("invalid ipsec.role %q", file.IPsec.Role)
 		}
+	}
+	if file.IPsec.DeprecatedAccept != "" {
+		return fmt.Errorf("ipsec.accept is deprecated; use ipsec.role")
 	}
 	if file.IPsec.VICISocket != "" {
 		config.IPsec.VICISocket = file.IPsec.VICISocket
@@ -780,7 +784,7 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg netnsConfig, de
 		return ipsec.LinkGroupSpec{}, fmt.Errorf("netns: %w", err)
 	}
 	if overlay.Direction != "" {
-		return ipsec.LinkGroupSpec{}, fmt.Errorf("overlays[].direction is deprecated; use ipsec.accept instead")
+		return ipsec.LinkGroupSpec{}, fmt.Errorf("overlays[].direction is deprecated; use ipsec.role instead")
 	}
 	group := ipsec.LinkGroupSpec{
 		ID:                 overlay.ID,

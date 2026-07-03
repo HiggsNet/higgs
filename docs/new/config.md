@@ -131,7 +131,7 @@ netns:
 
 ```yaml
 ipsec:
-  accept: bidirectional
+  role: both
   # driver: strongswan
   vici_socket: /run/charon.vici
 
@@ -147,7 +147,7 @@ ipsec:
 
 主要字段：
 
-- `accept`：`none`、`inbound`、`bidirectional`。表达本节点 IPsec 连接意图。
+- `role`：`out`、`in`、`both`。表达本节点 IPsec 连接意图；默认 `both`。
 - `driver`：`strongswan` 或 `dry-run`。默认 `strongswan`；无 root/VICI/XFRM 的开发环境用 `dry-run`。
 - `vici_socket`：StrongSwan VICI socket 路径。Higgs 不负责启动 charon。
 - `port_mode`：`fixed` 或 `range`。`range` 需要配置 `port_range`。
@@ -182,7 +182,7 @@ overlays:
     #     max: 1m
 
     connect:
-      - "strongswan://*.catofes.?accept=bidirectional&family=dual&source=manual-dns,discovery&mode=family-redundant"
+      - "strongswan://*.catofes.?role=both&family=dual&source=manual-dns,discovery&mode=family-redundant"
     deny:
       - "strongswan://*.lab.catofes."
 ```

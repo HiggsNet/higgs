@@ -17,27 +17,43 @@ WireGuard 是后续可选的轻量 transport，应复用同一套高层 mesh pol
 
 ## 整体分层
 
-Transport 处于"全网事实层"和"本机执行层"之间：
+Transport 处于"全网事实层"和"本机执行层"之间。核心工作由 **IPsec reconcile 循环** 驱动，而不是由 driver 直接产出 LinkInstance：
 
 ```text
+输入侧
+──────
 Gossip verified active state           ← peer 的 ipsec/* records
        +
 Local config (overlays, netns, ...)    ← 本机策略
        │
        ▼
-LinkPlanner                            ← 推导 desired TransportLinkSpec
+LinkPlanner                            ← 纯函数：输出 Desired []TransportLinkSpec + Roles
        │
        ▼
-StrongSwanDriver + SystemXFRMDriver    ← 通过 VICI + iproute2 执行
+ReconcileLinkInstances                 ← 状态机核心
+      ├─ 读：持久化的 LinkInstance（stateFile.LinkInstances）
+      ├─ 读：实际 SA / XFRM interface 状态（来自 driver.ListSAs / InspectLink）
+      └─ 输出：ReconcileAction[] + 更新后的 LinkInstance
        │
        ▼
-LinkInstance (persisted)               ← 本机 runtime 状态
+ApplyReconcileAction                   ← 按 action + spec 调用 driver
+       │
+       ▼
+StrongSwanDriver + SystemXFRMDriver    ← VICI + iproute2 实际建/拆/修链路
+       │
+       ▼
+LinkInstance（写回持久化）              ← 本机 runtime 状态锚点
        │
        ▼
 Routing / Firewall / Health 消费       ← hgs* interface + tunnel address
 ```
 
-关键点：LinkPlanner 是纯函数，不碰系统网络；driver 层只按 `TransportLinkSpec` 执行，不推理全局策略；`LinkInstance` 是 reconcile 的持久化锚点，连接 desired 和 actual 两侧。
+关键点：
+
+- **LinkPlanner 是纯函数**，输入是 gossip state、本地策略和当前时间，输出是 `TransportLinkSpec` 列表以及每个 link 的 `InitiatorRole`，不碰系统网络。
+- **ReconcileLinkInstances 是模块管理核心**：它对比 desired spec、持久化的 `LinkInstance` 和实际 driver 状态，决定 create / update / repair / teardown / rotate / adopt / noop。对应实现见 `pkg/transport/ipsec/instance.go`。
+- **Driver 层只执行动作**：`ApplyReconcileAction` 按 `ReconcileAction` 和 `TransportLinkSpec` 调用 VICI / iproute2，不做策略判断。
+- **LinkInstance 是 reconcile 的持久化状态锚点**：它既是 reconcile 的输入（上次状态），也是输出（本次结果）。 daemon 重启后靠它恢复链路状态、继续 rotate 阶段、遵守 backoff，并借助 `ResourceOwner` 做所有权审计， teardown 时避免误删非本管理器资源。
 
 ## 输入来自哪里
 
@@ -75,8 +91,6 @@ overlays:
     deny:
       - "strongswan://*.lab.catofes."
 ```
-
-> 当前代码仍使用 `ipsec.accept` / `accept=...` 和 `none` / `inbound` / `bidirectional`，本节使用的是目标命名；后续实现迁移见 `todo.md`。
 
 `role` 决定本节点在 mesh 中的角色：
 
@@ -223,28 +237,79 @@ type LinkInstance struct {
 
 ### Reconcile 主循环
 
+一次完整的 IPsec reconcile 由 `reconcileIPsecLinks`（`app/higgs/ipsec_reconcile.go`）驱动，整体数据流如下：
+
 ```text
 PlanTransportLinks(active state + config)
-    → desired []TransportLinkSpec + []SkipReason
+    → desired []TransportLinkSpec + []SkipReason + Roles
 
 ReconcileLinkInstances(desired + persisted LinkInstance + driver ListSAs + revocations)
-    → 每条 desired link 判定一个 action：
+    → Actions []ReconcileAction + 更新后的 Instances
 
-    create      — 新的 desired link，本地无实例
-    adopt       — 有 desired，也有 existing SA（daemon 重启后恢复）
-    update      — desired spec hash 变了
-    repair      — link 处于 degraded/error，backoff 已到期
-    noop        — 已经 up 且 desired 没变
-    teardown    — 不再 desired（peer revoked、配置删除、record 过期）
+ApplyReconcileAction(action, spec, instance)
+    → StrongSwanDriver + SystemXFRMDriver 实际建/拆/修链路
 
-ApplyTransportLink(action) — apply 顺序固定：
-    1. EnsureNamespace(target netns)
-    2. LoadKey(transport key)
-    3. LoadConnection(IKE connection)
-    4. EnsureInterface(host 创建 XFRM interface → move → up → addrgenmode none)
-    5. AssignAddress(tunnel address)
-    6. 记录 LinkInstance → 等待 ListSAs 观测到 SA → 推进到 up
+写回 d.Sync.State.LinkInstances + saveState()
 ```
+
+#### 每轮执行的 7 个步骤
+
+1. **规划 desired links**
+   调用 `ipsec.PlanTransportLinks`，输入当前 `NetworkState`、本机 `ManagedZone` 和 `LinkGroups`，得到 `LinkPlan`。
+   输出包括：
+   - `Desired []TransportLinkSpec`：本轮期望建立的链路；
+   - `Skipped []PlanSkip`：被跳过的 peer 及原因（用于诊断）；
+   - `Roles map[string]string`：每个 instance/transport 的 initiator role，用于 `both` 角色场景下的 secondary-standby / secondary-takeover 决策。
+
+2. **注入本机密钥材料**
+   调用 `injectIPsecKeyMaterial` 把本机持久化的 `IPsecTransportKey` 填入 desired specs，这样 planner 本身不需要访问私钥。
+
+3. **采集实际 SA 状态**
+   调用 `ipsecDriver.ListSAs(ctx)` 通过 VICI 拿到当前 StrongSwan 的 IKE/CHILD_SA 列表。
+
+4. **校验 XFRM interface 真实存在**
+   调用 `filterSAsWithMissingXFRMLinks`：
+   - 如果 xfrm driver 实现了 `XFRMLinkInspector`，逐个 `InspectLink` 检查 interface 是否存在且参数匹配；
+   - 否则回退到 `FilterSAsWithMissingLinks`。
+   这一步能发现“SA 还在但 interface 被外部清理”的异常，并把缺失的 link 标记到 instance 状态里。
+
+5. **运行 reconcile 状态机**
+   调用 `ipsec.ReconcileLinkInstances`，输入 `Desired`、`Instances`、`SAs`、`Revoked`、`Roles`、`GroupBackoff`、`GroupRotateRetention`、`RotateCutoverReady`。
+   输出：
+   - `Actions []ReconcileAction`：要执行的具体动作；
+   - `Instances map[string]LinkInstance`：更新后的 instance 状态（尚未持久化）。
+
+   常见的 action 类型：
+   - `create` — 新的 desired link，本地无 instance；
+   - `adopt` — desired 与现有 SA 匹配，直接采纳 driver 状态；
+   - `update` — desired spec hash 变了，或 identity/endpoint 不匹配；
+   - `repair` — link 处于 `degraded`/`error` 且 backoff 已到期；
+   - `noop` — 已经 up 且 desired 没变；
+   - `teardown` — 不再 desired（peer revoked、配置删除、record 过期）；
+   - `prepare_rotate` / `commit_rotate` / `rollback_rotate` / `cleanup_rotate` — staged rotate 各阶段。
+
+6. **执行 actions**
+   遍历 `Actions`，对每个需要实际改系统的动作：
+   - 根据 action 和对应 overlay 找到目标 netns；
+   - 调用 `ipsec.ApplyReconcileAction`，由它再调用 `StrongSwanDriver` / `XFRMDriver`；
+   - 如果执行失败，立即标记 instance 为失败状态、增加 backoff、把 `result.Instances` 写回内存并 `saveState()`，然后返回错误，避免同一轮继续执行后续可能依赖的动作；
+   - 如果成功，标记 instance 为成功状态。
+
+7. **持久化结果**
+   把 `result.Instances` 写回 `d.Sync.State.LinkInstances`，更新 `IPsecReconcile` 摘要（desired 数量、actions、skipped、last error），并调用 `saveState()` 落盘。
+
+> **注意**：reconcile 是单线程顺序执行的。任何一步出错都会提前返回，但已经把截至目前的 instance 状态保存下来，下一轮可以基于最新的持久化状态继续推进。
+
+#### Apply 顺序与 staged 边界
+
+`ApplyReconcileAction` 对 create/update/repair 会按固定顺序调用 driver：
+
+1. `EnsureNamespace(target netns)`
+2. `LoadKey(transport key)`
+3. `LoadConnection(IKE connection)`
+4. `EnsureInterface`（host 创建 XFRM interface → move → up → `addrgenmode none`）
+5. `AssignAddress(tunnel address)`
+6. `InitiateChild`（对 outbound initiator）或等待对端触发
 
 Staged connection 的 apply 有两个额外边界：复用已加载的 transport key，不重复 `load-key`；加载 staged connection 前会先 `unload-conn` 对应 base config，避免 StrongSwan 把 rotation 报文匹配到旧 connection 名下。这个 unload 只卸载配置，不等于 teardown 已建立的 base SA。
 

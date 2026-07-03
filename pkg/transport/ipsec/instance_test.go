@@ -133,10 +133,10 @@ func TestRotateSpecForSecondaryStandbyUsesInboundTrap(t *testing.T) {
 func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -156,7 +156,7 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	}
 
 	// Planner now sees generation 2 (peer published a rotated port record).
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -228,10 +228,10 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -284,7 +284,7 @@ func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
 func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -297,7 +297,7 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -358,10 +358,10 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 func TestReconcileSecondaryStandbyDoesNotTakeoverDuringRotateRetention(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -402,7 +402,7 @@ func TestReconcileSecondaryStandbyDoesNotTakeoverDuringRotateRetention(t *testin
 func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -415,7 +415,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -471,7 +471,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 func TestReconcileCommitsRotateWhenStagedSAAlreadyCurrent(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -484,7 +484,7 @@ func TestReconcileCommitsRotateWhenStagedSAAlreadyCurrent(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -602,7 +602,7 @@ func TestReconcileMatchesSameRuntimeSAByPathFamily(t *testing.T) {
 func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -615,7 +615,7 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -665,7 +665,7 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -678,7 +678,7 @@ func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) 
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -721,10 +721,10 @@ func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) 
 func TestReconcileSecondaryConvergedCommitsRotateWhenOldSADisappears(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-a.catofes."].Records[RecordKeyPorts] = record(t, "node-a.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -976,7 +976,7 @@ func TestReconcileUpdatesWhenEstablishedSAIdentityIsStale(t *testing.T) {
 func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -989,7 +989,7 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1033,7 +1033,7 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -1046,7 +1046,7 @@ func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1399,7 +1399,7 @@ func TestApplyReconcileActionCommitRotateTeardownsOldGeneration(t *testing.T) {
 func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -1412,7 +1412,7 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1470,10 +1470,10 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 func TestReconcileNormalUpdateWhenNoGenerationChange(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1519,10 +1519,10 @@ func TestReconcileNormalUpdateWhenNoGenerationChange(t *testing.T) {
 func TestReconcileRotateUsesUpdatedEndpointWhenGenerationChanges(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1589,10 +1589,10 @@ func TestReconcileRotateUsesUpdatedEndpointWhenGenerationChanges(t *testing.T) {
 func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1624,10 +1624,10 @@ func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
 func TestReconcileSecondaryStandbyRepairsMissingDriverStateWithoutTakeover(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1661,10 +1661,10 @@ func TestReconcileSecondaryStandbyRepairsMissingDriverStateWithoutTakeover(t *te
 func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 	base := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, base)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, base)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1719,10 +1719,10 @@ func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 func TestReconcileSecondaryTakeoverCooldownPreventsRetry(t *testing.T) {
 	base := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, base)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, base)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1771,10 +1771,10 @@ func TestReconcileSecondaryTakeoverCooldownPreventsRetry(t *testing.T) {
 func TestReconcileTakeoverAdoptsExistingSA(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -1806,10 +1806,10 @@ func TestReconcileTakeoverAdoptsExistingSA(t *testing.T) {
 func TestReconcileTakeoverForbiddenByRevocation(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["catofes."] = zone.NewZoneState("catofes.", nil)

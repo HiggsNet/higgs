@@ -38,7 +38,7 @@ func TestPlannedInspectDesiredLinksResolvesManualDNS(t *testing.T) {
 		Provider:                ipsec.ProviderStrongSwan,
 		IKEIdentity:             "node-b.catofes.",
 		TransportKeyFingerprint: key.Fingerprint,
-		Accept:                  ipsec.AcceptInbound,
+		Role:                    ipsec.RoleIn,
 		AddressFamilies:         []string{ipsec.FamilyIPv4},
 		PathModes:               []string{ipsec.PathModeFamilyRedundant},
 		UpdatedAt:               now.Unix(),
@@ -82,7 +82,7 @@ func TestPlannedInspectDesiredLinksResolvesManualDNS(t *testing.T) {
 		Provider:           ipsec.ProviderStrongSwan,
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualDNS},
-		ConnectRules:       []string{"strongswan://node-b.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://node-b.catofes.?role=in"},
 		TunnelAddressSpec:  ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6},
 	}}
 

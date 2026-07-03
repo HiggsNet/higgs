@@ -18,7 +18,7 @@ const (
 	SkipDisabledProfile       = "disabled_profile"
 	SkipUnsupportedPathMode   = "unsupported_path_mode"
 	SkipUnsupportedFamily     = "unsupported_address_family"
-	SkipAcceptIntentMismatch  = "accept_intent_mismatch"
+	SkipRoleMismatch          = "role_mismatch"
 	SkipNoContactPoints       = "no_contact_points"
 	SkipNoInboundNATEvidence  = "no_inbound_nat_evidence"
 	SkipMissingOverlayIntent  = "missing_overlay_intent"
@@ -156,11 +156,11 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedFamily}, linkIndex, nil
 	}
-	localAccept := localAcceptFromState(ns, local, now)
-	remoteAccept := records.Profile.Accept
-	role := InitiatorRoleForPeer(local, peer, localAccept, remoteAccept)
-	if role == "" && !canLoadResponder(localAccept) {
-		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipAcceptIntentMismatch, Detail: fmt.Sprintf("local=%s remote=%s", localAccept, remoteAccept)}, linkIndex, nil
+	localRole := localRoleFromState(ns, local, now)
+	remoteRole := records.Profile.Role
+	role := InitiatorRoleForPeer(local, peer, localRole, remoteRole)
+	if role == "" && !canLoadResponder(localRole) {
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipRoleMismatch, Detail: fmt.Sprintf("local=%s remote=%s", localRole, remoteRole)}, linkIndex, nil
 	}
 
 	var contacts []ContactPoint
@@ -324,22 +324,22 @@ func applyRuntimeGeneration(spec *TransportLinkSpec, group LinkGroupSpec, linkIn
 	return nil
 }
 
-func canLoadResponder(localAccept string) bool {
-	return localAccept == AcceptInbound || localAccept == AcceptBidirectional
+func canLoadResponder(localRole string) bool {
+	return localRole == RoleIn || localRole == RoleBoth
 }
 
-func localAcceptFromState(ns *zone.NetworkState, local zone.ZonePath, now time.Time) string {
+func localRoleFromState(ns *zone.NetworkState, local zone.ZonePath, now time.Time) string {
 	if ns == nil || !local.Valid() {
-		return AcceptBidirectional
+		return RoleBoth
 	}
 	records, err := ExtractNodeRecords(ns, local, now)
 	if err != nil {
-		return AcceptBidirectional
+		return RoleBoth
 	}
-	if records.Profile != nil && records.Profile.Accept != "" {
-		return records.Profile.Accept
+	if records.Profile != nil && records.Profile.Role != "" {
+		return records.Profile.Role
 	}
-	return AcceptBidirectional
+	return RoleBoth
 }
 
 func localPortGeneration(ns *zone.NetworkState, local zone.ZonePath, now time.Time) uint64 {
@@ -465,7 +465,7 @@ func meshRuleMatchesPeer(rule MeshPolicyRule, peer zone.ZonePath, records *NodeR
 	if rule.Role != "" || rule.Tag != "" {
 		return false
 	}
-	if rule.Accept != "" && (records == nil || records.Profile == nil || records.Profile.Accept != rule.Accept) {
+	if rule.PeerRole != "" && (records == nil || records.Profile == nil || records.Profile.Role != rule.PeerRole) {
 		return false
 	}
 	if rule.Family != "" && rule.Family != RuleFamilyDual {

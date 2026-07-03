@@ -12,13 +12,6 @@
 - [x] Phase 5：BIRD Babel、route authorization、per-netns BIRD 配置模型、routing debug 和 dry-run smoke 基座。
 - [x] Phase 6.0-6.7.6：事件驱动控制面、IPAM、准入诊断、防火墙、动态 peer、撤销清理、链路健康和 Observer MVP 主线。
 
-## Phase 4: StrongSwan / XFRM interface 建链（归档后仅保留后续项）
-
-**状态：** 主线能力已完成，完整展开清单见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。当前只保留尚未彻底闭环的后续能力。
-
-**剩余后续：**
-- [ ] IPsec role 命名迁移：把当前 `ipsec.accept` / `accept=...` 与 `none` / `inbound` / `bidirectional` 迁到 `ipsec.role` / `role=...` 与 `out` / `in` / `both`；同步 signed `ipsec/profile` schema、planner/filter、debug/observer 输出、`config.example.yaml`、`docs/new/config.md` 和兼容/迁移策略。
-
 ## Phase 5: BIRD Babel 路由 + Route Authorization Filter（归档后仅保留后续项）
 
 **状态：** 第一版 BIRD/Babel、route authorization、per-netns BIRD 和 dry-run smoke 已完成；完整展开清单见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。

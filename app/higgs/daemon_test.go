@@ -63,7 +63,7 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4000, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -71,7 +71,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	rt := &Runtime{
 		Config:    appConfig,
@@ -122,8 +122,8 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4000, 0)
 	state.Network.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
-	addTestIPsecRecords(t, state.Network.Zones["node-a.catofes."], "node-a.catofes.", now, ipsec.AcceptNone)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-a.catofes."], "node-a.catofes.", now, ipsec.RoleOut)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -131,7 +131,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	rt := &Runtime{
 		Config:    appConfig,
@@ -211,7 +211,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4060, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 
 	ns := "higgs-daemon-xfrm-" + time.Now().UTC().Format("20060102150405")
 	group := testIPsecLinkGroup()
@@ -373,8 +373,8 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	keyB, recordB := daemonTestTransportKey(t, now)
 	stateA.IPsecTransportKey = keyA
 	stateB.IPsecTransportKey = keyB
-	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, ipsec.AcceptNone, now)
-	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, ipsec.AcceptInbound, now)
+	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, ipsec.RoleOut, now)
+	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, ipsec.RoleIn, now)
 	stateA.Network.Zones["node-b.catofes."] = stateB.Network.Zones["node-b.catofes."]
 	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
 
@@ -614,8 +614,8 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 	keyB, recordB := daemonTestTransportKey(t, now)
 	stateA.IPsecTransportKey = keyA
 	stateB.IPsecTransportKey = keyB
-	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, ipsec.AcceptNone, now)
-	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, ipsec.AcceptInbound, now)
+	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, ipsec.RoleOut, now)
+	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, ipsec.RoleIn, now)
 	stateA.Network.Zones["node-b.catofes."] = stateB.Network.Zones["node-b.catofes."]
 	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
 
@@ -798,8 +798,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	keyB, recordB := daemonTestTransportKey(t, now)
 	stateA.IPsecTransportKey = keyA
 	stateB.IPsecTransportKey = keyB
-	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, ipsec.AcceptNone, now)
-	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, ipsec.AcceptInbound, now)
+	addDaemonTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", "192.0.2.1", recordA, ipsec.RoleOut, now)
+	addDaemonTestIPsecRecords(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", "192.0.2.2", recordB, ipsec.RoleIn, now)
 	stateA.Network.Zones["node-b.catofes."] = stateB.Network.Zones["node-b.catofes."]
 	stateB.Network.Zones["node-a.catofes."] = stateA.Network.Zones["node-a.catofes."]
 
@@ -1107,14 +1107,14 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
 		Clock:     time.Now,
 	}
-	rtA.Config.IPsec.Accept = ipsec.AcceptNone
+	rtA.Config.IPsec.Role = ipsec.RoleOut
 	rtA.Config.ListenAddr = gossipA
 	rtB := &Runtime{
 		Config:    testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB),
 		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
 		Clock:     time.Now,
 	}
-	rtB.Config.IPsec.Accept = ipsec.AcceptInbound
+	rtB.Config.IPsec.Role = ipsec.RoleIn
 	rtB.Config.ListenAddr = gossipB
 	if err := rtA.SaveState(stateA); err != nil {
 		t.Fatalf("SaveState(node-a): %v", err)
@@ -1161,7 +1161,7 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4050, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -1169,7 +1169,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	rt := &Runtime{
 		Config:    appConfig,
@@ -1221,7 +1221,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4100, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -1229,7 +1229,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
@@ -1304,7 +1304,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4125, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -1312,7 +1312,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
@@ -1371,7 +1371,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4126, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
 	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
@@ -1436,7 +1436,7 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4128, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
 	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
@@ -1531,8 +1531,8 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	now := time.Unix(4130, 0)
 	stateA, configA := buildTestNetworkState(t)
 	stateA.Network.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
-	addTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", now, ipsec.AcceptBidirectional)
-	addTestIPsecRecords(t, stateA.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", now, ipsec.RoleBoth)
+	addTestIPsecRecords(t, stateA.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
 	group.ConnectRules = nil
 	setTestIPsecOverlayIntent(t, stateA.Network.Zones["node-a.catofes."], "node-a.catofes.", group, now)
@@ -1675,13 +1675,13 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
 		Clock:     time.Now,
 	}
-	rtA.Config.IPsec.Accept = ipsec.AcceptInbound
+	rtA.Config.IPsec.Role = ipsec.RoleIn
 	rtB := &Runtime{
 		Config:    testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "b"), "198.51.100.20:4500", group),
 		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
 		Clock:     time.Now,
 	}
-	rtB.Config.IPsec.Accept = ipsec.AcceptInbound
+	rtB.Config.IPsec.Role = ipsec.RoleIn
 	if err := rtA.SaveState(stateA); err != nil {
 		t.Fatalf("SaveState(node-a): %v", err)
 	}
@@ -1790,7 +1790,7 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4135, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
 	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
@@ -1842,7 +1842,7 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4137, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
 	group.Reconcile.Backoff = ipsec.BackoffPolicy{InitialSeconds: 1, MaxSeconds: 1}
 	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
@@ -1896,7 +1896,7 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
 	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
@@ -1971,7 +1971,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4150, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -1979,7 +1979,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	rt := &Runtime{
 		Config:    appConfig,
@@ -2041,7 +2041,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4160, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -2049,7 +2049,7 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?accept=inbound"},
+		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	rt := &Runtime{
 		Config:    appConfig,
@@ -2130,7 +2130,7 @@ func TestNextIPsecReconcileTime(t *testing.T) {
 func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4200, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")
 	statePath := filepath.Join(dataDir, "higgs.db")
@@ -2183,7 +2183,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 		"    default_path_mode: family-redundant",
 		"    address_source_order: [manual-address]",
 		"    connect:",
-		"      - strongswan://*.catofes.?accept=inbound",
+		"      - strongswan://*.catofes.?role=in",
 		"",
 	}, "\n")
 	if err := os.WriteFile(configPath, []byte(reloadedConfig), 0o600); err != nil {
@@ -2344,7 +2344,7 @@ func testIPsecLinkGroup() ipsec.LinkGroupSpec {
 			Family: ipsec.FamilyIPv4,
 			Pool:   netip.MustParsePrefix("10.44.0.0/29"),
 		},
-		ConnectRules: []string{"strongswan://node-*.catofes.?accept=inbound"},
+		ConnectRules: []string{"strongswan://node-*.catofes.?role=in"},
 	}
 }
 
@@ -2837,7 +2837,7 @@ func addDaemonTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZoneP
 		Provider:                ipsec.ProviderStrongSwan,
 		IKEIdentity:             string(peer),
 		TransportKeyFingerprint: key.Fingerprint,
-		Accept:                  accept,
+		Role:                    accept,
 		AddressFamilies:         []string{ipsec.FamilyIPv4},
 		PathModes:               []string{ipsec.PathModeFamilyRedundant},
 		UpdatedAt:               now.Unix(),
@@ -3307,7 +3307,7 @@ func addTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZonePath, n
 		Provider:                ipsec.ProviderStrongSwan,
 		IKEIdentity:             string(peer),
 		TransportKeyFingerprint: fingerprint,
-		Accept:                  accept,
+		Role:                    accept,
 		AddressFamilies:         []string{ipsec.FamilyIPv4},
 		PathModes:               []string{ipsec.PathModeFamilyRedundant},
 		UpdatedAt:               now.Unix(),
@@ -3811,7 +3811,7 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedHiggsConnections(t 
 func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(5110, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.AcceptInbound)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	group := testIPsecLinkGroup()
 	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)

@@ -288,7 +288,7 @@ overlays:
         initial: 1s
         max: 1m
     connect:
-      - "strongswan://*.catofes.?accept=inbound&family=dual"
+      - "strongswan://*.catofes.?role=in&family=dual"
     deny:
       - "strongswan://*.lab.catofes."
 `
@@ -318,34 +318,45 @@ overlays:
 	if len(group.ConnectRules) != 1 || len(group.DenyRules) != 1 {
 		t.Fatalf("rules = connect:%v deny:%v", group.ConnectRules, group.DenyRules)
 	}
-	if config.IPsec.Accept != ipsec.AcceptBidirectional {
-		t.Fatalf("IPsec.Accept = %q, want default bidirectional", config.IPsec.Accept)
+	if config.IPsec.Role != ipsec.RoleBoth {
+		t.Fatalf("IPsec.Role = %q, want default bidirectional", config.IPsec.Role)
 	}
 }
 
-func TestParseConfigYAMLIPsecAccept(t *testing.T) {
+func TestParseConfigYAMLIPsecRole(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
 ipsec:
-  accept: bidirectional
+  role: both
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if config.IPsec.Accept != ipsec.AcceptBidirectional {
-		t.Fatalf("IPsec.Accept = %q, want bidirectional", config.IPsec.Accept)
+	if config.IPsec.Role != ipsec.RoleBoth {
+		t.Fatalf("IPsec.Role = %q, want both", config.IPsec.Role)
 	}
 }
 
-func TestParseConfigYAMLIPsecAcceptInvalid(t *testing.T) {
+func TestParseConfigYAMLIPsecRoleInvalid(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
 ipsec:
-  accept: both
+  role: invalid
 `
 	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("expected error for invalid ipsec.accept")
+		t.Fatalf("expected error for invalid ipsec.role")
+	}
+}
+
+func TestParseConfigYAMLIPsecRejectsDeprecatedAccept(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  accept: inbound
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatalf("expected error for deprecated ipsec.accept")
 	}
 }
 

@@ -15,10 +15,10 @@ import (
 func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{
@@ -51,10 +51,10 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 func TestPlanTransportLinksDerivesRuntimeNamesFromActiveGeneration(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -106,10 +106,10 @@ func TestPlanTransportLinksDerivesRuntimeNamesFromActiveGeneration(t *testing.T)
 func TestPlanTransportLinksRequiresOverlayIntent(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	delete(ns.Zones["node-b.catofes."].Records, OverlayIntentRecordKey("ipsec-main"))
@@ -126,10 +126,10 @@ func TestPlanTransportLinksRequiresOverlayIntent(t *testing.T) {
 func TestPlanTransportLinksSkipsOverlayIntentMismatch(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	delete(ns.Zones["node-b.catofes."].Records, OverlayIntentRecordKey("ipsec-main"))
@@ -154,10 +154,10 @@ func TestPlanTransportLinksSkipsOverlayIntentMismatch(t *testing.T) {
 func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{
@@ -188,10 +188,10 @@ func TestPlanTransportLinksMirrorsTunnelAddressesForPeerPair(t *testing.T) {
 func TestPlanTransportLinksSkipsOverlayIntentTunnelAddressMismatch(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{
@@ -215,10 +215,10 @@ func TestPlanTransportLinksSkipsOverlayIntentTunnelAddressMismatch(t *testing.T)
 func TestPlanTransportLinksMirrorsDerivedTunnelAddressesForPeerPair(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Family: FamilyIPv4, Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Family: FamilyIPv4, Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{
@@ -249,10 +249,10 @@ func TestPlanTransportLinksMirrorsDerivedTunnelAddressesForPeerPair(t *testing.T
 func TestPlanTransportLinksDerivedTunnelAddressStableWhenEarlierPeerAdded(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-c.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-c.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "c-public", Source: SourceManualAddress, Address: "198.51.100.30", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{
@@ -266,7 +266,7 @@ func TestPlanTransportLinksDerivedTunnelAddressStableWhenEarlierPeerAdded(t *tes
 	}
 	firstSpec := desiredSpecForPeer(t, first, "node-c.catofes.")
 
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	second, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
@@ -284,13 +284,13 @@ func TestPlanTransportLinksDerivedTunnelAddressStableWhenEarlierPeerAdded(t *tes
 	}
 }
 
-func TestPlanTransportLinksHonorsBidirectionalTieBreakAndInboundAccept(t *testing.T) {
+func TestPlanTransportLinksHonorsBothTieBreakAndInboundRole(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	group := LinkGroupSpec{ID: "ipsec-main"}
@@ -319,10 +319,10 @@ func TestPlanTransportLinksHonorsBidirectionalTieBreakAndInboundAccept(t *testin
 func TestPlanTransportLinksKeepsInboundResponderDesired(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-local", Source: SourceLocal, Address: "192.168.8.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
 
@@ -346,13 +346,13 @@ func TestPlanTransportLinksKeepsInboundResponderDesired(t *testing.T) {
 func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-local", Source: SourceLocal, Address: "192.168.8.20", Priority: 100, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-c.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-c.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "c-public", Source: SourceManualAddress, Address: "198.51.100.30", Priority: 100, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["catofes."] = zone.NewZoneState("catofes.", nil)
@@ -380,10 +380,10 @@ func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) 
 func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -441,10 +441,10 @@ func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) 
 func TestPlanTransportLinksDoesNotUseAdvertisedLocalPortAsStrongSwanLocalPort(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptBidirectional, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 	ns.Zones["node-a.catofes."].Records[RecordKeyPorts] = record(t, "node-a.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
@@ -503,13 +503,13 @@ func TestPlanTransportLinksDoesNotUseAdvertisedLocalPortAsStrongSwanLocalPort(t 
 func TestPlanTransportLinksSkipsBehindNATWithoutInboundEvidence(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-lan", Source: SourceLocal, Address: "192.168.8.20", Priority: 100, Reachability: ReachabilityPrivate, TTLSeconds: 300,
 	}}, now)
-	setIPsecNATProfile(t, ns, "node-b.catofes.", AcceptInbound, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
+	setIPsecNATProfile(t, ns, "node-b.catofes.", RoleIn, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
 
 	group := LinkGroupSpec{ID: "ipsec-main"}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{
@@ -530,11 +530,11 @@ func TestPlanTransportLinksSkipsBehindNATWithoutInboundEvidence(t *testing.T) {
 func TestPlanTransportLinksAllowsNATOutboundToPublicPeer(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-lan", Source: SourceLocal, Address: "192.168.8.10", Priority: 100, Reachability: ReachabilityPrivate, TTLSeconds: 300,
 	}}, now)
-	setIPsecNATProfile(t, ns, "node-a.catofes.", AcceptNone, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	setIPsecNATProfile(t, ns, "node-a.catofes.", RoleOut, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableFalse}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 
@@ -554,13 +554,13 @@ func TestPlanTransportLinksAllowsNATOutboundToPublicPeer(t *testing.T) {
 func TestPlanTransportLinksAllowsNATObservedExternalPort(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-observed", Source: SourceReflector, Address: "203.0.113.20", Priority: 100, Reachability: ReachabilityNATObserved, TTLSeconds: 300,
 	}}, now)
-	setIPsecNATProfile(t, ns, "node-b.catofes.", AcceptInbound, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableUnknown}, now)
+	setIPsecNATProfile(t, ns, "node-b.catofes.", RoleIn, NATProfile{Hint: NATHintBehindNAT, InboundReachable: NATReachableUnknown}, now)
 	ns.Zones["node-b.catofes."].Records[RecordKeyPorts] = record(t, "node-b.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
 		Version: 1,
 		Mode:    PortModeFixed,
@@ -590,26 +590,26 @@ func TestPlanTransportLinksAllowsNATObservedExternalPort(t *testing.T) {
 func TestPlanTransportLinksAppliesMeshPolicyRules(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{
 		{ID: "b-manual", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
 		{ID: "b-discovery", Source: SourceDiscovery, Address: "198.51.100.21", Priority: 1, Reachability: ReachabilityPublic, TTLSeconds: 300},
 	}, now)
-	addIPsecNode(t, ns, "node-c.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-c.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "c-public", Source: SourceManualAddress, Address: "198.51.100.30", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-d.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-d.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "d-public", Source: SourceManualAddress, Address: "198.51.100.40", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-e.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-e.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "e-discovery", Source: SourceDiscovery, Address: "198.51.100.50", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 
 	group := LinkGroupSpec{
 		ID:           "ipsec-main",
-		ConnectRules: []string{"strongswan://*.catofes.?accept=inbound&source=discovery&mode=exhaustive&max_peers=1"},
+		ConnectRules: []string{"strongswan://*.catofes.?role=in&source=discovery&mode=exhaustive&max_peers=1"},
 		DenyRules:    []string{"strongswan://node-d.catofes."},
 	}
 	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
@@ -640,10 +640,10 @@ func TestPlanTransportLinksAppliesMeshPolicyRules(t *testing.T) {
 func TestPlanTransportLinksDryRunDualStackModes(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{
 		{ID: "b-v4-primary", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
 		{ID: "b-v4-backup", Source: SourceManualAddress, Address: "198.51.100.21", Priority: 10, Reachability: ReachabilityPublic, TTLSeconds: 300},
 		{ID: "b-v6-primary", Source: SourceManualAddress, Address: "2001:db8::20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
@@ -687,10 +687,10 @@ func TestPlanTransportLinksDryRunDualStackModes(t *testing.T) {
 func TestPlanTransportLinksFamilyRedundantStableIDsDifferPerFamily(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{
 		{ID: "b-v4", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
 		{ID: "b-v6", Source: SourceManualAddress, Address: "2001:db8::20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
 	}, now)
@@ -758,10 +758,10 @@ func TestPlanTransportLinksFamilyRedundantStableIDsDifferPerFamily(t *testing.T)
 func TestPlanTransportLinksDryRunDNSRefreshUpdatesContactPoint(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
-	addIPsecNode(t, ns, "node-a.catofes.", AcceptNone, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
 		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
-	addIPsecNode(t, ns, "node-b.catofes.", AcceptInbound, []AddressAdvertisement{{
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
 		ID: "b-dns", Source: SourceManualDNS, Host: "node-b.example.com", Families: []string{FamilyIPv4}, RefreshSeconds: 30, Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
 	}}, now)
 
@@ -1116,7 +1116,7 @@ func setIPsecNATProfile(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath,
 		Provider:                ProviderStrongSwan,
 		IKEIdentity:             string(peer),
 		TransportKeyFingerprint: fingerprint,
-		Accept:                  accept,
+		Role:                    accept,
 		AddressFamilies:         []string{FamilyIPv4, FamilyIPv6},
 		PathModes:               []string{PathModeFamilyRedundant, PathModeExhaustive},
 		NAT:                     nat,
@@ -1134,7 +1134,7 @@ func addIPsecNode(t *testing.T, ns *zone.NetworkState, peer zone.ZonePath, accep
 		Provider:                ProviderStrongSwan,
 		IKEIdentity:             string(peer),
 		TransportKeyFingerprint: fingerprint,
-		Accept:                  accept,
+		Role:                    accept,
 		AddressFamilies:         []string{FamilyIPv4, FamilyIPv6},
 		PathModes:               []string{PathModeFamilyRedundant, PathModeExhaustive},
 		UpdatedAt:               now.Unix(),

@@ -3,14 +3,14 @@ package ipsec
 import "testing"
 
 func TestParseMeshPolicyRuleZoneGlob(t *testing.T) {
-	rule, err := ParseMeshPolicyRule("strongswan://*.catofes.?accept=inbound&family=dual&source=manual-dns,discovery&mode=family-redundant&max_peers=32")
+	rule, err := ParseMeshPolicyRule("strongswan://*.catofes.?role=in&family=dual&source=manual-dns,discovery&mode=family-redundant&max_peers=32")
 	if err != nil {
 		t.Fatalf("ParseMeshPolicyRule: %v", err)
 	}
 	if rule.Provider != ProviderStrongSwan || rule.ZonePattern != "*.catofes." {
 		t.Fatalf("rule target = %+v", rule)
 	}
-	if rule.Accept != AcceptInbound || rule.Family != RuleFamilyDual || rule.PathMode != PathModeFamilyRedundant {
+	if rule.PeerRole != RoleIn || rule.Family != RuleFamilyDual || rule.PathMode != PathModeFamilyRedundant {
 		t.Fatalf("rule predicates = %+v", rule)
 	}
 	if len(rule.Sources) != 2 || rule.Sources[0] != SourceManualDNS || rule.Sources[1] != SourceDiscovery {
@@ -25,7 +25,7 @@ func TestParseMeshPolicyRuleZoneGlob(t *testing.T) {
 }
 
 func TestParseMeshPolicyRuleRoleAndTagTargets(t *testing.T) {
-	role, err := ParseMeshPolicyRule("strongswan://role=edge?accept=bidirectional&family=ipv6")
+	role, err := ParseMeshPolicyRule("strongswan://role=edge?role=both&family=ipv6")
 	if err != nil {
 		t.Fatalf("Parse role rule: %v", err)
 	}
@@ -47,10 +47,16 @@ func TestParseMeshPolicyRuleRejectsDeprecatedDirection(t *testing.T) {
 	}
 }
 
+func TestParseMeshPolicyRuleRejectsDeprecatedAccept(t *testing.T) {
+	if _, err := ParseMeshPolicyRule("strongswan://*.catofes.?accept=inbound"); err == nil {
+		t.Fatalf("expected error for deprecated accept query")
+	}
+}
+
 func TestParseMeshPolicyRuleRejectsUnsupportedValues(t *testing.T) {
 	for _, raw := range []string{
 		"wireguard://*.catofes.",
-		"strongswan://*.catofes.?accept=maybe",
+		"strongswan://*.catofes.?role=maybe",
 		"strongswan://*.catofes.?family=ipv10",
 		"strongswan://*.catofes.?source=magic",
 		"strongswan://*.catofes.?max_peers=-1",

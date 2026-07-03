@@ -206,9 +206,9 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 	if err != nil {
 		return nil, err
 	}
-	accept := config.IPsec.Accept
-	if accept == "" {
-		accept = ipsec.AcceptBidirectional
+	role := config.IPsec.Role
+	if role == "" {
+		role = ipsec.RoleBoth
 	}
 	families := localIPsecFamilies(addresses)
 	profile := ipsec.ProfileRecord{
@@ -217,7 +217,7 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 		Provider:                ipsec.ProviderStrongSwan,
 		IKEIdentity:             string(managed),
 		TransportKeyFingerprint: key.Fingerprint,
-		Accept:                  accept,
+		Role:                    role,
 		AddressFamilies:         families,
 		PathModes:               localIPsecPathModes(config.IPsec.LinkGroups),
 		NAT:                     localIPsecNATProfile(addresses),
