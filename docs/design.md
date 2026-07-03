@@ -1010,7 +1010,7 @@ type PeerView struct {
 | StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot、root/container daemon-run gossip smoke 已实现 | CLI 进程级 smoke、重启恢复、撤销闭环 | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
 | XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
-| 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug babel/routes/route` 已落地；container root smoke、per-peer whitelist、策略路由、rotate cutover gate 后续补齐 |
+| 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug babel/routes/route`、BIRD neighbor/route driven rotate cutover gate 已落地；container root smoke、per-peer whitelist、策略路由后续补齐 |
 | 防火墙 | 🟨 第一版已实现 | `nftables` 优先，`iptables` 兜底 | `pkg/firewall/` 已落地：按 instance/netns 生成 owner-bound filter/NAT plan，host ingress + redirect grace，nft/iptables CLI driver，dry-run/reconcile/debug；root/container smoke 待联合 BIRD 验证 |
 
 ---

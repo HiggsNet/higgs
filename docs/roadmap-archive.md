@@ -792,6 +792,7 @@
     - [x] 启动流程：确保 netns 存在 → 生成 `bird.conf` → `ip netns exec <ns> bird -c ... -s ... -P <pidfile>` → 等待 control socket 出现。
     - [x] 配置热重载：filter/接口参数变化时重写 `bird.conf`，执行 `birdc configure`（当前先使用普通 configure；后续可优化为 soft + reload in/out）。
     - [x] 优雅退出：Stop 先发 `birdc down`，再 SIGTERM，再删 Higgs-owned pid/socket/config。
+      - 2026-07-03 已把 daemon shutdown 接到 managed BIRD teardown：退出时只对本 daemon 已持有的 managed process manager 调用 Stop，`mode=external` 不触碰。
     - [ ] 崩溃恢复/backoff：waitpid + 崩溃重拉起留到 Phase 5 后续打磨 / Phase 6。
   - [x] external 模式骨架：daemon 只校验配置并连接现有 socket，不杀进程。
   - [x] preflight：`bird.BirdPreflight` 检测 bird/birdc/ip/ip netns 可用性；`higgs debug preflight` 后续统一接入。
@@ -804,7 +805,8 @@
   - [x] daemon reconcile 顺序：IPsec desired/up snapshot -> BIRD desired config -> route authorization -> BIRD config apply (`birdc configure`) -> observe routes/neighbors -> 写入 debug snapshot。策略路由 table/rule 步骤随 5.4 后续补齐。
   - [x] **BIRD 后端**：依赖 interface pattern `"hgs*"` 自动发现 XFRM 接口；teardown/revocation 时由 BIRD 自动 retract。
   - [x] **tunnel 模式选路**：`type tunnel` + `rxcost` + `ecmp on limit 16` 已生成到 bird.conf。
-  - [ ] staged generation 接入 `RotateCutoverReady=true`：待 IPsec reconcile 与 BIRD 观测联动补齐（当前 `ReconcileInputs.RotateCutoverReady` 门闩已存在，但 BIRD 侧 metric 收敛反馈未接线）。
+  - [x] staged generation 接入 `RotateCutoverReady=true`：IPsec reconcile 已消费 health-manager readiness；routing reconcile 会把 BIRD staged interface 的 Babel neighbor 与 selected route 观测写入 health manager，缺少收敛时继续阻断 cutover。
+    - 2026-07-03 已接线：`BabelObservation` 按 `instance#staged` probe target 参与 readiness；BIRD 观测只在对应 staged interface 同时有 neighbor 和 selected Babel route 时放行。
 
 - [x] **5.2 Route Authorization / IPAM 输入模型**
   - [x] 明确记录语义并实现解析：`ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*`。

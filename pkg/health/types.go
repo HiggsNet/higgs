@@ -150,6 +150,7 @@ type LinkHealth struct {
 // BabelObservation is passive data collected from BIRD/Babel. It augments the
 // active probe but does not replace it.
 type BabelObservation struct {
+	ProbeID    string
 	InstanceID string
 	Neighbor   bool
 	RTT        time.Duration

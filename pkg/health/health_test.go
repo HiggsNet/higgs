@@ -190,6 +190,43 @@ func TestManagerRotateCutoverReadiness(t *testing.T) {
 	}
 }
 
+func TestManagerRotateCutoverReadinessRequiresBabelObservationWhenPresent(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Second, Timeout: 100 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 2}
+	hyst := DefaultHysteresisConfig()
+	prober := &fakeProber{rtt: 5 * time.Millisecond, success: true}
+	m := NewManager(cfg, hyst, prober)
+	now := time.Now()
+	target := ProbeTarget{
+		ProbeID:        "link1#staged",
+		InstanceID:     "link1",
+		ProbeRole:      "staged",
+		PeerZone:       "peer.",
+		Overlay:        "group1",
+		InterfaceName:  "hgs-new",
+		PeerTunnelAddr: netip.MustParseAddr("10.0.0.3"),
+		State:          "up",
+		Staged:         true,
+	}
+	m.UpsertTarget(target, now)
+	m.mu.Lock()
+	m.nextProbe["link1#staged"] = now.Add(-time.Second)
+	m.mu.Unlock()
+	m.Tick(context.Background(), now)
+	if ready := m.RotateCutoverReadiness()["link1"]; !ready {
+		t.Fatalf("staged link should be ready before BIRD observation is present")
+	}
+
+	m.SetBabelObservation(BabelObservation{ProbeID: "link1#staged", InstanceID: "link1", Neighbor: true, Route: false})
+	if ready := m.RotateCutoverReadiness()["link1"]; ready {
+		t.Fatalf("staged link should not be ready while BIRD route is not converged")
+	}
+
+	m.SetBabelObservation(BabelObservation{ProbeID: "link1#staged", InstanceID: "link1", Neighbor: true, Route: true, Metric: 96})
+	if ready := m.RotateCutoverReadiness()["link1"]; !ready {
+		t.Fatalf("staged link should be ready after BIRD neighbor and route converge")
+	}
+}
+
 func TestManagerKeepsRotateProbeTargetsSeparate(t *testing.T) {
 	cfg := ProbeConfig{Interval: time.Second, Timeout: 100 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 4}
 	hyst := DefaultHysteresisConfig()

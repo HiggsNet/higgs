@@ -415,7 +415,7 @@ higgs debug links
 | link 反复在 connecting/error 间翻转 | 检查 `LinkInstance` 中的 last_error 和 backoff；可能是 endpoint/ports 不可达 |
 | XFRM interface 有 TX dropped | XFRM state/policy 在 host，interface 在 overlay netns——确认 host-born 路径正确 |
 | revocation 后 SA 被反复拉起 | owner token 不匹配、残留 `LinkInstance` 未清理、或 teardown 没有成功删除 connection |
-| `dual_running` 不推进 cutover | 当前先看 retention 窗口、staged SA 观测和 last rotate error；BIRD `RotateCutoverReady` 是后续接入项 |
+| `dual_running` 不推进 cutover | 先看 retention 窗口、staged SA 观测和 last rotate error；若 health/BIRD cutover gate 已接入，还需确认 staged interface 已有 Babel neighbor 和 selected Babel route |
 | SA 已 established 但 `LinkInstance` 仍是 `connecting` | reconcile 未触发，或 VICI `list-sas` 没有观测到匹配的 SA（检查 child name/reqid/if_id 是否匹配） |
 
 ### 辅助观测手段

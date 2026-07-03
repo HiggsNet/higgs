@@ -13,6 +13,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/firewall"
+	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -262,17 +263,21 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 				instState.State = birdInstanceStateRunning
 			}
 		}
+		d.observeBirdForHealth(ctx, netnsName, instState.Overlays, spec.ControlSocketPath)
 
 	case bird.BirdModeExternal:
 		client := d.newBirdClient(spec.ControlSocketPath)
-		if _, err := client.Status(ctx); err != nil {
+		observed, err := client.Status(ctx)
+		if err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastError = err.Error()
+			d.recordBirdHealthObservationUnavailable(netnsName, instState.Overlays)
 			if !isDryRunConnectError(err) {
 				return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
 			}
 		} else {
 			instState.State = birdInstanceStateRunning
+			d.recordBirdHealthObservation(netnsName, instState.Overlays, observed)
 		}
 	}
 
@@ -286,6 +291,79 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 	return nil
 }
 
+func (d *DaemonService) observeBirdForHealth(ctx context.Context, netnsName string, overlays []string, socketPath string) {
+	if d == nil || d.health == nil || socketPath == "" {
+		return
+	}
+	observed, err := d.newBirdClient(socketPath).Status(ctx)
+	if err != nil {
+		d.recordBirdHealthObservationUnavailable(netnsName, overlays)
+		return
+	}
+	d.recordBirdHealthObservation(netnsName, overlays, observed)
+}
+
+func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string, overlays []string) {
+	d.recordBirdHealthObservation(netnsName, overlays, &bird.BirdObservedState{})
+}
+
+func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays []string, observed *bird.BirdObservedState) {
+	if d == nil || d.health == nil || d.Sync == nil || d.Sync.State == nil || observed == nil {
+		return
+	}
+	for _, inst := range d.Sync.State.LinkInstances {
+		if inst.StagedInterfaceName == "" || !linkInstanceBelongsToBirdInstance(inst, netnsName, overlays) {
+			continue
+		}
+		obs := birdObservationForInterface(inst.ID, healthProbeID(inst.ID, "staged"), inst.StagedInterfaceName, observed)
+		d.health.SetBabelObservation(obs)
+	}
+}
+
+func birdObservationForInterface(instanceID, probeID, iface string, observed *bird.BirdObservedState) health.BabelObservation {
+	obs := health.BabelObservation{InstanceID: instanceID, ProbeID: probeID}
+	if iface == "" || observed == nil {
+		return obs
+	}
+	for _, n := range observed.Neighbors {
+		if n.Interface != iface {
+			continue
+		}
+		obs.Neighbor = true
+		if n.Metric > 0 && (obs.Metric == 0 || int(n.Metric) < obs.Metric) {
+			obs.Metric = int(n.Metric)
+		}
+	}
+	for _, r := range observed.Routes {
+		if r.Iface == iface && r.Selected && birdRouteIsBabel(r) {
+			obs.Route = true
+			if r.Metric > 0 && (obs.Metric == 0 || int(r.Metric) < obs.Metric) {
+				obs.Metric = int(r.Metric)
+			}
+		}
+	}
+	return obs
+}
+
+func birdRouteIsBabel(route bird.BirdRoute) bool {
+	return strings.Contains(strings.ToLower(route.Protocol), "babel") ||
+		strings.Contains(strings.ToLower(route.Source), "babel")
+}
+
+func linkInstanceBelongsToBirdInstance(inst linkInstanceState, netnsName string, overlays []string) bool {
+	for _, overlay := range overlays {
+		if overlay == inst.GroupID {
+			return true
+		}
+	}
+	for _, addr := range []string{inst.StagedLocalTunnelAddr, inst.StagedPeerTunnelAddr, inst.LocalTunnelAddr, inst.PeerTunnelAddr} {
+		if scopedNetNS(addr) == netnsName {
+			return true
+		}
+	}
+	return netnsName == "" || netnsName == "default"
+}
+
 func (d *DaemonService) routingProcessManagerForNetNS(netnsName string) birdProcessManager {
 	if d.birdProcessManagers == nil {
 		d.birdProcessManagers = make(map[string]birdProcessManager)
@@ -296,6 +374,44 @@ func (d *DaemonService) routingProcessManagerForNetNS(netnsName string) birdProc
 		d.birdProcessManagers[netnsName] = pm
 	}
 	return pm
+}
+
+func (d *DaemonService) stopManagedBirdInstances(ctx context.Context) error {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var firstErr error
+	for _, inst := range d.Sync.App.Config.Routing.Instances {
+		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled || inst.Mode == ipsec.RoutingModeExternal {
+			continue
+		}
+		pm := d.birdProcessManager
+		if pm == nil {
+			pm = d.birdProcessManagers[inst.NetNS]
+		}
+		if pm == nil {
+			continue
+		}
+		mode := bird.BirdMode(inst.Mode)
+		if mode == "" {
+			mode = bird.BirdModeManaged
+		}
+		spec := bird.BirdInstanceSpec{
+			NetNSName:         inst.NetNS,
+			ControlSocketPath: inst.ControlSocket,
+			PIDFilePath:       inst.PIDFile,
+			ConfigPath:        inst.ConfigFile,
+			Mode:              mode,
+		}
+		if err := pm.Stop(ctx, spec); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("stop bird for netns %q: %w", inst.NetNS, err)
+		}
+	}
+	return firstErr
 }
 
 func (d *DaemonService) newBirdClient(socketPath string) birdClient {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -13,15 +14,27 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
+type successfulHealthProber struct{}
+
+func (successfulHealthProber) Probe(ctx context.Context, target health.ProbeTarget, cfg health.ProbeConfig) health.ProbeResult {
+	return health.ProbeResult{InstanceID: target.InstanceID, RTT: 5 * time.Millisecond, Success: true}
+}
+
+func (successfulHealthProber) Type() string { return health.ProbeTypeICMP }
+
 type fakeBirdProcessManager struct {
 	started   bool
 	startSpec bird.BirdInstanceSpec
 	startErr  error
+	stopped   bool
+	stopSpec  bird.BirdInstanceSpec
+	stopErr   error
 	running   bool
 }
 
@@ -32,8 +45,10 @@ func (f *fakeBirdProcessManager) Start(ctx context.Context, spec bird.BirdInstan
 }
 
 func (f *fakeBirdProcessManager) Stop(ctx context.Context, spec bird.BirdInstanceSpec) error {
+	f.stopped = true
+	f.stopSpec = spec
 	f.running = false
-	return nil
+	return f.stopErr
 }
 
 func (f *fakeBirdProcessManager) IsRunning(ctx context.Context) bool {
@@ -42,12 +57,16 @@ func (f *fakeBirdProcessManager) IsRunning(ctx context.Context) bool {
 
 type fakeBirdClient struct {
 	statusErr    error
+	status       *bird.BirdObservedState
 	configureErr error
 	statusCalled bool
 }
 
 func (f *fakeBirdClient) Status(ctx context.Context) (*bird.BirdObservedState, error) {
 	f.statusCalled = true
+	if f.status != nil {
+		return f.status, f.statusErr
+	}
 	return &bird.BirdObservedState{}, f.statusErr
 }
 
@@ -574,6 +593,96 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	inst := latest.BirdInstances["h2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("external instance state = %+v, want running", inst)
+	}
+}
+
+func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-1": {
+			ID:                  "link-1",
+			GroupID:             "main",
+			ActualState:         "up",
+			InterfaceName:       "hgs-old",
+			StagedInterfaceName: "hgs-new",
+		},
+	}
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	manager := health.NewManager(
+		health.ProbeConfig{Interval: -time.Second, Timeout: 100 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 2},
+		health.DefaultHysteresisConfig(),
+		successfulHealthProber{},
+	)
+	manager.UpsertTarget(health.ProbeTarget{
+		ProbeID:        healthProbeID("link-1", "staged"),
+		InstanceID:     "link-1",
+		ProbeRole:      "staged",
+		InterfaceName:  "hgs-new",
+		PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
+		State:          "up",
+		Staged:         true,
+	}, now)
+	if dispatched := manager.Tick(context.Background(), now); dispatched != 1 {
+		t.Fatalf("health probes dispatched = %d, want 1", dispatched)
+	}
+
+	client := &fakeBirdClient{status: &bird.BirdObservedState{
+		Neighbors: []bird.BirdNeighbor{{Interface: "hgs-new", Metric: 96}},
+		Routes:    []bird.BirdRoute{{Iface: "hgs-new", Protocol: "babel1", Selected: false, Metric: 96}},
+	}}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.health = manager
+	service.birdProcessManager = &fakeBirdProcessManager{running: false}
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return client
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting without selected route: %v", err)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
+		t.Fatalf("cutover should stay blocked until BIRD has a selected staged route")
+	}
+
+	client.status = &bird.BirdObservedState{
+		Neighbors: []bird.BirdNeighbor{{Interface: "hgs-new", Metric: 96}},
+		Routes:    []bird.BirdRoute{{Iface: "hgs-new", Protocol: "babel1", Selected: true, Metric: 96}},
+	}
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting with selected route: %v", err)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; !ready {
+		t.Fatalf("cutover should be ready after BIRD neighbor and selected route converge")
+	}
+
+	client.statusErr = errors.New("birdc unavailable")
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting with stale BIRD observation: %v", err)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
+		t.Fatalf("cutover should be blocked when fresh BIRD observation is unavailable")
 	}
 }
 
@@ -1147,6 +1256,47 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)
+	}
+}
+
+func TestStopManagedBirdInstancesStopsManagedOnly(t *testing.T) {
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		"h3": {Kind: ipsec.NetNSName, Name: "h3", Create: true},
+	}}
+	var err error
+	appConfig.Routing, err = parseRoutingConfigInstances([]routingInstanceYAML{
+		{ID: "managed", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged},
+		{ID: "external", NetNS: "h3", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal},
+	}, appConfig.Netns, appConfig.DataDir)
+	if err != nil {
+		t.Fatalf("parseRoutingConfigInstances: %v", err)
+	}
+
+	managedPM := &fakeBirdProcessManager{running: true}
+	externalPM := &fakeBirdProcessManager{running: true}
+	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service.birdProcessManagers = map[string]birdProcessManager{
+		"h2": managedPM,
+		"h3": externalPM,
+	}
+
+	if err := service.stopManagedBirdInstances(context.Background()); err != nil {
+		t.Fatalf("stopManagedBirdInstances: %v", err)
+	}
+	if !managedPM.stopped {
+		t.Fatalf("managed BIRD process manager was not stopped")
+	}
+	if managedPM.stopSpec.NetNSName != "h2" {
+		t.Fatalf("Stop netns = %q, want h2", managedPM.stopSpec.NetNSName)
+	}
+	if managedPM.stopSpec.ControlSocketPath == "" || managedPM.stopSpec.PIDFilePath == "" || managedPM.stopSpec.ConfigPath == "" {
+		t.Fatalf("Stop spec paths must be populated: %+v", managedPM.stopSpec)
+	}
+	if externalPM.stopped {
+		t.Fatalf("external BIRD process manager should not be stopped")
 	}
 }
 

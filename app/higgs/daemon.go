@@ -184,6 +184,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		}
 	}
 	defer d.closeConfiguredIPsecDriver()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := d.stopManagedBirdInstances(shutdownCtx); err != nil {
+			d.logWarn("routing", "bird_shutdown_failed", map[string]any{"error": err})
+		}
+	}()
 	transport, err := d.Sync.openTransport()
 	if err != nil {
 		return err

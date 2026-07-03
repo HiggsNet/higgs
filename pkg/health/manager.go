@@ -122,12 +122,16 @@ func (m *Manager) RemoveTarget(instanceID string) {
 
 // SetBabelObservation stores passive Babel data for a link.
 func (m *Manager) SetBabelObservation(obs BabelObservation) {
-	if obs.InstanceID == "" {
+	id := obs.ProbeID
+	if id == "" {
+		id = obs.InstanceID
+	}
+	if id == "" {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.babelObs[obs.InstanceID] = obs
+	m.babelObs[id] = obs
 }
 
 // Tick dispatches any probes that are due and returns the number of probes
@@ -379,10 +383,13 @@ func (m *Manager) cutoverBlockingLocked(instanceID string) bool {
 	state := m.states.State(instanceID)
 	switch state {
 	case HealthStateHealthy, HealthStateDegraded:
-		return false
 	default:
 		return true
 	}
+	if obs, ok := m.babelObs[instanceID]; ok && (!obs.Neighbor || !obs.Route) {
+		return true
+	}
+	return false
 }
 
 // ErrorsTotal returns the total probe errors counter for an instance.
