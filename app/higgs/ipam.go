@@ -130,12 +130,26 @@ func cmdIPAM() *cli.Command {
 				Name:        "mine",
 				Usage:       "Show IPAM prefixes and pools for the local managed zone",
 				UsageText:   "higgs ipam mine",
-				Description: "Print the local managed zone's authorized IPAM assignments and usable pools as JSON.",
+				Description: "Print the local managed zone's authorized IPAM assignments and owned pools as JSON.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
 						return cli.Exit("usage: higgs ipam mine", 1)
 					}
 					return showLocalIPAM()
+				},
+			},
+			{
+				Name:      "get",
+				Usage:     "Explain IPAM ownership and assignment for an address or prefix",
+				UsageText: "higgs ipam get <addr-or-prefix> [--json]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "json", Usage: "Print structured JSON output", Value: false},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return cli.Exit("usage: higgs ipam get <addr-or-prefix> [--json]", 1)
+					}
+					return getIPAM(cmd.Args().First(), cmd.Bool("json"))
 				},
 			},
 		},
@@ -155,6 +169,9 @@ func createIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, d
 	if err != nil {
 		return err
 	}
+	if err := dryRunIPAMRecord(rt, path, key, value, routing.RecordTypeIPAMPool, canonical, "ipam_pool_owner_mismatch", "ipam_pool_overlap"); err != nil {
+		return err
+	}
 	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMPool, true, "created")
 }
 
@@ -169,6 +186,9 @@ func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, sha
 func assignIPAMWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool) error {
 	canonical, key, value, err := prepareIPAMAssignmentRecord(prefix, assignedTo, true, shared)
 	if err != nil {
+		return err
+	}
+	if err := dryRunIPAMRecord(rt, path, key, value, routing.RecordTypeIPAMAssignment, canonical, "ipam_assignment_pool_mismatch", "ipam_assignment_overlap"); err != nil {
 		return err
 	}
 	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMAssignment, true, "assigned")
@@ -373,6 +393,61 @@ func putIPAMRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []by
 	return nil
 }
 
+func dryRunIPAMRecord(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType, canonical string, rejectCodes ...string) error {
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	if err := checkIPAMWriteCapability(state, path, key); err != nil {
+		return err
+	}
+	ns := cloneNetworkStateForIPAMDryRun(state.Network)
+	zs := ns.Zones[path]
+	if zs == nil {
+		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	zs.Records[key] = &zone.Record{Zone: path, Key: key, Type: recordType, Value: value}
+	ars, err := routing.BuildAuthorizedRouteSet(ns, rt.Now())
+	if err != nil {
+		return err
+	}
+	reject := make(map[string]bool, len(rejectCodes))
+	for _, code := range rejectCodes {
+		reject[code] = true
+	}
+	for _, authErr := range ars.Errors {
+		if authErr.Zone != path || authErr.Prefix.String() != canonical || !reject[authErr.Code] {
+			continue
+		}
+		return fmt.Errorf("%s: %s", authErr.Code, authErr.Detail)
+	}
+	return nil
+}
+
+func cloneNetworkStateForIPAMDryRun(ns *zone.NetworkState) *zone.NetworkState {
+	if ns == nil {
+		return zone.NewNetworkState()
+	}
+	clone := &zone.NetworkState{
+		Zones:          make(map[zone.ZonePath]*zone.ZoneState, len(ns.Zones)),
+		GlobalRoot:     ns.GlobalRoot,
+		RecordVerifier: ns.RecordVerifier,
+		RecordHasher:   ns.RecordHasher,
+	}
+	for path, zs := range ns.Zones {
+		if zs == nil {
+			continue
+		}
+		czs := *zs
+		czs.Records = make(map[string]*zone.Record, len(zs.Records))
+		for key, rec := range zs.Records {
+			czs.Records[key] = rec
+		}
+		clone.Zones[path] = &czs
+	}
+	return clone
+}
+
 func checkIPAMWriteCapability(state *stateFile, path zone.ZonePath, key string) error {
 	if state == nil || state.Network == nil {
 		return fmt.Errorf("state is nil")
@@ -557,7 +632,7 @@ func buildIPAMMineReport(rt *Runtime) (*ipamMineReport, error) {
 			Shared: entry.Shared,
 		})
 	}
-	for _, entry := range ars.Pools {
+	for _, entry := range ars.AllPools {
 		relation := localIPAMPoolRelation(entry, managed)
 		if len(relation) == 0 {
 			continue
@@ -595,10 +670,259 @@ func localIPAMPoolRelation(entry *routing.PoolEntry, managed zone.ZonePath) []st
 	if entry.DelegatedTo == managed {
 		relation = append(relation, "delegated_to_managed_zone")
 	}
-	if routing.IsZoneAncestor(entry.DelegatedTo, managed) {
-		relation = append(relation, "usable_by_managed_zone")
-	}
 	return relation
+}
+
+func getIPAM(query string, jsonOut bool) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	report, err := buildIPAMGetReport(rt, query)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		out, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(out))
+		return nil
+	}
+	printIPAMGetReport(report)
+	return nil
+}
+
+type ipamGetReport struct {
+	Query       string                 `json:"query"`
+	PoolChain   []ipamGetPoolRow       `json:"pool_chain"`
+	BestPool    *ipamGetPoolRow        `json:"best_pool"`
+	Assignments []ipamGetAssignmentRow `json:"assignments"`
+	AssignedTo  *string                `json:"assigned_to"`
+	Routes      []ipamGetRouteRow      `json:"routes"`
+	Diagnostics []ipamGetDiagnosticRow `json:"diagnostics"`
+}
+
+type ipamGetPoolRow struct {
+	Prefix      string `json:"prefix"`
+	Source      string `json:"source"`
+	DelegatedTo string `json:"delegated_to"`
+	Relation    string `json:"relation,omitempty"`
+}
+
+type ipamGetAssignmentRow struct {
+	Prefix     string `json:"prefix"`
+	Source     string `json:"source"`
+	AssignedTo string `json:"assigned_to"`
+	Shared     bool   `json:"shared,omitempty"`
+}
+
+type ipamGetRouteRow struct {
+	Prefix string `json:"prefix"`
+	Source string `json:"source"`
+}
+
+type ipamGetDiagnosticRow struct {
+	Code   string `json:"code"`
+	Detail string `json:"detail"`
+}
+
+func buildIPAMGetReport(rt *Runtime, query string) (*ipamGetReport, error) {
+	state, err := rt.LoadState()
+	if err != nil {
+		return nil, err
+	}
+	prefix, err := normalizeIPAMGetQuery(query)
+	if err != nil {
+		return nil, err
+	}
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if err != nil {
+		return nil, err
+	}
+	report := &ipamGetReport{
+		Query:       prefix.String(),
+		PoolChain:   []ipamGetPoolRow{},
+		Assignments: []ipamGetAssignmentRow{},
+		Routes:      []ipamGetRouteRow{},
+		Diagnostics: []ipamGetDiagnosticRow{},
+	}
+	for _, pool := range ars.AllPools {
+		if !containsIPAMQuery(pool.Prefix, prefix) {
+			continue
+		}
+		report.PoolChain = append(report.PoolChain, ipamGetPoolRow{
+			Prefix:      pool.Prefix.String(),
+			Source:      string(pool.Source),
+			DelegatedTo: string(pool.DelegatedTo),
+			Relation:    ipamGetPoolRelation(pool),
+		})
+	}
+	sort.Slice(report.PoolChain, func(i, j int) bool {
+		pi := netip.MustParsePrefix(report.PoolChain[i].Prefix)
+		pj := netip.MustParsePrefix(report.PoolChain[j].Prefix)
+		if pi.Bits() != pj.Bits() {
+			return pi.Bits() < pj.Bits()
+		}
+		if report.PoolChain[i].Source != report.PoolChain[j].Source {
+			return report.PoolChain[i].Source < report.PoolChain[j].Source
+		}
+		return report.PoolChain[i].DelegatedTo < report.PoolChain[j].DelegatedTo
+	})
+	if len(report.PoolChain) > 0 {
+		best := report.PoolChain[len(report.PoolChain)-1]
+		report.BestPool = &best
+	}
+	for _, assignment := range ars.AllAssignments {
+		if !prefixesRelatedForIPAMQuery(prefix, assignment.Prefix) {
+			continue
+		}
+		report.Assignments = append(report.Assignments, ipamGetAssignmentRow{
+			Prefix:     assignment.Prefix.String(),
+			Source:     string(assignment.Source),
+			AssignedTo: string(assignment.AssignedTo),
+			Shared:     assignment.Shared,
+		})
+	}
+	sort.Slice(report.Assignments, func(i, j int) bool {
+		return comparePrefixStrings(report.Assignments[i].Prefix, report.Assignments[j].Prefix) < 0
+	})
+	if len(report.Assignments) == 1 && !report.Assignments[0].Shared {
+		assignedTo := report.Assignments[0].AssignedTo
+		report.AssignedTo = &assignedTo
+	}
+	for source, routes := range ars.Announced {
+		for p := range routes {
+			if !prefixesRelatedForIPAMQuery(prefix, p) {
+				continue
+			}
+			report.Routes = append(report.Routes, ipamGetRouteRow{Prefix: p.String(), Source: string(source)})
+		}
+	}
+	sort.Slice(report.Routes, func(i, j int) bool {
+		if cmp := comparePrefixStrings(report.Routes[i].Prefix, report.Routes[j].Prefix); cmp != 0 {
+			return cmp < 0
+		}
+		return report.Routes[i].Source < report.Routes[j].Source
+	})
+	for _, authErr := range ars.Errors {
+		if !strings.HasPrefix(authErr.Code, "ipam_") {
+			continue
+		}
+		if authErr.Prefix.IsValid() && !prefixesRelatedForIPAMQuery(prefix, authErr.Prefix) {
+			continue
+		}
+		report.Diagnostics = append(report.Diagnostics, ipamGetDiagnosticRow{Code: authErr.Code, Detail: authErr.Detail})
+	}
+	if report.BestPool == nil {
+		report.Diagnostics = append(report.Diagnostics, ipamGetDiagnosticRow{Code: "ipam_no_pool", Detail: fmt.Sprintf("no valid pool covers %s", prefix)})
+	} else if len(report.Assignments) == 0 {
+		report.Diagnostics = append(report.Diagnostics, ipamGetDiagnosticRow{Code: "ipam_unassigned", Detail: fmt.Sprintf("no assignment covers %s", prefix)})
+	}
+	return report, nil
+}
+
+func normalizeIPAMGetQuery(query string) (netip.Prefix, error) {
+	if strings.Contains(query, "/") {
+		p, err := netip.ParsePrefix(query)
+		if err != nil {
+			return netip.Prefix{}, fmt.Errorf("invalid prefix %q: %w", query, err)
+		}
+		return p.Masked(), nil
+	}
+	addr, err := netip.ParseAddr(query)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("invalid address or prefix %q: %w", query, err)
+	}
+	if addr.Is4() {
+		return netip.PrefixFrom(addr, 32), nil
+	}
+	return netip.PrefixFrom(addr, 128), nil
+}
+
+func ipamGetPoolRelation(pool *routing.PoolEntry) string {
+	if pool.Source == pool.DelegatedTo {
+		return "owner"
+	}
+	return "delegated"
+}
+
+func containsIPAMQuery(pool, query netip.Prefix) bool {
+	return containsPrefixLocal(pool, query)
+}
+
+func prefixesRelatedForIPAMQuery(query, candidate netip.Prefix) bool {
+	return containsPrefixLocal(query, candidate) || containsPrefixLocal(candidate, query)
+}
+
+func containsPrefixLocal(outer, inner netip.Prefix) bool {
+	if outer.Bits() > inner.Bits() {
+		return false
+	}
+	return outer.Contains(inner.Masked().Addr())
+}
+
+func printIPAMGetReport(report *ipamGetReport) {
+	fmt.Printf("query: %s\n\n", report.Query)
+	printIPAMGetPools(report)
+	printIPAMGetAssignments(report)
+	printIPAMGetRoutes(report)
+	printIPAMGetDiagnostics(report)
+}
+
+func printIPAMGetPools(report *ipamGetReport) {
+	if len(report.PoolChain) == 0 {
+		fmt.Println("pool chain: none")
+		fmt.Println("best pool: none")
+		return
+	}
+	fmt.Println("pool chain:")
+	for _, pool := range report.PoolChain {
+		fmt.Printf("  %s  source=%s  delegated_to=%s  relation=%s\n", pool.Prefix, pool.Source, pool.DelegatedTo, pool.Relation)
+	}
+	fmt.Println()
+	fmt.Println("best pool:")
+	fmt.Printf("  %s  source=%s  delegated_to=%s\n", report.BestPool.Prefix, report.BestPool.Source, report.BestPool.DelegatedTo)
+}
+
+func printIPAMGetAssignments(report *ipamGetReport) {
+	fmt.Println()
+	if len(report.Assignments) == 0 {
+		fmt.Println("assignment: none")
+		return
+	}
+	fmt.Println("assignment:")
+	for _, assignment := range report.Assignments {
+		shared := ""
+		if assignment.Shared {
+			shared = "  shared=true"
+		}
+		fmt.Printf("  %s  source=%s  assigned_to=%s%s\n", assignment.Prefix, assignment.Source, assignment.AssignedTo, shared)
+	}
+}
+
+func printIPAMGetRoutes(report *ipamGetReport) {
+	if len(report.Routes) == 0 {
+		fmt.Println("routes: none")
+		return
+	}
+	fmt.Println("routes:")
+	for _, route := range report.Routes {
+		fmt.Printf("  %s  source=%s\n", route.Prefix, route.Source)
+	}
+}
+
+func printIPAMGetDiagnostics(report *ipamGetReport) {
+	fmt.Println()
+	if len(report.Diagnostics) == 0 {
+		fmt.Println("diagnostics: none")
+		return
+	}
+	fmt.Println("diagnostics:")
+	for _, diag := range report.Diagnostics {
+		fmt.Printf("  %s  %s\n", diag.Code, diag.Detail)
+	}
 }
 
 func comparePrefixStrings(a, b string) int {

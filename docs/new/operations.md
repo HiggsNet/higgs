@@ -74,7 +74,11 @@ HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs recovery export-zone . root-zone
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone root-zone.b64
 ```
 
+`delegated_to` 是精确 owner，不是向下继承开关。第一条 `delegated_to=.` 只让 root 拥有 `/32`；第二条才让 `catofes.` 精确拥有 `/58`，从而可以继续切子池或发布 assignment。子 Zone 不能直接使用 ancestor 的 self pool；缺少显式覆盖 pool 时，CLI 会以 `ipam_pool_owner_mismatch` 或 `ipam_assignment_pool_mismatch` 早失败。
+
 `export-zone` / `import-zone` 搬运的是已签名 Zone snapshot，不搬运 root 私钥；导入端仍会按 trusted root、delegation chain 和 record signature 做验证。`import-zone` 会优先通过本机 daemon control socket 导入，输出里出现 `via daemon` 表示写入已经进入在线 daemon 的内存状态和 DB；如果使用旧版本命令，在线 daemon 可能把直接 DB 写入覆盖掉，先停 daemon 再导入。
+
+排查本机视角时用 `higgs ipam mine` 查看分配给 `managed_zone` 的 assignment 和本 Zone 精确拥有/发布的 pool；排查单个地址或前缀时用 `higgs ipam get <addr-or-prefix>`，必要时加 `--json` 取得 pool chain、best pool、assignment、route 和诊断码。
 
 ## 启动 Daemon
 

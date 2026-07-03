@@ -70,6 +70,13 @@ func addRecords(ns *zone.NetworkState, path zone.ZonePath, records ...*zone.Reco
 	}
 }
 
+func addIPAMPoolRecord(ns *zone.NetworkState, source zone.ZonePath, prefix string, delegatedTo zone.ZonePath) {
+	addRecords(ns, source,
+		mkRecord(source, mustKeyPool(prefix), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: prefix, DelegatedTo: delegatedTo, Active: true})),
+	)
+}
+
 func hasCode(errors []RouteAuthorizationError, code string) bool {
 	for _, e := range errors {
 		if e.Code == code {
@@ -83,6 +90,9 @@ func TestBasicAnnouncementSameZone(t *testing.T) {
 	ns := zone.NewNetworkState()
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, "catofes.", "10.0.1.0/24", "pek.catofes.")
 	addZone(ns, "pek.catofes.", "catofes.",
 		mkRecord("pek.catofes.", mustKeyPool("10.0.1.0/24"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes.", Active: true})),
@@ -111,6 +121,8 @@ func TestParentAggregateAnnouncement(t *testing.T) {
 	ns := zone.NewNetworkState()
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 	addZone(ns, "pek.catofes.", "catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
@@ -137,6 +149,9 @@ func TestWithdrawnAnnouncementNotAuthorized(t *testing.T) {
 	ns := zone.NewNetworkState()
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, "catofes.", "10.0.1.0/24", "pek.catofes.")
 	addZone(ns, "pek.catofes.", "catofes.",
 		mkRecord("pek.catofes.", mustKeyPool("10.0.1.0/24"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes.", Active: true})),
@@ -184,9 +199,13 @@ func TestMoreSpecificAnnouncementAllowed(t *testing.T) {
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
+		mkRecord("catofes.", mustKeyPool("10.0.1.0/24"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes.", Active: true})),
 		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/16"), RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/16", AssignedTo: "pek.catofes.", Active: true})),
 	)
@@ -241,6 +260,8 @@ func TestSiblingOverlapUnauthorized(t *testing.T) {
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "child1.catofes.", "catofes.")
 	addZone(ns, "child2.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.1.0/24", "catofes.")
 
 	// A single parent assignment usable by the whole subtree; both siblings
 	// announce the exact same prefix, which must be rejected.
@@ -322,6 +343,8 @@ func TestIPv6Authorization(t *testing.T) {
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "2001:db8::/31", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "2001:db8::/32", "catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("2001:db8::/32"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "2001:db8::/32", DelegatedTo: "catofes.", Active: true})),
@@ -378,12 +401,15 @@ func TestPoolEnforcementValid(t *testing.T) {
 	ns := zone.NewNetworkState()
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 	addZone(ns, "pek.catofes.", "catofes.",
 		mkRecord("pek.catofes.", mustKeyPool("10.0.0.0/24"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/24", DelegatedTo: "pek.catofes.", Active: true})),
 		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "pek.catofes.", Active: true})),
 	)
+	addIPAMPoolRecord(ns, "catofes.", "10.0.0.0/24", "pek.catofes.")
 
 	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
 	if err != nil {
@@ -401,6 +427,8 @@ func TestPoolEnforcementAncestorPoolValid(t *testing.T) {
 	ns := zone.NewNetworkState()
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 	addZone(ns, "pek.catofes.", "catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
@@ -429,6 +457,8 @@ func TestPoolEnforcementInvalidDelegatedTo(t *testing.T) {
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
 	addZone(ns, "sh.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 
 	// catofes delegates the pool to pek, but sh tries to assign from it.
 	addRecords(ns, "catofes.",
@@ -473,12 +503,135 @@ func TestPoolEnforcementNoPool(t *testing.T) {
 	}
 }
 
+func TestIPAMPoolRootBootstrapValid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", ars.Errors)
+	}
+	if len(ars.AllPools) != 1 || ars.AllPools[0].DelegatedTo != zone.RootZone {
+		t.Fatalf("AllPools = %+v, want root bootstrap pool", ars.AllPools)
+	}
+}
+
+func TestIPAMPoolDelegationRequiresOwnedCoveringPool(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if !hasCode(ars.Errors, "ipam_pool_owner_mismatch") {
+		t.Fatalf("expected ipam_pool_owner_mismatch, got %+v", ars.Errors)
+	}
+	if len(ars.AllPools) != 0 {
+		t.Fatalf("AllPools = %+v, want no valid pools", ars.AllPools)
+	}
+}
+
+func TestIPAMPoolNestedDelegationFromCurrentOwnerValid(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, "catofes.", "10.0.1.0/24", "pek.catofes.")
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", ars.Errors)
+	}
+	if len(ars.AllPools) != 3 {
+		t.Fatalf("AllPools len = %d, want 3: %+v", len(ars.AllPools), ars.AllPools)
+	}
+}
+
+func TestIPAMPoolSiblingOverlapRejected(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "other.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.1.0/24", "other.")
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if !hasCode(ars.Errors, "ipam_pool_overlap") {
+		t.Fatalf("expected ipam_pool_overlap, got %+v", ars.Errors)
+	}
+}
+
+func TestIPAMAssignmentDoesNotInheritAncestorPool(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyAssignment("10.0.1.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "catofes.", Active: true})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if !hasCode(ars.Errors, "ipam_assignment_pool_mismatch") {
+		t.Fatalf("expected ipam_assignment_pool_mismatch, got %+v", ars.Errors)
+	}
+	if len(ars.AllAssignments) != 0 {
+		t.Fatalf("AllAssignments = %+v, want none", ars.AllAssignments)
+	}
+}
+
+func TestIPAMAssignmentUsesExplicitDelegatedPool(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyAssignment("10.0.1.0/24"), RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "catofes.", Active: true})),
+	)
+
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", ars.Errors)
+	}
+	if len(ars.AllAssignments) != 1 {
+		t.Fatalf("AllAssignments len = %d, want 1", len(ars.AllAssignments))
+	}
+}
+
 func TestAssignmentOverlapSameZoneHierarchicalValid(t *testing.T) {
 	ns := zone.NewNetworkState()
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
 	addZone(ns, "node1.pek.catofes.", "pek.catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.1.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, "catofes.", "10.1.0.0/16", "pek.catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
@@ -506,6 +659,8 @@ func TestAssignmentOverlapSameZoneSiblingInvalid(t *testing.T) {
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
 	addZone(ns, "sh.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
@@ -532,6 +687,8 @@ func TestAssignmentOverlapSameZoneSameAssigneeInvalid(t *testing.T) {
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
@@ -555,9 +712,13 @@ func TestAssignmentOverlapCrossZoneDelegationChainValid(t *testing.T) {
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
+		mkRecord("catofes.", mustKeyPool("10.0.1.0/24"), RecordTypeIPAMPool,
+			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes.", Active: true})),
 		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/16"), RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/16", AssignedTo: "pek.catofes.", Active: true})),
 	)
@@ -586,6 +747,10 @@ func TestAssignmentOverlapCrossZoneSiblingInvalid(t *testing.T) {
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
 	addZone(ns, "sh.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, "catofes.", "10.0.0.0/23", "pek.catofes.")
+	addIPAMPoolRecord(ns, "catofes.", "10.0.0.0/24", "sh.catofes.")
 	addRecords(ns, "pek.catofes.",
 		mkRecord("pek.catofes.", mustKeyPool("10.0.0.0/23"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/23", DelegatedTo: "pek.catofes.", Active: true})),
@@ -616,6 +781,10 @@ func TestAssignmentOverlapCrossZoneNoContainmentValid(t *testing.T) {
 	addZone(ns, zone.RootZone, "")
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.1.0.0/16", "catofes.")
+	addIPAMPoolRecord(ns, "catofes.", "10.1.0.0/16", "pek.catofes.")
 	addRecords(ns, "catofes.",
 		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
@@ -647,18 +816,14 @@ func TestAnycastAssignmentOverlapCrossZoneValid(t *testing.T) {
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
 	addZone(ns, "sh.catofes.", "catofes.")
-	// Parent pool delegates to catofes. subtree; both siblings create shared
-	// assignments for the same anycast prefix in their own zones.
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	// The owner publishes both shared anycast assignments. Sibling zones do
+	// not need overlapping pools to announce the assigned prefix.
 	addRecords(ns, "catofes.",
-		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
-			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
-	)
-	addRecords(ns, "pek.catofes.",
-		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/24")+"#pek", RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true})),
-	)
-	addRecords(ns, "sh.catofes.",
-		mkRecord("sh.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/24")+"#sh", RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes.", Active: true, Shared: true})),
 	)
 
@@ -687,18 +852,14 @@ func TestAnycastAssignmentOnlyOneSharedStillRejected(t *testing.T) {
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
 	addZone(ns, "sh.catofes.", "catofes.")
-	// Parent pool delegates to catofes. subtree.
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	// One shared and one non-shared assignment from the same owner should still
+	// be rejected as an assignment overlap.
 	addRecords(ns, "catofes.",
-		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
-			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
-	)
-	// pek has shared=true, sh has shared=false; overlap should still be rejected.
-	addRecords(ns, "pek.catofes.",
-		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/24")+"#pek", RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true})),
-	)
-	addRecords(ns, "sh.catofes.",
-		mkRecord("sh.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes.", Active: true})),
 	)
 
@@ -717,21 +878,20 @@ func TestAnycastRouteAnnouncementOverlapValid(t *testing.T) {
 	addZone(ns, "catofes.", zone.RootZone)
 	addZone(ns, "pek.catofes.", "catofes.")
 	addZone(ns, "sh.catofes.", "catofes.")
-	// Parent pool delegates to catofes. subtree.
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	// The owner publishes shared assignments and both assigned zones announce.
 	addRecords(ns, "catofes.",
-		mkRecord("catofes.", mustKeyPool("10.0.0.0/16"), RecordTypeIPAMPool,
-			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true})),
-	)
-	// Both siblings have shared assignments and route announcements.
-	addRecords(ns, "pek.catofes.",
-		mkRecord("pek.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/24")+"#pek", RecordTypeIPAMAssignment,
 			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.0.0/24")+"#sh", RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes.", Active: true, Shared: true})),
+	)
+	addRecords(ns, "pek.catofes.",
 		mkRecord("pek.catofes.", mustKeyRoute("10.0.0.0/24"), RecordTypeRouteAnnouncement,
 			mustJSON(RouteAnnouncementRecord{Version: 1, Prefix: "10.0.0.0/24", Active: true})),
 	)
 	addRecords(ns, "sh.catofes.",
-		mkRecord("sh.catofes.", mustKeyAssignment("10.0.0.0/24"), RecordTypeIPAMAssignment,
-			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "sh.catofes.", Active: true, Shared: true})),
 		mkRecord("sh.catofes.", mustKeyRoute("10.0.0.0/24"), RecordTypeRouteAnnouncement,
 			mustJSON(RouteAnnouncementRecord{Version: 1, Prefix: "10.0.0.0/24", Active: true})),
 	)

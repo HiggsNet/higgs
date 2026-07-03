@@ -190,7 +190,7 @@ HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root pubkey
 - Root Zone `.` 的 root authority
 - 保存在本地 bbolt 状态库中的 root 私钥
 
-Root authority 默认拥有当前所有内建权限，包括 `delegate`、`write`、`write:route` 和 `allocate-ip`。Root admin 因此可以声明全网 IPAM pool，并把子 pool 委派给一级管理 Zone。
+Root authority 默认拥有当前所有内建权限，包括 `delegate`、`write`、`write:route` 和 `allocate-ip`。Root admin 因此可以声明全网 IPAM pool，并把子 pool 委派给一级管理 Zone。`ipam/pools/*` 的 `delegated_to` 是精确 owner：`. delegated_to=.` 只表示 root 拥有该 pool，不会被所有子 Zone 隐式继承；`catofes.` 要继续切子池或发布 assignment，必须先拿到显式 `delegated_to=catofes.` 的覆盖 pool。
 
 `root pubkey` 输出的根公钥应写入普通节点的 `trusted_root_public_key`。
 
@@ -249,11 +249,15 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes
 离线 root admin 写入的 root Zone records 可以通过 signed snapshot 文件交给在线管理端，而不需要让 root daemon 上线：
 
 ```bash
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs ipam pool create . 10.212.0.0/14 --delegated-to .
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs ipam pool create . 10.212.0.0/18 --delegated-to catofes.
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs recovery export-zone . /tmp/root-zone.b64
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs recovery import-zone /tmp/root-zone.b64
 ```
 
 `recovery import-zone` 会优先通过本机 daemon control socket 导入，输出中的 `via daemon` 表示在线 daemon 已经接收并保存了 snapshot；旧版本命令在 daemon 运行时直接写 DB 可能会被 daemon 的旧内存状态覆盖。
+
+IPAM 排查可以用 `build/higgs ipam mine` 查看本 `managed_zone` 的 assignment 与精确拥有的 pool；用 `build/higgs ipam get <addr-or-prefix> [--json]` 查看某个地址或前缀的 valid pool chain、best pool、assignment、route 和 `ipam_no_pool` / `ipam_unassigned` 等诊断。
 
 ## 加入普通节点
 

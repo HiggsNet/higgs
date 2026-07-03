@@ -232,6 +232,46 @@ func TestIPAMMissingCapability(t *testing.T) {
 	}
 }
 
+func TestCreateIPAMPoolRejectsOwnerMismatch(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	removeIPAMPoolForTest(state.Network, "catofes.", "10.0.0.0/16")
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	err = createIPAMPoolWithRuntime(rt, managed, "10.0.1.0/24", managed)
+	if err == nil {
+		t.Fatalf("createIPAMPoolWithRuntime succeeded, want owner mismatch")
+	}
+	if !strings.Contains(err.Error(), "ipam_pool_owner_mismatch") {
+		t.Fatalf("error = %v, want ipam_pool_owner_mismatch", err)
+	}
+}
+
+func TestAssignIPAMRejectsImplicitAncestorPool(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	removeIPAMPoolForTest(state.Network, "catofes.", "10.0.0.0/16")
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	err = assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", managed, false)
+	if err == nil {
+		t.Fatalf("assignIPAMWithRuntime succeeded, want pool mismatch")
+	}
+	if !strings.Contains(err.Error(), "ipam_assignment_pool_mismatch") {
+		t.Fatalf("error = %v, want ipam_assignment_pool_mismatch", err)
+	}
+}
+
 func TestListIPAMAssignments(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
@@ -254,6 +294,70 @@ func TestListIPAMAssignments(t *testing.T) {
 	err := listIPAMAssignmentsWithRuntime(rt, "other.catofes.")
 	if err != nil {
 		t.Fatalf("listIPAMAssignments with non-matching filter failed: %v", err)
+	}
+}
+
+func TestIPAMGetExplainsPoolChainAndAssignment(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
+		t.Fatalf("assignIPAM failed: %v", err)
+	}
+
+	report, err := buildIPAMGetReport(rt, "10.0.1.42")
+	if err != nil {
+		t.Fatalf("buildIPAMGetReport: %v", err)
+	}
+	if report.Query != "10.0.1.42/32" {
+		t.Fatalf("Query = %q, want 10.0.1.42/32", report.Query)
+	}
+	if report.BestPool == nil || report.BestPool.DelegatedTo != string(managed) {
+		t.Fatalf("BestPool = %+v, want delegated to managed", report.BestPool)
+	}
+	if len(report.Assignments) != 1 || report.Assignments[0].AssignedTo != "node.pek.catofes." {
+		t.Fatalf("Assignments = %+v, want node assignment", report.Assignments)
+	}
+	if report.AssignedTo == nil || *report.AssignedTo != "node.pek.catofes." {
+		t.Fatalf("AssignedTo = %v, want node.pek.catofes.", report.AssignedTo)
+	}
+}
+
+func TestIPAMGetReportsUnassignedAddress(t *testing.T) {
+	rt, _ := buildIPAMTestRuntime(t)
+	report, err := buildIPAMGetReport(rt, "10.0.9.1")
+	if err != nil {
+		t.Fatalf("buildIPAMGetReport: %v", err)
+	}
+	if !ipamDiagnosticsContain(report.Diagnostics, "ipam_unassigned") {
+		t.Fatalf("Diagnostics = %+v, want ipam_unassigned", report.Diagnostics)
+	}
+}
+
+func TestIPAMGetReportsSharedAssignment(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	if err := assignIPAMWithRuntime(rt, managed, "10.0.3.0/24", "node.pek.catofes.", true); err != nil {
+		t.Fatalf("assignIPAM shared failed: %v", err)
+	}
+
+	report, err := buildIPAMGetReport(rt, "10.0.3.42")
+	if err != nil {
+		t.Fatalf("buildIPAMGetReport: %v", err)
+	}
+	if len(report.Assignments) != 1 || !report.Assignments[0].Shared {
+		t.Fatalf("Assignments = %+v, want one shared assignment", report.Assignments)
+	}
+	if report.AssignedTo != nil {
+		t.Fatalf("AssignedTo = %v, want nil for shared assignment", report.AssignedTo)
+	}
+}
+
+func TestIPAMGetReportsNoPool(t *testing.T) {
+	rt, _ := buildIPAMTestRuntime(t)
+	report, err := buildIPAMGetReport(rt, "192.0.2.1")
+	if err != nil {
+		t.Fatalf("buildIPAMGetReport: %v", err)
+	}
+	if !ipamDiagnosticsContain(report.Diagnostics, "ipam_no_pool") {
+		t.Fatalf("Diagnostics = %+v, want ipam_no_pool", report.Diagnostics)
 	}
 }
 
@@ -283,16 +387,24 @@ func TestBuildIPAMMineReport(t *testing.T) {
 	if report.Assignments[0].Prefix != "10.0.1.0/24" || report.Assignments[0].Source != string(managed) {
 		t.Fatalf("Assignments[0] = %+v, want local 10.0.1.0/24", report.Assignments[0])
 	}
-	if len(report.Pools) != 1 {
-		t.Fatalf("Pools len = %d, want 1: %+v", len(report.Pools), report.Pools)
+	if len(report.Pools) != 2 {
+		t.Fatalf("Pools len = %d, want 2: %+v", len(report.Pools), report.Pools)
 	}
-	if report.Pools[0].Prefix != "10.0.0.0/16" || report.Pools[0].DelegatedTo != string(managed) {
-		t.Fatalf("Pools[0] = %+v, want local pool", report.Pools[0])
-	}
-	for _, want := range []string{"published_by_managed_zone", "delegated_to_managed_zone", "usable_by_managed_zone"} {
-		if !stringSliceContains(report.Pools[0].Relation, want) {
-			t.Fatalf("pool relation = %v, want %s", report.Pools[0].Relation, want)
+	seenPublished := false
+	seenDelegated := false
+	for _, pool := range report.Pools {
+		if stringSliceContains(pool.Relation, "usable_by_managed_zone") {
+			t.Fatalf("pool relation = %v, should not include usable_by_managed_zone", pool.Relation)
 		}
+		if pool.Source == string(managed) && stringSliceContains(pool.Relation, "published_by_managed_zone") {
+			seenPublished = true
+		}
+		if pool.DelegatedTo == string(managed) && stringSliceContains(pool.Relation, "delegated_to_managed_zone") {
+			seenDelegated = true
+		}
+	}
+	if !seenPublished || !seenDelegated {
+		t.Fatalf("Pools = %+v, want published and delegated relations", report.Pools)
 	}
 }
 
@@ -347,6 +459,15 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 func stringSliceContains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func ipamDiagnosticsContain(values []ipamGetDiagnosticRow, want string) bool {
+	for _, value := range values {
+		if value.Code == want {
 			return true
 		}
 	}
@@ -444,6 +565,9 @@ func buildIPAMTestRuntimeWithCapability(t *testing.T, ipamCap bool) (*Runtime, z
 	ns.Zones[managed] = zone.NewZoneState(managed, childAuthority)
 	ns.Zones[zone.RootZone].Delegations[parent] = catofesDelegation
 	ns.Zones[parent].Delegations[managed] = pekDelegation
+	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/16", parent)
+	addUnsignedIPAMPoolForTest(ns, parent, "10.0.0.0/16", managed)
 	configureValidation(ns)
 	if err := higgscrypto.VerifyChain(ns, managed, time.Unix(1000, 0)); err != nil {
 		t.Fatalf("VerifyChain: %v", err)
@@ -462,4 +586,28 @@ func buildIPAMTestRuntimeWithCapability(t *testing.T, ipamCap bool) (*Runtime, z
 		t.Fatalf("SaveState: %v", err)
 	}
 	return rt, managed
+}
+
+func addUnsignedIPAMPoolForTest(ns *zone.NetworkState, source zone.ZonePath, prefix string, delegatedTo zone.ZonePath) {
+	canonical, err := routing.CanonicalizePrefix(prefix)
+	if err != nil {
+		panic(err)
+	}
+	key, err := routing.NormalizeIPAMPoolKey(prefix)
+	if err != nil {
+		panic(err)
+	}
+	value, err := json.Marshal(routing.IPAMPoolRecord{Version: 1, Prefix: canonical, DelegatedTo: delegatedTo, Active: true})
+	if err != nil {
+		panic(err)
+	}
+	ns.Zones[source].Records[key] = &zone.Record{Zone: source, Key: key, Type: routing.RecordTypeIPAMPool, Value: value}
+}
+
+func removeIPAMPoolForTest(ns *zone.NetworkState, source zone.ZonePath, prefix string) {
+	key, err := routing.NormalizeIPAMPoolKey(prefix)
+	if err != nil {
+		panic(err)
+	}
+	delete(ns.Zones[source].Records, key)
 }

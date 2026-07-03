@@ -56,8 +56,11 @@ type AuthorizedRouteSet struct {
 	// assignments (CLI listing, auto-announce, BIRD static routes) should
 	// iterate this slice instead of the Assignments map.
 	AllAssignments []*AssignmentEntry
-	Pools          map[netip.Prefix]*PoolEntry
-	Errors         []RouteAuthorizationError
+	Pools          map[netip.Prefix]*PoolEntry // one representative valid pool per prefix
+	// AllPools contains every valid pool, including entries with identical or
+	// overlapping prefixes that would otherwise be hidden by the Pools map.
+	AllPools []*PoolEntry
+	Errors   []RouteAuthorizationError
 }
 
 // BuildAuthorizedRouteSet builds an authorized route set from verified active state.
@@ -148,14 +151,17 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 		}
 	}
 
-	// Pools are indexed by prefix for quick lookup during assignment validation.
-	for _, pool := range pendingPools {
-		ars.Pools[pool.Prefix] = pool
+	validPools := validatePools(pendingPools, ars)
+	ars.AllPools = validPools
+	for _, pool := range validPools {
+		if ars.Pools[pool.Prefix] == nil {
+			ars.Pools[pool.Prefix] = pool
+		}
 	}
 
 	// Validate assignments against pools and detect overlaps before authorizing
 	// announcements.
-	validAssignments := validateAssignmentPools(pendingAssignments, ars, ns)
+	validAssignments := validateAssignmentPools(pendingAssignments, ars)
 	validAssignments, badAssignments := validateAssignmentOverlaps(validAssignments, ns)
 	for entry := range badAssignments {
 		ars.addError(entry.Source, entry.Prefix, "ipam_assignment_overlap",
@@ -263,14 +269,133 @@ func IsInDelegationChain(ns *zone.NetworkState, candidate, target zone.ZonePath)
 	return true
 }
 
+func validatePools(pools []*PoolEntry, ars *AuthorizedRouteSet) []*PoolEntry {
+	ownerValid := validatePoolOwnership(pools, ars)
+	valid, bad := validatePoolOverlaps(ownerValid)
+	for entry := range bad {
+		ars.addError(entry.Source, entry.Prefix, "ipam_pool_overlap",
+			fmt.Sprintf("pool %s overlaps with another pool outside the ownership chain", entry.Prefix))
+	}
+	return valid
+}
+
+func validatePoolOwnership(pools []*PoolEntry, ars *AuthorizedRouteSet) []*PoolEntry {
+	valid := make(map[*PoolEntry]bool)
+	for changed := true; changed; {
+		changed = false
+		for _, entry := range pools {
+			if valid[entry] {
+				continue
+			}
+			if isRootBootstrapPool(entry) || hasValidCoveringOwnerPool(valid, entry) {
+				valid[entry] = true
+				changed = true
+			}
+		}
+	}
+
+	out := make([]*PoolEntry, 0, len(valid))
+	for _, entry := range pools {
+		if valid[entry] {
+			out = append(out, entry)
+			continue
+		}
+		ars.addError(entry.Source, entry.Prefix, "ipam_pool_owner_mismatch",
+			fmt.Sprintf("pool %s is not covered by a pool owned by %s", entry.Prefix, entry.Source))
+	}
+	return out
+}
+
+func isRootBootstrapPool(pool *PoolEntry) bool {
+	return pool.Source == zone.RootZone && pool.DelegatedTo == zone.RootZone
+}
+
+func hasValidCoveringOwnerPool(valid map[*PoolEntry]bool, pool *PoolEntry) bool {
+	for cover := range valid {
+		if cover == pool {
+			continue
+		}
+		if cover.DelegatedTo != pool.Source {
+			continue
+		}
+		if containsPrefix(cover.Prefix, pool.Prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func validatePoolOverlaps(pools []*PoolEntry) (kept []*PoolEntry, bad map[*PoolEntry]bool) {
+	bad = make(map[*PoolEntry]bool)
+	for i := 0; i < len(pools); i++ {
+		for j := i + 1; j < len(pools); j++ {
+			a, b := pools[i], pools[j]
+			if !a.Prefix.Overlaps(b.Prefix) {
+				continue
+			}
+			if isPoolOverlapAllowed(pools, a, b) {
+				continue
+			}
+			if containsPrefix(a.Prefix, b.Prefix) && !containsPrefix(b.Prefix, a.Prefix) {
+				bad[b] = true
+				continue
+			}
+			if containsPrefix(b.Prefix, a.Prefix) && !containsPrefix(a.Prefix, b.Prefix) {
+				bad[a] = true
+				continue
+			}
+			bad[a] = true
+			bad[b] = true
+		}
+	}
+	if len(bad) == 0 {
+		return pools, bad
+	}
+	kept = make([]*PoolEntry, 0, len(pools)-len(bad))
+	for _, entry := range pools {
+		if bad[entry] {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept, bad
+}
+
+func isPoolOverlapAllowed(pools []*PoolEntry, a, b *PoolEntry) bool {
+	if containsPrefix(a.Prefix, b.Prefix) && isContainedPoolOverlapAllowed(pools, a, b) {
+		return true
+	}
+	if containsPrefix(b.Prefix, a.Prefix) && isContainedPoolOverlapAllowed(pools, b, a) {
+		return true
+	}
+	return false
+}
+
+func isContainedPoolOverlapAllowed(pools []*PoolEntry, outer, inner *PoolEntry) bool {
+	if outer.DelegatedTo == inner.Source {
+		return true
+	}
+	for _, bridge := range pools {
+		if bridge == inner || bridge == outer {
+			continue
+		}
+		if bridge.DelegatedTo != inner.Source {
+			continue
+		}
+		if containsPrefix(outer.Prefix, bridge.Prefix) && containsPrefix(bridge.Prefix, inner.Prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // validateAssignmentPools removes assignments that are not covered by a valid
-// pool delegation. An assignment in zone Z is valid only if there exists a pool
-// in Z or one of its ancestor zones whose prefix contains the assignment prefix
-// and whose delegated_to is Z or an ancestor of Z.
-func validateAssignmentPools(assignments []*AssignmentEntry, ars *AuthorizedRouteSet, ns *zone.NetworkState) []*AssignmentEntry {
+// pool ownership. An assignment in zone Z is valid only if there exists a valid
+// pool that covers the assignment prefix and is delegated exactly to Z.
+func validateAssignmentPools(assignments []*AssignmentEntry, ars *AuthorizedRouteSet) []*AssignmentEntry {
 	valid := make([]*AssignmentEntry, 0, len(assignments))
 	for _, entry := range assignments {
-		if isAssignmentPoolValid(ars, ns, entry) {
+		if isAssignmentPoolValid(ars, entry) {
 			valid = append(valid, entry)
 			continue
 		}
@@ -280,19 +405,13 @@ func validateAssignmentPools(assignments []*AssignmentEntry, ars *AuthorizedRout
 	return valid
 }
 
-func isAssignmentPoolValid(ars *AuthorizedRouteSet, ns *zone.NetworkState, assignment *AssignmentEntry) bool {
-	z := assignment.Source
-	for _, ancestor := range z.Ancestors() {
-		for _, pool := range ars.Pools {
-			if pool.Source != ancestor {
-				continue
-			}
-			if !containsPrefix(pool.Prefix, assignment.Prefix) {
-				continue
-			}
-			if IsZoneAncestor(pool.DelegatedTo, z) {
-				return true
-			}
+func isAssignmentPoolValid(ars *AuthorizedRouteSet, assignment *AssignmentEntry) bool {
+	for _, pool := range ars.AllPools {
+		if pool.DelegatedTo != assignment.Source {
+			continue
+		}
+		if containsPrefix(pool.Prefix, assignment.Prefix) {
+			return true
 		}
 	}
 	return false

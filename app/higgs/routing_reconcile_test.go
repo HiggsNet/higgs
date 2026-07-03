@@ -732,6 +732,9 @@ func buildTestNetworkStateForRouting(t *testing.T) (*stateFile, *syncConfigFile)
 		Network:        ns,
 		ZonePrivateKey: nodeAPriv,
 	}
+	addIPAMPool(t, state, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
+	addIPAMPool(t, state, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
+	addIPAMPool(t, state, zone.RootZone, "10.1.0.0/16", "catofes.", time.Unix(125, 0), rootPriv)
 	config := &syncConfigFile{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
@@ -867,6 +870,9 @@ func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile, ma
 		Network:        ns,
 		ZonePrivateKey: nodeAPriv,
 	}
+	addIPAMPool(t, state, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
+	addIPAMPool(t, state, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
+	addIPAMPool(t, state, zone.RootZone, "10.1.0.0/16", "catofes.", time.Unix(125, 0), rootPriv)
 	config := &syncConfigFile{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
@@ -986,6 +992,8 @@ func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFil
 		Network:        ns,
 		ZonePrivateKey: nodeAPriv,
 	}
+	addIPAMPool(t, state, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
+	addIPAMPool(t, state, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
 	config := &syncConfigFile{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
@@ -1365,6 +1373,9 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 	managedDelegation := testSignedDelegation(t, managedZone, *managedAuthority, "catofes.", catofesPriv)
 	ns.Zones[zone.RootZone].Delegations["catofes."] = catofesDelegation
 	ns.Zones["catofes."].Delegations[managedZone] = managedDelegation
+	stateForPools := &stateFile{Network: ns, ZonePrivateKey: catofesPriv, RootPrivateKey: rootPriv}
+	addIPAMPool(t, stateForPools, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(1, 0), rootPriv)
+	addIPAMPool(t, stateForPools, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(2, 0), rootPriv)
 
 	poolRecord := routing.IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/16", DelegatedTo: "catofes.", Active: true}
 	poolValue, err := json.Marshal(poolRecord)

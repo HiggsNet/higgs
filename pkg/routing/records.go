@@ -235,7 +235,7 @@ func ParseIPAMAssignmentRecord(record *zone.Record) (*IPAMAssignmentRecord, erro
 	if err != nil {
 		return nil, fmt.Errorf("normalize ipam assignment key: %w", err)
 	}
-	if record.Key != expectedKey {
+	if record.Key != expectedKey && !(assignment.Shared && strings.HasPrefix(record.Key, expectedKey+"#")) {
 		return nil, fmt.Errorf("ipam_assignment_key_mismatch: record key %q does not match prefix key %q", record.Key, expectedKey)
 	}
 	assignment.Prefix = canonical
