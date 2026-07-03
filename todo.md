@@ -40,22 +40,6 @@
 
 **剩余后续：**
 - [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
-- [ ] **6.1.x IPAM pool 严格所有权 / 隐式继承修复**
-  - **设计文档：** `docs/new/warning/ipam-pool-inheritance.md`
-  - 目标：把 `ipam/pools/*` 的 `delegated_to` 从“该 zone 及其所有子孙隐式可用”收紧为“精确 owner”；只有精确拥有覆盖 pool 的 zone 才能继续切子池或发布 assignment，避免 root/self pool 被全树绕过使用。
-  - [x] 调整 `pkg/routing.AuthorizedRouteSet` pool read model：保留兼容用 `Pools map[netip.Prefix]*PoolEntry`，新增 `AllPools []*PoolEntry`，后续 assignment 校验遍历 valid `AllPools`，避免同 prefix/重叠 pool 被 map 覆盖丢失。
-  - [x] 在 `BuildAuthorizedRouteSet` 中新增 pool validation 阶段，顺序为 active pool 收集 -> pool ownership/overlap 校验 -> assignment pool 校验 -> assignment overlap -> route authorization -> route overlap。
-  - [x] 实现 pool ownership 校验：允许 `. DT=.` root bootstrap pool；其他 pool 必须由 source 精确拥有的 covering pool 支撑，即存在 valid `cover.DelegatedTo == pool.Source` 且 `containsPrefix(cover.Prefix, pool.Prefix)`。
-  - [x] 实现 pool overlap 校验：允许 owner 从自己拥有的覆盖 pool 切子 pool；拒绝 sibling/unrelated owner 的相同、包含或部分重叠 prefix；非法 pool 输出 `ipam_pool_owner_mismatch` 或 `ipam_pool_overlap`，且不得进入 `AllPools`。
-  - [x] 将 `isAssignmentPoolValid` 改为精确 owner 检查：assignment source 必须存在 `pool.DelegatedTo == assignment.Source` 且覆盖 assignment prefix 的 valid pool；`AssignedTo` 只表示使用者，不参与 pool ownership 校验。
-  - [x] 保留现有 assignment overlap / anycast 语义，避免把 pool ownership 修复误扩展成禁止跨层 assign 或禁止 `Shared=true` anycast。
-  - [x] 在 `app/higgs/ipam.go` 写入路径增加 dry-run 早失败：`createIPAMPoolWithRuntime` 拒绝 owner mismatch / pool overlap；`assignIPAMWithRuntime` 拒绝 `ipam_assignment_pool_mismatch` / `ipam_assignment_overlap`；最终正确性仍以 `BuildAuthorizedRouteSet` 为准。
-  - [x] 调整 `higgs ipam mine`：删除 `usable_by_managed_zone`，只保留 `published_by_managed_zone` 和 `delegated_to_managed_zone`，让输出匹配严格 owner 语义。
-  - [x] 新增 `higgs ipam get <addr-or-prefix>` 只读诊断命令：归一化地址/前缀，基于 valid `AllPools` / `AllAssignments` / authorized routes 输出 pool chain、best pool、assignment、assigned_to、route 和 diagnostics；默认输出 human-readable 文本，`--json` 输出结构化 view；无 pool 输出 `ipam_no_pool`，有 pool 无 assignment 输出 `ipam_unassigned`。
-  - [x] 补 `pkg/routing` 单测：root bootstrap pool、无 covering owner 的 delegated pool 拒绝、root 切 child pool 合法、child 再切 grandchild pool 合法、sibling/unrelated pool overlap 拒绝、ancestor self pool 不再授权 descendant assignment、显式 delegated pool 授权 assignment。
-  - [x] 补 `app/higgs` CLI/runtime 单测：root bootstrap pool 可创建、无 owner covering pool 的子池创建失败、隐式继承 assignment 失败、显式 delegation assignment 成功、`ipam mine` 不再显示 `usable_by_managed_zone`，`ipam get` 默认文本和 `--json` 覆盖地址查询、prefix 查询、anycast/shared assignment、`ipam_no_pool` 和 `ipam_unassigned`。
-  - [x] 更新操作文档和示例：`README.md`、`docs/new/config.md`、`docs/new/operations.md` 中明确 root/self pool 只是精确 owner 声明，子 zone 需要显式 pool delegation；offline root 仍通过 `recovery export-zone/import-zone` 迁移 root-owned IPAM records。
-  - [x] 验证：先跑 focused `GOCACHE=/tmp/higgs-gocache GOMODCACHE=/tmp/higgs-gomodcache go test ./pkg/routing ./app/higgs -run 'Test(IPAM|Pool|Assignment|Recovery|Authority)'`，再跑 `make check`；若 broad `app/higgs` 受 sandbox UDP 限制影响，记录具体失败并保留 focused 结果。
 - [ ] 6.1.8 anycast smoke：多节点宣告同一 anycast 前缀，验证 Babel ECMP 和故障切换。
 - [ ] 6.3 firewall root/container 联合 smoke：overlay netns + veth + BIRD 下验证 default drop、合法 prefix 放行、非法 prefix drop、revocation 断流、port rotate redirect grace。
 - [ ] 6.6 health root/container 和 metrics smoke：在真实 XFRM+BIRD 链路上采集 ICMP/UDP probe 与 BIRD RTT/metric，注入丢包/延迟，验证状态切换、BIRD metric/cutover gate、`/metrics` 和本地 spool。

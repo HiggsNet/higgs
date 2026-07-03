@@ -230,8 +230,6 @@ routing:
 - `upstream` 可让 Higgs 创建 veth，把 mesh netns 接到主网络或另一个 namespace。
 - `ipam.auto_announce_assigned_ips` 为 true 时，daemon 会把分配给 `managed_zone` 的 IPAM assignment 自动发布为 route announcement。
 
-IPAM pool 使用严格 owner 语义：`ipam/pools/*` 的 `delegated_to` 只授权精确命名的 Zone 继续切子池或发布 assignment，不会向子孙 Zone 隐式继承。典型层级是 root 先发布 `. -> .` 的 bootstrap pool，再发布 `. -> catofes.` 的覆盖子池；之后 `catofes.` 才能从自己拥有的覆盖 pool 里继续委派给 `pek.catofes.` 或 assign 给节点。`higgs ipam get <addr-or-prefix> --json` 可用于检查 valid pool chain、assignment 和诊断码。
-
 ## Firewall
 
 Firewall 配置按 instance 声明。instance 可以绑定某个 netns，也可以绑定 host。
