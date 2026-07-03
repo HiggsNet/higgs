@@ -11,7 +11,6 @@ package firewall
 
 import (
 	"net/netip"
-	"time"
 )
 
 // Owner identifies Higgs-owned firewall objects so reconcile can distinguish
@@ -279,10 +278,3 @@ type FirewallReconcileSnapshot struct {
 	Instances map[string]*FirewallInstanceReconcileState `json:"instances,omitempty"`
 }
 
-// now returns the provided time or time.Now; kept as helper for tests.
-func now(t time.Time) time.Time {
-	if t.IsZero() {
-		return time.Now()
-	}
-	return t
-}

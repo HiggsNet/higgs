@@ -258,7 +258,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 }
 
 func TestIPAMRoutingSmoke(t *testing.T) {
-	state, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
 	now := rt.Now()
 
 	// Publish pool and assignment as the catofes. administrator.
@@ -341,7 +341,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 }
 
 func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
-	state, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = true
 	now := rt.Now()
 

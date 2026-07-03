@@ -293,14 +293,6 @@ func findBirdBinary() (string, error) {
 	return path, nil
 }
 
-// ensureNamedNetNS ensures a named network namespace exists, treating
-// "already exists" as success.
-func ensureNamedNetNS(ctx context.Context, name string) error {
-	return ensureNamedNetNSWithRunner(ctx, name, func(ctx context.Context, cmd string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, cmd, args...)
-	})
-}
-
 func ensureNamedNetNSWithRunner(
 	ctx context.Context,
 	name string,

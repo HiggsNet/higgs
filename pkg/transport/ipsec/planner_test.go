@@ -1177,18 +1177,6 @@ func desiredSpecForPeer(t *testing.T, plan LinkPlan, peer zone.ZonePath) Transpo
 	return TransportLinkSpec{}
 }
 
-func familiesInOrder(points []ContactPoint, families ...string) bool {
-	if len(points) != len(families) {
-		return false
-	}
-	for i, family := range families {
-		if points[i].Family != family || !strings.Contains(points[i].RankReason, points[i].Source) {
-			return false
-		}
-	}
-	return true
-}
-
 func firstAction(result ReconcileResult, action string) *ReconcileAction {
 	for i := range result.Actions {
 		if result.Actions[i].Action == action {

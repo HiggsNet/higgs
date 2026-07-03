@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -168,11 +167,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	if len(spec.StaticRoutes) > 0 {
 		block := StaticRouteBlock{Name: staticName}
 		for _, sr := range spec.StaticRoutes {
-			route := StaticRoute{
-				Prefix:    sr.Prefix,
-				Via:       sr.Via,
-				Blackhole: sr.Blackhole,
-			}
+			route := StaticRoute(sr)
 			if sr.Prefix.Addr().Is4() {
 				block.IPv4Routes = append(block.IPv4Routes, route)
 			} else {
@@ -405,26 +400,7 @@ func sanitizeNetNSName(name string) string {
 	return s
 }
 
-// sanitizeOverlayID is retained for backward compatibility with existing
-// tests and code that may still reference overlay-based naming.
-func sanitizeOverlayID(id string) string {
-	return sanitizeNetNSName(id)
-}
-
 func defaultInternalTableName(netnsName string) string {
 	return "higgs_" + sanitizeNetNSName(netnsName)
 }
 
-// sortedUniqueStrings returns a sorted, de-duplicated copy of the input.
-func sortedUniqueStrings(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	var out []string
-	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	sort.Strings(out)
-	return out
-}

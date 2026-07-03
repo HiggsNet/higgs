@@ -244,9 +244,7 @@ func CollectLocalEndpointsWithReflectors(listenPort uint16, advertiseAddrs []str
 			Source:   SourceReflector,
 		})
 	}
-	for _, ep := range scanInterfaceEndpoints(listenPort, filterPrivateIPv4) {
-		out = append(out, ep)
-	}
+	out = append(out, scanInterfaceEndpoints(listenPort, filterPrivateIPv4)...)
 	return dedupLocalEndpoints(out), reflectorErr
 }
 
