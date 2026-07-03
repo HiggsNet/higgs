@@ -326,35 +326,7 @@ func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gos
 		}
 	}
 	plan := planSnapshotDatagrams(d.Sync.State.Network, zones, budget, d.Sync.now())
-	var announces []*gossip.Announce
-	var recordAnnounces []*gossip.Announce
-	var deferredRecords int
-	for _, announce := range plan.Announces {
-		if len(announce.Records) > 0 {
-			recordAnnounces = append(recordAnnounces, announce)
-			continue
-		}
-		announces = append(announces, announce)
-	}
-	if len(recordAnnounces) == 1 {
-		announces = append(announces, recordAnnounces...)
-	} else if len(recordAnnounces) > 1 {
-		for _, ann := range recordAnnounces {
-			deferredRecords += len(ann.Records)
-		}
-	}
-	if deferredRecords > 0 {
-		d.logDebug("sync", "records_deferred_to_pull", map[string]any{
-			"peer_id": peerID,
-			"count":   deferredRecords,
-			"reason":  "udp_budget",
-			"via":     "responder",
-		})
-	}
 	for _, oversized := range plan.Oversized {
-		if oversized.Object == "zone_skeleton" {
-			recordDatagramDigestOnly(d.Sync.State, peerID)
-		}
 		recordDatagramTooLarge(d.Sync.State, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
 		d.logDebug("transport", "datagram_too_large", map[string]any{
 			"peer_id": peerID,
@@ -366,17 +338,14 @@ func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gos
 			"via":     "responder",
 		})
 	}
-	for _, announce := range announces {
+	for _, announce := range plan.Announces {
 		if announce == nil {
 			continue
 		}
 		d.logInfo("sync", "sending_announce", map[string]any{
-			"peer_id":          peerID,
-			"zones":            len(announce.Snapshots),
-			"records":          len(announce.Records),
-			"snapshot_records": snapshotRecordsCount(announce.Snapshots),
-			"digests":          len(announce.Zones),
-			"via":              "responder",
+			"peer_id": peerID,
+			"digests": len(announce.Zones),
+			"via":     "responder",
 		})
 		d.sendSyncMessage(peerID, &gossip.Message{
 			Type:     gossip.MessageAnnounce,
@@ -787,14 +756,6 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 		}
 		recordRelaySuccess(d.Sync.State, peerID, sourcePeerID, now)
 	}
-}
-
-func snapshotRecordsCount(snapshots []gossip.ZoneSnapshot) int {
-	n := 0
-	for i := range snapshots {
-		n += len(snapshots[i].Records)
-	}
-	return n
 }
 
 func zoneSnapshotExceedsBudget(ns *zone.NetworkState, path zone.ZonePath, budget int) bool {

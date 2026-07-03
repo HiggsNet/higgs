@@ -4318,23 +4318,17 @@ func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
 	service := newDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
-	record, err := buildSignedRecordAt(state, "node-b.catofes.", "announce-hint-test", []byte("do-not-apply-directly"), "policy.string", now)
-	if err != nil {
-		t.Fatalf("buildSignedRecordAt: %v", err)
-	}
-	err = service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
-		Type:   gossip.MessageAnnounce,
-		PeerID: "peer-a",
-		Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{{
-			Zone:   "node-b.catofes.",
-			Record: record,
-		}}},
+	beforeRoot := append([]byte(nil), gossip.ZoneRoot(state.Network.Zones["node-b.catofes."])...)
+	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		Type:     gossip.MessageAnnounce,
+		PeerID:   "peer-a",
+		Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{{Zone: "node-b.catofes.", RootHash: []byte("remote-root")}}},
 	}}, context.Background())
 	if err != nil {
 		t.Fatalf("process announce: %v", err)
 	}
-	if state.Network.Zones["node-b.catofes."].Records["announce-hint-test"] != nil {
-		t.Fatal("announce record was applied directly; want hint-only ingress")
+	if afterRoot := gossip.ZoneRoot(state.Network.Zones["node-b.catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
+		t.Fatal("announce changed zone state directly; want hint-only ingress")
 	}
 	session := service.syncSessions["peer-a"]
 	if session == nil || session.State != SyncSessionIdle {

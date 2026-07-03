@@ -88,11 +88,11 @@
   - 状态机边界：
     - Active pull FSM 只负责 `PING/PONG Summary -> FETCH_CATALOG_PAGE/CATALOG_PAGE -> TCP object pull -> UDP chunk fallback -> apply`。
     - Responder 只负责响应 `FETCH_CATALOG_PAGE`、TCP object pull 和必要的 UDP chunk fallback；读取本地 verified state，不改变 active pull FSM 状态。
-    - Hint ingress 只处理 `ANNOUNCE` / relay hint：记录 digest/source/time，按需唤醒 active pull；不直接依赖 UDP announce snapshot/record 完成同步。
+    - Hint ingress 只处理 `ANNOUNCE` / relay hint：记录 digest/source/time，按需唤醒 active pull；不依赖 UDP announce payload 完成同步。
   - [x] 回归测试覆盖：`SummarySent`/等待 `PONG` 时收到 `FETCH_CATALOG_PAGE` 或普通读取请求，active session 不会被 read-only responder 污染，后续 `PONG` 继续处理。
   - [x] 把 `FetchCatalogPageReceivedEvent` 从 `SyncSession.OnEvent` 中迁出，改为 daemon 只读 responder action/handler；保留 catalog page budget、诊断和发送错误记录。
   - [x] 把普通 `FETCH_ZONE` 兼容响应从主 FSM 迁出；现代路径优先走 TCP object pull，UDP `FETCH_ZONE{chunk_fallback:true}` 仅作为 TCP 不可达后的 chunk fallback 请求。
-  - [x] 将 `ANNOUNCE` 处理收敛为 hint：不再把 snapshot/record announce 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
+  - [x] 将 `ANNOUNCE` 处理收敛为 hint：不再把 UDP announce payload 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
   - [x] 删除旧兼容字段路径：现代 event-loop 不再使用旧 Ping/Pong digest/fetch 字段、反向 fetch 动作、服务中状态和 eager object pull；wire codec 与旧 `sync.go` receive 路径已随 6.0 事件循环收尾删除。
   - [ ] 更新观测面：`sync status --verbose` / `debug peer` 区分 active pull、read-only responder、hint suppressed/accepted、object pull/chunk fallback 结果。
   - [x] 验证：`go test ./app/higgs ./pkg/core/gossip`、`make phase2-smoke`、`make chain-relay-smoke`、`make object-pull-smoke`；最后再跑 `make check`。

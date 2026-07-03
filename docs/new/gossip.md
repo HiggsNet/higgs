@@ -33,15 +33,15 @@ Higgs gossip 仅传播**已签名的 Zone 状态**。任何进入 active state �
 
 | 层 | 载体 | 角色 | 不能承担的职责 |
 |----|------|------|----------------|
-| UDP control | `ping` / `pong` / `fetch_catalog_page` / `catalog_page` / `announce` / `fetch_zone` | 交换 bounded summary、分页 catalog、请求对象、发送变更 hint | 不依赖 IP fragmentation，不承载 unbounded list，不把多 datagram record 流作为正确性前提 |
+| UDP control | `ping` / `pong` / `fetch_catalog_page` / `catalog_page` / `announce` / `fetch_zone` | 交换 bounded summary、分页 catalog、请求对象、发送 digest hint | 不依赖 IP fragmentation，不承载 unbounded list，不把 UDP record 流作为正确性前提 |
 | TCP object pull | 短连接 MessagePack | 拉取完整 Zone snapshot 或完整 record object | 不改变 trust boundary，不跳过签名验证 |
 | UDP chunk fallback | `object_chunk` | TCP object pull 不可达时的兜底完整对象传输 | 不作为默认 bulk path，不承载未验证的部分状态 |
 
 ### 1.3 硬规则
 
 - UDP datagram 默认预算 **1200 bytes**；任何 UDP message 都必须先按 wire size 预算打包。
-- 所有 list 都必须 bounded：catalog page、announce digest、records 都不能假设一包装得下；旧 Ping/Pong digest/fetch list 已删除。
-- `announce` 是 hint，可以携带小而完整的 payload；不能依赖多条 UDP record announce 才完成一个 Zone。
+- 所有 list 都必须 bounded：catalog page、announce digest 都不能假设一包装得下；旧 Ping/Pong digest/fetch list 已删除。
+- `announce` 是 hint，只携带 digest；不能依赖 UDP announce payload 完成一个 Zone。
 - 大对象默认走 TCP object pull；UDP chunk fallback 只在 TCP pull 明确失败或不可达后使用。
 - relay 只在本地 verified active state 实际变化后触发；收到 hint 本身不是 relay 条件。
 
@@ -53,24 +53,26 @@ Gossip 运行于事件驱动的 daemon 架构中：
 ┌──────────────────────────────────────────────────────┐
 │                    Daemon Event Loop                    │
 │                                                        │
+│  ┌────────────┐    ┌──────────────┐                    │
+│  │UDP Receiver│───▶│ Packet Demux │──┐                 │
+│  │(single)    │    │ (per-peer)   │  │                 │
+│  └────────────┘    └──────────────┘  │                 │
+│                                      ▼                 │
 │  ┌────────────┐    ┌──────────────┐   ┌───────────┐   │
-│  │UDP Receiver│───▶│ Packet Demux │──▶│ SyncSession│   │
-│  │(single)    │    │ (per-peer)   │   │ (FSM)     │   │
+│  │TimerManager│───▶│ Sync Events  │──▶│ SyncSession│   │
+│  │            │    │ (queue)      │   │ (FSM)     │   │
 │  └────────────┘    └──────────────┘   └─────┬─────┘   │
-│                                             │         │
-│  ┌────────────┐    ┌──────────────┐         │         │
-│  │TimerManager│───▶│ Sync Events  │◀────────┘         │
-│  └────────────┘    └──────┬───────┘                   │
-│                           │                           │
-│                  ┌────────▼────────┐                  │
-│                  │  Action Executor │                  │
-│                  │ (apply/send/…)   │                  │
-│                  └─────────────────┘                   │
+│                                             │ actions │
+│                                    ┌────────▼────────┐│
+│                                    │ Action Executor ││
+│                                    │ (apply/send/…)  ││
+│                                    └─────────────────┘│
 └──────────────────────────────────────────────────────┘
 ```
 
 关键特征：
 - **单一 UDP reader**：只有 `startGossipPacketReceiver` 调用 `transport.Receive()`
+- **统一事件入口**：packet、timer、object-pull result 都先变成 `SyncEvent`，再由 event loop 驱动 `SyncSession.OnEvent`
 - **串行事件处理**：所有状态变更经 daemon event loop 串行处理，无需额外锁
 - **FSM 无 I/O**：`SyncSession.OnEvent` 不执行 I/O，只返回 `SyncAction` 由事件循环执行
 
@@ -195,9 +197,7 @@ type FetchRecord struct {
 }
 
 type Announce struct {
-    Zones     []ZoneDigest     // zone digest hint（bounded）
-    Snapshots []ZoneSnapshot   // bounded 小 payload；不作为正确性主路径
-    Records   []RecordSnapshot // bounded 小 payload；不作为正确性主路径
+    Zones []ZoneDigest // zone digest hint（bounded）
 }
 
 type ObjectChunk struct {
@@ -346,7 +346,7 @@ Phase 3: Object Pull（对象拉取）
   → apply 成功且 active state 变化后，才触发 relay
 ```
 
-`ANNOUNCE` 可以保留 bounded digest 信息，用于低成本唤醒和观测；不应依赖 UDP announce 中的 snapshot/records 才能完成正确同步。
+`ANNOUNCE` 只保留 bounded digest 信息，用于低成本唤醒和观测；不能携带 snapshot/records，也不负责完成正确同步。
 
 ---
 
@@ -416,7 +416,7 @@ Responder 不属于 `SyncSession` 主状态机。入站 `FETCH_CATALOG_PAGE`、T
 │ PingSent         │ 旧入口保留状态；现代路径通常直接进入 SummarySent    │
 │ SummarySent      │ 已发 PING（携带 CatalogSummary），等待对方响应      │
 │ CatalogDiffing   │ 双方 catalog root 不同，正在逐页比较              │
-│ AwaitingAnnounce │ 等待旧小 payload、迟到 UDP 或 fallback 收尾；不作为主路径 │
+│ AwaitingAnnounce │ 等待 object pull / chunk fallback 后的 quiet 收尾；不作为主路径 │
 │ ObjectPulling    │ 正在异步 TCP object pull                         │
 │ ChunkFallback    │ TCP pull 失败，等待 UDP chunk                    │
 │ Completed        │ 本轮同步成功结束                                  │
@@ -501,7 +501,7 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 - **第 1 次**: 认为 UDP burst 结束；若有 pending zones，从 `AwaitingAnnounce` → `ObjectPulling`
 - **第 2 次及以上**: 认为 object pull / chunk fallback 后的迟到窗口也结束；pending 为空则 `Completed`，否则 `Failed`
 
-现代主路径以 catalog diff 和 object pull 为准；`AwaitingAnnounce` 只用于小 payload、迟到 UDP 或 fallback 收尾。hint 只负责唤醒主动同步，不负责完成同步。
+现代主路径以 catalog diff 和 object pull 为准；`AwaitingAnnounce` 只用于 object pull / chunk fallback 后的迟到事件与 quiet 收尾。hint 只负责唤醒主动同步，不负责完成同步。
 
 每次有效数据到达（PONG、catalog page、object pull/chunk result）都会重置 `quietCount = 0`。
 

@@ -474,14 +474,7 @@ func MessageObjectCounts(message *Message) (zones int, records int) {
 	case message.CatalogPage != nil:
 		return len(message.CatalogPage.Entries), 0
 	case message.Announce != nil:
-		records = len(message.Announce.Records)
-		for _, snapshot := range message.Announce.Snapshots {
-			records += len(snapshot.Records)
-			for _, history := range snapshot.RecordHistory {
-				records += len(history)
-			}
-		}
-		return len(message.Announce.Zones) + len(message.Announce.Snapshots), records
+		return len(message.Announce.Zones), 0
 	case message.ObjectChunk != nil:
 		if message.ObjectChunk.Object == ObjectPullRecord {
 			return 0, 1

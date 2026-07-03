@@ -69,7 +69,7 @@ Phase 6 的结构性修复是：**单一 UDP reader + 显式 per-peer 同步会�
 | `PingSent` | 旧入口保留状态；现代路径通常直接进入 `SummarySent` |
 | `SummarySent` | 已发 `PING` 和本地 `CatalogSummary`，等待对端 summary |
 | `CatalogDiffing` | catalog root 不同，正在分页请求 / 接收 catalog page |
-| `AwaitingAnnounce` | 等待小 payload、迟到 UDP 或 fallback 收尾；不作为正确性主路径 |
+| `AwaitingAnnounce` | 等待 object pull / chunk fallback 后的迟到事件与 quiet 收尾；不作为正确性主路径 |
 | `ObjectPulling` | catalog diff 发现差异后，正在异步 TCP object pull |
 | `ChunkFallback` | TCP pull 失败或不可达，已发 `FETCH_ZONE{ChunkFallback:true}`，等 UDP chunk |
 | `Completed` | 本轮同步成功结束 |
@@ -121,7 +121,7 @@ stateDiagram-v2
     AwaitingAnnounce --> Completed : PacketQuietTimeout(pending empty)
     AwaitingAnnounce --> Failed : PacketQuietTimeout(pending not empty)
     note right of AwaitingAnnounce
-      仅用于小 payload、迟到 UDP 或 fallback 收尾；<br/>
+      仅用于 object pull / chunk fallback 后的 quiet 收尾；<br/>
       catalog diff/object pull 是正确性主路径
     end note
 
@@ -269,10 +269,7 @@ func startObjectPullWorker(
 
 发送侧：
 
-1. `sendSnapshots()` 不再阻塞，而是根据 `max_datagram_bytes` 预算生成 `SendAction` 列表：
-   - 小 snapshot → `SendAnnounce`
-   - 大 snapshot → `SendAnnounce{digestOnly=true}` + `StartObjectPull`（对端会走 TCP pull）
-   - 大 snapshot 且允许 chunk → `SendAnnounce{digestOnly=true}` + 等对端发 `FETCH_ZONE{ChunkFallback:true}` 后再 `SendObjectChunk`
+1. `sendSnapshots()` 不再把 snapshot/record 塞进 ordinary `ANNOUNCE`；它只发送 bounded digest hint。完整对象通过 TCP object pull 获取，TCP 不可达且收到 `FETCH_ZONE{ChunkFallback:true}` 时再发送 `object_chunk`。
 2. 事件循环按顺序执行 action；UDP send 失败不影响状态机，只记录统计。
 
 接收侧：

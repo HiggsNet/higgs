@@ -87,9 +87,7 @@ type FetchRecord struct {
 }
 
 type Announce struct {
-	Zones     []ZoneDigest     `json:"zones,omitempty" msgpack:"z,omitempty"`
-	Snapshots []ZoneSnapshot   `json:"snapshots,omitempty" msgpack:"s,omitempty"`
-	Records   []RecordSnapshot `json:"records,omitempty" msgpack:"r,omitempty"`
+	Zones []ZoneDigest `json:"zones,omitempty" msgpack:"z,omitempty"`
 }
 
 type ObjectChunk struct {

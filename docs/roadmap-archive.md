@@ -348,9 +348,9 @@
 - [x] **3.6.3 Snapshot / record 分帧**
   - [x] 固化当前临时修复方向：Zone metadata snapshot 与 record payload 分开发送，单条 record 走独立 `RecordSnapshot` 或等价小消息
   - [x] UDP gossip 主路径只传 digest、fetch request、ack/nack、小 metadata 和小 record；单条 record value 超过 datagram 预算时不直接塞进 UDP announce
-    - 超预算 skeleton 会退化为 digest-only announce，超预算 record 会跳过 UDP payload，由 object pull 补齐
+    - 超预算对象不走 UDP announce payload，由 object pull / chunk fallback 补齐
   - [x] 对多 record / 多 zone 同步增加发送批次规划：按预算打包，优先发送 digest、parent proof、delegation/revocation，再发送 active records
-    - 已增加预算内 announce planner：先按 datagram 预算批量发送 digest，再批量发送不含 record 的 zone skeleton（authority / parent proof / delegation / revocation），最后将多个小 record 合并进预算内 record datagram；单 skeleton 或单 record 超预算时只记录并跳过 UDP payload，由 object pull 补齐
+    - 已增加预算内 announce planner；后续读写分离后收敛为只发送 digest hint，完整对象由 object pull / chunk fallback 获取
   - [x] 接收端只在完整对象通过大小/数量限制后进入验证；超预算对象必须走 object pull，不能通过大 UDP datagram 隐式传输
 
 - [x] **3.6.4 Reliable object pull**
@@ -374,7 +374,7 @@
 - [x] **3.6.6 测试与 smoke**
   - [x] 增加单测：MessagePack codec 往返兼容、未知 codec/version 拒绝、消息编码必须低于 datagram 预算；超预算 record 转 object pull，不生成超预算 UDP datagram
   - [x] 增加大小基准/回归测试：JSON 与 MessagePack 对典型 gossip 消息的 encoded size 对比，确保二进制迁移实际降低包大小；protobuf 只作为可选参考基准
-    - 已补典型消息矩阵，覆盖 Ping/Pong、FetchZone、FetchRecord、digest announce、record announce、endpoint record、metadata/delegation/revocation snapshot；MessagePack size 必须小于 JSON。
+    - 已补典型消息矩阵，覆盖 Ping/Pong、FetchZone、FetchRecord、digest announce 和 object pull 相关对象；MessagePack size 必须小于 JSON。
   - [x] 增加 object pull 集成测试：UDP digest 发现缺失后，通过 TCP pull 拉取大 snapshot/record 并收敛；TCP 不可达时记录 `large_object_unreachable`，不假装同步成功
     - 已有 object pull 单测、sync object pull 集成测试和 `make object-pull-smoke`；新增 TCP 无服务场景，验证 sync round 返回 pending zones、未写入大 record，并累计 `large_object_unreachable`。
   - [x] 增加集成测试：模拟丢弃超过 1200 bytes 的 UDP packet，`phase1-smoke`、`phase2-smoke`、`chain-relay-smoke` 仍能收敛
@@ -382,7 +382,7 @@
   - [x] 增加公网/WSL 回归 smoke：覆盖 WSL loopback 或受限 MTU 环境中 1.5KB+ snapshot 不依赖 IP fragmentation 也能同步
     - `make object-pull-smoke` 覆盖 3000-byte record 在 1200-byte datagram budget 下通过 daemon + TCP object pull 收敛，不依赖 UDP/IP fragmentation。
   - [x] 保留 `message_too_large` 故障注入测试，并补充“发送端主动不生成超预算 datagram”的断言
-    - `message_too_large` 故障注入仍在；新增 planner 回归测试逐个统计 announce wire size，确保大 record 只进入 oversized/object-pull 路径，不泄漏进 UDP datagram。
+    - `message_too_large` 故障注入仍在；新增 planner 回归测试逐个统计 announce wire size，确保 ANNOUNCE 只承载 bounded digest hint。
 
 - [x] **3.6.7 UDP chunk fallback**
   - [x] 真实公网/NAT 测试证明需要“TCP/QUIC 不可达但 verified observed UDP path 可用的大对象同步”后启用：`fetch_zone` 请求遇到超预算 zone snapshot/record 时，发送端追加 `object_chunk` UDP fallback
@@ -394,10 +394,10 @@
   - [x] 定义并实现 `CatalogSummary`：`catalog_root`、`zone_count`、可选 bounded `first_page` / `next_cursor`；`PING` / `PONG` 不再承诺携带完整 `ZoneDigest[]`。
   - [x] 新增 bounded catalog page 消息：`FETCH_CATALOG_PAGE{cursor}` 与 `CATALOG_PAGE{catalog_root, entries[], next_cursor}`；`entries[]` 必须按 `max_datagram_bytes` 打包，单页超预算时 fail closed 并输出诊断。
   - [x] 同步状态机改为 summary -> catalog page diff -> object pull：catalog root 相同直接完成；root 不同则分页 diff，发现 Zone digest 不同后再 `FETCH_ZONE` / TCP object pull。
-    - [x] `SyncSession` 拆分为 active pull FSM、只读 responder 和 hint ingress；`ANNOUNCE` 只作为 wakeup/hint 或小 payload 优化。
+    - [x] `SyncSession` 拆分为 active pull FSM、只读 responder 和 hint ingress；`ANNOUNCE` 只作为 wakeup / digest hint。
     - [x] 新增 catalog 事件/action：`CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`、`SendFetchCatalogPageAction`、`SendCatalogPageAction`；`ObjectPulling` / `ChunkFallback` 继续作为完整对象传输阶段。
     - [x] `PacketQuietTimeout` 只用于 UDP hint/page quiet 和 fallback 收尾，不能再作为“发现 digest mismatch 后才启动 object pull”的主路径；page diff 得出的不同 Zone 应立即进入 object pull。
-  - [x] 所有 list 型 UDP 字段统一预算化：Ping/Pong summary、catalog page、announce digest/records 均不得生成超过 `max_datagram_bytes` 的 datagram。
+  - [x] 所有 list 型 UDP 字段统一预算化：Ping/Pong summary、catalog page、announce digest 均不得生成超过 `max_datagram_bytes` 的 datagram。
   - [x] 测试：构造大量 Zone 导致旧 full-digest `PING` 超过 1200 bytes 的场景，验证 catalog page sync 能收敛；覆盖 cursor 稳定性、空 page、单个过长 ZonePath、page root 不一致、恶意/乱序 page。
   - [x] 文档/诊断：`sync status --verbose` / `debug peer` 显示 catalog root、zone count、最近 catalog page cursor、page oversized / rejected reason。
 

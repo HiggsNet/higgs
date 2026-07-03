@@ -58,7 +58,7 @@
 gossip 维护时尤其要避免三种混淆：
 
 - **身份与可达性混淆**：Zone trust chain / record signature 决定身份和授权；bootstrap、signed endpoint、reflector、DNS、observed UDP path 只提供联系候选。
-- **hint 与完整对象混淆**：`announce` 首先是 digest hint，可以携带小而完整的 payload；不能把多条 UDP record announce 当成事务或完整性保证。
+- **hint 与完整对象混淆**：`announce` 是 digest hint；不能把 UDP announce payload 当成事务或完整性保证。
 - **bulk path 与 fallback 混淆**：大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时兜底。
 
 ### 1.2 总体架构（核心 + 插件）
@@ -1105,7 +1105,7 @@ Packet Demuxer ──► SyncSession FSM ──► Daemon Event Loop
 | `Idle` | 没有活跃 round，等待 `SyncTimerEvent`。 |
 | `SummarySent` | 已发送本地 `CatalogSummary`，等待对端 `PONG` summary 或入站 `PING` 派生出的 summary 事件。 |
 | `CatalogDiffing` | 已发现 catalog root 不同，通过 `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` 分页比较 sorted catalog；page diff 出的不同 Zone 立即进入 object pull。 |
-| `AwaitingAnnounce` | 等待小 payload、迟到 UDP 或 fallback 收尾；不再作为 catalog diff 的 correctness baseline。 |
+| `AwaitingAnnounce` | 等待 object pull / chunk fallback 后的迟到事件与 quiet 收尾；不再作为 catalog diff 的 correctness baseline。 |
 | `ObjectPulling` | page diff 得出不同 Zone 后，异步 TCP object pull 正在拉完整 snapshot。 |
 | `ChunkFallback` | TCP object pull 失败后，已请求 `FETCH_ZONE{ChunkFallback:true}`，等待 UDP chunk 重组完成。 |
 | `Completed` / `Failed` | 终态，触发持久化、backoff 或后续 state-change hook。 |
@@ -1124,7 +1124,7 @@ SyncTimerEvent
   -> Completed / Failed
 ```
 
-对应事件包括 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，动作包括 `SendFetchCatalogPageAction`、`SendCatalogPageAction`。`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，可以携带小而完整的 opportunistic payload，但不能作为 catalog diff 或完整对象事务的 correctness baseline。收到 skeleton、digest-only announce 或部分 record 后，session 必须保持 pending；只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
+对应事件包括 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，动作包括 `SendFetchCatalogPageAction`、`SendCatalogPageAction`。`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，但不能作为 catalog diff 或完整对象事务的 correctness baseline。只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
 
 ### 7.4 MTU / TCP Pull / UDP Chunk 的集成
 
@@ -1133,7 +1133,7 @@ SyncTimerEvent
 - 发送 snapshot 超预算 → 发 digest-only `ANNOUNCE` 或 skeleton hint，接收方基于 digest mismatch 触发 TCP object pull。
 - TCP object pull 改为异步 worker pool，完成后 post `ObjectPullResultEvent`。
 - TCP 不可达 → 进入 `ChunkFallback`，发送 `FETCH_ZONE{ChunkFallback:true}`，接收 `object_chunk` 事件驱动重组。
-- 多条 UDP record announce 不能作为完整 Zone 事务；如果一个 Zone 需要拆成多条 record datagram 才能达到目标 root，正确路径是 object pull，record announce 只能作为小对象优化。
+- UDP announce 不作为完整 Zone 事务；如果一个 Zone 需要完整对象才能达到目标 root，正确路径是 object pull 或 chunk fallback。
 
 ### 7.5 状态变更与持久化边界
 

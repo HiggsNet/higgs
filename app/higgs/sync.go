@@ -1666,9 +1666,9 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 	}
 }
 
-// sendSnapshots sends zone skeletons and individual records as separate UDP
-// datagrams, respecting the datagram budget. Objects that exceed the budget
-// are skipped on the UDP path and must be retrieved via object pull.
+// sendSnapshots sends bounded zone digest hints. When allowChunks is true, it
+// also sends full zone snapshots as UDP object chunks for explicit fallback
+// requests. Ordinary ANNOUNCE no longer carries snapshot or record payloads.
 func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
 	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now(), false, nil)
 }
@@ -1683,14 +1683,15 @@ func (sr *SyncRuntime) sendSnapshots(peerID string, zones []zone.ZonePath, allow
 func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) error {
 	plan := planSnapshotDatagrams(ns, zones, transport.MaxMessageBytes(), now)
 	chunkZones := make(map[zone.ZonePath]bool)
+	if allowChunks && ns != nil {
+		for _, path := range zones {
+			if zs := ns.Zones[path]; zs != nil && !ns.IsZoneRevoked(path, now) {
+				chunkZones[path] = true
+			}
+		}
+	}
 	for _, oversized := range plan.Oversized {
-		if state != nil && allowChunks {
-			chunkZones[oversized.Zone] = true
-		}
 		recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, transport.MaxMessageBytes(), now)
-		if oversized.Object == "zone_skeleton" {
-			recordDatagramDigestOnly(state, peerID)
-		}
 		if logger != nil && logger.debugEnabled() {
 			logger.Debug("transport", "datagram_too_large", map[string]any{
 				"peer_id": peerID,
@@ -1824,17 +1825,11 @@ func planSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget 
 	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
 
 	var digests []gossip.ZoneDigest
-	var skeletons []gossip.ZoneSnapshot
-	var records []gossip.RecordSnapshot
 	var oversized []oversizedDatagramObject
 
 	for _, path := range zones {
 		zs := ns.Zones[path]
 		if zs == nil || ns.IsZoneRevoked(path, now) {
-			continue
-		}
-		snapshot, err := gossip.Snapshot(ns, path)
-		if err != nil {
 			continue
 		}
 		digest := gossip.ZoneDigest{Zone: path, RootHash: gossip.ZoneRoot(zs)}
@@ -1844,40 +1839,10 @@ func planSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget 
 			continue
 		}
 		digests = append(digests, digest)
-
-		zoneRecords := snapshotRecordMessages(snapshot)
-		snapshot.Records = nil
-		snapshot.RecordHistory = nil
-		skeletonSize, _ := gossip.WireEncodeSize(&gossip.Message{
-			Type:     gossip.MessageAnnounce,
-			Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}, Snapshots: []gossip.ZoneSnapshot{*snapshot}},
-		})
-		if skeletonSize > budget {
-			oversized = append(oversized, oversizedDatagramObject{Object: "zone_skeleton", Zone: path, Size: skeletonSize})
-		} else {
-			skeletons = append(skeletons, *snapshot)
-		}
-		for _, record := range zoneRecords {
-			key := ""
-			if record.Record != nil {
-				key = record.Record.Key
-			}
-			recordSize, _ := gossip.WireEncodeSize(&gossip.Message{
-				Type:     gossip.MessageAnnounce,
-				Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{digest}, Records: []gossip.RecordSnapshot{record}},
-			})
-			if recordSize > budget {
-				oversized = append(oversized, oversizedDatagramObject{Object: "record", Zone: path, Key: key, Size: recordSize})
-				continue
-			}
-			records = append(records, record)
-		}
 	}
 
 	var announces []*gossip.Announce
 	announces = append(announces, packDigestAnnounces(digests, budget)...)
-	announces = append(announces, packSkeletonAnnounces(digests, skeletons, budget)...)
-	announces = append(announces, packRecordAnnounces(digests, records, budget)...)
 	return snapshotDatagramPlan{Announces: announces, Oversized: oversized}
 }
 
@@ -1902,60 +1867,6 @@ func packDigestAnnounces(digests []gossip.ZoneDigest, budget int) []*gossip.Anno
 	return out
 }
 
-func packSkeletonAnnounces(digests []gossip.ZoneDigest, skeletons []gossip.ZoneSnapshot, budget int) []*gossip.Announce {
-	digestByZone := digestMap(digests)
-	var out []*gossip.Announce
-	current := &gossip.Announce{}
-	for _, skeleton := range skeletons {
-		next := cloneAnnounce(current)
-		next.Snapshots = append(next.Snapshots, skeleton)
-		next.Zones = appendZoneDigestOnce(next.Zones, digestByZone[skeleton.Zone])
-		if len(current.Snapshots) > 0 && announceWireSize(next) > budget {
-			out = append(out, current)
-			current = &gossip.Announce{
-				Zones:     appendZoneDigestOnce(nil, digestByZone[skeleton.Zone]),
-				Snapshots: []gossip.ZoneSnapshot{skeleton},
-			}
-			if announceWireSize(current) > budget {
-				current = &gossip.Announce{}
-			}
-			continue
-		}
-		current = next
-	}
-	if len(current.Snapshots) > 0 {
-		out = append(out, current)
-	}
-	return out
-}
-
-func packRecordAnnounces(digests []gossip.ZoneDigest, records []gossip.RecordSnapshot, budget int) []*gossip.Announce {
-	digestByZone := digestMap(digests)
-	var out []*gossip.Announce
-	current := &gossip.Announce{}
-	for _, record := range records {
-		next := cloneAnnounce(current)
-		next.Records = append(next.Records, record)
-		next.Zones = appendZoneDigestOnce(next.Zones, digestByZone[record.Zone])
-		if len(current.Records) > 0 && announceWireSize(next) > budget {
-			out = append(out, current)
-			current = &gossip.Announce{
-				Zones:   appendZoneDigestOnce(nil, digestByZone[record.Zone]),
-				Records: []gossip.RecordSnapshot{record},
-			}
-			if announceWireSize(current) > budget {
-				current = &gossip.Announce{}
-			}
-			continue
-		}
-		current = next
-	}
-	if len(current.Records) > 0 {
-		out = append(out, current)
-	}
-	return out
-}
-
 func announceWireSize(announce *gossip.Announce) int {
 	size, err := gossip.WireEncodeSize(&gossip.Message{Type: gossip.MessageAnnounce, Announce: announce})
 	if err != nil {
@@ -1969,9 +1880,7 @@ func cloneAnnounce(announce *gossip.Announce) *gossip.Announce {
 		return &gossip.Announce{}
 	}
 	return &gossip.Announce{
-		Zones:     append([]gossip.ZoneDigest(nil), announce.Zones...),
-		Snapshots: append([]gossip.ZoneSnapshot(nil), announce.Snapshots...),
-		Records:   append([]gossip.RecordSnapshot(nil), announce.Records...),
+		Zones: append([]gossip.ZoneDigest(nil), announce.Zones...),
 	}
 }
 
@@ -2047,16 +1956,19 @@ func (sr *SyncRuntime) sendRecord(peerID string, fetch *gossip.FetchRecord) erro
 }
 
 func sendRecordWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, fetch *gossip.FetchRecord, now time.Time, logger *appLogger) error {
-	if fetch != nil && ns.IsZoneRevoked(fetch.Zone, now) {
+	if ns == nil || fetch == nil {
 		return nil
 	}
-	record, err := gossip.RecordSnapshotFor(ns, fetch)
-	if err != nil {
+	if ns.IsZoneRevoked(fetch.Zone, now) {
+		return nil
+	}
+	zs := ns.Zones[fetch.Zone]
+	if zs == nil {
 		return nil
 	}
 	msg := &gossip.Message{
 		Type:     gossip.MessageAnnounce,
-		Announce: &gossip.Announce{Records: []gossip.RecordSnapshot{*record}},
+		Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{{Zone: fetch.Zone, RootHash: gossip.ZoneRoot(zs)}}},
 	}
 	if size, err := gossip.WireEncodeSize(msg); err != nil || size > transport.MaxMessageBytes() {
 		zoneName := zone.ZonePath("")

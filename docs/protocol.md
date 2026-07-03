@@ -18,7 +18,7 @@ Gossip 是 Higgs 在 peer 之间同步 signed Zone state 的协议。详细规�
 
 - UDP control message 必须 bounded，不能承载 unbounded list 或 bulk object。
 - 下一步目标同步模型是 `catalog_root + catalog page diff + object pull`。
-- `announce` 是 state-change hint + optional small payload，不是完整对象事务。
+- `announce` 是 state-change digest hint，不是完整对象事务。
 - 完整 Zone snapshot / record object 默认通过 TCP object pull 获取；UDP chunk fallback 只在 TCP 不可达时兜底。
 - signed endpoint record、reflector、DNS、bootstrap 和 observed UDP path 只影响可达性候选，不替代 Zone trust chain。
 - relay 只在本地 verified active state 发生实际 digest 变化后触发。
@@ -673,7 +673,7 @@ overlays:
 
 | 关注点 | 机制 |
 |---------|-----------|
-| **状态传播** | 基于 catalog 的选择性同步（`PING/PONG CatalogSummary` → `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` → TCP object pull；`ANNOUNCE` 作为 hint / 小 payload 优化） |
+| **状态传播** | 基于 catalog 的选择性同步（`PING/PONG CatalogSummary` → `FETCH_CATALOG_PAGE` / `CATALOG_PAGE` → TCP object pull；`ANNOUNCE` 作为 digest hint） |
 | **收敛** | 每次应用变更后中继；gossip 式传递 |
 | **冲突解决** | 单调版本号；时间戳仅用于审计 |
 | **信任** | 完整委托链验证，追溯到受信任的根公钥 |

@@ -55,7 +55,7 @@ func TestSendSnapshotsSkipsOversizedRecords(t *testing.T) {
 	}
 }
 
-func TestSendSnapshotsRecordsDatagramStats(t *testing.T) {
+func TestSendSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 	now := time.Unix(1000, 0)
@@ -91,12 +91,8 @@ func TestSendSnapshotsRecordsDatagramStats(t *testing.T) {
 	if err := sendSnapshotsWithStats(state, state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false, nil); err != nil {
 		t.Fatalf("sendSnapshotsWithStats: %v", err)
 	}
-	stats := state.SyncPeers["node-b.catofes."].DatagramStats
-	if stats == nil || stats.TooLargeDropped == 0 {
-		t.Fatalf("datagram stats = %#v, want too_large_dropped", stats)
-	}
-	if stats.LastTooLargeObject != "record" || stats.LastTooLargeZone != "node-b.catofes." || stats.LastTooLargeKey != "bigdata" {
-		t.Fatalf("last too-large stats = %#v", stats)
+	if peer, ok := state.SyncPeers["node-b.catofes."]; ok && peer.DatagramStats != nil && peer.DatagramStats.TooLargeDropped != 0 {
+		t.Fatalf("datagram stats = %#v, want no record payload accounting for hint-only announce", peer.DatagramStats)
 	}
 }
 
@@ -152,7 +148,7 @@ func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
 	}
 }
 
-func TestPlanSnapshotDatagramsBatchesRecordsWithinBudget(t *testing.T) {
+func TestPlanSnapshotDatagramsEmitsDigestHintsOnly(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 	now := time.Unix(1000, 0)
@@ -178,27 +174,20 @@ func TestPlanSnapshotDatagramsBatchesRecordsWithinBudget(t *testing.T) {
 	if len(plan.Oversized) != 0 {
 		t.Fatalf("oversized = %#v, want none", plan.Oversized)
 	}
-	if len(plan.Announces) < 3 {
-		t.Fatalf("announces = %d, want digest, skeleton, records", len(plan.Announces))
+	if len(plan.Announces) != 1 {
+		t.Fatalf("announces = %d, want one digest hint batch", len(plan.Announces))
 	}
 	if got := len(plan.Announces[0].Zones); got == 0 {
 		t.Fatalf("first announce zones = %d, want digest batch", got)
 	}
-	var recordBatchFound bool
 	for _, announce := range plan.Announces {
-		if len(announce.Records) >= 2 {
-			recordBatchFound = true
-		}
 		if size := announceWireSize(announce); size > gossip.DefaultDatagramBudget {
 			t.Fatalf("announce size = %d exceeds budget", size)
 		}
 	}
-	if !recordBatchFound {
-		t.Fatalf("plan did not batch multiple records: %#v", plan.Announces)
-	}
 }
 
-func TestPlanSnapshotDatagramsNeverEmitsOversizedDatagrams(t *testing.T) {
+func TestPlanSnapshotDatagramsIgnoresRecordPayloadSize(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 	now := time.Unix(1000, 0)
@@ -220,13 +209,10 @@ func TestPlanSnapshotDatagramsNeverEmitsOversizedDatagrams(t *testing.T) {
 	}
 
 	plan := planSnapshotDatagrams(state.Network, []zone.ZonePath{"node-b.catofes."}, gossip.DefaultDatagramBudget, now)
-	if len(plan.Oversized) == 0 {
-		t.Fatalf("oversized = none, want large record to be deferred to object pull")
+	if len(plan.Oversized) != 0 {
+		t.Fatalf("oversized = %#v, want none because ANNOUNCE only carries digest hints", plan.Oversized)
 	}
 	for _, announce := range plan.Announces {
-		if len(announce.Records) > 0 {
-			t.Fatalf("oversized record leaked into UDP announce: %#v", announce.Records)
-		}
 		if size := announceWireSize(announce); size > gossip.DefaultDatagramBudget {
 			t.Fatalf("announce size = %d exceeds budget %d", size, gossip.DefaultDatagramBudget)
 		}

@@ -3,9 +3,7 @@ package gossip
 import (
 	"bytes"
 	"crypto/ed25519"
-	"net"
 	"testing"
-	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
@@ -153,20 +151,6 @@ func TestMsgpackSmallerThanJSON(t *testing.T) {
 		Timestamp: 1717171717,
 		Announce: &Announce{
 			Zones: []ZoneDigest{{Zone: "catofes.", RootHash: make([]byte, 32)}},
-			Records: []RecordSnapshot{{
-				Zone: "catofes.",
-				Record: &zone.Record{
-					Zone:      "catofes.",
-					Key:       "identity",
-					Type:      "node.identity",
-					Value:     []byte("node-a"),
-					ValueHash: make([]byte, 32),
-					Version:   1,
-					Timestamp: 1717171717,
-					SignedBy:  make([]byte, 32),
-					Signature: make([]byte, 64),
-				},
-			}},
 		},
 	}
 	jsonData, _ := encodeMessage(jsonCodec{}, message)
@@ -179,18 +163,6 @@ func TestMsgpackSmallerThanJSON(t *testing.T) {
 
 func TestTypicalMessagePackSizesBeatJSON(t *testing.T) {
 	digest := ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
-	record := sampleWireRecord("identity", []byte("node-a"))
-	endpointValue := EndpointRecordBytes([]LocalEndpoint{{
-		IP:       net.ParseIP("192.0.2.10"),
-		Port:     33434,
-		Scope:    "global",
-		Priority: 100,
-		Source:   SourceAdvertise,
-	}}, time.Unix(1717171717, 0))
-	endpointRecord := sampleWireRecord(EndpointRecordKeyUDP, endpointValue)
-	delegation := sampleWireDelegation("node-b.catofes.")
-	revocation := sampleWireRevocation("node-b.catofes.")
-	authority := sampleWireAuthority("catofes.")
 
 	cases := []struct {
 		name    string
@@ -216,38 +188,6 @@ func TestTypicalMessagePackSizesBeatJSON(t *testing.T) {
 			name:    "announce digest",
 			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}}),
 		},
-		{
-			name:    "announce record",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: record}}}),
-		},
-		{
-			name:    "announce endpoint record",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: endpointRecord}}}),
-		},
-		{
-			name: "announce metadata snapshot",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
-				Zone:        "catofes.",
-				Authority:   authority,
-				ParentProof: []*zone.Delegation{delegation},
-			}}}),
-		},
-		{
-			name: "announce delegation snapshot",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
-				Zone:        "catofes.",
-				Authority:   authority,
-				Delegations: map[zone.ZonePath]*zone.Delegation{"node-b.catofes.": delegation},
-			}}}),
-		},
-		{
-			name: "announce revocation snapshot",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
-				Zone:        "catofes.",
-				Authority:   authority,
-				Revocations: map[zone.ZonePath]*zone.DelegationRevocation{"node-b.catofes.": revocation},
-			}}}),
-		},
 	}
 
 	for _, tc := range cases {
@@ -268,18 +208,6 @@ func TestTypicalMessagePackSizesBeatJSON(t *testing.T) {
 
 func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 	digest := ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
-	record := sampleWireRecord("identity", []byte("node-a"))
-	endpointValue := EndpointRecordBytes([]LocalEndpoint{{
-		IP:       net.ParseIP("192.0.2.10"),
-		Port:     33434,
-		Scope:    "global",
-		Priority: 100,
-		Source:   SourceAdvertise,
-	}}, time.Unix(1717171717, 0))
-	endpointRecord := sampleWireRecord(EndpointRecordKeyUDP, endpointValue)
-	delegation := sampleWireDelegation("node-b.catofes.")
-	revocation := sampleWireRevocation("node-b.catofes.")
-	authority := sampleWireAuthority("catofes.")
 
 	cases := []struct {
 		name    string
@@ -294,36 +222,8 @@ func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
 		},
 		{
-			name: "metadata snapshot",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
-				Zone:        "catofes.",
-				Authority:   authority,
-				ParentProof: []*zone.Delegation{delegation},
-			}}}),
-		},
-		{
-			name:    "single record",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: record}}}),
-		},
-		{
-			name:    "endpoint record",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Records: []RecordSnapshot{{Zone: "node-a.catofes.", Record: endpointRecord}}}),
-		},
-		{
-			name: "delegation snapshot",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
-				Zone:        "catofes.",
-				Authority:   authority,
-				Delegations: map[zone.ZonePath]*zone.Delegation{"node-b.catofes.": delegation},
-			}}}),
-		},
-		{
-			name: "revocation snapshot",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}, Snapshots: []ZoneSnapshot{{
-				Zone:        "catofes.",
-				Authority:   authority,
-				Revocations: map[zone.ZonePath]*zone.DelegationRevocation{"node-b.catofes.": revocation},
-			}}}),
+			name:    "announce digest",
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}}),
 		},
 	}
 
