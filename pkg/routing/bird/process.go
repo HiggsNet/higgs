@@ -2,6 +2,8 @@ package bird
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +30,9 @@ type ProcessManager interface {
 	// IsRunning reports whether the currently managed BIRD process is alive.
 	// The implementation is expected to hold the spec it was started with.
 	IsRunning(ctx context.Context) bool
+
+	// LastExit returns and clears the latest observed managed-process exit.
+	LastExit() *ProcessExit
 }
 
 // ExecProcessManager implements ProcessManager by executing BIRD and ip
@@ -39,6 +44,7 @@ type ExecProcessManager struct {
 	mu   sync.Mutex
 	pid  int
 	spec BirdInstanceSpec
+	exit *ProcessExit
 
 	// socketWaitTimeout is the maximum time to wait for the BIRD control
 	// socket to appear after Start. Exported for tests.
@@ -118,7 +124,11 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 	pm.spec = spec
 	pm.mu.Unlock()
 
-	go func() { _ = cmd.Wait() }()
+	startedPID := cmd.Process.Pid
+	go func() {
+		err := cmd.Wait()
+		pm.recordExitIfCurrent(startedPID, err)
+	}()
 
 	if err := pm.waitForSocket(ctx, spec.ControlSocketPath); err != nil {
 		_ = cmd.Process.Kill()
@@ -181,9 +191,20 @@ func (pm *ExecProcessManager) Stop(ctx context.Context, spec BirdInstanceSpec) e
 // IsRunning reports whether the currently managed BIRD process is alive.
 func (pm *ExecProcessManager) IsRunning(ctx context.Context) bool {
 	pm.mu.Lock()
+	pm.reapManagedProcessLocked()
 	pid := pm.pid
 	pm.mu.Unlock()
 	return pid > 0 && processIsRunning(pid)
+}
+
+// LastExit returns and clears the latest observed managed BIRD process exit.
+func (pm *ExecProcessManager) LastExit() *ProcessExit {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.reapManagedProcessLocked()
+	exit := pm.exit
+	pm.exit = nil
+	return exit
 }
 
 func (pm *ExecProcessManager) resolveBinary() (string, error) {
@@ -221,9 +242,103 @@ func (pm *ExecProcessManager) resetState() {
 func (pm *ExecProcessManager) clearManagedState(spec BirdInstanceSpec) {
 	pm.resetState()
 
-	_ = os.Remove(spec.PIDFilePath)
-	_ = os.Remove(spec.ControlSocketPath)
-	_ = os.Remove(spec.ConfigPath)
+	if birdResourceCleanupAllowed(spec.Owner, "pid_file") {
+		_ = os.Remove(spec.PIDFilePath)
+	}
+	if birdResourceCleanupAllowed(spec.Owner, "control_socket") {
+		_ = os.Remove(spec.ControlSocketPath)
+	}
+	if birdResourceCleanupAllowed(spec.Owner, "config_file") {
+		_ = os.Remove(spec.ConfigPath)
+	}
+}
+
+func (pm *ExecProcessManager) recordExitIfCurrent(pid int, err error) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.pid != pid {
+		return
+	}
+	pm.pid = 0
+	pm.exit = &ProcessExit{PID: pid, Error: exitErrorString(err)}
+}
+
+func (pm *ExecProcessManager) reapManagedProcessLocked() {
+	if pm.pid <= 0 {
+		return
+	}
+	var status syscall.WaitStatus
+	var usage syscall.Rusage
+	pid, err := syscall.Wait4(pm.pid, &status, syscall.WNOHANG, &usage)
+	if pid == 0 || err == syscall.ECHILD {
+		return
+	}
+	if err != nil {
+		return
+	}
+	pm.pid = 0
+	pm.exit = &ProcessExit{PID: pid, Error: waitStatusString(status)}
+}
+
+func exitErrorString(err error) string {
+	if err == nil {
+		return "exited"
+	}
+	return err.Error()
+}
+
+func waitStatusString(status syscall.WaitStatus) string {
+	switch {
+	case status.Exited():
+		return fmt.Sprintf("exit status %d", status.ExitStatus())
+	case status.Signaled():
+		return fmt.Sprintf("signal: %s", status.Signal())
+	default:
+		return "exited"
+	}
+}
+
+func birdResourceCleanupAllowed(owner BirdResourceOwner, resource string) bool {
+	if owner.Manager != "higgs" || owner.InstanceID == "" || owner.NetNSName == "" || owner.Token == "" {
+		return false
+	}
+	switch resource {
+	case "control_socket":
+		return owner.ControlSocketToken == ResourceToken(owner, resource)
+	case "pid_file":
+		return owner.PIDFileToken == ResourceToken(owner, resource)
+	case "config_file":
+		return owner.ConfigFileToken == ResourceToken(owner, resource)
+	case "route_table":
+		return owner.RouteTableToken == ResourceToken(owner, resource)
+	case "rule":
+		return owner.RuleToken == ResourceToken(owner, resource)
+	default:
+		return false
+	}
+}
+
+// OwnerToken derives the base token for one managed BIRD instance.
+func OwnerToken(instanceID, netnsName string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		"higgs.bird.owner.v1",
+		instanceID,
+		netnsName,
+		"owner",
+	}, "\x00")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// ResourceToken derives a token for one concrete managed BIRD resource.
+func ResourceToken(owner BirdResourceOwner, resource string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		"higgs.bird.owner.v1",
+		owner.InstanceID,
+		owner.NetNSName,
+		owner.Token,
+		resource,
+	}, "\x00")))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (pm *ExecProcessManager) ensureNamedNetNS(ctx context.Context, name string) error {

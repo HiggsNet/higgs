@@ -66,6 +66,11 @@ type BirdInstanceSpec struct {
 	PIDFilePath       string `yaml:"pid_file" json:"pid_file"`
 	ConfigPath        string `yaml:"config_path" json:"config_path"`
 
+	// Owner proves which Higgs-managed runtime resources may be cleaned up
+	// during teardown. Empty tokens retain legacy process teardown but skip
+	// path/resource cleanup.
+	Owner BirdResourceOwner `yaml:"owner,omitempty" json:"owner,omitempty"`
+
 	// TableID is the kernel routing table to synchronize with. "main" means
 	// the default table for the netns. Non-main values are passed to BIRD as
 	// "kernel table <id>".
@@ -120,6 +125,27 @@ type BirdInstanceSpec struct {
 	// StaticRoutes specifies static routes to announce via the upstream
 	// interface. Each prefix is routed via the upstream interface name.
 	StaticRoutes []StaticRouteSpec `yaml:"static_routes,omitempty" json:"static_routes,omitempty"`
+}
+
+// BirdResourceOwner carries per-resource ownership tokens for managed BIRD
+// runtime artifacts. Separate tokens keep cleanup decisions scoped to the
+// concrete resource being removed.
+type BirdResourceOwner struct {
+	Manager            string `yaml:"manager,omitempty" json:"manager,omitempty"`
+	InstanceID         string `yaml:"instance_id,omitempty" json:"instance_id,omitempty"`
+	NetNSName          string `yaml:"netns_name,omitempty" json:"netns_name,omitempty"`
+	Token              string `yaml:"token,omitempty" json:"token,omitempty"`
+	ControlSocketToken string `yaml:"control_socket_token,omitempty" json:"control_socket_token,omitempty"`
+	PIDFileToken       string `yaml:"pid_file_token,omitempty" json:"pid_file_token,omitempty"`
+	ConfigFileToken    string `yaml:"config_file_token,omitempty" json:"config_file_token,omitempty"`
+	RouteTableToken    string `yaml:"route_table_token,omitempty" json:"route_table_token,omitempty"`
+	RuleToken          string `yaml:"rule_token,omitempty" json:"rule_token,omitempty"`
+}
+
+// ProcessExit records a managed BIRD process exit observed by waitpid/Wait.
+type ProcessExit struct {
+	PID   int    `json:"pid,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // UpstreamSpec configures a veth-based Babel peering with the main network.

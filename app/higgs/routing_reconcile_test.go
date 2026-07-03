@@ -36,6 +36,7 @@ type fakeBirdProcessManager struct {
 	stopSpec  bird.BirdInstanceSpec
 	stopErr   error
 	running   bool
+	lastExit  *bird.ProcessExit
 }
 
 func (f *fakeBirdProcessManager) Start(ctx context.Context, spec bird.BirdInstanceSpec) error {
@@ -53,6 +54,12 @@ func (f *fakeBirdProcessManager) Stop(ctx context.Context, spec bird.BirdInstanc
 
 func (f *fakeBirdProcessManager) IsRunning(ctx context.Context) bool {
 	return f.running
+}
+
+func (f *fakeBirdProcessManager) LastExit() *bird.ProcessExit {
+	exit := f.lastExit
+	f.lastExit = nil
+	return exit
 }
 
 type fakeBirdClient struct {
@@ -593,6 +600,131 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	inst := latest.BirdInstances["h2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("external instance state = %+v, want running", inst)
+	}
+}
+
+func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false, lastExit: &bird.ProcessExit{PID: 1234, Error: "signal: killed"}}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	if pm.started {
+		t.Fatalf("managed BIRD should not restart while crash backoff is active")
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["h2"]
+	if inst == nil {
+		t.Fatalf("missing bird instance state")
+	}
+	if inst.State != birdInstanceStateDegraded {
+		t.Fatalf("State = %q, want degraded", inst.State)
+	}
+	if inst.FailureCount != 1 {
+		t.Fatalf("FailureCount = %d, want 1", inst.FailureCount)
+	}
+	if inst.BackoffUntilUnix != now.Add(time.Second).Unix() {
+		t.Fatalf("BackoffUntilUnix = %d, want %d", inst.BackoffUntilUnix, now.Add(time.Second).Unix())
+	}
+	if !strings.Contains(inst.LastExit, "pid 1234") {
+		t.Fatalf("LastExit = %q, want pid detail", inst.LastExit)
+	}
+	if inst.Owner.ControlSocketToken == "" || inst.Owner.PIDFileToken == "" || inst.Owner.RouteTableToken == "" || inst.Owner.RuleToken == "" {
+		t.Fatalf("owner tokens are incomplete: %+v", inst.Owner)
+	}
+}
+
+func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	state.BirdInstances = map[string]*BirdInstanceState{
+		"h2": {
+			NetNSName:        "h2",
+			State:            birdInstanceStateDegraded,
+			FailureCount:     1,
+			BackoffUntilUnix: now.Add(-time.Second).Unix(),
+			LastError:        "bird restart backoff active",
+			LastExit:         "pid 1234: signal: killed",
+		},
+	}
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	if !pm.started {
+		t.Fatalf("managed BIRD should restart after crash backoff expires")
+	}
+	if pm.startSpec.Owner.RouteTableToken == "" || pm.startSpec.Owner.RuleToken == "" {
+		t.Fatalf("start spec owner tokens are incomplete: %+v", pm.startSpec.Owner)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["h2"]
+	if inst == nil || inst.State != birdInstanceStateRunning {
+		t.Fatalf("bird instance = %+v, want running", inst)
+	}
+	if inst.FailureCount != 0 || inst.BackoffUntilUnix != 0 || inst.LastExit != "" {
+		t.Fatalf("restart did not clear crash state: %+v", inst)
 	}
 }
 

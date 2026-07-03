@@ -793,10 +793,10 @@
     - [x] 配置热重载：filter/接口参数变化时重写 `bird.conf`，执行 `birdc configure`（当前先使用普通 configure；后续可优化为 soft + reload in/out）。
     - [x] 优雅退出：Stop 先发 `birdc down`，再 SIGTERM，再删 Higgs-owned pid/socket/config。
       - 2026-07-03 已把 daemon shutdown 接到 managed BIRD teardown：退出时只对本 daemon 已持有的 managed process manager 调用 Stop，`mode=external` 不触碰。
-    - [ ] 崩溃恢复/backoff：waitpid + 崩溃重拉起留到 Phase 5 后续打磨 / Phase 6。
+    - [x] 崩溃恢复/backoff：`ExecProcessManager` 通过 `waitpid`/`Wait` 记录 managed process exit，daemon reconcile 按指数 backoff 标记 degraded，到期后自动重拉起并清理 crash 状态。
   - [x] external 模式骨架：daemon 只校验配置并连接现有 socket，不杀进程。
   - [x] preflight：`bird.BirdPreflight` 检测 bird/birdc/ip/ip netns 可用性；`higgs debug preflight` 后续统一接入。
-  - [ ] owner token 细化到 control socket/pid/route table/rule 的 teardown 清理规则后续随策略路由一起补齐。
+  - [x] owner token 细化到 control socket/pid/config/route table/rule：`BirdResourceOwner` 持久化 per-resource token，Stop 只清理 owner 校验通过的 runtime 文件；route table/rule token 先进入 spec/state，为后续策略路由清理复用同一归属边界。
 
 - [x] **5.1 Babel daemon control client 与 adapter**
   - [x] 在 `pkg/routing/bird/` 实现 BIRD adapter：config generator、birdc client、process manager、observed state parser。

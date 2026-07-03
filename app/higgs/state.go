@@ -10,6 +10,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -128,15 +129,19 @@ type admissionState struct {
 }
 
 type BirdInstanceState struct {
-	NetNSName      string   `json:"netns_name"`
-	Overlays       []string `json:"overlays,omitempty"`
-	ConfigPath     string   `json:"config_path"`
-	ControlSocket  string   `json:"control_socket"`
-	PIDFile        string   `json:"pid_file"`
-	RouterID       uint32   `json:"router_id"`
-	LastConfigHash string   `json:"last_config_hash"`
-	LastError      string   `json:"last_error"`
-	State          string   `json:"state"` // pending, running, degraded, error
+	NetNSName        string                 `json:"netns_name"`
+	Overlays         []string               `json:"overlays,omitempty"`
+	ConfigPath       string                 `json:"config_path"`
+	ControlSocket    string                 `json:"control_socket"`
+	PIDFile          string                 `json:"pid_file"`
+	RouterID         uint32                 `json:"router_id"`
+	Owner            bird.BirdResourceOwner `json:"owner,omitempty"`
+	LastConfigHash   string                 `json:"last_config_hash"`
+	LastError        string                 `json:"last_error"`
+	LastExit         string                 `json:"last_exit,omitempty"`
+	FailureCount     int                    `json:"failure_count,omitempty"`
+	BackoffUntilUnix int64                  `json:"backoff_until_unix,omitempty"`
+	State            string                 `json:"state"` // pending, running, degraded, error
 }
 
 func cloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstanceState {

@@ -17,8 +17,6 @@
 **状态：** 第一版 BIRD/Babel、route authorization、per-netns BIRD 和 dry-run smoke 已完成；完整展开清单见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
 
 **剩余后续：**
-- [ ] managed BIRD 崩溃恢复/backoff：daemon shutdown teardown 已补；剩余 `waitpid` + 崩溃重拉起。
-- [ ] owner token 细化到 control socket/pid/route table/rule 的 teardown 清理规则。
 - [ ] route-table auditor 作为可选兜底。
 - [ ] `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出。
 - [ ] 多 overlay 共享同一 netns 时的 table/rule 隔离。

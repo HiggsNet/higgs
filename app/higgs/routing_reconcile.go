@@ -25,6 +25,7 @@ const (
 	birdInstanceStateRunning        = "running"
 	birdInstanceStateDegraded       = "degraded"
 	birdInstanceStateError          = "error"
+	maxRoutingCrashBackoff          = time.Minute
 )
 
 // birdProcessManager is the subset of bird.ProcessManager used by the daemon.
@@ -32,6 +33,7 @@ type birdProcessManager interface {
 	Start(ctx context.Context, spec bird.BirdInstanceSpec) error
 	Stop(ctx context.Context, spec bird.BirdInstanceSpec) error
 	IsRunning(ctx context.Context) bool
+	LastExit() *bird.ProcessExit
 }
 
 // vethManager is the subset of bird.VethManager used by the daemon.
@@ -147,7 +149,7 @@ func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNS
 	return out
 }
 
-func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, _ time.Time) error {
+func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time) error {
 	netnsName := inst.NetNS
 	instState := d.Sync.State.BirdInstances[netnsName]
 	if instState == nil {
@@ -170,6 +172,8 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
+	instState.Owner = birdOwnerForInstance(inst, netnsName)
+	spec.Owner = instState.Owner
 
 	// Ensure veth pair for upstream if configured and create_veth is true.
 	if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.CreateVeth {
@@ -241,7 +245,21 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 		if pm == nil {
 			pm = d.routingProcessManagerForNetNS(netnsName)
 		}
-		if !pm.IsRunning(ctx) {
+		running := pm.IsRunning(ctx)
+		if exit := pm.LastExit(); exit != nil {
+			instState.LastExit = formatBirdProcessExit(exit)
+			instState.FailureCount++
+			instState.BackoffUntilUnix = now.Add(routingCrashBackoff(instState.FailureCount)).Unix()
+			instState.State = birdInstanceStateDegraded
+			instState.LastError = fmt.Sprintf("bird process exited: %s", instState.LastExit)
+			running = false
+		}
+		if !running && instState.BackoffUntilUnix > now.Unix() {
+			instState.State = birdInstanceStateDegraded
+			instState.LastError = fmt.Sprintf("bird restart backoff active until %s", time.Unix(instState.BackoffUntilUnix, 0).Format(time.RFC3339))
+			return nil
+		}
+		if !running {
 			if err := pm.Start(ctx, spec); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastError = err.Error()
@@ -250,6 +268,9 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 				}
 			} else {
 				instState.State = birdInstanceStateRunning
+				instState.FailureCount = 0
+				instState.BackoffUntilUnix = 0
+				instState.LastExit = ""
 			}
 		} else if configChanged {
 			client := d.newBirdClient(spec.ControlSocketPath)
@@ -406,6 +427,7 @@ func (d *DaemonService) stopManagedBirdInstances(ctx context.Context) error {
 			PIDFilePath:       inst.PIDFile,
 			ConfigPath:        inst.ConfigFile,
 			Mode:              mode,
+			Owner:             birdOwnerForInstance(inst, inst.NetNS),
 		}
 		if err := pm.Stop(ctx, spec); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("stop bird for netns %q: %w", inst.NetNS, err)
@@ -593,6 +615,45 @@ func assignmentPrefixes(ars *routing.AuthorizedRouteSet) []netip.Prefix {
 		out = append(out, prefix)
 	}
 	return out
+}
+
+func birdOwnerForInstance(inst RoutingInstance, netnsName string) bird.BirdResourceOwner {
+	owner := bird.BirdResourceOwner{
+		Manager:    "higgs",
+		InstanceID: inst.ID,
+		NetNSName:  netnsName,
+	}
+	owner.Token = bird.OwnerToken(owner.InstanceID, owner.NetNSName)
+	owner.ControlSocketToken = bird.ResourceToken(owner, "control_socket")
+	owner.PIDFileToken = bird.ResourceToken(owner, "pid_file")
+	owner.ConfigFileToken = bird.ResourceToken(owner, "config_file")
+	owner.RouteTableToken = bird.ResourceToken(owner, "route_table")
+	owner.RuleToken = bird.ResourceToken(owner, "rule")
+	return owner
+}
+
+func routingCrashBackoff(failureCount int) time.Duration {
+	if failureCount < 1 {
+		failureCount = 1
+	}
+	backoff := time.Duration(1<<minInt(failureCount-1, 6)) * time.Second
+	if backoff > maxRoutingCrashBackoff {
+		return maxRoutingCrashBackoff
+	}
+	return backoff
+}
+
+func formatBirdProcessExit(exit *bird.ProcessExit) string {
+	if exit == nil {
+		return ""
+	}
+	if exit.PID > 0 && exit.Error != "" {
+		return fmt.Sprintf("pid %d: %s", exit.PID, exit.Error)
+	}
+	if exit.PID > 0 {
+		return fmt.Sprintf("pid %d", exit.PID)
+	}
+	return exit.Error
 }
 
 func rootTrustHash(ns *zone.NetworkState) []byte {

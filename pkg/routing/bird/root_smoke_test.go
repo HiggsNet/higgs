@@ -54,6 +54,7 @@ func TestExecProcessManagerRootSmoke(t *testing.T) {
 		MetricStaged:      200,
 		MetricDraining:    500,
 	}
+	spec = withTestBirdOwner(spec)
 
 	// Generate a minimal BIRD config.
 	gen := DefaultConfigGenerator{}
@@ -185,6 +186,7 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 		MetricStaged:      200,
 		MetricDraining:    500,
 	}
+	specA = withTestBirdOwner(specA)
 	specB := BirdInstanceSpec{
 		RouterID:          0x0a630102, // 10.99.1.2
 		NetNSName:         nsB,
@@ -199,6 +201,7 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 		MetricStaged:      200,
 		MetricDraining:    500,
 	}
+	specB = withTestBirdOwner(specB)
 
 	// The BIRD config generator normally targets "hgs*" tunnel interfaces.
 	// For the root smoke we use a raw config that works with a regular veth.
@@ -392,6 +395,7 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 		TableID:           "main",
 		InterfacePatterns: []string{vethOverlay},
 	}
+	overlaySpec = withTestBirdOwner(overlaySpec)
 	overlayPM := NewExecProcessManager("")
 	overlayPM.socketWaitTimeout = 5 * time.Second
 	if err := overlayPM.Start(ctx, overlaySpec); err != nil {
@@ -464,6 +468,22 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 // - Uses the given interface for Babel (without type tunnel)
 // - Announces the given prefix via protocol static
 // - Exports the static route to Babel and imports Babel routes to kernel
+func withTestBirdOwner(spec BirdInstanceSpec) BirdInstanceSpec {
+	owner := BirdResourceOwner{
+		Manager:    "higgs",
+		InstanceID: spec.NetNSName,
+		NetNSName:  spec.NetNSName,
+	}
+	owner.Token = OwnerToken(owner.InstanceID, owner.NetNSName)
+	owner.ControlSocketToken = ResourceToken(owner, "control_socket")
+	owner.PIDFileToken = ResourceToken(owner, "pid_file")
+	owner.ConfigFileToken = ResourceToken(owner, "config_file")
+	owner.RouteTableToken = ResourceToken(owner, "route_table")
+	owner.RuleToken = ResourceToken(owner, "rule")
+	spec.Owner = owner
+	return spec
+}
+
 func generateMinimalBabelConfig(spec BirdInstanceSpec, iface, announcePrefix string) string {
 	routerID := fmt.Sprintf("%d.%d.%d.%d",
 		(spec.RouterID>>24)&0xff,

@@ -45,6 +45,17 @@ func fakeBirdBinary(t *testing.T) string {
 }
 
 func managedSpec(tmp string) BirdInstanceSpec {
+	owner := BirdResourceOwner{
+		Manager:    "higgs",
+		InstanceID: "test-overlay",
+		NetNSName:  "test-overlay",
+	}
+	owner.Token = OwnerToken(owner.InstanceID, owner.NetNSName)
+	owner.ControlSocketToken = ResourceToken(owner, "control_socket")
+	owner.PIDFileToken = ResourceToken(owner, "pid_file")
+	owner.ConfigFileToken = ResourceToken(owner, "config_file")
+	owner.RouteTableToken = ResourceToken(owner, "route_table")
+	owner.RuleToken = ResourceToken(owner, "rule")
 	return BirdInstanceSpec{
 		Mode:              BirdModeManaged,
 		NetNSName:         "test-overlay",
@@ -52,6 +63,7 @@ func managedSpec(tmp string) BirdInstanceSpec {
 		ConfigPath:        filepath.Join(tmp, "bird.conf"),
 		ControlSocketPath: filepath.Join(tmp, "bird.ctl"),
 		PIDFilePath:       filepath.Join(tmp, "bird.pid"),
+		Owner:             owner,
 	}
 }
 
@@ -237,6 +249,37 @@ func TestExecProcessManagerStopIssuesCorrectCommands(t *testing.T) {
 	for _, p := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be removed", p)
+		}
+	}
+}
+
+func TestExecProcessManagerStopSkipsCleanupWithoutOwnerTokens(t *testing.T) {
+	tmp := t.TempDir()
+	spec := managedSpec(tmp)
+	spec.Owner = BirdResourceOwner{}
+
+	for path, contents := range map[string]string{
+		spec.ConfigPath:        "# config",
+		spec.ControlSocketPath: "",
+		spec.PIDFilePath:       "99999\n",
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	pm := NewExecProcessManager("")
+	pm.runner = (&mockRunner{fallback: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "false")
+	}}).run
+	pm.pid = 99999
+
+	if err := pm.Stop(context.Background(), spec); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+	for _, p := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("expected %s to remain without owner token: %v", p, err)
 		}
 	}
 }
