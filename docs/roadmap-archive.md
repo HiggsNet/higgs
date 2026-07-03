@@ -876,6 +876,20 @@
   - [x] endpoint 地址优先级与可达性探测修复：`Transport.Send()` 记录 per-address success/failure/backoff，`updateDiscoveredPeers()` 支持 source order，loopback smoke 自动抑制公网 endpoint 发布。
   - [x] 文档同步到 `docs/phase6-event-driven-design.md`、`docs/design.md` 和 `docs/protocol.md`。
 
+- [x] **6.0.x Gossip SyncSession 读写分离 / hint 语义重构**
+  - 设计文档：`docs/new/gossip.md#15-当前结构读写分离与-hint-语义`。
+  - [x] 把 active pull FSM、只读 responder 和 hint ingress 拆开，避免一个 per-peer `SyncSession.State` 同时表达“我正在读对方”和“对方正在读我”。
+  - [x] Active pull FSM 收敛为 `PING/PONG Summary -> FETCH_CATALOG_PAGE/CATALOG_PAGE -> TCP object pull -> UDP chunk fallback -> apply`。
+  - [x] Responder 只响应 `FETCH_CATALOG_PAGE`、TCP object pull 和必要的 UDP chunk fallback；读取本地 verified state，不改变 active pull FSM 状态。
+  - [x] Hint ingress 只处理 `ANNOUNCE` / relay hint：记录 digest/source/time，按需唤醒 active pull；不依赖 UDP announce payload 完成同步。
+  - [x] 回归测试覆盖：`SummarySent`/等待 `PONG` 时收到 `FETCH_CATALOG_PAGE` 或普通读取请求，active session 不会被 read-only responder 污染，后续 `PONG` 继续处理。
+  - [x] 把 `FetchCatalogPageReceivedEvent` 从 `SyncSession.OnEvent` 中迁出，改为 daemon 只读 responder action/handler；保留 catalog page budget、诊断和发送错误记录。
+  - [x] 把普通 `FETCH_ZONE` 兼容响应从主 FSM 迁出；现代路径优先走 TCP object pull，UDP `FETCH_ZONE{chunk_fallback:true}` 仅作为 TCP 不可达后的 chunk fallback 请求。
+  - [x] 将 `ANNOUNCE` 处理收敛为 hint：不再把 UDP announce payload 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
+  - [x] 删除旧兼容字段路径：现代 event-loop 不再使用旧 Ping/Pong digest/fetch 字段、反向 fetch 动作、服务中状态和 eager object pull；wire codec 与旧 `sync.go` receive 路径已随 6.0 事件循环收尾删除。
+  - [x] 更新观测面：`sync status --verbose` / `debug peer` 可区分 active pull、read-only responder、hint suppressed/accepted、object pull/chunk fallback 结果；per-peer `sync_flow` / debug 展开字段包含 `active_pull_state`、`active_pull_last_event`、hint accepted/suppressed、read-only responder kind/zone/last。
+  - [x] 验证：`go test ./app/higgs -run 'TestSyncStatusVerboseOutput|TestDebugPeerOutput|TestDaemonEventLoopAnnounceIsHint|TestDaemonEventLoopResponderDoesNotStealActiveSession'`、`go test ./app/higgs ./pkg/core/gossip`、`make check`。
+
 - [x] **6.1 IPAM 闭环**
   - [x] 实现 pool/assignment 分离、pool enforcement、assignment 重叠检测和 `PermAllocateIP` 权限模型。
   - [x] 增加 `higgs ipam` CLI：pool create、assign、revoke assignment/pool、assigned 查询。

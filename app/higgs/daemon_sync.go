@@ -212,11 +212,13 @@ func (d *DaemonService) handleAnnounceHint(peerID string) error {
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || peerID == "" {
 		return nil
 	}
+	now := d.Sync.now()
 	if existing, ok := d.syncSessions[peerID]; ok && existing != nil && !existing.Done() {
 		if d.pendingSyncHints == nil {
 			d.pendingSyncHints = make(map[string]bool)
 		}
 		d.pendingSyncHints[peerID] = true
+		recordSyncHint(d.Sync.State, peerID, "announce_hint", "session_active", false, now)
 		d.logDebug("sync", "announce_hint_suppressed", map[string]any{
 			"peer_id": peerID,
 			"reason":  "session_active",
@@ -230,6 +232,7 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || peerID == "" {
 		return nil
 	}
+	now := d.Sync.now()
 	summary, err := gossip.CatalogSummaryFor(d.Sync.State.Network, d.syncDatagramBudget())
 	if err != nil {
 		d.logWarn("sync", "catalog_summary_failed", map[string]any{
@@ -248,6 +251,8 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		delete(d.syncSessions, peerID)
 		return err
 	}
+	recordSyncHint(d.Sync.State, peerID, reason, "", true, now)
+	recordSyncActivePull(d.Sync.State, peerID, "hint_queued", d.syncSessions[peerID], now)
 	d.logDebug("sync", "hinted_sync_started", map[string]any{
 		"peer_id": peerID,
 		"reason":  reason,
@@ -269,6 +274,7 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		return nil
 	}
+	recordReadOnlyResponder(d.Sync.State, peerID, "catalog_page", "", d.Sync.now())
 	budget := d.syncDatagramBudget()
 	page, err := gossip.CatalogPageFor(d.Sync.State.Network, cursor, budget)
 	if err != nil {
@@ -294,6 +300,7 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
 		return nil
 	}
+	recordReadOnlyResponder(d.Sync.State, peerID, "fetch_zone", path, d.Sync.now())
 	snap, err := gossip.Snapshot(d.Sync.State.Network, path)
 	if err != nil {
 		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
@@ -311,6 +318,7 @@ func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		return nil
 	}
+	recordReadOnlyResponder(d.Sync.State, peerID, "chunk_fallback", path, d.Sync.now())
 	return d.Sync.sendSnapshots(peerID, []zone.ZonePath{path}, true)
 }
 
@@ -398,6 +406,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		session.State = SyncSessionFailed
 		session.lastError = err
 	}
+	recordSyncActivePull(d.Sync.State, peerID, syncEventName(event), session, d.Sync.now())
 	if session.State != oldState {
 		d.logDebug("sync", "session_state_changed", map[string]any{
 			"peer_id":   peerID,
@@ -411,6 +420,29 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	changed := d.executeSyncActions(ctx, session, actions)
 	if session.Done() {
 		d.completeSyncSession(session, changed)
+	}
+}
+
+func syncEventName(event SyncEvent) string {
+	switch event.(type) {
+	case *SyncTimerEvent:
+		return "sync_timer"
+	case *PongReceivedEvent:
+		return "pong"
+	case *CatalogSummaryReceivedEvent:
+		return "catalog_summary"
+	case *CatalogPageReceivedEvent:
+		return "catalog_page"
+	case *CatalogPageTimeoutEvent:
+		return "catalog_page_timeout"
+	case *RoundTimeoutEvent:
+		return "round_timeout"
+	case *ObjectPullResultEvent:
+		return "object_pull_result"
+	case *ObjectChunkEvent:
+		return "object_chunk"
+	default:
+		return fmt.Sprintf("%T", event)
 	}
 }
 

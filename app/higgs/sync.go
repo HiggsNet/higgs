@@ -283,6 +283,7 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 				dash(peerState.ObservedAddr),
 				formatObservedPath(peerState, now),
 			)
+			writeSyncFlow(w, peer.ID, peerState)
 			writeDatagramStats(w, peer.ID, peerState)
 			writeObjectPullStats(w, peer.ID, peerState)
 		}
@@ -305,6 +306,7 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 				dash(peerState.ObservedAddr),
 				formatObservedPath(peerState, now),
 			)
+			writeSyncFlow(w, peerID, peerState)
 			writeDatagramStats(w, peerID, peerState)
 			writeObjectPullStats(w, peerID, peerState)
 		}
@@ -379,6 +381,30 @@ func writeDatagramStats(w io.Writer, peerID string, peerState syncPeerState) {
 		dash(stats.LastTooLargeKey),
 		stats.LastTooLargeBytes,
 		stats.LastTooLargeLimit,
+	)
+}
+
+func writeSyncFlow(w io.Writer, peerID string, peerState syncPeerState) {
+	if peerState.ActivePullState == "" &&
+		peerState.HintAccepted == 0 &&
+		peerState.HintSuppressed == 0 &&
+		peerState.ReadOnlyResponder == 0 {
+		return
+	}
+	fmt.Fprintf(w, "sync_flow peer=%s active_pull=%s active_event=%s active_updated=%s hint_accepted=%d hint_suppressed=%d last_hint=%s hint_reason=%s hint_suppression=%s read_only_responder=%d responder_kind=%s responder_zone=%s responder_last=%s\n",
+		peerID,
+		dash(peerState.ActivePullState),
+		dash(peerState.ActivePullLastEvent),
+		formatUnixTime(peerState.ActivePullUpdatedUnix),
+		peerState.HintAccepted,
+		peerState.HintSuppressed,
+		formatUnixTime(peerState.LastHintUnix),
+		dash(peerState.LastHintReason),
+		dash(peerState.LastHintSuppression),
+		peerState.ReadOnlyResponder,
+		dash(peerState.LastResponderKind),
+		dash(peerState.LastResponderZone),
+		formatUnixTime(peerState.LastResponderUnix),
 	)
 }
 

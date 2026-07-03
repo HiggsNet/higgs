@@ -107,6 +107,7 @@ func debugPeer(peerID string) error {
 	fmt.Printf("last_update_source: %s\n", dash(peerState.LastUpdateSource))
 	fmt.Printf("last_relay: %s\n", formatUnixTime(peerState.LastRelayUnix))
 	fmt.Printf("relay_suppression: %s\n", formatRelaySuppression(peerState))
+	printDebugPeerSyncFlow(peerState)
 	printDebugPeerDatagramStats(peerState)
 	printDebugPeerObjectPullStats(peerState)
 	return nil
@@ -731,6 +732,25 @@ func printDebugPeerObjectPullStats(peerState syncPeerState) {
 		dash(stats.LastSourcePeer),
 		stats.LastUnreachable,
 		dash(stats.LastError),
+	)
+}
+
+func printDebugPeerSyncFlow(peerState syncPeerState) {
+	fmt.Printf("active_pull_state: %s\n", dash(peerState.ActivePullState))
+	fmt.Printf("active_pull_last_event: %s\n", dash(peerState.ActivePullLastEvent))
+	fmt.Printf("active_pull_updated: %s\n", formatUnixTime(peerState.ActivePullUpdatedUnix))
+	fmt.Printf("hint_accepted: %d\n", peerState.HintAccepted)
+	fmt.Printf("hint_suppressed: %d\n", peerState.HintSuppressed)
+	fmt.Printf("hint_last: %s reason=%s suppression=%s\n",
+		formatUnixTime(peerState.LastHintUnix),
+		dash(peerState.LastHintReason),
+		dash(peerState.LastHintSuppression),
+	)
+	fmt.Printf("read_only_responder: %d\n", peerState.ReadOnlyResponder)
+	fmt.Printf("read_only_responder_last: %s kind=%s zone=%s\n",
+		formatUnixTime(peerState.LastResponderUnix),
+		dash(peerState.LastResponderKind),
+		dash(peerState.LastResponderZone),
 	)
 }
 

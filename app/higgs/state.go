@@ -325,6 +325,18 @@ type syncPeerState struct {
 	ObservedSource        string                         `json:"observed_source,omitempty"`
 	ObservedFailureCount  int                            `json:"observed_failure_count,omitempty"`
 	ObservedGraceAddrs    []observedGraceAddrState       `json:"observed_grace_addrs,omitempty"`
+	ActivePullState       string                         `json:"active_pull_state,omitempty"`
+	ActivePullLastEvent   string                         `json:"active_pull_last_event,omitempty"`
+	ActivePullUpdatedUnix int64                          `json:"active_pull_updated_unix,omitempty"`
+	HintAccepted          int64                          `json:"hint_accepted,omitempty"`
+	HintSuppressed        int64                          `json:"hint_suppressed,omitempty"`
+	LastHintUnix          int64                          `json:"last_hint_unix,omitempty"`
+	LastHintReason        string                         `json:"last_hint_reason,omitempty"`
+	LastHintSuppression   string                         `json:"last_hint_suppression,omitempty"`
+	ReadOnlyResponder     int64                          `json:"read_only_responder,omitempty"`
+	LastResponderUnix     int64                          `json:"last_responder_unix,omitempty"`
+	LastResponderKind     string                         `json:"last_responder_kind,omitempty"`
+	LastResponderZone     string                         `json:"last_responder_zone,omitempty"`
 	DatagramStats         *datagramStats                 `json:"datagram_stats,omitempty"`
 	ObjectPullStats       *objectPullStats               `json:"object_pull_stats,omitempty"`
 	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
@@ -688,6 +700,53 @@ func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time)
 			peerState.ObservedFailureCount = 0
 		}
 	}
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordSyncActivePull(state *stateFile, peerID, event string, session *SyncSession, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if session != nil {
+		peerState.ActivePullState = string(session.State)
+	} else {
+		peerState.ActivePullState = ""
+	}
+	peerState.ActivePullLastEvent = event
+	peerState.ActivePullUpdatedUnix = now.Unix()
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordSyncHint(state *stateFile, peerID, reason, suppression string, accepted bool, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	if accepted {
+		peerState.HintAccepted++
+		peerState.LastHintSuppression = ""
+	} else {
+		peerState.HintSuppressed++
+		peerState.LastHintSuppression = suppression
+	}
+	peerState.LastHintUnix = now.Unix()
+	peerState.LastHintReason = reason
+	state.SyncPeers[peerID] = peerState
+}
+
+func recordReadOnlyResponder(state *stateFile, peerID, kind string, zoneName zone.ZonePath, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	normalizeSyncPeers(state)
+	peerState := state.SyncPeers[peerID]
+	peerState.ReadOnlyResponder++
+	peerState.LastResponderUnix = now.Unix()
+	peerState.LastResponderKind = kind
+	peerState.LastResponderZone = string(zoneName)
 	state.SyncPeers[peerID] = peerState
 }
 
