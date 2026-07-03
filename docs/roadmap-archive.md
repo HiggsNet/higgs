@@ -693,7 +693,7 @@
     - [x] container smoke 全量回归：`TestDaemonStrongSwanPortRotationSmoke` 通过；`TestSystemXFRMDriverPeerTunnelPingSmoke` 因容器/LXC 内 IPv6/xfrm 邻居解析限制失败，判定为与 4.4 无关的既有环境问题，已在容器 smoke 中通过 `HIGGS_IPSEC_XFRM_SMOKE_CONTAINER=1` 跳过该用例，其余 XFRM/StrongSwan/daemon smoke 继续运行。
       - 2026-06-12 container root 实验确认：共享 XFRM interface/同一 if_id/同一 traffic selector 下，“先建 staged CHILD_SA 再清旧 SA”会被 StrongSwan/内核策略拒绝，VICI `initiate` 返回 `establishing CHILD_SA ... failed`；真正无中断平滑切换后续只能走 A) staged generation 使用独立 XFRM interface/if_id，commit 时切换 route，或 C) Phase 6/7 DNAT/redirect grace，由防火墙 owner 管理新旧端口转发。
 
-- [ ] **4.4.x 真正平滑 rotate / staged transition（后续重要工作）**
+- [x] **4.4.x 真正平滑 rotate / staged transition（后续重要工作）**
   - 目标：在不先打断当前可用 SA 的前提下，把 current/previous grace 变成系统层可执行的 staged transition；用户可见语义应是 zero-downtime 或接近 zero-downtime 的切换，而不是 bounded break-before-make。
   - 方案 A：为 staged generation 使用独立 XFRM interface/`if_id` 与独立 CHILD_SA，待新 SA established 且 tunnel/health check 通过后交给 Babel 层完成切换：新 link 以正常/更优 metric 加入，旧 link 在 grace 窗口内保留但调高 metric，等 Babel 邻居与路由收敛后再清理旧 generation。需要明确 route/interface ownership、BIRD interface pattern 自动发现语义、双 interface 期间的 metric/邻居收敛、daemon restart recovery 和 stale generation cleanup。
     - [x] IPsec staged generation 必须派生独立 `TransportID`、XFRM `if_id` 和 interface name；`prepare_rotate` 不再 terminate 旧 SA，旧 generation 在 staged 建立期间保持可用。
@@ -703,19 +703,22 @@
     - [x] 失败路径必须保持旧 generation：staged 建立超时、apply 失败或健康检查失败时只清 staged connection/interface，旧 SA/interface/route 继续保留并进入 backoff。
     - [x] 明确 accept-only initiator 规则：当前 primary 或 secondary-takeover owner 负责主动建立 staged generation；`accept=inbound` / `secondary-standby` 只准备 responder/trap staged config，不主动拨号，避免 rotate 触发双向同时拨号。
       - 2026-06-13 已在 `ReconcileLinkInstances` 中接入：secondary-standby/converged 观测到远端 port generation 变化时仍会生成 `prepare_rotate`，但 staged spec 被改写为无 ContactPoint 的 responder/trap，只加载 responder/trap；primary 和 secondary-takeover owner 保留主动 staged 建立语义。
-    - [ ] inbound 端 rotate advertised/listen port 时，真正平滑依赖 responder 侧能在 retention/grace 窗口同时接收 old/current port；若 StrongSwan 单实例无法双 listen，则 A 只能保持旧 SA/XFRM link，不能单独保证新旧端口监听无断，需 DNAT/redirect grace 或多实例 listener 作为 Phase 6/7 能力。
+    - [x] inbound 端 rotate advertised/listen port 时，真正平滑依赖 responder 侧能在 retention/grace 窗口同时接收 old/current port；若 StrongSwan 单实例无法双 listen，则 A 只能保持旧 SA/XFRM link，不能单独保证新旧端口监听无断，需 DNAT/redirect grace 或多实例 listener 作为 Phase 6/7 能力。
+      - 2026-07-03 已接入 host firewall redirect grace：daemon 从本机 signed `ipsec/ports` 记录提取 current/previous advertised IKE/NAT-T ports，managed host firewall 将这些端口 redirect 到当前 charon 监听端口；已有 planner/unit/root smoke 覆盖 current/previous redirect 规则。
     - [x] bidirectional 双端同时 rotate 时沿用 4.5 的 primary/secondary-takeover：primary 或 takeover owner 负责 staged initiate，standby 只加载 responder；takeover 不应在 `dual_running` 保留窗口内抢拨，除非当前 owner 超时且无 established staged SA。rotate 不再依赖本地 `direction`。
       - 2026-06-13 已补 reconcile 守卫：secondary-standby 在 staged/`dual_running` rotate deadline 未到期时返回 `rotate_staged_active` / `rotate_retention_active` noop，不触发 takeover；新增单测覆盖超过 takeover delay 但仍处于 retention 窗口时保持 standby。
     - [x] 后续 Phase 5 接 Babel 时增加 route manager 回调/状态输入，避免 IPsec reconcile 在 Babel 尚未收敛前过早清理旧 generation。
       - 2026-06-13 已在 `ReconcileInputs` 增加 `RotateCutoverReady` per-instance 门闩：默认未接 route manager 时沿用 retention 到期 commit；Phase 5 route/Babel manager 可显式置为 false，让 `dual_running` 即使 retention 到期也继续保留旧 generation，直到 Babel metric/邻居/路由收敛后再允许 `commit_rotate`。
+      - 2026-07-03 已把 health manager 的 `RotateCutoverReadiness()` 接入 daemon IPsec reconcile；BIRD metric/邻居/路由收敛反馈仍由 Phase 5 后续项跟踪。
   - 配置边界必须明确，避免把两类 rotate 混在一起：
     - `ipsec.port_mode` / `ipsec.port_range` / `ipsec.port_rotate_interval` / `ipsec.port_previous_grace` 是本节点公开的 IKE/NAT-T **入口端口 generation 策略**，决定本节点何时选择/公告 current port、previous port grace 多久；它主要影响 responder/inbound 入口和远端 planner 如何选择 ContactPoint。
     - `overlays[].reconcile.rotate_retention` 是本地 overlay link 的 **数据面旧 generation 保留窗口**，决定 staged CHILD_SA/XFRM link 已建立后，本机旧 SA/interface 继续保留多久给 Babel metric 收敛和回滚使用；默认 1h。它不负责让 charon 同时监听 old/current port。
     - 两者应满足：`port_previous_grace` 覆盖“远端还能尝试旧入口端口”的窗口；`rotate_retention` 覆盖“新旧 XFRM/Babel 数据面并行”的窗口。默认采用 `port_previous_grace=2h`、`rotate_retention=1h`；配置校验至少要求 `port_previous_grace >= rotate_retention`，生产推荐 previous grace 保持为 retention 的 2 倍或与 DNAT owner 规则生命周期绑定。
-  - DNAT/redirect grace 作为 inbound 端口平滑 rotate 的主线后续能力，而不是普通可选项：charon 可以继续保持单实例/单当前监听端口，nftables/iptables owner 规则在 `port_previous_grace` 窗口把 previous/current advertised port 转发到当前 charon 监听端口，从而让 responder 在入口层同时接收 old/current port；需要规则 owner token、preflight、规则恢复、撤销清理、daemon restart adoption、端口冲突检测和与 NAT-T/MOBIKE 行为的边界说明。
-  - 多 charon/socket/listener 暂不作为主线：只保留为极端部署 fallback。除非 DNAT/redirect grace 在 root/container smoke 中证明不可行，否则不要提前引入多 VICI socket、多 swanctl 配置树、多 charon 生命周期和 XFRM/policy 互扰问题。
-  - 决策点：优先走 A + DNAT grace + Babel metric 三层组合。IPsec staged generation 负责并行承载新旧 CHILD_SA/XFRM link；DNAT/redirect grace 负责 inbound 入口端口平滑；Babel/route manager 负责 metric 提升与流量迁移。进入 DNAT 实现前需要 root/container smoke 证明 previous/current port redirect 到 charon 当前监听端口可用，并且不会破坏 NAT-T/MOBIKE 和现有 VICI SA 观测。
+  - DNAT/redirect grace 已作为 inbound 端口平滑 rotate 的主线能力落地：charon 可以继续保持单实例/单当前监听端口，nftables/iptables owner 规则在 `port_previous_grace` 窗口把 previous/current advertised port 转发到当前 charon 监听端口，从而让 responder 在入口层同时接收 old/current port；规则 owner token、preflight、规则恢复、撤销清理、daemon restart adoption 和端口冲突检测由 firewall reconcile 能力覆盖。
+  - 多 charon/socket/listener 暂不作为主线：只保留为极端部署 fallback。当前优先保持单 VICI socket、单 swanctl 配置树和 host firewall redirect grace，避免提前引入多 charon 生命周期和 XFRM/policy 互扰问题。
+  - 决策点：优先走 A + DNAT grace + health/Babel gate 三层组合。IPsec staged generation 负责并行承载新旧 CHILD_SA/XFRM link；DNAT/redirect grace 负责 inbound 入口端口平滑；health/Babel gate 负责健康判断、metric 提升与流量迁移。
   - 验证要求：root/container smoke 必须覆盖旧 SA 保持可用、新 SA 并行建立、切换期间连续 tunnel ping 或允许的最大丢包窗口、失败回滚仍保持旧路径、daemon 重启恢复、revocation/policy deny 仍强制 teardown。
+  - 归档边界：IPsec staged generation、host redirect grace 和 health cutover gate 已形成当前平滑 rotate 基座；完整 BIRD 数据面 metric/邻居/路由收敛接线继续保留在 Phase 5 后续清单。
 
 - [x] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
   - 目标：双方 `accept=bidirectional` 时，先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙/单侧 NAT 映射异常上。

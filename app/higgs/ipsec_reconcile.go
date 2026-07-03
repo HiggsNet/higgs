@@ -56,6 +56,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		Roles:                plan.Roles,
 		GroupBackoff:         groupBackoffMap(groups),
 		GroupRotateRetention: groupRotateRetentionMap(groups),
+		RotateCutoverReady:   d.ipsecRotateCutoverReady(),
 	})
 	for _, action := range result.Actions {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
@@ -83,6 +84,13 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
+}
+
+func (d *DaemonService) ipsecRotateCutoverReady() map[string]bool {
+	if d == nil || d.health == nil {
+		return nil
+	}
+	return d.health.RotateCutoverReadiness()
 }
 
 func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any {
