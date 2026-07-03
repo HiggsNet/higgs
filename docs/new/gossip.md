@@ -778,19 +778,80 @@ SyncSession 完成 + state changed
 
 ---
 
-## 附录：关键配置
+## 附录：完整配置参考
 
-Gossip 相关配置项及默认值：
+Gossip 相关配置项（`config.yaml` 中 `gossip:` 及其关联字段）：
+
+### `gossip.init` — 节点身份初始化
 
 | 配置键 | 默认值 | 说明 |
 |--------|--------|------|
-| `gossip.listen_addr` | `[::]:33434` | UDP 绑定地址 |
-| `gossip.max_datagram_bytes` | `1200` | UDP datagram 预算 |
-| `gossip.max_sync_zones` | `16` | 每次 apply 最多 zone |
-| `gossip.max_sync_records` | `1024` | 每次 apply 最多 record |
-| `gossip.advertise_addrs` | (自动) | 显式发布地址 |
-| `gossip.reflectors` | `auto` | 公网 IP reflector |
-| `gossip.reflector_interval` | `5m` | reflector 查询间隔 |
-| `gossip.endpoint_ttl` | `3h` | 端点记录 TTL |
-| `gossip.endpoint_refresh` | `30m` | 端点租约续期间隔 |
-| `gossip.filter_private_ipv4` | `true` | 过滤 RFC1918 地址 |
+| `gossip.init.managed_zone` | `""` | 本节点管理的 Zone 路径（如 `node-a.catofes.`）。peer_id 未设置时也作为 peer ID |
+| `gossip.init.key_path` | `""` | 节点 identity 私钥文件路径（ED25519）。初始化后生成，不可更改 |
+| `gossip.init.identity.key_path` | `""` | 与 `key_path` 等价，YAML 兼容写法 |
+
+### `gossip` — 协议与传输
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `gossip.peer_id` | 等于 `managed_zone` | 本节点在 gossip 协议中的标识。未设置时从 managed_zone 自动推导 |
+| `gossip.listen_addr` | `[::]:33434` | UDP 绑定地址，同时接收 IPv4 和 IPv6 |
+| `gossip.max_datagram_bytes` | `1200` | 单个 UDP datagram 的安全预算。超出的消息被拒绝并记录诊断 |
+| `gossip.max_sync_zones` | `16` | 单次 apply snapshot 最多处理的 zone 数量 |
+| `gossip.max_sync_records` | `1024` | 单次 apply snapshot 最多处理的 record 数量 |
+| `gossip.filter_private_ipv4` | `true` | 接口扫描时过滤 RFC1918 地址；私网实验可设为 `false` |
+
+### `gossip.bootstrap[]` — 静态节点发现
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `gossip.bootstrap[].id` | — | 对端 peer ID（Zone 路径） |
+| `gossip.bootstrap[].addr` | — | 对端 UDP 地址 `host:port` |
+
+bootstrap 节点同时加入入站白名单和出站地址簿。运行时发现的 peer 通过 Zone 信任链自动加入。
+
+### `gossip.advertise_addrs` — 地址公告
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `gossip.advertise_addr` | `""` | 单条公告地址，与 `advertise_addrs` 等价 |
+| `gossip.advertise_addrs` | `[]` | 显式的可拨地址列表（`"ip:port"` 格式） |
+
+未配置时只使用接口扫描 + reflector 发现地址。
+
+### `gossip.reflectors` — 公网 IP 反射
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `gossip.reflector` | `""` | 单条 reflector URL，与 `reflectors` 等价 |
+| `gossip.reflectors` | `auto` | 公网 IP 反射列表。`auto` = 使用内置 reflector 列表；`none` / `off` = 禁用；也可指定 URL 列表 |
+| `gossip.reflector_interval` | `5m` | 重新收集端点（含 reflector 查询）的间隔 |
+| `gossip.reflector_timeout` | `3s` | 单个 reflector HTTP 请求超时；失败会自动尝试下一个 |
+
+内置 reflectors（约 9 个）：`api.ipify.org`、`myip.ipip.net`、`ddns.oray.com/checkip` 等。
+
+### `gossip.endpoint*` — 端点和 NAT
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `gossip.endpoint_ttl` | `3h` | 写入 `sync/endpoint/*` 记录的 TTL |
+| `gossip.endpoint_refresh` | `30m` | 地址集合不变时刷新端点租约的间隔 |
+| `gossip.endpoint_grace` | `10m` | endpoint 变化后继续保留旧地址的窗口 |
+| `gossip.endpoint_grace_period` | — | `endpoint_grace` 的别名 |
+| `gossip.publish_endpoints` | `true` | 是否发布本机端点记录。`false` 时 NAT/outbound-only 节点不公告直达地址 |
+| `gossip.endpoint_discovery` | `""` | 端点发现模式，预留未来扩展 |
+| `gossip.endpoint_source_order` | `[advertise, bootstrap, reflector, interface]` | 地址来源优先级排序。用于决定出站连接时优先使用哪种来源的地址 |
+
+### 默认值来源
+
+非 gossip 层但影响 gossip 行为的全局配置：
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `trusted_root_public_key` | — | 信任锚根公钥。不设置则 gossip 无法验证任何 Zone 链（仅用于无身份验证场景） |
+
+默认值定义在代码中：
+- `DefaultPort = 33434`、`DefaultMaxMessage = 1200`（[`pkg/core/gossip/message.go`](pkg/core/gossip/message.go)）
+- `DefaultSyncLimits: MaxZones=16, MaxRecords=1024`（[`pkg/core/gossip/sync.go`](pkg/core/gossip/sync.go)）
+- `DefaultEndpointTTL=3h, DefaultEndpointRefresh=30m, DefaultEndpointGrace=10m`（[`pkg/core/gossip/discovery.go`](pkg/core/gossip/discovery.go)）
+- `defaultAppConfig` 中 `ReflectorInterval=5m, ReflectorTimeout=3s, PublishEndpoints=true, FilterPrivateIPv4=true`（[`app/higgs/config.go`](app/higgs/config.go)）
