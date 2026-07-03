@@ -27,11 +27,11 @@ const (
 )
 
 type appLogger struct {
-	level    logLevel
-	out      io.Writer
-	now      func() time.Time
-	mode     logMode
-	file     string
+	level logLevel
+	out   io.Writer
+	now   func() time.Time
+	mode  logMode
+	file  string
 }
 
 type logMode string
@@ -358,7 +358,6 @@ func writeSyslogLine(level logLevel, line string) error {
 	}
 }
 
-
 func addGossipErrorFields(fields map[string]any, err error) map[string]any {
 	if fields == nil {
 		fields = make(map[string]any)
@@ -440,4 +439,3 @@ func syncErrorReason(err error) string {
 		return "sync_error"
 	}
 }
-

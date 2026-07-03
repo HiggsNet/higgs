@@ -250,4 +250,3 @@ func commonWireMessage(messageType MessageType, ping *Ping, pong *Pong, fetchZon
 		Announce:    announce,
 	}
 }
-

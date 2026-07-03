@@ -317,4 +317,3 @@ func inspectLinkOwner(owner linkOwnerState) inspect.LinkOwner {
 		Token:       owner.Token,
 	}
 }
-

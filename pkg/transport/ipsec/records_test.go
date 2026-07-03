@@ -554,6 +554,50 @@ func TestDeriveTunnelAddressesDerivedPoolMirror(t *testing.T) {
 	}
 }
 
+func TestDeriveTunnelAddressesDerivedPoolGenerationEpochsDoNotReuseAddresses(t *testing.T) {
+	group := LinkGroupSpec{
+		ID: "ipsec-main",
+		TunnelAddressSpec: TunnelAddressSpec{
+			Mode:   TunnelAddressDerivedPool,
+			Family: FamilyIPv4,
+			Pool:   netip.MustParsePrefix("10.44.0.0/24"),
+		},
+	}
+	local := zone.ZonePath("node-a.catofes.")
+	peer := zone.ZonePath("node-b.catofes.")
+	pathKey := DefaultPathKey
+	linkID := StableLinkID(local, peer, group.ID, pathKey)
+
+	baseLocal, basePeer, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 0, 0)
+	if err != nil {
+		t.Fatalf("derive base: %v", err)
+	}
+	stagedLocal, stagedPeer, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 2, 0)
+	if err != nil {
+		t.Fatalf("derive staged: %v", err)
+	}
+	mirrorLocal, mirrorPeer, err := group.DeriveTunnelAddressesForLink(peer, local, linkID, pathKey, 2, 0)
+	if err != nil {
+		t.Fatalf("derive staged mirror: %v", err)
+	}
+	if stagedLocal != mirrorPeer || stagedPeer != mirrorLocal {
+		t.Fatalf("staged addresses not mirrored: A=%s/%s B=%s/%s", stagedLocal, stagedPeer, mirrorLocal, mirrorPeer)
+	}
+	if baseLocal == stagedLocal || baseLocal == stagedPeer || basePeer == stagedLocal || basePeer == stagedPeer {
+		t.Fatalf("derived-pool reused base/staged addresses: base=%s/%s staged=%s/%s", baseLocal, basePeer, stagedLocal, stagedPeer)
+	}
+	pool := group.TunnelAddressSpec.Pool
+	broadcast := netip.MustParseAddr("10.44.0.255")
+	for _, addr := range []netip.Addr{baseLocal, basePeer, stagedLocal, stagedPeer} {
+		if !pool.Contains(addr) {
+			t.Fatalf("address %s not in pool", addr)
+		}
+		if addr == pool.Masked().Addr() || addr == broadcast {
+			t.Fatalf("address %s is network/broadcast", addr)
+		}
+	}
+}
+
 func TestDeriveTunnelAddressesDependsOnInputs(t *testing.T) {
 	group := LinkGroupSpec{
 		ID: "ipsec-main",

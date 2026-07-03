@@ -405,6 +405,20 @@
 
 **目标：** 两个节点能根据同步后的 Zone 配置自动建立 IKEv2/IPsec SA，并通过 XFRM interface 暴露为普通三层链路。WireGuard 后移为可选轻量传输驱动，不作为动态路由主线。
 
+- [x] **4.x IPsec 链路身份重新分层**
+  - [x] 引入无方向 `LinkID` / `PairID` 作为两节点同一逻辑 link 的唯一基础身份：`hash(sorted(local_zone, peer_zone), overlay_id, path_key)`；`path_key` 第一版为 `default` 或 `family:ipv4` / `family:ipv6`。
+  - [x] `LinkInstance`、routing/debug/health read model 以稳定 `LinkID` 为主键；runtime connection、generation、interface 作为观测 label，避免 rotate 后历史断裂。
+  - [x] 将 `TransportID` 降级为 runtime resource id：`RuntimeConnectionID = "ipsec-" + short(hash(LinkID, generation, provider, "runtime"))`，staged generation 使用 `-r<generation>` 短名；`ChildSAName = RuntimeConnectionID + "-child"`。
+  - [x] XFRM 与 interface 从 runtime 派生：`XFRMIfID = uint32(hash(LinkID, generation, provider, "xfrm-if-id"))`，0 改为 1；`InterfaceName = hgs<8hex>`，保持 Linux 15 字符限制。
+  - [x] owner token 从 `hash(LinkID, RuntimeConnectionID, "owner-token")` 派生，用于 create/adopt/cleanup/revocation 的 owner guard；兼容旧 `TransportID` owner token 的迁移/清理。
+  - [x] `derived-link-local` / `derived-pool` 地址改为从 `LinkID + address_epoch + mode + pool? + lower/higher` 派生；`address_epoch=0` 为稳定地址，staged old/new 同 family 双 running 时用 generation 作为 epoch，尤其避免 `derived-pool` 地址复用。
+  - [x] `derived-pool` 派生把 pool 纳入 hash：IPv4 跳过 network/broadcast/不可用 host，IPv6 跳过 pool base/不可用地址，通过 retry 处理候选不可用。
+  - [x] 新增 overlay/link intent 记录层：`ipsec/overlays/<overlay_id>` / `ipsec.overlay_intent.v1` 表达本节点愿意把节点级 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` 能力用于哪个 `overlay_id/path_key`；daemon 为每个本地 StrongSwan overlay 发布 signed intent，`family-redundant` 发布 `family:ipv4` / `family:ipv6`，`exhaustive` 发布 `default`。
+  - [x] planner 只有在远端 capability 完整可信、本地 `connect` 选择 peer、远端 overlay intent 与本地 `overlay_id/path_key` 和 tunnel address mode/family/pool 兼容时才输出 desired link；缺 intent 输出 `missing_overlay_intent`，provider/path_key/tunnel address 不兼容输出 `overlay_intent_mismatch`。
+  - [x] `sequential-pool` 标为 legacy：保留兼容和迁移测试，但新设计、示例和文档默认使用 `derived-link-local` 或 `derived-pool`。
+  - [x] 补迁移策略：从旧 `TransportID`/directional address 状态恢复时能 adopt/cleanup 旧资源，重新写入 `LinkID`、runtime id、owner token、tunnel address；debug links 显示 `link_id`、`path_key`、`runtime_id`。
+  - [x] 测试闭环：核心 planner/instance、daemon dry-run bringup/SA observation、debug read model、overlay intent record、不同 overlay skip、tunnel address intent mismatch、双端同 overlay `LinkID` 一致、family-redundant 不同 path_key/LinkID、单 family intent 过滤、runtime generation 派生、derived-pool staged address epoch 不复用、staged/current runtime restart 恢复均已有覆盖。
+
 - [x] **4.0 Admin 写操作 daemon 化 / 控制 API 补齐**
   - [x] 将 `delegate issue` client 化：daemon 存在时通过 control socket 提交 join request，由 daemon 持有父 Zone 私钥、签发 delegation、写 DB、返回结构化 bundle；CLI 负责人类可读输出和 bundle 文件写入；daemon 不存在时保留 direct/recovery 模式并输出明确提示
   - [x] 将 `delegate revoke` client 化：由 daemon 串行写入 signed revocation/tombstone、清理 peer state、触发 outbound sync 和后续 apply hook

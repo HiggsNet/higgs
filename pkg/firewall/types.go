@@ -277,4 +277,3 @@ type FirewallReconcileSnapshot struct {
 	Backend   string                                     `json:"backend,omitempty"`
 	Instances map[string]*FirewallInstanceReconcileState `json:"instances,omitempty"`
 }
-

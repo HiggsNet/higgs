@@ -120,4 +120,3 @@ func defaultStr(value, fallback string) string {
 	}
 	return value
 }
-

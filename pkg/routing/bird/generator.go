@@ -403,4 +403,3 @@ func sanitizeNetNSName(name string) string {
 func defaultInternalTableName(netnsName string) string {
 	return "higgs_" + sanitizeNetNSName(netnsName)
 }
-

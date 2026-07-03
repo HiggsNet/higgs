@@ -703,10 +703,12 @@ func TestPlanTransportLinksFamilyRedundantStableIDsDifferPerFamily(t *testing.T)
 	if len(plan.Desired) != 2 {
 		t.Fatalf("desired len = %d, want 2", len(plan.Desired))
 	}
+	byPath := map[string]TransportLinkSpec{}
 	ids := map[string]bool{}
 	ifIDs := map[uint32]bool{}
 	ifNames := map[string]bool{}
 	for _, spec := range plan.Desired {
+		byPath[spec.PathKey] = spec
 		if ids[spec.TransportID] {
 			t.Fatalf("duplicate TransportID %q", spec.TransportID)
 		}
@@ -719,6 +721,37 @@ func TestPlanTransportLinksFamilyRedundantStableIDsDifferPerFamily(t *testing.T)
 		ids[spec.TransportID] = true
 		ifIDs[spec.XFRMIfID] = true
 		ifNames[spec.InterfaceName] = true
+	}
+	for _, pathKey := range []string{"family:ipv4", "family:ipv6"} {
+		spec, ok := byPath[pathKey]
+		if !ok {
+			t.Fatalf("missing desired spec for %s: %+v", pathKey, plan.Desired)
+		}
+		if spec.LinkID != StableLinkID("node-a.catofes.", "node-b.catofes.", "ipsec-main", pathKey) {
+			t.Fatalf("%s LinkID = %q, want stable path-derived id", pathKey, spec.LinkID)
+		}
+		if spec.TransportID != RuntimeConnectionID(spec.LinkID, 0, spec.Provider) {
+			t.Fatalf("%s TransportID = %q, want runtime id from LinkID", pathKey, spec.TransportID)
+		}
+	}
+	if byPath["family:ipv4"].LinkID == byPath["family:ipv6"].LinkID {
+		t.Fatalf("family-specific LinkID reused across paths: %+v", byPath)
+	}
+
+	ns.Zones["node-b.catofes."].Records[OverlayIntentRecordKey("ipsec-main")] = record(t, "node-b.catofes.", OverlayIntentRecordKey("ipsec-main"), RecordTypeOverlayIntent, OverlayIntentRecord{
+		Version:       1,
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		PathKeys:      []string{"family:ipv4"},
+		TunnelAddress: TunnelAddressSpec{Mode: TunnelAddressDerivedLinkLocal, Family: FamilyIPv6},
+		UpdatedAt:     now.Unix(),
+	})
+	plan, err = PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(single-family intent): %v", err)
+	}
+	if len(plan.Desired) != 1 || plan.Desired[0].PathKey != "family:ipv4" {
+		t.Fatalf("single-family intent desired = %+v skips=%+v, want only family:ipv4", plan.Desired, plan.Skipped)
 	}
 }
 

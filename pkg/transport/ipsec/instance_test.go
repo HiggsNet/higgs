@@ -312,6 +312,11 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedRuntimeID(existing, 2)
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
+	stagedSpec := rotateSpec(newSpec, 2)
+	existing.StagedInterfaceName = stagedSpec.InterfaceName
+	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.StagedLocalTunnelAddr = stagedSpec.LocalTunnelAddr
+	existing.StagedPeerTunnelAddr = stagedSpec.PeerTunnelAddr
 	existing.RotatePhase = RotatePhaseTestingNew
 	existing.RotateDeadline = now.Add(time.Minute).Unix()
 
@@ -1425,6 +1430,11 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedRuntimeID(existing, 2)
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
+	stagedSpec := rotateSpec(newSpec, 2)
+	existing.StagedInterfaceName = stagedSpec.InterfaceName
+	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.StagedLocalTunnelAddr = stagedSpec.LocalTunnelAddr
+	existing.StagedPeerTunnelAddr = stagedSpec.PeerTunnelAddr
 	existing.RotatePhase = RotatePhaseTestingNew
 	existing.RotateDeadline = now.Add(time.Minute).Unix()
 
@@ -1448,6 +1458,12 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 	}
 	if inst.IKEName != existing.StagedIKEName {
 		t.Fatalf("ike name = %q, want %q", inst.IKEName, existing.StagedIKEName)
+	}
+	if inst.InterfaceName != stagedSpec.InterfaceName || inst.XFRMIfID != stagedSpec.XFRMIfID {
+		t.Fatalf("runtime interface = %s/%d, want staged %s/%d", inst.InterfaceName, inst.XFRMIfID, stagedSpec.InterfaceName, stagedSpec.XFRMIfID)
+	}
+	if inst.LocalTunnelAddr != stagedSpec.LocalTunnelAddr || inst.PeerTunnelAddr != stagedSpec.PeerTunnelAddr {
+		t.Fatalf("tunnel addrs = %s/%s, want staged %s/%s", inst.LocalTunnelAddr, inst.PeerTunnelAddr, stagedSpec.LocalTunnelAddr, stagedSpec.PeerTunnelAddr)
 	}
 }
 

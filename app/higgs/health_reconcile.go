@@ -295,7 +295,6 @@ func printHealthLinkJSON(l healthLinkJSON) {
 	}
 }
 
-
 // liveDaemonHealthSnapshot reads health state from a running daemon via the
 // control socket. Returns nil if the daemon is not running.
 func liveDaemonHealthSnapshot(rt *Runtime) []healthLinkJSON {

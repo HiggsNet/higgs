@@ -142,15 +142,15 @@ type gossipInitYAML struct {
 }
 
 type logConfig struct {
-	Level          string
-	Mode           string
-	File           string
+	Level string
+	Mode  string
+	File  string
 }
 
 type logConfigYAML struct {
-	Level          string `yaml:"level"`
-	Mode           string `yaml:"mode"`
-	File           string `yaml:"file"`
+	Level string `yaml:"level"`
+	Mode  string `yaml:"mode"`
+	File  string `yaml:"file"`
 }
 
 type overlayConfig struct {
