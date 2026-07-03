@@ -16,7 +16,8 @@
 
 **状态：** 主线能力已完成，完整展开清单见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。当前只保留尚未彻底闭环的后续能力。
 
-当前无 Phase 4 主 TODO；4.x 链路身份重新分层已归档到 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
+**剩余后续：**
+- [ ] IPsec role 命名迁移：把当前 `ipsec.accept` / `accept=...` 与 `none` / `inbound` / `bidirectional` 迁到 `ipsec.role` / `role=...` 与 `out` / `in` / `both`；同步 signed `ipsec/profile` schema、planner/filter、debug/observer 输出、`config.example.yaml`、`docs/new/config.md` 和兼容/迁移策略。
 
 ## Phase 5: BIRD Babel 路由 + Route Authorization Filter（归档后仅保留后续项）
 

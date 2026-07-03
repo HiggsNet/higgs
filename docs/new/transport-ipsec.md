@@ -1,0 +1,391 @@
+# Transport-IPsec：StrongSwan / IKEv2 链路控制面
+
+## 这个模块解决什么问题
+
+Transport 模块负责把"哪些节点应该互联"变成真实的数据面链路——也就是把控制面的状态翻译成真正的加密隧道。
+
+当前唯一的 transport 实现是 **StrongSwan/IKEv2 + XFRM interface**。它做这些事情：
+
+- 根据已验证的 peer 能力记录和本地策略，规划出需要建立的 IPsec 链路（LinkPlanner）。
+- 通过 VICI 协议控制 StrongSwan/charon，加载私钥和 IKE connection，发起或接受 CHILD_SA。
+- 管理 XFRM interface 的完整生命周期：在 charon 所在的 netns 创建 → move 到 overlay netns → 分配 tunnel address → 启用。
+- 持续观测 SA 状态，把链路推进到 `up`，或在失败时 repair/backoff。
+- 当 peer 被撤销、transport key 变更或配置删除时，按可审计顺序清理 connection、SA 和 XFRM interface。
+- 支持端口/地址切换时新旧链路并行（staged rotate），以及 `role=both` 场景下 primary 不可达时的 secondary 接管（bidirectional takeover）。
+
+WireGuard 是后续可选的轻量 transport，应复用同一套高层 mesh policy 和 signed record 思路，但底层 driver、key 管理和端口 rotate 能力会独立说明。本文只覆盖 StrongSwan/IPsec 路线。
+
+## 整体分层
+
+Transport 处于"全网事实层"和"本机执行层"之间：
+
+```text
+Gossip verified active state           ← peer 的 ipsec/* records
+       +
+Local config (overlays, netns, ...)    ← 本机策略
+       │
+       ▼
+LinkPlanner                            ← 推导 desired TransportLinkSpec
+       │
+       ▼
+StrongSwanDriver + SystemXFRMDriver    ← 通过 VICI + iproute2 执行
+       │
+       ▼
+LinkInstance (persisted)               ← 本机 runtime 状态
+       │
+       ▼
+Routing / Firewall / Health 消费       ← hgs* interface + tunnel address
+```
+
+关键点：LinkPlanner 是纯函数，不碰系统网络；driver 层只按 `TransportLinkSpec` 执行，不推理全局策略；`LinkInstance` 是 reconcile 的持久化锚点，连接 desired 和 actual 两侧。
+
+## 输入来自哪里
+
+### Gossip 中的 signed records（远端节点发布，通过 Zone trust chain 验证后才可用）
+
+| Record | 作用 |
+|--------|------|
+| `ipsec/profile` | 节点能力声明：provider、IKE identity、role（out/in/both）、地址族、path mode、NAT hint |
+| `ipsec/addresses` | 候选地址列表，每个来源（manual-address/manual-dns/discovery/reflector/local）、优先级、TTL |
+| `ipsec/ports` | 当前端口 generation、IKE/NAT-T 端口（local=本地绑定, advertised=对外公告, observed=外部观测选填）、previous grace 窗口 |
+| `ipsec/transport-key` | 独立于 Zone signing key 的 IPsec 传输密钥；持久化到本地 state meta，防止 daemon 重启后 fingerprint 抖动 |
+| `ipsec/overlays/<overlay_id>` | 节点级 IPsec 能力用于某个 overlay/path 的意图声明；planner 必须同时满足三层条件：远端 profile 完整可信 + 本地 connect 选中 + 远端发布了兼容同一 overlay_id/path_key 和 tunnel address 策略的 intent |
+
+### 本机配置（config.yaml，不进入 gossip）
+
+```yaml
+ipsec:
+  role: both                        # 本机角色：out / in / both
+  driver: strongswan                # 或 dry-run（非 root 开发/CI）
+  vici_socket: /run/charon.vici
+
+netns:
+  default:
+    kind: name
+    name: h2
+    create: true
+
+overlays:
+  - id: ipsec-main
+    name: ipsec-main
+    provider: strongswan
+    netns: default
+    connect:
+      - "strongswan://*.catofes.?role=both&family=dual&source=manual-dns,discovery&mode=family-redundant"
+    deny:
+      - "strongswan://*.lab.catofes."
+```
+
+> 当前代码仍使用 `ipsec.accept` / `accept=...` 和 `none` / `inbound` / `bidirectional`，本节使用的是目标命名；后续实现迁移见 `todo.md`。
+
+`role` 决定本节点在 mesh 中的角色：
+
+| 本机 \ 远端 | `out` | `in` | `both` |
+|-------------|-------|------|--------|
+| `out` | 不建链 | 主动拨远端 | 主动拨远端 |
+| `in` | 不建链 | 只响应（无法建链） | 只响应（等待对方建链） |
+| `both` | 只响应（等待对方建链） | 主动拨远端 | 字典序小的一方主动拨，另一方响应 |
+
+这里有三层容易混淆：
+
+- `ipsec.role` 是本机发布到 `ipsec/profile` 的能力声明，也决定本机 planner 的本机角色。
+- 远端 `ipsec/profile.role` 是远端发布的能力声明，planner 用“本机 role + 远端 role”推导本机 `InitiatorRole`。
+- `overlays[].connect` URI 里的 `role=...` 是本机策略过滤条件，只匹配远端 profile 的 `role`；它不改写本机 `ipsec.role`，也不改写远端 record。
+
+因此示例中的 `role=both` 表示“这个 overlay 只选择远端声明为 `both` 的 peer”。如果希望本机也连接 `role=in` 的远端，需要增加一条 connect rule，或去掉该过滤条件。
+
+### 系统运行时
+
+- charon VICI socket：`list-sas` 返回当前 SA 列表，供 reconcile 判断是否需要 create/adopt/repair/teardown。
+- VICI event（`child-updown` / `ike-updown`）：SA 变化的低延迟通知，只标记 IPsec dirty 进入 reconcile，不直接创建或删除资源。
+- 系统 netns 和 link 状态：XFRM interface 是否存在、在哪个 netns、是否有地址。
+
+## 输出影响什么
+
+| 影响面 | 具体内容 |
+|--------|----------|
+| **StrongSwan charon** | `load-key` 加载 transport private key → `load-conn` 加载 IKE connection → `initiate` 发起 CHILD_SA → `terminate` / `unload-conn` 做撤销清理 |
+| **XFRM interface** | 在 charon netns（通常是 host）创建 → move 到 overlay netns → set addrgenmode none → up → 分配 tunnel address（derived-link-local + derived-pool IPv4/ IPv6） |
+| **LinkInstance（持久化）** | 每条逻辑链路一个，记录 desired spec hash、实际状态、XFRM if_id、IKE/CHILD_SA 名称、endpoint、owner、failure count、backoff、rotate phase 和最近错误 |
+| **Routing 模块** | 暴露 `hgs*` XFRM interface 给 BIRD/Babel 发现邻居；IPv4 tunnel address 作为 Babel interface address |
+| **Firewall 模块** | XFRM interface 和 tunnel address 进入对应 netns 后，firewall 按 interface pattern 生成 forward/input 规则 |
+| **Health 模块** | `LinkInstance.ActualState` 决定链路是否可用，影响健康探测；后续可作为 cutover gate 的输入 |
+
+## 核心架构
+
+### LinkPlanner — 链路规划
+
+输入：verified active state（peer 的 ipsec records）+ 本地 `LinkGroupSpec`（connect/deny rules）。
+
+输出：`[]TransportLinkSpec` + `[]SkipReason`。每一条 spec 描述"应该和谁在哪个 overlay 用哪个 provider 建立一条怎样的链路"。
+
+Planner 会逐项检查：
+- 远端所有节点级 IPsec record 是否完整（profile + addresses + ports + transport-key + overlay intent）
+- profile 中的 `role` 与本机是否兼容
+- overlay intent 中的 provider/path_key/tunnel_address 策略是否匹配
+- 地址族、path mode、地址来源是否支持
+- 是否有可用的 ContactPoint（AddressCandidate + PortAdvertisement 组合）
+- NAT 后是否缺少可验证公网证据
+- connect/deny rule 是否匹配
+- 是否处于 revocation/tombstone 状态
+
+缺少任何一项都会输出结构化 skip reason（如 `missing_overlay_intent`、`overlay_intent_mismatch`、`no_contact_point`），而不是静默跳过。
+
+### TransportLinkSpec — 链路的"desired state"
+
+```go
+type TransportLinkSpec struct {
+    LocalZone       ZonePath
+    PeerZone        ZonePath
+    OverlayID       string
+    Provider        string          // strongswan
+    LinkID          string
+    PathKey         string
+    TransportID     string          // StrongSwan connection name
+    PathMode        string
+    IKEIdentity     string
+    AuthRef         string
+    ContactPoints   []ContactPoint
+    XFRMIfID        uint32
+    InterfaceName   string          // hgs<8hex>
+    LocalTunnelAddr netip.Addr
+    PeerTunnelAddr  netip.Addr
+    LocalAddress    string
+    LocalIKEPort    uint16
+    Generation      uint64
+    AddressEpoch    uint64
+    NetNS           string
+    InitiatorRole   string          // primary / secondary-standby / secondary-takeover / ""
+}
+```
+
+身份派生规则（两端一致，不随 rotate generation 改变）：
+
+| ID | 派生方式 | 用途 |
+|----|---------|------|
+| `LinkID` | `hash(sorted(local_zone, peer_zone), overlay_id, path_key)` | 逻辑链路稳定主键 |
+| `RuntimeConnectionID` | `short(hash(LinkID, generation, provider, "runtime"))` | StrongSwan connection 名 |
+| `ChildSAName` | `RuntimeConnectionID + "-child"` | CHILD_SA 名 |
+| `XFRMIfID` | `uint32(hash(LinkID, generation, provider, "xfrm-if-id"))` | XFRM if_id |
+| `InterfaceName` | `hgs<8hex>` 从 `XFRMIfID` 派生 | Linux interface 名 |
+| `OwnerToken` | `hash("higgs.ipsec.owner.v2", LinkID, RuntimeConnectionID, "owner-token")` | 清理时的归属校验 |
+
+Tunnel address 也从 `LinkID` 派生：`derive(LinkID, address_epoch, mode, pool, role)`。`role` 为 sorted peer pair 中的 `lower`/`higher`；`address_epoch=0` 为普通稳定地址，staged generation 使用 `address_epoch=<generation>` 避免新旧 interface 地址冲突。
+
+### LinkInstance — 链路的"actual state"
+
+每条链路对应一个持久化的 `LinkInstance`，连接 desired 和 actual：
+
+```go
+type LinkInstance struct {
+    ID              string
+    GroupID         string
+    PeerZone        ZonePath
+    TransportKind   string
+    LinkID          string
+    PathKey         string
+    TransportID     string
+    DesiredSpecHash string
+    ActualState     string       // up / connecting / degraded / error / removing
+    InterfaceName   string
+    XFRMIfID        uint32
+    LocalTunnelAddr netip.Addr
+    PeerTunnelAddr  netip.Addr
+    IKEName         string
+    ChildSAName     string
+    Endpoint        string
+    SelectedContact ContactPoint
+    RemoteGeneration uint64
+    FailureCount    int
+    BackoffUntil    int64
+    LastTransition  int64
+    LastError       string
+    Owner           ResourceOwner
+    // rotate 相关
+    RotatePhase           string   // idle / preparing / testing_new / dual_running / cutover / rollback / cleanup
+    StagedGeneration      uint64
+    StagedIKEName         string
+    StagedChildSAName     string
+    StagedInterfaceName   string
+    StagedXFRMIfID        uint32
+    StagedLocalTunnelAddr netip.Addr
+    StagedPeerTunnelAddr  netip.Addr
+    RotateDeadline        int64
+    // takeover 相关
+    InitiatorRole      string
+    TakeoverPhase      string
+    TakeoverStartedAt  int64
+    TakeoverUntil      int64
+    LastTakeoverError  string
+    ObservedInitiator  string
+}
+```
+
+### Reconcile 主循环
+
+```text
+PlanTransportLinks(active state + config)
+    → desired []TransportLinkSpec + []SkipReason
+
+ReconcileLinkInstances(desired + persisted LinkInstance + driver ListSAs + revocations)
+    → 每条 desired link 判定一个 action：
+
+    create      — 新的 desired link，本地无实例
+    adopt       — 有 desired，也有 existing SA（daemon 重启后恢复）
+    update      — desired spec hash 变了
+    repair      — link 处于 degraded/error，backoff 已到期
+    noop        — 已经 up 且 desired 没变
+    teardown    — 不再 desired（peer revoked、配置删除、record 过期）
+
+ApplyTransportLink(action) — apply 顺序固定：
+    1. EnsureNamespace(target netns)
+    2. LoadKey(transport key)
+    3. LoadConnection(IKE connection)
+    4. EnsureInterface(host 创建 XFRM interface → move → up → addrgenmode none)
+    5. AssignAddress(tunnel address)
+    6. 记录 LinkInstance → 等待 ListSAs 观测到 SA → 推进到 up
+```
+
+Staged connection 的 apply 有两个额外边界：复用已加载的 transport key，不重复 `load-key`；加载 staged connection 前会先 `unload-conn` 对应 base config，避免 StrongSwan 把 rotation 报文匹配到旧 connection 名下。这个 unload 只卸载配置，不等于 teardown 已建立的 base SA。
+
+### Staged Rotate（4.4+）
+
+当远端 `ipsec/ports.current.generation` 变化时，进入 staged rotate 状态机：
+
+```text
+Idle → Preparing（加载独立 staged connection/SA/XFRM interface）
+     → TestingNew（观测 staged SA 是否 established）
+         → DualRunning（新旧两条链路并行，保留窗口默认 1h）
+             → Cutover（保留到期后 promote staged；BIRD metric/邻居 gate 仍是后续接入项）
+             → Rollback（staged SA 在规定时限内未建立，清理 staged 保留旧链路）
+```
+
+staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running 期间 overlay netns 同时有两个 `hgs*` interface。
+
+### Bidirectional Takeover（4.5）
+
+双方 `role=both` 时，字典序小的一方 primary 主动拨号，secondary 为 standby。若 primary 持续不可达（超过失败阈值 + takeover delay），secondary 可临时接管主动拨号：
+
+- takeover 有 lease（默认 5min）和 cooldown（默认 2min）
+- 已有匹配 SA 时优先 adopt，不再纠结谁先拨
+- revocation、profile/transport-key mismatch 禁止 takeover（信任失败不是连通性失败）
+
+## XFRM interface 生命周期
+
+这是排障时最容易出错的环节。
+
+### 正确形态（当前实现）
+
+```
+host netns:                        overlay netns (h2):
+  charon / VICI                       moved XFRM interface hgs...
+  XFRM state/policy (by StrongSwan)   tunnel address on hgs...
+  XFRM interface 创建位置              BIRD/Babel + overlay routes
+```
+
+**创建顺序：**
+1. `EnsureNamespace` — 确保 target overlay netns 存在
+2. `ip link add <iface> type xfrm if_id <id>` — 在 charon netns（host）创建
+3. `ip link set <iface> netns <target>` — move 到 overlay netns
+4. 在 target netns 执行 `ip link set dev <iface> addrgenmode none`
+5. `ip link set dev <iface> up`
+6. `ip addr replace <prefix> dev <iface>` — 分配 tunnel address
+
+**为什么 interface 要先出生在 host：** charon 安装的 XFRM state/policy 在 host netns，XFRM interface 如果在 overlay netns 创建，流量虽然在 interface 上可见但匹配不到 state/policy，导致 TX dropped。StrongSwan 的 route-based VPN 设计也说明 XFRM interface 可以 move 到其它 netns，目标 netns 只看到 interface 看不到 SA key/state。
+
+### 删除顺序
+
+`TeardownTransportLink` 的可审计顺序：
+1. `terminate` IKE_SA/CHILD_SA（需要时可 `flush`）
+2. `unload-conn` 从 charon 卸载 connection
+3. 通过 `LinkInstance.Owner` 校验后，删除 XFRM interface（先查 target netns，再查 host 残留）
+4. 删除本地持久化 `LinkInstance`
+
+## 哪些状态进入 gossip，哪些只是本机 runtime
+
+### 进入 gossip 的 signed records（全网可见，Zone authority 签名）
+
+- `ipsec/profile` — 节点能力声明
+- `ipsec/addresses` — 候选地址/DNS
+- `ipsec/ports` — 端口公告（current + previous grace）
+- `ipsec/transport-key` — 独立传输密钥
+- `ipsec/overlays/<overlay_id>` — overlay 参与意图
+
+### 本机 runtime 状态（不进入 gossip）
+
+- `LinkInstance` — 链路 reconciled 结果（desired hash、实际状态、backoff、rotate phase）
+- `LinkGroupSpec` / connect-rule — connect/deny rule、netns、tunnel_address 策略
+- VICI SA snapshot 和 VICI event — charon 运行态观测
+- `ContactPoint` 展开结果 — DNS/discovery 解析地址
+- initiator role / takeover state
+- apply plan 和失败记录
+
+## 出错时 operator 应该看什么
+
+### 首选诊断命令
+
+```
+higgs debug links
+```
+
+输出包含每条链路的：
+- transport_id、peer zone
+- `LinkInstance` status（up / connecting / degraded / error）
+- skip reason（如果 planner 跳过了某个 peer）
+- rotate phase + generation + deadline
+- initiator role + takeover phase
+- backoff 剩余时间、最后 error、failure 计数
+- VICI SA 信息：identity、endpoint、reqid、if_id
+- tunnel address（link-local 带 interface scope）
+
+### 常见问题排查
+
+| 现象 | 排查方向 |
+|------|----------|
+| planner 输出 `missing_overlay_intent` | 远端没有发布 `ipsec/overlays/<overlay_id>`，或本地的 overlay id 与远端不匹配 |
+| planner 输出 `overlay_intent_mismatch` | 远端 overlay intent 中的 provider/path_key/tunnel_address 与本机不兼容 |
+| `bidirectional_standby` | 正常状态，secondary 在等 primary 拨号；检查 primary 是否已正常 initiate |
+| `takeover_delay_active` | secondary 在 takeover delay 冷却期内，等待超时后再接管 |
+| link 卡在 `connecting` 超过 3 分钟 | VICI socket 不可达、IKE 协商失败、NAT-T 端口不通、远端 charon 未运行 |
+| link 反复在 connecting/error 间翻转 | 检查 `LinkInstance` 中的 last_error 和 backoff；可能是 endpoint/ports 不可达 |
+| XFRM interface 有 TX dropped | XFRM state/policy 在 host，interface 在 overlay netns——确认 host-born 路径正确 |
+| revocation 后 SA 被反复拉起 | owner token 不匹配、残留 `LinkInstance` 未清理、或 teardown 没有成功删除 connection |
+| `dual_running` 不推进 cutover | 当前先看 retention 窗口、staged SA 观测和 last rotate error；BIRD `RotateCutoverReady` 是后续接入项 |
+| SA 已 established 但 `LinkInstance` 仍是 `connecting` | reconcile 未触发，或 VICI `list-sas` 没有观测到匹配的 SA（检查 child name/reqid/if_id 是否匹配） |
+
+### 辅助观测手段
+
+**VICI SA 状态（人工对照）：**
+```sh
+swanctl --list-sas
+```
+检查 IKE identity、CHILD_SA 的 reqid/if_id、endpoint、established 时间。
+
+**XFRM state/policy（host netns）：**
+```sh
+ip xfrm state
+ip xfrm policy
+```
+确认 charon 安装的 SA 和策略对端期望通过 XFRM interface 的流量。
+
+**XFRM interface 位置：**
+```sh
+# host netns
+ip link show type xfrm
+
+# 目标 overlay netns
+ip netns exec <name> ip link show type xfrm
+ip netns exec <name> ip addr show dev hgs*
+ip netns exec <name> ip route show dev hgs*
+```
+确认 interface 在正确的 overlay netns，有正确地址，且状态为 UP。
+
+**daemon 日志：**
+结构化 key=value 日志包含 VICI call 超时、action/skip 摘要和脱敏后的 key material。在日志中搜索 `transport`、`ipsec`、`link`、`reconcile` 等关键词。
+
+### 重要边界
+
+- **StrongSwan/charon 是本机 runtime driver，它的失败不改变 signed state 的真实性。** charon 崩溃、VICI socket 断开、XFRM module 缺失，不代表 peer 不可信。先确认 gossip 已验证的 peer `ipsec/*` records 是否正常，再排查 driver 层。
+- **NAT hint 只是提示，不是安全事实。** 两端都在 NAT 后且无可验证公网 ContactPoint 时，链路进入 `degraded`，debug 输出明确不可达原因。
+- **rotate 分两层理解：** 入口端口公告层（`ipsec/ports.current/previous`）告诉远端优先连哪个端口；XFRM 数据面预备层（staged generation）在底层并行搭建新链路。前者即使写入了 previous，也不代表本机 charon 已在监听两个端口。
+- **LinkInstance 被 teardown 成功后 daemon 会删除持久化记录。** 因此后续 state change 或 restart 不会再看到 `removing` 状态，也不会重复执行清理。
