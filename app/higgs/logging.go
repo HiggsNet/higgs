@@ -32,7 +32,6 @@ type appLogger struct {
 	now      func() time.Time
 	mode     logMode
 	file     string
-	facility string
 }
 
 type logMode string
@@ -59,15 +58,11 @@ func newAppLogger(config *syncConfigFile) *appLogger {
 	}
 	mode := logModeStderr
 	file := ""
-	facility := "daemon"
 	if config != nil {
 		mode = parseLogMode(config.LogMode)
 		file = strings.TrimSpace(config.LogFile)
-		if strings.TrimSpace(config.LogSyslogFacility) != "" {
-			facility = strings.TrimSpace(config.LogSyslogFacility)
-		}
 	}
-	return &appLogger{level: level, out: os.Stderr, now: time.Now, mode: mode, file: file, facility: facility}
+	return &appLogger{level: level, out: os.Stderr, now: time.Now, mode: mode, file: file}
 }
 
 func (c *syncConfigFile) effectiveLogLevel() string {
@@ -276,7 +271,7 @@ func (l *appLogger) writeFileLine(line []byte) {
 }
 
 func (l *appLogger) writeSyslogLine(level logLevel, line []byte) {
-	if err := writeSyslogLine(level, l.facility, string(line)); err != nil {
+	if err := writeSyslogLine(level, string(line)); err != nil {
 		l.writeSinkError(err.Error())
 	}
 }
@@ -345,8 +340,8 @@ func quoteLogValue(value any) string {
 	}
 }
 
-func writeSyslogLine(level logLevel, facility, line string) error {
-	writer, err := syslog.New(syslogFacility(facility)|syslog.LOG_INFO, "higgs")
+func writeSyslogLine(level logLevel, line string) error {
+	writer, err := syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, "higgs")
 	if err != nil {
 		return err
 	}
@@ -363,52 +358,6 @@ func writeSyslogLine(level logLevel, facility, line string) error {
 	}
 }
 
-func syslogFacility(raw string) syslog.Priority {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "auth":
-		return syslog.LOG_AUTH
-	case "authpriv":
-		return syslog.LOG_AUTHPRIV
-	case "cron":
-		return syslog.LOG_CRON
-	case "daemon", "":
-		return syslog.LOG_DAEMON
-	case "ftp":
-		return syslog.LOG_FTP
-	case "kern":
-		return syslog.LOG_KERN
-	case "local0":
-		return syslog.LOG_LOCAL0
-	case "local1":
-		return syslog.LOG_LOCAL1
-	case "local2":
-		return syslog.LOG_LOCAL2
-	case "local3":
-		return syslog.LOG_LOCAL3
-	case "local4":
-		return syslog.LOG_LOCAL4
-	case "local5":
-		return syslog.LOG_LOCAL5
-	case "local6":
-		return syslog.LOG_LOCAL6
-	case "local7":
-		return syslog.LOG_LOCAL7
-	case "lpr":
-		return syslog.LOG_LPR
-	case "mail":
-		return syslog.LOG_MAIL
-	case "news":
-		return syslog.LOG_NEWS
-	case "syslog":
-		return syslog.LOG_SYSLOG
-	case "user":
-		return syslog.LOG_USER
-	case "uucp":
-		return syslog.LOG_UUCP
-	default:
-		return syslog.LOG_DAEMON
-	}
-}
 
 func addGossipErrorFields(fields map[string]any, err error) map[string]any {
 	if fields == nil {

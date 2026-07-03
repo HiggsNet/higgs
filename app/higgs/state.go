@@ -390,7 +390,6 @@ type syncConfigFile struct {
 	LogLevel               string           `json:"log_level,omitempty"`
 	LogMode                string           `json:"log_mode,omitempty"`
 	LogFile                string           `json:"log_file,omitempty"`
-	LogSyslogFacility      string           `json:"log_syslog_facility,omitempty"`
 	AdvertiseAddrs         []string         `json:"advertise_addrs,omitempty"`
 	Reflectors             []string         `json:"reflectors,omitempty"`
 	ReflectorInterval      time.Duration    `json:"reflector_interval,omitempty"`

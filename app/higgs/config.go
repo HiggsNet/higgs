@@ -145,14 +145,12 @@ type logConfig struct {
 	Level          string
 	Mode           string
 	File           string
-	SyslogFacility string
 }
 
 type logConfigYAML struct {
 	Level          string `yaml:"level"`
 	Mode           string `yaml:"mode"`
 	File           string `yaml:"file"`
-	SyslogFacility string `yaml:"syslog_facility"`
 }
 
 type overlayConfig struct {
@@ -336,9 +334,6 @@ func normalizeAppConfig(config *appConfig) {
 	if config.Log.Mode == "" {
 		config.Log.Mode = string(logModeStderr)
 	}
-	if config.Log.SyslogFacility == "" {
-		config.Log.SyslogFacility = "daemon"
-	}
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	if config.IPsec.Accept == "" {
@@ -505,9 +500,6 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	}
 	if file.Log.File != "" {
 		config.Log.File = file.Log.File
-	}
-	if file.Log.SyslogFacility != "" {
-		config.Log.SyslogFacility = strings.ToLower(strings.TrimSpace(file.Log.SyslogFacility))
 	}
 	if topLevelKeys["gossip"] {
 		if err := applyGossipConfigYAML(config, file.Gossip, "gossip."); err != nil {
@@ -1040,7 +1032,6 @@ func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFil
 		LogLevel:               config.LogLevel,
 		LogMode:                config.Log.Mode,
 		LogFile:                config.Log.File,
-		LogSyslogFacility:      config.Log.SyslogFacility,
 		AdvertiseAddrs:         config.AdvertiseAddrs,
 		Reflectors:             config.Reflectors,
 		ReflectorInterval:      config.ReflectorInterval,
