@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,8 @@ import (
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/higgs/pkg/routing/bird"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 type routesDumpResponse struct {
@@ -24,6 +27,29 @@ type routesDumpResponse struct {
 	Authorized  map[string][]string            `json:"authorized"`
 	Assignments map[string]routeAssignmentInfo `json:"assignments"`
 	Errors      []routeAuthorizationErrorJSON  `json:"errors"`
+	BIRD        []birdRoutesView               `json:"bird,omitempty"`
+}
+
+type birdRoutesView struct {
+	NetNS      string          `json:"netns"`
+	InstanceID string          `json:"instance_id,omitempty"`
+	State      string          `json:"state,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Routes     []birdRouteView `json:"routes,omitempty"`
+}
+
+type birdRouteView struct {
+	Prefix        string   `json:"prefix"`
+	Protocol      string   `json:"protocol,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	Iface         string   `json:"iface,omitempty"`
+	From          string   `json:"from,omitempty"`
+	Via           string   `json:"via,omitempty"`
+	Metric        uint32   `json:"metric,omitempty"`
+	Selected      bool     `json:"selected"`
+	Authorized    bool     `json:"authorized"`
+	ImportAllowed bool     `json:"import_allowed"`
+	Zones         []string `json:"zones,omitempty"`
 }
 
 type birdDumpResponse struct {
@@ -336,6 +362,135 @@ func buildRoutesDumpResponse(managedZone zone.ZonePath, ars *routing.AuthorizedR
 		Assignments: assignments,
 		Errors:      errors,
 	}
+}
+
+func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *routesDumpResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []birdRoutesView {
+	if d == nil || dump == nil {
+		return nil
+	}
+	views := make([]birdRoutesView, 0, len(instances))
+	for _, inst := range instances {
+		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
+			continue
+		}
+		state := birdStates[inst.NetNS]
+		view := birdRoutesView{
+			NetNS:      inst.NetNS,
+			InstanceID: inst.ID,
+		}
+		socketPath := inst.ControlSocket
+		if state != nil {
+			view.State = state.State
+			if state.LastError != "" {
+				view.Error = state.LastError
+			}
+			if state.ControlSocket != "" {
+				socketPath = state.ControlSocket
+			}
+		}
+		if socketPath == "" {
+			if view.Error == "" {
+				view.Error = "control socket not configured"
+			}
+			views = append(views, view)
+			continue
+		}
+		observed, err := d.newBirdClient(socketPath).Status(ctx)
+		if err != nil {
+			view.Error = err.Error()
+			views = append(views, view)
+			continue
+		}
+		if observed != nil {
+			view.Routes = buildBirdRouteViews(dump, observed.Routes)
+		}
+		views = append(views, view)
+	}
+	sort.Slice(views, func(i, j int) bool {
+		if views[i].NetNS != views[j].NetNS {
+			return views[i].NetNS < views[j].NetNS
+		}
+		return views[i].InstanceID < views[j].InstanceID
+	})
+	return views
+}
+
+func buildBirdRouteViews(dump *routesDumpResponse, routes []bird.BirdRoute) []birdRouteView {
+	out := make([]birdRouteView, 0, len(routes))
+	for _, route := range routes {
+		if !route.Prefix.IsValid() {
+			continue
+		}
+		prefix := route.Prefix.String()
+		zones := authorizedZonesForPrefix(dump, prefix)
+		out = append(out, birdRouteView{
+			Prefix:        prefix,
+			Protocol:      route.Protocol,
+			Source:        route.Source,
+			Iface:         route.Iface,
+			From:          addrString(route.From),
+			Via:           addrString(route.Via),
+			Metric:        route.Metric,
+			Selected:      route.Selected,
+			Authorized:    len(zones) > 0,
+			ImportAllowed: routeWithinAssignedPrefix(dump, route.Prefix),
+			Zones:         zones,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Prefix != out[j].Prefix {
+			return comparePrefixStrings(out[i].Prefix, out[j].Prefix) < 0
+		}
+		if out[i].Selected != out[j].Selected {
+			return out[i].Selected
+		}
+		if out[i].Protocol != out[j].Protocol {
+			return out[i].Protocol < out[j].Protocol
+		}
+		return out[i].Iface < out[j].Iface
+	})
+	return out
+}
+
+func authorizedZonesForPrefix(dump *routesDumpResponse, prefix string) []string {
+	if dump == nil {
+		return nil
+	}
+	zones := make([]string, 0)
+	for z, prefixes := range dump.Authorized {
+		for _, p := range prefixes {
+			if p == prefix {
+				zones = append(zones, z)
+				break
+			}
+		}
+	}
+	sort.Strings(zones)
+	return zones
+}
+
+func routeWithinAssignedPrefix(dump *routesDumpResponse, prefix netip.Prefix) bool {
+	if dump == nil || !prefix.IsValid() {
+		return false
+	}
+	addr := prefix.Masked().Addr()
+	for assignPrefixStr := range dump.Assignments {
+		assignPrefix, err := netip.ParsePrefix(assignPrefixStr)
+		if err != nil {
+			continue
+		}
+		if assignPrefix.Bits() <= prefix.Bits() && assignPrefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func addrString(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return ""
+	}
+	return addr.String()
 }
 
 func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {

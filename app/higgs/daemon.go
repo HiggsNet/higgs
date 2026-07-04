@@ -669,6 +669,10 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
+		var routingInstances []RoutingInstance
+		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Config != nil {
+			routingInstances = append([]RoutingInstance(nil), d.Sync.App.Config.Routing.Instances...)
+		}
 		state.RLock()
 		if state.Network == nil {
 			state.RUnlock()
@@ -682,7 +686,9 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		routesDump := buildRoutesDumpResponse(state.ManagedZone, ars)
+		birdStates := cloneBirdInstances(state.BirdInstances)
 		state.RUnlock()
+		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdStates)
 		writeControlResponse(conn, controlResponse{
 			OK:         true,
 			RoutesDump: routesDump,

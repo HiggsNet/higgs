@@ -17,13 +17,10 @@
 **状态：** 第一版 BIRD/Babel、route authorization、per-netns BIRD 和 dry-run smoke 已完成；完整展开清单见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
 
 **剩余后续：**
-- [ ] route-table auditor 作为可选兜底。
-- [ ] `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出。
-- [ ] teardown/revocation 对 table routes/rules 的 owner-guarded 清理。
 - [x] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）。
-- [ ] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图。
-- [ ] 多 overlay 共享同一 netns 时的 table/rule 隔离。
-- [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
+- [x] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图。
+  - 已在 `routes_dump` / `debug routes` / `debug route <prefix>` 接入 BIRD live route cross-view，按 prefix 标注 selected、authorized exact match、assignment/import 范围命中和来源 zone。
+- [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面一起补齐。
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（归档后仅保留后续项）
 
@@ -150,6 +147,12 @@
   - 结构化日志（slog）
   - CLI 调试工具：`higgs status`, `higgs zones`, `higgs peers`, `higgs sync`
 
+- [ ] **7.12 可选策略路由与系统路由审计（远期）**
+  - 当前主线保持一个 netns 一个 BIRD 实例，BIRD 直接写该 netns 的 main table；默认不启用额外 `ip rule` / per-overlay table 隔离。
+  - 如后续需要 external BIRD、管理员自定义策略路由、或非默认共享 netns 拓扑，再补 `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出。
+  - route-table auditor 仅作为可选兜底，用于交叉检查 Higgs authorized route set、BIRD learned/installed routes 与内核 route table 是否一致。
+  - 若未来开始 apply table routes/rules，必须同时实现 teardown/revocation 对 Higgs-owned routes/rules 的 owner-guarded 清理。
+
 ## Phase 8: 应用层服务网格与代理（远期规划）
 
 **目标：** 在 Higgs L3 mesh 之上支持应用代理层的策略源站选路，让 Higgs 不仅提供节点间连通性，还能作为服务发现、策略分发和选路决策的基础设施。
@@ -199,4 +202,4 @@
 2. 第二步抽 zone/record/authority 展示逻辑，复用到 `zone show` / `debug zone` / Observer zone detail，避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
 3. 第三步抽 peer endpoints，再逐步迁移 routes/BIRD/health/revocation/admission/firewall 的诊断 presenter 和 reason 推理。
 4. 补 state 文件外部协调：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
-5. Phase 5 后续按需补 managed BIRD 崩溃恢复、BIRD 观测接入 `RotateCutoverReady`、策略路由/table owner 清理和真实数据面 smoke。
+5. Phase 5 后续按需补真实 BIRD 数据面 negative/rotate/restart smoke。

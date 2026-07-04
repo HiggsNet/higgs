@@ -1,11 +1,13 @@
 package main
 
 import (
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -85,6 +87,71 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 	}
 	if !strings.Contains(out, "assignment_assigned_to: node-a.catofes.") {
 		t.Errorf("expected assignment to node-a.catofes., got:\n%s", out)
+	}
+}
+
+func TestDebugRoutesShowsBirdAuthorizedCrossView(t *testing.T) {
+	dump := &routesDumpResponse{
+		LocalZone: "node-a.catofes.",
+		ExportSet: []string{"10.0.0.0/24"},
+		Authorized: map[string][]string{
+			"node-a.catofes.": {"10.0.0.0/24"},
+			"node-b.catofes.": {"10.1.0.0/24"},
+		},
+		Assignments: map[string]routeAssignmentInfo{
+			"10.0.0.0/16": {Source: "catofes.", AssignedTo: "node-a.catofes."},
+			"10.1.0.0/16": {Source: "catofes.", AssignedTo: "node-b.catofes."},
+		},
+	}
+	dump.BIRD = []birdRoutesView{{
+		NetNS:      "h2",
+		InstanceID: "main",
+		State:      birdInstanceStateRunning,
+		Routes: buildBirdRouteViews(dump, []bird.BirdRoute{
+			{
+				Prefix:   netip.MustParsePrefix("10.1.0.0/24"),
+				Protocol: "babel1",
+				Iface:    "hgs-node-b",
+				Metric:   96,
+				Selected: true,
+			},
+			{
+				Prefix:   netip.MustParsePrefix("10.2.0.0/24"),
+				Protocol: "babel1",
+				Iface:    "hgs-node-c",
+				Metric:   128,
+				Selected: true,
+			},
+		}),
+	}}
+
+	var buf strings.Builder
+	if err := writeDebugRoutes(&buf, dump); err != nil {
+		t.Fatalf("writeDebugRoutes: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		"bird_routes: 1 instances",
+		"netns h2",
+		"10.1.0.0/24 selected=true authorized=true import_allowed=true zones=node-b.catofes. protocol=babel1 iface=hgs-node-b metric=96",
+		"10.2.0.0/24 selected=true authorized=false import_allowed=false protocol=babel1 iface=hgs-node-c metric=128",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got:\n%s", want, out)
+		}
+	}
+
+	buf.Reset()
+	if err := writeDebugRoute(&buf, netip.MustParsePrefix("10.1.0.0/24"), dump); err != nil {
+		t.Fatalf("writeDebugRoute: %v", err)
+	}
+	out = buf.String()
+	if !strings.Contains(out, "bird_routes: 1") {
+		t.Errorf("expected one bird route match, got:\n%s", out)
+	}
+	if !strings.Contains(out, "netns=h2 instance=main selected=true authorized=true import_allowed=true protocol=babel1 iface=hgs-node-b metric=96") {
+		t.Errorf("expected bird route detail, got:\n%s", out)
 	}
 }
 
