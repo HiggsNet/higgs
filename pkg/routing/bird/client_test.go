@@ -234,6 +234,20 @@ func TestShutdown(t *testing.T) {
 	}
 }
 
+func TestRawCommand(t *testing.T) {
+	server := newFakeServer(t, defaultHandler)
+	defer server.close()
+
+	client := NewClient(server.socket, 5*time.Second)
+	out, err := client.Raw(context.Background(), "show route all")
+	if err != nil {
+		t.Fatalf("Raw returned error: %v", err)
+	}
+	if !strings.Contains(out, "Table master4:") {
+		t.Fatalf("Raw output missing route table:\n%s", out)
+	}
+}
+
 func TestCommandTimeout(t *testing.T) {
 	slowHandler := func(cmd string) string {
 		time.Sleep(500 * time.Millisecond)

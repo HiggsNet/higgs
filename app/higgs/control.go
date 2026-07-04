@@ -26,6 +26,19 @@ type routesDumpResponse struct {
 	Errors      []routeAuthorizationErrorJSON  `json:"errors"`
 }
 
+type birdDumpResponse struct {
+	Instances map[string]birdDumpInstance `json:"instances"`
+}
+
+type birdDumpInstance struct {
+	NetNS         string            `json:"netns"`
+	InstanceID    string            `json:"instance_id"`
+	ControlSocket string            `json:"control_socket"`
+	Command       string            `json:"command,omitempty"`
+	Raw           map[string]string `json:"raw,omitempty"`
+	Error         string            `json:"error,omitempty"`
+}
+
 type routeAssignmentInfo struct {
 	Source     string `json:"source"`
 	AssignedTo string `json:"assigned_to"`
@@ -56,6 +69,8 @@ type controlRequest struct {
 	Snapshot    *gossip.ZoneSnapshot `json:"snapshot,omitempty"`
 	Apply       bool                 `json:"apply,omitempty"`
 	Orphans     bool                 `json:"orphans,omitempty"`
+	NetNS       string               `json:"netns,omitempty"`
+	Command     string               `json:"command,omitempty"`
 }
 
 type controlResponse struct {
@@ -74,6 +89,7 @@ type controlResponse struct {
 	RootPublicKey     ed25519.PublicKey             `json:"root_public_key,omitempty"`
 	JoinBundle        *joinBundle                   `json:"join_bundle,omitempty"`
 	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
+	BirdDump          *birdDumpResponse             `json:"bird_dump,omitempty"`
 	RoutesDump        *routesDumpResponse           `json:"routes_dump,omitempty"`
 	Admission         *admissionDiagnosis           `json:"admission,omitempty"`
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
@@ -233,6 +249,24 @@ func birdStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 func routesDumpViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "routes_dump"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func routingReloadViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "routing_reload"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func birdDumpViaControl(rt *Runtime, netnsName, command string) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "bird_dump", NetNS: netnsName, Command: command})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}

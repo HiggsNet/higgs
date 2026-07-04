@@ -33,6 +33,9 @@ type Client interface {
 
 	// Shutdown performs a graceful shutdown ("birdc down" or SIGTERM).
 	Shutdown(ctx context.Context) error
+
+	// Raw runs a single birdc command and returns the unparsed response body.
+	Raw(ctx context.Context, cmd string) (string, error)
 }
 
 type birdcClient struct {
@@ -121,6 +124,11 @@ func (c *birdcClient) ReloadOut(ctx context.Context, proto string) error {
 // Shutdown performs a graceful shutdown ("birdc down" or SIGTERM).
 func (c *birdcClient) Shutdown(ctx context.Context) error {
 	return c.commandCheck(ctx, "down")
+}
+
+// Raw runs a single birdc command and returns the unparsed response body.
+func (c *birdcClient) Raw(ctx context.Context, cmd string) (string, error) {
+	return c.command(ctx, cmd)
 }
 
 // commandCheck runs a command and returns an error if BIRD reports a failure.

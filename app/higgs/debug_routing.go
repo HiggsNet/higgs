@@ -22,6 +22,87 @@ func debugBabel(_ context.Context, _ *cli.Command) error {
 	return debugBabelWithRuntime(rt, os.Stdout)
 }
 
+func debugRoutingReload(_ context.Context, _ *cli.Command) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	return debugRoutingReloadWithRuntime(rt, os.Stdout)
+}
+
+func debugRoutingReloadWithRuntime(rt *Runtime, w io.Writer) error {
+	response, ok, err := routingReloadViaControl(rt)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("daemon control socket unavailable; start the daemon to reload routing")
+	}
+	msg := "routing reloaded"
+	if response.Message != "" {
+		msg = response.Message
+	}
+	fmt.Fprintln(w, msg)
+	return nil
+}
+
+func debugBirdDump(_ context.Context, cmd *cli.Command) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	return debugBirdDumpWithRuntime(rt, cmd.String("netns"), cmd.String("command"), os.Stdout)
+}
+
+func debugBirdDumpWithRuntime(rt *Runtime, netnsName, command string, w io.Writer) error {
+	response, ok, err := birdDumpViaControl(rt, netnsName, command)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("daemon control socket unavailable; start the daemon to dump live BIRD output")
+	}
+	return writeDebugBirdDump(w, response.BirdDump)
+}
+
+func writeDebugBirdDump(w io.Writer, dump *birdDumpResponse) error {
+	if dump == nil || len(dump.Instances) == 0 {
+		fmt.Fprintln(w, "bird_dump: no instances")
+		return nil
+	}
+	netnsNames := make([]string, 0, len(dump.Instances))
+	for netnsName := range dump.Instances {
+		netnsNames = append(netnsNames, netnsName)
+	}
+	sort.Strings(netnsNames)
+	for _, netnsName := range netnsNames {
+		inst := dump.Instances[netnsName]
+		fmt.Fprintf(w, "netns %s\n", inst.NetNS)
+		fmt.Fprintf(w, "  instance_id: %s\n", dash(inst.InstanceID))
+		fmt.Fprintf(w, "  control_socket: %s\n", dash(inst.ControlSocket))
+		if inst.Error != "" {
+			fmt.Fprintf(w, "  error: %s\n", inst.Error)
+		}
+		commands := make([]string, 0, len(inst.Raw))
+		for cmd := range inst.Raw {
+			commands = append(commands, cmd)
+		}
+		sort.Strings(commands)
+		for _, cmd := range commands {
+			fmt.Fprintf(w, "  command: %s\n", cmd)
+			out := strings.TrimRight(inst.Raw[cmd], "\n")
+			if out == "" {
+				fmt.Fprintln(w, "    -")
+				continue
+			}
+			for _, line := range strings.Split(out, "\n") {
+				fmt.Fprintf(w, "    %s\n", line)
+			}
+		}
+	}
+	return nil
+}
+
 func debugBabelWithRuntime(rt *Runtime, w io.Writer) error {
 	response, ok, err := birdStatusViaControl(rt)
 	if err != nil {

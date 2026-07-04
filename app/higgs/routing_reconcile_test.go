@@ -67,6 +67,9 @@ type fakeBirdClient struct {
 	status       *bird.BirdObservedState
 	configureErr error
 	statusCalled bool
+	raw          map[string]string
+	rawErr       error
+	rawCommands  []string
 }
 
 func (f *fakeBirdClient) Status(ctx context.Context) (*bird.BirdObservedState, error) {
@@ -83,6 +86,14 @@ func (f *fakeBirdClient) Configure(ctx context.Context, path string) error {
 
 func (f *fakeBirdClient) ConfigureSoft(ctx context.Context, path string) error {
 	return f.configureErr
+}
+
+func (f *fakeBirdClient) Raw(ctx context.Context, cmd string) (string, error) {
+	f.rawCommands = append(f.rawCommands, cmd)
+	if f.raw != nil {
+		return f.raw[cmd], f.rawErr
+	}
+	return "", f.rawErr
 }
 
 func TestReconcileRoutingGeneratesConfig(t *testing.T) {

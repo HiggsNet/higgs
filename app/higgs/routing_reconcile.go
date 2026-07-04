@@ -47,6 +47,7 @@ type birdClient interface {
 	Status(ctx context.Context) (*bird.BirdObservedState, error)
 	Configure(ctx context.Context, path string) error
 	ConfigureSoft(ctx context.Context, path string) error
+	Raw(ctx context.Context, cmd string) (string, error)
 }
 
 func (d *DaemonService) reconcileRouting(ctx context.Context) error {
@@ -441,6 +442,64 @@ func (d *DaemonService) newBirdClient(socketPath string) birdClient {
 		return d.birdClientFactory(socketPath, 10*time.Second)
 	}
 	return bird.NewClient(socketPath, 10*time.Second)
+}
+
+func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, command string) *birdDumpResponse {
+	response := &birdDumpResponse{Instances: map[string]birdDumpInstance{}}
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return response
+	}
+	commands := defaultBirdDumpCommands()
+	if trimmed := strings.TrimSpace(command); trimmed != "" {
+		command = trimmed
+		commands = []string{command}
+	} else {
+		command = ""
+	}
+	for _, inst := range d.Sync.App.Config.Routing.Instances {
+		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
+			continue
+		}
+		if netnsName != "" && inst.NetNS != netnsName && inst.ID != netnsName {
+			continue
+		}
+		item := birdDumpInstance{
+			NetNS:         inst.NetNS,
+			InstanceID:    inst.ID,
+			ControlSocket: inst.ControlSocket,
+			Command:       command,
+			Raw:           map[string]string{},
+		}
+		if inst.ControlSocket == "" {
+			item.Error = "control socket is not configured"
+			response.Instances[inst.NetNS] = item
+			continue
+		}
+		client := d.newBirdClient(inst.ControlSocket)
+		for _, cmd := range commands {
+			out, err := client.Raw(ctx, cmd)
+			if err != nil {
+				if item.Error == "" {
+					item.Error = err.Error()
+				}
+				item.Raw[cmd] = out
+				continue
+			}
+			item.Raw[cmd] = out
+		}
+		response.Instances[inst.NetNS] = item
+	}
+	return response
+}
+
+func defaultBirdDumpCommands() []string {
+	return []string{
+		"show status",
+		"show protocols all",
+		"show route all",
+		"show interfaces",
+		"show babel neighbors",
+	}
 }
 
 func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ string, ng *netnsOverlayGroup, netnsCfg netnsConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {

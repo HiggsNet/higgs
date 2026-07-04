@@ -258,3 +258,7 @@ func (c *realBirdClient) Configure(ctx context.Context, _ string) error {
 func (c *realBirdClient) ConfigureSoft(ctx context.Context, _ string) error {
 	return nil
 }
+
+func (c *realBirdClient) Raw(ctx context.Context, cmd string) (string, error) {
+	return bird.NewClient(c.socketPath, c.timeout).Raw(ctx, cmd)
+}

@@ -250,6 +250,8 @@ Daemon 监听一个 Unix domain socket（路径默认 `<data_dir>/higgs.sock`，
 | `ipsec_rotate_port` | 触发 IPsec 端口轮换 |
 | `shutdown` | 优雅关闭 daemon |
 | `bird_status` | 查询 BIRD 实例状态 |
+| `bird_dump` | 导出 BIRD 实例的完整 birdc 原始诊断输出 |
+| `routing_reload` | 立即触发 daemon routing reconcile，不重新读取配置 |
 | `routes_dump` | 导出授权路由集 |
 | `admission_status` | 查询 auto-join 准入状态 |
 | `firewall_status` | 查询防火墙 reconcile 状态 |

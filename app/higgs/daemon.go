@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,6 +85,7 @@ const (
 	daemonEventEndpointTimer        daemonEventType = "timer_endpoint_publish"
 	daemonEventSyncTrigger          daemonEventType = "sync_trigger"
 	daemonEventReloadConfig         daemonEventType = "reload_config"
+	daemonEventRoutingReload        daemonEventType = "routing_reload"
 	daemonEventIPsecCleanup         daemonEventType = "ipsec_cleanup"
 	daemonEventIPsecPortRotate      daemonEventType = "ipsec_port_rotate"
 	daemonEventIPsecLifecycle       daemonEventType = "ipsec_lifecycle"
@@ -605,6 +607,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "config reloaded"})
+	case "routing_reload":
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventRoutingReload})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Message: "routing reloaded"})
 	case "ipsec_cleanup":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecCleanup, Orphans: request.Orphans})
 		if result.Error != nil {
@@ -642,6 +651,17 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			BirdInstances:    instances,
 			LastRoutingError: lastRoutingError,
 			Message:          "bird status",
+		})
+	case "bird_dump":
+		if strings.ContainsAny(request.Command, "\r\n") {
+			writeControlResponse(conn, controlError(errors.New("bird_dump command must be a single line")))
+			return
+		}
+		dump := d.birdDumpForControl(ctx, request.NetNS, request.Command)
+		writeControlResponse(conn, controlResponse{
+			OK:       true,
+			BirdDump: dump,
+			Message:  "bird dump",
 		})
 	case "routes_dump":
 		state := d.currentState()
@@ -869,6 +889,10 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventReloadConfig:
 		err := d.handleReloadConfigEvent()
 		return daemonEventResult{Error: err}, err == nil, false
+	case daemonEventRoutingReload:
+		d.routingDirty = true
+		d.flushRoutingReconcile(controlContext(event.Context))
+		return daemonEventResult{}, false, false
 	case daemonEventIPsecCleanup:
 		cleaned, orphans, err := d.handleIPsecCleanupEvent(controlContext(event.Context), event.Orphans)
 		if err == nil {

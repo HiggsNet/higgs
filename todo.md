@@ -19,10 +19,10 @@
 **剩余后续：**
 - [ ] route-table auditor 作为可选兜底。
 - [ ] `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出。
-- [ ] 多 overlay 共享同一 netns 时的 table/rule 隔离。
 - [ ] teardown/revocation 对 table routes/rules 的 owner-guarded 清理。
-- [ ] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）。
+- [x] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）。
 - [ ] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图。
+- [ ] 多 overlay 共享同一 netns 时的 table/rule 隔离。
 - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（归档后仅保留后续项）

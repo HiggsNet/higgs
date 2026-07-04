@@ -481,6 +481,24 @@ func cmdDebug() *cli.Command {
 				},
 			},
 			{
+				Name:  "bird-dump",
+				Usage: "Dump raw birdc diagnostic output from the daemon",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "netns", Usage: "Only dump the BIRD instance for this netns or instance id"},
+					&cli.StringFlag{Name: "command", Aliases: []string{"c"}, Usage: "Run one birdc command instead of the default diagnostic set"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugBirdDump(ctx, cmd)
+				},
+			},
+			{
+				Name:  "routing-reload",
+				Usage: "Trigger daemon routing reconcile",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return debugRoutingReload(ctx, cmd)
+				},
+			},
+			{
 				Name:  "routes",
 				Usage: "Show authorized route set",
 				Action: func(ctx context.Context, cmd *cli.Command) error {

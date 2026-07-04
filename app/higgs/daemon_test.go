@@ -3957,6 +3957,66 @@ func TestDaemonControlStatus(t *testing.T) {
 	}
 }
 
+func TestDaemonControlRoutingReload(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "higgs.db")}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.routingDirty = false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pumpDaemonEvents(ctx, service)
+
+	response := controlRequestViaPipe(t, service, controlRequest{Method: "routing_reload"})
+	if !response.OK || response.Message != "routing reloaded" {
+		t.Fatalf("routing_reload response = %#v", response)
+	}
+	if service.routingDirty {
+		t.Fatalf("routingDirty should be cleared after synchronous routing_reload")
+	}
+}
+
+func TestDaemonControlBirdDump(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{
+		ID:            "main",
+		NetNS:         "h2",
+		Enabled:       boolPtr(true),
+		Mode:          ipsec.RoutingModeManaged,
+		ControlSocket: "/run/higgs/bird-h2.ctl",
+	}}, appConfig.Netns, appConfig.DataDir)
+
+	client := &fakeBirdClient{raw: map[string]string{
+		"show route all": "Table master4:\n10.0.0.0/24 unicast\n",
+	}}
+	service := newDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		if socketPath != "/run/higgs/bird-h2.ctl" {
+			t.Fatalf("socketPath = %q, want /run/higgs/bird-h2.ctl", socketPath)
+		}
+		return client
+	}
+
+	response := controlRequestViaPipe(t, service, controlRequest{Method: "bird_dump", NetNS: "h2", Command: "show route all"})
+	if !response.OK || response.BirdDump == nil {
+		t.Fatalf("bird_dump response = %#v", response)
+	}
+	inst := response.BirdDump.Instances["h2"]
+	if inst.ControlSocket != "/run/higgs/bird-h2.ctl" || inst.Raw["show route all"] == "" {
+		t.Fatalf("bird_dump instance = %#v", inst)
+	}
+	if len(client.rawCommands) != 1 || client.rawCommands[0] != "show route all" {
+		t.Fatalf("raw commands = %#v, want show route all", client.rawCommands)
+	}
+}
+
 func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.LinkInstances = map[string]linkInstanceState{
