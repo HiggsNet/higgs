@@ -244,10 +244,10 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	lastObservedDigests := d.zoneDigests()
 	d.Sync.State.Lock()
 	d.Sync.updateDiscoveredPeers()
+	d.Sync.State.Unlock()
 	d.recoverIPsecLinksOnStart(ctx)
 	d.recoverRoutingOnStart(ctx)
 	d.recoverFirewallOnStart(ctx)
-	d.Sync.State.Unlock()
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
