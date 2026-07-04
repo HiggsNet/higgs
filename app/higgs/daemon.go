@@ -245,10 +245,27 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.Sync.State.Lock()
 	d.Sync.updateDiscoveredPeers()
 	d.Sync.State.Unlock()
+	d.logDebug("daemon", "startup_publish_begin", nil)
+	if err := d.Sync.publishEndpointRecord(); err != nil {
+		d.logWarn("endpoint", "startup_publish_failed", map[string]any{"error": err})
+	}
+	if err := d.Sync.publishIPsecRecords(); err != nil {
+		d.logWarn("ipsec", "startup_publish_failed", map[string]any{"error": err})
+	}
+	if err := d.publishRoutingNetnsRecord(); err != nil {
+		d.logWarn("routing", "startup_publish_failed", map[string]any{"error": err})
+	}
+	d.logDebug("daemon", "startup_publish_done", nil)
 	d.logDebug("daemon", "startup_recovery_begin", nil)
+	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "ipsec"})
 	d.recoverIPsecLinksOnStart(ctx)
+	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "ipsec"})
+	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "routing"})
 	d.recoverRoutingOnStart(ctx)
+	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "routing"})
+	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "firewall"})
 	d.recoverFirewallOnStart(ctx)
+	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
 	var forceSync bool
 	for {
