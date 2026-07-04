@@ -45,6 +45,13 @@ HIGGS_BIRD_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/routing/bird -run '^TestBIRDUpstreamBabelRootSmoke$' -count=1 -v
 
+# Test 2c: BIRD/Babel import filter rejects unauthorized prefixes
+HIGGS_BIRD_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./pkg/routing/bird -run '^TestBabelImportFilterNegativeRootSmoke$' -count=1 -v
+
 # Test 3: Daemon routing reconcile with real BIRD in a netns
 HIGGS_BIRD_SMOKE=1 \
   GOCACHE="$go_cache" \
@@ -59,4 +66,11 @@ HIGGS_BIRD_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonBIRDUpstreamRootSmoke$' -count=1 -v
 
-printf 'bird/babel smoke passed (preflight + managed BIRD lifecycle + two-node Babel exchange + upstream Babel bidirectional prefix exchange + daemon routing reconcile + veth upstream)\n'
+# Test 5: Daemon restart adopts the persisted managed BIRD process
+HIGGS_BIRD_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./app/higgs -run '^TestDaemonBIRDAdoptRestartRootSmoke$' -count=1 -v
+
+printf 'bird/babel smoke passed (preflight + managed BIRD lifecycle + two-node Babel exchange + upstream Babel bidirectional prefix exchange + negative import filter + daemon routing reconcile + veth upstream + daemon restart adopt)\n'

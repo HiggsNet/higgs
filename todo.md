@@ -21,17 +21,19 @@
 - [x] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图。
   - 已在 `routes_dump` / `debug routes` / `debug route <prefix>` 接入 BIRD live route cross-view，按 prefix 标注 selected、authorized exact match、assignment/import 范围命中和来源 zone。
 - [x] managed BIRD 默认随 Higgs daemon 退出保持运行，重启后 adopt，避免 Babel 邻居和路由因控制面重启出现静默期；如需实验室 teardown 可显式配置 `shutdown_policy: stop`。
-- [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面一起补齐。
+- [x] restart/adopt smoke 随真实 BIRD 数据面补齐：daemon 默认退出不停止 managed BIRD，新 daemon/process manager 通过 pidfile/control socket adopt 原进程，避免 Babel 会话被控制面重启打断。
+- [x] negative smoke 随真实 BIRD 数据面补齐：用真实 BIRD 验证未授权 prefix 不被 import/selected/安装。
+- [ ] 跨数据面 rotate smoke（远期增强）：结合端口/IPsec rotate 与真实 BIRD route/metric 观测验证数据面切换窗口；不阻塞 Phase 5 收尾。
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（归档后仅保留后续项）
 
-**状态：** 6.0-6.7.6 主线已完成并归档到 [docs/roadmap-archive.md](docs/roadmap-archive.md)：事件驱动 daemon/sync FSM、endpoint 可达性修复、IPAM 闭环、auto-join 诊断、防火墙同步、动态 peer 管理、撤销清理、链路健康检测、Observer 只读控制台 MVP 均已落地。当前 Phase 6 只保留未闭环后续项与 6.7.7 模块化重构。
+**状态：** 6.0-6.7.6 主线已完成并归档到 [docs/roadmap-archive.md](docs/roadmap-archive.md)：事件驱动 daemon/sync FSM、endpoint 可达性修复、IPAM 闭环、auto-join 诊断、防火墙同步、动态 peer 管理、撤销清理、链路健康检测、Observer 只读控制台 MVP 均已落地。当前 Phase 6 只保留远期增强 smoke 与 6.7.7 模块化重构，不表示 6.3/6.6 主线未完成。
 
 **剩余后续：**
 - [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
 - [ ] 6.1.8 anycast smoke：多节点宣告同一 anycast 前缀，验证 Babel ECMP 和故障切换。
-- [ ] 6.3 firewall root/container 联合 smoke：overlay netns + veth + BIRD 下验证 default drop、合法 prefix 放行、非法 prefix drop、revocation 断流、port rotate redirect grace。
-- [ ] 6.6 health root/container 和 metrics smoke：在真实 XFRM+BIRD 链路上采集 ICMP/UDP probe 与 BIRD RTT/metric，注入丢包/延迟，验证状态切换、BIRD metric/cutover gate、`/metrics` 和本地 spool。
+- [ ] firewall root/container 增强 smoke：overlay netns + veth + BIRD 下验证 default drop、合法 prefix 放行、非法 prefix drop、revocation 断流、port rotate redirect grace。
+- [ ] health root/container 和 metrics 增强 smoke：在真实 XFRM+BIRD 链路上采集 ICMP/UDP probe 与 BIRD RTT/metric，注入丢包/延迟，验证状态切换、BIRD metric/cutover gate、`/metrics` 和本地 spool。
 - [ ] 6.7 Observer 增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析，作为后续增强，不阻塞当前主线。
 
 - [ ] **6.7.7 `app/higgs` 模块化重构（Observer/debug 先行）**

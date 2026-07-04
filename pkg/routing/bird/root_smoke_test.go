@@ -282,6 +282,152 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 	t.Logf("Babel two-node root smoke: B learned route 10.0.1.0/24 from A")
 }
 
+// TestBabelImportFilterNegativeRootSmoke verifies that a real BIRD/Babel
+// import filter accepts an authorized prefix while rejecting an unauthorized
+// prefix announced by the same neighbor.
+func TestBabelImportFilterNegativeRootSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
+		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD Babel negative smoke")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	nsA := "higgs-bird-neg-a-" + suffix
+	nsB := "higgs-bird-neg-b-" + suffix
+	vethA := "hgnega" + suffix[len(suffix)-4:]
+	vethB := "hgnegb" + suffix[len(suffix)-4:]
+	tmpA := t.TempDir()
+	tmpB := t.TempDir()
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", nsA).Run()
+		_ = exec.Command("ip", "netns", "delete", nsB).Run()
+	})
+
+	if err := exec.CommandContext(ctx, "ip", "netns", "add", nsA).Run(); err != nil {
+		t.Fatalf("ip netns add %s: %v", nsA, err)
+	}
+	if err := exec.CommandContext(ctx, "ip", "netns", "add", nsB).Run(); err != nil {
+		t.Fatalf("ip netns add %s: %v", nsB, err)
+	}
+	if err := exec.CommandContext(ctx, "ip", "link", "add", vethA, "type", "veth", "peer", "name", vethB).Run(); err != nil {
+		t.Fatalf("create veth pair: %v", err)
+	}
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethA, "netns", nsA).Run()
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethB, "netns", nsB).Run()
+
+	steps := [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "10.99.3.1/30", "dev", vethA},
+		{"netns", "exec", nsB, "ip", "addr", "add", "10.99.3.2/30", "dev", vethB},
+		{"netns", "exec", nsA, "ip", "link", "set", vethA, "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", vethB, "up"},
+	}
+	for _, args := range steps {
+		out, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ip %s: %v\noutput: %s", strings.Join(args, " "), err, string(out))
+		}
+	}
+
+	specA := withTestBirdOwner(BirdInstanceSpec{
+		RouterID:          0x0a630301,
+		NetNSName:         nsA,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsA, Create: false},
+		ControlSocketPath: filepath.Join(tmpA, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpA, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpA, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{vethA},
+	})
+	specB := withTestBirdOwner(BirdInstanceSpec{
+		RouterID:          0x0a630302,
+		NetNSName:         nsB,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsB, Create: false},
+		ControlSocketPath: filepath.Join(tmpB, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpB, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpB, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{vethB},
+	})
+
+	allowedPrefix := "10.10.1.0/24"
+	rejectedPrefix := "10.10.66.0/24"
+	cfgA := generateBabelFilterSmokeConfig(specA, vethA, []string{allowedPrefix, rejectedPrefix}, nil)
+	cfgB := generateBabelFilterSmokeConfig(specB, vethB, []string{"10.10.2.0/24"}, []string{allowedPrefix})
+	if err := os.WriteFile(specA.ConfigPath, []byte(cfgA), 0644); err != nil {
+		t.Fatalf("write config A: %v", err)
+	}
+	if err := os.WriteFile(specB.ConfigPath, []byte(cfgB), 0644); err != nil {
+		t.Fatalf("write config B: %v", err)
+	}
+
+	pmA := NewExecProcessManager("")
+	pmA.socketWaitTimeout = 5 * time.Second
+	pmB := NewExecProcessManager("")
+	pmB.socketWaitTimeout = 5 * time.Second
+
+	if err := pmA.Start(ctx, specA); err != nil {
+		t.Fatalf("start BIRD A: %v", err)
+	}
+	t.Cleanup(func() { _ = pmA.Stop(context.Background(), specA) })
+	if err := pmB.Start(ctx, specB); err != nil {
+		t.Fatalf("start BIRD B: %v", err)
+	}
+	t.Cleanup(func() { _ = pmB.Stop(context.Background(), specB) })
+
+	dumpOnFail := func() {
+		for _, pair := range []struct{ ns, sock string }{
+			{nsA, specA.ControlSocketPath},
+			{nsB, specB.ControlSocketPath},
+		} {
+			out, _ := exec.CommandContext(ctx, "birdc", "-s", pair.sock, "show", "protocols", "all").CombinedOutput()
+			t.Logf("--- birdc show protocols all in %s ---\n%s", pair.ns, string(out))
+			routes, _ := exec.CommandContext(ctx, "birdc", "-s", pair.sock, "show", "route", "all").CombinedOutput()
+			t.Logf("--- routes in %s ---\n%s", pair.ns, string(routes))
+		}
+	}
+	defer func() {
+		if t.Failed() {
+			dumpOnFail()
+		}
+	}()
+
+	var lastRoutes string
+	allowedSeen := false
+	for i := 0; i < 40; i++ {
+		out, err := exec.CommandContext(ctx, "birdc", "-s", specB.ControlSocketPath, "show", "route").CombinedOutput()
+		lastRoutes = string(out)
+		if err == nil && strings.Contains(lastRoutes, allowedPrefix) {
+			allowedSeen = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !allowedSeen {
+		t.Fatalf("authorized prefix %s not learned by B; last routes:\n%s", allowedPrefix, lastRoutes)
+	}
+	if strings.Contains(lastRoutes, rejectedPrefix) {
+		t.Fatalf("unauthorized prefix %s was imported by B; routes:\n%s", rejectedPrefix, lastRoutes)
+	}
+
+	time.Sleep(2 * time.Second)
+	out, err := exec.CommandContext(ctx, "birdc", "-s", specB.ControlSocketPath, "show", "route").CombinedOutput()
+	if err != nil {
+		t.Fatalf("birdc show route after negative wait: %v\noutput: %s", err, string(out))
+	}
+	if strings.Contains(string(out), rejectedPrefix) {
+		t.Fatalf("unauthorized prefix %s appeared after filter settle; routes:\n%s", rejectedPrefix, string(out))
+	}
+
+	t.Logf("Babel negative root smoke: B accepted %s and rejected %s", allowedPrefix, rejectedPrefix)
+}
+
 // TestBIRDUpstreamBabelRootSmoke tests the 6.1.7 scenario: a veth pair
 // connects an overlay netns to the host (main) network, BIRD instances
 // on both sides establish a Babel neighbor over the veth, and prefixes
@@ -543,4 +689,109 @@ protocol babel {
     };
 }
 `, logPath, routerID, announcePrefix, iface)
+}
+
+func generateBabelFilterSmokeConfig(spec BirdInstanceSpec, iface string, staticPrefixes, importAllowed []string) string {
+	routerID := fmt.Sprintf("%d.%d.%d.%d",
+		(spec.RouterID>>24)&0xff,
+		(spec.RouterID>>16)&0xff,
+		(spec.RouterID>>8)&0xff,
+		spec.RouterID&0xff,
+	)
+	logPath := filepath.Join(filepath.Dir(spec.ConfigPath), "bird.log")
+
+	var staticRoutes strings.Builder
+	for _, prefix := range staticPrefixes {
+		fmt.Fprintf(&staticRoutes, "    route %s blackhole;\n", prefix)
+	}
+	if staticRoutes.Len() == 0 {
+		staticRoutes.WriteString("    # no static routes announced by this smoke peer\n")
+	}
+
+	importFilter := "import all;"
+	if len(importAllowed) > 0 {
+		var rules strings.Builder
+		rules.WriteString("filter higgs_import4 {\n")
+		for _, prefix := range importAllowed {
+			fmt.Fprintf(&rules, "    if net = %s then accept;\n", prefix)
+		}
+		rules.WriteString("    reject;\n")
+		rules.WriteString("}\n\n")
+		importFilter = "import filter higgs_import4;"
+		return fmt.Sprintf(`# Minimal Babel config generated by TestBabelImportFilterNegativeRootSmoke
+log "%s" all;
+debug protocols all;
+
+router id %s;
+
+ipv4 table master4;
+
+protocol device {
+    scan time 5;
+}
+
+protocol kernel {
+    ipv4 {
+        export all;
+    };
+    learn;
+}
+
+protocol direct {
+    ipv4;
+}
+
+protocol static {
+    ipv4;
+%s}
+
+%sprotocol babel {
+    ipv4 {
+        %s
+        export where source = RTS_BABEL || source = RTS_STATIC || source = RTS_DEVICE;
+    };
+    interface "%s" {
+        type wireless;
+    };
+}
+`, logPath, routerID, staticRoutes.String(), rules.String(), importFilter, iface)
+	}
+
+	return fmt.Sprintf(`# Minimal Babel config generated by TestBabelImportFilterNegativeRootSmoke
+log "%s" all;
+debug protocols all;
+
+router id %s;
+
+ipv4 table master4;
+
+protocol device {
+    scan time 5;
+}
+
+protocol kernel {
+    ipv4 {
+        export all;
+    };
+    learn;
+}
+
+protocol direct {
+    ipv4;
+}
+
+protocol static {
+    ipv4;
+%s}
+
+protocol babel {
+    ipv4 {
+        %s
+        export where source = RTS_BABEL || source = RTS_STATIC || source = RTS_DEVICE;
+    };
+    interface "%s" {
+        type wireless;
+    };
+}
+`, logPath, routerID, staticRoutes.String(), importFilter, iface)
 }

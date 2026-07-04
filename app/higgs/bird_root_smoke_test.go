@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,128 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	}
 
 	t.Logf("Daemon BIRD routing root smoke: BIRD running in netns %s, birdc responds", nsName)
+}
+
+// TestDaemonBIRDAdoptRestartRootSmoke verifies the daemon restart shape for
+// managed BIRD: the first daemon leaves BIRD running by default, and a fresh
+// process manager adopts the existing daemon instead of restarting it.
+func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
+		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD daemon adopt smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	nsName := "higgs-bird-adopt-" + suffix
+	dataDir := t.TempDir()
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", nsName).Run()
+	})
+
+	if err := exec.CommandContext(ctx, "ip", "netns", "add", nsName).Run(); err != nil {
+		t.Fatalf("ip netns add %s: %v", nsName, err)
+	}
+	if err := exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "ip", "link", "set", "lo", "up").Run(); err != nil {
+		t.Fatalf("set lo up: %v", err)
+	}
+
+	state, syncConfig, _ := buildDryRunSmokeNetworkState(t)
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = dataDir
+	appConfig.Netns = netnsConfig{
+		Names: map[string]ipsec.NetNSSpec{
+			nsName: {Kind: ipsec.NetNSName, Name: nsName, Create: false},
+		},
+	}
+	routingYAML := []routingInstanceYAML{{
+		ID:           "main",
+		NetNS:        nsName,
+		Enabled:      boolPtr(true),
+		Mode:         ipsec.RoutingModeManaged,
+		InterfacePat: "hgs*",
+	}}
+	appConfig.Routing, _ = parseRoutingConfigInstances(routingYAML, appConfig.Netns, dataDir)
+	if len(appConfig.Routing.Instances) == 0 {
+		t.Fatal("routing instances empty after parse")
+	}
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(123, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	service1 := newDaemonService(rt, state, syncConfig, time.Second)
+	service1.birdProcessManager = bird.NewExecProcessManager("")
+	service1.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &realBirdClient{socketPath: socketPath, timeout: timeout}
+	}
+	t.Cleanup(func() {
+		_ = service1.stopManagedBirdInstances(context.Background(), true)
+	})
+
+	if err := service1.reconcileRouting(ctx); err != nil {
+		t.Fatalf("initial reconcileRouting: %v", err)
+	}
+	if !service1.birdProcessManager.IsRunning(ctx) {
+		t.Fatal("BIRD process is not running after initial reconcile")
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState after initial reconcile: %v", err)
+	}
+	birdState := latest.BirdInstances[nsName]
+	if birdState == nil {
+		t.Fatalf("BirdInstances[%s] is nil", nsName)
+	}
+	initialPID := readSmokePID(t, birdState.PIDFile)
+
+	if err := service1.stopManagedBirdInstances(ctx, false); err != nil {
+		t.Fatalf("non-force stopManagedBirdInstances: %v", err)
+	}
+	if !service1.birdProcessManager.IsRunning(ctx) {
+		t.Fatal("BIRD stopped on non-force daemon shutdown; default shutdown_policy should persist")
+	}
+
+	restartedState, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState before restart reconcile: %v", err)
+	}
+	service2 := newDaemonService(rt, restartedState, syncConfig, time.Second)
+	service2.birdProcessManager = bird.NewExecProcessManager("")
+	service2.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &realBirdClient{socketPath: socketPath, timeout: timeout}
+	}
+	t.Cleanup(func() {
+		_ = service2.stopManagedBirdInstances(context.Background(), true)
+	})
+
+	if err := service2.reconcileRouting(ctx); err != nil {
+		t.Fatalf("restart reconcileRouting: %v", err)
+	}
+	if !service2.birdProcessManager.IsRunning(ctx) {
+		t.Fatal("fresh process manager did not adopt the existing BIRD process")
+	}
+	adoptedPID := readSmokePID(t, birdState.PIDFile)
+	if adoptedPID != initialPID {
+		t.Fatalf("BIRD pid changed across daemon restart: got %d want %d", adoptedPID, initialPID)
+	}
+
+	birdcOut, err := exec.CommandContext(ctx, "birdc", "-s", birdState.ControlSocket, "show", "status").CombinedOutput()
+	if err != nil {
+		t.Fatalf("birdc show status after adopt failed: %v\noutput: %s", err, string(birdcOut))
+	}
+	if !strings.Contains(string(birdcOut), "BIRD") {
+		t.Errorf("birdc output missing BIRD identifier after adopt:\n%s", string(birdcOut))
+	}
+
+	t.Logf("Daemon BIRD adopt root smoke: BIRD pid %d persisted across daemon restart in netns %s", adoptedPID, nsName)
 }
 
 // TestDaemonBIRDUpstreamRootSmoke verifies the veth upstream pipeline with
@@ -267,4 +390,20 @@ func (c *realBirdClient) ConfigureSoft(ctx context.Context, _ string) error {
 
 func (c *realBirdClient) Raw(ctx context.Context, cmd string) (string, error) {
 	return bird.NewClient(c.socketPath, c.timeout).Raw(ctx, cmd)
+}
+
+func readSmokePID(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read pidfile %s: %v", path, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse pidfile %s: %v", path, err)
+	}
+	if pid <= 0 {
+		t.Fatalf("pidfile %s has invalid pid %d", path, pid)
+	}
+	return pid
 }
