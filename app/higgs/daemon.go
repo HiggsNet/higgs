@@ -70,6 +70,7 @@ type daemonEventType string
 
 const (
 	controlConnDeadline                             = 10 * time.Second
+	stateReadLockTimeout                            = 2 * time.Second
 	defaultDaemonInterval                           = 60 * time.Second
 	defaultIPsecReconcileInterval                   = time.Minute
 	daemonEventRecordPut            daemonEventType = "record_put"
@@ -449,11 +450,15 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		var desiredLinks int
 		var lastLinkError string
 		if state := d.currentState(); state != nil {
-			state.RLock()
+			unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+			if !ok {
+				writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+				return
+			}
 			linkInstances = len(state.LinkInstances)
 			desiredLinks = desiredIPsecLinks(state)
 			lastLinkError = lastIPsecReconcileError(state)
-			state.RUnlock()
+			unlock()
 		}
 		writeControlResponse(conn, controlResponse{
 			OK:            true,
@@ -492,9 +497,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		state.RLock()
+		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+		if !ok {
+			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+			return
+		}
 		record, err := lookupRecordJSON(state, zone.ZonePath(request.Zone), request.Key, request.History)
-		state.RUnlock()
+		unlock()
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
@@ -639,12 +648,16 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		var instances map[string]*BirdInstanceState
 		var lastRoutingError string
 		if state := d.currentState(); state != nil {
-			state.RLock()
+			unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+			if !ok {
+				writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+				return
+			}
 			instances = cloneBirdInstances(state.BirdInstances)
 			if state.RoutingReconcile != nil {
 				lastRoutingError = state.RoutingReconcile.LastError
 			}
-			state.RUnlock()
+			unlock()
 		}
 		writeControlResponse(conn, controlResponse{
 			OK:               true,
@@ -673,21 +686,25 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Config != nil {
 			routingInstances = append([]RoutingInstance(nil), d.Sync.App.Config.Routing.Instances...)
 		}
-		state.RLock()
+		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+		if !ok {
+			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+			return
+		}
 		if state.Network == nil {
-			state.RUnlock()
+			unlock()
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
 		ars, err := routing.BuildAuthorizedRouteSet(state.Network, d.Sync.now())
 		if err != nil {
-			state.RUnlock()
+			unlock()
 			writeControlResponse(conn, controlError(err))
 			return
 		}
 		routesDump := buildRoutesDumpResponse(state.ManagedZone, ars)
 		birdStates := cloneBirdInstances(state.BirdInstances)
-		state.RUnlock()
+		unlock()
 		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdStates)
 		writeControlResponse(conn, controlResponse{
 			OK:         true,
@@ -700,9 +717,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		state.RLock()
+		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+		if !ok {
+			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+			return
+		}
 		diagnosis := diagnoseAutoJoinAdmission(state, d.Sync.now())
-		state.RUnlock()
+		unlock()
 		writeControlResponse(conn, controlResponse{
 			OK:        true,
 			PeerID:    d.Sync.Config.PeerID,
@@ -715,9 +736,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		state.RLock()
+		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+		if !ok {
+			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+			return
+		}
 		fwSnapshot := cloneFirewallReconcileState(state.FirewallReconcile)
-		state.RUnlock()
+		unlock()
 		writeControlResponse(conn, controlResponse{
 			OK:                true,
 			FirewallReconcile: fwSnapshot,
@@ -729,13 +754,17 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		state.RLock()
+		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+		if !ok {
+			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+			return
+		}
 		build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
 		links := linkInspectionControlFromBuild(build)
 		if state.IPsecReconcile != nil {
 			links.ActualSAs = append([]linkSAState(nil), state.IPsecReconcile.ActualSAs...)
 		}
-		state.RUnlock()
+		unlock()
 		writeControlResponse(conn, controlResponse{
 			OK:      true,
 			PeerID:  d.Sync.Config.PeerID,
@@ -760,9 +789,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		state.RLock()
+		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+		if !ok {
+			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
+			return
+		}
 		impacts := AllRevocationImpact(state, d.Sync.Config, d.Sync.now())
-		state.RUnlock()
+		unlock()
 		writeControlResponse(conn, controlResponse{
 			OK:               true,
 			PeerID:           d.Sync.Config.PeerID,

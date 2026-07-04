@@ -70,6 +70,29 @@ func (s *stateFile) WithRLock(fn func()) {
 	fn()
 }
 
+func tryStateRLockWithin(state *stateFile, timeout time.Duration) (func(), bool) {
+	if state == nil {
+		return func() {}, true
+	}
+	if state.mu.TryRLock() {
+		return state.RUnlock, true
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			return nil, false
+		case <-ticker.C:
+			if state.mu.TryRLock() {
+				return state.RUnlock, true
+			}
+		}
+	}
+}
+
 type stateMeta struct {
 	ManagedZone       zone.ZonePath                 `json:"managed_zone"`
 	IdentityKeyPath   string                        `json:"identity_key_path,omitempty"`

@@ -148,8 +148,11 @@ func (d *DaemonService) peerStatusSnapshotForControl() []PeerStatusInfo {
 	if state == nil {
 		return nil
 	}
-	state.RLock()
-	defer state.RUnlock()
+	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+	if !ok {
+		return nil
+	}
+	defer unlock()
 	now := d.Sync.now()
 	cfg := PeerLifecycleConfig{}
 	if d.Sync.App != nil && d.Sync.App.Config != nil {

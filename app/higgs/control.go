@@ -238,6 +238,7 @@ func sendControlRequest(path string, request controlRequest) (*controlResponse, 
 		return nil, err
 	}
 	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(controlConnDeadline))
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		return nil, err
 	}
