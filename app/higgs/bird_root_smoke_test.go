@@ -78,6 +78,9 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
 	}
+	t.Cleanup(func() {
+		_ = service.stopManagedBirdInstances(context.Background())
+	})
 
 	// Run routing reconcile.
 	if err := service.reconcileRouting(ctx); err != nil {
@@ -201,6 +204,9 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
 	}
+	t.Cleanup(func() {
+		_ = service.stopManagedBirdInstances(context.Background())
+	})
 
 	// Run routing reconcile.
 	if err := service.reconcileRouting(ctx); err != nil {
