@@ -245,9 +245,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.Sync.State.Lock()
 	d.Sync.updateDiscoveredPeers()
 	d.Sync.State.Unlock()
+	d.logDebug("daemon", "startup_recovery_begin", nil)
 	d.recoverIPsecLinksOnStart(ctx)
 	d.recoverRoutingOnStart(ctx)
 	d.recoverFirewallOnStart(ctx)
+	d.logDebug("daemon", "startup_recovery_done", nil)
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -1205,6 +1207,7 @@ func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
 }
 
 func (d *DaemonService) handleEndpointTimerEvent() error {
+	d.logDebug("endpoint", "timer_begin", nil)
 	latest, err := d.Sync.loadState()
 	if err != nil {
 		return fmt.Errorf("daemon reload: %w", err)
@@ -1220,6 +1223,7 @@ func (d *DaemonService) handleEndpointTimerEvent() error {
 		return err
 	}
 	d.notifyStateChanged()
+	d.logDebug("endpoint", "timer_done", nil)
 	return nil
 }
 
