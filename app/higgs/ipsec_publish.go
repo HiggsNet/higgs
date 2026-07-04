@@ -20,16 +20,38 @@ import (
 
 func (sr *SyncRuntime) publishIPsecRecords() error {
 	if sr == nil || sr.State == nil || sr.State.Network == nil || sr.App == nil || sr.App.Config == nil {
+		if sr != nil {
+			sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "runtime_incomplete"})
+		}
 		return nil
 	}
 	state := sr.State
 	config := sr.App.Config
-	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() || len(state.ZonePrivateKey) == 0 || autoJoinPending(state) {
+	if state.ManagedZone == zone.RootZone {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "root_zone"})
+		return nil
+	}
+	if !state.ManagedZone.Valid() {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "invalid_managed_zone", "managed_zone": state.ManagedZone})
+		return nil
+	}
+	if len(state.ZonePrivateKey) == 0 {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "missing_zone_private_key", "managed_zone": state.ManagedZone})
+		return nil
+	}
+	if autoJoinPending(state) {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "auto_join_pending", "managed_zone": state.ManagedZone})
 		return nil
 	}
 	if len(config.IPsec.LinkGroups) == 0 {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "no_link_groups", "managed_zone": state.ManagedZone})
 		return nil
 	}
+	sr.logger().Debug("ipsec", "publish_started", map[string]any{
+		"managed_zone": state.ManagedZone,
+		"role":         config.IPsec.Role,
+		"link_groups":  len(config.IPsec.LinkGroups),
+	})
 	now := sr.now()
 	key, keyRecord, err := ensureIPsecTransportKey(state, now)
 	if err != nil {
@@ -46,6 +68,11 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 		if err != nil {
 			return err
 		}
+		sr.logger().Debug("ipsec", "publish_record_decision", map[string]any{
+			"managed_zone": state.ManagedZone,
+			"key":          item.key,
+			"updated":      updated,
+		})
 		changed = changed || updated
 	}
 	for _, item := range records {
@@ -78,8 +105,13 @@ func (sr *SyncRuntime) publishIPsecRecords() error {
 		}
 	}
 	if changed {
-		return sr.saveState()
+		if err := sr.saveState(); err != nil {
+			return err
+		}
+		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": state.ManagedZone, "records": len(records)})
+		return nil
 	}
+	sr.logger().Debug("ipsec", "publish_unchanged", map[string]any{"managed_zone": state.ManagedZone, "records": len(records)})
 	return nil
 }
 

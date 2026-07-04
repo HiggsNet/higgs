@@ -225,12 +225,15 @@ func cmdZone() *cli.Command {
 			{
 				Name:      "show",
 				Usage:     "Show zone details as JSON",
-				UsageText: "higgs zone show <zone>",
+				UsageText: "higgs zone show <zone> [--history]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "history", Usage: "Include bounded record history"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs zone show <zone>", 1)
+						return cli.Exit("usage: higgs zone show <zone> [--history]", 1)
 					}
-					return showZone(zone.ZonePath(cmd.Args().First()))
+					return showZone(zone.ZonePath(cmd.Args().First()), cmd.Bool("history"))
 				},
 			},
 		},

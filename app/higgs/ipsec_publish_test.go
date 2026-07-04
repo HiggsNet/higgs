@@ -59,6 +59,9 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	if profile.TransportKeyFingerprint != key.Fingerprint {
 		t.Fatalf("profile fingerprint = %q, key fingerprint = %q", profile.TransportKeyFingerprint, key.Fingerprint)
 	}
+	if profile.Role != ipsec.RoleBoth {
+		t.Fatalf("profile role = %q, want both", profile.Role)
+	}
 	addresses, err := ipsec.ParseAddressRecord(zs.Records[ipsec.RecordKeyAddresses])
 	if err != nil {
 		t.Fatalf("ParseAddressRecord: %v", err)
@@ -99,6 +102,143 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	again := latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyProfile]
 	if again.Version != 1 {
 		t.Fatalf("second profile version = %d, want unchanged 1", again.Version)
+	}
+}
+
+func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(5000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = "198.51.100.10:4500"
+	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
+	appConfig.IPsec.Role = ipsec.RoleBoth
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	oldValue, err := json.Marshal(map[string]any{
+		"version":                   1,
+		"enabled":                   true,
+		"provider":                  ipsec.ProviderStrongSwan,
+		"ike_identity":              string(state.ManagedZone),
+		"transport_key_fingerprint": "old-fingerprint",
+		"accept":                    "both",
+		"address_families":          []string{ipsec.FamilyIPv4},
+		"path_modes":                []string{ipsec.PathModeFamilyRedundant},
+	})
+	if err != nil {
+		t.Fatalf("Marshal old profile: %v", err)
+	}
+	oldRecord, err := buildSignedRecordAt(state, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("build old profile: %v", err)
+	}
+	if err := state.Network.Put(oldRecord); err != nil {
+		t.Fatalf("put old profile: %v", err)
+	}
+
+	sr := newSyncRuntime(state, config, nil, rt)
+	if err := sr.publishIPsecRecords(); err != nil {
+		t.Fatalf("publishIPsecRecords: %v", err)
+	}
+	record := state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyProfile]
+	profile, err := ipsec.ParseProfileRecord(record)
+	if err != nil {
+		t.Fatalf("ParseProfileRecord: %v", err)
+	}
+	if profile.Role != ipsec.RoleBoth {
+		t.Fatalf("profile role = %q, want both", profile.Role)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(record.Value, &raw); err != nil {
+		t.Fatalf("Unmarshal profile: %v", err)
+	}
+	if _, ok := raw["accept"]; ok {
+		t.Fatalf("profile still contains deprecated accept field: %s", record.Value)
+	}
+	if _, ok := raw["role"]; !ok {
+		t.Fatalf("profile missing role field: %s", record.Value)
+	}
+	if record.Version != oldRecord.Version+1 {
+		t.Fatalf("profile version = %d, want migrated version %d", record.Version, oldRecord.Version+1)
+	}
+}
+
+func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(5000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = "198.51.100.10:4500"
+	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
+	appConfig.IPsec.Role = ipsec.RoleBoth
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	oldValue, err := json.Marshal(map[string]any{
+		"version":                   1,
+		"enabled":                   true,
+		"provider":                  ipsec.ProviderStrongSwan,
+		"ike_identity":              string(state.ManagedZone),
+		"transport_key_fingerprint": "old-fingerprint",
+		"accept":                    "bidirectional",
+		"address_families":          []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6},
+		"path_modes":                []string{ipsec.PathModeFamilyRedundant},
+	})
+	if err != nil {
+		t.Fatalf("Marshal old profile: %v", err)
+	}
+	oldRecord, err := buildSignedRecordAt(state, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("build old profile: %v", err)
+	}
+	if err := state.Network.Put(oldRecord); err != nil {
+		t.Fatalf("put old profile: %v", err)
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	loaded, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	service := newDaemonService(rt, loaded, config, time.Minute)
+
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
+	if result.Error != nil {
+		t.Fatalf("handleEvent(endpoint): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(latest): %v", err)
+	}
+	record := latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyProfile]
+	if record.Version != oldRecord.Version+1 {
+		t.Fatalf("profile version = %d, want %d", record.Version, oldRecord.Version+1)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(record.Value, &raw); err != nil {
+		t.Fatalf("Unmarshal profile: %v", err)
+	}
+	if raw["role"] != ipsec.RoleBoth {
+		t.Fatalf("profile role = %v, want both; raw=%s", raw["role"], record.Value)
+	}
+	if _, ok := raw["accept"]; ok {
+		t.Fatalf("profile still contains deprecated accept field: %s", record.Value)
 	}
 }
 
