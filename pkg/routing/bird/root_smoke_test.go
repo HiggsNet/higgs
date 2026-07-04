@@ -428,6 +428,177 @@ func TestBabelImportFilterNegativeRootSmoke(t *testing.T) {
 	t.Logf("Babel negative root smoke: B accepted %s and rejected %s", allowedPrefix, rejectedPrefix)
 }
 
+// TestBabelAnycastFailoverRootSmoke creates a three-node Babel topology where
+// two speakers announce the same anycast prefix. It verifies that the receiver
+// learns the prefix, then fails over to the remaining speaker after the
+// selected speaker is stopped. This intentionally does not assert ECMP; BIRD
+// 2.19.x does not accept the Babel "ecmp" directive in our generated config.
+func TestBabelAnycastFailoverRootSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
+		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD Babel anycast smoke")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	nsR := "higgs-bird-any-r-" + suffix
+	nsA := "higgs-bird-any-a-" + suffix
+	nsB := "higgs-bird-any-b-" + suffix
+	vethRA := "hganyra" + suffix[len(suffix)-4:]
+	vethA := "hganya" + suffix[len(suffix)-4:]
+	vethRB := "hganyrb" + suffix[len(suffix)-4:]
+	vethB := "hganyb" + suffix[len(suffix)-4:]
+	tmpR := t.TempDir()
+	tmpA := t.TempDir()
+	tmpB := t.TempDir()
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", nsR).Run()
+		_ = exec.Command("ip", "netns", "delete", nsA).Run()
+		_ = exec.Command("ip", "netns", "delete", nsB).Run()
+	})
+
+	for _, ns := range []string{nsR, nsA, nsB} {
+		if err := exec.CommandContext(ctx, "ip", "netns", "add", ns).Run(); err != nil {
+			t.Fatalf("ip netns add %s: %v", ns, err)
+		}
+	}
+	if err := exec.CommandContext(ctx, "ip", "link", "add", vethRA, "type", "veth", "peer", "name", vethA).Run(); err != nil {
+		t.Fatalf("create receiver/A veth pair: %v", err)
+	}
+	if err := exec.CommandContext(ctx, "ip", "link", "add", vethRB, "type", "veth", "peer", "name", vethB).Run(); err != nil {
+		t.Fatalf("create receiver/B veth pair: %v", err)
+	}
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethRA, "netns", nsR).Run()
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethRB, "netns", nsR).Run()
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethA, "netns", nsA).Run()
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethB, "netns", nsB).Run()
+
+	steps := [][]string{
+		{"netns", "exec", nsR, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsR, "ip", "addr", "add", "10.99.5.1/30", "dev", vethRA},
+		{"netns", "exec", nsA, "ip", "addr", "add", "10.99.5.2/30", "dev", vethA},
+		{"netns", "exec", nsR, "ip", "addr", "add", "10.99.5.5/30", "dev", vethRB},
+		{"netns", "exec", nsB, "ip", "addr", "add", "10.99.5.6/30", "dev", vethB},
+		{"netns", "exec", nsR, "ip", "link", "set", vethRA, "up"},
+		{"netns", "exec", nsA, "ip", "link", "set", vethA, "up"},
+		{"netns", "exec", nsR, "ip", "link", "set", vethRB, "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", vethB, "up"},
+	}
+	for _, args := range steps {
+		out, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ip %s: %v\noutput: %s", strings.Join(args, " "), err, string(out))
+		}
+	}
+
+	anycastPrefix := "10.30.0.0/24"
+	specR := withTestBirdOwner(BirdInstanceSpec{
+		RouterID:          0x0a630501,
+		NetNSName:         nsR,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsR, Create: false},
+		ControlSocketPath: filepath.Join(tmpR, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpR, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpR, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{vethRA, vethRB},
+	})
+	specA := withTestBirdOwner(BirdInstanceSpec{
+		RouterID:          0x0a630502,
+		NetNSName:         nsA,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsA, Create: false},
+		ControlSocketPath: filepath.Join(tmpA, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpA, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpA, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{vethA},
+	})
+	specB := withTestBirdOwner(BirdInstanceSpec{
+		RouterID:          0x0a630506,
+		NetNSName:         nsB,
+		Mode:              BirdModeManaged,
+		NetNS:             NetNSSpec{Kind: "name", Name: nsB, Create: false},
+		ControlSocketPath: filepath.Join(tmpB, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpB, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpB, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{vethB},
+	})
+
+	if err := os.WriteFile(specR.ConfigPath, []byte(generateAnycastBabelConfig(specR, []string{vethRA, vethRB}, "")), 0644); err != nil {
+		t.Fatalf("write receiver config: %v", err)
+	}
+	if err := os.WriteFile(specA.ConfigPath, []byte(generateAnycastBabelConfig(specA, []string{vethA}, anycastPrefix)), 0644); err != nil {
+		t.Fatalf("write speaker A config: %v", err)
+	}
+	if err := os.WriteFile(specB.ConfigPath, []byte(generateAnycastBabelConfig(specB, []string{vethB}, anycastPrefix)), 0644); err != nil {
+		t.Fatalf("write speaker B config: %v", err)
+	}
+
+	pmR := NewExecProcessManager("")
+	pmR.socketWaitTimeout = 5 * time.Second
+	pmA := NewExecProcessManager("")
+	pmA.socketWaitTimeout = 5 * time.Second
+	pmB := NewExecProcessManager("")
+	pmB.socketWaitTimeout = 5 * time.Second
+	if err := pmR.Start(ctx, specR); err != nil {
+		t.Fatalf("start BIRD receiver: %v", err)
+	}
+	t.Cleanup(func() { _ = pmR.Stop(context.Background(), specR) })
+	if err := pmA.Start(ctx, specA); err != nil {
+		t.Fatalf("start BIRD speaker A: %v", err)
+	}
+	t.Cleanup(func() { _ = pmA.Stop(context.Background(), specA) })
+	if err := pmB.Start(ctx, specB); err != nil {
+		t.Fatalf("start BIRD speaker B: %v", err)
+	}
+	t.Cleanup(func() { _ = pmB.Stop(context.Background(), specB) })
+
+	dumpOnFail := func() {
+		for _, pair := range []struct{ ns, sock string }{
+			{nsR, specR.ControlSocketPath},
+			{nsA, specA.ControlSocketPath},
+			{nsB, specB.ControlSocketPath},
+		} {
+			out, _ := exec.CommandContext(ctx, "birdc", "-s", pair.sock, "show", "protocols", "all").CombinedOutput()
+			t.Logf("--- birdc show protocols all in %s ---\n%s", pair.ns, string(out))
+			routes, _ := exec.CommandContext(ctx, "birdc", "-s", pair.sock, "show", "route", "all").CombinedOutput()
+			t.Logf("--- routes in %s ---\n%s", pair.ns, string(routes))
+		}
+	}
+	defer func() {
+		if t.Failed() {
+			dumpOnFail()
+		}
+	}()
+
+	firstIface, firstRoutes := waitForSelectedAnycastIface(t, ctx, specR.ControlSocketPath, anycastPrefix, []string{vethRA, vethRB}, "")
+	var stoppedIface, remainingIface string
+	if firstIface == vethRA {
+		stoppedIface, remainingIface = vethRA, vethRB
+		if err := pmA.Stop(ctx, specA); err != nil {
+			t.Fatalf("stop selected speaker A: %v", err)
+		}
+	} else {
+		stoppedIface, remainingIface = vethRB, vethRA
+		if err := pmB.Stop(ctx, specB); err != nil {
+			t.Fatalf("stop selected speaker B: %v", err)
+		}
+	}
+
+	afterIface, afterRoutes := waitForSelectedAnycastIface(t, ctx, specR.ControlSocketPath, anycastPrefix, []string{remainingIface}, stoppedIface)
+	if afterIface != remainingIface {
+		t.Fatalf("selected iface after failover = %q, want %q\nbefore:\n%s\nafter:\n%s", afterIface, remainingIface, firstRoutes, afterRoutes)
+	}
+
+	t.Logf("Babel anycast failover root smoke: %s moved from %s to %s after selected speaker stopped", anycastPrefix, stoppedIface, afterIface)
+}
+
 // TestBIRDUpstreamBabelRootSmoke tests the 6.1.7 scenario: a veth pair
 // connects an overlay netns to the host (main) network, BIRD instances
 // on both sides establish a Babel neighbor over the veth, and prefixes
@@ -793,5 +964,113 @@ protocol babel {
         type wireless;
     };
 }
-`, logPath, routerID, staticRoutes.String(), importFilter, iface)
+	`, logPath, routerID, staticRoutes.String(), importFilter, iface)
+}
+
+func generateAnycastBabelConfig(spec BirdInstanceSpec, ifaces []string, announcePrefix string) string {
+	routerID := fmt.Sprintf("%d.%d.%d.%d",
+		(spec.RouterID>>24)&0xff,
+		(spec.RouterID>>16)&0xff,
+		(spec.RouterID>>8)&0xff,
+		spec.RouterID&0xff,
+	)
+	logPath := filepath.Join(filepath.Dir(spec.ConfigPath), "bird.log")
+	staticRoutes := "    # no static route announced by this smoke peer\n"
+	if strings.TrimSpace(announcePrefix) != "" {
+		staticRoutes = fmt.Sprintf("    route %s blackhole;\n", announcePrefix)
+	}
+	var ifaceBlocks strings.Builder
+	for _, iface := range ifaces {
+		fmt.Fprintf(&ifaceBlocks, "    interface %q {\n        type wireless;\n    };\n", iface)
+	}
+	return fmt.Sprintf(`# Minimal Babel config generated by TestBabelAnycastFailoverRootSmoke
+log "%s" all;
+debug protocols all;
+
+router id %s;
+
+ipv4 table master4;
+
+protocol device {
+    scan time 5;
+}
+
+protocol kernel {
+    ipv4 {
+        export all;
+    };
+    learn;
+}
+
+protocol direct {
+    ipv4;
+}
+
+protocol static {
+    ipv4;
+%s}
+
+protocol babel {
+    ipv4 {
+        import all;
+        export where source = RTS_BABEL || source = RTS_STATIC || source = RTS_DEVICE;
+    };
+%s}
+`, logPath, routerID, staticRoutes, ifaceBlocks.String())
+}
+
+func waitForSelectedAnycastIface(t *testing.T, ctx context.Context, socketPath, prefix string, allowedIfaces []string, forbiddenIface string) (string, string) {
+	t.Helper()
+	var last string
+	for i := 0; i < 60; i++ {
+		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "route", "all").CombinedOutput()
+		last = string(out)
+		if err == nil {
+			iface, ok := selectedRouteIface(last, prefix, allowedIfaces)
+			if ok && iface != "" && iface != forbiddenIface {
+				return iface, last
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("selected route for %s via allowed ifaces %v not found; last route output:\n%s", prefix, allowedIfaces, last)
+	return "", last
+}
+
+func selectedRouteIface(output, prefix string, allowedIfaces []string) (string, bool) {
+	allowed := map[string]bool{}
+	for _, iface := range allowedIfaces {
+		allowed[iface] = true
+	}
+	lines := strings.Split(output, "\n")
+	inSelectedPrefix := false
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, "\r")
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(line, prefix) {
+			inSelectedPrefix = strings.Contains(line, "*")
+			if inSelectedPrefix {
+				for iface := range allowed {
+					if strings.Contains(line, iface) {
+						return iface, true
+					}
+				}
+			}
+			continue
+		}
+		if inSelectedPrefix {
+			if trimmed == "" {
+				continue
+			}
+			for iface := range allowed {
+				if strings.Contains(line, " on "+iface) || strings.Contains(line, iface) {
+					return iface, true
+				}
+			}
+			if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+				inSelectedPrefix = false
+			}
+		}
+	}
+	return "", false
 }

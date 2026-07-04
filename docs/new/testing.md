@@ -156,6 +156,7 @@ make bird-babel-container-smoke
 
 sudo make firewall-smoke
 make firewall-container-smoke
+sudo make health-smoke
 sudo make revocation-data-plane-smoke
 make revocation-data-plane-container-smoke
 ```
@@ -184,10 +185,11 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `ipsec-xfrm-smoke` | 在真实系统能力下验证 StrongSwan/VICI + XFRM interface、daemon reconcile、SA 观测和 tunnel ping。 |
 | `ipsec-xfrm-container-smoke` | 在 privileged container 中运行 StrongSwan/XFRM smoke，适合隔离宿主环境差异。 |
 | `bird-babel-preflight` | 检查 root/netns/BIRD/Babel 相关前置条件。 |
-| `bird-babel-smoke` | 验证 managed BIRD/Babel lifecycle、邻居和路由学习等真实 routing 数据面。 |
+| `bird-babel-smoke` | 验证 managed BIRD/Babel lifecycle、邻居和路由学习、negative import filter、anycast failover、daemon restart adopt 等真实 routing 数据面。 |
 | `bird-babel-container-smoke` | 在 privileged container 中运行 BIRD/Babel smoke。 |
 | `firewall-smoke` | 使用真实 nftables/iptables backend 验证 firewall 规则 apply 和清理。 |
 | `firewall-container-smoke` | 在 privileged container 中运行 firewall 数据面 smoke。 |
+| `health-smoke` | 验证 health manager、OpenMetrics render、本地 spool/series，以及真实 BIRD selected route 进入 rotate cutover gate。 |
 | `revocation-data-plane-smoke` | 组合 firewall、BIRD 和 StrongSwan 的 revocation 数据面验证，需要 root。 |
 | `revocation-data-plane-container-smoke` | 在 privileged container 中运行组合 revocation 数据面验证。 |
 

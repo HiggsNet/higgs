@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -244,6 +246,130 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	t.Logf("Daemon BIRD adopt root smoke: BIRD pid %d persisted across daemon restart in netns %s", adoptedPID, nsName)
 }
 
+// TestDaemonHealthBIRDCutoverGateRootSmoke verifies the Phase 6.6 glue with
+// real BIRD/Babel data: a staged health target stays blocked while BIRD route
+// observation is unavailable, then becomes cutover-ready after a selected Babel
+// route is observed on the staged interface.
+func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_HEALTH_SMOKE") != "1" {
+		t.Skip("set HIGGS_HEALTH_SMOKE=1 to run the root/system health+BIRD smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	nsA := "higgs-health-a-" + suffix
+	nsB := "higgs-health-b-" + suffix
+	vethA := "hghlta" + suffix[len(suffix)-4:]
+	vethB := "hghltb" + suffix[len(suffix)-4:]
+	tmpA := t.TempDir()
+	tmpB := t.TempDir()
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", nsA).Run()
+		_ = exec.Command("ip", "netns", "delete", nsB).Run()
+	})
+
+	if err := exec.CommandContext(ctx, "ip", "netns", "add", nsA).Run(); err != nil {
+		t.Fatalf("ip netns add %s: %v", nsA, err)
+	}
+	if err := exec.CommandContext(ctx, "ip", "netns", "add", nsB).Run(); err != nil {
+		t.Fatalf("ip netns add %s: %v", nsB, err)
+	}
+	if err := exec.CommandContext(ctx, "ip", "link", "add", vethA, "type", "veth", "peer", "name", vethB).Run(); err != nil {
+		t.Fatalf("create veth pair: %v", err)
+	}
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethA, "netns", nsA).Run()
+	_ = exec.CommandContext(ctx, "ip", "link", "set", vethB, "netns", nsB).Run()
+
+	steps := [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "10.99.4.1/30", "dev", vethA},
+		{"netns", "exec", nsB, "ip", "addr", "add", "10.99.4.2/30", "dev", vethB},
+		{"netns", "exec", nsA, "ip", "link", "set", vethA, "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", vethB, "up"},
+	}
+	for _, args := range steps {
+		out, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ip %s: %v\noutput: %s", strings.Join(args, " "), err, string(out))
+		}
+	}
+
+	specA := healthSmokeBirdSpec(nsA, tmpA, vethA, 0x0a630401)
+	specB := healthSmokeBirdSpec(nsB, tmpB, vethB, 0x0a630402)
+	remotePrefix := "10.20.2.0/24"
+	if err := os.WriteFile(specA.ConfigPath, []byte(generateHealthSmokeBabelConfig(specA, vethA, "")), 0644); err != nil {
+		t.Fatalf("write config A: %v", err)
+	}
+	if err := os.WriteFile(specB.ConfigPath, []byte(generateHealthSmokeBabelConfig(specB, vethB, remotePrefix)), 0644); err != nil {
+		t.Fatalf("write config B: %v", err)
+	}
+
+	pmA := bird.NewExecProcessManager("")
+	pmB := bird.NewExecProcessManager("")
+	if err := pmA.Start(ctx, specA); err != nil {
+		t.Fatalf("start BIRD A: %v", err)
+	}
+	t.Cleanup(func() { _ = pmA.Stop(context.Background(), specA) })
+	if err := pmB.Start(ctx, specB); err != nil {
+		t.Fatalf("start BIRD B: %v", err)
+	}
+	t.Cleanup(func() { _ = pmB.Stop(context.Background(), specB) })
+
+	observed := waitForHealthSmokeBirdRoute(t, ctx, specA.ControlSocketPath, remotePrefix, vethA)
+
+	now := time.Unix(5000, 0)
+	manager := health.NewManager(
+		health.ProbeConfig{Interval: -time.Second, Timeout: 100 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 2},
+		health.DefaultHysteresisConfig(),
+		successfulHealthProber{},
+	)
+	manager.UpsertTarget(health.ProbeTarget{
+		ProbeID:        healthProbeID("link-1", "staged"),
+		InstanceID:     "link-1",
+		GroupID:        "main",
+		Overlay:        "main",
+		NetNS:          nsA,
+		InterfaceName:  vethA,
+		PeerTunnelAddr: netip.MustParseAddr("10.99.4.2"),
+		State:          "up",
+		ProbeRole:      "staged",
+		Staged:         true,
+	}, now)
+	if dispatched := manager.Tick(context.Background(), now); dispatched != 1 {
+		t.Fatalf("health probes dispatched = %d, want 1", dispatched)
+	}
+
+	service := &DaemonService{
+		health: manager,
+		Sync: &SyncRuntime{State: &stateFile{LinkInstances: map[string]linkInstanceState{
+			"link-1": {
+				ID:                  "link-1",
+				GroupID:             "main",
+				ActualState:         "up",
+				StagedInterfaceName: vethA,
+			},
+		}}},
+	}
+	service.recordBirdHealthObservationUnavailable(nsA, []string{"main"})
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
+		t.Fatal("cutover should be blocked while BIRD observation is unavailable")
+	}
+
+	service.recordBirdHealthObservation(nsA, []string{"main"}, observed)
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; !ready {
+		t.Fatalf("cutover should be ready after real BIRD selected route observation: %+v", observed)
+	}
+
+	snapshot := manager.Snapshot(now)
+	if len(snapshot) != 1 || snapshot[0].CutoverBlocking {
+		t.Fatalf("health snapshot = %+v, want staged cutover unblocked", snapshot)
+	}
+	t.Logf("Health+BIRD root smoke: selected route %s on %s unblocked staged cutover", remotePrefix, vethA)
+}
+
 // TestDaemonBIRDUpstreamRootSmoke verifies the veth upstream pipeline with
 // real BIRD: creates a veth pair, assigns addresses, starts BIRD, and
 // verifies that the upstream interface block appears in the generated config.
@@ -406,4 +532,105 @@ func readSmokePID(t *testing.T, path string) int {
 		t.Fatalf("pidfile %s has invalid pid %d", path, pid)
 	}
 	return pid
+}
+
+func healthSmokeBirdSpec(nsName, tmpDir, iface string, routerID uint32) bird.BirdInstanceSpec {
+	spec := bird.BirdInstanceSpec{
+		RouterID:          routerID,
+		NetNSName:         nsName,
+		Mode:              bird.BirdModeManaged,
+		NetNS:             bird.NetNSSpec{Kind: "name", Name: nsName, Create: false},
+		ControlSocketPath: filepath.Join(tmpDir, "bird.ctl"),
+		PIDFilePath:       filepath.Join(tmpDir, "bird.pid"),
+		ConfigPath:        filepath.Join(tmpDir, "bird.conf"),
+		TableID:           "main",
+		InterfacePatterns: []string{iface},
+	}
+	owner := bird.BirdResourceOwner{
+		Manager:    "higgs",
+		InstanceID: nsName,
+		NetNSName:  nsName,
+	}
+	owner.Token = bird.OwnerToken(owner.InstanceID, owner.NetNSName)
+	owner.ControlSocketToken = bird.ResourceToken(owner, "control_socket")
+	owner.PIDFileToken = bird.ResourceToken(owner, "pid_file")
+	owner.ConfigFileToken = bird.ResourceToken(owner, "config_file")
+	spec.Owner = owner
+	return spec
+}
+
+func waitForHealthSmokeBirdRoute(t *testing.T, ctx context.Context, socketPath, prefix, iface string) *bird.BirdObservedState {
+	t.Helper()
+	var last string
+	for i := 0; i < 40; i++ {
+		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "route", "all").CombinedOutput()
+		last = string(out)
+		if err == nil && strings.Contains(last, prefix) && strings.Contains(last, iface) {
+			parsedPrefix := netip.MustParsePrefix(prefix)
+			return &bird.BirdObservedState{
+				Routes: []bird.BirdRoute{{
+					Prefix:   parsedPrefix,
+					Protocol: "babel1",
+					Iface:    iface,
+					Selected: true,
+					Metric:   96,
+				}},
+				Neighbors: []bird.BirdNeighbor{{Interface: iface, Metric: 96}},
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("selected Babel route %s on %s was not observed; last route output:\n%s", prefix, iface, last)
+	return nil
+}
+
+func generateHealthSmokeBabelConfig(spec bird.BirdInstanceSpec, iface, announcePrefix string) string {
+	routerID := fmt.Sprintf("%d.%d.%d.%d",
+		(spec.RouterID>>24)&0xff,
+		(spec.RouterID>>16)&0xff,
+		(spec.RouterID>>8)&0xff,
+		spec.RouterID&0xff,
+	)
+	logPath := filepath.Join(filepath.Dir(spec.ConfigPath), "bird.log")
+	staticRoutes := "    # no static route announced by this smoke peer\n"
+	if strings.TrimSpace(announcePrefix) != "" {
+		staticRoutes = fmt.Sprintf("    route %s blackhole;\n", announcePrefix)
+	}
+	return fmt.Sprintf(`# Minimal Babel config generated by TestDaemonHealthBIRDCutoverGateRootSmoke
+log "%s" all;
+debug protocols all;
+
+router id %s;
+
+ipv4 table master4;
+
+protocol device {
+    scan time 5;
+}
+
+protocol kernel {
+    ipv4 {
+        export all;
+    };
+    learn;
+}
+
+protocol direct {
+    ipv4;
+}
+
+protocol static {
+    ipv4;
+%s}
+
+protocol babel {
+    ipv4 {
+        import all;
+        export where source = RTS_BABEL || source = RTS_STATIC || source = RTS_DEVICE;
+    };
+    interface "%s" {
+        type wireless;
+    };
+}
+`, logPath, routerID, staticRoutes, iface)
 }

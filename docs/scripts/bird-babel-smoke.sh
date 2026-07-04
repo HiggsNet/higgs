@@ -52,6 +52,13 @@ HIGGS_BIRD_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/routing/bird -run '^TestBabelImportFilterNegativeRootSmoke$' -count=1 -v
 
+# Test 2d: Anycast prefix failover without asserting ECMP
+HIGGS_BIRD_SMOKE=1 \
+  GOCACHE="$go_cache" \
+  GOMODCACHE="$go_mod_cache" \
+  CGO_ENABLED="${CGO_ENABLED:-0}" \
+  "$go_cmd" test ./pkg/routing/bird -run '^TestBabelAnycastFailoverRootSmoke$' -count=1 -v
+
 # Test 3: Daemon routing reconcile with real BIRD in a netns
 HIGGS_BIRD_SMOKE=1 \
   GOCACHE="$go_cache" \
@@ -73,4 +80,4 @@ HIGGS_BIRD_SMOKE=1 \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./app/higgs -run '^TestDaemonBIRDAdoptRestartRootSmoke$' -count=1 -v
 
-printf 'bird/babel smoke passed (preflight + managed BIRD lifecycle + two-node Babel exchange + upstream Babel bidirectional prefix exchange + negative import filter + daemon routing reconcile + veth upstream + daemon restart adopt)\n'
+printf 'bird/babel smoke passed (preflight + managed BIRD lifecycle + two-node Babel exchange + upstream Babel bidirectional prefix exchange + negative import filter + anycast failover + daemon routing reconcile + veth upstream + daemon restart adopt)\n'

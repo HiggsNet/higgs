@@ -31,9 +31,10 @@
 
 **剩余后续：**
 - [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
-- [ ] 6.1.8 anycast smoke：多节点宣告同一 anycast 前缀，验证 Babel ECMP 和故障切换。
+- [x] 6.1.8 anycast smoke：多节点宣告同一 anycast 前缀，验证 Babel 多候选路由和故障切换；暂不声明 ECMP 多 nexthop。
 - [ ] firewall root/container 增强 smoke：overlay netns + veth + BIRD 下验证 default drop、合法 prefix 放行、非法 prefix drop、revocation 断流、port rotate redirect grace。
-- [ ] health root/container 和 metrics 增强 smoke：在真实 XFRM+BIRD 链路上采集 ICMP/UDP probe 与 BIRD RTT/metric，注入丢包/延迟，验证状态切换、BIRD metric/cutover gate、`/metrics` 和本地 spool。
+- [x] health root + metrics 增强 smoke：覆盖 probe state、OpenMetrics render、本地 spool/series、真实 BIRD selected route 进入 rotate cutover gate。
+- [ ] health container / fault-injection 增强 smoke：在真实 XFRM+BIRD 链路上注入丢包/延迟，验证状态切换、BIRD metric/cutover gate 和数据面恢复。
 - [ ] 6.7 Observer 增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析，作为后续增强，不阻塞当前主线。
 
 - [ ] **6.7.7 `app/higgs` 模块化重构（Observer/debug 先行）**
