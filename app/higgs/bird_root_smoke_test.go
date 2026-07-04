@@ -79,7 +79,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
 	}
 	t.Cleanup(func() {
-		_ = service.stopManagedBirdInstances(context.Background())
+		_ = service.stopManagedBirdInstances(context.Background(), true)
 	})
 
 	// Run routing reconcile.
@@ -205,7 +205,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
 	}
 	t.Cleanup(func() {
-		_ = service.stopManagedBirdInstances(context.Background())
+		_ = service.stopManagedBirdInstances(context.Background(), true)
 	})
 
 	// Run routing reconcile.

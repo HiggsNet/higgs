@@ -10,7 +10,7 @@ import (
 func TestIPTablesDriver_Preflight(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
-	pf, err := d.Preflight(context.Background(), FirewallInstanceSpec{ID: "h2"})
+	pf, err := d.Preflight(context.Background(), FirewallInstanceSpec{ID: "higgstesth2"})
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestIPTablesDriver_ApplyOverlay(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
 		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
 		OwnerPrefix: "higgs",
 	}
@@ -34,7 +34,7 @@ func TestIPTablesDriver_ApplyOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("h2", desired, FirewallObservedState{})
+	plan := PlanDiff("higgstesth2", desired, FirewallObservedState{})
 	result, err := d.Apply(context.Background(), plan, desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -160,7 +160,7 @@ func TestIPTablesDriver_HostAddressFamilyCommands(t *testing.T) {
 func TestIPTablesDriver_ListOwned(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
-	state, err := d.ListOwned(context.Background(), Owner{OwnerPrefix: "higgs", InstanceID: "h2"})
+	state, err := d.ListOwned(context.Background(), Owner{OwnerPrefix: "higgs", InstanceID: "higgstesth2"})
 	if err != nil {
 		t.Fatalf("ListOwned: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestIPTablesDriver_DeleteStale(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
 	refs := []FirewallObjectRef{
-		{Kind: "chain", Family: "inet", Name: "higgs_h2_stale"},
+		{Kind: "chain", Family: "inet", Name: "higgs_higgstesth2_stale"},
 	}
 	if err := d.DeleteStale(context.Background(), refs); err != nil {
 		t.Fatalf("DeleteStale: %v", err)
@@ -197,13 +197,13 @@ func TestIPTablesDriver_DeleteStale(t *testing.T) {
 }
 
 func TestParseIPTablesChains(t *testing.T) {
-	output := "-N higgs_h2_INPUT\n-A higgs_h2_INPUT -p udp --dport 500 -j ACCEPT\n-N higgs_h2_FORWARD\n-A INPUT -j higgs_h2_INPUT\n-N other_chain"
-	refs := parseIPTablesChains(output, "higgs_h2", "filter")
+	output := "-N higgs_higgstesth2_INPUT\n-A higgs_higgstesth2_INPUT -p udp --dport 500 -j ACCEPT\n-N higgs_higgstesth2_FORWARD\n-A INPUT -j higgs_higgstesth2_INPUT\n-N other_chain"
+	refs := parseIPTablesChains(output, "higgs_higgstesth2", "filter")
 	if len(refs) != 2 {
 		t.Fatalf("expected 2 higgs-owned chains, got %d", len(refs))
 	}
 	for _, ref := range refs {
-		if !strings.HasPrefix(ref.Name, "higgs_h2") {
+		if !strings.HasPrefix(ref.Name, "higgs_higgstesth2") {
 			t.Errorf("non-higgs chain in result: %s", ref.Name)
 		}
 	}

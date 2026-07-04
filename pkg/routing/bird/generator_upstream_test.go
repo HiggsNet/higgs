@@ -8,7 +8,7 @@ import (
 
 func TestGenerateWithUpstreamInterface(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "h2"
+	spec.NetNSName = "higgstesth2"
 	spec.Upstream = &UpstreamSpec{
 		Interface: "hgs-2host",
 	}
@@ -40,7 +40,7 @@ func TestGenerateWithUpstreamInterface(t *testing.T) {
 
 func TestGenerateWithoutUpstreamNoExtraInterface(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "h2"
+	spec.NetNSName = "higgstesth2"
 
 	gen := DefaultConfigGenerator{}
 	cfg, err := gen.Generate(spec, nil, nil)
@@ -61,7 +61,7 @@ func TestGenerateWithoutUpstreamNoExtraInterface(t *testing.T) {
 
 func TestGenerateWithStaticRoutes(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "h2"
+	spec.NetNSName = "higgstesth2"
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
@@ -81,7 +81,7 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 	s := string(cfg)
 
 	// Must have a protocol static block.
-	if !strings.Contains(s, "protocol static higgs_static_h2 {") {
+	if !strings.Contains(s, "protocol static higgs_static_higgstesth2 {") {
 		t.Errorf("missing protocol static block\n%s", s)
 	}
 	// Must have the IPv4 route via the upstream interface.
@@ -96,7 +96,7 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 
 func TestGenerateWithBlackholeStaticRoute(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "h2"
+	spec.NetNSName = "higgstesth2"
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix:    netip.MustParsePrefix("10.0.0.0/24"),
@@ -118,7 +118,7 @@ func TestGenerateWithBlackholeStaticRoute(t *testing.T) {
 
 func TestGenerateWithStaticRouteNoVia(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "h2"
+	spec.NetNSName = "higgstesth2"
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
@@ -155,7 +155,7 @@ func TestGenerateWithoutStaticRoutesNoStaticBlock(t *testing.T) {
 
 func TestGenerateWithUpstreamAndStaticRoutes(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "h2"
+	spec.NetNSName = "higgstesth2"
 	spec.Upstream = &UpstreamSpec{
 		Interface: "hgs-2host",
 	}

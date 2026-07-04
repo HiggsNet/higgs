@@ -11,7 +11,7 @@ func TestParseUpstreamConfig(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
     upstream:
       create_veth: true
       upstream_interface: hgs-2host
@@ -28,7 +28,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err != nil {
@@ -74,7 +74,7 @@ func TestParseUpstreamConfigLegacyFieldAliases(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
     upstream:
       interface: hgs-2host
       peer_interface: hgs-upstream1
@@ -87,7 +87,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err != nil {
@@ -106,7 +106,7 @@ func TestParseUpstreamConfigRejectsConflictingAliases(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
     upstream:
       upstream_interface: hgs-2host
       interface: hgs-other0
@@ -117,7 +117,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	if _, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp"); err == nil {
 		t.Fatal("expected conflicting alias error")
@@ -128,7 +128,7 @@ func TestParseUpstreamConfigDisabled(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
     upstream:
       disabled: true
 `
@@ -138,7 +138,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err != nil {
@@ -157,7 +157,7 @@ func TestParseUpstreamConfigNil(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
 `
 	var yamlCfg routingInstancesYAML
 	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
@@ -165,7 +165,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err != nil {
@@ -181,7 +181,7 @@ func TestParseUpstreamConfigDefaults(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
     upstream: {}
 `
 	var yamlCfg routingInstancesYAML
@@ -190,7 +190,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err != nil {
@@ -212,7 +212,7 @@ func TestParseUpstreamConfigInvalidIPv4(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
     upstream:
       upstream_ipv4_ll: "not-a-cidr"
 `
@@ -222,7 +222,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	_, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err == nil {
@@ -234,7 +234,7 @@ func TestParseUpstreamConfigInvalidIPv6(t *testing.T) {
 	yamlInput := `
 instances:
   - id: main
-    netns: h2
+    netns: higgstesth2
     upstream:
       downstream_ipv6_ll: "not-a-cidr"
 `
@@ -244,7 +244,7 @@ instances:
 	}
 
 	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: "name", Name: "h2", Create: true},
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
 	}}
 	_, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err == nil {

@@ -28,14 +28,14 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
 
 	upstreamYAML := []routingInstanceYAML{{
 		ID:           "main",
-		NetNS:        "h2",
+		NetNS:        "higgstesth2",
 		Enabled:      boolPtr(true),
 		Mode:         ipsec.RoutingModeManaged,
 		InterfacePat: "hgs*",
@@ -98,9 +98,9 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	birdState := latest.BirdInstances["h2"]
+	birdState := latest.BirdInstances["higgstesth2"]
 	if birdState == nil {
-		t.Fatal("BirdInstances[h2] is nil")
+		t.Fatal("BirdInstances[higgstesth2] is nil")
 	}
 	if birdState.State != birdInstanceStateRunning {
 		t.Errorf("bird state = %q, want running", birdState.State)
@@ -209,12 +209,12 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 
 	dataDir := t.TempDir()
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
 
 	// Build the BirdInstanceSpec via parseRoutingConfigInstances for proper path derivation.
 	yamlInstances := []routingInstanceYAML{{
 		ID:           "main",
-		NetNS:        "h2",
+		NetNS:        "higgstesth2",
 		Enabled:      boolPtr(true),
 		Mode:         "managed",
 		InterfacePat: "hgs*",
@@ -233,11 +233,11 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 		t.Fatal("upstream config not parsed correctly")
 	}
 	ng := &netnsOverlayGroup{
-		NetNSName: "h2",
+		NetNSName: "higgstesth2",
 		Overlays:  []string{"main"},
-		Spec:      ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		Spec:      ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 	}
-	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(state.Network), "h2")
+	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(state.Network), "higgstesth2")
 	spec := buildBirdInstanceSpecForNetns(inst, routerID, "/tmp", ng, netnsCfg, ars, "node-a.catofes.")
 
 	// Verify the assignment prefix appears in static routes.

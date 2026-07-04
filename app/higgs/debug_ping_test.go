@@ -127,7 +127,7 @@ func TestRunPingOutcomesUsesProber(t *testing.T) {
 func TestWritePingReportOutput(t *testing.T) {
 	outcomes := []pingOutcome{
 		{
-			Target: health.ProbeTarget{ProbeID: "t1", InstanceID: "t1", ProbeRole: "active", InterfaceName: "hgs0", NetNS: "h2",
+			Target: health.ProbeTarget{ProbeID: "t1", InstanceID: "t1", ProbeRole: "active", InterfaceName: "hgs0", NetNS: "higgstesth2",
 				LocalTunnelAddr: netip.MustParseAddr("10.0.0.1"), PeerTunnelAddr: netip.MustParseAddr("10.0.0.2")},
 			Family: "ipv4",
 			Result: health.ProbeResult{Success: true, RTT: 2300 * time.Microsecond},
@@ -150,7 +150,7 @@ func TestWritePingReportOutput(t *testing.T) {
 		"count: 4 timeout: 1s",
 		"instance t1",
 		"role=active family=ipv4",
-		"interface: hgs0  netns: h2",
+		"interface: hgs0  netns: higgstesth2",
 		"result: ok rtt=2.3ms",
 		"role=staged family=ipv6",
 		`result: fail error="100% packet loss"`,

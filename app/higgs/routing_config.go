@@ -39,6 +39,7 @@ type RoutingInstance struct {
 	Enabled        bool
 	Protocol       string
 	Mode           string
+	ShutdownPolicy string
 	ControlSocket  string
 	PIDFile        string
 	ConfigFile     string
@@ -80,6 +81,7 @@ type routingInstanceYAML struct {
 	Disabled       *bool               `yaml:"disabled"`
 	Provider       string              `yaml:"provider"`
 	Mode           string              `yaml:"mode"`
+	ShutdownPolicy string              `yaml:"shutdown_policy"`
 	ControlSocket  string              `yaml:"control_socket"`
 	PIDFile        string              `yaml:"pid_file"`
 	ConfigFile     string              `yaml:"config_file"`
@@ -111,6 +113,11 @@ type upstreamConfigYAML struct {
 	IPv4LL              string `yaml:"ipv4_ll"`
 	IPv6LL              string `yaml:"ipv6_ll"`
 }
+
+const (
+	routingShutdownPolicyPersist = "persist"
+	routingShutdownPolicyStop    = "stop"
+)
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
 func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) (netnsConfig, error) {
@@ -210,6 +217,10 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 	if !oneOfRoutingMode(mode) {
 		return RoutingInstance{}, fmt.Errorf("unsupported routing mode %q", mode)
 	}
+	shutdownPolicy := normalizedRoutingShutdownPolicy(strings.TrimSpace(yi.ShutdownPolicy))
+	if !oneOfRoutingShutdownPolicy(shutdownPolicy) {
+		return RoutingInstance{}, fmt.Errorf("unsupported shutdown_policy %q", shutdownPolicy)
+	}
 	provider := yi.Provider
 	if provider == "" {
 		provider = "bird"
@@ -271,6 +282,7 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		Enabled:        enabled,
 		Protocol:       provider,
 		Mode:           mode,
+		ShutdownPolicy: shutdownPolicy,
 		ControlSocket:  controlSocket,
 		PIDFile:        pidFile,
 		ConfigFile:     configFile,
@@ -376,6 +388,17 @@ func validateOptionalPrefix(field, value string) error {
 
 func oneOfRoutingMode(mode string) bool {
 	return mode == ipsec.RoutingModeManaged || mode == ipsec.RoutingModeExternal || mode == ipsec.RoutingModeDisabled
+}
+
+func oneOfRoutingShutdownPolicy(policy string) bool {
+	return policy == routingShutdownPolicyPersist || policy == routingShutdownPolicyStop
+}
+
+func normalizedRoutingShutdownPolicy(policy string) string {
+	if policy == "" {
+		return routingShutdownPolicyPersist
+	}
+	return policy
 }
 
 // resolveOverlayNetNSName returns the netns name for an overlay group.

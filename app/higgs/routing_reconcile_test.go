@@ -105,11 +105,11 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
 		Config:    appConfig,
@@ -139,9 +139,9 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil {
-		t.Fatalf("missing bird instance state for netns h2")
+		t.Fatalf("missing bird instance state for netns higgstesth2")
 	}
 	if inst.ConfigPath == "" {
 		t.Fatalf("ConfigPath is empty")
@@ -177,8 +177,8 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	}
 
 	// Export filter should contain only the local prefix.
-	importIdx := strings.Index(cfg, "filter higgs_import_h2")
-	exportIdx := strings.Index(cfg, "filter higgs_export_h2")
+	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
 	if importIdx == -1 || exportIdx == -1 {
 		t.Fatalf("missing import/export filters")
 	}
@@ -214,11 +214,11 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "ipsec-main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
 		Config:    appConfig,
@@ -248,9 +248,9 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil {
-		t.Fatalf("missing bird instance state for netns h2")
+		t.Fatalf("missing bird instance state for netns higgstesth2")
 	}
 	if inst.State == birdInstanceStateError {
 		t.Fatalf("bird instance state is error: %s", inst.LastError)
@@ -264,8 +264,8 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 		t.Fatalf("read generated config: %v", err)
 	}
 
-	importIdx := strings.Index(cfg, "filter higgs_import_h2")
-	exportIdx := strings.Index(cfg, "filter higgs_export_h2")
+	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
 	if importIdx == -1 || exportIdx == -1 {
 		t.Fatalf("missing import/export filters")
 	}
@@ -349,7 +349,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
 	}
@@ -359,8 +359,8 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 		t.Fatalf("read generated config: %v", err)
 	}
 
-	importIdx := strings.Index(cfg, "filter higgs_import_h2")
-	exportIdx := strings.Index(cfg, "filter higgs_export_h2")
+	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
 	if importIdx == -1 || exportIdx == -1 {
 		t.Fatalf("missing import/export filters")
 	}
@@ -436,7 +436,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
 	}
@@ -444,7 +444,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}
-	exportIdx := strings.Index(cfg, "filter higgs_export_h2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
 	if exportIdx == -1 {
 		t.Fatalf("missing export filter")
 	}
@@ -506,11 +506,11 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "ipsec-main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
 		Config:    appConfig,
@@ -536,7 +536,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
 	}
@@ -546,8 +546,8 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 		t.Fatalf("read generated config: %v", err)
 	}
 
-	importIdx := strings.Index(cfg, "filter higgs_import_h2")
-	exportIdx := strings.Index(cfg, "filter higgs_export_h2")
+	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
 	if importIdx == -1 || exportIdx == -1 {
 		t.Fatalf("missing import/export filters")
 	}
@@ -574,12 +574,12 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
 		Config:    appConfig,
@@ -608,7 +608,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("external instance state = %+v, want running", inst)
 	}
@@ -623,11 +623,11 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
 		Config:    appConfig,
@@ -655,7 +655,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil {
 		t.Fatalf("missing bird instance state")
 	}
@@ -685,14 +685,14 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 	state.BirdInstances = map[string]*BirdInstanceState{
-		"h2": {
-			NetNSName:        "h2",
+		"higgstesth2": {
+			NetNSName:        "higgstesth2",
 			State:            birdInstanceStateDegraded,
 			FailureCount:     1,
 			BackoffUntilUnix: now.Add(-time.Second).Unix(),
@@ -730,7 +730,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	inst := latest.BirdInstances["h2"]
+	inst := latest.BirdInstances["higgstesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("bird instance = %+v, want running", inst)
 	}
@@ -748,11 +748,11 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	state.LinkInstances = map[string]linkInstanceState{
 		"link-1": {
@@ -838,7 +838,7 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 
@@ -1261,11 +1261,11 @@ func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFil
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "ipsec-main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
 		Config:    appConfig,
@@ -1383,7 +1383,7 @@ func runWithZonePrivateKey(rt *Runtime, key ed25519.PrivateKey, f func() error) 
 func TestRoutingReconcileInterval(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
-		{ID: "a", NetNS: "h2", Enabled: true, Mode: ipsec.RoutingModeManaged},
+		{ID: "a", NetNS: "higgstesth2", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
 	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
 	if got := service.routingReconcileInterval(); got != 30*time.Second {
@@ -1394,7 +1394,7 @@ func TestRoutingReconcileInterval(t *testing.T) {
 func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
-		{ID: "a", NetNS: "h2", Enabled: false, Mode: ipsec.RoutingModeManaged},
+		{ID: "a", NetNS: "higgstesth2", Enabled: false, Mode: ipsec.RoutingModeManaged},
 	}}
 	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
 	if got := service.routingReconcileInterval(); got != 0 {
@@ -1402,44 +1402,60 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestStopManagedBirdInstancesStopsManagedOnly(t *testing.T) {
+func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true},
-		"h3": {Kind: ipsec.NetNSName, Name: "h3", Create: true},
+		"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		"higgstesth3": {Kind: ipsec.NetNSName, Name: "higgstesth3", Create: true},
+		"higgstesth4": {Kind: ipsec.NetNSName, Name: "higgstesth4", Create: true},
 	}}
 	var err error
 	appConfig.Routing, err = parseRoutingConfigInstances([]routingInstanceYAML{
-		{ID: "managed", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged},
-		{ID: "external", NetNS: "h3", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal},
+		{ID: "managed-persist", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged},
+		{ID: "external", NetNS: "higgstesth3", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal},
+		{ID: "managed-stop", NetNS: "higgstesth4", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged, ShutdownPolicy: routingShutdownPolicyStop},
 	}, appConfig.Netns, appConfig.DataDir)
 	if err != nil {
 		t.Fatalf("parseRoutingConfigInstances: %v", err)
 	}
 
-	managedPM := &fakeBirdProcessManager{running: true}
+	persistPM := &fakeBirdProcessManager{running: true}
 	externalPM := &fakeBirdProcessManager{running: true}
+	stopPM := &fakeBirdProcessManager{running: true}
 	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
 	service.birdProcessManagers = map[string]birdProcessManager{
-		"h2": managedPM,
-		"h3": externalPM,
+		"higgstesth2": persistPM,
+		"higgstesth3": externalPM,
+		"higgstesth4": stopPM,
 	}
 
-	if err := service.stopManagedBirdInstances(context.Background()); err != nil {
+	if err := service.stopManagedBirdInstances(context.Background(), false); err != nil {
 		t.Fatalf("stopManagedBirdInstances: %v", err)
 	}
-	if !managedPM.stopped {
-		t.Fatalf("managed BIRD process manager was not stopped")
-	}
-	if managedPM.stopSpec.NetNSName != "h2" {
-		t.Fatalf("Stop netns = %q, want h2", managedPM.stopSpec.NetNSName)
-	}
-	if managedPM.stopSpec.ControlSocketPath == "" || managedPM.stopSpec.PIDFilePath == "" || managedPM.stopSpec.ConfigPath == "" {
-		t.Fatalf("Stop spec paths must be populated: %+v", managedPM.stopSpec)
+	if persistPM.stopped {
+		t.Fatalf("default managed BIRD should persist across daemon shutdown")
 	}
 	if externalPM.stopped {
 		t.Fatalf("external BIRD process manager should not be stopped")
+	}
+	if !stopPM.stopped {
+		t.Fatalf("managed BIRD with shutdown_policy=stop was not stopped")
+	}
+	if stopPM.stopSpec.NetNSName != "higgstesth4" {
+		t.Fatalf("Stop netns = %q, want higgstesth4", stopPM.stopSpec.NetNSName)
+	}
+	if stopPM.stopSpec.ControlSocketPath == "" || stopPM.stopSpec.PIDFilePath == "" || stopPM.stopSpec.ConfigPath == "" {
+		t.Fatalf("Stop spec paths must be populated: %+v", stopPM.stopSpec)
+	}
+
+	persistPM.stopped = false
+	stopPM.stopped = false
+	if err := service.stopManagedBirdInstances(context.Background(), true); err != nil {
+		t.Fatalf("force stopManagedBirdInstances: %v", err)
+	}
+	if !persistPM.stopped || !stopPM.stopped {
+		t.Fatalf("force stop should stop all managed instances: persist=%v stop=%v", persistPM.stopped, stopPM.stopped)
 	}
 }
 
@@ -1452,11 +1468,11 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
 		Config:    appConfig,

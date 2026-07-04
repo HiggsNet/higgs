@@ -225,6 +225,7 @@ routing:
       # protocol stanza inside the generated bird.conf; babeld is not supported.
       # provider: bird
       # mode: managed
+      # shutdown_policy: persist  # persist keeps BIRD running across Higgs restarts; use stop for lab teardown.
       # table: main
       # metric_base: 100
       # metric_staged: 200

@@ -23,8 +23,8 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 				GroupID:         "blue",
 				PeerZone:        zone.ZonePath("node-b.catofes."),
 				InterfaceName:   "hgs0",
-				LocalTunnelAddr: "fd00::1%hgs0 netns=h2",
-				PeerTunnelAddr:  "fd00::2%hgs0 netns=h2",
+				LocalTunnelAddr: "fd00::1%hgs0 netns=higgstesth2",
+				PeerTunnelAddr:  "fd00::2%hgs0 netns=higgstesth2",
 			}},
 		},
 	}
@@ -34,8 +34,8 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
 	target := targets[0]
-	if target.NetNS != "h2" {
-		t.Fatalf("target NetNS = %q, want h2", target.NetNS)
+	if target.NetNS != "higgstesth2" {
+		t.Fatalf("target NetNS = %q, want higgstesth2", target.NetNS)
 	}
 	if got := target.PeerTunnelAddr.String(); got != "fd00::2" {
 		t.Fatalf("peer tunnel addr = %q, want fd00::2", got)
@@ -67,8 +67,8 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 				GroupID:         "blue",
 				PeerZone:        zone.ZonePath("node-b.catofes."),
 				InterfaceName:   "hgs-desired",
-				LocalTunnelAddr: "fe80::1%hgs-desired netns=h2",
-				PeerTunnelAddr:  "fe80::2%hgs-desired netns=h2",
+				LocalTunnelAddr: "fe80::1%hgs-desired netns=higgstesth2",
+				PeerTunnelAddr:  "fe80::2%hgs-desired netns=higgstesth2",
 			}},
 		},
 	}
@@ -120,8 +120,8 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 				LinkID:          "link-1",
 				PathKey:         "family:ipv4",
 				InterfaceName:   "hgsa0f3bb66",
-				LocalTunnelAddr: "fe80::7454:3eca:1ff:6f5a%hgsa0f3bb66 netns=h2",
-				PeerTunnelAddr:  "fe80::91eb:8d94:108b:d6d%hgsa0f3bb66 netns=h2",
+				LocalTunnelAddr: "fe80::7454:3eca:1ff:6f5a%hgsa0f3bb66 netns=higgstesth2",
+				PeerTunnelAddr:  "fe80::91eb:8d94:108b:d6d%hgsa0f3bb66 netns=higgstesth2",
 			}},
 		},
 	}
@@ -137,8 +137,8 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 	if got := target.PeerTunnelAddr.String(); got != "fe80::91eb:8d94:108b:d6d" {
 		t.Fatalf("peer tunnel addr = %q, want persisted desired address", got)
 	}
-	if target.InterfaceName != "hgsa0f3bb66" || target.NetNS != "h2" {
-		t.Fatalf("target scope = iface %q netns %q, want hgsa0f3bb66/h2", target.InterfaceName, target.NetNS)
+	if target.InterfaceName != "hgsa0f3bb66" || target.NetNS != "higgstesth2" {
+		t.Fatalf("target scope = iface %q netns %q, want hgsa0f3bb66/higgstesth2", target.InterfaceName, target.NetNS)
 	}
 }
 
@@ -173,8 +173,8 @@ func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *t
 				LinkID:          linkID,
 				PathKey:         pathKey,
 				InterfaceName:   "hgs-new",
-				LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(newLocal, "hgs-new", "h2"),
-				PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(newPeer, "hgs-new", "h2"),
+				LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(newLocal, "hgs-new", "higgstesth2"),
+				PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(newPeer, "hgs-new", "higgstesth2"),
 			}},
 		},
 	}

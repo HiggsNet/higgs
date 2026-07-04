@@ -104,7 +104,7 @@ func TestDebugRoutesShowsBirdAuthorizedCrossView(t *testing.T) {
 		},
 	}
 	dump.BIRD = []birdRoutesView{{
-		NetNS:      "h2",
+		NetNS:      "higgstesth2",
 		InstanceID: "main",
 		State:      birdInstanceStateRunning,
 		Routes: buildBirdRouteViews(dump, []bird.BirdRoute{
@@ -133,7 +133,7 @@ func TestDebugRoutesShowsBirdAuthorizedCrossView(t *testing.T) {
 
 	for _, want := range []string{
 		"bird_routes: 1 instances",
-		"netns h2",
+		"netns higgstesth2",
 		"10.1.0.0/24 selected=true authorized=true import_allowed=true zones=node-b.catofes. protocol=babel1 iface=hgs-node-b metric=96",
 		"10.2.0.0/24 selected=true authorized=false import_allowed=false protocol=babel1 iface=hgs-node-c metric=128",
 	} {
@@ -150,7 +150,7 @@ func TestDebugRoutesShowsBirdAuthorizedCrossView(t *testing.T) {
 	if !strings.Contains(out, "bird_routes: 1") {
 		t.Errorf("expected one bird route match, got:\n%s", out)
 	}
-	if !strings.Contains(out, "netns=h2 instance=main selected=true authorized=true import_allowed=true protocol=babel1 iface=hgs-node-b metric=96") {
+	if !strings.Contains(out, "netns=higgstesth2 instance=main selected=true authorized=true import_allowed=true protocol=babel1 iface=hgs-node-b metric=96") {
 		t.Errorf("expected bird route detail, got:\n%s", out)
 	}
 }
@@ -158,8 +158,8 @@ func TestDebugRoutesShowsBirdAuthorizedCrossView(t *testing.T) {
 func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 	state, _ := buildTestNetworkStateForRouting(t)
 	state.BirdInstances = map[string]*BirdInstanceState{
-		"h2": {
-			NetNSName:      "h2",
+		"higgstesth2": {
+			NetNSName:      "higgstesth2",
 			RouterID:       12345,
 			ControlSocket:  "/run/higgs/bird/bird-main.ctl",
 			ConfigPath:     "/run/higgs/bird/bird-main.conf",
@@ -175,15 +175,15 @@ func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:              "main",
 		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 	}}
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{
 		ID:      "main",
-		NetNS:   "h2",
+		NetNS:   "higgstesth2",
 		Enabled: true,
 		Mode:    ipsec.RoutingModeManaged,
 	}}}
@@ -202,14 +202,17 @@ func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 	}
 	out := buf.String()
 
-	if !strings.Contains(out, "netns h2") {
-		t.Errorf("expected netns h2, got:\n%s", out)
+	if !strings.Contains(out, "netns higgstesth2") {
+		t.Errorf("expected netns higgstesth2, got:\n%s", out)
 	}
 	if !strings.Contains(out, "instance_id: main") {
 		t.Errorf("expected instance_id main, got:\n%s", out)
 	}
 	if !strings.Contains(out, "mode: managed") {
 		t.Errorf("expected mode managed, got:\n%s", out)
+	}
+	if !strings.Contains(out, "shutdown_policy: persist") {
+		t.Errorf("expected shutdown_policy persist, got:\n%s", out)
 	}
 	if !strings.Contains(out, "router_id: 12345") {
 		t.Errorf("expected router_id 12345, got:\n%s", out)

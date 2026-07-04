@@ -189,7 +189,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := d.stopManagedBirdInstances(shutdownCtx); err != nil {
+		if err := d.stopManagedBirdInstances(shutdownCtx, false); err != nil {
 			d.logWarn("routing", "bird_shutdown_failed", map[string]any{"error": err})
 		}
 	}()

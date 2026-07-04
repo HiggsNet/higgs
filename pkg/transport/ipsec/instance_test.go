@@ -1108,7 +1108,7 @@ func TestApplyReconcileActionPrepareRotateSkipsPrivateKeyLoad(t *testing.T) {
 	_, err := ApplyReconcileAction(context.TODO(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionPrepareRotate,
 		Spec:   &stagedSpec,
-	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -1153,7 +1153,7 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 		Action:   ReconcileActionPrepareRotate,
 		Spec:     &stagedSpec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -1193,7 +1193,7 @@ func TestApplyReconcileActionPrepareResponderRotateKeepsOldSA(t *testing.T) {
 		Action:   ReconcileActionPrepareRotate,
 		Spec:     &stagedSpec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -1231,7 +1231,7 @@ func TestApplyReconcileActionRepairInitiatesChild(t *testing.T) {
 	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionRepair,
 		Spec:   &spec,
-	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -1267,7 +1267,7 @@ func TestApplyReconcileActionCreateInitiatesActiveChild(t *testing.T) {
 	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionCreate,
 		Spec:   &spec,
-	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -1313,7 +1313,7 @@ func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T)
 		Action:   ReconcileActionUpdate,
 		Spec:     &newSpec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -1355,7 +1355,7 @@ func TestApplyReconcileActionPrepareRotateUnloadsBaseConfig(t *testing.T) {
 		Action:   ReconcileActionPrepareRotate,
 		Spec:     &spec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true}); err != nil {
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true}); err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
 	if !stringSliceContains(ipsecDrv.Unloaded, inst.IKEName) {

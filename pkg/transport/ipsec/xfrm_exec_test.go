@@ -20,19 +20,19 @@ type recordedCommand struct {
 func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
 		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
-			if reflect.DeepEqual(args, []string{"netns", "exec", "h2", "true"}) {
+			if reflect.DeepEqual(args, []string{"netns", "exec", "higgstesth2", "true"}) {
 				return nil, errors.New("missing")
 			}
-			if strings.Join(args, " ") == "netns exec h2 ip link show dev hgs1" {
+			if strings.Join(args, " ") == "netns exec higgstesth2 ip link show dev hgs1" {
 				return nil, errors.New("missing")
 			}
 			if strings.Join(args, " ") == "link show dev hgs1" {
 				return nil, errors.New("missing")
 			}
-			if strings.Join(args, " ") == "netns exec h2 ip -6 -o addr show dev hgs1" {
+			if strings.Join(args, " ") == "netns exec higgstesth2 ip -6 -o addr show dev hgs1" {
 				return nil, nil
 			}
 			return []byte("ok"), nil
@@ -42,7 +42,7 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		TransportID:     "ipsec-1",
 		InterfaceName:   "hgs1",
 		XFRMIfID:        42,
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
 	}
 	if err := driver.EnsureInterface(context.Background(), spec); err != nil {
@@ -53,16 +53,16 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 	}
 	got := commandStrings(commands)
 	want := []string{
-		"ip netns exec h2 true",
-		"ip netns add h2",
-		"ip netns exec h2 ip link show dev hgs1",
+		"ip netns exec higgstesth2 true",
+		"ip netns add higgstesth2",
+		"ip netns exec higgstesth2 ip link show dev hgs1",
 		"ip link show dev hgs1",
 		"ip link add hgs1 type xfrm if_id 42",
-		"ip link set hgs1 netns h2",
-		"ip netns exec h2 ip link set dev hgs1 addrgenmode none",
-		"ip netns exec h2 ip link set dev hgs1 up",
-		"ip netns exec h2 ip -6 -o addr show dev hgs1",
-		"ip netns exec h2 ip addr replace fd00:1234::1/64 dev hgs1",
+		"ip link set hgs1 netns higgstesth2",
+		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set dev hgs1 up",
+		"ip netns exec higgstesth2 ip -6 -o addr show dev hgs1",
+		"ip netns exec higgstesth2 ip addr replace fd00:1234::1/64 dev hgs1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -72,10 +72,10 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 func TestSystemXFRMDriverAssignAddressPrunesStaleSameFamilyAddresses(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2"},
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2"},
 		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
-			if strings.Join(args, " ") == "netns exec h2 ip -6 -o addr show dev hgs1" {
+			if strings.Join(args, " ") == "netns exec higgstesth2 ip -6 -o addr show dev hgs1" {
 				return []byte(strings.Join([]string{
 					"7: hgs1    inet6 fe80::dead/64 scope link",
 					"7: hgs1    inet6 fe80::1234/64 scope link",
@@ -85,15 +85,15 @@ func TestSystemXFRMDriverAssignAddressPrunesStaleSameFamilyAddresses(t *testing.
 		},
 	}
 
-	spec := TransportLinkSpec{InterfaceName: "hgs1", NetNS: "h2"}
+	spec := TransportLinkSpec{InterfaceName: "hgs1", NetNS: "higgstesth2"}
 	if err := driver.AssignAddress(context.Background(), spec, "fe80::1234/64"); err != nil {
 		t.Fatalf("AssignAddress: %v", err)
 	}
 	got := commandStrings(commands)
 	want := []string{
-		"ip netns exec h2 ip -6 -o addr show dev hgs1",
-		"ip netns exec h2 ip addr del fe80::dead/64 dev hgs1",
-		"ip netns exec h2 ip addr replace fe80::1234/64 dev hgs1",
+		"ip netns exec higgstesth2 ip -6 -o addr show dev hgs1",
+		"ip netns exec higgstesth2 ip addr del fe80::dead/64 dev hgs1",
+		"ip netns exec higgstesth2 ip addr replace fe80::1234/64 dev hgs1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -148,7 +148,7 @@ func TestSystemXFRMDriverRejectsPathNetNSInterfaceMove(t *testing.T) {
 			return []byte("ok"), nil
 		},
 	}
-	spec := TransportLinkSpec{InterfaceName: "hgs1", XFRMIfID: 7, NetNS: "/run/netns/h2"}
+	spec := TransportLinkSpec{InterfaceName: "hgs1", XFRMIfID: 7, NetNS: "/run/netns/higgstesth2"}
 	err := driver.EnsureInterface(context.Background(), spec)
 	if err == nil || !strings.Contains(err.Error(), "path netns") {
 		t.Fatalf("EnsureInterface err = %v", err)
@@ -158,13 +158,13 @@ func TestSystemXFRMDriverRejectsPathNetNSInterfaceMove(t *testing.T) {
 func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
 		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
 			switch strings.Join(args, " ") {
-			case "netns exec h2 true":
+			case "netns exec higgstesth2 true":
 				return []byte("ok"), nil
-			case "netns exec h2 ip link show dev hgs1":
+			case "netns exec higgstesth2 ip link show dev hgs1":
 				return nil, errors.New("missing")
 			case "link show dev hgs1":
 				return []byte("ok"), nil
@@ -177,19 +177,19 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 		TransportID:   "ipsec-1",
 		InterfaceName: "hgs1",
 		XFRMIfID:      42,
-		NetNS:         "h2",
+		NetNS:         "higgstesth2",
 	}
 	if err := driver.EnsureInterface(context.Background(), spec); err != nil {
 		t.Fatalf("EnsureInterface: %v", err)
 	}
 	got := commandStrings(commands)
 	want := []string{
-		"ip netns exec h2 true",
-		"ip netns exec h2 ip link show dev hgs1",
+		"ip netns exec higgstesth2 true",
+		"ip netns exec higgstesth2 ip link show dev hgs1",
 		"ip link show dev hgs1",
-		"ip link set hgs1 netns h2",
-		"ip netns exec h2 ip link set dev hgs1 addrgenmode none",
-		"ip netns exec h2 ip link set dev hgs1 up",
+		"ip link set hgs1 netns higgstesth2",
+		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set dev hgs1 up",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -199,10 +199,10 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 func TestSystemXFRMDriverInspectsMissingNamedNamespace(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
 		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
-			if strings.Join(args, " ") == "netns exec h2 true" {
+			if strings.Join(args, " ") == "netns exec higgstesth2 true" {
 				return nil, errors.New("missing")
 			}
 			return []byte("ok"), nil
@@ -211,7 +211,7 @@ func TestSystemXFRMDriverInspectsMissingNamedNamespace(t *testing.T) {
 	state, err := driver.InspectLink(context.Background(), TransportLinkSpec{
 		InterfaceName: "hgs1",
 		XFRMIfID:      42,
-		NetNS:         "h2",
+		NetNS:         "higgstesth2",
 	})
 	if err != nil {
 		t.Fatalf("InspectLink: %v", err)
@@ -220,7 +220,7 @@ func TestSystemXFRMDriverInspectsMissingNamedNamespace(t *testing.T) {
 		t.Fatalf("state = %+v, want missing namespace and interface", state)
 	}
 	got := commandStrings(commands)
-	want := []string{"ip netns exec h2 true"}
+	want := []string{"ip netns exec higgstesth2 true"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
 	}
@@ -228,9 +228,9 @@ func TestSystemXFRMDriverInspectsMissingNamedNamespace(t *testing.T) {
 
 func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
 		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			if strings.Join(args, " ") == "netns exec h2 true" {
+			if strings.Join(args, " ") == "netns exec higgstesth2 true" {
 				return nil, errors.New("missing")
 			}
 			return []byte("ok"), nil
@@ -240,7 +240,7 @@ func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 		TransportID:   "ipsec-1",
 		InterfaceName: "hgs1",
 		XFRMIfID:      42,
-		NetNS:         "h2",
+		NetNS:         "higgstesth2",
 	}
 	sas := []SAState{{
 		Name:        spec.TransportID,
@@ -262,14 +262,14 @@ func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 
 func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMAddressMissing(t *testing.T) {
 	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
 		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			switch strings.Join(args, " ") {
-			case "netns exec h2 true", "netns exec h2 ip link show dev hgs1":
+			case "netns exec higgstesth2 true", "netns exec higgstesth2 ip link show dev hgs1":
 				return []byte("ok"), nil
-			case "netns exec h2 ip -4 -o addr show dev hgs1":
+			case "netns exec higgstesth2 ip -4 -o addr show dev hgs1":
 				return nil, nil
-			case "netns exec h2 ip -6 -o addr show dev hgs1":
+			case "netns exec higgstesth2 ip -6 -o addr show dev hgs1":
 				return []byte("7: hgs1 inet6 fe80::9999/64 scope link\n"), nil
 			default:
 				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
@@ -280,7 +280,7 @@ func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMAddressMissing(t *testing.T
 		TransportID:     "ipsec-1",
 		InterfaceName:   "hgs1",
 		XFRMIfID:        42,
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
 	}
 	sas := []SAState{{
@@ -303,14 +303,14 @@ func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMAddressMissing(t *testing.T
 
 func TestSystemXFRMDriverRetainsEstablishedSAWhenXFRMAddressMatches(t *testing.T) {
 	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "h2", Create: true},
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
 		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			switch strings.Join(args, " ") {
-			case "netns exec h2 true", "netns exec h2 ip link show dev hgs1":
+			case "netns exec higgstesth2 true", "netns exec higgstesth2 ip link show dev hgs1":
 				return []byte("ok"), nil
-			case "netns exec h2 ip -4 -o addr show dev hgs1":
+			case "netns exec higgstesth2 ip -4 -o addr show dev hgs1":
 				return nil, nil
-			case "netns exec h2 ip -6 -o addr show dev hgs1":
+			case "netns exec higgstesth2 ip -6 -o addr show dev hgs1":
 				return []byte("7: hgs1 inet6 fe80::1234/64 scope link\n"), nil
 			default:
 				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
@@ -321,7 +321,7 @@ func TestSystemXFRMDriverRetainsEstablishedSAWhenXFRMAddressMatches(t *testing.T
 		TransportID:     "ipsec-1",
 		InterfaceName:   "hgs1",
 		XFRMIfID:        42,
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
 	}
 	sas := []SAState{{

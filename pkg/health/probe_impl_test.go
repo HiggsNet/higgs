@@ -15,7 +15,7 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
 		InstanceID:      "link-1",
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		InterfaceName:   "hgs431bcb9f",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::7888:86ec:66e0:2620"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::b09d:5f83:3e81:d064"),
@@ -33,7 +33,7 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 		t.Fatalf("command name = %q, want ip", runner.name)
 	}
 	want := []string{
-		"netns", "exec", "h2",
+		"netns", "exec", "higgstesth2",
 		"ping", "-6", "-n", "-c", "1",
 		"-I", "fe80::7888:86ec:66e0:2620%hgs431bcb9f",
 		"fe80::b09d:5f83:3e81:d064%hgs431bcb9f",
@@ -56,7 +56,7 @@ func TestICMProberIncludesPingOutputInError(t *testing.T) {
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
 		InstanceID:     "link-1",
-		NetNS:          "h2",
+		NetNS:          "higgstesth2",
 		InterfaceName:  "hgs0",
 		PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
 		State:          "up",
@@ -87,7 +87,7 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
 		InstanceID:      "link-1",
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		InterfaceName:   "hgs0",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
@@ -103,13 +103,13 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 	}
 	want := [][]string{
 		{
-			"netns", "exec", "h2",
+			"netns", "exec", "higgstesth2",
 			"ping", "-6", "-n", "-c", "1",
 			"-I", "fe80::1%hgs0",
 			"fe80::2%hgs0",
 		},
 		{
-			"netns", "exec", "h2",
+			"netns", "exec", "higgstesth2",
 			"ping", "-6", "-n", "-c", "1",
 			"fe80::2%hgs0",
 		},

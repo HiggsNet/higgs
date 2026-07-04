@@ -19,12 +19,12 @@ func TestParseConfigYAMLFirewallOverlay(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 firewall:
   instances:
-    - id: h2
-      netns: h2
+    - id: higgstesth2
+      netns: higgstesth2
       mode: managed
       backend: auto
       default_policy: drop
@@ -46,8 +46,8 @@ firewall:
 		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
 	}
 	inst := config.Firewall.Instances[0]
-	if inst.ID != "h2" {
-		t.Errorf("ID = %s, want h2", inst.ID)
+	if inst.ID != "higgstesth2" {
+		t.Errorf("ID = %s, want higgstesth2", inst.ID)
 	}
 	if inst.Mode != firewall.ModeManaged {
 		t.Errorf("Mode = %s, want managed", inst.Mode)
@@ -75,11 +75,11 @@ func TestParseConfigYAMLFirewallOverlayDefaultsToDefaultNetNS(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 firewall:
   instances:
-    - id: h2
+    - id: higgstesth2
       mode: managed
 `
 	if err := parseConfigYAML(input, config); err != nil {
@@ -247,12 +247,12 @@ func TestParseConfigYAMLFirewallDisabled(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 firewall:
   instances:
-    - id: h2
-      netns: h2
+    - id: higgstesth2
+      netns: higgstesth2
       disabled: true
 `
 	if err := parseConfigYAML(input, config); err != nil {
@@ -272,13 +272,13 @@ func TestParseConfigYAMLFirewallRejectsHostNetnsConflict(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 firewall:
   instances:
     - id: ambiguous
       host: true
-      netns: h2
+      netns: higgstesth2
 `
 	err := parseConfigYAML(input, config)
 	if err == nil {
@@ -295,12 +295,12 @@ func TestParseConfigYAMLFirewallInvalidMode(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 firewall:
   instances:
-    - id: h2
-      netns: h2
+    - id: higgstesth2
+      netns: higgstesth2
       mode: bogus
 `
 	if err := parseConfigYAML(input, config); err == nil {
@@ -314,12 +314,12 @@ func TestParseConfigYAMLFirewallInvalidBackend(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 firewall:
   instances:
-    - id: h2
-      netns: h2
+    - id: higgstesth2
+      netns: higgstesth2
       backend: bogus
 `
 	if err := parseConfigYAML(input, config); err == nil {
@@ -332,7 +332,7 @@ func TestParseConfigYAMLFirewallUnknownNetns(t *testing.T) {
 	input := `
 firewall:
   instances:
-    - id: h2
+    - id: higgstesth2
       netns: nonexistent
 `
 	if err := parseConfigYAML(input, config); err == nil {
@@ -361,14 +361,14 @@ func TestFirewallInstancesEnabled(t *testing.T) {
 
 func TestFirewallInstanceSpecFromConfig(t *testing.T) {
 	inst := FirewallInstanceConfig{
-		ID: "h2", NetNS: "h2", IsHost: false,
+		ID: "higgstesth2", NetNS: "higgstesth2", IsHost: false,
 		Enabled: true, Mode: firewall.ModeManaged,
 		Backend: firewall.BackendNFT, DefaultPolicy: firewall.DefaultPolicyDrop,
 		OwnerPrefix: "higgs", XFRMTunnelPattern: "hgs*",
 		LocalServices: []firewall.LocalService{{Proto: "tcp", Port: 443}},
 	}
 	spec := firewallInstanceSpecFromConfig(inst, nil, 500, 4500)
-	if spec.ID != "h2" {
+	if spec.ID != "higgstesth2" {
 		t.Errorf("ID = %s", spec.ID)
 	}
 	if spec.CharonIKEPort != 500 {
@@ -503,15 +503,15 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 func TestFirewallDriverNetNSResolvesDefaultAlias(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"default": {Kind: ipsec.NetNSName, Name: "h2", Create: true},
-		"h2":      {Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		"default":     {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 	}}
 	got, err := firewallDriverNetNS(FirewallInstanceConfig{ID: "higgs", NetNS: "default"}, appConfig)
 	if err != nil {
 		t.Fatalf("firewallDriverNetNS: %v", err)
 	}
-	if got != "h2" {
-		t.Fatalf("driver netns = %q, want h2", got)
+	if got != "higgstesth2" {
+		t.Fatalf("driver netns = %q, want higgstesth2", got)
 	}
 	host, err := firewallDriverNetNS(FirewallInstanceConfig{ID: "host-ipsec", IsHost: true}, appConfig)
 	if err != nil {
@@ -526,8 +526,8 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	appConfig := defaultAppConfig()
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
-		ID:            "h2",
-		NetNS:         "h2",
+		ID:            "higgstesth2",
+		NetNS:         "higgstesth2",
 		Enabled:       true,
 		Mode:          firewall.ModeManaged,
 		Backend:       firewall.BackendNone,
@@ -561,10 +561,10 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallDirty {
 		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
 	}
-	if state.FirewallReconcile == nil || state.FirewallReconcile.Instances["h2"] == nil {
+	if state.FirewallReconcile == nil || state.FirewallReconcile.Instances["higgstesth2"] == nil {
 		t.Fatalf("firewall reconcile state missing after recover: %+v", state.FirewallReconcile)
 	}
-	entry := state.FirewallReconcile.Instances["h2"]
+	entry := state.FirewallReconcile.Instances["higgstesth2"]
 	if entry.PolicyHash == "" || entry.OwnedObjects == 0 || entry.LastRunUnix != 7000 {
 		t.Fatalf("firewall reconcile entry = %+v, want hash/objects/last run", entry)
 	}
@@ -586,13 +586,13 @@ func TestDebugFirewall_NotConfigured(t *testing.T) {
 func TestDebugFirewall_InstanceOutput(t *testing.T) {
 	rt := &Runtime{Config: &appConfig{}}
 	instances := []FirewallInstanceConfig{
-		{ID: "h2", NetNS: "h2", IsHost: false, Enabled: true, Mode: firewall.ModeManaged, Backend: firewall.BackendAuto, DefaultPolicy: firewall.DefaultPolicyDrop},
+		{ID: "higgstesth2", NetNS: "higgstesth2", IsHost: false, Enabled: true, Mode: firewall.ModeManaged, Backend: firewall.BackendAuto, DefaultPolicy: firewall.DefaultPolicyDrop},
 		{ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: firewall.ModeManaged, HostPorts: firewall.HostPortConfig{IKE: true, NATT: true}, RedirectGrace: firewall.RedirectGrace{Enabled: true}},
 	}
 	snapshot := &firewallReconcileState{
 		Backend: "dry-run",
 		Instances: map[string]*firewallInstanceReconcileStateEntry{
-			"h2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
+			"higgstesth2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 		},
 	}
 	var buf bytes.Buffer
@@ -603,8 +603,8 @@ func TestDebugFirewall_InstanceOutput(t *testing.T) {
 	if !strings.Contains(output, "backend: dry-run") {
 		t.Errorf("missing backend line: %s", output)
 	}
-	if !strings.Contains(output, "instance h2") {
-		t.Errorf("missing h2 instance: %s", output)
+	if !strings.Contains(output, "instance higgstesth2") {
+		t.Errorf("missing higgstesth2 instance: %s", output)
 	}
 	if !strings.Contains(output, "generation: 5") {
 		t.Errorf("missing generation: %s", output)

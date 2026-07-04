@@ -592,11 +592,11 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "h2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
-		ID:                "h2",
-		NetNS:             "h2",
+		ID:                "higgstesth2",
+		NetNS:             "higgstesth2",
 		Enabled:           true,
 		Mode:              firewall.ModeManaged,
 		Backend:           firewall.BackendNone,
@@ -637,7 +637,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState(initial): %v", err)
 	}
-	initialBirdCfg := readBirdConfigForNetns(t, latest, "h2")
+	initialBirdCfg := readBirdConfigForNetns(t, latest, "higgstesth2")
 	if !strings.Contains(initialBirdCfg, "10.1.0.0/24+") {
 		t.Fatalf("initial BIRD config missing transit export for node-b route:\n%s", initialBirdCfg)
 	}
@@ -699,7 +699,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState(revoked): %v", err)
 	}
-	revokedBirdCfg := readBirdConfigForNetns(t, latest, "h2")
+	revokedBirdCfg := readBirdConfigForNetns(t, latest, "higgstesth2")
 	if strings.Contains(revokedBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("BIRD config still exports revoked node-b route:\n%s", revokedBirdCfg)
 	}

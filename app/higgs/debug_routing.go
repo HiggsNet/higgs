@@ -152,6 +152,9 @@ func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *contr
 		fmt.Fprintf(w, "netns %s\n", inst.NetNS)
 		fmt.Fprintf(w, "  instance_id: %s\n", inst.ID)
 		fmt.Fprintf(w, "  mode: %s\n", mode)
+		if inst.Mode != ipsec.RoutingModeExternal && inst.Mode != ipsec.RoutingModeDisabled {
+			fmt.Fprintf(w, "  shutdown_policy: %s\n", normalizedRoutingShutdownPolicy(inst.ShutdownPolicy))
+		}
 		if !inst.Enabled {
 			fmt.Fprintln(w, "  state: disabled")
 			continue

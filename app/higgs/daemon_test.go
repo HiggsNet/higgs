@@ -68,7 +68,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
@@ -128,7 +128,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
@@ -1166,7 +1166,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
@@ -1226,7 +1226,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
@@ -1309,7 +1309,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
@@ -1976,7 +1976,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
@@ -2046,7 +2046,7 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
@@ -2178,7 +2178,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 		"  - id: main",
 		"    provider: strongswan",
 		"    netns:",
-		"      name: h2",
+		"      name: higgstesth2",
 		"      create: true",
 		"    default_path_mode: family-redundant",
 		"    address_source_order: [manual-address]",
@@ -2336,7 +2336,7 @@ func testIPsecLinkGroup() ipsec.LinkGroupSpec {
 	return ipsec.LinkGroupSpec{
 		ID:                 "main",
 		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "h2", Create: true},
+		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
 		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		TunnelAddressSpec: ipsec.TunnelAddressSpec{
@@ -2371,7 +2371,7 @@ func singleDesiredSpec(t *testing.T, state *stateFile) ipsec.TransportLinkSpec {
 		XFRMIfID:        desired.XFRMIfID,
 		LocalTunnelAddr: localTunnel,
 		PeerTunnelAddr:  peerTunnel,
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		ContactPoints: []ipsec.ContactPoint{{
 			Address:  desired.Endpoint,
 			IKEPort:  ipsec.DefaultIKEPort,
@@ -3984,13 +3984,13 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	state, config := buildTestNetworkStateForRouting(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"h2": {Kind: ipsec.NetNSName, Name: "h2", Create: true}}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{
 		ID:            "main",
-		NetNS:         "h2",
+		NetNS:         "higgstesth2",
 		Enabled:       boolPtr(true),
 		Mode:          ipsec.RoutingModeManaged,
-		ControlSocket: "/run/higgs/bird-h2.ctl",
+		ControlSocket: "/run/higgs/bird-higgstesth2.ctl",
 	}}, appConfig.Netns, appConfig.DataDir)
 
 	client := &fakeBirdClient{raw: map[string]string{
@@ -3998,18 +3998,18 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	}}
 	service := newDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
-		if socketPath != "/run/higgs/bird-h2.ctl" {
-			t.Fatalf("socketPath = %q, want /run/higgs/bird-h2.ctl", socketPath)
+		if socketPath != "/run/higgs/bird-higgstesth2.ctl" {
+			t.Fatalf("socketPath = %q, want /run/higgs/bird-higgstesth2.ctl", socketPath)
 		}
 		return client
 	}
 
-	response := controlRequestViaPipe(t, service, controlRequest{Method: "bird_dump", NetNS: "h2", Command: "show route all"})
+	response := controlRequestViaPipe(t, service, controlRequest{Method: "bird_dump", NetNS: "higgstesth2", Command: "show route all"})
 	if !response.OK || response.BirdDump == nil {
 		t.Fatalf("bird_dump response = %#v", response)
 	}
-	inst := response.BirdDump.Instances["h2"]
-	if inst.ControlSocket != "/run/higgs/bird-h2.ctl" || inst.Raw["show route all"] == "" {
+	inst := response.BirdDump.Instances["higgstesth2"]
+	if inst.ControlSocket != "/run/higgs/bird-higgstesth2.ctl" || inst.Raw["show route all"] == "" {
 		t.Fatalf("bird_dump instance = %#v", inst)
 	}
 	if len(client.rawCommands) != 1 || client.rawCommands[0] != "show route all" {

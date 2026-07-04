@@ -20,6 +20,7 @@
 - [x] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）。
 - [x] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图。
   - 已在 `routes_dump` / `debug routes` / `debug route <prefix>` 接入 BIRD live route cross-view，按 prefix 标注 selected、authorized exact match、assignment/import 范围命中和来源 zone。
+- [x] managed BIRD 默认随 Higgs daemon 退出保持运行，重启后 adopt，避免 Babel 邻居和路由因控制面重启出现静默期；如需实验室 teardown 可显式配置 `shutdown_policy: stop`。
 - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面一起补齐。
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（归档后仅保留后续项）

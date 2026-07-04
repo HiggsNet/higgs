@@ -647,11 +647,11 @@ func TestPlanApplyShowsScopedLinkLocalAddress(t *testing.T) {
 		TransportID:     "ipsec-1",
 		InterfaceName:   "hgs1234",
 		XFRMIfID:        1234,
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
 	}
-	plan := PlanApply(spec, NetNSSpec{Kind: NetNSName, Name: "h2", Create: true})
+	plan := PlanApply(spec, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
 	var assign *ApplyOperation
 	for i := range plan.Operations {
 		if plan.Operations[i].Action == "assign_address" {
@@ -665,7 +665,7 @@ func TestPlanApplyShowsScopedLinkLocalAddress(t *testing.T) {
 	if !strings.Contains(assign.Detail, "fe80::1%hgs1234") {
 		t.Fatalf("assign_address detail %q missing scoped link-local address", assign.Detail)
 	}
-	if !strings.Contains(assign.Detail, "netns=h2") {
+	if !strings.Contains(assign.Detail, "netns=higgstesth2") {
 		t.Fatalf("assign_address detail %q missing netns scope", assign.Detail)
 	}
 }

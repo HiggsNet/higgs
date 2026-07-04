@@ -19,8 +19,8 @@ func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
 		InterfaceName:   "hgs1be3f390",
 		XFRMIfID:        467923856,
 		Endpoint:        "123.57.143.66:30002",
-		LocalTunnelAddr: "fe80::24c7:24ac:32e9:cd45%hgs1be3f390 netns=h2",
-		PeerTunnelAddr:  "fe80::abdb:3c51:6e24:8655%hgs1be3f390 netns=h2",
+		LocalTunnelAddr: "fe80::24c7:24ac:32e9:cd45%hgs1be3f390 netns=higgstesth2",
+		PeerTunnelAddr:  "fe80::abdb:3c51:6e24:8655%hgs1be3f390 netns=higgstesth2",
 		Rotation: inspect.LinkRotation{
 			RemoteGeneration: 1,
 			StagedGeneration: 2,
@@ -33,7 +33,7 @@ func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
 		XFRMIfID:        686016229,
 		LocalTunnelAddr: netip.MustParseAddr("fe80::5ff8:918b:338e:35e6"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::ec14:d563:b479:44ed"),
-		NetNS:           "h2",
+		NetNS:           "higgstesth2",
 		ContactPoints:   []ipsec.ContactPoint{{Address: "123.57.143.66", NATTPort: 30003, Generation: 2}},
 	}
 
@@ -60,13 +60,13 @@ func TestDebugLinksPlannerShowsActiveRuntimeTunnel(t *testing.T) {
 		Endpoint:        "123.57.143.66:30002",
 		InterfaceName:   "hgs1be3f390",
 		XFRMIfID:        467923856,
-		LocalTunnelAddr: "fe80::old-local%hgs1be3f390 netns=h2",
-		PeerTunnelAddr:  "fe80::old-peer%hgs1be3f390 netns=h2",
+		LocalTunnelAddr: "fe80::old-local%hgs1be3f390 netns=higgstesth2",
+		PeerTunnelAddr:  "fe80::old-peer%hgs1be3f390 netns=higgstesth2",
 		Desired: &inspect.DesiredLink{
 			TransportID:     "ipsec-f46fb3d71fe8-r2",
 			DesiredSpecHash: "desired-hash",
-			LocalTunnelAddr: "fe80::new-local%hgs28e3c6e5 netns=h2",
-			PeerTunnelAddr:  "fe80::new-peer%hgs28e3c6e5 netns=h2",
+			LocalTunnelAddr: "fe80::new-local%hgs28e3c6e5 netns=higgstesth2",
+			PeerTunnelAddr:  "fe80::new-peer%hgs28e3c6e5 netns=higgstesth2",
 		},
 	}
 
@@ -76,8 +76,8 @@ func TestDebugLinksPlannerShowsActiveRuntimeTunnel(t *testing.T) {
 		"    runtime_id: ipsec-526e55bae2e1",
 		"    endpoint: 123.57.143.66:30002",
 		"    interface: hgs1be3f390(467923856)",
-		"    local_tunnel: fe80::old-local%hgs1be3f390 netns=h2",
-		"    peer_tunnel: fe80::old-peer%hgs1be3f390 netns=h2",
+		"    local_tunnel: fe80::old-local%hgs1be3f390 netns=higgstesth2",
+		"    peer_tunnel: fe80::old-peer%hgs1be3f390 netns=higgstesth2",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)
@@ -98,8 +98,8 @@ func TestRotateRuntimeStagedUsesPersistedRuntimeAndMatchingSA(t *testing.T) {
 			StagedChildSAName:     "ipsec-f46fb3d71fe8-r2-child",
 			StagedInterfaceName:   "hgs28e3c6e5",
 			StagedXFRMIfID:        686016229,
-			StagedLocalTunnelAddr: "fe80::5ff8:918b:338e:35e6%hgs28e3c6e5 netns=h2",
-			StagedPeerTunnelAddr:  "fe80::ec14:d563:b479:44ed%hgs28e3c6e5 netns=h2",
+			StagedLocalTunnelAddr: "fe80::5ff8:918b:338e:35e6%hgs28e3c6e5 netns=higgstesth2",
+			StagedPeerTunnelAddr:  "fe80::ec14:d563:b479:44ed%hgs28e3c6e5 netns=higgstesth2",
 		},
 	}
 	sas := []linkSAState{{
@@ -114,10 +114,10 @@ func TestRotateRuntimeStagedUsesPersistedRuntimeAndMatchingSA(t *testing.T) {
 	if got.Endpoint != "123.57.143.66:30003" || got.Port != "30003" {
 		t.Fatalf("staged endpoint/port = %q/%q, want 123.57.143.66:30003/30003", got.Endpoint, got.Port)
 	}
-	if got.LocalTunnelAddr != "fe80::5ff8:918b:338e:35e6%hgs28e3c6e5 netns=h2" {
+	if got.LocalTunnelAddr != "fe80::5ff8:918b:338e:35e6%hgs28e3c6e5 netns=higgstesth2" {
 		t.Fatalf("local tunnel = %q, want persisted staged local tunnel", got.LocalTunnelAddr)
 	}
-	if got.PeerTunnelAddr != "fe80::ec14:d563:b479:44ed%hgs28e3c6e5 netns=h2" {
+	if got.PeerTunnelAddr != "fe80::ec14:d563:b479:44ed%hgs28e3c6e5 netns=higgstesth2" {
 		t.Fatalf("peer tunnel = %q, want persisted staged peer tunnel", got.PeerTunnelAddr)
 	}
 }

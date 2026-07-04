@@ -139,18 +139,19 @@ func TestParseConfigYAMLNetNSDefault(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if config.Overlay.DefaultNetNS.Kind != ipsec.NetNSName || config.Overlay.DefaultNetNS.Name != "h2" || !config.Overlay.DefaultNetNS.Create {
-		t.Fatalf("Overlay.DefaultNetNS = %+v", config.Overlay.DefaultNetNS)
+	if config.Netns.Default != "default" {
+		t.Fatalf("Netns.Default = %q, want default", config.Netns.Default)
 	}
-	if config.IPsec.DefaultNetNS.Kind != ipsec.NetNSName || config.IPsec.DefaultNetNS.Name != "h2" || !config.IPsec.DefaultNetNS.Create {
-		t.Fatalf("IPsec.DefaultNetNS = %+v", config.IPsec.DefaultNetNS)
+	spec := config.Netns.Names["default"]
+	if spec.Kind != ipsec.NetNSName || spec.Name != "higgstesth2" || !spec.Create {
+		t.Fatalf("Netns.Names[default] = %+v", spec)
 	}
 }
 
@@ -159,13 +160,13 @@ func TestParseConfigYAMLRejectsLegacyDefaultNetNS(t *testing.T) {
 ipsec:
   default_netns:
     kind: name
-    name: legacy-h2
+    name: legacytesth2
     create: true
 `, `
 overlay:
   default_netns:
     kind: name
-    name: legacy-h2
+    name: legacytesth2
     create: true
 `} {
 		config := defaultAppConfig()
@@ -245,7 +246,7 @@ func TestParseConfigYAMLNetNSNamedSiblings(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
   edge:
     kind: name
@@ -256,8 +257,8 @@ netns:
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if config.Overlay.DefaultNetNS.Name != "h2" || config.IPsec.DefaultNetNS.Name != "h2" {
-		t.Fatalf("default netns = overlay:%+v ipsec:%+v", config.Overlay.DefaultNetNS, config.IPsec.DefaultNetNS)
+	if spec, ok := config.Netns.Names["default"]; !ok || spec.Name != "higgstesth2" || !spec.Create {
+		t.Fatalf("netns.default = %+v, ok=%t", spec, ok)
 	}
 	if spec, ok := config.Netns.Names["edge"]; !ok || spec.Name != "edge" || !spec.Create {
 		t.Fatalf("netns.edge = %+v, ok=%t", spec, ok)
@@ -270,7 +271,7 @@ func TestParseConfigYAMLOverlays(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 overlays:
   - name: ipsec-main
@@ -303,7 +304,7 @@ overlays:
 	if group.ID != "ipsec-main" || group.Name != "ipsec-main" || group.Provider != ipsec.ProviderStrongSwan {
 		t.Fatalf("group identity = %+v", group)
 	}
-	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "h2" || !group.NetNS.Create {
+	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "higgstesth2" || !group.NetNS.Create {
 		t.Fatalf("group netns = %+v", group.NetNS)
 	}
 	if group.TunnelAddressPool.String() != "fd00:1234::/64" {
@@ -378,7 +379,7 @@ func TestParseConfigYAMLOverlayUsesDefaultNetNSReference(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 overlays:
   - name: ipsec-main
@@ -389,8 +390,8 @@ overlays:
 	}
 	normalizeAppConfig(config)
 	group := config.IPsec.LinkGroups[0]
-	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "h2" || !group.NetNS.Create {
-		t.Fatalf("group netns = %+v, want netns.default h2", group.NetNS)
+	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "higgstesth2" || !group.NetNS.Create {
+		t.Fatalf("group netns = %+v, want netns.default higgstesth2", group.NetNS)
 	}
 }
 
@@ -402,7 +403,7 @@ overlays:
     provider: strongswan
     netns:
       kind: name
-      name: legacy-h2
+      name: legacytesth2
       create: true
 `
 	if err := parseConfigYAML(input, config); err != nil {
@@ -410,8 +411,8 @@ overlays:
 	}
 	normalizeAppConfig(config)
 	group := config.IPsec.LinkGroups[0]
-	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "legacy-h2" || !group.NetNS.Create {
-		t.Fatalf("group netns = %+v, want inline legacy-h2", group.NetNS)
+	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "legacytesth2" || !group.NetNS.Create {
+		t.Fatalf("group netns = %+v, want inline legacytesth2", group.NetNS)
 	}
 }
 
@@ -421,7 +422,7 @@ func TestParseConfigYAMLOverlayRejectsUnknownNetNSReference(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 overlays:
   - name: ipsec-main
@@ -1012,14 +1013,15 @@ func TestParseConfigYAMLRoutingInstances(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 routing:
   instances:
     - id: main
-      netns: h2
+      netns: higgstesth2
       provider: bird
       mode: external
+      shutdown_policy: stop
       control_socket: /run/higgs/bird-main.ctl
       pid_file: /run/higgs/bird-main.pid
       config_file: /etc/higgs/bird-main.conf
@@ -1042,8 +1044,8 @@ routing:
 	if inst.ID != "main" {
 		t.Fatalf("inst.ID = %q, want main", inst.ID)
 	}
-	if inst.NetNS != "h2" {
-		t.Fatalf("inst.NetNS = %q, want h2", inst.NetNS)
+	if inst.NetNS != "higgstesth2" {
+		t.Fatalf("inst.NetNS = %q, want higgstesth2", inst.NetNS)
 	}
 	if !inst.Enabled {
 		t.Fatalf("inst.Enabled = false, want true")
@@ -1053,6 +1055,9 @@ routing:
 	}
 	if inst.Mode != ipsec.RoutingModeExternal {
 		t.Fatalf("inst.Mode = %q, want external", inst.Mode)
+	}
+	if inst.ShutdownPolicy != routingShutdownPolicyStop {
+		t.Fatalf("inst.ShutdownPolicy = %q, want stop", inst.ShutdownPolicy)
 	}
 	if inst.ControlSocket != "/run/higgs/bird-main.ctl" {
 		t.Fatalf("inst.ControlSocket = %q", inst.ControlSocket)
@@ -1092,12 +1097,12 @@ func TestParseConfigYAMLRoutingInstancesRejectsLegacyProtocolAlias(t *testing.T)
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 routing:
   instances:
     - id: main
-      netns: h2
+      netns: higgstesth2
       protocol: bird
 `
 	if err := parseConfigYAML(input, config); err == nil {
@@ -1111,12 +1116,12 @@ func TestParseConfigYAMLRoutingInstancesDefaults(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 routing:
   instances:
     - id: main
-      netns: h2
+      netns: higgstesth2
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -1128,6 +1133,9 @@ routing:
 	inst := config.Routing.Instances[0]
 	if inst.Mode != ipsec.RoutingModeManaged {
 		t.Fatalf("inst.Mode = %q, want managed", inst.Mode)
+	}
+	if inst.ShutdownPolicy != routingShutdownPolicyPersist {
+		t.Fatalf("inst.ShutdownPolicy = %q, want persist", inst.ShutdownPolicy)
 	}
 	if inst.Protocol != "bird" {
 		t.Fatalf("inst.Protocol = %q, want bird", inst.Protocol)
@@ -1155,13 +1163,32 @@ routing:
 	}
 }
 
+func TestParseConfigYAMLRoutingInstancesRejectsInvalidShutdownPolicy(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: higgstesth2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: higgstesth2
+      shutdown_policy: drain
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatal("parseConfigYAML should reject unsupported routing.instances[].shutdown_policy")
+	}
+}
+
 func TestParseConfigYAMLRoutingInstanceDefaultsToDefaultNetNS(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 routing:
   instances:
@@ -1195,12 +1222,12 @@ func TestParseConfigYAMLRoutingInstanceDisabled(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 routing:
   instances:
     - id: main
-      netns: h2
+      netns: higgstesth2
       disabled: true
 `
 	if err := parseConfigYAML(input, config); err != nil {
@@ -1221,12 +1248,12 @@ func TestParseConfigYAMLRejectsConflictingEnabledDisabled(t *testing.T) {
 netns:
   default:
     kind: name
-    name: h2
+    name: higgstesth2
     create: true
 routing:
   instances:
     - id: main
-      netns: h2
+      netns: higgstesth2
       enabled: true
       disabled: true
 `

@@ -398,7 +398,7 @@ func (d *DaemonService) routingProcessManagerForNetNS(netnsName string) birdProc
 	return pm
 }
 
-func (d *DaemonService) stopManagedBirdInstances(ctx context.Context) error {
+func (d *DaemonService) stopManagedBirdInstances(ctx context.Context, force bool) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
@@ -409,6 +409,9 @@ func (d *DaemonService) stopManagedBirdInstances(ctx context.Context) error {
 	var firstErr error
 	for _, inst := range d.Sync.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled || inst.Mode == ipsec.RoutingModeExternal {
+			continue
+		}
+		if !force && normalizedRoutingShutdownPolicy(inst.ShutdownPolicy) != routingShutdownPolicyStop {
 			continue
 		}
 		pm := d.birdProcessManager
