@@ -138,6 +138,113 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 }
 
+func TestDaemonIPsecReconcileMergesInstanceWhenRevisionChanged(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4050, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	baseRev := service.StateStore.Meta().Revision
+	driver := &staleCommitIPsecDriver{}
+	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
+		if _, err := service.StateStore.Update(func(state *stateFile) error {
+			state.IdentityKeyPath = "newer-revision"
+			return nil
+		}); err != nil {
+			t.Fatalf("advance state revision during apply: %v", err)
+		}
+	}
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	if err := service.reconcileIPsecLinks(context.Background()); err != nil {
+		t.Fatalf("reconcileIPsecLinks: %v", err)
+	}
+	if service.ipsecDirty {
+		t.Fatal("ipsecDirty = true, want token-compatible instance merge to complete")
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.IdentityKeyPath != "newer-revision" {
+		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
+	}
+	if len(snapshot.LinkInstances) != 1 {
+		t.Fatalf("link instances = %+v, want stale-revision instance result merged", snapshot.LinkInstances)
+	}
+	if snapshot.IPsecReconcile == nil {
+		t.Fatal("ipsec reconcile summary missing")
+	}
+	if snapshot.IPsecReconcile.SourceRevision != baseRev || snapshot.IPsecReconcile.Stale || !snapshot.IPsecReconcile.Committed {
+		t.Fatalf("ipsec reconcile summary = %+v, want committed summary for source revision %d", snapshot.IPsecReconcile, baseRev)
+	}
+}
+
+func TestDaemonIPsecReconcileStaleInstanceTokenDoesNotOverwriteCurrent(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4055, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	baseRev := service.StateStore.Meta().Revision
+	driver := &staleCommitIPsecDriver{}
+	driver.onLoadConnection = func(spec ipsec.TransportLinkSpec) {
+		id := ipsec.LinkInstanceID(spec)
+		if _, err := service.StateStore.Update(func(state *stateFile) error {
+			state.LinkInstances = map[string]linkInstanceState{
+				id: {ID: id, Owner: linkOwnerState{Token: "new-owner-token"}},
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("advance state revision during apply: %v", err)
+		}
+	}
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	if err := service.reconcileIPsecLinks(context.Background()); err != nil {
+		t.Fatalf("reconcileIPsecLinks: %v", err)
+	}
+	if !service.ipsecDirty {
+		t.Fatal("ipsecDirty = false, want stale token conflict to schedule another reconcile")
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if len(snapshot.LinkInstances) != 1 {
+		t.Fatalf("link instances = %+v, want current conflicting instance preserved", snapshot.LinkInstances)
+	}
+	for _, inst := range snapshot.LinkInstances {
+		if inst.Owner.Token != "new-owner-token" {
+			t.Fatalf("link instance owner token = %q, want current conflicting token preserved", inst.Owner.Token)
+		}
+	}
+	if snapshot.IPsecReconcile == nil {
+		t.Fatal("ipsec reconcile summary missing, want stale diagnostic")
+	}
+	if snapshot.IPsecReconcile.SourceRevision != baseRev || !snapshot.IPsecReconcile.Stale || snapshot.IPsecReconcile.Committed {
+		t.Fatalf("ipsec reconcile summary = %+v, want stale diagnostic for source revision %d", snapshot.IPsecReconcile, baseRev)
+	}
+}
+
 func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4000, 0)
@@ -2356,6 +2463,22 @@ type countingIPsecDriver struct {
 func (d *countingIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
 	d.listCalls++
 	return d.DryRunDriver.ListSAs(context.Background())
+}
+
+type staleCommitIPsecDriver struct {
+	ipsec.DryRunDriver
+	onLoadConnection func(ipsec.TransportLinkSpec)
+	loadedOnce       bool
+}
+
+func (d *staleCommitIPsecDriver) LoadConnection(ctx context.Context, spec ipsec.TransportLinkSpec) error {
+	if !d.loadedOnce {
+		d.loadedOnce = true
+		if d.onLoadConnection != nil {
+			d.onLoadConnection(spec)
+		}
+	}
+	return d.DryRunDriver.LoadConnection(ctx, spec)
 }
 
 func testIPsecLinkGroup() ipsec.LinkGroupSpec {

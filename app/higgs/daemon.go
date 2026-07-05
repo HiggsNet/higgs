@@ -1527,6 +1527,7 @@ func (d *DaemonService) flushRoutingReconcile(ctx context.Context) bool {
 	if err := d.reconcileRouting(reconcileCtx); err != nil {
 		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
 	}
+	d.publishCommittedStateSnapshot()
 	return true
 }
 

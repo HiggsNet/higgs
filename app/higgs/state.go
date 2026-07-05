@@ -278,13 +278,16 @@ type linkOwnerState struct {
 }
 
 type ipsecReconcileState struct {
-	LastRunUnix  int64              `json:"last_run_unix,omitempty"`
-	DesiredLinks int                `json:"desired_links,omitempty"`
-	Desired      []desiredLinkState `json:"desired,omitempty"`
-	ActualSAs    []linkSAState      `json:"actual_sas,omitempty"`
-	Actions      []linkActionState  `json:"actions,omitempty"`
-	Skipped      []linkSkipState    `json:"skipped,omitempty"`
-	LastError    string             `json:"last_error,omitempty"`
+	LastRunUnix    int64              `json:"last_run_unix,omitempty"`
+	SourceRevision uint64             `json:"source_revision,omitempty"`
+	Committed      bool               `json:"committed,omitempty"`
+	Stale          bool               `json:"stale,omitempty"`
+	DesiredLinks   int                `json:"desired_links,omitempty"`
+	Desired        []desiredLinkState `json:"desired,omitempty"`
+	ActualSAs      []linkSAState      `json:"actual_sas,omitempty"`
+	Actions        []linkActionState  `json:"actions,omitempty"`
+	Skipped        []linkSkipState    `json:"skipped,omitempty"`
+	LastError      string             `json:"last_error,omitempty"`
 }
 
 type desiredLinkState struct {

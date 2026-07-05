@@ -182,7 +182,8 @@
         - control `status` / `record_get` / `bird_status` / `routes_dump` / `admission_status` / `firewall_status` / `links_status` / `peers_status` / `revoke_status` 已读 committed snapshot，并返回 `state_revision` / `snapshot_time_unix` / dirty / reconcile flags；observer provider 已改用 snapshot，status API 输出 revision/dirty 信息；CLI debug 在线路径经 control 间接受益。
       - [x] 迁移 gossip packet 快路径：ping/pong 响应不等待 writer；observed path 作为 event 异步提交。
         - packet event 已从 `handleEvent` 全局 live state 写锁前分流，处理后发布 committed snapshot；object-pull TCP lookup 改为读取 snapshot getter，不再持 live `RLock()`；已补 live state 写锁被持有时 packet event 仍返回并提交 observed path 的回归测试。后续 sync FSM 更细粒度写回仍归入 reconcile/store 条件提交阶段。
-      - [ ] 先拆 IPsec reconcile：snapshot input、锁外 plan/apply、按 instance 条件提交 `LinkInstances`，summary 带 revision/stale 标记。
+      - [x] 先拆 IPsec reconcile：snapshot input、锁外 plan/apply、按 instance 条件提交 `LinkInstances`，summary 带 revision/stale 标记。
+        - `reconcileIPsecLinks` 基于 committed snapshot 做 plan/list/XFRM inspect/reconcile/apply；写回先走 source revision 快路径，revision 变化时按变更 instance 的 owner token 合并 `LinkInstances`，只在同 id token 冲突时保留当前 snapshot、写 stale diagnostic 并重新置 `ipsecDirty`。`IPsecReconcile` summary 已包含 `source_revision`、`committed`、`stale`。
       - [ ] 再拆 routing：BIRD config/start/reload/status 锁外执行，按 netns 条件提交 `BirdInstances`；拆出 `autoAnnounceAssignedIPs` 为独立 state update。
       - [ ] 再拆 firewall：锁外 apply，短事务写 `FirewallReconcile` summary。
       - [ ] 最后移除 `DaemonService.stateUnlock` / `lockState()` 这类 live pointer 锁追踪，daemon event loop 只通过 StateStore 操作。

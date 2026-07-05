@@ -359,6 +359,7 @@ func (d *DaemonService) flushFirewallReconcile(ctx context.Context) bool {
 	if err := d.reconcileFirewall(reconcileCtx); err != nil {
 		d.logWarn("firewall", "reconcile_failed", map[string]any{"error": err})
 	}
+	d.publishCommittedStateSnapshot()
 	return true
 }
 
