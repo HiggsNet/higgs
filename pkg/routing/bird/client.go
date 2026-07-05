@@ -174,30 +174,77 @@ func (c *birdcClient) command(ctx context.Context, cmd string) (string, error) {
 		return "", fmt.Errorf("write command: %w", err)
 	}
 
-	var body strings.Builder
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return body.String(), fmt.Errorf("read response: %w", err)
-		}
-
-		// The birdc prompt marks the end of a response.
-		if isPromptLine(line) {
-			break
-		}
-
-		body.WriteString(line)
+	body, err := readResponse(reader)
+	if err != nil {
+		return body, fmt.Errorf("read response: %w", err)
 	}
-
-	return body.String(), nil
+	return body, nil
 }
 
-func isPromptLine(line string) bool {
-	line = strings.TrimRight(line, "\r\n")
-	return line == "0000" || strings.HasPrefix(line, "0000 ")
+func readResponse(reader io.Reader) (string, error) {
+	var data []byte
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			data = append(data, buf[:n]...)
+			if body, ok := completeResponse(data); ok {
+				return body, nil
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return string(data), nil
+			}
+			return string(data), err
+		}
+	}
+}
+
+func completeResponse(data []byte) (string, bool) {
+	for start := 0; start < len(data); {
+		lineEnd := -1
+		for i := start; i < len(data); i++ {
+			if data[i] == '\n' {
+				lineEnd = i + 1
+				break
+			}
+		}
+
+		if len(data)-start >= 5 && isReplyCode(data[start:start+4]) {
+			switch data[start+4] {
+			case ' ':
+				code := string(data[start : start+4])
+				if code == "0000" {
+					return string(data[:start]), true
+				}
+				if lineEnd >= 0 {
+					return string(data[:lineEnd]), true
+				}
+				return "", false
+			case '-':
+				// Continuation line; keep scanning following complete lines.
+			}
+		}
+
+		if lineEnd < 0 {
+			return "", false
+		}
+		start = lineEnd
+	}
+	return "", false
+}
+
+func isReplyCode(b []byte) bool {
+	if len(b) != 4 {
+		return false
+	}
+	for _, c := range b {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isErrorResponse reports whether a response body contains an error code line.

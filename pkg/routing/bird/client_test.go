@@ -292,7 +292,7 @@ func TestCommandUsesClientTimeoutWithoutContextDeadline(t *testing.T) {
 
 func TestRawAcceptsBarePromptTerminator(t *testing.T) {
 	server := newFakeServer(t, func(cmd string) string {
-		return "1000-BIRD 2.15.1\n0000\n"
+		return "1000-BIRD 2.15.1\n0000"
 	})
 	defer server.close()
 
@@ -303,6 +303,37 @@ func TestRawAcceptsBarePromptTerminator(t *testing.T) {
 	}
 	if !strings.Contains(out, "BIRD 2.15.1") {
 		t.Fatalf("Raw output missing status line: %q", out)
+	}
+}
+
+func TestReadResponseStopsAtPromptWithoutNewline(t *testing.T) {
+	out, err := readResponse(strings.NewReader("1000-BIRD 2.15.1\n0000 "))
+	if err != nil {
+		t.Fatalf("readResponse: %v", err)
+	}
+	if out != "1000-BIRD 2.15.1\n" {
+		t.Fatalf("response = %q", out)
+	}
+}
+
+func TestReadResponseStopsAtAnyFinalReplyLine(t *testing.T) {
+	out, err := readResponse(strings.NewReader("8001 Unknown command\n"))
+	if err != nil {
+		t.Fatalf("readResponse: %v", err)
+	}
+	if out != "8001 Unknown command\n" {
+		t.Fatalf("response = %q", out)
+	}
+}
+
+func TestReadResponseKeepsContinuationLines(t *testing.T) {
+	out, err := readResponse(strings.NewReader("1000-BIRD 2.15.1\n1011-Router ID is 10.64.64.2\n Last reboot today\n0000 \n"))
+	if err != nil {
+		t.Fatalf("readResponse: %v", err)
+	}
+	want := "1000-BIRD 2.15.1\n1011-Router ID is 10.64.64.2\n Last reboot today\n"
+	if out != want {
+		t.Fatalf("response = %q, want %q", out, want)
 	}
 }
 
