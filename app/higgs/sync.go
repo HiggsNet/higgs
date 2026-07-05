@@ -492,9 +492,7 @@ func syncServe(ctx context.Context) error {
 		case event := <-service.syncEvents:
 			service.handleSyncEvent(ctx, event)
 		case result := <-service.objectPullResults:
-			unlock := service.lockState()
-			recordObjectPullResult(service.Sync.State, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, service.Sync.now())
-			unlock()
+			service.commitObjectPullResult(result)
 			service.enqueueObjectPullResult(result)
 		}
 	}
@@ -567,9 +565,7 @@ func syncOnce(peerID string) error {
 			service.handleSyncEvent(ctx, event)
 		case result := <-service.objectPullResults:
 			responderQuietUntil = time.Time{}
-			unlock := service.lockState()
-			recordObjectPullResult(service.Sync.State, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, service.Sync.now())
-			unlock()
+			service.commitObjectPullResult(result)
 			service.enqueueObjectPullResult(result)
 		default:
 			deadline := time.Now().Add(100 * time.Millisecond)

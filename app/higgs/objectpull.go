@@ -403,6 +403,62 @@ func recordObjectPullResult(state *stateFile, peerID, object string, zoneName zo
 	state.SyncPeers[peerID] = peerState
 }
 
+func (d *DaemonService) commitObjectPullAttempt(peerID string, path zone.ZonePath, now time.Time) {
+	if d == nil || d.Sync == nil {
+		return
+	}
+	if d.StateStore == nil {
+		if d.Sync.State != nil {
+			recordObjectPullAttempt(d.Sync.State, peerID, "zone", path, "", now)
+		}
+		return
+	}
+	if _, err := d.StateStore.Update(func(state *stateFile) error {
+		recordObjectPullAttempt(state, peerID, "zone", path, "", now)
+		return nil
+	}); err != nil {
+		d.logWarn("sync", "object_pull_attempt_commit_failed", map[string]any{
+			"peer_id": peerID,
+			"zone":    path,
+			"error":   err,
+		})
+		return
+	}
+	d.installCommittedSnapshotIfLiveUnlocked()
+}
+
+func (d *DaemonService) commitObjectPullResult(result ObjectPullResult) {
+	if d == nil || d.Sync == nil {
+		return
+	}
+	if d.StateStore == nil {
+		if d.Sync.State != nil {
+			recordObjectPullResult(d.Sync.State, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
+		}
+		return
+	}
+	if _, err := d.StateStore.Update(func(state *stateFile) error {
+		recordObjectPullResult(state, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
+		return nil
+	}); err != nil {
+		d.logWarn("sync", "object_pull_result_commit_failed", map[string]any{
+			"peer_id": result.PeerID,
+			"zone":    result.Zone,
+			"error":   err,
+		})
+		return
+	}
+	d.installCommittedSnapshotIfLiveUnlocked()
+}
+
+func (d *DaemonService) installCommittedSnapshotIfLiveUnlocked() {
+	if d == nil || d.hasStateLock() {
+		return
+	}
+	state, _, _ := d.snapshotState()
+	d.installCurrentStateSnapshot(state)
+}
+
 // resolvePeerTCPAddr returns the best-effort TCP object-pull address for a peer.
 func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID string) string {
 	if config == nil || targetPeerID == "" {

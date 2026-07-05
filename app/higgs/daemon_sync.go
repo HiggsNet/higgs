@@ -641,18 +641,24 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 	if d == nil || d.objectPullPool == nil || d.Sync == nil || d.Sync.State == nil {
 		return
 	}
-	addr := resolvePeerTCPAddr(d.Sync.State, d.Sync.Config, peerID)
+	state := d.Sync.State
+	if snapshot, _, _ := d.snapshotState(); snapshot != nil {
+		state = snapshot
+	}
+	addr := resolvePeerTCPAddr(state, d.Sync.Config, peerID)
 	if addr == "" {
 		err := fmt.Errorf("no TCP address for peer %s", peerID)
-		recordObjectPullResult(d.Sync.State, peerID, "zone", path, "", 0, err, true, now)
-		d.enqueueObjectPullResult(ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true})
+		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
+		d.commitObjectPullResult(result)
+		d.enqueueObjectPullResult(result)
 		return
 	}
-	recordObjectPullAttempt(d.Sync.State, peerID, "zone", path, "", now)
+	d.commitObjectPullAttempt(peerID, path, now)
 	if !d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: peerID, Zone: path, Addr: addr}) {
 		err := errors.New("object pull submit failed")
-		recordObjectPullResult(d.Sync.State, peerID, "zone", path, "", 0, err, true, now)
-		d.enqueueObjectPullResult(ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true})
+		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
+		d.commitObjectPullResult(result)
+		d.enqueueObjectPullResult(result)
 	}
 }
 

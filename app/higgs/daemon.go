@@ -409,9 +409,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			}
 		case result := <-d.objectPullResults:
 			timer.Stop()
-			unlock := d.lockState()
-			recordObjectPullResult(d.Sync.State, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
-			unlock()
+			d.commitObjectPullResult(result)
 			d.enqueueObjectPullResult(result)
 		case <-timer.C:
 			// Continue the loop; timers will be checked and fired at the top.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,68 @@ func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
 	}
 	if stats.LastObject != "zone" || stats.LastZone != "node-b.catofes." || stats.LastError == "" {
 		t.Fatalf("last object stats = %#v", stats)
+	}
+}
+
+func TestCommitObjectPullResultUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(7100, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	unlock := service.lockState()
+	service.commitObjectPullResult(ObjectPullResult{
+		PeerID:      "node-b.catofes.",
+		Zone:        "node-b.catofes.",
+		Bytes:       4096,
+		Unreachable: false,
+	})
+	unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	stats := snapshot.SyncPeers["node-b.catofes."].ObjectPullStats
+	if stats == nil {
+		t.Fatal("object pull stats missing from committed snapshot")
+	}
+	if stats.Successes != 1 || stats.LastBytes != 4096 || stats.LastZone != "node-b.catofes." {
+		t.Fatalf("object pull stats = %+v, want committed success result", stats)
+	}
+}
+
+func TestSubmitObjectPullNoAddressUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(7200, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	unlock := service.lockState()
+	service.submitObjectPull(context.Background(), "node-b.catofes.", "node-b.catofes.", now)
+	if got := service.currentState(); got != state {
+		t.Fatalf("live state pointer changed while state lock is held")
+	}
+	unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	stats := snapshot.SyncPeers["node-b.catofes."].ObjectPullStats
+	if stats == nil {
+		t.Fatal("object pull stats missing from committed snapshot")
+	}
+	if stats.Failures != 1 || stats.LargeObjectUnreachable != 1 || !stats.LastUnreachable {
+		t.Fatalf("object pull stats = %+v, want committed unreachable failure", stats)
 	}
 }
 

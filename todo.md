@@ -189,7 +189,7 @@
       - [x] 再拆 firewall：锁外 apply，短事务写 `FirewallReconcile` summary。
         - `reconcileFirewall` 已改为读取 committed snapshot 构造 desired/plan/apply，运行期只累积 `FirewallReconcile` summary；最终通过 StateStore revision 条件提交 summary，revision stale 时合并到当前 snapshot、保留新 state 并重新置 `firewallDirty`。
       - [ ] 最后移除 `DaemonService.stateUnlock` / `lockState()` 这类 live pointer 锁追踪，daemon event loop 只通过 StateStore 操作。
-        - 已移除 `stateUnlock func()` 的 unlock 函数追踪，改为局部锁闭包 + `lockedState` 指针转移，避免保存可调用 unlock；`setState` 仍保持 event 写路径的锁转移语义。后续仍需把 sync FSM / object pull result / remaining daemon write handlers 从 live state lock 迁到 StateStore 短事务，最终删除 `lockState()`。
+        - 已移除 `stateUnlock func()` 的 unlock 函数追踪，改为局部锁闭包 + `lockedState` 指针转移，避免保存可调用 unlock；`setState` 仍保持 event 写路径的锁转移语义。object pull result / submit attempt / immediate failure stats 已改为 StateStore 短事务提交 committed snapshot，并避免在 live lock 持有期间安装新 state 指针。后续仍需把 sync FSM / remaining daemon write handlers 从 live state lock 迁到 StateStore 短事务，最终删除 `lockState()`。
       - [ ] 增加并发回归测试：长 IPsec/BIRD/firewall reconcile 阻塞时，`daemon status` / `debug links` / observer API 仍能返回 latest committed snapshot；旧 snapshot result 不覆盖新 revision；dirty coalescing 能在 stale commit 后触发下一轮 reconcile。
     - **验收标准：**
       - 长时间 IPsec/VICI/BIRD/firewall apply 不阻塞 observer/control 普通只读查询。
