@@ -175,8 +175,9 @@
       - 强一致命令（如 record put 后立即 get）可选择等待指定 revision committed；普通只读命令不等待。
       - gossip ping/pong 响应不读长写锁；需要更新 observed path 时投递 writer event，由 single-writer 后台提交。
     - **实施顺序：**
-      - [ ] 设计并引入 `DaemonStateStore` 骨架：committed pointer、revision、snapshot clone、short update、dirty flags；先不迁移所有调用，只提供并行 API。
-      - [ ] 补 `cloneStateFile` / snapshot clone 测试，确保 `Network`、records/history、maps/slices、runtime states 深拷贝，不共享可变 map。
+      - [x] 设计并引入 `DaemonStateStore` 骨架：committed pointer、revision、snapshot clone、short update、dirty flags；先不迁移所有调用，只提供并行 API。
+        - 已新增 `DaemonStateStore` 并接到 `DaemonService`：旧事件循环仍操作 live `Sync.State`，`setState` / `notifyStateChanged` 发布 committed snapshot；后续 reader/reconcile 逐步迁到 store API。
+      - [x] 补 `cloneStateFile` / snapshot clone 测试，确保 `Network`、records/history、maps/slices、runtime states 深拷贝，不共享可变 map。
       - [ ] 迁移 observer/control/debug 只读路径到 `Snapshot()`，去掉对 live `stateFile.RLock()` 的依赖；输出 revision/dirty/reconcile status。
       - [ ] 迁移 gossip packet 快路径：ping/pong 响应不等待 writer；observed path 作为 event 异步提交。
       - [ ] 先拆 IPsec reconcile：snapshot input、锁外 plan/apply、按 instance 条件提交 `LinkInstances`，summary 带 revision/stale 标记。

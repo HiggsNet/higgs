@@ -26,6 +26,7 @@ type DaemonService struct {
 	ControlSocketPath string
 	Events            chan daemonEvent
 	Hooks             DaemonHooks
+	StateStore        *DaemonStateStore
 	IPsecDriver       ipsec.IPsecDriver
 	XFRMDriver        ipsec.XFRMDriver
 	closeIPsecDriver  func() error
@@ -153,6 +154,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		Events:            make(chan daemonEvent, 64),
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
+		StateStore:        NewDaemonStateStore(state),
 	}
 	d.syncSessions = make(map[string]*SyncSession)
 	d.pendingSyncHints = make(map[string]bool)
@@ -1367,6 +1369,7 @@ func (d *DaemonService) setState(state *stateFile) {
 	defer d.stateMu.Unlock()
 	if d.stateUnlock == nil {
 		d.Sync.State = state
+		d.publishCommittedStateSnapshot()
 		return
 	}
 	state.Lock()
@@ -1375,6 +1378,7 @@ func (d *DaemonService) setState(state *stateFile) {
 	}
 	old := d.Sync.State
 	d.Sync.State = state
+	d.publishCommittedStateSnapshot()
 	if old != nil {
 		old.Unlock()
 	}
@@ -1394,16 +1398,19 @@ func (d *DaemonService) notifyStateChanged() {
 	// firewall/routing/IPsec flush so that allow sets and desired links are
 	// computed without revoked entries.
 	d.flushRevocationCleanup()
+	d.publishCommittedStateSnapshot()
 
 	if d.drainingEvents || d.hasStateLock() {
 		d.ipsecDirty = true
 		d.routingDirty = true
 		d.firewallDirty = true
+		d.publishStateStoreRuntimeFlags()
 		return
 	}
 	d.ipsecDirty = true
 	d.routingDirty = true
 	d.firewallDirty = true
+	d.publishStateStoreRuntimeFlags()
 	d.flushFirewallReconcile(context.Background())
 	d.notifyObserver("route_changed", nil)
 	d.notifyObserver("bird_updated", nil)
@@ -1413,8 +1420,28 @@ func (d *DaemonService) notifyStateChanged() {
 	// Gossip peer cache cleanup runs again after teardown to ensure observed
 	// paths discovered/refreshed during the flush are cleared.
 	d.flushRevocationCleanup()
+	d.publishCommittedStateSnapshot()
 	d.notifyObserver("peer_updated", nil)
 	d.notifyObserver("health_updated", nil)
+}
+
+func (d *DaemonService) publishCommittedStateSnapshot() {
+	if d == nil || d.StateStore == nil || d.Sync == nil {
+		return
+	}
+	d.StateStore.ReplaceCommitted(d.Sync.State)
+	d.publishStateStoreRuntimeFlags()
+}
+
+func (d *DaemonService) publishStateStoreRuntimeFlags() {
+	if d == nil || d.StateStore == nil {
+		return
+	}
+	d.StateStore.SetDirty(daemonDirtyFlags{
+		IPsec:    d.ipsecDirty,
+		Routing:  d.routingDirty,
+		Firewall: d.firewallDirty,
+	})
 }
 
 func (d *DaemonService) noteReconcileFlush(layer string) {
