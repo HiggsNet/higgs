@@ -383,11 +383,21 @@ func TestDaemonIPsecReconcileInterval(t *testing.T) {
 		t.Fatalf("interval without link groups = %s, want 0", interval)
 	}
 
-	state.LinkInstances = map[string]linkInstanceState{"stale": {ID: "stale"}}
+	if _, err := service.StateStore.Update(func(state *stateFile) error {
+		state.LinkInstances = map[string]linkInstanceState{"stale": {ID: "stale"}}
+		return nil
+	}); err != nil {
+		t.Fatalf("StateStore.Update(stale links): %v", err)
+	}
 	if interval := service.ipsecReconcileInterval(); interval != defaultIPsecReconcileInterval {
 		t.Fatalf("interval with stale instances = %s, want %s", interval, defaultIPsecReconcileInterval)
 	}
-	state.LinkInstances = nil
+	if _, err := service.StateStore.Update(func(state *stateFile) error {
+		state.LinkInstances = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("StateStore.Update(clear links): %v", err)
+	}
 
 	defaultGroup := testIPsecLinkGroup()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{defaultGroup}

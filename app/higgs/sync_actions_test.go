@@ -92,6 +92,47 @@ func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
 	}
 }
 
+func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2130, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	peerID := "node-b.catofes."
+
+	unlock := service.lockState()
+	done := make(chan error, 1)
+	go func() {
+		done <- service.respondFetchCatalogPage(peerID, "")
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			unlock()
+			t.Fatalf("respondFetchCatalogPage: %v", err)
+		}
+	case <-time.After(time.Second):
+		unlock()
+		t.Fatal("read-only responder blocked behind live state lock")
+	}
+	unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	peerState := snapshot.SyncPeers[peerID]
+	if peerState.ReadOnlyResponder == 0 {
+		t.Fatalf("read-only responder count = %d, want committed read-only responder stats", peerState.ReadOnlyResponder)
+	}
+	if peerState.DatagramStats == nil || (peerState.DatagramStats.LastCatalogCursor == "" && peerState.DatagramStats.LastCatalogPageEntries == 0) {
+		t.Fatalf("catalog page stats = %+v, want committed catalog page", peerState.DatagramStats)
+	}
+}
+
 func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	base, config := buildTestNetworkState(t)
 	state := cloneStateFile(base)

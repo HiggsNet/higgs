@@ -1188,12 +1188,14 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 }
 
 func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+	if d == nil {
 		return nil
 	}
-	d.Sync.State.RLock()
-	defer d.Sync.State.RUnlock()
-	return gossip.ZoneDigests(d.Sync.State.Network)
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
+		return nil
+	}
+	return gossip.ZoneDigests(state.Network)
 }
 
 func (d *DaemonService) handleEndpointTimerEvent() error {
@@ -1632,13 +1634,9 @@ func (d *DaemonService) ipsecReconcileInterval() time.Duration {
 	}
 	groups := d.Sync.App.Config.IPsec.LinkGroups
 	if len(groups) == 0 {
-		if d.Sync.State != nil {
-			d.Sync.State.RLock()
-			hasLinks := len(d.Sync.State.LinkInstances) > 0
-			d.Sync.State.RUnlock()
-			if hasLinks {
-				return defaultIPsecReconcileInterval
-			}
+		state, _, _ := d.snapshotState()
+		if state != nil && len(state.LinkInstances) > 0 {
+			return defaultIPsecReconcileInterval
 		}
 		return 0
 	}

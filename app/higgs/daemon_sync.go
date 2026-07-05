@@ -38,14 +38,21 @@ func (d *DaemonService) EnableEventLoopSync(clock Clock) {
 }
 
 func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) error {
+	if d == nil || d.Sync == nil {
+		return nil
+	}
 	now := d.Sync.now()
-	peers := outboundSyncPeersAt(d.Sync.State, d.Sync.Config, now)
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
+		return nil
+	}
+	peers := outboundSyncPeersAt(state, d.Sync.Config, now)
 	d.logDebug("sync", "event_loop_timer", map[string]any{
 		"peer_count": len(peers),
 		"force":      force,
 	})
 	for _, peerID := range peers {
-		if !force && backoffRemaining(d.Sync.State.SyncPeers[peerID], now) > 0 {
+		if !force && backoffRemaining(state.SyncPeers[peerID], now) > 0 {
 			d.logDebug("sync", "event_loop_skipped", map[string]any{
 				"peer_id": peerID,
 				"reason":  "backoff",
@@ -60,14 +67,14 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 			continue
 		}
 		d.syncSessions[peerID] = NewSyncSession(peerID)
-		summary, err := gossip.CatalogSummaryFor(d.Sync.State.Network, d.syncDatagramBudget())
+		summary, err := gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
 		if err != nil {
 			d.logWarn("sync", "catalog_summary_failed", map[string]any{"peer_id": peerID, "error": err})
 			continue
 		}
 		event := &SyncTimerEvent{
 			PeerID:       peerID,
-			LocalDigests: gossip.ZoneDigests(d.Sync.State.Network),
+			LocalDigests: gossip.ZoneDigests(state.Network),
 			LocalSummary: summary,
 		}
 		select {
@@ -80,7 +87,7 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 }
 
 func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ context.Context) error {
-	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil && d.Sync.State != nil {
+	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil {
 		d.recordSyncPeerState(packet.Message.PeerID, "observed_path", func(state *stateFile) {
 			recordVerifiedObservedPath(state, packet.Message.PeerID, packet.Addr, packet.Message.Type, d.Sync.now())
 		})
@@ -189,10 +196,14 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 }
 
 func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || d.Sync.Transport == nil || ping == nil {
+	if d == nil || d.Sync == nil || d.Sync.Transport == nil || ping == nil {
 		return nil
 	}
-	summary, err := gossip.CatalogSummaryFor(d.Sync.State.Network, d.syncDatagramBudget())
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
+		return nil
+	}
+	summary, err := gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
 	if err != nil {
 		return err
 	}
@@ -213,7 +224,7 @@ func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
 }
 
 func (d *DaemonService) handleAnnounceHint(peerID string) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || peerID == "" {
+	if d == nil || d.Sync == nil || peerID == "" {
 		return nil
 	}
 	now := d.Sync.now()
@@ -235,11 +246,15 @@ func (d *DaemonService) handleAnnounceHint(peerID string) error {
 }
 
 func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || peerID == "" {
+	if d == nil || d.Sync == nil || peerID == "" {
 		return nil
 	}
 	now := d.Sync.now()
-	summary, err := gossip.CatalogSummaryFor(d.Sync.State.Network, d.syncDatagramBudget())
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
+		return nil
+	}
+	summary, err := gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
 	if err != nil {
 		d.logWarn("sync", "catalog_summary_failed", map[string]any{
 			"peer_id": peerID,
@@ -251,7 +266,7 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 	d.syncSessions[peerID] = NewSyncSession(peerID)
 	if err := d.postSyncEvent(&SyncTimerEvent{
 		PeerID:       peerID,
-		LocalDigests: gossip.ZoneDigests(d.Sync.State.Network),
+		LocalDigests: gossip.ZoneDigests(state.Network),
 		LocalSummary: summary,
 	}); err != nil {
 		delete(d.syncSessions, peerID)
@@ -281,14 +296,18 @@ func (d *DaemonService) postSyncEvent(event SyncEvent) error {
 }
 
 func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil {
+		return nil
+	}
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
 		return nil
 	}
 	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
 		recordReadOnlyResponder(state, peerID, "catalog_page", "", d.Sync.now())
 	})
 	budget := d.syncDatagramBudget()
-	page, err := gossip.CatalogPageFor(d.Sync.State.Network, cursor, budget)
+	page, err := gossip.CatalogPageFor(state.Network, cursor, budget)
 	if err != nil {
 		d.recordSyncPeerState(peerID, "catalog_page_reject", func(state *stateFile) {
 			recordDatagramTooLarge(state, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
@@ -313,13 +332,17 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 }
 
 func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
+	if d == nil || d.Sync == nil {
+		return nil
+	}
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
 		return nil
 	}
 	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
 		recordReadOnlyResponder(state, peerID, "fetch_zone", path, d.Sync.now())
 	})
-	snap, err := gossip.Snapshot(d.Sync.State.Network, path)
+	snap, err := gossip.Snapshot(state.Network, path)
 	if err != nil {
 		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
 			"peer_id": peerID,
@@ -333,17 +356,25 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 }
 
 func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil || d.Sync.Transport == nil {
+		return nil
+	}
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
 		return nil
 	}
 	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
 		recordReadOnlyResponder(state, peerID, "chunk_fallback", path, d.Sync.now())
 	})
-	return d.Sync.sendSnapshots(peerID, []zone.ZonePath{path}, true)
+	return sendSnapshotsWithStats(state, state.Network, d.Sync.Transport, peerID, []zone.ZonePath{path}, d.Sync.now(), true, d.Sync.logger())
 }
 
 func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gossip.ZoneSnapshot) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || len(snapshots) == 0 {
+	if d == nil || d.Sync == nil || len(snapshots) == 0 {
+		return nil
+	}
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
 		return nil
 	}
 	budget := d.syncDatagramBudget()
@@ -353,7 +384,7 @@ func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gos
 			zones = append(zones, snap.Zone)
 		}
 	}
-	plan := planSnapshotDatagrams(d.Sync.State.Network, zones, budget, d.Sync.now())
+	plan := planSnapshotDatagrams(state.Network, zones, budget, d.Sync.now())
 	for _, oversized := range plan.Oversized {
 		d.recordSyncPeerState(peerID, "datagram_too_large", func(state *stateFile) {
 			recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
@@ -763,12 +794,16 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 }
 
 func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, path zone.ZonePath, now time.Time) {
-	if d == nil || d.objectPullPool == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.objectPullPool == nil || d.Sync == nil {
 		return
 	}
-	state := d.Sync.State
-	if snapshot, _, _ := d.snapshotState(); snapshot != nil {
-		state = snapshot
+	state, _, _ := d.snapshotState()
+	if state == nil {
+		err := fmt.Errorf("no committed state for peer %s", peerID)
+		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
+		d.commitObjectPullResult(result)
+		d.enqueueObjectPullResult(result)
+		return
 	}
 	addr := resolvePeerTCPAddr(state, d.Sync.Config, peerID)
 	if addr == "" {
@@ -806,33 +841,6 @@ func (d *DaemonService) syncDatagramBudget() int {
 		}
 	}
 	return budget
-}
-
-func (d *DaemonService) tryAdoptAutoJoinAfterSync(peerID, via string, now time.Time, changed *bool) {
-	adopted, err := tryAdoptAutoJoinDelegation(d.Sync.State, now)
-	recordAdoptionResult(d.Sync.State, adopted, err, now)
-	if err != nil {
-		d.logWarn("auto_join", "adopt_failed", map[string]any{
-			"peer_id": peerID,
-			"zone":    d.Sync.State.ManagedZone,
-			"via":     via,
-			"error":   err,
-		})
-		return
-	}
-	if !adopted {
-		// Record bootstrap sync success for pending diagnostics.
-		recordBootstrapSyncSuccess(d.Sync.State, peerID, d.Sync.Config, now)
-		return
-	}
-	if changed != nil {
-		*changed = true
-	}
-	d.logInfo("auto_join", "adopted", map[string]any{
-		"peer_id": peerID,
-		"zone":    d.Sync.State.ManagedZone,
-		"via":     via,
-	})
 }
 
 func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
@@ -894,9 +902,17 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 }
 
 func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
+	if d == nil || d.Sync == nil {
+		return
+	}
 	now := d.Sync.now()
 	relayed := 0
-	for _, peerID := range outboundSyncPeersAt(d.Sync.State, d.Sync.Config, now) {
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
+		return
+	}
+	localDigests := gossip.ZoneDigests(state.Network)
+	for _, peerID := range outboundSyncPeersAt(state, d.Sync.Config, now) {
 		if peerID == sourcePeerID {
 			continue
 		}
@@ -906,7 +922,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			})
 			continue
 		}
-		allowed, reason := shouldRelayToPeer(d.Sync.State.SyncPeers[peerID], peerID, sourcePeerID, now)
+		allowed, reason := shouldRelayToPeer(state.SyncPeers[peerID], peerID, sourcePeerID, now)
 		if !allowed {
 			d.recordSyncPeerState(peerID, "relay_suppression", func(state *stateFile) {
 				recordRelaySuppression(state, peerID, reason, now)
@@ -919,7 +935,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 		}
 		d.syncSessions[peerID] = NewSyncSession(peerID)
 		select {
-		case d.syncEvents <- &SyncTimerEvent{PeerID: peerID, LocalDigests: gossip.ZoneDigests(d.Sync.State.Network)}:
+		case d.syncEvents <- &SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}:
 		default:
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
 		}
