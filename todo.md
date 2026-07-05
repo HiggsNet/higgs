@@ -185,6 +185,7 @@
       - [x] 先拆 IPsec reconcile：snapshot input、锁外 plan/apply、按 instance 条件提交 `LinkInstances`，summary 带 revision/stale 标记。
         - `reconcileIPsecLinks` 基于 committed snapshot 做 plan/list/XFRM inspect/reconcile/apply；写回先走 source revision 快路径，revision 变化时按变更 instance 的 owner token 合并 `LinkInstances`，只在同 id token 冲突时保留当前 snapshot、写 stale diagnostic 并重新置 `ipsecDirty`。`IPsecReconcile` summary 已包含 `source_revision`、`committed`、`stale`。
       - [ ] 再拆 routing：BIRD config/start/reload/status 锁外执行，按 netns 条件提交 `BirdInstances`；拆出 `autoAnnounceAssignedIPs` 为独立 state update。
+        - 已完成 routing 第一刀：`reconcileRouting` 基于 committed snapshot workspace 生成 `BirdInstances` / `RoutingReconcile`，BIRD config/start/reload/status 和 health observation 不再读写 live state pointer；提交先走 source revision 快路径，revision 变化且无 auto-announce 网络改动时按 netns 的 BIRD owner token 合并 `BirdInstances`，冲突则保留当前 snapshot 并重新置 `routingDirty`。后续仍需把 `autoAnnounceAssignedIPs` 从 routing workspace 内拆成独立 StateStore update。
       - [ ] 再拆 firewall：锁外 apply，短事务写 `FirewallReconcile` summary。
       - [ ] 最后移除 `DaemonService.stateUnlock` / `lockState()` 这类 live pointer 锁追踪，daemon event loop 只通过 StateStore 操作。
       - [ ] 增加并发回归测试：长 IPsec/BIRD/firewall reconcile 阻塞时，`daemon status` / `debug links` / observer API 仍能返回 latest committed snapshot；旧 snapshot result 不覆盖新 revision；dirty coalescing 能在 stale commit 后触发下一轮 reconcile。

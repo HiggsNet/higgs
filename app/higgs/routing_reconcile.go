@@ -52,28 +52,33 @@ type birdClient interface {
 }
 
 func (d *DaemonService) reconcileRouting(ctx context.Context) error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
+	snapshot, rev, _ := d.snapshotState()
+	if snapshot == nil {
+		return nil
+	}
+	workspace := cloneStateFile(snapshot)
 	config := d.Sync.App.Config
 	routingInstances := config.Routing.Instances
 	if len(routingInstances) == 0 {
 		return nil
 	}
-	if d.Sync.State.ManagedZone.IsRoot() || !d.Sync.State.ManagedZone.Valid() {
+	if workspace.ManagedZone.IsRoot() || !workspace.ManagedZone.Valid() {
 		return nil
 	}
 
 	now := d.Sync.now()
-	if d.Sync.State.RoutingReconcile == nil {
-		d.Sync.State.RoutingReconcile = &routingReconcileState{}
+	if workspace.RoutingReconcile == nil {
+		workspace.RoutingReconcile = &routingReconcileState{}
 	}
-	d.Sync.State.RoutingReconcile.LastRunUnix = now.Unix()
+	workspace.RoutingReconcile.LastRunUnix = now.Unix()
 
-	ars, err := routing.BuildAuthorizedRouteSet(d.Sync.State.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(workspace.Network, now)
 	if err != nil {
-		d.Sync.State.RoutingReconcile.LastError = err.Error()
-		_ = d.Sync.saveState()
+		workspace.RoutingReconcile.LastError = err.Error()
+		_ = d.commitRoutingReconcileResult(rev, snapshot.BirdInstances, workspace, true)
 		return fmt.Errorf("build authorized route set: %w", err)
 	}
 
@@ -85,12 +90,12 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 		dataDir = abs
 	}
 
-	if d.Sync.State.BirdInstances == nil {
-		d.Sync.State.BirdInstances = make(map[string]*BirdInstanceState)
+	if workspace.BirdInstances == nil {
+		workspace.BirdInstances = make(map[string]*BirdInstanceState)
 	}
 
 	var firstErr error
-	if err := d.autoAnnounceAssignedIPs(ars); err != nil {
+	if err := d.autoAnnounceAssignedIPsForState(workspace, ars); err != nil {
 		firstErr = err
 	}
 
@@ -98,7 +103,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	// route announcements. Rebuild the authorized route set so BIRD import/export
 	// filters reflect the latest announcements.
 	if config.IPAM.AutoAnnounceAssignedIPs {
-		ars, err = routing.BuildAuthorizedRouteSet(d.Sync.State.Network, now)
+		ars, err = routing.BuildAuthorizedRouteSet(workspace.Network, now)
 		if err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
 		}
@@ -108,18 +113,18 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups, config.Overlay.DefaultNetNS)
 
 	for _, inst := range routingInstances {
-		if err := d.reconcileRoutingForInstance(ctx, inst, ars, dataDir, overlayByNetns, config, now); err != nil && firstErr == nil {
+		if err := d.reconcileRoutingForInstance(ctx, workspace, inst, ars, dataDir, overlayByNetns, config, now); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 
 	if firstErr != nil {
-		d.Sync.State.RoutingReconcile.LastError = firstErr.Error()
+		workspace.RoutingReconcile.LastError = firstErr.Error()
 	} else {
-		d.Sync.State.RoutingReconcile.LastError = ""
+		workspace.RoutingReconcile.LastError = ""
 	}
 
-	if err := d.Sync.saveState(); err != nil {
+	if err := d.commitRoutingReconcileResult(rev, snapshot.BirdInstances, workspace, config.IPAM.AutoAnnounceAssignedIPs); err != nil {
 		return fmt.Errorf("save routing reconcile state: %w", err)
 	}
 	return firstErr
@@ -151,12 +156,152 @@ func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNS
 	return out
 }
 
-func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time) error {
+func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[string]*BirdInstanceState, result *stateFile, includesNetworkChanges bool) error {
+	if d == nil || d.StateStore == nil || result == nil {
+		return nil
+	}
+	_, committed, err := d.StateStore.CommitIfRevision(rev, func(state *stateFile) error {
+		state.Network = result.Network
+		state.BirdInstances = cloneBirdInstances(result.BirdInstances)
+		state.RoutingReconcile = result.RoutingReconcile
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !committed {
+		if !includesNetworkChanges {
+			merged, err := d.commitRoutingBirdInstancesByNetNS(baseBird, result.BirdInstances, result.RoutingReconcile)
+			if err != nil {
+				return err
+			}
+			if merged {
+				return nil
+			}
+		}
+		d.routingDirty = true
+		d.publishStateStoreRuntimeFlags()
+		return nil
+	}
+	return d.installAndSaveCommittedState()
+}
+
+func (d *DaemonService) commitRoutingBirdInstancesByNetNS(base, next map[string]*BirdInstanceState, reconcile *routingReconcileState) (bool, error) {
+	if d == nil || d.StateStore == nil {
+		return false, nil
+	}
+	changed := changedBirdInstanceNetNS(base, next)
+	current, currentRev := d.StateStore.Snapshot()
+	if current == nil {
+		return false, nil
+	}
+	if len(changed) > 0 && !birdInstanceCommitTokensMatch(base, current.BirdInstances, changed) {
+		return false, nil
+	}
+	_, committed, err := d.StateStore.CommitIfRevision(currentRev, func(state *stateFile) error {
+		if state.BirdInstances == nil {
+			state.BirdInstances = make(map[string]*BirdInstanceState)
+		}
+		for _, netns := range changed {
+			inst, ok := next[netns]
+			if !ok || inst == nil {
+				delete(state.BirdInstances, netns)
+				continue
+			}
+			copyInst := *inst
+			if inst.Overlays != nil {
+				copyInst.Overlays = append([]string(nil), inst.Overlays...)
+			}
+			state.BirdInstances[netns] = &copyInst
+		}
+		state.RoutingReconcile = reconcile
+		return nil
+	})
+	if err != nil || !committed {
+		return false, err
+	}
+	return true, d.installAndSaveCommittedState()
+}
+
+func changedBirdInstanceNetNS(base, next map[string]*BirdInstanceState) []string {
+	seen := make(map[string]bool, len(base)+len(next))
+	var out []string
+	for netns, baseInst := range base {
+		seen[netns] = true
+		nextInst := next[netns]
+		if !birdInstanceStatesEqual(baseInst, nextInst) {
+			out = append(out, netns)
+		}
+	}
+	for netns := range next {
+		if !seen[netns] {
+			out = append(out, netns)
+		}
+	}
+	return out
+}
+
+func birdInstanceCommitTokensMatch(base, current map[string]*BirdInstanceState, netnsNames []string) bool {
+	for _, netns := range netnsNames {
+		baseInst := base[netns]
+		currentInst := current[netns]
+		if baseInst == nil {
+			if currentInst != nil {
+				return false
+			}
+			continue
+		}
+		if currentInst == nil {
+			return false
+		}
+		if baseInst.Owner.Token == "" || currentInst.Owner.Token == "" {
+			if !birdInstanceStatesEqual(baseInst, currentInst) {
+				return false
+			}
+			continue
+		}
+		if baseInst.Owner.Token != currentInst.Owner.Token {
+			return false
+		}
+	}
+	return true
+}
+
+func birdInstanceStatesEqual(a, b *BirdInstanceState) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if len(a.Overlays) != len(b.Overlays) {
+		return false
+	}
+	if a.NetNSName != b.NetNSName ||
+		a.ConfigPath != b.ConfigPath ||
+		a.ControlSocket != b.ControlSocket ||
+		a.PIDFile != b.PIDFile ||
+		a.RouterID != b.RouterID ||
+		a.Owner != b.Owner ||
+		a.LastConfigHash != b.LastConfigHash ||
+		a.LastError != b.LastError ||
+		a.LastExit != b.LastExit ||
+		a.FailureCount != b.FailureCount ||
+		a.BackoffUntilUnix != b.BackoffUntilUnix ||
+		a.State != b.State {
+		return false
+	}
+	for i := range a.Overlays {
+		if a.Overlays[i] != b.Overlays[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *stateFile, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time) error {
 	netnsName := inst.NetNS
-	instState := d.Sync.State.BirdInstances[netnsName]
+	instState := state.BirdInstances[netnsName]
 	if instState == nil {
 		instState = &BirdInstanceState{NetNSName: netnsName}
-		d.Sync.State.BirdInstances[netnsName] = instState
+		state.BirdInstances[netnsName] = instState
 	}
 
 	// Record which overlays share this instance.
@@ -167,10 +312,10 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 	instState.Overlays = overlays
 
 	routerIDLabel := netnsRouterIDLabel(netnsName, config.Netns, inst)
-	routerID := bird.StableRouterID(d.Sync.State.ManagedZone, rootTrustHash(d.Sync.State.Network), routerIDLabel)
+	routerID := bird.StableRouterID(state.ManagedZone, rootTrustHash(state.Network), routerIDLabel)
 	instState.RouterID = routerID
 
-	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns, ars, d.Sync.State.ManagedZone)
+	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns, ars, state.ManagedZone)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
@@ -206,7 +351,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 	// a transit node exports authorized prefixes filtered by the forwarding
 	// policy allow/deny lists. Both BIRD and firewall consume the same policy
 	// so they never disagree on which transit paths are allowed.
-	exportSet := buildRoutingExportSet(ars, d.Sync.State.ManagedZone, config, netnsName)
+	exportSet := buildRoutingExportSet(ars, state.ManagedZone, config, netnsName)
 
 	configBytes, err := bird.DefaultConfigGenerator{}.Generate(spec, importSet, exportSet)
 	if err != nil {
@@ -286,7 +431,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 				instState.State = birdInstanceStateRunning
 			}
 		}
-		d.observeBirdForHealth(ctx, netnsName, instState.Overlays, spec.ControlSocketPath)
+		d.observeBirdForHealth(ctx, state, netnsName, instState.Overlays, spec.ControlSocketPath)
 
 	case bird.BirdModeExternal:
 		client := d.newBirdClient(spec.ControlSocketPath)
@@ -294,13 +439,13 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 		if err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastError = err.Error()
-			d.recordBirdHealthObservationUnavailable(netnsName, instState.Overlays)
+			d.recordBirdHealthObservationUnavailableForState(state, netnsName, instState.Overlays)
 			if !isDryRunConnectError(err) {
 				return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
 			}
 		} else {
 			instState.State = birdInstanceStateRunning
-			d.recordBirdHealthObservation(netnsName, instState.Overlays, observed)
+			d.recordBirdHealthObservationForState(state, netnsName, instState.Overlays, observed)
 		}
 	}
 
@@ -314,7 +459,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, inst Ro
 	return nil
 }
 
-func (d *DaemonService) observeBirdForHealth(ctx context.Context, netnsName string, overlays []string, socketPath string) {
+func (d *DaemonService) observeBirdForHealth(ctx context.Context, state *stateFile, netnsName string, overlays []string, socketPath string) {
 	if d == nil || d.health == nil || socketPath == "" {
 		return
 	}
@@ -322,21 +467,35 @@ func (d *DaemonService) observeBirdForHealth(ctx context.Context, netnsName stri
 	defer cancel()
 	observed, err := d.newBirdClient(socketPath).Status(observeCtx)
 	if err != nil {
-		d.recordBirdHealthObservationUnavailable(netnsName, overlays)
+		d.recordBirdHealthObservationUnavailableForState(state, netnsName, overlays)
 		return
 	}
-	d.recordBirdHealthObservation(netnsName, overlays, observed)
+	d.recordBirdHealthObservationForState(state, netnsName, overlays, observed)
 }
 
 func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string, overlays []string) {
-	d.recordBirdHealthObservation(netnsName, overlays, &bird.BirdObservedState{})
+	if d == nil || d.Sync == nil {
+		return
+	}
+	d.recordBirdHealthObservationUnavailableForState(d.Sync.State, netnsName, overlays)
+}
+
+func (d *DaemonService) recordBirdHealthObservationUnavailableForState(state *stateFile, netnsName string, overlays []string) {
+	d.recordBirdHealthObservationForState(state, netnsName, overlays, &bird.BirdObservedState{})
 }
 
 func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays []string, observed *bird.BirdObservedState) {
-	if d == nil || d.health == nil || d.Sync == nil || d.Sync.State == nil || observed == nil {
+	if d == nil || d.Sync == nil {
 		return
 	}
-	for _, inst := range d.Sync.State.LinkInstances {
+	d.recordBirdHealthObservationForState(d.Sync.State, netnsName, overlays, observed)
+}
+
+func (d *DaemonService) recordBirdHealthObservationForState(state *stateFile, netnsName string, overlays []string, observed *bird.BirdObservedState) {
+	if d == nil || d.health == nil || state == nil || observed == nil {
+		return
+	}
+	for _, inst := range state.LinkInstances {
 		if inst.StagedInterfaceName == "" || !linkInstanceBelongsToBirdInstance(inst, netnsName, overlays) {
 			continue
 		}
@@ -759,10 +918,17 @@ func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet)
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
 		return nil
 	}
+	return d.autoAnnounceAssignedIPsForState(d.Sync.State, ars)
+}
+
+func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *routing.AuthorizedRouteSet) error {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || state == nil || state.Network == nil {
+		return nil
+	}
 	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
 		return nil
 	}
-	managedZone := d.Sync.State.ManagedZone
+	managedZone := state.ManagedZone
 	if managedZone.IsRoot() || !managedZone.Valid() {
 		return nil
 	}
@@ -775,7 +941,7 @@ func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet)
 	}
 
 	localAnnounced := make(map[netip.Prefix]bool)
-	zs := d.Sync.State.Network.Zones[managedZone]
+	zs := state.Network.Zones[managedZone]
 	if zs != nil {
 		for key, rec := range zs.Records {
 			if !strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {
@@ -797,7 +963,7 @@ func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet)
 		if active, ok := localAnnounced[prefix]; ok && active {
 			continue
 		}
-		if err := d.putRouteAnnouncement(managedZone, prefix, true); err != nil {
+		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, true); err != nil {
 			return fmt.Errorf("auto-announce %s: %w", prefix, err)
 		}
 		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{
@@ -813,7 +979,7 @@ func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet)
 		if _, ok := localAssigned[prefix]; ok {
 			continue
 		}
-		if err := d.putRouteAnnouncement(managedZone, prefix, false); err != nil {
+		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, false); err != nil {
 			return fmt.Errorf("auto-withdraw %s: %w", prefix, err)
 		}
 		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{
@@ -829,6 +995,13 @@ func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet)
 // the current in-memory state. It must be called from the daemon's single-writer
 // path where d.Sync.State is already locked/mutable.
 func (d *DaemonService) putRouteAnnouncement(path zone.ZonePath, prefix netip.Prefix, active bool) error {
+	if d == nil || d.Sync == nil || d.Sync.State == nil {
+		return nil
+	}
+	return d.putRouteAnnouncementForState(d.Sync.State, path, prefix, active)
+}
+
+func (d *DaemonService) putRouteAnnouncementForState(state *stateFile, path zone.ZonePath, prefix netip.Prefix, active bool) error {
 	canonical := prefix.Masked().String()
 	key, err := routing.NormalizeRouteAnnouncementKey(canonical)
 	if err != nil {
@@ -839,11 +1012,11 @@ func (d *DaemonService) putRouteAnnouncement(path zone.ZonePath, prefix netip.Pr
 	if err != nil {
 		return fmt.Errorf("marshal route announcement: %w", err)
 	}
-	rec, err := buildSignedRecordAt(d.Sync.State, path, key, value, routing.RecordTypeRouteAnnouncement, d.Sync.now())
+	rec, err := buildSignedRecordAt(state, path, key, value, routing.RecordTypeRouteAnnouncement, d.Sync.now())
 	if err != nil {
 		return fmt.Errorf("build signed route record: %w", err)
 	}
-	if err := d.Sync.State.Network.Put(rec); err != nil {
+	if err := state.Network.Put(rec); err != nil {
 		return fmt.Errorf("put route record: %w", err)
 	}
 	return nil

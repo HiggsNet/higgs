@@ -31,6 +31,7 @@ func (successfulHealthProber) Type() string { return health.ProbeTypeICMP }
 type fakeBirdProcessManager struct {
 	started   bool
 	startSpec bird.BirdInstanceSpec
+	onStart   func(bird.BirdInstanceSpec)
 	startErr  error
 	stopped   bool
 	stopSpec  bird.BirdInstanceSpec
@@ -42,6 +43,9 @@ type fakeBirdProcessManager struct {
 func (f *fakeBirdProcessManager) Start(ctx context.Context, spec bird.BirdInstanceSpec) error {
 	f.started = true
 	f.startSpec = spec
+	if f.onStart != nil {
+		f.onStart(spec)
+	}
 	return f.startErr
 }
 
@@ -193,6 +197,63 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	// BIRD process should have been started with the generated config path.
 	if pm.startSpec.ConfigPath != inst.ConfigPath {
 		t.Errorf("Start config path = %q, want %q", pm.startSpec.ConfigPath, inst.ConfigPath)
+	}
+}
+
+func TestReconcileRoutingMergesBirdInstanceWhenRevisionChanged(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4010, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	pm.onStart = func(bird.BirdInstanceSpec) {
+		if _, err := service.StateStore.Update(func(state *stateFile) error {
+			state.IdentityKeyPath = "newer-routing-revision"
+			return nil
+		}); err != nil {
+			t.Fatalf("advance state revision during routing apply: %v", err)
+		}
+	}
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	if service.routingDirty {
+		t.Fatal("routingDirty = true, want token-compatible BIRD instance merge to complete")
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.IdentityKeyPath != "newer-routing-revision" {
+		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
+	}
+	if len(snapshot.BirdInstances) != 1 || snapshot.BirdInstances["higgstesth2"] == nil {
+		t.Fatalf("bird instances = %+v, want merged higgstesth2 instance", snapshot.BirdInstances)
+	}
+	if snapshot.RoutingReconcile == nil || snapshot.RoutingReconcile.LastError != "" {
+		t.Fatalf("routing reconcile = %+v, want successful summary", snapshot.RoutingReconcile)
 	}
 }
 
