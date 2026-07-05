@@ -21,6 +21,7 @@ import (
 
 const (
 	defaultRoutingReconcileInterval = 30 * time.Second
+	birdHealthObservationTimeout    = 2 * time.Second
 	birdInstanceStatePending        = "pending"
 	birdInstanceStateRunning        = "running"
 	birdInstanceStateDegraded       = "degraded"
@@ -317,7 +318,9 @@ func (d *DaemonService) observeBirdForHealth(ctx context.Context, netnsName stri
 	if d == nil || d.health == nil || socketPath == "" {
 		return
 	}
-	observed, err := d.newBirdClient(socketPath).Status(ctx)
+	observeCtx, cancel := context.WithTimeout(ctx, birdHealthObservationTimeout)
+	defer cancel()
+	observed, err := d.newBirdClient(socketPath).Status(observeCtx)
 	if err != nil {
 		d.recordBirdHealthObservationUnavailable(netnsName, overlays)
 		return

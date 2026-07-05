@@ -156,9 +156,11 @@ func (c *birdcClient) command(ctx context.Context, cmd string) (string, error) {
 	}
 	defer conn.Close()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+	deadline := time.Now().Add(c.timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
 	}
+	_ = conn.SetDeadline(deadline)
 
 	// Consume the greeting line (e.g. "0001 BIRD 2.15.1 ready.").
 	reader := bufio.NewReader(conn)
@@ -183,7 +185,7 @@ func (c *birdcClient) command(ctx context.Context, cmd string) (string, error) {
 		}
 
 		// The birdc prompt marks the end of a response.
-		if strings.HasPrefix(line, "0000 ") {
+		if isPromptLine(line) {
 			break
 		}
 
@@ -191,6 +193,11 @@ func (c *birdcClient) command(ctx context.Context, cmd string) (string, error) {
 	}
 
 	return body.String(), nil
+}
+
+func isPromptLine(line string) bool {
+	line = strings.TrimRight(line, "\r\n")
+	return line == "0000" || strings.HasPrefix(line, "0000 ")
 }
 
 // isErrorResponse reports whether a response body contains an error code line.

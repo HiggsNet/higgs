@@ -272,6 +272,40 @@ func TestCommandTimeout(t *testing.T) {
 	}
 }
 
+func TestCommandUsesClientTimeoutWithoutContextDeadline(t *testing.T) {
+	slowHandler := func(cmd string) string {
+		time.Sleep(500 * time.Millisecond)
+		return defaultHandler(cmd)
+	}
+	server := newFakeServer(t, slowHandler)
+	defer server.close()
+
+	client := NewClient(server.socket, 50*time.Millisecond)
+	err := client.Configure(context.Background(), "/tmp/bird.conf")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "deadline") {
+		t.Errorf("expected timeout-related error, got: %v", err)
+	}
+}
+
+func TestRawAcceptsBarePromptTerminator(t *testing.T) {
+	server := newFakeServer(t, func(cmd string) string {
+		return "1000-BIRD 2.15.1\n0000\n"
+	})
+	defer server.close()
+
+	client := NewClient(server.socket, 5*time.Second)
+	out, err := client.Raw(context.Background(), "show status")
+	if err != nil {
+		t.Fatalf("Raw: %v", err)
+	}
+	if !strings.Contains(out, "BIRD 2.15.1") {
+		t.Fatalf("Raw output missing status line: %q", out)
+	}
+}
+
 func TestParseStatusDirectly(t *testing.T) {
 	status, err := parseStatus(sampleShowStatus)
 	if err != nil {
