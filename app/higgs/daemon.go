@@ -988,7 +988,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	}
 	d.Log = newAppLogger(syncConfig)
 	d.ControlSocketPath = socketPath
-	d.setState(latest)
+	d.replaceCommittedState(latest)
 	if d.Sync.Transport != nil {
 		d.Sync.updateDiscoveredPeers()
 	}
@@ -1149,7 +1149,7 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 	if err != nil {
 		return nil, err
 	}
-	d.setState(latest)
+	d.replaceCommittedState(latest)
 	if d.Sync.Transport != nil {
 		d.Sync.updateDiscoveredPeers()
 	}
@@ -1182,7 +1182,7 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	if err != nil {
 		return fmt.Errorf("daemon reload: %w", err)
 	}
-	d.setState(latest)
+	d.replaceCommittedState(latest)
 	d.Sync.updateDiscoveredPeers()
 	return d.handleSyncTimerEventLoop(ctx, force)
 }
@@ -1376,6 +1376,20 @@ func (d *DaemonService) setState(state *stateFile) {
 	d.Sync.State = state
 	d.stateMu.Unlock()
 	d.publishCommittedStateSnapshot()
+}
+
+func (d *DaemonService) replaceCommittedState(state *stateFile) {
+	if d == nil || d.Sync == nil {
+		return
+	}
+	if d.StateStore != nil {
+		d.StateStore.ReplaceCommitted(state)
+		committed, _, _ := d.snapshotState()
+		d.installCurrentStateSnapshot(committed)
+		d.publishStateStoreRuntimeFlags()
+		return
+	}
+	d.setState(state)
 }
 
 func (d *DaemonService) notifyStateChanged() {

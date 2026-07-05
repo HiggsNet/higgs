@@ -352,7 +352,7 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 		})
 		return nil
 	}
-	return d.respondAnnounceSnapshots(peerID, []*gossip.ZoneSnapshot{snap})
+	return d.respondAnnounceSnapshotsFromState(state, peerID, []*gossip.ZoneSnapshot{snap})
 }
 
 func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath) error {
@@ -366,7 +366,12 @@ func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath
 	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
 		recordReadOnlyResponder(state, peerID, "chunk_fallback", path, d.Sync.now())
 	})
-	return sendSnapshotsWithStats(state, state.Network, d.Sync.Transport, peerID, []zone.ZonePath{path}, d.Sync.now(), true, d.Sync.logger())
+	now := d.Sync.now()
+	diag, err := sendSnapshotsWithDiagnostics(state.Network, d.Sync.Transport, peerID, []zone.ZonePath{path}, now, true, d.Sync.logger())
+	d.recordSyncPeerState(peerID, "chunk_fallback_diagnostics", func(state *stateFile) {
+		recordDatagramSendDiagnostics(state, peerID, diag, d.syncDatagramBudget(), now)
+	})
+	return err
 }
 
 func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gossip.ZoneSnapshot) error {
@@ -374,6 +379,13 @@ func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gos
 		return nil
 	}
 	state, _, _ := d.snapshotState()
+	return d.respondAnnounceSnapshotsFromState(state, peerID, snapshots)
+}
+
+func (d *DaemonService) respondAnnounceSnapshotsFromState(state *stateFile, peerID string, snapshots []*gossip.ZoneSnapshot) error {
+	if d == nil || d.Sync == nil || len(snapshots) == 0 {
+		return nil
+	}
 	if state == nil || state.Network == nil {
 		return nil
 	}

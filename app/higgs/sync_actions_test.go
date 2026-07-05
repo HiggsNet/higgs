@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -130,6 +131,56 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T
 	}
 	if peerState.DatagramStats == nil || (peerState.DatagramStats.LastCatalogCursor == "" && peerState.DatagramStats.LastCatalogPageEntries == 0) {
 		t.Fatalf("catalog page stats = %+v, want committed catalog page", peerState.DatagramStats)
+	}
+}
+
+func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2140, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	transport, err := gossip.Listen(gossip.Config{
+		PeerID:          config.PeerID,
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen: %v", err)
+	}
+	defer transport.Close()
+	peerID := "node-b.catofes."
+	transport.SetPeerAddrs(peerID, []*net.UDPAddr{transport.LocalAddr()})
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service.Sync.Transport = transport
+
+	unlock := service.lockState()
+	done := make(chan error, 1)
+	go func() {
+		done <- service.respondFetchZoneChunks(peerID, "node-b.catofes.")
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			unlock()
+			t.Fatalf("respondFetchZoneChunks: %v", err)
+		}
+	case <-time.After(time.Second):
+		unlock()
+		t.Fatal("chunk responder blocked behind live state lock")
+	}
+	unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	stats := snapshot.SyncPeers[peerID].DatagramStats
+	if stats == nil || stats.ChunkFallbacks == 0 {
+		t.Fatalf("datagram stats = %+v, want committed chunk fallback counter", stats)
 	}
 }
 

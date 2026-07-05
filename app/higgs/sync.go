@@ -1690,6 +1690,18 @@ func (sr *SyncRuntime) sendSnapshots(peerID string, zones []zone.ZonePath, allow
 }
 
 func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) error {
+	diag, err := sendSnapshotsWithDiagnostics(ns, transport, peerID, zones, now, allowChunks, logger)
+	recordDatagramSendDiagnostics(state, peerID, diag, transport.MaxMessageBytes(), now)
+	return err
+}
+
+type datagramSendDiagnostics struct {
+	Oversized      []oversizedDatagramObject
+	ChunkFallbacks int
+}
+
+func sendSnapshotsWithDiagnostics(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) (datagramSendDiagnostics, error) {
+	var diag datagramSendDiagnostics
 	plan := planSnapshotDatagrams(ns, zones, transport.MaxMessageBytes(), now)
 	chunkZones := make(map[zone.ZonePath]bool)
 	if allowChunks && ns != nil {
@@ -1700,7 +1712,7 @@ func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *
 		}
 	}
 	for _, oversized := range plan.Oversized {
-		recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, transport.MaxMessageBytes(), now)
+		diag.Oversized = append(diag.Oversized, oversized)
 		if logger != nil && logger.debugEnabled() {
 			logger.Debug("transport", "datagram_too_large", map[string]any{
 				"peer_id": peerID,
@@ -1716,46 +1728,49 @@ func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *
 	for _, announce := range plan.Announces {
 		msg := &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}
 		if err := transport.Send(peerID, msg); err != nil {
-			return err
+			return diag, err
 		}
 	}
 	for path := range chunkZones {
-		if err := sendZoneSnapshotChunks(state, ns, transport, peerID, path, now); err != nil {
-			return err
+		chunks, err := sendZoneSnapshotChunks(ns, transport, peerID, path, now)
+		diag.ChunkFallbacks += chunks
+		if err != nil {
+			return diag, err
 		}
 	}
-	return nil
+	return diag, nil
 }
 
-func sendZoneSnapshotChunks(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, path zone.ZonePath, now time.Time) error {
+func sendZoneSnapshotChunks(ns *zone.NetworkState, transport *gossip.Transport, peerID string, path zone.ZonePath, now time.Time) (int, error) {
 	if ns == nil || transport == nil || ns.IsZoneRevoked(path, now) {
-		return nil
+		return 0, nil
 	}
 	zs := ns.Zones[path]
 	if zs == nil {
-		return nil
+		return 0, nil
 	}
 	snapshot, err := gossip.Snapshot(ns, path)
 	if err != nil {
-		return nil
+		return 0, nil
 	}
 	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(data) > maxChunkObjectBytes {
-		return fmt.Errorf("chunk zone snapshot %s exceeds max %d bytes", path, maxChunkObjectBytes)
+		return 0, fmt.Errorf("chunk zone snapshot %s exceeds max %d bytes", path, maxChunkObjectBytes)
 	}
 	chunkSize := maxObjectChunkDataSize(transport.MaxMessageBytes(), peerID, path)
 	if chunkSize <= 0 {
-		return gossip.ErrMessageTooLarge
+		return 0, gossip.ErrMessageTooLarge
 	}
 	total := (len(data) + chunkSize - 1) / chunkSize
 	if total <= 0 || total > int(^uint16(0)) {
-		return fmt.Errorf("chunk zone snapshot %s needs invalid chunk count %d", path, total)
+		return 0, fmt.Errorf("chunk zone snapshot %s needs invalid chunk count %d", path, total)
 	}
 	objectHash := sha256.Sum256(data)
 	rootHash := gossip.ZoneRoot(zs)
+	sent := 0
 	for i := 0; i < total; i++ {
 		start := i * chunkSize
 		end := start + chunkSize
@@ -1775,11 +1790,11 @@ func sendZoneSnapshotChunks(state *stateFile, ns *zone.NetworkState, transport *
 			},
 		}
 		if err := transport.Send(peerID, msg); err != nil {
-			return err
+			return sent, err
 		}
-		recordDatagramChunkFallback(state, peerID)
+		sent++
 	}
-	return nil
+	return sent, nil
 }
 
 func maxObjectChunkDataSize(budget int, peerID string, path zone.ZonePath) int {
@@ -1956,6 +1971,18 @@ func recordDatagramTooLarge(state *stateFile, peerID, direction, object string, 
 	peerState.DatagramStats.LastTooLargeBytes = size
 	peerState.DatagramStats.LastTooLargeLimit = limit
 	state.SyncPeers[peerID] = peerState
+}
+
+func recordDatagramSendDiagnostics(state *stateFile, peerID string, diag datagramSendDiagnostics, limit int, now time.Time) {
+	if state == nil || peerID == "" {
+		return
+	}
+	for _, oversized := range diag.Oversized {
+		recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, limit, now)
+	}
+	for i := 0; i < diag.ChunkFallbacks; i++ {
+		recordDatagramChunkFallback(state, peerID)
+	}
 }
 
 // recordDatagramChunkFallback mutates state.SyncPeers. The caller must hold the
