@@ -361,11 +361,11 @@ func TestHandleAnnounceSkipsManagedZoneSnapshotAndRecord(t *testing.T) {
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	session := NewSyncSession("zone-catofes-admin")
-	state.Lock()
+	unlock := service.lockState()
 	service.executeSyncActions(context.Background(), session, []SyncAction{
 		ApplySnapshotAction{PeerID: "zone-catofes-admin", Snapshot: snapshot},
 	})
-	state.Unlock()
+	unlock()
 	if got := state.Network.Zones[state.ManagedZone].Records["remote-own-record"]; got != nil {
 		t.Fatalf("managed zone record was applied from remote announce: %+v", got)
 	}
@@ -388,6 +388,43 @@ func TestFilterRemoteCatalogPageSkipsManagedZone(t *testing.T) {
 	}
 	if len(page.Entries) != 2 {
 		t.Fatalf("original page was mutated: %+v", page.Entries)
+	}
+}
+
+func TestHandleSyncEventCommitsPeerDiagnosticsToStateStore(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2100, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	peerID := "node-b.catofes."
+	service.syncSessions[peerID] = NewSyncSession(peerID)
+
+	service.handleSyncEvent(context.Background(), &CatalogSummaryReceivedEvent{
+		PeerID: peerID,
+		Summary: &gossip.CatalogSummary{
+			CatalogRoot: []byte{0x21, 0x22},
+			ZoneCount:   2,
+			NextCursor:  "next-page",
+		},
+	})
+
+	snapshot, _ := service.StateStore.Snapshot()
+	peerState := snapshot.SyncPeers[peerID]
+	stats := peerState.DatagramStats
+	if stats == nil {
+		t.Fatal("datagram stats missing from committed snapshot")
+	}
+	if stats.LastCatalogRootHex != "2122" || stats.LastCatalogZoneCount != 2 || stats.LastCatalogCursor != "next-page" {
+		t.Fatalf("catalog stats = %+v, want committed summary", stats)
+	}
+	if peerState.ActivePullState != string(SyncSessionCatalogDiffing) || peerState.ActivePullLastEvent != "catalog_summary" {
+		t.Fatalf("active pull = state %q event %q, want committed catalog diffing summary", peerState.ActivePullState, peerState.ActivePullLastEvent)
 	}
 }
 
@@ -415,11 +452,11 @@ func TestHandleAnnounceRecordsRejectedDigestOnVerifyFailure(t *testing.T) {
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
-	state.Lock()
+	unlock := service.lockState()
 	service.executeSyncActions(context.Background(), session, []SyncAction{
 		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
 	})
-	state.Unlock()
+	unlock()
 	if !isRejectedDigestActive(state, "node-b.catofes.", "node-b.catofes.", digest.RootHash, now.Add(time.Minute)) {
 		t.Fatalf("rejected digest was not recorded")
 	}

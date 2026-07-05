@@ -81,7 +81,9 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 
 func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ context.Context) error {
 	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil && d.Sync.State != nil {
-		recordVerifiedObservedPath(d.Sync.State, packet.Message.PeerID, packet.Addr, packet.Message.Type, d.Sync.now())
+		d.recordSyncPeerState(packet.Message.PeerID, "observed_path", func(state *stateFile) {
+			recordVerifiedObservedPath(state, packet.Message.PeerID, packet.Addr, packet.Message.Type, d.Sync.now())
+		})
 		d.Sync.seedObservedPeerPath(packet.Message.PeerID)
 	}
 	event := routePacket(packet, d.syncSessions)
@@ -194,7 +196,9 @@ func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
 	if err != nil {
 		return err
 	}
-	recordCatalogSummary(d.Sync.State, peerID, summary, d.Sync.now())
+	d.recordSyncPeerState(peerID, "catalog_summary", func(state *stateFile) {
+		recordCatalogSummary(state, peerID, summary, d.Sync.now())
+	})
 	d.sendSyncMessage(peerID, &gossip.Message{
 		Type: gossip.MessagePong,
 		Pong: &gossip.Pong{Summary: summary},
@@ -218,7 +222,9 @@ func (d *DaemonService) handleAnnounceHint(peerID string) error {
 			d.pendingSyncHints = make(map[string]bool)
 		}
 		d.pendingSyncHints[peerID] = true
-		recordSyncHint(d.Sync.State, peerID, "announce_hint", "session_active", false, now)
+		d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
+			recordSyncHint(state, peerID, "announce_hint", "session_active", false, now)
+		})
 		d.logDebug("sync", "announce_hint_suppressed", map[string]any{
 			"peer_id": peerID,
 			"reason":  "session_active",
@@ -251,8 +257,12 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		delete(d.syncSessions, peerID)
 		return err
 	}
-	recordSyncHint(d.Sync.State, peerID, reason, "", true, now)
-	recordSyncActivePull(d.Sync.State, peerID, "hint_queued", d.syncSessions[peerID], now)
+	d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
+		recordSyncHint(state, peerID, reason, "", true, now)
+	})
+	d.recordSyncPeerState(peerID, "active_pull", func(state *stateFile) {
+		recordSyncActivePull(state, peerID, "hint_queued", d.syncSessions[peerID], now)
+	})
 	d.logDebug("sync", "hinted_sync_started", map[string]any{
 		"peer_id": peerID,
 		"reason":  reason,
@@ -274,12 +284,16 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		return nil
 	}
-	recordReadOnlyResponder(d.Sync.State, peerID, "catalog_page", "", d.Sync.now())
+	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
+		recordReadOnlyResponder(state, peerID, "catalog_page", "", d.Sync.now())
+	})
 	budget := d.syncDatagramBudget()
 	page, err := gossip.CatalogPageFor(d.Sync.State.Network, cursor, budget)
 	if err != nil {
-		recordDatagramTooLarge(d.Sync.State, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
-		recordCatalogReject(d.Sync.State, peerID, cursor, gossip.RejectReason(err), d.Sync.now())
+		d.recordSyncPeerState(peerID, "catalog_page_reject", func(state *stateFile) {
+			recordDatagramTooLarge(state, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
+			recordCatalogReject(state, peerID, cursor, gossip.RejectReason(err), d.Sync.now())
+		})
 		d.logWarn("sync", "catalog_page_failed", map[string]any{
 			"peer_id": peerID,
 			"cursor":  cursor,
@@ -288,7 +302,9 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 		})
 		return nil
 	}
-	recordCatalogPage(d.Sync.State, peerID, page, d.Sync.now())
+	d.recordSyncPeerState(peerID, "catalog_page", func(state *stateFile) {
+		recordCatalogPage(state, peerID, page, d.Sync.now())
+	})
 	d.sendSyncMessage(peerID, &gossip.Message{
 		Type:        gossip.MessageCatalogPage,
 		CatalogPage: page,
@@ -300,7 +316,9 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
 		return nil
 	}
-	recordReadOnlyResponder(d.Sync.State, peerID, "fetch_zone", path, d.Sync.now())
+	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
+		recordReadOnlyResponder(state, peerID, "fetch_zone", path, d.Sync.now())
+	})
 	snap, err := gossip.Snapshot(d.Sync.State.Network, path)
 	if err != nil {
 		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
@@ -318,7 +336,9 @@ func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		return nil
 	}
-	recordReadOnlyResponder(d.Sync.State, peerID, "chunk_fallback", path, d.Sync.now())
+	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
+		recordReadOnlyResponder(state, peerID, "chunk_fallback", path, d.Sync.now())
+	})
 	return d.Sync.sendSnapshots(peerID, []zone.ZonePath{path}, true)
 }
 
@@ -335,7 +355,9 @@ func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gos
 	}
 	plan := planSnapshotDatagrams(d.Sync.State.Network, zones, budget, d.Sync.now())
 	for _, oversized := range plan.Oversized {
-		recordDatagramTooLarge(d.Sync.State, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
+		d.recordSyncPeerState(peerID, "datagram_too_large", func(state *stateFile) {
+			recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
+		})
 		d.logDebug("transport", "datagram_too_large", map[string]any{
 			"peer_id": peerID,
 			"object":  oversized.Object,
@@ -386,15 +408,21 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	case *PongReceivedEvent:
 		if e.Pong != nil {
 			if e.Pong.Summary != nil {
-				recordCatalogSummary(d.Sync.State, peerID, e.Pong.Summary, d.Sync.now())
+				d.recordSyncPeerState(peerID, "catalog_summary", func(state *stateFile) {
+					recordCatalogSummary(state, peerID, e.Pong.Summary, d.Sync.now())
+				})
 			}
 		}
 	case *CatalogSummaryReceivedEvent:
-		recordCatalogSummary(d.Sync.State, peerID, e.Summary, d.Sync.now())
+		d.recordSyncPeerState(peerID, "catalog_summary", func(state *stateFile) {
+			recordCatalogSummary(state, peerID, e.Summary, d.Sync.now())
+		})
 	case *CatalogPageReceivedEvent:
 		e.LocalEntries = gossip.ZoneDigests(d.Sync.State.Network)
 		e.Page = filterRemoteCatalogPage(d.Sync.State, peerID, e.Page, d.Sync.now())
-		recordCatalogPage(d.Sync.State, peerID, e.Page, d.Sync.now())
+		d.recordSyncPeerState(peerID, "catalog_page", func(state *stateFile) {
+			recordCatalogPage(state, peerID, e.Page, d.Sync.now())
+		})
 	}
 	oldState := session.State
 	actions, err := session.OnEvent(event, d.Sync.now())
@@ -406,7 +434,9 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		session.State = SyncSessionFailed
 		session.lastError = err
 	}
-	recordSyncActivePull(d.Sync.State, peerID, syncEventName(event), session, d.Sync.now())
+	d.recordSyncPeerState(peerID, "active_pull", func(state *stateFile) {
+		recordSyncActivePull(state, peerID, syncEventName(event), session, d.Sync.now())
+	})
 	if session.State != oldState {
 		d.logDebug("sync", "session_state_changed", map[string]any{
 			"peer_id":   peerID,
@@ -483,6 +513,49 @@ func syncEventPeerID(event SyncEvent) string {
 	return ""
 }
 
+func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*stateFile)) {
+	if d == nil || d.Sync == nil || fn == nil {
+		return
+	}
+	liveLocked := d.hasStateLock()
+	if d.Sync.State != nil && liveLocked {
+		fn(d.Sync.State)
+	}
+	if d.StateStore == nil {
+		if d.Sync.State != nil && !liveLocked {
+			d.Sync.State.Lock()
+			fn(d.Sync.State)
+			d.Sync.State.Unlock()
+		}
+		return
+	}
+	if _, err := d.StateStore.Update(func(state *stateFile) error {
+		fn(state)
+		return nil
+	}); err != nil {
+		d.logWarn("sync", "sync_peer_state_commit_failed", map[string]any{
+			"peer_id": peerID,
+			"label":   label,
+			"error":   err,
+		})
+	}
+	if !liveLocked && d.liveStateReadableNow() {
+		d.installCommittedSnapshotIfLiveUnlocked()
+	}
+}
+
+func (d *DaemonService) liveStateReadableNow() bool {
+	if d == nil || d.Sync == nil || d.Sync.State == nil {
+		return true
+	}
+	unlock, ok := tryStateRLockWithin(d.Sync.State, stateReadLockTimeout)
+	if !ok {
+		return false
+	}
+	unlock()
+	return true
+}
+
 func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSession, actions []SyncAction) bool {
 	if len(actions) == 0 {
 		return false
@@ -517,7 +590,9 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 			}
 			result, err := gossip.ApplySnapshot(d.Sync.State.Network, a.Snapshot, now, applyLimits)
 			if err != nil {
-				recordRejectedDigest(d.Sync.State, peerID, digestForSnapshot(a.Snapshot), gossip.RejectReason(err), now)
+				d.recordSyncPeerState(peerID, "rejected_digest", func(state *stateFile) {
+					recordRejectedDigest(state, peerID, digestForSnapshot(a.Snapshot), gossip.RejectReason(err), now)
+				})
 				d.logWarn("sync", "zone_apply_failed", map[string]any{
 					"peer_id": peerID,
 					"zone":    a.Snapshot.Zone,
@@ -526,7 +601,9 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				})
 				continue
 			}
-			clearRejectedDigest(d.Sync.State, peerID, a.Snapshot.Zone)
+			d.recordSyncPeerState(peerID, "clear_rejected_digest", func(state *stateFile) {
+				clearRejectedDigest(state, peerID, a.Snapshot.Zone)
+			})
 			changed = true
 			d.logInfo("sync", "zone_applied", map[string]any{
 				"peer_id":     peerID,
@@ -571,8 +648,10 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 		case SendCatalogPageAction:
 			page, err := gossip.CatalogPageFor(d.Sync.State.Network, a.Cursor, budget)
 			if err != nil {
-				recordDatagramTooLarge(d.Sync.State, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
-				recordCatalogReject(d.Sync.State, peerID, a.Cursor, gossip.RejectReason(err), d.Sync.now())
+				d.recordSyncPeerState(peerID, "catalog_page_reject", func(state *stateFile) {
+					recordDatagramTooLarge(state, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
+					recordCatalogReject(state, peerID, a.Cursor, gossip.RejectReason(err), d.Sync.now())
+				})
 				d.logWarn("sync", "catalog_page_failed", map[string]any{
 					"peer_id": peerID,
 					"cursor":  a.Cursor,
@@ -580,7 +659,9 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				})
 				continue
 			}
-			recordCatalogPage(d.Sync.State, peerID, page, d.Sync.now())
+			d.recordSyncPeerState(peerID, "catalog_page", func(state *stateFile) {
+				recordCatalogPage(state, peerID, page, d.Sync.now())
+			})
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type:        gossip.MessageCatalogPage,
 				CatalogPage: page,
@@ -622,7 +703,9 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	for _, action := range actions {
 		switch a := action.(type) {
 		case RecordBackoffAction:
-			recordPeerBackoff(d.Sync.State, a.PeerID, a.Err, now)
+			d.recordSyncPeerState(a.PeerID, "peer_backoff", func(state *stateFile) {
+				recordPeerBackoff(state, a.PeerID, a.Err, now)
+			})
 		case SaveStateAction:
 			if err := d.Sync.saveState(); err != nil {
 				d.logWarn("sync", "save_failed", map[string]any{
@@ -717,7 +800,9 @@ func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
 	budget := d.syncDatagramBudget()
 	if size := messageWireSize(msg); size > budget {
 		object := string(msg.Type)
-		recordDatagramTooLarge(d.Sync.State, peerID, "send", object, "", "", size, budget, d.Sync.now())
+		d.recordSyncPeerState(peerID, "datagram_too_large", func(state *stateFile) {
+			recordDatagramTooLarge(state, peerID, "send", object, "", "", size, budget, d.Sync.now())
+		})
 		d.logWarn("transport", "datagram_too_large", map[string]any{
 			"peer_id": peerID,
 			"type":    msg.Type,
@@ -739,7 +824,9 @@ func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
 func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) {
 	peerID := session.PeerID
 	d.timerManager.CancelAll(peerID)
-	recordPeerSyncAt(d.Sync.State, peerID, session.lastError, d.Sync.now())
+	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
+		recordPeerSyncAt(state, peerID, session.lastError, d.Sync.now())
+	})
 	// Only mark the last-used address as failing for timeout-like errors; do
 	// not penalize the address for internal/event handling failures.
 	if session.lastError != nil && d.Sync.Transport != nil && strings.Contains(session.lastError.Error(), "timeout") {
