@@ -321,25 +321,32 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	observed := waitForHealthSmokeBirdRoute(t, ctx, specA.ControlSocketPath, remotePrefix, vethA)
 
 	now := time.Unix(5000, 0)
+	hyst := health.DefaultHysteresisConfig()
+	hyst.FailThresholdConsecutive = 1
+	hyst.RecoverConsecutive = 1
 	manager := health.NewManager(
-		health.ProbeConfig{Interval: -time.Second, Timeout: 100 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 2},
-		health.DefaultHysteresisConfig(),
-		successfulHealthProber{},
+		health.ProbeConfig{Interval: -time.Second, Timeout: time.Second, Burst: 1, LossWindow: 5, MaxConcurrent: 2},
+		hyst,
+		health.NewICMProber(nil, nil),
 	)
 	manager.UpsertTarget(health.ProbeTarget{
-		ProbeID:        healthProbeID("link-1", "staged"),
-		InstanceID:     "link-1",
-		GroupID:        "main",
-		Overlay:        "main",
-		NetNS:          nsA,
-		InterfaceName:  vethA,
-		PeerTunnelAddr: netip.MustParseAddr("10.99.4.2"),
-		State:          "up",
-		ProbeRole:      "staged",
-		Staged:         true,
+		ProbeID:         healthProbeID("link-1", "staged"),
+		InstanceID:      "link-1",
+		GroupID:         "main",
+		Overlay:         "main",
+		NetNS:           nsA,
+		InterfaceName:   vethA,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.4.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.4.2"),
+		State:           "up",
+		ProbeRole:       "staged",
+		Staged:          true,
 	}, now)
 	if dispatched := manager.Tick(context.Background(), now); dispatched != 1 {
 		t.Fatalf("health probes dispatched = %d, want 1", dispatched)
+	}
+	if state := healthSmokeState(t, manager, now); state != health.HealthStateHealthy {
+		t.Fatalf("health state after initial real probe = %s, want healthy", state)
 	}
 
 	service := &DaemonService{
@@ -367,7 +374,50 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	if len(snapshot) != 1 || snapshot[0].CutoverBlocking {
 		t.Fatalf("health snapshot = %+v, want staged cutover unblocked", snapshot)
 	}
-	t.Logf("Health+BIRD root smoke: selected route %s on %s unblocked staged cutover", remotePrefix, vethA)
+
+	if _, err := exec.LookPath("tc"); err != nil {
+		t.Fatalf("tc is required for health fault-injection smoke: %v", err)
+	}
+	if out, err := exec.CommandContext(ctx, "ip", "netns", "exec", nsA, "tc", "qdisc", "add", "dev", vethA, "root", "netem", "loss", "100%").CombinedOutput(); err != nil {
+		t.Fatalf("tc netem loss add: %v\noutput: %s", err, string(out))
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "exec", nsA, "tc", "qdisc", "del", "dev", vethA, "root").Run()
+	})
+	faultAt := now.Add(time.Second)
+	if dispatched := manager.Tick(context.Background(), faultAt); dispatched != 1 {
+		t.Fatalf("health probes during injected loss = %d, want 1", dispatched)
+	}
+	if state := healthSmokeState(t, manager, faultAt); state != health.HealthStateProbeError && state != health.HealthStateDown {
+		t.Fatalf("health state during injected loss = %s, want probe_error/down", state)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
+		t.Fatal("cutover should be blocked while injected loss breaks the staged data plane")
+	}
+
+	if out, err := exec.CommandContext(ctx, "ip", "netns", "exec", nsA, "tc", "qdisc", "del", "dev", vethA, "root").CombinedOutput(); err != nil {
+		t.Fatalf("tc netem loss delete: %v\noutput: %s", err, string(out))
+	}
+	recoverAt := faultAt
+	var recoveredState string
+	for i := 0; i < 8; i++ {
+		recoverAt = recoverAt.Add(time.Second)
+		if dispatched := manager.Tick(context.Background(), recoverAt); dispatched != 1 {
+			t.Fatalf("health probes after fault recovery = %d, want 1", dispatched)
+		}
+		recoveredState = healthSmokeState(t, manager, recoverAt)
+		if recoveredState == health.HealthStateHealthy {
+			break
+		}
+	}
+	service.recordBirdHealthObservation(nsA, []string{"main"}, waitForHealthSmokeBirdRoute(t, ctx, specA.ControlSocketPath, remotePrefix, vethA))
+	if recoveredState != health.HealthStateHealthy {
+		t.Fatalf("health state after fault recovery = %s, want healthy", recoveredState)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; !ready {
+		t.Fatal("cutover should be ready again after data-plane recovery and selected BIRD route")
+	}
+	t.Logf("Health+BIRD fault-injection root smoke: selected route %s on %s survived loss injection and recovery", remotePrefix, vethA)
 }
 
 // TestDaemonBIRDUpstreamRootSmoke verifies the veth upstream pipeline with
@@ -582,6 +632,15 @@ func waitForHealthSmokeBirdRoute(t *testing.T, ctx context.Context, socketPath, 
 	}
 	t.Fatalf("selected Babel route %s on %s was not observed; last route output:\n%s", prefix, iface, last)
 	return nil
+}
+
+func healthSmokeState(t *testing.T, manager *health.Manager, now time.Time) string {
+	t.Helper()
+	snapshot := manager.Snapshot(now)
+	if len(snapshot) != 1 {
+		t.Fatalf("health snapshot has %d entries, want 1: %+v", len(snapshot), snapshot)
+	}
+	return snapshot[0].State
 }
 
 func generateHealthSmokeBabelConfig(spec bird.BirdInstanceSpec, iface, announcePrefix string) string {

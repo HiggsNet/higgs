@@ -157,6 +157,8 @@ make bird-babel-container-smoke
 sudo make firewall-smoke
 make firewall-container-smoke
 sudo make health-smoke
+sudo make health-fault-smoke
+make health-fault-container-smoke
 sudo make revocation-data-plane-smoke
 make revocation-data-plane-container-smoke
 ```
@@ -173,8 +175,8 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 |------|------|
 | `HIGGS_CONTAINER_RUNTIME` | 容器运行时，默认 `docker`。 |
 | `HIGGS_CONTAINER_USERNS` | Docker 默认使用 `host` user namespace；设为空可禁用该参数做对比。 |
-| `HIGGS_IPSEC_XFRM_IMAGE` / `HIGGS_BIRD_IMAGE` / `HIGGS_FIREWALL_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_IMAGE` | 数据面 smoke 的基础镜像，默认 `ubuntu:24.04`。 |
-| `HIGGS_IPSEC_XFRM_REBUILD_IMAGE` / `HIGGS_BIRD_REBUILD_IMAGE` / `HIGGS_FIREWALL_REBUILD_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_REBUILD_IMAGE` | 设为 `1` 时强制重建对应缓存镜像。 |
+| `HIGGS_IPSEC_XFRM_IMAGE` / `HIGGS_BIRD_IMAGE` / `HIGGS_FIREWALL_IMAGE` / `HIGGS_HEALTH_FAULT_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_IMAGE` | 数据面 smoke 的基础镜像，默认 `ubuntu:24.04`。 |
+| `HIGGS_IPSEC_XFRM_REBUILD_IMAGE` / `HIGGS_BIRD_REBUILD_IMAGE` / `HIGGS_FIREWALL_REBUILD_IMAGE` / `HIGGS_HEALTH_FAULT_REBUILD_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_REBUILD_IMAGE` | 设为 `1` 时强制重建对应缓存镜像。 |
 | `GO_CACHE` / `GO_MOD_CACHE` | Makefile 侧 Go cache 目录，默认 `/tmp/higgs-gocache` 和 `/tmp/higgs-gomodcache`。 |
 
 真实数据面目标说明：
@@ -189,7 +191,9 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `bird-babel-container-smoke` | 在 privileged container 中运行 BIRD/Babel smoke。 |
 | `firewall-smoke` | 使用真实 nftables/iptables backend 验证 firewall 规则 apply 和清理。 |
 | `firewall-container-smoke` | 在 privileged container 中运行 firewall 数据面 smoke。 |
-| `health-smoke` | 验证 health manager、OpenMetrics render、本地 spool/series，以及真实 BIRD selected route 进入 rotate cutover gate。 |
+| `health-smoke` | 验证 health manager、OpenMetrics render、本地 spool/series、真实 BIRD selected route 进入 rotate cutover gate，以及 `tc netem` 丢包注入后的状态切换和恢复。 |
+| `health-fault-smoke` | `health-smoke` 的显式故障注入别名，用于表达该 lane 覆盖 BIRD cutover gate、数据面丢包和恢复。 |
+| `health-fault-container-smoke` | 在 privileged container 中运行 health fault-injection smoke。 |
 | `revocation-data-plane-smoke` | 组合 firewall、BIRD 和 StrongSwan 的 revocation 数据面验证，需要 root。 |
 | `revocation-data-plane-container-smoke` | 在 privileged container 中运行组合 revocation 数据面验证。 |
 

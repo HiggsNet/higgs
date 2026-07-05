@@ -220,17 +220,17 @@ func buildNFTOverlayChainCommands(tableName string, desired *FirewallDesiredStat
 	forwardChain := tableName + "_forward"
 	outputChain := tableName + "_output"
 
-	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority filter; policy accept; }"})
 	for _, r := range desired.InputRules {
 		commands = append(commands, []string{"add", "rule", "inet", tableName, inputChain, renderNFTRule(r)})
 	}
 
-	commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority filter; policy accept; }"})
 	for _, r := range desired.ForwardRules {
 		commands = append(commands, []string{"add", "rule", "inet", tableName, forwardChain, renderNFTRule(r)})
 	}
 
-	commands = append(commands, []string{"add", "chain", "inet", tableName, outputChain})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, outputChain, "{ type filter hook output priority filter; policy accept; }"})
 	for _, r := range desired.OutputRules {
 		commands = append(commands, []string{"add", "rule", "inet", tableName, outputChain, renderNFTRule(r)})
 	}

@@ -211,10 +211,16 @@ func completeResponse(data []byte) (string, bool) {
 			}
 		}
 
-		if len(data)-start >= 5 && isReplyCode(data[start:start+4]) {
+		if len(data)-start >= 4 && isReplyCode(data[start:start+4]) {
+			code := string(data[start : start+4])
+			if len(data)-start == 4 {
+				if code == "0000" {
+					return string(data[:start]), true
+				}
+				return "", false
+			}
 			switch data[start+4] {
 			case ' ':
-				code := string(data[start : start+4])
 				if code == "0000" {
 					return string(data[:start]), true
 				}

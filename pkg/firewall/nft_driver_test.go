@@ -76,6 +76,22 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 	if !foundAddTable {
 		t.Error("expected 'add table' command")
 	}
+	for _, want := range []string{
+		"hook input",
+		"hook forward",
+		"hook output",
+	} {
+		found := false
+		for _, cmd := range runner.commands {
+			if strings.Contains(strings.Join(cmd.args, " "), want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected nft overlay chain with %s hook", want)
+		}
+	}
 }
 
 func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {

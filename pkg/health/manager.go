@@ -211,6 +211,10 @@ func (m *Manager) applyResult(instanceID string, result ProbeResult, now time.Ti
 		m.errorsTotal[instanceID]++
 		m.lastReason[instanceID] = result.Error
 		m.mu.Unlock()
+	} else if result.Success {
+		m.mu.Lock()
+		delete(m.lastReason, instanceID)
+		m.mu.Unlock()
 	}
 	window.Record(now, result.RTT, result.Success)
 
