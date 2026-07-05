@@ -7,6 +7,7 @@ set -euo pipefail
 go_cmd="${GO:-go}"
 go_cache="${GOCACHE:-/tmp/higgs-gocache}"
 go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
+skip_shared="${HIGGS_REVOCATION_DATA_PLANE_SKIP_SHARED:-0}"
 make_env=(
   "GO=$go_cmd"
   "GOCACHE=$go_cache"
@@ -39,26 +40,34 @@ dump_diagnostics() {
 
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then dump_diagnostics; fi; exit "$rc"' EXIT
 
-printf '[revocation-data-plane-smoke] firewall real backend smoke\n'
-env "${make_env[@]}" make firewall-smoke
+if [[ "$skip_shared" == "1" ]]; then
+  printf '[revocation-data-plane-smoke] shared firewall/BIRD/StrongSwan lanes already covered; skipping repeats\n'
+else
+  printf '[revocation-data-plane-smoke] firewall real backend smoke\n'
+  env "${make_env[@]}" make firewall-smoke
 
-printf '[revocation-data-plane-smoke] BIRD/Babel real routing smoke\n'
-env "${make_env[@]}" make bird-babel-smoke
+  printf '[revocation-data-plane-smoke] BIRD/Babel real routing smoke\n'
+  env "${make_env[@]}" make bird-babel-smoke
 
-printf '[revocation-data-plane-smoke] StrongSwan/XFRM revocation-relevant real smoke\n'
-docs/scripts/ipsec-xfrm-preflight.sh
-HIGGS_IPSEC_XFRM_SMOKE=1 \
-  GOCACHE="$go_cache" \
-  GOMODCACHE="$go_mod_cache" \
-  CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverIKEBringupSmoke$' -count=1
-HIGGS_IPSEC_XFRM_SMOKE=1 \
-  GOCACHE="$go_cache" \
-  GOMODCACHE="$go_mod_cache" \
-  CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupSmoke$' -count=1
+  printf '[revocation-data-plane-smoke] StrongSwan/XFRM revocation-relevant real smoke\n'
+  docs/scripts/ipsec-xfrm-preflight.sh
+  HIGGS_IPSEC_XFRM_SMOKE=1 \
+    GOCACHE="$go_cache" \
+    GOMODCACHE="$go_mod_cache" \
+    CGO_ENABLED="${CGO_ENABLED:-0}" \
+    "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverIKEBringupSmoke$' -count=1
+  HIGGS_IPSEC_XFRM_SMOKE=1 \
+    GOCACHE="$go_cache" \
+    GOMODCACHE="$go_mod_cache" \
+    CGO_ENABLED="${CGO_ENABLED:-0}" \
+    "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupSmoke$' -count=1
+fi
 
 printf '[revocation-data-plane-smoke] daemon revocation deny-first ordering smoke\n'
 env "${make_env[@]}" make revocation-cleanup-smoke
 
-printf 'revocation data-plane smoke passed (real firewall + real BIRD/Babel + revocation-relevant StrongSwan/XFRM + deny-first revocation ordering)\n'
+if [[ "$skip_shared" == "1" ]]; then
+  printf 'revocation data-plane smoke passed (shared real data-plane lanes skipped + deny-first revocation ordering)\n'
+else
+  printf 'revocation data-plane smoke passed (real firewall + real BIRD/Babel + revocation-relevant StrongSwan/XFRM + deny-first revocation ordering)\n'
+fi

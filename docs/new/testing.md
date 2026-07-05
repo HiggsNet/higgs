@@ -143,7 +143,15 @@ make observer-smoke
 
 真实数据面 smoke 会触碰宿主网络、network namespace、XFRM、StrongSwan/charon、BIRD、nftables 或 iptables。它们默认不放进 `make check`，也不放进 `make smoke-all`。
 
-运行前先跑对应 preflight：
+完整 root 数据面入口：
+
+```bash
+sudo make root-smoke
+```
+
+`root-smoke` 会跑真实 StrongSwan/XFRM、BIRD/Babel、firewall、health fault-injection 和 revocation ordering。它会复用共享 lane，避免再通过 `revocation-data-plane-smoke` 重复跑 firewall/BIRD/StrongSwan 子集。
+
+下面是按数据面分组的入口，适合局部验证。运行前先跑对应 preflight；container 入口用于隔离宿主差异，通常和同名 root 入口二选一。
 
 ```bash
 make ipsec-xfrm-preflight
@@ -156,12 +164,19 @@ make bird-babel-container-smoke
 
 sudo make firewall-smoke
 make firewall-container-smoke
-sudo make health-smoke
 sudo make health-fault-smoke
 make health-fault-container-smoke
 sudo make revocation-data-plane-smoke
 make revocation-data-plane-container-smoke
 ```
+
+避免重复跑的关系：
+
+| 如果已经跑了 | 通常不需要再单独跑 |
+|--------------|--------------------|
+| `sudo make root-smoke` | 下面列出的各个 root 数据面 smoke。 |
+| `sudo make revocation-data-plane-smoke` | `sudo make firewall-smoke`、`sudo make bird-babel-smoke` 和 revocation 相关的精简 XFRM bring-up；该组合目标内部会再次调用这些 lane。 |
+| `make revocation-data-plane-container-smoke` | 对应的 root 组合目标，除非你正在对比宿主和容器权限差异。 |
 
 container 目标默认使用 Docker，也可以切到 Podman：
 
@@ -183,6 +198,7 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 
 | 目标 | 说明 |
 |------|------|
+| `root-smoke` | 汇总真实 root 数据面验证，覆盖 StrongSwan/XFRM、BIRD/Babel、firewall、health fault-injection 和 revocation ordering。 |
 | `ipsec-xfrm-preflight` | 检查 root/netns/XFRM/StrongSwan/VICI 等前置条件，避免半途创建系统资源后失败。 |
 | `ipsec-xfrm-smoke` | 在真实系统能力下验证 StrongSwan/VICI + XFRM interface、daemon reconcile、SA 观测和 tunnel ping。 |
 | `ipsec-xfrm-container-smoke` | 在 privileged container 中运行 StrongSwan/XFRM smoke，适合隔离宿主环境差异。 |
