@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -461,6 +464,22 @@ func (d *captureFirewallOwnerDriver) Apply(ctx context.Context, plan firewall.Fi
 	return d.DryRunDriver.Apply(ctx, plan, desired)
 }
 
+type blockingFirewallDriver struct {
+	firewall.DryRunDriver
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (d *blockingFirewallDriver) Apply(ctx context.Context, plan firewall.FirewallPlan, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+	close(d.started)
+	select {
+	case <-d.unblock:
+	case <-ctx.Done():
+		return firewall.FirewallApplyResult{}, ctx.Err()
+	}
+	return d.DryRunDriver.Apply(ctx, plan, desired)
+}
+
 func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	appConfig := defaultAppConfig()
@@ -505,6 +524,95 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 	}
 	if driver.owners[1].InstanceID != "host" {
 		t.Fatalf("host owner scope = %q, want host", driver.owners[1].InstanceID)
+	}
+}
+
+func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	appConfig := defaultAppConfig()
+	appConfig.Observer.Enabled = true
+	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+		ID:            "higgstesth2",
+		NetNS:         "higgstesth2",
+		Enabled:       true,
+		Mode:          firewall.ModeManaged,
+		Backend:       firewall.BackendNone,
+		DefaultPolicy: firewall.DefaultPolicyDrop,
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(7020, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	driver := &blockingFirewallDriver{
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+	service.firewallDriver = driver
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.reconcileFirewall(context.Background())
+	}()
+	select {
+	case <-driver.started:
+	case <-time.After(time.Second):
+		close(driver.unblock)
+		t.Fatal("firewall reconcile did not enter blocking apply")
+	}
+
+	committedRev := service.StateStore.Meta().Revision
+	statusDone := make(chan controlResponse, 1)
+	go func() {
+		statusDone <- controlRequestViaPipe(t, service, controlRequest{Method: "status"})
+	}()
+	select {
+	case status := <-statusDone:
+		if !status.OK || status.StateRevision != committedRev {
+			close(driver.unblock)
+			t.Fatalf("status response = %#v, want committed revision %d", status, committedRev)
+		}
+	case <-time.After(time.Second):
+		close(driver.unblock)
+		t.Fatal("control status blocked behind firewall reconcile apply")
+	}
+
+	srv := newObserverServer(service, appConfig.Observer)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	rr := httptest.NewRecorder()
+	observerDone := make(chan struct{})
+	go func() {
+		srv.handleStatus(rr, req)
+		close(observerDone)
+	}()
+	select {
+	case <-observerDone:
+		if rr.Code != http.StatusOK {
+			close(driver.unblock)
+			t.Fatalf("observer status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+		}
+		var resp apiResponse
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			close(driver.unblock)
+			t.Fatalf("decode observer status: %v", err)
+		}
+		data := resp.Data.(map[string]any)
+		if data["state_revision"] != float64(committedRev) {
+			close(driver.unblock)
+			t.Fatalf("observer status data = %#v, want committed revision %d", data, committedRev)
+		}
+	case <-time.After(time.Second):
+		close(driver.unblock)
+		t.Fatal("observer status blocked behind firewall reconcile apply")
+	}
+
+	close(driver.unblock)
+	if err := <-done; err != nil {
+		t.Fatalf("reconcileFirewall: %v", err)
 	}
 }
 

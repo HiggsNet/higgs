@@ -174,6 +174,81 @@ func TestDaemonIPsecReconcileStaleInstanceTokenDoesNotOverwriteCurrent(t *testin
 	}
 }
 
+func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4060, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	driver := &staleCommitIPsecDriver{}
+	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
+		close(started)
+		<-unblock
+	}
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.reconcileIPsecLinks(context.Background())
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		close(unblock)
+		t.Fatal("ipsec reconcile did not enter blocking LoadConnection")
+	}
+
+	committedRev := service.StateStore.Meta().Revision
+	statusDone := make(chan controlResponse, 1)
+	go func() {
+		statusDone <- controlRequestViaPipe(t, service, controlRequest{Method: "status"})
+	}()
+	select {
+	case status := <-statusDone:
+		if !status.OK || status.StateRevision != committedRev {
+			close(unblock)
+			t.Fatalf("status response = %#v, want committed revision %d", status, committedRev)
+		}
+	case <-time.After(time.Second):
+		close(unblock)
+		t.Fatal("control status blocked behind IPsec reconcile apply")
+	}
+
+	linksDone := make(chan controlResponse, 1)
+	go func() {
+		linksDone <- controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
+	}()
+	select {
+	case links := <-linksDone:
+		if !links.OK || links.StateRevision != committedRev {
+			close(unblock)
+			t.Fatalf("links_status response = %#v, want committed revision %d", links, committedRev)
+		}
+	case <-time.After(time.Second):
+		close(unblock)
+		t.Fatal("links_status blocked behind IPsec reconcile apply")
+	}
+
+	close(unblock)
+	if err := <-done; err != nil {
+		t.Fatalf("reconcileIPsecLinks: %v", err)
+	}
+}
+
 func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4000, 0)

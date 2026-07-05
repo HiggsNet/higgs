@@ -960,3 +960,26 @@
   - [x] health container / fault-injection 增强 smoke：在真实 XFRM+BIRD 链路上注入丢包/延迟，验证状态切换、BIRD metric/cutover gate 和数据面恢复。
   - [ ] state 文件外部协调补强已降级为 Phase 7 之后远期增强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
   - [ ] Observer 深度增强已降级为 Phase 7 之后远期增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析。
+
+
+## Phase 7.10.1: Daemon state 读写分离 / committed snapshot 重构（已完成）
+
+**完成背景：** daemon event handler 曾直接在 live `*stateFile` 上原地修改 map/slice/字段。为避免 reader 看到半写入状态，writer 持有 `stateFile.Lock()` 时 observer/debug/control 的只读路径都会等待；当写事务内同步执行 IPsec/VICI、BIRD、firewall、health probe 等外部 I/O 时，运维面会在最需要诊断时失明。
+
+**完成结果：**
+- 引入 `DaemonStateStore`：维护 committed snapshot、revision、snapshot clone、short update、dirty flags，并提供 `Snapshot()`、`Update(fn)`、`CommitIfRevision(rev, fn)`、`BeginUpdate()` workspace 语义。
+- observer/control/debug 只读路径迁到 committed snapshot，输出 `state_revision`、`snapshot_time_unix`、dirty/reconcile flags，不再依赖 live `stateFile.RLock()`。
+- gossip packet 快路径、object-pull TCP lookup、sync timer、read-only responder、hinted session、relay fanout、daemon zone digest 和 IPsec interval 判断均迁到 committed snapshot 输入。
+- IPsec reconcile 基于 committed snapshot 做 plan/list/XFRM inspect/apply；`LinkInstances` 按 instance owner token / revision 条件提交，`IPsecReconcile` summary 标注 source revision / committed / stale。
+- routing/BIRD reconcile 基于 committed snapshot workspace 生成 `BirdInstances` / `RoutingReconcile`；BIRD config/start/reload/status 锁外执行，revision stale 时按 netns owner token 合并或重新置 dirty。
+- firewall reconcile 基于 committed snapshot 构造 desired/plan/apply；`FirewallReconcile` summary 通过短事务写回，stale summary 可合并并重新置 dirty。
+- `record_put`、delegate issue/grant/revoke、recovery import/purge、IPsec port rotate/cleanup、endpoint timer、revocation cleanup、sync snapshot apply、object-pull attempt/result 等写路径迁到 StateStore 短事务提交 committed snapshot。
+- 移除 `DaemonService.lockState()`、`hasStateLock()`、`stateLocked` / `lockedState` 这类 live pointer 锁追踪；`setState` 只做 current snapshot 指针切换并发布 committed snapshot，不再承担 live-lock 转移语义。
+- peer state 分层结论：`SyncPeers` 中 observed path、backoff、rejected digest/record cache 暂留 runtime control state；datagram/object-pull counters、read-only responder、last catalog/page/reject 等纯诊断字段后续随 6.7.7 inspect/source 迁到 peer observability readmodel 或 metrics store，避免统计写入频繁推动主 committed revision。
+
+**验收覆盖：**
+- `TestLongIPsecReconcileDoesNotBlockCommittedReaders`
+- `TestLongBirdReconcileDoesNotBlockCommittedReaders`
+- `TestLongFirewallReconcileDoesNotBlockCommittedReaders`
+- IPsec/firewall stale commit 测试覆盖旧 snapshot result 不覆盖新 revision，并在冲突时重新置 dirty。
+- `make check` 通过，包含 `go fmt ./...`、`go vet ./...`、`go test ./...`、`go build ./app/higgs`。

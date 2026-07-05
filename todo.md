@@ -42,12 +42,6 @@
   - [ ] 删除 `observer_server.go` 中只为兼容旧 handler 测试保留的 app 层 wrapper 或改测 `internal/observer.Server.Handler()`；保留必要 shim 时必须标注迁移原因。
   - [ ] 验证：`make observer-smoke`、`go test ./app/higgs`、相关 CLI golden/output 测试必须继续覆盖 HTTP route、SSE、static UI、debug 文本和 raw JSON 输出。
 
-## 当前 P0：Daemon state 读写分离 / committed snapshot 重构
-
-**优先级判断：** 这是当前 daemon 稳定性的阻塞项，不应该按 Phase 7.10 的普通排期理解。`debug links`、observer、control socket、gossip fast path 被长 reconcile 写锁拖住时，运维面会在最需要诊断时失明；因此它优先于 multipath、port hopping、relay/admission 等高级功能。
-
-**当前处理方式：** 先完成 `DaemonStateStore` / committed snapshot / revision / 短事务写回这条主线，再继续推进 Phase 6.7.7 模块化和 Phase 7 其他增强。详细设计和拆分清单见下方 `7.10.1`，暂时保留在 daemon/control 生产化章节下作为实现归属，但执行顺序按本 P0 小节优先。
-
 ## Phase 7: 健壮性与高级特性（预计 4-6 周）
 
 **目标：** 生产可用，支持多线路、跳频、扩展传输协议。
@@ -127,77 +121,6 @@
   - [ ] 加入认证与授权边界：Unix socket 文件权限、token/mTLS 预留、只读/管理操作分级
   - [ ] daemon 生命周期：启动、优雅停止、reload、状态持久化、崩溃恢复
   - [ ] systemd service 示例和 socket 路径约定，如 `/run/higgs/higgs.sock`
-  - [ ] **7.10.1 Daemon state 读写分离 / committed snapshot 重构（当前 P0）**
-    - **背景问题：**
-      - 当前 `stateFile` 已有 `sync.RWMutex`，但 daemon event handler 直接在 live `*stateFile` 上原地修改 map/slice/字段。
-      - 为避免 reader 看到半写入状态，writer 拿 `Lock()` 后所有 observer/debug/control 的 `RLock()` 都会等待；当写事务内同步执行 IPsec/VICI、BIRD、firewall、health probe 等外部 I/O 时，只读查询也会被长时间阻塞。
-      - IPsec/routing/firewall reconcile 的结果并非同质：有些是会影响下一轮决策的 runtime control state，有些只是诊断摘要。把它们放在同一个长写锁里，颗粒度过粗。
-    - **当前过渡修复（保留）：**
-      - daemon startup 先发布本机 endpoint/IPsec/routing capability records，再进入 startup recovery；避免数据面 recovery 卡住时阻塞 `ipsec/profile` 从旧 schema 迁移到 `role` 版。
-      - `notifyStateChanged()` 在发现 event loop 已持有 state 写锁时，只设置 `ipsecDirty` / `routingDirty` / `firewallDirty`，不在锁内同步 flush reconcile；真实 event loop 在锁释放后统一 flush。
-      - IPsec/routing/firewall flush 默认套 `defaultReconcileOperationTimeout`，防止无 deadline 的外部 I/O 无限阻塞主循环；已有更短/更明确 deadline 的调用方保持原 deadline。
-      - control/observer 读路径使用 bounded read lock timeout，锁忙时返回明确错误而不是永久卡住。
-    - **字段分层：**
-      - Source-of-truth state：`Network`、`ManagedZone`、root/zone keys、本机发布的 signed records、config 派生的本地 capability records。
-      - Runtime control state：`LinkInstances`、`BirdInstances`、`IPsecTransportKey`、`IPsecPortRecord`、`SyncPeers` 的 backoff/cache/observed path、admission state。这些字段会影响下一轮 plan/reconcile，需要强一致或按 key 条件提交。
-      - Observability summary：`IPsecReconcile`、`RoutingReconcile`、`FirewallReconcile`、最近 actions/skips/actual SAs、last error、backend summary。这些字段主要供 CLI/observer/diagn断使用，可以接受读到最近一次 committed snapshot，写回策略也可以比 runtime control state 更宽松。
-      - Peer state 需要继续细分：`SyncPeers` 里的 observed path、backoff、rejected digest/record cache 会影响 sync/object-pull/relay plan，暂留 runtime control state；datagram/object-pull counters、read-only responder、last catalog/page/reject 等纯诊断字段后续与 6.7.7 inspect/source 衔接，迁到 peer observability readmodel 或 metrics store，避免统计写入推动主 committed revision。
-    - **目标设计：**
-      - 引入 `StateStore` / `DaemonStateStore`，daemon 不再把 mutable `*stateFile` 指针裸露给 observer/control/debug。
-      - Store 维护 committed snapshot 与 revision：
-        - `Snapshot() (snapshot *stateFile, rev uint64)` 返回稳定只读快照；reader 读取最近一次 committed snapshot，不等待长写事务。
-        - `BeginUpdate()` / `Update(fn)` 用于短事务修改 committed state；禁止在 update 闭包中做 VICI/BIRD/nft/DNS/ping/文件系统长 I/O。
-        - `CommitIfRevision(rev, fn)` 或按对象 `CommitLinkInstancesIfMatch(...)`，用于 reconcile result 条件写回；revision 或 per-object token 不匹配时丢弃旧 result 并重新置 dirty。
-      - 写事务采用 copy-on-write / writer workspace：
-        - writer 从 committed snapshot clone 出 workspace，在 workspace 上计算和执行需要强顺序的 state transition。
-        - 外部 I/O 尽量锁外执行；需要事务顺序的 layer 保留 daemon single-writer 调度，但不持 reader-visible state 写锁。
-        - commit 时短锁/atomic swap committed snapshot；reader 可能读到稍旧 snapshot，但不会看到半写入状态，也不会被长事务阻塞。
-    - **IPsec reconcile 拆分策略：**
-      - 第一阶段只做 snapshot 输入：
-        - 从 committed snapshot 复制 `Network`、`ManagedZone`、`LinkInstances`、`IPsecTransportKey`、`IPsecPortRecord`、revoked peers、health cutover readiness 和 link group config。
-        - 锁外执行 `PlanTransportLinks`、`ListSAs`、XFRM inspect 和 `ReconcileLinkInstances`。
-      - 写回分层：
-        - `LinkInstances` 按 `InstanceID` 条件提交，检查当前 instance 的 `DesiredSpecHash` / generation / owner token / rotate phase 是否仍匹配 reconcile 起点；不匹配则跳过该 instance 并保持 `ipsecDirty=true`。
-        - `IPsecReconcile` summary 可写入“最近一次 attempt”，但必须标注 `snapshot_revision` / `committed=false|stale` 或在 stale 时只记录 last_error，不覆盖当前 desired/action summary。
-        - `ActualSAs` 属于 observation，可允许用较新 observe 覆盖摘要，但不得驱动旧 desired 覆盖 `LinkInstances`。
-      - 失败处理：
-        - apply 失败后的 backoff/failure count 写回也必须按 instance 条件提交；提交失败说明状态已被新事务接管，旧失败不应污染新 instance。
-        - 外部 apply 已发生但 commit 失败时，下一轮 reconcile 通过 observe/live state 收敛，而不是强行写旧结果。
-    - **Routing / BIRD reconcile 拆分策略：**
-      - `BirdInstances` 是 runtime control state：config hash、pid/control socket、state、failure count、backoff 会影响下一轮 start/reload/adopt，需按 netns 条件提交。
-      - BIRD config 生成可基于 snapshot 锁外完成；写 config 文件、start/reload/status 都必须在 reader-visible lock 外执行。
-      - `RoutingReconcile` last run/error 是 summary，可独立宽松提交。
-      - `autoAnnounceAssignedIPs` 会修改 source-of-truth records，不能混入普通 routing reconcile 的长事务；需要拆成独立 command/update 事务，再触发 routing dirty。
-    - **Firewall reconcile 拆分策略：**
-      - firewall desired 主要从 source snapshot + config 构建；`FirewallReconcile` 基本是 observation summary。
-      - List/Plan/Apply 必须锁外执行；summary 写回短事务即可。
-      - 因 firewall result 不应改变 source-of-truth，stale summary 可以被下一轮覆盖；需要避免 stale apply 后误报为最新 policy hash。
-    - **Reader / control / observer 语义：**
-      - `debug links`、observer API、`daemon status` 默认读 latest committed snapshot，不等待 active writer；输出 `state_revision`、`snapshot_time`、`reconcile_in_progress` / dirty flags，必要时标注结果可能是上一次 committed view。
-      - 强一致命令（如 record put 后立即 get）可选择等待指定 revision committed；普通只读命令不等待。
-      - gossip ping/pong 响应不读长写锁；需要更新 observed path 时投递 writer event，由 single-writer 后台提交。
-    - **实施顺序：**
-      - [x] 设计并引入 `DaemonStateStore` 骨架：committed pointer、revision、snapshot clone、short update、dirty flags；先不迁移所有调用，只提供并行 API。
-        - 已新增 `DaemonStateStore` 并接到 `DaemonService`：旧事件循环仍操作 live `Sync.State`，`setState` / `notifyStateChanged` 发布 committed snapshot；后续 reader/reconcile 逐步迁到 store API。
-      - [x] 补 `cloneStateFile` / snapshot clone 测试，确保 `Network`、records/history、maps/slices、runtime states 深拷贝，不共享可变 map。
-      - [x] 迁移 observer/control/debug 只读路径到 `Snapshot()`，去掉对 live `stateFile.RLock()` 的依赖；输出 revision/dirty/reconcile status。
-        - control `status` / `record_get` / `bird_status` / `routes_dump` / `admission_status` / `firewall_status` / `links_status` / `peers_status` / `revoke_status` 已读 committed snapshot，并返回 `state_revision` / `snapshot_time_unix` / dirty / reconcile flags；observer provider 已改用 snapshot，status API 输出 revision/dirty 信息；CLI debug 在线路径经 control 间接受益。
-      - [x] 迁移 gossip packet 快路径：ping/pong 响应不等待 writer；observed path 作为 event 异步提交。
-        - packet event 已从 `handleEvent` 全局 live state 写锁前分流，处理后发布 committed snapshot；object-pull TCP lookup 改为读取 snapshot getter，不再持 live `RLock()`；已补 live state 写锁被持有时 packet event 仍返回并提交 observed path 的回归测试。后续 sync FSM 更细粒度写回仍归入 reconcile/store 条件提交阶段。
-      - [x] 先拆 IPsec reconcile：snapshot input、锁外 plan/apply、按 instance 条件提交 `LinkInstances`，summary 带 revision/stale 标记。
-        - `reconcileIPsecLinks` 基于 committed snapshot 做 plan/list/XFRM inspect/reconcile/apply；写回先走 source revision 快路径，revision 变化时按变更 instance 的 owner token 合并 `LinkInstances`，只在同 id token 冲突时保留当前 snapshot、写 stale diagnostic 并重新置 `ipsecDirty`。`IPsecReconcile` summary 已包含 `source_revision`、`committed`、`stale`。
-      - [x] 再拆 routing：BIRD config/start/reload/status 锁外执行，按 netns 条件提交 `BirdInstances`；拆出 `autoAnnounceAssignedIPs` 为独立 state update。
-        - `reconcileRouting` 基于 committed snapshot workspace 生成 `BirdInstances` / `RoutingReconcile`，BIRD config/start/reload/status 和 health observation 不再读写 live state pointer；提交先走 source revision 快路径，revision 变化时按 netns 的 BIRD owner token 合并 `BirdInstances`，冲突则保留当前 snapshot 并重新置 `routingDirty`。`autoAnnounceAssignedIPs` 已拆为独立 StateStore update，提交后刷新 routing snapshot/revision 再生成 BIRD 配置。
-      - [x] 再拆 firewall：锁外 apply，短事务写 `FirewallReconcile` summary。
-        - `reconcileFirewall` 已改为读取 committed snapshot 构造 desired/plan/apply，运行期只累积 `FirewallReconcile` summary；最终通过 StateStore revision 条件提交 summary，revision stale 时合并到当前 snapshot、保留新 state 并重新置 `firewallDirty`。
-      - [x] 最后移除 `DaemonService.stateUnlock` / `lockState()` 这类 live pointer 锁追踪，daemon event loop 只通过 StateStore 操作。
-        - 已彻底移除 `lockState()`、`hasStateLock()`、`stateLocked` / `lockedState` live pointer 锁追踪；`setState` 只做 current snapshot 指针切换并发布 committed snapshot，不再承担 live-lock 转移语义。object pull result / submit attempt / immediate failure stats 已改为 StateStore 短事务提交 committed snapshot，提交后直接安装 committed snapshot；sync FSM/responder 的 catalog、active-pull、hint、rejected digest、backoff、peer-sync、read-only responder、datagram、relay suppression/success 诊断也已同步写入 committed snapshot；chunk fallback / oversized datagram 发送统计已从发送 helper 中拆成显式 diagnostics，由 daemon 通过 StateStore 短事务写回 committed snapshot，不再依赖修改临时 snapshot clone；daemon sync 的 `ApplySnapshotAction` 已在 Store workspace 内 apply Network snapshot / rejected digest / auto-join 诊断并切换到 committed state，`SaveStateAction`、apply 后保存、relay session 保存也改为保存 committed state；`record_put`、delegate issue、authority grant、delegate revoke、recovery import、recovery purge apply、IPsec port rotate、IPsec cleanup、endpoint timer、revocation cleanup 已迁到 Store workspace 修改并保存/安装 committed state；daemon event loop 已移除外层 `lockState()`，`record_put` 等 store 写事件不会被旧 live state 锁阻塞，sync FSM 事件处理也已移除内部 `lockState()`，catalog/filter/reconcile 输入改为读取 committed snapshot；sync timer、read-only responder、hinted session、relay fanout、object-pull submit、daemon zone digest 和 IPsec interval 判断也已迁到 committed snapshot 输入；reload / join accept / sync timer reload 这类磁盘最新 state 安装路径已改为显式 `StateStore.ReplaceCommitted` 后再安装 current snapshot，不再依赖 `setState` 的隐式 publish；`runStateStoreWrite` / `record_put` / recovery purge / IPsec cleanup 的旧 `StateStore == nil` live-write fallback 已收缩为初始化错误，object-pull attempt/result 和 sync snapshot apply 的旧 live fallback 已清掉；staticcheck 标出的旧 helper / live wrapper 已清理。
-      - [ ] 增加并发回归测试：长 IPsec/BIRD/firewall reconcile 阻塞时，`daemon status` / `debug links` / observer API 仍能返回 latest committed snapshot；旧 snapshot result 不覆盖新 revision；dirty coalescing 能在 stale commit 后触发下一轮 reconcile。
-    - **验收标准：**
-      - 长时间 IPsec/VICI/BIRD/firewall apply 不阻塞 observer/control 普通只读查询。
-      - 单写事务顺序仍保留：record put / reload / reconcile result 不并发修改同一 runtime control state。
-      - 旧 snapshot 的 runtime result 不覆盖新 committed state；stale result 会置 dirty 并由下一轮收敛。
-      - `go test ./app/higgs`、observer/control/debug 相关测试、IPsec/routing/firewall reconcile 测试均覆盖 MVCC 语义。
 
 - [ ] **7.11 运维与可观测性**
   - Prometheus metrics 导出（节点数、链路状态、Gossip 流量、Zone 数量）
@@ -261,7 +184,6 @@
 
 ## 下一步
 
-1. 启动当前 P0 / Phase 7.10.1 Daemon state 读写分离 / committed snapshot 重构：先实现 `DaemonStateStore` 骨架、snapshot clone、revision/dirty 语义和 reader 快照路径，解决 observer/control/debug 被长写事务阻塞的问题。
-2. 继续 Phase 6.7.7 `app/higgs` 模块化重构：优先补齐 `internal/inspect` / `inspect/text` 骨架，把 `debug links` 与 Observer links 的共用 read model 扩展成可迁移模式；该 read model 后续直接消费 StateStore snapshot。
-3. 第二步抽 zone/record/authority 展示逻辑，复用到 `zone show` / `debug zone` / Observer zone detail，避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
-4. 第三步抽 peer endpoints，再逐步迁移 routes/BIRD/health/revocation/admission/firewall 的诊断 presenter 和 reason 推理。
+1. 继续 Phase 6.7.7 `app/higgs` 模块化重构：优先补齐 `internal/inspect` / `inspect/text` 骨架，把 `debug links` 与 Observer links 的共用 read model 扩展成可迁移模式；该 read model 后续直接消费 StateStore snapshot。
+2. 第二步抽 zone/record/authority 展示逻辑，复用到 `zone show` / `debug zone` / Observer zone detail，避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
+3. 第三步抽 peer endpoints，再逐步迁移 routes/BIRD/health/revocation/admission/firewall 的诊断 presenter 和 reason 推理。

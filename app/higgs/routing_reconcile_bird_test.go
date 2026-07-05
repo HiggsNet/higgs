@@ -10,6 +10,38 @@ import (
 	"time"
 )
 
+type blockingBirdProcessManager struct {
+	started   bool
+	startSpec bird.BirdInstanceSpec
+	startedCh chan struct{}
+	unblock   chan struct{}
+	startErr  error
+}
+
+func (f *blockingBirdProcessManager) Start(ctx context.Context, spec bird.BirdInstanceSpec) error {
+	f.started = true
+	f.startSpec = spec
+	close(f.startedCh)
+	select {
+	case <-f.unblock:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return f.startErr
+}
+
+func (f *blockingBirdProcessManager) Stop(ctx context.Context, spec bird.BirdInstanceSpec) error {
+	return nil
+}
+
+func (f *blockingBirdProcessManager) IsRunning(ctx context.Context) bool {
+	return false
+}
+
+func (f *blockingBirdProcessManager) LastExit() *bird.ProcessExit {
+	return nil
+}
+
 func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	state, config := buildTestNetworkStateForRouting(t)
 	now := time.Unix(4000, 0)
@@ -132,6 +164,88 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	}
 	if inst.FailureCount != 0 || inst.BackoffUntilUnix != 0 || inst.LastExit != "" {
 		t.Fatalf("restart did not clear crash state: %+v", inst)
+	}
+}
+
+func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4050, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &blockingBirdProcessManager{
+		startedCh: make(chan struct{}),
+		unblock:   make(chan struct{}),
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.reconcileRouting(context.Background())
+	}()
+	select {
+	case <-pm.startedCh:
+	case <-time.After(time.Second):
+		close(pm.unblock)
+		t.Fatal("routing reconcile did not enter blocking BIRD start")
+	}
+
+	committedRev := service.StateStore.Meta().Revision
+	statusDone := make(chan controlResponse, 1)
+	go func() {
+		statusDone <- controlRequestViaPipe(t, service, controlRequest{Method: "status"})
+	}()
+	select {
+	case status := <-statusDone:
+		if !status.OK || status.StateRevision != committedRev {
+			close(pm.unblock)
+			t.Fatalf("status response = %#v, want committed revision %d", status, committedRev)
+		}
+	case <-time.After(time.Second):
+		close(pm.unblock)
+		t.Fatal("control status blocked behind BIRD start")
+	}
+
+	linksDone := make(chan controlResponse, 1)
+	go func() {
+		linksDone <- controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
+	}()
+	select {
+	case links := <-linksDone:
+		if !links.OK || links.StateRevision != committedRev {
+			close(pm.unblock)
+			t.Fatalf("links_status response = %#v, want committed revision %d", links, committedRev)
+		}
+	case <-time.After(time.Second):
+		close(pm.unblock)
+		t.Fatal("links_status blocked behind BIRD start")
+	}
+
+	close(pm.unblock)
+	if err := <-done; err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
 	}
 }
 
