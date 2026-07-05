@@ -178,7 +178,8 @@
       - [x] 设计并引入 `DaemonStateStore` 骨架：committed pointer、revision、snapshot clone、short update、dirty flags；先不迁移所有调用，只提供并行 API。
         - 已新增 `DaemonStateStore` 并接到 `DaemonService`：旧事件循环仍操作 live `Sync.State`，`setState` / `notifyStateChanged` 发布 committed snapshot；后续 reader/reconcile 逐步迁到 store API。
       - [x] 补 `cloneStateFile` / snapshot clone 测试，确保 `Network`、records/history、maps/slices、runtime states 深拷贝，不共享可变 map。
-      - [ ] 迁移 observer/control/debug 只读路径到 `Snapshot()`，去掉对 live `stateFile.RLock()` 的依赖；输出 revision/dirty/reconcile status。
+      - [x] 迁移 observer/control/debug 只读路径到 `Snapshot()`，去掉对 live `stateFile.RLock()` 的依赖；输出 revision/dirty/reconcile status。
+        - control `status` / `record_get` / `bird_status` / `routes_dump` / `admission_status` / `firewall_status` / `links_status` / `peers_status` / `revoke_status` 已读 committed snapshot，并返回 `state_revision` / `snapshot_time_unix` / dirty / reconcile flags；observer provider 已改用 snapshot，status API 输出 revision/dirty 信息；CLI debug 在线路径经 control 间接受益。
       - [ ] 迁移 gossip packet 快路径：ping/pong 响应不等待 writer；observed path 作为 event 异步提交。
       - [ ] 先拆 IPsec reconcile：snapshot input、锁外 plan/apply、按 instance 条件提交 `LinkInstances`，summary 带 revision/stale 标记。
       - [ ] 再拆 routing：BIRD config/start/reload/status 锁外执行，按 netns 条件提交 `BirdInstances`；拆出 `autoAnnounceAssignedIPs` 为独立 state update。

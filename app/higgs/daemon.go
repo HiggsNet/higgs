@@ -474,25 +474,22 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		var linkInstances int
 		var desiredLinks int
 		var lastLinkError string
-		if state := d.currentState(); state != nil {
-			unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-			if !ok {
-				writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
-				return
-			}
+		state, _, meta := d.snapshotState()
+		if state != nil {
 			linkInstances = len(state.LinkInstances)
 			desiredLinks = desiredIPsecLinks(state)
 			lastLinkError = lastIPsecReconcileError(state)
-			unlock()
 		}
-		writeControlResponse(conn, controlResponse{
+		response := controlResponse{
 			OK:            true,
 			PeerID:        d.Sync.Config.PeerID,
 			LinkInstances: linkInstances,
 			DesiredLinks:  desiredLinks,
 			LastLinkError: lastLinkError,
 			Message:       "daemon online",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -517,23 +514,19 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		state := d.currentState()
+		state, _, meta := d.snapshotState()
 		if state == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-		if !ok {
-			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
-			return
-		}
 		record, err := lookupRecordJSON(state, zone.ZonePath(request.Zone), request.Key, request.History)
-		unlock()
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		writeControlResponse(conn, controlResponse{OK: true, Record: record})
+		response := controlResponse{OK: true, Record: record}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "delegate_issue":
 		if err := validateControlDelegateIssue(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -672,24 +665,21 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	case "bird_status":
 		var instances map[string]*BirdInstanceState
 		var lastRoutingError string
-		if state := d.currentState(); state != nil {
-			unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-			if !ok {
-				writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
-				return
-			}
+		state, _, meta := d.snapshotState()
+		if state != nil {
 			instances = cloneBirdInstances(state.BirdInstances)
 			if state.RoutingReconcile != nil {
 				lastRoutingError = state.RoutingReconcile.LastError
 			}
-			unlock()
 		}
-		writeControlResponse(conn, controlResponse{
+		response := controlResponse{
 			OK:               true,
 			BirdInstances:    instances,
 			LastRoutingError: lastRoutingError,
 			Message:          "bird status",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "bird_dump":
 		if strings.ContainsAny(request.Command, "\r\n") {
 			writeControlResponse(conn, controlError(errors.New("bird_dump command must be a single line")))
@@ -702,7 +692,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			Message:  "bird dump",
 		})
 	case "routes_dump":
-		state := d.currentState()
+		state, _, meta := d.snapshotState()
 		if state == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
@@ -711,77 +701,58 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Config != nil {
 			routingInstances = append([]RoutingInstance(nil), d.Sync.App.Config.Routing.Instances...)
 		}
-		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-		if !ok {
-			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
-			return
-		}
 		if state.Network == nil {
-			unlock()
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
 		ars, err := routing.BuildAuthorizedRouteSet(state.Network, d.Sync.now())
 		if err != nil {
-			unlock()
 			writeControlResponse(conn, controlError(err))
 			return
 		}
 		routesDump := buildRoutesDumpResponse(state.ManagedZone, ars)
 		birdStates := cloneBirdInstances(state.BirdInstances)
-		unlock()
 		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdStates)
-		writeControlResponse(conn, controlResponse{
+		response := controlResponse{
 			OK:         true,
 			RoutesDump: routesDump,
 			Message:    "routes dump",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "admission_status":
-		state := d.currentState()
+		state, _, meta := d.snapshotState()
 		if state == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-		if !ok {
-			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
-			return
-		}
 		diagnosis := diagnoseAutoJoinAdmission(state, d.Sync.now())
-		unlock()
-		writeControlResponse(conn, controlResponse{
+		response := controlResponse{
 			OK:        true,
 			PeerID:    d.Sync.Config.PeerID,
 			Admission: &diagnosis,
 			Message:   "admission status",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "firewall_status":
-		state := d.currentState()
+		state, _, meta := d.snapshotState()
 		if state == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
-			return
-		}
-		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-		if !ok {
-			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
 			return
 		}
 		fwSnapshot := cloneFirewallReconcileState(state.FirewallReconcile)
-		unlock()
-		writeControlResponse(conn, controlResponse{
+		response := controlResponse{
 			OK:                true,
 			FirewallReconcile: fwSnapshot,
 			Message:           "firewall status",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "links_status":
-		state := d.currentState()
+		state, _, meta := d.snapshotState()
 		if state == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
-			return
-		}
-		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-		if !ok {
-			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
 			return
 		}
 		build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
@@ -789,44 +760,43 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		if state.IPsecReconcile != nil {
 			links.ActualSAs = append([]linkSAState(nil), state.IPsecReconcile.ActualSAs...)
 		}
-		unlock()
-		writeControlResponse(conn, controlResponse{
+		response := controlResponse{
 			OK:      true,
 			PeerID:  d.Sync.Config.PeerID,
 			Links:   links,
 			Message: "links status",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "peers_status":
-		if d.currentState() == nil {
+		if state, _, _ := d.snapshotState(); state == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		peerStatuses := d.peerStatusSnapshotForControl()
-		writeControlResponse(conn, controlResponse{
+		peerStatuses, meta := d.peerStatusSnapshotForControl()
+		response := controlResponse{
 			OK:           true,
 			PeerID:       d.Sync.Config.PeerID,
 			PeerStatuses: peerStatuses,
 			Message:      "peers status",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "revoke_status":
-		state := d.currentState()
+		state, _, meta := d.snapshotState()
 		if state == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-		if !ok {
-			writeControlResponse(conn, controlError(errors.New("daemon state lock busy")))
-			return
-		}
 		impacts := AllRevocationImpact(state, d.Sync.Config, d.Sync.now())
-		unlock()
-		writeControlResponse(conn, controlResponse{
+		response := controlResponse{
 			OK:               true,
 			PeerID:           d.Sync.Config.PeerID,
 			RevocationImpact: impacts,
 			Message:          "revoke status",
-		})
+		}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "health_status":
 		writeControlResponse(conn, controlResponse{
 			OK:      true,
@@ -1336,6 +1306,43 @@ func (d *DaemonService) currentState() *stateFile {
 	d.stateMu.Lock()
 	defer d.stateMu.Unlock()
 	return d.Sync.State
+}
+
+func (d *DaemonService) snapshotState() (*stateFile, uint64, daemonStateStoreMeta) {
+	if d == nil {
+		return nil, 0, daemonStateStoreMeta{}
+	}
+	if d.StateStore != nil {
+		state, rev := d.StateStore.Snapshot()
+		meta := d.StateStore.Meta()
+		if meta.Revision == 0 {
+			meta.Revision = rev
+		}
+		return state, rev, meta
+	}
+	state := d.currentState()
+	if state == nil {
+		return nil, 0, daemonStateStoreMeta{}
+	}
+	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
+	if !ok {
+		return nil, 0, daemonStateStoreMeta{}
+	}
+	snapshot := cloneStateFile(state)
+	unlock()
+	return snapshot, 0, daemonStateStoreMeta{}
+}
+
+func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
+	if response == nil {
+		return
+	}
+	response.StateRevision = meta.Revision
+	if !meta.SnapshotTime.IsZero() {
+		response.SnapshotTimeUnix = meta.SnapshotTime.Unix()
+	}
+	response.Dirty = meta.Dirty
+	response.ReconcileProgress = meta.ReconcileProgress
 }
 
 // setState replaces the current state pointer. When called from the event loop

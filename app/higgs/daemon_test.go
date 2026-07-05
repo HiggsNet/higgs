@@ -4105,6 +4105,62 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	}
 }
 
+func TestDaemonControlReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-committed": {
+			ID:          "link-committed",
+			GroupID:     "main",
+			PeerZone:    "node-b.catofes.",
+			ActualState: "up",
+		},
+	}
+	state.IPsecReconcile = &ipsecReconcileState{
+		LastRunUnix:  1234,
+		DesiredLinks: 1,
+		Desired: []desiredLinkState{{
+			InstanceID: "link-committed",
+			GroupID:    "main",
+			PeerZone:   "node-b.catofes.",
+			Endpoint:   "203.0.113.9:4500",
+		}},
+	}
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b": {LastSyncUnix: 1111, ObservedAddr: "198.51.100.2:7777", ObservedUntilUnix: time.Now().Add(time.Minute).Unix()},
+	}
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	committedRev := service.StateStore.Meta().Revision
+
+	state.Lock()
+	state.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
+	state.IPsecReconcile.DesiredLinks = 99
+	defer state.Unlock()
+
+	status := controlRequestViaPipe(t, service, controlRequest{Method: "status"})
+	if !status.OK {
+		t.Fatalf("status response = %#v", status)
+	}
+	if status.StateRevision != committedRev || status.LinkInstances != 1 || status.DesiredLinks != 1 {
+		t.Fatalf("status = %#v, want committed rev=%d link_instances=1 desired_links=1", status, committedRev)
+	}
+
+	links := controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
+	if !links.OK || links.Links == nil {
+		t.Fatalf("links_status response = %#v", links)
+	}
+	if links.StateRevision != committedRev || links.Links.ReplannedDesired != 1 {
+		t.Fatalf("links_status = %#v, want committed rev=%d desired=1", links, committedRev)
+	}
+
+	peers := controlRequestViaPipe(t, service, controlRequest{Method: "peers_status"})
+	if !peers.OK {
+		t.Fatalf("peers_status response = %#v", peers)
+	}
+	if peers.StateRevision != committedRev {
+		t.Fatalf("peers_status revision = %d, want %d", peers.StateRevision, committedRev)
+	}
+}
+
 func TestDaemonControlRecordGet(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	record, err := buildSignedRecordAt(state, "node-b.catofes.", "site/name", []byte(`{"name":"node-b"}`), "policy.json", time.Unix(1000, 0))
@@ -4170,6 +4226,8 @@ func controlRequestViaPipe(t *testing.T, service *DaemonService, request control
 	t.Helper()
 	client, server := net.Pipe()
 	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = server.SetDeadline(time.Now().Add(5 * time.Second))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

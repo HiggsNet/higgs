@@ -148,15 +148,10 @@ func (p *observerProvider) Status() (any, error) {
 	if d == nil || d.Sync == nil {
 		return map[string]any{"daemon_online": false}, nil
 	}
-	state := d.currentState()
+	state, _, meta := d.snapshotState()
 	if state == nil {
 		return map[string]any{"daemon_online": false}, nil
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, observer.Errorf(http.StatusServiceUnavailable, "daemon state lock busy")
-	}
-	defer unlock()
 	var linkInstances int
 	var desiredLinks int
 	var lastLinkError string
@@ -200,6 +195,10 @@ func (p *observerProvider) Status() (any, error) {
 		"managed_zone":        managedZone,
 		"listen_addr":         listenAddr,
 		"daemon_online":       true,
+		"state_revision":      meta.Revision,
+		"snapshot_time_unix":  meta.SnapshotTime.Unix(),
+		"dirty":               meta.Dirty,
+		"reconcile_progress":  meta.ReconcileProgress,
 		"known_zones":         knownZones,
 		"known_peers":         knownPeers,
 		"link_instances":      linkInstances,
@@ -226,15 +225,10 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	if d == nil || d.Sync == nil {
 		return map[string]any{"zones": []any{}}, nil
 	}
-	state := d.currentState()
+	state, _, _ := d.snapshotState()
 	if state == nil {
 		return map[string]any{"zones": []any{}}, nil
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, observer.Errorf(http.StatusServiceUnavailable, "daemon state lock busy")
-	}
-	defer unlock()
 	if state.Network == nil {
 		return map[string]any{"zones": []any{}}, nil
 	}
@@ -512,15 +506,10 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	if d == nil || d.Sync == nil {
 		return map[string]any{"peers": []any{}}, nil
 	}
-	state := d.currentState()
+	state, _, _ := d.snapshotState()
 	if state == nil {
 		return map[string]any{"peers": []any{}}, nil
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, observer.Errorf(http.StatusServiceUnavailable, "daemon state lock busy")
-	}
-	defer unlock()
 	peerIDs := make([]string, 0, len(state.SyncPeers))
 	for id := range state.SyncPeers {
 		if isLocalObserverPeer(id, d.Sync.Config, state) {
@@ -775,15 +764,10 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	if d == nil || d.Sync == nil {
 		return map[string]any{"instances": []any{}}, nil
 	}
-	state := d.currentState()
+	state, _, _ := d.snapshotState()
 	if state == nil {
 		return map[string]any{"instances": []any{}}, nil
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, observer.Errorf(http.StatusServiceUnavailable, "daemon state lock busy")
-	}
-	defer unlock()
 	build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
 	view := build.Inspection
 	// Single link detail
@@ -855,7 +839,7 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]map[str
 		}
 		return out, nil
 	}
-	state := d.currentState()
+	state, _, _ := d.snapshotState()
 	if state == nil {
 		out := make([]map[string]any, 0, len(links))
 		for _, link := range links {
@@ -863,11 +847,6 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]map[str
 		}
 		return out, nil
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, observer.Errorf(http.StatusServiceUnavailable, "daemon state lock busy")
-	}
-	defer unlock()
 	reconcile := state.IPsecReconcile
 	desiredByID := map[string]desiredLinkState{}
 	if reconcile != nil {
@@ -1025,15 +1004,10 @@ func (p *observerProvider) Routes() (any, error) {
 	if d == nil || d.Sync == nil {
 		return &routesDumpResponse{}, nil
 	}
-	state := d.currentState()
+	state, _, _ := d.snapshotState()
 	if state == nil {
 		return &routesDumpResponse{}, nil
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, observer.Errorf(http.StatusServiceUnavailable, "daemon state lock busy")
-	}
-	defer unlock()
 	now := d.Sync.now()
 	ars, _ := routing.BuildAuthorizedRouteSet(state.Network, now)
 	return buildRoutesDumpResponse(state.ManagedZone, ars), nil
@@ -1044,15 +1018,10 @@ func (p *observerProvider) Bird() (any, error) {
 	if d == nil || d.Sync == nil {
 		return map[string]any{"instances": map[string]any{}}, nil
 	}
-	state := d.currentState()
+	state, _, _ := d.snapshotState()
 	if state == nil {
 		return map[string]any{"instances": map[string]any{}}, nil
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, observer.Errorf(http.StatusServiceUnavailable, "daemon state lock busy")
-	}
-	defer unlock()
 	lastRoutingError := ""
 	if state.RoutingReconcile != nil {
 		lastRoutingError = state.RoutingReconcile.LastError

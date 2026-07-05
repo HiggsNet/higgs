@@ -140,26 +140,21 @@ func formatDuration(d time.Duration) string {
 // peerStatusSnapshotForControl returns the peer status list for a daemon
 // control API response. It is called from the control handler when the
 // `peers_status` method is invoked.
-func (d *DaemonService) peerStatusSnapshotForControl() []PeerStatusInfo {
+func (d *DaemonService) peerStatusSnapshotForControl() ([]PeerStatusInfo, daemonStateStoreMeta) {
 	if d == nil || d.Sync == nil {
-		return nil
+		return nil, daemonStateStoreMeta{}
 	}
-	state := d.currentState()
+	state, _, meta := d.snapshotState()
 	if state == nil {
-		return nil
+		return nil, meta
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil
-	}
-	defer unlock()
 	now := d.Sync.now()
 	cfg := PeerLifecycleConfig{}
 	if d.Sync.App != nil && d.Sync.App.Config != nil {
 		cfg = d.Sync.App.Config.PeerLifecycle
 	}
 	hasOverlay := d.Sync.App != nil && d.Sync.App.Config != nil && len(d.Sync.App.Config.IPsec.LinkGroups) > 0
-	return derivePeerStatuses(state, now, cfg, hasOverlay)
+	return derivePeerStatuses(state, now, cfg, hasOverlay), meta
 }
 
 // peerLifecycleCleanupZones returns peer zones that should have their Higgs
