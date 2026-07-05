@@ -8,8 +8,10 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
@@ -60,9 +62,71 @@ func debugBirdDumpWithRuntime(rt *Runtime, netnsName, command string, w io.Write
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("daemon control socket unavailable; start the daemon to dump live BIRD output")
+		dump, err := birdDumpOffline(rt, netnsName, command)
+		if err != nil {
+			return err
+		}
+		return writeDebugBirdDump(w, dump)
 	}
 	return writeDebugBirdDump(w, response.BirdDump)
+}
+
+func birdDumpOffline(rt *Runtime, netnsName, command string) (*birdDumpResponse, error) {
+	if rt == nil || rt.Config == nil {
+		return &birdDumpResponse{Instances: map[string]birdDumpInstance{}}, nil
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return nil, err
+	}
+	commands := defaultBirdDumpCommands()
+	if trimmed := strings.TrimSpace(command); trimmed != "" {
+		command = trimmed
+		commands = []string{command}
+	} else {
+		command = ""
+	}
+	response := &birdDumpResponse{Instances: map[string]birdDumpInstance{}}
+	for _, inst := range rt.Config.Routing.Instances {
+		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
+			continue
+		}
+		if netnsName != "" && inst.NetNS != netnsName && inst.ID != netnsName {
+			continue
+		}
+		controlSocket := inst.ControlSocket
+		if state != nil && state.BirdInstances != nil {
+			if bi := state.BirdInstances[inst.NetNS]; bi != nil && bi.ControlSocket != "" {
+				controlSocket = bi.ControlSocket
+			}
+		}
+		item := birdDumpInstance{
+			NetNS:         inst.NetNS,
+			InstanceID:    inst.ID,
+			ControlSocket: controlSocket,
+			Command:       command,
+			Raw:           map[string]string{},
+		}
+		if controlSocket == "" {
+			item.Error = "control socket is not configured"
+			response.Instances[inst.NetNS] = item
+			continue
+		}
+		client := bird.NewClient(controlSocket, 10*time.Second)
+		for _, cmd := range commands {
+			out, err := client.Raw(context.Background(), cmd)
+			if err != nil {
+				if item.Error == "" {
+					item.Error = err.Error()
+				}
+				item.Raw[cmd] = out
+				continue
+			}
+			item.Raw[cmd] = out
+		}
+		response.Instances[inst.NetNS] = item
+	}
+	return response, nil
 }
 
 func writeDebugBirdDump(w io.Writer, dump *birdDumpResponse) error {

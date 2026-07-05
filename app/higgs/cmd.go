@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"time"
 
@@ -26,11 +27,25 @@ func rootCommand() *cli.Command {
 			cmdRoute(),
 			cmdIPAM(),
 			cmdVerify(),
+			cmdVersion(),
 			cmdDaemon(),
 			cmdSync(),
 			cmdRecovery(),
 			cmdDebug(),
 			cmdDB(),
+		},
+	}
+}
+
+func cmdVersion() *cli.Command {
+	return &cli.Command{
+		Name:  "version",
+		Usage: "Show build version information",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: higgs version", 1)
+			}
+			return writeVersion(os.Stdout)
 		},
 	}
 }

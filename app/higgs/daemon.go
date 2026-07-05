@@ -230,6 +230,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		startFields["config_path"] = configPath()
 		startFields["state_path"] = d.Sync.App.StatePath
 	}
+	for k, v := range buildInfoFields() {
+		startFields[k] = v
+	}
 	d.logInfo("daemon", "started", startFields)
 	if d.Sync.State != nil {
 		updateAdmissionOnPending(d.Sync.State, d.Sync.now())

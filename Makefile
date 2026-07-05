@@ -6,9 +6,13 @@ BUILD_DIR := build
 GO := go
 GO_CACHE ?= /tmp/higgs-gocache
 GO_MOD_CACHE ?= /tmp/higgs-gomodcache
+GIT_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+GIT_DESCRIBE := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+GIT_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo true || echo false)
+BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Build flags
-LDFLAGS := -s -w
+LDFLAGS := -s -w -X main.buildCommit=$(GIT_COMMIT) -X main.buildDescribe=$(GIT_DESCRIBE) -X main.buildDirty=$(GIT_DIRTY) -X main.buildTime=$(BUILD_TIME)
 CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
 SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
