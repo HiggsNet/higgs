@@ -863,6 +863,9 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 }
 
 func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
+	if event.Type == daemonEventPacket {
+		return daemonEventResult{Error: d.handlePacketEvent(event.Packet, controlContext(event.Context))}, false, false
+	}
 	unlock := d.lockState()
 	defer unlock()
 	switch event.Type {
@@ -911,8 +914,6 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventRootInit:
 		rootKey, err := d.handleRootInitEvent()
 		return daemonEventResult{Zone: zone.RootZone, RootPublicKey: rootKey, Error: err}, false, false
-	case daemonEventPacket:
-		return daemonEventResult{Error: d.handlePacketEvent(event.Packet, controlContext(event.Context))}, false, false
 	case daemonEventSyncTimer:
 		return daemonEventResult{Error: d.handleSyncTimerEvent(controlContext(event.Context), event.ForceSync)}, false, false
 	case daemonEventEndpointTimer:
@@ -1164,12 +1165,10 @@ func (d *DaemonService) handleRootInitEvent() ([]byte, error) {
 	return nil, errors.New("root init via daemon is only valid before a daemon has loaded state; stop the daemon and run root init as recovery/direct initialization")
 }
 
-// processPacketEvent locks the current state and then dispatches to
-// handlePacketEvent. It is used by tests and other callers that bypass the
-// main Events channel.
+// processPacketEvent dispatches packet handling without taking the live state
+// lock. Packet fast-path updates are serialized by the daemon event loop and
+// published to the committed snapshot after handling.
 func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
-	unlock := d.lockState()
-	defer unlock()
 	return d.handlePacketEvent(packet, ctx)
 }
 
@@ -1177,7 +1176,9 @@ func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Con
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
-	return d.handlePacketEventSyncSession(packet, ctx)
+	err := d.handlePacketEventSyncSession(packet, ctx)
+	d.publishCommittedStateSnapshot()
+	return err
 }
 
 func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {

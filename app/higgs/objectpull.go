@@ -232,17 +232,15 @@ func objectPullClientDeadlineUntil(deadline time.Time, maxTimeout time.Duration)
 }
 
 // objectPullLookup returns a function that can be passed to objectPullTCPServe.
-// It accepts a getter so that the daemon can reload state without invalidating
-// the closure. The returned handler holds the state read lock while reading
-// Network and SyncPeers.
+// It accepts a snapshot getter so that the daemon can reload state without
+// invalidating the closure. The returned handler reads only its private
+// snapshot and does not acquire the live state lock.
 func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 	return func(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		state := getState()
 		if state == nil || req == nil || !req.Zone.Valid() {
 			return &gossip.ObjectPullResponse{Error: "invalid request"}
 		}
-		state.RLock()
-		defer state.RUnlock()
 		if state.Network == nil {
 			return &gossip.ObjectPullResponse{Error: "invalid request"}
 		}
@@ -475,7 +473,10 @@ func startObjectPullServer(d *DaemonService) (net.Listener, error) {
 	if addr == "" {
 		return nil, nil
 	}
-	listener, err := objectPullTCPServe(addr, objectPullLookup(func() *stateFile { return d.currentState() }))
+	listener, err := objectPullTCPServe(addr, objectPullLookup(func() *stateFile {
+		state, _, _ := d.snapshotState()
+		return state
+	}))
 	if err != nil {
 		return nil, err
 	}

@@ -4161,6 +4161,43 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *tes
 	}
 }
 
+func TestDaemonPacketEventDoesNotWaitForLiveStateLock(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	packet := &gossip.Packet{
+		Addr: &net.UDPAddr{IP: net.ParseIP("198.51.100.9"), Port: 33434},
+		Message: &gossip.Message{
+			Type:   gossip.MessagePong,
+			PeerID: "node-b.catofes.",
+			Pong:   &gossip.Pong{},
+		},
+	}
+
+	state.Lock()
+	done := make(chan daemonEventResult, 1)
+	go func() {
+		result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: context.Background()})
+		done <- result
+	}()
+
+	select {
+	case result := <-done:
+		if result.Error != nil {
+			t.Fatalf("packet event error: %v", result.Error)
+		}
+	case <-time.After(time.Second):
+		state.Unlock()
+		t.Fatal("packet event blocked behind live state lock")
+	}
+	state.Unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	peerState := snapshot.SyncPeers["node-b.catofes."]
+	if peerState.ObservedAddr != "198.51.100.9:33434" {
+		t.Fatalf("observed addr = %q, want packet source", peerState.ObservedAddr)
+	}
+}
+
 func TestDaemonControlRecordGet(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	record, err := buildSignedRecordAt(state, "node-b.catofes.", "site/name", []byte(`{"name":"node-b"}`), "policy.json", time.Unix(1000, 0))
