@@ -12,31 +12,6 @@
 - [x] Phase 5：BIRD Babel、route authorization、per-netns BIRD 配置模型、routing debug 和 dry-run smoke 基座。
 - [x] Phase 6.0-6.7.6：事件驱动控制面、IPAM、准入诊断、防火墙、动态 peer、撤销清理、链路健康和 Observer MVP 主线。
 
-## Phase 5: BIRD Babel 路由 + Route Authorization Filter（归档后仅保留后续项）
-
-**状态：** 第一版 BIRD/Babel、route authorization、per-netns BIRD 和 dry-run smoke 已完成；完整展开清单见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
-
-**剩余后续：**
-- [x] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）。
-- [x] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图。
-  - 已在 `routes_dump` / `debug routes` / `debug route <prefix>` 接入 BIRD live route cross-view，按 prefix 标注 selected、authorized exact match、assignment/import 范围命中和来源 zone。
-- [x] managed BIRD 默认随 Higgs daemon 退出保持运行，重启后 adopt，避免 Babel 邻居和路由因控制面重启出现静默期；如需实验室 teardown 可显式配置 `shutdown_policy: stop`。
-- [x] restart/adopt smoke 随真实 BIRD 数据面补齐：daemon 默认退出不停止 managed BIRD，新 daemon/process manager 通过 pidfile/control socket adopt 原进程，避免 Babel 会话被控制面重启打断。
-- [x] negative smoke 随真实 BIRD 数据面补齐：用真实 BIRD 验证未授权 prefix 不被 import/selected/安装。
-- [ ] 跨数据面 rotate smoke（远期增强）：结合端口/IPsec rotate 与真实 BIRD route/metric 观测验证数据面切换窗口；不阻塞 Phase 5 收尾。
-
-## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（归档后仅保留后续项）
-
-**状态：** 6.0-6.7.6 主线已完成并归档到 [docs/roadmap-archive.md](docs/roadmap-archive.md)：事件驱动 daemon/sync FSM、endpoint 可达性修复、IPAM 闭环、auto-join 诊断、防火墙同步、动态 peer 管理、撤销清理、链路健康检测、Observer 只读控制台 MVP 均已落地。当前 Phase 6 只保留远期增强 smoke 与 6.7.7 模块化重构，不表示 6.3/6.6 主线未完成。
-
-**剩余后续：**
-- [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
-- [x] 6.1.8 anycast smoke：多节点宣告同一 anycast 前缀，验证 Babel 多候选路由和故障切换；暂不声明 ECMP 多 nexthop。
-- [x] firewall root/container 增强 smoke：overlay netns + veth + BIRD 下验证 default drop、合法 prefix 放行、非法 prefix drop、revocation 断流、port rotate redirect grace。
-- [x] health root + metrics 增强 smoke：覆盖 probe state、OpenMetrics render、本地 spool/series、真实 BIRD selected route 进入 rotate cutover gate。
-- [x] health container / fault-injection 增强 smoke：在真实 XFRM+BIRD 链路上注入丢包/延迟，验证状态切换、BIRD metric/cutover gate 和数据面恢复。
-- [ ] 6.7 Observer 增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析，作为后续增强，不阻塞当前主线。
-
 - [ ] **6.7.7 `app/higgs` 模块化重构（Observer/debug 先行）**
   - **设计文档：** `docs/app-higgs-modularization-design.md`
   - 目标：以 Observer/debug/inspect 为第一批切入点，启动 `app/higgs` 模块化重构；后续把 health、routing、revocation、peer lifecycle、firewall、IPsec reconcile、sync runtime 等应用子系统逐步下沉到 internal 模块，避免所有逻辑长期堆在 `app/higgs` executable 包。
@@ -226,6 +201,12 @@
   - route-table auditor 仅作为可选兜底，用于交叉检查 Higgs authorized route set、BIRD learned/installed routes 与内核 route table 是否一致。
   - 若未来开始 apply table routes/rules，必须同时实现 teardown/revocation 对 Higgs-owned routes/rules 的 owner-guarded 清理。
 
+## Phase 7 之后的远期后续
+
+- [ ] 跨数据面 rotate smoke：结合端口/IPsec rotate 与真实 BIRD route/metric 观测验证数据面切换窗口；不阻塞 Phase 5/6 收尾。
+- [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
+- [ ] Observer 增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析。
+
 ## Phase 8: 应用层服务网格与代理（远期规划）
 
 **目标：** 在 Higgs L3 mesh 之上支持应用代理层的策略源站选路，让 Higgs 不仅提供节点间连通性，还能作为服务发现、策略分发和选路决策的基础设施。
@@ -275,5 +256,3 @@
 2. 继续 Phase 6.7.7 `app/higgs` 模块化重构：优先补齐 `internal/inspect` / `inspect/text` 骨架，把 `debug links` 与 Observer links 的共用 read model 扩展成可迁移模式；该 read model 后续直接消费 StateStore snapshot。
 3. 第二步抽 zone/record/authority 展示逻辑，复用到 `zone show` / `debug zone` / Observer zone detail，避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
 4. 第三步抽 peer endpoints，再逐步迁移 routes/BIRD/health/revocation/admission/firewall 的诊断 presenter 和 reason 推理。
-5. 补 state 文件外部协调：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
-6. Phase 5 后续按需补真实 BIRD 数据面 negative/rotate/restart smoke。

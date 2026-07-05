@@ -708,7 +708,7 @@
     - [x] container smoke 全量回归：`TestDaemonStrongSwanPortRotationSmoke` 通过；`TestSystemXFRMDriverPeerTunnelPingSmoke` 因容器/LXC 内 IPv6/xfrm 邻居解析限制失败，判定为与 4.4 无关的既有环境问题，已在容器 smoke 中通过 `HIGGS_IPSEC_XFRM_SMOKE_CONTAINER=1` 跳过该用例，其余 XFRM/StrongSwan/daemon smoke 继续运行。
       - 2026-06-12 container root 实验确认：共享 XFRM interface/同一 if_id/同一 traffic selector 下，“先建 staged CHILD_SA 再清旧 SA”会被 StrongSwan/内核策略拒绝，VICI `initiate` 返回 `establishing CHILD_SA ... failed`；真正无中断平滑切换后续只能走 A) staged generation 使用独立 XFRM interface/if_id，commit 时切换 route，或 C) Phase 6/7 DNAT/redirect grace，由防火墙 owner 管理新旧端口转发。
 
-- [x] **4.4.x 真正平滑 rotate / staged transition（后续重要工作）**
+- [x] **4.4.x 真正平滑 rotate / staged transition（已归档）**
   - 目标：在不先打断当前可用 SA 的前提下，把 current/previous grace 变成系统层可执行的 staged transition；用户可见语义应是 zero-downtime 或接近 zero-downtime 的切换，而不是 bounded break-before-make。
   - 方案 A：为 staged generation 使用独立 XFRM interface/`if_id` 与独立 CHILD_SA，待新 SA established 且 tunnel/health check 通过后交给 Babel 层完成切换：新 link 以正常/更优 metric 加入，旧 link 在 grace 窗口内保留但调高 metric，等 Babel 邻居与路由收敛后再清理旧 generation。需要明确 route/interface ownership、BIRD interface pattern 自动发现语义、双 interface 期间的 metric/邻居收敛、daemon restart recovery 和 stale generation cleanup。
     - [x] IPsec staged generation 必须派生独立 `TransportID`、XFRM `if_id` 和 interface name；`prepare_rotate` 不再 terminate 旧 SA，旧 generation 在 staged 建立期间保持可用。
@@ -724,7 +724,8 @@
       - 2026-06-13 已补 reconcile 守卫：secondary-standby 在 staged/`dual_running` rotate deadline 未到期时返回 `rotate_staged_active` / `rotate_retention_active` noop，不触发 takeover；新增单测覆盖超过 takeover delay 但仍处于 retention 窗口时保持 standby。
     - [x] 后续 Phase 5 接 Babel 时增加 route manager 回调/状态输入，避免 IPsec reconcile 在 Babel 尚未收敛前过早清理旧 generation。
       - 2026-06-13 已在 `ReconcileInputs` 增加 `RotateCutoverReady` per-instance 门闩：默认未接 route manager 时沿用 retention 到期 commit；Phase 5 route/Babel manager 可显式置为 false，让 `dual_running` 即使 retention 到期也继续保留旧 generation，直到 Babel metric/邻居/路由收敛后再允许 `commit_rotate`。
-      - 2026-07-03 已把 health manager 的 `RotateCutoverReadiness()` 接入 daemon IPsec reconcile；BIRD metric/邻居/路由收敛反馈仍由 Phase 5 后续项跟踪。
+      - 2026-07-03 已把 health manager 的 `RotateCutoverReadiness()` 接入 daemon IPsec reconcile。
+      - 2026-07-05 已把 BIRD staged interface 的 Babel neighbor / selected route 观测接入 health readiness，数据面 rotate 的 BIRD gate 基座完成；跨数据面 rotate smoke 降级为 Phase 7 之后远期增强。
   - 配置边界必须明确，避免把两类 rotate 混在一起：
     - `ipsec.port_mode` / `ipsec.port_range` / `ipsec.port_rotate_interval` / `ipsec.port_previous_grace` 是本节点公开的 IKE/NAT-T **入口端口 generation 策略**，决定本节点何时选择/公告 current port、previous port grace 多久；它主要影响 responder/inbound 入口和远端 planner 如何选择 ContactPoint。
     - `overlays[].reconcile.rotate_retention` 是本地 overlay link 的 **数据面旧 generation 保留窗口**，决定 staged CHILD_SA/XFRM link 已建立后，本机旧 SA/interface 继续保留多久给 Babel metric 收敛和回滚使用；默认 1h。它不负责让 charon 同时监听 old/current port。
@@ -733,7 +734,7 @@
   - 多 charon/socket/listener 暂不作为主线：只保留为极端部署 fallback。当前优先保持单 VICI socket、单 swanctl 配置树和 host firewall redirect grace，避免提前引入多 charon 生命周期和 XFRM/policy 互扰问题。
   - 决策点：优先走 A + DNAT grace + health/Babel gate 三层组合。IPsec staged generation 负责并行承载新旧 CHILD_SA/XFRM link；DNAT/redirect grace 负责 inbound 入口端口平滑；health/Babel gate 负责健康判断、metric 提升与流量迁移。
   - 验证要求：root/container smoke 必须覆盖旧 SA 保持可用、新 SA 并行建立、切换期间连续 tunnel ping 或允许的最大丢包窗口、失败回滚仍保持旧路径、daemon 重启恢复、revocation/policy deny 仍强制 teardown。
-  - 归档边界：IPsec staged generation、host redirect grace 和 health cutover gate 已形成当前平滑 rotate 基座；完整 BIRD 数据面 metric/邻居/路由收敛接线继续保留在 Phase 5 后续清单。
+  - 归档边界：IPsec staged generation、host redirect grace、health cutover gate 和 BIRD staged route readiness 已形成当前平滑 rotate 基座；跨数据面 rotate smoke 作为 Phase 7 之后远期增强保留。
 
 - [x] **4.5 Bidirectional 首拨失败接管（生产健壮性）**
   - 目标：双方 `role=both` 时，先使用稳定 tie-break 选出 primary initiator，避免正常情况下双向同时拨号；但当 primary 长时间无法建立 IKE_SA/CHILD_SA 时，secondary 可以有边界地接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达/单侧防火墙或单侧 NAT 映射异常上。
@@ -825,7 +826,7 @@
 - [x] **5.4 策略路由与路由表 ownership（第一版）**
   - [x] BIRD config 支持 `kernel table <id>` 和非 main internal table；默认仍使用 main table（独立 netns 隔离）。
   - [x] ECMP：`ecmp on limit 16` 已写入 bird.conf。
-  - [ ] `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出留到 Phase 5 后续 / Phase 6。
+  - [ ] `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出已降级为 Phase 7.12 远期增强。
   - [ ] 多 overlay 共享同一 netns 时的 table/rule 隔离留到后续。
   - [ ] teardown/revocation 对 table routes/rules 的 owner-guarded 清理随策略路由一起补齐。
 
@@ -835,14 +836,17 @@
   - [x] `higgs debug route <prefix>`：解释前缀的授权状态、宣告来源、assignment 依据。
   - [x] `higgs debug links` 扩展 `routing:` 列：bird_state、bird_neighbors、bird_best_routes。
   - [x] control method `bird_status` / `routes_dump` 已加入；daemon status 已包含 routing reconcile last error。
-  - [ ] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）留到后续。
-  - [ ] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图待真实 BIRD 观测接线后补齐。
+  - [x] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）已补齐。
+  - [x] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图已补齐：`routes_dump` / `debug routes` / `debug route <prefix>` 接入 BIRD live route cross-view，按 prefix 标注 selected、authorized exact match、assignment/import 范围命中和来源 zone。
 
 - [x] **5.6 闭环验证（第一版）**
   - [x] 单元测试：`StableRouterID`、`AuthorizedRouteSet`（assignment/announcement/撤销/重叠/default route）、BIRD config/filter、birdc client、process manager、daemon routing reconcile。
   - [x] dry-run smoke：`make routing-dry-run-smoke` 验证两节点 route authorization + BIRD config 生成。
   - [x] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）：已增加 `make bird-babel-smoke` / `make bird-babel-container-smoke` 基础设施和 Go root smoke 测试骨架（`HIGGS_BIRD_SMOKE=1`），覆盖 managed BIRD lifecycle、两节点 Babel 邻居+路由学习、daemon routing reconcile、veth upstream。完整 3 节点 + StrongSwan/XFRM + managed BIRD 联合 smoke 仍待后续接入。
-  - [ ] negative smoke、rotate smoke、restart smoke 随真实 BIRD 数据面和策略路由一起补齐。
+  - [x] managed BIRD 默认随 Higgs daemon 退出保持运行，重启后 adopt；如需实验室 teardown 可显式配置 `shutdown_policy: stop`。
+  - [x] restart/adopt smoke 随真实 BIRD 数据面补齐：daemon 默认退出不停止 managed BIRD，新 daemon/process manager 通过 pidfile/control socket adopt 原进程，避免 Babel 会话被控制面重启打断。
+  - [x] negative smoke 随真实 BIRD 数据面补齐：用真实 BIRD 验证未授权 prefix 不被 import/selected/安装。
+  - [ ] 跨数据面 rotate smoke 已降级为 Phase 7 之后远期增强：结合端口/IPsec rotate 与真实 BIRD route/metric 观测验证数据面切换窗口。
 
 - [x] **5.7 BIRD 从 per-overlay 改为 per-netns（配置模型重构）**
   - 设计文档：`docs/phase5-7-per-netns-bird-design.md`（完整调研与安全分析）、`docs/design.md` Phase 5 netns 章节、`docs/phase6-ipam-design.md` 第 13 章。
@@ -871,7 +875,7 @@
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（已完成主线归档）
 
-**归档状态：** Phase 6 主线 6.0-6.7.6 已从主 `todo.md` 移出；主 TODO 只保留未闭环后续项和 6.7.7 `app/higgs` 模块化重构。完整实现细节可回看对应设计文档：`docs/phase6-event-driven-design.md`、`docs/phase6-ipam-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`。
+**归档状态：** Phase 6 主线 6.0-6.7.6 和增强 smoke 已从主 `todo.md` 移出；主 TODO 只保留 6.7.7 `app/higgs` 模块化重构以及 Phase 7 之后的远期后续。完整实现细节可回看对应设计文档：`docs/phase6-event-driven-design.md`、`docs/phase6-ipam-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`。
 
 - [x] **6.0 事件驱动控制面重构**
   - [x] 默认启用 event loop + `SyncSession` FSM；packet demux、timer manager、异步 object pull、UDP chunk fallback、relay fanout 均接入事件循环。
@@ -948,3 +952,11 @@
   - [x] REST API 覆盖 status、zones、peers、links、health、health series、本地 routes、BIRD；统一 `{ok,error,data}` 响应并过滤敏感字段。
   - [x] Go embed 静态 UI、SSE `/api/v1/events`、轮询 fallback、Health sparkline、本地 spool 查询、raw JSON view 已完成。
   - [x] `make observer-smoke` 纳入 `smoke-all`；README 和 `docs/web-status-dashboard-design.md` 已标注 MVP 已实现与只读安全边界。
+
+- [x] **6.x 增强 smoke 收尾**
+  - [x] 6.1.8 anycast smoke：多节点宣告同一 anycast 前缀，验证 Babel 多候选路由和故障切换；暂不声明 ECMP 多 nexthop。
+  - [x] firewall root/container 增强 smoke：overlay netns + veth + BIRD 下验证 default drop、合法 prefix 放行、非法 prefix drop、revocation 断流、port rotate redirect grace。
+  - [x] health root + metrics 增强 smoke：覆盖 probe state、OpenMetrics render、本地 spool/series、真实 BIRD selected route 进入 rotate cutover gate。
+  - [x] health container / fault-injection 增强 smoke：在真实 XFRM+BIRD 链路上注入丢包/延迟，验证状态切换、BIRD metric/cutover gate 和数据面恢复。
+  - [ ] state 文件外部协调补强已降级为 Phase 7 之后远期增强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
+  - [ ] Observer 深度增强已降级为 Phase 7 之后远期增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析。
