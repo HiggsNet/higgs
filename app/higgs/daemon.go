@@ -69,28 +69,29 @@ type DaemonHooks struct {
 type daemonEventType string
 
 const (
-	controlConnDeadline                             = 10 * time.Second
-	stateReadLockTimeout                            = 2 * time.Second
-	defaultDaemonInterval                           = 60 * time.Second
-	defaultIPsecReconcileInterval                   = time.Minute
-	daemonEventRecordPut            daemonEventType = "record_put"
-	daemonEventDelegateIssue        daemonEventType = "delegate_issue"
-	daemonEventDelegateRevoke       daemonEventType = "delegate_revoke"
-	daemonEventAuthorityGrant       daemonEventType = "authority_grant"
-	daemonEventRecoveryImportZone   daemonEventType = "recovery_import_zone"
-	daemonEventRecoveryPurgeRevoked daemonEventType = "recovery_purge_revoked"
-	daemonEventJoinAccept           daemonEventType = "join_accept"
-	daemonEventRootInit             daemonEventType = "root_init"
-	daemonEventPacket               daemonEventType = "packet"
-	daemonEventSyncTimer            daemonEventType = "timer_sync"
-	daemonEventEndpointTimer        daemonEventType = "timer_endpoint_publish"
-	daemonEventSyncTrigger          daemonEventType = "sync_trigger"
-	daemonEventReloadConfig         daemonEventType = "reload_config"
-	daemonEventRoutingReload        daemonEventType = "routing_reload"
-	daemonEventIPsecCleanup         daemonEventType = "ipsec_cleanup"
-	daemonEventIPsecPortRotate      daemonEventType = "ipsec_port_rotate"
-	daemonEventIPsecLifecycle       daemonEventType = "ipsec_lifecycle"
-	daemonEventShutdown             daemonEventType = "shutdown"
+	controlConnDeadline                              = 10 * time.Second
+	stateReadLockTimeout                             = 2 * time.Second
+	defaultReconcileOperationTimeout                 = 20 * time.Second
+	defaultDaemonInterval                            = 60 * time.Second
+	defaultIPsecReconcileInterval                    = time.Minute
+	daemonEventRecordPut             daemonEventType = "record_put"
+	daemonEventDelegateIssue         daemonEventType = "delegate_issue"
+	daemonEventDelegateRevoke        daemonEventType = "delegate_revoke"
+	daemonEventAuthorityGrant        daemonEventType = "authority_grant"
+	daemonEventRecoveryImportZone    daemonEventType = "recovery_import_zone"
+	daemonEventRecoveryPurgeRevoked  daemonEventType = "recovery_purge_revoked"
+	daemonEventJoinAccept            daemonEventType = "join_accept"
+	daemonEventRootInit              daemonEventType = "root_init"
+	daemonEventPacket                daemonEventType = "packet"
+	daemonEventSyncTimer             daemonEventType = "timer_sync"
+	daemonEventEndpointTimer         daemonEventType = "timer_endpoint_publish"
+	daemonEventSyncTrigger           daemonEventType = "sync_trigger"
+	daemonEventReloadConfig          daemonEventType = "reload_config"
+	daemonEventRoutingReload         daemonEventType = "routing_reload"
+	daemonEventIPsecCleanup          daemonEventType = "ipsec_cleanup"
+	daemonEventIPsecPortRotate       daemonEventType = "ipsec_port_rotate"
+	daemonEventIPsecLifecycle        daemonEventType = "ipsec_lifecycle"
+	daemonEventShutdown              daemonEventType = "shutdown"
 )
 
 type daemonEvent struct {
@@ -1391,7 +1392,7 @@ func (d *DaemonService) notifyStateChanged() {
 	// computed without revoked entries.
 	d.flushRevocationCleanup()
 
-	if d.drainingEvents {
+	if d.drainingEvents || d.hasStateLock() {
 		d.ipsecDirty = true
 		d.routingDirty = true
 		d.firewallDirty = true
@@ -1483,7 +1484,9 @@ func (d *DaemonService) flushRoutingReconcile(ctx context.Context) bool {
 	}
 	d.routingDirty = false
 	d.noteReconcileFlush("routing")
-	if err := d.reconcileRouting(ctx); err != nil {
+	reconcileCtx, cancel := boundedReconcileContext(ctx)
+	defer cancel()
+	if err := d.reconcileRouting(reconcileCtx); err != nil {
 		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
 	}
 	return true
@@ -1507,19 +1510,31 @@ func nextRoutingReconcileTime(now time.Time, interval time.Duration) time.Time {
 	return now.Add(interval)
 }
 
+func boundedReconcileContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultReconcileOperationTimeout)
+}
+
 func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
 	if d == nil || !d.ipsecDirty {
 		return false
 	}
 	d.ipsecDirty = false
 	d.noteReconcileFlush("ipsec")
-	if err := d.reconcileIPsecLinks(ctx); err != nil {
+	reconcileCtx, cancel := boundedReconcileContext(ctx)
+	defer cancel()
+	if err := d.reconcileIPsecLinks(reconcileCtx); err != nil {
 		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
 	}
 	// Phase 6.6: after IPsec reconcile, refresh health probe targets and
 	// dispatch any due probes. This keeps the probe scheduler in sync with
 	// link create/update/teardown without adding a separate timer path.
-	d.reconcileHealth(ctx)
+	d.reconcileHealth(reconcileCtx)
 	return true
 }
 

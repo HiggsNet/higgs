@@ -60,6 +60,26 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 	}
 }
 
+func TestDaemonNotifyStateChangedDefersReconcileWhileStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	var flushed []string
+	service.Hooks.OnReconcileFlush = func(layer string) {
+		flushed = append(flushed, layer)
+	}
+
+	unlock := service.lockState()
+	service.notifyStateChanged()
+	unlock()
+
+	if len(flushed) != 0 {
+		t.Fatalf("reconcile flushed while state lock was held: %v", flushed)
+	}
+	if !service.ipsecDirty || !service.routingDirty || !service.firewallDirty {
+		t.Fatalf("dirty flags = ipsec:%v routing:%v firewall:%v, want all true", service.ipsecDirty, service.routingDirty, service.firewallDirty)
+	}
+}
+
 func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4000, 0)
@@ -2155,9 +2175,12 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	}
 	service := newDaemonService(rt, state, config, time.Second)
 
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
+	reply := make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
+	syncNow, shutdown, _, _, _ := service.processEvents(context.Background())
+	result := <-reply
 	if result.Error != nil {
-		t.Fatalf("handleEvent(reload initial): %v", result.Error)
+		t.Fatalf("processEvents(reload initial): %v", result.Error)
 	}
 	if !syncNow || shutdown {
 		t.Fatalf("initial reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
@@ -2190,9 +2213,12 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 		t.Fatalf("WriteFile(reloaded config): %v", err)
 	}
 
-	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
+	reply = make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
+	syncNow, shutdown, _, _, _ = service.processEvents(context.Background())
+	result = <-reply
 	if result.Error != nil {
-		t.Fatalf("handleEvent(reload overlay): %v", result.Error)
+		t.Fatalf("processEvents(reload overlay): %v", result.Error)
 	}
 	if !syncNow || shutdown {
 		t.Fatalf("overlay reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
