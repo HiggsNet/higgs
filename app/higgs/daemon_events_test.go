@@ -103,6 +103,60 @@ func TestDaemonRecordPutUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	}
 }
 
+func TestDaemonEventLoopRecordPutDoesNotWaitForLiveStateLock(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2125, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	reply := make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{
+		Type: daemonEventRecordPut,
+		RecordPut: &daemonRecordPut{
+			Zone:  zone.ZonePath("node-b.catofes."),
+			Key:   "event-loop-record",
+			Value: []byte("store"),
+			Type:  "policy.string",
+		},
+		Reply: reply,
+	}
+	unlock := service.lockState()
+	done := make(chan daemonEventResult, 1)
+	go func() {
+		service.processEvents(context.Background())
+		done <- <-reply
+	}()
+
+	select {
+	case result := <-done:
+		if result.Error != nil {
+			unlock()
+			t.Fatalf("processEvents(record_put): %v", result.Error)
+		}
+	case <-time.After(time.Second):
+		unlock()
+		t.Fatal("record_put event blocked behind live state lock")
+	}
+	current := service.currentState()
+	if current == state {
+		unlock()
+		t.Fatal("live state pointer did not transfer to committed state")
+	}
+	unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	if got := snapshot.Network.Zones["node-b.catofes."].Records["event-loop-record"]; got == nil {
+		t.Fatal("committed snapshot missing event-loop record")
+	}
+}
+
 func TestDaemonEndpointTimerUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."

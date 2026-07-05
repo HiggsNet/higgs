@@ -311,9 +311,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			forceSync = true
 			d.Sync.updateDiscoveredPeers()
 			d.notifyStateChanged()
-			// setState acquired the lock on the new state; release it before the
-			// next iteration so handleEvent can lock the current state.
-			d.releaseStateLock()
 		}
 		if !now.Before(nextEndpointPublish) {
 			result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
@@ -864,8 +861,6 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	if event.Type == daemonEventPacket {
 		return daemonEventResult{Error: d.handlePacketEvent(event.Packet, controlContext(event.Context))}, false, false
 	}
-	unlock := d.lockState()
-	defer unlock()
 	switch event.Type {
 	case daemonEventRecordPut:
 		version, err := d.handleRecordPutEvent(event.RecordPut)
@@ -1056,29 +1051,19 @@ func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason str
 }
 
 func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
-	if d == nil || d.Sync == nil || fn == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	latest, err := d.Sync.loadState()
 	if err != nil {
 		return err
 	}
-	if d.StateStore == nil {
-		d.setState(latest)
-		if err := fn(d.Sync.State); err != nil {
-			return err
-		}
-		if err := d.Sync.saveState(); err != nil {
-			return err
-		}
-	} else {
-		d.StateStore.ReplaceCommitted(latest)
-		if _, err := d.StateStore.Update(fn); err != nil {
-			return err
-		}
-		if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
-			return err
-		}
+	d.StateStore.ReplaceCommitted(latest)
+	if _, err := d.StateStore.Update(fn); err != nil {
+		return err
+	}
+	if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+		return err
 	}
 	if d.Sync.Transport != nil {
 		d.Sync.updateDiscoveredPeers()
@@ -1097,26 +1082,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 		return nil, err
 	}
 	if d.StateStore == nil {
-		d.setState(latest)
-		plan, err := planPurgeRevokedZones(d.Sync.State, d.Sync.App.Now(), target)
-		if err != nil {
-			return nil, err
-		}
-		if !apply {
-			return plan, nil
-		}
-		if err := d.cleanupPurgePlanIPsecLinks(ctx, d.Sync.State, plan); err != nil {
-			return nil, err
-		}
-		executePurgePlan(d.Sync.State, plan)
-		if err := d.Sync.saveState(); err != nil {
-			return nil, err
-		}
-		if d.Sync.Transport != nil {
-			d.Sync.updateDiscoveredPeers()
-		}
-		d.notifyStateChanged()
-		return plan, nil
+		return nil, errors.New("daemon service is not initialized")
 	}
 	d.StateStore.ReplaceCommitted(latest)
 	if !apply {
@@ -1262,29 +1228,7 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 		return 0, err
 	}
 	if d.StateStore == nil {
-		d.setState(latest)
-		record, err := buildSignedRecordAt(d.Sync.State, event.Zone, event.Key, event.Value, event.Type, d.Sync.now())
-		if err != nil {
-			return 0, err
-		}
-		if err := d.Sync.State.Network.Put(record); err != nil {
-			return 0, err
-		}
-		if zs := d.Sync.State.Network.Zones[event.Zone]; zs != nil {
-			d.logInfo("daemon", "record_put_persist", map[string]any{
-				"zone":         event.Zone,
-				"key":          event.Key,
-				"record_count": len(zs.Records),
-			})
-		}
-		if err := d.Sync.saveState(); err != nil {
-			return 0, err
-		}
-		if d.Sync.Transport != nil {
-			d.Sync.updateDiscoveredPeers()
-		}
-		d.notifyStateChanged()
-		return record.Version, nil
+		return 0, errors.New("daemon service is not initialized")
 	}
 	d.StateStore.ReplaceCommitted(latest)
 	var version uint64
@@ -1405,23 +1349,6 @@ func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
 	}
 	response.Dirty = meta.Dirty
 	response.ReconcileProgress = meta.ReconcileProgress
-}
-
-// releaseStateLock releases the state pointer currently locked by lockState.
-// Most callers should use the closure returned by lockState; this exists for
-// event-loop paths that need to drop the lock before continuing.
-func (d *DaemonService) releaseStateLock() {
-	if d == nil {
-		return
-	}
-	d.stateMu.Lock()
-	locked := d.lockedState
-	d.stateLocked = false
-	d.lockedState = nil
-	d.stateMu.Unlock()
-	if locked != nil {
-		locked.Unlock()
-	}
 }
 
 func (d *DaemonService) setState(state *stateFile) {

@@ -47,6 +47,51 @@ func TestHandleSyncEventCommitsPeerDiagnosticsToStateStore(t *testing.T) {
 	}
 }
 
+func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2120, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	peerID := "node-b.catofes."
+	service.syncSessions[peerID] = NewSyncSession(peerID)
+
+	unlock := service.lockState()
+	done := make(chan struct{})
+	go func() {
+		service.handleSyncEvent(context.Background(), &CatalogSummaryReceivedEvent{
+			PeerID: peerID,
+			Summary: &gossip.CatalogSummary{
+				CatalogRoot: []byte{0x31, 0x32},
+				ZoneCount:   3,
+			},
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		unlock()
+		t.Fatal("handleSyncEvent blocked behind live state lock")
+	}
+	unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	peerState := snapshot.SyncPeers[peerID]
+	if peerState.DatagramStats == nil || peerState.DatagramStats.LastCatalogRootHex != "3132" {
+		t.Fatalf("catalog stats = %+v, want committed summary", peerState.DatagramStats)
+	}
+	if peerState.ActivePullState != string(SyncSessionCatalogDiffing) {
+		t.Fatalf("active pull state = %q, want catalog diffing", peerState.ActivePullState)
+	}
+}
+
 func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	base, config := buildTestNetworkState(t)
 	state := cloneStateFile(base)

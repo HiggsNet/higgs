@@ -386,8 +386,6 @@ func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gos
 }
 
 func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
-	unlock := d.lockState()
-	defer unlock()
 	peerID := syncEventPeerID(event)
 	if peerID == "" {
 		d.logDebug("sync", "event_dropped", map[string]any{"reason": "no_peer_id"})
@@ -418,8 +416,11 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 			recordCatalogSummary(state, peerID, e.Summary, d.Sync.now())
 		})
 	case *CatalogPageReceivedEvent:
-		e.LocalEntries = gossip.ZoneDigests(d.Sync.State.Network)
-		e.Page = filterRemoteCatalogPage(d.Sync.State, peerID, e.Page, d.Sync.now())
+		snapshot, _, _ := d.snapshotState()
+		if snapshot != nil && snapshot.Network != nil {
+			e.LocalEntries = gossip.ZoneDigests(snapshot.Network)
+			e.Page = filterRemoteCatalogPage(snapshot, peerID, e.Page, d.Sync.now())
+		}
 		d.recordSyncPeerState(peerID, "catalog_page", func(state *stateFile) {
 			recordCatalogPage(state, peerID, e.Page, d.Sync.now())
 		})
@@ -514,19 +515,7 @@ func syncEventPeerID(event SyncEvent) string {
 }
 
 func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*stateFile)) {
-	if d == nil || d.Sync == nil || fn == nil {
-		return
-	}
-	liveLocked := d.hasStateLock()
-	if d.Sync.State != nil && liveLocked {
-		fn(d.Sync.State)
-	}
-	if d.StateStore == nil {
-		if d.Sync.State != nil && !liveLocked {
-			d.Sync.State.Lock()
-			fn(d.Sync.State)
-			d.Sync.State.Unlock()
-		}
+	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
 		return
 	}
 	if _, err := d.StateStore.Update(func(state *stateFile) error {
@@ -539,20 +528,7 @@ func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*state
 			"error":   err,
 		})
 	}
-	if !liveLocked && d.liveStateReadableNow() {
-		d.installCommittedSnapshotIfLiveUnlocked()
-	}
-}
-
-func (d *DaemonService) liveStateReadableNow() bool {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		return true
-	}
-	if !d.Sync.State.mu.TryRLock() {
-		return false
-	}
-	d.Sync.State.RUnlock()
-	return true
+	d.installCommittedSnapshotIfLiveUnlocked()
 }
 
 func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
@@ -560,14 +536,7 @@ func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnaps
 		return nil, false, nil
 	}
 	if d.StateStore == nil {
-		result, err := gossip.ApplySnapshot(d.Sync.State.Network, action.Snapshot, now, limits)
-		if err != nil {
-			recordRejectedDigest(d.Sync.State, peerID, digestForSnapshot(action.Snapshot), gossip.RejectReason(err), now)
-			return nil, false, err
-		}
-		clearRejectedDigest(d.Sync.State, peerID, action.Snapshot.Zone)
-		d.tryAdoptAutoJoinAfterSync(peerID, "event_loop", now, nil)
-		return result, true, nil
+		return nil, false, errors.New("daemon service is not initialized")
 	}
 
 	var result *gossip.ApplyResult
@@ -631,7 +600,11 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	}
 	peerID := session.PeerID
 	now := d.Sync.now()
-	configureValidation(d.Sync.State.Network)
+	stateSnapshot, _, _ := d.snapshotState()
+	if stateSnapshot == nil || stateSnapshot.Network == nil {
+		return false
+	}
+	configureValidation(stateSnapshot.Network)
 
 	var changed bool
 	limits := syncLimits(d.Sync.Config)
@@ -643,7 +616,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 			if a.Snapshot == nil {
 				continue
 			}
-			if a.Snapshot.Zone == d.Sync.State.ManagedZone {
+			if a.Snapshot.Zone == stateSnapshot.ManagedZone {
 				// Never accept a snapshot for our own managed zone from a peer;
 				// we are the authority for it.
 				d.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
@@ -686,12 +659,13 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 		if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
 			d.logWarn("sync", "save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
+		stateSnapshot, _, _ = d.snapshotState()
 	}
 
 	// Applied object-pull or chunk-fallback snapshots may leave a zone pending
 	// until the FSM sees local state again. Reconcile before sending more I/O.
-	if !session.Done() {
-		reconcileActions := session.reconcilePendingWithState(d.Sync.State.Network)
+	if !session.Done() && stateSnapshot != nil && stateSnapshot.Network != nil {
+		reconcileActions := session.reconcilePendingWithState(stateSnapshot.Network)
 		actions = append(actions, reconcileActions...)
 	}
 
@@ -711,7 +685,10 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				FetchCatalogPage: &gossip.FetchCatalogPage{Cursor: a.Cursor},
 			})
 		case SendCatalogPageAction:
-			page, err := gossip.CatalogPageFor(d.Sync.State.Network, a.Cursor, budget)
+			if stateSnapshot == nil || stateSnapshot.Network == nil {
+				continue
+			}
+			page, err := gossip.CatalogPageFor(stateSnapshot.Network, a.Cursor, budget)
 			if err != nil {
 				d.recordSyncPeerState(peerID, "catalog_page_reject", func(state *stateFile) {
 					recordDatagramTooLarge(state, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())

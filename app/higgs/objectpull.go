@@ -408,9 +408,6 @@ func (d *DaemonService) commitObjectPullAttempt(peerID string, path zone.ZonePat
 		return
 	}
 	if d.StateStore == nil {
-		if d.Sync.State != nil {
-			recordObjectPullAttempt(d.Sync.State, peerID, "zone", path, "", now)
-		}
 		return
 	}
 	if _, err := d.StateStore.Update(func(state *stateFile) error {
@@ -432,9 +429,6 @@ func (d *DaemonService) commitObjectPullResult(result ObjectPullResult) {
 		return
 	}
 	if d.StateStore == nil {
-		if d.Sync.State != nil {
-			recordObjectPullResult(d.Sync.State, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
-		}
 		return
 	}
 	if _, err := d.StateStore.Update(func(state *stateFile) error {

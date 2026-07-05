@@ -137,14 +137,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	}
 
 	if d.StateStore == nil {
-		d.setState(latest)
-		if err := cleanupState(d.Sync.State); err != nil {
-			return cleaned, orphans, err
-		}
-		if err := d.Sync.saveState(); err != nil {
-			return cleaned, orphans, err
-		}
-		return cleaned, orphans, nil
+		return cleaned, orphans, errors.New("daemon service is not initialized")
 	}
 
 	d.StateStore.ReplaceCommitted(latest)
