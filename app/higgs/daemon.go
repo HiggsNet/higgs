@@ -47,12 +47,12 @@ type DaemonService struct {
 	objectPullPool    *objectPullPool
 	timerManager      *TimerManager
 
-	// stateUnlock tracks the unlock function for the stateFile currently locked
-	// by the event loop. It is updated by lockState and setState so that deferred
-	// unlocks always release the correct stateFile pointer after setState swaps it.
-	// stateMu protects stateUnlock and must be held when reading or writing it.
+	// stateMu protects Sync.State pointer swaps and the coarse event-loop state
+	// mutation marker. Individual stateFile locks are always released by the
+	// local closure that acquired them.
 	stateMu     sync.Mutex
-	stateUnlock func()
+	stateLocked bool
+	lockedState *stateFile
 
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager  birdProcessManager
@@ -1274,28 +1274,30 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 	return result, nil
 }
 
-// lockState acquires the write lock on the current Sync.State and stores the
-// matching unlock function in d.stateUnlock. The returned function must be
-// called once to release the lock. It is safe to call when Sync.State is nil.
+// lockState acquires the write lock on the current Sync.State. The returned
+// function releases the same state pointer that was locked, even if Sync.State
+// is swapped before the closure runs. It is safe to call when Sync.State is nil.
 func (d *DaemonService) lockState() func() {
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		return func() {}
 	}
-	d.Sync.State.Lock()
-	if d.Sync.State.Network != nil && d.Sync.State.Network.RecordVerifier == nil {
-		configureValidation(d.Sync.State.Network)
+	state := d.Sync.State
+	state.Lock()
+	if state.Network != nil && state.Network.RecordVerifier == nil {
+		configureValidation(state.Network)
 	}
-	fn := d.Sync.State.Unlock
 	d.stateMu.Lock()
-	d.stateUnlock = fn
+	d.stateLocked = true
+	d.lockedState = state
 	d.stateMu.Unlock()
 	return func() {
 		d.stateMu.Lock()
-		fn := d.stateUnlock
-		d.stateUnlock = nil
+		locked := d.lockedState
+		d.stateLocked = false
+		d.lockedState = nil
 		d.stateMu.Unlock()
-		if fn != nil {
-			fn()
+		if locked != nil {
+			locked.Unlock()
 		}
 	}
 }
@@ -1346,26 +1348,20 @@ func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
 	response.ReconcileProgress = meta.ReconcileProgress
 }
 
-// setState replaces the current state pointer. When called from the event loop
-// (i.e. d.stateUnlock is non-nil because lockState acquired the current state
-// lock), setState transfers the write lock from the old state to the new state,
-// releases the old lock, and updates d.stateUnlock so that the deferred unlock
-// from lockState releases the new state. When called without an event-loop
-// lock tracked, setState simply assigns the pointer; callers that need
-// synchronization must acquire the lock separately.
-// releaseStateLock releases the state lock currently tracked by d.stateUnlock
-// and clears the tracker. It is used by event handlers that need to drop the
-// event-loop lock before a sub-operation that acquires its own lock.
+// releaseStateLock releases the state pointer currently locked by lockState.
+// Most callers should use the closure returned by lockState; this exists for
+// event-loop paths that need to drop the lock before continuing.
 func (d *DaemonService) releaseStateLock() {
 	if d == nil {
 		return
 	}
 	d.stateMu.Lock()
-	fn := d.stateUnlock
-	d.stateUnlock = nil
+	locked := d.lockedState
+	d.stateLocked = false
+	d.lockedState = nil
 	d.stateMu.Unlock()
-	if fn != nil {
-		fn()
+	if locked != nil {
+		locked.Unlock()
 	}
 }
 
@@ -1374,23 +1370,24 @@ func (d *DaemonService) setState(state *stateFile) {
 		return
 	}
 	d.stateMu.Lock()
-	defer d.stateMu.Unlock()
-	if d.stateUnlock == nil {
-		d.Sync.State = state
-		d.publishCommittedStateSnapshot()
-		return
-	}
-	state.Lock()
 	if state.Network != nil && state.Network.RecordVerifier == nil {
 		configureValidation(state.Network)
 	}
-	old := d.Sync.State
-	d.Sync.State = state
-	d.publishCommittedStateSnapshot()
-	if old != nil {
-		old.Unlock()
+	if d.stateLocked {
+		state.Lock()
+		old := d.lockedState
+		d.lockedState = state
+		d.Sync.State = state
+		d.stateMu.Unlock()
+		if old != nil {
+			old.Unlock()
+		}
+		d.publishCommittedStateSnapshot()
+		return
 	}
-	d.stateUnlock = state.Unlock
+	d.Sync.State = state
+	d.stateMu.Unlock()
+	d.publishCommittedStateSnapshot()
 }
 
 func (d *DaemonService) notifyStateChanged() {
@@ -1484,7 +1481,7 @@ func (d *DaemonService) hasStateLock() bool {
 	}
 	d.stateMu.Lock()
 	defer d.stateMu.Unlock()
-	return d.stateUnlock != nil
+	return d.stateLocked
 }
 
 func (d *DaemonService) flushRevocationCleanupLocked(state *stateFile) {
