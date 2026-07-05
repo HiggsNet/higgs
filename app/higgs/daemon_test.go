@@ -3316,6 +3316,56 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	}
 }
 
+func TestDaemonRecordPutUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2100, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	unlock := service.lockState()
+	version, err := service.handleRecordPutEvent(&daemonRecordPut{
+		Zone:  zone.ZonePath("node-b.catofes."),
+		Key:   "locked-record",
+		Value: []byte("store"),
+		Type:  "policy.string",
+	})
+	if err != nil {
+		unlock()
+		t.Fatalf("handleRecordPutEvent: %v", err)
+	}
+	current := service.currentState()
+	if current == state {
+		unlock()
+		t.Fatal("live state pointer did not transfer to committed state")
+	}
+	if got := current.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
+		unlock()
+		t.Fatal("transferred live state missing locked record")
+	}
+	unlock()
+	if version != 1 {
+		t.Fatalf("version = %d, want 1", version)
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if got := snapshot.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
+		t.Fatal("committed snapshot missing locked record")
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := latest.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
+		t.Fatal("persisted state missing locked record")
+	}
+}
+
 func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
@@ -3337,6 +3387,9 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	sr := newSyncRuntime(state, config, nil, rt)
 	if err := sr.publishIPsecRecords(); err != nil {
 		t.Fatalf("publishIPsecRecords: %v", err)
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState(published ports): %v", err)
 	}
 	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
@@ -3383,6 +3436,57 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	}
 	if len(rotated.Previous) != 1 || rotated.Previous[0].Generation != first.Current.Generation {
 		t.Fatalf("previous grace = %+v, want generation %d", rotated.Previous, first.Current.Generation)
+	}
+}
+
+func TestDaemonIPsecPortRotateUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	now := time.Unix(2300, 0)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.PortMode = ipsec.PortModeRange
+	appConfig.IPsec.PortRange = ipsec.PortRange{From: 31000, To: 31099}
+	appConfig.IPsec.PortPreviousGrace = time.Hour
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	unlock := service.lockState()
+	result, err := service.handleIPsecPortRotateEvent()
+	if err != nil {
+		unlock()
+		t.Fatalf("handleIPsecPortRotateEvent: %v", err)
+	}
+	current := service.currentState()
+	if current == state {
+		unlock()
+		t.Fatal("live state pointer did not transfer to committed state")
+	}
+	if got := current.IPsecPortRecord; got == nil || got.Generation != result.CurrentGeneration {
+		unlock()
+		t.Fatalf("transferred live IPsecPortRecord = %#v, want generation %d", got, result.CurrentGeneration)
+	}
+	unlock()
+	if result == nil || result.CurrentGeneration == 0 {
+		t.Fatalf("rotate result = %#v", result)
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.IPsecPortRecord == nil || snapshot.IPsecPortRecord.Generation != result.CurrentGeneration {
+		t.Fatalf("committed IPsecPortRecord = %#v, want generation %d", snapshot.IPsecPortRecord, result.CurrentGeneration)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if latest.IPsecPortRecord == nil || latest.IPsecPortRecord.Generation != result.CurrentGeneration {
+		t.Fatalf("persisted IPsecPortRecord = %#v, want generation %d", latest.IPsecPortRecord, result.CurrentGeneration)
 	}
 }
 
@@ -3663,6 +3767,58 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	}
 	if parent.Delegations["node-b.catofes."] != nil {
 		t.Fatalf("node-b delegation still active after revoke")
+	}
+}
+
+func TestDaemonDelegateIssueUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+	now := time.Unix(6100, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "root.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if _, err := initRootStateInRuntime(rt); err != nil {
+		t.Fatalf("initRootStateInRuntime: %v", err)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(root): %v", err)
+	}
+	service := newDaemonService(rt, state, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	unlock := service.lockState()
+	result, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "catofes.", PublicKey: pub}, nil)
+	if err != nil {
+		unlock()
+		t.Fatalf("handleDelegateIssueEvent: %v", err)
+	}
+	current := service.currentState()
+	if current == state {
+		unlock()
+		t.Fatal("live state pointer did not transfer to committed state")
+	}
+	if got := current.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
+		unlock()
+		t.Fatal("transferred live state missing catofes delegation")
+	}
+	unlock()
+	if result == nil || result.Bundle == nil || result.Bundle.Zone != "catofes." {
+		t.Fatalf("delegate issue result = %#v", result)
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if got := snapshot.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
+		t.Fatal("committed snapshot missing catofes delegation")
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(latest): %v", err)
+	}
+	if got := latest.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
+		t.Fatal("persisted state missing catofes delegation")
 	}
 }
 

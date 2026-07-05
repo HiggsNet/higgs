@@ -556,6 +556,76 @@ func (d *DaemonService) liveStateReadableNow() bool {
 	return true
 }
 
+func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
+	if d == nil || d.Sync == nil || action.Snapshot == nil {
+		return nil, false, nil
+	}
+	if d.StateStore == nil {
+		result, err := gossip.ApplySnapshot(d.Sync.State.Network, action.Snapshot, now, limits)
+		if err != nil {
+			recordRejectedDigest(d.Sync.State, peerID, digestForSnapshot(action.Snapshot), gossip.RejectReason(err), now)
+			return nil, false, err
+		}
+		clearRejectedDigest(d.Sync.State, peerID, action.Snapshot.Zone)
+		d.tryAdoptAutoJoinAfterSync(peerID, "event_loop", now, nil)
+		return result, true, nil
+	}
+
+	var result *gossip.ApplyResult
+	var applied bool
+	var applyErr error
+	var adopted bool
+	var adoptionErr error
+	var managedZone zone.ZonePath
+	_, err := d.StateStore.Update(func(state *stateFile) error {
+		if state == nil || state.Network == nil {
+			return errors.New("daemon state network is nil")
+		}
+		if state.Network.RecordVerifier == nil {
+			configureValidation(state.Network)
+		}
+		managedZone = state.ManagedZone
+		nextResult, err := gossip.ApplySnapshot(state.Network, action.Snapshot, now, limits)
+		if err != nil {
+			applyErr = err
+			recordRejectedDigest(state, peerID, digestForSnapshot(action.Snapshot), gossip.RejectReason(err), now)
+			return nil
+		}
+		clearRejectedDigest(state, peerID, action.Snapshot.Zone)
+		result = nextResult
+		applied = true
+		adopted, adoptionErr = tryAdoptAutoJoinDelegation(state, now)
+		recordAdoptionResult(state, adopted, adoptionErr, now)
+		if !adopted && adoptionErr == nil {
+			recordBootstrapSyncSuccess(state, peerID, d.Sync.Config, now)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	committed, _, _ := d.snapshotState()
+	d.setState(committed)
+	if !applied {
+		return nil, false, applyErr
+	}
+	if adoptionErr != nil {
+		d.logWarn("auto_join", "adopt_failed", map[string]any{
+			"peer_id": peerID,
+			"zone":    managedZone,
+			"via":     "event_loop",
+			"error":   adoptionErr,
+		})
+	} else if adopted {
+		d.logInfo("auto_join", "adopted", map[string]any{
+			"peer_id": peerID,
+			"zone":    managedZone,
+			"via":     "event_loop",
+		})
+	}
+	return result, true, nil
+}
+
 func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSession, actions []SyncAction) bool {
 	if len(actions) == 0 {
 		return false
@@ -588,11 +658,8 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				applyLimits = limits
 				applyLimits.MaxBytes = 8 << 20
 			}
-			result, err := gossip.ApplySnapshot(d.Sync.State.Network, a.Snapshot, now, applyLimits)
+			result, applied, err := d.applySyncSnapshotAction(peerID, a, applyLimits, now)
 			if err != nil {
-				d.recordSyncPeerState(peerID, "rejected_digest", func(state *stateFile) {
-					recordRejectedDigest(state, peerID, digestForSnapshot(a.Snapshot), gossip.RejectReason(err), now)
-				})
 				d.logWarn("sync", "zone_apply_failed", map[string]any{
 					"peer_id": peerID,
 					"zone":    a.Snapshot.Zone,
@@ -601,9 +668,9 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				})
 				continue
 			}
-			d.recordSyncPeerState(peerID, "clear_rejected_digest", func(state *stateFile) {
-				clearRejectedDigest(state, peerID, a.Snapshot.Zone)
-			})
+			if !applied {
+				continue
+			}
 			changed = true
 			d.logInfo("sync", "zone_applied", map[string]any{
 				"peer_id":     peerID,
@@ -612,7 +679,6 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				"delegations": result.Delegation,
 				"via":         "event_loop",
 			})
-			d.tryAdoptAutoJoinAfterSync(peerID, "event_loop", now, &changed)
 		}
 	}
 

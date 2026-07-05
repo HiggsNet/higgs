@@ -457,8 +457,46 @@ func TestHandleAnnounceRecordsRejectedDigestOnVerifyFailure(t *testing.T) {
 		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
 	})
 	unlock()
-	if !isRejectedDigestActive(state, "node-b.catofes.", "node-b.catofes.", digest.RootHash, now.Add(time.Minute)) {
+	snapshotState, _ := service.StateStore.Snapshot()
+	if !isRejectedDigestActive(snapshotState, "node-b.catofes.", "node-b.catofes.", digest.RootHash, now.Add(time.Minute)) {
 		t.Fatalf("rejected digest was not recorded")
+	}
+}
+
+func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
+	base, config := buildTestNetworkState(t)
+	state := cloneStateFile(base)
+	source := cloneStateFile(base)
+	now := time.Unix(2200, 0)
+	record, err := buildSignedRecordAt(source, "node-b.catofes.", "remote-record", []byte("remote"), "policy.string", now)
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt: %v", err)
+	}
+	source.Network.Zones["node-b.catofes."].Records[record.Key] = record
+	snapshot, err := gossip.Snapshot(source.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+
+	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	session := NewSyncSession("node-b.catofes.")
+	unlock := service.lockState()
+	changed := service.executeSyncActions(context.Background(), session, []SyncAction{
+		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
+	})
+	unlock()
+	if !changed {
+		t.Fatal("executeSyncActions changed = false, want true")
+	}
+
+	committed, _ := service.StateStore.Snapshot()
+	if got := committed.Network.Zones["node-b.catofes."].Records["remote-record"]; got == nil {
+		t.Fatal("committed snapshot missing applied record")
+	}
+	current := service.currentState()
+	if got := current.Network.Zones["node-b.catofes."].Records["remote-record"]; got == nil {
+		t.Fatal("current state missing applied record")
 	}
 }
 
