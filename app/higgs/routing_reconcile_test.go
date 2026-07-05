@@ -1582,8 +1582,9 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
-	if len(state.Network.Zones["node-a.catofes."].Records) != 0 {
-		t.Fatalf("expected no announcements when disabled, got %d", len(state.Network.Zones["node-a.catofes."].Records))
+	snapshot, _ := service.StateStore.Snapshot()
+	if len(snapshot.Network.Zones["node-a.catofes."].Records) != 0 {
+		t.Fatalf("expected no announcements when disabled, got %d", len(snapshot.Network.Zones["node-a.catofes."].Records))
 	}
 }
 
@@ -1600,7 +1601,8 @@ func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	rec := state.Network.Zones["node-a.catofes."].Records[key]
+	snapshot, _ := service.StateStore.Snapshot()
+	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement record for %s", key)
 	}
@@ -1629,7 +1631,8 @@ func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	rec := state.Network.Zones["node-a.catofes."].Records[key]
+	snapshot, _ := service.StateStore.Snapshot()
+	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected withdrawal record for %s", key)
 	}
@@ -1655,7 +1658,8 @@ func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	rec := state.Network.Zones["node-a.catofes."].Records[key]
+	snapshot, _ := service.StateStore.Snapshot()
+	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement record for %s", key)
 	}
@@ -1680,7 +1684,8 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("192.168.0.0/24")
-	if state.Network.Zones["node-a.catofes."].Records[key] != nil {
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.Network.Zones["node-a.catofes."].Records[key] != nil {
 		t.Fatalf("expected no announcement for invalid assignment")
 	}
 }
@@ -1810,8 +1815,12 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 		RootPrivateKey: rootPriv,
 	}
 	rt := &Runtime{
-		Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
-		Clock:  func() time.Time { return time.Unix(1000, 0) },
+		Config:    &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(1000, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
 	}
 	return state, rt
 }

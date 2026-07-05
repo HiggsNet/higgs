@@ -445,12 +445,20 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 
 type captureFirewallOwnerDriver struct {
 	firewall.DryRunDriver
-	owners []firewall.Owner
+	owners  []firewall.Owner
+	onApply func()
 }
 
 func (d *captureFirewallOwnerDriver) ListOwned(ctx context.Context, owner firewall.Owner) (firewall.FirewallObservedState, error) {
 	d.owners = append(d.owners, owner)
 	return firewall.FirewallObservedState{}, nil
+}
+
+func (d *captureFirewallOwnerDriver) Apply(ctx context.Context, plan firewall.FirewallPlan, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+	if d.onApply != nil {
+		d.onApply()
+	}
+	return d.DryRunDriver.Apply(ctx, plan, desired)
 }
 
 func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
@@ -497,6 +505,53 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 	}
 	if driver.owners[1].InstanceID != "host" {
 		t.Fatalf("host owner scope = %q, want host", driver.owners[1].InstanceID)
+	}
+}
+
+func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	appConfig := defaultAppConfig()
+	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+		ID:            "higgstesth2",
+		NetNS:         "higgstesth2",
+		Enabled:       true,
+		Mode:          firewall.ModeManaged,
+		Backend:       firewall.BackendNone,
+		DefaultPolicy: firewall.DefaultPolicyDrop,
+	}}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(7010, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	driver := &captureFirewallOwnerDriver{}
+	driver.onApply = func() {
+		if _, err := service.StateStore.Update(func(state *stateFile) error {
+			state.IdentityKeyPath = "newer-firewall-revision"
+			return nil
+		}); err != nil {
+			t.Fatalf("advance state revision during firewall apply: %v", err)
+		}
+		driver.onApply = nil
+	}
+	service.firewallDriver = driver
+
+	if err := service.reconcileFirewall(context.Background()); err != nil {
+		t.Fatalf("reconcileFirewall: %v", err)
+	}
+	if !service.firewallDirty {
+		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.IdentityKeyPath != "newer-firewall-revision" {
+		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
+	}
+	if snapshot.FirewallReconcile == nil || snapshot.FirewallReconcile.Instances["higgstesth2"] == nil {
+		t.Fatalf("firewall reconcile summary = %+v, want committed stale summary", snapshot.FirewallReconcile)
 	}
 }
 
@@ -561,10 +616,11 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallDirty {
 		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
 	}
-	if state.FirewallReconcile == nil || state.FirewallReconcile.Instances["higgstesth2"] == nil {
-		t.Fatalf("firewall reconcile state missing after recover: %+v", state.FirewallReconcile)
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.FirewallReconcile == nil || snapshot.FirewallReconcile.Instances["higgstesth2"] == nil {
+		t.Fatalf("firewall reconcile state missing after recover: %+v", snapshot.FirewallReconcile)
 	}
-	entry := state.FirewallReconcile.Instances["higgstesth2"]
+	entry := snapshot.FirewallReconcile.Instances["higgstesth2"]
 	if entry.PolicyHash == "" || entry.OwnedObjects == 0 || entry.LastRunUnix != 7000 {
 		t.Fatalf("firewall reconcile entry = %+v, want hash/objects/last run", entry)
 	}

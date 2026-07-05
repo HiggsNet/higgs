@@ -27,7 +27,11 @@ type firewallDriver interface {
 // diffs against observed owned objects, and applies the plan via the driver.
 // The default driver is DryRunDriver; real nft/iptables drivers are added later.
 func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || d.Sync.State == nil {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return nil
+	}
+	snapshot, rev, _ := d.snapshotState()
+	if snapshot == nil {
 		return nil
 	}
 	config := d.Sync.App.Config
@@ -35,32 +39,33 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	if len(instances) == 0 {
 		return nil
 	}
-	if d.Sync.State.ManagedZone.IsRoot() || !d.Sync.State.ManagedZone.Valid() {
+	if snapshot.ManagedZone.IsRoot() || !snapshot.ManagedZone.Valid() {
 		return nil
 	}
 
 	now := d.Sync.now()
-	if d.Sync.State.FirewallReconcile == nil {
-		d.Sync.State.FirewallReconcile = &firewallReconcileState{}
+	summary := cloneFirewallReconcileState(snapshot.FirewallReconcile)
+	if summary == nil {
+		summary = &firewallReconcileState{}
 	}
-	d.Sync.State.FirewallReconcile.LastRunUnix = now.Unix()
+	summary.LastRunUnix = now.Unix()
 
 	// Build authorized route set for prefix inputs.
-	ars, err := routing.BuildAuthorizedRouteSet(d.Sync.State.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(snapshot.Network, now)
 	if err != nil {
-		d.Sync.State.FirewallReconcile.LastError = err.Error()
-		_ = d.Sync.saveState()
+		summary.LastError = err.Error()
+		_ = d.commitFirewallReconcileResult(rev, summary)
 		return fmt.Errorf("firewall build authorized route set: %w", err)
 	}
 
 	preflight := firewall.PreflightProbe(ctx)
-	d.Sync.State.FirewallReconcile.Backend = preflight.Backend
+	summary.Backend = preflight.Backend
 
-	if d.Sync.State.FirewallReconcile.Instances == nil {
-		d.Sync.State.FirewallReconcile.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
+	if summary.Instances == nil {
+		summary.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
 	}
 
-	charonIKE, charonNATT := firewallCharonPorts(config, d.Sync.State)
+	charonIKE, charonNATT := firewallCharonPorts(config, snapshot)
 
 	if len(instances) > 0 && preflight.NFTNetlink != "ok" && preflight.Iptables != "available" {
 		d.logWarn("firewall", "no_backend_available", map[string]any{
@@ -75,10 +80,10 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	for _, instCfg := range instances {
 		listenAddrs := instCfg.ListenAddrs
 		spec := firewallInstanceSpecFromConfig(instCfg, listenAddrs, charonIKE, charonNATT)
-		input := buildFirewallPolicyInput(spec, ars, d.Sync.State, config)
+		input := buildFirewallPolicyInput(spec, ars, snapshot, config)
 		desired, err := firewall.BuildDesiredState(spec, input)
 		if err != nil {
-			entry := d.getOrCreateFirewallEntry(instCfg.ID)
+			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 			entry.LastRunUnix = now.Unix()
 			entry.LastError = err.Error()
 			if firstErr == nil {
@@ -89,7 +94,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 
 		driver, err := d.firewallDriverInstance(instCfg)
 		if err != nil {
-			entry := d.getOrCreateFirewallEntry(instCfg.ID)
+			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 			entry.LastRunUnix = now.Unix()
 			entry.LastError = err.Error()
 			if firstErr == nil {
@@ -111,7 +116,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 
 		plan, err := driver.Plan(ctx, desired, observed)
 		if err != nil {
-			entry := d.getOrCreateFirewallEntry(instCfg.ID)
+			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 			entry.LastRunUnix = now.Unix()
 			entry.LastError = err.Error()
 			if firstErr == nil {
@@ -121,7 +126,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		}
 
 		result, err := driver.Apply(ctx, plan, desired)
-		entry := d.getOrCreateFirewallEntry(instCfg.ID)
+		entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 		entry.LastRunUnix = now.Unix()
 		entry.PolicyHash = firewall.DesiredStateHash(desired)
 		entry.OwnedObjects = len(firewall.DesiredObjects(desired))
@@ -137,27 +142,59 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	}
 
 	if firstErr != nil {
-		d.Sync.State.FirewallReconcile.LastError = firstErr.Error()
+		summary.LastError = firstErr.Error()
 	} else {
-		d.Sync.State.FirewallReconcile.LastError = ""
+		summary.LastError = ""
 	}
 
-	if err := d.Sync.saveState(); err != nil {
+	if err := d.commitFirewallReconcileResult(rev, summary); err != nil {
 		return fmt.Errorf("save firewall reconcile state: %w", err)
 	}
 	return firstErr
 }
 
-func (d *DaemonService) getOrCreateFirewallEntry(id string) *firewallInstanceReconcileStateEntry {
-	if d.Sync.State.FirewallReconcile.Instances == nil {
-		d.Sync.State.FirewallReconcile.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
+func getOrCreateFirewallEntry(state *firewallReconcileState, id string) *firewallInstanceReconcileStateEntry {
+	if state.Instances == nil {
+		state.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
 	}
-	entry := d.Sync.State.FirewallReconcile.Instances[id]
+	entry := state.Instances[id]
 	if entry == nil {
 		entry = &firewallInstanceReconcileStateEntry{}
-		d.Sync.State.FirewallReconcile.Instances[id] = entry
+		state.Instances[id] = entry
 	}
 	return entry
+}
+
+func (d *DaemonService) commitFirewallReconcileResult(rev uint64, summary *firewallReconcileState) error {
+	if d == nil || d.StateStore == nil || summary == nil {
+		return nil
+	}
+	_, committed, err := d.StateStore.CommitIfRevision(rev, func(state *stateFile) error {
+		state.FirewallReconcile = cloneFirewallReconcileState(summary)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !committed {
+		current := d.StateStore.Meta().Revision
+		_, retryCommitted, retryErr := d.StateStore.CommitIfRevision(current, func(state *stateFile) error {
+			state.FirewallReconcile = cloneFirewallReconcileState(summary)
+			return nil
+		})
+		if retryErr != nil {
+			return retryErr
+		}
+		if !retryCommitted {
+			d.firewallDirty = true
+			d.publishStateStoreRuntimeFlags()
+			return nil
+		}
+		d.firewallDirty = true
+		d.publishStateStoreRuntimeFlags()
+		return d.installAndSaveCommittedState()
+	}
+	return d.installAndSaveCommittedState()
 }
 
 func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {

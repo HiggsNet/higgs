@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -28,6 +29,8 @@ const (
 	birdInstanceStateError          = "error"
 	maxRoutingCrashBackoff          = time.Minute
 )
+
+var errAutoAnnounceNoChanges = errors.New("auto announce has no changes")
 
 // birdProcessManager is the subset of bird.ProcessManager used by the daemon.
 type birdProcessManager interface {
@@ -78,7 +81,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	ars, err := routing.BuildAuthorizedRouteSet(workspace.Network, now)
 	if err != nil {
 		workspace.RoutingReconcile.LastError = err.Error()
-		_ = d.commitRoutingReconcileResult(rev, snapshot.BirdInstances, workspace, true)
+		_ = d.commitRoutingReconcileResult(rev, snapshot.BirdInstances, workspace)
 		return fmt.Errorf("build authorized route set: %w", err)
 	}
 
@@ -90,23 +93,31 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 		dataDir = abs
 	}
 
-	if workspace.BirdInstances == nil {
-		workspace.BirdInstances = make(map[string]*BirdInstanceState)
-	}
-
 	var firstErr error
-	if err := d.autoAnnounceAssignedIPsForState(workspace, ars); err != nil {
+	if err := d.autoAnnounceAssignedIPs(ars); err != nil {
 		firstErr = err
 	}
 
-	// If auto-announce is enabled, it may have mutated Sync.State with new
+	// If auto-announce is enabled, it may have committed new
 	// route announcements. Rebuild the authorized route set so BIRD import/export
 	// filters reflect the latest announcements.
 	if config.IPAM.AutoAnnounceAssignedIPs {
+		snapshot, rev, _ = d.snapshotState()
+		if snapshot == nil {
+			return firstErr
+		}
+		workspace = cloneStateFile(snapshot)
+		if workspace.RoutingReconcile == nil {
+			workspace.RoutingReconcile = &routingReconcileState{}
+		}
+		workspace.RoutingReconcile.LastRunUnix = now.Unix()
 		ars, err = routing.BuildAuthorizedRouteSet(workspace.Network, now)
 		if err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
 		}
+	}
+	if workspace.BirdInstances == nil {
+		workspace.BirdInstances = make(map[string]*BirdInstanceState)
 	}
 
 	// Build per-netns overlay groups for interface pattern merging.
@@ -124,7 +135,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 		workspace.RoutingReconcile.LastError = ""
 	}
 
-	if err := d.commitRoutingReconcileResult(rev, snapshot.BirdInstances, workspace, config.IPAM.AutoAnnounceAssignedIPs); err != nil {
+	if err := d.commitRoutingReconcileResult(rev, snapshot.BirdInstances, workspace); err != nil {
 		return fmt.Errorf("save routing reconcile state: %w", err)
 	}
 	return firstErr
@@ -156,12 +167,11 @@ func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNS
 	return out
 }
 
-func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[string]*BirdInstanceState, result *stateFile, includesNetworkChanges bool) error {
+func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[string]*BirdInstanceState, result *stateFile) error {
 	if d == nil || d.StateStore == nil || result == nil {
 		return nil
 	}
 	_, committed, err := d.StateStore.CommitIfRevision(rev, func(state *stateFile) error {
-		state.Network = result.Network
 		state.BirdInstances = cloneBirdInstances(result.BirdInstances)
 		state.RoutingReconcile = result.RoutingReconcile
 		return nil
@@ -170,14 +180,12 @@ func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[st
 		return err
 	}
 	if !committed {
-		if !includesNetworkChanges {
-			merged, err := d.commitRoutingBirdInstancesByNetNS(baseBird, result.BirdInstances, result.RoutingReconcile)
-			if err != nil {
-				return err
-			}
-			if merged {
-				return nil
-			}
+		merged, err := d.commitRoutingBirdInstancesByNetNS(baseBird, result.BirdInstances, result.RoutingReconcile)
+		if err != nil {
+			return err
+		}
+		if merged {
+			return nil
 		}
 		d.routingDirty = true
 		d.publishStateStoreRuntimeFlags()
@@ -912,25 +920,44 @@ func isDryRunConnectError(err error) bool {
 
 // autoAnnounceAssignedIPs publishes or withdraws routes/announcements/* records
 // for every IPAM assignment whose assigned_to equals this node's managed zone.
-// It runs inside the daemon's single-writer reconcile path and directly mutates
-// d.Sync.State; callers must save the state afterwards.
+// It commits network record changes through the daemon state store so routing
+// reconcile can run BIRD work from a refreshed committed snapshot.
 func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet) error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.State == nil || d.Sync.State.Network == nil {
-		return nil
-	}
-	return d.autoAnnounceAssignedIPsForState(d.Sync.State, ars)
-}
-
-func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *routing.AuthorizedRouteSet) error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || state == nil || state.Network == nil {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.StateStore == nil {
 		return nil
 	}
 	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
 		return nil
 	}
+	_, err := d.StateStore.Update(func(state *stateFile) error {
+		changed, err := d.autoAnnounceAssignedIPsForState(state, ars)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return errAutoAnnounceNoChanges
+		}
+		return nil
+	})
+	if errors.Is(err, errAutoAnnounceNoChanges) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return d.installAndSaveCommittedState()
+}
+
+func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *routing.AuthorizedRouteSet) (bool, error) {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || state == nil || state.Network == nil {
+		return false, nil
+	}
+	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
+		return false, nil
+	}
 	managedZone := state.ManagedZone
 	if managedZone.IsRoot() || !managedZone.Valid() {
-		return nil
+		return false, nil
 	}
 
 	localAssigned := make(map[netip.Prefix]struct{})
@@ -959,13 +986,15 @@ func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *r
 		}
 	}
 
+	changed := false
 	for prefix := range localAssigned {
 		if active, ok := localAnnounced[prefix]; ok && active {
 			continue
 		}
 		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, true); err != nil {
-			return fmt.Errorf("auto-announce %s: %w", prefix, err)
+			return changed, fmt.Errorf("auto-announce %s: %w", prefix, err)
 		}
+		changed = true
 		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{
 			"zone":   managedZone,
 			"prefix": prefix.String(),
@@ -980,15 +1009,16 @@ func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *r
 			continue
 		}
 		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, false); err != nil {
-			return fmt.Errorf("auto-withdraw %s: %w", prefix, err)
+			return changed, fmt.Errorf("auto-withdraw %s: %w", prefix, err)
 		}
+		changed = true
 		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{
 			"zone":   managedZone,
 			"prefix": prefix.String(),
 		})
 	}
 
-	return nil
+	return changed, nil
 }
 
 // putRouteAnnouncement signs and writes a routes/announcements/* record into
