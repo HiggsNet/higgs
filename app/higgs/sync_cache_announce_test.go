@@ -66,7 +66,8 @@ func TestHandleAnnounceSkipsManagedZoneSnapshotAndRecord(t *testing.T) {
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	session := NewSyncSession("zone-catofes-admin")
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	service.executeSyncActions(context.Background(), session, []SyncAction{
 		ApplySnapshotAction{PeerID: "zone-catofes-admin", Snapshot: snapshot},
 	})
@@ -120,7 +121,8 @@ func TestHandleAnnounceRecordsRejectedDigestOnVerifyFailure(t *testing.T) {
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	service.executeSyncActions(context.Background(), session, []SyncAction{
 		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
 	})

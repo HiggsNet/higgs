@@ -571,7 +571,7 @@ func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*state
 			"error":   err,
 		})
 	}
-	d.installCommittedSnapshotIfLiveUnlocked()
+	d.installCommittedSnapshot()
 }
 
 func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
@@ -699,7 +699,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 
 	// Second pass: persist once if any apply succeeded.
 	if changed {
-		if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+		if err := d.installAndSaveCommittedState(); err != nil {
 			d.logWarn("sync", "save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
 		stateSnapshot, _, _ = d.snapshotState()
@@ -792,7 +792,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				recordPeerBackoff(state, a.PeerID, a.Err, now)
 			})
 		case SaveStateAction:
-			if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+			if err := d.installAndSaveCommittedState(); err != nil {
 				d.logWarn("sync", "save_failed", map[string]any{
 					"peer_id": peerID,
 					"reason":  a.Reason,
@@ -902,7 +902,7 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 		}
 		d.notifyStateChanged()
 		d.relaySyncToPeers(peerID)
-		if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+		if err := d.installAndSaveCommittedState(); err != nil {
 			d.logWarn("sync", "session_save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
 	}

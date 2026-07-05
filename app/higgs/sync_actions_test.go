@@ -62,7 +62,8 @@ func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
 	peerID := "node-b.catofes."
 	service.syncSessions[peerID] = NewSyncSession(peerID)
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	done := make(chan struct{})
 	go func() {
 		service.handleSyncEvent(context.Background(), &CatalogSummaryReceivedEvent{
@@ -106,7 +107,8 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	done := make(chan error, 1)
 	go func() {
 		done <- service.respondFetchCatalogPage(peerID, "")
@@ -159,7 +161,8 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	service.Sync.Transport = transport
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	done := make(chan error, 1)
 	go func() {
 		done <- service.respondFetchZoneChunks(peerID, "node-b.catofes.")
@@ -202,7 +205,8 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	changed := service.executeSyncActions(context.Background(), session, []SyncAction{
 		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
 	})

@@ -825,7 +825,8 @@ func TestDaemonIPsecCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	cleaned, orphans, err := service.handleIPsecCleanupEvent(context.Background(), false)
 	if err != nil {
 		unlock()
@@ -836,27 +837,22 @@ func TestDaemonIPsecCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 		unlock()
 		t.Fatal("live state pointer did not transfer to committed state")
 	}
-	if len(current.LinkInstances) != 0 {
-		unlock()
-		t.Fatalf("transferred live link instances = %+v, want none", current.LinkInstances)
-	}
 	unlock()
 	if cleaned != 1 || orphans != 0 {
 		t.Fatalf("cleanup result = %d/%d, want 1/0", cleaned, orphans)
-	}
-	snapshot, _ := service.StateStore.Snapshot()
-	if len(snapshot.LinkInstances) != 0 {
-		t.Fatalf("committed link instances = %+v, want none", snapshot.LinkInstances)
 	}
 	latest, err := rt.LoadState()
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if len(latest.LinkInstances) != 0 {
-		t.Fatalf("persisted link instances = %+v, want none", latest.LinkInstances)
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("persisted link instances = %+v, want reconciled link", latest.LinkInstances)
 	}
 	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID || len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID {
 		t.Fatalf("driver cleanup: terminated=%+v unloaded=%+v", driver.Terminated, driver.Unloaded)
+	}
+	if len(driver.Connections) != 1 || driver.Connections[0].TransportID != spec.TransportID {
+		t.Fatalf("driver recreate connections=%+v, want reconciled link", driver.Connections)
 	}
 }
 

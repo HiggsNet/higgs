@@ -421,7 +421,7 @@ func (d *DaemonService) commitObjectPullAttempt(peerID string, path zone.ZonePat
 		})
 		return
 	}
-	d.installCommittedSnapshotIfLiveUnlocked()
+	d.installCommittedSnapshot()
 }
 
 func (d *DaemonService) commitObjectPullResult(result ObjectPullResult) {
@@ -442,11 +442,11 @@ func (d *DaemonService) commitObjectPullResult(result ObjectPullResult) {
 		})
 		return
 	}
-	d.installCommittedSnapshotIfLiveUnlocked()
+	d.installCommittedSnapshot()
 }
 
-func (d *DaemonService) installCommittedSnapshotIfLiveUnlocked() {
-	if d == nil || d.hasStateLock() {
+func (d *DaemonService) installCommittedSnapshot() {
+	if d == nil {
 		return
 	}
 	state, _, _ := d.snapshotState()

@@ -258,7 +258,8 @@ func TestCommitObjectPullResultUsesStateStoreWhileLiveStateLocked(t *testing.T) 
 	}
 	service := newDaemonService(rt, state, config, time.Second)
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	service.commitObjectPullResult(ObjectPullResult{
 		PeerID:      "node-b.catofes.",
 		Zone:        "node-b.catofes.",
@@ -290,10 +291,11 @@ func TestSubmitObjectPullNoAddressUsesStateStoreWhileLiveStateLocked(t *testing.
 	}
 	service := newDaemonService(rt, state, config, time.Second)
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	service.submitObjectPull(context.Background(), "node-b.catofes.", "node-b.catofes.", now)
-	if got := service.currentState(); got != state {
-		t.Fatalf("live state pointer changed while state lock is held")
+	if got := service.currentState(); got == state {
+		t.Fatalf("live state pointer did not install committed snapshot")
 	}
 	unlock()
 

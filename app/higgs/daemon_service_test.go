@@ -46,20 +46,19 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 	}
 }
 
-func TestDaemonNotifyStateChangedDefersReconcileWhileStateLocked(t *testing.T) {
+func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service.drainingEvents = true
 	var flushed []string
 	service.Hooks.OnReconcileFlush = func(layer string) {
 		flushed = append(flushed, layer)
 	}
 
-	unlock := service.lockState()
 	service.notifyStateChanged()
-	unlock()
 
 	if len(flushed) != 0 {
-		t.Fatalf("reconcile flushed while state lock was held: %v", flushed)
+		t.Fatalf("reconcile flushed while draining events: %v", flushed)
 	}
 	if !service.ipsecDirty || !service.routingDirty || !service.firewallDirty {
 		t.Fatalf("dirty flags = ipsec:%v routing:%v firewall:%v, want all true", service.ipsecDirty, service.routingDirty, service.firewallDirty)

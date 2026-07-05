@@ -66,7 +66,8 @@ func TestDaemonRecordPutUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	}
 	service := newDaemonService(rt, state, config, time.Second)
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	version, err := service.handleRecordPutEvent(&daemonRecordPut{
 		Zone:  zone.ZonePath("node-b.catofes."),
 		Key:   "locked-record",
@@ -127,7 +128,8 @@ func TestDaemonEventLoopRecordPutDoesNotWaitForLiveStateLock(t *testing.T) {
 		},
 		Reply: reply,
 	}
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	done := make(chan daemonEventResult, 1)
 	go func() {
 		service.processEvents(context.Background())
@@ -176,7 +178,8 @@ func TestDaemonEndpointTimerUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	}
 	service := newDaemonService(rt, state, config, time.Second)
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	if err := service.handleEndpointTimerEvent(); err != nil {
 		unlock()
 		t.Fatalf("handleEndpointTimerEvent: %v", err)
@@ -297,7 +300,8 @@ func TestDaemonIPsecPortRotateUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	}
 	service := newDaemonService(rt, state, config, time.Second)
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	result, err := service.handleIPsecPortRotateEvent()
 	if err != nil {
 		unlock()
@@ -556,7 +560,8 @@ func TestDaemonDelegateIssueUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 
-	unlock := service.lockState()
+	state.Lock()
+	unlock := state.Unlock
 	result, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "catofes.", PublicKey: pub}, nil)
 	if err != nil {
 		unlock()

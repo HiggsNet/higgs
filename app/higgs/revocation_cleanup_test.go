@@ -345,7 +345,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	}
 }
 
-func TestDaemonFlushRevocationCleanupTakesStateLock(t *testing.T) {
+func TestDaemonFlushRevocationCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
 	state.SyncPeers = map[string]syncPeerState{
@@ -379,19 +379,15 @@ func TestDaemonFlushRevocationCleanupTakesStateLock(t *testing.T) {
 	}()
 	select {
 	case <-done:
+	case <-time.After(time.Second):
 		state.Unlock()
-		t.Fatalf("flushRevocationCleanup returned while state write lock was held")
-	case <-time.After(50 * time.Millisecond):
+		t.Fatalf("flushRevocationCleanup blocked behind live state lock")
 	}
 	state.Unlock()
 
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("flushRevocationCleanup did not complete after state unlock")
-	}
-	if got := state.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "" {
-		t.Fatalf("discovered addr = %q, want cleared", got)
+	snapshot, _ := service.StateStore.Snapshot()
+	if got := snapshot.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "" {
+		t.Fatalf("committed discovered addr = %q, want cleared", got)
 	}
 }
 

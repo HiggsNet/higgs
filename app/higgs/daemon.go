@@ -47,12 +47,8 @@ type DaemonService struct {
 	objectPullPool    *objectPullPool
 	timerManager      *TimerManager
 
-	// stateMu protects Sync.State pointer swaps and the coarse event-loop state
-	// mutation marker. Individual stateFile locks are always released by the
-	// local closure that acquired them.
-	stateMu     sync.Mutex
-	stateLocked bool
-	lockedState *stateFile
+	// stateMu protects Sync.State pointer swaps.
+	stateMu sync.Mutex
 
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager  birdProcessManager
@@ -1062,7 +1058,7 @@ func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
 	if _, err := d.StateStore.Update(fn); err != nil {
 		return err
 	}
-	if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+	if err := d.installAndSaveCommittedState(); err != nil {
 		return err
 	}
 	if d.Sync.Transport != nil {
@@ -1104,7 +1100,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	}); err != nil {
 		return nil, err
 	}
-	if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+	if err := d.installAndSaveCommittedState(); err != nil {
 		return nil, err
 	}
 	if d.Sync.Transport != nil {
@@ -1256,7 +1252,7 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 		"key":          event.Key,
 		"record_count": recordCount,
 	})
-	if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+	if err := d.installAndSaveCommittedState(); err != nil {
 		return 0, err
 	}
 	if d.Sync.Transport != nil {
@@ -1277,34 +1273,6 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 		return nil, err
 	}
 	return result, nil
-}
-
-// lockState acquires the write lock on the current Sync.State. The returned
-// function releases the same state pointer that was locked, even if Sync.State
-// is swapped before the closure runs. It is safe to call when Sync.State is nil.
-func (d *DaemonService) lockState() func() {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		return func() {}
-	}
-	state := d.Sync.State
-	state.Lock()
-	if state.Network != nil && state.Network.RecordVerifier == nil {
-		configureValidation(state.Network)
-	}
-	d.stateMu.Lock()
-	d.stateLocked = true
-	d.lockedState = state
-	d.stateMu.Unlock()
-	return func() {
-		d.stateMu.Lock()
-		locked := d.lockedState
-		d.stateLocked = false
-		d.lockedState = nil
-		d.stateMu.Unlock()
-		if locked != nil {
-			locked.Unlock()
-		}
-	}
 }
 
 func (d *DaemonService) currentState() *stateFile {
@@ -1357,22 +1325,10 @@ func (d *DaemonService) setState(state *stateFile) {
 	if d == nil || d.Sync == nil || d.Sync.State == state {
 		return
 	}
-	d.stateMu.Lock()
 	if state.Network != nil && state.Network.RecordVerifier == nil {
 		configureValidation(state.Network)
 	}
-	if d.stateLocked {
-		state.Lock()
-		old := d.lockedState
-		d.lockedState = state
-		d.Sync.State = state
-		d.stateMu.Unlock()
-		if old != nil {
-			old.Unlock()
-		}
-		d.publishCommittedStateSnapshot()
-		return
-	}
+	d.stateMu.Lock()
 	d.Sync.State = state
 	d.stateMu.Unlock()
 	d.publishCommittedStateSnapshot()
@@ -1407,7 +1363,7 @@ func (d *DaemonService) notifyStateChanged() {
 	d.flushRevocationCleanup()
 	d.publishCommittedStateSnapshot()
 
-	if d.drainingEvents || d.hasStateLock() {
+	if d.drainingEvents {
 		d.ipsecDirty = true
 		d.routingDirty = true
 		d.firewallDirty = true
@@ -1434,10 +1390,6 @@ func (d *DaemonService) notifyStateChanged() {
 
 func (d *DaemonService) publishCommittedStateSnapshot() {
 	if d == nil || d.StateStore == nil || d.Sync == nil {
-		return
-	}
-	if d.hasStateLock() {
-		d.publishStateStoreRuntimeFlags()
 		return
 	}
 	state := d.Sync.State
@@ -1479,26 +1431,18 @@ func (d *DaemonService) noteReconcileFlush(layer string) {
 // retained with a "revoked" marker for diagnostics; it is removed via the
 // normal offline cleanup policy after the cleanup_after retention window.
 func (d *DaemonService) flushRevocationCleanup() {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
+	if d == nil || d.StateStore == nil || d.Sync == nil {
 		return
 	}
-	state := d.Sync.State
-	if d.hasStateLock() {
+	if _, err := d.StateStore.Update(func(state *stateFile) error {
 		d.flushRevocationCleanupLocked(state)
+		return nil
+	}); err != nil {
+		d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
 		return
 	}
-	state.Lock()
-	defer state.Unlock()
-	d.flushRevocationCleanupLocked(state)
-}
-
-func (d *DaemonService) hasStateLock() bool {
-	if d == nil {
-		return false
-	}
-	d.stateMu.Lock()
-	defer d.stateMu.Unlock()
-	return d.stateLocked
+	state, _, _ := d.snapshotState()
+	d.installCurrentStateSnapshot(state)
 }
 
 func (d *DaemonService) flushRevocationCleanupLocked(state *stateFile) {

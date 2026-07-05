@@ -144,7 +144,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if _, err := d.StateStore.Update(cleanupState); err != nil {
 		return cleaned, orphans, err
 	}
-	if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+	if err := d.installAndSaveCommittedState(); err != nil {
 		return cleaned, orphans, err
 	}
 	d.notifyStateChanged()

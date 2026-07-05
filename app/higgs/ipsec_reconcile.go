@@ -463,19 +463,6 @@ func (d *DaemonService) installAndSaveCommittedState() error {
 	return saveState(committedState)
 }
 
-func (d *DaemonService) installAndSaveCommittedStateWithLockTransfer() error {
-	committedState, _, _ := d.snapshotState()
-	if d.hasStateLock() {
-		d.setState(committedState)
-	} else {
-		d.installCurrentStateSnapshot(committedState)
-	}
-	if d.Sync != nil && d.Sync.App != nil {
-		return d.Sync.App.SaveState(committedState)
-	}
-	return saveState(committedState)
-}
-
 func (d *DaemonService) installCurrentStateSnapshot(state *stateFile) {
 	if d == nil || d.Sync == nil || state == nil {
 		return
