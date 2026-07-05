@@ -1115,13 +1115,20 @@ func listenPortFromAddr(addr string) uint16 {
 }
 
 func (sr *SyncRuntime) publishEndpointRecord() error {
-	state := sr.State
+	changed, err := sr.publishEndpointRecordInState(sr.State)
+	if err != nil || !changed {
+		return err
+	}
+	return sr.saveState()
+}
+
+func (sr *SyncRuntime) publishEndpointRecordInState(state *stateFile) (bool, error) {
 	config := sr.Config
 	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 || autoJoinPending(state) {
-		return nil
+		return false, nil
 	}
 	if config != nil && config.DisableEndpointPublish {
-		return sr.clearPublishedEndpointRecord()
+		return sr.clearPublishedEndpointRecordInState(state)
 	}
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
@@ -1144,25 +1151,25 @@ func (sr *SyncRuntime) publishEndpointRecord() error {
 	recordValue := gossip.LocalEndpointsToRecordWithPolicy(endpoints, previous, now, config.EndpointTTL, config.EndpointGrace)
 	value, err := json.Marshal(recordValue)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if zs != nil {
 		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
 			if bytes.Equal(existing.Value, value) || (gossip.EndpointRecordEndpointsEqual(previous, recordValue) && !endpointRefreshDue(previous, now, config.EndpointRefresh)) {
-				return nil
+				return false, nil
 			}
 		}
 	}
 
 	record, err := buildSignedRecordAt(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint", now)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := state.Network.Put(record); err != nil {
-		return err
+		return false, err
 	}
-	return sr.saveState()
+	return true, nil
 }
 
 func endpointRefreshDue(previous *gossip.EndpointRecord, now time.Time, refresh time.Duration) bool {
@@ -1274,35 +1281,34 @@ func isLoopbackIP(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (sr *SyncRuntime) clearPublishedEndpointRecord() error {
-	state := sr.State
+func (sr *SyncRuntime) clearPublishedEndpointRecordInState(state *stateFile) (bool, error) {
 	config := sr.Config
 	zs := state.Network.Zones[state.ManagedZone]
 	if zs == nil {
-		return nil
+		return false, nil
 	}
 	existing := zs.Records[gossip.EndpointRecordKeyUDP]
 	if existing == nil {
-		return nil
+		return false, nil
 	}
 	var current gossip.EndpointRecord
 	if err := json.Unmarshal(existing.Value, &current); err == nil && len(current.Endpoints) == 0 {
-		return nil
+		return false, nil
 	}
 	now := sr.now()
 	recordValue := gossip.LocalEndpointsToRecordWithPolicy(nil, nil, now, config.EndpointTTL, 0)
 	value, err := json.Marshal(recordValue)
 	if err != nil {
-		return err
+		return false, err
 	}
 	record, err := buildSignedRecordAt(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint", now)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := state.Network.Put(record); err != nil {
-		return err
+		return false, err
 	}
-	return sr.saveState()
+	return true, nil
 }
 
 func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {

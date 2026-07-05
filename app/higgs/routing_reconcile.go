@@ -1021,16 +1021,6 @@ func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *r
 	return changed, nil
 }
 
-// putRouteAnnouncement signs and writes a routes/announcements/* record into
-// the current in-memory state. It must be called from the daemon's single-writer
-// path where d.Sync.State is already locked/mutable.
-func (d *DaemonService) putRouteAnnouncement(path zone.ZonePath, prefix netip.Prefix, active bool) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil {
-		return nil
-	}
-	return d.putRouteAnnouncementForState(d.Sync.State, path, prefix, active)
-}
-
 func (d *DaemonService) putRouteAnnouncementForState(state *stateFile, path zone.ZonePath, prefix netip.Prefix, active bool) error {
 	canonical := prefix.Masked().String()
 	key, err := routing.NormalizeRouteAnnouncementKey(canonical)
@@ -1059,33 +1049,41 @@ func (d *DaemonService) publishRoutingNetnsRecord() error {
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
+	_, err := d.publishRoutingNetnsRecordInState(d.Sync.State)
+	return err
+}
+
+func (d *DaemonService) publishRoutingNetnsRecordInState(state *stateFile) (bool, error) {
+	if d == nil || d.Sync == nil || state == nil || state.Network == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return false, nil
+	}
 	config := d.Sync.App.Config
-	if d.Sync.State.ManagedZone == zone.RootZone || !d.Sync.State.ManagedZone.Valid() || len(d.Sync.State.ZonePrivateKey) == 0 {
-		return nil
+	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() || len(state.ZonePrivateKey) == 0 {
+		return false, nil
 	}
 	if len(config.Routing.Instances) == 0 {
-		return nil
+		return false, nil
 	}
 	netnsNames := routingNetnsNames(config.Routing)
 	if len(netnsNames) == 0 {
-		return nil
+		return false, nil
 	}
 	record := routing.RoutingNetnsRecord{Version: 1, Netns: netnsNames}
 	value, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("marshal routing/netns record: %w", err)
+		return false, fmt.Errorf("marshal routing/netns record: %w", err)
 	}
-	updated, err := putSignedRoutingNetnsRecord(d.Sync.State, d.Sync.State.ManagedZone, value, d.Sync.now())
+	updated, err := putSignedRoutingNetnsRecord(state, state.ManagedZone, value, d.Sync.now())
 	if err != nil {
-		return fmt.Errorf("put routing/netns record: %w", err)
+		return false, fmt.Errorf("put routing/netns record: %w", err)
 	}
 	if updated {
 		d.logInfo("routing", "published_netns_record", map[string]any{
-			"zone":  d.Sync.State.ManagedZone,
+			"zone":  state.ManagedZone,
 			"netns": netnsNames,
 		})
 	}
-	return nil
+	return updated, nil
 }
 
 func putSignedRoutingNetnsRecord(state *stateFile, path zone.ZonePath, value []byte, now time.Time) (bool, error) {

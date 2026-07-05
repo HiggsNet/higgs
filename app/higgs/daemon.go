@@ -1232,21 +1232,23 @@ func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
 
 func (d *DaemonService) handleEndpointTimerEvent() error {
 	d.logDebug("endpoint", "timer_begin", nil)
-	latest, err := d.Sync.loadState()
+	err := d.runStateStoreWrite(func(state *stateFile) error {
+		syncRuntime := *d.Sync
+		syncRuntime.State = state
+		if _, err := syncRuntime.publishEndpointRecordInState(state); err != nil {
+			return err
+		}
+		if _, err := syncRuntime.publishIPsecRecordsInState(state); err != nil {
+			return err
+		}
+		if _, err := d.publishRoutingNetnsRecordInState(state); err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("daemon reload: %w", err)
-	}
-	d.setState(latest)
-	if err := d.Sync.publishEndpointRecord(); err != nil {
 		return err
 	}
-	if err := d.Sync.publishIPsecRecords(); err != nil {
-		return err
-	}
-	if err := d.publishRoutingNetnsRecord(); err != nil {
-		return err
-	}
-	d.notifyStateChanged()
 	d.logDebug("endpoint", "timer_done", nil)
 	return nil
 }

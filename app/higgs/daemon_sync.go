@@ -684,7 +684,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 
 	// Second pass: persist once if any apply succeeded.
 	if changed {
-		if err := d.Sync.saveState(); err != nil {
+		if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
 			d.logWarn("sync", "save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
 	}
@@ -773,7 +773,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				recordPeerBackoff(state, a.PeerID, a.Err, now)
 			})
 		case SaveStateAction:
-			if err := d.Sync.saveState(); err != nil {
+			if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
 				d.logWarn("sync", "save_failed", map[string]any{
 					"peer_id": peerID,
 					"reason":  a.Reason,
@@ -906,7 +906,7 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 		}
 		d.notifyStateChanged()
 		d.relaySyncToPeers(peerID)
-		if err := d.Sync.saveState(); err != nil {
+		if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
 			d.logWarn("sync", "session_save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
 	}
@@ -925,12 +925,16 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			continue
 		}
 		if relayed >= maxRelayFanoutPerUpdate {
-			recordRelaySuppression(d.Sync.State, peerID, "relay_fanout_limited", now)
+			d.recordSyncPeerState(peerID, "relay_suppression", func(state *stateFile) {
+				recordRelaySuppression(state, peerID, "relay_fanout_limited", now)
+			})
 			continue
 		}
 		allowed, reason := shouldRelayToPeer(d.Sync.State.SyncPeers[peerID], peerID, sourcePeerID, now)
 		if !allowed {
-			recordRelaySuppression(d.Sync.State, peerID, reason, now)
+			d.recordSyncPeerState(peerID, "relay_suppression", func(state *stateFile) {
+				recordRelaySuppression(state, peerID, reason, now)
+			})
 			continue
 		}
 		relayed++
@@ -943,7 +947,9 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 		default:
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
 		}
-		recordRelaySuccess(d.Sync.State, peerID, sourcePeerID, now)
+		d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {
+			recordRelaySuccess(state, peerID, sourcePeerID, now)
+		})
 	}
 }
 

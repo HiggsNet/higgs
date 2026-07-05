@@ -92,48 +92,69 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.App == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
-	if len(d.Sync.State.LinkInstances) == 0 && !includeOrphans {
-		markIPsecCleanupSnapshot(d.Sync.State, d.Sync.now())
-		if err := d.Sync.saveState(); err != nil {
-			return 0, 0, err
-		}
-		return 0, 0, nil
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return 0, 0, err
 	}
 	ipsecDriver := d.IPsecDriver
 	xfrmDriver := d.XFRMDriver
 	var closeFn func() error
-	if ipsecDriver == nil || xfrmDriver == nil {
-		drivers, err := newIPsecCleanupDrivers(d.Sync.App.Config)
-		if err != nil {
-			return 0, 0, err
+	if len(latest.LinkInstances) > 0 || includeOrphans {
+		if ipsecDriver == nil || xfrmDriver == nil {
+			drivers, err := newIPsecCleanupDrivers(d.Sync.App.Config)
+			if err != nil {
+				return 0, 0, err
+			}
+			ipsecDriver = drivers.ipsecDriver
+			xfrmDriver = drivers.xfrmDriver
+			closeFn = drivers.close
 		}
-		ipsecDriver = drivers.ipsecDriver
-		xfrmDriver = drivers.xfrmDriver
-		closeFn = drivers.close
 	}
 	if closeFn != nil {
 		defer func() { _ = closeFn() }()
 	}
+
 	cleaned := 0
-	var err error
-	if len(d.Sync.State.LinkInstances) > 0 {
-		cleaned, err = cleanupIPsecLinkInstances(ctx, d.Sync.State, ipsecDriver, xfrmDriver, d.Sync.now())
-		if err != nil {
-			return cleaned, 0, err
-		}
-	} else {
-		markIPsecCleanupSnapshot(d.Sync.State, d.Sync.now())
-	}
 	orphans := 0
-	if includeOrphans {
-		orphans, err = cleanupIPsecOrphanConnections(ctx, d.Sync.State, ipsecDriver)
-		if err != nil {
+	cleanupState := func(state *stateFile) error {
+		now := d.Sync.now()
+		var err error
+		if len(state.LinkInstances) > 0 {
+			cleaned, err = cleanupIPsecLinkInstances(ctx, state, ipsecDriver, xfrmDriver, now)
+			if err != nil {
+				return err
+			}
+		} else {
+			markIPsecCleanupSnapshot(state, now)
+		}
+		if includeOrphans {
+			orphans, err = cleanupIPsecOrphanConnections(ctx, state, ipsecDriver)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if d.StateStore == nil {
+		d.setState(latest)
+		if err := cleanupState(d.Sync.State); err != nil {
 			return cleaned, orphans, err
 		}
+		if err := d.Sync.saveState(); err != nil {
+			return cleaned, orphans, err
+		}
+		return cleaned, orphans, nil
 	}
-	if err := d.Sync.saveState(); err != nil {
+
+	d.StateStore.ReplaceCommitted(latest)
+	if _, err := d.StateStore.Update(cleanupState); err != nil {
 		return cleaned, orphans, err
 	}
+	if err := d.installAndSaveCommittedStateWithLockTransfer(); err != nil {
+		return cleaned, orphans, err
+	}
+	d.notifyStateChanged()
 	return cleaned, orphans, nil
 }
 

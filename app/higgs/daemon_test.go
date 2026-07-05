@@ -3366,6 +3366,54 @@ func TestDaemonRecordPutUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	}
 }
 
+func TestDaemonEndpointTimerUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	config.ListenAddr = "198.51.100.20:4242"
+	now := time.Unix(2150, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = config.ListenAddr
+	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	unlock := service.lockState()
+	if err := service.handleEndpointTimerEvent(); err != nil {
+		unlock()
+		t.Fatalf("handleEndpointTimerEvent: %v", err)
+	}
+	current := service.currentState()
+	if current == state {
+		unlock()
+		t.Fatal("live state pointer did not transfer to committed state")
+	}
+	if got := current.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
+		unlock()
+		t.Fatal("transferred live state missing endpoint record")
+	}
+	unlock()
+
+	snapshot, _ := service.StateStore.Snapshot()
+	if got := snapshot.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
+		t.Fatal("committed snapshot missing endpoint record")
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := latest.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
+		t.Fatal("persisted state missing endpoint record")
+	}
+}
+
 func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
@@ -4173,6 +4221,72 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 	if len(driver.Connections) != 1 || driver.Connections[0].TransportID != spec.TransportID || len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName {
 		t.Fatalf("driver recreate: connections=%+v interfaces=%+v", driver.Connections, driver.Interfaces)
+	}
+}
+
+func TestDaemonIPsecCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(5111, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	appConfig := defaultAppConfig()
+	group := testIPsecLinkGroup()
+	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
+	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
+	}
+	spec := plan.Desired[0]
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
+	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	driver := &observedIPsecDriver{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.IPsecDriver = driver
+	service.XFRMDriver = driver
+
+	unlock := service.lockState()
+	cleaned, orphans, err := service.handleIPsecCleanupEvent(context.Background(), false)
+	if err != nil {
+		unlock()
+		t.Fatalf("handleIPsecCleanupEvent: %v", err)
+	}
+	current := service.currentState()
+	if current == state {
+		unlock()
+		t.Fatal("live state pointer did not transfer to committed state")
+	}
+	if len(current.LinkInstances) != 0 {
+		unlock()
+		t.Fatalf("transferred live link instances = %+v, want none", current.LinkInstances)
+	}
+	unlock()
+	if cleaned != 1 || orphans != 0 {
+		t.Fatalf("cleanup result = %d/%d, want 1/0", cleaned, orphans)
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	if len(snapshot.LinkInstances) != 0 {
+		t.Fatalf("committed link instances = %+v, want none", snapshot.LinkInstances)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(latest.LinkInstances) != 0 {
+		t.Fatalf("persisted link instances = %+v, want none", latest.LinkInstances)
+	}
+	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID || len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID {
+		t.Fatalf("driver cleanup: terminated=%+v unloaded=%+v", driver.Terminated, driver.Unloaded)
 	}
 }
 
