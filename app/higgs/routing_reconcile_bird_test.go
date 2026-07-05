@@ -1,0 +1,243 @@
+package main
+
+import (
+	"context"
+	"github.com/Catofes/higgs/pkg/routing/bird"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false, lastExit: &bird.ProcessExit{PID: 1234, Error: "signal: killed"}}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	if pm.started {
+		t.Fatalf("managed BIRD should not restart while crash backoff is active")
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["higgstesth2"]
+	if inst == nil {
+		t.Fatalf("missing bird instance state")
+	}
+	if inst.State != birdInstanceStateDegraded {
+		t.Fatalf("State = %q, want degraded", inst.State)
+	}
+	if inst.FailureCount != 1 {
+		t.Fatalf("FailureCount = %d, want 1", inst.FailureCount)
+	}
+	if inst.BackoffUntilUnix != now.Add(time.Second).Unix() {
+		t.Fatalf("BackoffUntilUnix = %d, want %d", inst.BackoffUntilUnix, now.Add(time.Second).Unix())
+	}
+	if !strings.Contains(inst.LastExit, "pid 1234") {
+		t.Fatalf("LastExit = %q, want pid detail", inst.LastExit)
+	}
+	if inst.Owner.ControlSocketToken == "" || inst.Owner.PIDFileToken == "" || inst.Owner.RouteTableToken == "" || inst.Owner.RuleToken == "" {
+		t.Fatalf("owner tokens are incomplete: %+v", inst.Owner)
+	}
+}
+
+func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	state.BirdInstances = map[string]*BirdInstanceState{
+		"higgstesth2": {
+			NetNSName:        "higgstesth2",
+			State:            birdInstanceStateDegraded,
+			FailureCount:     1,
+			BackoffUntilUnix: now.Add(-time.Second).Unix(),
+			LastError:        "bird restart backoff active",
+			LastExit:         "pid 1234: signal: killed",
+		},
+	}
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	if !pm.started {
+		t.Fatalf("managed BIRD should restart after crash backoff expires")
+	}
+	if pm.startSpec.Owner.RouteTableToken == "" || pm.startSpec.Owner.RuleToken == "" {
+		t.Fatalf("start spec owner tokens are incomplete: %+v", pm.startSpec.Owner)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["higgstesth2"]
+	if inst == nil || inst.State != birdInstanceStateRunning {
+		t.Fatalf("bird instance = %+v, want running", inst)
+	}
+	if inst.FailureCount != 0 || inst.BackoffUntilUnix != 0 || inst.LastExit != "" {
+		t.Fatalf("restart did not clear crash state: %+v", inst)
+	}
+}
+
+func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		"higgstesth3": {Kind: ipsec.NetNSName, Name: "higgstesth3", Create: true},
+		"higgstesth4": {Kind: ipsec.NetNSName, Name: "higgstesth4", Create: true},
+	}}
+	var err error
+	appConfig.Routing, err = parseRoutingConfigInstances([]routingInstanceYAML{
+		{ID: "managed-persist", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged},
+		{ID: "external", NetNS: "higgstesth3", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal},
+		{ID: "managed-stop", NetNS: "higgstesth4", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged, ShutdownPolicy: routingShutdownPolicyStop},
+	}, appConfig.Netns, appConfig.DataDir)
+	if err != nil {
+		t.Fatalf("parseRoutingConfigInstances: %v", err)
+	}
+
+	persistPM := &fakeBirdProcessManager{running: true}
+	externalPM := &fakeBirdProcessManager{running: true}
+	stopPM := &fakeBirdProcessManager{running: true}
+	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service.birdProcessManagers = map[string]birdProcessManager{
+		"higgstesth2": persistPM,
+		"higgstesth3": externalPM,
+		"higgstesth4": stopPM,
+	}
+
+	if err := service.stopManagedBirdInstances(context.Background(), false); err != nil {
+		t.Fatalf("stopManagedBirdInstances: %v", err)
+	}
+	if persistPM.stopped {
+		t.Fatalf("default managed BIRD should persist across daemon shutdown")
+	}
+	if externalPM.stopped {
+		t.Fatalf("external BIRD process manager should not be stopped")
+	}
+	if !stopPM.stopped {
+		t.Fatalf("managed BIRD with shutdown_policy=stop was not stopped")
+	}
+	if stopPM.stopSpec.NetNSName != "higgstesth4" {
+		t.Fatalf("Stop netns = %q, want higgstesth4", stopPM.stopSpec.NetNSName)
+	}
+	if stopPM.stopSpec.ControlSocketPath == "" || stopPM.stopSpec.PIDFilePath == "" || stopPM.stopSpec.ConfigPath == "" {
+		t.Fatalf("Stop spec paths must be populated: %+v", stopPM.stopSpec)
+	}
+
+	persistPM.stopped = false
+	stopPM.stopped = false
+	if err := service.stopManagedBirdInstances(context.Background(), true); err != nil {
+		t.Fatalf("force stopManagedBirdInstances: %v", err)
+	}
+	if !persistPM.stopped || !stopPM.stopped {
+		t.Fatalf("force stop should stop all managed instances: persist=%v stop=%v", persistPM.stopped, stopPM.stopped)
+	}
+}
+
+func TestFlushRoutingReconcileCoalesces(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+
+	if service.flushRoutingReconcile(context.Background()) {
+		t.Fatalf("flushRoutingReconcile should return false when not dirty")
+	}
+
+	service.routingDirty = true
+	if !service.flushRoutingReconcile(context.Background()) {
+		t.Fatalf("flushRoutingReconcile should return true when dirty")
+	}
+
+	if service.routingDirty {
+		t.Fatalf("routingDirty should be cleared after flush")
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(latest.BirdInstances) != 1 {
+		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
+	}
+}

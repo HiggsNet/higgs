@@ -1,0 +1,381 @@
+package main
+
+import (
+	"context"
+	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	"net/netip"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRoutingDryRunSmoke(t *testing.T) {
+	state, config, _ := buildDryRunSmokeNetworkState(t)
+	now := time.Unix(4000, 0)
+
+	// Verify the route set authorizes the expected announcements without errors.
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) > 0 {
+		t.Fatalf("unexpected authorization errors: %+v", ars.Errors)
+	}
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "ipsec-main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	client := &fakeBirdClient{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return client
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(latest.BirdInstances) != 1 {
+		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
+	}
+	inst := latest.BirdInstances["higgstesth2"]
+	if inst == nil {
+		t.Fatalf("missing bird instance state for netns higgstesth2")
+	}
+	if inst.State == birdInstanceStateError {
+		t.Fatalf("bird instance state is error: %s", inst.LastError)
+	}
+	if inst.ConfigPath == "" {
+		t.Fatalf("ConfigPath is empty")
+	}
+
+	cfg, err := readFileString(inst.ConfigPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+
+	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
+	if importIdx == -1 || exportIdx == -1 {
+		t.Fatalf("missing import/export filters")
+	}
+	importFilter := cfg[importIdx:exportIdx]
+	exportFilter := cfg[exportIdx:]
+
+	// Import filter should contain the authorized IPAM assignment prefixes.
+	if !strings.Contains(importFilter, "10.0.0.0/16+") {
+		t.Errorf("import filter missing authorized prefix 10.0.0.0/16+")
+	}
+	if !strings.Contains(importFilter, "10.1.0.0/16+") {
+		t.Errorf("import filter missing authorized prefix 10.1.0.0/16+")
+	}
+
+	// Export filter should contain only the local announcement.
+	if !strings.Contains(exportFilter, "10.0.1.0/24+") {
+		t.Errorf("export filter missing local prefix 10.0.1.0/24+")
+	}
+	if strings.Contains(exportFilter, "10.1.1.0/24") {
+		t.Errorf("export filter should not contain remote prefix 10.1.1.0/24")
+	}
+
+	// The reconcile run itself should not have recorded any error.
+	if latest.RoutingReconcile != nil && latest.RoutingReconcile.LastError != "" {
+		t.Errorf("unexpected routing reconcile error: %s", latest.RoutingReconcile.LastError)
+	}
+}
+
+func TestIPAMRoutingSmoke(t *testing.T) {
+	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	now := rt.Now()
+
+	// Publish pool and assignment as the catofes. administrator.
+	if err := runWithZonePrivateKey(rt, signers["catofes."], func() error {
+		if err := createIPAMPoolWithRuntime(rt, "catofes.", "10.0.0.0/16", "catofes."); err != nil {
+			return err
+		}
+		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/16", "node-a.catofes.", false)
+	}); err != nil {
+		t.Fatalf("catofes IPAM writes: %v", err)
+	}
+
+	// Announce a route as node-a.catofes.
+	if err := runWithZonePrivateKey(rt, signers["node-a.catofes."], func() error {
+		return announceRouteWithRuntime(rt, "node-a.catofes.", "10.0.1.0/24")
+	}); err != nil {
+		t.Fatalf("node-a route announce: %v", err)
+	}
+
+	// Reload state to see records written by the CLI functions.
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState after CLI writes: %v", err)
+	}
+
+	// Verify the authorized route set before reconcile.
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) > 0 {
+		t.Fatalf("unexpected authorization errors: %+v", ars.Errors)
+	}
+	if _, ok := ars.Announced["node-a.catofes."][netip.MustParsePrefix("10.0.1.0/24")]; !ok {
+		t.Fatalf("expected 10.0.1.0/24 to be authorized for node-a.catofes.")
+	}
+
+	// Reconcile routing and verify BIRD config import/export filters.
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["higgstesth2"]
+	if inst == nil || inst.ConfigPath == "" {
+		t.Fatalf("missing bird instance state or config path")
+	}
+
+	cfg, err := readFileString(inst.ConfigPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+
+	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
+	if importIdx == -1 || exportIdx == -1 {
+		t.Fatalf("missing import/export filters")
+	}
+	importFilter := cfg[importIdx:exportIdx]
+	exportFilter := cfg[exportIdx:]
+
+	if !strings.Contains(importFilter, "10.0.0.0/16+") {
+		t.Errorf("import filter missing authorized assignment prefix 10.0.0.0/16+")
+	}
+	if !strings.Contains(exportFilter, "10.0.1.0/24+") {
+		t.Errorf("export filter missing local announcement prefix 10.0.1.0/24+")
+	}
+
+	_ = signers
+}
+
+func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
+	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	rt.Config.IPAM.AutoAnnounceAssignedIPs = true
+	now := rt.Now()
+
+	// Publish pool and assignment as the catofes. administrator.
+	// The assignment is for node-a.catofes., so auto-announce should pick it up.
+	if err := runWithZonePrivateKey(rt, signers["catofes."], func() error {
+		if err := createIPAMPoolWithRuntime(rt, "catofes.", "10.0.0.0/16", "catofes."); err != nil {
+			return err
+		}
+		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/24", "node-a.catofes.", false)
+	}); err != nil {
+		t.Fatalf("catofes IPAM writes: %v", err)
+	}
+
+	// Reload state to see records written by the CLI functions.
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState after CLI writes: %v", err)
+	}
+	// Restore the managed-zone signing key; runWithZonePrivateKey left the
+	// state with the catofes. administrator key.
+	state.ZonePrivateKey = signers["node-a.catofes."]
+
+	// Reconcile routing and let auto-announce publish the route.
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+
+	// Verify the route announcement record was auto-published.
+	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
+	rec := service.Sync.State.Network.Zones["node-a.catofes."].Records[key]
+	if rec == nil {
+		t.Fatalf("expected auto-published announcement for 10.0.0.0/24")
+	}
+	ann, err := routing.ParseRouteAnnouncementRecord(rec)
+	if err != nil {
+		t.Fatalf("ParseRouteAnnouncementRecord: %v", err)
+	}
+	if !ann.Active {
+		t.Fatalf("expected active auto-published announcement")
+	}
+	if ann.Prefix != "10.0.0.0/24" {
+		t.Fatalf("expected prefix 10.0.0.0/24, got %s", ann.Prefix)
+	}
+
+	// Verify the BIRD export filter includes the auto-announced prefix.
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["higgstesth2"]
+	if inst == nil || inst.ConfigPath == "" {
+		t.Fatalf("missing bird instance state or config path")
+	}
+	cfg, err := readFileString(inst.ConfigPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
+	if exportIdx == -1 {
+		t.Fatalf("missing export filter")
+	}
+	exportFilter := cfg[exportIdx:]
+	if !strings.Contains(exportFilter, "10.0.0.0/24+") {
+		t.Errorf("export filter missing auto-announced prefix 10.0.0.0/24+")
+	}
+
+	_ = now
+}
+
+func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
+	state, config, signers := buildDryRunSmokeNetworkState(t)
+	now := time.Unix(4000, 0)
+
+	// Initial authorized route set should authorize node-a's announcement.
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+	if len(ars.Errors) > 0 {
+		t.Fatalf("unexpected authorization errors: %+v", ars.Errors)
+	}
+	if _, ok := ars.Announced["node-a.catofes."][netip.MustParsePrefix("10.0.1.0/24")]; !ok {
+		t.Fatalf("expected 10.0.1.0/24 to be authorized for node-a.catofes.")
+	}
+	if _, ok := ars.Assignments[netip.MustParsePrefix("10.0.0.0/16")]; !ok {
+		t.Fatalf("expected 10.0.0.0/16 assignment to be present")
+	}
+
+	// Revoke the assignment covering node-a's announcement.
+	revokeRouteAssignment(t, state, "catofes.", "10.0.0.0/16", "node-a.catofes.", now.Add(time.Second), signers["catofes."])
+
+	// After revocation the assignment and its authorized announcement should disappear.
+	ars, err = routing.BuildAuthorizedRouteSet(state.Network, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet after revoke: %v", err)
+	}
+	if _, ok := ars.Announced["node-a.catofes."][netip.MustParsePrefix("10.0.1.0/24")]; ok {
+		t.Fatalf("expected 10.0.1.0/24 to be removed from authorized announcements after assignment revoke")
+	}
+	if _, ok := ars.Assignments[netip.MustParsePrefix("10.0.0.0/16")]; ok {
+		t.Fatalf("expected 10.0.0.0/16 assignment to be removed after revoke")
+	}
+	foundErr := false
+	for _, e := range ars.Errors {
+		if e.Code == "route_unauthorized_no_assignment" && e.Prefix == netip.MustParsePrefix("10.0.1.0/24") {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Fatalf("expected route_unauthorized_no_assignment error for 10.0.1.0/24, got %+v", ars.Errors)
+	}
+
+	// Reconcile routing again and verify the export filter no longer contains the revoked prefix.
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "ipsec-main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now.Add(time.Second) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return &fakeBirdClient{}
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["higgstesth2"]
+	if inst == nil || inst.ConfigPath == "" {
+		t.Fatalf("missing bird instance state or config path")
+	}
+
+	cfg, err := readFileString(inst.ConfigPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+
+	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
+	if importIdx == -1 || exportIdx == -1 {
+		t.Fatalf("missing import/export filters")
+	}
+	importFilter := cfg[importIdx:exportIdx]
+	exportFilter := cfg[exportIdx:]
+
+	if !strings.Contains(importFilter, "10.1.0.0/16+") {
+		t.Errorf("import filter missing remaining authorized prefix 10.1.0.0/16+")
+	}
+	if strings.Contains(importFilter, "10.0.0.0/16+") {
+		t.Errorf("import filter should not contain revoked prefix 10.0.0.0/16+")
+	}
+	if strings.Contains(exportFilter, "10.0.1.0/24+") {
+		t.Errorf("export filter should not contain revoked local prefix 10.0.1.0/24+")
+	}
+}

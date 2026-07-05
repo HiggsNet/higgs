@@ -1,0 +1,199 @@
+package main
+
+import (
+	"context"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
+	service := newDaemonService(&Runtime{}, &stateFile{}, &syncConfigFile{}, 0)
+	if service.Interval != defaultDaemonInterval {
+		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
+	}
+	if service.Sync == nil {
+		t.Fatal("sync runtime is nil")
+	}
+}
+
+func TestConfiguredStrongSwanDriverWithoutLinkGroupsIsNoop(t *testing.T) {
+	drivers, err := newConfiguredIPsecDrivers(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil)
+	if err != nil {
+		t.Fatalf("newConfiguredIPsecDrivers: %v", err)
+	}
+	if drivers.ipsecDriver != nil || drivers.xfrmDriver != nil || drivers.close != nil {
+		t.Fatalf("drivers = %+v, want no-op without link groups", drivers)
+	}
+}
+
+func TestDaemonServiceStateChangedHook(t *testing.T) {
+	state := &stateFile{}
+	service := newDaemonService(&Runtime{}, state, &syncConfigFile{}, time.Second)
+	var called bool
+	service.Hooks.OnStateChanged = func(got *stateFile) {
+		called = true
+		if got != state {
+			t.Fatalf("hook got unexpected state pointer")
+		}
+	}
+	service.notifyStateChanged()
+	if !called {
+		t.Fatal("state changed hook was not called")
+	}
+}
+
+func TestDaemonNotifyStateChangedDefersReconcileWhileStateLocked(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	var flushed []string
+	service.Hooks.OnReconcileFlush = func(layer string) {
+		flushed = append(flushed, layer)
+	}
+
+	unlock := service.lockState()
+	service.notifyStateChanged()
+	unlock()
+
+	if len(flushed) != 0 {
+		t.Fatalf("reconcile flushed while state lock was held: %v", flushed)
+	}
+	if !service.ipsecDirty || !service.routingDirty || !service.firewallDirty {
+		t.Fatalf("dirty flags = ipsec:%v routing:%v firewall:%v, want all true", service.ipsecDirty, service.routingDirty, service.firewallDirty)
+	}
+}
+
+func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4200, 0)
+	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	statePath := filepath.Join(dataDir, "higgs.db")
+	configPath := filepath.Join(dir, "config.yaml")
+	t.Setenv("HIGGS_CONFIG", configPath)
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(dataDir): %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("data_dir: "+dataDir+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(initial config): %v", err)
+	}
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = dataDir
+	appConfig.StatePath = statePath
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: statePath,
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	reply := make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
+	syncNow, shutdown, _, _, _ := service.processEvents(context.Background())
+	result := <-reply
+	if result.Error != nil {
+		t.Fatalf("processEvents(reload initial): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("initial reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(initial): %v", err)
+	}
+	if len(latest.LinkInstances) != 0 {
+		t.Fatalf("initial link instances = %+v, want none", latest.LinkInstances)
+	}
+
+	reloadedConfig := strings.Join([]string{
+		"data_dir: " + dataDir,
+		"ipsec:",
+		"  driver: dry-run",
+		"overlays:",
+		"  - id: main",
+		"    provider: strongswan",
+		"    netns:",
+		"      name: higgstesth2",
+		"      create: true",
+		"    default_path_mode: family-redundant",
+		"    address_source_order: [manual-address]",
+		"    connect:",
+		"      - strongswan://*.catofes.?role=in",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(reloadedConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile(reloaded config): %v", err)
+	}
+
+	reply = make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
+	syncNow, shutdown, _, _, _ = service.processEvents(context.Background())
+	result = <-reply
+	if result.Error != nil {
+		t.Fatalf("processEvents(reload overlay): %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("overlay reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+	latest, err = rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(reloaded): %v", err)
+	}
+	if len(latest.LinkInstances) != 1 {
+		t.Fatalf("link instances after reload = %d, want 1", len(latest.LinkInstances))
+	}
+	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("ipsec reconcile after reload = %+v, want create", latest.IPsecReconcile)
+	}
+	if len(service.Sync.App.Config.IPsec.LinkGroups) != 1 || service.Sync.Config.PeerID != config.PeerID {
+		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.Sync.App.Config.IPsec.LinkGroups, service.Sync.Config)
+	}
+}
+
+func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	dataDir := filepath.Join(dir, "data")
+	otherDir := filepath.Join(dir, "other")
+	t.Setenv("HIGGS_CONFIG", configPath)
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(dataDir): %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("data_dir: "+otherDir+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config): %v", err)
+	}
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(dataDir, "higgs.db"),
+		Clock:     func() time.Time { return time.Unix(4300, 0) },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "restart daemon to switch state") {
+		t.Fatalf("reload error = %v, want state path switch rejection", result.Error)
+	}
+	if syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
+	}
+}
+
+func TestRootCommandIncludesDaemon(t *testing.T) {
+	for _, command := range rootCommand().Commands {
+		if command.Name == "daemon" {
+			return
+		}
+	}
+	t.Fatal("root command does not include daemon")
+}

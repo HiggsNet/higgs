@@ -1,0 +1,103 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"github.com/Catofes/higgs/pkg/health"
+	"github.com/Catofes/higgs/pkg/routing/bird"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	"net/netip"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	state.LinkInstances = map[string]linkInstanceState{
+		"link-1": {
+			ID:                  "link-1",
+			GroupID:             "main",
+			ActualState:         "up",
+			InterfaceName:       "hgs-old",
+			StagedInterfaceName: "hgs-new",
+		},
+	}
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	manager := health.NewManager(
+		health.ProbeConfig{Interval: -time.Second, Timeout: 100 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 2},
+		health.DefaultHysteresisConfig(),
+		successfulHealthProber{},
+	)
+	manager.UpsertTarget(health.ProbeTarget{
+		ProbeID:        healthProbeID("link-1", "staged"),
+		InstanceID:     "link-1",
+		ProbeRole:      "staged",
+		InterfaceName:  "hgs-new",
+		PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
+		State:          "up",
+		Staged:         true,
+	}, now)
+	if dispatched := manager.Tick(context.Background(), now); dispatched != 1 {
+		t.Fatalf("health probes dispatched = %d, want 1", dispatched)
+	}
+
+	client := &fakeBirdClient{status: &bird.BirdObservedState{
+		Neighbors: []bird.BirdNeighbor{{Interface: "hgs-new", Metric: 96}},
+		Routes:    []bird.BirdRoute{{Iface: "hgs-new", Protocol: "babel1", Selected: false, Metric: 96}},
+	}}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.health = manager
+	service.birdProcessManager = &fakeBirdProcessManager{running: false}
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return client
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting without selected route: %v", err)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
+		t.Fatalf("cutover should stay blocked until BIRD has a selected staged route")
+	}
+
+	client.status = &bird.BirdObservedState{
+		Neighbors: []bird.BirdNeighbor{{Interface: "hgs-new", Metric: 96}},
+		Routes:    []bird.BirdRoute{{Iface: "hgs-new", Protocol: "babel1", Selected: true, Metric: 96}},
+	}
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting with selected route: %v", err)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; !ready {
+		t.Fatalf("cutover should be ready after BIRD neighbor and selected route converge")
+	}
+
+	client.statusErr = errors.New("birdc unavailable")
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting with stale BIRD observation: %v", err)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
+		t.Fatalf("cutover should be blocked when fresh BIRD observation is unavailable")
+	}
+}
