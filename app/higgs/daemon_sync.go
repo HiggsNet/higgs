@@ -548,11 +548,10 @@ func (d *DaemonService) liveStateReadableNow() bool {
 	if d == nil || d.Sync == nil || d.Sync.State == nil {
 		return true
 	}
-	unlock, ok := tryStateRLockWithin(d.Sync.State, stateReadLockTimeout)
-	if !ok {
+	if !d.Sync.State.mu.TryRLock() {
 		return false
 	}
-	unlock()
+	d.Sync.State.RUnlock()
 	return true
 }
 

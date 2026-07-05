@@ -1497,7 +1497,18 @@ func (d *DaemonService) publishCommittedStateSnapshot() {
 		d.publishStateStoreRuntimeFlags()
 		return
 	}
-	d.StateStore.ReplaceCommitted(d.Sync.State)
+	state := d.Sync.State
+	if state != nil {
+		if !state.mu.TryRLock() {
+			d.publishStateStoreRuntimeFlags()
+			return
+		}
+		snapshot := cloneStateFile(state)
+		state.RUnlock()
+		d.StateStore.ReplaceCommitted(snapshot)
+	} else {
+		d.StateStore.ReplaceCommitted(nil)
+	}
 	d.publishStateStoreRuntimeFlags()
 }
 
