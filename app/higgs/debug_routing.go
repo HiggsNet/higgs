@@ -170,49 +170,39 @@ func buildBabelDebugView(rt *Runtime, state *stateFile, response *controlRespons
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances
 	}
-	view := inspect.BabelDebugView{}
+	input := inspect.BabelDebugInput{}
 	if len(routingInstances) == 0 {
-		return view
+		return inspect.BuildBabelDebug(input)
 	}
 	if response != nil && response.LastRoutingError != "" {
-		view.LastReconcileError = response.LastRoutingError
+		input.LastReconcileError = response.LastRoutingError
 	}
-	for _, inst := range routingInstances {
-		mode := inst.Mode
-		if mode == "" {
-			mode = "managed"
-		}
-		if !inst.Enabled {
-			mode = "disabled"
-		}
-		instView := inspect.BabelInstanceView{
-			NetNS:      inst.NetNS,
-			InstanceID: inst.ID,
-			Mode:       mode,
-			Enabled:    inst.Enabled,
-		}
-		if inst.Mode != ipsec.RoutingModeExternal && inst.Mode != ipsec.RoutingModeDisabled {
-			instView.ShutdownPolicy = normalizedRoutingShutdownPolicy(inst.ShutdownPolicy)
-		}
-		if !inst.Enabled {
-			view.Instances = append(view.Instances, instView)
+	input.RuntimeStates = make(map[string]inspect.BabelRuntimeState, len(instances))
+	for netnsName, bi := range instances {
+		if bi == nil {
 			continue
 		}
-		bi := instances[inst.NetNS]
-		if bi != nil {
-			instView.HasState = true
-			instView.RouterID = bi.RouterID
-			instView.ControlSocket = bi.ControlSocket
-			instView.ConfigPath = bi.ConfigPath
-			instView.PIDFile = bi.PIDFile
-			instView.LastConfigHash = bi.LastConfigHash
-			instView.Overlays = append([]string(nil), bi.Overlays...)
-			instView.State = bi.State
-			instView.LastError = bi.LastError
+		input.RuntimeStates[netnsName] = inspect.BabelRuntimeState{
+			RouterID:       bi.RouterID,
+			ControlSocket:  bi.ControlSocket,
+			ConfigPath:     bi.ConfigPath,
+			PIDFile:        bi.PIDFile,
+			LastConfigHash: bi.LastConfigHash,
+			Overlays:       append([]string(nil), bi.Overlays...),
+			State:          bi.State,
+			LastError:      bi.LastError,
 		}
-		view.Instances = append(view.Instances, instView)
 	}
-	return view
+	for _, inst := range routingInstances {
+		input.Instances = append(input.Instances, inspect.BabelInstanceInput{
+			NetNS:          inst.NetNS,
+			InstanceID:     inst.ID,
+			Mode:           inst.Mode,
+			ShutdownPolicy: inst.ShutdownPolicy,
+			Enabled:        inst.Enabled,
+		})
+	}
+	return inspect.BuildBabelDebug(input)
 }
 
 func debugRoutes(_ context.Context, _ *cli.Command) error {

@@ -5,6 +5,23 @@ import (
 	"time"
 )
 
+func TestBuildPeerLifecycleDebugNormalizesConfigAndCopiesPeers(t *testing.T) {
+	peers := []PeerStatusInfo{{PeerID: "node-a", State: PeerStateActive}}
+	view := BuildPeerLifecycleDebug(PeerLifecycleDebugInput{Peers: peers})
+	peers[0].PeerID = "changed"
+
+	def := DefaultPeerLifecycleConfig()
+	if view.Config.StaleAfter != def.StaleAfter || view.Config.OfflineAfter != def.OfflineAfter || view.Config.CleanupAfter != def.CleanupAfter {
+		t.Fatalf("config = %+v, want defaults %+v", view.Config, def)
+	}
+	if !view.Config.KeepSAWhileStale {
+		t.Fatalf("KeepSAWhileStale = false, want default true")
+	}
+	if got := view.Peers[0].PeerID; got != "node-a" {
+		t.Fatalf("peer copied = %q, want node-a", got)
+	}
+}
+
 func TestBuildPeerLifecycleStatusPriorityAndThresholds(t *testing.T) {
 	now := time.Unix(2000, 0)
 	cfg := DefaultPeerLifecycleConfig()

@@ -7,7 +7,6 @@ import (
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
-	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/urfave/cli/v3"
 )
 
@@ -47,32 +46,25 @@ func writeDebugFirewall(w io.Writer, _ *Runtime, instances []FirewallInstanceCon
 }
 
 func buildFirewallDebugView(instances []FirewallInstanceConfig, snapshot *firewallReconcileState) inspect.FirewallDebugView {
-	view := inspect.FirewallDebugView{}
-	if len(instances) == 0 {
-		return view
+	input := inspect.FirewallDebugInput{
+		Instances: make([]inspect.FirewallInstanceInput, 0, len(instances)),
 	}
 	if snapshot != nil && snapshot.Backend != "" {
-		view.Backend = snapshot.Backend
+		input.Backend = snapshot.Backend
 	}
 	if snapshot != nil && snapshot.LastError != "" {
-		view.LastError = snapshot.LastError
+		input.LastError = snapshot.LastError
 	}
 	for _, inst := range instances {
-		mode := inst.Mode
-		if mode == "" {
-			mode = firewall.ModeManaged
-		}
-		if !inst.Enabled {
-			mode = "disabled"
-		}
 		scope := inst.NetNS
 		if inst.IsHost {
 			scope = "host"
 		}
-		instView := inspect.FirewallInstanceView{
+		instInput := inspect.FirewallInstanceInput{
 			ID:            inst.ID,
 			Scope:         scope,
-			Mode:          mode,
+			Enabled:       inst.Enabled,
+			Mode:          inst.Mode,
 			Backend:       inst.Backend,
 			DefaultPolicy: inst.DefaultPolicy,
 			OwnerPrefix:   inst.OwnerPrefix,
@@ -85,22 +77,28 @@ func buildFirewallDebugView(instances []FirewallInstanceConfig, snapshot *firewa
 			RedirectGrace: inst.RedirectGrace.Enabled,
 		}
 		for _, svc := range inst.LocalServices {
-			instView.LocalServices = append(instView.LocalServices, inspect.FirewallLocalServiceView{
+			instInput.LocalServices = append(instInput.LocalServices, inspect.FirewallLocalServiceView{
 				Proto: svc.Proto,
 				Port:  svc.Port,
 			})
 		}
-		if snapshot != nil && snapshot.Instances != nil {
-			if entry := snapshot.Instances[inst.ID]; entry != nil {
-				instView.Generation = entry.Generation
-				instView.OwnedObjects = entry.OwnedObjects
-				instView.PolicyHash = entry.PolicyHash
-				instView.LastError = entry.LastError
+		input.Instances = append(input.Instances, instInput)
+	}
+	if snapshot != nil && snapshot.Instances != nil {
+		input.Snapshot = make(map[string]inspect.FirewallInstanceSnapshot, len(snapshot.Instances))
+		for id, entry := range snapshot.Instances {
+			if entry == nil {
+				continue
+			}
+			input.Snapshot[id] = inspect.FirewallInstanceSnapshot{
+				Generation:   entry.Generation,
+				OwnedObjects: entry.OwnedObjects,
+				PolicyHash:   entry.PolicyHash,
+				LastError:    entry.LastError,
 			}
 		}
-		view.Instances = append(view.Instances, instView)
 	}
-	return view
+	return inspect.BuildFirewallDebug(input)
 }
 
 func firewallStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {

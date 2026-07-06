@@ -58,16 +58,10 @@ func buildPeerLifecycleDebugView(rt *Runtime, state *stateFile) inspect.PeerLife
 	hasOverlay := rt != nil && rt.Config != nil && len(rt.Config.IPsec.LinkGroups) > 0
 
 	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
-	normalized := inspect.NormalizePeerLifecycleConfig(cfg)
-	return inspect.PeerLifecycleDebugView{
-		Config: inspect.PeerLifecycleDebugConfig{
-			StaleAfter:       normalized.StaleAfter,
-			OfflineAfter:     normalized.OfflineAfter,
-			CleanupAfter:     normalized.CleanupAfter,
-			KeepSAWhileStale: normalized.KeepSAWhileStale,
-		},
-		Peers: peers,
-	}
+	return inspect.BuildPeerLifecycleDebug(inspect.PeerLifecycleDebugInput{
+		Config: cfg,
+		Peers:  peers,
+	})
 }
 
 // peerStatusSnapshotForControl returns the peer status list for a daemon

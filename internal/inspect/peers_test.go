@@ -229,3 +229,31 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 		t.Fatalf("nested diagnostics = %+v", got)
 	}
 }
+
+func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+
+	flow := BuildPeerSyncFlowView(PeerSyncFlowInput{
+		ActivePullUpdatedUnix: now.Unix(),
+		LastHintUnix:          now.Add(-time.Minute).Unix(),
+		LastResponderUnix:     now.Add(-2 * time.Minute).Unix(),
+	})
+	if flow.ActivePullUpdated != "2023-11-14T22:13:20Z" || flow.LastHint == "never" || flow.LastResponder == "never" {
+		t.Fatalf("sync flow timestamps = %+v", flow)
+	}
+
+	datagram := BuildPeerDatagramStatsView(PeerDatagramStatsInput{
+		LastCatalogUnix:  now.Unix(),
+		LastTooLargeUnix: now.Add(-time.Minute).Unix(),
+	})
+	if datagram.LastCatalog != "2023-11-14T22:13:20Z" || datagram.LastTooLarge == "never" {
+		t.Fatalf("datagram timestamps = %+v", datagram)
+	}
+
+	objectPull := BuildPeerObjectPullStatsView(PeerObjectPullStatsInput{
+		LastUnix: now.Unix(),
+	})
+	if objectPull.Last != "2023-11-14T22:13:20Z" {
+		t.Fatalf("object pull timestamp = %+v", objectPull)
+	}
+}

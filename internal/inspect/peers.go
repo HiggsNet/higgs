@@ -225,6 +225,21 @@ type PeerSyncFlowView struct {
 	LastResponderZone   string
 }
 
+type PeerSyncFlowInput struct {
+	ActivePullState       string
+	ActivePullLastEvent   string
+	ActivePullUpdatedUnix int64
+	HintAccepted          int64
+	HintSuppressed        int64
+	LastHintUnix          int64
+	LastHintReason        string
+	LastHintSuppression   string
+	ReadOnlyResponder     int64
+	LastResponderUnix     int64
+	LastResponderKind     string
+	LastResponderZone     string
+}
+
 type PeerDatagramStatsView struct {
 	TooLargeDropped           int64
 	DigestOnlyAnnounces       int64
@@ -244,12 +259,46 @@ type PeerDatagramStatsView struct {
 	LastTooLargeLimit         int
 }
 
+type PeerDatagramStatsInput struct {
+	TooLargeDropped           int64
+	DigestOnlyAnnounces       int64
+	ChunkFallbacks            int64
+	LastCatalogUnix           int64
+	LastCatalogRootHex        string
+	LastCatalogZoneCount      int
+	LastCatalogCursor         string
+	LastCatalogPageEntries    int
+	LastCatalogRejectedReason string
+	LastTooLargeUnix          int64
+	LastTooLargeDirection     string
+	LastTooLargeObject        string
+	LastTooLargeZone          string
+	LastTooLargeKey           string
+	LastTooLargeBytes         int
+	LastTooLargeLimit         int
+}
+
 type PeerObjectPullStatsView struct {
 	Attempts               int64
 	Successes              int64
 	Failures               int64
 	LargeObjectUnreachable int64
 	Last                   string
+	LastObject             string
+	LastZone               string
+	LastKey                string
+	LastBytes              int
+	LastSourcePeer         string
+	LastUnreachable        bool
+	LastError              string
+}
+
+type PeerObjectPullStatsInput struct {
+	Attempts               int64
+	Successes              int64
+	Failures               int64
+	LargeObjectUnreachable int64
+	LastUnix               int64
 	LastObject             string
 	LastZone               string
 	LastKey                string
@@ -280,6 +329,61 @@ func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 		SyncFlow:         input.SyncFlow,
 		DatagramStats:    input.DatagramStats,
 		ObjectPullStats:  input.ObjectPullStats,
+	}
+}
+
+func BuildPeerSyncFlowView(input PeerSyncFlowInput) PeerSyncFlowView {
+	return PeerSyncFlowView{
+		ActivePullState:     input.ActivePullState,
+		ActivePullLastEvent: input.ActivePullLastEvent,
+		ActivePullUpdated:   formatPeerDebugUnixTime(input.ActivePullUpdatedUnix),
+		HintAccepted:        input.HintAccepted,
+		HintSuppressed:      input.HintSuppressed,
+		LastHint:            formatPeerDebugUnixTime(input.LastHintUnix),
+		LastHintReason:      input.LastHintReason,
+		LastHintSuppression: input.LastHintSuppression,
+		ReadOnlyResponder:   input.ReadOnlyResponder,
+		LastResponder:       formatPeerDebugUnixTime(input.LastResponderUnix),
+		LastResponderKind:   input.LastResponderKind,
+		LastResponderZone:   input.LastResponderZone,
+	}
+}
+
+func BuildPeerDatagramStatsView(input PeerDatagramStatsInput) PeerDatagramStatsView {
+	return PeerDatagramStatsView{
+		TooLargeDropped:           input.TooLargeDropped,
+		DigestOnlyAnnounces:       input.DigestOnlyAnnounces,
+		ChunkFallbacks:            input.ChunkFallbacks,
+		LastCatalogRootHex:        input.LastCatalogRootHex,
+		LastCatalogZoneCount:      input.LastCatalogZoneCount,
+		LastCatalogCursor:         input.LastCatalogCursor,
+		LastCatalogPageEntries:    input.LastCatalogPageEntries,
+		LastCatalogRejectedReason: input.LastCatalogRejectedReason,
+		LastCatalog:               formatPeerDebugUnixTime(input.LastCatalogUnix),
+		LastTooLarge:              formatPeerDebugUnixTime(input.LastTooLargeUnix),
+		LastTooLargeDirection:     input.LastTooLargeDirection,
+		LastTooLargeObject:        input.LastTooLargeObject,
+		LastTooLargeZone:          input.LastTooLargeZone,
+		LastTooLargeKey:           input.LastTooLargeKey,
+		LastTooLargeBytes:         input.LastTooLargeBytes,
+		LastTooLargeLimit:         input.LastTooLargeLimit,
+	}
+}
+
+func BuildPeerObjectPullStatsView(input PeerObjectPullStatsInput) PeerObjectPullStatsView {
+	return PeerObjectPullStatsView{
+		Attempts:               input.Attempts,
+		Successes:              input.Successes,
+		Failures:               input.Failures,
+		LargeObjectUnreachable: input.LargeObjectUnreachable,
+		Last:                   formatPeerDebugUnixTime(input.LastUnix),
+		LastObject:             input.LastObject,
+		LastZone:               input.LastZone,
+		LastKey:                input.LastKey,
+		LastBytes:              input.LastBytes,
+		LastSourcePeer:         input.LastSourcePeer,
+		LastUnreachable:        input.LastUnreachable,
+		LastError:              input.LastError,
 	}
 }
 
