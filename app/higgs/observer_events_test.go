@@ -12,7 +12,7 @@ func TestObserverEventsMethodNotAllowed(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
 	rr := httptest.NewRecorder()
-	srv.handleEvents(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
 	}
@@ -24,7 +24,7 @@ func TestObserverEventsInitialFrame(t *testing.T) {
 	cancel()
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil)
 	rr := httptest.NewRecorder()
-	srv.handleEvents(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}

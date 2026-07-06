@@ -108,36 +108,6 @@ func (s *observerServer) handler() http.Handler {
 	return s.server.Handler()
 }
 
-type apiResponse = observer.APIResponse
-
-func (s *observerServer) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleStatus(w, r)
-}
-func (s *observerServer) handleZones(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleZones(w, r)
-}
-func (s *observerServer) handlePeers(w http.ResponseWriter, r *http.Request) {
-	s.server.HandlePeers(w, r)
-}
-func (s *observerServer) handleLinks(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleLinks(w, r)
-}
-func (s *observerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleHealth(w, r)
-}
-func (s *observerServer) handleRoutes(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleRoutes(w, r)
-}
-func (s *observerServer) handleBird(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleBird(w, r)
-}
-func (s *observerServer) handleEvents(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleEvents(w, r)
-}
-func (s *observerServer) handleStatic(w http.ResponseWriter, r *http.Request) {
-	s.server.HandleStatic(w, r)
-}
-
 func (p *observerProvider) Status() (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {

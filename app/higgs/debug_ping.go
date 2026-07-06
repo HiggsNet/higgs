@@ -7,9 +7,10 @@ import (
 	"net/netip"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -155,81 +156,30 @@ func distinctPeerZones(targets []health.ProbeTarget) []string {
 // When no targets matched, it lists the peer zones currently known to state so
 // the operator can spot a typo.
 func writePingReport(w io.Writer, peerZone zone.ZonePath, outcomes []pingOutcome, availableZones []string, count int, timeout time.Duration) error {
-	fmt.Fprintf(w, "zone: %s\n", peerZone)
-	fmt.Fprintf(w, "targets: %d\n", len(outcomes))
-	if len(outcomes) == 0 {
-		fmt.Fprintf(w, "no IPsec link instances for zone %s\n", peerZone)
-		if len(availableZones) > 0 {
-			fmt.Fprintf(w, "available peer zones: %s\n", strings.Join(availableZones, ", "))
-		}
-		return nil
-	}
-	fmt.Fprintf(w, "count: %d timeout: %s\n\n", count, timeout)
-	for _, instanceID := range orderedPingInstances(outcomes) {
-		fmt.Fprintf(w, "instance %s\n", instanceID)
-		rows := pingRowsForInstance(outcomes, instanceID)
-		for _, row := range rows {
-			fmt.Fprintf(w, "  role=%s family=%s\n", pingRole(row.Target), row.Family)
-			fmt.Fprintf(w, "    interface: %s", dash(row.Target.InterfaceName))
-			if row.Target.NetNS != "" {
-				fmt.Fprintf(w, "  netns: %s", row.Target.NetNS)
-			}
-			fmt.Fprintln(w)
-			fmt.Fprintf(w, "    local: %s  peer: %s\n", dash(row.Target.LocalTunnelAddr.String()), dash(row.Target.PeerTunnelAddr.String()))
-			fmt.Fprintf(w, "    result: %s\n", formatPingResult(row.Result))
-		}
-	}
-	return nil
+	return inspecttext.WritePingDebug(w, buildPingDebugView(peerZone, outcomes, availableZones, count, timeout))
 }
 
-func orderedPingInstances(outcomes []pingOutcome) []string {
-	seen := map[string]struct{}{}
-	ordered := make([]string, 0, len(outcomes))
-	for _, o := range outcomes {
-		id := o.Target.InstanceID
-		if id == "" {
-			id = o.Target.ProbeID
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ordered = append(ordered, id)
+func buildPingDebugView(peerZone zone.ZonePath, outcomes []pingOutcome, availableZones []string, count int, timeout time.Duration) inspect.PingDebugView {
+	view := inspect.PingDebugView{
+		Zone:           string(peerZone),
+		AvailableZones: append([]string(nil), availableZones...),
+		Count:          count,
+		Timeout:        timeout,
 	}
-	sort.Strings(ordered)
-	return ordered
-}
-
-func pingRowsForInstance(outcomes []pingOutcome, instanceID string) []pingOutcome {
-	rows := make([]pingOutcome, 0, len(outcomes))
-	for _, o := range outcomes {
-		id := o.Target.InstanceID
-		if id == "" {
-			id = o.Target.ProbeID
-		}
-		if id != instanceID {
-			continue
-		}
-		rows = append(rows, o)
+	for _, outcome := range outcomes {
+		view.Targets = append(view.Targets, inspect.PingTargetView{
+			InstanceID:  outcome.Target.InstanceID,
+			ProbeID:     outcome.Target.ProbeID,
+			Role:        pingRole(outcome.Target),
+			Family:      outcome.Family,
+			Interface:   outcome.Target.InterfaceName,
+			NetNS:       outcome.Target.NetNS,
+			LocalTunnel: outcome.Target.LocalTunnelAddr.String(),
+			PeerTunnel:  outcome.Target.PeerTunnelAddr.String(),
+			Success:     outcome.Result.Success,
+			RTT:         outcome.Result.RTT,
+			Error:       outcome.Result.Error,
+		})
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if ri, rj := pingRole(rows[i].Target), pingRole(rows[j].Target); ri != rj {
-			return ri < rj
-		}
-		return rows[i].Family < rows[j].Family
-	})
-	return rows
-}
-
-func formatPingResult(r health.ProbeResult) string {
-	if r.Success {
-		if r.RTT > 0 {
-			return fmt.Sprintf("ok rtt=%s", r.RTT.Round(time.Microsecond))
-		}
-		return "ok"
-	}
-	if r.Error != "" {
-		return fmt.Sprintf("fail error=%q", r.Error)
-	}
-	return "fail"
+	return view
 }

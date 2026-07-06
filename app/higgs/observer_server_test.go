@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/internal/observer"
 )
 
 func TestObserverStartObserverServerDisabled(t *testing.T) {
@@ -63,7 +65,7 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status code = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
-	var apiResp apiResponse
+	var apiResp observer.APIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		t.Fatalf("decode response error: %v", err)
 	}

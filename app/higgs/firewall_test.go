@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -585,7 +586,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	rr := httptest.NewRecorder()
 	observerDone := make(chan struct{})
 	go func() {
-		srv.handleStatus(rr, req)
+		srv.handler().ServeHTTP(rr, req)
 		close(observerDone)
 	}()
 	select {
@@ -594,7 +595,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 			close(driver.unblock)
 			t.Fatalf("observer status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 		}
-		var resp apiResponse
+		var resp observer.APIResponse
 		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 			close(driver.unblock)
 			t.Fatalf("decode observer status: %v", err)

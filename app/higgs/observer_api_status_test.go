@@ -6,17 +6,19 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/internal/observer"
 )
 
 func TestObserverStatusAPI(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()
-	srv.handleStatus(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -62,11 +64,11 @@ func TestObserverReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *testing.
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()
-	srv.handleStatus(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestObserverReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *testing.
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr = httptest.NewRecorder()
-	srv.handleLinks(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("links code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -94,7 +96,7 @@ func TestObserverStatusAPIMethodNotAllowed(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()
-	srv.handleStatus(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
 	}

@@ -4,15 +4,17 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
-	"github.com/Catofes/higgs/pkg/core/gossip"
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/internal/observer"
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
@@ -27,7 +29,7 @@ func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -63,11 +65,11 @@ func TestObserverZonesAPIEmpty(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
 	rr := httptest.NewRecorder()
-	srv.handleZones(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -137,7 +139,7 @@ func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -169,11 +171,11 @@ func TestObserverPeersAPIEmpty(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
 	rr := httptest.NewRecorder()
-	srv.handlePeers(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -236,7 +238,7 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -286,7 +288,7 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -326,7 +328,7 @@ func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -346,11 +348,11 @@ func TestObserverLinksAPIEmpty(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr := httptest.NewRecorder()
-	srv.handleLinks(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -421,11 +423,11 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr := httptest.NewRecorder()
-	srv.handleLinks(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -478,11 +480,11 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	rr := httptest.NewRecorder()
-	srv.handleHealth(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -523,11 +525,11 @@ func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/link-1/series?metric=rtt&range=5m&step=1m", nil)
 	rr := httptest.NewRecorder()
-	srv.handleHealth(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	var resp apiResponse
+	var resp observer.APIResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -551,7 +553,7 @@ func TestObserverRoutesAPI(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/routes", nil)
 	rr := httptest.NewRecorder()
-	srv.handleRoutes(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
@@ -561,7 +563,7 @@ func TestObserverBirdAPI(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/bird", nil)
 	rr := httptest.NewRecorder()
-	srv.handleBird(rr, req)
+	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
