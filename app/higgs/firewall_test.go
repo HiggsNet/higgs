@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -734,21 +733,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	}
 }
 
-func TestDebugFirewall_NotConfigured(t *testing.T) {
-	rt := &Runtime{Config: &appConfig{}}
-	var buf bytes.Buffer
-	instances := []FirewallInstanceConfig{}
-	if err := writeDebugFirewall(&buf, rt, instances, nil); err != nil {
-		t.Fatalf("writeDebugFirewall: %v", err)
-	}
-	output := buf.String()
-	if !strings.Contains(output, "not configured") {
-		t.Errorf("expected 'not configured' in output, got: %s", output)
-	}
-}
-
-func TestDebugFirewall_InstanceOutput(t *testing.T) {
-	rt := &Runtime{Config: &appConfig{}}
+func TestBuildFirewallDebugView(t *testing.T) {
 	instances := []FirewallInstanceConfig{
 		{ID: "higgstesth2", NetNS: "higgstesth2", IsHost: false, Enabled: true, Mode: firewall.ModeManaged, Backend: firewall.BackendAuto, DefaultPolicy: firewall.DefaultPolicyDrop},
 		{ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: firewall.ModeManaged, HostPorts: firewall.HostPortConfig{IKE: true, NATT: true}, RedirectGrace: firewall.RedirectGrace{Enabled: true}},
@@ -759,24 +744,17 @@ func TestDebugFirewall_InstanceOutput(t *testing.T) {
 			"higgstesth2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 		},
 	}
-	var buf bytes.Buffer
-	if err := writeDebugFirewall(&buf, rt, instances, snapshot); err != nil {
-		t.Fatalf("writeDebugFirewall: %v", err)
+	view := buildFirewallDebugView(instances, snapshot)
+	if view.Backend != "dry-run" {
+		t.Fatalf("backend = %q, want dry-run", view.Backend)
 	}
-	output := buf.String()
-	if !strings.Contains(output, "backend: dry-run") {
-		t.Errorf("missing backend line: %s", output)
+	if len(view.Instances) != 2 {
+		t.Fatalf("instances = %d, want 2", len(view.Instances))
 	}
-	if !strings.Contains(output, "instance higgstesth2") {
-		t.Errorf("missing higgstesth2 instance: %s", output)
+	if got := view.Instances[0]; got.ID != "higgstesth2" || got.Generation != 5 || got.OwnedObjects != 10 || got.PolicyHash != "abc123" {
+		t.Fatalf("first instance = %+v, want reconcile fields", got)
 	}
-	if !strings.Contains(output, "generation: 5") {
-		t.Errorf("missing generation: %s", output)
-	}
-	if !strings.Contains(output, "host_ports: ike=true natt=true") {
-		t.Errorf("missing host_ports: %s", output)
-	}
-	if !strings.Contains(output, "transit: false") {
-		t.Errorf("missing transit: %s", output)
+	if got := view.Instances[1]; !got.IsHost || !got.HostIKE || !got.HostNATT || !got.RedirectGrace {
+		t.Fatalf("host instance = %+v, want host flags", got)
 	}
 }

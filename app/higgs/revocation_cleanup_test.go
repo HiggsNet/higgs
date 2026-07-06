@@ -427,58 +427,6 @@ func TestAllRevocationImpactEmpty(t *testing.T) {
 	}
 }
 
-// TestWriteRevocationImpactsOutput verifies debug output format.
-func TestWriteRevocationImpactsOutput(t *testing.T) {
-	impacts := []RevocationImpact{
-		{
-			RevokedZone:           "node-b.catofes.",
-			SourceZone:            "catofes.",
-			RevokedSubtree:        []zone.ZonePath{"leaf.node-b.catofes."},
-			AffectedLinkInstances: []string{"link-1"},
-			AffectedSyncPeers:     []string{"node-b.catofes."},
-			ConfiguredButRevoked:  []string{"node-b.catofes."},
-			Layers: map[string]*RevocationLayerStatus{
-				revocationLayerIPsec:    {Status: revocationStatusRemoved, Reason: "teardown complete"},
-				revocationLayerRouting:  {Status: revocationStatusRemoved},
-				revocationLayerFirewall: {Status: revocationStatusRemoved},
-				revocationLayerGossip:   {Status: revocationStatusRemoved},
-			},
-		},
-	}
-
-	var buf strings.Builder
-	if err := writeRevocationImpacts(&buf, impacts); err != nil {
-		t.Fatalf("writeRevocationImpacts: %v", err)
-	}
-	output := buf.String()
-	if !strings.Contains(output, "revoked_zone: node-b.catofes.") {
-		t.Fatalf("output missing revoked_zone, got:\n%s", output)
-	}
-	if !strings.Contains(output, "source_zone: catofes.") {
-		t.Fatalf("output missing source_zone, got:\n%s", output)
-	}
-	if !strings.Contains(output, "leaf.node-b.catofes.") {
-		t.Fatalf("output missing subtree, got:\n%s", output)
-	}
-	if !strings.Contains(output, "configured_but_revoked:") {
-		t.Fatalf("output missing configured_but_revoked, got:\n%s", output)
-	}
-	if !strings.Contains(output, "cleanup_layers:") {
-		t.Fatalf("output missing cleanup_layers, got:\n%s", output)
-	}
-}
-
-// TestWriteRevocationImpactsEmpty verifies empty output.
-func TestWriteRevocationImpactsEmpty(t *testing.T) {
-	var buf strings.Builder
-	if err := writeRevocationImpacts(&buf, nil); err != nil {
-		t.Fatalf("writeRevocationImpacts: %v", err)
-	}
-	if !strings.Contains(buf.String(), "no revoked zones") {
-		t.Fatalf("expected 'no revoked zones', got %q", buf.String())
-	}
-}
-
 // TestDaemonRevocationCleanupPeerCache verifies that the daemon's
 // notifyStateChanged path clears peer cache after revocation, and that the
 // deny-first ordering runs cleanup before IPsec/routing/firewall flush.

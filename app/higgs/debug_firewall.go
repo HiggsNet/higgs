@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 
+	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/urfave/cli/v3"
 )
@@ -42,15 +43,19 @@ func debugFirewallWithRuntime(rt *Runtime, w io.Writer) error {
 }
 
 func writeDebugFirewall(w io.Writer, _ *Runtime, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) error {
+	return inspecttext.WriteDebugFirewall(w, buildFirewallDebugView(instances, snapshot))
+}
+
+func buildFirewallDebugView(instances []FirewallInstanceConfig, snapshot *firewallReconcileState) inspect.FirewallDebugView {
+	view := inspect.FirewallDebugView{}
 	if len(instances) == 0 {
-		fmt.Fprintln(w, "firewall: not configured")
-		return nil
+		return view
 	}
 	if snapshot != nil && snapshot.Backend != "" {
-		fmt.Fprintf(w, "backend: %s\n", snapshot.Backend)
+		view.Backend = snapshot.Backend
 	}
 	if snapshot != nil && snapshot.LastError != "" {
-		fmt.Fprintf(w, "last_reconcile_error: %s\n", snapshot.LastError)
+		view.LastError = snapshot.LastError
 	}
 	for _, inst := range instances {
 		mode := inst.Mode
@@ -64,45 +69,38 @@ func writeDebugFirewall(w io.Writer, _ *Runtime, instances []FirewallInstanceCon
 		if inst.IsHost {
 			scope = "host"
 		}
-		fmt.Fprintf(w, "instance %s\n", inst.ID)
-		fmt.Fprintf(w, "  scope: %s\n", scope)
-		fmt.Fprintf(w, "  mode: %s\n", mode)
-		fmt.Fprintf(w, "  backend: %s\n", defaultStr(inst.Backend, "auto"))
-		fmt.Fprintf(w, "  default_policy: %s\n", defaultStr(inst.DefaultPolicy, "drop"))
-		if inst.OwnerPrefix != "" {
-			fmt.Fprintf(w, "  owner_prefix: %s\n", inst.OwnerPrefix)
+		instView := inspect.FirewallInstanceView{
+			ID:            inst.ID,
+			Scope:         scope,
+			Mode:          mode,
+			Backend:       inst.Backend,
+			DefaultPolicy: inst.DefaultPolicy,
+			OwnerPrefix:   inst.OwnerPrefix,
+			Transit:       inst.Forwarding.Transit,
+			AllowPrefixes: len(inst.Forwarding.AllowPrefixes),
+			DenyPrefixes:  len(inst.Forwarding.DenyPrefixes),
+			IsHost:        inst.IsHost,
+			HostIKE:       inst.HostPorts.IKE,
+			HostNATT:      inst.HostPorts.NATT,
+			RedirectGrace: inst.RedirectGrace.Enabled,
 		}
-		fmt.Fprintf(w, "  transit: %t\n", inst.Forwarding.Transit)
-		if len(inst.Forwarding.AllowPrefixes) > 0 {
-			fmt.Fprintf(w, "  allow_prefixes: %d\n", len(inst.Forwarding.AllowPrefixes))
-		}
-		if len(inst.Forwarding.DenyPrefixes) > 0 {
-			fmt.Fprintf(w, "  deny_prefixes: %d\n", len(inst.Forwarding.DenyPrefixes))
-		}
-		if len(inst.LocalServices) > 0 {
-			fmt.Fprintf(w, "  local_services: %d\n", len(inst.LocalServices))
-			for _, svc := range inst.LocalServices {
-				fmt.Fprintf(w, "    %s/%d\n", svc.Proto, svc.Port)
-			}
-		}
-		if inst.IsHost {
-			fmt.Fprintf(w, "  host_ports: ike=%t natt=%t\n", inst.HostPorts.IKE, inst.HostPorts.NATT)
-			fmt.Fprintf(w, "  redirect_grace: %t\n", inst.RedirectGrace.Enabled)
+		for _, svc := range inst.LocalServices {
+			instView.LocalServices = append(instView.LocalServices, inspect.FirewallLocalServiceView{
+				Proto: svc.Proto,
+				Port:  svc.Port,
+			})
 		}
 		if snapshot != nil && snapshot.Instances != nil {
 			if entry := snapshot.Instances[inst.ID]; entry != nil {
-				fmt.Fprintf(w, "  generation: %d\n", entry.Generation)
-				fmt.Fprintf(w, "  owned_objects: %d\n", entry.OwnedObjects)
-				if entry.PolicyHash != "" {
-					fmt.Fprintf(w, "  policy_hash: %s\n", entry.PolicyHash)
-				}
-				if entry.LastError != "" {
-					fmt.Fprintf(w, "  last_error: %s\n", entry.LastError)
-				}
+				instView.Generation = entry.Generation
+				instView.OwnedObjects = entry.OwnedObjects
+				instView.PolicyHash = entry.PolicyHash
+				instView.LastError = entry.LastError
 			}
 		}
+		view.Instances = append(view.Instances, instView)
 	}
-	return nil
+	return view
 }
 
 func firewallStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
@@ -112,11 +110,4 @@ func firewallStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 		return nil, false, nil
 	}
 	return response, true, err
-}
-
-func defaultStr(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }

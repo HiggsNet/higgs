@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"time"
 
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -42,7 +41,7 @@ func debugRevokeImpact(_ context.Context, zoneArg string) error {
 		if zoneArg != "" {
 			impacts = filterImpactsByZone(impacts, zone.ZonePath(zoneArg))
 		}
-		return writeRevocationImpacts(os.Stdout, impacts)
+		return inspecttext.WriteRevocationImpacts(os.Stdout, impacts)
 	}
 
 	// Fallback to local state snapshot.
@@ -59,7 +58,7 @@ func debugRevokeImpact(_ context.Context, zoneArg string) error {
 	} else {
 		impacts = AllRevocationImpact(state, syncConfig, now)
 	}
-	return writeRevocationImpacts(os.Stdout, impacts)
+	return inspecttext.WriteRevocationImpacts(os.Stdout, impacts)
 }
 
 func filterImpactsByZone(impacts []RevocationImpact, z zone.ZonePath) []RevocationImpact {
@@ -70,86 +69,4 @@ func filterImpactsByZone(impacts []RevocationImpact, z zone.ZonePath) []Revocati
 		}
 	}
 	return out
-}
-
-// writeRevocationImpacts writes the revocation impact details to w.
-func writeRevocationImpacts(w io.Writer, impacts []RevocationImpact) error {
-	if len(impacts) == 0 {
-		fmt.Fprintln(w, "no revoked zones")
-		return nil
-	}
-	for _, imp := range impacts {
-		writeRevocationImpactDetail(w, imp)
-	}
-	return nil
-}
-
-func writeRevocationImpactDetail(w io.Writer, imp RevocationImpact) {
-	fmt.Fprintf(w, "revoked_zone: %s\n", imp.RevokedZone)
-	if imp.SourceZone != "" {
-		fmt.Fprintf(w, "  source_zone: %s\n", imp.SourceZone)
-	}
-	if len(imp.RevokedSubtree) > 0 {
-		fmt.Fprintf(w, "  affected_subtree:\n")
-		for _, z := range imp.RevokedSubtree {
-			fmt.Fprintf(w, "    - %s\n", z)
-		}
-	} else {
-		fmt.Fprintf(w, "  affected_subtree: (none)\n")
-	}
-	if len(imp.AffectedLinkInstances) > 0 {
-		fmt.Fprintf(w, "  affected_link_instances:\n")
-		for _, id := range imp.AffectedLinkInstances {
-			fmt.Fprintf(w, "    - %s\n", id)
-		}
-	}
-	if len(imp.AffectedSyncPeers) > 0 {
-		fmt.Fprintf(w, "  affected_sync_peers:\n")
-		for _, id := range imp.AffectedSyncPeers {
-			fmt.Fprintf(w, "    - %s\n", id)
-		}
-	}
-	if len(imp.ConfiguredButRevoked) > 0 {
-		fmt.Fprintf(w, "  configured_but_revoked:\n")
-		for _, id := range imp.ConfiguredButRevoked {
-			fmt.Fprintf(w, "    - %s\n", id)
-		}
-		fmt.Fprintln(w, "    note: bootstrap config still points to revoked peer; remove from config or update peer identity")
-	}
-	if len(imp.AffectedIPAMPrefixes) > 0 {
-		fmt.Fprintf(w, "  affected_ipam_prefixes:\n")
-		for _, pfx := range imp.AffectedIPAMPrefixes {
-			fmt.Fprintf(w, "    - %s\n", pfx)
-		}
-	}
-	if len(imp.Layers) > 0 {
-		fmt.Fprintf(w, "  cleanup_layers:\n")
-		for _, layer := range orderedLayerNames() {
-			status := imp.Layers[layer]
-			if status == nil {
-				continue
-			}
-			fmt.Fprintf(w, "    %s:\n", layer)
-			fmt.Fprintf(w, "      status: %s\n", status.Status)
-			if status.Reason != "" {
-				fmt.Fprintf(w, "      reason: %s\n", status.Reason)
-			}
-			if status.Error != "" {
-				fmt.Fprintf(w, "      error: %s\n", status.Error)
-			}
-			if status.UnixTime != 0 {
-				fmt.Fprintf(w, "      time: %s\n", time.Unix(status.UnixTime, 0).Format(time.RFC3339))
-			}
-		}
-	}
-	fmt.Fprintln(w)
-}
-
-func orderedLayerNames() []string {
-	return []string{
-		revocationLayerFirewall,
-		revocationLayerRouting,
-		revocationLayerIPsec,
-		revocationLayerGossip,
-	}
 }

@@ -5,59 +5,27 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-// RevocationImpact describes the set of objects affected by a revocation.
-// It is computed from verified active state and local runtime state so that
-// the daemon event loop can orchestrate cleanup across IPsec, BIRD, firewall
-// and gossip layers in a single pass.
-type RevocationImpact struct {
-	// RevokedZone is the zone whose delegation was revoked by its parent.
-	RevokedZone zone.ZonePath `json:"revoked_zone"`
-	// SourceZone is the parent zone that issued the revocation/tombstone.
-	SourceZone zone.ZonePath `json:"source_zone"`
-	// RevokedSubtree lists all descendant zones of RevokedZone that are
-	// transitively affected by this revocation. Each entry is a zone path.
-	RevokedSubtree []zone.ZonePath `json:"revoked_subtree,omitempty"`
-	// AffectedLinkInstances lists LinkInstance IDs whose peer zone is in the
-	// revoked subtree.
-	AffectedLinkInstances []string `json:"affected_link_instances,omitempty"`
-	// AffectedSyncPeers lists peer IDs (zone FQDNs) whose entries in
-	// SyncPeers should be cleaned or marked as revoked.
-	AffectedSyncPeers []string `json:"affected_sync_peers,omitempty"`
-	// ConfiguredButRevoked lists bootstrap peer IDs that are still in the
-	// local config but are now revoked. This is a diagnostic signal.
-	ConfiguredButRevoked []string `json:"configured_but_revoked,omitempty"`
-	// AffectedIPAMPrefixes lists authorized prefixes that belong to revoked
-	// zones and will be removed from routing/firewall allow sets.
-	AffectedIPAMPrefixes []string `json:"affected_ipam_prefixes,omitempty"`
-	// Layers tracks per-layer cleanup status.
-	Layers map[string]*RevocationLayerStatus `json:"layers,omitempty"`
-}
-
-// RevocationLayerStatus tracks the cleanup status for a single subsystem.
-type RevocationLayerStatus struct {
-	Status   string `json:"status"`           // pending, removed, not_found, owner_conflict, error
-	Error    string `json:"error,omitempty"`  // populated when Status == "error"
-	Reason   string `json:"reason,omitempty"` // human-readable detail
-	UnixTime int64  `json:"unix_time,omitempty"`
-}
+type RevocationImpact = inspect.RevocationImpact
+type RevocationLayerStatus = inspect.RevocationLayerStatus
 
 const (
-	revocationLayerIPsec    = "ipsec_xfrm"
-	revocationLayerRouting  = "routing_bird"
-	revocationLayerFirewall = "firewall"
-	revocationLayerGossip   = "gossip_peer_cache"
+	revocationLayerIPsec    = inspect.RevocationLayerIPsec
+	revocationLayerRouting  = inspect.RevocationLayerRouting
+	revocationLayerFirewall = inspect.RevocationLayerFirewall
+	revocationLayerGossip   = inspect.RevocationLayerGossip
 )
 
 // Revocation layer status values.
 const (
-	revocationStatusPending       = "pending"
-	revocationStatusRemoved       = "removed"
-	revocationStatusNotFound      = "not_found"
-	revocationStatusOwnerConflict = "owner_conflict"
-	revocationStatusError         = "error"
+	revocationStatusPending       = inspect.RevocationStatusPending
+	revocationStatusRemoved       = inspect.RevocationStatusRemoved
+	revocationStatusNotFound      = inspect.RevocationStatusNotFound
+	revocationStatusOwnerConflict = inspect.RevocationStatusOwnerConflict
+	revocationStatusError         = inspect.RevocationStatusError
 )
 
 // ComputeRevocationImpact computes the full impact of a revocation on the
@@ -396,19 +364,6 @@ func UpdateRevocationLayerStatus(impact *RevocationImpact, layer string, status,
 	entry.Reason = reason
 	entry.Error = errStr
 	entry.UnixTime = now.Unix()
-}
-
-// HasPendingCleanup returns true if any layer in the impact is still pending.
-func (impact *RevocationImpact) HasPendingCleanup() bool {
-	if impact == nil || impact.Layers == nil {
-		return false
-	}
-	for _, s := range impact.Layers {
-		if s != nil && s.Status == revocationStatusPending {
-			return true
-		}
-	}
-	return false
 }
 
 // AllRevocationImpact computes impact for all currently-revoked zones and

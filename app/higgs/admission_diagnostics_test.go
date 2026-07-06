@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -206,38 +205,6 @@ func TestRecordBootstrapSyncIgnoresNonBootstrapPeer(t *testing.T) {
 	recordBootstrapSyncSuccess(state, "other.peer.", config, now)
 	if state.Admission.LastBootstrapSyncUnix != 0 {
 		t.Fatalf("last_bootstrap_sync should remain 0 for non-bootstrap peer")
-	}
-}
-
-func TestWriteAdmissionDiagnosis(t *testing.T) {
-	d := admissionDiagnosis{
-		Pending:               true,
-		ManagedZone:           "node-b.catofes.",
-		ParentZone:            "catofes.",
-		Reason:                admissionReasonMissingDelegation,
-		ReasonDetail:          "parent zone has no delegation",
-		HasZonePrivateKey:     true,
-		ParentZoneKnown:       true,
-		ParentAuthorityKnown:  true,
-		DelegationKnown:       false,
-		LastBootstrapSyncUnix: time.Unix(5000, 0).Unix(),
-		PendingSinceUnix:      time.Unix(4000, 0).Unix(),
-	}
-	var buf strings.Builder
-	writeAdmissionDiagnosis(&buf, d)
-	output := buf.String()
-	required := []string{
-		"managed_zone: node-b.catofes.",
-		"parent_zone: catofes.",
-		"pending: true",
-		"reason: missing_delegation",
-		"has_zone_private_key: true",
-		"boundary:",
-	}
-	for _, s := range required {
-		if !strings.Contains(output, s) {
-			t.Errorf("output missing %q\ngot:\n%s", s, output)
-		}
 	}
 }
 
