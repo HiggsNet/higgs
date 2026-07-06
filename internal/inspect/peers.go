@@ -208,6 +208,7 @@ type PeerDatagramStatsView struct {
 	LastCatalogCursor         string
 	LastCatalogPageEntries    int
 	LastCatalogRejectedReason string
+	LastCatalog               string
 	LastTooLarge              string
 	LastTooLargeDirection     string
 	LastTooLargeObject        string

@@ -316,6 +316,7 @@ func peerDebugDatagramStats(peerState syncPeerState) inspect.PeerDatagramStatsVi
 		LastCatalogCursor:         stats.LastCatalogCursor,
 		LastCatalogPageEntries:    stats.LastCatalogPageEntries,
 		LastCatalogRejectedReason: stats.LastCatalogRejectedReason,
+		LastCatalog:               formatUnixTime(stats.LastCatalogUnix),
 		LastTooLarge:              formatUnixTime(stats.LastTooLargeUnix),
 		LastTooLargeDirection:     stats.LastTooLargeDirection,
 		LastTooLargeObject:        stats.LastTooLargeObject,

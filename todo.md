@@ -51,9 +51,10 @@
     - `app/higgs/debug_firewall.go`、`debug_revoke_impact.go` 已完成 presenter 迁移；后续只保留系统 apply/reconcile、control socket/offline fallback 和 app 私有 runtime adapter。
     - `app/higgs/debug_rotate.go` 已新增 `inspect.RotateDebugView` + `inspect/text.WriteRotateDebug`：rotate 文本 presenter 已下沉，app 层保留 control socket、live SA 采集和 current/staged runtime adapter。
     - `app/higgs/debug_ping.go` 已新增 `internal/ping` + `inspect.PingDebugView` + `inspect/text.WritePingDebug`：一次性 ping 的 target 过滤、prober 执行、debug view 构建和文本 presenter 已下沉；app 层仅保留 state/config -> health targets 的 adapter 和 CLI wiring。
+    - `sync status --verbose` 已新增 `inspect.SyncStatusView` + `inspect/text.WriteSyncStatus`：summary、bootstrap/discovered peer 明细、sync_flow、datagram/object_pull 诊断行和 zone 摘要输出已从 `sync.go` 下沉；app 层仅保留 state/config/gossip digest 到 view 的投影。
     - `app/higgs/cmd.go` 的 `cmdDebug()` 只做 CLI 子命令注册、参数解析、source 选择和 presenter 调用。
   - [ ] 为 inspect/text 建立 golden/output 测试，迁移现有 `TestDebug*Output`、`TestWriteDebug*`、admission diagnosis 输出测试；app 层只保留命令 wiring/fallback 的窄测试。
-    - 已新增 peer/endpoints/rotate/ping 等 inspect/text focused output 测试；`debug ping` 选择/执行/view 构建测试已迁到 `internal/ping`，文本断言已迁到 `internal/inspect/text`，app 层保留 state target adapter 测试。
+    - 已新增 peer/endpoints/rotate/ping/sync status 等 inspect/text focused output 测试；`debug ping` 选择/执行/view 构建测试已迁到 `internal/ping`，文本断言已迁到 `internal/inspect/text`，app 层保留 state target adapter 测试。
   - [x] 删除 `observer_server.go` 中只为兼容旧 handler 测试保留的 app 层 wrapper 或改测 `internal/observer.Server.Handler()`；保留必要 shim 时必须标注迁移原因。
     - 已删除 `observerServer.handleStatus/handleZones/handlePeers/handleLinks/handleHealth/handleRoutes/handleBird/handleEvents/handleStatic` 和 `apiResponse` 兼容 alias；observer API/static/events/firewall 相关测试已改走 `srv.handler().ServeHTTP` + `observer.APIResponse`。
   - [ ] 验证：`make observer-smoke`、`go test ./app/higgs`、相关 CLI golden/output 测试必须继续覆盖 HTTP route、SSE、static UI、debug 文本和 raw JSON 输出。

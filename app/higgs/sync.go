@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -235,80 +237,61 @@ func syncStatus(verbose bool) error {
 }
 
 func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now time.Time, verbose bool) error {
-	fmt.Fprintf(w, "peer_id: %s\n", config.PeerID)
-	fmt.Fprintf(w, "listen_addr: %s\n", config.ListenAddr)
+	return inspecttext.WriteSyncStatus(w, buildSyncStatusView(state, config, now, verbose))
+}
+
+func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusView {
 	digests := gossip.ZoneDigests(state.Network)
-	fmt.Fprintf(w, "known_peers: %d\n", len(config.Bootstrap))
-	fmt.Fprintf(w, "known_zones: %d\n", len(digests))
-	fmt.Fprintf(w, "local_root: %s\n", hex.EncodeToString(globalRootHash(digests)))
-	fmt.Fprintf(w, "limits: max_datagram_bytes=%d max_sync_zones=%d max_sync_records=%d wire_version=%d wire_codec=msgpack\n",
-		config.MaxMessageBytes,
-		config.MaxSyncZones,
-		config.MaxSyncRecords,
-		gossip.WireVersion,
-	)
+	view := inspect.SyncStatusView{
+		PeerID:       config.PeerID,
+		ListenAddr:   config.ListenAddr,
+		KnownPeers:   len(config.Bootstrap),
+		KnownZones:   len(digests),
+		LocalRootHex: hex.EncodeToString(globalRootHash(digests)),
+		Limits: inspect.SyncLimitsView{
+			MaxDatagramBytes: config.MaxMessageBytes,
+			MaxSyncZones:     config.MaxSyncZones,
+			MaxSyncRecords:   config.MaxSyncRecords,
+			WireVersion:      gossip.WireVersion,
+			WireCodec:        "msgpack",
+		},
+		Verbose: verbose,
+	}
 	discovered := gossip.ExtractPeerEndpoints(state.Network)
 	if verbose {
 		known := configuredKnownPeers(config)
-		fmt.Fprintf(w, "allowlist_source: bootstrap+discovery\n")
-		fmt.Fprintf(w, "bootstrap_peers: %d\n", len(config.Bootstrap))
-		var discoveredCount int
+		view.AllowlistSource = "bootstrap+discovery"
+		view.BootstrapPeers = len(config.Bootstrap)
 		for peerID := range discovered {
 			if !isBootstrapPeer(config, peerID) {
-				discoveredCount++
+				view.DiscoveredPeers++
 			}
 		}
-		fmt.Fprintf(w, "discovered_peers: %d\n", discoveredCount)
 		for _, peer := range config.Bootstrap {
 			resolved := "-"
 			if addr := known[peer.ID]; addr != nil {
 				resolved = addr.String()
 			}
 			peerState := state.SyncPeers[peer.ID]
-			fmt.Fprintf(w, "bootstrap peer=%s configured_addr=%s resolved_addr=%s status=%s last_success=%s last_error=%s next_retry=%s\n",
-				peer.ID,
-				peer.Addr,
-				resolved,
-				peerStatus(peerState, now),
-				formatLastSuccess(peerState),
-				dash(peerState.LastError),
-				formatNextRetry(peerState, now),
-			)
-			fmt.Fprintf(w, "  update_source=%s last_relay=%s relay_suppression=%s\n",
-				dash(peerState.LastUpdateSource),
-				formatUnixTime(peerState.LastRelayUnix),
-				formatRelaySuppression(peerState),
-			)
-			fmt.Fprintf(w, "  observed_addr=%s observed_status=%s\n",
-				dash(peerState.ObservedAddr),
-				formatObservedPath(peerState, now),
-			)
-			writeSyncFlow(w, peer.ID, peerState)
-			writeDatagramStats(w, peer.ID, peerState)
-			writeObjectPullStats(w, peer.ID, peerState)
+			view.Bootstrap = append(view.Bootstrap, syncVerbosePeerView(peer.ID, peer.Addr, resolved, "", peerState, now))
 		}
+		discoveredIDs := make([]string, 0, len(discovered))
 		for peerID, entries := range discovered {
 			if isBootstrapPeer(config, peerID) {
 				continue
 			}
+			discoveredIDs = append(discoveredIDs, peerID)
+			_ = entries
+		}
+		sort.Slice(discoveredIDs, func(i, j int) bool { return inspect.ZonePathLess(discoveredIDs[i], discoveredIDs[j]) })
+		for _, peerID := range discoveredIDs {
+			entries := discovered[peerID]
 			peerState := state.SyncPeers[peerID]
 			addr := "-"
 			if len(entries) > 0 {
 				addr = fmt.Sprintf("%s:%d", entries[0].Address, entries[0].Port)
 			}
-			fmt.Fprintf(w, "discovered peer=%s addr=%s status=%s last_success=%s\n",
-				peerID,
-				addr,
-				peerStatus(peerState, now),
-				formatLastSuccess(peerState),
-			)
-			fmt.Fprintf(w, "  observed_addr=%s observed_status=%s\n",
-				dash(peerState.ObservedAddr),
-				formatObservedPath(peerState, now),
-			)
-			writeSyncFlow(w, peerID, peerState)
-			writeDatagramStats(w, peerID, peerState)
-			writeObjectPullStats(w, peerID, peerState)
+			view.Discovered = append(view.Discovered, syncVerbosePeerView(peerID, "", "", addr, peerState, now))
 		}
 	}
 	for _, peer := range config.Bootstrap {
@@ -321,117 +304,49 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 		if lastError == "" {
 			lastError = "-"
 		}
-		fmt.Fprintf(w, "peer %s addr=%s status=%s last_sync=%s known_zones=%d last_error=%s next_retry=%s\n",
-			peer.ID,
-			peer.Addr,
-			peerStatus(peerState, now),
-			lastSync,
-			len(digests),
-			lastError,
-			formatNextRetry(peerState, now),
-		)
+		view.Peers = append(view.Peers, inspect.SyncPeerSummaryView{
+			PeerID:     peer.ID,
+			Addr:       peer.Addr,
+			Status:     peerStatus(peerState, now),
+			LastSync:   lastSync,
+			KnownZones: len(digests),
+			LastError:  lastError,
+			NextRetry:  formatNextRetry(peerState, now),
+		})
 	}
 	for _, digest := range digests {
 		zs := state.Network.Zones[digest.Zone]
-		fmt.Fprintf(w, "zone %s root=%s records=%d history=%d delegations=%d revocations=%d\n",
-			digest.Zone,
-			hex.EncodeToString(digest.RootHash),
-			len(zs.Records),
-			countHistory(zs),
-			len(zs.Delegations),
-			len(zs.Revocations),
-		)
+		view.Zones = append(view.Zones, inspect.SyncZoneSummaryView{
+			Zone:        string(digest.Zone),
+			RootHex:     hex.EncodeToString(digest.RootHash),
+			Records:     len(zs.Records),
+			History:     countHistory(zs),
+			Delegations: len(zs.Delegations),
+			Revocations: len(zs.Revocations),
+		})
 	}
-	return nil
+	return view
 }
 
-func writeDatagramStats(w io.Writer, peerID string, peerState syncPeerState) {
-	stats := peerState.DatagramStats
-	if stats == nil || (stats.TooLargeDropped == 0 && stats.DigestOnlyAnnounces == 0 && stats.ChunkFallbacks == 0 && stats.LastCatalogUnix == 0 && stats.LastCatalogRejectedReason == "") {
-		return
+func syncVerbosePeerView(peerID, configuredAddr, resolvedAddr, addr string, peerState syncPeerState, now time.Time) inspect.SyncVerbosePeerView {
+	return inspect.SyncVerbosePeerView{
+		PeerID:           peerID,
+		ConfiguredAddr:   configuredAddr,
+		ResolvedAddr:     resolvedAddr,
+		Addr:             addr,
+		Status:           peerStatus(peerState, now),
+		LastSuccess:      formatLastSuccess(peerState),
+		LastError:        peerState.LastError,
+		NextRetry:        formatNextRetry(peerState, now),
+		UpdateSource:     peerState.LastUpdateSource,
+		LastRelay:        formatUnixTime(peerState.LastRelayUnix),
+		RelaySuppression: formatRelaySuppression(peerState),
+		ObservedAddr:     peerState.ObservedAddr,
+		ObservedStatus:   formatObservedPath(peerState, now),
+		SyncFlow:         peerDebugSyncFlow(peerState),
+		DatagramStats:    peerDebugDatagramStats(peerState),
+		ObjectPullStats:  peerDebugObjectPullStats(peerState),
 	}
-	if stats.LastCatalogUnix != 0 || stats.LastCatalogRejectedReason != "" {
-		lastCatalog := "-"
-		if stats.LastCatalogUnix != 0 {
-			lastCatalog = time.Unix(stats.LastCatalogUnix, 0).UTC().Format(time.RFC3339)
-		}
-		fmt.Fprintf(w, "catalog peer=%s root=%s zone_count=%d cursor=%s page_entries=%d last=%s rejected_reason=%s\n",
-			peerID,
-			dash(stats.LastCatalogRootHex),
-			stats.LastCatalogZoneCount,
-			dash(stats.LastCatalogCursor),
-			stats.LastCatalogPageEntries,
-			lastCatalog,
-			dash(stats.LastCatalogRejectedReason),
-		)
-	}
-	last := "-"
-	if stats.LastTooLargeUnix != 0 {
-		last = time.Unix(stats.LastTooLargeUnix, 0).UTC().Format(time.RFC3339)
-	}
-	fmt.Fprintf(w, "datagram peer=%s too_large_dropped=%d digest_only_announces=%d chunk_fallbacks=%d last_too_large=%s direction=%s object=%s zone=%s key=%s bytes=%d limit=%d\n",
-		peerID,
-		stats.TooLargeDropped,
-		stats.DigestOnlyAnnounces,
-		stats.ChunkFallbacks,
-		last,
-		dash(stats.LastTooLargeDirection),
-		dash(stats.LastTooLargeObject),
-		dash(stats.LastTooLargeZone),
-		dash(stats.LastTooLargeKey),
-		stats.LastTooLargeBytes,
-		stats.LastTooLargeLimit,
-	)
-}
-
-func writeSyncFlow(w io.Writer, peerID string, peerState syncPeerState) {
-	if peerState.ActivePullState == "" &&
-		peerState.HintAccepted == 0 &&
-		peerState.HintSuppressed == 0 &&
-		peerState.ReadOnlyResponder == 0 {
-		return
-	}
-	fmt.Fprintf(w, "sync_flow peer=%s active_pull=%s active_event=%s active_updated=%s hint_accepted=%d hint_suppressed=%d last_hint=%s hint_reason=%s hint_suppression=%s read_only_responder=%d responder_kind=%s responder_zone=%s responder_last=%s\n",
-		peerID,
-		dash(peerState.ActivePullState),
-		dash(peerState.ActivePullLastEvent),
-		formatUnixTime(peerState.ActivePullUpdatedUnix),
-		peerState.HintAccepted,
-		peerState.HintSuppressed,
-		formatUnixTime(peerState.LastHintUnix),
-		dash(peerState.LastHintReason),
-		dash(peerState.LastHintSuppression),
-		peerState.ReadOnlyResponder,
-		dash(peerState.LastResponderKind),
-		dash(peerState.LastResponderZone),
-		formatUnixTime(peerState.LastResponderUnix),
-	)
-}
-
-func writeObjectPullStats(w io.Writer, peerID string, peerState syncPeerState) {
-	stats := peerState.ObjectPullStats
-	if stats == nil || (stats.Attempts == 0 && stats.Successes == 0 && stats.Failures == 0 && stats.LargeObjectUnreachable == 0) {
-		return
-	}
-	last := "-"
-	if stats.LastUnix != 0 {
-		last = time.Unix(stats.LastUnix, 0).UTC().Format(time.RFC3339)
-	}
-	fmt.Fprintf(w, "object_pull peer=%s attempts=%d successes=%d failures=%d large_object_unreachable=%d last=%s object=%s zone=%s key=%s bytes=%d source_peer=%s unreachable=%t last_error=%s\n",
-		peerID,
-		stats.Attempts,
-		stats.Successes,
-		stats.Failures,
-		stats.LargeObjectUnreachable,
-		last,
-		dash(stats.LastObject),
-		dash(stats.LastZone),
-		dash(stats.LastKey),
-		stats.LastBytes,
-		dash(stats.LastSourcePeer),
-		stats.LastUnreachable,
-		dash(stats.LastError),
-	)
 }
 
 func syncServe(ctx context.Context) error {
