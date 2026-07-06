@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -252,7 +253,7 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	for p := range state.Network.Zones {
 		paths = append(paths, p)
 	}
-	sort.Slice(paths, func(i, j int) bool { return observerZoneLess(string(paths[i]), string(paths[j])) })
+	sort.Slice(paths, func(i, j int) bool { return inspect.ZonePathLess(string(paths[i]), string(paths[j])) })
 	for _, p := range paths {
 		zs := state.Network.Zones[p]
 		if zs == nil {
@@ -322,34 +323,12 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	if state == nil {
 		return map[string]any{"peers": []any{}}, nil
 	}
-	peerIDs := make([]string, 0, len(state.SyncPeers))
-	for id := range state.SyncPeers {
-		if isLocalObserverPeer(id, d.Sync.Config, state) {
-			continue
-		}
-		peerIDs = append(peerIDs, id)
-	}
-	for _, peer := range configuredBootstrapPeers(d.Sync.Config) {
-		if isLocalObserverPeer(peer.ID, d.Sync.Config, state) {
-			continue
-		}
-		if _, ok := state.SyncPeers[peer.ID]; !ok {
-			peerIDs = append(peerIDs, peer.ID)
-		}
-	}
-	for id := range gossip.ExtractPeerEndpointsAt(state.Network, d.Sync.now()) {
-		if isLocalObserverPeer(id, d.Sync.Config, state) {
-			continue
-		}
-		if _, ok := state.SyncPeers[id]; !ok {
-			peerIDs = append(peerIDs, id)
-		}
-	}
-	sort.Slice(peerIDs, func(i, j int) bool { return observerZoneLess(peerIDs[i], peerIDs[j]) })
+	peerSet := inspectPeerSetInput(state, d.Sync.Config, d.Sync.now())
+	peerIDs := inspect.BuildPeerIDs(peerSet)
 	// Single peer detail
 	if peerFilter != "" {
-		ps, ok := state.SyncPeers[peerFilter]
-		if isLocalObserverPeer(peerFilter, d.Sync.Config, state) || (!ok && !peerKnownFromConfigOrDiscovery(peerFilter, d.Sync.Config, state.Network, d.Sync.now())) {
+		ps := state.SyncPeers[peerFilter]
+		if !inspect.PeerKnown(peerSet, peerFilter) {
 			return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 		}
 		return peerJSONFromState(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()), nil
@@ -405,55 +384,6 @@ func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *
 	}
 }
 
-func observerZoneLess(a, b string) bool {
-	aLabels, aOK := observerZoneLabels(a)
-	bLabels, bOK := observerZoneLabels(b)
-	if !aOK || !bOK {
-		return a < b
-	}
-	for i := 0; i < len(aLabels) && i < len(bLabels); i++ {
-		if aLabels[i] != bLabels[i] {
-			return aLabels[i] < bLabels[i]
-		}
-	}
-	if len(aLabels) != len(bLabels) {
-		return len(aLabels) < len(bLabels)
-	}
-	return a < b
-}
-
-func observerZoneLabels(path string) ([]string, bool) {
-	zp := zone.ZonePath(path)
-	if !zp.Valid() {
-		return nil, false
-	}
-	if zp.IsRoot() {
-		return nil, true
-	}
-	labels := strings.Split(strings.TrimSuffix(path, "."), ".")
-	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
-		labels[i], labels[j] = labels[j], labels[i]
-	}
-	return labels, true
-}
-
-func isLocalObserverPeer(peerID string, config *syncConfigFile, state *stateFile) bool {
-	if peerID == "" {
-		return false
-	}
-	if config != nil && peerID == config.PeerID {
-		return true
-	}
-	return state != nil && peerID == string(state.ManagedZone)
-}
-
-func configuredBootstrapPeers(config *syncConfigFile) []syncConfigPeer {
-	if config == nil {
-		return nil
-	}
-	return config.Bootstrap
-}
-
 func bootstrapAddrForPeer(config *syncConfigFile, peerID string) string {
 	if config == nil {
 		return ""
@@ -466,74 +396,8 @@ func bootstrapAddrForPeer(config *syncConfigFile, peerID string) string {
 	return ""
 }
 
-func peerKnownFromConfigOrDiscovery(peerID string, config *syncConfigFile, ns *zone.NetworkState, now time.Time) bool {
-	if bootstrapAddrForPeer(config, peerID) != "" {
-		return true
-	}
-	_, ok := gossip.ExtractPeerEndpointsAt(ns, now)[peerID]
-	return ok
-}
-
 func peerEndpointsJSON(peerID string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) []inspect.PeerEndpointView {
-	input := inspect.PeerEndpointInput{
-		BootstrapAddr:  bootstrapAddrForPeer(config, peerID),
-		SelectedAddr:   ps.DiscoveredAddr,
-		ObservedAddr:   ps.ObservedAddr,
-		ObservedSource: ps.ObservedSource,
-		Grace:          make([]inspect.PeerGraceEndpoint, 0, len(ps.ObservedGraceAddrs)),
-	}
-	discovered := gossip.ExtractPeerEndpointsAt(ns, now)
-	for _, ep := range discovered[peerID] {
-		input.Signed = append(input.Signed, inspect.PeerSignedEndpoint{
-			Address:      ep.Address,
-			Port:         ep.Port,
-			Protocol:     ep.Protocol,
-			Scope:        ep.Scope,
-			Source:       ep.Source,
-			Priority:     ep.Priority,
-			LastObserved: ep.LastObserved,
-		})
-	}
-	for _, grace := range ps.ObservedGraceAddrs {
-		input.Grace = append(input.Grace, inspect.PeerGraceEndpoint{Addr: grace.Addr})
-	}
-	return inspect.BuildPeerEndpoints(input)
-}
-
-type observerLinksResponse struct {
-	Instances    []observerLinkJSON   `json:"instances"`
-	LastRunUnix  int64                `json:"last_run_unix,omitempty"`
-	DesiredLinks int                  `json:"desired_links,omitempty"`
-	ActualSAs    int                  `json:"actual_sas,omitempty"`
-	Actions      []inspect.LinkAction `json:"actions,omitempty"`
-	Skipped      []inspect.LinkSkip   `json:"skipped,omitempty"`
-	LastError    string               `json:"last_error,omitempty"`
-}
-
-type observerLinkJSON struct {
-	ID              string               `json:"id"`
-	PeerZone        string               `json:"peer_zone"`
-	GroupID         string               `json:"group_id,omitempty"`
-	TransportKind   string               `json:"transport_kind,omitempty"`
-	TransportID     string               `json:"transport_id,omitempty"`
-	State           string               `json:"state,omitempty"`
-	ActualState     string               `json:"actual_state,omitempty"`
-	Endpoint        string               `json:"endpoint,omitempty"`
-	InterfaceName   string               `json:"interface_name,omitempty"`
-	XFRMIfID        uint32               `json:"xfrm_if_id,omitempty"`
-	DesiredSpecHash string               `json:"desired_spec_hash,omitempty"`
-	Desired         *inspect.DesiredLink `json:"desired,omitempty"`
-	ActualSA        *inspect.LinkSA      `json:"actual_sa,omitempty"`
-	Health          *inspect.LinkHealth  `json:"health,omitempty"`
-	Routing         inspect.LinkRouting  `json:"routing"`
-	Rotation        inspect.LinkRotation `json:"rotation"`
-	Takeover        inspect.LinkTakeover `json:"takeover"`
-	Owner           inspect.LinkOwner    `json:"owner,omitempty"`
-	FailureCount    int                  `json:"failure_count,omitempty"`
-	BackoffUntil    int64                `json:"backoff_until,omitempty"`
-	LastTransition  int64                `json:"last_transition,omitempty"`
-	LastError       string               `json:"last_error,omitempty"`
-	Raw             inspect.LinkView     `json:"raw"`
+	return inspectPeerEndpoints(peerID, ps, config, ns, now)
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {
@@ -551,54 +415,12 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	if linkFilter != "" {
 		for _, link := range view.Links {
 			if link.ID == linkFilter {
-				return observerLinkFromInspect(link), nil
+				return inspecthttp.LinkFromInspect(link), nil
 			}
 		}
 		return nil, observer.Errorf(http.StatusNotFound, "link not found")
 	}
-	// All links
-	instances := make([]observerLinkJSON, 0, len(view.Links))
-	for _, link := range view.Links {
-		instances = append(instances, observerLinkFromInspect(link))
-	}
-	result := observerLinksResponse{
-		Instances:    instances,
-		LastRunUnix:  view.Summary.LastRunUnix,
-		DesiredLinks: view.Summary.DesiredLinks,
-		ActualSAs:    view.Summary.ActualSAs,
-		Actions:      view.Actions,
-		Skipped:      view.Skipped,
-		LastError:    view.Summary.LastError,
-	}
-	return result, nil
-}
-
-func observerLinkFromInspect(link inspect.LinkView) observerLinkJSON {
-	return observerLinkJSON{
-		ID:              link.ID,
-		PeerZone:        link.PeerZone,
-		GroupID:         link.GroupID,
-		TransportKind:   link.TransportKind,
-		TransportID:     link.TransportID,
-		State:           link.State,
-		ActualState:     link.ActualState,
-		Endpoint:        link.Endpoint,
-		InterfaceName:   link.InterfaceName,
-		XFRMIfID:        link.XFRMIfID,
-		DesiredSpecHash: link.DesiredSpecHash,
-		Desired:         link.Desired,
-		ActualSA:        link.ActualSA,
-		Health:          link.Health,
-		Routing:         link.Routing,
-		Rotation:        link.Rotation,
-		Takeover:        link.Takeover,
-		Owner:           link.Owner,
-		FailureCount:    link.FailureCount,
-		BackoffUntil:    link.BackoffUntil,
-		LastTransition:  link.LastTransition,
-		LastError:       link.LastError,
-		Raw:             link,
-	}
+	return inspecthttp.LinksFromInspection(view), nil
 }
 
 func observerRuntime(d *DaemonService) *Runtime {

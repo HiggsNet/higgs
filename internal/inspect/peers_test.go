@@ -2,6 +2,44 @@ package inspect
 
 import "testing"
 
+func TestBuildPeerIDsMergesFiltersAndSorts(t *testing.T) {
+	got := BuildPeerIDs(PeerSetInput{
+		RuntimeIDs:   []string{"node-c.catofes.", "node-a.catofes.", "self.catofes."},
+		BootstrapIDs: []string{"node-b.catofes.", "node-a.catofes."},
+		SignedIDs:    []string{"node-d.catofes.", "self.catofes."},
+		LocalIDs:     []string{"self.catofes."},
+	})
+	want := []string{"node-a.catofes.", "node-b.catofes.", "node-c.catofes.", "node-d.catofes."}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d] = %q, want %q; all=%+v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestPeerKnownExcludesLocalPeer(t *testing.T) {
+	input := PeerSetInput{
+		RuntimeIDs:   []string{"node-a.catofes.", "self.catofes."},
+		BootstrapIDs: []string{"node-b.catofes."},
+		SignedIDs:    []string{"node-c.catofes."},
+		LocalIDs:     []string{"self.catofes."},
+	}
+	for _, peerID := range []string{"node-a.catofes.", "node-b.catofes.", "node-c.catofes."} {
+		if !PeerKnown(input, peerID) {
+			t.Fatalf("PeerKnown(%s) = false, want true", peerID)
+		}
+	}
+	if PeerKnown(input, "self.catofes.") {
+		t.Fatal("local peer should not be known as observable remote peer")
+	}
+	if PeerKnown(input, "unknown.catofes.") {
+		t.Fatal("unknown peer should not be known")
+	}
+}
+
 func TestBuildPeerEndpointsMergesAndSortsSources(t *testing.T) {
 	got := BuildPeerEndpoints(PeerEndpointInput{
 		BootstrapAddr:  "192.0.2.10:33434",

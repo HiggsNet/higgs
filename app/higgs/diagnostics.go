@@ -85,12 +85,13 @@ func debugPeer(peerID string) error {
 	known := configuredKnownPeers(config)
 	peerState := state.SyncPeers[peerID]
 	source, configuredAddr := bootstrapPeerSource(config, peerID)
+	endpoints := inspectPeerEndpoints(peerID, peerState, config, state.Network, now)
 	resolved := "-"
 	if addr := known[peerID]; addr != nil {
 		resolved = addr.String()
 	}
-	if peerState.DiscoveredAddr != "" {
-		resolved = peerState.DiscoveredAddr
+	if selected := selectedPeerEndpointAddr(endpoints); selected != "" {
+		resolved = selected
 	}
 	fmt.Printf("peer_id: %s\n", peerID)
 	fmt.Printf("source: %s\n", source)

@@ -3,7 +3,17 @@ package inspect
 import (
 	"fmt"
 	"sort"
+	"strings"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
 )
+
+type PeerSetInput struct {
+	RuntimeIDs   []string
+	BootstrapIDs []string
+	SignedIDs    []string
+	LocalIDs     []string
+}
 
 type PeerEndpointInput struct {
 	BootstrapAddr  string
@@ -38,6 +48,84 @@ type PeerEndpointView struct {
 	Priority     int    `json:"priority,omitempty"`
 	LastObserved int64  `json:"last_observed,omitempty"`
 	Selected     bool   `json:"selected,omitempty"`
+}
+
+func BuildPeerIDs(input PeerSetInput) []string {
+	local := make(map[string]bool, len(input.LocalIDs))
+	for _, id := range input.LocalIDs {
+		if id != "" {
+			local[id] = true
+		}
+	}
+	seen := map[string]bool{}
+	add := func(ids []string) {
+		for _, id := range ids {
+			if id == "" || local[id] || seen[id] {
+				continue
+			}
+			seen[id] = true
+		}
+	}
+	add(input.RuntimeIDs)
+	add(input.BootstrapIDs)
+	add(input.SignedIDs)
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return ZonePathLess(out[i], out[j]) })
+	return out
+}
+
+func PeerKnown(input PeerSetInput, peerID string) bool {
+	if peerID == "" {
+		return false
+	}
+	for _, local := range input.LocalIDs {
+		if peerID == local {
+			return false
+		}
+	}
+	for _, ids := range [][]string{input.RuntimeIDs, input.BootstrapIDs, input.SignedIDs} {
+		for _, id := range ids {
+			if peerID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ZonePathLess(a, b string) bool {
+	aLabels, aOK := zonePathLabels(a)
+	bLabels, bOK := zonePathLabels(b)
+	if !aOK || !bOK {
+		return a < b
+	}
+	for i := 0; i < len(aLabels) && i < len(bLabels); i++ {
+		if aLabels[i] != bLabels[i] {
+			return aLabels[i] < bLabels[i]
+		}
+	}
+	if len(aLabels) != len(bLabels) {
+		return len(aLabels) < len(bLabels)
+	}
+	return a < b
+}
+
+func zonePathLabels(path string) ([]string, bool) {
+	zp := zone.ZonePath(path)
+	if !zp.Valid() {
+		return nil, false
+	}
+	if zp.IsRoot() {
+		return nil, true
+	}
+	labels := strings.Split(strings.TrimSuffix(path, "."), ".")
+	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
+		labels[i], labels[j] = labels[j], labels[i]
+	}
+	return labels, true
 }
 
 func BuildPeerEndpoints(input PeerEndpointInput) []PeerEndpointView {
