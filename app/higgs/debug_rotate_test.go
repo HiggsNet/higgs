@@ -38,7 +38,7 @@ func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
 		ContactPoints:   []ipsec.ContactPoint{{Address: "123.57.143.66", NATTPort: 30003, Generation: 2}},
 	}
 
-	got := rotateRuntimeCurrent(link, spec)
+	got := inspect.RotateRuntimeCurrent(link, spec)
 	if got.Port != "30002" || got.Endpoint != "123.57.143.66:30002" {
 		t.Fatalf("current endpoint/port = %q/%q, want active runtime 123.57.143.66:30002/30002", got.Endpoint, got.Port)
 	}
@@ -110,7 +110,7 @@ func TestRotateRuntimeStagedUsesPersistedRuntimeAndMatchingSA(t *testing.T) {
 			StagedPeerTunnelAddr:  "fe80::ec14:d563:b479:44ed%hgs28e3c6e5 netns=higgstesth2",
 		},
 	}
-	sas := []linkSAState{{
+	sas := []inspect.LinkSA{{
 		Name:           "ipsec-f46fb3d71fe8-r2",
 		ChildSA:        "ipsec-f46fb3d71fe8-r2-child-24",
 		XFRMIfID:       686016229,
@@ -118,7 +118,7 @@ func TestRotateRuntimeStagedUsesPersistedRuntimeAndMatchingSA(t *testing.T) {
 		Established:    true,
 	}}
 
-	got := rotateRuntimeStaged(link, nil, sas)
+	got := inspect.RotateRuntimeStaged(link, nil, sas)
 	if got.Endpoint != "123.57.143.66:30003" || got.Port != "30003" {
 		t.Fatalf("staged endpoint/port = %q/%q, want 123.57.143.66:30003/30003", got.Endpoint, got.Port)
 	}

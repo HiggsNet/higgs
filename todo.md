@@ -54,6 +54,7 @@
     - `app/higgs/debug_firewall.go`、`debug_revoke_impact.go` 已完成 presenter 迁移；后续只保留系统 apply/reconcile、control socket/offline fallback 和 app 私有 runtime adapter。
     - `app/higgs/debug_rotate.go` 已新增 `inspect.RotateDebugView` + `inspect/text.WriteRotateDebug`：rotate 文本 presenter 已下沉，app 层保留 control socket、live SA 采集和 current/staged runtime adapter。
       - 已将 rotate/links 共享的 IPsec 端口 generation/port 摘要 helper 下沉到 `internal/inspect`，`debug links` presenter 和 `debug rotate` adapter 复用同一套只读 formatter；对应测试迁到 `internal/inspect`。
+      - 已新增 `inspect.BuildRotateDebug` / `RotateDebugInput`：rotate current/staged runtime view、stored/live SA 匹配、path-family 过滤和最终 debug view 组装已从 `app/higgs/debug_rotate.go` 下沉；app 层仅保留 control socket/offline fallback、live StrongSwan SA 采集和 app 私有 SA 状态投影。
     - `app/higgs/debug_ping.go` 已新增 `internal/ping` + `inspect.PingDebugView` + `inspect/text.WritePingDebug`：一次性 ping 的 target 过滤、prober 执行、debug view 构建和文本 presenter 已下沉；ping target 排序/instance 分组已收敛到 `inspect.BuildPingDebugView`，app 层仅保留 state/config -> health targets 的 adapter 和 CLI wiring。
     - `sync status --verbose` 已新增 `inspect.SyncStatusView` + `inspect/text.WriteSyncStatus`：summary、bootstrap/discovered peer 明细、sync_flow、datagram/object_pull 诊断行和 zone 摘要输出已从 `sync.go` 下沉；app 层仅保留 state/config/gossip digest 到 view 的投影。
     - 已新增 `inspect.BuildPeerDebug` / `PeerDebugInput`：`debug peer` 与 `sync status --verbose` 共用 peer status、backoff、observed path、relay suppression 和诊断计数 view 构建；app 层只保留 `syncPeerState` 到 inspect input 的薄投影。

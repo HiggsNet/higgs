@@ -3,12 +3,17 @@ package inspect
 import (
 	"fmt"
 	"net"
+	"strconv"
 
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func DebugPortGenerationSummary(spec *ipsec.TransportLinkSpec, rotation LinkRotation) string {
 	return fmt.Sprintf("%s/%d/%d", debugSelectedGeneration(spec), rotation.RemoteGeneration, rotation.StagedGeneration)
+}
+
+func uint16String(value uint16) string {
+	return strconv.FormatUint(uint64(value), 10)
 }
 
 func DebugPortSummary(spec *ipsec.TransportLinkSpec, selectedEndpoint, runtimeEndpoint string, stagedGeneration uint64) string {

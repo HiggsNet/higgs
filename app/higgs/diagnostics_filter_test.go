@@ -47,16 +47,16 @@ func TestRotateSAMatchesCurrentAndStagedRuntime(t *testing.T) {
 		},
 	}
 
-	if !rotateSAMatchesLink(link, linkSAState{Name: "ipsec-current", XFRMIfID: 1001}) {
+	if !inspect.RotateSAMatchesLink(link, inspect.LinkSA{Name: "ipsec-current", XFRMIfID: 1001}) {
 		t.Fatalf("current SA did not match link")
 	}
-	if !rotateSAMatchesLink(link, linkSAState{Name: "ipsec-current-r2", XFRMIfID: 2002}) {
+	if !inspect.RotateSAMatchesLink(link, inspect.LinkSA{Name: "ipsec-current-r2", XFRMIfID: 2002}) {
 		t.Fatalf("staged SA did not match link")
 	}
-	if rotateSAMatchesLink(link, linkSAState{Name: "ipsec-current", XFRMIfID: 1001, RemoteEndpoint: "[2001:db8::20]:4500"}) {
+	if inspect.RotateSAMatchesLink(link, inspect.LinkSA{Name: "ipsec-current", XFRMIfID: 1001, RemoteEndpoint: "[2001:db8::20]:4500"}) {
 		t.Fatalf("wrong-family SA matched link")
 	}
-	if rotateSAMatchesLink(link, linkSAState{Name: "ipsec-other", XFRMIfID: 3003}) {
+	if inspect.RotateSAMatchesLink(link, inspect.LinkSA{Name: "ipsec-other", XFRMIfID: 3003}) {
 		t.Fatalf("unrelated SA matched link")
 	}
 }

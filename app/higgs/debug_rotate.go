@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -116,244 +114,25 @@ func writeDebugRotate(w io.Writer, rt *Runtime, state *stateFile, filter string,
 }
 
 func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter string, storedSAs, liveSAs []linkSAState, liveErr error, storedLabel, liveLabel string) error {
-	links := filterLinkViews(build.Inspection.Links, filter)
-	view := inspect.RotateDebugView{
-		LastRunUnix:       build.Inspection.Summary.LastRunUnix,
-		LinkInstances:     build.Inspection.Summary.LinkInstances,
-		PlannedDesired:    build.ReplannedDesired,
+	liveErrText := ""
+	if liveErr != nil {
+		liveErrText = liveErr.Error()
+	}
+	view := inspect.BuildRotateDebug(inspect.RotateDebugInput{
+		Inspection:        build.Inspection,
+		PlannedSpecs:      build.PlannedSpecs,
+		ReplannedDesired:  build.ReplannedDesired,
 		ReplanIgnored:     build.ReplanIgnored,
 		LastDesiredLinks:  build.LastDesiredLinks,
 		DesiredPlanSource: build.DesiredPlanSource,
-		Filter:            strings.TrimSpace(filter),
+		Filter:            filter,
 		StoredLabel:       storedLabel,
 		LiveLabel:         liveLabel,
-		StoredSACount:     len(storedSAs),
-		LiveSACount:       len(liveSAs),
-	}
-	if liveErr != nil {
-		view.LiveSAError = liveErr.Error()
-	}
-	for _, link := range links {
-		spec, hasSpec := build.PlannedSpecs[link.ID]
-		var specPtr *ipsec.TransportLinkSpec
-		if hasSpec {
-			specPtr = &spec
-		}
-		staged := rotateRuntimeStaged(link, specPtr, append(storedSAs, liveSAs...))
-		view.Links = append(view.Links, inspect.RotateDebugLink{
-			Link:                  link,
-			PortGenerationSummary: inspect.DebugPortGenerationSummary(specPtr, link.Rotation),
-			PortSummary:           inspect.DebugPortSummary(specPtr, link.Endpoint, link.Endpoint, link.Rotation.StagedGeneration),
-			Current:               rotateRuntimeCurrent(link, specPtr),
-			Staged:                staged,
-			HasStaged:             !rotateRuntimeEmpty(staged),
-			StoredMatchingSAs:     inspectLinkSAs(matchingRotateSAs(link, storedSAs)),
-			LiveMatchingSAs:       inspectLinkSAs(matchingRotateSAs(link, liveSAs)),
-		})
-	}
+		StoredSAs:         inspectLinkSAs(storedSAs),
+		LiveSAs:           inspectLinkSAs(liveSAs),
+		LiveSAError:       liveErrText,
+	})
 	return inspecttext.WriteRotateDebug(w, view)
-}
-
-func rotateRuntimeEmpty(v inspect.RotateRuntimeView) bool {
-	return v.RuntimeID == "" && v.ChildSAName == "" && v.InterfaceName == "" && v.XFRMIfID == 0 && v.State == ""
-}
-
-func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) inspect.RotateRuntimeView {
-	out := inspect.RotateRuntimeView{
-		State:           "expected_current",
-		Generation:      link.Rotation.RemoteGeneration,
-		Port:            inspect.DebugEndpointPort(link.Endpoint),
-		RuntimeID:       link.TransportID,
-		ChildSAName:     link.ChildSAName,
-		InterfaceName:   link.InterfaceName,
-		XFRMIfID:        link.XFRMIfID,
-		Endpoint:        link.Endpoint,
-		LocalTunnelAddr: link.LocalTunnelAddr,
-		PeerTunnelAddr:  link.PeerTunnelAddr,
-	}
-	if link.Desired != nil {
-		out.RuntimeID = firstNonEmpty(out.RuntimeID, link.Desired.TransportID)
-		out.InterfaceName = firstNonEmpty(out.InterfaceName, link.Desired.InterfaceName)
-		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, link.Desired.XFRMIfID)
-		out.Endpoint = firstNonEmpty(out.Endpoint, link.Desired.Endpoint)
-		out.Port = firstNonEmpty(out.Port, inspect.DebugEndpointPort(link.Desired.Endpoint))
-		if rotateRuntimeMatchesDesired(out, *link.Desired) {
-			out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, link.Desired.LocalTunnelAddr)
-			out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, link.Desired.PeerTunnelAddr)
-		}
-	}
-	if spec != nil {
-		out.Generation = firstNonZeroUint64(out.Generation, spec.Generation)
-		out.Port = firstNonEmpty(out.Port, inspect.DebugRemotePort(spec, ""))
-		out.RuntimeID = firstNonEmpty(out.RuntimeID, spec.TransportID)
-		out.ChildSAName = firstNonEmpty(out.ChildSAName, ipsec.ChildSAName(*spec))
-		out.InterfaceName = firstNonEmpty(out.InterfaceName, spec.InterfaceName)
-		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, spec.XFRMIfID)
-		out.Endpoint = firstNonEmpty(out.Endpoint, summarizeContactEndpoint(spec.ContactPoints))
-		if rotateRuntimeMatchesSpec(out, *spec) {
-			out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
-			out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS))
-		}
-	}
-	return out
-}
-
-func rotateRuntimeMatchesDesired(runtime inspect.RotateRuntimeView, desired inspect.DesiredLink) bool {
-	if desired.InterfaceName != "" && runtime.InterfaceName != "" && desired.InterfaceName != runtime.InterfaceName {
-		return false
-	}
-	if desired.XFRMIfID != 0 && runtime.XFRMIfID != 0 && desired.XFRMIfID != runtime.XFRMIfID {
-		return false
-	}
-	if desired.TransportID != "" && runtime.RuntimeID != "" && desired.TransportID != runtime.RuntimeID {
-		return false
-	}
-	return true
-}
-
-func rotateRuntimeMatchesSpec(runtime inspect.RotateRuntimeView, spec ipsec.TransportLinkSpec) bool {
-	if spec.InterfaceName != "" && runtime.InterfaceName != "" && spec.InterfaceName != runtime.InterfaceName {
-		return false
-	}
-	if spec.XFRMIfID != 0 && runtime.XFRMIfID != 0 && spec.XFRMIfID != runtime.XFRMIfID {
-		return false
-	}
-	if spec.TransportID != "" && runtime.RuntimeID != "" && spec.TransportID != runtime.RuntimeID {
-		return false
-	}
-	return true
-}
-
-func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, sas []linkSAState) inspect.RotateRuntimeView {
-	generation := link.Rotation.StagedGeneration
-	if generation == 0 {
-		return inspect.RotateRuntimeView{}
-	}
-	out := inspect.RotateRuntimeView{
-		State:           "expected_new",
-		Generation:      generation,
-		Port:            inspect.DebugStagedPort(spec, generation),
-		RuntimeID:       link.Rotation.StagedIKEName,
-		ChildSAName:     link.Rotation.StagedChildSAName,
-		InterfaceName:   link.Rotation.StagedInterfaceName,
-		XFRMIfID:        link.Rotation.StagedXFRMIfID,
-		LocalTunnelAddr: link.Rotation.StagedLocalTunnelAddr,
-		PeerTunnelAddr:  link.Rotation.StagedPeerTunnelAddr,
-	}
-	linkID := link.LinkID
-	provider := ipsec.ProviderStrongSwan
-	if spec != nil {
-		linkID = firstNonEmpty(linkID, spec.LinkID)
-		provider = firstNonEmpty(spec.Provider, provider)
-	}
-	if linkID != "" {
-		out.RuntimeID = firstNonEmpty(out.RuntimeID, ipsec.RuntimeConnectionID(linkID, generation, provider))
-		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, ipsec.RuntimeXFRMIfID(linkID, generation, provider))
-		out.InterfaceName = firstNonEmpty(out.InterfaceName, ipsec.StableInterfaceName(out.XFRMIfID))
-	}
-	if out.RuntimeID != "" {
-		out.ChildSAName = firstNonEmpty(out.ChildSAName, out.RuntimeID+"-child")
-	}
-	if sa, ok := stagedSAForRuntime(out, sas); ok {
-		out.Endpoint = firstNonEmpty(out.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint))
-		out.Port = firstNonEmpty(out.Port, inspect.DebugEndpointPort(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)))
-	}
-	return out
-}
-
-func stagedSAForRuntime(runtime inspect.RotateRuntimeView, sas []linkSAState) (linkSAState, bool) {
-	for _, sa := range sas {
-		if runtime.XFRMIfID != 0 && sa.XFRMIfID == runtime.XFRMIfID {
-			return sa, true
-		}
-		if nonEmptyMatches(runtime.RuntimeID, sa.Name, sa.ChildSA) ||
-			nonEmptyMatches(runtime.ChildSAName, sa.Name, sa.ChildSA) {
-			return sa, true
-		}
-	}
-	return linkSAState{}, false
-}
-
-func matchingRotateSAs(link inspect.LinkView, sas []linkSAState) []linkSAState {
-	out := make([]linkSAState, 0, len(sas))
-	for _, sa := range sas {
-		if rotateSAMatchesLink(link, sa) {
-			out = append(out, sa)
-		}
-	}
-	return out
-}
-
-func rotateSAMatchesLink(link inspect.LinkView, sa linkSAState) bool {
-	if !linkSAMatchesPathKey(link, sa) {
-		return false
-	}
-	if sa.XFRMIfID != 0 && (sa.XFRMIfID == link.XFRMIfID || sa.XFRMIfID == link.Rotation.StagedXFRMIfID) {
-		return true
-	}
-	return nonEmptyMatches(link.ID, sa.Name, sa.ChildSA) ||
-		nonEmptyMatches(link.TransportID, sa.Name, sa.ChildSA) ||
-		nonEmptyMatches(link.ChildSAName, sa.Name, sa.ChildSA) ||
-		nonEmptyMatches(link.Rotation.StagedIKEName, sa.Name, sa.ChildSA) ||
-		nonEmptyMatches(link.Rotation.StagedChildSAName, sa.Name, sa.ChildSA)
-}
-
-func linkSAMatchesPathKey(link inspect.LinkView, sa linkSAState) bool {
-	family := debugPathKeyFamily(link.PathKey)
-	if family == "" {
-		return true
-	}
-	endpointFamily := debugSAEndpointFamily(sa)
-	return endpointFamily == "" || endpointFamily == family
-}
-
-func debugPathKeyFamily(pathKey string) string {
-	if !strings.HasPrefix(pathKey, "family:") {
-		return ""
-	}
-	family := strings.TrimPrefix(pathKey, "family:")
-	if family == ipsec.FamilyIPv4 || family == ipsec.FamilyIPv6 {
-		return family
-	}
-	return ""
-}
-
-func debugSAEndpointFamily(sa linkSAState) string {
-	endpoint := firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)
-	host := debugEndpointHost(endpoint)
-	if host == "" {
-		return ""
-	}
-	return ipsecFamily(host)
-}
-
-func debugEndpointHost(endpoint string) string {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return ""
-	}
-	if host, _, err := net.SplitHostPort(endpoint); err == nil {
-		return strings.Trim(host, "[]")
-	}
-	if strings.HasPrefix(endpoint, "[") {
-		if end := strings.Index(endpoint, "]"); end > 1 {
-			return endpoint[1:end]
-		}
-	}
-	return endpoint
-}
-
-func nonEmptyMatches(filter string, values ...string) bool {
-	filter = strings.ToLower(strings.TrimSpace(filter))
-	if filter == "" {
-		return false
-	}
-	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), filter) {
-			return true
-		}
-	}
-	return false
 }
 
 func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []linkSAState {
@@ -376,24 +155,6 @@ func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []linkSAState {
 		})
 	}
 	return out
-}
-
-func firstNonZeroUint64(values ...uint64) uint64 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
-}
-
-func firstNonZeroUint32(values ...uint32) uint32 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
 }
 
 func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
