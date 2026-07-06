@@ -25,8 +25,11 @@ func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {
 		out.Linef("instance %s", instanceID)
 		for _, row := range pingRowsForInstance(view.Targets, instanceID) {
 			out.Linef("  role=%s family=%s", pingTargetRole(row), row.Family)
-			out.Linef("    interface: %s", dash(row.Interface))
-			out.LineIf(row.NetNS != "", "  netns: %s", row.NetNS)
+			if row.NetNS != "" {
+				out.Linef("    interface: %s  netns: %s", dash(row.Interface), row.NetNS)
+			} else {
+				out.Linef("    interface: %s", dash(row.Interface))
+			}
 			out.Blank()
 			out.Linef("    local: %s  peer: %s", dash(row.LocalTunnel), dash(row.PeerTunnel))
 			out.Linef("    result: %s", formatPingResult(row))
