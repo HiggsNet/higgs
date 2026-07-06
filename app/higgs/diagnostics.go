@@ -91,26 +91,31 @@ func debugPeer(peerID string) error {
 	if selected := selectedPeerEndpointAddr(endpoints); selected != "" {
 		resolved = selected
 	}
-	fmt.Printf("peer_id: %s\n", peerID)
-	fmt.Printf("source: %s\n", source)
-	fmt.Printf("configured_addr: %s\n", dash(configuredAddr))
-	fmt.Printf("resolved_addr: %s\n", resolved)
-	fmt.Printf("status: %s\n", peerStatus(peerState, now))
-	fmt.Printf("last_success: %s\n", formatLastSuccess(peerState))
-	fmt.Printf("last_error: %s\n", dash(peerState.LastError))
-	fmt.Printf("backoff: %s\n", formatBackoff(peerState, now))
-	fmt.Printf("next_retry: %s\n", formatNextRetry(peerState, now))
-	fmt.Printf("known_endpoint: %s\n", resolved)
-	fmt.Printf("discovered_addr: %s\n", dash(peerState.DiscoveredAddr))
-	fmt.Printf("observed_addr: %s\n", dash(peerState.ObservedAddr))
-	fmt.Printf("observed_status: %s\n", formatObservedPath(peerState, now))
-	fmt.Printf("last_update_source: %s\n", dash(peerState.LastUpdateSource))
-	fmt.Printf("last_relay: %s\n", formatUnixTime(peerState.LastRelayUnix))
-	fmt.Printf("relay_suppression: %s\n", formatRelaySuppression(peerState))
-	printDebugPeerSyncFlow(peerState)
-	printDebugPeerDatagramStats(peerState)
-	printDebugPeerObjectPullStats(peerState)
-	return nil
+	return inspecttext.WritePeerDebug(os.Stdout, buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, now))
+}
+
+func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerState syncPeerState, now time.Time) inspect.PeerDebugView {
+	return inspect.PeerDebugView{
+		PeerID:           peerID,
+		Source:           source,
+		ConfiguredAddr:   configuredAddr,
+		ResolvedAddr:     resolved,
+		Status:           peerStatus(peerState, now),
+		LastSuccess:      formatLastSuccess(peerState),
+		LastError:        peerState.LastError,
+		Backoff:          formatBackoff(peerState, now),
+		NextRetry:        formatNextRetry(peerState, now),
+		KnownEndpoint:    resolved,
+		DiscoveredAddr:   peerState.DiscoveredAddr,
+		ObservedAddr:     peerState.ObservedAddr,
+		ObservedStatus:   formatObservedPath(peerState, now),
+		LastUpdateSource: peerState.LastUpdateSource,
+		LastRelay:        formatUnixTime(peerState.LastRelayUnix),
+		RelaySuppression: formatRelaySuppression(peerState),
+		SyncFlow:         peerDebugSyncFlow(peerState),
+		DatagramStats:    peerDebugDatagramStats(peerState),
+		ObjectPullStats:  peerDebugObjectPullStats(peerState),
+	}
 }
 
 func debugLinks(filter string) error {
@@ -341,76 +346,66 @@ func shortHash(hash string) string {
 	return hash[:12]
 }
 
-func printDebugPeerDatagramStats(peerState syncPeerState) {
+func peerDebugDatagramStats(peerState syncPeerState) inspect.PeerDatagramStatsView {
 	stats := peerState.DatagramStats
 	if stats == nil {
 		stats = &datagramStats{}
 	}
-	fmt.Printf("datagram_too_large_dropped: %d\n", stats.TooLargeDropped)
-	fmt.Printf("datagram_digest_only_announces: %d\n", stats.DigestOnlyAnnounces)
-	fmt.Printf("datagram_chunk_fallbacks: %d\n", stats.ChunkFallbacks)
-	fmt.Printf("catalog_root: %s\n", dash(stats.LastCatalogRootHex))
-	fmt.Printf("catalog_zone_count: %d\n", stats.LastCatalogZoneCount)
-	fmt.Printf("catalog_last_page_cursor: %s\n", dash(stats.LastCatalogCursor))
-	fmt.Printf("catalog_last_page_entries: %d\n", stats.LastCatalogPageEntries)
-	fmt.Printf("catalog_last_rejected_reason: %s\n", dash(stats.LastCatalogRejectedReason))
-	if stats.LastTooLargeUnix == 0 {
-		fmt.Printf("datagram_last_too_large: -\n")
-		return
+	return inspect.PeerDatagramStatsView{
+		TooLargeDropped:           stats.TooLargeDropped,
+		DigestOnlyAnnounces:       stats.DigestOnlyAnnounces,
+		ChunkFallbacks:            stats.ChunkFallbacks,
+		LastCatalogRootHex:        stats.LastCatalogRootHex,
+		LastCatalogZoneCount:      stats.LastCatalogZoneCount,
+		LastCatalogCursor:         stats.LastCatalogCursor,
+		LastCatalogPageEntries:    stats.LastCatalogPageEntries,
+		LastCatalogRejectedReason: stats.LastCatalogRejectedReason,
+		LastTooLarge:              formatUnixTime(stats.LastTooLargeUnix),
+		LastTooLargeDirection:     stats.LastTooLargeDirection,
+		LastTooLargeObject:        stats.LastTooLargeObject,
+		LastTooLargeZone:          stats.LastTooLargeZone,
+		LastTooLargeKey:           stats.LastTooLargeKey,
+		LastTooLargeBytes:         stats.LastTooLargeBytes,
+		LastTooLargeLimit:         stats.LastTooLargeLimit,
 	}
-	fmt.Printf("datagram_last_too_large: %s direction=%s object=%s zone=%s key=%s bytes=%d limit=%d\n",
-		time.Unix(stats.LastTooLargeUnix, 0).UTC().Format(time.RFC3339),
-		dash(stats.LastTooLargeDirection),
-		dash(stats.LastTooLargeObject),
-		dash(stats.LastTooLargeZone),
-		dash(stats.LastTooLargeKey),
-		stats.LastTooLargeBytes,
-		stats.LastTooLargeLimit,
-	)
 }
 
-func printDebugPeerObjectPullStats(peerState syncPeerState) {
+func peerDebugObjectPullStats(peerState syncPeerState) inspect.PeerObjectPullStatsView {
 	stats := peerState.ObjectPullStats
 	if stats == nil {
 		stats = &objectPullStats{}
 	}
-	fmt.Printf("object_pull_attempts: %d\n", stats.Attempts)
-	fmt.Printf("object_pull_successes: %d\n", stats.Successes)
-	fmt.Printf("object_pull_failures: %d\n", stats.Failures)
-	fmt.Printf("object_pull_large_object_unreachable: %d\n", stats.LargeObjectUnreachable)
-	if stats.LastUnix == 0 {
-		fmt.Printf("object_pull_last: -\n")
-		return
+	return inspect.PeerObjectPullStatsView{
+		Attempts:               stats.Attempts,
+		Successes:              stats.Successes,
+		Failures:               stats.Failures,
+		LargeObjectUnreachable: stats.LargeObjectUnreachable,
+		Last:                   formatUnixTime(stats.LastUnix),
+		LastObject:             stats.LastObject,
+		LastZone:               stats.LastZone,
+		LastKey:                stats.LastKey,
+		LastBytes:              stats.LastBytes,
+		LastSourcePeer:         stats.LastSourcePeer,
+		LastUnreachable:        stats.LastUnreachable,
+		LastError:              stats.LastError,
 	}
-	fmt.Printf("object_pull_last: %s object=%s zone=%s key=%s bytes=%d source_peer=%s unreachable=%t error=%s\n",
-		time.Unix(stats.LastUnix, 0).UTC().Format(time.RFC3339),
-		dash(stats.LastObject),
-		dash(stats.LastZone),
-		dash(stats.LastKey),
-		stats.LastBytes,
-		dash(stats.LastSourcePeer),
-		stats.LastUnreachable,
-		dash(stats.LastError),
-	)
 }
 
-func printDebugPeerSyncFlow(peerState syncPeerState) {
-	fmt.Printf("active_pull_state: %s\n", dash(peerState.ActivePullState))
-	fmt.Printf("active_pull_last_event: %s\n", dash(peerState.ActivePullLastEvent))
-	fmt.Printf("active_pull_updated: %s\n", formatUnixTime(peerState.ActivePullUpdatedUnix))
-	fmt.Printf("hint_accepted: %d\n", peerState.HintAccepted)
-	fmt.Printf("hint_suppressed: %d\n", peerState.HintSuppressed)
-	fmt.Printf("hint_last: %s reason=%s suppression=%s\n",
-		formatUnixTime(peerState.LastHintUnix),
-		dash(peerState.LastHintReason),
-		dash(peerState.LastHintSuppression),
-	)
-	fmt.Printf("read_only_responder: %d\n", peerState.ReadOnlyResponder)
-	fmt.Printf("read_only_responder_last: %s kind=%s zone=%s\n",
-		formatUnixTime(peerState.LastResponderUnix),
-		dash(peerState.LastResponderKind),
-		dash(peerState.LastResponderZone),
-	)
+func peerDebugSyncFlow(peerState syncPeerState) inspect.PeerSyncFlowView {
+	return inspect.PeerSyncFlowView{
+		ActivePullState:     peerState.ActivePullState,
+		ActivePullLastEvent: peerState.ActivePullLastEvent,
+		ActivePullUpdated:   formatUnixTime(peerState.ActivePullUpdatedUnix),
+		HintAccepted:        peerState.HintAccepted,
+		HintSuppressed:      peerState.HintSuppressed,
+		LastHint:            formatUnixTime(peerState.LastHintUnix),
+		LastHintReason:      peerState.LastHintReason,
+		LastHintSuppression: peerState.LastHintSuppression,
+		ReadOnlyResponder:   peerState.ReadOnlyResponder,
+		LastResponder:       formatUnixTime(peerState.LastResponderUnix),
+		LastResponderKind:   peerState.LastResponderKind,
+		LastResponderZone:   peerState.LastResponderZone,
+	}
 }
 
 func debugZone(path zone.ZonePath) error {

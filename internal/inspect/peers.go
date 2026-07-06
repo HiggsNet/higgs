@@ -70,6 +70,76 @@ type PeerStatusInfo struct {
 	NextCleanupUnix   int64         `json:"next_cleanup_unix,omitempty"`
 }
 
+type PeerDebugView struct {
+	PeerID           string
+	Source           string
+	ConfiguredAddr   string
+	ResolvedAddr     string
+	Status           string
+	LastSuccess      string
+	LastError        string
+	Backoff          string
+	NextRetry        string
+	KnownEndpoint    string
+	DiscoveredAddr   string
+	ObservedAddr     string
+	ObservedStatus   string
+	LastUpdateSource string
+	LastRelay        string
+	RelaySuppression string
+	SyncFlow         PeerSyncFlowView
+	DatagramStats    PeerDatagramStatsView
+	ObjectPullStats  PeerObjectPullStatsView
+}
+
+type PeerSyncFlowView struct {
+	ActivePullState     string
+	ActivePullLastEvent string
+	ActivePullUpdated   string
+	HintAccepted        int64
+	HintSuppressed      int64
+	LastHint            string
+	LastHintReason      string
+	LastHintSuppression string
+	ReadOnlyResponder   int64
+	LastResponder       string
+	LastResponderKind   string
+	LastResponderZone   string
+}
+
+type PeerDatagramStatsView struct {
+	TooLargeDropped           int64
+	DigestOnlyAnnounces       int64
+	ChunkFallbacks            int64
+	LastCatalogRootHex        string
+	LastCatalogZoneCount      int
+	LastCatalogCursor         string
+	LastCatalogPageEntries    int
+	LastCatalogRejectedReason string
+	LastTooLarge              string
+	LastTooLargeDirection     string
+	LastTooLargeObject        string
+	LastTooLargeZone          string
+	LastTooLargeKey           string
+	LastTooLargeBytes         int
+	LastTooLargeLimit         int
+}
+
+type PeerObjectPullStatsView struct {
+	Attempts               int64
+	Successes              int64
+	Failures               int64
+	LargeObjectUnreachable int64
+	Last                   string
+	LastObject             string
+	LastZone               string
+	LastKey                string
+	LastBytes              int
+	LastSourcePeer         string
+	LastUnreachable        bool
+	LastError              string
+}
+
 func BuildPeerIDs(input PeerSetInput) []string {
 	local := make(map[string]bool, len(input.LocalIDs))
 	for _, id := range input.LocalIDs {
