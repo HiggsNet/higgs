@@ -7,7 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
+	"sort"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -214,19 +214,6 @@ func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceSt
 	return
 }
 
-func formatInterfaceWithIfID(name string, ifID uint32) string {
-	if name == "" && ifID == 0 {
-		return "-"
-	}
-	if name == "" {
-		name = ipsec.StableInterfaceName(ifID)
-	}
-	if ifID == 0 {
-		return dash(name)
-	}
-	return fmt.Sprintf("%s(%d)", name, ifID)
-}
-
 func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {
 	out := map[string]desiredLinkState{}
 	for _, item := range items {
@@ -235,29 +222,6 @@ func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {
 		}
 	}
 	return out
-}
-
-func formatSAState(sa inspect.LinkSA) string {
-	if sa.Name == "" && sa.ChildSA == "" {
-		return "-"
-	}
-	if sa.Established {
-		return "established"
-	}
-	if sa.ChildState != "" {
-		return strings.ToLower(sa.ChildState)
-	}
-	if sa.IKEState != "" {
-		return strings.ToLower(sa.IKEState)
-	}
-	return "present"
-}
-
-func formatUint32OrDash(value uint32) string {
-	if value == 0 {
-		return "-"
-	}
-	return fmt.Sprintf("%d", value)
 }
 
 func debugPortGenerationSummary(spec *ipsec.TransportLinkSpec, rotation inspect.LinkRotation) string {
@@ -337,13 +301,6 @@ func firstContactPointForDebug(points []ipsec.ContactPoint) (ipsec.ContactPoint,
 		return point, true
 	}
 	return ipsec.ContactPoint{}, false
-}
-
-func shortHash(hash string) string {
-	if len(hash) <= 12 {
-		return hash
-	}
-	return hash[:12]
 }
 
 func peerDebugDatagramStats(peerState syncPeerState) inspect.PeerDatagramStatsView {
@@ -592,34 +549,55 @@ func debugEndpoints() error {
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
 	candidates, reflectorErr := collectSyncLocalEndpoints(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
+	view := inspect.EndpointDebugView{}
 	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
-		fmt.Printf("reflector_error: %v\n", reflectorErr)
+		view.ReflectorError = reflectorErr.Error()
 	}
-	fmt.Printf("local_candidates: %d\n", len(candidates))
 	for _, ep := range candidates {
-		source := "unknown"
-		switch ep.Source {
-		case gossip.SourceAdvertise:
-			source = "advertise"
-		case gossip.SourceInterface:
-			source = "interface"
-		case gossip.SourceReflector:
-			source = "reflector"
-		}
-		fmt.Printf("candidate addr=%s port=%d scope=%s priority=%d source=%s\n",
-			ep.IP.String(), ep.Port, ep.Scope, ep.Priority, source)
+		view.LocalCandidates = append(view.LocalCandidates, inspect.EndpointCandidateView{
+			Address:  ep.IP.String(),
+			Port:     ep.Port,
+			Scope:    ep.Scope,
+			Priority: ep.Priority,
+			Source:   endpointSourceString(ep.Source),
+		})
 	}
 
 	discovered := gossip.ExtractPeerEndpoints(state.Network)
-	fmt.Printf("discovered_peers: %d\n", len(discovered))
-	for peerID, entries := range discovered {
-		fmt.Printf("peer %s endpoints=%d\n", peerID, len(entries))
-		for _, ep := range entries {
-			fmt.Printf("  endpoint addr=%s port=%d scope=%s priority=%d protocol=%s source=%s last_observed=%s\n",
-				ep.Address, ep.Port, ep.Scope, ep.Priority, ep.Protocol, dash(ep.Source), formatUnixTime(ep.LastObserved))
-		}
+	peerIDs := make([]string, 0, len(discovered))
+	for peerID := range discovered {
+		peerIDs = append(peerIDs, peerID)
 	}
-	return nil
+	sort.Strings(peerIDs)
+	for _, peerID := range peerIDs {
+		peer := inspect.DiscoveredPeerEndpointsView{PeerID: peerID}
+		for _, ep := range discovered[peerID] {
+			peer.Endpoints = append(peer.Endpoints, inspect.PeerSignedEndpoint{
+				Address:      ep.Address,
+				Port:         ep.Port,
+				Scope:        ep.Scope,
+				Priority:     ep.Priority,
+				Protocol:     ep.Protocol,
+				Source:       ep.Source,
+				LastObserved: ep.LastObserved,
+			})
+		}
+		view.DiscoveredPeers = append(view.DiscoveredPeers, peer)
+	}
+	return inspecttext.WriteEndpointsDebug(os.Stdout, view)
+}
+
+func endpointSourceString(source gossip.LocalEndpointSource) string {
+	switch source {
+	case gossip.SourceAdvertise:
+		return "advertise"
+	case gossip.SourceInterface:
+		return "interface"
+	case gossip.SourceReflector:
+		return "reflector"
+	default:
+		return "unknown"
+	}
 }
 
 func debugAdmission() error {

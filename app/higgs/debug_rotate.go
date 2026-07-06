@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -116,21 +117,21 @@ func writeDebugRotate(w io.Writer, rt *Runtime, state *stateFile, filter string,
 
 func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter string, storedSAs, liveSAs []linkSAState, liveErr error, storedLabel, liveLabel string) error {
 	links := filterLinkViews(build.Inspection.Links, filter)
-	fmt.Fprintf(w, "last_run: %s\n", formatUnixTime(build.Inspection.Summary.LastRunUnix))
-	fmt.Fprintf(w, "link_instances: %d\n", build.Inspection.Summary.LinkInstances)
-	fmt.Fprintf(w, "planned_desired_links: %d\n", build.ReplannedDesired)
-	if build.ReplanIgnored {
-		fmt.Fprintf(w, "planned_desired_status: ignored_partial last_reconcile_desired=%d\n", build.LastDesiredLinks)
+	view := inspect.RotateDebugView{
+		LastRunUnix:       build.Inspection.Summary.LastRunUnix,
+		LinkInstances:     build.Inspection.Summary.LinkInstances,
+		PlannedDesired:    build.ReplannedDesired,
+		ReplanIgnored:     build.ReplanIgnored,
+		LastDesiredLinks:  build.LastDesiredLinks,
+		DesiredPlanSource: build.DesiredPlanSource,
+		Filter:            strings.TrimSpace(filter),
+		StoredLabel:       storedLabel,
+		LiveLabel:         liveLabel,
+		StoredSACount:     len(storedSAs),
+		LiveSACount:       len(liveSAs),
 	}
-	fmt.Fprintf(w, "desired_source: %s\n", dash(build.DesiredPlanSource))
-	if strings.TrimSpace(filter) != "" {
-		fmt.Fprintf(w, "filter: %s\n", filter)
-		fmt.Fprintf(w, "matched_links: %d\n", len(links))
-	}
-	fmt.Fprintf(w, "%s: %d\n", storedLabel, len(storedSAs))
-	fmt.Fprintf(w, "%s: %d\n", liveLabel, len(liveSAs))
 	if liveErr != nil {
-		fmt.Fprintf(w, "live_sa_error: %s\n", liveErr)
+		view.LiveSAError = liveErr.Error()
 	}
 	for _, link := range links {
 		spec, hasSpec := build.PlannedSpecs[link.ID]
@@ -138,49 +139,24 @@ func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter st
 		if hasSpec {
 			specPtr = &spec
 		}
-		printDebugRotateLink(w, link, specPtr, storedSAs, liveSAs)
+		staged := rotateRuntimeStaged(link, specPtr, append(storedSAs, liveSAs...))
+		view.Links = append(view.Links, inspect.RotateDebugLink{
+			Link:                  link,
+			PortGenerationSummary: debugPortGenerationSummary(specPtr, link.Rotation),
+			PortSummary:           debugPortSummary(specPtr, link.Endpoint, link.Endpoint, link.Rotation.StagedGeneration),
+			Current:               rotateRuntimeCurrent(link, specPtr),
+			Staged:                staged,
+			HasStaged:             !rotateRuntimeEmpty(staged),
+			StoredMatchingSAs:     inspectLinkSAs(matchingRotateSAs(link, storedSAs)),
+			LiveMatchingSAs:       inspectLinkSAs(matchingRotateSAs(link, liveSAs)),
+		})
 	}
-	return nil
+	return inspecttext.WriteRotateDebug(w, view)
 }
 
-func printDebugRotateLink(w io.Writer, link inspect.LinkView, spec *ipsec.TransportLinkSpec, storedSAs, liveSAs []linkSAState) {
-	fmt.Fprintf(w, "\nlink %s\n", link.ID)
-	fmt.Fprintf(w, "  peer: %s\n", link.PeerZone)
-	fmt.Fprintf(w, "  group: %s\n", dash(link.GroupID))
-	fmt.Fprintf(w, "  link_id: %s\n", dash(link.LinkID))
-	fmt.Fprintf(w, "  path_key: %s\n", dash(link.PathKey))
-	fmt.Fprintf(w, "  rotate:\n")
-	fmt.Fprintf(w, "    phase: %s\n", dash(link.Rotation.Phase))
-	fmt.Fprintf(w, "    port_generation select/runtime/staged: %s\n", debugPortGenerationSummary(spec, link.Rotation))
-	fmt.Fprintf(w, "    port local/remote/runtime/staged: %s\n", debugPortSummary(spec, link.Endpoint, link.Endpoint, link.Rotation.StagedGeneration))
-	fmt.Fprintf(w, "    deadline: %s\n", formatUnixTime(link.Rotation.RotateDeadline))
-	fmt.Fprintf(w, "    last_error: %s\n", dash(link.LastError))
-	printDebugRotateRuntime(w, "current", rotateRuntimeCurrent(link, spec))
-	staged := rotateRuntimeStaged(link, spec, append(storedSAs, liveSAs...))
-	if !staged.empty() {
-		printDebugRotateRuntime(w, "staged", staged)
-	} else {
-		fmt.Fprintf(w, "  staged:\n")
-		fmt.Fprintf(w, "    state: absent\n")
-	}
-	printDebugRotateSAs(w, "stored_matching_sas", link, storedSAs)
-	printDebugRotateSAs(w, "live_matching_sas", link, liveSAs)
-}
+type rotateRuntimeView = inspect.RotateRuntimeView
 
-type rotateRuntimeView struct {
-	State           string
-	Generation      uint64
-	Port            string
-	RuntimeID       string
-	ChildSAName     string
-	InterfaceName   string
-	XFRMIfID        uint32
-	Endpoint        string
-	LocalTunnelAddr string
-	PeerTunnelAddr  string
-}
-
-func (v rotateRuntimeView) empty() bool {
+func rotateRuntimeEmpty(v rotateRuntimeView) bool {
 	return v.RuntimeID == "" && v.ChildSAName == "" && v.InterfaceName == "" && v.XFRMIfID == 0 && v.State == ""
 }
 
@@ -300,36 +276,6 @@ func stagedSAForRuntime(runtime rotateRuntimeView, sas []linkSAState) (linkSASta
 	return linkSAState{}, false
 }
 
-func printDebugRotateRuntime(w io.Writer, label string, runtime rotateRuntimeView) {
-	fmt.Fprintf(w, "  %s:\n", label)
-	fmt.Fprintf(w, "    state: %s\n", dash(runtime.State))
-	fmt.Fprintf(w, "    port: %s\n", dash(runtime.Port))
-	fmt.Fprintf(w, "    runtime_id: %s\n", dash(runtime.RuntimeID))
-	fmt.Fprintf(w, "    child_sa: %s\n", dash(runtime.ChildSAName))
-	fmt.Fprintf(w, "    interface: %s\n", formatInterfaceWithIfID(runtime.InterfaceName, runtime.XFRMIfID))
-	fmt.Fprintf(w, "    endpoint: %s\n", dash(runtime.Endpoint))
-	fmt.Fprintf(w, "    local_tunnel: %s\n", dash(runtime.LocalTunnelAddr))
-	fmt.Fprintf(w, "    peer_tunnel: %s\n", dash(runtime.PeerTunnelAddr))
-}
-
-func printDebugRotateSAs(w io.Writer, label string, link inspect.LinkView, sas []linkSAState) {
-	matches := matchingRotateSAs(link, sas)
-	fmt.Fprintf(w, "  %s: %d\n", label, len(matches))
-	for _, sa := range matches {
-		fmt.Fprintf(w, "    - name=%s child=%s state=%s if_id=%s reqid=%s local=%s remote=%s identities=%s/%s\n",
-			dash(sa.Name),
-			dash(sa.ChildSA),
-			formatSAState(inspectLinkSA(sa)),
-			formatUint32OrDash(sa.XFRMIfID),
-			formatUint32OrDash(sa.ReqID),
-			dash(sa.LocalEndpoint),
-			dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)),
-			dash(sa.LocalIdentity),
-			dash(sa.RemoteIdentity),
-		)
-	}
-}
-
 func matchingRotateSAs(link inspect.LinkView, sas []linkSAState) []linkSAState {
 	out := make([]linkSAState, 0, len(sas))
 	for _, sa := range sas {
@@ -410,24 +356,6 @@ func nonEmptyMatches(filter string, values ...string) bool {
 		}
 	}
 	return false
-}
-
-func inspectLinkSA(item linkSAState) inspect.LinkSA {
-	return inspect.LinkSA{
-		Name:           item.Name,
-		Peer:           item.Peer,
-		ChildSA:        item.ChildSA,
-		IKEState:       item.IKEState,
-		ChildState:     item.ChildState,
-		XFRMIfID:       item.XFRMIfID,
-		ReqID:          item.ReqID,
-		LocalIdentity:  item.LocalIdentity,
-		RemoteIdentity: item.RemoteIdentity,
-		LocalEndpoint:  item.LocalEndpoint,
-		RemoteEndpoint: item.RemoteEndpoint,
-		Endpoint:       item.Endpoint,
-		Established:    item.Established,
-	}
 }
 
 func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []linkSAState {

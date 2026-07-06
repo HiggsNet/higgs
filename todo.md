@@ -23,9 +23,9 @@
     - `app/higgs` 只保留 executable wiring：从 `DaemonStateStore.Snapshot()` / control socket / 离线 DB 构造 inspect input，复制 app 私有 runtime 状态，初始化 config/runtime/control command service；`internal/inspect` 不直接依赖 `DaemonService`、`stateFile` 锁或 `main` 包私有运行态类型。
     - HTTP observer 和 CLI debug 都从 inspect view 做 presenter：HTTP 输出稳定 JSON，CLI 输出表格/文本/可选 JSON；不得各自重新推理状态 reason。
     - readmodel 可以输出 `SuggestedAction` / `CommandHint`，但不得执行写操作；未来 Web 控制必须走独立 command service / control socket single-writer 路径。
-  - [ ] 盘点重合面：`debug links` vs `/api/v1/links`、`debug peer/sync status` vs `/api/v1/peers`、`debug zone/zone show` vs `/api/v1/zones`、`debug routes/babel/health/revoke-impact` vs 对应 observer API。
-  - [ ] 建立 `internal/inspect` 包骨架：公共 input/view/reason/action 类型、builder 单测；建立 `internal/inspect/text` CLI presenter；必要时建立 `internal/inspect/source` source 接口。
-    - 已建立 links 子集：`internal/inspect` 提供 `LinkInput` / `LinkInspection` / `BuildLinks` 与 builder 单测；`inspect/text` 和通用 source 接口仍待后续迁移。
+  - [x] 盘点重合面：`debug links` vs `/api/v1/links`、`debug peer/sync status` vs `/api/v1/peers`、`debug zone/zone show` vs `/api/v1/zones`、`debug routes/babel/health/revoke-impact` vs 对应 observer API。
+  - [x] 建立 `internal/inspect` 包骨架：公共 input/view/reason/action 类型、builder 单测；建立 `internal/inspect/text` CLI presenter；必要时建立 `internal/inspect/source` source 接口。
+    - 已建立 links/zone/peers/routes/health/revocation/admission/firewall/routing/records 子集：`internal/inspect` 提供共享 view/builder/filter，`internal/inspect/http` 提供 observer DTO/builder，`internal/inspect/text` 提供 CLI presenter 与 focused output 单测；`internal/inspect/source` 仍留到 source/fallback 瘦身阶段。
   - [x] 先以 links 为第一刀：定义 `inspect.LinkInput` / `LinkInspection` / `BuildLinks`，覆盖 desired/actual SA、health、BIRD routing、rotate/takeover、diagnostic reason；observer links API 和 `debug links` 都从同一 view 输出。
     - 已新增 `app/higgs/inspect_links.go` 薄 adapter，从 committed state snapshot / runtime config / health snapshot 投影到 inspect input；`debug links` 和 `/api/v1/links` 均消费同一 `LinkInspection`；debug links CLI presenter 已迁到 `internal/inspect/text`，Observer status/links/bird HTTP DTO 与 status response builder 已迁到 `internal/inspect/http`。
   - [x] 第二步抽 zone/record/authority：把 `recordJSON`、authority/delegation/revocation 展示逻辑迁到 inspect，复用到 `zone show` / `debug zone` / observer zone detail；避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
@@ -33,7 +33,7 @@
   - [x] 第三步抽 peer endpoints：把 bootstrap/discovered/observed/grace endpoint 合并、本地 peer 过滤、source/selected 排序收敛到 inspect；observer peers 和 CLI peer debug 共用。
     - 已新增 `internal/inspect.BuildPeerIDs` / `PeerKnown` / `BuildPeerEndpoints` 与 `PeerStatusInfo` view：peer 候选集合、本地 peer 过滤、zone-path 排序、bootstrap/signed/selected/observed/grace endpoint 合并去重均已下沉；Observer peers API 与 `debug peer` endpoint resolution 已改用该 view；Observer peers HTTP DTO 已迁到 `internal/inspect/http`。
   - [ ] 拆 peer runtime control vs observability readmodel：`SyncPeers` 中 backoff、observed path、rejected digest/record cache、relay eligibility 等仍归 daemon runtime control state；`DatagramStats`、`ObjectPullStats`、read-only responder、last catalog/page/reject、chunk fallback/too-large counters 等纯诊断字段后续迁到 peer observability readmodel / metrics store，并由 `internal/inspect/source` 汇入 debug/observer input，避免主 committed state revision 因统计计数频繁前进。
-  - [ ] 第四步抽 routes/BIRD/health/revocation/admission/firewall：优先复用现有结构化结果，逐步把 presenter 与诊断推理分开；系统采集和 provider 调用留在 source/adapter 层。
+  - [x] 第四步抽 routes/BIRD/health/revocation/admission/firewall：优先复用现有结构化结果，逐步把 presenter 与诊断推理分开；系统采集和 provider 调用留在 source/adapter 层。
     - 已新增 `internal/inspect/http` health response / health series DTO 与 health context builder：Observer health list、health series envelope、health sample + link instance + desired context 合并/补 unknown/排序已从 `observer_server.go` 下沉，app 层仍负责 health spool 查询和私有 runtime state 投影。
     - 已新增 `internal/inspect/text` health presenter：`debug health` 的 target 排序、目标输出、live health sample 输出已从 `health_reconcile.go` 下沉，app 层仅保留 LoadState、control socket live snapshot 和私有 `healthLinkJSON` 投影。
     - 已新增 `internal/inspect/text` peer lifecycle presenter：`debug peers` 的 lifecycle config header、summary、peer detail、severity 文本输出已从 `debug_peers.go` 下沉，app 层仅保留 daemon status banner、state load、lifecycle derive 和 cleanup zone runtime 逻辑。
@@ -42,10 +42,11 @@
     - 已新增 `internal/inspect` admission diagnosis view/reason code 与 `internal/inspect/text` presenter：`debug admission` 文本输出和 output 测试已下沉；app 层保留 auto-join state/key/delegation 检查与 admission state 更新 adapter。
     - 已新增 `internal/inspect` routing/BIRD debug view 与 `internal/inspect/text` presenter：`debug bird-dump` raw command 输出、`debug babel` BIRD instance 摘要已从 `debug_routing.go` 下沉；app 层保留 BIRD client/control socket/offline fallback adapter。
   - [ ] Diagnostics/debug 迁移路线：
-    - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link 的 view builder 和文本输出迁到 inspect/text；`debug peer` / `debug links` CLI presenter 与 `debug records` records view/presenter 已下沉。
+    - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link、endpoint 的 view builder 和文本输出迁到 inspect/text；`debug peer` / `debug links` / `debug endpoints` CLI presenter 与 `debug records` records view/presenter 已下沉。
     - `app/higgs/admission_diagnostics.go` 的 reason code、diagnosis view、writeAdmissionDiagnosis 已迁到 inspect + inspect/text；app 只保留在 daemon 事件中诊断/更新 admission state 的 adapter。
     - `app/higgs/debug_routing.go` route dump/prefix explanation、BIRD raw dump、Babel summary presenter 已迁到 inspect + inspect/text；control socket/offline fallback 留 source/adapter。
     - `app/higgs/debug_firewall.go`、`debug_revoke_impact.go` 已完成 presenter 迁移；后续只保留系统 apply/reconcile、control socket/offline fallback 和 app 私有 runtime adapter。
+    - `app/higgs/debug_rotate.go` 已新增 `inspect.RotateDebugView` + `inspect/text.WriteRotateDebug`：rotate 文本 presenter 已下沉，app 层保留 control socket、live SA 采集和 current/staged runtime adapter。
     - `app/higgs/cmd.go` 的 `cmdDebug()` 只做 CLI 子命令注册、参数解析、source 选择和 presenter 调用。
   - [ ] 为 inspect/text 建立 golden/output 测试，迁移现有 `TestDebug*Output`、`TestWriteDebug*`、admission diagnosis 输出测试；app 层只保留命令 wiring/fallback 的窄测试。
   - [ ] 删除 `observer_server.go` 中只为兼容旧 handler 测试保留的 app 层 wrapper 或改测 `internal/observer.Server.Handler()`；保留必要 shim 时必须标注迁移原因。

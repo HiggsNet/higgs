@@ -374,14 +374,6 @@ func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath
 	return err
 }
 
-func (d *DaemonService) respondAnnounceSnapshots(peerID string, snapshots []*gossip.ZoneSnapshot) error {
-	if d == nil || d.Sync == nil || len(snapshots) == 0 {
-		return nil
-	}
-	state, _, _ := d.snapshotState()
-	return d.respondAnnounceSnapshotsFromState(state, peerID, snapshots)
-}
-
 func (d *DaemonService) respondAnnounceSnapshotsFromState(state *stateFile, peerID string, snapshots []*gossip.ZoneSnapshot) error {
 	if d == nil || d.Sync == nil || len(snapshots) == 0 {
 		return nil

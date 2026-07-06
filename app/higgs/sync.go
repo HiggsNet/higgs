@@ -1682,13 +1682,6 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now(), false, nil)
 }
 
-func (sr *SyncRuntime) sendSnapshots(peerID string, zones []zone.ZonePath, allowChunks bool) error {
-	if sr == nil {
-		return nil
-	}
-	return sendSnapshotsWithStats(sr.State, sr.State.Network, sr.Transport, peerID, zones, sr.now(), allowChunks, sr.logger())
-}
-
 func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) error {
 	diag, err := sendSnapshotsWithDiagnostics(ns, transport, peerID, zones, now, allowChunks, logger)
 	recordDatagramSendDiagnostics(state, peerID, diag, transport.MaxMessageBytes(), now)

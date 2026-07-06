@@ -3,6 +3,7 @@ package text
 import (
 	"io"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 
@@ -78,12 +79,9 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 	authorized := false
 	zones := make([]string, 0)
 	for z, prefixes := range dump.Authorized {
-		for _, p := range prefixes {
-			if p == prefixStr {
-				authorized = true
-				zones = append(zones, z)
-				break
-			}
+		if slices.Contains(prefixes, prefixStr) {
+			authorized = true
+			zones = append(zones, z)
 		}
 	}
 	sort.Strings(zones)

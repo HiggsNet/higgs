@@ -50,6 +50,25 @@ type PeerEndpointView struct {
 	Selected     bool   `json:"selected,omitempty"`
 }
 
+type EndpointDebugView struct {
+	ReflectorError  string
+	LocalCandidates []EndpointCandidateView
+	DiscoveredPeers []DiscoveredPeerEndpointsView
+}
+
+type EndpointCandidateView struct {
+	Address  string
+	Port     uint16
+	Scope    string
+	Priority int
+	Source   string
+}
+
+type DiscoveredPeerEndpointsView struct {
+	PeerID    string
+	Endpoints []PeerSignedEndpoint
+}
+
 // PeerStatusInfo is the derived runtime status view for a peer. Producers
 // compute it from committed state and runtime observations; presenters render
 // it without depending on app-private stateFile internals.
