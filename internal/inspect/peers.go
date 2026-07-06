@@ -56,6 +56,13 @@ type EndpointDebugView struct {
 	DiscoveredPeers []DiscoveredPeerEndpointsView
 }
 
+type EndpointDebugInput struct {
+	ReflectorError      string
+	HasPublicReflectors bool
+	LocalCandidates     []EndpointCandidateView
+	Discovered          map[string][]PeerSignedEndpoint
+}
+
 type EndpointCandidateView struct {
 	Address  string
 	Port     uint16
@@ -67,6 +74,72 @@ type EndpointCandidateView struct {
 type DiscoveredPeerEndpointsView struct {
 	PeerID    string
 	Endpoints []PeerSignedEndpoint
+}
+
+func BuildEndpointDebug(input EndpointDebugInput) EndpointDebugView {
+	view := EndpointDebugView{
+		LocalCandidates: append([]EndpointCandidateView(nil), input.LocalCandidates...),
+	}
+	sort.SliceStable(view.LocalCandidates, func(i, j int) bool {
+		return endpointCandidateLess(view.LocalCandidates[i], view.LocalCandidates[j])
+	})
+	if input.ReflectorError != "" && input.HasPublicReflectors {
+		view.ReflectorError = input.ReflectorError
+	}
+	peerIDs := make([]string, 0, len(input.Discovered))
+	for peerID := range input.Discovered {
+		peerIDs = append(peerIDs, peerID)
+	}
+	sort.Strings(peerIDs)
+	for _, peerID := range peerIDs {
+		endpoints := append([]PeerSignedEndpoint(nil), input.Discovered[peerID]...)
+		sort.SliceStable(endpoints, func(i, j int) bool {
+			return signedEndpointLess(endpoints[i], endpoints[j])
+		})
+		view.DiscoveredPeers = append(view.DiscoveredPeers, DiscoveredPeerEndpointsView{
+			PeerID:    peerID,
+			Endpoints: endpoints,
+		})
+	}
+	return view
+}
+
+func endpointCandidateLess(a, b EndpointCandidateView) bool {
+	if a.Priority != b.Priority {
+		return a.Priority > b.Priority
+	}
+	if a.Source != b.Source {
+		return a.Source < b.Source
+	}
+	if a.Scope != b.Scope {
+		return a.Scope < b.Scope
+	}
+	if a.Address != b.Address {
+		return a.Address < b.Address
+	}
+	return a.Port < b.Port
+}
+
+func signedEndpointLess(a, b PeerSignedEndpoint) bool {
+	if a.Priority != b.Priority {
+		return a.Priority > b.Priority
+	}
+	if a.LastObserved != b.LastObserved {
+		return a.LastObserved > b.LastObserved
+	}
+	if a.Source != b.Source {
+		return a.Source < b.Source
+	}
+	if a.Scope != b.Scope {
+		return a.Scope < b.Scope
+	}
+	if a.Address != b.Address {
+		return a.Address < b.Address
+	}
+	if a.Port != b.Port {
+		return a.Port < b.Port
+	}
+	return a.Protocol < b.Protocol
 }
 
 // PeerStatusInfo is the derived runtime status view for a peer. Producers

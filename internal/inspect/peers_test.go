@@ -99,3 +99,80 @@ func TestBuildPeerEndpointsDeduplicatesByAddrAndSource(t *testing.T) {
 		t.Fatalf("advertise endpoints = %d, want 1: %+v", advertise, got)
 	}
 }
+
+func TestBuildEndpointDebugSortsDiscoveredPeersAndCopiesInputs(t *testing.T) {
+	input := EndpointDebugInput{
+		ReflectorError:      "timeout",
+		HasPublicReflectors: true,
+		LocalCandidates: []EndpointCandidateView{
+			{
+				Address:  "203.0.113.30",
+				Port:     33434,
+				Scope:    "global",
+				Priority: 50,
+				Source:   "reflector",
+			},
+			{
+				Address:  "203.0.113.10",
+				Port:     33434,
+				Scope:    "global",
+				Priority: 100,
+				Source:   "advertise",
+			},
+			{
+				Address:  "203.0.113.20",
+				Port:     33434,
+				Scope:    "site",
+				Priority: 100,
+				Source:   "interface",
+			},
+		},
+		Discovered: map[string][]PeerSignedEndpoint{
+			"node-c.catofes.": {{Address: "198.51.100.30", Port: 33434}},
+			"node-b.catofes.": {
+				{Address: "198.51.100.10", Port: 33434, Priority: 50, LastObserved: 300},
+				{Address: "198.51.100.20", Port: 33434, Priority: 100, LastObserved: 100},
+				{Address: "198.51.100.30", Port: 33434, Priority: 100, LastObserved: 200},
+			},
+		},
+	}
+	got := BuildEndpointDebug(input)
+	if got.ReflectorError != "timeout" {
+		t.Fatalf("ReflectorError = %q, want timeout", got.ReflectorError)
+	}
+	if len(got.LocalCandidates) != 3 {
+		t.Fatalf("LocalCandidates = %+v", got.LocalCandidates)
+	}
+	if got.LocalCandidates[0].Address != "203.0.113.10" || got.LocalCandidates[1].Address != "203.0.113.20" || got.LocalCandidates[2].Address != "203.0.113.30" {
+		t.Fatalf("LocalCandidates not sorted by priority/source: %+v", got.LocalCandidates)
+	}
+	if len(got.DiscoveredPeers) != 2 {
+		t.Fatalf("DiscoveredPeers len = %d, want 2: %+v", len(got.DiscoveredPeers), got.DiscoveredPeers)
+	}
+	if got.DiscoveredPeers[0].PeerID != "node-b.catofes." || got.DiscoveredPeers[1].PeerID != "node-c.catofes." {
+		t.Fatalf("DiscoveredPeers not sorted: %+v", got.DiscoveredPeers)
+	}
+	endpoints := got.DiscoveredPeers[0].Endpoints
+	if len(endpoints) != 3 {
+		t.Fatalf("node-b endpoints len = %d, want 3: %+v", len(endpoints), endpoints)
+	}
+	if endpoints[0].Address != "198.51.100.30" || endpoints[1].Address != "198.51.100.20" || endpoints[2].Address != "198.51.100.10" {
+		t.Fatalf("node-b endpoints not sorted by priority/last_observed: %+v", endpoints)
+	}
+
+	input.LocalCandidates[0].Address = "mutated"
+	input.Discovered["node-b.catofes."][0].Address = "mutated"
+	if got.LocalCandidates[0].Address == "mutated" || got.DiscoveredPeers[0].Endpoints[0].Address == "mutated" {
+		t.Fatalf("BuildEndpointDebug did not copy inputs: %+v", got)
+	}
+}
+
+func TestBuildEndpointDebugSuppressesPrivateReflectorErrors(t *testing.T) {
+	got := BuildEndpointDebug(EndpointDebugInput{
+		ReflectorError:      "timeout",
+		HasPublicReflectors: false,
+	})
+	if got.ReflectorError != "" {
+		t.Fatalf("ReflectorError = %q, want empty", got.ReflectorError)
+	}
+}

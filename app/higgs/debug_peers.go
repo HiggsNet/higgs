@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
@@ -43,14 +44,14 @@ func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {
 		return nil
 	}
 	now := rt.Now()
-	cfg := PeerLifecycleConfig{}
+	cfg := inspect.PeerLifecycleConfig{}
 	if rt != nil && rt.Config != nil {
 		cfg = rt.Config.PeerLifecycle
 	}
 	hasOverlay := rt != nil && rt.Config != nil && len(rt.Config.IPsec.LinkGroups) > 0
 
 	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
-	normalized := normalizedPeerLifecycleConfig(cfg)
+	normalized := inspect.NormalizePeerLifecycleConfig(cfg)
 	return inspecttext.WritePeerLifecycleDebug(w, inspecttext.PeerLifecycleDebugView{
 		Config: inspecttext.PeerLifecycleDebugConfig{
 			StaleAfter:       normalized.StaleAfter,
@@ -65,7 +66,7 @@ func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {
 // peerStatusSnapshotForControl returns the peer status list for a daemon
 // control API response. It is called from the control handler when the
 // `peers_status` method is invoked.
-func (d *DaemonService) peerStatusSnapshotForControl() ([]PeerStatusInfo, daemonStateStoreMeta) {
+func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo, daemonStateStoreMeta) {
 	if d == nil || d.Sync == nil {
 		return nil, daemonStateStoreMeta{}
 	}
@@ -74,7 +75,7 @@ func (d *DaemonService) peerStatusSnapshotForControl() ([]PeerStatusInfo, daemon
 		return nil, meta
 	}
 	now := d.Sync.now()
-	cfg := PeerLifecycleConfig{}
+	cfg := inspect.PeerLifecycleConfig{}
 	if d.Sync.App != nil && d.Sync.App.Config != nil {
 		cfg = d.Sync.App.Config.PeerLifecycle
 	}
@@ -87,17 +88,17 @@ func (d *DaemonService) peerStatusSnapshotForControl() ([]PeerStatusInfo, daemon
 // 6.4.2 cleanup_after / 6.4.5 revoked entry point: it is called by the
 // daemon's periodic timer to discover long-term offline or revoked peers that
 // need resource cleanup beyond normal reconcile teardown.
-func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg PeerLifecycleConfig) []zone.ZonePath {
+func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.PeerLifecycleConfig) []zone.ZonePath {
 	if state == nil {
 		return nil
 	}
-	cfg = normalizedPeerLifecycleConfig(cfg)
+	cfg = inspect.NormalizePeerLifecycleConfig(cfg)
 	hasOverlay := hasIPsecConfig(state)
 	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
 	var out []zone.ZonePath
 	seen := make(map[zone.ZonePath]bool)
 	for _, p := range peers {
-		if peerStatusRequiresCleanup(p, cfg) && !seen[p.Zone] {
+		if inspect.PeerStatusRequiresCleanup(p) && !seen[p.Zone] {
 			seen[p.Zone] = true
 			out = append(out, p.Zone)
 		}

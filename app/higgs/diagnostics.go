@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -549,12 +548,9 @@ func debugEndpoints() error {
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
 	candidates, reflectorErr := collectSyncLocalEndpoints(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
-	view := inspect.EndpointDebugView{}
-	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
-		view.ReflectorError = reflectorErr.Error()
-	}
+	localCandidates := make([]inspect.EndpointCandidateView, 0, len(candidates))
 	for _, ep := range candidates {
-		view.LocalCandidates = append(view.LocalCandidates, inspect.EndpointCandidateView{
+		localCandidates = append(localCandidates, inspect.EndpointCandidateView{
 			Address:  ep.IP.String(),
 			Port:     ep.Port,
 			Scope:    ep.Scope,
@@ -564,15 +560,10 @@ func debugEndpoints() error {
 	}
 
 	discovered := gossip.ExtractPeerEndpoints(state.Network)
-	peerIDs := make([]string, 0, len(discovered))
-	for peerID := range discovered {
-		peerIDs = append(peerIDs, peerID)
-	}
-	sort.Strings(peerIDs)
-	for _, peerID := range peerIDs {
-		peer := inspect.DiscoveredPeerEndpointsView{PeerID: peerID}
-		for _, ep := range discovered[peerID] {
-			peer.Endpoints = append(peer.Endpoints, inspect.PeerSignedEndpoint{
+	discoveredInput := make(map[string][]inspect.PeerSignedEndpoint, len(discovered))
+	for peerID, endpoints := range discovered {
+		for _, ep := range endpoints {
+			discoveredInput[peerID] = append(discoveredInput[peerID], inspect.PeerSignedEndpoint{
 				Address:      ep.Address,
 				Port:         ep.Port,
 				Scope:        ep.Scope,
@@ -582,8 +573,17 @@ func debugEndpoints() error {
 				LastObserved: ep.LastObserved,
 			})
 		}
-		view.DiscoveredPeers = append(view.DiscoveredPeers, peer)
 	}
+	reflectorError := ""
+	if reflectorErr != nil {
+		reflectorError = reflectorErr.Error()
+	}
+	view := inspect.BuildEndpointDebug(inspect.EndpointDebugInput{
+		ReflectorError:      reflectorError,
+		HasPublicReflectors: len(gossip.ResolvePublicIPReflectors(reflectors)) > 0,
+		LocalCandidates:     localCandidates,
+		Discovered:          discoveredInput,
+	})
 	return inspecttext.WriteEndpointsDebug(os.Stdout, view)
 }
 

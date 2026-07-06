@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
@@ -128,11 +129,11 @@ func addRevocationToParent(t *testing.T, state *stateFile, parentZone, childZone
 func TestDerivePeerStatusRevoked(t *testing.T) {
 	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig()
+	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Before revocation: node-b should not be revoked.
 	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
-	if info.State == peerStateRevoked {
+	if info.State == inspect.PeerStateRevoked {
 		t.Fatalf("peer should not be revoked before revocation is added, got state=%s", info.State)
 	}
 
@@ -141,7 +142,7 @@ func TestDerivePeerStatusRevoked(t *testing.T) {
 
 	// After revocation: node-b should be revoked, overriding any other state.
 	info = derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
-	if info.State != peerStateRevoked {
+	if info.State != inspect.PeerStateRevoked {
 		t.Fatalf("state = %s, want revoked", info.State)
 	}
 	if info.Reason != "zone_revoked" {
@@ -152,7 +153,7 @@ func TestDerivePeerStatusRevoked(t *testing.T) {
 func TestDerivePeerStatusActiveWithUpLink(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig()
+	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add a LinkInstance for node-b that is up.
 	state.LinkInstances["link-node-b"] = linkInstanceState{
@@ -163,7 +164,7 @@ func TestDerivePeerStatusActiveWithUpLink(t *testing.T) {
 	}
 
 	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
-	if info.State != peerStateActive {
+	if info.State != inspect.PeerStateActive {
 		t.Fatalf("state = %s, want active", info.State)
 	}
 	if info.UpLinks != 1 {
@@ -177,7 +178,7 @@ func TestDerivePeerStatusActiveWithUpLink(t *testing.T) {
 func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig()
+	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add a LinkInstance for node-b that is connecting (not up).
 	state.LinkInstances["link-node-b"] = linkInstanceState{
@@ -188,7 +189,7 @@ func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
 	}
 
 	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
-	if info.State != peerStateConnecting {
+	if info.State != inspect.PeerStateConnecting {
 		t.Fatalf("state = %s, want connecting", info.State)
 	}
 }
@@ -196,7 +197,7 @@ func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
 func TestDerivePeerStatusStaleAfterThreshold(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig() // stale_after=15m, offline_after=12h
+	cfg := inspect.DefaultPeerLifecycleConfig() // stale_after=15m, offline_after=12h
 
 	// Set last sync to 20 minutes ago; should be stale but not offline.
 	lastSync := now.Add(-20 * time.Minute)
@@ -205,7 +206,7 @@ func TestDerivePeerStatusStaleAfterThreshold(t *testing.T) {
 	}
 
 	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
-	if info.State != peerStateStale {
+	if info.State != inspect.PeerStateStale {
 		t.Fatalf("state = %s, want stale", info.State)
 	}
 	if info.Reason != "stale_after_exceeded" {
@@ -216,7 +217,7 @@ func TestDerivePeerStatusStaleAfterThreshold(t *testing.T) {
 func TestDerivePeerStatusOfflineAfterThreshold(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig() // offline_after=12h, cleanup_after=48h
+	cfg := inspect.DefaultPeerLifecycleConfig() // offline_after=12h, cleanup_after=48h
 
 	// Set last sync to 13 hours ago; should be offline but not cleanup due.
 	lastSync := now.Add(-13 * time.Hour)
@@ -225,7 +226,7 @@ func TestDerivePeerStatusOfflineAfterThreshold(t *testing.T) {
 	}
 
 	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
-	if info.State != peerStateOffline {
+	if info.State != inspect.PeerStateOffline {
 		t.Fatalf("state = %s, want offline", info.State)
 	}
 	if info.Reason != "offline_after_exceeded" {
@@ -236,7 +237,7 @@ func TestDerivePeerStatusOfflineAfterThreshold(t *testing.T) {
 func TestDerivePeerStatusCleanupAfterThreshold(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig() // cleanup_after=48h
+	cfg := inspect.DefaultPeerLifecycleConfig() // cleanup_after=48h
 
 	// Set last sync to 49 hours ago; should be offline with cleanup due.
 	lastSync := now.Add(-49 * time.Hour)
@@ -245,27 +246,27 @@ func TestDerivePeerStatusCleanupAfterThreshold(t *testing.T) {
 	}
 
 	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
-	if info.State != peerStateOffline {
+	if info.State != inspect.PeerStateOffline {
 		t.Fatalf("state = %s, want offline", info.State)
 	}
 	if info.Reason != "cleanup_after_exceeded" {
 		t.Fatalf("reason = %s, want cleanup_after_exceeded", info.Reason)
 	}
-	if !peerStatusRequiresCleanup(info, cfg) {
-		t.Fatalf("peerStatusRequiresCleanup should be true for cleanup_after_exceeded")
+	if !inspect.PeerStatusRequiresCleanup(info) {
+		t.Fatalf("inspect.PeerStatusRequiresCleanup should be true for cleanup_after_exceeded")
 	}
 }
 
 func TestDerivePeerStatusNeverSeen(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig()
+	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// No SyncPeers entry for node-b, no LinkInstance, no desired link.
 	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
 	// Without IPsec config, this should be eligible (no_overlay_config) since
 	// the state alone has no IPsecReconcile.DesiredLinks.
-	if info.State != peerStateEligible && info.State != peerStateOffline {
+	if info.State != inspect.PeerStateEligible && info.State != inspect.PeerStateOffline {
 		t.Fatalf("state = %s, want eligible or offline", info.State)
 	}
 }
@@ -275,20 +276,20 @@ func TestPeerStatusIsHardChange(t *testing.T) {
 		old, new string
 		want     bool
 	}{
-		{peerStateActive, peerStateActive, false},
-		{peerStateActive, peerStateStale, false},
-		{peerStateActive, peerStateRevoked, true},
-		{peerStateRevoked, peerStateActive, true},
-		{peerStateActive, peerStatePolicyDenied, true},
-		{peerStatePolicyDenied, peerStateActive, true},
-		{peerStateActive, peerStateConfigError, true},
-		{peerStateStale, peerStateOffline, false},
-		{peerStateConnecting, peerStateActive, false},
+		{inspect.PeerStateActive, inspect.PeerStateActive, false},
+		{inspect.PeerStateActive, inspect.PeerStateStale, false},
+		{inspect.PeerStateActive, inspect.PeerStateRevoked, true},
+		{inspect.PeerStateRevoked, inspect.PeerStateActive, true},
+		{inspect.PeerStateActive, inspect.PeerStatePolicyDenied, true},
+		{inspect.PeerStatePolicyDenied, inspect.PeerStateActive, true},
+		{inspect.PeerStateActive, inspect.PeerStateConfigError, true},
+		{inspect.PeerStateStale, inspect.PeerStateOffline, false},
+		{inspect.PeerStateConnecting, inspect.PeerStateActive, false},
 	}
 	for _, tc := range tests {
-		got := peerStatusIsHardChange(tc.old, tc.new)
+		got := inspect.PeerStatusIsHardChange(tc.old, tc.new)
 		if got != tc.want {
-			t.Errorf("peerStatusIsHardChange(%q, %q) = %v, want %v", tc.old, tc.new, got, tc.want)
+			t.Errorf("inspect.PeerStatusIsHardChange(%q, %q) = %v, want %v", tc.old, tc.new, got, tc.want)
 		}
 	}
 }
@@ -298,19 +299,19 @@ func TestShouldBlockReconnect(t *testing.T) {
 		state string
 		want  bool
 	}{
-		{peerStateRevoked, true},
-		{peerStatePolicyDenied, true},
-		{peerStateConfigError, true},
-		{peerStateActive, false},
-		{peerStateStale, false},
-		{peerStateOffline, false},
-		{peerStateEligible, false},
+		{inspect.PeerStateRevoked, true},
+		{inspect.PeerStatePolicyDenied, true},
+		{inspect.PeerStateConfigError, true},
+		{inspect.PeerStateActive, false},
+		{inspect.PeerStateStale, false},
+		{inspect.PeerStateOffline, false},
+		{inspect.PeerStateEligible, false},
 	}
 	for _, tc := range tests {
-		info := PeerStatusInfo{State: tc.state}
-		got := shouldBlockReconnect(info)
+		info := inspect.PeerStatusInfo{State: tc.state}
+		got := inspect.ShouldBlockPeerReconnect(info)
 		if got != tc.want {
-			t.Errorf("shouldBlockReconnect(%q) = %v, want %v", tc.state, got, tc.want)
+			t.Errorf("inspect.ShouldBlockPeerReconnect(%q) = %v, want %v", tc.state, got, tc.want)
 		}
 	}
 }
@@ -423,8 +424,8 @@ peer_lifecycle:
 		config := defaultAppConfig()
 		// No peer_lifecycle section — should use defaults from defaultAppConfig.
 		// The field is zero-valued; normalizeAppConfig or explicit call fills defaults.
-		norm := normalizedPeerLifecycleConfig(config.PeerLifecycle)
-		def := defaultPeerLifecycleConfig()
+		norm := inspect.NormalizePeerLifecycleConfig(config.PeerLifecycle)
+		def := inspect.DefaultPeerLifecycleConfig()
 		if norm.StaleAfter != def.StaleAfter {
 			t.Errorf("default StaleAfter = %s, want %s", norm.StaleAfter, def.StaleAfter)
 		}
@@ -454,7 +455,7 @@ func TestWriteDebugPeers(t *testing.T) {
 
 	rt := &Runtime{
 		Config: &appConfig{
-			PeerLifecycle: defaultPeerLifecycleConfig(),
+			PeerLifecycle: inspect.DefaultPeerLifecycleConfig(),
 		},
 		Clock: func() time.Time { return now },
 	}
@@ -511,7 +512,7 @@ func TestWriteDebugPeersEmpty(t *testing.T) {
 func TestPeerLifecycleCleanupZones(t *testing.T) {
 	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig()
+	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add node-b to SyncPeers with old sync time (beyond cleanup_after).
 	state.SyncPeers["node-b.catofes."] = syncPeerState{
@@ -547,7 +548,7 @@ func TestPeerLifecycleCleanupZones(t *testing.T) {
 func TestDerivePeerStatusesAllPeers(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)
-	cfg := defaultPeerLifecycleConfig()
+	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add SyncPeers entries.
 	state.SyncPeers["node-b.catofes."] = syncPeerState{

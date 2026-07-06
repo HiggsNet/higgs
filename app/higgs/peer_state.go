@@ -8,88 +8,6 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-// Peer lifecycle states (Phase 6.4.1). These are derived at runtime from
-// verified active state, local config and SyncPeers observations. They are
-// never written to gossip active state and only influence local desired-state
-// reconcile.
-const (
-	// peerStateEligible: trust chain and local policy allow this peer, but no
-	// usable endpoint/ipsec/profile record has been observed yet.
-	peerStateEligible = "eligible"
-	// peerStateDiscovered: a usable endpoint/ipsec/profile record is available;
-	// transport link has not entered connecting yet.
-	peerStateDiscovered = "discovered"
-	// peerStateConnecting: IPsec apply succeeded, awaiting SA establishment.
-	peerStateConnecting = "connecting"
-	// peerStateActive: at least one LinkInstance is up (established SA).
-	peerStateActive = "active"
-	// peerStateStale: short-term offline (within stale_after). Known endpoints,
-	// desired link and firewall config are retained; reconnect retry frequency
-	// is reduced.
-	peerStateStale = "stale"
-	// peerStateOffline: long-term offline (beyond offline_after). Active new
-	// connection attempts enter low-frequency backoff; cleanup policy decides
-	// whether existing SA/route are retained.
-	peerStateOffline = "offline"
-	// peerStatePolicyDenied: local MeshPolicy or trust chain denies this peer.
-	peerStatePolicyDenied = "policy_denied"
-	// peerStateConfigError: required local config (netns/link group) is missing
-	// or inconsistent.
-	peerStateConfigError = "config_error"
-	// peerStateRevoked: the peer Zone or an ancestor delegation is revoked.
-	// This state overrides any stale/offline/active observation: even if the SA
-	// is still up, overlay access must be blocked.
-	peerStateRevoked = "revoked"
-)
-
-// PeerLifecycleConfig holds stale/offline/cleanup thresholds. Zero values use
-// defaults from defaultPeerLifecycleConfig().
-type PeerLifecycleConfig struct {
-	StaleAfter       time.Duration `yaml:"stale_after" json:"stale_after,omitempty"`
-	OfflineAfter     time.Duration `yaml:"offline_after" json:"offline_after,omitempty"`
-	CleanupAfter     time.Duration `yaml:"cleanup_after" json:"cleanup_after,omitempty"`
-	KeepSAWhileStale bool          `yaml:"keep_sa_while_stale" json:"keep_sa_while_stale,omitempty"`
-}
-
-// defaultPeerLifecycleConfig returns conservative defaults so that transient
-// network blips do not cause link teardown.
-func defaultPeerLifecycleConfig() PeerLifecycleConfig {
-	return PeerLifecycleConfig{
-		StaleAfter:       15 * time.Minute,
-		OfflineAfter:     12 * time.Hour,
-		CleanupAfter:     48 * time.Hour,
-		KeepSAWhileStale: true,
-	}
-}
-
-// normalizedPeerLifecycleConfig merges cfg with defaults for any zero field.
-func normalizedPeerLifecycleConfig(cfg PeerLifecycleConfig) PeerLifecycleConfig {
-	def := defaultPeerLifecycleConfig()
-	out := cfg
-	// KeepSAWhileStale is false by default in Go; our policy default is true.
-	// We can't distinguish "explicitly false" from "unset zero", so we use the
-	// conservative default true only when the struct appears to be at zero
-	// value (all durations are zero), i.e. the user didn't configure this
-	// section at all.
-	allZero := out.StaleAfter <= 0 && out.OfflineAfter <= 0 && out.CleanupAfter <= 0
-	if allZero && !out.KeepSAWhileStale {
-		out.KeepSAWhileStale = def.KeepSAWhileStale
-	}
-	if out.StaleAfter <= 0 {
-		out.StaleAfter = def.StaleAfter
-	}
-	if out.OfflineAfter <= 0 {
-		out.OfflineAfter = def.OfflineAfter
-	}
-	if out.CleanupAfter <= 0 {
-		out.CleanupAfter = def.CleanupAfter
-	}
-	return out
-}
-
-// PeerStatusInfo is the derived runtime status view for a single peer.
-type PeerStatusInfo = inspect.PeerStatusInfo
-
 // derivePeerStatus computes the lifecycle state of a peer from verified active
 // state, SyncPeers observations, LinkInstances and local config.
 //
@@ -107,163 +25,70 @@ func derivePeerStatus(
 	peerID string,
 	peerZone zone.ZonePath,
 	now time.Time,
-	cfg PeerLifecycleConfig,
-) PeerStatusInfo {
-	info := PeerStatusInfo{
-		PeerID: peerID,
-		Zone:   peerZone,
+	cfg inspect.PeerLifecycleConfig,
+) inspect.PeerStatusInfo {
+	if state == nil {
+		return inspect.BuildPeerLifecycleStatus(inspect.PeerLifecycleInput{
+			PeerID:         peerID,
+			PeerZone:       peerZone,
+			StateAvailable: false,
+			Now:            now,
+			Config:         cfg,
+		})
+	}
+	return inspect.BuildPeerLifecycleStatus(peerLifecycleInputFromState(state, peerID, peerZone, now, cfg, false))
+}
+
+func peerLifecycleInputFromState(state *stateFile, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
+	input := inspect.PeerLifecycleInput{
+		PeerID:           peerID,
+		PeerZone:         peerZone,
+		StateAvailable:   state != nil,
+		HasOverlayConfig: hasOverlayConfig,
+		Now:              now,
+		Config:           cfg,
 	}
 	if state == nil {
-		info.State = peerStateConfigError
-		info.Reason = "state_nil"
-		return info
+		return input
 	}
-	cfg = normalizedPeerLifecycleConfig(cfg)
 	ps := state.SyncPeers[peerID]
-	info.LastSeenUnix = ps.ObservedLastSeenUnix
-	if ps.LastSyncUnix > info.LastSeenUnix {
-		info.LastSeenUnix = ps.LastSyncUnix
+	input.LastSyncUnix = ps.LastSyncUnix
+	input.ObservedLastSeenUnix = ps.ObservedLastSeenUnix
+	input.HasIPsecConfig = hasIPsecConfig(state)
+	if state.Network != nil {
+		input.PeerZoneKnown = state.Network.Zones[peerZone] != nil
+		input.ZoneRevoked = state.Network.IsZoneRevoked(peerZone, now)
+		if peerZoneState := state.Network.Zones[peerZone]; peerZoneState != nil {
+			input.PeerHasIPsecRecords = hasPeerIPsecRecords(peerZoneState)
+		}
 	}
-	info.LastSyncUnix = ps.LastSyncUnix
-
-	// Collect link instance stats for this peer zone.
-	var upLinks, actualLinks, desiredLinks int
-	var lastTransitionUnix int64
 	for _, inst := range state.LinkInstances {
 		if inst.PeerZone != peerZone {
 			continue
 		}
-		actualLinks++
+		input.ActualLinks++
 		if inst.ActualState == "up" {
-			upLinks++
+			input.UpLinks++
 		}
-		if inst.LastTransition > lastTransitionUnix {
-			lastTransitionUnix = inst.LastTransition
+		if inst.LastTransition > input.LastTransitionUnix {
+			input.LastTransitionUnix = inst.LastTransition
 		}
 	}
 	if rec := state.IPsecReconcile; rec != nil {
 		for _, d := range rec.Desired {
 			if d.PeerZone == peerZone {
-				desiredLinks++
+				input.DesiredLinks++
+			}
+		}
+		for _, skip := range rec.Skipped {
+			if skip.Peer == peerZone {
+				input.PolicyDeniedReason = skip.Reason
+				input.PolicyDeniedDetail = skip.Detail
+				break
 			}
 		}
 	}
-	info.UpLinks = upLinks
-	info.ActualLinks = actualLinks
-	info.DesiredLinks = desiredLinks
-	if lastTransitionUnix > info.LastReconcileUnix {
-		info.LastReconcileUnix = lastTransitionUnix
-	}
-
-	// 1. Revoked overrides everything.
-	if state.Network != nil && state.Network.IsZoneRevoked(peerZone, now) {
-		info.State = peerStateRevoked
-		info.Reason = "zone_revoked"
-		return info
-	}
-
-	// Verify trust chain eligibility: the peer zone must exist and have a
-	// delegation chain.
-	if state.Network == nil || state.Network.Zones[peerZone] == nil {
-		// Unknown peer zone: not eligible.
-		info.State = peerStateConfigError
-		info.Reason = "peer_zone_unknown"
-		return info
-	}
-
-	// If we have desired links but MeshPolicy denied them, reflect that.
-	if desiredLinks == 0 && hasIPsecConfig(state) {
-		// Check if there's a deny reason recorded in the latest reconcile skip.
-		if rec := state.IPsecReconcile; rec != nil {
-			for _, skip := range rec.Skipped {
-				if skip.Peer == peerZone {
-					info.State = peerStatePolicyDenied
-					info.Reason = skip.Reason
-					info.Detail = skip.Detail
-					return info
-				}
-			}
-		}
-		// No skip record but no desired link: peer may be eligible but lacks
-		// required ipsec records (profile/address/port/transport-key).
-		info.State = peerStateEligible
-		info.Reason = "no_ipsec_records"
-		return info
-	}
-
-	// 3. Active: at least one up link.
-	if upLinks > 0 {
-		info.State = peerStateActive
-		info.Reason = "link_up"
-		return info
-	}
-
-	// 4. Connecting: link apply succeeded but no SA yet.
-	if actualLinks > 0 {
-		info.State = peerStateConnecting
-		info.Reason = "link_connecting"
-		return info
-	}
-
-	// 5. Discovered: desired link exists (endpoint/profile available) but
-	//    LinkInstance not created yet.
-	if desiredLinks > 0 {
-		info.State = peerStateDiscovered
-		info.Reason = "link_pending"
-		return info
-	}
-
-	// 6/7/8. Stale / offline based on last seen time. This applies regardless
-	// of whether IPsec overlay config exists: a peer that was synced recently
-	// but is now beyond the active window should be flagged stale/offline so
-	// that reconcile and cleanup logic can react.
-	lastActive := ps.LastSyncUnix
-	if ps.ObservedLastSeenUnix > 0 && ps.ObservedLastSeenUnix > lastActive {
-		lastActive = ps.ObservedLastSeenUnix
-	}
-	if lastActive == 0 {
-		// Never synced: no overlay config means eligible; with overlay config
-		// but no desired link, also eligible (missing ipsec records).
-		if hasIPsecConfig(state) {
-			info.State = peerStateEligible
-			info.Reason = "no_ipsec_records"
-		} else {
-			info.State = peerStateEligible
-			info.Reason = "no_overlay_config"
-		}
-		return info
-	}
-	lastActiveTime := time.Unix(lastActive, 0)
-	elapsed := now.Sub(lastActiveTime)
-	info.OfflineSinceUnix = lastActive
-	if elapsed >= cfg.CleanupAfter {
-		info.State = peerStateOffline
-		info.Reason = "cleanup_after_exceeded"
-		info.NextCleanupUnix = now.Unix()
-		return info
-	}
-	if elapsed >= cfg.OfflineAfter {
-		info.State = peerStateOffline
-		info.Reason = "offline_after_exceeded"
-		info.NextCleanupUnix = lastActiveTime.Add(cfg.CleanupAfter).Unix()
-		return info
-	}
-	if elapsed >= cfg.StaleAfter {
-		info.State = peerStateStale
-		info.Reason = "stale_after_exceeded"
-		info.NextCleanupUnix = lastActiveTime.Add(cfg.CleanupAfter).Unix()
-		return info
-	}
-
-	// Recently seen but no active link: treat as discovered/eligible.
-	if hasIPsecConfig(state) {
-		info.State = peerStateDiscovered
-		info.Reason = "recently_seen_no_link"
-	} else {
-		info.State = peerStateEligible
-		info.Reason = "no_overlay_config"
-	}
-	return info
+	return input
 }
 
 // hasIPsecConfig returns true if the local node has IPsec link groups
@@ -281,14 +106,14 @@ func hasIPsecConfig(state *stateFile) bool {
 func derivePeerStatuses(
 	state *stateFile,
 	now time.Time,
-	cfg PeerLifecycleConfig,
+	cfg inspect.PeerLifecycleConfig,
 	hasOverlayConfig bool,
-) []PeerStatusInfo {
+) []inspect.PeerStatusInfo {
 	if state == nil {
 		return nil
 	}
 	seen := make(map[string]bool)
-	var out []PeerStatusInfo
+	var out []inspect.PeerStatusInfo
 
 	// Gather all candidate peers: SyncPeers, LinkInstances peer zones, desired
 	// link peer zones, and active state zones with ipsec records.
@@ -297,18 +122,7 @@ func derivePeerStatuses(
 			return
 		}
 		seen[peerID] = true
-		info := derivePeerStatus(state, peerID, peerZone, now, cfg)
-		// If overlay config is available but this peer has no desired link,
-		// refine the eligible/discovered distinction.
-		if hasOverlayConfig && info.State == peerStateEligible && info.Reason == "no_ipsec_records" {
-			// Check if the peer zone has ipsec profile record.
-			if peerZoneState := state.Network.Zones[peerZone]; peerZoneState != nil {
-				if hasPeerIPsecRecords(peerZoneState) {
-					info.State = peerStateDiscovered
-					info.Reason = "has_ipsec_records_no_link"
-				}
-			}
-		}
+		info := inspect.BuildPeerLifecycleStatus(peerLifecycleInputFromState(state, peerID, peerZone, now, cfg, hasOverlayConfig))
 		out = append(out, info)
 	}
 
@@ -357,62 +171,6 @@ func hasPeerIPsecRecords(zs *zone.ZoneState) bool {
 		}
 	}
 	return false
-}
-
-// peerStatusRequiresCleanup returns true if the peer's lifecycle state means
-// long-term invalid SA/interface/route/firewall entries should be cleaned up.
-// Only offline (beyond cleanup_after) and revoked states trigger cleanup;
-// stale peers retain their SA per KeepSAWhileStale.
-func peerStatusRequiresCleanup(info PeerStatusInfo, _ PeerLifecycleConfig) bool {
-	switch info.State {
-	case peerStateRevoked:
-		return true
-	case peerStateOffline:
-		if info.Reason == "cleanup_after_exceeded" {
-			return true
-		}
-		return false
-	default:
-		return false
-	}
-}
-
-// peerStatusIsHardChange returns true if the peer status change from oldState
-// to newState requires teardown/recreate rather than a soft update. Hard
-// changes include transitions involving revoked, policy_denied, config_error,
-// or any change to/from active when the underlying key/profile changed.
-func peerStatusIsHardChange(oldState, newState string) bool {
-	if oldState == newState {
-		return false
-	}
-	// Revocation is always a hard change (force teardown).
-	if newState == peerStateRevoked || oldState == peerStateRevoked {
-		return true
-	}
-	// Policy denied / config error are hard changes.
-	if newState == peerStatePolicyDenied || newState == peerStateConfigError {
-		return true
-	}
-	if oldState == peerStatePolicyDenied || oldState == peerStateConfigError {
-		return true
-	}
-	return false
-}
-
-// shouldBlockReconnect returns true if the peer's state means new connection
-// attempts should be blocked (not just backoff). Revoked peers must never
-// reconnect.
-func shouldBlockReconnect(info PeerStatusInfo) bool {
-	switch info.State {
-	case peerStateRevoked:
-		return true
-	case peerStatePolicyDenied:
-		return true
-	case peerStateConfigError:
-		return true
-	default:
-		return false
-	}
 }
 
 // collectRevokedPeerZones returns the set of peer zones that are currently

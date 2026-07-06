@@ -74,7 +74,7 @@ type controlResponse struct {
 	Admission         *admissionDiagnosis           `json:"admission,omitempty"`
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
 	Links             *linkInspectionControl        `json:"links,omitempty"`
-	PeerStatuses      []PeerStatusInfo              `json:"peer_statuses,omitempty"`
+	PeerStatuses      []inspect.PeerStatusInfo      `json:"peer_statuses,omitempty"`
 	RevocationImpact  []RevocationImpact            `json:"revocation_impact,omitempty"`
 	Health            []healthLinkJSON              `json:"health,omitempty"`
 	Record            map[string]any                `json:"record,omitempty"`

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -58,7 +59,7 @@ type appConfig struct {
 	Netns                netnsConfig
 	Routing              routingConfig
 	Firewall             firewallConfig
-	PeerLifecycle        PeerLifecycleConfig
+	PeerLifecycle        inspect.PeerLifecycleConfig
 	Health               healthConfig
 	Observer             observerConfig
 }
@@ -629,9 +630,9 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 }
 
 // parsePeerLifecycleConfig parses the peer_lifecycle YAML section with validation.
-func parsePeerLifecycleConfig(y *peerLifecycleYAML) (PeerLifecycleConfig, error) {
-	def := defaultPeerLifecycleConfig()
-	out := PeerLifecycleConfig{
+func parsePeerLifecycleConfig(y *peerLifecycleYAML) (inspect.PeerLifecycleConfig, error) {
+	def := inspect.DefaultPeerLifecycleConfig()
+	out := inspect.PeerLifecycleConfig{
 		StaleAfter:       def.StaleAfter,
 		OfflineAfter:     def.OfflineAfter,
 		CleanupAfter:     def.CleanupAfter,
@@ -640,30 +641,30 @@ func parsePeerLifecycleConfig(y *peerLifecycleYAML) (PeerLifecycleConfig, error)
 	if y.StaleAfter != "" {
 		d, err := parseConfigDuration(y.StaleAfter, "peer_lifecycle.stale_after")
 		if err != nil {
-			return PeerLifecycleConfig{}, err
+			return inspect.PeerLifecycleConfig{}, err
 		}
 		if d <= 0 {
-			return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.stale_after must be positive, got %s", d)
+			return inspect.PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.stale_after must be positive, got %s", d)
 		}
 		out.StaleAfter = d
 	}
 	if y.OfflineAfter != "" {
 		d, err := parseConfigDuration(y.OfflineAfter, "peer_lifecycle.offline_after")
 		if err != nil {
-			return PeerLifecycleConfig{}, err
+			return inspect.PeerLifecycleConfig{}, err
 		}
 		if d <= 0 {
-			return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.offline_after must be positive, got %s", d)
+			return inspect.PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.offline_after must be positive, got %s", d)
 		}
 		out.OfflineAfter = d
 	}
 	if y.CleanupAfter != "" {
 		d, err := parseConfigDuration(y.CleanupAfter, "peer_lifecycle.cleanup_after")
 		if err != nil {
-			return PeerLifecycleConfig{}, err
+			return inspect.PeerLifecycleConfig{}, err
 		}
 		if d <= 0 {
-			return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.cleanup_after must be positive, got %s", d)
+			return inspect.PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.cleanup_after must be positive, got %s", d)
 		}
 		out.CleanupAfter = d
 	}
@@ -672,10 +673,10 @@ func parsePeerLifecycleConfig(y *peerLifecycleYAML) (PeerLifecycleConfig, error)
 	}
 	// Validate threshold ordering: stale < offline < cleanup.
 	if out.StaleAfter >= out.OfflineAfter {
-		return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.stale_after %s must be less than offline_after %s", out.StaleAfter, out.OfflineAfter)
+		return inspect.PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.stale_after %s must be less than offline_after %s", out.StaleAfter, out.OfflineAfter)
 	}
 	if out.OfflineAfter >= out.CleanupAfter {
-		return PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.offline_after %s must be less than cleanup_after %s", out.OfflineAfter, out.CleanupAfter)
+		return inspect.PeerLifecycleConfig{}, fmt.Errorf("peer_lifecycle.offline_after %s must be less than cleanup_after %s", out.OfflineAfter, out.CleanupAfter)
 	}
 	return out, nil
 }
