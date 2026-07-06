@@ -1,0 +1,108 @@
+package text
+
+import (
+	"net/netip"
+	"strings"
+	"testing"
+
+	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
+	"github.com/Catofes/higgs/pkg/routing/bird"
+)
+
+func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
+	dump := &inspecthttp.RoutesResponse{
+		LocalZone: "node-a.catofes.",
+		ExportSet: []string{"10.0.0.0/24"},
+		Authorized: map[string][]string{
+			"node-a.catofes.": {"10.0.0.0/24"},
+			"node-b.catofes.": {"10.1.0.0/24"},
+		},
+		Assignments: map[string]inspecthttp.RouteAssignment{
+			"10.0.0.0/16": {Source: "catofes.", AssignedTo: "node-a.catofes."},
+			"10.1.0.0/16": {Source: "catofes.", AssignedTo: "node-b.catofes."},
+		},
+	}
+	dump.BIRD = []inspecthttp.BirdRoutesView{{
+		NetNS:      "higgstesth2",
+		InstanceID: "main",
+		State:      "running",
+		Routes: inspecthttp.BuildBirdRouteViews(dump, []bird.BirdRoute{
+			{
+				Prefix:   netip.MustParsePrefix("10.1.0.0/24"),
+				Protocol: "babel1",
+				Iface:    "hgs-node-b",
+				Metric:   96,
+				Selected: true,
+			},
+			{
+				Prefix:   netip.MustParsePrefix("10.2.0.0/24"),
+				Protocol: "babel1",
+				Iface:    "hgs-node-c",
+				Metric:   128,
+				Selected: true,
+			},
+		}),
+	}}
+
+	var buf strings.Builder
+	if err := WriteRoutesDebug(&buf, dump); err != nil {
+		t.Fatalf("WriteRoutesDebug: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		"bird_routes: 1 instances",
+		"netns higgstesth2",
+		"10.1.0.0/24 selected=true authorized=true import_allowed=true zones=node-b.catofes. protocol=babel1 iface=hgs-node-b metric=96",
+		"10.2.0.0/24 selected=true authorized=false import_allowed=false protocol=babel1 iface=hgs-node-c metric=128",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteRouteDebugShowsPrefixExplanationAndBirdMatch(t *testing.T) {
+	dump := &inspecthttp.RoutesResponse{
+		LocalZone: "node-a.catofes.",
+		ExportSet: []string{"10.1.0.0/24"},
+		Authorized: map[string][]string{
+			"node-b.catofes.": {"10.1.0.0/24"},
+		},
+		Assignments: map[string]inspecthttp.RouteAssignment{
+			"10.1.0.0/16": {Source: "catofes.", AssignedTo: "node-b.catofes."},
+		},
+		BIRD: []inspecthttp.BirdRoutesView{{
+			NetNS:      "higgstesth2",
+			InstanceID: "main",
+			Routes: []inspecthttp.BirdRouteView{{
+				Prefix:        "10.1.0.0/24",
+				Protocol:      "babel1",
+				Iface:         "hgs-node-b",
+				Metric:        96,
+				Selected:      true,
+				Authorized:    true,
+				ImportAllowed: true,
+			}},
+		}},
+	}
+
+	var buf strings.Builder
+	if err := WriteRouteDebug(&buf, netip.MustParsePrefix("10.1.0.0/24"), dump); err != nil {
+		t.Fatalf("WriteRouteDebug: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"prefix: 10.1.0.0/24",
+		"local_export: true",
+		"authorized: true",
+		"announcing_zones: node-b.catofes.",
+		"assignment_assigned_to: node-b.catofes.",
+		"bird_routes: 1",
+		"netns=higgstesth2 instance=main selected=true authorized=true import_allowed=true protocol=babel1 iface=hgs-node-b metric=96",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got:\n%s", want, out)
+		}
+	}
+}

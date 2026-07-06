@@ -38,9 +38,6 @@ type birdDumpInstance struct {
 	Error         string            `json:"error,omitempty"`
 }
 
-type routeAssignmentInfo = inspecthttp.RouteAssignment
-type routeAuthorizationErrorJSON = inspecthttp.RouteAuthorizationError
-
 const controlSocketName = "higgs.sock"
 
 type controlRequest struct {
