@@ -214,6 +214,7 @@ func NewSyncSession(peerID string) *SyncSession {
 		pendingZones:       make(map[zone.ZonePath]bool),
 		objectPullInflight: make(map[zone.ZonePath]bool),
 		chunkFallbackZones: make(map[zone.ZonePath]bool),
+		expectedDigests:    make(map[zone.ZonePath]gossip.ZoneDigest),
 		estimatedRTT:       InitialRTT,
 	}
 }

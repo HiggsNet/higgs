@@ -213,6 +213,30 @@ func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction"})
 }
 
+func TestSyncSessionCatalogPageBeforeTimerDoesNotPanic(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := gossip.CatalogRoot(remote)
+
+	// A catalog page may arrive for a freshly created session before the
+	// SyncTimerEvent has been processed (e.g. the timer event was dropped
+	// because the event channel was full). The session must not panic.
+	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
+		PeerID:       "peer-a",
+		Page:         &gossip.CatalogPage{CatalogRoot: root, Entries: remote},
+		LocalEntries: local,
+	}, now)
+	if err != nil {
+		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling, got %s", s.State)
+	}
+	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
+}
+
 func TestSyncSessionPongMissingZonesStartsObjectPull(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
