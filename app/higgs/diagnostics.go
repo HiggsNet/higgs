@@ -2,13 +2,11 @@ package main
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -811,83 +809,14 @@ func writeDebugRecords(w io.Writer, state *stateFile, path zone.ZonePath, prefix
 	if state == nil || state.Network == nil {
 		return fmt.Errorf("state is nil")
 	}
-	paths := make([]zone.ZonePath, 0, len(state.Network.Zones))
-	if path.Valid() {
-		if state.Network.Zones[path] == nil {
-			return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-		}
-		paths = append(paths, path)
-	} else {
-		for p := range state.Network.Zones {
-			paths = append(paths, p)
-		}
-		sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+	if path.Valid() && state.Network.Zones[path] == nil {
+		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
-	total := 0
-	for _, p := range paths {
-		total += countRecordsWithPrefix(state.Network.Zones[p].Records, prefix)
-	}
-	fmt.Fprintf(w, "zones: %d\n", len(paths))
-	fmt.Fprintf(w, "records: %d\n", total)
-	if prefix != "" {
-		fmt.Fprintf(w, "prefix: %s\n", prefix)
-	}
-	for _, p := range paths {
-		zs := state.Network.Zones[p]
-		if zs == nil {
-			continue
-		}
-		keys := make([]string, 0, len(zs.Records))
-		for key := range zs.Records {
-			if prefix == "" || strings.HasPrefix(key, prefix) {
-				keys = append(keys, key)
-			}
-		}
-		sort.Strings(keys)
-		fmt.Fprintf(w, "\nzone %s\n", p)
-		fmt.Fprintf(w, "  records: %d\n", len(keys))
-		for _, key := range keys {
-			record := zs.Records[key]
-			if record == nil {
-				continue
-			}
-			fmt.Fprintf(w, "  record key=%s version=%d type=%s signed_by=%s timestamp=%s hash=%s\n",
-				key,
-				record.Version,
-				dash(record.Type),
-				shortKey(record.SignedBy),
-				formatUnixTime(record.Timestamp),
-				shortBytes(higgscrypto.RecordHash(record)),
-			)
-			if values {
-				fmt.Fprintf(w, "    value: %s\n", formatDebugRecordValue(record.Value))
-			}
-		}
-	}
-	return nil
-}
-
-func countRecordsWithPrefix(records map[string]*zone.Record, prefix string) int {
-	count := 0
-	for key, record := range records {
-		if record == nil {
-			continue
-		}
-		if prefix == "" || strings.HasPrefix(key, prefix) {
-			count++
-		}
-	}
-	return count
-}
-
-func formatDebugRecordValue(value []byte) string {
-	var decoded any
-	if err := json.Unmarshal(value, &decoded); err == nil {
-		if data, err := json.Marshal(decoded); err == nil {
-			return string(data)
-		}
-	}
-	return string(value)
+	return inspecttext.WriteRecordsDebug(w, inspect.BuildRecordsDebug(inspect.RecordsDebugInput{
+		Network: state.Network,
+		Path:    path,
+		Prefix:  prefix,
+	}), values)
 }
 
 func bootstrapPeerSource(config *syncConfigFile, peerID string) (string, string) {

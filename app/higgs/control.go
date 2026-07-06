@@ -24,19 +24,8 @@ import (
 type routesDumpResponse = inspecthttp.RoutesResponse
 type birdRoutesView = inspecthttp.BirdRoutesView
 type birdRouteView = inspecthttp.BirdRouteView
-
-type birdDumpResponse struct {
-	Instances map[string]birdDumpInstance `json:"instances"`
-}
-
-type birdDumpInstance struct {
-	NetNS         string            `json:"netns"`
-	InstanceID    string            `json:"instance_id"`
-	ControlSocket string            `json:"control_socket"`
-	Command       string            `json:"command,omitempty"`
-	Raw           map[string]string `json:"raw,omitempty"`
-	Error         string            `json:"error,omitempty"`
-}
+type birdDumpResponse = inspect.BirdDumpResponse
+type birdDumpInstance = inspect.BirdDumpInstance
 
 const controlSocketName = "higgs.sock"
 

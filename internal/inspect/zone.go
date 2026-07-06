@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -52,6 +53,24 @@ type RecordView struct {
 	Signature    string `json:"signature"`
 	HistoryCount int    `json:"history_count"`
 	ValueJSON    any    `json:"value_json,omitempty"`
+}
+
+type RecordsDebugInput struct {
+	Network *zone.NetworkState
+	Path    zone.ZonePath
+	Prefix  string
+}
+
+type RecordsDebugView struct {
+	Zones       []RecordsDebugZoneView
+	ZoneCount   int
+	RecordCount int
+	Prefix      string
+}
+
+type RecordsDebugZoneView struct {
+	Path    string
+	Records []RecordView
 }
 
 type AuthorityView struct {
@@ -155,6 +174,49 @@ func BuildRecord(rec *zone.Record, historyCount int) RecordView {
 		out.ValueJSON = parsed
 	}
 	return out
+}
+
+func BuildRecordsDebug(input RecordsDebugInput) RecordsDebugView {
+	view := RecordsDebugView{Prefix: input.Prefix}
+	if input.Network == nil {
+		return view
+	}
+	paths := make([]zone.ZonePath, 0, len(input.Network.Zones))
+	if input.Path.Valid() {
+		paths = append(paths, input.Path)
+	} else {
+		for p := range input.Network.Zones {
+			paths = append(paths, p)
+		}
+		sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+	}
+	view.ZoneCount = len(paths)
+	for _, p := range paths {
+		zs := input.Network.Zones[p]
+		if zs == nil {
+			continue
+		}
+		keys := make([]string, 0, len(zs.Records))
+		for key, record := range zs.Records {
+			if record == nil {
+				continue
+			}
+			if input.Prefix == "" || strings.HasPrefix(key, input.Prefix) {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		zoneView := RecordsDebugZoneView{
+			Path:    string(p),
+			Records: make([]RecordView, 0, len(keys)),
+		}
+		for _, key := range keys {
+			zoneView.Records = append(zoneView.Records, BuildRecord(zs.Records[key], len(zs.RecordHistory[key])))
+		}
+		view.RecordCount += len(zoneView.Records)
+		view.Zones = append(view.Zones, zoneView)
+	}
+	return view
 }
 
 func BuildAuthority(authority *zone.ZoneAuthority) *AuthorityView {

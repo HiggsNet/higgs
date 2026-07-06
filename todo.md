@@ -40,10 +40,11 @@
     - 已新增 `internal/inspect/http` routes response / BIRD route view DTO 与 `internal/inspect/text` routes presenter：route export/authorized/assignment/error 生成、BIRD route authorized/import_allowed 标注和排序、`debug routes` / `debug route` 文本输出均已下沉并补 schema/output 单测；app 层暂留 control socket、BIRD client 采集和 offline fallback adapter。
     - 已新增 `internal/inspect` revocation/firewall debug view 与 `internal/inspect/text` presenter：`debug revoke-impact` 的影响详情输出、revocation layer view/status、`debug firewall` 实例摘要输出已从 app 层迁出；app 层保留 impact 计算、daemon control fallback、firewall config/snapshot 投影 adapter。
     - 已新增 `internal/inspect` admission diagnosis view/reason code 与 `internal/inspect/text` presenter：`debug admission` 文本输出和 output 测试已下沉；app 层保留 auto-join state/key/delegation 检查与 admission state 更新 adapter。
+    - 已新增 `internal/inspect` routing/BIRD debug view 与 `internal/inspect/text` presenter：`debug bird-dump` raw command 输出、`debug babel` BIRD instance 摘要已从 `debug_routing.go` 下沉；app 层保留 BIRD client/control socket/offline fallback adapter。
   - [ ] Diagnostics/debug 迁移路线：
-    - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link 的 view builder 和文本输出迁到 inspect/text。
+    - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link 的 view builder 和文本输出迁到 inspect/text；`debug records` 的 records view/presenter 已下沉。
     - `app/higgs/admission_diagnostics.go` 的 reason code、diagnosis view、writeAdmissionDiagnosis 已迁到 inspect + inspect/text；app 只保留在 daemon 事件中诊断/更新 admission state 的 adapter。
-    - `app/higgs/debug_routing.go` 将 route dump/prefix explanation 和 BIRD summary presenter 迁到 inspect/routes + inspect/text；control socket/offline fallback 留 source/adapter。
+    - `app/higgs/debug_routing.go` route dump/prefix explanation、BIRD raw dump、Babel summary presenter 已迁到 inspect + inspect/text；control socket/offline fallback 留 source/adapter。
     - `app/higgs/debug_firewall.go`、`debug_revoke_impact.go` 已完成 presenter 迁移；后续只保留系统 apply/reconcile、control socket/offline fallback 和 app 私有 runtime adapter。
     - `app/higgs/cmd.go` 的 `cmdDebug()` 只做 CLI 子命令注册、参数解析、source 选择和 presenter 调用。
   - [ ] 为 inspect/text 建立 golden/output 测试，迁移现有 `TestDebug*Output`、`TestWriteDebug*`、admission diagnosis 输出测试；app 层只保留命令 wiring/fallback 的窄测试。

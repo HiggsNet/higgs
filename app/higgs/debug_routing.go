@@ -6,10 +6,10 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/routing/bird"
@@ -131,41 +131,7 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*birdDumpResponse,
 }
 
 func writeDebugBirdDump(w io.Writer, dump *birdDumpResponse) error {
-	if dump == nil || len(dump.Instances) == 0 {
-		fmt.Fprintln(w, "bird_dump: no instances")
-		return nil
-	}
-	netnsNames := make([]string, 0, len(dump.Instances))
-	for netnsName := range dump.Instances {
-		netnsNames = append(netnsNames, netnsName)
-	}
-	sort.Strings(netnsNames)
-	for _, netnsName := range netnsNames {
-		inst := dump.Instances[netnsName]
-		fmt.Fprintf(w, "netns %s\n", inst.NetNS)
-		fmt.Fprintf(w, "  instance_id: %s\n", dash(inst.InstanceID))
-		fmt.Fprintf(w, "  control_socket: %s\n", dash(inst.ControlSocket))
-		if inst.Error != "" {
-			fmt.Fprintf(w, "  error: %s\n", inst.Error)
-		}
-		commands := make([]string, 0, len(inst.Raw))
-		for cmd := range inst.Raw {
-			commands = append(commands, cmd)
-		}
-		sort.Strings(commands)
-		for _, cmd := range commands {
-			fmt.Fprintf(w, "  command: %s\n", cmd)
-			out := strings.TrimRight(inst.Raw[cmd], "\n")
-			if out == "" {
-				fmt.Fprintln(w, "    -")
-				continue
-			}
-			for _, line := range strings.Split(out, "\n") {
-				fmt.Fprintf(w, "    %s\n", line)
-			}
-		}
-	}
-	return nil
+	return inspecttext.WriteBirdDump(w, dump)
 }
 
 func debugBabelWithRuntime(rt *Runtime, w io.Writer) error {
@@ -184,6 +150,10 @@ func debugBabelWithRuntime(rt *Runtime, w io.Writer) error {
 }
 
 func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *controlResponse) error {
+	return inspecttext.WriteBabelDebug(w, buildBabelDebugView(rt, state, response))
+}
+
+func buildBabelDebugView(rt *Runtime, state *stateFile, response *controlResponse) inspect.BabelDebugView {
 	instances := map[string]*BirdInstanceState{}
 	if response != nil && response.BirdInstances != nil {
 		for id, inst := range response.BirdInstances {
@@ -199,12 +169,12 @@ func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *contr
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances
 	}
+	view := inspect.BabelDebugView{}
 	if len(routingInstances) == 0 {
-		fmt.Fprintln(w, "routing: not configured")
-		return nil
+		return view
 	}
 	if response != nil && response.LastRoutingError != "" {
-		fmt.Fprintf(w, "last_reconcile_error: %s\n", response.LastRoutingError)
+		view.LastReconcileError = response.LastRoutingError
 	}
 	for _, inst := range routingInstances {
 		mode := inst.Mode
@@ -214,43 +184,34 @@ func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *contr
 		if !inst.Enabled {
 			mode = "disabled"
 		}
-		fmt.Fprintf(w, "netns %s\n", inst.NetNS)
-		fmt.Fprintf(w, "  instance_id: %s\n", inst.ID)
-		fmt.Fprintf(w, "  mode: %s\n", mode)
+		instView := inspect.BabelInstanceView{
+			NetNS:      inst.NetNS,
+			InstanceID: inst.ID,
+			Mode:       mode,
+			Enabled:    inst.Enabled,
+		}
 		if inst.Mode != ipsec.RoutingModeExternal && inst.Mode != ipsec.RoutingModeDisabled {
-			fmt.Fprintf(w, "  shutdown_policy: %s\n", normalizedRoutingShutdownPolicy(inst.ShutdownPolicy))
+			instView.ShutdownPolicy = normalizedRoutingShutdownPolicy(inst.ShutdownPolicy)
 		}
 		if !inst.Enabled {
-			fmt.Fprintln(w, "  state: disabled")
+			view.Instances = append(view.Instances, instView)
 			continue
 		}
 		bi := instances[inst.NetNS]
 		if bi != nil {
-			fmt.Fprintf(w, "  router_id: %d\n", bi.RouterID)
-			fmt.Fprintf(w, "  control_socket: %s\n", dash(bi.ControlSocket))
-			fmt.Fprintf(w, "  config_path: %s\n", dash(bi.ConfigPath))
-			fmt.Fprintf(w, "  pid_file: %s\n", dash(bi.PIDFile))
-			fmt.Fprintf(w, "  last_config_hash: %s\n", dash(shortHash(bi.LastConfigHash)))
-			if len(bi.Overlays) > 0 {
-				fmt.Fprintf(w, "  overlays: %s\n", strings.Join(bi.Overlays, ", "))
-			}
-			st := bi.State
-			if st == "" {
-				st = "pending"
-			}
-			fmt.Fprintf(w, "  state: %s\n", st)
-			fmt.Fprintf(w, "  last_error: %s\n", dash(bi.LastError))
-		} else {
-			fmt.Fprintln(w, "  router_id: -")
-			fmt.Fprintln(w, "  control_socket: -")
-			fmt.Fprintln(w, "  config_path: -")
-			fmt.Fprintln(w, "  pid_file: -")
-			fmt.Fprintln(w, "  last_config_hash: -")
-			fmt.Fprintln(w, "  state: pending")
-			fmt.Fprintln(w, "  last_error: -")
+			instView.HasState = true
+			instView.RouterID = bi.RouterID
+			instView.ControlSocket = bi.ControlSocket
+			instView.ConfigPath = bi.ConfigPath
+			instView.PIDFile = bi.PIDFile
+			instView.LastConfigHash = bi.LastConfigHash
+			instView.Overlays = append([]string(nil), bi.Overlays...)
+			instView.State = bi.State
+			instView.LastError = bi.LastError
 		}
+		view.Instances = append(view.Instances, instView)
 	}
-	return nil
+	return view
 }
 
 func debugRoutes(_ context.Context, _ *cli.Command) error {
