@@ -307,22 +307,10 @@ type peerJSON struct {
 	ObservedSource        string                         `json:"observed_source,omitempty"`
 	ObservedFailureCount  int                            `json:"observed_failure_count,omitempty"`
 	ObservedGraceAddrs    []observedGraceAddrState       `json:"observed_grace_addrs,omitempty"`
-	Endpoints             []peerEndpointJSON             `json:"endpoints,omitempty"`
+	Endpoints             []inspect.PeerEndpointView     `json:"endpoints,omitempty"`
 	DatagramStats         *datagramStats                 `json:"datagram_stats,omitempty"`
 	ObjectPullStats       *objectPullStats               `json:"object_pull_stats,omitempty"`
 	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
-}
-
-type peerEndpointJSON struct {
-	Addr         string `json:"addr"`
-	Address      string `json:"address,omitempty"`
-	Port         uint16 `json:"port,omitempty"`
-	Protocol     string `json:"protocol,omitempty"`
-	Scope        string `json:"scope,omitempty"`
-	Source       string `json:"source,omitempty"`
-	Priority     int    `json:"priority,omitempty"`
-	LastObserved int64  `json:"last_observed,omitempty"`
-	Selected     bool   `json:"selected,omitempty"`
 }
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
@@ -486,65 +474,30 @@ func peerKnownFromConfigOrDiscovery(peerID string, config *syncConfigFile, ns *z
 	return ok
 }
 
-func peerEndpointsJSON(peerID string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) []peerEndpointJSON {
-	var out []peerEndpointJSON
-	appendEndpoint := func(ep peerEndpointJSON) {
-		if ep.Addr == "" {
-			if ep.Address != "" && ep.Port != 0 {
-				ep.Addr = fmt.Sprintf("%s:%d", ep.Address, ep.Port)
-			}
-		}
-		for i := range out {
-			if out[i].Addr == ep.Addr && out[i].Source == ep.Source {
-				if ep.Selected {
-					out[i].Selected = true
-				}
-				return
-			}
-		}
-		out = append(out, ep)
-	}
-	if addr := bootstrapAddrForPeer(config, peerID); addr != "" {
-		appendEndpoint(peerEndpointJSON{Addr: addr, Source: "bootstrap", Protocol: "udp", Selected: ps.DiscoveredAddr == addr})
+func peerEndpointsJSON(peerID string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) []inspect.PeerEndpointView {
+	input := inspect.PeerEndpointInput{
+		BootstrapAddr:  bootstrapAddrForPeer(config, peerID),
+		SelectedAddr:   ps.DiscoveredAddr,
+		ObservedAddr:   ps.ObservedAddr,
+		ObservedSource: ps.ObservedSource,
+		Grace:          make([]inspect.PeerGraceEndpoint, 0, len(ps.ObservedGraceAddrs)),
 	}
 	discovered := gossip.ExtractPeerEndpointsAt(ns, now)
 	for _, ep := range discovered[peerID] {
-		protocol := ep.Protocol
-		if protocol == "" {
-			protocol = "udp"
-		}
-		addr := fmt.Sprintf("%s:%d", ep.Address, ep.Port)
-		appendEndpoint(peerEndpointJSON{
-			Addr:         addr,
+		input.Signed = append(input.Signed, inspect.PeerSignedEndpoint{
 			Address:      ep.Address,
 			Port:         ep.Port,
-			Protocol:     protocol,
+			Protocol:     ep.Protocol,
 			Scope:        ep.Scope,
-			Source:       firstNonEmpty(ep.Source, "signed"),
+			Source:       ep.Source,
 			Priority:     ep.Priority,
 			LastObserved: ep.LastObserved,
-			Selected:     ps.DiscoveredAddr == addr,
 		})
 	}
-	if ps.DiscoveredAddr != "" {
-		appendEndpoint(peerEndpointJSON{Addr: ps.DiscoveredAddr, Source: "selected", Protocol: "udp", Selected: true})
-	}
-	if ps.ObservedAddr != "" {
-		appendEndpoint(peerEndpointJSON{Addr: ps.ObservedAddr, Source: firstNonEmpty(ps.ObservedSource, "observed"), Protocol: "udp", Selected: ps.DiscoveredAddr == ""})
-	}
 	for _, grace := range ps.ObservedGraceAddrs {
-		appendEndpoint(peerEndpointJSON{Addr: grace.Addr, Source: "observed_grace", Protocol: "udp"})
+		input.Grace = append(input.Grace, inspect.PeerGraceEndpoint{Addr: grace.Addr})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Selected != out[j].Selected {
-			return out[i].Selected
-		}
-		if out[i].Source != out[j].Source {
-			return out[i].Source < out[j].Source
-		}
-		return out[i].Addr < out[j].Addr
-	})
-	return out
+	return inspect.BuildPeerEndpoints(input)
 }
 
 type observerLinksResponse struct {
