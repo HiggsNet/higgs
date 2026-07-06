@@ -31,16 +31,18 @@
   - [x] 第二步抽 zone/record/authority：把 `recordJSON`、authority/delegation/revocation 展示逻辑迁到 inspect，复用到 `zone show` / `debug zone` / observer zone detail；避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
     - 已新增 `internal/inspect` zone/record/authority view 与 `internal/inspect/text` zone presenter：Observer zone detail、`zone show`、`debug zone`、`record get` 复用同一套 `BuildZoneDetail` / `BuildRecord`；Observer zones summary HTTP DTO 已迁到 `internal/inspect/http`。
   - [x] 第三步抽 peer endpoints：把 bootstrap/discovered/observed/grace endpoint 合并、本地 peer 过滤、source/selected 排序收敛到 inspect；observer peers 和 CLI peer debug 共用。
-    - 已新增 `internal/inspect.BuildPeerIDs` / `PeerKnown` / `BuildPeerEndpoints`：peer 候选集合、本地 peer 过滤、zone-path 排序、bootstrap/signed/selected/observed/grace endpoint 合并去重均已下沉；Observer peers API 与 `debug peer` endpoint resolution 已改用该 view；Observer peers HTTP DTO 已迁到 `internal/inspect/http`。
+    - 已新增 `internal/inspect.BuildPeerIDs` / `PeerKnown` / `BuildPeerEndpoints` 与 `PeerStatusInfo` view：peer 候选集合、本地 peer 过滤、zone-path 排序、bootstrap/signed/selected/observed/grace endpoint 合并去重均已下沉；Observer peers API 与 `debug peer` endpoint resolution 已改用该 view；Observer peers HTTP DTO 已迁到 `internal/inspect/http`。
   - [ ] 拆 peer runtime control vs observability readmodel：`SyncPeers` 中 backoff、observed path、rejected digest/record cache、relay eligibility 等仍归 daemon runtime control state；`DatagramStats`、`ObjectPullStats`、read-only responder、last catalog/page/reject、chunk fallback/too-large counters 等纯诊断字段后续迁到 peer observability readmodel / metrics store，并由 `internal/inspect/source` 汇入 debug/observer input，避免主 committed state revision 因统计计数频繁前进。
   - [ ] 第四步抽 routes/BIRD/health/revocation/admission/firewall：优先复用现有结构化结果，逐步把 presenter 与诊断推理分开；系统采集和 provider 调用留在 source/adapter 层。
     - 已新增 `internal/inspect/http` health response / health series DTO 与 health context builder：Observer health list、health series envelope、health sample + link instance + desired context 合并/补 unknown/排序已从 `observer_server.go` 下沉，app 层仍负责 health spool 查询和私有 runtime state 投影。
+    - 已新增 `internal/inspect/text` health presenter：`debug health` 的 target 排序、目标输出、live health sample 输出已从 `health_reconcile.go` 下沉，app 层仅保留 LoadState、control socket live snapshot 和私有 `healthLinkJSON` 投影。
+    - 已新增 `internal/inspect/text` peer lifecycle presenter：`debug peers` 的 lifecycle config header、summary、peer detail、severity 文本输出已从 `debug_peers.go` 下沉，app 层仅保留 daemon status banner、state load、lifecycle derive 和 cleanup zone runtime 逻辑。
     - 已新增 `internal/inspect/http` routes response / BIRD route view DTO 与 `internal/inspect/text` routes presenter：route export/authorized/assignment/error 生成、BIRD route authorized/import_allowed 标注和排序、`debug routes` / `debug route` 文本输出均已下沉并补 schema/output 单测；app 层暂留 control socket、BIRD client 采集和 offline fallback adapter。
   - [ ] Diagnostics/debug 迁移路线：
     - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link 的 view builder 和文本输出迁到 inspect/text。
     - `app/higgs/admission_diagnostics.go` 的 reason code、diagnosis view、writeAdmissionDiagnosis 迁到 inspect/admission + inspect/text；app 只保留在 daemon 事件中更新 admission state 的 adapter。
     - `app/higgs/debug_routing.go` 将 route dump/prefix explanation 和 BIRD summary presenter 迁到 inspect/routes + inspect/text；control socket/offline fallback 留 source/adapter。
-    - `app/higgs/debug_firewall.go`、`debug_peers.go`、`debug_revoke_impact.go`、`health_reconcile.go:debugHealth` 的格式化和 reason 推理迁到 inspect/text；系统 apply/reconcile 与 health probe 调度留 app。
+    - `app/higgs/debug_firewall.go`、`debug_revoke_impact.go` 的格式化和 reason 推理迁到 inspect/text；系统 apply/reconcile 与 health probe 调度留 app。
     - `app/higgs/cmd.go` 的 `cmdDebug()` 只做 CLI 子命令注册、参数解析、source 选择和 presenter 调用。
   - [ ] 为 inspect/text 建立 golden/output 测试，迁移现有 `TestDebug*Output`、`TestWriteDebug*`、admission diagnosis 输出测试；app 层只保留命令 wiring/fallback 的窄测试。
   - [ ] 删除 `observer_server.go` 中只为兼容旧 handler 测试保留的 app 层 wrapper 或改测 `internal/observer.Server.Handler()`；保留必要 shim 时必须标注迁移原因。

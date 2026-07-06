@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -86,26 +87,8 @@ func normalizedPeerLifecycleConfig(cfg PeerLifecycleConfig) PeerLifecycleConfig 
 	return out
 }
 
-// PeerStatusInfo is the derived runtime status for a single peer. It is
-// computed on demand from verified state and SyncPeers observations; it is
-// not persisted as the authoritative state (only timestamps/reasons that feed
-// into it are persisted).
-type PeerStatusInfo struct {
-	PeerID            string        `json:"peer_id"`
-	Zone              zone.ZonePath `json:"zone"`
-	State             string        `json:"state"`
-	Reason            string        `json:"reason,omitempty"`
-	Detail            string        `json:"detail,omitempty"`
-	LastSeenUnix      int64         `json:"last_seen_unix,omitempty"`
-	LastSyncUnix      int64         `json:"last_sync_unix,omitempty"`
-	LastEndpointUnix  int64         `json:"last_endpoint_change_unix,omitempty"`
-	LastReconcileUnix int64         `json:"last_reconcile_unix,omitempty"`
-	DesiredLinks      int           `json:"desired_links,omitempty"`
-	ActualLinks       int           `json:"actual_links,omitempty"`
-	UpLinks           int           `json:"up_links,omitempty"`
-	OfflineSinceUnix  int64         `json:"offline_since_unix,omitempty"`
-	NextCleanupUnix   int64         `json:"next_cleanup_unix,omitempty"`
-}
+// PeerStatusInfo is the derived runtime status view for a single peer.
+type PeerStatusInfo = inspect.PeerStatusInfo
 
 // derivePeerStatus computes the lifecycle state of a peer from verified active
 // state, SyncPeers observations, LinkInstances and local config.

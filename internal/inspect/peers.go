@@ -50,6 +50,26 @@ type PeerEndpointView struct {
 	Selected     bool   `json:"selected,omitempty"`
 }
 
+// PeerStatusInfo is the derived runtime status view for a peer. Producers
+// compute it from committed state and runtime observations; presenters render
+// it without depending on app-private stateFile internals.
+type PeerStatusInfo struct {
+	PeerID            string        `json:"peer_id"`
+	Zone              zone.ZonePath `json:"zone"`
+	State             string        `json:"state"`
+	Reason            string        `json:"reason,omitempty"`
+	Detail            string        `json:"detail,omitempty"`
+	LastSeenUnix      int64         `json:"last_seen_unix,omitempty"`
+	LastSyncUnix      int64         `json:"last_sync_unix,omitempty"`
+	LastEndpointUnix  int64         `json:"last_endpoint_change_unix,omitempty"`
+	LastReconcileUnix int64         `json:"last_reconcile_unix,omitempty"`
+	DesiredLinks      int           `json:"desired_links,omitempty"`
+	ActualLinks       int           `json:"actual_links,omitempty"`
+	UpLinks           int           `json:"up_links,omitempty"`
+	OfflineSinceUnix  int64         `json:"offline_since_unix,omitempty"`
+	NextCleanupUnix   int64         `json:"next_cleanup_unix,omitempty"`
+}
+
 func BuildPeerIDs(input PeerSetInput) []string {
 	local := make(map[string]bool, len(input.LocalIDs))
 	for _, id := range input.LocalIDs {

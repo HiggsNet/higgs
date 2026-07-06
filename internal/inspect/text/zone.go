@@ -1,7 +1,6 @@
 package text
 
 import (
-	"fmt"
 	"io"
 	"time"
 
@@ -22,9 +21,8 @@ func WriteZoneDebug(w io.Writer, view ZoneDebugView) error {
 	if view.VerifyResult == "" {
 		view.VerifyResult = "ok"
 	}
-	if _, err := fmt.Fprintf(w, "zone: %s\n", view.Detail.Path); err != nil {
-		return err
-	}
+	out := newLineWriter(w)
+	out.Linef("zone: %s", view.Detail.Path)
 	lines := []struct {
 		key   string
 		value any
@@ -37,14 +35,10 @@ func WriteZoneDebug(w io.Writer, view ZoneDebugView) error {
 		{"parent_proof", len(view.Detail.ParentProof)},
 	}
 	for _, line := range lines {
-		if _, err := fmt.Fprintf(w, "%s: %v\n", line.key, line.value); err != nil {
-			return err
-		}
+		out.Linef("%s: %v", line.key, line.value)
 	}
 	if view.ActiveRevocation == nil {
-		if _, err := fmt.Fprintln(w, "revoked: false"); err != nil {
-			return err
-		}
+		out.Println("revoked: false")
 	} else {
 		rev := view.ActiveRevocation
 		revocationLines := []struct {
@@ -58,20 +52,14 @@ func WriteZoneDebug(w io.Writer, view ZoneDebugView) error {
 			{"revoked_authority_epoch", rev.RevokedAuthorityEpoch},
 		}
 		for _, line := range revocationLines {
-			if _, err := fmt.Fprintf(w, "%s: %v\n", line.key, line.value); err != nil {
-				return err
-			}
+			out.Linef("%s: %v", line.key, line.value)
 		}
 	}
-	if _, err := fmt.Fprintf(w, "verify: %s\n", view.VerifyResult); err != nil {
-		return err
-	}
+	out.Linef("verify: %s", view.VerifyResult)
 	for _, record := range view.Detail.Records {
-		if _, err := fmt.Fprintf(w, "record key=%s version=%d type=%s\n", record.Key, record.Version, record.Type); err != nil {
-			return err
-		}
+		out.Linef("record key=%s version=%d type=%s", record.Key, record.Version, record.Type)
 	}
-	return nil
+	return out.Err()
 }
 
 func formatUnixTime(unix int64) string {

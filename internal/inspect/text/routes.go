@@ -1,7 +1,6 @@
 package text
 
 import (
-	"fmt"
 	"io"
 	"net/netip"
 	"sort"
@@ -14,66 +13,49 @@ func WriteRoutesDebug(w io.Writer, dump *inspecthttp.RoutesResponse) error {
 	if dump == nil {
 		dump = &inspecthttp.RoutesResponse{}
 	}
-	fmt.Fprintf(w, "local_zone: %s\n", dump.LocalZone)
-	fmt.Fprintf(w, "export_prefixes: %d\n", len(dump.ExportSet))
+	out := newLineWriter(w)
+	out.Linef("local_zone: %s", dump.LocalZone)
+	out.Linef("export_prefixes: %d", len(dump.ExportSet))
 	for _, p := range dump.ExportSet {
-		fmt.Fprintf(w, "  %s\n", p)
+		out.Linef("  %s", p)
 	}
 	zones := make([]string, 0, len(dump.Authorized))
 	for z := range dump.Authorized {
 		zones = append(zones, z)
 	}
 	sort.Strings(zones)
-	fmt.Fprintf(w, "authorized_prefixes: %d zones\n", len(zones))
+	out.Linef("authorized_prefixes: %d zones", len(zones))
 	for _, z := range zones {
-		fmt.Fprintf(w, "zone %s\n", z)
+		out.Linef("zone %s", z)
 		for _, p := range dump.Authorized[z] {
-			fmt.Fprintf(w, "  %s\n", p)
+			out.Linef("  %s", p)
 		}
 	}
-	fmt.Fprintf(w, "authorization_errors: %d\n", len(dump.Errors))
+	out.Linef("authorization_errors: %d", len(dump.Errors))
 	for _, e := range dump.Errors {
-		fmt.Fprintf(w, "  zone=%s prefix=%s code=%s detail=%s\n", e.Zone, dash(e.Prefix), e.Code, e.Detail)
+		out.Linef("  zone=%s prefix=%s code=%s detail=%s", e.Zone, dash(e.Prefix), e.Code, e.Detail)
 	}
-	fmt.Fprintf(w, "bird_routes: %d instances\n", len(dump.BIRD))
+	out.Linef("bird_routes: %d instances", len(dump.BIRD))
 	for _, inst := range dump.BIRD {
-		fmt.Fprintf(w, "netns %s\n", inst.NetNS)
-		fmt.Fprintf(w, "  instance_id: %s\n", dash(inst.InstanceID))
-		if inst.State != "" {
-			fmt.Fprintf(w, "  state: %s\n", inst.State)
-		}
-		if inst.Error != "" {
-			fmt.Fprintf(w, "  error: %s\n", inst.Error)
-		}
-		fmt.Fprintf(w, "  routes: %d\n", len(inst.Routes))
+		out.Linef("netns %s", inst.NetNS)
+		out.Linef("  instance_id: %s", dash(inst.InstanceID))
+		out.LineIf(inst.State != "", "  state: %s", inst.State)
+		out.LineIf(inst.Error != "", "  error: %s", inst.Error)
+		out.Linef("  routes: %d", len(inst.Routes))
 		for _, route := range inst.Routes {
-			fmt.Fprintf(w, "    %s selected=%t authorized=%t import_allowed=%t",
+			out.Printf("    %s selected=%t authorized=%t import_allowed=%t",
 				route.Prefix, route.Selected, route.Authorized, route.ImportAllowed)
-			if len(route.Zones) > 0 {
-				fmt.Fprintf(w, " zones=%s", strings.Join(route.Zones, ","))
-			}
-			if route.Protocol != "" {
-				fmt.Fprintf(w, " protocol=%s", route.Protocol)
-			}
-			if route.Source != "" {
-				fmt.Fprintf(w, " source=%s", route.Source)
-			}
-			if route.Iface != "" {
-				fmt.Fprintf(w, " iface=%s", route.Iface)
-			}
-			if route.Via != "" {
-				fmt.Fprintf(w, " via=%s", route.Via)
-			}
-			if route.From != "" {
-				fmt.Fprintf(w, " from=%s", route.From)
-			}
-			if route.Metric > 0 {
-				fmt.Fprintf(w, " metric=%d", route.Metric)
-			}
-			fmt.Fprintln(w)
+			out.PrintIf(len(route.Zones) > 0, " zones=%s", strings.Join(route.Zones, ","))
+			out.PrintIf(route.Protocol != "", " protocol=%s", route.Protocol)
+			out.PrintIf(route.Source != "", " source=%s", route.Source)
+			out.PrintIf(route.Iface != "", " iface=%s", route.Iface)
+			out.PrintIf(route.Via != "", " via=%s", route.Via)
+			out.PrintIf(route.From != "", " from=%s", route.From)
+			out.PrintIf(route.Metric > 0, " metric=%d", route.Metric)
+			out.Blank()
 		}
 	}
-	return nil
+	return out.Err()
 }
 
 func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesResponse) error {
@@ -81,7 +63,8 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 		dump = &inspecthttp.RoutesResponse{}
 	}
 	prefixStr := prefix.String()
-	fmt.Fprintf(w, "prefix: %s\n", prefixStr)
+	out := newLineWriter(w)
+	out.Linef("prefix: %s", prefixStr)
 
 	localExport := false
 	for _, p := range dump.ExportSet {
@@ -90,7 +73,7 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 			break
 		}
 	}
-	fmt.Fprintf(w, "local_export: %t\n", localExport)
+	out.Linef("local_export: %t", localExport)
 
 	authorized := false
 	zones := make([]string, 0)
@@ -104,11 +87,11 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 		}
 	}
 	sort.Strings(zones)
-	fmt.Fprintf(w, "authorized: %t\n", authorized)
+	out.Linef("authorized: %t", authorized)
 	if len(zones) == 0 {
-		fmt.Fprintln(w, "announcing_zones: -")
+		out.Println("announcing_zones: -")
 	} else {
-		fmt.Fprintf(w, "announcing_zones: %s\n", strings.Join(zones, ", "))
+		out.Linef("announcing_zones: %s", strings.Join(zones, ", "))
 	}
 
 	matchedAssignment := inspecthttp.RouteAssignment{}
@@ -129,11 +112,11 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 		}
 	}
 	if matchedBits != -1 {
-		fmt.Fprintf(w, "assignment_source: %s\n", matchedAssignment.Source)
-		fmt.Fprintf(w, "assignment_assigned_to: %s\n", matchedAssignment.AssignedTo)
+		out.Linef("assignment_source: %s", matchedAssignment.Source)
+		out.Linef("assignment_assigned_to: %s", matchedAssignment.AssignedTo)
 	} else {
-		fmt.Fprintln(w, "assignment_source: -")
-		fmt.Fprintln(w, "assignment_assigned_to: -")
+		out.Println("assignment_source: -")
+		out.Println("assignment_assigned_to: -")
 	}
 
 	prefixErrors := make([]inspecthttp.RouteAuthorizationError, 0)
@@ -142,27 +125,21 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 			prefixErrors = append(prefixErrors, e)
 		}
 	}
-	fmt.Fprintf(w, "authorization_errors: %d\n", len(prefixErrors))
+	out.Linef("authorization_errors: %d", len(prefixErrors))
 	for _, e := range prefixErrors {
-		fmt.Fprintf(w, "  zone=%s code=%s detail=%s\n", e.Zone, e.Code, e.Detail)
+		out.Linef("  zone=%s code=%s detail=%s", e.Zone, e.Code, e.Detail)
 	}
 	matches := BirdRoutesMatchingPrefix(dump, prefixStr)
-	fmt.Fprintf(w, "bird_routes: %d\n", len(matches))
+	out.Linef("bird_routes: %d", len(matches))
 	for _, match := range matches {
-		fmt.Fprintf(w, "  netns=%s instance=%s selected=%t authorized=%t import_allowed=%t",
+		out.Printf("  netns=%s instance=%s selected=%t authorized=%t import_allowed=%t",
 			match.NetNS, dash(match.InstanceID), match.Route.Selected, match.Route.Authorized, match.Route.ImportAllowed)
-		if match.Route.Protocol != "" {
-			fmt.Fprintf(w, " protocol=%s", match.Route.Protocol)
-		}
-		if match.Route.Iface != "" {
-			fmt.Fprintf(w, " iface=%s", match.Route.Iface)
-		}
-		if match.Route.Metric > 0 {
-			fmt.Fprintf(w, " metric=%d", match.Route.Metric)
-		}
-		fmt.Fprintln(w)
+		out.PrintIf(match.Route.Protocol != "", " protocol=%s", match.Route.Protocol)
+		out.PrintIf(match.Route.Iface != "", " iface=%s", match.Route.Iface)
+		out.PrintIf(match.Route.Metric > 0, " metric=%d", match.Route.Metric)
+		out.Blank()
 	}
-	return nil
+	return out.Err()
 }
 
 type BirdRoutePrefixMatch struct {

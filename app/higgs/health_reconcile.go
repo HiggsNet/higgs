@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/netip"
-	"sort"
+	"os"
 	"strings"
 
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -239,7 +239,7 @@ func debugHealth() error {
 		return err
 	}
 	if state == nil {
-		fmt.Println("no state loaded")
+		_, _ = os.Stdout.WriteString("no state loaded\n")
 		return nil
 	}
 	// Reconstruct targets and print from state.
@@ -250,49 +250,39 @@ func debugHealth() error {
 		groups = rtConfig.IPsec.LinkGroups
 	}
 	targets := healthTargetsFromState(state, localZone, groups)
-	if len(targets) == 0 {
-		fmt.Println("No link instances to probe.")
-		return nil
-	}
-	fmt.Printf("Link health (%d links):\n", len(targets))
-	// Sort by instance ID for stable output.
-	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].InstanceID != targets[j].InstanceID {
-			return targets[i].InstanceID < targets[j].InstanceID
-		}
-		return targets[i].ProbeRole < targets[j].ProbeRole
-	})
-	for _, t := range targets {
-		fmt.Printf("  %s\n", t.InstanceID)
-		fmt.Printf("    peer=%s overlay=%s\n", t.PeerZone, t.Overlay)
-		fmt.Printf("    probe_id=%s role=%s interface=%s local=%s peer_addr=%s\n", t.ProbeID, firstNonEmpty(t.ProbeRole, "active"), t.InterfaceName, t.LocalTunnelAddr, t.PeerTunnelAddr)
-		fmt.Printf("    state=%s staged=%v\n", t.State, t.Staged)
-	}
+	view := inspecttext.HealthDebugView{Targets: targets}
 	// Health manager output (when daemon live).
 	if links := liveDaemonHealthSnapshot(rt); links != nil {
-		fmt.Println("\nLive health state:")
-		for _, l := range links {
-			printHealthLinkJSON(l)
-		}
+		view.Live = inspectHealthLiveLinks(links)
 	}
-	return nil
+	return inspecttext.WriteHealthDebug(os.Stdout, view)
 }
 
-func printHealthLinkJSON(l healthLinkJSON) {
-	fmt.Printf("  %s: state=%s role=%s probe=%s\n", firstNonEmpty(l.ProbeID, l.InstanceID), l.State, firstNonEmpty(l.ProbeRole, "active"), l.ProbeType)
-	if l.Sent > 0 {
-		fmt.Printf("    sent=%d received=%d lost=%d loss=%d%%\n", l.Sent, l.Received, l.Lost, l.LossRatio)
+func inspectHealthLiveLinks(links []healthLinkJSON) []inspecttext.HealthLiveView {
+	out := make([]inspecttext.HealthLiveView, 0, len(links))
+	for _, link := range links {
+		out = append(out, inspecttext.HealthLiveView{
+			ProbeID:         link.ProbeID,
+			InstanceID:      link.InstanceID,
+			ProbeRole:       link.ProbeRole,
+			State:           link.State,
+			ProbeType:       link.ProbeType,
+			Sent:            link.Sent,
+			Received:        link.Received,
+			Lost:            link.Lost,
+			LossRatio:       link.LossRatio,
+			LastRTTMs:       link.LastRTTMs,
+			EWMARTTMs:       link.EWMARTTMs,
+			P50RTTMs:        link.P50RTTMs,
+			P95RTTMs:        link.P95RTTMs,
+			P99RTTMs:        link.P99RTTMs,
+			JitterMs:        link.JitterMs,
+			ConsecutiveFail: link.ConsecutiveFail,
+			LastError:       link.LastError,
+			CutoverBlocking: link.CutoverBlocking,
+		})
 	}
-	if l.LastRTTMs > 0 {
-		fmt.Printf("    rtt last=%dms ewma=%dms p50=%dms p95=%dms p99=%dms jitter=%dms\n",
-			l.LastRTTMs, l.EWMARTTMs, l.P50RTTMs, l.P95RTTMs, l.P99RTTMs, l.JitterMs)
-	}
-	if l.LastError != "" {
-		fmt.Printf("    last_error=%s consecutive_fail=%d\n", l.LastError, l.ConsecutiveFail)
-	}
-	if l.CutoverBlocking {
-		fmt.Printf("    cutover_blocking=true\n")
-	}
+	return out
 }
 
 // liveDaemonHealthSnapshot reads health state from a running daemon via the

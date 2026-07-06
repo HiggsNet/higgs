@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -49,92 +50,16 @@ func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {
 	hasOverlay := rt != nil && rt.Config != nil && len(rt.Config.IPsec.LinkGroups) > 0
 
 	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
-	if len(peers) == 0 {
-		fmt.Fprintln(w, "no peers known")
-		return nil
-	}
-
-	fmt.Fprintf(w, "peer lifecycle config: stale_after=%s offline_after=%s cleanup_after=%s keep_sa_while_stale=%v\n",
-		formatDuration(normalizedPeerLifecycleConfig(cfg).StaleAfter),
-		formatDuration(normalizedPeerLifecycleConfig(cfg).OfflineAfter),
-		formatDuration(normalizedPeerLifecycleConfig(cfg).CleanupAfter),
-		normalizedPeerLifecycleConfig(cfg).KeepSAWhileStale,
-	)
-	fmt.Fprintln(w)
-
-	// Summary counts
-	counts := make(map[string]int)
-	for _, p := range peers {
-		counts[p.State]++
-	}
-	states := make([]string, 0, len(counts))
-	for s := range counts {
-		states = append(states, s)
-	}
-	sort.Strings(states)
-	fmt.Fprint(w, "summary: ")
-	for i, s := range states {
-		if i > 0 {
-			fmt.Fprint(w, ", ")
-		}
-		fmt.Fprintf(w, "%s=%d", s, counts[s])
-	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w)
-
-	for _, p := range peers {
-		writePeerStatusDetail(w, p)
-	}
-	return nil
-}
-
-func writePeerStatusDetail(w io.Writer, p PeerStatusInfo) {
-	fmt.Fprintf(w, "peer_id: %s\n", p.PeerID)
-	fmt.Fprintf(w, "  zone: %s\n", p.Zone)
-	fmt.Fprintf(w, "  state: %s\n", p.State)
-	if p.Reason != "" {
-		fmt.Fprintf(w, "  reason: %s\n", p.Reason)
-	}
-	if p.Detail != "" {
-		fmt.Fprintf(w, "  detail: %s\n", p.Detail)
-	}
-	fmt.Fprintf(w, "  last_seen: %s\n", formatUnixTime(p.LastSeenUnix))
-	fmt.Fprintf(w, "  last_sync: %s\n", formatUnixTime(p.LastSyncUnix))
-	fmt.Fprintf(w, "  last_reconcile: %s\n", formatUnixTime(p.LastReconcileUnix))
-	fmt.Fprintf(w, "  desired_links: %d\n", p.DesiredLinks)
-	fmt.Fprintf(w, "  actual_links: %d\n", p.ActualLinks)
-	fmt.Fprintf(w, "  up_links: %d\n", p.UpLinks)
-	if p.OfflineSinceUnix != 0 {
-		fmt.Fprintf(w, "  offline_since: %s\n", formatUnixTime(p.OfflineSinceUnix))
-	}
-	if p.NextCleanupUnix != 0 {
-		fmt.Fprintf(w, "  next_cleanup: %s\n", formatUnixTime(p.NextCleanupUnix))
-	}
-	// Severity hint for operators
-	switch p.State {
-	case peerStateRevoked:
-		fmt.Fprintln(w, "  severity: critical (revoked)")
-	case peerStateOffline:
-		if p.Reason == "cleanup_after_exceeded" {
-			fmt.Fprintln(w, "  severity: warning (cleanup due)")
-		} else {
-			fmt.Fprintln(w, "  severity: warning (offline)")
-		}
-	case peerStateStale:
-		fmt.Fprintln(w, "  severity: info (stale)")
-	case peerStatePolicyDenied, peerStateConfigError:
-		fmt.Fprintln(w, "  severity: warning (policy/config)")
-	default:
-		fmt.Fprintln(w, "  severity: ok")
-	}
-	fmt.Fprintln(w)
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "default"
-	}
-	return d.String()
+	normalized := normalizedPeerLifecycleConfig(cfg)
+	return inspecttext.WritePeerLifecycleDebug(w, inspecttext.PeerLifecycleDebugView{
+		Config: inspecttext.PeerLifecycleDebugConfig{
+			StaleAfter:       normalized.StaleAfter,
+			OfflineAfter:     normalized.OfflineAfter,
+			CleanupAfter:     normalized.CleanupAfter,
+			KeepSAWhileStale: normalized.KeepSAWhileStale,
+		},
+		Peers: peers,
+	})
 }
 
 // peerStatusSnapshotForControl returns the peer status list for a daemon
