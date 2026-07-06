@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	pingdebug "github.com/Catofes/higgs/internal/ping"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/urfave/cli/v3"
 )
@@ -634,11 +635,11 @@ func cmdDebug() *cli.Command {
 					if cmd.Args().Len() != 1 {
 						return cli.Exit("usage: higgs debug ping <zone> [--count N] [--timeout D] [--family ipv4|ipv6] [--role active|old|staged]", 1)
 					}
-					return debugPing(ctx, zone.ZonePath(cmd.Args().First()), pingFlags{
-						count:   cmd.Int("count"),
-						timeout: cmd.Duration("timeout"),
-						family:  strings.ToLower(strings.TrimSpace(cmd.String("family"))),
-						role:    strings.ToLower(strings.TrimSpace(cmd.String("role"))),
+					return debugPing(ctx, zone.ZonePath(cmd.Args().First()), pingdebug.Options{
+						Count:   cmd.Int("count"),
+						Timeout: cmd.Duration("timeout"),
+						Family:  strings.ToLower(strings.TrimSpace(cmd.String("family"))),
+						Role:    strings.ToLower(strings.TrimSpace(cmd.String("role"))),
 					})
 				},
 			},
