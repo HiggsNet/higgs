@@ -177,22 +177,7 @@ func buildBabelDebugView(rt *Runtime, state *stateFile, response *controlRespons
 	if response != nil && response.LastRoutingError != "" {
 		input.LastReconcileError = response.LastRoutingError
 	}
-	input.RuntimeStates = make(map[string]inspect.BabelRuntimeState, len(instances))
-	for netnsName, bi := range instances {
-		if bi == nil {
-			continue
-		}
-		input.RuntimeStates[netnsName] = inspect.BabelRuntimeState{
-			RouterID:       bi.RouterID,
-			ControlSocket:  bi.ControlSocket,
-			ConfigPath:     bi.ConfigPath,
-			PIDFile:        bi.PIDFile,
-			LastConfigHash: bi.LastConfigHash,
-			Overlays:       append([]string(nil), bi.Overlays...),
-			State:          bi.State,
-			LastError:      bi.LastError,
-		}
-	}
+	input.RuntimeStates = instances
 	for _, inst := range routingInstances {
 		input.Instances = append(input.Instances, inspect.BabelInstanceInput{
 			NetNS:          inst.NetNS,

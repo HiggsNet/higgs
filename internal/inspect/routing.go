@@ -1,5 +1,7 @@
 package inspect
 
+import higgsstate "github.com/Catofes/higgs/internal/state"
+
 const (
 	RoutingModeManaged           = "managed"
 	RoutingModeExternal          = "external"
@@ -28,7 +30,7 @@ type BabelDebugView struct {
 type BabelDebugInput struct {
 	LastReconcileError string
 	Instances          []BabelInstanceInput
-	RuntimeStates      map[string]BabelRuntimeState
+	RuntimeStates      map[string]*higgsstate.BirdInstanceState
 }
 
 type BabelInstanceInput struct {
@@ -37,17 +39,6 @@ type BabelInstanceInput struct {
 	Mode           string
 	ShutdownPolicy string
 	Enabled        bool
-}
-
-type BabelRuntimeState struct {
-	RouterID       uint32
-	ControlSocket  string
-	ConfigPath     string
-	PIDFile        string
-	LastConfigHash string
-	Overlays       []string
-	State          string
-	LastError      string
 }
 
 type BabelInstanceView struct {
@@ -91,7 +82,7 @@ func BuildBabelDebug(input BabelDebugInput) BabelDebugView {
 			continue
 		}
 		runtime, ok := input.RuntimeStates[inst.NetNS]
-		if ok {
+		if ok && runtime != nil {
 			instView.HasState = true
 			instView.RouterID = runtime.RouterID
 			instView.ControlSocket = runtime.ControlSocket

@@ -1,6 +1,10 @@
 package inspect
 
-import "testing"
+import (
+	"testing"
+
+	higgsstate "github.com/Catofes/higgs/internal/state"
+)
 
 func TestBuildBabelDebug(t *testing.T) {
 	view := BuildBabelDebug(BabelDebugInput{
@@ -24,7 +28,7 @@ func TestBuildBabelDebug(t *testing.T) {
 				Enabled:    false,
 			},
 		},
-		RuntimeStates: map[string]BabelRuntimeState{
+		RuntimeStates: map[string]*higgsstate.BirdInstanceState{
 			"higgstesth2": {
 				RouterID:       12345,
 				ControlSocket:  "/run/higgs/bird/bird-main.ctl",
@@ -67,7 +71,7 @@ func TestBuildBabelDebugCopiesRuntimeSlices(t *testing.T) {
 	overlays := []string{"main"}
 	view := BuildBabelDebug(BabelDebugInput{
 		Instances: []BabelInstanceInput{{NetNS: "n", InstanceID: "main", Enabled: true}},
-		RuntimeStates: map[string]BabelRuntimeState{
+		RuntimeStates: map[string]*higgsstate.BirdInstanceState{
 			"n": {Overlays: overlays},
 		},
 	})

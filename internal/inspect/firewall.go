@@ -1,5 +1,7 @@
 package inspect
 
+import higgsstate "github.com/Catofes/higgs/internal/state"
+
 const FirewallModeManaged = "managed"
 
 type FirewallDebugView struct {
@@ -9,10 +11,8 @@ type FirewallDebugView struct {
 }
 
 type FirewallDebugInput struct {
-	Backend   string
-	LastError string
 	Instances []FirewallInstanceInput
-	Snapshot  map[string]FirewallInstanceSnapshot
+	Reconcile *higgsstate.FirewallReconcileState
 }
 
 type FirewallInstanceInput struct {
@@ -31,13 +31,6 @@ type FirewallInstanceInput struct {
 	HostIKE       bool
 	HostNATT      bool
 	RedirectGrace bool
-}
-
-type FirewallInstanceSnapshot struct {
-	Generation   uint64
-	OwnedObjects int
-	PolicyHash   string
-	LastError    string
 }
 
 type FirewallInstanceView struct {
@@ -67,9 +60,10 @@ type FirewallLocalServiceView struct {
 }
 
 func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
-	view := FirewallDebugView{
-		Backend:   input.Backend,
-		LastError: input.LastError,
+	view := FirewallDebugView{}
+	if input.Reconcile != nil {
+		view.Backend = input.Reconcile.Backend
+		view.LastError = input.Reconcile.LastError
 	}
 	if len(input.Instances) == 0 {
 		return view
@@ -102,7 +96,7 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 			HostNATT:      inst.HostNATT,
 			RedirectGrace: inst.RedirectGrace,
 		}
-		if snapshot, ok := input.Snapshot[inst.ID]; ok {
+		if snapshot, ok := firewallReconcileInstance(input.Reconcile, inst.ID); ok {
 			instView.Generation = snapshot.Generation
 			instView.OwnedObjects = snapshot.OwnedObjects
 			instView.PolicyHash = snapshot.PolicyHash
@@ -111,4 +105,12 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 		view.Instances = append(view.Instances, instView)
 	}
 	return view
+}
+
+func firewallReconcileInstance(reconcile *higgsstate.FirewallReconcileState, id string) (*higgsstate.FirewallReconcileInstance, bool) {
+	if reconcile == nil || reconcile.Instances == nil {
+		return nil, false
+	}
+	snapshot, ok := reconcile.Instances[id]
+	return snapshot, ok && snapshot != nil
 }

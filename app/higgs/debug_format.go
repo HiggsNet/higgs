@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -41,14 +40,6 @@ func peerStatus(peerState syncPeerState, now time.Time) string {
 	return "online"
 }
 
-func formatBackoff(peerState syncPeerState, now time.Time) string {
-	remaining := backoffRemaining(peerState, now)
-	if remaining <= 0 {
-		return "-"
-	}
-	return remaining.Round(time.Second).String()
-}
-
 func formatNextRetry(peerState syncPeerState, now time.Time) string {
 	if backoffRemaining(peerState, now) <= 0 {
 		return "-"
@@ -61,35 +52,6 @@ func formatUnixTime(unix int64) string {
 		return "never"
 	}
 	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
-}
-
-func formatRelaySuppression(peerState syncPeerState) string {
-	if peerState.LastRelaySuppression == "" {
-		return "-"
-	}
-	at := formatUnixTime(peerState.LastRelaySuppressedAt)
-	if at == "never" {
-		return peerState.LastRelaySuppression
-	}
-	return fmt.Sprintf("%s at=%s", peerState.LastRelaySuppression, at)
-}
-
-func formatObservedPath(peerState syncPeerState, now time.Time) string {
-	if peerState.ObservedAddr == "" {
-		return "-"
-	}
-	state := "expired"
-	if observedPathActive(peerState, now) {
-		state = "active"
-	}
-	return fmt.Sprintf("%s until=%s last_seen=%s last_success=%s failures=%d source=%s",
-		state,
-		formatUnixTime(peerState.ObservedUntilUnix),
-		formatUnixTime(peerState.ObservedLastSeenUnix),
-		formatUnixTime(peerState.ObservedLastSyncUnix),
-		peerState.ObservedFailureCount,
-		dash(peerState.ObservedSource),
-	)
 }
 
 func dash(value string) string {

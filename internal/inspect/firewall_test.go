@@ -1,10 +1,13 @@
 package inspect
 
-import "testing"
+import (
+	"testing"
+
+	higgsstate "github.com/Catofes/higgs/internal/state"
+)
 
 func TestBuildFirewallDebugView(t *testing.T) {
 	view := BuildFirewallDebug(FirewallDebugInput{
-		Backend: "dry-run",
 		Instances: []FirewallInstanceInput{
 			{
 				ID:            "higgstesth2",
@@ -25,8 +28,11 @@ func TestBuildFirewallDebugView(t *testing.T) {
 				RedirectGrace: true,
 			},
 		},
-		Snapshot: map[string]FirewallInstanceSnapshot{
-			"higgstesth2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
+		Reconcile: &higgsstate.FirewallReconcileState{
+			Backend: "dry-run",
+			Instances: map[string]*higgsstate.FirewallReconcileInstance{
+				"higgstesth2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
+			},
 		},
 	})
 	if view.Backend != "dry-run" {

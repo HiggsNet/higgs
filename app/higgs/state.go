@@ -11,7 +11,6 @@ import (
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
-	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -110,21 +109,8 @@ type stateMeta struct {
 	Admission         *admissionState               `json:"admission,omitempty"`
 }
 
-// firewallReconcileState persists firewall reconcile diagnostics per instance.
-type firewallReconcileState struct {
-	Backend     string                                          `json:"backend,omitempty"`
-	Instances   map[string]*firewallInstanceReconcileStateEntry `json:"instances,omitempty"`
-	LastRunUnix int64                                           `json:"last_run_unix,omitempty"`
-	LastError   string                                          `json:"last_error,omitempty"`
-}
-
-type firewallInstanceReconcileStateEntry struct {
-	Generation   uint64 `json:"generation,omitempty"`
-	LastRunUnix  int64  `json:"last_run_unix,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
-	PolicyHash   string `json:"policy_hash,omitempty"`
-	OwnedObjects int    `json:"owned_objects,omitempty"`
-}
+type firewallReconcileState = higgsstate.FirewallReconcileState
+type firewallInstanceReconcileStateEntry = higgsstate.FirewallReconcileInstance
 
 // admissionState tracks auto-join admission diagnostics. It is persisted so
 // that pending reasons survive daemon restarts and operators can inspect
@@ -152,21 +138,7 @@ type admissionState struct {
 	PendingReasonDetail string `json:"pending_reason_detail,omitempty"`
 }
 
-type BirdInstanceState struct {
-	NetNSName        string                 `json:"netns_name"`
-	Overlays         []string               `json:"overlays,omitempty"`
-	ConfigPath       string                 `json:"config_path"`
-	ControlSocket    string                 `json:"control_socket"`
-	PIDFile          string                 `json:"pid_file"`
-	RouterID         uint32                 `json:"router_id"`
-	Owner            bird.BirdResourceOwner `json:"owner,omitempty"`
-	LastConfigHash   string                 `json:"last_config_hash"`
-	LastError        string                 `json:"last_error"`
-	LastExit         string                 `json:"last_exit,omitempty"`
-	FailureCount     int                    `json:"failure_count,omitempty"`
-	BackoffUntilUnix int64                  `json:"backoff_until_unix,omitempty"`
-	State            string                 `json:"state"` // pending, running, degraded, error
-}
+type BirdInstanceState = higgsstate.BirdInstanceState
 
 func cloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstanceState {
 	if in == nil {

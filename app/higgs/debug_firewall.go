@@ -48,12 +48,7 @@ func writeDebugFirewall(w io.Writer, _ *Runtime, instances []FirewallInstanceCon
 func buildFirewallDebugView(instances []FirewallInstanceConfig, snapshot *firewallReconcileState) inspect.FirewallDebugView {
 	input := inspect.FirewallDebugInput{
 		Instances: make([]inspect.FirewallInstanceInput, 0, len(instances)),
-	}
-	if snapshot != nil && snapshot.Backend != "" {
-		input.Backend = snapshot.Backend
-	}
-	if snapshot != nil && snapshot.LastError != "" {
-		input.LastError = snapshot.LastError
+		Reconcile: snapshot,
 	}
 	for _, inst := range instances {
 		scope := inst.NetNS
@@ -83,20 +78,6 @@ func buildFirewallDebugView(instances []FirewallInstanceConfig, snapshot *firewa
 			})
 		}
 		input.Instances = append(input.Instances, instInput)
-	}
-	if snapshot != nil && snapshot.Instances != nil {
-		input.Snapshot = make(map[string]inspect.FirewallInstanceSnapshot, len(snapshot.Instances))
-		for id, entry := range snapshot.Instances {
-			if entry == nil {
-				continue
-			}
-			input.Snapshot[id] = inspect.FirewallInstanceSnapshot{
-				Generation:   entry.Generation,
-				OwnedObjects: entry.OwnedObjects,
-				PolicyHash:   entry.PolicyHash,
-				LastError:    entry.LastError,
-			}
-		}
 	}
 	return inspect.BuildFirewallDebug(input)
 }
