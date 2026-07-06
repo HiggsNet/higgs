@@ -303,14 +303,14 @@ func TestDaemonControlRecordGet(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("record_get response = %#v", response)
 	}
-	if response.Record["key"] != "site/name" || response.Record["value"] != `{"name":"node-b-2"}` || response.Record["record_hash"] == "" {
+	if response.Record.Key != "site/name" || response.Record.Value != `{"name":"node-b-2"}` || response.Record.RecordHash == "" {
 		t.Fatalf("record_get record = %#v", response.Record)
 	}
-	history := response.Record["record_history"].([]any)
+	history := response.Record.RecordHistory
 	if len(history) != 1 {
 		t.Fatalf("record_get history len = %d, want 1", len(history))
 	}
-	if item := history[0].(map[string]any); item["value"] != `{"name":"node-b"}` {
+	if item := history[0]; item.Value != `{"name":"node-b"}` {
 		t.Fatalf("record_get history = %#v", history)
 	}
 

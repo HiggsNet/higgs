@@ -1,6 +1,7 @@
 package text
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 )
@@ -53,4 +54,17 @@ func (l *lineWriter) Err() error {
 		return nil
 	}
 	return l.err
+}
+
+func defaultText(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func WriteJSON(w io.Writer, value any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(value)
 }

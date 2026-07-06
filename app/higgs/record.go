@@ -2,12 +2,12 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
@@ -70,14 +70,14 @@ func getRecordDirect(rt *Runtime, path zone.ZonePath, key string, history int) e
 	if err != nil {
 		return err
 	}
-	record, err := lookupRecordJSON(state, path, key, history)
+	record, err := lookupRecordDetail(state, path, key, history)
 	if err != nil {
 		return err
 	}
 	return writeRecordJSON(record)
 }
 
-func lookupRecordJSON(state *stateFile, path zone.ZonePath, key string, history int) (map[string]any, error) {
+func lookupRecordDetail(state *stateFile, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
 	if history < 0 {
 		return nil, fmt.Errorf("history must be >= 0")
 	}
@@ -92,57 +92,12 @@ func lookupRecordJSON(state *stateFile, path zone.ZonePath, key string, history 
 	if rec == nil {
 		return nil, fmt.Errorf("record not found: %s/%s", path, key)
 	}
-	out := recordJSON(rec, len(zs.RecordHistory[key]))
-	if history > 0 {
-		out["record_history"] = recordHistoryJSON(zs.RecordHistory[key], history)
-	}
-	return out, nil
+	view := inspect.BuildRecordDetail(rec, zs.RecordHistory[key], history)
+	return &view, nil
 }
 
-func recordHistoryJSON(records []*zone.Record, limit int) []map[string]any {
-	if limit <= 0 {
-		return nil
-	}
-	out := make([]map[string]any, 0, limit)
-	if len(records) == 0 {
-		return out
-	}
-	if limit > len(records) {
-		limit = len(records)
-	}
-	for i := len(records) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, recordJSON(records[i], 0))
-	}
-	return out
-}
-
-func recordJSON(rec *zone.Record, historyCount int) map[string]any {
-	view := inspect.BuildRecord(rec, historyCount)
-	out := map[string]any{
-		"zone":          view.Zone,
-		"key":           view.Key,
-		"version":       view.Version,
-		"type":          view.Type,
-		"value":         view.Value,
-		"value_b64":     view.ValueB64,
-		"value_hash":    view.ValueHash,
-		"record_hash":   view.RecordHash,
-		"prev_hash":     view.PrevHash,
-		"timestamp":     view.Timestamp,
-		"signed_by":     view.SignedBy,
-		"signature":     view.Signature,
-		"history_count": view.HistoryCount,
-	}
-	if view.ValueJSON != nil {
-		out["value_json"] = view.ValueJSON
-	}
-	return out
-}
-
-func writeRecordJSON(record map[string]any) error {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(record)
+func writeRecordJSON(record *inspect.RecordDetailView) error {
+	return inspecttext.WriteJSON(os.Stdout, record)
 }
 
 func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {

@@ -69,7 +69,7 @@ type controlResponse struct {
 	PeerStatuses      []inspect.PeerStatusInfo      `json:"peer_statuses,omitempty"`
 	RevocationImpact  []inspect.RevocationImpact    `json:"revocation_impact,omitempty"`
 	Health            []healthLinkJSON              `json:"health,omitempty"`
-	Record            map[string]any                `json:"record,omitempty"`
+	Record            *inspect.RecordDetailView     `json:"record,omitempty"`
 	PortRotate        *manualPortRotateResult       `json:"port_rotate,omitempty"`
 	RecordsApplied    int                           `json:"records_applied,omitempty"`
 	Delegations       int                           `json:"delegations,omitempty"`
@@ -333,7 +333,7 @@ func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []by
 	return response.Version, true, nil
 }
 
-func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history int) (map[string]any, bool, error) {
+func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, bool, error) {
 	socketPath := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(socketPath, controlRequest{
 		Method:  "record_get",

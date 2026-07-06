@@ -2,7 +2,6 @@ package text
 
 import (
 	"io"
-	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
@@ -31,16 +30,9 @@ func WriteEndpointsDebug(w io.Writer, view inspect.EndpointDebugView) error {
 				ep.Priority,
 				ep.Protocol,
 				dash(ep.Source),
-				formatEndpointUnixTime(ep.LastObserved),
+				formatUnixTime(ep.LastObserved),
 			)
 		}
 	}
 	return out.Err()
-}
-
-func formatEndpointUnixTime(unix int64) string {
-	if unix == 0 {
-		return "never"
-	}
-	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
 }

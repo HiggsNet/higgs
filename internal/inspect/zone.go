@@ -55,6 +55,11 @@ type RecordView struct {
 	ValueJSON    any    `json:"value_json,omitempty"`
 }
 
+type RecordDetailView struct {
+	RecordView
+	RecordHistory []RecordView `json:"record_history,omitempty"`
+}
+
 type RecordsDebugInput struct {
 	Network *zone.NetworkState
 	Path    zone.ZonePath
@@ -174,6 +179,21 @@ func BuildRecord(rec *zone.Record, historyCount int) RecordView {
 		out.ValueJSON = parsed
 	}
 	return out
+}
+
+func BuildRecordDetail(rec *zone.Record, history []*zone.Record, historyLimit int) RecordDetailView {
+	view := RecordDetailView{RecordView: BuildRecord(rec, len(history))}
+	if historyLimit <= 0 || len(history) == 0 {
+		return view
+	}
+	if historyLimit > len(history) {
+		historyLimit = len(history)
+	}
+	view.RecordHistory = make([]RecordView, 0, historyLimit)
+	for i := len(history) - 1; i >= 0 && len(view.RecordHistory) < historyLimit; i-- {
+		view.RecordHistory = append(view.RecordHistory, BuildRecord(history[i], 0))
+	}
+	return view
 }
 
 func BuildRecordsDebug(input RecordsDebugInput) RecordsDebugView {

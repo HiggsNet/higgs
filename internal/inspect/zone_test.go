@@ -105,3 +105,38 @@ func TestBuildZoneDetailOmitsHistoryWhenDisabled(t *testing.T) {
 		t.Fatalf("history = %+v count=%d", got.RecordHistory, got.HistoryCount)
 	}
 }
+
+func TestBuildRecordDetailIncludesLimitedHistory(t *testing.T) {
+	active := &zone.Record{
+		Zone:    "node-a.catofes.",
+		Key:     "site/name",
+		Type:    "policy.json",
+		Value:   []byte(`{"name":"active"}`),
+		Version: 3,
+	}
+	old1 := &zone.Record{Zone: "node-a.catofes.", Key: "site/name", Type: "policy.json", Value: []byte(`{"name":"old-1"}`), Version: 1}
+	old2 := &zone.Record{Zone: "node-a.catofes.", Key: "site/name", Type: "policy.json", Value: []byte(`{"name":"old-2"}`), Version: 2}
+
+	got := BuildRecordDetail(active, []*zone.Record{old1, old2}, 1)
+
+	if got.Key != "site/name" || got.Version != 3 || got.HistoryCount != 2 {
+		t.Fatalf("record detail = %+v", got)
+	}
+	if got.ValueJSON == nil {
+		t.Fatalf("record detail should parse JSON value: %+v", got)
+	}
+	if len(got.RecordHistory) != 1 || got.RecordHistory[0].Version != 2 {
+		t.Fatalf("history = %+v, want latest limited history", got.RecordHistory)
+	}
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded["key"] != "site/name" || decoded["record_history"] == nil {
+		t.Fatalf("decoded record detail missing flat JSON fields: %#v", decoded)
+	}
+}

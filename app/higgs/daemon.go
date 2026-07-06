@@ -511,7 +511,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		record, err := lookupRecordJSON(state, zone.ZonePath(request.Zone), request.Key, request.History)
+		record, err := lookupRecordDetail(state, zone.ZonePath(request.Zone), request.Key, request.History)
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return

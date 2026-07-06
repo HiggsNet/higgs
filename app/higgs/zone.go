@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -25,7 +25,5 @@ func showZone(path zone.ZonePath, includeHistory bool) error {
 		Now:            timeNow(),
 		IncludeHistory: includeHistory,
 	})
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return inspecttext.WriteJSON(os.Stdout, out)
 }

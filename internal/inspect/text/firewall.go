@@ -41,10 +41,3 @@ func WriteDebugFirewall(w io.Writer, view inspect.FirewallDebugView) error {
 	}
 	return out.Err()
 }
-
-func defaultText(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
-}

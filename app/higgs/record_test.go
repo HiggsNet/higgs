@@ -6,7 +6,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-func TestLookupRecordJSON(t *testing.T) {
+func TestLookupRecordDetail(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 	if err := putRecordDirect(rt, managed, "site/name", []byte(`{"name":"pek"}`), "policy.json"); err != nil {
 		t.Fatalf("putRecordDirect: %v", err)
@@ -16,17 +16,17 @@ func TestLookupRecordJSON(t *testing.T) {
 		t.Fatalf("LoadState: %v", err)
 	}
 
-	record, err := lookupRecordJSON(state, managed, "site/name", 0)
+	record, err := lookupRecordDetail(state, managed, "site/name", 0)
 	if err != nil {
-		t.Fatalf("lookupRecordJSON: %v", err)
+		t.Fatalf("lookupRecordDetail: %v", err)
 	}
-	if record["zone"] != string(managed) || record["key"] != "site/name" || record["type"] != "policy.json" {
-		t.Fatalf("record JSON = %#v", record)
+	if record.Zone != string(managed) || record.Key != "site/name" || record.Type != "policy.json" {
+		t.Fatalf("record detail = %#v", record)
 	}
-	if record["value"] != `{"name":"pek"}` || record["value_json"] == nil || record["record_hash"] == "" {
-		t.Fatalf("record JSON missing value fields: %#v", record)
+	if record.Value != `{"name":"pek"}` || record.ValueJSON == nil || record.RecordHash == "" {
+		t.Fatalf("record detail missing value fields: %#v", record)
 	}
-	if _, ok := record["record_history"]; ok {
+	if len(record.RecordHistory) != 0 {
 		t.Fatalf("record_history should be omitted by default: %#v", record)
 	}
 
@@ -40,25 +40,25 @@ func TestLookupRecordJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState after history writes: %v", err)
 	}
-	record, err = lookupRecordJSON(state, managed, "site/name", 2)
+	record, err = lookupRecordDetail(state, managed, "site/name", 2)
 	if err != nil {
-		t.Fatalf("lookupRecordJSON with history: %v", err)
+		t.Fatalf("lookupRecordDetail with history: %v", err)
 	}
-	history := record["record_history"].([]map[string]any)
+	history := record.RecordHistory
 	if len(history) != 2 {
 		t.Fatalf("history len = %d, want 2", len(history))
 	}
-	if history[0]["version"] != uint64(2) || history[1]["version"] != uint64(1) {
+	if history[0].Version != 2 || history[1].Version != 1 {
 		t.Fatalf("history versions = %#v, want latest history first", history)
 	}
 
-	if _, err := lookupRecordJSON(state, managed, "missing", 0); err == nil {
-		t.Fatal("lookupRecordJSON missing record error = nil")
+	if _, err := lookupRecordDetail(state, managed, "missing", 0); err == nil {
+		t.Fatal("lookupRecordDetail missing record error = nil")
 	}
-	if _, err := lookupRecordJSON(state, zone.ZonePath("missing."), "site/name", 0); err == nil {
-		t.Fatal("lookupRecordJSON missing zone error = nil")
+	if _, err := lookupRecordDetail(state, zone.ZonePath("missing."), "site/name", 0); err == nil {
+		t.Fatal("lookupRecordDetail missing zone error = nil")
 	}
-	if _, err := lookupRecordJSON(state, managed, "site/name", -1); err == nil {
-		t.Fatal("lookupRecordJSON negative history error = nil")
+	if _, err := lookupRecordDetail(state, managed, "site/name", -1); err == nil {
+		t.Fatal("lookupRecordDetail negative history error = nil")
 	}
 }
