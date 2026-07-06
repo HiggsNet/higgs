@@ -52,8 +52,8 @@ func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {
 
 	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
 	normalized := inspect.NormalizePeerLifecycleConfig(cfg)
-	return inspecttext.WritePeerLifecycleDebug(w, inspecttext.PeerLifecycleDebugView{
-		Config: inspecttext.PeerLifecycleDebugConfig{
+	return inspecttext.WritePeerLifecycleDebug(w, inspect.PeerLifecycleDebugView{
+		Config: inspect.PeerLifecycleDebugConfig{
 			StaleAfter:       normalized.StaleAfter,
 			OfflineAfter:     normalized.OfflineAfter,
 			CleanupAfter:     normalized.CleanupAfter,

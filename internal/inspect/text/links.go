@@ -10,17 +10,7 @@ import (
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
-type LinksDebugView struct {
-	Inspection        inspect.LinkInspection
-	PlannedSpecs      map[string]ipsec.TransportLinkSpec
-	ReplannedDesired  int
-	ReplanIgnored     bool
-	LastDesiredLinks  int
-	DesiredPlanSource string
-	Filter            string
-}
-
-func WriteLinksDebug(w io.Writer, view LinksDebugView) error {
+func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	out := newLineWriter(w)
 	inspection := view.Inspection
 	inspection.Links = inspect.FilterLinkViews(inspection.Links, view.Filter)
@@ -241,7 +231,7 @@ func formatDebugChildIfID(value any) string {
 	if _, err := fmt.Sscanf(s, "%d", &id); err == nil && id != 0 {
 		return formatDerivedInterfaceWithIfID(id)
 	}
-	return dash(s)
+	return s
 }
 
 func debugString(value any) string {
@@ -284,13 +274,6 @@ func debugStringList(value any) string {
 	}
 }
 
-func presentOrDash(ok bool) string {
-	if ok {
-		return "present"
-	}
-	return "-"
-}
-
 func formatSAState(sa inspect.LinkSA) string {
 	if sa.Name == "" && sa.ChildSA == "" {
 		return "-"
@@ -305,13 +288,6 @@ func formatSAState(sa inspect.LinkSA) string {
 		return strings.ToLower(sa.IKEState)
 	}
 	return "present"
-}
-
-func formatUint32OrDash(value uint32) string {
-	if value == 0 {
-		return "-"
-	}
-	return fmt.Sprintf("%d", value)
 }
 
 func debugPortGenerationSummary(spec *ipsec.TransportLinkSpec, rotation inspect.LinkRotation) string {

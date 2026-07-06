@@ -71,7 +71,7 @@ func TestDebugLinksPlannerShowsActiveRuntimeTunnel(t *testing.T) {
 		},
 	}
 
-	if err := inspecttext.WriteLinksDebug(&out, inspecttext.LinksDebugView{
+	if err := inspecttext.WriteLinksDebug(&out, inspect.LinksDebugView{
 		Inspection: inspect.LinkInspection{
 			Summary: inspect.LinkSummary{LinkInstances: 1},
 			Links:   []inspect.LinkView{link},

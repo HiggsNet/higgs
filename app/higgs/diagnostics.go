@@ -162,7 +162,7 @@ func linkInspectionBuildFromControl(in *linkInspectionControl) linkInspectionBui
 }
 
 func writeDebugLinksFromBuild(w io.Writer, build linkInspectionBuild, filter string) error {
-	return inspecttext.WriteLinksDebug(w, inspecttext.LinksDebugView{
+	return inspecttext.WriteLinksDebug(w, inspect.LinksDebugView{
 		Inspection:        build.Inspection,
 		PlannedSpecs:      build.PlannedSpecs,
 		ReplannedDesired:  build.ReplannedDesired,
@@ -390,7 +390,7 @@ func debugZone(path zone.ZonePath) error {
 		view := inspect.BuildRevocation(revocation)
 		activeRevocation = &view
 	}
-	return inspecttext.WriteZoneDebug(os.Stdout, inspecttext.ZoneDebugView{
+	return inspecttext.WriteZoneDebug(os.Stdout, inspect.ZoneDebugView{
 		Detail: inspect.BuildZoneDetail(inspect.ZoneDetailInput{
 			Path:           path,
 			State:          zs,

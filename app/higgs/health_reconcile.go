@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -249,8 +250,8 @@ func debugHealth() error {
 	if rtConfig != nil {
 		groups = rtConfig.IPsec.LinkGroups
 	}
-	targets := healthTargetsFromState(state, localZone, groups)
-	view := inspecttext.HealthDebugView{Targets: targets}
+	targets := inspectHealthProbeTargets(healthTargetsFromState(state, localZone, groups))
+	view := inspect.HealthDebugView{Targets: targets}
 	// Health manager output (when daemon live).
 	if links := liveDaemonHealthSnapshot(rt); links != nil {
 		view.Live = inspectHealthLiveLinks(links)
@@ -258,10 +259,29 @@ func debugHealth() error {
 	return inspecttext.WriteHealthDebug(os.Stdout, view)
 }
 
-func inspectHealthLiveLinks(links []healthLinkJSON) []inspecttext.HealthLiveView {
-	out := make([]inspecttext.HealthLiveView, 0, len(links))
+func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthProbeTargetView {
+	out := make([]inspect.HealthProbeTargetView, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, inspect.HealthProbeTargetView{
+			ProbeID:         target.ProbeID,
+			InstanceID:      target.InstanceID,
+			PeerZone:        target.PeerZone,
+			Overlay:         target.Overlay,
+			InterfaceName:   target.InterfaceName,
+			LocalTunnelAddr: target.LocalTunnelAddr.String(),
+			PeerTunnelAddr:  target.PeerTunnelAddr.String(),
+			ProbeRole:       target.ProbeRole,
+			State:           target.State,
+			Staged:          target.Staged,
+		})
+	}
+	return out
+}
+
+func inspectHealthLiveLinks(links []healthLinkJSON) []inspect.HealthLiveView {
+	out := make([]inspect.HealthLiveView, 0, len(links))
 	for _, link := range links {
-		out = append(out, inspecttext.HealthLiveView{
+		out = append(out, inspect.HealthLiveView{
 			ProbeID:         link.ProbeID,
 			InstanceID:      link.InstanceID,
 			ProbeRole:       link.ProbeRole,

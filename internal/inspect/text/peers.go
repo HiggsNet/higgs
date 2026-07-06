@@ -3,27 +3,11 @@ package text
 import (
 	"io"
 	"sort"
-	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
 
-type PeerLifecycleDebugView struct {
-	Config PeerLifecycleDebugConfig
-	Peers  []inspect.PeerStatusInfo
-}
-
-type PeerLifecycleDebugConfig struct {
-	StaleAfter       time.Duration
-	OfflineAfter     time.Duration
-	CleanupAfter     time.Duration
-	KeepSAWhileStale bool
-}
-
-func WritePeerLifecycleDebug(w io.Writer, view PeerLifecycleDebugView) error {
-	if w == nil {
-		return nil
-	}
+func WritePeerLifecycleDebug(w io.Writer, view inspect.PeerLifecycleDebugView) error {
 	out := newLineWriter(w)
 	if len(view.Peers) == 0 {
 		out.Println("no peers known")
@@ -103,11 +87,4 @@ func peerSeverity(p inspect.PeerStatusInfo) string {
 	default:
 		return "ok"
 	}
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "default"
-	}
-	return d.String()
 }

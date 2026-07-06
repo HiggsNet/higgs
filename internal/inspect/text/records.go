@@ -40,13 +40,3 @@ func formatDebugRecordValue(value string) string {
 	}
 	return value
 }
-
-func shortText(value string, max int) string {
-	if value == "" {
-		return "-"
-	}
-	if len(value) <= max {
-		return value
-	}
-	return value[:max] + "..."
-}

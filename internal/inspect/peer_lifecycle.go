@@ -27,6 +27,18 @@ type PeerLifecycleConfig struct {
 	KeepSAWhileStale bool          `yaml:"keep_sa_while_stale" json:"keep_sa_while_stale,omitempty"`
 }
 
+type PeerLifecycleDebugView struct {
+	Config PeerLifecycleDebugConfig
+	Peers  []PeerStatusInfo
+}
+
+type PeerLifecycleDebugConfig struct {
+	StaleAfter       time.Duration
+	OfflineAfter     time.Duration
+	CleanupAfter     time.Duration
+	KeepSAWhileStale bool
+}
+
 type PeerLifecycleInput struct {
 	PeerID               string
 	PeerZone             zone.ZonePath

@@ -3,6 +3,8 @@ package inspect
 import (
 	"sort"
 	"strings"
+
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 type LinkInput struct {
@@ -23,6 +25,16 @@ type LinkInspection struct {
 	Links   []LinkView
 	Actions []LinkAction
 	Skipped []LinkSkip
+}
+
+type LinksDebugView struct {
+	Inspection        LinkInspection
+	PlannedSpecs      map[string]ipsec.TransportLinkSpec
+	ReplannedDesired  int
+	ReplanIgnored     bool
+	LastDesiredLinks  int
+	DesiredPlanSource string
+	Filter            string
 }
 
 type LinkSummary struct {

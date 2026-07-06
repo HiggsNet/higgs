@@ -1,20 +1,14 @@
 package text
 
 import (
+	"fmt"
 	"io"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
 
-type ZoneDebugView struct {
-	Detail           inspect.ZoneDetail
-	RootHash         string
-	VerifyResult     string
-	ActiveRevocation *inspect.RevocationView
-}
-
-func WriteZoneDebug(w io.Writer, view ZoneDebugView) error {
+func WriteZoneDebug(w io.Writer, view inspect.ZoneDebugView) error {
 	if w == nil {
 		return nil
 	}
@@ -74,4 +68,18 @@ func dash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func presentOrDash(ok bool) string {
+	if ok {
+		return "present"
+	}
+	return "-"
+}
+
+func formatUint32OrDash(value uint32) string {
+	if value == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", value)
 }

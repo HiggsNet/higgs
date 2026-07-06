@@ -67,13 +67,7 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 	out := newLineWriter(w)
 	out.Linef("prefix: %s", prefixStr)
 
-	localExport := false
-	for _, p := range dump.ExportSet {
-		if p == prefixStr {
-			localExport = true
-			break
-		}
-	}
+	localExport := slices.Contains(dump.ExportSet, prefixStr)
 	out.Linef("local_export: %t", localExport)
 
 	authorized := false

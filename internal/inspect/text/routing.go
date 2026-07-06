@@ -37,7 +37,7 @@ func WriteBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 				out.Linef("    -")
 				continue
 			}
-			for _, line := range strings.Split(raw, "\n") {
+			for line := range strings.SplitSeq(raw, "\n") {
 				out.Linef("    %s", line)
 			}
 		}
@@ -68,11 +68,7 @@ func WriteBabelDebug(w io.Writer, view inspect.BabelDebugView) error {
 			out.Linef("  pid_file: %s", dash(inst.PIDFile))
 			out.Linef("  last_config_hash: %s", dash(shortTextHash(inst.LastConfigHash)))
 			out.LineIf(len(inst.Overlays) > 0, "  overlays: %s", strings.Join(inst.Overlays, ", "))
-			state := inst.State
-			if state == "" {
-				state = "pending"
-			}
-			out.Linef("  state: %s", state)
+			out.Linef("  state: %s", defaultText(inst.State, "pending"))
 			out.Linef("  last_error: %s", dash(inst.LastError))
 			continue
 		}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 )
 
 type lineWriter struct {
@@ -67,4 +68,21 @@ func WriteJSON(w io.Writer, value any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(value)
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "default"
+	}
+	return d.String()
+}
+
+func shortText(value string, max int) string {
+	if value == "" {
+		return "-"
+	}
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
 }

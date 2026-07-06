@@ -4,41 +4,15 @@ import (
 	"io"
 	"sort"
 
-	"github.com/Catofes/higgs/pkg/health"
+	"github.com/Catofes/higgs/internal/inspect"
 )
 
-type HealthDebugView struct {
-	Targets []health.ProbeTarget
-	Live    []HealthLiveView
-}
-
-type HealthLiveView struct {
-	ProbeID         string
-	InstanceID      string
-	ProbeRole       string
-	State           string
-	ProbeType       string
-	Sent            int
-	Received        int
-	Lost            int
-	LossRatio       int
-	LastRTTMs       int64
-	EWMARTTMs       int64
-	P50RTTMs        int64
-	P95RTTMs        int64
-	P99RTTMs        int64
-	JitterMs        int64
-	ConsecutiveFail int
-	LastError       string
-	CutoverBlocking bool
-}
-
-func WriteHealthDebug(w io.Writer, view HealthDebugView) error {
+func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
 	if w == nil {
 		return nil
 	}
 	out := newLineWriter(w)
-	targets := append([]health.ProbeTarget(nil), view.Targets...)
+	targets := append([]inspect.HealthProbeTargetView(nil), view.Targets...)
 	if len(targets) == 0 {
 		out.Println("No link instances to probe.")
 		return out.Err()
@@ -71,7 +45,7 @@ func WriteHealthDebug(w io.Writer, view HealthDebugView) error {
 	return out.Err()
 }
 
-func writeHealthLive(w io.Writer, l HealthLiveView) error {
+func writeHealthLive(w io.Writer, l inspect.HealthLiveView) error {
 	out := newLineWriter(w)
 	out.Linef("  %s: state=%s role=%s probe=%s", firstNonEmpty(l.ProbeID, l.InstanceID), l.State, firstNonEmpty(l.ProbeRole, "active"), l.ProbeType)
 	out.LineIf(l.Sent > 0, "    sent=%d received=%d lost=%d loss=%d%%", l.Sent, l.Received, l.Lost, l.LossRatio)

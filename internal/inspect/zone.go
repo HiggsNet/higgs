@@ -38,6 +38,13 @@ type ZoneDetail struct {
 	MerkleRoot      string           `json:"merkle_root"`
 }
 
+type ZoneDebugView struct {
+	Detail           ZoneDetail
+	RootHash         string
+	VerifyResult     string
+	ActiveRevocation *RevocationView
+}
+
 type RecordView struct {
 	Zone         string `json:"zone"`
 	Key          string `json:"key"`

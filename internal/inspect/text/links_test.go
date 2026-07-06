@@ -8,7 +8,7 @@ import (
 )
 
 func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
-	view := LinksDebugView{
+	view := inspect.LinksDebugView{
 		Inspection: inspect.LinkInspection{
 			Summary: inspect.LinkSummary{
 				LastRunUnix:   1700000000,

@@ -10,7 +10,7 @@ import (
 
 func TestWritePeerLifecycleDebugNoPeers(t *testing.T) {
 	var buf strings.Builder
-	if err := WritePeerLifecycleDebug(&buf, PeerLifecycleDebugView{}); err != nil {
+	if err := WritePeerLifecycleDebug(&buf, inspect.PeerLifecycleDebugView{}); err != nil {
 		t.Fatalf("WritePeerLifecycleDebug: %v", err)
 	}
 	if got := buf.String(); got != "no peers known\n" {
@@ -19,8 +19,8 @@ func TestWritePeerLifecycleDebugNoPeers(t *testing.T) {
 }
 
 func TestWritePeerLifecycleDebugSummaryAndSeverity(t *testing.T) {
-	view := PeerLifecycleDebugView{
-		Config: PeerLifecycleDebugConfig{
+	view := inspect.PeerLifecycleDebugView{
+		Config: inspect.PeerLifecycleDebugConfig{
 			StaleAfter:       15 * time.Minute,
 			OfflineAfter:     12 * time.Hour,
 			CleanupAfter:     48 * time.Hour,

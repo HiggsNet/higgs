@@ -1,16 +1,15 @@
 package text
 
 import (
-	"net/netip"
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/pkg/health"
+	"github.com/Catofes/higgs/internal/inspect"
 )
 
 func TestWriteHealthDebugNoTargets(t *testing.T) {
 	var buf strings.Builder
-	if err := WriteHealthDebug(&buf, HealthDebugView{}); err != nil {
+	if err := WriteHealthDebug(&buf, inspect.HealthDebugView{}); err != nil {
 		t.Fatalf("WriteHealthDebug: %v", err)
 	}
 	if got := buf.String(); got != "No link instances to probe.\n" {
@@ -19,16 +18,16 @@ func TestWriteHealthDebugNoTargets(t *testing.T) {
 }
 
 func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
-	view := HealthDebugView{
-		Targets: []health.ProbeTarget{
+	view := inspect.HealthDebugView{
+		Targets: []inspect.HealthProbeTargetView{
 			{
 				ProbeID:         "link-b#staged",
 				InstanceID:      "link-b",
 				PeerZone:        "node-b.catofes.",
 				Overlay:         "blue",
 				InterfaceName:   "hgs-b",
-				LocalTunnelAddr: netip.MustParseAddr("fd00::1"),
-				PeerTunnelAddr:  netip.MustParseAddr("fd00::2"),
+				LocalTunnelAddr: "fd00::1",
+				PeerTunnelAddr:  "fd00::2",
 				ProbeRole:       "staged",
 				State:           "up",
 				Staged:          true,
@@ -39,12 +38,12 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 				PeerZone:        "node-a.catofes.",
 				Overlay:         "blue",
 				InterfaceName:   "hgs-a",
-				LocalTunnelAddr: netip.MustParseAddr("fd00::3"),
-				PeerTunnelAddr:  netip.MustParseAddr("fd00::4"),
+				LocalTunnelAddr: "fd00::3",
+				PeerTunnelAddr:  "fd00::4",
 				State:           "up",
 			},
 		},
-		Live: []HealthLiveView{{
+		Live: []inspect.HealthLiveView{{
 			ProbeID:         "link-b#staged",
 			InstanceID:      "link-b",
 			ProbeRole:       "staged",

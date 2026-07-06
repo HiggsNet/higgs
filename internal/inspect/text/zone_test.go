@@ -9,7 +9,7 @@ import (
 )
 
 func TestWriteZoneDebugPreservesLegacyLayout(t *testing.T) {
-	view := ZoneDebugView{
+	view := inspect.ZoneDebugView{
 		Detail: inspect.ZoneDetail{
 			Path:            "node-a.catofes.",
 			RecordCount:     1,
@@ -49,7 +49,7 @@ func TestWriteZoneDebugPreservesLegacyLayout(t *testing.T) {
 }
 
 func TestWriteZoneDebugRevocationFields(t *testing.T) {
-	view := ZoneDebugView{
+	view := inspect.ZoneDebugView{
 		Detail: inspect.ZoneDetail{Path: "node-a.catofes."},
 		ActiveRevocation: &inspect.RevocationView{
 			Parent:                "catofes.",

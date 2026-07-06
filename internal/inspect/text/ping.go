@@ -16,9 +16,7 @@ func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {
 	out.Linef("targets: %d", len(view.Targets))
 	if len(view.Targets) == 0 {
 		out.Linef("no IPsec link instances for zone %s", view.Zone)
-		if len(view.AvailableZones) > 0 {
-			out.Linef("available peer zones: %s", strings.Join(view.AvailableZones, ", "))
-		}
+		out.LineIf(len(view.AvailableZones) > 0, "available peer zones: %s", strings.Join(view.AvailableZones, ", "))
 		return out.Err()
 	}
 	out.Linef("count: %d timeout: %s", view.Count, view.Timeout)
@@ -27,10 +25,8 @@ func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {
 		out.Linef("instance %s", instanceID)
 		for _, row := range pingRowsForInstance(view.Targets, instanceID) {
 			out.Linef("  role=%s family=%s", pingTargetRole(row), row.Family)
-			out.Printf("    interface: %s", dash(row.Interface))
-			if row.NetNS != "" {
-				out.Printf("  netns: %s", row.NetNS)
-			}
+			out.Linef("    interface: %s", dash(row.Interface))
+			out.LineIf(row.NetNS != "", "  netns: %s", row.NetNS)
 			out.Blank()
 			out.Linef("    local: %s  peer: %s", dash(row.LocalTunnel), dash(row.PeerTunnel))
 			out.Linef("    result: %s", formatPingResult(row))
