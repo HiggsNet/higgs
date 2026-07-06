@@ -329,23 +329,24 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 }
 
 func syncVerbosePeerView(peerID, configuredAddr, resolvedAddr, addr string, peerState syncPeerState, now time.Time) inspect.SyncVerbosePeerView {
+	debugView := inspect.BuildPeerDebug(peerDebugInput(peerID, "", configuredAddr, resolvedAddr, peerState, now))
 	return inspect.SyncVerbosePeerView{
 		PeerID:           peerID,
 		ConfiguredAddr:   configuredAddr,
 		ResolvedAddr:     resolvedAddr,
 		Addr:             addr,
-		Status:           peerStatus(peerState, now),
-		LastSuccess:      formatLastSuccess(peerState),
-		LastError:        peerState.LastError,
-		NextRetry:        formatNextRetry(peerState, now),
-		UpdateSource:     peerState.LastUpdateSource,
-		LastRelay:        formatUnixTime(peerState.LastRelayUnix),
-		RelaySuppression: formatRelaySuppression(peerState),
-		ObservedAddr:     peerState.ObservedAddr,
-		ObservedStatus:   formatObservedPath(peerState, now),
-		SyncFlow:         peerDebugSyncFlow(peerState),
-		DatagramStats:    peerDebugDatagramStats(peerState),
-		ObjectPullStats:  peerDebugObjectPullStats(peerState),
+		Status:           debugView.Status,
+		LastSuccess:      debugView.LastSuccess,
+		LastError:        debugView.LastError,
+		NextRetry:        debugView.NextRetry,
+		UpdateSource:     debugView.LastUpdateSource,
+		LastRelay:        debugView.LastRelay,
+		RelaySuppression: debugView.RelaySuppression,
+		ObservedAddr:     debugView.ObservedAddr,
+		ObservedStatus:   debugView.ObservedStatus,
+		SyncFlow:         debugView.SyncFlow,
+		DatagramStats:    debugView.DatagramStats,
+		ObjectPullStats:  debugView.ObjectPullStats,
 	}
 }
 

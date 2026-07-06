@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
@@ -184,6 +185,31 @@ type PeerDebugView struct {
 	ObjectPullStats  PeerObjectPullStatsView
 }
 
+type PeerDebugInput struct {
+	PeerID                string
+	Source                string
+	ConfiguredAddr        string
+	ResolvedAddr          string
+	LastSyncUnix          int64
+	LastError             string
+	BackoffUntilUnix      int64
+	DiscoveredAddr        string
+	ObservedAddr          string
+	ObservedUntilUnix     int64
+	ObservedLastSeenUnix  int64
+	ObservedLastSyncUnix  int64
+	ObservedFailureCount  int
+	ObservedSource        string
+	LastUpdateSource      string
+	LastRelayUnix         int64
+	LastRelaySuppression  string
+	LastRelaySuppressedAt int64
+	SyncFlow              PeerSyncFlowView
+	DatagramStats         PeerDatagramStatsView
+	ObjectPullStats       PeerObjectPullStatsView
+	Now                   time.Time
+}
+
 type PeerSyncFlowView struct {
 	ActivePullState     string
 	ActivePullLastEvent string
@@ -233,6 +259,30 @@ type PeerObjectPullStatsView struct {
 	LastError              string
 }
 
+func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
+	return PeerDebugView{
+		PeerID:           input.PeerID,
+		Source:           input.Source,
+		ConfiguredAddr:   input.ConfiguredAddr,
+		ResolvedAddr:     input.ResolvedAddr,
+		Status:           peerDebugStatus(input, input.Now),
+		LastSuccess:      formatPeerDebugLastSuccess(input.LastSyncUnix),
+		LastError:        input.LastError,
+		Backoff:          formatPeerDebugBackoff(input.BackoffUntilUnix, input.Now),
+		NextRetry:        formatPeerDebugNextRetry(input.BackoffUntilUnix, input.Now),
+		KnownEndpoint:    input.ResolvedAddr,
+		DiscoveredAddr:   input.DiscoveredAddr,
+		ObservedAddr:     input.ObservedAddr,
+		ObservedStatus:   formatPeerDebugObservedPath(input, input.Now),
+		LastUpdateSource: input.LastUpdateSource,
+		LastRelay:        formatPeerDebugUnixTime(input.LastRelayUnix),
+		RelaySuppression: formatPeerDebugRelaySuppression(input.LastRelaySuppression, input.LastRelaySuppressedAt),
+		SyncFlow:         input.SyncFlow,
+		DatagramStats:    input.DatagramStats,
+		ObjectPullStats:  input.ObjectPullStats,
+	}
+}
+
 func BuildPeerIDs(input PeerSetInput) []string {
 	local := make(map[string]bool, len(input.LocalIDs))
 	for _, id := range input.LocalIDs {
@@ -258,6 +308,91 @@ func BuildPeerIDs(input PeerSetInput) []string {
 	}
 	sort.Slice(out, func(i, j int) bool { return ZonePathLess(out[i], out[j]) })
 	return out
+}
+
+func peerDebugStatus(input PeerDebugInput, now time.Time) string {
+	if peerDebugBackoffRemaining(input.BackoffUntilUnix, now) > 0 {
+		return "backoff"
+	}
+	if input.LastError != "" {
+		return "stale"
+	}
+	if input.LastSyncUnix == 0 {
+		return "unknown"
+	}
+	if now.Sub(time.Unix(input.LastSyncUnix, 0)) > 2*time.Minute {
+		return "stale"
+	}
+	return "online"
+}
+
+func formatPeerDebugLastSuccess(unix int64) string {
+	if unix == 0 {
+		return "never"
+	}
+	return formatPeerDebugUnixTime(unix)
+}
+
+func formatPeerDebugBackoff(untilUnix int64, now time.Time) string {
+	remaining := peerDebugBackoffRemaining(untilUnix, now)
+	if remaining <= 0 {
+		return "-"
+	}
+	return remaining.Round(time.Second).String()
+}
+
+func formatPeerDebugNextRetry(untilUnix int64, now time.Time) string {
+	if peerDebugBackoffRemaining(untilUnix, now) <= 0 {
+		return "-"
+	}
+	return formatPeerDebugUnixTime(untilUnix)
+}
+
+func formatPeerDebugUnixTime(unix int64) string {
+	if unix == 0 {
+		return "never"
+	}
+	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
+}
+
+func formatPeerDebugRelaySuppression(reason string, suppressedAtUnix int64) string {
+	if reason == "" {
+		return "-"
+	}
+	at := formatPeerDebugUnixTime(suppressedAtUnix)
+	if at == "never" {
+		return reason
+	}
+	return fmt.Sprintf("%s at=%s", reason, at)
+}
+
+func formatPeerDebugObservedPath(input PeerDebugInput, now time.Time) string {
+	if input.ObservedAddr == "" {
+		return "-"
+	}
+	state := "expired"
+	if input.ObservedUntilUnix != 0 && now.Before(time.Unix(input.ObservedUntilUnix, 0)) {
+		state = "active"
+	}
+	return fmt.Sprintf("%s until=%s last_seen=%s last_success=%s failures=%d source=%s",
+		state,
+		formatPeerDebugUnixTime(input.ObservedUntilUnix),
+		formatPeerDebugUnixTime(input.ObservedLastSeenUnix),
+		formatPeerDebugUnixTime(input.ObservedLastSyncUnix),
+		input.ObservedFailureCount,
+		debugDash(input.ObservedSource),
+	)
+}
+
+func peerDebugBackoffRemaining(untilUnix int64, now time.Time) time.Duration {
+	if untilUnix == 0 {
+		return 0
+	}
+	until := time.Unix(untilUnix, 0)
+	if !until.After(now) {
+		return 0
+	}
+	return until.Sub(now)
 }
 
 func PeerKnown(input PeerSetInput, peerID string) bool {

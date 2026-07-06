@@ -1,6 +1,10 @@
 package inspect
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestBuildPeerIDsMergesFiltersAndSorts(t *testing.T) {
 	got := BuildPeerIDs(PeerSetInput{
@@ -174,5 +178,54 @@ func TestBuildEndpointDebugSuppressesPrivateReflectorErrors(t *testing.T) {
 	})
 	if got.ReflectorError != "" {
 		t.Fatalf("ReflectorError = %q, want empty", got.ReflectorError)
+	}
+}
+
+func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	got := BuildPeerDebug(PeerDebugInput{
+		PeerID:                "node-b.catofes.",
+		Source:                "bootstrap",
+		ConfiguredAddr:        "127.0.0.1:9999",
+		ResolvedAddr:          "127.0.0.1:2000",
+		LastSyncUnix:          now.Add(-time.Minute).Unix(),
+		BackoffUntilUnix:      now.Add(30 * time.Second).Unix(),
+		DiscoveredAddr:        "127.0.0.1:2000",
+		ObservedAddr:          "127.0.0.1:3000",
+		ObservedUntilUnix:     now.Add(time.Hour).Unix(),
+		ObservedLastSeenUnix:  now.Unix(),
+		ObservedLastSyncUnix:  now.Add(-time.Minute).Unix(),
+		ObservedFailureCount:  2,
+		ObservedSource:        "PING",
+		LastUpdateSource:      "node-c.catofes.",
+		LastRelayUnix:         now.Add(-2 * time.Minute).Unix(),
+		LastRelaySuppression:  "relay_throttled",
+		LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
+		SyncFlow: PeerSyncFlowView{
+			ActivePullState: "object_pulling",
+		},
+		DatagramStats: PeerDatagramStatsView{
+			TooLargeDropped: 2,
+		},
+		ObjectPullStats: PeerObjectPullStatsView{
+			Attempts: 3,
+		},
+		Now: now,
+	})
+
+	if got.PeerID != "node-b.catofes." || got.Source != "bootstrap" || got.ResolvedAddr != "127.0.0.1:2000" {
+		t.Fatalf("identity fields = %+v", got)
+	}
+	if got.Status != "backoff" || got.Backoff != "30s" || got.NextRetry == "-" {
+		t.Fatalf("retry fields = status=%q backoff=%q next=%q", got.Status, got.Backoff, got.NextRetry)
+	}
+	if !strings.Contains(got.ObservedStatus, "active until=") || !strings.Contains(got.ObservedStatus, "failures=2 source=PING") {
+		t.Fatalf("observed status = %q", got.ObservedStatus)
+	}
+	if !strings.Contains(got.RelaySuppression, "relay_throttled at=") {
+		t.Fatalf("relay suppression = %q", got.RelaySuppression)
+	}
+	if got.SyncFlow.ActivePullState != "object_pulling" || got.DatagramStats.TooLargeDropped != 2 || got.ObjectPullStats.Attempts != 3 {
+		t.Fatalf("nested diagnostics = %+v", got)
 	}
 }

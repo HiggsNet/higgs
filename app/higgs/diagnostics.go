@@ -92,26 +92,33 @@ func debugPeer(peerID string) error {
 }
 
 func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerState syncPeerState, now time.Time) inspect.PeerDebugView {
-	return inspect.PeerDebugView{
-		PeerID:           peerID,
-		Source:           source,
-		ConfiguredAddr:   configuredAddr,
-		ResolvedAddr:     resolved,
-		Status:           peerStatus(peerState, now),
-		LastSuccess:      formatLastSuccess(peerState),
-		LastError:        peerState.LastError,
-		Backoff:          formatBackoff(peerState, now),
-		NextRetry:        formatNextRetry(peerState, now),
-		KnownEndpoint:    resolved,
-		DiscoveredAddr:   peerState.DiscoveredAddr,
-		ObservedAddr:     peerState.ObservedAddr,
-		ObservedStatus:   formatObservedPath(peerState, now),
-		LastUpdateSource: peerState.LastUpdateSource,
-		LastRelay:        formatUnixTime(peerState.LastRelayUnix),
-		RelaySuppression: formatRelaySuppression(peerState),
-		SyncFlow:         peerDebugSyncFlow(peerState),
-		DatagramStats:    peerDebugDatagramStats(peerState),
-		ObjectPullStats:  peerDebugObjectPullStats(peerState),
+	return inspect.BuildPeerDebug(peerDebugInput(peerID, source, configuredAddr, resolved, peerState, now))
+}
+
+func peerDebugInput(peerID, source, configuredAddr, resolved string, peerState syncPeerState, now time.Time) inspect.PeerDebugInput {
+	return inspect.PeerDebugInput{
+		PeerID:                peerID,
+		Source:                source,
+		ConfiguredAddr:        configuredAddr,
+		ResolvedAddr:          resolved,
+		LastSyncUnix:          peerState.LastSyncUnix,
+		LastError:             peerState.LastError,
+		BackoffUntilUnix:      peerState.BackoffUntilUnix,
+		DiscoveredAddr:        peerState.DiscoveredAddr,
+		ObservedAddr:          peerState.ObservedAddr,
+		ObservedUntilUnix:     peerState.ObservedUntilUnix,
+		ObservedLastSeenUnix:  peerState.ObservedLastSeenUnix,
+		ObservedLastSyncUnix:  peerState.ObservedLastSyncUnix,
+		ObservedFailureCount:  peerState.ObservedFailureCount,
+		ObservedSource:        peerState.ObservedSource,
+		LastUpdateSource:      peerState.LastUpdateSource,
+		LastRelayUnix:         peerState.LastRelayUnix,
+		LastRelaySuppression:  peerState.LastRelaySuppression,
+		LastRelaySuppressedAt: peerState.LastRelaySuppressedAt,
+		SyncFlow:              peerDebugSyncFlow(peerState),
+		DatagramStats:         peerDebugDatagramStats(peerState),
+		ObjectPullStats:       peerDebugObjectPullStats(peerState),
+		Now:                   now,
 	}
 }
 

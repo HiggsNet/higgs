@@ -56,7 +56,8 @@
       - 已将 rotate/links 共享的 IPsec 端口 generation/port 摘要 helper 下沉到 `internal/inspect`，`debug links` presenter 和 `debug rotate` adapter 复用同一套只读 formatter；对应测试迁到 `internal/inspect`。
     - `app/higgs/debug_ping.go` 已新增 `internal/ping` + `inspect.PingDebugView` + `inspect/text.WritePingDebug`：一次性 ping 的 target 过滤、prober 执行、debug view 构建和文本 presenter 已下沉；ping target 排序/instance 分组已收敛到 `inspect.BuildPingDebugView`，app 层仅保留 state/config -> health targets 的 adapter 和 CLI wiring。
     - `sync status --verbose` 已新增 `inspect.SyncStatusView` + `inspect/text.WriteSyncStatus`：summary、bootstrap/discovered peer 明细、sync_flow、datagram/object_pull 诊断行和 zone 摘要输出已从 `sync.go` 下沉；app 层仅保留 state/config/gossip digest 到 view 的投影。
-    - `app/higgs/cmd.go` 的 `cmdDebug()` 只做 CLI 子命令注册、参数解析、source 选择和 presenter 调用。
+    - 已新增 `inspect.BuildPeerDebug` / `PeerDebugInput`：`debug peer` 与 `sync status --verbose` 共用 peer status、backoff、observed path、relay suppression 和诊断计数 view 构建；app 层只保留 `syncPeerState` 到 inspect input 的薄投影。
+    - 已将 `cmdDebug()` 从 `app/higgs/cmd.go` 拆到 `app/higgs/debug_cmd.go`，root command 文件不再承载 debug 子命令注册细节；`cmdDebug()` 仍只做 CLI 子命令注册、参数解析、source 选择和 presenter 调用。
   - [x] 为 inspect/text 建立 golden/output 测试，迁移现有 `TestDebug*Output`、`TestWriteDebug*`、admission diagnosis 输出测试；app 层只保留命令 wiring/fallback 的窄测试。
     - 已新增 peer/endpoints/rotate/ping/sync status/links/routes/routing/health/zone/records/revocation/firewall/admission 等 inspect/text focused output 测试；`debug ping` 选择/执行/view 构建测试已迁到 `internal/ping`，文本断言已迁到 `internal/inspect/text`；app 层 legacy `TestDebug*Output` / `TestWriteDebug*` 已移除，保留的 app 窄测试只覆盖 `syncPeerState` 等私有 runtime state 到 inspect view 的投影。
   - [x] 删除 `observer_server.go` 中只为兼容旧 handler 测试保留的 app 层 wrapper 或改测 `internal/observer.Server.Handler()`；保留必要 shim 时必须标注迁移原因。
