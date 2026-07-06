@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
@@ -18,6 +19,12 @@ type ZoneDetailInput struct {
 	Network        *zone.NetworkState
 	Now            time.Time
 	IncludeHistory bool
+}
+
+type ZoneDebugInput struct {
+	Network *zone.NetworkState
+	Path    zone.ZonePath
+	Now     time.Time
 }
 
 type ZoneDetail struct {
@@ -162,6 +169,37 @@ func BuildZoneDetail(input ZoneDetailInput) ZoneDetail {
 	return view
 }
 
+func BuildZoneDebug(input ZoneDebugInput) (ZoneDebugView, bool) {
+	if input.Network == nil {
+		return ZoneDebugView{}, false
+	}
+	zs := input.Network.Zones[input.Path]
+	if zs == nil {
+		return ZoneDebugView{}, false
+	}
+	verifyResult := "ok"
+	if err := higgscrypto.VerifyChain(input.Network, input.Path, input.Now); err != nil {
+		verifyResult = err.Error()
+	}
+	var activeRevocation *RevocationView
+	if revocation := input.Network.ActiveRevocation(input.Path, input.Now); revocation != nil {
+		view := BuildRevocation(revocation)
+		activeRevocation = &view
+	}
+	return ZoneDebugView{
+		Detail: BuildZoneDetail(ZoneDetailInput{
+			Path:           input.Path,
+			State:          zs,
+			Network:        input.Network,
+			Now:            input.Now,
+			IncludeHistory: false,
+		}),
+		RootHash:         zoneDigestRootHex(input.Network, input.Path),
+		VerifyResult:     verifyResult,
+		ActiveRevocation: activeRevocation,
+	}, true
+}
+
 func BuildRecord(rec *zone.Record, historyCount int) RecordView {
 	if rec == nil {
 		return RecordView{}
@@ -186,6 +224,15 @@ func BuildRecord(rec *zone.Record, historyCount int) RecordView {
 		out.ValueJSON = parsed
 	}
 	return out
+}
+
+func zoneDigestRootHex(ns *zone.NetworkState, path zone.ZonePath) string {
+	for _, digest := range gossip.ZoneDigests(ns) {
+		if digest.Zone == path {
+			return hex.EncodeToString(digest.RootHash)
+		}
+	}
+	return ""
 }
 
 func BuildRecordDetail(rec *zone.Record, history []*zone.Record, historyLimit int) RecordDetailView {

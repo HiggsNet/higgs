@@ -3,9 +3,11 @@ package main
 import (
 	"crypto/ed25519"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
@@ -107,6 +109,28 @@ func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) inspect.Admissio
 	}
 
 	return d
+}
+
+func debugAdmission() error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	if response, ok, err := admissionStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		fmt.Printf("daemon: online peer_id=%s\n", response.PeerID)
+		if response.Admission != nil {
+			return inspecttext.WriteAdmissionDiagnosis(os.Stdout, *response.Admission)
+		}
+		fmt.Printf("admission: not available from daemon\n")
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	diagnosis := diagnoseAutoJoinAdmission(state, rt.Now())
+	return inspecttext.WriteAdmissionDiagnosis(os.Stdout, diagnosis)
 }
 
 // updateAdmissionOnPending records the current pending diagnosis into the

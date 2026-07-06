@@ -106,6 +106,40 @@ func TestBuildZoneDetailOmitsHistoryWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildZoneDebugBuildsDetailAndDigest(t *testing.T) {
+	zs := zone.NewZoneState("node-a.catofes.", nil)
+	zs.Records["identity"] = &zone.Record{Zone: "node-a.catofes.", Key: "identity", Type: "profile", Value: []byte("node-a"), Version: 1}
+	network := &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{"node-a.catofes.": zs}}
+	network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+
+	got, ok := BuildZoneDebug(ZoneDebugInput{
+		Network: network,
+		Path:    "node-a.catofes.",
+		Now:     time.Unix(100, 0),
+	})
+
+	if !ok {
+		t.Fatalf("BuildZoneDebug returned ok=false")
+	}
+	if got.Detail.Path != "node-a.catofes." || got.Detail.RecordCount != 1 || got.RootHash == "" {
+		t.Fatalf("zone debug view = %+v", got)
+	}
+	if got.VerifyResult == "" {
+		t.Fatalf("verify result should be explicit: %+v", got)
+	}
+}
+
+func TestBuildZoneDebugMissingZone(t *testing.T) {
+	_, ok := BuildZoneDebug(ZoneDebugInput{
+		Network: &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{}},
+		Path:    "missing.catofes.",
+		Now:     time.Unix(100, 0),
+	})
+	if ok {
+		t.Fatalf("BuildZoneDebug missing zone returned ok=true")
+	}
+}
+
 func TestBuildRecordDetailIncludesLimitedHistory(t *testing.T) {
 	active := &zone.Record{
 		Zone:    "node-a.catofes.",
