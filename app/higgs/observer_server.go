@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,9 +14,7 @@ import (
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/internal/observer"
-	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 	"github.com/Catofes/higgs/pkg/routing"
 )
 
@@ -145,11 +142,11 @@ func (s *observerServer) handleStatic(w http.ResponseWriter, r *http.Request) {
 func (p *observerProvider) Status() (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {
-		return map[string]any{"daemon_online": false}, nil
+		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
 	}
 	state, _, meta := d.snapshotState()
 	if state == nil {
-		return map[string]any{"daemon_online": false}, nil
+		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
 	}
 	var linkInstances int
 	var desiredLinks int
@@ -189,47 +186,37 @@ func (p *observerProvider) Status() (any, error) {
 		listenAddr = d.Sync.Config.ListenAddr
 	}
 	managedZone = string(state.ManagedZone)
-	return map[string]any{
-		"peer_id":             peerID,
-		"managed_zone":        managedZone,
-		"listen_addr":         listenAddr,
-		"daemon_online":       true,
-		"state_revision":      meta.Revision,
-		"snapshot_time_unix":  meta.SnapshotTime.Unix(),
-		"dirty":               meta.Dirty,
-		"reconcile_progress":  meta.ReconcileProgress,
-		"known_zones":         knownZones,
-		"known_peers":         knownPeers,
-		"link_instances":      linkInstances,
-		"desired_links":       desiredLinks,
-		"last_link_error":     lastLinkError,
-		"last_routing_error":  lastRoutingError,
-		"last_sync_unix":      lastSyncUnix,
-		"last_reconcile_unix": lastReconcileUnix,
+	return inspecthttp.StatusResponse{
+		PeerID:            peerID,
+		ManagedZone:       managedZone,
+		ListenAddr:        listenAddr,
+		DaemonOnline:      true,
+		StateRevision:     meta.Revision,
+		SnapshotTimeUnix:  meta.SnapshotTime.Unix(),
+		Dirty:             meta.Dirty,
+		ReconcileProgress: meta.ReconcileProgress,
+		KnownZones:        knownZones,
+		KnownPeers:        knownPeers,
+		LinkInstances:     linkInstances,
+		DesiredLinks:      desiredLinks,
+		LastLinkError:     lastLinkError,
+		LastRoutingError:  lastRoutingError,
+		LastSyncUnix:      lastSyncUnix,
+		LastReconcileUnix: lastReconcileUnix,
 	}, nil
-}
-
-// zoneSummaryJSON is the per-zone summary for /api/v1/zones
-type zoneSummaryJSON struct {
-	Path        string `json:"path"`
-	Records     int    `json:"records"`
-	Delegations int    `json:"delegations"`
-	Revocations int    `json:"revocations"`
-	Revoked     bool   `json:"revoked"`
-	RootHashHex string `json:"root_hash"`
 }
 
 func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {
-		return map[string]any{"zones": []any{}}, nil
+		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil {
-		return map[string]any{"zones": []any{}}, nil
+		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
 	}
 	if state.Network == nil {
-		return map[string]any{"zones": []any{}}, nil
+		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
 	}
 	now := d.Sync.now()
 	// Single zone detail
@@ -247,71 +234,7 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 			IncludeHistory: true,
 		}), nil
 	}
-	// All zones summary
-	zones := make([]zoneSummaryJSON, 0, len(state.Network.Zones))
-	paths := make([]zone.ZonePath, 0, len(state.Network.Zones))
-	for p := range state.Network.Zones {
-		paths = append(paths, p)
-	}
-	sort.Slice(paths, func(i, j int) bool { return inspect.ZonePathLess(string(paths[i]), string(paths[j])) })
-	for _, p := range paths {
-		zs := state.Network.Zones[p]
-		if zs == nil {
-			continue
-		}
-		revoked := state.Network.IsZoneRevoked(p, now)
-		rootHash := ""
-		if zs.Authority != nil {
-			rootHash = hex.EncodeToString(higgscrypto.AuthorityHash(zs.Authority))
-		}
-		zones = append(zones, zoneSummaryJSON{
-			Path:        string(p),
-			Records:     len(zs.Records),
-			Delegations: len(zs.Delegations),
-			Revocations: len(zs.Revocations),
-			Revoked:     revoked,
-			RootHashHex: rootHash,
-		})
-	}
-	globalRoot := ""
-	digests := gossip.ZoneDigests(state.Network)
-	if root := globalRootHash(digests); root != nil {
-		globalRoot = hex.EncodeToString(root)
-	}
-	return map[string]any{
-		"zones":       zones,
-		"global_root": globalRoot,
-	}, nil
-}
-
-// peerJSON is the per-peer view for /api/v1/peers
-type peerJSON struct {
-	PeerID                string                         `json:"peer_id"`
-	Source                string                         `json:"source,omitempty"`
-	ConfiguredAddr        string                         `json:"configured_addr,omitempty"`
-	LastSyncUnix          int64                          `json:"last_sync_unix"`
-	LastAttemptUnix       int64                          `json:"last_attempt_unix"`
-	BackoffUntilUnix      int64                          `json:"backoff_until_unix"`
-	LastRelayUnix         int64                          `json:"last_relay_unix,omitempty"`
-	FailureCount          int                            `json:"failure_count"`
-	LastError             string                         `json:"last_error,omitempty"`
-	LastUpdateSource      string                         `json:"last_update_source,omitempty"`
-	LastRelaySuppression  string                         `json:"last_relay_suppression,omitempty"`
-	LastRelaySuppressedAt int64                          `json:"last_relay_suppressed_at,omitempty"`
-	DiscoveredAddr        string                         `json:"discovered_addr,omitempty"`
-	DiscoveredAtUnix      int64                          `json:"discovered_at_unix,omitempty"`
-	ObservedAddr          string                         `json:"observed_addr,omitempty"`
-	ObservedFirstSeenUnix int64                          `json:"observed_first_seen_unix,omitempty"`
-	ObservedLastSeenUnix  int64                          `json:"observed_last_seen_unix,omitempty"`
-	ObservedLastSyncUnix  int64                          `json:"observed_last_sync_unix,omitempty"`
-	ObservedUntilUnix     int64                          `json:"observed_until_unix,omitempty"`
-	ObservedSource        string                         `json:"observed_source,omitempty"`
-	ObservedFailureCount  int                            `json:"observed_failure_count,omitempty"`
-	ObservedGraceAddrs    []observedGraceAddrState       `json:"observed_grace_addrs,omitempty"`
-	Endpoints             []inspect.PeerEndpointView     `json:"endpoints,omitempty"`
-	DatagramStats         *datagramStats                 `json:"datagram_stats,omitempty"`
-	ObjectPullStats       *objectPullStats               `json:"object_pull_stats,omitempty"`
-	RejectedDigests       map[string]rejectedDigestState `json:"rejected_digests,omitempty"`
+	return inspecthttp.ZonesFromNetwork(state.Network, now.Unix()), nil
 }
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
@@ -334,7 +257,7 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 		return peerJSONFromState(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()), nil
 	}
 	// All peers
-	peers := make([]peerJSON, 0, len(peerIDs))
+	peers := make([]inspecthttp.PeerJSON, 0, len(peerIDs))
 	seen := make(map[string]bool, len(peerIDs))
 	for _, id := range peerIDs {
 		if seen[id] {
@@ -343,10 +266,10 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 		seen[id] = true
 		peers = append(peers, peerJSONFromState(id, state.SyncPeers[id], d.Sync.Config, state.Network, d.Sync.now()))
 	}
-	return map[string]any{"peers": peers}, nil
+	return inspecthttp.PeersResponse{Peers: peers}, nil
 }
 
-func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) peerJSON {
+func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) inspecthttp.PeerJSON {
 	configuredAddr := bootstrapAddrForPeer(config, id)
 	source := "discovered"
 	if configuredAddr != "" {
@@ -354,7 +277,7 @@ func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *
 	} else if ps.ObservedAddr != "" {
 		source = "observed"
 	}
-	return peerJSON{
+	return inspecthttp.PeerJSON{
 		PeerID:                id,
 		Source:                source,
 		ConfiguredAddr:        configuredAddr,
@@ -403,11 +326,11 @@ func peerEndpointsJSON(peerID string, ps syncPeerState, config *syncConfigFile, 
 func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {
-		return map[string]any{"instances": []any{}}, nil
+		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil {
-		return map[string]any{"instances": []any{}}, nil
+		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
 	build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
 	view := build.Inspection
@@ -615,19 +538,19 @@ func (p *observerProvider) Routes() (any, error) {
 func (p *observerProvider) Bird() (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {
-		return map[string]any{"instances": map[string]any{}}, nil
+		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil {
-		return map[string]any{"instances": map[string]any{}}, nil
+		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
 	lastRoutingError := ""
 	if state.RoutingReconcile != nil {
 		lastRoutingError = state.RoutingReconcile.LastError
 	}
-	return map[string]any{
-		"instances":          cloneBirdInstances(state.BirdInstances),
-		"last_routing_error": lastRoutingError,
+	return inspecthttp.BirdResponse{
+		Instances:        cloneBirdInstances(state.BirdInstances),
+		LastRoutingError: lastRoutingError,
 	}, nil
 }
 
