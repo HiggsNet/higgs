@@ -43,6 +43,13 @@ func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {
 	if state == nil {
 		return nil
 	}
+	return inspecttext.WritePeerLifecycleDebug(w, buildPeerLifecycleDebugView(rt, state))
+}
+
+func buildPeerLifecycleDebugView(rt *Runtime, state *stateFile) inspect.PeerLifecycleDebugView {
+	if state == nil {
+		return inspect.PeerLifecycleDebugView{}
+	}
 	now := rt.Now()
 	cfg := inspect.PeerLifecycleConfig{}
 	if rt != nil && rt.Config != nil {
@@ -52,7 +59,7 @@ func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {
 
 	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
 	normalized := inspect.NormalizePeerLifecycleConfig(cfg)
-	return inspecttext.WritePeerLifecycleDebug(w, inspect.PeerLifecycleDebugView{
+	return inspect.PeerLifecycleDebugView{
 		Config: inspect.PeerLifecycleDebugConfig{
 			StaleAfter:       normalized.StaleAfter,
 			OfflineAfter:     normalized.OfflineAfter,
@@ -60,7 +67,7 @@ func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {
 			KeepSAWhileStale: normalized.KeepSAWhileStale,
 		},
 		Peers: peers,
-	})
+	}
 }
 
 // peerStatusSnapshotForControl returns the peer status list for a daemon

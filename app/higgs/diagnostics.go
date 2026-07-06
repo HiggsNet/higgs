@@ -374,34 +374,42 @@ func debugZone(path zone.ZonePath) error {
 	if err != nil {
 		return err
 	}
+	view, err := buildDebugZoneView(state, path, rt.Now())
+	if err != nil {
+		return err
+	}
+	return inspecttext.WriteZoneDebug(os.Stdout, view)
+}
+
+func buildDebugZoneView(state *stateFile, path zone.ZonePath, now time.Time) (inspect.ZoneDebugView, error) {
 	configureValidation(state.Network)
 	zs := state.Network.Zones[path]
 	if zs == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+		return inspect.ZoneDebugView{}, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
 	digest := zoneDigest(state.Network, path)
 	verifyResult := "ok"
-	if err := higgscrypto.VerifyChain(state.Network, path, rt.Now()); err != nil {
+	if err := higgscrypto.VerifyChain(state.Network, path, now); err != nil {
 		verifyResult = err.Error()
 	}
-	revocation := state.Network.ActiveRevocation(path, rt.Now())
+	revocation := state.Network.ActiveRevocation(path, now)
 	var activeRevocation *inspect.RevocationView
 	if revocation != nil {
 		view := inspect.BuildRevocation(revocation)
 		activeRevocation = &view
 	}
-	return inspecttext.WriteZoneDebug(os.Stdout, inspect.ZoneDebugView{
+	return inspect.ZoneDebugView{
 		Detail: inspect.BuildZoneDetail(inspect.ZoneDetailInput{
 			Path:           path,
 			State:          zs,
 			Network:        state.Network,
-			Now:            rt.Now(),
+			Now:            now,
 			IncludeHistory: false,
 		}),
 		RootHash:         hex.EncodeToString(digest.RootHash),
 		VerifyResult:     verifyResult,
 		ActiveRevocation: activeRevocation,
-	})
+	}, nil
 }
 
 func debugRecords(path zone.ZonePath, prefix string, values bool) error {

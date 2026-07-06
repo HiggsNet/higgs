@@ -140,3 +140,34 @@ func TestBuildRecordDetailIncludesLimitedHistory(t *testing.T) {
 		t.Fatalf("decoded record detail missing flat JSON fields: %#v", decoded)
 	}
 }
+
+func TestBuildRecordsDebugFiltersByPrefix(t *testing.T) {
+	zs := zone.NewZoneState("node-a.catofes.", nil)
+	zs.Records["ipsec/profile"] = &zone.Record{Zone: "node-a.catofes.", Key: "ipsec/profile", Type: "ipsec.profile.v1", Value: []byte(`{"enabled":true}`), Version: 1}
+	zs.Records["ipsec/transport-key"] = &zone.Record{Zone: "node-a.catofes.", Key: "ipsec/transport-key", Type: "ipsec.transport_key.v1", Value: []byte("key"), Version: 1}
+	zs.Records["sync/endpoint/udp"] = &zone.Record{Zone: "node-a.catofes.", Key: "sync/endpoint/udp", Type: "sync.endpoint", Value: []byte("endpoint"), Version: 1}
+	network := &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{"node-a.catofes.": zs}}
+
+	view := BuildRecordsDebug(RecordsDebugInput{
+		Network: network,
+		Path:    "node-a.catofes.",
+		Prefix:  "ipsec/",
+	})
+
+	if view.ZoneCount != 1 || view.RecordCount != 2 || view.Prefix != "ipsec/" || len(view.Zones) != 1 {
+		t.Fatalf("records debug view = %+v", view)
+	}
+	keys := map[string]bool{}
+	for _, record := range view.Zones[0].Records {
+		keys[record.Key] = true
+		if record.Value == "" {
+			t.Fatalf("record value should be retained for presenter: %+v", record)
+		}
+	}
+	if !keys["ipsec/profile"] || !keys["ipsec/transport-key"] {
+		t.Fatalf("missing expected ipsec records: %+v", view.Zones[0].Records)
+	}
+	if keys["sync/endpoint/udp"] {
+		t.Fatalf("prefix leaked endpoint record: %+v", view.Zones[0].Records)
+	}
+}

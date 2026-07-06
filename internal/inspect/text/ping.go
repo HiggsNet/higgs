@@ -3,7 +3,6 @@ package text
 import (
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 )
 
 func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {
+	view = inspect.BuildPingDebugView(view)
 	out := newLineWriter(w)
 	out.Linef("zone: %s", view.Zone)
 	out.Linef("targets: %d", len(view.Targets))
@@ -21,10 +21,10 @@ func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {
 	}
 	out.Linef("count: %d timeout: %s", view.Count, view.Timeout)
 	out.Blank()
-	for _, instanceID := range orderedPingInstances(view.Targets) {
-		out.Linef("instance %s", instanceID)
-		for _, row := range pingRowsForInstance(view.Targets, instanceID) {
-			out.Linef("  role=%s family=%s", pingTargetRole(row), row.Family)
+	for _, instance := range view.Instances {
+		out.Linef("instance %s", instance.InstanceID)
+		for _, row := range instance.Rows {
+			out.Linef("  role=%s family=%s", inspect.PingTargetRole(row), row.Family)
 			if row.NetNS != "" {
 				out.Linef("    interface: %s  netns: %s", dash(row.Interface), row.NetNS)
 			} else {
@@ -36,52 +36,6 @@ func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {
 		}
 	}
 	return out.Err()
-}
-
-func orderedPingInstances(targets []inspect.PingTargetView) []string {
-	seen := map[string]struct{}{}
-	ordered := make([]string, 0, len(targets))
-	for _, target := range targets {
-		id := pingTargetInstanceID(target)
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ordered = append(ordered, id)
-	}
-	sort.Strings(ordered)
-	return ordered
-}
-
-func pingRowsForInstance(targets []inspect.PingTargetView, instanceID string) []inspect.PingTargetView {
-	rows := make([]inspect.PingTargetView, 0, len(targets))
-	for _, target := range targets {
-		if pingTargetInstanceID(target) != instanceID {
-			continue
-		}
-		rows = append(rows, target)
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		if ri, rj := pingTargetRole(rows[i]), pingTargetRole(rows[j]); ri != rj {
-			return ri < rj
-		}
-		return rows[i].Family < rows[j].Family
-	})
-	return rows
-}
-
-func pingTargetInstanceID(target inspect.PingTargetView) string {
-	if target.InstanceID != "" {
-		return target.InstanceID
-	}
-	return target.ProbeID
-}
-
-func pingTargetRole(target inspect.PingTargetView) string {
-	if target.Role != "" {
-		return target.Role
-	}
-	return "active"
 }
 
 func formatPingResult(target inspect.PingTargetView) string {

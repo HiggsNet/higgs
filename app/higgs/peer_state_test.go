@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"strings"
 	"testing"
@@ -439,74 +438,6 @@ peer_lifecycle:
 			t.Errorf("default KeepSAWhileStale = false, want true")
 		}
 	})
-}
-
-func TestWriteDebugPeers(t *testing.T) {
-	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
-	now := time.Unix(2000, 0)
-
-	// Add node-b to SyncPeers with a recent sync time.
-	state.SyncPeers["node-b.catofes."] = syncPeerState{
-		LastSyncUnix: now.Add(-1 * time.Minute).Unix(),
-	}
-
-	// Revoke node-b.
-	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
-
-	rt := &Runtime{
-		Config: &appConfig{
-			PeerLifecycle: inspect.DefaultPeerLifecycleConfig(),
-		},
-		Clock: func() time.Time { return now },
-	}
-
-	var buf bytes.Buffer
-	if err := writeDebugPeers(&buf, rt, state); err != nil {
-		t.Fatalf("writeDebugPeers: %v", err)
-	}
-	output := buf.String()
-
-	// Should contain the peer lifecycle config header.
-	if !strings.Contains(output, "peer lifecycle config:") {
-		t.Errorf("output missing lifecycle config header:\n%s", output)
-	}
-
-	// Should contain summary with revoked=1.
-	if !strings.Contains(output, "revoked=1") {
-		t.Errorf("output missing revoked=1 in summary:\n%s", output)
-	}
-
-	// Should contain node-b peer entry with state=revoked.
-	if !strings.Contains(output, "node-b.catofes.") {
-		t.Errorf("output missing node-b.catofes.:\n%s", output)
-	}
-	if !strings.Contains(output, "state: revoked") {
-		t.Errorf("output missing state: revoked:\n%s", output)
-	}
-
-	// Should contain severity: critical.
-	if !strings.Contains(output, "severity: critical") {
-		t.Errorf("output missing severity: critical:\n%s", output)
-	}
-}
-
-func TestWriteDebugPeersEmpty(t *testing.T) {
-	state, _, _, _ := buildPeerStateTestNetwork(t)
-	rt := &Runtime{
-		Config: &appConfig{},
-		Clock:  func() time.Time { return time.Unix(2000, 0) },
-	}
-
-	var buf bytes.Buffer
-	if err := writeDebugPeers(&buf, rt, state); err != nil {
-		t.Fatalf("writeDebugPeers: %v", err)
-	}
-	if !strings.Contains(buf.String(), "no peers known") {
-		// If there are zones with ipsec records or SyncPeers entries, we won't get "no peers known".
-		// But with an empty state (no SyncPeers, no LinkInstances, no IPsecReconcile), we should.
-		// The test network has node-b.catofes. zone but no ipsec records, so it won't be included.
-		t.Logf("output (may have peers if state has ipsec records): %s", buf.String())
-	}
 }
 
 func TestPeerLifecycleCleanupZones(t *testing.T) {

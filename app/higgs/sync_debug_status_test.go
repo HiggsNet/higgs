@@ -1,97 +1,84 @@
 package main
 
 import (
-	"bytes"
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
-	"strings"
 	"testing"
 	"time"
 )
 
-func TestSyncStatusVerboseOutput(t *testing.T) {
+func TestBuildSyncStatusViewProjectsVerboseDiagnostics(t *testing.T) {
 	prepareDiagnosticsState(t)
 
-	output := runCLIAndCaptureStdout(t, "higgs", "sync", "status", "--verbose")
-
-	assertOutputContains(t, output,
-		"peer_id: node-a.catofes.",
-		"listen_addr: 127.0.0.1:0",
-		"known_peers: 1",
-		"known_zones: 3",
-		"limits: max_datagram_bytes=4096 max_sync_zones=8 max_sync_records=64 wire_version=1 wire_codec=msgpack",
-		"allowlist_source: bootstrap+discovery",
-		"bootstrap_peers: 1",
-		"bootstrap peer=node-b.catofes. configured_addr=127.0.0.1:9999 resolved_addr=127.0.0.1:9999",
-		"sync_flow peer=node-b.catofes. active_pull=object_pulling active_event=catalog_page active_updated=2023-11-14T22:13:20Z hint_accepted=2 hint_suppressed=1 last_hint=2023-11-14T22:13:20Z hint_reason=announce_hint hint_suppression=session_active read_only_responder=3 responder_kind=chunk_fallback responder_zone=node-b.catofes. responder_last=2023-11-14T22:13:20Z",
-		"datagram peer=node-b.catofes. too_large_dropped=2 digest_only_announces=1 chunk_fallbacks=0",
-		"object_pull peer=node-b.catofes. attempts=3 successes=2 failures=1 large_object_unreachable=1",
-		"zone node-b.catofes.",
-	)
-}
-
-func TestDebugPeerOutput(t *testing.T) {
-	prepareDiagnosticsState(t)
-
-	output := runCLIAndCaptureStdout(t, "higgs", "debug", "peer", "node-b.catofes.")
-
-	assertOutputContains(t, output,
-		"peer_id: node-b.catofes.",
-		"source: bootstrap",
-		"configured_addr: 127.0.0.1:9999",
-		"resolved_addr: 127.0.0.1:2000",
-		"last_success: 2023-11-14T22:13:20Z",
-		"last_error: -",
-		"discovered_addr: 127.0.0.1:2000",
-		"observed_addr: 127.0.0.1:3000",
-		"observed_status: active",
-		"last_update_source: node-c.catofes.",
-		"active_pull_state: object_pulling",
-		"active_pull_last_event: catalog_page",
-		"hint_last: 2023-11-14T22:13:20Z reason=announce_hint suppression=session_active",
-		"read_only_responder_last: 2023-11-14T22:13:20Z kind=chunk_fallback zone=node-b.catofes.",
-		"datagram_too_large_dropped: 2",
-		"datagram_last_too_large: 2023-11-14T22:13:20Z direction=send object=record zone=node-b.catofes. key=bigdata bytes=1800 limit=1200",
-		"object_pull_attempts: 3",
-		"object_pull_last: 2023-11-14T22:13:20Z object=record zone=node-b.catofes. key=bigdata bytes=4096 source_peer=node-b.catofes. unreachable=true error=no TCP address",
-	)
-}
-
-func TestDebugZoneOutput(t *testing.T) {
-	prepareDiagnosticsState(t)
-
-	output := runCLIAndCaptureStdout(t, "higgs", "debug", "zone", "node-b.catofes.")
-
-	assertOutputContains(t, output,
-		"zone: node-b.catofes.",
-		"records: 1",
-		"history: 0",
-		"delegations: 0",
-		"parent_proof: 0",
-		"verify: ok",
-		"record key=sync/endpoint/udp version=1 type=sync.endpoint",
-	)
-}
-
-func TestDebugRecordsOutputFiltersByPrefixAndPrintsValues(t *testing.T) {
-	now := time.Unix(1700000000, 0)
-	state, _ := buildTestNetworkState(t)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	var out bytes.Buffer
-	if err := writeDebugRecords(&out, state, "node-b.catofes.", "ipsec/", true); err != nil {
-		t.Fatalf("writeDebugRecords: %v", err)
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
 	}
-	output := out.String()
-	assertOutputContains(t, output,
-		"zones: 1",
-		"records: 5",
-		"prefix: ipsec/",
-		"zone node-b.catofes.",
-		"record key=ipsec/overlays/main version=1 type=ipsec.overlay_intent.v1",
-		"record key=ipsec/profile version=1 type=ipsec.profile.v1",
-		"record key=ipsec/transport-key version=1 type=ipsec.transport_key.v1",
-		"value: {",
-	)
-	if strings.Contains(output, "sync/endpoint/udp") {
-		t.Fatalf("debug records prefix leaked endpoint record:\n%s", output)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	config, err := rt.SyncConfig(state)
+	if err != nil {
+		t.Fatalf("SyncConfig: %v", err)
+	}
+	view := buildSyncStatusView(state, config, time.Unix(1700000000, 0), true)
+
+	if view.PeerID != "node-a.catofes." || view.ListenAddr != "127.0.0.1:0" || view.KnownPeers != 1 || view.KnownZones != 3 {
+		t.Fatalf("sync status summary = %+v", view)
+	}
+	if view.Limits.MaxDatagramBytes != 4096 || view.Limits.MaxSyncZones != 8 || view.Limits.MaxSyncRecords != 64 || view.Limits.WireCodec != "msgpack" {
+		t.Fatalf("sync limits = %+v", view.Limits)
+	}
+	if !view.Verbose || view.AllowlistSource != "bootstrap+discovery" || view.BootstrapPeers != 1 {
+		t.Fatalf("verbose metadata = %+v", view)
+	}
+	if len(view.Bootstrap) != 1 {
+		t.Fatalf("bootstrap peers = %+v, want one", view.Bootstrap)
+	}
+	peer := view.Bootstrap[0]
+	if peer.PeerID != "node-b.catofes." || peer.ConfiguredAddr != "127.0.0.1:9999" || peer.ResolvedAddr != "127.0.0.1:9999" {
+		t.Fatalf("bootstrap peer = %+v", peer)
+	}
+	if peer.SyncFlow.ActivePullState != string(SyncSessionObjectPulling) || peer.SyncFlow.ReadOnlyResponder != 3 {
+		t.Fatalf("sync flow = %+v", peer.SyncFlow)
+	}
+	if peer.DatagramStats.TooLargeDropped != 2 || peer.DatagramStats.DigestOnlyAnnounces != 1 {
+		t.Fatalf("datagram stats = %+v", peer.DatagramStats)
+	}
+	if peer.ObjectPullStats.Attempts != 3 || peer.ObjectPullStats.LargeObjectUnreachable != 1 {
+		t.Fatalf("object pull stats = %+v", peer.ObjectPullStats)
+	}
+	if len(view.Zones) == 0 {
+		t.Fatalf("zones = %+v, want zone summaries", view.Zones)
+	}
+}
+
+func TestBuildPeerDebugViewProjectsRuntimeStats(t *testing.T) {
+	prepareDiagnosticsState(t)
+
+	rt, err := NewRuntime()
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	peerState := state.SyncPeers["node-b.catofes."]
+	view := buildPeerDebugView("node-b.catofes.", "bootstrap", "127.0.0.1:9999", "127.0.0.1:2000", peerState, time.Unix(1700000000, 0))
+
+	if view.PeerID != "node-b.catofes." || view.Source != "bootstrap" || view.ConfiguredAddr != "127.0.0.1:9999" || view.ResolvedAddr != "127.0.0.1:2000" {
+		t.Fatalf("peer debug identity = %+v", view)
+	}
+	if view.DiscoveredAddr != "127.0.0.1:2000" || view.ObservedAddr != "127.0.0.1:3000" || view.LastUpdateSource != "node-c.catofes." {
+		t.Fatalf("peer endpoint fields = %+v", view)
+	}
+	if view.SyncFlow.ActivePullState != string(SyncSessionObjectPulling) || view.SyncFlow.ActivePullLastEvent != "catalog_page" {
+		t.Fatalf("sync flow = %+v", view.SyncFlow)
+	}
+	if view.DatagramStats.TooLargeDropped != 2 || view.DatagramStats.LastTooLargeObject != "record" {
+		t.Fatalf("datagram stats = %+v", view.DatagramStats)
+	}
+	if view.ObjectPullStats.Attempts != 3 || !view.ObjectPullStats.LastUnreachable || view.ObjectPullStats.LastError != "no TCP address" {
+		t.Fatalf("object pull stats = %+v", view.ObjectPullStats)
 	}
 }

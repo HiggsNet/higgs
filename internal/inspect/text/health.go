@@ -2,28 +2,22 @@ package text
 
 import (
 	"io"
-	"sort"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
 
 func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
+	view = inspect.BuildHealthDebugView(view)
 	if w == nil {
 		return nil
 	}
 	out := newLineWriter(w)
-	targets := append([]inspect.HealthProbeTargetView(nil), view.Targets...)
+	targets := view.Targets
 	if len(targets) == 0 {
 		out.Println("No link instances to probe.")
 		return out.Err()
 	}
 	out.Linef("Link health (%d links):", len(targets))
-	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].InstanceID != targets[j].InstanceID {
-			return targets[i].InstanceID < targets[j].InstanceID
-		}
-		return targets[i].ProbeRole < targets[j].ProbeRole
-	})
 	for _, t := range targets {
 		out.Linef("  %s", t.InstanceID)
 		out.Linef("    peer=%s overlay=%s", t.PeerZone, t.Overlay)

@@ -1,5 +1,7 @@
 package inspect
 
+import "sort"
+
 type HealthDebugView struct {
 	Targets []HealthProbeTargetView
 	Live    []HealthLiveView
@@ -37,4 +39,20 @@ type HealthLiveView struct {
 	ConsecutiveFail int
 	LastError       string
 	CutoverBlocking bool
+}
+
+func BuildHealthDebugView(view HealthDebugView) HealthDebugView {
+	out := view
+	out.Targets = append([]HealthProbeTargetView(nil), view.Targets...)
+	out.Live = append([]HealthLiveView(nil), view.Live...)
+	sort.SliceStable(out.Targets, func(i, j int) bool {
+		if out.Targets[i].InstanceID != out.Targets[j].InstanceID {
+			return out.Targets[i].InstanceID < out.Targets[j].InstanceID
+		}
+		if out.Targets[i].ProbeRole != out.Targets[j].ProbeRole {
+			return out.Targets[i].ProbeRole < out.Targets[j].ProbeRole
+		}
+		return out.Targets[i].ProbeID < out.Targets[j].ProbeID
+	})
+	return out
 }

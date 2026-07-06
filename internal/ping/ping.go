@@ -126,7 +126,7 @@ func BuildDebugView(peerZone string, outcomes []Outcome, availableZones []string
 			Error:       outcome.Result.Error,
 		})
 	}
-	return view
+	return inspect.BuildPingDebugView(view)
 }
 
 func DistinctPeerZones(targets []health.ProbeTarget) []string {
