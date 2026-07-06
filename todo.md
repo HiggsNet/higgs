@@ -28,8 +28,8 @@
     - 已建立 links 子集：`internal/inspect` 提供 `LinkInput` / `LinkInspection` / `BuildLinks` 与 builder 单测；`inspect/text` 和通用 source 接口仍待后续迁移。
   - [x] 先以 links 为第一刀：定义 `inspect.LinkInput` / `LinkInspection` / `BuildLinks`，覆盖 desired/actual SA、health、BIRD routing、rotate/takeover、diagnostic reason；observer links API 和 `debug links` 都从同一 view 输出。
     - 已新增 `app/higgs/inspect_links.go` 薄 adapter，从 committed state snapshot / runtime config / health snapshot 投影到 inspect input；`debug links` 和 `/api/v1/links` 均消费同一 `LinkInspection`，保留 CLI 文本布局和 observer JSON schema。
-  - [ ] 第二步抽 zone/record/authority：把 `recordJSON`、authority/delegation/revocation 展示逻辑迁到 inspect，复用到 `zone show` / `debug zone` / observer zone detail；避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
-    - 已新增 `internal/inspect` zone/record/authority view：Observer zone detail、`zone show`、`record get` 复用同一套 `BuildZoneDetail` / `BuildRecord`；`debug zone` 文本 presenter 仍待迁到 inspect/text。
+  - [x] 第二步抽 zone/record/authority：把 `recordJSON`、authority/delegation/revocation 展示逻辑迁到 inspect，复用到 `zone show` / `debug zone` / observer zone detail；避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
+    - 已新增 `internal/inspect` zone/record/authority view 与 `internal/inspect/text` zone presenter：Observer zone detail、`zone show`、`debug zone`、`record get` 复用同一套 `BuildZoneDetail` / `BuildRecord`。
   - [ ] 第三步抽 peer endpoints：把 bootstrap/discovered/observed/grace endpoint 合并、本地 peer 过滤、source/selected 排序收敛到 inspect；observer peers 和 CLI peer debug 共用。
   - [ ] 拆 peer runtime control vs observability readmodel：`SyncPeers` 中 backoff、observed path、rejected digest/record cache、relay eligibility 等仍归 daemon runtime control state；`DatagramStats`、`ObjectPullStats`、read-only responder、last catalog/page/reject、chunk fallback/too-large counters 等纯诊断字段后续迁到 peer observability readmodel / metrics store，并由 `internal/inspect/source` 汇入 debug/observer input，避免主 committed state revision 因统计计数频繁前进。
   - [ ] 第四步抽 routes/BIRD/health/revocation/admission/firewall：优先复用现有结构化结果，逐步把 presenter 与诊断推理分开；系统采集和 provider 调用留在 source/adapter 层。

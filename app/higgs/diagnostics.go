@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -774,25 +775,23 @@ func debugZone(path zone.ZonePath) error {
 		verifyResult = err.Error()
 	}
 	revocation := state.Network.ActiveRevocation(path, rt.Now())
-	fmt.Printf("zone: %s\n", path)
-	fmt.Printf("root: %s\n", hex.EncodeToString(digest.RootHash))
-	fmt.Printf("records: %d\n", len(zs.Records))
-	fmt.Printf("history: %d\n", countHistory(zs))
-	fmt.Printf("delegations: %d\n", len(zs.Delegations))
-	fmt.Printf("revocations: %d\n", len(zs.Revocations))
-	fmt.Printf("parent_proof: %d\n", len(zs.ParentProof))
-	if revocation == nil {
-		fmt.Printf("revoked: false\n")
-	} else {
-		fmt.Printf("revoked: true\n")
-		fmt.Printf("revoked_by: %s\n", revocation.ParentZone)
-		fmt.Printf("revoked_at: %s\n", formatUnixTime(revocation.RevokedAt))
-		fmt.Printf("revocation_reason: %s\n", dash(revocation.Reason))
-		fmt.Printf("revoked_authority_epoch: %d\n", revocation.RevokedAuthorityEpoch)
+	var activeRevocation *inspect.RevocationView
+	if revocation != nil {
+		view := inspect.BuildRevocation(revocation)
+		activeRevocation = &view
 	}
-	fmt.Printf("verify: %s\n", verifyResult)
-	printDebugRecords("record", zs.Records)
-	return nil
+	return inspecttext.WriteZoneDebug(os.Stdout, inspecttext.ZoneDebugView{
+		Detail: inspect.BuildZoneDetail(inspect.ZoneDetailInput{
+			Path:           path,
+			State:          zs,
+			Network:        state.Network,
+			Now:            rt.Now(),
+			IncludeHistory: false,
+		}),
+		RootHash:         hex.EncodeToString(digest.RootHash),
+		VerifyResult:     verifyResult,
+		ActiveRevocation: activeRevocation,
+	})
 }
 
 func debugRecords(path zone.ZonePath, prefix string, values bool) error {
@@ -917,21 +916,6 @@ func countHistory(zs *zone.ZoneState) int {
 		out += len(records)
 	}
 	return out
-}
-
-func printDebugRecords(prefix string, records map[string]*zone.Record) {
-	keys := make([]string, 0, len(records))
-	for key := range records {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		record := records[key]
-		if record == nil {
-			continue
-		}
-		fmt.Printf("%s key=%s version=%d type=%s\n", prefix, key, record.Version, record.Type)
-	}
 }
 
 func formatLastSuccess(peerState syncPeerState) string {
