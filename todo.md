@@ -35,6 +35,7 @@
   - [ ] 拆 peer runtime control vs observability readmodel：`SyncPeers` 中 backoff、observed path、rejected digest/record cache、relay eligibility 等仍归 daemon runtime control state；`DatagramStats`、`ObjectPullStats`、read-only responder、last catalog/page/reject、chunk fallback/too-large counters 等纯诊断字段后续迁到 peer observability readmodel / metrics store，并由 `internal/inspect/source` 汇入 debug/observer input，避免主 committed state revision 因统计计数频繁前进。
   - [ ] 第四步抽 routes/BIRD/health/revocation/admission/firewall：优先复用现有结构化结果，逐步把 presenter 与诊断推理分开；系统采集和 provider 调用留在 source/adapter 层。
     - 已新增 `internal/inspect/http` health response / health series DTO：Observer health list、health series envelope 已从 `observer_server.go` 下沉，app 层仍负责 health spool 查询和 link/desired runtime context adapter。
+    - 已新增 `internal/inspect/http` routes response / BIRD route view DTO：route export/authorized/assignment/error 生成、BIRD route authorized/import_allowed 标注和排序已下沉并补 schema 单测；app 层暂留 control socket、BIRD client 采集和 debug routes 文本 presenter。
   - [ ] Diagnostics/debug 迁移路线：
     - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link 的 view builder 和文本输出迁到 inspect/text。
     - `app/higgs/admission_diagnostics.go` 的 reason code、diagnosis view、writeAdmissionDiagnosis 迁到 inspect/admission + inspect/text；app 只保留在 daemon 事件中更新 admission state 的 adapter。

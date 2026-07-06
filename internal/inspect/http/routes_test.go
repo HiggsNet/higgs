@@ -1,0 +1,108 @@
+package http
+
+import (
+	"encoding/json"
+	"net/netip"
+	"testing"
+
+	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/higgs/pkg/routing/bird"
+)
+
+func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
+	managed := zone.ZonePath("node-a.catofes.")
+	announced := map[zone.ZonePath]map[netip.Prefix]*routing.RouteEntry{
+		managed: {
+			netip.MustParsePrefix("10.0.1.0/24"): {},
+			netip.MustParsePrefix("10.0.0.0/24"): {},
+		},
+		"node-b.catofes.": {
+			netip.MustParsePrefix("10.1.0.0/24"): {},
+		},
+	}
+	ars := &routing.AuthorizedRouteSet{
+		Announced: announced,
+		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
+			netip.MustParsePrefix("10.0.0.0/16"): {
+				Source:     "catofes.",
+				AssignedTo: managed,
+			},
+		},
+		Errors: []routing.RouteAuthorizationError{{
+			Zone:   "node-b.catofes.",
+			Prefix: netip.MustParsePrefix("10.2.0.0/24"),
+			Code:   "route_unassigned",
+			Detail: "not delegated",
+		}},
+	}
+
+	resp := RoutesFromAuthorizedSet(managed, ars)
+	if resp.LocalZone != managed {
+		t.Fatalf("local zone = %s, want %s", resp.LocalZone, managed)
+	}
+	if got := resp.ExportSet; len(got) != 2 || got[0] != "10.0.0.0/24" || got[1] != "10.0.1.0/24" {
+		t.Fatalf("export set = %#v, want prefix sorted values", got)
+	}
+	if got := resp.Assignments["10.0.0.0/16"]; got.Source != "catofes." || got.AssignedTo != string(managed) {
+		t.Fatalf("assignment = %#v", got)
+	}
+	if len(resp.Errors) != 1 || resp.Errors[0].Code != "route_unassigned" || resp.Errors[0].Prefix != "10.2.0.0/24" {
+		t.Fatalf("errors = %#v", resp.Errors)
+	}
+
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"local_zone", "export_set", "authorized", "assignments", "errors"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("missing JSON key %q in %s", key, raw)
+		}
+	}
+}
+
+func TestBuildBirdRouteViewsAnnotatesAuthorizedAndImportAllowed(t *testing.T) {
+	dump := &RoutesResponse{
+		Authorized: map[string][]string{
+			"node-a.catofes.": {"10.0.0.0/24"},
+			"node-b.catofes.": {"10.0.0.0/24"},
+		},
+		Assignments: map[string]RouteAssignment{
+			"10.0.0.0/16": {Source: "catofes.", AssignedTo: "node-a.catofes."},
+		},
+	}
+
+	views := BuildBirdRouteViews(dump, []bird.BirdRoute{
+		{
+			Prefix:   netip.MustParsePrefix("10.0.2.0/24"),
+			Protocol: "babel",
+			Iface:    "hgs-b",
+			Metric:   128,
+			Selected: true,
+		},
+		{
+			Prefix:   netip.MustParsePrefix("10.0.0.0/24"),
+			Protocol: "babel",
+			Iface:    "hgs-a",
+			Metric:   96,
+			Selected: true,
+		},
+	})
+	if len(views) != 2 {
+		t.Fatalf("views len = %d, want 2", len(views))
+	}
+	if views[0].Prefix != "10.0.0.0/24" || !views[0].Authorized || !views[0].ImportAllowed {
+		t.Fatalf("first route view = %#v", views[0])
+	}
+	if got := views[0].Zones; len(got) != 2 || got[0] != "node-a.catofes." || got[1] != "node-b.catofes." {
+		t.Fatalf("zones = %#v, want sorted authorized zones", got)
+	}
+	if views[1].Prefix != "10.0.2.0/24" || views[1].Authorized || !views[1].ImportAllowed {
+		t.Fatalf("second route view = %#v", views[1])
+	}
+}

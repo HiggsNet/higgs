@@ -520,11 +520,11 @@ func parseOptionalDuration(raw string, fallback time.Duration, name string) (tim
 func (p *observerProvider) Routes() (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {
-		return &routesDumpResponse{}, nil
+		return &inspecthttp.RoutesResponse{}, nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil {
-		return &routesDumpResponse{}, nil
+		return &inspecthttp.RoutesResponse{}, nil
 	}
 	now := d.Sync.now()
 	ars, _ := routing.BuildAuthorizedRouteSet(state.Network, now)

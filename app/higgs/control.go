@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
@@ -21,36 +21,9 @@ import (
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
-type routesDumpResponse struct {
-	LocalZone   zone.ZonePath                  `json:"local_zone"`
-	ExportSet   []string                       `json:"export_set"`
-	Authorized  map[string][]string            `json:"authorized"`
-	Assignments map[string]routeAssignmentInfo `json:"assignments"`
-	Errors      []routeAuthorizationErrorJSON  `json:"errors"`
-	BIRD        []birdRoutesView               `json:"bird,omitempty"`
-}
-
-type birdRoutesView struct {
-	NetNS      string          `json:"netns"`
-	InstanceID string          `json:"instance_id,omitempty"`
-	State      string          `json:"state,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Routes     []birdRouteView `json:"routes,omitempty"`
-}
-
-type birdRouteView struct {
-	Prefix        string   `json:"prefix"`
-	Protocol      string   `json:"protocol,omitempty"`
-	Source        string   `json:"source,omitempty"`
-	Iface         string   `json:"iface,omitempty"`
-	From          string   `json:"from,omitempty"`
-	Via           string   `json:"via,omitempty"`
-	Metric        uint32   `json:"metric,omitempty"`
-	Selected      bool     `json:"selected"`
-	Authorized    bool     `json:"authorized"`
-	ImportAllowed bool     `json:"import_allowed"`
-	Zones         []string `json:"zones,omitempty"`
-}
+type routesDumpResponse = inspecthttp.RoutesResponse
+type birdRoutesView = inspecthttp.BirdRoutesView
+type birdRouteView = inspecthttp.BirdRouteView
 
 type birdDumpResponse struct {
 	Instances map[string]birdDumpInstance `json:"instances"`
@@ -65,17 +38,8 @@ type birdDumpInstance struct {
 	Error         string            `json:"error,omitempty"`
 }
 
-type routeAssignmentInfo struct {
-	Source     string `json:"source"`
-	AssignedTo string `json:"assigned_to"`
-}
-
-type routeAuthorizationErrorJSON struct {
-	Zone   string `json:"zone"`
-	Prefix string `json:"prefix,omitempty"`
-	Code   string `json:"code"`
-	Detail string `json:"detail"`
-}
+type routeAssignmentInfo = inspecthttp.RouteAssignment
+type routeAuthorizationErrorJSON = inspecthttp.RouteAuthorizationError
 
 const controlSocketName = "higgs.sock"
 
@@ -323,50 +287,7 @@ func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 }
 
 func buildRoutesDumpResponse(managedZone zone.ZonePath, ars *routing.AuthorizedRouteSet) *routesDumpResponse {
-	if ars == nil {
-		return &routesDumpResponse{LocalZone: managedZone}
-	}
-	exportSet := make([]string, 0)
-	for p := range ars.Announced[managedZone] {
-		exportSet = append(exportSet, p.String())
-	}
-	sort.Strings(exportSet)
-	authorized := make(map[string][]string, len(ars.Announced))
-	for z, prefixes := range ars.Announced {
-		ps := make([]string, 0, len(prefixes))
-		for p := range prefixes {
-			ps = append(ps, p.String())
-		}
-		sort.Strings(ps)
-		authorized[string(z)] = ps
-	}
-	assignments := make(map[string]routeAssignmentInfo, len(ars.Assignments))
-	for p, entry := range ars.Assignments {
-		assignments[p.String()] = routeAssignmentInfo{
-			Source:     string(entry.Source),
-			AssignedTo: string(entry.AssignedTo),
-		}
-	}
-	errors := make([]routeAuthorizationErrorJSON, 0, len(ars.Errors))
-	for _, e := range ars.Errors {
-		prefix := ""
-		if e.Prefix.IsValid() {
-			prefix = e.Prefix.String()
-		}
-		errors = append(errors, routeAuthorizationErrorJSON{
-			Zone:   string(e.Zone),
-			Prefix: prefix,
-			Code:   e.Code,
-			Detail: e.Detail,
-		})
-	}
-	return &routesDumpResponse{
-		LocalZone:   managedZone,
-		ExportSet:   exportSet,
-		Authorized:  authorized,
-		Assignments: assignments,
-		Errors:      errors,
-	}
+	return inspecthttp.RoutesFromAuthorizedSet(managedZone, ars)
 }
 
 func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *routesDumpResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []birdRoutesView {
@@ -421,81 +342,7 @@ func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *routesDu
 }
 
 func buildBirdRouteViews(dump *routesDumpResponse, routes []bird.BirdRoute) []birdRouteView {
-	out := make([]birdRouteView, 0, len(routes))
-	for _, route := range routes {
-		if !route.Prefix.IsValid() {
-			continue
-		}
-		prefix := route.Prefix.String()
-		zones := authorizedZonesForPrefix(dump, prefix)
-		out = append(out, birdRouteView{
-			Prefix:        prefix,
-			Protocol:      route.Protocol,
-			Source:        route.Source,
-			Iface:         route.Iface,
-			From:          addrString(route.From),
-			Via:           addrString(route.Via),
-			Metric:        route.Metric,
-			Selected:      route.Selected,
-			Authorized:    len(zones) > 0,
-			ImportAllowed: routeWithinAssignedPrefix(dump, route.Prefix),
-			Zones:         zones,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Prefix != out[j].Prefix {
-			return comparePrefixStrings(out[i].Prefix, out[j].Prefix) < 0
-		}
-		if out[i].Selected != out[j].Selected {
-			return out[i].Selected
-		}
-		if out[i].Protocol != out[j].Protocol {
-			return out[i].Protocol < out[j].Protocol
-		}
-		return out[i].Iface < out[j].Iface
-	})
-	return out
-}
-
-func authorizedZonesForPrefix(dump *routesDumpResponse, prefix string) []string {
-	if dump == nil {
-		return nil
-	}
-	zones := make([]string, 0)
-	for z, prefixes := range dump.Authorized {
-		for _, p := range prefixes {
-			if p == prefix {
-				zones = append(zones, z)
-				break
-			}
-		}
-	}
-	sort.Strings(zones)
-	return zones
-}
-
-func routeWithinAssignedPrefix(dump *routesDumpResponse, prefix netip.Prefix) bool {
-	if dump == nil || !prefix.IsValid() {
-		return false
-	}
-	addr := prefix.Masked().Addr()
-	for assignPrefixStr := range dump.Assignments {
-		assignPrefix, err := netip.ParsePrefix(assignPrefixStr)
-		if err != nil {
-			continue
-		}
-		if assignPrefix.Bits() <= prefix.Bits() && assignPrefix.Contains(addr) {
-			return true
-		}
-	}
-	return false
-}
-
-func addrString(addr netip.Addr) string {
-	if !addr.IsValid() {
-		return ""
-	}
-	return addr.String()
+	return inspecthttp.BuildBirdRouteViews(dump, routes)
 }
 
 func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {
