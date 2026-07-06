@@ -329,7 +329,13 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 }
 
 func syncVerbosePeerView(peerID, configuredAddr, resolvedAddr, addr string, peerState syncPeerState, now time.Time) inspect.SyncVerbosePeerView {
-	debugView := inspect.BuildPeerDebug(peerDebugInput(peerID, "", configuredAddr, resolvedAddr, peerState, now))
+	debugView := inspect.BuildPeerDebugFromRuntime(inspect.PeerRuntimeDebugInput{
+		PeerID:         peerID,
+		ConfiguredAddr: configuredAddr,
+		ResolvedAddr:   resolvedAddr,
+		State:          peerState,
+		Now:            now,
+	})
 	return inspect.SyncVerbosePeerView{
 		PeerID:           peerID,
 		ConfiguredAddr:   configuredAddr,

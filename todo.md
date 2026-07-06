@@ -18,6 +18,7 @@
   - 边界原则：
     - `internal/observer` 继续只负责 HTTP routing、SSE、API envelope、静态资源，不读取 Higgs daemon 状态。
     - `internal/inspect` 负责 snapshot/input -> inspect view 的纯只读转换、排序、摘要、reason code 和 suggested action hint。
+    - `internal/state` 承接可被 app runtime、inspect、observer/source 共同引用的持久化/运行时 snapshot 类型；`app/higgs` 负责写入和生命周期，`internal/inspect` 只解释这些只读结构。
     - `internal/inspect/text` 负责 CLI 可复用 presenter：表格、详细文本、可选 JSON；`app/higgs/debug_*.go` 只做命令注册、参数解析和调用 presenter。
     - `internal/inspect/source` 定义 Source/Collector 接口和通用 snapshot input 类型；离线 DB/control-socket source 可下沉到 internal，live daemon source 若需要访问 `DaemonService` 或未导出状态，则在 `app/higgs` 保留薄 adapter。
     - `app/higgs` 只保留 executable wiring：从 `DaemonStateStore.Snapshot()` / control socket / 离线 DB 构造 inspect input，复制 app 私有 runtime 状态，初始化 config/runtime/control command service；`internal/inspect` 不直接依赖 `DaemonService`、`stateFile` 锁或 `main` 包私有运行态类型。
@@ -60,13 +61,12 @@
       - 已新增 `inspect.BuildRotateDebug` / `RotateDebugInput`：rotate current/staged runtime view、stored/live SA 匹配、path-family 过滤和最终 debug view 组装已从 `app/higgs/debug_rotate.go` 下沉；app 层仅保留 control socket/offline fallback、live StrongSwan SA 采集和 app 私有 SA 状态投影。
     - `app/higgs/debug_ping.go` 已新增 `internal/ping` + `inspect.PingDebugView` + `inspect/text.WritePingDebug`：一次性 ping 的 target 过滤、prober 执行、debug view 构建和文本 presenter 已下沉；ping target 排序/instance 分组已收敛到 `inspect.BuildPingDebugView`，app 层仅保留 state/config -> health targets 的 adapter 和 CLI wiring。
     - `sync status --verbose` 已新增 `inspect.SyncStatusView` + `inspect/text.WriteSyncStatus`：summary、bootstrap/discovered peer 明细、sync_flow、datagram/object_pull 诊断行和 zone 摘要输出已从 `sync.go` 下沉；app 层仅保留 state/config/gossip digest 到 view 的投影。
-    - 已新增 `inspect.BuildPeerDebug` / `PeerDebugInput`：`debug peer` 与 `sync status --verbose` 共用 peer status、backoff、observed path、relay suppression 和诊断计数 view 构建；app 层只保留 `syncPeerState` 到 inspect input 的薄投影。
-      - 已新增 `inspect.BuildPeerSyncFlowView` / `BuildPeerDatagramStatsView` / `BuildPeerObjectPullStatsView`：sync flow、datagram、object pull 诊断子块的时间格式化和 view 构建下沉到 inspect；app 层投影集中到 `sync_peer_inspect.go`，`debug_peer.go` 只保留命令 wiring 与 endpoint 选择。
+    - 已新增 `internal/state.PeerRuntimeState` + `inspect.BuildPeerDebugFromRuntime`：`debug peer` 与 `sync status --verbose` 可消费共享只读 peer runtime snapshot，共用 peer status、backoff、observed path、relay suppression、sync flow、datagram、object pull 诊断 view 构建；app 层保留 `syncPeerState` / stats / rejected digest alias 来表达 `stateFile` ownership，`debug_peer.go` 只做命令 wiring 与 endpoint 选择。
     - 已将 `cmdDebug()` 从 `app/higgs/cmd.go` 拆到 `app/higgs/debug_cmd.go`，root command 文件不再承载 debug 子命令注册细节；`cmdDebug()` 仍只做 CLI 子命令注册、参数解析、source 选择和 presenter 调用。
     - 已新增 `inspect.BuildZoneDebug` / `ZoneDebugInput`：`debug zone` 的 zone detail、root digest、verify result、active revocation view 构建下沉到 inspect；app 层只保留 state/configureValidation/missing-zone error adapter。
     - 已将 `app/higgs/diagnostics.go` 拆成 `debug_peer.go`、`debug_links.go`、`debug_zone_records.go`、`debug_endpoints.go`、`debug_format.go`，admission CLI glue 合入 `admission_diagnostics.go`；`diagnostics.go` 现在只保留 sync debug logger / log-level glue。
   - [x] 为 inspect/text 建立 golden/output 测试，迁移现有 `TestDebug*Output`、`TestWriteDebug*`、admission diagnosis 输出测试；app 层只保留命令 wiring/fallback 的窄测试。
-    - 已新增 peer/endpoints/rotate/ping/sync status/links/routes/routing/health/zone/records/revocation/firewall/admission 等 inspect/text focused output 测试；`debug ping` 选择/执行/view 构建测试已迁到 `internal/ping`，文本断言已迁到 `internal/inspect/text`；app 层 legacy `TestDebug*Output` / `TestWriteDebug*` 已移除，保留的 app 窄测试只覆盖 `syncPeerState` 等私有 runtime state 到 inspect view 的投影。
+    - 已新增 peer/endpoints/rotate/ping/sync status/links/routes/routing/health/zone/records/revocation/firewall/admission 等 inspect/text focused output 测试；`debug ping` 选择/执行/view 构建测试已迁到 `internal/ping`，文本断言已迁到 `internal/inspect/text`；app 层 legacy `TestDebug*Output` / `TestWriteDebug*` 已移除，保留的 app 窄测试只覆盖 app runtime/source 到 inspect view 的窄 wiring。
   - [x] 删除 `observer_server.go` 中只为兼容旧 handler 测试保留的 app 层 wrapper 或改测 `internal/observer.Server.Handler()`；保留必要 shim 时必须标注迁移原因。
     - 已删除 `observerServer.handleStatus/handleZones/handlePeers/handleLinks/handleHealth/handleRoutes/handleBird/handleEvents/handleStatic` 和 `apiResponse` 兼容 alias；observer API/static/events/firewall 相关测试已改走 `srv.handler().ServeHTTP` + `observer.APIResponse`。
   - [ ] 验证：`make observer-smoke`、`go test ./app/higgs`、相关 CLI golden/output 测试必须继续覆盖 HTTP route、SSE、static UI、debug 文本和 raw JSON 输出。

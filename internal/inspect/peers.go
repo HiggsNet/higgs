@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	higgsstate "github.com/Catofes/higgs/internal/state"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -210,6 +211,21 @@ type PeerDebugInput struct {
 	Now                   time.Time
 }
 
+type PeerRuntimeDebugInput struct {
+	PeerID         string
+	Source         string
+	ConfiguredAddr string
+	ResolvedAddr   string
+	State          higgsstate.PeerRuntimeState
+	Now            time.Time
+}
+
+type PeerRuntimeState = higgsstate.PeerRuntimeState
+type PeerObservedGraceAddrState = higgsstate.PeerObservedGraceAddrState
+type PeerRejectedDigestState = higgsstate.PeerRejectedDigest
+type PeerDatagramStatsInput = higgsstate.PeerDatagramStats
+type PeerObjectPullStatsInput = higgsstate.PeerObjectPullStats
+
 type PeerSyncFlowView struct {
 	ActivePullState     string
 	ActivePullLastEvent string
@@ -259,25 +275,6 @@ type PeerDatagramStatsView struct {
 	LastTooLargeLimit         int
 }
 
-type PeerDatagramStatsInput struct {
-	TooLargeDropped           int64
-	DigestOnlyAnnounces       int64
-	ChunkFallbacks            int64
-	LastCatalogUnix           int64
-	LastCatalogRootHex        string
-	LastCatalogZoneCount      int
-	LastCatalogCursor         string
-	LastCatalogPageEntries    int
-	LastCatalogRejectedReason string
-	LastTooLargeUnix          int64
-	LastTooLargeDirection     string
-	LastTooLargeObject        string
-	LastTooLargeZone          string
-	LastTooLargeKey           string
-	LastTooLargeBytes         int
-	LastTooLargeLimit         int
-}
-
 type PeerObjectPullStatsView struct {
 	Attempts               int64
 	Successes              int64
@@ -293,19 +290,31 @@ type PeerObjectPullStatsView struct {
 	LastError              string
 }
 
-type PeerObjectPullStatsInput struct {
-	Attempts               int64
-	Successes              int64
-	Failures               int64
-	LargeObjectUnreachable int64
-	LastUnix               int64
-	LastObject             string
-	LastZone               string
-	LastKey                string
-	LastBytes              int
-	LastSourcePeer         string
-	LastUnreachable        bool
-	LastError              string
+func BuildPeerDebugFromRuntime(input PeerRuntimeDebugInput) PeerDebugView {
+	return BuildPeerDebug(PeerDebugInput{
+		PeerID:                input.PeerID,
+		Source:                input.Source,
+		ConfiguredAddr:        input.ConfiguredAddr,
+		ResolvedAddr:          input.ResolvedAddr,
+		LastSyncUnix:          input.State.LastSyncUnix,
+		LastError:             input.State.LastError,
+		BackoffUntilUnix:      input.State.BackoffUntilUnix,
+		DiscoveredAddr:        input.State.DiscoveredAddr,
+		ObservedAddr:          input.State.ObservedAddr,
+		ObservedUntilUnix:     input.State.ObservedUntilUnix,
+		ObservedLastSeenUnix:  input.State.ObservedLastSeenUnix,
+		ObservedLastSyncUnix:  input.State.ObservedLastSyncUnix,
+		ObservedFailureCount:  input.State.ObservedFailureCount,
+		ObservedSource:        input.State.ObservedSource,
+		LastUpdateSource:      input.State.LastUpdateSource,
+		LastRelayUnix:         input.State.LastRelayUnix,
+		LastRelaySuppression:  input.State.LastRelaySuppression,
+		LastRelaySuppressedAt: input.State.LastRelaySuppressedAt,
+		SyncFlow:              BuildPeerSyncFlowFromRuntime(input.State),
+		DatagramStats:         BuildPeerDatagramStatsFromRuntime(input.State),
+		ObjectPullStats:       BuildPeerObjectPullStatsFromRuntime(input.State),
+		Now:                   input.Now,
+	})
 }
 
 func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
@@ -330,6 +339,37 @@ func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 		DatagramStats:    input.DatagramStats,
 		ObjectPullStats:  input.ObjectPullStats,
 	}
+}
+
+func BuildPeerSyncFlowFromRuntime(state PeerRuntimeState) PeerSyncFlowView {
+	return BuildPeerSyncFlowView(PeerSyncFlowInput{
+		ActivePullState:       state.ActivePullState,
+		ActivePullLastEvent:   state.ActivePullLastEvent,
+		ActivePullUpdatedUnix: state.ActivePullUpdatedUnix,
+		HintAccepted:          state.HintAccepted,
+		HintSuppressed:        state.HintSuppressed,
+		LastHintUnix:          state.LastHintUnix,
+		LastHintReason:        state.LastHintReason,
+		LastHintSuppression:   state.LastHintSuppression,
+		ReadOnlyResponder:     state.ReadOnlyResponder,
+		LastResponderUnix:     state.LastResponderUnix,
+		LastResponderKind:     state.LastResponderKind,
+		LastResponderZone:     state.LastResponderZone,
+	})
+}
+
+func BuildPeerDatagramStatsFromRuntime(state PeerRuntimeState) PeerDatagramStatsView {
+	if state.DatagramStats == nil {
+		return BuildPeerDatagramStatsView(PeerDatagramStatsInput{})
+	}
+	return BuildPeerDatagramStatsView(*state.DatagramStats)
+}
+
+func BuildPeerObjectPullStatsFromRuntime(state PeerRuntimeState) PeerObjectPullStatsView {
+	if state.ObjectPullStats == nil {
+		return BuildPeerObjectPullStatsView(PeerObjectPullStatsInput{})
+	}
+	return BuildPeerObjectPullStatsView(*state.ObjectPullStats)
 }
 
 func BuildPeerSyncFlowView(input PeerSyncFlowInput) PeerSyncFlowView {
