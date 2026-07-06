@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -17,10 +18,13 @@ func showZone(path zone.ZonePath, includeHistory bool) error {
 	if zs == nil {
 		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
-	out := *zs
-	if !includeHistory {
-		out.RecordHistory = nil
-	}
+	out := inspect.BuildZoneDetail(inspect.ZoneDetailInput{
+		Path:           path,
+		State:          zs,
+		Network:        state.Network,
+		Now:            timeNow(),
+		IncludeHistory: includeHistory,
+	})
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)

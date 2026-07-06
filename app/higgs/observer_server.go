@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -240,7 +238,13 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 		if zs == nil {
 			return nil, observer.Errorf(http.StatusNotFound, "zone not found")
 		}
-		return zoneDetailJSON(zs, state.Network, zp, now), nil
+		return inspect.BuildZoneDetail(inspect.ZoneDetailInput{
+			Path:           zp,
+			State:          zs,
+			Network:        state.Network,
+			Now:            now,
+			IncludeHistory: true,
+		}), nil
 	}
 	// All zones summary
 	zones := make([]zoneSummaryJSON, 0, len(state.Network.Zones))
@@ -277,186 +281,6 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 		"zones":       zones,
 		"global_root": globalRoot,
 	}, nil
-}
-
-// zoneDetailJSON builds the detail view for a single zone
-func zoneDetailJSON(zs *zone.ZoneState, ns *zone.NetworkState, path zone.ZonePath, now time.Time) map[string]any {
-	revoked := ns.IsZoneRevoked(path, now)
-	records := make([]map[string]any, 0, len(zs.Records))
-	recordKeys := make([]string, 0, len(zs.Records))
-	for key := range zs.Records {
-		recordKeys = append(recordKeys, key)
-	}
-	sort.Strings(recordKeys)
-	for _, key := range recordKeys {
-		records = append(records, recordJSON(zs.Records[key], len(zs.RecordHistory[key])))
-	}
-	delegations := make([]map[string]any, 0, len(zs.Delegations))
-	delegationPaths := make([]zone.ZonePath, 0, len(zs.Delegations))
-	for childPath := range zs.Delegations {
-		delegationPaths = append(delegationPaths, childPath)
-	}
-	sort.Slice(delegationPaths, func(i, j int) bool { return delegationPaths[i] < delegationPaths[j] })
-	for _, childPath := range delegationPaths {
-		delegations = append(delegations, delegationJSON(zs.Delegations[childPath]))
-	}
-	revocations := make([]map[string]any, 0, len(zs.Revocations))
-	revocationPaths := make([]zone.ZonePath, 0, len(zs.Revocations))
-	for childPath := range zs.Revocations {
-		revocationPaths = append(revocationPaths, childPath)
-	}
-	sort.Slice(revocationPaths, func(i, j int) bool { return revocationPaths[i] < revocationPaths[j] })
-	for _, childPath := range revocationPaths {
-		revocations = append(revocations, revocationJSON(zs.Revocations[childPath]))
-	}
-	history := make([]map[string]any, 0)
-	historyKeys := make([]string, 0, len(zs.RecordHistory))
-	for key := range zs.RecordHistory {
-		historyKeys = append(historyKeys, key)
-	}
-	sort.Strings(historyKeys)
-	for _, key := range historyKeys {
-		versions := zs.RecordHistory[key]
-		for i := len(versions) - 1; i >= 0; i-- {
-			history = append(history, recordJSON(versions[i], 0))
-		}
-	}
-	return map[string]any{
-		"path":             string(path),
-		"parent":           string(path.Parent()),
-		"authority":        authorityJSON(zs.Authority),
-		"authority_hash":   hexOrEmpty(authorityHash(zs.Authority)),
-		"parent_proof":     delegationsJSON(zs.ParentProof),
-		"records":          records,
-		"record_history":   history,
-		"delegations":      delegations,
-		"revocations":      revocations,
-		"revoked":          revoked,
-		"record_count":     len(zs.Records),
-		"history_count":    len(history),
-		"delegation_count": len(zs.Delegations),
-		"revocation_count": len(zs.Revocations),
-		"merkle_root":      hexOrEmpty(zs.MerkleRoot),
-	}
-}
-
-func recordJSON(rec *zone.Record, historyCount int) map[string]any {
-	if rec == nil {
-		return map[string]any{}
-	}
-	out := map[string]any{
-		"zone":          string(rec.Zone),
-		"key":           rec.Key,
-		"version":       rec.Version,
-		"type":          rec.Type,
-		"value":         string(rec.Value),
-		"value_b64":     base64.StdEncoding.EncodeToString(rec.Value),
-		"value_hash":    hexOrEmpty(rec.ValueHash),
-		"record_hash":   hexOrEmpty(higgscrypto.RecordHash(rec)),
-		"prev_hash":     hexOrEmpty(rec.PrevHash),
-		"timestamp":     rec.Timestamp,
-		"signed_by":     hexOrEmpty(rec.SignedBy),
-		"signature":     hexOrEmpty(rec.Signature),
-		"history_count": historyCount,
-	}
-	var parsed any
-	if len(rec.Value) > 0 && json.Unmarshal(rec.Value, &parsed) == nil {
-		out["value_json"] = parsed
-	}
-	return out
-}
-
-func authorityJSON(authority *zone.ZoneAuthority) map[string]any {
-	if authority == nil {
-		return nil
-	}
-	keys := make([]map[string]any, 0, len(authority.Keys))
-	for _, key := range authority.Keys {
-		caps := make([]map[string]any, 0, len(key.Capabilities))
-		for _, cap := range key.Capabilities {
-			perms := make([]string, 0, len(cap.Permissions))
-			for _, perm := range cap.Permissions {
-				perms = append(perms, string(perm))
-			}
-			caps = append(caps, map[string]any{
-				"permissions": perms,
-				"key_prefix":  cap.KeyPrefix,
-			})
-		}
-		keys = append(keys, map[string]any{
-			"key":          hexOrEmpty(key.Key),
-			"key_id":       hexOrEmpty(higgscrypto.KeyID(key.Key)),
-			"not_before":   key.NotBefore,
-			"not_after":    key.NotAfter,
-			"capabilities": caps,
-		})
-	}
-	return map[string]any{
-		"zone":      string(authority.Zone),
-		"epoch":     authority.Epoch,
-		"threshold": authority.Threshold,
-		"keys":      keys,
-	}
-}
-
-func delegationJSON(del *zone.Delegation) map[string]any {
-	if del == nil {
-		return nil
-	}
-	expiresAt := ""
-	if del.ExpiresAt != nil {
-		expiresAt = del.ExpiresAt.UTC().Format(time.RFC3339)
-	}
-	return map[string]any{
-		"child":           string(del.ZoneName),
-		"scope":           string(del.Scope),
-		"authority_epoch": del.AuthorityEpoch,
-		"authority_hash":  hexOrEmpty(del.AuthorityHash),
-		"authority":       authorityJSON(&del.Authority),
-		"expires_at":      expiresAt,
-		"signed_by":       hexOrEmpty(del.SignedBy),
-		"signature":       hexOrEmpty(del.Signature),
-	}
-}
-
-func delegationsJSON(delegations []*zone.Delegation) []map[string]any {
-	out := make([]map[string]any, 0, len(delegations))
-	for _, del := range delegations {
-		out = append(out, delegationJSON(del))
-	}
-	return out
-}
-
-func revocationJSON(rev *zone.DelegationRevocation) map[string]any {
-	if rev == nil {
-		return nil
-	}
-	return map[string]any{
-		"child":                   string(rev.ChildZone),
-		"parent":                  string(rev.ParentZone),
-		"revoked_authority_epoch": rev.RevokedAuthorityEpoch,
-		"revoked_authority_hash":  hexOrEmpty(rev.RevokedAuthorityHash),
-		"reason":                  rev.Reason,
-		"revoked_at":              rev.RevokedAt,
-		"ttl_seconds":             rev.TTLSeconds,
-		"grace_seconds":           rev.GraceSeconds,
-		"signed_by":               hexOrEmpty(rev.SignedBy),
-		"signature":               hexOrEmpty(rev.Signature),
-	}
-}
-
-func authorityHash(authority *zone.ZoneAuthority) []byte {
-	if authority == nil {
-		return nil
-	}
-	return higgscrypto.AuthorityHash(authority)
-}
-
-func hexOrEmpty(data []byte) string {
-	if len(data) == 0 {
-		return ""
-	}
-	return hex.EncodeToString(data)
 }
 
 // peerJSON is the per-peer view for /api/v1/peers

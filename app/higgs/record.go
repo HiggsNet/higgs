@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
@@ -111,6 +112,29 @@ func recordHistoryJSON(records []*zone.Record, limit int) []map[string]any {
 	}
 	for i := len(records) - 1; i >= 0 && len(out) < limit; i-- {
 		out = append(out, recordJSON(records[i], 0))
+	}
+	return out
+}
+
+func recordJSON(rec *zone.Record, historyCount int) map[string]any {
+	view := inspect.BuildRecord(rec, historyCount)
+	out := map[string]any{
+		"zone":          view.Zone,
+		"key":           view.Key,
+		"version":       view.Version,
+		"type":          view.Type,
+		"value":         view.Value,
+		"value_b64":     view.ValueB64,
+		"value_hash":    view.ValueHash,
+		"record_hash":   view.RecordHash,
+		"prev_hash":     view.PrevHash,
+		"timestamp":     view.Timestamp,
+		"signed_by":     view.SignedBy,
+		"signature":     view.Signature,
+		"history_count": view.HistoryCount,
+	}
+	if view.ValueJSON != nil {
+		out["value_json"] = view.ValueJSON
 	}
 	return out
 }

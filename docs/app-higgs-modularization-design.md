@@ -59,7 +59,7 @@ pkg/*
 1. `pkg/*` 继续放稳定领域模型和底层能力，例如 zone、gossip、routing authorization、firewall planner、health manager、transport/ipsec provider。
 2. `internal/*` 放 Higgs 应用层模块：它可以组合 `pkg/*`，但不应该依赖 CLI 框架、stdout、环境变量散读或 `main` 包未导出类型。
 3. `app/higgs` 保留 executable glue：命令注册、配置入口、daemon assembly、需要访问未导出状态的临时 adapter。
-4. 所有写路径仍通过 daemon single-writer/control command service；readmodel/inspect 不执行写操作。
+4. 所有写路径仍通过 daemon commit 流程：`DaemonStateStore.BeginUpdate` / workspace 变更 / `Commit` 或 control command service 的 single-writer 路径；readmodel/inspect 不执行写操作，也不读取未提交 workspace。
 5. 每次迁移都要先定义输入/输出结构，避免把 `stateFile` 原样搬进 internal 后形成新的大泥团。
 
 ---
@@ -69,7 +69,7 @@ pkg/*
 | 模块 | 候选位置 | 可迁移内容 | 暂留 `app/higgs` 的内容 |
 |------|----------|------------|-------------------------|
 | Observer HTTP | `internal/observer` | HTTP routing、SSE、static、API envelope（已部分完成） | daemon 启动接线、provider adapter |
-| Inspect / diagnostics | `internal/inspect`, `internal/inspect/text`, `internal/inspect/source` | 共享诊断 view、reason code、CLI text presenter、HTTP/CLI 共用 readmodel | 访问 `DaemonService`/未导出状态的 live adapter |
+| Inspect / diagnostics | `internal/inspect`, `internal/inspect/text`, `internal/inspect/source` | 共享诊断 view、reason code、CLI text presenter、HTTP/CLI 共用 readmodel | 从 committed snapshot、health/reconcile runtime snapshot、control socket 构造 input 的 live adapter |
 | Peer lifecycle | `internal/peerstate` 或 `internal/lifecycle` | `PeerStatusInfo`、stale/offline/revoked 推理、cleanup decision | 将 `stateFile.SyncPeers` 拷贝成 input |
 | Revocation impact | `internal/revocation` | revoked subtree impact、layer status、diagnostic view | daemon flush 顺序和实际 cleanup 调用 |
 | Admission diagnostics | `internal/admission` | pending/adopted diagnosis、reason code、join hint view | daemon 中更新 admission state 的 adapter |
@@ -89,7 +89,7 @@ pkg/*
 
 ### 4.1 不直接搬 `stateFile`
 
-`stateFile` 是当前耦合中心。迁移时优先定义小 input：
+`stateFile` 仍是当前耦合中心，但 daemon 读侧事实源已经变成 committed snapshot。迁移时优先定义小 input：
 
 ```go
 type PeerLifecycleInput struct {
@@ -101,14 +101,14 @@ type PeerLifecycleInput struct {
 }
 ```
 
-internal 模块吃 input，输出 view/decision。`app/higgs` adapter 负责在 `RLock` 内从 `stateFile` 拷贝。
+internal 模块吃 input，输出 view/decision。`app/higgs` adapter 负责从 `DaemonStateStore.Snapshot()`、离线 DB snapshot 或 control socket response 拷贝 committed state；health、BIRD、actual SA、reconcile progress 等 live 诊断作为单独 source 汇入 input。adapter 不应把未提交 workspace 或 `stateFile` 锁本身传入 internal。
 
 ### 4.2 写侧和读侧分开
 
-- 写侧：daemon event loop、control command service、reconcile apply。
-- 读侧：inspect/readmodel、debug/observer/control status。
+- 写侧：daemon event loop、control command service、reconcile apply；对 state 的修改先落在 workspace，只有 commit 成功后才成为读侧事实。
+- 读侧：inspect/readmodel、debug/observer/control status；默认读取 committed snapshot，再合并只读 runtime diagnostics。
 
-readmodel 可以输出 `SuggestedAction` / `CommandHint`，但不能直接调用 apply、record put、delegate、reload、cleanup 或 reconcile。
+readmodel 可以输出 `SuggestedAction` / `CommandHint`，但不能直接调用 apply、record put、delegate、reload、cleanup 或 reconcile，也不能通过频繁诊断计数推进 committed state revision。
 
 ### 4.3 Presenter 不做推理
 
@@ -127,7 +127,7 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 优先级高，因为它横跨 observer、debug、control status，同时风险较低：
 
 1. 建立 `internal/inspect`、`internal/inspect/text`、`internal/inspect/source` 骨架。
-2. 先抽 links：`debug links` 与 `/api/v1/links` 重合最高。
+2. 先抽 links：`debug links` 与 `/api/v1/links` 重合最高；links input 优先使用最近一次 committed reconcile snapshot，只有离线/显式 dry-run 才重新 plan desired。
 3. 再抽 peer/endpoints：`debug peer`、`sync status --verbose`、`debug peers`、`/api/v1/peers` 共用 endpoint merge 和 lifecycle reason。
 4. 再抽 zone/records/admission/revocation。
 5. 最后抽 routes/BIRD/firewall/health 的 view 和 presenter。
