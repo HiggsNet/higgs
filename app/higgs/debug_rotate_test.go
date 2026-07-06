@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -70,7 +71,14 @@ func TestDebugLinksPlannerShowsActiveRuntimeTunnel(t *testing.T) {
 		},
 	}
 
-	printDebugLinkInstance(&out, link, nil)
+	if err := inspecttext.WriteLinksDebug(&out, inspecttext.LinksDebugView{
+		Inspection: inspect.LinkInspection{
+			Summary: inspect.LinkSummary{LinkInstances: 1},
+			Links:   []inspect.LinkView{link},
+		},
+	}); err != nil {
+		t.Fatalf("WriteLinksDebug: %v", err)
+	}
 	output := out.String()
 	for _, want := range []string{
 		"    runtime_id: ipsec-526e55bae2e1",

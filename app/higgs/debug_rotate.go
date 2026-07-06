@@ -404,7 +404,12 @@ func nonEmptyMatches(filter string, values ...string) bool {
 	if filter == "" {
 		return false
 	}
-	return stringMatchesFilter(filter, values...)
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), filter) {
+			return true
+		}
+	}
+	return false
 }
 
 func inspectLinkSA(item linkSAState) inspect.LinkSA {

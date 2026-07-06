@@ -27,7 +27,7 @@
   - [ ] 建立 `internal/inspect` 包骨架：公共 input/view/reason/action 类型、builder 单测；建立 `internal/inspect/text` CLI presenter；必要时建立 `internal/inspect/source` source 接口。
     - 已建立 links 子集：`internal/inspect` 提供 `LinkInput` / `LinkInspection` / `BuildLinks` 与 builder 单测；`inspect/text` 和通用 source 接口仍待后续迁移。
   - [x] 先以 links 为第一刀：定义 `inspect.LinkInput` / `LinkInspection` / `BuildLinks`，覆盖 desired/actual SA、health、BIRD routing、rotate/takeover、diagnostic reason；observer links API 和 `debug links` 都从同一 view 输出。
-    - 已新增 `app/higgs/inspect_links.go` 薄 adapter，从 committed state snapshot / runtime config / health snapshot 投影到 inspect input；`debug links` 和 `/api/v1/links` 均消费同一 `LinkInspection`，保留 CLI 文本布局和 observer JSON schema；Observer status/links/bird HTTP DTO 与 status response builder 已迁到 `internal/inspect/http`。
+    - 已新增 `app/higgs/inspect_links.go` 薄 adapter，从 committed state snapshot / runtime config / health snapshot 投影到 inspect input；`debug links` 和 `/api/v1/links` 均消费同一 `LinkInspection`；debug links CLI presenter 已迁到 `internal/inspect/text`，Observer status/links/bird HTTP DTO 与 status response builder 已迁到 `internal/inspect/http`。
   - [x] 第二步抽 zone/record/authority：把 `recordJSON`、authority/delegation/revocation 展示逻辑迁到 inspect，复用到 `zone show` / `debug zone` / observer zone detail；避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
     - 已新增 `internal/inspect` zone/record/authority view 与 `internal/inspect/text` zone presenter：Observer zone detail、`zone show`、`debug zone`、`record get` 复用同一套 `BuildZoneDetail` / `BuildRecord`；Observer zones summary HTTP DTO 已迁到 `internal/inspect/http`。
   - [x] 第三步抽 peer endpoints：把 bootstrap/discovered/observed/grace endpoint 合并、本地 peer 过滤、source/selected 排序收敛到 inspect；observer peers 和 CLI peer debug 共用。
@@ -42,7 +42,7 @@
     - 已新增 `internal/inspect` admission diagnosis view/reason code 与 `internal/inspect/text` presenter：`debug admission` 文本输出和 output 测试已下沉；app 层保留 auto-join state/key/delegation 检查与 admission state 更新 adapter。
     - 已新增 `internal/inspect` routing/BIRD debug view 与 `internal/inspect/text` presenter：`debug bird-dump` raw command 输出、`debug babel` BIRD instance 摘要已从 `debug_routing.go` 下沉；app 层保留 BIRD client/control socket/offline fallback adapter。
   - [ ] Diagnostics/debug 迁移路线：
-    - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link 的 view builder 和文本输出迁到 inspect/text；`debug records` 的 records view/presenter 已下沉。
+    - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link 的 view builder 和文本输出迁到 inspect/text；`debug links` CLI presenter 与 `debug records` records view/presenter 已下沉。
     - `app/higgs/admission_diagnostics.go` 的 reason code、diagnosis view、writeAdmissionDiagnosis 已迁到 inspect + inspect/text；app 只保留在 daemon 事件中诊断/更新 admission state 的 adapter。
     - `app/higgs/debug_routing.go` route dump/prefix explanation、BIRD raw dump、Babel summary presenter 已迁到 inspect + inspect/text；control socket/offline fallback 留 source/adapter。
     - `app/higgs/debug_firewall.go`、`debug_revoke_impact.go` 已完成 presenter 迁移；后续只保留系统 apply/reconcile、control socket/offline fallback 和 app 私有 runtime adapter。

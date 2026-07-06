@@ -1,6 +1,9 @@
 package inspect
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 type LinkInput struct {
 	Instances      []LinkInstance
@@ -210,6 +213,106 @@ type LinkSkip struct {
 	Peer    string `json:"peer,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Detail  string `json:"detail,omitempty"`
+}
+
+func FilterLinkViews(links []LinkView, filter string) []LinkView {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return links
+	}
+	out := make([]LinkView, 0, len(links))
+	for _, link := range links {
+		if linkMatchesFilter(link, filter) {
+			out = append(out, link)
+		}
+	}
+	return out
+}
+
+func FilterLinkActions(actions []LinkAction, filter string) []LinkAction {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return actions
+	}
+	out := make([]LinkAction, 0, len(actions))
+	for _, action := range actions {
+		if stringMatchesFilter(filter, action.InstanceID, action.GroupID, action.PeerZone, action.Action, action.Reason) {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+func FilterLinkSkips(skips []LinkSkip, filter string) []LinkSkip {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return skips
+	}
+	out := make([]LinkSkip, 0, len(skips))
+	for _, skip := range skips {
+		if stringMatchesFilter(filter, skip.GroupID, skip.Peer, skip.Reason, skip.Detail) {
+			out = append(out, skip)
+		}
+	}
+	return out
+}
+
+func linkMatchesFilter(link LinkView, filter string) bool {
+	values := []string{
+		link.ID,
+		link.PeerZone,
+		link.GroupID,
+		link.TransportKind,
+		link.LinkID,
+		link.PathKey,
+		link.TransportID,
+		link.Endpoint,
+		link.InterfaceName,
+		link.ChildSAName,
+		link.Rotation.Phase,
+		link.Rotation.StagedIKEName,
+		link.Rotation.StagedChildSAName,
+		link.Rotation.StagedInterfaceName,
+		link.Takeover.InitiatorRole,
+		link.Takeover.ObservedInitiator,
+	}
+	if link.Desired != nil {
+		values = append(values,
+			link.Desired.InstanceID,
+			link.Desired.PeerZone,
+			link.Desired.GroupID,
+			link.Desired.LinkID,
+			link.Desired.PathKey,
+			link.Desired.TransportID,
+			link.Desired.InterfaceName,
+			link.Desired.Endpoint,
+		)
+	}
+	if link.ActualSA != nil {
+		values = append(values,
+			link.ActualSA.Name,
+			link.ActualSA.Peer,
+			link.ActualSA.ChildSA,
+			link.ActualSA.LocalIdentity,
+			link.ActualSA.RemoteIdentity,
+			link.ActualSA.LocalEndpoint,
+			link.ActualSA.RemoteEndpoint,
+			link.ActualSA.Endpoint,
+		)
+	}
+	if link.Health != nil {
+		values = append(values, link.Health.InstanceID, link.Health.ProbeID, link.Health.InterfaceName, link.Health.State)
+	}
+	return stringMatchesFilter(filter, values...)
+}
+
+func stringMatchesFilter(filter string, values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), filter) {
+			return true
+		}
+	}
+	return false
 }
 
 func BuildLinks(input LinkInput) LinkInspection {
