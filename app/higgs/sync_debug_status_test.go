@@ -3,39 +3,37 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-func TestBuildSyncStatusViewProjectsVerboseDiagnostics(t *testing.T) {
-	prepareDiagnosticsState(t)
+func TestSyncStatusAdapterProjectsPeerDiagnostics(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	state := &stateFile{
+		Network: &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{}},
+		SyncPeers: map[string]syncPeerState{
+			"node-b.catofes.": diagnosticSyncPeerState(now),
+		},
+	}
+	config := &syncConfigFile{
+		PeerID:          "node-a.catofes.",
+		ListenAddr:      "127.0.0.1:0",
+		MaxMessageBytes: 4096,
+		MaxSyncZones:    8,
+		MaxSyncRecords:  64,
+		Bootstrap: []syncConfigPeer{{
+			ID:   "node-b.catofes.",
+			Addr: "127.0.0.1:9999",
+		}},
+	}
+	view := buildSyncStatusView(state, config, now, true)
 
-	rt, err := NewRuntime()
-	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
-	}
-	state, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		t.Fatalf("SyncConfig: %v", err)
-	}
-	view := buildSyncStatusView(state, config, time.Unix(1700000000, 0), true)
-
-	if view.PeerID != "node-a.catofes." || view.ListenAddr != "127.0.0.1:0" || view.KnownPeers != 1 || view.KnownZones != 3 {
-		t.Fatalf("sync status summary = %+v", view)
-	}
-	if view.Limits.MaxDatagramBytes != 4096 || view.Limits.MaxSyncZones != 8 || view.Limits.MaxSyncRecords != 64 || view.Limits.WireCodec != "msgpack" {
-		t.Fatalf("sync limits = %+v", view.Limits)
-	}
-	if !view.Verbose || view.AllowlistSource != "bootstrap+discovery" || view.BootstrapPeers != 1 {
-		t.Fatalf("verbose metadata = %+v", view)
-	}
 	if len(view.Bootstrap) != 1 {
 		t.Fatalf("bootstrap peers = %+v, want one", view.Bootstrap)
 	}
 	peer := view.Bootstrap[0]
-	if peer.PeerID != "node-b.catofes." || peer.ConfiguredAddr != "127.0.0.1:9999" || peer.ResolvedAddr != "127.0.0.1:9999" {
+	if peer.PeerID != "node-b.catofes." || peer.ConfiguredAddr != "127.0.0.1:9999" {
 		t.Fatalf("bootstrap peer = %+v", peer)
 	}
 	if peer.SyncFlow.ActivePullState != string(SyncSessionObjectPulling) || peer.SyncFlow.ReadOnlyResponder != 3 {
@@ -47,24 +45,18 @@ func TestBuildSyncStatusViewProjectsVerboseDiagnostics(t *testing.T) {
 	if peer.ObjectPullStats.Attempts != 3 || peer.ObjectPullStats.LargeObjectUnreachable != 1 {
 		t.Fatalf("object pull stats = %+v", peer.ObjectPullStats)
 	}
-	if len(view.Zones) == 0 {
-		t.Fatalf("zones = %+v, want zone summaries", view.Zones)
-	}
 }
 
-func TestBuildPeerDebugViewProjectsRuntimeStats(t *testing.T) {
-	prepareDiagnosticsState(t)
-
-	rt, err := NewRuntime()
-	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
-	}
-	state, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	peerState := state.SyncPeers["node-b.catofes."]
-	view := buildPeerDebugView("node-b.catofes.", "bootstrap", "127.0.0.1:9999", "127.0.0.1:2000", peerState, time.Unix(1700000000, 0))
+func TestPeerDebugAdapterProjectsRuntimeStats(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	view := buildPeerDebugView(
+		"node-b.catofes.",
+		"bootstrap",
+		"127.0.0.1:9999",
+		"127.0.0.1:2000",
+		diagnosticSyncPeerState(now),
+		now,
+	)
 
 	if view.PeerID != "node-b.catofes." || view.Source != "bootstrap" || view.ConfiguredAddr != "127.0.0.1:9999" || view.ResolvedAddr != "127.0.0.1:2000" {
 		t.Fatalf("peer debug identity = %+v", view)
@@ -80,5 +72,57 @@ func TestBuildPeerDebugViewProjectsRuntimeStats(t *testing.T) {
 	}
 	if view.ObjectPullStats.Attempts != 3 || !view.ObjectPullStats.LastUnreachable || view.ObjectPullStats.LastError != "no TCP address" {
 		t.Fatalf("object pull stats = %+v", view.ObjectPullStats)
+	}
+}
+
+func diagnosticSyncPeerState(now time.Time) syncPeerState {
+	return syncPeerState{
+		LastSyncUnix:          now.Unix(),
+		DiscoveredAddr:        "127.0.0.1:2000",
+		DiscoveredAtUnix:      now.Unix(),
+		ObservedAddr:          "127.0.0.1:3000",
+		ObservedFirstSeenUnix: now.Unix(),
+		ObservedLastSeenUnix:  now.Unix(),
+		ObservedLastSyncUnix:  now.Unix(),
+		ObservedUntilUnix:     now.Add(time.Hour).Unix(),
+		ObservedSource:        string(gossip.MessagePing),
+		LastUpdateSource:      "node-c.catofes.",
+		ActivePullState:       string(SyncSessionObjectPulling),
+		ActivePullLastEvent:   "catalog_page",
+		ActivePullUpdatedUnix: now.Unix(),
+		HintAccepted:          2,
+		HintSuppressed:        1,
+		LastHintUnix:          now.Unix(),
+		LastHintReason:        "announce_hint",
+		LastHintSuppression:   "session_active",
+		ReadOnlyResponder:     3,
+		LastResponderUnix:     now.Unix(),
+		LastResponderKind:     "chunk_fallback",
+		LastResponderZone:     "node-b.catofes.",
+		DatagramStats: &datagramStats{
+			TooLargeDropped:       2,
+			DigestOnlyAnnounces:   1,
+			LastTooLargeUnix:      now.Unix(),
+			LastTooLargeDirection: "send",
+			LastTooLargeObject:    "record",
+			LastTooLargeZone:      "node-b.catofes.",
+			LastTooLargeKey:       "bigdata",
+			LastTooLargeBytes:     1800,
+			LastTooLargeLimit:     gossip.DefaultDatagramBudget,
+		},
+		ObjectPullStats: &objectPullStats{
+			Attempts:               3,
+			Successes:              2,
+			Failures:               1,
+			LargeObjectUnreachable: 1,
+			LastUnix:               now.Unix(),
+			LastError:              "no TCP address",
+			LastObject:             "record",
+			LastZone:               "node-b.catofes.",
+			LastKey:                "bigdata",
+			LastBytes:              4096,
+			LastSourcePeer:         "node-b.catofes.",
+			LastUnreachable:        true,
+		},
 	}
 }

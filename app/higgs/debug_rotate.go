@@ -142,8 +142,8 @@ func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter st
 		staged := rotateRuntimeStaged(link, specPtr, append(storedSAs, liveSAs...))
 		view.Links = append(view.Links, inspect.RotateDebugLink{
 			Link:                  link,
-			PortGenerationSummary: debugPortGenerationSummary(specPtr, link.Rotation),
-			PortSummary:           debugPortSummary(specPtr, link.Endpoint, link.Endpoint, link.Rotation.StagedGeneration),
+			PortGenerationSummary: inspect.DebugPortGenerationSummary(specPtr, link.Rotation),
+			PortSummary:           inspect.DebugPortSummary(specPtr, link.Endpoint, link.Endpoint, link.Rotation.StagedGeneration),
 			Current:               rotateRuntimeCurrent(link, specPtr),
 			Staged:                staged,
 			HasStaged:             !rotateRuntimeEmpty(staged),
@@ -162,7 +162,7 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 	out := inspect.RotateRuntimeView{
 		State:           "expected_current",
 		Generation:      link.Rotation.RemoteGeneration,
-		Port:            debugEndpointPort(link.Endpoint),
+		Port:            inspect.DebugEndpointPort(link.Endpoint),
 		RuntimeID:       link.TransportID,
 		ChildSAName:     link.ChildSAName,
 		InterfaceName:   link.InterfaceName,
@@ -176,7 +176,7 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 		out.InterfaceName = firstNonEmpty(out.InterfaceName, link.Desired.InterfaceName)
 		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, link.Desired.XFRMIfID)
 		out.Endpoint = firstNonEmpty(out.Endpoint, link.Desired.Endpoint)
-		out.Port = firstNonEmpty(out.Port, debugEndpointPort(link.Desired.Endpoint))
+		out.Port = firstNonEmpty(out.Port, inspect.DebugEndpointPort(link.Desired.Endpoint))
 		if rotateRuntimeMatchesDesired(out, *link.Desired) {
 			out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, link.Desired.LocalTunnelAddr)
 			out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, link.Desired.PeerTunnelAddr)
@@ -184,7 +184,7 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 	}
 	if spec != nil {
 		out.Generation = firstNonZeroUint64(out.Generation, spec.Generation)
-		out.Port = firstNonEmpty(out.Port, debugRemotePort(spec, ""))
+		out.Port = firstNonEmpty(out.Port, inspect.DebugRemotePort(spec, ""))
 		out.RuntimeID = firstNonEmpty(out.RuntimeID, spec.TransportID)
 		out.ChildSAName = firstNonEmpty(out.ChildSAName, ipsec.ChildSAName(*spec))
 		out.InterfaceName = firstNonEmpty(out.InterfaceName, spec.InterfaceName)
@@ -232,7 +232,7 @@ func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, s
 	out := inspect.RotateRuntimeView{
 		State:           "expected_new",
 		Generation:      generation,
-		Port:            debugStagedPort(spec, generation),
+		Port:            inspect.DebugStagedPort(spec, generation),
 		RuntimeID:       link.Rotation.StagedIKEName,
 		ChildSAName:     link.Rotation.StagedChildSAName,
 		InterfaceName:   link.Rotation.StagedInterfaceName,
@@ -256,7 +256,7 @@ func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, s
 	}
 	if sa, ok := stagedSAForRuntime(out, sas); ok {
 		out.Endpoint = firstNonEmpty(out.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint))
-		out.Port = firstNonEmpty(out.Port, debugEndpointPort(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)))
+		out.Port = firstNonEmpty(out.Port, inspect.DebugEndpointPort(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)))
 	}
 	return out
 }

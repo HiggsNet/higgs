@@ -1,18 +1,15 @@
 package main
 
 import (
-	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -131,108 +128,6 @@ func endpointRecordFromState(t *testing.T, state *stateFile, path zone.ZonePath)
 	return er
 }
 
-func prepareDiagnosticsState(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	dataDir := filepath.Join(dir, "data")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	config := strings.Join([]string{
-		"data_dir: " + dataDir,
-		"gossip:",
-		"  peer_id: node-a.catofes.",
-		"  listen_addr: 127.0.0.1:0",
-		"  max_datagram_bytes: 4096",
-		"  max_sync_zones: 8",
-		"  max_sync_records: 64",
-		"  bootstrap:",
-		"    - id: node-b.catofes.",
-		"      addr: 127.0.0.1:9999",
-		"",
-	}, "\n")
-	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
-		t.Fatalf("WriteFile(config): %v", err)
-	}
-	t.Setenv("HIGGS_CONFIG", configPath)
-
-	state, _ := buildTestNetworkState(t)
-	now := time.Unix(1700000000, 0)
-	observedNow := time.Now()
-	endpoints := []gossip.LocalEndpoint{
-		{IP: net.ParseIP("127.0.0.1"), Port: 9999, Scope: "global", Priority: 100, Source: gossip.SourceAdvertise},
-	}
-	record := &zone.Record{
-		Zone:      "node-b.catofes.",
-		Key:       gossip.EndpointRecordKeyUDP,
-		Type:      "sync.endpoint",
-		Value:     gossip.EndpointRecordBytes(endpoints, now),
-		Version:   1,
-		Timestamp: now.Unix(),
-	}
-	if err := higgscrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
-		t.Fatalf("SignRecord(endpoint): %v", err)
-	}
-	if err := state.Network.PutAt(record, now); err != nil {
-		t.Fatalf("PutAt(endpoint): %v", err)
-	}
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {
-			LastSyncUnix:          now.Unix(),
-			DiscoveredAddr:        "127.0.0.1:2000",
-			DiscoveredAtUnix:      now.Unix(),
-			ObservedAddr:          "127.0.0.1:3000",
-			ObservedFirstSeenUnix: observedNow.Unix(),
-			ObservedLastSeenUnix:  observedNow.Unix(),
-			ObservedLastSyncUnix:  observedNow.Unix(),
-			ObservedUntilUnix:     observedNow.Add(time.Hour).Unix(),
-			ObservedSource:        string(gossip.MessagePing),
-			LastUpdateSource:      "node-c.catofes.",
-			ActivePullState:       string(SyncSessionObjectPulling),
-			ActivePullLastEvent:   "catalog_page",
-			ActivePullUpdatedUnix: now.Unix(),
-			HintAccepted:          2,
-			HintSuppressed:        1,
-			LastHintUnix:          now.Unix(),
-			LastHintReason:        "announce_hint",
-			LastHintSuppression:   "session_active",
-			ReadOnlyResponder:     3,
-			LastResponderUnix:     now.Unix(),
-			LastResponderKind:     "chunk_fallback",
-			LastResponderZone:     "node-b.catofes.",
-			DatagramStats: &datagramStats{
-				TooLargeDropped:       2,
-				DigestOnlyAnnounces:   1,
-				LastTooLargeUnix:      now.Unix(),
-				LastTooLargeDirection: "send",
-				LastTooLargeObject:    "record",
-				LastTooLargeZone:      "node-b.catofes.",
-				LastTooLargeKey:       "bigdata",
-				LastTooLargeBytes:     1800,
-				LastTooLargeLimit:     gossip.DefaultDatagramBudget,
-			},
-			ObjectPullStats: &objectPullStats{
-				Attempts:               3,
-				Successes:              2,
-				Failures:               1,
-				LargeObjectUnreachable: 1,
-				LastUnix:               now.Unix(),
-				LastError:              "no TCP address",
-				LastObject:             "record",
-				LastZone:               "node-b.catofes.",
-				LastKey:                "bigdata",
-				LastBytes:              4096,
-				LastSourcePeer:         "node-b.catofes.",
-				LastUnreachable:        true,
-			},
-		},
-	}
-	if err := saveState(state); err != nil {
-		t.Fatalf("saveState: %v", err)
-	}
-}
-
 func prepareStatePersistence(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -265,38 +160,6 @@ func putSignedEndpointRecord(t *testing.T, state *stateFile, ip string, port uin
 	}
 	if err := state.Network.PutAt(record, now); err != nil {
 		t.Fatalf("PutAt(endpoint): %v", err)
-	}
-}
-
-func runCLIAndCaptureStdout(t *testing.T, args ...string) string {
-	t.Helper()
-	oldStdout := os.Stdout
-	readEnd, writeEnd, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Pipe: %v", err)
-	}
-	os.Stdout = writeEnd
-	err = rootCommand().Run(context.Background(), args)
-	if closeErr := writeEnd.Close(); closeErr != nil {
-		t.Fatalf("Close(stdout pipe): %v", closeErr)
-	}
-	os.Stdout = oldStdout
-	data, readErr := io.ReadAll(readEnd)
-	if readErr != nil {
-		t.Fatalf("ReadAll(stdout): %v", readErr)
-	}
-	if err != nil {
-		t.Fatalf("Run(%v): %v\nstdout:\n%s", args, err, string(data))
-	}
-	return string(data)
-}
-
-func assertOutputContains(t *testing.T, output string, want ...string) {
-	t.Helper()
-	for _, fragment := range want {
-		if !strings.Contains(output, fragment) {
-			t.Fatalf("output missing %q\noutput:\n%s", fragment, output)
-		}
 	}
 }
 

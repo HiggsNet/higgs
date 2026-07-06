@@ -3,7 +3,6 @@ package text
 import (
 	"fmt"
 	"io"
-	"net"
 	"strings"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -100,8 +99,8 @@ func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.
 	writeDebugStrongSwanConfig(out, spec)
 	out.Linef("  rotation:")
 	out.Linef("    phase: %s", dash(link.Rotation.Phase))
-	out.Linef("    port_generation select/runtime/staged: %s", debugPortGenerationSummary(spec, link.Rotation))
-	out.Linef("    port local/remote/runtime/staged: %s", debugPortSummary(spec, link.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint), link.Rotation.StagedGeneration))
+	out.Linef("    port_generation select/runtime/staged: %s", inspect.DebugPortGenerationSummary(spec, link.Rotation))
+	out.Linef("    port local/remote/runtime/staged: %s", inspect.DebugPortSummary(spec, link.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint), link.Rotation.StagedGeneration))
 	out.Linef("    staged_ike: %s", dash(link.Rotation.StagedIKEName))
 	out.Linef("    staged_interface: %s", formatInterfaceWithIfID(link.Rotation.StagedInterfaceName, link.Rotation.StagedXFRMIfID))
 	out.Linef("    deadline: %s", formatUnixTime(link.Rotation.RotateDeadline))
@@ -288,83 +287,4 @@ func formatSAState(sa inspect.LinkSA) string {
 		return strings.ToLower(sa.IKEState)
 	}
 	return "present"
-}
-
-func debugPortGenerationSummary(spec *ipsec.TransportLinkSpec, rotation inspect.LinkRotation) string {
-	return fmt.Sprintf("%s/%d/%d", debugSelectedGeneration(spec), rotation.RemoteGeneration, rotation.StagedGeneration)
-}
-
-func debugPortSummary(spec *ipsec.TransportLinkSpec, selectedEndpoint, runtimeEndpoint string, stagedGeneration uint64) string {
-	return fmt.Sprintf("%s/%s/%s/%s",
-		dash(debugLocalPort(spec)),
-		dash(debugRemotePort(spec, selectedEndpoint)),
-		dash(debugEndpointPort(runtimeEndpoint)),
-		dash(debugStagedPort(spec, stagedGeneration)),
-	)
-}
-
-func debugSelectedGeneration(spec *ipsec.TransportLinkSpec) string {
-	if spec == nil {
-		return ""
-	}
-	return fmt.Sprintf("%d", spec.Generation)
-}
-
-func debugLocalPort(spec *ipsec.TransportLinkSpec) string {
-	if spec == nil {
-		return ""
-	}
-	if spec.LocalIKEPort != 0 {
-		return fmt.Sprintf("%d", spec.LocalIKEPort)
-	}
-	return fmt.Sprintf("%d", ipsec.DefaultNATTPort)
-}
-
-func debugRemotePort(spec *ipsec.TransportLinkSpec, endpoint string) string {
-	if spec != nil {
-		if point, ok := firstContactPointForDebug(spec.ContactPoints); ok {
-			return debugContactPort(point)
-		}
-	}
-	return debugEndpointPort(endpoint)
-}
-
-func debugStagedPort(spec *ipsec.TransportLinkSpec, stagedGeneration uint64) string {
-	if spec == nil || stagedGeneration == 0 {
-		return ""
-	}
-	for _, point := range spec.ContactPoints {
-		if point.Generation == stagedGeneration {
-			return debugContactPort(point)
-		}
-	}
-	return ""
-}
-
-func debugContactPort(point ipsec.ContactPoint) string {
-	if point.NATTPort != 0 {
-		return fmt.Sprintf("%d", point.NATTPort)
-	}
-	if point.IKEPort != 0 {
-		return fmt.Sprintf("%d", point.IKEPort)
-	}
-	return ""
-}
-
-func debugEndpointPort(endpoint string) string {
-	if endpoint == "" {
-		return ""
-	}
-	_, port, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		return ""
-	}
-	return port
-}
-
-func firstContactPointForDebug(points []ipsec.ContactPoint) (ipsec.ContactPoint, bool) {
-	for _, point := range points {
-		return point, true
-	}
-	return ipsec.ContactPoint{}, false
 }
