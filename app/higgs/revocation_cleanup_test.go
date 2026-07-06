@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -51,7 +52,7 @@ func TestCollectAllRevokedZonesWithRevocation(t *testing.T) {
 	}
 }
 
-// TestComputeRevocationImpactBasic verifies that RevocationImpact correctly
+// TestComputeRevocationImpactBasic verifies that inspect.RevocationImpact correctly
 // identifies affected link instances, sync peers, and the source zone.
 func TestComputeRevocationImpactBasic(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
@@ -99,8 +100,8 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 		t.Fatalf("affected sync peers = %v, want [node-b.catofes.]", impact.AffectedSyncPeers)
 	}
 	// All layer statuses should be pending.
-	for _, layer := range []string{revocationLayerIPsec, revocationLayerRouting, revocationLayerFirewall, revocationLayerGossip} {
-		if status := impact.Layers[layer]; status == nil || status.Status != revocationStatusPending {
+	for _, layer := range []string{inspect.RevocationLayerIPsec, inspect.RevocationLayerRouting, inspect.RevocationLayerFirewall, inspect.RevocationLayerGossip} {
+		if status := impact.Layers[layer]; status == nil || status.Status != inspect.RevocationStatusPending {
 			t.Fatalf("layer %s status = %+v, want pending", layer, status)
 		}
 	}
@@ -268,27 +269,27 @@ func TestCleanupRevokedPeerCacheEmpty(t *testing.T) {
 
 // TestUpdateRevocationLayerStatus verifies layer status updates.
 func TestUpdateRevocationLayerStatus(t *testing.T) {
-	impact := RevocationImpact{
-		Layers: make(map[string]*RevocationLayerStatus),
+	impact := inspect.RevocationImpact{
+		Layers: make(map[string]*inspect.RevocationLayerStatus),
 	}
 	// Initialize all layers as pending, similar to ComputeRevocationImpact.
-	for _, layer := range []string{revocationLayerIPsec, revocationLayerRouting, revocationLayerFirewall, revocationLayerGossip} {
-		impact.Layers[layer] = &RevocationLayerStatus{Status: revocationStatusPending}
+	for _, layer := range []string{inspect.RevocationLayerIPsec, inspect.RevocationLayerRouting, inspect.RevocationLayerFirewall, inspect.RevocationLayerGossip} {
+		impact.Layers[layer] = &inspect.RevocationLayerStatus{Status: inspect.RevocationStatusPending}
 	}
 	now := time.Unix(4140, 0)
-	UpdateRevocationLayerStatus(&impact, revocationLayerFirewall, revocationStatusRemoved, "deleted 3 rules", "", now)
-	status := impact.Layers[revocationLayerFirewall]
-	if status == nil || status.Status != revocationStatusRemoved || status.Reason != "deleted 3 rules" || status.UnixTime != now.Unix() {
+	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerFirewall, inspect.RevocationStatusRemoved, "deleted 3 rules", "", now)
+	status := impact.Layers[inspect.RevocationLayerFirewall]
+	if status == nil || status.Status != inspect.RevocationStatusRemoved || status.Reason != "deleted 3 rules" || status.UnixTime != now.Unix() {
 		t.Fatalf("layer status = %+v, want removed/deleted 3 rules", status)
 	}
 
-	UpdateRevocationLayerStatus(&impact, revocationLayerIPsec, revocationStatusError, "", "timeout", now)
+	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerIPsec, inspect.RevocationStatusError, "", "timeout", now)
 	if !impact.HasPendingCleanup() {
 		// routing and gossip should still be pending
 		t.Fatalf("expected pending cleanup, but routing/gossip are not pending")
 	}
-	UpdateRevocationLayerStatus(&impact, revocationLayerRouting, revocationStatusRemoved, "", "", now)
-	UpdateRevocationLayerStatus(&impact, revocationLayerGossip, revocationStatusRemoved, "", "", now)
+	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerRouting, inspect.RevocationStatusRemoved, "", "", now)
+	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerGossip, inspect.RevocationStatusRemoved, "", "", now)
 	if impact.HasPendingCleanup() {
 		t.Fatalf("expected no pending cleanup after all layers resolved")
 	}

@@ -154,14 +154,12 @@ func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter st
 	return inspecttext.WriteRotateDebug(w, view)
 }
 
-type rotateRuntimeView = inspect.RotateRuntimeView
-
-func rotateRuntimeEmpty(v rotateRuntimeView) bool {
+func rotateRuntimeEmpty(v inspect.RotateRuntimeView) bool {
 	return v.RuntimeID == "" && v.ChildSAName == "" && v.InterfaceName == "" && v.XFRMIfID == 0 && v.State == ""
 }
 
-func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) rotateRuntimeView {
-	out := rotateRuntimeView{
+func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) inspect.RotateRuntimeView {
+	out := inspect.RotateRuntimeView{
 		State:           "expected_current",
 		Generation:      link.Rotation.RemoteGeneration,
 		Port:            debugEndpointPort(link.Endpoint),
@@ -200,7 +198,7 @@ func rotateRuntimeCurrent(link inspect.LinkView, spec *ipsec.TransportLinkSpec) 
 	return out
 }
 
-func rotateRuntimeMatchesDesired(runtime rotateRuntimeView, desired inspect.DesiredLink) bool {
+func rotateRuntimeMatchesDesired(runtime inspect.RotateRuntimeView, desired inspect.DesiredLink) bool {
 	if desired.InterfaceName != "" && runtime.InterfaceName != "" && desired.InterfaceName != runtime.InterfaceName {
 		return false
 	}
@@ -213,7 +211,7 @@ func rotateRuntimeMatchesDesired(runtime rotateRuntimeView, desired inspect.Desi
 	return true
 }
 
-func rotateRuntimeMatchesSpec(runtime rotateRuntimeView, spec ipsec.TransportLinkSpec) bool {
+func rotateRuntimeMatchesSpec(runtime inspect.RotateRuntimeView, spec ipsec.TransportLinkSpec) bool {
 	if spec.InterfaceName != "" && runtime.InterfaceName != "" && spec.InterfaceName != runtime.InterfaceName {
 		return false
 	}
@@ -226,12 +224,12 @@ func rotateRuntimeMatchesSpec(runtime rotateRuntimeView, spec ipsec.TransportLin
 	return true
 }
 
-func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, sas []linkSAState) rotateRuntimeView {
+func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, sas []linkSAState) inspect.RotateRuntimeView {
 	generation := link.Rotation.StagedGeneration
 	if generation == 0 {
-		return rotateRuntimeView{}
+		return inspect.RotateRuntimeView{}
 	}
-	out := rotateRuntimeView{
+	out := inspect.RotateRuntimeView{
 		State:           "expected_new",
 		Generation:      generation,
 		Port:            debugStagedPort(spec, generation),
@@ -263,7 +261,7 @@ func rotateRuntimeStaged(link inspect.LinkView, spec *ipsec.TransportLinkSpec, s
 	return out
 }
 
-func stagedSAForRuntime(runtime rotateRuntimeView, sas []linkSAState) (linkSAState, bool) {
+func stagedSAForRuntime(runtime inspect.RotateRuntimeView, sas []linkSAState) (linkSAState, bool) {
 	for _, sa := range sas {
 		if runtime.XFRMIfID != 0 && sa.XFRMIfID == runtime.XFRMIfID {
 			return sa, true

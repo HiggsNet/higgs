@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/Catofes/higgs/pkg/health"
@@ -617,8 +618,8 @@ func (d *DaemonService) newBirdClient(socketPath string) birdClient {
 	return bird.NewClient(socketPath, 10*time.Second)
 }
 
-func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, command string) *birdDumpResponse {
-	response := &birdDumpResponse{Instances: map[string]birdDumpInstance{}}
+func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, command string) *inspect.BirdDumpResponse {
+	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return response
 	}
@@ -636,7 +637,7 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, comma
 		if netnsName != "" && inst.NetNS != netnsName && inst.ID != netnsName {
 			continue
 		}
-		item := birdDumpInstance{
+		item := inspect.BirdDumpInstance{
 			NetNS:         inst.NetNS,
 			InstanceID:    inst.ID,
 			ControlSocket: inst.ControlSocket,

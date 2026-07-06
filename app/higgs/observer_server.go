@@ -490,7 +490,7 @@ func (p *observerProvider) Routes() (any, error) {
 	}
 	now := d.Sync.now()
 	ars, _ := routing.BuildAuthorizedRouteSet(state.Network, now)
-	return buildRoutesDumpResponse(state.ManagedZone, ars), nil
+	return inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars), nil
 }
 
 func (p *observerProvider) Bird() (any, error) {

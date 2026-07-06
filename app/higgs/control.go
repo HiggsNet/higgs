@@ -16,16 +16,8 @@ import (
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
-	"github.com/Catofes/higgs/pkg/routing"
-	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
-
-type routesDumpResponse = inspecthttp.RoutesResponse
-type birdRoutesView = inspecthttp.BirdRoutesView
-type birdRouteView = inspecthttp.BirdRouteView
-type birdDumpResponse = inspect.BirdDumpResponse
-type birdDumpInstance = inspect.BirdDumpInstance
 
 const controlSocketName = "higgs.sock"
 
@@ -69,13 +61,13 @@ type controlResponse struct {
 	RootPublicKey     ed25519.PublicKey             `json:"root_public_key,omitempty"`
 	JoinBundle        *joinBundle                   `json:"join_bundle,omitempty"`
 	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
-	BirdDump          *birdDumpResponse             `json:"bird_dump,omitempty"`
-	RoutesDump        *routesDumpResponse           `json:"routes_dump,omitempty"`
-	Admission         *admissionDiagnosis           `json:"admission,omitempty"`
+	BirdDump          *inspect.BirdDumpResponse     `json:"bird_dump,omitempty"`
+	RoutesDump        *inspecthttp.RoutesResponse   `json:"routes_dump,omitempty"`
+	Admission         *inspect.AdmissionDiagnosis   `json:"admission,omitempty"`
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
 	Links             *linkInspectionControl        `json:"links,omitempty"`
 	PeerStatuses      []inspect.PeerStatusInfo      `json:"peer_statuses,omitempty"`
-	RevocationImpact  []RevocationImpact            `json:"revocation_impact,omitempty"`
+	RevocationImpact  []inspect.RevocationImpact    `json:"revocation_impact,omitempty"`
 	Health            []healthLinkJSON              `json:"health,omitempty"`
 	Record            map[string]any                `json:"record,omitempty"`
 	PortRotate        *manualPortRotateResult       `json:"port_rotate,omitempty"`
@@ -272,21 +264,17 @@ func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
-func buildRoutesDumpResponse(managedZone zone.ZonePath, ars *routing.AuthorizedRouteSet) *routesDumpResponse {
-	return inspecthttp.RoutesFromAuthorizedSet(managedZone, ars)
-}
-
-func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *routesDumpResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []birdRoutesView {
+func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspecthttp.RoutesResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []inspecthttp.BirdRoutesView {
 	if d == nil || dump == nil {
 		return nil
 	}
-	views := make([]birdRoutesView, 0, len(instances))
+	views := make([]inspecthttp.BirdRoutesView, 0, len(instances))
 	for _, inst := range instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}
 		state := birdStates[inst.NetNS]
-		view := birdRoutesView{
+		view := inspecthttp.BirdRoutesView{
 			NetNS:      inst.NetNS,
 			InstanceID: inst.ID,
 		}
@@ -314,7 +302,7 @@ func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *routesDu
 			continue
 		}
 		if observed != nil {
-			view.Routes = buildBirdRouteViews(dump, observed.Routes)
+			view.Routes = inspecthttp.BuildBirdRouteViews(dump, observed.Routes)
 		}
 		views = append(views, view)
 	}
@@ -325,10 +313,6 @@ func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *routesDu
 		return views[i].InstanceID < views[j].InstanceID
 	})
 	return views
-}
-
-func buildBirdRouteViews(dump *routesDumpResponse, routes []bird.BirdRoute) []birdRouteView {
-	return inspecthttp.BuildBirdRouteViews(dump, routes)
 }
 
 func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/routing/bird"
@@ -72,9 +73,9 @@ func debugBirdDumpWithRuntime(rt *Runtime, netnsName, command string, w io.Write
 	return writeDebugBirdDump(w, response.BirdDump)
 }
 
-func birdDumpOffline(rt *Runtime, netnsName, command string) (*birdDumpResponse, error) {
+func birdDumpOffline(rt *Runtime, netnsName, command string) (*inspect.BirdDumpResponse, error) {
 	if rt == nil || rt.Config == nil {
-		return &birdDumpResponse{Instances: map[string]birdDumpInstance{}}, nil
+		return &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}, nil
 	}
 	state, err := rt.LoadState()
 	if err != nil {
@@ -87,7 +88,7 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*birdDumpResponse,
 	} else {
 		command = ""
 	}
-	response := &birdDumpResponse{Instances: map[string]birdDumpInstance{}}
+	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
 	for _, inst := range rt.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
@@ -101,7 +102,7 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*birdDumpResponse,
 				controlSocket = bi.ControlSocket
 			}
 		}
-		item := birdDumpInstance{
+		item := inspect.BirdDumpInstance{
 			NetNS:         inst.NetNS,
 			InstanceID:    inst.ID,
 			ControlSocket: controlSocket,
@@ -130,7 +131,7 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*birdDumpResponse,
 	return response, nil
 }
 
-func writeDebugBirdDump(w io.Writer, dump *birdDumpResponse) error {
+func writeDebugBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 	return inspecttext.WriteBirdDump(w, dump)
 }
 
@@ -227,7 +228,7 @@ func debugRoutesWithRuntime(rt *Runtime, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var dump *routesDumpResponse
+	var dump *inspecthttp.RoutesResponse
 	if ok && response.RoutesDump != nil {
 		dump = response.RoutesDump
 	} else {
@@ -240,7 +241,7 @@ func debugRoutesWithRuntime(rt *Runtime, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		dump = buildRoutesDumpResponse(state.ManagedZone, ars)
+		dump = inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars)
 	}
 	return inspecttext.WriteRoutesDebug(w, dump)
 }
@@ -266,7 +267,7 @@ func debugRouteWithRuntime(rt *Runtime, prefixArg string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var dump *routesDumpResponse
+	var dump *inspecthttp.RoutesResponse
 	if ok && response.RoutesDump != nil {
 		dump = response.RoutesDump
 	} else {
@@ -279,7 +280,7 @@ func debugRouteWithRuntime(rt *Runtime, prefixArg string, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		dump = buildRoutesDumpResponse(state.ManagedZone, ars)
+		dump = inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars)
 	}
 	return inspecttext.WriteRouteDebug(w, prefix, dump)
 }

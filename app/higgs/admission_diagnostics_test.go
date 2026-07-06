@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/internal/inspect"
 )
 
 func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {
@@ -20,7 +22,7 @@ func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {
 	if d.Pending {
 		t.Fatalf("diagnosis should not be pending after adoption")
 	}
-	if d.Reason != admissionReasonAdopted && d.Reason != admissionReasonNotApplicable {
+	if d.Reason != inspect.AdmissionReasonAdopted && d.Reason != inspect.AdmissionReasonNotApplicable {
 		t.Fatalf("reason = %s, want adopted or not_applicable", d.Reason)
 	}
 }
@@ -34,8 +36,8 @@ func TestDiagnoseAutoJoinMissingParentZone(t *testing.T) {
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
-	if d.Reason != admissionReasonMissingParentZone {
-		t.Fatalf("reason = %s, want %s", d.Reason, admissionReasonMissingParentZone)
+	if d.Reason != inspect.AdmissionReasonMissingParentZone {
+		t.Fatalf("reason = %s, want %s", d.Reason, inspect.AdmissionReasonMissingParentZone)
 	}
 }
 
@@ -53,8 +55,8 @@ func TestDiagnoseAutoJoinMissingDelegation(t *testing.T) {
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
-	if d.Reason != admissionReasonMissingDelegation {
-		t.Fatalf("reason = %s, want %s", d.Reason, admissionReasonMissingDelegation)
+	if d.Reason != inspect.AdmissionReasonMissingDelegation {
+		t.Fatalf("reason = %s, want %s", d.Reason, inspect.AdmissionReasonMissingDelegation)
 	}
 }
 
@@ -66,8 +68,8 @@ func TestDiagnoseAutoJoinDelegationKeyMismatch(t *testing.T) {
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
-	if d.Reason != admissionReasonDelegationKeyMismatch {
-		t.Fatalf("reason = %s, want %s", d.Reason, admissionReasonDelegationKeyMismatch)
+	if d.Reason != inspect.AdmissionReasonDelegationKeyMismatch {
+		t.Fatalf("reason = %s, want %s", d.Reason, inspect.AdmissionReasonDelegationKeyMismatch)
 	}
 }
 
@@ -79,8 +81,8 @@ func TestDiagnoseAutoJoinNoBootstrapSync(t *testing.T) {
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
-	if d.Reason != admissionReasonNoBootstrapSync && d.Reason != admissionReasonWaitingForAdoption {
-		t.Fatalf("reason = %s, want %s or %s", d.Reason, admissionReasonNoBootstrapSync, admissionReasonWaitingForAdoption)
+	if d.Reason != inspect.AdmissionReasonNoBootstrapSync && d.Reason != inspect.AdmissionReasonWaitingForAdoption {
+		t.Fatalf("reason = %s, want %s or %s", d.Reason, inspect.AdmissionReasonNoBootstrapSync, inspect.AdmissionReasonWaitingForAdoption)
 	}
 }
 
@@ -97,8 +99,8 @@ func TestDiagnoseAutoJoinWaitingForAdoption(t *testing.T) {
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
-	if d.Reason != admissionReasonWaitingForAdoption {
-		t.Fatalf("reason = %s, want %s", d.Reason, admissionReasonWaitingForAdoption)
+	if d.Reason != inspect.AdmissionReasonWaitingForAdoption {
+		t.Fatalf("reason = %s, want %s", d.Reason, inspect.AdmissionReasonWaitingForAdoption)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
@@ -51,18 +52,18 @@ func debugRevokeImpact(_ context.Context, zoneArg string) error {
 	}
 	now := rt.Now()
 	syncConfig, _ := rt.SyncConfig(state)
-	var impacts []RevocationImpact
+	var impacts []inspect.RevocationImpact
 	if zoneArg != "" {
 		impact := ComputeRevocationImpact(state, zone.ZonePath(zoneArg), now)
-		impacts = []RevocationImpact{impact}
+		impacts = []inspect.RevocationImpact{impact}
 	} else {
 		impacts = AllRevocationImpact(state, syncConfig, now)
 	}
 	return inspecttext.WriteRevocationImpacts(os.Stdout, impacts)
 }
 
-func filterImpactsByZone(impacts []RevocationImpact, z zone.ZonePath) []RevocationImpact {
-	var out []RevocationImpact
+func filterImpactsByZone(impacts []inspect.RevocationImpact, z zone.ZonePath) []inspect.RevocationImpact {
+	var out []inspect.RevocationImpact
 	for _, imp := range impacts {
 		if imp.RevokedZone == z {
 			out = append(out, imp)

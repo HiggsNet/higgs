@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -701,7 +702,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		routesDump := buildRoutesDumpResponse(state.ManagedZone, ars)
+		routesDump := inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars)
 		birdStates := cloneBirdInstances(state.BirdInstances)
 		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdStates)
 		response := controlResponse{

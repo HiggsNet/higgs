@@ -42,6 +42,7 @@
     - 已新增 `internal/inspect` revocation/firewall debug view 与 `internal/inspect/text` presenter：`debug revoke-impact` 的影响详情输出、revocation layer view/status、`debug firewall` 实例摘要输出已从 app 层迁出；app 层保留 impact 计算、daemon control fallback、firewall config/snapshot 投影 adapter。
     - 已新增 `internal/inspect` admission diagnosis view/reason code 与 `internal/inspect/text` presenter：`debug admission` 文本输出和 output 测试已下沉；app 层保留 auto-join state/key/delegation 检查与 admission state 更新 adapter。
     - 已新增 `internal/inspect` routing/BIRD debug view 与 `internal/inspect/text` presenter：`debug bird-dump` raw command 输出、`debug babel` BIRD instance 摘要已从 `debug_routing.go` 下沉；app 层保留 BIRD client/control socket/offline fallback adapter。
+    - 已清理 app 层仅为迁移兼容保留的 inspect / inspect/http alias：routes/BIRD、admission、revocation、rotate、peer lifecycle 调用点直接引用 `internal/inspect` 或 `internal/inspect/http`；app 层只保留 runtime/control/state adapter。
   - [ ] Diagnostics/debug 迁移路线：
     - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link、endpoint 的 view builder 和文本输出迁到 inspect/text；`debug peer` / `debug links` / `debug endpoints` CLI presenter 与 `debug records` records view/presenter 已下沉。
       - 已新增 `inspect.BuildEndpointDebug`：`debug endpoints` 的 local candidate / discovered peer / signed endpoint 稳定排序、reflector error 展示规则和 endpoint debug view 构建下沉到 `internal/inspect`；app 层仅保留 local/discovered endpoint 采集与 gossip 类型适配。

@@ -9,27 +9,12 @@ import (
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
-const (
-	admissionReasonAdopted                = inspect.AdmissionReasonAdopted
-	admissionReasonNotApplicable          = inspect.AdmissionReasonNotApplicable
-	admissionReasonMissingZoneKey         = inspect.AdmissionReasonMissingZoneKey
-	admissionReasonMissingParentZone      = inspect.AdmissionReasonMissingParentZone
-	admissionReasonMissingDelegation      = inspect.AdmissionReasonMissingDelegation
-	admissionReasonDelegationKeyMismatch  = inspect.AdmissionReasonDelegationKeyMismatch
-	admissionReasonVerifyDelegationFailed = inspect.AdmissionReasonVerifyDelegationFailed
-	admissionReasonVerifyChainFailed      = inspect.AdmissionReasonVerifyChainFailed
-	admissionReasonNoBootstrapSync        = inspect.AdmissionReasonNoBootstrapSync
-	admissionReasonWaitingForAdoption     = inspect.AdmissionReasonWaitingForAdoption
-)
-
-type admissionDiagnosis = inspect.AdmissionDiagnosis
-
 // diagnoseAutoJoinAdmission examines the local state and produces a
 // structured admission diagnosis explaining why a node is (or is not)
 // in auto-join pending state. The function is pure: it does not mutate
 // state or perform I/O.
-func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) admissionDiagnosis {
-	d := admissionDiagnosis{
+func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) inspect.AdmissionDiagnosis {
+	d := inspect.AdmissionDiagnosis{
 		ManagedZone: state.ManagedZone,
 		ParentZone:  state.ManagedZone.Parent(),
 	}
@@ -43,9 +28,9 @@ func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) admissionDiagnos
 	if !autoJoinPending(state) {
 		d.Pending = false
 		if state.Admission != nil && state.Admission.AdoptedAtUnix > 0 {
-			d.Reason = admissionReasonAdopted
+			d.Reason = inspect.AdmissionReasonAdopted
 		} else {
-			d.Reason = admissionReasonNotApplicable
+			d.Reason = inspect.AdmissionReasonNotApplicable
 		}
 		return d
 	}
@@ -61,26 +46,26 @@ func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) admissionDiagnos
 			d.JoinRequestB64 = text
 		}
 	} else {
-		d.Reason = admissionReasonMissingZoneKey
+		d.Reason = inspect.AdmissionReasonMissingZoneKey
 		d.ReasonDetail = "zone private key is not loaded; check identity.key_path in config"
 		return d
 	}
 
 	// Check parent zone presence.
 	if state.Network == nil {
-		d.Reason = admissionReasonMissingParentZone
+		d.Reason = inspect.AdmissionReasonMissingParentZone
 		d.ReasonDetail = "network state is empty; bootstrap peer must sync the parent zone"
 		return d
 	}
 	parentState := state.Network.Zones[d.ParentZone]
 	if parentState == nil {
-		d.Reason = admissionReasonMissingParentZone
+		d.Reason = inspect.AdmissionReasonMissingParentZone
 		d.ReasonDetail = fmt.Sprintf("parent zone %s is not in local verified state; waiting for bootstrap sync", d.ParentZone)
 		return d
 	}
 	d.ParentZoneKnown = true
 	if parentState.Authority == nil {
-		d.Reason = admissionReasonMissingParentZone
+		d.Reason = inspect.AdmissionReasonMissingParentZone
 		d.ReasonDetail = fmt.Sprintf("parent zone %s has no authority; waiting for bootstrap sync", d.ParentZone)
 		return d
 	}
@@ -89,7 +74,7 @@ func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) admissionDiagnos
 	// Check delegation presence.
 	delegation := parentState.Delegations[state.ManagedZone]
 	if delegation == nil {
-		d.Reason = admissionReasonMissingDelegation
+		d.Reason = inspect.AdmissionReasonMissingDelegation
 		d.ReasonDetail = fmt.Sprintf("parent zone %s has no delegation for %s; parent zone admin must run 'delegate issue'", d.ParentZone, state.ManagedZone)
 		return d
 	}
@@ -98,7 +83,7 @@ func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) admissionDiagnos
 	// Check delegation key match.
 	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
 	if delegation.ZoneName != state.ManagedZone || delegation.Authority.Zone != state.ManagedZone || !authorityHasKey(&delegation.Authority, pub) {
-		d.Reason = admissionReasonDelegationKeyMismatch
+		d.Reason = inspect.AdmissionReasonDelegationKeyMismatch
 		d.ReasonDetail = "delegation authority does not match local zone private key; parent zone admin may have signed for a different public key"
 		return d
 	}
@@ -106,16 +91,16 @@ func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) admissionDiagnos
 
 	// Check VerifyDelegation.
 	if err := higgscrypto.VerifyDelegation(delegation, parentState.Authority, d.ParentZone, now); err != nil {
-		d.Reason = admissionReasonVerifyDelegationFailed
+		d.Reason = inspect.AdmissionReasonVerifyDelegationFailed
 		d.ReasonDetail = fmt.Sprintf("VerifyDelegation failed: %v", err)
 		return d
 	}
 
 	// All checks pass — either we should be adopted on next sync, or
 	// VerifyChain would fail if we tried to materialize now.
-	d.Reason = admissionReasonWaitingForAdoption
+	d.Reason = inspect.AdmissionReasonWaitingForAdoption
 	if d.LastBootstrapSyncUnix == 0 {
-		d.Reason = admissionReasonNoBootstrapSync
+		d.Reason = inspect.AdmissionReasonNoBootstrapSync
 		d.ReasonDetail = "no bootstrap peer has successfully synced yet; check bootstrap config and peer reachability"
 	} else {
 		d.ReasonDetail = "all local checks pass; adoption will complete on next sync round that applies the delegation"

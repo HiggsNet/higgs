@@ -9,25 +9,6 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-type RevocationImpact = inspect.RevocationImpact
-type RevocationLayerStatus = inspect.RevocationLayerStatus
-
-const (
-	revocationLayerIPsec    = inspect.RevocationLayerIPsec
-	revocationLayerRouting  = inspect.RevocationLayerRouting
-	revocationLayerFirewall = inspect.RevocationLayerFirewall
-	revocationLayerGossip   = inspect.RevocationLayerGossip
-)
-
-// Revocation layer status values.
-const (
-	revocationStatusPending       = inspect.RevocationStatusPending
-	revocationStatusRemoved       = inspect.RevocationStatusRemoved
-	revocationStatusNotFound      = inspect.RevocationStatusNotFound
-	revocationStatusOwnerConflict = inspect.RevocationStatusOwnerConflict
-	revocationStatusError         = inspect.RevocationStatusError
-)
-
 // ComputeRevocationImpact computes the full impact of a revocation on the
 // local daemon's runtime state. It is a pure function that reads from verified
 // active state and local runtime state; it does not mutate anything.
@@ -38,10 +19,10 @@ const (
 //   - SyncPeers entries whose peer ID maps to a revoked zone
 //   - Bootstrap peers that are configured but now revoked
 //   - IPAM prefixes assigned to revoked zones (from route authorization errors)
-func ComputeRevocationImpact(state *stateFile, revokedZone zone.ZonePath, now time.Time) RevocationImpact {
-	impact := RevocationImpact{
+func ComputeRevocationImpact(state *stateFile, revokedZone zone.ZonePath, now time.Time) inspect.RevocationImpact {
+	impact := inspect.RevocationImpact{
 		RevokedZone: revokedZone,
-		Layers:      make(map[string]*RevocationLayerStatus),
+		Layers:      make(map[string]*inspect.RevocationLayerStatus),
 	}
 	if state == nil || state.Network == nil || !revokedZone.Valid() {
 		return impact
@@ -94,8 +75,8 @@ func ComputeRevocationImpact(state *stateFile, revokedZone zone.ZonePath, now ti
 	sort.Strings(impact.ConfiguredButRevoked)
 
 	// Initialize all layer statuses as pending.
-	for _, layer := range []string{revocationLayerIPsec, revocationLayerRouting, revocationLayerFirewall, revocationLayerGossip} {
-		impact.Layers[layer] = &RevocationLayerStatus{Status: revocationStatusPending}
+	for _, layer := range []string{inspect.RevocationLayerIPsec, inspect.RevocationLayerRouting, inspect.RevocationLayerFirewall, inspect.RevocationLayerGossip} {
+		impact.Layers[layer] = &inspect.RevocationLayerStatus{Status: inspect.RevocationStatusPending}
 	}
 
 	return impact
@@ -351,13 +332,13 @@ func executePurgePlan(state *stateFile, plan *purgePlan) {
 
 // UpdateRevocationLayerStatus records the cleanup status for a layer in the
 // impact object. This is called by the daemon after each layer's cleanup pass.
-func UpdateRevocationLayerStatus(impact *RevocationImpact, layer string, status, reason, errStr string, now time.Time) {
+func UpdateRevocationLayerStatus(impact *inspect.RevocationImpact, layer string, status, reason, errStr string, now time.Time) {
 	if impact == nil || impact.Layers == nil {
 		return
 	}
 	entry := impact.Layers[layer]
 	if entry == nil {
-		entry = &RevocationLayerStatus{}
+		entry = &inspect.RevocationLayerStatus{}
 		impact.Layers[layer] = entry
 	}
 	entry.Status = status
@@ -368,7 +349,7 @@ func UpdateRevocationLayerStatus(impact *RevocationImpact, layer string, status,
 
 // AllRevocationImpact computes impact for all currently-revoked zones and
 // returns a combined result for debug/diagnostic output.
-func AllRevocationImpact(state *stateFile, config *syncConfigFile, now time.Time) []RevocationImpact {
+func AllRevocationImpact(state *stateFile, config *syncConfigFile, now time.Time) []inspect.RevocationImpact {
 	if state == nil || state.Network == nil {
 		return nil
 	}
@@ -384,7 +365,7 @@ func AllRevocationImpact(state *stateFile, config *syncConfigFile, now time.Time
 	sort.Slice(zones, func(i, j int) bool {
 		return zones[i] < zones[j]
 	})
-	var out []RevocationImpact
+	var out []inspect.RevocationImpact
 	for _, z := range zones {
 		impact := ComputeRevocationImpact(state, z, now)
 		// Supplement configured_but_revoked with actual config.
