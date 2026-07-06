@@ -37,3 +37,27 @@ func TestStatusResponsePreservesObserverSchema(t *testing.T) {
 		t.Fatalf("numeric fields missing: %#v", decoded)
 	}
 }
+
+func TestBuildStatusResponseComputesLastReconcile(t *testing.T) {
+	got := BuildStatusResponse(StatusInput{
+		PeerID:             "node-a.catofes.",
+		ManagedZone:        "node-a.catofes.",
+		ListenAddr:         "127.0.0.1:33434",
+		DaemonOnline:       true,
+		StateRevision:      7,
+		SnapshotTimeUnix:   100,
+		KnownZones:         3,
+		KnownPeers:         2,
+		LinkInstances:      4,
+		DesiredLinks:       5,
+		LastSyncUnix:       80,
+		IPsecLastRunUnix:   90,
+		RoutingLastRunUnix: 95,
+	})
+	if got.LastReconcileUnix != 95 {
+		t.Fatalf("last reconcile = %d, want routing max 95", got.LastReconcileUnix)
+	}
+	if got.PeerID != "node-a.catofes." || got.StateRevision != 7 || got.LinkInstances != 4 {
+		t.Fatalf("status fields not preserved: %#v", got)
+	}
+}

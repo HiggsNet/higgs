@@ -18,3 +18,48 @@ type StatusResponse struct {
 	LastSyncUnix      int64  `json:"last_sync_unix,omitempty"`
 	LastReconcileUnix int64  `json:"last_reconcile_unix,omitempty"`
 }
+
+type StatusInput struct {
+	PeerID             string
+	ManagedZone        string
+	ListenAddr         string
+	DaemonOnline       bool
+	StateRevision      uint64
+	SnapshotTimeUnix   int64
+	Dirty              any
+	ReconcileProgress  any
+	KnownZones         int
+	KnownPeers         int
+	LinkInstances      int
+	DesiredLinks       int
+	LastLinkError      string
+	LastRoutingError   string
+	LastSyncUnix       int64
+	IPsecLastRunUnix   int64
+	RoutingLastRunUnix int64
+}
+
+func BuildStatusResponse(input StatusInput) StatusResponse {
+	lastReconcileUnix := input.IPsecLastRunUnix
+	if input.RoutingLastRunUnix > lastReconcileUnix {
+		lastReconcileUnix = input.RoutingLastRunUnix
+	}
+	return StatusResponse{
+		PeerID:            input.PeerID,
+		ManagedZone:       input.ManagedZone,
+		ListenAddr:        input.ListenAddr,
+		DaemonOnline:      input.DaemonOnline,
+		StateRevision:     input.StateRevision,
+		SnapshotTimeUnix:  input.SnapshotTimeUnix,
+		Dirty:             input.Dirty,
+		ReconcileProgress: input.ReconcileProgress,
+		KnownZones:        input.KnownZones,
+		KnownPeers:        input.KnownPeers,
+		LinkInstances:     input.LinkInstances,
+		DesiredLinks:      input.DesiredLinks,
+		LastLinkError:     input.LastLinkError,
+		LastRoutingError:  input.LastRoutingError,
+		LastSyncUnix:      input.LastSyncUnix,
+		LastReconcileUnix: lastReconcileUnix,
+	}
+}

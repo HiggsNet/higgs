@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -166,17 +165,18 @@ func (p *observerProvider) Status() (any, error) {
 	}
 	knownPeers := len(state.SyncPeers)
 	var lastSyncUnix int64
-	var lastReconcileUnix int64
 	for _, peer := range state.SyncPeers {
 		if peer.LastSyncUnix > lastSyncUnix {
 			lastSyncUnix = peer.LastSyncUnix
 		}
 	}
-	if state.IPsecReconcile != nil && state.IPsecReconcile.LastRunUnix > lastReconcileUnix {
-		lastReconcileUnix = state.IPsecReconcile.LastRunUnix
+	var ipsecLastRunUnix int64
+	if state.IPsecReconcile != nil {
+		ipsecLastRunUnix = state.IPsecReconcile.LastRunUnix
 	}
-	if state.RoutingReconcile != nil && state.RoutingReconcile.LastRunUnix > lastReconcileUnix {
-		lastReconcileUnix = state.RoutingReconcile.LastRunUnix
+	var routingLastRunUnix int64
+	if state.RoutingReconcile != nil {
+		routingLastRunUnix = state.RoutingReconcile.LastRunUnix
 	}
 	peerID := ""
 	listenAddr := ""
@@ -186,24 +186,25 @@ func (p *observerProvider) Status() (any, error) {
 		listenAddr = d.Sync.Config.ListenAddr
 	}
 	managedZone = string(state.ManagedZone)
-	return inspecthttp.StatusResponse{
-		PeerID:            peerID,
-		ManagedZone:       managedZone,
-		ListenAddr:        listenAddr,
-		DaemonOnline:      true,
-		StateRevision:     meta.Revision,
-		SnapshotTimeUnix:  meta.SnapshotTime.Unix(),
-		Dirty:             meta.Dirty,
-		ReconcileProgress: meta.ReconcileProgress,
-		KnownZones:        knownZones,
-		KnownPeers:        knownPeers,
-		LinkInstances:     linkInstances,
-		DesiredLinks:      desiredLinks,
-		LastLinkError:     lastLinkError,
-		LastRoutingError:  lastRoutingError,
-		LastSyncUnix:      lastSyncUnix,
-		LastReconcileUnix: lastReconcileUnix,
-	}, nil
+	return inspecthttp.BuildStatusResponse(inspecthttp.StatusInput{
+		PeerID:             peerID,
+		ManagedZone:        managedZone,
+		ListenAddr:         listenAddr,
+		DaemonOnline:       true,
+		StateRevision:      meta.Revision,
+		SnapshotTimeUnix:   meta.SnapshotTime.Unix(),
+		Dirty:              meta.Dirty,
+		ReconcileProgress:  meta.ReconcileProgress,
+		KnownZones:         knownZones,
+		KnownPeers:         knownPeers,
+		LinkInstances:      linkInstances,
+		DesiredLinks:       desiredLinks,
+		LastLinkError:      lastLinkError,
+		LastRoutingError:   lastRoutingError,
+		LastSyncUnix:       lastSyncUnix,
+		IPsecLastRunUnix:   ipsecLastRunUnix,
+		RoutingLastRunUnix: routingLastRunUnix,
+	}), nil
 }
 
 func (p *observerProvider) Zones(zoneFilter string) (any, error) {
@@ -351,87 +352,78 @@ func observerRuntime(d *DaemonService) *Runtime {
 
 func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]inspecthttp.HealthContextItem, error) {
 	if d == nil || d.Sync == nil {
-		out := make([]inspecthttp.HealthContextItem, 0, len(links))
-		for _, link := range links {
-			out = append(out, inspecthttp.HealthContextItem{Health: link})
-		}
-		return out, nil
+		return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{
+			HealthLinks: inspectHealthLinks(links),
+		}), nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil {
-		out := make([]inspecthttp.HealthContextItem, 0, len(links))
-		for _, link := range links {
-			out = append(out, inspecthttp.HealthContextItem{Health: link})
-		}
-		return out, nil
+		return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{
+			HealthLinks: inspectHealthLinks(links),
+		}), nil
 	}
 	reconcile := state.IPsecReconcile
 	desiredByID := map[string]desiredLinkState{}
 	if reconcile != nil {
 		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
-	healthBaseIDs := map[string]bool{}
-	out := make([]inspecthttp.HealthContextItem, 0, len(links)+len(state.LinkInstances))
-	for _, health := range links {
-		if health.InstanceID == "" {
-			continue
-		}
-		healthBaseIDs[health.InstanceID] = true
-		out = append(out, healthContextItem(health, state.LinkInstances[health.InstanceID], desiredByID[health.InstanceID]))
-	}
-	ids := make([]string, 0, len(state.LinkInstances))
-	for id := range state.LinkInstances {
-		if !healthBaseIDs[id] {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		health := healthLinkJSON{
-			InstanceID: id,
-			State:      "unknown",
-		}
-		out = append(out, healthContextItem(health, state.LinkInstances[id], desiredByID[id]))
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		hi := out[i].Health.(healthLinkJSON)
-		hj := out[j].Health.(healthLinkJSON)
-		if hi.InstanceID != hj.InstanceID {
-			return hi.InstanceID < hj.InstanceID
-		}
-		return hi.ProbeRole < hj.ProbeRole
-	})
-	return out, nil
+	return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{
+		HealthLinks: inspectHealthLinks(links),
+		Instances:   inspectHealthInstances(state.LinkInstances),
+		Desired:     inspectHealthDesired(desiredByID),
+		Unknown: func(instanceID string) any {
+			return healthLinkJSON{
+				InstanceID: instanceID,
+				State:      "unknown",
+			}
+		},
+	}), nil
 }
 
-func healthContextItem(health healthLinkJSON, inst linkInstanceState, desired desiredLinkState) inspecthttp.HealthContextItem {
-	item := inspecthttp.HealthContextItem{Health: health}
-	if inst.ID != "" {
-		item.Instance = inst
-		item.PeerZone = inst.PeerZone
-		item.GroupID = inst.GroupID
-		item.InterfaceName = firstNonEmpty(health.InterfaceName, inst.InterfaceName)
-		item.Endpoint = inst.Endpoint
-		item.ActualState = inst.ActualState
+func inspectHealthLinks(links []healthLinkJSON) []inspecthttp.HealthLinkContextInput {
+	out := make([]inspecthttp.HealthLinkContextInput, 0, len(links))
+	for _, health := range links {
+		out = append(out, inspecthttp.HealthLinkContextInput{
+			InstanceID:    health.InstanceID,
+			ProbeID:       health.ProbeID,
+			ProbeRole:     health.ProbeRole,
+			InterfaceName: health.InterfaceName,
+			Health:        health,
+		})
 	}
-	if desired.InstanceID != "" {
-		item.Desired = desired
-		if item.PeerZone == nil {
-			item.PeerZone = desired.PeerZone
+	return out
+}
+
+func inspectHealthInstances(instances map[string]linkInstanceState) map[string]inspecthttp.HealthInstanceContextInput {
+	out := make(map[string]inspecthttp.HealthInstanceContextInput, len(instances))
+	for id, inst := range instances {
+		out[id] = inspecthttp.HealthInstanceContextInput{
+			ID:            inst.ID,
+			PeerZone:      inst.PeerZone,
+			GroupID:       inst.GroupID,
+			InterfaceName: inst.InterfaceName,
+			Endpoint:      inst.Endpoint,
+			ActualState:   inst.ActualState,
+			Instance:      inst,
 		}
-		if item.GroupID == "" {
-			item.GroupID = desired.GroupID
-		}
-		if item.InterfaceName == "" {
-			item.InterfaceName = firstNonEmpty(health.InterfaceName, desired.InterfaceName)
-		}
-		item.LocalTunnelAddr = desired.LocalTunnelAddr
-		item.PeerTunnelAddr = desired.PeerTunnelAddr
 	}
-	if item.InterfaceName == "" && health.InterfaceName != "" {
-		item.InterfaceName = health.InterfaceName
+	return out
+}
+
+func inspectHealthDesired(desiredByID map[string]desiredLinkState) map[string]inspecthttp.HealthDesiredContextInput {
+	out := make(map[string]inspecthttp.HealthDesiredContextInput, len(desiredByID))
+	for id, desired := range desiredByID {
+		out[id] = inspecthttp.HealthDesiredContextInput{
+			InstanceID:      desired.InstanceID,
+			PeerZone:        desired.PeerZone,
+			GroupID:         desired.GroupID,
+			InterfaceName:   desired.InterfaceName,
+			LocalTunnelAddr: desired.LocalTunnelAddr,
+			PeerTunnelAddr:  desired.PeerTunnelAddr,
+			Desired:         desired,
+		}
 	}
-	return item
+	return out
 }
 
 func (p *observerProvider) Health(linkFilter string) (any, error) {
