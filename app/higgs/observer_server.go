@@ -240,11 +240,11 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {
-		return map[string]any{"peers": []any{}}, nil
+		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil {
-		return map[string]any{"peers": []any{}}, nil
+		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
 	}
 	peerSet := inspectPeerSetInput(state, d.Sync.Config, d.Sync.now())
 	peerIDs := inspect.BuildPeerIDs(peerSet)
@@ -300,7 +300,7 @@ func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *
 		ObservedSource:        ps.ObservedSource,
 		ObservedFailureCount:  ps.ObservedFailureCount,
 		ObservedGraceAddrs:    ps.ObservedGraceAddrs,
-		Endpoints:             peerEndpointsJSON(id, ps, config, ns, now),
+		Endpoints:             inspectPeerEndpoints(id, ps, config, ns, now),
 		DatagramStats:         ps.DatagramStats,
 		ObjectPullStats:       ps.ObjectPullStats,
 		RejectedDigests:       ps.RejectedDigests,
@@ -317,10 +317,6 @@ func bootstrapAddrForPeer(config *syncConfigFile, peerID string) string {
 		}
 	}
 	return ""
-}
-
-func peerEndpointsJSON(peerID string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) []inspect.PeerEndpointView {
-	return inspectPeerEndpoints(peerID, ps, config, ns, now)
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {
@@ -353,19 +349,19 @@ func observerRuntime(d *DaemonService) *Runtime {
 	return d.Sync.App
 }
 
-func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]map[string]any, error) {
+func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]inspecthttp.HealthContextItem, error) {
 	if d == nil || d.Sync == nil {
-		out := make([]map[string]any, 0, len(links))
+		out := make([]inspecthttp.HealthContextItem, 0, len(links))
 		for _, link := range links {
-			out = append(out, map[string]any{"health": link})
+			out = append(out, inspecthttp.HealthContextItem{Health: link})
 		}
 		return out, nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil {
-		out := make([]map[string]any, 0, len(links))
+		out := make([]inspecthttp.HealthContextItem, 0, len(links))
 		for _, link := range links {
-			out = append(out, map[string]any{"health": link})
+			out = append(out, inspecthttp.HealthContextItem{Health: link})
 		}
 		return out, nil
 	}
@@ -375,7 +371,7 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]map[str
 		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
 	healthBaseIDs := map[string]bool{}
-	out := make([]map[string]any, 0, len(links)+len(state.LinkInstances))
+	out := make([]inspecthttp.HealthContextItem, 0, len(links)+len(state.LinkInstances))
 	for _, health := range links {
 		if health.InstanceID == "" {
 			continue
@@ -398,8 +394,8 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]map[str
 		out = append(out, healthContextItem(health, state.LinkInstances[id], desiredByID[id]))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		hi := out[i]["health"].(healthLinkJSON)
-		hj := out[j]["health"].(healthLinkJSON)
+		hi := out[i].Health.(healthLinkJSON)
+		hj := out[j].Health.(healthLinkJSON)
 		if hi.InstanceID != hj.InstanceID {
 			return hi.InstanceID < hj.InstanceID
 		}
@@ -408,32 +404,32 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]map[str
 	return out, nil
 }
 
-func healthContextItem(health healthLinkJSON, inst linkInstanceState, desired desiredLinkState) map[string]any {
-	item := map[string]any{"health": health}
+func healthContextItem(health healthLinkJSON, inst linkInstanceState, desired desiredLinkState) inspecthttp.HealthContextItem {
+	item := inspecthttp.HealthContextItem{Health: health}
 	if inst.ID != "" {
-		item["instance"] = inst
-		item["peer_zone"] = inst.PeerZone
-		item["group_id"] = inst.GroupID
-		item["interface_name"] = firstNonEmpty(health.InterfaceName, inst.InterfaceName)
-		item["endpoint"] = inst.Endpoint
-		item["actual_state"] = inst.ActualState
+		item.Instance = inst
+		item.PeerZone = inst.PeerZone
+		item.GroupID = inst.GroupID
+		item.InterfaceName = firstNonEmpty(health.InterfaceName, inst.InterfaceName)
+		item.Endpoint = inst.Endpoint
+		item.ActualState = inst.ActualState
 	}
 	if desired.InstanceID != "" {
-		item["desired"] = desired
-		if _, ok := item["peer_zone"]; !ok {
-			item["peer_zone"] = desired.PeerZone
+		item.Desired = desired
+		if item.PeerZone == nil {
+			item.PeerZone = desired.PeerZone
 		}
-		if _, ok := item["group_id"]; !ok {
-			item["group_id"] = desired.GroupID
+		if item.GroupID == "" {
+			item.GroupID = desired.GroupID
 		}
-		if _, ok := item["interface_name"]; !ok {
-			item["interface_name"] = firstNonEmpty(health.InterfaceName, desired.InterfaceName)
+		if item.InterfaceName == "" {
+			item.InterfaceName = firstNonEmpty(health.InterfaceName, desired.InterfaceName)
 		}
-		item["local_tunnel_addr"] = desired.LocalTunnelAddr
-		item["peer_tunnel_addr"] = desired.PeerTunnelAddr
+		item.LocalTunnelAddr = desired.LocalTunnelAddr
+		item.PeerTunnelAddr = desired.PeerTunnelAddr
 	}
-	if _, ok := item["interface_name"]; !ok && health.InterfaceName != "" {
-		item["interface_name"] = health.InterfaceName
+	if item.InterfaceName == "" && health.InterfaceName != "" {
+		item.InterfaceName = health.InterfaceName
 	}
 	return item
 }
@@ -448,15 +444,15 @@ func (p *observerProvider) Health(linkFilter string) (any, error) {
 	// Single link health detail
 	if linkFilter != "" {
 		for _, item := range contextualLinks {
-			if h, ok := item["health"].(healthLinkJSON); ok && (h.InstanceID == linkFilter || h.ProbeID == linkFilter) {
+			if h, ok := item.Health.(healthLinkJSON); ok && (h.InstanceID == linkFilter || h.ProbeID == linkFilter) {
 				return item, nil
 			}
 		}
 		return nil, observer.Errorf(http.StatusNotFound, "health data not found for link %s", linkFilter)
 	}
-	return map[string]any{
-		"datasource": healthDatasourceInfo(observerAppConfig(d)),
-		"links":      contextualLinks,
+	return inspecthttp.HealthResponse{
+		Datasource: healthDatasourceInfo(observerAppConfig(d)),
+		Links:      contextualLinks,
 	}, nil
 }
 
@@ -486,10 +482,10 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 	if err != nil {
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
-	return map[string]any{
-		"datasource": healthDatasourceInfo(config),
-		"link_id":    linkID,
-		"series":     result,
+	return inspecthttp.HealthSeriesResponse{
+		Datasource: healthDatasourceInfo(config),
+		LinkID:     linkID,
+		Series:     result,
 	}, nil
 }
 
