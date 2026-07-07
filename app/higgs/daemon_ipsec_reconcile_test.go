@@ -91,6 +91,29 @@ func TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink(t *testing.T) {
 	}
 }
 
+func TestMaintainExistingXFRMInterfacesRefreshesAdoptedLink(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           "higgstesth2",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
+	driver := &observedIPsecDriver{}
+	service := &DaemonService{}
+
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionAdopt, Spec: &spec, Instance: &inst}}); err != nil {
+		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
+	}
+	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != "hgs1" {
+		t.Fatalf("interfaces = %+v, want hgs1 maintenance", driver.Interfaces)
+	}
+	if len(driver.Addresses) != 1 || driver.Addresses[0] != "hgs1=fe80::1/64" {
+		t.Fatalf("addresses = %+v, want link-local /64 maintenance", driver.Addresses)
+	}
+}
+
 func TestMaintainExistingXFRMInterfacesSkipsLinkWithActiveAction(t *testing.T) {
 	spec := ipsec.TransportLinkSpec{
 		TransportID:     "ipsec-main-ab",

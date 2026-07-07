@@ -28,6 +28,32 @@ func TestXFRMLinkStateMatchesCandidateRequiresLocalTunnelAddress(t *testing.T) {
 	}
 }
 
+func TestXFRMLinkStateMatchesCandidateRequiresKnownInterfaceFlags(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{
+		InterfaceName:   "hgs1",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
+	}
+	state := ipsec.XFRMLinkState{
+		NamespaceExists: true,
+		InterfaceExists: true,
+		FlagsKnown:      true,
+		InterfaceUp:     true,
+		Multicast:       false,
+		Addresses:       []netip.Prefix{netip.MustParsePrefix("fe80::1234/64")},
+	}
+	if xfrmLinkStateMatchesCandidate(state, spec) {
+		t.Fatalf("candidate matched without multicast enabled")
+	}
+	state.Multicast = true
+	if !xfrmLinkStateMatchesCandidate(state, spec) {
+		t.Fatalf("candidate did not match with expected flags and address")
+	}
+	state.InterfaceUp = false
+	if xfrmLinkStateMatchesCandidate(state, spec) {
+		t.Fatalf("candidate matched while interface was not up")
+	}
+}
+
 func TestIPsecQualityAddrPortMatchesOnlySamePortGeneration(t *testing.T) {
 	current := ipsec.PortAdvertisement{
 		Generation: 3,

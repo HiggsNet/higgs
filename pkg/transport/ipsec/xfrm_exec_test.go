@@ -59,9 +59,9 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		"ip link show dev hgs1",
 		"ip link add hgs1 type xfrm if_id 42",
 		"ip link set hgs1 netns higgstesth2",
-		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
-		"ip netns exec higgstesth2 ip link set dev hgs1 multicast on",
-		"ip netns exec higgstesth2 ip link set dev hgs1 up",
+		"ip netns exec higgstesth2 ip link set hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set hgs1 multicast on",
+		"ip netns exec higgstesth2 ip link set hgs1 up",
 		"ip netns exec higgstesth2 ip -6 -o addr show dev hgs1",
 		"ip netns exec higgstesth2 ip addr replace fd00:1234::1/64 dev hgs1",
 	}
@@ -123,9 +123,9 @@ func TestSystemXFRMDriverEnablesMulticastOnExistingInterface(t *testing.T) {
 	want := []string{
 		"ip netns exec higgstesth2 true",
 		"ip netns exec higgstesth2 ip link show dev hgs1",
-		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
-		"ip netns exec higgstesth2 ip link set dev hgs1 multicast on",
-		"ip netns exec higgstesth2 ip link set dev hgs1 up",
+		"ip netns exec higgstesth2 ip link set hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set hgs1 multicast on",
+		"ip netns exec higgstesth2 ip link set hgs1 up",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -220,9 +220,9 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 		"ip netns exec higgstesth2 ip link show dev hgs1",
 		"ip link show dev hgs1",
 		"ip link set hgs1 netns higgstesth2",
-		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
-		"ip netns exec higgstesth2 ip link set dev hgs1 multicast on",
-		"ip netns exec higgstesth2 ip link set dev hgs1 up",
+		"ip netns exec higgstesth2 ip link set hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set hgs1 multicast on",
+		"ip netns exec higgstesth2 ip link set hgs1 up",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -259,6 +259,37 @@ func TestSystemXFRMDriverInspectsMissingNamedNamespace(t *testing.T) {
 	}
 }
 
+func TestSystemXFRMDriverInspectLinkParsesInterfaceFlags(t *testing.T) {
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch strings.Join(args, " ") {
+			case "netns exec higgstesth2 true":
+				return []byte("ok"), nil
+			case "netns exec higgstesth2 ip link show dev hgs1":
+				return []byte("30: hgs1@NONE: <MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\n"), nil
+			case "netns exec higgstesth2 ip -4 -o addr show dev hgs1":
+				return nil, nil
+			case "netns exec higgstesth2 ip -6 -o addr show dev hgs1":
+				return []byte("30: hgs1 inet6 fe80::1234/64 scope link\n"), nil
+			default:
+				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
+			}
+		},
+	}
+	state, err := driver.InspectLink(context.Background(), TransportLinkSpec{
+		InterfaceName: "hgs1",
+		XFRMIfID:      42,
+		NetNS:         "higgstesth2",
+	})
+	if err != nil {
+		t.Fatalf("InspectLink: %v", err)
+	}
+	if !state.FlagsKnown || !state.InterfaceUp || !state.Multicast {
+		t.Fatalf("state flags = %+v, want known up multicast", state)
+	}
+}
+
 func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	driver := SystemXFRMDriver{
 		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
@@ -274,6 +305,49 @@ func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 		InterfaceName: "hgs1",
 		XFRMIfID:      42,
 		NetNS:         "higgstesth2",
+	}
+	sas := []SAState{{
+		Name:        spec.TransportID,
+		ChildSA:     ChildSAName(spec),
+		XFRMIfID:    spec.XFRMIfID,
+		Established: true,
+	}}
+	filtered, missing, err := driver.FilterSAsWithMissingLinks(context.Background(), []TransportLinkSpec{spec}, sas)
+	if err != nil {
+		t.Fatalf("FilterSAsWithMissingLinks: %v", err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("filtered SAs = %+v, want matching SA suppressed", filtered)
+	}
+	if got := missing[LinkInstanceID(spec)]; got.TransportID != spec.TransportID {
+		t.Fatalf("missing = %+v, want spec %s", missing, spec.TransportID)
+	}
+}
+
+func TestSystemXFRMDriverFiltersEstablishedSAWhenXFRMMulticastMissing(t *testing.T) {
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch strings.Join(args, " ") {
+			case "netns exec higgstesth2 true":
+				return []byte("ok"), nil
+			case "netns exec higgstesth2 ip link show dev hgs1":
+				return []byte("30: hgs1@NONE: <NOARP,UP,LOWER_UP> mtu 1500 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\n"), nil
+			case "netns exec higgstesth2 ip -4 -o addr show dev hgs1":
+				return nil, nil
+			case "netns exec higgstesth2 ip -6 -o addr show dev hgs1":
+				return []byte("30: hgs1 inet6 fe80::1234/64 scope link\n"), nil
+			default:
+				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
+			}
+		},
+	}
+	spec := TransportLinkSpec{
+		TransportID:     "ipsec-1",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           "higgstesth2",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
 	}
 	sas := []SAState{{
 		Name:        spec.TransportID,

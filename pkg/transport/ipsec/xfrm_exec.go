@@ -138,7 +138,14 @@ func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpe
 	if !state.NamespaceExists {
 		return state, nil
 	}
-	state.InterfaceExists = d.linkExists(ctx, netns, spec.InterfaceName)
+	link, err := d.inspectInterfaceLink(ctx, netns, spec.InterfaceName)
+	if err != nil {
+		return XFRMLinkState{}, err
+	}
+	state.InterfaceExists = link.exists
+	state.FlagsKnown = link.flagsKnown
+	state.InterfaceUp = link.up
+	state.Multicast = link.multicast
 	if state.InterfaceExists {
 		state.Addresses, err = d.inspectInterfaceAddresses(ctx, netns, spec.InterfaceName)
 		if err != nil {
@@ -196,6 +203,9 @@ func (d SystemXFRMDriver) inspectInterfaceAddresses(ctx context.Context, netns N
 
 func xfrmLinkStateMatchesSpec(state XFRMLinkState, spec TransportLinkSpec) bool {
 	if !state.NamespaceExists || !state.InterfaceExists {
+		return false
+	}
+	if state.FlagsKnown && (!state.InterfaceUp || !state.Multicast) {
 		return false
 	}
 	if !spec.LocalTunnelAddr.IsValid() {
@@ -296,6 +306,48 @@ func (d SystemXFRMDriver) interfaceAddresses(ctx context.Context, netns NetNSSpe
 	return addrs, nil
 }
 
+type xfrmInterfaceLinkState struct {
+	exists     bool
+	flagsKnown bool
+	up         bool
+	multicast  bool
+}
+
+func (d SystemXFRMDriver) inspectInterfaceLink(ctx context.Context, netns NetNSSpec, name string) (xfrmInterfaceLinkState, error) {
+	out, err := d.outputInNetNS(ctx, netns, "link", "show", "dev", name)
+	if err != nil {
+		return xfrmInterfaceLinkState{}, nil
+	}
+	flags, ok := parseIPLinkFlags(string(out))
+	return xfrmInterfaceLinkState{
+		exists:     true,
+		flagsKnown: ok,
+		up:         flags["UP"],
+		multicast:  flags["MULTICAST"],
+	}, nil
+}
+
+func parseIPLinkFlags(out string) (map[string]bool, bool) {
+	start := strings.Index(out, "<")
+	if start < 0 {
+		return nil, false
+	}
+	end := strings.Index(out[start+1:], ">")
+	if end < 0 {
+		return nil, false
+	}
+	raw := out[start+1 : start+1+end]
+	flags := make(map[string]bool)
+	for _, flag := range strings.Split(raw, ",") {
+		flag = strings.ToUpper(strings.TrimSpace(flag))
+		if flag == "" {
+			continue
+		}
+		flags[flag] = true
+	}
+	return flags, len(flags) > 0
+}
+
 func (d SystemXFRMDriver) specNetNS(spec TransportLinkSpec) (NetNSSpec, error) {
 	defaultNS := d.DefaultNetNS.Normalized()
 	if spec.NetNS == "" {
@@ -394,15 +446,15 @@ func (d SystemXFRMDriver) addXFRMInterface(ctx context.Context, netns NetNSSpec,
 }
 
 func (d SystemXFRMDriver) setLinkUp(ctx context.Context, netns NetNSSpec, name string) error {
-	return d.runInNetNS(ctx, netns, "link", "set", "dev", name, "up")
+	return d.runInNetNS(ctx, netns, "link", "set", name, "up")
 }
 
 func (d SystemXFRMDriver) enableMulticast(ctx context.Context, netns NetNSSpec, name string) error {
-	return d.runInNetNS(ctx, netns, "link", "set", "dev", name, "multicast", "on")
+	return d.runInNetNS(ctx, netns, "link", "set", name, "multicast", "on")
 }
 
 func (d SystemXFRMDriver) disableIPv6AddrGen(ctx context.Context, netns NetNSSpec, name string) error {
-	return d.runInNetNS(ctx, netns, "link", "set", "dev", name, "addrgenmode", "none")
+	return d.runInNetNS(ctx, netns, "link", "set", name, "addrgenmode", "none")
 }
 
 func (d SystemXFRMDriver) runInNetNS(ctx context.Context, netns NetNSSpec, args ...string) error {

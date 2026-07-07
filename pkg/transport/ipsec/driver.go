@@ -92,6 +92,9 @@ type XFRMLinkState struct {
 	NetNS           NetNSSpec
 	NamespaceExists bool
 	InterfaceExists bool
+	FlagsKnown      bool
+	InterfaceUp     bool
+	Multicast       bool
 	Addresses       []netip.Prefix
 }
 

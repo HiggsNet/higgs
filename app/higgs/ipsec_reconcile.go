@@ -102,7 +102,7 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 	}
 	activeActions := make(map[string]struct{})
 	for _, action := range actions {
-		if action.Action == ipsec.ReconcileActionNoop {
+		if !ipsecActionAppliesXFRM(action.Action) {
 			continue
 		}
 		if id := actionInstanceID(action); id != "" {
@@ -124,6 +124,12 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
 		}
 		if !state.NamespaceExists || !state.InterfaceExists {
+			d.logDebug("ipsec", "xfrm_maintenance_skip_missing", map[string]any{
+				"instance_id": id,
+				"peer":        candidate.PeerZone,
+				"interface":   candidate.InterfaceName,
+				"netns":       candidate.NetNS,
+			})
 			continue
 		}
 		if err := driver.EnsureInterface(ctx, candidate); err != nil {
@@ -134,8 +140,30 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 				return fmt.Errorf("maintain xfrm address %q: %w", candidate.InterfaceName, err)
 			}
 		}
+		d.logDebug("ipsec", "xfrm_maintenance_applied", map[string]any{
+			"instance_id": id,
+			"peer":        candidate.PeerZone,
+			"interface":   candidate.InterfaceName,
+			"netns":       candidate.NetNS,
+		})
 	}
 	return nil
+}
+
+func ipsecActionAppliesXFRM(action string) bool {
+	switch action {
+	case ipsec.ReconcileActionCreate,
+		ipsec.ReconcileActionUpdate,
+		ipsec.ReconcileActionRepair,
+		ipsec.ReconcileActionTeardown,
+		ipsec.ReconcileActionPrepareRotate,
+		ipsec.ReconcileActionCommitRotate,
+		ipsec.ReconcileActionRollbackRotate,
+		ipsec.ReconcileActionCleanupRotate:
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldMaintainXFRMInstance(inst ipsec.LinkInstance) bool {
@@ -291,6 +319,9 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 
 func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {
 	if !state.NamespaceExists || !state.InterfaceExists {
+		return false
+	}
+	if state.FlagsKnown && (!state.InterfaceUp || !state.Multicast) {
 		return false
 	}
 	if !spec.LocalTunnelAddr.IsValid() {
