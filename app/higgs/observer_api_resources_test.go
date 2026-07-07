@@ -48,19 +48,6 @@ func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	}
 }
 
-func TestObserverHandlerRejectsUnknownAPIPath(t *testing.T) {
-	srv := newTestObserverServer()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/unknown", nil)
-	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusNotFound)
-	}
-	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("content type = %q, want application/json", ct)
-	}
-}
-
 func TestObserverZonesAPIEmpty(t *testing.T) {
 	srv := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)

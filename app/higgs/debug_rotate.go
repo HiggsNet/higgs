@@ -161,17 +161,16 @@ func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
 	if result == nil {
 		return
 	}
-	fmt.Printf("mode: %s\n", mode)
-	fmt.Printf("zone: %s\n", result.Zone)
-	fmt.Printf("previous_generation: %d\n", result.PreviousGeneration)
-	fmt.Printf("current_generation: %d\n", result.CurrentGeneration)
-	if result.PreviousGeneration > 0 {
-		fmt.Printf("previous_ike: %d\n", result.PreviousIKE)
-		fmt.Printf("previous_natt: %d\n", result.PreviousNATT)
-		fmt.Printf("previous_valid_until: %d\n", result.PreviousValidUntil)
-	}
-	fmt.Printf("current_ike: %d\n", result.CurrentIKE)
-	fmt.Printf("current_natt: %d\n", result.CurrentNATT)
+	_ = inspecttext.WriteManualPortRotateResult(os.Stdout, mode, inspect.ManualPortRotateView{
+		Zone:               result.Zone,
+		PreviousGeneration: result.PreviousGeneration,
+		CurrentGeneration:  result.CurrentGeneration,
+		PreviousIKE:        result.PreviousIKE,
+		PreviousNATT:       result.PreviousNATT,
+		CurrentIKE:         result.CurrentIKE,
+		CurrentNATT:        result.CurrentNATT,
+		PreviousValidUntil: result.PreviousValidUntil,
+	})
 }
 
 func forceLocalIPsecPortRotate(config *appConfig, state *stateFile, now time.Time) (*manualPortRotateResult, error) {

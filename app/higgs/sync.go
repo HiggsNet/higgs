@@ -296,10 +296,12 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 	}
 	for _, peer := range config.Bootstrap {
 		peerState := state.SyncPeers[peer.ID]
-		lastSync := "never"
-		if peerState.LastSyncUnix != 0 {
-			lastSync = time.Unix(peerState.LastSyncUnix, 0).UTC().Format(time.RFC3339)
-		}
+		peerDebug := inspect.BuildPeerDebugFromRuntime(inspect.PeerRuntimeDebugInput{
+			PeerID:         peer.ID,
+			ConfiguredAddr: peer.Addr,
+			State:          peerState,
+			Now:            now,
+		})
 		lastError := peerState.LastError
 		if lastError == "" {
 			lastError = "-"
@@ -307,11 +309,11 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 		view.Peers = append(view.Peers, inspect.SyncPeerSummaryView{
 			PeerID:     peer.ID,
 			Addr:       peer.Addr,
-			Status:     peerStatus(peerState, now),
-			LastSync:   lastSync,
+			Status:     peerDebug.Status,
+			LastSync:   peerDebug.LastSuccess,
 			KnownZones: len(digests),
 			LastError:  lastError,
-			NextRetry:  formatNextRetry(peerState, now),
+			NextRetry:  peerDebug.NextRetry,
 		})
 	}
 	for _, digest := range digests {
@@ -320,7 +322,7 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 			Zone:        string(digest.Zone),
 			RootHex:     hex.EncodeToString(digest.RootHash),
 			Records:     len(zs.Records),
-			History:     countHistory(zs),
+			History:     inspect.ZoneHistoryCount(zs),
 			Delegations: len(zs.Delegations),
 			Revocations: len(zs.Revocations),
 		})

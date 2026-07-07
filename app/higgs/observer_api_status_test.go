@@ -91,13 +91,3 @@ func TestObserverReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *testing.
 		t.Fatalf("links data = %#v, want desired_links=1 from committed snapshot", linksData)
 	}
 }
-
-func TestObserverStatusAPIMethodNotAllowed(t *testing.T) {
-	srv := newTestObserverServer()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/status", nil)
-	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
-	}
-}

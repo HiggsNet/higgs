@@ -60,6 +60,18 @@ func inspectPeerEndpoints(peerID string, ps syncPeerState, config *syncConfigFil
 	return inspect.BuildPeerEndpoints(inspectPeerEndpointInput(peerID, ps, config, ns, now))
 }
 
+func bootstrapAddrForPeer(config *syncConfigFile, peerID string) string {
+	if config == nil {
+		return ""
+	}
+	for _, peer := range config.Bootstrap {
+		if peer.ID == peerID {
+			return peer.Addr
+		}
+	}
+	return ""
+}
+
 func selectedPeerEndpointAddr(endpoints []inspect.PeerEndpointView) string {
 	for _, ep := range endpoints {
 		if ep.Selected && ep.Addr != "" {

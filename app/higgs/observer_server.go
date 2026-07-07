@@ -224,7 +224,12 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 		if !inspect.PeerKnown(peerSet, peerFilter) {
 			return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 		}
-		return peerJSONFromState(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()), nil
+		return inspecthttp.PeerFromInputs(
+			peerFilter,
+			bootstrapAddrForPeer(d.Sync.Config, peerFilter),
+			inspectPeerEndpoints(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()),
+			ps,
+		), nil
 	}
 	// All peers
 	peers := make([]inspecthttp.PeerJSON, 0, len(peerIDs))
@@ -234,38 +239,15 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 			continue
 		}
 		seen[id] = true
-		peers = append(peers, peerJSONFromState(id, state.SyncPeers[id], d.Sync.Config, state.Network, d.Sync.now()))
+		ps := state.SyncPeers[id]
+		peers = append(peers, inspecthttp.PeerFromInputs(
+			id,
+			bootstrapAddrForPeer(d.Sync.Config, id),
+			inspectPeerEndpoints(id, ps, d.Sync.Config, state.Network, d.Sync.now()),
+			ps,
+		))
 	}
 	return inspecthttp.PeersResponse{Peers: peers}, nil
-}
-
-func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) inspecthttp.PeerJSON {
-	configuredAddr := bootstrapAddrForPeer(config, id)
-	source := "discovered"
-	if configuredAddr != "" {
-		source = "bootstrap"
-	} else if ps.ObservedAddr != "" {
-		source = "observed"
-	}
-	return inspecthttp.PeerJSON{
-		PeerID:          id,
-		Source:          source,
-		ConfiguredAddr:  configuredAddr,
-		PeerRuntimeJSON: inspecthttp.PeerRuntimeJSONFromState(ps),
-		Endpoints:       inspectPeerEndpoints(id, ps, config, ns, now),
-	}
-}
-
-func bootstrapAddrForPeer(config *syncConfigFile, peerID string) string {
-	if config == nil {
-		return ""
-	}
-	for _, peer := range config.Bootstrap {
-		if peer.ID == peerID {
-			return peer.Addr
-		}
-	}
-	return ""
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {

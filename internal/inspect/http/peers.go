@@ -17,6 +17,22 @@ type PeerJSON struct {
 	PeerRuntimeJSON
 }
 
+func PeerFromInputs(id, configuredAddr string, endpoints []inspect.PeerEndpointView, state higgsstate.PeerRuntimeState) PeerJSON {
+	source := "discovered"
+	if configuredAddr != "" {
+		source = "bootstrap"
+	} else if state.ObservedAddr != "" {
+		source = "observed"
+	}
+	return PeerJSON{
+		PeerID:          id,
+		Source:          source,
+		ConfiguredAddr:  configuredAddr,
+		PeerRuntimeJSON: PeerRuntimeJSONFromState(state),
+		Endpoints:       endpoints,
+	}
+}
+
 type PeerRuntimeJSON struct {
 	LastSyncUnix          int64                                    `json:"last_sync_unix"`
 	LastAttemptUnix       int64                                    `json:"last_attempt_unix"`

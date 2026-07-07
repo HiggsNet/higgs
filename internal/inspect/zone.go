@@ -169,6 +169,13 @@ func BuildZoneDetail(input ZoneDetailInput) ZoneDetail {
 	return view
 }
 
+func ZoneHistoryCount(zs *zone.ZoneState) int {
+	if zs == nil {
+		return 0
+	}
+	return countRecordHistory(zs.RecordHistory)
+}
+
 func BuildZoneDebug(input ZoneDebugInput) (ZoneDebugView, bool) {
 	if input.Network == nil {
 		return ZoneDebugView{}, false

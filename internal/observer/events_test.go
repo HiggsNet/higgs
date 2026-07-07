@@ -1,4 +1,4 @@
-package main
+package observer
 
 import (
 	"context"
@@ -8,23 +8,23 @@ import (
 	"testing"
 )
 
-func TestObserverEventsMethodNotAllowed(t *testing.T) {
-	srv := newTestObserverServer()
+func TestEventsMethodNotAllowed(t *testing.T) {
+	srv := newTestServer()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
 	}
 }
 
-func TestObserverEventsInitialFrame(t *testing.T) {
-	srv := newTestObserverServer()
+func TestEventsInitialFrame(t *testing.T) {
+	srv := newTestServer()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}

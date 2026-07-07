@@ -4,8 +4,20 @@ import (
 	"net"
 	"strings"
 
+	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
+
+type ManualPortRotateView struct {
+	Zone               zone.ZonePath
+	PreviousGeneration uint64
+	CurrentGeneration  uint64
+	PreviousIKE        uint16
+	PreviousNATT       uint16
+	CurrentIKE         uint16
+	CurrentNATT        uint16
+	PreviousValidUntil int64
+}
 
 type RotateDebugView struct {
 	LastRunUnix       int64

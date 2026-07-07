@@ -29,6 +29,22 @@ func WriteRotateDebug(w io.Writer, view inspect.RotateDebugView) error {
 	return out.Err()
 }
 
+func WriteManualPortRotateResult(w io.Writer, mode string, view inspect.ManualPortRotateView) error {
+	out := newLineWriter(w)
+	out.Linef("mode: %s", mode)
+	out.Linef("zone: %s", view.Zone)
+	out.Linef("previous_generation: %d", view.PreviousGeneration)
+	out.Linef("current_generation: %d", view.CurrentGeneration)
+	if view.PreviousGeneration > 0 {
+		out.Linef("previous_ike: %d", view.PreviousIKE)
+		out.Linef("previous_natt: %d", view.PreviousNATT)
+		out.Linef("previous_valid_until: %d", view.PreviousValidUntil)
+	}
+	out.Linef("current_ike: %d", view.CurrentIKE)
+	out.Linef("current_natt: %d", view.CurrentNATT)
+	return out.Err()
+}
+
 func writeRotateLink(out *lineWriter, item inspect.RotateDebugLink) {
 	link := item.Link
 	out.Linef("")
