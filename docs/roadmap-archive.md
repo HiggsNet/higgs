@@ -875,7 +875,7 @@
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（已完成主线归档）
 
-**归档状态：** Phase 6 主线 6.0-6.7.6 和增强 smoke 已从主 `todo.md` 移出；主 TODO 只保留 6.7.7 `app/higgs` 模块化重构以及 Phase 7 之后的远期后续。完整实现细节可回看对应设计文档：`docs/phase6-event-driven-design.md`、`docs/phase6-ipam-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`。
+**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/phase6-event-driven-design.md`、`docs/phase6-ipam-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
 
 - [x] **6.0 事件驱动控制面重构**
   - [x] 默认启用 event loop + `SyncSession` FSM；packet demux、timer manager、异步 object pull、UDP chunk fallback、relay fanout 均接入事件循环。
@@ -960,6 +960,34 @@
   - [x] health container / fault-injection 增强 smoke：在真实 XFRM+BIRD 链路上注入丢包/延迟，验证状态切换、BIRD metric/cutover gate 和数据面恢复。
   - [ ] state 文件外部协调补强已降级为 Phase 7 之后远期增强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
   - [ ] Observer 深度增强已降级为 Phase 7 之后远期增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析。
+
+
+## Phase 6.7.7: `app/higgs` 模块化重构（Observer/debug 先行，已完成）
+
+**设计文档：** `docs/app-higgs-modularization-design.md`
+
+**完成背景：** `app/higgs` 曾同时承载 CLI wiring、daemon lifecycle、sync runtime、reconcile、observer、debug presenter 和 readmodel 推理。6.7.7 以 Observer/debug/inspect 为低风险第一刀，把可复用只读 view、reason、HTTP DTO 和 CLI presenter 从 executable 包中拆出，同时保留 `app/higgs` 作为 runtime/source adapter。
+
+**完成结果：**
+- `internal/observer` 承接 HTTP routing、SSE、static web、API envelope、method/404/SSE/static/webapp 等通用 handler 测试；`app/higgs` 只保留 daemon provider、observer 启停和 health spool/runtime adapter。
+- `internal/inspect` 建立 links、zones/records、peers/endpoints、peer lifecycle、routes/BIRD、health、revocation、firewall、admission、rotate、ping、sync status 等共享 readmodel/builder/filter/reason。
+- `internal/inspect/http` 承接 observer status/zones/peers/links/health/routes/BIRD DTO builder，稳定 HTTP schema，避免 observer 直接依赖 app 私有 state 或原始 runtime struct。
+- `internal/inspect/text` 承接 debug/zone/record/peer/endpoints/links/routes/routing/health/revocation/firewall/admission/rotate/ping/sync status 文本 presenter 和 focused output 测试；`app/higgs/debug_*.go` 保留命令注册、参数解析、control socket/live/offline source 选择。
+- `internal/state` 承接跨 app/inspect/control/observer 共享的只读 snapshot 类型，例如 `PeerRuntimeState`、link runtime state、BIRD/firewall reconcile state；app 层通过 alias 表达 state ownership。
+- `sync status` 与 `debug peer` 复用 `inspect.BuildPeerDebugFromRuntime`，peer status/backoff/next retry/observed path/datagram/object pull 诊断不再在 app 和 inspect 重复推理。
+- manual rotate-port 输出下沉为 `inspect.ManualPortRotateView` + `inspect/text.WriteManualPortRotateResult`；app 层只做结果投影。
+- 明确不新增 `internal/debug` 包：debug 是 CLI 命令面，可复用诊断 readmodel 留在 `internal/inspect`，文本 presenter 留在 `internal/inspect/text`。
+
+**延后事项：**
+- `internal/inspect/source` 暂不创建；control socket、offline DB、live daemon source 仍与 app 私有 runtime adapter 贴近，等 metrics/source collector 接口稳定后再抽。
+- admission 的 state/key/delegation 检查和 admission state 更新 adapter 仍留在 app 层；后续若下沉，必须先定义纯 input，不把 `stateFile`、join request 编码或 app 私有协议塞进 inspect。
+- `DatagramStats`、`ObjectPullStats` 等纯诊断计数仍随 `PeerRuntimeState` 持久化；后续随 metrics store / observability readmodel 拆出，避免统计计数推动主 committed state revision。
+- `sync.go`、`daemon.go`、`ipsec_reconcile.go`、`routing_reconcile.go`、`config.go` 仍是后续模块化主战场，但不属于 6.7.7 收尾阻塞。
+
+**验收覆盖：**
+- `go test ./app/higgs ./internal/...` 通过。
+- `internal/inspect`、`internal/inspect/http`、`internal/inspect/text`、`internal/observer` 已补 focused builder/schema/output/handler 测试。
+- Observer/debug app 层测试保留 daemon provider、source fallback、config/wiring 和 committed snapshot 行为覆盖。
 
 
 ## Phase 7.10.1: Daemon state 读写分离 / committed snapshot 重构（已完成）

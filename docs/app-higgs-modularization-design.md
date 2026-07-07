@@ -1,6 +1,6 @@
 # app/higgs 模块化设计
 
-> **文档状态**：设计草案（Phase 6.7 后续重构）
+> **文档状态**：Phase 6.7.7 第一阶段已落地；本文继续作为后续模块化约束和演进记录。
 > **目标**：将 `app/higgs` 从单一巨大 `main` 包逐步拆成清晰的应用模块。`app/higgs` 最终只保留 executable wiring、CLI 命令注册、配置装配和少量 daemon live adapter；health、routing、revocation、peer lifecycle、observer、debug/inspect、firewall、IPsec reconcile、sync runtime 等可复用或相对独立的应用逻辑应下沉到 internal/package 模块中。
 
 ---
@@ -26,27 +26,48 @@
 
 模块化目标不是一次性把所有类型导出，也不是机械移动文件，而是逐步把“领域纯逻辑、应用服务、读侧诊断、presenter、source adapter”拆开，让 `app/higgs` 成为 thin executable layer。
 
+## 1.1 Phase 6.7.7 落地状态
+
+6.7.7 已完成 Observer/debug/inspect 读侧优先重构，可以作为第一阶段关账：
+
+- `internal/observer` 已承接 HTTP routing、SSE、static web、API envelope 和通用 handler 测试；`app/higgs/observer_server.go` 保留 daemon provider、health spool/runtime 投影和启动接线。
+- `internal/inspect` 已承接 links、zones/records、peers/endpoints、peer lifecycle、routes/BIRD、health、revocation、firewall、admission、rotate、ping、sync status 等只读 view/reason/builder。
+- `internal/inspect/http` 已承接 observer 专用 DTO/builder，避免 HTTP schema 直接绑 app 私有 state 或原始 runtime struct。
+- `internal/inspect/text` 已承接 CLI debug/sync/status 文本 presenter 和 focused output 测试；`app/higgs/debug_*.go` 主要保留参数解析、control socket/live/offline source 选择和 presenter 调用。
+- `internal/state` 已承接 peer runtime、link runtime、BIRD/firewall reconcile 等跨 app/inspect 共享的只读 snapshot 类型；app 层通过 alias 表达 state ownership。
+- 明确不新增 `internal/debug` 包：debug 是 CLI 命令面，可复用读模型属于 `internal/inspect`，文本输出属于 `internal/inspect/text`。
+
+仍然延后的边界：
+
+- `internal/inspect/source` 暂不急建；control socket、offline DB、live daemon source 仍与 `Runtime`、`DaemonService` 和私有 state adapter 贴得较近，后续等 metrics store / source collector 接口稳定后再抽。
+- admission 诊断中涉及 `stateFile`、`autoJoinPending`、join request 编码和 admission state 更新的 adapter 仍留在 app 层；若继续下沉，必须先定义纯 `AdmissionDiagnosisInput`，不能让 inspect 依赖 app 私有协议。
+- `sync.go`、`daemon.go`、`ipsec_reconcile.go`、`routing_reconcile.go`、`config.go` 仍是后续模块化主战场，但不属于 6.7.7 阻塞项。
+- `DatagramStats`、`ObjectPullStats` 等纯观测计数仍随 `PeerRuntimeState` 持久化，后续应随 metrics/readmodel store 拆出，避免诊断计数推动主 committed state revision。
+
 ---
 
 ## 2. 分层目标
 
-推荐目标结构：
+当前已落地结构更接近“横向抽读侧，写侧暂留 app”：
 
 ```text
 app/higgs
   - main / cmd registration
   - config loading + runtime assembly
-  - daemon live adapters for unexported state
-  - command-service wiring
+  - daemon lifecycle / workspace commit / reconcile / sync runtime
+  - command-service wiring and control socket handlers
+  - live adapters: inspect_links.go, inspect_peers.go, observer_server.go, debug_*.go
         |
         v
-internal/higgsapp/* or internal/*
-  - sync service
-  - reconcile services
-  - lifecycle / revocation / admission
-  - inspect/readmodel
-  - CLI text presenters
-  - control API DTOs
+internal/inspect (+ internal/inspect/http, internal/inspect/text)
+  - shared read-model / view builders / reason code
+  - HTTP JSON presenter / DTO builders
+  - CLI text presenter
+        |
+        v
+internal/state
+  - runtime state DTOs shared by app and inspect
+  - no persistence, no locking, no workspace/commit semantics
         |
         v
 pkg/*
@@ -54,34 +75,44 @@ pkg/*
   - wire/protocol/model/planner/driver logic
 ```
 
+这不是最终形态的全部，但它是当前应遵守的事实边界：读侧已经横切到 `internal/inspect`，写侧、reconcile、daemon lifecycle、config assembly 和 state commit 仍在 `app/higgs`。
+
 分层规则：
 
 1. `pkg/*` 继续放稳定领域模型和底层能力，例如 zone、gossip、routing authorization、firewall planner、health manager、transport/ipsec provider。
 2. `internal/*` 放 Higgs 应用层模块：它可以组合 `pkg/*`，但不应该依赖 CLI 框架、stdout、环境变量散读或 `main` 包未导出类型。
 3. `app/higgs` 保留 executable glue：命令注册、配置入口、daemon assembly、需要访问未导出状态的临时 adapter。
-4. 所有写路径仍通过 daemon commit 流程：`DaemonStateStore.BeginUpdate` / workspace 变更 / `Commit` 或 control command service 的 single-writer 路径；readmodel/inspect 不执行写操作，也不读取未提交 workspace。
-5. 每次迁移都要先定义输入/输出结构，避免把 `stateFile` 原样搬进 internal 后形成新的大泥团。
+4. `internal/state` 只放跨包共享的运行时快照 DTO，例如 peer/link/BIRD/firewall reconcile state；它不是 `stateFile` 持久化层，也不拥有锁、bbolt 读写、workspace 或 commit 逻辑。
+5. 所有写路径仍通过 daemon commit 流程：`DaemonStateStore.BeginUpdate` / workspace 变更 / `Commit` 或 control command service 的 single-writer 路径；readmodel/inspect 不执行写操作，也不读取未提交 workspace。
+6. 每次迁移都要先定义输入/输出结构，避免把 `stateFile` 原样搬进 internal 后形成新的大泥团。
 
 ---
 
-## 3. 建议模块
+## 3. 当前模块状态与后续规划
 
-| 模块 | 候选位置 | 可迁移内容 | 暂留 `app/higgs` 的内容 |
-|------|----------|------------|-------------------------|
-| Observer HTTP | `internal/observer` | HTTP routing、SSE、static、API envelope（已部分完成） | daemon 启动接线、provider adapter |
-| Inspect / diagnostics | `internal/inspect`, `internal/inspect/text`, `internal/inspect/source` | 共享诊断 view、reason code、CLI text presenter、HTTP/CLI 共用 readmodel | 从 committed snapshot、health/reconcile runtime snapshot、control socket 构造 input 的 live adapter |
-| Peer lifecycle | `internal/peerstate` 或 `internal/lifecycle` | `PeerStatusInfo`、stale/offline/revoked 推理、cleanup decision | 将 `stateFile.SyncPeers` 拷贝成 input |
-| Revocation impact | `internal/revocation` | revoked subtree impact、layer status、diagnostic view | daemon flush 顺序和实际 cleanup 调用 |
-| Admission diagnostics | `internal/admission` | pending/adopted diagnosis、reason code、join hint view | daemon 中更新 admission state 的 adapter |
-| Health app layer | `internal/healthapp` | health status view、spool query/parser、CLI/observer presenter | probe 调度和 daemon manager lifecycle |
-| Routing app layer | `internal/routingapp` | route dump/explanation、BIRD summary view、debug presenter | BIRD process/client lifecycle、daemon reconcile timer |
-| Firewall app layer | `internal/firewallapp` | config-to-spec conversion、debug view、reconcile summary presenter | privileged apply scheduling、driver construction with runtime config |
-| IPsec app layer | `internal/ipsecapp` | publish record planning, reconcile summary/view helpers, debug config redaction | provider lifecycle, VICI subscription wiring |
-| Sync app layer | `internal/syncapp` | SyncSession FSM、packet demux、peer address ranking、object pull client/pool where possible | daemon event loop integration and state persistence adapter |
-| Control API | `internal/controlapi` | control request/response DTOs and client helpers | daemon handler registration touching live service |
-| Config parsing | `internal/config` or focused packages | per-subsystem YAML parsing once stable | top-level env/path/default assembly |
+当前不要按旧设想一次性创建很多垂直 `internal/*app` 包。已落地的主线是：读侧统一收敛到 `internal/inspect`，运行时快照 DTO 放到 `internal/state`，写侧和 lifecycle/reconcile 暂留 `app/higgs`。
 
-模块名可以在实现时微调；重点是先按职责分开，而不是按当前文件名一比一搬迁。
+| 职责 | 当前实际位置 | 后续规划 / 注意事项 |
+|------|--------------|---------------------|
+| Observer HTTP | `internal/observer` | 已承接 HTTP routing、SSE、static、API envelope 和通用 handler 测试；`app/higgs` 保留 daemon provider、health spool/runtime adapter 和启动接线。 |
+| Inspect / diagnostics | `internal/inspect` | 已成为核心共享读模型层，横切 observer、CLI debug、control status；新增诊断输出应优先补 inspect view。 |
+| HTTP JSON presenter | `internal/inspect/http` | 已承接 observer DTO/builder；HTTP schema 不应直接绑定 app 私有 state 或原始 runtime struct。 |
+| CLI text presenter | `internal/inspect/text` | 已承接 debug/sync/status 文本输出；text 包只做 writer/formatter，不定义跨包业务 view。 |
+| Runtime state DTO | `internal/state` | 只放 `PeerRuntimeState`、link runtime、BIRD/firewall reconcile 等共享 DTO；不是 `stateFile`、锁、bbolt、workspace 或 commit 层。 |
+| Debug ping executor | `internal/ping` | 已作为小型执行模块独立；app 层保留 CLI wiring 和 state/config -> target adapter。 |
+| Peer lifecycle | `internal/inspect/peer_lifecycle.go` + `app/higgs/peer_state.go` | 状态推导/view 已在 inspect；cleanup 决策、flush 顺序和 state adapter 仍在 app。暂未创建 `internal/peerstate` / `internal/lifecycle`。 |
+| Revocation impact / cleanup | `internal/inspect/revocation.go` + `app/higgs/revocation_cleanup.go` | revocation view/status 已在 inspect；实际 cleanup、layer flush 和 daemon 顺序仍在 app。暂未创建 `internal/revocation`。 |
+| Admission diagnostics | `internal/inspect/admission.go` + `app/higgs/admission_diagnostics.go` | reason/view/text 已下沉；auto-join state/key/delegation 检查、join request 编码和 admission state 更新仍在 app。暂未创建 `internal/admission`。 |
+| Health app layer | `internal/inspect/health_debug.go`, `internal/inspect/http/health.go` + `app/higgs/health_reconcile.go` | view/presenter/context 已下沉；probe manager、spool append/query adapter 和 reconcile lifecycle 仍在 app。暂未创建 `internal/healthapp`。 |
+| Routing/BIRD app layer | `internal/inspect/routing.go`, `internal/inspect/http/routes.go` + `app/higgs/routing_reconcile.go` | route/BIRD readmodel 和 presenter 已下沉；BIRD process/client lifecycle、config render/apply 和 reconcile timer 仍在 app。暂未创建 `internal/routingapp`。 |
+| Firewall app layer | `internal/inspect/firewall.go` + `app/higgs/firewall_reconcile.go` | debug view/presenter 和 reconcile snapshot DTO 已下沉； privileged apply、driver construction 和 policy input adapter 仍在 app。暂未创建 `internal/firewallapp`。 |
+| IPsec app layer | `internal/inspect/links.go`, `internal/inspect/rotate.go` + `app/higgs/ipsec_*.go` | links/rotate readmodel 已下沉； publish/reconcile/cleanup/provider lifecycle 基本仍在 app。暂未创建 `internal/ipsecapp`。 |
+| Sync runtime | `app/higgs/sync.go`, `sync_session.go`, `daemon_sync.go` | 只有 sync status view/text 和 peer debug runtime view 已下沉；FSM、packet demux、object pull、timer、state apply adapter 仍在 app。暂未创建 `internal/syncapp`。 |
+| Control API | `app/higgs/control.go` | control socket 和 DTO/client helper 仍在 app；Phase 7.10 可逐步抽 `internal/controlapi`，但 daemon handler registration 留 app。 |
+| Config parsing | `app/higgs/config.go`, `*_config.go` | 仍在 app；只有等 subsystem 接口稳定后再考虑 focused parser 包。暂未创建 `internal/config`。 |
+| App state / commit | `app/higgs/state.go`, `daemon_state_store.go` | 持久化、锁、workspace、commit 和 clone 仍在 app；不要把 `internal/state` 误认为完整 app state 层。 |
+
+后续新包名应由实际迁移切口驱动，而不是按旧设计表格预先占坑。优先继续保持：纯 readmodel/view 进 `internal/inspect`，共享 runtime DTO 进 `internal/state`，写侧 adapter 和 daemon commit 留 `app/higgs`。
 
 ---
 
@@ -120,27 +151,34 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 
 ---
 
-## 5. 建议迁移顺序
+## 5. 迁移进度与后续顺序
 
-### 5.1 Inspect/debug/observer 读侧
+### 5.1 Inspect/debug/observer 读侧（已基本完成）
 
 优先级高，因为它横跨 observer、debug、control status，同时风险较低：
 
-1. 建立 `internal/inspect`、`internal/inspect/text`、`internal/inspect/source` 骨架。
+1. 建立 `internal/inspect`、`internal/inspect/http`、`internal/inspect/text` 骨架；`internal/inspect/source` 延后到 source/fallback 瘦身阶段。
 2. 先抽 links：`debug links` 与 `/api/v1/links` 重合最高；links input 优先使用最近一次 committed reconcile snapshot，只有离线/显式 dry-run 才重新 plan desired。
 3. 再抽 peer/endpoints：`debug peer`、`sync status --verbose`、`debug peers`、`/api/v1/peers` 共用 endpoint merge 和 lifecycle reason。
 4. 再抽 zone/records/admission/revocation。
 5. 最后抽 routes/BIRD/firewall/health 的 view 和 presenter。
 
-### 5.2 Peer lifecycle + revocation
+**当前状态：已完成第一阶段。** 后续新增 observer/debug/control status 输出时，默认先补 `internal/inspect` view，再补 `internal/inspect/text` 或 `internal/inspect/http` presenter；不要在 `app/higgs` 重新手写状态推理或 DTO 组装。
 
-`peer_state.go` 和 `revocation_cleanup.go` 已经像独立模块，但仍依赖 `stateFile`。下一步应：
+### 5.2 Peer lifecycle + revocation（部分完成）
+
+`peer_state.go` 和 `revocation_cleanup.go` 已经像独立模块，但仍依赖 `stateFile`。Peer lifecycle readmodel 和 debug presenter 已先行下沉到 `internal/inspect`；后续如果继续拆，应聚焦写侧 cleanup decision 和 daemon flush ordering：
 
 1. 把 `derivePeerStatus`、cleanup decision、revoked subtree impact 改成 input -> decision。
 2. `app/higgs` 保留 `stateFile` adapter 和 daemon flush ordering。
 3. debug/observer/control 都消费同一 decision/view。
 
-### 5.3 Health / routing / firewall app 层
+当前状态：
+
+- 已完成：peer lifecycle 状态推导、debug view/text、revocation impact/debug view/status 的读侧下沉。
+- 未完成：revocation cleanup 执行、cleanup decision 与 daemon flush ordering 仍在 app。
+
+### 5.3 Health / routing / firewall app 层（部分完成）
 
 这些子系统都有 config、reconcile、debug、observer/control 状态：
 
@@ -148,22 +186,51 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 2. 再迁移不触碰 daemon lifecycle 的 planner input builder。
 3. privileged apply、probe manager、BIRD process lifecycle 暂留 app adapter，待接口稳定后再下沉。
 
-### 5.4 Sync runtime
+当前状态：
+
+- 已完成：health/routing/firewall/BIRD 的 view、HTTP DTO、文本 presenter、部分 reconcile snapshot DTO。
+- 未完成：health probe manager/spool lifecycle、BIRD process lifecycle、routing/firewall privileged apply、driver construction 和 reconcile timer 仍在 app。
+
+### 5.4 Sync runtime（未开始写侧迁移）
 
 `sync.go` 仍是最大文件，且耦合传输、状态、CLI 输出、object pull、peer discovery。建议较晚处理：
 
 1. 先保留 event loop wiring 在 `app/higgs`。
 2. 抽 `SyncSession`、timer、packet demux、peer address ranking、object pull client/pool 到 `internal/syncapp`。
-3. 将 `sync status` 输出改为 inspect/text。
+3. `sync status` view/text 已下沉；继续拆时只迁移纯 runtime/FSM，不把 daemon commit adapter 搬进 internal。
 4. 再拆旧 `sync.go` 的 transport open、packet handling、state apply adapter。
 
-### 5.5 State/config/control
+当前状态：
+
+- 已完成：`sync status` view/text、peer runtime debug view、部分 shared `PeerRuntimeState` DTO。
+- 未完成：`sync.go`、`sync_session.go`、`daemon_sync.go`、packet demux、object pull、timer、transport open 和 state apply adapter 仍在 app。
+
+### 5.5 State/config/control（未开始主体迁移）
 
 这是最后处理的核心边界：
 
 1. 先把 control DTO/client helper 下沉到 `internal/controlapi`。
 2. 把 per-subsystem config parser 移到对应 internal module，顶层 `appConfig` 只做组合。
-3. 评估是否将 `stateFile` 类型移到 `internal/appstate`。这一步影响面最大，必须等上面模块已经通过 input/view 降耦合后再做。
+3. 评估是否将 `stateFile` 类型移到专门 app state 包。当前 `internal/state` 不是这个包；它只承接运行时 DTO。这一步影响面最大，必须等上面模块已经通过 input/view 降耦合后再做。
+
+当前状态：
+
+- 已完成：committed snapshot / `DaemonStateStore` 读写分离已在 app 内完成；部分 runtime DTO 已移动到 `internal/state`。
+- 未完成：`stateFile`、bbolt 持久化、clone、workspace/commit、control socket DTO/client helper、config parsing/assembly 仍在 app。
+
+### 5.6 剩余 app/higgs 大文件清单
+
+下一阶段如果继续模块化，应优先从这些文件中选择一个窄切口，而不是同时创建多个空包：
+
+- Sync/runtime：`sync.go`、`sync_session.go`、`daemon_sync.go`、`packet_demux.go`、`objectpull.go`、`timer_manager.go`
+- IPsec：`ipsec_reconcile.go`、`ipsec_publish.go`、`ipsec_cleanup.go`
+- Routing/BIRD：`routing_reconcile.go`、`routing_reconcile_helpers.go`
+- Firewall：`firewall_reconcile.go`
+- Health：`health_reconcile.go`、`health_spool.go`
+- Lifecycle/security：`peer_state.go`、`revocation_cleanup.go`、`admission_diagnostics.go`
+- Control/config/state：`control.go`、`config.go`、`state.go`、`daemon_state_store.go`
+
+建议顺序仍然是：先抽纯 input/view/decision，再抽不触碰 daemon lifecycle 的 planner/helper，最后才移动持久化、commit、driver lifecycle 或 privileged apply。
 
 ---
 
