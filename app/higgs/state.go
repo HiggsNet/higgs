@@ -11,7 +11,6 @@ import (
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 const cliMetaKey = "cli_state"
@@ -112,31 +111,7 @@ type stateMeta struct {
 type firewallReconcileState = higgsstate.FirewallReconcileState
 type firewallInstanceReconcileStateEntry = higgsstate.FirewallReconcileInstance
 
-// admissionState tracks auto-join admission diagnostics. It is persisted so
-// that pending reasons survive daemon restarts and operators can inspect
-// why a node has not yet been adopted.
-type admissionState struct {
-	// Pending is true when the node is waiting for delegation adoption.
-	Pending bool `json:"pending,omitempty"`
-	// PendingSinceUnix is when the node first entered pending state.
-	PendingSinceUnix int64 `json:"pending_since_unix,omitempty"`
-	// AdoptedAtUnix is when the node was most recently adopted (0 = never).
-	AdoptedAtUnix int64 `json:"adopted_at_unix,omitempty"`
-	// LastAdoptionError records the most recent adoption failure.
-	LastAdoptionError string `json:"last_adoption_error,omitempty"`
-	// LastBootstrapSyncUnix tracks the most recent successful bootstrap peer
-	// sync round while pending (0 = never synced).
-	LastBootstrapSyncUnix int64 `json:"last_bootstrap_sync_unix,omitempty"`
-	// JoinRequestB64 is the base64-encoded join request that the parent zone
-	// admin needs to sign a delegation for.
-	JoinRequestB64 string `json:"join_request_b64,omitempty"`
-	// PendingReason is the structured diagnostic reason for the current
-	// pending state (e.g. missing_parent_zone, missing_delegation,
-	// delegation_key_mismatch, verify_chain_failed, no_bootstrap_sync).
-	PendingReason string `json:"pending_reason,omitempty"`
-	// PendingReasonDetail provides additional context for the pending reason.
-	PendingReasonDetail string `json:"pending_reason_detail,omitempty"`
-}
+type admissionState = higgsstate.AdmissionState
 
 type BirdInstanceState = higgsstate.BirdInstanceState
 
@@ -158,10 +133,7 @@ func cloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstan
 	return out
 }
 
-type routingReconcileState struct {
-	LastRunUnix int64  `json:"last_run_unix,omitempty"`
-	LastError   string `json:"last_error,omitempty"`
-}
+type routingReconcileState = higgsstate.RoutingReconcileState
 
 func cloneFirewallReconcileState(in *firewallReconcileState) *firewallReconcileState {
 	if in == nil {
@@ -181,133 +153,17 @@ func cloneFirewallReconcileState(in *firewallReconcileState) *firewallReconcileS
 	return &out
 }
 
-type ipsecTransportKeyState struct {
-	Kind        string `json:"kind,omitempty"`
-	Algorithm   string `json:"algorithm,omitempty"`
-	PublicKey   []byte `json:"public_key,omitempty"`
-	PrivateKey  []byte `json:"private_key,omitempty"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-	NotBefore   int64  `json:"not_before,omitempty"`
-	NotAfter    int64  `json:"not_after,omitempty"`
-	UpdatedAt   int64  `json:"updated_at,omitempty"`
-}
+type ipsecTransportKeyState = higgsstate.IPsecTransportKeyState
+type ipsecPortRecordState = higgsstate.IPsecPortRecordState
 
-type ipsecPortRecordState struct {
-	Mode       string           `json:"mode,omitempty"`
-	Range      *ipsec.PortRange `json:"range,omitempty"`
-	Generation uint64           `json:"generation,omitempty"`
-	UpdatedAt  int64            `json:"updated_at,omitempty"`
-}
+type linkInstanceState = higgsstate.LinkInstanceState
+type linkOwnerState = higgsstate.LinkOwnerState
 
-type linkInstanceState struct {
-	ID                    string         `json:"id"`
-	GroupID               string         `json:"group_id,omitempty"`
-	PeerZone              zone.ZonePath  `json:"peer_zone"`
-	TransportKind         string         `json:"transport_kind,omitempty"`
-	LinkID                string         `json:"link_id,omitempty"`
-	PathKey               string         `json:"path_key,omitempty"`
-	TransportID           string         `json:"transport_id,omitempty"`
-	DesiredSpecHash       string         `json:"desired_spec_hash,omitempty"`
-	ActualState           string         `json:"actual_state,omitempty"`
-	InterfaceName         string         `json:"interface_name,omitempty"`
-	XFRMIfID              uint32         `json:"xfrm_if_id,omitempty"`
-	LocalTunnelAddr       string         `json:"local_tunnel_addr,omitempty"`
-	PeerTunnelAddr        string         `json:"peer_tunnel_addr,omitempty"`
-	IKEName               string         `json:"ike_name,omitempty"`
-	ChildSAName           string         `json:"child_sa_name,omitempty"`
-	Endpoint              string         `json:"endpoint,omitempty"`
-	RemoteGeneration      uint64         `json:"remote_generation,omitempty"`
-	StagedGeneration      uint64         `json:"staged_generation,omitempty"`
-	RotatePhase           string         `json:"rotate_phase,omitempty"`
-	StagedIKEName         string         `json:"staged_ike_name,omitempty"`
-	StagedChildSAName     string         `json:"staged_child_sa_name,omitempty"`
-	StagedInterfaceName   string         `json:"staged_interface_name,omitempty"`
-	StagedXFRMIfID        uint32         `json:"staged_xfrm_if_id,omitempty"`
-	StagedLocalTunnelAddr string         `json:"staged_local_tunnel_addr,omitempty"`
-	StagedPeerTunnelAddr  string         `json:"staged_peer_tunnel_addr,omitempty"`
-	RotateDeadline        int64          `json:"rotate_deadline,omitempty"`
-	LastError             string         `json:"last_error,omitempty"`
-	FailureCount          int            `json:"failure_count,omitempty"`
-	BackoffUntil          int64          `json:"backoff_until,omitempty"`
-	LastTransition        int64          `json:"last_transition,omitempty"`
-	Owner                 linkOwnerState `json:"owner,omitempty"`
-
-	// Phase 4.5 bidirectional takeover state.
-	InitiatorRole     string `json:"initiator_role,omitempty"`
-	TakeoverPhase     string `json:"takeover_phase,omitempty"`
-	TakeoverStartedAt int64  `json:"takeover_started_at,omitempty"`
-	TakeoverUntil     int64  `json:"takeover_until,omitempty"`
-	LastTakeoverError string `json:"last_takeover_error,omitempty"`
-	ObservedInitiator string `json:"observed_initiator,omitempty"`
-}
-
-type linkOwnerState struct {
-	Manager     string `json:"manager,omitempty"`
-	GroupID     string `json:"group_id,omitempty"`
-	InstanceID  string `json:"instance_id,omitempty"`
-	LinkID      string `json:"link_id,omitempty"`
-	TransportID string `json:"transport_id,omitempty"`
-	Token       string `json:"token,omitempty"`
-}
-
-type ipsecReconcileState struct {
-	LastRunUnix    int64              `json:"last_run_unix,omitempty"`
-	SourceRevision uint64             `json:"source_revision,omitempty"`
-	Committed      bool               `json:"committed,omitempty"`
-	Stale          bool               `json:"stale,omitempty"`
-	DesiredLinks   int                `json:"desired_links,omitempty"`
-	Desired        []desiredLinkState `json:"desired,omitempty"`
-	ActualSAs      []linkSAState      `json:"actual_sas,omitempty"`
-	Actions        []linkActionState  `json:"actions,omitempty"`
-	Skipped        []linkSkipState    `json:"skipped,omitempty"`
-	LastError      string             `json:"last_error,omitempty"`
-}
-
-type desiredLinkState struct {
-	InstanceID      string        `json:"instance_id,omitempty"`
-	GroupID         string        `json:"group_id,omitempty"`
-	PeerZone        zone.ZonePath `json:"peer_zone,omitempty"`
-	LinkID          string        `json:"link_id,omitempty"`
-	PathKey         string        `json:"path_key,omitempty"`
-	TransportID     string        `json:"transport_id,omitempty"`
-	DesiredSpecHash string        `json:"desired_spec_hash,omitempty"`
-	InterfaceName   string        `json:"interface_name,omitempty"`
-	XFRMIfID        uint32        `json:"xfrm_if_id,omitempty"`
-	Endpoint        string        `json:"endpoint,omitempty"`
-	LocalTunnelAddr string        `json:"local_tunnel_addr,omitempty"`
-	PeerTunnelAddr  string        `json:"peer_tunnel_addr,omitempty"`
-}
-
-type linkSAState struct {
-	Name           string `json:"name,omitempty"`
-	Peer           string `json:"peer,omitempty"`
-	ChildSA        string `json:"child_sa,omitempty"`
-	IKEState       string `json:"ike_state,omitempty"`
-	ChildState     string `json:"child_state,omitempty"`
-	XFRMIfID       uint32 `json:"xfrm_if_id,omitempty"`
-	ReqID          uint32 `json:"reqid,omitempty"`
-	LocalIdentity  string `json:"local_identity,omitempty"`
-	RemoteIdentity string `json:"remote_identity,omitempty"`
-	LocalEndpoint  string `json:"local_endpoint,omitempty"`
-	RemoteEndpoint string `json:"remote_endpoint,omitempty"`
-	Endpoint       string `json:"endpoint,omitempty"`
-	Established    bool   `json:"established,omitempty"`
-}
-
-type linkActionState struct {
-	Action     string        `json:"action"`
-	InstanceID string        `json:"instance_id,omitempty"`
-	GroupID    string        `json:"group_id,omitempty"`
-	PeerZone   zone.ZonePath `json:"peer_zone,omitempty"`
-	Reason     string        `json:"reason,omitempty"`
-}
-
-type linkSkipState struct {
-	GroupID string        `json:"group_id,omitempty"`
-	Peer    zone.ZonePath `json:"peer,omitempty"`
-	Reason  string        `json:"reason,omitempty"`
-	Detail  string        `json:"detail,omitempty"`
-}
+type ipsecReconcileState = higgsstate.IPsecReconcileState
+type desiredLinkState = higgsstate.DesiredLinkState
+type linkSAState = higgsstate.LinkSAState
+type linkActionState = higgsstate.LinkActionState
+type linkSkipState = higgsstate.LinkSkipState
 
 type syncPeerState = higgsstate.PeerRuntimeState
 type observedGraceAddrState = higgsstate.PeerObservedGraceAddrState

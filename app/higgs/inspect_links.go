@@ -58,7 +58,12 @@ func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []heal
 	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
 	for _, id := range ids {
 		inst := state.LinkInstances[id]
-		input.Instances = append(input.Instances, inspectLinkInstance(rt, state, inst))
+		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, state.BirdInstances, inst.GroupID)
+		input.Instances = append(input.Instances, inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{
+			BirdState:      birdState,
+			BirdNeighbors:  birdNeighbors,
+			BirdBestRoutes: birdBestRoutes,
+		}))
 	}
 	lastDesiredLinks := lastReconcileDesiredLinks(reconcile)
 	replannedDesired := lastDesiredLinks
@@ -121,54 +126,6 @@ func sortedLinkInstanceIDs(instances map[string]linkInstanceState) []string {
 	return ids
 }
 
-func inspectLinkInstance(rt *Runtime, state *stateFile, inst linkInstanceState) inspect.LinkInstance {
-	birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, state.BirdInstances, inst.GroupID)
-	return inspect.LinkInstance{
-		ID:                    inst.ID,
-		GroupID:               inst.GroupID,
-		PeerZone:              string(inst.PeerZone),
-		TransportKind:         inst.TransportKind,
-		LinkID:                inst.LinkID,
-		PathKey:               inst.PathKey,
-		TransportID:           inst.TransportID,
-		DesiredSpecHash:       inst.DesiredSpecHash,
-		ActualState:           inst.ActualState,
-		InterfaceName:         inst.InterfaceName,
-		XFRMIfID:              inst.XFRMIfID,
-		IKEName:               inst.IKEName,
-		ChildSAName:           inst.ChildSAName,
-		Endpoint:              inst.Endpoint,
-		LocalTunnelAddr:       inst.LocalTunnelAddr,
-		PeerTunnelAddr:        inst.PeerTunnelAddr,
-		RemoteGeneration:      inst.RemoteGeneration,
-		StagedGeneration:      inst.StagedGeneration,
-		RotatePhase:           inst.RotatePhase,
-		StagedIKEName:         inst.StagedIKEName,
-		StagedChildSAName:     inst.StagedChildSAName,
-		StagedInterfaceName:   inst.StagedInterfaceName,
-		StagedXFRMIfID:        inst.StagedXFRMIfID,
-		StagedLocalTunnelAddr: inst.StagedLocalTunnelAddr,
-		StagedPeerTunnelAddr:  inst.StagedPeerTunnelAddr,
-		RotateDeadline:        inst.RotateDeadline,
-		LastError:             inst.LastError,
-		FailureCount:          inst.FailureCount,
-		BackoffUntil:          inst.BackoffUntil,
-		LastTransition:        inst.LastTransition,
-		Owner:                 inspectLinkOwner(inst.Owner),
-		InitiatorRole:         inst.InitiatorRole,
-		TakeoverPhase:         inst.TakeoverPhase,
-		TakeoverStartedAt:     inst.TakeoverStartedAt,
-		TakeoverUntil:         inst.TakeoverUntil,
-		LastTakeoverError:     inst.LastTakeoverError,
-		ObservedInitiator:     inst.ObservedInitiator,
-		Routing: inspect.LinkRouting{
-			BirdState:      birdState,
-			BirdNeighbors:  birdNeighbors,
-			BirdBestRoutes: birdBestRoutes,
-		},
-	}
-}
-
 func plannedInspectDesiredLinks(rt *Runtime, state *stateFile) ([]inspect.DesiredLink, map[string]ipsec.TransportLinkSpec, error) {
 	specs := map[string]ipsec.TransportLinkSpec{}
 	if rt == nil || rt.Config == nil || state == nil || state.Network == nil || state.ManagedZone.IsRoot() || !state.ManagedZone.Valid() || len(rt.Config.IPsec.LinkGroups) == 0 {
@@ -198,7 +155,7 @@ func plannedInspectDesiredLinks(rt *Runtime, state *stateFile) ([]inspect.Desire
 			LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS),
 			PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
 		}
-		out = append(out, inspectDesiredLink(item))
+		out = append(out, inspect.BuildDesiredLinkFromRuntime(item))
 		specs[item.InstanceID] = spec
 	}
 	return out, specs, nil
@@ -207,46 +164,15 @@ func plannedInspectDesiredLinks(rt *Runtime, state *stateFile) ([]inspect.Desire
 func inspectDesiredLinks(items []desiredLinkState) []inspect.DesiredLink {
 	out := make([]inspect.DesiredLink, 0, len(items))
 	for _, item := range items {
-		out = append(out, inspectDesiredLink(item))
+		out = append(out, inspect.BuildDesiredLinkFromRuntime(item))
 	}
 	return out
-}
-
-func inspectDesiredLink(item desiredLinkState) inspect.DesiredLink {
-	return inspect.DesiredLink{
-		InstanceID:      item.InstanceID,
-		GroupID:         item.GroupID,
-		PeerZone:        string(item.PeerZone),
-		LinkID:          item.LinkID,
-		PathKey:         item.PathKey,
-		TransportID:     item.TransportID,
-		DesiredSpecHash: item.DesiredSpecHash,
-		InterfaceName:   item.InterfaceName,
-		XFRMIfID:        item.XFRMIfID,
-		Endpoint:        item.Endpoint,
-		LocalTunnelAddr: item.LocalTunnelAddr,
-		PeerTunnelAddr:  item.PeerTunnelAddr,
-	}
 }
 
 func inspectLinkSAs(items []linkSAState) []inspect.LinkSA {
 	out := make([]inspect.LinkSA, 0, len(items))
 	for _, item := range items {
-		out = append(out, inspect.LinkSA{
-			Name:           item.Name,
-			Peer:           item.Peer,
-			ChildSA:        item.ChildSA,
-			IKEState:       item.IKEState,
-			ChildState:     item.ChildState,
-			XFRMIfID:       item.XFRMIfID,
-			ReqID:          item.ReqID,
-			LocalIdentity:  item.LocalIdentity,
-			RemoteIdentity: item.RemoteIdentity,
-			LocalEndpoint:  item.LocalEndpoint,
-			RemoteEndpoint: item.RemoteEndpoint,
-			Endpoint:       item.Endpoint,
-			Established:    item.Established,
-		})
+		out = append(out, inspect.LinkSA(item))
 	}
 	return out
 }
@@ -283,13 +209,7 @@ func inspectLinkHealth(items []healthLinkJSON) []inspect.LinkHealth {
 func inspectLinkActions(items []linkActionState) []inspect.LinkAction {
 	out := make([]inspect.LinkAction, 0, len(items))
 	for _, item := range items {
-		out = append(out, inspect.LinkAction{
-			Action:     item.Action,
-			InstanceID: item.InstanceID,
-			GroupID:    item.GroupID,
-			PeerZone:   string(item.PeerZone),
-			Reason:     item.Reason,
-		})
+		out = append(out, inspect.BuildLinkActionFromRuntime(item))
 	}
 	return out
 }
@@ -297,23 +217,7 @@ func inspectLinkActions(items []linkActionState) []inspect.LinkAction {
 func inspectLinkSkips(items []linkSkipState) []inspect.LinkSkip {
 	out := make([]inspect.LinkSkip, 0, len(items))
 	for _, item := range items {
-		out = append(out, inspect.LinkSkip{
-			GroupID: item.GroupID,
-			Peer:    string(item.Peer),
-			Reason:  item.Reason,
-			Detail:  item.Detail,
-		})
+		out = append(out, inspect.BuildLinkSkipFromRuntime(item))
 	}
 	return out
-}
-
-func inspectLinkOwner(owner linkOwnerState) inspect.LinkOwner {
-	return inspect.LinkOwner{
-		Manager:     owner.Manager,
-		GroupID:     owner.GroupID,
-		InstanceID:  owner.InstanceID,
-		LinkID:      owner.LinkID,
-		TransportID: owner.TransportID,
-		Token:       owner.Token,
-	}
 }

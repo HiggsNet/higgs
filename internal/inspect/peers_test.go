@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	higgsstate "github.com/Catofes/higgs/internal/state"
 )
 
 func TestBuildPeerIDsMergesFiltersAndSorts(t *testing.T) {
@@ -184,31 +186,31 @@ func TestBuildEndpointDebugSuppressesPrivateReflectorErrors(t *testing.T) {
 func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	got := BuildPeerDebug(PeerDebugInput{
-		PeerID:                "node-b.catofes.",
-		Source:                "bootstrap",
-		ConfiguredAddr:        "127.0.0.1:9999",
-		ResolvedAddr:          "127.0.0.1:2000",
-		LastSyncUnix:          now.Add(-time.Minute).Unix(),
-		BackoffUntilUnix:      now.Add(30 * time.Second).Unix(),
-		DiscoveredAddr:        "127.0.0.1:2000",
-		ObservedAddr:          "127.0.0.1:3000",
-		ObservedUntilUnix:     now.Add(time.Hour).Unix(),
-		ObservedLastSeenUnix:  now.Unix(),
-		ObservedLastSyncUnix:  now.Add(-time.Minute).Unix(),
-		ObservedFailureCount:  2,
-		ObservedSource:        "PING",
-		LastUpdateSource:      "node-c.catofes.",
-		LastRelayUnix:         now.Add(-2 * time.Minute).Unix(),
-		LastRelaySuppression:  "relay_throttled",
-		LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
-		SyncFlow: PeerSyncFlowView{
-			ActivePullState: "object_pulling",
-		},
-		DatagramStats: PeerDatagramStatsView{
-			TooLargeDropped: 2,
-		},
-		ObjectPullStats: PeerObjectPullStatsView{
-			Attempts: 3,
+		PeerID:         "node-b.catofes.",
+		Source:         "bootstrap",
+		ConfiguredAddr: "127.0.0.1:9999",
+		ResolvedAddr:   "127.0.0.1:2000",
+		PeerRuntimeState: higgsstate.PeerRuntimeState{
+			LastSyncUnix:          now.Add(-time.Minute).Unix(),
+			BackoffUntilUnix:      now.Add(30 * time.Second).Unix(),
+			DiscoveredAddr:        "127.0.0.1:2000",
+			ObservedAddr:          "127.0.0.1:3000",
+			ObservedUntilUnix:     now.Add(time.Hour).Unix(),
+			ObservedLastSeenUnix:  now.Unix(),
+			ObservedLastSyncUnix:  now.Add(-time.Minute).Unix(),
+			ObservedFailureCount:  2,
+			ObservedSource:        "PING",
+			LastUpdateSource:      "node-c.catofes.",
+			LastRelayUnix:         now.Add(-2 * time.Minute).Unix(),
+			LastRelaySuppression:  "relay_throttled",
+			LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
+			ActivePullState:       "object_pulling",
+			DatagramStats: &higgsstate.PeerDatagramStats{
+				TooLargeDropped: 2,
+			},
+			ObjectPullStats: &higgsstate.PeerObjectPullStats{
+				Attempts: 3,
+			},
 		},
 		Now: now,
 	})
@@ -233,7 +235,7 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 
-	flow := BuildPeerSyncFlowView(PeerSyncFlowInput{
+	flow := BuildPeerSyncFlowFromRuntime(higgsstate.PeerRuntimeState{
 		ActivePullUpdatedUnix: now.Unix(),
 		LastHintUnix:          now.Add(-time.Minute).Unix(),
 		LastResponderUnix:     now.Add(-2 * time.Minute).Unix(),
@@ -242,16 +244,20 @@ func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 		t.Fatalf("sync flow timestamps = %+v", flow)
 	}
 
-	datagram := BuildPeerDatagramStatsView(PeerDatagramStatsInput{
-		LastCatalogUnix:  now.Unix(),
-		LastTooLargeUnix: now.Add(-time.Minute).Unix(),
+	datagram := BuildPeerDatagramStatsFromRuntime(higgsstate.PeerRuntimeState{
+		DatagramStats: &higgsstate.PeerDatagramStats{
+			LastCatalogUnix:  now.Unix(),
+			LastTooLargeUnix: now.Add(-time.Minute).Unix(),
+		},
 	})
 	if datagram.LastCatalog != "2023-11-14T22:13:20Z" || datagram.LastTooLarge == "never" {
 		t.Fatalf("datagram timestamps = %+v", datagram)
 	}
 
-	objectPull := BuildPeerObjectPullStatsView(PeerObjectPullStatsInput{
-		LastUnix: now.Unix(),
+	objectPull := BuildPeerObjectPullStatsFromRuntime(higgsstate.PeerRuntimeState{
+		ObjectPullStats: &higgsstate.PeerObjectPullStats{
+			LastUnix: now.Unix(),
+		},
 	})
 	if objectPull.Last != "2023-11-14T22:13:20Z" {
 		t.Fatalf("object pull timestamp = %+v", objectPull)

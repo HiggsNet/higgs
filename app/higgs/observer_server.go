@@ -249,32 +249,11 @@ func peerJSONFromState(id string, ps syncPeerState, config *syncConfigFile, ns *
 		source = "observed"
 	}
 	return inspecthttp.PeerJSON{
-		PeerID:                id,
-		Source:                source,
-		ConfiguredAddr:        configuredAddr,
-		LastSyncUnix:          ps.LastSyncUnix,
-		LastAttemptUnix:       ps.LastAttemptUnix,
-		BackoffUntilUnix:      ps.BackoffUntilUnix,
-		LastRelayUnix:         ps.LastRelayUnix,
-		FailureCount:          ps.FailureCount,
-		LastError:             ps.LastError,
-		LastUpdateSource:      ps.LastUpdateSource,
-		LastRelaySuppression:  ps.LastRelaySuppression,
-		LastRelaySuppressedAt: ps.LastRelaySuppressedAt,
-		DiscoveredAddr:        ps.DiscoveredAddr,
-		DiscoveredAtUnix:      ps.DiscoveredAtUnix,
-		ObservedAddr:          ps.ObservedAddr,
-		ObservedFirstSeenUnix: ps.ObservedFirstSeenUnix,
-		ObservedLastSeenUnix:  ps.ObservedLastSeenUnix,
-		ObservedLastSyncUnix:  ps.ObservedLastSyncUnix,
-		ObservedUntilUnix:     ps.ObservedUntilUnix,
-		ObservedSource:        ps.ObservedSource,
-		ObservedFailureCount:  ps.ObservedFailureCount,
-		ObservedGraceAddrs:    ps.ObservedGraceAddrs,
-		Endpoints:             inspectPeerEndpoints(id, ps, config, ns, now),
-		DatagramStats:         ps.DatagramStats,
-		ObjectPullStats:       ps.ObjectPullStats,
-		RejectedDigests:       ps.RejectedDigests,
+		PeerID:          id,
+		Source:          source,
+		ConfiguredAddr:  configuredAddr,
+		PeerRuntimeJSON: inspecthttp.PeerRuntimeJSONFromState(ps),
+		Endpoints:       inspectPeerEndpoints(id, ps, config, ns, now),
 	}
 }
 

@@ -12,7 +12,7 @@
 - [x] Phase 5：BIRD Babel、route authorization、per-netns BIRD 配置模型、routing debug 和 dry-run smoke 基座。
 - [x] Phase 6.0-6.7.6：事件驱动控制面、IPAM、准入诊断、防火墙、动态 peer、撤销清理、链路健康和 Observer MVP 主线。
 
-- [ ] **6.7.7 `app/higgs` 模块化重构（Observer/debug 先行）**
+- [x] **6.7.7 `app/higgs` 模块化重构（Observer/debug 先行）**
   - **设计文档：** `docs/app-higgs-modularization-design.md`
   - 目标：以 Observer/debug/inspect 为第一批切入点，启动 `app/higgs` 模块化重构；后续把 health、routing、revocation、peer lifecycle、firewall、IPsec reconcile、sync runtime 等应用子系统逐步下沉到 internal 模块，避免所有逻辑长期堆在 `app/higgs` executable 包。
   - 边界原则：
@@ -34,7 +34,8 @@
     - 已新增 `inspect.RecordDetailView` / `BuildRecordDetail` 与 `inspect/text.WriteJSON`：`record get` / control `record_get` 不再在 app 层手工拼 `map[string]any` record JSON，`zone show` 也复用 shared JSON presenter。
   - [x] 第三步抽 peer endpoints：把 bootstrap/discovered/observed/grace endpoint 合并、本地 peer 过滤、source/selected 排序收敛到 inspect；observer peers 和 CLI peer debug 共用。
     - 已新增 `internal/inspect.BuildPeerIDs` / `PeerKnown` / `BuildPeerEndpoints` 与 `PeerStatusInfo` view：peer 候选集合、本地 peer 过滤、zone-path 排序、bootstrap/signed/selected/observed/grace endpoint 合并去重均已下沉；Observer peers API 与 `debug peer` endpoint resolution 已改用该 view；Observer peers HTTP DTO 已迁到 `internal/inspect/http`。
-  - [ ] 拆 peer runtime control vs observability readmodel：`SyncPeers` 中 backoff、observed path、rejected digest/record cache、relay eligibility 等仍归 daemon runtime control state；`DatagramStats`、`ObjectPullStats`、read-only responder、last catalog/page/reject、chunk fallback/too-large counters 等纯诊断字段后续迁到 peer observability readmodel / metrics store，并由 `internal/inspect/source` 汇入 debug/observer input，避免主 committed state revision 因统计计数频繁前进。
+  - [x] 拆 peer runtime control vs observability readmodel：已通过 `internal/state.PeerRuntimeState` 将 peer runtime 状态从 `app/higgs` 私有类型提升为 `app/higgs`、`internal/inspect`、control/observer 共用的只读快照类型；`PeerDebugInput`、`inspecthttp.PeerJSON`、`inspect.SyncVerbosePeerView` 均直接嵌入/复用 `PeerRuntimeState`，删除了 `PeerSyncFlowInput`、`PeerDatagramStatsInput`、`PeerObjectPullStatsInput` 等重复中间类型，消除了 app/inspect/observer 之间大量字段复制。backoff、observed path、rejected digest/record cache、relay eligibility 等控制字段仍由 daemon runtime 写入。`DatagramStats`、`ObjectPullStats`、read-only responder、last catalog/page/reject、chunk fallback/too-large counters 等纯诊断字段当前仍随 `PeerRuntimeState` 持久化，尚未完全迁出到独立 metrics store；待后续建立 `internal/inspect/source` 或 metrics store 后再评估彻底拆出，避免统计计数频繁推动主 committed state revision。
+  - [x] 抽 link runtime snapshot 到 `internal/state`：已将 `LinkInstanceState`、`DesiredLinkState`、`LinkSAState`、`LinkActionState`、`LinkSkipState`、`LinkOwnerState` 从 `app/higgs/state.go` 提升到 `internal/state`，`app/higgs` 通过类型别名复用；`internal/inspect` 中 `LinkOwner`/`LinkSA` 与共享状态别名等价，`LinkInstance`/`DesiredLink`/`LinkAction`/`LinkSkip` 通过 `Build*FromRuntime` builder 从共享状态构建，`app/higgs/inspect_links.go` 不再逐字段复制，统一走 inspect builder。`LinkHealth`/`LinkRouting`/`LinkRotation`/`LinkTakeover` 等纯 inspect view 类型保留在 `internal/inspect`，与持久化/runtime snapshot 解耦。
   - [x] 第四步抽 routes/BIRD/health/revocation/admission/firewall：优先复用现有结构化结果，逐步把 presenter 与诊断推理分开；系统采集和 provider 调用留在 source/adapter 层。
     - 已新增 `internal/inspect/http` health response / health series DTO 与 health context builder：Observer health list、health series envelope、health sample + link instance + desired context 合并/补 unknown/排序已从 `observer_server.go` 下沉，`debug health` target 排序已收敛到 `inspect.BuildHealthDebugView`，app 层仍负责 health spool 查询和私有 runtime state 投影。
     - 已新增 `internal/inspect/text` health presenter：`debug health` 的 target 排序、目标输出、live health sample 输出已从 `health_reconcile.go` 下沉，app 层仅保留 LoadState、control socket live snapshot 和私有 `healthLinkJSON` 投影。
@@ -48,7 +49,7 @@
     - 已清理 app 层仅为迁移兼容保留的 inspect / inspect/http alias：routes/BIRD、admission、revocation、rotate、peer lifecycle 调用点直接引用 `internal/inspect` 或 `internal/inspect/http`；app 层只保留 runtime/control/state adapter。
     - 已将 `LinksDebugView` 从 `internal/inspect/text` 迁回 `internal/inspect`，CLI text presenter 只消费 inspect view；`PlannedSpecs` 仍暂存原始 `ipsec.TransportLinkSpec`，后续需继续拆成纯 inspect StrongSwan config view，消除 text/inspect 对 runtime spec 的直接耦合。
     - 已将 `ZoneDebugView`、`PeerLifecycleDebugView` / config、`HealthDebugView` / live/target view 从 `internal/inspect/text` 迁回 `internal/inspect`；`text` 包继续瘦身为 writer/formatter，不再定义跨包 debug view，也不再直接依赖 `pkg/health`。
-  - [ ] Diagnostics/debug 迁移路线：
+  - [x] Diagnostics/debug 迁移路线：
     - `app/higgs/diagnostics.go` 拆分：sync debug logger / runtime log glue 留 app；peer、zone、record、link、endpoint 的 view builder 和文本输出迁到 inspect/text；`debug peer` / `debug links` / `debug endpoints` CLI presenter 与 `debug records` records view/presenter 已下沉。
       - 已新增 `inspect.BuildEndpointDebug`：`debug endpoints` 的 local candidate / discovered peer / signed endpoint 稳定排序、reflector error 展示规则和 endpoint debug view 构建下沉到 `internal/inspect`；app 层仅保留 local/discovered endpoint 采集与 gossip 类型适配。
     - `app/higgs/admission_diagnostics.go` 的 reason code、diagnosis view、writeAdmissionDiagnosis 已迁到 inspect + inspect/text；app 只保留在 daemon 事件中诊断/更新 admission state 的 adapter。
@@ -69,7 +70,7 @@
     - 已新增 peer/endpoints/rotate/ping/sync status/links/routes/routing/health/zone/records/revocation/firewall/admission 等 inspect/text focused output 测试；`debug ping` 选择/执行/view 构建测试已迁到 `internal/ping`，文本断言已迁到 `internal/inspect/text`；app 层 legacy `TestDebug*Output` / `TestWriteDebug*` 已移除，保留的 app 窄测试只覆盖 app runtime/source 到 inspect view 的窄 wiring。
   - [x] 删除 `observer_server.go` 中只为兼容旧 handler 测试保留的 app 层 wrapper 或改测 `internal/observer.Server.Handler()`；保留必要 shim 时必须标注迁移原因。
     - 已删除 `observerServer.handleStatus/handleZones/handlePeers/handleLinks/handleHealth/handleRoutes/handleBird/handleEvents/handleStatic` 和 `apiResponse` 兼容 alias；observer API/static/events/firewall 相关测试已改走 `srv.handler().ServeHTTP` + `observer.APIResponse`。
-  - [ ] 验证：`make observer-smoke`、`go test ./app/higgs`、相关 CLI golden/output 测试必须继续覆盖 HTTP route、SSE、static UI、debug 文本和 raw JSON 输出。
+  - [x] 验证：`make observer-smoke`、`go test ./app/higgs`、相关 CLI golden/output 测试覆盖 HTTP route、SSE、static UI、debug 文本和 raw JSON 输出。
 
 ## Phase 7: 健壮性与高级特性（预计 4-6 周）
 
@@ -213,6 +214,6 @@
 
 ## 下一步
 
-1. 继续 Phase 6.7.7 `app/higgs` 模块化重构：优先补齐 `internal/inspect` / `inspect/text` 骨架，把 `debug links` 与 Observer links 的共用 read model 扩展成可迁移模式；该 read model 后续直接消费 StateStore snapshot。
-2. 第二步抽 zone/record/authority 展示逻辑，复用到 `zone show` / `debug zone` / Observer zone detail，避免 HTTP schema 直接绑定 `zone.Record` 原始字段。
-3. 第三步抽 peer endpoints，再逐步迁移 routes/BIRD/health/revocation/admission/firewall 的诊断 presenter 和 reason 推理。
+1. 进入 Phase 7：启动 7.1 多线路并行（Multipath）设计，明确单 Peer 多条 TransportLink 共存、per-link BIRD interface pattern 匹配和 Babel ECMP 行为。
+2. 远期补强 `internal/inspect/source` 与 peer 可观测性 readmodel：在 metrics store 就绪后，将 `DatagramStats`/`ObjectPullStats` 等纯诊断计数从 `PeerRuntimeState` 完全拆出，避免统计写入推动主 committed state revision。
+3. 继续按 `docs/app-higgs-modularization-design.md` 推进 `internal/*` 应用层拆分（peer lifecycle、revocation impact、admission、health/routing/firewall/ipsec app 层等），待接口稳定后再评估 `stateFile` 迁移。

@@ -80,7 +80,7 @@ func writeSyncVerbose(out *lineWriter, view inspect.SyncStatusView) {
 
 func writeSyncPeerDetail(out *lineWriter, peer inspect.SyncVerbosePeerView) {
 	out.Linef("  update_source=%s last_relay=%s relay_suppression=%s",
-		dash(peer.UpdateSource),
+		dash(peer.LastUpdateSource),
 		peer.LastRelay,
 		peer.RelaySuppression,
 	)

@@ -187,28 +187,12 @@ type PeerDebugView struct {
 }
 
 type PeerDebugInput struct {
-	PeerID                string
-	Source                string
-	ConfiguredAddr        string
-	ResolvedAddr          string
-	LastSyncUnix          int64
-	LastError             string
-	BackoffUntilUnix      int64
-	DiscoveredAddr        string
-	ObservedAddr          string
-	ObservedUntilUnix     int64
-	ObservedLastSeenUnix  int64
-	ObservedLastSyncUnix  int64
-	ObservedFailureCount  int
-	ObservedSource        string
-	LastUpdateSource      string
-	LastRelayUnix         int64
-	LastRelaySuppression  string
-	LastRelaySuppressedAt int64
-	SyncFlow              PeerSyncFlowView
-	DatagramStats         PeerDatagramStatsView
-	ObjectPullStats       PeerObjectPullStatsView
-	Now                   time.Time
+	PeerID         string
+	Source         string
+	ConfiguredAddr string
+	ResolvedAddr   string
+	higgsstate.PeerRuntimeState
+	Now time.Time
 }
 
 type PeerRuntimeDebugInput struct {
@@ -219,12 +203,6 @@ type PeerRuntimeDebugInput struct {
 	State          higgsstate.PeerRuntimeState
 	Now            time.Time
 }
-
-type PeerRuntimeState = higgsstate.PeerRuntimeState
-type PeerObservedGraceAddrState = higgsstate.PeerObservedGraceAddrState
-type PeerRejectedDigestState = higgsstate.PeerRejectedDigest
-type PeerDatagramStatsInput = higgsstate.PeerDatagramStats
-type PeerObjectPullStatsInput = higgsstate.PeerObjectPullStats
 
 type PeerSyncFlowView struct {
 	ActivePullState     string
@@ -239,21 +217,6 @@ type PeerSyncFlowView struct {
 	LastResponder       string
 	LastResponderKind   string
 	LastResponderZone   string
-}
-
-type PeerSyncFlowInput struct {
-	ActivePullState       string
-	ActivePullLastEvent   string
-	ActivePullUpdatedUnix int64
-	HintAccepted          int64
-	HintSuppressed        int64
-	LastHintUnix          int64
-	LastHintReason        string
-	LastHintSuppression   string
-	ReadOnlyResponder     int64
-	LastResponderUnix     int64
-	LastResponderKind     string
-	LastResponderZone     string
 }
 
 type PeerDatagramStatsView struct {
@@ -292,28 +255,12 @@ type PeerObjectPullStatsView struct {
 
 func BuildPeerDebugFromRuntime(input PeerRuntimeDebugInput) PeerDebugView {
 	return BuildPeerDebug(PeerDebugInput{
-		PeerID:                input.PeerID,
-		Source:                input.Source,
-		ConfiguredAddr:        input.ConfiguredAddr,
-		ResolvedAddr:          input.ResolvedAddr,
-		LastSyncUnix:          input.State.LastSyncUnix,
-		LastError:             input.State.LastError,
-		BackoffUntilUnix:      input.State.BackoffUntilUnix,
-		DiscoveredAddr:        input.State.DiscoveredAddr,
-		ObservedAddr:          input.State.ObservedAddr,
-		ObservedUntilUnix:     input.State.ObservedUntilUnix,
-		ObservedLastSeenUnix:  input.State.ObservedLastSeenUnix,
-		ObservedLastSyncUnix:  input.State.ObservedLastSyncUnix,
-		ObservedFailureCount:  input.State.ObservedFailureCount,
-		ObservedSource:        input.State.ObservedSource,
-		LastUpdateSource:      input.State.LastUpdateSource,
-		LastRelayUnix:         input.State.LastRelayUnix,
-		LastRelaySuppression:  input.State.LastRelaySuppression,
-		LastRelaySuppressedAt: input.State.LastRelaySuppressedAt,
-		SyncFlow:              BuildPeerSyncFlowFromRuntime(input.State),
-		DatagramStats:         BuildPeerDatagramStatsFromRuntime(input.State),
-		ObjectPullStats:       BuildPeerObjectPullStatsFromRuntime(input.State),
-		Now:                   input.Now,
+		PeerID:           input.PeerID,
+		Source:           input.Source,
+		ConfiguredAddr:   input.ConfiguredAddr,
+		ResolvedAddr:     input.ResolvedAddr,
+		PeerRuntimeState: input.State,
+		Now:              input.Now,
 	})
 }
 
@@ -335,61 +282,44 @@ func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 		LastUpdateSource: input.LastUpdateSource,
 		LastRelay:        formatPeerDebugUnixTime(input.LastRelayUnix),
 		RelaySuppression: formatPeerDebugRelaySuppression(input.LastRelaySuppression, input.LastRelaySuppressedAt),
-		SyncFlow:         input.SyncFlow,
-		DatagramStats:    input.DatagramStats,
-		ObjectPullStats:  input.ObjectPullStats,
+		SyncFlow:         BuildPeerSyncFlowFromRuntime(input.PeerRuntimeState),
+		DatagramStats:    BuildPeerDatagramStatsFromRuntime(input.PeerRuntimeState),
+		ObjectPullStats:  BuildPeerObjectPullStatsFromRuntime(input.PeerRuntimeState),
 	}
 }
 
-func BuildPeerSyncFlowFromRuntime(state PeerRuntimeState) PeerSyncFlowView {
-	return BuildPeerSyncFlowView(PeerSyncFlowInput{
-		ActivePullState:       state.ActivePullState,
-		ActivePullLastEvent:   state.ActivePullLastEvent,
-		ActivePullUpdatedUnix: state.ActivePullUpdatedUnix,
-		HintAccepted:          state.HintAccepted,
-		HintSuppressed:        state.HintSuppressed,
-		LastHintUnix:          state.LastHintUnix,
-		LastHintReason:        state.LastHintReason,
-		LastHintSuppression:   state.LastHintSuppression,
-		ReadOnlyResponder:     state.ReadOnlyResponder,
-		LastResponderUnix:     state.LastResponderUnix,
-		LastResponderKind:     state.LastResponderKind,
-		LastResponderZone:     state.LastResponderZone,
-	})
-}
-
-func BuildPeerDatagramStatsFromRuntime(state PeerRuntimeState) PeerDatagramStatsView {
-	if state.DatagramStats == nil {
-		return BuildPeerDatagramStatsView(PeerDatagramStatsInput{})
-	}
-	return BuildPeerDatagramStatsView(*state.DatagramStats)
-}
-
-func BuildPeerObjectPullStatsFromRuntime(state PeerRuntimeState) PeerObjectPullStatsView {
-	if state.ObjectPullStats == nil {
-		return BuildPeerObjectPullStatsView(PeerObjectPullStatsInput{})
-	}
-	return BuildPeerObjectPullStatsView(*state.ObjectPullStats)
-}
-
-func BuildPeerSyncFlowView(input PeerSyncFlowInput) PeerSyncFlowView {
+func BuildPeerSyncFlowFromRuntime(state higgsstate.PeerRuntimeState) PeerSyncFlowView {
 	return PeerSyncFlowView{
-		ActivePullState:     input.ActivePullState,
-		ActivePullLastEvent: input.ActivePullLastEvent,
-		ActivePullUpdated:   formatPeerDebugUnixTime(input.ActivePullUpdatedUnix),
-		HintAccepted:        input.HintAccepted,
-		HintSuppressed:      input.HintSuppressed,
-		LastHint:            formatPeerDebugUnixTime(input.LastHintUnix),
-		LastHintReason:      input.LastHintReason,
-		LastHintSuppression: input.LastHintSuppression,
-		ReadOnlyResponder:   input.ReadOnlyResponder,
-		LastResponder:       formatPeerDebugUnixTime(input.LastResponderUnix),
-		LastResponderKind:   input.LastResponderKind,
-		LastResponderZone:   input.LastResponderZone,
+		ActivePullState:     state.ActivePullState,
+		ActivePullLastEvent: state.ActivePullLastEvent,
+		ActivePullUpdated:   formatPeerDebugUnixTime(state.ActivePullUpdatedUnix),
+		HintAccepted:        state.HintAccepted,
+		HintSuppressed:      state.HintSuppressed,
+		LastHint:            formatPeerDebugUnixTime(state.LastHintUnix),
+		LastHintReason:      state.LastHintReason,
+		LastHintSuppression: state.LastHintSuppression,
+		ReadOnlyResponder:   state.ReadOnlyResponder,
+		LastResponder:       formatPeerDebugUnixTime(state.LastResponderUnix),
+		LastResponderKind:   state.LastResponderKind,
+		LastResponderZone:   state.LastResponderZone,
 	}
 }
 
-func BuildPeerDatagramStatsView(input PeerDatagramStatsInput) PeerDatagramStatsView {
+func BuildPeerDatagramStatsFromRuntime(state higgsstate.PeerRuntimeState) PeerDatagramStatsView {
+	if state.DatagramStats == nil {
+		return PeerDatagramStatsView{}
+	}
+	return buildPeerDatagramStatsView(*state.DatagramStats)
+}
+
+func BuildPeerObjectPullStatsFromRuntime(state higgsstate.PeerRuntimeState) PeerObjectPullStatsView {
+	if state.ObjectPullStats == nil {
+		return PeerObjectPullStatsView{}
+	}
+	return buildPeerObjectPullStatsView(*state.ObjectPullStats)
+}
+
+func buildPeerDatagramStatsView(input higgsstate.PeerDatagramStats) PeerDatagramStatsView {
 	return PeerDatagramStatsView{
 		TooLargeDropped:           input.TooLargeDropped,
 		DigestOnlyAnnounces:       input.DigestOnlyAnnounces,
@@ -410,7 +340,7 @@ func BuildPeerDatagramStatsView(input PeerDatagramStatsInput) PeerDatagramStatsV
 	}
 }
 
-func BuildPeerObjectPullStatsView(input PeerObjectPullStatsInput) PeerObjectPullStatsView {
+func buildPeerObjectPullStatsView(input higgsstate.PeerObjectPullStats) PeerObjectPullStatsView {
 	return PeerObjectPullStatsView{
 		Attempts:               input.Attempts,
 		Successes:              input.Successes,

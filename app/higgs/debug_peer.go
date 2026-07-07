@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 )
 
@@ -38,6 +40,17 @@ func debugPeer(peerID string) error {
 		resolved = selected
 	}
 	return inspecttext.WritePeerDebug(os.Stdout, buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, now))
+}
+
+func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerState syncPeerState, now time.Time) inspect.PeerDebugView {
+	return inspect.BuildPeerDebugFromRuntime(inspect.PeerRuntimeDebugInput{
+		PeerID:         peerID,
+		Source:         source,
+		ConfiguredAddr: configuredAddr,
+		ResolvedAddr:   resolved,
+		State:          peerState,
+		Now:            now,
+	})
 }
 
 func bootstrapPeerSource(config *syncConfigFile, peerID string) (string, string) {

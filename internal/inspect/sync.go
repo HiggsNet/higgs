@@ -26,22 +26,8 @@ type SyncLimitsView struct {
 }
 
 type SyncVerbosePeerView struct {
-	PeerID           string
-	ConfiguredAddr   string
-	ResolvedAddr     string
-	Addr             string
-	Status           string
-	LastSuccess      string
-	LastError        string
-	NextRetry        string
-	UpdateSource     string
-	LastRelay        string
-	RelaySuppression string
-	ObservedAddr     string
-	ObservedStatus   string
-	SyncFlow         PeerSyncFlowView
-	DatagramStats    PeerDatagramStatsView
-	ObjectPullStats  PeerObjectPullStatsView
+	PeerDebugView
+	Addr string
 }
 
 type SyncPeerSummaryView struct {

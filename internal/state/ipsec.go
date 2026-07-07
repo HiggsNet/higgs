@@ -1,0 +1,90 @@
+package state
+
+import (
+	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
+)
+
+// IPsecTransportKeyState stores the local node's IPsec transport key.
+type IPsecTransportKeyState struct {
+	Kind        string `json:"kind,omitempty"`
+	Algorithm   string `json:"algorithm,omitempty"`
+	PublicKey   []byte `json:"public_key,omitempty"`
+	PrivateKey  []byte `json:"private_key,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	NotBefore   int64  `json:"not_before,omitempty"`
+	NotAfter    int64  `json:"not_after,omitempty"`
+	UpdatedAt   int64  `json:"updated_at,omitempty"`
+}
+
+// IPsecPortRecordState caches the local advertised IPsec port record.
+type IPsecPortRecordState struct {
+	Mode       string           `json:"mode,omitempty"`
+	Range      *ipsec.PortRange `json:"range,omitempty"`
+	Generation uint64           `json:"generation,omitempty"`
+	UpdatedAt  int64            `json:"updated_at,omitempty"`
+}
+
+// IPsecReconcileState captures the last IPsec reconcile run and its outputs.
+type IPsecReconcileState struct {
+	LastRunUnix    int64              `json:"last_run_unix,omitempty"`
+	SourceRevision uint64             `json:"source_revision,omitempty"`
+	Committed      bool               `json:"committed,omitempty"`
+	Stale          bool               `json:"stale,omitempty"`
+	DesiredLinks   int                `json:"desired_links,omitempty"`
+	Desired        []DesiredLinkState `json:"desired,omitempty"`
+	ActualSAs      []LinkSAState      `json:"actual_sas,omitempty"`
+	Actions        []LinkActionState  `json:"actions,omitempty"`
+	Skipped        []LinkSkipState    `json:"skipped,omitempty"`
+	LastError      string             `json:"last_error,omitempty"`
+}
+
+// DesiredLinkState is a planned desired link from the IPsec reconcile/planner.
+type DesiredLinkState struct {
+	InstanceID      string        `json:"instance_id,omitempty"`
+	GroupID         string        `json:"group_id,omitempty"`
+	PeerZone        zone.ZonePath `json:"peer_zone,omitempty"`
+	LinkID          string        `json:"link_id,omitempty"`
+	PathKey         string        `json:"path_key,omitempty"`
+	TransportID     string        `json:"transport_id,omitempty"`
+	DesiredSpecHash string        `json:"desired_spec_hash,omitempty"`
+	InterfaceName   string        `json:"interface_name,omitempty"`
+	XFRMIfID        uint32        `json:"xfrm_if_id,omitempty"`
+	Endpoint        string        `json:"endpoint,omitempty"`
+	LocalTunnelAddr string        `json:"local_tunnel_addr,omitempty"`
+	PeerTunnelAddr  string        `json:"peer_tunnel_addr,omitempty"`
+}
+
+// LinkSAState is a stored StrongSwan SA snapshot.
+type LinkSAState struct {
+	Name           string `json:"name,omitempty"`
+	Peer           string `json:"peer,omitempty"`
+	ChildSA        string `json:"child_sa,omitempty"`
+	IKEState       string `json:"ike_state,omitempty"`
+	ChildState     string `json:"child_state,omitempty"`
+	XFRMIfID       uint32 `json:"xfrm_if_id,omitempty"`
+	ReqID          uint32 `json:"reqid,omitempty"`
+	LocalIdentity  string `json:"local_identity,omitempty"`
+	RemoteIdentity string `json:"remote_identity,omitempty"`
+	LocalEndpoint  string `json:"local_endpoint,omitempty"`
+	RemoteEndpoint string `json:"remote_endpoint,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty"`
+	Established    bool   `json:"established,omitempty"`
+}
+
+// LinkActionState records a reconcile action.
+type LinkActionState struct {
+	Action     string        `json:"action"`
+	InstanceID string        `json:"instance_id,omitempty"`
+	GroupID    string        `json:"group_id,omitempty"`
+	PeerZone   zone.ZonePath `json:"peer_zone,omitempty"`
+	Reason     string        `json:"reason,omitempty"`
+}
+
+// LinkSkipState records a peer skipped by reconcile.
+type LinkSkipState struct {
+	GroupID string        `json:"group_id,omitempty"`
+	Peer    zone.ZonePath `json:"peer,omitempty"`
+	Reason  string        `json:"reason,omitempty"`
+	Detail  string        `json:"detail,omitempty"`
+}

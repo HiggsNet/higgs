@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	higgsstate "github.com/Catofes/higgs/internal/state"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -121,14 +122,8 @@ type LinkInstance struct {
 	Routing               LinkRouting
 }
 
-type LinkOwner struct {
-	Manager     string `json:"manager,omitempty"`
-	GroupID     string `json:"group_id,omitempty"`
-	InstanceID  string `json:"instance_id,omitempty"`
-	LinkID      string `json:"link_id,omitempty"`
-	TransportID string `json:"transport_id,omitempty"`
-	Token       string `json:"token,omitempty"`
-}
+// LinkOwner is a read-only alias of the shared runtime owner state.
+type LinkOwner = higgsstate.LinkOwnerState
 
 type DesiredLink struct {
 	InstanceID      string `json:"instance_id,omitempty"`
@@ -145,21 +140,8 @@ type DesiredLink struct {
 	PeerTunnelAddr  string `json:"peer_tunnel_addr,omitempty"`
 }
 
-type LinkSA struct {
-	Name           string `json:"name,omitempty"`
-	Peer           string `json:"peer,omitempty"`
-	ChildSA        string `json:"child_sa,omitempty"`
-	IKEState       string `json:"ike_state,omitempty"`
-	ChildState     string `json:"child_state,omitempty"`
-	XFRMIfID       uint32 `json:"xfrm_if_id,omitempty"`
-	ReqID          uint32 `json:"reqid,omitempty"`
-	LocalIdentity  string `json:"local_identity,omitempty"`
-	RemoteIdentity string `json:"remote_identity,omitempty"`
-	LocalEndpoint  string `json:"local_endpoint,omitempty"`
-	RemoteEndpoint string `json:"remote_endpoint,omitempty"`
-	Endpoint       string `json:"endpoint,omitempty"`
-	Established    bool   `json:"established,omitempty"`
-}
+// LinkSA is a read-only alias of the shared runtime SA state.
+type LinkSA = higgsstate.LinkSAState
 
 type LinkHealth struct {
 	ProbeID         string `json:"probe_id,omitempty"`
@@ -225,6 +207,94 @@ type LinkSkip struct {
 	Peer    string `json:"peer,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Detail  string `json:"detail,omitempty"`
+}
+
+// BuildLinkInstanceFromRuntime builds an inspect view of a link instance from
+// the shared runtime state. Routing is supplied separately because it is
+// derived from the BIRD runtime snapshot.
+func BuildLinkInstanceFromRuntime(inst higgsstate.LinkInstanceState, routing LinkRouting) LinkInstance {
+	return LinkInstance{
+		ID:                    inst.ID,
+		GroupID:               inst.GroupID,
+		PeerZone:              string(inst.PeerZone),
+		TransportKind:         inst.TransportKind,
+		LinkID:                inst.LinkID,
+		PathKey:               inst.PathKey,
+		TransportID:           inst.TransportID,
+		DesiredSpecHash:       inst.DesiredSpecHash,
+		ActualState:           inst.ActualState,
+		InterfaceName:         inst.InterfaceName,
+		XFRMIfID:              inst.XFRMIfID,
+		LocalTunnelAddr:       inst.LocalTunnelAddr,
+		PeerTunnelAddr:        inst.PeerTunnelAddr,
+		IKEName:               inst.IKEName,
+		ChildSAName:           inst.ChildSAName,
+		Endpoint:              inst.Endpoint,
+		RemoteGeneration:      inst.RemoteGeneration,
+		StagedGeneration:      inst.StagedGeneration,
+		RotatePhase:           inst.RotatePhase,
+		StagedIKEName:         inst.StagedIKEName,
+		StagedChildSAName:     inst.StagedChildSAName,
+		StagedInterfaceName:   inst.StagedInterfaceName,
+		StagedXFRMIfID:        inst.StagedXFRMIfID,
+		StagedLocalTunnelAddr: inst.StagedLocalTunnelAddr,
+		StagedPeerTunnelAddr:  inst.StagedPeerTunnelAddr,
+		RotateDeadline:        inst.RotateDeadline,
+		LastError:             inst.LastError,
+		FailureCount:          inst.FailureCount,
+		BackoffUntil:          inst.BackoffUntil,
+		LastTransition:        inst.LastTransition,
+		Owner:                 LinkOwner(inst.Owner),
+		InitiatorRole:         inst.InitiatorRole,
+		TakeoverPhase:         inst.TakeoverPhase,
+		TakeoverStartedAt:     inst.TakeoverStartedAt,
+		TakeoverUntil:         inst.TakeoverUntil,
+		LastTakeoverError:     inst.LastTakeoverError,
+		ObservedInitiator:     inst.ObservedInitiator,
+		Routing:               routing,
+	}
+}
+
+// BuildDesiredLinkFromRuntime builds an inspect view of a desired link from the
+// shared runtime state.
+func BuildDesiredLinkFromRuntime(item higgsstate.DesiredLinkState) DesiredLink {
+	return DesiredLink{
+		InstanceID:      item.InstanceID,
+		GroupID:         item.GroupID,
+		PeerZone:        string(item.PeerZone),
+		LinkID:          item.LinkID,
+		PathKey:         item.PathKey,
+		TransportID:     item.TransportID,
+		DesiredSpecHash: item.DesiredSpecHash,
+		InterfaceName:   item.InterfaceName,
+		XFRMIfID:        item.XFRMIfID,
+		Endpoint:        item.Endpoint,
+		LocalTunnelAddr: item.LocalTunnelAddr,
+		PeerTunnelAddr:  item.PeerTunnelAddr,
+	}
+}
+
+// BuildLinkActionFromRuntime builds an inspect view of a reconcile action from
+// the shared runtime state.
+func BuildLinkActionFromRuntime(item higgsstate.LinkActionState) LinkAction {
+	return LinkAction{
+		Action:     item.Action,
+		InstanceID: item.InstanceID,
+		GroupID:    item.GroupID,
+		PeerZone:   string(item.PeerZone),
+		Reason:     item.Reason,
+	}
+}
+
+// BuildLinkSkipFromRuntime builds an inspect view of a skipped peer from the
+// shared runtime state.
+func BuildLinkSkipFromRuntime(item higgsstate.LinkSkipState) LinkSkip {
+	return LinkSkip{
+		GroupID: item.GroupID,
+		Peer:    string(item.Peer),
+		Reason:  item.Reason,
+		Detail:  item.Detail,
+	}
 }
 
 func FilterLinkViews(links []LinkView, filter string) []LinkView {
