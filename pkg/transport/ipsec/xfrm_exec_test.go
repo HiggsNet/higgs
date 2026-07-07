@@ -60,6 +60,7 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		"ip link add hgs1 type xfrm if_id 42",
 		"ip link set hgs1 netns higgstesth2",
 		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set dev hgs1 multicast on",
 		"ip netns exec higgstesth2 ip link set dev hgs1 up",
 		"ip netns exec higgstesth2 ip -6 -o addr show dev hgs1",
 		"ip netns exec higgstesth2 ip addr replace fd00:1234::1/64 dev hgs1",
@@ -94,6 +95,37 @@ func TestSystemXFRMDriverAssignAddressPrunesStaleSameFamilyAddresses(t *testing.
 		"ip netns exec higgstesth2 ip -6 -o addr show dev hgs1",
 		"ip netns exec higgstesth2 ip addr del fe80::dead/64 dev hgs1",
 		"ip netns exec higgstesth2 ip addr replace fe80::1234/64 dev hgs1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestSystemXFRMDriverEnablesMulticastOnExistingInterface(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			return []byte("ok"), nil
+		},
+	}
+	spec := TransportLinkSpec{
+		TransportID:   "ipsec-1",
+		InterfaceName: "hgs1",
+		XFRMIfID:      42,
+		NetNS:         "higgstesth2",
+	}
+	if err := driver.EnsureInterface(context.Background(), spec); err != nil {
+		t.Fatalf("EnsureInterface: %v", err)
+	}
+	got := commandStrings(commands)
+	want := []string{
+		"ip netns exec higgstesth2 true",
+		"ip netns exec higgstesth2 ip link show dev hgs1",
+		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set dev hgs1 multicast on",
+		"ip netns exec higgstesth2 ip link set dev hgs1 up",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -189,6 +221,7 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 		"ip link show dev hgs1",
 		"ip link set hgs1 netns higgstesth2",
 		"ip netns exec higgstesth2 ip link set dev hgs1 addrgenmode none",
+		"ip netns exec higgstesth2 ip link set dev hgs1 multicast on",
 		"ip netns exec higgstesth2 ip link set dev hgs1 up",
 	}
 	if !reflect.DeepEqual(got, want) {

@@ -106,6 +106,20 @@ func cmdDebug() *cli.Command {
 				},
 			},
 			{
+				Name:  "routing",
+				Usage: "Routing diagnostic commands",
+				Commands: []*cli.Command{
+					{
+						Name:      "reload",
+						Usage:     "Trigger daemon routing reconcile",
+						UsageText: "higgs debug routing reload",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return debugRoutingReload(ctx, cmd)
+						},
+					},
+				},
+			},
+			{
 				Name:  "routes",
 				Usage: "Show authorized route set",
 				Action: func(ctx context.Context, cmd *cli.Command) error {

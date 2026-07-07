@@ -79,6 +79,9 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 		if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
 			return err
 		}
+		if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
+			return err
+		}
 		return d.setLinkUp(ctx, netns, spec.InterfaceName)
 	}
 	stateNetNS := d.stateNetNS()
@@ -87,6 +90,9 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 			return err
 		}
 		if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
+			return err
+		}
+		if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
 			return err
 		}
 		return d.setLinkUp(ctx, netns, spec.InterfaceName)
@@ -98,6 +104,9 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 		return err
 	}
 	if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
+		return err
+	}
+	if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
 		return err
 	}
 	return d.setLinkUp(ctx, netns, spec.InterfaceName)
@@ -386,6 +395,10 @@ func (d SystemXFRMDriver) addXFRMInterface(ctx context.Context, netns NetNSSpec,
 
 func (d SystemXFRMDriver) setLinkUp(ctx context.Context, netns NetNSSpec, name string) error {
 	return d.runInNetNS(ctx, netns, "link", "set", "dev", name, "up")
+}
+
+func (d SystemXFRMDriver) enableMulticast(ctx context.Context, netns NetNSSpec, name string) error {
+	return d.runInNetNS(ctx, netns, "link", "set", "dev", name, "multicast", "on")
 }
 
 func (d SystemXFRMDriver) disableIPv6AddrGen(ctx context.Context, netns NetNSSpec, name string) error {
