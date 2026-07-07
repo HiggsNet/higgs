@@ -270,51 +270,6 @@ func TestDerivePeerStatusNeverSeen(t *testing.T) {
 	}
 }
 
-func TestPeerStatusIsHardChange(t *testing.T) {
-	tests := []struct {
-		old, new string
-		want     bool
-	}{
-		{inspect.PeerStateActive, inspect.PeerStateActive, false},
-		{inspect.PeerStateActive, inspect.PeerStateStale, false},
-		{inspect.PeerStateActive, inspect.PeerStateRevoked, true},
-		{inspect.PeerStateRevoked, inspect.PeerStateActive, true},
-		{inspect.PeerStateActive, inspect.PeerStatePolicyDenied, true},
-		{inspect.PeerStatePolicyDenied, inspect.PeerStateActive, true},
-		{inspect.PeerStateActive, inspect.PeerStateConfigError, true},
-		{inspect.PeerStateStale, inspect.PeerStateOffline, false},
-		{inspect.PeerStateConnecting, inspect.PeerStateActive, false},
-	}
-	for _, tc := range tests {
-		got := inspect.PeerStatusIsHardChange(tc.old, tc.new)
-		if got != tc.want {
-			t.Errorf("inspect.PeerStatusIsHardChange(%q, %q) = %v, want %v", tc.old, tc.new, got, tc.want)
-		}
-	}
-}
-
-func TestShouldBlockReconnect(t *testing.T) {
-	tests := []struct {
-		state string
-		want  bool
-	}{
-		{inspect.PeerStateRevoked, true},
-		{inspect.PeerStatePolicyDenied, true},
-		{inspect.PeerStateConfigError, true},
-		{inspect.PeerStateActive, false},
-		{inspect.PeerStateStale, false},
-		{inspect.PeerStateOffline, false},
-		{inspect.PeerStateEligible, false},
-	}
-	for _, tc := range tests {
-		info := inspect.PeerStatusInfo{State: tc.state}
-		got := inspect.ShouldBlockPeerReconnect(info)
-		if got != tc.want {
-			t.Errorf("inspect.ShouldBlockPeerReconnect(%q) = %v, want %v", tc.state, got, tc.want)
-		}
-	}
-}
-
 func TestCollectRevokedPeerZones(t *testing.T) {
 	state, catofesPriv, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)

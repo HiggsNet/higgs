@@ -69,3 +69,52 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
+	var out strings.Builder
+	link := inspect.LinkView{
+		ID:              "link-1",
+		PeerZone:        "venus-aliyun-pek.catofes.",
+		GroupID:         "ipsec-main",
+		LinkID:          "link-1",
+		PathKey:         "family:ipv4",
+		TransportID:     "ipsec-526e55bae2e1",
+		DesiredSpecHash: "actual-hash",
+		ActualState:     "up",
+		Endpoint:        "123.57.143.66:30002",
+		InterfaceName:   "hgs1be3f390",
+		XFRMIfID:        467923856,
+		LocalTunnelAddr: "fe80::old-local%hgs1be3f390 netns=higgstesth2",
+		PeerTunnelAddr:  "fe80::old-peer%hgs1be3f390 netns=higgstesth2",
+		Desired: &inspect.DesiredLink{
+			TransportID:     "ipsec-f46fb3d71fe8-r2",
+			DesiredSpecHash: "desired-hash",
+			LocalTunnelAddr: "fe80::new-local%hgs28e3c6e5 netns=higgstesth2",
+			PeerTunnelAddr:  "fe80::new-peer%hgs28e3c6e5 netns=higgstesth2",
+		},
+	}
+
+	if err := WriteLinksDebug(&out, inspect.LinksDebugView{
+		Inspection: inspect.LinkInspection{
+			Summary: inspect.LinkSummary{LinkInstances: 1},
+			Links:   []inspect.LinkView{link},
+		},
+	}); err != nil {
+		t.Fatalf("WriteLinksDebug: %v", err)
+	}
+	output := out.String()
+	for _, want := range []string{
+		"    runtime_id: ipsec-526e55bae2e1",
+		"    endpoint: 123.57.143.66:30002",
+		"    interface: hgs1be3f390(467923856)",
+		"    local_tunnel: fe80::old-local%hgs1be3f390 netns=higgstesth2",
+		"    peer_tunnel: fe80::old-peer%hgs1be3f390 netns=higgstesth2",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("debug links output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "fe80::new-local%hgs28e3c6e5") || strings.Contains(output, "fe80::new-peer%hgs28e3c6e5") {
+		t.Fatalf("debug links planner mixed desired tunnel into active runtime block:\n%s", output)
+	}
+}

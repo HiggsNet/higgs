@@ -98,3 +98,32 @@ func TestBuildLinksMatchesRotatedRuntimeSAByIKEName(t *testing.T) {
 		t.Fatalf("actual sa = %+v, want rotated runtime SA", got.Links[0].ActualSA)
 	}
 }
+
+func TestFilterLinkViewsMatchesPeerAndRuntimeFields(t *testing.T) {
+	links := []LinkView{
+		{
+			ID:            "ipsec-main/node-a.catofes.",
+			PeerZone:      "node-a.catofes.",
+			LinkID:        "link-a",
+			TransportID:   "ipsec-current",
+			InterfaceName: "hgs11111111",
+		},
+		{
+			ID:            "ipsec-main/node-b.catofes.",
+			PeerZone:      "node-b.catofes.",
+			LinkID:        "link-b",
+			TransportID:   "ipsec-staged-r2",
+			InterfaceName: "hgs22222222",
+		},
+	}
+
+	if got := FilterLinkViews(links, "node-b.catofes."); len(got) != 1 || got[0].PeerZone != "node-b.catofes." {
+		t.Fatalf("filter by peer = %+v, want node-b only", got)
+	}
+	if got := FilterLinkViews(links, "ipsec-staged"); len(got) != 1 || got[0].TransportID != "ipsec-staged-r2" {
+		t.Fatalf("filter by runtime = %+v, want staged runtime", got)
+	}
+	if got := FilterLinkViews(links, "missing"); len(got) != 0 {
+		t.Fatalf("filter missing = %+v, want no links", got)
+	}
+}

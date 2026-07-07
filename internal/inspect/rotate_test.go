@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -87,5 +88,101 @@ func TestBuildRotateDebugBuildsRuntimeAndMatchingSAs(t *testing.T) {
 	}
 	if link.PortGenerationSummary != "2/1/2" || link.PortSummary != "4500/30003/30002/30003" {
 		t.Fatalf("ports = generation=%q summary=%q", link.PortGenerationSummary, link.PortSummary)
+	}
+}
+
+func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
+	link := LinkView{
+		ID:              "link-1",
+		LinkID:          "link-1",
+		TransportID:     "ipsec-526e55bae2e1",
+		ChildSAName:     "ipsec-526e55bae2e1-child",
+		InterfaceName:   "hgs1be3f390",
+		XFRMIfID:        467923856,
+		Endpoint:        "123.57.143.66:30002",
+		LocalTunnelAddr: "fe80::24c7:24ac:32e9:cd45%hgs1be3f390 netns=higgstesth2",
+		PeerTunnelAddr:  "fe80::abdb:3c51:6e24:8655%hgs1be3f390 netns=higgstesth2",
+		Rotation: LinkRotation{
+			RemoteGeneration: 1,
+			StagedGeneration: 2,
+		},
+	}
+	spec := &ipsec.TransportLinkSpec{
+		Generation:      2,
+		TransportID:     "ipsec-f46fb3d71fe8-r2",
+		InterfaceName:   "hgs28e3c6e5",
+		XFRMIfID:        686016229,
+		LocalTunnelAddr: netip.MustParseAddr("fe80::5ff8:918b:338e:35e6"),
+		PeerTunnelAddr:  netip.MustParseAddr("fe80::ec14:d563:b479:44ed"),
+		NetNS:           "higgstesth2",
+		ContactPoints:   []ipsec.ContactPoint{{Address: "123.57.143.66", NATTPort: 30003, Generation: 2}},
+	}
+
+	got := RotateRuntimeCurrent(link, spec)
+	if got.Port != "30002" || got.Endpoint != "123.57.143.66:30002" {
+		t.Fatalf("current endpoint/port = %q/%q, want active runtime 123.57.143.66:30002/30002", got.Endpoint, got.Port)
+	}
+	if got.LocalTunnelAddr != link.LocalTunnelAddr || got.PeerTunnelAddr != link.PeerTunnelAddr {
+		t.Fatalf("current tunnels = %q/%q, want active runtime tunnels", got.LocalTunnelAddr, got.PeerTunnelAddr)
+	}
+}
+
+func TestRotateRuntimeStagedUsesPersistedRuntimeAndMatchingSA(t *testing.T) {
+	link := LinkView{
+		ID:     "link-1",
+		LinkID: "link-1",
+		Rotation: LinkRotation{
+			StagedGeneration:      2,
+			StagedIKEName:         "ipsec-f46fb3d71fe8-r2",
+			StagedChildSAName:     "ipsec-f46fb3d71fe8-r2-child",
+			StagedInterfaceName:   "hgs28e3c6e5",
+			StagedXFRMIfID:        686016229,
+			StagedLocalTunnelAddr: "fe80::5ff8:918b:338e:35e6%hgs28e3c6e5 netns=higgstesth2",
+			StagedPeerTunnelAddr:  "fe80::ec14:d563:b479:44ed%hgs28e3c6e5 netns=higgstesth2",
+		},
+	}
+	sas := []LinkSA{{
+		Name:           "ipsec-f46fb3d71fe8-r2",
+		ChildSA:        "ipsec-f46fb3d71fe8-r2-child-24",
+		XFRMIfID:       686016229,
+		RemoteEndpoint: "123.57.143.66:30003",
+		Established:    true,
+	}}
+
+	got := RotateRuntimeStaged(link, nil, sas)
+	if got.Endpoint != "123.57.143.66:30003" || got.Port != "30003" {
+		t.Fatalf("staged endpoint/port = %q/%q, want 123.57.143.66:30003/30003", got.Endpoint, got.Port)
+	}
+	if got.LocalTunnelAddr != "fe80::5ff8:918b:338e:35e6%hgs28e3c6e5 netns=higgstesth2" {
+		t.Fatalf("local tunnel = %q, want persisted staged local tunnel", got.LocalTunnelAddr)
+	}
+	if got.PeerTunnelAddr != "fe80::ec14:d563:b479:44ed%hgs28e3c6e5 netns=higgstesth2" {
+		t.Fatalf("peer tunnel = %q, want persisted staged peer tunnel", got.PeerTunnelAddr)
+	}
+}
+
+func TestRotateSAMatchesCurrentAndStagedRuntime(t *testing.T) {
+	link := LinkView{
+		ID:          "ipsec-main/node-a.catofes.",
+		PathKey:     "family:ipv4",
+		TransportID: "ipsec-current",
+		XFRMIfID:    1001,
+		Rotation: LinkRotation{
+			StagedIKEName:  "ipsec-current-r2",
+			StagedXFRMIfID: 2002,
+		},
+	}
+
+	if !RotateSAMatchesLink(link, LinkSA{Name: "ipsec-current", XFRMIfID: 1001}) {
+		t.Fatalf("current SA did not match link")
+	}
+	if !RotateSAMatchesLink(link, LinkSA{Name: "ipsec-current-r2", XFRMIfID: 2002}) {
+		t.Fatalf("staged SA did not match link")
+	}
+	if RotateSAMatchesLink(link, LinkSA{Name: "ipsec-current", XFRMIfID: 1001, RemoteEndpoint: "[2001:db8::20]:4500"}) {
+		t.Fatalf("wrong-family SA matched link")
+	}
+	if RotateSAMatchesLink(link, LinkSA{Name: "ipsec-other", XFRMIfID: 3003}) {
+		t.Fatalf("unrelated SA matched link")
 	}
 }
