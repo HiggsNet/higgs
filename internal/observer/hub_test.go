@@ -1,18 +1,15 @@
-package main
+package observer
 
-import (
-	"github.com/Catofes/higgs/internal/observer"
-	"testing"
-)
+import "testing"
 
 func TestSSEHubSubscribeBroadcast(t *testing.T) {
-	hub := observer.NewHub()
+	hub := NewHub()
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
 	if hub.SubscriberCount() != 1 {
 		t.Errorf("subscriber count = %d, want 1", hub.SubscriberCount())
 	}
-	event := observer.Event{Type: "test", Payload: map[string]any{"key": "value"}}
+	event := Event{Type: "test", Payload: map[string]any{"key": "value"}}
 	hub.Broadcast(event)
 	select {
 	case received := <-ch:
@@ -25,7 +22,7 @@ func TestSSEHubSubscribeBroadcast(t *testing.T) {
 }
 
 func TestSSEHubUnsubscribe(t *testing.T) {
-	hub := observer.NewHub()
+	hub := NewHub()
 	_, unsubscribe := hub.Subscribe()
 	if hub.SubscriberCount() != 1 {
 		t.Errorf("count = %d, want 1", hub.SubscriberCount())
@@ -37,6 +34,6 @@ func TestSSEHubUnsubscribe(t *testing.T) {
 }
 
 func TestSSEHubBroadcastNoSubscribers(t *testing.T) {
-	hub := observer.NewHub()
-	hub.Broadcast(observer.Event{Type: "test"}) // should not panic
+	hub := NewHub()
+	hub.Broadcast(Event{Type: "test"})
 }

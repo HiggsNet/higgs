@@ -1,4 +1,4 @@
-package main
+package observer
 
 import (
 	"net/http"
@@ -6,12 +6,28 @@ import (
 	"testing"
 )
 
-func TestObserverStaticHandler(t *testing.T) {
-	srv := newTestObserverServer()
-	// Serve index.html
+type testProvider struct{}
+
+func (testProvider) Status() (any, error)       { return map[string]any{}, nil }
+func (testProvider) Zones(string) (any, error)  { return map[string]any{}, nil }
+func (testProvider) Peers(string) (any, error)  { return map[string]any{}, nil }
+func (testProvider) Links(string) (any, error)  { return map[string]any{}, nil }
+func (testProvider) Health(string) (any, error) { return map[string]any{}, nil }
+func (testProvider) HealthSeries(string, map[string]string) (any, error) {
+	return map[string]any{}, nil
+}
+func (testProvider) Routes() (any, error) { return map[string]any{}, nil }
+func (testProvider) Bird() (any, error)   { return map[string]any{}, nil }
+
+func newTestServer() *Server {
+	return NewServer(testProvider{}, Config{Enabled: true, BindAddr: "127.0.0.1", Port: 8080})
+}
+
+func TestStaticHandler(t *testing.T) {
+	srv := newTestServer()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
@@ -21,11 +37,11 @@ func TestObserverStaticHandler(t *testing.T) {
 	}
 }
 
-func TestObserverStaticHandlerSPAFallbackContentType(t *testing.T) {
-	srv := newTestObserverServer()
+func TestStaticHandlerSPAFallbackContentType(t *testing.T) {
+	srv := newTestServer()
 	req := httptest.NewRequest(http.MethodGet, "/overlay/links", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
@@ -34,11 +50,11 @@ func TestObserverStaticHandlerSPAFallbackContentType(t *testing.T) {
 	}
 }
 
-func TestObserverStaticHandlerCSS(t *testing.T) {
-	srv := newTestObserverServer()
+func TestStaticHandlerCSS(t *testing.T) {
+	srv := newTestServer()
 	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
@@ -47,11 +63,11 @@ func TestObserverStaticHandlerCSS(t *testing.T) {
 	}
 }
 
-func TestObserverStaticHandlerJS(t *testing.T) {
-	srv := newTestObserverServer()
+func TestStaticHandlerJS(t *testing.T) {
+	srv := newTestServer()
 	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
@@ -60,11 +76,11 @@ func TestObserverStaticHandlerJS(t *testing.T) {
 	}
 }
 
-func TestObserverStaticHandlerMethodNotAllowed(t *testing.T) {
-	srv := newTestObserverServer()
+func TestStaticHandlerMethodNotAllowed(t *testing.T) {
+	srv := newTestServer()
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
 	}

@@ -1,4 +1,4 @@
-package main
+package observer
 
 import (
 	"io/fs"
@@ -7,9 +7,9 @@ import (
 )
 
 func TestWebSubFS(t *testing.T) {
-	webFS := webSubFS()
+	webFS := WebSubFS()
 	if webFS == nil {
-		t.Fatal("webSubFS should not be nil")
+		t.Fatal("WebSubFS should not be nil")
 	}
 	data, err := fs.ReadFile(webFS, "index.html")
 	if err != nil {
@@ -21,9 +21,9 @@ func TestWebSubFS(t *testing.T) {
 }
 
 func TestWebAppEscapesHTML(t *testing.T) {
-	webFS := webSubFS()
+	webFS := WebSubFS()
 	if webFS == nil {
-		t.Fatal("webSubFS should not be nil")
+		t.Fatal("WebSubFS should not be nil")
 	}
 	data, err := fs.ReadFile(webFS, "app.js")
 	if err != nil {
@@ -38,9 +38,9 @@ func TestWebAppEscapesHTML(t *testing.T) {
 }
 
 func TestWebAppPreservesFoldState(t *testing.T) {
-	webFS := webSubFS()
+	webFS := WebSubFS()
 	if webFS == nil {
-		t.Fatal("webSubFS should not be nil")
+		t.Fatal("WebSubFS should not be nil")
 	}
 	data, err := fs.ReadFile(webFS, "app.js")
 	if err != nil {

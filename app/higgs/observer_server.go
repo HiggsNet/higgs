@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/http"
 	"strings"
@@ -489,9 +488,4 @@ func (p *observerProvider) Bird() (any, error) {
 		Instances:        cloneBirdInstances(state.BirdInstances),
 		LastRoutingError: lastRoutingError,
 	}, nil
-}
-
-// webSubFS returns the embedded web/ directory as an fs.FS for testing.
-func webSubFS() fs.FS {
-	return observer.WebSubFS()
 }
