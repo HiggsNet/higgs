@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	"net/netip"
 	"path/filepath"
 	"testing"
 	"time"
@@ -64,6 +65,49 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 	if len(reloaded.IPsecReconcile.Actions) != 1 || reloaded.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionNoop {
 		t.Fatalf("second actions = %+v, want noop", reloaded.IPsecReconcile.Actions)
+	}
+}
+
+func TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           "higgstesth2",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
+	driver := &observedIPsecDriver{}
+	service := &DaemonService{}
+
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}); err != nil {
+		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
+	}
+	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != "hgs1" {
+		t.Fatalf("interfaces = %+v, want hgs1 maintenance", driver.Interfaces)
+	}
+	if len(driver.Addresses) != 1 || driver.Addresses[0] != "hgs1=fe80::1/64" {
+		t.Fatalf("addresses = %+v, want link-local /64 maintenance", driver.Addresses)
+	}
+}
+
+func TestMaintainExistingXFRMInterfacesSkipsLinkWithActiveAction(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        42,
+		NetNS:           "higgstesth2",
+		LocalTunnelAddr: netip.MustParseAddr("fd00::1"),
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateConnecting, time.Unix(4000, 0))
+	driver := &observedIPsecDriver{}
+	service := &DaemonService{}
+
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionCreate, Spec: &spec}}); err != nil {
+		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
+	}
+	if len(driver.Interfaces) != 0 || len(driver.Addresses) != 0 {
+		t.Fatalf("maintenance ran despite active action: interfaces=%+v addresses=%+v", driver.Interfaces, driver.Addresses)
 	}
 }
 

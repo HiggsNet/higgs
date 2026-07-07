@@ -80,10 +80,99 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			markIPsecActionSucceeded(result.Instances, action, now)
 		}
 	}
+	if err := d.maintainExistingXFRMInterfaces(ctx, xfrmDriver, plan.Desired, result.Instances, result.Actions); err != nil {
+		if saveErr := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
+		}
+		return err
+	}
 	if err := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
+}
+
+func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, actions []ipsec.ReconcileAction) error {
+	driver, ok := xfrmDriver.(interface {
+		ipsec.XFRMDriver
+		ipsec.XFRMLinkInspector
+	})
+	if !ok || len(desired) == 0 || len(instances) == 0 {
+		return nil
+	}
+	activeActions := make(map[string]struct{})
+	for _, action := range actions {
+		if action.Action == ipsec.ReconcileActionNoop {
+			continue
+		}
+		if id := actionInstanceID(action); id != "" {
+			activeActions[id] = struct{}{}
+		}
+	}
+	for _, spec := range desired {
+		id := ipsec.LinkInstanceID(spec)
+		if _, ok := activeActions[id]; ok {
+			continue
+		}
+		inst, ok := instances[id]
+		if !ok || !shouldMaintainXFRMInstance(inst) {
+			continue
+		}
+		candidate := xfrmMaintenanceSpec(spec, inst)
+		state, err := driver.InspectLink(ctx, candidate)
+		if err != nil {
+			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
+		}
+		if !state.NamespaceExists || !state.InterfaceExists {
+			continue
+		}
+		if err := driver.EnsureInterface(ctx, candidate); err != nil {
+			return fmt.Errorf("maintain xfrm interface %q: %w", candidate.InterfaceName, err)
+		}
+		if candidate.LocalTunnelAddr.IsValid() {
+			if err := driver.AssignAddress(ctx, candidate, tunnelAddressPrefixForDaemon(candidate.LocalTunnelAddr)); err != nil {
+				return fmt.Errorf("maintain xfrm address %q: %w", candidate.InterfaceName, err)
+			}
+		}
+	}
+	return nil
+}
+
+func shouldMaintainXFRMInstance(inst ipsec.LinkInstance) bool {
+	if inst.InterfaceName == "" || inst.XFRMIfID == 0 {
+		return false
+	}
+	switch inst.ActualState {
+	case ipsec.LinkStateUp, ipsec.LinkStateConnecting, ipsec.LinkStateConfiguring:
+		return true
+	default:
+		return false
+	}
+}
+
+func xfrmMaintenanceSpec(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance) ipsec.TransportLinkSpec {
+	out := spec
+	if inst.InterfaceName != "" {
+		out.InterfaceName = inst.InterfaceName
+	}
+	if inst.XFRMIfID != 0 {
+		out.XFRMIfID = inst.XFRMIfID
+	}
+	return out
+}
+
+func tunnelAddressPrefixForDaemon(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return ""
+	}
+	bits := 32
+	if addr.Is6() {
+		bits = 128
+		if addr.IsLinkLocalUnicast() {
+			bits = 64
+		}
+	}
+	return netip.PrefixFrom(addr, bits).String()
 }
 
 func (d *DaemonService) ipsecRotateCutoverReady() map[string]bool {
