@@ -151,8 +151,8 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)
 		}
 	}
-	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
-		t.Fatalf("adopt should not apply resources: connections=%d interfaces=%d", len(driver.Connections), len(driver.Interfaces))
+	if len(driver.Connections) != 0 || len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName {
+		t.Fatalf("adopt maintenance = connections:%d interfaces:%+v, want xfrm maintenance only", len(driver.Connections), driver.Interfaces)
 	}
 }
 
@@ -218,8 +218,8 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
 		t.Fatalf("startup reconcile = %+v, want adopt", latest.IPsecReconcile)
 	}
-	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
-		t.Fatalf("startup adopt should not apply resources: connections=%d interfaces=%d", len(driver.Connections), len(driver.Interfaces))
+	if len(driver.Connections) != 0 || len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName {
+		t.Fatalf("startup adopt maintenance = connections:%d interfaces:%+v, want xfrm maintenance only", len(driver.Connections), driver.Interfaces)
 	}
 }
 
@@ -377,8 +377,8 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 	if inst.InterfaceName != rotatedInterface || inst.XFRMIfID != rotatedIfID || inst.RemoteGeneration != 2 {
 		t.Fatalf("instance = %+v, want rotated runtime interface %s/%d generation 2", inst, rotatedInterface, rotatedIfID)
 	}
-	if len(driver.Interfaces) != 0 {
-		t.Fatalf("interfaces applied = %+v, want no repair apply", driver.Interfaces)
+	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != rotatedInterface {
+		t.Fatalf("interfaces applied = %+v, want rotated xfrm maintenance only", driver.Interfaces)
 	}
 }
 
