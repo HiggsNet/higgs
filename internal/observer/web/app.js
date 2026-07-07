@@ -244,9 +244,26 @@ function endpointValueSummary(record) {
     return bits.join(' · ');
 }
 
+function ipamValueSummary(record) {
+    const value = record && record.value_json;
+    if (!value || typeof value !== 'object') return null;
+    if (record.type === 'ipam.pool') {
+        return `${value.prefix || '-'} -> ${value.delegated_to || '-'}${value.active === false ? ' · revoked' : ''}`;
+    }
+    if (record.type === 'ipam.assignment') {
+        const bits = [`${value.prefix || '-'} -> ${value.assigned_to || '-'}`];
+        if (value.shared) bits.push('shared');
+        if (value.active === false) bits.push('revoked');
+        return bits.join(' · ');
+    }
+    return null;
+}
+
 function recordValueSummary(record) {
     const endpointSummary = endpointValueSummary(record);
     if (endpointSummary) return endpointSummary;
+    const ipamSummary = ipamValueSummary(record);
+    if (ipamSummary) return ipamSummary;
     if (record.value_json && typeof record.value_json === 'object') {
         const keys = Object.keys(record.value_json);
         return keys.length ? `{${keys.slice(0, 4).join(', ')}${keys.length > 4 ? ', ...' : ''}}` : '{}';
@@ -254,6 +271,37 @@ function recordValueSummary(record) {
     const value = record.value || '';
     if (!value) return '-';
     return value.length > 96 ? `${value.substring(0, 96)}...` : value;
+}
+
+function ipamValueTable(record) {
+    const value = record && record.value_json;
+    if (!value || typeof value !== 'object') return '';
+    if (record.type === 'ipam.pool') {
+        return `
+        <table class="mini-table">
+            <tr><th>Prefix</th><th>Delegated To</th><th>Active</th><th>Version</th></tr>
+            <tr>
+                <td><code>${esc(value.prefix || '-')}</code></td>
+                <td>${esc(value.delegated_to || '-')}</td>
+                <td>${value.active === false ? stateBadge('revoked') : stateBadge('healthy')}</td>
+                <td>${esc(value.version || '-')}</td>
+            </tr>
+        </table>`;
+    }
+    if (record.type === 'ipam.assignment') {
+        return `
+        <table class="mini-table">
+            <tr><th>Prefix</th><th>Assigned To</th><th>Shared</th><th>Active</th><th>Version</th></tr>
+            <tr>
+                <td><code>${esc(value.prefix || '-')}</code></td>
+                <td>${esc(value.assigned_to || '-')}</td>
+                <td>${value.shared ? 'Yes' : 'No'}</td>
+                <td>${value.active === false ? stateBadge('revoked') : stateBadge('healthy')}</td>
+                <td>${esc(value.version || '-')}</td>
+            </tr>
+        </table>`;
+    }
+    return '';
 }
 
 function endpointValueTable(record) {
@@ -300,10 +348,12 @@ function groupRecordsByKey(records) {
 
 function recordDetails(record, history, zonePath) {
     const endpointTableHTML = endpointValueTable(record);
+    const ipamTableHTML = ipamValueTable(record);
     return `
         <details class="record-details"${foldAttr(`zone:${zonePath || ''}:record:${record.key || ''}`)}>
             <summary>Inspect record${history && history.length ? ` · ${history.length} historical` : ''}</summary>
             ${endpointTableHTML}
+            ${ipamTableHTML}
             <h3>Value</h3>
             ${record.value_json ? jsonViewer(record.value_json) : `<div class="json-viewer">${esc(record.value || '')}</div>`}
             ${history && history.length ? `
@@ -1020,12 +1070,24 @@ async function renderRoutes() {
         const data = await fetchAPI('/routes');
         const exportSet = data.export_set || [];
         const authorized = data.authorized || {};
-        const assignments = data.assignments || {};
+        const pools = data.ipam_pools || [];
+        const assignments = data.ipam_assignments || Object.entries(data.assignments || {}).map(([prefix, info]) => ({
+            prefix,
+            source: info.source,
+            assigned_to: info.assigned_to,
+        }));
         const errors = data.errors || [];
         let zoneRows = Object.entries(authorized).map(([zone, prefixes]) => `
             <tr><td>${esc(zone)}</td><td>${prefixes.map(p => esc(p)).join(', ')}</td></tr>`).join('');
-        let assignRows = Object.entries(assignments).map(([prefix, info]) => `
-            <tr><td>${esc(prefix)}</td><td>${esc(info.source || '-')}</td><td>${esc(info.assigned_to || '-')}</td></tr>`).join('');
+        let poolRows = pools.map(pool => `
+            <tr><td><code>${esc(pool.prefix || '-')}</code></td><td>${esc(pool.source || '-')}</td><td>${esc(pool.delegated_to || '-')}</td></tr>`).join('');
+        let assignRows = assignments.map(info => `
+            <tr>
+                <td><code>${esc(info.prefix || '-')}</code></td>
+                <td>${esc(info.source || '-')}</td>
+                <td>${esc(info.assigned_to || '-')}</td>
+                <td>${info.shared ? stateBadge('shared') : '-'}</td>
+            </tr>`).join('');
         let errorRows = errors.map(e => `
             <tr><td>${esc(e.zone)}</td><td>${esc(e.prefix || '-')}</td><td>${esc(e.code)}</td><td>${esc(e.detail)}</td></tr>`).join('');
         content.innerHTML = `
@@ -1034,8 +1096,10 @@ async function renderRoutes() {
             <div>${exportSet.map(p => `<span class="badge badge-green">${esc(p)}</span> `).join('') || emptyState('No exports')}</div>
             <h2>Authorized Prefixes by Zone</h2>
             ${tableWrap(`<table><tr><th>Zone</th><th>Prefixes</th></tr>${zoneRows || emptyRow(2)}</table>`)}
+            <h2>IPAM Pools</h2>
+            ${tableWrap(`<table><tr><th>Prefix</th><th>Source</th><th>Delegated To</th></tr>${poolRows || emptyRow(3)}</table>`)}
             <h2>IPAM Assignments</h2>
-            ${tableWrap(`<table><tr><th>Prefix</th><th>Source</th><th>Assigned To</th></tr>${assignRows || emptyRow(3)}</table>`)}
+            ${tableWrap(`<table><tr><th>Prefix</th><th>Source</th><th>Assigned To</th><th>Mode</th></tr>${assignRows || emptyRow(4)}</table>`)}
             <h2>Authorization Errors (${errors.length})</h2>
             ${tableWrap(`<table><tr><th>Zone</th><th>Prefix</th><th>Code</th><th>Detail</th></tr>${errorRows || emptyRow(4)}</table>`)}`;
     } catch (e) {

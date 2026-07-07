@@ -29,6 +29,16 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 				AssignedTo: managed,
 			},
 		},
+		AllPools: []*routing.PoolEntry{{
+			Prefix:      netip.MustParsePrefix("10.0.0.0/8"),
+			Source:      ".",
+			DelegatedTo: "catofes.",
+		}},
+		AllAssignments: []*routing.AssignmentEntry{{
+			Prefix:     netip.MustParsePrefix("10.0.0.0/16"),
+			Source:     "catofes.",
+			AssignedTo: managed,
+		}},
 		Errors: []routing.RouteAuthorizationError{{
 			Zone:   "node-b.catofes.",
 			Prefix: netip.MustParsePrefix("10.2.0.0/24"),
@@ -47,6 +57,12 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 	if got := resp.Assignments["10.0.0.0/16"]; got.Source != "catofes." || got.AssignedTo != string(managed) {
 		t.Fatalf("assignment = %#v", got)
 	}
+	if len(resp.IPAMPools) != 1 || resp.IPAMPools[0].Prefix != "10.0.0.0/8" || resp.IPAMPools[0].DelegatedTo != "catofes." {
+		t.Fatalf("ipam pools = %#v", resp.IPAMPools)
+	}
+	if len(resp.IPAMAssignments) != 1 || resp.IPAMAssignments[0].Prefix != "10.0.0.0/16" || resp.IPAMAssignments[0].AssignedTo != string(managed) {
+		t.Fatalf("ipam assignments = %#v", resp.IPAMAssignments)
+	}
 	if len(resp.Errors) != 1 || resp.Errors[0].Code != "route_unassigned" || resp.Errors[0].Prefix != "10.2.0.0/24" {
 		t.Fatalf("errors = %#v", resp.Errors)
 	}
@@ -59,10 +75,43 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, key := range []string{"local_zone", "export_set", "authorized", "assignments", "errors"} {
+	for _, key := range []string{"local_zone", "export_set", "authorized", "assignments", "ipam_pools", "ipam_assignments", "errors"} {
 		if _, ok := decoded[key]; !ok {
 			t.Fatalf("missing JSON key %q in %s", key, raw)
 		}
+	}
+}
+
+func TestRoutesFromAuthorizedSetUsesAllIPAMAssignments(t *testing.T) {
+	managed := zone.ZonePath("node-a.catofes.")
+	prefix := netip.MustParsePrefix("10.0.0.0/24")
+	ars := &routing.AuthorizedRouteSet{
+		Announced: map[zone.ZonePath]map[netip.Prefix]*routing.RouteEntry{},
+		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
+			prefix: {
+				Source:     "catofes.",
+				AssignedTo: "node-a.catofes.",
+				Shared:     true,
+			},
+		},
+		AllAssignments: []*routing.AssignmentEntry{
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-a.catofes.", Shared: true},
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes.", Shared: true},
+		},
+	}
+
+	resp := RoutesFromAuthorizedSet(managed, ars)
+	if len(resp.Assignments) != 1 {
+		t.Fatalf("legacy assignments len = %d, want representative map entry", len(resp.Assignments))
+	}
+	if len(resp.IPAMAssignments) != 2 {
+		t.Fatalf("ipam assignments len = %d, want all assignments: %#v", len(resp.IPAMAssignments), resp.IPAMAssignments)
+	}
+	if !resp.IPAMAssignments[0].Shared || !resp.IPAMAssignments[1].Shared {
+		t.Fatalf("ipam assignments should preserve shared flag: %#v", resp.IPAMAssignments)
+	}
+	if resp.IPAMAssignments[0].AssignedTo != "node-a.catofes." || resp.IPAMAssignments[1].AssignedTo != "node-b.catofes." {
+		t.Fatalf("ipam assignments order/content = %#v", resp.IPAMAssignments)
 	}
 }
 

@@ -10,17 +10,32 @@ import (
 )
 
 type RoutesResponse struct {
-	LocalZone   zone.ZonePath              `json:"local_zone"`
-	ExportSet   []string                   `json:"export_set"`
-	Authorized  map[string][]string        `json:"authorized"`
-	Assignments map[string]RouteAssignment `json:"assignments"`
-	Errors      []RouteAuthorizationError  `json:"errors"`
-	BIRD        []BirdRoutesView           `json:"bird,omitempty"`
+	LocalZone       zone.ZonePath              `json:"local_zone"`
+	ExportSet       []string                   `json:"export_set"`
+	Authorized      map[string][]string        `json:"authorized"`
+	Assignments     map[string]RouteAssignment `json:"assignments"`
+	IPAMPools       []IPAMPool                 `json:"ipam_pools"`
+	IPAMAssignments []IPAMAssignment           `json:"ipam_assignments"`
+	Errors          []RouteAuthorizationError  `json:"errors"`
+	BIRD            []BirdRoutesView           `json:"bird,omitempty"`
 }
 
 type RouteAssignment struct {
 	Source     string `json:"source"`
 	AssignedTo string `json:"assigned_to"`
+}
+
+type IPAMPool struct {
+	Prefix      string `json:"prefix"`
+	Source      string `json:"source"`
+	DelegatedTo string `json:"delegated_to"`
+}
+
+type IPAMAssignment struct {
+	Prefix     string `json:"prefix"`
+	Source     string `json:"source"`
+	AssignedTo string `json:"assigned_to"`
+	Shared     bool   `json:"shared,omitempty"`
 }
 
 type RouteAuthorizationError struct {
@@ -80,6 +95,63 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 		}
 	}
 
+	ipamPools := make([]IPAMPool, 0, len(ars.AllPools))
+	for _, entry := range ars.AllPools {
+		if entry == nil {
+			continue
+		}
+		ipamPools = append(ipamPools, IPAMPool{
+			Prefix:      entry.Prefix.String(),
+			Source:      string(entry.Source),
+			DelegatedTo: string(entry.DelegatedTo),
+		})
+	}
+	sort.Slice(ipamPools, func(i, j int) bool {
+		if cmp := comparePrefixStrings(ipamPools[i].Prefix, ipamPools[j].Prefix); cmp != 0 {
+			return cmp < 0
+		}
+		if ipamPools[i].Source != ipamPools[j].Source {
+			return ipamPools[i].Source < ipamPools[j].Source
+		}
+		return ipamPools[i].DelegatedTo < ipamPools[j].DelegatedTo
+	})
+
+	ipamAssignments := make([]IPAMAssignment, 0, len(ars.AllAssignments))
+	if len(ars.AllAssignments) > 0 {
+		for _, entry := range ars.AllAssignments {
+			if entry == nil {
+				continue
+			}
+			ipamAssignments = append(ipamAssignments, IPAMAssignment{
+				Prefix:     entry.Prefix.String(),
+				Source:     string(entry.Source),
+				AssignedTo: string(entry.AssignedTo),
+				Shared:     entry.Shared,
+			})
+		}
+	} else {
+		for p, entry := range ars.Assignments {
+			if entry == nil {
+				continue
+			}
+			ipamAssignments = append(ipamAssignments, IPAMAssignment{
+				Prefix:     p.String(),
+				Source:     string(entry.Source),
+				AssignedTo: string(entry.AssignedTo),
+				Shared:     entry.Shared,
+			})
+		}
+	}
+	sort.Slice(ipamAssignments, func(i, j int) bool {
+		if cmp := comparePrefixStrings(ipamAssignments[i].Prefix, ipamAssignments[j].Prefix); cmp != 0 {
+			return cmp < 0
+		}
+		if ipamAssignments[i].Source != ipamAssignments[j].Source {
+			return ipamAssignments[i].Source < ipamAssignments[j].Source
+		}
+		return ipamAssignments[i].AssignedTo < ipamAssignments[j].AssignedTo
+	})
+
 	errors := make([]RouteAuthorizationError, 0, len(ars.Errors))
 	for _, e := range ars.Errors {
 		prefix := ""
@@ -95,11 +167,13 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 	}
 
 	return &RoutesResponse{
-		LocalZone:   managedZone,
-		ExportSet:   exportSet,
-		Authorized:  authorized,
-		Assignments: assignments,
-		Errors:      errors,
+		LocalZone:       managedZone,
+		ExportSet:       exportSet,
+		Authorized:      authorized,
+		Assignments:     assignments,
+		IPAMPools:       ipamPools,
+		IPAMAssignments: ipamAssignments,
+		Errors:          errors,
 	}
 }
 
