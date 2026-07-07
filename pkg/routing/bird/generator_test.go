@@ -163,6 +163,22 @@ func TestDefaultsApplied(t *testing.T) {
 	}
 }
 
+func TestRenderMultipleInterfacePatterns(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.InterfacePattern = ""
+	spec.InterfacePatterns = []string{"hgs-live0", "hgs-live1"}
+
+	gen := DefaultConfigGenerator{}
+	cfg, err := gen.Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+	if !strings.Contains(s, `interface "hgs-live0", "hgs-live1" {`) {
+		t.Fatalf("interface pattern list not comma-separated:\n%s", s)
+	}
+}
+
 func TestIPv4AndIPv6Prefixes(t *testing.T) {
 	spec := testBirdInstanceSpec()
 	importSet := []netip.Prefix{

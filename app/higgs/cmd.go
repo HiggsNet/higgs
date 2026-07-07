@@ -326,6 +326,22 @@ func cmdRoute() *cli.Command {
 					return withdrawRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
 				},
 			},
+			{
+				Name:      "show",
+				Usage:     "Show route announcements",
+				UsageText: "higgs route show [--zone <zone>] [--all] [--json]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "zone", Usage: "Filter by announcing zone"},
+					&cli.BoolFlag{Name: "all", Usage: "Include withdrawn announcements"},
+					&cli.BoolFlag{Name: "json", Usage: "Print structured JSON output"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs route show [--zone <zone>] [--all] [--json]", 1)
+					}
+					return showRoutes(zone.ZonePath(cmd.String("zone")), cmd.Bool("all"), cmd.Bool("json"))
+				},
+			},
 		},
 	}
 }

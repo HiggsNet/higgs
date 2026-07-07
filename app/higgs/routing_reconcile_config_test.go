@@ -103,10 +103,116 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	if strings.Contains(exportFilter, "10.1.0.0/24+") {
 		t.Errorf("export filter should not contain remote prefix 10.1.0.0/24")
 	}
+	if !strings.Contains(cfg, `interface "hgs*" {`) {
+		t.Errorf("babel interface should use configured XFRM interface pattern:\n%s", cfg)
+	}
 
 	// BIRD process should have been started with the generated config path.
 	if pm.startSpec.ConfigPath != inst.ConfigPath {
 		t.Errorf("Start config path = %q, want %q", pm.startSpec.ConfigPath, inst.ConfigPath)
+	}
+}
+
+func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: true}
+	client := &fakeBirdClient{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return client
+	}
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	if pm.started {
+		t.Fatalf("running managed BIRD should be reconfigured, not restarted")
+	}
+	if client.configureCalls != 1 {
+		t.Fatalf("Configure calls = %d, want 1", client.configureCalls)
+	}
+	if client.configureSoftCalls != 0 {
+		t.Fatalf("ConfigureSoft calls = %d, want 0", client.configureSoftCalls)
+	}
+	if client.configurePath == "" {
+		t.Fatalf("Configure path is empty")
+	}
+}
+
+func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	client := &fakeBirdClient{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+		return client
+	}
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("initial reconcileRouting: %v", err)
+	}
+
+	pm.running = true
+	pm.started = false
+	client.configureCalls = 0
+	client.configureSoftCalls = 0
+	service.routingForceReload = true
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("force reconcileRouting: %v", err)
+	}
+	if pm.started {
+		t.Fatalf("force reload should reconfigure running BIRD, not restart it")
+	}
+	if client.configureCalls != 1 {
+		t.Fatalf("Configure calls = %d, want 1", client.configureCalls)
+	}
+	if client.configureSoftCalls != 0 {
+		t.Fatalf("ConfigureSoft calls = %d, want 0", client.configureSoftCalls)
 	}
 }
 

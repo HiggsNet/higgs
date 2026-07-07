@@ -3,11 +3,28 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"os"
+	"sort"
 	"strings"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
 )
+
+type routeShowReport struct {
+	ManagedZone   string         `json:"managed_zone"`
+	Announcements []routeShowRow `json:"announcements"`
+}
+
+type routeShowRow struct {
+	Zone       string `json:"zone"`
+	Prefix     string `json:"prefix"`
+	Active     bool   `json:"active"`
+	Authorized bool   `json:"authorized"`
+	Version    uint64 `json:"version"`
+	Key        string `json:"key"`
+}
 
 func announceRoute(path zone.ZonePath, prefix string) error {
 	rt, err := NewRuntime()
@@ -25,6 +42,24 @@ func withdrawRoute(path zone.ZonePath, prefix string) error {
 	return withdrawRouteWithRuntime(rt, path, prefix)
 }
 
+func showRoutes(filterZone zone.ZonePath, includeAll bool, jsonOut bool) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	report, err := buildRouteShowReport(rt, filterZone, includeAll)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+	printRouteShowReport(report, includeAll)
+	return nil
+}
+
 func announceRouteWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) error {
 	canonical, key, value, err := prepareRouteRecord(prefix, true)
 	if err != nil {
@@ -39,6 +74,117 @@ func withdrawRouteWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) er
 		return err
 	}
 	return submitRouteRecord(rt, path, key, value, canonical, false)
+}
+
+func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool) (*routeShowReport, error) {
+	state, err := rt.LoadState()
+	if err != nil {
+		return nil, err
+	}
+	report := &routeShowReport{
+		ManagedZone:   string(state.ManagedZone),
+		Announcements: []routeShowRow{},
+	}
+	if state.Network == nil {
+		return report, nil
+	}
+	authorized := map[string]map[string]struct{}{}
+	if ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now()); err == nil && ars != nil {
+		for z, prefixes := range ars.Announced {
+			key := string(z)
+			if authorized[key] == nil {
+				authorized[key] = map[string]struct{}{}
+			}
+			for prefix := range prefixes {
+				authorized[key][prefix.String()] = struct{}{}
+			}
+		}
+	}
+
+	zones := make([]zone.ZonePath, 0, len(state.Network.Zones))
+	for path := range state.Network.Zones {
+		if filterZone != "" && path != filterZone {
+			continue
+		}
+		zones = append(zones, path)
+	}
+	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
+
+	for _, path := range zones {
+		zs := state.Network.Zones[path]
+		if zs == nil {
+			continue
+		}
+		keys := make([]string, 0, len(zs.Records))
+		for key := range zs.Records {
+			if strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			rec := zs.Records[key]
+			ann, err := routing.ParseRouteAnnouncementRecord(rec)
+			if err != nil {
+				continue
+			}
+			if !includeAll && !ann.Active {
+				continue
+			}
+			prefix := ann.Prefix
+			if p, err := netip.ParsePrefix(prefix); err == nil {
+				prefix = p.Masked().String()
+			}
+			_, isAuthorized := authorized[string(path)][prefix]
+			report.Announcements = append(report.Announcements, routeShowRow{
+				Zone:       string(path),
+				Prefix:     prefix,
+				Active:     ann.Active,
+				Authorized: isAuthorized,
+				Version:    rec.Version,
+				Key:        key,
+			})
+		}
+	}
+	sort.Slice(report.Announcements, func(i, j int) bool {
+		a := report.Announcements[i]
+		b := report.Announcements[j]
+		if a.Zone != b.Zone {
+			return a.Zone < b.Zone
+		}
+		if cmp := comparePrefixStrings(a.Prefix, b.Prefix); cmp != 0 {
+			return cmp < 0
+		}
+		return a.Key < b.Key
+	})
+	return report, nil
+}
+
+func printRouteShowReport(report *routeShowReport, includeAll bool) {
+	if report == nil {
+		report = &routeShowReport{}
+	}
+	fmt.Fprintf(os.Stdout, "managed_zone: %s\n", report.ManagedZone)
+	fmt.Fprintf(os.Stdout, "announcements: %d\n", len(report.Announcements))
+	if len(report.Announcements) == 0 {
+		if includeAll {
+			fmt.Fprintln(os.Stdout, "  -")
+		} else {
+			fmt.Fprintln(os.Stdout, "  - (use --all to include withdrawn announcements)")
+		}
+		return
+	}
+	for _, row := range report.Announcements {
+		state := "active"
+		if !row.Active {
+			state = "withdrawn"
+		}
+		authorized := "unauthorized"
+		if row.Authorized {
+			authorized = "authorized"
+		}
+		fmt.Fprintf(os.Stdout, "  %s  zone=%s  state=%s  %s  version=%d\n", row.Prefix, row.Zone, state, authorized, row.Version)
+	}
 }
 
 func prepareRouteRecord(prefix string, active bool) (canonical, key string, value []byte, err error) {

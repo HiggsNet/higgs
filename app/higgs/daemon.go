@@ -22,24 +22,25 @@ import (
 )
 
 type DaemonService struct {
-	Sync              *SyncRuntime
-	Interval          time.Duration
-	ControlSocketPath string
-	Events            chan daemonEvent
-	Hooks             DaemonHooks
-	StateStore        *DaemonStateStore
-	IPsecDriver       ipsec.IPsecDriver
-	XFRMDriver        ipsec.XFRMDriver
-	closeIPsecDriver  func() error
-	health            *health.Manager
-	healthSpoolMu     sync.Mutex
-	observerHub       *observer.Hub
-	Log               *appLogger
-	LogLimiter        *repeatedLogLimiter
-	drainingEvents    bool
-	ipsecDirty        bool
-	routingDirty      bool
-	firewallDirty     bool
+	Sync               *SyncRuntime
+	Interval           time.Duration
+	ControlSocketPath  string
+	Events             chan daemonEvent
+	Hooks              DaemonHooks
+	StateStore         *DaemonStateStore
+	IPsecDriver        ipsec.IPsecDriver
+	XFRMDriver         ipsec.XFRMDriver
+	closeIPsecDriver   func() error
+	health             *health.Manager
+	healthSpoolMu      sync.Mutex
+	observerHub        *observer.Hub
+	Log                *appLogger
+	LogLimiter         *repeatedLogLimiter
+	drainingEvents     bool
+	ipsecDirty         bool
+	routingDirty       bool
+	routingForceReload bool
+	firewallDirty      bool
 
 	syncSessions      map[string]*SyncSession
 	pendingSyncHints  map[string]bool
@@ -915,6 +916,7 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		err := d.handleReloadConfigEvent()
 		return daemonEventResult{Error: err}, err == nil, false
 	case daemonEventRoutingReload:
+		d.routingForceReload = true
 		d.routingDirty = true
 		d.flushRoutingReconcile(controlContext(event.Context))
 		return daemonEventResult{}, false, false

@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/Catofes/higgs/pkg/routing"
+	"net/netip"
 	"testing"
 	"time"
 )
@@ -123,5 +124,59 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	snapshot, _ := service.StateStore.Snapshot()
 	if snapshot.Network.Zones["node-a.catofes."].Records[key] != nil {
 		t.Fatalf("expected no announcement for invalid assignment")
+	}
+}
+
+func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
+	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", nil, nil)
+	service := newDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	prefix := netip.MustParsePrefix("10.0.0.0/24")
+	ars := &routing.AuthorizedRouteSet{
+		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
+			prefix: {
+				Prefix:     prefix,
+				Source:     "catofes.",
+				AssignedTo: "node-b.catofes.",
+			},
+		},
+		AllAssignments: []*routing.AssignmentEntry{
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes."},
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-a.catofes."},
+		},
+	}
+
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
+	}
+	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
+	snapshot, _ := service.StateStore.Snapshot()
+	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
+	if rec == nil {
+		t.Fatalf("expected announcement from local AllAssignments entry")
+	}
+	ann, err := routing.ParseRouteAnnouncementRecord(rec)
+	if err != nil {
+		t.Fatalf("ParseRouteAnnouncementRecord: %v", err)
+	}
+	if !ann.Active {
+		t.Fatalf("expected active announcement")
+	}
+}
+
+func TestLocalAssignedPrefixesUsesAllAssignments(t *testing.T) {
+	prefix := netip.MustParsePrefix("10.0.0.0/24")
+	ars := &routing.AuthorizedRouteSet{
+		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
+			prefix: {Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes."},
+		},
+		AllAssignments: []*routing.AssignmentEntry{
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes."},
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-a.catofes."},
+		},
+	}
+
+	got := localAssignedPrefixes(ars, "node-a.catofes.")
+	if len(got) != 1 || got[0] != prefix {
+		t.Fatalf("localAssignedPrefixes = %+v, want [%s]", got, prefix)
 	}
 }

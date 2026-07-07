@@ -222,13 +222,13 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 }
 
 // renderInterfacePatterns renders multiple BIRD interface patterns as a
-// space-separated list of quoted strings, e.g. "hgs*" "wg*".
+// comma-separated list of quoted strings, e.g. "hgs*", "wg*".
 func renderInterfacePatterns(patterns []string) string {
 	quoted := make([]string, len(patterns))
 	for i, p := range patterns {
 		quoted[i] = fmt.Sprintf("%q", p)
 	}
-	return strings.Join(quoted, " ")
+	return strings.Join(quoted, ", ")
 }
 
 func renderConfig(cfg BirdConfig) ([]byte, error) {

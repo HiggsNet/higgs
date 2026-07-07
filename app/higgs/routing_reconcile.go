@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,6 +73,8 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	if workspace.ManagedZone.IsRoot() || !workspace.ManagedZone.Valid() {
 		return nil
 	}
+	forceReload := d.routingForceReload
+	d.routingForceReload = false
 
 	now := d.Sync.now()
 	if workspace.RoutingReconcile == nil {
@@ -125,7 +128,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups, config.Overlay.DefaultNetNS)
 
 	for _, inst := range routingInstances {
-		if err := d.reconcileRoutingForInstance(ctx, workspace, inst, ars, dataDir, overlayByNetns, config, now); err != nil && firstErr == nil {
+		if err := d.reconcileRoutingForInstance(ctx, workspace, inst, ars, dataDir, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -305,7 +308,7 @@ func birdInstanceStatesEqual(a, b *BirdInstanceState) bool {
 	return true
 }
 
-func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *stateFile, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time) error {
+func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *stateFile, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
 	netnsName := inst.NetNS
 	instState := state.BirdInstances[netnsName]
 	if instState == nil {
@@ -370,7 +373,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 	}
 
 	configHash := fmt.Sprintf("%x", sha256.Sum256(configBytes))
-	configChanged := instState.LastConfigHash == "" || instState.LastConfigHash != configHash
+	configChanged := forceReload || instState.LastConfigHash == "" || instState.LastConfigHash != configHash
 
 	mode := bird.BirdMode(inst.Mode)
 	if mode == "" {
@@ -430,7 +433,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			}
 		} else if configChanged {
 			client := d.newBirdClient(spec.ControlSocketPath)
-			if err := client.ConfigureSoft(ctx, spec.ConfigPath); err != nil {
+			if err := client.Configure(ctx, spec.ConfigPath); err != nil {
 				instState.State = birdInstanceStateDegraded
 				instState.LastError = err.Error()
 				if !isDryRunConnectError(err) {
@@ -685,16 +688,15 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 		netnsSpec = ng.Spec
 	}
 
+	overlays := []string{}
+	if ng != nil {
+		overlays = ng.Overlays
+	}
 	// Build interface patterns: merge the instance default + any overlay-specific patterns.
 	// Currently all overlays use "hgs*" by default, so the instance pattern suffices.
 	interfacePatterns := []string{}
 	if inst.InterfacePat != "" {
 		interfacePatterns = append(interfacePatterns, inst.InterfacePat)
-	}
-
-	overlays := []string{}
-	if ng != nil {
-		overlays = ng.Overlays
 	}
 
 	mode := bird.BirdMode(inst.Mode)
@@ -729,10 +731,7 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 
 	// Build static routes for local assigned prefixes.
 	if ars != nil && managedZone.Valid() {
-		for prefix, entry := range ars.Assignments {
-			if entry.AssignedTo != managedZone {
-				continue
-			}
+		for _, prefix := range localAssignedPrefixes(ars, managedZone) {
 			via := ""
 			if inst.Upstream != nil && inst.Upstream.Enabled {
 				via = inst.Upstream.Interface
@@ -833,6 +832,44 @@ func authorizedPrefixes(ars *routing.AuthorizedRouteSet, zones []zone.ZonePath) 
 		}
 	}
 	return out
+}
+
+func localAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
+	if ars == nil || !managedZone.Valid() {
+		return nil
+	}
+	outSet := make(map[netip.Prefix]struct{})
+	if len(ars.AllAssignments) > 0 {
+		for _, entry := range ars.AllAssignments {
+			if entry == nil || entry.AssignedTo != managedZone {
+				continue
+			}
+			outSet[entry.Prefix] = struct{}{}
+		}
+	} else {
+		for prefix, entry := range ars.Assignments {
+			if entry == nil || entry.AssignedTo != managedZone {
+				continue
+			}
+			outSet[prefix] = struct{}{}
+		}
+	}
+	out := make([]netip.Prefix, 0, len(outSet))
+	for prefix := range outSet {
+		out = append(out, prefix)
+	}
+	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
+	return out
+}
+
+func netipPrefixLess(a, b netip.Prefix) bool {
+	if a.Addr().Less(b.Addr()) {
+		return true
+	}
+	if b.Addr().Less(a.Addr()) {
+		return false
+	}
+	return a.Bits() < b.Bits()
 }
 
 // assignmentPrefixes returns all IPAM assignment prefixes from the authorized
@@ -962,10 +999,8 @@ func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *r
 	}
 
 	localAssigned := make(map[netip.Prefix]struct{})
-	for prefix, entry := range ars.Assignments {
-		if entry.AssignedTo == managedZone {
-			localAssigned[prefix] = struct{}{}
-		}
+	for _, prefix := range localAssignedPrefixes(ars, managedZone) {
+		localAssigned[prefix] = struct{}{}
 	}
 
 	localAnnounced := make(map[netip.Prefix]bool)

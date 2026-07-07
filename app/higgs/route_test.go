@@ -193,6 +193,42 @@ func TestWithdrawAlreadyWithdrawnFails(t *testing.T) {
 	}
 }
 
+func TestBuildRouteShowReportListsActiveAndAllAnnouncements(t *testing.T) {
+	rt, managed := buildRouteTestRuntime(t)
+
+	if err := announceRouteWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+		t.Fatalf("announce active route: %v", err)
+	}
+	if err := announceRouteWithRuntime(rt, managed, "10.0.2.0/24"); err != nil {
+		t.Fatalf("announce withdrawn route: %v", err)
+	}
+	if err := withdrawRouteWithRuntime(rt, managed, "10.0.2.0/24"); err != nil {
+		t.Fatalf("withdraw route: %v", err)
+	}
+
+	report, err := buildRouteShowReport(rt, "", false)
+	if err != nil {
+		t.Fatalf("buildRouteShowReport active: %v", err)
+	}
+	if len(report.Announcements) != 1 {
+		t.Fatalf("active announcements len = %d, want 1: %+v", len(report.Announcements), report.Announcements)
+	}
+	if report.Announcements[0].Prefix != "10.0.1.0/24" || !report.Announcements[0].Active {
+		t.Fatalf("active announcement = %+v", report.Announcements[0])
+	}
+
+	report, err = buildRouteShowReport(rt, managed, true)
+	if err != nil {
+		t.Fatalf("buildRouteShowReport all: %v", err)
+	}
+	if len(report.Announcements) != 2 {
+		t.Fatalf("all announcements len = %d, want 2: %+v", len(report.Announcements), report.Announcements)
+	}
+	if report.Announcements[1].Prefix != "10.0.2.0/24" || report.Announcements[1].Active {
+		t.Fatalf("withdrawn announcement = %+v", report.Announcements[1])
+	}
+}
+
 func buildRouteTestRuntime(t *testing.T) (*Runtime, zone.ZonePath) {
 	t.Helper()
 	return buildRouteTestRuntimeWithCapability(t, true)
