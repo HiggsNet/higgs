@@ -1,0 +1,15 @@
+.git
+.github
+.codex
+.agents
+.claude
+.vscode
+.higgs
+.higgs.db
+.public-test
+build
+bin
+dist
+result
+*.tmp
+

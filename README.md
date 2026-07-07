@@ -111,6 +111,8 @@ make check
 
 ```bash
 make build
+make docker-build
+make nix-build
 make join-smoke
 make phase1-smoke
 make phase2-smoke
@@ -135,6 +137,44 @@ make observer-smoke
 ```
 
 `make join-smoke` 和 `make reflector-smoke` 不依赖真实 UDP peer。其他 gossip smoke 会启动本地 UDP peer，因此运行环境需要允许本地 UDP socket。
+
+### Docker 镜像
+
+仓库根目录提供 `Dockerfile` 和示例配置 `docker/config.example.yaml`。本地构建：
+
+```bash
+make docker-build
+```
+
+容器内默认执行 `/usr/local/bin/higgs`，默认配置路径为 `/etc/higgs/config.yaml`，状态目录建议挂载到 `/var/lib/higgs`。如果要运行真实 IPsec/XFRM、BIRD/Babel、firewall 或 netns 数据面，需要让容器使用宿主网络和特权权限：
+
+```bash
+docker run --rm -it --privileged --network host \
+  -v "$PWD/config.yaml:/etc/higgs/config.yaml:ro" \
+  -v "$PWD/.higgs:/var/lib/higgs" \
+  higgs:dev daemon
+```
+
+也可以先用仓库内示例确认镜像可启动：
+
+```bash
+make docker-run-example
+```
+
+### Nix
+
+仓库提供 `flake.nix` 和 `default.nix`：
+
+```bash
+nix build .#higgs
+nix develop
+```
+
+`nix develop` 会提供 Go、BIRD、strongSwan、iproute2、iptables 和 nftables 等开发/数据面调试工具。
+
+### GitHub Release
+
+打 `v*` tag 时，`.github/workflows/release.yml` 会在 GitHub 原生 Linux runner 上分别构建 `amd64` 和 `arm64` release tarball，并发布到 GitHub Release。它还会把 Docker 镜像推送到 GHCR：两个架构先分别生成 `:<version>-amd64` 和 `:<version>-arm64`，再合并为多架构 `:<version>`、`:sha-<commit>` 和 `:latest` tag。也可以从 GitHub Actions 手动触发 workflow 生成 artifacts 和镜像。
 
 真实系统/特权数据面 smoke 是显式目标，不纳入普通 `make check`：
 

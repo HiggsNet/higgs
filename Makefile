@@ -6,6 +6,8 @@ BUILD_DIR := build
 GO := go
 GO_CACHE ?= /tmp/higgs-gocache
 GO_MOD_CACHE ?= /tmp/higgs-gomodcache
+DOCKER ?= docker
+DOCKER_IMAGE ?= higgs:dev
 GIT_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 GIT_DESCRIBE := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
 GIT_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo true || echo false)
@@ -17,6 +19,8 @@ CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
 SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
 ROOT_SMOKE_TARGETS := ipsec-xfrm-smoke bird-babel-smoke firewall-smoke health-fault-smoke
+
+.PHONY: docker-build docker-run-example nix-build
 
 all: build
 
@@ -48,6 +52,23 @@ install:
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)
+
+docker-build:
+	$(DOCKER) build \
+		--build-arg VERSION="$(GIT_DESCRIBE)" \
+		--build-arg COMMIT="$(GIT_COMMIT)" \
+		--build-arg DIRTY="$(GIT_DIRTY)" \
+		--build-arg BUILD_TIME="$(BUILD_TIME)" \
+		-t "$(DOCKER_IMAGE)" .
+
+docker-run-example:
+	$(DOCKER) run --rm --privileged --network host \
+		-v "$${PWD}/docker/config.example.yaml:/etc/higgs/config.yaml:ro" \
+		-v "$${PWD}/.higgs:/var/lib/higgs" \
+		"$(DOCKER_IMAGE)" version
+
+nix-build:
+	nix build .#higgs
 
 smoke: smoke-all
 

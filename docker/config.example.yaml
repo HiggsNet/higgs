@@ -1,0 +1,21 @@
+data_dir: /var/lib/higgs
+trusted_root_public_key: <base64-ed25519-public-key>
+
+gossip:
+  init:
+    managed_zone: node-a.catofes.
+    key_path: /var/lib/higgs/identity.key.json
+  peer_id: node-a.catofes.
+  listen_addr: "[::]:33434"
+  bootstrap: []
+
+log:
+  level: info
+  mode: stderr
+
+ipsec:
+  driver: strongswan
+
+observer:
+  listen_addr: 127.0.0.1:8080
+

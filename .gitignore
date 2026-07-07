@@ -1,6 +1,7 @@
 bin
 .vscode
 build
+result
 .higgs.db
 .higgs
 /higgs
