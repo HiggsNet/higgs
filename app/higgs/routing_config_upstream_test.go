@@ -44,6 +44,9 @@ instances:
 	if !inst.Upstream.Enabled {
 		t.Error("upstream not enabled")
 	}
+	if inst.Upstream.Mode != upstreamModeStatic {
+		t.Errorf("mode = %q, want static", inst.Upstream.Mode)
+	}
 	if inst.Upstream.Interface != "hgs-2host" {
 		t.Errorf("interface = %q, want hgs-2host", inst.Upstream.Interface)
 	}
@@ -67,6 +70,53 @@ instances:
 	}
 	if inst.Upstream.DownstreamIPv6LL != "fe80::2/64" {
 		t.Errorf("downstream ipv6_ll = %q, want fe80::2/64", inst.Upstream.DownstreamIPv6LL)
+	}
+}
+
+func TestParseUpstreamConfigExternalMode(t *testing.T) {
+	yamlInput := `
+instances:
+  - id: main
+    netns: higgstesth2
+    upstream:
+      mode: external
+`
+	var yamlCfg routingInstancesYAML
+	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+
+	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
+	}}
+	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
+	if err != nil {
+		t.Fatalf("parseRoutingConfigInstances: %v", err)
+	}
+	inst := cfg.Instances[0]
+	if inst.Upstream == nil || inst.Upstream.Mode != upstreamModeExternal {
+		t.Fatalf("upstream mode = %#v, want external", inst.Upstream)
+	}
+}
+
+func TestParseUpstreamConfigRejectsInvalidMode(t *testing.T) {
+	yamlInput := `
+instances:
+  - id: main
+    netns: higgstesth2
+    upstream:
+      mode: dynamic
+`
+	var yamlCfg routingInstancesYAML
+	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+
+	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
+	}}
+	if _, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp"); err == nil {
+		t.Fatal("expected invalid upstream mode error")
 	}
 }
 

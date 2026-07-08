@@ -405,7 +405,13 @@ protocol babel higgs_babel_xxx {
 
 ### 13.4 用 static protocol 宣告分配前缀
 
-当 `ipam.auto_announce_assigned_ips` 开启且需要让主网络/other users 可达时，除了发布 `routes/announcements/*` 给 mesh 内其他节点，还要在本节点 BIRD 中生成 static route：
+当 `ipam.auto_announce_assigned_ips` 开启时，Higgs 发布本节点 assignment 对应的 `routes/announcements/*`。本地 BIRD static route 按 `routing.instances[].upstream` 分三种语义：
+
+- 未配置 upstream：本节点 prefix 用 blackhole 兜底，只表达 ownership，不承载 host/service。
+- `upstream.mode: static`（默认）：本节点 prefix 指向 mesh netns 内的 upstream veth，host 回 mesh 的静态路由由 Higgs/管理员按授权前缀控制。
+- `upstream.mode: external`：Higgs 只让 mesh-side BIRD 监听 veth，不生成本节点 prefix static route；host-side BIRD/FRR/babeld 由管理员自管。
+
+static upstream 示例：
 
 ```bird
 protocol static higgs_static_xxx {
@@ -414,7 +420,7 @@ protocol static higgs_static_xxx {
 }
 ```
 
-对于只做聚合宣告、本节点不实际承载业务的 prefix，可用 blackhole 兜底：
+对于只做聚合宣告、本节点不实际承载业务的 prefix，未配置 upstream 时用 blackhole 兜底：
 
 ```bird
 route 10.0.0.0/24 blackhole;
@@ -430,7 +436,7 @@ static protocol 的路由需要被 export filter 显式允许，才能进入 Bab
 filter higgs_import_xxx {
     if net = 0.0.0.0/0 then reject;              # 不接受默认路由
     if net = ::/0 then reject;
-    if ! net ~ [ assigned_prefix_set+ ] then reject;  # 只接受已分配前缀内的路由
+    if ! net ~ [ authorized_route_set{bounded} ] then reject;  # 只接受已授权前缀下的受限 more-specific
     if source !~ [ RTS_BABEL, RTS_STATIC ] then reject; # 只接受 Babel/Static 来源
     accept;
 }
@@ -444,8 +450,8 @@ filter higgs_import_xxx {
 filter higgs_export_xxx {
     if net = 0.0.0.0/0 then reject;
     if net = ::/0 then reject;
-    if net ~ [ my_assigned_prefixes+ ] then accept;      # 本节点分配到的前缀
-    if net ~ [ mesh_authorized_prefixes+ ] then accept;  # mesh 内其他节点授权可达的前缀
+    if net ~ [ my_assigned_prefixes ] then accept;      # 本节点分配到的前缀
+    if net ~ [ mesh_authorized_prefixes ] then accept;  # mesh 内其他节点授权可达的前缀
     reject;
 }
 ```
@@ -463,8 +469,8 @@ protocol kernel higgs_kern_xxx {
 }
 
 filter higgs_kernel_export {
-    if net ~ [ my_assigned_prefixes+ ] then accept;
-    if source = RTS_BABEL && net ~ [ assigned_prefix_set+ ] then accept;
+    if net ~ [ my_assigned_prefixes ] then accept;
+    if source = RTS_BABEL && net ~ [ assigned_prefix_set ] then accept;
     reject;
 }
 ```
@@ -474,7 +480,7 @@ filter higgs_kernel_export {
 ### 13.6 安全边界
 
 1. **绝不接受默认路由**：import/export filter 必须显式 reject `0.0.0.0/0` 和 `::/0`，避免主网络把默认路由注入 mesh，也避免 mesh 把默认路由泄露到主网络。
-2. **严格白名单**：veth 上学习到的路由必须落在 `assigned_prefix_set+` 内，未授权前缀直接丢弃。
+2. **严格白名单**：默认只接受 authorized route prefix 下的 bounded more-specific（IPv6 约束为 `/48..../96`，IPv4 约束为 `/18..../28`）；node 内部诊断 `/128` 和 IPv4 host route 不在 mesh 中传播，未授权前缀直接丢弃。
 3. **来源限制**：只接受 `RTS_BABEL` 和 `RTS_STATIC` 来源；`RTS_DEVICE`、`RTS_KERNEL` 等不应直接进入 mesh。
 4. **owner 与清理**：veth pair、static route、filter 列表都属于 Higgs 管理资源，teardown/revocation 时按 owner token 清理，避免误删管理员手工配置。
 

@@ -87,17 +87,17 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	importFilter := cfg[importIdx:exportIdx]
 	exportFilter := cfg[exportIdx:]
 
-	// Import filter should contain the authorized IPAM assignment prefixes.
-	if !strings.Contains(importFilter, "10.0.0.0/16+") {
-		t.Errorf("import filter missing authorized prefix 10.0.0.0/16+")
+	// Import filter should contain authorized route announcement prefixes exactly.
+	if !strings.Contains(importFilter, "10.0.1.0/24") {
+		t.Errorf("import filter missing authorized route prefix 10.0.1.0/24")
 	}
-	if !strings.Contains(importFilter, "10.1.0.0/16+") {
-		t.Errorf("import filter missing authorized prefix 10.1.0.0/16+")
+	if !strings.Contains(importFilter, "10.1.1.0/24") {
+		t.Errorf("import filter missing authorized route prefix 10.1.1.0/24")
 	}
 
 	// Export filter should contain only the local announcement.
-	if !strings.Contains(exportFilter, "10.0.1.0/24+") {
-		t.Errorf("export filter missing local prefix 10.0.1.0/24+")
+	if !strings.Contains(exportFilter, "10.0.1.0/24") {
+		t.Errorf("export filter missing local prefix 10.0.1.0/24")
 	}
 	if strings.Contains(exportFilter, "10.1.1.0/24") {
 		t.Errorf("export filter should not contain remote prefix 10.1.1.0/24")
@@ -182,11 +182,11 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 	importFilter := cfg[importIdx:exportIdx]
 	exportFilter := cfg[exportIdx:]
 
-	if !strings.Contains(importFilter, "10.0.0.0/16+") {
-		t.Errorf("import filter missing authorized assignment prefix 10.0.0.0/16+")
+	if !strings.Contains(importFilter, "10.0.1.0/24") {
+		t.Errorf("import filter missing authorized route prefix 10.0.1.0/24")
 	}
-	if !strings.Contains(exportFilter, "10.0.1.0/24+") {
-		t.Errorf("export filter missing local announcement prefix 10.0.1.0/24+")
+	if !strings.Contains(exportFilter, "10.0.1.0/24") {
+		t.Errorf("export filter missing local announcement prefix 10.0.1.0/24")
 	}
 
 	_ = signers
@@ -264,8 +264,8 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 		t.Fatalf("missing export filter")
 	}
 	exportFilter := cfg[exportIdx:]
-	if !strings.Contains(exportFilter, "10.0.0.0/24+") {
-		t.Errorf("export filter missing auto-announced prefix 10.0.0.0/24+")
+	if !strings.Contains(exportFilter, "10.0.0.0/24") {
+		t.Errorf("export filter missing auto-announced prefix 10.0.0.0/24")
 	}
 
 	_ = now
@@ -369,13 +369,13 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	importFilter := cfg[importIdx:exportIdx]
 	exportFilter := cfg[exportIdx:]
 
-	if !strings.Contains(importFilter, "10.1.0.0/16+") {
-		t.Errorf("import filter missing remaining authorized prefix 10.1.0.0/16+")
+	if !strings.Contains(importFilter, "10.1.1.0/24") {
+		t.Errorf("import filter missing remaining authorized route prefix 10.1.1.0/24")
 	}
-	if strings.Contains(importFilter, "10.0.0.0/16+") {
-		t.Errorf("import filter should not contain revoked prefix 10.0.0.0/16+")
+	if strings.Contains(importFilter, "10.0.1.0/24") {
+		t.Errorf("import filter should not contain revoked route prefix 10.0.1.0/24")
 	}
-	if strings.Contains(exportFilter, "10.0.1.0/24+") {
-		t.Errorf("export filter should not contain revoked local prefix 10.0.1.0/24+")
+	if strings.Contains(exportFilter, "10.0.1.0/24") {
+		t.Errorf("export filter should not contain revoked local prefix 10.0.1.0/24")
 	}
 }

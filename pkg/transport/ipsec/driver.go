@@ -88,6 +88,10 @@ type XFRMDriver interface {
 	AssignAddress(context.Context, TransportLinkSpec, string) error
 }
 
+type XFRMExtraAddressAssigner interface {
+	AssignExtraAddress(context.Context, TransportLinkSpec, string) error
+}
+
 type XFRMLinkState struct {
 	NetNS           NetNSSpec
 	NamespaceExists bool
@@ -754,6 +758,11 @@ func (d *DryRunDriver) DeleteInterface(_ context.Context, name string) error {
 }
 
 func (d *DryRunDriver) AssignAddress(_ context.Context, spec TransportLinkSpec, address string) error {
+	d.Addresses = append(d.Addresses, spec.InterfaceName+"="+address)
+	return nil
+}
+
+func (d *DryRunDriver) AssignExtraAddress(_ context.Context, spec TransportLinkSpec, address string) error {
 	d.Addresses = append(d.Addresses, spec.InterfaceName+"="+address)
 	return nil
 }

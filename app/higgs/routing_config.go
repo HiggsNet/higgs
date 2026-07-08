@@ -59,6 +59,7 @@ type RoutingInstance struct {
 // the mesh netns to the main network (init netns or another ns).
 type UpstreamConfig struct {
 	Enabled          bool
+	Mode             string // static or external
 	Interface        string // mesh netns side of the veth pair
 	CreateVeth       bool   // if true, Higgs creates and maintains the veth pair
 	PeerInterface    string // main network side of the veth pair
@@ -100,6 +101,7 @@ type routingInstanceYAML struct {
 type upstreamConfigYAML struct {
 	Enabled             *bool  `yaml:"enabled"`
 	Disabled            *bool  `yaml:"disabled"`
+	Mode                string `yaml:"mode"`
 	UpstreamInterface   string `yaml:"upstream_interface"`
 	DownstreamInterface string `yaml:"downstream_interface"`
 	Interface           string `yaml:"interface"`
@@ -117,6 +119,9 @@ type upstreamConfigYAML struct {
 const (
 	routingShutdownPolicyPersist = "persist"
 	routingShutdownPolicyStop    = "stop"
+
+	upstreamModeStatic   = "static"
+	upstreamModeExternal = "external"
 )
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
@@ -329,6 +334,7 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 
 	uc := &UpstreamConfig{
 		Enabled:          true,
+		Mode:             normalizedUpstreamMode(strings.TrimSpace(yu.Mode)),
 		Interface:        upstreamInterface,
 		PeerInterface:    downstreamInterface,
 		PeerNetns:        strings.TrimSpace(yu.PeerNetns),
@@ -347,6 +353,9 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 	}
 	if uc.PeerInterface == "" {
 		uc.PeerInterface = "hgs-2higgs"
+	}
+	if !oneOfUpstreamMode(uc.Mode) {
+		return nil, fmt.Errorf("unsupported mode %q", uc.Mode)
 	}
 
 	// Validate IPv4/IPv6 link-local if provided.
@@ -392,6 +401,17 @@ func oneOfRoutingMode(mode string) bool {
 
 func oneOfRoutingShutdownPolicy(policy string) bool {
 	return policy == routingShutdownPolicyPersist || policy == routingShutdownPolicyStop
+}
+
+func oneOfUpstreamMode(mode string) bool {
+	return mode == upstreamModeStatic || mode == upstreamModeExternal
+}
+
+func normalizedUpstreamMode(mode string) string {
+	if mode == "" {
+		return upstreamModeStatic
+	}
+	return mode
 }
 
 func normalizedRoutingShutdownPolicy(policy string) string {

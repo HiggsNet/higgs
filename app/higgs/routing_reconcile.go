@@ -357,7 +357,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 		}
 	}
 
-	importSet := assignmentPrefixes(ars)
+	importSet := authorizedPrefixes(ars, nil)
 	// Phase 6.3.4: BIRD export set must use the same forwarding policy as the
 	// firewall. A non-transit node only exports its own local assigned prefixes;
 	// a transit node exports authorized prefixes filtered by the forwarding
@@ -730,10 +730,10 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 	}
 
 	// Build static routes for local assigned prefixes.
-	if ars != nil && managedZone.Valid() {
+	if ars != nil && managedZone.Valid() && upstreamStaticRoutesEnabled(inst.Upstream) {
 		for _, prefix := range localAssignedPrefixes(ars, managedZone) {
 			via := ""
-			if inst.Upstream != nil && inst.Upstream.Enabled {
+			if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == upstreamModeStatic {
 				via = inst.Upstream.Interface
 			}
 			spec.StaticRoutes = append(spec.StaticRoutes, bird.StaticRouteSpec{
@@ -744,6 +744,13 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 	}
 
 	return spec
+}
+
+func upstreamStaticRoutesEnabled(upstream *UpstreamConfig) bool {
+	if upstream == nil || !upstream.Enabled {
+		return true
+	}
+	return upstream.Mode == upstreamModeStatic
 }
 
 func routingInstancesEnabled(config *appConfig) []RoutingInstance {
@@ -873,9 +880,8 @@ func netipPrefixLess(a, b netip.Prefix) bool {
 }
 
 // assignmentPrefixes returns all IPAM assignment prefixes from the authorized
-// route set. These prefixes form the import whitelist: the local BIRD instance
-// accepts any route advertised by overlay peers that falls within an assigned
-// prefix (the BIRD prefix list uses "+" to include more specific prefixes).
+// route set. These prefixes are still used by firewall/IPAM consumers; BIRD
+// import/export filters use authorized route announcements instead.
 func assignmentPrefixes(ars *routing.AuthorizedRouteSet) []netip.Prefix {
 	if ars == nil {
 		return nil

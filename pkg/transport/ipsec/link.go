@@ -737,7 +737,7 @@ func RuntimeXFRMIfID(linkID string, generation uint64, provider string) uint32 {
 }
 
 func LegacyStableTransportID(local, peer zone.ZonePath, overlayID string, family ...string) string {
-	parts := [][]byte{[]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(overlayID)}
+	parts := [][]byte{[]byte(local), {0}, []byte(peer), {0}, []byte(overlayID)}
 	if len(family) > 0 && family[0] != "" {
 		parts = append(parts, []byte{0}, []byte(family[0]))
 	}

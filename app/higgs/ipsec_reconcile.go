@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -71,6 +73,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		GroupRotateRetention: groupRotateRetentionMap(groups),
 		RotateCutoverReady:   d.ipsecRotateCutoverReady(),
 	})
+	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(snapshot, now)
 	for _, action := range result.Actions {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {
@@ -85,10 +88,19 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 				}
 				return err
 			}
+			if shouldAssignIPsecDiagnosticAddresses(action) {
+				if err := d.assignIPsecDiagnosticAddresses(ctx, xfrmDriver, *action.Spec, diagnosticPrefixes); err != nil {
+					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
+					if saveErr := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
+					}
+					return err
+				}
+			}
 			markIPsecActionSucceeded(result.Instances, action, now)
 		}
 	}
-	if err := d.maintainExistingXFRMInterfaces(ctx, xfrmDriver, plan.Desired, result.Instances, result.Actions, groups); err != nil {
+	if err := d.maintainExistingXFRMInterfaces(ctx, xfrmDriver, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes); err != nil {
 		if saveErr := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
@@ -100,7 +112,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	return nil
 }
 
-func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, actions []ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) error {
+func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, actions []ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec, diagnosticPrefixes []netip.Prefix) error {
 	driver, ok := xfrmDriver.(interface {
 		ipsec.XFRMDriver
 		ipsec.XFRMLinkInspector
@@ -166,6 +178,9 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 				return fmt.Errorf("maintain xfrm address %q: %w", candidate.InterfaceName, err)
 			}
 		}
+		if err := d.assignIPsecDiagnosticAddresses(ctx, xfrmDriver, candidate, diagnosticPrefixes); err != nil {
+			return fmt.Errorf("maintain xfrm diagnostic address %q: %w", candidate.InterfaceName, err)
+		}
 		d.logDebug("ipsec", "xfrm_maintenance_applied", map[string]any{
 			"instance_id": id,
 			"peer":        candidate.PeerZone,
@@ -175,6 +190,99 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 		})
 	}
 	return nil
+}
+
+func shouldAssignIPsecDiagnosticAddresses(action ipsec.ReconcileAction) bool {
+	if action.Spec == nil {
+		return false
+	}
+	switch action.Action {
+	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareRotate:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *DaemonService) localIPv6DiagnosticPrefixes(state *stateFile, now time.Time) []netip.Prefix {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || state == nil || state.Network == nil {
+		return nil
+	}
+	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
+		return nil
+	}
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	if err != nil {
+		d.logWarn("ipsec", "diagnostic_prefixes_unavailable", map[string]any{"error": err.Error()})
+		return nil
+	}
+	prefixes := localAssignedPrefixes(ars, state.ManagedZone)
+	out := prefixes[:0]
+	for _, prefix := range prefixes {
+		if prefix.Addr().Is6() && prefix.Bits() == 64 {
+			out = append(out, prefix.Masked())
+		}
+	}
+	return out
+}
+
+func (d *DaemonService) assignIPsecDiagnosticAddresses(ctx context.Context, xfrmDriver ipsec.XFRMDriver, spec ipsec.TransportLinkSpec, prefixes []netip.Prefix) error {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	assigner, ok := xfrmDriver.(ipsec.XFRMExtraAddressAssigner)
+	if !ok {
+		return nil
+	}
+	suffix, ok := ipsecDiagnosticSuffix(spec)
+	if !ok {
+		return nil
+	}
+	for _, prefix := range prefixes {
+		addr, ok := diagnosticAddressForPrefix(prefix, suffix)
+		if !ok {
+			continue
+		}
+		if err := assigner.AssignExtraAddress(ctx, spec, netip.PrefixFrom(addr, 128).String()); err != nil {
+			return err
+		}
+		d.logDebug("ipsec", "diagnostic_address_assigned", map[string]any{
+			"interface": spec.InterfaceName,
+			"netns":     spec.NetNS,
+			"address":   addr.String(),
+			"prefix":    prefix.String(),
+			"path_key":  spec.PathKey,
+		})
+	}
+	return nil
+}
+
+func ipsecDiagnosticSuffix(spec ipsec.TransportLinkSpec) (uint16, bool) {
+	pathKey := strings.ToLower(spec.PathKey)
+	switch {
+	case strings.Contains(pathKey, "ipv4"):
+		return 0xfff4, true
+	case strings.Contains(pathKey, "ipv6"):
+		return 0xfff6, true
+	}
+	if ip := net.ParseIP(spec.LocalAddress); ip != nil {
+		if ip.To4() != nil {
+			return 0xfff4, true
+		}
+		return 0xfff6, true
+	}
+	return 0, false
+}
+
+func diagnosticAddressForPrefix(prefix netip.Prefix, suffix uint16) (netip.Addr, bool) {
+	prefix = prefix.Masked()
+	if !prefix.Addr().Is6() || prefix.Bits() != 64 {
+		return netip.Addr{}, false
+	}
+	raw := prefix.Addr().As16()
+	raw[14] = byte(suffix >> 8)
+	raw[15] = byte(suffix)
+	return netip.AddrFrom16(raw), true
 }
 
 func ipsecActionAppliesXFRM(action string) bool {

@@ -583,7 +583,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("LoadState(initial): %v", err)
 	}
 	initialBirdCfg := readBirdConfigForNetns(t, latest, "higgstesth2")
-	if !strings.Contains(initialBirdCfg, "10.1.0.0/24+") {
+	if !strings.Contains(initialBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("initial BIRD config missing transit export for node-b route:\n%s", initialBirdCfg)
 	}
 

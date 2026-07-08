@@ -58,6 +58,39 @@ func prefixListString(p []netip.Prefix, moreSpecific bool) string {
 	return strings.Join(parts, ", ")
 }
 
+func acceptedPrefixListString(p []netip.Prefix) string {
+	p = sortPrefixes(p)
+	parts := make([]string, len(p))
+	for i, prefix := range p {
+		parts[i] = acceptedPrefixPattern(prefix)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func acceptedPrefixPattern(prefix netip.Prefix) string {
+	bits := prefix.Bits()
+	if prefix.Addr().Is6() {
+		const (
+			minIPv6AnnounceBits = 48
+			maxIPv6AnnounceBits = 96
+		)
+		if bits > maxIPv6AnnounceBits {
+			return prefix.String()
+		}
+		minBits := max(bits, minIPv6AnnounceBits)
+		return fmt.Sprintf("%s{%d,%d}", prefix.String(), minBits, maxIPv6AnnounceBits)
+	}
+	const (
+		minIPv4AnnounceBits = 18
+		maxIPv4AnnounceBits = 28
+	)
+	if bits > maxIPv4AnnounceBits {
+		return prefix.String()
+	}
+	minBits := max(bits, minIPv4AnnounceBits)
+	return fmt.Sprintf("%s{%d,%d}", prefix.String(), minBits, maxIPv4AnnounceBits)
+}
+
 func writeRejectList(b *strings.Builder, p []netip.Prefix) {
 	if len(p) == 0 {
 		return
@@ -69,5 +102,5 @@ func writeAcceptList(b *strings.Builder, p []netip.Prefix) {
 	if len(p) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "    if net ~ [ %s ] then accept;\n", prefixListString(p, true))
+	fmt.Fprintf(b, "    if net ~ [ %s ] then accept;\n", acceptedPrefixListString(p))
 }

@@ -1307,15 +1307,6 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-func firstValidAddr(values ...netip.Addr) netip.Addr {
-	for _, value := range values {
-		if value.IsValid() {
-			return value
-		}
-	}
-	return netip.Addr{}
-}
-
 func firstNonZeroUint32(values ...uint32) uint32 {
 	for _, value := range values {
 		if value != 0 {

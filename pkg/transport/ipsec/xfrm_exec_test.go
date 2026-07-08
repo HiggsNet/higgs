@@ -101,6 +101,29 @@ func TestSystemXFRMDriverAssignAddressPrunesStaleSameFamilyAddresses(t *testing.
 	}
 }
 
+func TestSystemXFRMDriverAssignExtraAddressDoesNotPrune(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "higgstesth2"},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			return []byte("ok"), nil
+		},
+	}
+
+	spec := TransportLinkSpec{InterfaceName: "hgs1", NetNS: "higgstesth2"}
+	if err := driver.AssignExtraAddress(context.Background(), spec, "fd00:1234::fff4/128"); err != nil {
+		t.Fatalf("AssignExtraAddress: %v", err)
+	}
+	got := commandStrings(commands)
+	want := []string{
+		"ip netns exec higgstesth2 ip addr replace fd00:1234::fff4/128 dev hgs1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
+	}
+}
+
 func TestSystemXFRMDriverEnablesMulticastOnExistingInterface(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{

@@ -390,7 +390,7 @@ Example body for an import filter:
 ```bird
 filter higgs_import_100 {
     if net ~ [ 0.0.0.0/0, ::/0 ] then reject;
-    if net ~ [ 10.0.0.0/8+, 2001:db8::/32+ ] then accept;
+    if net ~ [ 10.0.0.0/8{18,28}, 2001:db8::/32{48,96} ] then accept;
     reject;
 }
 ```
@@ -497,7 +497,7 @@ protocol babel higgs_babel_ipsec_main {
 ```bird
 filter higgs_import_ipsec_main {
     if net ~ [ 0.0.0.0/0, ::/0 ] then reject;
-    if net ~ [ 10.0.0.0/8+, 2001:db8::/32+ ] then accept;
+    if net ~ [ 10.0.0.0/8{18,28}, 2001:db8::/32{48,96} ] then accept;
     reject;
 }
 

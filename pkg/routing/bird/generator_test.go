@@ -107,14 +107,52 @@ func TestRenderFilter(t *testing.T) {
 	if !strings.Contains(filter, "192.168.0.0/16+") {
 		t.Error("missing bogon rejection with more-specific")
 	}
-	if !strings.Contains(filter, "10.0.0.0/8+") {
-		t.Error("missing authorized IPv4 prefix acceptance")
+	if !strings.Contains(filter, "10.0.0.0/8{18,28}") {
+		t.Error("missing bounded authorized IPv4 prefix acceptance")
 	}
-	if !strings.Contains(filter, "2001:db8::/32+") {
-		t.Error("missing authorized IPv6 prefix acceptance")
+	if !strings.Contains(filter, "2001:db8::/32{48,96}") {
+		t.Error("missing bounded authorized IPv6 prefix acceptance")
 	}
 	if !strings.HasSuffix(filter, "    reject;\n}") {
 		t.Error("missing final reject")
+	}
+}
+
+func TestAcceptedPrefixPatternBoundsIPv6Specifics(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{raw: "2001:db8::/32", want: "2001:db8::/32{48,96}"},
+		{raw: "2001:db8:1:2::/64", want: "2001:db8:1:2::/64{64,96}"},
+		{raw: "2001:db8:1:2:3::/80", want: "2001:db8:1:2:3::/80{80,96}"},
+		{raw: "2001:db8:1:2:3:4::/112", want: "2001:db8:1:2:3:4::/112"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			if got := acceptedPrefixPattern(netip.MustParsePrefix(tt.raw)); got != tt.want {
+				t.Fatalf("acceptedPrefixPattern(%s) = %s, want %s", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAcceptedPrefixPatternBoundsIPv4Specifics(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{raw: "10.0.0.0/8", want: "10.0.0.0/8{18,28}"},
+		{raw: "10.0.0.0/24", want: "10.0.0.0/24{24,28}"},
+		{raw: "10.0.0.0/28", want: "10.0.0.0/28{28,28}"},
+		{raw: "10.0.0.1/32", want: "10.0.0.1/32"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			if got := acceptedPrefixPattern(netip.MustParsePrefix(tt.raw)); got != tt.want {
+				t.Fatalf("acceptedPrefixPattern(%s) = %s, want %s", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -193,10 +231,10 @@ func TestIPv4AndIPv6Prefixes(t *testing.T) {
 	}
 	s := string(cfg)
 
-	if !strings.Contains(s, "10.0.0.0/8+") {
+	if !strings.Contains(s, "10.0.0.0/8") {
 		t.Error("missing IPv4 authorized prefix")
 	}
-	if !strings.Contains(s, "2001:db8::/32+") {
+	if !strings.Contains(s, "2001:db8::/32") {
 		t.Error("missing IPv6 authorized prefix")
 	}
 }

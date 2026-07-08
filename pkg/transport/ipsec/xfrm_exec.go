@@ -259,6 +259,20 @@ func (d SystemXFRMDriver) AssignAddress(ctx context.Context, spec TransportLinkS
 	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
 }
 
+func (d SystemXFRMDriver) AssignExtraAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
+	if spec.InterfaceName == "" {
+		return errors.New("interface name is required")
+	}
+	if address == "" {
+		return errors.New("address is required")
+	}
+	netns, err := d.specNetNS(spec)
+	if err != nil {
+		return err
+	}
+	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
+}
+
 func (d SystemXFRMDriver) pruneInterfaceAddresses(ctx context.Context, netns NetNSSpec, name, target string) error {
 	targetPrefix, err := netip.ParsePrefix(target)
 	if err != nil {

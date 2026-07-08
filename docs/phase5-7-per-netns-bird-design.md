@@ -230,13 +230,13 @@ netns:
 | **Export filter** | BIRD 本地生成 | 只发布本节点 `AuthorizedRouteSet` 中的前缀 | ❌ 只对诚实节点有效；恶意节点可绕过 BIRD config 手工注入 |
 | **Import filter** | BIRD 接收端 | 接受所有落在 IPAM assignment 范围内的前缀 | ❌ **不检查来源**！任何 peer 宣告的前缀只要在 IPAM pool 范围内就被接受 |
 
-当前 import filter（`routing_reconcile.go:135`）只生成全局 prefix whitelist：
+当前 import filter 生成全局 authorized route prefix whitelist：
 
 ```go
-importSet := assignmentPrefixes(ars)  // 所有 IPAM assignment 前缀
+importSet := authorizedPrefixes(ars, nil)  // 所有已授权 route announcement 前缀
 ```
 
-`filter.go` 的 `RenderFilter` 只做 `net ~ [ prefix+ ]` 匹配——任何来自任何 peer 的路由，只要前缀落在授权空间内就接受。
+`filter.go` 的 `RenderFilter` 对 accept 侧使用 bounded prefix 匹配：IPv6 默认限制在授权基准前缀之下的 `/48..../96` 范围内，IPv4 限制在 `/18..../28` 范围内。这样允许节点把自己的授权段拆成更细路由，但不会让诊断 `/128`、IPv4 host route 或无界 more-specific 在 mesh 中传播。
 
 ### 6.3 关键矛盾：per-peer import filter 与 Babel 多跳传播冲突
 
@@ -262,7 +262,7 @@ import filter 仍基于全局授权前缀集（所有 IPAM assignment 范围）�
 filter higgs_import_h2 {
     if net ~ [ 0.0.0.0/0, ::/0 ] then reject;       # 拒绝 default route
     if net ~ [ bogon_prefixes+ ] then reject;         # 拒绝 bogon
-    if net ~ [ authorized_assignment_prefixes+ ]      # 接受所有授权前缀范围
+    if net ~ [ authorized_assignment_prefixes ]       # 接受授权 node prefix，不接受 node 内部 /128
     then accept;
     reject;                                           # 拒绝未授权前缀
 }

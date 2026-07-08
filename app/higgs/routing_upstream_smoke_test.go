@@ -255,7 +255,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 
 	// Generate BIRD config and verify the static route is rendered.
-	importSet := assignmentPrefixes(ars)
+	importSet := authorizedPrefixes(ars, nil)
 	exportSet := authorizedPrefixes(ars, []zone.ZonePath{"node-a.catofes."})
 	cfgBytes, err := bird.DefaultConfigGenerator{}.Generate(spec, importSet, exportSet)
 	if err != nil {
@@ -270,9 +270,52 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 		t.Errorf("BIRD config missing static route for 10.42.0.0/24\n%s", cfgStr)
 	}
 
-	// Verify import filter includes the assigned prefix.
-	if !strings.Contains(cfgStr, "10.42.0.0/24+") {
-		t.Errorf("BIRD config missing import filter for 10.42.0.0/24+\n%s", cfgStr)
+	// Verify import filter includes the assigned prefix exactly.
+	if !strings.Contains(cfgStr, "10.42.0.0/24") {
+		t.Errorf("BIRD config missing import filter for 10.42.0.0/24\n%s", cfgStr)
+	}
+}
+
+func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
+	now := time.Unix(1000, 0)
+	state, _, signers, _ := buildIPAMRoutingSmokeNetworkState(t)
+	addRouteAssignment(t, state, "catofes.", "10.42.0.0/24", "node-a.catofes.", true, now, signers["catofes."])
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	if err != nil {
+		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	yamlInstances := []routingInstanceYAML{{
+		ID:           "main",
+		NetNS:        "higgstesth2",
+		Enabled:      boolPtr(true),
+		Mode:         "managed",
+		InterfacePat: "hgs*",
+		Upstream: &upstreamConfigYAML{
+			Enabled:   boolPtr(true),
+			Mode:      upstreamModeExternal,
+			Interface: "hgs-2host",
+		},
+	}}
+	parsedCfg, err := parseRoutingConfigInstances(yamlInstances, netnsCfg, dataDir)
+	if err != nil {
+		t.Fatalf("parseRoutingConfigInstances: %v", err)
+	}
+	inst := parsedCfg.Instances[0]
+	ng := &netnsOverlayGroup{
+		NetNSName: "higgstesth2",
+		Overlays:  []string{"main"},
+		Spec:      ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+	}
+	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(state.Network), "higgstesth2")
+	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, ng, netnsCfg, ars, "node-a.catofes.")
+	if spec.Upstream == nil {
+		t.Fatal("expected upstream interface block")
+	}
+	if len(spec.StaticRoutes) != 0 {
+		t.Fatalf("external upstream static routes = %+v, want none", spec.StaticRoutes)
 	}
 }
 

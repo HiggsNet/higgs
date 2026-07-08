@@ -66,10 +66,6 @@ func writeDebugLinksFromBuild(w io.Writer, build linkInspectionBuild, filter str
 	})
 }
 
-func filterLinkViews(links []inspect.LinkView, filter string) []inspect.LinkView {
-	return inspect.FilterLinkViews(links, filter)
-}
-
 func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceState, groupID string) (state, neighborCount, bestRouteCount string) {
 	state = "-"
 	neighborCount = "-"

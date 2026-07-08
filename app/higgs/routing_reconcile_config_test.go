@@ -83,11 +83,11 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 
 	// Import filter should contain the IPAM assignment prefixes (authorized route
 	// space) for both local and remote zones.
-	if !strings.Contains(cfg, "10.0.0.0/16+") {
+	if !strings.Contains(cfg, "10.0.0.0/16") {
 		t.Errorf("import filter missing local assignment prefix 10.0.0.0/16")
 	}
-	if !strings.Contains(cfg, "10.1.0.0/16+") {
-		t.Errorf("import filter missing remote assignment prefix 10.1.0.0/16")
+	if !strings.Contains(cfg, "10.1.0.0/24") {
+		t.Errorf("import filter missing remote route prefix 10.1.0.0/24")
 	}
 
 	// Export filter should contain only the local prefix.
@@ -97,10 +97,10 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		t.Fatalf("missing import/export filters")
 	}
 	exportFilter := cfg[exportIdx:]
-	if !strings.Contains(exportFilter, "10.0.0.0/24+") {
+	if !strings.Contains(exportFilter, "10.0.0.0/24") {
 		t.Errorf("export filter missing local prefix 10.0.0.0/24")
 	}
-	if strings.Contains(exportFilter, "10.1.0.0/24+") {
+	if strings.Contains(exportFilter, "10.1.0.0/24") {
 		t.Errorf("export filter should not contain remote prefix 10.1.0.0/24")
 	}
 	if !strings.Contains(cfg, `interface "hgs*" {`) {

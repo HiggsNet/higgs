@@ -171,12 +171,22 @@ func assertDryRunApply(t *testing.T, driver *observedIPsecDriver, spec ipsec.Tra
 	if len(driver.Connections) != 1 || driver.Connections[0].TransportID != spec.TransportID {
 		t.Fatalf("connections = %+v, want one %s", driver.Connections, spec.TransportID)
 	}
-	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName || driver.Interfaces[0].XFRMIfID != spec.XFRMIfID {
+	if len(driver.Interfaces) == 0 {
 		t.Fatalf("interfaces = %+v, want %s/%d", driver.Interfaces, spec.InterfaceName, spec.XFRMIfID)
 	}
+	for _, iface := range driver.Interfaces {
+		if iface.InterfaceName != spec.InterfaceName || iface.XFRMIfID != spec.XFRMIfID {
+			t.Fatalf("interfaces = %+v, want only %s/%d", driver.Interfaces, spec.InterfaceName, spec.XFRMIfID)
+		}
+	}
 	wantAddr := spec.InterfaceName + "=" + netip.PrefixFrom(spec.LocalTunnelAddr, 32).String()
-	if len(driver.Addresses) != 1 || driver.Addresses[0] != wantAddr {
+	if len(driver.Addresses) == 0 {
 		t.Fatalf("addresses = %+v, want %s", driver.Addresses, wantAddr)
+	}
+	for _, addr := range driver.Addresses {
+		if addr != wantAddr {
+			t.Fatalf("addresses = %+v, want only %s", driver.Addresses, wantAddr)
+		}
 	}
 }
 
