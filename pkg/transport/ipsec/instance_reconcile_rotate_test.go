@@ -302,14 +302,23 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	}
 	newSpec := plan.Desired[0]
 
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	oldSpec, err := RuntimeSpecForPortGeneration(newSpec, group, 1)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(old): %v", err)
+	}
+	stagedSpec, err := RuntimeSpecForPortGeneration(newSpec, group, 2)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(staged): %v", err)
+	}
+	existing := NewLinkInstance(oldSpec, LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedRuntimeID(existing, 2)
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
-	stagedSpec := rotateSpec(newSpec, 2)
 	existing.StagedInterfaceName = stagedSpec.InterfaceName
 	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
+	existing.StagedLocalTunnelAddr = oldSpec.LocalTunnelAddr
+	existing.StagedPeerTunnelAddr = oldSpec.PeerTunnelAddr
 	existing.RotatePhase = RotatePhaseDualRunning
 	existing.RotateDeadline = now.Add(-time.Second).Unix()
 
@@ -320,7 +329,8 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 			{Name: existing.IKEName, Established: true},
 			{Name: existing.StagedIKEName, Established: true},
 		},
-		Now: now,
+		Now:        now,
+		GroupSpecs: map[string]LinkGroupSpec{group.ID: group},
 	})
 
 	action := firstAction(result, ReconcileActionCommitRotate)
@@ -342,6 +352,9 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	}
 	if inst.XFRMIfID != stagedSpec.XFRMIfID {
 		t.Fatalf("if_id = %d, want promoted staged if_id %d", inst.XFRMIfID, stagedSpec.XFRMIfID)
+	}
+	if inst.LocalTunnelAddr != stagedSpec.LocalTunnelAddr || inst.PeerTunnelAddr != stagedSpec.PeerTunnelAddr {
+		t.Fatalf("promoted tunnel addrs = %s/%s, want derived staged %s/%s", inst.LocalTunnelAddr, inst.PeerTunnelAddr, stagedSpec.LocalTunnelAddr, stagedSpec.PeerTunnelAddr)
 	}
 }
 

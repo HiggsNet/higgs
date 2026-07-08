@@ -324,6 +324,37 @@ func applyRuntimeGeneration(spec *TransportLinkSpec, group LinkGroupSpec, linkIn
 	return nil
 }
 
+// RuntimeSpecForPortGeneration returns the runtime resources for a link at a
+// specific port generation. Derived tunnel address modes are epoch-scoped;
+// sequential pool addresses are stable across generations and keep base addrs.
+func RuntimeSpecForPortGeneration(base TransportLinkSpec, group LinkGroupSpec, generation uint64) (TransportLinkSpec, error) {
+	spec := base
+	spec.Generation = generation
+	runtimeGeneration := runtimeGenerationForPortGeneration(generation)
+	spec.AddressEpoch = runtimeGeneration
+	if spec.LinkID != "" {
+		spec.TransportID = RuntimeConnectionID(spec.LinkID, runtimeGeneration, spec.Provider)
+		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, runtimeGeneration, spec.Provider)
+	} else {
+		spec.XFRMIfID = StableXFRMIfID(spec.LocalZone, spec.PeerZone, spec.TransportID)
+	}
+	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
+	if group.ID == "" {
+		return spec, nil
+	}
+	tunnel := group.normalizedTunnelAddress()
+	if tunnel.Mode == TunnelAddressSequentialPool {
+		return spec, nil
+	}
+	localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(spec.LocalZone, spec.PeerZone, spec.LinkID, spec.PathKey, spec.AddressEpoch, 0)
+	if err != nil {
+		return TransportLinkSpec{}, err
+	}
+	spec.LocalTunnelAddr = localAddr
+	spec.PeerTunnelAddr = peerAddr
+	return spec, nil
+}
+
 func canLoadResponder(localRole string) bool {
 	return localRole == RoleIn || localRole == RoleBoth
 }

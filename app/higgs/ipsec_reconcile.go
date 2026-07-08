@@ -66,6 +66,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		Now:                  now,
 		Revoked:              revokedLinkPeers(snapshot, now),
 		Roles:                plan.Roles,
+		GroupSpecs:           groupSpecMap(groups),
 		GroupBackoff:         groupBackoffMap(groups),
 		GroupRotateRetention: groupRotateRetentionMap(groups),
 		RotateCutoverReady:   d.ipsecRotateCutoverReady(),
@@ -87,7 +88,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			markIPsecActionSucceeded(result.Instances, action, now)
 		}
 	}
-	if err := d.maintainExistingXFRMInterfaces(ctx, xfrmDriver, plan.Desired, result.Instances, result.Actions); err != nil {
+	if err := d.maintainExistingXFRMInterfaces(ctx, xfrmDriver, plan.Desired, result.Instances, result.Actions, groups); err != nil {
 		if saveErr := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
@@ -99,7 +100,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	return nil
 }
 
-func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, actions []ipsec.ReconcileAction) error {
+func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, actions []ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) error {
 	driver, ok := xfrmDriver.(interface {
 		ipsec.XFRMDriver
 		ipsec.XFRMLinkInspector
@@ -140,7 +141,7 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 		if !ok || !shouldMaintainXFRMInstance(inst) {
 			continue
 		}
-		candidate := xfrmMaintenanceSpec(spec, inst)
+		candidate := xfrmMaintenanceSpec(spec, inst, groups)
 		state, err := driver.InspectLink(ctx, candidate)
 		if err != nil {
 			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
@@ -204,13 +205,25 @@ func shouldMaintainXFRMInstance(inst ipsec.LinkInstance) bool {
 	}
 }
 
-func xfrmMaintenanceSpec(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance) ipsec.TransportLinkSpec {
-	out := spec
+func xfrmMaintenanceSpec(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance, groups []ipsec.LinkGroupSpec) ipsec.TransportLinkSpec {
+	out := runtimeSpecForInstanceGeneration(spec, inst, groups)
 	if inst.InterfaceName != "" {
 		out.InterfaceName = inst.InterfaceName
 	}
 	if inst.XFRMIfID != 0 {
 		out.XFRMIfID = inst.XFRMIfID
+	}
+	return out
+}
+
+func runtimeSpecForInstanceGeneration(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance, groups []ipsec.LinkGroupSpec) ipsec.TransportLinkSpec {
+	generation := inst.RemoteGeneration
+	if generation == 0 {
+		generation = spec.Generation
+	}
+	out, err := ipsec.RuntimeSpecForPortGeneration(spec, linkGroupForSpec(spec, groups), generation)
+	if err != nil {
+		return spec
 	}
 	return out
 }
@@ -1175,6 +1188,23 @@ func actionInstanceID(action ipsec.ReconcileAction) string {
 		return ipsec.LinkInstanceID(*action.Spec)
 	}
 	return ""
+}
+
+func groupSpecMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.LinkGroupSpec {
+	out := make(map[string]ipsec.LinkGroupSpec, len(groups))
+	for _, group := range groups {
+		out[group.ID] = group.Normalized()
+	}
+	return out
+}
+
+func linkGroupForSpec(spec ipsec.TransportLinkSpec, groups []ipsec.LinkGroupSpec) ipsec.LinkGroupSpec {
+	for _, group := range groups {
+		if group.ID == spec.OverlayID {
+			return group.Normalized()
+		}
+	}
+	return ipsec.LinkGroupSpec{}
 }
 
 func groupBackoffMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.BackoffPolicy {

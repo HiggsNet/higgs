@@ -80,7 +80,7 @@ func TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink(t *testing.T) {
 	driver := &observedIPsecDriver{}
 	service := &DaemonService{}
 
-	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}); err != nil {
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != "hgs1" {
@@ -88,6 +88,49 @@ func TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink(t *testing.T) {
 	}
 	if len(driver.Addresses) != 1 || driver.Addresses[0] != "hgs1=fe80::1/64" {
 		t.Fatalf("addresses = %+v, want link-local /64 maintenance", driver.Addresses)
+	}
+}
+
+func TestMaintainExistingXFRMInterfacesUsesRuntimeAddressDuringRotate(t *testing.T) {
+	group := ipsec.LinkGroupSpec{ID: "main"}
+	base := ipsec.TransportLinkSpec{
+		LocalZone: "node-a.catofes.",
+		PeerZone:  "node-b.catofes.",
+		OverlayID: "main",
+		Provider:  ipsec.ProviderStrongSwan,
+		LinkID:    "link-stable",
+		NetNS:     "higgstesth2",
+	}
+	desired, err := ipsec.RuntimeSpecForPortGeneration(base, group, 2)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(desired): %v", err)
+	}
+	oldRuntime, err := ipsec.RuntimeSpecForPortGeneration(base, group, 1)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(old): %v", err)
+	}
+	inst := ipsec.NewLinkInstance(oldRuntime, ipsec.LinkStateUp, time.Unix(4000, 0))
+	inst.RemoteGeneration = 1
+	inst.RotatePhase = ipsec.RotatePhaseDualRunning
+	inst.StagedIKEName = desired.TransportID
+	inst.StagedInterfaceName = desired.InterfaceName
+	inst.StagedXFRMIfID = desired.XFRMIfID
+	inst.StagedLocalTunnelAddr = desired.LocalTunnelAddr
+	inst.StagedPeerTunnelAddr = desired.PeerTunnelAddr
+	inst.LocalTunnelAddr = desired.LocalTunnelAddr
+	inst.PeerTunnelAddr = desired.PeerTunnelAddr
+	driver := &observedIPsecDriver{}
+	service := &DaemonService{}
+
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{desired}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Reason: "route_cutover_pending", Instance: &inst}}, []ipsec.LinkGroupSpec{group}); err != nil {
+		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
+	}
+	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != oldRuntime.InterfaceName {
+		t.Fatalf("interfaces = %+v, want old runtime interface maintenance", driver.Interfaces)
+	}
+	wantAddress := oldRuntime.InterfaceName + "=" + netip.PrefixFrom(oldRuntime.LocalTunnelAddr, 64).String()
+	if len(driver.Addresses) != 1 || driver.Addresses[0] != wantAddress {
+		t.Fatalf("addresses = %+v, want old runtime address preserved", driver.Addresses)
 	}
 }
 
@@ -103,7 +146,7 @@ func TestMaintainExistingXFRMInterfacesRefreshesAdoptedLink(t *testing.T) {
 	driver := &observedIPsecDriver{}
 	service := &DaemonService{}
 
-	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionAdopt, Spec: &spec, Instance: &inst}}); err != nil {
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionAdopt, Spec: &spec, Instance: &inst}}, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != "hgs1" {
@@ -126,7 +169,7 @@ func TestMaintainExistingXFRMInterfacesSkipsLinkWithActiveAction(t *testing.T) {
 	driver := &observedIPsecDriver{}
 	service := &DaemonService{}
 
-	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionCreate, Spec: &spec}}); err != nil {
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionCreate, Spec: &spec}}, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if len(driver.Interfaces) != 0 || len(driver.Addresses) != 0 {
