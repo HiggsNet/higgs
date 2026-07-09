@@ -294,8 +294,8 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 
 	// Upstream interfaces from routing config.
 	for _, inst := range config.Routing.Instances {
-		if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Interface != "" {
-			input.UpstreamInterfaces = append(input.UpstreamInterfaces, inst.Upstream.Interface)
+		if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.MeshInterface != "" {
+			input.UpstreamInterfaces = append(input.UpstreamInterfaces, inst.Upstream.MeshInterface)
 		}
 	}
 

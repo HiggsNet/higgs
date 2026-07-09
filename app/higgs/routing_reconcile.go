@@ -337,14 +337,14 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 	// Ensure veth pair for upstream if configured and create_veth is true.
 	if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.CreateVeth {
 		vspec := bird.VethSpec{
-			MeshInterface: inst.Upstream.Interface,
-			PeerInterface: inst.Upstream.PeerInterface,
+			MeshInterface: inst.Upstream.MeshInterface,
+			PeerInterface: inst.Upstream.ExternalInterface,
 			MeshNetns:     netnsName,
-			PeerNetns:     inst.Upstream.PeerNetns,
-			MeshIPv4LL:    inst.Upstream.IPv4LL,
-			MeshIPv6LL:    inst.Upstream.IPv6LL,
-			PeerIPv4LL:    inst.Upstream.DownstreamIPv4LL,
-			PeerIPv6LL:    inst.Upstream.DownstreamIPv6LL,
+			PeerNetns:     inst.Upstream.ExternalNetns,
+			MeshIPv4LL:    inst.Upstream.MeshIPv4LL,
+			MeshIPv6LL:    inst.Upstream.MeshIPv6LL,
+			PeerIPv4LL:    inst.Upstream.ExternalIPv4LL,
+			PeerIPv6LL:    inst.Upstream.ExternalIPv6LL,
 		}
 		vm := d.vethManager
 		if vm == nil {
@@ -725,7 +725,7 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 	// Wire upstream config into BIRD spec.
 	if inst.Upstream != nil && inst.Upstream.Enabled {
 		spec.Upstream = &bird.UpstreamSpec{
-			Interface: inst.Upstream.Interface,
+			Interface: inst.Upstream.MeshInterface,
 		}
 	}
 
@@ -734,7 +734,7 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 		for _, prefix := range localAssignedPrefixes(ars, managedZone) {
 			via := ""
 			if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == upstreamModeStatic {
-				via = inst.Upstream.Interface
+				via = inst.Upstream.MeshInterface
 			}
 			spec.StaticRoutes = append(spec.StaticRoutes, bird.StaticRouteSpec{
 				Prefix: prefix,

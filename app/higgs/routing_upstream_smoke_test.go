@@ -40,14 +40,18 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 		Mode:         ipsec.RoutingModeManaged,
 		InterfacePat: "hgs*",
 		Upstream: &upstreamConfigYAML{
-			Enabled:             boolPtr(true),
-			UpstreamInterface:   "hgs-2host",
-			CreateVeth:          boolPtr(true),
-			DownstreamInterface: "hgs-2higgs",
-			UpstreamIPv4LL:      "169.254.0.1/30",
-			DownstreamIPv4LL:    "169.254.0.2/30",
-			UpstreamIPv6LL:      "fe80::1/64",
-			DownstreamIPv6LL:    "fe80::2/64",
+			Enabled:    boolPtr(true),
+			CreateVeth: boolPtr(true),
+			Mesh: upstreamEndpointYAML{
+				Interface: "hgs-2host",
+				IPv4LL:    "169.254.0.1/30",
+				IPv6LL:    "fe80::1/64",
+			},
+			External: upstreamEndpointYAML{
+				Interface: "hgs-2higgs",
+				IPv4LL:    "169.254.0.2/30",
+				IPv6LL:    "fe80::2/64",
+			},
 		},
 	}}
 	appConfig.Routing, _ = parseRoutingConfigInstances(upstreamYAML, appConfig.Netns, appConfig.DataDir)
@@ -219,9 +223,11 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 		Mode:         "managed",
 		InterfacePat: "hgs*",
 		Upstream: &upstreamConfigYAML{
-			Enabled:   boolPtr(true),
-			Interface: "hgs-2host",
-			IPv6LL:    "fe80::1/64",
+			Enabled: boolPtr(true),
+			Mesh: upstreamEndpointYAML{
+				Interface: "hgs-2host",
+				IPv6LL:    "fe80::1/64",
+			},
 		},
 	}}
 	parsedCfg, err := parseRoutingConfigInstances(yamlInstances, netnsCfg, dataDir)
@@ -294,9 +300,11 @@ func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
 		Mode:         "managed",
 		InterfacePat: "hgs*",
 		Upstream: &upstreamConfigYAML{
-			Enabled:   boolPtr(true),
-			Mode:      upstreamModeExternal,
-			Interface: "hgs-2host",
+			Enabled: boolPtr(true),
+			Mode:    upstreamModeExternal,
+			Mesh: upstreamEndpointYAML{
+				Interface: "hgs-2host",
+			},
 		},
 	}}
 	parsedCfg, err := parseRoutingConfigInstances(yamlInstances, netnsCfg, dataDir)

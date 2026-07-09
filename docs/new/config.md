@@ -229,7 +229,7 @@ routing:
 - `mode` 可为 `managed`、`external`、`disabled`。
 - `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Higgs 启动和配置，但默认不会随 Higgs daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
-- `upstream` 可让 Higgs 创建 veth，把 mesh netns 接到主网络或另一个 namespace。
+- `upstream` 可让 Higgs 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。
 - `ipam.auto_announce_assigned_ips` 为 true 时，daemon 会把分配给 `managed_zone` 的 IPAM assignment 自动发布为 route announcement。
 
 ## Firewall

@@ -14,13 +14,15 @@ instances:
     netns: higgstesth2
     upstream:
       create_veth: true
-      upstream_interface: hgs-2host
-      downstream_interface: hgs-2higgs
-      peer_netns: ""
-      upstream_ipv4_ll: "169.254.0.1/30"
-      downstream_ipv4_ll: "169.254.0.2/30"
-      upstream_ipv6_ll: "fe80::1/64"
-      downstream_ipv6_ll: "fe80::2/64"
+      mesh:
+        interface: hgs-2host
+        ipv4_ll: "169.254.0.1/30"
+        ipv6_ll: "fe80::1/64"
+      external:
+        interface: hgs-2higgs
+        netns: ""
+        ipv4_ll: "169.254.0.2/30"
+        ipv6_ll: "fe80::2/64"
 `
 	var yamlCfg routingInstancesYAML
 	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
@@ -47,29 +49,29 @@ instances:
 	if inst.Upstream.Mode != upstreamModeStatic {
 		t.Errorf("mode = %q, want static", inst.Upstream.Mode)
 	}
-	if inst.Upstream.Interface != "hgs-2host" {
-		t.Errorf("interface = %q, want hgs-2host", inst.Upstream.Interface)
+	if inst.Upstream.MeshInterface != "hgs-2host" {
+		t.Errorf("mesh interface = %q, want hgs-2host", inst.Upstream.MeshInterface)
 	}
 	if !inst.Upstream.CreateVeth {
 		t.Error("create_veth not set")
 	}
-	if inst.Upstream.PeerInterface != "hgs-2higgs" {
-		t.Errorf("peer_interface = %q, want hgs-2higgs", inst.Upstream.PeerInterface)
+	if inst.Upstream.ExternalInterface != "hgs-2higgs" {
+		t.Errorf("external interface = %q, want hgs-2higgs", inst.Upstream.ExternalInterface)
 	}
-	if inst.Upstream.PeerNetns != "" {
-		t.Errorf("peer_netns = %q, want empty", inst.Upstream.PeerNetns)
+	if inst.Upstream.ExternalNetns != "" {
+		t.Errorf("external netns = %q, want empty", inst.Upstream.ExternalNetns)
 	}
-	if inst.Upstream.IPv4LL != "169.254.0.1/30" {
-		t.Errorf("upstream ipv4_ll = %q, want 169.254.0.1/30", inst.Upstream.IPv4LL)
+	if inst.Upstream.MeshIPv4LL != "169.254.0.1/30" {
+		t.Errorf("mesh ipv4_ll = %q, want 169.254.0.1/30", inst.Upstream.MeshIPv4LL)
 	}
-	if inst.Upstream.DownstreamIPv4LL != "169.254.0.2/30" {
-		t.Errorf("downstream ipv4_ll = %q, want 169.254.0.2/30", inst.Upstream.DownstreamIPv4LL)
+	if inst.Upstream.ExternalIPv4LL != "169.254.0.2/30" {
+		t.Errorf("external ipv4_ll = %q, want 169.254.0.2/30", inst.Upstream.ExternalIPv4LL)
 	}
-	if inst.Upstream.IPv6LL != "fe80::1/64" {
-		t.Errorf("upstream ipv6_ll = %q, want fe80::1/64", inst.Upstream.IPv6LL)
+	if inst.Upstream.MeshIPv6LL != "fe80::1/64" {
+		t.Errorf("mesh ipv6_ll = %q, want fe80::1/64", inst.Upstream.MeshIPv6LL)
 	}
-	if inst.Upstream.DownstreamIPv6LL != "fe80::2/64" {
-		t.Errorf("downstream ipv6_ll = %q, want fe80::2/64", inst.Upstream.DownstreamIPv6LL)
+	if inst.Upstream.ExternalIPv6LL != "fe80::2/64" {
+		t.Errorf("external ipv6_ll = %q, want fe80::2/64", inst.Upstream.ExternalIPv6LL)
 	}
 }
 
@@ -117,60 +119,6 @@ instances:
 	}}
 	if _, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp"); err == nil {
 		t.Fatal("expected invalid upstream mode error")
-	}
-}
-
-func TestParseUpstreamConfigLegacyFieldAliases(t *testing.T) {
-	yamlInput := `
-instances:
-  - id: main
-    netns: higgstesth2
-    upstream:
-      interface: hgs-2host
-      peer_interface: hgs-upstream1
-      ipv4_ll: "169.254.0.1/30"
-      ipv6_ll: "fe80::1/64"
-`
-	var yamlCfg routingInstancesYAML
-	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
-		t.Fatalf("yaml unmarshal: %v", err)
-	}
-
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
-	}}
-	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
-	if err != nil {
-		t.Fatalf("parseRoutingConfigInstances: %v", err)
-	}
-	inst := cfg.Instances[0]
-	if inst.Upstream.Interface != "hgs-2host" || inst.Upstream.PeerInterface != "hgs-upstream1" {
-		t.Fatalf("legacy interfaces = %q/%q", inst.Upstream.Interface, inst.Upstream.PeerInterface)
-	}
-	if inst.Upstream.IPv4LL != "169.254.0.1/30" || inst.Upstream.IPv6LL != "fe80::1/64" {
-		t.Fatalf("legacy addresses = %q/%q", inst.Upstream.IPv4LL, inst.Upstream.IPv6LL)
-	}
-}
-
-func TestParseUpstreamConfigRejectsConflictingAliases(t *testing.T) {
-	yamlInput := `
-instances:
-  - id: main
-    netns: higgstesth2
-    upstream:
-      upstream_interface: hgs-2host
-      interface: hgs-other0
-`
-	var yamlCfg routingInstancesYAML
-	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
-		t.Fatalf("yaml unmarshal: %v", err)
-	}
-
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
-	}}
-	if _, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp"); err == nil {
-		t.Fatal("expected conflicting alias error")
 	}
 }
 
@@ -250,11 +198,46 @@ instances:
 	if inst.Upstream == nil || !inst.Upstream.Enabled {
 		t.Fatal("upstream should be enabled")
 	}
-	if inst.Upstream.Interface != "hgs-2host" {
-		t.Errorf("default interface = %q, want hgs-2host", inst.Upstream.Interface)
+	if inst.Upstream.MeshInterface != "hgs-2host" {
+		t.Errorf("default mesh interface = %q, want hgs-2host", inst.Upstream.MeshInterface)
 	}
-	if inst.Upstream.PeerInterface != "hgs-2higgs" {
-		t.Errorf("default peer_interface = %q, want hgs-2higgs", inst.Upstream.PeerInterface)
+	if inst.Upstream.ExternalInterface != "hgs-2higgs" {
+		t.Errorf("default external interface = %q, want hgs-2higgs", inst.Upstream.ExternalInterface)
+	}
+	if !inst.Upstream.CreateVeth {
+		t.Error("default create_veth = false, want true")
+	}
+	if inst.Upstream.ExternalNetns != "" {
+		t.Errorf("default external netns = %q, want empty host/init netns", inst.Upstream.ExternalNetns)
+	}
+}
+
+func TestParseUpstreamConfigCreateVethCanBeDisabled(t *testing.T) {
+	yamlInput := `
+instances:
+  - id: main
+    netns: higgstesth2
+    upstream:
+      create_veth: false
+`
+	var yamlCfg routingInstancesYAML
+	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+
+	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
+	}}
+	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
+	if err != nil {
+		t.Fatalf("parseRoutingConfigInstances: %v", err)
+	}
+	inst := cfg.Instances[0]
+	if inst.Upstream == nil || !inst.Upstream.Enabled {
+		t.Fatal("upstream should be enabled")
+	}
+	if inst.Upstream.CreateVeth {
+		t.Error("create_veth = true, want explicit false")
 	}
 }
 
@@ -264,7 +247,8 @@ instances:
   - id: main
     netns: higgstesth2
     upstream:
-      upstream_ipv4_ll: "not-a-cidr"
+      mesh:
+        ipv4_ll: "not-a-cidr"
 `
 	var yamlCfg routingInstancesYAML
 	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
@@ -276,7 +260,7 @@ instances:
 	}}
 	_, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err == nil {
-		t.Fatal("expected error for invalid upstream_ipv4_ll")
+		t.Fatal("expected error for invalid mesh.ipv4_ll")
 	}
 }
 
@@ -286,7 +270,8 @@ instances:
   - id: main
     netns: higgstesth2
     upstream:
-      downstream_ipv6_ll: "not-a-cidr"
+      external:
+        ipv6_ll: "not-a-cidr"
 `
 	var yamlCfg routingInstancesYAML
 	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
@@ -298,6 +283,6 @@ instances:
 	}}
 	_, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
 	if err == nil {
-		t.Fatal("expected error for invalid downstream_ipv6_ll")
+		t.Fatal("expected error for invalid external.ipv6_ll")
 	}
 }

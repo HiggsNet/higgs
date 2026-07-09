@@ -235,23 +235,25 @@ routing:
       # rendering does not emit Babel ECMP directives; leave them unset here.
 
       # Optional veth upstream for main-network Babel peering. Higgs starts BIRD
-      # in the target netns; BIRD itself cannot switch namespaces after start.
+      # in the routing instance netns; BIRD itself cannot switch namespaces
+      # after start. The upstream veth mesh side also uses this instance netns.
       # If upstream is omitted, local assigned prefixes are exported with a
       # local blackhole route in this netns. If upstream is enabled, mode
       # defaults to static: local assigned prefixes are routed toward the veth.
       # mode: external only makes mesh-side BIRD listen on the veth; host-side
       # routing/BIRD is administrator-managed and Higgs does not add static routes.
-      # upstream:
-      #   disabled: true
+      # upstream:  # upstream: {} or any non-disabled upstream block enables it.
       #   mode: static  # static | external
-      #   create_veth: true
-      #   upstream_interface: hgs-2host     # mesh netns side, toward host
-      #   downstream_interface: hgs-2higgs  # peer_netns / host side, toward Higgs
-      #   peer_netns: ""          # empty = init/main netns
-      #   upstream_ipv4_ll: 169.254.0.1/30
-      #   downstream_ipv4_ll: 169.254.0.2/30
-      #   upstream_ipv6_ll: fe80::1/64
-      #   downstream_ipv6_ll: fe80::2/64
+      #   create_veth: true          # default true; set false for pre-created veth pairs
+      #   mesh:
+      #     interface: hgs-2host     # routing instance netns side, toward host
+      #     ipv4_ll: 169.254.0.1/30
+      #     ipv6_ll: fe80::1/64
+      #   external:
+      #     interface: hgs-2higgs    # host/upstream netns side, toward Higgs
+      #     netns: ""                # optional; empty = init/main host netns
+      #     ipv4_ll: 169.254.0.2/30
+      #     ipv6_ll: fe80::2/64
 
 # -----------------------------------------------------------------------------
 # 5. Firewall, health probes, and read-only observer

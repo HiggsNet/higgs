@@ -364,14 +364,16 @@ routing:
       metric_base: 100
       interface_pattern: "hgs*"            # XFRM tunnel 接口
       upstream:
-        create_veth: true                  # 是否由 Higgs 创建并维护 veth pair
-        upstream_interface: "hgs-2host"       # mesh netns 内的 veth 端
-        downstream_interface: "hgs-2higgs"    # 主网络端（init netns 或其他 ns）
-        peer_netns: ""                     # 空表示主网络（init netns）
-        upstream_ipv4_ll: "169.254.0.1/30"
-        downstream_ipv4_ll: "169.254.0.2/30"
-        upstream_ipv6_ll: "fe80::1/64"
-        downstream_ipv6_ll: "fe80::2/64"
+        create_veth: true                  # 是否由 Higgs 创建并维护 veth pair；默认 true
+        mesh:
+          interface: "hgs-2host"           # routing instance netns 内的 veth 端
+          ipv4_ll: "169.254.0.1/30"
+          ipv6_ll: "fe80::1/64"
+        external:
+          interface: "hgs-2higgs"          # 主网络端（init netns 或其他 ns）
+          netns: ""                        # 空表示主网络（init netns）
+          ipv4_ll: "169.254.0.2/30"
+          ipv6_ll: "fe80::2/64"
 
 overlays:
   - id: ipsec-main
@@ -379,8 +381,8 @@ overlays:
     # routing 不再在 overlay 层级配置
 ```
 
-- `upstream_interface` 与 `downstream_interface` 组成一对 veth；Higgs 在 reconcile 时确保存在、up、两端地址正确。旧字段 `interface` / `peer_interface` 仍作为兼容别名读取。
-- 如果管理员已手工创建 veth，可设置 `create_veth: false`，Higgs 只负责在 BIRD config 中引用它。
+- `mesh.interface` 与 `external.interface` 组成一对 veth；mesh 端位于 routing instance 的 netns，external 端位于 `external.netns`，省略或为空时是 init/main host netns。Higgs 在 reconcile 时确保存在、up、两端地址正确。
+- 启用 `upstream` 后默认创建并维护 veth；如果管理员已手工创建 veth，可设置 `create_veth: false`，Higgs 只负责在 BIRD config 中引用它。
 - veth 上的 Babel 邻居发现需要接口具备 IPv6 link-local 地址；若只有 IPv4 地址，需改用单播 `neighbor` 配置或额外分配 link-local。
 - 同一 netns 下的所有 overlay 共享同一个 BIRD 实例和同一个 `upstream` 配置。
 
