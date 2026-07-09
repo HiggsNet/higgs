@@ -201,17 +201,47 @@ routing:
 		t.Fatalf("Routing.Instances len = %d, want 1", len(config.Routing.Instances))
 	}
 	inst := config.Routing.Instances[0]
-	if inst.NetNS != "default" {
-		t.Fatalf("inst.NetNS = %q, want default", inst.NetNS)
+	if inst.NetNS != "higgstesth2" {
+		t.Fatalf("inst.NetNS = %q, want resolved default higgstesth2", inst.NetNS)
 	}
-	if inst.ControlSocket != filepath.Join(config.DataDir, "bird", "bird-default.ctl") {
-		t.Fatalf("inst.ControlSocket = %q, want default-derived path", inst.ControlSocket)
+	if inst.ControlSocket != filepath.Join(config.DataDir, "bird", "bird-higgstesth2.ctl") {
+		t.Fatalf("inst.ControlSocket = %q, want resolved-netns-derived path", inst.ControlSocket)
 	}
-	if inst.PIDFile != filepath.Join(config.DataDir, "bird", "bird-default.pid") {
-		t.Fatalf("inst.PIDFile = %q, want default-derived path", inst.PIDFile)
+	if inst.PIDFile != filepath.Join(config.DataDir, "bird", "bird-higgstesth2.pid") {
+		t.Fatalf("inst.PIDFile = %q, want resolved-netns-derived path", inst.PIDFile)
 	}
-	if inst.ConfigFile != filepath.Join(config.DataDir, "bird", "bird-default.conf") {
-		t.Fatalf("inst.ConfigFile = %q, want default-derived path", inst.ConfigFile)
+	if inst.ConfigFile != filepath.Join(config.DataDir, "bird", "bird-higgstesth2.conf") {
+		t.Fatalf("inst.ConfigFile = %q, want resolved-netns-derived path", inst.ConfigFile)
+	}
+}
+
+func TestParseConfigYAMLRoutingUpstreamDefaultUsesResolvedDefaultNetNS(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+routing:
+  instances:
+    - id: main
+      upstream: {}
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if len(config.Routing.Instances) != 1 {
+		t.Fatalf("Routing.Instances len = %d, want 1", len(config.Routing.Instances))
+	}
+	inst := config.Routing.Instances[0]
+	if inst.NetNS != ipsec.DefaultNetNSName {
+		t.Fatalf("inst.NetNS = %q, want default netns target %q", inst.NetNS, ipsec.DefaultNetNSName)
+	}
+	if inst.Upstream == nil || !inst.Upstream.Enabled {
+		t.Fatal("upstream should be enabled")
+	}
+	if !inst.Upstream.CreateVeth {
+		t.Fatal("upstream create_veth should default to true")
+	}
+	if inst.Upstream.MeshInterface != "hgs-2host" || inst.Upstream.ExternalInterface != "hgs-2higgs" {
+		t.Fatalf("upstream interfaces = %q/%q, want hgs-2host/hgs-2higgs", inst.Upstream.MeshInterface, inst.Upstream.ExternalInterface)
 	}
 }
 

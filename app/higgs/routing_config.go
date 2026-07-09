@@ -203,6 +203,7 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 	if !ok {
 		return RoutingInstance{}, fmt.Errorf("netns %q not found in netns section", yi.NetNS)
 	}
+	netnsName := routingNetNSTarget(spec)
 	// path netns requires router_id_label
 	if spec.Kind == ipsec.NetNSPath && yi.RouterIDLabel == "" {
 		return RoutingInstance{}, fmt.Errorf("router_id_label is required when netns uses path mode")
@@ -263,15 +264,15 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 	configDir := filepath.Join(dataDir, "bird")
 	controlSocket := yi.ControlSocket
 	if controlSocket == "" {
-		controlSocket = filepath.Join(configDir, fmt.Sprintf("bird-%s.ctl", yi.NetNS))
+		controlSocket = filepath.Join(configDir, fmt.Sprintf("bird-%s.ctl", netnsName))
 	}
 	pidFile := yi.PIDFile
 	if pidFile == "" {
-		pidFile = filepath.Join(configDir, fmt.Sprintf("bird-%s.pid", yi.NetNS))
+		pidFile = filepath.Join(configDir, fmt.Sprintf("bird-%s.pid", netnsName))
 	}
 	configFile := yi.ConfigFile
 	if configFile == "" {
-		configFile = filepath.Join(configDir, fmt.Sprintf("bird-%s.conf", yi.NetNS))
+		configFile = filepath.Join(configDir, fmt.Sprintf("bird-%s.conf", netnsName))
 	}
 
 	upstream, err := parseUpstreamConfig(yi.Upstream)
@@ -281,7 +282,7 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 
 	return RoutingInstance{
 		ID:             yi.ID,
-		NetNS:          yi.NetNS,
+		NetNS:          netnsName,
 		Enabled:        enabled,
 		Protocol:       provider,
 		Mode:           mode,
@@ -299,6 +300,13 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		RouterIDLabel:  yi.RouterIDLabel,
 		Upstream:       upstream,
 	}, nil
+}
+
+func routingNetNSTarget(spec ipsec.NetNSSpec) string {
+	if target := spec.Target(); target != "" {
+		return target
+	}
+	return ipsec.NetNSHost
 }
 
 func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {

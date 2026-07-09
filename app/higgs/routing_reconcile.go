@@ -353,7 +353,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 		if err := vm.EnsureVethPair(ctx, vspec); err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastError = fmt.Sprintf("ensure veth: %s", err)
-			// Non-fatal in dry-run: continue with BIRD config generation.
+			return fmt.Errorf("ensure upstream veth for netns %q: %w", netnsName, err)
 		}
 	}
 
