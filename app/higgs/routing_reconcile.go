@@ -48,6 +48,16 @@ type vethManager interface {
 	DeleteVethPair(ctx context.Context, spec bird.VethSpec) error
 }
 
+type upstreamRouteManager interface {
+	EnsureRoutes(ctx context.Context, spec upstreamRouteSpec) error
+}
+
+type upstreamRouteSpec struct {
+	NetNS     string
+	Interface string
+	Prefixes  []netip.Prefix
+}
+
 // birdClient is the subset of bird.Client used by the daemon.
 type birdClient interface {
 	Status(ctx context.Context) (*bird.BirdObservedState, error)
@@ -354,6 +364,22 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			instState.State = birdInstanceStateError
 			instState.LastError = fmt.Sprintf("ensure veth: %s", err)
 			return fmt.Errorf("ensure upstream veth for netns %q: %w", netnsName, err)
+		}
+	}
+	if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == upstreamModeStatic {
+		rm := d.upstreamRouteManager
+		if rm == nil {
+			rm = newExecUpstreamRouteManager()
+		}
+		rspec := upstreamRouteSpec{
+			NetNS:     inst.Upstream.ExternalNetns,
+			Interface: inst.Upstream.ExternalInterface,
+			Prefixes:  externalUpstreamRoutePrefixes(ars, state.ManagedZone),
+		}
+		if err := rm.EnsureRoutes(ctx, rspec); err != nil {
+			instState.State = birdInstanceStateError
+			instState.LastError = fmt.Sprintf("ensure upstream routes: %s", err)
+			return fmt.Errorf("ensure upstream routes for netns %q: %w", netnsName, err)
 		}
 	}
 
@@ -867,6 +893,44 @@ func localAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.Zon
 	}
 	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
 	return out
+}
+
+func externalUpstreamRoutePrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
+	authorized := authorizedPrefixes(ars, nil)
+	localAssigned := localAssignedPrefixes(ars, managedZone)
+	if len(authorized) == 0 {
+		return nil
+	}
+	out := make([]netip.Prefix, 0, len(authorized))
+	seen := make(map[netip.Prefix]struct{}, len(authorized))
+	for _, prefix := range authorized {
+		if prefixWithinAny(prefix, localAssigned) {
+			continue
+		}
+		if _, ok := seen[prefix]; ok {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		out = append(out, prefix)
+	}
+	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
+	return out
+}
+
+func prefixWithinAny(prefix netip.Prefix, candidates []netip.Prefix) bool {
+	for _, candidate := range candidates {
+		if prefixWithin(prefix, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func prefixWithin(prefix, parent netip.Prefix) bool {
+	if prefix.Addr().Is4() != parent.Addr().Is4() {
+		return false
+	}
+	return prefix.Bits() >= parent.Bits() && parent.Contains(prefix.Addr())
 }
 
 func netipPrefixLess(a, b netip.Prefix) bool {

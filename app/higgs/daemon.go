@@ -53,11 +53,12 @@ type DaemonService struct {
 	stateMu sync.Mutex
 
 	// Test overrides for BIRD routing reconcile.
-	birdProcessManager  birdProcessManager
-	birdProcessManagers map[string]birdProcessManager
-	birdClientFactory   func(socketPath string, timeout time.Duration) birdClient
-	vethManager         vethManager
-	firewallDriver      firewallDriver
+	birdProcessManager   birdProcessManager
+	birdProcessManagers  map[string]birdProcessManager
+	birdClientFactory    func(socketPath string, timeout time.Duration) birdClient
+	vethManager          vethManager
+	upstreamRouteManager upstreamRouteManager
+	firewallDriver       firewallDriver
 }
 
 type DaemonHooks struct {

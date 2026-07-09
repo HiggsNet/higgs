@@ -70,6 +70,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 
 	// Build a fake veth manager.
 	fakeVM := &fakeVethManager{}
+	fakeRM := &fakeUpstreamRouteManager{}
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 
@@ -77,6 +78,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return client }
 	service.vethManager = fakeVM
+	service.upstreamRouteManager = fakeRM
 
 	ctx := context.Background()
 	if err := service.reconcileRouting(ctx); err != nil {
@@ -95,6 +97,18 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	}
 	if fakeVM.ensureSpec.MeshIPv6LL != "fe80::1/64" || fakeVM.ensureSpec.PeerIPv6LL != "fe80::2/64" {
 		t.Fatalf("veth IPv6 LL = %q/%q", fakeVM.ensureSpec.MeshIPv6LL, fakeVM.ensureSpec.PeerIPv6LL)
+	}
+	if !fakeRM.ensureCalled {
+		t.Error("upstreamRouteManager.EnsureRoutes was not called during reconcile")
+	}
+	if fakeRM.ensureSpec.NetNS != "" || fakeRM.ensureSpec.Interface != "hgs-2higgs" {
+		t.Fatalf("upstream route target = netns %q iface %q, want host hgs-2higgs", fakeRM.ensureSpec.NetNS, fakeRM.ensureSpec.Interface)
+	}
+	if !prefixesContain(fakeRM.ensureSpec.Prefixes, "10.1.0.0/24") {
+		t.Fatalf("upstream routes missing remote prefix 10.1.0.0/24: %+v", fakeRM.ensureSpec.Prefixes)
+	}
+	if prefixesContain(fakeRM.ensureSpec.Prefixes, "10.0.0.0/24") {
+		t.Fatalf("upstream routes should not send local assigned prefix back to mesh: %+v", fakeRM.ensureSpec.Prefixes)
 	}
 
 	// Read the generated config and verify upstream interface + static route support.
@@ -343,4 +357,28 @@ func (m *fakeVethManager) EnsureVethPair(ctx context.Context, spec bird.VethSpec
 func (m *fakeVethManager) DeleteVethPair(ctx context.Context, spec bird.VethSpec) error {
 	m.deleteCalled = true
 	return nil
+}
+
+type fakeUpstreamRouteManager struct {
+	ensureCalled bool
+	ensureSpec   upstreamRouteSpec
+}
+
+func (m *fakeUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec upstreamRouteSpec) error {
+	m.ensureCalled = true
+	m.ensureSpec = spec
+	return nil
+}
+
+func prefixesContain(prefixes []netip.Prefix, want string) bool {
+	prefix, err := netip.ParsePrefix(want)
+	if err != nil {
+		return false
+	}
+	for _, got := range prefixes {
+		if got == prefix {
+			return true
+		}
+	}
+	return false
 }
