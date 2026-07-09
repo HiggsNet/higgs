@@ -120,6 +120,11 @@ const (
 
 	upstreamModeStatic   = "static"
 	upstreamModeExternal = "external"
+
+	defaultMeshIPv4LL     = "169.254.254.1/30"
+	defaultMeshIPv6LL     = "fe80::a1:1/64"
+	defaultExternalIPv4LL = "169.254.254.2/30"
+	defaultExternalIPv6LL = "fe80::a1:2/64"
 )
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
@@ -335,6 +340,22 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 	}
 	if yu.CreateVeth != nil {
 		uc.CreateVeth = *yu.CreateVeth
+	}
+
+	// Apply default link-local addresses when upstream is enabled and the user
+	// did not provide explicit values. These are used both for the veth
+	// endpoints and as the next-hop for static routes toward the mesh netns.
+	if uc.MeshIPv4LL == "" {
+		uc.MeshIPv4LL = defaultMeshIPv4LL
+	}
+	if uc.MeshIPv6LL == "" {
+		uc.MeshIPv6LL = defaultMeshIPv6LL
+	}
+	if uc.ExternalIPv4LL == "" {
+		uc.ExternalIPv4LL = defaultExternalIPv4LL
+	}
+	if uc.ExternalIPv6LL == "" {
+		uc.ExternalIPv6LL = defaultExternalIPv6LL
 	}
 
 	// Default endpoint interface names when upstream is enabled but not specified.

@@ -367,13 +367,13 @@ routing:
         create_veth: true                  # 是否由 Higgs 创建并维护 veth pair；默认 true
         mesh:
           interface: "hgs-2host"           # routing instance netns 内的 veth 端
-          ipv4_ll: "169.254.0.1/30"
-          ipv6_ll: "fe80::1/64"
+          ipv4_ll: "169.254.254.1/30"
+          ipv6_ll: "fe80::a1:1/64"
         external:
           interface: "hgs-2higgs"          # 主网络端（init netns 或其他 ns）
           netns: ""                        # 空表示主网络（init netns）
-          ipv4_ll: "169.254.0.2/30"
-          ipv6_ll: "fe80::2/64"
+          ipv4_ll: "169.254.254.2/30"
+          ipv6_ll: "fe80::a1:2/64"
 
 overlays:
   - id: ipsec-main

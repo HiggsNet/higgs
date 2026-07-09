@@ -57,6 +57,8 @@ type upstreamRouteSpec struct {
 	Interface      string
 	Prefixes       []netip.Prefix
 	SourcePrefixes []netip.Prefix
+	MeshIPv4LL     string
+	MeshIPv6LL     string
 }
 
 // birdClient is the subset of bird.Client used by the daemon.
@@ -377,6 +379,8 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			Interface:      inst.Upstream.ExternalInterface,
 			Prefixes:       externalUpstreamRoutePrefixes(ars, state.ManagedZone),
 			SourcePrefixes: externalUpstreamSourcePrefixes(ars, state.ManagedZone),
+			MeshIPv4LL:     inst.Upstream.MeshIPv4LL,
+			MeshIPv6LL:     inst.Upstream.MeshIPv6LL,
 		}
 		if err := rm.EnsureRoutes(ctx, rspec); err != nil {
 			instState.State = birdInstanceStateError

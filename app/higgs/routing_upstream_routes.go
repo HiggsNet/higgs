@@ -30,11 +30,16 @@ func (m *execUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec upstre
 			return err
 		}
 	}
+	nextHopByFamily, err := upstreamNextHopByFamily(spec.MeshIPv4LL, spec.MeshIPv6LL)
+	if err != nil {
+		return err
+	}
 	sourceByFamily := upstreamSourceByFamily(sourcePrefixes)
 	prefixes := append([]netip.Prefix(nil), spec.Prefixes...)
 	sort.Slice(prefixes, func(i, j int) bool { return netipPrefixLess(prefixes[i], prefixes[j]) })
 	for _, prefix := range prefixes {
-		if err := m.replaceRoute(ctx, spec.NetNS, spec.Interface, prefix, sourceByFamily[prefix.Addr().Is4()]); err != nil {
+		is4 := prefix.Addr().Is4()
+		if err := m.replaceRoute(ctx, spec.NetNS, spec.Interface, prefix, sourceByFamily[is4], nextHopByFamily[is4]); err != nil {
 			return err
 		}
 	}
@@ -50,12 +55,15 @@ func (m *execUpstreamRouteManager) replaceAddress(ctx context.Context, netnsName
 	return m.runIP(ctx, netnsName, args)
 }
 
-func (m *execUpstreamRouteManager) replaceRoute(ctx context.Context, netnsName, iface string, prefix netip.Prefix, source netip.Addr) error {
+func (m *execUpstreamRouteManager) replaceRoute(ctx context.Context, netnsName, iface string, prefix netip.Prefix, source netip.Addr, nextHop netip.Addr) error {
 	family := "-6"
 	if prefix.Addr().Is4() {
 		family = "-4"
 	}
 	args := []string{family, "route", "replace", prefix.String(), "dev", iface, "proto", "static"}
+	if nextHop.IsValid() {
+		args = append(args, "via", nextHop.String())
+	}
 	if source.IsValid() {
 		args = append(args, "src", source.String())
 	}
@@ -83,4 +91,23 @@ func upstreamSourceByFamily(prefixes []netip.Prefix) map[bool]netip.Addr {
 		}
 	}
 	return out
+}
+
+func upstreamNextHopByFamily(ipv4LL, ipv6LL string) (map[bool]netip.Addr, error) {
+	out := make(map[bool]netip.Addr, 2)
+	if ipv4LL != "" {
+		prefix, err := netip.ParsePrefix(ipv4LL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid mesh ipv4_ll %q: %w", ipv4LL, err)
+		}
+		out[true] = prefix.Addr()
+	}
+	if ipv6LL != "" {
+		prefix, err := netip.ParsePrefix(ipv6LL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid mesh ipv6_ll %q: %w", ipv6LL, err)
+		}
+		out[false] = prefix.Addr()
+	}
+	return out, nil
 }

@@ -113,6 +113,12 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	if !prefixesContain(fakeRM.ensureSpec.SourcePrefixes, "10.0.0.1/16") {
 		t.Fatalf("upstream route source prefixes missing local source 10.0.0.1/16: %+v", fakeRM.ensureSpec.SourcePrefixes)
 	}
+	if fakeRM.ensureSpec.MeshIPv4LL != "169.254.0.1/30" {
+		t.Fatalf("upstream route mesh ipv4_ll = %q, want 169.254.0.1/30", fakeRM.ensureSpec.MeshIPv4LL)
+	}
+	if fakeRM.ensureSpec.MeshIPv6LL != "fe80::1/64" {
+		t.Fatalf("upstream route mesh ipv6_ll = %q, want fe80::1/64", fakeRM.ensureSpec.MeshIPv6LL)
+	}
 
 	// Read the generated config and verify upstream interface + static route support.
 	latest, err := rt.LoadState()

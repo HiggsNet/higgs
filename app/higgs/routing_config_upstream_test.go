@@ -210,6 +210,18 @@ instances:
 	if inst.Upstream.ExternalNetns != "" {
 		t.Errorf("default external netns = %q, want empty host/init netns", inst.Upstream.ExternalNetns)
 	}
+	if inst.Upstream.MeshIPv4LL != defaultMeshIPv4LL {
+		t.Errorf("default mesh ipv4_ll = %q, want %q", inst.Upstream.MeshIPv4LL, defaultMeshIPv4LL)
+	}
+	if inst.Upstream.MeshIPv6LL != defaultMeshIPv6LL {
+		t.Errorf("default mesh ipv6_ll = %q, want %q", inst.Upstream.MeshIPv6LL, defaultMeshIPv6LL)
+	}
+	if inst.Upstream.ExternalIPv4LL != defaultExternalIPv4LL {
+		t.Errorf("default external ipv4_ll = %q, want %q", inst.Upstream.ExternalIPv4LL, defaultExternalIPv4LL)
+	}
+	if inst.Upstream.ExternalIPv6LL != defaultExternalIPv6LL {
+		t.Errorf("default external ipv6_ll = %q, want %q", inst.Upstream.ExternalIPv6LL, defaultExternalIPv6LL)
+	}
 }
 
 func TestParseUpstreamConfigCreateVethCanBeDisabled(t *testing.T) {
