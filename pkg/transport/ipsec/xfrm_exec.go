@@ -35,7 +35,7 @@ func (d SystemXFRMDriver) EnsureNamespace(ctx context.Context, spec NetNSSpec) e
 	}
 	switch spec.Kind {
 	case NetNSHost:
-		return nil
+		return d.enableNamespaceForwarding(ctx, spec)
 	case NetNSPath:
 		stat := d.Stat
 		if stat == nil {
@@ -47,7 +47,7 @@ func (d SystemXFRMDriver) EnsureNamespace(ctx context.Context, spec NetNSSpec) e
 		return nil
 	case NetNSName:
 		if d.netnsExists(ctx, spec.Name) {
-			return nil
+			return d.enableNamespaceForwarding(ctx, spec)
 		}
 		if !spec.Create {
 			return fmt.Errorf("netns %q does not exist and create=false", spec.Name)
@@ -55,7 +55,7 @@ func (d SystemXFRMDriver) EnsureNamespace(ctx context.Context, spec NetNSSpec) e
 		if err := d.run(ctx, "ip", "netns", "add", spec.Name); err != nil {
 			return err
 		}
-		return nil
+		return d.enableNamespaceForwarding(ctx, spec)
 	default:
 		return fmt.Errorf("unsupported netns kind %q", spec.Kind)
 	}
@@ -82,12 +82,22 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 		if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
 			return err
 		}
-		return d.setLinkUp(ctx, netns, spec.InterfaceName)
-	}
-	stateNetNS := d.stateNetNS()
-	if d.linkExists(ctx, stateNetNS, spec.InterfaceName) {
-		if err := d.moveLinkFrom(ctx, stateNetNS, spec.InterfaceName, netns); err != nil {
+		if err := d.setLinkUp(ctx, netns, spec.InterfaceName); err != nil {
 			return err
+		}
+	} else {
+		stateNetNS := d.stateNetNS()
+		if d.linkExists(ctx, stateNetNS, spec.InterfaceName) {
+			if err := d.moveLinkFrom(ctx, stateNetNS, spec.InterfaceName, netns); err != nil {
+				return err
+			}
+		} else {
+			if err := d.addXFRMInterface(ctx, stateNetNS, spec.InterfaceName, spec.XFRMIfID); err != nil {
+				return err
+			}
+			if err := d.moveLinkFrom(ctx, stateNetNS, spec.InterfaceName, netns); err != nil {
+				return err
+			}
 		}
 		if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
 			return err
@@ -95,21 +105,11 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 		if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
 			return err
 		}
-		return d.setLinkUp(ctx, netns, spec.InterfaceName)
+		if err := d.setLinkUp(ctx, netns, spec.InterfaceName); err != nil {
+			return err
+		}
 	}
-	if err := d.addXFRMInterface(ctx, stateNetNS, spec.InterfaceName, spec.XFRMIfID); err != nil {
-		return err
-	}
-	if err := d.moveLinkFrom(ctx, stateNetNS, spec.InterfaceName, netns); err != nil {
-		return err
-	}
-	if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
-		return err
-	}
-	if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
-		return err
-	}
-	return d.setLinkUp(ctx, netns, spec.InterfaceName)
+	return d.enableInterfaceForwarding(ctx, netns, spec.InterfaceName)
 }
 
 func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpec) (XFRMLinkState, error) {
@@ -532,4 +532,47 @@ func execCommand(ctx context.Context, name string, args ...string) ([]byte, erro
 func statPath(path string) error {
 	_, err := os.Stat(path)
 	return err
+}
+
+func (d SystemXFRMDriver) enableNamespaceForwarding(ctx context.Context, netns NetNSSpec) error {
+	params := []string{
+		"net.ipv4.conf.all.forwarding=1",
+		"net.ipv4.conf.default.forwarding=1",
+		"net.ipv6.conf.all.forwarding=1",
+		"net.ipv6.conf.default.forwarding=1",
+	}
+	for _, p := range params {
+		if err := d.sysctl(ctx, netns, "-w", p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d SystemXFRMDriver) enableInterfaceForwarding(ctx context.Context, netns NetNSSpec, iface string) error {
+	params := []string{
+		fmt.Sprintf("net.ipv4.conf.%s.forwarding=1", iface),
+		fmt.Sprintf("net.ipv6.conf.%s.forwarding=1", iface),
+	}
+	for _, p := range params {
+		if err := d.sysctl(ctx, netns, "-w", p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d SystemXFRMDriver) sysctl(ctx context.Context, netns NetNSSpec, args ...string) error {
+	netns = netns.Normalized()
+	switch netns.Kind {
+	case NetNSHost:
+		return d.run(ctx, "sysctl", args...)
+	case NetNSName:
+		full := append([]string{"netns", "exec", netns.Name, "sysctl"}, args...)
+		return d.run(ctx, "ip", full...)
+	case NetNSPath:
+		return fmt.Errorf("path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
+	default:
+		return fmt.Errorf("unsupported netns kind %q", netns.Kind)
+	}
 }

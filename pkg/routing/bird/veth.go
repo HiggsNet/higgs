@@ -64,56 +64,67 @@ func (m *ExecVethManager) EnsureVethPair(ctx context.Context, spec VethSpec) err
 		return fmt.Errorf("veth: mesh and peer interface names are required")
 	}
 
-	// Check if the veth already exists in the mesh netns.
-	if m.ifaceExistsInNetns(ctx, spec.MeshNetns, spec.MeshInterface) {
-		// Idempotent: ensure addresses are set.
-		return m.ensureAddresses(ctx, spec)
-	}
+	if !m.ifaceExistsInNetns(ctx, spec.MeshNetns, spec.MeshInterface) {
+		// Create the veth pair in the mesh netns, then move the peer to the
+		// target netns. We create both endpoints in the mesh netns first, then
+		// move the peer end.
+		args := []string{"netns", "exec", spec.MeshNetns, "ip", "link", "add", spec.MeshInterface, "type", "veth", "peer", "name", spec.PeerInterface}
+		cmd := m.runner(ctx, "ip", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// If the pair already exists (race), continue.
+			if !strings.Contains(string(out), "exists") {
+				return fmt.Errorf("create veth pair: %w (%s)", err, strings.TrimSpace(string(out)))
+			}
+		}
 
-	// Create the veth pair in the mesh netns, then move the peer to the
-	// target netns. We create both endpoints in the mesh netns first, then
-	// move the peer end.
-	args := []string{"netns", "exec", spec.MeshNetns, "ip", "link", "add", spec.MeshInterface, "type", "veth", "peer", "name", spec.PeerInterface}
-	cmd := m.runner(ctx, "ip", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// If the pair already exists (race), continue.
-		if !strings.Contains(string(out), "exists") {
-			return fmt.Errorf("create veth pair: %w (%s)", err, strings.TrimSpace(string(out)))
+		// Bring up the mesh side.
+		if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.MeshInterface, "up"); err != nil {
+			return fmt.Errorf("set mesh veth up: %w", err)
 		}
-	}
 
-	// Bring up the mesh side.
-	if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.MeshInterface, "up"); err != nil {
-		return fmt.Errorf("set mesh veth up: %w", err)
-	}
-
-	// Move peer to the target netns (if different from mesh netns).
-	if spec.PeerNetns == "" {
-		// Move to init netns: use PID 1 or just set netns to 1.
-		// Actually, from inside a named netns, moving peer to init netns
-		// requires: ip link set <peer> netns 1
-		if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "netns", "1"); err != nil {
-			return fmt.Errorf("move peer to init netns: %w", err)
-		}
-		// Bring up peer in init netns.
-		if err := m.run(ctx, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
-			return fmt.Errorf("set peer veth up: %w", err)
-		}
-	} else if spec.PeerNetns != spec.MeshNetns {
-		if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "netns", spec.PeerNetns); err != nil {
-			return fmt.Errorf("move peer to netns %s: %w", spec.PeerNetns, err)
-		}
-		if err := m.runInNetns(ctx, spec.PeerNetns, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
-			return fmt.Errorf("set peer veth up: %w", err)
-		}
-	} else {
-		// Both endpoints in same netns: just bring up the peer.
-		if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
-			return fmt.Errorf("set peer veth up: %w", err)
+		// Move peer to the target netns (if different from mesh netns).
+		if spec.PeerNetns == "" {
+			// Move to init netns: use PID 1 or just set netns to 1.
+			// Actually, from inside a named netns, moving peer to init netns
+			// requires: ip link set <peer> netns 1
+			if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "netns", "1"); err != nil {
+				return fmt.Errorf("move peer to init netns: %w", err)
+			}
+			// Bring up peer in init netns.
+			if err := m.run(ctx, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
+				return fmt.Errorf("set peer veth up: %w", err)
+			}
+		} else if spec.PeerNetns != spec.MeshNetns {
+			if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "netns", spec.PeerNetns); err != nil {
+				return fmt.Errorf("move peer to netns %s: %w", spec.PeerNetns, err)
+			}
+			if err := m.runInNetns(ctx, spec.PeerNetns, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
+				return fmt.Errorf("set peer veth up: %w", err)
+			}
+		} else {
+			// Both endpoints in same netns: just bring up the peer.
+			if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
+				return fmt.Errorf("set peer veth up: %w", err)
+			}
 		}
 	}
 
-	return m.ensureAddresses(ctx, spec)
+	if err := m.ensureAddresses(ctx, spec); err != nil {
+		return err
+	}
+	if err := m.enableInterfaceForwarding(ctx, spec.MeshNetns, spec.MeshInterface); err != nil {
+		return err
+	}
+	if spec.PeerNetns != "" && spec.PeerNetns != spec.MeshNetns {
+		if err := m.enableInterfaceForwarding(ctx, spec.PeerNetns, spec.PeerInterface); err != nil {
+			return err
+		}
+	} else if spec.PeerNetns == "" {
+		if err := m.enableInterfaceForwarding(ctx, "", spec.PeerInterface); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteVethPair removes the veth pair. Deleting one end removes both.
@@ -225,6 +236,27 @@ func (m *ExecVethManager) runInNetns(ctx context.Context, netns string, cmd stri
 		return m.run(ctx, cmd, args...)
 	}
 	full := append([]string{"netns", "exec", netns, cmd}, args...)
+	return m.run(ctx, "ip", full...)
+}
+
+func (m *ExecVethManager) enableInterfaceForwarding(ctx context.Context, netns, iface string) error {
+	params := []string{
+		fmt.Sprintf("net.ipv4.conf.%s.forwarding=1", iface),
+		fmt.Sprintf("net.ipv6.conf.%s.forwarding=1", iface),
+	}
+	for _, p := range params {
+		if err := m.sysctl(ctx, netns, "-w", p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ExecVethManager) sysctl(ctx context.Context, netns string, args ...string) error {
+	if netns == "" || netns == "host" {
+		return m.run(ctx, "sysctl", args...)
+	}
+	full := append([]string{"netns", "exec", netns, "sysctl"}, args...)
 	return m.run(ctx, "ip", full...)
 }
 

@@ -55,6 +55,10 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 	want := []string{
 		"ip netns exec higgstesth2 true",
 		"ip netns add higgstesth2",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.all.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.default.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.all.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.default.forwarding=1",
 		"ip netns exec higgstesth2 ip link show dev hgs1",
 		"ip link show dev hgs1",
 		"ip link add hgs1 type xfrm if_id 42",
@@ -62,6 +66,8 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		"ip netns exec higgstesth2 ip link set hgs1 addrgenmode none",
 		"ip netns exec higgstesth2 ip link set hgs1 multicast on",
 		"ip netns exec higgstesth2 ip link set hgs1 up",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.hgs1.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.hgs1.forwarding=1",
 		"ip netns exec higgstesth2 ip -6 -o addr show dev hgs1",
 		"ip netns exec higgstesth2 ip addr replace fd00:1234::1/64 dev hgs1",
 	}
@@ -145,10 +151,16 @@ func TestSystemXFRMDriverEnablesMulticastOnExistingInterface(t *testing.T) {
 	got := commandStrings(commands)
 	want := []string{
 		"ip netns exec higgstesth2 true",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.all.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.default.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.all.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.default.forwarding=1",
 		"ip netns exec higgstesth2 ip link show dev hgs1",
 		"ip netns exec higgstesth2 ip link set hgs1 addrgenmode none",
 		"ip netns exec higgstesth2 ip link set hgs1 multicast on",
 		"ip netns exec higgstesth2 ip link set hgs1 up",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.hgs1.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.hgs1.forwarding=1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -240,12 +252,18 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 	got := commandStrings(commands)
 	want := []string{
 		"ip netns exec higgstesth2 true",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.all.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.default.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.all.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.default.forwarding=1",
 		"ip netns exec higgstesth2 ip link show dev hgs1",
 		"ip link show dev hgs1",
 		"ip link set hgs1 netns higgstesth2",
 		"ip netns exec higgstesth2 ip link set hgs1 addrgenmode none",
 		"ip netns exec higgstesth2 ip link set hgs1 multicast on",
 		"ip netns exec higgstesth2 ip link set hgs1 up",
+		"ip netns exec higgstesth2 sysctl -w net.ipv4.conf.hgs1.forwarding=1",
+		"ip netns exec higgstesth2 sysctl -w net.ipv6.conf.hgs1.forwarding=1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
