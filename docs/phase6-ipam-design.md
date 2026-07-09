@@ -410,7 +410,7 @@ protocol babel higgs_babel_xxx {
 当 `ipam.auto_announce_assigned_ips` 开启时，Higgs 发布本节点 assignment 对应的 `routes/announcements/*`。本地 BIRD static route 按 `routing.instances[].upstream` 分三种语义：
 
 - 未配置 upstream：本节点 prefix 用 blackhole 兜底，只表达 ownership，不承载 host/service。
-- `upstream.mode: static`（默认）：本节点 prefix 指向 mesh netns 内的 upstream veth；Higgs 在 external/host 侧按授权前缀维护回 mesh 的 kernel route，但排除本节点本地承载的 assigned prefix。
+- `upstream.mode: static`（默认）：本节点 prefix 指向 mesh netns 内的 upstream veth；Higgs 在 external/host 侧按授权前缀维护回 mesh 的 kernel route，但排除本节点本地承载的 assigned prefix。external 端会配置本地 assigned prefix 的首个可用地址作为 route source。
 - `upstream.mode: external`：Higgs 只让 mesh-side BIRD 监听 veth，不生成本节点 prefix static route；host-side BIRD/FRR/babeld 由管理员自管。
 
 static upstream 示例：

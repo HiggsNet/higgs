@@ -53,9 +53,10 @@ type upstreamRouteManager interface {
 }
 
 type upstreamRouteSpec struct {
-	NetNS     string
-	Interface string
-	Prefixes  []netip.Prefix
+	NetNS          string
+	Interface      string
+	Prefixes       []netip.Prefix
+	SourcePrefixes []netip.Prefix
 }
 
 // birdClient is the subset of bird.Client used by the daemon.
@@ -372,9 +373,10 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			rm = newExecUpstreamRouteManager()
 		}
 		rspec := upstreamRouteSpec{
-			NetNS:     inst.Upstream.ExternalNetns,
-			Interface: inst.Upstream.ExternalInterface,
-			Prefixes:  externalUpstreamRoutePrefixes(ars, state.ManagedZone),
+			NetNS:          inst.Upstream.ExternalNetns,
+			Interface:      inst.Upstream.ExternalInterface,
+			Prefixes:       externalUpstreamRoutePrefixes(ars, state.ManagedZone),
+			SourcePrefixes: externalUpstreamSourcePrefixes(ars, state.ManagedZone),
 		}
 		if err := rm.EnsureRoutes(ctx, rspec); err != nil {
 			instState.State = birdInstanceStateError
@@ -915,6 +917,33 @@ func externalUpstreamRoutePrefixes(ars *routing.AuthorizedRouteSet, managedZone 
 	}
 	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
 	return out
+}
+
+func externalUpstreamSourcePrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
+	localAssigned := localAssignedPrefixes(ars, managedZone)
+	out := make([]netip.Prefix, 0, len(localAssigned))
+	seen := make(map[netip.Prefix]struct{}, len(localAssigned))
+	for _, prefix := range localAssigned {
+		source := firstUsablePrefixAddress(prefix)
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		out = append(out, source)
+	}
+	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
+	return out
+}
+
+func firstUsablePrefixAddress(prefix netip.Prefix) netip.Prefix {
+	addr := prefix.Addr()
+	if prefix.Bits() < addr.BitLen() {
+		next := addr.Next()
+		if next.IsValid() && prefix.Contains(next) {
+			addr = next
+		}
+	}
+	return netip.PrefixFrom(addr, prefix.Bits())
 }
 
 func prefixWithinAny(prefix netip.Prefix, candidates []netip.Prefix) bool {

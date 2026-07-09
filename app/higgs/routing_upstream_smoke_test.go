@@ -110,6 +110,9 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	if prefixesContain(fakeRM.ensureSpec.Prefixes, "10.0.0.0/24") {
 		t.Fatalf("upstream routes should not send local assigned prefix back to mesh: %+v", fakeRM.ensureSpec.Prefixes)
 	}
+	if !prefixesContain(fakeRM.ensureSpec.SourcePrefixes, "10.0.0.1/16") {
+		t.Fatalf("upstream route source prefixes missing local source 10.0.0.1/16: %+v", fakeRM.ensureSpec.SourcePrefixes)
+	}
 
 	// Read the generated config and verify upstream interface + static route support.
 	latest, err := rt.LoadState()
