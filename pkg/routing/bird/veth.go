@@ -64,7 +64,8 @@ func (m *ExecVethManager) EnsureVethPair(ctx context.Context, spec VethSpec) err
 		return fmt.Errorf("veth: mesh and peer interface names are required")
 	}
 
-	if !m.ifaceExistsInNetns(ctx, spec.MeshNetns, spec.MeshInterface) {
+	meshExisted := m.ifaceExistsInNetns(ctx, spec.MeshNetns, spec.MeshInterface)
+	if !meshExisted {
 		// Create the veth pair in the mesh netns, then move the peer to the
 		// target netns. We create both endpoints in the mesh netns first, then
 		// move the peer end.
@@ -75,6 +76,13 @@ func (m *ExecVethManager) EnsureVethPair(ctx context.Context, spec VethSpec) err
 			if !strings.Contains(string(out), "exists") {
 				return fmt.Errorf("create veth pair: %w (%s)", err, strings.TrimSpace(string(out)))
 			}
+		}
+
+		// Disable the kernel's automatic IPv6 link-local address generation
+		// (FE80::/64 based on MAC) before bringing the interface up, so Higgs
+		// remains in control of which addresses are present on the veth.
+		if err := m.disableAutoLinkLocal(ctx, spec.MeshNetns, spec.MeshInterface); err != nil {
+			return err
 		}
 
 		// Bring up the mesh side.
@@ -90,6 +98,10 @@ func (m *ExecVethManager) EnsureVethPair(ctx context.Context, spec VethSpec) err
 			if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "netns", "1"); err != nil {
 				return fmt.Errorf("move peer to init netns: %w", err)
 			}
+			// Disable auto link-local on the peer before bringing it up.
+			if err := m.disableAutoLinkLocal(ctx, "", spec.PeerInterface); err != nil {
+				return err
+			}
 			// Bring up peer in init netns.
 			if err := m.run(ctx, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
 				return fmt.Errorf("set peer veth up: %w", err)
@@ -98,14 +110,30 @@ func (m *ExecVethManager) EnsureVethPair(ctx context.Context, spec VethSpec) err
 			if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "netns", spec.PeerNetns); err != nil {
 				return fmt.Errorf("move peer to netns %s: %w", spec.PeerNetns, err)
 			}
+			if err := m.disableAutoLinkLocal(ctx, spec.PeerNetns, spec.PeerInterface); err != nil {
+				return err
+			}
 			if err := m.runInNetns(ctx, spec.PeerNetns, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
 				return fmt.Errorf("set peer veth up: %w", err)
 			}
 		} else {
 			// Both endpoints in same netns: just bring up the peer.
+			if err := m.disableAutoLinkLocal(ctx, spec.MeshNetns, spec.PeerInterface); err != nil {
+				return err
+			}
 			if err := m.runInNetns(ctx, spec.MeshNetns, "ip", "link", "set", spec.PeerInterface, "up"); err != nil {
 				return fmt.Errorf("set peer veth up: %w", err)
 			}
+		}
+	} else {
+		// For an existing veth, make sure auto link-local generation stays
+		// disabled in case the interface was created by an older version or an
+		// external tool.
+		if err := m.disableAutoLinkLocal(ctx, spec.MeshNetns, spec.MeshInterface); err != nil {
+			return err
+		}
+		if err := m.disableAutoLinkLocalForPeer(ctx, spec); err != nil {
+			return err
 		}
 	}
 
@@ -201,6 +229,20 @@ func (m *ExecVethManager) ensurePeerAddress(ctx context.Context, spec VethSpec, 
 		}
 	}
 	return nil
+}
+
+func (m *ExecVethManager) disableAutoLinkLocal(ctx context.Context, netns, iface string) error {
+	if err := m.runInNetns(ctx, netns, "ip", "link", "set", iface, "addrgenmode", "none"); err != nil {
+		return fmt.Errorf("disable auto link-local on %s: %w", iface, err)
+	}
+	return nil
+}
+
+func (m *ExecVethManager) disableAutoLinkLocalForPeer(ctx context.Context, spec VethSpec) error {
+	if spec.PeerNetns == "" {
+		return m.disableAutoLinkLocal(ctx, "", spec.PeerInterface)
+	}
+	return m.disableAutoLinkLocal(ctx, spec.PeerNetns, spec.PeerInterface)
 }
 
 func (m *ExecVethManager) ifaceExistsInNetns(ctx context.Context, netns, iface string) bool {

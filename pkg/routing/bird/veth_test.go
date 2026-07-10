@@ -41,8 +41,10 @@ func TestExecVethManagerSetsForwardingOnNewVethPair(t *testing.T) {
 	want := []string{
 		"ip netns exec mesh-ns ip link show hgs-mesh",
 		"ip netns exec mesh-ns ip link add hgs-mesh type veth peer name hgs-peer",
+		"ip netns exec mesh-ns ip link set hgs-mesh addrgenmode none",
 		"ip netns exec mesh-ns ip link set hgs-mesh up",
 		"ip netns exec mesh-ns ip link set hgs-peer netns 1",
+		"ip link set hgs-peer addrgenmode none",
 		"ip link set hgs-peer up",
 		"ip netns exec mesh-ns ip addr show hgs-mesh",
 		"ip netns exec mesh-ns ip addr replace 169.254.1.1/30 dev hgs-mesh",
@@ -84,8 +86,10 @@ func TestExecVethManagerSetsForwardingOnBothEndsInSeparateNetns(t *testing.T) {
 	wantPrefix := []string{
 		"ip netns exec mesh-ns ip link show hgs-mesh",
 		"ip netns exec mesh-ns ip link add hgs-mesh type veth peer name hgs-peer",
+		"ip netns exec mesh-ns ip link set hgs-mesh addrgenmode none",
 		"ip netns exec mesh-ns ip link set hgs-mesh up",
 		"ip netns exec mesh-ns ip link set hgs-peer netns peer-ns",
+		"ip netns exec peer-ns ip link set hgs-peer addrgenmode none",
 		"ip netns exec peer-ns ip link set hgs-peer up",
 		"ip netns exec mesh-ns sysctl -w net.ipv4.conf.hgs-mesh.forwarding=1",
 		"ip netns exec mesh-ns sysctl -w net.ipv6.conf.hgs-mesh.forwarding=1",
