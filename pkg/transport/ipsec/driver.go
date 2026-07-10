@@ -218,13 +218,13 @@ func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 			return plan, fmt.Errorf("assign address: %w", err)
 		}
 	}
-	// Staged connections rely on StrongSwan's start_action (start/trap) instead
-	// of an explicit vici initiate. This avoids racing with the auto-start that
-	// load-conn triggers for active initiators while still letting responders
-	// install a trap policy.
+	// Active initiators must explicitly trigger the staged CHILD_SA because the
+	// child config uses start_action=trap to avoid racing with load-conn auto-
+	// start. Responders keep the trap policy installed and wait for the peer.
 	if IsActiveInitiatorRole(spec.InitiatorRole) {
-		child := ChildSAName(spec)
-		plan.add("initiate_child", child, spec.TransportID)
+		if err := InitiateTransportChild(ctx, ipsec, spec, &plan); err != nil {
+			return plan, fmt.Errorf("initiate staged child: %w", err)
+		}
 	}
 	return plan, nil
 }

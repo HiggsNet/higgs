@@ -319,3 +319,65 @@ func TestApplyReconcileActionCommitRotateTeardownsOldGeneration(t *testing.T) {
 		t.Fatalf("deleted interfaces = %+v", xfrmDrv.DeletedIFs)
 	}
 }
+
+func TestApplyReconcileActionPrepareRotateInitiatesActiveChild(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "hgs1",
+		XFRMIfID:        77,
+		InitiatorRole:   InitiatorRolePrimary,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
+		ContactPoints: []ContactPoint{{
+			Address:    "198.51.100.20",
+			Family:     FamilyIPv4,
+			Generation: 2,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   DefaultNATTPort,
+		}},
+	}
+	stagedSpec := rotateSpec(spec, 2)
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action: ReconcileActionPrepareRotate,
+		Spec:   &stagedSpec,
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Initiated) != 1 || ipsecDrv.Initiated[0] != ChildSAName(stagedSpec) {
+		t.Fatalf("initiated = %+v, want %s", ipsecDrv.Initiated, ChildSAName(stagedSpec))
+	}
+	last := plan.Operations[len(plan.Operations)-1]
+	if last.Action != "initiate_child" || last.Target != ChildSAName(stagedSpec) {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
+func TestApplyReconcileActionPrepareRotateResponderDoesNotInitiate(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:     "node-b.catofes.",
+		PeerZone:      "node-a.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ba",
+		InterfaceName: "hgs1",
+		XFRMIfID:      77,
+	}
+	stagedSpec := rotateSpecForRole(spec, 2, InitiatorRoleSecondaryStandby)
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	if _, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action: ReconcileActionPrepareRotate,
+		Spec:   &stagedSpec,
+	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true}); err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Initiated) != 0 {
+		t.Fatalf("responder initiated = %+v, want none", ipsecDrv.Initiated)
+	}
+}
