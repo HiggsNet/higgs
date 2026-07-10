@@ -74,6 +74,36 @@
   - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
 
+- [ ] **7.13 IPsec/XFRM maintenance 冗余命令优化（待实现）**
+  - 问题：`maintainExistingXFRMInterfaces()` 在 `runtime_ensure` 阶段已通过 `InspectLink` 获得接口 flags/addresses，但随后仍无条件调用 `EnsureInterface` / `AssignAddress` / `AssignExtraAddress`。
+  - 影响：每次 IPsec reconcile（含启动 recovery、sync timer、endpoint timer 触发）都会对所有已匹配 link 重复执行 `ip link set up/multicast/addrgenmode`、`ip addr replace`、sysctl 等命令；4 link 节点每次 reconcile 约几十次 netns exec 调用。
+  - 优化方向：在 `maintainExistingXFRMInterfaces` 中利用 `xfrmLinkStateMatchReason` 的 observed 结果做短路；若 flags/address 已匹配则跳过对应 `EnsureInterface` / `AssignAddress` 调用，仅保留需要一次性确认的配置（如 addrgenmode、forwarding sysctl）。
+  - 注意：需同步调整 `TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink` / `RefreshesAdoptedLink` 的测试预期；评估 race condition 与周期性自愈语义之间的取舍。
+  - 相关代码：`app/higgs/ipsec_reconcile.go:115-193`、`pkg/transport/ipsec/xfrm_exec.go:64-113`、`pkg/transport/ipsec/xfrm_exec.go:245-274`、`app/higgs/daemon_ipsec_reconcile_test.go:71-158`。
+
+- [ ] **7.14 daemon 启动/endpoint timer 重复触发 reconcile 优化（待实现）**
+  - 问题：启动后 `nextEndpointPublish = now` 导致 endpoint timer 立即触发；`handleEndpointTimerEvent` 写 state 后无条件调用 `notifyStateChanged()`，直接 flush IPsec/routing/firewall；同时 endpoint timer 返回 `triggerSync=true`，又把 `nextSync` 重置为 `now`，sync timer 立即再次 flush IPsec。
+  - 影响：启动后短时间内（日志里约 300ms）出现两次完整 IPsec reconcile；即使 endpoint/ipsec/routing record 都 `updated=false` 也无法避免。
+  - 优化方向：
+    1. `runStateStoreWrite` / `notifyStateChanged` 区分“state 是否真正变更”，无变更时不触发 layer flush；
+    2. 或 `handleEndpointTimerEvent` 仅在 record 有更新时才返回 `triggerSync=true`；
+    3. 或 `notifyStateChanged` 不再直接调用 `flushIPsecReconcile` / `flushRoutingReconcile`，而是把 dirty 标记留给主循环统一 flush，避免一次事件两次 flush。
+  - 注意：需保证启动 recovery 后第一次 publish 不会漏掉必要的 layer reconcile；同步更新相关测试，验证无更新时不产生多余 flush。
+  - 相关代码：`app/higgs/daemon.go:314-342`（endpoint/sync timer 主循环）、`app/higgs/daemon.go:1053-1072`（`runStateStoreWrite`）、`app/higgs/daemon.go:1355-1386`（`notifyStateChanged`）、`app/higgs/daemon.go:1201-1221`（`handleEndpointTimerEvent`）。
+
+- [ ] **7.15 gossip unsolicited ping summary 短路优化（待实现）**
+  - 问题：收到 unsolicited `MessagePing` 且 `msg.Ping.Summary != nil` 时，当前实现直接调用 `handleAnnounceHint(peerID)` 创建 `SyncSession`；session 起来后又会发一次 ping、等一次 pong，才能完成 catalog 对账。但 unsolicited ping 里已经携带了对端的 catalog summary，若 root 和本端一致，这次 ping-pong 完全是冗余的。双方因此形成“对方 ping 触发我开 session → 我发 ping → 对方开 session → 对方又 ping …”的循环，日志里反复出现 `hinted_sync_started reason=announce_hint`。
+  - 影响：稳态下每次 unsolicited ping 都走一遍完整 sync round（ping/pong/catalog diff/save state），浪费 CPU 和网络；state 保存还会级联触发 IPsec/routing/firewall dirty flush（见 7.14）。
+  - 优化方向：在 `daemon_sync.go:162-171` 的 unsolicited `MessagePing` 处理路径中，先复用 `gossip.CatalogSummaryFor` 生成本端 summary，与 `msg.Ping.Summary.CatalogRoot` 比较；若一致，直接更新 sync peer 状态（`recordSyncHint` + `recordPeerSync`）并返回，**不创建 `SyncSession`**；若不一致，再走 `handleAnnounceHint` 拉差异。
+  - 关键设计：
+    - 仅对带 summary 的 `MessagePing` 做短路；`MessageAnnounce` 只带 digest hint，无法直接比较，仍走原逻辑；
+    - 必须保持现有 `respondPing` 行为（回 pong），让对端能拿到本端 summary；
+    - 短路路径要补上 session 完成时会做的状态更新（`LastSyncUnix`、清除 backoff 等），避免 debug/status 显示未同步；
+    - 不改变 `SyncSession` 状态机，只改 ingress 处是否创建 session 的判断；
+    - 可在此基础上看效果决定是否保留一个较短的 hint cooldown（5s）作为补充兜底，用于处理 root 不一致但仍频繁互相触发 session 的场景。
+  - 注意：启动后或长时间未同步时，第一次 unsolicited ping 的 summary 通常会和本端不一致，正常开 session；比较逻辑要注意空 snapshot / nil summary 的边界。
+  - 相关代码：`app/higgs/daemon_sync.go:162-171`（unsolicited ping handler）、`app/higgs/daemon_sync.go:226-246`（`handleAnnounceHint`）、`app/higgs/sync_session.go:309-319`（`handleCatalogSummary` 的 root 比较逻辑可复用）、`app/higgs/state.go:470-498`（`recordPeerSync` / `recordSyncActivePull`）、`app/higgs/daemon_sync_test.go`（补“summary 一致时不开 session”测试）。
+
 - [ ] **7.9 可选 Admission 管理面**
   - 在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交。
   - 第一版 admission 仍不引入新的公网 request 协议，也不让 leaf 自动把 join request 写入 gossip active state。

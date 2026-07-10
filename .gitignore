@@ -10,3 +10,5 @@ app/higgs/.higgs.db
 .claude
 .codex
 .agents
+.tmp
+
