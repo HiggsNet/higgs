@@ -180,7 +180,7 @@ func TestDaemonEndpointTimerUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 
 	state.Lock()
 	unlock := state.Unlock
-	if err := service.handleEndpointTimerEvent(); err != nil {
+	if _, err := service.handleEndpointTimerEvent(); err != nil {
 		unlock()
 		t.Fatalf("handleEndpointTimerEvent: %v", err)
 	}
@@ -687,5 +687,124 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	}
 	if catofes.Revocations["node-b.catofes."] == nil {
 		t.Fatalf("delegate_revoke result missing after concurrent record_put")
+	}
+}
+
+func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	config.ListenAddr = "198.51.100.20:4242"
+	now := time.Unix(2200, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = config.ListenAddr
+	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	// First publish: records are created, state is flushed.
+	if _, err := service.handleEndpointTimerEvent(); err != nil {
+		t.Fatalf("first handleEndpointTimerEvent: %v", err)
+	}
+
+	// Reset flush tracking and capture the revision after the initial publish.
+	var flushed []string
+	service.Hooks.OnReconcileFlush = func(layer string) {
+		flushed = append(flushed, layer)
+	}
+	beforeRev := service.StateStore.Meta().Revision
+
+	// Second publish at the same timestamp: nothing changed, so it should not
+	// trigger a sync, layer flush, or state-store revision bump.
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
+	if result.Error != nil {
+		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
+	}
+	if syncNow {
+		t.Fatalf("syncNow = true, want false on no-op endpoint timer")
+	}
+	if shutdown {
+		t.Fatalf("shutdown = true, want false")
+	}
+	if len(flushed) != 0 {
+		t.Fatalf("layer flushes on no-op endpoint timer: %v", flushed)
+	}
+	if afterRev := service.StateStore.Meta().Revision; afterRev != beforeRev {
+		t.Fatalf("state store revision changed on no-op endpoint timer: before=%d after=%d", beforeRev, afterRev)
+	}
+}
+
+func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
+	config.ListenAddr = "198.51.100.20:4242"
+
+	now := time.Unix(1000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.ListenAddr = config.ListenAddr
+	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
+	appConfig.EndpointRefresh = 30 * time.Minute
+	appConfig.EndpointTTL = time.Hour
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+
+	// First publish: record is created.
+	if _, err := service.handleEndpointTimerEvent(); err != nil {
+		t.Fatalf("first handleEndpointTimerEvent: %v", err)
+	}
+	first := service.currentState().Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
+	if first == nil {
+		t.Fatal("first endpoint record missing")
+	}
+
+	// Second publish before refresh interval: no-op, no sync trigger.
+	now = time.Unix(1300, 0)
+	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
+	if result.Error != nil {
+		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
+	}
+	if shutdown {
+		t.Fatalf("shutdown = true, want false")
+	}
+	if syncNow {
+		t.Fatalf("syncNow = true, want false before refresh interval")
+	}
+
+	// Third publish after refresh interval: record should be refreshed and sync
+	// should be triggered so gossip can propagate the new lease timestamp.
+	now = time.Unix(2800, 0)
+	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
+	if result.Error != nil {
+		t.Fatalf("third handleEvent(endpoint): %v", result.Error)
+	}
+	if shutdown {
+		t.Fatalf("shutdown = true, want false")
+	}
+	if !syncNow {
+		t.Fatalf("syncNow = false, want true after refresh interval")
+	}
+	third := service.currentState().Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
+	if third.Version != first.Version+1 {
+		t.Fatalf("third version = %d, want %d (refreshed)", third.Version, first.Version+1)
+	}
+	refreshed := endpointRecordFromState(t, service.currentState(), state.ManagedZone)
+	if refreshed.UpdatedAt != 2800 {
+		t.Fatalf("refreshed updated_at = %d, want 2800", refreshed.UpdatedAt)
 	}
 }

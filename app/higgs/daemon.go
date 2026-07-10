@@ -909,8 +909,8 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventSyncTimer:
 		return daemonEventResult{Error: d.handleSyncTimerEvent(controlContext(event.Context), event.ForceSync)}, false, false
 	case daemonEventEndpointTimer:
-		err := d.handleEndpointTimerEvent()
-		return daemonEventResult{Error: err}, err == nil, false
+		changed, err := d.handleEndpointTimerEvent()
+		return daemonEventResult{Error: err}, changed, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
 	case daemonEventReloadConfig:
@@ -1072,6 +1072,38 @@ func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
 	return nil
 }
 
+// runStateStoreWriteIfChanged is like runStateStoreWrite, but the update
+// function reports whether the state actually changed. When it reports false,
+// the loaded state is discarded without replacing the committed snapshot,
+// incrementing the revision, or notifying downstream layers. This avoids
+// duplicate IPsec/routing/firewall flushes when the endpoint timer (or similar
+// periodic writer) produces a no-op publish.
+func (d *DaemonService) runStateStoreWriteIfChanged(fn func(*stateFile) (bool, error)) (bool, error) {
+	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
+		return false, errors.New("daemon service is not initialized")
+	}
+	latest, err := d.Sync.loadState()
+	if err != nil {
+		return false, err
+	}
+	changed, err := fn(latest)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+	d.StateStore.ReplaceCommitted(latest)
+	if err := d.installAndSaveCommittedState(); err != nil {
+		return false, err
+	}
+	if d.Sync.Transport != nil {
+		d.Sync.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return true, nil
+}
+
 // handleRecoveryPurgeRevokedEvent runs the manual revoked-zone GC. It always
 // computes the plan (returned for reporting); when apply is true it also
 // executes the deletions, persists, and notifies subsystems so the running node
@@ -1198,27 +1230,30 @@ func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
 	return gossip.ZoneDigests(state.Network)
 }
 
-func (d *DaemonService) handleEndpointTimerEvent() error {
+func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 	d.logDebug("endpoint", "timer_begin", nil)
-	err := d.runStateStoreWrite(func(state *stateFile) error {
+	changed, err := d.runStateStoreWriteIfChanged(func(state *stateFile) (bool, error) {
 		syncRuntime := *d.Sync
 		syncRuntime.State = state
-		if _, err := syncRuntime.publishEndpointRecordInState(state); err != nil {
-			return err
+		endpointChanged, err := syncRuntime.publishEndpointRecordInState(state)
+		if err != nil {
+			return false, err
 		}
-		if _, err := syncRuntime.publishIPsecRecordsInState(state); err != nil {
-			return err
+		ipsecChanged, err := syncRuntime.publishIPsecRecordsInState(state)
+		if err != nil {
+			return false, err
 		}
-		if _, err := d.publishRoutingNetnsRecordInState(state); err != nil {
-			return err
+		routingChanged, err := d.publishRoutingNetnsRecordInState(state)
+		if err != nil {
+			return false, err
 		}
-		return nil
+		return endpointChanged || ipsecChanged || routingChanged, nil
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	d.logDebug("endpoint", "timer_done", nil)
-	return nil
+	d.logDebug("endpoint", "timer_done", map[string]any{"changed": changed})
+	return changed, nil
 }
 
 func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {

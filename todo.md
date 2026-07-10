@@ -81,15 +81,11 @@
   - 注意：需同步调整 `TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink` / `RefreshesAdoptedLink` 的测试预期；评估 race condition 与周期性自愈语义之间的取舍。
   - 相关代码：`app/higgs/ipsec_reconcile.go:115-193`、`pkg/transport/ipsec/xfrm_exec.go:64-113`、`pkg/transport/ipsec/xfrm_exec.go:245-274`、`app/higgs/daemon_ipsec_reconcile_test.go:71-158`。
 
-- [ ] **7.14 daemon 启动/endpoint timer 重复触发 reconcile 优化（待实现）**
-  - 问题：启动后 `nextEndpointPublish = now` 导致 endpoint timer 立即触发；`handleEndpointTimerEvent` 写 state 后无条件调用 `notifyStateChanged()`，直接 flush IPsec/routing/firewall；同时 endpoint timer 返回 `triggerSync=true`，又把 `nextSync` 重置为 `now`，sync timer 立即再次 flush IPsec。
-  - 影响：启动后短时间内（日志里约 300ms）出现两次完整 IPsec reconcile；即使 endpoint/ipsec/routing record 都 `updated=false` 也无法避免。
-  - 优化方向：
-    1. `runStateStoreWrite` / `notifyStateChanged` 区分“state 是否真正变更”，无变更时不触发 layer flush；
-    2. 或 `handleEndpointTimerEvent` 仅在 record 有更新时才返回 `triggerSync=true`；
-    3. 或 `notifyStateChanged` 不再直接调用 `flushIPsecReconcile` / `flushRoutingReconcile`，而是把 dirty 标记留给主循环统一 flush，避免一次事件两次 flush。
-  - 注意：需保证启动 recovery 后第一次 publish 不会漏掉必要的 layer reconcile；同步更新相关测试，验证无更新时不产生多余 flush。
-  - 相关代码：`app/higgs/daemon.go:314-342`（endpoint/sync timer 主循环）、`app/higgs/daemon.go:1053-1072`（`runStateStoreWrite`）、`app/higgs/daemon.go:1355-1386`（`notifyStateChanged`）、`app/higgs/daemon.go:1201-1221`（`handleEndpointTimerEvent`）。
+- [x] **7.14 daemon 启动/endpoint timer 重复触发 reconcile 优化**
+  - 实现：新增 `runStateStoreWriteIfChanged`，由 `handleEndpointTimerEvent` 汇总 endpoint / IPsec / routing netns 三个 publish 函数的 `updated` 结果；无变更时不替换 committed snapshot、不持久化、不触发 `notifyStateChanged`，也不会把 `triggerSync` 置为 true。
+  - 效果：启动后若 endpoint / IPsec / routing 记录均无需更新，endpoint timer 不再引发 IPsec/routing/firewall flush，也不会立即触发 sync timer 再次 flush；有变更时仍走完整 reconcile。
+  - 相关代码：`app/higgs/daemon.go:314-342`（endpoint/sync timer 主循环）、`app/higgs/daemon.go:1075-1105`（`runStateStoreWriteIfChanged`）、`app/higgs/daemon.go:1233-1255`（`handleEndpointTimerEvent`）。
+  - 测试：`TestDaemonEndpointTimerNoChangeSkipsFlushAndSync` 验证无变更时 `syncNow=false`、无 layer flush、state store revision 不变。
 
 - [ ] **7.15 gossip unsolicited ping summary 短路优化（待实现）**
   - 问题：收到 unsolicited `MessagePing` 且 `msg.Ping.Summary != nil` 时，当前实现直接调用 `handleAnnounceHint(peerID)` 创建 `SyncSession`；session 起来后又会发一次 ping、等一次 pong，才能完成 catalog 对账。但 unsolicited ping 里已经携带了对端的 catalog summary，若 root 和本端一致，这次 ping-pong 完全是冗余的。双方因此形成“对方 ping 触发我开 session → 我发 ping → 对方开 session → 对方又 ping …”的循环，日志里反复出现 `hinted_sync_started reason=announce_hint`。
