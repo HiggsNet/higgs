@@ -87,7 +87,7 @@
   - 相关代码：`app/higgs/daemon.go:314-342`（endpoint/sync timer 主循环）、`app/higgs/daemon.go:1075-1105`（`runStateStoreWriteIfChanged`）、`app/higgs/daemon.go:1233-1255`（`handleEndpointTimerEvent`）。
   - 测试：`TestDaemonEndpointTimerNoChangeSkipsFlushAndSync` 验证无变更时 `syncNow=false`、无 layer flush、state store revision 不变。
 
-- [ ] **7.15 gossip unsolicited ping summary 短路优化（待实现）**
+- [x] **7.15 gossip unsolicited ping summary 短路优化**
   - 问题：收到 unsolicited `MessagePing` 且 `msg.Ping.Summary != nil` 时，当前实现直接调用 `handleAnnounceHint(peerID)` 创建 `SyncSession`；session 起来后又会发一次 ping、等一次 pong，才能完成 catalog 对账。但 unsolicited ping 里已经携带了对端的 catalog summary，若 root 和本端一致，这次 ping-pong 完全是冗余的。双方因此形成“对方 ping 触发我开 session → 我发 ping → 对方开 session → 对方又 ping …”的循环，日志里反复出现 `hinted_sync_started reason=announce_hint`。
   - 影响：稳态下每次 unsolicited ping 都走一遍完整 sync round（ping/pong/catalog diff/save state），浪费 CPU 和网络；state 保存还会级联触发 IPsec/routing/firewall dirty flush（见 7.14）。
   - 优化方向：在 `daemon_sync.go:162-171` 的 unsolicited `MessagePing` 处理路径中，先复用 `gossip.CatalogSummaryFor` 生成本端 summary，与 `msg.Ping.Summary.CatalogRoot` 比较；若一致，直接更新 sync peer 状态（`recordSyncHint` + `recordPeerSync`）并返回，**不创建 `SyncSession`**；若不一致，再走 `handleAnnounceHint` 拉差异。

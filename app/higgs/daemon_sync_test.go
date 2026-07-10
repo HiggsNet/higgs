@@ -234,6 +234,87 @@ func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
 	}
 }
 
+func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "state.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.EnableEventLoopSync(newFakeClock(now))
+
+	peerID := "peer-a"
+	localSummary, err := gossip.CatalogSummaryFor(state.Network, service.syncDatagramBudget())
+	if err != nil {
+		t.Fatalf("CatalogSummaryFor: %v", err)
+	}
+
+	err = service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		Type:   gossip.MessagePing,
+		PeerID: peerID,
+		Ping:   &gossip.Ping{Summary: localSummary},
+	}}, context.Background())
+	if err != nil {
+		t.Fatalf("process ping: %v", err)
+	}
+
+	if session := service.syncSessions[peerID]; session != nil {
+		t.Fatalf("expected no session for matching summary, got %+v", session)
+	}
+	if got := len(service.syncEvents); got != 0 {
+		t.Fatalf("expected no sync events, got %d", got)
+	}
+
+	snapshot, _ := service.StateStore.Snapshot()
+	peerState := snapshot.SyncPeers[peerID]
+	if peerState.LastSyncUnix != now.Unix() {
+		t.Fatalf("LastSyncUnix = %d, want %d", peerState.LastSyncUnix, now.Unix())
+	}
+	if peerState.LastHintReason != "ping_summary_match" {
+		t.Fatalf("LastHintReason = %q, want ping_summary_match", peerState.LastHintReason)
+	}
+	if peerState.BackoffUntilUnix != 0 {
+		t.Fatalf("BackoffUntilUnix = %d, want 0", peerState.BackoffUntilUnix)
+	}
+}
+
+func TestDaemonUnsolicitedPingSummaryMismatchStartsSession(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "state.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.EnableEventLoopSync(newFakeClock(now))
+
+	peerID := "peer-a"
+	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		Type:   gossip.MessagePing,
+		PeerID: peerID,
+		Ping:   &gossip.Ping{Summary: &gossip.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
+	}}, context.Background())
+	if err != nil {
+		t.Fatalf("process ping: %v", err)
+	}
+
+	if session := service.syncSessions[peerID]; session == nil || session.State != SyncSessionIdle {
+		t.Fatalf("expected idle session for mismatched summary, got %+v", session)
+	}
+	if got := len(service.syncEvents); got != 1 {
+		t.Fatalf("expected one sync timer event, got %d", got)
+	}
+}
+
 func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(1000, 0)

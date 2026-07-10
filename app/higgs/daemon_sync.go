@@ -167,7 +167,7 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 				return err
 			}
 			if msg.Ping.Summary != nil {
-				return d.handleAnnounceHint(msg.PeerID)
+				return d.maybeShortcutSyncFromPingSummary(msg.PeerID, msg.Ping.Summary)
 			}
 			return nil
 		case gossip.MessageFetchZone:
@@ -220,6 +220,45 @@ func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
 			FetchCatalogPage: &gossip.FetchCatalogPage{},
 		})
 	}
+	return nil
+}
+
+// maybeShortcutSyncFromPingSummary checks whether an unsolicited ping's catalog
+// summary already matches the local catalog root. If it does, we record the
+// peer sync state and skip creating a SyncSession, avoiding a redundant
+// ping-pong round. If roots differ (or summary generation fails), it falls back
+// to handleAnnounceHint.
+func (d *DaemonService) maybeShortcutSyncFromPingSummary(peerID string, remoteSummary *gossip.CatalogSummary) error {
+	if d == nil || d.Sync == nil || remoteSummary == nil {
+		return nil
+	}
+	state, _, _ := d.snapshotState()
+	if state == nil || state.Network == nil {
+		return nil
+	}
+	localSummary, err := gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
+	if err != nil {
+		d.logWarn("sync", "catalog_summary_failed", map[string]any{
+			"peer_id": peerID,
+			"reason":  "ping_summary_shortcut",
+			"error":   err,
+		})
+		return d.handleAnnounceHint(peerID)
+	}
+	if !bytes.Equal(remoteSummary.CatalogRoot, localSummary.CatalogRoot) {
+		return d.handleAnnounceHint(peerID)
+	}
+	now := d.Sync.now()
+	d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
+		recordSyncHint(state, peerID, "ping_summary_match", "", true, now)
+	})
+	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
+		recordPeerSyncAt(state, peerID, nil, now)
+	})
+	d.logDebug("sync", "ping_summary_shortcut", map[string]any{
+		"peer_id": peerID,
+		"reason":  "catalog_root_match",
+	})
 	return nil
 }
 
