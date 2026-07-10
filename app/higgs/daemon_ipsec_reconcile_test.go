@@ -68,7 +68,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 }
 
-func TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink(t *testing.T) {
+func TestMaintainExistingXFRMInterfacesSkipsNoopUpLinkWhenMatched(t *testing.T) {
 	spec := ipsec.TransportLinkSpec{
 		TransportID:     "ipsec-main-ab",
 		InterfaceName:   "hgs1",
@@ -83,11 +83,11 @@ func TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink(t *testing.T) {
 	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}, nil, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
-	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != "hgs1" {
-		t.Fatalf("interfaces = %+v, want hgs1 maintenance", driver.Interfaces)
+	if len(driver.Interfaces) != 0 {
+		t.Fatalf("interfaces = %+v, want no redundant maintenance when state matches", driver.Interfaces)
 	}
-	if len(driver.Addresses) != 1 || driver.Addresses[0] != "hgs1=fe80::1/64" {
-		t.Fatalf("addresses = %+v, want link-local /64 maintenance", driver.Addresses)
+	if len(driver.Addresses) != 0 {
+		t.Fatalf("addresses = %+v, want no redundant maintenance when state matches", driver.Addresses)
 	}
 }
 
@@ -119,7 +119,16 @@ func TestMaintainExistingXFRMInterfacesUsesRuntimeAddressDuringRotate(t *testing
 	inst.StagedPeerTunnelAddr = desired.PeerTunnelAddr
 	inst.LocalTunnelAddr = desired.LocalTunnelAddr
 	inst.PeerTunnelAddr = desired.PeerTunnelAddr
-	driver := &observedIPsecDriver{}
+	driver := &observedIPsecDriver{
+		linkState: &ipsec.XFRMLinkState{
+			NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2"}.Normalized(),
+			NamespaceExists: true,
+			InterfaceExists: true,
+			FlagsKnown:      true,
+			InterfaceUp:     false,
+			Multicast:       true,
+		},
+	}
 	service := &DaemonService{}
 
 	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{desired}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Reason: "route_cutover_pending", Instance: &inst}}, []ipsec.LinkGroupSpec{group}, nil); err != nil {
@@ -134,7 +143,7 @@ func TestMaintainExistingXFRMInterfacesUsesRuntimeAddressDuringRotate(t *testing
 	}
 }
 
-func TestMaintainExistingXFRMInterfacesRefreshesAdoptedLink(t *testing.T) {
+func TestMaintainExistingXFRMInterfacesSkipsAdoptedLinkWhenMatched(t *testing.T) {
 	spec := ipsec.TransportLinkSpec{
 		TransportID:     "ipsec-main-ab",
 		InterfaceName:   "hgs1",
@@ -149,11 +158,11 @@ func TestMaintainExistingXFRMInterfacesRefreshesAdoptedLink(t *testing.T) {
 	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionAdopt, Spec: &spec, Instance: &inst}}, nil, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
-	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != "hgs1" {
-		t.Fatalf("interfaces = %+v, want hgs1 maintenance", driver.Interfaces)
+	if len(driver.Interfaces) != 0 {
+		t.Fatalf("interfaces = %+v, want no redundant maintenance when state matches", driver.Interfaces)
 	}
-	if len(driver.Addresses) != 1 || driver.Addresses[0] != "hgs1=fe80::1/64" {
-		t.Fatalf("addresses = %+v, want link-local /64 maintenance", driver.Addresses)
+	if len(driver.Addresses) != 0 {
+		t.Fatalf("addresses = %+v, want no redundant maintenance when state matches", driver.Addresses)
 	}
 }
 

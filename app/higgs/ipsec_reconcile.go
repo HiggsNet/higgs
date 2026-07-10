@@ -170,13 +170,24 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 			})
 			continue
 		}
-		if err := driver.EnsureInterface(ctx, candidate); err != nil {
-			return fmt.Errorf("maintain xfrm interface %q: %w", candidate.InterfaceName, err)
-		}
-		if candidate.LocalTunnelAddr.IsValid() {
-			if err := driver.AssignAddress(ctx, candidate, tunnelAddressPrefixForDaemon(candidate.LocalTunnelAddr)); err != nil {
-				return fmt.Errorf("maintain xfrm address %q: %w", candidate.InterfaceName, err)
+		if !matches {
+			if err := driver.EnsureInterface(ctx, candidate); err != nil {
+				return fmt.Errorf("maintain xfrm interface %q: %w", candidate.InterfaceName, err)
 			}
+			if candidate.LocalTunnelAddr.IsValid() {
+				if err := driver.AssignAddress(ctx, candidate, tunnelAddressPrefixForDaemon(candidate.LocalTunnelAddr)); err != nil {
+					return fmt.Errorf("maintain xfrm address %q: %w", candidate.InterfaceName, err)
+				}
+			}
+		} else {
+			d.logDebug("ipsec", "xfrm_maintenance_skip_matched", map[string]any{
+				"instance_id": id,
+				"peer":        candidate.PeerZone,
+				"interface":   candidate.InterfaceName,
+				"netns":       candidate.NetNS,
+				"runtime":     "active",
+				"reason":      reason,
+			})
 		}
 		if err := d.assignIPsecDiagnosticAddresses(ctx, xfrmDriver, candidate, diagnosticPrefixes); err != nil {
 			return fmt.Errorf("maintain xfrm diagnostic address %q: %w", candidate.InterfaceName, err)

@@ -74,7 +74,7 @@
   - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
 
-- [ ] **7.13 IPsec/XFRM maintenance 冗余命令优化（待实现）**
+- [x] **7.13 IPsec/XFRM maintenance 冗余命令优化**
   - 问题：`maintainExistingXFRMInterfaces()` 在 `runtime_ensure` 阶段已通过 `InspectLink` 获得接口 flags/addresses，但随后仍无条件调用 `EnsureInterface` / `AssignAddress` / `AssignExtraAddress`。
   - 影响：每次 IPsec reconcile（含启动 recovery、sync timer、endpoint timer 触发）都会对所有已匹配 link 重复执行 `ip link set up/multicast/addrgenmode`、`ip addr replace`、sysctl 等命令；4 link 节点每次 reconcile 约几十次 netns exec 调用。
   - 优化方向：在 `maintainExistingXFRMInterfaces` 中利用 `xfrmLinkStateMatchReason` 的 observed 结果做短路；若 flags/address 已匹配则跳过对应 `EnsureInterface` / `AssignAddress` 调用，仅保留需要一次性确认的配置（如 addrgenmode、forwarding sysctl）。
