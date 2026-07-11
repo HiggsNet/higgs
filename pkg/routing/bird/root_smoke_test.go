@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -781,6 +782,113 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 	t.Logf("BIRD upstream Babel root smoke: host learned 172.16.2.0/24, overlay learned 172.16.1.0/24")
 }
 
+// TestBabelDualInterfaceCostFailoverRootSmoke is the Phase 7.1.a validation
+// experiment. Two nodes have two independent Babel-facing interfaces each.
+// It proves that rxcost is directional: a node's configured receive cost is
+// advertised to its peer, so each node may prefer a different interface for
+// traffic towards the other node. It also proves that the lower-cost interface
+// is restored after a link failure without health changing BIRD policy.
+func TestBabelDualInterfaceCostFailoverRootSmoke(t *testing.T) {
+	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
+		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the Phase 7.1 dual-interface BIRD/Babel root experiment")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	nsA := "higgs-bird-dual-a-" + suffix
+	nsB := "higgs-bird-dual-b-" + suffix
+	aLeft, bLeft := "hgdla"+suffix[len(suffix)-4:], "hgdlb"+suffix[len(suffix)-4:]
+	aRight, bRight := "hgdra"+suffix[len(suffix)-4:], "hgdrb"+suffix[len(suffix)-4:]
+	tmpA, tmpB := t.TempDir(), t.TempDir()
+
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "netns", "delete", nsA).Run()
+		_ = exec.Command("ip", "netns", "delete", nsB).Run()
+	})
+	for _, ns := range []string{nsA, nsB} {
+		if out, err := exec.CommandContext(ctx, "ip", "netns", "add", ns).CombinedOutput(); err != nil {
+			t.Fatalf("ip netns add %s: %v\noutput: %s", ns, err, out)
+		}
+	}
+	for _, pair := range [][2]string{{aLeft, bLeft}, {aRight, bRight}} {
+		if out, err := exec.CommandContext(ctx, "ip", "link", "add", pair[0], "type", "veth", "peer", "name", pair[1]).CombinedOutput(); err != nil {
+			t.Fatalf("create veth pair %s/%s: %v\noutput: %s", pair[0], pair[1], err, out)
+		}
+		if out, err := exec.CommandContext(ctx, "ip", "link", "set", pair[0], "netns", nsA).CombinedOutput(); err != nil {
+			t.Fatalf("move %s to %s: %v\noutput: %s", pair[0], nsA, err, out)
+		}
+		if out, err := exec.CommandContext(ctx, "ip", "link", "set", pair[1], "netns", nsB).CombinedOutput(); err != nil {
+			t.Fatalf("move %s to %s: %v\noutput: %s", pair[1], nsB, err, out)
+		}
+	}
+	for _, args := range [][]string{
+		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "10.99.71.1/30", "dev", aLeft},
+		{"netns", "exec", nsB, "ip", "addr", "add", "10.99.71.2/30", "dev", bLeft},
+		{"netns", "exec", nsA, "ip", "addr", "add", "10.99.72.1/30", "dev", aRight},
+		{"netns", "exec", nsB, "ip", "addr", "add", "10.99.72.2/30", "dev", bRight},
+		{"netns", "exec", nsA, "ip", "link", "set", aLeft, "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", bLeft, "up"},
+		{"netns", "exec", nsA, "ip", "link", "set", aRight, "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", bRight, "up"},
+	} {
+		if out, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput(); err != nil {
+			t.Fatalf("ip %s: %v\noutput: %s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	specA := withTestBirdOwner(BirdInstanceSpec{RouterID: 0x0a634701, NetNSName: nsA, Mode: BirdModeManaged, NetNS: NetNSSpec{Kind: "name", Name: nsA}, ControlSocketPath: filepath.Join(tmpA, "bird.ctl"), PIDFilePath: filepath.Join(tmpA, "bird.pid"), ConfigPath: filepath.Join(tmpA, "bird.conf"), TableID: "main"})
+	specB := withTestBirdOwner(BirdInstanceSpec{RouterID: 0x0a634702, NetNSName: nsB, Mode: BirdModeManaged, NetNS: NetNSSpec{Kind: "name", Name: nsB}, ControlSocketPath: filepath.Join(tmpB, "bird.ctl"), PIDFilePath: filepath.Join(tmpB, "bird.pid"), ConfigPath: filepath.Join(tmpB, "bird.conf"), TableID: "main"})
+	if err := os.WriteFile(specA.ConfigPath, []byte(generateDualInterfaceBabelConfig(specA, map[string]uint{aLeft: 96, aRight: 160}, "10.71.0.0/24")), 0644); err != nil {
+		t.Fatalf("write config A: %v", err)
+	}
+	if err := os.WriteFile(specB.ConfigPath, []byte(generateDualInterfaceBabelConfig(specB, map[string]uint{bLeft: 160, bRight: 96}, "10.72.0.0/24")), 0644); err != nil {
+		t.Fatalf("write config B: %v", err)
+	}
+
+	pmA, pmB := NewExecProcessManager(""), NewExecProcessManager("")
+	pmA.socketWaitTimeout, pmB.socketWaitTimeout = 5*time.Second, 5*time.Second
+	if err := pmA.Start(ctx, specA); err != nil {
+		t.Fatalf("start BIRD A: %v", err)
+	}
+	t.Cleanup(func() { _ = pmA.Stop(context.Background(), specA) })
+	if err := pmB.Start(ctx, specB); err != nil {
+		t.Fatalf("start BIRD B: %v", err)
+	}
+	t.Cleanup(func() { _ = pmB.Stop(context.Background(), specB) })
+
+	dumpOnFail := func() {
+		for _, pair := range []struct{ ns, socket string }{{nsA, specA.ControlSocketPath}, {nsB, specB.ControlSocketPath}} {
+			out, _ := exec.CommandContext(ctx, "birdc", "-s", pair.socket, "show", "route", "all").CombinedOutput()
+			t.Logf("--- routes in %s ---\n%s", pair.ns, out)
+		}
+	}
+	defer func() {
+		if t.Failed() {
+			dumpOnFail()
+		}
+	}()
+
+	// rxcost is advertised to the peer: B chooses bLeft because A assigns 96
+	// to aLeft, while A chooses aRight because B assigns 96 to bRight.
+	waitForSelectedAnycastIfaceWithin(t, ctx, specB.ControlSocketPath, "10.71.0.0/24", []string{bLeft}, "", 20)
+	waitForSelectedAnycastIfaceWithin(t, ctx, specA.ControlSocketPath, "10.72.0.0/24", []string{aRight}, "", 20)
+
+	if out, err := exec.CommandContext(ctx, "ip", "netns", "exec", nsB, "ip", "link", "set", bLeft, "down").CombinedOutput(); err != nil {
+		t.Fatalf("bring preferred B interface down: %v\noutput: %s", err, out)
+	}
+	waitForSelectedAnycastIfaceWithin(t, ctx, specB.ControlSocketPath, "10.71.0.0/24", []string{bRight}, bLeft, 20)
+	if out, err := exec.CommandContext(ctx, "ip", "netns", "exec", nsB, "ip", "link", "set", bLeft, "up").CombinedOutput(); err != nil {
+		t.Fatalf("restore preferred B interface: %v\noutput: %s", err, out)
+	}
+	waitForSelectedAnycastIfaceWithin(t, ctx, specB.ControlSocketPath, "10.71.0.0/24", []string{bLeft}, "", 20)
+
+	t.Logf("Phase 7.1.a: B preferred %s while A preferred %s; B failed over to %s and recovered %s", bLeft, aRight, bRight, bLeft)
+}
+
 // generateMinimalBabelConfig produces a minimal BIRD 2.x config that:
 // - Uses the given interface for Babel (without type tunnel)
 // - Announces the given prefix via protocol static
@@ -1016,13 +1124,53 @@ protocol babel {
         export where source = RTS_BABEL || source = RTS_STATIC || source = RTS_DEVICE;
     };
 %s}
-`, logPath, routerID, staticRoutes, ifaceBlocks.String())
+	`, logPath, routerID, staticRoutes, ifaceBlocks.String())
+}
+
+func generateDualInterfaceBabelConfig(spec BirdInstanceSpec, interfaceCosts map[string]uint, announcePrefix string) string {
+	routerID := fmt.Sprintf("%d.%d.%d.%d", (spec.RouterID>>24)&0xff, (spec.RouterID>>16)&0xff, (spec.RouterID>>8)&0xff, spec.RouterID&0xff)
+	logPath := filepath.Join(filepath.Dir(spec.ConfigPath), "bird.log")
+	names := make([]string, 0, len(interfaceCosts))
+	for name := range interfaceCosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var ifaceBlocks strings.Builder
+	for _, iface := range names {
+		fmt.Fprintf(&ifaceBlocks, "    interface %q {\n        type wireless;\n        rxcost %d;\n    };\n", iface, interfaceCosts[iface])
+	}
+	return fmt.Sprintf(`# Phase 7.1.a dual-interface Babel experiment
+log "%s" all;
+debug protocols all;
+
+router id %s;
+
+ipv4 table master4;
+
+protocol device { scan time 5; }
+protocol kernel { ipv4 { export all; }; learn; }
+protocol direct { ipv4; }
+protocol static {
+    ipv4;
+    route %s blackhole;
+}
+protocol babel {
+    ipv4 {
+        import all;
+        export where source = RTS_BABEL || source = RTS_STATIC || source = RTS_DEVICE;
+    };
+%s}
+`, logPath, routerID, announcePrefix, ifaceBlocks.String())
 }
 
 func waitForSelectedAnycastIface(t *testing.T, ctx context.Context, socketPath, prefix string, allowedIfaces []string, forbiddenIface string) (string, string) {
+	return waitForSelectedAnycastIfaceWithin(t, ctx, socketPath, prefix, allowedIfaces, forbiddenIface, 60)
+}
+
+func waitForSelectedAnycastIfaceWithin(t *testing.T, ctx context.Context, socketPath, prefix string, allowedIfaces []string, forbiddenIface string, attempts int) (string, string) {
 	t.Helper()
 	var last string
-	for i := 0; i < 60; i++ {
+	for i := 0; i < attempts; i++ {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "route", "all").CombinedOutput()
 		last = string(out)
 		if err == nil {

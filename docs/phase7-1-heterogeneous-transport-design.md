@@ -811,11 +811,14 @@ policy；routing reconcile 再把各 group 的 link/cost 合并为同一个 per-
 
 ### 7.1.5 真实 netns/BIRD 验证性实验
 
-- 两节点、每端两条独立 veth/tunnel-like interface；
-- BIRD 同时建立两个 Babel neighbor；
-- 不同 cost 选路、首选 link down 后切换、恢复回切；
-- 对照双方配置的 `rxcost` 与双方 selected route，记录其方向性；不接入 Higgs health
-  动态 metric 或 interface exclusion。
+- [x] 两节点、每端两条独立 veth/tunnel-like interface；
+- [x] BIRD 同时建立两个 Babel neighbor；
+- [x] 不同 cost 选路、首选 link down 后切换、恢复回切；
+- [x] 由 `pkg/routing/bird.TestBabelDualInterfaceCostFailoverRootSmoke` 在 BIRD 2.19.1
+  root/netns lane 记录 `rxcost` 方向性：A 配置的低 `rxcost` 让 B 偏好对应链路，B
+  配置的低 `rxcost` 让 A 偏好对应链路。实验未接入 Higgs health 动态 metric 或
+  interface exclusion。该实验较慢，只通过 `sudo make phase7-1-bird-experiment` 显式运行，
+  不纳入 `bird-babel-smoke` 或聚合 `root-smoke`。
 
 ### 7.1.6 WireGuard transit + GRE provider
 

@@ -25,7 +25,7 @@
 
 - [ ] **7.1 异构 TransportLink 并行共存（模型已冻结，待验证与实现）**
   - 设计文档：[`docs/phase7-1-heterogeneous-transport-design.md`](docs/phase7-1-heterogeneous-transport-design.md)。D1-D7 已冻结：一个 LinkGroup 一个 provider；静态 Babel base cost 属于 LinkGroup；Link ID 包含 provider 但无 ID version；WG device 按 LinkGroup + underlay family 共享；health 第一版不接管 BIRD；非秘密链路参数从 Link ID 派生；IPsec/WG 使用独立 ports record 与 overlay intent；rotate 共用 generation/readmodel，但由 provider 按 per-link 或 shared-device resource graph apply。
-  - [ ] **7.1.a BIRD 双接口验证性实验**：两节点每端两条接口，同一 per-netns BIRD 建立两个 Babel neighbor；验证双方静态 `rxcost` 的方向性、低 cost 选择、首选接口失效与恢复收敛，不接入 health 动态 metric。
+  - [x] **7.1.a BIRD 双接口验证性实验**：已由 `TestBabelDualInterfaceCostFailoverRootSmoke` 在真实 root/netns BIRD 2.19.1 lane 验证。两节点每端两条接口、同一 per-netns BIRD 建立两个 Babel neighbor；`rxcost` 是本机向对端公告的接收 cost：B 选择 A 设为低 cost 的左链，A 选择 B 设为低 cost 的右链。B 的优选链路 down 后切至另一条，恢复后回切；未接入 health 动态 metric。
   - [ ] **7.1.b WG/GRE 基础验证性实验**：每个 LinkGroup/family 一个共享 WG device，多个 peer 仅配置 transit AllowedIPs，per-peer GRE/IP6GRE 承载 Babel/业务前缀；验证 netns、路由、MTU 和 cleanup。
   - [ ] **7.1.c WG staged rotate 验证性实验**：old/staged WG devices 复用逻辑 device key 并复制 peers，使用 generation-specific transit address 与 staged GRE interface；验证双 generation 并行、Babel readiness/cutover、old/current listener/firewall grace 和引用计数 cleanup。
   - [ ] **7.1.d 通用模型/provider adapter**：实现 desired resource graph、通用 LinkSpec/LinkInstance/owner/readiness、endpoint generation 和 shared-resource state，以 adapter 保持现有 StrongSwan rotate/takeover 行为。
@@ -141,6 +141,6 @@
 
 ## 下一步
 
-1. 执行 7.1.a BIRD 双接口验证性实验，先用真实 BIRD/netns 固化静态 `rxcost` 方向性和故障收敛，再执行 7.1.b WG/GRE 基础实验与 7.1.c staged rotate 实验。
+1. 执行 7.1.b WG/GRE 基础验证性实验，再执行 7.1.c staged rotate 实验；7.1.a 已用真实 BIRD/netns 固化静态 `rxcost` 方向性和故障收敛。
 2. 选择一个窄实现切口进入 Phase 7：稳定性优先选 7.3 chunk repair；公网部署体验优先选 7.7/7.8 discovery/relay；运维可见性优先选 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
