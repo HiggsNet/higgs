@@ -68,11 +68,12 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 	return nil
 }
 
-func issueDelegation(requestInput string, outPath string, permissions []zone.Permission) error {
+func issueDelegation(requestInput string, outPath string, permissions []zone.Permission, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	var request joinRequest
 	if err := readBase64JSONOrJSON(requestInput, &request); err != nil {
 		return err
@@ -101,7 +102,9 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 		fmt.Printf("wrote join bundle: %s\n", outPath)
 		return nil
 	}
-	logControlFallback("delegate_issue")
+	if !direct {
+		logControlFallback("delegate_issue")
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -204,11 +207,12 @@ func delegationCapabilities(permissions []zone.Permission) []zone.Capability {
 	return []zone.Capability{{Permissions: out}}
 }
 
-func revokeDelegation(path zone.ZonePath, reason string) error {
+func revokeDelegation(path zone.ZonePath, reason string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	controlled, err := revokeDelegationViaControl(rt, path, reason)
 	if err != nil {
 		return err
@@ -217,7 +221,9 @@ func revokeDelegation(path zone.ZonePath, reason string) error {
 		fmt.Printf("revoked delegation for %s via daemon\n", path)
 		return nil
 	}
-	logControlFallback("delegate_revoke")
+	if !direct {
+		logControlFallback("delegate_revoke")
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -284,11 +290,12 @@ func revokeDelegationInState(rt *Runtime, state *stateFile, path zone.ZonePath, 
 	return nil
 }
 
-func acceptJoinBundle(bundleInput string, keyPath string) error {
+func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	var bundle joinBundle
 	if err := readBase64JSONOrJSON(bundleInput, &bundle); err != nil {
 		return err
@@ -306,7 +313,9 @@ func acceptJoinBundle(bundleInput string, keyPath string) error {
 		fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
 		return nil
 	}
-	logControlFallback("join_accept")
+	if !direct {
+		logControlFallback("join_accept")
+	}
 	result, err := acceptJoinBundleInState(rt, &bundle, key)
 	if err != nil {
 		return err

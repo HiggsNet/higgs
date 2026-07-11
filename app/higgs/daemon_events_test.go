@@ -747,13 +747,14 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	state.ManagedZone = "node-b.catofes."
 	config.PeerID = string(state.ManagedZone)
 	config.ListenAddr = "198.51.100.20:4242"
+	config.AdvertiseAddrs = []string{"198.51.100.20:4242"}
+	config.EndpointRefresh = 30 * time.Minute
+	config.EndpointTTL = time.Hour
 
 	now := time.Unix(1000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = config.ListenAddr
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
-	appConfig.EndpointRefresh = 30 * time.Minute
-	appConfig.EndpointTTL = time.Hour
 	rt := &Runtime{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "higgs.db"),

@@ -36,9 +36,9 @@
     - [x] `internal/controlapi` 第一批下沉：Unix JSON request/response client、deadline 和 unavailable 错误分类脱离 app 层；业务 DTO 与 daemon handler 暂留 app，等 API surface 稳定后再迁移。
     - [x] 为显式 direct/recovery 路径增加 `Runtime.DisableControl` 基础开关，测试和未来 `--direct` 不再依赖“连接 daemon 失败”来选择离线写入。
   - 剩余可执行项：
-    - [ ] 按已记录的方法矩阵继续统一各 CLI 的提示和显式 `--direct` 入口，消除调用点之间的历史差异。
+    - [x] 按方法矩阵统一 CLI 的显式 `--direct` 入口和提示：覆盖 `record put`、`delegate issue/revoke`、`authority grant`、`join accept`、`route announce/withdraw`、IPAM pool/assignment 写命令，以及 recovery import/purge/cleanup；显式 direct 不再误报 daemon unavailable fallback，并明确不会立即 reconcile 或需要避免与 daemon 并发。依赖网络的 recovery pull 不提供无意义的 direct。
     - [ ] 在已固化路径、基础权限和 stale cleanup 上继续明确可配置 owner/group 与 root/admin 多用户边界。
-    - [ ] 补全 control API surface 清单：status、peers、zones、records/history/conflicts、sync trigger、reload config、apply dry-run、health/routes/links/admission/revoke。
+    - [x] 补全当前 control API surface 清单和离线策略矩阵：status、record/history、delegation/authority/recovery、sync/reload、IPsec/routing、BIRD/routes、health/links/peers/admission/revoke；尚未实现的 zones/conflicts/apply dry-run 不伪列为已有方法，后续按需求单独扩展。
     - [ ] 在 transport client 已下沉的基础上，待 API surface 稳定后迁移公共 control DTO 和 typed client helper；daemon handler registration 继续留 app。
     - [ ] 增加只读/管理操作分级；TCP control listener 仅预留设计，默认关闭，后续需要时再加 token/mTLS。
     - [ ] 补 daemon 生命周期文档：启动、优雅停止、reload、状态持久化、崩溃恢复、observer/control socket 交互。

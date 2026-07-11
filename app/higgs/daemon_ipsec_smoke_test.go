@@ -936,9 +936,11 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	}
 
 	serviceA := newDaemonService(rtA, stateA, configA, 200*time.Millisecond)
+	serviceA.ControlSocketPath = filepath.Join(t.TempDir(), controlSocketName)
 	serviceA.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciA, clientA)
 	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
 	serviceB := newDaemonService(rtB, stateB, configB, 200*time.Millisecond)
+	serviceB.ControlSocketPath = filepath.Join(t.TempDir(), controlSocketName)
 	serviceB.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciB, clientB)
 	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
 

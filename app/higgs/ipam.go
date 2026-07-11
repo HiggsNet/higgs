@@ -25,11 +25,12 @@ func cmdIPAM() *cli.Command {
 					{
 						Name:      "create",
 						Usage:     "Create or update an IPAM pool delegation",
-						UsageText: "higgs ipam pool create <zone> <prefix> --delegated-to <zone>",
+						UsageText: "higgs ipam pool create [--direct] <zone> <prefix> --delegated-to <zone>",
 						Description: "Delegate authority to assign prefixes from a pool to a sub-zone.\n" +
 							"The prefix is canonicalized before storage.",
 						Flags: []cli.Flag{
 							&cli.StringFlag{Name: "delegated-to", Usage: "Zone that receives the pool delegation", Required: true},
+							&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon reconcile"},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
@@ -39,19 +40,23 @@ func cmdIPAM() *cli.Command {
 								zone.ZonePath(cmd.Args().Get(0)),
 								cmd.Args().Get(1),
 								zone.ZonePath(cmd.String("delegated-to")),
+								cmd.Bool("direct"),
 							)
 						},
 					},
 					{
 						Name:        "revoke",
 						Usage:       "Revoke an IPAM pool delegation",
-						UsageText:   "higgs ipam revoke pool <zone> <prefix>",
+						UsageText:   "higgs ipam pool revoke [--direct] <zone> <prefix>",
 						Description: "Withdraw a previously created IPAM pool delegation by publishing a higher-version record with active=false.",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon reconcile"},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
 								return cli.Exit("usage: higgs ipam revoke pool <zone> <prefix>", 1)
 							}
-							return revokeIPAMPool(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+							return revokeIPAMPool(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 						},
 					},
 				},
@@ -59,13 +64,14 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:      "assign",
 				Usage:     "Assign a prefix to a zone",
-				UsageText: "higgs ipam assign <zone> <prefix> --to <zone> [--shared]",
+				UsageText: "higgs ipam assign [--direct] <zone> <prefix> --to <zone> [--shared]",
 				Description: "Assign a CIDR prefix to a zone so it may announce routes within it.\n" +
 					"The prefix is canonicalized before storage.\n" +
 					"--shared marks this as an anycast assignment, allowing multiple zones to hold the same prefix.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "to", Usage: "Zone that receives the assignment", Required: true},
 					&cli.BoolFlag{Name: "shared", Usage: "Mark as anycast/shared assignment (allows prefix overlap with other shared assignments)", Value: false},
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon reconcile"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
@@ -76,6 +82,7 @@ func cmdIPAM() *cli.Command {
 						cmd.Args().Get(1),
 						zone.ZonePath(cmd.String("to")),
 						cmd.Bool("shared"),
+						cmd.Bool("direct"),
 					)
 				},
 			},
@@ -87,25 +94,31 @@ func cmdIPAM() *cli.Command {
 					{
 						Name:        "assignment",
 						Usage:       "Revoke an IPAM assignment",
-						UsageText:   "higgs ipam revoke assignment <zone> <prefix>",
+						UsageText:   "higgs ipam revoke assignment [--direct] <zone> <prefix>",
 						Description: "Withdraw a previously created IPAM assignment by publishing a higher-version record with active=false.",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon reconcile"},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
 								return cli.Exit("usage: higgs ipam revoke assignment <zone> <prefix>", 1)
 							}
-							return revokeIPAMAssignment(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+							return revokeIPAMAssignment(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 						},
 					},
 					{
 						Name:        "pool",
 						Usage:       "Revoke an IPAM pool delegation",
-						UsageText:   "higgs ipam revoke pool <zone> <prefix>",
+						UsageText:   "higgs ipam revoke pool [--direct] <zone> <prefix>",
 						Description: "Withdraw a previously created IPAM pool delegation by publishing a higher-version record with active=false.",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon reconcile"},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
 								return cli.Exit("usage: higgs ipam revoke pool <zone> <prefix>", 1)
 							}
-							return revokeIPAMPool(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+							return revokeIPAMPool(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 						},
 					},
 				},
@@ -156,11 +169,12 @@ func cmdIPAM() *cli.Command {
 	}
 }
 
-func createIPAMPool(path zone.ZonePath, prefix string, delegatedTo zone.ZonePath) error {
+func createIPAMPool(path zone.ZonePath, prefix string, delegatedTo zone.ZonePath, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	return createIPAMPoolWithRuntime(rt, path, prefix, delegatedTo)
 }
 
@@ -175,11 +189,12 @@ func createIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, d
 	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMPool, true, "created")
 }
 
-func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool) error {
+func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	return assignIPAMWithRuntime(rt, path, prefix, assignedTo, shared)
 }
 
@@ -194,11 +209,12 @@ func assignIPAMWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, assig
 	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMAssignment, true, "assigned")
 }
 
-func revokeIPAMPool(path zone.ZonePath, prefix string) error {
+func revokeIPAMPool(path zone.ZonePath, prefix string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	return revokeIPAMPoolWithRuntime(rt, path, prefix)
 }
 
@@ -214,11 +230,12 @@ func revokeIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) e
 	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMPool, false, "revoked")
 }
 
-func revokeIPAMAssignment(path zone.ZonePath, prefix string) error {
+func revokeIPAMAssignment(path zone.ZonePath, prefix string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	return revokeIPAMAssignmentWithRuntime(rt, path, prefix)
 }
 
@@ -367,7 +384,9 @@ func submitIPAMRecord(rt *Runtime, path zone.ZonePath, key string, value []byte,
 		fmt.Printf("%s %s/%s version %d via daemon\n", op, path, key, version)
 		return nil
 	}
-	logControlFallback("ipam_submit")
+	if !rt.DisableControl {
+		logControlFallback("ipam_submit")
+	}
 	return putIPAMRecordDirect(rt, path, key, value, recordType, state)
 }
 

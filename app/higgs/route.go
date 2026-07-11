@@ -26,19 +26,21 @@ type routeShowRow struct {
 	Key        string `json:"key"`
 }
 
-func announceRoute(path zone.ZonePath, prefix string) error {
+func announceRoute(path zone.ZonePath, prefix string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	return announceRouteWithRuntime(rt, path, prefix)
 }
 
-func withdrawRoute(path zone.ZonePath, prefix string) error {
+func withdrawRoute(path zone.ZonePath, prefix string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	return withdrawRouteWithRuntime(rt, path, prefix)
 }
 
@@ -225,7 +227,9 @@ func submitRouteRecord(rt *Runtime, path zone.ZonePath, key string, value []byte
 		fmt.Printf("%s route %s/%s version %d via daemon\n", routeOpVerb(active), path, key, version)
 		return nil
 	}
-	logControlFallback("route_submit")
+	if !rt.DisableControl {
+		logControlFallback("route_submit")
+	}
 	return putRouteRecordDirect(rt, path, key, value, active, state)
 }
 

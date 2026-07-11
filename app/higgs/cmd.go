@@ -145,12 +145,15 @@ func cmdJoin() *cli.Command {
 			{
 				Name:      "accept",
 				Usage:     "Accept a join bundle",
-				UsageText: "higgs join accept <bundle-b64|bundle-file> [key.json]",
+				UsageText: "higgs join accept [--direct] <bundle-b64|bundle-file> [key.json]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
 						return cli.Exit("usage: higgs join accept <bundle-b64|bundle-file> [key.json]", 1)
 					}
-					return acceptJoinBundle(cmd.Args().Get(0), cmd.Args().Get(1))
+					return acceptJoinBundle(cmd.Args().Get(0), cmd.Args().Get(1), cmd.Bool("direct"))
 				},
 			},
 		},
@@ -165,9 +168,10 @@ func cmdDelegate() *cli.Command {
 			{
 				Name:      "issue",
 				Usage:     "Issue a delegation from a join request",
-				UsageText: "higgs delegate issue [--cap <permissions>] <request-b64|request-file> [bundle.b64]",
+				UsageText: "higgs delegate issue [--cap <permissions>] [--direct] <request-b64|request-file> [bundle.b64]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "cap", Usage: "Comma-separated permissions for the delegated authority"},
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
@@ -177,13 +181,16 @@ func cmdDelegate() *cli.Command {
 					if err != nil {
 						return err
 					}
-					return issueDelegation(cmd.Args().Get(0), cmd.Args().Get(1), permissions)
+					return issueDelegation(cmd.Args().Get(0), cmd.Args().Get(1), permissions, cmd.Bool("direct"))
 				},
 			},
 			{
 				Name:      "revoke",
 				Usage:     "Revoke a child zone delegation",
-				UsageText: "higgs delegate revoke <zone> [reason]",
+				UsageText: "higgs delegate revoke [--direct] <zone> [reason]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
 						return cli.Exit("usage: higgs delegate revoke <zone> [reason]", 1)
@@ -192,7 +199,7 @@ func cmdDelegate() *cli.Command {
 					if cmd.Args().Len() == 2 {
 						reason = cmd.Args().Get(1)
 					}
-					return revokeDelegation(zone.ZonePath(cmd.Args().Get(0)), reason)
+					return revokeDelegation(zone.ZonePath(cmd.Args().Get(0)), reason, cmd.Bool("direct"))
 				},
 			},
 		},
@@ -207,9 +214,12 @@ func cmdAuthority() *cli.Command {
 			{
 				Name:      "grant",
 				Usage:     "Grant permissions to an existing authority",
-				UsageText: "higgs authority grant <zone> <permission>[,<permission>...] [bundle.b64]",
+				UsageText: "higgs authority grant [--direct] <zone> <permission>[,<permission>...] [bundle.b64]",
 				Description: "Increase the target authority epoch and add permissions to its authorized keys.\n" +
 					"For non-root zones this must be run by the parent zone admin because the parent delegation is re-signed.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 2 || cmd.Args().Len() > 3 {
 						return cli.Exit("usage: higgs authority grant <zone> <permission>[,<permission>...] [bundle.b64]", 1)
@@ -218,7 +228,7 @@ func cmdAuthority() *cli.Command {
 					if err != nil {
 						return err
 					}
-					return grantAuthority(zone.ZonePath(cmd.Args().Get(0)), permissions, cmd.Args().Get(2))
+					return grantAuthority(zone.ZonePath(cmd.Args().Get(0)), permissions, cmd.Args().Get(2), cmd.Bool("direct"))
 				},
 			},
 		},
@@ -263,9 +273,12 @@ func cmdRecord() *cli.Command {
 			{
 				Name:      "put",
 				Usage:     "Store a record in a zone",
-				UsageText: "higgs record put <zone> <key> <value> [type]",
+				UsageText: "higgs record put [--direct] <zone> <key> <value> [type]",
 				Description: "Store a key-value record in the specified zone.\n" +
 					"Optional type defaults to 'policy.string'.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 3 || cmd.Args().Len() > 4 {
 						return cli.Exit("usage: higgs record put <zone> <key> <value> [type]", 1)
@@ -274,7 +287,7 @@ func cmdRecord() *cli.Command {
 					if cmd.Args().Len() > 3 {
 						recordType = cmd.Args().Get(3)
 					}
-					return putRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), []byte(cmd.Args().Get(2)), recordType)
+					return putRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), []byte(cmd.Args().Get(2)), recordType, cmd.Bool("direct"))
 				},
 			},
 			{
@@ -303,27 +316,33 @@ func cmdRoute() *cli.Command {
 			{
 				Name:      "announce",
 				Usage:     "Announce a route prefix",
-				UsageText: "higgs route announce <zone> <prefix>",
+				UsageText: "higgs route announce [--direct] <zone> <prefix>",
 				Description: "Announce a CIDR prefix from the specified zone.\n" +
 					"The prefix is canonicalized before storage (e.g. 10.0.1.1/24 becomes 10.0.1.0/24).",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon routing reconcile"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
 						return cli.Exit("usage: higgs route announce <zone> <prefix>", 1)
 					}
-					return announceRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+					return announceRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 				},
 			},
 			{
 				Name:      "withdraw",
 				Usage:     "Withdraw a route prefix",
-				UsageText: "higgs route withdraw <zone> <prefix>",
+				UsageText: "higgs route withdraw [--direct] <zone> <prefix>",
 				Description: "Withdraw a previously announced CIDR prefix from the specified zone.\n" +
 					"The prefix is canonicalized before lookup.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon routing reconcile"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
 						return cli.Exit("usage: higgs route withdraw <zone> <prefix>", 1)
 					}
-					return withdrawRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
+					return withdrawRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 				},
 			},
 			{

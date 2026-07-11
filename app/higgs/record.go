@@ -12,11 +12,12 @@ import (
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
-func putRecord(path zone.ZonePath, key string, value []byte, recordType string) error {
+func putRecord(path zone.ZonePath, key string, value []byte, recordType string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	if version, ok, err := putRecordViaControl(rt, path, key, value, recordType); ok {
 		if err != nil {
 			return err
@@ -24,7 +25,9 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string) 
 		fmt.Printf("put %s/%s version %d via daemon\n", path, key, version)
 		return nil
 	}
-	logControlFallback("record_put")
+	if !direct {
+		logControlFallback("record_put")
+	}
 	return putRecordDirect(rt, path, key, value, recordType)
 }
 

@@ -34,14 +34,17 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "import-zone",
 				Usage:     "Import a signed zone snapshot from a file or payload",
-				UsageText: "higgs recovery import-zone <snapshot-b64|snapshot-file>",
+				UsageText: "higgs recovery import-zone [--direct] <snapshot-b64|snapshot-file>",
 				Description: "Import a signed ZoneSnapshot into the local state after normal signature and delegation-chain verification.\n" +
 					"This accepts snapshots created by recovery export-zone.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
 						return cli.Exit("usage: higgs recovery import-zone <snapshot-b64|snapshot-file>", 1)
 					}
-					return recoveryImportZone(cmd.Args().First())
+					return recoveryImportZone(cmd.Args().First(), cmd.Bool("direct"))
 				},
 			},
 			{
@@ -82,23 +85,24 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "cleanup-ipsec",
 				Usage:     "Tear down locally managed IPsec links",
-				UsageText: "higgs recovery cleanup-ipsec [--orphans]",
+				UsageText: "higgs recovery cleanup-ipsec [--orphans] [--direct]",
 				Description: "Explicitly terminate Higgs-managed StrongSwan connections and delete their XFRM interfaces.\n" +
 					"This is intended for local recovery after system networking state becomes inconsistent.",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "orphans", Usage: "Also terminate/unload Higgs-named StrongSwan connections not referenced by local state"},
+					&cli.BoolFlag{Name: "direct", Usage: "Run cleanup in this process without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
 						return cli.Exit("usage: higgs recovery cleanup-ipsec [--orphans]", 1)
 					}
-					return recoveryCleanupIPsec(ctx, cmd.Bool("orphans"))
+					return recoveryCleanupIPsec(ctx, cmd.Bool("orphans"), cmd.Bool("direct"))
 				},
 			},
 			{
 				Name:      "purge-revoked",
 				Usage:     "Remove revoked zones' local residue (dry-run by default)",
-				UsageText: "higgs recovery purge-revoked [--zone <zone>] [--apply]",
+				UsageText: "higgs recovery purge-revoked [--zone <zone>] [--apply] [--direct]",
 				Description: "Hard-delete the local residue of revoked zones: their ZoneState bodies in the DB, " +
 					"plus LinkInstances and SyncPeers entries pointing at them.\n" +
 					"Without --apply this only prints a preview and changes nothing. " +
@@ -109,12 +113,13 @@ func cmdRecovery() *cli.Command {
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "zone", Usage: "Limit the purge to a single revoked zone (and its subtree)"},
 					&cli.BoolFlag{Name: "apply", Usage: "Actually delete; without it the command only prints a preview"},
+					&cli.BoolFlag{Name: "direct", Usage: "Apply cleanup in this process without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
 						return cli.Exit("usage: higgs recovery purge-revoked [--zone <zone>] [--apply]", 1)
 					}
-					return recoveryPurgeRevoked(ctx, cmd.Bool("apply"), zone.ZonePath(cmd.String("zone")))
+					return recoveryPurgeRevoked(ctx, cmd.Bool("apply"), zone.ZonePath(cmd.String("zone")), cmd.Bool("direct"))
 				},
 			},
 		},
@@ -152,7 +157,7 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 	return nil
 }
 
-func recoveryImportZone(input string) error {
+func recoveryImportZone(input string, direct bool) error {
 	var snapshot gossip.ZoneSnapshot
 	if err := readBase64JSONOrJSON(input, &snapshot); err != nil {
 		return err
@@ -161,11 +166,15 @@ func recoveryImportZone(input string) error {
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	if result, revocations, ok, err := importRecoveryZoneViaControl(rt, &snapshot); err != nil {
 		return err
 	} else if ok {
 		printRecoveryImportResult(result, revocations, " via daemon")
 		return nil
+	}
+	if !direct {
+		logControlFallback("recovery_import_zone")
 	}
 	state, err := rt.LoadState()
 	if err != nil {
@@ -342,11 +351,12 @@ func validateRecoveryRootSnapshot(rt *Runtime, state *stateFile, snapshot *gossi
 	return nil
 }
 
-func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath) error {
+func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	// Only --apply talks to the daemon so the running node can observe the
 	// deletion and reconcile (tear down orphaned IPsec, etc.). A dry-run is a
 	// pure local computation and never reaches the daemon.
@@ -359,7 +369,9 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath)
 			printPurgePlan(plan, " via daemon")
 			return nil
 		}
-		logControlFallback("recovery_purge_revoked")
+		if !direct {
+			logControlFallback("recovery_purge_revoked")
+		}
 	}
 	state, err := rt.LoadState()
 	if err != nil {

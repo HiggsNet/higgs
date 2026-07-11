@@ -60,11 +60,12 @@ func parseAuthorityPermission(raw string) (zone.Permission, error) {
 	}
 }
 
-func grantAuthority(path zone.ZonePath, permissions []zone.Permission, outPath string) error {
+func grantAuthority(path zone.ZonePath, permissions []zone.Permission, outPath string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	bundle, controlled, err := grantAuthorityViaControl(rt, path, permissions)
 	if err != nil {
 		return err
@@ -77,7 +78,9 @@ func grantAuthority(path zone.ZonePath, permissions []zone.Permission, outPath s
 		return nil
 	}
 
-	logControlFallback("authority_grant")
+	if !direct {
+		logControlFallback("authority_grant")
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err

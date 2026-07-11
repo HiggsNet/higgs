@@ -279,6 +279,8 @@ CLI 命令（`higgs daemon`、`higgs record put`、`higgs debug links` 等）通
 
 Unix socket 当前以文件权限作为统一管理边界，服务端尚未按方法做调用者身份分权；因此上述类别是 CLI 行为和未来权限模型的约束，不是已经存在的应用层鉴权。
 
+持久状态管理命令 `record put`、`delegate issue`、`delegate revoke`、`authority grant`、`join accept`、`route announce/withdraw` 以及 IPAM pool/assignment 写命令均提供显式 `--direct`。恢复命令 `recovery import-zone`、`recovery purge-revoked --apply` 和 `recovery cleanup-ipsec` 也提供 direct 路径；pull-zone/pull-chain 本身依赖网络，不提供该参数。使用 direct 时客户端不探测 control socket，也不会把这一用户选择记录成 daemon unavailable fallback；调用者必须先确认没有 daemon 正在使用同一状态文件或同时管理相同 IPsec/XFRM 对象。route/IPAM direct 只持久化 signed record，不会立即触发 daemon routing reconcile。`root init` 仍会先探测 daemon，因为它只能在 daemon 尚未加载状态时执行。
+
 ### 5.4 systemd 运行约定
 
 仓库提供 [`contrib/systemd/higgs.service`](../../contrib/systemd/higgs.service) 示例。service 使用 `RuntimeDirectory=higgs` 创建 `/run/higgs`，因此不需要预先手工创建运行目录，也不需要单独的 `.socket` unit。当前 daemon 自己创建并管理 Unix socket，尚不支持 systemd socket activation。

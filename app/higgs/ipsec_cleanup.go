@@ -11,11 +11,12 @@ import (
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
-func recoveryCleanupIPsec(ctx context.Context, includeOrphans bool) error {
+func recoveryCleanupIPsec(ctx context.Context, includeOrphans, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
+	rt.DisableControl = direct
 	if response, ok, err := cleanupIPsecViaControl(rt, includeOrphans); err != nil {
 		return err
 	} else if ok {
@@ -31,6 +32,9 @@ func recoveryCleanupIPsec(ctx context.Context, includeOrphans bool) error {
 }
 
 func cleanupIPsecViaControl(rt *Runtime, includeOrphans bool) (*controlResponse, bool, error) {
+	if rt != nil && rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "ipsec_cleanup", Orphans: includeOrphans})
 	if err != nil && isControlSocketUnavailable(err) {

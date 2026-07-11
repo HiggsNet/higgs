@@ -39,11 +39,11 @@ func TestJoinFlow(t *testing.T) {
 		t.Fatalf("createJoinRequest(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", adminConfig)
-	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil); err != nil {
+	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil, false); err != nil {
 		t.Fatalf("issueDelegation(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
-	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath); err != nil {
+	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, false); err != nil {
 		t.Fatalf("acceptJoinBundle(catofes): %v", err)
 	}
 
@@ -56,7 +56,7 @@ func TestJoinFlow(t *testing.T) {
 		t.Fatalf("createJoinRequest: %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
-	if err := putRecord("catofes.", "admin-note", []byte("kept-out-of-bundle"), "policy.string"); err != nil {
+	if err := putRecord("catofes.", "admin-note", []byte("kept-out-of-bundle"), "policy.string", false); err != nil {
 		t.Fatalf("putRecord(catofes): %v", err)
 	}
 	if err := keygen(siblingKeyPath); err != nil {
@@ -65,10 +65,10 @@ func TestJoinFlow(t *testing.T) {
 	if err := createJoinRequest("node-a.catofes.", siblingKeyPath, siblingRequestPath); err != nil {
 		t.Fatalf("createJoinRequest(node-a): %v", err)
 	}
-	if err := issueDelegation(siblingRequestPath, siblingBundlePath, nil); err != nil {
+	if err := issueDelegation(siblingRequestPath, siblingBundlePath, nil, false); err != nil {
 		t.Fatalf("issueDelegation(node-a): %v", err)
 	}
-	if err := issueDelegation(requestPath, bundlePath, nil); err != nil {
+	if err := issueDelegation(requestPath, bundlePath, nil, false); err != nil {
 		t.Fatalf("issueDelegation: %v", err)
 	}
 	var bundle joinBundle
@@ -89,7 +89,7 @@ func TestJoinFlow(t *testing.T) {
 	}
 
 	t.Setenv("HIGGS_CONFIG", nodeConfig)
-	if err := acceptJoinBundle(bundlePath, keyPath); err != nil {
+	if err := acceptJoinBundle(bundlePath, keyPath, false); err != nil {
 		t.Fatalf("acceptJoinBundle: %v", err)
 	}
 	state, err := loadState()
@@ -102,7 +102,7 @@ func TestJoinFlow(t *testing.T) {
 	if len(state.RootPrivateKey) != 0 {
 		t.Fatalf("joined node unexpectedly has root private key")
 	}
-	if err := putRecord("node-b.catofes.", "identity", []byte("node-b"), "node.identity"); err != nil {
+	if err := putRecord("node-b.catofes.", "identity", []byte("node-b"), "node.identity", false); err != nil {
 		t.Fatalf("putRecord(node-b): %v", err)
 	}
 	if err := verifyChain("node-b.catofes."); err != nil {
@@ -163,7 +163,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	}
 
 	t.Setenv("HIGGS_CONFIG", nodeConfig)
-	if err := acceptJoinBundle(bundleText, keyPath); err != nil {
+	if err := acceptJoinBundle(bundleText, keyPath, false); err != nil {
 		t.Fatalf("acceptJoinBundle(base64): %v", err)
 	}
 	joined, err := loadState()
