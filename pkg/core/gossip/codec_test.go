@@ -68,6 +68,7 @@ func TestObjectChunkCodecRoundTrip(t *testing.T) {
 		Nonce:     99,
 		Timestamp: 1717171717,
 		ObjectChunk: &ObjectChunk{
+			TransferID: []byte("0123456789abcdef"),
 			Object:     ObjectPullZone,
 			Zone:       "catofes.",
 			RootHash:   []byte{1, 2, 3},

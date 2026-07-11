@@ -59,6 +59,9 @@ type PeerDatagramStats struct {
 	TooLargeDropped           int64  `json:"too_large_dropped,omitempty"`
 	DigestOnlyAnnounces       int64  `json:"digest_only_announces,omitempty"`
 	ChunkFallbacks            int64  `json:"chunk_fallbacks,omitempty"`
+	ChunkRepairNACKs          int64  `json:"chunk_repair_nacks,omitempty"`
+	ChunkRepairChunks         int64  `json:"chunk_repair_chunks,omitempty"`
+	ChunkRepairIgnored        int64  `json:"chunk_repair_ignored,omitempty"`
 	LastCatalogUnix           int64  `json:"last_catalog_unix,omitempty"`
 	LastCatalogRootHex        string `json:"last_catalog_root_hex,omitempty"`
 	LastCatalogZoneCount      int    `json:"last_catalog_zone_count,omitempty"`

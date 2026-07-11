@@ -26,6 +26,7 @@ const (
 	MessageCatalogPage      MessageType = "catalog_page"
 	MessageAnnounce         MessageType = "announce"
 	MessageObjectChunk      MessageType = "object_chunk"
+	MessageObjectChunkNACK  MessageType = "object_chunk_nack"
 )
 
 type Message struct {
@@ -43,6 +44,7 @@ type Message struct {
 	CatalogPage      *CatalogPage      `json:"catalog_page,omitempty" msgpack:"cp,omitempty"`
 	Announce         *Announce         `json:"announce,omitempty" msgpack:"a,omitempty"`
 	ObjectChunk      *ObjectChunk      `json:"object_chunk,omitempty" msgpack:"c,omitempty"`
+	ObjectChunkNACK  *ObjectChunkNACK  `json:"object_chunk_nack,omitempty" msgpack:"cn,omitempty"`
 }
 
 type ZoneDigest struct {
@@ -91,6 +93,7 @@ type Announce struct {
 }
 
 type ObjectChunk struct {
+	TransferID []byte                `json:"transfer_id" msgpack:"x"`
 	Object     ObjectPullRequestType `json:"object" msgpack:"o"`
 	Zone       zone.ZonePath         `json:"zone" msgpack:"z"`
 	Key        string                `json:"key,omitempty" msgpack:"k,omitempty"`
@@ -100,6 +103,14 @@ type ObjectChunk struct {
 	Index      uint16                `json:"index" msgpack:"i"`
 	Total      uint16                `json:"total" msgpack:"t"`
 	Data       []byte                `json:"data" msgpack:"d"`
+}
+
+// ObjectChunkNACK requests bounded retransmission of missing chunks from a
+// recently advertised transfer. It never requests an object by selector: the
+// sender must already have the exact transfer in its short-lived send cache.
+type ObjectChunkNACK struct {
+	TransferID []byte   `json:"transfer_id" msgpack:"x"`
+	Missing    []uint16 `json:"missing" msgpack:"m"`
 }
 
 type RecordSnapshot struct {
@@ -154,6 +165,7 @@ func validateMessage(message *Message) error {
 		message.CatalogPage != nil,
 		message.Announce != nil,
 		message.ObjectChunk != nil,
+		message.ObjectChunkNACK != nil,
 	} {
 		if present {
 			bodies++
@@ -198,11 +210,22 @@ func validateMessage(message *Message) error {
 			return errors.New("announce message missing announce body")
 		}
 	case MessageObjectChunk:
-		if message.ObjectChunk == nil || !message.ObjectChunk.Zone.Valid() || len(message.ObjectChunk.ObjectHash) == 0 || message.ObjectChunk.Total == 0 || message.ObjectChunk.Index >= message.ObjectChunk.Total || len(message.ObjectChunk.Data) == 0 {
+		if message.ObjectChunk == nil || len(message.ObjectChunk.TransferID) != 16 || !message.ObjectChunk.Zone.Valid() || len(message.ObjectChunk.ObjectHash) == 0 || message.ObjectChunk.Total == 0 || message.ObjectChunk.Index >= message.ObjectChunk.Total || len(message.ObjectChunk.Data) == 0 {
 			return errors.New("object_chunk message has invalid chunk")
 		}
 		if message.ObjectChunk.Object != ObjectPullZone && message.ObjectChunk.Object != ObjectPullRecord {
 			return errors.New("object_chunk message has invalid object type")
+		}
+	case MessageObjectChunkNACK:
+		if message.ObjectChunkNACK == nil || len(message.ObjectChunkNACK.TransferID) != 16 || len(message.ObjectChunkNACK.Missing) == 0 || len(message.ObjectChunkNACK.Missing) > 128 {
+			return errors.New("object_chunk_nack message has invalid repair request")
+		}
+		seen := make(map[uint16]struct{}, len(message.ObjectChunkNACK.Missing))
+		for _, index := range message.ObjectChunkNACK.Missing {
+			if _, ok := seen[index]; ok {
+				return errors.New("object_chunk_nack message has duplicate index")
+			}
+			seen[index] = struct{}{}
 		}
 	default:
 		return fmt.Errorf("unknown gossip message type: %s", message.Type)

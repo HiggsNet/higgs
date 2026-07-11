@@ -887,6 +887,7 @@ object-pull-smoke: build
 #    多个 UDP object_chunk 发给 A。
 # 7. 断言 A 收到 bigdata，且 A 的 debug peer 显示 chunk_fallbacks > 0。
 chunk-fallback-smoke: build
+	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(SentChunkCache|MissingChunkIndexes|ChunkAssemblyQuietNACK)'
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-chunk-fallback-smoke"; \
 	rm -rf "$$tmp"; \

@@ -259,6 +259,7 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 	}
 	chunks := []*gossip.ObjectChunk{
 		{
+			TransferID: []byte("0123456789abcdef"),
 			Object:     gossip.ObjectPullZone,
 			Zone:       "catofes.",
 			RootHash:   rootHash,
@@ -268,6 +269,7 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 			Data:       data[:chunkSize],
 		},
 		{
+			TransferID: []byte("0123456789abcdef"),
 			Object:     gossip.ObjectPullZone,
 			Zone:       "catofes.",
 			RootHash:   rootHash,

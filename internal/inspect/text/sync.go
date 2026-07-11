@@ -121,6 +121,9 @@ func writeDatagramStatsLine(out *lineWriter, peerID string, stats inspect.PeerDa
 	if stats.TooLargeDropped == 0 &&
 		stats.DigestOnlyAnnounces == 0 &&
 		stats.ChunkFallbacks == 0 &&
+		stats.ChunkRepairNACKs == 0 &&
+		stats.ChunkRepairChunks == 0 &&
+		stats.ChunkRepairIgnored == 0 &&
 		stats.LastCatalogRootHex == "" &&
 		stats.LastCatalogRejectedReason == "" {
 		return
@@ -144,11 +147,14 @@ func writeDatagramStatsLine(out *lineWriter, peerID string, stats inspect.PeerDa
 	if last == "" || last == "never" {
 		last = "-"
 	}
-	out.Linef("datagram peer=%s too_large_dropped=%d digest_only_announces=%d chunk_fallbacks=%d last_too_large=%s direction=%s object=%s zone=%s key=%s bytes=%d limit=%d",
+	out.Linef("datagram peer=%s too_large_dropped=%d digest_only_announces=%d chunk_fallbacks=%d repair_nacks=%d repair_chunks=%d repair_ignored=%d last_too_large=%s direction=%s object=%s zone=%s key=%s bytes=%d limit=%d",
 		peerID,
 		stats.TooLargeDropped,
 		stats.DigestOnlyAnnounces,
 		stats.ChunkFallbacks,
+		stats.ChunkRepairNACKs,
+		stats.ChunkRepairChunks,
+		stats.ChunkRepairIgnored,
 		last,
 		dash(stats.LastTooLargeDirection),
 		dash(stats.LastTooLargeObject),

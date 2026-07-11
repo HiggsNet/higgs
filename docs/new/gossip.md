@@ -202,6 +202,7 @@ type Announce struct {
 }
 
 type ObjectChunk struct {
+	TransferID []byte                // 16-byte short-lived transfer id
     Object     ObjectPullRequestType // "zone" 或 "record"
     Zone       ZonePath
     Key        string
@@ -211,6 +212,11 @@ type ObjectChunk struct {
     Index      uint16    // 当前分片索引（从 0 开始）
     Total      uint16    // 总分片数
     Data       []byte    // 分片 payload
+}
+
+type ObjectChunkNACK struct {
+    TransferID []byte
+    Missing    []uint16 // 最多 128 个缺块索引
 }
 ```
 
@@ -402,6 +408,9 @@ Phase 3: Object Pull（对象拉取）
   │◀─── OBJECT_CHUNK (3/3) ─────│
   │    {index:2, total:3}       │
   │                              │
+  │──── OBJECT_CHUNK_NACK ─────▶│
+  │    {transfer_id, missing}   │
+  │◀─── OBJECT_CHUNK (repair) ──│
 ```
 
 约束：
@@ -409,7 +418,11 @@ Phase 3: Object Pull（对象拉取）
 - 重组缓存 TTL：2 分钟（`chunkAssemblyTTL`）
 - 所有 chunk 到齐后做 content hash 校验
 - 校验通过后再做 root hash / 签名验证
-- 缺少任意 chunk → 丢弃，等下次重新请求
+- 每个 fallback 使用随机 16-byte `transfer_id`；接收 quiet 150ms 后只 NACK 缺块索引。
+- 发送端只从 30 秒 TTL 的已发送缓存重传；每 peer 最多 4 个 inflight transfer，缓存总量最多 32 MiB。
+- 每个 transfer 最多 3 个 repair round，每个 NACK 最多 128 个索引；重复 NACK 不重复发送。
+- NACK 和 repair chunk 都经过现有 datagram budget、replay 与 peer quota；完整对象 hash 和签名链通过后才 apply。
+- `SyncSession` round timeout 会丢弃该 peer 未完成的 assembly；超时后的 unsolicited chunk 不会 apply。
 
 ## 6. SyncSession 状态机
 
@@ -704,6 +717,9 @@ Relay 的 key 约束：
 | `max_sync_records` | 1024 | 每次 apply 最多 record 数 |
 | UDP chunk max | 8 MiB | 最大 chunk fallback 对象 |
 | Chunk assembly TTL | 2 min | UDP chunk 重组超时 |
+| Chunk repair quiet / send TTL | 150ms / 30s | 缺块检测与发送缓存有效期 |
+| Chunk repair rounds / NACK | 3 / 128 indexes | 单 transfer repair 上限 |
+| Chunk peer inflight / send cache | 4 / 32 MiB | 接收 peer 并发与全局发送缓存上限 |
 | round timeout | ≥5s | 整轮超时（RTT 感知）|
 | TCP pull timeout | 5s | object pull 超时 |
 

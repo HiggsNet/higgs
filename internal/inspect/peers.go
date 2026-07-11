@@ -223,6 +223,9 @@ type PeerDatagramStatsView struct {
 	TooLargeDropped           int64
 	DigestOnlyAnnounces       int64
 	ChunkFallbacks            int64
+	ChunkRepairNACKs          int64
+	ChunkRepairChunks         int64
+	ChunkRepairIgnored        int64
 	LastCatalogRootHex        string
 	LastCatalogZoneCount      int
 	LastCatalogCursor         string
@@ -324,6 +327,9 @@ func buildPeerDatagramStatsView(input higgsstate.PeerDatagramStats) PeerDatagram
 		TooLargeDropped:           input.TooLargeDropped,
 		DigestOnlyAnnounces:       input.DigestOnlyAnnounces,
 		ChunkFallbacks:            input.ChunkFallbacks,
+		ChunkRepairNACKs:          input.ChunkRepairNACKs,
+		ChunkRepairChunks:         input.ChunkRepairChunks,
+		ChunkRepairIgnored:        input.ChunkRepairIgnored,
 		LastCatalogRootHex:        input.LastCatalogRootHex,
 		LastCatalogZoneCount:      input.LastCatalogZoneCount,
 		LastCatalogCursor:         input.LastCatalogCursor,

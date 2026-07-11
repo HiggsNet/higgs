@@ -150,6 +150,8 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 		case gossip.MessageObjectChunk:
 			// Object chunks still use the global UDP chunk assembly store.
 			return d.Sync.handleObjectChunk(msg, syncLimits(d.Sync.Config))
+		case gossip.MessageObjectChunkNACK:
+			return d.Sync.handleObjectChunkNACK(msg)
 		default:
 			return nil
 		}
@@ -185,8 +187,8 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
 		case gossip.MessageAnnounce:
 			return d.handleAnnounceHint(msg.PeerID)
-		case gossip.MessageObjectChunk:
-			return d.Sync.handleObjectChunk(msg, syncLimits(d.Sync.Config))
+		case gossip.MessageObjectChunkNACK:
+			return d.Sync.handleObjectChunkNACK(msg)
 		default:
 			return nil
 		}
@@ -500,6 +502,9 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		})
 	}
 	oldState := session.State
+	if _, ok := event.(*RoundTimeoutEvent); ok {
+		udpChunkAssemblies.dropPeer(peerID)
+	}
 	actions, err := session.OnEvent(event, d.Sync.now())
 	if err != nil {
 		d.logWarn("sync", "session_event_error", map[string]any{

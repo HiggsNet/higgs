@@ -1015,6 +1015,14 @@
 
 ## Phase 7 已完成项归档
 
+### 7.3 Gossip UDP object chunk repair
+
+- UDP chunk fallback 保持为 TCP object pull 不可达时的兜底，不扩展成通用可靠传输。
+- 每个发送使用随机 16-byte `transfer_id`；接收端在 150ms quiet 后发送 `object_chunk_nack`，只列出缺块索引，完整 hash 与签名链验证通过后才 apply。
+- 发送端只从 30 秒 TTL 的已发送缓存 repair；单 transfer 最多 3 轮、单 NACK 最多 128 个索引、单 peer 最多 4 个 inflight transfer、全局发送缓存最多 32 MiB。NACK 与 repair chunk 继续受 datagram budget、replay 和 peer quota 约束。
+- `sync status --verbose` / `debug peer` 增加 repair NACK、repair chunk 和 ignored request counters，区分首次 fallback 与 repair 流量。
+- `make check` 和 `make chunk-fallback-smoke` 通过；smoke 先覆盖乱序丢块、重复 NACK、过期/错误 transfer，再验证真实 daemon 在 TCP pull 不可达时经 UDP fallback 收敛。
+
 ### 7.10 Daemon / 本地控制接口生产化
 
 - daemon 统一承担 gossip、committed state 和各数据面 runtime apply；CLI 写入优先走 Unix control socket，显式 `--direct` 仅用于离线或恢复场景。

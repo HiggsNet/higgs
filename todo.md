@@ -12,7 +12,7 @@
 - [x] Phase 5：BIRD Babel、route authorization、per-netns BIRD 配置模型、routing debug 和 dry-run smoke 基座。
 - [x] Phase 6.0-6.7.6：事件驱动控制面、IPAM、准入诊断、防火墙、动态 peer、撤销清理、链路健康和 Observer MVP 主线。
 - [x] Phase 6.7.7：`app/higgs` 模块化重构第一阶段（Observer/debug/inspect 先行）。`internal/observer`、`internal/inspect`、`internal/inspect/http`、`internal/inspect/text` 和 `internal/state` 已承接读侧 view、HTTP DTO、CLI presenter、通用 observer handler 和共享 snapshot 类型；`app/higgs` 保留 executable wiring、daemon provider、control/live/offline source adapter。详细归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)，后续约束见 [docs/app-higgs-modularization-design.md](docs/app-higgs-modularization-design.md)。
-- [x] Phase 7 部分完成项：7.10 daemon/control 生产化收口，以及 7.13-7.15 稳态 reconcile、endpoint timer 和 gossip ping 冗余优化。详细归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
+- [x] Phase 7 部分完成项：7.3 UDP chunk repair、7.10 daemon/control 生产化收口，以及 7.13-7.15 稳态 reconcile、endpoint timer 和 gossip ping 冗余优化。详细归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
 
 ## Phase 7: 生产化收口与高级能力候选
 
@@ -20,7 +20,7 @@
 
 **当前建议顺序：**
 1. **7.1 异构链路模型与公共边界已完成**：BIRD 双接口、WG/GRE 基础数据路径与 staged rotate 均已在真实 root/netns lane 通过，公共 Babel-facing `LinkOutput` 已落地；WG 底座和 GRE/VXLAN 正式实现分别留在可选 7.4/7.5。
-2. 选择一个窄切口进入实现：若目标是稳定性，优先 7.3 chunk repair；若目标是公网部署体验，优先 7.7/7.8 discovery/relay；若目标是运维可见性，优先 7.11 metrics。
+2. **7.3 chunk repair 已完成**；下一窄切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel。
 3. 7.2 高频 port hopping、7.4 WireGuard、7.5 GRE/VXLAN、7.6 SRv6 暂作为可选能力保留，等需求和实验环境明确后再开。
 
 - [x] **7.1 异构 TransportLink 并行共存（模型、实验与公共边界已完成）**
@@ -30,14 +30,6 @@
   - [x] **7.1.c WG staged rotate 验证性实验**：`TestWireGuardGREStagedRotateRootSmoke` 已在真实三节点 root/netns lane 验证 old/staged WG devices 可复用逻辑 device key 与相同 peer public keys；generation-specific transit address 和 staged GRE interface 可与 old generation 并行，Babel 在 old GRE withdraw 后经 staged interface cutover；old/current UDP listener 与 nftables grace rule 同时存在，old shared device 在最后一个 peer 引用释放后才清理。与 7.1.b 共用 `sudo make phase7-1-wg-gre-experiment` 显式入口。
   - [x] **7.1.d 双 provider 抽象边界收口**：确认长期只维护 StrongSwan/XFRM 与 WG/GRE 两套 lifecycle。撤回未接生产路径的通用 `ProviderPlan`/`ProviderAction`/resource graph、通用持久化 instance、StrongSwan 双向 adapter，以及只覆盖部分 constructor 的 Link ID 提前迁移。StrongSwan 继续使用现有 planner/reconcile/apply/state；WG/GRE 自己管理 shared device/peer/GRE resource graph、引用和 rotate。
   - [x] **7.1.e 公共 LinkOutput 与消费者收口**：已在 `internal/state.LinkOutput` 落地 provider-neutral、只读的 Babel-facing 契约；StrongSwan current/staged runtime 投影为独立 active/staged 输出，health、firewall、BIRD health observation 和在线 `links_status.outputs` 统一消费/发布该聚合结果。公共结构不包含 owner、SA 名、rotate phase 或 action，不能反推 apply/teardown；routing/health readiness 保留后续 observation enrichment。
-
-- [ ] **7.3 Gossip UDP object chunk repair（窄化可靠性增强）**
-  - 目标：只补强 UDP chunk fallback 丢包恢复，不把 gossip UDP 扩展成通用可靠传输；TCP object pull 仍是大对象主路径。
-  - 定义短期 `transfer_id`、接收端缺块 bitmap、quiet/deadline 和大小上限。
-  - 增加 `object_chunk_nack` / repair request；发送端只从短 TTL 已发送对象缓存中重发缺块。
-  - 设置硬边界：最大 repair 轮数、单 peer inflight transfer 数、缓存总字节数、每轮 NACK 大小、quota 计费、sync round deadline 和 TTL 清理。
-  - 观测面增加 repair counters，并让 `sync status --verbose` / `debug peer` 区分首次 chunk fallback 与 repair 流量。
-  - 增加单测和 smoke：乱序+丢 chunk 后 NACK 补齐、重复 NACK 不放大、缓存过期不重传、坏 hash/错误 transfer_id 不 apply。
 
 - [ ] **7.7 可选 Global Discovery Server**
   - 作为独立公网 rendezvous 服务，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 discovery 仍以 signed endpoint record + gossip 为主。
@@ -144,5 +136,5 @@
 ## 下一步
 
 1. 7.1 已完成并保持 StrongSwan 主链路现状；WG 底座与 GRE/VXLAN 正式实现分别留在可选 7.4/7.5，不作为当前主线的隐含下一步。
-2. 选择一个窄实现切口进入 Phase 7：稳定性优先选 7.3 chunk repair；公网部署体验优先选 7.7/7.8 discovery/relay；运维可见性优先选 7.11 metrics/readmodel。
+2. 7.3 chunk repair 已完成；下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
