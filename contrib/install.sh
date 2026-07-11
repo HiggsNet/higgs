@@ -1,0 +1,184 @@
+#!/bin/sh
+
+set -eu
+
+repo="${HIGGS_GITHUB_REPOSITORY:-HiggsNet/higgs}"
+version="${HIGGS_VERSION:-latest}"
+install_dir="${HIGGS_INSTALL_DIR:-/usr/local/bin}"
+service_dir="${HIGGS_SYSTEMD_DIR:-/etc/systemd/system}"
+update_only=false
+install_service=true
+enable_service=false
+
+usage() {
+	cat <<'EOF'
+Install Higgs from a GitHub Release.
+
+Usage: install.sh [--version VERSION] [--install-dir DIR] [--no-service] [--enable-service] [--update]
+
+Options:
+  --version VERSION   Release tag to install (default: latest)
+  --install-dir DIR   Binary destination (default: /usr/local/bin)
+  --no-service        Do not install the systemd service
+  --enable-service    Enable higgsnet.service after installing it (does not start it)
+  --update            Do nothing when the installed version is current
+  -h, --help          Show this help
+
+Environment:
+  HIGGS_GITHUB_REPOSITORY  GitHub owner/repository (default: HiggsNet/higgs)
+  HIGGS_VERSION            Same as --version
+  HIGGS_INSTALL_DIR        Same as --install-dir
+  HIGGS_SYSTEMD_DIR        systemd unit directory (default: /etc/systemd/system)
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--version)
+			[ "$#" -ge 2 ] || { echo "error: --version needs a value" >&2; exit 2; }
+			version=$2
+			shift 2
+			;;
+		--install-dir)
+			[ "$#" -ge 2 ] || { echo "error: --install-dir needs a value" >&2; exit 2; }
+			install_dir=$2
+			shift 2
+			;;
+		--update)
+			update_only=true
+			shift
+			;;
+		--no-service)
+			install_service=false
+			shift
+			;;
+		--enable-service)
+			enable_service=true
+			shift
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			echo "error: unknown argument: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+command -v curl >/dev/null 2>&1 || {
+	echo "error: curl is required" >&2
+	exit 1
+}
+command -v sha256sum >/dev/null 2>&1 || {
+	echo "error: sha256sum is required" >&2
+	exit 1
+}
+
+case "$(uname -s)" in
+	Linux) os=linux ;;
+	*) echo "error: only Linux releases are currently available" >&2; exit 1 ;;
+esac
+
+case "$(uname -m)" in
+	x86_64|amd64) arch=amd64 ;;
+	aarch64|arm64) arch=arm64 ;;
+	*) echo "error: unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+if [ "$version" = latest ]; then
+	latest_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${repo}/releases/latest")
+	version=${latest_url##*/}
+	[ -n "$version" ] && [ "$version" != latest ] || {
+		echo "error: could not determine the latest release tag" >&2
+		exit 1
+	}
+fi
+
+case "$version" in
+	v*) ;;
+	*) version="v${version}" ;;
+esac
+
+already_current=false
+if [ "$update_only" = true ] && command -v higgsnet >/dev/null 2>&1; then
+	current=$(higgsnet version 2>/dev/null | sed -n '1s/^higgs //p')
+	if [ "$current" = "$version" ]; then
+		already_current=true
+	fi
+fi
+
+archive="higgs-${version}-${os}-${arch}.tar.gz"
+checksum="higgs-${os}-${arch}.sha256"
+base_url="https://github.com/${repo}/releases/download/${version}"
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+
+if [ "$already_current" = false ]; then
+	echo "Downloading higgs ${version} for ${os}/${arch}..."
+	curl -fL --retry 3 -o "${tmp_dir}/${archive}" "${base_url}/${archive}"
+	curl -fL --retry 3 -o "${tmp_dir}/${checksum}" "${base_url}/${checksum}"
+	(
+		cd "$tmp_dir"
+		sha256sum -c "$checksum"
+	)
+	tar -xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
+	binary="${tmp_dir}/higgs-${version}-${os}-${arch}/higgs"
+	[ -x "$binary" ] || { echo "error: release archive does not contain higgs" >&2; exit 1; }
+
+	if [ -d "$install_dir" ] && [ -w "$install_dir" ]; then
+		install -m 0755 "$binary" "${install_dir}/higgsnet"
+	elif [ ! -e "$install_dir" ] && [ -w "$(dirname "$install_dir")" ]; then
+		mkdir -p "$install_dir"
+		install -m 0755 "$binary" "${install_dir}/higgsnet"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo install -d "$install_dir"
+		sudo install -m 0755 "$binary" "${install_dir}/higgsnet"
+	else
+		echo "error: ${install_dir} is not writable; rerun as root or set HIGGS_INSTALL_DIR" >&2
+		exit 1
+	fi
+
+	echo "Installed higgsnet ${version} to ${install_dir}/higgsnet"
+	"${install_dir}/higgsnet" version
+else
+	echo "higgsnet ${version} is already installed"
+fi
+
+if [ "$install_service" = true ]; then
+	service_source="${tmp_dir}/higgsnet.service"
+	archive_service="${tmp_dir}/higgs-${version}-${os}-${arch}/higgsnet.service"
+	if [ -f "$archive_service" ]; then
+		cp "$archive_service" "$service_source.source"
+	elif ! curl -fsL --retry 3 -o "$service_source.source" \
+		"https://raw.githubusercontent.com/${repo}/${version}/contrib/systemd/higgsnet.service"; then
+		installer_ref="${HIGGS_INSTALLER_REF:-master}"
+		curl -fL --retry 3 -o "$service_source.source" \
+			"https://raw.githubusercontent.com/${repo}/${installer_ref}/contrib/systemd/higgsnet.service"
+	fi
+	sed "s|^ExecStart=.*|ExecStart=${install_dir}/higgsnet daemon|" \
+		"$service_source.source" > "$service_source"
+
+	if [ -d "$service_dir" ] && [ -w "$service_dir" ]; then
+		install -m 0644 "$service_source" "${service_dir}/higgsnet.service"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo install -d "$service_dir"
+		sudo install -m 0644 "$service_source" "${service_dir}/higgsnet.service"
+	else
+		echo "error: ${service_dir} is not writable; rerun as root or use --no-service" >&2
+		exit 1
+	fi
+
+	if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+		if [ "$(id -u)" -eq 0 ]; then
+			systemctl daemon-reload
+			[ "$enable_service" = false ] || systemctl enable higgsnet.service
+		else
+			sudo systemctl daemon-reload
+			[ "$enable_service" = false ] || sudo systemctl enable higgsnet.service
+		fi
+	fi
+	echo "Installed ${service_dir}/higgsnet.service (not started)"
+fi

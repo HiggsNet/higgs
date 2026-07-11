@@ -107,8 +107,8 @@ kill -TERM <pid>
 使用 systemd 时直接运行：
 
 ```bash
-systemctl stop higgs
-systemctl restart higgs
+systemctl stop higgsnet.service
+systemctl restart higgsnet.service
 ```
 
 示例 unit 会在异常退出后重启；正常停止不重启；停止超时为 30 秒。

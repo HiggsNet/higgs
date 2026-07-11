@@ -166,15 +166,50 @@ make docker-run-example
 仓库提供 `flake.nix` 和 `default.nix`：
 
 ```bash
-nix build .#higgs
+nix build .#higgsnet
 nix develop
 ```
 
-`nix develop` 会提供 Go、BIRD、strongSwan、iproute2、iptables 和 nftables 等开发/数据面调试工具。
+Flake 安装的命令名是 `higgsnet`；`.#higgs` 暂时保留为同一 package 的兼容别名。NixOS 可以直接启用随 Flake 提供的 module：
+
+```nix
+{
+  inputs.higgs.url = "github:HiggsNet/higgs";
+  imports = [ inputs.higgs.nixosModules.default ];
+  services.higgsnet.enable = true;
+}
+```
+
+生成的 `higgsnet.service` 默认读取 `/etc/higgs/config.yaml`。`nix develop` 会提供 Go、BIRD、strongSwan、iproute2、iptables 和 nftables 等开发/数据面调试工具。
 
 ### GitHub Release
 
 打 `v*` tag 时，`.github/workflows/release.yml` 会在 GitHub 原生 Linux runner 上分别构建 `amd64` 和 `arm64` release tarball，并发布到 GitHub Release。它还会把 Docker 镜像推送到 GHCR：两个架构先分别生成 `:<version>-amd64` 和 `:<version>-arm64`，再合并为多架构 `:<version>`、`:sha-<commit>` 和 `:latest` tag。也可以从 GitHub Actions 手动触发 workflow 生成 artifacts 和镜像。
+
+Linux `amd64` / `arm64` 可以直接从最新 GitHub Release 安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/install.sh | sh
+```
+
+更新到最新 Release：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/update.sh | sh
+```
+
+脚本会校验 Release 提供的 SHA-256，并把 Release 内的 `higgs` 暂时安装为 `/usr/local/bin/higgsnet`，避免与旧程序重名。配置仍使用 `/etc/higgs/config.yaml`。脚本还会安装 `contrib/systemd/higgsnet.service`，但不会自动启用或启动服务。需要时会自动调用 `sudo`。安装完成并准备好配置后可执行：
+
+```bash
+sudo systemctl enable --now higgsnet.service
+```
+
+指定版本或用户目录安装可使用（用户目录安装通常不需要系统服务）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/install.sh | \
+  sh -s -- --version v0.0.4 --install-dir "$HOME/.local/bin" --no-service
+```
 
 真实系统/特权数据面 smoke 是显式目标，不纳入普通 `make check`：
 

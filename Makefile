@@ -20,7 +20,7 @@ GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABL
 SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
 ROOT_SMOKE_TARGETS := ipsec-xfrm-smoke bird-babel-smoke firewall-smoke health-fault-smoke
 
-.PHONY: docker-build docker-run-example nix-build
+.PHONY: docker-build docker-run-example nix-build install-script-check
 
 all: build
 
@@ -49,6 +49,10 @@ check: fmt vet test build
 
 install:
 	$(GO_ENV) $(GO) install $(MAIN_PACKAGE)
+
+install-script-check:
+	@sh -n contrib/install.sh contrib/update.sh
+	@contrib/install.sh --help >/dev/null
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)

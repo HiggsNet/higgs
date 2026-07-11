@@ -302,7 +302,7 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 
 ### 5.1 systemd 运行约定
 
-仓库提供 [`contrib/systemd/higgs.service`](../../contrib/systemd/higgs.service) 示例。service 使用 `RuntimeDirectory=higgs` 创建 `/run/higgs`，因此不需要预先手工创建运行目录，也不需要单独的 `.socket` unit。当前 daemon 自己创建并管理 Unix socket，尚不支持 systemd socket activation。
+仓库提供 [`contrib/systemd/higgsnet.service`](../../contrib/systemd/higgsnet.service) 示例。service 使用 `RuntimeDirectory=higgs` 创建 `/run/higgs`，因此不需要预先手工创建运行目录，也不需要单独的 `.socket` unit。当前 daemon 自己创建并管理 Unix socket，尚不支持 systemd socket activation。
 
 安装后至少需要确认：
 
