@@ -16,19 +16,20 @@
 
 ## Phase 7: 生产化收口与高级能力候选
 
-**目标：** 先把 daemon/control/运维面补到可长期运行，再按真实需求推进 multipath、可靠性补强和可选传输能力。Phase 7 不要求按编号顺序执行。
+**目标：** 先把 daemon/control/运维面补到可长期运行，再按真实需求推进异构 TransportLink 并行、可靠性补强和可选传输能力。Phase 7 不要求按编号顺序执行。
 
 **当前建议顺序：**
-1. 先做 **7.1 设计冻结**：明确单 peer 多 TransportLink 的数据模型、BIRD/Babel 行为和 smoke 验收，不急着实现。
+1. **7.1 模型决策已冻结**：下一步先做 BIRD 双接口和 WG/GRE staged rotate 的真实验证性实验，再进入通用模型/provider adapter 实现。
 2. 选择一个窄切口进入实现：若目标是稳定性，优先 7.3 chunk repair；若目标是公网部署体验，优先 7.7/7.8 discovery/relay；若目标是运维可见性，优先 7.11 metrics。
-3. 7.2 高频 port hopping、7.4 WireGuard、7.5 VXLAN、7.6 SRv6 暂作为可选能力保留，等需求和实验环境明确后再开。
+3. 7.2 高频 port hopping、7.4 WireGuard、7.5 GRE/VXLAN、7.6 SRv6 暂作为可选能力保留，等需求和实验环境明确后再开。
 
-- [ ] **7.1 多线路并行（Multipath，先设计冻结）**
-  - 待明确：一个 peer 下多条 TransportLink 的 identity、owner token、link group、path priority/weight、health gate 和 cleanup 语义。
-  - 待明确：IKEv2/XFRM over 公网 + IKEv2/XFRM over 内网 + 可选 WG/GRE 共存时，哪些字段属于 signed record，哪些属于本地 policy。
-  - 待明确：每条链路如何独立匹配 BIRD interface pattern，Babel ECMP/metric 如何与 health/quality 联动。
-  - 待明确：debug/observer/readmodel 如何展示 per-peer 多 link 状态，避免只显示“peer online/offline”的单链路视角。
-  - 设计冻结后再拆实现：先 planner/readmodel/smoke，再 runtime apply。
+- [ ] **7.1 异构 TransportLink 并行共存（模型已冻结，待验证与实现）**
+  - 设计文档：[`docs/phase7-1-heterogeneous-transport-design.md`](docs/phase7-1-heterogeneous-transport-design.md)。D1-D7 已冻结：一个 LinkGroup 一个 provider；静态 Babel base cost 属于 LinkGroup；Link ID 包含 provider 但无 ID version；WG device 按 LinkGroup + underlay family 共享；health 第一版不接管 BIRD；非秘密链路参数从 Link ID 派生；IPsec/WG 使用独立 ports record 与 overlay intent；rotate 共用 generation/readmodel，但由 provider 按 per-link 或 shared-device resource graph apply。
+  - [ ] **7.1.a BIRD 双接口验证性实验**：两节点每端两条接口，同一 per-netns BIRD 建立两个 Babel neighbor；验证双方静态 `rxcost` 的方向性、低 cost 选择、首选接口失效与恢复收敛，不接入 health 动态 metric。
+  - [ ] **7.1.b WG/GRE 基础验证性实验**：每个 LinkGroup/family 一个共享 WG device，多个 peer 仅配置 transit AllowedIPs，per-peer GRE/IP6GRE 承载 Babel/业务前缀；验证 netns、路由、MTU 和 cleanup。
+  - [ ] **7.1.c WG staged rotate 验证性实验**：old/staged WG devices 复用逻辑 device key 并复制 peers，使用 generation-specific transit address 与 staged GRE interface；验证双 generation 并行、Babel readiness/cutover、old/current listener/firewall grace 和引用计数 cleanup。
+  - [ ] **7.1.d 通用模型/provider adapter**：实现 desired resource graph、通用 LinkSpec/LinkInstance/owner/readiness、endpoint generation 和 shared-resource state，以 adapter 保持现有 StrongSwan rotate/takeover 行为。
+  - [ ] **7.1.e BIRD/readmodel/runtime 收口**：per-interface policy blocks、按 peer/group/provider 展示多 link、fake-provider dry-run，以及 IPsec/XFRM + WG/GRE 联合 root/container smoke。
 
 - [ ] **7.3 Gossip UDP object chunk repair（窄化可靠性增强）**
   - 目标：只补强 UDP chunk fallback 丢包恢复，不把 gossip UDP 扩展成通用可靠传输；TCP object pull 仍是大对象主路径。
@@ -68,14 +69,17 @@
   - IKEv2/IPsec 不假设能像 WireGuard 一样任意 per-peer 高频跳监听端口；高频数据面端口跳变通常需要 reestablish/MOBIKE/多实例或外层 DNAT 配合。
   - 若推进，必须包含 old-port grace、clock skew 容忍、fallback static port、失联恢复路径、QoS 误判回滚和探测限速。
 
-- [ ] **7.4 WireGuard 传输驱动（可选 / fallback）**
+- [ ] **7.4 WireGuard 传输底座与上层 per-peer 接口（可选实验）**
   - 通过 `wgctrl-go` 操作内核 WG 接口，复用 Zone K-V 中的 `wireguard/*` record。
-  - WG 不作为动态路由主线；仅用于静态前缀、小规模 P2P、或 StrongSwan 不可用平台的轻量 fallback。
-  - WG AllowedIPs 只放 tunnel /32 或 /128；业务路由仍交给 Babel/route authorization。
+  - WG 与 IPsec/XFRM 可以作为同一 peer 的并行 active TransportLink；是否表现为等价路径、较高 cost 的 fallback 或按目的前缀分流，由本地 policy/Babel 决定，不固化在 provider 类型中。
+  - 不把共享裸 WG mesh interface 直接交给 Babel：WG 需要依靠 AllowedIPs 选择加密 peer，若把业务前缀写入 AllowedIPs，会与 Babel 的动态多跳下一跳选择重复并冲突。
+  - WG AllowedIPs 只放每个直连 peer 的 transit `/32` 或 `/128`；业务前缀仍交给 Babel/route authorization。WG 上层通过 GRE 或其他封装提供独立 per-peer 接口，使 Babel 选择接口/下一跳后，WG 只负责把外层包投递给对应 peer。
+  - WG、上层封装与 Babel 接口原则上归属同一个目标 netns；若 WG 留在 host netns，必须显式设计跨 netns underlay、路由、转发、防火墙和 teardown，不作为默认拓扑。
 
-- [ ] **7.5 VXLAN Overlay（远期可选）**
-  - 在 WG 或其他三层底座上封装 VXLAN。
-  - 通过 Zone record 同步 VNI、VTEP 信息。
+- [ ] **7.5 GRE / VXLAN 上层封装选择（远期可选）**
+  - 先用真实 netns + WG + BIRD smoke 比较 GRE 与 VXLAN；仅需 point-to-point 三层 Babel 接口时优先评估 GRE，明确需要二层承载时再选 GRETAP/VXLAN。
+  - VXLAN 方案必须明确 VNI、VTEP、静态/动态 FDB、广播/多播复制和额外 MTU 开销；共享 VNI 不能假设 WG 自动向所有 peer 复制广播/多播。
+  - GRE/VXLAN endpoint 使用 WG transit address，业务前缀不进入 WG AllowedIPs；封装设备在目标 netns 内创建并通过 WG underlay 可达。
 
 - [ ] **7.6 SRv6 支持（实验性）**
   - 通过 netlink 配置 SRv6 SID、End.DT4/End.DX6 行为。
@@ -137,6 +141,6 @@
 
 ## 下一步
 
-1. 写 7.1 multipath 设计冻结稿：先明确数据模型、BIRD/Babel 行为、health/quality 语义、debug/observer 展示和 smoke 验收，再决定实现切口。
+1. 执行 7.1.a BIRD 双接口验证性实验，先用真实 BIRD/netns 固化静态 `rxcost` 方向性和故障收敛，再执行 7.1.b WG/GRE 基础实验与 7.1.c staged rotate 实验。
 2. 选择一个窄实现切口进入 Phase 7：稳定性优先选 7.3 chunk repair；公网部署体验优先选 7.7/7.8 discovery/relay；运维可见性优先选 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
