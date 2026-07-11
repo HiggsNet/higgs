@@ -200,9 +200,10 @@ type syncConfigPeer struct {
 }
 
 type Runtime struct {
-	Config    *appConfig
-	StatePath string
-	Clock     func() time.Time
+	Config         *appConfig
+	StatePath      string
+	Clock          func() time.Time
+	DisableControl bool
 }
 
 func NewRuntime() (*Runtime, error) {

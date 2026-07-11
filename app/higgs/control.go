@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Catofes/higgs/internal/controlapi"
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/pkg/core/gossip"
@@ -177,17 +178,8 @@ func controlSocketPath(config *appConfig) string {
 }
 
 func sendControlRequest(path string, request controlRequest) (*controlResponse, error) {
-	conn, err := net.DialTimeout("unix", path, time.Second)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(controlConnDeadline))
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
-		return nil, err
-	}
 	var response controlResponse
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	if err := controlapi.Send(path, request, &response); err != nil {
 		return nil, err
 	}
 	if !response.OK {
@@ -314,6 +306,9 @@ func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspecth
 }
 
 func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {
+	if rt != nil && rt.DisableControl {
+		return 0, false, nil
+	}
 	socketPath := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(socketPath, controlRequest{
 		Method: "record_put",
@@ -447,6 +442,9 @@ func initRootViaControl(rt *Runtime) (ed25519.PublicKey, bool, error) {
 }
 
 func sendAdminControlRequest(rt *Runtime, request controlRequest) (*controlResponse, bool, error) {
+	if rt != nil && rt.DisableControl {
+		return nil, false, nil
+	}
 	socketPath := controlSocketPath(nil)
 	if rt != nil {
 		socketPath = controlSocketPath(rt.Config)
@@ -462,11 +460,11 @@ func sendAdminControlRequest(rt *Runtime, request controlRequest) (*controlRespo
 }
 
 func isControlSocketUnavailable(err error) bool {
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		return true
-	}
-	return errors.Is(err, os.ErrNotExist)
+	// Only errors that positively mean "there is no listener" permit callers
+	// to enter an offline/direct fallback. Timeouts, permission failures and
+	// connection resets may all come from a live but unhealthy daemon; treating
+	// them as absence risks concurrent direct DB writes beside the single writer.
+	return controlapi.IsUnavailable(err)
 }
 
 func writeControlResponse(conn net.Conn, response controlResponse) {

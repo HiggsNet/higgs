@@ -580,8 +580,9 @@ func buildIPAMTestRuntimeWithCapability(t *testing.T, ipamCap bool) (*Runtime, z
 	}
 
 	config := defaultAppConfig()
+	config.DataDir = dir
 	config.StatePath = filepath.Join(dir, "higgs.db")
-	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
+	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}

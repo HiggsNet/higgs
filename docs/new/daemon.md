@@ -266,7 +266,18 @@ Daemon 监听一个 Unix domain socket。root 运行时固定默认使用 `/run/
 
 ### 5.3 客户端调用
 
-CLI 命令（`higgs daemon`、`higgs record put`、`higgs debug links` 等）通过 `sendControlRequest()` 与 daemon 通信。当 daemon 不存在时（control socket 不可用），允许 recovery/direct 的命令可回退到本地状态文件；必须依赖在线 runtime apply 的命令会报错或要求显式 `--direct`。具体命令分级仍以 CLI 帮助为准，后续会固化为 control API 权限表。
+CLI 命令（`higgs daemon`、`higgs record put`、`higgs debug links` 等）通过 `sendControlRequest()` 与 daemon 通信。当 daemon 不存在时（socket 路径不存在或明确返回 connection refused），允许 recovery/direct 的命令可回退到本地状态文件；超时、权限错误、连接重置和协议错误不会触发 direct fallback，因为这些错误可能来自仍在线但异常的 daemon。必须依赖在线 runtime apply 的命令会报错或要求显式 `--direct`。
+
+当前方法和离线策略分为四类：
+
+| 类别 | control 方法 | daemon 不在线时 |
+|------|--------------|-----------------|
+| 只读快照/诊断 | `status`、`record_get`、`bird_status`、`bird_dump`、`routes_dump`、`admission_status`、`firewall_status`、`links_status`、`peers_status`、`revoke_status`、`health_status` | CLI 可使用 DB/offline view；BIRD、SA、health 等 live 字段可能缺失 |
+| 持久状态管理 | `record_put`、`delegate_issue`、`authority_grant`、`delegate_revoke`、`join_accept` | 仅在确认 daemon 不在线时允许现有 direct/recovery 路径，并输出 fallback 警告 |
+| 在线 runtime 管理 | `sync_trigger`、`reload`、`routing_reload`、`ipsec_rotate_port`、`shutdown` | 默认失败；确有恢复用途的命令必须显式提供 `--direct`，且 direct 不代表已 apply 数据面 |
+| 恢复操作 | `recovery_import_zone`、`recovery_purge_revoked`、`ipsec_cleanup`、`root_init` | import/purge/cleanup 优先经 daemon，确认 daemon 不在线后可进入现有 recovery 路径；`root_init` 必须停止 daemon 后离线执行 |
+
+Unix socket 当前以文件权限作为统一管理边界，服务端尚未按方法做调用者身份分权；因此上述类别是 CLI 行为和未来权限模型的约束，不是已经存在的应用层鉴权。
 
 ### 5.4 systemd 运行约定
 
