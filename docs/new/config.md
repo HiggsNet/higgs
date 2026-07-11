@@ -119,6 +119,10 @@ netns:
     kind: name
     name: h2
     create: true
+    forwarding:
+      transit: false
+      allow_prefixes:
+        - 10.42.0.0/16
   # edge:
   #   kind: name
   #   name: edge
@@ -126,6 +130,8 @@ netns:
 ```
 
 `default` 是 overlay link group、routing instance 和非 host firewall instance 的默认 netns。其他名字，例如 `edge`，与 `default` 并列声明，供 `overlays[].netns`、`routing.instances[].netns` 和 `firewall.instances[].netns` 引用。
+
+`forwarding` 属于 netns，并由该 netns 中的 BIRD 与 firewall 共同消费。`transit: false` 只禁止本节点充当 XFRM-to-XFRM mesh 中继；Higgs 仍会按运行需要开启内核 IPv4/IPv6 forwarding。`allow_prefixes` / `deny_prefixes` 限制允许中继和继续宣告的授权前缀。
 
 ## IPsec Provider
 
@@ -253,10 +259,6 @@ firewall:
       backend: auto
       default_policy: drop
       xfrm_tunnel_pattern: hgs*
-      forwarding:
-        transit: false
-        allow_prefixes:
-          - 10.42.0.0/16
 
     - id: host-ipsec
       host: true
@@ -272,7 +274,6 @@ firewall:
 - 非 host instance 的 `netns` 引用顶层 `netns`；省略时使用 `netns.default`。
 - netns instance 默认匹配 `hgs*` XFRM tunnel interface。
 - host instance 用于 ingress、IKE/NAT-T 端口和 range 模式 redirect grace。
-- `forwarding.allow_prefixes` / `deny_prefixes`：允许或拒绝转发的前缀列表。
 - host instance 的 `listen_addrs`：用于 host ingress 和 DNAT/redirect 规则的监听地址，默认使用 `gossip.advertise_addrs`。
 - `host_ports`：控制是否管理 host IKE/NAT-T 端口规则（`ike`、`natt`）。
 - `redirect_grace`：range 模式下是否管理 advertised port 到 charon 的 DNAT/redirect 规则。

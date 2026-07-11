@@ -430,38 +430,6 @@ func firstListenAddr(addrs []netip.Addr) netip.Addr {
 	return addrs[0]
 }
 
-// filterTransitPrefixes applies allow/deny prefix lists from the forwarding policy.
-func filterTransitPrefixes(v4, v6 []netip.Prefix, policy ForwardingPolicy) []netip.Prefix {
-	all := append(append([]netip.Prefix{}, v4...), v6...)
-	if len(policy.AllowPrefixes) > 0 {
-		allowed := make(map[string]bool)
-		for _, p := range policy.AllowPrefixes {
-			allowed[p.String()] = true
-		}
-		var filtered []netip.Prefix
-		for _, p := range all {
-			if allowed[p.String()] {
-				filtered = append(filtered, p)
-			}
-		}
-		all = filtered
-	}
-	if len(policy.DenyPrefixes) > 0 {
-		denied := make(map[string]bool)
-		for _, p := range policy.DenyPrefixes {
-			denied[p.String()] = true
-		}
-		var filtered []netip.Prefix
-		for _, p := range all {
-			if !denied[p.String()] {
-				filtered = append(filtered, p)
-			}
-		}
-		all = filtered
-	}
-	return all
-}
-
 func defaultPolicyVerb(policy string) string {
 	if policy == DefaultPolicyAccept {
 		return ActionAccept

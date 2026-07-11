@@ -41,16 +41,21 @@ func debugFirewallWithRuntime(rt *Runtime, w io.Writer) error {
 	return writeDebugFirewall(w, rt, instances, snapshot)
 }
 
-func writeDebugFirewall(w io.Writer, _ *Runtime, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) error {
-	return inspecttext.WriteDebugFirewall(w, buildFirewallDebugView(instances, snapshot))
+func writeDebugFirewall(w io.Writer, rt *Runtime, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) error {
+	var config *appConfig
+	if rt != nil {
+		config = rt.Config
+	}
+	return inspecttext.WriteDebugFirewall(w, buildFirewallDebugView(config, instances, snapshot))
 }
 
-func buildFirewallDebugView(instances []FirewallInstanceConfig, snapshot *firewallReconcileState) inspect.FirewallDebugView {
+func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) inspect.FirewallDebugView {
 	input := inspect.FirewallDebugInput{
 		Instances: make([]inspect.FirewallInstanceInput, 0, len(instances)),
 		Reconcile: snapshot,
 	}
 	for _, inst := range instances {
+		policy := netnsForwardingPolicy(config, inst.NetNS)
 		scope := inst.NetNS
 		if inst.IsHost {
 			scope = "host"
@@ -63,9 +68,9 @@ func buildFirewallDebugView(instances []FirewallInstanceConfig, snapshot *firewa
 			Backend:       inst.Backend,
 			DefaultPolicy: inst.DefaultPolicy,
 			OwnerPrefix:   inst.OwnerPrefix,
-			Transit:       inst.Forwarding.Transit,
-			AllowPrefixes: len(inst.Forwarding.AllowPrefixes),
-			DenyPrefixes:  len(inst.Forwarding.DenyPrefixes),
+			Transit:       policy.Transit,
+			AllowPrefixes: len(policy.AllowPrefixes),
+			DenyPrefixes:  len(policy.DenyPrefixes),
 			IsHost:        inst.IsHost,
 			HostIKE:       inst.HostPorts.IKE,
 			HostNATT:      inst.HostPorts.NATT,

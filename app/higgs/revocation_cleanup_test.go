@@ -537,7 +537,10 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Netns = netnsConfig{
+		Names:      map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}},
+		Forwarding: map[string]firewall.ForwardingPolicy{"higgstesth2": {Transit: true}},
+	}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
 		ID:                "higgstesth2",
@@ -547,7 +550,6 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		Backend:           firewall.BackendNone,
 		DefaultPolicy:     firewall.DefaultPolicyDrop,
 		XFRMTunnelPattern: "hgs*",
-		Forwarding:        firewall.ForwardingPolicy{Transit: true},
 	}}
 
 	rt := &Runtime{

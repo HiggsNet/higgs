@@ -104,6 +104,13 @@ netns:
     kind: name
     name: h2
     create: true
+    # Forwarding policy is owned by this netns and shared by BIRD and firewall.
+    forwarding:
+      transit: false
+      # allow_prefixes:
+      #   - 10.42.0.0/16
+      # deny_prefixes:
+      #   - 10.99.0.0/24
 
 ipsec:
   # This section configures the local IPsec provider. It does not, by itself,
@@ -269,12 +276,6 @@ firewall:
       # backend: auto
       # default_policy: drop
       # xfrm_tunnel_pattern: hgs*
-      # forwarding:
-      #   transit: false
-      #   allow_prefixes:
-      #     - 10.42.0.0/16
-      #   deny_prefixes:
-      #     - 10.99.0.0/24
 
     - id: host-ipsec
       host: true

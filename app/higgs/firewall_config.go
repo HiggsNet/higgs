@@ -43,9 +43,6 @@ type FirewallInstanceConfig struct {
 	ListenAddrs []netip.Addr
 
 	Hooks firewall.Hooks
-
-	// Forwarding policy for this instance's overlay.
-	Forwarding firewall.ForwardingPolicy
 }
 
 // firewallConfigYAML is the raw YAML model for the top-level `firewall:` section.
@@ -74,8 +71,6 @@ type firewallInstanceYAML struct {
 	ListenAddrs   []string           `yaml:"listen_addrs"`
 
 	Hooks *hooksYAML `yaml:"hooks"`
-
-	Forwarding *forwardingYAML `yaml:"forwarding"`
 }
 
 type localServiceYAML struct {
@@ -105,15 +100,6 @@ type hooksYAML struct {
 	HostPostPrerouting string `yaml:"host_post_prerouting"`
 	HostPreInput       string `yaml:"host_pre_input"`
 	HostPostInput      string `yaml:"host_post_input"`
-}
-
-type forwardingYAML struct {
-	Transit       *bool    `yaml:"transit"`
-	AllowPrefixes []string `yaml:"allow_prefixes"`
-	DenyPrefixes  []string `yaml:"deny_prefixes"`
-	AllowPeers    []string `yaml:"allow_peers"`
-	DenyPeers     []string `yaml:"deny_peers"`
-	MetricHint    uint     `yaml:"metric_hint"`
 }
 
 func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig, _ string) (firewallConfig, error) {
@@ -248,30 +234,6 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		}
 	}
 
-	forwarding := firewall.ForwardingPolicy{}
-	if yi.Forwarding != nil {
-		allowPrefixes, err := parsePrefixList(yi.Forwarding.AllowPrefixes)
-		if err != nil {
-			return FirewallInstanceConfig{}, fmt.Errorf("forwarding.allow_prefixes: %w", err)
-		}
-		denyPrefixes, err := parsePrefixList(yi.Forwarding.DenyPrefixes)
-		if err != nil {
-			return FirewallInstanceConfig{}, fmt.Errorf("forwarding.deny_prefixes: %w", err)
-		}
-		transit := false
-		if yi.Forwarding.Transit != nil {
-			transit = *yi.Forwarding.Transit
-		}
-		forwarding = firewall.BuildForwardingPolicy(
-			transit,
-			allowPrefixes,
-			denyPrefixes,
-			yi.Forwarding.AllowPeers,
-			yi.Forwarding.DenyPeers,
-			yi.Forwarding.MetricHint,
-		)
-	}
-
 	return FirewallInstanceConfig{
 		ID:                yi.ID,
 		NetNS:             yi.NetNS,
@@ -288,7 +250,6 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		RedirectGrace:     redirectGrace,
 		ListenAddrs:       listenAddrs,
 		Hooks:             hooks,
-		Forwarding:        forwarding,
 	}, nil
 }
 

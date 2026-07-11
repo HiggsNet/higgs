@@ -299,12 +299,9 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 		}
 	}
 
-	// Forwarding policy from matching firewall instance config.
-	for _, fi := range config.Firewall.Instances {
-		if fi.ID == spec.ID {
-			input.Forwarding = fi.Forwarding
-			break
-		}
+	// Forwarding policy is owned by the network namespace and shared with BIRD.
+	if !spec.IsHost {
+		input.Forwarding = netnsForwardingPolicy(config, spec.NetNS)
 	}
 
 	// Phase 6.3.7: derive revoked prefixes from the route authorization errors.

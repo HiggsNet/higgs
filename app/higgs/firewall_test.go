@@ -24,6 +24,10 @@ netns:
     kind: name
     name: higgstesth2
     create: true
+    forwarding:
+      transit: false
+      allow_prefixes:
+        - 10.42.0.0/16
 firewall:
   instances:
     - id: higgstesth2
@@ -37,10 +41,6 @@ firewall:
           port: 8080
           sources:
             - 10.42.0.0/16
-      forwarding:
-        transit: false
-        allow_prefixes:
-          - 10.42.0.0/16
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -64,11 +64,12 @@ firewall:
 	if inst.LocalServices[0].Port != 8080 {
 		t.Errorf("service port = %d, want 8080", inst.LocalServices[0].Port)
 	}
-	if inst.Forwarding.Transit {
+	policy := netnsForwardingPolicy(config, inst.NetNS)
+	if policy.Transit {
 		t.Error("transit should be false")
 	}
-	if len(inst.Forwarding.AllowPrefixes) != 1 {
-		t.Errorf("allow_prefixes len = %d, want 1", len(inst.Forwarding.AllowPrefixes))
+	if len(policy.AllowPrefixes) != 1 {
+		t.Errorf("allow_prefixes len = %d, want 1", len(policy.AllowPrefixes))
 	}
 }
 
@@ -745,7 +746,7 @@ func TestBuildFirewallDebugView(t *testing.T) {
 			"higgstesth2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 		},
 	}
-	view := buildFirewallDebugView(instances, snapshot)
+	view := buildFirewallDebugView(nil, instances, snapshot)
 	if view.Backend != "dry-run" {
 		t.Fatalf("backend = %q, want dry-run", view.Backend)
 	}

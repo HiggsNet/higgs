@@ -127,6 +127,31 @@ func TestBuildDesiredState_TransitAllowFilters(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredState_TransitAllowParentPrefix(t *testing.T) {
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "mesh", Enabled: true, Mode: ModeManaged, DefaultPolicy: DefaultPolicyDrop,
+	}, FirewallPolicyInput{
+		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.1.0/24"), mustPrefix(t, "10.43.0.0/24")},
+		Forwarding: ForwardingPolicy{
+			Transit:       true,
+			AllowPrefixes: []netip.Prefix{mustPrefix(t, "10.42.0.0/16")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	for _, rule := range desired.ForwardRules {
+		if rule.Comment != "xfrm transit (transit enabled)" {
+			continue
+		}
+		if len(rule.Src) != 1 || rule.Src[0].String() != "10.42.1.0/24" {
+			t.Fatalf("transit prefixes = %v, want child prefix covered by allow /16", rule.Src)
+		}
+		return
+	}
+	t.Fatal("transit accept rule not found")
+}
+
 func TestBuildDesiredState_HostInstance(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID:            "host-ipsec",
@@ -462,25 +487,6 @@ func TestResolveBackend(t *testing.T) {
 	}
 	if got := ResolveBackend(BackendNone, pf); got != BackendNone {
 		t.Errorf("ResolveBackend(none) = %s, want none", got)
-	}
-}
-
-func TestBuildForwardingPolicy(t *testing.T) {
-	p := BuildForwardingPolicy(true,
-		[]netip.Prefix{mustPrefix(t, "10.0.0.0/8")},
-		[]netip.Prefix{mustPrefix(t, "10.99.0.0/24")},
-		[]string{"*.catofes."},
-		[]string{},
-		200,
-	)
-	if !p.Transit {
-		t.Error("transit should be true")
-	}
-	if !IsTransitPrefixAllowed(p, mustPrefix(t, "10.42.0.0/24")) {
-		t.Error("10.42/16 should be allowed under 10/8 allow")
-	}
-	if IsTransitPrefixAllowed(p, mustPrefix(t, "10.99.0.0/24")) {
-		t.Error("10.99/24 should be denied")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -15,6 +16,10 @@ type netnsConfig struct {
 	// Names maps netns name → spec. The name is used as the stable key
 	// referenced by overlays and routing instances.
 	Names map[string]ipsec.NetNSSpec
+	// Forwarding holds the single routing/firewall forwarding policy owned by
+	// each network namespace. Alias keys (notably "default" and its target)
+	// point at the same value.
+	Forwarding map[string]firewall.ForwardingPolicy
 	// Default is the preferred default reference key.
 	Default string
 }
@@ -22,9 +27,14 @@ type netnsConfig struct {
 // netnsConfigYAML is the raw YAML model for the top-level `netns:` section.
 type netnsConfigYAML struct {
 	// Default is the optional default netns, equivalent to a named entry.
-	Default *ipsec.NetNSSpec `yaml:"default"`
+	Default *netnsSpecYAML `yaml:"default"`
 	// Entries is a map of named netns definitions, declared alongside default.
-	Entries map[string]ipsec.NetNSSpec `yaml:",inline"`
+	Entries map[string]netnsSpecYAML `yaml:",inline"`
+}
+
+type netnsSpecYAML struct {
+	ipsec.NetNSSpec `yaml:",inline"`
+	Forwarding      *forwardingYAML `yaml:"forwarding"`
 }
 
 // routingConfig holds top-level routing instance definitions.
@@ -129,21 +139,24 @@ const (
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
 func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) (netnsConfig, error) {
-	cfg := netnsConfig{Names: make(map[string]ipsec.NetNSSpec)}
+	cfg := netnsConfig{Names: make(map[string]ipsec.NetNSSpec), Forwarding: make(map[string]firewall.ForwardingPolicy)}
 	if yamlCfg == nil {
 		n := fallback.Normalized()
 		addNetnsSpec(&cfg, "default", n)
 		return cfg, nil
 	}
 	if yamlCfg.Default != nil {
-		n := yamlCfg.Default.Normalized()
+		n := yamlCfg.Default.NetNSSpec.Normalized()
 		if err := n.Validate(); err != nil {
 			return cfg, fmt.Errorf("netns.default: %w", err)
 		}
 		addNetnsSpec(&cfg, "default", n)
+		if err := addNetnsForwarding(&cfg, "default", n, yamlCfg.Default.Forwarding); err != nil {
+			return cfg, fmt.Errorf("netns.default: %w", err)
+		}
 	}
-	for name, spec := range yamlCfg.Entries {
-		n := spec.Normalized()
+	for name, entry := range yamlCfg.Entries {
+		n := entry.NetNSSpec.Normalized()
 		if err := n.Validate(); err != nil {
 			return cfg, fmt.Errorf("netns.%s: %w", name, err)
 		}
@@ -151,6 +164,9 @@ func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) (netns
 			name = n.Target()
 		}
 		cfg.Names[name] = n
+		if err := addNetnsForwarding(&cfg, name, n, entry.Forwarding); err != nil {
+			return cfg, fmt.Errorf("netns.%s: %w", name, err)
+		}
 		if name == "default" && cfg.Default == "" {
 			cfg.Default = name
 		}

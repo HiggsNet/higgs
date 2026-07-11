@@ -62,3 +62,16 @@ func canonicalPrefixes(prefixes []netip.Prefix) []netip.Prefix {
 	}
 	return out
 }
+
+// filterTransitPrefixes applies the shared allow/deny semantics to the
+// authorized IPv4 and IPv6 prefix sets used by the firewall planner.
+func filterTransitPrefixes(v4, v6 []netip.Prefix, policy ForwardingPolicy) []netip.Prefix {
+	all := append(append([]netip.Prefix{}, v4...), v6...)
+	var filtered []netip.Prefix
+	for _, p := range all {
+		if IsTransitPrefixAllowed(policy, p) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}
