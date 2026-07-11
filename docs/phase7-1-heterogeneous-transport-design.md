@@ -828,6 +828,15 @@ policy；routing reconcile 再把各 group 的 link/cost 合并为同一个 per-
   MTU 1360 和 BIRD/WG/GRE/netns cleanup 均通过。实验通过
   `sudo make phase7-1-wg-gre-experiment` 显式运行，不进入默认 smoke。
 
+- [x] 7.1.c staged rotate 验证性实验：
+  `pkg/transport/wireguard.TestWireGuardGREStagedRotateRootSmoke` 在同一组三节点真实 netns
+  中创建 old/staged WG device。两个 runtime device 复用每个节点的逻辑 WG private key 和
+  相同 peer public keys，但使用不同 listen port、transit address epoch 与 per-peer GRE
+  interface。Babel 同时观察两代接口，old GRE withdraw 后业务路由切到 staged GRE；两代 UDP
+  listener 的 nftables accept grace rule 同时存在。删除一个 peer 的 old link 后，中心旧
+  device 仍为另一 peer 保留；最后一个引用释放后才删除旧 device。与 7.1.b 共用
+  `sudo make phase7-1-wg-gre-experiment`，不进入默认 smoke。
+
 以下仍属于正式 provider 实现范围：
 
 - netns 内 WG device/peer ownership；

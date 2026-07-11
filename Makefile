@@ -972,7 +972,7 @@ help:
 	@echo "  bird-babel-preflight - Check root/netns/BIRD prerequisites"
 	@echo "  bird-babel-smoke - Run real BIRD/Babel smoke (requires root, NOT in smoke-all)"
 	@echo "  phase7-1-bird-experiment - Run the explicit Phase 7.1 dual-interface BIRD experiment (requires root)"
-	@echo "  phase7-1-wg-gre-experiment - Run the explicit Phase 7.1 shared-WG/per-peer-GRE experiment (requires root)"
+	@echo "  phase7-1-wg-gre-experiment - Run explicit Phase 7.1 shared-WG/GRE and staged-rotate experiments (requires root)"
 	@echo "  bird-babel-container-smoke - Run BIRD/Babel smoke in privileged container"
 	@echo "  observer-smoke - Run Phase 6.7 web observer API + SSE + static UI smoke test"
 	@echo "  help    - Show this help message"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Explicit Phase 7.1.b experiment. It validates one shared WireGuard device
-# with multiple transit-only peers and per-peer GRE/Babel links. It is not part
-# of smoke-all, bird-babel-smoke, or root-smoke.
+# Explicit Phase 7.1.b/7.1.c experiment. It validates one shared WireGuard
+# device with multiple transit-only peers and per-peer GRE/Babel links, then
+# validates staged shared-device rotation. It is not part of smoke-all,
+# bird-babel-smoke, or root-smoke.
 set -euo pipefail
 
 go_cmd="${GO:-go}"
@@ -35,6 +36,6 @@ HIGGS_WG_GRE_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./pkg/transport/wireguard -run '^TestWireGuardGREThreeNodeRootSmoke$' -count=1 -v
+  "$go_cmd" test ./pkg/transport/wireguard -run '^TestWireGuardGRE(ThreeNode|StagedRotate)RootSmoke$' -count=1 -v
 
-printf 'Phase 7.1 WireGuard/GRE experiment passed\n'
+printf 'Phase 7.1 WireGuard/GRE and staged rotate experiments passed\n'
