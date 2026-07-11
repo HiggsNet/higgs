@@ -31,14 +31,15 @@
     - [x] 多个 CLI 写命令已优先尝试 daemon control，daemon 不可用时 fallback 到直接 DB/debug/recovery 路径。
     - [x] status、admission、peers、revoke、health、observer/debug 相关 control/readmodel 已有结构化响应或共享 inspect view。
     - [x] `sync status --verbose`、`debug peer`、`debug links`、`debug health` 等已能优先使用 daemon/control/live source，并 fallback 到 DB/offline source。
+    - [x] control socket 生命周期第一批 hardening：root 默认固定为 `/run/higgs/higgs.sock`；启动时拒绝覆盖活跃 socket，仅清理确认失效的 Unix socket，同名普通文件不删除；父目录/socket 维持 `0700`/`0600`，并补 systemd service 示例与运行约定。
   - 剩余可执行项：
     - [ ] 梳理 CLI daemon-client 默认策略：明确哪些命令必须走 daemon，哪些允许 direct DB fallback，哪些仅 debug/recovery 才可直接写 DB。
-    - [ ] 固化 Unix socket 路径、目录权限、文件权限和 root/admin 用户边界；补 socket stale cleanup 与错误提示。
+    - [ ] 在已固化路径、基础权限和 stale cleanup 上继续明确可配置 owner/group 与 root/admin 多用户边界。
     - [ ] 补全 control API surface 清单：status、peers、zones、records/history/conflicts、sync trigger、reload config、apply dry-run、health/routes/links/admission/revoke。
     - [ ] 将 control DTO/client helper 逐步下沉到 `internal/controlapi`，避免 app 层和 CLI 调用点重复拼请求/响应。
     - [ ] 增加只读/管理操作分级；TCP control listener 仅预留设计，默认关闭，后续需要时再加 token/mTLS。
     - [ ] 补 daemon 生命周期文档：启动、优雅停止、reload、状态持久化、崩溃恢复、observer/control socket 交互。
-    - [ ] 增加 systemd service/socket 示例和路径约定，如 `/run/higgs/higgs.sock`。
+    - [x] 增加 systemd service 示例和 `/run/higgs/higgs.sock` 路径约定；当前不支持 socket activation，因此不提供误导性的 `.socket` unit。
 
 - [ ] **7.1 多线路并行（Multipath，先设计冻结）**
   - 待明确：一个 peer 下多条 TransportLink 的 identity、owner token、link group、path priority/weight、health gate 和 cleanup 语义。

@@ -226,7 +226,9 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（record put、de
 
 ### 5.1 协议
 
-Daemon 监听一个 Unix domain socket（路径默认 `<data_dir>/higgs.sock`，root 下也可用 `/run/higgs/higgs.sock`，可被 `HIGGS_CONTROL_SOCKET` 环境变量覆盖）。
+Daemon 监听一个 Unix domain socket。root 运行时固定默认使用 `/run/higgs/higgs.sock`，非 root 运行时默认使用 `<data_dir>/higgs.sock`；`HIGGS_CONTROL_SOCKET` 可显式覆盖两者。daemon 会以 `0700` 创建父目录，并把 socket 设为 `0600`，因此当前权限边界是启动 daemon 的用户（以及 root）。
+
+启动时如果路径上已有 socket，daemon 会先探测它：能够连接说明另一个实例仍在线，此时拒绝启动；确认无法连接的失效 socket 才会被清理。同名普通文件或无法确认状态的 socket 不会被删除，避免误删和双 daemon 抢占。正常停止会移除 socket；崩溃遗留的 socket 会在下一次启动时按上述规则清理。
 
 协议是简单 JSON request/response：客户端发送 `controlRequest`，服务端回复 `controlResponse`。所有通信通过 `json.NewEncoder`/`json.NewDecoder` 完成。
 
@@ -264,7 +266,18 @@ Daemon 监听一个 Unix domain socket（路径默认 `<data_dir>/higgs.sock`，
 
 ### 5.3 客户端调用
 
-CLI 命令（`higgs daemon`、`higgs record put`、`higgs debug links` 等）通过 `sendControlRequest()` 与 daemon 通信。当 daemon 不存在时（control socket 不可用），客户端自动回退到直接操作本地状态文件。
+CLI 命令（`higgs daemon`、`higgs record put`、`higgs debug links` 等）通过 `sendControlRequest()` 与 daemon 通信。当 daemon 不存在时（control socket 不可用），允许 recovery/direct 的命令可回退到本地状态文件；必须依赖在线 runtime apply 的命令会报错或要求显式 `--direct`。具体命令分级仍以 CLI 帮助为准，后续会固化为 control API 权限表。
+
+### 5.4 systemd 运行约定
+
+仓库提供 [`contrib/systemd/higgs.service`](../../contrib/systemd/higgs.service) 示例。service 使用 `RuntimeDirectory=higgs` 创建 `/run/higgs`，因此不需要预先手工创建运行目录，也不需要单独的 `.socket` unit。当前 daemon 自己创建并管理 Unix socket，尚不支持 systemd socket activation。
+
+安装后至少需要确认：
+
+- `ExecStart` 指向实际安装的 `higgs` 二进制；
+- `/etc/higgs/config.yaml` 和 identity/private key 仅允许运行用户读取；
+- 如果启用 StrongSwan/XFRM、netns 或防火墙 apply，service 需要相应的 root/capability 权限；
+- root CLI 与 daemon 使用相同的 `HIGGS_CONFIG`，从而共同定位 `/run/higgs/higgs.sock` 和同一份状态。
 
 ---
 
@@ -462,7 +475,7 @@ Daemon 使用结构化日志，通过 `Log` 字段（`*appLogger`）输出 `comp
 ### 8.4 关键状态文件路径
 
 - 状态数据库：`<data_dir>/state.db`（BoltDB，含 Network、meta）
-- Control socket：`<data_dir>/higgs.sock` 或 `/run/higgs/higgs.sock`
+- Control socket：root 为 `/run/higgs/higgs.sock`；非 root 为 `<data_dir>/higgs.sock`；环境变量可覆盖
 - 配置文件：`<data_dir>/config.yaml`
 - BIRD 配置：`<data_dir>/bird-<instance>.conf`
 

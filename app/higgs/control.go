@@ -167,9 +167,7 @@ func controlSocketPath(config *appConfig) string {
 		return path
 	}
 	if os.Geteuid() == 0 {
-		if _, err := os.Stat("/run/higgs"); err == nil {
-			return filepath.Join("/run/higgs", controlSocketName)
-		}
+		return filepath.Join("/run/higgs", controlSocketName)
 	}
 	dataDir := "."
 	if config != nil && config.DataDir != "" {

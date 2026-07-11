@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
@@ -418,12 +419,14 @@ func (d *DaemonService) startControlServer(ctx context.Context) (func(), error) 
 		return func() {}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(d.ControlSocketPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create control socket directory: %w", err)
+	}
+	if err := prepareControlSocketPath(d.ControlSocketPath); err != nil {
 		return nil, err
 	}
-	_ = os.Remove(d.ControlSocketPath)
 	listener, err := net.Listen("unix", d.ControlSocketPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listen on control socket %s: %w", d.ControlSocketPath, err)
 	}
 	if err := os.Chmod(d.ControlSocketPath, 0o600); err != nil {
 		_ = listener.Close()
@@ -437,6 +440,39 @@ func (d *DaemonService) startControlServer(ctx context.Context) (func(), error) 
 		<-done
 		_ = os.Remove(d.ControlSocketPath)
 	}, nil
+}
+
+// prepareControlSocketPath removes a socket left behind by a daemon that is no
+// longer listening. It deliberately refuses to unlink live sockets or other
+// filesystem objects: both cases require operator intervention rather than
+// silently taking over the path.
+func prepareControlSocketPath(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect control socket %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("control socket path %s exists and is not a Unix socket", path)
+	}
+
+	conn, dialErr := net.DialTimeout("unix", path, 250*time.Millisecond)
+	if dialErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("control socket %s is already in use; another daemon may be running", path)
+	}
+	if errors.Is(dialErr, os.ErrNotExist) {
+		return nil
+	}
+	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+		return fmt.Errorf("control socket %s could not be checked; refusing to remove it: %w", path, dialErr)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove stale control socket %s: %w", path, err)
+	}
+	return nil
 }
 
 func (d *DaemonService) serveControl(ctx context.Context, listener net.Listener, done chan<- struct{}) {

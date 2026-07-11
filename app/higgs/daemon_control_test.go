@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/Catofes/higgs/pkg/core/gossip"
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestDaemonControlErrorResponses(t *testing.T) {
@@ -58,6 +60,62 @@ func TestDaemonControlStatus(t *testing.T) {
 	}
 	if response.PeerID != config.PeerID || response.Message != "daemon online" {
 		t.Fatalf("status response = %#v", response)
+	}
+}
+
+func TestPrepareControlSocketPathRejectsActiveListener(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "higgs.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("Unix sockets are not permitted in this environment: %v", err)
+		}
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	err = prepareControlSocketPath(path)
+	if err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("prepareControlSocketPath(active) error = %v", err)
+	}
+	if _, statErr := os.Lstat(path); statErr != nil {
+		t.Fatalf("active socket was removed: %v", statErr)
+	}
+}
+
+func TestPrepareControlSocketPathRemovesStaleSocket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "higgs.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("Unix sockets are not permitted in this environment: %v", err)
+		}
+		t.Fatalf("listen: %v", err)
+	}
+	listener.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	if err := prepareControlSocketPath(path); err != nil {
+		t.Fatalf("prepareControlSocketPath(stale): %v", err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale socket still exists: %v", err)
+	}
+}
+
+func TestPrepareControlSocketPathPreservesRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "higgs.sock")
+	if err := os.WriteFile(path, []byte("do not remove"), 0o600); err != nil {
+		t.Fatalf("write regular file: %v", err)
+	}
+
+	if err := prepareControlSocketPath(path); err == nil || !strings.Contains(err.Error(), "not a Unix socket") {
+		t.Fatalf("prepareControlSocketPath(regular) error = %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "do not remove" {
+		t.Fatalf("regular file changed: data=%q err=%v", got, err)
 	}
 }
 
