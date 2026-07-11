@@ -237,19 +237,89 @@ type LinkInstance struct {
 
 ### Reconcile 主循环
 
-一次完整的 IPsec reconcile 由 `reconcileIPsecLinks`（`app/higgs/ipsec_reconcile.go`）驱动，整体数据流如下：
+一次完整的 IPsec reconcile 由 `reconcileIPsecLinks`（`app/higgs/ipsec_reconcile.go`）驱动。
+`TransportLinkSpec` 不是直接“变成 interface”：它先是 desired state，再与持久化 state 和
+真实 SA/XFRM observation 比较，产出 `ReconcileAction` 操作图，最后才由 driver 落成系统资源。
 
 ```text
-PlanTransportLinks(active state + config)
-    → desired []TransportLinkSpec + []SkipReason + Roles
+已验证的 active NetworkState                 本机 config + LinkGroup + 本机 transport key
+（peer ipsec/profile/addresses/ports/key/intent）       （connect/deny、netns、backoff、rotate policy）
+                 \                                           /
+                  +---- ipsec.PlanTransportLinks ------------+
+                                |
+                                |  desired LinkPlan
+                                |  - []TransportLinkSpec：希望存在的 IKE/XFRM 链路
+                                |  - Roles / Skipped：角色与不能建链的原因
+                                v
+                    injectIPsecKeyMaterial
+                                |
+                                |  desired spec 补齐本机私钥；planner 本身不读私钥
+                                v
+持久化 LinkInstances --------> ReconcileLinkInstances <-------- VICI ListSAs + XFRM InspectLink
+（上轮状态、owner、backoff、          |                            （实际 IKE/CHILD SA、
+ rotate/takeover）                    |                             interface/flags/address）
+                                      |
+                                      |  对比 desired / persisted / observed / revocation
+                                      |  输出：next LinkInstances + []ReconcileAction
+                                      v
+                       Action graph（按 link/rotate phase 顺序执行）
+                         | create/update/repair/adopt/noop
+                         | teardown
+                         | prepare_rotate/commit_rotate/rollback/cleanup_rotate
+                         v
+                    ipsec.ApplyReconcileAction
+                         |
+          +--------------+------------------+
+          |                                 |
+          v                                 v
+ StrongSwanDriver                       SystemXFRMDriver
+ VICI: load-key/load-conn/             host: ip link add type xfrm if_id
+ initiate/terminate/unload-conn        -> move to target netns -> up
+                                       -> assign derived tunnel address
+          |                                 |
+          +--------------+------------------+
+                         v
+          mark action success/failure + maintain existing XFRM interfaces
+                         v
+          commit LinkInstances + IPsecReconcileState + save state
+                         v
+          routing / firewall / health consume hgs* interface and runtime state
+```
 
-ReconcileLinkInstances(desired + persisted LinkInstance + driver ListSAs + revocations)
-    → Actions []ReconcileAction + 更新后的 Instances
+对象职责：
 
-ApplyReconcileAction(action, spec, instance)
-    → StrongSwanDriver + SystemXFRMDriver 实际建/拆/修链路
+| 对象 | 是什么 | 不做什么 |
+|---|---|---|
+| `TransportLinkSpec` | 某条逻辑 link 的 desired 配置：peer、endpoint、IKE identity、XFRM if_id、interface、地址、generation | 不操作系统，不代表已建立 |
+| `LinkInstance` | 上轮/本轮的持久化 runtime 锚点：实际 state、SA/XFRM 名称、owner、backoff、rotate/takeover | 不自行决定策略或调用 VICI |
+| `SAState` / `InspectLink` | 本轮真实观测：charon 是否有匹配 SA、XFRM interface 是否真的存在且可用 | 不修改 desired state |
+| `ReconcileAction` | 三类输入比较后得到的操作节点，含 action、spec、instance 和原因 | 不做策略规划，不直接执行命令 |
+| `ApplyReconcileAction` | 把 action 分派给 VICI/XFRM driver 的执行器 | 不重新决定 create/repair/rotate/teardown |
 
-写回 d.Sync.State.LinkInstances + saveState()
+典型 `create` 操作图：
+
+```text
+desired spec
+  -> EnsureNamespace(target netns)
+  -> LoadPrivateKey(transport ID)                 [若本机 key 尚未加载]
+  -> LoadConnection(IKE/CHILD configuration)
+  -> EnsureInterface(XFRM if_id)
+       host-born XFRM -> move target netns -> addrgenmode none -> link up
+  -> AssignAddress(derived local tunnel address)
+  -> InitiateChild                                [仅本机应主动发起时]
+  -> instance=connecting
+  -> 下次 ListSAs/InspectLink 观测成功后 instance=up 或 adopt
+```
+
+`teardown` 是反向且带 owner guard 的操作图：
+
+```text
+owner + Higgs resource marker verified
+  -> TerminateSA
+  -> UnloadConnection
+  -> UnloadPrivateKey（无其他引用时）
+  -> Delete staged/current XFRM interface
+  -> remove LinkInstance
 ```
 
 #### 每轮执行的 7 个步骤
