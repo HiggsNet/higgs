@@ -15,6 +15,7 @@ import (
 	"github.com/Catofes/higgs/internal/controlapi"
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
+	higgsstate "github.com/Catofes/higgs/internal/state"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
@@ -79,12 +80,13 @@ type controlResponse struct {
 }
 
 type linkInspectionControl struct {
-	Inspection        inspect.LinkInspection `json:"inspection"`
-	ReplannedDesired  int                    `json:"replanned_desired"`
-	ReplanIgnored     bool                   `json:"replan_ignored,omitempty"`
-	LastDesiredLinks  int                    `json:"last_desired_links,omitempty"`
-	DesiredPlanSource string                 `json:"desired_plan_source,omitempty"`
-	ActualSAs         []linkSAState          `json:"actual_sas,omitempty"`
+	Inspection        inspect.LinkInspection  `json:"inspection"`
+	Outputs           []higgsstate.LinkOutput `json:"outputs,omitempty"`
+	ReplannedDesired  int                     `json:"replanned_desired"`
+	ReplanIgnored     bool                    `json:"replan_ignored,omitempty"`
+	LastDesiredLinks  int                     `json:"last_desired_links,omitempty"`
+	DesiredPlanSource string                  `json:"desired_plan_source,omitempty"`
+	ActualSAs         []linkSAState           `json:"actual_sas,omitempty"`
 }
 
 // healthLinkJSON is the JSON representation of health.LinkHealth for the

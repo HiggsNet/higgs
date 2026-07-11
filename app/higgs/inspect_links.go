@@ -6,11 +6,13 @@ import (
 	"sort"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	higgsstate "github.com/Catofes/higgs/internal/state"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 type linkInspectionBuild struct {
 	Inspection        inspect.LinkInspection
+	Outputs           []higgsstate.LinkOutput
 	PlannedSpecs      map[string]ipsec.TransportLinkSpec
 	ReplannedDesired  int
 	ReplanIgnored     bool
@@ -30,6 +32,7 @@ func buildLinkInspectionFromReconcile(rt *Runtime, state *stateFile, health []he
 func linkInspectionControlFromBuild(build linkInspectionBuild) *linkInspectionControl {
 	return &linkInspectionControl{
 		Inspection:        build.Inspection,
+		Outputs:           append([]higgsstate.LinkOutput(nil), build.Outputs...),
 		ReplannedDesired:  build.ReplannedDesired,
 		ReplanIgnored:     build.ReplanIgnored,
 		LastDesiredLinks:  build.LastDesiredLinks,
@@ -90,6 +93,7 @@ func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []heal
 	}
 	return linkInspectionBuild{
 		Inspection:        inspection,
+		Outputs:           linkOutputsFromState(state),
 		PlannedSpecs:      plannedSpecs,
 		ReplannedDesired:  replannedDesired,
 		ReplanIgnored:     replanIgnored,

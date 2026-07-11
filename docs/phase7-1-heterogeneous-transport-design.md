@@ -11,12 +11,12 @@
 - 7.1.b：三节点共享 WG device、transit-only AllowedIPs、per-peer GRE/Babel 数据面；
 - 7.1.c：old/staged WG device、generation-specific transit/GRE、Babel cutover 和零引用 cleanup；
 - 7.1.d：确认只维护两套 provider lifecycle，撤销通用 planner/action/resource graph 的过度抽象。
+- 7.1.e：公共 `LinkOutput` 契约、StrongSwan active/staged 投影和公共消费者读取边界。
 
 剩余实现：
 
-1. 7.1.e：公共 Babel-facing `LinkOutput` 与 routing/firewall/health/readmodel 消费边界；
-2. 7.1.f：WG/GRE 正式 provider；
-3. 7.1.g：BIRD per-interface policy、双 provider readmodel 和联合 smoke。
+1. 7.1.f：WG/GRE 正式 provider；
+2. 7.1.g：BIRD per-interface policy、双 provider readmodel 和联合 smoke。
 
 目标拓扑：
 
@@ -181,6 +181,12 @@ LinkGroup policy + BIRD snapshot + health snapshot
 - inspect/observer：按 peer/group/provider 展示多 link。
 
 公共消费者不得读取 provider action/resource state，也不得凭 `LinkOutput` 执行 teardown。
+
+当前实现位于 `internal/state.LinkOutput` 与 daemon 的 `linkOutputsFromState`。StrongSwan
+current/staged interface 分别投影为 `active`/`staged` 输出；health target、firewall live-interface、
+BIRD staged observation 与在线 `links_status.outputs` 已切到该公共边界。`routing`/`health`
+readiness 当前为 `unknown`，由 7.1.g 的 BIRD/health snapshot enrichment 补齐，而不是从
+provider lifecycle state 猜测。
 
 ## 5. Identity、generation 与 ownership
 

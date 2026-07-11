@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	higgsstate "github.com/Catofes/higgs/internal/state"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/routing"
@@ -539,13 +540,29 @@ func (d *DaemonService) recordBirdHealthObservationForState(state *stateFile, ne
 	if d == nil || d.health == nil || state == nil || observed == nil {
 		return
 	}
-	for _, inst := range state.LinkInstances {
-		if inst.StagedInterfaceName == "" || !linkInstanceBelongsToBirdInstance(inst, netnsName, overlays) {
+	for _, link := range linkOutputsFromState(state) {
+		if link.RuntimeRole != "staged" || link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {
 			continue
 		}
-		obs := birdObservationForInterface(inst.ID, healthProbeID(inst.ID, "staged"), inst.StagedInterfaceName, observed)
+		instanceID := strings.TrimSuffix(link.ID, "#staged")
+		obs := birdObservationForInterface(instanceID, healthProbeID(instanceID, "staged"), link.InterfaceName, observed)
 		d.health.SetBabelObservation(obs)
 	}
+}
+
+func linkOutputBelongsToBirdInstance(link higgsstate.LinkOutput, netnsName string, overlays []string) bool {
+	if link.NetNS != "" && link.NetNS != netnsName {
+		return false
+	}
+	if len(overlays) == 0 {
+		return true
+	}
+	for _, overlay := range overlays {
+		if overlay == link.GroupID {
+			return true
+		}
+	}
+	return false
 }
 
 func birdObservationForInterface(instanceID, probeID, iface string, observed *bird.BirdObservedState) health.BabelObservation {
@@ -576,20 +593,6 @@ func birdObservationForInterface(instanceID, probeID, iface string, observed *bi
 func birdRouteIsBabel(route bird.BirdRoute) bool {
 	return strings.Contains(strings.ToLower(route.Protocol), "babel") ||
 		strings.Contains(strings.ToLower(route.Source), "babel")
-}
-
-func linkInstanceBelongsToBirdInstance(inst linkInstanceState, netnsName string, overlays []string) bool {
-	for _, overlay := range overlays {
-		if overlay == inst.GroupID {
-			return true
-		}
-	}
-	for _, addr := range []string{inst.StagedLocalTunnelAddr, inst.StagedPeerTunnelAddr, inst.LocalTunnelAddr, inst.PeerTunnelAddr} {
-		if scopedNetNS(addr) == netnsName {
-			return true
-		}
-	}
-	return netnsName == "" || netnsName == "default"
 }
 
 func (d *DaemonService) routingProcessManagerForNetNS(netnsName string) birdProcessManager {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
+	higgsstate "github.com/Catofes/higgs/internal/state"
 )
 
 func debugLinks(filter string) error {
@@ -47,6 +48,7 @@ func linkInspectionBuildFromControl(in *linkInspectionControl) linkInspectionBui
 	}
 	return linkInspectionBuild{
 		Inspection:        in.Inspection,
+		Outputs:           append([]higgsstate.LinkOutput(nil), in.Outputs...),
 		ReplannedDesired:  in.ReplannedDesired,
 		ReplanIgnored:     in.ReplanIgnored,
 		LastDesiredLinks:  in.LastDesiredLinks,

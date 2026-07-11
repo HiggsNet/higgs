@@ -285,10 +285,10 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	// Assignment prefixes (import whitelist).
 	input.AssignmentPrefixes = assignmentPrefixes(ars)
 
-	// Live link interfaces from LinkInstances.
-	for _, li := range state.LinkInstances {
-		if li.InterfaceName != "" && li.ActualState != "" && li.ActualState != "removing" {
-			input.LiveInterfaces = append(input.LiveInterfaces, li.InterfaceName)
+	// Provider-neutral live Babel-facing interfaces.
+	for _, link := range linkOutputsFromState(state) {
+		if link.InterfaceName != "" && link.Readiness.Interface == "ready" {
+			input.LiveInterfaces = append(input.LiveInterfaces, link.InterfaceName)
 		}
 	}
 

@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"os"
 	"strings"
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
+	higgsstate "github.com/Catofes/higgs/internal/state"
 	"github.com/Catofes/higgs/pkg/health"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
@@ -27,102 +27,53 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 // snapshot and persisted LinkInstances. Only links with a valid peer tunnel
 // address and probeable state are returned.
 func healthTargetsFromState(state *stateFile, localZone string, _ []ipsec.LinkGroupSpec) []health.ProbeTarget {
-	if state == nil || state.IPsecReconcile == nil {
-		return nil
-	}
-	instanceMap := map[string]linkInstanceState{}
-	if state.LinkInstances != nil {
-		for id, inst := range state.LinkInstances {
-			instanceMap[id] = inst
-		}
-	}
 	var targets []health.ProbeTarget
-	for _, d := range state.IPsecReconcile.Desired {
-		inst := instanceMap[d.InstanceID]
-		base := health.ProbeTarget{
-			InstanceID:    d.InstanceID,
-			GroupID:       d.GroupID,
-			PeerZone:      string(d.PeerZone),
-			LocalZone:     localZone,
-			Overlay:       d.GroupID,
-			NetNS:         scopedNetNS(d.PeerTunnelAddr),
-			InterfaceName: firstNonEmpty(inst.InterfaceName, d.InterfaceName),
-			Generation:    inst.RemoteGeneration,
-			ProbeRole:     "active",
-			State:         inst.ActualState,
-		}
-		if base.NetNS == "" {
-			base.NetNS = scopedNetNS(d.LocalTunnelAddr)
-		}
-		if addr, err := netip.ParseAddr(stripScope(d.PeerTunnelAddr)); err == nil {
-			base.PeerTunnelAddr = addr
-		}
-		if addr, err := netip.ParseAddr(stripScope(d.LocalTunnelAddr)); err == nil {
-			base.LocalTunnelAddr = addr
-		}
-		applyStateTunnelAddrs(&base, inst.LocalTunnelAddr, inst.PeerTunnelAddr)
-		if shouldProbeStagedInterface(inst) {
-			oldTarget := health.ProbeTarget{
-				InstanceID:    d.InstanceID,
-				GroupID:       d.GroupID,
-				PeerZone:      string(d.PeerZone),
-				LocalZone:     localZone,
-				Overlay:       d.GroupID,
-				NetNS:         base.NetNS,
-				ProbeID:       healthProbeID(d.InstanceID, "old"),
-				ProbeRole:     "old",
-				InterfaceName: firstNonEmpty(inst.InterfaceName, d.InterfaceName),
-				Generation:    inst.RemoteGeneration,
-				State:         inst.ActualState,
-			}
-			if applyStateTunnelAddrs(&oldTarget, inst.LocalTunnelAddr, inst.PeerTunnelAddr) && probeTargetHasTunnelAddrs(oldTarget) {
-				targets = append(targets, oldTarget)
-			}
-
-			stagedTarget := health.ProbeTarget{
-				InstanceID:    d.InstanceID,
-				GroupID:       d.GroupID,
-				PeerZone:      string(d.PeerZone),
-				LocalZone:     localZone,
-				Overlay:       d.GroupID,
-				NetNS:         base.NetNS,
-				ProbeID:       healthProbeID(d.InstanceID, "staged"),
-				ProbeRole:     "staged",
-				InterfaceName: inst.StagedInterfaceName,
-				Generation:    inst.StagedGeneration,
-				State:         inst.ActualState,
-				Staged:        true,
-			}
-			if applyStateTunnelAddrs(&stagedTarget, inst.StagedLocalTunnelAddr, inst.StagedPeerTunnelAddr) && probeTargetHasTunnelAddrs(stagedTarget) {
-				targets = append(targets, stagedTarget)
-			}
+	for _, output := range linkOutputsFromState(state) {
+		if !output.LocalAddr.IsValid() || !output.PeerAddr.IsValid() {
 			continue
 		}
-		if probeTargetHasTunnelAddrs(base) {
-			targets = append(targets, base)
+		role := output.RuntimeRole
+		probeRole := role
+		if role == higgsstate.LinkRuntimeActive {
+			probeRole = "active"
+			if hasStagedLinkOutput(state, output.ID) {
+				probeRole = "old"
+			}
 		}
+		target := health.ProbeTarget{
+			InstanceID:      output.ID,
+			GroupID:         output.GroupID,
+			PeerZone:        string(output.PeerZone),
+			LocalZone:       localZone,
+			Overlay:         output.GroupID,
+			NetNS:           output.NetNS,
+			InterfaceName:   output.InterfaceName,
+			Generation:      output.Generation,
+			ProbeRole:       probeRole,
+			State:           output.State,
+			LocalTunnelAddr: output.LocalAddr,
+			PeerTunnelAddr:  output.PeerAddr,
+		}
+		if probeRole != "active" {
+			target.ProbeID = healthProbeID(output.ID, probeRole)
+		}
+		if role == higgsstate.LinkRuntimeStaged {
+			target.InstanceID = strings.TrimSuffix(output.ID, "#"+higgsstate.LinkRuntimeStaged)
+			target.ProbeID = healthProbeID(target.InstanceID, "staged")
+			target.Staged = true
+		}
+		targets = append(targets, target)
 	}
 	return targets
 }
 
-func applyStateTunnelAddrs(target *health.ProbeTarget, localAddr, peerAddr string) bool {
-	if target == nil {
-		return false
+func hasStagedLinkOutput(state *stateFile, linkID string) bool {
+	for _, output := range linkOutputsFromState(state) {
+		if output.ID == runtimeLinkOutputID(linkID, higgsstate.LinkRuntimeStaged) {
+			return true
+		}
 	}
-	updated := false
-	if local, err := netip.ParseAddr(stripScope(localAddr)); err == nil {
-		target.LocalTunnelAddr = local
-		updated = true
-	}
-	if peer, err := netip.ParseAddr(stripScope(peerAddr)); err == nil {
-		target.PeerTunnelAddr = peer
-		updated = true
-	}
-	return updated
-}
-
-func probeTargetHasTunnelAddrs(target health.ProbeTarget) bool {
-	return target.LocalTunnelAddr.IsValid() && target.PeerTunnelAddr.IsValid()
+	return false
 }
 
 func shouldProbeStagedInterface(inst linkInstanceState) bool {
