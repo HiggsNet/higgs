@@ -822,6 +822,14 @@ policy；routing reconcile 再把各 group 的 link/cost 合并为同一个 per-
 
 ### 7.1.6 WireGuard transit + GRE provider
 
+- [x] 7.1.b 基础验证性实验：`pkg/transport/wireguard.TestWireGuardGREThreeNodeRootSmoke`
+  在三个真实 netns 中使用一个中心共享 WG device 承载两个 transit-only `/32` peer，
+  为每个 peer 创建独立 GRE/Babel interface；B/C 的业务前缀经 A 学习并双向转发，GRE
+  MTU 1360 和 BIRD/WG/GRE/netns cleanup 均通过。实验通过
+  `sudo make phase7-1-wg-gre-experiment` 显式运行，不进入默认 smoke。
+
+以下仍属于正式 provider 实现范围：
+
 - netns 内 WG device/peer ownership；
 - AllowedIPs 仅 transit `/32`/`/128`；
 - per-peer GRE/IP6GRE interface；

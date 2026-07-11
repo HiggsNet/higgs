@@ -69,6 +69,7 @@
               pkgs.iptables
               pkgs.nftables
               pkgs.strongswan
+              pkgs.wireguard-tools
             ];
           };
         });

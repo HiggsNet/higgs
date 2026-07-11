@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -96,6 +96,9 @@ bird-babel-smoke: build
 
 phase7-1-bird-experiment: build
 	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/phase7-1-bird-experiment.sh
+
+phase7-1-wg-gre-experiment: build
+	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" WG="$(WG)" docs/scripts/phase7-1-wg-gre-experiment.sh
 
 bird-babel-container-smoke:
 	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/bird-babel-container-smoke.sh
@@ -969,6 +972,7 @@ help:
 	@echo "  bird-babel-preflight - Check root/netns/BIRD prerequisites"
 	@echo "  bird-babel-smoke - Run real BIRD/Babel smoke (requires root, NOT in smoke-all)"
 	@echo "  phase7-1-bird-experiment - Run the explicit Phase 7.1 dual-interface BIRD experiment (requires root)"
+	@echo "  phase7-1-wg-gre-experiment - Run the explicit Phase 7.1 shared-WG/per-peer-GRE experiment (requires root)"
 	@echo "  bird-babel-container-smoke - Run BIRD/Babel smoke in privileged container"
 	@echo "  observer-smoke - Run Phase 6.7 web observer API + SSE + static UI smoke test"
 	@echo "  help    - Show this help message"

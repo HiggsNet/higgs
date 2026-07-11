@@ -161,6 +161,7 @@ make ipsec-xfrm-container-smoke
 make bird-babel-preflight
 sudo make bird-babel-smoke
 sudo make phase7-1-bird-experiment
+sudo make phase7-1-wg-gre-experiment
 make bird-babel-container-smoke
 
 sudo make firewall-smoke
@@ -206,6 +207,7 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `bird-babel-preflight` | 检查 root/netns/BIRD/Babel 相关前置条件。 |
 | `bird-babel-smoke` | 验证 managed BIRD/Babel lifecycle、邻居和路由学习、negative import filter、anycast failover 和 daemon restart adopt 等常规真实 routing 数据面。 |
 | `phase7-1-bird-experiment` | 显式运行较慢的 Phase 7.1 双接口静态 `rxcost` 方向性、故障切换与恢复实验；不包含在 `bird-babel-smoke` 或 `root-smoke`。 |
+| `phase7-1-wg-gre-experiment` | 显式运行 Phase 7.1 三节点共享 WG device、transit-only AllowedIPs、per-peer GRE/Babel、业务前缀转发、MTU 与 cleanup 实验；不包含在默认 smoke。 |
 | `bird-babel-container-smoke` | 在 privileged container 中运行 BIRD/Babel smoke。 |
 | `firewall-smoke` | 使用真实 nftables/iptables backend 验证 firewall 规则 apply 和清理。 |
 | `firewall-container-smoke` | 在 privileged container 中运行 firewall 数据面 smoke。 |
