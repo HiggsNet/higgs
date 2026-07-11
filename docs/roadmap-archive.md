@@ -1011,3 +1011,21 @@
 - `TestLongFirewallReconcileDoesNotBlockCommittedReaders`
 - IPsec/firewall stale commit 测试覆盖旧 snapshot result 不覆盖新 revision，并在冲突时重新置 dirty。
 - `make check` 通过，包含 `go fmt ./...`、`go vet ./...`、`go test ./...`、`go build ./app/higgs`。
+
+
+## Phase 7 已完成项归档
+
+### 7.10 Daemon / 本地控制接口生产化
+
+- daemon 统一承担 gossip、committed state 和各数据面 runtime apply；CLI 写入优先走 Unix control socket，显式 `--direct` 仅用于离线或恢复场景。
+- control socket 固定为 root-only：默认 `/run/higgs/higgs.sock`，目录/socket 权限 `0700`/`0600`；拒绝覆盖活跃 socket 或同名普通文件，仅清理确认失效的 socket。
+- fallback 只接受 socket 不存在或明确 `ECONNREFUSED`；超时、权限、连接重置和协议错误不回退到直接 DB 写入。
+- `internal/controlapi` 承担 Unix JSON transport、deadline 和 unavailable 分类。公共业务 DTO/typed client 暂不迁移，等出现实际复用需求再评估。
+- 不做多用户 owner/group、只读/管理方法分级或 TCP listener；远程管理有需求时再单独设计鉴权。
+- control API surface、离线策略、daemon 生命周期、systemd 运行方式和 BIRD shutdown policy 已形成文档。
+
+### 7.13-7.15 稳态冗余优化
+
+- **7.13 XFRM maintenance：** 已匹配的接口利用 observed flags/address 短路，避免重复执行 interface/address 维护命令，同时保留必要的周期自愈。
+- **7.14 endpoint timer：** `runStateStoreWriteIfChanged` 只在 endpoint/IPsec/routing 记录实际变化时提交状态并触发 sync/reconcile；稳态不再递增 revision 或 flush 数据面。
+- **7.15 unsolicited ping：** 收到带 catalog summary 的 ping 时先比较本地 root；一致则更新 peer sync 状态并回复 pong，不创建冗余 `SyncSession`，不一致时仍正常拉取差异。

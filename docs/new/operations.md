@@ -104,6 +104,15 @@ higgs daemon --shutdown
 kill -TERM <pid>
 ```
 
+使用 systemd 时直接运行：
+
+```bash
+systemctl stop higgs
+systemctl restart higgs
+```
+
+示例 unit 会在异常退出后重启；正常停止不重启；停止超时为 30 秒。
+
 daemon 做这些事：
 
 - 监听 UDP gossip。
@@ -112,6 +121,8 @@ daemon 做这些事：
 - 接收 control socket 上的本机写入请求。
 - 执行 IPsec、routing、firewall、health reconcile。
 - 提供 Observer API/UI。
+
+崩溃重启后，daemon 从 BoltDB 恢复并重新 reconcile；未完成的同步会自动重试。BIRD 默认使用 `shutdown_policy: persist` 跨 Higgs 重启保留，实验环境可设为 `stop`。详细生命周期见 [Daemon 设计与实现](daemon.md#52-状态持久化停止与崩溃恢复)。
 
 CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在线时，部分命令会回退为直接写本地状态。你也可以显式加 `--direct` 跳过 control socket 探测，直接写本地 DB。
 

@@ -11,6 +11,7 @@ Environment=HIGGS_CONFIG=/etc/higgs/config.yaml
 ExecStart=/usr/local/bin/higgs daemon
 Restart=on-failure
 RestartSec=2s
+TimeoutStopSec=30s
 RuntimeDirectory=higgs
 RuntimeDirectoryMode=0700
 UMask=0077

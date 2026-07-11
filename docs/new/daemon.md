@@ -21,6 +21,7 @@ Higgs daemon 是长期运行的控制循环。它把所有子系统——gossip�
    - 4.6 [状态变化通知](#46-状态变化通知)
 5. [Control Socket](#5-control-socket)
    - 5.1 [systemd 运行约定](#51-systemd-运行约定)
+   - 5.2 [状态持久化、停止与崩溃恢复](#52-状态持久化停止与崩溃恢复)
 6. [Reconcile 调度](#6-reconcile-调度)
 7. [子模块集成](#7-子模块集成)
 
@@ -310,6 +311,23 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 - 如果启用 StrongSwan/XFRM、netns 或防火墙 apply，service 需要相应的 root/capability 权限；
 - root CLI 与 daemon 使用相同的 `HIGGS_CONFIG`，从而共同定位 `/run/higgs/higgs.sock` 和同一份状态。
 
+示例使用 `Restart=on-failure`、`RestartSec=2s` 和 `TimeoutStopSec=30s`：异常退出会重启；正常 shutdown 或 `SIGTERM` 不会重启；停止超过 30 秒后才强制结束。
+
+control socket 先启动、后于 Observer 停止。任一服务启动失败都会终止启动并清理已有 listener。control socket 使用父目录 `0700`、socket `0600`，只允许 root 管理，不做方法级鉴权。
+
+### 5.2 状态持久化、停止与崩溃恢复
+
+签名状态、peer sync 状态和 reconcile 快照写入 BoltDB；socket、连接、内存事件和进行中的 sync session 不持久化。正常关闭使用 `higgs daemon --shutdown` 或 `SIGTERM`。
+
+崩溃后，daemon 从最后一次成功提交的状态启动，重新发布本机记录并 reconcile 数据面；未完成的同步由定时任务重试。状态库无法打开时启动失败，不会用空状态覆盖原文件。
+
+managed BIRD 的退出行为由每个 routing instance 的 `shutdown_policy` 决定：
+
+- `persist`（默认）：保留 BIRD，重启后 adopt，减少路由中断。
+- `stop`：优雅退出时停止 BIRD，适合实验环境。
+
+强制结束或崩溃时不保证执行 `stop`；遗留对象由下次启动按 ownership 检查和收敛。
+
 ---
 
 ## 6. Reconcile 调度
@@ -430,5 +448,3 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 - **输出**：HTTP API（/api/v1/...）、SSE 事件推送
 - **集成点**：`newObserverServer()` 在启动时创建，`observerProvider` 从 `StateStore` 读取数据。状态变化时 daemon 通过 `d.observerHub` 广播 SSE 事件
 - **状态范围**：observer 是纯只读的，不修改任何状态
-
-

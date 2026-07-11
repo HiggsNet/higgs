@@ -11,38 +11,17 @@
 - [x] Phase 4：StrongSwan/XFRM 主线、daemon admin 写入、auto-join、planner/reconcile、host-born XFRM、低频 rotate、bidirectional takeover。
 - [x] Phase 5：BIRD Babel、route authorization、per-netns BIRD 配置模型、routing debug 和 dry-run smoke 基座。
 - [x] Phase 6.0-6.7.6：事件驱动控制面、IPAM、准入诊断、防火墙、动态 peer、撤销清理、链路健康和 Observer MVP 主线。
-
 - [x] Phase 6.7.7：`app/higgs` 模块化重构第一阶段（Observer/debug/inspect 先行）。`internal/observer`、`internal/inspect`、`internal/inspect/http`、`internal/inspect/text` 和 `internal/state` 已承接读侧 view、HTTP DTO、CLI presenter、通用 observer handler 和共享 snapshot 类型；`app/higgs` 保留 executable wiring、daemon provider、control/live/offline source adapter。详细归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)，后续约束见 [docs/app-higgs-modularization-design.md](docs/app-higgs-modularization-design.md)。
+- [x] Phase 7 部分完成项：7.10 daemon/control 生产化收口，以及 7.13-7.15 稳态 reconcile、endpoint timer 和 gossip ping 冗余优化。详细归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
 
 ## Phase 7: 生产化收口与高级能力候选
 
 **目标：** 先把 daemon/control/运维面补到可长期运行，再按真实需求推进 multipath、可靠性补强和可选传输能力。Phase 7 不要求按编号顺序执行。
 
 **当前建议顺序：**
-1. 先做 **7.10 剩余项**：本地控制接口生产化、CLI daemon-client 默认路径、权限边界、systemd/socket 运行约定。这块最贴近现有完成度，也能支撑后续所有高级能力的操作面。
-2. 并行做 **7.1 设计冻结**：先明确单 peer 多 TransportLink 的数据模型、BIRD/Babel 行为和 smoke 验收，不急着实现。
-3. 选择一个窄切口进入实现：若目标是稳定性，优先 7.3 chunk repair；若目标是公网部署体验，优先 7.7/7.8 discovery/relay；若目标是运维可见性，优先 7.11 metrics。
-4. 7.2 高频 port hopping、7.4 WireGuard、7.5 VXLAN、7.6 SRv6 暂作为可选能力保留，等需求和实验环境明确后再开。
-
-- [ ] **7.10 Daemon / 本地控制接口生产化（建议优先）**
-  - 已完成基座：
-    - [x] `higgs daemon` 常驻运行主线已负责 gossip 同步、committed state 更新、IPsec/XFRM、BIRD/Babel、firewall、health、observer 等 runtime apply。
-    - [x] Unix control socket、control command dispatch、daemon event loop single-writer、committed snapshot 读写分离已落地。
-    - [x] 多个 CLI 写命令已优先尝试 daemon control，daemon 不可用时 fallback 到直接 DB/debug/recovery 路径。
-    - [x] status、admission、peers、revoke、health、observer/debug 相关 control/readmodel 已有结构化响应或共享 inspect view。
-    - [x] `sync status --verbose`、`debug peer`、`debug links`、`debug health` 等已能优先使用 daemon/control/live source，并 fallback 到 DB/offline source。
-    - [x] control socket 生命周期第一批 hardening：root 默认固定为 `/run/higgs/higgs.sock`；启动时拒绝覆盖活跃 socket，仅清理确认失效的 Unix socket，同名普通文件不删除；父目录/socket 维持 `0700`/`0600`，并补 systemd service 示例与运行约定。
-    - [x] CLI fallback 安全边界第一批收口：仅 socket 不存在或明确 `ECONNREFUSED` 才视为 daemon 不在线；超时、权限错误、连接重置不再触发 direct DB fallback，并记录只读、持久状态管理、在线 runtime、恢复操作四类方法矩阵。
-    - [x] `internal/controlapi` 第一批下沉：Unix JSON request/response client、deadline 和 unavailable 错误分类脱离 app 层；业务 DTO 与 daemon handler 暂留 app，等 API surface 稳定后再迁移。
-    - [x] 为显式 direct/recovery 路径增加 `Runtime.DisableControl` 基础开关，测试和未来 `--direct` 不再依赖“连接 daemon 失败”来选择离线写入。
-  - 剩余可执行项：
-    - [x] 按方法矩阵统一 CLI 的显式 `--direct` 入口和提示：覆盖 `record put`、`delegate issue/revoke`、`authority grant`、`join accept`、`route announce/withdraw`、IPAM pool/assignment 写命令，以及 recovery import/purge/cleanup；显式 direct 不再误报 daemon unavailable fallback，并明确不会立即 reconcile 或需要避免与 daemon 并发。依赖网络的 recovery pull 不提供无意义的 direct。
-    - [ ] 在已固化路径、基础权限和 stale cleanup 上继续明确可配置 owner/group 与 root/admin 多用户边界。
-    - [x] 补全当前 control API surface 清单和离线策略矩阵：status、record/history、delegation/authority/recovery、sync/reload、IPsec/routing、BIRD/routes、health/links/peers/admission/revoke；尚未实现的 zones/conflicts/apply dry-run 不伪列为已有方法，后续按需求单独扩展。
-    - [ ] 在 transport client 已下沉的基础上，待 API surface 稳定后迁移公共 control DTO 和 typed client helper；daemon handler registration 继续留 app。
-    - [ ] 增加只读/管理操作分级；TCP control listener 仅预留设计，默认关闭，后续需要时再加 token/mTLS。
-    - [ ] 补 daemon 生命周期文档：启动、优雅停止、reload、状态持久化、崩溃恢复、observer/control socket 交互。
-    - [x] 增加 systemd service 示例和 `/run/higgs/higgs.sock` 路径约定；当前不支持 socket activation，因此不提供误导性的 `.socket` unit。
+1. 先做 **7.1 设计冻结**：明确单 peer 多 TransportLink 的数据模型、BIRD/Babel 行为和 smoke 验收，不急着实现。
+2. 选择一个窄切口进入实现：若目标是稳定性，优先 7.3 chunk repair；若目标是公网部署体验，优先 7.7/7.8 discovery/relay；若目标是运维可见性，优先 7.11 metrics。
+3. 7.2 高频 port hopping、7.4 WireGuard、7.5 VXLAN、7.6 SRv6 暂作为可选能力保留，等需求和实验环境明确后再开。
 
 - [ ] **7.1 多线路并行（Multipath，先设计冻结）**
   - 待明确：一个 peer 下多条 TransportLink 的 identity、owner token、link group、path priority/weight、health gate 和 cleanup 语义。
@@ -77,32 +56,6 @@
   - 评估 peer observability readmodel / metrics store，将 `DatagramStats`、`ObjectPullStats` 等纯诊断计数从 `PeerRuntimeState` 拆出。
   - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
-
-- [x] **7.13 IPsec/XFRM maintenance 冗余命令优化**
-  - 问题：`maintainExistingXFRMInterfaces()` 在 `runtime_ensure` 阶段已通过 `InspectLink` 获得接口 flags/addresses，但随后仍无条件调用 `EnsureInterface` / `AssignAddress` / `AssignExtraAddress`。
-  - 影响：每次 IPsec reconcile（含启动 recovery、sync timer、endpoint timer 触发）都会对所有已匹配 link 重复执行 `ip link set up/multicast/addrgenmode`、`ip addr replace`、sysctl 等命令；4 link 节点每次 reconcile 约几十次 netns exec 调用。
-  - 优化方向：在 `maintainExistingXFRMInterfaces` 中利用 `xfrmLinkStateMatchReason` 的 observed 结果做短路；若 flags/address 已匹配则跳过对应 `EnsureInterface` / `AssignAddress` 调用，仅保留需要一次性确认的配置（如 addrgenmode、forwarding sysctl）。
-  - 注意：需同步调整 `TestMaintainExistingXFRMInterfacesRefreshesNoopUpLink` / `RefreshesAdoptedLink` 的测试预期；评估 race condition 与周期性自愈语义之间的取舍。
-  - 相关代码：`app/higgs/ipsec_reconcile.go:115-193`、`pkg/transport/ipsec/xfrm_exec.go:64-113`、`pkg/transport/ipsec/xfrm_exec.go:245-274`、`app/higgs/daemon_ipsec_reconcile_test.go:71-158`。
-
-- [x] **7.14 daemon 启动/endpoint timer 重复触发 reconcile 优化**
-  - 实现：新增 `runStateStoreWriteIfChanged`，由 `handleEndpointTimerEvent` 汇总 endpoint / IPsec / routing netns 三个 publish 函数的 `updated` 结果；无变更时不替换 committed snapshot、不持久化、不触发 `notifyStateChanged`，也不会把 `triggerSync` 置为 true。
-  - 效果：启动后若 endpoint / IPsec / routing 记录均无需更新，endpoint timer 不再引发 IPsec/routing/firewall flush，也不会立即触发 sync timer 再次 flush；有变更时仍走完整 reconcile。
-  - 相关代码：`app/higgs/daemon.go:314-342`（endpoint/sync timer 主循环）、`app/higgs/daemon.go:1075-1105`（`runStateStoreWriteIfChanged`）、`app/higgs/daemon.go:1233-1255`（`handleEndpointTimerEvent`）。
-  - 测试：`TestDaemonEndpointTimerNoChangeSkipsFlushAndSync` 验证无变更时 `syncNow=false`、无 layer flush、state store revision 不变。
-
-- [x] **7.15 gossip unsolicited ping summary 短路优化**
-  - 问题：收到 unsolicited `MessagePing` 且 `msg.Ping.Summary != nil` 时，当前实现直接调用 `handleAnnounceHint(peerID)` 创建 `SyncSession`；session 起来后又会发一次 ping、等一次 pong，才能完成 catalog 对账。但 unsolicited ping 里已经携带了对端的 catalog summary，若 root 和本端一致，这次 ping-pong 完全是冗余的。双方因此形成“对方 ping 触发我开 session → 我发 ping → 对方开 session → 对方又 ping …”的循环，日志里反复出现 `hinted_sync_started reason=announce_hint`。
-  - 影响：稳态下每次 unsolicited ping 都走一遍完整 sync round（ping/pong/catalog diff/save state），浪费 CPU 和网络；state 保存还会级联触发 IPsec/routing/firewall dirty flush（见 7.14）。
-  - 优化方向：在 `daemon_sync.go:162-171` 的 unsolicited `MessagePing` 处理路径中，先复用 `gossip.CatalogSummaryFor` 生成本端 summary，与 `msg.Ping.Summary.CatalogRoot` 比较；若一致，直接更新 sync peer 状态（`recordSyncHint` + `recordPeerSync`）并返回，**不创建 `SyncSession`**；若不一致，再走 `handleAnnounceHint` 拉差异。
-  - 关键设计：
-    - 仅对带 summary 的 `MessagePing` 做短路；`MessageAnnounce` 只带 digest hint，无法直接比较，仍走原逻辑；
-    - 必须保持现有 `respondPing` 行为（回 pong），让对端能拿到本端 summary；
-    - 短路路径要补上 session 完成时会做的状态更新（`LastSyncUnix`、清除 backoff 等），避免 debug/status 显示未同步；
-    - 不改变 `SyncSession` 状态机，只改 ingress 处是否创建 session 的判断；
-    - 可在此基础上看效果决定是否保留一个较短的 hint cooldown（5s）作为补充兜底，用于处理 root 不一致但仍频繁互相触发 session 的场景。
-  - 注意：启动后或长时间未同步时，第一次 unsolicited ping 的 summary 通常会和本端不一致，正常开 session；比较逻辑要注意空 snapshot / nil summary 的边界。
-  - 相关代码：`app/higgs/daemon_sync.go:162-171`（unsolicited ping handler）、`app/higgs/daemon_sync.go:226-246`（`handleAnnounceHint`）、`app/higgs/sync_session.go:309-319`（`handleCatalogSummary` 的 root 比较逻辑可复用）、`app/higgs/state.go:470-498`（`recordPeerSync` / `recordSyncActivePull`）、`app/higgs/daemon_sync_test.go`（补“summary 一致时不开 session”测试）。
 
 - [ ] **7.9 可选 Admission 管理面**
   - 在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交。
@@ -184,7 +137,6 @@
 
 ## 下一步
 
-1. 优先收敛 7.10 剩余项：CLI daemon-client 默认策略、Unix socket 权限/路径、control API surface、`internal/controlapi` 边界、systemd/socket 文档。
-2. 并行写 7.1 multipath 设计冻结稿：先明确数据模型、BIRD/Babel 行为、health/quality 语义、debug/observer 展示和 smoke 验收，再决定实现切口。
-3. 选择一个窄实现切口进入 Phase 7：稳定性优先选 7.3 chunk repair；公网部署体验优先选 7.7/7.8 discovery/relay；运维可见性优先选 7.11 metrics/readmodel。
-4. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定。
+1. 写 7.1 multipath 设计冻结稿：先明确数据模型、BIRD/Babel 行为、health/quality 语义、debug/observer 展示和 smoke 验收，再决定实现切口。
+2. 选择一个窄实现切口进入 Phase 7：稳定性优先选 7.3 chunk repair；公网部署体验优先选 7.7/7.8 discovery/relay；运维可见性优先选 7.11 metrics/readmodel。
+3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
