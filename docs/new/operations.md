@@ -67,8 +67,8 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.
 如果 root admin 保持离线，它写入的 root Zone records 不会自动进入在线 gossip 网络。可以把 root Zone signed snapshot 导出成文件，再交给在线管理端导入：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create . 2a0d:2905::/32 --delegated-to .
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create . 2a0d:2905::/58 --delegated-to catofes.
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs recovery export-zone . root-zone.b64
 
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone root-zone.b64
@@ -76,7 +76,7 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone root-zone
 
 `delegated_to` 是精确 owner，不是向下继承开关。第一条 `delegated_to=.` 只让 root 拥有 `/32`；第二条才让 `catofes.` 精确拥有 `/58`，从而可以继续切子池或发布 assignment。子 Zone 不能直接使用 ancestor 的 self pool；缺少显式覆盖 pool 时，CLI 会以 `ipam_pool_owner_mismatch` 或 `ipam_assignment_pool_mismatch` 早失败。
 
-`export-zone` / `import-zone` 搬运的是已签名 Zone snapshot，不搬运 root 私钥；导入端仍会按 trusted root、delegation chain 和 record signature 做验证。`import-zone` 会优先通过本机 daemon control socket 导入，输出里出现 `via daemon` 表示写入已经进入在线 daemon 的内存状态和 DB；如果使用旧版本命令，在线 daemon 可能把直接 DB 写入覆盖掉，先停 daemon 再导入。
+`export-zone` / `import-zone` 搬运的是已签名 Zone snapshot，不搬运 root 私钥；导入端仍会按 trusted root、delegation chain 和 record signature 做验证。`import-zone` 会优先通过本机 daemon control socket 导入，输出里出现 `via daemon` 表示写入已经进入在线 daemon 的内存状态和 DB。如果目标节点没有 daemon 或你想显式跳过 control socket，加 `--direct` 直接写本地 DB。
 
 排查本机视角时用 `higgs ipam mine` 查看分配给 `managed_zone` 的 assignment 和本 Zone 精确拥有/发布的 pool；排查单个地址或前缀时用 `higgs ipam get <addr-or-prefix>`，必要时加 `--json` 取得 pool chain、best pool、assignment、route 和诊断码。
 
@@ -94,6 +94,16 @@ HIGGS_CONFIG=/etc/higgs/config.yaml higgs daemon
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs daemon --interval 60
 ```
 
+优雅关闭：
+
+```bash
+# 通过 control socket 关闭
+higgs daemon --shutdown
+
+# 或向进程发送 SIGTERM
+kill -TERM <pid>
+```
+
 daemon 做这些事：
 
 - 监听 UDP gossip。
@@ -103,7 +113,37 @@ daemon 做这些事：
 - 执行 IPsec、routing、firewall、health reconcile。
 - 提供 Observer API/UI。
 
-CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在线时，部分命令会回退为直接写本地状态。
+CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在线时，部分命令会回退为直接写本地状态。你也可以显式加 `--direct` 跳过 control socket 探测，直接写本地 DB。
+
+## --direct 离线写入
+
+支持 `--direct` 的命令包括：`record put`、`delegate issue`、`delegate revoke`、`authority grant`、`join accept`、`route announce`/`withdraw`、IPAM pool/assignment 写命令，以及 `recovery import-zone`、`recovery purge-revoked --apply`、`recovery cleanup-ipsec`。
+
+使用场景：
+
+- 节点还没有 daemon，但需要先写入初始 delegation、route、IPAM 等记录。
+- 明确知道 daemon 不在线，且不想等待 control socket 探测超时。
+- 恢复场景下需要直接操作本地 DB。
+
+使用 `--direct` 时不会触发 daemon 的 runtime reconcile（例如不会立即刷新路由或 IPsec）。写入只持久化 signed record，等 daemon 启动后才会 apply 数据面。因此不要用它绕过正在运行的 daemon 去“热改”状态。
+
+示例：
+
+```bash
+# daemon 不在线时直接签发 delegation
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate issue --direct --cap write,delegate <request-payload>
+
+# 直接接受 join bundle
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept --direct <bundle-payload> /tmp/catofes.key.json
+
+# 直接写 record
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs record put --direct node-a.catofes. endpoints/udp '{"endpoints": [...]}' json
+
+# 离线导入 root Zone snapshot
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone --direct root-zone.b64
+```
+
+**注意**：使用 `--direct` 前必须确认没有 daemon 正在管理同一份状态文件或相同的 IPsec/XFRM 对象，否则可能产生并发写或数据面状态不一致。
 
 ## 手动同步
 
@@ -153,6 +193,8 @@ higgs debug peers
 higgs debug zone node-b.catofes.
 higgs debug records node-b.catofes. --prefix endpoints/
 higgs debug endpoints
+higgs debug admission
+higgs debug revoke-impact node-b.catofes.
 ```
 
 数据面：
@@ -165,7 +207,12 @@ higgs debug babel
 higgs debug firewall
 higgs debug health
 higgs debug rotate-port
-higgs debug revoke-impact node-b.catofes.
+```
+
+通过 control socket 查询单条 record：
+
+```bash
+higgs record get <zone> <key>
 ```
 
 底层数据库：
@@ -205,6 +252,26 @@ debug log 常见字段包括 peer、message type、zone/record 数量、字节�
 - `quota`：peer 触发 byte/object rate limit。
 - `verify_failed`：Zone trust chain 或 record 签名验证失败。
 - `unsupported_wire_version`：wire version 不兼容。
+
+Daemon 使用结构化日志，关键事件如下：
+
+| 组件 | 事件 | 含义 |
+|------|------|------|
+| `daemon` | `started` | Daemon 启动，包含 peer_id、addr、interval |
+| `sync` | `zone_applied` | Zone snapshot 被成功应用 |
+| `sync` | `zone_apply_failed` | Zone snapshot 应用失败（含 reject reason） |
+| `sync` | `hinted_sync_started` | 收到 announce hint 后启动 sync session |
+| `sync` | `send_failed` | 发送 UDP 消息失败 |
+| `sync` | `event_dropped` | Sync event 因队列满被丢弃 |
+| `ipsec` | `vici_lifecycle_event` | StrongSwan 生命周期事件 |
+| `ipsec` | `reconcile_failed` | IPsec reconcile 失败 |
+| `routing` | `reconcile_failed` | Routing reconcile 失败 |
+| `firewall` | `no_backend_available` | 无可用防火墙后端 |
+| `endpoint` | `publish_failed` | 端点发布失败 |
+| `endpoint` | `reflector_failed` | 公网地址反射器查询失败 |
+| `auto_join` | `adopted` | 该节点被父 zone 采纳 |
+| `auto_join` | `adopt_failed` | 采纳失败（含原因） |
+| `state` | `save` | 状态文件保存（含 records 数） |
 
 ## Observer
 
@@ -331,9 +398,28 @@ higgs recovery pull-chain node-b.catofes. --from node-b.catofes.
 
 ```bash
 sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs recovery cleanup-ipsec
+
+# 明确跳过 daemon 探测
+sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs recovery cleanup-ipsec --direct
 ```
 
-`cleanup-ipsec` 会优先走 daemon；daemon 不在线时直接读取本地状态并调用配置的 IPsec/XFRM driver。它会拒绝清理无法验证为 Higgs-owned 的 link。
+`cleanup-ipsec` 会优先走 daemon；daemon 不在线时直接读取本地状态并调用配置的 IPsec/XFRM driver。加 `--direct` 可显式跳过 control socket 探测。它会拒绝清理无法验证为 Higgs-owned 的 link。
+
+## 关键路径与注意事项
+
+关键文件路径（默认 `<data_dir>` 由 `HIGGS_CONFIG` 或 `config.yaml` 中的 `data_dir` 决定）：
+
+- 状态数据库：`<data_dir>/higgs.db`（BoltDB，含 Network、meta）
+- Control socket：root 为 `/run/higgs/higgs.sock`；非 root 为 `<data_dir>/higgs.sock`；`HIGGS_CONTROL_SOCKET` 可覆盖
+- 配置文件：`<data_dir>/config.yaml`
+- BIRD 配置：`<data_dir>/bird-<instance>.conf`
+
+运行注意事项：
+
+- **daemon 是单 writer**：不要同时运行多个 `higgs daemon` 实例操作同一个 state 文件。
+- **reload**：`reload` 命令会重新加载配置和状态文件，但不允许切换 `state_path`、control socket 路径或 identity key。
+- **root init 不能通过 daemon 执行**：root zone 初始化需要在 daemon 启动前以 recovery/direct 方式执行。
+- **状态文件外部修改**：daemon 事件循环会检测磁盘状态文件是否被外部修改，检测到变化后自动加载并触发 reconcile。
 
 ## 常见问题入口
 

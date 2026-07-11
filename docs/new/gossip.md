@@ -87,12 +87,13 @@ Gossip 运行于事件驱动的 daemon 架构中：
 |------|------|------------------------------|
 | Active pull FSM | 发起 `PING`，比较 catalog，启动 TCP object pull / UDP chunk fallback，apply 验证后的对象 | 是 |
 | Read-only responder | 响应 `FETCH_CATALOG_PAGE`、TCP object pull、必要时响应 UDP chunk fallback | 否 |
-| Hint ingress | 接收 `ANNOUNCE` / relay hint，决定是否唤醒一次 active pull | 否；最多创建或唤醒主动同步 |
+| Hint ingress | 接收 `ANNOUNCE`、relay hint 或带 Summary 的 unsolicited `PING`，决定是否唤醒一次 active pull | 否；最多创建或唤醒主动同步 |
 
 - `FETCH_*` 是只读请求，响应方直接从本地 verified state 读数据并返回，不进入“服务中”会话状态。
 - `ANNOUNCE` 只表示“我这里可能有新 digest/object”，不作为完整同步的正确性前提。
 - 大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时传完整对象。
 - 收到 hint 不触发 relay；只有本地 active state 真正 apply 成功并发生变化后，才按 relay 规则通知其他 peer。
+- 带 `CatalogSummary` 的 unsolicited `PING` 也是一种 hint：如果 `catalog_root` 与本端一致，直接记录 peer sync 状态并跳过 SyncSession；不一致时回退到 hint 处理，可能创建 active pull。
 - 旧协议兼容字段已删除：Ping/Pong 不再携带完整 digest/fetch list；旧 `sync.go` receive/deadline 路径也已移除，event-loop 是 daemon 与 `sync once` 的唯一收包调度模型。
 
 ---
@@ -293,6 +294,11 @@ Phase 3: Object Pull（对象拉取）
 - 如果一方 catalog 为空 → 立即完成
 - 如果 `catalog_root` 不同 → 进入 Phase 2
 
+**unsolicited PING 的处理**：当 B 在没有主动 session 的情况下收到 A 的 `PING {summary}` 时，同样视为一次 summary round。
+
+- `catalog_root` 一致 → B 直接记录 peer sync 状态，不创建 SyncSession（稳态短路）
+- `catalog_root` 不一致 → B 把该 `PING` 当作 hint，可能创建或唤醒 active pull；同时 B 在回复 `PONG` 后会额外发送 `FETCH_CATALOG_PAGE`，主动拉取 A 的 catalog 分页
+
 ### 4.2 Phase 2: Page Diff
 
 ```
@@ -335,18 +341,23 @@ Phase 3: Object Pull（对象拉取）
 
 ### 4.4 Hint 与主动同步
 
-`ANNOUNCE` 是 hint，不是对象同步主路径。现代路径应按以下方式处理：
+`ANNOUNCE` 和带 Summary 的 unsolicited `PING` 都是 hint，不是对象同步主路径。现代路径应按以下方式处理：
 
 ```
-收到 ANNOUNCE / relay hint
+收到 ANNOUNCE / relay hint / unsolicited PING{summary}
   → 校验消息基本格式、peer、quota、防重放
-  → 记录 hint digest / source / time
-  → 如果没有活跃 session，创建或唤醒 active pull FSM
-  → active pull 通过 catalog diff + object pull 获取完整对象
+  → 如果是 PING{summary} 且 catalog_root 与本端一致
+       → 记录 peer sync 状态并返回（稳态短路，不创建 SyncSession）
+  → 否则
+       → 记录 hint digest / source / time
+       → 如果没有活跃 session，创建或唤醒 active pull FSM
+       → active pull 通过 catalog diff + object pull 获取完整对象
   → apply 成功且 active state 变化后，才触发 relay
 ```
 
 `ANNOUNCE` 只保留 bounded digest 信息，用于低成本唤醒和观测；不能携带 snapshot/records，也不负责完成正确同步。
+
+带 `CatalogSummary` 的 `PING` 比 `ANNOUNCE` 更强：它直接提供了对端 catalog root。root 一致时可以避免创建 SyncSession 的冗余开销；root 不一致时行为与 `ANNOUNCE` 类似，但响应方还会立即发送 `FETCH_CATALOG_PAGE` 主动拉取 catalog。
 
 ---
 
@@ -738,11 +749,13 @@ Packet → routePacket()
   └── 无匹配 → UnsolicitedPacketEvent → 由 handlePacket 处理
 ```
 
+gossip packet 事件不再等待 live state 写锁。`handlePacketEvent` 在事件循环中先于需要写锁的控制请求处理，只读响应（`PONG`、`FETCH_CATALOG_PAGE`、`FETCH_ZONE` 等）直接读取 committed snapshot 并返回；处理完成后通过 `publishCommittedStateSnapshot()` 把 observed path 等 runtime 更新发布到 committed snapshot。
+
 对于有 SyncSession 的场景，具体消息类型转换：
 
 | 入站消息 | 转换事件 |
 |----------|----------|
-| PING (有 Summary) | `CatalogSummaryReceivedEvent` |
+| PING (有 Summary) | 匹配活跃 session 时 → `CatalogSummaryReceivedEvent`；无匹配 session 时 → 按 unsolicited PING 处理 |
 | PING (无 Summary) | 回退到 `PongReceivedEvent` |
 | PONG | `PongReceivedEvent` |
 | FETCH_ZONE (非 chunk) | direct read-only responder；不进入 active `SyncSession` |
@@ -751,6 +764,8 @@ Packet → routePacket()
 | CATALOG_PAGE | `CatalogPageReceivedEvent` |
 | ANNOUNCE | hint ingress：没有活跃 session 时创建 active pull；已有 session 时记录 follow-up hint，不改当前 FSM |
 | OBJECT_CHUNK | 走全局 chunk assembly |
+
+**unsolicited PING 的处理**：无匹配 session 时，带 `Summary` 的 `PING` 先由 `respondPing` 回复 `PONG`（如果 root 不一致还会额外发送 `FETCH_CATALOG_PAGE`），然后进入 `maybeShortcutSyncFromPingSummary`。root 一致则记录 peer sync 状态并直接返回；不一致或 summary 生成失败则回退到 `handleAnnounceHint`，按 hint 创建/唤醒 active pull。
 
 ### 11.4 TimerManager
 

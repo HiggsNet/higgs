@@ -14,12 +14,14 @@ Higgs 默认读取 `/etc/higgs/config.yaml`。本地开发或同一机器多节�
 
 - `HIGGS_CONFIG` 覆盖默认配置路径。
 - `HIGGS_STATE` 覆盖最终状态数据库路径，优先级高于配置里的 `state_path`。排障时要确认它没有指向另一个节点。
+- `HIGGS_CONTROL_SOCKET` 覆盖 control socket 路径，优先级高于由运行身份和 `data_dir` 推导的默认值。
+- `HIGGS_LOG_LEVEL` 临时覆盖配置里的 `log.level`，常用于排障。
 - `trusted_root_public_key` 也兼容 `root_public_key` / `trusted_root_key`。
 - gossip 身份、bootstrap、同步限额和 endpoint discovery 必须写在 `gossip:` 下。
 - 一些列表字段仍兼容旧的逗号分隔字符串，但新配置应使用 YAML list。
 - duration 字段使用 Go duration 写法，例如 `5s`、`10m`、`1h`。
 
-默认状态目录是 `/etc/higgs`，默认数据库是 `<data_dir>/higgs.db`。如果没有显式配置文件，程序会使用内置默认值；真正部署建议始终写明 `data_dir`、`trusted_root_public_key`、`gossip.peer_id` 和必要的 `gossip.bootstrap`。
+默认状态目录是 `/etc/higgs`，默认数据库是 `<data_dir>/higgs.db`。配置里的 `state_path` 可以显式指定数据库文件路径；`HIGGS_STATE` 又能覆盖 `state_path`。如果没有显式配置文件，程序会使用内置默认值；真正部署建议始终写明 `data_dir`、`trusted_root_public_key`、`gossip.peer_id` 和必要的 `gossip.bootstrap`。
 
 ## 最小节点配置
 
@@ -189,10 +191,11 @@ overlays:
 
 字段说明：
 
-- `id` / `name`：overlay link group 标识。`id` 是推荐字段，并会用于发布 `ipsec/overlays/<id>` intent；两端要进入同一个 overlay，必须配置相同的 `id`，否则 planner 会认为缺少对应 overlay intent。
+- `id` / `name`：overlay link group 标识。`id` 是推荐字段，并会用于发布 `ipsec/overlays/<id>` intent；`name` 作为兼容别名。两端要进入同一个 overlay，必须配置相同的 `id`，否则 planner 会认为缺少对应 overlay intent。
 - `provider`：数据面 provider，当前主线是 `strongswan`。只有配置了使用 `strongswan` 的 overlay 后，daemon 才会发布本节点 signed `ipsec/*` records。
 - `netns`：引用顶层 `netns` 中声明的名字；省略时使用 `netns.default`。
 - `default_path_mode`：远端候选地址的建链模式，常用 `family-redundant`，按 IPv4/IPv6 family 选 contact point；`exhaustive` 会保留更多候选。
+- `address_source_order`：本 group 选择对端地址时的来源优先级，例如 `manual-address`、`manual-dns`、`discovery`、`reflector`。
 - `max_peers` / `max_links_per_peer`：限制本 group 参与的 peer 数量和每个 peer 的 link 数量。
 - `tunnel_address`：隧道接口地址分配方式。IPv6 默认 `derived-link-local`；显式地址池优先用 `derived-pool`。`sequential-pool` 只适合旧配置迁移或测试。
 - `reconcile.interval`：周期安全扫频，用于 SA 观察和恢复；它不是每次变更的唯一触发，daemon 也会按 state/config/VICI 事件触发 reconcile。
@@ -227,7 +230,11 @@ routing:
 - `routing.instances[].netns` 引用顶层 `netns`；省略时使用 `netns.default`。
 - `provider` 当前只支持 `bird`。
 - `mode` 可为 `managed`、`external`、`disabled`。
+- `disabled`：设为 `true` 时保留配置块但停止 reconcile。
 - `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Higgs 启动和配置，但默认不会随 Higgs daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
+- `table`：BIRD 主路由表名。
+- `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，分别用于正常、staged rotate、draining 状态。
+- `interface_pattern`：匹配本 instance 内 XFRM tunnel interface 的模式，默认 `hgs*`。
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
 - `upstream` 可让 Higgs 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。
 - `upstream.mode: static` 是默认模式；Higgs 会在 mesh 侧把本节点 assigned prefix 指向 `mesh.interface`，并在 external/host 侧把远端授权 mesh 前缀指向 `external.interface`，使用本节点 assigned prefix 的首个可用地址作为 route source。
@@ -261,10 +268,14 @@ firewall:
 
 - `backend` 可为 `auto`、`nft`、`iptables`、`none`。
 - `mode` 可为 `managed`、`external`、`disabled`。
+- `disabled`：设为 `true` 时保留配置块但停止 reconcile。
 - 非 host instance 的 `netns` 引用顶层 `netns`；省略时使用 `netns.default`。
 - netns instance 默认匹配 `hgs*` XFRM tunnel interface。
 - host instance 用于 ingress、IKE/NAT-T 端口和 range 模式 redirect grace。
-- 当 `ipsec.port_mode=range` 且存在 host firewall instance 时，host IPsec ports 和 redirect grace 默认启用；如果这些规则由外部防火墙管理，应显式关闭。
+- `forwarding.allow_prefixes` / `deny_prefixes`：允许或拒绝转发的前缀列表。
+- host instance 的 `listen_addrs`：用于 host ingress 和 DNAT/redirect 规则的监听地址，默认使用 `gossip.advertise_addrs`。
+- `host_ports`：控制是否管理 host IKE/NAT-T 端口规则（`ike`、`natt`）。
+- `redirect_grace`：range 模式下是否管理 advertised port 到 charon 的 DNAT/redirect 规则。
 
 Firewall 规则是本机 runtime 状态，不进入 gossip。
 
@@ -278,18 +289,34 @@ health:
   timeout: 1s
   burst: 3
   loss_window: 20
+  jitter: 500ms
+  max_concurrent_probes: 8
   fail_threshold_consecutive: 3
   loss_threshold: "0.2"
   down_loss_threshold: "0.6"
   recover_consecutive: 5
   metrics:
+    disabled: true
     local_spool_path: /var/lib/higgs/health-spool
     local_spool_max_age: 6h
+    remote_write_url: http://victoriametrics:8428/api/v1/write
+    remote_write_queue_capacity: 1024
 ```
 
-Health 结果用于本机 debug、observer、metrics 和 rotate/cutover gate。当前第一版不会把 health 直接写入 gossip active state。
+字段说明：
 
-`health.metrics.local_spool_path` 会写本地历史样本，Observer 的 health series API 从这里读取。
+- `interval` / `timeout` / `burst`：探测间隔、单次超时和连续探测次数。
+- `loss_window`：计算丢包率的滑动窗口大小。
+- `jitter`：RTT 抖动阈值，用于判断链路质量。
+- `max_concurrent_probes`：同时进行的探测数量上限。
+- `fail_threshold_consecutive` / `recover_consecutive`：连续失败/恢复多少次后切换状态。
+- `loss_threshold` / `down_loss_threshold`：判定 degraded / down 的丢包率阈值。
+- `metrics.disabled`：关闭本地 health metrics spool 和 remote write。
+- `metrics.local_spool_path`：本地历史样本路径，Observer 的 health series API 从这里读取。
+- `metrics.local_spool_max_age`：本地样本保留时长。
+- `metrics.remote_write_url` / `remote_write_queue_capacity`：可选的远程 metrics 推送 endpoint 和队列容量。
+
+Health 结果用于本机 debug、observer、metrics 和 rotate/cutover gate。当前第一版不会把 health 直接写入 gossip active state。
 
 ## Observer
 
@@ -301,6 +328,13 @@ observer:
   ui_path: ""
   event_buffer_seconds: 0
 ```
+
+字段说明：
+
+- `listen`：HTTP 监听地址，默认 `127.0.0.1:8080`。
+- `ui_path`：自定义 UI 静态文件路径；为空时使用内置 UI。
+- `event_buffer_seconds`：SSE 事件缓冲区保留时长；`0` 表示不限制。
+- `disabled`：设为 `true` 时关闭 observer。
 
 Observer 是只读 HTTP/API 控制台，建议默认绑定 loopback，再由 SSH tunnel、反向代理或内网 ACL 暴露。
 

@@ -13,10 +13,16 @@ Higgs daemon 是长期运行的控制循环。它把所有子系统——gossip�
 2. [DaemonService 结构](#2-daemonservice-结构)
 3. [事件循环](#3-事件循环)
 4. [单 Writer 模式与状态管理](#4-单-writer-模式与状态管理)
+   - 4.1 [核心原则](#41-核心原则)
+   - 4.2 [DaemonStateStore](#42-daemonstatestore)
+   - 4.3 [写路径](#43-写路径)
+   - 4.4 [Reconcile 与 StateStore](#44-reconcile-与-statestore)
+   - 4.5 [状态文件](#45-状态文件)
+   - 4.6 [状态变化通知](#46-状态变化通知)
 5. [Control Socket](#5-control-socket)
+   - 5.1 [systemd 运行约定](#51-systemd-运行约定)
 6. [Reconcile 调度](#6-reconcile-调度)
 7. [子模块集成](#7-子模块集成)
-8. [Operator 信息](#8-operator-信息)
 
 ---
 
@@ -70,6 +76,7 @@ Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调�
 | 字段 | 类型 | 作用 |
 |------|------|------|
 | `Sync` | `*SyncRuntime` | gossip sync 运行时封装，持有 `State`、`Config`、`Transport` |
+| `StateStore` | `*DaemonStateStore` | 状态中心：committed snapshot + revision + dirty 标记 |
 | `Events` | `chan daemonEvent` | 统一事件入口（64 buffer） |
 | `Interval` | `time.Duration` | 出站 sync 周期（默认 60s） |
 | `ControlSocketPath` | `string` | Unix domain socket 路径 |
@@ -84,9 +91,9 @@ Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调�
 | `objectPullPool` | `*objectPullPool` | TCP object pull 连接池 |
 | `timerManager` | `*TimerManager` | Sync session 定时器管理 |
 
-**DaemonEvent 类型**（[`daemon.go:70-91`](../../app/higgs/daemon.go#L70-L91)）：
+**DaemonEvent 类型**（[`daemon.go:70-95`](../../app/higgs/daemon.go#L70-L95)）：
 
-事件通过 `daemonEvent` 结构体传递，包含 `Type`、`Context`、`Reply` 等字段。`enqueueEvent()` 将事件放入 Events 通道并同步等待 result，确保 admin 操作有明确的完成信号。
+事件通过 `daemonEvent` 结构体传递，主要字段包括 `Type`（事件类型）、`Context`（上下文）和 `Reply`（结果通道）。`enqueueEvent()` 把事件放进 `Events` 通道，然后阻塞等待 `Reply` 返回结果。这样，control socket 侧的 admin 操作能拿到明确的完成或失败信号。
 
 主要事件类型：
 - `record_put` / `delegate_issue` / `delegate_revoke` — 状态写入
@@ -113,7 +120,7 @@ daemonRun()
  └─ service.Run()         进入事件循环
 ```
 
-`Run()` 方法（[`daemon.go:177-385`](../../app/higgs/daemon.go#L177-L385)）：
+`Run()` 方法（[`daemon.go:183-417`](../../app/higgs/daemon.go#L183-L417)）：
 
 1. **初始化驱动**：配置 IPsec (StrongSwan VICI + XFRM) 驱动
 2. **启动子服务**：
@@ -122,7 +129,27 @@ daemonRun()
    - `startControlServer()` — 启动 Unix domain socket 控制服务器
    - `startObserverServer()` — 启动 HTTP observer 服务器
    - `startIPsecLifecycleEventWatcher()` — 监听 StrongSwan VICI 生命周期事件
-3. **启动恢复**：在锁定状态下执行 `recoverIPsecLinksOnStart()`、`recoverRoutingOnStart()`、`recoverFirewallOnStart()`
+3. **启动恢复**：
+
+```
+// 1. 短暂加锁更新 discovered peers，然后释放写锁
+d.Sync.State.Lock()
+d.Sync.updateDiscoveredPeers()
+d.Sync.State.Unlock()
+
+// 2. 发布本机记录
+d.Sync.publishEndpointRecord()
+d.Sync.publishIPsecRecords()
+d.publishRoutingNetnsRecord()
+
+// 3. 数据面恢复
+d.recoverIPsecLinksOnStart(ctx)
+d.recoverRoutingOnStart(ctx)
+d.recoverFirewallOnStart(ctx)
+```
+
+提前释放写锁可避免恢复阶段长时间阻塞 control socket 与 Observer
+
 4. **进入主循环**：
 
 ```
@@ -133,7 +160,7 @@ for {
     // 2. 检查磁盘状态文件是否被外部修改
     reloadStateIfChanged()
     
-    // 3. 检查端点发布定时器
+    // 3. 检查端点发布定时器；记录无变更时跳过下游 flush
     handleEvent(endpointTimer)
     
     // 4. 检查 sync 定时器
@@ -156,7 +183,7 @@ for {
 }
 ```
 
-**processEvents() 阶段**（[`daemon.go:769-802`](../../app/higgs/daemon.go#L769-L802)）：
+**processEvents() 阶段**（[`daemon.go:860-895`](../../app/higgs/daemon.go#L860-L895)）：
 
 非阻塞 drain 所有已排队事件，处理完后以 **Phase 6.5 拒绝优先顺序**执行 flush：
 1. `flushRevocationCleanup()` — 清理已吊销 zone 的 gossip peer cache
@@ -173,22 +200,56 @@ for {
 
 ### 4.1 核心原则
 
-Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（record put、delegate issue 等）不直接修改 BoltDB 文件，而是通过 control socket 向 daemon event loop 发送请求，由 event loop 串行执行。
+Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（如 record put、delegate issue）不会直接修改 BoltDB 文件，而是通过 control socket 把请求发给 daemon 的事件循环，由事件循环串行提交到 `DaemonStateStore`。
 
-这避免了多个命令同时写本地状态的竞争问题。
+这样可以避免多个写者同时修改同一份本地状态。
 
-### 4.2 状态锁管理
+### 4.2 DaemonStateStore
 
-`stateFile` 内嵌 `sync.RWMutex`（[`state.go:19`](../../app/higgs/state.go#L19-L34)），daemon 的事件循环在 `handleEvent()` 执行期间持有**写锁**。
+`DaemonStateStore` 是 daemon 的状态中心，定义在 [`daemon_state_store.go`](../../app/higgs/daemon_state_store.go)。它维护：
 
-- `lockState()` — 获取当前 `Sync.State` 的写锁，将 unlock 函数存入 `d.stateUnlock`
-- `setState()` — 原子替换状态指针，同时将写锁从旧状态转移到新状态
-- `releaseStateLock()` — 释放当前跟踪的锁（用于子操作需要自行加锁的场景）
-- `currentState()` — 在 `stateMu` 下稳定读取当前 `Sync.State` 指针；它不锁住返回的 `stateFile` 内容，调用方读取 map/结构体时仍需要持有 state 的读锁或先复制快照
+| 字段 | 作用 |
+|------|------|
+| `committed` | 当前已提交的 `*stateFile` 快照 |
+| `revision` | 单调递增的版本号 |
+| `dirty` | IPsec / routing / firewall 的 dirty 标记 |
+| `reconcileProgress` | 各层 reconcile 是否在进行中 |
 
-### 4.3 状态文件
+主要接口：
 
-状态持久化在 BoltDB 文件中（路径由 `config.yaml` 的 `state_path` 指定，默认 `<data_dir>/state.db`）。
+- `Snapshot()` — 返回 committed 状态的深拷贝 + 当前 revision。只读路径（control socket、observer、debug）都走这里，不会阻塞事件循环。
+- `Meta()` — 返回 revision、snapshot time、dirty 标记、reconcile progress。
+- `BeginUpdate()` — 基于当前 committed 状态创建一个 workspace 克隆，不阻塞其他 reader。
+- `Update(fn)` / `CommitIfRevision(rev, fn)` — 在 workspace 上执行变更，然后以乐观锁方式提交。只有 committed revision 仍等于 base rev 时才替换成功，否则返回 stale revision 错误。
+- `ReplaceCommitted(state)` — 用外部加载的最新状态无条件替换 committed 快照。
+
+`stateFile` 本身仍内嵌 `sync.RWMutex`，但它现在主要保护单个克隆在本地修改时的并发安全；跨 goroutine 的同步由 `DaemonStateStore` 的版本号 + 快照机制负责。
+
+### 4.3 写路径
+
+事件循环中的写事件 handler（`record_put`、`delegate_issue`、`join_accept` 等）通过 `runStateStoreWrite()` 执行：
+
+1. 从磁盘加载最新状态（`Sync.loadState()`）
+2. 用 `ReplaceCommitted()` 刷新 StateStore
+3. 通过 `StateStore.Update(fn)` 在 workspace 上完成业务修改
+4. 调用 `installAndSaveCommittedState()` 把 committed 快照同步到 `Sync.State` 并保存回磁盘
+5. 通知 observer，设置 dirty 标记并触发 reconcile
+
+可能 no-op 的周期性写入（如 endpoint timer）使用 `runStateStoreWriteIfChanged()`：只有 `fn` 报告状态确实变化时，才会提交、递增 revision 并触发下游 flush。
+
+### 4.4 Reconcile 与 StateStore
+
+IPsec、routing、firewall 的 reconcile 不再长时间持有 live state 写锁：
+
+1. `snapshotState()` 从 `StateStore.Snapshot()` 拿到 committed 快照和 revision
+2. reconcile 基于快照计算 desired state 并执行数据面操作
+3. 结果通过 `StateStore.CommitIfRevision(rev, fn)` 写回；如果期间状态已被其他写者更新，本轮 reconcile 结果会被丢弃，由下一轮重新计算
+
+这样长 reconcile 不会阻塞 control socket、observer 和其他只读诊断路径。
+
+### 4.5 状态文件
+
+状态持久化在 BoltDB 文件中（路径由 `config.yaml` 的 `state_path` 指定，默认 `<data_dir>/higgs.db`）。
 
 `stateFile` 结构包含（[`state.go:18-34`](../../app/higgs/state.go#L18-L34)）：
 
@@ -209,9 +270,9 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（record put、de
 | `BirdInstances` | BIRD 进程实例状态 |
 | `Admission` | Auto-join 准入诊断 |
 
-### 4.4 状态变化通知
+### 4.6 状态变化通知
 
-`notifyStateChanged()`（[`daemon.go:1289-1323`](../../app/higgs/daemon.go#L1289-L1323)）：
+`notifyStateChanged()`（[`daemon.go:1426-1462`](../../app/higgs/daemon.go#L1426-L1462)）：
 
 当状态变化时（sync 成功应用了 Zone snapshot、admin 写入 record 等），daemon 会：
 1. 调用 `OnStateChanged` hook（测试用）
@@ -224,64 +285,21 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（record put、de
 
 ## 5. Control Socket
 
-### 5.1 协议
+Daemon 通过 Unix domain socket 暴露控制接口。
 
-Daemon 监听一个 Unix domain socket。root 运行时固定默认使用 `/run/higgs/higgs.sock`，非 root 运行时默认使用 `<data_dir>/higgs.sock`；`HIGGS_CONTROL_SOCKET` 可显式覆盖两者。daemon 会以 `0700` 创建父目录，并把 socket 设为 `0600`，因此当前权限边界是启动 daemon 的用户（以及 root）。
+- root 默认路径 `/run/higgs/higgs.sock`，非 root 默认 `<data_dir>/higgs.sock`，`HIGGS_CONTROL_SOCKET` 可覆盖
+- 协议是简单 JSON request/response
+- 安全边界只有 Unix 文件权限（父目录 `0700`，socket `0600`），**没有应用层方法级鉴权**
 
-启动时如果路径上已有 socket，daemon 会先探测它：能够连接说明另一个实例仍在线，此时拒绝启动；确认无法连接的失效 socket 才会被清理。同名普通文件或无法确认状态的 socket 不会被删除，避免误删和双 daemon 抢占。正常停止会移除 socket；崩溃遗留的 socket 会在下一次启动时按上述规则清理。
+CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操作进入事件循环由单 writer 串行执行；读操作从当前状态快照返回。
 
-协议是简单 JSON request/response：客户端发送 `controlRequest`，服务端回复 `controlResponse`。所有通信通过 `json.NewEncoder`/`json.NewDecoder` 完成。
+当 socket 不存在或连接被拒绝（`ECONNREFUSED`）时，只读诊断命令可回退到本地 DB 离线视图，持久状态写入命令可走 direct/recovery 路径。超时、权限错误、连接重置、协议错误等不会触发 fallback，因为这些错误可能来自仍在线但异常的 daemon。
 
-### 5.2 控制方法
+状态写入类命令和恢复类命令支持显式 `--direct`，跳过 control socket 直接写本地 DB。使用 direct 时调用者需自行保证没有 daemon 在管理同一状态文件或 IPsec/XFRM 对象；direct 只持久化 signed record，不会触发 routing reconcile。
 
-| 方法 | 作用 |
-|------|------|
-| `status` | 查询 daemon 在线状态和链路概览 |
-| `record_put` | 写入签名 record |
-| `record_get` | 读取 record（含历史版本） |
-| `delegate_issue` | 签发 delegation |
-| `authority_grant` | 授权权限 |
-| `delegate_revoke` | 吊销 delegation |
-| `recovery_import_zone` | 导入 Zone snapshot 恢复 |
-| `recovery_purge_revoked` | 清理已吊销 Zone |
-| `join_accept` | 接受 join bundle |
-| `root_init` | 拒绝执行并提示停止 daemon 后 direct/recovery 初始化 |
-| `sync_trigger` | 立即触发一轮 sync |
-| `reload` | 重新加载配置 |
-| `ipsec_cleanup` | 清理孤儿 IPsec 链路 |
-| `ipsec_rotate_port` | 触发 IPsec 端口轮换 |
-| `shutdown` | 优雅关闭 daemon |
-| `bird_status` | 查询 BIRD 实例状态 |
-| `bird_dump` | 导出 BIRD 实例的完整 birdc 原始诊断输出 |
-| `routing_reload` | 立即触发 daemon routing reconcile，不重新读取配置 |
-| `routes_dump` | 导出授权路由集 |
-| `admission_status` | 查询 auto-join 准入状态 |
-| `firewall_status` | 查询防火墙 reconcile 状态 |
-| `links_status` | 查询 IPsec 链路状态 |
-| `peers_status` | 查询 peer lifecycle 状态 |
-| `revoke_status` | 查询吊销影响范围 |
-| `health_status` | 查询链路健康探测状态 |
+控制方法覆盖状态读写、delegation 管理、节点加入、恢复操作、runtime 触发（`sync_trigger`/`reload`/`routing_reload`/`shutdown`）以及各类诊断接口。完整列表见 `app/higgs/daemon.go` 中 `handleControlConn` 的 switch。
 
-> 注：control socket **没有应用层的权限校验**，所有 methods 对任何能连接 socket 的进程同等开放。唯一的安全边界是 Unix socket 文件权限（`chmod 0600`），只有 socket owner 用户（或 root）可以连接。客户端侧名为 `sendAdminControlRequest` 的辅助函数只是命名约定，daemon 侧一视同仁。
-
-### 5.3 客户端调用
-
-CLI 命令（`higgs daemon`、`higgs record put`、`higgs debug links` 等）通过 `sendControlRequest()` 与 daemon 通信。当 daemon 不存在时（socket 路径不存在或明确返回 connection refused），允许 recovery/direct 的命令可回退到本地状态文件；超时、权限错误、连接重置和协议错误不会触发 direct fallback，因为这些错误可能来自仍在线但异常的 daemon。必须依赖在线 runtime apply 的命令会报错或要求显式 `--direct`。
-
-当前方法和离线策略分为四类：
-
-| 类别 | control 方法 | daemon 不在线时 |
-|------|--------------|-----------------|
-| 只读快照/诊断 | `status`、`record_get`、`bird_status`、`bird_dump`、`routes_dump`、`admission_status`、`firewall_status`、`links_status`、`peers_status`、`revoke_status`、`health_status` | CLI 可使用 DB/offline view；BIRD、SA、health 等 live 字段可能缺失 |
-| 持久状态管理 | `record_put`、`delegate_issue`、`authority_grant`、`delegate_revoke`、`join_accept` | 仅在确认 daemon 不在线时允许现有 direct/recovery 路径，并输出 fallback 警告 |
-| 在线 runtime 管理 | `sync_trigger`、`reload`、`routing_reload`、`ipsec_rotate_port`、`shutdown` | 默认失败；确有恢复用途的命令必须显式提供 `--direct`，且 direct 不代表已 apply 数据面 |
-| 恢复操作 | `recovery_import_zone`、`recovery_purge_revoked`、`ipsec_cleanup`、`root_init` | import/purge/cleanup 优先经 daemon，确认 daemon 不在线后可进入现有 recovery 路径；`root_init` 必须停止 daemon 后离线执行 |
-
-Unix socket 当前以文件权限作为统一管理边界，服务端尚未按方法做调用者身份分权；因此上述类别是 CLI 行为和未来权限模型的约束，不是已经存在的应用层鉴权。
-
-持久状态管理命令 `record put`、`delegate issue`、`delegate revoke`、`authority grant`、`join accept`、`route announce/withdraw` 以及 IPAM pool/assignment 写命令均提供显式 `--direct`。恢复命令 `recovery import-zone`、`recovery purge-revoked --apply` 和 `recovery cleanup-ipsec` 也提供 direct 路径；pull-zone/pull-chain 本身依赖网络，不提供该参数。使用 direct 时客户端不探测 control socket，也不会把这一用户选择记录成 daemon unavailable fallback；调用者必须先确认没有 daemon 正在使用同一状态文件或同时管理相同 IPsec/XFRM 对象。route/IPAM direct 只持久化 signed record，不会立即触发 daemon routing reconcile。`root init` 仍会先探测 daemon，因为它只能在 daemon 尚未加载状态时执行。
-
-### 5.4 systemd 运行约定
+### 5.1 systemd 运行约定
 
 仓库提供 [`contrib/systemd/higgs.service`](../../contrib/systemd/higgs.service) 示例。service 使用 `RuntimeDirectory=higgs` 创建 `/run/higgs`，因此不需要预先手工创建运行目录，也不需要单独的 `.socket` unit。当前 daemon 自己创建并管理 Unix socket，尚不支持 systemd socket activation。
 
@@ -339,7 +357,7 @@ flushIPsecReconcile()      // 4. IPsec
 flushRevocationCleanup()   // 5. 再次清理
 ```
 
-吊销优先于任何允许操作：被吊销 zone 的 peer 必须先从 endpoint cache、observed path、object-pull 候选中被清除，才能在防火墙/routing/IPsec reconcile 中不被考虑。
+吊销优先于任何允许操作。被吊销 zone 的 peer 必须先从 endpoint cache、observed path、object-pull 候选中被清除，这样后续的防火墙 / routing / IPsec reconcile 才不会继续考虑它。
 
 ### 6.5 同一事件队列的 sync-trigger 链
 
@@ -357,7 +375,8 @@ sync timer
 
 endpoint publish timer
   → handleEndpointTimerEvent: 发布 endpoint、IPsec transport、routing netns 记录
-  → notifyStateChanged
+  → 记录无变更时直接返回，不触发 notifyStateChanged / flush
+  → 有变更时 notifyStateChanged
 ```
 
 ---
@@ -369,29 +388,33 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 ### 7.1 Gossip Sync
 
 - **输入**：UDP 包（从 transport.Receive() 接收）、定时器事件、object pull 结果
-- **输出**：更新 `Sync.State.Network`（Zone 数据库）
+- **输出**：通过 `StateStore.Update()` / `CommitIfRevision()` 更新 `Network`（Zone 数据库）和 peer runtime 状态
 - **集成点**：`SyncRuntime` 结构持有 state、config、transport。`handleSyncEvent()` 在 event loop 中驱动 `SyncSession` FSM，通过 `executeSyncActions()` 执行 apply snapshot / send message / start object pull / start timer 等动作
 - **状态范围**：gossip 操作的是全网 verified signed state，进入 `Network` 字段
 
+**稳态 unsolicited ping 短路**：收到对端主动发来的 `MessagePing` 时，如果 ping 携带的 catalog root 与本端一致，`maybeShortcutSyncFromPingSummary` 直接记录 peer sync 状态并返回，不再创建 SyncSession。只有 root 不一致或 summary 生成失败时，才回退到完整 sync round。respondPing 仍正常回复 PONG，让对端拿到本端 summary。
+
 ### 7.2 IPsec Transport
 
-- **输入**：`d.Sync.State.Network` 中的 endpoint、transport key 记录，本地 `overlays[]` mesh policy
-- **输出**：StrongSwan IKE child SA、XFRM interface、network namespace 内接口
+- **输入**：`StateStore.Snapshot()` 中的 endpoint、transport key 记录，本地 `overlays[]` mesh policy
+- **输出**：StrongSwan IKE child SA、XFRM interface、network namespace 内接口；结果通过 `StateStore.CommitIfRevision()` 写回
 - **集成点**：`reconcileIPsecLinks(ctx)` 在 daemon.go 中调用，使用 `ipsec.PlanTransportLinks()` → `ipsec.ReconcileLinkInstances()` → `ipsec.ApplyReconcileAction()`
 - **状态范围**：LinkInstances、IPsecReconcile 仅存在于本机 state file，不进入 gossip
 
+**XFRM 维护短路**：在 `maintainExistingXFRMInterfaces` 中，如果 observed 状态与期望状态已经匹配，则跳过 `EnsureInterface`/`AssignAddress` 等冗余命令，只保留诊断地址分配。这减少了 reconcile 周期中对已有接口的无意义重写。
+
 ### 7.3 Routing
 
-- **输入**：`d.Sync.State.Network` 中的 route announcement / authorization 记录
-- **输出**：BIRD 配置文件、Babel 邻居发现、路由导入/导出 filter
+- **输入**：`StateStore.Snapshot()` 中的 route announcement / authorization 记录
+- **输出**：BIRD 配置文件、Babel 邻居发现、路由导入/导出 filter；结果通过 `StateStore.CommitIfRevision()` 写回
 - **集成点**：`reconcileRouting(ctx)` 在 routing_reconcile.go 中，构建 `AuthorizedRouteSet`，生成 BIRD 配置并 reconfigure
 - **状态范围**：BirdInstances、RoutingReconcile 仅存在于本机 state file
 
 ### 7.4 Firewall
 
-- **输入**：`d.Sync.State.Network` 中的授权路由，本地 firewall 配置
-- **输出**：nftables/iptables 规则（netns ingress、host ingress、redirect grace）
-- **集成点**：`reconcileFirewall(ctx)` 通过 `firewall.BuildDesiredState()` → driver.Apply() 
+- **输入**：`StateStore.Snapshot()` 中的授权路由，本地 firewall 配置
+- **输出**：nftables/iptables 规则（netns ingress、host ingress、redirect grace）；结果通过 `StateStore.CommitIfRevision()` 写回
+- **集成点**：`reconcileFirewall(ctx)` 通过 `firewall.BuildDesiredState()` → driver.Apply()
 - **状态范围**：FirewallReconcile 仅存在于本机 state file
 
 ### 7.5 Health
@@ -403,106 +426,9 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 ### 7.6 Observer
 
-- **输入**：daemon 状态（state 指针 + runtime snapshot）
+- **输入**：`StateStore.Snapshot()` / `StateStore.Meta()` 提供的 committed snapshot
 - **输出**：HTTP API（/api/v1/...）、SSE 事件推送
-- **集成点**：`newObserverServer()` 在启动时创建，`observerProvider` 从 daemon 读取数据。状态变化时 daemon 通过 `d.observerHub` 广播 SSE 事件
+- **集成点**：`newObserverServer()` 在启动时创建，`observerProvider` 从 `StateStore` 读取数据。状态变化时 daemon 通过 `d.observerHub` 广播 SSE 事件
 - **状态范围**：observer 是纯只读的，不修改任何状态
 
----
 
-## 8. Operator 信息
-
-### 8.1 启动与关闭
-
-```bash
-# 前台运行
-higgs daemon [--interval seconds]
-
-# 后台运行（通过 systemd 等）
-higgs daemon &
-
-# 优雅关闭
-higgs daemon --shutdown     # 通过 control socket
-# 或向进程发送 SIGTERM（context cancel）
-```
-
-### 8.2 常用诊断命令
-
-```bash
-# 检查 daemon 在线状态
-higgs sync status
-higgs sync status --verbose
-
-# 检查链路状态
-higgs debug links
-higgs debug links --filter <peer-or-link>
-
-# 检查路由
-higgs debug routes
-higgs debug route <prefix>
-
-# 检查防火墙
-higgs debug firewall
-
-# 检查健康探测
-higgs debug health
-
-# 检查 BIRD 状态
-higgs debug babel
-
-# 检查 peer lifecycle
-higgs debug peers
-
-# 检查 auto-join 准入
-higgs debug admission
-
-# 检查吊销影响
-higgs debug revoke-impact
-
-# 查询节点状态（通过 control socket）
-higgs record get <zone> <key>
-```
-
-### 8.3 关键日志与事件
-
-Daemon 使用结构化日志，通过 `Log` 字段（`*appLogger`）输出 `component`、`event`、`fields` 三个维度：
-
-| 组件 | 事件 | 含义 |
-|------|------|------|
-| `daemon` | `started` | Daemon 启动，包含 peer_id、addr、interval |
-| `sync` | `zone_applied` | Zone snapshot 被成功应用 |
-| `sync` | `zone_apply_failed` | Zone snapshot 应用失败（含 reject reason） |
-| `sync` | `hinted_sync_started` | 收到 announce hint 后启动 sync session |
-| `sync` | `send_failed` | 发送 UDP 消息失败 |
-| `sync` | `event_dropped` | Sync event 因队列满被丢弃 |
-| `ipsec` | `vici_lifecycle_event` | StrongSwan 生命周期事件 |
-| `ipsec` | `reconcile_failed` | IPsec reconcile 失败 |
-| `routing` | `reconcile_failed` | Routing reconcile 失败 |
-| `firewall` | `no_backend_available` | 无可用防火墙后端 |
-| `endpoint` | `publish_failed` | 端点发布失败 |
-| `endpoint` | `reflector_failed` | 公网地址反射器查询失败 |
-| `auto_join` | `adopted` | 该节点被父 zone 采纳 |
-| `auto_join` | `adopt_failed` | 采纳失败（含原因） |
-| `state` | `save` | 状态文件保存（含 records 数） |
-
-### 8.4 关键状态文件路径
-
-- 状态数据库：`<data_dir>/state.db`（BoltDB，含 Network、meta）
-- Control socket：root 为 `/run/higgs/higgs.sock`；非 root 为 `<data_dir>/higgs.sock`；环境变量可覆盖
-- 配置文件：`<data_dir>/config.yaml`
-- BIRD 配置：`<data_dir>/bird-<instance>.conf`
-
-### 8.5 Observer 只读控制台
-
-当 observer 启用时（`config.yaml` 中 `observer.enabled: true`），daemon 会在配置的端口启动 HTTP 只读 API：
-
-- `/api/v1/...` — JSON API，展示与 CLI debug 命令相同的 read model
-- SSE 事件流 — 状态变化时推送 `state_changed`、`route_changed`、`link_updated`、`peer_updated`、`health_updated` 等事件
-- observer 不直接操作 daemon 状态，不实现自己的诊断逻辑——它消费 daemon 已经收敛好的 runtime snapshot
-
-### 8.6 注意事项
-
-- **daemon 是单 writer**：不要同时运行多个 `higgs daemon` 实例操作同一个 state 文件。
-- **reload**：`reload` 命令会重新加载配置和状态文件，但不允许切换 state_path、control socket 路径或 identity key。
-- **root init 不能通过 daemon 执行**：root zone 初始化需要在 daemon 启动前以 recovery 方式执行。
-- **状态文件修改**：`reloadStateIfChanged()` 在事件循环每次迭代时检查磁盘状态文件是否被外部修改，检测到变化后自动加载并触发 reconcile。
