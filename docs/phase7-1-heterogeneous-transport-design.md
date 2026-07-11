@@ -13,10 +13,8 @@
 - 7.1.d：确认只维护两套 provider lifecycle，撤销通用 planner/action/resource graph 的过度抽象。
 - 7.1.e：公共 `LinkOutput` 契约、StrongSwan active/staged 投影和公共消费者读取边界。
 
-剩余实现：
-
-1. 7.1.f：WG/GRE 正式 provider；
-2. 7.1.g：BIRD per-interface policy、双 provider readmodel 和联合 smoke。
+7.1 到此完成。WG 生产底座是否实现由可选 7.4 决定；GRE/VXLAN 上层封装选择、正式
+per-peer interface lifecycle 与双 provider 联合 smoke 归远期 7.5，不作为 7.1 的完成条件。
 
 目标拓扑：
 
@@ -185,7 +183,7 @@ LinkGroup policy + BIRD snapshot + health snapshot
 当前实现位于 `internal/state.LinkOutput` 与 daemon 的 `linkOutputsFromState`。StrongSwan
 current/staged interface 分别投影为 `active`/`staged` 输出；health target、firewall live-interface、
 BIRD staged observation 与在线 `links_status.outputs` 已切到该公共边界。`routing`/`health`
-readiness 当前为 `unknown`，由 7.1.g 的 BIRD/health snapshot enrichment 补齐，而不是从
+readiness 当前为 `unknown`，后续由 BIRD/health snapshot enrichment 补齐，而不是从
 provider lifecycle state 猜测。
 
 ## 5. Identity、generation 与 ownership
@@ -206,7 +204,7 @@ link_id = H(
 endpoint、port、handshake、health 和 generation 不进入稳定 Link ID。provider 原地变化会产生
 新 ID，从而禁止新 provider adopt 旧 provider 资源。
 
-当前上个实验 commit 仍使用旧 StrongSwan ID。provider-aware helper 必须在 WG/GRE 正式接入
+当前实验仍使用旧 StrongSwan ID。provider-aware helper 必须在 7.4 WG 正式接入
 时一次性完成，并覆盖所有 StrongSwan planner/constructor 路径；不允许只修改部分 constructor。
 迁移测试必须证明：
 
@@ -464,21 +462,22 @@ private key、完整 owner token 和其他秘密不得进入输出。
 验收：StrongSwan 现有测试无语义变化；聚合/enrichment 单测覆盖 active/staged、多 group、
 missing BIRD/health 和稳定排序。
 
-### 11.2 7.1.f：WG/GRE 正式 provider
+### 11.2 可选 7.4：WireGuard 传输底座
 
 - 一次性落地 provider-aware Link ID helper 与 StrongSwan legacy migration tests；
 - 实现 WG records、overlay intent 和本地 policy；
-- 实现 device/peer/GRE planner、state、inspect、reconcile、apply 和 teardown；
+- 实现 WG device/peer planner、state、inspect、reconcile、apply 和 teardown；
 - AllowedIPs 只允许 transit `/32`/`/128`；
 - 实现 private key 持久化、owner/live marker 和 restart/adopt；
-- 实现 shared-device staged rotate、listener/firewall grace 和零引用 cleanup；
-- 投影基础 `LinkOutput`。
+- 实现 shared-device staged rotate、listener/firewall grace 和零引用 cleanup。
 
-验收：fake-driver 单测、state round-trip/restart、shared device 引用、错误隔离、rotate/rollback/
-cleanup，以及现有 WG/GRE root experiment 的正式 provider 等价验证。
+验收：fake-driver 单测、state round-trip/restart、shared device 引用、错误隔离和
+rotate/rollback/cleanup。是否进入该实现由 7.4 单独决定，不阻塞 7.1。
 
-### 11.3 7.1.g：联合收口
+### 11.3 远期 7.5：上层封装与联合收口
 
+- 在真实实验后选择 GRE 或 VXLAN，再实现 per-peer interface lifecycle；
+- 将选定封装的 Babel-facing interface 投影为公共 `LinkOutput`；
 - BIRD per-interface policy blocks 和 LinkGroup base cost；
 - `debug links`/observer 按 peer/group/provider 展示；
 - 同一 peer 的真实 IPsec/XFRM 与 WG/GRE 同时 active；
@@ -522,14 +521,15 @@ cleanup，以及现有 WG/GRE root experiment 的正式 provider 等价验证。
 
 WG/GRE 两项入口：`sudo make phase7-1-wg-gre-experiment`，不进入默认 smoke。
 
-## 13. 完成条件
+## 13. 7.1 完成条件
 
-7.1 只有在以下条件全部满足时完成：
+7.1 以模型、真实实验和公共消费边界为完成范围：
 
 1. StrongSwan 主链路、state、takeover 和 rotate 未因 WG 抽象发生语义回归；
-2. WG/GRE 正式 provider 具备完整 owner、restart/adopt、rotate 和零引用 cleanup；
-3. 两个 provider 都能发布公共 `LinkOutput`，消费者不读取 provider 内部 action/resource；
-4. BIRD 支持按 interface/group 设置 cost，同一 peer 两条邻接可共存和独立收敛；
-5. readmodel 能区分 peer/group/provider/link/runtime generation；
-6. `make check`、focused tests、双 provider dry-run 和联合 root/container smoke 通过；
-7. revoke、group removal、restart 和单边故障不影响另一 provider 的 owned resources。
+2. BIRD 真实双接口 cost、故障切换与恢复回切已验证；
+3. WG/GRE 共享 device、per-peer interface、三节点转发与 staged rotate 已由显式实验验证；
+4. StrongSwan runtime 能发布公共 `LinkOutput`，公共消费者不读取 provider action/resource；
+5. `make check` 与相关 focused tests 通过。
+
+WG owner、restart/adopt、正式 rotate/cleanup、GRE/VXLAN lifecycle、双 provider readmodel 和
+联合 smoke 分别是 7.4/7.5 的验收内容，不反向扩张 7.1。
