@@ -263,7 +263,31 @@ routing:
       #     ipv6_ll: fe80::a1:2/64
 
 # -----------------------------------------------------------------------------
-# 5. Firewall, health probes, and read-only observer
+# 5. Application services (Phase 8.1 validation only)
+# -----------------------------------------------------------------------------
+
+# A configured service is not published or started automatically. Phase 8.1
+# validates its public record projection, local write capability, and that its
+# address is covered by an active IPAM assignment to this node. Run
+# `higgs service validate [service-id]` after the assignment has synchronized.
+# allow_zones and compose are local-only and never enter services/<id> records.
+# services:
+#   - id: egress-cn
+#     type: socks5
+#     region: cn-east
+#     netns: default
+#     address: fd42:1::20
+#     port: 1080
+#     allow_zones:
+#       - clients.catofes.
+#     compose:
+#       output_dir: /etc/higgs/services/egress-cn
+#       project_name: higgs-egress-cn
+#       image: ghcr.io/example/socks5:stable
+#       container_name: higgs-egress-cn
+
+# -----------------------------------------------------------------------------
+# 6. Firewall, health probes, and read-only observer
 # -----------------------------------------------------------------------------
 
 firewall:

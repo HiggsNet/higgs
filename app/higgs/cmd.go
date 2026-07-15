@@ -26,6 +26,7 @@ func rootCommand() *cli.Command {
 			cmdRecord(),
 			cmdRoute(),
 			cmdIPAM(),
+			cmdService(),
 			cmdVerify(),
 			cmdVersion(),
 			cmdDaemon(),
@@ -33,6 +34,29 @@ func rootCommand() *cli.Command {
 			cmdRecovery(),
 			cmdDebug(),
 			cmdDB(),
+		},
+	}
+}
+
+func cmdService() *cli.Command {
+	return &cli.Command{
+		Name:  "service",
+		Usage: "Application service configuration commands",
+		Commands: []*cli.Command{
+			{
+				Name:      "validate",
+				Usage:     "Validate configured services against local authority and IPAM state",
+				UsageText: "higgs service validate [service-id] [--json]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "json", Usage: "Write the validation report as JSON"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs service validate [service-id] [--json]", 1)
+					}
+					return validateServices(cmd.Args().First(), cmd.Bool("json"))
+				},
+			},
 		},
 	}
 }

@@ -494,3 +494,32 @@ func TestVerifyRecordIPAMAssignmentRequiresAllocateIPCapability(t *testing.T) {
 		t.Fatalf("VerifyRecord accepted ipam.assignment without PermAllocateIP")
 	}
 }
+
+func TestVerifyRecordServiceRequiresWriteServiceCapability(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	record := &zone.Record{
+		Zone: "node-a.catofes.", Key: "services/egress", Type: "service.socks5.v1",
+		Value:   []byte(`{"type":"socks5","region":"cn-east","address":"fd42::20","port":1080}`),
+		Version: 1, Timestamp: 123,
+	}
+	if err := SignRecord(record, priv); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	authority := func(permission zone.Permission) *zone.ZoneAuthority {
+		return &zone.ZoneAuthority{Zone: record.Zone, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
+			Key: pub, Capabilities: []zone.Capability{{Permissions: []zone.Permission{permission}}},
+		}}}
+	}
+	if err := VerifyRecord(record, authority(zone.PermWriteService), time.Unix(123, 0)); err != nil {
+		t.Fatalf("VerifyRecord with write:service: %v", err)
+	}
+	if err := VerifyRecord(record, authority(zone.PermWriteRoute), time.Unix(123, 0)); err == nil {
+		t.Fatal("VerifyRecord accepted service record without write:service")
+	}
+	if err := VerifyRecord(record, authority(zone.PermWrite), time.Unix(123, 0)); err != nil {
+		t.Fatalf("VerifyRecord with general write: %v", err)
+	}
+}

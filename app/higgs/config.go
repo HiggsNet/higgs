@@ -62,6 +62,7 @@ type appConfig struct {
 	PeerLifecycle        inspect.PeerLifecycleConfig
 	Health               healthConfig
 	Observer             observerConfig
+	Services             []serviceConfig
 }
 
 type configYAML struct {
@@ -84,6 +85,7 @@ type configYAML struct {
 	PeerLifecycle *peerLifecycleYAML       `yaml:"peer_lifecycle"`
 	Health        *healthConfigYAML        `yaml:"health"`
 	Observer      *observerConfigYAML      `yaml:"observer"`
+	Services      []serviceConfigYAML      `yaml:"services"`
 	Overlays      []overlayGroupConfigYAML `yaml:"overlays"`
 	Gossip        gossipConfigYAML         `yaml:"gossip"`
 }
@@ -566,6 +568,10 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	var err error
 	config.Netns, err = parseNetnsConfig(file.Netns, config.Overlay.DefaultNetNS)
+	if err != nil {
+		return err
+	}
+	config.Services, err = parseServiceConfigs(file.Services, config.Netns)
 	if err != nil {
 		return err
 	}
