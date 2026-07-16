@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,6 +20,7 @@ type composeNetwork struct {
 	Name       string              `yaml:"name"`
 	External   bool                `yaml:"external,omitempty"`
 	Driver     string              `yaml:"driver,omitempty"`
+	DriverOpts map[string]string   `yaml:"driver_opts,omitempty"`
 	EnableIPv6 bool                `yaml:"enable_ipv6,omitempty"`
 	IPAM       *composeNetworkIPAM `yaml:"ipam,omitempty"`
 }
@@ -38,6 +40,7 @@ type composeService struct {
 	Image     string                              `yaml:"image"`
 	Restart   string                              `yaml:"restart"`
 	Networks  map[string]composeServiceAttachment `yaml:"networks"`
+	Ports     []string                            `yaml:"ports,omitempty"`
 	Command   []string                            `yaml:"command,omitempty"`
 	Volumes   []string                            `yaml:"volumes,omitempty"`
 	DependsOn []string                            `yaml:"depends_on,omitempty"`
@@ -75,7 +78,8 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 		}
 		file.Networks[id] = composeNetwork{
 			Name: network.Name, Driver: "bridge", EnableIPv6: network.IPv6 != nil,
-			IPAM: &composeNetworkIPAM{Driver: "default", Config: configs},
+			DriverOpts: composeBridgeDriverOpts(network.TrustedHostInterfaces),
+			IPAM:       &composeNetworkIPAM{Driver: "default", Config: configs},
 		}
 	}
 	return writeYAML(filepath.Join(manifest.OutputDir, "networks", "docker-compose.yml"), file)
@@ -86,6 +90,7 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 	socksNetworks := map[string]composeServiceAttachment{}
 	dnsNetworks := map[string]composeServiceAttachment{}
 	h2Networks := map[string]composeServiceAttachment{}
+	var hasIPv4, hasIPv6 bool
 	for _, id := range sortedKeys(service.Networks) {
 		network := manifest.Networks[id]
 		roles := service.Networks[id]
@@ -93,13 +98,17 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 		socksNetworks[id] = attachmentForAddress(roles.SOCKS)
 		dnsNetworks[id] = attachmentForAddress(roles.DNS)
 		h2Networks[id] = attachmentForAddress(roles.H2)
+		hasIPv4 = hasIPv4 || network.IPv4 != nil
+		hasIPv6 = hasIPv6 || network.IPv6 != nil
 	}
+	ports := composeLoopbackPorts(service.Port, hasIPv4, hasIPv6)
 	file := composeFile{
 		Name:     "higgs-socks5",
 		Networks: networks,
 		Services: map[string]composeService{
 			"socks": {
 				Image: manifest.Images.Gost, Restart: "unless-stopped", Networks: socksNetworks,
+				Ports:   ports,
 				Command: []string{"-L", fmt.Sprintf("socks5://[::]:%d?dns=dns:53", service.Port)}, DependsOn: []string{"dns"},
 			},
 			"dns": {
@@ -124,6 +133,24 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 		return err
 	}
 	return atomicWrite(filepath.Join(dir, "resolved.json"), append(data, '\n'), 0o644)
+}
+
+func composeBridgeDriverOpts(interfaces []string) map[string]string {
+	if len(interfaces) == 0 {
+		return nil
+	}
+	return map[string]string{"com.docker.network.bridge.trusted_host_interfaces": strings.Join(interfaces, ":")}
+}
+
+func composeLoopbackPorts(port uint16, hasIPv4, hasIPv6 bool) []string {
+	ports := make([]string, 0, 2)
+	if hasIPv4 {
+		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:%d", port, port))
+	}
+	if hasIPv6 {
+		ports = append(ports, fmt.Sprintf("[::1]:%d:%d", port, port))
+	}
+	return ports
 }
 
 func attachmentForAddress(address string) composeServiceAttachment {

@@ -34,8 +34,9 @@ type imageConfig struct {
 }
 
 type networkConfig struct {
-	IPv4 string `yaml:"ipv4,omitempty"`
-	IPv6 string `yaml:"ipv6,omitempty"`
+	IPv4                  string   `yaml:"ipv4,omitempty"`
+	IPv6                  string   `yaml:"ipv6,omitempty"`
+	TrustedHostInterfaces []string `yaml:"trusted_host_interfaces,omitempty"`
 }
 
 type socks5Config struct {
@@ -96,9 +97,10 @@ type resolvedManifest struct {
 }
 
 type resolvedNetwork struct {
-	Name string        `json:"name"`
-	IPv4 *resolvedIPAM `json:"ipv4,omitempty"`
-	IPv6 *resolvedIPAM `json:"ipv6,omitempty"`
+	Name                  string        `json:"name"`
+	TrustedHostInterfaces []string      `json:"trusted_host_interfaces,omitempty"`
+	IPv4                  *resolvedIPAM `json:"ipv4,omitempty"`
+	IPv6                  *resolvedIPAM `json:"ipv6,omitempty"`
 }
 
 type resolvedIPAM struct {
@@ -188,7 +190,11 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		if id != name {
 			return resolvedManifest{}, fmt.Errorf("network name %q is not canonical; use %q", name, id)
 		}
-		network := resolvedNetwork{Name: "higgs-" + id}
+		trustedInterfaces, err := normalizeTrustedHostInterfaces(configured.TrustedHostInterfaces)
+		if err != nil {
+			return resolvedManifest{}, fmt.Errorf("network %s trusted_host_interfaces: %w", name, err)
+		}
+		network := resolvedNetwork{Name: "higgs-" + id, TrustedHostInterfaces: trustedInterfaces}
 		if configured.IPv4 != "" {
 			resolved, err := resolveDescriptor(configured.IPv4, 4, assignments)
 			if err != nil {
@@ -287,6 +293,27 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 	hash := sha256.Sum256(hashInput)
 	service.ConfigHash = hex.EncodeToString(hash[:])
 	result.SOCKS5 = service
+	return result, nil
+}
+
+func normalizeTrustedHostInterfaces(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || strings.ContainsAny(value, ":\t\n\r ") {
+			return nil, fmt.Errorf("must contain non-empty interface names without whitespace or ':'")
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
 	return result, nil
 }
 

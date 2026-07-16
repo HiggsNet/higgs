@@ -13,7 +13,7 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		Version: 1, OutputDir: output,
 		Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
 		Networks: map[string]networkConfig{
-			"main": {IPv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1", IPv6: "auto;::/112;::100/120;::1"},
+			"main": {IPv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1", IPv6: "auto;::/112;::100/120;::1", TrustedHostInterfaces: []string{"hgs1", "hgs0"}},
 			"cn":   {IPv6: "assignment:fd42:2::/64;::/112;::100/120;::1"},
 		},
 		SOCKS5: socks5Config{Publish: publishConfig{"main": "cn-east", "cn": "cn"}, Networks: map[string]string{"main": "::20", "cn": "::30"}},
@@ -22,7 +22,10 @@ func TestResolveAndRenderManifest(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "auto requires exactly one") {
 		t.Fatalf("ambiguous auto error = %v", err)
 	}
-	configured.Networks["main"] = networkConfig{IPv4: configured.Networks["main"].IPv4, IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1"}
+	configured.Networks["main"] = networkConfig{
+		IPv4: configured.Networks["main"].IPv4, IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1",
+		TrustedHostInterfaces: configured.Networks["main"].TrustedHostInterfaces,
+	}
 	resolved, err := resolveManifest(configured, []runtimeAssignment{{Prefix: "fd42:1::/64"}, {Prefix: "fd42:2::/64"}})
 	if err != nil {
 		t.Fatalf("resolveManifest: %v", err)
@@ -43,14 +46,30 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		t.Fatalf("rendered lock = %+v", lock)
 	}
 	networkCompose := readTestFile(t, filepath.Join(output, "networks", "docker-compose.yml"))
-	if !strings.Contains(networkCompose, "name: higgs-main") || !strings.Contains(networkCompose, "fd42:1::/112") {
-		t.Fatalf("network compose:\n%s", networkCompose)
+	for _, want := range []string{"name: higgs-main", "fd42:1::/112", "driver_opts:", "com.docker.network.bridge.trusted_host_interfaces: hgs0:hgs1"} {
+		if !strings.Contains(networkCompose, want) {
+			t.Fatalf("network compose missing %q:\n%s", want, networkCompose)
+		}
 	}
 	serviceCompose := readTestFile(t, filepath.Join(output, "socks5", "docker-compose.yml"))
-	for _, want := range []string{"name: higgs-socks5", "socks:", "dns:", "h2:", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "ipv6_address: fd42:1::22"} {
+	for _, want := range []string{"name: higgs-socks5", "socks:", "dns:", "h2:", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "ipv6_address: fd42:1::22", "127.0.0.1:3128:3128", "[::1]:3128:3128"} {
 		if !strings.Contains(serviceCompose, want) {
 			t.Fatalf("service compose missing %q:\n%s", want, serviceCompose)
 		}
+	}
+}
+
+func TestResolveManifestRejectsInvalidTrustedHostInterface(t *testing.T) {
+	configured := manifest{
+		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		Networks: map[string]networkConfig{"main": {
+			IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1", TrustedHostInterfaces: []string{"hgs0:eth0"},
+		}},
+		SOCKS5: socks5Config{Publish: publishConfig{"main": "test"}, Networks: map[string]string{"main": "::20"}},
+	}
+	_, err := resolveManifest(configured, []runtimeAssignment{{Prefix: "fd42:1::/64"}})
+	if err == nil || !strings.Contains(err.Error(), "trusted_host_interfaces") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
