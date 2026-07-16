@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"time"
 )
 
@@ -38,10 +39,30 @@ func run(args []string) error {
 		if flags.NArg() != 0 {
 			return errors.New("usage: higgs-services withdraw [options]")
 		}
+		manifest, err := loadManifest(*configPath)
+		if err != nil {
+			return err
+		}
+		if *outputDir != "" {
+			manifest.OutputDir = *outputDir
+		}
+		lock, err := loadPublishedSOCKS5(manifest.OutputDir)
+		if err != nil {
+			return err
+		}
 		if err := runHiggs(*higgsBinary, "service", "withdraw"); err != nil {
 			return err
 		}
-		return runHiggs(*higgsBinary, "firewall", "endpoint", "remove", socks5ServiceName)
+		for _, endpoint := range lock.Endpoints {
+			if err := runHiggs(*higgsBinary, "route", "withdraw", lock.ManagedZone, endpoint.Assignment); err != nil {
+				return err
+			}
+			if err := runHiggs(*higgsBinary, "firewall", "endpoint", "remove", endpointACLName(endpoint.Network)); err != nil {
+				return err
+			}
+		}
+		lock.Endpoints = nil
+		return writeSOCKS5Lock(filepath.Join(manifest.OutputDir, "socks5", "published.json"), lock)
 	}
 	manifest, err := loadManifest(*configPath)
 	if err != nil {
@@ -50,14 +71,15 @@ func run(args []string) error {
 	if *outputDir != "" {
 		manifest.OutputDir = *outputDir
 	}
-	assignments, err := queryAssignments(*higgsBinary)
+	report, err := queryAssignments(*higgsBinary)
 	if err != nil {
 		return err
 	}
-	resolved, err := resolveManifest(manifest, assignments)
+	resolved, err := resolveManifest(manifest, report.Assignments)
 	if err != nil {
 		return err
 	}
+	resolved.ManagedZone = report.ManagedZone
 	switch command {
 	case "validate":
 		return writeJSON(os.Stdout, resolved)
@@ -77,57 +99,131 @@ func run(args []string) error {
 	}
 }
 
-func queryAssignments(higgsBinary string) ([]runtimeAssignment, error) {
+func queryAssignments(higgsBinary string) (runtimeIPAMReport, error) {
 	cmd := exec.Command(higgsBinary, "ipam", "mine")
 	out, err := cmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return nil, fmt.Errorf("higgs ipam mine: %s", exit.Stderr)
+			return runtimeIPAMReport{}, fmt.Errorf("higgs ipam mine: %s", exit.Stderr)
 		}
-		return nil, fmt.Errorf("higgs ipam mine: %w", err)
+		return runtimeIPAMReport{}, fmt.Errorf("higgs ipam mine: %w", err)
 	}
-	var report struct {
-		Assignments []runtimeAssignment `json:"assignments"`
-	}
+	var report runtimeIPAMReport
 	if err := json.Unmarshal(out, &report); err != nil {
-		return nil, fmt.Errorf("decode higgs ipam mine output: %w", err)
+		return runtimeIPAMReport{}, fmt.Errorf("decode higgs ipam mine output: %w", err)
 	}
-	return report.Assignments, nil
+	return report, nil
 }
 
 func publishResolvedService(higgsBinary string, manifest resolvedManifest) error {
 	service := manifest.SOCKS5
-	lockPath := filepath.Join(manifest.OutputDir, "socks5", "resolved.json")
-	data, err := os.ReadFile(lockPath)
+	rendered, err := loadRenderedSOCKS5(manifest.OutputDir)
 	if err != nil {
-		return fmt.Errorf("read rendered state %s: %w; run render first", lockPath, err)
+		return err
 	}
-	var rendered resolvedSOCKS5
-	if err := json.Unmarshal(data, &rendered); err != nil {
-		return fmt.Errorf("decode rendered state: %w", err)
-	}
-	if rendered.ConfigHash != service.ConfigHash || rendered.Address != service.Address {
+	if rendered.ConfigHash != service.ConfigHash || rendered.ManagedZone != manifest.ManagedZone || !reflect.DeepEqual(rendered.Endpoints, service.Endpoints) {
 		return errors.New("socks5 runtime assignment or config changed; run render again")
 	}
-	connection, err := net.DialTimeout("tcp", net.JoinHostPort(service.Address, fmt.Sprint(service.Port)), 3*time.Second)
-	if err != nil {
-		return fmt.Errorf("socks5 TCP readiness check failed: %w", err)
-	}
-	connection.Close()
-	if len(service.AllowZones) > 0 {
-		args := []string{"firewall", "endpoint", "apply", socks5ServiceName, "--destination", service.Address, "--protocol", "tcp", "--port", fmt.Sprint(service.Port)}
-		for _, selector := range service.AllowZones {
-			args = append(args, "--allow-zone", selector)
+	for _, endpoint := range service.Endpoints {
+		connection, err := net.DialTimeout("tcp", net.JoinHostPort(endpoint.Address, fmt.Sprint(endpoint.Port)), 3*time.Second)
+		if err != nil {
+			return fmt.Errorf("socks5 endpoint %s TCP readiness check failed: %w", endpoint.Network, err)
 		}
-		if err := runHiggs(higgsBinary, args...); err != nil {
-			return fmt.Errorf("apply endpoint ACL before publish: %w", err)
-		}
-	} else if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", socks5ServiceName); err != nil {
-		return fmt.Errorf("remove stale endpoint ACL before unrestricted publish: %w", err)
+		connection.Close()
 	}
-	return runHiggs(higgsBinary, "service", "publish", "--region", service.Region, "--address", service.Address, "--port", fmt.Sprint(service.Port))
+	for _, endpoint := range service.Endpoints {
+		aclName := endpointACLName(endpoint.Network)
+		if len(service.AllowZones) > 0 {
+			args := []string{"firewall", "endpoint", "apply", aclName, "--destination", endpoint.Address, "--protocol", "tcp", "--port", fmt.Sprint(endpoint.Port)}
+			for _, selector := range service.AllowZones {
+				args = append(args, "--allow-zone", selector)
+			}
+			if err := runHiggs(higgsBinary, args...); err != nil {
+				return fmt.Errorf("apply endpoint ACL before publish: %w", err)
+			}
+		} else if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", aclName); err != nil {
+			return fmt.Errorf("remove stale endpoint ACL before unrestricted publish: %w", err)
+		}
+		if err := runHiggs(higgsBinary, "route", "announce", manifest.ManagedZone, endpoint.Assignment); err != nil {
+			return fmt.Errorf("announce endpoint network %s: %w", endpoint.Network, err)
+		}
+	}
+	args := []string{"service", "publish"}
+	for _, endpoint := range service.Endpoints {
+		args = append(args, "--endpoint", fmt.Sprintf("%s,%s,%d", endpoint.Region, endpoint.Address, endpoint.Port))
+	}
+	if err := runHiggs(higgsBinary, args...); err != nil {
+		return err
+	}
+	previous, _ := loadPublishedSOCKS5(manifest.OutputDir)
+	current := renderedSOCKS5Lock{resolvedSOCKS5: service, ManagedZone: manifest.ManagedZone}
+	for _, old := range previous.Endpoints {
+		if endpointStillPublished(old, service.Endpoints) {
+			continue
+		}
+		if err := runHiggs(higgsBinary, "route", "withdraw", previous.ManagedZone, old.Assignment); err != nil {
+			return err
+		}
+		if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", endpointACLName(old.Network)); err != nil {
+			return err
+		}
+	}
+	return writeSOCKS5Lock(filepath.Join(manifest.OutputDir, "socks5", "published.json"), current)
 }
+
+type renderedSOCKS5Lock struct {
+	resolvedSOCKS5
+	ManagedZone string `json:"managed_zone"`
+}
+
+func loadRenderedSOCKS5(outputDir string) (renderedSOCKS5Lock, error) {
+	path := filepath.Join(outputDir, "socks5", "resolved.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return renderedSOCKS5Lock{}, fmt.Errorf("read rendered state %s: %w; run render first", path, err)
+	}
+	var lock renderedSOCKS5Lock
+	if err := json.Unmarshal(data, &lock); err != nil {
+		return renderedSOCKS5Lock{}, fmt.Errorf("decode rendered state: %w", err)
+	}
+	return lock, nil
+}
+
+func loadPublishedSOCKS5(outputDir string) (renderedSOCKS5Lock, error) {
+	path := filepath.Join(outputDir, "socks5", "published.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return loadRenderedSOCKS5(outputDir)
+	}
+	if err != nil {
+		return renderedSOCKS5Lock{}, err
+	}
+	var lock renderedSOCKS5Lock
+	if err := json.Unmarshal(data, &lock); err != nil {
+		return renderedSOCKS5Lock{}, fmt.Errorf("decode published state: %w", err)
+	}
+	return lock, nil
+}
+
+func writeSOCKS5Lock(path string, lock renderedSOCKS5Lock) error {
+	data, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, append(data, '\n'), 0o644)
+}
+
+func endpointStillPublished(old resolvedEndpoint, current []resolvedEndpoint) bool {
+	for _, endpoint := range current {
+		if endpoint.Network == old.Network && endpoint.Assignment == old.Assignment && endpoint.Address == old.Address {
+			return true
+		}
+	}
+	return false
+}
+
+func endpointACLName(network string) string { return socks5ServiceName + "-" + network }
 
 func runHiggs(binary string, args ...string) error {
 	cmd := exec.Command(binary, args...)

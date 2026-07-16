@@ -846,6 +846,29 @@ func TestAnycastAssignmentOverlapCrossZoneValid(t *testing.T) {
 	}
 }
 
+func TestSharedAssignmentTagConflictRejected(t *testing.T) {
+	ns := zone.NewNetworkState()
+	addZone(ns, zone.RootZone, "")
+	addZone(ns, "catofes.", zone.RootZone)
+	addZone(ns, "pek.catofes.", "catofes.")
+	addZone(ns, "sh.catofes.", "catofes.")
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addIPAMPoolRecord(ns, zone.RootZone, "10.0.0.0/16", "catofes.")
+	addRecords(ns, "catofes.",
+		mkRecord("catofes.", mustKeyAssignment("10.0.1.0/24")+"#pek", RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true, Tag: "socks5.cn"})),
+		mkRecord("catofes.", mustKeyAssignment("10.0.2.0/24")+"#sh", RecordTypeIPAMAssignment,
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.2.0/24", AssignedTo: "sh.catofes.", Active: true, Shared: true, Tag: "socks5.cn"})),
+	)
+	ars, err := BuildAuthorizedRouteSet(ns, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasCode(ars.Errors, "ipam_assignment_tag_conflict") || len(ars.AllAssignments) != 0 {
+		t.Fatalf("assignments=%+v errors=%+v", ars.AllAssignments, ars.Errors)
+	}
+}
+
 func TestAnycastAssignmentOnlyOneSharedStillRejected(t *testing.T) {
 	ns := zone.NewNetworkState()
 	addZone(ns, zone.RootZone, "")

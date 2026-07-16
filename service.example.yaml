@@ -6,13 +6,26 @@ networks:
   main:
     ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
     ipv6: "auto;::/112;::100/120;::1"
+  # Shared Anycast networks use stable IPAM tags. The local main network does
+  # not need a tag: auto intentionally selects the node's unique assignment.
+  # cn:
+  #   ipv6: "tag:socks5.cn;::/112;::100/120;::1"
+  # asia:
+  #   ipv6: "tag:socks5.asia;::/112;::100/120;::1"
 
 socks5:
-  region: cn-east
-  publish: main
   networks:
     # Base address: socks=::20, dns=::21, h2=::22.
     main: "::20"
+    # cn: "::20"
+    # asia: "::20"
+  # Each entry maps an attached network to the endpoint's discovery region.
+  # The local endpoint and any number of Anycast endpoints may be published
+  # together.
+  publish:
+    main: local
+    # cn: cn
+    # asia: asia
   # Optional local endpoint ACL. publish installs it through the running
   # Higgs daemon before publishing the signed service record.
   # allow_zones:

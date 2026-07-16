@@ -101,8 +101,30 @@ func TestAuthorizeSOCKS5RecordUsesValidIPAMAssignment(t *testing.T) {
 	sharedOnly := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{{
 		Prefix: netip.MustParsePrefix("fd42:1::/64"), AssignedTo: record.Zone, Shared: true,
 	}}}
-	if _, err := AuthorizeSOCKS5Record(record, sharedOnly); err == nil || !strings.Contains(err.Error(), "non-shared") {
-		t.Fatalf("shared assignment error = %v", err)
+	if _, err := AuthorizeSOCKS5Record(record, sharedOnly); err != nil {
+		t.Fatalf("shared assignment should authorize anycast endpoint: %v", err)
+	}
+}
+
+func TestSOCKS5RecordMultipleEndpoints(t *testing.T) {
+	record := &zone.Record{Zone: "node-a.catofes.", Key: "services/socks5", Type: RecordTypeSOCKS5, Value: []byte(`{"type":"socks5","endpoints":[{"region":"cn","address":"fd42:1::20","port":3128},{"region":"asia","address":"fd42:2::20","port":3128}]}`)}
+	parsed, err := ParseSOCKS5Record(record)
+	if err != nil {
+		t.Fatalf("ParseSOCKS5Record: %v", err)
+	}
+	if len(parsed.EffectiveEndpoints()) != 2 {
+		t.Fatalf("endpoints = %+v", parsed.EffectiveEndpoints())
+	}
+	authorized := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{
+		{Prefix: netip.MustParsePrefix("fd42:1::/64"), AssignedTo: record.Zone},
+		{Prefix: netip.MustParsePrefix("fd42:2::/64"), AssignedTo: record.Zone, Shared: true, Tag: "socks5.asia"},
+	}}
+	if _, err := AuthorizeSOCKS5Record(record, authorized); err != nil {
+		t.Fatalf("AuthorizeSOCKS5Record multi endpoint: %v", err)
+	}
+	authorized.AllAssignments = authorized.AllAssignments[:1]
+	if _, err := AuthorizeSOCKS5Record(record, authorized); err == nil || !strings.Contains(err.Error(), "fd42:2::20") {
+		t.Fatalf("missing second assignment error = %v", err)
 	}
 }
 

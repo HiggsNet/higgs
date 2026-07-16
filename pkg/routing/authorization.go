@@ -28,6 +28,7 @@ type AssignmentEntry struct {
 	Record     *zone.Record
 	Assignment *IPAMAssignmentRecord
 	Shared     bool // anycast assignment: overlaps with other shared assignments are allowed
+	Tag        string
 }
 
 // PoolEntry represents an active IPAM pool record.
@@ -125,6 +126,7 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 					Record:     rec,
 					Assignment: assignment,
 					Shared:     assignment.Shared,
+					Tag:        assignment.Tag,
 				})
 
 			case strings.HasPrefix(key, RecordKeyPrefixRoutes):
@@ -162,6 +164,11 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 	// Validate assignments against pools and detect overlaps before authorizing
 	// announcements.
 	validAssignments := validateAssignmentPools(pendingAssignments, ars)
+	validAssignments, badTags := validateAssignmentTags(validAssignments)
+	for entry := range badTags {
+		ars.addError(entry.Source, entry.Prefix, "ipam_assignment_tag_conflict",
+			fmt.Sprintf("shared assignment tag %q resolves to more than one prefix", entry.Tag))
+	}
 	validAssignments, badAssignments := validateAssignmentOverlaps(validAssignments, ns)
 	for entry := range badAssignments {
 		ars.addError(entry.Source, entry.Prefix, "ipam_assignment_overlap",
@@ -211,6 +218,42 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 	})
 
 	return ars, nil
+}
+
+func validateAssignmentTags(assignments []*AssignmentEntry) (kept []*AssignmentEntry, bad map[*AssignmentEntry]bool) {
+	bad = make(map[*AssignmentEntry]bool)
+	byTag := make(map[string]netip.Prefix)
+	conflicted := make(map[string]bool)
+	for _, entry := range assignments {
+		if entry == nil || entry.Tag == "" {
+			continue
+		}
+		key := assignmentTagFamilyKey(entry)
+		if prefix, ok := byTag[key]; ok && prefix != entry.Prefix {
+			conflicted[key] = true
+		} else {
+			byTag[key] = entry.Prefix
+		}
+	}
+	for _, entry := range assignments {
+		if entry != nil && conflicted[assignmentTagFamilyKey(entry)] {
+			bad[entry] = true
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept, bad
+}
+
+func assignmentTagFamilyKey(entry *AssignmentEntry) string {
+	if entry == nil {
+		return ""
+	}
+	family := "6"
+	if entry.Prefix.Addr().Is4() {
+		family = "4"
+	}
+	return entry.Tag + "/" + family
 }
 
 // IsZoneAncestor reports whether ancestor is the same zone as child or one of

@@ -25,13 +25,20 @@ var serviceIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62})$`)
 // SOCKS5Record is the public, signed service description. Access policy and
 // container rendering details intentionally remain local configuration.
 type SOCKS5Record struct {
-	Type    string `json:"type"`
-	Region  string `json:"region"`
-	Address string `json:"address"`
-	Port    uint16 `json:"port"`
+	Type      string           `json:"type"`
+	Region    string           `json:"region,omitempty"`
+	Address   string           `json:"address,omitempty"`
+	Port      uint16           `json:"port,omitempty"`
+	Endpoints []SOCKS5Endpoint `json:"endpoints,omitempty"`
 	// Active is optional for compatibility: records created before explicit
 	// withdrawal support omitted it and are therefore active by default.
 	Active *bool `json:"active,omitempty"`
+}
+
+type SOCKS5Endpoint struct {
+	Region  string `json:"region"`
+	Address string `json:"address"`
+	Port    uint16 `json:"port"`
 }
 
 func (r SOCKS5Record) IsActive() bool { return r.Active == nil || *r.Active }
@@ -88,23 +95,48 @@ func (r SOCKS5Record) Validate() error {
 	if r.Type != TypeSOCKS5 {
 		return fmt.Errorf("service type must be %q", TypeSOCKS5)
 	}
-	if strings.TrimSpace(r.Region) == "" {
-		return errors.New("service region is required")
+	endpoints := r.EffectiveEndpoints()
+	if len(endpoints) == 0 {
+		return errors.New("service requires at least one endpoint")
 	}
-	addr, err := netip.ParseAddr(r.Address)
-	if err != nil {
-		return fmt.Errorf("invalid service address %q: %w", r.Address, err)
+	if len(r.Endpoints) > 0 && (r.Region != "" || r.Address != "" || r.Port != 0) {
+		return errors.New("service legacy endpoint fields and endpoints cannot both be set")
 	}
-	if addr.IsUnspecified() || addr.IsMulticast() {
-		return fmt.Errorf("service address %s is not a usable unicast address", addr)
-	}
-	if r.Address != addr.String() {
-		return fmt.Errorf("service address %q is not canonical; use %q", r.Address, addr)
-	}
-	if r.Port == 0 {
-		return errors.New("service port must be between 1 and 65535")
+	seen := make(map[string]bool)
+	for i, endpoint := range endpoints {
+		if strings.TrimSpace(endpoint.Region) == "" {
+			return fmt.Errorf("service endpoint %d region is required", i)
+		}
+		addr, err := netip.ParseAddr(endpoint.Address)
+		if err != nil {
+			return fmt.Errorf("invalid service endpoint %d address %q: %w", i, endpoint.Address, err)
+		}
+		if addr.IsUnspecified() || addr.IsMulticast() {
+			return fmt.Errorf("service endpoint %d address %s is not a usable unicast address", i, addr)
+		}
+		if endpoint.Address != addr.String() {
+			return fmt.Errorf("service endpoint %d address %q is not canonical; use %q", i, endpoint.Address, addr)
+		}
+		if endpoint.Port == 0 {
+			return fmt.Errorf("service endpoint %d port must be between 1 and 65535", i)
+		}
+		key := endpoint.Region + "/" + endpoint.Address + fmt.Sprint("/", endpoint.Port)
+		if seen[key] {
+			return fmt.Errorf("duplicate service endpoint %s", key)
+		}
+		seen[key] = true
 	}
 	return nil
+}
+
+func (r SOCKS5Record) EffectiveEndpoints() []SOCKS5Endpoint {
+	if len(r.Endpoints) > 0 {
+		return append([]SOCKS5Endpoint(nil), r.Endpoints...)
+	}
+	if r.Region == "" && r.Address == "" && r.Port == 0 {
+		return nil
+	}
+	return []SOCKS5Endpoint{{Region: r.Region, Address: r.Address, Port: r.Port}}
 }
 
 // AuthorizeSOCKS5Record checks that the service address belongs to an active,
@@ -122,20 +154,26 @@ func AuthorizeSOCKS5Record(record *zone.Record, authorized *routing.AuthorizedRo
 	if !value.IsActive() {
 		return nil, errors.New("service record is withdrawn")
 	}
-	addr := netip.MustParseAddr(value.Address)
-	var best *routing.AssignmentEntry
-	for _, assignment := range authorized.AllAssignments {
-		if assignment == nil || assignment.Shared || assignment.AssignedTo != record.Zone || !assignment.Prefix.Contains(addr) {
-			continue
+	var first *routing.AssignmentEntry
+	for _, endpoint := range value.EffectiveEndpoints() {
+		addr := netip.MustParseAddr(endpoint.Address)
+		var best *routing.AssignmentEntry
+		for _, assignment := range authorized.AllAssignments {
+			if assignment == nil || assignment.AssignedTo != record.Zone || !assignment.Prefix.Contains(addr) {
+				continue
+			}
+			if best == nil || assignment.Prefix.Bits() > best.Prefix.Bits() {
+				best = assignment
+			}
 		}
-		if best == nil || assignment.Prefix.Bits() > best.Prefix.Bits() {
-			best = assignment
+		if best == nil {
+			return nil, fmt.Errorf("service_address_unauthorized: address %s is not covered by an active IPAM assignment to %s", addr, record.Zone)
+		}
+		if first == nil {
+			first = best
 		}
 	}
-	if best == nil {
-		return nil, fmt.Errorf("service_address_unauthorized: address %s is not covered by an active non-shared IPAM assignment to %s", addr, record.Zone)
-	}
-	return best, nil
+	return first, nil
 }
 
 func requireJSONEOF(decoder *json.Decoder) error {

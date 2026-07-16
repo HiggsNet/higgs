@@ -926,6 +926,13 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 			if event.Type == daemonEventIPsecCleanup && result.Error == nil {
 				ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
 			}
+			if event.Type == daemonEventRecordPut && event.RecordPut != nil && strings.HasPrefix(event.RecordPut.Key, routing.RecordKeyPrefixRoutes) && result.Error == nil {
+				flushed, err := d.flushRoutingReconcileResult(ctx)
+				routingFlushed = flushed || routingFlushed
+				if err != nil {
+					result.Error = err
+				}
+			}
 			if (event.Type == daemonEventEndpointACLApply || event.Type == daemonEventEndpointACLRemove) && result.Error == nil {
 				flushed, err := d.flushFirewallReconcileResult(ctx)
 				firewallFlushed = flushed || firewallFlushed
@@ -1617,18 +1624,24 @@ func (d *DaemonService) recoverRoutingOnStart(ctx context.Context) {
 }
 
 func (d *DaemonService) flushRoutingReconcile(ctx context.Context) bool {
+	flushed, err := d.flushRoutingReconcileResult(ctx)
+	if err != nil {
+		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
+	}
+	return flushed
+}
+
+func (d *DaemonService) flushRoutingReconcileResult(ctx context.Context) (bool, error) {
 	if d == nil || !d.routingDirty {
-		return false
+		return false, nil
 	}
 	d.routingDirty = false
 	d.noteReconcileFlush("routing")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
-	if err := d.reconcileRouting(reconcileCtx); err != nil {
-		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
-	}
+	err := d.reconcileRouting(reconcileCtx)
 	d.publishCommittedStateSnapshot()
-	return true
+	return true, err
 }
 
 func (d *DaemonService) routingReconcileInterval() time.Duration {

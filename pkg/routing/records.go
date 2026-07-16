@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"strings"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
+
+var assignmentTagPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62})$`)
 
 const (
 	RecordTypeRouteAnnouncement = "route.announcement"
@@ -56,6 +59,7 @@ type IPAMAssignmentRecord struct {
 	AssignedTo zone.ZonePath `json:"assigned_to"`      // zone that may announce the prefix
 	Active     bool          `json:"active"`           // true=assigned, false=revoked
 	Shared     bool          `json:"shared,omitempty"` // anycast: allow multiple zones to hold the same prefix
+	Tag        string        `json:"tag,omitempty"`    // optional stable selector for a shared assignment group
 }
 
 // CanonicalizePrefix parses a CIDR and returns its canonical form (masked network address).
@@ -258,6 +262,14 @@ func (r IPAMAssignmentRecord) Validate(owner zone.ZonePath) error {
 	}
 	if r.AssignedTo == "" {
 		return errors.New("ipam assignment assigned_to is empty")
+	}
+	if r.Tag != "" {
+		if !r.Shared {
+			return errors.New("ipam assignment tag requires shared=true")
+		}
+		if !assignmentTagPattern.MatchString(r.Tag) {
+			return fmt.Errorf("invalid ipam assignment tag %q", r.Tag)
+		}
 	}
 	_ = owner
 	return nil

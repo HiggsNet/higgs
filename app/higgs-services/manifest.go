@@ -39,24 +39,60 @@ type networkConfig struct {
 }
 
 type socks5Config struct {
-	Region     string            `yaml:"region"`
-	Publish    string            `yaml:"publish"`
+	Region     string            `yaml:"region,omitempty"` // legacy single-endpoint region
+	Publish    publishConfig     `yaml:"publish"`
 	Port       uint16            `yaml:"port,omitempty"`
 	Networks   map[string]string `yaml:"networks"`
 	AllowZones []string          `yaml:"allow_zones,omitempty"`
+}
+
+type publishConfig map[string]string
+
+func (p *publishConfig) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var network string
+		if err := node.Decode(&network); err != nil {
+			return err
+		}
+		*p = publishConfig{network: ""}
+		return nil
+	case yaml.MappingNode:
+		var value map[string]string
+		if err := node.Decode(&value); err != nil {
+			return err
+		}
+		*p = value
+		return nil
+	default:
+		return fmt.Errorf("publish must be a network-to-region map")
+	}
 }
 
 type runtimeAssignment struct {
 	Prefix string `json:"prefix"`
 	Source string `json:"source"`
 	Shared bool   `json:"shared,omitempty"`
+	Tag    string `json:"tag,omitempty"`
+}
+
+type runtimeIPAMReport struct {
+	ManagedZone string              `json:"managed_zone"`
+	Assignments []runtimeAssignment `json:"assignments"`
+}
+
+type assignmentCandidate struct {
+	Prefix netip.Prefix
+	Shared bool
+	Tag    string
 }
 
 type resolvedManifest struct {
-	OutputDir string                     `json:"output_dir"`
-	Images    imageConfig                `json:"images"`
-	Networks  map[string]resolvedNetwork `json:"networks"`
-	SOCKS5    resolvedSOCKS5             `json:"socks5"`
+	ManagedZone string                     `json:"managed_zone"`
+	OutputDir   string                     `json:"output_dir"`
+	Images      imageConfig                `json:"images"`
+	Networks    map[string]resolvedNetwork `json:"networks"`
+	SOCKS5      resolvedSOCKS5             `json:"socks5"`
 }
 
 type resolvedNetwork struct {
@@ -71,22 +107,35 @@ type resolvedIPAM struct {
 	Subnet     string `json:"subnet"`
 	IPRange    string `json:"ip_range"`
 	Gateway    string `json:"gateway"`
+	Shared     bool   `json:"shared,omitempty"`
+	Tag        string `json:"tag,omitempty"`
 }
 
 type resolvedSOCKS5 struct {
-	Region     string                       `json:"region"`
-	Publish    string                       `json:"publish"`
-	Address    string                       `json:"address"`
 	Port       uint16                       `json:"port"`
 	AllowZones []string                     `json:"allow_zones,omitempty"`
 	Networks   map[string]resolvedRoleAddrs `json:"networks"`
 	ConfigHash string                       `json:"config_hash"`
+	Endpoints  []resolvedEndpoint           `json:"endpoints"`
+}
+
+type resolvedEndpoint struct {
+	Network       string `json:"network"`
+	Region        string `json:"region"`
+	Address       string `json:"address"`
+	Port          uint16 `json:"port"`
+	Assignment    string `json:"assignment"`
+	Shared        bool   `json:"shared,omitempty"`
+	AssignmentTag string `json:"assignment_tag,omitempty"`
 }
 
 type resolvedRoleAddrs struct {
-	SOCKS string `json:"socks"`
-	DNS   string `json:"dns"`
-	H2    string `json:"h2"`
+	SOCKS         string `json:"socks"`
+	DNS           string `json:"dns"`
+	H2            string `json:"h2"`
+	Assignment    string `json:"assignment,omitempty"`
+	Shared        bool   `json:"shared,omitempty"`
+	AssignmentTag string `json:"assignment_tag,omitempty"`
 }
 
 func loadManifest(path string) (manifest, error) {
@@ -122,16 +171,13 @@ func loadManifest(path string) (manifest, error) {
 }
 
 func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolvedManifest, error) {
-	assignments := make([]netip.Prefix, 0, len(rawAssignments))
+	assignments := make([]assignmentCandidate, 0, len(rawAssignments))
 	for _, raw := range rawAssignments {
-		if raw.Shared {
-			continue
-		}
 		prefix, err := netip.ParsePrefix(raw.Prefix)
 		if err != nil || prefix != prefix.Masked() {
 			return resolvedManifest{}, fmt.Errorf("invalid runtime assignment %q", raw.Prefix)
 		}
-		assignments = append(assignments, prefix)
+		assignments = append(assignments, assignmentCandidate{Prefix: prefix, Shared: raw.Shared, Tag: raw.Tag})
 	}
 	result := resolvedManifest{OutputDir: value.OutputDir, Images: value.Images, Networks: map[string]resolvedNetwork{}}
 	for name, configured := range value.Networks {
@@ -171,19 +217,16 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		result.Networks[name] = network
 	}
 	configured := value.SOCKS5
-	if strings.TrimSpace(configured.Region) == "" {
-		return resolvedManifest{}, fmt.Errorf("socks5.region is required")
-	}
 	if configured.Port == 0 {
 		configured.Port = 3128
 	}
-	if configured.Publish == "" {
+	if len(configured.Publish) == 0 {
 		return resolvedManifest{}, fmt.Errorf("socks5.publish is required")
 	}
 	if len(configured.Networks) == 0 {
 		return resolvedManifest{}, fmt.Errorf("socks5.networks is required")
 	}
-	service := resolvedSOCKS5{Region: configured.Region, Publish: configured.Publish, Port: configured.Port, Networks: map[string]resolvedRoleAddrs{}}
+	service := resolvedSOCKS5{Port: configured.Port, Networks: map[string]resolvedRoleAddrs{}}
 	for _, raw := range configured.AllowZones {
 		selector, err := higgsservice.ParseZoneSelector(raw)
 		if err != nil {
@@ -204,13 +247,39 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		if err != nil {
 			return resolvedManifest{}, fmt.Errorf("socks5 network %s: %w", networkName, err)
 		}
+		roles.Assignment = familyIPAM.Assignment
+		roles.Shared = familyIPAM.Shared
+		roles.AssignmentTag = familyIPAM.Tag
 		service.Networks[networkName] = roles
 	}
-	published, ok := service.Networks[configured.Publish]
-	if !ok {
-		return resolvedManifest{}, fmt.Errorf("socks5: publish network %q is not attached", configured.Publish)
+	for networkName, region := range configured.Publish {
+		if len(socks5ServiceName)+1+len(networkName) > 63 {
+			return resolvedManifest{}, fmt.Errorf("socks5: publish network name %q is too long for its endpoint ACL name", networkName)
+		}
+		published, ok := service.Networks[networkName]
+		if !ok {
+			return resolvedManifest{}, fmt.Errorf("socks5: publish network %q is not attached", networkName)
+		}
+		if region == "" {
+			region = configured.Region
+		}
+		if strings.TrimSpace(region) == "" {
+			return resolvedManifest{}, fmt.Errorf("socks5.publish.%s region is required", networkName)
+		}
+		if published.Assignment == "" {
+			return resolvedManifest{}, fmt.Errorf("socks5: publish network %q must come from an IPAM assignment", networkName)
+		}
+		assignment := netip.MustParsePrefix(published.Assignment)
+		maxBits := 96
+		if assignment.Addr().Is4() {
+			maxBits = 28
+		}
+		if assignment.Bits() > maxBits {
+			return resolvedManifest{}, fmt.Errorf("socks5: publish network %q assignment %s exceeds Babel /%d limit", networkName, assignment, maxBits)
+		}
+		service.Endpoints = append(service.Endpoints, resolvedEndpoint{Network: networkName, Region: region, Address: published.SOCKS, Port: service.Port, Assignment: published.Assignment, Shared: published.Shared, AssignmentTag: published.AssignmentTag})
 	}
-	service.Address = published.SOCKS
+	sort.Slice(service.Endpoints, func(i, j int) bool { return service.Endpoints[i].Network < service.Endpoints[j].Network })
 	hashInput, _ := json.Marshal(struct {
 		Config   socks5Config
 		Networks map[string]resolvedNetwork
@@ -221,7 +290,7 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 	return result, nil
 }
 
-func resolveDescriptor(raw string, family int, assignments []netip.Prefix) (resolvedIPAM, error) {
+func resolveDescriptor(raw string, family int, assignments []assignmentCandidate) (resolvedIPAM, error) {
 	parts := strings.Split(raw, ";")
 	if len(parts) != 4 {
 		return resolvedIPAM{}, fmt.Errorf("expected source;subnet;dynamic-range;gateway")
@@ -231,35 +300,52 @@ func resolveDescriptor(raw string, family int, assignments []netip.Prefix) (reso
 	}
 	source := parts[0]
 	var base netip.Prefix
+	var selected *assignmentCandidate
 	switch {
 	case source == "local":
 	case source == "auto":
-		var matches []netip.Prefix
+		var matches []assignmentCandidate
 		for _, assignment := range assignments {
-			if addressFamily(assignment.Addr()) == family {
+			if !assignment.Shared && addressFamily(assignment.Prefix.Addr()) == family {
 				matches = append(matches, assignment)
 			}
 		}
 		if len(matches) != 1 {
 			return resolvedIPAM{}, fmt.Errorf("auto requires exactly one non-shared IPv%d assignment, found %d", family, len(matches))
 		}
-		base = matches[0]
+		selected = &matches[0]
 	case strings.HasPrefix(source, "assignment:"):
 		wanted, err := parsePrefix(strings.TrimPrefix(source, "assignment:"), family)
 		if err != nil {
 			return resolvedIPAM{}, err
 		}
 		for _, assignment := range assignments {
-			if assignment == wanted {
-				base = assignment
+			if assignment.Prefix == wanted {
+				candidate := assignment
+				selected = &candidate
 				break
 			}
 		}
-		if !base.IsValid() {
+		if selected == nil {
 			return resolvedIPAM{}, fmt.Errorf("assignment %s is not active for this node", wanted)
 		}
+	case strings.HasPrefix(source, "tag:"):
+		tag := strings.TrimSpace(strings.TrimPrefix(source, "tag:"))
+		var matches []assignmentCandidate
+		for _, assignment := range assignments {
+			if assignment.Shared && assignment.Tag == tag && addressFamily(assignment.Prefix.Addr()) == family {
+				matches = append(matches, assignment)
+			}
+		}
+		if len(matches) != 1 {
+			return resolvedIPAM{}, fmt.Errorf("tag %q requires exactly one local shared IPv%d assignment, found %d", tag, family, len(matches))
+		}
+		selected = &matches[0]
 	default:
 		return resolvedIPAM{}, fmt.Errorf("unsupported source %q", source)
+	}
+	if selected != nil {
+		base = selected.Prefix
 	}
 	subnet, err := resolvePrefix(parts[1], family, base)
 	if err != nil {
@@ -285,6 +371,8 @@ func resolveDescriptor(raw string, family int, assignments []netip.Prefix) (reso
 	resolved := resolvedIPAM{Source: source, Subnet: subnet.String(), IPRange: ipRange.String(), Gateway: gateway.String()}
 	if base.IsValid() {
 		resolved.Assignment = base.String()
+		resolved.Shared = selected.Shared
+		resolved.Tag = selected.Tag
 	}
 	return resolved, nil
 }

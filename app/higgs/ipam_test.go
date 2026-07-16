@@ -423,6 +423,7 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeIPAMAssignmentKey: %v", err)
 	}
+	key += "#node.pek.catofes"
 	rec := state.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("assignment record not found")
@@ -453,6 +454,23 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 	}
 	if !assignment.Shared {
 		t.Fatalf("expected Shared=true preserved after revoke")
+	}
+}
+
+func TestSharedAssignmentTagRoundTrip(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.4.0/24", managed, true, "socks5.cn"); err != nil {
+		t.Fatalf("assignIPAMWithRuntimeTag: %v", err)
+	}
+	report, err := buildIPAMMineReport(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Assignments) != 1 || report.Assignments[0].Tag != "socks5.cn" || !report.Assignments[0].Shared {
+		t.Fatalf("assignments = %+v", report.Assignments)
+	}
+	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.4.0/24", managed); err != nil {
+		t.Fatalf("revoke tagged assignment: %v", err)
 	}
 }
 

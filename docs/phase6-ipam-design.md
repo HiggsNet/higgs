@@ -511,7 +511,7 @@ filter higgs_kernel_export {
 
 ### 14.3 Schema 变更
 
-`ipam.assignment` record 新增 `shared` 字段（可选，默认 `false`）：
+`ipam.assignment` record 新增 `shared` 和可选 `tag` 字段：
 
 ```json
 {
@@ -519,12 +519,15 @@ filter higgs_kernel_export {
   "prefix": "10.0.0.1/32",
   "assigned_to": "node-a.catofes.",
   "active": true,
-  "shared": true
+  "shared": true,
+  "tag": "socks5.cn"
 }
 ```
 
 - `shared=false`（默认）：行为与之前完全一致，不允许多 Zone 重叠。
 - `shared=true`：该 assignment 被标记为 anycast，允许与其他同样标记为 `shared=true` 的 assignment 重叠。
+- `tag` 只能用于 shared assignment，是服务部署选择共享前缀的稳定名字；本地唯一 assignment 不需要 tag。
+- 同一个 tag 在同一地址族必须对应同一个 prefix；IPv4 和 IPv6 可以共用 tag。
 
 向后兼容：旧 record 不含 `shared` 字段，解析时默认为 `false`，行为不变。
 
@@ -543,13 +546,13 @@ filter higgs_kernel_export {
 
 ```bash
 # 创建 anycast assignment
-higgs ipam assign <zone> <prefix> --to <zone> --shared
+higgs ipam assign <zone> <prefix> --to <member-zone> --shared --tag socks5.cn
 
-# 撤销 anycast assignment（与普通撤销相同）
-higgs ipam revoke assignment <zone> <prefix>
+# 精确撤销一个 anycast 成员
+higgs ipam revoke assignment <zone> <prefix> --to <member-zone>
 ```
 
-`--shared` 标志默认为 `false`。撤销操作会保留原 record 的 `shared` 字段值。
+`--shared` 标志默认为 `false`。同一 owner 下 shared assignment 的 record key 包含成员 Zone 后缀，因此多个成员可同时存在；省略 `--to` 时只有唯一匹配成员才能撤销。撤销操作会保留原 record 的 `shared` 和 `tag`。
 
 ### 14.7 授权模型
 

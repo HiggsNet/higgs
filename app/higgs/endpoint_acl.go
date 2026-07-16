@@ -187,13 +187,13 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) error {
 	destination, _ := netip.ParseAddr(validated.Destination)
 	owned := false
 	for _, assignment := range ars.AllAssignments {
-		if assignment.AssignedTo == snapshot.ManagedZone && !assignment.Shared && assignment.Prefix.Contains(destination) {
+		if assignment.AssignedTo == snapshot.ManagedZone && assignment.Prefix.Contains(destination) {
 			owned = true
 			break
 		}
 	}
 	if !owned {
-		return fmt.Errorf("endpoint ACL destination %s is outside the managed Zone's active non-shared assignments", destination)
+		return fmt.Errorf("endpoint ACL destination %s is outside the managed Zone's active assignments", destination)
 	}
 	return d.runStateStoreWrite(func(state *stateFile) error {
 		if state.EndpointACLs == nil {

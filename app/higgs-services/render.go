@@ -119,7 +119,7 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 	if err := atomicWrite(filepath.Join(dir, "config", "smartdns.conf"), []byte("bind [::]:53\ncache-size 4096\nserver 8.8.8.8\nserver 1.1.1.1\ndualstack-ip-selection yes\n"), 0o644); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(service, "", "  ")
+	data, err := json.MarshalIndent(renderedSOCKS5Lock{resolvedSOCKS5: service, ManagedZone: manifest.ManagedZone}, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -46,6 +46,17 @@ func TestCanonicalizePrefix(t *testing.T) {
 	}
 }
 
+func TestIPAMAssignmentTagRequiresShared(t *testing.T) {
+	record := IPAMAssignmentRecord{Version: 1, Prefix: "10.0.0.0/24", AssignedTo: "node.catofes.", Active: true, Tag: "socks5.cn"}
+	if err := record.Validate("catofes."); err == nil || !strings.Contains(err.Error(), "requires shared") {
+		t.Fatalf("Validate error = %v", err)
+	}
+	record.Shared = true
+	if err := record.Validate("catofes."); err != nil {
+		t.Fatalf("Validate shared tag: %v", err)
+	}
+}
+
 func TestNormalizeRouteAnnouncementKey(t *testing.T) {
 	tests := []struct {
 		input   string

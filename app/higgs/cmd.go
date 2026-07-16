@@ -113,18 +113,23 @@ func cmdService() *cli.Command {
 			{
 				Name:      "publish",
 				Usage:     "Publish a SOCKS5 endpoint owned by the managed zone",
-				UsageText: "higgs service publish --region <region> --address <ip> [--port 3128] [--direct]",
+				UsageText: "higgs service publish --endpoint <region,address,port>... [--direct]",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "region", Required: true},
-					&cli.StringFlag{Name: "address", Required: true},
+					&cli.StringSliceFlag{Name: "endpoint", Usage: "Endpoint as region,address,port; repeat for multiple networks"},
+					&cli.StringFlag{Name: "region", Usage: "Legacy single-endpoint region"},
+					&cli.StringFlag{Name: "address", Usage: "Legacy single-endpoint address"},
 					&cli.UintFlag{Name: "port", Value: 3128},
 					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 || cmd.Uint("port") > 65535 {
-						return cli.Exit("usage: higgs service publish --region <region> --address <ip> [--port 3128] [--direct]", 1)
+						return cli.Exit("usage: higgs service publish --endpoint <region,address,port>...", 1)
 					}
-					return publishSOCKS5Service(cmd.String("region"), cmd.String("address"), uint16(cmd.Uint("port")), cmd.Bool("direct"))
+					endpoints, err := parseSOCKS5EndpointFlags(cmd.StringSlice("endpoint"), cmd.String("region"), cmd.String("address"), uint16(cmd.Uint("port")))
+					if err != nil {
+						return err
+					}
+					return publishSOCKS5Endpoints(endpoints, cmd.Bool("direct"))
 				},
 			},
 			{
