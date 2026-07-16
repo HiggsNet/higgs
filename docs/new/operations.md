@@ -55,12 +55,14 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs verify catofes.
 
 当前 CLI 支持复制粘贴 base64 payload；需要落盘时也兼容旧 JSON 文件路径。
 
-`root init` 创建的 root authority 默认拥有当前所有内建权限，包括 `delegate`、`write`、`write:route` 和 `allocate-ip`。子 Zone 默认只获得 `write,delegate`；如果一个管理 Zone 需要分配 IPAM pool/assignment，应在 `delegate issue` 时显式加 `--cap write,delegate,allocate-ip`。已有 delegation 可由父 Zone 管理端原地升级：
+`root init` 创建的 root authority 默认拥有当前所有内建权限，包括 `delegate`、`write` 和 `allocate-ip`。route announcement 使用通用 `write`；子 Zone 默认只获得 `write,delegate`。如果一个管理 Zone需要分配 IPAM pool/assignment，应在 `delegate issue` 时显式加 `--cap write,delegate,allocate-ip`。已有 delegation 可由父 Zone 管理端原地升级：
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs authority grant catofes. allocate-ip catofes-authority.b64
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.b64
 ```
+
+旧版本中若存在只拥有 `write:route`、`write:service` 或 `write:wireguard`、却没有通用 `write` 的 authority，父 Zone 应先补发包含 `write` 的 authority bundle。普通节点和 root 的默认 authority 原本已经包含 `write`，无需迁移；保留同一签名 key 时，authority refresh 后既有 route、service 和 WireGuard records 会按新的通用写权限重新通过验证。
 
 首次 `join accept` 仍需要传入 `key.json`；已经加入的管理端接受 authority refresh bundle 时可以省略 key，CLI 会使用本地 state meta 中的 `zone_private_key` 校验并保留原有本地状态。
 

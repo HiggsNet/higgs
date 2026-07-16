@@ -435,7 +435,7 @@ func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFil
 		Keys: []zone.AuthorizedKey{{
 			Key: nodeAPub,
 			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermWriteRoute},
+				Permissions: []zone.Permission{zone.PermWrite},
 			}},
 		}},
 	}
@@ -655,7 +655,7 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 		Keys: []zone.AuthorizedKey{{
 			Key: managedPub,
 			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermWrite, zone.PermWriteRoute},
+				Permissions: []zone.Permission{zone.PermWrite},
 			}},
 		}},
 	}

@@ -212,7 +212,7 @@ sh.catofes./ipam/assignments/10.0.1.0_24 → assigned_to: node1.sh.catofes.
 
 - `ipam.pool` 记录类型映射到 capability `PermAllocateIP`。
 - `ipam.assignment` 记录类型也映射到 `PermAllocateIP`。
-- `route.announcement` 记录类型继续映射到 `PermWriteRoute`。
+- `route.announcement` 使用通用 `PermWrite`。
 
 只有 Zone authority 具备 `PermAllocateIP` 时，才能写入 pool/assignment 记录。
 

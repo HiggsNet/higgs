@@ -13,9 +13,6 @@ import (
 func allAuthorityPermissions() []zone.Permission {
 	return []zone.Permission{
 		zone.PermWrite,
-		zone.PermWriteWireGuard,
-		zone.PermWriteRoute,
-		zone.PermWriteService,
 		zone.PermDelegate,
 		zone.PermAllocateIP,
 	}
@@ -54,7 +51,7 @@ func parseAuthorityPermissions(input []string) ([]zone.Permission, error) {
 
 func parseAuthorityPermission(raw string) (zone.Permission, error) {
 	switch zone.Permission(raw) {
-	case zone.PermWrite, zone.PermWriteWireGuard, zone.PermWriteRoute, zone.PermWriteService, zone.PermDelegate, zone.PermAllocateIP:
+	case zone.PermWrite, zone.PermDelegate, zone.PermAllocateIP:
 		return zone.Permission(raw), nil
 	default:
 		return "", fmt.Errorf("unsupported authority permission %q", raw)

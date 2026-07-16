@@ -82,13 +82,11 @@ CIDR 会 canonicalize；例如 `10.0.1.1/24` 与 `10.0.1.0/24` 都使用 `10.0.1
 
 | 检查 | 回答的问题 | 当前规则 |
 |---|---|---|
-| 签名 capability | 这把私钥能不能写这类 record？ | pool / assignment 需要通用 `write` 或 `allocate-ip`；announcement 需要通用 `write` 或 `write:route`。 |
+| 签名 capability | 这把私钥能不能写这类 record？ | pool / assignment 需要通用 `write` 或 `allocate-ip`；announcement 使用通用 `write`。 |
 | Pool chain | 此 Zone 是否有资格发布一条 assignment？ | assignment 的 `source` 必须是覆盖它的有效 pool 的 `delegated_to`。 |
 | Assignment | 这个 announcer 是否有资格发布该 prefix？ | 见第 3 节的使用与继承规则。 |
 
-默认 delegation 发给普通节点的是通用 `write, delegate`，因此它在 record verifier 的语义上能发布 route announcement。`assigned_to` 本身不发放私钥或 capability；它只是 IPAM 语义授权。relay 则不需要 Zone authority 或写权限，它只转发已验证 gossip state。
-
-> 当前 `higgs route announce` 的 CLI preflight 只检查 typed `write:route`，而 verifier 也接受通用 `write`；这项不一致已记录在 [TODO](../../todo.md)，不影响这里的 record 验证规则。
+默认 delegation 发给普通节点的是通用 `write, delegate`，因此它能发布 route announcement。`assigned_to` 本身不发放私钥或 capability；它只是 IPAM 语义授权。relay 则不需要 Zone authority 或写权限，它只转发已验证 gossip state。
 
 ### 2.3 从 pool 到可达路由
 

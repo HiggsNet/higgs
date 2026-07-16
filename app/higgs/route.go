@@ -217,9 +217,6 @@ func submitRouteRecord(rt *Runtime, path zone.ZonePath, key string, value []byte
 	if err != nil {
 		return err
 	}
-	if err := checkRouteWriteCapability(state, path, key); err != nil {
-		return err
-	}
 	if !active {
 		if err := checkWithdrawAllowed(state, path, key, canonical); err != nil {
 			return err
@@ -266,29 +263,6 @@ func routeOpVerb(active bool) string {
 		return "announced"
 	}
 	return "withdrew"
-}
-
-func checkRouteWriteCapability(state *stateFile, path zone.ZonePath, key string) error {
-	if state == nil || state.Network == nil {
-		return fmt.Errorf("state is nil")
-	}
-	zs := state.Network.Zones[path]
-	if zs == nil || zs.Authority == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	for _, authorizedKey := range zs.Authority.Keys {
-		for _, capability := range authorizedKey.Capabilities {
-			if capability.KeyPrefix != "" && !strings.HasPrefix(key, capability.KeyPrefix) {
-				continue
-			}
-			for _, permission := range capability.Permissions {
-				if permission == zone.PermWriteRoute {
-					return nil
-				}
-			}
-		}
-	}
-	return fmt.Errorf("zone %s authority lacks write:route capability for key %s", path, key)
 }
 
 func checkWithdrawAllowed(state *stateFile, path zone.ZonePath, key, canonical string) error {

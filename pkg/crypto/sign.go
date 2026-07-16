@@ -371,12 +371,6 @@ func hasCapability(caps []zone.Capability, required zone.Permission, typed zone.
 
 func typePermission(recordType string) zone.Permission {
 	switch recordType {
-	case "wireguard.public_key", "wireguard.listen_port":
-		return zone.PermWriteWireGuard
-	case "route.announcement":
-		return zone.PermWriteRoute
-	case "service.socks5.v1":
-		return zone.PermWriteService
 	case "ipam.pool", "ipam.assignment":
 		return zone.PermAllocateIP
 	default:

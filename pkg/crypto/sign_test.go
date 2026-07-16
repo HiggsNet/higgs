@@ -22,7 +22,7 @@ func TestSignAndVerifyRecord(t *testing.T) {
 		Keys: []zone.AuthorizedKey{{
 			Key: pub,
 			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermWriteWireGuard},
+				Permissions: []zone.Permission{zone.PermWrite},
 				KeyPrefix:   "wireguard/",
 			}},
 		}},
@@ -429,7 +429,7 @@ func TestVerifyRecordIPAMRequiresAllocateIPCapability(t *testing.T) {
 		t.Fatalf("VerifyRecord with PermAllocateIP: %v", err)
 	}
 
-	// Authority with only PermWriteRoute should reject the pool record.
+	// Authority with only PermDelegate should reject the pool record.
 	authorityWithoutPerm := &zone.ZoneAuthority{
 		Zone:      "catofes.",
 		Epoch:     1,
@@ -437,7 +437,7 @@ func TestVerifyRecordIPAMRequiresAllocateIPCapability(t *testing.T) {
 		Keys: []zone.AuthorizedKey{{
 			Key: pub,
 			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermWriteRoute},
+				Permissions: []zone.Permission{zone.PermDelegate},
 			}},
 		}},
 	}
@@ -486,7 +486,7 @@ func TestVerifyRecordIPAMAssignmentRequiresAllocateIPCapability(t *testing.T) {
 		Keys: []zone.AuthorizedKey{{
 			Key: pub,
 			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermWriteRoute},
+				Permissions: []zone.Permission{zone.PermDelegate},
 			}},
 		}},
 	}
@@ -495,7 +495,7 @@ func TestVerifyRecordIPAMAssignmentRequiresAllocateIPCapability(t *testing.T) {
 	}
 }
 
-func TestVerifyRecordServiceRequiresWriteServiceCapability(t *testing.T) {
+func TestVerifyRecordServiceRequiresGeneralWriteCapability(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -513,11 +513,8 @@ func TestVerifyRecordServiceRequiresWriteServiceCapability(t *testing.T) {
 			Key: pub, Capabilities: []zone.Capability{{Permissions: []zone.Permission{permission}}},
 		}}}
 	}
-	if err := VerifyRecord(record, authority(zone.PermWriteService), time.Unix(123, 0)); err != nil {
-		t.Fatalf("VerifyRecord with write:service: %v", err)
-	}
-	if err := VerifyRecord(record, authority(zone.PermWriteRoute), time.Unix(123, 0)); err == nil {
-		t.Fatal("VerifyRecord accepted service record without write:service")
+	if err := VerifyRecord(record, authority(zone.PermAllocateIP), time.Unix(123, 0)); err == nil {
+		t.Fatal("VerifyRecord accepted service record without write")
 	}
 	if err := VerifyRecord(record, authority(zone.PermWrite), time.Unix(123, 0)); err != nil {
 		t.Fatalf("VerifyRecord with general write: %v", err)

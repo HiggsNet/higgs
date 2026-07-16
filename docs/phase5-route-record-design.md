@@ -249,7 +249,7 @@ higgs route withdraw <zone> <prefix>
 - 调用 `CanonicalizePrefix` 得到规范前缀。
 - 调用 `NormalizeRouteAnnouncementKey` 生成 key。
 - 通过现有 `putRecord` 路径写入；daemon 运行时走 control socket，否则直接写 DB。
-- 写入前检查本 Zone authority 是否具备 `write:route` capability。
+- 写入前检查本 Zone authority 是否具备通用 `write` capability。
 
 ## 9. 前置依赖与实现顺序
 
@@ -274,7 +274,7 @@ Route announcement 不能独立闭环，必须依赖 IPAM assignment 记录：
 本文件为 Phase 5 设计补充。确认后将：
 - 在 `docs/design.md` 第二节“Record 内置类型列表”中加入 `route.announcement`，并补充 key 规范化说明。
 - 在 `docs/design.md` 的 IPAM/路由映射章节中补充 `ipam/pools/*`、`ipam/assignments/*`、`routes/announcements/*` 三层语义。
-- `pkg/core/zone/types.go` 中 `PermWriteRoute` 已存在，`route.announcement` 已在 `pkg/crypto/sign.go` 映射到该 capability，无需额外修改。
+- `route.announcement` 使用通用 `PermWrite`，无需单独的 route capability。
 - 实现代码放在 `pkg/routing/` 下：
   - 新建 `pkg/routing/records.go`：route announcement schema、解析、校验、key 规范化。
   - 后续新建 `pkg/routing/authorization.go`：`AuthorizedRouteSet`、assignment/announcement 校验、重叠前缀裁决。

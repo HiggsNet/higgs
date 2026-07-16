@@ -31,10 +31,9 @@
   - [x] **7.1.d 双 provider 抽象边界收口**：确认长期只维护 StrongSwan/XFRM 与 WG/GRE 两套 lifecycle。撤回未接生产路径的通用 `ProviderPlan`/`ProviderAction`/resource graph、通用持久化 instance、StrongSwan 双向 adapter，以及只覆盖部分 constructor 的 Link ID 提前迁移。StrongSwan 继续使用现有 planner/reconcile/apply/state；WG/GRE 自己管理 shared device/peer/GRE resource graph、引用和 rotate。
   - [x] **7.1.e 公共 LinkOutput 与消费者收口**：已在 `internal/state.LinkOutput` 落地 provider-neutral、只读的 Babel-facing 契约；StrongSwan current/staged runtime 投影为独立 active/staged 输出，health、firewall、BIRD health observation 和在线 `links_status.outputs` 统一消费/发布该聚合结果。公共结构不包含 owner、SA 名、rotate phase 或 action，不能反推 apply/teardown；routing/health readiness 保留后续 observation enrichment。
 
-- [ ] **Zone 写权限语义收口**
+- [x] **Zone 写权限语义收口**
   - 普通网络节点默认持有通用 `write`，可维护本 Zone 的 control-plane records；relay 不持有 Zone authority / 私钥，只转发 verified gossip，不需要任何写权限。
-  - 当前 record verifier 将通用 `write` 视为 `route.announcement` 的有效权限，但 `higgs route announce` 的 CLI preflight 只接受 `write:route`，导致默认节点无法手动宣告而 auto-announce 可成功；统一为 CLI 也接受 `write` 或 `write:route`，并补回归测试。
-  - `write:route` 暂保留为未来同 Zone 多角色、多 key 最小授权的 typed capability，不作为当前普通节点的额外默认授权门槛；届时若要 strict typed capability，需整体设计迁移，不能只收紧 route。
+  - 已移除 `write:route`、`write:service`、`write:wireguard` capability 及其 record type 映射；普通 Zone record 统一使用通用 `write`，并由 route / crypto 回归测试覆盖。
 
 - [ ] **7.7 可选 Global Discovery Server**
   - 作为独立公网 rendezvous 服务，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 discovery 仍以 signed endpoint record + gossip 为主。
@@ -103,7 +102,7 @@
 - [x] **8.1 最小 service record 与显式发布**
   - 定义固定的 `services/socks5` / `service.socks5.v1` record；新记录用 endpoints 数组同时发布多个 `region/address/port`，并兼容旧单 endpoint 字段和可选 `active`。
   - 增加 `higgs service publish/withdraw`；每个发布地址必须落在当前节点 active assignment 内（普通或 shared），撤销写入 `active:false` 新版本。
-  - 保留最小 `write:service` capability、严格 schema 和 route-authorization 归属验证；从 Higgs 主配置删除 Docker/Compose/service instance 模型。
+  - service record 使用通用 `write`、严格 schema 和 route-authorization 归属验证；从 Higgs 主配置删除 Docker/Compose/service instance 模型。
 
 - [x] **8.2 独立 Compose 生成与 host/overlay 网络接入**
   - [x] 新增独立 `higgs-services`：读取 `/etc/higgs/service.yaml`，通过 `higgs ipam mine` 获取运行态，把全部双栈 external network 写入同一份 network Compose。

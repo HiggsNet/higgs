@@ -162,15 +162,15 @@ func TestAnnounceRouteInvalidPrefix(t *testing.T) {
 	}
 }
 
-func TestAnnounceRouteMissingCapability(t *testing.T) {
-	rt, managed := buildRouteTestRuntimeWithoutRouteCapability(t)
+func TestAnnounceRouteRequiresWriteCapability(t *testing.T) {
+	rt, managed := buildRouteTestRuntimeWithoutWriteCapability(t)
 
 	err := announceRouteWithRuntime(rt, managed, "10.0.1.0/24")
 	if err == nil {
-		t.Fatalf("announceRoute without route capability succeeded, want error")
+		t.Fatalf("announceRoute without write capability succeeded, want error")
 	}
-	if !strings.Contains(err.Error(), "lacks write:route capability") {
-		t.Fatalf("error = %v, want lacks write:route capability", err)
+	if !strings.Contains(err.Error(), "authorized key lacks capability") {
+		t.Fatalf("error = %v, want authorized key lacks capability", err)
 	}
 }
 
@@ -231,15 +231,15 @@ func TestBuildRouteShowReportListsActiveAndAllAnnouncements(t *testing.T) {
 
 func buildRouteTestRuntime(t *testing.T) (*Runtime, zone.ZonePath) {
 	t.Helper()
-	return buildRouteTestRuntimeWithCapability(t, true)
+	return buildRouteTestRuntimeWithWriteCapability(t, true)
 }
 
-func buildRouteTestRuntimeWithoutRouteCapability(t *testing.T) (*Runtime, zone.ZonePath) {
+func buildRouteTestRuntimeWithoutWriteCapability(t *testing.T) (*Runtime, zone.ZonePath) {
 	t.Helper()
-	return buildRouteTestRuntimeWithCapability(t, false)
+	return buildRouteTestRuntimeWithWriteCapability(t, false)
 }
 
-func buildRouteTestRuntimeWithCapability(t *testing.T, routeCap bool) (*Runtime, zone.ZonePath) {
+func buildRouteTestRuntimeWithWriteCapability(t *testing.T, writeCap bool) (*Runtime, zone.ZonePath) {
 	t.Helper()
 	dir := t.TempDir()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -281,9 +281,9 @@ func buildRouteTestRuntimeWithCapability(t *testing.T, routeCap bool) (*Runtime,
 		}},
 	}
 
-	perms := []zone.Permission{zone.PermWrite}
-	if routeCap {
-		perms = append(perms, zone.PermWriteRoute)
+	perms := []zone.Permission{zone.PermDelegate}
+	if writeCap {
+		perms = append(perms, zone.PermWrite)
 	}
 	childAuthority := &zone.ZoneAuthority{
 		Zone:      managed,

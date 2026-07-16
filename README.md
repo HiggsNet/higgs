@@ -265,7 +265,7 @@ HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root pubkey
 - Root Zone `.` 的 root authority
 - 保存在本地 bbolt 状态库中的 root 私钥
 
-Root authority 默认拥有当前所有内建权限，包括 `delegate`、`write`、`write:route` 和 `allocate-ip`。Root admin 因此可以声明全网 IPAM pool，并把子 pool 委派给一级管理 Zone。`ipam/pools/*` 的 `delegated_to` 是精确 owner：`. delegated_to=.` 只表示 root 拥有该 pool，不会被所有子 Zone 隐式继承；`catofes.` 要继续切子池或发布 assignment，必须先拿到显式 `delegated_to=catofes.` 的覆盖 pool。
+Root authority 默认拥有当前所有内建权限，包括 `delegate`、`write` 和 `allocate-ip`。Root admin 因此可以声明全网 IPAM pool，并把子 pool 委派给一级管理 Zone。`ipam/pools/*` 的 `delegated_to` 是精确 owner：`. delegated_to=.` 只表示 root 拥有该 pool，不会被所有子 Zone 隐式继承；`catofes.` 要继续切子池或发布 assignment，必须先拿到显式 `delegated_to=catofes.` 的覆盖 pool。
 
 `root pubkey` 输出的根公钥应写入普通节点的 `trusted_root_public_key`。
 

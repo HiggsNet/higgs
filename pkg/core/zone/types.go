@@ -65,12 +65,9 @@ func (zp ZonePath) Ancestors() []ZonePath {
 type Permission string
 
 const (
-	PermWrite          Permission = "write"
-	PermWriteWireGuard Permission = "write:wireguard"
-	PermWriteRoute     Permission = "write:route"
-	PermWriteService   Permission = "write:service"
-	PermDelegate       Permission = "delegate"
-	PermAllocateIP     Permission = "allocate-ip"
+	PermWrite      Permission = "write"
+	PermDelegate   Permission = "delegate"
+	PermAllocateIP Permission = "allocate-ip"
 )
 
 type DelegationScope string

@@ -186,7 +186,7 @@ node1.catofes.
 **验证签名链示例：**
 - 读取 `node1.catofes./wireguard/public_key` 时：
   1. 取出 Record，验证 `SignedBy` 是否属于 `node1.catofes.` 的 `ZoneAuthority.Keys`
-  2. 验证该 key 的 `Capabilities` 包含 `write`（或更细粒度的 `write:wireguard`）
+  2. 验证该 key 的 `Capabilities` 包含通用 `write`
   3. 验证 `node1.catofes.` 的 `ParentProof`（Delegation）签名者属于 `catofes.` 的 `ZoneAuthority.Keys`
   4. 验证 `catofes.` 的 `ParentProof` 签名者属于 `.` 的 `ZoneAuthority.Keys`
   5. 全部通过 → 配置可信
@@ -809,8 +809,6 @@ func (zp ZonePath) IsRoot() bool      // "."
 type Permission string
 const (
     PermWrite       Permission = "write"
-    PermWriteWireGuard Permission = "write:wireguard"
-    PermWriteRoute  Permission = "write:route"
     PermDelegate    Permission = "delegate"
     PermAllocateIP  Permission = "allocate-ip"
 )
@@ -949,8 +947,7 @@ type PeerView struct {
 2. 检查 r.SignedBy 是否属于 authority.Keys（按 key_id 匹配）
 3. 找到匹配的 AuthorizedKey，检查其 Capabilities：
    a. 是否包含全局 PermWrite；或
-   b. 是否包含 PermWrite<Type>（如 write:wireguard）；或
-   c. 是否包含匹配 r.Key 前缀的 Capability
+   b. 是否包含匹配 r.Key 前缀的 Capability
 4. 检查 AuthorizedKey 的 NotBefore <= now <= NotAfter
 5. 重新计算 value_hash = blake2b(r.Value)，与 r.ValueHash 比对
 6. 验证 Signature：
@@ -1052,7 +1049,7 @@ type PeerView struct {
 | Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
 | Delegation 撤销（tombstone） | `pkg/core/zone/` + `app/higgs/` | ✅ 已实现 |
-| 细粒度 Capability 执行 | `pkg/crypto/sign.go` | ⚠️ 结构已定义，校验仅检查 PermDelegate/PermWrite；`route.announcement` 已映射到 `PermWriteRoute` |
+| 细粒度 Capability 执行 | `pkg/crypto/sign.go` | ⚠️ 结构已定义；`route.announcement` 使用通用 `PermWrite` |
 | Public IP Reflector | `pkg/core/gossip/discovery.go` | ✅ HTTP client + local smoke |
 
 ---
