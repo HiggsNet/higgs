@@ -50,10 +50,10 @@
 
 本仓库里与 gossip 相关的文档按读者分工：
 
-- `docs/gossip-protocol.md` 是 gossip canonical 规范，面向 operator、实现者和测试作者。它描述 wire message、catalog sync、object pull、UDP chunk fallback、endpoint discovery、NAT observed path 和 trust boundary 的当前规则/目标规则。
-- `docs/protocol.md` 是控制面协议总览，保留 IPsec / overlay signed record 规范，并链接到 gossip 专文。
+- `docs/new/gossip.md` 是 gossip canonical 规范，面向 operator、实现者和测试作者。它描述 wire message、catalog sync、object pull、UDP chunk fallback、endpoint discovery、NAT observed path、trust boundary 和 daemon 事件驱动架构的当前规则。
+- `docs/new/overall.md` 是控制面跨模块总览；`docs/new/transport-ipsec.md` 保留 IPsec / overlay signed record 规范；`docs/new/gossip.md` 是 gossip 专文。
 - 本文 `docs/design.md` 是架构设计，面向长期维护者和 AI agent。它描述为什么要这样分层、哪些边界不能混、哪些历史设计已经被后续实现替代。
-- 代码附近的测试和 smoke 是可执行规范。如果本文与 `docs/gossip-protocol.md` 冲突，以 `docs/gossip-protocol.md` 的当前协议规则和已通过测试为准，然后回头修本文。
+- 代码附近的测试和 smoke 是可执行规范。如果本文与 `docs/new/gossip.md` 冲突，以 `docs/new/gossip.md` 的当前协议规则和已通过测试为准，然后回头修本文。
 
 gossip 维护时尤其要避免三种混淆：
 
@@ -760,39 +760,15 @@ Sign(
   ```
 - 旧版本记录在 `RecordHistory` 中保留有限窗口作为审计/调试 log，但 active state 只使用每个 key 的 latest non-conflict record；普通同步主路径不维护 pending 补前驱状态
 
-**Gossip 架构边界：**
-- 详细 wire / sync 规则见 `docs/gossip-protocol.md`。
-- UDP control path 只负责 bounded summary、catalog page、fetch request、state-change hint 和小而完整的 opportunistic payload。
-- TCP object pull 是完整 Zone snapshot / record 的 bulk 主路径；UDP chunk fallback 是 TCP pull 的兜底，不是默认 bulk path。
-- Catalog sync 负责回答“双方有哪些 Zone digest 不同”；object sync 负责拉取不同 Zone 的完整对象。
-- 收到 skeleton、digest-only announce 或部分 record 后，session 必须保持 pending；只有本地 `ZoneRoot` 与期望 digest 匹配，或者完整 object pull/chunk apply 成功后，该 Zone 才算完成。
-
-**Gossip 安全边界**
-- 仅接受 bootstrap 列表、已验证节点、显式 allowlist 节点的同步连接
-- `FETCH_ZONE` 前先验证 zone path 是否位于可信根树下
-- 限制单次同步资源：最大 Zone 数、最大 Record 数、最大字节数
-- 收到的数据先进入 `quarantine store`，签名链通过后再提升到 `active store`
-- 状态分层必须明确：`untrusted received data` -> `verified candidate state` -> `active network state`
-
-**同步流程：**
-1. 节点 A/B 交换 catalog summary；如果 `catalog_root` 一致，本轮结束。
-2. 如果 root 不同，双方通过 bounded catalog pages 定位不同 Zone digest。
-3. 对不同 Zone，接收方通过 object pull 拉取完整 Zone snapshot；TCP 不可达时才请求 UDP chunk fallback。
-4. 数据进入 candidate state，本地逐条验证签名链（Delegation → Authority → Record）。
-5. 验证通过且 root digest 匹配 → 提升到 active store → 重新计算本地 hash → 继续 Gossip。
-
-**并发与冲突：**
-- Zone 天然有单一持有者，同一 Zone 内的写入冲突应由该持有者避免。
-- 若因网络分区恢复等原因检测到同一 Zone 同一 key 的冲突：
-  1. `Version` 更高者胜；
-  2. `Version` 相同但内容不同，进入 `fork/conflict`；
-  3. `fork/conflict` 不自动裁决，需 Zone owner（或上级 Zone）签发修正记录。
-- `Timestamp` 仅作为审计字段，不参与最终裁决。
+**Gossip 同步边界：**
+- 详细 wire / sync 规则、安全边界、同步流程、并发与冲突处理见 `docs/new/gossip.md`。
+- UDP control path 只负责 bounded summary、catalog page、fetch request、state-change hint；TCP object pull 是完整 Zone snapshot / record 的 bulk 主路径；UDP chunk fallback 是 TCP pull 的兜底。
+- 状态分层必须明确：`untrusted received data` -> `verified candidate state` -> `active network state`。
 
 **Merkle 实施分层（降低 Phase 1 风险）**
-- Phase 1A: `ZoneRoot = hash(sorted(records + delegations + authority))`，hash 不同直接拉完整 Zone
-- Phase 1B: 引入 per-record hash diff
-- Phase 2+: 再上完整 Merkle path/proof 增量同步
+- Phase 1A: `ZoneRoot = hash(sorted(records + delegations + authority))`，hash 不同直接拉完整 Zone。
+- Phase 1B: 引入 per-record hash diff。
+- Phase 2+: 再上完整 Merkle path/proof 增量同步。
 
 ---
 
@@ -1142,6 +1118,6 @@ SyncTimerEvent
 
 ### 7.6 文档与实现
 
-详细设计见 `../docs/phase6-event-driven-design.md`，可执行任务见 `../todo.md` Phase 6。
+详细设计见 `docs/new/gossip.md` 第 11 节（Daemon 事件驱动架构）和 `docs/new/daemon.md`；可执行任务见 `../todo.md` Phase 6。
 
 实施路线与各 Phase 任务见 `../todo.md`。

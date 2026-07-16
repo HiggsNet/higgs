@@ -60,6 +60,8 @@ networks:
   node:
     ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
     ipv6: "auto;::/112;::100/120;::1"
+    # Docker direct-routing 的可信 overlay 入接口；按本机实际接口填写。
+    trusted_host_interfaces: [hgs0]
   cn:
     ipv6: "tag:socks5.cn;::/112;::100/120;::1"
   asia:
@@ -78,7 +80,7 @@ socks5:
   #   - clients.catofes.
 ```
 
-`networks` 表示容器实际连接的 Docker network。`socks5.networks` 为每个已连接 network 指定相对基址。`publish` 是 `network: region` 映射：只发布列出的 network，也可以同时列出任意数量的本地和 Anycast endpoint。
+`networks` 表示容器实际连接的 Docker network。`trusted_host_interfaces` 是可选的宿主 overlay 入接口列表；生成 Compose 时会成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option，接口名以本机实际、稳定的 XFRM/WireGuard/veth ingress 为准。`socks5.networks` 为每个已连接 network 指定相对基址。`publish` 是 `network: region` 映射：只发布列出的 network，也可以同时列出任意数量的本地和 Anycast endpoint。
 
 为了兼容旧配置，标量形式 `publish: main` 和顶层 `region` 仍可读取，但新配置应使用映射形式。
 
@@ -149,6 +151,8 @@ docker compose -f /etc/higgs/services/networks/docker-compose.yml up -d
 docker compose -f /etc/higgs/services/socks5/docker-compose.yml up -d
 higgs-services publish
 ```
+
+Docker bridge 的 driver option 不能原地更新。修改 `trusted_host_interfaces` 后，先停止依赖该 network 的服务，删除旧 Docker network，再重新执行上述 Compose 命令。生成的 SOCKS5 Compose 会把服务端口发布到 loopback；这只用于让 Docker 将端口标记为 direct-routing 可访问，overlay 访问仍使用容器 endpoint IP。
 
 `publish` 会重新查询 `higgs ipam mine`，要求当前解析结果与 `resolved.json` 的配置 hash、managed Zone 和 endpoints 完全一致。assignment 或配置发生变化时必须先重新 `render`。
 
@@ -232,7 +236,7 @@ selector 支持：
 - 双栈、多 network 的 Compose 生成；
 - 多 endpoint service record 及旧单 endpoint record 兼容；
 - publish/withdraw 对 TCP readiness、ACL、整段 route 和 record 的编排；
-- endpoint ACL 持久化以及动态 host firewall reconcile。
+- endpoint ACL 持久化以及动态 host firewall reconcile；生成的 bridge network 通过 Docker 的 `trusted_host_interfaces` 支持受信任 overlay interface 到已发布 endpoint 的 direct routing。
 - 已实现 `services-smoke`：真实 Docker bridge 上的 SOCKS5/目标 TCP 容器、两端
   BIRD/Babel、host 聚合路由和 static upstream 回程组成的 root smoke；它会
   断言 Docker connected route 比更宽的 host→overlay 聚合路由优先，并实际

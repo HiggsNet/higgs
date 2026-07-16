@@ -209,6 +209,37 @@ overlays:
 - `reconcile.backoff`：provider apply 失败后的重试退避，不是正常 reconcile 频率。
 - `connect` / `deny`：本机 mesh policy 规则，只影响本节点想和哪些 peer 建链，不公开给远端。
 
+### MeshPolicy URI 规则
+
+`connect` / `deny` 使用 URI 风格的规则，保持配置简单且容易审计：
+
+```yaml
+overlays:
+  - id: ipsec-main
+    provider: strongswan
+    connect:
+      - "strongswan://*.catofes.?role=both&family=dual&source=manual-dns,discovery&mode=family-redundant"
+      - "strongswan://edge.catofes.?role=both&family=dual"
+    deny:
+      - "strongswan://*.lab.catofes."
+```
+
+第一版支持的 predicate：
+
+- **zone glob / exact**：例如 `*.catofes.` 或 `edge.catofes.`。
+- **`role`**：远端 `ipsec/profile` 中声明的角色，取值为 `out`、`in`、`both`。
+- **`family`**：`ipv4`、`ipv6`、`dual`，用于过滤地址族。
+- **`source`**：地址来源，例如 `manual-address`、`manual-dns`、`discovery`、`reflector`、`local`。
+- **`mode`**：path mode，例如 `family-redundant`、`exhaustive`。
+- **`max_peers`**：正整数，限制本 group 匹配的 peer 数量。
+- **`tag` / `role` 作为 label selector**：预留，待本地 peer label/tag 来源接入后启用；当前默认示例使用 zone glob / exact。
+
+规则评估顺序：
+
+1. 先处理 `deny`；命中 deny 的 peer 直接排除。
+2. 再按 `connect` 规则顺序匹配；第一个命中的规则决定该 peer 是否被选中。
+3. 正则表达式不是第一版默认能力；glob/suffix/label 更容易审计。
+
 ## Routing 与 IPAM
 
 Routing 采用 per-netns BIRD/Babel 模型。一个 netns 对应一个 BIRD 实例，同一 netns 内的 overlay 共享 Babel 邻居和路由表。

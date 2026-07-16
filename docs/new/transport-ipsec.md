@@ -67,6 +67,115 @@ Routing / Firewall / Health 消费       ← hgs* interface + tunnel address
 | `ipsec/transport-key` | 独立于 Zone signing key 的 IPsec 传输密钥；持久化到本地 state meta，防止 daemon 重启后 fingerprint 抖动 |
 | `ipsec/overlays/<overlay_id>` | 节点级 IPsec 能力用于某个 overlay/path 的意图声明；planner 必须同时满足三层条件：远端 profile 完整可信 + 本地 connect 选中 + 远端发布了兼容同一 overlay_id/path_key 和 tunnel address 策略的 intent |
 
+### Record 示例
+
+以下示例使用当前字段名（注意 `ipsec/profile` 用 `role`，旧文档中的 `accept` 已废弃）：
+
+#### `ipsec/profile`
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "provider": "strongswan",
+  "ike_identity": "node-a.catofes.",
+  "transport_key_fingerprint": "b2:...",
+  "role": "both",
+  "address_families": ["ipv6", "ipv4"],
+  "path_modes": ["family-redundant"],
+  "nat": {
+    "hint": "unknown",
+    "inbound_reachable": "unknown"
+  },
+  "updated_at": 1717171717
+}
+```
+
+#### `ipsec/addresses`
+
+```json
+{
+  "version": 1,
+  "addresses": [
+    {
+      "id": "manual-v6",
+      "source": "manual-address",
+      "address": "2001:db8::10",
+      "family": "ipv6",
+      "priority": 100,
+      "reachability": "public",
+      "ttl_seconds": 3600
+    },
+    {
+      "id": "reflector-v4",
+      "source": "reflector",
+      "address": "203.0.113.10",
+      "family": "ipv4",
+      "priority": 60,
+      "reachability": "nat-observed",
+      "ttl_seconds": 600
+    }
+  ],
+  "updated_at": 1717171717
+}
+```
+
+#### `ipsec/ports`
+
+```json
+{
+  "version": 1,
+  "mode": "range",
+  "range": {"from": 30000, "to": 30999},
+  "current": {
+    "generation": 42,
+    "ike": {"local": 30412, "advertised": 30412, "observed": 30412},
+    "natt": {"local": 30413, "advertised": 30413, "observed": 30413},
+    "valid_until": 1717175317
+  },
+  "previous": [
+    {
+      "generation": 41,
+      "ike": {"advertised": 30100},
+      "natt": {"advertised": 30101},
+      "valid_until": 1717172017
+    }
+  ],
+  "updated_at": 1717171717
+}
+```
+
+#### `ipsec/transport-key`
+
+```json
+{
+  "version": 1,
+  "kind": "raw-public-key",
+  "algorithm": "ed25519",
+  "public_key": "base64...",
+  "fingerprint": "b2:...",
+  "not_before": 1717170000,
+  "not_after": 1722440400,
+  "updated_at": 1717171717
+}
+```
+
+#### `ipsec/overlays/<overlay_id>`
+
+```json
+{
+  "version": 1,
+  "overlay_id": "ipsec-main",
+  "provider": "strongswan",
+  "path_keys": ["default"],
+  "tunnel_address": {
+    "mode": "derived-link-local",
+    "family": "ipv6"
+  },
+  "updated_at": 1717171717
+}
+```
+
 ### 本机配置（config.yaml，不进入 gossip）
 
 ```yaml

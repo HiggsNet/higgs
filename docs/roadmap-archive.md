@@ -343,7 +343,7 @@
     - 已补 `TestCommonMessageSizesWithinDatagramBudget`，覆盖 Ping/Pong、metadata snapshot、single record、endpoint record、delegation snapshot、revocation snapshot 的默认 MessagePack wire size，并按 1200-byte budget 断言。
   - [x] 评估是否需要通用压缩（如 zstd）但默认不对 UDP 小包启用；压缩只允许用于大 object pull，且必须有阈值、最大解压大小和 CPU/内存上限，避免解压炸弹和小包负收益
     - 当前 UDP 控制面不启用通用压缩；TCP object pull 仍为 length-prefixed MessagePack。后续若引入 zstd，仅用于大 object pull 响应，并必须带压缩阈值、最大解压大小和 CPU/内存上限。
-  - [x] 更新 README / docs/protocol.md：当前 JSON framing 只作为旧协议说明，新公网推荐路径是 MessagePack + MTU-safe framing；`gossip.proto` 保留为协议形状参考而非当前构建依赖
+  - [x] 更新 README / docs/protocol.md（后并入 `docs/new/` 系列文档；`docs/protocol.md` 已删除）：当前 JSON framing 只作为旧协议说明，新公网推荐路径是 MessagePack + MTU-safe framing；`gossip.proto` 保留为协议形状参考而非当前构建依赖
 
 - [x] **3.6.3 Snapshot / record 分帧**
   - [x] 固化当前临时修复方向：Zone metadata snapshot 与 record payload 分开发送，单条 record 走独立 `RecordSnapshot` 或等价小消息
@@ -390,7 +390,7 @@
   - [x] chunk 丢失/乱序/重复/篡改不得进入 active state；完整 zone snapshot 仍经 trust chain / signature 验证后才 apply，chunk 消息继续计入 per-peer quota，并记录 `chunk_fallbacks`
 
 - [x] **3.6.8 Catalog sync / bounded UDP control**
-  - [x] 文档整理：新增 `docs/gossip-protocol.md` 作为 gossip canonical 规范；`docs/protocol.md` 改为控制面协议入口和 IPsec/overlay record 规范；`docs/design.md` 只保留架构边界并指向 gossip 专文。
+  - [x] 文档整理：新增 `docs/gossip-protocol.md` 作为 gossip canonical 规范（后迁移并扩展为 `docs/new/gossip.md`）；`docs/protocol.md` 改为控制面协议入口和 IPsec/overlay record 规范（后并入 `docs/new/overall.md`、`docs/new/transport-ipsec.md` 并删除）；`docs/design.md` 只保留架构边界并指向 gossip 专文。
   - [x] 定义并实现 `CatalogSummary`：`catalog_root`、`zone_count`、可选 bounded `first_page` / `next_cursor`；`PING` / `PONG` 不再承诺携带完整 `ZoneDigest[]`。
   - [x] 新增 bounded catalog page 消息：`FETCH_CATALOG_PAGE{cursor}` 与 `CATALOG_PAGE{catalog_root, entries[], next_cursor}`；`entries[]` 必须按 `max_datagram_bytes` 打包，单页超预算时 fail closed 并输出诊断。
   - [x] 同步状态机改为 summary -> catalog page diff -> object pull：catalog root 相同直接完成；root 不同则分页 diff，发现 Zone digest 不同后再 `FETCH_ZONE` / TCP object pull。
@@ -660,7 +660,7 @@
     - [x] root smoke：link-local 模式 XFRM interface 分配 scoped tunnel address，`ping6`/`route` 显式带 interface；新增 `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke` 覆盖 IPv4 derived-pool。
 
 - [x] **4.3.2 host-born XFRM interface / 内嵌 VICI event 生命周期**
-  - 目标：借鉴 `swan-updown` 的关键原理，但不依赖外部 updown script；由 Higgs daemon 内嵌管理 StrongSwan CHILD_SA 与 XFRM interface 生命周期。详见 `docs/strongswan-xfrm-netns-lifecycle-design.md`。
+  - 目标：借鉴 `swan-updown` 的关键原理，但不依赖外部 updown script；由 Higgs daemon 内嵌管理 StrongSwan CHILD_SA 与 XFRM interface 生命周期。设计稿已落地并并入 `docs/new/transport-ipsec.md` 的 XFRM interface 生命周期章节；原 `docs/strongswan-xfrm-netns-lifecycle-design.md` 已删除。
   - 修正 namespace 模型：单 host charon 负责 IKE/NAT-T、VICI、XFRM state/policy；XFRM interface 必须先在 charon/state/policy 所在 host netns 创建，再 move 到 `TransportLinkSpec.NetNS` / overlay netns，地址和 BIRD/Babel 继续在 overlay netns 内配置。
   - 更新 `SystemXFRMDriver.EnsureInterface`：named netns 目标下改为 host `ip link add <iface> type xfrm if_id <id>` -> `ip link set <iface> netns <target>` -> target netns `ip link set dev <iface> up`；已有目标 netns interface 直接 adopt/up，已有 host 残留则 move 后 adopt。
   - 保持 `ApplyTransportLink` 高层顺序不变：ensure namespace -> load key -> load connection -> ensure interface -> assign address；变化只在真实 XFRM driver 的 interface 出生点和 move 语义。
@@ -875,13 +875,13 @@
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（已完成主线归档）
 
-**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/new/routing.md`、`docs/phase6-event-driven-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
+**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/new/routing.md`、`docs/new/daemon.md`（原 `docs/phase6-event-driven-design.md` 已并入并删除）、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
 
 - [x] **6.0 事件驱动控制面重构**
   - [x] 默认启用 event loop + `SyncSession` FSM；packet demux、timer manager、异步 object pull、UDP chunk fallback、relay fanout 均接入事件循环。
   - [x] daemon 主 goroutine 成为 single writer；`ReplayWindow`、`PeerQuotas`、`stateFile` race 修复完成，`go test -race` 基线通过。
   - [x] endpoint 地址优先级与可达性探测修复：`Transport.Send()` 记录 per-address success/failure/backoff，`updateDiscoveredPeers()` 支持 source order，loopback smoke 自动抑制公网 endpoint 发布。
-  - [x] 文档同步到 `docs/phase6-event-driven-design.md`、`docs/design.md` 和 `docs/protocol.md`。
+  - [x] 文档同步到 `docs/phase6-event-driven-design.md`（后并入 `docs/new/daemon.md` 并删除）、`docs/design.md` 和 `docs/protocol.md`（后并入 `docs/new/` 系列文档并删除）。
 
 - [x] **6.0.x Gossip SyncSession 读写分离 / hint 语义重构**
   - 设计文档：`docs/new/gossip.md#15-当前结构读写分离与-hint-语义`。

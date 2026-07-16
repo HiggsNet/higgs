@@ -12,6 +12,9 @@ Higgs daemon 是长期运行的控制循环。它把所有子系统——gossip�
 1. [架构概览](#1-架构概览)
 2. [DaemonService 结构](#2-daemonservice-结构)
 3. [事件循环](#3-事件循环)
+   - 3.1 [Packet Demuxer](#31-packet-demuxer)
+   - 3.2 [Timer Manager](#32-timer-manager)
+   - 3.3 [Async Object Pull](#33-async-object-pull)
 4. [单 Writer 模式与状态管理](#4-单-writer-模式与状态管理)
    - 4.1 [核心原则](#41-核心原则)
    - 4.2 [DaemonStateStore](#42-daemonstatestore)
@@ -19,6 +22,9 @@ Higgs daemon 是长期运行的控制循环。它把所有子系统——gossip�
    - 4.4 [Reconcile 与 StateStore](#44-reconcile-与-statestore)
    - 4.5 [状态文件](#45-状态文件)
    - 4.6 [状态变化通知](#46-状态变化通知)
+   - 4.7 [状态变更边界](#47-状态变更边界)
+   - 4.8 [外部 state 文件监控](#48-外部-state-文件监控)
+   - 4.9 [状态持久化边界](#49-状态持久化边界)
 5. [Control Socket](#5-control-socket)
    - 5.1 [systemd 运行约定](#51-systemd-运行约定)
    - 5.2 [状态持久化、停止与崩溃恢复](#52-状态持久化停止与崩溃恢复)
@@ -195,6 +201,44 @@ for {
 
 这个顺序确保吊销的 prefix 和 peer entry 在任何层可能重新接受流量之前从 allow set 中移除。
 
+### 3.1 Packet Demuxer
+
+UDP reader 收到包后，由 Packet Demuxer 按 `peer_id` 路由：
+
+- 命中活跃 `SyncSession` 的包 → `PacketEvent`，交给该 session 的 FSM。
+- 未命中的包 → `UnsolicitedPacketEvent`，由事件循环里的只读 responder / hint ingress 处理：
+  - `PING` / `FETCH_CATALOG_PAGE` / `FETCH_ZONE` / `FETCH_RECORD`：直接读取 committed snapshot 并回复。
+  - `ANNOUNCE`：记录 hint，必要时创建或唤醒 active pull session。
+
+Demuxer 只按 `peer_id` 路由，不解释 message type；message type 由 `SyncSession` 或 unsolicited handler 在事件循环内判断。
+
+收到命中活跃 session 的 `PING` 时，事件循环会同时做两件事：
+1. 把 summary 转成 `CatalogSummaryReceivedEvent` 交给 session FSM。
+2. 直接回复 `PONG` summary（respondPing）。
+
+### 3.2 Timer Manager
+
+`TimerManager` 管理所有 SyncSession 相关的定时器。每个 timer 用 `(peerID, kind)` 作为 key，`kind` 包括：
+
+- `round`：整轮同步超时。
+- `catalog_page`：catalog page 请求超时。
+- `backoff`：peer 可再次尝试的时间点。
+
+Timer 到期后向 `syncEvents` channel post 对应事件，由事件循环统一处理；timer callback 本身不直接修改状态。Session 进入 `Completed` / `Failed` 时，取消该 peer 的所有 timer。
+
+`TimerManager` 支持 fake clock 注入，方便单测模拟超时。
+
+### 3.3 Async Object Pull
+
+TCP object pull 在独立的 worker pool 中执行，避免阻塞事件循环：
+
+1. `SyncSession` 进入 `ObjectPulling` 后，生成 `StartObjectPull` action。
+2. 事件循环把请求塞进 `objectPullPool`。
+3. Worker 完成 TCP 连接、读取 MessagePack 响应后，把结果发回 `objectPullResults` channel。
+4. 事件循环将结果转成 `ObjectPullResultEvent`，交给对应 session。
+
+`SyncSession` 跟踪每个 zone 的 inflight pull，避免对同一个对象重复请求。
+
 ---
 
 ## 4. 单 Writer 模式与状态管理
@@ -281,6 +325,53 @@ IPsec、routing、firewall 的 reconcile 不再长时间持有 live state 写锁
 3. 执行 `flushRevocationCleanup()`（拒绝优先）
 4. 设置所有 dirty 标记并依次 flush：firewall → routing → IPsec
 5. 完成后再次清理 gossip peer cache
+
+### 4.7 状态变更边界
+
+**所有状态变更只允许在 daemon 事件循环 goroutine 中发生**。`SyncSession.OnEvent` 只读当前状态并输出动作列表，动作由事件循环统一执行。这样事件循环本身就是锁，不需要额外对 `NetworkState` 加锁。
+
+必须在事件循环内串行执行的状态变更：
+
+- `NetworkState` apply：`ApplySnapshot`、`ApplyRecordSnapshot`
+- peer runtime 更新：sync 状态、观测地址、backoff、last error
+- `saveState()` 落盘
+- `Transport` 运行时表更新：`AddKnownPeerID`、`SetPeerAddrs`、`SetObservedPeerPaths`
+- IPsec / routing / firewall 的 desired-state 计算与 reconcile 触发
+- `udpChunkAssemblies`、`rejectedDigests` 等运行时缓存
+
+可以在 worker goroutine 中执行、但结果必须以事件回注的：
+
+- UDP 读包（单 reader，已在事件循环入口）
+- TCP object pull 的网络 I/O
+- DNS 解析
+- 较重的批量 crypto verify（结果以事件回注）
+
+任何 worker 都不应直接持有 `stateFile`、`NetworkState` 或 `Transport` 的可变引用。
+
+### 4.8 外部 state 文件监控
+
+Daemon 运行期间，推荐所有写操作都通过 control socket。如果外部程序直接修改了 BoltDB 文件，daemon 通过 `fsnotify` / `inotify` 监控该路径：
+
+- 文件内容变化（mtime / size / digest 任一变化）→ post `StateFileChangedEvent` 到事件循环。
+- 事件循环收到后 `loadState()`；若 digest 变化则 `ReplaceCommitted()` 并 `notifyStateChanged()`，立即触发 outbound sync 和 relay。
+
+`saveState()` 写盘前会对 state 文件加 `flock`（互斥锁）。外部工具若也遵守 `flock`，可避免并发写；不遵守则至少 daemon 写期间不会被覆盖。多个 writer 同时绕过 control socket 直接写 state DB 是未定义行为。
+
+### 4.9 状态持久化边界
+
+旧代码在收包路径里用 `defer saveState()`，落盘时机隐式。当前设计明确只在以下时机落盘：
+
+- `SyncSession` 进入 `Completed` 或 `Failed`
+- 应用 `ANNOUNCE` / object pull 结果后 digest 发生变化
+- control / admin 事件处理完成后
+
+以下情况不落盘：
+
+- 单纯收到 `PING` / `PONG` 且状态未变
+- chunk 接收但未完整重组
+- timer 触发但状态未变
+
+所有落盘都在 daemon 主 goroutine 串行执行。
 
 ---
 
