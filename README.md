@@ -855,7 +855,7 @@ HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery cleanup-ipsec
 
 该命令优先通过 daemon control socket 串行执行；daemon 不在线时才直接操作本地 state DB 和系统 driver。它只清理带有 Higgs `ResourceOwner` 证明、且命名符合 `ipsec-*` / `hgs*` 约束的连接和 interface，避免误删管理员手工管理的 IPsec/XFRM 资源。daemon 在线时，清理后会默认立即触发一次 IPsec reconcile，让 desired link 按当前配置重新收敛；daemon 不在线的 direct recovery 路径则等待下一次 daemon 启动恢复。
 
-真实公网多节点 daemon gossip 测试见 [docs/public-internet-test.md](docs/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
+真实公网多节点 daemon gossip 测试见 [docs/refer/public-internet-test.md](docs/refer/public-internet-test.md)。该文档配套 [docs/scripts/public-gossip-node.sh](docs/scripts/public-gossip-node.sh)，用于在 3+ 台公网 Linux 节点上生成配置、提交 join request、启动 daemon、写入测试 record 并验证收敛。
 
 ## 当前数据面现状
 

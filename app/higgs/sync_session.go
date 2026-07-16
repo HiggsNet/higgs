@@ -24,7 +24,7 @@ const (
 	SyncSessionFailed         SyncSessionState = "failed"
 )
 
-// RTT-aware timeout defaults. These match docs/phase6-event-driven-design.md.
+// RTT-aware timeout defaults. These match docs/new/gossip.md and docs/new/daemon.md.
 const (
 	MinCatalogPageTimeout = 250 * time.Millisecond
 	MinRoundTimeout       = 5 * time.Second
