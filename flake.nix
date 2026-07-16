@@ -30,7 +30,7 @@
             src = cleanSrc;
             vendorHash = "sha256-NoOelMKfFmgXd/CRitCSct7dFf7Nrq14jCWtEsbghUo=";
 
-            subPackages = [ "app/higgs" ];
+            subPackages = [ "app/higgs" "app/higgs-services" ];
 
             ldflags = [
               "-s"

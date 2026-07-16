@@ -41,20 +41,35 @@ func rootCommand() *cli.Command {
 func cmdService() *cli.Command {
 	return &cli.Command{
 		Name:  "service",
-		Usage: "Application service configuration commands",
+		Usage: "Publish and withdraw signed application service records",
 		Commands: []*cli.Command{
 			{
-				Name:      "validate",
-				Usage:     "Validate configured services against local authority and IPAM state",
-				UsageText: "higgs service validate [service-id] [--json]",
+				Name:      "publish",
+				Usage:     "Publish a SOCKS5 endpoint owned by the managed zone",
+				UsageText: "higgs service publish <name> --region <region> --address <ip> [--port 3128] [--direct]",
 				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "json", Usage: "Write the validation report as JSON"},
+					&cli.StringFlag{Name: "region", Required: true},
+					&cli.StringFlag{Name: "address", Required: true},
+					&cli.UintFlag{Name: "port", Value: 3128},
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() > 1 {
-						return cli.Exit("usage: higgs service validate [service-id] [--json]", 1)
+					if cmd.Args().Len() != 1 || cmd.Uint("port") > 65535 {
+						return cli.Exit("usage: higgs service publish <name> --region <region> --address <ip> [--port 3128] [--direct]", 1)
 					}
-					return validateServices(cmd.Args().First(), cmd.Bool("json"))
+					return publishSOCKS5Service(cmd.Args().First(), cmd.String("region"), cmd.String("address"), uint16(cmd.Uint("port")), cmd.Bool("direct"))
+				},
+			},
+			{
+				Name:      "withdraw",
+				Usage:     "Withdraw a previously published SOCKS5 endpoint",
+				UsageText: "higgs service withdraw <name> [--direct]",
+				Flags:     []cli.Flag{&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly"}},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return cli.Exit("usage: higgs service withdraw <name> [--direct]", 1)
+					}
+					return withdrawSOCKS5Service(cmd.Args().First(), cmd.Bool("direct"))
 				},
 			},
 		},

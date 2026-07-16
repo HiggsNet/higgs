@@ -95,27 +95,26 @@
 **目标：** 先在 Higgs L3 mesh 上提供可发现、可授权的内网 SOCKS5 服务，再独立演进共享 Anycast 和应用层源路由 relay。
 
 **设计边界：**
-- Higgs 负责服务地址归属、record 发布、路由/防火墙计划和 Docker Compose/代理配置生成，不通过 Docker API 管理容器生命周期；Compose 由管理员检查后手工启停。
+- Higgs 只负责服务地址归属、签名 record 发布/撤销和动态防火墙授权；独立 `higgs-services` 读取 `/etc/higgs/service.yaml` 并生成 Docker Compose/代理配置。两者都不通过 Docker API 管理容器生命周期，Compose 由管理员检查后手工启停。
 - 第一版每个服务实例使用当前节点独有、显式配置的 Higgs 内网地址；`region` 只是服务选择属性，不隐式推导共享地址。
 - Docker bridge 位于 host netns，容器地址属于 Higgs 管理的服务前缀；host 侧通过指向 Higgs netns 的聚合路由和 Docker connected route 最长前缀匹配，overlay 侧复用显式 `routing.instances[].upstream` 返回 host。
 - SOCKS5 第一版可使用 `NO AUTH`，由 Higgs overlay 身份/前缀和本机 firewall 提供 zone/node 级授权；这不承诺同一节点内的用户级身份区分。
 
-- [x] **8.1 最小 service 配置与 record**
-  - 定义 host Docker service network：`services.networks` map key 同时作为网络 ID，Docker 名默认 `higgs-<id>`；IPv4/IPv6 使用 `来源;subnet;动态范围;gateway` 描述符，支持 `local`、`auto`、`assignment:<CIDR>`，并兼容旧 sequence 长格式。
-  - 定义本地 service instance 配置：`id`、`type: socks5`、`region`、`network`、固定/相对 `address`、`port`、`allow_zones` 和 Compose 渲染参数；相对静态地址必须避开 Docker 动态池。
-  - `address` 必须落在当前节点已授权的 IPAM prefix 内；第一版不按服务类型猜测 `::2` 等地址。
-  - 定义最小 `services/<id>` / `service.socks5.v1` record，只发布 `type`、`region`、`address`和 `port`；节点/zone 由 record 签发者推导，`allow_zones` 保持为本机策略。
-  - 补充最小写入 capability 和 schema/归属/route-authorization 验证。
+- [x] **8.1 最小 service record 与显式发布**
+  - 定义 `services/<name>` / `service.socks5.v1` record，发布 `type`、`region`、`address`、`port` 和向后兼容的可选 `active`；节点/Zone 由 record 签发者推导。
+  - 增加 `higgs service publish/withdraw`；发布地址必须落在当前节点 active、非 shared assignment 内，撤销写入 `active:false` 新版本。
+  - 保留最小 `write:service` capability、严格 schema 和 route-authorization 归属验证；从 Higgs 主配置删除 Docker/Compose/service instance 模型。
 
-- [ ] **8.2 Compose 生成与 host/overlay 网络接入**
-  - 以 `share/networks` 和 `share/socks5` 的旧实现为输入，把全部 IPv4/IPv6 external network 生成到同一份 Docker network Compose，并生成 SOCKS5 Compose/配置文件。
-  - 生成命令只写 artifact 并输出管理员后续命令，不执行 `docker compose up/down/pull`。
+- [ ] **8.2 独立 Compose 生成与 host/overlay 网络接入**
+  - [x] 新增独立 `higgs-services`：读取 `/etc/higgs/service.yaml`，通过 `higgs ipam mine` 获取运行态，把全部双栈 external network 写入同一份 network Compose。
+  - [x] 每套 SOCKS5 服务生成 `socks`、`dns`、`h2` 三容器 Compose，支持多个 network、相对 base address、固定镜像默认值和 resolved lock。
+  - [x] 生成命令只原子写 artifact，不执行 `docker compose up/down/pull`。
   - 校验 Docker service subnet、host connected route、host -> Higgs netns 聚合路由和 overlay -> host static upstream 不冲突；启用 service 不隐式改变现有 upstream 边界。
   - 明确区分 host 数据面聚合路由与 Babel export：前者可指向 root 拥有的大前缀，后者仍只宣告本节点实际拥有/获授权的服务前缀。
 
 - [ ] **8.3 发布、防火墙与运行状态**
-  - 将 `allow_zones` 解析为已授权来源前缀，复用现有 firewall backend 仅放行目标 service address/port；未授权 zone 默认 drop。
-  - 区分配置已生成、管理员已启动和服务已可达；record 发布应有显式 enable/readiness 边界，避免仅生成 Compose 就对外宣告。
+  - 将 `allow_zones` 通过通用 endpoint ACL `{destination, protocol, port, selectors}` 解析为已授权 overlay 来源前缀，复用现有 firewall backend；未授权 Zone 默认 drop。
+  - [x] `higgs-services publish` 核对 resolved lock 和当前 assignment，并执行 TCP 健康检查；endpoint ACL 未实现前，非空 `allow_zones` 会 fail-closed。
   - 增加 `services` / `proxy` 本机查询与诊断输出，展示地址归属、路由、firewall、readiness 和当前 record。
 
 - [ ] **8.4 唯一节点地址验证**
@@ -142,4 +141,4 @@
 1. 7.1 已完成并保持 StrongSwan 主链路现状；WG 底座与 GRE/VXLAN 正式实现分别留在可选 7.4/7.5，不作为当前主线的隐含下一步。
 2. 7.3 chunk repair 已完成；下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-4. Phase 8 按需求从 8.1 最小 service schema 与 IPAM 归属校验开始；Compose 生成、shared Anycast 和应用层 relay 各自保持独立切口，不在首个实现中一次展开。
+4. Phase 8 的 Docker 部署已从 Higgs daemon 拆到独立 `higgs-services`；下一窄切口是通用 endpoint ACL reconcile，其后再做真实容器 smoke。shared Anycast 和应用层 relay 继续保持独立切口。

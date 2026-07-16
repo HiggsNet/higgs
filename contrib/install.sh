@@ -103,7 +103,7 @@ case "$version" in
 esac
 
 already_current=false
-if [ "$update_only" = true ] && command -v higgsnet >/dev/null 2>&1; then
+if [ "$update_only" = true ] && command -v higgsnet >/dev/null 2>&1 && command -v higgs-services >/dev/null 2>&1; then
 	current=$(higgsnet version 2>/dev/null | sed -n '1s/^higgs //p')
 	if [ "$current" = "$version" ]; then
 		already_current=true
@@ -126,22 +126,27 @@ if [ "$already_current" = false ]; then
 	)
 	tar -xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
 	binary="${tmp_dir}/higgs-${version}-${os}-${arch}/higgs"
+	services_binary="${tmp_dir}/higgs-${version}-${os}-${arch}/higgs-services"
 	[ -x "$binary" ] || { echo "error: release archive does not contain higgs" >&2; exit 1; }
+	[ -x "$services_binary" ] || { echo "error: release archive does not contain higgs-services" >&2; exit 1; }
 
 	if [ -d "$install_dir" ] && [ -w "$install_dir" ]; then
 		install -m 0755 "$binary" "${install_dir}/higgsnet"
+		install -m 0755 "$services_binary" "${install_dir}/higgs-services"
 	elif [ ! -e "$install_dir" ] && [ -w "$(dirname "$install_dir")" ]; then
 		mkdir -p "$install_dir"
 		install -m 0755 "$binary" "${install_dir}/higgsnet"
+		install -m 0755 "$services_binary" "${install_dir}/higgs-services"
 	elif command -v sudo >/dev/null 2>&1; then
 		sudo install -d "$install_dir"
 		sudo install -m 0755 "$binary" "${install_dir}/higgsnet"
+		sudo install -m 0755 "$services_binary" "${install_dir}/higgs-services"
 	else
 		echo "error: ${install_dir} is not writable; rerun as root or set HIGGS_INSTALL_DIR" >&2
 		exit 1
 	fi
 
-	echo "Installed higgsnet ${version} to ${install_dir}/higgsnet"
+	echo "Installed higgsnet ${version} and higgs-services to ${install_dir}"
 	"${install_dir}/higgsnet" version
 else
 	echo "higgsnet ${version} is already installed"

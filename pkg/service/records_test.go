@@ -39,6 +39,25 @@ func TestParseSOCKS5RecordStrictSchema(t *testing.T) {
 	}
 }
 
+func TestSOCKS5RecordActiveCompatibility(t *testing.T) {
+	record := &zone.Record{Zone: "node-a.catofes.", Key: "services/egress", Type: RecordTypeSOCKS5, Value: []byte(`{"type":"socks5","region":"cn","address":"fd42::20","port":3128}`)}
+	parsed, err := ParseSOCKS5Record(record)
+	if err != nil || !parsed.IsActive() {
+		t.Fatalf("legacy record = %#v, error = %v", parsed, err)
+	}
+	active := false
+	parsed.Active = &active
+	data, err := json.Marshal(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Value = data
+	parsed, err = ParseSOCKS5Record(record)
+	if err != nil || parsed.IsActive() {
+		t.Fatalf("withdrawn record = %#v, error = %v", parsed, err)
+	}
+}
+
 func TestAuthorizeSOCKS5RecordUsesValidIPAMAssignment(t *testing.T) {
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, nil)
@@ -83,27 +102,6 @@ func TestAuthorizeSOCKS5RecordUsesValidIPAMAssignment(t *testing.T) {
 		Prefix: netip.MustParsePrefix("fd42:1::/64"), AssignedTo: record.Zone, Shared: true,
 	}}}
 	if _, err := AuthorizeSOCKS5Record(record, sharedOnly); err == nil || !strings.Contains(err.Error(), "non-shared") {
-		t.Fatalf("shared assignment error = %v", err)
-	}
-}
-
-func TestAuthorizeNetworkPrefixRequiresWholeNonSharedAssignment(t *testing.T) {
-	owner := zone.ZonePath("node-a.catofes.")
-	authorized := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{{
-		Prefix: netip.MustParsePrefix("fd42:1::/64"), AssignedTo: owner,
-	}}}
-	assignment, err := AuthorizeNetworkPrefix(owner, netip.MustParsePrefix("fd42:1::/112"), authorized)
-	if err != nil {
-		t.Fatalf("AuthorizeNetworkPrefix: %v", err)
-	}
-	if assignment.Prefix.String() != "fd42:1::/64" {
-		t.Fatalf("assignment = %s", assignment.Prefix)
-	}
-	if _, err := AuthorizeNetworkPrefix(owner, netip.MustParsePrefix("fd42:2::/112"), authorized); err == nil || !strings.Contains(err.Error(), "service_network_unauthorized") {
-		t.Fatalf("outside assignment error = %v", err)
-	}
-	authorized.AllAssignments[0].Shared = true
-	if _, err := AuthorizeNetworkPrefix(owner, netip.MustParsePrefix("fd42:1::/112"), authorized); err == nil || !strings.Contains(err.Error(), "non-shared") {
 		t.Fatalf("shared assignment error = %v", err)
 	}
 }

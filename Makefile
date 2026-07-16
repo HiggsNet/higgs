@@ -2,6 +2,8 @@
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
+SERVICES_BINARY_NAME := higgs-services
+SERVICES_MAIN_PACKAGE := ./app/higgs-services
 BUILD_DIR := build
 GO := go
 GO_CACHE ?= /tmp/higgs-gocache
@@ -27,7 +29,8 @@ all: build
 build:
 	@mkdir -p $(BUILD_DIR)
 	$(GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PACKAGE)
-	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)"
+	$(GO_ENV) $(GO) build -o $(BUILD_DIR)/$(SERVICES_BINARY_NAME) $(SERVICES_MAIN_PACKAGE)
+	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME) and $(BUILD_DIR)/$(SERVICES_BINARY_NAME)"
 
 clean:
 	@rm -rf $(BUILD_DIR)
@@ -49,6 +52,7 @@ check: fmt vet test build
 
 install:
 	$(GO_ENV) $(GO) install $(MAIN_PACKAGE)
+	$(GO_ENV) $(GO) install $(SERVICES_MAIN_PACKAGE)
 
 install-script-check:
 	@sh -n contrib/install.sh contrib/update.sh

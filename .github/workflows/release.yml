@@ -53,7 +53,8 @@ jobs:
           out="dist/higgs-${version}-${GOOS}-${GOARCH}"
           mkdir -p "$out"
           go build -trimpath -ldflags "$ldflags" -o "$out/higgs" ./app/higgs
-          cp README.md config.example.yaml contrib/systemd/higgsnet.service "$out/"
+          go build -trimpath -o "$out/higgs-services" ./app/higgs-services
+          cp README.md config.example.yaml service.example.yaml contrib/systemd/higgsnet.service "$out/"
           tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
 
       - name: Checksums

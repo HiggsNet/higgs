@@ -262,55 +262,13 @@ routing:
       #     ipv4_ll: 169.254.254.2/30
       #     ipv6_ll: fe80::a1:2/64
 
-# -----------------------------------------------------------------------------
-# 5. Application services (Phase 8.1 validation only)
-# -----------------------------------------------------------------------------
-
-# Docker service networks live in the init/main host netns. `networks` is keyed
-# by a local network ID; Docker name defaults to `higgs-<id>` and
-# routing_instance defaults to the same ID. IPv4 and IPv6 use one compact form:
-# source;subnet;dynamic-range;gateway.
-#
-# A configured service is not published or started automatically. Phase 8.1
-# validates its public record projection, local write capability, and routed
-# addresses against this node's active IPAM assignment. All networks will be
-# rendered into one docker-compose.yml in Phase 8.2. `allow_zones`, network and
-# compose stay local-only.
-# services:
-#   compose:
-#     # Defaults to <data_dir>/services/networks and higgs-networks.
-#     output_dir: /etc/higgs/services/networks
-#     project_name: higgs-networks
-#   networks:
-#     main:
-#       # local does not consume Higgs IPAM; it is only usable on this host.
-#       ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
-#       # auto selects this Zone's unique active, non-shared IPv6 assignment.
-#       # The remaining fields are offsets within that assignment.
-#       ipv6: "auto;::/112;::100/120;::1"
-#   instances:
-#     - id: egress-cn
-#       type: socks5
-#       region: cn-east
-#       network: main
-#       # Relative static address. Keep it outside the dynamic range above.
-#       address: "::20"
-#       port: 1080
-#       allow_zones:
-#         # Exact Zone only.
-#         - clients.catofes.
-#         # Base Zone plus every descendant Zone. Quote YAML wildcard values.
-#         - "*.partners.catofes."
-#         # Every non-root Zone.
-#         - "*."
-#       compose:
-#         output_dir: /etc/higgs/services/egress-cn
-#         project_name: higgs-egress-cn
-#         image: ghcr.io/example/socks5:stable
-#         container_name: higgs-egress-cn
+# Application deployment is intentionally not part of the Higgs daemon
+# configuration. `higgs-services` reads /etc/higgs/service.yaml, queries the
+# current IPAM state through the Higgs CLI, and renders Docker Compose files.
+# See service.example.yaml and docs/phase8-services.md.
 
 # -----------------------------------------------------------------------------
-# 6. Firewall, health probes, and read-only observer
+# 5. Firewall, health probes, and read-only observer
 # -----------------------------------------------------------------------------
 
 firewall:

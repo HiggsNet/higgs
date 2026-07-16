@@ -62,7 +62,6 @@ type appConfig struct {
 	PeerLifecycle        inspect.PeerLifecycleConfig
 	Health               healthConfig
 	Observer             observerConfig
-	Services             servicesConfig
 }
 
 type configYAML struct {
@@ -85,7 +84,6 @@ type configYAML struct {
 	PeerLifecycle *peerLifecycleYAML       `yaml:"peer_lifecycle"`
 	Health        *healthConfigYAML        `yaml:"health"`
 	Observer      *observerConfigYAML      `yaml:"observer"`
-	Services      *servicesConfigYAML      `yaml:"services"`
 	Overlays      []overlayGroupConfigYAML `yaml:"overlays"`
 	Gossip        gossipConfigYAML         `yaml:"gossip"`
 }
@@ -577,10 +575,6 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		if err != nil {
 			return err
 		}
-	}
-	config.Services, err = parseServicesConfig(file.Services, config.Routing, config.DataDir)
-	if err != nil {
-		return err
 	}
 	// Parse firewall.instances[], if any.
 	if file.Firewall != nil {
