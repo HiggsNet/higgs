@@ -80,6 +80,16 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	for _, instCfg := range instances {
 		listenAddrs := instCfg.ListenAddrs
 		spec := firewallInstanceSpecFromConfig(instCfg, listenAddrs, charonIKE, charonNATT)
+		if spec.IsHost {
+			endpointServices, endpointErr := resolveEndpointServices(snapshot.EndpointACLs, ars)
+			if endpointErr != nil {
+				if firstErr == nil {
+					firstErr = endpointErr
+				}
+				continue
+			}
+			spec.EndpointServices = endpointServices
+		}
 		input := buildFirewallPolicyInput(spec, ars, snapshot, config)
 		desired, err := firewall.BuildDesiredState(spec, input)
 		if err != nil {
@@ -383,18 +393,26 @@ func firewallCharonPorts(_ *appConfig, _ *stateFile) (uint16, uint16) {
 
 // flushFirewallReconcile runs firewall reconcile if dirty.
 func (d *DaemonService) flushFirewallReconcile(ctx context.Context) bool {
+	flushed, err := d.flushFirewallReconcileResult(ctx)
+	if err != nil {
+		d.logWarn("firewall", "reconcile_failed", map[string]any{"error": err})
+	}
+	return flushed
+}
+
+// flushFirewallReconcileResult is used by security-sensitive control writes
+// that must not report success before the new policy reaches the backend.
+func (d *DaemonService) flushFirewallReconcileResult(ctx context.Context) (bool, error) {
 	if d == nil || !d.firewallDirty {
-		return false
+		return false, nil
 	}
 	d.firewallDirty = false
 	d.noteReconcileFlush("firewall")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
-	if err := d.reconcileFirewall(reconcileCtx); err != nil {
-		d.logWarn("firewall", "reconcile_failed", map[string]any{"error": err})
-	}
+	err := d.reconcileFirewall(reconcileCtx)
 	d.publishCommittedStateSnapshot()
-	return true
+	return true, err
 }
 
 func (d *DaemonService) firewallReconcileInterval() time.Duration {

@@ -281,6 +281,23 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 
 // buildHostRules generates host-side IKE/NAT-T ingress and optional redirect grace.
 func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, input FirewallPolicyInput) {
+	for _, endpoint := range spec.EndpointServices {
+		dst := netip.PrefixFrom(endpoint.Destination, endpoint.Destination.BitLen())
+		// An empty resolved source set deliberately produces no accept rule. The
+		// following exact endpoint drop keeps selector resolution fail-closed.
+		if len(endpoint.Sources) > 0 {
+			desired.ForwardRules = append(desired.ForwardRules, Rule{
+				Action: ActionAccept, Proto: endpoint.Proto, Port: endpoint.Port,
+				Src: endpoint.Sources, Dst: []netip.Prefix{dst},
+				Comment: "endpoint_acl " + endpoint.Name,
+			})
+		}
+		desired.ForwardRules = append(desired.ForwardRules, Rule{
+			Action: ActionDrop, Proto: endpoint.Proto, Port: endpoint.Port,
+			Dst: []netip.Prefix{dst}, Comment: "endpoint_acl default drop " + endpoint.Name,
+		})
+	}
+
 	ikePort := spec.CharonIKEPort
 	if ikePort == 0 {
 		ikePort = defaultIKEPort
@@ -494,13 +511,13 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 		fmt.Fprintln(h, "rev6", p.String())
 	}
 	for _, r := range desired.InputRules {
-		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Comment)
+		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.ForwardRules {
-		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Comment)
+		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.OutputRules {
-		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Comment)
+		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.HostIngress {
 		fmt.Fprintln(h, "hi", r.Proto, r.Port, r.DstAddr.String(), r.Comment)

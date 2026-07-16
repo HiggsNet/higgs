@@ -24,20 +24,20 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishSOCKS5ServiceWithRuntime(rt, "egress-cn", "cn-east", "fd42:1::20", 3128); err != nil {
+	if err := publishSOCKS5ServiceWithRuntime(rt, "cn-east", "fd42:1::20", 3128); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	state, _ = rt.LoadState()
-	record := state.Network.Zones[managed].Records["services/egress-cn"]
+	record := state.Network.Zones[managed].Records["services/socks5"]
 	parsed, err := higgsservice.ParseSOCKS5Record(record)
 	if err != nil || !parsed.IsActive() || record.Version != 1 {
 		t.Fatalf("published record = %#v, parsed = %#v, error = %v", record, parsed, err)
 	}
-	if err := withdrawSOCKS5ServiceWithRuntime(rt, "egress-cn"); err != nil {
+	if err := withdrawSOCKS5ServiceWithRuntime(rt); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
 	state, _ = rt.LoadState()
-	record = state.Network.Zones[managed].Records["services/egress-cn"]
+	record = state.Network.Zones[managed].Records["services/socks5"]
 	parsed, err = higgsservice.ParseSOCKS5Record(record)
 	if err != nil || parsed.IsActive() || record.Version != 2 {
 		t.Fatalf("withdrawn record = %#v, parsed = %#v, error = %v", record, parsed, err)
@@ -46,7 +46,7 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 
 func TestPublishSOCKS5ServiceRejectsUnownedAddress(t *testing.T) {
 	rt, _ := buildRouteTestRuntime(t)
-	if err := publishSOCKS5ServiceWithRuntime(rt, "egress", "cn", "fd42:1::20", 3128); err == nil {
+	if err := publishSOCKS5ServiceWithRuntime(rt, "cn", "fd42:1::20", 3128); err == nil {
 		t.Fatal("expected unowned address error")
 	}
 }

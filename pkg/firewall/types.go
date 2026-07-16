@@ -40,6 +40,16 @@ type LocalService struct {
 	Sources []netip.Prefix // empty = allow from authorized mesh prefixes
 }
 
+// EndpointService is a forwarded service endpoint, normally a container on a
+// host Docker bridge. Sources are already resolved from trusted Zone state.
+type EndpointService struct {
+	Name        string
+	Proto       string
+	Port        uint16
+	Destination netip.Addr
+	Sources     []netip.Prefix
+}
+
 // HostPortConfig controls which entry ports are opened on the host for inbound
 // transport connections (IKE, NAT-T, WireGuard, etc.).
 type HostPortConfig struct {
@@ -75,7 +85,8 @@ type FirewallInstanceSpec struct {
 	UpstreamPatterns  []string // e.g. ["hgs-upstream*"]
 
 	// Overlay data-plane inputs.
-	LocalServices []LocalService
+	LocalServices    []LocalService
+	EndpointServices []EndpointService
 
 	// Host-only inputs.
 	HostPorts      HostPortConfig

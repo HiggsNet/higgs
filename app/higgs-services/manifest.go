@@ -25,7 +25,7 @@ type manifest struct {
 	OutputDir string                   `yaml:"output_dir,omitempty"`
 	Images    imageConfig              `yaml:"images,omitempty"`
 	Networks  map[string]networkConfig `yaml:"networks"`
-	SOCKS5    map[string]socks5Config  `yaml:"socks5"`
+	SOCKS5    socks5Config             `yaml:"socks5"`
 }
 
 type imageConfig struct {
@@ -56,7 +56,7 @@ type resolvedManifest struct {
 	OutputDir string                     `json:"output_dir"`
 	Images    imageConfig                `json:"images"`
 	Networks  map[string]resolvedNetwork `json:"networks"`
-	SOCKS5    map[string]resolvedSOCKS5  `json:"socks5"`
+	SOCKS5    resolvedSOCKS5             `json:"socks5"`
 }
 
 type resolvedNetwork struct {
@@ -74,7 +74,6 @@ type resolvedIPAM struct {
 }
 
 type resolvedSOCKS5 struct {
-	Name       string                       `json:"name"`
 	Region     string                       `json:"region"`
 	Publish    string                       `json:"publish"`
 	Address    string                       `json:"address"`
@@ -119,9 +118,6 @@ func loadManifest(path string) (manifest, error) {
 	if len(value.Networks) == 0 {
 		return manifest{}, fmt.Errorf("networks is required")
 	}
-	if len(value.SOCKS5) == 0 {
-		return manifest{}, fmt.Errorf("socks5 is required")
-	}
 	return value, nil
 }
 
@@ -137,7 +133,7 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		}
 		assignments = append(assignments, prefix)
 	}
-	result := resolvedManifest{OutputDir: value.OutputDir, Images: value.Images, Networks: map[string]resolvedNetwork{}, SOCKS5: map[string]resolvedSOCKS5{}}
+	result := resolvedManifest{OutputDir: value.OutputDir, Images: value.Images, Networks: map[string]resolvedNetwork{}}
 	for name, configured := range value.Networks {
 		id, err := higgsservice.NormalizeID(name)
 		if err != nil {
@@ -174,68 +170,54 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		}
 		result.Networks[name] = network
 	}
-	usedAddresses := map[string]string{}
-	for name, configured := range value.SOCKS5 {
-		id, err := higgsservice.NormalizeID(name)
-		if err != nil {
-			return resolvedManifest{}, fmt.Errorf("socks5 name: %w", err)
-		}
-		if id != name {
-			return resolvedManifest{}, fmt.Errorf("socks5 name %q is not canonical; use %q", name, id)
-		}
-		if strings.TrimSpace(configured.Region) == "" {
-			return resolvedManifest{}, fmt.Errorf("socks5 %s: region is required", name)
-		}
-		if configured.Port == 0 {
-			configured.Port = 3128
-		}
-		if configured.Publish == "" {
-			return resolvedManifest{}, fmt.Errorf("socks5 %s: publish network is required", name)
-		}
-		service := resolvedSOCKS5{Name: name, Region: configured.Region, Publish: configured.Publish, Port: configured.Port, Networks: map[string]resolvedRoleAddrs{}}
-		for _, raw := range configured.AllowZones {
-			selector, err := higgsservice.ParseZoneSelector(raw)
-			if err != nil {
-				return resolvedManifest{}, fmt.Errorf("socks5 %s allow_zones: %w", name, err)
-			}
-			service.AllowZones = append(service.AllowZones, selector.String())
-		}
-		for networkName, baseText := range configured.Networks {
-			network, ok := result.Networks[networkName]
-			if !ok {
-				return resolvedManifest{}, fmt.Errorf("socks5 %s: unknown network %q", name, networkName)
-			}
-			base, familyIPAM, err := resolveServiceBase(baseText, network)
-			if err != nil {
-				return resolvedManifest{}, fmt.Errorf("socks5 %s network %s: %w", name, networkName, err)
-			}
-			roles, err := resolveRoleAddresses(base, *familyIPAM)
-			if err != nil {
-				return resolvedManifest{}, fmt.Errorf("socks5 %s network %s: %w", name, networkName, err)
-			}
-			for role, address := range map[string]string{"socks": roles.SOCKS, "dns": roles.DNS, "h2": roles.H2} {
-				key := networkName + "/" + address
-				if previous, exists := usedAddresses[key]; exists {
-					return resolvedManifest{}, fmt.Errorf("socks5 %s %s address %s on network %s conflicts with %s", name, role, address, networkName, previous)
-				}
-				usedAddresses[key] = name + "/" + role
-			}
-			service.Networks[networkName] = roles
-		}
-		published, ok := service.Networks[configured.Publish]
-		if !ok {
-			return resolvedManifest{}, fmt.Errorf("socks5 %s: publish network %q is not attached", name, configured.Publish)
-		}
-		service.Address = published.SOCKS
-		hashInput, _ := json.Marshal(struct {
-			Name     string
-			Config   socks5Config
-			Networks map[string]resolvedNetwork
-		}{name, configured, result.Networks})
-		hash := sha256.Sum256(hashInput)
-		service.ConfigHash = hex.EncodeToString(hash[:])
-		result.SOCKS5[name] = service
+	configured := value.SOCKS5
+	if strings.TrimSpace(configured.Region) == "" {
+		return resolvedManifest{}, fmt.Errorf("socks5.region is required")
 	}
+	if configured.Port == 0 {
+		configured.Port = 3128
+	}
+	if configured.Publish == "" {
+		return resolvedManifest{}, fmt.Errorf("socks5.publish is required")
+	}
+	if len(configured.Networks) == 0 {
+		return resolvedManifest{}, fmt.Errorf("socks5.networks is required")
+	}
+	service := resolvedSOCKS5{Region: configured.Region, Publish: configured.Publish, Port: configured.Port, Networks: map[string]resolvedRoleAddrs{}}
+	for _, raw := range configured.AllowZones {
+		selector, err := higgsservice.ParseZoneSelector(raw)
+		if err != nil {
+			return resolvedManifest{}, fmt.Errorf("socks5.allow_zones: %w", err)
+		}
+		service.AllowZones = append(service.AllowZones, selector.String())
+	}
+	for networkName, baseText := range configured.Networks {
+		network, ok := result.Networks[networkName]
+		if !ok {
+			return resolvedManifest{}, fmt.Errorf("socks5: unknown network %q", networkName)
+		}
+		base, familyIPAM, err := resolveServiceBase(baseText, network)
+		if err != nil {
+			return resolvedManifest{}, fmt.Errorf("socks5 network %s: %w", networkName, err)
+		}
+		roles, err := resolveRoleAddresses(base, *familyIPAM)
+		if err != nil {
+			return resolvedManifest{}, fmt.Errorf("socks5 network %s: %w", networkName, err)
+		}
+		service.Networks[networkName] = roles
+	}
+	published, ok := service.Networks[configured.Publish]
+	if !ok {
+		return resolvedManifest{}, fmt.Errorf("socks5: publish network %q is not attached", configured.Publish)
+	}
+	service.Address = published.SOCKS
+	hashInput, _ := json.Marshal(struct {
+		Config   socks5Config
+		Networks map[string]resolvedNetwork
+	}{configured, result.Networks})
+	hash := sha256.Sum256(hashInput)
+	service.ConfigHash = hex.EncodeToString(hash[:])
+	result.SOCKS5 = service
 	return result, nil
 }
 

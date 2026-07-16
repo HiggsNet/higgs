@@ -101,20 +101,20 @@
 - SOCKS5 第一版可使用 `NO AUTH`，由 Higgs overlay 身份/前缀和本机 firewall 提供 zone/node 级授权；这不承诺同一节点内的用户级身份区分。
 
 - [x] **8.1 最小 service record 与显式发布**
-  - 定义 `services/<name>` / `service.socks5.v1` record，发布 `type`、`region`、`address`、`port` 和向后兼容的可选 `active`；节点/Zone 由 record 签发者推导。
+  - 定义固定的 `services/socks5` / `service.socks5.v1` record，发布 `type`、`region`、`address`、`port` 和向后兼容的可选 `active`；节点/Zone 由 record 签发者推导。
   - 增加 `higgs service publish/withdraw`；发布地址必须落在当前节点 active、非 shared assignment 内，撤销写入 `active:false` 新版本。
   - 保留最小 `write:service` capability、严格 schema 和 route-authorization 归属验证；从 Higgs 主配置删除 Docker/Compose/service instance 模型。
 
 - [ ] **8.2 独立 Compose 生成与 host/overlay 网络接入**
   - [x] 新增独立 `higgs-services`：读取 `/etc/higgs/service.yaml`，通过 `higgs ipam mine` 获取运行态，把全部双栈 external network 写入同一份 network Compose。
-  - [x] 每套 SOCKS5 服务生成 `socks`、`dns`、`h2` 三容器 Compose，支持多个 network、相对 base address、固定镜像默认值和 resolved lock。
+  - [x] 固定 SOCKS5 服务生成 `socks`、`dns`、`h2` 三容器 Compose，支持多个 network、相对 base address、固定镜像默认值和 resolved lock。
   - [x] 生成命令只原子写 artifact，不执行 `docker compose up/down/pull`。
   - 校验 Docker service subnet、host connected route、host -> Higgs netns 聚合路由和 overlay -> host static upstream 不冲突；启用 service 不隐式改变现有 upstream 边界。
   - 明确区分 host 数据面聚合路由与 Babel export：前者可指向 root 拥有的大前缀，后者仍只宣告本节点实际拥有/获授权的服务前缀。
 
 - [ ] **8.3 发布、防火墙与运行状态**
-  - 将 `allow_zones` 通过通用 endpoint ACL `{destination, protocol, port, selectors}` 解析为已授权 overlay 来源前缀，复用现有 firewall backend；未授权 Zone 默认 drop。
-  - [x] `higgs-services publish` 核对 resolved lock 和当前 assignment，并执行 TCP 健康检查；endpoint ACL 未实现前，非空 `allow_zones` 会 fail-closed。
+  - [x] 将 `allow_zones` 通过通用 endpoint ACL `{destination, protocol, port, selectors}` 持久化，并动态解析为已授权 overlay 来源前缀；host FORWARD 对 endpoint 先 allow 后精确 drop，空匹配保持 fail-closed。
+  - [x] `higgs-services publish` 核对 resolved lock 和当前 assignment，执行 TCP 健康检查，先 apply ACL 再发布 record；withdraw 先撤销 record 再清理 ACL。
   - 增加 `services` / `proxy` 本机查询与诊断输出，展示地址归属、路由、firewall、readiness 和当前 record。
 
 - [ ] **8.4 唯一节点地址验证**
@@ -141,4 +141,4 @@
 1. 7.1 已完成并保持 StrongSwan 主链路现状；WG 底座与 GRE/VXLAN 正式实现分别留在可选 7.4/7.5，不作为当前主线的隐含下一步。
 2. 7.3 chunk repair 已完成；下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-4. Phase 8 的 Docker 部署已从 Higgs daemon 拆到独立 `higgs-services`；下一窄切口是通用 endpoint ACL reconcile，其后再做真实容器 smoke。shared Anycast 和应用层 relay 继续保持独立切口。
+4. Phase 8 的 Docker 部署已从 Higgs daemon 拆到独立 `higgs-services`，通用 endpoint ACL reconcile 已完成；下一窄切口是 host/overlay 接入校验和真实容器 smoke。shared Anycast 和应用层 relay 继续保持独立切口。

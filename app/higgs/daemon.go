@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -92,6 +93,8 @@ const (
 	daemonEventIPsecCleanup          daemonEventType = "ipsec_cleanup"
 	daemonEventIPsecPortRotate       daemonEventType = "ipsec_port_rotate"
 	daemonEventIPsecLifecycle        daemonEventType = "ipsec_lifecycle"
+	daemonEventEndpointACLApply      daemonEventType = "endpoint_acl_apply"
+	daemonEventEndpointACLRemove     daemonEventType = "endpoint_acl_remove"
 	daemonEventShutdown              daemonEventType = "shutdown"
 )
 
@@ -105,11 +108,13 @@ type daemonEvent struct {
 	Snapshot    *gossip.ZoneSnapshot
 	Zone        zone.ZonePath
 	Reason      string
+	Key         string
 	Apply       bool
 	Orphans     bool
 	Packet      *gossip.Packet
 	VICIEvent   ipsec.VICIEvent
 	ForceSync   bool
+	EndpointACL *endpointACL
 	Context     context.Context
 	Reply       chan daemonEventResult
 }
@@ -557,6 +562,36 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		response := controlResponse{OK: true, Record: record}
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
+	case "endpoint_acl_apply":
+		if request.EndpointACL == nil {
+			writeControlResponse(conn, controlError(errors.New("endpoint_acl is required")))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventEndpointACLApply, EndpointACL: request.EndpointACL})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Message: "endpoint ACL applied"})
+	case "endpoint_acl_remove":
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventEndpointACLRemove, Key: request.Key})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Message: "endpoint ACL removed"})
+	case "endpoint_acl_list":
+		state, _, meta := d.snapshotState()
+		var acls []endpointACL
+		if state != nil {
+			for _, acl := range state.EndpointACLs {
+				acls = append(acls, acl)
+			}
+			sort.Slice(acls, func(i, j int) bool { return acls[i].Name < acls[j].Name })
+		}
+		response := controlResponse{OK: true, EndpointACLs: acls, Message: "endpoint ACL list"}
+		applyStateStoreMeta(&response, meta)
+		writeControlResponse(conn, response)
 	case "delegate_issue":
 		if err := validateControlDelegateIssue(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -878,6 +913,13 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 			if event.Type == daemonEventIPsecCleanup && result.Error == nil {
 				ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
 			}
+			if (event.Type == daemonEventEndpointACLApply || event.Type == daemonEventEndpointACLRemove) && result.Error == nil {
+				flushed, err := d.flushFirewallReconcileResult(ctx)
+				firewallFlushed = flushed || firewallFlushed
+				if err != nil {
+					result.Error = err
+				}
+			}
 			if event.Reply != nil {
 				event.Reply <- result
 			}
@@ -969,6 +1011,15 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventIPsecLifecycle:
 		d.handleIPsecLifecycleEvent(event.VICIEvent)
 		return daemonEventResult{}, false, false
+	case daemonEventEndpointACLApply:
+		if event.EndpointACL == nil {
+			return daemonEventResult{Error: errors.New("endpoint ACL is required")}, false, false
+		}
+		err := d.handleEndpointACLApplyEvent(*event.EndpointACL)
+		return daemonEventResult{Error: err}, false, false
+	case daemonEventEndpointACLRemove:
+		err := d.handleEndpointACLRemoveEvent(event.Key)
+		return daemonEventResult{Error: err}, false, false
 	case daemonEventShutdown:
 		return daemonEventResult{}, false, true
 	default:

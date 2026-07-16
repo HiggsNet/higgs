@@ -247,6 +247,13 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 		rule := renderNFTHostIngressRule(hi)
 		commands = append(commands, []string{"add", "rule", "inet", tableName, inputChain, rule})
 	}
+	if len(desired.ForwardRules) > 0 {
+		forwardChain := tableName + "_forward"
+		commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority filter; policy accept; }"})
+		for _, rule := range desired.ForwardRules {
+			commands = append(commands, []string{"add", "rule", "inet", tableName, forwardChain, renderNFTRule(rule)})
+		}
+	}
 
 	if len(desired.NatRedirects) > 0 {
 		preroutingChain := tableName + "_prerouting"

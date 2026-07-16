@@ -8,17 +8,16 @@ networks:
     ipv6: "auto;::/112;::100/120;::1"
 
 socks5:
-  egress-cn:
-    region: cn-east
-    publish: main
-    networks:
-      # Base address: socks=::20, dns=::21, h2=::22.
-      main: "::20"
-    # Endpoint ACL reconcile is a later Phase 8 cut. higgs-services currently
-    # refuses `publish` when allow_zones is non-empty, instead of ignoring it.
-    # allow_zones:
-    #   - clients.catofes.
-    #   - "*.partners.catofes."
+  region: cn-east
+  publish: main
+  networks:
+    # Base address: socks=::20, dns=::21, h2=::22.
+    main: "::20"
+  # Optional local endpoint ACL. publish installs it through the running
+  # Higgs daemon before publishing the signed service record.
+  # allow_zones:
+  #   - clients.catofes.
+  #   - "*.partners.catofes."
 
 # Defaults are pinned to the images already used by the repository templates.
 # Override globally only when required.

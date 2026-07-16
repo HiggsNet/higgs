@@ -284,6 +284,8 @@ firewall:
 
     - id: host-ipsec
       host: true
+      # This managed host instance also enforces dynamic service endpoint ACLs
+      # on forwarded traffic to Docker bridges.
       # disabled: true
       # mode: managed
       # backend: auto

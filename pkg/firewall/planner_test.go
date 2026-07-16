@@ -15,6 +15,42 @@ func mustPrefix(t *testing.T, s string) netip.Prefix {
 	return p.Masked()
 }
 
+func TestBuildDesiredStateHostEndpointACLAllowThenDrop(t *testing.T) {
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Mode: ModeManaged,
+		EndpointServices: []EndpointService{{
+			Name: "egress-cn", Proto: ProtoTCP, Port: 3128,
+			Destination: netip.MustParseAddr("fd42::20"),
+			Sources:     []netip.Prefix{netip.MustParsePrefix("fd10::/64")},
+		}},
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if len(desired.ForwardRules) != 2 {
+		t.Fatalf("forward rules = %+v", desired.ForwardRules)
+	}
+	if desired.ForwardRules[0].Action != ActionAccept || desired.ForwardRules[1].Action != ActionDrop {
+		t.Fatalf("forward rule order = %+v", desired.ForwardRules)
+	}
+	if got := desired.ForwardRules[1].Dst[0].String(); got != "fd42::20/128" {
+		t.Fatalf("drop destination = %s", got)
+	}
+}
+
+func TestBuildDesiredStateHostEndpointACLEmptySourcesOnlyDrops(t *testing.T) {
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Mode: ModeManaged,
+		EndpointServices: []EndpointService{{Name: "closed", Proto: ProtoTCP, Port: 3128, Destination: netip.MustParseAddr("10.0.0.20")}},
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if len(desired.ForwardRules) != 1 || desired.ForwardRules[0].Action != ActionDrop {
+		t.Fatalf("forward rules = %+v", desired.ForwardRules)
+	}
+}
+
 func TestBuildDesiredState_OverlayInput(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID:                "higgstesth2",

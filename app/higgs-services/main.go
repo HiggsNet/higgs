@@ -13,6 +13,7 @@ import (
 )
 
 const defaultManifestPath = "/etc/higgs/service.yaml"
+const socks5ServiceName = "socks5"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -34,10 +35,13 @@ func run(args []string) error {
 		return err
 	}
 	if command == "withdraw" {
-		if flags.NArg() != 1 {
-			return errors.New("usage: higgs-services withdraw [options] <name>")
+		if flags.NArg() != 0 {
+			return errors.New("usage: higgs-services withdraw [options]")
 		}
-		return runHiggs(*higgsBinary, "service", "withdraw", flags.Arg(0))
+		if err := runHiggs(*higgsBinary, "service", "withdraw"); err != nil {
+			return err
+		}
+		return runHiggs(*higgsBinary, "firewall", "endpoint", "remove", socks5ServiceName)
 	}
 	manifest, err := loadManifest(*configPath)
 	if err != nil {
@@ -64,10 +68,10 @@ func run(args []string) error {
 		fmt.Printf("rendered service artifacts under %s\n", resolved.OutputDir)
 		return nil
 	case "publish":
-		if flags.NArg() != 1 {
-			return errors.New("usage: higgs-services publish [options] <name>")
+		if flags.NArg() != 0 {
+			return errors.New("usage: higgs-services publish [options]")
 		}
-		return publishResolvedService(*higgsBinary, resolved, flags.Arg(0))
+		return publishResolvedService(*higgsBinary, resolved)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
@@ -92,15 +96,9 @@ func queryAssignments(higgsBinary string) ([]runtimeAssignment, error) {
 	return report.Assignments, nil
 }
 
-func publishResolvedService(higgsBinary string, manifest resolvedManifest, name string) error {
-	service, ok := manifest.SOCKS5[name]
-	if !ok {
-		return fmt.Errorf("unknown socks5 service %q", name)
-	}
-	if len(service.AllowZones) != 0 {
-		return fmt.Errorf("service %q has allow_zones but endpoint ACL apply is not implemented yet; refusing to publish without enforcement", name)
-	}
-	lockPath := filepath.Join(manifest.OutputDir, "socks5", name, "resolved.json")
+func publishResolvedService(higgsBinary string, manifest resolvedManifest) error {
+	service := manifest.SOCKS5
+	lockPath := filepath.Join(manifest.OutputDir, "socks5", "resolved.json")
 	data, err := os.ReadFile(lockPath)
 	if err != nil {
 		return fmt.Errorf("read rendered state %s: %w; run render first", lockPath, err)
@@ -110,14 +108,25 @@ func publishResolvedService(higgsBinary string, manifest resolvedManifest, name 
 		return fmt.Errorf("decode rendered state: %w", err)
 	}
 	if rendered.ConfigHash != service.ConfigHash || rendered.Address != service.Address {
-		return fmt.Errorf("service %q runtime assignment or config changed; run render again", name)
+		return errors.New("socks5 runtime assignment or config changed; run render again")
 	}
 	connection, err := net.DialTimeout("tcp", net.JoinHostPort(service.Address, fmt.Sprint(service.Port)), 3*time.Second)
 	if err != nil {
-		return fmt.Errorf("service %q health check failed: %w", name, err)
+		return fmt.Errorf("socks5 TCP readiness check failed: %w", err)
 	}
 	connection.Close()
-	return runHiggs(higgsBinary, "service", "publish", name, "--region", service.Region, "--address", service.Address, "--port", fmt.Sprint(service.Port))
+	if len(service.AllowZones) > 0 {
+		args := []string{"firewall", "endpoint", "apply", socks5ServiceName, "--destination", service.Address, "--protocol", "tcp", "--port", fmt.Sprint(service.Port)}
+		for _, selector := range service.AllowZones {
+			args = append(args, "--allow-zone", selector)
+		}
+		if err := runHiggs(higgsBinary, args...); err != nil {
+			return fmt.Errorf("apply endpoint ACL before publish: %w", err)
+		}
+	} else if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", socks5ServiceName); err != nil {
+		return fmt.Errorf("remove stale endpoint ACL before unrestricted publish: %w", err)
+	}
+	return runHiggs(higgsBinary, "service", "publish", "--region", service.Region, "--address", service.Address, "--port", fmt.Sprint(service.Port))
 }
 
 func runHiggs(binary string, args ...string) error {

@@ -29,6 +29,7 @@ type stateFile struct {
 	IPsecReconcile    *ipsecReconcileState
 	RoutingReconcile  *routingReconcileState
 	FirewallReconcile *firewallReconcileState
+	EndpointACLs      map[string]endpointACL
 	BirdInstances     map[string]*BirdInstanceState
 	Admission         *admissionState `json:"admission,omitempty"`
 }
@@ -104,12 +105,14 @@ type stateMeta struct {
 	IPsecReconcile    *ipsecReconcileState          `json:"ipsec_reconcile,omitempty"`
 	RoutingReconcile  *routingReconcileState        `json:"routing_reconcile,omitempty"`
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
+	EndpointACLs      map[string]endpointACL        `json:"endpoint_acls,omitempty"`
 	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
 	Admission         *admissionState               `json:"admission,omitempty"`
 }
 
 type firewallReconcileState = higgsstate.FirewallReconcileState
 type firewallInstanceReconcileStateEntry = higgsstate.FirewallReconcileInstance
+type endpointACL = higgsstate.EndpointACL
 
 type admissionState = higgsstate.AdmissionState
 
@@ -288,6 +291,7 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		IPsecReconcile:    meta.IPsecReconcile,
 		RoutingReconcile:  meta.RoutingReconcile,
 		FirewallReconcile: meta.FirewallReconcile,
+		EndpointACLs:      meta.EndpointACLs,
 		BirdInstances:     meta.BirdInstances,
 		Admission:         meta.Admission,
 	}
@@ -350,6 +354,7 @@ func saveStateAt(path string, state *stateFile) error {
 		IPsecReconcile:    state.IPsecReconcile,
 		RoutingReconcile:  state.RoutingReconcile,
 		FirewallReconcile: state.FirewallReconcile,
+		EndpointACLs:      state.EndpointACLs,
 		BirdInstances:     state.BirdInstances,
 		Admission:         state.Admission,
 	}

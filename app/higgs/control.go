@@ -42,6 +42,7 @@ type controlRequest struct {
 	Orphans     bool                 `json:"orphans,omitempty"`
 	NetNS       string               `json:"netns,omitempty"`
 	Command     string               `json:"command,omitempty"`
+	EndpointACL *endpointACL         `json:"endpoint_acl,omitempty"`
 }
 
 type controlResponse struct {
@@ -78,6 +79,7 @@ type controlResponse struct {
 	Delegations       int                           `json:"delegations,omitempty"`
 	Revocations       int                           `json:"revocations,omitempty"`
 	PurgePlan         *purgePlan                    `json:"purge_plan,omitempty"`
+	EndpointACLs      []endpointACL                 `json:"endpoint_acls,omitempty"`
 }
 
 type linkInspectionControl struct {
@@ -460,6 +462,24 @@ func sendAdminControlRequest(rt *Runtime, request controlRequest) (*controlRespo
 		return nil, true, err
 	}
 	return response, true, nil
+}
+
+func endpointACLApplyViaControl(rt *Runtime, acl endpointACL) (bool, error) {
+	_, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl})
+	return ok, err
+}
+
+func endpointACLRemoveViaControl(rt *Runtime, name string) (bool, error) {
+	_, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_remove", Key: name})
+	return ok, err
+}
+
+func endpointACLListViaControl(rt *Runtime) ([]endpointACL, bool, error) {
+	response, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_list"})
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return response.EndpointACLs, true, nil
 }
 
 func isControlSocketUnavailable(err error) bool {

@@ -259,6 +259,16 @@ func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesire
 	// Jump from INPUT to Higgs chain.
 	commands = append(commands, iptablesCommand{"iptables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
 	commands = append(commands, iptablesCommand{"ip6tables", []string{"-I", "INPUT", "-j", chainName, "-m", "comment", "--comment", marker}})
+	if len(desired.ForwardRules) > 0 {
+		forwardChain := tableName + "_FORWARD"
+		commands = append(commands, iptablesCommand{"iptables", []string{"-N", forwardChain}})
+		commands = append(commands, iptablesCommand{"ip6tables", []string{"-N", forwardChain}})
+		for _, rule := range desired.ForwardRules {
+			commands = append(commands, iptablesRuleCommands(forwardChain, rule, marker)...)
+		}
+		commands = append(commands, iptablesCommand{"iptables", []string{"-I", "FORWARD", "-j", forwardChain, "-m", "comment", "--comment", marker}})
+		commands = append(commands, iptablesCommand{"ip6tables", []string{"-I", "FORWARD", "-j", forwardChain, "-m", "comment", "--comment", marker}})
+	}
 
 	// NAT redirect rules for both IPv4 and IPv6.
 	for _, nr := range desired.NatRedirects {

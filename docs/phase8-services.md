@@ -9,7 +9,7 @@ Phase 8 把“可信服务发现”和“容器部署”明确拆开：Higgs 只
 - 提供当前节点有效的 IPAM assignment；
 - 校验服务地址属于当前 Zone 的 active、非 shared assignment；
 - 签名、发布和撤销 `service.socks5.v1` record；
-- 后续根据 Zone selector 动态维护 endpoint ACL。
+- 根据 Zone selector 动态维护 host FORWARD endpoint ACL。
 
 `higgs-services` 负责：
 
@@ -34,14 +34,13 @@ networks:
     ipv6: "auto;::/112;::100/120;::1"
 
 socks5:
-  egress-cn:
-    region: cn-east
-    publish: main
-    networks:
-      main: "::20"
+  region: cn-east
+  publish: main
+  networks:
+    main: "::20"
 ```
 
-`egress-cn` 是服务名称，不再额外配置 `id`、`type`、Compose project name 或 container name。一项 `socks5` 配置代表一整套三容器服务，不是单个容器实例。
+当前只部署一套固定名称为 `socks5` 的服务，因此没有额外的实例名、`id`、`type`、Compose project name 或 container name。`socks5` 配置代表 `socks`、`dns`、`h2` 三个容器组成的整体，不是单个容器。
 
 ### 2.1 Network 描述符
 
@@ -69,7 +68,7 @@ IPv6 非 local 网络允许使用 `::` 开头的相对 subnet、动态池和 gat
 
 ### 2.2 三容器服务与多 network
 
-每个 SOCKS5 服务生成三个 Compose service：
+固定的 SOCKS5 服务生成三个 Compose service：
 
 | 角色 | 地址 |
 |---|---|
@@ -79,16 +78,15 @@ IPv6 非 local 网络允许使用 `::` 开头的相对 subnet、动态池和 gat
 
 例如 `main: "::20"` 解析为 `::20`、`::21` 和 `::22`。三者都必须位于 subnet 内，且不能占用 gateway 或 Docker 动态池。
 
-一套服务可以连接多个 network：
+这套服务可以连接多个 network：
 
 ```yaml
 socks5:
-  egress-cn:
-    region: cn-east
-    publish: main
-    networks:
-      main: "::20"
-      cn: "::30"
+  region: cn-east
+  publish: main
+  networks:
+    main: "::20"
+    cn: "::30"
 ```
 
 当前 `service.socks5.v1` 只发布一个 endpoint，因此 `publish` 必须指定其中一个 network。其他 network 只是容器的额外接入网络。
@@ -96,12 +94,12 @@ socks5:
 服务 artifact 默认位于：
 
 ```text
-/etc/higgs/services/socks5/egress-cn/docker-compose.yml
-/etc/higgs/services/socks5/egress-cn/config/smartdns.conf
-/etc/higgs/services/socks5/egress-cn/resolved.json
+/etc/higgs/services/socks5/docker-compose.yml
+/etc/higgs/services/socks5/config/smartdns.conf
+/etc/higgs/services/socks5/resolved.json
 ```
 
-Compose project name 自动为 `higgs-<service>`。不设置 `container_name`，由 Compose 使用 project 和 role 名生成。
+Compose project name 固定为 `higgs-socks5`。不设置 `container_name`，由 Compose 使用 project 和 role 名生成。
 
 ### 2.3 镜像默认值
 
@@ -133,30 +131,34 @@ higgs-services render
 
 ```text
 docker compose -f /etc/higgs/services/networks/docker-compose.yml up -d
-docker compose -f /etc/higgs/services/socks5/egress-cn/docker-compose.yml up -d
+docker compose -f /etc/higgs/services/socks5/docker-compose.yml up -d
 ```
 
 发布 record：
 
 ```text
-higgs-services publish egress-cn
+higgs-services publish
 ```
 
-发布前会重新查询 `higgs ipam mine`，并与 `resolved.json` 的 config hash 和地址比较；assignment 或配置发生变化时必须重新 render。随后执行 TCP 健康检查，最后调用：
+发布前会重新查询 `higgs ipam mine`，并与 `resolved.json` 的 config hash 和地址比较；assignment 或配置发生变化时必须重新 render。
+
+随后会从本机连接 SOCKS5 容器的发布地址和端口，超时为 3 秒。这个 TCP 就绪检查只能确认“地址可达且端口正在监听”，不能确认 SOCKS5 握手、DNS 解析或真实代理出口可用。检查失败时不会安装 ACL，也不会发布 record；后续真实容器 smoke 再覆盖完整代理能力。
+
+检查通过后最终调用：
 
 ```text
-higgs service publish egress-cn --region cn-east --address fd42:1::20 --port 3128
+higgs service publish --region cn-east --address fd42:1::20 --port 3128
 ```
 
 撤销：
 
 ```text
-higgs-services withdraw egress-cn
+higgs-services withdraw
 ```
 
-它调用 `higgs service withdraw egress-cn`，写入 `active:false` 的新版本。旧版没有 `active` 字段的 record 仍按 active 处理，保持向后兼容。
+它调用 `higgs service withdraw`，把固定的 `services/socks5` record 写成 `active:false` 新版本。旧版没有 `active` 字段的 record 仍按 active 处理，保持向后兼容。
 
-## 4. `allow_zones` 与当前安全边界
+## 4. `allow_zones` 与动态安全边界
 
 `allow_zones` 属于服务提供节点的本地策略，绝不进入公开 service record。selector 支持：
 
@@ -166,9 +168,21 @@ higgs-services withdraw egress-cn
 | `*.catofes.` | `catofes.` 及全部子 Zone。 |
 | `*.` | 全部非 root Zone。 |
 
-最终实现应由 Higgs 的通用 endpoint ACL 接口保存 `{destination, protocol, port, selectors}`，并在 route announcement、IPAM assignment 或 Zone revoke 变化时，把匹配 Zone 当前 active、已授权的 overlay route prefix 原子更新到 nftables set。这里使用的是 overlay 路由前缀，不是 IPsec underlay announce IP。
+`higgs-services publish` 在健康检查通过后，先调用通用接口：
 
-当前 endpoint ACL apply/reconcile 尚未实现。为了避免配置看似受限但实际对所有来源开放，`higgs-services publish` 遇到非空 `allow_zones` 会 fail-closed。`render` 和 `validate` 仍会解析并保存 selector，便于下一切口直接接入 ACL。
+```text
+higgs firewall endpoint apply socks5 \
+  --destination fd42:1::20 --protocol tcp --port 3128 \
+  --allow-zone clients.catofes.
+```
+
+ACL 是本地、非 gossip 的持久化运行态。daemon 在 route announcement、IPAM assignment 或 Zone revoke 变化时重新解析 selector，把匹配 Zone 当前 active、已授权的 overlay route prefix 更新到 host FORWARD 规则。这里使用的是 overlay 路由前缀，不是 IPsec underlay announce IP。
+
+容器位于 host Docker bridge，所以 ACL 必须由一个启用的 `host: true`、`mode: managed` firewall instance 执行；缺少该实例时 apply 和 publish 都会失败。ACL 的 destination 还必须位于当前 Zone active、非 shared assignment 内。
+
+每个 endpoint 先生成来源允许规则，再生成该 destination/protocol/port 的精确 drop。即使 selector 暂时匹配不到任何有效前缀，也只保留 drop，不会退化为全开放。`withdraw` 撤销公开 record 后删除本地 ACL。
+
+不配置 `allow_zones` 表示该 endpoint 不由这套动态 ACL 限制；publish 会清除同名旧 ACL，避免从“受限”改成“开放”后残留旧规则。
 
 ## 5. 已实现与后续切口
 
@@ -180,10 +194,10 @@ higgs-services withdraw egress-cn
 - resolved lock、发布前新鲜度检查和 TCP 健康检查；
 - `higgs service publish/withdraw`、地址归属校验与可传播撤销记录；
 - Zone selector 语法。
+- 通用 endpoint ACL apply/remove/list、持久化状态和动态 host firewall reconcile。
 
 后续独立实现：
 
-- 通用 `higgs firewall endpoint apply/remove` 与 daemon 动态 reconcile；
 - SOCKS5/H2 的真实容器和跨 mesh smoke；
 - shared Anycast allocation；
 - 多 endpoint record、服务选择和应用层 relay。

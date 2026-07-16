@@ -52,10 +52,8 @@ func renderArtifacts(manifest resolvedManifest) error {
 	if err := renderNetworkCompose(manifest); err != nil {
 		return err
 	}
-	for _, name := range sortedKeys(manifest.SOCKS5) {
-		if err := renderSOCKS5Compose(manifest, manifest.SOCKS5[name]); err != nil {
-			return err
-		}
+	if err := renderSOCKS5Compose(manifest, manifest.SOCKS5); err != nil {
+		return err
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -97,7 +95,7 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 		h2Networks[id] = attachmentForAddress(roles.H2)
 	}
 	file := composeFile{
-		Name:     "higgs-" + service.Name,
+		Name:     "higgs-socks5",
 		Networks: networks,
 		Services: map[string]composeService{
 			"socks": {
@@ -114,7 +112,7 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 			},
 		},
 	}
-	dir := filepath.Join(manifest.OutputDir, "socks5", service.Name)
+	dir := filepath.Join(manifest.OutputDir, "socks5")
 	if err := writeYAML(filepath.Join(dir, "docker-compose.yml"), file); err != nil {
 		return err
 	}
