@@ -84,15 +84,15 @@ func TestGenerateManagedConfig(t *testing.T) {
 	}
 }
 
-func TestGenerateBabelECMP(t *testing.T) {
+func TestGenerateKernelMultipath(t *testing.T) {
 	gen := DefaultConfigGenerator{}
 	for _, tc := range []struct {
 		name  string
 		limit uint
 		want  string
 	}{
-		{name: "without limit", want: "ecmp on;"},
-		{name: "with limit", limit: 16, want: "ecmp on limit 16;"},
+		{name: "without limit", want: "merge paths on;"},
+		{name: "with limit", limit: 16, want: "merge paths on limit 16;"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := testBirdInstanceSpec()

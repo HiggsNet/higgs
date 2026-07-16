@@ -145,6 +145,12 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 		pm.pid = daemonPID
 		pm.mu.Unlock()
 	}
+	if !pm.IsRunning(ctx) {
+		if exit := pm.LastExit(); exit != nil {
+			return fmt.Errorf("bird exited during startup: pid %d: %s", exit.PID, exit.Error)
+		}
+		return errors.New("bird exited during startup")
+	}
 
 	return nil
 }

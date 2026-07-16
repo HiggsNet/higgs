@@ -92,7 +92,20 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 
 	// Verify BIRD is running.
 	if !service.birdProcessManager.IsRunning(ctx) {
-		t.Fatal("BIRD process is not running after reconcileRouting")
+		latest, err := rt.LoadState()
+		if err != nil {
+			t.Fatalf("BIRD process is not running after reconcileRouting; LoadState: %v", err)
+		}
+		inst := latest.BirdInstances[nsName]
+		if inst == nil {
+			t.Fatal("BIRD process is not running after reconcileRouting; instance state is missing")
+		}
+		config, err := os.ReadFile(inst.ConfigPath)
+		if err != nil {
+			t.Fatalf("BIRD process is not running after reconcileRouting; state=%+v; read config: %v", inst, err)
+		}
+		parseOut, parseErr := exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "bird", "-p", "-c", inst.ConfigPath).CombinedOutput()
+		t.Fatalf("BIRD process is not running after reconcileRouting; state=%+v; last_exit=%+v; parse_error=%v; parse_output=%s; config:\n%s", inst, service.birdProcessManager.LastExit(), parseErr, parseOut, config)
 	}
 
 	// Verify the control socket file exists.

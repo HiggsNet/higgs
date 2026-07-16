@@ -237,10 +237,6 @@ func revokeIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) e
 	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMPool, false, "revoked")
 }
 
-func revokeIPAMAssignment(path zone.ZonePath, prefix string, direct bool) error {
-	return revokeIPAMAssignmentTo(path, prefix, "", direct)
-}
-
 func revokeIPAMAssignmentTo(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
@@ -282,10 +278,6 @@ func prepareIPAMPoolRecord(prefix string, delegatedTo zone.ZonePath, active bool
 	return canonical, key, value, nil
 }
 
-func prepareIPAMAssignmentRecord(prefix string, assignedTo zone.ZonePath, active bool, shared bool) (canonical, key string, value []byte, err error) {
-	return prepareIPAMAssignmentRecordTag(prefix, assignedTo, active, shared, "")
-}
-
 func prepareIPAMAssignmentRecordTag(prefix string, assignedTo zone.ZonePath, active bool, shared bool, tag string) (canonical, key string, value []byte, err error) {
 	canonical, err = routing.CanonicalizePrefix(prefix)
 	if err != nil {
@@ -312,10 +304,6 @@ func marshalIPAMPoolRecord(canonical string, delegatedTo zone.ZonePath, active b
 		return nil, fmt.Errorf("marshal ipam pool record: %w", err)
 	}
 	return value, nil
-}
-
-func marshalIPAMAssignmentRecord(canonical string, assignedTo zone.ZonePath, active bool, shared bool) ([]byte, error) {
-	return marshalIPAMAssignmentRecordTag(canonical, assignedTo, active, shared, "")
 }
 
 func marshalIPAMAssignmentRecordTag(canonical string, assignedTo zone.ZonePath, active bool, shared bool, tag string) ([]byte, error) {
@@ -359,11 +347,6 @@ func currentIPAMPoolInfo(rt *Runtime, path zone.ZonePath, prefix string) (canoni
 		return "", "", "", fmt.Errorf("pool %s in %s is already revoked", canonical, path)
 	}
 	return canonical, key, pool.DelegatedTo, nil
-}
-
-func currentIPAMAssignmentInfo(rt *Runtime, path zone.ZonePath, prefix string) (canonical, key string, assignedTo zone.ZonePath, shared bool, err error) {
-	canonical, key, assignedTo, shared, _, err = currentIPAMAssignmentInfoFor(rt, path, prefix, "")
-	return
 }
 
 func currentIPAMAssignmentInfoFor(rt *Runtime, path zone.ZonePath, prefix string, target zone.ZonePath) (canonical, key string, assignedTo zone.ZonePath, shared bool, tag string, err error) {

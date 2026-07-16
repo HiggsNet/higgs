@@ -15,10 +15,6 @@ import (
 
 const socks5RecordName = "socks5"
 
-func publishSOCKS5Service(region, address string, port uint16, direct bool) error {
-	return publishSOCKS5Endpoints([]higgsservice.SOCKS5Endpoint{{Region: region, Address: address, Port: port}}, direct)
-}
-
 func publishSOCKS5Endpoints(endpoints []higgsservice.SOCKS5Endpoint, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {

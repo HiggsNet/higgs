@@ -243,8 +243,10 @@ routing:
       # metric_staged: 200
       # metric_draining: 500
       # interface_pattern: hgs*
-      # ECMP knobs are parsed for future/alternate backends, but current BIRD
-      # rendering does not emit Babel ECMP directives; leave them unset here.
+      # Optional equal-cost multipath support. When enabled, BIRD renders
+      # `ecmp on` (or `ecmp on limit N`) in the Babel protocol block.
+      # ecmp: true
+      # ecmp_limit: 16
 
       # Optional veth upstream for main-network Babel peering. Higgs starts BIRD
       # in the routing instance netns; BIRD itself cannot switch namespaces

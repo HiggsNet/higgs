@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/hex"
 	"sort"
 	"strings"
@@ -144,7 +143,5 @@ func missingChunkIndexes(chunks [][]byte, limit int) []uint16 {
 	}
 	return missing
 }
-
-func sameTransferID(a, b []byte) bool { return bytes.Equal(a, b) }
 
 var udpSentChunkCache = newSentChunkCache()

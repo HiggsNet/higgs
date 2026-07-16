@@ -7,7 +7,7 @@
 > 实施状态（2026-07-16）：调研中列出的解析偏差已在
 > `pkg/routing/bird` 修正。控制客户端现在校验 `0001 BIRD ...` 问候语；接口、
 > 路由和邻居夹具均使用官方 IP-first / headerless 的实际输出；同时恢复了
-> `ecmp on [limit N]` 配置渲染。下文保留原始问题与证据，作为格式兼容性依据。
+> kernel `merge paths on [limit N]` 配置渲染。下文保留原始问题与证据，作为格式兼容性依据。
 
 ## 1. BIRD CLI 协议格式（协议层）
 
@@ -316,7 +316,7 @@ eth0       fe80::2             256
 | 4 | `pkg/routing/bird/parser.go:parseRoutes()` | 通过 `Source:`/`source` 提取 `Source`，但真实 verbose 输出使用 `Type:` | 低 | `Source` 字段基本不可用；健康检查实际依赖 `Protocol` |
 | 5 | `pkg/routing/bird/parser.go:parseProtocols()` | `Since` 字段为纯时间（无日期）时 `parseTime()` 失败 | 低 | 当天启动的协议 `Since` 会显示为空 |
 | 6 | `pkg/routing/bird/client_test.go` | 测试夹具 `sampleShowInterfaces` 包含虚假的 `Interface State MTU Link-local` 表头 | 中 | 测试通过但不能验证真实 BIRD 输出 |
-| 7 | `pkg/routing/bird/generator.go` | 针对 BIRD 2.19.x 注释说 Babel 不接受 `ecmp`，但源码确实支持 `ecmp`/`ecmp on limit N` | 低 | 可能是版本判断过严或历史遗留，可重新评估 |
+| 7 | `pkg/routing/bird/generator.go` | 将 `ecmp on limit N` 写进 `protocol babel` | **高** | BIRD 2.19.1 在该位置报 `unexpected ECMP` 并退出；已改为 kernel `merge paths on limit N` |
 | 8 | `pkg/routing/bird/parser.go:parseBabelNeighbors()` | `babelLegacyHeaderRe` 假设的 Interface-first 格式在官方 BIRD 中不存在 | 中 | 该分支永远不会命中；测试夹具 `sampleShowBabelNeighbors` 是虚构格式 |
 
 ## 5. 修复建议

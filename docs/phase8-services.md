@@ -223,7 +223,7 @@ selector 支持：
 
 每个 endpoint 先生成来源 allow，再生成 destination/protocol/port 的精确 drop。selector 暂时匹配不到有效前缀时仍保留 drop，不会退化为开放。未配置 `allow_zones` 表示不使用这套限制，publish 会删除同名旧 ACL。
 
-## 7. 当前完成度与后续
+## 7. 验收与范围结论
 
 已完成：
 
@@ -233,11 +233,23 @@ selector 支持：
 - 多 endpoint service record 及旧单 endpoint record 兼容；
 - publish/withdraw 对 TCP readiness、ACL、整段 route 和 record 的编排；
 - endpoint ACL 持久化以及动态 host firewall reconcile。
+- 已实现 `services-smoke`：真实 Docker bridge 上的 SOCKS5/目标 TCP 容器、两端
+  BIRD/Babel、host 聚合路由和 static upstream 回程组成的 root smoke；它会
+  断言 Docker connected route 比更宽的 host→overlay 聚合路由优先，并实际
+  完成一次 SOCKS5 代理 TCP 请求。
+- 复用 BIRD 的三节点 Anycast failover smoke，验证 shared prefix 的成员故障
+  后收敛；服务 shared assignment、route announce 和 publish 编排由单元测试覆盖。
 
-后续重点是实际数据面的验证与诊断：
+运行完整 Phase 8 验收：
 
-- SOCKS5/H2 真实容器和跨 mesh smoke；
-- Anycast 多节点宣告、故障收敛和撤销 smoke；
-- 展示 assignment、route、ACL、readiness 和当前 record 的本机诊断命令；
-- 基于 region、可达性、Babel metric 和健康状态的客户端服务选择；
-- 应用层 relay 继续作为独立协议/项目，不与 SOCKS5 部署模型耦合。
+```bash
+sudo make services-smoke
+```
+
+该目标要求 root、可创建 network namespace 的 Linux 环境、本机 BIRD 和可用的
+Docker daemon；不会进入默认 `make test`。它创建的 BIRD、netns、Docker network
+和容器均在测试结束时清理。
+
+客户端 service selection/health policy 与应用层 source-routing relay 不属于 SOCKS5
+发布数据面，按产品需求作为独立后续项目评估。`services-smoke` 在目标 root 环境
+通过后，即可将本阶段归档。

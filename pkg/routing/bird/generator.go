@@ -187,18 +187,22 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 		KernelTableID:  kernelTableID,
 		Kernel: []KernelProtocolBlock{
 			{
-				Name:          kernelName4,
-				IPv4Table:     ipv4Table,
-				KernelTableID: kernelTableID,
-				Learn:         false,
-				Persist:       false,
+				Name:            kernelName4,
+				IPv4Table:       ipv4Table,
+				KernelTableID:   kernelTableID,
+				Learn:           false,
+				Persist:         false,
+				MergePaths:      spec.ECMP,
+				MergePathsLimit: spec.ECMPLimit,
 			},
 			{
-				Name:          kernelName6,
-				IPv6Table:     ipv6Table,
-				KernelTableID: kernelTableID,
-				Learn:         false,
-				Persist:       false,
+				Name:            kernelName6,
+				IPv6Table:       ipv6Table,
+				KernelTableID:   kernelTableID,
+				Learn:           false,
+				Persist:         false,
+				MergePaths:      spec.ECMP,
+				MergePathsLimit: spec.ECMPLimit,
 			},
 		},
 		Babel: BabelProtocolBlock{
@@ -210,8 +214,6 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			MetricBase:       spec.MetricBase,
 			MetricStaged:     spec.MetricStaged,
 			MetricDraining:   spec.MetricDraining,
-			ECMP:             spec.ECMP,
-			ECMPLimit:        spec.ECMPLimit,
 			Auth:             spec.BabelAuth,
 			UpstreamBlock:    upstreamBlock,
 		},
@@ -264,6 +266,13 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		if kp.KernelTableID != 0 {
 			fmt.Fprintf(&b, "    kernel table %d;\n", kp.KernelTableID)
 		}
+		if kp.MergePaths {
+			if kp.MergePathsLimit > 0 {
+				fmt.Fprintf(&b, "    merge paths on limit %d;\n", kp.MergePathsLimit)
+			} else {
+				fmt.Fprintln(&b, "    merge paths on;")
+			}
+		}
 		fmt.Fprintln(&b, "}")
 		fmt.Fprintln(&b)
 	}
@@ -299,13 +308,6 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 			fmt.Fprintf(&b, "        export filter %s;\n", cfg.ExportFilters[0].Name)
 		}
 		fmt.Fprintln(&b, "    };")
-	}
-	if cfg.Babel.ECMP {
-		if cfg.Babel.ECMPLimit > 0 {
-			fmt.Fprintf(&b, "    ecmp on limit %d;\n", cfg.Babel.ECMPLimit)
-		} else {
-			fmt.Fprintln(&b, "    ecmp on;")
-		}
 	}
 	if cfg.Babel.InterfacePattern != "" {
 		fmt.Fprintf(&b, "    interface %s {\n", cfg.Babel.InterfacePattern)

@@ -137,6 +137,25 @@ func TestExecProcessManagerStartNamedNetNS(t *testing.T) {
 	}
 }
 
+func TestExecProcessManagerStartRejectsExitAfterSocketAppears(t *testing.T) {
+	tmp := t.TempDir()
+	pm := NewExecProcessManager(fakeBirdBinary(t))
+	pm.socketWaitTimeout = 100 * time.Millisecond
+
+	spec := managedSpec(tmp)
+	spec.NetNS = NetNSSpec{Kind: "host"}
+	// Simulate BIRD creating its control socket before failing to parse the
+	// configuration. Start must not report this as a healthy daemon.
+	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
+		t.Fatalf("write socket: %v", err)
+	}
+
+	err := pm.Start(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "exited during startup") {
+		t.Fatalf("Start error = %v, want startup exit", err)
+	}
+}
+
 func TestExecProcessManagerStartRejectsNonManagedModes(t *testing.T) {
 	pm := NewExecProcessManager("")
 

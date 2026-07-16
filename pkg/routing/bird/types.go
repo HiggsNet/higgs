@@ -108,10 +108,11 @@ type BirdInstanceSpec struct {
 	// BabelAuth configures per-interface HMAC authentication. Nil disables it.
 	BabelAuth *BabelAuthSpec `yaml:"babel_auth,omitempty" json:"babel_auth,omitempty"`
 
-	// ECMP enables Babel ECMP for equal-cost paths.
+	// ECMP enables kernel multipath installation for equal-cost Babel paths.
+	// BIRD renders this as "merge paths" in each kernel protocol.
 	ECMP bool `yaml:"ecmp,omitempty" json:"ecmp,omitempty"`
 
-	// ECMPLimit is the optional "ecmp on limit N" value. Zero means no limit.
+	// ECMPLimit is the optional "merge paths on limit N" value. Zero means no limit.
 	ECMPLimit uint `yaml:"ecmp_limit,omitempty" json:"ecmp_limit,omitempty"`
 
 	// BogonPrefixes are rejected before any accept logic in rendered filters.
@@ -215,6 +216,11 @@ type KernelProtocolBlock struct {
 	KernelTableID uint32 // 0 = default/main
 	Learn         bool   // import from kernel
 	Persist       bool   // persist routes on BIRD shutdown
+	// MergePaths asks the kernel protocol to install equal-cost routes as a
+	// single multipath route. BIRD 2.x accepts this in protocol kernel, not
+	// protocol babel.
+	MergePaths      bool
+	MergePathsLimit uint
 }
 
 // BabelProtocolBlock describes one "protocol babel { ... }" block.
@@ -227,8 +233,6 @@ type BabelProtocolBlock struct {
 	MetricBase       uint
 	MetricStaged     uint
 	MetricDraining   uint
-	ECMP             bool
-	ECMPLimit        uint
 	Auth             *BabelAuthSpec
 	UpstreamBlock    *BabelInterfaceBlock // optional second interface block for veth upstream
 }

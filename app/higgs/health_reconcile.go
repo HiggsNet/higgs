@@ -76,16 +76,6 @@ func hasStagedLinkOutput(state *stateFile, linkID string) bool {
 	return false
 }
 
-func shouldProbeStagedInterface(inst linkInstanceState) bool {
-	if inst.StagedGeneration != 0 && inst.StagedInterfaceName != "" {
-		switch inst.RotatePhase {
-		case "preparing", "testing_new", "dual_running", "cutover":
-			return true
-		}
-	}
-	return false
-}
-
 func healthProbeID(instanceID, role string) string {
 	if role == "" || role == "active" {
 		return instanceID

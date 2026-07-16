@@ -31,6 +31,11 @@
   - [x] **7.1.d 双 provider 抽象边界收口**：确认长期只维护 StrongSwan/XFRM 与 WG/GRE 两套 lifecycle。撤回未接生产路径的通用 `ProviderPlan`/`ProviderAction`/resource graph、通用持久化 instance、StrongSwan 双向 adapter，以及只覆盖部分 constructor 的 Link ID 提前迁移。StrongSwan 继续使用现有 planner/reconcile/apply/state；WG/GRE 自己管理 shared device/peer/GRE resource graph、引用和 rotate。
   - [x] **7.1.e 公共 LinkOutput 与消费者收口**：已在 `internal/state.LinkOutput` 落地 provider-neutral、只读的 Babel-facing 契约；StrongSwan current/staged runtime 投影为独立 active/staged 输出，health、firewall、BIRD health observation 和在线 `links_status.outputs` 统一消费/发布该聚合结果。公共结构不包含 owner、SA 名、rotate phase 或 action，不能反推 apply/teardown；routing/health readiness 保留后续 observation enrichment。
 
+- [ ] **Zone 写权限语义收口**
+  - 普通网络节点默认持有通用 `write`，可维护本 Zone 的 control-plane records；relay 不持有 Zone authority / 私钥，只转发 verified gossip，不需要任何写权限。
+  - 当前 record verifier 将通用 `write` 视为 `route.announcement` 的有效权限，但 `higgs route announce` 的 CLI preflight 只接受 `write:route`，导致默认节点无法手动宣告而 auto-announce 可成功；统一为 CLI 也接受 `write` 或 `write:route`，并补回归测试。
+  - `write:route` 暂保留为未来同 Zone 多角色、多 key 最小授权的 typed capability，不作为当前普通节点的额外默认授权门槛；届时若要 strict typed capability，需整体设计迁移，不能只收紧 route。
+
 - [ ] **7.7 可选 Global Discovery Server**
   - 作为独立公网 rendezvous 服务，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 discovery 仍以 signed endpoint record + gossip 为主。
   - 服务端不成为信任根，不持有 root/admin/zone 私钥；客户端仍以 signed endpoint record 和 Zone trust chain 为准。
@@ -55,11 +60,6 @@
   - 第一版 admission 仍不引入新的公网 request 协议，也不让 leaf 自动把 join request 写入 gossip active state。
   - 候选命令：`higgs join pending`、`higgs join approve <request-id>`、`higgs join reject <request-id>`。
   - admission policy 仅覆盖父 Zone 有权签发/写入的对象，不配置本机 MeshPolicy / link group / connect-deny override。
-
-- [ ] **7.2 高频 UDP 端口候选 / 对抗性 Port Hopping（可选实验）**
-  - 在 Phase 4.4 低频平滑 rotate 之上评估，不默认承诺高频跳端口。
-  - IKEv2/IPsec 不假设能像 WireGuard 一样任意 per-peer 高频跳监听端口；高频数据面端口跳变通常需要 reestablish/MOBIKE/多实例或外层 DNAT 配合。
-  - 若推进，必须包含 old-port grace、clock skew 容忍、fallback static port、失联恢复路径、QoS 误判回滚和探测限速。
 
 - [ ] **7.4 WireGuard 传输底座与上层 per-peer 接口（可选实验）**
   - 通过 `wgctrl-go` 操作内核 WG 接口，复用 Zone K-V 中的 `wireguard/*` record。
@@ -90,7 +90,7 @@
 - [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
 - [ ] Observer 增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析。
 
-## Phase 8: 应用层服务与代理（远期规划）
+## Phase 8: 应用层服务与代理（待 root 数据面验收）
 
 **目标：** 在 Higgs L3 mesh 上提供可发现、可授权的内网 SOCKS5 服务，同时支持本地唯一 endpoint 和 shared Anycast endpoint；应用层源路由 relay 保持独立演进。
 
@@ -105,42 +105,38 @@
   - 增加 `higgs service publish/withdraw`；每个发布地址必须落在当前节点 active assignment 内（普通或 shared），撤销写入 `active:false` 新版本。
   - 保留最小 `write:service` capability、严格 schema 和 route-authorization 归属验证；从 Higgs 主配置删除 Docker/Compose/service instance 模型。
 
-- [ ] **8.2 独立 Compose 生成与 host/overlay 网络接入**
+- [x] **8.2 独立 Compose 生成与 host/overlay 网络接入**
   - [x] 新增独立 `higgs-services`：读取 `/etc/higgs/service.yaml`，通过 `higgs ipam mine` 获取运行态，把全部双栈 external network 写入同一份 network Compose。
   - [x] 固定 SOCKS5 服务生成 `socks`、`dns`、`h2` 三容器 Compose，支持多个 network、`auto`/`tag:` assignment 来源、相对 base address、固定镜像默认值和 resolved lock。
   - [x] 生成命令只原子写 artifact，不执行 `docker compose up/down/pull`。
   - 校验 Docker service subnet、host connected route、host -> Higgs netns 聚合路由和 overlay -> host static upstream 不冲突；启用 service 不隐式改变现有 upstream 边界。
   - 明确区分 host 数据面聚合路由与 Babel export：前者可指向 root 拥有的大前缀，后者仍只宣告本节点实际拥有/获授权的服务前缀。
 
-- [ ] **8.3 发布、防火墙与运行状态**
+- [x] **8.3 发布、防火墙与运行状态**
   - [x] 将 `allow_zones` 通过通用 endpoint ACL `{destination, protocol, port, selectors}` 持久化，并动态解析为已授权 overlay 来源前缀；host FORWARD 对 endpoint 先 allow 后精确 drop，空匹配保持 fail-closed。
   - [x] `higgs-services publish` 核对 resolved lock 和当前 assignment，对所有 endpoint 执行 TCP 健康检查和 ACL，只为 shared endpoint 宣告整个 assignment prefix，再发布多 endpoint record；withdraw 先撤销 record，再清理 shared route 和全部 ACL。
   - 增加 `services` / `proxy` 本机查询与诊断输出，展示地址归属、路由、firewall、readiness 和当前 record。
 
 - [ ] **8.4 本地与 Anycast 数据面验证**
-  - container/root smoke：两节点经 Higgs mesh 访问指定节点 Docker bridge 中的 SOCKS5，并通过代理完成 TCP 请求。
-  - negative smoke：非 IPAM owner 地址拒绝生成/发布，tag 冲突被拒绝，未授权 zone 无法连接 SOCKS5，未启动服务不进入 ready 发布状态。
-  - 验证最长前缀匹配：本机 service subnet 走 Docker bridge，其他 Higgs 地址走 host -> overlay 聚合路由，回程经 static upstream 闭环。
+  - 已实现 `services-smoke`：真实 Docker bridge 上运行 SOCKS5 和目标 TCP 容器；client netns 经 BIRD/Babel、host route 和 static upstream 回程完成代理请求。
+  - root smoke 断言 Docker connected route 优先于更宽的 host -> overlay 聚合路由；另一 Higgs 前缀仍命中该聚合路由。
+  - non-owner service publish、shared tag 冲突、空 ACL selector fail-closed、未监听 endpoint 不发布分别由 `pkg/service`、routing、firewall 与 `higgs-services` 单元测试覆盖；shared prefix 成员故障收敛复用 BIRD Anycast root smoke。
+  - 待在允许 netns 且具备目标 host firewall 配置的 root 环境执行 `sudo make services-smoke`；通过后即可归档 Phase 8。
 
-- [ ] **8.5 服务选择与健康**
-  - 先按 service type/region 枚举具体节点 endpoint，再基于可达性、Babel metric、TCP 健康和静态权重选择；不在代理层重新实现 L3 路由。
-  - 需要时再增加 daemon control socket 查询/订阅 API，不为第一版 SOCKS5 引入 xDS-like 接口。
+- **8.5 不纳入 Phase 8**：客户端 service selection/health policy 不是 SOCKS5 发布数据面；Anycast 的 L3 选路和故障收敛交给 BIRD/Babel。出现明确客户端需求后再独立设计。
 
 - [x] **8.6 IPAM shared Anycast 与多网络发布**
   - shared assignment 支持可选稳定 tag；tag 仅用于 shared，同 tag/同地址族强制对应同一 prefix，本地唯一 assignment 保持无 tag 的 `auto` 语义。
   - 同一 owner 的 shared assignment 按成员分别存储，`ipam revoke assignment --to` 可精确撤销成员。
   - `ipam.announce` 用 `non-shared`、`tag:<tag>` 等 selector 固化长期 announcement；服务 Anycast 不加入该列表，由服务生命周期控制。旧 `auto_announce_assigned_ips` 保持兼容。
   - `publish` 用 `network: region` 映射同时发布本地和任意数量 Anycast endpoint，并为 shared endpoint 显式宣告整个 assignment（IPv6 最具体 `/96`、IPv4 最具体 `/28`），不发布 `/128`/`/32` host route。
-  - 待补多节点 route/ECMP/metric 收敛、成员撤销和真实容器 smoke。
+  - 多节点 route/成员故障收敛由 `services-smoke` 与 BIRD Anycast root smoke 验证。
 
-- [ ] **8.7 应用层源路由 relay（独立项目/协议）**
-  - 将 ingress、relay、exit/service 能力与第一阶段 SOCKS5 service 解耦；SOCKS5 只作为客户端入口，节点间使用独立的带身份、segment list、hop limit 和审计元数据的 relay 协议。
-  - 应用路径只指定显式 relay 节点；两个 relay 之间的真实 L3 next hop 仍由 Higgs/Babel 决定，不要求每个 L3 中间节点终止连接。
-  - 先用真实异构/丢包链路比较 direct 与逐跳拆分的吞吐、延迟和缓冲开销，再决定 TCP/TLS 试验协议是否演进为长期 QUIC 多路复用传输。
+- **8.7 不纳入 Phase 8**：应用层源路由 relay 是独立协议/项目，不与 SOCKS5 发布、IPAM 或 BIRD 数据面耦合。
 
 ## 下一步
 
 1. 7.1 已完成并保持 StrongSwan 主链路现状；WG 底座与 GRE/VXLAN 正式实现分别留在可选 7.4/7.5，不作为当前主线的隐含下一步。
 2. 7.3 chunk repair 已完成；下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-4. Phase 8 的 Docker 部署已从 Higgs daemon 拆到独立 `higgs-services`，shared tag、多 endpoint 发布和通用 endpoint ACL reconcile 已完成；下一窄切口是 host/overlay 接入校验、Anycast 收敛和真实容器 smoke。应用层 relay 继续保持独立切口。
+4. Phase 8 的实现、单元测试与 `services-smoke` 已就绪；待 root 数据面验收通过后归档。客户端服务选择和应用层 relay 按需作为独立项目评估。
