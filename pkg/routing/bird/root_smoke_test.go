@@ -862,8 +862,10 @@ func TestBabelDualInterfaceCostFailoverRootSmoke(t *testing.T) {
 
 	dumpOnFail := func() {
 		for _, pair := range []struct{ ns, socket string }{{nsA, specA.ControlSocketPath}, {nsB, specB.ControlSocketPath}} {
-			out, _ := exec.CommandContext(ctx, "birdc", "-s", pair.socket, "show", "route", "all").CombinedOutput()
-			t.Logf("--- routes in %s ---\n%s", pair.ns, out)
+			routes, _ := exec.CommandContext(ctx, "birdc", "-s", pair.socket, "show", "route", "all").CombinedOutput()
+			neighbors, _ := exec.CommandContext(ctx, "birdc", "-s", pair.socket, "show", "babel", "neighbors").CombinedOutput()
+			t.Logf("--- Babel neighbors in %s ---\n%s", pair.ns, neighbors)
+			t.Logf("--- routes in %s ---\n%s", pair.ns, routes)
 		}
 	}
 	defer func() {
@@ -871,6 +873,13 @@ func TestBabelDualInterfaceCostFailoverRootSmoke(t *testing.T) {
 			dumpOnFail()
 		}
 	}()
+
+	// Do not start judging cost direction until both independently-created
+	// links have formed Babel adjacencies. BIRD can discover one veth later
+	// than the other during namespace setup; treating that transient state as
+	// a cost-selection result made this explicit experiment unnecessarily flaky.
+	waitForBabelNeighborsWithin(t, ctx, specA.ControlSocketPath, []string{aLeft, aRight}, 40)
+	waitForBabelNeighborsWithin(t, ctx, specB.ControlSocketPath, []string{bLeft, bRight}, 40)
 
 	// rxcost is advertised to the peer: B chooses bLeft because A assigns 96
 	// to aLeft, while A chooses aRight because B assigns 96 to bRight.
@@ -1137,7 +1146,9 @@ func generateDualInterfaceBabelConfig(spec BirdInstanceSpec, interfaceCosts map[
 	sort.Strings(names)
 	var ifaceBlocks strings.Builder
 	for _, iface := range names {
-		fmt.Fprintf(&ifaceBlocks, "    interface %q {\n        type wireless;\n        rxcost %d;\n    };\n", iface, interfaceCosts[iface])
+		// Fast intervals keep this isolated convergence experiment bounded while
+		// leaving the production BIRD generator's timings unchanged.
+		fmt.Fprintf(&ifaceBlocks, "    interface %q {\n        type wireless;\n        rxcost %d;\n        hello interval 1 s;\n        update interval 1 s;\n    };\n", iface, interfaceCosts[iface])
 	}
 	return fmt.Sprintf(`# Phase 7.1.a dual-interface Babel experiment
 log "%s" all;
@@ -1165,6 +1176,33 @@ protocol babel {
 
 func waitForSelectedAnycastIface(t *testing.T, ctx context.Context, socketPath, prefix string, allowedIfaces []string, forbiddenIface string) (string, string) {
 	return waitForSelectedAnycastIfaceWithin(t, ctx, socketPath, prefix, allowedIfaces, forbiddenIface, 60)
+}
+
+func waitForBabelNeighborsWithin(t *testing.T, ctx context.Context, socketPath string, expectedIfaces []string, attempts int) {
+	t.Helper()
+	expected := make(map[string]struct{}, len(expectedIfaces))
+	for _, iface := range expectedIfaces {
+		expected[iface] = struct{}{}
+	}
+
+	var last string
+	for i := 0; i < attempts; i++ {
+		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "babel", "neighbors").CombinedOutput()
+		last = string(out)
+		if err == nil {
+			seen := make(map[string]struct{}, len(expected))
+			for _, neighbor := range parseBabelNeighbors(last) {
+				if _, ok := expected[neighbor.Interface]; ok {
+					seen[neighbor.Interface] = struct{}{}
+				}
+			}
+			if len(seen) == len(expected) {
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("Babel neighbors on interfaces %v did not converge; last neighbor output:\n%s", expectedIfaces, last)
 }
 
 func waitForSelectedAnycastIfaceWithin(t *testing.T, ctx context.Context, socketPath, prefix string, allowedIfaces []string, forbiddenIface string, attempts int) (string, string) {
