@@ -581,6 +581,6 @@ make firewall-container-smoke
 ## 16. 与现有文档的关系
 
 - `todo.md` Phase 6.3 是可执行任务清单。
-- `docs/phase6-ipam-design.md` 定义 IPAM assignment、route announcement 和 anycast/shared assignment，Firewall planner 消费其派生结果。
-- `docs/phase5-7-per-netns-bird-design.md` 定义 per-netns BIRD 和 route authorization 边界，Firewall policy 必须与 BIRD policy 共用 forwarding decision。
+- `docs/new/routing.md` 定义 IPAM assignment、route announcement、anycast/shared assignment 和 per-netns BIRD 边界，Firewall planner 消费其派生结果。
+- Firewall policy 必须与 BIRD policy 共用 forwarding decision。
 - `docs/design.md` 保持总体架构与状态概览，本文件是 Phase 6.3 的细化设计。

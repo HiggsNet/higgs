@@ -820,7 +820,7 @@
   - [x] BIRD import filter 接受所有已分配 IPAM 空间内的前缀（使用 `+` 包含更具体路由），拒绝 default route、bogon、未授权聚合。
   - [x] BIRD export filter 只发布本节点 `local export set`（本地 Zone 的 authorized announcements）。
   - [x] filter 变化时重写 bird.conf 并 `birdc configure`；后续可优化为 soft + reload in/out。
-  - [ ] ~~per-peer/interface import whitelist~~ 已废弃：Babel 多跳传播与 per-interface filter 冲突，见 `docs/phase5-7-per-netns-bird-design.md` 6.3 节。替代方案为控制面交叉审计（Phase 7 后续）。
+  - [ ] ~~per-peer/interface import whitelist~~ 已废弃：Babel 多跳传播与 per-interface filter 冲突，见 `docs/new/routing.md` 5.5 节。替代方案为控制面交叉审计（Phase 7 后续）。
   - [ ] route-table auditor 作为可选兜底留到后续。
 
 - [x] **5.4 策略路由与路由表 ownership（第一版）**
@@ -849,7 +849,7 @@
   - [ ] 跨数据面 rotate smoke 已降级为 Phase 7 之后远期增强：结合端口/IPsec rotate 与真实 BIRD route/metric 观测验证数据面切换窗口。
 
 - [x] **5.7 BIRD 从 per-overlay 改为 per-netns（配置模型重构）**
-  - 设计文档：`docs/phase5-7-per-netns-bird-design.md`（完整调研与安全分析）、`docs/design.md` Phase 5 netns 章节、`docs/phase6-ipam-design.md` 第 13 章。
+  - 设计文档：`docs/new/routing.md`（完整 routing / IPAM / per-netns BIRD 规范）、`docs/design.md` Phase 5 netns 章节。
   - **核心决策：** 一个 netns 内只运行一个 BIRD 实例，同一 netns 下的所有 overlay 共享该实例；routing 配置从 `overlays[].routing` 上提到 `routing.instances[]` / `netns` 层级。
   - **Router-ID 派生：** `StableRouterID(localZone, rootTrust, netnsName)`，第三个参数从 overlayID 改为 netns 标识；同一节点不同 netns 的 BIRD 必须有不同 Router-ID，不同节点因 zone 不同也自然不同。netns name 通过 `routing/netns` record  announce，供对端审计时反推 Router-ID。
   - **安全设计结论（见设计文档 6.x 节）：**
@@ -875,7 +875,7 @@
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（已完成主线归档）
 
-**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/phase6-event-driven-design.md`、`docs/phase6-ipam-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
+**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/new/routing.md`、`docs/phase6-event-driven-design.md`、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
 
 - [x] **6.0 事件驱动控制面重构**
   - [x] 默认启用 event loop + `SyncSession` FSM；packet demux、timer manager、异步 object pull、UDP chunk fallback、relay fanout 均接入事件循环。

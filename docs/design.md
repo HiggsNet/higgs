@@ -1,10 +1,10 @@
 # Higgs Mesh VPN 控制平面设计
 
-> **文档状态（2026-06）**
-> Phase 0–4 已落地实现，Phase 5 路由授权与 BIRD Babel adapter 第一版已实现。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 第一版已实现 route announcement / IPAM record、AuthorizedRouteSet、BIRD config generator / birdc client / process manager、daemon routing reconcile、`higgs route` 与 `higgs debug babel/routes/route` CLI，并通过 `make routing-dry-run-smoke` 验证。
-> 
-> **待调整：** BIRD 实例应从「每个 overlay 一个 BIRD」改为「每个 netns 一个 BIRD」。同一 netns 内的多个 overlay 共享同一路由守护进程，routing 配置从 `overlays[].routing` 上提到 `routing.instances[]` / `netns` 层级。详见下文 Phase 5 / netns 章节。
+> **文档状态（2026-07）**
+> Phase 0–4 已落地实现，Phase 5 routing / IPAM / per-netns BIRD 已完成并迁移到 `docs/new/routing.md`。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 已实现 route announcement / IPAM record / `routing/netns`、AuthorizedRouteSet、per-netns BIRD config generator / birdc client / process manager、daemon routing reconcile、veth upstream、`higgs route` / `higgs ipam` 与 `higgs debug babel/routes/route` CLI，并通过 `make routing-dry-run-smoke` 验证。
+>
+> 本文档保留架构总览与协议背景；routing / IPAM 的具体当前行为、record schema、授权规则、BIRD 运行时与诊断以 `docs/new/routing.md` 为准。旧的 `docs/phase5-route-record-design.md`、`docs/phase6-ipam-design.md`、`docs/phase5-7-per-netns-bird-design.md` 已被合并删除。
 
 ## 原始需求摘要
 

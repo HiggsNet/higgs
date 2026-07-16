@@ -149,7 +149,7 @@ make observer-smoke
 sudo make root-smoke
 ```
 
-`root-smoke` 会跑真实 StrongSwan/XFRM、BIRD/Babel、firewall、health fault-injection 和 revocation ordering。它会复用共享 lane，避免再通过 `revocation-data-plane-smoke` 重复跑 firewall/BIRD/StrongSwan 子集。
+`root-smoke` 会跑真实 StrongSwan/XFRM、BIRD/Babel、firewall、health fault-injection 和 revocation ordering。它会复用共享 lane，避免再通过 `revocation-data-plane-smoke` 重复跑 firewall/BIRD/StrongSwan 子集。Phase 8 的服务数据面还依赖 Docker bridge，因此不包含在该集合中，需显式运行 `services-smoke`。
 
 下面是按数据面分组的入口，适合局部验证。运行前先跑对应 preflight；container 入口用于隔离宿主差异，通常和同名 root 入口二选一。
 
@@ -170,13 +170,16 @@ sudo make health-fault-smoke
 make health-fault-container-smoke
 sudo make revocation-data-plane-smoke
 make revocation-data-plane-container-smoke
+
+# Phase 8：需要 root、Docker、ip、bird/birdc 和 nft
+sudo make services-smoke
 ```
 
 避免重复跑的关系：
 
 | 如果已经跑了 | 通常不需要再单独跑 |
 |--------------|--------------------|
-| `sudo make root-smoke` | 下面列出的各个 root 数据面 smoke。 |
+| `sudo make root-smoke` | 下面列出的常规 root 数据面 smoke；不包括依赖 Docker bridge 的 `services-smoke`。 |
 | `sudo make revocation-data-plane-smoke` | `sudo make firewall-smoke`、`sudo make bird-babel-smoke` 和 revocation 相关的精简 XFRM bring-up；该组合目标内部会再次调用这些 lane。 |
 | `make revocation-data-plane-container-smoke` | 对应的 root 组合目标，除非你正在对比宿主和容器权限差异。 |
 
@@ -216,6 +219,7 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `health-fault-container-smoke` | 在 privileged container 中运行 health fault-injection smoke。 |
 | `revocation-data-plane-smoke` | 组合 firewall、BIRD 和 StrongSwan 的 revocation 数据面验证，需要 root。 |
 | `revocation-data-plane-container-smoke` | 在 privileged container 中运行组合 revocation 数据面验证。 |
+| `services-smoke` | Phase 8 的显式 root 入口。先跑 `app/higgs-services` 单元测试，再以真实 Docker bridge、SOCKS5 与目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、BIRD/Babel 验证端到端代理数据面，并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker、`ip`、`bird`/`birdc` 和 `nft`；不包含在 `root-smoke` 或 `smoke-all`。 |
 
 ## 失败判断
 
@@ -226,6 +230,7 @@ smoke 失败时先看目标属于哪一层：
 - object pull / chunk fallback 失败，区分 TCP object pull、UDP chunk repair 和外部端口阻断工具是否真的可用。
 - dry-run 目标失败，通常是代码或测试 fixture 回归，不应归因于宿主系统能力。
 - root/container smoke 失败，先看 preflight、容器权限、charon/VICI、BIRD、nftables/iptables 和 netns/XFRM 诊断输出。
+- `services-smoke` 失败，额外检查 Docker daemon、临时 bridge/network 与容器清理、host connected route 是否优先于 overlay 聚合路由，以及 BIRD/Babel 和 static upstream 回程。
 
 优先收集这些证据再改代码：
 
