@@ -18,6 +18,7 @@ import (
 	higgsstate "github.com/Catofes/higgs/internal/state"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -287,7 +288,7 @@ func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspecth
 			views = append(views, view)
 			continue
 		}
-		observed, err := d.newBirdClient(socketPath).Status(ctx)
+		observed, err := d.newBirdClient(socketPath, bird.InternalRouteTableNames(inst.NetNS)...).Status(ctx)
 		if err != nil {
 			view.Error = err.Error()
 			views = append(views, view)

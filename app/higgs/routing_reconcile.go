@@ -479,7 +479,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 		d.observeBirdForHealth(ctx, state, netnsName, instState.Overlays, spec.ControlSocketPath)
 
 	case bird.BirdModeExternal:
-		client := d.newBirdClient(spec.ControlSocketPath)
+		client := d.newBirdClient(spec.ControlSocketPath, bird.InternalRouteTableNames(netnsName)...)
 		observed, err := client.Status(ctx)
 		if err != nil {
 			instState.State = birdInstanceStateError
@@ -510,7 +510,7 @@ func (d *DaemonService) observeBirdForHealth(ctx context.Context, state *stateFi
 	}
 	observeCtx, cancel := context.WithTimeout(ctx, birdHealthObservationTimeout)
 	defer cancel()
-	observed, err := d.newBirdClient(socketPath).Status(observeCtx)
+	observed, err := d.newBirdClient(socketPath, bird.InternalRouteTableNames(netnsName)...).Status(observeCtx)
 	if err != nil {
 		d.recordBirdHealthObservationUnavailableForState(state, netnsName, overlays)
 		return
@@ -649,11 +649,11 @@ func (d *DaemonService) stopManagedBirdInstances(ctx context.Context, force bool
 	return firstErr
 }
 
-func (d *DaemonService) newBirdClient(socketPath string) birdClient {
+func (d *DaemonService) newBirdClient(socketPath string, routeTables ...string) birdClient {
 	if d.birdClientFactory != nil {
 		return d.birdClientFactory(socketPath, 10*time.Second)
 	}
-	return bird.NewClient(socketPath, 10*time.Second)
+	return bird.NewClientWithRouteTables(socketPath, 10*time.Second, routeTables)
 }
 
 func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, command string) *inspect.BirdDumpResponse {
@@ -661,10 +661,10 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, comma
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return response
 	}
-	commands := defaultBirdDumpCommands()
+	customCommand := ""
 	if trimmed := strings.TrimSpace(command); trimmed != "" {
 		command = trimmed
-		commands = []string{command}
+		customCommand = command
 	} else {
 		command = ""
 	}
@@ -687,6 +687,10 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, comma
 			response.Instances[inst.NetNS] = item
 			continue
 		}
+		commands := defaultBirdDumpCommands(inst.NetNS)
+		if customCommand != "" {
+			commands = []string{customCommand}
+		}
 		client := d.newBirdClient(inst.ControlSocket)
 		for _, cmd := range commands {
 			out, err := client.Raw(ctx, cmd)
@@ -704,14 +708,18 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, comma
 	return response
 }
 
-func defaultBirdDumpCommands() []string {
-	return []string{
+func defaultBirdDumpCommands(netnsName string) []string {
+	commands := []string{
 		"show status",
 		"show protocols all",
 		"show route all",
 		"show interfaces",
 		"show babel neighbors",
 	}
+	for _, table := range bird.InternalRouteTableNames(netnsName) {
+		commands = append(commands, fmt.Sprintf("show route table %s all", table))
+	}
+	return commands
 }
 
 func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ string, ng *netnsOverlayGroup, netnsCfg netnsConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {

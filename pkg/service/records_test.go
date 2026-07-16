@@ -87,6 +87,27 @@ func TestAuthorizeSOCKS5RecordUsesValidIPAMAssignment(t *testing.T) {
 	}
 }
 
+func TestAuthorizeNetworkPrefixRequiresWholeNonSharedAssignment(t *testing.T) {
+	owner := zone.ZonePath("node-a.catofes.")
+	authorized := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{{
+		Prefix: netip.MustParsePrefix("fd42:1::/64"), AssignedTo: owner,
+	}}}
+	assignment, err := AuthorizeNetworkPrefix(owner, netip.MustParsePrefix("fd42:1::/112"), authorized)
+	if err != nil {
+		t.Fatalf("AuthorizeNetworkPrefix: %v", err)
+	}
+	if assignment.Prefix.String() != "fd42:1::/64" {
+		t.Fatalf("assignment = %s", assignment.Prefix)
+	}
+	if _, err := AuthorizeNetworkPrefix(owner, netip.MustParsePrefix("fd42:2::/112"), authorized); err == nil || !strings.Contains(err.Error(), "service_network_unauthorized") {
+		t.Fatalf("outside assignment error = %v", err)
+	}
+	authorized.AllAssignments[0].Shared = true
+	if _, err := AuthorizeNetworkPrefix(owner, netip.MustParsePrefix("fd42:1::/112"), authorized); err == nil || !strings.Contains(err.Error(), "non-shared") {
+		t.Fatalf("shared assignment error = %v", err)
+	}
+}
+
 func putJSONRecord(t *testing.T, state *zone.ZoneState, key, recordType string, value any) {
 	t.Helper()
 	data, err := json.Marshal(value)

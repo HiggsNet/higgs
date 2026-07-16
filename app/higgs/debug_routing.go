@@ -81,10 +81,10 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*inspect.BirdDumpR
 	if err != nil {
 		return nil, err
 	}
-	commands := defaultBirdDumpCommands()
+	customCommand := ""
 	if trimmed := strings.TrimSpace(command); trimmed != "" {
 		command = trimmed
-		commands = []string{command}
+		customCommand = command
 	} else {
 		command = ""
 	}
@@ -113,6 +113,10 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*inspect.BirdDumpR
 			item.Error = "control socket is not configured"
 			response.Instances[inst.NetNS] = item
 			continue
+		}
+		commands := defaultBirdDumpCommands(inst.NetNS)
+		if customCommand != "" {
+			commands = []string{customCommand}
 		}
 		client := bird.NewClient(controlSocket, 10*time.Second)
 		for _, cmd := range commands {

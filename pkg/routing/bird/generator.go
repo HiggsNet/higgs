@@ -403,3 +403,11 @@ func sanitizeNetNSName(name string) string {
 func defaultInternalTableName(netnsName string) string {
 	return "higgs_" + sanitizeNetNSName(netnsName)
 }
+
+// InternalRouteTableNames returns the BIRD IPv4 and IPv6 table names generated
+// for a network namespace when no custom internal table name is configured.
+// These tables are distinct from BIRD's default master tables.
+func InternalRouteTableNames(netnsName string) []string {
+	base := defaultInternalTableName(netnsName)
+	return []string{base + "4", base + "6"}
+}

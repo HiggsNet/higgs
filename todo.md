@@ -101,13 +101,14 @@
 - SOCKS5 第一版可使用 `NO AUTH`，由 Higgs overlay 身份/前缀和本机 firewall 提供 zone/node 级授权；这不承诺同一节点内的用户级身份区分。
 
 - [x] **8.1 最小 service 配置与 record**
-  - 定义本地 service 配置：`id`、`type: socks5`、`region`、`netns`、`address`、`port`、`allow_zones`和 Compose 渲染参数。
+  - 定义 host Docker service network：`services.networks` map key 同时作为网络 ID，Docker 名默认 `higgs-<id>`；IPv4/IPv6 使用 `来源;subnet;动态范围;gateway` 描述符，支持 `local`、`auto`、`assignment:<CIDR>`，并兼容旧 sequence 长格式。
+  - 定义本地 service instance 配置：`id`、`type: socks5`、`region`、`network`、固定/相对 `address`、`port`、`allow_zones` 和 Compose 渲染参数；相对静态地址必须避开 Docker 动态池。
   - `address` 必须落在当前节点已授权的 IPAM prefix 内；第一版不按服务类型猜测 `::2` 等地址。
   - 定义最小 `services/<id>` / `service.socks5.v1` record，只发布 `type`、`region`、`address`和 `port`；节点/zone 由 record 签发者推导，`allow_zones` 保持为本机策略。
   - 补充最小写入 capability 和 schema/归属/route-authorization 验证。
 
 - [ ] **8.2 Compose 生成与 host/overlay 网络接入**
-  - 以 `share/networks` 和 `share/socks5` 的旧实现为输入，生成独立的 Docker IPv6 network Compose 和 SOCKS5 Compose/配置文件。
+  - 以 `share/networks` 和 `share/socks5` 的旧实现为输入，把全部 IPv4/IPv6 external network 生成到同一份 Docker network Compose，并生成 SOCKS5 Compose/配置文件。
   - 生成命令只写 artifact 并输出管理员后续命令，不执行 `docker compose up/down/pull`。
   - 校验 Docker service subnet、host connected route、host -> Higgs netns 聚合路由和 overlay -> host static upstream 不冲突；启用 service 不隐式改变现有 upstream 边界。
   - 明确区分 host 数据面聚合路由与 Babel export：前者可指向 root 拥有的大前缀，后者仍只宣告本节点实际拥有/获授权的服务前缀。

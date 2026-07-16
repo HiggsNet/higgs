@@ -49,6 +49,17 @@ eth0       fe80::3             512
 0000 
 `
 
+const sampleShowBabelNeighborsV219 = `BIRD 2.19.1 ready.
+higgs_babel_h2:
+IP address                Interface  Metric Routes Hellos Expires Auth  RTT (ms)
+fe80::dc29:e1e4:3622:bde5 hgs1d556624    100      1     16   5.391 No       5.009
+0000`
+
+const sampleShowHiggsH26Routes = `Table higgs_h26:
+2a0d:2905:1:2::/64   unicast [higgs_babel_h2 2026-07-10] * (130/100) [00:00:00:00:f7:24:52:c9]
+        via fe80::dc29:e1e4:3622:bde5 on hgs1d556624
+0000`
+
 // fakeServer is a minimal birdc-style Unix socket server for tests.
 type fakeServer struct {
 	listener net.Listener
@@ -198,6 +209,47 @@ func TestStatusParsing(t *testing.T) {
 
 	if len(state.Neighbors) != 2 {
 		t.Errorf("neighbors = %d, want 2", len(state.Neighbors))
+	}
+}
+
+func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
+	server := newFakeServer(t, func(cmd string) string {
+		switch cmd {
+		case "show status":
+			return sampleShowStatus
+		case "show protocols all":
+			return sampleShowProtocols
+		case "show route table higgs_h24 all":
+			return "Table higgs_h24:\n0000 \n"
+		case "show route table higgs_h26 all":
+			return sampleShowHiggsH26Routes + " \n"
+		case "show interfaces":
+			return sampleShowInterfaces
+		case "show babel neighbors":
+			return sampleShowBabelNeighborsV219 + " \n"
+		default:
+			return "8001 Unknown command\n0000 \n"
+		}
+	})
+	defer server.close()
+
+	client := NewClientWithRouteTables(server.socket, 5*time.Second, InternalRouteTableNames("h2"))
+	state, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+	if state.Stale {
+		t.Fatalf("unexpected stale state, warnings: %v", state.Warnings)
+	}
+	if len(state.Neighbors) != 1 || state.Neighbors[0].Interface != "hgs1d556624" {
+		t.Fatalf("neighbors = %#v", state.Neighbors)
+	}
+	if len(state.Routes) != 1 {
+		t.Fatalf("routes = %#v", state.Routes)
+	}
+	route := state.Routes[0]
+	if !route.Selected || route.Iface != "hgs1d556624" || route.Metric != 130 {
+		t.Fatalf("route = %#v", route)
 	}
 }
 

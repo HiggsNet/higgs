@@ -130,6 +130,37 @@ func AuthorizeSOCKS5Record(record *zone.Record, authorized *routing.AuthorizedRo
 	return best, nil
 }
 
+// AuthorizeNetworkPrefix checks that a host-side Docker service subnet is
+// wholly contained by an active, valid, non-shared assignment to owner.
+func AuthorizeNetworkPrefix(owner zone.ZonePath, prefix netip.Prefix, authorized *routing.AuthorizedRouteSet) (*routing.AssignmentEntry, error) {
+	if !owner.Valid() {
+		return nil, fmt.Errorf("invalid service network owner %q", owner)
+	}
+	if !prefix.IsValid() {
+		return nil, errors.New("service network prefix is invalid")
+	}
+	if authorized == nil {
+		return nil, errors.New("service authorization set is nil")
+	}
+	var best *routing.AssignmentEntry
+	for _, assignment := range authorized.AllAssignments {
+		if assignment == nil || assignment.Shared || assignment.AssignedTo != owner || !prefixContainsPrefix(assignment.Prefix, prefix) {
+			continue
+		}
+		if best == nil || assignment.Prefix.Bits() > best.Prefix.Bits() {
+			best = assignment
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf("service_network_unauthorized: subnet %s is not covered by an active non-shared IPAM assignment to %s", prefix, owner)
+	}
+	return best, nil
+}
+
+func prefixContainsPrefix(parent, child netip.Prefix) bool {
+	return parent.IsValid() && child.IsValid() && parent.Addr().Is4() == child.Addr().Is4() && parent.Bits() <= child.Bits() && parent.Contains(child.Addr())
+}
+
 func requireJSONEOF(decoder *json.Decoder) error {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {

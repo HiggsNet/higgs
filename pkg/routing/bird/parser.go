@@ -21,7 +21,7 @@ var (
 	protocolRowRe    = regexp.MustCompile(`(?m)^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*))?`)
 
 	routeHeaderRe = regexp.MustCompile(`(?im)^\s*(?:Table|VRF)\s+`)
-	routeLineRe   = regexp.MustCompile(`(?m)^\s*(\S+?)\s+(?:unicast|multicast)?\s*\[([^\]]+)\]\s*(\*)?\s*\((\d+)\)`)
+	routeLineRe   = regexp.MustCompile(`(?m)^\s*(\S+?)\s+(?:unicast|multicast)?\s*\[([^\]]+)\]\s*(\*)?\s*\((\d+)(?:/\d+)?\)`)
 	routeViaRe    = regexp.MustCompile(`(?m)^\s+via\s+(\S+)\s+on\s+(\S+)`)
 	routeFromRe   = regexp.MustCompile(`(?m)^\s+from\s+(\S+)`)
 
@@ -29,8 +29,8 @@ var (
 	interfaceRowRe    = regexp.MustCompile(`(?m)^\s*(\S+)\s+(up|down)\s+(\d+)\s+(\S+)?`)
 	interfaceAddrRe   = regexp.MustCompile(`(?im)^\s+(?:IPv4|IPv6|addresses?:?)\s*[:=]?\s*(.+)`)
 
-	babelHeaderRe = regexp.MustCompile(`(?im)^\s*Interface\s+Neighbor`)
-	babelRowRe    = regexp.MustCompile(`(?m)^\s*(\S+)\s+(\S+)\s+(\d+)(?:\s+\S+\s+\S+)?`)
+	babelLegacyHeaderRe = regexp.MustCompile(`(?im)^\s*Interface\s+Neighbor`)
+	babelV219HeaderRe   = regexp.MustCompile(`(?im)^\s*IP\s+address\s+Interface\s+Metric`)
 )
 
 // stripCodes removes BIRD CLI numeric prefixes like "1001-" or "0001 " from each line.
@@ -273,29 +273,41 @@ func parseBabelNeighbors(output string) []BirdNeighbor {
 	var neighbors []BirdNeighbor
 
 	lines := strings.Split(output, "\n")
-	var headerFound bool
+	format := ""
 	for _, raw := range lines {
 		line := strings.TrimRight(raw, "\r")
-		if !headerFound {
-			if babelHeaderRe.MatchString(line) {
-				headerFound = true
-			}
+		if babelLegacyHeaderRe.MatchString(line) {
+			format = "legacy"
 			continue
 		}
-		if strings.TrimSpace(line) == "" {
+		if babelV219HeaderRe.MatchString(line) {
+			format = "v219"
+			continue
+		}
+		if format == "" || strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		m := babelRowRe.FindStringSubmatch(line)
-		if len(m) >= 4 {
-			metric, _ := strconv.ParseUint(strings.TrimSpace(m[3]), 10, 32)
-			addr, _ := netip.ParseAddr(strings.TrimSpace(m[2]))
-			neighbors = append(neighbors, BirdNeighbor{
-				Interface: strings.TrimSpace(m[1]),
-				Address:   addr,
-				Metric:    uint32(metric),
-			})
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
 		}
+		var iface, addrText, metricText string
+		switch format {
+		case "legacy":
+			iface, addrText, metricText = fields[0], fields[1], fields[2]
+		case "v219":
+			addrText, iface, metricText = fields[0], fields[1], fields[2]
+		}
+		addr, err := netip.ParseAddr(addrText)
+		if err != nil {
+			continue
+		}
+		metric, err := strconv.ParseUint(metricText, 10, 32)
+		if err != nil {
+			continue
+		}
+		neighbors = append(neighbors, BirdNeighbor{Interface: iface, Address: addr, Metric: uint32(metric)})
 	}
 	return neighbors
 }

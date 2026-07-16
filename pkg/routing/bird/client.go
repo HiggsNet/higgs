@@ -39,18 +39,27 @@ type Client interface {
 }
 
 type birdcClient struct {
-	socketPath string
-	timeout    time.Duration
+	socketPath  string
+	timeout     time.Duration
+	routeTables []string
 }
 
 // NewClient creates a new birdc client connected to socketPath.
 func NewClient(socketPath string, timeout time.Duration) Client {
+	return NewClientWithRouteTables(socketPath, timeout, nil)
+}
+
+// NewClientWithRouteTables creates a BIRD client that collects routes from
+// the supplied internal tables. Without tables, Status retains the historical
+// behavior of querying BIRD's default table with "show route all".
+func NewClientWithRouteTables(socketPath string, timeout time.Duration, routeTables []string) Client {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 	return &birdcClient{
-		socketPath: socketPath,
-		timeout:    timeout,
+		socketPath:  socketPath,
+		timeout:     timeout,
+		routeTables: append([]string(nil), routeTables...),
 	}
 }
 
@@ -77,9 +86,6 @@ func (c *birdcClient) Status(ctx context.Context) (*BirdObservedState, error) {
 		{"protocols", "show protocols all", func(out string, s *BirdObservedState) {
 			s.Protocols = parseProtocols(out)
 		}},
-		{"routes", "show route all", func(out string, s *BirdObservedState) {
-			s.Routes = parseRoutes(out)
-		}},
 		{"interfaces", "show interfaces", func(out string, s *BirdObservedState) {
 			s.Interfaces = parseInterfaces(out)
 		}},
@@ -97,8 +103,30 @@ func (c *birdcClient) Status(ctx context.Context) (*BirdObservedState, error) {
 		}
 		item.parse(out, state)
 	}
+	for _, cmd := range c.routeCommands() {
+		out, err := c.command(ctx, cmd)
+		if err != nil {
+			state.Warnings = append(state.Warnings, fmt.Sprintf("routes command %q failed: %v", cmd, err))
+			state.Stale = true
+			continue
+		}
+		state.Routes = append(state.Routes, parseRoutes(out)...)
+	}
 
 	return state, nil
+}
+
+func (c *birdcClient) routeCommands() []string {
+	if len(c.routeTables) == 0 {
+		return []string{"show route all"}
+	}
+	commands := make([]string, 0, len(c.routeTables))
+	for _, table := range c.routeTables {
+		if table != "" {
+			commands = append(commands, fmt.Sprintf("show route table %s all", table))
+		}
+	}
+	return commands
 }
 
 // Configure performs a full "birdc configure" using the file at path.
