@@ -80,6 +80,7 @@ type controlResponse struct {
 	Revocations       int                           `json:"revocations,omitempty"`
 	PurgePlan         *purgePlan                    `json:"purge_plan,omitempty"`
 	EndpointACLs      []endpointACL                 `json:"endpoint_acls,omitempty"`
+	StateGC           *stateGCPlan                  `json:"state_gc,omitempty"`
 }
 
 type linkInspectionControl struct {
@@ -253,6 +254,18 @@ func admissionStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "links_status"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func stateGCViaControl(rt *Runtime, apply bool) (*controlResponse, bool, error) {
+	if rt != nil && rt.DisableControl {
+		return nil, false, nil
+	}
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "state_gc", Apply: apply})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}

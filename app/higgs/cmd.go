@@ -34,7 +34,29 @@ func rootCommand() *cli.Command {
 			cmdSync(),
 			cmdRecovery(),
 			cmdDebug(),
+			cmdGC(),
 			cmdDB(),
+		},
+	}
+}
+
+func cmdGC() *cli.Command {
+	return &cli.Command{
+		Name:      "gc",
+		Usage:     "Garbage-collect stale local runtime state",
+		UsageText: "higgs gc [--apply] [--direct]",
+		Description: "Preview local runtime state that cannot be referenced by the current configuration. " +
+			"Currently this removes orphan BIRD instance state only; it never stops BIRD, IPsec, or firewall resources. " +
+			"Use --apply to persist the removal.",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "apply", Usage: "Actually remove the stale state; without it the command only prints a preview"},
+			&cli.BoolFlag{Name: "direct", Usage: "Run in this process without contacting the daemon"},
+		},
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: higgs gc [--apply] [--direct]", 1)
+			}
+			return garbageCollectState(cmd.Bool("apply"), cmd.Bool("direct"))
 		},
 	}
 }

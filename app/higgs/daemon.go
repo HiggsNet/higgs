@@ -91,6 +91,7 @@ const (
 	daemonEventReloadConfig          daemonEventType = "reload_config"
 	daemonEventRoutingReload         daemonEventType = "routing_reload"
 	daemonEventIPsecCleanup          daemonEventType = "ipsec_cleanup"
+	daemonEventStateGC               daemonEventType = "state_gc"
 	daemonEventIPsecPortRotate       daemonEventType = "ipsec_port_rotate"
 	daemonEventIPsecLifecycle        daemonEventType = "ipsec_lifecycle"
 	daemonEventEndpointACLApply      daemonEventType = "endpoint_acl_apply"
@@ -138,6 +139,7 @@ type daemonEventResult struct {
 	Delegations    int
 	Revocations    int
 	Purge          *purgePlan
+	StateGC        *stateGCPlan
 	Error          error
 }
 
@@ -713,6 +715,17 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, CleanedLinks: result.CleanedLinks, CleanedOrphans: result.CleanedOrphans, Message: "ipsec links cleaned"})
+	case "state_gc":
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventStateGC, Apply: request.Apply})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		message := "state GC preview"
+		if request.Apply {
+			message = "state GC applied"
+		}
+		writeControlResponse(conn, controlResponse{OK: true, StateGC: result.StateGC, Message: message})
 	case "ipsec_rotate_port":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecPortRotate})
 		if result.Error != nil {
@@ -1005,6 +1018,9 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 			d.ipsecDirty = true
 		}
 		return daemonEventResult{CleanedLinks: cleaned, CleanedOrphans: orphans, Error: err}, false, false
+	case daemonEventStateGC:
+		plan, err := d.handleStateGCEvent(event.Apply)
+		return daemonEventResult{StateGC: plan, Error: err}, false, false
 	case daemonEventIPsecPortRotate:
 		result, err := d.handleIPsecPortRotateEvent()
 		return daemonEventResult{PortRotate: result, Error: err}, err == nil, false
