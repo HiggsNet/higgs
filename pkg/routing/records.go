@@ -25,6 +25,8 @@ const (
 
 	RecordTypeRoutingNetns = "routing.netns.v1"
 	RecordKeyRoutingNetns  = "routing/netns"
+
+	RouteControllerAuto = "auto"
 )
 
 // RoutingNetnsRecord announces the network namespaces a node uses for routing.
@@ -38,9 +40,10 @@ type RoutingNetnsRecord struct {
 // RouteAnnouncementRecord represents a route announcement or withdrawal
 // under the routes/announcements/<prefix> key.
 type RouteAnnouncementRecord struct {
-	Version int    `json:"version"` // schema version, 1
-	Prefix  string `json:"prefix"`  // canonical CIDR prefix
-	Active  bool   `json:"active"`  // true=announced, false=withdrawn
+	Version    int    `json:"version"`              // schema version, 1
+	Prefix     string `json:"prefix"`               // canonical CIDR prefix
+	Active     bool   `json:"active"`               // true=announced, false=withdrawn
+	Controller string `json:"controller,omitempty"` // optional lifecycle owner; empty means an explicit caller
 }
 
 // IPAMPoolRecord represents a pool delegation: a zone declares it has the
@@ -161,7 +164,18 @@ func (r RouteAnnouncementRecord) Validate(owner zone.ZonePath) error {
 	if _, err := CanonicalizePrefix(r.Prefix); err != nil {
 		return fmt.Errorf("invalid route announcement prefix %q: %w", r.Prefix, err)
 	}
+	if r.Controller != "" && r.Controller != RouteControllerAuto {
+		return fmt.Errorf("unsupported route announcement controller %q", r.Controller)
+	}
 	_ = owner
+	return nil
+}
+
+// ValidateAssignmentTag validates a stable shared-assignment selector.
+func ValidateAssignmentTag(tag string) error {
+	if !assignmentTagPattern.MatchString(tag) {
+		return fmt.Errorf("invalid ipam assignment tag %q", tag)
+	}
 	return nil
 }
 
@@ -267,8 +281,8 @@ func (r IPAMAssignmentRecord) Validate(owner zone.ZonePath) error {
 		if !r.Shared {
 			return errors.New("ipam assignment tag requires shared=true")
 		}
-		if !assignmentTagPattern.MatchString(r.Tag) {
-			return fmt.Errorf("invalid ipam assignment tag %q", r.Tag)
+		if err := ValidateAssignmentTag(r.Tag); err != nil {
+			return err
 		}
 	}
 	_ = owner

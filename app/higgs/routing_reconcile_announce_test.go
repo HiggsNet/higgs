@@ -163,6 +163,65 @@ func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
 	}
 }
 
+func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testing.T) {
+	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", nil, map[string]bool{"10.0.3.0/24": true})
+	rt.Config.IPAM.AutoAnnounceAssignedIPs = false
+	rt.Config.IPAM.Announce = []string{"non-shared", "tag:edge.c"}
+	service := newDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	ars := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{
+		{Prefix: netip.MustParsePrefix("10.0.1.0/24"), AssignedTo: "node-a.catofes."},
+		{Prefix: netip.MustParsePrefix("10.0.2.0/24"), AssignedTo: "node-a.catofes.", Shared: true, Tag: "edge.c"},
+		{Prefix: netip.MustParsePrefix("10.0.3.0/24"), AssignedTo: "node-a.catofes.", Shared: true, Tag: "socks5.cn"},
+	}}
+
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	for _, prefix := range []string{"10.0.1.0/24", "10.0.2.0/24"} {
+		key, _ := routing.NormalizeRouteAnnouncementKey(prefix)
+		ann, err := routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[key])
+		if err != nil || !ann.Active || ann.Controller != routing.RouteControllerAuto {
+			t.Fatalf("auto announcement %s = %+v, error = %v", prefix, ann, err)
+		}
+	}
+	serviceKey, _ := routing.NormalizeRouteAnnouncementKey("10.0.3.0/24")
+	serviceAnn, err := routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[serviceKey])
+	if err != nil || !serviceAnn.Active || serviceAnn.Controller != "" {
+		t.Fatalf("explicit service announcement = %+v, error = %v", serviceAnn, err)
+	}
+
+	service.Sync.App.Config.IPAM.Announce = []string{"non-shared"}
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs after config change: %v", err)
+	}
+	snapshot, _ = service.StateStore.Snapshot()
+	edgeKey, _ := routing.NormalizeRouteAnnouncementKey("10.0.2.0/24")
+	edgeAnn, _ := routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[edgeKey])
+	serviceAnn, _ = routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[serviceKey])
+	if edgeAnn.Active {
+		t.Fatalf("removed auto selector left edge route active: %+v", edgeAnn)
+	}
+	if !serviceAnn.Active {
+		t.Fatalf("selector reconcile withdrew explicit service route: %+v", serviceAnn)
+	}
+
+	service.Sync.App.Config.IPAM.Announce = nil
+	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+		t.Fatalf("autoAnnounceAssignedIPs after removing all selectors: %v", err)
+	}
+	snapshot, _ = service.StateStore.Snapshot()
+	localKey, _ := routing.NormalizeRouteAnnouncementKey("10.0.1.0/24")
+	localAnn, _ := routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[localKey])
+	serviceAnn, _ = routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[serviceKey])
+	if localAnn.Active {
+		t.Fatalf("removing all selectors left auto route active: %+v", localAnn)
+	}
+	if !serviceAnn.Active {
+		t.Fatalf("removing all selectors withdrew explicit service route: %+v", serviceAnn)
+	}
+}
+
 func TestLocalAssignedPrefixesUsesAllAssignments(t *testing.T) {
 	prefix := netip.MustParsePrefix("10.0.0.0/24")
 	ars := &routing.AuthorizedRouteSet{

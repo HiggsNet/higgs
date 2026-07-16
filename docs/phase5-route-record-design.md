@@ -139,9 +139,10 @@ const (
 )
 
 type RouteAnnouncementRecord struct {
-    Version int    `json:"version"` // schema version, 1
-    Prefix  string `json:"prefix"`  // canonical CIDR prefix
-    Active  bool   `json:"active"`  // true=announced, false=withdrawn
+    Version    int    `json:"version"`              // schema version, 1
+    Prefix     string `json:"prefix"`               // canonical CIDR prefix
+    Active     bool   `json:"active"`               // true=announced, false=withdrawn
+    Controller string `json:"controller,omitempty"` // "auto" only for config-managed records
 }
 
 // Validate checks the route announcement schema and prefix.

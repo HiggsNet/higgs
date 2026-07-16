@@ -54,8 +54,10 @@ func run(args []string) error {
 			return err
 		}
 		for _, endpoint := range lock.Endpoints {
-			if err := runHiggs(*higgsBinary, "route", "withdraw", lock.ManagedZone, endpoint.Assignment); err != nil {
-				return err
+			if serviceControlsRoute(endpoint) {
+				if err := runHiggs(*higgsBinary, "route", "withdraw", lock.ManagedZone, endpoint.Assignment); err != nil {
+					return err
+				}
 			}
 			if err := runHiggs(*higgsBinary, "firewall", "endpoint", "remove", endpointACLName(endpoint.Network)); err != nil {
 				return err
@@ -145,8 +147,10 @@ func publishResolvedService(higgsBinary string, manifest resolvedManifest) error
 		} else if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", aclName); err != nil {
 			return fmt.Errorf("remove stale endpoint ACL before unrestricted publish: %w", err)
 		}
-		if err := runHiggs(higgsBinary, "route", "announce", manifest.ManagedZone, endpoint.Assignment); err != nil {
-			return fmt.Errorf("announce endpoint network %s: %w", endpoint.Network, err)
+		if serviceControlsRoute(endpoint) {
+			if err := runHiggs(higgsBinary, "route", "announce", manifest.ManagedZone, endpoint.Assignment); err != nil {
+				return fmt.Errorf("announce endpoint network %s: %w", endpoint.Network, err)
+			}
 		}
 	}
 	args := []string{"service", "publish"}
@@ -162,8 +166,10 @@ func publishResolvedService(higgsBinary string, manifest resolvedManifest) error
 		if endpointStillPublished(old, service.Endpoints) {
 			continue
 		}
-		if err := runHiggs(higgsBinary, "route", "withdraw", previous.ManagedZone, old.Assignment); err != nil {
-			return err
+		if serviceControlsRoute(old) {
+			if err := runHiggs(higgsBinary, "route", "withdraw", previous.ManagedZone, old.Assignment); err != nil {
+				return err
+			}
 		}
 		if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", endpointACLName(old.Network)); err != nil {
 			return err
@@ -222,6 +228,8 @@ func endpointStillPublished(old resolvedEndpoint, current []resolvedEndpoint) bo
 	}
 	return false
 }
+
+func serviceControlsRoute(endpoint resolvedEndpoint) bool { return endpoint.Shared }
 
 func endpointACLName(network string) string { return socks5ServiceName + "-" + network }
 

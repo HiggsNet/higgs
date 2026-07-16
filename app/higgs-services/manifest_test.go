@@ -91,6 +91,9 @@ func TestResolveManifestPublishesAutoAndTaggedSharedEndpoints(t *testing.T) {
 	if endpoint := resolved.SOCKS5.Endpoints[0]; endpoint.Network != "cn" || !endpoint.Shared || endpoint.Assignment != "fd42:2::/96" {
 		t.Fatalf("cn endpoint = %+v", endpoint)
 	}
+	if !serviceControlsRoute(resolved.SOCKS5.Endpoints[0]) || serviceControlsRoute(resolved.SOCKS5.Endpoints[1]) {
+		t.Fatalf("route ownership should be shared-only: %+v", resolved.SOCKS5.Endpoints)
+	}
 }
 
 func TestResolveManifestRejectsPublishNetworkWithOversizedACLName(t *testing.T) {

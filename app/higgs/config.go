@@ -16,6 +16,7 @@ import (
 	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"gopkg.in/yaml.v3"
 )
@@ -191,10 +192,12 @@ type ipsecConfigYAML struct {
 
 type ipamConfig struct {
 	AutoAnnounceAssignedIPs bool
+	Announce                []string
 }
 
 type ipamConfigYAML struct {
-	AutoAnnounceAssignedIPs *bool `yaml:"auto_announce_assigned_ips"`
+	AutoAnnounceAssignedIPs *bool            `yaml:"auto_announce_assigned_ips"`
+	Announce                configStringList `yaml:"announce"`
 }
 
 type tunnelAddressConfigYAML struct {
@@ -597,6 +600,16 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	if file.IPAM.AutoAnnounceAssignedIPs != nil {
 		config.IPAM.AutoAnnounceAssignedIPs = *file.IPAM.AutoAnnounceAssignedIPs
 	}
+	if len(file.IPAM.Announce) > 0 {
+		if file.IPAM.AutoAnnounceAssignedIPs != nil {
+			return fmt.Errorf("ipam.announce cannot be combined with legacy ipam.auto_announce_assigned_ips")
+		}
+		selectors, err := parseIPAMAnnounceSelectors(file.IPAM.Announce)
+		if err != nil {
+			return err
+		}
+		config.IPAM.Announce = selectors
+	}
 	if file.PeerLifecycle != nil {
 		pl, err := parsePeerLifecycleConfig(file.PeerLifecycle)
 		if err != nil {
@@ -914,6 +927,35 @@ func (list *configStringList) UnmarshalYAML(node *yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+func parseIPAMAnnounceSelectors(values []string) ([]string, error) {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		selector := strings.TrimSpace(raw)
+		switch {
+		case selector == "all", selector == "non-shared", selector == "shared":
+		case strings.HasPrefix(selector, "tag:"):
+			tag := strings.TrimPrefix(selector, "tag:")
+			if err := routing.ValidateAssignmentTag(tag); err != nil {
+				return nil, fmt.Errorf("ipam.announce selector %q: %w", raw, err)
+			}
+		case strings.HasPrefix(selector, "assignment:"):
+			prefix, err := routing.CanonicalizePrefix(strings.TrimPrefix(selector, "assignment:"))
+			if err != nil {
+				return nil, fmt.Errorf("ipam.announce selector %q: invalid assignment prefix: %w", raw, err)
+			}
+			selector = "assignment:" + prefix
+		default:
+			return nil, fmt.Errorf("unsupported ipam.announce selector %q", raw)
+		}
+		if !seen[selector] {
+			seen[selector] = true
+			out = append(out, selector)
+		}
+	}
+	return out, nil
 }
 
 func firstNonEmpty(values ...string) string {

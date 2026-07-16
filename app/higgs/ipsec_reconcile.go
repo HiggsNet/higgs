@@ -219,7 +219,7 @@ func (d *DaemonService) localIPv6DiagnosticPrefixes(state *stateFile, now time.T
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || state == nil || state.Network == nil {
 		return nil
 	}
-	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
+	if !ipamAutoAnnounceEnabled(d.Sync.App.Config.IPAM) {
 		return nil
 	}
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
@@ -227,7 +227,7 @@ func (d *DaemonService) localIPv6DiagnosticPrefixes(state *stateFile, now time.T
 		d.logWarn("ipsec", "diagnostic_prefixes_unavailable", map[string]any{"error": err.Error()})
 		return nil
 	}
-	prefixes := localAssignedPrefixes(ars, state.ManagedZone)
+	prefixes := autoAnnounceAssignedPrefixes(ars, state.ManagedZone, d.Sync.App.Config.IPAM)
 	out := prefixes[:0]
 	for _, prefix := range prefixes {
 		if prefix.Addr().Is6() && prefix.Bits() == 64 {

@@ -114,7 +114,7 @@
 
 - [ ] **8.3 发布、防火墙与运行状态**
   - [x] 将 `allow_zones` 通过通用 endpoint ACL `{destination, protocol, port, selectors}` 持久化，并动态解析为已授权 overlay 来源前缀；host FORWARD 对 endpoint 先 allow 后精确 drop，空匹配保持 fail-closed。
-  - [x] `higgs-services publish` 核对 resolved lock 和当前 assignment，对所有 endpoint 执行 TCP 健康检查，依次 apply ACL、宣告整个 assignment prefix、发布多 endpoint record；withdraw 先撤销 record 再清理 route 和 ACL。
+  - [x] `higgs-services publish` 核对 resolved lock 和当前 assignment，对所有 endpoint 执行 TCP 健康检查和 ACL，只为 shared endpoint 宣告整个 assignment prefix，再发布多 endpoint record；withdraw 先撤销 record，再清理 shared route 和全部 ACL。
   - 增加 `services` / `proxy` 本机查询与诊断输出，展示地址归属、路由、firewall、readiness 和当前 record。
 
 - [ ] **8.4 本地与 Anycast 数据面验证**
@@ -129,7 +129,8 @@
 - [x] **8.6 IPAM shared Anycast 与多网络发布**
   - shared assignment 支持可选稳定 tag；tag 仅用于 shared，同 tag/同地址族强制对应同一 prefix，本地唯一 assignment 保持无 tag 的 `auto` 语义。
   - 同一 owner 的 shared assignment 按成员分别存储，`ipam revoke assignment --to` 可精确撤销成员。
-  - `publish` 用 `network: region` 映射同时发布本地和任意数量 Anycast endpoint，并显式宣告整个 assignment（IPv6 最具体 `/96`、IPv4 最具体 `/28`），不发布 `/128`/`/32` host route。
+  - `ipam.announce` 用 `non-shared`、`tag:<tag>` 等 selector 固化长期 announcement；服务 Anycast 不加入该列表，由服务生命周期控制。旧 `auto_announce_assigned_ips` 保持兼容。
+  - `publish` 用 `network: region` 映射同时发布本地和任意数量 Anycast endpoint，并为 shared endpoint 显式宣告整个 assignment（IPv6 最具体 `/96`、IPv4 最具体 `/28`），不发布 `/128`/`/32` host route。
   - 待补多节点 route/ECMP/metric 收敛、成员撤销和真实容器 smoke。
 
 - [ ] **8.7 应用层源路由 relay（独立项目/协议）**

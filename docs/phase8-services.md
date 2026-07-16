@@ -156,7 +156,7 @@ higgs-services publish
 
 1. 从本机对每个 endpoint 的 SOCKS5 地址和端口做 3 秒 TCP 就绪检查；
 2. 为每个 endpoint 安装或清理独立 ACL；
-3. 用 `higgs route announce` 宣告每个 endpoint 对应的整个 assignment prefix；
+3. 对 shared endpoint 用 `higgs route announce` 宣告整个 assignment prefix；非 shared endpoint 的路由由 IPAM 配置或管理员负责；
 4. 用一条 `service.socks5.v1` record 发布所有 endpoints；
 5. 清理上一版不再使用的 route 和 ACL，并写入 `published.json`。
 
@@ -168,7 +168,7 @@ TCP 检查只说明地址可达且端口在监听，不验证 SOCKS5 握手、DN
 higgs-services withdraw
 ```
 
-它先写入 `active:false` 的 service record，再根据 `published.json` 撤销 routes 和 ACL。旧版没有 `active` 字段以及只有单个 `region/address/port` 的 record 仍可读取。
+它先写入 `active:false` 的 service record，再根据 `published.json` 撤销 shared routes 和全部 endpoint ACL。旧版没有 `active` 字段以及只有单个 `region/address/port` 的 record 仍可读取。
 
 ### 4.1 为什么宣告 assignment，而不是 `/128`
 
@@ -180,14 +180,15 @@ higgs-services withdraw
 
 当前 mesh export 上限为 IPv6 `/96`、IPv4 `/28`，所以被 `publish` 的 assignment 不能比该上限更具体。Docker subnet 可以更具体。
 
-服务路由由 `higgs-services publish/withdraw` 显式控制。使用这种模式时应保持：
+非 shared assignment 通常由 Higgs 持续宣告；服务停止只撤销 service record，不应撤销可能承载节点地址或其他用途的普通前缀：
 
 ```yaml
 ipam:
-  auto_announce_assigned_ips: false
+  announce:
+    - non-shared
 ```
 
-否则 Higgs 的 assignment 自动宣告会在服务 withdraw 后再次发布相同 prefix，破坏“服务就绪才宣告”的语义。
+`tag:socks5.cn` 之类的服务 Anycast 不写入 `ipam.announce`，由 `higgs-services` 随服务健康状态宣告和撤销。`tag:edge.c` 之类的长期边缘 Anycast 可以显式写入 `ipam.announce`。一个 prefix 应只选择一种生命周期控制方式。
 
 ## 5. 多 endpoint service record
 

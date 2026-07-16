@@ -84,6 +84,31 @@ func TestGenerateManagedConfig(t *testing.T) {
 	}
 }
 
+func TestGenerateBabelECMP(t *testing.T) {
+	gen := DefaultConfigGenerator{}
+	for _, tc := range []struct {
+		name  string
+		limit uint
+		want  string
+	}{
+		{name: "without limit", want: "ecmp on;"},
+		{name: "with limit", limit: 16, want: "ecmp on limit 16;"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := testBirdInstanceSpec()
+			spec.ECMP = true
+			spec.ECMPLimit = tc.limit
+			cfg, err := gen.Generate(spec, nil, nil)
+			if err != nil {
+				t.Fatalf("Generate failed: %v", err)
+			}
+			if !strings.Contains(string(cfg), tc.want) {
+				t.Fatalf("generated config missing %q:\n%s", tc.want, cfg)
+			}
+		})
+	}
+}
+
 func TestRenderFilter(t *testing.T) {
 	prefixes := []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"),

@@ -6,6 +6,8 @@ networks:
   main:
     ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
     ipv6: "auto;::/112;::100/120;::1"
+  # The main non-shared assignment is normally kept reachable by
+  # config.yaml: ipam.announce: [non-shared]. higgs-services does not own it.
   # Shared Anycast networks use stable IPAM tags. The local main network does
   # not need a tag: auto intentionally selects the node's unique assignment.
   # cn:

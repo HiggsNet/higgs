@@ -190,13 +190,16 @@ func (c *birdcClient) command(ctx context.Context, cmd string) (string, error) {
 	}
 	_ = conn.SetDeadline(deadline)
 
-	// Consume the greeting line (e.g. "0001 BIRD 2.15.1 ready.").
+	// BIRD sends a greeting before accepting commands. Validate it so a
+	// mistakenly configured Unix socket is reported at the actual boundary.
 	reader := bufio.NewReader(conn)
 	greeting, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err != nil {
 		return "", fmt.Errorf("read greeting: %w", err)
 	}
-	_ = greeting
+	if !strings.HasPrefix(greeting, "0001 BIRD ") {
+		return "", fmt.Errorf("unexpected BIRD greeting: %q", strings.TrimSpace(greeting))
+	}
 
 	if _, err := fmt.Fprintf(conn, "%s\n", cmd); err != nil {
 		return "", fmt.Errorf("write command: %w", err)

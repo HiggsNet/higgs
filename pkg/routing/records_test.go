@@ -106,9 +106,10 @@ func TestNormalizeIPAMAssignmentKey(t *testing.T) {
 
 func TestParseRouteAnnouncementRecord(t *testing.T) {
 	value, err := json.Marshal(RouteAnnouncementRecord{
-		Version: 1,
-		Prefix:  "10.0.1.1/24",
-		Active:  true,
+		Version:    1,
+		Prefix:     "10.0.1.1/24",
+		Active:     true,
+		Controller: RouteControllerAuto,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -134,6 +135,18 @@ func TestParseRouteAnnouncementRecord(t *testing.T) {
 	if !ann.Active {
 		t.Fatal("Active = false, want true")
 	}
+	if ann.Controller != RouteControllerAuto {
+		t.Fatalf("Controller = %q, want %q", ann.Controller, RouteControllerAuto)
+	}
+
+	t.Run("invalid controller", func(t *testing.T) {
+		value, _ := json.Marshal(RouteAnnouncementRecord{Version: 1, Prefix: "10.0.1.0/24", Active: true, Controller: "service"})
+		bad := *record
+		bad.Value = value
+		if _, err := ParseRouteAnnouncementRecord(&bad); err == nil || !strings.Contains(err.Error(), "controller") {
+			t.Fatalf("error = %v", err)
+		}
+	})
 
 	t.Run("nil record", func(t *testing.T) {
 		if _, err := ParseRouteAnnouncementRecord(nil); err == nil {

@@ -215,7 +215,9 @@ Routing 采用 per-netns BIRD/Babel 模型。一个 netns 对应一个 BIRD 实�
 
 ```yaml
 ipam:
-  auto_announce_assigned_ips: false
+  announce:
+    - non-shared
+    # - tag:edge.c
 
 routing:
   instances:
@@ -244,7 +246,9 @@ routing:
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
 - `upstream` 可让 Higgs 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。
 - `upstream.mode: static` 是默认模式；Higgs 会在 mesh 侧把本节点 assigned prefix 指向 `mesh.interface`，并在 external/host 侧把远端授权 mesh 前缀指向 `external.interface`，使用本节点 assigned prefix 的首个可用地址作为 route source。
-- `ipam.auto_announce_assigned_ips` 为 true 时，daemon 会把分配给 `managed_zone` 的 IPAM assignment 自动发布为 route announcement。
+- `ipam.announce` 选择由 daemon 持续发布的本节点 assignment。支持 `all`、`non-shared`、`shared`、`tag:<tag>` 和 `assignment:<CIDR>`。
+- 未匹配的 assignment 不由配置管理，可由 `higgs route announce/withdraw` 或服务控制；配置 reconcile 只撤销自己以 `controller:auto` 创建的记录。
+- 旧字段 `ipam.auto_announce_assigned_ips: true` 仍兼容，含义是自动管理全部本地 assignment；不能与 `ipam.announce` 同时使用。
 
 ## Firewall
 

@@ -432,8 +432,8 @@ func TestBabelImportFilterNegativeRootSmoke(t *testing.T) {
 // TestBabelAnycastFailoverRootSmoke creates a three-node Babel topology where
 // two speakers announce the same anycast prefix. It verifies that the receiver
 // learns the prefix, then fails over to the remaining speaker after the
-// selected speaker is stopped. This intentionally does not assert ECMP; BIRD
-// 2.19.x does not accept the Babel "ecmp" directive in our generated config.
+// selected speaker is stopped. This intentionally does not assert ECMP: the
+// test verifies convergence and failover, not kernel multi-next-hop behavior.
 func TestBabelAnycastFailoverRootSmoke(t *testing.T) {
 	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
 		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD Babel anycast smoke")

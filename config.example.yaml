@@ -217,9 +217,14 @@ ipsec:
 # -----------------------------------------------------------------------------
 
 # ipam:
-#   # When true, daemon publishes routes/announcements/* for IPAM assignments
-#   # whose assigned_to equals managed_zone. Defaults false for explicit control.
-#   auto_announce_assigned_ips: false
+#   # Persistently announce selected assignments owned by managed_zone.
+#   # Unlisted shared assignments remain available to services or manual CLI.
+#   announce:
+#     - non-shared
+#     # - tag:edge.c
+#   # Legacy compatibility: true announces every local assignment, including
+#   # shared assignments. Do not combine it with announce.
+#   # auto_announce_assigned_ips: false
 
 routing:
   instances:

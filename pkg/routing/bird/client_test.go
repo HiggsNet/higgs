@@ -37,15 +37,21 @@ const sampleShowRoutes = `Table master4:
 0000 
 `
 
-const sampleShowInterfaces = `1002-Interface  State  MTU  Link-local
-eth0       up     1500 fe80::1
-eth1       down   1500 -
+const sampleShowInterfaces = `1001-lo up (index=1)
+1004-	MultiAccess AdminUp LinkUp Loopback Ignored MTU=65536
+1003-	127.0.0.1/8 (Preferred, scope host)
+       ::1/128 (scope host)
+1001-eth0 up (index=2)
+1004-	MultiAccess Broadcast Multicast AdminUp LinkUp MTU=1500
+1003-	192.0.2.1/24 (Preferred, scope univ)
+       fe80::1/64 (Preferred, scope link)
 0000 
 `
 
-const sampleShowBabelNeighbors = `1002-Interface  Neighbor           Metric
-eth0       fe80::2             256
-eth0       fe80::3             512
+const sampleShowBabelNeighbors = `1024-babel1:
+     IP address                Interface  Metric Routes Hellos Expires Auth  RTT (ms)
+1001-fe80::2                   eth0         256      1     16   5.391 No       5.009
+     fe80::3                   eth0         512      1     16   5.391 No       5.009
 0000 
 `
 
@@ -202,13 +208,25 @@ func TestStatusParsing(t *testing.T) {
 	if selected.Via.String() != "192.168.1.2" {
 		t.Errorf("selected via = %q, want 192.168.1.2", selected.Via)
 	}
+	if got := state.Routes[1].Iface; got != "eth0" {
+		t.Errorf("on-link route interface = %q, want eth0", got)
+	}
 
 	if len(state.Interfaces) != 2 {
 		t.Errorf("interfaces = %d, want 2", len(state.Interfaces))
 	}
+	if len(state.Interfaces) == 2 {
+		eth0 := state.Interfaces[1]
+		if eth0.Index != 2 || eth0.MTU != 1500 || eth0.LinkLocal.String() != "fe80::1" {
+			t.Errorf("eth0 = %#v, want index=2 mtu=1500 link-local=fe80::1", eth0)
+		}
+	}
 
 	if len(state.Neighbors) != 2 {
 		t.Errorf("neighbors = %d, want 2", len(state.Neighbors))
+	}
+	if len(state.Neighbors) > 0 && state.Neighbors[0].Protocol != "babel1" {
+		t.Errorf("neighbor protocol = %q, want babel1", state.Neighbors[0].Protocol)
 	}
 }
 
@@ -250,6 +268,34 @@ func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
 	route := state.Routes[0]
 	if !route.Selected || route.Iface != "hgs1d556624" || route.Metric != 130 {
 		t.Fatalf("route = %#v", route)
+	}
+}
+
+func TestParseRoutesSupportsOnLinkAndNonUnicastDestinations(t *testing.T) {
+	routes := parseRoutes(`1007-Table master4:
+1007-10.0.0.0/8           blackhole [static1 13:05:41.763] * (200)
+1007-10.1.0.0/16          unreachable [static1 13:05:41.763] * (200)
+1007-10.2.0.0/16          prohibit [static1 13:05:41.763] * (200)
+1007-10.3.0.0/16          unicast [direct1 13:05:41.763] ! (240)
+     dev eth0
+0000 `)
+	if len(routes) != 4 {
+		t.Fatalf("routes = %#v, want four routes", routes)
+	}
+	if routes[3].Iface != "eth0" || routes[3].Selected {
+		t.Fatalf("on-link route = %#v, want iface eth0 and unselected", routes[3])
+	}
+	if routes[0].Source != "static1" {
+		t.Fatalf("route source = %q, want static1", routes[0].Source)
+	}
+}
+
+func TestParseProtocolsParsesSameDaySince(t *testing.T) {
+	protocols := parseProtocols(`2002-Name       Proto      Table      State  Since         Info
+1002-babel1     Babel      master4    up     13:05:41.762  Established
+0000 `)
+	if len(protocols) != 1 || protocols[0].Since.IsZero() {
+		t.Fatalf("protocols = %#v, want same-day timestamp", protocols)
 	}
 }
 
@@ -297,6 +343,29 @@ func TestRawCommand(t *testing.T) {
 	}
 	if !strings.Contains(out, "Table master4:") {
 		t.Fatalf("Raw output missing route table:\n%s", out)
+	}
+}
+
+func TestCommandRejectsUnexpectedGreeting(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "unexpected.ctl")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = fmt.Fprint(conn, "0001 unexpected service\n")
+	}()
+
+	_, err = NewClient(socket, time.Second).Raw(context.Background(), "show status")
+	if err == nil || !strings.Contains(err.Error(), "unexpected BIRD greeting") {
+		t.Fatalf("Raw error = %v, want invalid greeting", err)
 	}
 }
 

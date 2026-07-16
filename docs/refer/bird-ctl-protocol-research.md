@@ -4,6 +4,11 @@
 >
 > 环境：BIRD 2.19.1（`/run/current-system/sw/bin/bird`），源码参考 CZ-NIC/bird（当前 shallow clone 为 2.19.0）。
 
+> 实施状态（2026-07-16）：调研中列出的解析偏差已在
+> `pkg/routing/bird` 修正。控制客户端现在校验 `0001 BIRD ...` 问候语；接口、
+> 路由和邻居夹具均使用官方 IP-first / headerless 的实际输出；同时恢复了
+> `ecmp on [limit N]` 配置渲染。下文保留原始问题与证据，作为格式兼容性依据。
+
 ## 1. BIRD CLI 协议格式（协议层）
 
 BIRD 的 CLI 协议在官方 Programmer's Documentation 中有明确定义，实现位于：

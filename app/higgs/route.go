@@ -21,6 +21,7 @@ type routeShowRow struct {
 	Zone       string `json:"zone"`
 	Prefix     string `json:"prefix"`
 	Active     bool   `json:"active"`
+	Controller string `json:"controller,omitempty"`
 	Authorized bool   `json:"authorized"`
 	Version    uint64 `json:"version"`
 	Key        string `json:"key"`
@@ -142,6 +143,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 				Zone:       string(path),
 				Prefix:     prefix,
 				Active:     ann.Active,
+				Controller: ann.Controller,
 				Authorized: isAuthorized,
 				Version:    rec.Version,
 				Key:        key,
@@ -185,7 +187,11 @@ func printRouteShowReport(report *routeShowReport, includeAll bool) {
 		if row.Authorized {
 			authorized = "authorized"
 		}
-		fmt.Fprintf(os.Stdout, "  %s  zone=%s  state=%s  %s  version=%d\n", row.Prefix, row.Zone, state, authorized, row.Version)
+		controller := "explicit"
+		if row.Controller != "" {
+			controller = row.Controller
+		}
+		fmt.Fprintf(os.Stdout, "  %s  zone=%s  state=%s  controller=%s  %s  version=%d\n", row.Prefix, row.Zone, state, controller, authorized, row.Version)
 	}
 }
 

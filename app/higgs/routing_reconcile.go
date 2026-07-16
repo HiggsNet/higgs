@@ -116,23 +116,21 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 		firstErr = err
 	}
 
-	// If auto-announce is enabled, it may have committed new
-	// route announcements. Rebuild the authorized route set so BIRD import/export
-	// filters reflect the latest announcements.
-	if config.IPAM.AutoAnnounceAssignedIPs {
-		snapshot, rev, _ = d.snapshotState()
-		if snapshot == nil {
-			return firstErr
-		}
-		workspace = cloneStateFile(snapshot)
-		if workspace.RoutingReconcile == nil {
-			workspace.RoutingReconcile = &routingReconcileState{}
-		}
-		workspace.RoutingReconcile.LastRunUnix = now.Unix()
-		ars, err = routing.BuildAuthorizedRouteSet(workspace.Network, now)
-		if err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
-		}
+	// Auto-announce may also withdraw controller:auto records when selectors are
+	// removed entirely, so always refresh the committed snapshot before BIRD
+	// generation. Explicit/service records are never withdrawn by this path.
+	snapshot, rev, _ = d.snapshotState()
+	if snapshot == nil {
+		return firstErr
+	}
+	workspace = cloneStateFile(snapshot)
+	if workspace.RoutingReconcile == nil {
+		workspace.RoutingReconcile = &routingReconcileState{}
+	}
+	workspace.RoutingReconcile.LastRunUnix = now.Unix()
+	ars, err = routing.BuildAuthorizedRouteSet(workspace.Network, now)
+	if err != nil && firstErr == nil {
+		firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
 	}
 	if workspace.BirdInstances == nil {
 		workspace.BirdInstances = make(map[string]*BirdInstanceState)
@@ -875,6 +873,56 @@ func localAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.Zon
 	return out
 }
 
+func ipamAutoAnnounceEnabled(config ipamConfig) bool {
+	return config.AutoAnnounceAssignedIPs || len(config.Announce) > 0
+}
+
+func autoAnnounceAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath, config ipamConfig) []netip.Prefix {
+	if ars == nil || !managedZone.Valid() || !ipamAutoAnnounceEnabled(config) {
+		return nil
+	}
+	entries := ars.AllAssignments
+	if len(entries) == 0 {
+		entries = make([]*routing.AssignmentEntry, 0, len(ars.Assignments))
+		for _, entry := range ars.Assignments {
+			entries = append(entries, entry)
+		}
+	}
+	selected := make(map[netip.Prefix]struct{})
+	for _, entry := range entries {
+		if entry == nil || entry.AssignedTo != managedZone {
+			continue
+		}
+		if config.AutoAnnounceAssignedIPs || assignmentMatchesAnnounceSelectors(entry, config.Announce) {
+			selected[entry.Prefix] = struct{}{}
+		}
+	}
+	out := make([]netip.Prefix, 0, len(selected))
+	for prefix := range selected {
+		out = append(out, prefix)
+	}
+	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
+	return out
+}
+
+func assignmentMatchesAnnounceSelectors(entry *routing.AssignmentEntry, selectors []string) bool {
+	for _, selector := range selectors {
+		switch {
+		case selector == "all":
+			return true
+		case selector == "non-shared" && !entry.Shared:
+			return true
+		case selector == "shared" && entry.Shared:
+			return true
+		case strings.HasPrefix(selector, "tag:") && entry.Tag == strings.TrimPrefix(selector, "tag:"):
+			return true
+		case strings.HasPrefix(selector, "assignment:") && entry.Prefix.String() == strings.TrimPrefix(selector, "assignment:"):
+			return true
+		}
+	}
+	return false
+}
+
 func externalUpstreamRoutePrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
 	authorized := authorizedPrefixes(ars, nil)
 	localAssigned := localAssignedPrefixes(ars, managedZone)
@@ -1041,9 +1089,6 @@ func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet)
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.StateStore == nil {
 		return nil
 	}
-	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
-		return nil
-	}
 	_, err := d.StateStore.Update(func(state *stateFile) error {
 		changed, err := d.autoAnnounceAssignedIPsForState(state, ars)
 		if err != nil {
@@ -1067,20 +1112,18 @@ func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *r
 	if d == nil || d.Sync == nil || d.Sync.App == nil || state == nil || state.Network == nil {
 		return false, nil
 	}
-	if !d.Sync.App.Config.IPAM.AutoAnnounceAssignedIPs {
-		return false, nil
-	}
+	config := d.Sync.App.Config.IPAM
 	managedZone := state.ManagedZone
 	if managedZone.IsRoot() || !managedZone.Valid() {
 		return false, nil
 	}
 
-	localAssigned := make(map[netip.Prefix]struct{})
-	for _, prefix := range localAssignedPrefixes(ars, managedZone) {
-		localAssigned[prefix] = struct{}{}
+	desired := make(map[netip.Prefix]struct{})
+	for _, prefix := range autoAnnounceAssignedPrefixes(ars, managedZone, config) {
+		desired[prefix] = struct{}{}
 	}
 
-	localAnnounced := make(map[netip.Prefix]bool)
+	localAnnounced := make(map[netip.Prefix]*routing.RouteAnnouncementRecord)
 	zs := state.Network.Zones[managedZone]
 	if zs != nil {
 		for key, rec := range zs.Records {
@@ -1095,13 +1138,13 @@ func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *r
 			if err != nil {
 				continue
 			}
-			localAnnounced[p] = ann.Active
+			localAnnounced[p] = ann
 		}
 	}
 
 	changed := false
-	for prefix := range localAssigned {
-		if active, ok := localAnnounced[prefix]; ok && active {
+	for prefix := range desired {
+		if ann, ok := localAnnounced[prefix]; ok && ann.Active {
 			continue
 		}
 		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, true); err != nil {
@@ -1114,11 +1157,17 @@ func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *r
 		})
 	}
 
-	for prefix, active := range localAnnounced {
-		if !active {
+	for prefix, ann := range localAnnounced {
+		if !ann.Active {
 			continue
 		}
-		if _, ok := localAssigned[prefix]; ok {
+		if _, ok := desired[prefix]; ok {
+			continue
+		}
+		// Legacy true retains the old ownership model and reconciles every local
+		// announcement. Selector mode only withdraws records it created, leaving
+		// service/operator-controlled shared prefixes untouched.
+		if !config.AutoAnnounceAssignedIPs && ann.Controller != routing.RouteControllerAuto {
 			continue
 		}
 		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, false); err != nil {
@@ -1140,7 +1189,7 @@ func (d *DaemonService) putRouteAnnouncementForState(state *stateFile, path zone
 	if err != nil {
 		return err
 	}
-	record := routing.RouteAnnouncementRecord{Version: 1, Prefix: canonical, Active: active}
+	record := routing.RouteAnnouncementRecord{Version: 1, Prefix: canonical, Active: active, Controller: routing.RouteControllerAuto}
 	value, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("marshal route announcement: %w", err)

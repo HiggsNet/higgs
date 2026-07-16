@@ -222,18 +222,28 @@ sh.catofes./ipam/assignments/10.0.1.0_24 → assigned_to: node1.sh.catofes.
 
 ### 9.1 自动发布 route announcement（可选）
 
-配置项：
+推荐使用 selector 列表声明由 Higgs 持续维护的 assignment：
 
 ```yaml
 ipam:
-  auto_announce_assigned_ips: false  # 默认关闭
+  announce:
+    - non-shared
+    # - tag:edge.c
 ```
 
-当开启时，节点自动为每个分配到的前缀发布 `routes/announcements/*`。
+selector 支持：
 
-**默认关闭**，因为：
-- 业务 IP 的宣告应该由管理员显式控制。
-- 某些 assignment 可能用于非路由用途（如 SRv6 SID、服务监听地址）。
+| selector | 含义 |
+|---|---|
+| `all` | 当前节点全部 assignment。 |
+| `non-shared` | 当前节点全部普通、非 shared assignment。 |
+| `shared` | 当前节点全部 shared assignment。 |
+| `tag:<tag>` | 带指定 tag 的 shared assignment。 |
+| `assignment:<CIDR>` | 指定的 exact assignment。CIDR 会规范化。 |
+
+未匹配的 assignment 不由配置自动管理，仍可使用 `higgs route announce/withdraw`，或者由 `higgs-services` 等组件按自身生命周期控制。
+
+旧配置 `auto_announce_assigned_ips: true` 保持兼容，等价于自动管理全部本地 assignment；它不能与 `announce` 同时出现。
 
 ### 9.2 自动发布 route announcement 的详细设计
 
@@ -243,7 +253,7 @@ ipam:
 
 1. daemon 启动或 state 加载完成后首次 reconcile。
 2. 本地或远端 record 变化导致 `NetworkState` 更新后。
-3. 配置 reload 后（`ipam.auto_announce_assigned_ips` 状态变化）。
+3. 配置 reload 后（`ipam.announce` 或旧自动开关变化）。
 4. 周期性的 routing reconcile（默认 30s）作为兜底。
 
 触发点统一收敛在 `app/higgs/routing_reconcile.go` 的 `reconcileRouting()` 中，在 `BuildAuthorizedRouteSet` 之后插入 `autoAnnounceAssignedIPs` 步骤。
@@ -251,17 +261,18 @@ ipam:
 #### 9.2.2 自查询逻辑
 
 1. 调用 `routing.BuildAuthorizedRouteSet(ns, now)` 获取 `AuthorizedRouteSet`。
-2. 遍历 `ars.Assignments`，筛选出 `AssignedTo == d.Sync.State.ManagedZone` 的 assignment。
-3. 对每个有效 assignment，检查其是否已被 pool 授权且无重叠错误。非法/无效的 assignment 不参与自动宣告。
-4. 将结果前缀集合记为 `localAssignedPrefixes`。
+2. 遍历 `ars.AllAssignments`，筛选 `AssignedTo == managed_zone` 且匹配 `ipam.announce` 的 assignment；`AllAssignments` 可保留同 prefix 的 shared 成员。
+3. 只有已经通过 pool、tag 和重叠校验的有效 assignment 才会进入结果。
+4. 旧布尔开关启用时不应用 selector，继续选择全部本地 assignment。
 
 #### 9.2.3 与现有 announcements 的差集处理
 
-1. 从本 Zone 的 `routes/announcements/*` 记录中读取当前已发布的前缀集合 `localAnnouncedPrefixes`。
+1. 从本 Zone 的 `routes/announcements/*` 记录中读取当前已发布的前缀及其 `controller`。
 2. 计算差集：
-   - **新增**：`localAssignedPrefixes - localAnnouncedPrefixes` → 自动发布 route announcement。
-   - **撤回**：`localAnnouncedPrefixes - localAssignedPrefixes` → 自动撤回（发布 `active=false` 或更高版本的无效记录）。
+   - **新增**：匹配 selector、但未 active 的前缀 → 写入 `controller:auto` 的 route announcement。
+   - **撤回**：由 `controller:auto` 创建、但不再匹配 selector 的前缀 → 写入 `active=false`。
 3. 已存在且一致的前缀不重复写入，避免无意义版本递增。
+4. selector reconcile 不撤销没有 `controller:auto` 的显式/service announcement，避免干扰未匹配 shared assignment 的独立生命周期。
 
 #### 9.2.4 写入路径与单 writer 边界
 
@@ -270,25 +281,30 @@ ipam:
 - daemon 运行时：直接由 `DaemonService` 内部调用 record 写入逻辑，复用 `record put` 的签名与版本比较逻辑。
 - CLI 模式下（daemon 不存在）：`higgs ipam assigned` 只读查询；不自动写 announcement，避免多个 CLI 进程竞争写 DB。
 
-建议新增内部方法 `putRouteAnnouncement(zone, prefix, active bool)`，与 CLI `higgs route announce/withdraw` 共享同一 record builder。
+自动路径使用 daemon 内部的 signed record builder 并写入 `controller:auto`；CLI 记录不带 controller，表示显式调用方负责其生命周期。
 
 #### 9.2.5 配置项
 
 ```yaml
 ipam:
-  auto_announce_assigned_ips: false   # 默认关闭
+  announce:
+    - non-shared
+    - tag:edge.c
 ```
 
-该配置是**本节点本地行为开关**：
-- 开启只影响本节点是否自动发布 announcements。
+该配置是**本节点本地行为策略**：
+- `non-shared` 适合节点长期地址。
+- `tag:edge.c` 适合长期存在、实际路由由 external Babel 决定的边缘 Anycast 授权。
+- `tag:socks5.cn` 等服务 Anycast 不应同时写入列表，应由服务健康状态控制。
 - 不影响 assignment 的授权有效性，也不影响其他节点是否接受该 announcement（仍由 `BuildAuthorizedRouteSet` 决定）。
 - 配置变化时，daemon 在下一轮 reconcile 中按新状态补齐/撤回 announcements。
 
 #### 9.2.6 与手动 route announce 的共存
 
-- 手动通过 `higgs route announce` 发布的前缀如果恰好也是本节点分配到的前缀，自动宣告不会重复发布。
-- 手动发布的前缀若不在 `localAssignedPrefixes` 中，不会被自动撤回（只撤回由自动机制创建的 announcements）。
-- 建议通过 record 的 metadata 或来源标记区分自动/手动 announcement，便于后续审计。
+- 手动或服务发布的前缀如果已经 active，自动路径不会重复写入。
+- selector 模式只撤回 `controller:auto` 记录，不撤回显式记录。
+- 当前约束是一个 prefix 只选择一种生命周期控制方式；不引入多 source claim/refcount。
+- legacy `auto_announce_assigned_ips: true` 保持旧行为，会管理全部本地 announcement；新部署应使用 selector 模式。
 
 ## 10. CLI 设计
 
@@ -328,8 +344,8 @@ higgs ipam assigned [--zone <zone>]
    - unit test: assignment 重叠检测（同 Zone 层级、兄弟冲突、跨 Zone 合法/非法）
    - unit test: `PermAllocateIP` capability 校验
    - smoke: `higgs ipam pool create` / `assign` / `route announce` + BIRD filter
-   - unit test: `auto_announce_assigned_ips` 开启/关闭、前缀补齐/撤回
-   - smoke: 开启 `auto_announce_assigned_ips` 后 BIRD export filter 自动包含本节点分配前缀
+   - unit test: `ipam.announce` selector、legacy 开关、自动/显式记录隔离、前缀补齐/撤回
+   - smoke: 配置 `ipam.announce: [non-shared]` 后 BIRD export filter 自动包含本节点普通分配前缀
 
 ## 13. veth 上行与主网络集成（可选）
 
@@ -407,7 +423,7 @@ protocol babel higgs_babel_xxx {
 
 ### 13.4 用 static protocol 宣告分配前缀
 
-当 `ipam.auto_announce_assigned_ips` 开启时，Higgs 发布本节点 assignment 对应的 `routes/announcements/*`。本地 BIRD static route 按 `routing.instances[].upstream` 分三种语义：
+当 assignment 匹配 `ipam.announce`（或启用 legacy 自动开关）时，Higgs 发布对应的 `routes/announcements/*`。本地 BIRD static route 仍直接由 assignment 驱动，与是否 announcement 解耦，并按 `routing.instances[].upstream` 分三种语义：
 
 - 未配置 upstream：本节点 prefix 用 blackhole 兜底，只表达 ownership，不承载 host/service。
 - `upstream.mode: static`（默认）：本节点 prefix 指向 mesh netns 内的 upstream veth；Higgs 在 external/host 侧按授权前缀维护回 mesh 的 kernel route，但排除本节点本地承载的 assigned prefix。external 端会配置本地 assigned prefix 的首个可用地址作为 route source。
@@ -488,7 +504,7 @@ filter higgs_kernel_export {
 
 ### 13.7 实现顺序
 
-1. **先实现 `ipam.auto_announce_assigned_ips`**：产生可宣告的前缀来源。
+1. **先实现 selector 化 `ipam.announce`**：产生可宣告的前缀来源，同时兼容旧自动开关。
 2. **再实现 veth 创建与 BIRD 多接口监听**：让 BIRD 能通过 veth 与主网络建立 Babel 邻居。
 3. **最后加入 static route 与精细化 filter**：完成 mesh ↔ 主网络的双向路由控制。
 

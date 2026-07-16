@@ -21,16 +21,19 @@ var (
 	protocolRowRe    = regexp.MustCompile(`(?m)^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*))?`)
 
 	routeHeaderRe = regexp.MustCompile(`(?im)^\s*(?:Table|VRF)\s+`)
-	routeLineRe   = regexp.MustCompile(`(?m)^\s*(\S+?)\s+(?:unicast|multicast)?\s*\[([^\]]+)\]\s*(\*)?\s*\((\d+)(?:/\d+)?\)`)
-	routeViaRe    = regexp.MustCompile(`(?m)^\s+via\s+(\S+)\s+on\s+(\S+)`)
-	routeFromRe   = regexp.MustCompile(`(?m)^\s+from\s+(\S+)`)
+	// BIRD emits a destination type between the prefix and source bracket
+	// (e.g. unicast, blackhole, unreachable, prohibit). It is deliberately
+	// parsed as a token rather than a fixed enum because BIRD can add types.
+	routeLineRe = regexp.MustCompile(`(?m)^\s*(\S+)\s+(?:\S+\s+)?\[([^\]\s]+)(?:\s+[^\]]*)?\]\s*([*!]?)\s*\((\d+)(?:/\d+)?\)`)
+	routeViaRe  = regexp.MustCompile(`(?m)^\s+via\s+(\S+)\s+on\s+(\S+)`)
+	routeDevRe  = regexp.MustCompile(`(?m)^\s+dev\s+(\S+)`)
+	routeFromRe = regexp.MustCompile(`(?m)^\s+from\s+(\S+)`)
 
-	interfaceHeaderRe = regexp.MustCompile(`(?im)^\s*(?:Interface|Iface)\s+`)
-	interfaceRowRe    = regexp.MustCompile(`(?m)^\s*(\S+)\s+(up|down)\s+(\d+)\s+(\S+)?`)
-	interfaceAddrRe   = regexp.MustCompile(`(?im)^\s+(?:IPv4|IPv6|addresses?:?)\s*[:=]?\s*(.+)`)
+	interfaceStartRe   = regexp.MustCompile(`(?m)^\s*(\S+)\s+(up|down)\s+\(index=(\d+)(?:\s+[^)]*)?\)`)
+	interfaceDetailsRe = regexp.MustCompile(`^\s*(.*?)\s+MTU=(\d+)\s*$`)
 
-	babelLegacyHeaderRe = regexp.MustCompile(`(?im)^\s*Interface\s+Neighbor`)
-	babelV219HeaderRe   = regexp.MustCompile(`(?im)^\s*IP\s+address\s+Interface\s+Metric`)
+	babelNeighborsHeaderRe = regexp.MustCompile(`(?im)^\s*IP\s+address\s+Interface\s+Metric`)
+	babelProtocolNameRe    = regexp.MustCompile(`^\s*(\S+):\s*$`)
 )
 
 // stripCodes removes BIRD CLI numeric prefixes like "1001-" or "0001 " from each line.
@@ -59,6 +62,12 @@ func parseTime(value string) (time.Time, error) {
 	for _, f := range formats {
 		if t, err := time.ParseInLocation(f, value, time.Local); err == nil {
 			return t, nil
+		}
+	}
+	for _, f := range []string{"15:04:05.000", "15:04:05", "15:04"} {
+		if t, err := time.ParseInLocation(f, value, time.Local); err == nil {
+			now := time.Now().In(time.Local)
+			return time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local), nil
 		}
 	}
 	return time.Time{}, fmt.Errorf("unrecognized time format: %q", value)
@@ -183,6 +192,9 @@ func parseRoutes(output string) []BirdRoute {
 			current = &BirdRoute{
 				Prefix:   prefix,
 				Protocol: strings.TrimSpace(m[2]),
+				// BIRD's verbose output has no stable "Source:" line. The
+				// bracketed protocol name is the source relevant to callers.
+				Source:   strings.TrimSpace(m[2]),
 				Metric:   uint32(metric),
 				Selected: m[3] == "*",
 			}
@@ -197,16 +209,13 @@ func parseRoutes(output string) []BirdRoute {
 			current.Iface = strings.TrimSpace(m[2])
 			continue
 		}
+		if m := routeDevRe.FindStringSubmatch(line); len(m) >= 2 {
+			current.Iface = strings.TrimSpace(m[1])
+			continue
+		}
 		if m := routeFromRe.FindStringSubmatch(line); len(m) >= 2 {
 			current.From, _ = netip.ParseAddr(m[1])
 			continue
-		}
-		// Try to extract source information if present.
-		if strings.Contains(line, "Source:") || strings.Contains(line, "source") {
-			parts := strings.SplitN(trimmed, ":", 2)
-			if len(parts) == 2 {
-				current.Source = strings.TrimSpace(parts[1])
-			}
 		}
 	}
 	if current != nil {
@@ -215,51 +224,46 @@ func parseRoutes(output string) []BirdRoute {
 	return routes
 }
 
-// parseInterfaces parses the output of "show interfaces" into BirdInterface entries.
+// parseInterfaces parses BIRD's headerless "show interfaces" output.
 func parseInterfaces(output string) []BirdInterface {
 	output = stripCodes(output)
 	var ifaces []BirdInterface
 
 	lines := strings.Split(output, "\n")
-	var headerFound bool
 	for _, raw := range lines {
 		line := strings.TrimRight(raw, "\r")
-		if !headerFound {
-			if interfaceHeaderRe.MatchString(line) {
-				headerFound = true
-			}
-			continue
-		}
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		m := interfaceRowRe.FindStringSubmatch(line)
+		m := interfaceStartRe.FindStringSubmatch(line)
 		if len(m) >= 4 {
-			mtu, _ := strconv.Atoi(strings.TrimSpace(m[3]))
+			index, _ := strconv.Atoi(strings.TrimSpace(m[3]))
 			iface := BirdInterface{
 				Name:  strings.TrimSpace(m[1]),
 				State: strings.TrimSpace(m[2]),
-				MTU:   mtu,
-			}
-			if len(m) >= 5 && m[4] != "" {
-				iface.LinkLocal, _ = netip.ParseAddr(strings.TrimSpace(m[4]))
+				Index: index,
 			}
 			ifaces = append(ifaces, iface)
 			continue
 		}
 
-		// Address continuation lines.
-		if m := interfaceAddrRe.FindStringSubmatch(line); len(m) >= 2 && len(ifaces) > 0 {
-			for _, s := range strings.Fields(m[1]) {
-				s = strings.TrimSpace(s)
-				s = strings.Trim(s, "[],")
-				if s == "" {
-					continue
-				}
-				if addr, err := netip.ParseAddr(s); err == nil {
-					last := &ifaces[len(ifaces)-1]
-					last.Addresses = append(last.Addresses, addr)
+		if len(ifaces) == 0 {
+			continue
+		}
+		last := &ifaces[len(ifaces)-1]
+		if m := interfaceDetailsRe.FindStringSubmatch(line); len(m) >= 3 {
+			last.Flags = strings.TrimSpace(m[1])
+			last.MTU, _ = strconv.Atoi(m[2])
+			continue
+		}
+		// Address rows begin with an address/prefix, followed by annotations.
+		if fields := strings.Fields(line); len(fields) > 0 {
+			if prefix, err := netip.ParsePrefix(fields[0]); err == nil {
+				addr := prefix.Addr()
+				last.Addresses = append(last.Addresses, addr)
+				if addr.Is6() && addr.IsLinkLocalUnicast() {
+					last.LinkLocal = addr
 				}
 			}
 		}
@@ -273,18 +277,19 @@ func parseBabelNeighbors(output string) []BirdNeighbor {
 	var neighbors []BirdNeighbor
 
 	lines := strings.Split(output, "\n")
-	format := ""
+	var inNeighbors bool
+	var protocol string
 	for _, raw := range lines {
 		line := strings.TrimRight(raw, "\r")
-		if babelLegacyHeaderRe.MatchString(line) {
-			format = "legacy"
+		if m := babelProtocolNameRe.FindStringSubmatch(line); len(m) >= 2 {
+			protocol = m[1]
 			continue
 		}
-		if babelV219HeaderRe.MatchString(line) {
-			format = "v219"
+		if babelNeighborsHeaderRe.MatchString(line) {
+			inNeighbors = true
 			continue
 		}
-		if format == "" || strings.TrimSpace(line) == "" {
+		if !inNeighbors || strings.TrimSpace(line) == "" {
 			continue
 		}
 
@@ -292,13 +297,7 @@ func parseBabelNeighbors(output string) []BirdNeighbor {
 		if len(fields) < 3 {
 			continue
 		}
-		var iface, addrText, metricText string
-		switch format {
-		case "legacy":
-			iface, addrText, metricText = fields[0], fields[1], fields[2]
-		case "v219":
-			addrText, iface, metricText = fields[0], fields[1], fields[2]
-		}
+		addrText, iface, metricText := fields[0], fields[1], fields[2]
 		addr, err := netip.ParseAddr(addrText)
 		if err != nil {
 			continue
@@ -307,7 +306,7 @@ func parseBabelNeighbors(output string) []BirdNeighbor {
 		if err != nil {
 			continue
 		}
-		neighbors = append(neighbors, BirdNeighbor{Interface: iface, Address: addr, Metric: uint32(metric)})
+		neighbors = append(neighbors, BirdNeighbor{Interface: iface, Address: addr, Protocol: protocol, Metric: uint32(metric)})
 	}
 	return neighbors
 }

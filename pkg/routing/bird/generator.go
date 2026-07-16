@@ -300,10 +300,13 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		}
 		fmt.Fprintln(&b, "    };")
 	}
-	// Note: BIRD 2.19.x does not accept an "ecmp" directive inside the
-	// Babel protocol block, so ECMP/Limit fields from the spec are currently
-	// ignored during rendering. The struct fields are retained for future
-	// BIRD versions or alternative backends.
+	if cfg.Babel.ECMP {
+		if cfg.Babel.ECMPLimit > 0 {
+			fmt.Fprintf(&b, "    ecmp on limit %d;\n", cfg.Babel.ECMPLimit)
+		} else {
+			fmt.Fprintln(&b, "    ecmp on;")
+		}
+	}
 	if cfg.Babel.InterfacePattern != "" {
 		fmt.Fprintf(&b, "    interface %s {\n", cfg.Babel.InterfacePattern)
 		if cfg.Babel.TypeTunnel {
