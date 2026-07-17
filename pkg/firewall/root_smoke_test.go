@@ -225,12 +225,28 @@ func cleanupFirewallBackendNow(ctx context.Context, nsName, backend, ownerPrefix
 	case BackendNFT:
 		_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "nft", "delete", "table", "inet", tableName).Run()
 	case BackendIptables:
-		for _, chain := range []string{tableName + "_INPUT", tableName + "_FORWARD", tableName + "_OUTPUT"} {
-			_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "iptables", "-D", "INPUT", "-j", chain).Run()
-			_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "iptables", "-D", "FORWARD", "-j", chain).Run()
-			_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "iptables", "-D", "OUTPUT", "-j", chain).Run()
-			_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "iptables", "-F", chain).Run()
-			_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "iptables", "-X", chain).Run()
+		for _, binary := range []string{"iptables", "ip6tables"} {
+			for _, chain := range []string{
+				tableName + "_input", tableName + "_forward", tableName + "_output",
+				tableName + "_INPUT", tableName + "_FORWARD", tableName + "_OUTPUT",
+			} {
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-D", "INPUT", "-j", chain).Run()
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-D", "FORWARD", "-j", chain).Run()
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-D", "OUTPUT", "-j", chain).Run()
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-F", chain).Run()
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-X", chain).Run()
+			}
+			for _, item := range []struct {
+				builtin string
+				chain   string
+			}{
+				{"PREROUTING", tableName + "_prerouting"},
+				{"POSTROUTING", tableName + "_postrouting"},
+			} {
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-t", "nat", "-D", item.builtin, "-j", item.chain).Run()
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-t", "nat", "-F", item.chain).Run()
+				_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-t", "nat", "-X", item.chain).Run()
+			}
 		}
 		_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "iptables", "-t", "nat", "-D", "PREROUTING", "-p", "udp", "--dport", "500", "-d", "127.0.0.1", "-j", "REDIRECT", "--to-ports", "1500").Run()
 		_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "iptables", "-t", "nat", "-D", "PREROUTING", "-p", "udp", "--dport", "4500", "-d", "127.0.0.1", "-j", "REDIRECT", "--to-ports", "14500").Run()

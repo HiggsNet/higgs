@@ -110,7 +110,7 @@ func TestIPTablesDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	assertCommandContains(t, runner.commands, "iptables", "-t nat -A POSTROUTING -p udp --sport 4500 -j MASQUERADE --to-ports 33403")
+	assertCommandContains(t, runner.commands, "iptables", "-t nat -A higgs_host_postrouting -p udp --sport 4500 -j MASQUERADE --to-ports 33403")
 }
 
 func TestIPTablesDriver_HostAddressFamilyCommands(t *testing.T) {
@@ -170,10 +170,13 @@ func TestIPTablesDriver_ListOwned(t *testing.T) {
 }
 
 func TestIPTablesDriver_DeleteStale(t *testing.T) {
-	runner := &fakeCommandRunner{}
+	runner := &fakeCommandRunner{existingChains: map[string]bool{
+		"iptables:filter:higgs_higgstesth2_input":  true,
+		"ip6tables:filter:higgs_higgstesth2_input": true,
+	}}
 	d := &IPTablesDriver{Command: runner.run}
 	refs := []FirewallObjectRef{
-		{Kind: "chain", Family: "inet", Name: "higgs_higgstesth2_stale"},
+		{Kind: "chain", Family: "inet", Name: "higgs_higgstesth2_input"},
 	}
 	if err := d.DeleteStale(context.Background(), refs); err != nil {
 		t.Fatalf("DeleteStale: %v", err)
@@ -197,7 +200,7 @@ func TestIPTablesDriver_DeleteStale(t *testing.T) {
 }
 
 func TestParseIPTablesChains(t *testing.T) {
-	output := "-N higgs_higgstesth2_INPUT\n-A higgs_higgstesth2_INPUT -p udp --dport 500 -j ACCEPT\n-N higgs_higgstesth2_FORWARD\n-A INPUT -j higgs_higgstesth2_INPUT\n-N other_chain"
+	output := "-N higgs_higgstesth2_INPUT\n-A higgs_higgstesth2_INPUT -p udp --dport 500 -j ACCEPT\n-N higgs_higgstesth2_FORWARD\n-N higgs_higgstesth2_pre_user\n-A INPUT -j higgs_higgstesth2_INPUT\n-N other_chain"
 	refs := parseIPTablesChains(output, "higgs_higgstesth2", "filter")
 	if len(refs) != 2 {
 		t.Fatalf("expected 2 higgs-owned chains, got %d", len(refs))
@@ -206,6 +209,13 @@ func TestParseIPTablesChains(t *testing.T) {
 		if !strings.HasPrefix(ref.Name, "higgs_higgstesth2") {
 			t.Errorf("non-higgs chain in result: %s", ref.Name)
 		}
+	}
+	natRefs := parseIPTablesChains(
+		"-N higgs_higgstesth2_prerouting\n-N higgs_higgstesth2_postrouting\n-N higgs_higgstesth2_nat_user",
+		"higgs_higgstesth2", "nat",
+	)
+	if len(natRefs) != 2 || natRefs[0].Kind != "nat_redirect" || natRefs[1].Kind != "nat_source" {
+		t.Fatalf("nat refs = %+v, want redirect/source managed objects only", natRefs)
 	}
 }
 
@@ -375,4 +385,256 @@ func assertNatSource(t *testing.T, desired *FirewallDesiredState, original, targ
 		}
 	}
 	t.Fatalf("missing source rewrite %d -> %d comment containing %q in %+v", original, target, comment, desired.NatSources)
+}
+
+func TestIPTablesDriver_CtStateAndHookCommands(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	d := &IPTablesDriver{Command: runner.run}
+	spec := FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		OwnerPrefix: "higgs",
+		Hooks:       Hooks{PreInput: "my_pre_input", PostForward: "my_post_forward"},
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("higgstesth2", desired, FirewallObservedState{})
+	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// Conntrack and hook jump rules install for both address families, and the
+	// driver creates hook chains only when they are absent.
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		assertCommandContains(t, runner.commands, binary, "-m conntrack --ctstate INVALID -j DROP")
+		assertCommandContains(t, runner.commands, binary, "--ctstate ESTABLISHED,RELATED -j ACCEPT")
+		assertCommandContains(t, runner.commands, binary, "-j my_pre_input")
+		assertCommandContains(t, runner.commands, binary, "-j my_post_forward")
+		assertCommandContains(t, runner.commands, binary, "-N my_pre_input")
+		assertCommandContains(t, runner.commands, binary, "-N my_post_forward")
+	}
+	// Jump rules must not carry iface matches.
+	for _, cmd := range runner.commands {
+		args := strings.Join(cmd.args, " ")
+		if strings.Contains(args, "-j my_pre_input") && (strings.Contains(args, "-i my_pre_input") || strings.Contains(args, "-o my_pre_input")) {
+			t.Fatalf("hook jump rendered with iface match: %s %s", cmd.name, args)
+		}
+	}
+	// Existing hook chains must be preserved and must not be recreated.
+	existing := &fakeCommandRunner{existingChains: map[string]bool{}}
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		existing.existingChains[binary+":filter:my_pre_input"] = true
+		existing.existingChains[binary+":filter:my_post_forward"] = true
+	}
+	d2 := &IPTablesDriver{Command: existing.run}
+	if _, err := d2.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("Apply with existing hook chains should tolerate -N failures: %v", err)
+	}
+	for _, cmd := range existing.commands {
+		if len(cmd.args) == 2 && cmd.args[0] == "-N" &&
+			(cmd.args[1] == "my_pre_input" || cmd.args[1] == "my_post_forward") {
+			t.Fatalf("existing admin hook chain was recreated: %s %v", cmd.name, cmd.args)
+		}
+	}
+}
+
+func TestIPTablesDriver_FamilyNeutralAndICMPCommands(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	d := &IPTablesDriver{Command: runner.run}
+	spec := FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		OwnerPrefix: "higgs",
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("higgstesth2", desired, FirewallObservedState{})
+	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// ICMP rules render per family with an explicit protocol match.
+	assertCommandContains(t, runner.commands, "iptables", "-p icmp -j ACCEPT")
+	assertCommandContains(t, runner.commands, "ip6tables", "-p icmpv6 -j ACCEPT")
+
+	// Family-neutral rules (loopback, babel control, default policy) install
+	// for both address families.
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		assertCommandContains(t, runner.commands, binary, "-i lo -j ACCEPT")
+		assertCommandContains(t, runner.commands, binary, "-p udp --dport 6696 -j ACCEPT")
+		assertCommandContains(t, runner.commands, binary, "-i hgs+ -o hgs+ -j DROP")
+	}
+
+	// No cross-family ICMP rendering.
+	for _, cmd := range runner.commands {
+		args := strings.Join(cmd.args, " ")
+		if cmd.name == "iptables" && strings.Contains(args, "-p icmpv6") {
+			t.Fatalf("icmpv6 rendered into iptables command: %s %s", cmd.name, args)
+		}
+		if cmd.name == "ip6tables" && strings.Contains(args, "-p icmp ") {
+			t.Fatalf("icmp rendered into ip6tables command: %s %s", cmd.name, args)
+		}
+	}
+
+	// Every accept rule in the overlay INPUT chain must carry at least one
+	// match; an unconditional accept before the default policy would nullify
+	// the default drop.
+	chain := "higgs_higgstesth2_input"
+	for _, cmd := range runner.commands {
+		args := strings.Join(cmd.args, " ")
+		if !strings.Contains(args, "-A "+chain) || !strings.Contains(args, "-j ACCEPT") {
+			continue
+		}
+		matched := false
+		for _, flag := range []string{"-p ", "-i ", "-o ", "-s ", "-d ", "-m "} {
+			if strings.Contains(args, flag) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Fatalf("unconditional accept in %s: %s %s", chain, cmd.name, args)
+		}
+	}
+}
+
+func TestIPTablesDriver_ReconcileExistingManagedChains(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	d := &IPTablesDriver{Command: runner.run}
+	spec := FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		OwnerPrefix: "higgs",
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	firstPlan := PlanDiff(spec.ID, desired, FirewallObservedState{})
+	if _, err := d.Apply(context.Background(), firstPlan, desired); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+
+	runner.commands = nil
+	observed := FirewallObservedState{Objects: DesiredObjects(desired)}
+	secondPlan := PlanDiff(spec.ID, desired, observed)
+	if _, err := d.Apply(context.Background(), secondPlan, desired); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+	for _, cmd := range runner.commands {
+		if len(cmd.args) >= 2 && cmd.args[0] == "-N" {
+			t.Fatalf("second reconcile recreated existing chain: %s %v", cmd.name, cmd.args)
+		}
+	}
+	assertCommandContains(t, runner.commands, "iptables", "-F higgs_higgstesth2_input")
+	assertCommandContains(t, runner.commands, "iptables", "--ctstate ESTABLISHED,RELATED -j ACCEPT")
+}
+
+func TestIPTablesMatchArgSetsSkipsCrossFamilyPairs(t *testing.T) {
+	rule := Rule{
+		Action: ActionAccept,
+		Src: []netip.Prefix{
+			netip.MustParsePrefix("10.0.0.0/8"),
+			netip.MustParsePrefix("2001:db8::/32"),
+		},
+		Dst: []netip.Prefix{
+			netip.MustParsePrefix("192.0.2.0/24"),
+			netip.MustParsePrefix("2001:db8:1::/48"),
+		},
+	}
+	matches := iptablesMatchArgSets(rule)
+	if len(matches) != 2 {
+		t.Fatalf("match sets = %v, want two same-family pairs", matches)
+	}
+	for _, match := range matches {
+		var src, dst netip.Prefix
+		for i := 0; i+1 < len(match); i++ {
+			switch match[i] {
+			case "-s":
+				src = netip.MustParsePrefix(match[i+1])
+			case "-d":
+				dst = netip.MustParsePrefix(match[i+1])
+			}
+		}
+		if !src.IsValid() || !dst.IsValid() || src.Addr().Is4() != dst.Addr().Is4() {
+			t.Fatalf("cross-family or incomplete match generated: %v", match)
+		}
+	}
+}
+
+func TestPlanDiffKeepsObservedNATChains(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
+		OwnerPrefix: "higgs", RedirectGrace: RedirectGrace{Enabled: true},
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{
+		AdvertisedCurrentNATTPorts: []uint16{33403},
+	})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	observed := FirewallObservedState{Objects: []FirewallObjectRef{
+		{Kind: "table", Family: "inet", Name: "higgs_host"},
+		{Kind: "chain", Family: "inet", Name: "higgs_host_input"},
+		{Kind: "nat_redirect", Family: "inet", Name: "higgs_host_prerouting"},
+		{Kind: "nat_source", Family: "inet", Name: "higgs_host_postrouting"},
+	}}
+	for _, action := range PlanDiff(spec.ID, desired, observed).Actions {
+		if action.Action == "delete" {
+			t.Fatalf("current NAT object planned for deletion: %+v", action)
+		}
+	}
+}
+
+func TestIPTablesPlanRemovesDisabledNATChainsFromNATTable(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
+		OwnerPrefix: "higgs",
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	observed := FirewallObservedState{Objects: []FirewallObjectRef{
+		{Kind: "table", Family: "inet", Name: "higgs_host"},
+		{Kind: "chain", Family: "inet", Name: "higgs_host_input"},
+		{Kind: "nat_redirect", Family: "inet", Name: "higgs_host_prerouting"},
+		{Kind: "nat_source", Family: "inet", Name: "higgs_host_postrouting"},
+	}}
+	plan := PlanDiff(spec.ID, desired, observed)
+	commands := buildIPTablesApplyCommands(plan, desired)
+	for _, want := range []string{
+		"-t nat -D PREROUTING -j higgs_host_prerouting",
+		"-t nat -F higgs_host_prerouting",
+		"-t nat -X higgs_host_prerouting",
+		"-t nat -D POSTROUTING -j higgs_host_postrouting",
+		"-t nat -F higgs_host_postrouting",
+		"-t nat -X higgs_host_postrouting",
+	} {
+		found := false
+		for _, cmd := range commands {
+			if strings.Contains(strings.Join(cmd.args, " "), want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing NAT stale cleanup containing %q in %+v", want, commands)
+		}
+	}
+}
+
+func TestLegacyNATRuleNumbersDescending(t *testing.T) {
+	output := `Chain PREROUTING (policy ACCEPT)
+num  target     prot opt source destination
+1    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* other */ redir ports 500
+2    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* higgs-host:old one */ redir ports 500
+5    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* higgs-host:old two */ redir ports 4500`
+	got := legacyNATRuleNumbers(output, "higgs-host")
+	if len(got) != 2 || got[0] != 5 || got[1] != 2 {
+		t.Fatalf("legacy rule numbers = %v, want [5 2]", got)
+	}
 }

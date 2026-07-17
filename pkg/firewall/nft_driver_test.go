@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -10,6 +11,11 @@ import (
 // fakeCommandRunner captures all commands executed by a driver for assertions.
 type fakeCommandRunner struct {
 	commands []executedCommand
+	// failOnNew lists chain names whose `-N` creation should fail, simulating
+	// an already-existing chain.
+	failOnNew      map[string]bool
+	existingChains map[string]bool
+	existingRules  map[string]bool
 }
 
 type executedCommand struct {
@@ -19,9 +25,71 @@ type executedCommand struct {
 
 func (f *fakeCommandRunner) run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	f.commands = append(f.commands, executedCommand{name: name, args: args})
+	if name == "iptables" || name == "ip6tables" {
+		return f.runIPTables(name, args)
+	}
 	// Simulate `nft list tables` returning empty (no owned objects).
 	if len(args) >= 1 && args[0] == "list" {
 		return []byte(""), nil
+	}
+	return []byte(""), nil
+}
+
+func (f *fakeCommandRunner) runIPTables(binary string, args []string) ([]byte, error) {
+	if f.existingChains == nil {
+		f.existingChains = make(map[string]bool)
+	}
+	if f.existingRules == nil {
+		f.existingRules = make(map[string]bool)
+	}
+	table := "filter"
+	opIndex := 0
+	if len(args) >= 2 && args[0] == "-t" {
+		table = args[1]
+		opIndex = 2
+	}
+	if opIndex >= len(args) {
+		return []byte(""), nil
+	}
+	op := args[opIndex]
+	rest := args[opIndex+1:]
+	chainKey := func(chain string) string { return binary + ":" + table + ":" + chain }
+	switch op {
+	case "-S":
+		if len(rest) == 0 {
+			return []byte(""), nil
+		}
+		if f.existingChains[chainKey(rest[0])] {
+			return []byte("-N " + rest[0]), nil
+		}
+		return nil, errors.New("chain does not exist")
+	case "-N":
+		if len(rest) == 0 {
+			return nil, errors.New("missing chain")
+		}
+		if f.failOnNew[rest[0]] || f.existingChains[chainKey(rest[0])] {
+			return nil, errors.New("chain already exists")
+		}
+		f.existingChains[chainKey(rest[0])] = true
+	case "-F":
+		if len(rest) > 0 && !f.existingChains[chainKey(rest[0])] {
+			return nil, errors.New("chain does not exist")
+		}
+	case "-X":
+		if len(rest) > 0 && !f.existingChains[chainKey(rest[0])] {
+			return nil, errors.New("chain does not exist")
+		}
+		if len(rest) > 0 {
+			delete(f.existingChains, chainKey(rest[0]))
+		}
+	case "-C":
+		key := binary + ":" + table + ":" + strings.Join(rest, "\x00")
+		if !f.existingRules[key] {
+			return nil, errors.New("rule does not exist")
+		}
+	case "-I":
+		key := binary + ":" + table + ":" + strings.Join(rest, "\x00")
+		f.existingRules[key] = true
 	}
 	return []byte(""), nil
 }
@@ -122,16 +190,23 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	if result.Applied == 0 {
 		t.Error("expected non-zero applied count")
 	}
-	// Check for nat prerouting chain creation.
+	// Check for host input and nat prerouting base-chain creation.
 	foundNatChain := false
+	foundInputChain := false
 	for _, cmd := range runner.commands {
 		argsStr := strings.Join(cmd.args, " ")
 		if strings.Contains(argsStr, "prerouting") && strings.Contains(argsStr, "nat") {
 			foundNatChain = true
 		}
+		if strings.Contains(argsStr, "higgs_host_input") && strings.Contains(argsStr, "hook input") {
+			foundInputChain = true
+		}
 	}
 	if !foundNatChain {
 		t.Error("expected NAT prerouting chain creation")
+	}
+	if !foundInputChain {
+		t.Error("expected host input base-chain creation")
 	}
 }
 
@@ -290,5 +365,35 @@ func TestNFTDriver_DeleteStale(t *testing.T) {
 	}
 	if !foundDeleteTable {
 		t.Error("missing delete table command")
+	}
+}
+
+func TestRenderNFTRuleCtStateAndJump(t *testing.T) {
+	invalid := renderNFTRule(Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
+	if !strings.Contains(invalid, "ct state invalid drop") {
+		t.Errorf("invalid drop rendered as %q", invalid)
+	}
+	est := renderNFTRule(Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related"})
+	if !strings.Contains(est, "ct state { established, related } accept") {
+		t.Errorf("established/related rendered as %q", est)
+	}
+	jump := renderNFTRule(Rule{Action: ActionJump, JumpTarget: "my_pre_input", Comment: "pre_input hook"})
+	if !strings.Contains(jump, "jump my_pre_input") {
+		t.Errorf("hook jump rendered as %q", jump)
+	}
+	if strings.Contains(jump, "iifname") || strings.Contains(jump, "oifname") {
+		t.Errorf("hook jump must not render an iface match: %q", jump)
+	}
+}
+
+func TestBuildDesiredStateRejectsNFTHooks(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		Backend: BackendNFT, DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		OwnerPrefix: "higgs",
+		Hooks:       Hooks{PreInput: "my_pre_input", PostOutput: "my_post_output"},
+	}
+	if _, err := BuildDesiredState(spec, FirewallPolicyInput{}); err == nil || !strings.Contains(err.Error(), "nft backend does not support hooks") {
+		t.Fatalf("BuildDesiredState error = %v, want nft hooks rejection", err)
 	}
 }

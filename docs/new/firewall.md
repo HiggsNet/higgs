@@ -2,7 +2,7 @@
 
 > **本文档状态：2026-07**
 > 描述 Higgs firewall 子系统的当前实现：`pkg/firewall` 的 planner 与 backend driver、`app/higgs` 中的 reconcile 集成，以及 `higgs debug firewall` 等诊断命令。
-> 旧设计参考见 `docs/phase6-firewall-design.md`，但本文以当前代码为准；文中会显式标注已实现行为与设计文档的差异或待完善项。
+> 本文以当前代码为准；文中会显式标注已实现行为与原设计的差异或待完善项。原 Phase 6.3 设计文档已并入本文（差异与后续方向见第 8 节），不再单独保留。
 
 Firewall 是 Higgs overlay data-plane 的安全边界执行器。它把已通过 Zone trust chain 验证的 IPAM、route announcement、revocation state 和本地配置策略，收敛成 Linux 防火墙规则。它**不是**通用主机防火墙，不管理 SSH、Docker、Kubernetes 等发行版默认规则。
 
@@ -48,7 +48,7 @@ overlay netns (e.g. h2)
   └─ Higgs-owned input/forward/output policy
 ```
 
-Firewall 跟随 netns 隔离边界：一个 netns 对应一个 firewall instance。host 单独作为一个特殊 instance。
+Firewall 跟随 netns 隔离边界：一个 netns 对应一个 firewall instance。host 单独作为一个特殊 instance。主策略放在 overlay netns，是因为 overlay 的路由和业务前缀已经按 netns 隔离，防火墙跟随该边界最自然；host 上可能已有管理员、发行版或容器运行时管理的防火墙，因此 host 侧只保留 Higgs 必须拥有的最小入口。端口 rotate / NAT-T 入口规则无法完全留在 overlay netns，只能作为 host 上明确的独立 plan 处理。
 
 ---
 
@@ -114,6 +114,17 @@ type ForwardingPolicy struct {
 - `Transit=true`：按 `AllowPrefixes`/`DenyPrefixes` 过滤后的 mesh 前缀允许 XFRM→XFRM transit。
 
 > **注意**：当前代码只使用 `AllowPrefixes`/`DenyPrefixes`，`AllowPeers`/`DenyPeers` 字段存在但**未实际参与过滤**。
+
+### 2.5 接口角色
+
+Planner 按接口角色分别处理流量：
+
+- `xfrm_tunnel`：mesh peer 之间的数据面接口，由 `xfrm_tunnel_pattern`（默认 `hgs*`）匹配。
+- `upstream_veth`：overlay netns 与 host/主网络之间的出入口，由 `upstream_patterns`（默认 `hgs-upstream*`）匹配。
+- `loopback`：本机服务。
+- underlay 接口不在 overlay netns 内处理；host 入口见第 4.4 节。
+
+跨 upstream veth 的流量必须有显式规则（见第 4.3 节 forward chain）：默认不把 mesh 学到的路由直接暴露给主网络。
 
 ---
 
@@ -200,7 +211,7 @@ local_services:
 
 ### 3.5 hooks
 
-Hook 用于挂载管理员自定义 chain。当前代码已解析并保留字段，但**生成的规则语法有误**，hook 实际无法生效（见第 8 节）。
+Hook 用于挂载管理员自定义 chain：planner 在对应位置生成 `jump` 规则指向配置的 chain 名，chain 内容由管理员自行维护，Higgs 不管理其中规则。当前只有 iptables backend 支持 hooks；driver 会创建尚不存在的空 hook chain，已存在的 chain 不会被 flush 或删除。
 
 ```yaml
 hooks:
@@ -208,14 +219,18 @@ hooks:
   post_input: higgs_h2_post_user
   pre_forward: higgs_h2_pre_fwd
   post_forward: higgs_h2_post_fwd
-  pre_output: higgs_h2_pre_out
   post_output: higgs_h2_post_out
-  # host-only hooks
-  host_pre_prerouting: ...
-  host_post_prerouting: ...
-  host_pre_input: ...
-  host_post_input: ...
+  # 以下字段保留在配置模型中但尚未实现；配置非空值会报错：
+  # pre_output: ...
+  # host_pre_prerouting: ...
+  # host_post_prerouting: ...
+  # host_pre_input: ...
+  # host_post_input: ...
 ```
+
+当前 overlay 实际接线的是 `pre_input` / `post_input` / `pre_forward` / `post_forward` / `post_output` 五个挂点；`pre_output` 与 `host_*` hooks 尚未接线（见第 8 节）。
+
+> **注意（nft 后端）**：nft 的 `jump` 目标必须位于同一 table，而当前 nft backend 每轮会整表重建，无法保留管理员规则。因此显式 `backend: nft` 配置 hooks 会被拒绝；`backend: auto` 在 hooks 存在时优先选择 iptables，iptables 不可用则报错。
 
 ---
 
@@ -226,7 +241,7 @@ Planner 是纯逻辑函数，不执行 I/O，不依赖 root。
 ### 4.1 入口与输入
 
 ```go
-// pkg/firewall/planner.go:45
+// pkg/firewall/planner.go:50
 func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*FirewallDesiredState, error)
 ```
 
@@ -266,27 +281,29 @@ overlay 实例生成 `input`、`forward`、`output` 三条 filter chain。
 #### input chain（按生成顺序）
 
 ```text
-1. loopback accept
-2. pre_input hook（当前语法有误）
-3. UDP 6696 (Babel) accept
-4. ICMP / ICMPv6 accept
-5. established/related accept（当前无 ct state 匹配）
-6. local_services accept
-7. mesh authorized -> local assigned accept
-8. post_input hook（当前语法有误）
-9. default policy (drop / accept)
+1. invalid drop (ct state)
+2. loopback accept
+3. pre_input hook
+4. UDP 6696 (Babel) accept
+5. ICMP / ICMPv6 accept
+6. established/related accept (ct state)
+7. local_services accept
+8. mesh authorized -> local assigned accept
+9. post_input hook
+10. default policy (drop / accept)
 ```
 
 #### forward chain
 
 ```text
-1. established/related accept（当前无 ct state 匹配）
-2. pre_forward hook（当前语法有误）
-3. XFRM->XFRM：transit=false 则 drop；transit=true 则按 forwarding policy allow
-4. XFRM->upstream：允许到 local assigned 前缀
-5. upstream->XFRM：允许到 mesh authorized 前缀
-6. post_forward hook（当前语法有误）
-7. default policy (drop / accept)
+1. invalid drop (ct state)
+2. established/related accept (ct state)
+3. pre_forward hook
+4. XFRM->XFRM：transit=false 则 drop；transit=true 则按 forwarding policy allow
+5. XFRM->upstream：允许到 local assigned 前缀
+6. upstream->XFRM：允许到 mesh authorized 前缀
+7. post_forward hook
+8. default policy (drop / accept)
 ```
 
 #### output chain
@@ -296,7 +313,7 @@ overlay 实例生成 `input`、`forward`、`output` 三条 filter chain。
 2. UDP 6696 (Babel) accept
 3. ICMP / ICMPv6 accept
 4. local assigned source accept
-5. post_output hook（当前语法有误）
+5. post_output hook
 6. default accept（output 固定为 accept）
 ```
 
@@ -337,13 +354,21 @@ desired.ForwardRules = append(desired.ForwardRules, Rule{
 当 `redirect_grace.enabled=true` 时，把当前或历史 advertised 端口重定向到当前 charon 监听端口（IKE 500 / NAT-T 4500）。同时生成 source-port rewrite 规则，使本机发出的传输流量源端口与 advertised 端口一致。
 
 ```go
-// pkg/firewall/planner.go:332-353
+// pkg/firewall/planner.go:340-361
 addNatRedirects(desired, input.AdvertisedCurrentIKEPorts, ikePort, "redirect current", "ike", spec.ListenAddrs)
 addNatRedirects(desired, input.AdvertisedPreviousIKEPorts, ikePort, "redirect grace", "ike", spec.ListenAddrs)
 addNatRedirects(desired, input.AdvertisedCurrentNATTPorts, nattPort, "redirect current", "natt", spec.ListenAddrs)
 addNatRedirects(desired, input.AdvertisedPreviousNATTPorts, nattPort, "redirect grace", "natt", spec.ListenAddrs)
 addNatSourceRewrites(...)
 ```
+
+这一模型的要点：
+
+- charon 始终以稳定端口监听（IKE 500 / NAT-T 4500）；`ipsec.port_mode=range` 的 advertised entry port 只是对外公布的 wire 入口，charon 不绑定每个 generation 的端口，入口兼容完全由 NAT redirect 解决。这不是 StrongSwan per-connection listener。
+- previous advertised ports 只用于入方向 grace；新出站流量的源端口始终 rewrite 到 current advertised 端口，避免延长旧 generation 的主动使用窗口。
+- previous 端口记录带 grace 窗口（`ValidUntil`），过期端口不再进入 planner 输入，对应规则随下一轮 reconcile 消失。
+- redirect grace 只解决 responder 入口端口兼容，source-port rewrite 只让 wire 源端口与公告一致；二者都不保证 CHILD_SA 无中断迁移，SA 生命周期仍由 StrongSwan/VICI reconcile 管理。
+- 排障时注意端口视角差异：`swanctl --list-sas` / `ip xfrm state` 展示的是 charon 视角的 500/4500，underlay 接口上抓包看到的则是 rewrite 后的 advertised 端口。二者不一致是预期行为，不作为 wire-port 故障依据。
 
 WireGuard 的 previous port redirect 也已预留字段，但依赖 Phase 7 WireGuard transport driver 提供 advertised 端口。
 
@@ -364,6 +389,8 @@ type FirewallDriver interface {
 }
 ```
 
+overlay 实例的 driver 会把所有命令用 `ip netns exec <netns>` 包装后执行，使规则真正下发到对应命名空间；host 实例直接在 host netns 执行。
+
 ### 5.2 nftables 后端（`NFTDriver`）
 
 - 使用 `nft` CLI（非 netlink API）。
@@ -371,13 +398,17 @@ type FirewallDriver interface {
 - overlay 创建 `input`、`forward`、`output` chain；host 额外创建 `prerouting`、`postrouting`。
 - Mesh 前缀使用 `set`，命名如 `higgs_h2_mesh_v4`、`higgs_h2_mesh_v6`，带 `flags interval`。
 - `Apply` 时如果观察到已存在同名 Higgs-owned table，先 `delete table` 再整体重建，避免 stale rule 累积。
+- 当前不支持 hooks；带 hooks 的 nft desired state 会在 apply 前被拒绝（见 §3.5）。
 
 ### 5.3 iptables 后端（`IPTablesDriver`）
 
 - 同时操作 `iptables` 与 `ip6tables`。
-- 通过 chain 名前缀 `higgs_<scope>_INPUT/FORWARD/OUTPUT` 识别归属。
+- 只把精确命名的 managed chain（`higgs_<scope>_input/forward/output` 及 host NAT chain）识别为归属对象，避免把共享前缀的管理员 hook chain 当作 stale 清理。
 - 使用 `-m comment --comment higgs-<scope>` 标记 Higgs 规则。
-- NAT redirect 用 `REDIRECT --to-ports`；source rewrite 用 `MASQUERADE --to-ports`。
+- NAT redirect 用 dedicated prerouting chain 中的 `REDIRECT --to-ports`；source rewrite 用 dedicated postrouting chain 中的 `MASQUERADE --to-ports`，每轮 flush/refill。
+- 配置了 hooks 时，`Apply` 用 `-N` 幂等创建空 hook chain 作为 jump 目标（chain 已存在时不报错，内容保留）。
+- 地址族处理：带 v4/v6 前缀或地址的规则按族只进对应 binary；族中立规则（无前缀匹配、非 ICMP 协议，如 loopback、babel、conntrack、hook jump、default policy）同时下发到 `iptables` 与 `ip6tables`；ICMP 规则按族分别渲染（`-p icmp` 只进 `iptables`，`-p icmpv6` 只进 `ip6tables`）。
+- 接口前缀模式在 planner 中使用 nft 风格尾随 `*`；iptables 渲染时转换为 xtables 的尾随 `+`（例如 `hgs*` → `hgs+`）。
 
 ### 5.4 dry-run 后端（`DryRunDriver`）
 
@@ -464,6 +495,15 @@ type FirewallReconcileInstance struct {
 
 > **注意**：当前 `Generation` 在 `NFTDriver` / `IPTablesDriver` / `DryRunDriver` 中均返回固定值 `1`，未实现真正的 generation 递增。
 
+### 6.4 失败语义
+
+`reconcileFirewall` 按 instance 隔离失败，单个实例出错不影响其他实例：
+
+- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并持久化，可由 `higgs debug firewall` 查看。
+- driver `Apply` 对命令列表逐条执行、尽力而为：单条失败不中断后续命令，失败命令计入 `Failed` 并汇总返回。失败时可能留下部分应用的规则，不做回滚，靠下一轮 reconcile 继续收敛（nft 后端每轮先整体删表重建，天然清理残留）。
+- backend 不可用（`nft`/`iptables` 均缺失）：daemon 记录 warning 日志并退化为 dry-run driver，不修改系统规则；系统上已有的旧规则保持不动。
+- 撤销（revocation）不走特殊通道：Zone record 变化经 `notifyStateChanged` 触发 flush，deny-first 由 planner 的 `buildPrefixSets` 在生成期望状态时保证（见 4.2）。
+
 ---
 
 ## 7. Debug 与诊断
@@ -498,45 +538,34 @@ higgs debug preflight
 
 ## 8. 已知限制与实现缺口
 
-以下条款均以当前代码为准，与 `docs/phase6-firewall-design.md` 存在差异或尚未完成：
+以下条款均以当前代码为准，与原 Phase 6.3 设计存在差异或尚未完成：
 
-| 项 | 设计文档期望 | 当前实现 | 影响 |
+| 项 | 设计期望 | 当前实现 | 影响 |
 |---|---|---|---|
-| Hook 规则 | `jump <admin_chain>` | 把 hook chain 名填进 `IfaceIn`，渲染成 `iifname "<chain>" jump` | **管理员 hook 无法生效** |
-| Invalid drop | overlay input 开头 drop invalid | 未生成 | 基础安全规则不完整 |
-| Established/related conntrack | 基于 `ct state` 匹配 | 只生成 comment 为 "established related" 的 accept 规则，无 `ct state` | 语义退化为全 accept |
+| nft 后端 hooks | 保留管理员 hook chain 内规则 | 当前整表重建模型无法保留，配置时拒绝；auto 尝试选择 iptables | nft 暂不支持 hooks |
 | Host hooks | host pre/post input/prerouting hook | host 规则未使用任何 hook | 未实现 |
 | `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 |
 | Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、host NAT hook、ipset | 仅检测 `nft`/`iptables` 命令，`CAP_NET_ADMIN` 用 `nft list tables` 近似 | 探测较粗糙 |
 | netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 |
 | Generation 递增 | 每次 apply 递增 | 各 driver 返回 `Generation: 1` | 无法按 generation 区分历史 |
 | 停止清理 | shutdown 时回滚 owned rules | 停止时未调用 `DeleteStale` | daemon 退出后规则残留 |
-| 周期 reconcile timer | 设计建议有周期 timer | 定义了 `defaultFirewallReconcileInterval` 但主循环未调度 | 只靠事件触发 |
+| 周期 reconcile timer | 设计建议有周期 timer | 定义了 `defaultFirewallReconcileInterval`（30s）但主循环未调度 | 只靠事件触发 |
 | 冲突检测 | 检测非 Higgs 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 |
 | 优先级配置 | `priority.filter` / `priority.nat` | 未实现 | chain 优先级不可配置 |
 | `AllowPeers`/`DenyPeers` | 按 peer zone 过滤 transit | 字段存在但**未实际使用** | 仅前缀过滤生效 |
-| 命名约定 | 建议 `HIGGS-H2-INPUT` | 实际 `higgs_h2_INPUT` | 风格差异 |
+| debug 命令 flag | `--netns` / `--host` / `--dry-run` / `--json` | 未实现，只有裸 `higgs debug firewall` | 无法按实例过滤或预演 diff |
+| 命名约定 | 建议 `HIGGS-H2-INPUT` | 实际 `higgs_h2_input` | 风格差异 |
 
-### 8.1 Hook 语法问题详解
-
-当前 overlay planner 生成的 hook 规则形如：
-
-```go
-// pkg/firewall/planner.go:142-143
-addRule(ChainInput, Rule{Action: "jump", Comment: "pre_input hook", IfaceIn: spec.Hooks.PreInput})
-```
-
-`IfaceIn` 被后端渲染为接口匹配（`iifname`），而不是 `jump` 的目标 chain。因此 hook 规则会生成类似：
-
-```text
-iifname "higgs_h2_pre_user" jump
-```
-
-这是错误语法：既把 chain 名当接口名，又缺少 jump 目标。需要修复 planner 增加独立的 jump target 字段，并调整 backend 渲染逻辑。
-
-### 8.2 使用建议
+### 8.1 使用建议
 
 - 生产环境建议显式配置 `backend: nft` 或 `backend: iptables`，避免 `auto` 在命令缺失时落入 dry-run 而不自知。
 - host 实例在 `ipsec.port_mode=range` 时默认启用 redirect grace；若使用固定端口，可关闭 `redirect_grace`。
-- 不要依赖 hook 做关键安全策略，等待 hook 语法修复。
+- hooks 仅用于 iptables backend；关键安全策略仍建议直接通过 Higgs 管理的规则表达。
 - daemon 升级或停止后，建议手动检查并清理残留的 Higgs-owned table/chain（`nft list tables` 或 `iptables -L | grep higgs_`）。
+
+### 8.2 后续设计方向
+
+原设计中尚未排期、仍作为方向保留的内容：
+
+- **forwarding policy 升级为 signed record**：`ForwardingPolicy` 当前来自本地配置，后续可升级为 `routing/forwarding` signed record，使转发意图可验证、可传播，并继续由 BIRD 与 firewall 共享同一份来源。
+- **gossip 中继控制信号**：源节点可通过 gossip 发布“不希望某些中继转发自己的路由”的 hint，用于规避质量差、费用高或不可信的链路。

@@ -3,6 +3,7 @@ package firewall
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -536,24 +537,147 @@ func TestBuildDesiredState_Hooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	foundPreInput := false
-	foundPostForward := false
-	for _, r := range desired.InputRules {
-		if r.Comment == "pre_input hook" {
-			foundPreInput = true
+	assertHookJump := func(rules []Rule, comment, target string) {
+		t.Helper()
+		for _, r := range rules {
+			if r.Comment != comment {
+				continue
+			}
+			if r.Action != ActionJump {
+				t.Fatalf("%s action = %q, want jump", comment, r.Action)
+			}
+			if r.JumpTarget != target {
+				t.Fatalf("%s jump target = %q, want %s", comment, r.JumpTarget, target)
+			}
+			if r.IfaceIn != "" || r.IfaceOut != "" {
+				t.Fatalf("%s must not set iface match, got in=%q out=%q", comment, r.IfaceIn, r.IfaceOut)
+			}
+			return
 		}
+		t.Fatalf("%s not found", comment)
 	}
-	for _, r := range desired.ForwardRules {
-		if r.Comment == "post_forward hook" {
-			foundPostForward = true
+	assertHookJump(desired.InputRules, "pre_input hook", "my_pre_input")
+	assertHookJump(desired.ForwardRules, "post_forward hook", "my_post_forward")
+}
+
+func TestBuildDesiredState_InvalidDropFirst(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if len(desired.InputRules) < 2 {
+		t.Fatalf("input rules = %+v, want at least invalid drop and loopback", desired.InputRules)
+	}
+	first := desired.InputRules[0]
+	if first.Action != ActionDrop {
+		t.Fatalf("first input rule action = %q, want drop", first.Action)
+	}
+	if len(first.CtStates) != 1 || first.CtStates[0] != CtStateInvalid {
+		t.Fatalf("first input rule ct states = %v, want [invalid]", first.CtStates)
+	}
+	if desired.InputRules[1].Comment != "loopback" {
+		t.Fatalf("second input rule = %+v, want loopback accept", desired.InputRules[1])
+	}
+	if len(desired.ForwardRules) == 0 {
+		t.Fatal("forward rules are empty")
+	}
+	forwardFirst := desired.ForwardRules[0]
+	if forwardFirst.Action != ActionDrop || len(forwardFirst.CtStates) != 1 || forwardFirst.CtStates[0] != CtStateInvalid {
+		t.Fatalf("first forward rule = %+v, want ct state invalid drop", forwardFirst)
+	}
+}
+
+func TestBuildDesiredState_RejectsUnsupportedOrUnsafeHooks(t *testing.T) {
+	base := FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, OwnerPrefix: "higgs",
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*FirewallInstanceSpec)
+		wantErr string
+	}{
+		{
+			name: "pre output not implemented",
+			mutate: func(spec *FirewallInstanceSpec) {
+				spec.Hooks.PreOutput = "admin_pre_output"
+			},
+			wantErr: "pre_output hook is not implemented",
+		},
+		{
+			name: "host hooks not implemented",
+			mutate: func(spec *FirewallInstanceSpec) {
+				spec.IsHost = true
+				spec.NetNS = "host"
+				spec.Hooks.HostPreInput = "admin_host_input"
+			},
+			wantErr: "host hooks are not implemented",
+		},
+		{
+			name: "managed chain collision",
+			mutate: func(spec *FirewallInstanceSpec) {
+				spec.Hooks.PreInput = "higgs_higgstesth2_input"
+			},
+			wantErr: "conflicts with a managed or built-in chain",
+		},
+		{
+			name: "unsupported character",
+			mutate: func(spec *FirewallInstanceSpec) {
+				spec.Hooks.PreInput = "admin hook"
+			},
+			wantErr: "contains unsupported character",
+		},
+		{
+			name: "too long",
+			mutate: func(spec *FirewallInstanceSpec) {
+				spec.Hooks.PreInput = "admin_hook_name_that_is_too_long"
+			},
+			wantErr: "28-character limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := base
+			tt.mutate(&spec)
+			_, err := BuildDesiredState(spec, FirewallPolicyInput{})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("BuildDesiredState error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestBuildDesiredState_EstablishedRelatedCtState(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	assertEstRelated := func(chain string, rules []Rule) {
+		t.Helper()
+		for _, r := range rules {
+			if r.Comment != "established related" {
+				continue
+			}
+			if r.Action != ActionAccept {
+				t.Fatalf("%s established/related action = %q, want accept", chain, r.Action)
+			}
+			if len(r.CtStates) != 2 || r.CtStates[0] != CtStateEstablished || r.CtStates[1] != CtStateRelated {
+				t.Fatalf("%s established/related ct states = %v, want [established related]", chain, r.CtStates)
+			}
+			return
 		}
+		t.Fatalf("%s established/related rule not found", chain)
 	}
-	if !foundPreInput {
-		t.Error("pre_input hook not found")
-	}
-	if !foundPostForward {
-		t.Error("post_forward hook not found")
-	}
+	assertEstRelated("input", desired.InputRules)
+	assertEstRelated("forward", desired.ForwardRules)
 }
 
 func TestBuildDesiredState_RevokedPrefixesExcluded(t *testing.T) {

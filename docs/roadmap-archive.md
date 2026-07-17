@@ -875,7 +875,7 @@
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（已完成主线归档）
 
-**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/new/routing.md`、`docs/new/daemon.md`（原 `docs/phase6-event-driven-design.md` 已并入并删除）、`docs/phase6-firewall-design.md`、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
+**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/new/routing.md`、`docs/new/daemon.md`（原 `docs/phase6-event-driven-design.md` 已并入并删除）、`docs/new/firewall.md`（原 `docs/phase6-firewall-design.md` 已并入并删除）、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
 
 - [x] **6.0 事件驱动控制面重构**
   - [x] 默认启用 event loop + `SyncSession` FSM；packet demux、timer manager、异步 object pull、UDP chunk fallback、relay fanout 均接入事件循环。

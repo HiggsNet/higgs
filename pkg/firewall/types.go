@@ -6,7 +6,7 @@
 // backend-agnostic FirewallDesiredState. A FirewallDriver renders and applies that
 // desired state to the system (nftables first, iptables fallback, dry-run for tests).
 //
-// Design document: docs/phase6-firewall-design.md
+// Design document: docs/new/firewall.md
 package firewall
 
 import (
@@ -186,16 +186,18 @@ type FirewallDesiredState struct {
 
 // Rule is a single backend-agnostic firewall rule.
 type Rule struct {
-	ID       string
-	Chain    string // input | forward | output
-	Action   string // accept | drop
-	Proto    string // tcp | udp | icmp | ipv6-icmp | ""
-	Src      []netip.Prefix
-	Dst      []netip.Prefix
-	IfaceIn  string
-	IfaceOut string
-	Port     uint16 // destination port, 0 = any
-	Comment  string
+	ID         string
+	Chain      string // input | forward | output
+	Action     string // accept | drop | jump
+	Proto      string // tcp | udp | icmp | ipv6-icmp | ""
+	Src        []netip.Prefix
+	Dst        []netip.Prefix
+	IfaceIn    string
+	IfaceOut   string
+	Port       uint16   // destination port, 0 = any
+	CtStates   []string // conntrack states to match: established | related | invalid
+	JumpTarget string   // jump target chain, only when Action == "jump"
+	Comment    string
 }
 
 // HostIngressRule is a host-side allow rule for IKE/NAT-T entry ports.

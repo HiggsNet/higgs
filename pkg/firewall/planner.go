@@ -24,6 +24,7 @@ const (
 
 	ActionAccept = "accept"
 	ActionDrop   = "drop"
+	ActionJump   = "jump"
 
 	ChainInput   = "input"
 	ChainForward = "forward"
@@ -33,6 +34,10 @@ const (
 	ProtoUDP    = "udp"
 	ProtoICMP   = "icmp"
 	ProtoICMPv6 = "ipv6-icmp"
+
+	CtStateEstablished = "established"
+	CtStateRelated     = "related"
+	CtStateInvalid     = "invalid"
 
 	defaultIKEPort  = 500
 	defaultNATTPort = 4500
@@ -49,6 +54,9 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 	if spec.Mode == ModeDisabled {
 		return &FirewallDesiredState{Instance: spec}, nil
 	}
+	if err := validateFirewallHooks(spec); err != nil {
+		return nil, err
+	}
 	prefixes := buildPrefixSets(input)
 	desired := &FirewallDesiredState{
 		Instance: spec,
@@ -60,6 +68,62 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 		buildOverlayRules(desired, spec, input)
 	}
 	return desired, nil
+}
+
+// HasOverlayHooks reports whether the currently-wired overlay hook fields are
+// configured. nft cannot preserve these admin-managed chains with its current
+// whole-table rebuild model; auto backend selection uses this to prefer
+// iptables.
+func HasOverlayHooks(h Hooks) bool {
+	return h.PreInput != "" || h.PostInput != "" ||
+		h.PreForward != "" || h.PostForward != "" || h.PostOutput != ""
+}
+
+func validateFirewallHooks(spec FirewallInstanceSpec) error {
+	h := spec.Hooks
+	hasHostHooks := h.HostPrePrerouting != "" || h.HostPostPrerouting != "" ||
+		h.HostPreInput != "" || h.HostPostInput != ""
+	if spec.IsHost {
+		if HasOverlayHooks(h) || h.PreOutput != "" || hasHostHooks {
+			return fmt.Errorf("firewall instance %q: host hooks are not implemented", spec.ID)
+		}
+		return nil
+	}
+	if hasHostHooks {
+		return fmt.Errorf("firewall instance %q: host hooks require a host instance and are not implemented", spec.ID)
+	}
+	if h.PreOutput != "" {
+		return fmt.Errorf("firewall instance %q: pre_output hook is not implemented", spec.ID)
+	}
+	if spec.Backend == BackendNFT && HasOverlayHooks(h) {
+		return fmt.Errorf("firewall instance %q: nft backend does not support hooks with whole-table rebuild; use backend iptables", spec.ID)
+	}
+
+	managedPrefix := chainNameSuffix(spec)
+	reserved := map[string]bool{
+		"INPUT": true, "FORWARD": true, "OUTPUT": true,
+		strings.ToUpper(managedPrefix + "_input"):   true,
+		strings.ToUpper(managedPrefix + "_forward"): true,
+		strings.ToUpper(managedPrefix + "_output"):  true,
+	}
+	for _, target := range []string{h.PreInput, h.PostInput, h.PreForward, h.PostForward, h.PostOutput} {
+		if target == "" {
+			continue
+		}
+		if len(target) > 28 {
+			return fmt.Errorf("firewall instance %q: hook chain %q exceeds the iptables 28-character limit", spec.ID, target)
+		}
+		for _, r := range target {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.') {
+				return fmt.Errorf("firewall instance %q: hook chain %q contains unsupported character %q", spec.ID, target, r)
+			}
+		}
+		if reserved[strings.ToUpper(target)] {
+			return fmt.Errorf("firewall instance %q: hook chain %q conflicts with a managed or built-in chain", spec.ID, target)
+		}
+	}
+	return nil
 }
 
 // buildPrefixSets partitions prefixes by family and purpose. Revoked prefixes
@@ -135,24 +199,27 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		}
 	}
 
-	// 1. loopback accept
+	// 1. invalid drop (ct state)
+	addRule(ChainInput, Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
+
+	// 2. loopback accept
 	addRule(ChainInput, Rule{Action: ActionAccept, IfaceIn: "lo", Comment: "loopback"})
 
-	// 2. pre_input hook
+	// 3. pre_input hook
 	if spec.Hooks.PreInput != "" {
-		addRule(ChainInput, Rule{Action: "jump", Comment: "pre_input hook", IfaceIn: spec.Hooks.PreInput})
+		addRule(ChainInput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PreInput, Comment: "pre_input hook"})
 	}
 
-	// 3. BIRD/Babel control traffic (UDP 6696 for babel)
+	// 4. BIRD/Babel control traffic (UDP 6696 for babel)
 	addRule(ChainInput, Rule{Action: ActionAccept, Proto: ProtoUDP, Port: 6696, Comment: "babel control"})
 	// ICMP for health/neighbor discovery
 	addRule(ChainInput, Rule{Action: ActionAccept, Proto: ProtoICMP, Comment: "icmp health"})
 	addRule(ChainInput, Rule{Action: ActionAccept, Proto: ProtoICMPv6, Comment: "icmpv6 health"})
 
-	// 4. established/related
-	addRule(ChainInput, Rule{Action: ActionAccept, Comment: "established related", ID: chainSuffix + "_input_est"})
+	// 5. established/related
+	addRule(ChainInput, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_input_est"})
 
-	// 5. local services
+	// 6. local services
 	for _, svc := range spec.LocalServices {
 		srcs := svc.Sources
 		if len(srcs) == 0 {
@@ -167,7 +234,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		})
 	}
 
-	// 6. mesh authorized sources to local assigned prefixes
+	// 7. mesh authorized sources to local assigned prefixes
 	if len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0 {
 		allMesh := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
 		allLocal := append(append([]netip.Prefix{}, prefixes.LocalAssignedV4...), prefixes.LocalAssignedV6...)
@@ -181,19 +248,23 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		}
 	}
 
-	// 7. post_input hook
+	// 8. post_input hook
 	if spec.Hooks.PostInput != "" {
-		addRule(ChainInput, Rule{Action: "jump", Comment: "post_input hook", IfaceIn: spec.Hooks.PostInput})
+		addRule(ChainInput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostInput, Comment: "post_input hook"})
 	}
 
-	// 8. default policy
+	// 9. default policy
 	addRule(ChainInput, Rule{Action: defaultPolicyVerb(defaultPolicy), Comment: "default policy"})
 
 	// --- forward chain ---
-	addRule(ChainForward, Rule{Action: ActionAccept, Comment: "established related", ID: chainSuffix + "_fwd_est"})
+	// 1. invalid drop (ct state)
+	addRule(ChainForward, Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
+
+	// 2. established/related
+	addRule(ChainForward, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_fwd_est"})
 
 	if spec.Hooks.PreForward != "" {
-		addRule(ChainForward, Rule{Action: "jump", Comment: "pre_forward hook", IfaceIn: spec.Hooks.PreForward})
+		addRule(ChainForward, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PreForward, Comment: "pre_forward hook"})
 	}
 
 	xfrmPat := spec.XFRMTunnelPattern
@@ -258,7 +329,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	}
 
 	if spec.Hooks.PostForward != "" {
-		addRule(ChainForward, Rule{Action: "jump", Comment: "post_forward hook", IfaceIn: spec.Hooks.PostForward})
+		addRule(ChainForward, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostForward, Comment: "post_forward hook"})
 	}
 	addRule(ChainForward, Rule{Action: defaultPolicyVerb(defaultPolicy), Comment: "default policy"})
 
@@ -273,7 +344,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		addRule(ChainOutput, Rule{Action: ActionAccept, Src: localAll, Comment: "local assigned source"})
 	}
 	if spec.Hooks.PostOutput != "" {
-		addRule(ChainOutput, Rule{Action: "jump", Comment: "post_output hook", IfaceOut: spec.Hooks.PostOutput})
+		addRule(ChainOutput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostOutput, Comment: "post_output hook"})
 	}
 	// Output default to accept for overlay services; can be tightened.
 	addRule(ChainOutput, Rule{Action: ActionAccept, Comment: "default policy"})
@@ -465,6 +536,25 @@ func chainNameSuffix(spec FirewallInstanceSpec) string {
 	return prefix + "_" + spec.NetNS
 }
 
+// jumpTargets returns the sorted unique set of hook chain names referenced by
+// jump rules in the desired state. The iptables backend creates missing targets;
+// the nft backend rejects hooks because whole-table rebuilds cannot preserve them.
+func jumpTargets(desired *FirewallDesiredState) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, rules := range [][]Rule{desired.InputRules, desired.ForwardRules, desired.OutputRules} {
+		for _, r := range rules {
+			if r.Action != ActionJump || r.JumpTarget == "" || seen[r.JumpTarget] {
+				continue
+			}
+			seen[r.JumpTarget] = true
+			out = append(out, r.JumpTarget)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func dedupSorted(prefixes []netip.Prefix) []netip.Prefix {
 	seen := make(map[string]bool)
 	var out []netip.Prefix
@@ -511,13 +601,13 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 		fmt.Fprintln(h, "rev6", p.String())
 	}
 	for _, r := range desired.InputRules {
-		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.JumpTarget, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.ForwardRules {
-		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.JumpTarget, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.OutputRules {
-		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.JumpTarget, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.HostIngress {
 		fmt.Fprintln(h, "hi", r.Proto, r.Port, r.DstAddr.String(), r.Comment)
@@ -562,18 +652,12 @@ func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
 	tableName := prefix + "_" + target
 	var refs []FirewallObjectRef
 	refs = append(refs, FirewallObjectRef{Kind: "table", Family: "inet", Name: tableName})
-	refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_input"})
-	refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_forward"})
-	refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_output"})
-	if len(desired.Prefixes.MeshAuthorizedV4) > 0 {
-		refs = append(refs, FirewallObjectRef{Kind: "set", Family: "inet", Name: tableName + "_mesh_v4"})
-	}
-	if len(desired.Prefixes.MeshAuthorizedV6) > 0 {
-		refs = append(refs, FirewallObjectRef{Kind: "set", Family: "inet", Name: tableName + "_mesh_v6"})
-	}
 	if desired.Instance.IsHost {
-		if len(desired.HostIngress) > 0 {
-			refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_input"})
+		// Host drivers always create the input chain. Forward and NAT chains
+		// only exist when their corresponding rule sets are non-empty.
+		refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_input"})
+		if len(desired.ForwardRules) > 0 {
+			refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_forward"})
 		}
 		if len(desired.NatRedirects) > 0 {
 			refs = append(refs, FirewallObjectRef{Kind: "nat_redirect", Family: "inet", Name: tableName + "_prerouting"})
@@ -581,6 +665,18 @@ func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
 		if len(desired.NatSources) > 0 {
 			refs = append(refs, FirewallObjectRef{Kind: "nat_source", Family: "inet", Name: tableName + "_postrouting"})
 		}
+	} else {
+		refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_input"})
+		refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_forward"})
+		refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_output"})
+	}
+	// Hook jump-target chains are admin-owned and intentionally not tracked
+	// here: they must never be reaped as stale (their content is not ours).
+	if len(desired.Prefixes.MeshAuthorizedV4) > 0 {
+		refs = append(refs, FirewallObjectRef{Kind: "set", Family: "inet", Name: tableName + "_mesh_v4"})
+	}
+	if len(desired.Prefixes.MeshAuthorizedV6) > 0 {
+		refs = append(refs, FirewallObjectRef{Kind: "set", Family: "inet", Name: tableName + "_mesh_v6"})
 	}
 	return refs
 }

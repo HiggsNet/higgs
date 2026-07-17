@@ -79,6 +79,12 @@ func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Firew
 	if desired == nil {
 		return result, fmt.Errorf("desired state is nil")
 	}
+	// Hooks are admin-managed chains inside the Higgs table; the whole-table
+	// rebuild would wipe their content on every reconcile, so reject the plan
+	// instead of silently discarding admin rules.
+	if targets := jumpTargets(desired); len(targets) > 0 {
+		return result, fmt.Errorf("nft backend does not support hooks %v: whole-table rebuild would reset admin-managed hook chains every reconcile; use backend iptables or remove hooks", targets)
+	}
 	commands := buildNFTApplyCommands(plan, desired)
 	var errs []string
 	for _, cmd := range commands {
@@ -117,7 +123,7 @@ func (d *NFTDriver) DeleteStale(ctx context.Context, refs []FirewallObjectRef) e
 		switch ref.Kind {
 		case "table":
 			args = []string{"delete", "table", ref.Family, ref.Name}
-		case "chain":
+		case "chain", "nat_redirect", "nat_source":
 			args = []string{"delete", "chain", ref.Family, ref.Name}
 		case "set":
 			args = []string{"delete", "set", ref.Family, ref.Name}
@@ -166,7 +172,7 @@ func buildNFTApplyCommands(plan FirewallPlan, desired *FirewallDesiredState) [][
 		switch a.Object.Kind {
 		case "table":
 			commands = append(commands, []string{"delete", "table", a.Object.Family, a.Object.Name})
-		case "chain":
+		case "chain", "nat_redirect", "nat_source":
 			commands = append(commands, []string{"delete", "chain", a.Object.Family, a.Object.Name})
 		case "set":
 			commands = append(commands, []string{"delete", "set", a.Object.Family, a.Object.Name})
@@ -242,7 +248,7 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 	var commands [][]string
 
 	inputChain := tableName + "_input"
-	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority filter; policy accept; }"})
 	for _, hi := range desired.HostIngress {
 		rule := renderNFTHostIngressRule(hi)
 		commands = append(commands, []string{"add", "rule", "inet", tableName, inputChain, rule})
@@ -302,7 +308,18 @@ func renderNFTRule(r Rule) string {
 	if len(r.Dst) > 0 {
 		parts = append(parts, prefixNFTMatch("daddr", r.Dst))
 	}
-	parts = append(parts, r.Action)
+	if len(r.CtStates) > 0 {
+		if len(r.CtStates) == 1 {
+			parts = append(parts, "ct state "+r.CtStates[0])
+		} else {
+			parts = append(parts, fmt.Sprintf("ct state { %s }", strings.Join(r.CtStates, ", ")))
+		}
+	}
+	if r.Action == ActionJump {
+		parts = append(parts, "jump "+quoteNFTVal(r.JumpTarget))
+	} else {
+		parts = append(parts, r.Action)
+	}
 	if r.Comment != "" {
 		parts = append(parts, fmt.Sprintf("comment %s", quoteNFTVal(r.Comment)))
 	}
@@ -428,8 +445,15 @@ func parseNFTListOutput(output, tableName string) FirewallObservedState {
 		if strings.HasPrefix(line, "chain ") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
+				kind := "chain"
+				switch fields[1] {
+				case tableName + "_prerouting":
+					kind = "nat_redirect"
+				case tableName + "_postrouting":
+					kind = "nat_source"
+				}
 				state.Objects = append(state.Objects, FirewallObjectRef{
-					Kind: "chain", Family: "inet", Name: fields[1],
+					Kind: kind, Family: "inet", Name: fields[1],
 				})
 			}
 		}

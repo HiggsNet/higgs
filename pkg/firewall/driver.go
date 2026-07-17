@@ -47,10 +47,12 @@ func PlanDiff(instanceID string, desired *FirewallDesiredState, observed Firewal
 		}
 	}
 	// Delete: observed but not in desired (stale).
+	deletedSet := make(map[string]bool, len(observed.Objects))
 	for _, ref := range observed.Objects {
 		key := objKey(ref)
-		if !desiredSet[key] {
+		if !desiredSet[key] && !deletedSet[key] {
 			actions = append(actions, FirewallPlanAction{Action: "delete", Object: ref, Reason: "stale owned object"})
+			deletedSet[key] = true
 		}
 	}
 	return FirewallPlan{InstanceID: instanceID, Actions: actions}
