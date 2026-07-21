@@ -22,18 +22,23 @@ func TestWriteDebugFirewallInstanceOutput(t *testing.T) {
 		Backend: "dry-run",
 		Instances: []inspect.FirewallInstanceView{
 			{
-				ID:            "higgstesth2",
-				Scope:         "higgstesth2",
-				Mode:          "managed",
-				Backend:       "auto",
-				DefaultPolicy: "drop",
-				Transit:       true,
-				AllowPrefixes: 2,
-				DenyPrefixes:  1,
-				LocalServices: []inspect.FirewallLocalServiceView{{Proto: "udp", Port: 4500}},
-				Generation:    5,
-				OwnedObjects:  10,
-				PolicyHash:    "abc123",
+				ID:              "higgstesth2",
+				Scope:           "higgstesth2",
+				Mode:            "managed",
+				Backend:         "auto",
+				ResolvedBackend: "nft",
+				DefaultPolicy:   "drop",
+				Transit:         true,
+				AllowPrefixes:   2,
+				DenyPrefixes:    1,
+				LocalServices:   []inspect.FirewallLocalServiceView{{Proto: "udp", Port: 4500}},
+				Generation:      5,
+				OwnedObjects:    10,
+				PolicyHash:      "abc123",
+				InlineHooks: []inspect.FirewallInlineHookView{
+					{Backend: "nft", Point: "pre_input", Expression: "counter", State: "active"},
+					{Backend: "iptables", Family: "ipv4", Point: "pre_input", Expression: "-j ACCEPT", State: "inactive"},
+				},
 			},
 			{
 				ID:            "host",
@@ -54,6 +59,7 @@ func TestWriteDebugFirewallInstanceOutput(t *testing.T) {
 	output := buf.String()
 	required := []string{
 		"backend: dry-run",
+		"resolved_backend: nft",
 		"instance higgstesth2",
 		"transit: true",
 		"allow_prefixes: 2",
@@ -63,6 +69,9 @@ func TestWriteDebugFirewallInstanceOutput(t *testing.T) {
 		"generation: 5",
 		"owned_objects: 10",
 		"policy_hash: abc123",
+		"inline_hooks: 2",
+		"[active] nft pre_input: counter",
+		"[inactive] iptables/ipv4 pre_input: -j ACCEPT",
 		"host_ports: ike=true natt=true",
 		"redirect_grace: true",
 	}

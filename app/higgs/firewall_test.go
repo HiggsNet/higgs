@@ -790,13 +790,17 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 
 func TestBuildFirewallDebugView(t *testing.T) {
 	instances := []FirewallInstanceConfig{
-		{ID: "higgstesth2", NetNS: "higgstesth2", IsHost: false, Enabled: true, Mode: firewall.ModeManaged, Backend: firewall.BackendAuto, DefaultPolicy: firewall.DefaultPolicyDrop},
+		{ID: "higgstesth2", NetNS: "higgstesth2", IsHost: false, Enabled: true, Mode: firewall.ModeManaged, Backend: firewall.BackendAuto, DefaultPolicy: firewall.DefaultPolicyDrop,
+			NativeHooks: firewall.NativeHooks{
+				NFT:      firewall.InlineHookRules{PreInput: []string{"counter"}},
+				IPTables: firewall.IPTablesInlineHooks{IPv4: firewall.InlineHookRules{PreInput: []string{"-j ACCEPT"}}},
+			}},
 		{ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: firewall.ModeManaged, HostPorts: firewall.HostPortConfig{IKE: true, NATT: true}, RedirectGrace: firewall.RedirectGrace{Enabled: true}},
 	}
 	snapshot := &firewallReconcileState{
 		Backend: "dry-run",
 		Instances: map[string]*firewallInstanceReconcileStateEntry{
-			"higgstesth2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
+			"higgstesth2": {Backend: firewall.BackendNFT, Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 		},
 	}
 	view := buildFirewallDebugView(nil, instances, snapshot)
@@ -808,6 +812,9 @@ func TestBuildFirewallDebugView(t *testing.T) {
 	}
 	if got := view.Instances[0]; got.ID != "higgstesth2" || got.Generation != 5 || got.OwnedObjects != 10 || got.PolicyHash != "abc123" {
 		t.Fatalf("first instance = %+v, want reconcile fields", got)
+	}
+	if got := view.Instances[0]; got.ResolvedBackend != firewall.BackendNFT || len(got.InlineHooks) != 2 || got.InlineHooks[0].State != "active" || got.InlineHooks[1].State != "inactive" {
+		t.Fatalf("first instance inline hooks = %+v, resolved backend %q", got.InlineHooks, got.ResolvedBackend)
 	}
 	if got := view.Instances[1]; !got.IsHost || !got.HostIKE || !got.HostNATT || !got.RedirectGrace {
 		t.Fatalf("host instance = %+v, want host flags", got)

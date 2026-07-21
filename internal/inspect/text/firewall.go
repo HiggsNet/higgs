@@ -19,6 +19,7 @@ func WriteDebugFirewall(w io.Writer, view inspect.FirewallDebugView) error {
 		out.Linef("  scope: %s", inst.Scope)
 		out.Linef("  mode: %s", inst.Mode)
 		out.Linef("  backend: %s", defaultText(inst.Backend, "auto"))
+		out.LineIf(inst.ResolvedBackend != "", "  resolved_backend: %s", inst.ResolvedBackend)
 		out.Linef("  default_policy: %s", defaultText(inst.DefaultPolicy, "drop"))
 		out.LineIf(inst.OwnerPrefix != "", "  owner_prefix: %s", inst.OwnerPrefix)
 		out.Linef("  transit: %t", inst.Transit)
@@ -33,6 +34,16 @@ func WriteDebugFirewall(w io.Writer, view inspect.FirewallDebugView) error {
 		if inst.IsHost {
 			out.Linef("  host_ports: ike=%t natt=%t", inst.HostIKE, inst.HostNATT)
 			out.Linef("  redirect_grace: %t", inst.RedirectGrace)
+		}
+		if len(inst.InlineHooks) > 0 {
+			out.Linef("  inline_hooks: %d", len(inst.InlineHooks))
+			for _, hook := range inst.InlineHooks {
+				backend := hook.Backend
+				if hook.Family != "" {
+					backend += "/" + hook.Family
+				}
+				out.Linef("    [%s] %s %s: %s", defaultText(hook.State, "pending"), backend, hook.Point, hook.Expression)
+			}
 		}
 		out.LineIf(inst.Generation != 0, "  generation: %d", inst.Generation)
 		out.LineIf(inst.OwnedObjects != 0, "  owned_objects: %d", inst.OwnedObjects)

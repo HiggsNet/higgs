@@ -524,6 +524,7 @@ Firewall reconcile 在 `app/higgs/firewall_reconcile.go` 中实现，触发时�
 ```go
 // internal/state/firewall.go
 type FirewallReconcileInstance struct {
+	Backend      string `json:"backend,omitempty"`
     Generation   uint64 `json:"generation,omitempty"`
     LastRunUnix  int64  `json:"last_run_unix,omitempty"`
     LastError    string `json:"last_error,omitempty"`
@@ -540,7 +541,7 @@ type FirewallReconcileInstance struct {
 
 - `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并持久化，可由 `higgs debug firewall` 查看。
 - nft driver 使用单次 batch 事务，任一命令失败时整批不提交，旧 ruleset 保持不变。
-- iptables driver 的 staging 阶段遇错立即停止并删除未激活链，旧 generation 保持生效；所有 staging chain 完成后才进入切换阶段。iptables 与 ip6tables 以及不同 table 之间没有跨后端的统一内核事务，因此切换阶段失败时可能暂时同时保留新旧 jump，但不会先清空旧策略，下一轮 reconcile 会继续收敛和清理。
+- iptables driver 的 staging 阶段遇错立即停止并删除未激活链，旧 generation 保持生效；所有 staging chain 完成后才进入切换阶段。iptables 与 ip6tables 以及不同 table 之间没有跨后端的统一内核事务，因此切换阶段若失败会补偿删除此前已激活的新 jump 并保留旧 generation；若补偿命令本身也失败，错误会记录到 reconcile 状态，下一轮继续收敛。
 - backend 不可用（`nft`/`iptables` 均缺失）：daemon 记录 warning 日志并退化为 dry-run driver，不修改系统规则；系统上已有的旧规则保持不动。
 - 撤销（revocation）不走特殊通道：Zone record 变化经 `notifyStateChanged` 触发 flush，deny-first 由 planner 的 `buildPrefixSets` 在生成期望状态时保证（见 4.2）。
 
@@ -554,7 +555,7 @@ type FirewallReconcileInstance struct {
 higgs debug firewall
 ```
 
-输出每个 instance 的期望规则、owned 对象、reconcile 状态、backend 选择等信息。实现见：
+输出每个 instance 的期望规则、owned 对象、reconcile 状态、配置 backend 和实际 resolved backend。配置了 inline hooks 时，还会逐条显示 backend、iptables family、hook point、原始表达式及状态：`active` 表示属于当前实际 backend，`inactive` 表示为异构主机保留但本机未使用，`pending` 表示该实例尚无 reconcile backend 结果。实现见：
 
 - `internal/inspect/firewall.go`：构造 debug 视图
 - `internal/inspect/text/firewall.go`：文本化输出

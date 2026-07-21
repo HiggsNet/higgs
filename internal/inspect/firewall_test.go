@@ -16,6 +16,10 @@ func TestBuildFirewallDebugView(t *testing.T) {
 				Mode:          FirewallModeManaged,
 				Backend:       "auto",
 				DefaultPolicy: "drop",
+				InlineHooks: []FirewallInlineHookView{
+					{Backend: "nft", Point: "pre_input", Expression: "counter"},
+					{Backend: "iptables", Family: "ipv4", Point: "pre_input", Expression: "-j ACCEPT"},
+				},
 			},
 			{
 				ID:            "host",
@@ -31,7 +35,7 @@ func TestBuildFirewallDebugView(t *testing.T) {
 		Reconcile: &higgsstate.FirewallReconcileState{
 			Backend: "dry-run",
 			Instances: map[string]*higgsstate.FirewallReconcileInstance{
-				"higgstesth2": {Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
+				"higgstesth2": {Backend: "nft", Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 			},
 		},
 	})
@@ -43,6 +47,9 @@ func TestBuildFirewallDebugView(t *testing.T) {
 	}
 	if got := view.Instances[0]; got.ID != "higgstesth2" || got.Generation != 5 || got.OwnedObjects != 10 || got.PolicyHash != "abc123" {
 		t.Fatalf("first instance = %+v, want reconcile fields", got)
+	}
+	if got := view.Instances[0]; got.ResolvedBackend != "nft" || len(got.InlineHooks) != 2 || got.InlineHooks[0].State != "active" || got.InlineHooks[1].State != "inactive" {
+		t.Fatalf("inline hooks = %+v, resolved backend %q", got.InlineHooks, got.ResolvedBackend)
 	}
 	if got := view.Instances[1]; !got.IsHost || !got.HostIKE || !got.HostNATT || !got.RedirectGrace {
 		t.Fatalf("host instance = %+v, want host flags", got)

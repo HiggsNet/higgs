@@ -7,6 +7,7 @@ import (
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
+	"github.com/Catofes/higgs/pkg/firewall"
 	"github.com/urfave/cli/v3"
 )
 
@@ -75,6 +76,7 @@ func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfi
 			HostIKE:       inst.HostPorts.IKE,
 			HostNATT:      inst.HostPorts.NATT,
 			RedirectGrace: inst.RedirectGrace.Enabled,
+			InlineHooks:   firewallInlineHookViews(inst.NativeHooks),
 		}
 		for _, svc := range inst.LocalServices {
 			instInput.LocalServices = append(instInput.LocalServices, inspect.FirewallLocalServiceView{
@@ -85,6 +87,35 @@ func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfi
 		input.Instances = append(input.Instances, instInput)
 	}
 	return inspect.BuildFirewallDebug(input)
+}
+
+func firewallInlineHookViews(hooks firewall.NativeHooks) []inspect.FirewallInlineHookView {
+	points := []firewall.HookPoint{
+		firewall.HookPreInput,
+		firewall.HookPostInput,
+		firewall.HookPreForward,
+		firewall.HookPostForward,
+		firewall.HookPreOutput,
+		firewall.HookPostOutput,
+		firewall.HookHostPrePrerouting,
+		firewall.HookHostPostPrerouting,
+		firewall.HookHostPreInput,
+		firewall.HookHostPostInput,
+	}
+	var out []inspect.FirewallInlineHookView
+	appendRules := func(backend, family string, rules firewall.InlineHookRules) {
+		for _, point := range points {
+			for _, expression := range rules.Rules(point) {
+				out = append(out, inspect.FirewallInlineHookView{
+					Backend: backend, Family: family, Point: string(point), Expression: expression,
+				})
+			}
+		}
+	}
+	appendRules(firewall.BackendNFT, "", hooks.NFT)
+	appendRules(firewall.BackendIptables, "ipv4", hooks.IPTables.IPv4)
+	appendRules(firewall.BackendIptables, "ipv6", hooks.IPTables.IPv6)
+	return out
 }
 
 func firewallStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {

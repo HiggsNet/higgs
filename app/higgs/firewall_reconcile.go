@@ -101,6 +101,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 			}
 			continue
 		}
+		resolvedBackend, _ := firewall.ResolveBackendForInstance(spec, preflight)
 
 		driver, err := d.firewallDriverInstance(instCfg)
 		if err != nil {
@@ -138,6 +139,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		result, err := driver.Apply(ctx, plan, desired)
 		entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 		entry.LastRunUnix = now.Unix()
+		entry.Backend = resolvedBackend
 		entry.PolicyHash = firewall.DesiredStateHash(desired)
 		entry.OwnedObjects = len(firewall.DesiredObjects(desired))
 		if err != nil {

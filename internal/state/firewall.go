@@ -8,6 +8,7 @@ type FirewallReconcileState struct {
 }
 
 type FirewallReconcileInstance struct {
+	Backend      string `json:"backend,omitempty"`
 	Generation   uint64 `json:"generation,omitempty"`
 	LastRunUnix  int64  `json:"last_run_unix,omitempty"`
 	LastError    string `json:"last_error,omitempty"`

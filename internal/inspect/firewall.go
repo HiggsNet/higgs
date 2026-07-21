@@ -31,32 +31,43 @@ type FirewallInstanceInput struct {
 	HostIKE       bool
 	HostNATT      bool
 	RedirectGrace bool
+	InlineHooks   []FirewallInlineHookView
 }
 
 type FirewallInstanceView struct {
-	ID            string
-	Scope         string
-	Mode          string
-	Backend       string
-	DefaultPolicy string
-	OwnerPrefix   string
-	Transit       bool
-	AllowPrefixes int
-	DenyPrefixes  int
-	LocalServices []FirewallLocalServiceView
-	IsHost        bool
-	HostIKE       bool
-	HostNATT      bool
-	RedirectGrace bool
-	Generation    uint64
-	OwnedObjects  int
-	PolicyHash    string
-	LastError     string
+	ID              string
+	Scope           string
+	Mode            string
+	Backend         string
+	DefaultPolicy   string
+	OwnerPrefix     string
+	Transit         bool
+	AllowPrefixes   int
+	DenyPrefixes    int
+	LocalServices   []FirewallLocalServiceView
+	IsHost          bool
+	HostIKE         bool
+	HostNATT        bool
+	RedirectGrace   bool
+	ResolvedBackend string
+	InlineHooks     []FirewallInlineHookView
+	Generation      uint64
+	OwnedObjects    int
+	PolicyHash      string
+	LastError       string
 }
 
 type FirewallLocalServiceView struct {
 	Proto string
 	Port  uint16
+}
+
+type FirewallInlineHookView struct {
+	Backend    string
+	Family     string
+	Point      string
+	Expression string
+	State      string
 }
 
 func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
@@ -95,12 +106,25 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 			HostIKE:       inst.HostIKE,
 			HostNATT:      inst.HostNATT,
 			RedirectGrace: inst.RedirectGrace,
+			InlineHooks:   append([]FirewallInlineHookView(nil), inst.InlineHooks...),
 		}
 		if snapshot, ok := firewallReconcileInstance(input.Reconcile, inst.ID); ok {
+			instView.ResolvedBackend = snapshot.Backend
 			instView.Generation = snapshot.Generation
 			instView.OwnedObjects = snapshot.OwnedObjects
 			instView.PolicyHash = snapshot.PolicyHash
 			instView.LastError = snapshot.LastError
+		}
+		for i := range instView.InlineHooks {
+			hook := &instView.InlineHooks[i]
+			switch {
+			case instView.ResolvedBackend == "":
+				hook.State = "pending"
+			case hook.Backend == instView.ResolvedBackend:
+				hook.State = "active"
+			default:
+				hook.State = "inactive"
+			}
 		}
 		view.Instances = append(view.Instances, instView)
 	}

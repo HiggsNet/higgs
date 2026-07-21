@@ -35,7 +35,7 @@
   - 普通网络节点默认持有通用 `write`，可维护本 Zone 的 control-plane records；relay 不持有 Zone authority / 私钥，只转发 verified gossip，不需要任何写权限。
   - 已移除 `write:route`、`write:service`、`write:wireguard` capability 及其 record type 映射；普通 Zone record 统一使用通用 `write`，并由 route / crypto 回归测试覆盖。
 
-- [ ] **7.16 Firewall backend-native inline hooks**
+- [ ] **7.16 Firewall backend-native inline hooks**（核心实现与 nft root smoke 已完成；当前环境未安装 `iptables`/`ip6tables`，真实 iptables smoke 待验收）
   - **目标与边界**：允许管理员直接在 `config.yaml` 中为固定 hook point 写 nftables 或 iptables 的原生规则表达式，由 Higgs 将其编入自己管理的 generation/table；这不是跨后端规则 DSL，两种后端的等价语义由管理员分别维护。表达式只描述单条 rule body，不能创建、删除或 flush table/chain，也不能执行 shell。
   - **配置草案**：同一实例可以同时携带两套等价配置，运行时只使用最终选中 backend 对应的一套；`iptables_hooks` 先按 `ipv4` / `ipv6` 分组，分别对应 `iptables` / `ip6tables`，不在每条规则上重复声明地址族，也不从规则文本猜测地址族。
 
@@ -70,9 +70,9 @@
   - **nft 表达式**：只接受可追加到当前 managed chain 的单条 rule expression，不接受 `add/delete/replace/insert/flush table|chain|ruleset`、`include`、分号或换行等可逃逸单条规则上下文的语法。表达式与 Higgs 规则进入同一个 `nft -f` batch；任一表达式语法错误时整批失败，旧 table 继续生效。
   - **iptables 切换安全性**：inline rule 必须写入 inactive generation chain；所有 IPv4/IPv6 规则均成功后才切换内置链 jump。准备阶段任一规则失败时删除未激活 generation 并保留当前 active generation；切换某一地址族失败时必须补偿回切已切换的地址族，不能先清空线上链，也不能累积重复 jump。
   - **旧 `hooks:` 兼容**：现有“跳到管理员外部 chain”的 `hooks:` 暂保留为 iptables-only 兼容入口；同一 hook point 不允许同时配置旧 chain hook 与新 `iptables_hooks`，避免重复执行。文档标为 legacy，但本任务不直接删除或自动迁移。
-  - **模型与 reconcile**：为 backend-native rule 定义独立 typed config/desired model，不把原始文本伪装成现有通用 `Rule`；hook point、backend、family、规则顺序和原始表达式必须进入 desired-state hash。配置与 observed/hash 均未变化时保持现有稳态 no-op；表达式变化才生成并切换新 generation/table。
+  - **模型与 reconcile**：为 backend-native rule 定义独立 typed config/desired model，不把原始文本伪装成现有通用 `Rule`；hook point、backend、family、规则顺序和原始表达式必须进入 desired-state hash。沿用当前低频 reconcile 行为：nft apply 整表原子替换，iptables apply 生成并切换 generation；inline hooks 不额外引入独立刷新周期。
   - **校验与诊断**：限制单 point 规则数、单条长度和总配置大小；错误需包含 instance、backend、hook point 和规则序号。`higgs debug firewall` 同时展示原始表达式、最终 backend、family、渲染位置和 active/inactive 状态，并在 dry-run 中显示将要发生的 generation/table 替换。
-  - **测试与验收**：补齐 YAML parse/strict-field、hash 稳定性、同一 point 多条规则的精确顺序、backend auto/显式选择、IPv4/IPv6 独立渲染、缺省 family 不复制、拒绝 `both`、旧 hook 冲突、危险 token 拒绝、无 shell 执行、稳定 reconcile no-op 和表达式变更切换测试；为 nft batch 失败和 iptables staging 失败增加“旧策略仍生效、无重复 jump、无半套双栈规则”的回归测试，并增加可选 root/netns smoke 验证真实 nft/iptables 语法。
+  - **测试与验收**：已覆盖 YAML parse/strict-field、hash 稳定性、同一 point 多条规则的精确顺序、backend auto/显式选择、IPv4/IPv6 独立渲染、缺省 family 不复制、拒绝 `both`、旧 hook 冲突、危险 token 拒绝、无 shell 执行、表达式变更切换、staging/activation 失败回滚、无重复 jump 和无半套双栈规则；root/netns smoke 已真实通过 nft overlay/host input/prerouting，iptables 路径已写入同一 smoke，但当前机器缺少 `iptables`/`ip6tables`，仍待具备命令的 root 环境验收。
   - **文档交付**：同步更新 `docs/new/firewall.md`、配置参考和示例，明确两套表达式不具备可移植性、Higgs 不验证其业务语义、`DROP/ACCEPT/RETURN` 会改变后续规则可达性，以及错误规则会让本次 reconcile 失败但不应破坏上一 generation。
 
 - [ ] **7.7 可选 Global Discovery Server**

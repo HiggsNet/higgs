@@ -9,6 +9,7 @@ import (
 const (
 	maxInlineRulesPerPoint = 256
 	maxInlineRuleLength    = 4096
+	maxInlineConfigSize    = 1 << 20
 )
 
 var allHookPoints = []HookPoint{
@@ -97,6 +98,9 @@ func hasNativeHookAt(h NativeHooks, point HookPoint) bool {
 // ValidateNativeHooks validates rule-body syntax boundaries without invoking
 // nft, iptables, a shell, or any other external process.
 func ValidateNativeHooks(h NativeHooks) error {
+	if size := inlineHooksSize(h); size > maxInlineConfigSize {
+		return fmt.Errorf("inline hook expressions use %d bytes, exceeding total limit %d", size, maxInlineConfigSize)
+	}
 	if err := validateInlineRuleSet("nft", "", h.NFT, validateNFTInlineRule); err != nil {
 		return err
 	}
@@ -104,6 +108,18 @@ func ValidateNativeHooks(h NativeHooks) error {
 		return err
 	}
 	return validateInlineRuleSet("iptables", "ipv6", h.IPTables.IPv6, validateIPTablesInlineRule)
+}
+
+func inlineHooksSize(h NativeHooks) int {
+	total := 0
+	for _, rules := range []InlineHookRules{h.NFT, h.IPTables.IPv4, h.IPTables.IPv6} {
+		for _, point := range allHookPoints {
+			for _, expression := range rules.Rules(point) {
+				total += len(expression)
+			}
+		}
+	}
+	return total
 }
 
 func validateInlineRuleSet(backend, family string, hooks InlineHookRules, validate func(string) error) error {
