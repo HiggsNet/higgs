@@ -97,8 +97,10 @@
               path = with pkgs; [
                 bird2
                 iproute2
+                iputils
                 iptables
                 nftables
+                procps
                 strongswan
               ];
               serviceConfig = {
