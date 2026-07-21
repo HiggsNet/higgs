@@ -73,6 +73,59 @@ firewall:
 	}
 }
 
+func TestParseConfigYAMLFirewallInlineHooks(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+firewall:
+  instances:
+    - id: h2
+      backend: auto
+      nft_hooks:
+        pre_input:
+          - 'tcp dport 22 accept'
+      iptables_hooks:
+        ipv4:
+          pre_input:
+            - '-s 10.20.0.0/16 -j ACCEPT'
+            - '-s 10.30.0.0/16 -j ACCEPT'
+        ipv6:
+          pre_input:
+            - '-s 2001:db8::/32 -j ACCEPT'
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	got := config.Firewall.Instances[0].NativeHooks
+	if len(got.NFT.PreInput) != 1 || len(got.IPTables.IPv4.PreInput) != 2 || len(got.IPTables.IPv6.PreInput) != 1 {
+		t.Fatalf("parsed inline hooks = %+v", got)
+	}
+}
+
+func TestParseConfigYAMLFirewallInlineHooksRejectsBothFamily(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+firewall:
+  instances:
+    - id: h2
+      iptables_hooks:
+        both:
+          pre_input:
+            - '-j ACCEPT'
+`
+	err := parseConfigYAML(input, config)
+	if err == nil || !strings.Contains(err.Error(), "field both not found") {
+		t.Fatalf("parseConfigYAML error = %v, want strict rejection of both", err)
+	}
+}
+
 func TestParseConfigYAMLFirewallOverlayDefaultsToDefaultNetNS(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

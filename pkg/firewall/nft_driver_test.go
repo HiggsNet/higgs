@@ -528,3 +528,42 @@ func TestBuildDesiredStateRejectsNFTHooks(t *testing.T) {
 		t.Fatalf("BuildDesiredState error = %v, want nft hooks rejection", err)
 	}
 }
+
+func TestNFTDriverInlineHooksAreRenderedInPlannerOrder(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	driver := &NFTDriver{Command: runner.run}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "h2", NetNS: "h2", Mode: ModeManaged, Backend: BackendNFT, OwnerPrefix: "higgs",
+		NativeHooks: NativeHooks{NFT: InlineHookRules{
+			PreInput:  []string{`tcp dport 2222 accept comment "native-pre"`},
+			PostInput: []string{`counter comment "native-post"`},
+		}},
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if _, err := driver.Apply(context.Background(), PlanDiff("h2", desired, FirewallObservedState{}), desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	var batch string
+	for _, command := range runner.commands {
+		if command.name == "nft" && command.input != "" {
+			batch = command.input
+		}
+	}
+	if batch == "" {
+		t.Fatal("nft batch not captured")
+	}
+	invalid := strings.Index(batch, "ct state invalid drop")
+	loopback := strings.Index(batch, `iifname lo accept`)
+	pre := strings.Index(batch, `tcp dport 2222 accept comment "native-pre"`)
+	babel := strings.Index(batch, "udp dport 6696 accept")
+	post := strings.Index(batch, `counter comment "native-post"`)
+	defaultDrop := strings.LastIndex(batch, "drop comment \"default policy\"")
+	if !(invalid >= 0 && invalid < loopback && loopback < pre && pre < babel) {
+		t.Fatalf("pre_input order incorrect: invalid=%d loopback=%d pre=%d babel=%d\n%s", invalid, loopback, pre, babel, batch)
+	}
+	if !(post >= 0 && defaultDrop >= 0 && post < defaultDrop) {
+		t.Fatalf("post_input order incorrect: post=%d default=%d\n%s", post, defaultDrop, batch)
+	}
+}

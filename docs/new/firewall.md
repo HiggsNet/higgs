@@ -173,7 +173,10 @@ firewall:
 | `host_ports.wg` | bool | false | host WireGuard 入口（预留） |
 | `redirect_grace.enabled` | bool | 见下文 | 端口 rotate 期间的 DNAT/redirect grace |
 | `listen_addrs` | string list | `[]` | host 规则绑定的本地目的地址 |
-| `hooks.*` | string | `""` | 管理员自定义 chain 挂载点 |
+| `hooks.*` | string | `""` | 旧 iptables 管理员外部 chain 挂载点 |
+| `nft_hooks.<point>` | string list | `[]` | 编入 managed nft table 的原生 rule body |
+| `iptables_hooks.ipv4.<point>` | string list | `[]` | 编入 `iptables` managed generation 的原生参数表达式 |
+| `iptables_hooks.ipv6.<point>` | string list | `[]` | 编入 `ip6tables` managed generation 的原生参数表达式 |
 
 ### 3.3 host 实例默认值
 
@@ -209,7 +212,7 @@ local_services:
 - `sources` 为空时，允许来源为所有 mesh 授权前缀。
 - 只支持 `tcp` 或 `udp`。
 
-### 3.5 hooks
+### 3.5 旧 chain hooks（iptables 兼容入口）
 
 Hook 用于挂载管理员自定义 chain：planner 在对应位置生成 `jump` 规则指向配置的 chain 名，chain 内容由管理员自行维护，Higgs 不管理其中规则。当前只有 iptables backend 支持 hooks；driver 会创建尚不存在的空 hook chain，已存在的 chain 不会被 flush 或删除。
 
@@ -230,7 +233,42 @@ hooks:
 
 当前 overlay 实际接线的是 `pre_input` / `post_input` / `pre_forward` / `post_forward` / `post_output` 五个挂点；`pre_output` 与 `host_*` hooks 尚未接线（见第 8 节）。
 
-> **注意（nft 后端）**：nft 的 `jump` 目标必须位于同一 table，而当前 nft backend 每轮会整表重建，无法保留管理员规则。因此显式 `backend: nft` 配置 hooks 会被拒绝；`backend: auto` 在 hooks 存在时优先选择 iptables，iptables 不可用则报错。
+> **注意（nft 后端）**：这里的旧 `hooks:` 依赖 Higgs 跳入管理员维护的外部 chain。nft 当前整表重建，无法保留这种外部 chain，因此仍会拒绝；需要 nft 自定义规则时应使用下面的 `nft_hooks`。
+
+### 3.6 Backend-native inline hooks
+
+`nft_hooks` 和 `iptables_hooks` 把单条 backend 原生 rule body 直接编入 Higgs 管理的 table/generation。两套语法不是可移植 DSL；同一配置可同时提供两套等价规则，实际只渲染最终选中 backend 的配置。
+
+```yaml
+firewall:
+  instances:
+    - id: h2
+      backend: auto
+      nft_hooks:
+        pre_input:
+          - 'ip saddr 10.20.0.0/16 tcp dport 22 accept'
+        post_forward:
+          - 'counter log prefix "higgs-forward "'
+      iptables_hooks:
+        ipv4:
+          pre_input:
+            - '-s 10.20.0.0/16 -p tcp --dport 22 -j ACCEPT'
+            - '-s 10.30.0.0/16 -p tcp --dport 443 -j ACCEPT'
+        ipv6:
+          pre_input:
+            - '-s 2001:db8:20::/48 -p tcp --dport 22 -j ACCEPT'
+```
+
+- `iptables_hooks.ipv4` 只写入 `iptables`，`ipv6` 只写入 `ip6tables`；没有 `both`、默认 family 或自动复制。
+- 每个 hook point 是字符串列表，可以写多条规则，严格保持 YAML 顺序。
+- overlay 支持 `pre_input` / `post_input`、`pre_forward` / `post_forward`、`pre_output` / `post_output`。
+- host 支持 `host_pre_input` / `host_post_input` 和 `host_pre_prerouting` / `host_post_prerouting`。
+- `pre_input` 位于 invalid drop 和 loopback accept 之后；`pre_forward` 位于 invalid drop 和 established/related accept 之后；`pre_output` 位于 Higgs output 规则之前。所有 `post_*` 都位于 Higgs 生成规则之后、terminal default verdict 之前。
+- nft 表达式随 Higgs 规则进入同一个 `nft -f` 事务，失败时旧 table 保持生效。
+- iptables 表达式先写入 inactive generation；IPv4/IPv6 都准备完成后才切换内置链 jump，切换失败会尝试回滚已激活的新 jump。
+- 表达式只能是当前 chain 的 rule body。配置会拒绝换行、分号、shell 元字符、nft object command，以及 iptables 的 `-A/-I/-D/-N/-X/-F/-P/-t` 等规则/chain/table 管理参数；命令始终以 argv 执行，不经过 shell。
+- 同一 hook point 不能同时配置旧 `hooks:` 和 inline hook。原生 verdict（如 `ACCEPT`、`DROP`、`RETURN`）会影响后续 Higgs 规则是否可达，管理员需自行负责业务语义。
+- `backend: auto` 只有一套 inline 配置时会选择对应 backend；两套都存在时使用正常探测优先级。显式 backend 只有另一套配置时会报错，不会静默忽略。
 
 ---
 
@@ -544,8 +582,7 @@ higgs debug preflight
 
 | 项 | 设计期望 | 当前实现 | 影响 |
 |---|---|---|---|
-| nft 后端 hooks | 保留管理员 hook chain 内规则 | 当前整表重建模型无法保留，配置时拒绝；auto 尝试选择 iptables | nft 暂不支持 hooks |
-| Host hooks | host pre/post input/prerouting hook | host 规则未使用任何 hook | 未实现 |
+| 管理员外部 chain hooks | 保留管理员 hook chain 内规则 | 旧 `hooks:` 仍仅支持 iptables；nft 和 host 自定义规则使用 backend-native inline hooks | 旧 chain 入口不跨 backend |
 | `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 |
 | Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、host NAT hook、ipset | 仅检测 `nft`/`iptables` 命令，`CAP_NET_ADMIN` 用 `nft list tables` 近似 | 探测较粗糙 |
 | netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 |
@@ -562,7 +599,7 @@ higgs debug preflight
 
 - 生产环境建议显式配置 `backend: nft` 或 `backend: iptables`，避免 `auto` 在命令缺失时落入 dry-run 而不自知。
 - host 实例在 `ipsec.port_mode=range` 时默认启用 redirect grace；若使用固定端口，可关闭 `redirect_grace`。
-- hooks 仅用于 iptables backend；关键安全策略仍建议直接通过 Higgs 管理的规则表达。
+- 旧 `hooks:` 外部 chain 仅用于 iptables backend；新 `nft_hooks` / `iptables_hooks` 会成为 Higgs managed generation 的一部分。
 - daemon 升级或停止后，建议手动检查并清理残留的 Higgs-owned table/chain（`nft list tables` 或 `iptables -L | grep higgs_`）。
 
 ### 8.2 后续设计方向

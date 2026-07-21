@@ -59,8 +59,9 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 	}
 	prefixes := buildPrefixSets(input)
 	desired := &FirewallDesiredState{
-		Instance: spec,
-		Prefixes: prefixes,
+		Instance:    spec,
+		Prefixes:    prefixes,
+		NativeHooks: spec.NativeHooks,
 	}
 	if spec.IsHost {
 		buildHostRules(desired, spec, input)
@@ -81,6 +82,45 @@ func HasOverlayHooks(h Hooks) bool {
 
 func validateFirewallHooks(spec FirewallInstanceSpec) error {
 	h := spec.Hooks
+	if err := ValidateNativeHooks(spec.NativeHooks); err != nil {
+		return fmt.Errorf("firewall instance %q: %w", spec.ID, err)
+	}
+	hasNFTInline := HasNFTInlineHooks(spec.NativeHooks)
+	hasIPTablesInline := HasIPTablesInlineHooks(spec.NativeHooks)
+	switch spec.Backend {
+	case BackendNFT:
+		if hasIPTablesInline && !hasNFTInline {
+			return fmt.Errorf("firewall instance %q: backend nft has only iptables_hooks configured", spec.ID)
+		}
+	case BackendIptables:
+		if hasNFTInline && !hasIPTablesInline {
+			return fmt.Errorf("firewall instance %q: backend iptables has only nft_hooks configured", spec.ID)
+		}
+	case BackendNone:
+		if hasNFTInline || hasIPTablesInline {
+			return fmt.Errorf("firewall instance %q: inline hooks require nft or iptables backend", spec.ID)
+		}
+	}
+	for _, rules := range []InlineHookRules{spec.NativeHooks.NFT, spec.NativeHooks.IPTables.IPv4, spec.NativeHooks.IPTables.IPv6} {
+		if spec.IsHost && hasInlineRules(rules, overlayHookPoints) {
+			return fmt.Errorf("firewall instance %q: overlay inline hooks require a non-host instance", spec.ID)
+		}
+		if !spec.IsHost && hasInlineRules(rules, hostHookPoints) {
+			return fmt.Errorf("firewall instance %q: host inline hooks require a host instance", spec.ID)
+		}
+	}
+	legacyByPoint := map[HookPoint]string{
+		HookPreInput: h.PreInput, HookPostInput: h.PostInput,
+		HookPreForward: h.PreForward, HookPostForward: h.PostForward,
+		HookPreOutput: h.PreOutput, HookPostOutput: h.PostOutput,
+		HookHostPrePrerouting: h.HostPrePrerouting, HookHostPostPrerouting: h.HostPostPrerouting,
+		HookHostPreInput: h.HostPreInput, HookHostPostInput: h.HostPostInput,
+	}
+	for point, target := range legacyByPoint {
+		if target != "" && hasNativeHookAt(spec.NativeHooks, point) {
+			return fmt.Errorf("firewall instance %q: legacy hook %s conflicts with inline hook rules at the same point", spec.ID, point)
+		}
+	}
 	hasHostHooks := h.HostPrePrerouting != "" || h.HostPostPrerouting != "" ||
 		h.HostPreInput != "" || h.HostPostInput != ""
 	if spec.IsHost {
@@ -204,6 +244,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 
 	// 2. loopback accept
 	addRule(ChainInput, Rule{Action: ActionAccept, IfaceIn: "lo", Comment: "loopback"})
+	desired.HookPositions.PreInput = len(desired.InputRules)
 
 	// 3. pre_input hook
 	if spec.Hooks.PreInput != "" {
@@ -249,6 +290,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	}
 
 	// 8. post_input hook
+	desired.HookPositions.PostInput = len(desired.InputRules)
 	if spec.Hooks.PostInput != "" {
 		addRule(ChainInput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostInput, Comment: "post_input hook"})
 	}
@@ -262,6 +304,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 
 	// 2. established/related
 	addRule(ChainForward, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_fwd_est"})
+	desired.HookPositions.PreForward = len(desired.ForwardRules)
 
 	if spec.Hooks.PreForward != "" {
 		addRule(ChainForward, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PreForward, Comment: "pre_forward hook"})
@@ -328,12 +371,14 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		}
 	}
 
+	desired.HookPositions.PostForward = len(desired.ForwardRules)
 	if spec.Hooks.PostForward != "" {
 		addRule(ChainForward, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostForward, Comment: "post_forward hook"})
 	}
 	addRule(ChainForward, Rule{Action: defaultPolicyVerb(defaultPolicy), Comment: "default policy"})
 
 	// --- output chain ---
+	desired.HookPositions.PreOutput = len(desired.OutputRules)
 	addRule(ChainOutput, Rule{Action: ActionAccept, IfaceOut: "lo", Comment: "loopback"})
 	addRule(ChainOutput, Rule{Action: ActionAccept, Proto: ProtoUDP, Port: 6696, Comment: "babel control"})
 	addRule(ChainOutput, Rule{Action: ActionAccept, Proto: ProtoICMP, Comment: "icmp health"})
@@ -343,6 +388,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		localAll := append(append([]netip.Prefix{}, prefixes.LocalAssignedV4...), prefixes.LocalAssignedV6...)
 		addRule(ChainOutput, Rule{Action: ActionAccept, Src: localAll, Comment: "local assigned source"})
 	}
+	desired.HookPositions.PostOutput = len(desired.OutputRules)
 	if spec.Hooks.PostOutput != "" {
 		addRule(ChainOutput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostOutput, Comment: "post_output hook"})
 	}
@@ -352,6 +398,8 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 
 // buildHostRules generates host-side IKE/NAT-T ingress and optional redirect grace.
 func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, input FirewallPolicyInput) {
+	desired.HookPositions.HostPreInput = 0
+	desired.HookPositions.HostPrePrerouting = 0
 	for _, endpoint := range spec.EndpointServices {
 		dst := netip.PrefixFrom(endpoint.Destination, endpoint.Destination.BitLen())
 		// An empty resolved source set deliberately produces no accept rule. The
@@ -422,6 +470,8 @@ func buildHostRules(desired *FirewallDesiredState, spec FirewallInstanceSpec, in
 			})
 		}
 	}
+	desired.HookPositions.HostPostInput = len(desired.HostIngress)
+	desired.HookPositions.HostPostPrerouting = len(desired.NatRedirects)
 }
 
 func addNatRedirects(desired *FirewallDesiredState, ports []uint16, target uint16, reason, label string, listenAddrs []netip.Addr) {
@@ -618,7 +668,22 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 	for _, r := range desired.NatSources {
 		fmt.Fprintln(h, "snat", r.Proto, r.OriginalSrc, r.RewriteTo, r.DstPort, r.DstAddr.String(), r.Comment)
 	}
+	writeNativeHooksHash(h, desired.NativeHooks)
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func writeNativeHooksHash(h interface{ Write([]byte) (int, error) }, hooks NativeHooks) {
+	for _, point := range allHookPoints {
+		for _, rule := range hooks.NFT.Rules(point) {
+			fmt.Fprintln(h, "native", BackendNFT, point, rule)
+		}
+		for _, rule := range hooks.IPTables.IPv4.Rules(point) {
+			fmt.Fprintln(h, "native", BackendIptables, "ipv4", point, rule)
+		}
+		for _, rule := range hooks.IPTables.IPv6.Rules(point) {
+			fmt.Fprintln(h, "native", BackendIptables, "ipv6", point, rule)
+		}
+	}
 }
 
 // OwnerToken derives a stable owner token for an instance.
@@ -659,7 +724,7 @@ func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
 		if len(desired.ForwardRules) > 0 {
 			refs = append(refs, FirewallObjectRef{Kind: "chain", Family: "inet", Name: tableName + "_forward"})
 		}
-		if len(desired.NatRedirects) > 0 {
+		if len(desired.NatRedirects) > 0 || hasNativeHookAt(desired.NativeHooks, HookHostPrePrerouting) || hasNativeHookAt(desired.NativeHooks, HookHostPostPrerouting) {
 			refs = append(refs, FirewallObjectRef{Kind: "nat_redirect", Family: "inet", Name: tableName + "_prerouting"})
 		}
 		if len(desired.NatSources) > 0 {

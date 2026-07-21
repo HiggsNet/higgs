@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -502,6 +503,63 @@ func TestIPTablesDriver_FamilyNeutralAndICMPCommands(t *testing.T) {
 	}
 }
 
+func TestIPTablesDriverInlineHooksKeepFamiliesAndOrderSeparate(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	driver := &IPTablesDriver{Command: runner.run}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "h2", NetNS: "h2", Mode: ModeManaged, Backend: BackendIptables, OwnerPrefix: "higgs",
+		NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{
+			IPv4: InlineHookRules{PreInput: []string{
+				`-s 10.20.0.0/16 -p tcp --dport 22 -j ACCEPT`,
+				`-s 10.30.0.0/16 -p tcp --dport 443 -j ACCEPT`,
+			}},
+			IPv6: InlineHookRules{PreInput: []string{
+				`-s 2001:db8:20::/48 -p tcp --dport 22 -j ACCEPT`,
+			}},
+		}},
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if _, err := driver.Apply(context.Background(), PlanDiff("h2", desired, FirewallObservedState{}), desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	first := commandIndex(runner.commands, "iptables", "-s 10.20.0.0/16")
+	second := commandIndex(runner.commands, "iptables", "-s 10.30.0.0/16")
+	if first < 0 || second < 0 || first >= second {
+		t.Fatalf("IPv4 inline rule order incorrect: first=%d second=%d", first, second)
+	}
+	assertCommandContains(t, runner.commands, "ip6tables", "-s 2001:db8:20::/48")
+	for _, command := range runner.commands {
+		args := strings.Join(command.args, " ")
+		if command.name == "ip6tables" && (strings.Contains(args, "10.20.0.0/16") || strings.Contains(args, "10.30.0.0/16")) {
+			t.Fatalf("IPv4 inline rule copied to ip6tables: %s", args)
+		}
+		if command.name == "iptables" && strings.Contains(args, "2001:db8:20::/48") {
+			t.Fatalf("IPv6 inline rule copied to iptables: %s", args)
+		}
+	}
+}
+
+func TestIPTablesDriverHostPreroutingInlineRuleUsesNATTable(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	driver := &IPTablesDriver{Command: runner.run}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Mode: ModeManaged, Backend: BackendIptables, OwnerPrefix: "higgs",
+		NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{
+			IPv4: InlineHookRules{HostPrePrerouting: []string{`-p tcp --dport 8080 -j ACCEPT`}},
+		}},
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if _, err := driver.Apply(context.Background(), PlanDiff("host", desired, FirewallObservedState{}), desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	assertCommandContains(t, runner.commands, "iptables", "-t nat -A higgs_host_r_")
+	assertCommandContains(t, runner.commands, "iptables", "-p tcp --dport 8080 -j ACCEPT")
+}
+
 func TestIPTablesDriver_ReconcileExistingManagedChains(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
@@ -604,6 +662,56 @@ func TestIPTablesDriver_PrepareFailureKeepsActiveGeneration(t *testing.T) {
 	}
 	if commandIndex(runner.commands, "iptables", "-I INPUT -j "+stagingInput) >= 0 {
 		t.Fatal("failed staging generation was activated")
+	}
+}
+
+func TestIPTablesDriver_ActivationFailureRollsBackOtherFamily(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	driver := &IPTablesDriver{Command: runner.run}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff(desired.Instance.ID, desired, FirewallObservedState{})
+	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+
+	tableName := iptablesTableName(desired)
+	hash := DesiredStateHash(desired)
+	activeInput := iptablesGenerationChain(tableName, "i", hash, 'a')
+	stagingInput := iptablesGenerationChain(tableName, "i", hash, 'b')
+	runner.commands = nil
+	failed := false
+	driver.Command = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if !failed && name == "ip6tables" && strings.Contains(strings.Join(args, " "), "-I INPUT -j "+stagingInput) {
+			failed = true
+			runner.commands = append(runner.commands, executedCommand{name: name, args: append([]string(nil), args...)})
+			return nil, errors.New("injected activation failure")
+		}
+		return runner.run(ctx, name, args...)
+	}
+	if _, err := driver.Apply(context.Background(), plan, desired); err == nil {
+		t.Fatal("second Apply succeeded despite injected activation failure")
+	}
+	if !failed {
+		t.Fatal("activation failure was not injected")
+	}
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		activeJump := []string{"INPUT", "-j", activeInput, "-m", "comment", "--comment", "higgs-higgstesth2"}
+		if !runner.existingRules[binary+":filter:"+strings.Join(activeJump, "\x00")] {
+			t.Errorf("%s old active jump missing after activation rollback", binary)
+		}
+		stagingJump := []string{"INPUT", "-j", stagingInput, "-m", "comment", "--comment", "higgs-higgstesth2"}
+		if runner.existingRules[binary+":filter:"+strings.Join(stagingJump, "\x00")] {
+			t.Errorf("%s staging jump remained after activation rollback", binary)
+		}
+		if runner.existingChains[binary+":filter:"+stagingInput] {
+			t.Errorf("%s staging chain remained after activation rollback", binary)
+		}
 	}
 }
 

@@ -225,7 +225,12 @@ func (d *DaemonService) hasEnforcingHostFirewall() bool {
 			if d.firewallDriver != nil {
 				return true
 			}
-			backend := firewall.ResolveBackend(instance.Backend, preflight)
+			backend, err := firewall.ResolveBackendForInstance(firewall.FirewallInstanceSpec{
+				ID: instance.ID, Backend: instance.Backend, Hooks: instance.Hooks, NativeHooks: instance.NativeHooks,
+			}, preflight)
+			if err != nil {
+				continue
+			}
 			if backend == firewall.BackendNFT || backend == firewall.BackendIptables {
 				return true
 			}

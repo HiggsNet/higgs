@@ -35,6 +35,46 @@
   - 普通网络节点默认持有通用 `write`，可维护本 Zone 的 control-plane records；relay 不持有 Zone authority / 私钥，只转发 verified gossip，不需要任何写权限。
   - 已移除 `write:route`、`write:service`、`write:wireguard` capability 及其 record type 映射；普通 Zone record 统一使用通用 `write`，并由 route / crypto 回归测试覆盖。
 
+- [ ] **7.16 Firewall backend-native inline hooks**
+  - **目标与边界**：允许管理员直接在 `config.yaml` 中为固定 hook point 写 nftables 或 iptables 的原生规则表达式，由 Higgs 将其编入自己管理的 generation/table；这不是跨后端规则 DSL，两种后端的等价语义由管理员分别维护。表达式只描述单条 rule body，不能创建、删除或 flush table/chain，也不能执行 shell。
+  - **配置草案**：同一实例可以同时携带两套等价配置，运行时只使用最终选中 backend 对应的一套；`iptables_hooks` 先按 `ipv4` / `ipv6` 分组，分别对应 `iptables` / `ip6tables`，不在每条规则上重复声明地址族，也不从规则文本猜测地址族。
+
+    ```yaml
+    firewall:
+      instances:
+        - id: h2
+          backend: auto
+          nft_hooks:
+            pre_input:
+              - 'ip saddr 10.20.0.0/16 tcp dport 22 accept'
+            post_forward:
+              - 'counter log prefix "higgs-forward "'
+          iptables_hooks:
+            ipv4:
+              pre_input:
+                - '-s 10.20.0.0/16 -p tcp --dport 22 -j ACCEPT'
+                - '-s 10.30.0.0/16 -p tcp --dport 443 -j ACCEPT'
+              post_forward:
+                - '-m comment --comment "higgs-forward-v4" -j LOG'
+            ipv6:
+              pre_input:
+                - '-s 2001:db8:20::/48 -p tcp --dport 22 -j ACCEPT'
+              post_forward:
+                - '-m comment --comment "higgs-forward-v6" -j LOG'
+    ```
+
+  - **Hook point 集合**：第一版覆盖现有契约 `pre_input`、`post_input`、`pre_forward`、`post_forward`、`pre_output`、`post_output`、`host_pre_prerouting`、`host_post_prerouting`、`host_pre_input`、`host_post_input`；每个 point 是有序规则列表，按 YAML 顺序渲染。补齐当前未落地的 `pre_output` 和 host hook，不另造 backend 专属 point。
+  - **顺序语义**：以 planner 中固定的安全/基础规则为锚点冻结每个 point 的准确位置；`post_*` 必须位于 Higgs 生成规则之后、terminal default verdict 之前。`ct invalid drop` 等不可绕过的安全规则是否先于 `pre_*`，需要在实现前写入设计说明并用逐条顺序测试锁定，禁止由 driver 各自决定。
+  - **Backend 选择**：`backend: auto` 只有一套 inline hooks 时必须选择支持该配置的 backend；两套都存在时沿用正常探测优先级；显式 backend 若只有另一 backend 的配置则启动报错，不能静默忽略。选中 backend 后未使用的另一套配置保留用于异构主机，但 debug 输出必须明确显示 `inactive`。
+  - **iptables 表达式**：只支持 `ipv4` 和 `ipv6` 两个 family block，分别编入 `iptables` 和 `ip6tables`；不提供 `both`、默认 family 或跨 family 自动复制。某一 family 未配置即表示该 family 没有管理员 inline rule。每个 hook point 是字符串列表，可连续写任意多条规则并保持配置顺序。使用 shellwords-compatible lexer 仅做参数分词，再以 argv 调用命令；禁止 shell expansion、换行、NUL、重定向/管道/命令连接符，以及 `-A/-I/-D/-R/-N/-X/-F/-P/-t/--table` 等越过当前 managed chain 的操作参数。
+  - **nft 表达式**：只接受可追加到当前 managed chain 的单条 rule expression，不接受 `add/delete/replace/insert/flush table|chain|ruleset`、`include`、分号或换行等可逃逸单条规则上下文的语法。表达式与 Higgs 规则进入同一个 `nft -f` batch；任一表达式语法错误时整批失败，旧 table 继续生效。
+  - **iptables 切换安全性**：inline rule 必须写入 inactive generation chain；所有 IPv4/IPv6 规则均成功后才切换内置链 jump。准备阶段任一规则失败时删除未激活 generation 并保留当前 active generation；切换某一地址族失败时必须补偿回切已切换的地址族，不能先清空线上链，也不能累积重复 jump。
+  - **旧 `hooks:` 兼容**：现有“跳到管理员外部 chain”的 `hooks:` 暂保留为 iptables-only 兼容入口；同一 hook point 不允许同时配置旧 chain hook 与新 `iptables_hooks`，避免重复执行。文档标为 legacy，但本任务不直接删除或自动迁移。
+  - **模型与 reconcile**：为 backend-native rule 定义独立 typed config/desired model，不把原始文本伪装成现有通用 `Rule`；hook point、backend、family、规则顺序和原始表达式必须进入 desired-state hash。配置与 observed/hash 均未变化时保持现有稳态 no-op；表达式变化才生成并切换新 generation/table。
+  - **校验与诊断**：限制单 point 规则数、单条长度和总配置大小；错误需包含 instance、backend、hook point 和规则序号。`higgs debug firewall` 同时展示原始表达式、最终 backend、family、渲染位置和 active/inactive 状态，并在 dry-run 中显示将要发生的 generation/table 替换。
+  - **测试与验收**：补齐 YAML parse/strict-field、hash 稳定性、同一 point 多条规则的精确顺序、backend auto/显式选择、IPv4/IPv6 独立渲染、缺省 family 不复制、拒绝 `both`、旧 hook 冲突、危险 token 拒绝、无 shell 执行、稳定 reconcile no-op 和表达式变更切换测试；为 nft batch 失败和 iptables staging 失败增加“旧策略仍生效、无重复 jump、无半套双栈规则”的回归测试，并增加可选 root/netns smoke 验证真实 nft/iptables 语法。
+  - **文档交付**：同步更新 `docs/new/firewall.md`、配置参考和示例，明确两套表达式不具备可移植性、Higgs 不验证其业务语义、`DROP/ACCEPT/RETURN` 会改变后续规则可达性，以及错误规则会让本次 reconcile 失败但不应破坏上一 generation。
+
 - [ ] **7.7 可选 Global Discovery Server**
   - 作为独立公网 rendezvous 服务，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 discovery 仍以 signed endpoint record + gossip 为主。
   - 服务端不成为信任根，不持有 root/admin/zone 私钥；客户端仍以 signed endpoint record 和 Zone trust chain 为准。
@@ -139,3 +179,4 @@
 2. 7.3 chunk repair 已完成；下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
 4. Phase 8 的实现、单元测试与 `services-smoke` 已就绪；待 root 数据面验收通过后归档。客户端服务选择和应用层 relay 按需作为独立项目评估。
+5. Firewall 管理员扩展采用 7.16 的 backend-native inline hooks：先冻结 hook 顺序、失败原子性和配置校验，再实现 nft/iptables 两条渲染路径；旧 iptables chain hook 仅作为兼容入口保留。

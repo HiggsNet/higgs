@@ -224,19 +224,12 @@ func (d *DaemonService) firewallDriverInstance(inst FirewallInstanceConfig) (fir
 		return d.firewallDriver, nil
 	}
 	pf := firewall.PreflightProbe(context.Background())
-	if firewall.HasOverlayHooks(inst.Hooks) {
-		switch inst.Backend {
-		case firewall.BackendNFT:
-			return nil, fmt.Errorf("firewall instance %s: nft backend does not support hooks; use backend iptables", inst.ID)
-		case "", firewall.BackendAuto:
-			if pf.Iptables == "available" {
-				inst.Backend = firewall.BackendIptables
-			} else {
-				return nil, fmt.Errorf("firewall instance %s: hooks require iptables, but iptables is unavailable", inst.ID)
-			}
-		}
+	resolved, err := firewall.ResolveBackendForInstance(firewall.FirewallInstanceSpec{
+		ID: inst.ID, Backend: inst.Backend, Hooks: inst.Hooks, NativeHooks: inst.NativeHooks,
+	}, pf)
+	if err != nil {
+		return nil, err
 	}
-	resolved := firewall.ResolveBackend(inst.Backend, pf)
 	switch resolved {
 	case firewall.BackendNFT:
 		netns, err := firewallDriverNetNS(inst, d.Sync.App.Config)

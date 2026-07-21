@@ -156,6 +156,50 @@ func ResolveBackend(configured string, pf FirewallPreflight) string {
 	}
 }
 
+// ResolveBackendForInstance applies hook compatibility constraints before the
+// ordinary availability-based backend selection. It never silently ignores a
+// backend-native hook block.
+func ResolveBackendForInstance(spec FirewallInstanceSpec, pf FirewallPreflight) (string, error) {
+	configured := spec.Backend
+	hasNFTInline := HasNFTInlineHooks(spec.NativeHooks)
+	hasIPTablesInline := HasIPTablesInlineHooks(spec.NativeHooks)
+	if HasOverlayHooks(spec.Hooks) {
+		switch configured {
+		case BackendNFT:
+			return BackendNone, fmt.Errorf("firewall instance %s: nft backend does not support legacy chain hooks; use backend iptables", spec.ID)
+		case "", BackendAuto:
+			if pf.Iptables != "available" {
+				return BackendNone, fmt.Errorf("firewall instance %s: legacy chain hooks require iptables, but iptables is unavailable", spec.ID)
+			}
+			configured = BackendIptables
+		}
+	}
+	switch configured {
+	case BackendNFT:
+		if hasIPTablesInline && !hasNFTInline {
+			return BackendNone, fmt.Errorf("firewall instance %s: backend nft has only iptables_hooks configured", spec.ID)
+		}
+	case BackendIptables:
+		if hasNFTInline && !hasIPTablesInline {
+			return BackendNone, fmt.Errorf("firewall instance %s: backend iptables has only nft_hooks configured", spec.ID)
+		}
+	case "", BackendAuto:
+		switch {
+		case hasNFTInline && !hasIPTablesInline:
+			if pf.NFTNetlink != "ok" {
+				return BackendNone, fmt.Errorf("firewall instance %s: nft_hooks require nft, but nft is unavailable", spec.ID)
+			}
+			configured = BackendNFT
+		case hasIPTablesInline && !hasNFTInline:
+			if pf.Iptables != "available" {
+				return BackendNone, fmt.Errorf("firewall instance %s: iptables_hooks require iptables, but iptables is unavailable", spec.ID)
+			}
+			configured = BackendIptables
+		}
+	}
+	return ResolveBackend(configured, pf), nil
+}
+
 // MergeConflicts scans observed state for potential non-Higgs conflicts.
 // First version is conservative: returns empty (no conflict detection beyond
 // owner matching, which is handled by ListOwned).

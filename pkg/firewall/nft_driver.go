@@ -277,19 +277,28 @@ func buildNFTOverlayChainCommands(tableName string, desired *FirewallDesiredStat
 	outputChain := tableName + "_output"
 
 	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority filter; policy accept; }"})
-	for _, r := range desired.InputRules {
-		commands = append(commands, []string{"add", "rule", "inet", tableName, inputChain, renderNFTRule(r)})
-	}
+	commands = append(commands, buildNFTChainRules(tableName, inputChain, len(desired.InputRules), func(i int) string {
+		return renderNFTRule(desired.InputRules[i])
+	},
+		nftHookInsertion{index: desired.HookPositions.PreInput, rules: desired.NativeHooks.NFT.PreInput},
+		nftHookInsertion{index: desired.HookPositions.PostInput, rules: desired.NativeHooks.NFT.PostInput},
+	)...)
 
 	commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority filter; policy accept; }"})
-	for _, r := range desired.ForwardRules {
-		commands = append(commands, []string{"add", "rule", "inet", tableName, forwardChain, renderNFTRule(r)})
-	}
+	commands = append(commands, buildNFTChainRules(tableName, forwardChain, len(desired.ForwardRules), func(i int) string {
+		return renderNFTRule(desired.ForwardRules[i])
+	},
+		nftHookInsertion{index: desired.HookPositions.PreForward, rules: desired.NativeHooks.NFT.PreForward},
+		nftHookInsertion{index: desired.HookPositions.PostForward, rules: desired.NativeHooks.NFT.PostForward},
+	)...)
 
 	commands = append(commands, []string{"add", "chain", "inet", tableName, outputChain, "{ type filter hook output priority filter; policy accept; }"})
-	for _, r := range desired.OutputRules {
-		commands = append(commands, []string{"add", "rule", "inet", tableName, outputChain, renderNFTRule(r)})
-	}
+	commands = append(commands, buildNFTChainRules(tableName, outputChain, len(desired.OutputRules), func(i int) string {
+		return renderNFTRule(desired.OutputRules[i])
+	},
+		nftHookInsertion{index: desired.HookPositions.PreOutput, rules: desired.NativeHooks.NFT.PreOutput},
+		nftHookInsertion{index: desired.HookPositions.PostOutput, rules: desired.NativeHooks.NFT.PostOutput},
+	)...)
 
 	return commands
 }
@@ -299,10 +308,12 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 
 	inputChain := tableName + "_input"
 	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority filter; policy accept; }"})
-	for _, hi := range desired.HostIngress {
-		rule := renderNFTHostIngressRule(hi)
-		commands = append(commands, []string{"add", "rule", "inet", tableName, inputChain, rule})
-	}
+	commands = append(commands, buildNFTChainRules(tableName, inputChain, len(desired.HostIngress), func(i int) string {
+		return renderNFTHostIngressRule(desired.HostIngress[i])
+	},
+		nftHookInsertion{index: desired.HookPositions.HostPreInput, rules: desired.NativeHooks.NFT.HostPreInput},
+		nftHookInsertion{index: desired.HookPositions.HostPostInput, rules: desired.NativeHooks.NFT.HostPostInput},
+	)...)
 	if len(desired.ForwardRules) > 0 {
 		forwardChain := tableName + "_forward"
 		commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority filter; policy accept; }"})
@@ -311,13 +322,15 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 		}
 	}
 
-	if len(desired.NatRedirects) > 0 {
+	if len(desired.NatRedirects) > 0 || len(desired.NativeHooks.NFT.HostPrePrerouting) > 0 || len(desired.NativeHooks.NFT.HostPostPrerouting) > 0 {
 		preroutingChain := tableName + "_prerouting"
 		commands = append(commands, []string{"add", "chain", "inet", tableName, preroutingChain, "{ type nat hook prerouting priority dstnat; }"})
-		for _, nr := range desired.NatRedirects {
-			rule := renderNFTNatRedirectRule(nr)
-			commands = append(commands, []string{"add", "rule", "inet", tableName, preroutingChain, rule})
-		}
+		commands = append(commands, buildNFTChainRules(tableName, preroutingChain, len(desired.NatRedirects), func(i int) string {
+			return renderNFTNatRedirectRule(desired.NatRedirects[i])
+		},
+			nftHookInsertion{index: desired.HookPositions.HostPrePrerouting, rules: desired.NativeHooks.NFT.HostPrePrerouting},
+			nftHookInsertion{index: desired.HookPositions.HostPostPrerouting, rules: desired.NativeHooks.NFT.HostPostPrerouting},
+		)...)
 	}
 	if len(desired.NatSources) > 0 {
 		postroutingChain := tableName + "_postrouting"
@@ -328,6 +341,29 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 		}
 	}
 
+	return commands
+}
+
+type nftHookInsertion struct {
+	index int
+	rules []string
+}
+
+func buildNFTChainRules(tableName, chainName string, genericCount int, renderGeneric func(int) string, insertions ...nftHookInsertion) [][]string {
+	var commands [][]string
+	for i := 0; i <= genericCount; i++ {
+		for _, insertion := range insertions {
+			if insertion.index != i {
+				continue
+			}
+			for _, expression := range insertion.rules {
+				commands = append(commands, []string{"add", "rule", "inet", tableName, chainName, expression})
+			}
+		}
+		if i < genericCount {
+			commands = append(commands, []string{"add", "rule", "inet", tableName, chainName, renderGeneric(i)})
+		}
+	}
 	return commands
 }
 

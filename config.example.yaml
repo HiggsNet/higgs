@@ -288,6 +288,19 @@ firewall:
       # backend: auto
       # default_policy: drop
       # xfrm_tunnel_pattern: hgs*
+      # Backend-native inline hooks. Configure either backend or both; auto
+      # uses only the selected backend. Rule bodies never run through a shell.
+      # nft_hooks:
+      #   pre_input:
+      #     - 'ip saddr 10.20.0.0/16 tcp dport 22 accept'
+      # iptables_hooks:
+      #   ipv4:
+      #     pre_input:
+      #       - '-s 10.20.0.0/16 -p tcp --dport 22 -j ACCEPT'
+      #       - '-s 10.30.0.0/16 -p tcp --dport 443 -j ACCEPT'
+      #   ipv6:
+      #     pre_input:
+      #       - '-s 2001:db8:20::/48 -p tcp --dport 22 -j ACCEPT'
 
     - id: host-ipsec
       host: true
@@ -310,6 +323,13 @@ firewall:
       #   natt: false
       # redirect_grace:
       #   disabled: true
+      # nft_hooks:
+      #   host_pre_input:
+      #     - 'udp dport 51820 accept'
+      # iptables_hooks:
+      #   ipv4:
+      #     host_pre_prerouting:
+      #       - '-p tcp --dport 8080 -j REDIRECT --to-ports 18080'
 
 # health:
 #   disabled: true

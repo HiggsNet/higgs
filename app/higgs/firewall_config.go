@@ -42,7 +42,8 @@ type FirewallInstanceConfig struct {
 	// match any local address.
 	ListenAddrs []netip.Addr
 
-	Hooks firewall.Hooks
+	Hooks       firewall.Hooks
+	NativeHooks firewall.NativeHooks
 }
 
 // firewallConfigYAML is the raw YAML model for the top-level `firewall:` section.
@@ -70,7 +71,9 @@ type firewallInstanceYAML struct {
 	RedirectGrace *redirectGraceYAML `yaml:"redirect_grace"`
 	ListenAddrs   []string           `yaml:"listen_addrs"`
 
-	Hooks *hooksYAML `yaml:"hooks"`
+	Hooks         *hooksYAML         `yaml:"hooks"`
+	NFTHooks      *inlineHooksYAML   `yaml:"nft_hooks"`
+	IPTablesHooks *iptablesHooksYAML `yaml:"iptables_hooks"`
 }
 
 type localServiceYAML struct {
@@ -100,6 +103,24 @@ type hooksYAML struct {
 	HostPostPrerouting string `yaml:"host_post_prerouting"`
 	HostPreInput       string `yaml:"host_pre_input"`
 	HostPostInput      string `yaml:"host_post_input"`
+}
+
+type inlineHooksYAML struct {
+	PreInput           []string `yaml:"pre_input"`
+	PostInput          []string `yaml:"post_input"`
+	PreForward         []string `yaml:"pre_forward"`
+	PostForward        []string `yaml:"post_forward"`
+	PreOutput          []string `yaml:"pre_output"`
+	PostOutput         []string `yaml:"post_output"`
+	HostPrePrerouting  []string `yaml:"host_pre_prerouting"`
+	HostPostPrerouting []string `yaml:"host_post_prerouting"`
+	HostPreInput       []string `yaml:"host_pre_input"`
+	HostPostInput      []string `yaml:"host_post_input"`
+}
+
+type iptablesHooksYAML struct {
+	IPv4 *inlineHooksYAML `yaml:"ipv4"`
+	IPv6 *inlineHooksYAML `yaml:"ipv6"`
 }
 
 func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig, _ string) (firewallConfig, error) {
@@ -233,6 +254,21 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 			HostPostInput:      yi.Hooks.HostPostInput,
 		}
 	}
+	nativeHooks := firewall.NativeHooks{}
+	if yi.NFTHooks != nil {
+		nativeHooks.NFT = inlineHooksFromYAML(yi.NFTHooks)
+	}
+	if yi.IPTablesHooks != nil {
+		if yi.IPTablesHooks.IPv4 != nil {
+			nativeHooks.IPTables.IPv4 = inlineHooksFromYAML(yi.IPTablesHooks.IPv4)
+		}
+		if yi.IPTablesHooks.IPv6 != nil {
+			nativeHooks.IPTables.IPv6 = inlineHooksFromYAML(yi.IPTablesHooks.IPv6)
+		}
+	}
+	if err := firewall.ValidateNativeHooks(nativeHooks); err != nil {
+		return FirewallInstanceConfig{}, fmt.Errorf("inline hooks: %w", err)
+	}
 
 	return FirewallInstanceConfig{
 		ID:                yi.ID,
@@ -250,7 +286,26 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		RedirectGrace:     redirectGrace,
 		ListenAddrs:       listenAddrs,
 		Hooks:             hooks,
+		NativeHooks:       nativeHooks,
 	}, nil
+}
+
+func inlineHooksFromYAML(h *inlineHooksYAML) firewall.InlineHookRules {
+	if h == nil {
+		return firewall.InlineHookRules{}
+	}
+	return firewall.InlineHookRules{
+		PreInput:           append([]string(nil), h.PreInput...),
+		PostInput:          append([]string(nil), h.PostInput...),
+		PreForward:         append([]string(nil), h.PreForward...),
+		PostForward:        append([]string(nil), h.PostForward...),
+		PreOutput:          append([]string(nil), h.PreOutput...),
+		PostOutput:         append([]string(nil), h.PostOutput...),
+		HostPrePrerouting:  append([]string(nil), h.HostPrePrerouting...),
+		HostPostPrerouting: append([]string(nil), h.HostPostPrerouting...),
+		HostPreInput:       append([]string(nil), h.HostPreInput...),
+		HostPostInput:      append([]string(nil), h.HostPostInput...),
+	}
 }
 
 func parseLocalServices(items []localServiceYAML) ([]firewall.LocalService, error) {
@@ -368,6 +423,7 @@ func firewallInstanceSpecFromConfig(inst FirewallInstanceConfig, listenAddrs []n
 		CharonIKEPort:     charonIKEPort,
 		CharonNATTPort:    charonNATTPort,
 		Hooks:             inst.Hooks,
+		NativeHooks:       inst.NativeHooks,
 	}
 }
 
