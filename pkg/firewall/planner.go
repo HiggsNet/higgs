@@ -50,7 +50,7 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 	if spec.ID == "" {
 		return nil, fmt.Errorf("firewall instance spec ID is required")
 	}
-	if spec.Mode == ModeDisabled {
+	if spec.Mode == ModeDisabled || spec.Mode == ModeExternal {
 		return &FirewallDesiredState{Instance: spec}, nil
 	}
 	if err := validateFirewallHooks(spec); err != nil {
@@ -601,7 +601,7 @@ func OwnerToken(spec FirewallInstanceSpec) string {
 // DesiredObjects returns the set of owned object references for a desired state.
 // Used by Plan to compute the create/delete diff against observed state.
 func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
-	if desired == nil || desired.Instance.Mode == ModeDisabled {
+	if desired == nil || desired.Instance.Mode == ModeDisabled || desired.Instance.Mode == ModeExternal {
 		return nil
 	}
 	prefix := desired.Instance.OwnerPrefix

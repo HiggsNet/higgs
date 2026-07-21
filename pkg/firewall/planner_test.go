@@ -524,6 +524,10 @@ func TestResolveBackend(t *testing.T) {
 	if got := ResolveBackend(BackendNone, pf); got != BackendNone {
 		t.Errorf("ResolveBackend(none) = %s, want none", got)
 	}
+	pf2.IptablesV6 = "unavailable"
+	if got := ResolveBackend(BackendIptables, pf2); got != BackendNone {
+		t.Errorf("ResolveBackend(iptables, ip6tables unavailable) = %s, want none", got)
+	}
 }
 
 func TestBuildDesiredState_InvalidDropFirst(t *testing.T) {
@@ -554,6 +558,25 @@ func TestBuildDesiredState_InvalidDropFirst(t *testing.T) {
 	forwardFirst := desired.ForwardRules[0]
 	if forwardFirst.Action != ActionDrop || len(forwardFirst.CtStates) != 1 || forwardFirst.CtStates[0] != CtStateInvalid {
 		t.Fatalf("first forward rule = %+v, want ct state invalid drop", forwardFirst)
+	}
+}
+
+func TestBuildDesiredStateExternalDoesNotManageObjects(t *testing.T) {
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "external", NetNS: "h2", Enabled: true, Mode: ModeExternal,
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if len(DesiredObjects(desired)) != 0 {
+		t.Fatalf("external desired objects = %+v, want none", DesiredObjects(desired))
+	}
+	if len(desired.InputRules) != 0 || len(desired.ForwardRules) != 0 || len(desired.OutputRules) != 0 {
+		t.Fatalf("external desired rules = %+v, want none", desired)
+	}
+	plan := PlanDiff("external", desired, FirewallObservedState{Objects: []FirewallObjectRef{{Kind: "table", Family: "inet", Name: "higgs_h2"}}})
+	if len(plan.Actions) != 0 {
+		t.Fatalf("external plan actions = %+v, want none", plan.Actions)
 	}
 }
 

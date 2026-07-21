@@ -43,6 +43,9 @@ func (d *DryRunDriver) Plan(ctx context.Context, desired *FirewallDesiredState, 
 }
 
 func (d *DryRunDriver) Apply(ctx context.Context, plan FirewallPlan, desired *FirewallDesiredState) (FirewallApplyResult, error) {
+	if desired != nil && (desired.Instance.Mode == ModeExternal || desired.Instance.Mode == ModeDisabled) {
+		return FirewallApplyResult{}, nil
+	}
 	d.Applied = append(d.Applied, plan)
 	result := FirewallApplyResult{
 		Generation: 1,

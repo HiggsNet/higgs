@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 
@@ -11,15 +13,22 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func debugFirewall(_ context.Context, _ *cli.Command) error {
+func debugFirewall(_ context.Context, cmd *cli.Command) error {
+	if cmd.Bool("host") && cmd.String("netns") != "" {
+		return fmt.Errorf("--host and --netns cannot be used together")
+	}
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	return debugFirewallWithRuntime(rt, os.Stdout)
+	return debugFirewallWithRuntimeFiltered(rt, os.Stdout, cmd.String("netns"), cmd.Bool("host"), cmd.Bool("json"))
 }
 
 func debugFirewallWithRuntime(rt *Runtime, w io.Writer) error {
+	return debugFirewallWithRuntimeFiltered(rt, w, "", false, false)
+}
+
+func debugFirewallWithRuntimeFiltered(rt *Runtime, w io.Writer, netns string, hostOnly, jsonOutput bool) error {
 	response, ok, err := firewallStatusViaControl(rt)
 	if err != nil {
 		return err
@@ -39,7 +48,31 @@ func debugFirewallWithRuntime(rt *Runtime, w io.Writer) error {
 	if rt != nil && rt.Config != nil {
 		instances = rt.Config.Firewall.Instances
 	}
-	return writeDebugFirewall(w, rt, instances, snapshot)
+	instances = filterFirewallDebugInstances(instances, netns, hostOnly)
+	view := buildFirewallDebugView(rt.Config, instances, snapshot)
+	if jsonOutput {
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(view)
+	}
+	return inspecttext.WriteDebugFirewall(w, view)
+}
+
+func filterFirewallDebugInstances(instances []FirewallInstanceConfig, netns string, hostOnly bool) []FirewallInstanceConfig {
+	if netns == "" && !hostOnly {
+		return instances
+	}
+	filtered := make([]FirewallInstanceConfig, 0, len(instances))
+	for _, inst := range instances {
+		if hostOnly && !inst.IsHost {
+			continue
+		}
+		if netns != "" && inst.NetNS != netns && inst.ID != netns {
+			continue
+		}
+		filtered = append(filtered, inst)
+	}
+	return filtered
 }
 
 func writeDebugFirewall(w io.Writer, rt *Runtime, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) error {

@@ -48,9 +48,15 @@ func (d *IPTablesDriver) run(ctx context.Context, binary string, args ...string)
 
 func (d *IPTablesDriver) Preflight(ctx context.Context, spec FirewallInstanceSpec) (FirewallPreflight, error) {
 	pf := PreflightProbe(ctx)
-	if pf.Iptables == "available" {
+	if IPTablesAvailable(pf) {
 		if _, err := d.run(ctx, "iptables", "-L", "INPUT"); err != nil {
 			pf.Iptables = "permission_denied"
+			if pf.Backend == BackendIptables {
+				pf.Backend = BackendNone
+			}
+		}
+		if _, err := d.run(ctx, "ip6tables", "-L", "INPUT"); err != nil {
+			pf.IptablesV6 = "permission_denied"
 			if pf.Backend == BackendIptables {
 				pf.Backend = BackendNone
 			}
@@ -70,6 +76,9 @@ func (d *IPTablesDriver) Apply(ctx context.Context, plan FirewallPlan, desired *
 	result := FirewallApplyResult{}
 	if desired == nil {
 		return result, fmt.Errorf("desired state is nil")
+	}
+	if desired.Instance.Mode == ModeExternal || desired.Instance.Mode == ModeDisabled {
+		return result, nil
 	}
 	_ = plan // generation-chain apply converges from the live kernel state.
 
@@ -169,7 +178,7 @@ func iptablesTableName(desired *FirewallDesiredState) string {
 }
 
 func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string) []iptablesManagedChainSpec {
-	if desired.Instance.Mode == ModeDisabled {
+	if desired.Instance.Mode == ModeDisabled || desired.Instance.Mode == ModeExternal {
 		return nil
 	}
 	tableName := iptablesTableName(desired)

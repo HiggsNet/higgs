@@ -297,7 +297,8 @@ type FirewallPreflight struct {
 	Backend         string
 	NFTNetlink      string // ok | unavailable | ""
 	CAPNetAdmin     string
-	Iptables        string
+	Iptables        string // iptables IPv4 command availability
+	IptablesV6      string // ip6tables command availability
 	IptablesVariant string
 	HostNATHook     string
 	NetNSStatus     string

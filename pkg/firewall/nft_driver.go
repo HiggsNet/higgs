@@ -81,6 +81,9 @@ func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Firew
 	if desired == nil {
 		return result, fmt.Errorf("desired state is nil")
 	}
+	if desired.Instance.Mode == ModeExternal || desired.Instance.Mode == ModeDisabled {
+		return result, nil
+	}
 	commands := buildNFTApplyCommands(plan, desired)
 	if len(commands) == 0 {
 		result.Generation = 1

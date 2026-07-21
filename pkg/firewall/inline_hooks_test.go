@@ -144,8 +144,8 @@ func TestResolveBackendForInstanceHonorsInlineHookBackend(t *testing.T) {
 		t.Fatalf("dual hooks resolved to (%q, %v), want normal nft preference", got, err)
 	}
 
-	pf.Iptables = "unavailable"
-	if _, err := ResolveBackendForInstance(iptablesOnly, pf); err == nil || !strings.Contains(err.Error(), "iptables_hooks require iptables") {
+	pf.IptablesV6 = "unavailable"
+	if _, err := ResolveBackendForInstance(iptablesOnly, pf); err == nil || !strings.Contains(err.Error(), "iptables_hooks require both iptables and ip6tables") {
 		t.Fatalf("iptables-only unavailable error = %v", err)
 	}
 }

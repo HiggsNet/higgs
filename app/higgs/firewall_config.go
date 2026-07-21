@@ -357,14 +357,16 @@ func oneOfFirewallBackend(backend string) bool {
 	return false
 }
 
-// firewallInstancesEnabled returns enabled, non-disabled firewall instances.
+// firewallInstancesEnabled returns enabled instances Higgs is allowed to
+// manage. External instances are visible through debug output but deliberately
+// excluded from reconcile and endpoint ACL enforcement.
 func firewallInstancesEnabled(config *appConfig) []FirewallInstanceConfig {
 	if config == nil {
 		return nil
 	}
 	var out []FirewallInstanceConfig
 	for _, inst := range config.Firewall.Instances {
-		if inst.Enabled && inst.Mode != firewall.ModeDisabled {
+		if inst.Enabled && inst.Mode == firewall.ModeManaged {
 			out = append(out, inst)
 		}
 	}

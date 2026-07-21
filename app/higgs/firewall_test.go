@@ -422,6 +422,7 @@ func TestFirewallInstancesEnabled(t *testing.T) {
 				{ID: "a", Enabled: true, Mode: firewall.ModeManaged},
 				{ID: "b", Enabled: false, Mode: firewall.ModeManaged},
 				{ID: "c", Enabled: true, Mode: firewall.ModeDisabled},
+				{ID: "d", Enabled: true, Mode: firewall.ModeExternal},
 			},
 		},
 	}
@@ -836,5 +837,18 @@ func TestBuildFirewallDebugView(t *testing.T) {
 	}
 	if got := view.Instances[1]; !got.IsHost || !got.HostIKE || !got.HostNATT || !got.RedirectGrace {
 		t.Fatalf("host instance = %+v, want host flags", got)
+	}
+}
+
+func TestFilterFirewallDebugInstances(t *testing.T) {
+	instances := []FirewallInstanceConfig{
+		{ID: "overlay", NetNS: "h2"},
+		{ID: "host-ipsec", NetNS: "host", IsHost: true},
+	}
+	if got := filterFirewallDebugInstances(instances, "h2", false); len(got) != 1 || got[0].ID != "overlay" {
+		t.Fatalf("netns filter = %+v", got)
+	}
+	if got := filterFirewallDebugInstances(instances, "", true); len(got) != 1 || got[0].ID != "host-ipsec" {
+		t.Fatalf("host filter = %+v", got)
 	}
 }

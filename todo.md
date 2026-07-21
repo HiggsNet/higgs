@@ -35,7 +35,7 @@
   - 普通网络节点默认持有通用 `write`，可维护本 Zone 的 control-plane records；relay 不持有 Zone authority / 私钥，只转发 verified gossip，不需要任何写权限。
   - 已移除 `write:route`、`write:service`、`write:wireguard` capability 及其 record type 映射；普通 Zone record 统一使用通用 `write`，并由 route / crypto 回归测试覆盖。
 
-- [ ] **7.16 Firewall backend-native inline hooks**（核心实现与 nft root smoke 已完成；当前环境未安装 `iptables`/`ip6tables`，真实 iptables smoke 待验收）
+- [x] **7.16 Firewall backend-native inline hooks**（实现、YAML/driver/reconcile 测试和 nft root smoke 已完成；真实 iptables root smoke 仍需在具备 `iptables`/`ip6tables` 的环境复验）
   - **目标与边界**：允许管理员直接在 `config.yaml` 中为固定 hook point 写 nftables 或 iptables 的原生规则表达式，由 Higgs 将其编入自己管理的 generation/table；这不是跨后端规则 DSL，两种后端的等价语义由管理员分别维护。表达式只描述单条 rule body，不能创建、删除或 flush table/chain，也不能执行 shell。
   - **配置草案**：同一实例可以同时携带两套等价配置，运行时只使用最终选中 backend 对应的一套；`iptables_hooks` 先按 `ipv4` / `ipv6` 分组，分别对应 `iptables` / `ip6tables`，不在每条规则上重复声明地址族，也不从规则文本猜测地址族。
 

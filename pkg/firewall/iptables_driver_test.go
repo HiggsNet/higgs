@@ -57,6 +57,20 @@ func TestIPTablesDriver_ApplyOverlay(t *testing.T) {
 	}
 }
 
+func TestIPTablesDriver_ExternalDoesNotApply(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{ID: "external", NetNS: "h2", Mode: ModeExternal}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if _, err := (&IPTablesDriver{Command: runner.run}).Apply(context.Background(), FirewallPlan{}, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("external apply executed commands: %+v", runner.commands)
+	}
+}
+
 func TestIPTablesDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}

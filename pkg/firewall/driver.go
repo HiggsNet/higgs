@@ -25,6 +25,9 @@ type FirewallDriver interface {
 // PlanDiff computes the diff between desired objects and observed owned objects.
 // This is pure logic shared by all drivers.
 func PlanDiff(instanceID string, desired *FirewallDesiredState, observed FirewallObservedState) FirewallPlan {
+	if desired == nil || desired.Instance.Mode == ModeDisabled || desired.Instance.Mode == ModeExternal {
+		return FirewallPlan{InstanceID: instanceID}
+	}
 	desiredRefs := DesiredObjects(desired)
 	desiredSet := make(map[string]bool, len(desiredRefs))
 	for _, ref := range desiredRefs {
@@ -69,6 +72,8 @@ func PreflightProbe(ctx context.Context) FirewallPreflight {
 		Backend:     BackendNFT,
 		NFTNetlink:  "unavailable",
 		CAPNetAdmin: "unknown",
+		Iptables:    "unavailable",
+		IptablesV6:  "unavailable",
 	}
 
 	// Check nft binary availability (proxy for nftables support).
@@ -80,21 +85,25 @@ func PreflightProbe(ctx context.Context) FirewallPreflight {
 		pf.NFTNetlink = "unavailable"
 	}
 
-	// Check iptables fallback.
+	// iptables requires both address-family binaries. The managed policy always
+	// installs IPv4 and IPv6 chains together, so accepting only one binary would
+	// create a partially enforced firewall.
 	if iptPath, err := exec.LookPath("iptables"); err == nil {
 		_ = iptPath
 		pf.Iptables = "available"
-		if pf.Backend == BackendAuto || pf.NFTNetlink != "ok" {
-			pf.Backend = BackendIptables
-		}
 		// Detect variant: iptables-nft vs iptables-legacy.
 		pf.IptablesVariant = detectIptablesVariant()
-	} else {
-		pf.Iptables = "unavailable"
+	}
+	if ip6tPath, err := exec.LookPath("ip6tables"); err == nil {
+		_ = ip6tPath
+		pf.IptablesV6 = "available"
+	}
+	if IPTablesAvailable(pf) && (pf.Backend == BackendAuto || pf.NFTNetlink != "ok") {
+		pf.Backend = BackendIptables
 	}
 
 	// If nothing available, fall back to none/dry-run.
-	if pf.NFTNetlink != "ok" && pf.Iptables != "available" {
+	if pf.NFTNetlink != "ok" && !IPTablesAvailable(pf) {
 		pf.Backend = BackendNone
 	}
 
@@ -102,6 +111,13 @@ func PreflightProbe(ctx context.Context) FirewallPreflight {
 	pf.CAPNetAdmin = checkCAPNETAdmin()
 
 	return pf
+}
+
+// IPTablesAvailable requires both address families. An empty IptablesV6 is
+// retained as available for hand-constructed legacy test fixtures; probes
+// always populate the field explicitly.
+func IPTablesAvailable(pf FirewallPreflight) bool {
+	return pf.Iptables == "available" && (pf.IptablesV6 == "" || pf.IptablesV6 == "available")
 }
 
 func detectIptablesVariant() string {
@@ -143,7 +159,7 @@ func ResolveBackend(configured string, pf FirewallPreflight) string {
 		}
 		return BackendNone
 	case BackendIptables:
-		if pf.Iptables == "available" {
+		if IPTablesAvailable(pf) {
 			return BackendIptables
 		}
 		return BackendNone
@@ -180,8 +196,8 @@ func ResolveBackendForInstance(spec FirewallInstanceSpec, pf FirewallPreflight) 
 			}
 			configured = BackendNFT
 		case hasIPTablesInline && !hasNFTInline:
-			if pf.Iptables != "available" {
-				return BackendNone, fmt.Errorf("firewall instance %s: iptables_hooks require iptables, but iptables is unavailable", spec.ID)
+			if !IPTablesAvailable(pf) {
+				return BackendNone, fmt.Errorf("firewall instance %s: iptables_hooks require both iptables and ip6tables, but one is unavailable", spec.ID)
 			}
 			configured = BackendIptables
 		}

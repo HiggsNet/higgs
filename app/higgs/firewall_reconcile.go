@@ -67,12 +67,13 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 
 	charonIKE, charonNATT := firewallCharonPorts(config, snapshot)
 
-	if len(instances) > 0 && preflight.NFTNetlink != "ok" && preflight.Iptables != "available" {
+	if len(instances) > 0 && preflight.NFTNetlink != "ok" && !firewall.IPTablesAvailable(preflight) {
 		d.logWarn("firewall", "no_backend_available", map[string]any{
 			"nft":       preflight.NFTNetlink,
 			"iptables":  preflight.Iptables,
+			"ip6tables": preflight.IptablesV6,
 			"net_admin": preflight.CAPNetAdmin,
-			"message":   "no nft or iptables command available; firewall rules will not be applied",
+			"message":   "no complete nft or iptables/ip6tables backend available; firewall rules will not be applied",
 		})
 	}
 
@@ -101,7 +102,32 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 			}
 			continue
 		}
-		resolvedBackend, _ := firewall.ResolveBackendForInstance(spec, preflight)
+		resolvedBackend, resolveErr := firewall.ResolveBackendForInstance(spec, preflight)
+		if resolveErr != nil {
+			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
+			entry.LastRunUnix = now.Unix()
+			entry.LastError = resolveErr.Error()
+			if firstErr == nil {
+				firstErr = resolveErr
+			}
+			continue
+		}
+		if resolvedBackend == firewall.BackendNone && instCfg.Backend != firewall.BackendNone {
+			message := "configured firewall backend is unavailable; rules were not applied"
+			d.logWarn("firewall", "backend_unavailable", map[string]any{
+				"instance": instCfg.ID, "configured_backend": instCfg.Backend,
+				"nft": preflight.NFTNetlink, "iptables": preflight.Iptables,
+				"ip6tables": preflight.IptablesV6, "message": message,
+			})
+			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
+			entry.LastRunUnix = now.Unix()
+			entry.Backend = firewall.BackendNone
+			entry.LastError = message
+			if firstErr == nil {
+				firstErr = fmt.Errorf("firewall instance %s: %s", instCfg.ID, message)
+			}
+			continue
+		}
 
 		driver, err := d.firewallDriverInstance(instCfg)
 		if err != nil {

@@ -145,8 +145,14 @@ func cmdDebug() *cli.Command {
 				},
 			},
 			{
-				Name:  "firewall",
-				Usage: "Show firewall reconcile state and owned objects",
+				Name:      "firewall",
+				Usage:     "Show firewall reconcile state and owned objects",
+				UsageText: "higgs debug firewall [--netns <name> | --host] [--json]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "netns", Usage: "Only show the firewall instance for this netns or instance id"},
+					&cli.BoolFlag{Name: "host", Usage: "Only show host firewall instances"},
+					&cli.BoolFlag{Name: "json", Usage: "Print JSON instead of text"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return debugFirewall(ctx, cmd)
 				},

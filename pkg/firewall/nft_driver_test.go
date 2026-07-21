@@ -278,6 +278,20 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 	}
 }
 
+func TestNFTDriver_ExternalDoesNotApply(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{ID: "external", NetNS: "h2", Mode: ModeExternal}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if _, err := (&NFTDriver{Command: runner.run}).Apply(context.Background(), FirewallPlan{}, desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("external apply executed commands: %+v", runner.commands)
+	}
+}
+
 func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &NFTDriver{Command: runner.run}
