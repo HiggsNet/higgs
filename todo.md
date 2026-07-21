@@ -80,7 +80,7 @@
 - [ ] state 文件外部协调补强：在现有 bbolt 文件锁基础上增加显式 `flock` / fsnotify watcher，避免多进程或外部修改时状态漂移。
 - [ ] Observer 增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析。
 
-## Phase 8: 应用层服务与代理（待 root 数据面验收）
+## Phase 8: 应用层服务与代理（已验收）
 
 **目标：** 在 Higgs L3 mesh 上提供可发现、可授权的内网 SOCKS5 服务，同时支持本地唯一 endpoint 和 shared Anycast endpoint；应用层源路由 relay 保持独立演进。
 
@@ -90,11 +90,11 @@
 - Docker bridge 位于 host netns，容器地址属于 Higgs 管理的服务前缀；host 侧通过指向 Higgs netns 的聚合路由和 Docker connected route 最长前缀匹配，overlay 侧复用显式 `routing.instances[].upstream` 返回 host。
 - SOCKS5 第一版可使用 `NO AUTH`，由 Higgs overlay 身份/前缀和本机 firewall 提供 zone/node 级授权；这不承诺同一节点内的用户级身份区分。
 
-- [ ] **8.4 本地与 Anycast 数据面验证**
+- [x] **8.4 本地与 Anycast 数据面验证**
   - 已实现 `services-smoke`：真实 Docker bridge 上运行 SOCKS5 和目标 TCP 容器；client netns 经 BIRD/Babel、host route 和 static upstream 回程完成代理请求。
   - root smoke 断言 Docker connected route 优先于更宽的 host -> overlay 聚合路由；另一 Higgs 前缀仍命中该聚合路由。
   - non-owner service publish、shared tag 冲突、空 ACL selector fail-closed、未监听 endpoint 不发布分别由 `pkg/service`、routing、firewall 与 `higgs-services` 单元测试覆盖；shared prefix 成员故障收敛复用 BIRD Anycast root smoke。
-  - 待在允许 netns 且具备目标 host firewall 配置的 root 环境执行 `sudo make services-smoke`；通过后即可归档 Phase 8。
+  - 已于 2026-07-21 在允许 netns、具备目标 host firewall 配置的 root 环境执行 `sudo make services-smoke` 并通过。
 
 - **8.5 不纳入 Phase 8**：客户端 service selection/health policy 不是 SOCKS5 发布数据面；Anycast 的 L3 选路和故障收敛交给 BIRD/Babel。出现明确客户端需求后再独立设计。
 
@@ -104,4 +104,4 @@
 
 1. 下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
 2. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-3. Phase 8 的实现、单元测试与 `services-smoke` 已就绪；待 root 数据面验收通过后归档。客户端服务选择和应用层 relay 按需作为独立项目评估。
+3. Phase 8 已完成 root 数据面验收；客户端服务选择和应用层 relay 按需作为独立项目评估。

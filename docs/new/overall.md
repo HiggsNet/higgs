@@ -31,6 +31,7 @@ Higgs 是一个 mesh VPN 控制平面。它不把某个节点的本地配置当�
 | `firewall.md` | nftables/iptables 规则生成、host ingress、redirect grace、owner 清理 |
 | `health.md` | 链路探测、BIRD 观测、metric/cutover gate、metrics 输出 |
 | `observer.md` | 只读 Web/API 控制台、SSE、inspect read model 和 CLI debug 复用 |
+| `services.md` | `higgs-services` 工具、service manifest、shared Anycast assignment、service record、动态 endpoint ACL 和发布/撤销编排 |
 | `config.md` | 用户配置文件结构、默认值和常见部署形态 |
 | `operations.md` | 常用运行命令、排障路径和恢复操作 |
 | `testing.md` | `make check`、轻量 smoke 和真实数据面 smoke 的验证入口 |
@@ -119,6 +120,14 @@ Observer 是只读 Web/API 控制台。它不应该直接操作 daemon 状态，
 
 这样可以避免 `debug links`、`/api/v1/links`、route debug、health API 各自给出不同原因。
 
+### 8. Service 发布
+
+Service 发布把“可信网络状态”和“容器部署”拆开。Higgs daemon 只负责网络原语：保存 shared Anycast assignment、校验并签名 `service.socks5.v1` record、显式宣告或撤销服务前缀、按 Zone selector 维护动态 endpoint ACL。它不理解镜像、容器或 Compose。
+
+独立工具 `higgs-services` 读取本机 `/etc/higgs/service.yaml`，通过 `higgs ipam mine` 解析本地和 shared Anycast 地址，生成 Docker Compose artifact，并在管理员拉起容器后编排 TCP 就绪检查、endpoint ACL、整段 assignment 的 route announce 和签名 service record 的发布/撤销顺序。
+
+发布出去的签名事实只有 service record 本身（region、address、port）；容器拓扑、`allow_zones` 等部署与安全策略都留在本机。跨节点共用的服务地址使用带 tag 的 shared assignment，路由随服务健康状态宣告和撤销，与节点普通前缀的生命周期分开。
+
 ## 一次典型收敛流程
 
 一个节点运行时，大致会经历以下流程：
@@ -140,5 +149,6 @@ Observer 是只读 Web/API 控制台。它不应该直接操作 daemon 状态，
 - Endpoint、DNS、reflector、observed path 只影响可达性候选，不替代 Zone trust chain。
 - StrongSwan、WireGuard、BIRD、nftables/iptables 都是本机 runtime driver；它们的失败不改变 signed state 的真实性。
 - Debug/Observer 应展示“已验证事实 + 本机期望状态 + 实际 runtime 状态”的差异，而不是只展示某一层。
+- 服务发布是 operator 驱动的独立流程：daemon 只提供 signed record、路由宣告和动态 ACL 原语，容器部署和生命周期由 `higgs-services` 与管理员负责。
 
 这个边界是后续拆文档的主线：每个模块都要讲清楚自己在哪一层，读什么，写什么，以及不负责什么。

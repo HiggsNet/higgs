@@ -272,7 +272,7 @@ routing:
 # Application deployment is intentionally not part of the Higgs daemon
 # configuration. `higgs-services` reads /etc/higgs/service.yaml, queries the
 # current IPAM state through the Higgs CLI, and renders Docker Compose files.
-# See service.example.yaml and docs/phase8-services.md.
+# See service.example.yaml and docs/new/services.md.
 
 # -----------------------------------------------------------------------------
 # 5. Firewall, health probes, and read-only observer
