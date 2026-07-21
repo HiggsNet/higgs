@@ -33,6 +33,7 @@ type FirewallInstanceConfig struct {
 
 	HostPorts     firewall.HostPortConfig
 	RedirectGrace firewall.RedirectGrace
+	Priorities    firewall.ChainPriorities
 
 	// ListenAddrs are the local addresses used to scope host ingress and
 	// DNAT/redirect rules to a destination address. Set this when the host is
@@ -68,6 +69,7 @@ type firewallInstanceYAML struct {
 
 	HostPorts     *hostPortsYAML     `yaml:"host_ports"`
 	RedirectGrace *redirectGraceYAML `yaml:"redirect_grace"`
+	Priority      *priorityYAML      `yaml:"priority"`
 	ListenAddrs   []string           `yaml:"listen_addrs"`
 
 	NFTHooks      *inlineHooksYAML   `yaml:"nft_hooks"`
@@ -88,6 +90,12 @@ type hostPortsYAML struct {
 type redirectGraceYAML struct {
 	Enabled  *bool `yaml:"enabled"`
 	Disabled *bool `yaml:"disabled"`
+}
+
+type priorityYAML struct {
+	Filter      string `yaml:"filter"`
+	Prerouting  string `yaml:"prerouting"`
+	Postrouting string `yaml:"postrouting"`
 }
 
 type inlineHooksYAML struct {
@@ -223,6 +231,10 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 	if err != nil {
 		return FirewallInstanceConfig{}, fmt.Errorf("listen_addrs: %w", err)
 	}
+	priorities, err := parseFirewallPriorities(yi.Priority)
+	if err != nil {
+		return FirewallInstanceConfig{}, fmt.Errorf("priority: %w", err)
+	}
 
 	nativeHooks := firewall.NativeHooks{}
 	if yi.NFTHooks != nil {
@@ -254,9 +266,28 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		LocalServices:     localServices,
 		HostPorts:         hostPorts,
 		RedirectGrace:     redirectGrace,
+		Priorities:        priorities,
 		ListenAddrs:       listenAddrs,
 		NativeHooks:       nativeHooks,
 	}, nil
+}
+
+func parseFirewallPriorities(raw *priorityYAML) (firewall.ChainPriorities, error) {
+	priorities := firewall.DefaultChainPriorities()
+	if raw == nil {
+		return priorities, nil
+	}
+	var err error
+	if priorities.Filter, err = firewall.ParseChainPriority(raw.Filter, "filter"); err != nil {
+		return firewall.ChainPriorities{}, fmt.Errorf("filter: %w", err)
+	}
+	if priorities.Prerouting, err = firewall.ParseChainPriority(raw.Prerouting, "dstnat"); err != nil {
+		return firewall.ChainPriorities{}, fmt.Errorf("prerouting: %w", err)
+	}
+	if priorities.Postrouting, err = firewall.ParseChainPriority(raw.Postrouting, "srcnat"); err != nil {
+		return firewall.ChainPriorities{}, fmt.Errorf("postrouting: %w", err)
+	}
+	return priorities, nil
 }
 
 func inlineHooksFromYAML(h *inlineHooksYAML) firewall.InlineHookRules {
@@ -390,6 +421,7 @@ func firewallInstanceSpecFromConfig(inst FirewallInstanceConfig, listenAddrs []n
 		LocalServices:     inst.LocalServices,
 		HostPorts:         inst.HostPorts,
 		RedirectGrace:     inst.RedirectGrace,
+		Priorities:        inst.Priorities,
 		ListenAddrs:       listenAddrs,
 		CharonIKEPort:     charonIKEPort,
 		CharonNATTPort:    charonNATTPort,

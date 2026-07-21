@@ -580,6 +580,23 @@ func TestBuildDesiredStateExternalDoesNotManageObjects(t *testing.T) {
 	}
 }
 
+func TestDesiredStateHashIncludesChainPriorities(t *testing.T) {
+	base := FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged}
+	first, err := BuildDesiredState(base, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState default: %v", err)
+	}
+	custom := base
+	custom.Priorities.Filter = ChainPriority{Base: "filter", Offset: -1}
+	second, err := BuildDesiredState(custom, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState custom: %v", err)
+	}
+	if DesiredStateHash(first) == DesiredStateHash(second) {
+		t.Fatal("chain priority change must change desired-state hash")
+	}
+}
+
 func TestBuildDesiredState_EstablishedRelatedCtState(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,

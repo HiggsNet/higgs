@@ -53,8 +53,12 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 	if spec.Mode == ModeDisabled || spec.Mode == ModeExternal {
 		return &FirewallDesiredState{Instance: spec}, nil
 	}
+	spec.Priorities = spec.Priorities.Normalized()
 	if err := validateFirewallHooks(spec); err != nil {
 		return nil, err
+	}
+	if err := ValidateChainPriorities(spec.Priorities); err != nil {
+		return nil, fmt.Errorf("firewall instance %q: %w", spec.ID, err)
 	}
 	prefixes := buildPrefixSets(input)
 	desired := &FirewallDesiredState{
@@ -530,6 +534,8 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 	fmt.Fprintln(h, desired.Instance.ID)
 	fmt.Fprintln(h, desired.Instance.Mode)
 	fmt.Fprintln(h, desired.Instance.DefaultPolicy)
+	priorities := desired.Instance.Priorities.Normalized()
+	fmt.Fprintln(h, "priority", priorities.Filter.String(), priorities.Prerouting.String(), priorities.Postrouting.String())
 	for _, p := range desired.Prefixes.LocalAssignedV4 {
 		fmt.Fprintln(h, "lav4", p.String())
 	}

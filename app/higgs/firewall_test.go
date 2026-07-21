@@ -105,6 +105,54 @@ firewall:
 	}
 }
 
+func TestParseConfigYAMLFirewallPriorities(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+firewall:
+  instances:
+    - id: h2
+      priority:
+        filter: "filter - 1"
+        prerouting: "dstnat - 2"
+        postrouting: "srcnat + 3"
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	priorities := config.Firewall.Instances[0].Priorities
+	if got := priorities.Filter.String(); got != "filter - 1" {
+		t.Fatalf("filter priority = %q", got)
+	}
+	if got := priorities.Prerouting.String(); got != "dstnat - 2" {
+		t.Fatalf("prerouting priority = %q", got)
+	}
+	if got := priorities.Postrouting.String(); got != "srcnat + 3" {
+		t.Fatalf("postrouting priority = %q", got)
+	}
+}
+
+func TestParseConfigYAMLFirewallPrioritiesRejectInvalidBase(t *testing.T) {
+	config := defaultAppConfig()
+	err := parseConfigYAML(`
+netns:
+  default:
+    kind: name
+    name: h2
+firewall:
+  instances:
+    - id: h2
+      priority:
+        prerouting: "raw - 1"
+`, config)
+	if err == nil || !strings.Contains(err.Error(), `priority: prerouting: must use "dstnat"`) {
+		t.Fatalf("parseConfigYAML error = %v", err)
+	}
+}
+
 func TestParseConfigYAMLFirewallInlineHooksRejectsBothFamily(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

@@ -288,6 +288,13 @@ firewall:
       # backend: auto
       # default_policy: drop
       # xfrm_tunnel_pattern: hgs*
+      # nft base-chain priorities. Defaults are filter, dstnat, and srcnat.
+      # Effective only with backend: nft; each value is its required base plus
+      # an optional spaced integer offset, for example "filter - 1".
+      # priority:
+      #   filter: "filter - 1"
+      #   prerouting: "dstnat - 1"
+      #   postrouting: "srcnat + 1"
       # Backend-native inline hooks. Configure either backend or both; auto
       # uses only the selected backend. Rule bodies never run through a shell.
       # nft_hooks:

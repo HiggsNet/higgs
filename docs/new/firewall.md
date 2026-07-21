@@ -164,6 +164,9 @@ firewall:
 | `mode` | string | `managed` | `managed` / `external` / `disabled` |
 | `backend` | string | `auto` | `auto` / `nft` / `iptables` / `none` |
 | `default_policy` | string | `drop` | `drop` / `accept` |
+| `priority.filter` | string | `filter` | nft input/forward/output base-chain priority |
+| `priority.prerouting` | string | `dstnat` | nft NAT prerouting base-chain priority |
+| `priority.postrouting` | string | `srcnat` | nft NAT postrouting base-chain priority |
 | `owner_prefix` | string | `higgs` | 命名前缀 |
 | `xfrm_tunnel_pattern` | string | `hgs*` | overlay XFRM 接口匹配模式 |
 | `upstream_patterns` | string list | `["hgs-upstream*"]` | upstream veth 接口匹配模式 |
@@ -177,7 +180,20 @@ firewall:
 | `iptables_hooks.ipv4.<point>` | string list | `[]` | 编入 `iptables` managed generation 的原生参数表达式 |
 | `iptables_hooks.ipv6.<point>` | string list | `[]` | 编入 `ip6tables` managed generation 的原生参数表达式 |
 
-### 3.3 host 实例默认值
+### 3.3 nft base-chain priority
+
+`priority` 只影响 nft backend；iptables 的 built-in chain 没有等价的 base-chain priority。三个字段都必须使用其固定的 nft 基准名，并可附加带空格的整数偏移：
+
+```yaml
+priority:
+  filter: "filter - 1"
+  prerouting: "dstnat - 1"
+  postrouting: "srcnat + 1"
+```
+
+省略时分别默认为 `filter`、`dstnat`、`srcnat`。`prerouting` 不能写成 `raw - 1`，`postrouting` 不能写成 `dstnat`：前者必须保持 DNAT/REDIRECT 阶段，后者必须保持 SNAT/MASQUERADE 阶段。配置解析只接受固定基准加偏移，拒绝任意 nft 表达式。
+
+### 3.4 host 实例默认值
 
 当 `ipsec.port_mode=range` 时，host 实例会自动启用 `host_ports.ike` 和 `host_ports.natt`，并启用 `redirect_grace`，以便端口范围模式正常工作。这些默认值可被显式配置覆盖。
 
@@ -196,7 +212,7 @@ if rangeMode {
 // ... 可被 yi.RedirectGrace.* 覆盖
 ```
 
-### 3.4 local_services
+### 3.5 local_services
 
 显式开放 overlay netns 内的服务：
 
@@ -211,7 +227,7 @@ local_services:
 - `sources` 为空时，允许来源为所有 mesh 授权前缀。
 - 只支持 `tcp` 或 `udp`。
 
-### 3.5 Backend-native inline hooks
+### 3.6 Backend-native inline hooks
 
 `nft_hooks` 和 `iptables_hooks` 把单条 backend 原生 rule body 直接编入 Higgs 管理的 table/generation。两套语法不是可移植 DSL；同一配置可同时提供两套等价规则，实际只渲染最终选中 backend 的配置。
 
@@ -573,7 +589,7 @@ higgs debug preflight
 | 生命周期与跨 backend 清理 | shutdown、禁用/删除实例、scope/prefix/backend 变化时回滚旧 owned rules | daemon 不调用 `DeleteStale`；只对当前启用实例、当前 scope 和当前 backend 做 reconcile。禁用/删除实例、退出、改变 owner/scope 或切换 backend 不会遍历并清理旧 backend 对象 | 旧 nft table 或 iptables chain/jump 可能长期残留，并与新策略同时生效 | 问题不大 暂时保留 |
 | 周期 reconcile timer | 设计建议有周期 timer | 定义了 `defaultFirewallReconcileInterval`（30s）但主循环未调度 | 只靠事件触发 | 问题不大 暂时保留 |
 | 冲突检测 | 检测非 Higgs 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 | 问题不大 暂时保留 |
-| 优先级配置 | `priority.filter` / `priority.nat` | 未实现 | chain 优先级不可配置 | 这个可以考虑可配置一下 |
+| 优先级配置 | nft base-chain priority 可按 hook 阶段配置 | 已支持 `priority.filter`、`priority.prerouting`、`priority.postrouting`；默认分别是 `filter`、`dstnat`、`srcnat`，只允许对应基准加整数偏移 | 可以在不混淆 DNAT/SNAT 阶段的前提下与管理员 chain 排序 | 已完成 |
 | `AllowPeers`/`DenyPeers` | 按 peer zone 过滤 transit | 字段存在但**未实际使用** | 仅前缀过滤生效 | 问题不大 暂时保留 |
 | WireGuard host 配置接线 | `host_ports.wg`、当前/历史 advertised WG port 驱动 ingress 与 grace | type/planner 中有 `WG`、`WGPort`、`AdvertisedPreviousWGPorts` 预留，但 YAML `host_ports` 只接受 `ike`/`natt`，daemon 也不填充 WG 端口输入 | 目前不能从 `config.yaml` 启用 WireGuard host firewall/grace | wg没实现前不需要进一步推进 |
 | debug 命令 flag | `--netns` / `--host` / `--dry-run` / `--json` | 已支持 `--netns`（也可按 instance ID）、`--host` 与 `--json`；未实现 `--dry-run` plan | 日常定位与机器读取已收口；仍不能从 CLI 预演完整 plan | 仅 dry-run 暂不实现 |

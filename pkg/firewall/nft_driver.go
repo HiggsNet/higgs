@@ -268,12 +268,13 @@ func desiredHasTable(desired *FirewallDesiredState, tableName string) bool {
 
 func buildNFTOverlayChainCommands(tableName string, desired *FirewallDesiredState) [][]string {
 	var commands [][]string
+	priority := desired.Instance.Priorities.Normalized().Filter.String()
 
 	inputChain := tableName + "_input"
 	forwardChain := tableName + "_forward"
 	outputChain := tableName + "_output"
 
-	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority filter; policy accept; }"})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority " + priority + "; policy accept; }"})
 	commands = append(commands, buildNFTChainRules(tableName, inputChain, len(desired.InputRules), func(i int) string {
 		return renderNFTRule(desired.InputRules[i])
 	},
@@ -281,7 +282,7 @@ func buildNFTOverlayChainCommands(tableName string, desired *FirewallDesiredStat
 		nftHookInsertion{index: desired.HookPositions.PostInput, rules: desired.NativeHooks.NFT.PostInput},
 	)...)
 
-	commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority filter; policy accept; }"})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority " + priority + "; policy accept; }"})
 	commands = append(commands, buildNFTChainRules(tableName, forwardChain, len(desired.ForwardRules), func(i int) string {
 		return renderNFTRule(desired.ForwardRules[i])
 	},
@@ -289,7 +290,7 @@ func buildNFTOverlayChainCommands(tableName string, desired *FirewallDesiredStat
 		nftHookInsertion{index: desired.HookPositions.PostForward, rules: desired.NativeHooks.NFT.PostForward},
 	)...)
 
-	commands = append(commands, []string{"add", "chain", "inet", tableName, outputChain, "{ type filter hook output priority filter; policy accept; }"})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, outputChain, "{ type filter hook output priority " + priority + "; policy accept; }"})
 	commands = append(commands, buildNFTChainRules(tableName, outputChain, len(desired.OutputRules), func(i int) string {
 		return renderNFTRule(desired.OutputRules[i])
 	},
@@ -302,9 +303,11 @@ func buildNFTOverlayChainCommands(tableName string, desired *FirewallDesiredStat
 
 func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) [][]string {
 	var commands [][]string
+	priorities := desired.Instance.Priorities.Normalized()
+	filterPriority := priorities.Filter.String()
 
 	inputChain := tableName + "_input"
-	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority filter; policy accept; }"})
+	commands = append(commands, []string{"add", "chain", "inet", tableName, inputChain, "{ type filter hook input priority " + filterPriority + "; policy accept; }"})
 	commands = append(commands, buildNFTChainRules(tableName, inputChain, len(desired.HostIngress), func(i int) string {
 		return renderNFTHostIngressRule(desired.HostIngress[i])
 	},
@@ -313,7 +316,7 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 	)...)
 	if len(desired.ForwardRules) > 0 {
 		forwardChain := tableName + "_forward"
-		commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority filter; policy accept; }"})
+		commands = append(commands, []string{"add", "chain", "inet", tableName, forwardChain, "{ type filter hook forward priority " + filterPriority + "; policy accept; }"})
 		for _, rule := range desired.ForwardRules {
 			commands = append(commands, []string{"add", "rule", "inet", tableName, forwardChain, renderNFTRule(rule)})
 		}
@@ -321,7 +324,7 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 
 	if len(desired.NatRedirects) > 0 || len(desired.NativeHooks.NFT.HostPrePrerouting) > 0 || len(desired.NativeHooks.NFT.HostPostPrerouting) > 0 {
 		preroutingChain := tableName + "_prerouting"
-		commands = append(commands, []string{"add", "chain", "inet", tableName, preroutingChain, "{ type nat hook prerouting priority dstnat; }"})
+		commands = append(commands, []string{"add", "chain", "inet", tableName, preroutingChain, "{ type nat hook prerouting priority " + priorities.Prerouting.String() + "; }"})
 		commands = append(commands, buildNFTChainRules(tableName, preroutingChain, len(desired.NatRedirects), func(i int) string {
 			return renderNFTNatRedirectRule(desired.NatRedirects[i])
 		},
@@ -331,7 +334,7 @@ func buildNFTHostChainCommands(tableName string, desired *FirewallDesiredState) 
 	}
 	if len(desired.NatSources) > 0 {
 		postroutingChain := tableName + "_postrouting"
-		commands = append(commands, []string{"add", "chain", "inet", tableName, postroutingChain, "{ type nat hook postrouting priority srcnat; }"})
+		commands = append(commands, []string{"add", "chain", "inet", tableName, postroutingChain, "{ type nat hook postrouting priority " + priorities.Postrouting.String() + "; }"})
 		for _, ns := range desired.NatSources {
 			rule := renderNFTNatSourceRule(ns)
 			commands = append(commands, []string{"add", "rule", "inet", tableName, postroutingChain, rule})

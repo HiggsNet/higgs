@@ -95,6 +95,7 @@ type FirewallInstanceSpec struct {
 	CharonIKEPort  uint16       // current charon IKE listen port (default 500)
 	CharonNATTPort uint16       // current charon NAT-T listen port (default 4500)
 	WGPort         uint16       // current WireGuard listen port (default 51820)
+	Priorities     ChainPriorities
 
 	// NativeHooks are backend-native inline rule expressions compiled into
 	// Higgs-managed chains. They are intentionally not a portable rule DSL.

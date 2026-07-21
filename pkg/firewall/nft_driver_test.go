@@ -340,6 +340,36 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	}
 }
 
+func TestNFTDriver_RendersConfiguredPriorities(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	spec := FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Mode: ModeManaged,
+		HostPorts:     HostPortConfig{IKE: true},
+		RedirectGrace: RedirectGrace{Enabled: true},
+		Priorities: ChainPriorities{
+			Filter:      ChainPriority{Base: "filter", Offset: -1},
+			Prerouting:  ChainPriority{Base: "dstnat", Offset: -2},
+			Postrouting: ChainPriority{Base: "srcnat", Offset: 3},
+		},
+	}
+	desired, err := BuildDesiredState(spec, FirewallPolicyInput{
+		AdvertisedCurrentIKEPorts:  []uint16{1500},
+		AdvertisedPreviousIKEPorts: []uint16{450},
+	})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if _, err := (&NFTDriver{Command: runner.run}).Apply(context.Background(), PlanDiff("host", desired, FirewallObservedState{}), desired); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	batch := commandText(runner.commands[0])
+	for _, want := range []string{"priority filter - 1", "priority dstnat - 2", "priority srcnat + 3"} {
+		if !strings.Contains(batch, want) {
+			t.Fatalf("nft batch missing %q:\n%s", want, batch)
+		}
+	}
+}
+
 func TestNFTDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &NFTDriver{Command: runner.run}
