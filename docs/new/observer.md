@@ -296,3 +296,49 @@ series 端点的数据完全来自 health 子系统的本地 JSONL spool（产�
 | 时序留存 | 短历史完全取决于 health spool 的 `local_spool_max_age`；spool 未配置时 Health 页无曲线 |
 
 测试覆盖：`internal/observer` 的 `hub_test.go`（订阅/广播/慢客户端）、`events_test.go`（SSE 帧）、`server_method_test.go`（非 GET 拒绝）、`static_test.go`（静态服务与 SPA fallback）、`webapp_test.go`（内嵌资源完整性）；`app/higgs` 的 `observer_config_test` 族（随配置测试）、`observer_server_test.go`（启动/事件广播）、`observer_api_status_test.go` 与 `observer_api_resources_test.go`（各端点响应与 404/405 行为）。
+
+---
+
+## 10. 未来扩展与历史决策
+
+本节保留原设计文档中关于后续演进方向的记录，便于在扩展 observer 时参考。当前实现均未落地。
+
+### 10.1 未来控制接口预留
+
+observer 当前只读。若后续需要支持 Web 控制，建议按以下阶段引入认证与审计，而不是直接开放无认证写接口：
+
+1. **静态 Token**：`observer.auth.mode: static_token`，请求头携带 `Authorization: Bearer <token>`。
+2. **Unix Socket 模式**：HTTP server 可改为监听 Unix Domain Socket，与 control socket 类似，便于 Nginx/反向代理接入。
+3. **mTLS**：通过 `client_ca_file` 验证浏览器证书。
+4. **审计日志**：所有写操作记录到结构化日志，包含操作人、来源 IP、操作内容摘要。
+
+### 10.2 BIRD 深度集成计划
+
+当前 `/api/v1/bird` 只返回 `BirdInstances` 中已有的字段。后续可解析 `birdc` 输出，新增：
+
+- `/api/v1/bird/protocols`
+- `/api/v1/bird/neighbors`
+- `/api/v1/bird/routes`
+
+并在 UI 上：
+
+- Route 页面增加「控制面路由 vs 数据面学习路由」对比视图。
+- Health 页面把 BIRD neighbor RTT/metric 与 Higgs probe RTT/loss 放在同一 link 详情里对比。
+- 增加前缀树 / 路径分析图。
+
+### 10.3 metrics/remote write 与 observer 的关系
+
+当前 health series 完全来自本地 JSONL spool。原设计预留了更灵活的时序后端：
+
+- 可接入本机 **VictoriaMetrics** / Prometheus-compatible API 或 push pipeline，作为 `/api/v1/health/{link_id}/series` 的 datasource。
+- 即使接入外部 TSDB，observer 也不得把前端传入的任意 PromQL 直接透传给 TSDB；只允许固定 metric 枚举、固定 label filter 和受限 time range，避免 observer 变成通用 TSDB proxy。
+
+### 10.4 MVP 决策记录
+
+observer 第一版实现前已决策的关键问题：
+
+1. **前端技术栈**：第一版采用原生 HTML/CSS/JS，不引入 Node.js 构建链；拓扑图库后续增强时再引入。
+2. **默认启用策略**：未声明 `observer:` 时默认关闭；声明后默认监听 `127.0.0.1:8080`，可用 `disabled: true` 暂停。
+3. **离线诊断子命令**：第一版只提供 daemon 内嵌 observer；独立的 `higgs observer` 离线 DB viewer 延后到后续阶段。
+4. **SSE 持久化/回放**：SSE 仅做实时通知，不持久化、不重放；前端断线后自动降级为 5s 轮询。
+5. **拓扑图优先级**：第一版以表格 + raw JSON 为主，可视化拓扑图留到后续增强。

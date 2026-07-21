@@ -1015,6 +1015,27 @@
 
 ## Phase 7 已完成项归档
 
+### 7.1 异构 TransportLink 并行共存（模型、实验与公共边界）
+
+- 冻结 D1-D8：一个 LinkGroup 对应一个 provider；静态 Babel base cost 属于 LinkGroup；Link ID 包含 provider；WG device 按 LinkGroup 与 underlay family 共享；health 第一版不接管 BIRD；IPsec/WG 各自使用 ports record 与 overlay intent；provider 各自拥有 lifecycle/resource graph，daemon 只统一调度 Babel-facing 输出。
+- `TestBabelDualInterfaceCostFailoverRootSmoke` 验证 BIRD 双接口 cost failover；`TestWireGuardGREThreeNodeRootSmoke` 验证共享 WG device、多 peer、独立 GRE/Babel interface 的三节点数据面；`TestWireGuardGREStagedRotateRootSmoke` 验证 old/staged device、GRE cutover、listener/firewall grace 与零引用清理。
+- 收敛为长期维护 StrongSwan/XFRM 与 WG/GRE 两套独立 lifecycle，撤回未进入生产路径的通用 provider plan/action/resource graph 与 StrongSwan adapter。
+- `internal/state.LinkOutput` 成为 provider-neutral、只读的 Babel-facing 契约；health、firewall、BIRD health observation 与 `links_status.outputs` 都消费该输出，且不能反推 provider 的 apply/teardown 内部状态。
+
+### Zone 写权限语义收口
+
+- 普通网络节点使用通用 `write` 维护本 Zone control-plane records；relay 不持有 Zone authority 或私钥，仅转发已验证 gossip。
+- 移除 `write:route`、`write:service`、`write:wireguard` capability 及其 record type 映射，route/crypto 回归测试覆盖统一权限语义。
+
+### 7.16 Firewall backend-native inline hooks
+
+- `firewall.instances[]` 支持 `nft_hooks` 及按 `ipv4` / `ipv6` 分组的 `iptables_hooks`；两套配置可并存，`backend: auto` 会选择可用且匹配已配置 hook 的 backend，debug 明确标记 active/inactive。
+- 覆盖 overlay 的 `pre/post_input`、`pre/post_forward`、`pre/post_output` 与 host 的 `host_pre/post_input`、`host_pre/post_prerouting`。hook 规则按 YAML 顺序编入 Higgs managed chain/generation；invalid drop 等基础安全规则和 post hook 的相对位置由 planner 测试锁定。
+- nft 规则作为单条 rule body 与 managed table 进入同一个原子 batch；iptables 按 argv 执行，拒绝 shell 元字符和 chain/table 管理参数，并在 IPv4/IPv6 inactive generation 均准备成功后才切换 builtin-chain jump，失败时保留/回滚旧 generation。
+- 移除了旧 `hooks:` 管理员外部 chain 入口及其兼容逻辑；只保留 backend-native inline hooks。hook 点、backend、family、顺序和原始表达式都进入 desired-state hash。
+- 增加 hook 配置/strict field、顺序、backend 选择、双栈 family、危险参数、staging/activation rollback、dry-run/debug 等单元测试，并完成 nft overlay/host root smoke。真实 iptables root smoke 仍需在同时具备 `iptables` 与 `ip6tables` 的环境复验。
+- 随后补齐 `mode: external` 只读语义、完整 iptables/ip6tables availability 检查与明确 warning，以及 nft `priority.filter`、`priority.prerouting`、`priority.postrouting`（默认 `filter`、`dstnat`、`srcnat`）的受限偏移配置。
+
 ### 7.3 Gossip UDP object chunk repair
 
 - UDP chunk fallback 保持为 TCP object pull 不可达时的兜底，不扩展成通用可靠传输。
@@ -1037,3 +1058,29 @@
 - **7.13 XFRM maintenance：** 已匹配的接口利用 observed flags/address 短路，避免重复执行 interface/address 维护命令，同时保留必要的周期自愈。
 - **7.14 endpoint timer：** `runStateStoreWriteIfChanged` 只在 endpoint/IPsec/routing 记录实际变化时提交状态并触发 sync/reconcile；稳态不再递增 revision 或 flush 数据面。
 - **7.15 unsolicited ping：** 收到带 catalog summary 的 ping 时先比较本地 root；一致则更新 peer sync 状态并回复 pong，不创建冗余 `SyncSession`，不一致时仍正常拉取差异。
+
+## Phase 8 已完成子项归档
+
+### 8.1 最小 service record 与显式发布
+
+- 定义 `services/socks5` / `service.socks5.v1` record，支持 endpoints 数组、多 endpoint、旧单 endpoint 字段与可选 `active`。
+- `higgs service publish/withdraw` 校验地址归属当前节点 active assignment（普通或 shared），撤销通过 `active:false` 新版本表达。
+- service record 使用通用 `write`、严格 schema 与 route-authorization 归属验证；Higgs 主配置不再包含 Docker/Compose/service instance 模型。
+
+### 8.2 独立 Compose 生成与 host/overlay 网络接入
+
+- 独立 `higgs-services` 读取 `/etc/higgs/service.yaml` 并通过 `higgs ipam mine` 生成覆盖全部双栈 external network 的 Compose；支持多 network、`auto`/`tag:` assignment、相对 base address 与 resolved lock。
+- 固定 SOCKS5 输出 `socks`、`dns`、`h2` 三容器，只原子写 artifact，不执行 Docker 生命周期操作。
+- 校验 Docker subnet、host connected route、host→Higgs netns 聚合路由与 overlay→host static upstream；服务前缀的 Babel export 仍限于实际拥有/获授权前缀。
+
+### 8.3 发布、防火墙与运行状态
+
+- 通用 endpoint ACL 持久化 `{destination, protocol, port, selectors}`，动态解析授权 overlay 来源；host FORWARD 先 allow 后精确 drop，空匹配 fail-closed。
+- `higgs-services publish` 校验 resolved lock / assignment、TCP 健康与 ACL，再发布多 endpoint record；withdraw 按 record、shared route、ACL 的顺序清理。
+- 增加 `services` / `proxy` 本机诊断，展示地址归属、路由、firewall、readiness 与当前 record。
+
+### 8.6 IPAM shared Anycast 与多网络发布
+
+- shared assignment 支持稳定 tag；同 tag/地址族对应同一 prefix，成员按 owner 独立存储，并支持精确 revoke。
+- `ipam.announce` 支持 `non-shared` / `tag:<tag>` selector；服务生命周期控制 Anycast announcement。
+- publish 可由 `network: region` 同时发布本地和多个 Anycast endpoint；shared endpoint 宣告 assignment prefix 而非 host route。
