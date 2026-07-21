@@ -342,3 +342,7 @@ observer 第一版实现前已决策的关键问题：
 3. **离线诊断子命令**：第一版只提供 daemon 内嵌 observer；独立的 `higgs observer` 离线 DB viewer 延后到后续阶段。
 4. **SSE 持久化/回放**：SSE 仅做实时通知，不持久化、不重放；前端断线后自动降级为 5s 轮询。
 5. **拓扑图优先级**：第一版以表格 + raw JSON 为主，可视化拓扑图留到后续增强。
+
+### 10.5 Web UI 重构
+
+现有 UI 的视觉与信息架构重构设计已定稿，见 [observer-ui-redesign.md](observer-ui-redesign.md)：零构建约束下以原生 ES Modules 模块化前端、建立设计 token 体系、逐页重构信息架构（Overview 仪表盘化、Overlay/Health 职责分离、Zones 双栏 + Inspect 折叠），并可选补完事件 payload 与 Events 时间线页。实施任务见 `../../todo.md` Phase 9。

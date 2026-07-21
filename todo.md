@@ -18,6 +18,39 @@
 - [x] Phase 7.13-7.15 稳态冗余优化（XFRM maintenance、endpoint timer、unsolicited ping）。
 - [x] Phase 7.16 Firewall backend-native inline hooks 及后续收口（external mode、ip6tables 双栈探测、`higgs debug firewall` flag、nft priority 配置）。详细实现归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
 
+## Phase 9: Observer Web UI 重构（当前执行队列）
+
+**目标：** 解决现有 observer 网页视觉陈旧、信息架构混乱的问题。设计定稿见 [docs/new/observer-ui-redesign.md](docs/new/observer-ui-redesign.md)；observer 只读定位、REST API 形状与安全模型不变。
+
+**约束：** 零构建（原生 ES Modules + 多 CSS 文件，无 Node 工具链）、零运行时依赖、纯 embed；注意 `//go:embed web/*` pattern 需随新增子目录扩大。
+
+- [ ] **9.1 设计基座**
+  - `web/style/tokens.css`：中性灰底 + 单一 accent + 语义状态色（ok/warn/err/unknown）、字号/间距阶梯、radius token。
+  - 布局壳重写：侧栏分组导航（总览 / 网络 / 监控）、底部连接状态三态指示、统一页头（标题 + 说明 + 页面级操作区）。
+  - 基础组件收敛到 `style/base.css`：card、stat-card、badge、dot、table、kv、details、empty/loading/error 三态。
+
+- [ ] **9.2 前端模块化与重绘策略**
+  - `app.js`（1153 行单文件）拆分为 `web/src/` 原生 ES modules：`api.js` / `store.js` / `events.js` / `router.js` / `format.js` / `components/*` / `pages/*`，单文件 < ~200 行。
+  - store 按 endpoint 缓存 + 事件类型到 endpoint 的失效映射，SSE 事件只重取受影响键，不再整页刷新。
+  - 重绘保留 scrollTop / 输入 / `<details open>` 状态，删除 `foldState` 全局补丁。
+  - Health 页 sparkline 懒加载，消除每次刷新每条 link 一个 series 请求的 N× 放大。
+
+- [ ] **9.3 页面信息架构重构**
+  - Overview 仪表盘化：全局状态横幅 + 问题清单（带深链）优先，统计卡与 reconcile 摘要其次。
+  - Overlay（控制面：planner/SA/reconcile/rotation）与 Health（数据面：探针/RTT/loss/曲线）职责分离，导航文案明确。
+  - Zones 双栏布局；authority/proof/revocations/history/Raw JSON 全部收入 Inspect 折叠区；hash 截断 + 点击复制。
+  - Routes 错误置顶 + zone 过滤；BIRD 错误醒目展示；Gossip diagnostics 格式化 kv。
+  - 全局：相对时间、列表页文本过滤、选中态写入 hash 可深链。
+
+- [ ] **9.4 事件链路补完（可选，动后端）**
+  - `daemon.go` 广播点携带轻量 payload（`link_id` / `peer_id`），前端条目级失效。
+  - 落地 `event_buffer_seconds` 环形缓冲 + Events 时间线页（独立可裁）。
+
+- [ ] **9.5 测试与文档收口**
+  - `webapp_test.go` token 断言改写为模块化后的关键导出；`static_test.go` 覆盖新增子目录；`internal/observer` 与 `app/higgs` observer 族测试全绿。
+  - `app/higgs/observer_api_*_test.go` 不应需要修改（REST 响应不变，9.4 除外），若需修改则说明越界。
+  - `docs/new/observer.md` 第 6/9 节同步为重构后行为。
+
 ## Phase 7: 生产化收口与高级能力候选
 
 **目标：** 先把 daemon/control/运维面补到可长期运行，再按真实需求推进异构 TransportLink 并行、可靠性补强和可选传输能力。Phase 7 不要求按编号顺序执行。
@@ -102,6 +135,7 @@
 
 ## 下一步
 
-1. 下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
-2. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-3. Phase 8 已完成 root 数据面验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
+1. 当前执行队列为 Phase 9 Observer Web UI 重构（9.1 → 9.3 顺序实施，9.4 可选，9.5 收口），设计见 [docs/new/observer-ui-redesign.md](docs/new/observer-ui-redesign.md)。
+2. 其后窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
+3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
+4. Phase 8 已完成 root 数据面验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
