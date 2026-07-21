@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +16,8 @@ import (
 //   - All Higgs-owned rules use a comment marker "higgs-<scope>" for ownership tracking.
 //   - Chains are created with a Higgs-specific name prefix.
 //   - ListOwned parses `iptables -S` / `iptables -t nat -S` output.
-//   - Apply uses sequential iptables commands.
+//   - Apply populates an inactive generation chain before switching the
+//     built-in-chain jump, so preparation failures keep the old policy active.
 //
 // The driver is designed to be testable by injecting CommandRunner.
 type IPTablesDriver struct {
@@ -71,50 +71,397 @@ func (d *IPTablesDriver) Apply(ctx context.Context, plan FirewallPlan, desired *
 	if desired == nil {
 		return result, fmt.Errorf("desired state is nil")
 	}
-	// Migrate rules written directly into built-in NAT chains by older
-	// versions. Dedicated managed chains below replace this layout.
-	legacyApplied, legacyErrs := d.deleteLegacyNATBaseRules(ctx, iptablesOwnerMarker(desired))
-	result.Applied += legacyApplied
-	commands := buildIPTablesApplyCommands(plan, desired)
-	errs := append([]string(nil), legacyErrs...)
-	for _, cmd := range commands {
-		binary := cmd.binary
-		args := cmd.args
-		if len(cmd.skipIfSucceeds) > 0 {
-			if _, err := d.run(ctx, binary, cmd.skipIfSucceeds...); err == nil {
-				// Object/rule already present; nothing to do.
+	_ = plan // generation-chain apply converges from the live kernel state.
+
+	marker := iptablesOwnerMarker(desired)
+	tableName := iptablesTableName(desired)
+	hash := DesiredStateHash(desired)
+	specs := buildIPTablesManagedChainSpecs(desired, marker)
+	var prepared []preparedIPTablesChain
+
+	// Admin hook targets must exist before staging rules that jump to them.
+	// They are never flushed or otherwise treated as Higgs-owned policy.
+	for _, target := range jumpTargets(desired) {
+		for _, binary := range []string{"iptables", "ip6tables"} {
+			if _, err := d.run(ctx, binary, "-S", target); err == nil {
 				continue
 			}
-		}
-		if len(cmd.skipUnlessSucceeds) > 0 {
-			if _, err := d.run(ctx, binary, cmd.skipUnlessSucceeds...); err != nil {
-				continue
+			if _, err := d.run(ctx, binary, "-N", target); err != nil {
+				return iptablesApplyFailure(result, fmt.Sprintf("%s create hook target %s: %v", binary, target, err))
 			}
-		}
-		if cmd.repeatUntilFail {
-			// Drain (possibly duplicated) references; the final failure just
-			// means "no more references" and is expected.
-			for i := 0; i < 8; i++ {
-				if _, err := d.run(ctx, binary, args...); err != nil {
-					break
-				}
-				result.Applied++
-			}
-			continue
-		}
-		if _, err := d.run(ctx, binary, args...); err != nil {
-			errs = append(errs, fmt.Sprintf("%s %v: %v", binary, args, err))
-			result.Failed++
-		} else {
 			result.Applied++
 		}
 	}
-	result.Errors = errs
-	result.Generation = 1
-	if len(errs) > 0 {
-		return result, fmt.Errorf("iptables apply had %d errors", len(errs))
+
+	// Build every inactive generation chain completely before changing a
+	// built-in-chain jump. A preparation error leaves the active generation
+	// untouched and therefore cannot create a fail-open window.
+	for _, spec := range specs {
+		for _, binary := range []string{"iptables", "ip6tables"} {
+			item, applied, err := d.prepareIPTablesGeneration(ctx, binary, tableName, marker, hash, spec)
+			result.Applied += applied
+			if err != nil {
+				d.discardPreparedIPTablesChains(ctx, append(prepared, item))
+				return iptablesApplyFailure(result, err.Error())
+			}
+			prepared = append(prepared, item)
+		}
 	}
+
+	// Cut over only after all IPv4 and IPv6 staging chains are complete. New
+	// jumps are inserted before old jumps, so a cutover failure leaves at
+	// least the old policy (and possibly the new policy) active.
+	for i := range prepared {
+		item := &prepared[i]
+		args := iptablesArgs(item.spec.table, "-I", item.spec.builtin, "-j", item.generation, "-m", "comment", "--comment", marker)
+		if _, err := d.run(ctx, item.binary, args...); err != nil {
+			return iptablesApplyFailure(result, fmt.Sprintf("%s activate %s: %v", item.binary, item.generation, err))
+		}
+		item.activated = true
+		result.Applied++
+	}
+
+	active := make(map[string]bool, len(prepared))
+	for _, item := range prepared {
+		active[iptablesChainKey(item.binary, item.spec.table, item.generation)] = true
+	}
+	cleaned, cleanupErrs := d.cleanupOldIPTablesGenerations(ctx, tableName, marker, active)
+	result.Applied += cleaned
+
+	// Migrate rules written directly into built-in NAT chains only after the
+	// replacement NAT generation is active.
+	legacyApplied, legacyErrs := d.deleteLegacyNATBaseRules(ctx, marker)
+	result.Applied += legacyApplied
+	cleanupErrs = append(cleanupErrs, legacyErrs...)
+	if len(cleanupErrs) > 0 {
+		result.Failed += len(cleanupErrs)
+		result.Errors = cleanupErrs
+		result.Generation = 1
+		return result, fmt.Errorf("iptables apply cleanup had %d errors", len(cleanupErrs))
+	}
+	result.Generation = 1
 	return result, nil
+}
+
+type iptablesManagedChainSpec struct {
+	table     string
+	builtin   string
+	canonical string
+	code      string
+	rules     func(chain string) []iptablesCommand
+}
+
+type preparedIPTablesChain struct {
+	binary     string
+	spec       iptablesManagedChainSpec
+	generation string
+	activated  bool
+}
+
+func iptablesApplyFailure(result FirewallApplyResult, message string) (FirewallApplyResult, error) {
+	result.Failed++
+	result.Errors = append(result.Errors, message)
+	result.Generation = 1
+	return result, fmt.Errorf("iptables apply failed: %s", message)
+}
+
+func iptablesTableName(desired *FirewallDesiredState) string {
+	prefix := desired.Instance.OwnerPrefix
+	if prefix == "" {
+		prefix = "higgs"
+	}
+	scope := desired.Instance.NetNS
+	if desired.Instance.IsHost {
+		scope = "host"
+	}
+	return prefix + "_" + scope
+}
+
+func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string) []iptablesManagedChainSpec {
+	if desired.Instance.Mode == ModeDisabled {
+		return nil
+	}
+	tableName := iptablesTableName(desired)
+	ruleBuilder := func(rules []Rule) func(string) []iptablesCommand {
+		return func(chain string) []iptablesCommand {
+			var commands []iptablesCommand
+			for _, rule := range rules {
+				commands = append(commands, iptablesRuleCommands(chain, rule, marker)...)
+			}
+			return commands
+		}
+	}
+
+	if !desired.Instance.IsHost {
+		return []iptablesManagedChainSpec{
+			{builtin: "INPUT", canonical: tableName + "_input", code: "i", rules: ruleBuilder(desired.InputRules)},
+			{builtin: "FORWARD", canonical: tableName + "_forward", code: "f", rules: ruleBuilder(desired.ForwardRules)},
+			{builtin: "OUTPUT", canonical: tableName + "_output", code: "o", rules: ruleBuilder(desired.OutputRules)},
+		}
+	}
+
+	inputRules := func(chain string) []iptablesCommand {
+		var commands []iptablesCommand
+		for _, hi := range desired.HostIngress {
+			args := []string{"-A", chain, "-p", iptablesProto(hi.Proto)}
+			if hi.Port > 0 {
+				args = append(args, "--dport", fmt.Sprintf("%d", hi.Port))
+			}
+			if hi.DstAddr.IsValid() {
+				args = append(args, "-d", hi.DstAddr.String())
+			}
+			args = append(args, "-j", "ACCEPT", "-m", "comment", "--comment", marker+":"+hi.Comment)
+			for _, binary := range iptablesBinariesForAddr(hi.DstAddr) {
+				commands = append(commands, iptablesCommand{binary: binary, args: args})
+			}
+		}
+		return commands
+	}
+	specs := []iptablesManagedChainSpec{
+		{builtin: "INPUT", canonical: tableName + "_input", code: "i", rules: inputRules},
+	}
+	if len(desired.ForwardRules) > 0 {
+		specs = append(specs, iptablesManagedChainSpec{
+			builtin: "FORWARD", canonical: tableName + "_forward", code: "f", rules: ruleBuilder(desired.ForwardRules),
+		})
+	}
+	if len(desired.NatRedirects) > 0 {
+		specs = append(specs, iptablesManagedChainSpec{
+			table: "nat", builtin: "PREROUTING", canonical: tableName + "_prerouting", code: "r",
+			rules: func(chain string) []iptablesCommand {
+				var commands []iptablesCommand
+				for _, nr := range desired.NatRedirects {
+					args := []string{"-t", "nat", "-A", chain, "-p", iptablesProto(nr.Proto)}
+					if nr.OriginalDst > 0 {
+						args = append(args, "--dport", fmt.Sprintf("%d", nr.OriginalDst))
+					}
+					if nr.DstAddr.IsValid() {
+						args = append(args, "-d", nr.DstAddr.String())
+					}
+					args = append(args, "-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", nr.RedirectTo), "-m", "comment", "--comment", marker+":"+nr.Comment)
+					for _, binary := range iptablesBinariesForAddr(nr.DstAddr) {
+						commands = append(commands, iptablesCommand{binary: binary, args: args})
+					}
+				}
+				return commands
+			},
+		})
+	}
+	if len(desired.NatSources) > 0 {
+		specs = append(specs, iptablesManagedChainSpec{
+			table: "nat", builtin: "POSTROUTING", canonical: tableName + "_postrouting", code: "s",
+			rules: func(chain string) []iptablesCommand {
+				var commands []iptablesCommand
+				for _, ns := range desired.NatSources {
+					args := []string{"-t", "nat", "-A", chain, "-p", iptablesProto(ns.Proto)}
+					if ns.OriginalSrc > 0 {
+						args = append(args, "--sport", fmt.Sprintf("%d", ns.OriginalSrc))
+					}
+					if ns.DstPort > 0 {
+						args = append(args, "--dport", fmt.Sprintf("%d", ns.DstPort))
+					}
+					if ns.DstAddr.IsValid() {
+						args = append(args, "-d", ns.DstAddr.String())
+					}
+					args = append(args, "-j", "MASQUERADE", "--to-ports", fmt.Sprintf("%d", ns.RewriteTo), "-m", "comment", "--comment", marker+":"+ns.Comment)
+					for _, binary := range iptablesBinariesForAddr(ns.DstAddr) {
+						commands = append(commands, iptablesCommand{binary: binary, args: args})
+					}
+				}
+				return commands
+			},
+		})
+	}
+	return specs
+}
+
+func iptablesGenerationChain(tableName, code, hash string, slot byte) string {
+	const generationHashLength = 12
+	if len(hash) > generationHashLength {
+		hash = hash[:generationHashLength]
+	}
+	suffix := "_" + code + "_" + hash + string(slot)
+	const maxChainName = 28
+	prefixLen := maxChainName - len(suffix)
+	if prefixLen < 1 {
+		prefixLen = 1
+	}
+	prefix := tableName
+	if len(prefix) > prefixLen {
+		prefix = prefix[:prefixLen]
+	}
+	return prefix + suffix
+}
+
+func (d *IPTablesDriver) prepareIPTablesGeneration(
+	ctx context.Context,
+	binary, tableName, marker, hash string,
+	spec iptablesManagedChainSpec,
+) (preparedIPTablesChain, int, error) {
+	a := iptablesGenerationChain(tableName, spec.code, hash, 'a')
+	b := iptablesGenerationChain(tableName, spec.code, hash, 'b')
+	aActive := d.iptablesJumpExists(ctx, binary, spec.table, spec.builtin, a, marker)
+	bActive := d.iptablesJumpExists(ctx, binary, spec.table, spec.builtin, b, marker)
+	if aActive && bActive {
+		// Both slots represent the same desired hash. Keep a active while b is
+		// rebuilt, then normal cleanup removes the duplicate a jump.
+		if _, err := d.run(ctx, binary, iptablesArgs(spec.table, "-D", spec.builtin, "-j", b, "-m", "comment", "--comment", marker)...); err != nil {
+			return preparedIPTablesChain{}, 0, fmt.Errorf("%s remove duplicate active slot %s: %w", binary, b, err)
+		}
+		bActive = false
+	}
+	generation := a
+	if aActive {
+		generation = b
+	} else if bActive {
+		generation = a
+	}
+	item := preparedIPTablesChain{binary: binary, spec: spec, generation: generation}
+	applied := 0
+
+	existsArgs := iptablesArgs(spec.table, "-S", generation)
+	if _, err := d.run(ctx, binary, existsArgs...); err == nil {
+		if _, err := d.run(ctx, binary, iptablesArgs(spec.table, "-F", generation)...); err != nil {
+			return item, applied, fmt.Errorf("%s flush inactive generation %s: %w", binary, generation, err)
+		}
+		applied++
+	} else {
+		if _, err := d.run(ctx, binary, iptablesArgs(spec.table, "-N", generation)...); err != nil {
+			return item, applied, fmt.Errorf("%s create generation %s: %w", binary, generation, err)
+		}
+		applied++
+	}
+
+	for _, command := range spec.rules(generation) {
+		if command.binary != binary {
+			continue
+		}
+		if _, err := d.run(ctx, binary, command.args...); err != nil {
+			return item, applied, fmt.Errorf("%s populate generation %s: %w", binary, generation, err)
+		}
+		applied++
+	}
+	return item, applied, nil
+}
+
+func (d *IPTablesDriver) iptablesJumpExists(ctx context.Context, binary, table, builtin, target, marker string) bool {
+	_, err := d.run(ctx, binary, iptablesArgs(table, "-C", builtin, "-j", target, "-m", "comment", "--comment", marker)...)
+	return err == nil
+}
+
+func (d *IPTablesDriver) discardPreparedIPTablesChains(ctx context.Context, prepared []preparedIPTablesChain) {
+	for _, item := range prepared {
+		if item.activated {
+			continue
+		}
+		_, _ = d.run(ctx, item.binary, iptablesArgs(item.spec.table, "-F", item.generation)...)
+		_, _ = d.run(ctx, item.binary, iptablesArgs(item.spec.table, "-X", item.generation)...)
+	}
+}
+
+func iptablesChainKey(binary, table, chain string) string {
+	if table == "" {
+		table = "filter"
+	}
+	return binary + ":" + table + ":" + chain
+}
+
+func (d *IPTablesDriver) cleanupOldIPTablesGenerations(
+	ctx context.Context,
+	tableName, marker string,
+	active map[string]bool,
+) (int, []string) {
+	applied := 0
+	var errs []string
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		for _, table := range []string{"", "nat"} {
+			out, err := d.run(ctx, binary, iptablesArgs(table, "-S")...)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s list %s table for cleanup: %v", binary, iptablesTableLabel(table), err))
+				continue
+			}
+			for _, chain := range parseManagedIPTablesActualChains(string(out), tableName, table) {
+				if active[iptablesChainKey(binary, table, chain.name)] {
+					continue
+				}
+				deleteArgs := iptablesArgs(table, "-D", chain.builtin, "-j", chain.name, "-m", "comment", "--comment", marker)
+				for attempts := 0; attempts < 4096; attempts++ {
+					if _, err := d.run(ctx, binary, deleteArgs...); err != nil {
+						break
+					}
+					applied++
+				}
+				if d.iptablesJumpExists(ctx, binary, table, chain.builtin, chain.name, marker) {
+					errs = append(errs, fmt.Sprintf("%s too many references to stale chain %s", binary, chain.name))
+					continue
+				}
+				after, err := d.run(ctx, binary, iptablesArgs(table, "-S")...)
+				if err != nil {
+					errs = append(errs, fmt.Sprintf("%s verify references to stale chain %s: %v", binary, chain.name, err))
+					continue
+				}
+				if iptablesChainReferenced(string(after), chain.name) {
+					errs = append(errs, fmt.Sprintf("%s stale chain %s still has non-Higgs references", binary, chain.name))
+					continue
+				}
+				if _, err := d.run(ctx, binary, iptablesArgs(table, "-F", chain.name)...); err != nil {
+					errs = append(errs, fmt.Sprintf("%s flush stale chain %s: %v", binary, chain.name, err))
+					continue
+				}
+				applied++
+				if _, err := d.run(ctx, binary, iptablesArgs(table, "-X", chain.name)...); err != nil {
+					errs = append(errs, fmt.Sprintf("%s delete stale chain %s: %v", binary, chain.name, err))
+					continue
+				}
+				applied++
+			}
+		}
+	}
+	return applied, errs
+}
+
+func iptablesTableLabel(table string) string {
+	if table == "" {
+		return "filter"
+	}
+	return table
+}
+
+type managedIPTablesActualChain struct {
+	name    string
+	builtin string
+}
+
+func parseManagedIPTablesActualChains(output, tableName, table string) []managedIPTablesActualChain {
+	seen := make(map[string]bool)
+	var chains []managedIPTablesActualChain
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) != 2 || fields[0] != "-N" {
+			continue
+		}
+		name := fields[1]
+		_, builtin, ok := managedIPTablesChainIdentity(tableName, table, name)
+		if !ok || seen[name] {
+			continue
+		}
+		seen[name] = true
+		chains = append(chains, managedIPTablesActualChain{name: name, builtin: builtin})
+	}
+	sort.Slice(chains, func(i, j int) bool { return chains[i].name < chains[j].name })
+	return chains
+}
+
+func iptablesChainReferenced(output, target string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "-j" && fields[i+1] == target {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func iptablesOwnerMarker(desired *FirewallDesiredState) string {
@@ -198,262 +545,94 @@ func (d *IPTablesDriver) ListOwned(ctx context.Context, owner Owner) (FirewallOb
 }
 
 func (d *IPTablesDriver) DeleteStale(ctx context.Context, refs []FirewallObjectRef) error {
+	wanted := make(map[string]map[string]bool)
 	for _, ref := range refs {
-		table, builtin, ok := iptablesObjectLocation(ref)
+		tableName, ok := iptablesObjectTableName(ref)
 		if !ok {
 			continue
 		}
+		if wanted[tableName] == nil {
+			wanted[tableName] = make(map[string]bool)
+		}
+		wanted[tableName][objKey(ref)] = true
+	}
+	var errs []string
+	for tableName, keys := range wanted {
 		for _, binary := range []string{"iptables", "ip6tables"} {
-			for i := 0; i < 8; i++ {
-				if _, err := d.run(ctx, binary, iptablesArgs(table, "-D", builtin, "-j", ref.Name)...); err != nil {
-					break
+			for _, table := range []string{"", "nat"} {
+				out, err := d.run(ctx, binary, iptablesArgs(table, "-S")...)
+				if err != nil {
+					errs = append(errs, fmt.Sprintf("%s list %s table: %v", binary, iptablesTableLabel(table), err))
+					continue
+				}
+				for _, chain := range parseManagedIPTablesActualChains(string(out), tableName, table) {
+					ref, _, ok := managedIPTablesChainIdentity(tableName, table, chain.name)
+					if !ok {
+						continue
+					}
+					if !keys[objKey(ref)] && !keys[objKey(FirewallObjectRef{Kind: ref.Kind, Family: "inet", Name: chain.name})] {
+						continue
+					}
+					for _, args := range matchingIPTablesJumpDeletes(string(out), chain.builtin, chain.name) {
+						if _, err := d.run(ctx, binary, iptablesArgs(table, args...)...); err != nil {
+							errs = append(errs, fmt.Sprintf("%s remove jump to %s: %v", binary, chain.name, err))
+						}
+					}
+					if _, err := d.run(ctx, binary, iptablesArgs(table, "-F", chain.name)...); err != nil {
+						errs = append(errs, fmt.Sprintf("%s flush %s: %v", binary, chain.name, err))
+						continue
+					}
+					if _, err := d.run(ctx, binary, iptablesArgs(table, "-X", chain.name)...); err != nil {
+						errs = append(errs, fmt.Sprintf("%s delete %s: %v", binary, chain.name, err))
+					}
 				}
 			}
-			if _, err := d.run(ctx, binary, iptablesArgs(table, "-S", ref.Name)...); err != nil {
-				continue
-			}
-			_, _ = d.run(ctx, binary, iptablesArgs(table, "-F", ref.Name)...)
-			_, _ = d.run(ctx, binary, iptablesArgs(table, "-X", ref.Name)...)
 		}
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("iptables stale cleanup: %s", strings.Join(errs, "; "))
+	}
 	return nil
+}
+
+func iptablesObjectTableName(ref FirewallObjectRef) (string, bool) {
+	suffixes := []string{"_prerouting", "_postrouting", "_forward", "_output", "_input"}
+	lower := strings.ToLower(ref.Name)
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return ref.Name[:len(ref.Name)-len(suffix)], true
+		}
+	}
+	return "", false
+}
+
+func matchingIPTablesJumpDeletes(output, builtin, target string) [][]string {
+	var deletes [][]string
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 4 || fields[0] != "-A" || fields[1] != builtin {
+			continue
+		}
+		matches := false
+		for i := 2; i+1 < len(fields); i++ {
+			if fields[i] == "-j" && fields[i+1] == target {
+				matches = true
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		fields[0] = "-D"
+		deletes = append(deletes, fields)
+	}
+	return deletes
 }
 
 // iptablesCommand represents a single iptables/ip6tables invocation.
 type iptablesCommand struct {
 	binary string
 	args   []string
-	// skipIfSucceeds, when set, is run first with the same binary; if it
-	// exits 0 the main command is skipped (idempotent create/insert).
-	skipIfSucceeds []string
-	// skipUnlessSucceeds, when set, is run first with the same binary; if it
-	// fails the main command is skipped (conditional cleanup).
-	skipUnlessSucceeds []string
-	// repeatUntilFail runs the command until it fails (bounded); the final
-	// failure is expected and tolerated. Used to drain duplicate references.
-	repeatUntilFail bool
-}
-
-// buildIPTablesApplyCommands generates sequential iptables commands.
-//
-// The apply model is an idempotent full rebuild: managed chains are created
-// when missing, flushed, and refilled from desired state on every apply, and
-// jumps from built-in chains are inserted once (guarded by -C checks). This
-// keeps the backend convergent across reconciles without tracking per-rule
-// diffs, mirroring the nft backend's delete-and-recreate semantics.
-func buildIPTablesApplyCommands(plan FirewallPlan, desired *FirewallDesiredState) []iptablesCommand {
-	prefix := desired.Instance.OwnerPrefix
-	if prefix == "" {
-		prefix = "higgs"
-	}
-	scope := desired.Instance.NetNS
-	if desired.Instance.IsHost {
-		scope = "host"
-	}
-	tableName := prefix + "_" + scope
-	marker := iptablesOwnerMarker(desired)
-
-	var commands []iptablesCommand
-
-	// Delete stale chains (e.g. legacy uppercase chains from older naming):
-	// drain references from built-in chains first so -X can succeed, then
-	// flush and delete.
-	for _, a := range plan.Actions {
-		if a.Action != "delete" {
-			continue
-		}
-		table, builtin, ok := iptablesObjectLocation(a.Object)
-		if !ok {
-			continue
-		}
-		for _, binary := range []string{"iptables", "ip6tables"} {
-			commands = append(commands, iptablesCommand{
-				binary:          binary,
-				args:            iptablesArgs(table, "-D", builtin, "-j", a.Object.Name, "-m", "comment", "--comment", marker),
-				repeatUntilFail: true,
-			})
-			exists := iptablesArgs(table, "-S", a.Object.Name)
-			commands = append(commands, iptablesCommand{
-				binary: binary, args: iptablesArgs(table, "-F", a.Object.Name),
-				skipUnlessSucceeds: exists,
-			})
-			commands = append(commands, iptablesCommand{
-				binary: binary, args: iptablesArgs(table, "-X", a.Object.Name),
-				skipUnlessSucceeds: exists,
-			})
-		}
-	}
-
-	if desired.Instance.IsHost {
-		commands = append(commands, buildIPTablesHostCommands(tableName, marker, desired)...)
-	} else {
-		commands = append(commands, buildIPTablesOverlayCommands(tableName, marker, desired)...)
-	}
-
-	return commands
-}
-
-// jumpOnce inserts a jump from a built-in chain to a Higgs chain, guarded by
-// a -C check so the jump is only inserted once. table may be "" (filter).
-func jumpOnce(binary, table, builtin, chain, marker string) iptablesCommand {
-	full := func(op string) []string {
-		var args []string
-		if table != "" {
-			args = append(args, "-t", table)
-		}
-		return append(args, op, builtin, "-j", chain, "-m", "comment", "--comment", marker)
-	}
-	return iptablesCommand{binary: binary, args: full("-I"), skipIfSucceeds: full("-C")}
-}
-
-// ensureChain creates a chain when missing, then flushes it for refill.
-// table may be "" (filter).
-func ensureChain(binary, table, chain string) []iptablesCommand {
-	full := func(op string) []string {
-		var args []string
-		if table != "" {
-			args = append(args, "-t", table)
-		}
-		return append(args, op, chain)
-	}
-	return []iptablesCommand{
-		{binary: binary, args: full("-N"), skipIfSucceeds: full("-S")},
-		{binary: binary, args: full("-F")},
-	}
-}
-
-func buildIPTablesOverlayCommands(tableName, marker string, desired *FirewallDesiredState) []iptablesCommand {
-	var commands []iptablesCommand
-	binaries := []string{"iptables", "ip6tables"}
-
-	// Hook jump-target chains are admin-owned: create them when missing so
-	// jump rules never reference a missing chain, but never flush them.
-	for _, target := range jumpTargets(desired) {
-		for _, binary := range binaries {
-			commands = append(commands, iptablesCommand{binary: binary, args: []string{"-N", target}, skipIfSucceeds: []string{"-S", target}})
-		}
-	}
-
-	chains := []struct {
-		name    string
-		builtin string
-		rules   []Rule
-	}{
-		{tableName + "_input", "INPUT", desired.InputRules},
-		{tableName + "_forward", "FORWARD", desired.ForwardRules},
-		{tableName + "_output", "OUTPUT", desired.OutputRules},
-	}
-	for _, c := range chains {
-		for _, binary := range binaries {
-			commands = append(commands, ensureChain(binary, "", c.name)...)
-		}
-		for _, r := range c.rules {
-			commands = append(commands, iptablesRuleCommands(c.name, r, marker)...)
-		}
-		for _, binary := range binaries {
-			commands = append(commands, jumpOnce(binary, "", c.builtin, c.name, marker))
-		}
-	}
-
-	return commands
-}
-
-func buildIPTablesHostCommands(tableName, marker string, desired *FirewallDesiredState) []iptablesCommand {
-	var commands []iptablesCommand
-	binaries := []string{"iptables", "ip6tables"}
-
-	inputChain := tableName + "_input"
-	for _, binary := range binaries {
-		commands = append(commands, ensureChain(binary, "", inputChain)...)
-	}
-
-	for _, hi := range desired.HostIngress {
-		args := []string{"-A", inputChain, "-p", iptablesProto(hi.Proto)}
-		if hi.Port > 0 {
-			args = append(args, "--dport", fmt.Sprintf("%d", hi.Port))
-		}
-		if hi.DstAddr.IsValid() {
-			args = append(args, "-d", hi.DstAddr.String())
-		}
-		acceptArgs := append(args, "-j", "ACCEPT", "-m", "comment", "--comment", marker+":"+hi.Comment)
-
-		for _, binary := range iptablesBinariesForAddr(hi.DstAddr) {
-			commands = append(commands, iptablesCommand{binary: binary, args: acceptArgs})
-		}
-	}
-
-	for _, binary := range binaries {
-		commands = append(commands, jumpOnce(binary, "", "INPUT", inputChain, marker))
-	}
-
-	if len(desired.ForwardRules) > 0 {
-		forwardChain := tableName + "_forward"
-		for _, binary := range binaries {
-			commands = append(commands, ensureChain(binary, "", forwardChain)...)
-		}
-		for _, rule := range desired.ForwardRules {
-			commands = append(commands, iptablesRuleCommands(forwardChain, rule, marker)...)
-		}
-		for _, binary := range binaries {
-			commands = append(commands, jumpOnce(binary, "", "FORWARD", forwardChain, marker))
-		}
-	}
-
-	// NAT redirect rules live in a dedicated nat prerouting chain so each
-	// apply can flush and refill them idempotently.
-	if len(desired.NatRedirects) > 0 {
-		preChain := tableName + "_prerouting"
-		for _, binary := range binaries {
-			commands = append(commands, ensureChain(binary, "nat", preChain)...)
-		}
-		for _, nr := range desired.NatRedirects {
-			args := []string{"-t", "nat", "-A", preChain, "-p", iptablesProto(nr.Proto)}
-			if nr.OriginalDst > 0 {
-				args = append(args, "--dport", fmt.Sprintf("%d", nr.OriginalDst))
-			}
-			if nr.DstAddr.IsValid() {
-				args = append(args, "-d", nr.DstAddr.String())
-			}
-			args = append(args, "-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", nr.RedirectTo), "-m", "comment", "--comment", marker+":"+nr.Comment)
-
-			for _, binary := range iptablesBinariesForAddr(nr.DstAddr) {
-				commands = append(commands, iptablesCommand{binary: binary, args: args})
-			}
-		}
-		for _, binary := range binaries {
-			commands = append(commands, jumpOnce(binary, "nat", "PREROUTING", preChain, marker))
-		}
-	}
-
-	// NAT source port rewrite rules for host-originated charon traffic.
-	if len(desired.NatSources) > 0 {
-		postChain := tableName + "_postrouting"
-		for _, binary := range binaries {
-			commands = append(commands, ensureChain(binary, "nat", postChain)...)
-		}
-		for _, ns := range desired.NatSources {
-			args := []string{"-t", "nat", "-A", postChain, "-p", iptablesProto(ns.Proto)}
-			if ns.OriginalSrc > 0 {
-				args = append(args, "--sport", fmt.Sprintf("%d", ns.OriginalSrc))
-			}
-			if ns.DstPort > 0 {
-				args = append(args, "--dport", fmt.Sprintf("%d", ns.DstPort))
-			}
-			if ns.DstAddr.IsValid() {
-				args = append(args, "-d", ns.DstAddr.String())
-			}
-			args = append(args, "-j", "MASQUERADE", "--to-ports", fmt.Sprintf("%d", ns.RewriteTo), "-m", "comment", "--comment", marker+":"+ns.Comment)
-
-			for _, binary := range iptablesBinariesForAddr(ns.DstAddr) {
-				commands = append(commands, iptablesCommand{binary: binary, args: args})
-			}
-		}
-		for _, binary := range binaries {
-			commands = append(commands, jumpOnce(binary, "nat", "POSTROUTING", postChain, marker))
-		}
-	}
-
-	return commands
 }
 
 func iptablesRuleCommands(chain string, r Rule, marker string) []iptablesCommand {
@@ -627,26 +806,74 @@ func parseIPTablesChains(output, tableName, table string) []FirewallObjectRef {
 }
 
 func managedIPTablesObject(tableName, table, chainName string) (FirewallObjectRef, bool) {
-	kind := ""
-	switch table {
-	case "", "filter":
-		switch chainName {
-		case tableName + "_input", tableName + "_forward", tableName + "_output",
-			tableName + "_INPUT", tableName + "_FORWARD", tableName + "_OUTPUT":
-			kind = "chain"
-		}
-	case "nat":
-		switch chainName {
-		case tableName + "_prerouting":
-			kind = "nat_redirect"
-		case tableName + "_postrouting":
-			kind = "nat_source"
-		}
-	}
-	if kind == "" {
+	ref, _, ok := managedIPTablesChainIdentity(tableName, table, chainName)
+	if !ok {
 		return FirewallObjectRef{}, false
 	}
-	return FirewallObjectRef{Kind: kind, Family: "inet", Name: chainName}, true
+	return ref, true
+}
+
+func managedIPTablesChainIdentity(tableName, table, chainName string) (FirewallObjectRef, string, bool) {
+	type identity struct {
+		code      string
+		kind      string
+		suffix    string
+		builtin   string
+		legacyCap string
+	}
+	var identities []identity
+	switch table {
+	case "", "filter":
+		identities = []identity{
+			{code: "i", kind: "chain", suffix: "_input", builtin: "INPUT", legacyCap: "_INPUT"},
+			{code: "f", kind: "chain", suffix: "_forward", builtin: "FORWARD", legacyCap: "_FORWARD"},
+			{code: "o", kind: "chain", suffix: "_output", builtin: "OUTPUT", legacyCap: "_OUTPUT"},
+		}
+	case "nat":
+		identities = []identity{
+			{code: "r", kind: "nat_redirect", suffix: "_prerouting", builtin: "PREROUTING"},
+			{code: "s", kind: "nat_source", suffix: "_postrouting", builtin: "POSTROUTING"},
+		}
+	default:
+		return FirewallObjectRef{}, "", false
+	}
+	for _, id := range identities {
+		canonical := tableName + id.suffix
+		if chainName == canonical {
+			return FirewallObjectRef{Kind: id.kind, Family: "inet", Name: canonical}, id.builtin, true
+		}
+		if id.legacyCap != "" && chainName == tableName+id.legacyCap {
+			// Preserve the actual uppercase name so Plan reports it as stale.
+			return FirewallObjectRef{Kind: id.kind, Family: "inet", Name: chainName}, id.builtin, true
+		}
+		if isIPTablesGenerationChain(tableName, id.code, chainName) {
+			// Generation chains implement the canonical desired object. Hide
+			// the active slot/hash from the backend-neutral planner.
+			return FirewallObjectRef{Kind: id.kind, Family: "inet", Name: canonical}, id.builtin, true
+		}
+	}
+	return FirewallObjectRef{}, "", false
+}
+
+func isIPTablesGenerationChain(tableName, code, chainName string) bool {
+	// Generation names use a twelve-hex desired hash plus an a/b staging slot.
+	const hashLength = 12
+	hashPlaceholder := strings.Repeat("0", hashLength)
+	example := iptablesGenerationChain(tableName, code, hashPlaceholder, 'a')
+	prefix := strings.TrimSuffix(example, hashPlaceholder+"a")
+	if !strings.HasPrefix(chainName, prefix) {
+		return false
+	}
+	tail := strings.TrimPrefix(chainName, prefix)
+	if len(tail) != hashLength+1 || (tail[hashLength] != 'a' && tail[hashLength] != 'b') {
+		return false
+	}
+	for _, c := range tail[:hashLength] {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func dedupFirewallObjectRefs(refs []FirewallObjectRef) []FirewallObjectRef {
@@ -666,26 +893,6 @@ func dedupFirewallObjectRefs(refs []FirewallObjectRef) []FirewallObjectRef {
 	return out
 }
 
-func iptablesObjectLocation(ref FirewallObjectRef) (table, builtin string, ok bool) {
-	switch ref.Kind {
-	case "chain":
-		lower := strings.ToLower(ref.Name)
-		switch {
-		case strings.HasSuffix(lower, "_input"):
-			return "", "INPUT", true
-		case strings.HasSuffix(lower, "_forward"):
-			return "", "FORWARD", true
-		case strings.HasSuffix(lower, "_output"):
-			return "", "OUTPUT", true
-		}
-	case "nat_redirect":
-		return "nat", "PREROUTING", true
-	case "nat_source":
-		return "nat", "POSTROUTING", true
-	}
-	return "", "", false
-}
-
 func iptablesArgs(table string, args ...string) []string {
 	if table == "" {
 		return append([]string(nil), args...)
@@ -693,6 +900,3 @@ func iptablesArgs(table string, args ...string) []string {
 	out := []string{"-t", table}
 	return append(out, args...)
 }
-
-// Ensure exec import is used.
-var _ = exec.LookPath

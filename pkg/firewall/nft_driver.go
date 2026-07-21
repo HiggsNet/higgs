@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -20,7 +21,8 @@ type CommandRunner func(ctx context.Context, name string, args ...string) ([]byt
 //   - Chains within the table handle input/forward/output/prerouting.
 //   - Prefix sets are nft sets; rules reference them.
 //   - ListOwned parses `nft list table` output for Higgs-owned objects.
-//   - Apply uses sequential nft commands.
+//   - Apply renders one nft batch file so the kernel commits the whole ruleset
+//     transaction atomically.
 //
 // The driver is designed to be testable by injecting CommandRunner.
 type NFTDriver struct {
@@ -86,21 +88,69 @@ func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Firew
 		return result, fmt.Errorf("nft backend does not support hooks %v: whole-table rebuild would reset admin-managed hook chains every reconcile; use backend iptables or remove hooks", targets)
 	}
 	commands := buildNFTApplyCommands(plan, desired)
-	var errs []string
-	for _, cmd := range commands {
-		if _, err := d.run(ctx, cmd...); err != nil {
-			errs = append(errs, fmt.Sprintf("nft %v: %v", cmd, err))
-			result.Failed++
-		} else {
-			result.Applied++
+	if len(commands) == 0 {
+		result.Generation = 1
+		return result, nil
+	}
+
+	script := renderNFTBatch(commands)
+	path, err := writeNFTBatch(script)
+	if err != nil {
+		result.Failed = 1
+		result.Errors = []string{err.Error()}
+		return result, fmt.Errorf("prepare nft transaction: %w", err)
+	}
+	defer os.Remove(path)
+
+	output, err := d.run(ctx, "-f", path)
+	if err != nil {
+		message := fmt.Sprintf("nft transaction: %v", err)
+		if detail := strings.TrimSpace(string(output)); detail != "" {
+			message += ": " + detail
 		}
+		result.Failed = 1
+		result.Errors = []string{message}
+		result.Generation = 1
+		return result, fmt.Errorf("nft apply transaction failed")
 	}
-	result.Errors = errs
+	result.Applied = len(commands)
 	result.Generation = 1
-	if len(errs) > 0 {
-		return result, fmt.Errorf("nft apply had %d errors", len(errs))
-	}
 	return result, nil
+}
+
+func renderNFTBatch(commands [][]string) string {
+	var b strings.Builder
+	for _, command := range commands {
+		if len(command) == 0 {
+			continue
+		}
+		b.WriteString(strings.Join(command, " "))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func writeNFTBatch(script string) (string, error) {
+	file, err := os.CreateTemp("", "higgs-nft-*.nft")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	remove := true
+	defer func() {
+		_ = file.Close()
+		if remove {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := file.WriteString(script); err != nil {
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	remove = false
+	return path, nil
 }
 
 func (d *NFTDriver) ListOwned(ctx context.Context, owner Owner) (FirewallObservedState, error) {

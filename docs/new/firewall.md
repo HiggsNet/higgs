@@ -397,15 +397,16 @@ overlay 实例的 driver 会把所有命令用 `ip netns exec <netns>` 包装后
 - 所有对象放在 `inet` family 的表 `<owner_prefix>_<scope>` 中。
 - overlay 创建 `input`、`forward`、`output` chain；host 额外创建 `prerouting`、`postrouting`。
 - Mesh 前缀使用 `set`，命名如 `higgs_h2_mesh_v4`、`higgs_h2_mesh_v6`，带 `flags interval`。
-- `Apply` 时如果观察到已存在同名 Higgs-owned table，先 `delete table` 再整体重建，避免 stale rule 累积。
+- `Apply` 把 delete/recreate、set、chain 与 rule 渲染到同一个 batch 文件，通过单次 `nft -f` 事务提交；任一语句失败时内核拒绝整批变更，旧 table 继续生效。
 - 当前不支持 hooks；带 hooks 的 nft desired state 会在 apply 前被拒绝（见 §3.5）。
 
 ### 5.3 iptables 后端（`IPTablesDriver`）
 
 - 同时操作 `iptables` 与 `ip6tables`。
-- 只把精确命名的 managed chain（`higgs_<scope>_input/forward/output` 及 host NAT chain）识别为归属对象，避免把共享前缀的管理员 hook chain 当作 stale 清理。
+- planner/ListOwned 使用 `higgs_<scope>_input/forward/output` 及 host NAT chain 作为逻辑对象；内核中的实际策略使用带 desired hash 与 `a`/`b` 槽位的 generation chain。解析时只识别严格格式的 managed chain，避免把共享前缀的管理员 hook chain 当作 stale 清理。
 - 使用 `-m comment --comment higgs-<scope>` 标记 Higgs 规则。
-- NAT redirect 用 dedicated prerouting chain 中的 `REDIRECT --to-ports`；source rewrite 用 dedicated postrouting chain 中的 `MASQUERADE --to-ports`，每轮 flush/refill。
+- 每次 Apply 先在未激活槽中完整生成 INPUT/FORWARD/OUTPUT 及所需 NAT chain；全部 IPv4/IPv6 staging chain 填充成功后，才在 builtin chain 顶部插入新 jump，随后移除旧 jump 和旧 generation。准备失败不会修改当前入口，切换失败则保留旧 jump。
+- NAT redirect 使用 generation prerouting chain 中的 `REDIRECT --to-ports`；source rewrite 使用 generation postrouting chain 中的 `MASQUERADE --to-ports`。
 - 配置了 hooks 时，`Apply` 用 `-N` 幂等创建空 hook chain 作为 jump 目标（chain 已存在时不报错，内容保留）。
 - 地址族处理：带 v4/v6 前缀或地址的规则按族只进对应 binary；族中立规则（无前缀匹配、非 ICMP 协议，如 loopback、babel、conntrack、hook jump、default policy）同时下发到 `iptables` 与 `ip6tables`；ICMP 规则按族分别渲染（`-p icmp` 只进 `iptables`，`-p icmpv6` 只进 `ip6tables`）。
 - 接口前缀模式在 planner 中使用 nft 风格尾随 `*`；iptables 渲染时转换为 xtables 的尾随 `+`（例如 `hgs*` → `hgs+`）。
@@ -500,7 +501,8 @@ type FirewallReconcileInstance struct {
 `reconcileFirewall` 按 instance 隔离失败，单个实例出错不影响其他实例：
 
 - `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并持久化，可由 `higgs debug firewall` 查看。
-- driver `Apply` 对命令列表逐条执行、尽力而为：单条失败不中断后续命令，失败命令计入 `Failed` 并汇总返回。失败时可能留下部分应用的规则，不做回滚，靠下一轮 reconcile 继续收敛（nft 后端每轮先整体删表重建，天然清理残留）。
+- nft driver 使用单次 batch 事务，任一命令失败时整批不提交，旧 ruleset 保持不变。
+- iptables driver 的 staging 阶段遇错立即停止并删除未激活链，旧 generation 保持生效；所有 staging chain 完成后才进入切换阶段。iptables 与 ip6tables 以及不同 table 之间没有跨后端的统一内核事务，因此切换阶段失败时可能暂时同时保留新旧 jump，但不会先清空旧策略，下一轮 reconcile 会继续收敛和清理。
 - backend 不可用（`nft`/`iptables` 均缺失）：daemon 记录 warning 日志并退化为 dry-run driver，不修改系统规则；系统上已有的旧规则保持不动。
 - 撤销（revocation）不走特殊通道：Zone record 变化经 `notifyStateChanged` 触发 flush，deny-first 由 planner 的 `buildPrefixSets` 在生成期望状态时保证（见 4.2）。
 
@@ -554,7 +556,7 @@ higgs debug preflight
 | 优先级配置 | `priority.filter` / `priority.nat` | 未实现 | chain 优先级不可配置 |
 | `AllowPeers`/`DenyPeers` | 按 peer zone 过滤 transit | 字段存在但**未实际使用** | 仅前缀过滤生效 |
 | debug 命令 flag | `--netns` / `--host` / `--dry-run` / `--json` | 未实现，只有裸 `higgs debug firewall` | 无法按实例过滤或预演 diff |
-| 命名约定 | 建议 `HIGGS-H2-INPUT` | 实际 `higgs_h2_input` | 风格差异 |
+| 命名约定 | 建议 `HIGGS-H2-INPUT` | 逻辑对象为 `higgs_h2_input`，iptables 物理 chain 另带 hash/双槽 generation 后缀 | 风格差异 |
 
 ### 8.1 使用建议
 

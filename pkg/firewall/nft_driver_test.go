@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -16,15 +18,34 @@ type fakeCommandRunner struct {
 	failOnNew      map[string]bool
 	existingChains map[string]bool
 	existingRules  map[string]bool
+	ruleArgs       map[string][]string
+	ruleCounts     map[string]int
+	failContains   string
+	nftBatchErr    error
 }
 
 type executedCommand struct {
 	name string
 	args []string
+	// input contains the nft batch file contents for `nft -f <path>`.
+	input string
 }
 
 func (f *fakeCommandRunner) run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	f.commands = append(f.commands, executedCommand{name: name, args: args})
+	command := executedCommand{name: name, args: args}
+	if name == "nft" && len(args) == 2 && args[0] == "-f" {
+		contents, err := os.ReadFile(args[1])
+		if err != nil {
+			return nil, err
+		}
+		command.input = string(contents)
+		f.commands = append(f.commands, command)
+		if f.nftBatchErr != nil {
+			return []byte("batch rejected"), f.nftBatchErr
+		}
+		return []byte(""), nil
+	}
+	f.commands = append(f.commands, command)
 	if name == "iptables" || name == "ip6tables" {
 		return f.runIPTables(name, args)
 	}
@@ -35,12 +56,45 @@ func (f *fakeCommandRunner) run(ctx context.Context, name string, args ...string
 	return []byte(""), nil
 }
 
+func commandText(command executedCommand) string {
+	return strings.TrimSpace(strings.Join(command.args, " ") + "\n" + command.input)
+}
+
+func (f *fakeCommandRunner) seedIPTablesChain(binary, table, chain string) {
+	if f.existingChains == nil {
+		f.existingChains = make(map[string]bool)
+	}
+	f.existingChains[binary+":"+table+":"+chain] = true
+}
+
+func (f *fakeCommandRunner) seedIPTablesRule(binary, table string, args []string) {
+	if f.existingRules == nil {
+		f.existingRules = make(map[string]bool)
+	}
+	if f.ruleArgs == nil {
+		f.ruleArgs = make(map[string][]string)
+	}
+	if f.ruleCounts == nil {
+		f.ruleCounts = make(map[string]int)
+	}
+	key := binary + ":" + table + ":" + strings.Join(args, "\x00")
+	f.existingRules[key] = true
+	f.ruleArgs[key] = append([]string(nil), args...)
+	f.ruleCounts[key]++
+}
+
 func (f *fakeCommandRunner) runIPTables(binary string, args []string) ([]byte, error) {
 	if f.existingChains == nil {
 		f.existingChains = make(map[string]bool)
 	}
 	if f.existingRules == nil {
 		f.existingRules = make(map[string]bool)
+	}
+	if f.ruleArgs == nil {
+		f.ruleArgs = make(map[string][]string)
+	}
+	if f.ruleCounts == nil {
+		f.ruleCounts = make(map[string]int)
 	}
 	table := "filter"
 	opIndex := 0
@@ -57,10 +111,43 @@ func (f *fakeCommandRunner) runIPTables(binary string, args []string) ([]byte, e
 	switch op {
 	case "-S":
 		if len(rest) == 0 {
-			return []byte(""), nil
+			var lines []string
+			prefix := binary + ":" + table + ":"
+			for key := range f.existingChains {
+				if strings.HasPrefix(key, prefix) {
+					lines = append(lines, "-N "+strings.TrimPrefix(key, prefix))
+				}
+			}
+			for key, args := range f.ruleArgs {
+				if strings.HasPrefix(key, prefix) {
+					count := f.ruleCounts[key]
+					if count == 0 && f.existingRules[key] {
+						count = 1
+					}
+					for i := 0; i < count; i++ {
+						lines = append(lines, "-A "+strings.Join(args, " "))
+					}
+				}
+			}
+			sort.Strings(lines)
+			return []byte(strings.Join(lines, "\n")), nil
 		}
 		if f.existingChains[chainKey(rest[0])] {
-			return []byte("-N " + rest[0]), nil
+			lines := []string{"-N " + rest[0]}
+			prefix := binary + ":" + table + ":"
+			for key, args := range f.ruleArgs {
+				if strings.HasPrefix(key, prefix) && len(args) > 0 && args[0] == rest[0] {
+					count := f.ruleCounts[key]
+					if count == 0 && f.existingRules[key] {
+						count = 1
+					}
+					for i := 0; i < count; i++ {
+						lines = append(lines, "-A "+strings.Join(args, " "))
+					}
+				}
+			}
+			sort.Strings(lines)
+			return []byte(strings.Join(lines, "\n")), nil
 		}
 		return nil, errors.New("chain does not exist")
 	case "-N":
@@ -75,21 +162,64 @@ func (f *fakeCommandRunner) runIPTables(binary string, args []string) ([]byte, e
 		if len(rest) > 0 && !f.existingChains[chainKey(rest[0])] {
 			return nil, errors.New("chain does not exist")
 		}
+		if len(rest) > 0 {
+			prefix := binary + ":" + table + ":"
+			for key, args := range f.ruleArgs {
+				if strings.HasPrefix(key, prefix) && len(args) > 0 && args[0] == rest[0] {
+					delete(f.ruleArgs, key)
+					delete(f.existingRules, key)
+					delete(f.ruleCounts, key)
+				}
+			}
+		}
 	case "-X":
 		if len(rest) > 0 && !f.existingChains[chainKey(rest[0])] {
 			return nil, errors.New("chain does not exist")
+		}
+		prefix := binary + ":" + table + ":"
+		for key, args := range f.ruleArgs {
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
+			for i := 0; i+1 < len(args); i++ {
+				if args[i] == "-j" && args[i+1] == rest[0] {
+					return nil, errors.New("chain is referenced")
+				}
+			}
 		}
 		if len(rest) > 0 {
 			delete(f.existingChains, chainKey(rest[0]))
 		}
 	case "-C":
 		key := binary + ":" + table + ":" + strings.Join(rest, "\x00")
-		if !f.existingRules[key] {
+		if !f.existingRules[key] && f.ruleCounts[key] == 0 {
 			return nil, errors.New("rule does not exist")
 		}
-	case "-I":
+	case "-A", "-I":
+		if f.failContains != "" && strings.Contains(strings.Join(rest, " "), f.failContains) {
+			return nil, errors.New("injected rule failure")
+		}
 		key := binary + ":" + table + ":" + strings.Join(rest, "\x00")
 		f.existingRules[key] = true
+		f.ruleArgs[key] = append([]string(nil), rest...)
+		f.ruleCounts[key]++
+	case "-D":
+		key := binary + ":" + table + ":" + strings.Join(rest, "\x00")
+		count := f.ruleCounts[key]
+		if count == 0 && f.existingRules[key] {
+			count = 1
+		}
+		if count == 0 {
+			return nil, errors.New("rule does not exist")
+		}
+		count--
+		if count == 0 {
+			delete(f.existingRules, key)
+			delete(f.ruleArgs, key)
+			delete(f.ruleCounts, key)
+		} else {
+			f.ruleCounts[key] = count
+		}
 	}
 	return []byte(""), nil
 }
@@ -130,33 +260,19 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 	if result.Applied == 0 {
 		t.Error("expected non-zero applied count")
 	}
-	// Verify some nft commands were generated.
-	if len(runner.commands) == 0 {
-		t.Fatal("expected commands to be executed")
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %v, want one atomic nft transaction", runner.commands)
 	}
-	// Check for table creation.
-	foundAddTable := false
-	for _, cmd := range runner.commands {
-		if cmd.name == "nft" && len(cmd.args) >= 2 && cmd.args[0] == "add" && cmd.args[1] == "table" {
-			foundAddTable = true
-		}
-	}
-	if !foundAddTable {
-		t.Error("expected 'add table' command")
+	batch := commandText(runner.commands[0])
+	if !strings.Contains(batch, "add table inet higgs_higgstesth2") {
+		t.Errorf("expected table creation in nft batch:\n%s", batch)
 	}
 	for _, want := range []string{
 		"hook input",
 		"hook forward",
 		"hook output",
 	} {
-		found := false
-		for _, cmd := range runner.commands {
-			if strings.Contains(strings.Join(cmd.args, " "), want) {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !strings.Contains(batch, want) {
 			t.Errorf("expected nft overlay chain with %s hook", want)
 		}
 	}
@@ -194,7 +310,7 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	foundNatChain := false
 	foundInputChain := false
 	for _, cmd := range runner.commands {
-		argsStr := strings.Join(cmd.args, " ")
+		argsStr := commandText(cmd)
 		if strings.Contains(argsStr, "prerouting") && strings.Contains(argsStr, "nat") {
 			foundNatChain = true
 		}
@@ -233,7 +349,7 @@ func TestNFTDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	foundPostrouting := false
 	foundMasquerade := false
 	for _, cmd := range runner.commands {
-		argsStr := strings.Join(cmd.args, " ")
+		argsStr := commandText(cmd)
 		if strings.Contains(argsStr, "postrouting") && strings.Contains(argsStr, "srcnat") {
 			foundPostrouting = true
 		}
@@ -268,22 +384,37 @@ func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
 	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if len(runner.commands) < 2 {
-		t.Fatalf("commands = %v, want delete table then add table", runner.commands)
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %v, want one atomic nft transaction", runner.commands)
 	}
-	first := strings.Join(runner.commands[0].args, " ")
-	if first != "delete table inet higgs_host" {
-		t.Fatalf("first command = %q, want table delete", first)
+	batch := runner.commands[0].input
+	if !strings.HasPrefix(batch, "delete table inet higgs_host\n") {
+		t.Fatalf("batch = %q, want table delete first", batch)
 	}
-	foundAdd := false
-	for _, cmd := range runner.commands[1:] {
-		if strings.Join(cmd.args, " ") == "add table inet higgs_host" {
-			foundAdd = true
-			break
-		}
+	if !strings.Contains(batch, "add table inet higgs_host\n") {
+		t.Fatalf("missing table rebuild in transaction:\n%s", batch)
 	}
-	if !foundAdd {
-		t.Fatalf("missing table rebuild command: %+v", runner.commands)
+}
+
+func TestNFTDriver_ApplyTransactionFailureReportsNoAppliedCommands(t *testing.T) {
+	runner := &fakeCommandRunner{nftBatchErr: errors.New("syntax error")}
+	d := &NFTDriver{Command: runner.run}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	result, err := d.Apply(context.Background(), PlanDiff(desired.Instance.ID, desired, FirewallObservedState{}), desired)
+	if err == nil {
+		t.Fatal("Apply succeeded despite rejected nft transaction")
+	}
+	if result.Applied != 0 || result.Failed != 1 {
+		t.Fatalf("result = %+v, want zero applied and one failed transaction", result)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %v, want exactly one transaction attempt", runner.commands)
 	}
 }
 
