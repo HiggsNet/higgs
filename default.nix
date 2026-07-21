@@ -14,6 +14,7 @@
   (
     { buildGoModule, lib }:
     let
+      version = lib.removeSuffix "\n" (builtins.readFile ./VERSION);
       cleanSrc = lib.cleanSourceWith {
         src = ./.;
         filter = path: type:
@@ -27,10 +28,11 @@
     in
     buildGoModule {
       pname = "higgs";
-      version = "dirty";
+      inherit version;
       src = cleanSrc;
       vendorHash = "sha256-NoOelMKfFmgXd/CRitCSct7dFf7Nrq14jCWtEsbghUo=";
       subPackages = [ "app/higgs" "app/higgs-services" ];
+      doCheck = false;
       ldflags = [
         "-s"
         "-w"

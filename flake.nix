@@ -14,6 +14,7 @@
       packages = forAllSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          version = pkgs.lib.removeSuffix "\n" (builtins.readFile ./VERSION);
           cleanSrc = pkgs.lib.cleanSourceWith {
             src = ./.;
             filter = path: type:
@@ -26,11 +27,14 @@
           };
           higgsnet = pkgs.buildGoModule {
             pname = "higgsnet";
-            version = self.shortRev or "dirty";
+            inherit version;
             src = cleanSrc;
             vendorHash = "sha256-NoOelMKfFmgXd/CRitCSct7dFf7Nrq14jCWtEsbghUo=";
 
             subPackages = [ "app/higgs" "app/higgs-services" ];
+            # Unit and root smoke tests are run explicitly by CI/Make targets.
+            # Nix packaging only needs to compile the installable binaries.
+            doCheck = false;
 
             ldflags = [
               "-s"

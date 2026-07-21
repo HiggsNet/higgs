@@ -170,7 +170,7 @@ nix build .#higgsnet
 nix develop
 ```
 
-Flake 安装的命令名是 `higgsnet`；`.#higgs` 暂时保留为同一 package 的兼容别名。NixOS 可以直接启用随 Flake 提供的 module：
+Flake 安装的命令名是 `higgsnet`；`.#higgs` 暂时保留为同一 package 的兼容别名。Nix package 的正式版本只读取仓库根目录的 `VERSION`，不依赖本机 Git 状态。NixOS 可以直接启用随 Flake 提供的 module：
 
 ```nix
 {
@@ -183,6 +183,16 @@ Flake 安装的命令名是 `higgsnet`；`.#higgs` 暂时保留为同一 package
 生成的 `higgsnet.service` 默认读取 `/etc/higgs/config.yaml`。`nix develop` 会提供 Go、BIRD、strongSwan、iproute2、iptables 和 nftables 等开发/数据面调试工具。
 
 ### GitHub Release
+
+发布版本以根目录 `VERSION` 为准，tag 必须严格为 `v$(cat VERSION)`。发布时先更新 `VERSION`、提交并推送，然后执行：
+
+```bash
+make release-check
+make release-tag
+make release-push
+```
+
+`release-check` 会校验版本格式、干净工作树、已推送的当前提交和本地 tag 不存在，并运行 test、vet 和 build；`release-tag` 只创建本地 annotated tag；`release-push` 只推送 tag 到 `origin`（可用 `RELEASE_REMOTE=<remote>` 覆盖）。三个目标都不会提交或推送当前分支。release workflow 还会校验 tag 与 `VERSION` 一致，避免 Nix package、release archive 和镜像标签的版本漂移。
 
 打 `v*` tag 时，`.github/workflows/release.yml` 会在 GitHub 原生 Linux runner 上分别构建 `amd64` 和 `arm64` release tarball，并发布到 GitHub Release。它还会把 Docker 镜像推送到 GHCR：两个架构先分别生成 `:<version>-amd64` 和 `:<version>-arm64`，再合并为多架构 `:<version>`、`:sha-<commit>` 和 `:latest` tag。也可以从 GitHub Actions 手动触发 workflow 生成 artifacts 和镜像。
 

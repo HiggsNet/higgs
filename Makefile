@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -10,6 +10,9 @@ GO_CACHE ?= /tmp/higgs-gocache
 GO_MOD_CACHE ?= /tmp/higgs-gomodcache
 DOCKER ?= docker
 DOCKER_IMAGE ?= higgs:dev
+RELEASE_REMOTE ?= origin
+RELEASE_VERSION := $(shell tr -d '\r\n' < VERSION 2>/dev/null)
+RELEASE_TAG := v$(RELEASE_VERSION)
 GIT_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 GIT_DESCRIBE := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
 GIT_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo true || echo false)
@@ -77,6 +80,30 @@ docker-run-example:
 
 nix-build:
 	nix build .#higgs
+
+# Release flow: first make release-check, then make release-tag, then
+# make release-push. Neither target commits nor pushes the current branch.
+release-check:
+	@test -n "$(RELEASE_VERSION)" || { echo "VERSION is empty or missing" >&2; exit 1; }
+	@printf '%s\n' "$(RELEASE_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be MAJOR.MINOR.PATCH, got $(RELEASE_VERSION)" >&2; exit 1; }
+	@git diff --check
+	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before release" >&2; git status --short >&2; exit 1; }
+	@if git rev-parse -q --verify "refs/tags/$(RELEASE_TAG)" >/dev/null; then echo "tag $(RELEASE_TAG) already exists locally" >&2; exit 1; fi
+	@upstream="$$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)" || { echo "current branch has no upstream" >&2; exit 1; }; \
+	git merge-base --is-ancestor HEAD "$$upstream" || { echo "HEAD has not been pushed to $$upstream" >&2; exit 1; }
+	@$(MAKE) test vet build
+	@echo "Release checks passed for $(RELEASE_TAG)"
+
+release-tag: release-check
+	@git tag -a "$(RELEASE_TAG)" -m "$(RELEASE_TAG)"
+	@echo "Created local tag $(RELEASE_TAG). Run 'make release-push' to publish it."
+
+release-push:
+	@git rev-parse -q --verify "refs/tags/$(RELEASE_TAG)" >/dev/null || { echo "local tag $(RELEASE_TAG) does not exist; run 'make release-tag' first" >&2; exit 1; }
+	@tag_commit="$$(git rev-parse "$(RELEASE_TAG)^{commit}")"; head_commit="$$(git rev-parse HEAD)"; \
+	test "$$tag_commit" = "$$head_commit" || { echo "tag $(RELEASE_TAG) does not point to HEAD" >&2; exit 1; }
+	@git push "$(RELEASE_REMOTE)" "$(RELEASE_TAG)"
+	@echo "Pushed $(RELEASE_TAG) to $(RELEASE_REMOTE); GitHub Release will now run."
 
 smoke: smoke-all
 
@@ -946,6 +973,9 @@ help:
 	@echo "  fmt     - Format Go source code"
 	@echo "  vet     - Run go vet"
 	@echo "  check   - Run fmt, vet, test, and build"
+	@echo "  release-check - Validate VERSION/repository state and run release tests"
+	@echo "  release-tag - Create local v<VERSION> tag after release checks"
+	@echo "  release-push - Push the local release tag to $(RELEASE_REMOTE)"
 	@echo "  install - Install higgs to GOPATH/bin"
 	@echo "  run     - Build and run higgs"
 	@echo "  smoke   - Run all smoke tests"
