@@ -499,7 +499,7 @@ func TestNFTDriver_DeleteStale(t *testing.T) {
 	}
 }
 
-func TestRenderNFTRuleCtStateAndJump(t *testing.T) {
+func TestRenderNFTRuleCtState(t *testing.T) {
 	invalid := renderNFTRule(Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
 	if !strings.Contains(invalid, "ct state invalid drop") {
 		t.Errorf("invalid drop rendered as %q", invalid)
@@ -507,25 +507,6 @@ func TestRenderNFTRuleCtStateAndJump(t *testing.T) {
 	est := renderNFTRule(Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related"})
 	if !strings.Contains(est, "ct state { established, related } accept") {
 		t.Errorf("established/related rendered as %q", est)
-	}
-	jump := renderNFTRule(Rule{Action: ActionJump, JumpTarget: "my_pre_input", Comment: "pre_input hook"})
-	if !strings.Contains(jump, "jump my_pre_input") {
-		t.Errorf("hook jump rendered as %q", jump)
-	}
-	if strings.Contains(jump, "iifname") || strings.Contains(jump, "oifname") {
-		t.Errorf("hook jump must not render an iface match: %q", jump)
-	}
-}
-
-func TestBuildDesiredStateRejectsNFTHooks(t *testing.T) {
-	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		Backend: BackendNFT, DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
-		OwnerPrefix: "higgs",
-		Hooks:       Hooks{PreInput: "my_pre_input", PostOutput: "my_post_output"},
-	}
-	if _, err := BuildDesiredState(spec, FirewallPolicyInput{}); err == nil || !strings.Contains(err.Error(), "nft backend does not support hooks") {
-		t.Fatalf("BuildDesiredState error = %v, want nft hooks rejection", err)
 	}
 }
 

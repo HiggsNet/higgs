@@ -79,20 +79,6 @@ func (d *IPTablesDriver) Apply(ctx context.Context, plan FirewallPlan, desired *
 	specs := buildIPTablesManagedChainSpecs(desired, marker)
 	var prepared []preparedIPTablesChain
 
-	// Admin hook targets must exist before staging rules that jump to them.
-	// They are never flushed or otherwise treated as Higgs-owned policy.
-	for _, target := range jumpTargets(desired) {
-		for _, binary := range []string{"iptables", "ip6tables"} {
-			if _, err := d.run(ctx, binary, "-S", target); err == nil {
-				continue
-			}
-			if _, err := d.run(ctx, binary, "-N", target); err != nil {
-				return iptablesApplyFailure(result, fmt.Sprintf("%s create hook target %s: %v", binary, target, err))
-			}
-			result.Applied++
-		}
-	}
-
 	// Build every inactive generation chain completely before changing a
 	// built-in-chain jump. A preparation error leaves the active generation
 	// untouched and therefore cannot create a fail-open window.
@@ -722,11 +708,7 @@ func iptablesRuleCommands(chain string, r Rule, marker string) []iptablesCommand
 	var commands []iptablesCommand
 	for _, match := range iptablesMatchArgSets(r) {
 		args := append([]string{"-A", chain}, match...)
-		if r.Action == ActionJump {
-			args = append(args, "-j", r.JumpTarget)
-		} else {
-			args = append(args, "-j", strings.ToUpper(r.Action))
-		}
+		args = append(args, "-j", strings.ToUpper(r.Action))
 		args = append(args, "-m", "comment", "--comment", marker+":"+r.Comment)
 
 		// Determine if this rule is for IPv4, IPv6, or both.
@@ -860,7 +842,7 @@ func iptablesProto(proto string) string {
 
 // parseIPTablesChains parses `iptables -S` output and returns only exact
 // Higgs-managed chain names. Prefix matching is intentionally insufficient:
-// administrator-owned hook chains commonly share the instance prefix.
+// unrelated administrator-owned chains may share the instance prefix.
 func parseIPTablesChains(output, tableName, table string) []FirewallObjectRef {
 	var refs []FirewallObjectRef
 	seen := make(map[string]bool)

@@ -389,14 +389,13 @@ func assertNatSource(t *testing.T, desired *FirewallDesiredState, original, targ
 	t.Fatalf("missing source rewrite %d -> %d comment containing %q in %+v", original, target, comment, desired.NatSources)
 }
 
-func TestIPTablesDriver_CtStateAndHookCommands(t *testing.T) {
+func TestIPTablesDriver_CtStateCommands(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
 		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
 		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
 		OwnerPrefix: "higgs",
-		Hooks:       Hooks{PreInput: "my_pre_input", PostForward: "my_post_forward"},
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
@@ -406,38 +405,10 @@ func TestIPTablesDriver_CtStateAndHookCommands(t *testing.T) {
 	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	// Conntrack and hook jump rules install for both address families, and the
-	// driver creates hook chains only when they are absent.
+	// Conntrack rules install for both address families.
 	for _, binary := range []string{"iptables", "ip6tables"} {
 		assertCommandContains(t, runner.commands, binary, "-m conntrack --ctstate INVALID -j DROP")
 		assertCommandContains(t, runner.commands, binary, "--ctstate ESTABLISHED,RELATED -j ACCEPT")
-		assertCommandContains(t, runner.commands, binary, "-j my_pre_input")
-		assertCommandContains(t, runner.commands, binary, "-j my_post_forward")
-		assertCommandContains(t, runner.commands, binary, "-N my_pre_input")
-		assertCommandContains(t, runner.commands, binary, "-N my_post_forward")
-	}
-	// Jump rules must not carry iface matches.
-	for _, cmd := range runner.commands {
-		args := strings.Join(cmd.args, " ")
-		if strings.Contains(args, "-j my_pre_input") && (strings.Contains(args, "-i my_pre_input") || strings.Contains(args, "-o my_pre_input")) {
-			t.Fatalf("hook jump rendered with iface match: %s %s", cmd.name, args)
-		}
-	}
-	// Existing hook chains must be preserved and must not be recreated.
-	existing := &fakeCommandRunner{existingChains: map[string]bool{}}
-	for _, binary := range []string{"iptables", "ip6tables"} {
-		existing.existingChains[binary+":filter:my_pre_input"] = true
-		existing.existingChains[binary+":filter:my_post_forward"] = true
-	}
-	d2 := &IPTablesDriver{Command: existing.run}
-	if _, err := d2.Apply(context.Background(), plan, desired); err != nil {
-		t.Fatalf("Apply with existing hook chains should tolerate -N failures: %v", err)
-	}
-	for _, cmd := range existing.commands {
-		if len(cmd.args) == 2 && cmd.args[0] == "-N" &&
-			(cmd.args[1] == "my_pre_input" || cmd.args[1] == "my_post_forward") {
-			t.Fatalf("existing admin hook chain was recreated: %s %v", cmd.name, cmd.args)
-		}
 	}
 }
 

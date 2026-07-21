@@ -24,7 +24,6 @@ const (
 
 	ActionAccept = "accept"
 	ActionDrop   = "drop"
-	ActionJump   = "jump"
 
 	ChainInput   = "input"
 	ChainForward = "forward"
@@ -71,17 +70,7 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 	return desired, nil
 }
 
-// HasOverlayHooks reports whether the currently-wired overlay hook fields are
-// configured. nft cannot preserve these admin-managed chains with its current
-// whole-table rebuild model; auto backend selection uses this to prefer
-// iptables.
-func HasOverlayHooks(h Hooks) bool {
-	return h.PreInput != "" || h.PostInput != "" ||
-		h.PreForward != "" || h.PostForward != "" || h.PostOutput != ""
-}
-
 func validateFirewallHooks(spec FirewallInstanceSpec) error {
-	h := spec.Hooks
 	if err := ValidateNativeHooks(spec.NativeHooks); err != nil {
 		return fmt.Errorf("firewall instance %q: %w", spec.ID, err)
 	}
@@ -107,60 +96,6 @@ func validateFirewallHooks(spec FirewallInstanceSpec) error {
 		}
 		if !spec.IsHost && hasInlineRules(rules, hostHookPoints) {
 			return fmt.Errorf("firewall instance %q: host inline hooks require a host instance", spec.ID)
-		}
-	}
-	legacyByPoint := map[HookPoint]string{
-		HookPreInput: h.PreInput, HookPostInput: h.PostInput,
-		HookPreForward: h.PreForward, HookPostForward: h.PostForward,
-		HookPreOutput: h.PreOutput, HookPostOutput: h.PostOutput,
-		HookHostPrePrerouting: h.HostPrePrerouting, HookHostPostPrerouting: h.HostPostPrerouting,
-		HookHostPreInput: h.HostPreInput, HookHostPostInput: h.HostPostInput,
-	}
-	for point, target := range legacyByPoint {
-		if target != "" && hasNativeHookAt(spec.NativeHooks, point) {
-			return fmt.Errorf("firewall instance %q: legacy hook %s conflicts with inline hook rules at the same point", spec.ID, point)
-		}
-	}
-	hasHostHooks := h.HostPrePrerouting != "" || h.HostPostPrerouting != "" ||
-		h.HostPreInput != "" || h.HostPostInput != ""
-	if spec.IsHost {
-		if HasOverlayHooks(h) || h.PreOutput != "" || hasHostHooks {
-			return fmt.Errorf("firewall instance %q: host hooks are not implemented", spec.ID)
-		}
-		return nil
-	}
-	if hasHostHooks {
-		return fmt.Errorf("firewall instance %q: host hooks require a host instance and are not implemented", spec.ID)
-	}
-	if h.PreOutput != "" {
-		return fmt.Errorf("firewall instance %q: pre_output hook is not implemented", spec.ID)
-	}
-	if spec.Backend == BackendNFT && HasOverlayHooks(h) {
-		return fmt.Errorf("firewall instance %q: nft backend does not support hooks with whole-table rebuild; use backend iptables", spec.ID)
-	}
-
-	managedPrefix := chainNameSuffix(spec)
-	reserved := map[string]bool{
-		"INPUT": true, "FORWARD": true, "OUTPUT": true,
-		strings.ToUpper(managedPrefix + "_input"):   true,
-		strings.ToUpper(managedPrefix + "_forward"): true,
-		strings.ToUpper(managedPrefix + "_output"):  true,
-	}
-	for _, target := range []string{h.PreInput, h.PostInput, h.PreForward, h.PostForward, h.PostOutput} {
-		if target == "" {
-			continue
-		}
-		if len(target) > 28 {
-			return fmt.Errorf("firewall instance %q: hook chain %q exceeds the iptables 28-character limit", spec.ID, target)
-		}
-		for _, r := range target {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-				(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.') {
-				return fmt.Errorf("firewall instance %q: hook chain %q contains unsupported character %q", spec.ID, target, r)
-			}
-		}
-		if reserved[strings.ToUpper(target)] {
-			return fmt.Errorf("firewall instance %q: hook chain %q conflicts with a managed or built-in chain", spec.ID, target)
 		}
 	}
 	return nil
@@ -246,21 +181,16 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	addRule(ChainInput, Rule{Action: ActionAccept, IfaceIn: "lo", Comment: "loopback"})
 	desired.HookPositions.PreInput = len(desired.InputRules)
 
-	// 3. pre_input hook
-	if spec.Hooks.PreInput != "" {
-		addRule(ChainInput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PreInput, Comment: "pre_input hook"})
-	}
-
-	// 4. BIRD/Babel control traffic (UDP 6696 for babel)
+	// 3. BIRD/Babel control traffic (UDP 6696 for babel)
 	addRule(ChainInput, Rule{Action: ActionAccept, Proto: ProtoUDP, Port: 6696, Comment: "babel control"})
 	// ICMP for health/neighbor discovery
 	addRule(ChainInput, Rule{Action: ActionAccept, Proto: ProtoICMP, Comment: "icmp health"})
 	addRule(ChainInput, Rule{Action: ActionAccept, Proto: ProtoICMPv6, Comment: "icmpv6 health"})
 
-	// 5. established/related
+	// 4. established/related
 	addRule(ChainInput, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_input_est"})
 
-	// 6. local services
+	// 5. local services
 	for _, svc := range spec.LocalServices {
 		srcs := svc.Sources
 		if len(srcs) == 0 {
@@ -275,7 +205,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		})
 	}
 
-	// 7. mesh authorized sources to local assigned prefixes
+	// 6. mesh authorized sources to local assigned prefixes
 	if len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0 {
 		allMesh := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
 		allLocal := append(append([]netip.Prefix{}, prefixes.LocalAssignedV4...), prefixes.LocalAssignedV6...)
@@ -289,13 +219,10 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		}
 	}
 
-	// 8. post_input hook
+	// 7. post_input inline hooks
 	desired.HookPositions.PostInput = len(desired.InputRules)
-	if spec.Hooks.PostInput != "" {
-		addRule(ChainInput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostInput, Comment: "post_input hook"})
-	}
 
-	// 9. default policy
+	// 8. default policy
 	addRule(ChainInput, Rule{Action: defaultPolicyVerb(defaultPolicy), Comment: "default policy"})
 
 	// --- forward chain ---
@@ -305,10 +232,6 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	// 2. established/related
 	addRule(ChainForward, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_fwd_est"})
 	desired.HookPositions.PreForward = len(desired.ForwardRules)
-
-	if spec.Hooks.PreForward != "" {
-		addRule(ChainForward, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PreForward, Comment: "pre_forward hook"})
-	}
 
 	xfrmPat := spec.XFRMTunnelPattern
 	if xfrmPat == "" {
@@ -372,9 +295,6 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	}
 
 	desired.HookPositions.PostForward = len(desired.ForwardRules)
-	if spec.Hooks.PostForward != "" {
-		addRule(ChainForward, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostForward, Comment: "post_forward hook"})
-	}
 	addRule(ChainForward, Rule{Action: defaultPolicyVerb(defaultPolicy), Comment: "default policy"})
 
 	// --- output chain ---
@@ -389,9 +309,6 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		addRule(ChainOutput, Rule{Action: ActionAccept, Src: localAll, Comment: "local assigned source"})
 	}
 	desired.HookPositions.PostOutput = len(desired.OutputRules)
-	if spec.Hooks.PostOutput != "" {
-		addRule(ChainOutput, Rule{Action: ActionJump, JumpTarget: spec.Hooks.PostOutput, Comment: "post_output hook"})
-	}
 	// Output default to accept for overlay services; can be tightened.
 	addRule(ChainOutput, Rule{Action: ActionAccept, Comment: "default policy"})
 }
@@ -586,25 +503,6 @@ func chainNameSuffix(spec FirewallInstanceSpec) string {
 	return prefix + "_" + spec.NetNS
 }
 
-// jumpTargets returns the sorted unique set of hook chain names referenced by
-// jump rules in the desired state. The iptables backend creates missing targets;
-// the nft backend rejects hooks because whole-table rebuilds cannot preserve them.
-func jumpTargets(desired *FirewallDesiredState) []string {
-	seen := make(map[string]bool)
-	var out []string
-	for _, rules := range [][]Rule{desired.InputRules, desired.ForwardRules, desired.OutputRules} {
-		for _, r := range rules {
-			if r.Action != ActionJump || r.JumpTarget == "" || seen[r.JumpTarget] {
-				continue
-			}
-			seen[r.JumpTarget] = true
-			out = append(out, r.JumpTarget)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 func dedupSorted(prefixes []netip.Prefix) []netip.Prefix {
 	seen := make(map[string]bool)
 	var out []netip.Prefix
@@ -651,13 +549,13 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 		fmt.Fprintln(h, "rev6", p.String())
 	}
 	for _, r := range desired.InputRules {
-		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.JumpTarget, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.ForwardRules {
-		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.JumpTarget, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.OutputRules {
-		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.JumpTarget, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.HostIngress {
 		fmt.Fprintln(h, "hi", r.Proto, r.Port, r.DstAddr.String(), r.Comment)

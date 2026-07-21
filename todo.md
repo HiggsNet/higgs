@@ -69,10 +69,10 @@
   - **iptables 表达式**：只支持 `ipv4` 和 `ipv6` 两个 family block，分别编入 `iptables` 和 `ip6tables`；不提供 `both`、默认 family 或跨 family 自动复制。某一 family 未配置即表示该 family 没有管理员 inline rule。每个 hook point 是字符串列表，可连续写任意多条规则并保持配置顺序。使用 shellwords-compatible lexer 仅做参数分词，再以 argv 调用命令；禁止 shell expansion、换行、NUL、重定向/管道/命令连接符，以及 `-A/-I/-D/-R/-N/-X/-F/-P/-t/--table` 等越过当前 managed chain 的操作参数。
   - **nft 表达式**：只接受可追加到当前 managed chain 的单条 rule expression，不接受 `add/delete/replace/insert/flush table|chain|ruleset`、`include`、分号或换行等可逃逸单条规则上下文的语法。表达式与 Higgs 规则进入同一个 `nft -f` batch；任一表达式语法错误时整批失败，旧 table 继续生效。
   - **iptables 切换安全性**：inline rule 必须写入 inactive generation chain；所有 IPv4/IPv6 规则均成功后才切换内置链 jump。准备阶段任一规则失败时删除未激活 generation 并保留当前 active generation；切换某一地址族失败时必须补偿回切已切换的地址族，不能先清空线上链，也不能累积重复 jump。
-  - **旧 `hooks:` 兼容**：现有“跳到管理员外部 chain”的 `hooks:` 暂保留为 iptables-only 兼容入口；同一 hook point 不允许同时配置旧 chain hook 与新 `iptables_hooks`，避免重复执行。文档标为 legacy，但本任务不直接删除或自动迁移。
+  - **旧 chain hooks 已删除**：原先跳到管理员外部 chain 的 `hooks:` 配置和运行时支持已移除；只支持 backend-native inline hooks。
   - **模型与 reconcile**：为 backend-native rule 定义独立 typed config/desired model，不把原始文本伪装成现有通用 `Rule`；hook point、backend、family、规则顺序和原始表达式必须进入 desired-state hash。沿用当前低频 reconcile 行为：nft apply 整表原子替换，iptables apply 生成并切换 generation；inline hooks 不额外引入独立刷新周期。
   - **校验与诊断**：限制单 point 规则数、单条长度和总配置大小；错误需包含 instance、backend、hook point 和规则序号。`higgs debug firewall` 同时展示原始表达式、最终 backend、family、渲染位置和 active/inactive 状态，并在 dry-run 中显示将要发生的 generation/table 替换。
-  - **测试与验收**：已覆盖 YAML parse/strict-field、hash 稳定性、同一 point 多条规则的精确顺序、backend auto/显式选择、IPv4/IPv6 独立渲染、缺省 family 不复制、拒绝 `both`、旧 hook 冲突、危险 token 拒绝、无 shell 执行、表达式变更切换、staging/activation 失败回滚、无重复 jump 和无半套双栈规则；root/netns smoke 已真实通过 nft overlay/host input/prerouting，iptables 路径已写入同一 smoke，但当前机器缺少 `iptables`/`ip6tables`，仍待具备命令的 root 环境验收。
+  - **测试与验收**：已覆盖 YAML parse/strict-field、hash 稳定性、同一 point 多条规则的精确顺序、backend auto/显式选择、IPv4/IPv6 独立渲染、缺省 family 不复制、拒绝 `both`、危险 token 拒绝、无 shell 执行、表达式变更切换、staging/activation 失败回滚、无重复 jump 和无半套双栈规则；root/netns smoke 已真实通过 nft overlay/host input/prerouting，iptables 路径已写入同一 smoke，但当前机器缺少 `iptables`/`ip6tables`，仍待具备命令的 root 环境验收。
   - **文档交付**：同步更新 `docs/new/firewall.md`、配置参考和示例，明确两套表达式不具备可移植性、Higgs 不验证其业务语义、`DROP/ACCEPT/RETURN` 会改变后续规则可达性，以及错误规则会让本次 reconcile 失败但不应破坏上一 generation。
 
 - [ ] **7.7 可选 Global Discovery Server**
@@ -179,4 +179,4 @@
 2. 7.3 chunk repair 已完成；下一窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel。
 3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
 4. Phase 8 的实现、单元测试与 `services-smoke` 已就绪；待 root 数据面验收通过后归档。客户端服务选择和应用层 relay 按需作为独立项目评估。
-5. Firewall 管理员扩展采用 7.16 的 backend-native inline hooks：先冻结 hook 顺序、失败原子性和配置校验，再实现 nft/iptables 两条渲染路径；旧 iptables chain hook 仅作为兼容入口保留。
+5. Firewall 管理员扩展采用 7.16 的 backend-native inline hooks：先冻结 hook 顺序、失败原子性和配置校验，再实现 nft/iptables 两条渲染路径。

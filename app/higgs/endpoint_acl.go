@@ -226,7 +226,7 @@ func (d *DaemonService) hasEnforcingHostFirewall() bool {
 				return true
 			}
 			backend, err := firewall.ResolveBackendForInstance(firewall.FirewallInstanceSpec{
-				ID: instance.ID, Backend: instance.Backend, Hooks: instance.Hooks, NativeHooks: instance.NativeHooks,
+				ID: instance.ID, Backend: instance.Backend, NativeHooks: instance.NativeHooks,
 			}, preflight)
 			if err != nil {
 				continue

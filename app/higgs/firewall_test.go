@@ -126,6 +126,24 @@ firewall:
 	}
 }
 
+func TestParseConfigYAMLFirewallRejectsRemovedExternalChainHooks(t *testing.T) {
+	config := defaultAppConfig()
+	err := parseConfigYAML(`
+netns:
+  default:
+    kind: name
+    name: h2
+firewall:
+  instances:
+    - id: h2
+      hooks:
+        pre_input: admin_input
+`, config)
+	if err == nil || !strings.Contains(err.Error(), "field hooks not found") {
+		t.Fatalf("parseConfigYAML error = %v, want strict rejection of removed hooks", err)
+	}
+}
+
 func TestParseConfigYAMLFirewallOverlayDefaultsToDefaultNetNS(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

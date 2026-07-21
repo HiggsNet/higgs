@@ -81,12 +81,6 @@ func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Firew
 	if desired == nil {
 		return result, fmt.Errorf("desired state is nil")
 	}
-	// Hooks are admin-managed chains inside the Higgs table; the whole-table
-	// rebuild would wipe their content on every reconcile, so reject the plan
-	// instead of silently discarding admin rules.
-	if targets := jumpTargets(desired); len(targets) > 0 {
-		return result, fmt.Errorf("nft backend does not support hooks %v: whole-table rebuild would reset admin-managed hook chains every reconcile; use backend iptables or remove hooks", targets)
-	}
 	commands := buildNFTApplyCommands(plan, desired)
 	if len(commands) == 0 {
 		result.Generation = 1
@@ -401,11 +395,7 @@ func renderNFTRule(r Rule) string {
 			parts = append(parts, fmt.Sprintf("ct state { %s }", strings.Join(r.CtStates, ", ")))
 		}
 	}
-	if r.Action == ActionJump {
-		parts = append(parts, "jump "+quoteNFTVal(r.JumpTarget))
-	} else {
-		parts = append(parts, r.Action)
-	}
+	parts = append(parts, r.Action)
 	if r.Comment != "" {
 		parts = append(parts, fmt.Sprintf("comment %s", quoteNFTVal(r.Comment)))
 	}

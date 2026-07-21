@@ -96,26 +96,9 @@ type FirewallInstanceSpec struct {
 	CharonNATTPort uint16       // current charon NAT-T listen port (default 4500)
 	WGPort         uint16       // current WireGuard listen port (default 51820)
 
-	// Hooks: admin custom chains that Higgs jumps to but does not manage.
-	Hooks Hooks
-
 	// NativeHooks are backend-native inline rule expressions compiled into
 	// Higgs-managed chains. They are intentionally not a portable rule DSL.
 	NativeHooks NativeHooks
-}
-
-// Hooks holds admin-provided custom chain mount points.
-type Hooks struct {
-	PreInput           string
-	PostInput          string
-	PreForward         string
-	PostForward        string
-	PreOutput          string
-	PostOutput         string
-	HostPrePrerouting  string
-	HostPostPrerouting string
-	HostPreInput       string
-	HostPostInput      string
 }
 
 // HookPoint identifies a stable insertion point inside a Higgs-managed chain.
@@ -253,18 +236,17 @@ type FirewallDesiredState struct {
 
 // Rule is a single backend-agnostic firewall rule.
 type Rule struct {
-	ID         string
-	Chain      string // input | forward | output
-	Action     string // accept | drop | jump
-	Proto      string // tcp | udp | icmp | ipv6-icmp | ""
-	Src        []netip.Prefix
-	Dst        []netip.Prefix
-	IfaceIn    string
-	IfaceOut   string
-	Port       uint16   // destination port, 0 = any
-	CtStates   []string // conntrack states to match: established | related | invalid
-	JumpTarget string   // jump target chain, only when Action == "jump"
-	Comment    string
+	ID       string
+	Chain    string // input | forward | output
+	Action   string // accept | drop
+	Proto    string // tcp | udp | icmp | ipv6-icmp | ""
+	Src      []netip.Prefix
+	Dst      []netip.Prefix
+	IfaceIn  string
+	IfaceOut string
+	Port     uint16   // destination port, 0 = any
+	CtStates []string // conntrack states to match: established | related | invalid
+	Comment  string
 }
 
 // HostIngressRule is a host-side allow rule for IKE/NAT-T entry ports.

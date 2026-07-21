@@ -156,24 +156,13 @@ func ResolveBackend(configured string, pf FirewallPreflight) string {
 	}
 }
 
-// ResolveBackendForInstance applies hook compatibility constraints before the
+// ResolveBackendForInstance applies backend-native hook constraints before the
 // ordinary availability-based backend selection. It never silently ignores a
 // backend-native hook block.
 func ResolveBackendForInstance(spec FirewallInstanceSpec, pf FirewallPreflight) (string, error) {
 	configured := spec.Backend
 	hasNFTInline := HasNFTInlineHooks(spec.NativeHooks)
 	hasIPTablesInline := HasIPTablesInlineHooks(spec.NativeHooks)
-	if HasOverlayHooks(spec.Hooks) {
-		switch configured {
-		case BackendNFT:
-			return BackendNone, fmt.Errorf("firewall instance %s: nft backend does not support legacy chain hooks; use backend iptables", spec.ID)
-		case "", BackendAuto:
-			if pf.Iptables != "available" {
-				return BackendNone, fmt.Errorf("firewall instance %s: legacy chain hooks require iptables, but iptables is unavailable", spec.ID)
-			}
-			configured = BackendIptables
-		}
-	}
 	switch configured {
 	case BackendNFT:
 		if hasIPTablesInline && !hasNFTInline {

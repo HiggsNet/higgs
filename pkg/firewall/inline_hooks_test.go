@@ -73,14 +73,6 @@ func TestBuildDesiredStateRejectsInvalidInlineHooks(t *testing.T) {
 			wantErr: "host inline hooks require a host instance",
 		},
 		{
-			name: "legacy conflict",
-			spec: FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged,
-				Hooks:       Hooks{PreInput: "admin_input"},
-				NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{IPv4: InlineHookRules{PreInput: []string{"-j ACCEPT"}}}},
-			},
-			wantErr: "conflicts with inline hook",
-		},
-		{
 			name: "explicit backend mismatch",
 			spec: FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged, Backend: BackendNFT,
 				NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{IPv4: InlineHookRules{PreInput: []string{"-j ACCEPT"}}}},

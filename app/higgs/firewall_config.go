@@ -42,7 +42,6 @@ type FirewallInstanceConfig struct {
 	// match any local address.
 	ListenAddrs []netip.Addr
 
-	Hooks       firewall.Hooks
 	NativeHooks firewall.NativeHooks
 }
 
@@ -71,7 +70,6 @@ type firewallInstanceYAML struct {
 	RedirectGrace *redirectGraceYAML `yaml:"redirect_grace"`
 	ListenAddrs   []string           `yaml:"listen_addrs"`
 
-	Hooks         *hooksYAML         `yaml:"hooks"`
 	NFTHooks      *inlineHooksYAML   `yaml:"nft_hooks"`
 	IPTablesHooks *iptablesHooksYAML `yaml:"iptables_hooks"`
 }
@@ -90,19 +88,6 @@ type hostPortsYAML struct {
 type redirectGraceYAML struct {
 	Enabled  *bool `yaml:"enabled"`
 	Disabled *bool `yaml:"disabled"`
-}
-
-type hooksYAML struct {
-	PreInput           string `yaml:"pre_input"`
-	PostInput          string `yaml:"post_input"`
-	PreForward         string `yaml:"pre_forward"`
-	PostForward        string `yaml:"post_forward"`
-	PreOutput          string `yaml:"pre_output"`
-	PostOutput         string `yaml:"post_output"`
-	HostPrePrerouting  string `yaml:"host_pre_prerouting"`
-	HostPostPrerouting string `yaml:"host_post_prerouting"`
-	HostPreInput       string `yaml:"host_pre_input"`
-	HostPostInput      string `yaml:"host_post_input"`
 }
 
 type inlineHooksYAML struct {
@@ -239,21 +224,6 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		return FirewallInstanceConfig{}, fmt.Errorf("listen_addrs: %w", err)
 	}
 
-	hooks := firewall.Hooks{}
-	if yi.Hooks != nil {
-		hooks = firewall.Hooks{
-			PreInput:           yi.Hooks.PreInput,
-			PostInput:          yi.Hooks.PostInput,
-			PreForward:         yi.Hooks.PreForward,
-			PostForward:        yi.Hooks.PostForward,
-			PreOutput:          yi.Hooks.PreOutput,
-			PostOutput:         yi.Hooks.PostOutput,
-			HostPrePrerouting:  yi.Hooks.HostPrePrerouting,
-			HostPostPrerouting: yi.Hooks.HostPostPrerouting,
-			HostPreInput:       yi.Hooks.HostPreInput,
-			HostPostInput:      yi.Hooks.HostPostInput,
-		}
-	}
 	nativeHooks := firewall.NativeHooks{}
 	if yi.NFTHooks != nil {
 		nativeHooks.NFT = inlineHooksFromYAML(yi.NFTHooks)
@@ -285,7 +255,6 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		HostPorts:         hostPorts,
 		RedirectGrace:     redirectGrace,
 		ListenAddrs:       listenAddrs,
-		Hooks:             hooks,
 		NativeHooks:       nativeHooks,
 	}, nil
 }
@@ -422,7 +391,6 @@ func firewallInstanceSpecFromConfig(inst FirewallInstanceConfig, listenAddrs []n
 		ListenAddrs:       listenAddrs,
 		CharonIKEPort:     charonIKEPort,
 		CharonNATTPort:    charonNATTPort,
-		Hooks:             inst.Hooks,
 		NativeHooks:       inst.NativeHooks,
 	}
 }

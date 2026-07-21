@@ -227,7 +227,7 @@ func (d *DaemonService) firewallDriverInstance(inst FirewallInstanceConfig) (fir
 	}
 	pf := firewall.PreflightProbe(context.Background())
 	resolved, err := firewall.ResolveBackendForInstance(firewall.FirewallInstanceSpec{
-		ID: inst.ID, Backend: inst.Backend, Hooks: inst.Hooks, NativeHooks: inst.NativeHooks,
+		ID: inst.ID, Backend: inst.Backend, NativeHooks: inst.NativeHooks,
 	}, pf)
 	if err != nil {
 		return nil, err

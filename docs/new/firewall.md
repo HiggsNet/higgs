@@ -30,14 +30,14 @@ Firewall 是 Higgs overlay data-plane 的安全边界执行器。它把已通过
 | 层面 | 做什么 | 不做什么 |
 |---|---|---|
 | overlay/data-plane netns | 默认 drop 未授权流量；放行 mesh 授权前缀、BIRD/Babel 控制流量、本地显式服务 | 不管理 host 全局防火墙、不处理 underlay 入口 |
-| host netns | 仅管理 Higgs 必须的最小入口：IKE/NAT-T/WireGuard 端口 allow、端口 rotate 的 DNAT/redirect grace | 不接管 Docker、Kubernetes、发行版默认规则 |
-| reconcile 语义 | 只增删 Higgs-owned 对象；启动时 adopt、运行时 diff apply | 停止时**不**自动清理 owned 规则（当前实现缺口，见第 8 节） |
+| host netns | 仅管理 Higgs 必须的最小入口：当前为 IKE/NAT-T allow 与端口 rotate 的 DNAT/redirect grace；WireGuard 仅有 planner 预留 | 不接管 Docker、Kubernetes、发行版默认规则 |
+| reconcile 语义 | 只操作 Higgs-owned 对象；启动和状态变化时重新生成期望状态 | 当前不是内容级 no-op：nft 会整表替换，iptables 会切换 generation；停止、禁用或移除实例时也不会自动清理旧对象（见第 8 节） |
 
 ### 1.2 命名空间边界
 
 ```text
 host netns
-  ├─ Higgs-owned host ingress allow (IKE/NAT-T/WG)
+  ├─ Higgs-owned host ingress allow (当前为 IKE/NAT-T；WG 尚未接入配置)
   ├─ optional old/current port redirect grace
   └─ non-Higgs firewall rules stay untouched
 
@@ -91,8 +91,8 @@ Instance scope（用于 owner 和命名）以实际 netns 名为准，而不是�
 ### 2.3 Mode
 
 - `managed`：Higgs 拥有并管理该 netns 的防火墙规则。
-- `external`：Higgs 不生成规则，保留给外部管理器；daemon 仍会读取配置但跳过 reconcile。
-- `disabled`：完全禁用该 instance。
+- `external`：配置值已被接受，但当前 planner/driver **没有实现 external 旁路语义**，实际行为与 `managed` 相同；不要用它表达“仅由外部管理器维护”（见第 8 节）。
+- `disabled`：不参与后续 reconcile；如果该实例以前启用过，当前实现不会自动删除其旧规则。
 
 ### 2.4 ForwardingPolicy
 
@@ -170,10 +170,9 @@ firewall:
 | `local_services` | list | `[]` | overlay 内显式开放的服务 |
 | `host_ports.ike` | bool | 见下文 | host UDP 500 入口 |
 | `host_ports.natt` | bool | 见下文 | host UDP 4500 入口 |
-| `host_ports.wg` | bool | false | host WireGuard 入口（预留） |
+| `host_ports.wg` | bool | 未接入 | planner/type 中有预留，但当前 YAML schema 不接受该字段 |
 | `redirect_grace.enabled` | bool | 见下文 | 端口 rotate 期间的 DNAT/redirect grace |
 | `listen_addrs` | string list | `[]` | host 规则绑定的本地目的地址 |
-| `hooks.*` | string | `""` | 旧 iptables 管理员外部 chain 挂载点 |
 | `nft_hooks.<point>` | string list | `[]` | 编入 managed nft table 的原生 rule body |
 | `iptables_hooks.ipv4.<point>` | string list | `[]` | 编入 `iptables` managed generation 的原生参数表达式 |
 | `iptables_hooks.ipv6.<point>` | string list | `[]` | 编入 `ip6tables` managed generation 的原生参数表达式 |
@@ -212,30 +211,7 @@ local_services:
 - `sources` 为空时，允许来源为所有 mesh 授权前缀。
 - 只支持 `tcp` 或 `udp`。
 
-### 3.5 旧 chain hooks（iptables 兼容入口）
-
-Hook 用于挂载管理员自定义 chain：planner 在对应位置生成 `jump` 规则指向配置的 chain 名，chain 内容由管理员自行维护，Higgs 不管理其中规则。当前只有 iptables backend 支持 hooks；driver 会创建尚不存在的空 hook chain，已存在的 chain 不会被 flush 或删除。
-
-```yaml
-hooks:
-  pre_input: higgs_h2_pre_user
-  post_input: higgs_h2_post_user
-  pre_forward: higgs_h2_pre_fwd
-  post_forward: higgs_h2_post_fwd
-  post_output: higgs_h2_post_out
-  # 以下字段保留在配置模型中但尚未实现；配置非空值会报错：
-  # pre_output: ...
-  # host_pre_prerouting: ...
-  # host_post_prerouting: ...
-  # host_pre_input: ...
-  # host_post_input: ...
-```
-
-当前 overlay 实际接线的是 `pre_input` / `post_input` / `pre_forward` / `post_forward` / `post_output` 五个挂点；`pre_output` 与 `host_*` hooks 尚未接线（见第 8 节）。
-
-> **注意（nft 后端）**：这里的旧 `hooks:` 依赖 Higgs 跳入管理员维护的外部 chain。nft 当前整表重建，无法保留这种外部 chain，因此仍会拒绝；需要 nft 自定义规则时应使用下面的 `nft_hooks`。
-
-### 3.6 Backend-native inline hooks
+### 3.5 Backend-native inline hooks
 
 `nft_hooks` 和 `iptables_hooks` 把单条 backend 原生 rule body 直接编入 Higgs 管理的 table/generation。两套语法不是可移植 DSL；同一配置可同时提供两套等价规则，实际只渲染最终选中 backend 的配置。
 
@@ -267,7 +243,7 @@ firewall:
 - nft 表达式随 Higgs 规则进入同一个 `nft -f` 事务，失败时旧 table 保持生效。
 - iptables 表达式先写入 inactive generation；IPv4/IPv6 都准备完成后才切换内置链 jump，切换失败会尝试回滚已激活的新 jump。
 - 表达式只能是当前 chain 的 rule body。配置会拒绝换行、分号、shell 元字符、nft object command，以及 iptables 的 `-A/-I/-D/-N/-X/-F/-P/-t` 等规则/chain/table 管理参数；命令始终以 argv 执行，不经过 shell。
-- 同一 hook point 不能同时配置旧 `hooks:` 和 inline hook。原生 verdict（如 `ACCEPT`、`DROP`、`RETURN`）会影响后续 Higgs 规则是否可达，管理员需自行负责业务语义。
+- 原生 verdict（如 `ACCEPT`、`DROP`、`RETURN`）会影响后续 Higgs 规则是否可达，管理员需自行负责业务语义。
 - `backend: auto` 只有一套 inline 配置时会选择对应 backend；两套都存在时使用正常探测优先级。显式 backend 只有另一套配置时会报错，不会静默忽略。
 
 ---
@@ -289,11 +265,11 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 |---|---|---|
 | `LocalAssigned` | `AuthorizedRouteSet` 中本 Zone 被分配的前缀 | overlay 本地前缀 |
 | `MeshAuthorized` | `AuthorizedRouteSet.Announced` 中所有授权前缀 | 可信 mesh 前缀 |
-| `AssignmentPrefixes` | IPAM assignment 白名单 | 校验用 |
+| `AssignmentPrefixes` | IPAM assignment 白名单 | 已组装，但当前 planner 未使用 |
 | `Forwarding` | 本 netns 的 forwarding policy | transit 决策 |
 | `Revoked` | revocation state | deny-first：从 allow set 中剔除 |
-| `LiveInterfaces` | 当前活跃 XFRM 接口 | 规则匹配 |
-| `UpstreamInterfaces` | upstream veth 接口 | 规则匹配 |
+| `LiveInterfaces` | 当前活跃 XFRM 接口 | 已组装，但当前 planner 未使用；实际按 `xfrm_tunnel_pattern` 匹配 |
+| `UpstreamInterfaces` | upstream veth 接口 | 已组装，但当前 planner 未使用；实际按 `upstream_patterns` 匹配 |
 | `AdvertisedCurrent/Previous*Ports` | 本地 signed `ipsec/ports` record | redirect grace |
 
 ### 4.2 PrefixSets
@@ -436,16 +412,16 @@ overlay 实例的 driver 会把所有命令用 `ip netns exec <netns>` 包装后
 - overlay 创建 `input`、`forward`、`output` chain；host 额外创建 `prerouting`、`postrouting`。
 - Mesh 前缀使用 `set`，命名如 `higgs_h2_mesh_v4`、`higgs_h2_mesh_v6`，带 `flags interval`。
 - `Apply` 把 delete/recreate、set、chain 与 rule 渲染到同一个 batch 文件，通过单次 `nft -f` 事务提交；任一语句失败时内核拒绝整批变更，旧 table 继续生效。
-- 当前不支持 hooks；带 hooks 的 nft desired state 会在 apply 前被拒绝（见 §3.5）。
+- 支持 `nft_hooks` 原生 inline rule，并与 managed rules 一起进入同一个 batch 事务。
 
 ### 5.3 iptables 后端（`IPTablesDriver`）
 
 - 同时操作 `iptables` 与 `ip6tables`。
-- planner/ListOwned 使用 `higgs_<scope>_input/forward/output` 及 host NAT chain 作为逻辑对象；内核中的实际策略使用带 desired hash 与 `a`/`b` 槽位的 generation chain。解析时只识别严格格式的 managed chain，避免把共享前缀的管理员 hook chain 当作 stale 清理。
+- planner/ListOwned 使用 `higgs_<scope>_input/forward/output` 及 host NAT chain 作为逻辑对象；内核中的实际策略使用带 desired hash 与 `a`/`b` 槽位的 generation chain。解析时只识别严格格式的 managed chain，避免误清理非 Higgs 对象。
 - 使用 `-m comment --comment higgs-<scope>` 标记 Higgs 规则。
 - 每次 Apply 先在未激活槽中完整生成 INPUT/FORWARD/OUTPUT 及所需 NAT chain；全部 IPv4/IPv6 staging chain 填充成功后，才在 builtin chain 顶部插入新 jump，随后移除旧 jump 和旧 generation。准备失败不会修改当前入口，切换失败则保留旧 jump。
 - NAT redirect 使用 generation prerouting chain 中的 `REDIRECT --to-ports`；source rewrite 使用 generation postrouting chain 中的 `MASQUERADE --to-ports`。
-- 配置了 hooks 时，`Apply` 用 `-N` 幂等创建空 hook chain 作为 jump 目标（chain 已存在时不报错，内容保留）。
+- `iptables_hooks.ipv4/ipv6` 原生 inline rule 直接写入对应 family 的 inactive generation，不创建外部 chain。
 - 地址族处理：带 v4/v6 前缀或地址的规则按族只进对应 binary；族中立规则（无前缀匹配、非 ICMP 协议，如 loopback、babel、conntrack、hook jump、default policy）同时下发到 `iptables` 与 `ip6tables`；ICMP 规则按族分别渲染（`-p icmp` 只进 `iptables`，`-p icmpv6` 只进 `ip6tables`）。
 - 接口前缀模式在 planner 中使用 nft 风格尾随 `*`；iptables 渲染时转换为 xtables 的尾随 `+`（例如 `hgs*` → `hgs+`）。
 
@@ -464,12 +440,12 @@ func PreflightProbe(ctx context.Context) FirewallPreflight
 
 探测逻辑：
 
-1. 检查 `nft` 命令是否存在；存在则 `NFTNetlink=ok`，`Backend=nft`。
-2. 检查 `iptables` 命令是否存在；存在则 `Iptables=available`，`Backend=iptables`（nft 不可用时）。
+1. 检查 `nft` 命令是否存在；存在便记为 `NFTNetlink=ok` 并优先选择 `nft`（字段名不代表真的探测了 netlink API）。
+2. 检查 `iptables` 命令是否存在；存在便记为 `Iptables=available`，在 nft 不存在时选择 `iptables`；这里没有同时检查 `ip6tables`。
 3. 都不可用时 `Backend=none`。
 4. `CAP_NET_ADMIN` 通过 `nft list tables` 做尽力探测。
 
-> **注意**：当前探测只检查命令存在性，不检测 netlink API、host NAT hook、ipset 等设计文档建议的能力。
+> **注意**：daemon 选择 backend 时使用上述全局探测，不调用具体 driver 的 `Preflight`；`CAP_NET_ADMIN` 结果也不参与选择。当前不检测 netlink API、host NAT hook、ipset、目标 netns 内可执行性等能力，详见第 8 节。
 
 ### 5.6 Plan diff
 
@@ -483,6 +459,8 @@ func PlanDiff(instanceID string, desired *FirewallDesiredState, observed Firewal
 - desired 中有、observed 中无 → `create`
 - desired 中有、observed 中也有 → `adopt`
 - observed 中有、desired 中无 → `delete`（stale）
+
+这个 diff 只比较对象引用（kind/family/name），不比较 rule/set 内容；当前 driver 的 `Apply` 也不会因为 `policy_hash` 未变化而跳过。因此 nft 每次 apply 都会整表替换，iptables 每次 apply 都会准备并切换另一个 `a`/`b` 槽位。
 
 ---
 
@@ -579,29 +557,35 @@ higgs debug preflight
 
 ## 8. 已知限制与实现缺口
 
-以下条款均以当前代码为准，与原 Phase 6.3 设计存在差异或尚未完成：
+以下只列当前仍存在的限制和部分实现。原清单中的 invalid drop、`ct state established/related`、host native hooks、nft/iptables backend-native inline hooks，以及 iptables 大小写 chain/stale/jump 累积问题已经修正，不再属于当前缺口。
 
-| 项 | 设计期望 | 当前实现 | 影响 |
-|---|---|---|---|
-| 管理员外部 chain hooks | 保留管理员 hook chain 内规则 | 旧 `hooks:` 仍仅支持 iptables；nft 和 host 自定义规则使用 backend-native inline hooks | 旧 chain 入口不跨 backend |
-| `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 |
-| Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、host NAT hook、ipset | 仅检测 `nft`/`iptables` 命令，`CAP_NET_ADMIN` 用 `nft list tables` 近似 | 探测较粗糙 |
-| netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 |
-| Generation 递增 | 每次 apply 递增 | 各 driver 返回 `Generation: 1` | 无法按 generation 区分历史 |
-| 停止清理 | shutdown 时回滚 owned rules | 停止时未调用 `DeleteStale` | daemon 退出后规则残留 |
-| 周期 reconcile timer | 设计建议有周期 timer | 定义了 `defaultFirewallReconcileInterval`（30s）但主循环未调度 | 只靠事件触发 |
-| 冲突检测 | 检测非 Higgs 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 |
-| 优先级配置 | `priority.filter` / `priority.nat` | 未实现 | chain 优先级不可配置 |
-| `AllowPeers`/`DenyPeers` | 按 peer zone 过滤 transit | 字段存在但**未实际使用** | 仅前缀过滤生效 |
-| debug 命令 flag | `--netns` / `--host` / `--dry-run` / `--json` | 未实现，只有裸 `higgs debug firewall` | 无法按实例过滤或预演 diff |
-| 命名约定 | 建议 `HIGGS-H2-INPUT` | 逻辑对象为 `higgs_h2_input`，iptables 物理 chain 另带 hash/双槽 generation 后缀 | 风格差异 |
+| 项 | 设计期望 | 当前实现 | 影响 | 下一步 |
+|---|---|---|---|---|
+| `mode: external` | Higgs 只读取/诊断，不生成或修改规则 | 配置可解析，但除 `disabled` 外 planner/driver 不区分 mode；`external` 实际按 `managed` apply | **可能意外接管本应由外部管理器维护的防火墙** | 这个需要调整，external是不是应该不做修改？ |
+| Native inline rule 可移植性与校验 | 同一策略可跨 backend 表达，并在 apply 前完成完整语义校验 | `nft_hooks` / `iptables_hooks` 是两套原生语法；配置阶段只做边界和危险参数校验，真正的模块、match、target、表达式合法性由 nft/iptables apply 验证 | 异构节点需同时维护两套等价规则；语义错误到 reconcile 时才暴露 | 暂时不需要调整，由管理员自行控制 |
+| `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 | 暂不实现 |
+| Planner 派生输入接线 | 用 assignment 白名单和实际 live/upstream interface 精确生成规则 | `AssignmentPrefixes`、`LiveInterfaces`、`UpstreamInterfaces` 会被组装，但 planner 未使用；接口仍按 `hgs*` / `hgs-upstream*` 等 pattern 匹配 | 规则不能随单个接口 readiness 精确收缩，assignment 白名单没有独立二次校验 | 暂不实现 |
+| Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、目标 netns、host NAT hook、ipset 及 IPv4/IPv6 CLI | 主要只检查 host PATH 中的 `nft` 和 `iptables`；不检查 `ip6tables`，`CAP_NET_ADMIN` 仅以 `nft list tables` 近似且不参与 backend 选择，daemon 也未调用 driver `Preflight` | 可能先选中实际无权限、缺 `ip6tables` 或在目标 netns 中不可用的 backend，随后 apply 才失败 | 至少要实现检查ip6tables，权限暂时不用管，有问题报错即可 |
+| Backend 不可用时的失败策略 | 显式 backend 不可用应 fail closed 或阻止启动 | 普通实例解析为 `BackendNone` 后退化到 `DryRunDriver`；显式 backend 缺失也可能如此。仅 `auto` 且只配置某一套 unavailable inline hooks 等路径会提前报错 | 没有下发规则但 daemon 可继续运行；必须监控 `resolved_backend`、`LastError` 和 warning 日志 | 需要有明确的Warning警告 |
+| netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 | 暂不实现 |
+| 无变更 reconcile | `policy_hash` 未变化时 no-op | `PlanDiff` 只比较对象名；nft 每次 apply 原子整表替换，iptables 每次 apply 重建并切换同 hash 的另一个 `a`/`b` 槽位 | 无业务变更也会产生内核写入；nft 有短暂事务切换成本，iptables builtin jump 会经历一次 generation 切换 | 问题不大 暂时保留 |
+| Generation 递增 | 每次成功 apply 递增并可追踪历史 | iptables 物理 chain 已带 desired hash 和 `a`/`b` staging 槽，但 NFT/IPTables/DryRun driver 对外仍返回 `Generation: 1` | 持久化/debug 状态无法按 generation 区分历史，也不能表达实际槽位 | 问题不大 暂时保留 |
+| 生命周期与跨 backend 清理 | shutdown、禁用/删除实例、scope/prefix/backend 变化时回滚旧 owned rules | daemon 不调用 `DeleteStale`；只对当前启用实例、当前 scope 和当前 backend 做 reconcile。禁用/删除实例、退出、改变 owner/scope 或切换 backend 不会遍历并清理旧 backend 对象 | 旧 nft table 或 iptables chain/jump 可能长期残留，并与新策略同时生效 | 问题不大 暂时保留 |
+| 周期 reconcile timer | 设计建议有周期 timer | 定义了 `defaultFirewallReconcileInterval`（30s）但主循环未调度 | 只靠事件触发 | 问题不大 暂时保留 |
+| 冲突检测 | 检测非 Higgs 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 | 问题不大 暂时保留 |
+| 优先级配置 | `priority.filter` / `priority.nat` | 未实现 | chain 优先级不可配置 | 这个可以考虑可配置一下 |
+| `AllowPeers`/`DenyPeers` | 按 peer zone 过滤 transit | 字段存在但**未实际使用** | 仅前缀过滤生效 | 问题不大 暂时保留 |
+| WireGuard host 配置接线 | `host_ports.wg`、当前/历史 advertised WG port 驱动 ingress 与 grace | type/planner 中有 `WG`、`WGPort`、`AdvertisedPreviousWGPorts` 预留，但 YAML `host_ports` 只接受 `ike`/`natt`，daemon 也不填充 WG 端口输入 | 目前不能从 `config.yaml` 启用 WireGuard host firewall/grace | wg没实现前不需要进一步推进 |
+| debug 命令 flag | `--netns` / `--host` / `--dry-run` / `--json` | 未实现，只有裸 `higgs debug firewall` | 无法按实例过滤或预演 diff | 这个可以修改一下 |
+| 命名约定 | 建议 `HIGGS-H2-INPUT` | 逻辑对象为 `higgs_h2_input`，iptables 物理 chain 另带 hash/双槽 generation 后缀 | 风格差异 | 问题不大 |
+
 
 ### 8.1 使用建议
 
-- 生产环境建议显式配置 `backend: nft` 或 `backend: iptables`，避免 `auto` 在命令缺失时落入 dry-run 而不自知。
+- 生产环境可显式配置 `backend: nft` 或 `backend: iptables` 来固定选择，但“显式”不等于 backend 可用时强制失败；仍应检查 `higgs debug firewall` 的 `resolved_backend` / `LastError` 和 daemon warning，避免实际落入 dry-run。
+- 当前不要使用 `mode: external` 表达外部托管；它实际仍会按 managed 模式下发规则。若要完全禁止 Higgs 修改该实例，只能禁用/移除该实例，并手工处理此前的 owned 规则。
 - host 实例在 `ipsec.port_mode=range` 时默认启用 redirect grace；若使用固定端口，可关闭 `redirect_grace`。
-- 旧 `hooks:` 外部 chain 仅用于 iptables backend；新 `nft_hooks` / `iptables_hooks` 会成为 Higgs managed generation 的一部分。
-- daemon 升级或停止后，建议手动检查并清理残留的 Higgs-owned table/chain（`nft list tables` 或 `iptables -L | grep higgs_`）。
+- daemon 升级、停止、禁用实例或切换 backend 后，建议手动检查并清理残留的 Higgs-owned table/chain（`nft list tables`、`iptables -S`、`ip6tables -S`）。
 
 ### 8.2 后续设计方向
 
