@@ -1594,7 +1594,22 @@ func (d *DaemonService) flushRevocationCleanup() {
 	if d == nil || d.StateStore == nil || d.Sync == nil {
 		return
 	}
+	// This function is called after every sync-state update. Most calls have no
+	// revocations, so check the immutable committed state first and avoid the
+	// copy-on-write transaction (which deep-copies the whole state through JSON).
+	var revokedZones map[zone.ZonePath]bool
+	d.StateStore.ReadCommitted(func(state *stateFile) {
+		if state == nil || state.Network == nil {
+			return
+		}
+		revokedZones = CollectAllRevokedZones(state, d.Sync.now())
+	})
+	if len(revokedZones) == 0 {
+		return
+	}
 	if _, err := d.StateStore.Update(func(state *stateFile) error {
+		// Recompute inside the transaction in case a newer state was committed
+		// after the read-only fast-path check.
 		d.flushRevocationCleanupLocked(state)
 		return nil
 	}); err != nil {

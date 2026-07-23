@@ -346,6 +346,22 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	}
 }
 
+func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	before := service.StateStore.Meta().Revision
+
+	service.flushRevocationCleanup()
+
+	if after := service.StateStore.Meta().Revision; after != before {
+		t.Fatalf("state revision after no-op cleanup = %d, want %d", after, before)
+	}
+}
+
 func TestDaemonFlushRevocationCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)

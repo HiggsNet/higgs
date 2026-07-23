@@ -61,6 +61,19 @@ func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
 	return cloneStateFile(committed), rev
 }
 
+// ReadCommitted invokes fn while holding a read lock on the immutable
+// committed state. The callback must not retain or mutate state. It is for
+// inexpensive predicates that can avoid creating a full copy-on-write
+// workspace when no update is necessary.
+func (s *DaemonStateStore) ReadCommitted(fn func(*stateFile)) {
+	if s == nil || fn == nil {
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	fn(s.committed)
+}
+
 func (s *DaemonStateStore) Meta() daemonStateStoreMeta {
 	if s == nil {
 		return daemonStateStoreMeta{}
