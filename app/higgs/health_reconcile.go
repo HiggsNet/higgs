@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
@@ -104,9 +105,9 @@ func scopedNetNS(s string) string {
 	return ""
 }
 
-// reconcileHealth updates the health manager with the current link targets,
-// ticks any due probes, and returns the number of probes dispatched. It is
-// meant to be called from the daemon event loop after IPsec reconcile.
+// reconcileHealth updates the health manager with the current link targets.
+// In a running daemon, the independent health scheduler picks up due probes;
+// the synchronous fallback supports one-shot callers and tests.
 func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	if d == nil || d.health == nil {
 		return 0
@@ -125,13 +126,77 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	targets := healthTargetsFromState(d.Sync.State, localZone, groups)
 	now := d.Sync.now()
 	d.health.SetTargets(targets, now)
+	return d.tickHealth(ctx, now)
+}
+
+// tickHealth runs due probes without rebuilding the target set. Keeping this
+// separate from reconcileHealth lets the daemon honor health.interval even
+// when IPsec reconciliation is infrequent.
+func (d *DaemonService) tickHealth(ctx context.Context, now time.Time) int {
+	if d == nil || d.health == nil {
+		return 0
+	}
+	if d.healthUpdates != nil {
+		return 0
+	}
 	dispatched := d.health.Tick(ctx, now)
 	if dispatched > 0 {
-		if err := d.appendHealthSpool(now, d.healthStatusResponse()); err != nil && !errors.Is(err, errHealthSpoolNotConfigured) {
-			d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
-		}
+		d.handleHealthUpdate(now)
 	}
 	return dispatched
+}
+
+// startHealthProbeLoop owns periodic probe dispatch for a running daemon.
+// Target changes remain synchronized through Manager's lock, while command
+// execution stays in its bounded worker pool. A one-second cadence preserves
+// the health scheduler's intended timer resolution without waking the daemon's
+// primary event loop.
+func (d *DaemonService) startHealthProbeLoop(ctx context.Context) <-chan struct{} {
+	if d == nil || d.health == nil {
+		return nil
+	}
+	updates := d.health.StartAsync(ctx)
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			d.health.TickAsync(ctx, d.Sync.now())
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return updates
+}
+
+// drainHealthUpdates coalesces completed async probes before the daemon
+// computes its next deadline. The channel is intentionally best-effort: a
+// single snapshot represents every completion received in this drain.
+func (d *DaemonService) drainHealthUpdates() bool {
+	if d == nil || d.healthUpdates == nil {
+		return false
+	}
+	updated := false
+	for {
+		select {
+		case <-d.healthUpdates:
+			updated = true
+		default:
+			return updated
+		}
+	}
+}
+
+func (d *DaemonService) handleHealthUpdate(now time.Time) {
+	if d == nil || d.health == nil {
+		return
+	}
+	if err := d.appendHealthSpool(now, d.healthStatusResponse()); err != nil && !errors.Is(err, errHealthSpoolNotConfigured) {
+		d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
+	}
+	d.notifyObserver("health_updated", nil)
 }
 
 // healthStatusResponse builds the control API response for `health_status`.

@@ -34,6 +34,7 @@ type DaemonService struct {
 	XFRMDriver         ipsec.XFRMDriver
 	closeIPsecDriver   func() error
 	health             *health.Manager
+	healthUpdates      <-chan struct{}
 	healthSpoolMu      sync.Mutex
 	observerHub        *observer.Hub
 	Log                *appLogger
@@ -230,6 +231,10 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	defer stopObserver()
 	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(ctx)
 	defer stopIPsecEvents()
+	if d.health != nil {
+		d.healthUpdates = d.startHealthProbeLoop(ctx)
+		defer func() { d.healthUpdates = nil }()
+	}
 	startFields := map[string]any{
 		"peer_id":  d.Sync.Config.PeerID,
 		"addr":     transport.LocalAddr(),
@@ -289,6 +294,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed := d.processEvents(ctx)
 		if shutdown {
 			return nil
+		}
+		if d.drainHealthUpdates() {
+			d.handleHealthUpdate(d.Sync.now())
 		}
 		_ = firewallFlushed
 		if syncNow {
@@ -415,6 +423,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			timer.Stop()
 			d.commitObjectPullResult(result)
 			d.enqueueObjectPullResult(result)
+		case <-d.healthUpdates:
+			timer.Stop()
+			d.handleHealthUpdate(d.Sync.now())
 		case <-timer.C:
 			// Continue the loop; timers will be checked and fired at the top.
 		}

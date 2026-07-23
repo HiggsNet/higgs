@@ -33,7 +33,18 @@ type Manager struct {
 
 	// inFlight tracks concurrent probe dispatch.
 	inFlight    int
+	inFlightIDs map[string]bool
 	maxInflight int
+
+	asyncOnce    sync.Once
+	asyncJobs    chan probeDispatch
+	asyncUpdates chan struct{}
+}
+
+type probeDispatch struct {
+	ctx    context.Context
+	id     string
+	target ProbeTarget
 }
 
 // NewManager creates a Manager. The Prober may be nil, in which case a no-op
@@ -57,6 +68,7 @@ func NewManager(cfg ProbeConfig, hyst HysteresisConfig, prober Prober) *Manager 
 		nextProbe:   map[string]time.Time{},
 		errorsTotal: map[string]int{},
 		babelObs:    map[string]BabelObservation{},
+		inFlightIDs: map[string]bool{},
 		maxInflight: max,
 	}
 }
@@ -80,6 +92,7 @@ func (m *Manager) SetTargets(targets []ProbeTarget, now time.Time) {
 	}
 	for id := range m.targets {
 		if _, ok := newMap[id]; !ok {
+			m.releaseInFlightLocked(id)
 			delete(m.targets, id)
 			delete(m.windows, id)
 			delete(m.nextProbe, id)
@@ -111,6 +124,7 @@ func (m *Manager) UpsertTarget(t ProbeTarget, now time.Time) {
 func (m *Manager) RemoveTarget(instanceID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.releaseInFlightLocked(instanceID)
 	delete(m.targets, instanceID)
 	delete(m.windows, instanceID)
 	delete(m.nextProbe, instanceID)
@@ -134,51 +148,138 @@ func (m *Manager) SetBabelObservation(obs BabelObservation) {
 	m.babelObs[id] = obs
 }
 
-// Tick dispatches any probes that are due and returns the number of probes
-// dispatched in this tick. It is meant to be called from the daemon event loop
-// on a short timer (e.g. 1s).
+// Tick dispatches any probes that are due and waits for the selected batch.
+// It remains useful to callers that need a synchronous result (notably tests
+// and one-shot commands). Daemons should use TickAsync instead.
 func (m *Manager) Tick(ctx context.Context, now time.Time) int {
-	m.mu.Lock()
-	if len(m.targets) == 0 {
-		m.mu.Unlock()
+	pending := m.reserveDue(ctx, now)
+	if len(pending) == 0 {
 		return 0
 	}
+
+	type outcome struct {
+		id     string
+		result ProbeResult
+	}
+	results := make(chan outcome, len(pending))
+	var wg sync.WaitGroup
+	for _, job := range pending {
+		wg.Add(1)
+		go func(job probeDispatch) {
+			defer wg.Done()
+			results <- outcome{id: job.id, result: m.prober.Probe(job.ctx, job.target, m.cfg)}
+		}(job)
+	}
+	wg.Wait()
+	close(results)
+	byID := make(map[string]ProbeResult, len(pending))
+	for result := range results {
+		byID[result.id] = result.result
+	}
+	for _, job := range pending {
+		id := job.id
+		m.applyResult(id, byID[id], now)
+		m.finishProbe(id, now)
+	}
+	return len(pending)
+}
+
+// StartAsync starts a bounded probe worker pool and returns a coalesced
+// notification channel. The manager remains responsible for its state; the
+// daemon uses the channel only to persist and publish completed updates.
+func (m *Manager) StartAsync(ctx context.Context) <-chan struct{} {
+	m.asyncOnce.Do(func() {
+		m.asyncJobs = make(chan probeDispatch, m.maxInflight)
+		m.asyncUpdates = make(chan struct{}, 1)
+		for i := 0; i < m.maxInflight; i++ {
+			go m.runAsyncWorker(ctx)
+		}
+	})
+	return m.asyncUpdates
+}
+
+// TickAsync queues due probes for the worker pool and returns immediately.
+// StartAsync must have been called first.
+func (m *Manager) TickAsync(ctx context.Context, now time.Time) int {
+	if m.asyncJobs == nil {
+		return 0
+	}
+	pending := m.reserveDue(ctx, now)
+	for _, job := range pending {
+		m.asyncJobs <- job
+	}
+	return len(pending)
+}
+
+func (m *Manager) runAsyncWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-m.asyncJobs:
+			result := m.prober.Probe(job.ctx, job.target, m.cfg)
+			now := time.Now()
+			m.applyResult(job.id, result, now)
+			m.finishProbe(job.id, now)
+			m.notifyAsyncUpdate()
+		}
+	}
+}
+
+func (m *Manager) notifyAsyncUpdate() {
+	select {
+	case m.asyncUpdates <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Manager) reserveDue(ctx context.Context, now time.Time) []probeDispatch {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.targets) == 0 || m.maxInflight-m.inFlight <= 0 {
+		return nil
+	}
+	available := m.maxInflight - m.inFlight
 	due := make([]string, 0, len(m.targets))
 	for id, next := range m.nextProbe {
-		if !next.IsZero() && !now.Before(next) && m.inFlight < m.maxInflight {
+		if !m.inFlightIDs[id] && !next.IsZero() && !now.Before(next) {
 			due = append(due, id)
 		}
 	}
 	sort.Strings(due)
-	m.inFlight += len(due)
-	pending := map[string]ProbeTarget{}
+	if len(due) > available {
+		due = due[:available]
+	}
+	pending := make([]probeDispatch, 0, len(due))
 	for _, id := range due {
-		pending[id] = m.targets[id]
+		pending = append(pending, probeDispatch{ctx: ctx, id: id, target: m.targets[id]})
+		m.inFlight++
+		m.inFlightIDs[id] = true
 	}
-	m.mu.Unlock()
+	return pending
+}
 
-	if len(due) == 0 {
-		return 0
-	}
-
-	dispatched := 0
-	for id, t := range pending {
-		dispatched++
-		result := m.prober.Probe(ctx, t, m.cfg)
-		m.applyResult(id, result, now)
-	}
-
+func (m *Manager) finishProbe(id string, now time.Time) {
 	m.mu.Lock()
-	m.inFlight -= len(due)
+	defer m.mu.Unlock()
+	if !m.inFlightIDs[id] {
+		return
+	}
+	m.releaseInFlightLocked(id)
+	if _, ok := m.targets[id]; ok {
+		m.nextProbe[id] = now.Add(m.jitteredInterval())
+	}
+}
+
+func (m *Manager) releaseInFlightLocked(id string) {
+	if !m.inFlightIDs[id] {
+		return
+	}
+	delete(m.inFlightIDs, id)
+	m.inFlight--
 	if m.inFlight < 0 {
 		m.inFlight = 0
 	}
-	// Schedule next probe.
-	for _, id := range due {
-		m.nextProbe[id] = now.Add(m.jitteredInterval())
-	}
-	m.mu.Unlock()
-	return dispatched
 }
 
 // NextDue returns the earliest next probe time across all targets, or the zero
@@ -187,8 +288,8 @@ func (m *Manager) NextDue(now time.Time) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var earliest time.Time
-	for _, next := range m.nextProbe {
-		if next.IsZero() {
+	for id, next := range m.nextProbe {
+		if m.inFlightIDs[id] || next.IsZero() {
 			continue
 		}
 		if earliest.IsZero() || next.Before(earliest) {
@@ -201,38 +302,29 @@ func (m *Manager) NextDue(now time.Time) (time.Time, bool) {
 func (m *Manager) applyResult(instanceID string, result ProbeResult, now time.Time) {
 	m.mu.Lock()
 	window, ok := m.windows[instanceID]
-	target, tok := m.targets[instanceID]
 	m.mu.Unlock()
-	if !ok || !tok {
+	if !ok {
+		return
+	}
+	window.Record(now, result.RTT, result.Success)
+	snap := window.Snapshot()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.targets[instanceID]; !ok {
 		return
 	}
 	if result.Error != "" {
-		m.mu.Lock()
 		m.errorsTotal[instanceID]++
 		m.lastReason[instanceID] = result.Error
-		m.mu.Unlock()
 	} else if result.Success {
-		m.mu.Lock()
 		delete(m.lastReason, instanceID)
-		m.mu.Unlock()
 	}
-	window.Record(now, result.RTT, result.Success)
-
-	snap := window.Snapshot()
-	state, reason := m.states.Evaluate(instanceID, snap, m.lastErr(instanceID), now)
+	state, reason := m.states.Evaluate(instanceID, snap, m.lastReason[instanceID], now)
 	if reason != "" {
-		m.mu.Lock()
 		m.lastReason[instanceID] = reason
-		m.mu.Unlock()
 	}
 	_ = state
-	_ = target
-}
-
-func (m *Manager) lastErr(instanceID string) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastReason[instanceID]
 }
 
 // Snapshot returns the current health of all links.

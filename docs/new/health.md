@@ -479,9 +479,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 
 | 项 | 设计期望 | 当前实现 | 影响 |
 |---|---|---|---|
-| 独立 probe timer | event loop 以约 1s 短 timer 驱动 Tick | 只在 `flushIPsecReconcile` 末尾运行 | 稳态探测频率被 IPsec reconcile 间隔（默认 1min）封顶，`interval: 5s` 不生效 |
-| `max_concurrent_probes` | 全局并发探测上限 | 限流条件恒真，不生效 | 到期 target 全部一次探完 |
-| 探测执行模型 | 有界并发、不阻塞 loop | Tick 内同步串行执行 ping | 大量 link / 大 timeout 会阻塞 event loop |
+| 探测执行模型 | 有界并发、不阻塞 loop | 独立 health 协程以约 1s timer 投递任务；固定大小 worker pool 经 channel 执行 ping，完成后以 channel 通知 daemon | 健康 interval 不受 IPsec reconcile 间隔限制，慢 ping 不阻塞 daemon event loop |
 | ICMP 快路径 | raw socket（`ip4:icmp`）优先，ping 兜底 | 只有 `ip netns exec ping` | RTT 含进程创建开销，偏粗 |
 | UDP fallback | ICMP 不可用时降级 UDP keepalive | fallback 未接线；UDPProber 语义弱（write 成功即可达） | 无 ICMP 权限时只能得到 probe_error |
 | Babel RTT/metric | 普通 link 也采集被动指标、出 `higgs_link_babel_*` | 只为 staged link 采集 neighbor/route 布尔与最小 metric；series API 显式报未实现 | 被动质量数据基本不可用 |
@@ -497,8 +495,8 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 
 ### 10.1 使用建议
 
-- 想要更高的实际探测频率，先调低对应 link group 的 `reconcile.interval_seconds`，再把 `health.interval` 配到同量级；只改 `health.interval` 没有效果。
-- 控制 `timeout` 与 `burst`：Tick 同步执行，link 较多时 `targets × burst × timeout` 直接占用 event loop 时间。
+- `health.interval` 独立于 IPsec reconcile 间隔；默认 `5s`、`burst: 3` 时，每条 link 平均约 `0.6 ICMP/s`。`jitter` 会将初始与后续探测错峰。
+- 控制 `timeout`、`burst` 与 `max_concurrent_probes`：worker pool 同时最多运行该并发数的 link；`burst` 内的单包请求仍会串行执行，但不会阻塞 daemon 主循环。
 - 确认运行环境 `ping` 可用（容器内需要 cap_net_raw 或 setuid ping），否则所有 link 会收敛到 `probe_error`。
 - 需要 observer 时序图时务必配置 `metrics.local_spool_path`；不配置则只有实时状态，没有历史。
 - 排障 rotate 停滞时先看 `higgs debug health` 的 `cutover_blocking` 与 staged 视角的 BIRD 观测——BIRD 不可达也会 hold 住 cutover。

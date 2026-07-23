@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 )
@@ -154,6 +155,68 @@ func TestManagerTickAndSnapshot(t *testing.T) {
 		t.Fatalf("sent = %d, want 1", snapshot[0].Sent)
 	}
 	if snapshot[0].Received != 1 {
+		t.Fatalf("received = %d, want 1", snapshot[0].Received)
+	}
+}
+
+func TestManagerTickCapsConcurrentProbes(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Hour, Timeout: time.Second, Burst: 1, LossWindow: 5, MaxConcurrent: 2}
+	prober := newBlockingProber()
+	m := NewManager(cfg, DefaultHysteresisConfig(), prober)
+	now := time.Now()
+	for _, id := range []string{"link-a", "link-b", "link-c"} {
+		m.UpsertTarget(ProbeTarget{InstanceID: id, PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"), State: "up"}, now)
+		m.mu.Lock()
+		m.nextProbe[id] = now.Add(-time.Second)
+		m.mu.Unlock()
+	}
+
+	done := make(chan int, 1)
+	go func() { done <- m.Tick(context.Background(), now) }()
+	for i := 0; i < cfg.MaxConcurrent; i++ {
+		<-prober.started
+	}
+	if got := prober.maxActive(); got != cfg.MaxConcurrent {
+		t.Fatalf("maximum active probes = %d, want %d", got, cfg.MaxConcurrent)
+	}
+	select {
+	case <-prober.started:
+		t.Fatal("started more probes than max concurrent")
+	default:
+	}
+	close(prober.release)
+	if got := <-done; got != cfg.MaxConcurrent {
+		t.Fatalf("dispatched = %d, want %d", got, cfg.MaxConcurrent)
+	}
+}
+
+func TestManagerTickAsyncReturnsBeforeProbeCompletes(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Hour, Timeout: time.Second, Burst: 1, LossWindow: 5, MaxConcurrent: 1}
+	prober := newBlockingProber()
+	m := NewManager(cfg, DefaultHysteresisConfig(), prober)
+	now := time.Now()
+	m.UpsertTarget(ProbeTarget{InstanceID: "link-a", PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"), State: "up"}, now)
+	m.mu.Lock()
+	m.nextProbe["link-a"] = now.Add(-time.Second)
+	m.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := m.StartAsync(ctx)
+	if got := m.TickAsync(ctx, now); got != 1 {
+		t.Fatalf("dispatched = %d, want 1", got)
+	}
+	<-prober.started
+	if snapshot := m.Snapshot(now); snapshot[0].Sent != 0 {
+		t.Fatalf("async probe completed before release: %+v", snapshot[0])
+	}
+	close(prober.release)
+	select {
+	case <-updates:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for async probe completion")
+	}
+	if snapshot := m.Snapshot(time.Now()); snapshot[0].Received != 1 {
 		t.Fatalf("received = %d, want 1", snapshot[0].Received)
 	}
 }
@@ -362,6 +425,41 @@ func (p *fakeProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeCon
 }
 
 func (p *fakeProber) Type() string { return ProbeTypeICMP }
+
+type blockingProber struct {
+	started chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	active  int
+	max     int
+}
+
+func newBlockingProber() *blockingProber {
+	return &blockingProber{started: make(chan struct{}, 3), release: make(chan struct{})}
+}
+
+func (p *blockingProber) Probe(context.Context, ProbeTarget, ProbeConfig) ProbeResult {
+	p.mu.Lock()
+	p.active++
+	if p.active > p.max {
+		p.max = p.active
+	}
+	p.mu.Unlock()
+	p.started <- struct{}{}
+	<-p.release
+	p.mu.Lock()
+	p.active--
+	p.mu.Unlock()
+	return ProbeResult{Success: true, RTT: time.Millisecond}
+}
+
+func (p *blockingProber) Type() string { return ProbeTypeICMP }
+
+func (p *blockingProber) maxActive() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.max
+}
 
 type stringBuilder struct {
 	data []byte
