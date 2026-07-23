@@ -119,6 +119,65 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 	}
 }
 
+func TestICMProberRunsBurstInOneProcess(t *testing.T) {
+	runner := &recordingCommandRunner{out: []byte(`64 bytes from 192.0.2.2: icmp_seq=1 ttl=64 time=1.25 ms
+64 bytes from 192.0.2.2: icmp_seq=2 ttl=64 time=2.50 ms
+64 bytes from 192.0.2.2: icmp_seq=3 ttl=64 time=3.75 ms
+3 packets transmitted, 3 received, 0% packet loss
+`)}
+	prober := NewICMProber(runner, nil)
+	target := ProbeTarget{
+		InstanceID:     "link-1",
+		NetNS:          "higgstesth2",
+		PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),
+		State:          "up",
+	}
+
+	result := prober.Probe(context.Background(), target, ProbeConfig{Timeout: time.Second, Burst: 3})
+	if !result.Success {
+		t.Fatalf("probe success = false, error=%q", result.Error)
+	}
+	if result.RTT != 3750*time.Microsecond {
+		t.Fatalf("probe RTT = %s, want 3.75ms", result.RTT)
+	}
+	want := []string{"netns", "exec", "higgstesth2", "ping", "-n", "-c", "3", "-i", "0.2", "192.0.2.2"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("command args = %#v, want %#v", runner.args, want)
+	}
+}
+
+func TestICMProberBurstRequiresMajorityOfReplies(t *testing.T) {
+	runner := &recordingCommandRunner{
+		out: []byte(`64 bytes from 192.0.2.2: icmp_seq=1 ttl=64 time=1.25 ms
+3 packets transmitted, 1 received, 66% packet loss
+`),
+		err: errors.New("exit status 1"),
+	}
+	prober := NewICMProber(runner, nil)
+	target := ProbeTarget{InstanceID: "link-1", PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"), State: "up"}
+
+	result := prober.Probe(context.Background(), target, ProbeConfig{Timeout: time.Second, Burst: 3})
+	if result.Success {
+		t.Fatal("probe success = true, want false for one reply in a three-packet burst")
+	}
+	if result.Error != "" {
+		t.Fatalf("probe error = %q, want partial loss without a command error", result.Error)
+	}
+}
+
+func TestParsePingBurstOutput(t *testing.T) {
+	received, lastRTT := parsePingBurstOutput([]byte(`3 packets transmitted, 2 packets received, 33% packet loss
+64 bytes from 192.0.2.2: icmp_seq=1 ttl=64 time=0.125 ms
+64 bytes from 192.0.2.2: icmp_seq=2 ttl=64 time<1 ms
+`))
+	if received != 2 {
+		t.Fatalf("received = %d, want 2", received)
+	}
+	if lastRTT != time.Millisecond {
+		t.Fatalf("last RTT = %s, want 1ms", lastRTT)
+	}
+}
+
 func TestPingTargetAddressScopesLinkLocal(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:     "link-1",

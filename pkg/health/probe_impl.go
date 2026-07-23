@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,6 +33,13 @@ type ICMProber struct {
 	runner CommandRunner
 }
 
+const pingBurstInterval = 200 * time.Millisecond
+
+var (
+	pingReplyTimePattern = regexp.MustCompile(`time[=<]([0-9]+(?:\.[0-9]+)?)\s*ms`)
+	pingReceivedPattern  = regexp.MustCompile(`(?:^|[,\s])(\d+)\s+(?:packets?\s+)?received(?:[,\s]|$)`)
+)
+
 // NewICMProber creates an ICMP prober. The fallback argument is retained for
 // API compatibility, but ICMP failures are reported directly because UDP probe
 // requires an explicit peer listener/capability to avoid false positives.
@@ -52,51 +61,88 @@ func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 	if burst <= 0 {
 		burst = 3
 	}
-	rtts := make([]time.Duration, 0, burst)
-	failures := 0
-	var lastErr string
-	for i := 0; i < burst; i++ {
-		rtt, err := p.pingOnceExec(ctx, target, cfg.Timeout)
-		if err != nil {
-			failures++
-			lastErr = err.Error()
-			continue
-		}
-		rtts = append(rtts, rtt)
+	received, lastRTT, err := p.pingBurstExec(ctx, target, cfg.Timeout, burst)
+	if err != nil {
+		return ProbeResult{InstanceID: target.InstanceID, Error: err.Error()}
 	}
-	if len(rtts) == 0 {
-		return ProbeResult{InstanceID: target.InstanceID, Error: lastErr}
+	if received == 0 {
+		return ProbeResult{InstanceID: target.InstanceID, Error: "ping returned no replies"}
 	}
-	// Aggregate: use the last successful RTT as the representative sample.
-	last := rtts[len(rtts)-1]
-	if failures > 0 {
-		// Partial loss: still success but note error.
-		return ProbeResult{InstanceID: target.InstanceID, RTT: last, Success: len(rtts) > failures}
+	// Preserve the previous burst policy: a partial burst is healthy only when
+	// more than half of the packets succeeded.
+	return ProbeResult{
+		InstanceID: target.InstanceID,
+		RTT:        lastRTT,
+		Success:    received > burst-received,
 	}
-	return ProbeResult{InstanceID: target.InstanceID, RTT: last, Success: true}
 }
 
-func (p *ICMProber) pingOnceExec(ctx context.Context, target ProbeTarget, timeout time.Duration) (time.Duration, error) {
+// pingBurstExec executes one ping process for a whole probe burst. Starting a
+// separate `ip netns exec ping -c 1` process for every packet is expensive:
+// each invocation forks, enters the netns and performs mount setup.
+func (p *ICMProber) pingBurstExec(ctx context.Context, target ProbeTarget, timeout time.Duration, burst int) (int, time.Duration, error) {
 	if timeout <= 0 {
 		timeout = time.Second
 	}
-	deadline, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	args := pingArgs(target, true)
-	start := time.Now()
-	if out, err := p.runner.Run(deadline, "ip", args); err != nil {
-		if shouldRetryWithoutPingSource(target, out) {
-			if out, err := p.runner.Run(deadline, "ip", pingArgs(target, false)); err != nil {
-				return 0, pingExecError(err, out)
-			}
-			return time.Since(start), nil
-		}
-		return 0, pingExecError(err, out)
+	if burst <= 0 {
+		burst = 1
 	}
-	return time.Since(start), nil
+	run := func(includeSource bool) (int, time.Duration, []byte, error) {
+		// The old implementation allowed one timeout per ping. Keep that total
+		// budget while issuing the burst through a single process.
+		deadline, cancel := context.WithTimeout(ctx, timeout*time.Duration(burst))
+		defer cancel()
+		start := time.Now()
+		out, err := p.runner.Run(deadline, "ip", pingArgsForCount(target, includeSource, burst))
+		received, lastRTT := parsePingBurstOutput(out)
+		if received == 0 && err == nil {
+			// Successful ping implementations always report replies, but tolerate
+			// wrappers whose stdout is intentionally suppressed.
+			received = burst
+			lastRTT = time.Since(start)
+		}
+		return received, lastRTT, out, err
+	}
+	received, lastRTT, out, err := run(true)
+	if err != nil && shouldRetryWithoutPingSource(target, out) {
+		received, lastRTT, out, err = run(false)
+	}
+	if received > 0 {
+		return received, lastRTT, nil
+	}
+	if err != nil {
+		return 0, 0, pingExecError(err, out)
+	}
+	return 0, 0, fmt.Errorf("ping returned no replies")
+}
+
+func parsePingBurstOutput(out []byte) (int, time.Duration) {
+	text := string(out)
+	var lastRTT time.Duration
+	replies := pingReplyTimePattern.FindAllStringSubmatch(text, -1)
+	for _, match := range replies {
+		milliseconds, err := strconv.ParseFloat(match[1], 64)
+		if err != nil || milliseconds < 0 {
+			continue
+		}
+		lastRTT = time.Duration(milliseconds * float64(time.Millisecond))
+	}
+	if matches := pingReceivedPattern.FindStringSubmatch(text); len(matches) == 2 {
+		if received, err := strconv.Atoi(matches[1]); err == nil && received >= 0 {
+			return received, lastRTT
+		}
+	}
+	return len(replies), lastRTT
 }
 
 func pingArgs(target ProbeTarget, includeSource bool) []string {
+	return pingArgsForCount(target, includeSource, 1)
+}
+
+func pingArgsForCount(target ProbeTarget, includeSource bool, count int) []string {
+	if count <= 0 {
+		count = 1
+	}
 	args := []string{}
 	if target.NetNS != "" {
 		args = append(args, "netns", "exec", target.NetNS)
@@ -105,12 +151,19 @@ func pingArgs(target ProbeTarget, includeSource bool) []string {
 	if target.PeerTunnelAddr.Is6() {
 		args = append(args, "-6")
 	}
-	args = append(args, "-n", "-c", "1")
+	args = append(args, "-n", "-c", strconv.Itoa(count))
+	if count > 1 {
+		args = append(args, "-i", formatPingBurstInterval(pingBurstInterval))
+	}
 	if source := pingSourceAddress(target); includeSource && source != "" {
 		args = append(args, "-I", source)
 	}
 	args = append(args, pingTargetAddress(target))
 	return args
+}
+
+func formatPingBurstInterval(interval time.Duration) string {
+	return strconv.FormatFloat(interval.Seconds(), 'f', -1, 64)
 }
 
 func pingExecError(err error, out []byte) error {

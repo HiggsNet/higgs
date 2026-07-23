@@ -207,8 +207,13 @@ d.health = newHealthManager(cfg, health.NewICMProber(nil, health.NewUDPProber(ni
 `pkg/health/probe_impl.go`。当前**唯一接线**的 prober，通过 `ip netns exec` 调系统 `ping`：
 
 ```text
-ip netns exec <netns> ping [-6] -n -c 1 [-I <local tunnel addr>] <peer tunnel addr>
+ip netns exec <netns> ping [-6] -n -c <burst> [-I <local tunnel addr>] <peer tunnel addr>
 ```
+
+当 `burst > 1` 时，daemon 仍只启动一个 ping 进程，使用 `-c <burst>`
+（并以 200ms 间隔发包），而不是为 burst 中的每个 ICMP 包分别启动
+`ip netns exec`。这样保留多数成功的聚合语义，同时避免重复 fork、进入
+network namespace 和 mount setup。
 
 - 单次 ping 用 context deadline 控制 `timeout`；RTT 取整个命令的 wall time——包含 `ip`/`ping` 进程创建开销，因此是偏粗的测量，亚毫秒级 LAN RTT 会被进程开销淹没。
 - IPv6 link-local 地址自动补 `%<interface>` scope（目标和源都补）；若 ping 报 `bind icmp socket: Invalid argument`，去掉 `-I` 源地址重试一次。
