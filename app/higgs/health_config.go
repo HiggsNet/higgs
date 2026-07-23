@@ -161,7 +161,10 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 		out.RecoverConsecutive = *y.RecoverConsecutive
 	}
 	if y.Metrics != nil {
-		metricsEnabled, err := enabledFromPresence("health.metrics.enabled", "health.metrics.disabled", true, y.Metrics.Enabled, y.Metrics.Disabled)
+		// Metrics persistence is opt-in. A metrics block often only carries a
+		// destination or retention setting; treating that presence as permission
+		// to enable the local JSONL spool can create substantial steady-state I/O.
+		metricsEnabled, err := enabledFromPresence("health.metrics.enabled", "health.metrics.disabled", false, y.Metrics.Enabled, y.Metrics.Disabled)
 		if err != nil {
 			return healthConfig{}, err
 		}

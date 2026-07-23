@@ -330,7 +330,8 @@ health:
   down_loss_threshold: "0.6"
   recover_consecutive: 5
   metrics:
-    disabled: true
+    # Metrics persistence is disabled unless explicitly enabled.
+    enabled: false
     local_spool_path: /var/lib/higgs/health-spool
     local_spool_max_age: 6h
     remote_write_url: http://victoriametrics:8428/api/v1/write
@@ -345,7 +346,7 @@ health:
 - `max_concurrent_probes`：同时进行的探测数量上限。
 - `fail_threshold_consecutive` / `recover_consecutive`：连续失败/恢复多少次后切换状态。
 - `loss_threshold` / `down_loss_threshold`：判定 degraded / down 的丢包率阈值。
-- `metrics.disabled`：关闭本地 health metrics spool 和 remote write。
+- `metrics.enabled`：显式设为 `true` 才启用本地 health metrics spool 和 remote write；默认关闭。`metrics.disabled: true` 也可显式关闭。
 - `metrics.local_spool_path`：本地历史样本路径，Observer 的 health series API 从这里读取。
 - `metrics.local_spool_max_age`：本地样本保留时长。
 - `metrics.remote_write_url` / `remote_write_queue_capacity`：可选的远程 metrics 推送 endpoint 和队列容量。

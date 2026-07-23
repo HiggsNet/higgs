@@ -941,7 +941,7 @@ ssh -L 8080:127.0.0.1:8080 user@node
 
 - 所有数据来自 daemon live state（stateFile），通过 `RLock` 只读访问。
 - BIRD 页面第一版只显示实例级状态（router-id、netns、table、socket、last error）；`birdc show protocols/routes/neighbors` 深度字段尚未实现。
-- Health 页面展示 live snapshot；如果配置了 `health.metrics.local_spool_path`，还会从本地 health spool 读取 `rtt/loss/jitter/state` 短历史，其中 UI 当前展示 link 级 RTT sparkline。未配置本地 spool 时只显示当前窗口。
+- Health 页面展示 live snapshot；只有显式设置 `health.metrics.enabled: true` 并配置 `health.metrics.local_spool_path` 时，才会从本地 health spool 读取 `rtt/loss/jitter/state` 短历史，其中 UI 当前展示 link 级 RTT sparkline。未配置本地 spool 时只显示当前窗口。
 
 ### 安全边界
 

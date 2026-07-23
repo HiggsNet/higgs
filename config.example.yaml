@@ -352,7 +352,8 @@ firewall:
 #   down_loss_threshold: "0.6"
 #   recover_consecutive: 5
 #   metrics:
-#     disabled: true
+#     # Disabled unless enabled is explicitly set to true.
+#     enabled: false
 #     # Local spool is used by observer /api/v1/health/<link_id>/series.
 #     local_spool_path: .higgs/health-spool
 #     local_spool_max_age: 6h

@@ -153,6 +153,7 @@ type BabelObservation struct {
 health:
   interval: 5s
   metrics:
+    enabled: true
     local_spool_path: /var/lib/higgs/health-spool
 ```
 
@@ -171,7 +172,7 @@ health:
 | `loss_threshold` | string(float) | `0.2` | degraded 丢包率阈值，0.0–1.0 |
 | `down_loss_threshold` | string(float) | `0.6` | down 丢包率阈值；必须 ≥ `loss_threshold` |
 | `recover_consecutive` | int | `5` | 恢复所需连续成功次数 |
-| `metrics.enabled` / `metrics.disabled` | bool | 块存在即启用 | metrics 开关 |
+| `metrics.enabled` / `metrics.disabled` | bool | 默认关闭，需显式 `enabled: true` | metrics 开关 |
 | `metrics.local_spool_path` | string | `""` | 本地 JSONL spool 目录；为空则 spool 关闭 |
 | `metrics.local_spool_max_age` | duration | `6h` | spool 样本保留时长 |
 | `metrics.remote_write_url` | string | `""` | 已解析但**无消费者**（见第 10 节） |

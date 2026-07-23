@@ -45,13 +45,24 @@ func TestParseHealthConfigDisabled(t *testing.T) {
 	}
 }
 
-func TestParseHealthConfigMetricsEnabledByPresence(t *testing.T) {
+func TestParseHealthConfigMetricsDisabledByDefault(t *testing.T) {
 	cfg, err := parseHealthConfig(&healthConfigYAML{Metrics: &healthMetricsYAML{}})
 	if err != nil {
 		t.Fatalf("parseHealthConfig: %v", err)
 	}
+	if cfg.MetricsEnabled {
+		t.Fatal("health metrics should remain disabled without explicit enablement")
+	}
+}
+
+func TestParseHealthConfigMetricsEnabledExplicitly(t *testing.T) {
+	enabled := true
+	cfg, err := parseHealthConfig(&healthConfigYAML{Metrics: &healthMetricsYAML{Enabled: &enabled}})
+	if err != nil {
+		t.Fatalf("parseHealthConfig: %v", err)
+	}
 	if !cfg.MetricsEnabled {
-		t.Fatal("health metrics should be enabled when the metrics section is present")
+		t.Fatal("health metrics should be enabled explicitly")
 	}
 }
 
