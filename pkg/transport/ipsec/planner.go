@@ -179,6 +179,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		if err != nil {
 			return nil, false, PlanSkip{}, linkIndex, err
 		}
+		allContacts = filterContactPointsByFamily(allContacts, group.AllowedAddressFamilies)
 		contacts = SelectContactPointsWithOptions(allContacts, group.DefaultPathMode, AddressCandidateOptions{
 			SourceOrder:    group.AddressSourceOrder,
 			Now:            now,
@@ -205,7 +206,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			// Responder-only specs do not carry contact points, but still need
 			// the same family path key the active side will derive from the
 			// group's allowed remote address sources.
-			families := responderPathFamilies(records, group.AddressSourceOrder)
+			families := responderPathFamilies(records, group.AddressSourceOrder, group.AllowedAddressFamilies)
 			if len(families) == 0 {
 				families = []string{""}
 			}
@@ -436,7 +437,7 @@ func sortedFamilies(byFamily map[string][]ContactPoint) []string {
 	return families
 }
 
-func responderPathFamilies(records *NodeRecords, allowedSources []string) []string {
+func responderPathFamilies(records *NodeRecords, allowedSources, allowedFamilies []string) []string {
 	if records == nil || records.Addresses == nil {
 		return nil
 	}
@@ -457,11 +458,31 @@ func responderPathFamilies(records *NodeRecords, allowedSources []string) []stri
 			if len(records.Profile.AddressFamilies) > 0 && !oneOf(family, records.Profile.AddressFamilies...) {
 				continue
 			}
+			if len(allowedFamilies) > 0 && !oneOf(family, allowedFamilies...) {
+				continue
+			}
 			seen[family] = true
 			out = append(out, family)
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+func filterContactPointsByFamily(points []ContactPoint, allowedFamilies []string) []ContactPoint {
+	if len(allowedFamilies) == 0 {
+		return points
+	}
+	out := make([]ContactPoint, 0, len(points))
+	for _, point := range points {
+		family := point.Family
+		if family == "" {
+			family = inferIPFamily(point.Address)
+		}
+		if oneOf(family, allowedFamilies...) {
+			out = append(out, point)
+		}
+	}
 	return out
 }
 
@@ -512,6 +533,9 @@ func meshRuleMatchesPeer(rule MeshPolicyRule, peer zone.ZonePath, records *NodeR
 
 func applyMeshRuleToGroup(group LinkGroupSpec, rule MeshPolicyRule) LinkGroupSpec {
 	out := group
+	if rule.Family == FamilyIPv4 || rule.Family == FamilyIPv6 {
+		out.AllowedAddressFamilies = []string{rule.Family}
+	}
 	if rule.PathMode != "" {
 		out.DefaultPathMode = rule.PathMode
 	}

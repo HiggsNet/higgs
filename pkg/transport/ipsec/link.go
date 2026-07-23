@@ -72,13 +72,17 @@ type LinkGroupSpec struct {
 	NetNS              NetNSSpec
 	DefaultPathMode    string
 	AddressSourceOrder []string
-	MaxPeers           int
-	MaxLinksPerPeer    int
-	TunnelAddressPool  netip.Prefix
-	TunnelAddressSpec  TunnelAddressSpec
-	Reconcile          ReconcilePolicy
-	ConnectRules       []string
-	DenyRules          []string
+	// AllowedAddressFamilies limits the underlay families selected for this
+	// group. It is populated from a matching local mesh policy rule rather than
+	// from a peer-advertised capability.
+	AllowedAddressFamilies []string
+	MaxPeers               int
+	MaxLinksPerPeer        int
+	TunnelAddressPool      netip.Prefix
+	TunnelAddressSpec      TunnelAddressSpec
+	Reconcile              ReconcilePolicy
+	ConnectRules           []string
+	DenyRules              []string
 }
 
 type TransportLinkSpec struct {
@@ -252,6 +256,11 @@ func (g LinkGroupSpec) Validate() error {
 	for _, source := range g.AddressSourceOrder {
 		if !oneOf(source, SourceManualAddress, SourceManualDNS, SourceDiscovery, SourceReflector, SourceLocal) {
 			return fmt.Errorf("unsupported link group address source %q", source)
+		}
+	}
+	for _, family := range g.AllowedAddressFamilies {
+		if !validFamily(family) {
+			return fmt.Errorf("unsupported link group address family %q", family)
 		}
 	}
 	if g.MaxPeers < 0 {

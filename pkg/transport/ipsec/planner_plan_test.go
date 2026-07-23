@@ -634,6 +634,33 @@ func TestPlanTransportLinksAppliesMeshPolicyRules(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksPolicyFamilyFiltersOutboundContactPoints(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{
+		{ID: "b-v4", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
+		{ID: "b-v6", Source: SourceManualAddress, Address: "2001:db8::20", Priority: 100, Reachability: ReachabilityPublic, TTLSeconds: 300},
+	}, now)
+
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{{
+		ID:           "ipsec-main",
+		ConnectRules: []string{"strongswan://node-b.catofes.?role=in&family=ipv4"},
+	}}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired = %+v skips=%+v, want one IPv4 link", plan.Desired, plan.Skipped)
+	}
+	spec := plan.Desired[0]
+	if spec.PathKey != "family:ipv4" || len(spec.ContactPoints) != 1 || spec.ContactPoints[0].Family != FamilyIPv4 || spec.ContactPoints[0].Address != "198.51.100.20" {
+		t.Fatalf("spec = %+v, want only IPv4 contact", spec)
+	}
+}
+
 func TestPlanTransportLinksDryRunDualStackModes(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
