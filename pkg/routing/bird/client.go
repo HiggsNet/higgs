@@ -130,13 +130,15 @@ func (c *birdcClient) routeCommands() []string {
 }
 
 // Configure performs a full "birdc configure" using the file at path.
+// BIRD's CLI requires a configuration filename to be a quoted string.
 func (c *birdcClient) Configure(ctx context.Context, path string) error {
-	return c.commandCheck(ctx, fmt.Sprintf("configure %s", path))
+	return c.commandCheck(ctx, fmt.Sprintf("configure %q", path))
 }
 
 // ConfigureSoft performs "birdc configure soft" using the file at path.
+// BIRD's CLI requires a configuration filename to be a quoted string.
 func (c *birdcClient) ConfigureSoft(ctx context.Context, path string) error {
-	return c.commandCheck(ctx, fmt.Sprintf("configure soft %s", path))
+	return c.commandCheck(ctx, fmt.Sprintf("configure soft %q", path))
 }
 
 // ReloadIn triggers "birdc reload in <proto>".

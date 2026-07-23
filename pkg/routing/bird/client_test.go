@@ -136,9 +136,9 @@ func defaultHandler(cmd string) string {
 		return sampleShowInterfaces
 	case "show babel neighbors":
 		return sampleShowBabelNeighbors
-	case "configure /tmp/bird.conf":
+	case `configure "/tmp/bird.conf"`:
 		return "0002 Configuration OK\n0000 \n"
-	case "configure soft /tmp/bird.conf":
+	case `configure soft "/tmp/bird.conf"`:
 		return "0002 Configuration OK\n0000 \n"
 	case "reload in babel1":
 		return "0002 Reload requested\n0000 \n"
@@ -319,6 +319,29 @@ func TestConfigureSuccessAndError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Unknown command") {
 		t.Errorf("error message does not mention unknown command: %v", err)
+	}
+}
+
+func TestConfigureQuotesConfigPath(t *testing.T) {
+	const path = `/tmp/higgs bird-"next".conf`
+	var commands []string
+	server := newFakeServer(t, func(cmd string) string {
+		commands = append(commands, cmd)
+		return "0002 Configuration OK\n0000 \n"
+	})
+	defer server.close()
+
+	client := NewClient(server.socket, 5*time.Second)
+	if err := client.Configure(context.Background(), path); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	if err := client.ConfigureSoft(context.Background(), path); err != nil {
+		t.Fatalf("ConfigureSoft: %v", err)
+	}
+
+	want := []string{`configure "/tmp/higgs bird-\"next\".conf"`, `configure soft "/tmp/higgs bird-\"next\".conf"`}
+	if len(commands) != len(want) || commands[0] != want[0] || commands[1] != want[1] {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
 }
 
