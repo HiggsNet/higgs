@@ -167,6 +167,75 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	}
 }
 
+func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
+	state, config := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true}}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "higgstesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	pm := &fakeBirdProcessManager{running: false}
+	client := &fakeBirdClient{}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.birdProcessManager = pm
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return client }
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("initial reconcileRouting: %v", err)
+	}
+
+	if _, err := service.StateStore.Update(func(current *stateFile) error {
+		inst := current.BirdInstances["higgstesth2"]
+		inst.State = birdInstanceStateDegraded
+		inst.LastError = "bird restart backoff active until 1970-01-01T01:06:41Z"
+		inst.FailureCount = 1
+		inst.BackoffUntilUnix = now.Add(-time.Second).Unix()
+		inst.LastExit = "pid 1234: signal: killed"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed stale BIRD state: %v", err)
+	}
+	current, _, _ := service.snapshotState()
+	service.installCurrentStateSnapshot(current)
+	pm.running = true
+	pm.started = false
+	client.configureCalls = 0
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	latest, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	inst := latest.BirdInstances["higgstesth2"]
+	if inst == nil || inst.State != birdInstanceStateRunning || inst.LastError != "" {
+		t.Fatalf("bird instance = %+v, want running with no error", inst)
+	}
+	if inst.FailureCount != 0 || inst.BackoffUntilUnix != 0 || inst.LastExit != "" {
+		t.Fatalf("stale crash state was not cleared: %+v", inst)
+	}
+	if pm.started || client.configureCalls != 0 {
+		t.Fatalf("healthy unchanged BIRD should not restart/reconfigure: started=%v configure=%d", pm.started, client.configureCalls)
+	}
+}
+
 func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	state, config := buildTestNetworkStateForRouting(t)
 	now := time.Unix(4050, 0)

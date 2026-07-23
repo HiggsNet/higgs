@@ -473,6 +473,14 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			} else {
 				instState.State = birdInstanceStateRunning
 			}
+		} else {
+			// The process can become healthy again without a config change (for
+			// example after a daemon restart adopts an already-running BIRD).
+			// Do not retain an expired crash-backoff state in that case.
+			instState.State = birdInstanceStateRunning
+			instState.FailureCount = 0
+			instState.BackoffUntilUnix = 0
+			instState.LastExit = ""
 		}
 		d.observeBirdForHealth(ctx, state, netnsName, instState.Overlays, spec.ControlSocketPath)
 
