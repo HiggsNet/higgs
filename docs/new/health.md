@@ -196,13 +196,33 @@ type Prober interface {
 
 `ProbeResult` 携带 `RTT`、`Success` 和原始 `Error` 字符串；`Error` 只进入 debug 展示和 reason 分类，**不作为 metrics label**。每次 `Probe` 调用（含整个 burst）只产生 rolling window 中的一条样本。
 
-daemon 在 `configureHealthManager`（`app/higgs/daemon.go`）中固定注入 ICMP prober：
+daemon 在 `configureHealthManager`（`app/higgs/daemon.go`）中优先注入 raw-ICMP prober：
 
 ```go
-d.health = newHealthManager(cfg, health.NewICMProber(nil, health.NewUDPProber(nil)))
+d.health = newHealthManager(cfg,
+    health.NewRawICMProber(health.NewICMProber(nil, health.NewUDPProber(nil))))
 ```
 
-### 4.2 ICMProber
+### 4.2 RawICMProber（默认）
+
+Linux 上默认使用进程内 raw ICMP。每个目标 network namespace 有一个固定
+OS thread 的 worker；worker 仅在启动时 `setns`，并按协议族、源地址、接口
+复用 raw socket。steady state 不再执行 `ip netns exec`、fork `ping` 或创建
+临时 mount，因此不会产生 probe 子进程风暴。
+
+- 需要 daemon 自身具备 `CAP_NET_RAW`（创建 raw socket）；进入非 host netns
+  还需要 `CAP_SYS_ADMIN`。`UID 0` 通常具有这些 capability，但 systemd 的
+  `CapabilityBoundingSet`、`AmbientCapabilities`、`NoNewPrivileges` 或 user
+  namespace 仍可能把它们移除。
+- IPv4、IPv6 和 IPv6 link-local（以接口 index 作为 scope）均走 raw socket；
+  burst 仍以 200ms 间隔发出，成功数超过失败数才健康。
+- raw socket / `setns` 的本地 setup 失败会自动退回下述 `ICMProber`；网络
+  不可达、丢包和超时不会触发第二次 exec probe，避免误掩盖数据面问题。
+- worker 在 daemon 生命周期内持有 namespace 和 socket；netns 被删除并重建
+  后需要重启 daemon 才能让 worker 进入新的 namespace（root smoke 覆盖前不
+  应将此行为视为已经验收）。
+
+### 4.3 ICMProber（权限受限时回退）
 
 `pkg/health/probe_impl.go`。当前**唯一接线**的 prober，通过 `ip netns exec` 调系统 `ping`：
 
@@ -221,11 +241,11 @@ network namespace 和 mount setup。
 - `PeerTunnelAddr` 无效时直接返回 `peer address missing` 错误。
 - 需要 `ping` 二进制可用且具有相应权限（setuid 或 cap_net_raw）；权限不足时错误归入 `probe_error`。
 
-### 4.3 UDPProber
+### 4.4 UDPProber
 
 `NewUDPProber` 存在但**未被 daemon 使用**（仅作为 `NewICMProber` 的兼容参数传入，ICMP 失败不会 fallback 到 UDP）。其语义也很弱：向 `<peer tunnel addr>:33434` 写入带 `HIGGS-HC` magic 和 nonce 的 UDP 包，write 成功即视为 L3 可达，不校验任何回复。不要把它当作可靠健康证据。
 
-### 4.4 nopProber
+### 4.5 nopProber
 
 `NewManager` 传入 nil prober 时使用；所有探测返回 `no prober configured` 错误，全部 link 收敛到 `probe_error`。只用于测试。
 
@@ -473,7 +493,9 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 ### 9.4 测试入口
 
 - `go test ./pkg/health/`：rolling window、状态机迟滞、probe 聚合、metrics 渲染等单元测试。
-- `make health-smoke`：运行 `Test(Manager|CollectMetricsAndRender)`。
+- `sudo env PATH="$PATH" make health-smoke`：除 manager/metrics 单测外，还会在
+  两个真实 named netns 的 veth 链路上运行 raw-ICMP、BIRD cutover 和 `tc netem`
+  故障/恢复验证；需要 root、`ip`、`bird`/`birdc`、`tc` 与 daemon 所需 capability。
 - `app/higgs/health_config_test.go`、`health_reconcile_test.go`：配置解析与 daemon 级集成测试。
 - `app/higgs/bird_root_smoke_test.go` 含 cutover gate 的 root smoke 用例。
 
@@ -486,7 +508,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 | 项 | 设计期望 | 当前实现 | 影响 |
 |---|---|---|---|
 | 探测执行模型 | 有界并发、不阻塞 loop | 独立 health 协程以约 1s timer 投递任务；固定大小 worker pool 经 channel 执行 ping，完成后以 channel 通知 daemon | 健康 interval 不受 IPsec reconcile 间隔限制，慢 ping 不阻塞 daemon event loop |
-| ICMP 快路径 | raw socket（`ip4:icmp`）优先，ping 兜底 | 只有 `ip netns exec ping` | RTT 含进程创建开销，偏粗 |
+| ICMP 快路径 | raw socket（`ip4:icmp`）优先，ping 兜底 | Linux 默认 raw socket；无 capability 时回退 `ip netns exec ping` | raw 成功时 RTT 不含进程创建开销；netns 删除/重建的长期行为仍待 root smoke |
 | UDP fallback | ICMP 不可用时降级 UDP keepalive | fallback 未接线；UDPProber 语义弱（write 成功即可达） | 无 ICMP 权限时只能得到 probe_error |
 | Babel RTT/metric | 普通 link 也采集被动指标、出 `higgs_link_babel_*` | 只为 staged link 采集 neighbor/route 布尔与最小 metric；series API 显式报未实现 | 被动质量数据基本不可用 |
 | BIRD metric 联动 | degraded/down 先调高 BIRD metric | 未实现 | 健康结果不影响选路 |

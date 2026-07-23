@@ -340,7 +340,10 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	manager := health.NewManager(
 		health.ProbeConfig{Interval: -time.Second, Timeout: time.Second, Burst: 1, LossWindow: 5, MaxConcurrent: 2},
 		hyst,
-		health.NewICMProber(nil, nil),
+		// This smoke deliberately has no exec fallback: a pass proves raw ICMP
+		// and setns both worked in the real named network namespace. Capability
+		// fallback is covered independently by RawICMProber unit tests.
+		health.NewRawICMProber(nil),
 	)
 	manager.UpsertTarget(health.ProbeTarget{
 		ProbeID:         healthProbeID("link-1", "staged"),

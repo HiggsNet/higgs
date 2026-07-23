@@ -37,8 +37,6 @@
             doCheck = false;
 
             ldflags = [
-              "-s"
-              "-w"
               "-X main.buildCommit=${self.shortRev or "unknown"}"
               "-X main.buildDescribe=${self.shortRev or "dirty"}"
               "-X main.buildDirty=${if self ? rev then "false" else "true"}"

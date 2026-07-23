@@ -77,7 +77,7 @@
   - 评估 peer observability readmodel / metrics store，将 `DatagramStats`、`ObjectPullStats` 等纯诊断计数从 `PeerRuntimeState` 拆出。
   - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
-  - Health probe 性能：实现按 netns 常驻的 raw-ICMP worker，worker 固定 OS thread 后 `setns` 并复用 ICMP socket，消除稳态 `ip netns exec ping` 的 fork/exec/mount 开销；部署侧显式审计/配置 `CAP_NET_RAW`、`CAP_SYS_ADMIN` 和 `NoNewPrivileges`，保留 exec prober 作为受限环境 fallback。先完成 IPv4、IPv6 link-local scope、netns 删除/重建、capability 缺失降级的 root smoke，再考虑切换默认实现。
+  - Health probe 性能：已实现按 netns 常驻的 raw-ICMP worker，worker 固定 OS thread 后 `setns` 并按源/接口复用 ICMP socket；raw socket / `setns` 的 setup 失败自动回退 exec prober，消除正常路径的 `ip netns exec ping` fork/exec/mount 开销。待完成 root smoke：IPv4、IPv6 link-local scope、netns 删除/重建、`CAP_NET_RAW` / `CAP_SYS_ADMIN` / `NoNewPrivileges` 缺失时的降级；验收后再确认默认路径的长期运行行为。
 
 - [ ] **7.9 可选 Admission 管理面**
   - 在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交。

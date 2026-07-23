@@ -185,7 +185,12 @@ func (d *DaemonService) configureHealthManager() {
 	if !cfg.Enabled {
 		return
 	}
-	d.health = newHealthManager(cfg, health.NewICMProber(nil, health.NewUDPProber(nil)))
+	// Prefer the in-process raw-ICMP prober. It keeps one locked OS thread per
+	// network namespace and reuses raw sockets, avoiding the steady-state
+	// fork/exec and mount work of `ip netns exec ping`. When the service lacks
+	// the required capabilities it automatically falls back to the portable
+	// exec prober.
+	d.health = newHealthManager(cfg, health.NewRawICMProber(health.NewICMProber(nil, health.NewUDPProber(nil))))
 }
 
 func (d *DaemonService) Run(ctx context.Context) error {
