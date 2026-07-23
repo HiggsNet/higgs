@@ -186,9 +186,7 @@ ipsec:
 
 netns:
   default:
-    kind: name
     name: h2
-    create: true
 
 overlays:
   - id: ipsec-main

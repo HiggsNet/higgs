@@ -27,6 +27,36 @@ netns:
 	}
 }
 
+func TestParseConfigYAMLNetNSDefaultsAndCreateOverride(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    name: higgstesth2
+  existing:
+    name: existing
+    create: false
+  forwarded:
+    name: forwarded
+    forwarding: {}
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	for name, wantCreate := range map[string]bool{"default": true, "existing": false} {
+		spec := config.Netns.Names[name]
+		if spec.Kind != ipsec.NetNSName || spec.Create != wantCreate {
+			t.Fatalf("netns.%s = %+v, want kind=name create=%t", name, spec, wantCreate)
+		}
+	}
+	if policy := netnsForwardingPolicy(config, "default"); policy.Transit {
+		t.Fatalf("default forwarding policy = %+v, want non-transit", policy)
+	}
+	if policy := netnsForwardingPolicy(config, "forwarded"); !policy.Transit {
+		t.Fatalf("forwarded forwarding policy = %+v, want transit", policy)
+	}
+}
+
 func TestParseConfigYAMLRejectsLegacyDefaultNetNS(t *testing.T) {
 	for _, input := range []string{`
 ipsec:

@@ -33,8 +33,29 @@ type netnsConfigYAML struct {
 }
 
 type netnsSpecYAML struct {
-	ipsec.NetNSSpec `yaml:",inline"`
-	Forwarding      *forwardingYAML `yaml:"forwarding"`
+	Kind       string          `yaml:"kind"`
+	Name       string          `yaml:"name"`
+	Path       string          `yaml:"path"`
+	Create     *bool           `yaml:"create"`
+	Forwarding *forwardingYAML `yaml:"forwarding"`
+}
+
+// netNSSpec applies netns-specific YAML defaults. A declared named netns is
+// Higgs-owned by default; create: false opts into reusing an existing one.
+func (raw netnsSpecYAML) netNSSpec() ipsec.NetNSSpec {
+	spec := ipsec.NetNSSpec{
+		Kind: raw.Kind,
+		Name: raw.Name,
+		Path: raw.Path,
+	}
+	if raw.Create != nil {
+		spec.Create = *raw.Create
+	}
+	spec = spec.Normalized()
+	if raw.Create == nil && spec.Kind == ipsec.NetNSName {
+		spec.Create = true
+	}
+	return spec
 }
 
 // routingConfig holds top-level routing instance definitions.
@@ -146,7 +167,7 @@ func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) (netns
 		return cfg, nil
 	}
 	if yamlCfg.Default != nil {
-		n := yamlCfg.Default.NetNSSpec.Normalized()
+		n := yamlCfg.Default.netNSSpec()
 		if err := n.Validate(); err != nil {
 			return cfg, fmt.Errorf("netns.default: %w", err)
 		}
@@ -156,7 +177,7 @@ func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) (netns
 		}
 	}
 	for name, entry := range yamlCfg.Entries {
-		n := entry.NetNSSpec.Normalized()
+		n := entry.netNSSpec()
 		if err := n.Validate(); err != nil {
 			return cfg, fmt.Errorf("netns.%s: %w", name, err)
 		}

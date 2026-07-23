@@ -11,7 +11,6 @@ netns:
     name: higgstesth2
     create: true
     forwarding:
-      transit: true
       allow_prefixes:
         - 10.42.0.0/16
       deny_prefixes:

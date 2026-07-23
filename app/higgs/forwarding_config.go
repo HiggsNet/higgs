@@ -30,7 +30,12 @@ func parseForwardingPolicy(raw *forwardingYAML) (firewall.ForwardingPolicy, erro
 	if err != nil {
 		return firewall.ForwardingPolicy{}, fmt.Errorf("deny_prefixes: %w", err)
 	}
-	transit := raw.Transit != nil && *raw.Transit
+	// The forwarding section is an opt-in: declaring it enables transit unless
+	// the user explicitly overrides that with transit: false.
+	transit := true
+	if raw.Transit != nil {
+		transit = *raw.Transit
+	}
 	return firewall.BuildForwardingPolicy(transit, allowPrefixes, denyPrefixes, raw.AllowPeers, raw.DenyPeers, raw.MetricHint), nil
 }
 
