@@ -177,11 +177,10 @@ func CleanupRevokedPeerCache(state *stateFile, revokedZones map[zone.ZonePath]bo
 		ps.ObservedSource = ""
 		ps.ObservedFailureCount = 0
 		ps.ObservedGraceAddrs = nil
-		// Keep DatagramStats/ObjectPullStats for audit but reset live counters.
-		if ps.DatagramStats != nil {
-			ps.DatagramStats.LastTooLargeDirection = ""
-			ps.DatagramStats.LastTooLargeUnix = 0
-		}
+		// Drop diagnostics left by older state files. Current daemon diagnostics
+		// live in PeerObservability and are removed by the daemon cleanup path.
+		ps.DatagramStats = nil
+		ps.ObjectPullStats = nil
 		// Clear backoff so it doesn't interfere with future diagnostics.
 		ps.BackoffUntilUnix = 0
 		ps.FailureCount = 0

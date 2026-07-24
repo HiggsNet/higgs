@@ -15,6 +15,7 @@ import (
 	"time"
 
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
+	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -30,6 +31,7 @@ type DaemonService struct {
 	Events             chan daemonEvent
 	Hooks              DaemonHooks
 	StateStore         *DaemonStateStore
+	PeerObservability  *observability.PeerObservabilityStore
 	IPsecDriver        ipsec.IPsecDriver
 	XFRMDriver         ipsec.XFRMDriver
 	closeIPsecDriver   func() error
@@ -78,6 +80,8 @@ const (
 	defaultDaemonInterval                            = 60 * time.Second
 	defaultIPsecReconcileInterval                    = time.Minute
 	rawICMPFallbackLogInterval                       = 10 * time.Minute
+	defaultPeerObservabilityTTL                      = 24 * time.Hour
+	defaultPeerObservabilityLimit                    = 2048
 	daemonEventRecordPut             daemonEventType = "record_put"
 	daemonEventDelegateIssue         daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke        daemonEventType = "delegate_revoke"
@@ -156,14 +160,18 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	if state != nil && state.Network != nil && state.Network.RecordVerifier == nil {
 		configureValidation(state.Network)
 	}
+	peerObservability := observability.NewPeerObservabilityStore(defaultPeerObservabilityLimit, defaultPeerObservabilityTTL)
+	syncRuntime := newSyncRuntime(state, config, nil, rt)
+	syncRuntime.Observability = peerObservability
 	d := &DaemonService{
-		Sync:              newSyncRuntime(state, config, nil, rt),
+		Sync:              syncRuntime,
 		Interval:          interval,
 		ControlSocketPath: socketPath,
 		Events:            make(chan daemonEvent, 64),
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 		StateStore:        NewDaemonStateStore(state),
+		PeerObservability: peerObservability,
 	}
 	d.syncSessions = make(map[string]*SyncSession)
 	d.pendingSyncHints = make(map[string]bool)
@@ -455,7 +463,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			}
 		case result := <-d.objectPullResults:
 			timer.Stop()
-			d.commitObjectPullResult(result)
+			d.observeObjectPullResult(result)
 			d.enqueueObjectPullResult(result)
 		case <-d.healthUpdates:
 			timer.Stop()
@@ -1294,6 +1302,9 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	if err := d.installAndSaveCommittedState(); err != nil {
 		return nil, err
 	}
+	for _, peerID := range plan.SyncPeers {
+		d.PeerObservability.Delete(peerID)
+	}
 	if d.Sync.Transport != nil {
 		d.Sync.updateDiscoveredPeers()
 	}
@@ -1652,6 +1663,11 @@ func (d *DaemonService) flushRevocationCleanup() {
 	}); err != nil {
 		d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
 		return
+	}
+	for peerID := range d.peerObservabilitySnapshots() {
+		if revokedZones[zone.ZonePath(peerID)] {
+			d.PeerObservability.Delete(peerID)
+		}
 	}
 	state, _, _ := d.snapshotState()
 	d.installCurrentStateSnapshot(state)

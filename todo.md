@@ -88,7 +88,7 @@
     - `ZoneState.MerkleRoot` 当前没有完整的计算/失效维护，不能直接作为 digest cache。只有未来 perf 再次证明 zone digest 是热点，并覆盖 record/history、delegation、revocation、snapshot apply、recovery/import/purge、join/adoption 等所有 Network mutation 后，才考虑启用。
     - 不新增高基数内部 metrics；阶段验收继续由开发者手工运行 perf/strace，对比 idle CPU、clone/alloc、`LoadNetwork` 和 fork/exec。
 
-  - [ ] **7.11.0 先拆 committed control state 与纯 observability**
+  - [x] **7.11.0 先拆 committed control state 与纯 observability**
     - 这一步是 state-store 性能优化的前置阶段。Phase 6.7.7 已把 inspect/readmodel/presenter 从 `app/higgs` 拆出，但数据所有权仍集中在 `stateFile`：代码模块化不等于存储模型已经模块化。先消除不该发生的 commit，再优化剩余 commit 的复制方式。
     - 先按语义把数据分为三层：必须强一致和持久化的权威状态；会影响调度、路径选择和重启收敛的控制器运行状态；只供 observer/debug/status 使用、允许丢失或短暂不一致的 observability。readmodel 在读取时合并 committed control snapshot、observability snapshot 和 health/BIRD actual snapshot，现有 CLI/HTTP DTO 尽量保持不变。
     - 第一窄切口只迁移已经确认纯诊断的 `DatagramStats` 和 `ObjectPullStats`，包括其中的 catalog/page/reject、too-large、repair/fallback 计数与最近一次详情。随后逐字段审计并考虑迁移 hint accepted/suppressed、read-only responder、active-pull 展示状态、relay suppression reason 和其他最近一次 action/error detail；不能因为字段显示在 debug 页面就认定它是纯诊断。

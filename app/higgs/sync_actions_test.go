@@ -3,15 +3,17 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"github.com/Catofes/higgs/pkg/core/gossip"
-	"github.com/Catofes/higgs/pkg/core/zone"
 	"net"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/internal/observability"
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-func TestHandleSyncEventCommitsPeerDiagnosticsToStateStore(t *testing.T) {
+func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2100, 0)
 	rt := &Runtime{
@@ -36,15 +38,22 @@ func TestHandleSyncEventCommitsPeerDiagnosticsToStateStore(t *testing.T) {
 
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]
-	stats := peerState.DatagramStats
+	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	if !ok {
+		t.Fatal("peer observability snapshot missing")
+	}
+	stats := observed.DatagramStats
 	if stats == nil {
-		t.Fatal("datagram stats missing from committed snapshot")
+		t.Fatal("datagram stats missing from observability snapshot")
 	}
 	if stats.LastCatalogRootHex != "2122" || stats.LastCatalogZoneCount != 2 || stats.LastCatalogCursor != "next-page" {
 		t.Fatalf("catalog stats = %+v, want committed summary", stats)
 	}
 	if peerState.ActivePullState != string(SyncSessionCatalogDiffing) || peerState.ActivePullLastEvent != "catalog_summary" {
 		t.Fatalf("active pull = state %q event %q, want committed catalog diffing summary", peerState.ActivePullState, peerState.ActivePullLastEvent)
+	}
+	if peerState.DatagramStats != nil {
+		t.Fatalf("datagram stats leaked into committed state: %+v", peerState.DatagramStats)
 	}
 }
 
@@ -86,8 +95,9 @@ func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
 
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]
-	if peerState.DatagramStats == nil || peerState.DatagramStats.LastCatalogRootHex != "3132" {
-		t.Fatalf("catalog stats = %+v, want committed summary", peerState.DatagramStats)
+	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	if !ok || observed.DatagramStats == nil || observed.DatagramStats.LastCatalogRootHex != "3132" {
+		t.Fatalf("catalog stats = %+v, want observability summary", observed.DatagramStats)
 	}
 	if peerState.ActivePullState != string(SyncSessionCatalogDiffing) {
 		t.Fatalf("active pull state = %q, want catalog diffing", peerState.ActivePullState)
@@ -131,8 +141,9 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T
 	if peerState.ReadOnlyResponder == 0 {
 		t.Fatalf("read-only responder count = %d, want committed read-only responder stats", peerState.ReadOnlyResponder)
 	}
-	if peerState.DatagramStats == nil || (peerState.DatagramStats.LastCatalogCursor == "" && peerState.DatagramStats.LastCatalogPageEntries == 0) {
-		t.Fatalf("catalog page stats = %+v, want committed catalog page", peerState.DatagramStats)
+	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	if !ok || observed.DatagramStats == nil || (observed.DatagramStats.LastCatalogCursor == "" && observed.DatagramStats.LastCatalogPageEntries == 0) {
+		t.Fatalf("catalog page stats = %+v, want observability catalog page", observed.DatagramStats)
 	}
 }
 
@@ -180,10 +191,13 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	}
 	unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
-	stats := snapshot.SyncPeers[peerID].DatagramStats
+	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	if !ok {
+		t.Fatal("peer observability snapshot missing")
+	}
+	stats := observed.DatagramStats
 	if stats == nil || stats.ChunkFallbacks == 0 {
-		t.Fatalf("datagram stats = %+v, want committed chunk fallback counter", stats)
+		t.Fatalf("datagram stats = %+v, want observability chunk fallback counter", stats)
 	}
 }
 
@@ -252,6 +266,7 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 	}
 	rt.Clock = func() time.Time { return time.Unix(123, 0) }
 	sr := newSyncRuntime(targetState, config, nil, rt)
+	sr.Observability = observability.NewPeerObservabilityStore(8, time.Hour)
 
 	chunkSize := len(data) / 2
 	if chunkSize == 0 {
@@ -292,7 +307,11 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 	if targetState.Network.Zones["catofes."] == nil {
 		t.Fatalf("catofes. zone was not applied from chunks")
 	}
-	stats := targetState.SyncPeers["node-b.catofes."].DatagramStats
+	observed, ok := sr.Observability.Snapshot("node-b.catofes.", rt.Now())
+	if !ok {
+		t.Fatal("peer observability snapshot missing")
+	}
+	stats := observed.DatagramStats
 	if stats == nil || stats.ChunkFallbacks == 0 {
 		t.Fatalf("chunk fallback stats were not recorded: %#v", stats)
 	}

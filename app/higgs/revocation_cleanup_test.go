@@ -242,15 +242,8 @@ func TestCleanupRevokedPeerCache(t *testing.T) {
 	if peerB.LastUpdateSource != "revoked" {
 		t.Fatalf("last update source = %q, want 'revoked'", peerB.LastUpdateSource)
 	}
-	// DatagramStats should be preserved for audit but live counters reset.
-	if peerB.DatagramStats == nil {
-		t.Fatalf("datagram stats should be preserved for audit")
-	}
-	if peerB.DatagramStats.TooLargeDropped != 5 {
-		t.Fatalf("datagram stats TooLargeDropped should be preserved, got %d", peerB.DatagramStats.TooLargeDropped)
-	}
-	if peerB.DatagramStats.LastTooLargeDirection != "" {
-		t.Fatalf("datagram stats LastTooLargeDirection should be cleared, got %q", peerB.DatagramStats.LastTooLargeDirection)
+	if peerB.DatagramStats != nil || peerB.ObjectPullStats != nil {
+		t.Fatalf("legacy peer diagnostics should be cleared, got datagram=%#v object_pull=%#v", peerB.DatagramStats, peerB.ObjectPullStats)
 	}
 
 	// node-a should be untouched.
@@ -387,6 +380,7 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileLiveStateLocked(t *testi
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newDaemonService(rt, state, config, time.Second)
+	recordDatagramChunkFallback(service.PeerObservability, "node-b.catofes.", now)
 
 	state.Lock()
 	done := make(chan struct{})
@@ -405,6 +399,9 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileLiveStateLocked(t *testi
 	snapshot, _ := service.StateStore.Snapshot()
 	if got := snapshot.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "" {
 		t.Fatalf("committed discovered addr = %q, want cleared", got)
+	}
+	if _, ok := service.PeerObservability.Snapshot("node-b.catofes.", now); ok {
+		t.Fatal("revoked peer diagnostics were not deleted")
 	}
 }
 

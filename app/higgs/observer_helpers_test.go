@@ -2,20 +2,25 @@ package main
 
 import (
 	"crypto/ed25519"
-	"github.com/Catofes/higgs/pkg/core/gossip"
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/internal/observability"
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
 func newTestObserverServer() *observerServer {
+	peerObservability := observability.NewPeerObservabilityStore(32, time.Hour)
 	d := &DaemonService{
+		PeerObservability: peerObservability,
 		Sync: &SyncRuntime{
-			State:  newTestStateFile(),
-			Config: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
-			App:    &Runtime{Config: &appConfig{}},
+			State:         newTestStateFile(),
+			Config:        &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
+			App:           &Runtime{Config: &appConfig{}},
+			Observability: peerObservability,
 		},
 	}
 	cfg := defaultObserverConfig()

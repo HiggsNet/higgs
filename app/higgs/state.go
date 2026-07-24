@@ -347,7 +347,7 @@ func saveStateAt(path string, state *stateFile) error {
 		IdentityKeyPath:   state.IdentityKeyPath,
 		RootPrivateKey:    state.RootPrivateKey,
 		ZonePrivateKey:    state.ZonePrivateKey,
-		SyncPeers:         state.SyncPeers,
+		SyncPeers:         persistentSyncPeers(state.SyncPeers),
 		IPsecTransportKey: state.IPsecTransportKey,
 		IPsecPortRecord:   state.IPsecPortRecord,
 		LinkInstances:     state.LinkInstances,
@@ -362,6 +362,19 @@ func saveStateAt(path string, state *stateFile) error {
 		return err
 	}
 	return store.SaveNetwork(state.Network)
+}
+
+func persistentSyncPeers(peers map[string]syncPeerState) map[string]syncPeerState {
+	if peers == nil {
+		return nil
+	}
+	out := make(map[string]syncPeerState, len(peers))
+	for peerID, peer := range peers {
+		peer.DatagramStats = nil
+		peer.ObjectPullStats = nil
+		out[peerID] = peer
+	}
+	return out
 }
 
 func zoneChain(path zone.ZonePath) []zone.ZonePath {

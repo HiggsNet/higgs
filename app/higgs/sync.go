@@ -20,6 +20,7 @@ import (
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
+	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -69,6 +70,7 @@ type SyncRuntime struct {
 	Config        *syncConfigFile
 	Transport     *gossip.Transport
 	TransportDeps *SyncTransportDeps
+	Observability *observability.PeerObservabilityStore
 
 	// reloadStateStamp is only accessed by the daemon event loop.  It avoids
 	// reopening and decoding the complete state database when nothing changed.
@@ -480,7 +482,7 @@ func syncServe(ctx context.Context) error {
 		case event := <-service.syncEvents:
 			service.handleSyncEvent(ctx, event)
 		case result := <-service.objectPullResults:
-			service.commitObjectPullResult(result)
+			service.observeObjectPullResult(result)
 			service.enqueueObjectPullResult(result)
 		}
 	}
@@ -553,7 +555,7 @@ func syncOnce(peerID string) error {
 			service.handleSyncEvent(ctx, event)
 		case result := <-service.objectPullResults:
 			responderQuietUntil = time.Time{}
-			service.commitObjectPullResult(result)
+			service.observeObjectPullResult(result)
 			service.enqueueObjectPullResult(result)
 		default:
 			deadline := time.Now().Add(100 * time.Millisecond)
@@ -1678,7 +1680,7 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 		if sr.Transport != nil {
 			udpChunkAssemblies.scheduleRepair(message.PeerID, chunk, func(nack *gossip.ObjectChunkNACK) {
 				if err := sr.Transport.Send(message.PeerID, &gossip.Message{Type: gossip.MessageObjectChunkNACK, ObjectChunkNACK: nack}); err == nil {
-					recordDatagramRepairNACK(sr.State, message.PeerID, false)
+					recordDatagramRepairNACK(sr.Observability, message.PeerID, false, sr.now())
 				}
 			})
 		}
@@ -1699,7 +1701,7 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 			return err
 		}
 		clearRejectedDigest(sr.State, message.PeerID, chunk.Zone)
-		recordDatagramChunkFallback(sr.State, message.PeerID)
+		recordDatagramChunkFallback(sr.Observability, message.PeerID, sr.now())
 		sr.tryAdoptAutoJoinAfterSync(message.PeerID, "udp_chunks")
 		sr.logger().Info("sync", "zone_applied", map[string]any{
 			"peer_id":     message.PeerID,
@@ -1720,7 +1722,7 @@ func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 	}
 	chunks := udpSentChunkCache.repair(message.PeerID, message.ObjectChunkNACK, sr.now())
 	if len(chunks) == 0 {
-		recordDatagramRepairNACK(sr.State, message.PeerID, true)
+		recordDatagramRepairNACK(sr.Observability, message.PeerID, true, sr.now())
 		return nil
 	}
 	for _, chunk := range chunks {
@@ -1728,7 +1730,7 @@ func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 			return err
 		}
 	}
-	recordDatagramRepairSent(sr.State, message.PeerID, len(chunks))
+	recordDatagramRepairSent(sr.Observability, message.PeerID, len(chunks), sr.now())
 	return nil
 }
 
@@ -1739,9 +1741,9 @@ func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID st
 	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now(), false, nil)
 }
 
-func sendSnapshotsWithStats(state *stateFile, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) error {
+func sendSnapshotsWithStats(store *observability.PeerObservabilityStore, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) error {
 	diag, err := sendSnapshotsWithDiagnostics(ns, transport, peerID, zones, now, allowChunks, logger)
-	recordDatagramSendDiagnostics(state, peerID, diag, transport.MaxMessageBytes(), now)
+	recordDatagramSendDiagnostics(store, peerID, diag, transport.MaxMessageBytes(), now)
 	return err
 }
 
@@ -2010,135 +2012,124 @@ func messageWireSize(msg *gossip.Message) int {
 	return size
 }
 
-// recordDatagramTooLarge mutates state.SyncPeers. The caller must hold the write
-// lock on state.
-func recordDatagramTooLarge(state *stateFile, peerID, direction, object string, zoneName zone.ZonePath, key string, size, limit int, now time.Time) {
-	if state == nil || peerID == "" {
+func recordDatagramTooLarge(store *observability.PeerObservabilityStore, peerID, direction, object string, zoneName zone.ZonePath, key string, size, limit int, now time.Time) {
+	if store == nil || peerID == "" {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	peerState.DatagramStats.TooLargeDropped++
-	peerState.DatagramStats.LastTooLargeUnix = now.Unix()
-	peerState.DatagramStats.LastTooLargeDirection = direction
-	peerState.DatagramStats.LastTooLargeObject = object
-	peerState.DatagramStats.LastTooLargeZone = string(zoneName)
-	peerState.DatagramStats.LastTooLargeKey = key
-	peerState.DatagramStats.LastTooLargeBytes = size
-	peerState.DatagramStats.LastTooLargeLimit = limit
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.DatagramStats == nil {
+			snapshot.DatagramStats = &datagramStats{}
+		}
+		snapshot.DatagramStats.TooLargeDropped++
+		snapshot.DatagramStats.LastTooLargeUnix = now.Unix()
+		snapshot.DatagramStats.LastTooLargeDirection = direction
+		snapshot.DatagramStats.LastTooLargeObject = object
+		snapshot.DatagramStats.LastTooLargeZone = string(zoneName)
+		snapshot.DatagramStats.LastTooLargeKey = key
+		snapshot.DatagramStats.LastTooLargeBytes = size
+		snapshot.DatagramStats.LastTooLargeLimit = limit
+	})
 }
 
-func recordDatagramSendDiagnostics(state *stateFile, peerID string, diag datagramSendDiagnostics, limit int, now time.Time) {
-	if state == nil || peerID == "" {
+func recordDatagramSendDiagnostics(store *observability.PeerObservabilityStore, peerID string, diag datagramSendDiagnostics, limit int, now time.Time) {
+	if store == nil || peerID == "" {
 		return
 	}
 	for _, oversized := range diag.Oversized {
-		recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, limit, now)
+		recordDatagramTooLarge(store, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, limit, now)
 	}
 	for i := 0; i < diag.ChunkFallbacks; i++ {
-		recordDatagramChunkFallback(state, peerID)
+		recordDatagramChunkFallback(store, peerID, now)
 	}
 }
 
-// recordDatagramChunkFallback mutates state.SyncPeers. The caller must hold the
-// write lock on state.
-func recordDatagramChunkFallback(state *stateFile, peerID string) {
-	if state == nil || peerID == "" {
+func recordDatagramChunkFallback(store *observability.PeerObservabilityStore, peerID string, now time.Time) {
+	if store == nil || peerID == "" {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	peerState.DatagramStats.ChunkFallbacks++
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.DatagramStats == nil {
+			snapshot.DatagramStats = &datagramStats{}
+		}
+		snapshot.DatagramStats.ChunkFallbacks++
+	})
 }
 
-func recordDatagramRepairNACK(state *stateFile, peerID string, ignored bool) {
-	if state == nil || peerID == "" {
+func recordDatagramRepairNACK(store *observability.PeerObservabilityStore, peerID string, ignored bool, now time.Time) {
+	if store == nil || peerID == "" {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	if ignored {
-		peerState.DatagramStats.ChunkRepairIgnored++
-	} else {
-		peerState.DatagramStats.ChunkRepairNACKs++
-	}
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.DatagramStats == nil {
+			snapshot.DatagramStats = &datagramStats{}
+		}
+		if ignored {
+			snapshot.DatagramStats.ChunkRepairIgnored++
+		} else {
+			snapshot.DatagramStats.ChunkRepairNACKs++
+		}
+	})
 }
 
-func recordDatagramRepairSent(state *stateFile, peerID string, chunks int) {
-	if state == nil || peerID == "" || chunks <= 0 {
+func recordDatagramRepairSent(store *observability.PeerObservabilityStore, peerID string, chunks int, now time.Time) {
+	if store == nil || peerID == "" || chunks <= 0 {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	peerState.DatagramStats.ChunkRepairChunks += int64(chunks)
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.DatagramStats == nil {
+			snapshot.DatagramStats = &datagramStats{}
+		}
+		snapshot.DatagramStats.ChunkRepairChunks += int64(chunks)
+	})
 }
 
-func recordCatalogSummary(state *stateFile, peerID string, summary *gossip.CatalogSummary, now time.Time) {
-	if state == nil || peerID == "" || summary == nil {
+func recordCatalogSummary(store *observability.PeerObservabilityStore, peerID string, summary *gossip.CatalogSummary, now time.Time) {
+	if store == nil || peerID == "" || summary == nil {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	peerState.DatagramStats.LastCatalogUnix = now.Unix()
-	peerState.DatagramStats.LastCatalogRootHex = hex.EncodeToString(summary.CatalogRoot)
-	peerState.DatagramStats.LastCatalogZoneCount = summary.ZoneCount
-	peerState.DatagramStats.LastCatalogCursor = summary.NextCursor
-	if summary.FirstPage != nil {
-		peerState.DatagramStats.LastCatalogPageEntries = len(summary.FirstPage.Entries)
-	}
-	peerState.DatagramStats.LastCatalogRejectedReason = ""
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.DatagramStats == nil {
+			snapshot.DatagramStats = &datagramStats{}
+		}
+		snapshot.DatagramStats.LastCatalogUnix = now.Unix()
+		snapshot.DatagramStats.LastCatalogRootHex = hex.EncodeToString(summary.CatalogRoot)
+		snapshot.DatagramStats.LastCatalogZoneCount = summary.ZoneCount
+		snapshot.DatagramStats.LastCatalogCursor = summary.NextCursor
+		if summary.FirstPage != nil {
+			snapshot.DatagramStats.LastCatalogPageEntries = len(summary.FirstPage.Entries)
+		}
+		snapshot.DatagramStats.LastCatalogRejectedReason = ""
+	})
 }
 
-func recordCatalogPage(state *stateFile, peerID string, page *gossip.CatalogPage, now time.Time) {
-	if state == nil || peerID == "" || page == nil {
+func recordCatalogPage(store *observability.PeerObservabilityStore, peerID string, page *gossip.CatalogPage, now time.Time) {
+	if store == nil || peerID == "" || page == nil {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	peerState.DatagramStats.LastCatalogUnix = now.Unix()
-	peerState.DatagramStats.LastCatalogRootHex = hex.EncodeToString(page.CatalogRoot)
-	peerState.DatagramStats.LastCatalogCursor = page.NextCursor
-	peerState.DatagramStats.LastCatalogPageEntries = len(page.Entries)
-	peerState.DatagramStats.LastCatalogRejectedReason = ""
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.DatagramStats == nil {
+			snapshot.DatagramStats = &datagramStats{}
+		}
+		snapshot.DatagramStats.LastCatalogUnix = now.Unix()
+		snapshot.DatagramStats.LastCatalogRootHex = hex.EncodeToString(page.CatalogRoot)
+		snapshot.DatagramStats.LastCatalogCursor = page.NextCursor
+		snapshot.DatagramStats.LastCatalogPageEntries = len(page.Entries)
+		snapshot.DatagramStats.LastCatalogRejectedReason = ""
+	})
 }
 
-func recordCatalogReject(state *stateFile, peerID, cursor, reason string, now time.Time) {
-	if state == nil || peerID == "" {
+func recordCatalogReject(store *observability.PeerObservabilityStore, peerID, cursor, reason string, now time.Time) {
+	if store == nil || peerID == "" {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.DatagramStats == nil {
-		peerState.DatagramStats = &datagramStats{}
-	}
-	peerState.DatagramStats.LastCatalogUnix = now.Unix()
-	peerState.DatagramStats.LastCatalogCursor = cursor
-	peerState.DatagramStats.LastCatalogRejectedReason = reason
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.DatagramStats == nil {
+			snapshot.DatagramStats = &datagramStats{}
+		}
+		snapshot.DatagramStats.LastCatalogUnix = now.Unix()
+		snapshot.DatagramStats.LastCatalogCursor = cursor
+		snapshot.DatagramStats.LastCatalogRejectedReason = reason
+	})
 }
 
 func syncLimits(config *syncConfigFile) gossip.SyncLimits {

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
@@ -289,31 +290,23 @@ func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, p
 func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath, deadline time.Time) (*gossip.ZoneSnapshot, error) {
 	addr := resolvePeerTCPAddr(state, config, peerID)
 	if addr == "" {
-		err := fmt.Errorf("no TCP address for peer %s", peerID)
-		recordObjectPullResult(state, peerID, "zone", path, "", 0, err, true, time.Now())
-		return nil, err
+		return nil, fmt.Errorf("no TCP address for peer %s", peerID)
 	}
-	recordObjectPullAttempt(state, peerID, "zone", path, "", time.Now())
 	resp, err := pullObjectTCPForPeerUntil(peerID, addr, &gossip.ObjectPullRequest{
 		Type: gossip.ObjectPullZone,
 		Zone: path,
 	}, deadline)
 	if err != nil {
-		recordObjectPullResult(state, peerID, "zone", path, "", 0, err, isObjectPullUnreachable(err), time.Now())
 		return nil, err
 	}
-	respBytes := encodedObjectPullResponseSize(resp)
 	if !resp.OK {
 		err := fmt.Errorf("object pull failed: %s", resp.Error)
-		recordObjectPullResult(state, peerID, "zone", path, "", respBytes, err, false, time.Now())
 		return nil, err
 	}
 	if resp.Snapshot == nil {
 		err := fmt.Errorf("object pull returned empty snapshot")
-		recordObjectPullResult(state, peerID, "zone", path, "", respBytes, err, false, time.Now())
 		return nil, err
 	}
-	recordObjectPullResult(state, peerID, "zone", path, "", respBytes, nil, false, time.Now())
 	return resp.Snapshot, nil
 }
 
@@ -348,101 +341,65 @@ func isObjectPullUnreachable(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-// recordObjectPullAttempt records an object pull attempt for a peer. The
-// caller must hold the write lock on state; this function is called from
-// object-pull workers and from the sync round, both of which acquire the lock
-// before mutating peer stats.
-func recordObjectPullAttempt(state *stateFile, peerID, object string, zoneName zone.ZonePath, key string, now time.Time) {
-	if state == nil || peerID == "" {
+func recordObjectPullAttempt(store *observability.PeerObservabilityStore, peerID, object string, zoneName zone.ZonePath, key string, now time.Time) {
+	if store == nil || peerID == "" {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.ObjectPullStats == nil {
-		peerState.ObjectPullStats = &objectPullStats{}
-	}
-	peerState.ObjectPullStats.Attempts++
-	peerState.ObjectPullStats.LastUnix = now.Unix()
-	peerState.ObjectPullStats.LastObject = object
-	peerState.ObjectPullStats.LastZone = string(zoneName)
-	peerState.ObjectPullStats.LastKey = key
-	peerState.ObjectPullStats.LastSourcePeer = peerID
-	peerState.ObjectPullStats.LastUnreachable = false
-	state.SyncPeers[peerID] = peerState
-}
-
-// recordObjectPullResult records the result of an object pull for a peer. The
-// caller must hold the write lock on state.
-func recordObjectPullResult(state *stateFile, peerID, object string, zoneName zone.ZonePath, key string, bytes int, err error, unreachable bool, now time.Time) {
-	if state == nil || peerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.ObjectPullStats == nil {
-		peerState.ObjectPullStats = &objectPullStats{}
-	}
-	stats := peerState.ObjectPullStats
-	stats.LastUnix = now.Unix()
-	stats.LastObject = object
-	stats.LastZone = string(zoneName)
-	stats.LastKey = key
-	stats.LastBytes = bytes
-	stats.LastSourcePeer = peerID
-	stats.LastUnreachable = unreachable
-	if err != nil {
-		stats.Failures++
-		stats.LastError = err.Error()
-		if unreachable {
-			stats.LargeObjectUnreachable++
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.ObjectPullStats == nil {
+			snapshot.ObjectPullStats = &objectPullStats{}
 		}
-	} else {
-		stats.Successes++
-		stats.LastError = ""
-	}
-	state.SyncPeers[peerID] = peerState
+		snapshot.ObjectPullStats.Attempts++
+		snapshot.ObjectPullStats.LastUnix = now.Unix()
+		snapshot.ObjectPullStats.LastObject = object
+		snapshot.ObjectPullStats.LastZone = string(zoneName)
+		snapshot.ObjectPullStats.LastKey = key
+		snapshot.ObjectPullStats.LastSourcePeer = peerID
+		snapshot.ObjectPullStats.LastUnreachable = false
+	})
 }
 
-func (d *DaemonService) commitObjectPullAttempt(peerID string, path zone.ZonePath, now time.Time) {
+func recordObjectPullResult(store *observability.PeerObservabilityStore, peerID, object string, zoneName zone.ZonePath, key string, bytes int, err error, unreachable bool, now time.Time) {
+	if store == nil || peerID == "" {
+		return
+	}
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if snapshot.ObjectPullStats == nil {
+			snapshot.ObjectPullStats = &objectPullStats{}
+		}
+		stats := snapshot.ObjectPullStats
+		stats.LastUnix = now.Unix()
+		stats.LastObject = object
+		stats.LastZone = string(zoneName)
+		stats.LastKey = key
+		stats.LastBytes = bytes
+		stats.LastSourcePeer = peerID
+		stats.LastUnreachable = unreachable
+		if err != nil {
+			stats.Failures++
+			stats.LastError = err.Error()
+			if unreachable {
+				stats.LargeObjectUnreachable++
+			}
+		} else {
+			stats.Successes++
+			stats.LastError = ""
+		}
+	})
+}
+
+func (d *DaemonService) observeObjectPullAttempt(peerID string, path zone.ZonePath, now time.Time) {
+	if d == nil {
+		return
+	}
+	recordObjectPullAttempt(d.PeerObservability, peerID, "zone", path, "", now)
+}
+
+func (d *DaemonService) observeObjectPullResult(result ObjectPullResult) {
 	if d == nil || d.Sync == nil {
 		return
 	}
-	if d.StateStore == nil {
-		return
-	}
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		recordObjectPullAttempt(state, peerID, "zone", path, "", now)
-		return nil
-	}); err != nil {
-		d.logWarn("sync", "object_pull_attempt_commit_failed", map[string]any{
-			"peer_id": peerID,
-			"zone":    path,
-			"error":   err,
-		})
-		return
-	}
-	d.installCommittedSnapshot()
-}
-
-func (d *DaemonService) commitObjectPullResult(result ObjectPullResult) {
-	if d == nil || d.Sync == nil {
-		return
-	}
-	if d.StateStore == nil {
-		return
-	}
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		recordObjectPullResult(state, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
-		return nil
-	}); err != nil {
-		d.logWarn("sync", "object_pull_result_commit_failed", map[string]any{
-			"peer_id": result.PeerID,
-			"zone":    result.Zone,
-			"error":   err,
-		})
-		return
-	}
-	d.installCommittedSnapshot()
+	recordObjectPullResult(d.PeerObservability, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
 }
 
 func (d *DaemonService) installCommittedSnapshot() {

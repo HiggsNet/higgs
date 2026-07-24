@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -88,10 +89,11 @@ func TestSendSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("node-b.catofes.", []*net.UDPAddr{transport.LocalAddr()})
 
-	if err := sendSnapshotsWithStats(state, state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false, nil); err != nil {
+	store := observability.NewPeerObservabilityStore(8, time.Hour)
+	if err := sendSnapshotsWithStats(store, state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false, nil); err != nil {
 		t.Fatalf("sendSnapshotsWithStats: %v", err)
 	}
-	if peer, ok := state.SyncPeers["node-b.catofes."]; ok && peer.DatagramStats != nil && peer.DatagramStats.TooLargeDropped != 0 {
+	if peer, ok := store.Snapshot("node-b.catofes.", now); ok && peer.DatagramStats != nil && peer.DatagramStats.TooLargeDropped != 0 {
 		t.Fatalf("datagram stats = %#v, want no record payload accounting for hint-only announce", peer.DatagramStats)
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
+	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
@@ -217,10 +218,14 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
 	}
 	peerSet := inspectPeerSetInput(state, d.Sync.Config, d.Sync.now())
+	observabilitySnapshots := d.peerObservabilitySnapshots()
+	for peerID := range observabilitySnapshots {
+		peerSet.RuntimeIDs = append(peerSet.RuntimeIDs, peerID)
+	}
 	peerIDs := inspect.BuildPeerIDs(peerSet)
 	// Single peer detail
 	if peerFilter != "" {
-		ps := state.SyncPeers[peerFilter]
+		ps := d.mergePeerObservability(state.SyncPeers[peerFilter], observabilitySnapshots[peerFilter])
 		if !inspect.PeerKnown(peerSet, peerFilter) {
 			return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 		}
@@ -239,7 +244,7 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 			continue
 		}
 		seen[id] = true
-		ps := state.SyncPeers[id]
+		ps := d.mergePeerObservability(state.SyncPeers[id], observabilitySnapshots[id])
 		peers = append(peers, inspecthttp.PeerFromInputs(
 			id,
 			bootstrapAddrForPeer(d.Sync.Config, id),
@@ -248,6 +253,28 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 		))
 	}
 	return inspecthttp.PeersResponse{Peers: peers}, nil
+}
+
+func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerSnapshot {
+	if d == nil || d.PeerObservability == nil {
+		return nil
+	}
+	now := time.Now()
+	if d.Sync != nil {
+		now = d.Sync.now()
+	}
+	return d.PeerObservability.Snapshots(now)
+}
+
+func (d *DaemonService) mergePeerObservability(state syncPeerState, snapshot observability.PeerSnapshot) syncPeerState {
+	if d == nil || d.PeerObservability == nil {
+		return state
+	}
+	// Legacy state files may still contain these fields. A running daemon
+	// deliberately ignores them so diagnostics reset on restart.
+	state.DatagramStats = snapshot.DatagramStats
+	state.ObjectPullStats = snapshot.ObjectPullStats
+	return state
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {

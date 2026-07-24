@@ -209,9 +209,7 @@ func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
 	if err != nil {
 		return err
 	}
-	d.recordSyncPeerState(peerID, "catalog_summary", func(state *stateFile) {
-		recordCatalogSummary(state, peerID, summary, d.Sync.now())
-	})
+	recordCatalogSummary(d.PeerObservability, peerID, summary, d.Sync.now())
 	d.sendSyncMessage(peerID, &gossip.Message{
 		Type: gossip.MessagePong,
 		Pong: &gossip.Pong{Summary: summary},
@@ -350,10 +348,9 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 	budget := d.syncDatagramBudget()
 	page, err := gossip.CatalogPageFor(state.Network, cursor, budget)
 	if err != nil {
-		d.recordSyncPeerState(peerID, "catalog_page_reject", func(state *stateFile) {
-			recordDatagramTooLarge(state, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
-			recordCatalogReject(state, peerID, cursor, gossip.RejectReason(err), d.Sync.now())
-		})
+		now := d.Sync.now()
+		recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
+		recordCatalogReject(d.PeerObservability, peerID, cursor, gossip.RejectReason(err), now)
 		d.logWarn("sync", "catalog_page_failed", map[string]any{
 			"peer_id": peerID,
 			"cursor":  cursor,
@@ -362,9 +359,7 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 		})
 		return nil
 	}
-	d.recordSyncPeerState(peerID, "catalog_page", func(state *stateFile) {
-		recordCatalogPage(state, peerID, page, d.Sync.now())
-	})
+	recordCatalogPage(d.PeerObservability, peerID, page, d.Sync.now())
 	d.sendSyncMessage(peerID, &gossip.Message{
 		Type:        gossip.MessageCatalogPage,
 		CatalogPage: page,
@@ -409,9 +404,7 @@ func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath
 	})
 	now := d.Sync.now()
 	diag, err := sendSnapshotsWithDiagnostics(state.Network, d.Sync.Transport, peerID, []zone.ZonePath{path}, now, true, d.Sync.logger())
-	d.recordSyncPeerState(peerID, "chunk_fallback_diagnostics", func(state *stateFile) {
-		recordDatagramSendDiagnostics(state, peerID, diag, d.syncDatagramBudget(), now)
-	})
+	recordDatagramSendDiagnostics(d.PeerObservability, peerID, diag, d.syncDatagramBudget(), now)
 	return err
 }
 
@@ -431,9 +424,7 @@ func (d *DaemonService) respondAnnounceSnapshotsFromState(state *stateFile, peer
 	}
 	plan := planSnapshotDatagrams(state.Network, zones, budget, d.Sync.now())
 	for _, oversized := range plan.Oversized {
-		d.recordSyncPeerState(peerID, "datagram_too_large", func(state *stateFile) {
-			recordDatagramTooLarge(state, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
-		})
+		recordDatagramTooLarge(d.PeerObservability, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, d.Sync.now())
 		d.logDebug("transport", "datagram_too_large", map[string]any{
 			"peer_id": peerID,
 			"object":  oversized.Object,
@@ -482,24 +473,18 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	case *PongReceivedEvent:
 		if e.Pong != nil {
 			if e.Pong.Summary != nil {
-				d.recordSyncPeerState(peerID, "catalog_summary", func(state *stateFile) {
-					recordCatalogSummary(state, peerID, e.Pong.Summary, d.Sync.now())
-				})
+				recordCatalogSummary(d.PeerObservability, peerID, e.Pong.Summary, d.Sync.now())
 			}
 		}
 	case *CatalogSummaryReceivedEvent:
-		d.recordSyncPeerState(peerID, "catalog_summary", func(state *stateFile) {
-			recordCatalogSummary(state, peerID, e.Summary, d.Sync.now())
-		})
+		recordCatalogSummary(d.PeerObservability, peerID, e.Summary, d.Sync.now())
 	case *CatalogPageReceivedEvent:
 		snapshot, _, _ := d.snapshotState()
 		if snapshot != nil && snapshot.Network != nil {
 			e.LocalEntries = gossip.ZoneDigests(snapshot.Network)
 			e.Page = filterRemoteCatalogPage(snapshot, peerID, e.Page, d.Sync.now())
 		}
-		d.recordSyncPeerState(peerID, "catalog_page", func(state *stateFile) {
-			recordCatalogPage(state, peerID, e.Page, d.Sync.now())
-		})
+		recordCatalogPage(d.PeerObservability, peerID, e.Page, d.Sync.now())
 	}
 	oldState := session.State
 	if _, ok := event.(*RoundTimeoutEvent); ok {
@@ -769,10 +754,9 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 			}
 			page, err := gossip.CatalogPageFor(stateSnapshot.Network, a.Cursor, budget)
 			if err != nil {
-				d.recordSyncPeerState(peerID, "catalog_page_reject", func(state *stateFile) {
-					recordDatagramTooLarge(state, peerID, "send", "catalog_page", "", "", 0, budget, d.Sync.now())
-					recordCatalogReject(state, peerID, a.Cursor, gossip.RejectReason(err), d.Sync.now())
-				})
+				now := d.Sync.now()
+				recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
+				recordCatalogReject(d.PeerObservability, peerID, a.Cursor, gossip.RejectReason(err), now)
 				d.logWarn("sync", "catalog_page_failed", map[string]any{
 					"peer_id": peerID,
 					"cursor":  a.Cursor,
@@ -780,9 +764,7 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 				})
 				continue
 			}
-			d.recordSyncPeerState(peerID, "catalog_page", func(state *stateFile) {
-				recordCatalogPage(state, peerID, page, d.Sync.now())
-			})
+			recordCatalogPage(d.PeerObservability, peerID, page, d.Sync.now())
 			d.sendSyncMessage(peerID, &gossip.Message{
 				Type:        gossip.MessageCatalogPage,
 				CatalogPage: page,
@@ -849,7 +831,7 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 	if state == nil {
 		err := fmt.Errorf("no committed state for peer %s", peerID)
 		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.commitObjectPullResult(result)
+		d.observeObjectPullResult(result)
 		d.enqueueObjectPullResult(result)
 		return
 	}
@@ -857,15 +839,15 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 	if addr == "" {
 		err := fmt.Errorf("no TCP address for peer %s", peerID)
 		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.commitObjectPullResult(result)
+		d.observeObjectPullResult(result)
 		d.enqueueObjectPullResult(result)
 		return
 	}
-	d.commitObjectPullAttempt(peerID, path, now)
+	d.observeObjectPullAttempt(peerID, path, now)
 	if !d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: peerID, Zone: path, Addr: addr}) {
 		err := errors.New("object pull submit failed")
 		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.commitObjectPullResult(result)
+		d.observeObjectPullResult(result)
 		d.enqueueObjectPullResult(result)
 	}
 }
@@ -898,9 +880,7 @@ func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
 	budget := d.syncDatagramBudget()
 	if size := messageWireSize(msg); size > budget {
 		object := string(msg.Type)
-		d.recordSyncPeerState(peerID, "datagram_too_large", func(state *stateFile) {
-			recordDatagramTooLarge(state, peerID, "send", object, "", "", size, budget, d.Sync.now())
-		})
+		recordDatagramTooLarge(d.PeerObservability, peerID, "send", object, "", "", size, budget, d.Sync.now())
 		d.logWarn("transport", "datagram_too_large", map[string]any{
 			"peer_id": peerID,
 			"type":    msg.Type,

@@ -225,7 +225,7 @@ func TestResolvePeerTCPAddrPrefersObservedOverPrivateSignedEndpoint(t *testing.T
 	}
 }
 
-func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
+func TestOfflineObjectPullDoesNotPersistDiagnostics(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Lock()
 	defer state.Unlock()
@@ -233,19 +233,12 @@ func TestObjectPullRecordsUnreachablePeer(t *testing.T) {
 	if err == nil {
 		t.Fatalf("tryObjectPullTCP succeeded without a TCP address")
 	}
-	stats := state.SyncPeers["node-b.catofes."].ObjectPullStats
-	if stats == nil {
-		t.Fatalf("object pull stats missing")
-	}
-	if stats.LargeObjectUnreachable != 1 || !stats.LastUnreachable {
-		t.Fatalf("unreachable stats = %#v", stats)
-	}
-	if stats.LastObject != "zone" || stats.LastZone != "node-b.catofes." || stats.LastError == "" {
-		t.Fatalf("last object stats = %#v", stats)
+	if stats := state.SyncPeers["node-b.catofes."].ObjectPullStats; stats != nil {
+		t.Fatalf("offline object pull persisted diagnostics: %#v", stats)
 	}
 }
 
-func TestCommitObjectPullResultUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestObjectPullResultUsesObservabilityStoreWhileLiveStateLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(7100, 0)
 	rt := &Runtime{
@@ -257,10 +250,11 @@ func TestCommitObjectPullResultUsesStateStoreWhileLiveStateLocked(t *testing.T) 
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newDaemonService(rt, state, config, time.Second)
+	beforeRevision := service.StateStore.Meta().Revision
 
 	state.Lock()
 	unlock := state.Unlock
-	service.commitObjectPullResult(ObjectPullResult{
+	service.observeObjectPullResult(ObjectPullResult{
 		PeerID:      "node-b.catofes.",
 		Zone:        "node-b.catofes.",
 		Bytes:       4096,
@@ -268,17 +262,23 @@ func TestCommitObjectPullResultUsesStateStoreWhileLiveStateLocked(t *testing.T) 
 	})
 	unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
-	stats := snapshot.SyncPeers["node-b.catofes."].ObjectPullStats
+	snapshot, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)
+	if !ok {
+		t.Fatal("object pull observability snapshot missing")
+	}
+	stats := snapshot.ObjectPullStats
 	if stats == nil {
-		t.Fatal("object pull stats missing from committed snapshot")
+		t.Fatal("object pull stats missing from observability snapshot")
 	}
 	if stats.Successes != 1 || stats.LastBytes != 4096 || stats.LastZone != "node-b.catofes." {
 		t.Fatalf("object pull stats = %+v, want committed success result", stats)
 	}
+	if after := service.StateStore.Meta().Revision; after != beforeRevision {
+		t.Fatalf("state revision changed for object pull diagnostics: before=%d after=%d", beforeRevision, after)
+	}
 }
 
-func TestSubmitObjectPullNoAddressUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileLiveStateLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(7200, 0)
 	rt := &Runtime{
@@ -290,22 +290,29 @@ func TestSubmitObjectPullNoAddressUsesStateStoreWhileLiveStateLocked(t *testing.
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newDaemonService(rt, state, config, time.Second)
+	beforeRevision := service.StateStore.Meta().Revision
 
 	state.Lock()
 	unlock := state.Unlock
 	service.submitObjectPull(context.Background(), "node-b.catofes.", "node-b.catofes.", now)
-	if got := service.currentState(); got == state {
-		t.Fatalf("live state pointer did not install committed snapshot")
+	if got := service.currentState(); got != state {
+		t.Fatalf("live state pointer changed for diagnostics-only update")
 	}
 	unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
-	stats := snapshot.SyncPeers["node-b.catofes."].ObjectPullStats
+	snapshot, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)
+	if !ok {
+		t.Fatal("object pull observability snapshot missing")
+	}
+	stats := snapshot.ObjectPullStats
 	if stats == nil {
-		t.Fatal("object pull stats missing from committed snapshot")
+		t.Fatal("object pull stats missing from observability snapshot")
 	}
 	if stats.Failures != 1 || stats.LargeObjectUnreachable != 1 || !stats.LastUnreachable {
 		t.Fatalf("object pull stats = %+v, want committed unreachable failure", stats)
+	}
+	if after := service.StateStore.Meta().Revision; after != beforeRevision {
+		t.Fatalf("state revision changed for object pull diagnostics: before=%d after=%d", beforeRevision, after)
 	}
 }
 
@@ -326,7 +333,7 @@ func TestObjectPullClientTimeoutHonorsOuterDeadline(t *testing.T) {
 	}
 }
 
-func TestObjectPullExpiredDeadlineRecordsUnreachable(t *testing.T) {
+func TestOfflineObjectPullExpiredDeadlineDoesNotPersistDiagnostics(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	config := &syncConfigFile{
 		Bootstrap: []syncConfigPeer{
@@ -340,9 +347,8 @@ func TestObjectPullExpiredDeadlineRecordsUnreachable(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("tryObjectPullTCPUntil error = %v, want DeadlineExceeded", err)
 	}
-	stats := state.SyncPeers["node-b.catofes."].ObjectPullStats
-	if stats == nil || stats.LargeObjectUnreachable != 1 || !stats.LastUnreachable {
-		t.Fatalf("deadline unreachable stats = %#v", stats)
+	if stats := state.SyncPeers["node-b.catofes."].ObjectPullStats; stats != nil {
+		t.Fatalf("expired offline pull persisted diagnostics: %#v", stats)
 	}
 }
 

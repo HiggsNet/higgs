@@ -214,10 +214,15 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 		ObservedAddr:         "198.51.100.9:33434",
 		ObservedSource:       "verified_packet",
 		ObservedGraceAddrs:   []observedGraceAddrState{{Addr: "198.51.100.8:33434", UntilUnix: 1100}},
-		DatagramStats:        &datagramStats{ChunkFallbacks: 2},
-		ObjectPullStats:      &objectPullStats{Attempts: 3, Successes: 2},
 		RejectedDigests:      map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
 	}
+	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)
+	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)
+	recordObjectPullAttempt(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", now)
+	recordObjectPullAttempt(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", now)
+	recordObjectPullAttempt(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", now)
+	recordObjectPullResult(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", 0, nil, false, now)
+	recordObjectPullResult(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", 0, nil, false, now)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers/node-b.catofes.", nil)
 	rr := httptest.NewRecorder()
@@ -235,6 +240,14 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	}
 	if data["last_update_source"] != "announce" || data["last_relay_suppression"] != "relay_fanout_limited" {
 		t.Fatalf("peer diagnostics missing: %#v", data)
+	}
+	datagram := data["datagram_stats"].(map[string]any)
+	if datagram["chunk_fallbacks"] != float64(2) {
+		t.Fatalf("datagram_stats = %#v, want chunk_fallbacks=2", datagram)
+	}
+	objectPull := data["object_pull_stats"].(map[string]any)
+	if objectPull["attempts"] != float64(3) || objectPull["successes"] != float64(2) {
+		t.Fatalf("object_pull_stats = %#v, want attempts=3 successes=2", objectPull)
 	}
 	endpoints := data["endpoints"].([]any)
 	if len(endpoints) < 3 {
