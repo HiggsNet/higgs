@@ -994,8 +994,12 @@ func peerChainVerified(state *stateFile, peerID string, now time.Time) bool {
 	if state.ManagedZone == path {
 		return false
 	}
-	configureValidation(state.Network)
-	return higgscrypto.VerifyChain(state.Network, path, now) == nil
+	// Validation hooks are runtime-only fields. Configure them on a shallow
+	// Network root so callers using an immutable StateStore view do not mutate
+	// the structurally shared committed Network.
+	network := *state.Network
+	configureValidation(&network)
+	return higgscrypto.VerifyChain(&network, path, now) == nil
 }
 
 // seedObservedPeerPaths mutates transport observed paths based on state.SyncPeers.

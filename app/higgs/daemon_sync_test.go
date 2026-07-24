@@ -163,6 +163,7 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	}
 	service.syncSessions[peerID] = session
 
+	before := service.StateStore.Meta().Revision
 	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
 		Type:             gossip.MessageFetchCatalogPage,
 		PeerID:           peerID,
@@ -177,7 +178,11 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	if got := len(service.syncEvents); got != 0 {
 		t.Fatalf("fetch catalog page queued %d sync events, want none", got)
 	}
+	if after := service.StateStore.Meta().Revision; after != before+1 {
+		t.Fatalf("fetch catalog page state revision = %d, want one packet commit after %d", after, before)
+	}
 
+	before = service.StateStore.Meta().Revision
 	err = service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
 		Type:      gossip.MessageFetchZone,
 		PeerID:    peerID,
@@ -191,6 +196,9 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	}
 	if got := len(service.syncEvents); got != 0 {
 		t.Fatalf("fetch zone queued %d sync events, want none", got)
+	}
+	if after := service.StateStore.Meta().Revision; after != before+1 {
+		t.Fatalf("fetch zone state revision = %d, want one packet commit after %d", after, before)
 	}
 }
 
@@ -280,6 +288,88 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	}
 	if peerState.BackoffUntilUnix != 0 {
 		t.Fatalf("BackoffUntilUnix = %d, want 0", peerState.BackoffUntilUnix)
+	}
+}
+
+func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	service := newDaemonService(&Runtime{
+		Config: defaultAppConfig(),
+		Clock:  func() time.Time { return now },
+	}, state, config, time.Second)
+
+	summary, err := gossip.CatalogSummaryFor(state.Network, service.syncDatagramBudget())
+	if err != nil {
+		t.Fatalf("CatalogSummaryFor: %v", err)
+	}
+	before := service.StateStore.Meta().Revision
+	if err := service.maybeShortcutSyncFromPingSummary("peer-a", summary); err != nil {
+		t.Fatalf("maybeShortcutSyncFromPingSummary: %v", err)
+	}
+	after := service.StateStore.Meta().Revision
+	if after != before+1 {
+		t.Fatalf("state revision = %d, want one commit after %d", after, before)
+	}
+}
+
+func TestDaemonHintedSessionCommitsPeerChangesOnce(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	service := newDaemonService(&Runtime{
+		Config: defaultAppConfig(),
+		Clock:  func() time.Time { return now },
+	}, state, config, time.Second)
+
+	before := service.StateStore.Meta().Revision
+	if err := service.startHintedSyncSession("peer-a", "test_hint"); err != nil {
+		t.Fatalf("startHintedSyncSession: %v", err)
+	}
+	after := service.StateStore.Meta().Revision
+	if after != before+1 {
+		t.Fatalf("state revision = %d, want one commit after %d", after, before)
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	peerState := snapshot.SyncPeers["peer-a"]
+	if peerState.LastHintReason != "test_hint" || peerState.ActivePullLastEvent != "hint_queued" {
+		t.Fatalf("peer state = %+v, want hint and active-pull changes", peerState)
+	}
+}
+
+func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "state.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.EnableEventLoopSync(newFakeClock(now))
+
+	peerID := "peer-a"
+	session := NewSyncSession(peerID)
+	if _, err := session.OnEvent(&SyncTimerEvent{
+		PeerID:       peerID,
+		LocalSummary: &gossip.CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 1},
+	}, now); err != nil {
+		t.Fatalf("start sync session: %v", err)
+	}
+	service.syncSessions[peerID] = session
+
+	before := service.StateStore.Meta().Revision
+	service.handleSyncEvent(context.Background(), &RoundTimeoutEvent{PeerID: peerID})
+	after := service.StateStore.Meta().Revision
+	if after != before+1 {
+		t.Fatalf("state revision = %d, want one event commit after %d", after, before)
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	peerState := snapshot.SyncPeers[peerID]
+	if peerState.ActivePullLastEvent != "round_timeout" || peerState.FailureCount != 1 || peerState.LastError != "round timeout" {
+		t.Fatalf("peer state = %+v, want active-pull, backoff, and completion changes", peerState)
 	}
 }
 

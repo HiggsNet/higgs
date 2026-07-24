@@ -1371,7 +1371,13 @@ func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Con
 		return errors.New("packet event is nil")
 	}
 	err := d.handlePacketEventSyncSession(packet, ctx)
-	d.publishCommittedStateSnapshot()
+	// Object chunk assembly is the only remaining packet path that can mutate
+	// d.Sync.State directly. All other packet control-state writes already go
+	// through StateStore and install their committed snapshot, so republishing
+	// them here would clone and commit the same complete state a second time.
+	if packet.Message.Type == gossip.MessageObjectChunk {
+		d.publishCommittedStateSnapshot()
+	}
 	return err
 }
 

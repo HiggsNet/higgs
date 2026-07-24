@@ -24,3 +24,52 @@ func cloneStateFile(s *stateFile) *stateFile {
 	}
 	return &out
 }
+
+// cloneStateFileRootSharingChildren constructs a new immutable state root
+// without copying the mutex. Its child values remain shared and must be treated
+// as read-only; typed COW mutations replace the specific child they own before
+// committing this root.
+func cloneStateFileRootSharingChildren(s *stateFile) *stateFile {
+	if s == nil {
+		return &stateFile{}
+	}
+	return &stateFile{
+		ManagedZone:       s.ManagedZone,
+		IdentityKeyPath:   s.IdentityKeyPath,
+		RootPrivateKey:    s.RootPrivateKey,
+		ZonePrivateKey:    s.ZonePrivateKey,
+		Network:           s.Network,
+		SyncPeers:         s.SyncPeers,
+		IPsecTransportKey: s.IPsecTransportKey,
+		IPsecPortRecord:   s.IPsecPortRecord,
+		LinkInstances:     s.LinkInstances,
+		IPsecReconcile:    s.IPsecReconcile,
+		RoutingReconcile:  s.RoutingReconcile,
+		FirewallReconcile: s.FirewallReconcile,
+		EndpointACLs:      s.EndpointACLs,
+		BirdInstances:     s.BirdInstances,
+		Admission:         s.Admission,
+	}
+}
+
+func cloneSyncPeerState(in syncPeerState) syncPeerState {
+	out := in
+	if in.ObservedGraceAddrs != nil {
+		out.ObservedGraceAddrs = append([]observedGraceAddrState(nil), in.ObservedGraceAddrs...)
+	}
+	if in.RejectedDigests != nil {
+		out.RejectedDigests = make(map[string]rejectedDigestState, len(in.RejectedDigests))
+		for key, rejected := range in.RejectedDigests {
+			out.RejectedDigests[key] = rejected
+		}
+	}
+	if in.DatagramStats != nil {
+		stats := *in.DatagramStats
+		out.DatagramStats = &stats
+	}
+	if in.ObjectPullStats != nil {
+		stats := *in.ObjectPullStats
+		out.ObjectPullStats = &stats
+	}
+	return out
+}

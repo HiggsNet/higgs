@@ -97,9 +97,10 @@
     - 第一版 diagnostics 不随主 state 持久化，daemon restart 后计数归零；旧 state 中遗留字段可兼容读取但不再回写。live observer/debug 合并新 store，offline DB 诊断允许显示 unavailable/reset。若以后确有历史需求，再低频批量写独立 spool/metrics store，不能重新推动主 revision。
     - 将 `recordDatagram*`、`recordCatalog*`、`recordObjectPull*` 等调用改写为 observability store 更新后，不得调用 `StateStore.Update`、install、publish 或 `SaveState`。补充并发 snapshot、peer 清理、restart reset、旧 state 兼容以及 CLI/HTTP schema 测试，再跑相同负载 perf 判断剩余 `recordSyncPeerState` 热点。
 
-  - [ ] **7.11.1 合并同一事件内的重复 peer mutation**
+  - [x] **7.11.1 合并同一事件内的重复 peer mutation**
     - 在纯 diagnostics 迁出后，合并同一个 sync/packet 事件内剩余的 `sync_hint`、`peer_sync`、observed path、backoff/rejected digest 等控制状态写入，尽量一次提交；observability 更新独立聚合，不再参与 committed transaction。
     - 不改变状态机、control/observer DTO、落盘格式和 wire 格式；先做调用点收敛，不修改通用 `StateStore.Update`。
+    - sync event 现在用事件内 mutation batch 按原顺序聚合 active-pull、backoff 和 completion，并在 `SaveState` 前 flush；hint shortcut 与 hinted-session 初始化也各自合并为一次提交。fetch responder packet 将 observed-path 与 read-only responder 合并，除仍会直接 apply Network 的 object-chunk 外，不再在 packet 末尾重复 publish 已安装的 committed snapshot。
 
   - [ ] **7.11.2 实现 `UpdateSyncPeer` 局部 COW**
     - 保留全局 revision/CAS；新版本只构造新的 state root，复制 `SyncPeers` map，并深拷贝目标 peer 中会修改的 map、slice、pointer；`Network` 和其他未修改块只读共享。
@@ -107,6 +108,7 @@
     - stale 时只允许有界重试。mutation 必须纯粹且可重放：不得在 callback 内执行 transport、网络、磁盘、`SaveState`、事件广播或外部计数；时间/随机输入在重试外捕获；依赖 Network 的判断每次基于最新 committed revision 重新计算。
     - 第一阶段继续保留 `Snapshot()` 和 `installCommittedSnapshot` 的完整 clone，让 `d.Sync.State` 仍是与 committed 隔离的可变副本；先消除 `recordSyncPeerState` 中 `BeginUpdate` + `Commit` 的全量 JSON clone，不同时改 live-state 一致性模型。
     - 只迁移剩余高频且确实影响控制行为的 `SyncPeers` 写路径，例如 backoff、observed/discovered path、relay throttle 和 rejected digest；peer repair、chunk fallback/NACK 等纯诊断应已在 7.11.0 迁出。`updateDiscoveredPeers` 必须拆成“从 immutable view 计算变化 → 提交 peer mutation → commit 成功后更新 transport”，避免 CAS retry 重复 transport 副作用。
+    - 已完成第一部分：`UpdateSyncPeer` 使用最多 4 次全局 revision/CAS 重试，只复制 state root、`SyncPeers` map 和目标 peer，并在 commit 前仅二次复制目标 peer 来隔离 retained callback；sync event/hint/backoff/relay/read-only responder/observed-path 已切换到局部 COW，`Snapshot()`/install 仍按计划保留完整 clone。剩余阻塞项是拆分 `updateDiscoveredPeers` 的 transport 副作用，完成后再勾选本阶段。
 
   - [ ] **7.11.3 阻断 daemon 自写导致的 state reload**
     - 现有 `reloadStateIfChanged` 已用同一文件、mtime、size 的文件标记跳过无变化的 `BoltStore.LoadNetwork`；文件原子替换、读期间变化或 `stat` 失败时继续保守重读。

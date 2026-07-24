@@ -88,10 +88,23 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 
 func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ context.Context) error {
 	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil {
-		d.recordSyncPeerState(packet.Message.PeerID, "observed_path", func(state *stateFile) {
-			recordVerifiedObservedPath(state, packet.Message.PeerID, packet.Addr, packet.Message.Type, d.Sync.now())
-		})
-		d.Sync.seedObservedPeerPath(packet.Message.PeerID)
+		msg := packet.Message
+		now := d.Sync.now()
+		mutations := []func(*stateFile){
+			func(state *stateFile) {
+				recordVerifiedObservedPath(state, msg.PeerID, packet.Addr, msg.Type, now)
+			},
+		}
+		label := "observed_path"
+		if kind, zoneName, ok := packetReadOnlyResponder(msg); ok &&
+			(kind != "chunk_fallback" || d.Sync.Transport != nil) {
+			label += ",read_only_responder"
+			mutations = append(mutations, func(state *stateFile) {
+				recordReadOnlyResponder(state, msg.PeerID, kind, zoneName, now)
+			})
+		}
+		d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...)
+		d.Sync.seedObservedPeerPath(msg.PeerID)
 	}
 	event := routePacket(packet, d.syncSessions)
 	switch ev := event.(type) {
@@ -129,14 +142,14 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 			// oversized zone snapshots into UDP object chunks.
 			// Keep them out of the active pull FSM as a read-only responder path.
 			if msg.FetchZone.ChunkFallback {
-				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
+				return d.respondFetchZoneChunksWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
 			}
-			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
+			return d.respondFetchZoneWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
 		case gossip.MessageFetchCatalogPage:
 			if msg.FetchCatalogPage == nil {
 				return nil
 			}
-			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
+			return d.respondFetchCatalogPageWithoutStateRecord(msg.PeerID, msg.FetchCatalogPage.Cursor)
 		case gossip.MessageCatalogPage:
 			if msg.CatalogPage == nil {
 				return nil
@@ -177,14 +190,14 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 				return nil
 			}
 			if msg.FetchZone.ChunkFallback {
-				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
+				return d.respondFetchZoneChunksWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
 			}
-			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
+			return d.respondFetchZoneWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
 		case gossip.MessageFetchCatalogPage:
 			if msg.FetchCatalogPage == nil {
 				return nil
 			}
-			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
+			return d.respondFetchCatalogPageWithoutStateRecord(msg.PeerID, msg.FetchCatalogPage.Cursor)
 		case gossip.MessageAnnounce:
 			return d.handleAnnounceHint(msg.PeerID)
 		case gossip.MessageObjectChunkNACK:
@@ -195,6 +208,27 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 	default:
 		return nil
 	}
+}
+
+func packetReadOnlyResponder(msg *gossip.Message) (string, zone.ZonePath, bool) {
+	if msg == nil {
+		return "", "", false
+	}
+	switch msg.Type {
+	case gossip.MessageFetchZone:
+		if msg.FetchZone == nil {
+			return "", "", false
+		}
+		if msg.FetchZone.ChunkFallback {
+			return "chunk_fallback", msg.FetchZone.Zone, true
+		}
+		return "fetch_zone", msg.FetchZone.Zone, true
+	case gossip.MessageFetchCatalogPage:
+		if msg.FetchCatalogPage != nil {
+			return "catalog_page", "", true
+		}
+	}
+	return "", "", false
 }
 
 func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
@@ -249,12 +283,14 @@ func (d *DaemonService) maybeShortcutSyncFromPingSummary(peerID string, remoteSu
 		return d.handleAnnounceHint(peerID)
 	}
 	now := d.Sync.now()
-	d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
-		recordSyncHint(state, peerID, "ping_summary_match", "", true, now)
-	})
-	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
-		recordPeerSyncAt(state, peerID, nil, now)
-	})
+	d.recordSyncPeerStateBatch(peerID, "sync_hint,peer_sync",
+		func(state *stateFile) {
+			recordSyncHint(state, peerID, "ping_summary_match", "", true, now)
+		},
+		func(state *stateFile) {
+			recordPeerSyncAt(state, peerID, nil, now)
+		},
+	)
 	d.logDebug("sync", "ping_summary_shortcut", map[string]any{
 		"peer_id": peerID,
 		"reason":  "catalog_root_match",
@@ -311,12 +347,14 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		delete(d.syncSessions, peerID)
 		return err
 	}
-	d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
-		recordSyncHint(state, peerID, reason, "", true, now)
-	})
-	d.recordSyncPeerState(peerID, "active_pull", func(state *stateFile) {
-		recordSyncActivePull(state, peerID, "hint_queued", d.syncSessions[peerID], now)
-	})
+	d.recordSyncPeerStateBatch(peerID, "sync_hint,active_pull",
+		func(state *stateFile) {
+			recordSyncHint(state, peerID, reason, "", true, now)
+		},
+		func(state *stateFile) {
+			recordSyncActivePull(state, peerID, "hint_queued", d.syncSessions[peerID], now)
+		},
+	)
 	d.logDebug("sync", "hinted_sync_started", map[string]any{
 		"peer_id": peerID,
 		"reason":  reason,
@@ -335,6 +373,14 @@ func (d *DaemonService) postSyncEvent(event SyncEvent) error {
 }
 
 func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
+	return d.respondFetchCatalogPageWithStateRecord(peerID, cursor, true)
+}
+
+func (d *DaemonService) respondFetchCatalogPageWithoutStateRecord(peerID, cursor string) error {
+	return d.respondFetchCatalogPageWithStateRecord(peerID, cursor, false)
+}
+
+func (d *DaemonService) respondFetchCatalogPageWithStateRecord(peerID, cursor string, recordState bool) error {
 	if d == nil || d.Sync == nil {
 		return nil
 	}
@@ -342,9 +388,11 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 	if state == nil || state.Network == nil {
 		return nil
 	}
-	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
-		recordReadOnlyResponder(state, peerID, "catalog_page", "", d.Sync.now())
-	})
+	if recordState {
+		d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
+			recordReadOnlyResponder(state, peerID, "catalog_page", "", d.Sync.now())
+		})
+	}
 	budget := d.syncDatagramBudget()
 	page, err := gossip.CatalogPageFor(state.Network, cursor, budget)
 	if err != nil {
@@ -368,6 +416,14 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 }
 
 func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) error {
+	return d.respondFetchZoneWithStateRecord(peerID, path, true)
+}
+
+func (d *DaemonService) respondFetchZoneWithoutStateRecord(peerID string, path zone.ZonePath) error {
+	return d.respondFetchZoneWithStateRecord(peerID, path, false)
+}
+
+func (d *DaemonService) respondFetchZoneWithStateRecord(peerID string, path zone.ZonePath, recordState bool) error {
 	if d == nil || d.Sync == nil {
 		return nil
 	}
@@ -375,9 +431,11 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 	if state == nil || state.Network == nil {
 		return nil
 	}
-	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
-		recordReadOnlyResponder(state, peerID, "fetch_zone", path, d.Sync.now())
-	})
+	if recordState {
+		d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
+			recordReadOnlyResponder(state, peerID, "fetch_zone", path, d.Sync.now())
+		})
+	}
 	snap, err := gossip.Snapshot(state.Network, path)
 	if err != nil {
 		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
@@ -392,6 +450,14 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 }
 
 func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath) error {
+	return d.respondFetchZoneChunksWithStateRecord(peerID, path, true)
+}
+
+func (d *DaemonService) respondFetchZoneChunksWithoutStateRecord(peerID string, path zone.ZonePath) error {
+	return d.respondFetchZoneChunksWithStateRecord(peerID, path, false)
+}
+
+func (d *DaemonService) respondFetchZoneChunksWithStateRecord(peerID string, path zone.ZonePath, recordState bool) error {
 	if d == nil || d.Sync == nil || d.Sync.Transport == nil {
 		return nil
 	}
@@ -399,9 +465,11 @@ func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath
 	if state == nil || state.Network == nil {
 		return nil
 	}
-	d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
-		recordReadOnlyResponder(state, peerID, "chunk_fallback", path, d.Sync.now())
-	})
+	if recordState {
+		d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
+			recordReadOnlyResponder(state, peerID, "chunk_fallback", path, d.Sync.now())
+		})
+	}
 	now := d.Sync.now()
 	diag, err := sendSnapshotsWithDiagnostics(state.Network, d.Sync.Transport, peerID, []zone.ZonePath{path}, now, true, d.Sync.logger())
 	recordDatagramSendDiagnostics(d.PeerObservability, peerID, diag, d.syncDatagramBudget(), now)
@@ -499,8 +567,12 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 		session.State = SyncSessionFailed
 		session.lastError = err
 	}
-	d.recordSyncPeerState(peerID, "active_pull", func(state *stateFile) {
-		recordSyncActivePull(state, peerID, syncEventName(event), session, d.Sync.now())
+	eventName := syncEventName(event)
+	eventNow := d.Sync.now()
+	activeSession := &SyncSession{State: session.State}
+	mutations := newSyncPeerStateMutationBatch(peerID)
+	mutations.add("active_pull", func(state *stateFile) {
+		recordSyncActivePull(state, peerID, eventName, activeSession, eventNow)
 	})
 	if session.State != oldState {
 		d.logDebug("sync", "session_state_changed", map[string]any{
@@ -512,9 +584,13 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 			"inflight":  len(session.objectPullInflight),
 		})
 	}
-	changed := d.executeSyncActions(ctx, session, actions)
+	changed := d.executeSyncActionsWithMutations(ctx, session, actions, mutations)
 	if session.Done() {
-		d.completeSyncSession(session, changed)
+		mutations.addCompletion(session, eventNow)
+	}
+	mutations.commit(d)
+	if session.Done() {
+		d.completeSyncSessionAfterPeerState(session, changed)
 	}
 }
 
@@ -579,11 +655,21 @@ func syncEventPeerID(event SyncEvent) string {
 }
 
 func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*stateFile)) {
-	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
+	d.recordSyncPeerStateBatch(peerID, label, fn)
+}
+
+func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...func(*stateFile)) {
+	if d == nil || d.Sync == nil || d.StateStore == nil || len(fns) == 0 {
 		return
 	}
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		fn(state)
+	if _, err := d.StateStore.UpdateSyncPeer(peerID, func(peer *syncPeerState) error {
+		state := &stateFile{SyncPeers: map[string]syncPeerState{peerID: *peer}}
+		for _, fn := range fns {
+			if fn != nil {
+				fn(state)
+			}
+		}
+		*peer = state.SyncPeers[peerID]
 		return nil
 	}); err != nil {
 		d.logWarn("sync", "sync_peer_state_commit_failed", map[string]any{
@@ -593,6 +679,86 @@ func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*state
 		})
 	}
 	d.installCommittedSnapshot()
+}
+
+func (d *DaemonService) recordPacketPeerStateBatch(peerID, label string, fns ...func(*stateFile)) {
+	if d == nil || d.Sync == nil || d.StateStore == nil || len(fns) == 0 {
+		return
+	}
+	if _, err := d.StateStore.updateSyncPeerWithView(peerID, func(view syncPeerMutationView, peer *syncPeerState) error {
+		state := &stateFile{
+			ManagedZone: view.ManagedZone,
+			Network:     view.Network,
+			SyncPeers:   map[string]syncPeerState{peerID: *peer},
+		}
+		for _, fn := range fns {
+			if fn != nil {
+				fn(state)
+			}
+		}
+		*peer = state.SyncPeers[peerID]
+		return nil
+	}); err != nil {
+		d.logWarn("sync", "sync_peer_state_commit_failed", map[string]any{
+			"peer_id": peerID,
+			"label":   label,
+			"error":   err,
+		})
+	}
+	d.installCommittedSnapshot()
+}
+
+type syncPeerStateMutation struct {
+	label string
+	apply func(*stateFile)
+}
+
+// syncPeerStateMutationBatch collects the control-state changes caused by one
+// sync event. It preserves mutation order and flushes before persistence, while
+// avoiding a complete state-store transaction for every individual field
+// family.
+type syncPeerStateMutationBatch struct {
+	peerID             string
+	pending            []syncPeerStateMutation
+	completionRecorded bool
+}
+
+func newSyncPeerStateMutationBatch(peerID string) *syncPeerStateMutationBatch {
+	return &syncPeerStateMutationBatch{peerID: peerID}
+}
+
+func (b *syncPeerStateMutationBatch) add(label string, fn func(*stateFile)) {
+	if b == nil || fn == nil {
+		return
+	}
+	b.pending = append(b.pending, syncPeerStateMutation{label: label, apply: fn})
+}
+
+func (b *syncPeerStateMutationBatch) addCompletion(session *SyncSession, now time.Time) {
+	if b == nil || session == nil || b.completionRecorded {
+		return
+	}
+	peerID := session.PeerID
+	lastError := session.lastError
+	b.add("peer_sync", func(state *stateFile) {
+		recordPeerSyncAt(state, peerID, lastError, now)
+	})
+	b.completionRecorded = true
+}
+
+func (b *syncPeerStateMutationBatch) commit(d *DaemonService) {
+	if b == nil || len(b.pending) == 0 || d == nil {
+		return
+	}
+	pending := b.pending
+	b.pending = nil
+	labels := make([]string, 0, len(pending))
+	fns := make([]func(*stateFile), 0, len(pending))
+	for _, mutation := range pending {
+		labels = append(labels, mutation.label)
+		fns = append(fns, mutation.apply)
+	}
+	d.recordSyncPeerStateBatch(b.peerID, strings.Join(labels, ","), fns...)
 }
 
 func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
@@ -659,6 +825,10 @@ func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnaps
 }
 
 func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSession, actions []SyncAction) bool {
+	return d.executeSyncActionsWithMutations(ctx, session, actions, nil)
+}
+
+func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, session *SyncSession, actions []SyncAction, mutations *syncPeerStateMutationBatch) bool {
 	if len(actions) == 0 {
 		return false
 	}
@@ -806,10 +976,24 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSes
 	for _, action := range actions {
 		switch a := action.(type) {
 		case RecordBackoffAction:
-			d.recordSyncPeerState(a.PeerID, "peer_backoff", func(state *stateFile) {
-				recordPeerBackoff(state, a.PeerID, a.Err, now)
-			})
+			if mutations == nil {
+				d.recordSyncPeerState(a.PeerID, "peer_backoff", func(state *stateFile) {
+					recordPeerBackoff(state, a.PeerID, a.Err, now)
+				})
+			} else {
+				actionPeerID := a.PeerID
+				actionErr := a.Err
+				mutations.add("peer_backoff", func(state *stateFile) {
+					recordPeerBackoff(state, actionPeerID, actionErr, now)
+				})
+			}
 		case SaveStateAction:
+			if mutations != nil {
+				if session.Done() {
+					mutations.addCompletion(session, now)
+				}
+				mutations.commit(d)
+			}
 			if err := d.installAndSaveCommittedState(); err != nil {
 				d.logWarn("sync", "save_failed", map[string]any{
 					"peer_id": peerID,
@@ -900,11 +1084,22 @@ func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
 }
 
 func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) {
+	if session == nil {
+		return
+	}
 	peerID := session.PeerID
-	d.timerManager.CancelAll(peerID)
 	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
 		recordPeerSyncAt(state, peerID, session.lastError, d.Sync.now())
 	})
+	d.completeSyncSessionAfterPeerState(session, changed)
+}
+
+func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, changed bool) {
+	if session == nil {
+		return
+	}
+	peerID := session.PeerID
+	d.timerManager.CancelAll(peerID)
 	// Only mark the last-used address as failing for timeout-like errors; do
 	// not penalize the address for internal/event handling failures.
 	if session.lastError != nil && d.Sync.Transport != nil && strings.Contains(session.lastError.Error(), "timeout") {

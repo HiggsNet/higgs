@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
 var errDaemonStateRevisionStale = errors.New("daemon state revision is stale")
+
+const maxSyncPeerUpdateAttempts = 4
 
 type daemonDirtyFlags struct {
 	IPsec    bool `json:"ipsec,omitempty"`
@@ -44,6 +47,11 @@ type DaemonStateUpdate struct {
 	baseRev uint64
 	state   *stateFile
 	closed  bool
+}
+
+type syncPeerMutationView struct {
+	ManagedZone zone.ZonePath
+	Network     *zone.NetworkState
 }
 
 func NewDaemonStateStore(initial *stateFile) *DaemonStateStore {
@@ -164,6 +172,83 @@ func (s *DaemonStateStore) Update(fn func(*stateFile) error) (uint64, error) {
 		return rev, errDaemonStateRevisionStale
 	}
 	return rev, nil
+}
+
+// UpdateSyncPeer applies a replayable mutation to one peer using local
+// copy-on-write. It retains the global revision/CAS ordering while sharing the
+// immutable Network and unrelated state blocks. fn may be called more than once
+// after a stale revision and must not perform external side effects.
+//
+// The mutable peer passed to fn and all of its nested mutable values are
+// detached again before commit, so retaining the callback pointer cannot mutate
+// committed state.
+func (s *DaemonStateStore) UpdateSyncPeer(peerID string, fn func(*syncPeerState) error) (uint64, error) {
+	if s == nil {
+		return 0, errors.New("daemon state store is nil")
+	}
+	if fn == nil {
+		return 0, errors.New("sync peer update function is nil")
+	}
+	return s.updateSyncPeerWithView(peerID, func(_ syncPeerMutationView, peer *syncPeerState) error {
+		return fn(peer)
+	})
+}
+
+// updateSyncPeerWithView additionally supplies the immutable fields needed to
+// derive a peer mutation from the same revision. The view is rebuilt for every
+// CAS retry; callers must not mutate or retain its Network pointer.
+func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPeerMutationView, *syncPeerState) error) (uint64, error) {
+	if s == nil {
+		return 0, errors.New("daemon state store is nil")
+	}
+	if peerID == "" {
+		return 0, errors.New("sync peer id is empty")
+	}
+	if fn == nil {
+		return 0, errors.New("sync peer update function is nil")
+	}
+	var currentRev uint64
+	for attempt := 0; attempt < maxSyncPeerUpdateAttempts; attempt++ {
+		s.mu.RLock()
+		base := s.committed
+		baseRev := s.revision
+		var peer syncPeerState
+		if base != nil && base.SyncPeers != nil {
+			peer = cloneSyncPeerState(base.SyncPeers[peerID])
+		}
+		view := syncPeerMutationView{}
+		if base != nil {
+			view.ManagedZone = base.ManagedZone
+			view.Network = base.Network
+		}
+		s.mu.RUnlock()
+
+		if err := fn(view, &peer); err != nil {
+			return baseRev, err
+		}
+		committedPeer := cloneSyncPeerState(peer)
+
+		next := cloneStateFileRootSharingChildren(base)
+		next.SyncPeers = make(map[string]syncPeerState)
+		if base != nil && base.SyncPeers != nil {
+			next.SyncPeers = make(map[string]syncPeerState, len(base.SyncPeers)+1)
+			for id, state := range base.SyncPeers {
+				next.SyncPeers[id] = state
+			}
+		}
+		next.SyncPeers[peerID] = committedPeer
+
+		s.mu.Lock()
+		if s.revision == baseRev {
+			s.commitLocked(next)
+			currentRev = s.revision
+			s.mu.Unlock()
+			return currentRev, nil
+		}
+		currentRev = s.revision
+		s.mu.Unlock()
+	}
+	return currentRev, errDaemonStateRevisionStale
 }
 
 func (s *DaemonStateStore) CommitIfRevision(rev uint64, fn func(*stateFile) error) (uint64, bool, error) {
