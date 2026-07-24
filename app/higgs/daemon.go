@@ -302,9 +302,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	routingReconcileInterval := d.routingReconcileInterval()
 	nextRoutingReconcile := nextRoutingReconcileTime(d.Sync.now(), routingReconcileInterval)
 	lastObservedDigests := d.zoneDigests()
-	d.Sync.State.Lock()
-	d.Sync.updateDiscoveredPeers()
-	d.Sync.State.Unlock()
+	d.updateDiscoveredPeers()
 	d.logDebug("daemon", "startup_publish_begin", nil)
 	if err := d.Sync.publishEndpointRecord(); err != nil {
 		d.logWarn("endpoint", "startup_publish_failed", map[string]any{"error": err})
@@ -366,7 +364,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			lastObservedDigests = gossip.ZoneDigests(latest.Network)
 			nextSync = now
 			forceSync = true
-			d.Sync.updateDiscoveredPeers()
+			d.updateDiscoveredPeers()
 			d.notifyStateChanged()
 		}
 		if !now.Before(nextEndpointPublish) {
@@ -1153,7 +1151,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	d.ControlSocketPath = socketPath
 	d.replaceCommittedState(latest)
 	if d.Sync.Transport != nil {
-		d.Sync.updateDiscoveredPeers()
+		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	d.recoverRoutingOnStart(context.Background())
@@ -1229,7 +1227,7 @@ func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
 		return err
 	}
 	if d.Sync.Transport != nil {
-		d.Sync.updateDiscoveredPeers()
+		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	return nil
@@ -1261,7 +1259,7 @@ func (d *DaemonService) runStateStoreWriteIfChanged(fn func(*stateFile) (bool, e
 		return false, err
 	}
 	if d.Sync.Transport != nil {
-		d.Sync.updateDiscoveredPeers()
+		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	return true, nil
@@ -1306,7 +1304,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 		d.PeerObservability.Delete(peerID)
 	}
 	if d.Sync.Transport != nil {
-		d.Sync.updateDiscoveredPeers()
+		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	return plan, nil
@@ -1349,7 +1347,7 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 	}
 	d.replaceCommittedState(latest)
 	if d.Sync.Transport != nil {
-		d.Sync.updateDiscoveredPeers()
+		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	return result, nil
@@ -1387,7 +1385,7 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 		return fmt.Errorf("daemon reload: %w", err)
 	}
 	d.replaceCommittedState(latest)
-	d.Sync.updateDiscoveredPeers()
+	d.updateDiscoveredPeers()
 	return d.handleSyncTimerEventLoop(ctx, force)
 }
 
@@ -1470,7 +1468,7 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 		return 0, err
 	}
 	if d.Sync.Transport != nil {
-		d.Sync.updateDiscoveredPeers()
+		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	return version, nil

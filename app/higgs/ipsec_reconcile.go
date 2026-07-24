@@ -681,8 +681,8 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, baseInstances map
 	}
 	committedState, _, _ := d.snapshotState()
 	d.installCurrentStateSnapshot(committedState)
-	if d.Sync != nil && d.Sync.App != nil {
-		return d.Sync.App.SaveState(committedState)
+	if d.Sync != nil {
+		return d.Sync.saveStateSnapshot(committedState)
 	}
 	return saveState(committedState)
 }
@@ -767,8 +767,8 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 	}
 	committedState, _, _ := d.snapshotState()
 	d.installCurrentStateSnapshot(committedState)
-	if d.Sync != nil && d.Sync.App != nil {
-		if saveErr := d.Sync.App.SaveState(committedState); saveErr != nil {
+	if d.Sync != nil {
+		if saveErr := d.Sync.saveStateSnapshot(committedState); saveErr != nil {
 			d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": saveErr})
 		}
 	}
@@ -795,8 +795,8 @@ func (d *DaemonService) recordStaleIPsecReconcileResult(summary *ipsecReconcileS
 	}
 	committedState, _, _ := d.snapshotState()
 	d.installCurrentStateSnapshot(committedState)
-	if d.Sync != nil && d.Sync.App != nil {
-		return d.Sync.App.SaveState(committedState)
+	if d.Sync != nil {
+		return d.Sync.saveStateSnapshot(committedState)
 	}
 	return saveState(committedState)
 }
@@ -804,8 +804,8 @@ func (d *DaemonService) recordStaleIPsecReconcileResult(summary *ipsecReconcileS
 func (d *DaemonService) installAndSaveCommittedState() error {
 	committedState, _, _ := d.snapshotState()
 	d.installCurrentStateSnapshot(committedState)
-	if d.Sync != nil && d.Sync.App != nil {
-		return d.Sync.App.SaveState(committedState)
+	if d.Sync != nil {
+		return d.Sync.saveStateSnapshot(committedState)
 	}
 	return saveState(committedState)
 }

@@ -52,6 +52,7 @@ type DaemonStateUpdate struct {
 type syncPeerMutationView struct {
 	ManagedZone zone.ZonePath
 	Network     *zone.NetworkState
+	SyncPeers   map[string]syncPeerState
 }
 
 func NewDaemonStateStore(initial *stateFile) *DaemonStateStore {
@@ -196,7 +197,7 @@ func (s *DaemonStateStore) UpdateSyncPeer(peerID string, fn func(*syncPeerState)
 
 // updateSyncPeerWithView additionally supplies the immutable fields needed to
 // derive a peer mutation from the same revision. The view is rebuilt for every
-// CAS retry; callers must not mutate or retain its Network pointer.
+// CAS retry; callers must not mutate or retain values from the view.
 func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPeerMutationView, *syncPeerState) error) (uint64, error) {
 	if s == nil {
 		return 0, errors.New("daemon state store is nil")
@@ -220,6 +221,7 @@ func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPee
 		if base != nil {
 			view.ManagedZone = base.ManagedZone
 			view.Network = base.Network
+			view.SyncPeers = base.SyncPeers
 		}
 		s.mu.RUnlock()
 
@@ -249,6 +251,70 @@ func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPee
 		s.mu.Unlock()
 	}
 	return currentRev, errDaemonStateRevisionStale
+}
+
+// updateSyncPeersWithView applies a replayable batch of peer replacements using
+// local copy-on-write. The callback receives an immutable view from one
+// revision and returns only the peers that should be replaced. Network and
+// unrelated state blocks remain structurally shared. fn may be retried and
+// must not mutate or retain any value from the view.
+func (s *DaemonStateStore) updateSyncPeersWithView(fn func(syncPeerMutationView) (map[string]syncPeerState, error)) (uint64, bool, error) {
+	if s == nil {
+		return 0, false, errors.New("daemon state store is nil")
+	}
+	if fn == nil {
+		return 0, false, errors.New("sync peers update function is nil")
+	}
+	var currentRev uint64
+	for attempt := 0; attempt < maxSyncPeerUpdateAttempts; attempt++ {
+		s.mu.RLock()
+		base := s.committed
+		baseRev := s.revision
+		view := syncPeerMutationView{}
+		if base != nil {
+			view.ManagedZone = base.ManagedZone
+			view.Network = base.Network
+			view.SyncPeers = base.SyncPeers
+		}
+		s.mu.RUnlock()
+		updates, err := fn(view)
+		if err != nil {
+			return baseRev, false, err
+		}
+		if len(updates) == 0 {
+			s.mu.RLock()
+			if s.revision == baseRev {
+				s.mu.RUnlock()
+				return baseRev, false, nil
+			}
+			currentRev = s.revision
+			s.mu.RUnlock()
+			continue
+		}
+
+		next := cloneStateFileRootSharingChildren(base)
+		next.SyncPeers = make(map[string]syncPeerState, len(view.SyncPeers)+len(updates))
+		for id, state := range view.SyncPeers {
+			next.SyncPeers[id] = state
+		}
+		for id, state := range updates {
+			if id == "" {
+				return baseRev, false, errors.New("sync peer id is empty")
+			}
+			next.SyncPeers[id] = cloneSyncPeerState(state)
+		}
+
+		s.mu.Lock()
+		if s.revision == baseRev {
+			s.commitLocked(next)
+			currentRev = s.revision
+			s.mu.Unlock()
+			return currentRev, true, nil
+		}
+		currentRev = s.revision
+		s.mu.Unlock()
+	}
+	return currentRev, false, errDaemonStateRevisionStale
 }
 
 func (s *DaemonStateStore) CommitIfRevision(rev uint64, fn func(*stateFile) error) (uint64, bool, error) {

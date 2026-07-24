@@ -102,18 +102,21 @@
     - 不改变状态机、control/observer DTO、落盘格式和 wire 格式；先做调用点收敛，不修改通用 `StateStore.Update`。
     - sync event 现在用事件内 mutation batch 按原顺序聚合 active-pull、backoff 和 completion，并在 `SaveState` 前 flush；hint shortcut 与 hinted-session 初始化也各自合并为一次提交。fetch responder packet 将 observed-path 与 read-only responder 合并，除仍会直接 apply Network 的 object-chunk 外，不再在 packet 末尾重复 publish 已安装的 committed snapshot。
 
-  - [ ] **7.11.2 实现 `UpdateSyncPeer` 局部 COW**
+  - [x] **7.11.2 实现 `UpdateSyncPeer` 局部 COW**
     - 保留全局 revision/CAS；新版本只构造新的 state root，复制 `SyncPeers` map，并深拷贝目标 peer 中会修改的 map、slice、pointer；`Network` 和其他未修改块只读共享。
     - mutation API 不向调用者暴露完整可变 `*stateFile`，也不得允许 callback retain 最终 committed root。`stateFile` 含 mutex，不能用普通结构体赋值直接复制锁；应显式构造不复制 mutex 的 root，或先拆出不含锁的 immutable root。
     - stale 时只允许有界重试。mutation 必须纯粹且可重放：不得在 callback 内执行 transport、网络、磁盘、`SaveState`、事件广播或外部计数；时间/随机输入在重试外捕获；依赖 Network 的判断每次基于最新 committed revision 重新计算。
     - 第一阶段继续保留 `Snapshot()` 和 `installCommittedSnapshot` 的完整 clone，让 `d.Sync.State` 仍是与 committed 隔离的可变副本；先消除 `recordSyncPeerState` 中 `BeginUpdate` + `Commit` 的全量 JSON clone，不同时改 live-state 一致性模型。
     - 只迁移剩余高频且确实影响控制行为的 `SyncPeers` 写路径，例如 backoff、observed/discovered path、relay throttle 和 rejected digest；peer repair、chunk fallback/NACK 等纯诊断应已在 7.11.0 迁出。`updateDiscoveredPeers` 必须拆成“从 immutable view 计算变化 → 提交 peer mutation → commit 成功后更新 transport”，避免 CAS retry 重复 transport 副作用。
-    - 已完成第一部分：`UpdateSyncPeer` 使用最多 4 次全局 revision/CAS 重试，只复制 state root、`SyncPeers` map 和目标 peer，并在 commit 前仅二次复制目标 peer 来隔离 retained callback；sync event/hint/backoff/relay/read-only responder/observed-path 已切换到局部 COW，`Snapshot()`/install 仍按计划保留完整 clone。剩余阻塞项是拆分 `updateDiscoveredPeers` 的 transport 副作用，完成后再勾选本阶段。
+    - `UpdateSyncPeer` 使用最多 4 次全局 revision/CAS 重试，只复制 state root、`SyncPeers` map 和目标 peer，并在 commit 前仅二次复制目标 peer 来隔离 retained callback；sync event/hint/backoff/relay/read-only responder/observed-path 已切换到局部 COW，`Snapshot()`/install 仍按计划保留完整 clone。
+    - `updateDiscoveredPeers` 已拆成 replayable batch plan：基于每次最新 immutable view 一次计算 peer state replacements 与 transport plan，通过局部 COW 一次提交所有变化，commit 成功后才更新 known peer、discovered/observed transport cache；stale/no-op 都会复核 revision，无状态变化不升 revision但仍可修复 transport cache。daemon 调用点均切到新路径，独立非-daemon helper 保留原兼容行为。
+    - 当前 1 MiB Network benchmark 的短基准为：通用 full update 约 15.99 ms / 6.53 MB / 137 alloc，local COW 约 633 ns / 1.26 KB / 6 alloc；该结果只确认复制路径量级，阶段后的实机 idle/perf 仍按上面的手工验收约定执行。
 
-  - [ ] **7.11.3 阻断 daemon 自写导致的 state reload**
+  - [x] **7.11.3 阻断 daemon 自写导致的 state reload**
     - 现有 `reloadStateIfChanged` 已用同一文件、mtime、size 的文件标记跳过无变化的 `BoltStore.LoadNetwork`；文件原子替换、读期间变化或 `stat` 失败时继续保守重读。
     - daemon 自己成功完成 Bolt save/commit/close 后，再读取并记录稳定的文件标记；reload 仅在标记明确等于当前进程刚完成的自写结果时跳过。保存期间文件再次变化、`stat` 失败或标记不确定时清空缓存并在下一轮正常 reload，不能屏蔽外部管理命令或其他进程写入。
     - 该项与 state COW 独立，可并行实现；perf 中剩余 `LoadNetwork` 约 1.49% 不保证全部来自自触发，改后需通过调用次数和新 perf 区分合法 reload。
+    - 已完成：daemon 所有 SyncRuntime/StateStore 持久化路径统一在 Bolt transactions 与 `Close` 成功后记录文件 identity/size/mtime；close 前后标记不稳定、`stat` 失败或保存失败时保持空缓存。测试覆盖稳定自写零 loader、外部写入仍 reload、读取期间文件变化不缓存以及保存失败清标记。
 
   - [ ] **7.11.4 清零对 `d.Sync.State` 的直接写入**
     - 完整盘点 direct writer，至少覆盖 object chunk snapshot apply、rejected digest、discovery、admission，以及启动阶段 endpoint/IPsec/routing record publish；chunk fallback、NACK/peer repair 等纯诊断在 7.11.0 后不应再写 `d.Sync.State`。

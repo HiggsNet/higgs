@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -326,11 +327,25 @@ func saveState(state *stateFile) error {
 }
 
 func saveStateAt(path string, state *stateFile) error {
+	_, err := saveStateAtWithFileInfo(path, state)
+	return err
+}
+
+// saveStateAtWithFileInfo returns a stable file marker only after the Bolt
+// transactions and Close have succeeded. A stat failure or a file change
+// between the final transaction and close does not fail the save; it merely
+// leaves the marker unavailable so the daemon reloads conservatively.
+func saveStateAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error) {
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer store.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = store.Close()
+		}
+	}()
 	if state != nil && state.Network != nil && state.ManagedZone.Valid() {
 		if zs := state.Network.Zones[state.ManagedZone]; zs != nil {
 			logger := newAppLogger(nil)
@@ -359,9 +374,22 @@ func saveStateAt(path string, state *stateFile) error {
 		Admission:         state.Admission,
 	}
 	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
-		return err
+		return nil, err
 	}
-	return store.SaveNetwork(state.Network)
+	if err := store.SaveNetwork(state.Network); err != nil {
+		return nil, err
+	}
+	beforeClose, beforeErr := os.Stat(path)
+	if err := store.Close(); err != nil {
+		closed = true
+		return nil, err
+	}
+	closed = true
+	afterClose, afterErr := os.Stat(path)
+	if beforeErr != nil || afterErr != nil || !sameStateFileInfo(beforeClose, afterClose) {
+		return nil, nil
+	}
+	return afterClose, nil
 }
 
 func persistentSyncPeers(peers map[string]syncPeerState) map[string]syncPeerState {

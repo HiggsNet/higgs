@@ -237,6 +237,101 @@ func TestDaemonStateStoreSyncPeerRetryRebuildsImmutableView(t *testing.T) {
 	}
 }
 
+func TestDaemonStateStoreUpdateSyncPeersWithViewRetriesAndIsolatesUpdates(t *testing.T) {
+	store := NewDaemonStateStore(&stateFile{
+		ManagedZone: "node-a.catofes.",
+		Network:     cloneTestNetworkState(),
+		SyncPeers: map[string]syncPeerState{
+			"peer-a": {
+				ObservedGraceAddrs: []observedGraceAddrState{{Addr: "198.51.100.1:33434"}},
+			},
+			"peer-b": {
+				ObservedGraceAddrs: []observedGraceAddrState{{Addr: "198.51.100.2:33434"}},
+			},
+		},
+	})
+	attempts := 0
+	var retained []observedGraceAddrState
+	var plannedNetwork *zone.NetworkState
+	var plannedPeerBGrace *observedGraceAddrState
+	_, changed, err := store.updateSyncPeersWithView(func(view syncPeerMutationView) (map[string]syncPeerState, error) {
+		attempts++
+		if attempts == 1 {
+			if _, err := store.Update(func(state *stateFile) error {
+				state.IdentityKeyPath = "advance-revision"
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+		}
+		plannedNetwork = view.Network
+		peerB := view.SyncPeers["peer-b"]
+		plannedPeerBGrace = &peerB.ObservedGraceAddrs[0]
+		peer := cloneSyncPeerState(view.SyncPeers["peer-a"])
+		peer.LastSyncUnix = int64(attempts)
+		retained = peer.ObservedGraceAddrs
+		return map[string]syncPeerState{"peer-a": peer}, nil
+	})
+	if err != nil {
+		t.Fatalf("updateSyncPeersWithView: %v", err)
+	}
+	if !changed {
+		t.Fatal("updateSyncPeersWithView reported no change")
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want one stale retry", attempts)
+	}
+
+	store.ReadCommitted(func(state *stateFile) {
+		if state.Network != plannedNetwork {
+			t.Fatal("batch peer update copied Network instead of sharing it")
+		}
+		peerB := state.SyncPeers["peer-b"]
+		if &peerB.ObservedGraceAddrs[0] != plannedPeerBGrace {
+			t.Fatal("batch peer update copied an unrelated peer's nested state")
+		}
+	})
+	retained[0].Addr = "retained-mutation"
+	snapshot, _ := store.Snapshot()
+	peer := snapshot.SyncPeers["peer-a"]
+	if peer.LastSyncUnix != 2 || peer.ObservedGraceAddrs[0].Addr != "198.51.100.1:33434" {
+		t.Fatalf("retained batch result mutated committed peer: %+v", peer)
+	}
+}
+
+func TestDaemonStateStoreUpdateSyncPeersWithViewNoopKeepsRevision(t *testing.T) {
+	store := NewDaemonStateStore(&stateFile{
+		Network:   cloneTestNetworkState(),
+		SyncPeers: map[string]syncPeerState{"peer-a": {}},
+	})
+	before := store.Meta().Revision
+	attempts := 0
+	rev, changed, err := store.updateSyncPeersWithView(func(syncPeerMutationView) (map[string]syncPeerState, error) {
+		attempts++
+		if attempts == 1 {
+			if _, err := store.Update(func(state *stateFile) error {
+				state.IdentityKeyPath = "advance-revision"
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("updateSyncPeersWithView: %v", err)
+	}
+	if changed {
+		t.Fatal("no-op batch reported a change")
+	}
+	if attempts != 2 {
+		t.Fatalf("no-op attempts = %d, want retry against latest revision", attempts)
+	}
+	if rev != before+1 || store.Meta().Revision != before+1 {
+		t.Fatalf("no-op batch returned stale revision: returned=%d before=%d after=%d", rev, before, store.Meta().Revision)
+	}
+}
+
 func BenchmarkDaemonStateStorePeerUpdate(b *testing.B) {
 	newLargeState := func() *stateFile {
 		state := &stateFile{

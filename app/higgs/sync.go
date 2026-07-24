@@ -283,10 +283,27 @@ func (s *chunkAssemblyStore) dropPeer(peerID string) {
 // saveState persists the current state. The caller must hold the write lock
 // on sr.State; saveState reads the state without acquiring its own lock.
 func (sr *SyncRuntime) saveState() error {
-	if sr != nil && sr.App != nil {
-		return sr.App.SaveState(sr.State)
+	if sr == nil {
+		return errors.New("sync runtime is nil")
 	}
-	return saveState(sr.State)
+	return sr.saveStateSnapshot(sr.State)
+}
+
+func (sr *SyncRuntime) saveStateSnapshot(state *stateFile) error {
+	if sr == nil || sr.App == nil {
+		return saveState(state)
+	}
+	// Until a complete, stable post-close marker is available, reload must not
+	// trust the previous token.
+	sr.reloadStateStamp = stateFileStamp{}
+	info, err := saveStateAtWithFileInfo(sr.App.StatePath, state)
+	if err != nil {
+		return err
+	}
+	if info != nil {
+		sr.reloadStateStamp = stateFileStamp{path: sr.App.StatePath, info: info}
+	}
+	return nil
 }
 
 func (sr *SyncRuntime) loadState() (*stateFile, error) {
@@ -522,7 +539,7 @@ func syncOnce(peerID string) error {
 	defer cancel()
 	service.objectPullPool.Start(ctx)
 	defer service.objectPullPool.Stop()
-	service.Sync.updateDiscoveredPeers()
+	service.updateDiscoveredPeers()
 	if err := service.startHintedSyncSession(peerID, "sync_once"); err != nil {
 		return err
 	}

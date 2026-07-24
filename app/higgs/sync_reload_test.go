@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 )
@@ -84,3 +85,76 @@ func TestSyncRuntimeReloadStateIfChangedDoesNotCacheRacingFile(t *testing.T) {
 		t.Fatalf("loads after racing file = %d, want 2", loads)
 	}
 }
+
+func TestSyncRuntimeReloadStateIfChangedSkipsStableSelfWrite(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	path := filepath.Join(t.TempDir(), "higgs.db")
+	rt := &Runtime{Config: defaultAppConfig(), StatePath: path}
+	sr := &SyncRuntime{App: rt, State: state}
+
+	if err := sr.saveState(); err != nil {
+		t.Fatalf("self save: %v", err)
+	}
+	if sr.reloadStateStamp.info == nil || sr.reloadStateStamp.path != path {
+		t.Fatalf("self save marker = %+v, want stable marker for %s", sr.reloadStateStamp, path)
+	}
+
+	loads := 0
+	load := func() (*stateFile, error) {
+		loads++
+		return rt.LoadState()
+	}
+	previous := gossip.ZoneDigests(state.Network)
+	latest, changed, err := sr.reloadStateIfChangedWith(previous, load)
+	if err != nil || changed || latest != state {
+		t.Fatalf("reload after self write = (%p, %t, %v), want current state", latest, changed, err)
+	}
+	if loads != 0 {
+		t.Fatalf("loads after stable self write = %d, want 0", loads)
+	}
+
+	external := cloneStateFile(state)
+	external.Network.Zones["node-b.catofes."].Authority.Epoch++
+	// Keep this test robust on filesystems with coarse timestamp updates.
+	time.Sleep(time.Millisecond)
+	if err := rt.SaveState(external); err != nil {
+		t.Fatalf("external save: %v", err)
+	}
+	latest, changed, err = sr.reloadStateIfChangedWith(previous, load)
+	if err != nil || !changed || latest == state {
+		t.Fatalf("reload after external write = (%p, %t, %v), want loaded change", latest, changed, err)
+	}
+	if loads != 1 {
+		t.Fatalf("loads after external write = %d, want 1", loads)
+	}
+}
+
+func TestSyncRuntimeFailedSelfWriteClearsReloadMarker(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	dir := t.TempDir()
+	sr := &SyncRuntime{
+		App:   &Runtime{Config: defaultAppConfig(), StatePath: dir},
+		State: state,
+		reloadStateStamp: stateFileStamp{
+			path: "old",
+			info: fakeFileInfo{name: "old"},
+		},
+	}
+	if err := sr.saveState(); err == nil {
+		t.Fatal("self save to directory unexpectedly succeeded")
+	}
+	if sr.reloadStateStamp.info != nil || sr.reloadStateStamp.path != "" {
+		t.Fatalf("failed self save kept reload marker: %+v", sr.reloadStateStamp)
+	}
+}
+
+type fakeFileInfo struct {
+	name string
+}
+
+func (f fakeFileInfo) Name() string     { return f.name }
+func (fakeFileInfo) Size() int64        { return 0 }
+func (fakeFileInfo) Mode() os.FileMode  { return 0 }
+func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fakeFileInfo) IsDir() bool        { return false }
+func (fakeFileInfo) Sys() any           { return nil }

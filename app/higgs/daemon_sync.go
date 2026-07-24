@@ -1109,7 +1109,7 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, 
 	}
 	if session.State == SyncSessionCompleted && changed {
 		if d.Sync.Transport != nil {
-			d.Sync.updateDiscoveredPeers()
+			d.updateDiscoveredPeers()
 		}
 		d.notifyStateChanged()
 		d.relaySyncToPeers(peerID)
