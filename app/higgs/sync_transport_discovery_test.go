@@ -50,6 +50,7 @@ func updateDiscoveredPeersForTest(t *testing.T, state *stateFile, config *syncCo
 	service.updateDiscoveredPeers()
 	committed, _ := service.StateStore.Snapshot()
 	state.Network = committed.Network
+	state.SyncPeers = committed.SyncPeers
 }
 
 func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {

@@ -926,7 +926,7 @@ object-pull-smoke: build
 #    失败（connection refused），触发 chunk fallback 路径。
 # 6. A 发送 fetch_zone 带 ChunkFallback=true；B 将 zone snapshot 拆成
 #    多个 UDP object_chunk 发给 A。
-# 7. 断言 A 收到 bigdata，且 A 的 debug peer 显示 chunk_fallbacks > 0。
+# 7. 断言 A 收到 bigdata，且 A 的 daemon 日志确认该 zone 经 UDP chunks apply。
 chunk-fallback-smoke: build
 	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(SentChunkCache|MissingChunkIndexes|ChunkAssemblyQuietNACK)'
 	@set -eu; \
@@ -961,7 +961,7 @@ chunk-fallback-smoke: build
 	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes.; exit 1; }; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'datagram_chunk_fallbacks: [1-9]'; \
+	grep -q 'event=zone_applied.*via=udp_chunks.*zone=node-b.catofes\.' "$$tmp/a.log"; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Chunk fallback smoke passed"
 

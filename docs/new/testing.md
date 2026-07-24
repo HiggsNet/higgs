@@ -134,7 +134,7 @@ make observer-smoke
 | `nat-observed-smoke` | 验证 NAT/outbound-only 场景下的 observed UDP path。 |
 | `nat-daemon-observed-smoke` | daemon 版 NAT observed path 验证。 |
 | `delegation-revoke-smoke` | 验证 delegation revocation 传播和下游状态失效。 |
-| `chunk-fallback-smoke` | 验证 TCP object pull 不可达时 UDP chunk fallback 能补齐大对象，并先覆盖乱序丢块 NACK、重复 NACK 和过期/错误 transfer。 |
+| `chunk-fallback-smoke` | 验证 TCP object pull 不可达时 UDP chunk fallback 能补齐大对象（以 daemon 的 `via=udp_chunks` apply 日志确认），并先覆盖乱序丢块 NACK、重复 NACK 和过期/错误 transfer。 |
 | `ipsec-policy-smoke` | 验证 IPsec mesh policy URI 解析和 planner rule 匹配。 |
 | `peer-lifecycle-smoke` | 验证 peer status、revoked peer 阻断和 peer lifecycle debug 输出。 |
 | `revocation-cleanup-smoke` | 验证 deny-first revocation cleanup、peer cache 清理和 IPsec link teardown dry-run。 |
