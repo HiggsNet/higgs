@@ -130,8 +130,8 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("transport address = %v", addr)
 	}
-	if got := service.Sync.State.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "203.0.113.10:33434" {
-		t.Fatalf("live DiscoveredAddr = %q", got)
+	if got := service.currentState().SyncPeers["node-b.catofes."].DiscoveredAddr; got != "203.0.113.10:33434" {
+		t.Fatalf("committed DiscoveredAddr = %q", got)
 	}
 	persisted, err := rt.LoadState()
 	if err != nil {

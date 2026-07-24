@@ -238,47 +238,69 @@ func objectPullClientDeadlineUntil(deadline time.Time, maxTimeout time.Duration)
 // snapshot and does not acquire the live state lock.
 func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 	return func(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-		state := getState()
-		if state == nil || req == nil || !req.Zone.Valid() {
-			return &gossip.ObjectPullResponse{Error: "invalid request"}
-		}
-		if state.Network == nil {
-			return &gossip.ObjectPullResponse{Error: "invalid request"}
-		}
-		now := time.Now()
-		switch req.Type {
-		case gossip.ObjectPullZone:
-			if state.Network.IsZoneRevoked(req.Zone, now) {
-				return &gossip.ObjectPullResponse{Error: "zone revoked"}
-			}
-			snapshot, err := gossip.Snapshot(state.Network, req.Zone)
-			if err != nil {
-				return &gossip.ObjectPullResponse{Error: err.Error()}
-			}
-			logger := newAppLogger(nil)
-			logger.Debug("object_pull", "lookup_snapshot", map[string]any{
-				"zone":    req.Zone.String(),
-				"records": len(snapshot.Records),
-				"bytes":   encodedZoneSnapshotSize(snapshot),
-			})
-			return &gossip.ObjectPullResponse{OK: true, Snapshot: snapshot}
-		case gossip.ObjectPullRecord:
-			if req.Key == "" {
-				return &gossip.ObjectPullResponse{Error: "missing key"}
-			}
-			record, err := gossip.RecordSnapshotFor(state.Network, &gossip.FetchRecord{
-				Zone:    req.Zone,
-				Key:     req.Key,
-				Version: req.Version,
-			})
-			if err != nil {
-				return &gossip.ObjectPullResponse{Error: err.Error()}
-			}
-			return &gossip.ObjectPullResponse{OK: true, Record: record}
-		default:
-			return &gossip.ObjectPullResponse{Error: "unsupported request type"}
-		}
+		response := objectPullResponseFromState(getState(), req, time.Now())
+		logObjectPullSnapshot(req, response)
+		return response
 	}
+}
+
+func objectPullResponseFromState(state *stateFile, req *gossip.ObjectPullRequest, now time.Time) *gossip.ObjectPullResponse {
+	if state == nil || state.Network == nil || req == nil || !req.Zone.Valid() {
+		return &gossip.ObjectPullResponse{Error: "invalid request"}
+	}
+	switch req.Type {
+	case gossip.ObjectPullZone:
+		if state.Network.IsZoneRevoked(req.Zone, now) {
+			return &gossip.ObjectPullResponse{Error: "zone revoked"}
+		}
+		snapshot, err := gossip.Snapshot(state.Network, req.Zone)
+		if err != nil {
+			return &gossip.ObjectPullResponse{Error: err.Error()}
+		}
+		return &gossip.ObjectPullResponse{OK: true, Snapshot: snapshot}
+	case gossip.ObjectPullRecord:
+		if req.Key == "" {
+			return &gossip.ObjectPullResponse{Error: "missing key"}
+		}
+		record, err := gossip.RecordSnapshotFor(state.Network, &gossip.FetchRecord{
+			Zone:    req.Zone,
+			Key:     req.Key,
+			Version: req.Version,
+		})
+		if err != nil {
+			return &gossip.ObjectPullResponse{Error: err.Error()}
+		}
+		return &gossip.ObjectPullResponse{OK: true, Record: record}
+	default:
+		return &gossip.ObjectPullResponse{Error: "unsupported request type"}
+	}
+}
+
+func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
+	if d == nil || d.StateStore == nil {
+		return &gossip.ObjectPullResponse{Error: "invalid request"}
+	}
+	var response *gossip.ObjectPullResponse
+	d.StateStore.ReadCommitted(func(state *stateFile) {
+		response = objectPullResponseFromState(state, req, time.Now())
+	})
+	if response == nil {
+		return &gossip.ObjectPullResponse{Error: "invalid request"}
+	}
+	logObjectPullSnapshot(req, response)
+	return response
+}
+
+func logObjectPullSnapshot(req *gossip.ObjectPullRequest, response *gossip.ObjectPullResponse) {
+	if req == nil || response == nil || !response.OK || response.Snapshot == nil {
+		return
+	}
+	logger := newAppLogger(nil)
+	logger.Debug("object_pull", "lookup_snapshot", map[string]any{
+		"zone":    req.Zone.String(),
+		"records": len(response.Snapshot.Records),
+		"bytes":   encodedZoneSnapshotSize(response.Snapshot),
+	})
 }
 
 // tryObjectPullTCP attempts to pull a zone snapshot over TCP from a peer.
@@ -402,14 +424,6 @@ func (d *DaemonService) observeObjectPullResult(result ObjectPullResult) {
 	recordObjectPullResult(d.PeerObservability, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
 }
 
-func (d *DaemonService) installCommittedSnapshot() {
-	if d == nil {
-		return
-	}
-	state, _, _ := d.snapshotState()
-	d.installCurrentStateSnapshot(state)
-}
-
 // resolvePeerTCPAddr returns the best-effort TCP object-pull address for a peer.
 func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID string) string {
 	if config == nil || targetPeerID == "" {
@@ -480,10 +494,7 @@ func startObjectPullServer(d *DaemonService) (net.Listener, error) {
 	if addr == "" {
 		return nil, nil
 	}
-	listener, err := objectPullTCPServe(addr, objectPullLookup(func() *stateFile {
-		state, _, _ := d.snapshotState()
-		return state
-	}))
+	listener, err := objectPullTCPServe(addr, d.objectPullResponse)
 	if err != nil {
 		return nil, err
 	}

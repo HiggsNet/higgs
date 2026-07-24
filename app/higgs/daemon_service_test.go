@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
@@ -70,6 +71,37 @@ func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T
 	}
 	if !service.ipsecDirty || !service.routingDirty || !service.firewallDirty {
 		t.Fatalf("dirty flags = ipsec:%v routing:%v firewall:%v, want all true", service.ipsecDirty, service.routingDirty, service.firewallDirty)
+	}
+}
+
+func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	beforeRevision := service.StateStore.Meta().Revision
+
+	service.firewallDirty = true
+	flushed, err := service.flushFirewallReconcileResult(context.Background())
+	if err != nil {
+		t.Fatalf("flushFirewallReconcileResult: %v", err)
+	}
+	if !flushed {
+		t.Fatal("firewall reconcile was not flushed")
+	}
+
+	service.routingDirty = true
+	flushed, err = service.flushRoutingReconcileResult(context.Background())
+	if err != nil {
+		t.Fatalf("flushRoutingReconcileResult: %v", err)
+	}
+	if !flushed {
+		t.Fatal("routing reconcile was not flushed")
+	}
+
+	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
+		t.Fatalf("empty reconciles changed revision from %d to %d", beforeRevision, revision)
+	}
+	if service.Sync.State != state {
+		t.Fatal("empty reconciles installed a new legacy live-state snapshot")
 	}
 }
 

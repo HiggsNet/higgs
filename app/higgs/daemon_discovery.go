@@ -48,8 +48,7 @@ func (d *DaemonService) updateDiscoveredPeers() {
 	if !changed {
 		return
 	}
-	d.installCommittedSnapshot()
-	if err := d.Sync.saveState(); err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		d.logWarn("endpoint", "discovered_peer_save_failed", map[string]any{"error": err})
 	}
 }
@@ -173,6 +172,30 @@ func plannedObservedPaths(view syncPeerMutationView, peerID string, peer syncPee
 		paths = append(paths, gossip.ObservedPath{Addr: graceAddr, Until: time.Unix(entry.UntilUnix, 0)})
 	}
 	return paths, observedPathPreferFirst(peer, now), true
+}
+
+func (d *DaemonService) seedObservedPeerPath(peerID string) {
+	if d == nil || d.Sync == nil || d.Sync.Transport == nil || d.StateStore == nil || peerID == "" {
+		return
+	}
+	now := d.Sync.now()
+	var paths []gossip.ObservedPath
+	var prefer, ok bool
+	d.StateStore.ReadCommitted(func(state *stateFile) {
+		if state == nil {
+			return
+		}
+		paths, prefer, ok = plannedObservedPaths(syncPeerMutationView{
+			ManagedZone: state.ManagedZone,
+			Network:     state.Network,
+			SyncPeers:   state.SyncPeers,
+		}, peerID, state.SyncPeers[peerID], now)
+	})
+	if !ok {
+		d.Sync.Transport.RemoveObservedPeerAddr(peerID)
+		return
+	}
+	d.Sync.Transport.SetObservedPeerPaths(peerID, paths, prefer)
 }
 
 func verifiedZonePeerIDs(view syncPeerMutationView, config *syncConfigFile, now time.Time) []string {

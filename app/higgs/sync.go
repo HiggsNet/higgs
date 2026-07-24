@@ -463,10 +463,7 @@ func syncServe(ctx context.Context) error {
 	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, logger.Warn)
 	defer stopRecv()
 	service.Sync.Transport = transport
-	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile {
-		state, _, _ := service.snapshotState()
-		return state
-	}))
+	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), service.objectPullResponse)
 	if err != nil {
 		return err
 	}
@@ -525,10 +522,7 @@ func syncOnce(peerID string) error {
 	}
 	defer transport.Close()
 	service.Sync.Transport = transport
-	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), objectPullLookup(func() *stateFile {
-		state, _, _ := service.snapshotState()
-		return state
-	}))
+	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), service.objectPullResponse)
 	if err != nil {
 		return err
 	}

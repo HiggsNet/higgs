@@ -262,7 +262,8 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（如 record put�
 
 主要接口：
 
-- `Snapshot()` — 返回 committed 状态的深拷贝 + 当前 revision。只读路径（control socket、observer、debug）都走这里，不会阻塞事件循环。
+- `Snapshot()` — 返回 committed 状态的深拷贝 + 当前 revision。control socket、observer、debug 以及需要隔离 workspace 的 reconcile 使用它。
+- `ReadCommitted(fn)` — 在短只读 callback 中访问 immutable committed view；daemon 热路径在 callback 内只生成 summary、digest、page 或其他 detached projection，不 retain committed 子结构，也不执行 transport/磁盘副作用。
 - `Meta()` — 返回 revision、snapshot time、dirty 标记、reconcile progress。
 - `BeginUpdate()` — 基于当前 committed 状态创建一个 workspace 克隆，不阻塞其他 reader。
 - `Update(fn)` / `CommitIfRevision(rev, fn)` — 在 workspace 上执行变更，然后以乐观锁方式提交。只有 committed revision 仍等于 base rev 时才替换成功，否则返回 stale revision 错误。
@@ -277,7 +278,7 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（如 record put�
 1. 从磁盘加载最新状态（`Sync.loadState()`）
 2. 用 `ReplaceCommitted()` 刷新 StateStore
 3. 通过 `StateStore.Update(fn)` 在 workspace 上完成业务修改
-4. 调用 `installAndSaveCommittedState()` 把 committed 快照同步到 `Sync.State` 并保存回磁盘
+4. 调用 `saveCommittedState()` 从 committed snapshot 保存回磁盘；daemon 不再同步或回灌 `Sync.State`
 5. 通知 observer，设置 dirty 标记并触发 reconcile
 
 可能 no-op 的周期性写入（如 endpoint timer）使用 `runStateStoreWriteIfChanged()`：只有 `fn` 报告状态确实变化时，才会提交、递增 revision 并触发下游 flush。

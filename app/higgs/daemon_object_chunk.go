@@ -71,7 +71,7 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits gossip
 		"delegations": result.Delegation,
 		"via":         "udp_chunks",
 	})
-	return d.installAndSaveCommittedState()
+	return d.saveCommittedState()
 }
 
 func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *gossip.ObjectChunk, applyErr error, now time.Time) {
@@ -95,5 +95,4 @@ func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *go
 		})
 		return
 	}
-	d.installCommittedSnapshot()
 }

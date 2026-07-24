@@ -230,9 +230,9 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, summary *firew
 		}
 		d.firewallDirty = true
 		d.publishStateStoreRuntimeFlags()
-		return d.installAndSaveCommittedState()
+		return d.saveCommittedState()
 	}
-	return d.installAndSaveCommittedState()
+	return d.saveCommittedState()
 }
 
 func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {
@@ -444,7 +444,6 @@ func (d *DaemonService) flushFirewallReconcileResult(ctx context.Context) (bool,
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
 	err := d.reconcileFirewall(reconcileCtx)
-	d.publishCommittedStateSnapshot()
 	return true, err
 }
 

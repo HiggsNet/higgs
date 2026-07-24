@@ -125,13 +125,16 @@
     - `recordBirdHealthObservationForState` 只从 state 读取并更新 health manager，不是 state writer；迁移时改用 immutable read/view，不为它新增 `BirdInstances` mutation。
     - 同时审计所有可能 retain/mutate committed 子结构的入口，不限于 `ReadCommitted`：包括返回 `*stateFile`/`*NetworkState` 的 API、validation 配置、map/slice/pointer 内部修改和 `d.Sync.State` 的全部调用点。结构共享后，任何旧 revision 被修改都会污染共享它的新 revision。
     - daemon UDP object chunk 已把 assembly/repair 与 committed mutation 分开：完整 zone snapshot 通过通用 StateStore workspace apply，损坏 chunk 的 rejected digest 通过 peer 局部 COW 提交；成功路径只升一个 apply revision，不再在 packet 尾部把 live state 反向 publish 一次。独立 `sync once` 继续保留 `SyncRuntime` 兼容实现。
-    - daemon 启动 admission diagnosis、endpoint、IPsec 和 routing record publish 已合并为一个隔离 workspace、一次 commit 和一次 save；无变化的第二次 prepare 不升 revision。外部 state reload 改为先替换 committed 再安装 live snapshot。
-    - reader/retain 审计已处理 transport observed grace slice 的原地 compact、verified-zone validation hook 对 Network root 的写入、health/BIRD 对 live state 的直接读取，以及 `OnStateChanged` hook retain：transport/health 改读不可变 view，hook 接收 detached snapshot。当前 `d.Sync.State` 生产代码命中只剩初始化检查、只读 fallback 和指针安装；live/store publish 桥接仍按 7.11.5 单独移除。
+    - daemon 启动 admission diagnosis、endpoint、IPsec 和 routing record publish 已合并为一个隔离 workspace、一次 commit 和一次 save；无变化的第二次 prepare 不升 revision。外部 state reload 直接替换 committed authority，不再反向发布旧 live state。
+    - reader/retain 审计已处理 transport observed grace slice 的原地 compact、verified-zone validation hook 对 Network root 的写入、health/BIRD 对 live state 的直接读取，以及 `OnStateChanged` hook retain：transport/health 改读不可变 view，hook 接收 detached snapshot。当前 `d.Sync.State` 生产代码命中只剩初始化检查、只读 fallback 和无 StateStore 时的兼容赋值；live/store publish 桥接已由 7.11.5 移除。
 
-  - [ ] **7.11.5 移除 live/store 双状态桥接**
+  - [x] **7.11.5 移除 live/store 双状态桥接**
     - 仅在 direct writer 清零、所有 reader 均遵守不可 retain/mutate 约定后，才把 runtime 读侧切换为 immutable committed view 或更小的 store projection；不要仅把一个仍可写的 `d.Sync.State` 指针指向 committed。
     - 随后删除 `installCommittedSnapshot` 的完整 clone 和 packet 后的 `publishCommittedStateSnapshot`；短、确定纯读的操作使用 committed view 或 `ZoneDigests()`、peer summary 等返回小结果的 projection，不为读操作复制完整 Network。
     - routing reconcile 的第二次 snapshot 保留其一致性语义：auto-announce 可能修改/撤回 record，BIRD 配置必须读取提交后的新状态。只有等价的数据依赖得到证明后才允许收敛，不能仅以减少 clone 为由删除。
+    - 已删除 daemon 的 install/publish 桥接；peer、packet、object chunk、discovery、reconcile 和 control 写侧只提交 StateStore，持久化直接保存 committed snapshot。`SyncRuntime.State` 仅保留给 standalone `sync once`、transport 初始化和无 StateStore 的兼容 fallback，不再作为 daemon runtime 权威。
+    - PING、catalog summary/page、hint session、timer、普通 `FETCH_ZONE`、relay、object-pull 与 observed-path seed 已改为 committed view 内生成 detached projection；回调外发送消息、更新 transport 或记录日志。完整 chunk fallback 与 reconcile 继续使用隔离 snapshot，避免在 committed 读锁中执行外部副作用。
+    - routing reconcile 的 auto-announce 后第二次 snapshot 保留；空 firewall/routing flush 与 peer 局部写回归测试会检查 revision 不被隐式 republish，legacy live-state 指针不被替换。1 MiB Network 的服务级 `recordSyncPeerState` 基准约 0.97–0.98 µs / 2.10 KB / 10 alloc，对照通用 full update 约 15.5–15.8 ms / 6.44–7.08 MB / 136–139 alloc。
 
   - [ ] **7.11.6 按新 perf 决定是否实现 Network/per-zone COW**
     - 若 Network mutation 仍是热点，再复制 `Zones` map、目标 zone 及实际修改的 records/history 层，其他 zone 只读共享；继续使用全局 CAS，不预先引入版本集合和 stale merge。

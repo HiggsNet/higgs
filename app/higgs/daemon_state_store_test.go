@@ -332,21 +332,22 @@ func TestDaemonStateStoreUpdateSyncPeersWithViewNoopKeepsRevision(t *testing.T) 
 	}
 }
 
-func BenchmarkDaemonStateStorePeerUpdate(b *testing.B) {
-	newLargeState := func() *stateFile {
-		state := &stateFile{
-			Network:   cloneTestNetworkState(),
-			SyncPeers: map[string]syncPeerState{"peer-a": {}},
-		}
-		state.Network.Zones["node-a.catofes."].Records["large"] = &zone.Record{
-			Zone:  "node-a.catofes.",
-			Key:   "large",
-			Value: make([]byte, 1<<20),
-		}
-		return state
+func newLargeDaemonState() *stateFile {
+	state := &stateFile{
+		Network:   cloneTestNetworkState(),
+		SyncPeers: map[string]syncPeerState{"peer-a": {}},
 	}
+	state.Network.Zones["node-a.catofes."].Records["large"] = &zone.Record{
+		Zone:  "node-a.catofes.",
+		Key:   "large",
+		Value: make([]byte, 1<<20),
+	}
+	return state
+}
+
+func BenchmarkDaemonStateStorePeerUpdate(b *testing.B) {
 	b.Run("full_update", func(b *testing.B) {
-		store := NewDaemonStateStore(newLargeState())
+		store := NewDaemonStateStore(newLargeDaemonState())
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -361,7 +362,7 @@ func BenchmarkDaemonStateStorePeerUpdate(b *testing.B) {
 		}
 	})
 	b.Run("local_cow", func(b *testing.B) {
-		store := NewDaemonStateStore(newLargeState())
+		store := NewDaemonStateStore(newLargeDaemonState())
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -373,4 +374,22 @@ func BenchmarkDaemonStateStorePeerUpdate(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkDaemonRecordSyncPeerState(b *testing.B) {
+	service := newDaemonService(
+		&Runtime{},
+		newLargeDaemonState(),
+		&syncConfigFile{PeerID: "node-a.catofes."},
+		defaultDaemonInterval,
+	)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		service.recordSyncPeerState("peer-a", "benchmark", func(state *stateFile) {
+			peer := state.SyncPeers["peer-a"]
+			peer.LastSyncUnix++
+			state.SyncPeers["peer-a"] = peer
+		})
+	}
 }

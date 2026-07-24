@@ -207,7 +207,7 @@ func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[st
 		d.publishStateStoreRuntimeFlags()
 		return nil
 	}
-	return d.installAndSaveCommittedState()
+	return d.saveCommittedState()
 }
 
 func (d *DaemonService) commitRoutingBirdInstancesByNetNS(base, next map[string]*BirdInstanceState, reconcile *routingReconcileState) (bool, error) {
@@ -244,7 +244,7 @@ func (d *DaemonService) commitRoutingBirdInstancesByNetNS(base, next map[string]
 	if err != nil || !committed {
 		return false, err
 	}
-	return true, d.installAndSaveCommittedState()
+	return true, d.saveCommittedState()
 }
 
 func changedBirdInstanceNetNS(base, next map[string]*BirdInstanceState) []string {
@@ -1129,7 +1129,7 @@ func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet)
 	if err != nil {
 		return err
 	}
-	return d.installAndSaveCommittedState()
+	return d.saveCommittedState()
 }
 
 func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *routing.AuthorizedRouteSet) (bool, error) {

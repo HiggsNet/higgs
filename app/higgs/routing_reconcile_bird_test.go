@@ -211,8 +211,6 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed stale BIRD state: %v", err)
 	}
-	current, _, _ := service.snapshotState()
-	service.installCurrentStateSnapshot(current)
 	pm.running = true
 	pm.started = false
 	client.configureCalls = 0

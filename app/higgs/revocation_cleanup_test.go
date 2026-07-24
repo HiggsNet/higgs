@@ -330,7 +330,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	service.flushRevocationCleanup()
 
 	// Verify peer cache is cleared.
-	peer := service.Sync.State.SyncPeers["node-b.catofes."]
+	peer := service.currentState().SyncPeers["node-b.catofes."]
 	if peer.DiscoveredAddr != "" || peer.ObservedAddr != "" {
 		t.Fatalf("peer cache not cleared: discovered=%s observed=%s", peer.DiscoveredAddr, peer.ObservedAddr)
 	}
@@ -510,7 +510,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.notifyStateChanged()
 
 	// Verify peer cache was cleared after notifyStateChanged.
-	peer := service.Sync.State.SyncPeers["node-b.catofes."]
+	current := service.currentState()
+	peer := current.SyncPeers["node-b.catofes."]
 	if peer.DiscoveredAddr != "" {
 		t.Fatalf("discovered addr should be cleared: %s", peer.DiscoveredAddr)
 	}
@@ -521,8 +522,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 		t.Fatalf("last error = %q, want 'zone revoked'", peer.LastError)
 	}
 	// Verify link instance was torn down.
-	if len(service.Sync.State.LinkInstances) != 0 {
-		t.Fatalf("link instances should be empty after revocation, got %d", len(service.Sync.State.LinkInstances))
+	if len(current.LinkInstances) != 0 {
+		t.Fatalf("link instances should be empty after revocation, got %d", len(current.LinkInstances))
 	}
 }
 
@@ -586,8 +587,9 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	}
 
 	service.notifyStateChanged()
-	if len(service.Sync.State.LinkInstances) != 1 {
-		t.Fatalf("initial link instances = %d, want 1", len(service.Sync.State.LinkInstances))
+	current := service.currentState()
+	if len(current.LinkInstances) != 1 {
+		t.Fatalf("initial link instances = %d, want 1", len(current.LinkInstances))
 	}
 	initialFirewall := lastFirewallDesired(t, firewallDriver)
 	if !prefixIn(initialFirewall.Prefixes.MeshAuthorizedV4, "10.1.0.0/24") {
@@ -645,13 +647,14 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked node-b route missing from firewall audit set: %v", revokedFirewall.Prefixes.RevokedV4)
 	}
 
-	if len(service.Sync.State.LinkInstances) != 0 {
-		t.Fatalf("link instances should be empty after revocation, got %d", len(service.Sync.State.LinkInstances))
+	current = service.currentState()
+	if len(current.LinkInstances) != 0 {
+		t.Fatalf("link instances should be empty after revocation, got %d", len(current.LinkInstances))
 	}
 	if len(ipsecDriver.Terminated) == 0 || len(ipsecDriver.Unloaded) == 0 || len(ipsecDriver.DeletedIFs) == 0 {
 		t.Fatalf("ipsec teardown incomplete: terminated=%v unloaded=%v deleted_ifs=%v", ipsecDriver.Terminated, ipsecDriver.Unloaded, ipsecDriver.DeletedIFs)
 	}
-	if peer := service.Sync.State.SyncPeers["node-b.catofes."]; peer.DiscoveredAddr != "" || peer.ObservedAddr != "" || peer.LastError != "zone revoked" {
+	if peer := current.SyncPeers["node-b.catofes."]; peer.DiscoveredAddr != "" || peer.ObservedAddr != "" || peer.LastError != "zone revoked" {
 		t.Fatalf("revoked peer cache not cleaned: %+v", peer)
 	}
 

@@ -104,6 +104,33 @@ func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
 	}
 }
 
+func TestRecordSyncPeerStateDoesNotInstallLiveSnapshot(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	service := newDaemonService(&Runtime{}, state, config, defaultDaemonInterval)
+	peerID := "node-b.catofes."
+	beforeRevision := service.StateStore.Meta().Revision
+
+	service.recordSyncPeerState(peerID, "test_local_cow", func(next *stateFile) {
+		peer := next.SyncPeers[peerID]
+		peer.LastSyncUnix = 42
+		next.SyncPeers[peerID] = peer
+	})
+
+	if service.Sync.State != state {
+		t.Fatal("peer mutation installed a new legacy live-state snapshot")
+	}
+	if state.SyncPeers[peerID].LastSyncUnix != 0 {
+		t.Fatalf("legacy live-state peer changed to %+v", state.SyncPeers[peerID])
+	}
+	committed, revision := service.StateStore.Snapshot()
+	if revision != beforeRevision+1 {
+		t.Fatalf("revision = %d, want %d", revision, beforeRevision+1)
+	}
+	if committed.SyncPeers[peerID].LastSyncUnix != 42 {
+		t.Fatalf("committed peer = %+v, want LastSyncUnix 42", committed.SyncPeers[peerID])
+	}
+}
+
 func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2130, 0)
@@ -136,10 +163,27 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T
 	}
 	unlock()
 
+	state.Lock()
+	unlock = state.Unlock
+	go func() {
+		done <- service.respondFetchZone(peerID, "node-b.catofes.")
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			unlock()
+			t.Fatalf("respondFetchZone: %v", err)
+		}
+	case <-time.After(time.Second):
+		unlock()
+		t.Fatal("fetch-zone responder blocked behind live state lock")
+	}
+	unlock()
+
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]
-	if peerState.ReadOnlyResponder == 0 {
-		t.Fatalf("read-only responder count = %d, want committed read-only responder stats", peerState.ReadOnlyResponder)
+	if peerState.ReadOnlyResponder < 2 {
+		t.Fatalf("read-only responder count = %d, want catalog and fetch-zone stats", peerState.ReadOnlyResponder)
 	}
 	observed, ok := service.PeerObservability.Snapshot(peerID, now)
 	if !ok || observed.DatagramStats == nil || (observed.DatagramStats.LastCatalogCursor == "" && observed.DatagramStats.LastCatalogPageEntries == 0) {

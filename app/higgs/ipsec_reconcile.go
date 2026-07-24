@@ -680,7 +680,6 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, baseInstances map
 		return nil
 	}
 	committedState, _, _ := d.snapshotState()
-	d.installCurrentStateSnapshot(committedState)
 	if d.Sync != nil {
 		return d.Sync.saveStateSnapshot(committedState)
 	}
@@ -704,7 +703,7 @@ func (d *DaemonService) commitIPsecReconcileResultByInstance(base, next map[stri
 		if err != nil || !committed {
 			return false, err
 		}
-		return true, d.installAndSaveCommittedState()
+		return true, d.saveCommittedState()
 	}
 	if !linkInstanceCommitTokensMatch(base, current.LinkInstances, changed) {
 		return false, nil
@@ -727,7 +726,7 @@ func (d *DaemonService) commitIPsecReconcileResultByInstance(base, next map[stri
 	if err != nil || !committed {
 		return false, err
 	}
-	return true, d.installAndSaveCommittedState()
+	return true, d.saveCommittedState()
 }
 
 func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err error) {
@@ -766,7 +765,6 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 		return
 	}
 	committedState, _, _ := d.snapshotState()
-	d.installCurrentStateSnapshot(committedState)
 	if d.Sync != nil {
 		if saveErr := d.Sync.saveStateSnapshot(committedState); saveErr != nil {
 			d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": saveErr})
@@ -794,32 +792,18 @@ func (d *DaemonService) recordStaleIPsecReconcileResult(summary *ipsecReconcileS
 		return nil
 	}
 	committedState, _, _ := d.snapshotState()
-	d.installCurrentStateSnapshot(committedState)
 	if d.Sync != nil {
 		return d.Sync.saveStateSnapshot(committedState)
 	}
 	return saveState(committedState)
 }
 
-func (d *DaemonService) installAndSaveCommittedState() error {
+func (d *DaemonService) saveCommittedState() error {
 	committedState, _, _ := d.snapshotState()
-	d.installCurrentStateSnapshot(committedState)
 	if d.Sync != nil {
 		return d.Sync.saveStateSnapshot(committedState)
 	}
 	return saveState(committedState)
-}
-
-func (d *DaemonService) installCurrentStateSnapshot(state *stateFile) {
-	if d == nil || d.Sync == nil || state == nil {
-		return
-	}
-	if state.Network != nil && state.Network.RecordVerifier == nil {
-		configureValidation(state.Network)
-	}
-	d.stateMu.Lock()
-	d.Sync.State = state
-	d.stateMu.Unlock()
 }
 
 func changedLinkInstanceIDs(base, next map[string]linkInstanceState) []string {

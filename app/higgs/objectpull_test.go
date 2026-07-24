@@ -295,8 +295,8 @@ func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileLiveStateLocked(t *
 	state.Lock()
 	unlock := state.Unlock
 	service.submitObjectPull(context.Background(), "node-b.catofes.", "node-b.catofes.", now)
-	if got := service.currentState(); got != state {
-		t.Fatalf("live state pointer changed for diagnostics-only update")
+	if service.Sync.State != state {
+		t.Fatal("legacy Sync.State pointer changed for diagnostics-only update")
 	}
 	unlock()
 

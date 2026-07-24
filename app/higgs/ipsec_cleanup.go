@@ -93,7 +93,7 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans
 }
 
 func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrphans bool) (int, int, error) {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.App == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.App == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
 	latest, err := d.Sync.loadState()
@@ -148,7 +148,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if _, err := d.StateStore.Update(cleanupState); err != nil {
 		return cleaned, orphans, err
 	}
-	if err := d.installAndSaveCommittedState(); err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		return cleaned, orphans, err
 	}
 	d.notifyStateChanged()

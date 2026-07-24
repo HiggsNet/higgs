@@ -54,7 +54,8 @@ type DaemonService struct {
 	objectPullPool    *objectPullPool
 	timerManager      *TimerManager
 
-	// stateMu protects Sync.State pointer swaps.
+	// stateMu protects the legacy Sync.State fallback used when StateStore is
+	// absent (primarily standalone helpers and narrow tests).
 	stateMu sync.Mutex
 
 	// Test overrides for BIRD routing reconcile.
@@ -295,7 +296,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
-	logAutoJoinPending(d.Log, d.Sync.State)
+	if d.StateStore != nil {
+		d.StateStore.ReadCommitted(func(state *stateFile) {
+			logAutoJoinPending(d.Log, state)
+		})
+	} else {
+		logAutoJoinPending(d.Log, d.Sync.State)
+	}
 
 	nextSync := d.Sync.now()
 	nextEndpointPublish := d.Sync.now()
@@ -1224,7 +1231,7 @@ func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
 	if _, err := d.StateStore.Update(fn); err != nil {
 		return err
 	}
-	if err := d.installAndSaveCommittedState(); err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		return err
 	}
 	if d.Sync.Transport != nil {
@@ -1256,7 +1263,7 @@ func (d *DaemonService) runStateStoreWriteIfChanged(fn func(*stateFile) (bool, e
 		return false, nil
 	}
 	d.StateStore.ReplaceCommitted(latest)
-	if err := d.installAndSaveCommittedState(); err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		return false, err
 	}
 	if d.Sync.Transport != nil {
@@ -1298,7 +1305,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	}); err != nil {
 		return nil, err
 	}
-	if err := d.installAndSaveCommittedState(); err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		return nil, err
 	}
 	for _, peerID := range plan.SyncPeers {
@@ -1471,7 +1478,7 @@ func (d *DaemonService) prepareStartupState() (bool, error) {
 	} else if !committed {
 		return false, errDaemonStateRevisionStale
 	}
-	if err := d.installAndSaveCommittedState(); err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1519,7 +1526,7 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 		"key":          event.Key,
 		"record_count": recordCount,
 	})
-	if err := d.installAndSaveCommittedState(); err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		return 0, err
 	}
 	if d.Sync.Transport != nil {
@@ -1543,7 +1550,14 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 }
 
 func (d *DaemonService) currentState() *stateFile {
-	if d == nil || d.Sync == nil {
+	if d == nil {
+		return nil
+	}
+	if d.StateStore != nil {
+		state, _ := d.StateStore.Snapshot()
+		return state
+	}
+	if d.Sync == nil {
 		return nil
 	}
 	d.stateMu.Lock()
@@ -1588,31 +1602,25 @@ func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
 	response.ReconcileProgress = meta.ReconcileProgress
 }
 
-func (d *DaemonService) setState(state *stateFile) {
-	if d == nil || d.Sync == nil || d.Sync.State == state {
-		return
-	}
-	if state.Network != nil && state.Network.RecordVerifier == nil {
-		configureValidation(state.Network)
-	}
-	d.stateMu.Lock()
-	d.Sync.State = state
-	d.stateMu.Unlock()
-	d.publishCommittedStateSnapshot()
-}
-
 func (d *DaemonService) replaceCommittedState(state *stateFile) {
 	if d == nil || d.Sync == nil {
 		return
 	}
 	if d.StateStore != nil {
 		d.StateStore.ReplaceCommitted(state)
-		committed, _, _ := d.snapshotState()
-		d.installCurrentStateSnapshot(committed)
 		d.publishStateStoreRuntimeFlags()
 		return
 	}
-	d.setState(state)
+	d.stateMu.Lock()
+	d.Sync.State = state
+	d.stateMu.Unlock()
+}
+
+// setState is retained as a narrow compatibility helper for tests and legacy
+// callers. With a StateStore it replaces only the committed authority; it no
+// longer installs or republishes a second live snapshot.
+func (d *DaemonService) setState(state *stateFile) {
+	d.replaceCommittedState(state)
 }
 
 func (d *DaemonService) notifyStateChanged() {
@@ -1629,7 +1637,6 @@ func (d *DaemonService) notifyStateChanged() {
 	// firewall/routing/IPsec flush so that allow sets and desired links are
 	// computed without revoked entries.
 	d.flushRevocationCleanup()
-	d.publishCommittedStateSnapshot()
 
 	if d.drainingEvents {
 		d.ipsecDirty = true
@@ -1651,28 +1658,8 @@ func (d *DaemonService) notifyStateChanged() {
 	// Gossip peer cache cleanup runs again after teardown to ensure observed
 	// paths discovered/refreshed during the flush are cleared.
 	d.flushRevocationCleanup()
-	d.publishCommittedStateSnapshot()
 	d.notifyObserver("peer_updated", nil)
 	d.notifyObserver("health_updated", nil)
-}
-
-func (d *DaemonService) publishCommittedStateSnapshot() {
-	if d == nil || d.StateStore == nil || d.Sync == nil {
-		return
-	}
-	state := d.Sync.State
-	if state != nil {
-		if !state.mu.TryRLock() {
-			d.publishStateStoreRuntimeFlags()
-			return
-		}
-		snapshot := cloneStateFile(state)
-		state.RUnlock()
-		d.StateStore.ReplaceCommitted(snapshot)
-	} else {
-		d.StateStore.ReplaceCommitted(nil)
-	}
-	d.publishStateStoreRuntimeFlags()
 }
 
 func (d *DaemonService) publishStateStoreRuntimeFlags() {
@@ -1729,8 +1716,6 @@ func (d *DaemonService) flushRevocationCleanup() {
 			d.PeerObservability.Delete(peerID)
 		}
 	}
-	state, _, _ := d.snapshotState()
-	d.installCurrentStateSnapshot(state)
 }
 
 func (d *DaemonService) flushRevocationCleanupLocked(state *stateFile) {
@@ -1779,7 +1764,6 @@ func (d *DaemonService) flushRoutingReconcileResult(ctx context.Context) (bool, 
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
 	err := d.reconcileRouting(reconcileCtx)
-	d.publishCommittedStateSnapshot()
 	return true, err
 }
 

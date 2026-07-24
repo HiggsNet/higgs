@@ -231,7 +231,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 
 	// Verify the route announcement record was auto-published.
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	rec := service.Sync.State.Network.Zones["node-a.catofes."].Records[key]
+	rec := service.currentState().Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected auto-published announcement for 10.0.0.0/24")
 	}

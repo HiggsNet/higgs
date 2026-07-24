@@ -1146,7 +1146,7 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	serviceB.XFRMDriver = driverB
 
 	tcpAddrA := objectPullTCPAddr(transportA.LocalAddr().String())
-	listenerA, err := objectPullTCPServe(tcpAddrA, objectPullLookup(func() *stateFile { return serviceA.Sync.State }))
+	listenerA, err := objectPullTCPServe(tcpAddrA, serviceA.objectPullResponse)
 	if err != nil {
 		t.Fatalf("objectPullTCPServe(A): %v", err)
 	}
@@ -1154,7 +1154,7 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 		defer listenerA.Close()
 	}
 	tcpAddrB := objectPullTCPAddr(transportB.LocalAddr().String())
-	listenerB, err := objectPullTCPServe(tcpAddrB, objectPullLookup(func() *stateFile { return serviceB.Sync.State }))
+	listenerB, err := objectPullTCPServe(tcpAddrB, serviceB.objectPullResponse)
 	if err != nil {
 		t.Fatalf("objectPullTCPServe(B): %v", err)
 	}
