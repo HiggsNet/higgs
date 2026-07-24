@@ -29,7 +29,7 @@
             pname = "higgsnet";
             inherit version;
             src = cleanSrc;
-            vendorHash = "sha256-NoOelMKfFmgXd/CRitCSct7dFf7Nrq14jCWtEsbghUo=";
+            vendorHash = "sha256-v0SzEL0agW+0qwx4mvoOW0JSemkaAm5FgCpg7zHfsxs=";
 
             subPackages = [ "app/higgs" "app/higgs-services" ];
             # Unit and root smoke tests are run explicitly by CI/Make targets.

@@ -30,7 +30,7 @@
       pname = "higgs";
       inherit version;
       src = cleanSrc;
-      vendorHash = "sha256-NoOelMKfFmgXd/CRitCSct7dFf7Nrq14jCWtEsbghUo=";
+      vendorHash = "sha256-v0SzEL0agW+0qwx4mvoOW0JSemkaAm5FgCpg7zHfsxs=";
       subPackages = [ "app/higgs" "app/higgs-services" ];
       doCheck = false;
       ldflags = [
