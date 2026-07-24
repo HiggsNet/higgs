@@ -45,14 +45,6 @@ func ParseZoneSelector(raw string) (ZoneSelector, error) {
 	return ZoneSelector{kind: ZoneSelectorExact, base: base}, nil
 }
 
-func (s ZoneSelector) Kind() ZoneSelectorKind {
-	return s.kind
-}
-
-func (s ZoneSelector) Base() zone.ZonePath {
-	return s.base
-}
-
 func (s ZoneSelector) String() string {
 	switch s.kind {
 	case ZoneSelectorAll:

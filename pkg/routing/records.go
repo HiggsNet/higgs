@@ -137,22 +137,6 @@ func ParseRouteAnnouncementRecord(record *zone.Record) (*RouteAnnouncementRecord
 	return &ann, nil
 }
 
-// ValidateRouteAnnouncementAgainstHistory rejects prefix changes on the same key.
-// Callers should pass the current active record for the same zone+key, if any.
-func ValidateRouteAnnouncementAgainstHistory(ann *RouteAnnouncementRecord, current *zone.Record) error {
-	if current == nil {
-		return nil
-	}
-	currentAnn, err := ParseRouteAnnouncementRecord(current)
-	if err != nil {
-		return fmt.Errorf("route_announcement_history_invalid: %w", err)
-	}
-	if currentAnn.Prefix != ann.Prefix {
-		return fmt.Errorf("route_announcement_key_mismatch: key %q previously announced %s, cannot change to %s; withdraw and re-announce under new key", current.Key, currentAnn.Prefix, ann.Prefix)
-	}
-	return nil
-}
-
 // Validate checks the route announcement schema and prefix.
 func (r RouteAnnouncementRecord) Validate(owner zone.ZonePath) error {
 	if r.Version != 1 {

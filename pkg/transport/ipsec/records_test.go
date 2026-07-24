@@ -49,7 +49,10 @@ func TestParseIPsecRecordsAndBuildContactPoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseAddressRecord: %v", err)
 	}
-	candidates := AddressCandidates(addresses, now)
+	candidates, err := ResolveAddressCandidates(context.Background(), addresses, now, AddressCandidateOptions{})
+	if err != nil {
+		t.Fatalf("ResolveAddressCandidates: %v", err)
+	}
 	if len(candidates) != 3 {
 		t.Fatalf("AddressCandidates len = %d, want 3", len(candidates))
 	}
@@ -93,7 +96,7 @@ func TestParseIPsecRecordsAndBuildContactPoints(t *testing.T) {
 	if len(points) != 6 {
 		t.Fatalf("ContactPoints len = %d, want 6", len(points))
 	}
-	selected := SelectContactPoints(points, PathModeFamilyRedundant)
+	selected := SelectContactPointsWithOptions(points, PathModeFamilyRedundant, AddressCandidateOptions{})
 	if len(selected) != 2 {
 		t.Fatalf("family redundant len = %d, want 2", len(selected))
 	}
@@ -773,13 +776,13 @@ func TestExtractNodeRecordsSkipsRevokedZone(t *testing.T) {
 }
 
 func TestShouldInitiateBidirectionalTieBreak(t *testing.T) {
-	if !ShouldInitiate("node-a.catofes.", "node-b.catofes.", RoleBoth, RoleBoth) {
+	if InitiatorRoleForPeer("node-a.catofes.", "node-b.catofes.", RoleBoth, RoleBoth) != InitiatorRolePrimary {
 		t.Fatalf("node-a should initiate toward node-b")
 	}
-	if ShouldInitiate("node-b.catofes.", "node-a.catofes.", RoleBoth, RoleBoth) {
+	if InitiatorRoleForPeer("node-b.catofes.", "node-a.catofes.", RoleBoth, RoleBoth) == InitiatorRolePrimary {
 		t.Fatalf("node-b should not initiate toward node-a")
 	}
-	if ShouldInitiate("node-a.catofes.", "node-b.catofes.", RoleBoth, RoleOut) {
+	if InitiatorRoleForPeer("node-a.catofes.", "node-b.catofes.", RoleBoth, RoleOut) == InitiatorRolePrimary {
 		t.Fatalf("role=both should not initiate toward role=out")
 	}
 }

@@ -212,40 +212,6 @@ func TestParseRouteAnnouncementRecord(t *testing.T) {
 	})
 }
 
-func TestValidateRouteAnnouncementAgainstHistory(t *testing.T) {
-	makeRecord := func(prefix string) *zone.Record {
-		value, _ := json.Marshal(RouteAnnouncementRecord{
-			Version: 1,
-			Prefix:  prefix,
-			Active:  true,
-		})
-		return &zone.Record{
-			Zone:  "pek.catofes.",
-			Key:   "routes/announcements/10.0.1.0_24",
-			Type:  RecordTypeRouteAnnouncement,
-			Value: value,
-		}
-	}
-
-	current := makeRecord("10.0.1.0/24")
-	ann := &RouteAnnouncementRecord{Version: 1, Prefix: "10.0.1.0/24", Active: true}
-
-	if err := ValidateRouteAnnouncementAgainstHistory(ann, current); err != nil {
-		t.Fatalf("same prefix should pass: %v", err)
-	}
-
-	badAnn := &RouteAnnouncementRecord{Version: 1, Prefix: "10.0.2.0/24", Active: true}
-	if err := ValidateRouteAnnouncementAgainstHistory(badAnn, current); err == nil {
-		t.Fatal("expected prefix change rejection")
-	} else if !strings.Contains(err.Error(), "route_announcement_key_mismatch") {
-		t.Fatalf("error should mention route_announcement_key_mismatch: %v", err)
-	}
-
-	if err := ValidateRouteAnnouncementAgainstHistory(ann, nil); err != nil {
-		t.Fatalf("nil current should pass: %v", err)
-	}
-}
-
 func TestParseIPAMPoolRecord(t *testing.T) {
 	value, err := json.Marshal(IPAMPoolRecord{
 		Version:     1,

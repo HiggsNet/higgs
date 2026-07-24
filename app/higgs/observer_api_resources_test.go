@@ -188,7 +188,7 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	}
 	authority := &zone.ZoneAuthority{Zone: "node-b.catofes.", Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: pub}}}
 	zs := zone.NewZoneState("node-b.catofes.", authority)
-	endpointValue := gossip.EndpointRecordBytes([]gossip.LocalEndpoint{{
+	endpointValue := endpointRecordBytes([]gossip.LocalEndpoint{{
 		IP:       net.ParseIP("203.0.113.20"),
 		Port:     33434,
 		Scope:    "global",

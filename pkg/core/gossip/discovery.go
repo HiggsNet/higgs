@@ -172,13 +172,6 @@ var publicIPHTTPClient = func(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
 }
 
-// DefaultPublicIPReflectors returns the built-in public IP reflector URLs.
-func DefaultPublicIPReflectors() []string {
-	out := make([]string, len(defaultPublicIPReflectors))
-	copy(out, defaultPublicIPReflectors)
-	return out
-}
-
 // ResolvePublicIPReflectors expands the "auto" preset while preserving
 // explicitly configured reflector order. Values "none", "off", and "disabled"
 // are ignored so callers can disable an inherited preset.
@@ -206,13 +199,6 @@ func ResolvePublicIPReflectors(reflectors []string) []string {
 		}
 	}
 	return out
-}
-
-// CollectLocalEndpoints gathers candidate endpoints from explicit advertise
-// addresses and local interface scanning.
-func CollectLocalEndpoints(listenPort uint16, advertiseAddrs []string) []LocalEndpoint {
-	endpoints, _ := CollectLocalEndpointsWithReflectors(listenPort, advertiseAddrs, nil, 0, false)
-	return endpoints
 }
 
 // CollectLocalEndpointsWithReflectors gathers candidate endpoints from explicit
@@ -417,14 +403,6 @@ func QueryPublicIPsWithQuery(reflectors []string, timeout time.Duration, query f
 	return nil, lastErr
 }
 
-func queryPublicIPWithClient(reflectors []string, client *http.Client) (net.IP, error) {
-	ips, err := queryPublicIPsWithClient(reflectors, client)
-	if len(ips) > 0 {
-		return ips[0], nil
-	}
-	return nil, err
-}
-
 func queryPublicIPsWithClient(reflectors []string, client *http.Client) ([]net.IP, error) {
 	reflectors = ResolvePublicIPReflectors(reflectors)
 	if len(reflectors) == 0 {
@@ -581,11 +559,6 @@ func parseIPToken(value string) net.IP {
 	return nil
 }
 
-// LocalEndpointsToRecord builds an EndpointRecord from local candidates.
-func LocalEndpointsToRecord(endpoints []LocalEndpoint, now time.Time) *EndpointRecord {
-	return LocalEndpointsToRecordWithPolicy(endpoints, nil, now, DefaultEndpointTTL, DefaultEndpointGrace)
-}
-
 // LocalEndpointsToRecordWithPolicy builds an EndpointRecord and carries recently
 // observed old endpoints through the configured grace window.
 func LocalEndpointsToRecordWithPolicy(endpoints []LocalEndpoint, previous *EndpointRecord, now time.Time, ttl, grace time.Duration) *EndpointRecord {
@@ -719,11 +692,4 @@ func endpointCompareKey(ep EndpointEntry) string {
 		protocol = "udp"
 	}
 	return fmt.Sprintf("%s/%s/%d/%s/%s/%d", protocol, ep.Address, ep.Port, ep.Scope, ep.Source, ep.Priority)
-}
-
-// EndpointRecordBytes marshals local endpoints into the record JSON value.
-func EndpointRecordBytes(endpoints []LocalEndpoint, now time.Time) []byte {
-	er := LocalEndpointsToRecord(endpoints, now)
-	data, _ := json.Marshal(er)
-	return data
 }

@@ -201,10 +201,6 @@ func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, sha
 	return assignIPAMWithRuntimeTag(rt, path, prefix, assignedTo, shared, tag)
 }
 
-func assignIPAMWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool) error {
-	return assignIPAMWithRuntimeTag(rt, path, prefix, assignedTo, shared, "")
-}
-
 func assignIPAMWithRuntimeTag(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string) error {
 	canonical, key, value, err := prepareIPAMAssignmentRecordTag(prefix, assignedTo, true, shared, tag)
 	if err != nil {
@@ -244,10 +240,6 @@ func revokeIPAMAssignmentTo(path zone.ZonePath, prefix string, assignedTo zone.Z
 	}
 	rt.DisableControl = direct
 	return revokeIPAMAssignmentWithRuntimeTo(rt, path, prefix, assignedTo)
-}
-
-func revokeIPAMAssignmentWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) error {
-	return revokeIPAMAssignmentWithRuntimeTo(rt, path, prefix, "")
 }
 
 func revokeIPAMAssignmentWithRuntimeTo(rt *Runtime, path zone.ZonePath, prefix string, target zone.ZonePath) error {

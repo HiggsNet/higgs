@@ -181,8 +181,8 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]
-	if peerState.ReadOnlyResponder < 2 {
-		t.Fatalf("read-only responder count = %d, want catalog and fetch-zone stats", peerState.ReadOnlyResponder)
+	if peerState.ReadOnlyResponder != 0 {
+		t.Fatalf("read-only responder count = %d, want no StateStore write", peerState.ReadOnlyResponder)
 	}
 	observed, ok := service.PeerObservability.Snapshot(peerID, now)
 	if !ok || observed.DatagramStats == nil || (observed.DatagramStats.LastCatalogCursor == "" && observed.DatagramStats.LastCatalogPageEntries == 0) {

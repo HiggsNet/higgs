@@ -6,8 +6,16 @@ import (
 	"testing"
 )
 
+func webSubFSForTest() fs.FS {
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		return nil
+	}
+	return sub
+}
+
 func TestWebSubFS(t *testing.T) {
-	webFS := WebSubFS()
+	webFS := webSubFSForTest()
 	if webFS == nil {
 		t.Fatal("WebSubFS should not be nil")
 	}
@@ -21,7 +29,7 @@ func TestWebSubFS(t *testing.T) {
 }
 
 func TestWebAppEscapesHTML(t *testing.T) {
-	webFS := WebSubFS()
+	webFS := webSubFSForTest()
 	if webFS == nil {
 		t.Fatal("WebSubFS should not be nil")
 	}
@@ -38,7 +46,7 @@ func TestWebAppEscapesHTML(t *testing.T) {
 }
 
 func TestWebAppPreservesFoldState(t *testing.T) {
-	webFS := WebSubFS()
+	webFS := webSubFSForTest()
 	if webFS == nil {
 		t.Fatal("WebSubFS should not be nil")
 	}

@@ -151,7 +151,7 @@ func putSignedEndpointRecord(t *testing.T, state *stateFile, ip string, port uin
 		Zone:      "node-b.catofes.",
 		Key:       gossip.EndpointRecordKeyUDP,
 		Type:      "sync.endpoint",
-		Value:     gossip.EndpointRecordBytes(endpoints, now),
+		Value:     endpointRecordBytes(endpoints, now),
 		Version:   version,
 		Timestamp: now.Unix(),
 	}

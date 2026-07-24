@@ -24,10 +24,6 @@ func publishSOCKS5Endpoints(endpoints []higgsservice.SOCKS5Endpoint, direct bool
 	return publishSOCKS5EndpointsWithRuntime(rt, endpoints)
 }
 
-func publishSOCKS5ServiceWithRuntime(rt *Runtime, region, address string, port uint16) error {
-	return publishSOCKS5EndpointsWithRuntime(rt, []higgsservice.SOCKS5Endpoint{{Region: region, Address: address, Port: port}})
-}
-
 func publishSOCKS5EndpointsWithRuntime(rt *Runtime, endpoints []higgsservice.SOCKS5Endpoint) error {
 	canonical := make([]higgsservice.SOCKS5Endpoint, 0, len(endpoints))
 	for _, endpoint := range endpoints {

@@ -175,10 +175,6 @@ func BaseConnectionName(transportID string) string {
 	return transportID
 }
 
-func RotateChildSAName(transportID string, generation uint64) string {
-	return RotateConnectionName(transportID, generation) + "-child"
-}
-
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 	// Higgs drives active CHILD_SA establishment through its explicit VICI
 	// initiate path. Keeping the loaded child as a trap avoids racing

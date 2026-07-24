@@ -48,7 +48,7 @@ func TestSelectTargetsByZoneFamilyAndRole(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := SelectTargets(targets, tc.zone, tc.opts)
+			got := SelectTargetsResolved(targets, tc.zone, ResolveOptions(tc.opts))
 			if len(got) != tc.wantLen {
 				t.Fatalf("SelectTargets(%s, %+v) = %d targets, want %d", tc.zone, tc.opts, len(got), tc.wantLen)
 			}

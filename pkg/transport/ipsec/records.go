@@ -572,11 +572,6 @@ func (r OverlayIntentRecord) Validate(keyOverlayID string) error {
 	return nil
 }
 
-func AddressCandidates(record *AddressRecord, now time.Time) []AddressCandidate {
-	candidates, _ := ResolveAddressCandidates(context.Background(), record, now, AddressCandidateOptions{})
-	return candidates
-}
-
 func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now time.Time, opts AddressCandidateOptions) ([]AddressCandidate, error) {
 	if record == nil {
 		return nil, nil
@@ -691,11 +686,6 @@ func PortAdvertisements(record *PortRecord, now time.Time) []PortAdvertisement {
 	return out
 }
 
-func ContactPoints(addresses *AddressRecord, ports *PortRecord, now time.Time) []ContactPoint {
-	points, _ := ResolveContactPoints(context.Background(), addresses, ports, now, AddressCandidateOptions{})
-	return points
-}
-
 func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *PortRecord, now time.Time, opts AddressCandidateOptions) ([]ContactPoint, error) {
 	addressCandidates, err := ResolveAddressCandidates(ctx, addresses, now, opts)
 	if err != nil {
@@ -727,10 +717,6 @@ func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *
 	annotateContactPoints(out, opts)
 	sortContactPoints(out, opts)
 	return out, nil
-}
-
-func SelectContactPoints(points []ContactPoint, mode string) []ContactPoint {
-	return SelectContactPointsWithOptions(points, mode, AddressCandidateOptions{})
 }
 
 func SelectContactPointsWithOptions(points []ContactPoint, mode string, opts AddressCandidateOptions) []ContactPoint {

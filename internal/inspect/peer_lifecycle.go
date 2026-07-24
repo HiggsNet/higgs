@@ -223,28 +223,3 @@ func PeerStatusRequiresCleanup(info PeerStatusInfo) bool {
 		return false
 	}
 }
-
-func PeerStatusIsHardChange(oldState, newState string) bool {
-	if oldState == newState {
-		return false
-	}
-	if newState == PeerStateRevoked || oldState == PeerStateRevoked {
-		return true
-	}
-	if newState == PeerStatePolicyDenied || newState == PeerStateConfigError {
-		return true
-	}
-	if oldState == PeerStatePolicyDenied || oldState == PeerStateConfigError {
-		return true
-	}
-	return false
-}
-
-func ShouldBlockPeerReconnect(info PeerStatusInfo) bool {
-	switch info.State {
-	case PeerStateRevoked, PeerStatePolicyDenied, PeerStateConfigError:
-		return true
-	default:
-		return false
-	}
-}

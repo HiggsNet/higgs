@@ -158,14 +158,14 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 			// oversized zone snapshots into UDP object chunks.
 			// Keep them out of the active pull FSM as a read-only responder path.
 			if msg.FetchZone.ChunkFallback {
-				return d.respondFetchZoneChunksWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
+				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
 			}
-			return d.respondFetchZoneWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
+			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
 		case gossip.MessageFetchCatalogPage:
 			if msg.FetchCatalogPage == nil {
 				return nil
 			}
-			return d.respondFetchCatalogPageWithoutStateRecord(msg.PeerID, msg.FetchCatalogPage.Cursor)
+			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
 		case gossip.MessageCatalogPage:
 			if msg.CatalogPage == nil {
 				return nil
@@ -205,14 +205,14 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 				return nil
 			}
 			if msg.FetchZone.ChunkFallback {
-				return d.respondFetchZoneChunksWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
+				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
 			}
-			return d.respondFetchZoneWithoutStateRecord(msg.PeerID, msg.FetchZone.Zone)
+			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
 		case gossip.MessageFetchCatalogPage:
 			if msg.FetchCatalogPage == nil {
 				return nil
 			}
-			return d.respondFetchCatalogPageWithoutStateRecord(msg.PeerID, msg.FetchCatalogPage.Cursor)
+			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
 		case gossip.MessageAnnounce:
 			return d.handleAnnounceHint(msg.PeerID)
 		case gossip.MessageObjectChunkNACK:
@@ -408,21 +408,8 @@ func (d *DaemonService) postSyncEvent(event SyncEvent) error {
 }
 
 func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
-	return d.respondFetchCatalogPageWithStateRecord(peerID, cursor, true)
-}
-
-func (d *DaemonService) respondFetchCatalogPageWithoutStateRecord(peerID, cursor string) error {
-	return d.respondFetchCatalogPageWithStateRecord(peerID, cursor, false)
-}
-
-func (d *DaemonService) respondFetchCatalogPageWithStateRecord(peerID, cursor string, recordState bool) error {
 	if d == nil || d.Sync == nil {
 		return nil
-	}
-	if recordState {
-		d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
-			recordReadOnlyResponder(state, peerID, "catalog_page", "", d.Sync.now())
-		})
 	}
 	budget := d.syncDatagramBudget()
 	var page *gossip.CatalogPage
@@ -456,21 +443,8 @@ func (d *DaemonService) respondFetchCatalogPageWithStateRecord(peerID, cursor st
 }
 
 func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) error {
-	return d.respondFetchZoneWithStateRecord(peerID, path, true)
-}
-
-func (d *DaemonService) respondFetchZoneWithoutStateRecord(peerID string, path zone.ZonePath) error {
-	return d.respondFetchZoneWithStateRecord(peerID, path, false)
-}
-
-func (d *DaemonService) respondFetchZoneWithStateRecord(peerID string, path zone.ZonePath, recordState bool) error {
 	if d == nil || d.Sync == nil {
 		return nil
-	}
-	if recordState {
-		d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
-			recordReadOnlyResponder(state, peerID, "fetch_zone", path, d.Sync.now())
-		})
 	}
 	budget := d.syncDatagramBudget()
 	var plan snapshotDatagramPlan
@@ -498,25 +472,12 @@ func (d *DaemonService) respondFetchZoneWithStateRecord(peerID string, path zone
 }
 
 func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath) error {
-	return d.respondFetchZoneChunksWithStateRecord(peerID, path, true)
-}
-
-func (d *DaemonService) respondFetchZoneChunksWithoutStateRecord(peerID string, path zone.ZonePath) error {
-	return d.respondFetchZoneChunksWithStateRecord(peerID, path, false)
-}
-
-func (d *DaemonService) respondFetchZoneChunksWithStateRecord(peerID string, path zone.ZonePath, recordState bool) error {
 	if d == nil || d.Sync == nil || d.Sync.Transport == nil {
 		return nil
 	}
 	state, _, _ := d.snapshotState()
 	if state == nil || state.Network == nil {
 		return nil
-	}
-	if recordState {
-		d.recordSyncPeerState(peerID, "read_only_responder", func(state *stateFile) {
-			recordReadOnlyResponder(state, peerID, "chunk_fallback", path, d.Sync.now())
-		})
 	}
 	now := d.Sync.now()
 	diag, err := sendSnapshotsWithDiagnostics(state.Network, d.Sync.Transport, peerID, []zone.ZonePath{path}, now, true, d.Sync.logger())
@@ -858,10 +819,6 @@ func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnaps
 	return result, true, nil
 }
 
-func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSession, actions []SyncAction) bool {
-	return d.executeSyncActionsWithMutations(ctx, session, actions, nil)
-}
-
 func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, session *SyncSession, actions []SyncAction, mutations *syncPeerStateMutationBatch) bool {
 	if len(actions) == 0 {
 		return false
@@ -1122,17 +1079,6 @@ func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
 			"error":   err,
 		})
 	}
-}
-
-func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) {
-	if session == nil {
-		return
-	}
-	peerID := session.PeerID
-	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
-		recordPeerSyncAt(state, peerID, session.lastError, d.Sync.now())
-	})
-	d.completeSyncSessionAfterPeerState(session, changed)
 }
 
 func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, changed bool) {

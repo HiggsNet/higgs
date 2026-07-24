@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -137,39 +136,6 @@ func (l *appLogger) debugEnabled() bool {
 		return newAppLogger(nil).debugEnabled()
 	}
 	return l.level == logLevelDebug
-}
-
-func (l *appLogger) withNow(now func() time.Time) *appLogger {
-	if l == nil {
-		l = newAppLogger(nil)
-	}
-	if now != nil {
-		l.now = now
-	}
-	return l
-}
-
-func (l *appLogger) withOutput(out io.Writer) *appLogger {
-	if l == nil {
-		l = newAppLogger(nil)
-	}
-	if out != nil {
-		l.out = out
-	}
-	return l
-}
-
-func (l *appLogger) setLevel(level logLevel) *appLogger {
-	if l == nil {
-		l = newAppLogger(nil)
-	}
-	switch level {
-	case logLevelDebug, logLevelInfo, logLevelWarn, logLevelError:
-	default:
-		level = logLevelInfo
-	}
-	l.level = level
-	return l
 }
 
 func (l *appLogger) Debug(component, event string, fields map[string]any) {
@@ -412,30 +378,4 @@ func (l *repeatedLogLimiter) Allow(key string, now time.Time) (suppressed int, o
 	entry.suppressed++
 	l.entries[key] = entry
 	return 0, false
-}
-
-func syncErrorReason(err error) string {
-	var pending *syncPendingZonesError
-	switch {
-	case err == nil:
-		return ""
-	case errors.As(err, &pending):
-		return "pending_zones"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "context_deadline"
-	case isReceiveTimeout(err):
-		return "timeout"
-	case errors.Is(err, gossip.ErrUnknownPeer):
-		return "unknown_peer"
-	case errors.Is(err, gossip.ErrMessageTooLarge):
-		return "message_too_large"
-	case errors.Is(err, gossip.ErrQuotaExceeded):
-		return "quota"
-	default:
-		reason := gossip.RejectReason(err)
-		if reason != "invalid_message" {
-			return reason
-		}
-		return "sync_error"
-	}
 }

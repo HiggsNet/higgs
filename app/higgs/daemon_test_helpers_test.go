@@ -28,6 +28,15 @@ type observedIPsecDriver struct {
 	listCalls  int
 }
 
+func endpointRecordBytes(endpoints []gossip.LocalEndpoint, now time.Time) []byte {
+	record := gossip.LocalEndpointsToRecordWithPolicy(endpoints, nil, now, gossip.DefaultEndpointTTL, gossip.DefaultEndpointGrace)
+	value, err := json.Marshal(record)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
 func (d *observedIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
 	d.listCalls++
 	return d.sas, nil

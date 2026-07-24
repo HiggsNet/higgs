@@ -44,7 +44,7 @@ func TestPingDebugTargetsIncludeActiveOldAndStagedRoles(t *testing.T) {
 	if got := len(targets); got != 4 {
 		t.Fatalf("fixture targets = %d, want 4", got)
 	}
-	cSel := pingdebug.SelectTargets(targets, "node-c.", pingdebug.Options{})
+	cSel := pingdebug.SelectTargetsResolved(targets, "node-c.", pingdebug.ResolveOptions(pingdebug.Options{}))
 	roles := map[string]bool{}
 	for _, sel := range cSel {
 		roles[pingdebug.Role(sel)] = true

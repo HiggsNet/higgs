@@ -146,15 +146,6 @@ func objectPullTCPAddr(udpAddr string) string {
 	return tcp.String()
 }
 
-// pullObjectTCP attempts to fetch an object from a peer via TCP.
-func pullObjectTCP(addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
-	return pullObjectTCPForPeer("", addr, req)
-}
-
-func pullObjectTCPForPeer(peerID, addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
-	return pullObjectTCPForPeerUntil(peerID, addr, req, time.Time{})
-}
-
 func pullObjectTCPForPeerUntil(peerID, addr string, req *gossip.ObjectPullRequest, deadline time.Time) (*gossip.ObjectPullResponse, error) {
 	select {
 	case objectPullClientLimiter <- struct{}{}:
@@ -232,18 +223,6 @@ func objectPullClientDeadlineUntil(deadline time.Time, maxTimeout time.Duration)
 	return time.Now().Add(timeout), nil
 }
 
-// objectPullLookup returns a function that can be passed to objectPullTCPServe.
-// It accepts a snapshot getter so that the daemon can reload state without
-// invalidating the closure. The returned handler reads only its private
-// snapshot and does not acquire the committed state lock.
-func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-	return func(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-		response := objectPullResponseFromState(getState(), req, time.Now())
-		logObjectPullSnapshot(req, response)
-		return response
-	}
-}
-
 func objectPullResponseFromState(state *stateFile, req *gossip.ObjectPullRequest, now time.Time) *gossip.ObjectPullResponse {
 	if state == nil || state.Network == nil || req == nil || !req.Zone.Valid() {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
@@ -301,12 +280,6 @@ func logObjectPullSnapshot(req *gossip.ObjectPullRequest, response *gossip.Objec
 		"records": len(response.Snapshot.Records),
 		"bytes":   encodedZoneSnapshotSize(response.Snapshot),
 	})
-}
-
-// tryObjectPullTCP attempts to pull a zone snapshot over TCP from a peer.
-// It derives the TCP address from the peer's discovered or bootstrap UDP address.
-func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath) (*gossip.ZoneSnapshot, error) {
-	return tryObjectPullTCPUntil(state, config, peerID, path, time.Time{})
 }
 
 func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath, deadline time.Time) (*gossip.ZoneSnapshot, error) {

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -21,21 +19,6 @@ type Config struct {
 	BindAddr           string
 	Port               int
 	EventBufferSeconds int
-}
-
-// ListenAddr returns the full observer listen address.
-func (c Config) ListenAddr() string {
-	return net.JoinHostPort(c.BindAddr, fmt.Sprintf("%d", c.Port))
-}
-
-// IsLoopbackBind reports whether the observer is only accessible from localhost.
-func (c Config) IsLoopbackBind() bool {
-	host := strings.TrimSpace(c.BindAddr)
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // Provider supplies read-only observer snapshots from the owning daemon.
@@ -303,15 +286,6 @@ func (s *Server) HandleStatic(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
-}
-
-// WebSubFS returns the embedded web/ directory as an fs.FS for testing.
-func WebSubFS() fs.FS {
-	sub, err := fs.Sub(webFS, "web")
-	if err != nil {
-		return nil
-	}
-	return sub
 }
 
 func pathFilter(path string, prefix string) string {

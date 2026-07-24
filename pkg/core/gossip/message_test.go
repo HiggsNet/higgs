@@ -282,59 +282,9 @@ func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 	}
 }
 
-func TestApplyRecordSnapshotAcceptsSignedFastForward(t *testing.T) {
-	now := time.Unix(1000, 0)
-	source, zonePriv := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
-
-	v1 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix())
-	v2 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-b"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
-	if err := source.PutAt(v1, now); err != nil {
-		t.Fatalf("PutAt(v1): %v", err)
-	}
-	if err := source.PutAt(v2, now); err != nil {
-		t.Fatalf("PutAt(v2): %v", err)
-	}
-
-	target := cloneNetworkState(source)
-	target.Zones["catofes."].Records = make(map[string]*zone.Record)
-	target.Zones["catofes."].RecordHistory = make(map[string][]*zone.Record)
-
-	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: v2}, now); err != nil {
-		t.Fatalf("ApplyRecordSnapshot(v2): %v", err)
-	}
-	got := target.Zones["catofes."].Records["identity"]
-	if got == nil || got.Version != 2 || string(got.Value) != "node-b" {
-		t.Fatalf("active record = %#v, want v2", got)
-	}
-}
-
-func TestApplyRecordSnapshotIgnoresStaleRecord(t *testing.T) {
-	now := time.Unix(1000, 0)
-	target, zonePriv := testNetwork(t)
-	target.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
-
-	v1 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix())
-	v2 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-b"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
-	if err := target.PutAt(v1, now); err != nil {
-		t.Fatalf("PutAt(v1): %v", err)
-	}
-	if err := target.PutAt(v2, now); err != nil {
-		t.Fatalf("PutAt(v2): %v", err)
-	}
-
-	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: v1}, now); err != nil {
-		t.Fatalf("ApplyRecordSnapshot(stale v1): %v", err)
-	}
-	got := target.Zones["catofes."].Records["identity"]
-	if got == nil || got.Version != 2 || string(got.Value) != "node-b" {
-		t.Fatalf("active record = %#v, want v2 unchanged", got)
-	}
-}
-
 func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 	now := time.Unix(1000, 0)
-	source, rootPriv, zonePriv := testNetworkWithKeys(t)
+	source, rootPriv, _ := testNetworkWithKeys(t)
 	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 
 	delegation := source.Zones[zone.RootZone].Delegations["catofes."]
@@ -369,10 +319,6 @@ func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 	}
 	if err := higgscrypto.VerifyChain(target, "catofes.", now); !errors.Is(err, zone.ErrZoneRevoked) {
 		t.Fatalf("VerifyChain = %v, want ErrZoneRevoked", err)
-	}
-	record := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-c"), 1, nil, now.Unix())
-	if err := ApplyRecordSnapshot(target, &RecordSnapshot{Zone: "catofes.", Record: record}, now); !errors.Is(err, zone.ErrZoneRevoked) {
-		t.Fatalf("ApplyRecordSnapshot = %v, want ErrZoneRevoked", err)
 	}
 }
 

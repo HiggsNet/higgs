@@ -64,10 +64,6 @@ func (opts ResolvedOptions) ProbeConfig() health.ProbeConfig {
 	return health.ProbeConfig{Timeout: opts.Timeout, Burst: opts.Count}
 }
 
-func SelectTargets(targets []health.ProbeTarget, peerZone string, opts Options) []health.ProbeTarget {
-	return SelectTargetsResolved(targets, peerZone, ResolveOptions(opts))
-}
-
 func SelectTargetsResolved(targets []health.ProbeTarget, peerZone string, opts ResolvedOptions) []health.ProbeTarget {
 	out := make([]health.ProbeTarget, 0, len(targets))
 	for _, target := range targets {

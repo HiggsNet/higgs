@@ -524,30 +524,8 @@ func (d *DaemonService) observeBirdForHealth(ctx context.Context, state *stateFi
 	d.recordBirdHealthObservationForState(state, netnsName, overlays, observed)
 }
 
-func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string, overlays []string) {
-	if d == nil {
-		return
-	}
-	if d.StateStore != nil {
-		d.StateStore.ReadCommitted(func(state *stateFile) {
-			d.recordBirdHealthObservationUnavailableForState(state, netnsName, overlays)
-		})
-	}
-}
-
 func (d *DaemonService) recordBirdHealthObservationUnavailableForState(state *stateFile, netnsName string, overlays []string) {
 	d.recordBirdHealthObservationForState(state, netnsName, overlays, &bird.BirdObservedState{})
-}
-
-func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays []string, observed *bird.BirdObservedState) {
-	if d == nil {
-		return
-	}
-	if d.StateStore != nil {
-		d.StateStore.ReadCommitted(func(state *stateFile) {
-			d.recordBirdHealthObservationForState(state, netnsName, overlays, observed)
-		})
-	}
 }
 
 func (d *DaemonService) recordBirdHealthObservationForState(state *stateFile, netnsName string, overlays []string, observed *bird.BirdObservedState) {

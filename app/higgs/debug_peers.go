@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
-	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
-	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
 // debugPeers implements `higgs debug peers`: it prints the derived lifecycle
@@ -82,30 +79,4 @@ func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo
 	}
 	hasOverlay := d.Sync.App != nil && d.Sync.App.Config != nil && len(d.Sync.App.Config.IPsec.LinkGroups) > 0
 	return derivePeerStatuses(state, now, cfg, hasOverlay), meta
-}
-
-// peerLifecycleCleanupZones returns peer zones that should have their Higgs
-// owner-managed SA/interface/route/firewall objects cleaned up. This is the
-// 6.4.2 cleanup_after / 6.4.5 revoked entry point: it is called by the
-// daemon's periodic timer to discover long-term offline or revoked peers that
-// need resource cleanup beyond normal reconcile teardown.
-func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.PeerLifecycleConfig) []zone.ZonePath {
-	if state == nil {
-		return nil
-	}
-	cfg = inspect.NormalizePeerLifecycleConfig(cfg)
-	hasOverlay := hasIPsecConfig(state)
-	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
-	var out []zone.ZonePath
-	seen := make(map[zone.ZonePath]bool)
-	for _, p := range peers {
-		if inspect.PeerStatusRequiresCleanup(p) && !seen[p.Zone] {
-			seen[p.Zone] = true
-			out = append(out, p.Zone)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i] < out[j]
-	})
-	return out
 }

@@ -35,8 +35,8 @@ func TestZoneSelectorMatches(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseZoneSelector: %v", err)
 			}
-			if selector.Kind() != tc.kind || selector.String() != tc.rule {
-				t.Fatalf("selector = kind %q string %q", selector.Kind(), selector.String())
+			if selector.kind != tc.kind || selector.String() != tc.rule {
+				t.Fatalf("selector = kind %q string %q", selector.kind, selector.String())
 			}
 			for _, candidate := range tc.matches {
 				if !selector.Matches(candidate) {

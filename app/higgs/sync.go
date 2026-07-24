@@ -699,7 +699,17 @@ func fetchListForPeer(state *stateFile, peerID string, remote []gossip.ZoneDiges
 	if state == nil {
 		return nil
 	}
-	fetch := gossip.FetchList(state.Network, remote)
+	localByZone := make(map[zone.ZonePath][]byte)
+	for _, digest := range gossip.ZoneDigests(state.Network) {
+		localByZone[digest.Zone] = digest.RootHash
+	}
+	var fetch []zone.ZonePath
+	for _, digest := range remote {
+		if digest.Zone.Valid() && !bytes.Equal(localByZone[digest.Zone], digest.RootHash) {
+			fetch = append(fetch, digest.Zone)
+		}
+	}
+	sort.Slice(fetch, func(i, j int) bool { return fetch[i] < fetch[j] })
 	if len(fetch) == 0 || peerID == "" {
 		return fetch
 	}

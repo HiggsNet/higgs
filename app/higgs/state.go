@@ -477,10 +477,6 @@ func globalRootHash(digests []gossip.ZoneDigest) []byte {
 	return higgscrypto.Hash(parts...)
 }
 
-func recordPeerSync(state *stateFile, peerID string, err error) {
-	recordPeerSyncAt(state, peerID, err, timeNow())
-}
-
 func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time) {
 	if state == nil || peerID == "" {
 		return

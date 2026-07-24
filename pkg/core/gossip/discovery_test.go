@@ -103,10 +103,11 @@ func TestQueryPublicIPParsesTextAndJSONReflectors(t *testing.T) {
 		return httpResponse(http.StatusOK, "203.0.113.44\n"), nil
 	})}
 
-	ip, err := queryPublicIPWithClient([]string{"https://reflector.example/text"}, textClient)
+	ips, err := queryPublicIPsWithClient([]string{"https://reflector.example/text"}, textClient)
 	if err != nil {
 		t.Fatalf("QueryPublicIP(text): %v", err)
 	}
+	ip := ips[0]
 	if ip.String() != "203.0.113.44" {
 		t.Fatalf("text ip = %s, want 203.0.113.44", ip)
 	}
@@ -115,10 +116,11 @@ func TestQueryPublicIPParsesTextAndJSONReflectors(t *testing.T) {
 		return httpResponse(http.StatusOK, `{"origin":"2001:db8::12"}`), nil
 	})}
 
-	ip, err = queryPublicIPWithClient([]string{"https://reflector.example/json"}, jsonClient)
+	ips, err = queryPublicIPsWithClient([]string{"https://reflector.example/json"}, jsonClient)
 	if err != nil {
 		t.Fatalf("QueryPublicIP(json): %v", err)
 	}
+	ip = ips[0]
 	if ip.String() != "2001:db8::12" {
 		t.Fatalf("json ip = %s, want 2001:db8::12", ip)
 	}
@@ -149,10 +151,11 @@ func TestQueryPublicIPFallsBackAcrossReflectors(t *testing.T) {
 		return httpResponse(http.StatusOK, `{"ip":"198.51.100.7"}`), nil
 	})}
 
-	ip, err := queryPublicIPWithClient([]string{"https://bad.example", "https://good.example"}, client)
+	ips, err := queryPublicIPsWithClient([]string{"https://bad.example", "https://good.example"}, client)
 	if err != nil {
 		t.Fatalf("QueryPublicIP(fallback): %v", err)
 	}
+	ip := ips[0]
 	if ip.String() != "198.51.100.7" {
 		t.Fatalf("fallback ip = %s, want 198.51.100.7", ip)
 	}
@@ -188,7 +191,7 @@ func TestQueryPublicIPsReturnsOneAddressPerFamily(t *testing.T) {
 
 func TestResolvePublicIPReflectorsExpandsAutoPreset(t *testing.T) {
 	reflectors := ResolvePublicIPReflectors([]string{"https://custom.example/ip", "auto", "https://custom.example/ip", "none"})
-	if len(reflectors) != len(DefaultPublicIPReflectors())+1 {
+	if len(reflectors) != len(defaultPublicIPReflectors)+1 {
 		t.Fatalf("reflectors = %d, want custom plus defaults", len(reflectors))
 	}
 	if reflectors[0] != "https://custom.example/ip" {

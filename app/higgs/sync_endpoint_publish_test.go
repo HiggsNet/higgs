@@ -152,7 +152,7 @@ func TestEndpointPublishDisabledClearsExistingEndpoint(t *testing.T) {
 		Zone:      "node-b.catofes.",
 		Key:       gossip.EndpointRecordKeyUDP,
 		Type:      "sync.endpoint",
-		Value:     gossip.EndpointRecordBytes(endpoints, now),
+		Value:     endpointRecordBytes(endpoints, now),
 		Version:   1,
 		Timestamp: now.Unix(),
 	}

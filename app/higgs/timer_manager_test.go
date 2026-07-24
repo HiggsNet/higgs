@@ -1,9 +1,82 @@
 package main
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
+
+type fakeClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	timers []*fakeTimer
+}
+
+func newFakeClock(now time.Time) *fakeClock { return &fakeClock{now: now} }
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) NewTimer(d time.Duration) Timer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := &fakeTimer{clock: c, when: c.now.Add(d), c: make(chan time.Time, 1)}
+	c.timers = append(c.timers, t)
+	return t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	var fired []*fakeTimer
+	var remaining []*fakeTimer
+	for _, t := range c.timers {
+		if !t.when.After(c.now) && !t.stopped {
+			fired = append(fired, t)
+		} else {
+			remaining = append(remaining, t)
+		}
+	}
+	c.timers = remaining
+	c.mu.Unlock()
+	for _, t := range fired {
+		select {
+		case t.c <- c.now:
+		default:
+		}
+	}
+}
+
+type fakeTimer struct {
+	clock   *fakeClock
+	when    time.Time
+	c       chan time.Time
+	stopped bool
+}
+
+func (t *fakeTimer) C() <-chan time.Time { return t.c }
+
+func (t *fakeTimer) Stop() bool {
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+	if t.stopped {
+		return false
+	}
+	t.stopped = true
+	return true
+}
+
+func (t *fakeTimer) Reset(d time.Duration) bool {
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+	wasActive := !t.stopped
+	t.stopped = false
+	t.when = t.clock.now.Add(d)
+	return wasActive
+}
 
 func TestTimerManagerPostsRoundTimeout(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))

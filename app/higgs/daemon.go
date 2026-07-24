@@ -1571,12 +1571,6 @@ func (d *DaemonService) replaceCommittedState(state *stateFile) {
 	d.publishStateStoreRuntimeFlags()
 }
 
-// setState is retained as a narrow compatibility helper for tests. It replaces
-// the daemon's sole in-memory authority.
-func (d *DaemonService) setState(state *stateFile) {
-	d.replaceCommittedState(state)
-}
-
 func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
 		state, _, _ := d.snapshotState()

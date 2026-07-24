@@ -329,23 +329,6 @@ func executePurgePlan(state *stateFile, plan *purgePlan) {
 	}
 }
 
-// UpdateRevocationLayerStatus records the cleanup status for a layer in the
-// impact object. This is called by the daemon after each layer's cleanup pass.
-func UpdateRevocationLayerStatus(impact *inspect.RevocationImpact, layer string, status, reason, errStr string, now time.Time) {
-	if impact == nil || impact.Layers == nil {
-		return
-	}
-	entry := impact.Layers[layer]
-	if entry == nil {
-		entry = &inspect.RevocationLayerStatus{}
-		impact.Layers[layer] = entry
-	}
-	entry.Status = status
-	entry.Reason = reason
-	entry.Error = errStr
-	entry.UnixTime = now.Unix()
-}
-
 // AllRevocationImpact computes impact for all currently-revoked zones and
 // returns a combined result for debug/diagnostic output.
 func AllRevocationImpact(state *stateFile, config *syncConfigFile, now time.Time) []inspect.RevocationImpact {

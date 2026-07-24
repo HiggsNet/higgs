@@ -381,40 +381,6 @@ func TestProbeTargetShouldProbe(t *testing.T) {
 	}
 }
 
-func TestCollectMetricsAndRender(t *testing.T) {
-	healths := []LinkHealth{
-		{
-			InstanceID: "link1",
-			State:      HealthStateHealthy,
-			ProbeType:  ProbeTypeICMP,
-			Sent:       10,
-			Received:   9,
-			Lost:       1,
-			LossRatio:  0.1,
-			LastRTT:    5 * time.Millisecond,
-			Jitter:     1 * time.Millisecond,
-			Labels:     MetricsLabels{LocalZone: "a.", PeerZone: "b.", Overlay: "g1", InstanceID: "link1", ProbeType: "icmp"},
-		},
-	}
-	snap := CollectMetrics(healths, time.Now())
-	if len(snap.Samples) == 0 {
-		t.Fatalf("no metric samples collected")
-	}
-	// Verify rendering doesn't panic.
-	var buf stringBuilder
-	RenderOpenMetrics(&buf, snap, map[string]int{"link1": 2})
-	output := buf.String()
-	if output == "" {
-		t.Fatalf("rendered output is empty")
-	}
-	if !contains(output, "higgs_link_probe_rtt_seconds") {
-		t.Fatalf("output missing rtt metric:\n%s", output)
-	}
-	if !contains(output, "higgs_link_health_state") {
-		t.Fatalf("output missing health state metric:\n%s", output)
-	}
-}
-
 type fakeProber struct {
 	rtt     time.Duration
 	success bool
@@ -459,17 +425,4 @@ func (p *blockingProber) maxActive() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.max
-}
-
-type stringBuilder struct {
-	data []byte
-}
-
-func (s *stringBuilder) Write(p []byte) (int, error) {
-	s.data = append(s.data, p...)
-	return len(p), nil
-}
-
-func (s *stringBuilder) String() string {
-	return string(s.data)
 }

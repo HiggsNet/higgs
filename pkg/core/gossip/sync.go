@@ -38,25 +38,6 @@ func DefaultSyncLimits() SyncLimits {
 	}
 }
 
-func FetchList(local *zone.NetworkState, remote []ZoneDigest) []zone.ZonePath {
-	localByZone := make(map[zone.ZonePath][]byte)
-	for _, digest := range ZoneDigests(local) {
-		localByZone[digest.Zone] = digest.RootHash
-	}
-
-	var out []zone.ZonePath
-	for _, digest := range remote {
-		if !digest.Zone.Valid() {
-			continue
-		}
-		if !bytes.Equal(localByZone[digest.Zone], digest.RootHash) {
-			out = append(out, digest.Zone)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
-}
-
 func Snapshot(ns *zone.NetworkState, path zone.ZonePath) (*ZoneSnapshot, error) {
 	if ns == nil {
 		return nil, errors.New("network state is nil")
@@ -95,30 +76,6 @@ func RecordSnapshotFor(ns *zone.NetworkState, fetch *FetchRecord) (*RecordSnapsh
 		return &RecordSnapshot{Zone: fetch.Zone, Record: cloneRecord(record)}, nil
 	}
 	return nil, fmt.Errorf("%w: %s/%s", zone.ErrRecordNotFound, fetch.Zone, fetch.Key)
-}
-
-func ApplyRecordSnapshot(ns *zone.NetworkState, snapshot *RecordSnapshot, now time.Time) error {
-	if ns == nil {
-		return errors.New("network state is nil")
-	}
-	if snapshot == nil || snapshot.Record == nil {
-		return errors.New("record snapshot is nil")
-	}
-	if snapshot.Zone != snapshot.Record.Zone {
-		return zone.ErrInvalidZonePath
-	}
-	if ns.IsZoneRevoked(snapshot.Zone, now) {
-		return fmt.Errorf("%w: %s", zone.ErrZoneRevoked, snapshot.Zone)
-	}
-	ns.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
-	if err := higgscrypto.VerifyChain(ns, snapshot.Zone, now); err != nil {
-		return fmt.Errorf("%w: %v", ErrUntrustedZone, err)
-	}
-	err := ns.PutAt(cloneRecord(snapshot.Record), now)
-	if errors.Is(err, zone.ErrStaleRecord) || errors.Is(err, zone.ErrRecordConflict) {
-		return nil
-	}
-	return err
 }
 
 func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits) (*ApplyResult, error) {

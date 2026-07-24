@@ -148,12 +148,6 @@ type TransportLinkOptions struct {
 	AddressEpoch    uint64
 }
 
-func NewTransportLinkSpec(local, peer zone.ZonePath, overlayID, transportID string, records *NodeRecords, contacts []ContactPoint) (TransportLinkSpec, error) {
-	return NewTransportLinkSpecWithOptions(local, peer, overlayID, records, contacts, TransportLinkOptions{
-		TransportID: transportID,
-	})
-}
-
 func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string, records *NodeRecords, contacts []ContactPoint, opts TransportLinkOptions) (TransportLinkSpec, error) {
 	if overlayID == "" {
 		return TransportLinkSpec{}, fmt.Errorf("overlay id is required")
@@ -208,31 +202,6 @@ func NewTransportLinkSpecWithOptions(local, peer zone.ZonePath, overlayID string
 		Generation:      opts.Generation,
 		AddressEpoch:    opts.AddressEpoch,
 	}, nil
-}
-
-func NewTransportLinkSpecForGroup(local, peer zone.ZonePath, group LinkGroupSpec, records *NodeRecords, contacts []ContactPoint, linkIndex int) (TransportLinkSpec, error) {
-	if err := group.Validate(); err != nil {
-		return TransportLinkSpec{}, err
-	}
-	group = group.Normalized()
-	pathKey := DefaultPathKey
-	linkID := StableLinkID(local, peer, group.ID, pathKey)
-	localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 0, linkIndex)
-	if err != nil {
-		return TransportLinkSpec{}, err
-	}
-	if group.normalizedTunnelAddress().Mode == TunnelAddressSequentialPool && peer < local {
-		localAddr, peerAddr = peerAddr, localAddr
-	}
-	return NewTransportLinkSpecWithOptions(local, peer, group.ID, records, contacts, TransportLinkOptions{
-		LinkID:          linkID,
-		PathKey:         pathKey,
-		Provider:        group.Provider,
-		PathMode:        group.DefaultPathMode,
-		NetNS:           group.NetNS.Target(),
-		LocalTunnelAddr: localAddr,
-		PeerTunnelAddr:  peerAddr,
-	})
 }
 
 func (g LinkGroupSpec) Validate() error {
@@ -667,14 +636,6 @@ func FormatScopedTunnelAddress(addr netip.Addr, ifName, netns string) string {
 	return s
 }
 
-func StableTransportID(local, peer zone.ZonePath, overlayID string, family ...string) string {
-	pathKey := DefaultPathKey
-	if len(family) > 0 && family[0] != "" {
-		pathKey = "family:" + family[0]
-	}
-	return RuntimeConnectionID(StableLinkID(local, peer, overlayID, pathKey), 0, ProviderStrongSwan)
-}
-
 func StableLinkID(local, peer zone.ZonePath, overlayID, pathKey string) string {
 	if pathKey == "" {
 		pathKey = DefaultPathKey
@@ -765,13 +726,6 @@ func StableXFRMIfID(local, peer zone.ZonePath, transportID string) uint32 {
 
 func StableInterfaceName(ifID uint32) string {
 	return fmt.Sprintf("hgs%x", ifID)
-}
-
-// ShouldInitiate reports whether the local node should actively initiate a
-// CHILD_SA for this link under the out/in/both role model. Only the primary
-// initiator (or an explicit secondary takeover) actively dials.
-func ShouldInitiate(local, peer zone.ZonePath, localRole, remoteRole string) bool {
-	return InitiatorRoleForPeer(local, peer, localRole, remoteRole) == InitiatorRolePrimary
 }
 
 // InitiatorRoleForPeer returns the local runtime role for a peer link based

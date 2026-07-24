@@ -54,7 +54,7 @@ func addObserverEndpointZone(t *testing.T, ns *zone.NetworkState, path zone.Zone
 	}
 	authority := &zone.ZoneAuthority{Zone: path, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: pub}}}
 	zs := zone.NewZoneState(path, authority)
-	value := gossip.EndpointRecordBytes([]gossip.LocalEndpoint{{
+	value := endpointRecordBytes([]gossip.LocalEndpoint{{
 		IP:       net.ParseIP(ip),
 		Port:     port,
 		Scope:    "loopback",

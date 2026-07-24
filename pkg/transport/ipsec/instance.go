@@ -330,14 +330,6 @@ func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
 	return spec
 }
 
-func rotateSpecForRole(base TransportLinkSpec, generation uint64, role string) TransportLinkSpec {
-	spec := rotateSpec(base, generation)
-	if !IsActiveInitiatorRole(role) {
-		spec.ContactPoints = nil
-	}
-	return spec
-}
-
 func rotateSpecForRoleWithGroup(base TransportLinkSpec, generation uint64, role string, group LinkGroupSpec) TransportLinkSpec {
 	spec, err := RuntimeSpecForPortGeneration(base, group, generation)
 	if err != nil {

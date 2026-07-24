@@ -447,24 +447,6 @@ func (d *DaemonService) flushFirewallReconcileResult(ctx context.Context) (bool,
 	return true, err
 }
 
-func (d *DaemonService) firewallReconcileInterval() time.Duration {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
-		return 0
-	}
-	instances := firewallInstancesEnabled(d.Sync.App.Config)
-	if len(instances) == 0 {
-		return 0
-	}
-	return defaultFirewallReconcileInterval
-}
-
-func nextFirewallReconcileTime(now time.Time, interval time.Duration) time.Time {
-	if interval <= 0 {
-		return time.Time{}
-	}
-	return now.Add(interval)
-}
-
 // recoverFirewallOnStart triggers an initial firewall reconcile at daemon start.
 func (d *DaemonService) recoverFirewallOnStart(ctx context.Context) {
 	if d == nil {

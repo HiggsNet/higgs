@@ -479,11 +479,6 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 	return filtered, missing, nil
 }
 
-func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {
-	matches, _ := xfrmLinkStateMatchReason(state, spec)
-	return matches
-}
-
 func xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) (bool, string) {
 	if !state.NamespaceExists || !state.InterfaceExists {
 		if !state.NamespaceExists {

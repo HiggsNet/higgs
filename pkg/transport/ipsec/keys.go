@@ -184,9 +184,6 @@ func KeyTypeForAlgorithm(algorithm string) string {
 	}
 }
 
-// KeyTypeAny returns the StrongSwan VICI load-key type that lets charon auto-detect the key format.
-func KeyTypeAny() string { return "any" }
-
 // DeriveTransportPublicKey extracts the public key from a PKCS#8 or SEC1
 // private key for the supported transport algorithms.
 func DeriveTransportPublicKey(privateKey []byte, algorithm string) ([]byte, error) {

@@ -205,12 +205,4 @@ func ResolveBackendForInstance(spec FirewallInstanceSpec, pf FirewallPreflight) 
 	return ResolveBackend(configured, pf), nil
 }
 
-// MergeConflicts scans observed state for potential non-Higgs conflicts.
-// First version is conservative: returns empty (no conflict detection beyond
-// owner matching, which is handled by ListOwned).
-func MergeConflicts(observed FirewallObservedState) []string {
-	_ = observed
-	return nil
-}
-
 var _ = fmt.Sprintf

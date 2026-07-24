@@ -24,10 +24,6 @@ func debugFirewall(_ context.Context, cmd *cli.Command) error {
 	return debugFirewallWithRuntimeFiltered(rt, os.Stdout, cmd.String("netns"), cmd.Bool("host"), cmd.Bool("json"))
 }
 
-func debugFirewallWithRuntime(rt *Runtime, w io.Writer) error {
-	return debugFirewallWithRuntimeFiltered(rt, w, "", false, false)
-}
-
 func debugFirewallWithRuntimeFiltered(rt *Runtime, w io.Writer, netns string, hostOnly, jsonOutput bool) error {
 	response, ok, err := firewallStatusViaControl(rt)
 	if err != nil {
@@ -73,14 +69,6 @@ func filterFirewallDebugInstances(instances []FirewallInstanceConfig, netns stri
 		filtered = append(filtered, inst)
 	}
 	return filtered
-}
-
-func writeDebugFirewall(w io.Writer, rt *Runtime, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) error {
-	var config *appConfig
-	if rt != nil {
-		config = rt.Config
-	}
-	return inspecttext.WriteDebugFirewall(w, buildFirewallDebugView(config, instances, snapshot))
 }
 
 func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) inspect.FirewallDebugView {

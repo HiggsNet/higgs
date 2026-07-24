@@ -159,13 +159,4 @@ func TestPeerLifecycleHelpers(t *testing.T) {
 	if PeerStatusRequiresCleanup(PeerStatusInfo{State: PeerStateOffline, Reason: "offline_after_exceeded"}) {
 		t.Fatal("ordinary offline peer should not require cleanup")
 	}
-	if !PeerStatusIsHardChange(PeerStateActive, PeerStateRevoked) {
-		t.Fatal("active -> revoked should be hard change")
-	}
-	if PeerStatusIsHardChange(PeerStateActive, PeerStateStale) {
-		t.Fatal("active -> stale should not be hard change")
-	}
-	if !ShouldBlockPeerReconnect(PeerStatusInfo{State: PeerStatePolicyDenied}) {
-		t.Fatal("policy denied should block reconnect")
-	}
 }

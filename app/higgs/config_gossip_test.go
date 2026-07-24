@@ -59,7 +59,7 @@ gossip:
 	if got := strings.Join(config.AdvertiseAddrs, ","); got != "203.0.113.10:33434" {
 		t.Fatalf("AdvertiseAddrs = %q", got)
 	}
-	if len(config.Reflectors) != len(gossip.DefaultPublicIPReflectors()) {
+	if len(config.Reflectors) != len(gossip.ResolvePublicIPReflectors([]string{"auto"})) {
 		t.Fatalf("Reflectors = %d, want auto preset", len(config.Reflectors))
 	}
 	if config.ReflectorInterval != 5*time.Minute || config.ReflectorTimeout != 3*time.Second {
@@ -95,7 +95,7 @@ func TestParseConfigYAMLExpandsAutoReflectors(t *testing.T) {
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
-	if len(config.Reflectors) != len(gossip.DefaultPublicIPReflectors())+1 {
+	if len(config.Reflectors) != len(gossip.ResolvePublicIPReflectors([]string{"auto"}))+1 {
 		t.Fatalf("Reflectors = %d, want custom plus defaults", len(config.Reflectors))
 	}
 	if config.Reflectors[len(config.Reflectors)-1] != "https://custom.example/ip" {

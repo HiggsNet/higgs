@@ -214,7 +214,7 @@ func TestUpdateDiscoveredPeersAddsAddrsForEndpoints(t *testing.T) {
 	endpoints := []gossip.LocalEndpoint{
 		{IP: net.ParseIP("127.0.0.1"), Port: 9999, Scope: "global", Priority: 100, Source: gossip.SourceAdvertise},
 	}
-	value := gossip.EndpointRecordBytes(endpoints, time.Now())
+	value := endpointRecordBytes(endpoints, time.Now())
 	record := &zone.Record{
 		Zone:      "node-b.catofes.",
 		Key:       gossip.EndpointRecordKeyUDP,
@@ -254,7 +254,7 @@ func TestUpdateDiscoveredPeersRanksPrivateEndpointsAfterPublic(t *testing.T) {
 		Zone:      "node-b.catofes.",
 		Key:       gossip.EndpointRecordKeyUDP,
 		Type:      "sync.endpoint",
-		Value:     gossip.EndpointRecordBytes(endpoints, now),
+		Value:     endpointRecordBytes(endpoints, now),
 		Version:   1,
 		Timestamp: now.Unix(),
 	}

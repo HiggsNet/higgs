@@ -65,17 +65,6 @@ func NewReconnectingGoviciClient(socketPath string) (*ReconnectingVICIClient, er
 	return &ReconnectingVICIClient{factory: factory, client: client, closeFn: closeFn}, nil
 }
 
-func NewReconnectingVICIClient(factory VICIClientFactory) (*ReconnectingVICIClient, error) {
-	if factory == nil {
-		return nil, fmt.Errorf("vici client factory is required")
-	}
-	client, closeFn, err := factory()
-	if err != nil {
-		return nil, err
-	}
-	return &ReconnectingVICIClient{factory: factory, client: client, closeFn: closeFn}, nil
-}
-
 func (c *GoviciClient) Call(ctx context.Context, cmd string, in map[string]any) (map[string]any, error) {
 	if c == nil || c.Session == nil {
 		return nil, errMissingGoviciSession()

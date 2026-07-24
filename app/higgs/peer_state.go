@@ -8,37 +8,6 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-// derivePeerStatus computes the lifecycle state of a peer from verified active
-// state, SyncPeers observations, LinkInstances and local config.
-//
-// The state priority is:
-//  1. revoked (overrides everything)
-//  2. policy_denied / config_error (local MeshPolicy/trust denies peer)
-//  3. active (at least one up link)
-//  4. connecting (link apply succeeded, SA not yet observed)
-//  5. discovered (endpoint/ipsec record available, no link yet)
-//  6. eligible (trust chain ok, no endpoint)
-//  7. stale (recently seen but beyond active window)
-//  8. offline (beyond offline_after)
-func derivePeerStatus(
-	state *stateFile,
-	peerID string,
-	peerZone zone.ZonePath,
-	now time.Time,
-	cfg inspect.PeerLifecycleConfig,
-) inspect.PeerStatusInfo {
-	if state == nil {
-		return inspect.BuildPeerLifecycleStatus(inspect.PeerLifecycleInput{
-			PeerID:         peerID,
-			PeerZone:       peerZone,
-			StateAvailable: false,
-			Now:            now,
-			Config:         cfg,
-		})
-	}
-	return inspect.BuildPeerLifecycleStatus(peerLifecycleInputFromState(state, peerID, peerZone, now, cfg, false))
-}
-
 func peerLifecycleInputFromState(state *stateFile, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
 	input := inspect.PeerLifecycleInput{
 		PeerID:           peerID,

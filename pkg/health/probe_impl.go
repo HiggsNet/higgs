@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"net/netip"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -135,10 +134,6 @@ func parsePingBurstOutput(out []byte) (int, time.Duration) {
 	return len(replies), lastRTT
 }
 
-func pingArgs(target ProbeTarget, includeSource bool) []string {
-	return pingArgsForCount(target, includeSource, 1)
-}
-
 func pingArgsForCount(target ProbeTarget, includeSource bool, count int) []string {
 	if count <= 0 {
 		count = 1
@@ -251,15 +246,4 @@ func (p *UDPProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 	// We don't expect a reply; treat successful write as reachability evidence.
 	rtt := time.Since(start)
 	return ProbeResult{InstanceID: target.InstanceID, RTT: rtt, Success: true}
-}
-
-// AddrFromNetIP converts a net.IP to netip.Addr.
-func AddrFromNetIP(ip net.IP) netip.Addr {
-	if ip == nil {
-		return netip.Addr{}
-	}
-	if a, ok := netip.AddrFromSlice(ip); ok {
-		return a
-	}
-	return netip.Addr{}
 }
