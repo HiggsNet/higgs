@@ -92,7 +92,7 @@ func TestSyncRuntimeReloadStateIfChangedSkipsStableSelfWrite(t *testing.T) {
 	rt := &Runtime{Config: defaultAppConfig(), StatePath: path}
 	sr := &SyncRuntime{App: rt}
 
-	if err := sr.saveState(state); err != nil {
+	if err := sr.saveStateSnapshot(state); err != nil {
 		t.Fatalf("self save: %v", err)
 	}
 	if sr.reloadStateStamp.info == nil || sr.reloadStateStamp.path != path {
@@ -176,7 +176,7 @@ func TestSyncRuntimeFailedSelfWriteClearsReloadMarker(t *testing.T) {
 			info: fakeFileInfo{name: "old"},
 		},
 	}
-	if err := sr.saveState(state); err == nil {
+	if err := sr.saveStateSnapshot(state); err == nil {
 		t.Fatal("self save to directory unexpectedly succeeded")
 	}
 	if sr.reloadStateStamp.info != nil || sr.reloadStateStamp.path != "" {

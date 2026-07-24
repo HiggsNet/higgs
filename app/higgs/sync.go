@@ -278,16 +278,6 @@ func (s *chunkAssemblyStore) dropPeer(peerID string) {
 	}
 }
 
-// saveState persists the explicitly supplied state. SyncRuntime deliberately
-// does not own a second state pointer; daemon callers persist StateStore
-// snapshots and standalone callers pass their private workspace.
-func (sr *SyncRuntime) saveState(state *stateFile) error {
-	if sr == nil {
-		return errors.New("sync runtime is nil")
-	}
-	return sr.saveStateSnapshot(state)
-}
-
 func (sr *SyncRuntime) saveStateSnapshot(state *stateFile) error {
 	if sr == nil || sr.App == nil {
 		return saveState(state)
@@ -695,38 +685,6 @@ func sameZoneDigests(a, b []gossip.ZoneDigest) bool {
 	return true
 }
 
-func fetchListForPeer(state *stateFile, peerID string, remote []gossip.ZoneDigest, now time.Time) []zone.ZonePath {
-	if state == nil {
-		return nil
-	}
-	localByZone := make(map[zone.ZonePath][]byte)
-	for _, digest := range gossip.ZoneDigests(state.Network) {
-		localByZone[digest.Zone] = digest.RootHash
-	}
-	var fetch []zone.ZonePath
-	for _, digest := range remote {
-		if digest.Zone.Valid() && !bytes.Equal(localByZone[digest.Zone], digest.RootHash) {
-			fetch = append(fetch, digest.Zone)
-		}
-	}
-	sort.Slice(fetch, func(i, j int) bool { return fetch[i] < fetch[j] })
-	if len(fetch) == 0 || peerID == "" {
-		return fetch
-	}
-	remoteByZone := make(map[zone.ZonePath][]byte, len(remote))
-	for _, digest := range remote {
-		remoteByZone[digest.Zone] = digest.RootHash
-	}
-	out := fetch[:0]
-	for _, path := range fetch {
-		if shouldSkipRemoteZone(state, peerID, path, remoteByZone[path], now) {
-			continue
-		}
-		out = append(out, path)
-	}
-	return out
-}
-
 func shouldSkipRemoteZone(state *stateFile, peerID string, path zone.ZonePath, rootHash []byte, now time.Time) bool {
 	if state == nil {
 		return true
@@ -784,69 +742,6 @@ func recordRejectedDigest(state *stateFile, peerID string, digest gossip.ZoneDig
 	state.SyncPeers[peerID] = peerState
 }
 
-func isRejectedRecordActive(state *stateFile, peerID string, record *gossip.RecordSnapshot, reason string, now time.Time) bool {
-	if state == nil || peerID == "" || record == nil || record.Record == nil {
-		return false
-	}
-	peerState := state.SyncPeers[peerID]
-	rejected, ok := peerState.RejectedDigests[rejectedRecordKey(record.Zone, record.Record.Key)]
-	if !ok {
-		return false
-	}
-	if rejected.Object != "record" {
-		return false
-	}
-	if reason != "" && rejected.Reason != normalizedRejectReason(reason) {
-		return false
-	}
-	if rejected.ObjectHashHex != hex.EncodeToString(recordObjectHash(record.Record)) {
-		return false
-	}
-	return rejected.UntilUnix != 0 && now.Before(time.Unix(rejected.UntilUnix, 0))
-}
-
-// recordRejectedRecord mutates state.SyncPeers. The caller must hold the write
-// lock on state.
-func recordRejectedRecord(state *stateFile, peerID string, record *gossip.RecordSnapshot, reason string, now time.Time) {
-	if state == nil || peerID == "" || record == nil || record.Record == nil || !record.Zone.Valid() {
-		return
-	}
-	reason = normalizedRejectReason(reason)
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.RejectedDigests == nil {
-		peerState.RejectedDigests = make(map[string]rejectedDigestState)
-	}
-	peerState.RejectedDigests[rejectedRecordKey(record.Zone, record.Record.Key)] = rejectedDigestState{
-		Zone:           record.Zone,
-		Object:         "record",
-		Key:            record.Record.Key,
-		ObjectHashHex:  hex.EncodeToString(recordObjectHash(record.Record)),
-		Reason:         reason,
-		RejectedAtUnix: now.Unix(),
-		UntilUnix:      now.Add(rejectedDigestTTL).Unix(),
-	}
-	state.SyncPeers[peerID] = peerState
-}
-
-func recordObjectHash(record *zone.Record) []byte {
-	if record == nil {
-		return nil
-	}
-	data, err := json.Marshal(record)
-	if err != nil {
-		return higgscrypto.RecordHash(record)
-	}
-	return higgscrypto.Hash(data)
-}
-
-func normalizedRejectReason(reason string) string {
-	if reason == "" {
-		return "verify_failed"
-	}
-	return reason
-}
-
 // clearRejectedDigest mutates state.SyncPeers. The caller must hold the write
 // lock on state.
 func clearRejectedDigest(state *stateFile, peerID string, path zone.ZonePath) {
@@ -864,10 +759,6 @@ func clearRejectedDigest(state *stateFile, peerID string, path zone.ZonePath) {
 
 func rejectedDigestKey(path zone.ZonePath) string {
 	return "zone:" + path.String()
-}
-
-func rejectedRecordKey(path zone.ZonePath, key string) string {
-	return "record:" + path.String() + ":" + key
 }
 
 func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now time.Time) (bool, string) {
@@ -934,20 +825,6 @@ func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAd
 	peerState.ObservedUntilUnix = now.Add(observedPathTTL).Unix()
 	peerState.ObservedSource = string(source)
 	peerState.ObservedGraceAddrs = pruneObservedGraceAddrs(peerState.ObservedGraceAddrs, addrString, now)
-	state.SyncPeers[peerID] = peerState
-}
-
-// recordObservedPathFailure mutates state.SyncPeers. The caller must hold the
-// write lock on state.
-func recordObservedPathFailure(state *stateFile, peerID string) {
-	if state == nil || peerID == "" {
-		return
-	}
-	peerState := state.SyncPeers[peerID]
-	if peerState.ObservedAddr == "" {
-		return
-	}
-	peerState.ObservedFailureCount++
 	state.SyncPeers[peerID] = peerState
 }
 
@@ -1036,13 +913,6 @@ func (sr *SyncRuntime) seedObservedPeerPaths(state *stateFile) {
 	}
 }
 
-func (sr *SyncRuntime) seedObservedPeerPath(state *stateFile, peerID string) {
-	if sr == nil {
-		return
-	}
-	sr.seedObservedPeerPathAt(state, peerID, sr.now())
-}
-
 func (sr *SyncRuntime) seedObservedPeerPathAt(state *stateFile, peerID string, now time.Time) {
 	if sr == nil || state == nil || sr.Transport == nil || peerID == "" {
 		return
@@ -1069,10 +939,6 @@ func (sr *SyncRuntime) seedObservedPeerPathAt(state *stateFile, peerID string, n
 		paths = append(paths, gossip.ObservedPath{Addr: graceAddr, Until: time.Unix(entry.UntilUnix, 0)})
 	}
 	sr.Transport.SetObservedPeerPaths(peerID, paths, observedPathPreferFirst(peerState, now))
-}
-
-func openSyncTransport(config *syncConfigFile, state *stateFile) (*gossip.Transport, error) {
-	return newSyncRuntime(config, nil, nil).openTransport(state)
 }
 
 func (sr *SyncRuntime) openTransport(state *stateFile) (*gossip.Transport, error) {
@@ -1177,14 +1043,6 @@ func listenPortFromAddr(addr string) uint16 {
 	return uint16(port)
 }
 
-func (sr *SyncRuntime) publishEndpointRecord(state *stateFile) error {
-	changed, err := sr.publishEndpointRecordInState(state)
-	if err != nil || !changed {
-		return err
-	}
-	return sr.saveState(state)
-}
-
 func (sr *SyncRuntime) publishEndpointRecordInState(state *stateFile) (bool, error) {
 	config := sr.Config
 	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 || autoJoinPending(state) {
@@ -1254,30 +1112,6 @@ func endpointRefreshDue(previous *gossip.EndpointRecord, now time.Time, refresh 
 		return true
 	}
 	return !now.Before(time.Unix(base, 0).Add(refresh))
-}
-
-func (sr *SyncRuntime) tryAdoptAutoJoinAfterSync(state *stateFile, peerID, via string) bool {
-	adopted, err := tryAdoptAutoJoinDelegation(state, sr.now())
-	recordAdoptionResult(state, adopted, err, sr.now())
-	if err != nil {
-		sr.logger().Warn("auto_join", "adopt_failed", map[string]any{
-			"peer_id": peerID,
-			"zone":    state.ManagedZone,
-			"via":     via,
-			"error":   err,
-		})
-		return false
-	}
-	if !adopted {
-		recordBootstrapSyncSuccess(state, peerID, sr.Config, sr.now())
-		return false
-	}
-	sr.logger().Info("auto_join", "adopted", map[string]any{
-		"peer_id": peerID,
-		"zone":    state.ManagedZone,
-		"via":     via,
-	})
-	return true
 }
 
 // filterEndpointDiscoveryInputs returns the advertise addresses and reflectors
@@ -1414,84 +1248,6 @@ func (sr *SyncRuntime) addVerifiedZonePeers(state *stateFile) {
 				continue
 			}
 			transport.AddKnownPeerID(peerID)
-		}
-	}
-}
-
-// updateDiscoveredPeers mutates state.SyncPeers and transport peer addresses.
-// The caller must hold the write lock on state.
-func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
-	newSyncRuntime(config, transport, nil).updateDiscoveredPeers(state)
-}
-
-// updateDiscoveredPeers mutates state.SyncPeers and transport peer addresses.
-// The caller owns the explicitly supplied mutable state.
-func (sr *SyncRuntime) updateDiscoveredPeers(state *stateFile) {
-	transport := sr.Transport
-	config := sr.Config
-	sr.addVerifiedZonePeers(state)
-	now := sr.now()
-	discovered := gossip.ExtractPeerEndpointsAt(state.Network, now)
-	bootstrapPeers := configuredKnownPeers(config)
-	updated := false
-	activeDiscovered := make(map[string]bool)
-	sr.seedObservedPeerPaths(state)
-	for peerID, entries := range discovered {
-		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
-			continue
-		}
-		if len(entries) == 0 {
-			continue
-		}
-		addrs := buildPeerAddrs(peerID, entries, bootstrapPeers[peerID], state.SyncPeers[peerID], config.EndpointGrace, config.EndpointSourceOrder, now)
-		if len(addrs) == 0 {
-			continue
-		}
-		activeDiscovered[peerID] = true
-		transport.SetPeerAddrs(peerID, addrs)
-		normalizeSyncPeers(state)
-		ps := state.SyncPeers[peerID]
-		ps.DiscoveredAddr = addrs[0].String()
-		ps.DiscoveredAtUnix = now.Unix()
-		state.SyncPeers[peerID] = ps
-		updated = true
-	}
-	for peerID, peerState := range state.SyncPeers {
-		if peerState.ObservedAddr != "" && !observedPathActive(peerState, now) {
-			if transport != nil {
-				transport.RemoveObservedPeerAddr(peerID)
-			}
-			peerState.ObservedAddr = ""
-			peerState.ObservedFirstSeenUnix = 0
-			peerState.ObservedLastSeenUnix = 0
-			peerState.ObservedLastSyncUnix = 0
-			peerState.ObservedUntilUnix = 0
-			peerState.ObservedSource = ""
-			peerState.ObservedFailureCount = 0
-			state.SyncPeers[peerID] = peerState
-			updated = true
-		}
-		if peerState.DiscoveredAddr == "" || activeDiscovered[peerID] || isBootstrapPeer(config, peerID) {
-			continue
-		}
-		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
-			continue
-		}
-		if len(discovered[peerID]) > 0 {
-			continue
-		}
-		if len(appendRecentSuccessfulDiscoveredAddr(nil, peerState, config.EndpointGrace, now)) > 0 {
-			continue
-		}
-		transport.RemovePeerAddrs(peerID)
-		peerState.DiscoveredAddr = ""
-		peerState.DiscoveredAtUnix = 0
-		state.SyncPeers[peerID] = peerState
-		updated = true
-	}
-	if updated {
-		if err := sr.saveState(state); err != nil {
-			sr.logger().Warn("endpoint", "discovered_peer_save_failed", map[string]any{"error": err})
 		}
 	}
 }
@@ -1694,58 +1450,6 @@ func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
 	return until.Sub(now)
 }
 
-func (sr *SyncRuntime) handleObjectChunk(state *stateFile, message *gossip.Message, limits gossip.SyncLimits) error {
-	if sr == nil || state == nil || message == nil || message.ObjectChunk == nil {
-		return nil
-	}
-	chunk := message.ObjectChunk
-	data, complete, err := udpChunkAssemblies.add(message.PeerID, chunk, sr.now())
-	if err != nil {
-		if chunk.Object == gossip.ObjectPullZone {
-			recordRejectedDigest(state, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
-		}
-		return err
-	}
-	if !complete {
-		if sr.Transport != nil {
-			udpChunkAssemblies.scheduleRepair(message.PeerID, chunk, func(nack *gossip.ObjectChunkNACK) {
-				if err := sr.Transport.Send(message.PeerID, &gossip.Message{Type: gossip.MessageObjectChunkNACK, ObjectChunkNACK: nack}); err == nil {
-					recordDatagramRepairNACK(sr.Observability, message.PeerID, false, sr.now())
-				}
-			})
-		}
-		return nil
-	}
-	switch chunk.Object {
-	case gossip.ObjectPullZone:
-		snapshot, err := gossip.DecodeZoneSnapshotObject(data)
-		if err != nil {
-			recordRejectedDigest(state, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
-			return err
-		}
-		pullLimits := limits
-		pullLimits.MaxBytes = maxChunkObjectBytes
-		result, err := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), pullLimits)
-		if err != nil {
-			recordRejectedDigest(state, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
-			return err
-		}
-		clearRejectedDigest(state, message.PeerID, chunk.Zone)
-		recordDatagramChunkFallback(sr.Observability, message.PeerID, sr.now())
-		sr.tryAdoptAutoJoinAfterSync(state, message.PeerID, "udp_chunks")
-		sr.logger().Info("sync", "zone_applied", map[string]any{
-			"peer_id":     message.PeerID,
-			"zone":        result.Zone,
-			"records":     result.Records,
-			"delegations": result.Delegation,
-			"via":         "udp_chunks",
-		})
-		return sr.saveState(state)
-	default:
-		return nil
-	}
-}
-
 func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 	if sr == nil || sr.Transport == nil || message == nil || message.ObjectChunkNACK == nil {
 		return nil
@@ -1762,19 +1466,6 @@ func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 	}
 	recordDatagramRepairSent(sr.Observability, message.PeerID, len(chunks), sr.now())
 	return nil
-}
-
-// sendSnapshots sends bounded zone digest hints. When allowChunks is true, it
-// also sends full zone snapshots as UDP object chunks for explicit fallback
-// requests. Ordinary ANNOUNCE no longer carries snapshot or record payloads.
-func sendSnapshots(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath) error {
-	return sendSnapshotsWithStats(nil, ns, transport, peerID, zones, time.Now(), false, nil)
-}
-
-func sendSnapshotsWithStats(store *observability.PeerObservabilityStore, ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) error {
-	diag, err := sendSnapshotsWithDiagnostics(ns, transport, peerID, zones, now, allowChunks, logger)
-	recordDatagramSendDiagnostics(store, peerID, diag, transport.MaxMessageBytes(), now)
-	return err
 }
 
 type datagramSendDiagnostics struct {
@@ -1988,50 +1679,6 @@ func announceWireSize(announce *gossip.Announce) int {
 		return 1 << 30
 	}
 	return size
-}
-
-func snapshotRecordMessages(snapshot *gossip.ZoneSnapshot) []gossip.RecordSnapshot {
-	if snapshot == nil {
-		return nil
-	}
-	type keyedRecord struct {
-		key    string
-		record *zone.Record
-		active bool
-	}
-	var records []keyedRecord
-	for key, record := range snapshot.Records {
-		if record != nil {
-			records = append(records, keyedRecord{key: key, record: record, active: true})
-		}
-	}
-	for key, history := range snapshot.RecordHistory {
-		for _, record := range history {
-			if record != nil {
-				records = append(records, keyedRecord{key: key, record: record})
-			}
-		}
-	}
-	sort.SliceStable(records, func(i, j int) bool {
-		if records[i].key != records[j].key {
-			return records[i].key < records[j].key
-		}
-		if records[i].active != records[j].active {
-			return records[i].active
-		}
-		if records[i].record.Version != records[j].record.Version {
-			return records[i].record.Version < records[j].record.Version
-		}
-		return bytes.Compare(higgscrypto.RecordHash(records[i].record), higgscrypto.RecordHash(records[j].record)) < 0
-	})
-	out := make([]gossip.RecordSnapshot, 0, len(records))
-	for _, item := range records {
-		out = append(out, gossip.RecordSnapshot{
-			Zone:   snapshot.Zone,
-			Record: item.record,
-		})
-	}
-	return out
 }
 
 func messageWireSize(msg *gossip.Message) int {

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
@@ -282,84 +281,6 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	}
 }
 
-func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
-	prepareStatePersistence(t)
-	udpChunkAssemblies = newChunkAssemblyStore()
-	sourceState, _ := buildTestNetworkState(t)
-	snapshot, err := gossip.Snapshot(sourceState.Network, "catofes.")
-	if err != nil {
-		t.Fatalf("Snapshot(catofes): %v", err)
-	}
-	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
-	if err != nil {
-		t.Fatalf("EncodeZoneSnapshotObject: %v", err)
-	}
-	objectHash := sha256.Sum256(data)
-	rootHash := gossip.ZoneRoot(sourceState.Network.Zones["catofes."])
-	targetState := sourceState
-	config := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
-	delete(targetState.Network.Zones, zone.ZonePath("catofes."))
-	delete(targetState.Network.Zones, zone.ZonePath("node-b.catofes."))
-	if err := saveState(targetState); err != nil {
-		t.Fatalf("saveState(target): %v", err)
-	}
-	rt, err := NewRuntime()
-	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
-	}
-	rt.Clock = func() time.Time { return time.Unix(123, 0) }
-	sr := newSyncRuntime(config, nil, rt)
-	sr.Observability = observability.NewPeerObservabilityStore(8, time.Hour)
-
-	chunkSize := len(data) / 2
-	if chunkSize == 0 {
-		t.Fatalf("encoded snapshot unexpectedly empty")
-	}
-	chunks := []*gossip.ObjectChunk{
-		{
-			TransferID: []byte("0123456789abcdef"),
-			Object:     gossip.ObjectPullZone,
-			Zone:       "catofes.",
-			RootHash:   rootHash,
-			ObjectHash: objectHash[:],
-			Index:      0,
-			Total:      2,
-			Data:       data[:chunkSize],
-		},
-		{
-			TransferID: []byte("0123456789abcdef"),
-			Object:     gossip.ObjectPullZone,
-			Zone:       "catofes.",
-			RootHash:   rootHash,
-			ObjectHash: objectHash[:],
-			Index:      1,
-			Total:      2,
-			Data:       data[chunkSize:],
-		},
-	}
-	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
-		err := sr.handleObjectChunk(targetState, &gossip.Message{
-			Type:        gossip.MessageObjectChunk,
-			PeerID:      "node-b.catofes.",
-			ObjectChunk: chunk,
-		}, gossip.DefaultSyncLimits())
-		if err != nil {
-			t.Fatalf("handleObjectChunk: %v", err)
-		}
-	}
-	if targetState.Network.Zones["catofes."] == nil {
-		t.Fatalf("catofes. zone was not applied from chunks")
-	}
-	observed, ok := sr.Observability.Snapshot("node-b.catofes.", rt.Now())
-	if !ok {
-		t.Fatal("peer observability snapshot missing")
-	}
-	stats := observed.DatagramStats
-	if stats == nil || stats.ChunkFallbacks == 0 {
-		t.Fatalf("chunk fallback stats were not recorded: %#v", stats)
-	}
-}
-
 func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	udpChunkAssemblies = newChunkAssemblyStore()
 	sourceState, _ := buildTestNetworkState(t)
@@ -495,40 +416,5 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 	}
 	if current := service.currentState(); len(current.SyncPeers[peerID].RejectedDigests) != 1 {
 		t.Fatalf("current rejected digests = %+v, want installed committed peer", current.SyncPeers[peerID].RejectedDigests)
-	}
-}
-
-func TestSnapshotRecordMessagesPrioritizesActiveRecord(t *testing.T) {
-	snapshot := &gossip.ZoneSnapshot{
-		Zone: "node-b.catofes.",
-		Records: map[string]*zone.Record{
-			"identity": {
-				Zone:    "node-b.catofes.",
-				Key:     "identity",
-				Version: 2,
-				Value:   []byte("node-b-restarted"),
-			},
-		},
-		RecordHistory: map[string][]*zone.Record{
-			"identity": {
-				{
-					Zone:    "node-b.catofes.",
-					Key:     "identity",
-					Version: 1,
-					Value:   []byte("node-b"),
-				},
-			},
-		},
-	}
-
-	records := snapshotRecordMessages(snapshot)
-	if len(records) != 2 {
-		t.Fatalf("records = %d, want 2", len(records))
-	}
-	if records[0].Record == nil || records[0].Record.Version != 2 || string(records[0].Record.Value) != "node-b-restarted" {
-		t.Fatalf("first record = %#v, want active v2", records[0].Record)
-	}
-	if records[1].Record == nil || records[1].Record.Version != 1 || string(records[1].Record.Value) != "node-b" {
-		t.Fatalf("second record = %#v, want history v1", records[1].Record)
 	}
 }

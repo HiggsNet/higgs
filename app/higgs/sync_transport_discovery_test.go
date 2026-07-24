@@ -1,20 +1,21 @@
 package main
 
 import (
-	"github.com/Catofes/higgs/pkg/core/gossip"
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
+	"github.com/Catofes/higgs/pkg/core/zone"
+	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
 )
 
 func TestOpenSyncTransportAddsVerifiedZones(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 
-	transport, err := openSyncTransport(config, state)
+	transport, err := newSyncRuntime(config, nil, nil).openTransport(state)
 	if err != nil {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("openSyncTransport: %v", err)
@@ -35,6 +36,20 @@ func TestOpenSyncTransportAddsVerifiedZones(t *testing.T) {
 	if transport.PeerAddr("node-b.catofes.") != nil {
 		t.Fatalf("PeerAddr(node-b.catofes.) should be nil when no endpoint record exists")
 	}
+}
+
+func updateDiscoveredPeersForTest(t *testing.T, state *stateFile, config *syncConfigFile, transport *gossip.Transport) {
+	t.Helper()
+	now := time.Now()
+	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "state.db"), Clock: func() time.Time { return now }}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	service.Sync.Transport = transport
+	service.updateDiscoveredPeers()
+	committed, _ := service.StateStore.Snapshot()
+	state.Network = committed.Network
 }
 
 func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {
@@ -198,7 +213,7 @@ func TestDefaultSyncTransportDeps(t *testing.T) {
 func TestUpdateDiscoveredPeersAddsAddrsForEndpoints(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 
-	transport, err := openSyncTransport(config, state)
+	transport, err := newSyncRuntime(config, nil, nil).openTransport(state)
 	if err != nil {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("openSyncTransport: %v", err)
@@ -230,7 +245,7 @@ func TestUpdateDiscoveredPeersAddsAddrsForEndpoints(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	updateDiscoveredPeers(state, transport, config)
+	updateDiscoveredPeersForTest(t, state, config, transport)
 
 	addr := transport.PeerAddr("node-b.catofes.")
 	if addr == nil {
@@ -265,7 +280,7 @@ func TestUpdateDiscoveredPeersRanksPrivateEndpointsAfterPublic(t *testing.T) {
 		t.Fatalf("PutAt: %v", err)
 	}
 
-	updateDiscoveredPeers(state, transport, config)
+	updateDiscoveredPeersForTest(t, state, config, transport)
 
 	addr := transport.PeerAddr("node-b.catofes.")
 	if addr == nil || addr.String() != "203.0.113.10:33434" {
@@ -284,13 +299,13 @@ func TestUpdateDiscoveredPeersUpdatesEndpointAddrWithoutUDP(t *testing.T) {
 
 	now := time.Now()
 	putSignedEndpointRecord(t, state, "127.0.0.1", 9999, now, 1)
-	updateDiscoveredPeers(state, transport, config)
+	updateDiscoveredPeersForTest(t, state, config, transport)
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "127.0.0.1:9999" {
 		t.Fatalf("PeerAddr after first update = %v, want 127.0.0.1:9999", addr)
 	}
 
 	putSignedEndpointRecord(t, state, "127.0.0.1", 10000, now.Add(time.Second), 2)
-	updateDiscoveredPeers(state, transport, config)
+	updateDiscoveredPeersForTest(t, state, config, transport)
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "127.0.0.1:10000" {
 		t.Fatalf("PeerAddr after endpoint change = %v, want 127.0.0.1:10000", addr)
 	}
@@ -312,7 +327,7 @@ func TestUpdateDiscoveredPeersRevokesExpiredEndpointWithoutUDP(t *testing.T) {
 	}
 	transport.SetPeerAddrs("node-b.catofes.", []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: 9999}})
 
-	updateDiscoveredPeers(state, transport, config)
+	updateDiscoveredPeersForTest(t, state, config, transport)
 	if addr := transport.PeerAddr("node-b.catofes."); addr != nil {
 		t.Fatalf("PeerAddr after expired endpoint = %v, want nil", addr)
 	}

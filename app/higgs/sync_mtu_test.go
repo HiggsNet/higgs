@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -50,9 +49,8 @@ func TestSendSnapshotsSkipsOversizedRecords(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("peer", []*net.UDPAddr{transport.LocalAddr()})
 
-	// sendSnapshots should return nil even though the record is too large for UDP.
-	if err := sendSnapshots(state.Network, transport, "peer", []zone.ZonePath{"node-b.catofes."}); err != nil {
-		t.Fatalf("sendSnapshots returned error for oversized record: %v", err)
+	if _, err := sendSnapshotsWithDiagnostics(state.Network, transport, "peer", []zone.ZonePath{"node-b.catofes."}, now, false, nil); err != nil {
+		t.Fatalf("sendSnapshotsWithDiagnostics returned error for oversized record: %v", err)
 	}
 }
 
@@ -89,12 +87,12 @@ func TestSendSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("node-b.catofes.", []*net.UDPAddr{transport.LocalAddr()})
 
-	store := observability.NewPeerObservabilityStore(8, time.Hour)
-	if err := sendSnapshotsWithStats(store, state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false, nil); err != nil {
-		t.Fatalf("sendSnapshotsWithStats: %v", err)
+	diag, err := sendSnapshotsWithDiagnostics(state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false, nil)
+	if err != nil {
+		t.Fatalf("sendSnapshotsWithDiagnostics: %v", err)
 	}
-	if peer, ok := store.Snapshot("node-b.catofes.", now); ok && peer.DatagramStats != nil && peer.DatagramStats.TooLargeDropped != 0 {
-		t.Fatalf("datagram stats = %#v, want no record payload accounting for hint-only announce", peer.DatagramStats)
+	if len(diag.Oversized) != 0 {
+		t.Fatalf("diagnostics = %#v, want no record payload accounting for hint-only announce", diag)
 	}
 }
 
@@ -144,9 +142,8 @@ func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("peer", []*net.UDPAddr{transport.LocalAddr()})
 
-	// sendSnapshots should return nil even though the skeleton exceeds the budget.
-	if err := sendSnapshots(state.Network, transport, "peer", []zone.ZonePath{"catofes."}); err != nil {
-		t.Fatalf("sendSnapshots returned error for oversized skeleton: %v", err)
+	if _, err := sendSnapshotsWithDiagnostics(state.Network, transport, "peer", []zone.ZonePath{"catofes."}, time.Now(), false, nil); err != nil {
+		t.Fatalf("sendSnapshotsWithDiagnostics returned error for oversized skeleton: %v", err)
 	}
 }
 
