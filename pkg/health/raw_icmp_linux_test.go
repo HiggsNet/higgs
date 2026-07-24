@@ -38,7 +38,12 @@ func TestRawICMProberUsesWorkerAndPreservesBurstMajority(t *testing.T) {
 func TestRawICMProberFallsBackOnlyForLocalSetupFailure(t *testing.T) {
 	fallback := &countingRawFallback{}
 	worker := &fakeRawICMPWorker{result: rawProbeResult{err: errors.New("operation not permitted"), unavailable: true}}
-	p := NewRawICMProber(fallback)
+	var reportedTarget ProbeTarget
+	var reportedErr error
+	p := NewRawICMProber(fallback, func(target ProbeTarget, err error) {
+		reportedTarget = target
+		reportedErr = err
+	})
 	p.new = func(string) (rawICMPWorker, error) { return worker, nil }
 	target := ProbeTarget{InstanceID: "link-a", PeerTunnelAddr: netip.MustParseAddr("192.0.2.2")}
 	if got := p.Probe(context.Background(), target, ProbeConfig{}); !got.Success {
@@ -47,14 +52,21 @@ func TestRawICMProberFallsBackOnlyForLocalSetupFailure(t *testing.T) {
 	if fallback.calls != 1 {
 		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
 	}
+	if reportedTarget.InstanceID != target.InstanceID || reportedErr == nil || reportedErr.Error() != "operation not permitted" {
+		t.Fatalf("fallback report = (%+v, %v), want target and raw setup error", reportedTarget, reportedErr)
+	}
 
 	worker.result = rawProbeResult{err: errors.New("network is unreachable")}
+	reportedErr = nil
 	got := p.Probe(context.Background(), target, ProbeConfig{})
 	if got.Error != "network is unreachable" {
 		t.Fatalf("network error = %q, want raw packet error", got.Error)
 	}
 	if fallback.calls != 1 {
 		t.Fatalf("fallback calls after packet error = %d, want 1", fallback.calls)
+	}
+	if reportedErr != nil {
+		t.Fatalf("packet error unexpectedly reported as fallback: %v", reportedErr)
 	}
 }
 

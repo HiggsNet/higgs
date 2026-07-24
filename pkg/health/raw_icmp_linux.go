@@ -29,7 +29,8 @@ import (
 // makes CAP_NET_RAW/CAP_SYS_ADMIN deployment mistakes non-disruptive while
 // still making the efficient path the normal case.
 type RawICMProber struct {
-	fallback Prober
+	fallback       Prober
+	reportFallback RawICMPFallbackReporter
 
 	mu      sync.Mutex
 	workers map[string]rawICMPWorker
@@ -37,6 +38,10 @@ type RawICMProber struct {
 	nextSeq atomic.Uint32
 	id      uint16
 }
+
+// RawICMPFallbackReporter observes local raw-ICMP setup failures before the
+// portable fallback prober is used. Callers should rate-limit any logging.
+type RawICMPFallbackReporter func(ProbeTarget, error)
 
 type rawICMPWorker interface {
 	probe(context.Context, ProbeTarget, ProbeConfig, uint16, *atomic.Uint32) rawProbeResult
@@ -54,13 +59,18 @@ type rawProbeResult struct {
 
 // NewRawICMProber creates the preferred in-process ICMP prober. fallback is
 // normally NewICMProber; nil means setup errors are returned to the caller.
-func NewRawICMProber(fallback Prober) *RawICMProber {
-	return &RawICMProber{
+// The optional reporter observes fallback reasons for low-volume diagnostics.
+func NewRawICMProber(fallback Prober, reporters ...RawICMPFallbackReporter) *RawICMProber {
+	p := &RawICMProber{
 		fallback: fallback,
 		workers:  make(map[string]rawICMPWorker),
 		new:      newRawICMPWorker,
 		id:       uint16(time.Now().UnixNano()),
 	}
+	if len(reporters) > 0 {
+		p.reportFallback = reporters[0]
+	}
+	return p
 }
 
 func (p *RawICMProber) Type() string { return ProbeTypeICMP }
@@ -96,6 +106,9 @@ func (p *RawICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeC
 
 func (p *RawICMProber) fallbackOrError(ctx context.Context, target ProbeTarget, cfg ProbeConfig, rawErr error) ProbeResult {
 	if p.fallback != nil {
+		if p.reportFallback != nil {
+			p.reportFallback(target, rawErr)
+		}
 		return p.fallback.Probe(ctx, target, cfg)
 	}
 	return ProbeResult{InstanceID: target.InstanceID, Error: rawErr.Error()}
@@ -200,14 +213,8 @@ func (w *rawICMPNamespaceWorker) run(ready chan<- error) {
 		close(w.done)
 	}()
 
-	for {
-		select {
-		case job, ok := <-w.jobs:
-			if !ok {
-				return
-			}
-			job.result <- probeRawICMP(job, sockets)
-		}
+	for job := range w.jobs {
+		job.result <- probeRawICMP(job, sockets)
 	}
 }
 
@@ -337,7 +344,9 @@ func openRawICMPSocket(key rawSocketKey) (int, error) {
 	}
 	if key.family == unix.AF_INET6 {
 		// Linux calculates the ICMPv6 pseudo-header checksum at byte offset 2.
-		if err := unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_CHECKSUM, 2); err != nil {
+		// ICMPv6 raw sockets reject IPV6_CHECKSUM at the IPPROTO_IPV6 level;
+		// Linux requires the SOL_RAW/IPPROTO_RAW level for this socket type.
+		if err := unix.SetsockoptInt(fd, unix.IPPROTO_RAW, unix.IPV6_CHECKSUM, 2); err != nil {
 			return closeOnError(err)
 		}
 		addr := unix.SockaddrInet6{}

@@ -77,6 +77,7 @@ const (
 	defaultReconcileOperationTimeout                 = 20 * time.Second
 	defaultDaemonInterval                            = 60 * time.Second
 	defaultIPsecReconcileInterval                    = time.Minute
+	rawICMPFallbackLogInterval                       = 10 * time.Minute
 	daemonEventRecordPut             daemonEventType = "record_put"
 	daemonEventDelegateIssue         daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke        daemonEventType = "delegate_revoke"
@@ -190,7 +191,35 @@ func (d *DaemonService) configureHealthManager() {
 	// fork/exec and mount work of `ip netns exec ping`. When the service lacks
 	// the required capabilities it automatically falls back to the portable
 	// exec prober.
-	d.health = newHealthManager(cfg, health.NewRawICMProber(health.NewICMProber(nil, health.NewUDPProber(nil))))
+	fallbackLogLimiter := newRepeatedLogLimiter(rawICMPFallbackLogInterval)
+	reportFallback := func(target health.ProbeTarget, rawErr error) {
+		netns := strings.TrimSpace(target.NetNS)
+		if netns == "" {
+			netns = "host"
+		}
+		key := netns
+		if rawErr != nil {
+			key += "\x00" + rawErr.Error()
+		}
+		suppressed, ok := fallbackLogLimiter.Allow(key, time.Now())
+		if !ok {
+			return
+		}
+		fields := map[string]any{
+			"netns":     netns,
+			"interface": target.InterfaceName,
+			"fallback":  "exec_ping",
+			"error":     rawErr,
+		}
+		if suppressed > 0 {
+			fields["suppressed"] = suppressed
+		}
+		d.logWarn("health", "raw_icmp_fallback", fields)
+	}
+	d.health = newHealthManager(cfg, health.NewRawICMProber(
+		health.NewICMProber(nil, health.NewUDPProber(nil)),
+		reportFallback,
+	))
 }
 
 func (d *DaemonService) Run(ctx context.Context) error {
