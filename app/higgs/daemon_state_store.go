@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
 )
 
 var errDaemonStateRevisionStale = errors.New("daemon state revision is stale")
@@ -59,6 +61,21 @@ func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
 	rev := s.revision
 	s.mu.RUnlock()
 	return cloneStateFile(committed), rev
+}
+
+// ZoneDigests returns a detached digest projection of the committed state.
+// It keeps the state pointer private and avoids cloning the complete Network
+// for callers that only need its gossip digest.
+func (s *DaemonStateStore) ZoneDigests() []gossip.ZoneDigest {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.committed == nil {
+		return nil
+	}
+	return gossip.ZoneDigests(s.committed.Network)
 }
 
 // ReadCommitted invokes fn while holding a read lock on the immutable

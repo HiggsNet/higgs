@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/core/gossip"
 )
 
 func TestDaemonStateStoreSnapshotReturnsCommittedClone(t *testing.T) {
@@ -28,6 +30,21 @@ func TestDaemonStateStoreSnapshotReturnsCommittedClone(t *testing.T) {
 	}
 	if string(again.Network.Zones["node-a.catofes."].Records["endpoint"].Value) != "endpoint-a" {
 		t.Fatalf("nested snapshot mutation leaked into store: %q", string(again.Network.Zones["node-a.catofes."].Records["endpoint"].Value))
+	}
+}
+
+func TestDaemonStateStoreZoneDigestsReturnsDetachedProjection(t *testing.T) {
+	state := &stateFile{ManagedZone: "node-a.catofes.", Network: cloneTestNetworkState()}
+	store := NewDaemonStateStore(state)
+	want := gossip.ZoneDigests(state.Network)
+
+	got := store.ZoneDigests()
+	if !sameZoneDigests(got, want) {
+		t.Fatalf("ZoneDigests = %#v, want %#v", got, want)
+	}
+	got[0].RootHash[0] ^= 0xff
+	if again := store.ZoneDigests(); !sameZoneDigests(again, want) {
+		t.Fatalf("digest mutation leaked into committed state: got %#v, want %#v", again, want)
 	}
 }
 

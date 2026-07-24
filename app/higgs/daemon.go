@@ -1349,6 +1349,9 @@ func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
 	if d == nil {
 		return nil
 	}
+	if d.StateStore != nil {
+		return d.StateStore.ZoneDigests()
+	}
 	state, _, _ := d.snapshotState()
 	if state == nil || state.Network == nil {
 		return nil
