@@ -19,10 +19,12 @@ import (
 
 func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	srv := newTestObserverServer()
-	srv.daemon.Sync.State.SyncPeers["peer-a.catofes."] = syncPeerState{
-		LastSyncUnix: 123,
-		FailureCount: 2,
-	}
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.SyncPeers["peer-a.catofes."] = syncPeerState{
+			LastSyncUnix: 123,
+			FailureCount: 2,
+		}
+	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers/peer-a.catofes.", nil)
 	rr := httptest.NewRecorder()
 	srv.handler().ServeHTTP(rr, req)
@@ -116,9 +118,11 @@ func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
 	zs := zone.NewZoneState("node-a.catofes.", authority)
 	zs.Records["identity"] = active
 	zs.RecordHistory["identity"] = []*zone.Record{old}
-	srv.daemon.Sync.State.Network = &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{
-		"node-a.catofes.": zs,
-	}}
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.Network = &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{
+			"node-a.catofes.": zs,
+		}}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/node-a.catofes.", nil)
 	rr := httptest.NewRecorder()
@@ -178,7 +182,6 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	now := time.Unix(1000, 0)
 	srv.daemon.Sync.App.Clock = func() time.Time { return now }
 	srv.daemon.Sync.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
-	srv.daemon.Sync.State.Network = zone.NewNetworkState()
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -204,18 +207,21 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 		t.Fatalf("SignRecord(endpoint): %v", err)
 	}
 	zs.Records[gossip.EndpointRecordKeyUDP] = endpointRecord
-	srv.daemon.Sync.State.Network.Zones["node-b.catofes."] = zs
-	srv.daemon.Sync.State.SyncPeers["node-b.catofes."] = syncPeerState{
-		LastSyncUnix:         900,
-		LastRelayUnix:        920,
-		LastUpdateSource:     "announce",
-		LastRelaySuppression: "relay_fanout_limited",
-		DiscoveredAddr:       "203.0.113.20:33434",
-		ObservedAddr:         "198.51.100.9:33434",
-		ObservedSource:       "verified_packet",
-		ObservedGraceAddrs:   []observedGraceAddrState{{Addr: "198.51.100.8:33434", UntilUnix: 1100}},
-		RejectedDigests:      map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
-	}
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.Network = zone.NewNetworkState()
+		state.Network.Zones["node-b.catofes."] = zs
+		state.SyncPeers["node-b.catofes."] = syncPeerState{
+			LastSyncUnix:         900,
+			LastRelayUnix:        920,
+			LastUpdateSource:     "announce",
+			LastRelaySuppression: "relay_fanout_limited",
+			DiscoveredAddr:       "203.0.113.20:33434",
+			ObservedAddr:         "198.51.100.9:33434",
+			ObservedSource:       "verified_packet",
+			ObservedGraceAddrs:   []observedGraceAddrState{{Addr: "198.51.100.8:33434", UntilUnix: 1100}},
+			RejectedDigests:      map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
+		}
+	})
 	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)
 	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)
 	recordObjectPullAttempt(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", now)
@@ -277,10 +283,12 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
 		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
 	}
-	srv.daemon.Sync.State.ManagedZone = "node-a.catofes."
-	srv.daemon.Sync.State.Network = zone.NewNetworkState()
-	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "node-a.catofes.", "127.0.0.1", 33434, now)
-	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.ManagedZone = "node-a.catofes."
+		state.Network = zone.NewNetworkState()
+		addObserverEndpointZone(t, state.Network, "node-a.catofes.", "127.0.0.1", 33434, now)
+		addObserverEndpointZone(t, state.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
 	rr := httptest.NewRecorder()
@@ -314,13 +322,15 @@ func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
 	srv.daemon.Sync.App.Clock = func() time.Time { return now }
-	srv.daemon.Sync.State.ManagedZone = "node-a.catofes."
-	srv.daemon.Sync.Config.PeerID = string(srv.daemon.Sync.State.ManagedZone)
-	srv.daemon.Sync.State.Network = zone.NewNetworkState()
-	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "zeta.other.", "127.0.0.1", 33439, now)
-	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
-	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "alpha.catofes.", "127.0.0.1", 33436, now)
-	addObserverEndpointZone(t, srv.daemon.Sync.State.Network, "branch.alpha.catofes.", "127.0.0.1", 33437, now)
+	srv.daemon.Sync.Config.PeerID = "node-a.catofes."
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.ManagedZone = "node-a.catofes."
+		state.Network = zone.NewNetworkState()
+		addObserverEndpointZone(t, state.Network, "zeta.other.", "127.0.0.1", 33439, now)
+		addObserverEndpointZone(t, state.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
+		addObserverEndpointZone(t, state.Network, "alpha.catofes.", "127.0.0.1", 33436, now)
+		addObserverEndpointZone(t, state.Network, "branch.alpha.catofes.", "127.0.0.1", 33437, now)
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
 	rr := httptest.NewRecorder()
@@ -379,47 +389,48 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			}},
 		},
 	}
-	state := srv.daemon.Sync.State
-	state.LinkInstances = map[string]linkInstanceState{
-		"link-1": {
-			ID:              "link-1",
-			GroupID:         "blue",
-			PeerZone:        "node-b.catofes.",
-			ActualState:     "up",
-			InterfaceName:   "hgs0",
-			XFRMIfID:        42,
-			Endpoint:        "198.51.100.10:4500",
-			DesiredSpecHash: "abcdef0123456789",
-			ChildSAName:     "child-link-1",
-			InitiatorRole:   "primary",
-		},
-	}
-	state.IPsecReconcile = &ipsecReconcileState{
-		LastRunUnix:  123,
-		DesiredLinks: 1,
-		Desired: []desiredLinkState{{
-			InstanceID:      "link-1",
-			GroupID:         "blue",
-			PeerZone:        "node-b.catofes.",
-			DesiredSpecHash: "abcdef0123456789",
-			InterfaceName:   "hgs0",
-			XFRMIfID:        42,
-			Endpoint:        "198.51.100.10:4500",
-			LocalTunnelAddr: "fd00::1%hgs0",
-			PeerTunnelAddr:  "fd00::2%hgs0",
-		}},
-		ActualSAs: []linkSAState{{
-			Name:           "link-1",
-			ChildSA:        "child-link-1",
-			Established:    true,
-			ReqID:          77,
-			LocalIdentity:  "node-a.catofes.",
-			RemoteIdentity: "node-b.catofes.",
-		}},
-	}
-	state.BirdInstances = map[string]*BirdInstanceState{
-		"hgs-blue": {State: "running"},
-	}
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.LinkInstances = map[string]linkInstanceState{
+			"link-1": {
+				ID:              "link-1",
+				GroupID:         "blue",
+				PeerZone:        "node-b.catofes.",
+				ActualState:     "up",
+				InterfaceName:   "hgs0",
+				XFRMIfID:        42,
+				Endpoint:        "198.51.100.10:4500",
+				DesiredSpecHash: "abcdef0123456789",
+				ChildSAName:     "child-link-1",
+				InitiatorRole:   "primary",
+			},
+		}
+		state.IPsecReconcile = &ipsecReconcileState{
+			LastRunUnix:  123,
+			DesiredLinks: 1,
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         "blue",
+				PeerZone:        "node-b.catofes.",
+				DesiredSpecHash: "abcdef0123456789",
+				InterfaceName:   "hgs0",
+				XFRMIfID:        42,
+				Endpoint:        "198.51.100.10:4500",
+				LocalTunnelAddr: "fd00::1%hgs0",
+				PeerTunnelAddr:  "fd00::2%hgs0",
+			}},
+			ActualSAs: []linkSAState{{
+				Name:           "link-1",
+				ChildSA:        "child-link-1",
+				Established:    true,
+				ReqID:          77,
+				LocalIdentity:  "node-a.catofes.",
+				RemoteIdentity: "node-b.catofes.",
+			}},
+		}
+		state.BirdInstances = map[string]*BirdInstanceState{
+			"hgs-blue": {State: "running"},
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr := httptest.NewRecorder()
@@ -456,27 +467,28 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 
 func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 	srv := newTestObserverServer()
-	state := srv.daemon.Sync.State
-	state.LinkInstances = map[string]linkInstanceState{
-		"link-1": {
-			ID:            "link-1",
-			GroupID:       "blue",
-			PeerZone:      "node-b.catofes.",
-			ActualState:   "up",
-			InterfaceName: "hgs0",
-			Endpoint:      "198.51.100.10:4500",
-		},
-	}
-	state.IPsecReconcile = &ipsecReconcileState{
-		Desired: []desiredLinkState{{
-			InstanceID:      "link-1",
-			GroupID:         "blue",
-			PeerZone:        "node-b.catofes.",
-			InterfaceName:   "hgs0",
-			LocalTunnelAddr: "fd00::1%hgs0",
-			PeerTunnelAddr:  "fd00::2%hgs0",
-		}},
-	}
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.LinkInstances = map[string]linkInstanceState{
+			"link-1": {
+				ID:            "link-1",
+				GroupID:       "blue",
+				PeerZone:      "node-b.catofes.",
+				ActualState:   "up",
+				InterfaceName: "hgs0",
+				Endpoint:      "198.51.100.10:4500",
+			},
+		}
+		state.IPsecReconcile = &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         "blue",
+				PeerZone:        "node-b.catofes.",
+				InterfaceName:   "hgs0",
+				LocalTunnelAddr: "fd00::1%hgs0",
+				PeerTunnelAddr:  "fd00::2%hgs0",
+			}},
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	rr := httptest.NewRecorder()

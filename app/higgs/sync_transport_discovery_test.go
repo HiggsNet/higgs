@@ -41,9 +41,9 @@ func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	delete(state.Network.Zones, zone.ZonePath("node-b.catofes."))
 	transport := &gossip.Transport{}
-	sr := newSyncRuntime(state, config, transport, &Runtime{Clock: func() time.Time { return time.Unix(123, 0) }})
+	sr := newSyncRuntime(config, transport, &Runtime{Clock: func() time.Time { return time.Unix(123, 0) }})
 
-	sr.addVerifiedZonePeers()
+	sr.addVerifiedZonePeers(state)
 
 	found := false
 	for _, id := range transport.KnownPeerIDs() {
@@ -136,7 +136,7 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 }
 
 func TestSyncRuntimeTransportConfigUsesInjectedDeps(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	_, config := buildTestNetworkState(t)
 	knownAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001}
 	replay := gossip.NewReplayWindow(time.Minute)
 	quotas := gossip.NewPeerQuotas(gossip.QuotaConfig{ByteRate: 1, ByteBurst: 1, ObjectRate: 1, ObjectBurst: 1})
@@ -145,7 +145,7 @@ func TestSyncRuntimeTransportConfigUsesInjectedDeps(t *testing.T) {
 	now := time.Unix(1234, 0)
 	rt := &Runtime{Clock: func() time.Time { return now }}
 
-	syncRuntime := newSyncRuntime(state, config, nil, rt)
+	syncRuntime := newSyncRuntime(config, nil, rt)
 	syncRuntime.TransportDeps = &SyncTransportDeps{
 		KnownPeers: map[string]*net.UDPAddr{"node-b.catofes.": knownAddr},
 		Replay:     replay,

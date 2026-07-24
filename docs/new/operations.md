@@ -235,7 +235,7 @@ higgs db stats
 higgs db dump
 ```
 
-`debug` 命令通常会优先读取 daemon live state；daemon 不在线时读取本地状态文件和最近一次 runtime snapshot。
+`debug` 命令通常会优先读取 daemon 的 committed StateStore view；daemon 不在线时读取本地状态文件和最近一次 runtime snapshot。
 
 ## 开启 Debug Log
 

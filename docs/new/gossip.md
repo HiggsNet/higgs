@@ -765,7 +765,7 @@ Packet → routePacket()
   └── 无匹配 → UnsolicitedPacketEvent → 由 handlePacket 处理
 ```
 
-gossip packet 事件不再等待 legacy live state 写锁。`handlePacketEvent` 在事件循环中先于控制请求处理；只读响应（`PONG`、`FETCH_CATALOG_PAGE`、`FETCH_ZONE` 等）从 committed view 直接生成 summary、page 或目标 zone 的 announce 计划，不复制完整 Network。observed path 等控制状态通过局部 COW 直接提交到 StateStore，不再在 packet 结束后回灌或发布 `Sync.State`。
+gossip packet 事件直接以 StateStore committed state 为唯一权威。`handlePacketEvent` 在事件循环中先于控制请求处理；只读响应（`PONG`、`FETCH_CATALOG_PAGE`、`FETCH_ZONE` 等）从 committed view 直接生成 summary、page 或目标 zone 的 announce 计划，不复制完整 Network。observed path 等控制状态通过局部 COW 直接提交到 StateStore；`SyncRuntime` 不再持有第二份 state。
 
 对于有 SyncSession 的场景，具体消息类型转换：
 

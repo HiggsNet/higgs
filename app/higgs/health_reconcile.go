@@ -121,18 +121,13 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 		groups = d.Sync.App.Config.IPsec.LinkGroups
 	}
 	var targets []health.ProbeTarget
-	if d.StateStore != nil {
-		d.StateStore.ReadCommitted(func(state *stateFile) {
-			if state == nil {
-				return
-			}
-			localZone = string(state.ManagedZone)
-			targets = healthTargetsFromState(state, localZone, groups)
-		})
-	} else if d.Sync.State != nil {
-		localZone = string(d.Sync.State.ManagedZone)
-		targets = healthTargetsFromState(d.Sync.State, localZone, groups)
-	}
+	d.StateStore.ReadCommitted(func(state *stateFile) {
+		if state == nil {
+			return
+		}
+		localZone = string(state.ManagedZone)
+		targets = healthTargetsFromState(state, localZone, groups)
+	})
 	now := d.Sync.now()
 	d.health.SetTargets(targets, now)
 	return d.tickHealth(ctx, now)

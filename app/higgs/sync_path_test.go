@@ -62,14 +62,14 @@ func TestRecordVerifiedObservedPathMigratesNewSource(t *testing.T) {
 	}
 	transport := &gossip.Transport{}
 	rt := &Runtime{Clock: func() time.Time { return now.Add(2 * time.Second) }}
-	sr := newSyncRuntime(state, &syncConfigFile{PeerID: "node-a.catofes."}, transport, rt)
-	sr.seedObservedPeerPath("node-b.catofes.")
+	sr := newSyncRuntime(&syncConfigFile{PeerID: "node-a.catofes."}, transport, rt)
+	sr.seedObservedPeerPath(state, "node-b.catofes.")
 	if got := transport.ObservedPeerAddrs("node-b.catofes."); len(got) != 2 || got[0].String() != "127.0.0.1:3000" || got[1].String() != "127.0.0.1:2000" {
 		t.Fatalf("ObservedPeerAddrs after migration = %v, want new addr plus grace old addr", got)
 	}
 
 	rt.Clock = func() time.Time { return now.Add(2*time.Second + observedPathMigrationGrace) }
-	sr.seedObservedPeerPath("node-b.catofes.")
+	sr.seedObservedPeerPath(state, "node-b.catofes.")
 	if got := transport.ObservedPeerAddrs("node-b.catofes."); len(got) != 1 || got[0].String() != "127.0.0.1:3000" {
 		t.Fatalf("ObservedPeerAddrs after grace expiry = %v, want only new addr", got)
 	}
@@ -91,9 +91,9 @@ func TestSeedObservedPeerPathDoesNotCompactStateGraceSlice(t *testing.T) {
 		},
 	}
 	transport := &gossip.Transport{}
-	sr := newSyncRuntime(state, config, transport, &Runtime{Clock: func() time.Time { return now }})
+	sr := newSyncRuntime(config, transport, &Runtime{Clock: func() time.Time { return now }})
 
-	sr.seedObservedPeerPath(peerID)
+	sr.seedObservedPeerPath(state, peerID)
 
 	grace := state.SyncPeers[peerID].ObservedGraceAddrs
 	if len(grace) != 2 || grace[0].Addr != "127.0.0.1:1000" || grace[1].Addr != "127.0.0.1:2000" {
@@ -124,8 +124,8 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 
 	transport := &gossip.Transport{}
 	rt := &Runtime{Clock: func() time.Time { return now }}
-	sr := newSyncRuntime(state, config, transport, rt)
-	sr.seedObservedPeerPath("node-b.catofes.")
+	sr := newSyncRuntime(config, transport, rt)
+	sr.seedObservedPeerPath(state, "node-b.catofes.")
 
 	if addr := transport.ObservedPeerAddr("node-b.catofes."); addr == nil || addr.String() != "127.0.0.1:2000" {
 		t.Fatalf("ObservedPeerAddr = %v, want 127.0.0.1:2000", addr)
@@ -135,7 +135,7 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	if peers := outboundSyncPeersAt(state, config, now); len(peers) != 0 {
 		t.Fatalf("outboundSyncPeers after observed expiry = %v, want empty", peers)
 	}
-	sr.seedObservedPeerPath("node-b.catofes.")
+	sr.seedObservedPeerPath(state, "node-b.catofes.")
 	if addr := transport.ObservedPeerAddr("node-b.catofes."); addr != nil {
 		t.Fatalf("ObservedPeerAddr after expiry = %v, want nil", addr)
 	}

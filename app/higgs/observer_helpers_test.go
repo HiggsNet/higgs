@@ -14,10 +14,11 @@ import (
 
 func newTestObserverServer() *observerServer {
 	peerObservability := observability.NewPeerObservabilityStore(32, time.Hour)
+	state := newTestStateFile()
 	d := &DaemonService{
 		PeerObservability: peerObservability,
+		StateStore:        NewDaemonStateStore(state),
 		Sync: &SyncRuntime{
-			State:         newTestStateFile(),
 			Config:        &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
 			App:           &Runtime{Config: &appConfig{}},
 			Observability: peerObservability,
@@ -26,6 +27,16 @@ func newTestObserverServer() *observerServer {
 	cfg := defaultObserverConfig()
 	cfg.Enabled = true
 	return newObserverServer(d, cfg)
+}
+
+func updateTestObserverState(srv *observerServer, fn func(*stateFile)) {
+	if srv == nil || srv.daemon == nil || srv.daemon.StateStore == nil || fn == nil {
+		return
+	}
+	_, _ = srv.daemon.StateStore.Update(func(state *stateFile) error {
+		fn(state)
+		return nil
+	})
 }
 
 func newTestStateFile() *stateFile {

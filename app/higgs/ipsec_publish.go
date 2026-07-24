@@ -18,16 +18,16 @@ import (
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
-func (sr *SyncRuntime) publishIPsecRecords() error {
-	changed, err := sr.publishIPsecRecordsInState(sr.State)
+func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
+	changed, err := sr.publishIPsecRecordsInState(state)
 	if err != nil || !changed {
 		return err
 	}
-	if err := sr.saveState(); err != nil {
+	if err := sr.saveState(state); err != nil {
 		return err
 	}
-	if sr != nil && sr.State != nil {
-		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": sr.State.ManagedZone})
+	if sr != nil && state != nil {
+		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": state.ManagedZone})
 	}
 	return nil
 }

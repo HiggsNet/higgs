@@ -82,7 +82,7 @@ Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调�
 
 | 字段 | 类型 | 作用 |
 |------|------|------|
-| `Sync` | `*SyncRuntime` | gossip sync 运行时封装，持有 `State`、`Config`、`Transport` |
+| `Sync` | `*SyncRuntime` | gossip sync 运行时封装，持有 `Config`、`Transport` 和落盘文件标记；不持有状态 |
 | `StateStore` | `*DaemonStateStore` | 状态中心：committed snapshot + revision + dirty 标记 |
 | `Events` | `chan daemonEvent` | 统一事件入口（64 buffer） |
 | `Interval` | `time.Duration` | 出站 sync 周期（默认 60s） |
@@ -139,17 +139,15 @@ daemonRun()
 3. **启动恢复**：
 
 ```
-// 1. 短暂加锁更新 discovered peers，然后释放写锁
-d.Sync.State.Lock()
-d.Sync.updateDiscoveredPeers()
-d.Sync.State.Unlock()
+// 1. transport 只用启动时的 committed snapshot 完成初始化
+initial, _ := d.StateStore.Snapshot()
+d.Sync.openTransport(initial)
 
-// 2. 发布本机记录
-d.Sync.publishEndpointRecord()
-d.Sync.publishIPsecRecords()
-d.publishRoutingNetnsRecord()
+// 2. 本机 endpoint/IPsec/routing 记录在一个 StateStore workspace 中发布
+d.prepareStartupState()
+d.updateDiscoveredPeers()
 
-// 3. 数据面恢复
+// 3. 数据面从 StateStore snapshot 恢复
 d.recoverIPsecLinksOnStart(ctx)
 d.recoverRoutingOnStart(ctx)
 d.recoverFirewallOnStart(ctx)
@@ -260,6 +258,8 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（如 record put�
 | `dirty` | IPsec / routing / firewall 的 dirty 标记 |
 | `reconcileProgress` | 各层 reconcile 是否在进行中 |
 
+daemon 进程内只有这一套权威状态。`SyncRuntime` 不含 `State` 字段；transport 初始化和 standalone helper 所需状态必须显式传入，避免产生一个可能落后于 committed revision 的隐式副本。
+
 主要接口：
 
 - `Snapshot()` — 返回 committed 状态的深拷贝 + 当前 revision。control socket、observer、debug 以及需要隔离 workspace 的 reconcile 使用它。
@@ -278,14 +278,14 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（如 record put�
 1. 从磁盘加载最新状态（`Sync.loadState()`）
 2. 用 `ReplaceCommitted()` 刷新 StateStore
 3. 通过 `StateStore.Update(fn)` 在 workspace 上完成业务修改
-4. 调用 `saveCommittedState()` 从 committed snapshot 保存回磁盘；daemon 不再同步或回灌 `Sync.State`
+4. 调用 `saveCommittedState()` 从 committed snapshot 保存回磁盘
 5. 通知 observer，设置 dirty 标记并触发 reconcile
 
 可能 no-op 的周期性写入（如 endpoint timer）使用 `runStateStoreWriteIfChanged()`：只有 `fn` 报告状态确实变化时，才会提交、递增 revision 并触发下游 flush。
 
 ### 4.4 Reconcile 与 StateStore
 
-IPsec、routing、firewall 的 reconcile 不再长时间持有 live state 写锁：
+IPsec、routing、firewall 的 reconcile 不再长时间持有 committed state 锁：
 
 1. `snapshotState()` 从 `StateStore.Snapshot()` 拿到 committed 快照和 revision
 2. reconcile 基于快照计算 desired state 并执行数据面操作
@@ -499,7 +499,7 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 - **输入**：UDP 包（从 transport.Receive() 接收）、定时器事件、object pull 结果
 - **输出**：通过 `StateStore.Update()` / `CommitIfRevision()` 更新 `Network`（Zone 数据库）和 peer runtime 状态
-- **集成点**：`SyncRuntime` 结构持有 state、config、transport。`handleSyncEvent()` 在 event loop 中驱动 `SyncSession` FSM，通过 `executeSyncActions()` 执行 apply snapshot / send message / start object pull / start timer 等动作
+- **集成点**：`SyncRuntime` 只持有 config、transport 和 I/O 依赖；状态由 `DaemonStateStore` 提供。`handleSyncEvent()` 在 event loop 中驱动 `SyncSession` FSM，通过 `executeSyncActions()` 执行 apply snapshot / send message / start object pull / start timer 等动作
 - **状态范围**：gossip 操作的是全网 verified signed state，进入 `Network` 字段
 
 **稳态 unsolicited ping 短路**：收到对端主动发来的 `MessagePing` 时，如果 ping 携带的 catalog root 与本端一致，`maybeShortcutSyncFromPingSummary` 直接记录 peer sync 状态并返回，不再创建 SyncSession。只有 root 不一致或 summary 生成失败时，才回退到完整 sync round。respondPing 仍正常回复 PONG，让对端拿到本端 summary。

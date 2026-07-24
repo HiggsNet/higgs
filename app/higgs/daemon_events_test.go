@@ -53,7 +53,7 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	}
 }
 
-func TestDaemonRecordPutUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestDaemonRecordPutUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2100, 0)
 	rt := &Runtime{
@@ -81,11 +81,11 @@ func TestDaemonRecordPutUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	current := service.currentState()
 	if current == state {
 		unlock()
-		t.Fatal("live state pointer did not transfer to committed state")
+		t.Fatal("committed snapshot still aliases constructor input")
 	}
 	if got := current.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
 		unlock()
-		t.Fatal("transferred live state missing locked record")
+		t.Fatal("committed state missing locked record")
 	}
 	unlock()
 	if version != 1 {
@@ -104,7 +104,7 @@ func TestDaemonRecordPutUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	}
 }
 
-func TestDaemonEventLoopRecordPutDoesNotWaitForLiveStateLock(t *testing.T) {
+func TestDaemonEventLoopRecordPutDoesNotWaitForConstructorInputLock(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2125, 0)
 	rt := &Runtime{
@@ -144,12 +144,12 @@ func TestDaemonEventLoopRecordPutDoesNotWaitForLiveStateLock(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		unlock()
-		t.Fatal("record_put event blocked behind live state lock")
+		t.Fatal("record_put event blocked behind detached constructor-input lock")
 	}
 	current := service.currentState()
 	if current == state {
 		unlock()
-		t.Fatal("live state pointer did not transfer to committed state")
+		t.Fatal("committed snapshot still aliases constructor input")
 	}
 	unlock()
 
@@ -159,7 +159,7 @@ func TestDaemonEventLoopRecordPutDoesNotWaitForLiveStateLock(t *testing.T) {
 	}
 }
 
-func TestDaemonEndpointTimerUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestDaemonEndpointTimerUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
 	config.PeerID = string(state.ManagedZone)
@@ -187,11 +187,11 @@ func TestDaemonEndpointTimerUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	current := service.currentState()
 	if current == state {
 		unlock()
-		t.Fatal("live state pointer did not transfer to committed state")
+		t.Fatal("committed snapshot still aliases constructor input")
 	}
 	if got := current.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
 		unlock()
-		t.Fatal("transferred live state missing endpoint record")
+		t.Fatal("committed state missing endpoint record")
 	}
 	unlock()
 
@@ -226,8 +226,8 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
-	if err := sr.publishIPsecRecords(); err != nil {
+	sr := newSyncRuntime(config, nil, rt)
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords: %v", err)
 	}
 	if err := rt.SaveState(state); err != nil {
@@ -281,7 +281,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	}
 }
 
-func TestDaemonIPsecPortRotateUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestDaemonIPsecPortRotateUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
 	config.PeerID = string(state.ManagedZone)
@@ -310,7 +310,7 @@ func TestDaemonIPsecPortRotateUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	current := service.currentState()
 	if current == state {
 		unlock()
-		t.Fatal("live state pointer did not transfer to committed state")
+		t.Fatal("committed snapshot still aliases constructor input")
 	}
 	if got := current.IPsecPortRecord; got == nil || got.Generation != result.CurrentGeneration {
 		unlock()
@@ -540,7 +540,7 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	}
 }
 
-func TestDaemonDelegateIssueUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestDaemonDelegateIssueUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
 	now := time.Unix(6100, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
@@ -570,11 +570,11 @@ func TestDaemonDelegateIssueUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	current := service.currentState()
 	if current == state {
 		unlock()
-		t.Fatal("live state pointer did not transfer to committed state")
+		t.Fatal("committed snapshot still aliases constructor input")
 	}
 	if got := current.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
 		unlock()
-		t.Fatal("transferred live state missing catofes delegation")
+		t.Fatal("committed state missing catofes delegation")
 	}
 	unlock()
 	if result == nil || result.Bundle == nil || result.Bundle.Zone != "catofes." {
@@ -742,7 +742,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	}
 }
 
-func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingLiveState(t *testing.T) {
+func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", false)
 	state.Admission = nil
@@ -770,7 +770,7 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingLiveState(t *test
 		t.Fatal("prepareStartupState changed = false, want admission commit")
 	}
 	if state.Admission != nil {
-		t.Fatal("prepareStartupState mutated the old live state")
+		t.Fatal("prepareStartupState mutated the detached constructor input")
 	}
 	committed, rev := service.StateStore.Snapshot()
 	if rev != beforeRev+1 {
@@ -780,7 +780,7 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingLiveState(t *test
 		t.Fatalf("committed admission = %+v, want pending startup diagnosis", committed.Admission)
 	}
 	if current := service.currentState(); current == state || current.Admission == nil || !current.Admission.Pending {
-		t.Fatalf("current admission = %+v, want installed committed state", current.Admission)
+		t.Fatalf("current admission = %+v, want committed state", current.Admission)
 	}
 	reloaded, err := rt.LoadState()
 	if err != nil {

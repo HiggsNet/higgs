@@ -31,7 +31,7 @@ func debugRevokeImpact(_ context.Context, zoneArg string) error {
 		return err
 	}
 
-	// Try daemon live state first.
+	// Try daemon committed state first.
 	if response, ok, err := revokeStatusViaControl(rt); err != nil {
 		return err
 	} else if ok {

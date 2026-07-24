@@ -18,7 +18,7 @@ func TestSyncRuntimeReloadStateIfChangedSkipsUnchangedStateFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
 		t.Fatalf("write state marker: %v", err)
 	}
-	sr := &SyncRuntime{App: &Runtime{StatePath: path}, State: state}
+	sr := &SyncRuntime{App: &Runtime{StatePath: path}}
 	loads := 0
 	load := func() (*stateFile, error) {
 		loads++
@@ -32,8 +32,8 @@ func TestSyncRuntimeReloadStateIfChangedSkipsUnchangedStateFile(t *testing.T) {
 	if latest, changed, err := sr.reloadStateIfChangedWith(previous, load); err != nil || changed || latest != state {
 		t.Fatalf("first reload = (%p, %t, %v), want current state without change", latest, changed, err)
 	}
-	if latest, changed, err := sr.reloadStateIfChangedWith(previous, load); err != nil || changed || latest != state {
-		t.Fatalf("unchanged reload = (%p, %t, %v), want cached current state", latest, changed, err)
+	if latest, changed, err := sr.reloadStateIfChangedWith(previous, load); err != nil || changed || latest != nil {
+		t.Fatalf("unchanged reload = (%p, %t, %v), want no replacement", latest, changed, err)
 	}
 	if loads != 1 {
 		t.Fatalf("loads after unchanged file = %d, want 1", loads)
@@ -62,7 +62,7 @@ func TestSyncRuntimeReloadStateIfChangedDoesNotCacheRacingFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
 		t.Fatalf("write state marker: %v", err)
 	}
-	sr := &SyncRuntime{App: &Runtime{StatePath: path}, State: state}
+	sr := &SyncRuntime{App: &Runtime{StatePath: path}}
 	loads := 0
 	load := func() (*stateFile, error) {
 		loads++
@@ -90,9 +90,9 @@ func TestSyncRuntimeReloadStateIfChangedSkipsStableSelfWrite(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	path := filepath.Join(t.TempDir(), "higgs.db")
 	rt := &Runtime{Config: defaultAppConfig(), StatePath: path}
-	sr := &SyncRuntime{App: rt, State: state}
+	sr := &SyncRuntime{App: rt}
 
-	if err := sr.saveState(); err != nil {
+	if err := sr.saveState(state); err != nil {
 		t.Fatalf("self save: %v", err)
 	}
 	if sr.reloadStateStamp.info == nil || sr.reloadStateStamp.path != path {
@@ -106,8 +106,8 @@ func TestSyncRuntimeReloadStateIfChangedSkipsStableSelfWrite(t *testing.T) {
 	}
 	previous := gossip.ZoneDigests(state.Network)
 	latest, changed, err := sr.reloadStateIfChangedWith(previous, load)
-	if err != nil || changed || latest != state {
-		t.Fatalf("reload after self write = (%p, %t, %v), want current state", latest, changed, err)
+	if err != nil || changed || latest != nil {
+		t.Fatalf("reload after self write = (%p, %t, %v), want no replacement", latest, changed, err)
 	}
 	if loads != 0 {
 		t.Fatalf("loads after stable self write = %d, want 0", loads)
@@ -129,18 +129,54 @@ func TestSyncRuntimeReloadStateIfChangedSkipsStableSelfWrite(t *testing.T) {
 	}
 }
 
+func TestDaemonSelfWriteReloadKeepsSoleCommittedState(t *testing.T) {
+	initial, config := buildTestNetworkState(t)
+	path := filepath.Join(t.TempDir(), "higgs.db")
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: path,
+	}
+	service := newDaemonService(rt, initial, config, time.Second)
+
+	if _, err := service.StateStore.Update(func(state *stateFile) error {
+		state.Network.Zones["node-b.catofes."].Authority.Epoch++
+		return nil
+	}); err != nil {
+		t.Fatalf("Update committed state: %v", err)
+	}
+	if err := service.saveCommittedState(); err != nil {
+		t.Fatalf("saveCommittedState: %v", err)
+	}
+	previous := service.zoneDigests()
+
+	latest, changed, err := service.Sync.reloadStateIfChanged(previous)
+	if err != nil {
+		t.Fatalf("reloadStateIfChanged: %v", err)
+	}
+	if changed || latest != nil {
+		t.Fatalf("self-write reload = (%p, %t), want no replacement", latest, changed)
+	}
+	if changed {
+		service.replaceCommittedState(latest)
+	}
+
+	committed, _ := service.StateStore.Snapshot()
+	if got := committed.Network.Zones["node-b.catofes."].Authority.Epoch; got != initial.Network.Zones["node-b.catofes."].Authority.Epoch+1 {
+		t.Fatalf("committed epoch = %d, want sole authority to retain self-written update", got)
+	}
+}
+
 func TestSyncRuntimeFailedSelfWriteClearsReloadMarker(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	dir := t.TempDir()
 	sr := &SyncRuntime{
-		App:   &Runtime{Config: defaultAppConfig(), StatePath: dir},
-		State: state,
+		App: &Runtime{Config: defaultAppConfig(), StatePath: dir},
 		reloadStateStamp: stateFileStamp{
 			path: "old",
 			info: fakeFileInfo{name: "old"},
 		},
 	}
-	if err := sr.saveState(); err == nil {
+	if err := sr.saveState(state); err == nil {
 		t.Fatal("self save to directory unexpectedly succeeded")
 	}
 	if sr.reloadStateStamp.info != nil || sr.reloadStateStamp.path != "" {

@@ -473,7 +473,7 @@ owner + Higgs resource marker verified
    - 如果成功，标记 instance 为成功状态。
 
 7. **持久化结果**
-   把 `result.Instances` 写回 `d.Sync.State.LinkInstances`，更新 `IPsecReconcile` 摘要（desired 数量、actions、skipped、last error），并调用 `saveState()` 落盘。
+   把 `result.Instances` 通过 `StateStore.CommitIfRevision()` 写回 `LinkInstances`，更新 `IPsecReconcile` 摘要（desired 数量、actions、skipped、last error），并从 committed snapshot 落盘。
 
 > **注意**：reconcile 是单线程顺序执行的。任何一步出错都会提前返回，但已经把截至目前的 instance 状态保存下来，下一轮可以基于最新的持久化状态继续推进。
 

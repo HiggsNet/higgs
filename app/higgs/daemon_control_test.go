@@ -241,7 +241,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	}
 }
 
-func TestDaemonControlReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *testing.T) {
+func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.LinkInstances = map[string]linkInstanceState{
 		"link-committed": {
@@ -297,7 +297,7 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *tes
 	}
 }
 
-func TestDaemonPacketEventDoesNotWaitForLiveStateLock(t *testing.T) {
+func TestDaemonPacketEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 	packet := &gossip.Packet{
@@ -323,7 +323,7 @@ func TestDaemonPacketEventDoesNotWaitForLiveStateLock(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		state.Unlock()
-		t.Fatal("packet event blocked behind live state lock")
+		t.Fatal("packet event blocked behind detached constructor-input lock")
 	}
 	state.Unlock()
 

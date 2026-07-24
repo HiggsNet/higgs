@@ -11,7 +11,7 @@ import (
 // status observer (Phase 6.7). It maps to the observer.* YAML section.
 //
 // The observer provides a read-only HTTP server that serves REST snapshot APIs
-// and a static UI for visualising daemon live state. It is disabled when the
+// and a static UI for visualising daemon committed state. It is disabled when the
 // observer section is absent; a present observer section enables it unless
 // observer.disabled: true (or legacy observer.enabled: false) is set.
 type observerConfig struct {

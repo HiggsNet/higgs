@@ -37,7 +37,7 @@ func TestObserverStatusAPI(t *testing.T) {
 	}
 }
 
-func TestObserverReadMethodsUseCommittedSnapshotWhileLiveStateLocked(t *testing.T) {
+func TestObserverReadMethodsUseCommittedSnapshotWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.LinkInstances = map[string]linkInstanceState{
 		"link-committed": {

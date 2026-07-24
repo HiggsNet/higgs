@@ -54,10 +54,6 @@ type DaemonService struct {
 	objectPullPool    *objectPullPool
 	timerManager      *TimerManager
 
-	// stateMu protects the legacy Sync.State fallback used when StateStore is
-	// absent (primarily standalone helpers and narrow tests).
-	stateMu sync.Mutex
-
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager   birdProcessManager
 	birdProcessManagers  map[string]birdProcessManager
@@ -76,7 +72,6 @@ type daemonEventType string
 
 const (
 	controlConnDeadline                              = 10 * time.Second
-	stateReadLockTimeout                             = 2 * time.Second
 	defaultReconcileOperationTimeout                 = 20 * time.Second
 	defaultDaemonInterval                            = 60 * time.Second
 	defaultIPsecReconcileInterval                    = time.Minute
@@ -162,7 +157,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		configureValidation(state.Network)
 	}
 	peerObservability := observability.NewPeerObservabilityStore(defaultPeerObservabilityLimit, defaultPeerObservabilityTTL)
-	syncRuntime := newSyncRuntime(state, config, nil, rt)
+	syncRuntime := newSyncRuntime(config, nil, rt)
 	syncRuntime.Observability = peerObservability
 	d := &DaemonService{
 		Sync:              syncRuntime,
@@ -232,8 +227,12 @@ func (d *DaemonService) configureHealthManager() {
 }
 
 func (d *DaemonService) Run(ctx context.Context) error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.Config == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.Config == nil {
 		return errors.New("daemon service is not initialized")
+	}
+	initialState, _ := d.StateStore.Snapshot()
+	if initialState == nil {
+		return errors.New("daemon committed state is not initialized")
 	}
 	if d.IPsecDriver == nil && d.XFRMDriver == nil {
 		if err := d.configureIPsecDriversFromConfig(); err != nil {
@@ -248,7 +247,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			d.logWarn("routing", "bird_shutdown_failed", map[string]any{"error": err})
 		}
 	}()
-	transport, err := d.Sync.openTransport()
+	transport, err := d.Sync.openTransport(initialState)
 	if err != nil {
 		return err
 	}
@@ -296,13 +295,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
-	if d.StateStore != nil {
-		d.StateStore.ReadCommitted(func(state *stateFile) {
-			logAutoJoinPending(d.Log, state)
-		})
-	} else {
-		logAutoJoinPending(d.Log, d.Sync.State)
-	}
+	d.StateStore.ReadCommitted(func(state *stateFile) {
+		logAutoJoinPending(d.Log, state)
+	})
 
 	nextSync := d.Sync.now()
 	nextEndpointPublish := d.Sync.now()
@@ -1123,15 +1118,11 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 		return err
 	}
 	var currentIdentityKeyPath string
-	if d.StateStore != nil {
-		d.StateStore.ReadCommitted(func(state *stateFile) {
-			if state != nil {
-				currentIdentityKeyPath = state.IdentityKeyPath
-			}
-		})
-	} else if d.Sync.State != nil {
-		currentIdentityKeyPath = d.Sync.State.IdentityKeyPath
-	}
+	d.StateStore.ReadCommitted(func(state *stateFile) {
+		if state != nil {
+			currentIdentityKeyPath = state.IdentityKeyPath
+		}
+	})
 	if currentIdentityKeyPath != "" && latest.IdentityKeyPath != "" && latest.IdentityKeyPath != currentIdentityKeyPath {
 		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, latest.IdentityKeyPath)
 	}
@@ -1365,7 +1356,7 @@ func (d *DaemonService) handleRootInitEvent() ([]byte, error) {
 	return nil, errors.New("root init via daemon is only valid before a daemon has loaded state; stop the daemon and run root init as recovery/direct initialization")
 }
 
-// processPacketEvent dispatches packet handling without taking the live state
+// processPacketEvent dispatches packet handling without a mutable stateFile
 // lock. Packet fast-path updates are serialized by the daemon event loop and
 // commit through StateStore.
 func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
@@ -1390,29 +1381,20 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 }
 
 func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
-	if d == nil {
+	if d == nil || d.StateStore == nil {
 		return nil
 	}
-	if d.StateStore != nil {
-		return d.StateStore.ZoneDigests()
-	}
-	state, _, _ := d.snapshotState()
-	if state == nil || state.Network == nil {
-		return nil
-	}
-	return gossip.ZoneDigests(state.Network)
+	return d.StateStore.ZoneDigests()
 }
 
 func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 	d.logDebug("endpoint", "timer_begin", nil)
 	changed, err := d.runStateStoreWriteIfChanged(func(state *stateFile) (bool, error) {
-		syncRuntime := *d.Sync
-		syncRuntime.State = state
-		endpointChanged, err := syncRuntime.publishEndpointRecordInState(state)
+		endpointChanged, err := d.Sync.publishEndpointRecordInState(state)
 		if err != nil {
 			return false, err
 		}
-		ipsecChanged, err := syncRuntime.publishIPsecRecordsInState(state)
+		ipsecChanged, err := d.Sync.publishIPsecRecordsInState(state)
 		if err != nil {
 			return false, err
 		}
@@ -1430,9 +1412,8 @@ func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 }
 
 // prepareStartupState folds admission diagnostics and all startup record
-// publishers into one isolated workspace. A changed startup publishes one
-// committed snapshot and performs one save instead of mutating and saving the
-// daemon live state once per publisher.
+// publishers into one isolated workspace. A changed startup performs one
+// commit and one save instead of one transaction per publisher.
 func (d *DaemonService) prepareStartupState() (bool, error) {
 	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return false, errors.New("daemon service is not initialized")
@@ -1454,13 +1435,11 @@ func (d *DaemonService) prepareStartupState() (bool, error) {
 	updateAdmissionOnPending(state, d.Sync.now())
 	changed := !sameAdmissionState(previousAdmission, state.Admission)
 
-	syncRuntime := *d.Sync
-	syncRuntime.State = state
-	endpointChanged, err := syncRuntime.publishEndpointRecordInState(state)
+	endpointChanged, err := d.Sync.publishEndpointRecordInState(state)
 	if err != nil {
 		return false, fmt.Errorf("publish startup endpoint record: %w", err)
 	}
-	ipsecChanged, err := syncRuntime.publishIPsecRecordsInState(state)
+	ipsecChanged, err := d.Sync.publishIPsecRecordsInState(state)
 	if err != nil {
 		return false, fmt.Errorf("publish startup IPsec records: %w", err)
 	}
@@ -1550,44 +1529,26 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 }
 
 func (d *DaemonService) currentState() *stateFile {
-	if d == nil {
+	if d == nil || d.StateStore == nil {
 		return nil
 	}
-	if d.StateStore != nil {
-		state, _ := d.StateStore.Snapshot()
-		return state
-	}
-	if d.Sync == nil {
-		return nil
-	}
-	d.stateMu.Lock()
-	defer d.stateMu.Unlock()
-	return d.Sync.State
+	state, _ := d.StateStore.Snapshot()
+	return state
 }
 
 func (d *DaemonService) snapshotState() (*stateFile, uint64, daemonStateStoreMeta) {
 	if d == nil {
 		return nil, 0, daemonStateStoreMeta{}
 	}
-	if d.StateStore != nil {
-		state, rev := d.StateStore.Snapshot()
-		meta := d.StateStore.Meta()
-		if meta.Revision == 0 {
-			meta.Revision = rev
-		}
-		return state, rev, meta
-	}
-	state := d.currentState()
-	if state == nil {
+	if d.StateStore == nil {
 		return nil, 0, daemonStateStoreMeta{}
 	}
-	unlock, ok := tryStateRLockWithin(state, stateReadLockTimeout)
-	if !ok {
-		return nil, 0, daemonStateStoreMeta{}
+	state, rev := d.StateStore.Snapshot()
+	meta := d.StateStore.Meta()
+	if meta.Revision == 0 {
+		meta.Revision = rev
 	}
-	snapshot := cloneStateFile(state)
-	unlock()
-	return snapshot, 0, daemonStateStoreMeta{}
+	return state, rev, meta
 }
 
 func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
@@ -1603,22 +1564,15 @@ func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
 }
 
 func (d *DaemonService) replaceCommittedState(state *stateFile) {
-	if d == nil || d.Sync == nil {
+	if d == nil || d.StateStore == nil {
 		return
 	}
-	if d.StateStore != nil {
-		d.StateStore.ReplaceCommitted(state)
-		d.publishStateStoreRuntimeFlags()
-		return
-	}
-	d.stateMu.Lock()
-	d.Sync.State = state
-	d.stateMu.Unlock()
+	d.StateStore.ReplaceCommitted(state)
+	d.publishStateStoreRuntimeFlags()
 }
 
-// setState is retained as a narrow compatibility helper for tests and legacy
-// callers. With a StateStore it replaces only the committed authority; it no
-// longer installs or republishes a second live snapshot.
+// setState is retained as a narrow compatibility helper for tests. It replaces
+// the daemon's sole in-memory authority.
 func (d *DaemonService) setState(state *stateFile) {
 	d.replaceCommittedState(state)
 }

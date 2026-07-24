@@ -50,9 +50,6 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 	if committed.ManagedZone != state.ManagedZone {
 		t.Fatalf("hook mutation leaked into committed state: %s", committed.ManagedZone)
 	}
-	if service.Sync.State.ManagedZone != state.ManagedZone {
-		t.Fatalf("hook mutation leaked into live state: %s", service.Sync.State.ManagedZone)
-	}
 }
 
 func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
@@ -99,9 +96,6 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 
 	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
 		t.Fatalf("empty reconciles changed revision from %d to %d", beforeRevision, revision)
-	}
-	if service.Sync.State != state {
-		t.Fatal("empty reconciles installed a new legacy live-state snapshot")
 	}
 }
 

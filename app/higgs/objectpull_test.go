@@ -238,7 +238,7 @@ func TestOfflineObjectPullDoesNotPersistDiagnostics(t *testing.T) {
 	}
 }
 
-func TestObjectPullResultUsesObservabilityStoreWhileLiveStateLocked(t *testing.T) {
+func TestObjectPullResultUsesObservabilityStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(7100, 0)
 	rt := &Runtime{
@@ -278,7 +278,7 @@ func TestObjectPullResultUsesObservabilityStoreWhileLiveStateLocked(t *testing.T
 	}
 }
 
-func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileLiveStateLocked(t *testing.T) {
+func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(7200, 0)
 	rt := &Runtime{
@@ -295,9 +295,6 @@ func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileLiveStateLocked(t *
 	state.Lock()
 	unlock := state.Unlock
 	service.submitObjectPull(context.Background(), "node-b.catofes.", "node-b.catofes.", now)
-	if service.Sync.State != state {
-		t.Fatal("legacy Sync.State pointer changed for diagnostics-only update")
-	}
 	unlock()
 
 	snapshot, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)

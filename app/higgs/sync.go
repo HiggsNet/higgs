@@ -66,7 +66,6 @@ type chunkAssembly struct {
 
 type SyncRuntime struct {
 	App           *Runtime
-	State         *stateFile
 	Config        *syncConfigFile
 	Transport     *gossip.Transport
 	TransportDeps *SyncTransportDeps
@@ -89,10 +88,9 @@ type SyncTransportDeps struct {
 	Log        func(gossip.Event)
 }
 
-func newSyncRuntime(state *stateFile, config *syncConfigFile, transport *gossip.Transport, app *Runtime) *SyncRuntime {
+func newSyncRuntime(config *syncConfigFile, transport *gossip.Transport, app *Runtime) *SyncRuntime {
 	return &SyncRuntime{
 		App:       app,
-		State:     state,
 		Config:    config,
 		Transport: transport,
 	}
@@ -280,13 +278,14 @@ func (s *chunkAssemblyStore) dropPeer(peerID string) {
 	}
 }
 
-// saveState persists the current state. The caller must hold the write lock
-// on sr.State; saveState reads the state without acquiring its own lock.
-func (sr *SyncRuntime) saveState() error {
+// saveState persists the explicitly supplied state. SyncRuntime deliberately
+// does not own a second state pointer; daemon callers persist StateStore
+// snapshots and standalone callers pass their private workspace.
+func (sr *SyncRuntime) saveState(state *stateFile) error {
 	if sr == nil {
 		return errors.New("sync runtime is nil")
 	}
-	return sr.saveStateSnapshot(sr.State)
+	return sr.saveStateSnapshot(state)
 }
 
 func (sr *SyncRuntime) saveStateSnapshot(state *stateFile) error {
@@ -456,7 +455,7 @@ func syncServe(ctx context.Context) error {
 	}
 	logger := newAppLogger(config)
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	transport, err := service.Sync.openTransport()
+	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err
 	}
@@ -516,7 +515,7 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	transport, err := service.Sync.openTransport()
+	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err
 	}
@@ -611,8 +610,10 @@ func (sr *SyncRuntime) reloadStateIfChangedWith(previous []gossip.ZoneDigest, lo
 	if path != "" {
 		if info, err := os.Stat(path); err == nil {
 			before = info
-			if sr.reloadStateStamp.matches(path, info) && sr.State != nil {
-				return sr.State, !sameZoneDigests(previous, gossip.ZoneDigests(sr.State.Network)), nil
+			if sr.reloadStateStamp.matches(path, info) {
+				// This exact file version was already produced or observed by
+				// the previous poll. There is no new external state to return.
+				return nil, false, nil
 			}
 		}
 	}
@@ -1015,32 +1016,32 @@ func peerChainVerified(state *stateFile, peerID string, now time.Time) bool {
 
 // seedObservedPeerPaths mutates transport observed paths based on a read-only
 // state view.
-func (sr *SyncRuntime) seedObservedPeerPaths() {
-	if sr == nil || sr.State == nil || sr.Transport == nil {
+func (sr *SyncRuntime) seedObservedPeerPaths(state *stateFile) {
+	if sr == nil || state == nil || sr.Transport == nil {
 		return
 	}
 	now := sr.now()
-	for peerID := range sr.State.SyncPeers {
-		sr.seedObservedPeerPathAt(peerID, now)
+	for peerID := range state.SyncPeers {
+		sr.seedObservedPeerPathAt(state, peerID, now)
 	}
 }
 
-func (sr *SyncRuntime) seedObservedPeerPath(peerID string) {
+func (sr *SyncRuntime) seedObservedPeerPath(state *stateFile, peerID string) {
 	if sr == nil {
 		return
 	}
-	sr.seedObservedPeerPathAt(peerID, sr.now())
+	sr.seedObservedPeerPathAt(state, peerID, sr.now())
 }
 
-func (sr *SyncRuntime) seedObservedPeerPathAt(peerID string, now time.Time) {
-	if sr == nil || sr.State == nil || sr.Transport == nil || peerID == "" {
+func (sr *SyncRuntime) seedObservedPeerPathAt(state *stateFile, peerID string, now time.Time) {
+	if sr == nil || state == nil || sr.Transport == nil || peerID == "" {
 		return
 	}
 	// pruneObservedGraceAddrs compacts its input slice in place. Detach the
-	// peer so seeding transport state cannot mutate a committed/live state
+	// peer so seeding transport state cannot mutate a committed state
 	// child through the shared slice backing array.
-	peerState := cloneSyncPeerState(sr.State.SyncPeers[peerID])
-	if !observedPathActive(peerState, now) || !peerChainVerified(sr.State, peerID, now) {
+	peerState := cloneSyncPeerState(state.SyncPeers[peerID])
+	if !observedPathActive(peerState, now) || !peerChainVerified(state, peerID, now) {
 		sr.Transport.RemoveObservedPeerAddr(peerID)
 		return
 	}
@@ -1061,17 +1062,17 @@ func (sr *SyncRuntime) seedObservedPeerPathAt(peerID string, now time.Time) {
 }
 
 func openSyncTransport(config *syncConfigFile, state *stateFile) (*gossip.Transport, error) {
-	return newSyncRuntime(state, config, nil, nil).openTransport()
+	return newSyncRuntime(config, nil, nil).openTransport(state)
 }
 
-func (sr *SyncRuntime) openTransport() (*gossip.Transport, error) {
+func (sr *SyncRuntime) openTransport(state *stateFile) (*gossip.Transport, error) {
 	deps := sr.syncTransportDeps()
 	transport, err := gossip.Listen(sr.transportConfig(deps))
 	if err != nil {
 		return nil, err
 	}
 	sr.Transport = transport
-	sr.seedTransportPeers(deps)
+	sr.seedTransportPeers(state, deps)
 	return transport, nil
 }
 
@@ -1088,14 +1089,14 @@ func (sr *SyncRuntime) transportConfig(deps *SyncTransportDeps) gossip.Config {
 	}
 }
 
-func (sr *SyncRuntime) seedTransportPeers(deps *SyncTransportDeps) {
-	if sr.State == nil || sr.Transport == nil {
+func (sr *SyncRuntime) seedTransportPeers(state *stateFile, deps *SyncTransportDeps) {
+	if state == nil || sr.Transport == nil {
 		return
 	}
-	addVerifiedZonePeers(sr.State, sr.Transport, sr.Config)
-	sr.seedObservedPeerPaths()
-	for peerID, entries := range gossip.ExtractPeerEndpoints(sr.State.Network) {
-		if peerID == sr.Config.PeerID || peerID == string(sr.State.ManagedZone) {
+	addVerifiedZonePeers(state, sr.Transport, sr.Config)
+	sr.seedObservedPeerPaths(state)
+	for peerID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
+		if peerID == sr.Config.PeerID || peerID == string(state.ManagedZone) {
 			continue
 		}
 		if _, ok := deps.KnownPeers[peerID]; ok {
@@ -1166,12 +1167,12 @@ func listenPortFromAddr(addr string) uint16 {
 	return uint16(port)
 }
 
-func (sr *SyncRuntime) publishEndpointRecord() error {
-	changed, err := sr.publishEndpointRecordInState(sr.State)
+func (sr *SyncRuntime) publishEndpointRecord(state *stateFile) error {
+	changed, err := sr.publishEndpointRecordInState(state)
 	if err != nil || !changed {
 		return err
 	}
-	return sr.saveState()
+	return sr.saveState(state)
 }
 
 func (sr *SyncRuntime) publishEndpointRecordInState(state *stateFile) (bool, error) {
@@ -1245,25 +1246,25 @@ func endpointRefreshDue(previous *gossip.EndpointRecord, now time.Time, refresh 
 	return !now.Before(time.Unix(base, 0).Add(refresh))
 }
 
-func (sr *SyncRuntime) tryAdoptAutoJoinAfterSync(peerID, via string) bool {
-	adopted, err := tryAdoptAutoJoinDelegation(sr.State, sr.now())
-	recordAdoptionResult(sr.State, adopted, err, sr.now())
+func (sr *SyncRuntime) tryAdoptAutoJoinAfterSync(state *stateFile, peerID, via string) bool {
+	adopted, err := tryAdoptAutoJoinDelegation(state, sr.now())
+	recordAdoptionResult(state, adopted, err, sr.now())
 	if err != nil {
 		sr.logger().Warn("auto_join", "adopt_failed", map[string]any{
 			"peer_id": peerID,
-			"zone":    sr.State.ManagedZone,
+			"zone":    state.ManagedZone,
 			"via":     via,
 			"error":   err,
 		})
 		return false
 	}
 	if !adopted {
-		recordBootstrapSyncSuccess(sr.State, peerID, sr.Config, sr.now())
+		recordBootstrapSyncSuccess(state, peerID, sr.Config, sr.now())
 		return false
 	}
 	sr.logger().Info("auto_join", "adopted", map[string]any{
 		"peer_id": peerID,
-		"zone":    sr.State.ManagedZone,
+		"zone":    state.ManagedZone,
 		"via":     via,
 	})
 	return true
@@ -1364,13 +1365,12 @@ func (sr *SyncRuntime) clearPublishedEndpointRecordInState(state *stateFile) (bo
 }
 
 func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
-	newSyncRuntime(state, config, transport, nil).addVerifiedZonePeers()
+	newSyncRuntime(config, transport, nil).addVerifiedZonePeers(state)
 }
 
 // addVerifiedZonePeers mutates transport known-peer state based on a read-only
 // state view.
-func (sr *SyncRuntime) addVerifiedZonePeers() {
-	state := sr.State
+func (sr *SyncRuntime) addVerifiedZonePeers(state *stateFile) {
 	transport := sr.Transport
 	config := sr.Config
 	if state == nil || state.Network == nil {
@@ -1411,22 +1411,21 @@ func (sr *SyncRuntime) addVerifiedZonePeers() {
 // updateDiscoveredPeers mutates state.SyncPeers and transport peer addresses.
 // The caller must hold the write lock on state.
 func updateDiscoveredPeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
-	newSyncRuntime(state, config, transport, nil).updateDiscoveredPeers()
+	newSyncRuntime(config, transport, nil).updateDiscoveredPeers(state)
 }
 
 // updateDiscoveredPeers mutates state.SyncPeers and transport peer addresses.
-// The caller must hold the write lock on sr.State.
-func (sr *SyncRuntime) updateDiscoveredPeers() {
-	state := sr.State
+// The caller owns the explicitly supplied mutable state.
+func (sr *SyncRuntime) updateDiscoveredPeers(state *stateFile) {
 	transport := sr.Transport
 	config := sr.Config
-	sr.addVerifiedZonePeers()
+	sr.addVerifiedZonePeers(state)
 	now := sr.now()
 	discovered := gossip.ExtractPeerEndpointsAt(state.Network, now)
 	bootstrapPeers := configuredKnownPeers(config)
 	updated := false
 	activeDiscovered := make(map[string]bool)
-	sr.seedObservedPeerPaths()
+	sr.seedObservedPeerPaths(state)
 	for peerID, entries := range discovered {
 		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
 			continue
@@ -1481,7 +1480,7 @@ func (sr *SyncRuntime) updateDiscoveredPeers() {
 		updated = true
 	}
 	if updated {
-		if err := sr.saveState(); err != nil {
+		if err := sr.saveState(state); err != nil {
 			sr.logger().Warn("endpoint", "discovered_peer_save_failed", map[string]any{"error": err})
 		}
 	}
@@ -1685,15 +1684,15 @@ func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
 	return until.Sub(now)
 }
 
-func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.SyncLimits) error {
-	if sr == nil || message == nil || message.ObjectChunk == nil {
+func (sr *SyncRuntime) handleObjectChunk(state *stateFile, message *gossip.Message, limits gossip.SyncLimits) error {
+	if sr == nil || state == nil || message == nil || message.ObjectChunk == nil {
 		return nil
 	}
 	chunk := message.ObjectChunk
 	data, complete, err := udpChunkAssemblies.add(message.PeerID, chunk, sr.now())
 	if err != nil {
 		if chunk.Object == gossip.ObjectPullZone {
-			recordRejectedDigest(sr.State, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
+			recordRejectedDigest(state, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
 		}
 		return err
 	}
@@ -1711,19 +1710,19 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 	case gossip.ObjectPullZone:
 		snapshot, err := gossip.DecodeZoneSnapshotObject(data)
 		if err != nil {
-			recordRejectedDigest(sr.State, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
+			recordRejectedDigest(state, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
 			return err
 		}
 		pullLimits := limits
 		pullLimits.MaxBytes = maxChunkObjectBytes
-		result, err := gossip.ApplySnapshot(sr.State.Network, snapshot, sr.now(), pullLimits)
+		result, err := gossip.ApplySnapshot(state.Network, snapshot, sr.now(), pullLimits)
 		if err != nil {
-			recordRejectedDigest(sr.State, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
+			recordRejectedDigest(state, message.PeerID, gossip.ZoneDigest{Zone: chunk.Zone, RootHash: chunk.RootHash}, gossip.RejectReason(err), sr.now())
 			return err
 		}
-		clearRejectedDigest(sr.State, message.PeerID, chunk.Zone)
+		clearRejectedDigest(state, message.PeerID, chunk.Zone)
 		recordDatagramChunkFallback(sr.Observability, message.PeerID, sr.now())
-		sr.tryAdoptAutoJoinAfterSync(message.PeerID, "udp_chunks")
+		sr.tryAdoptAutoJoinAfterSync(state, message.PeerID, "udp_chunks")
 		sr.logger().Info("sync", "zone_applied", map[string]any{
 			"peer_id":     message.PeerID,
 			"zone":        result.Zone,
@@ -1731,7 +1730,7 @@ func (sr *SyncRuntime) handleObjectChunk(message *gossip.Message, limits gossip.
 			"delegations": result.Delegation,
 			"via":         "udp_chunks",
 		})
-		return sr.saveState()
+		return sr.saveState(state)
 	default:
 		return nil
 	}

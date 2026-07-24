@@ -505,9 +505,9 @@ func TestFirewallInstanceSpecFromConfig(t *testing.T) {
 
 func TestReconcileFirewall_NoInstances(t *testing.T) {
 	d := &DaemonService{
+		StateStore: NewDaemonStateStore(&stateFile{}),
 		Sync: &SyncRuntime{
-			App:   &Runtime{Config: &appConfig{}},
-			State: &stateFile{},
+			App: &Runtime{Config: &appConfig{}},
 		},
 	}
 	if err := d.reconcileFirewall(context.Background()); err != nil {

@@ -31,9 +31,9 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 
-	if err := sr.publishIPsecRecords(); err != nil {
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords: %v", err)
 	}
 	zs := state.Network.Zones[state.ManagedZone]
@@ -95,8 +95,8 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 		t.Fatalf("loaded transport key state = %+v, want persisted private key", latest.IPsecTransportKey)
 	}
 	rt.Clock = func() time.Time { return now.Add(time.Hour) }
-	sr.State = latest
-	if err := sr.publishIPsecRecords(); err != nil {
+	state = latest
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords(second): %v", err)
 	}
 	again := latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyProfile]
@@ -144,8 +144,8 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 		t.Fatalf("put old profile: %v", err)
 	}
 
-	sr := newSyncRuntime(state, config, nil, rt)
-	if err := sr.publishIPsecRecords(); err != nil {
+	sr := newSyncRuntime(config, nil, rt)
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords: %v", err)
 	}
 	record := state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyProfile]
@@ -261,8 +261,8 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
-	if err := sr.publishIPsecRecords(); err != nil {
+	sr := newSyncRuntime(config, nil, rt)
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords: %v", err)
 	}
 	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
@@ -280,10 +280,10 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	sr.State = latest
+	state = latest
 	for i, offset := range []time.Duration{30 * time.Minute, 55 * time.Minute} {
 		rt.Clock = func() time.Time { return now.Add(offset) }
-		if err := sr.publishIPsecRecords(); err != nil {
+		if err := sr.publishIPsecRecords(state); err != nil {
 			t.Fatalf("publishIPsecRecords(refresh %d): %v", i, err)
 		}
 		refreshed, err := ipsec.ParsePortRecord(latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyPorts])
@@ -299,7 +299,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	}
 
 	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }
-	if err := sr.publishIPsecRecords(); err != nil {
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords(third): %v", err)
 	}
 	third, err := ipsec.ParsePortRecord(latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyPorts])
@@ -331,8 +331,8 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
 		Clock:     func() time.Time { return now },
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
-	if err := sr.publishIPsecRecords(); err != nil {
+	sr := newSyncRuntime(config, nil, rt)
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords(first): %v", err)
 	}
 	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
@@ -342,7 +342,7 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 	state.IPsecPortRecord = nil
 
 	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }
-	if err := sr.publishIPsecRecords(); err != nil {
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords(second): %v", err)
 	}
 	rotated, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
@@ -375,8 +375,8 @@ func TestForceLocalIPsecPortRotateAdvancesRangeGeneration(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
 		Clock:     func() time.Time { return now },
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
-	if err := sr.publishIPsecRecords(); err != nil {
+	sr := newSyncRuntime(config, nil, rt)
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords(first): %v", err)
 	}
 	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
@@ -435,9 +435,9 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 
-	if err := sr.publishIPsecRecords(); err != nil {
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords: %v", err)
 	}
 	zs := state.Network.Zones[state.ManagedZone]
@@ -700,9 +700,9 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 
-	if err := sr.publishIPsecRecords(); err != nil {
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords: %v", err)
 	}
 	key := ipsec.OverlayIntentRecordKey("main")
@@ -719,9 +719,9 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	sr.State = latest
+	state = latest
 	rt.Clock = func() time.Time { return now.Add(5 * time.Minute) }
-	if err := sr.publishIPsecRecords(); err != nil {
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords(second): %v", err)
 	}
 	second := latest.Network.Zones[latest.ManagedZone].Records[key]
@@ -741,7 +741,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 
 	appConfig.IPsec.LinkGroups[0].TunnelAddressSpec.Pool = netip.MustParsePrefix("10.45.0.0/29")
 	rt.Clock = func() time.Time { return now.Add(10 * time.Minute) }
-	if err := sr.publishIPsecRecords(); err != nil {
+	if err := sr.publishIPsecRecords(state); err != nil {
 		t.Fatalf("publishIPsecRecords(third): %v", err)
 	}
 	third := latest.Network.Zones[latest.ManagedZone].Records[key]

@@ -367,14 +367,15 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 
 	service := &DaemonService{
 		health: manager,
-		Sync: &SyncRuntime{State: &stateFile{LinkInstances: map[string]linkInstanceState{
+		StateStore: NewDaemonStateStore(&stateFile{LinkInstances: map[string]linkInstanceState{
 			"link-1": {
 				ID:                  "link-1",
 				GroupID:             "main",
 				ActualState:         "up",
 				StagedInterfaceName: vethA,
 			},
-		}}},
+		}}),
+		Sync: &SyncRuntime{},
 	}
 	service.recordBirdHealthObservationUnavailable(nsA, []string{"main"})
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {

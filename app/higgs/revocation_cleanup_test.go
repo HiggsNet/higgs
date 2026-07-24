@@ -355,7 +355,7 @@ func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.
 	}
 }
 
-func TestDaemonFlushRevocationCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
 	state.SyncPeers = map[string]syncPeerState{
@@ -392,7 +392,7 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileLiveStateLocked(t *testi
 	case <-done:
 	case <-time.After(time.Second):
 		state.Unlock()
-		t.Fatalf("flushRevocationCleanup blocked behind live state lock")
+		t.Fatalf("flushRevocationCleanup blocked behind detached constructor-input lock")
 	}
 	state.Unlock()
 

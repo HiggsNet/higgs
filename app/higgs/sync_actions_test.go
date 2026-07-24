@@ -57,7 +57,7 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	}
 }
 
-func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
+func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2120, 0)
 	rt := &Runtime{
@@ -89,7 +89,7 @@ func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		unlock()
-		t.Fatal("handleSyncEvent blocked behind live state lock")
+		t.Fatal("handleSyncEvent blocked behind detached constructor-input lock")
 	}
 	unlock()
 
@@ -104,7 +104,7 @@ func TestHandleSyncEventDoesNotWaitForLiveStateLock(t *testing.T) {
 	}
 }
 
-func TestRecordSyncPeerStateDoesNotInstallLiveSnapshot(t *testing.T) {
+func TestRecordSyncPeerStateUsesSoleCommittedAuthority(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	service := newDaemonService(&Runtime{}, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
@@ -116,11 +116,10 @@ func TestRecordSyncPeerStateDoesNotInstallLiveSnapshot(t *testing.T) {
 		next.SyncPeers[peerID] = peer
 	})
 
-	if service.Sync.State != state {
-		t.Fatal("peer mutation installed a new legacy live-state snapshot")
-	}
+	// The constructor input is detached from the store and must remain
+	// unchanged; there is no second runtime state to install or synchronize.
 	if state.SyncPeers[peerID].LastSyncUnix != 0 {
-		t.Fatalf("legacy live-state peer changed to %+v", state.SyncPeers[peerID])
+		t.Fatalf("constructor input peer changed to %+v", state.SyncPeers[peerID])
 	}
 	committed, revision := service.StateStore.Snapshot()
 	if revision != beforeRevision+1 {
@@ -131,7 +130,7 @@ func TestRecordSyncPeerStateDoesNotInstallLiveSnapshot(t *testing.T) {
 	}
 }
 
-func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T) {
+func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2130, 0)
 	rt := &Runtime{
@@ -159,7 +158,7 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T
 		}
 	case <-time.After(time.Second):
 		unlock()
-		t.Fatal("read-only responder blocked behind live state lock")
+		t.Fatal("read-only responder blocked behind detached constructor-input lock")
 	}
 	unlock()
 
@@ -176,7 +175,7 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileLiveStateLocked(t *testing.T
 		}
 	case <-time.After(time.Second):
 		unlock()
-		t.Fatal("fetch-zone responder blocked behind live state lock")
+		t.Fatal("fetch-zone responder blocked behind detached constructor-input lock")
 	}
 	unlock()
 
@@ -231,7 +230,7 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		unlock()
-		t.Fatal("chunk responder blocked behind live state lock")
+		t.Fatal("chunk responder blocked behind detached constructor-input lock")
 	}
 	unlock()
 
@@ -309,7 +308,7 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 		t.Fatalf("NewRuntime: %v", err)
 	}
 	rt.Clock = func() time.Time { return time.Unix(123, 0) }
-	sr := newSyncRuntime(targetState, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 	sr.Observability = observability.NewPeerObservabilityStore(8, time.Hour)
 
 	chunkSize := len(data) / 2
@@ -339,7 +338,7 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 		},
 	}
 	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
-		err := sr.handleObjectChunk(&gossip.Message{
+		err := sr.handleObjectChunk(targetState, &gossip.Message{
 			Type:        gossip.MessageObjectChunk,
 			PeerID:      "node-b.catofes.",
 			ObjectChunk: chunk,
@@ -427,7 +426,7 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	}
 
 	if targetState.Network.Zones["catofes."] != nil {
-		t.Fatal("daemon object chunk mutated the old live state")
+		t.Fatal("daemon object chunk mutated the detached constructor input")
 	}
 	committed, rev := service.StateStore.Snapshot()
 	if rev != beforeRev+1 {

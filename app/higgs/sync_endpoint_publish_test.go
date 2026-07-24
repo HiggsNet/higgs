@@ -39,9 +39,9 @@ func TestReflectorEndpointPublishSmoke(t *testing.T) {
 		StatePath: filepath.Join(dir, "higgs.db"),
 		Clock:     func() time.Time { return time.Unix(1000, 0) },
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(first): %v", err)
 	}
 	first := endpointRecordFromState(t, state, "node-b.catofes.")
@@ -54,7 +54,7 @@ func TestReflectorEndpointPublishSmoke(t *testing.T) {
 
 	reflectorIP = "198.51.100.20"
 	rt.Clock = func() time.Time { return time.Unix(1060, 0) }
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(second): %v", err)
 	}
 	second := endpointRecordFromState(t, state, "node-b.catofes.")
@@ -97,9 +97,9 @@ func TestEndpointPublishRefreshesStableEndpointsAfterInterval(t *testing.T) {
 		StatePath: filepath.Join(dir, "higgs.db"),
 		Clock:     func() time.Time { return time.Unix(1000, 0) },
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(first): %v", err)
 	}
 	first := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
@@ -111,7 +111,7 @@ func TestEndpointPublishRefreshesStableEndpointsAfterInterval(t *testing.T) {
 	}
 
 	rt.Clock = func() time.Time { return time.Unix(1300, 0) }
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(second): %v", err)
 	}
 	second := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
@@ -120,7 +120,7 @@ func TestEndpointPublishRefreshesStableEndpointsAfterInterval(t *testing.T) {
 	}
 
 	rt.Clock = func() time.Time { return time.Unix(2800, 0) }
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(third): %v", err)
 	}
 	third := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
@@ -162,9 +162,9 @@ func TestEndpointPublishDisabledClearsExistingEndpoint(t *testing.T) {
 	if err := state.Network.PutAt(record, now); err != nil {
 		t.Fatalf("PutAt(endpoint): %v", err)
 	}
-	sr := newSyncRuntime(state, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(clear): %v", err)
 	}
 	clearedRecord := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP]
@@ -179,7 +179,7 @@ func TestEndpointPublishDisabledClearsExistingEndpoint(t *testing.T) {
 		t.Fatalf("endpoint history len = %d, want previous record retained", len(history))
 	}
 
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(clear again): %v", err)
 	}
 	if got := state.Network.Zones["node-b.catofes."].Records[gossip.EndpointRecordKeyUDP].Version; got != 2 {
@@ -202,9 +202,9 @@ func TestEndpointPublishSkipsRootAdminState(t *testing.T) {
 		t.Fatalf("LoadState(root): %v", err)
 	}
 	config := &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:33540"}
-	sr := newSyncRuntime(state, config, nil, rt)
+	sr := newSyncRuntime(config, nil, rt)
 
-	if err := sr.publishEndpointRecord(); err != nil {
+	if err := sr.publishEndpointRecord(state); err != nil {
 		t.Fatalf("publishEndpointRecord(root): %v", err)
 	}
 	if record := state.Network.Zones[zone.RootZone].Records[gossip.EndpointRecordKeyUDP]; record != nil {

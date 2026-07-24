@@ -794,7 +794,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 }
 
-func TestDaemonIPsecCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
+func TestDaemonIPsecCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(5111, 0)
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
@@ -835,7 +835,7 @@ func TestDaemonIPsecCleanupUsesStateStoreWhileLiveStateLocked(t *testing.T) {
 	current := service.currentState()
 	if current == state {
 		unlock()
-		t.Fatal("live state pointer did not transfer to committed state")
+		t.Fatal("committed snapshot still aliases constructor input")
 	}
 	unlock()
 	if cleaned != 1 || orphans != 0 {
