@@ -1019,8 +1019,8 @@ func peerChainVerified(state *stateFile, peerID string, now time.Time) bool {
 	return higgscrypto.VerifyChain(&network, path, now) == nil
 }
 
-// seedObservedPeerPaths mutates transport observed paths based on state.SyncPeers.
-// The caller must hold the appropriate lock on sr.State.
+// seedObservedPeerPaths mutates transport observed paths based on a read-only
+// state view.
 func (sr *SyncRuntime) seedObservedPeerPaths() {
 	if sr == nil || sr.State == nil || sr.Transport == nil {
 		return
@@ -1042,7 +1042,10 @@ func (sr *SyncRuntime) seedObservedPeerPathAt(peerID string, now time.Time) {
 	if sr == nil || sr.State == nil || sr.Transport == nil || peerID == "" {
 		return
 	}
-	peerState := sr.State.SyncPeers[peerID]
+	// pruneObservedGraceAddrs compacts its input slice in place. Detach the
+	// peer so seeding transport state cannot mutate a committed/live state
+	// child through the shared slice backing array.
+	peerState := cloneSyncPeerState(sr.State.SyncPeers[peerID])
 	if !observedPathActive(peerState, now) || !peerChainVerified(sr.State, peerID, now) {
 		sr.Transport.RemoveObservedPeerAddr(peerID)
 		return
@@ -1370,8 +1373,8 @@ func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config 
 	newSyncRuntime(state, config, transport, nil).addVerifiedZonePeers()
 }
 
-// addVerifiedZonePeers mutates transport known-peer state based on state.Network.
-// The caller must hold the appropriate lock on sr.State.
+// addVerifiedZonePeers mutates transport known-peer state based on a read-only
+// state view.
 func (sr *SyncRuntime) addVerifiedZonePeers() {
 	state := sr.State
 	transport := sr.Transport
@@ -1379,28 +1382,31 @@ func (sr *SyncRuntime) addVerifiedZonePeers() {
 	if state == nil || state.Network == nil {
 		return
 	}
-	configureValidation(state.Network)
+	// Validation hooks are runtime-only. Install them on a shallow root so a
+	// transport refresh never mutates the state view supplied by StateStore.
+	network := *state.Network
+	configureValidation(&network)
 	now := sr.now()
-	for path := range state.Network.Zones {
+	for path := range network.Zones {
 		peerID := string(path)
 		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
 			continue
 		}
-		if err := higgscrypto.VerifyChain(state.Network, path, now); err != nil {
+		if err := higgscrypto.VerifyChain(&network, path, now); err != nil {
 			continue
 		}
 		transport.AddKnownPeerID(peerID)
 	}
-	for parentPath, zs := range state.Network.Zones {
+	for parentPath, zs := range network.Zones {
 		if zs == nil || len(zs.Delegations) == 0 {
 			continue
 		}
-		if err := higgscrypto.VerifyChain(state.Network, parentPath, now); err != nil {
+		if err := higgscrypto.VerifyChain(&network, parentPath, now); err != nil {
 			continue
 		}
 		for childPath := range zs.Delegations {
 			peerID := string(childPath)
-			if peerID == config.PeerID || peerID == string(state.ManagedZone) || state.Network.IsZoneRevoked(childPath, now) {
+			if peerID == config.PeerID || peerID == string(state.ManagedZone) || network.IsZoneRevoked(childPath, now) {
 				continue
 			}
 			transport.AddKnownPeerID(peerID)

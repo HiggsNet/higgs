@@ -118,12 +118,15 @@
     - 该项与 state COW 独立，可并行实现；perf 中剩余 `LoadNetwork` 约 1.49% 不保证全部来自自触发，改后需通过调用次数和新 perf 区分合法 reload。
     - 已完成：daemon 所有 SyncRuntime/StateStore 持久化路径统一在 Bolt transactions 与 `Close` 成功后记录文件 identity/size/mtime；close 前后标记不稳定、`stat` 失败或保存失败时保持空缓存。测试覆盖稳定自写零 loader、外部写入仍 reload、读取期间文件变化不缓存以及保存失败清标记。
 
-  - [ ] **7.11.4 清零对 `d.Sync.State` 的直接写入**
+  - [x] **7.11.4 清零对 `d.Sync.State` 的直接写入**
     - 完整盘点 direct writer，至少覆盖 object chunk snapshot apply、rejected digest、discovery、admission，以及启动阶段 endpoint/IPsec/routing record publish；chunk fallback、NACK/peer repair 等纯诊断在 7.11.0 后不应再写 `d.Sync.State`。
     - 高频 `SyncPeers` writer 使用 `UpdateSyncPeer`；低频 admission、endpoint、IPsec、routing writer可先迁到现有通用 `StateStore.Update`，优先统一写入权威，不要求为每个字段预先建立专用 chunk API。
     - object chunk 对 `Network` 的修改是移除 live/store 双状态前的关键阻塞项：先提供保证 committed 隔离的 Network mutation；若完整 Network clone 仍成为热点，再进入 per-zone COW。
     - `recordBirdHealthObservationForState` 只从 state 读取并更新 health manager，不是 state writer；迁移时改用 immutable read/view，不为它新增 `BirdInstances` mutation。
     - 同时审计所有可能 retain/mutate committed 子结构的入口，不限于 `ReadCommitted`：包括返回 `*stateFile`/`*NetworkState` 的 API、validation 配置、map/slice/pointer 内部修改和 `d.Sync.State` 的全部调用点。结构共享后，任何旧 revision 被修改都会污染共享它的新 revision。
+    - daemon UDP object chunk 已把 assembly/repair 与 committed mutation 分开：完整 zone snapshot 通过通用 StateStore workspace apply，损坏 chunk 的 rejected digest 通过 peer 局部 COW 提交；成功路径只升一个 apply revision，不再在 packet 尾部把 live state 反向 publish 一次。独立 `sync once` 继续保留 `SyncRuntime` 兼容实现。
+    - daemon 启动 admission diagnosis、endpoint、IPsec 和 routing record publish 已合并为一个隔离 workspace、一次 commit 和一次 save；无变化的第二次 prepare 不升 revision。外部 state reload 改为先替换 committed 再安装 live snapshot。
+    - reader/retain 审计已处理 transport observed grace slice 的原地 compact、verified-zone validation hook 对 Network root 的写入、health/BIRD 对 live state 的直接读取，以及 `OnStateChanged` hook retain：transport/health 改读不可变 view，hook 接收 detached snapshot。当前 `d.Sync.State` 生产代码命中只剩初始化检查、只读 fallback 和指针安装；live/store publish 桥接仍按 7.11.5 单独移除。
 
   - [ ] **7.11.5 移除 live/store 双状态桥接**
     - 仅在 direct writer 清零、所有 reader 均遵守不可 retain/mutate 约定后，才把 runtime 读侧切换为 immutable committed view 或更小的 store projection；不要仅把一个仍可写的 `d.Sync.State` 指针指向 committed。

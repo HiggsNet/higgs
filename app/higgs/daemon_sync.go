@@ -161,8 +161,7 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 		case gossip.MessageAnnounce:
 			return d.handleAnnounceHint(msg.PeerID)
 		case gossip.MessageObjectChunk:
-			// Object chunks still use the global UDP chunk assembly store.
-			return d.Sync.handleObjectChunk(msg, syncLimits(d.Sync.Config))
+			return d.handleObjectChunk(msg, syncLimits(d.Sync.Config))
 		case gossip.MessageObjectChunkNACK:
 			return d.Sync.handleObjectChunkNACK(msg)
 		default:
@@ -803,7 +802,7 @@ func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnaps
 		return nil, false, err
 	}
 	committed, _, _ := d.snapshotState()
-	d.setState(committed)
+	d.installCurrentStateSnapshot(committed)
 	if !applied {
 		return nil, false, applyErr
 	}

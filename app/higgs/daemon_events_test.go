@@ -742,6 +742,66 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	}
 }
 
+func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingLiveState(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", false)
+	state.Admission = nil
+	now := time.Unix(7250, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(dir, "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	config := &syncConfigFile{
+		PeerID:                 "node-b.catofes.",
+		ListenAddr:             "127.0.0.1:0",
+		DisableEndpointPublish: true,
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	beforeRev := service.StateStore.Meta().Revision
+
+	changed, err := service.prepareStartupState()
+	if err != nil {
+		t.Fatalf("prepareStartupState: %v", err)
+	}
+	if !changed {
+		t.Fatal("prepareStartupState changed = false, want admission commit")
+	}
+	if state.Admission != nil {
+		t.Fatal("prepareStartupState mutated the old live state")
+	}
+	committed, rev := service.StateStore.Snapshot()
+	if rev != beforeRev+1 {
+		t.Fatalf("state revision = %d, want one startup commit after %d", rev, beforeRev)
+	}
+	if committed.Admission == nil || !committed.Admission.Pending || committed.Admission.PendingSinceUnix != now.Unix() {
+		t.Fatalf("committed admission = %+v, want pending startup diagnosis", committed.Admission)
+	}
+	if current := service.currentState(); current == state || current.Admission == nil || !current.Admission.Pending {
+		t.Fatalf("current admission = %+v, want installed committed state", current.Admission)
+	}
+	reloaded, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if reloaded.Admission == nil || !reloaded.Admission.Pending {
+		t.Fatalf("persisted admission = %+v, want pending", reloaded.Admission)
+	}
+
+	changed, err = service.prepareStartupState()
+	if err != nil {
+		t.Fatalf("prepareStartupState(second): %v", err)
+	}
+	if changed {
+		t.Fatal("prepareStartupState(second) changed = true, want no-op")
+	}
+	if got := service.StateStore.Meta().Revision; got != rev {
+		t.Fatalf("state revision after no-op = %d, want %d", got, rev)
+	}
+}
+
 func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."

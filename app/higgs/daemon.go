@@ -290,9 +290,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		startFields[k] = v
 	}
 	d.logInfo("daemon", "started", startFields)
-	if d.Sync.State != nil {
-		updateAdmissionOnPending(d.Sync.State, d.Sync.now())
+	d.logDebug("daemon", "startup_publish_begin", nil)
+	if _, err := d.prepareStartupState(); err != nil {
+		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
+	d.logDebug("daemon", "startup_publish_done", nil)
 	logAutoJoinPending(d.Log, d.Sync.State)
 
 	nextSync := d.Sync.now()
@@ -303,17 +305,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	nextRoutingReconcile := nextRoutingReconcileTime(d.Sync.now(), routingReconcileInterval)
 	lastObservedDigests := d.zoneDigests()
 	d.updateDiscoveredPeers()
-	d.logDebug("daemon", "startup_publish_begin", nil)
-	if err := d.Sync.publishEndpointRecord(); err != nil {
-		d.logWarn("endpoint", "startup_publish_failed", map[string]any{"error": err})
-	}
-	if err := d.Sync.publishIPsecRecords(); err != nil {
-		d.logWarn("ipsec", "startup_publish_failed", map[string]any{"error": err})
-	}
-	if err := d.publishRoutingNetnsRecord(); err != nil {
-		d.logWarn("routing", "startup_publish_failed", map[string]any{"error": err})
-	}
-	d.logDebug("daemon", "startup_publish_done", nil)
 	d.logDebug("daemon", "startup_recovery_begin", nil)
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "ipsec"})
 	d.recoverIPsecLinksOnStart(ctx)
@@ -360,7 +351,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if latest, changed, err := d.Sync.reloadStateIfChanged(lastObservedDigests); err != nil {
 			d.logWarn("daemon", "reload_failed", map[string]any{"error": err})
 		} else if changed {
-			d.setState(latest)
+			d.replaceCommittedState(latest)
 			lastObservedDigests = gossip.ZoneDigests(latest.Network)
 			nextSync = now
 			forceSync = true
@@ -1124,8 +1115,18 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if err != nil {
 		return err
 	}
-	if d.Sync.State != nil && d.Sync.State.IdentityKeyPath != "" && latest.IdentityKeyPath != "" && latest.IdentityKeyPath != d.Sync.State.IdentityKeyPath {
-		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", d.Sync.State.IdentityKeyPath, latest.IdentityKeyPath)
+	var currentIdentityKeyPath string
+	if d.StateStore != nil {
+		d.StateStore.ReadCommitted(func(state *stateFile) {
+			if state != nil {
+				currentIdentityKeyPath = state.IdentityKeyPath
+			}
+		})
+	} else if d.Sync.State != nil {
+		currentIdentityKeyPath = d.Sync.State.IdentityKeyPath
+	}
+	if currentIdentityKeyPath != "" && latest.IdentityKeyPath != "" && latest.IdentityKeyPath != currentIdentityKeyPath {
+		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, latest.IdentityKeyPath)
 	}
 	syncConfig := syncConfigFromAppConfig(config, latest)
 	var ipsecDrivers configuredIPsecDrivers
@@ -1359,7 +1360,7 @@ func (d *DaemonService) handleRootInitEvent() ([]byte, error) {
 
 // processPacketEvent dispatches packet handling without taking the live state
 // lock. Packet fast-path updates are serialized by the daemon event loop and
-// published to the committed snapshot after handling.
+// commit through StateStore.
 func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
 	return d.handlePacketEvent(packet, ctx)
 }
@@ -1368,15 +1369,7 @@ func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Con
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
-	err := d.handlePacketEventSyncSession(packet, ctx)
-	// Object chunk assembly is the only remaining packet path that can mutate
-	// d.Sync.State directly. All other packet control-state writes already go
-	// through StateStore and install their committed snapshot, so republishing
-	// them here would clone and commit the same complete state a second time.
-	if packet.Message.Type == gossip.MessageObjectChunk {
-		d.publishCommittedStateSnapshot()
-	}
-	return err
+	return d.handlePacketEventSyncSession(packet, ctx)
 }
 
 func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {
@@ -1427,6 +1420,68 @@ func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 	}
 	d.logDebug("endpoint", "timer_done", map[string]any{"changed": changed})
 	return changed, nil
+}
+
+// prepareStartupState folds admission diagnostics and all startup record
+// publishers into one isolated workspace. A changed startup publishes one
+// committed snapshot and performs one save instead of mutating and saving the
+// daemon live state once per publisher.
+func (d *DaemonService) prepareStartupState() (bool, error) {
+	if d == nil || d.Sync == nil || d.StateStore == nil {
+		return false, errors.New("daemon service is not initialized")
+	}
+	update, err := d.StateStore.BeginUpdate()
+	if err != nil {
+		return false, err
+	}
+	state := update.Workspace()
+	if state == nil {
+		return false, errors.New("daemon startup state is nil")
+	}
+
+	var previousAdmission *admissionState
+	if state.Admission != nil {
+		value := *state.Admission
+		previousAdmission = &value
+	}
+	updateAdmissionOnPending(state, d.Sync.now())
+	changed := !sameAdmissionState(previousAdmission, state.Admission)
+
+	syncRuntime := *d.Sync
+	syncRuntime.State = state
+	endpointChanged, err := syncRuntime.publishEndpointRecordInState(state)
+	if err != nil {
+		return false, fmt.Errorf("publish startup endpoint record: %w", err)
+	}
+	ipsecChanged, err := syncRuntime.publishIPsecRecordsInState(state)
+	if err != nil {
+		return false, fmt.Errorf("publish startup IPsec records: %w", err)
+	}
+	routingChanged, err := d.publishRoutingNetnsRecordInState(state)
+	if err != nil {
+		return false, fmt.Errorf("publish startup routing record: %w", err)
+	}
+	changed = changed || endpointChanged || ipsecChanged || routingChanged
+	if !changed {
+		return false, nil
+	}
+
+	if _, committed, err := update.Commit(); err != nil {
+		return false, err
+	} else if !committed {
+		return false, errDaemonStateRevisionStale
+	}
+	if err := d.installAndSaveCommittedState(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func sameAdmissionState(a, b *admissionState) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {
@@ -1562,7 +1617,8 @@ func (d *DaemonService) replaceCommittedState(state *stateFile) {
 
 func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
-		d.Hooks.OnStateChanged(d.Sync.State)
+		state, _, _ := d.snapshotState()
+		d.Hooks.OnStateChanged(state)
 	}
 	// Phase 6.7: notify the read-only observer so it can push SSE events.
 	d.notifyObserver("state_changed", nil)

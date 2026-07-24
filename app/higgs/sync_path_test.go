@@ -75,6 +75,35 @@ func TestRecordVerifiedObservedPathMigratesNewSource(t *testing.T) {
 	}
 }
 
+func TestSeedObservedPeerPathDoesNotCompactStateGraceSlice(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Now()
+	peerID := "node-b.catofes."
+	if state.SyncPeers == nil {
+		state.SyncPeers = make(map[string]syncPeerState)
+	}
+	state.SyncPeers[peerID] = syncPeerState{
+		ObservedAddr:      "127.0.0.1:3000",
+		ObservedUntilUnix: now.Add(time.Minute).Unix(),
+		ObservedGraceAddrs: []observedGraceAddrState{
+			{Addr: "127.0.0.1:1000", UntilUnix: now.Add(-time.Second).Unix()},
+			{Addr: "127.0.0.1:2000", UntilUnix: now.Add(time.Minute).Unix()},
+		},
+	}
+	transport := &gossip.Transport{}
+	sr := newSyncRuntime(state, config, transport, &Runtime{Clock: func() time.Time { return now }})
+
+	sr.seedObservedPeerPath(peerID)
+
+	grace := state.SyncPeers[peerID].ObservedGraceAddrs
+	if len(grace) != 2 || grace[0].Addr != "127.0.0.1:1000" || grace[1].Addr != "127.0.0.1:2000" {
+		t.Fatalf("state grace paths were compacted in place: %+v", grace)
+	}
+	if got := transport.ObservedPeerAddrs(peerID); len(got) != 2 || got[0].String() != "127.0.0.1:3000" || got[1].String() != "127.0.0.1:2000" {
+		t.Fatalf("transport observed paths = %v, want active plus unexpired grace", got)
+	}
+}
+
 func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Now()

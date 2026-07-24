@@ -317,6 +317,144 @@ func TestHandleObjectChunkAppliesZoneSnapshot(t *testing.T) {
 	}
 }
 
+func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
+	udpChunkAssemblies = newChunkAssemblyStore()
+	sourceState, _ := buildTestNetworkState(t)
+	snapshot, err := gossip.Snapshot(sourceState.Network, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(catofes): %v", err)
+	}
+	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
+	if err != nil {
+		t.Fatalf("EncodeZoneSnapshotObject: %v", err)
+	}
+	objectHash := sha256.Sum256(data)
+	rootHash := gossip.ZoneRoot(sourceState.Network.Zones["catofes."])
+
+	targetState := cloneStateFile(sourceState)
+	delete(targetState.Network.Zones, zone.ZonePath("catofes."))
+	delete(targetState.Network.Zones, zone.ZonePath("node-b.catofes."))
+	now := time.Unix(2230, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(targetState); err != nil {
+		t.Fatalf("SaveState(target): %v", err)
+	}
+	config := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
+	service := newDaemonService(rt, targetState, config, defaultDaemonInterval)
+	beforeRev := service.StateStore.Meta().Revision
+
+	chunkSize := len(data) / 2
+	if chunkSize == 0 {
+		t.Fatal("encoded snapshot unexpectedly empty")
+	}
+	chunks := []*gossip.ObjectChunk{
+		{
+			TransferID: []byte("daemon-chunks-01"),
+			Object:     gossip.ObjectPullZone,
+			Zone:       "catofes.",
+			RootHash:   rootHash,
+			ObjectHash: objectHash[:],
+			Index:      0,
+			Total:      2,
+			Data:       data[:chunkSize],
+		},
+		{
+			TransferID: []byte("daemon-chunks-01"),
+			Object:     gossip.ObjectPullZone,
+			Zone:       "catofes.",
+			RootHash:   rootHash,
+			ObjectHash: objectHash[:],
+			Index:      1,
+			Total:      2,
+			Data:       data[chunkSize:],
+		},
+	}
+	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
+		if err := service.handleObjectChunk(&gossip.Message{
+			Type:        gossip.MessageObjectChunk,
+			PeerID:      "node-b.catofes.",
+			ObjectChunk: chunk,
+		}, gossip.DefaultSyncLimits()); err != nil {
+			t.Fatalf("handleObjectChunk: %v", err)
+		}
+	}
+
+	if targetState.Network.Zones["catofes."] != nil {
+		t.Fatal("daemon object chunk mutated the old live state")
+	}
+	committed, rev := service.StateStore.Snapshot()
+	if rev != beforeRev+1 {
+		t.Fatalf("state revision = %d, want exactly one object apply after %d", rev, beforeRev)
+	}
+	if committed.Network.Zones["catofes."] == nil {
+		t.Fatal("committed state missing chunk-applied zone")
+	}
+	if current := service.currentState(); current == targetState || current.Network.Zones["catofes."] == nil {
+		t.Fatal("current state was not installed from committed snapshot")
+	}
+	reloaded, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if reloaded.Network.Zones["catofes."] == nil {
+		t.Fatal("persisted state missing chunk-applied zone")
+	}
+	observed, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)
+	if !ok || observed.DatagramStats == nil || observed.DatagramStats.ChunkFallbacks != 1 {
+		t.Fatalf("chunk fallback observability = %+v, want one apply", observed.DatagramStats)
+	}
+}
+
+func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
+	udpChunkAssemblies = newChunkAssemblyStore()
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2240, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	peerID := "node-b.catofes."
+	beforeRev := service.StateStore.Meta().Revision
+	rootHash := gossip.ZoneRoot(state.Network.Zones["catofes."])
+
+	err := service.handleObjectChunk(&gossip.Message{
+		Type:   gossip.MessageObjectChunk,
+		PeerID: peerID,
+		ObjectChunk: &gossip.ObjectChunk{
+			TransferID: []byte("daemon-reject-01"),
+			Object:     gossip.ObjectPullZone,
+			Zone:       "catofes.",
+			RootHash:   rootHash,
+			ObjectHash: make([]byte, sha256.Size),
+			Index:      0,
+			Total:      1,
+			Data:       []byte("invalid object"),
+		},
+	}, gossip.DefaultSyncLimits())
+	if err == nil {
+		t.Fatal("handleObjectChunk accepted invalid object hash")
+	}
+
+	if len(state.SyncPeers[peerID].RejectedDigests) != 0 {
+		t.Fatal("chunk rejection mutated the old live peer state")
+	}
+	committed, rev := service.StateStore.Snapshot()
+	if rev != beforeRev+1 {
+		t.Fatalf("state revision = %d, want one peer COW commit after %d", rev, beforeRev)
+	}
+	rejected, ok := committed.SyncPeers[peerID].RejectedDigests[rejectedDigestKey("catofes.")]
+	if !ok || rejected.Reason == "" || rejected.RootHashHex == "" {
+		t.Fatalf("committed rejected digest = %+v, present=%v", rejected, ok)
+	}
+	if current := service.currentState(); len(current.SyncPeers[peerID].RejectedDigests) != 1 {
+		t.Fatalf("current rejected digests = %+v, want installed committed peer", current.SyncPeers[peerID].RejectedDigests)
+	}
+}
+
 func TestSnapshotRecordMessagesPrioritizesActiveRecord(t *testing.T) {
 	snapshot := &gossip.ZoneSnapshot{
 		Zone: "node-b.catofes.",

@@ -31,18 +31,26 @@ func TestConfiguredStrongSwanDriverWithoutLinkGroupsIsNoop(t *testing.T) {
 }
 
 func TestDaemonServiceStateChangedHook(t *testing.T) {
-	state := &stateFile{}
+	state := &stateFile{ManagedZone: "node-a.catofes."}
 	service := newDaemonService(&Runtime{}, state, &syncConfigFile{}, time.Second)
 	var called bool
 	service.Hooks.OnStateChanged = func(got *stateFile) {
 		called = true
-		if got != state {
-			t.Fatalf("hook got unexpected state pointer")
+		if got == state || got == nil || got.ManagedZone != state.ManagedZone {
+			t.Fatalf("hook got unexpected detached state: %+v", got)
 		}
+		got.ManagedZone = "retained-mutation.invalid."
 	}
 	service.notifyStateChanged()
 	if !called {
 		t.Fatal("state changed hook was not called")
+	}
+	committed, _ := service.StateStore.Snapshot()
+	if committed.ManagedZone != state.ManagedZone {
+		t.Fatalf("hook mutation leaked into committed state: %s", committed.ManagedZone)
+	}
+	if service.Sync.State.ManagedZone != state.ManagedZone {
+		t.Fatalf("hook mutation leaked into live state: %s", service.Sync.State.ManagedZone)
 	}
 }
 

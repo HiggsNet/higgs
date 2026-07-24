@@ -525,10 +525,18 @@ func (d *DaemonService) observeBirdForHealth(ctx context.Context, state *stateFi
 }
 
 func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string, overlays []string) {
-	if d == nil || d.Sync == nil {
+	if d == nil {
 		return
 	}
-	d.recordBirdHealthObservationUnavailableForState(d.Sync.State, netnsName, overlays)
+	if d.StateStore != nil {
+		d.StateStore.ReadCommitted(func(state *stateFile) {
+			d.recordBirdHealthObservationUnavailableForState(state, netnsName, overlays)
+		})
+		return
+	}
+	if d.Sync != nil {
+		d.recordBirdHealthObservationUnavailableForState(d.Sync.State, netnsName, overlays)
+	}
 }
 
 func (d *DaemonService) recordBirdHealthObservationUnavailableForState(state *stateFile, netnsName string, overlays []string) {
@@ -536,10 +544,18 @@ func (d *DaemonService) recordBirdHealthObservationUnavailableForState(state *st
 }
 
 func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays []string, observed *bird.BirdObservedState) {
-	if d == nil || d.Sync == nil {
+	if d == nil {
 		return
 	}
-	d.recordBirdHealthObservationForState(d.Sync.State, netnsName, overlays, observed)
+	if d.StateStore != nil {
+		d.StateStore.ReadCommitted(func(state *stateFile) {
+			d.recordBirdHealthObservationForState(state, netnsName, overlays, observed)
+		})
+		return
+	}
+	if d.Sync != nil {
+		d.recordBirdHealthObservationForState(d.Sync.State, netnsName, overlays, observed)
+	}
 }
 
 func (d *DaemonService) recordBirdHealthObservationForState(state *stateFile, netnsName string, overlays []string, observed *bird.BirdObservedState) {
@@ -1210,17 +1226,6 @@ func (d *DaemonService) putRouteAnnouncementForState(state *stateFile, path zone
 		return fmt.Errorf("put route record: %w", err)
 	}
 	return nil
-}
-
-// publishRoutingNetnsRecord publishes a routing/netns record listing the netns
-// names this node uses for routing. This allows other nodes to reverse-derive
-// Router-ID → (zone, netns) for control-plane cross-audit.
-func (d *DaemonService) publishRoutingNetnsRecord() error {
-	if d == nil || d.Sync == nil || d.Sync.State == nil || d.Sync.State.Network == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
-		return nil
-	}
-	_, err := d.publishRoutingNetnsRecordInState(d.Sync.State)
-	return err
 }
 
 func (d *DaemonService) publishRoutingNetnsRecordInState(state *stateFile) (bool, error) {
