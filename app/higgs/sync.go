@@ -69,6 +69,15 @@ type SyncRuntime struct {
 	Config        *syncConfigFile
 	Transport     *gossip.Transport
 	TransportDeps *SyncTransportDeps
+
+	// reloadStateStamp is only accessed by the daemon event loop.  It avoids
+	// reopening and decoding the complete state database when nothing changed.
+	reloadStateStamp stateFileStamp
+}
+
+type stateFileStamp struct {
+	path string
+	info os.FileInfo
 }
 
 type SyncTransportDeps struct {
@@ -577,14 +586,58 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 }
 
 func (sr *SyncRuntime) reloadStateIfChanged(previous []gossip.ZoneDigest) (*stateFile, bool, error) {
-	latest, err := sr.loadState()
+	return sr.reloadStateIfChangedWith(previous, sr.loadState)
+}
+
+// reloadStateIfChangedWith reloads only when the state DB changed. The loader
+// argument keeps the file-change gate independently testable; production uses
+// sr.loadState.
+func (sr *SyncRuntime) reloadStateIfChangedWith(previous []gossip.ZoneDigest, load func() (*stateFile, error)) (*stateFile, bool, error) {
+	path := sr.stateFilePath()
+	var before os.FileInfo
+	if path != "" {
+		if info, err := os.Stat(path); err == nil {
+			before = info
+			if sr.reloadStateStamp.matches(path, info) && sr.State != nil {
+				return sr.State, !sameZoneDigests(previous, gossip.ZoneDigests(sr.State.Network)), nil
+			}
+		}
+	}
+
+	latest, err := load()
 	if err != nil {
 		return nil, false, err
+	}
+	if path != "" {
+		// Do not cache a token if the file moved while it was being read. That
+		// makes the next loop reload once more instead of suppressing a newer
+		// external write.
+		if after, err := os.Stat(path); err == nil && sameStateFileInfo(before, after) {
+			sr.reloadStateStamp = stateFileStamp{path: path, info: after}
+		} else {
+			sr.reloadStateStamp = stateFileStamp{}
+		}
 	}
 	if !sameZoneDigests(previous, gossip.ZoneDigests(latest.Network)) {
 		return latest, true, nil
 	}
 	return latest, false, nil
+}
+
+func (sr *SyncRuntime) stateFilePath() string {
+	if sr != nil && sr.App != nil {
+		return sr.App.StatePath
+	}
+	return ""
+}
+
+func (stamp stateFileStamp) matches(path string, info os.FileInfo) bool {
+	return stamp.path == path && sameStateFileInfo(stamp.info, info)
+}
+
+func sameStateFileInfo(a, b os.FileInfo) bool {
+	return a != nil && b != nil && os.SameFile(a, b) &&
+		a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
 }
 
 func zonePathStrings(paths []zone.ZonePath) []string {

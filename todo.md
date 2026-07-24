@@ -78,6 +78,8 @@
   - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
   - Health probe 性能：已实现按 netns 常驻的 raw-ICMP worker，worker 固定 OS thread 后 `setns` 并按源/接口复用 ICMP socket；raw socket / `setns` 的 setup 失败自动回退 exec prober，消除正常路径的 `ip netns exec ping` fork/exec/mount 开销。待完成 root smoke：IPv4、IPv6 link-local scope、netns 删除/重建、`CAP_NET_RAW` / `CAP_SYS_ADMIN` / `NoNewPrivileges` 缺失时的降级；验收后再确认默认路径的长期运行行为。
+  - **Daemon state-store 性能（perf 2026-07-24）**：`reloadStateIfChanged` 已用 state DB 的文件标记（同一文件、mtime、size）跳过无变更时的 `BoltStore.LoadNetwork`；不引入 watcher、持久化 revision 或文件格式变更。文件被原子替换、读期间变化或 `stat` 失败时保守地重读。
+  - **commit-state 后续（先设计，不急于改）**：当前完整 JSON 深拷贝保证 committed snapshot 与工作区彼此隔离；先保持它不变。下一步先逐个盘点 perf 中的高频提交点，明确每个 `SyncPeers` 字段是否会影响后续控制决策，再选一个已证明局部、无中间读依赖的路径做小实验。实验必须保持旧 snapshot 不会被新写入修改，且不能把 observer/control/debug 读侧迁回持锁 callback；确认这些后，才考虑局部复制 `SyncPeers`，不直接改通用 `StateStore.Update`。
 
 - [ ] **7.9 可选 Admission 管理面**
   - 在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交。
