@@ -18,7 +18,7 @@ var (
 	ErrZoneRevoked        = errors.New("zone revoked")
 )
 
-const MaxRecordHistoryPerKey = 128
+const MaxRecordHistoryPerKey = 16
 
 func ParseFQKey(fqkey string) (ZonePath, string, error) {
 	zonePart, key, ok := strings.Cut(fqkey, "/")
@@ -198,7 +198,10 @@ func appendBoundedHistory(history []*Record, record *Record) []*Record {
 	if record == nil {
 		return history
 	}
-	history = append(history, record)
+	return boundRecordHistory(append(history, record))
+}
+
+func boundRecordHistory(history []*Record) []*Record {
 	if len(history) <= MaxRecordHistoryPerKey {
 		return history
 	}

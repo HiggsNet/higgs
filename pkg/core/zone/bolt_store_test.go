@@ -76,6 +76,49 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 	}
 }
 
+func TestBoltStoreLoadTrimsLegacyRecordHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "higgs.db")
+	store, err := OpenBoltStore(path, 0o600)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	ns := NewNetworkState()
+	zs := NewZoneState("node1.catofes.", &ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+	})
+	historyLen := MaxRecordHistoryPerKey + 5
+	history := make([]*Record, 0, historyLen)
+	for version := 1; version <= historyLen; version++ {
+		history = append(history, &Record{
+			Zone:    "node1.catofes.",
+			Key:     "identity",
+			Version: uint64(version),
+		})
+	}
+	zs.RecordHistory["identity"] = history
+	ns.Zones[zs.Path] = zs
+	if err := store.SaveNetwork(ns); err != nil {
+		t.Fatalf("SaveNetwork: %v", err)
+	}
+
+	got, err := store.LoadNetwork()
+	if err != nil {
+		t.Fatalf("LoadNetwork: %v", err)
+	}
+	loaded := got.Zones[zs.Path].RecordHistory["identity"]
+	if len(loaded) != MaxRecordHistoryPerKey {
+		t.Fatalf("loaded history len = %d, want %d", len(loaded), MaxRecordHistoryPerKey)
+	}
+	wantOldest := uint64(historyLen - MaxRecordHistoryPerKey + 1)
+	if loaded[0].Version != wantOldest {
+		t.Fatalf("oldest loaded version = %d, want %d", loaded[0].Version, wantOldest)
+	}
+}
+
 func TestBoltStoreLoadRestoresLatestActiveRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "higgs.db")
 	store, err := OpenBoltStore(path, 0o600)

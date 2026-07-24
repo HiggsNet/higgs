@@ -74,12 +74,67 @@
 
 - [ ] **7.11 运维与可观测性**
   - Prometheus/OpenMetrics 导出：节点数、链路状态、gossip 流量、zone 数量、chunk repair、object pull、health probe。
-  - 评估 peer observability readmodel / metrics store，将 `DatagramStats`、`ObjectPullStats` 等纯诊断计数从 `PeerRuntimeState` 拆出。
+  - 先按 7.11.0 将 peer 纯诊断数据从 committed state 拆到独立 observability store；不能用 peer ID、endpoint 或原始错误串作为 metrics label。
   - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
   - Health probe 性能：已实现按 netns 常驻的 raw-ICMP worker，worker 固定 OS thread 后 `setns` 并按源/接口复用 ICMP socket；raw socket / `setns` 的 setup 失败自动回退 exec prober，消除正常路径的 `ip netns exec ping` fork/exec/mount 开销。待完成 root smoke：IPv4、IPv6 link-local scope、netns 删除/重建、`CAP_NET_RAW` / `CAP_SYS_ADMIN` / `NoNewPrivileges` 缺失时的降级；验收后再确认默认路径的长期运行行为。
-  - **Daemon state-store 性能（perf 2026-07-24）**：`reloadStateIfChanged` 已用 state DB 的文件标记（同一文件、mtime、size）跳过无变更时的 `BoltStore.LoadNetwork`；不引入 watcher、持久化 revision 或文件格式变更。文件被原子替换、读期间变化或 `stat` 失败时保守地重读。
-  - **commit-state 后续（先设计，不急于改）**：当前完整 JSON 深拷贝保证 committed snapshot 与工作区彼此隔离；先保持它不变。下一步先逐个盘点 perf 中的高频提交点，明确每个 `SyncPeers` 字段是否会影响后续控制决策，再选一个已证明局部、无中间读依赖的路径做小实验。实验必须保持旧 snapshot 不会被新写入修改，且不能把 observer/control/debug 读侧迁回持锁 callback；确认这些后，才考虑局部复制 `SyncPeers`，不直接改通用 `StateStore.Update`。
+  - **Daemon state-store 性能（perf 2026-07-24）**
+    - 当前模型是全局 `revision` + optimistic CAS 的粗粒度 COW；问题不在 commit 语义，而在 `BeginUpdate`、`Commit`、install 和 publish 反复通过 JSON round-trip 复制完整 state，体积最大的 `Network` 因此反复分配、base64 编解码并增加 GC/缺页压力。
+    - 实机 `higgsnet db stats` 显示逻辑有效数据约 1,094,124 bytes：`_meta` 约 34,099 bytes（3.1%），所有 `zone:*` bucket 约 1,060,025 bytes（96.9%）。磁盘文件约 4 MB 是 bbolt 页、空闲页和索引等分配后的文件大小；此前提及的 48 MB 是 health spool，不是 Network/state DB。
+    - [x] 将每个 `zone/key` 的 `RecordHistory` 上限从 128 收紧为最近 16 条；新写入持续按 16 条截断，加载旧数据库时也裁掉更早历史，下一次成功保存会重写逻辑值。bbolt 文件不会因此自动缩小，物理回收若有需要应另做离线 compact，不纳入当前 CPU 修复。
+    - 保留通用 `StateStore.Update` 当前的完整隔离语义：不得直接转移 workspace 所有权，也不得单独删除 commit 的第二次 clone。`Workspace()` 仍会把裸指针交给调用者，且 callback 可以 retain 指针；在 typed mutation 收口前，第二次 clone 是 committed 私有性的保证。
+    - 不把完整 clone 移入 store 锁内；仅把 clone 延后到第一次 revision 检查之后只能优化 stale transaction，当前 perf 未证明 stale 是热点，不作为独立优化。
+    - 暂不引入 per-chunk revision，第一版结构共享继续使用全局 revision/CAS；暂不做手写全量深拷贝。手写 clone 只能降低复制单价、不能消除完整 Network 复制，并有新增字段遗漏风险；完成下面局部 COW 后若残余 clone 仍可测量，再以真实 fixture benchmark 和 clone 完整性测试评估。
+    - `ZoneState.MerkleRoot` 当前没有完整的计算/失效维护，不能直接作为 digest cache。只有未来 perf 再次证明 zone digest 是热点，并覆盖 record/history、delegation、revocation、snapshot apply、recovery/import/purge、join/adoption 等所有 Network mutation 后，才考虑启用。
+    - 不新增高基数内部 metrics；阶段验收继续由开发者手工运行 perf/strace，对比 idle CPU、clone/alloc、`LoadNetwork` 和 fork/exec。
+
+  - [ ] **7.11.0 先拆 committed control state 与纯 observability**
+    - 这一步是 state-store 性能优化的前置阶段。Phase 6.7.7 已把 inspect/readmodel/presenter 从 `app/higgs` 拆出，但数据所有权仍集中在 `stateFile`：代码模块化不等于存储模型已经模块化。先消除不该发生的 commit，再优化剩余 commit 的复制方式。
+    - 先按语义把数据分为三层：必须强一致和持久化的权威状态；会影响调度、路径选择和重启收敛的控制器运行状态；只供 observer/debug/status 使用、允许丢失或短暂不一致的 observability。readmodel 在读取时合并 committed control snapshot、observability snapshot 和 health/BIRD actual snapshot，现有 CLI/HTTP DTO 尽量保持不变。
+    - 第一窄切口只迁移已经确认纯诊断的 `DatagramStats` 和 `ObjectPullStats`，包括其中的 catalog/page/reject、too-large、repair/fallback 计数与最近一次详情。随后逐字段审计并考虑迁移 hint accepted/suppressed、read-only responder、active-pull 展示状态、relay suppression reason 和其他最近一次 action/error detail；不能因为字段显示在 debug 页面就认定它是纯诊断。
+    - `BackoffUntilUnix`、`FailureCount`、`LastRelayUnix`、`DiscoveredAddr`、observed path/TTL/grace、`LastSyncUnix`、`RejectedDigests` 等仍影响同步、限流或实际路径，先留在 control state。`LastError` 当前也参与 observed/discovered path 判断，迁移前应先拆成稳定的控制错误码/状态和仅展示的错误文本。
+    - 引入有界的 `PeerObservabilityStore`，优先放在窄职责的 `internal/observability`，由 `app/higgs` 负责 wiring，由 `internal/inspect` 继续负责纯 view 构建；不要把 mutable store 放进 `internal/inspect`。store 自带独立锁或分片、按 peer snapshot 和删除/过期能力，不持有 `stateFile` 或 committed 子结构指针。
+    - 第一版 diagnostics 不随主 state 持久化，daemon restart 后计数归零；旧 state 中遗留字段可兼容读取但不再回写。live observer/debug 合并新 store，offline DB 诊断允许显示 unavailable/reset。若以后确有历史需求，再低频批量写独立 spool/metrics store，不能重新推动主 revision。
+    - 将 `recordDatagram*`、`recordCatalog*`、`recordObjectPull*` 等调用改写为 observability store 更新后，不得调用 `StateStore.Update`、install、publish 或 `SaveState`。补充并发 snapshot、peer 清理、restart reset、旧 state 兼容以及 CLI/HTTP schema 测试，再跑相同负载 perf 判断剩余 `recordSyncPeerState` 热点。
+
+  - [ ] **7.11.1 合并同一事件内的重复 peer mutation**
+    - 在纯 diagnostics 迁出后，合并同一个 sync/packet 事件内剩余的 `sync_hint`、`peer_sync`、observed path、backoff/rejected digest 等控制状态写入，尽量一次提交；observability 更新独立聚合，不再参与 committed transaction。
+    - 不改变状态机、control/observer DTO、落盘格式和 wire 格式；先做调用点收敛，不修改通用 `StateStore.Update`。
+
+  - [ ] **7.11.2 实现 `UpdateSyncPeer` 局部 COW**
+    - 保留全局 revision/CAS；新版本只构造新的 state root，复制 `SyncPeers` map，并深拷贝目标 peer 中会修改的 map、slice、pointer；`Network` 和其他未修改块只读共享。
+    - mutation API 不向调用者暴露完整可变 `*stateFile`，也不得允许 callback retain 最终 committed root。`stateFile` 含 mutex，不能用普通结构体赋值直接复制锁；应显式构造不复制 mutex 的 root，或先拆出不含锁的 immutable root。
+    - stale 时只允许有界重试。mutation 必须纯粹且可重放：不得在 callback 内执行 transport、网络、磁盘、`SaveState`、事件广播或外部计数；时间/随机输入在重试外捕获；依赖 Network 的判断每次基于最新 committed revision 重新计算。
+    - 第一阶段继续保留 `Snapshot()` 和 `installCommittedSnapshot` 的完整 clone，让 `d.Sync.State` 仍是与 committed 隔离的可变副本；先消除 `recordSyncPeerState` 中 `BeginUpdate` + `Commit` 的全量 JSON clone，不同时改 live-state 一致性模型。
+    - 只迁移剩余高频且确实影响控制行为的 `SyncPeers` 写路径，例如 backoff、observed/discovered path、relay throttle 和 rejected digest；peer repair、chunk fallback/NACK 等纯诊断应已在 7.11.0 迁出。`updateDiscoveredPeers` 必须拆成“从 immutable view 计算变化 → 提交 peer mutation → commit 成功后更新 transport”，避免 CAS retry 重复 transport 副作用。
+
+  - [ ] **7.11.3 阻断 daemon 自写导致的 state reload**
+    - 现有 `reloadStateIfChanged` 已用同一文件、mtime、size 的文件标记跳过无变化的 `BoltStore.LoadNetwork`；文件原子替换、读期间变化或 `stat` 失败时继续保守重读。
+    - daemon 自己成功完成 Bolt save/commit/close 后，再读取并记录稳定的文件标记；reload 仅在标记明确等于当前进程刚完成的自写结果时跳过。保存期间文件再次变化、`stat` 失败或标记不确定时清空缓存并在下一轮正常 reload，不能屏蔽外部管理命令或其他进程写入。
+    - 该项与 state COW 独立，可并行实现；perf 中剩余 `LoadNetwork` 约 1.49% 不保证全部来自自触发，改后需通过调用次数和新 perf 区分合法 reload。
+
+  - [ ] **7.11.4 清零对 `d.Sync.State` 的直接写入**
+    - 完整盘点 direct writer，至少覆盖 object chunk snapshot apply、rejected digest、discovery、admission，以及启动阶段 endpoint/IPsec/routing record publish；chunk fallback、NACK/peer repair 等纯诊断在 7.11.0 后不应再写 `d.Sync.State`。
+    - 高频 `SyncPeers` writer 使用 `UpdateSyncPeer`；低频 admission、endpoint、IPsec、routing writer可先迁到现有通用 `StateStore.Update`，优先统一写入权威，不要求为每个字段预先建立专用 chunk API。
+    - object chunk 对 `Network` 的修改是移除 live/store 双状态前的关键阻塞项：先提供保证 committed 隔离的 Network mutation；若完整 Network clone 仍成为热点，再进入 per-zone COW。
+    - `recordBirdHealthObservationForState` 只从 state 读取并更新 health manager，不是 state writer；迁移时改用 immutable read/view，不为它新增 `BirdInstances` mutation。
+    - 同时审计所有可能 retain/mutate committed 子结构的入口，不限于 `ReadCommitted`：包括返回 `*stateFile`/`*NetworkState` 的 API、validation 配置、map/slice/pointer 内部修改和 `d.Sync.State` 的全部调用点。结构共享后，任何旧 revision 被修改都会污染共享它的新 revision。
+
+  - [ ] **7.11.5 移除 live/store 双状态桥接**
+    - 仅在 direct writer 清零、所有 reader 均遵守不可 retain/mutate 约定后，才把 runtime 读侧切换为 immutable committed view 或更小的 store projection；不要仅把一个仍可写的 `d.Sync.State` 指针指向 committed。
+    - 随后删除 `installCommittedSnapshot` 的完整 clone 和 packet 后的 `publishCommittedStateSnapshot`；短、确定纯读的操作使用 committed view 或 `ZoneDigests()`、peer summary 等返回小结果的 projection，不为读操作复制完整 Network。
+    - routing reconcile 的第二次 snapshot 保留其一致性语义：auto-announce 可能修改/撤回 record，BIRD 配置必须读取提交后的新状态。只有等价的数据依赖得到证明后才允许收敛，不能仅以减少 clone 为由删除。
+
+  - [ ] **7.11.6 按新 perf 决定是否实现 Network/per-zone COW**
+    - 若 Network mutation 仍是热点，再复制 `Zones` map、目标 zone 及实际修改的 records/history 层，其他 zone 只读共享；继续使用全局 CAS，不预先引入版本集合和 stale merge。
+    - digest cache/MerkleRoot 维护属于本阶段的可选后续，不与 `UpdateSyncPeer` 首阶段绑定。
+    - 收益统计必须去重：`recordSyncPeerState` 的 inclusive 栈已包含 `BeginUpdate`、`Commit` 和 install，`snapshotState` 也可能包含 install；GC/缺页是 clone 的伴生成本，不能与 inclusive 百分比直接相加。每阶段以同负载新 perf 确认下一步，不把静态上界当固定收益。
+
+  - [ ] **7.11.7 `app/higgs` 与 state ownership 后续模块化（性能收口后）**
+    - `app/higgs` 当前仍同时承载 daemon wiring、sync runtime、state adapter 和多个 reconcile 写侧，后续确有继续拆分价值；但本轮不机械搬迁整个 `stateFile`，也不在同一改动中同时重构 sync/IPsec/routing/firewall。
+    - 先通过 7.11.0 验证一个完整的窄切口：独立数据所有者/store、app wiring、inspect view 合并、兼容测试。该边界稳定后，再按“权威 state / controller runtime state / observability”逐块迁移，而不是创建一批没有稳定 API 的空 package。
+    - 后续候选包括：持久化 control-state store、peer sync controller state、reconcile observation store，以及 health/BIRD/actual source adapter。`Network`、密钥、owner token、rotate/adoption 等生命周期状态的归属必须由重启恢复语义决定，不能仅按文件大小或字段名字移动。
+    - 每次只迁一个字段族并保持磁盘格式、wire 格式和 control/observer schema 的兼容；模块化不阻塞当前性能修复，是否继续拆由 7.11.0-7.11.5 完成后的新 perf 和调用关系决定。
 
 - [ ] **7.9 可选 Admission 管理面**
   - 在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交。

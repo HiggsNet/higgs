@@ -184,7 +184,7 @@
   - [x] 明确普通同步语义：更高版本且签名有效的 record 可直接成为 active，不要求从 `@1` 顺序重放
   - [x] `PrevHash` 降级为审计/调试约束：只有本地正好持有直接前驱时才检查，不阻塞跳版本 fast-forward
   - [x] Whole-zone snapshot 只同步 active records，不再把远端完整 `RecordHistory` 作为冷启动依赖
-  - [x] 每个 `zone/key` 默认只保留最近 128 条历史版本，避免 DB 随版本无限膨胀
+  - [x] 每个 `zone/key` 的历史版本设置有界保留；最初上限为 128，2026-07-24 根据实际 state DB 体积进一步收紧为最近 16 条。
   - [x] 从普通同步主路径移除 pending 补前驱机制；最终一致性依赖 digest + snapshot + 更高版本 signed record
   - [x] 保留 `FETCH_RECORD` wire message 作为兼容和手工按需取单条历史 record 的能力
 

@@ -238,5 +238,9 @@ func normalizeZoneState(zs *ZoneState) {
 	}
 	if zs.RecordHistory == nil {
 		zs.RecordHistory = make(map[string][]*Record)
+		return
+	}
+	for key, history := range zs.RecordHistory {
+		zs.RecordHistory[key] = boundRecordHistory(history)
 	}
 }
