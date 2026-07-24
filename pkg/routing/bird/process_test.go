@@ -329,8 +329,13 @@ func TestExecProcessManagerIsRunning(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
+	managedPID := func() int {
+		pm.mu.Lock()
+		defer pm.mu.Unlock()
+		return pm.pid
+	}
 	t.Cleanup(func() {
-		if pid := pm.pid; pid > 0 {
+		if pid := managedPID(); pid > 0 {
 			if p, err := os.FindProcess(pid); err == nil {
 				_ = p.Kill()
 			}
@@ -341,7 +346,7 @@ func TestExecProcessManagerIsRunning(t *testing.T) {
 		t.Fatal("expected process to be running")
 	}
 
-	proc, err := os.FindProcess(pm.pid)
+	proc, err := os.FindProcess(managedPID())
 	if err != nil {
 		t.Fatalf("find process: %v", err)
 	}
