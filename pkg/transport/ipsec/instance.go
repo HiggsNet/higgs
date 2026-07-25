@@ -25,16 +25,18 @@ const (
 	LinkStateDown        = "down"
 	LinkStateError       = "error"
 
-	ReconcileActionAdopt          = "adopt"
-	ReconcileActionCreate         = "create"
-	ReconcileActionUpdate         = "update"
-	ReconcileActionRepair         = "repair"
-	ReconcileActionTeardown       = "teardown"
-	ReconcileActionNoop           = "noop"
-	ReconcileActionPrepareRotate  = "prepare_rotate"
-	ReconcileActionCommitRotate   = "commit_rotate"
-	ReconcileActionRollbackRotate = "rollback_rotate"
-	ReconcileActionCleanupRotate  = "cleanup_rotate"
+	ReconcileActionAdopt              = "adopt"
+	ReconcileActionCreate             = "create"
+	ReconcileActionUpdate             = "update"
+	ReconcileActionRepair             = "repair"
+	ReconcileActionTeardown           = "teardown"
+	ReconcileActionNoop               = "noop"
+	ReconcileActionPrepareRotate      = "prepare_rotate"
+	ReconcileActionCommitRotate       = "commit_rotate"
+	ReconcileActionRollbackRotate     = "rollback_rotate"
+	ReconcileActionCleanupRotate      = "cleanup_rotate"
+	ReconcileActionCleanupDuplicateSA = "cleanup_duplicate_sa"
+	ReconcileActionPrepareStandby     = "prepare_standby"
 
 	RotatePhaseIdle        = ""
 	RotatePhasePreparing   = "preparing"
@@ -93,6 +95,8 @@ type LinkInstance struct {
 	TakeoverUntil     int64
 	LastTakeoverError string
 	ObservedInitiator string
+	SAAbsentSince     int64
+	SAAbsentCount     int
 }
 
 type ResourceOwner struct {
@@ -115,6 +119,8 @@ type ReconcileInputs struct {
 	GroupBackoff         map[string]BackoffPolicy
 	GroupRotateRetention map[string]int
 	RotateCutoverReady   map[string]bool
+	PrepareStandby       bool
+	TakeoverNotBefore    time.Time
 }
 
 type ReconcileResult struct {
@@ -123,10 +129,11 @@ type ReconcileResult struct {
 }
 
 type ReconcileAction struct {
-	Action   string
-	Spec     *TransportLinkSpec
-	Instance *LinkInstance
-	Reason   string
+	Action     string
+	Spec       *TransportLinkSpec
+	Instance   *LinkInstance
+	Reason     string
+	SAUniqueID uint64
 }
 
 func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkInstance {
@@ -429,7 +436,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			if sa.Established && !saIdentityMatchesSpec(sa, spec) {
 				sa = SAState{}
 			}
-			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), in.GroupBackoff, in.GroupRotateRetention, in.RotateCutoverReady, now)
+			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), in.GroupBackoff, in.GroupRotateRetention, in.RotateCutoverReady, in.PrepareStandby, in.TakeoverNotBefore, now)
 			continue
 		}
 		// Primary / outbound initiator path.
@@ -590,7 +597,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	return result
 }
 
-func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, group LinkGroupSpec, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, rotateCutover map[string]bool, now time.Time) {
+func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, group LinkGroupSpec, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, rotateCutover map[string]bool, prepareStandby bool, takeoverNotBefore time.Time, now time.Time) {
 	policy := groupBackoffForSpec(spec, groupBackoff)
 	if exists {
 		desiredGen := contactGeneration(spec)
@@ -625,19 +632,36 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		inst.TakeoverPhase = TakeoverPhaseIdle
 		inst.TakeoverUntil = 0
 		inst.LastTakeoverError = ""
+		inst.SAAbsentSince = 0
+		inst.SAAbsentCount = 0
 		inst.LastTransition = now.Unix()
 		r.Instances[id] = inst
 		r.add(ReconcileActionAdopt, &spec, &inst, "driver state already exists")
 		return
 	}
 	if !exists {
-		inst := NewLinkInstance(spec, LinkStateDown, now)
+		inst := NewLinkInstance(spec, LinkStateConfiguring, now)
 		inst.InitiatorRole = InitiatorRoleSecondaryStandby
+		inst.SAAbsentSince = now.Unix()
+		inst.SAAbsentCount = 1
 		r.Instances[id] = inst
-		r.add(ReconcileActionNoop, &spec, &inst, "bidirectional_standby")
+		r.add(ReconcileActionPrepareStandby, &spec, &inst, "standby_responder_prepare")
 		return
 	}
 	inst := existing
+	if prepareStandby {
+		inst.InitiatorRole = InitiatorRoleSecondaryStandby
+		inst.TakeoverPhase = TakeoverPhaseIdle
+		inst.TakeoverStartedAt = 0
+		inst.TakeoverUntil = 0
+		inst.SAAbsentSince = now.Unix()
+		inst.SAAbsentCount = 1
+		inst.ActualState = LinkStateConfiguring
+		inst.LastTransition = now.Unix()
+		r.Instances[id] = inst
+		r.add(ReconcileActionPrepareStandby, &spec, &inst, "startup_standby_responder_prepare")
+		return
+	}
 	switch inst.InitiatorRole {
 	case InitiatorRoleSecondaryTakeover:
 		if inLinkBackoff(inst, now) {
@@ -684,6 +708,8 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		// branch forever and prevent shouldSecondaryTakeover from running.
 		inst.InitiatorRole = InitiatorRoleSecondaryStandby
 		inst.ActualState = LinkStateDegraded
+		inst.SAAbsentSince = now.Unix()
+		inst.SAAbsentCount = 1
 		inst.LastTransition = now.Unix()
 		r.Instances[id] = inst
 		r.add(ReconcileActionRepair, &spec, &inst, "driver state missing after convergence")
@@ -700,7 +726,9 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		r.add(ReconcileActionUpdate, &spec, &inst, "standby driver state missing")
 		return
 	}
-	ok, reason := shouldSecondaryTakeover(inst, InitiatorRoleSecondaryStandby, spec, sa, policy, now)
+	inst = noteSecondarySAAbsent(inst, now)
+	r.Instances[id] = inst
+	ok, reason := shouldSecondaryTakeover(inst, InitiatorRoleSecondaryStandby, spec, sa, policy, takeoverNotBefore, now)
 	if !ok {
 		r.add(ReconcileActionNoop, &spec, &inst, reason)
 		return
@@ -1113,7 +1141,7 @@ func takeoverDelayFor(policy BackoffPolicy, failureCount int) time.Duration {
 	}
 	// Require at least 2-3 backoff cycles before a secondary takes over.
 	delay := nextLinkBackoff(policy, failureCount+2) + nextLinkBackoff(policy, failureCount+3)
-	const minDelay = 60 * time.Second
+	const minDelay = 2 * time.Minute
 	if delay < minDelay {
 		return minDelay
 	}
@@ -1138,12 +1166,25 @@ func TakeoverCooldownDuration(policy BackoffPolicy) time.Duration {
 	return d
 }
 
-func shouldSecondaryTakeover(inst LinkInstance, role string, spec TransportLinkSpec, sa SAState, policy BackoffPolicy, now time.Time) (bool, string) {
+func noteSecondarySAAbsent(inst LinkInstance, now time.Time) LinkInstance {
+	if inst.SAAbsentSince == 0 {
+		inst.SAAbsentSince = now.Unix()
+		inst.SAAbsentCount = 1
+		return inst
+	}
+	inst.SAAbsentCount++
+	return inst
+}
+
+func shouldSecondaryTakeover(inst LinkInstance, role string, spec TransportLinkSpec, sa SAState, policy BackoffPolicy, takeoverNotBefore time.Time, now time.Time) (bool, string) {
 	if role != InitiatorRoleSecondaryStandby {
 		return false, ""
 	}
 	if sa.Established {
 		return false, ""
+	}
+	if !takeoverNotBefore.IsZero() && now.Before(takeoverNotBefore) {
+		return false, "takeover_startup_grace"
 	}
 	if inst.TakeoverPhase == TakeoverPhaseCooldown && now.Before(time.Unix(inst.TakeoverUntil, 0)) {
 		return false, "takeover_cooldown_active"
@@ -1159,16 +1200,11 @@ func shouldSecondaryTakeover(inst LinkInstance, role string, spec TransportLinkS
 		return true, "secondary_takeover_retry"
 	}
 	delay := takeoverDelayFor(policy, inst.FailureCount)
-	lastTransition := time.Unix(inst.LastTransition, 0)
-	switch inst.ActualState {
-	case LinkStatePending, LinkStateDown, "":
-		if now.Sub(lastTransition) < delay {
-			return false, "takeover_delay_active"
-		}
-	default:
-		if inst.FailureCount < 2 && now.Sub(lastTransition) < delay {
-			return false, "takeover_delay_active"
-		}
+	if inst.SAAbsentSince == 0 || inst.SAAbsentCount < 2 {
+		return false, "takeover_delay_active"
+	}
+	if now.Sub(time.Unix(inst.SAAbsentSince, 0)) < delay {
+		return false, "takeover_delay_active"
 	}
 	return true, "secondary_takeover"
 }
@@ -1190,6 +1226,11 @@ func suppressTakeoverDuringRotate(inst LinkInstance, now time.Time) (bool, strin
 
 func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, action ReconcileAction, netns NetNSSpec) (ApplyPlan, error) {
 	switch action.Action {
+	case ReconcileActionPrepareStandby:
+		if action.Spec == nil {
+			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
+		}
+		return ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
 	case ReconcileActionCreate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
@@ -1229,7 +1270,14 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 				return ApplyPlan{}, err
 			}
 		}
-		return ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+		plan, err := ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+		if err != nil {
+			return plan, err
+		}
+		if err := InitiateTransportChild(ctx, ipsec, *action.Spec, &plan); err != nil {
+			return plan, err
+		}
+		return plan, nil
 	case ReconcileActionPrepareRotate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
@@ -1289,6 +1337,20 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return ApplyPlan{}, fmt.Errorf("delete interface: %w", err)
 		}
 		return ApplyPlan{}, nil
+	case ReconcileActionCleanupDuplicateSA:
+		if action.SAUniqueID == 0 {
+			return ApplyPlan{}, fmt.Errorf("%s action requires SA unique id", action.Action)
+		}
+		terminator, ok := ipsec.(SAUniqueIDTerminator)
+		if !ok {
+			return ApplyPlan{}, fmt.Errorf("ipsec driver does not support terminating an SA by unique id")
+		}
+		plan := ApplyPlan{}
+		plan.add("terminate_sa_id", fmt.Sprintf("#%d", action.SAUniqueID), action.Reason)
+		if err := terminator.TerminateSAByID(ctx, action.SAUniqueID); err != nil {
+			return plan, fmt.Errorf("terminate duplicate SA #%d: %w", action.SAUniqueID, err)
+		}
+		return plan, nil
 	case ReconcileActionAdopt, ReconcileActionNoop:
 		return ApplyPlan{}, nil
 	default:

@@ -44,6 +44,8 @@ type LinkInstanceState struct {
 	TakeoverUntil     int64  `json:"takeover_until,omitempty"`
 	LastTakeoverError string `json:"last_takeover_error,omitempty"`
 	ObservedInitiator string `json:"observed_initiator,omitempty"`
+	SAAbsentSince     int64  `json:"sa_absent_since,omitempty"`
+	SAAbsentCount     int    `json:"sa_absent_count,omitempty"`
 }
 
 // LinkOwnerState identifies the Higgs owner of a link instance.

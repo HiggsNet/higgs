@@ -57,19 +57,24 @@ type DesiredLinkState struct {
 
 // LinkSAState is a stored StrongSwan SA snapshot.
 type LinkSAState struct {
-	Name           string `json:"name,omitempty"`
-	Peer           string `json:"peer,omitempty"`
-	ChildSA        string `json:"child_sa,omitempty"`
-	IKEState       string `json:"ike_state,omitempty"`
-	ChildState     string `json:"child_state,omitempty"`
-	XFRMIfID       uint32 `json:"xfrm_if_id,omitempty"`
-	ReqID          uint32 `json:"reqid,omitempty"`
-	LocalIdentity  string `json:"local_identity,omitempty"`
-	RemoteIdentity string `json:"remote_identity,omitempty"`
-	LocalEndpoint  string `json:"local_endpoint,omitempty"`
-	RemoteEndpoint string `json:"remote_endpoint,omitempty"`
-	Endpoint       string `json:"endpoint,omitempty"`
-	Established    bool   `json:"established,omitempty"`
+	Name            string `json:"name,omitempty"`
+	UniqueID        uint64 `json:"unique_id,omitempty"`
+	Initiator       bool   `json:"initiator,omitempty"`
+	InitiatorKnown  bool   `json:"initiator_known,omitempty"`
+	IKEAgeSeconds   uint64 `json:"ike_age_seconds,omitempty"`
+	ChildAgeSeconds uint64 `json:"child_age_seconds,omitempty"`
+	Peer            string `json:"peer,omitempty"`
+	ChildSA         string `json:"child_sa,omitempty"`
+	IKEState        string `json:"ike_state,omitempty"`
+	ChildState      string `json:"child_state,omitempty"`
+	XFRMIfID        uint32 `json:"xfrm_if_id,omitempty"`
+	ReqID           uint32 `json:"reqid,omitempty"`
+	LocalIdentity   string `json:"local_identity,omitempty"`
+	RemoteIdentity  string `json:"remote_identity,omitempty"`
+	LocalEndpoint   string `json:"local_endpoint,omitempty"`
+	RemoteEndpoint  string `json:"remote_endpoint,omitempty"`
+	Endpoint        string `json:"endpoint,omitempty"`
+	Established     bool   `json:"established,omitempty"`
 }
 
 // LinkActionState records a reconcile action.
@@ -79,6 +84,7 @@ type LinkActionState struct {
 	GroupID    string        `json:"group_id,omitempty"`
 	PeerZone   zone.ZonePath `json:"peer_zone,omitempty"`
 	Reason     string        `json:"reason,omitempty"`
+	SAUniqueID uint64        `json:"sa_unique_id,omitempty"`
 }
 
 // LinkSkipState records a peer skipped by reconcile.

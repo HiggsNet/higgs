@@ -70,7 +70,7 @@ func TestReconcileMatchesSameRuntimeSAByPathFamily(t *testing.T) {
 	}
 }
 
-func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
+func TestReconcileSecondaryStandbyInitialPrepare(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
 	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
@@ -96,12 +96,53 @@ func TestReconcileSecondaryStandbyInitialNoop(t *testing.T) {
 		Roles:        plan.Roles,
 		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
 	})
-	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "bidirectional_standby" {
-		t.Fatalf("expected standby noop, got %+v", result.Actions)
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionPrepareStandby || result.Actions[0].Reason != "standby_responder_prepare" {
+		t.Fatalf("expected standby responder prepare, got %+v", result.Actions)
 	}
 	inst := result.Instances[LinkInstanceID(spec)]
-	if inst.ActualState != LinkStateDown || inst.InitiatorRole != InitiatorRoleSecondaryStandby {
+	if inst.ActualState != LinkStateConfiguring || inst.InitiatorRole != InitiatorRoleSecondaryStandby {
 		t.Fatalf("instance = %+v", inst)
+	}
+	driver := &DryRunDriver{}
+	if _, err := ApplyReconcileAction(context.Background(), driver, driver, result.Actions[0], NetNSSpec{}); err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(driver.Connections) != 1 || len(driver.Interfaces) != 1 || len(driver.Initiated) != 0 {
+		t.Fatalf("standby prepare = connections:%d interfaces:%d initiated:%v", len(driver.Connections), len(driver.Interfaces), driver.Initiated)
+	}
+}
+
+func TestReconcileSecondaryTakeoverHonorsStartupGrace(t *testing.T) {
+	base := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	group := LinkGroupSpec{ID: "ipsec-main"}
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	spec := plan.Desired[0]
+	now := base.Add(10 * time.Minute)
+	inst := NewLinkInstance(spec, LinkStateDown, base)
+	inst.InitiatorRole = InitiatorRoleSecondaryStandby
+	inst.SAAbsentSince = base.Unix()
+	inst.SAAbsentCount = 20
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:           []TransportLinkSpec{spec},
+		Instances:         map[string]LinkInstance{inst.ID: inst},
+		Now:               now,
+		Roles:             plan.Roles,
+		GroupBackoff:      map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+		TakeoverNotBefore: now.Add(2 * time.Minute),
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "takeover_startup_grace" {
+		t.Fatalf("startup grace actions = %+v", result.Actions)
 	}
 }
 
@@ -290,6 +331,8 @@ func TestReconcileSecondaryTakeoverCooldownPreventsRetry(t *testing.T) {
 	inst := NewLinkInstance(spec, LinkStateDown, base)
 	inst.InitiatorRole = InitiatorRoleSecondaryStandby
 	inst.LastTransition = base.Unix()
+	inst.SAAbsentSince = base.Unix()
+	inst.SAAbsentCount = 1
 
 	// Trigger takeover.
 	result := ReconcileLinkInstances(ReconcileInputs{

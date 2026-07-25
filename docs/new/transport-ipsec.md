@@ -508,9 +508,12 @@ staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface nam
 
 双方 `role=both` 时，字典序小的一方 primary 主动拨号，secondary 为 standby。若 primary 持续不可达（超过失败阈值 + takeover delay），secondary 可临时接管主动拨号：
 
+- secondary 启动时先以 `start_action=none` 加载 responder connection、私钥并创建 XFRM interface，但不调用 `initiate`
+- daemon 启动后的 2min grace 内禁止 takeover；之后仍需连续至少两次、持续 2min 确认没有匹配 SA
 - takeover 有 lease（默认 5min）和 cooldown（默认 2min）
 - 已有匹配 SA 时优先 adopt，不再纠结谁先拨
 - revocation、profile/transport-key mismatch 禁止 takeover（信任失败不是连通性失败）
+- 同 runtime 的重复 SA 全部稳定 2min 后，由 secondary 按 IKE unique ID 精确 GC
 
 ## XFRM interface 生命周期
 
@@ -586,7 +589,8 @@ higgs debug links
 |------|----------|
 | planner 输出 `missing_overlay_intent` | 远端没有发布 `ipsec/overlays/<overlay_id>`，或本地的 overlay id 与远端不匹配 |
 | planner 输出 `overlay_intent_mismatch` | 远端 overlay intent 中的 provider/path_key/tunnel_address 与本机不兼容 |
-| `bidirectional_standby` | 正常状态，secondary 在等 primary 拨号；检查 primary 是否已正常 initiate |
+| `standby_responder_prepare` | secondary 正在准备 responder connection、密钥和 XFRM interface，不会主动 initiate |
+| `takeover_startup_grace` | daemon 刚启动，2min 保护期内禁止 secondary takeover |
 | `takeover_delay_active` | secondary 在 takeover delay 冷却期内，等待超时后再接管 |
 | link 卡在 `connecting` 超过 3 分钟 | VICI socket 不可达、IKE 协商失败、NAT-T 端口不通、远端 charon 未运行 |
 | link 反复在 connecting/error 间翻转 | 检查 `LinkInstance` 中的 last_error 和 backoff；可能是 endpoint/ports 不可达 |

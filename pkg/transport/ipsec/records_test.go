@@ -895,8 +895,8 @@ func TestBuildStrongSwanConnectionUsesRouteBasedChildSA(t *testing.T) {
 	if child["mode"] != StrongSwanChildMode || child["if_id_in"] != "77" || child["if_id_out"] != "77" {
 		t.Fatalf("child = %+v", child)
 	}
-	if child["start_action"] != "trap" {
-		t.Fatalf("start_action = %#v, want trap", child["start_action"])
+	if child["start_action"] != "none" {
+		t.Fatalf("start_action = %#v, want none", child["start_action"])
 	}
 	if got := child["local_ts"].([]string); len(got) != 1 || got[0] != "::/0" {
 		t.Fatalf("local_ts = %+v", got)
@@ -928,8 +928,8 @@ func TestBuildStrongSwanConnectionAllowsInboundWithoutContactPoint(t *testing.T)
 	}
 	children := conn["children"].(map[string]any)
 	child := children[ChildSAName(spec)].(map[string]any)
-	if child["start_action"] != "trap" {
-		t.Fatalf("start_action = %#v, want trap", child["start_action"])
+	if child["start_action"] != "none" {
+		t.Fatalf("start_action = %#v, want none", child["start_action"])
 	}
 }
 

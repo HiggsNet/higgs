@@ -21,19 +21,24 @@ const (
 )
 
 type SAState struct {
-	Name           string
-	Peer           string
-	ChildSA        string
-	IKEState       string
-	ChildState     string
-	XFRMIfID       uint32
-	ReqID          uint32
-	LocalIdentity  string
-	RemoteIdentity string
-	LocalEndpoint  string
-	RemoteEndpoint string
-	Endpoint       string
-	Established    bool
+	Name            string
+	UniqueID        uint64
+	Initiator       bool
+	InitiatorKnown  bool
+	IKEAgeSeconds   uint64
+	ChildAgeSeconds uint64
+	Peer            string
+	ChildSA         string
+	IKEState        string
+	ChildState      string
+	XFRMIfID        uint32
+	ReqID           uint32
+	LocalIdentity   string
+	RemoteIdentity  string
+	LocalEndpoint   string
+	RemoteEndpoint  string
+	Endpoint        string
+	Established     bool
 }
 
 type ConnectionState struct {
@@ -77,6 +82,10 @@ type IPsecDriver interface {
 
 type ConnectionLister interface {
 	ListConnections(context.Context) ([]ConnectionState, error)
+}
+
+type SAUniqueIDTerminator interface {
+	TerminateSAByID(context.Context, uint64) error
 }
 
 type ChildInitiator interface {
@@ -230,9 +239,9 @@ func ApplyStagedConnection(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 			return plan, fmt.Errorf("assign address: %w", err)
 		}
 	}
-	// Active initiators must explicitly trigger the staged CHILD_SA because the
-	// child config uses start_action=trap to avoid racing with load-conn auto-
-	// start. Responders keep the trap policy installed and wait for the peer.
+	// Active initiators explicitly trigger the staged CHILD_SA. Loaded child
+	// configurations are passive (start_action=none), so responders only
+	// accept the peer's negotiation.
 	if IsActiveInitiatorRole(spec.InitiatorRole) {
 		if err := InitiateTransportChild(ctx, ipsec, spec, &plan); err != nil {
 			return plan, fmt.Errorf("initiate staged child: %w", err)
@@ -392,6 +401,22 @@ func (d *StrongSwanDriver) TerminateSA(ctx context.Context, id string) error {
 	_, err := d.VICI.Call(ctx, "terminate", map[string]any{"ike": id, "force": "yes"})
 	// Terminating an already-gone SA is a no-op: the caller just wants the
 	// SA gone before the next step (e.g. bounded break-before-make rotate).
+	if err != nil && strings.Contains(err.Error(), "no matching SAs to terminate found") {
+		return nil
+	}
+	return err
+}
+
+func (d *StrongSwanDriver) TerminateSAByID(ctx context.Context, id uint64) error {
+	if d.VICI == nil {
+		return fmt.Errorf("vici client is required")
+	}
+	if id == 0 {
+		return fmt.Errorf("sa unique id is required")
+	}
+	ctx, cancel := d.viciContext(ctx)
+	defer cancel()
+	_, err := d.VICI.Call(ctx, "terminate", map[string]any{"ike-id": fmt.Sprintf("%d", id), "force": "yes"})
 	if err != nil && strings.Contains(err.Error(), "no matching SAs to terminate found") {
 		return nil
 	}
@@ -781,6 +806,11 @@ func (d *DryRunDriver) UnloadConnection(_ context.Context, id string) error {
 
 func (d *DryRunDriver) TerminateSA(_ context.Context, id string) error {
 	d.Terminated = append(d.Terminated, id)
+	return nil
+}
+
+func (d *DryRunDriver) TerminateSAByID(_ context.Context, id uint64) error {
+	d.Terminated = append(d.Terminated, fmt.Sprintf("#%d", id))
 	return nil
 }
 

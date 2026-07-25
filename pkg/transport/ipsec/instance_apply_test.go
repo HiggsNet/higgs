@@ -222,6 +222,7 @@ func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T)
 		}},
 	}
 	newSpec := oldSpec
+	newSpec.InitiatorRole = InitiatorRolePrimary
 	newSpec.ContactPoints = []ContactPoint{{
 		Address:    "198.51.100.20",
 		Family:     FamilyIPv4,
@@ -233,7 +234,7 @@ func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T)
 
 	ipsecDrv := &DryRunDriver{}
 	xfrmDrv := &DryRunDriver{}
-	_, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action:   ReconcileActionUpdate,
 		Spec:     &newSpec,
 		Instance: &inst,
@@ -249,6 +250,13 @@ func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T)
 	}
 	if len(ipsecDrv.Connections) != 1 || ipsecDrv.Connections[0].ContactPoints[0].IKEPort != 30001 {
 		t.Fatalf("connections = %+v, want new port spec", ipsecDrv.Connections)
+	}
+	if len(ipsecDrv.Initiated) != 1 || ipsecDrv.Initiated[0] != ChildSAName(newSpec) {
+		t.Fatalf("initiated = %+v, want updated child", ipsecDrv.Initiated)
+	}
+	last := plan.Operations[len(plan.Operations)-1]
+	if last.Action != "initiate_child" || last.Target != ChildSAName(newSpec) {
+		t.Fatalf("plan = %+v", plan)
 	}
 }
 

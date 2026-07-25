@@ -691,7 +691,7 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 		Roles:        map[string]string{transportB: InitiatorRoleSecondaryStandby},
 		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
 	})
-	if len(result.Actions) != 1 || result.Actions[0].Reason != "bidirectional_standby" {
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionPrepareStandby || result.Actions[0].Reason != "standby_responder_prepare" {
 		t.Fatalf("expected secondary standby, got %+v", result.Actions)
 	}
 	instB := result.Instances[transportB]

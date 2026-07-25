@@ -739,7 +739,7 @@ func StableInterfaceName(ifID uint32) string {
 //   - local out + remote out     -> "" (no link)
 //
 // An empty role means this node does not actively initiate; it may still load
-// a responder/trap configuration when the local role allows inbound.
+// a passive responder configuration when the local role allows inbound.
 func InitiatorRoleForPeer(local, peer zone.ZonePath, localRole, remoteRole string) string {
 	switch localRole {
 	case RoleOut:
@@ -761,8 +761,8 @@ func InitiatorRoleForPeer(local, peer zone.ZonePath, localRole, remoteRole strin
 }
 
 // IsActiveInitiatorRole returns true for roles that should actively start a
-// CHILD_SA. Secondary-standby and empty roles only install responder/trap
-// policies.
+// CHILD_SA. Secondary-standby and empty roles only prepare passive responder
+// configuration.
 func IsActiveInitiatorRole(role string) bool {
 	return role == InitiatorRolePrimary || role == InitiatorRoleSecondaryTakeover
 }

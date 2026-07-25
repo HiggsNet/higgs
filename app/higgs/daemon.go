@@ -25,27 +25,29 @@ import (
 )
 
 type DaemonService struct {
-	Sync               *SyncRuntime
-	Interval           time.Duration
-	ControlSocketPath  string
-	Events             chan daemonEvent
-	Hooks              DaemonHooks
-	StateStore         *DaemonStateStore
-	PeerObservability  *observability.PeerObservabilityStore
-	IPsecDriver        ipsec.IPsecDriver
-	XFRMDriver         ipsec.XFRMDriver
-	closeIPsecDriver   func() error
-	health             *health.Manager
-	healthUpdates      <-chan struct{}
-	healthSpoolMu      sync.Mutex
-	observerHub        *observer.Hub
-	Log                *appLogger
-	LogLimiter         *repeatedLogLimiter
-	drainingEvents     bool
-	ipsecDirty         bool
-	routingDirty       bool
-	routingForceReload bool
-	firewallDirty      bool
+	Sync                   *SyncRuntime
+	Interval               time.Duration
+	ControlSocketPath      string
+	Events                 chan daemonEvent
+	Hooks                  DaemonHooks
+	StateStore             *DaemonStateStore
+	PeerObservability      *observability.PeerObservabilityStore
+	IPsecDriver            ipsec.IPsecDriver
+	XFRMDriver             ipsec.XFRMDriver
+	closeIPsecDriver       func() error
+	health                 *health.Manager
+	healthUpdates          <-chan struct{}
+	healthSpoolMu          sync.Mutex
+	observerHub            *observer.Hub
+	Log                    *appLogger
+	LogLimiter             *repeatedLogLimiter
+	drainingEvents         bool
+	ipsecDirty             bool
+	ipsecPrepareStandby    bool
+	ipsecTakeoverNotBefore time.Time
+	routingDirty           bool
+	routingForceReload     bool
+	firewallDirty          bool
 
 	syncSessions      map[string]*SyncSession
 	pendingSyncHints  map[string]bool
@@ -170,6 +172,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		StateStore:        NewDaemonStateStore(state),
 		PeerObservability: peerObservability,
 	}
+	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
 	d.syncSessions = make(map[string]*SyncSession)
 	d.pendingSyncHints = make(map[string]bool)
 	d.syncEvents = make(chan SyncEvent, 64)
@@ -1684,6 +1687,8 @@ func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
 	if d == nil {
 		return
 	}
+	d.ipsecPrepareStandby = true
+	defer func() { d.ipsecPrepareStandby = false }()
 	d.ipsecDirty = true
 	d.flushIPsecReconcile(ctx)
 }

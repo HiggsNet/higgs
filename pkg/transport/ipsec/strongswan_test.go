@@ -5,6 +5,9 @@ import "testing"
 func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 	states := parseSAStates(map[string]any{
 		"ipsec-main-ab": map[string]any{
+			"uniqueid":    "42",
+			"initiator":   "yes",
+			"established": "180",
 			"local-host":  "198.51.100.10",
 			"local-port":  "4500",
 			"local-id":    "node-a.catofes.",
@@ -14,10 +17,11 @@ func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 			"state":       "ESTABLISHED",
 			"child-sas": map[string]any{
 				"ipsec-main-ab-child": map[string]any{
-					"reqid":     "17",
-					"if-id-in":  "0",
-					"if-id-out": "4e",
-					"state":     "INSTALLED",
+					"reqid":        "17",
+					"if-id-in":     "0",
+					"if-id-out":    "4e",
+					"state":        "INSTALLED",
+					"install-time": "175",
 				},
 			},
 		},
@@ -37,6 +41,9 @@ func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 	}
 	if got.XFRMIfID != 78 || got.ReqID != 17 || !got.Established {
 		t.Fatalf("child fields = %+v", got)
+	}
+	if got.UniqueID != 42 || !got.InitiatorKnown || !got.Initiator || got.IKEAgeSeconds != 180 || got.ChildAgeSeconds != 175 {
+		t.Fatalf("GC fields = %+v", got)
 	}
 }
 

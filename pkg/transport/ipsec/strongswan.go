@@ -176,10 +176,11 @@ func BaseConnectionName(transportID string) string {
 }
 
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
-	// Higgs drives active CHILD_SA establishment through its explicit VICI
-	// initiate path. Keeping the loaded child as a trap avoids racing
-	// StrongSwan autostart against our own initiate during rotate/repair.
-	startAction := "trap"
+	// Higgs drives active CHILD_SA establishment exclusively through its
+	// explicit VICI initiate path.  Keep the loaded child passive so a
+	// secondary-standby responder can't be promoted implicitly by traffic
+	// hitting a trap policy during a rolling or batch restart.
+	startAction := "none"
 	return map[string]any{
 		"mode":         StrongSwanChildMode,
 		"local_ts":     broadTrafficSelectors(spec.LocalTunnelAddr),
@@ -256,6 +257,9 @@ func parseSAStates(event map[string]any) []SAState {
 			continue
 		}
 		state := SAState{Name: name}
+		state.UniqueID = uint64Value(body["uniqueid"])
+		state.IKEAgeSeconds = uint64Value(body["established"])
+		state.Initiator, state.InitiatorKnown = boolValue(body["initiator"])
 		remoteHost := stringValue(body["remote-host"])
 		remotePort := stringValue(body["remote-port"])
 		localHost := stringValue(body["local-host"])
@@ -275,6 +279,7 @@ func parseSAStates(event map[string]any) []SAState {
 			childState.ChildState = stringValue(child["state"])
 			childState.XFRMIfID = firstHexUint32(child["if-id-out"], child["if-id-in"])
 			childState.ReqID = uint32Value(child["reqid"])
+			childState.ChildAgeSeconds = uint64Value(child["install-time"])
 			childState.Established = strongSwanSAEstablished(childState.IKEState, childState.ChildState)
 			states = append(states, childState)
 		}
@@ -390,6 +395,57 @@ func uint32Value(v any) uint32 {
 		}
 	}
 	return 0
+}
+
+func uint64Value(v any) uint64 {
+	switch value := v.(type) {
+	case uint64:
+		return value
+	case uint32:
+		return uint64(value)
+	case uint:
+		return uint64(value)
+	case int:
+		if value > 0 {
+			return uint64(value)
+		}
+	case int64:
+		if value > 0 {
+			return uint64(value)
+		}
+	case float64:
+		if value > 0 {
+			return uint64(value)
+		}
+	case string:
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err == nil {
+			return parsed
+		}
+	case []byte:
+		parsed, err := strconv.ParseUint(string(value), 10, 64)
+		if err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func boolValue(v any) (bool, bool) {
+	switch value := v.(type) {
+	case bool:
+		return value, true
+	case string:
+		switch strings.ToLower(value) {
+		case "yes", "true", "1":
+			return true, true
+		case "no", "false", "0":
+			return false, true
+		}
+	case []byte:
+		return boolValue(string(value))
+	}
+	return false, false
 }
 
 func firstUint32(values ...any) uint32 {

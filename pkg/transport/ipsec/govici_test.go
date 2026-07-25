@@ -252,8 +252,8 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	if child["if_id_in"] != "77" || child["if_id_out"] != "77" {
 		t.Fatalf("child if_id fields = %#v", child)
 	}
-	if child["start_action"] != "trap" {
-		t.Fatalf("child start_action = %#v, want trap", child["start_action"])
+	if child["start_action"] != "none" {
+		t.Fatalf("child start_action = %#v, want none", child["start_action"])
 	}
 }
 
@@ -276,6 +276,17 @@ func TestStrongSwanDriverMarshalsInitiateServerTimeout(t *testing.T) {
 	}
 	if timeout := session.callIn["timeout"]; timeout != "1250" {
 		t.Fatalf("timeout = %#v, want 1250ms", timeout)
+	}
+}
+
+func TestStrongSwanDriverTerminatesByUniqueID(t *testing.T) {
+	session := &fakeGoviciSession{}
+	driver := &StrongSwanDriver{VICI: &GoviciClient{Session: session}}
+	if err := driver.TerminateSAByID(context.Background(), 42); err != nil {
+		t.Fatalf("TerminateSAByID: %v", err)
+	}
+	if session.callCmd != "terminate" || session.callIn["ike-id"] != "42" || session.callIn["force"] != "yes" {
+		t.Fatalf("terminate request = %s %#v", session.callCmd, session.callIn)
 	}
 }
 

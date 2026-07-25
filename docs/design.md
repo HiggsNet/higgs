@@ -659,16 +659,16 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 
 #### 2.4.7 Bidirectional 首拨失败接管（Phase 4.5）
 
-双方 `role` 都是 `both` 时，先用稳定 tie-break（peer zone 字典序）选出 primary initiator，避免正常情况下双向同时拨号。选主只解决“正常情况下谁先拨”这个问题，不改变信任关系，也不把 secondary 排除出链路：secondary 仍会规划 desired spec 并加载 responder/trap 配置，保证 primary 拨过来时能接住。
+双方 `role` 都是 `both` 时，先用稳定 tie-break（peer zone 字典序）选出 primary initiator，避免正常情况下双向同时拨号。选主只解决“正常情况下谁先拨”这个问题，不改变信任关系，也不把 secondary 排除出链路：secondary 仍会规划 desired spec，并用 `start_action=none` 加载被动 responder 配置、私钥和 XFRM interface，保证 primary 拨过来时能接住。
 
 选主规则是纯本地、确定性的，两端无需额外协商：
 
 1. 每个节点用自己的 zone 和 peer zone 做字符串比较。
 2. 字典序较小的一侧得到 `initiator_role=primary`，负责主动 initiate。
-3. 字典序较大的一侧得到 `initiator_role=secondary-standby`，初始 reconcile 返回 `noop/bidirectional_standby`，只等待对端拨入。
+3. 字典序较大的一侧得到 `initiator_role=secondary-standby`，初始 reconcile 返回 `prepare_standby/standby_responder_prepare`，准备被动接入资源但不调用 `initiate`。
 4. 如果任意一侧已经通过 `ListSAs` 观测到匹配 SA，则优先 adopt，角色进入 `converged`，不再纠结谁先拨。
 
-例如 `node-a.catofes.` 与 `node-b.catofes.` 都是 `both` 时，`node-a.catofes.` 字典序更小，所以 A 是 primary；B 是 secondary-standby。A 主动拨 B，B 只加载 responder/trap。若 A 长时间无法建立 IKE_SA/CHILD_SA，B 才能按下面的 takeover 规则临时接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达、单侧防火墙或单侧 NAT 映射异常上。
+例如 `node-a.catofes.` 与 `node-b.catofes.` 都是 `both` 时，`node-a.catofes.` 字典序更小，所以 A 是 primary；B 是 secondary-standby。A 主动拨 B，B 只准备被动 responder。若 A 长时间无法建立 IKE_SA/CHILD_SA，B 才能按下面的 takeover 规则临时接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达、单侧防火墙或单侧 NAT 映射异常上。
 
 **接管不引入新 gossip record：** 4.5 不新增 signed health record。secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。Phase 6/7 再考虑低频 signed/runtime health hint。
 
@@ -677,7 +677,7 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 `InitiatorRoleForPeer` 只使用本节点 `ipsec.role` 与远端 `role`；双方都是 `both` 时使用稳定 tie-break，输出 initiator role：
 
 - `primary`：字典序较小侧，正常主动拨号。
-- `secondary-standby`：字典序较大侧，reconcile 初始 noop，reason `bidirectional_standby`。
+- `secondary-standby`：字典序较大侧，reconcile 初始准备 responder，reason `standby_responder_prepare`。
 - `secondary-takeover`：接管激活中。
 - `converged`：已有匹配 SA，双方退出接管状态机。
 - `cooldown`：接管失败后冷却期。
@@ -689,7 +689,7 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 **接管触发条件（保守边界）：**
 
 - 双方 profile 都必须 `role=both`；其他 role 组合不参与 takeover。
-- primary 连续失败次数、`connecting` 超时或长期未观测到匹配 SA 达到阈值后，secondary 才可接管；`takeoverDelay` 从 `LinkGroupSpec.Reconcile.Backoff` 派生，至少 2-3 个 backoff 周期，最小 60s。
+- primary 连续失败次数、`connecting` 超时或持续未观测到匹配 SA 达到阈值后，secondary 才可接管；缺失窗口使用独立的 `SAAbsentSince` 计时，至少连续两次成功观测，最小 2min。daemon 每次启动还有独立的 2min takeover grace，不能继承旧进程的等待时间。
 - secondary 接管前复用 planner 已过滤的 ContactPoint；缺少 ContactPoint 时返回 `takeover_no_contact_point`。
 - revocation、record 过期、transport key/profile mismatch、policy deny 时禁止 takeover；这些属于信任/授权失败，不是连通性失败。
 
@@ -699,7 +699,9 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 - takeover 有 lease（默认 5min）与 cooldown（默认 2min）：secondary 接管成功后维持稳定窗口；takeover 超时或失败后进入 cooldown，期间不反复 apply；cooldown 过期后可 retry。
 - primary 后续恢复时若已有 SA 则 adopt，不会立刻抢回主动权导致重连风暴。
 
-**Debug 输出：** `higgs debug links` 显示 `initiator_role`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_error`。reconcile noop reason 区分 `bidirectional_standby`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_cooldown_active`、`secondary_takeover_pending`。
+若同一 runtime connection 因极端竞态形成多条 SA，canonical secondary 会等待所有重复 SA 稳定 2min，再按 StrongSwan IKE unique ID 精确删除非 canonical SA；端口代际、地址族或 rotate staged runtime 不参与该 GC。
+
+**Debug 输出：** `higgs debug links` 显示 `initiator_role`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_error`。reconcile reason 区分 `standby_responder_prepare`、`takeover_startup_grace`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_cooldown_active`、`secondary_takeover_pending`。
 
 ### 2.5 签名规范（必须无歧义）
 

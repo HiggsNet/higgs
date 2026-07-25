@@ -72,12 +72,22 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		GroupBackoff:         groupBackoffMap(groups),
 		GroupRotateRetention: groupRotateRetentionMap(groups),
 		RotateCutoverReady:   d.ipsecRotateCutoverReady(),
+		PrepareStandby:       d.ipsecPrepareStandby,
+		TakeoverNotBefore:    d.ipsecTakeoverNotBefore,
 	})
+	result.Actions = append(result.Actions, ipsec.PlanDuplicateSAGC(plan.Desired, result.Instances, sas, plan.Roles)...)
 	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(snapshot, now)
 	for _, action := range result.Actions {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {
-		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair,
+		case ipsec.ReconcileActionCleanupDuplicateSA:
+			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, ipsec.NetNSSpec{}); err != nil {
+				d.logWarn("ipsec", "duplicate_sa_gc_failed", map[string]any{
+					"sa_unique_id": action.SAUniqueID,
+					"error":        err,
+				})
+			}
+		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby,
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate,
 			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			netns := netnsForAction(action, groups)
@@ -208,7 +218,7 @@ func shouldAssignIPsecDiagnosticAddresses(action ipsec.ReconcileAction) bool {
 		return false
 	}
 	switch action.Action {
-	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareRotate:
+	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby, ipsec.ReconcileActionPrepareRotate:
 		return true
 	default:
 		return false
@@ -301,6 +311,7 @@ func ipsecActionAppliesXFRM(action string) bool {
 	case ipsec.ReconcileActionCreate,
 		ipsec.ReconcileActionUpdate,
 		ipsec.ReconcileActionRepair,
+		ipsec.ReconcileActionPrepareStandby,
 		ipsec.ReconcileActionTeardown,
 		ipsec.ReconcileActionPrepareRotate,
 		ipsec.ReconcileActionCommitRotate,
@@ -403,6 +414,9 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 		fields["staged_ike"] = action.Instance.StagedIKEName
 		fields["interface"] = action.Instance.InterfaceName
 		fields["staged_interface"] = action.Instance.StagedInterfaceName
+	}
+	if action.SAUniqueID != 0 {
+		fields["sa_unique_id"] = action.SAUniqueID
 	}
 	return fields
 }
@@ -953,23 +967,28 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 	}
 	for _, sa := range sas {
 		state.ActualSAs = append(state.ActualSAs, linkSAState{
-			Name:           sa.Name,
-			Peer:           sa.Peer,
-			ChildSA:        sa.ChildSA,
-			IKEState:       sa.IKEState,
-			ChildState:     sa.ChildState,
-			XFRMIfID:       sa.XFRMIfID,
-			ReqID:          sa.ReqID,
-			LocalIdentity:  sa.LocalIdentity,
-			RemoteIdentity: sa.RemoteIdentity,
-			LocalEndpoint:  sa.LocalEndpoint,
-			RemoteEndpoint: sa.RemoteEndpoint,
-			Endpoint:       sa.Endpoint,
-			Established:    sa.Established,
+			Name:            sa.Name,
+			UniqueID:        sa.UniqueID,
+			Initiator:       sa.Initiator,
+			InitiatorKnown:  sa.InitiatorKnown,
+			IKEAgeSeconds:   sa.IKEAgeSeconds,
+			ChildAgeSeconds: sa.ChildAgeSeconds,
+			Peer:            sa.Peer,
+			ChildSA:         sa.ChildSA,
+			IKEState:        sa.IKEState,
+			ChildState:      sa.ChildState,
+			XFRMIfID:        sa.XFRMIfID,
+			ReqID:           sa.ReqID,
+			LocalIdentity:   sa.LocalIdentity,
+			RemoteIdentity:  sa.RemoteIdentity,
+			LocalEndpoint:   sa.LocalEndpoint,
+			RemoteEndpoint:  sa.RemoteEndpoint,
+			Endpoint:        sa.Endpoint,
+			Established:     sa.Established,
 		})
 	}
 	for _, action := range actions {
-		item := linkActionState{Action: action.Action, Reason: action.Reason}
+		item := linkActionState{Action: action.Action, Reason: action.Reason, SAUniqueID: action.SAUniqueID}
 		if action.Instance != nil {
 			item.InstanceID = action.Instance.ID
 			item.GroupID = action.Instance.GroupID
@@ -1065,6 +1084,8 @@ func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.Link
 			TakeoverUntil:     inst.TakeoverUntil,
 			LastTakeoverError: inst.LastTakeoverError,
 			ObservedInitiator: inst.ObservedInitiator,
+			SAAbsentSince:     inst.SAAbsentSince,
+			SAAbsentCount:     inst.SAAbsentCount,
 		}
 	}
 	return out
@@ -1121,6 +1142,8 @@ func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkIns
 			TakeoverUntil:     inst.TakeoverUntil,
 			LastTakeoverError: inst.LastTakeoverError,
 			ObservedInitiator: inst.ObservedInitiator,
+			SAAbsentSince:     inst.SAAbsentSince,
+			SAAbsentCount:     inst.SAAbsentCount,
 		}
 	}
 	return out
@@ -1236,8 +1259,9 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 	}
 	inst = ipsec.MarkLinkApplySuccess(inst, now)
 	switch action.Action {
-	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareRotate:
-		if action.Action == ipsec.ReconcileActionUpdate && inst.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby {
+	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby, ipsec.ReconcileActionPrepareRotate:
+		if inst.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby ||
+			(action.Spec != nil && action.Spec.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby) {
 			inst.ActualState = ipsec.LinkStateDown
 		} else {
 			inst.ActualState = ipsec.LinkStateConnecting
