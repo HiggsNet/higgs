@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +83,42 @@ func (s blockingGoviciSession) Close() error {
 	return nil
 }
 
+// wedgedGoviciEventSession models a VICI daemon that accepts the connection
+// but never confirms the event registration: Subscribe blocks until the
+// session is closed.
+type wedgedGoviciEventSession struct {
+	closeCh  chan struct{}
+	closeOne sync.Once
+}
+
+func newWedgedGoviciEventSession() *wedgedGoviciEventSession {
+	return &wedgedGoviciEventSession{closeCh: make(chan struct{})}
+}
+
+func (s *wedgedGoviciEventSession) Call(context.Context, string, *vici.Message) (*vici.Message, error) {
+	return nil, errors.New("wedged session")
+}
+
+func (s *wedgedGoviciEventSession) CallStreaming(context.Context, string, string, *vici.Message) iter.Seq2[*vici.Message, error] {
+	return func(yield func(*vici.Message, error) bool) {
+		yield(nil, errors.New("wedged session"))
+	}
+}
+
+func (s *wedgedGoviciEventSession) Close() error {
+	s.closeOne.Do(func() { close(s.closeCh) })
+	return nil
+}
+
+func (s *wedgedGoviciEventSession) Subscribe(events ...string) error {
+	<-s.closeCh
+	return errors.New("session closed while subscribing")
+}
+
+func (s *wedgedGoviciEventSession) NotifyEvents(chan<- vici.Event) {}
+
+func (s *wedgedGoviciEventSession) StopEvents(chan<- vici.Event) {}
+
 type blockingVICIClient struct {
 	calls   chan string
 	release chan struct{}
@@ -101,6 +139,68 @@ func (c *blockingVICIClient) Call(ctx context.Context, cmd string, _ map[string]
 
 func (c *blockingVICIClient) CallStreaming(context.Context, string, string, map[string]any) ([]map[string]any, error) {
 	return nil, nil
+}
+
+type controlledInitiateCall struct {
+	child   string
+	timeout string
+}
+
+type controlledInitiateClient struct {
+	started  chan controlledInitiateCall
+	release  chan struct{}
+	finished chan error
+
+	mu        sync.Mutex
+	active    int
+	maxActive int
+}
+
+func newControlledInitiateClient(size int) *controlledInitiateClient {
+	return &controlledInitiateClient{
+		started:  make(chan controlledInitiateCall, size),
+		release:  make(chan struct{}, size),
+		finished: make(chan error, size),
+	}
+}
+
+func (c *controlledInitiateClient) Call(ctx context.Context, cmd string, in map[string]any) (map[string]any, error) {
+	if cmd != "initiate" {
+		return nil, fmt.Errorf("unexpected command %q", cmd)
+	}
+	call := controlledInitiateCall{
+		child:   fmt.Sprint(in["child"]),
+		timeout: fmt.Sprint(in["timeout"]),
+	}
+	c.mu.Lock()
+	c.active++
+	if c.active > c.maxActive {
+		c.maxActive = c.active
+	}
+	c.mu.Unlock()
+	c.started <- call
+
+	var err error
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	c.mu.Lock()
+	c.active--
+	c.mu.Unlock()
+	c.finished <- err
+	return nil, err
+}
+
+func (c *controlledInitiateClient) CallStreaming(context.Context, string, string, map[string]any) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (c *controlledInitiateClient) peakActive() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.maxActive
 }
 
 type scriptedVICIClient struct {
@@ -154,6 +254,28 @@ func TestGoviciClientMarshalsLoadConnectionMessage(t *testing.T) {
 	}
 	if child["start_action"] != "trap" {
 		t.Fatalf("child start_action = %#v, want trap", child["start_action"])
+	}
+}
+
+func TestStrongSwanDriverMarshalsInitiateServerTimeout(t *testing.T) {
+	session := &fakeGoviciSession{}
+	client := &GoviciClient{Session: session}
+	driver := &StrongSwanDriver{
+		VICI:            client,
+		InitiateTimeout: 1250 * time.Millisecond,
+	}
+
+	if err := driver.InitiateChild(context.Background(), "ipsec-main-child"); err != nil {
+		t.Fatalf("InitiateChild: %v", err)
+	}
+	if session.callCmd != "initiate" {
+		t.Fatalf("command = %q, want initiate", session.callCmd)
+	}
+	if child := session.callIn["child"]; child != "ipsec-main-child" {
+		t.Fatalf("child = %#v, want ipsec-main-child", child)
+	}
+	if timeout := session.callIn["timeout"]; timeout != "1250" {
+		t.Fatalf("timeout = %#v, want 1250ms", timeout)
 	}
 }
 
@@ -211,6 +333,104 @@ func TestStrongSwanDriverInitiateChildAsyncReturnsAndCoalesces(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 	close(client.release)
+}
+
+func TestStrongSwanDriverAsyncInitiateUsesServerTimeoutAndOutlivesReconcileContext(t *testing.T) {
+	client := newControlledInitiateClient(1)
+	driver := &StrongSwanDriver{
+		VICI:                  client,
+		InitiateAsync:         true,
+		InitiateClientTimeout: time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := driver.InitiateChild(ctx, "ipsec-main-child"); err != nil {
+		t.Fatalf("InitiateChild: %v", err)
+	}
+	// This models flushIPsecReconcile returning and canceling its bounded
+	// context immediately after the detached initiate was scheduled.
+	cancel()
+
+	select {
+	case call := <-client.started:
+		if call.child != "ipsec-main-child" {
+			t.Fatalf("child = %q, want ipsec-main-child", call.child)
+		}
+		if call.timeout != "15000" {
+			t.Fatalf("server timeout = %q, want 15000ms", call.timeout)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for async initiate call")
+	}
+	select {
+	case err := <-client.finished:
+		t.Fatalf("async initiate inherited reconcile cancellation: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	client.release <- struct{}{}
+	select {
+	case err := <-client.finished:
+		if err != nil {
+			t.Fatalf("async initiate error after release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for async initiate completion")
+	}
+}
+
+func TestStrongSwanDriverLimitsConcurrentAsyncInitiates(t *testing.T) {
+	const (
+		concurrency = defaultVICIInitiateConcurrency
+		callCount   = concurrency + 3
+	)
+	client := newControlledInitiateClient(callCount)
+	driver := &StrongSwanDriver{
+		VICI:                  client,
+		InitiateAsync:         true,
+		InitiateClientTimeout: time.Second,
+	}
+	for i := 0; i < callCount; i++ {
+		child := fmt.Sprintf("ipsec-child-%d", i)
+		if err := driver.InitiateChild(context.Background(), child); err != nil {
+			t.Fatalf("InitiateChild(%q): %v", child, err)
+		}
+	}
+
+	for i := 0; i < concurrency; i++ {
+		select {
+		case <-client.started:
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for initial call %d", i)
+		}
+	}
+	select {
+	case call := <-client.started:
+		t.Fatalf("initiate beyond concurrency limit started before a slot was released: %+v", call)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	client.release <- struct{}{}
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("queued initiate did not start after a slot was released")
+	}
+	for i := 1; i < callCount; i++ {
+		client.release <- struct{}{}
+	}
+	for i := 0; i < callCount; i++ {
+		select {
+		case err := <-client.finished:
+			if err != nil {
+				t.Fatalf("async initiate %d failed: %v", i, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for async initiate %d", i)
+		}
+	}
+	if got := client.peakActive(); got > concurrency {
+		t.Fatalf("peak concurrent initiates = %d, want <= %d", got, concurrency)
+	}
 }
 
 func TestReconnectingVICIClientRetriesStreamingAfterBrokenPipe(t *testing.T) {
@@ -436,6 +656,25 @@ func TestGoviciClientSubscribesAndParsesLifecycleEvents(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for lifecycle event")
+	}
+}
+
+func TestGoviciClientSubscribeEventsUnblocksOnContextTimeout(t *testing.T) {
+	// A VICI daemon that accepts the connection but never confirms the event
+	// registration must not block the caller forever: the ctx deadline closes
+	// the session and surfaces the timeout.
+	session := newWedgedGoviciEventSession()
+	client := &GoviciClient{Session: session}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := client.SubscribeEvents(ctx, "child-updown")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SubscribeEvents error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("SubscribeEvents blocked for %s despite the ctx deadline", elapsed)
 	}
 }
 

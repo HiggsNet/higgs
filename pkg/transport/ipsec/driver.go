@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	defaultVICIOperationTimeout     = 10 * time.Second
-	defaultVICIInitiateAsyncTimeout = 5 * time.Minute
+	defaultVICIOperationTimeout      = 10 * time.Second
+	defaultVICIInitiateServerTimeout = 15 * time.Second
+	defaultVICIInitiateClientGrace   = 5 * time.Second
+	defaultVICIInitiateConcurrency   = 4
 )
 
 type SAState struct {
@@ -141,18 +143,28 @@ type ApplyPlan struct {
 }
 
 type StrongSwanDriver struct {
-	VICI                  VICIClient
-	KeyDir                string
-	LogConfig             func(event string, fields map[string]any)
-	OperationTimeout      time.Duration
-	InitiateAsync         bool
-	InitiateTimeout       time.Duration
+	VICI             VICIClient
+	KeyDir           string
+	LogConfig        func(event string, fields map[string]any)
+	OperationTimeout time.Duration
+	InitiateAsync    bool
+	// InitiateTimeout is sent to charon in the VICI request.  It bounds the
+	// blocking controller callback inside charon; a Go context timeout alone
+	// only disconnects the client and does not release charon's worker.
+	InitiateTimeout time.Duration
+	// InitiateClientTimeout bounds the local VICI call.  It should be longer
+	// than InitiateTimeout so charon can detach and return its response first.
+	InitiateClientTimeout time.Duration
+	// InitiateConcurrency limits blocking initiate callbacks submitted to one
+	// charon process.  Zero selects the conservative default.
+	InitiateConcurrency   int
 	InitiateClientFactory func() (VICIClient, func() error, error)
 
-	keyIDs       map[string]string
-	keyIDsMu     sync.Mutex
-	initiateMu   sync.Mutex
-	initiateBusy map[string]struct{}
+	keyIDs        map[string]string
+	keyIDsMu      sync.Mutex
+	initiateMu    sync.Mutex
+	initiateBusy  map[string]struct{}
+	initiateSlots chan struct{}
 }
 
 func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
@@ -396,9 +408,9 @@ func (d *StrongSwanDriver) InitiateChild(ctx context.Context, child string) erro
 	if d.InitiateAsync {
 		return d.initiateChildAsync(ctx, child)
 	}
-	ctx, cancel := d.viciContext(ctx)
+	ctx, cancel := d.viciInitiateContext(ctx)
 	defer cancel()
-	_, err := d.VICI.Call(ctx, "initiate", map[string]any{"child": child})
+	_, err := d.VICI.Call(ctx, "initiate", d.viciInitiateRequest(child))
 	return err
 }
 
@@ -409,30 +421,57 @@ func (d *StrongSwanDriver) initiateChildAsync(ctx context.Context, child string)
 	if d.markInitiateBusy(child) {
 		return nil
 	}
-	client := d.VICI
-	var closeFn func() error
-	if d.InitiateClientFactory != nil {
-		var err error
-		client, closeFn, err = d.InitiateClientFactory()
-		if err != nil {
-			d.clearInitiateBusy(child)
-			return err
-		}
-	}
-	if client == nil {
-		d.clearInitiateBusy(child)
-		return fmt.Errorf("vici client is required")
-	}
+	slots := d.asyncInitiateSlots()
 	go func() {
 		defer d.clearInitiateBusy(child)
-		callCtx, cancel := d.viciInitiateContext(ctx)
+
+		// Do not open a VICI socket until a charon worker slot is available.
+		// Waiting locally is cheap; submitting every desired child at once can
+		// exhaust charon's worker pool when peers are unreachable.
+		slots <- struct{}{}
+		defer func() { <-slots }()
+
+		client := d.VICI
+		var closeFn func() error
+		if d.InitiateClientFactory != nil {
+			var err error
+			client, closeFn, err = d.InitiateClientFactory()
+			if err != nil {
+				d.logAsyncInitiateFailure(child, err)
+				return
+			}
+		}
+		if client == nil {
+			d.logAsyncInitiateFailure(child, fmt.Errorf("vici client is required"))
+			return
+		}
+		// The reconcile context is canceled as soon as a reconcile pass
+		// returns.  This operation intentionally outlives that pass, but is
+		// still bounded by both the charon-side timeout in the request and the
+		// slightly longer local timeout applied here.
+		callCtx, cancel := d.viciInitiateContext(context.WithoutCancel(ctx))
 		defer cancel()
 		if closeFn != nil {
 			defer func() { _ = closeFn() }()
 		}
-		_, _ = client.Call(callCtx, "initiate", map[string]any{"child": child})
+		if _, err := client.Call(callCtx, "initiate", d.viciInitiateRequest(child)); err != nil {
+			d.logAsyncInitiateFailure(child, err)
+		}
 	}()
 	return nil
+}
+
+func (d *StrongSwanDriver) asyncInitiateSlots() chan struct{} {
+	d.initiateMu.Lock()
+	defer d.initiateMu.Unlock()
+	if d.initiateSlots == nil {
+		concurrency := d.InitiateConcurrency
+		if concurrency <= 0 {
+			concurrency = defaultVICIInitiateConcurrency
+		}
+		d.initiateSlots = make(chan struct{}, concurrency)
+	}
+	return d.initiateSlots
 }
 
 func (d *StrongSwanDriver) markInitiateBusy(child string) bool {
@@ -607,6 +646,21 @@ func (d *StrongSwanDriver) viciContext(ctx context.Context) (context.Context, co
 	return context.WithTimeout(ctx, timeout)
 }
 
+func (d *StrongSwanDriver) viciInitiateRequest(child string) map[string]any {
+	timeout := defaultVICIInitiateServerTimeout
+	if d != nil && d.InitiateTimeout > 0 {
+		timeout = d.InitiateTimeout
+	}
+	timeoutMillis := timeout.Milliseconds()
+	if timeoutMillis < 1 {
+		timeoutMillis = 1
+	}
+	return map[string]any{
+		"child":   child,
+		"timeout": fmt.Sprintf("%d", timeoutMillis),
+	}
+}
+
 func (d *StrongSwanDriver) viciInitiateContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -614,11 +668,25 @@ func (d *StrongSwanDriver) viciInitiateContext(ctx context.Context) (context.Con
 	if _, ok := ctx.Deadline(); ok {
 		return ctx, func() {}
 	}
-	timeout := defaultVICIInitiateAsyncTimeout
+	serverTimeout := defaultVICIInitiateServerTimeout
 	if d != nil && d.InitiateTimeout > 0 {
-		timeout = d.InitiateTimeout
+		serverTimeout = d.InitiateTimeout
+	}
+	timeout := serverTimeout + defaultVICIInitiateClientGrace
+	if d != nil && d.InitiateClientTimeout > 0 {
+		timeout = d.InitiateClientTimeout
 	}
 	return context.WithTimeout(ctx, timeout)
+}
+
+func (d *StrongSwanDriver) logAsyncInitiateFailure(child string, err error) {
+	if d == nil || d.LogConfig == nil || err == nil {
+		return
+	}
+	d.LogConfig("vici_initiate_failed", map[string]any{
+		"child": child,
+		"error": err.Error(),
+	})
 }
 
 func (d *StrongSwanDriver) logVICIConfig(event, connection string, msg map[string]any) {

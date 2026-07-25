@@ -211,7 +211,7 @@ func (c *ReconnectingVICIClient) reconnect(stale VICIClient) (VICIClient, error)
 	return client, nil
 }
 
-func (c *GoviciClient) SubscribeEvents(_ context.Context, events ...string) (<-chan VICIEvent, func(), error) {
+func (c *GoviciClient) SubscribeEvents(ctx context.Context, events ...string) (<-chan VICIEvent, func(), error) {
 	if c == nil || c.Session == nil {
 		return nil, nil, errMissingGoviciSession()
 	}
@@ -219,7 +219,7 @@ func (c *GoviciClient) SubscribeEvents(_ context.Context, events ...string) (<-c
 	if !ok {
 		return nil, nil, fmt.Errorf("govici session does not support event subscription")
 	}
-	if err := session.Subscribe(events...); err != nil {
+	if err := c.subscribeEventsWithContext(ctx, session, events...); err != nil {
 		return nil, nil, err
 	}
 	raw := make(chan vici.Event, 16)
@@ -235,6 +235,29 @@ func (c *GoviciClient) SubscribeEvents(_ context.Context, events ...string) (<-c
 		}
 	}()
 	return out, stop, nil
+}
+
+// subscribeEventsWithContext runs the blocking govici subscribe under ctx.
+// govici's Session.Subscribe hardcodes context.Background, so a VICI daemon
+// that accepts the connection but never confirms the registration would block
+// the caller forever (this has taken down daemon startup in production).
+// Closing the session on ctx expiry unblocks the subscribe; the next call on
+// the shared session then fails with a reconnectable error.
+func (c *GoviciClient) subscribeEventsWithContext(ctx context.Context, session GoviciEventSession, events ...string) error {
+	if ctx == nil || ctx.Done() == nil {
+		return session.Subscribe(events...)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Subscribe(events...)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = c.Session.Close()
+		return ctx.Err()
+	}
 }
 
 func errMissingGoviciSession() error {
