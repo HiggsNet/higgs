@@ -135,7 +135,7 @@ daemonRun()
    - `startObjectPullServer()` — 启动 TCP object pull 服务
    - `startControlServer()` — 启动 Unix domain socket 控制服务器
    - `startObserverServer()` — 启动 HTTP observer 服务器
-   - `startIPsecLifecycleEventWatcher()` — 监听 StrongSwan VICI 生命周期事件
+   - `startIPsecLifecycleEventWatcher()` — 监听 StrongSwan VICI 生命周期事件（后台 goroutine 订阅，单次订阅带超时、失败退避重试；VICI 卡死只产生告警日志，不阻塞 daemon 启动）
 3. **启动恢复**：
 
 ```

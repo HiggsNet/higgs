@@ -76,6 +76,7 @@ const (
 	defaultDaemonInterval                            = 60 * time.Second
 	defaultIPsecReconcileInterval                    = time.Minute
 	rawICMPFallbackLogInterval                       = 10 * time.Minute
+	ipsecLifecycleSubscribeTimeout                   = 10 * time.Second
 	defaultPeerObservabilityTTL                      = 24 * time.Hour
 	defaultPeerObservabilityLimit                    = 2048
 	daemonEventRecordPut             daemonEventType = "record_put"
@@ -1770,13 +1771,60 @@ func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) fun
 	if !ok || subscriber == nil {
 		return func() {}
 	}
-	events, stop, err := subscriber.SubscribeLifecycleEvents(ctx)
-	if err != nil {
-		d.logWarn("ipsec", "vici_event_subscribe_failed", map[string]any{"error": err})
-		return func() {}
+	watchCtx, cancel := context.WithCancel(ctx)
+	go d.runIPsecLifecycleEventWatcher(watchCtx, subscriber)
+	return cancel
+}
+
+// runIPsecLifecycleEventWatcher subscribes to StrongSwan lifecycle events in
+// the background and forwards them to the daemon event loop. Each subscribe
+// attempt is bounded by a timeout and retried with backoff: a wedged VICI
+// daemon (accepting connections but never answering) must degrade to warning
+// logs instead of blocking daemon startup, which a synchronous subscribe did.
+func (d *DaemonService) runIPsecLifecycleEventWatcher(ctx context.Context, subscriber ipsecLifecycleEventSubscriber) {
+	backoff := time.Second
+	for {
+		subscribeCtx, cancelSubscribe := context.WithTimeout(ctx, ipsecLifecycleSubscribeTimeout)
+		events, stop, err := subscriber.SubscribeLifecycleEvents(subscribeCtx)
+		cancelSubscribe()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			d.logWarn("ipsec", "vici_event_subscribe_failed", map[string]any{"error": err})
+			if !sleepBeforeRetry(ctx, backoff) {
+				return
+			}
+			backoff = nextRetryBackoff(backoff)
+			continue
+		}
+		backoff = time.Second
+		shutdown := d.forwardIPsecLifecycleEvents(ctx, events)
+		if stop != nil {
+			stop()
+		}
+		if shutdown {
+			return
+		}
+		d.logWarn("ipsec", "vici_event_stream_closed", map[string]any{"retry_in": backoff.String()})
+		if !sleepBeforeRetry(ctx, backoff) {
+			return
+		}
 	}
-	go func() {
-		for ev := range events {
+}
+
+// forwardIPsecLifecycleEvents pumps lifecycle events into the daemon event
+// loop until ctx ends (returns true) or the event stream closes (returns
+// false, caller should resubscribe).
+func (d *DaemonService) forwardIPsecLifecycleEvents(ctx context.Context, events <-chan ipsec.VICIEvent) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return true
+		case ev, ok := <-events:
+			if !ok {
+				return false
+			}
 			select {
 			case d.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ev}:
 			default:
@@ -1788,12 +1836,26 @@ func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) fun
 				})
 			}
 		}
-	}()
-	return func() {
-		if stop != nil {
-			stop()
-		}
 	}
+}
+
+func sleepBeforeRetry(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextRetryBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > time.Minute {
+		next = time.Minute
+	}
+	return next
 }
 
 func (d *DaemonService) handleIPsecLifecycleEvent(ev ipsec.VICIEvent) {
