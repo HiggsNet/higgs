@@ -7,6 +7,48 @@ import (
 	"github.com/Catofes/higgs/internal/inspect"
 )
 
+func TestWriteFirewallSummaryFiltersAndHidesDebugDetails(t *testing.T) {
+	view := inspect.FirewallDebugView{
+		Backend: "nft",
+		Instances: []inspect.FirewallInstanceView{
+			{
+				ID: "mesh-a", Scope: "higgs-a", Mode: "managed",
+				ResolvedBackend: "nft", DefaultPolicy: "drop", Transit: true,
+				AllowPrefixes: 2, LocalServices: []inspect.FirewallLocalServiceView{{Proto: "udp", Port: 4500}},
+				Generation: 5, OwnedObjects: 10, PolicyHash: "secret-policy-hash",
+				InlineHooks: []inspect.FirewallInlineHookView{{Expression: "secret hook"}},
+			},
+			{ID: "mesh-b", Scope: "higgs-b", Mode: "disabled"},
+		},
+	}
+	var buf strings.Builder
+	if err := WriteFirewall(&buf, view, "mesh-a", true); err != nil {
+		t.Fatalf("WriteFirewall: %v", err)
+	}
+	output := buf.String()
+	for _, want := range []string{
+		"firewall: active",
+		"backend: nft",
+		"instances: 1/2",
+		"mesh-a scope=higgs-a mode=managed backend=nft status=active",
+		"default_policy: drop",
+		"transit: true",
+		"prefixes: allow=2 deny=0",
+		"local_services: 1",
+		"generation: 5",
+		"owned_objects: 10",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"mesh-b", "secret-policy-hash", "secret hook"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("output unexpectedly contains %q:\n%s", unwanted, output)
+		}
+	}
+}
+
 func TestWriteDebugFirewallNotConfigured(t *testing.T) {
 	var buf strings.Builder
 	if err := WriteDebugFirewall(&buf, inspect.FirewallDebugView{}); err != nil {

@@ -14,6 +14,11 @@ func TestHumanZoneAndRecordCommandsOwnOperatorViews(t *testing.T) {
 	if commandByName(root.Commands, "db") != nil {
 		t.Fatal("root command unexpectedly exposes low-level db")
 	}
+	for _, name := range []string{"verify", "recovery", "gc", "sync"} {
+		if commandByName(root.Commands, name) != nil {
+			t.Errorf("root command unexpectedly exposes advanced command %s", name)
+		}
+	}
 
 	zoneCommand := commandByName(root.Commands, "zone")
 	show := commandByName(zoneCommand.Commands, "show")
@@ -36,9 +41,23 @@ func TestHumanZoneAndRecordCommandsOwnOperatorViews(t *testing.T) {
 	requireCommandFlags(t, debugZone, "json", "history")
 	debugRecord := commandByName(debug.Commands, "record")
 	requireCommandFlags(t, debugRecord, "history")
+	if commandByName(debug.Commands, "verify") == nil {
+		t.Fatal("debug command does not expose verify")
+	}
 	if commandByName(debug.Commands, "db") == nil {
 		t.Fatal("debug command does not expose db")
 	}
+
+	advanced := commandByName(root.Commands, "advanced")
+	for _, name := range []string{"sync", "recovery", "gc"} {
+		if commandByName(advanced.Commands, name) == nil {
+			t.Errorf("advanced command does not expose %s", name)
+		}
+	}
+
+	firewall := commandByName(root.Commands, "firewall")
+	showFirewall := commandByName(firewall.Commands, "show")
+	requireCommandFlags(t, showFirewall, "filter", "verbose")
 }
 
 func commandFlagByName(command *cli.Command, name string) cli.Flag {

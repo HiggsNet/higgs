@@ -26,12 +26,22 @@ func rootCommand() *cli.Command {
 			cmdIPAM(),
 			cmdService(),
 			cmdFirewall(),
-			cmdVerify(),
 			cmdVersion(),
 			cmdDaemon(),
+			cmdAdvanced(),
+			cmdDebug(),
+		},
+	}
+}
+
+func cmdAdvanced() *cli.Command {
+	return &cli.Command{
+		Name:        "advanced",
+		Usage:       "Low-level synchronization, recovery, and maintenance commands",
+		Description: "Commands for manual synchronization, state recovery, and local maintenance. Most installations only need the daemon.",
+		Commands: []*cli.Command{
 			cmdSync(),
 			cmdRecovery(),
-			cmdDebug(),
 			cmdGC(),
 		},
 	}
@@ -41,7 +51,7 @@ func cmdGC() *cli.Command {
 	return &cli.Command{
 		Name:      "gc",
 		Usage:     "Garbage-collect stale local runtime state",
-		UsageText: "higgs gc [--apply] [--direct]",
+		UsageText: "higgs advanced gc [--apply] [--direct]",
 		Description: "Preview local runtime state that cannot be referenced by the current configuration. " +
 			"Currently this removes orphan BIRD instance state only; it never stops BIRD, IPsec, or firewall resources. " +
 			"Use --apply to persist the removal.",
@@ -51,7 +61,7 @@ func cmdGC() *cli.Command {
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 0 {
-				return cli.Exit("usage: higgs gc [--apply] [--direct]", 1)
+				return cli.Exit("usage: higgs advanced gc [--apply] [--direct]", 1)
 			}
 			return garbageCollectState(cmd.Bool("apply"), cmd.Bool("direct"))
 		},
@@ -60,45 +70,69 @@ func cmdGC() *cli.Command {
 
 func cmdFirewall() *cli.Command {
 	return &cli.Command{
-		Name: "firewall", Usage: "Manage local dynamic firewall policy",
-		Commands: []*cli.Command{{
-			Name: "endpoint", Usage: "Manage forwarded endpoint ACLs",
-			Commands: []*cli.Command{
-				{
-					Name: "apply", UsageText: "higgs firewall endpoint apply <name> --destination <ip> --protocol <tcp|udp> --port <port> --allow-zone <selector>...",
-					Flags: []cli.Flag{
-						&cli.StringFlag{Name: "destination", Required: true},
-						&cli.StringFlag{Name: "protocol", Required: true},
-						&cli.UintFlag{Name: "port", Required: true},
-						&cli.StringSliceFlag{Name: "allow-zone", Required: true},
-					},
-					Action: func(ctx context.Context, cmd *cli.Command) error {
-						if cmd.Args().Len() != 1 || cmd.Uint("port") > 65535 {
-							return cli.Exit("invalid endpoint ACL arguments", 1)
-						}
-						return applyEndpointACL(cmd.Args().First(), cmd.String("destination"), cmd.String("protocol"), uint16(cmd.Uint("port")), cmd.StringSlice("allow-zone"))
-					},
+		Name:  "firewall",
+		Usage: "Show and manage local dynamic firewall policy",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: higgs firewall [show|endpoint]", 1)
+			}
+			return showFirewall("", false)
+		},
+		Commands: []*cli.Command{
+			{
+				Name:      "show",
+				Usage:     "Show a human-readable firewall summary",
+				UsageText: "higgs firewall show [--filter text] [--verbose]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show matching instance ids, scopes, modes, or backends"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show policy, service, generation, and owned-object details"},
 				},
-				{
-					Name: "remove", UsageText: "higgs firewall endpoint remove <name>",
-					Action: func(ctx context.Context, cmd *cli.Command) error {
-						if cmd.Args().Len() != 1 {
-							return cli.Exit("usage: higgs firewall endpoint remove <name>", 1)
-						}
-						return removeEndpointACL(cmd.Args().First())
-					},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs firewall show [--filter text] [--verbose]", 1)
+					}
+					return showFirewall(cmd.String("filter"), cmd.Bool("verbose"))
 				},
-				{
-					Name: "list", UsageText: "higgs firewall endpoint list",
-					Action: func(ctx context.Context, cmd *cli.Command) error {
-						if cmd.Args().Len() != 0 {
-							return cli.Exit("usage: higgs firewall endpoint list", 1)
-						}
-						return listEndpointACLs()
+			},
+			{
+				Name: "endpoint", Usage: "Manage forwarded endpoint ACLs",
+				Commands: []*cli.Command{
+					{
+						Name: "apply", UsageText: "higgs firewall endpoint apply <name> --destination <ip> --protocol <tcp|udp> --port <port> --allow-zone <selector>...",
+						Flags: []cli.Flag{
+							&cli.StringFlag{Name: "destination", Required: true},
+							&cli.StringFlag{Name: "protocol", Required: true},
+							&cli.UintFlag{Name: "port", Required: true},
+							&cli.StringSliceFlag{Name: "allow-zone", Required: true},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.Args().Len() != 1 || cmd.Uint("port") > 65535 {
+								return cli.Exit("invalid endpoint ACL arguments", 1)
+							}
+							return applyEndpointACL(cmd.Args().First(), cmd.String("destination"), cmd.String("protocol"), uint16(cmd.Uint("port")), cmd.StringSlice("allow-zone"))
+						},
+					},
+					{
+						Name: "remove", UsageText: "higgs firewall endpoint remove <name>",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.Args().Len() != 1 {
+								return cli.Exit("usage: higgs firewall endpoint remove <name>", 1)
+							}
+							return removeEndpointACL(cmd.Args().First())
+						},
+					},
+					{
+						Name: "list", UsageText: "higgs firewall endpoint list",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.Args().Len() != 0 {
+								return cli.Exit("usage: higgs firewall endpoint list", 1)
+							}
+							return listEndpointACLs()
+						},
 					},
 				},
 			},
-		}},
+		},
 	}
 }
 
@@ -466,23 +500,15 @@ func cmdRoute() *cli.Command {
 
 func cmdVerify() *cli.Command {
 	return &cli.Command{
-		Name:      "verify",
-		Usage:     "Verify zone chain integrity",
-		UsageText: "higgs verify [chain] <zone>",
-		Description: "Verify the delegation chain for a zone.\n" +
-			"The optional 'chain' keyword is accepted for compatibility.",
+		Name:        "verify",
+		Usage:       "Verify zone chain integrity",
+		UsageText:   "higgs debug verify <zone>",
+		Description: "Verify the delegation chain for a zone.",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			switch cmd.Args().Len() {
-			case 1:
-				return verifyChain(zone.ZonePath(cmd.Args().First()))
-			case 2:
-				if cmd.Args().First() != "chain" {
-					return cli.Exit("usage: higgs verify [chain] <zone>", 1)
-				}
-				return verifyChain(zone.ZonePath(cmd.Args().Get(1)))
-			default:
-				return cli.Exit("usage: higgs verify [chain] <zone>", 1)
+			if cmd.Args().Len() != 1 {
+				return cli.Exit("usage: higgs debug verify <zone>", 1)
 			}
+			return verifyChain(zone.ZonePath(cmd.Args().First()))
 		},
 	}
 }
@@ -542,10 +568,10 @@ func cmdSync() *cli.Command {
 			{
 				Name:      "once",
 				Usage:     "Run a single sync round with a peer",
-				UsageText: "higgs sync once <peer-id>",
+				UsageText: "higgs advanced sync once <peer-id>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs sync once <peer-id>", 1)
+						return cli.Exit("usage: higgs advanced sync once <peer-id>", 1)
 					}
 					return syncOnce(cmd.Args().First())
 				},

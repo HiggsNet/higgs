@@ -2,9 +2,80 @@ package text
 
 import (
 	"io"
+	"strings"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
+
+func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, verbose bool) error {
+	if len(view.Instances) == 0 {
+		out := newLineWriter(w)
+		out.Println("firewall: not configured")
+		return out.Err()
+	}
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	instances := make([]inspect.FirewallInstanceView, 0, len(view.Instances))
+	for _, instance := range view.Instances {
+		searchable := strings.Join([]string{
+			instance.ID,
+			instance.Scope,
+			instance.Mode,
+			instance.Backend,
+			instance.ResolvedBackend,
+			instance.LastError,
+		}, " ")
+		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
+			instances = append(instances, instance)
+		}
+	}
+
+	out := newLineWriter(w)
+	if view.LastError != "" {
+		out.Println("firewall: error")
+	} else {
+		out.Println("firewall: active")
+	}
+	out.LineIf(view.Backend != "", "backend: %s", view.Backend)
+	out.Linef("instances: %s", filteredCount(len(instances), len(view.Instances), filter))
+	for _, instance := range instances {
+		backend := defaultText(instance.ResolvedBackend, defaultText(instance.Backend, "auto"))
+		out.Linef("  %s scope=%s mode=%s backend=%s status=%s",
+			instance.ID,
+			defaultText(instance.Scope, "-"),
+			defaultText(instance.Mode, "managed"),
+			backend,
+			firewallInstanceStatus(instance),
+		)
+		if !verbose {
+			continue
+		}
+		out.Linef("    default_policy: %s", defaultText(instance.DefaultPolicy, "drop"))
+		out.Linef("    transit: %t", instance.Transit)
+		out.Linef("    prefixes: allow=%d deny=%d", instance.AllowPrefixes, instance.DenyPrefixes)
+		out.Linef("    local_services: %d", len(instance.LocalServices))
+		if instance.IsHost {
+			out.Linef("    host_ports: ike=%t natt=%t", instance.HostIKE, instance.HostNATT)
+		}
+		out.Linef("    generation: %d", instance.Generation)
+		out.Linef("    owned_objects: %d", instance.OwnedObjects)
+		out.LineIf(instance.LastError != "", "    last_error: %s", instance.LastError)
+	}
+	out.LineIf(view.LastError != "", "last_error: %s", view.LastError)
+	return out.Err()
+}
+
+func firewallInstanceStatus(instance inspect.FirewallInstanceView) string {
+	switch {
+	case instance.LastError != "":
+		return "error"
+	case instance.Mode == "disabled":
+		return "disabled"
+	case instance.ResolvedBackend != "":
+		return "active"
+	default:
+		return "pending"
+	}
+}
 
 func WriteDebugFirewall(w io.Writer, view inspect.FirewallDebugView) error {
 	out := newLineWriter(w)

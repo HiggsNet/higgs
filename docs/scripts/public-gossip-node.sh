@@ -274,13 +274,13 @@ case "$cmd" in
   status)
     if [ "$#" -ne 1 ]; then usage; exit 1; fi
     dir="$1"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" sync status --verbose
+    HIGGS_CONFIG="$(config_path "$dir")" "$bin" advanced sync status --verbose
     ;;
   verify)
     if [ "$#" -ne 2 ]; then usage; exit 1; fi
     dir="$1"
     zone="$2"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" verify "$zone"
+    HIGGS_CONFIG="$(config_path "$dir")" "$bin" debug verify "$zone"
     ;;
   *)
     usage

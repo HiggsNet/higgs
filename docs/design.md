@@ -1011,7 +1011,7 @@ type PeerView struct {
 | Peer 动态发现（endpoint record 扫描、TTL/grace 管理） | `pkg/core/gossip/` | ✅ 完整 |
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
 | Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` / `app/higgs/daemon_sync.go` | ✅ 已实现，admin 写入、IPsec state-change hook、单 UDP reader、事件循环和 per-peer `SyncSession` FSM 已接入 |
-| CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug（含 db）/ route） | `app/higgs/` | ✅ 完整 |
+| CLI（root / join / delegate / zone / record / route / firewall / daemon / advanced（sync、recovery、gc）/ debug（verify、db）） | `app/higgs/` | ✅ 完整 |
 | 配置文件（YAML + 环境变量覆盖；`overlays[].routing` 将移除，改为 `netns` + `routing.instances[]`） | `app/higgs/config.go` | 🟨 待按 per-netns BIRD 调整 |
 | Route Announcement / IPAM record 解析与校验 | `pkg/routing/records.go` | ✅ 完整 |
 | AuthorizedRouteSet（assignment/announcement 授权、重叠裁决） | `pkg/routing/authorization.go` | ✅ 第一版完整 |
@@ -1034,7 +1034,7 @@ type PeerView struct {
 
 ## 七、Phase 6 事件驱动 Daemon 设计要点
 
-Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并删除旧 `syncRound` 回退路径。`PING/PONG` wire 类型也已收敛为 catalog summary，不再携带旧 digest/fetch 兼容字段。daemon 与 `sync once` 都通过同一套 event-loop pump 处理收包、超时和状态持久化。
+Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并删除旧 `syncRound` 回退路径。`PING/PONG` wire 类型也已收敛为 catalog summary，不再携带旧 digest/fetch 兼容字段。daemon 与 `advanced sync once` 都通过同一套 event-loop pump 处理收包、超时和状态持久化。
 
 ### 7.1 为什么必须重构
 

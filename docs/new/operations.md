@@ -9,7 +9,7 @@
 默认配置路径是 `/etc/higgs/config.yaml`。多节点实验时应显式指定：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync status
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync status
 ```
 
 如果用 `sudo` 排查系统数据面，注意保留环境变量：
@@ -48,7 +48,7 @@ HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate issue --permissions wri
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept <bundle-payload> /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs verify catofes.
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs debug verify catofes.
 ```
 
 普通节点重复同样流程，只是 delegation 由 `catofes.` 管理节点签发，而不是 root admin 直接签发。
@@ -71,9 +71,9 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.
 ```bash
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs recovery export-zone . root-zone.b64
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs advanced recovery export-zone . root-zone.b64
 
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone root-zone.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone root-zone.b64
 ```
 
 `delegated_to` 是精确 owner，不是向下继承开关。第一条 `delegated_to=.` 只让 root 拥有 `/32`；第二条才让 `catofes.` 精确拥有 `/58`，从而可以继续切子池或发布 assignment。子 Zone 不能直接使用 ancestor 的 self pool；缺少显式覆盖 pool 时，CLI 会以 `ipam_pool_owner_mismatch` 或 `ipam_assignment_pool_mismatch` 早失败。
@@ -130,7 +130,7 @@ CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在�
 
 ## --direct 离线写入
 
-支持 `--direct` 的命令包括：`record put`、`delegate issue`、`delegate grant`、`delegate revoke`、`join accept`、`route announce`/`withdraw`、IPAM pool/assignment 写命令，以及 `recovery import-zone`、`recovery purge-revoked --apply`、`recovery cleanup-ipsec`。
+支持 `--direct` 的命令包括：`record put`、`delegate issue`、`delegate grant`、`delegate revoke`、`join accept`、`route announce`/`withdraw`、IPAM pool/assignment 写命令，以及 `advanced recovery import-zone`、`advanced recovery purge-revoked --apply`、`advanced recovery cleanup-ipsec`。
 
 使用场景：
 
@@ -153,7 +153,7 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept --direct <bundle-p
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs record put --direct node-a.catofes. endpoints/udp '{"endpoints": [...]}' json
 
 # 离线导入 root Zone snapshot
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone --direct root-zone.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone --direct root-zone.b64
 ```
 
 **注意**：使用 `--direct` 前必须确认没有 daemon 正在管理同一份状态文件或相同的 IPsec/XFRM 对象，否则可能产生并发写或数据面状态不一致。
@@ -165,38 +165,38 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs recovery import-zone --direct 
 查看同步状态：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync status --verbose
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync status --verbose
 ```
 
 对某个 peer 执行一次同步：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync once node-b.catofes.
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync once node-b.catofes.
 ```
 
 启动兼容的被动 UDP 服务：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml higgs sync serve
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml higgs advanced sync serve
 ```
 
 旧的常驻同步入口仍可用，但 daemon 是推荐入口：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync run --interval 5
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync run --interval 5
 ```
 
-`sync once` 如果输出 pending zones，通常表示对端已返回摘要，但还有对象需要继续拉取；再跑一轮或交给 daemon 后台收敛。
+`advanced sync once` 如果输出 pending zones，通常表示对端已返回摘要，但还有对象需要继续拉取；再跑一轮或交给 daemon 后台收敛。
 
 ## 常用 Debug
 
 基础状态：
 
 ```bash
-higgs sync status --verbose
+higgs advanced sync status --verbose
 higgs zone show node-b.catofes.
 higgs record list node-b.catofes. --filter identity
-higgs verify node-b.catofes.
+higgs debug verify node-b.catofes.
 ```
 
 Gossip 和 peer：
@@ -223,6 +223,7 @@ higgs debug routing bird status
 higgs debug routing bird route
 higgs debug routing ip route
 higgs debug firewall
+higgs firewall show --verbose
 higgs debug health
 higgs debug rotate-port
 ```
@@ -413,22 +414,22 @@ Higgs 只应管理带 owner 边界的规则。发现规则残留时，先确认�
 从 peer 显式拉回某个 Zone：
 
 ```bash
-higgs recovery pull-zone node-b.catofes. --from node-b.catofes.
+higgs advanced recovery pull-zone node-b.catofes. --from node-b.catofes.
 ```
 
 拉回某个 Zone 及祖先链：
 
 ```bash
-higgs recovery pull-chain node-b.catofes. --from node-b.catofes.
+higgs advanced recovery pull-chain node-b.catofes. --from node-b.catofes.
 ```
 
 清理本机 Higgs 管理的 IPsec 链路：
 
 ```bash
-sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs recovery cleanup-ipsec
+sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs advanced recovery cleanup-ipsec
 
 # 明确跳过 daemon 探测
-sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs recovery cleanup-ipsec --direct
+sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs advanced recovery cleanup-ipsec --direct
 ```
 
 `cleanup-ipsec` 会优先走 daemon；daemon 不在线时直接读取本地状态并调用配置的 IPsec/XFRM driver。加 `--direct` 可显式跳过 control socket 探测。它会拒绝清理无法验证为 Higgs-owned 的 link。
@@ -456,7 +457,7 @@ sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs recovery cleanup-ipsec --d
 先查：
 
 ```bash
-higgs sync status --verbose
+higgs advanced sync status --verbose
 higgs debug endpoints
 higgs debug peer <peer-id>
 ```
@@ -469,7 +470,7 @@ higgs debug peer <peer-id>
 
 ```bash
 higgs record list <zone> --filter <key-or-value>
-higgs verify <zone>
+higgs debug verify <zone>
 ```
 
 再看同步状态和 debug log。大对象或 UDP 受限环境下，object pull / UDP chunk fallback 可能是关键路径。

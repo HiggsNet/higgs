@@ -249,7 +249,7 @@ WantedBy=multi-user.target
 
 ```bash
 docs/scripts/public-gossip-node.sh status "$HOME/.higgs-public/node-a"
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs verify node-a.catofes.
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug verify node-a.catofes.
 ```
 
 预期：
@@ -327,7 +327,7 @@ auto-join 授权收敛后，在公网 node-a 上检查：
 
 ```bash
 HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug peer node-b.catofes.
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs sync status --verbose
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs advanced sync status --verbose
 ```
 
 预期：
@@ -345,7 +345,7 @@ docs/scripts/public-gossip-node.sh put-identity \
   node-a-to-nat-b
 
 HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs zone show node-a.catofes.
-HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs verify node-a.catofes.
+HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs debug verify node-a.catofes.
 ```
 
 如果 `observed_status` 很快过期，说明 NAT 映射生命周期较短；缩短 daemon interval，或后续引入 relay / hole punching。
@@ -382,7 +382,7 @@ HIGGS_CONFIG="$HIGGS_BASE/catofes-admin/config.yaml" \
 
 ```bash
 HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug zone node-c.catofes.
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs verify node-c.catofes.
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug verify node-c.catofes.
 ```
 
 预期：

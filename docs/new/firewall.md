@@ -542,7 +542,16 @@ type FirewallReconcileInstance struct {
 
 ## 7. Debug 与诊断
 
-### 7.1 higgs debug firewall
+### 7.1 higgs firewall show
+
+```bash
+higgs firewall
+higgs firewall show [--filter <text>] [--verbose]
+```
+
+这是面向 operator 的日常状态入口。默认按 instance 显示 scope、mode、实际 backend 和 active/pending/error 状态；`--filter/-f` 可按 instance ID、scope、mode 或 backend 过滤，`--verbose/-v` 增加 policy、prefix、service、generation 和 owned-object 计数。它不显示 policy hash 或 inline hook 原始表达式。
+
+### 7.2 higgs debug firewall
 
 ```bash
 higgs debug firewall [--netns <name> | --host] [--json]
@@ -554,7 +563,7 @@ higgs debug firewall [--netns <name> | --host] [--json]
 - `internal/inspect/text/firewall.go`：文本化输出
 - `app/higgs/debug_firewall.go`：CLI 注册
 
-### 7.2 higgs debug preflight
+### 7.3 higgs debug preflight
 
 ```bash
 higgs debug preflight
@@ -562,7 +571,7 @@ higgs debug preflight
 
 输出 backend 探测结果：`nft` 是否可用、`iptables` 是否可用、`CAP_NET_ADMIN` 状态等。
 
-### 7.3 单元测试与 smoke
+### 7.4 单元测试与 smoke
 
 - `pkg/firewall/*_test.go`：planner 与 driver 单元测试。
 - `pkg/firewall/root_smoke_test.go`：需要 root / netns 的 backend smoke 测试。

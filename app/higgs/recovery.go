@@ -21,12 +21,12 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "export-zone",
 				Usage:     "Export a signed zone snapshot to a file or stdout",
-				UsageText: "higgs recovery export-zone <zone> [snapshot.b64]",
+				UsageText: "higgs advanced recovery export-zone <zone> [snapshot.b64]",
 				Description: "Export the active ZoneSnapshot from the local state as base64 JSON.\n" +
 					"This is useful when an offline root/admin node needs to carry signed records to an online peer.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
-						return cli.Exit("usage: higgs recovery export-zone <zone> [snapshot.b64]", 1)
+						return cli.Exit("usage: higgs advanced recovery export-zone <zone> [snapshot.b64]", 1)
 					}
 					return recoveryExportZone(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1))
 				},
@@ -34,15 +34,15 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "import-zone",
 				Usage:     "Import a signed zone snapshot from a file or payload",
-				UsageText: "higgs recovery import-zone [--direct] <snapshot-b64|snapshot-file>",
+				UsageText: "higgs advanced recovery import-zone [--direct] <snapshot-b64|snapshot-file>",
 				Description: "Import a signed ZoneSnapshot into the local state after normal signature and delegation-chain verification.\n" +
-					"This accepts snapshots created by recovery export-zone.",
+					"This accepts snapshots created by advanced recovery export-zone.",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs recovery import-zone <snapshot-b64|snapshot-file>", 1)
+						return cli.Exit("usage: higgs advanced recovery import-zone <snapshot-b64|snapshot-file>", 1)
 					}
 					return recoveryImportZone(cmd.Args().First(), cmd.Bool("direct"))
 				},
@@ -50,7 +50,7 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "pull-zone",
 				Usage:     "Recover a signed zone snapshot from a peer",
-				UsageText: "higgs recovery pull-zone <zone> --from <peer-id>",
+				UsageText: "higgs advanced recovery pull-zone <zone> --from <peer-id>",
 				Description: "Pull a ZoneSnapshot over object-pull TCP and apply it after normal signature and delegation-chain verification.\n" +
 					"This explicit recovery path may restore this node's managed zone, unlike ordinary gossip sync.",
 				Flags: []cli.Flag{
@@ -59,7 +59,7 @@ func cmdRecovery() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs recovery pull-zone <zone> --from <peer-id>", 1)
+						return cli.Exit("usage: higgs advanced recovery pull-zone <zone> --from <peer-id>", 1)
 					}
 					timeout := time.Duration(cmd.Int("timeout")) * time.Second
 					return recoveryPullZone(ctx, zone.ZonePath(cmd.Args().First()), cmd.String("from"), timeout)
@@ -68,7 +68,7 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:        "pull-chain",
 				Usage:       "Recover a zone and its ancestor chain from a peer",
-				UsageText:   "higgs recovery pull-chain <zone> --from <peer-id>",
+				UsageText:   "higgs advanced recovery pull-chain <zone> --from <peer-id>",
 				Description: "Pull root-to-zone snapshots in trust-chain order, so deeper delegated zones can be recovered from an empty bootstrap DB.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "from", Usage: "Peer ID to pull snapshots from", Required: true},
@@ -76,7 +76,7 @@ func cmdRecovery() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs recovery pull-chain <zone> --from <peer-id>", 1)
+						return cli.Exit("usage: higgs advanced recovery pull-chain <zone> --from <peer-id>", 1)
 					}
 					timeout := time.Duration(cmd.Int("timeout")) * time.Second
 					return recoveryPullChain(ctx, zone.ZonePath(cmd.Args().First()), cmd.String("from"), timeout)
@@ -85,7 +85,7 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "cleanup-ipsec",
 				Usage:     "Tear down locally managed IPsec links",
-				UsageText: "higgs recovery cleanup-ipsec [--orphans] [--direct]",
+				UsageText: "higgs advanced recovery cleanup-ipsec [--orphans] [--direct]",
 				Description: "Explicitly terminate Higgs-managed StrongSwan connections and delete their XFRM interfaces.\n" +
 					"This is intended for local recovery after system networking state becomes inconsistent.",
 				Flags: []cli.Flag{
@@ -94,7 +94,7 @@ func cmdRecovery() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs recovery cleanup-ipsec [--orphans]", 1)
+						return cli.Exit("usage: higgs advanced recovery cleanup-ipsec [--orphans]", 1)
 					}
 					return recoveryCleanupIPsec(ctx, cmd.Bool("orphans"), cmd.Bool("direct"))
 				},
@@ -102,7 +102,7 @@ func cmdRecovery() *cli.Command {
 			{
 				Name:      "purge-revoked",
 				Usage:     "Remove revoked zones' local residue (dry-run by default)",
-				UsageText: "higgs recovery purge-revoked [--zone <zone>] [--apply] [--direct]",
+				UsageText: "higgs advanced recovery purge-revoked [--zone <zone>] [--apply] [--direct]",
 				Description: "Hard-delete the local residue of revoked zones: their ZoneState bodies in the DB, " +
 					"plus LinkInstances and SyncPeers entries pointing at them.\n" +
 					"Without --apply this only prints a preview and changes nothing. " +
@@ -117,7 +117,7 @@ func cmdRecovery() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs recovery purge-revoked [--zone <zone>] [--apply]", 1)
+						return cli.Exit("usage: higgs advanced recovery purge-revoked [--zone <zone>] [--apply]", 1)
 					}
 					return recoveryPurgeRevoked(ctx, cmd.Bool("apply"), zone.ZonePath(cmd.String("zone")), cmd.Bool("direct"))
 				},

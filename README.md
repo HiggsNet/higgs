@@ -240,7 +240,7 @@ make revocation-data-plane-container-smoke
 常用状态检查：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync status --verbose
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs advanced sync status --verbose
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug peer node-b
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-b.catofes.
 ```
@@ -248,7 +248,7 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-b.catofes.
 开启结构化 debug log：
 
 ```bash
-HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync once node-b
+HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs advanced sync once node-b
 ```
 
 debug log 默认输出到 stderr，可通过 `log.mode` 复制到文件或 syslog。字段包含消息方向、peer ID、message type、zone/record 数量、字节数、耗时，以及 reject reason（如 `unknown_peer`、`addr_mismatch`、`message_too_large`、`replay`、`quota`、`verify_failed`、`unsupported_wire_version`）。当 reason 为 `quota` 时，会额外输出本次请求消耗、bucket 剩余量、byte/object rate 和 burst，便于判断是大包、对象数还是短时间重试触发限流。
@@ -313,7 +313,7 @@ CATOFES_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate 
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept "$CATOFES_BUNDLE" /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs verify catofes.
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs debug verify catofes.
 ```
 
 之后：
@@ -336,11 +336,11 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes
 ```bash
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs ipam pool create . 10.212.0.0/14 --delegated-to .
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs ipam pool create . 10.212.0.0/18 --delegated-to catofes.
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs recovery export-zone . /tmp/root-zone.b64
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs recovery import-zone /tmp/root-zone.b64
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs advanced recovery export-zone . /tmp/root-zone.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs advanced recovery import-zone /tmp/root-zone.b64
 ```
 
-`recovery import-zone` 会优先通过本机 daemon control socket 导入，输出中的 `via daemon` 表示在线 daemon 已经接收并保存了 snapshot；旧版本命令在 daemon 运行时直接写 DB 可能会被 daemon 的旧内存状态覆盖。
+`advanced recovery import-zone` 会优先通过本机 daemon control socket 导入，输出中的 `via daemon` 表示在线 daemon 已经接收并保存了 snapshot；旧版本命令在 daemon 运行时直接写 DB 可能会被 daemon 的旧内存状态覆盖。
 
 IPAM 排查可以用 `build/higgs ipam mine` 查看本 `managed_zone` 的 assignment 与精确拥有的 pool；用 `build/higgs ipam get <addr-or-prefix> [--json]` 查看某个地址或前缀的 valid pool chain、best pool、assignment、route 和 `ipam_no_pool` / `ipam_unassigned` 等诊断。
 
@@ -381,7 +381,7 @@ NODE_A_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs join accept "$NODE_A_BUNDLE" /tmp/node-a.key.json
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs verify node-a.catofes.
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug verify node-a.catofes.
 ```
 
 node B 的流程相同。创建 B 的配置：
@@ -417,7 +417,7 @@ NODE_B_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs join accept "$NODE_B_BUNDLE" /tmp/node-b.key.json
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs verify node-b.catofes.
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs debug verify node-b.catofes.
 ```
 
 完成后，node B 拥有：
@@ -458,29 +458,29 @@ build/higgs debug db dump
 build/higgs debug db dump catofes.
 ```
 
-这些命令都以只读模式打开数据库，不会干扰正在运行的 `sync serve`、`sync run` 或 `daemon` 实例。
+这些命令都以只读模式打开数据库，不会干扰正在运行的 `advanced sync serve`、`advanced sync run` 或 `daemon` 实例。
 
 ## Gossip 同步
 
 同步相关命令分四种运行方式：
 
-- `sync serve`：只监听 UDP，响应其他 peer 发来的 `PING`、`FETCH_ZONE`、`FETCH_RECORD` 和 `ANNOUNCE`。它是被动服务端，适合手动 smoke 或排查。
-- `sync once <peer-id>`：主动和一个 peer 做一次同步 round。它会先发 `PING`，根据双方 zone digest 差异拉取缺失 zone/record，然后退出。
-- `sync run`：开发/兼容长期运行入口，当前内部委托给 daemon service。它同时执行收包处理、周期性 outbound sync、endpoint publish 和 relay fanout。
+- `advanced sync serve`：只监听 UDP，响应其他 peer 发来的 `PING`、`FETCH_ZONE`、`FETCH_RECORD` 和 `ANNOUNCE`。它是被动服务端，适合手动 smoke 或排查。
+- `advanced sync once <peer-id>`：主动和一个 peer 做一次同步 round。它会先发 `PING`，根据双方 zone digest 差异拉取缺失 zone/record，然后退出。
+- `advanced sync run`：开发/兼容长期运行入口，当前内部委托给 daemon service。它同时执行收包处理、周期性 outbound sync、endpoint publish 和 relay fanout。
 - `daemon`：Phase 3 后推荐的本机长期运行入口。daemon 通过 Unix control socket 接收本机 CLI 写命令，把 `record_put`、sync apply、endpoint publish、manual trigger 和 timer tick 收进同一个串行 writer 边界，避免多个进程同时写 state DB。
 
 启动 node B 的 gossip server：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync serve
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs advanced sync serve
 ```
 
 在 node A 上写入 record，并触发同步到 node B：
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record put node-a.catofes. identity node-a
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync once node-b
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs sync status
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs advanced sync once node-b
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs advanced sync status
 ```
 
 本机双节点测试时，每个节点都需要独立的 `config.yaml` 和 `data_dir`。`bootstrap` 中的 `id` 和 `addr` 必须和对端的 `peer_id`、UDP 监听地址一致。
@@ -492,7 +492,7 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs daemon
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs daemon
 ```
 
-daemon 默认每 60 秒做一次出站摘要比较，也会在本地写入、收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。`--interval 5` 这类短周期更适合 smoke 或交互调试；长期节点通常保持默认即可。`sync run` 保留为兼容入口，行为尽量复用同一套 daemon service。
+daemon 默认每 60 秒做一次出站摘要比较，也会在本地写入、收到并应用远端更新后触发 relay fanout。链式拓扑中，节点会优先把新变化同步给除来源 peer 之外的已知 peer，避免完全等待下一轮周期同步。`--interval 5` 这类短周期更适合 smoke 或交互调试；长期节点通常保持默认即可。`advanced sync run` 是低层手工入口，行为尽量复用同一套 daemon service。
 
 daemon 启动后，`record put` 会优先通过本机 control socket 提交给 daemon，由 daemon 签名、落盘并触发 outbound sync：
 
@@ -570,30 +570,30 @@ done
 HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs record put node-a.catofes. identity node-a >/dev/null
 HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record put node-b.catofes. identity node-b >/dev/null
 
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs sync serve >"$tmp/b.log" 2>&1 &
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs advanced sync serve >"$tmp/b.log" 2>&1 &
 server_pid="$!"
 trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
 sleep 1
 
-HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs sync once node-b >/dev/null
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs advanced sync once node-b >/dev/null
 kill "$server_pid" >/dev/null 2>&1 || true
 wait "$server_pid" >/dev/null 2>&1 || true
 trap - EXIT
 
-HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs sync serve >"$tmp/a.log" 2>&1 &
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs advanced sync serve >"$tmp/a.log" 2>&1 &
 server_pid="$!"
 trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
 sleep 1
 
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs sync once node-a >/dev/null
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs advanced sync once node-a >/dev/null
 kill "$server_pid" >/dev/null 2>&1 || true
 wait "$server_pid" >/dev/null 2>&1 || true
 trap - EXIT
 
 HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs record list node-b.catofes. --filter identity | grep -q 'identity'
 HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record list node-a.catofes. --filter identity | grep -q 'identity'
-HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs verify node-b.catofes. >/dev/null
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs verify node-a.catofes. >/dev/null
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs debug verify node-b.catofes. >/dev/null
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs debug verify node-a.catofes. >/dev/null
 
 echo "two-node sync passed: $tmp"
 ```
@@ -639,21 +639,21 @@ done
 
 HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record put node-b.catofes. identity node-b >/dev/null
 
-HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs sync serve >"$tmp/a.log" 2>&1 &
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs advanced sync serve >"$tmp/a.log" 2>&1 &
 server_pid="$!"
 trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
 sleep 1
 
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs sync once node-a >/dev/null
-HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs sync once node-a >/dev/null
-HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs sync once node-a >/dev/null
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs advanced sync once node-a >/dev/null
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs advanced sync once node-a >/dev/null
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs advanced sync once node-a >/dev/null
 
 kill "$server_pid" >/dev/null 2>&1 || true
 wait "$server_pid" >/dev/null 2>&1 || true
 trap - EXIT
 
 HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs record list node-b.catofes. --filter identity | grep -q 'identity'
-HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs verify node-b.catofes. >/dev/null
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs debug verify node-b.catofes. >/dev/null
 
 echo "three-node propagation passed: $tmp"
 ```
@@ -664,7 +664,7 @@ echo "three-node propagation passed: $tmp"
 
 链式拓扑指节点只知道相邻 peer，例如 `A <-> B <-> C <-> D`。在这种拓扑里有两种收敛路径：
 
-- 周期收敛：每个节点按 `sync run --interval` 周期主动和 bootstrap/已发现 peer 比较摘要。即使没有主动中继，只要图连通，更新也会沿链逐轮传播，但最坏延迟接近链路跳数乘以同步周期。
+- 周期收敛：每个节点按 `advanced sync run --interval` 周期主动和 bootstrap/已发现 peer 比较摘要。即使没有主动中继，只要图连通，更新也会沿链逐轮传播，但最坏延迟接近链路跳数乘以同步周期。
 - 主动 relay fanout：节点应用来自某个 peer 的 `ANNOUNCE` 后，会立即向除来源 peer 外的其他已知 peer 发起轻量同步。这样 A 的更新到达 B 后，B 会马上尝试推给 C，C 再推给 D，不必等待完整周期。
 
 relay fanout 是加速收敛，不是信任捷径。每一跳收到的 snapshot 仍然要通过 root public key、delegation chain 和 record signature 验证；失败的数据不会进入 active state。链式场景可以直接跑：
@@ -721,7 +721,7 @@ gossip:
   reflectors: off
 ```
 
-解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `gossip.reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `gossip.advertise_addrs` 和本机 interface scan 的候选，并在 daemon / `sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
+解析器支持纯文本 IP、HTML/普通文本中嵌入的 IP、JSON、嵌套 JSON 和 JSONP。自动发现会尽量获取一个 IPv4 和一个 IPv6；单个 reflector 请求超过 `gossip.reflector_timeout` 或返回不可解析内容时，会继续尝试后续 reflector。若所有 reflector 都失败，节点会保留 `gossip.advertise_addrs` 和本机 interface scan 的候选，并在 daemon / `advanced sync run` 日志或 `higgs debug endpoints` 中显示 reflector 错误。
 
 ### NAT 后节点与 observed UDP path
 
@@ -756,7 +756,7 @@ daemon 收到已准入 peer 的 UDP 包后，会先完成传输层 replay/quota/
 
 ```sh
 higgs debug peer node-b.catofes.
-higgs sync status --verbose
+higgs advanced sync status --verbose
 ```
 
 输出中的 `observed_addr` / `observed_status` 表示当前维护的短期 UDP 映射。若节点需要被任意 peer 主动拨入，仍需要公网地址、IPv6、端口映射、UDP hole punching，或后续 relay/discovery server 能力。
@@ -769,9 +769,9 @@ higgs sync status --verbose
 | debug log 出现 `unknown_peer` | 对端 `peer_id` 不在本节点 `bootstrap`，也还没有通过已验证 Zone/endpoint record 被发现 | 检查 `bootstrap.id` 是否等于对端配置里的 `peer_id`；首次接入时至少让一侧通过 bootstrap 或已同步 delegation chain 认识对方 |
 | `bind: permission denied`、`operation not permitted`、测试提示 UDP socket 不允许 | 当前运行环境禁止创建 UDP socket，或端口被系统策略拦截 | 换本机普通 shell 运行；确认没有容器/sandbox 网络限制；避免使用低端口；先跑不依赖 UDP 的 `make join-smoke` |
 | NAT 后节点能主动同步但别人拨不进来 | NAT/CGNAT 没有稳定入站端口映射；reflector 只能发现公网 IP，不能保证该地址可被外部主动访问 | 让 NAT 后节点主动连接公网 bootstrap；用 `debug peer` 查看 `observed_addr` 是否 active；需要任意入站访问时配置端口映射、IPv6 或等待后续 relay 能力 |
-| `bind: address already in use` | `listen_addr` 端口被已有 `daemon`、`sync serve`、`sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
+| `bind: address already in use` | `listen_addr` 端口被已有 `daemon`、`advanced sync serve`、`advanced sync run` 或其他进程占用 | 停掉旧进程，或给每个节点分配不同端口并同步更新其他节点的 `bootstrap.addr` |
 | `record version conflict`、`conflict` 或更新没有覆盖 | 同一 `zone/key` 出现相同 version 的不同内容，或本地正好有直接前驱但新 record 的 `PrevHash` 不匹配 | 用 `debug zone <zone>` 查看 active record 和历史；由该 Zone authority 再写入一个更高版本的合法 record，让网络继续 fast-forward 收敛 |
-| `verify_failed` | snapshot 能到达传输层，但 authority、delegation 或 record signature 验证失败 | 确认对端是用正确 bundle `join accept`，没有把 root/admin 私钥数据库复制给普通节点；用 `verify <zone>` 在发送方和接收方分别检查 |
+| `verify_failed` | snapshot 能到达传输层，但 authority、delegation 或 record signature 验证失败 | 确认对端是用正确 bundle `join accept`，没有把 root/admin 私钥数据库复制给普通节点；用 `debug verify <zone>` 在发送方和接收方分别检查 |
 | `message_too_large`、`quota` | 单包超过 datagram 预算，或短时间内同步对象太多 | 公网部署不要依赖调大 UDP 包；确认大 record 能通过 TCP object pull 或 UDP chunk fallback 收敛，必要时降低写入/同步频率或调小单轮对象数量 |
 
 ### Latest Record 与历史窗口
@@ -787,7 +787,7 @@ Record 按 `zone/key` 独立版本化。普通同步采用 `latest signed state 
 排查时常用：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs sync status
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs advanced sync status
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-a.catofes.
 ```
 
@@ -797,7 +797,7 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-a.catofes.
 make phase2-smoke
 ```
 
-该流程会创建独立的 `node-admin`、`zone-catofes-admin`、`node-a` 和 `node-b`，两端都通过 delegation bundle 加入；A/B 分别写入自己的 `identity` record 后轮流 `sync serve`/`sync once`，最后检查双方 `record list`、`sync status` 和 `verify`。
+该流程会创建独立的 `node-admin`、`zone-catofes-admin`、`node-a` 和 `node-b`，两端都通过 delegation bundle 加入；A/B 分别写入自己的 `identity` record 后轮流 `advanced sync serve`/`advanced sync once`，最后检查双方 `record list`、`advanced sync status` 和 `debug verify`。
 
 三节点传播可以直接跑：
 
@@ -813,7 +813,7 @@ make multi-node-smoke
 make chain-relay-smoke
 ```
 
-该流程使用 A-B-C-D 链式 bootstrap，所有节点以 60 秒周期运行 `sync run`。A 写入 `node-a.catofes./identity` 后，B/C 在应用远端更新时会立即向非来源邻居触发同步，验证 D 不需要等待完整轮询周期即可收敛。
+该流程使用 A-B-C-D 链式 bootstrap，所有节点以 60 秒周期运行 `advanced sync run`。A 写入 `node-a.catofes./identity` 后，B/C 在应用远端更新时会立即向非来源邻居触发同步，验证 D 不需要等待完整轮询周期即可收敛。
 
 delegation 撤销传播可以直接跑：
 
@@ -842,18 +842,18 @@ make object-pull-smoke
 
 该 smoke 验证 1200-byte UDP datagram 预算下，大 record 不通过超大 UDP 包传播，而是由 daemon 优先通过 TCP object pull 拉取完整对象后收敛。TCP object pull 默认使用 signed/bootstrap UDP endpoint 的同一个数字端口；如果 TCP 不可达但已准入 peer 的 UDP path 可用，daemon 会用 UDP chunk fallback 补齐完整 Zone snapshot。
 
-排查 MTU / 大包问题时，`higgs sync status --verbose` 和 `higgs debug peer <peer-id>` 会显示当前 datagram 预算、最近 oversized UDP 对象、digest-only announce 次数以及 UDP chunk fallback 计数。大对象优先走未压缩 MessagePack object pull，UDP chunk fallback 只在 object pull 不可达时兜底；通用压缩仅作为后续 object pull 优化候选，不用于默认 UDP 小包。
+排查 MTU / 大包问题时，`higgs advanced sync status --verbose` 和 `higgs debug peer <peer-id>` 会显示当前 datagram 预算、最近 oversized UDP 对象、digest-only announce 次数以及 UDP chunk fallback 计数。大对象优先走未压缩 MessagePack object pull，UDP chunk fallback 只在 object pull 不可达时兜底；通用压缩仅作为后续 object pull 优化候选，不用于默认 UDP 小包。
 
 如果管理节点丢失本地 DB，但网络里仍有 peer 保存过该 Zone 的 signed snapshot，可以显式从 peer 恢复一次：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs recovery pull-zone catofes. --from node-a.catofes.
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs advanced recovery pull-zone catofes. --from node-a.catofes.
 ```
 
 更深层的 delegated zone 可以用 chain 恢复，命令会按 `.` 到目标 Zone 的顺序逐层拉取：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery pull-chain node-b.pek.catofes. --from node-a.catofes.
+HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs advanced recovery pull-chain node-b.pek.catofes. --from node-a.catofes.
 ```
 
 这些命令绕过普通 sync 对本机 `managed_zone` 的保护性跳过逻辑，但仍使用 TCP object pull 获取 `ZoneSnapshot`，并通过现有 signature / delegation-chain 验证后才合并入本地 DB。恢复 `.` 时，如果配置了 `trusted_root_public_key`，拉到的 root authority 必须包含该 trusted key；如果没有配置 trusted root，则 root recovery 不允许改变本地 root authority。远端 snapshot 缺失的本地对象不会被删除，revocation 仍按现有优先级覆盖对应 delegation。
@@ -861,7 +861,7 @@ HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery pull-chain node-
 如果本机 StrongSwan/XFRM 状态出现不一致，可以显式清理当前 Higgs 管理的 IPsec link：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs recovery cleanup-ipsec
+HIGGS_CONFIG=/tmp/higgs-node-b/config.yaml build/higgs advanced recovery cleanup-ipsec
 ```
 
 该命令优先通过 daemon control socket 串行执行；daemon 不在线时才直接操作本地 state DB 和系统 driver。它只清理带有 Higgs `ResourceOwner` 证明、且命名符合 `ipsec-*` / `hgs*` 约束的连接和 interface，避免误删管理员手工管理的 IPsec/XFRM 资源。daemon 在线时，清理后会默认立即触发一次 IPsec reconcile，让 desired link 按当前配置重新收敛；daemon 不在线的 direct recovery 路径则等待下一次 daemon 启动恢复。
@@ -894,17 +894,18 @@ build/higgs zone show <zone> [--filter text] [--verbose]
 build/higgs record list [zone] [--filter text] [--verbose]
 build/higgs record get <zone> <key> [--verbose]
 build/higgs record put <zone> <key> <value> [type]
-build/higgs verify <zone>
+build/higgs firewall [show [--filter text] [--verbose]]
+build/higgs debug verify <zone>
 build/higgs daemon [--interval seconds]
-build/higgs sync status [--verbose]
-build/higgs sync serve
-build/higgs sync once <peer-id>
-build/higgs sync run [--interval seconds]
-build/higgs recovery export-zone <zone> [snapshot.b64]
-build/higgs recovery import-zone <snapshot-b64|snapshot-file>
-build/higgs recovery pull-zone <zone> --from <peer-id>
-build/higgs recovery pull-chain <zone> --from <peer-id>
-build/higgs recovery cleanup-ipsec
+build/higgs advanced sync status [--verbose]
+build/higgs advanced sync serve
+build/higgs advanced sync once <peer-id>
+build/higgs advanced sync run [--interval seconds]
+build/higgs advanced recovery export-zone <zone> [snapshot.b64]
+build/higgs advanced recovery import-zone <snapshot-b64|snapshot-file>
+build/higgs advanced recovery pull-zone <zone> --from <peer-id>
+build/higgs advanced recovery pull-chain <zone> --from <peer-id>
+build/higgs advanced recovery cleanup-ipsec
 build/higgs debug peer <peer-id>
 build/higgs debug zone <zone> [--json] [--history]
 build/higgs debug record <zone> <key> [--history N]

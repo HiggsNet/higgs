@@ -14,6 +14,7 @@ func cmdDebug() *cli.Command {
 		Name:  "debug",
 		Usage: "Diagnostic inspection commands",
 		Commands: []*cli.Command{
+			cmdVerify(),
 			{
 				Name:      "peer",
 				Usage:     "Show diagnostic state for a peer",

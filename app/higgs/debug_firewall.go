@@ -25,13 +25,38 @@ func debugFirewall(_ context.Context, cmd *cli.Command) error {
 }
 
 func debugFirewallWithRuntimeFiltered(rt *Runtime, w io.Writer, netns string, hostOnly, jsonOutput bool) error {
-	response, ok, err := firewallStatusViaControl(rt)
+	view, err := firewallViewWithRuntime(rt, netns, hostOnly)
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	if jsonOutput {
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(view)
+	}
+	return inspecttext.WriteDebugFirewall(w, view)
+}
+
+func showFirewall(filter string, verbose bool) error {
+	rt, err := NewRuntime()
 	if err != nil {
 		return err
+	}
+	view, err := firewallViewWithRuntime(rt, "", false)
+	if err != nil {
+		return err
+	}
+	return inspecttext.WriteFirewall(os.Stdout, view, filter, verbose)
+}
+
+func firewallViewWithRuntime(rt *Runtime, netns string, hostOnly bool) (inspect.FirewallDebugView, error) {
+	response, ok, err := firewallStatusViaControl(rt)
+	if err != nil {
+		return inspect.FirewallDebugView{}, err
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return inspect.FirewallDebugView{}, err
 	}
 	var snapshot *firewallReconcileState
 	if ok && response.FirewallReconcile != nil {
@@ -45,13 +70,7 @@ func debugFirewallWithRuntimeFiltered(rt *Runtime, w io.Writer, netns string, ho
 		instances = rt.Config.Firewall.Instances
 	}
 	instances = filterFirewallDebugInstances(instances, netns, hostOnly)
-	view := buildFirewallDebugView(rt.Config, instances, snapshot)
-	if jsonOutput {
-		encoder := json.NewEncoder(w)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(view)
-	}
-	return inspecttext.WriteDebugFirewall(w, view)
+	return buildFirewallDebugView(rt.Config, instances, snapshot), nil
 }
 
 func filterFirewallDebugInstances(instances []FirewallInstanceConfig, netns string, hostOnly bool) []FirewallInstanceConfig {

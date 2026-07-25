@@ -226,7 +226,7 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 smoke 失败时先看目标属于哪一层：
 
 - `join-smoke` 这类纯本地目标失败，通常优先查 trust chain、bundle、record 写入和本地状态库。
-- gossip smoke 失败，先看本地 UDP/TCP socket 是否被环境禁止，再看各节点日志和 `sync status`。
+- gossip smoke 失败，先看本地 UDP/TCP socket 是否被环境禁止，再看各节点日志和 `advanced sync status`。
 - object pull / chunk fallback 失败，区分 TCP object pull、UDP chunk repair 和外部端口阻断工具是否真的可用。
 - dry-run 目标失败，通常是代码或测试 fixture 回归，不应归因于宿主系统能力。
 - root/container smoke 失败，先看 preflight、容器权限、charon/VICI、BIRD、nftables/iptables 和 netns/XFRM 诊断输出。
@@ -236,8 +236,8 @@ smoke 失败时先看目标属于哪一层：
 
 | 场景 | 证据 |
 |------|------|
-| sync/gossip 不收敛 | 每个节点日志、`sync status --verbose`、`record list`、record history、catalog/object pull 计数。 |
-| daemon 行为异常 | control socket 是否在线、`sync status --verbose` 里的 daemon 状态、daemon 日志和本地 state DB。 |
+| sync/gossip 不收敛 | 每个节点日志、`advanced sync status --verbose`、`record list`、record history、catalog/object pull 计数。 |
+| daemon 行为异常 | control socket 是否在线、`advanced sync status --verbose` 里的 daemon 状态、daemon 日志和本地 state DB。 |
 | IPsec/XFRM 异常 | preflight 输出、`debug links`、`debug health`、`swanctl --list-sas`、`ip xfrm state`、XFRM interface/address/route。 |
 | routing/BIRD 异常 | generated BIRD config、`debug routing`、BIRD control socket、neighbor 和 best route 输出。 |
 | firewall/revocation 异常 | planned rules、实际 nftables/iptables 规则、revocation impacts、peer cache 和 link teardown 日志。 |
