@@ -142,6 +142,78 @@ func TestReconcileSecondaryStandbyRepairsMissingDriverStateWithoutTakeover(t *te
 	}
 }
 
+func TestReconcileConvergedSecondaryTakesOverAfterSAMissing(t *testing.T) {
+	base := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleBoth, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, base)
+	group := LinkGroupSpec{ID: "ipsec-main"}
+	plan, err := PlanTransportLinks(context.TODO(), ns, "node-b.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: base})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	spec := plan.Desired[0]
+	inst := NewLinkInstance(spec, LinkStateUp, base.Add(-time.Minute))
+	inst.InitiatorRole = InitiatorRoleConverged
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          base,
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 ||
+		result.Actions[0].Action != ReconcileActionRepair ||
+		result.Actions[0].Reason != "driver state missing after convergence" {
+		t.Fatalf("expected repair after converged SA disappeared, got %+v", result.Actions)
+	}
+	inst = result.Instances[inst.ID]
+	if inst.InitiatorRole != InitiatorRoleSecondaryStandby {
+		t.Fatalf("role after missing converged SA = %q, want secondary standby", inst.InitiatorRole)
+	}
+
+	// Model the daemon's successful repair transition. The responder waits
+	// through the takeover delay instead of repeating repair indefinitely.
+	inst = MarkLinkApplySuccess(inst, base)
+	inst.ActualState = LinkStateConnecting
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          base.Add(30 * time.Second),
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 ||
+		result.Actions[0].Action != ReconcileActionNoop ||
+		result.Actions[0].Reason != "takeover_delay_active" {
+		t.Fatalf("expected takeover delay after repair, got %+v", result.Actions)
+	}
+
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{inst.ID: inst},
+		SAs:          nil,
+		Now:          base.Add(2 * time.Minute),
+		Roles:        plan.Roles,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+	})
+	if len(result.Actions) != 1 ||
+		result.Actions[0].Action != ReconcileActionCreate ||
+		result.Actions[0].Reason != "secondary_takeover" {
+		t.Fatalf("expected secondary takeover after delay, got %+v", result.Actions)
+	}
+	if result.Actions[0].Spec == nil || result.Actions[0].Spec.InitiatorRole != InitiatorRoleSecondaryTakeover {
+		t.Fatalf("takeover action spec = %+v, want secondary takeover role", result.Actions[0].Spec)
+	}
+}
+
 func TestReconcileSecondaryTakeoverAfterDelay(t *testing.T) {
 	base := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

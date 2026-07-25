@@ -677,6 +677,12 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 			r.add(ReconcileActionNoop, &spec, &inst, "apply backoff active")
 			return
 		}
+		// A secondary records Converged after adopting an SA initiated by its
+		// primary peer. If that SA disappears, repair the responder state once,
+		// then return to standby so the normal takeover delay can eventually
+		// promote this side. Keeping Converged here would select this repair
+		// branch forever and prevent shouldSecondaryTakeover from running.
+		inst.InitiatorRole = InitiatorRoleSecondaryStandby
 		inst.ActualState = LinkStateDegraded
 		inst.LastTransition = now.Unix()
 		r.Instances[id] = inst
