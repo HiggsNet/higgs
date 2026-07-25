@@ -394,9 +394,9 @@ func issueDelegationViaControl(rt *Runtime, request *joinRequest, permissions []
 	return response.JoinBundle, true, nil
 }
 
-func grantAuthorityViaControl(rt *Runtime, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, bool, error) {
+func grantDelegationPermissionsViaControl(rt *Runtime, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
-		Method:      "authority_grant",
+		Method:      "delegate_grant",
 		Zone:        path.String(),
 		Permissions: permissions,
 	})
@@ -556,13 +556,13 @@ func validateControlDelegateIssue(request controlRequest) error {
 	return validateJoinRequest(request.JoinRequest)
 }
 
-func validateControlAuthorityGrant(request controlRequest) error {
+func validateControlDelegateGrant(request controlRequest) error {
 	path := zone.ZonePath(request.Zone)
 	if !path.Valid() {
-		return fmt.Errorf("invalid authority zone: %s", request.Zone)
+		return fmt.Errorf("invalid delegated zone: %s", request.Zone)
 	}
 	if len(request.Permissions) == 0 {
-		return errors.New("authority_grant requires permissions")
+		return errors.New("delegate_grant requires permissions")
 	}
 	for _, permission := range request.Permissions {
 		if _, err := parseAuthorityPermission(string(permission)); err != nil {

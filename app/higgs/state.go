@@ -382,15 +382,6 @@ func persistentSyncPeers(peers map[string]syncPeerState) map[string]syncPeerStat
 	return out
 }
 
-func zoneChain(path zone.ZonePath) []zone.ZonePath {
-	ancestors := path.Ancestors()
-	out := make([]zone.ZonePath, 0, len(ancestors)-1)
-	for i := len(ancestors) - 2; i >= 0; i-- {
-		out = append(out, ancestors[i])
-	}
-	return out
-}
-
 func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.PublicKey) error {
 	if len(trustRoot) == 0 {
 		return nil

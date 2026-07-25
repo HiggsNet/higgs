@@ -58,46 +58,46 @@ func parseAuthorityPermission(raw string) (zone.Permission, error) {
 	}
 }
 
-func grantAuthority(path zone.ZonePath, permissions []zone.Permission, outPath string, direct bool) error {
+func grantDelegationPermissions(path zone.ZonePath, permissions []zone.Permission, outPath string, direct bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
 	rt.DisableControl = direct
-	bundle, controlled, err := grantAuthorityViaControl(rt, path, permissions)
+	bundle, controlled, err := grantDelegationPermissionsViaControl(rt, path, permissions)
 	if err != nil {
 		return err
 	}
 	if controlled {
-		if err := writeAuthorityGrantBundle(bundle, outPath); err != nil {
+		if err := writeDelegationGrantBundle(bundle, outPath); err != nil {
 			return err
 		}
-		fmt.Printf("granted authority permissions for %s via daemon\n", path)
+		fmt.Printf("granted delegated permissions for %s via daemon\n", path)
 		return nil
 	}
 
 	if !direct {
-		logControlFallback("authority_grant")
+		logControlFallback("delegate_grant")
 	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
 	}
-	bundle, err = grantAuthorityInState(rt, state, path, permissions)
+	bundle, err = grantDelegationPermissionsInState(rt, state, path, permissions)
 	if err != nil {
 		return err
 	}
 	if err := rt.SaveState(state); err != nil {
 		return err
 	}
-	if err := writeAuthorityGrantBundle(bundle, outPath); err != nil {
+	if err := writeDelegationGrantBundle(bundle, outPath); err != nil {
 		return err
 	}
-	fmt.Printf("granted authority permissions for %s\n", path)
+	fmt.Printf("granted delegated permissions for %s\n", path)
 	return nil
 }
 
-func writeAuthorityGrantBundle(bundle *joinBundle, outPath string) error {
+func writeDelegationGrantBundle(bundle *joinBundle, outPath string) error {
 	if bundle == nil || outPath == "" {
 		return nil
 	}
@@ -108,12 +108,12 @@ func writeAuthorityGrantBundle(bundle *joinBundle, outPath string) error {
 	return nil
 }
 
-func grantAuthorityInState(rt *Runtime, state *stateFile, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
+func grantDelegationPermissionsInState(rt *Runtime, state *stateFile, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
 	if state == nil || state.Network == nil {
 		return nil, errors.New("state is nil")
 	}
 	if !path.Valid() {
-		return nil, fmt.Errorf("invalid authority zone: %s", path)
+		return nil, fmt.Errorf("invalid delegated zone: %s", path)
 	}
 	if len(permissions) == 0 {
 		return nil, errors.New("at least one permission is required")

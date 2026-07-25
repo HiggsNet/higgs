@@ -104,7 +104,7 @@ Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调�
 
 主要事件类型：
 - `record_put` / `delegate_issue` / `delegate_revoke` — 状态写入
-- `authority_grant` / `recovery_import_zone` / `recovery_purge_revoked` — 权限变更
+- `delegate_grant` / `recovery_import_zone` / `recovery_purge_revoked` — 权限变更
 - `join_accept` — 节点加入；`root_init` 只保留 daemon 侧拒绝入口，用来提示停止 daemon 后执行 direct/recovery 初始化
 - `packet` — 收到 UDP gossip 包
 - `timer_sync` / `timer_endpoint_publish` — 定时 sync 和端点发布

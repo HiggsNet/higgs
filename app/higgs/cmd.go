@@ -16,12 +16,10 @@ func rootCommand() *cli.Command {
 		Usage:       "Higgs zone authority CLI",
 		Description: "A command-line tool for managing Higgs zones, keys, records, and sync.",
 		Commands: []*cli.Command{
-			cmdInit(),
 			cmdRoot(),
 			cmdKeygen(),
 			cmdJoin(),
 			cmdDelegate(),
-			cmdAuthority(),
 			cmdZone(),
 			cmdRecord(),
 			cmdRoute(),
@@ -161,26 +159,6 @@ func cmdVersion() *cli.Command {
 	}
 }
 
-func cmdInit() *cli.Command {
-	return &cli.Command{
-		Name:      "init",
-		Usage:     "Initialize a new local state file",
-		UsageText: "higgs init [ZONE]",
-		Description: "Initialize a new state database with the given managed zone.\n" +
-			"If ZONE is omitted, defaults to 'local.'.",
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			if cmd.Args().Len() > 1 {
-				return cli.Exit("usage: higgs init [ZONE]", 1)
-			}
-			managedZone := zone.ZonePath("local.")
-			if cmd.Args().Len() > 0 {
-				managedZone = zone.ZonePath(cmd.Args().First())
-			}
-			return initState(managedZone)
-		},
-	}
-}
-
 func cmdRoot() *cli.Command {
 	return &cli.Command{
 		Name:  "root",
@@ -279,20 +257,40 @@ func cmdDelegate() *cli.Command {
 			{
 				Name:      "issue",
 				Usage:     "Issue a delegation from a join request",
-				UsageText: "higgs delegate issue [--cap <permissions>] [--direct] <request-b64|request-file> [bundle.b64]",
+				UsageText: "higgs delegate issue [--permissions <permissions>] [--direct] <request-b64|request-file> [bundle.b64]",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "cap", Usage: "Comma-separated permissions for the delegated authority"},
+					&cli.StringFlag{Name: "permissions", Usage: "Comma-separated permissions for the delegated zone"},
 					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
-						return cli.Exit("usage: higgs delegate issue <request-b64|request-file> [bundle.b64]", 1)
+						return cli.Exit("usage: higgs delegate issue [--permissions <permissions>] [--direct] <request-b64|request-file> [bundle.b64]", 1)
 					}
-					permissions, err := parseOptionalAuthorityPermissions(cmd.String("cap"))
+					permissions, err := parseOptionalDelegationPermissions(cmd.String("permissions"))
 					if err != nil {
 						return err
 					}
 					return issueDelegation(cmd.Args().Get(0), cmd.Args().Get(1), permissions, cmd.Bool("direct"))
+				},
+			},
+			{
+				Name:      "grant",
+				Usage:     "Add permissions to an existing delegated zone",
+				UsageText: "higgs delegate grant [--direct] <zone> <permission>[,<permission>...] [bundle.b64]",
+				Description: "Increase the delegated zone authority epoch, add permissions to its authorized keys, " +
+					"and re-sign the parent delegation.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() < 2 || cmd.Args().Len() > 3 {
+						return cli.Exit("usage: higgs delegate grant <zone> <permission>[,<permission>...] [bundle.b64]", 1)
+					}
+					permissions, err := parseAuthorityPermissions([]string{cmd.Args().Get(1)})
+					if err != nil {
+						return err
+					}
+					return grantDelegationPermissions(zone.ZonePath(cmd.Args().Get(0)), permissions, cmd.Args().Get(2), cmd.Bool("direct"))
 				},
 			},
 			{
@@ -317,36 +315,7 @@ func cmdDelegate() *cli.Command {
 	}
 }
 
-func cmdAuthority() *cli.Command {
-	return &cli.Command{
-		Name:  "authority",
-		Usage: "Zone authority management commands",
-		Commands: []*cli.Command{
-			{
-				Name:      "grant",
-				Usage:     "Grant permissions to an existing authority",
-				UsageText: "higgs authority grant [--direct] <zone> <permission>[,<permission>...] [bundle.b64]",
-				Description: "Increase the target authority epoch and add permissions to its authorized keys.\n" +
-					"For non-root zones this must be run by the parent zone admin because the parent delegation is re-signed.",
-				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() < 2 || cmd.Args().Len() > 3 {
-						return cli.Exit("usage: higgs authority grant <zone> <permission>[,<permission>...] [bundle.b64]", 1)
-					}
-					permissions, err := parseAuthorityPermissions([]string{cmd.Args().Get(1)})
-					if err != nil {
-						return err
-					}
-					return grantAuthority(zone.ZonePath(cmd.Args().Get(0)), permissions, cmd.Args().Get(2), cmd.Bool("direct"))
-				},
-			},
-		},
-	}
-}
-
-func parseOptionalAuthorityPermissions(raw string) ([]zone.Permission, error) {
+func parseOptionalDelegationPermissions(raw string) ([]zone.Permission, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}

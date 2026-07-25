@@ -215,9 +215,11 @@ observer-smoke:
 # join-smoke 流程：
 # 1. 创建隔离的 root admin、catofes 管理端和 node-b 数据目录。
 # 2. root admin 初始化 "."，catofes. 生成 join request 并由 root 签发 delegation。
-# 3. catofes. 导入 bundle 成为管理 Zone，再为 node-b.catofes. 签发 leaf delegation。
-# 4. node-b 导入 bundle，写入 identity record，并用 verify 检查本地信任链。
-# 5. 该目标不启动 UDP，只验证离线准入、密钥、bundle 和本地持久化。
+# 3. catofes. 导入 bundle 成为管理 Zone；root 再通过 delegate grant 追加
+#    allocate-ip，catofes. 接受 refresh bundle。
+# 4. catofes. 为 node-b.catofes. 签发 leaf delegation。
+# 5. node-b 导入 bundle，写入 identity record，并用 verify 检查本地信任链。
+# 6. 该目标不启动 UDP，只验证离线准入、权限、密钥、bundle 和本地持久化。
 join-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-join-smoke"; \
@@ -229,8 +231,12 @@ join-smoke: build
 	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root init >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/catofes.key.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue --permissions write,delegate "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	if HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show catofes. | grep -q 'allocate-ip'; then exit 1; fi; \
+	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate grant catofes. allocate-ip "$$tmp/catofes.grant.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.grant.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show catofes. | grep -q 'allocate-ip'; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/node-b.key.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
@@ -473,7 +479,8 @@ phase3-daemon-fallback-smoke: build
 # admin-daemon-smoke 流程：
 # 1. root admin 离线初始化 "."，随后启动 root admin daemon。
 # 2. catofes. 生成 join request，并通过 root admin control socket 签发 bundle。
-# 3. catofes. 导入 bundle 后启动自己的 daemon。
+# 3. root admin 通过 control socket 为 catofes. 追加 allocate-ip，catofes.
+#    接受 refresh bundle 后启动自己的 daemon。
 # 4. node-b 生成 join request，并通过 catofes. control socket 签发 leaf bundle。
 # 5. 通过 catofes. control socket 撤销 node-b，验证 revocation 持久化且 direct delegation 被清理。
 admin-daemon-smoke: build
@@ -488,7 +495,7 @@ admin-daemon-smoke: build
 	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) root pubkey)"; \
 	for node in catofes node-b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
 	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/admin.log" 2>&1 & admin_pid="$$!"; \
-	trap 'status="$$?"; kill "$$admin_pid" "$${catofes_pid:-}" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/admin.log" "$$tmp/catofes.log" "$$tmp/catofes-issue.out" "$$tmp/node-b-issue.out" "$$tmp/revoke.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	trap 'status="$$?"; kill "$$admin_pid" "$${catofes_pid:-}" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/admin.log" "$$tmp/catofes.log" "$$tmp/catofes-issue.out" "$$tmp/catofes-grant.out" "$$tmp/node-b-issue.out" "$$tmp/revoke.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	for i in 1 2 3 4 5; do if [ -S "$$tmp/admin/higgs.sock" ]; then break; fi; sleep 1; done; \
 	[ -S "$$tmp/admin/higgs.sock" ]; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) keygen "$$tmp/catofes.key.json" >/dev/null; \
@@ -496,6 +503,10 @@ admin-daemon-smoke: build
 	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >"$$tmp/catofes-issue.out"; \
 	grep -q 'via daemon' "$$tmp/catofes-issue.out"; \
 	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) delegate grant catofes. allocate-ip "$$tmp/catofes.grant.json" >"$$tmp/catofes-grant.out"; \
+	grep -q 'via daemon' "$$tmp/catofes-grant.out"; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/catofes.grant.json" >/dev/null; \
+	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show catofes. | grep -q 'allocate-ip'; \
 	HIGGS_CONTROL_SOCKET="$$tmp/catofes/higgs.sock" HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	for i in 1 2 3 4 5; do if [ -S "$$tmp/catofes/higgs.sock" ]; then break; fi; sleep 1; done; \
 	[ -S "$$tmp/catofes/higgs.sock" ]; \
@@ -994,7 +1005,7 @@ help:
 	@echo "  bootstrap-join-smoke - Run new-node bootstrap admission smoke test"
 	@echo "  nat-observed-smoke - Run NAT-style verified observed UDP path smoke test"
 	@echo "  nat-daemon-observed-smoke - Run daemon-based NAT observed path smoke test"
-	@echo "  admin-daemon-smoke - Run admin daemon delegation issue/revoke smoke test"
+	@echo "  admin-daemon-smoke - Run admin daemon delegation issue/grant/revoke smoke test"
 	@echo "  delegation-revoke-smoke - Run delegation revocation convergence smoke test"
 	@echo "  object-pull-smoke - Run large-record object-pull over TCP smoke test"
 	@echo "  chunk-fallback-smoke - Run large-record UDP chunk fallback when TCP object pull is unreachable"

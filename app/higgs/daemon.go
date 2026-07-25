@@ -84,7 +84,7 @@ const (
 	daemonEventRecordPut             daemonEventType = "record_put"
 	daemonEventDelegateIssue         daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke        daemonEventType = "delegate_revoke"
-	daemonEventAuthorityGrant        daemonEventType = "authority_grant"
+	daemonEventDelegateGrant         daemonEventType = "delegate_grant"
 	daemonEventRecoveryImportZone    daemonEventType = "recovery_import_zone"
 	daemonEventRecoveryPurgeRevoked  daemonEventType = "recovery_purge_revoked"
 	daemonEventJoinAccept            daemonEventType = "join_accept"
@@ -657,13 +657,13 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Zone: result.Zone, JoinBundle: result.JoinBundle})
-	case "authority_grant":
-		if err := validateControlAuthorityGrant(request); err != nil {
+	case "delegate_grant":
+		if err := validateControlDelegateGrant(request); err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
 		result := d.enqueueEvent(ctx, daemonEvent{
-			Type:        daemonEventAuthorityGrant,
+			Type:        daemonEventDelegateGrant,
 			Zone:        zone.ZonePath(request.Zone),
 			Permissions: request.Permissions,
 		})
@@ -1016,8 +1016,8 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 			return daemonEventResult{Error: err}, false, false
 		}
 		return daemonEventResult{Zone: result.Zone, JoinBundle: result.Bundle}, true, false
-	case daemonEventAuthorityGrant:
-		bundle, err := d.handleAuthorityGrantEvent(event.Zone, event.Permissions)
+	case daemonEventDelegateGrant:
+		bundle, err := d.handleDelegateGrantEvent(event.Zone, event.Permissions)
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
@@ -1174,11 +1174,11 @@ func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissio
 	return result, nil
 }
 
-func (d *DaemonService) handleAuthorityGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
+func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
 	var bundle *joinBundle
 	err := d.runStateStoreWrite(func(state *stateFile) error {
 		var err error
-		bundle, err = grantAuthorityInState(d.Sync.App, state, path, permissions)
+		bundle, err = grantDelegationPermissionsInState(d.Sync.App, state, path, permissions)
 		return err
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/urfave/cli/v3"
 )
 
 func TestRootInitHasAllAuthorityPermissions(t *testing.T) {
@@ -28,7 +29,7 @@ func TestRootInitHasAllAuthorityPermissions(t *testing.T) {
 	}
 }
 
-func TestAuthorityGrantReissuesChildDelegation(t *testing.T) {
+func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 	dir := t.TempDir()
 	adminConfig := filepath.Join(dir, "admin.yaml")
 	catofesConfig := filepath.Join(dir, "catofes.yaml")
@@ -73,8 +74,8 @@ func TestAuthorityGrantReissuesChildDelegation(t *testing.T) {
 		t.Fatalf("catofes authority unexpectedly has allocate-ip before grant")
 	}
 
-	if err := grantAuthority("catofes.", []zone.Permission{zone.PermAllocateIP}, grantBundlePath, false); err != nil {
-		t.Fatalf("grantAuthority(catofes): %v", err)
+	if err := grantDelegationPermissions("catofes.", []zone.Permission{zone.PermAllocateIP}, grantBundlePath, false); err != nil {
+		t.Fatalf("grantDelegationPermissions(catofes): %v", err)
 	}
 	state, err = loadState()
 	if err != nil {
@@ -106,6 +107,42 @@ func TestAuthorityGrantReissuesChildDelegation(t *testing.T) {
 	if childState.Network.Zones["catofes."].Records["local-note"] == nil {
 		t.Fatalf("catofes local record was lost while accepting grant bundle")
 	}
+}
+
+func TestDelegationCommandsOwnPermissionManagement(t *testing.T) {
+	root := rootCommand()
+	if authorityTestCommandByName(root.Commands, "authority") != nil {
+		t.Fatal("root command still exposes authority")
+	}
+	delegate := authorityTestCommandByName(root.Commands, "delegate")
+	if delegate == nil {
+		t.Fatal("root command does not expose delegate")
+	}
+	want := []string{"issue", "grant", "revoke"}
+	if len(delegate.Commands) != len(want) {
+		t.Fatalf("delegate subcommands = %d, want %d", len(delegate.Commands), len(want))
+	}
+	for i, name := range want {
+		if delegate.Commands[i].Name != name {
+			t.Errorf("delegate subcommand %d = %q, want %q", i, delegate.Commands[i].Name, name)
+		}
+	}
+	issue := authorityTestCommandByName(delegate.Commands, "issue")
+	if issue == nil || len(issue.Flags) == 0 {
+		t.Fatal("delegate issue permissions flag is missing")
+	}
+	if names := issue.Flags[0].Names(); len(names) != 1 || names[0] != "permissions" {
+		t.Fatalf("delegate issue first flag names = %#v, want permissions", names)
+	}
+}
+
+func authorityTestCommandByName(commands []*cli.Command, name string) *cli.Command {
+	for _, command := range commands {
+		if command.Name == name {
+			return command
+		}
+	}
+	return nil
 }
 
 func authorityHasPermission(authority *zone.ZoneAuthority, permission zone.Permission) bool {
