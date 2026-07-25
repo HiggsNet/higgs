@@ -35,6 +35,7 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 	want := []string{
 		"netns", "exec", "higgstesth2",
 		"ping", "-6", "-n", "-c", "1",
+		"-W", "0.05",
 		"-I", "fe80::7888:86ec:66e0:2620%hgs431bcb9f",
 		"fe80::b09d:5f83:3e81:d064%hgs431bcb9f",
 	}
@@ -42,8 +43,8 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 		t.Fatalf("command args = %#v, want %#v", runner.args, want)
 	}
 	for _, arg := range runner.args {
-		if arg == "ping6" || arg == "-W" {
-			t.Fatalf("command args include non-portable ping option: %#v", runner.args)
+		if arg == "ping6" {
+			t.Fatalf("command args include non-portable ping binary: %#v", runner.args)
 		}
 	}
 }
@@ -105,12 +106,14 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 		{
 			"netns", "exec", "higgstesth2",
 			"ping", "-6", "-n", "-c", "1",
+			"-W", "0.05",
 			"-I", "fe80::1%hgs0",
 			"fe80::2%hgs0",
 		},
 		{
 			"netns", "exec", "higgstesth2",
 			"ping", "-6", "-n", "-c", "1",
+			"-W", "0.05",
 			"fe80::2%hgs0",
 		},
 	}
@@ -140,9 +143,28 @@ func TestICMProberRunsBurstInOneProcess(t *testing.T) {
 	if result.RTT != 3750*time.Microsecond {
 		t.Fatalf("probe RTT = %s, want 3.75ms", result.RTT)
 	}
-	want := []string{"netns", "exec", "higgstesth2", "ping", "-n", "-c", "3", "-i", "0.2", "192.0.2.2"}
+	want := []string{"netns", "exec", "higgstesth2", "ping", "-n", "-c", "3", "-i", "0.2", "-W", "1", "192.0.2.2"}
 	if !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command args = %#v, want %#v", runner.args, want)
+	}
+}
+
+func TestICMProberUnansweredBurstReportsPacketLoss(t *testing.T) {
+	// With -W the ping process exits on its own with a loss summary instead of
+	// lingering until the context deadline kills it ("signal: killed").
+	runner := &recordingCommandRunner{
+		out: []byte("3 packets transmitted, 0 received, 100% packet loss, time 2040ms\n"),
+		err: errors.New("exit status 1"),
+	}
+	prober := NewICMProber(runner, nil)
+	target := ProbeTarget{InstanceID: "link-1", PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"), State: "up"}
+
+	result := prober.Probe(context.Background(), target, ProbeConfig{Timeout: time.Second, Burst: 3})
+	if result.Success {
+		t.Fatal("probe success = true, want false for an unanswered burst")
+	}
+	if !strings.Contains(result.Error, "100% packet loss") {
+		t.Fatalf("probe error = %q, want ping packet-loss summary", result.Error)
 	}
 }
 

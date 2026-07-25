@@ -92,7 +92,7 @@ func (p *ICMProber) pingBurstExec(ctx context.Context, target ProbeTarget, timeo
 		deadline, cancel := context.WithTimeout(ctx, timeout*time.Duration(burst))
 		defer cancel()
 		start := time.Now()
-		out, err := p.runner.Run(deadline, "ip", pingArgsForCount(target, includeSource, burst))
+		out, err := p.runner.Run(deadline, "ip", pingArgsForCount(target, includeSource, burst, timeout))
 		received, lastRTT := parsePingBurstOutput(out)
 		if received == 0 && err == nil {
 			// Successful ping implementations always report replies, but tolerate
@@ -134,7 +134,7 @@ func parsePingBurstOutput(out []byte) (int, time.Duration) {
 	return len(replies), lastRTT
 }
 
-func pingArgsForCount(target ProbeTarget, includeSource bool, count int) []string {
+func pingArgsForCount(target ProbeTarget, includeSource bool, count int, replyWait time.Duration) []string {
 	if count <= 0 {
 		count = 1
 	}
@@ -149,6 +149,13 @@ func pingArgsForCount(target ProbeTarget, includeSource bool, count int) []strin
 	args = append(args, "-n", "-c", strconv.Itoa(count))
 	if count > 1 {
 		args = append(args, "-i", formatPingBurstInterval(pingBurstInterval))
+	}
+	// Bound the per-reply wait so ping exits on its own before the surrounding
+	// context deadline kills it. Without this an unanswered burst lingers in
+	// iputils' default wait and the process is SIGKILLed, surfacing the
+	// misleading "signal: killed" instead of the packet-loss summary.
+	if replyWait > 0 {
+		args = append(args, "-W", formatPingBurstInterval(replyWait))
 	}
 	if source := pingSourceAddress(target); includeSource && source != "" {
 		args = append(args, "-I", source)
