@@ -24,6 +24,14 @@ func WriteBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 		out.Linef("netns %s", inst.NetNS)
 		out.Linef("  instance_id: %s", dash(inst.InstanceID))
 		out.Linef("  control_socket: %s", dash(inst.ControlSocket))
+		out.LineIf(inst.ConfigPath != "", "  config_path: %s", inst.ConfigPath)
+		out.LineIf(inst.FilterError != "", "  filter_error: %s", inst.FilterError)
+		if inst.FilterDefinitions != "" {
+			out.Linef("  filter_definitions:")
+			for line := range strings.SplitSeq(inst.FilterDefinitions, "\n") {
+				out.Linef("    %s", line)
+			}
+		}
 		out.LineIf(inst.Error != "", "  error: %s", inst.Error)
 		commands := make([]string, 0, len(inst.Raw))
 		for cmd := range inst.Raw {

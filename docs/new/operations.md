@@ -214,9 +214,12 @@ higgs debug revoke-impact node-b.catofes.
 
 ```bash
 higgs debug links
-higgs debug routes
-higgs debug route 10.42.0.0/24
-higgs debug babel
+higgs debug routing routes
+higgs debug routing routes 10.42.0.0/24
+higgs debug routing status
+higgs debug routing bird status
+higgs debug routing bird route
+higgs debug routing ip route
 higgs debug firewall
 higgs debug health
 higgs debug rotate-port
@@ -352,9 +355,13 @@ ip netns exec h2 ip -6 route
 先看 Higgs read model：
 
 ```bash
-higgs debug routes
-higgs debug route 10.42.0.0/24
-higgs debug babel
+higgs debug routing routes
+higgs debug routing routes 10.42.0.0/24
+higgs debug routing status
+higgs debug routing bird interface
+higgs debug routing bird filter
+higgs debug routing bird route
+higgs debug routing ip route --netns higgstesth2
 higgs debug links
 ```
 

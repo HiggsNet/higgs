@@ -459,11 +459,21 @@ higgs route withdraw <zone> <prefix>
 # 诊断
 higgs ipam get <addr-or-prefix>
 higgs ipam mine
-higgs debug routes
-higgs debug babel
-higgs debug bird dump --command "show babel neighbors"
-higgs debug bird dump --command "show route all"
+higgs debug routing status
+higgs debug routing routes
+higgs debug routing routes <prefix>
+higgs debug routing bird status
+higgs debug routing bird interface
+higgs debug routing bird filter
+higgs debug routing bird route
+higgs debug routing ip route
+higgs debug routing reload
 ```
+
+`routing routes` 以 gossip 中的 route announcement 和 IPAM 授权记录为主，并在 daemon 在线时附带
+BIRD RIB 交叉视图；它不是 netns 的内核路由表。`routing bird route` 只查询 BIRD 中由 Babel
+学习到的路由；`routing ip route` 查询 routing instance 所在 netns 的实际内核 FIB，默认同时
+显示 IPv4 和 IPv6，可用 `--netns` 和 `--family` 筛选。
 
 所有写操作在 daemon 运行时通过 control socket 提交，由 daemon 单 writer 落盘。离线/无 daemon 时 CLI 直接写本地 DB，但不应与 daemon 并发运行。
 
@@ -471,7 +481,7 @@ higgs debug bird dump --command "show route all"
 
 优先按以下顺序：
 
-1. assignment / announcement 是否在 `AuthorizedRouteSet`（`higgs debug routes`）。
+1. assignment / announcement 是否在 `AuthorizedRouteSet`（`higgs debug routing routes`）。
 2. tunnel 或 veth 接口是否 up、地址是否正确。
 3. BIRD 邻居是否建立（`show babel neighbors`）。
 4. 内核路由是否安装（`show route all`、`ip route`）。

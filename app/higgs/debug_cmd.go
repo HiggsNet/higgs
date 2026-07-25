@@ -81,60 +81,16 @@ func cmdDebug() *cli.Command {
 				},
 			},
 			{
-				Name:  "babel",
-				Usage: "Show BIRD/Babel routing instance state",
+				Name:        "routing",
+				Usage:       "Inspect and reconcile routing",
+				UsageText:   "higgs debug routing [status | routes [prefix] | bird ... | ip route | reload]",
+				Description: "Run without a subcommand to show routing instance status.",
+				Commands:    debugRoutingCommands(),
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return debugBabel(ctx, cmd)
-				},
-			},
-			{
-				Name:  "bird-dump",
-				Usage: "Dump raw birdc diagnostic output from the daemon",
-				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "netns", Usage: "Only dump the BIRD instance for this netns or instance id"},
-					&cli.StringFlag{Name: "command", Aliases: []string{"c"}, Usage: "Run one birdc command instead of the default diagnostic set"},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return debugBirdDump(ctx, cmd)
-				},
-			},
-			{
-				Name:  "routing-reload",
-				Usage: "Trigger daemon routing reconcile",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return debugRoutingReload(ctx, cmd)
-				},
-			},
-			{
-				Name:  "routing",
-				Usage: "Routing diagnostic commands",
-				Commands: []*cli.Command{
-					{
-						Name:      "reload",
-						Usage:     "Trigger daemon routing reconcile",
-						UsageText: "higgs debug routing reload",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return debugRoutingReload(ctx, cmd)
-						},
-					},
-				},
-			},
-			{
-				Name:  "routes",
-				Usage: "Show authorized route set",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return debugRoutes(ctx, cmd)
-				},
-			},
-			{
-				Name:      "route",
-				Usage:     "Explain a specific route prefix",
-				UsageText: "higgs debug route <prefix>",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs debug route <prefix>", 1)
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs debug routing [status|routes|bird|reload]", 1)
 					}
-					return debugRoute(ctx, cmd)
+					return debugBabel(ctx, cmd)
 				},
 			},
 			{
@@ -252,5 +208,113 @@ func cmdDebug() *cli.Command {
 				},
 			},
 		},
+	}
+}
+
+func debugRoutingCommands() []*cli.Command {
+	return []*cli.Command{
+		{
+			Name:      "status",
+			Usage:     "Show BIRD/Babel routing instance state",
+			UsageText: "higgs debug routing status",
+			Action: func(ctx context.Context, cmd *cli.Command) error {
+				if cmd.Args().Len() != 0 {
+					return cli.Exit("usage: higgs debug routing status", 1)
+				}
+				return debugBabel(ctx, cmd)
+			},
+		},
+		{
+			Name:      "routes",
+			Usage:     "Show announced/authorized routes with a BIRD cross-view",
+			UsageText: "higgs debug routing routes [prefix]",
+			Action: func(ctx context.Context, cmd *cli.Command) error {
+				switch cmd.Args().Len() {
+				case 0:
+					return debugRoutes(ctx, cmd)
+				case 1:
+					return debugRoute(ctx, cmd)
+				default:
+					return cli.Exit("usage: higgs debug routing routes [prefix]", 1)
+				}
+			},
+		},
+		{
+			Name:        "bird",
+			Usage:       "Inspect the live BIRD/Babel RIB and protocol state",
+			UsageText:   "higgs debug routing bird <status|interface|filter|route> [--netns name]",
+			Description: "These commands query the live BIRD control socket; route output is the BIRD RIB, not the kernel FIB.",
+			Commands:    debugRoutingBirdCommands(),
+		},
+		{
+			Name:      "ip",
+			Usage:     "Inspect the kernel network stack in routing namespaces",
+			UsageText: "higgs debug routing ip route [--netns name] [--family ipv4|ipv6|all]",
+			Commands: []*cli.Command{
+				{
+					Name:      "route",
+					Usage:     "Show the kernel FIB in routing namespaces",
+					UsageText: "higgs debug routing ip route [--netns name] [--family ipv4|ipv6|all]",
+					Flags: []cli.Flag{
+						&cli.StringFlag{Name: "netns", Usage: "Only show this netns or routing instance id"},
+						&cli.StringFlag{Name: "family", Value: "all", Usage: "Address family: ipv4, ipv6, or all"},
+					},
+					Action: func(ctx context.Context, cmd *cli.Command) error {
+						if cmd.Args().Len() != 0 {
+							return cli.Exit("usage: "+cmd.UsageText, 1)
+						}
+						return debugRoutingIPRoute(ctx, cmd.String("netns"), cmd.String("family"))
+					},
+				},
+			},
+		},
+		{
+			Name:      "reload",
+			Usage:     "Trigger daemon routing reconcile",
+			UsageText: "higgs debug routing reload",
+			Action: func(ctx context.Context, cmd *cli.Command) error {
+				if cmd.Args().Len() != 0 {
+					return cli.Exit("usage: higgs debug routing reload", 1)
+				}
+				return debugRoutingReload(ctx, cmd)
+			},
+		},
+	}
+}
+
+func debugRoutingBirdCommands() []*cli.Command {
+	type birdCommand struct {
+		name  string
+		usage string
+		view  birdDebugView
+	}
+	specs := []birdCommand{
+		{name: "status", usage: "Show live BIRD status, protocols, and Babel neighbors", view: birdDebugStatus},
+		{name: "interface", usage: "Show interfaces visible to BIRD", view: birdDebugInterface},
+		{name: "filter", usage: "Show active filter symbols and generated filter definitions", view: birdDebugFilter},
+		{name: "route", usage: "Show routes learned by the Babel protocol", view: birdDebugRoute},
+	}
+	commands := make([]*cli.Command, 0, len(specs))
+	for _, spec := range specs {
+		view := spec.view
+		commands = append(commands, &cli.Command{
+			Name:      spec.name,
+			Usage:     spec.usage,
+			UsageText: "higgs debug routing bird " + spec.name + " [--netns name]",
+			Flags:     debugBirdFlags(),
+			Action: func(ctx context.Context, cmd *cli.Command) error {
+				if cmd.Args().Len() != 0 {
+					return cli.Exit("usage: "+cmd.UsageText, 1)
+				}
+				return debugBird(ctx, cmd.String("netns"), view)
+			},
+		})
+	}
+	return commands
+}
+
+func debugBirdFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "netns", Usage: "Only dump the BIRD instance for this netns or instance id"},
 	}
 }

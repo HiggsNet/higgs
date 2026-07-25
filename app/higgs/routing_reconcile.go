@@ -648,17 +648,14 @@ func (d *DaemonService) newBirdClient(socketPath string, routeTables ...string) 
 	return bird.NewClientWithRouteTables(socketPath, 10*time.Second, routeTables)
 }
 
-func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, command string) *inspect.BirdDumpResponse {
+func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName string, view birdDebugView) (*inspect.BirdDumpResponse, error) {
 	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
-		return response
+		return response, nil
 	}
-	customCommand := ""
-	if trimmed := strings.TrimSpace(command); trimmed != "" {
-		command = trimmed
-		customCommand = command
-	} else {
-		command = ""
+	commands, err := birdDebugCommands(view)
+	if err != nil {
+		return nil, err
 	}
 	for _, inst := range d.Sync.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
@@ -671,17 +668,15 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, comma
 			NetNS:         inst.NetNS,
 			InstanceID:    inst.ID,
 			ControlSocket: inst.ControlSocket,
-			Command:       command,
 			Raw:           map[string]string{},
+		}
+		if view == birdDebugFilter {
+			addBirdFilterDefinitions(&item, inst.ConfigFile)
 		}
 		if inst.ControlSocket == "" {
 			item.Error = "control socket is not configured"
 			response.Instances[inst.NetNS] = item
 			continue
-		}
-		commands := defaultBirdDumpCommands(inst.NetNS)
-		if customCommand != "" {
-			commands = []string{customCommand}
 		}
 		client := d.newBirdClient(inst.ControlSocket)
 		for _, cmd := range commands {
@@ -697,21 +692,7 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName, comma
 		}
 		response.Instances[inst.NetNS] = item
 	}
-	return response
-}
-
-func defaultBirdDumpCommands(netnsName string) []string {
-	commands := []string{
-		"show status",
-		"show protocols all",
-		"show route all",
-		"show interfaces",
-		"show babel neighbors",
-	}
-	for _, table := range bird.InternalRouteTableNames(netnsName) {
-		commands = append(commands, fmt.Sprintf("show route table %s all", table))
-	}
-	return commands
+	return response, nil
 }
 
 func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ string, ng *netnsOverlayGroup, netnsCfg netnsConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {

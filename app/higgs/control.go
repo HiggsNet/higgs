@@ -41,7 +41,7 @@ type controlRequest struct {
 	Apply       bool                 `json:"apply,omitempty"`
 	Orphans     bool                 `json:"orphans,omitempty"`
 	NetNS       string               `json:"netns,omitempty"`
-	Command     string               `json:"command,omitempty"`
+	BirdView    string               `json:"bird_view,omitempty"`
 	EndpointACL *endpointACL         `json:"endpoint_acl,omitempty"`
 }
 
@@ -233,9 +233,9 @@ func routingReloadViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
-func birdDumpViaControl(rt *Runtime, netnsName, command string) (*controlResponse, bool, error) {
+func birdDumpViaControl(rt *Runtime, netnsName, view string) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "bird_dump", NetNS: netnsName, Command: command})
+	response, err := sendControlRequest(path, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: view})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}

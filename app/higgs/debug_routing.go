@@ -50,21 +50,30 @@ func debugRoutingReloadWithRuntime(rt *Runtime, w io.Writer) error {
 	return nil
 }
 
-func debugBirdDump(_ context.Context, cmd *cli.Command) error {
+type birdDebugView string
+
+const (
+	birdDebugStatus    birdDebugView = "status"
+	birdDebugInterface birdDebugView = "interface"
+	birdDebugFilter    birdDebugView = "filter"
+	birdDebugRoute     birdDebugView = "route"
+)
+
+func debugBird(_ context.Context, netnsName string, view birdDebugView) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	return debugBirdDumpWithRuntime(rt, cmd.String("netns"), cmd.String("command"), os.Stdout)
+	return debugBirdWithRuntime(rt, netnsName, view, os.Stdout)
 }
 
-func debugBirdDumpWithRuntime(rt *Runtime, netnsName, command string, w io.Writer) error {
-	response, ok, err := birdDumpViaControl(rt, netnsName, command)
+func debugBirdWithRuntime(rt *Runtime, netnsName string, view birdDebugView, w io.Writer) error {
+	response, ok, err := birdDumpViaControl(rt, netnsName, string(view))
 	if err != nil {
 		return err
 	}
 	if !ok {
-		dump, err := birdDumpOffline(rt, netnsName, command)
+		dump, err := birdDumpOffline(rt, netnsName, view)
 		if err != nil {
 			return err
 		}
@@ -73,7 +82,7 @@ func debugBirdDumpWithRuntime(rt *Runtime, netnsName, command string, w io.Write
 	return writeDebugBirdDump(w, response.BirdDump)
 }
 
-func birdDumpOffline(rt *Runtime, netnsName, command string) (*inspect.BirdDumpResponse, error) {
+func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspect.BirdDumpResponse, error) {
 	if rt == nil || rt.Config == nil {
 		return &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}, nil
 	}
@@ -81,12 +90,9 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*inspect.BirdDumpR
 	if err != nil {
 		return nil, err
 	}
-	customCommand := ""
-	if trimmed := strings.TrimSpace(command); trimmed != "" {
-		command = trimmed
-		customCommand = command
-	} else {
-		command = ""
+	commands, err := birdDebugCommands(view)
+	if err != nil {
+		return nil, err
 	}
 	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
 	for _, inst := range rt.Config.Routing.Instances {
@@ -97,26 +103,30 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*inspect.BirdDumpR
 			continue
 		}
 		controlSocket := inst.ControlSocket
+		configPath := inst.ConfigFile
 		if state != nil && state.BirdInstances != nil {
-			if bi := state.BirdInstances[inst.NetNS]; bi != nil && bi.ControlSocket != "" {
-				controlSocket = bi.ControlSocket
+			if bi := state.BirdInstances[inst.NetNS]; bi != nil {
+				if bi.ControlSocket != "" {
+					controlSocket = bi.ControlSocket
+				}
+				if bi.ConfigPath != "" {
+					configPath = bi.ConfigPath
+				}
 			}
 		}
 		item := inspect.BirdDumpInstance{
 			NetNS:         inst.NetNS,
 			InstanceID:    inst.ID,
 			ControlSocket: controlSocket,
-			Command:       command,
 			Raw:           map[string]string{},
+		}
+		if view == birdDebugFilter {
+			addBirdFilterDefinitions(&item, configPath)
 		}
 		if controlSocket == "" {
 			item.Error = "control socket is not configured"
 			response.Instances[inst.NetNS] = item
 			continue
-		}
-		commands := defaultBirdDumpCommands(inst.NetNS)
-		if customCommand != "" {
-			commands = []string{customCommand}
 		}
 		client := bird.NewClient(controlSocket, 10*time.Second)
 		for _, cmd := range commands {
@@ -133,6 +143,62 @@ func birdDumpOffline(rt *Runtime, netnsName, command string) (*inspect.BirdDumpR
 		response.Instances[inst.NetNS] = item
 	}
 	return response, nil
+}
+
+func birdDebugCommands(view birdDebugView) ([]string, error) {
+	switch view {
+	case birdDebugStatus:
+		return []string{"show status", "show protocols all", "show babel neighbors"}, nil
+	case birdDebugInterface:
+		return []string{"show interfaces"}, nil
+	case birdDebugFilter:
+		return []string{"show symbols filter"}, nil
+	case birdDebugRoute:
+		return []string{"show route table all where source = RTS_BABEL all"}, nil
+	default:
+		return nil, fmt.Errorf("unsupported bird debug view %q", view)
+	}
+}
+
+func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string) {
+	if item == nil {
+		return
+	}
+	item.ConfigPath = configPath
+	if configPath == "" {
+		item.FilterError = "config file is not configured"
+		return
+	}
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		item.FilterError = err.Error()
+		return
+	}
+	item.FilterDefinitions = extractBirdFilterDefinitions(string(config))
+}
+
+func extractBirdFilterDefinitions(config string) string {
+	var definitions strings.Builder
+	inFilter := false
+	depth := 0
+	for line := range strings.SplitSeq(config, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inFilter {
+			if !strings.HasPrefix(trimmed, "filter ") || !strings.HasSuffix(trimmed, "{") {
+				continue
+			}
+			inFilter = true
+		}
+		if definitions.Len() > 0 {
+			definitions.WriteByte('\n')
+		}
+		definitions.WriteString(line)
+		depth += strings.Count(line, "{") - strings.Count(line, "}")
+		if inFilter && depth == 0 {
+			inFilter = false
+		}
+	}
+	return strings.TrimSpace(definitions.String())
 }
 
 func writeDebugBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {

@@ -51,7 +51,8 @@ func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
 	out := buf.String()
 
 	for _, want := range []string{
-		"bird_routes: 1 instances",
+		"route_source: gossip_announcements_and_ipam_authorization",
+		"bird_cross_view: 1 instances",
 		"netns higgstesth2",
 		"10.1.0.0/24 selected=true authorized=true import_allowed=true zones=node-b.catofes. protocol=babel1 iface=hgs-node-b metric=96",
 		"10.2.0.0/24 selected=true authorized=false import_allowed=false protocol=babel1 iface=hgs-node-c metric=128",
@@ -93,12 +94,13 @@ func TestWriteRouteDebugShowsPrefixExplanationAndBirdMatch(t *testing.T) {
 	}
 	out := buf.String()
 	for _, want := range []string{
+		"route_source: gossip_announcements_and_ipam_authorization",
 		"prefix: 10.1.0.0/24",
 		"local_export: true",
 		"authorized: true",
 		"announcing_zones: node-b.catofes.",
 		"assignment_assigned_to: node-b.catofes.",
-		"bird_routes: 1",
+		"bird_cross_view: 1",
 		"netns=higgstesth2 instance=main selected=true authorized=true import_allowed=true protocol=babel1 iface=hgs-node-b metric=96",
 	} {
 		if !strings.Contains(out, want) {

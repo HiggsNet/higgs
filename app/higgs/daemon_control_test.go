@@ -156,7 +156,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	}}, appConfig.Netns, appConfig.DataDir)
 
 	client := &fakeBirdClient{raw: map[string]string{
-		"show route all": "Table master4:\n10.0.0.0/24 unicast\n",
+		"show route table all where source = RTS_BABEL all": "Table higgs_higgstesth24:\n10.0.0.0/24 unicast\n",
 	}}
 	service := newDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
@@ -166,16 +166,17 @@ func TestDaemonControlBirdDump(t *testing.T) {
 		return client
 	}
 
-	response := controlRequestViaPipe(t, service, controlRequest{Method: "bird_dump", NetNS: "higgstesth2", Command: "show route all"})
+	response := controlRequestViaPipe(t, service, controlRequest{Method: "bird_dump", NetNS: "higgstesth2", BirdView: "route"})
 	if !response.OK || response.BirdDump == nil {
 		t.Fatalf("bird_dump response = %#v", response)
 	}
 	inst := response.BirdDump.Instances["higgstesth2"]
-	if inst.ControlSocket != "/run/higgs/bird-higgstesth2.ctl" || inst.Raw["show route all"] == "" {
+	command := "show route table all where source = RTS_BABEL all"
+	if inst.ControlSocket != "/run/higgs/bird-higgstesth2.ctl" || inst.Raw[command] == "" {
 		t.Fatalf("bird_dump instance = %#v", inst)
 	}
-	if len(client.rawCommands) != 1 || client.rawCommands[0] != "show route all" {
-		t.Fatalf("raw commands = %#v, want show route all", client.rawCommands)
+	if len(client.rawCommands) != 1 || client.rawCommands[0] != command {
+		t.Fatalf("raw commands = %#v, want %q", client.rawCommands, command)
 	}
 }
 

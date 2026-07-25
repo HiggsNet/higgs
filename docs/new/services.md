@@ -306,7 +306,7 @@ sudo make services-smoke
 | TCP readiness 失败 | 容器未启动或角色地址冲突；确认先 `docker compose up -d`，且基址避开动态池与 gateway |
 | `auto` / `tag:` 解析失败 | `higgs ipam mine` 中同族 assignment 数量不等于 1，或 assignment 已失效 |
 | endpoint ACL apply 报错 | host firewall instance 未启用或不是 `managed` 模式，或 backend 不可用；`higgs firewall endpoint list` 查看现状 |
-| 服务已发布但 mesh 内不可达 | shared 路由是否已 announce（`higgs debug routes` 方向）、host 聚合路由与 Docker connected route 的优先级、回程 static upstream |
+| 服务已发布但 mesh 内不可达 | shared 路由是否已 announce（`higgs debug routing routes` 方向）、host 聚合路由与 Docker connected route 的优先级、回程 static upstream |
 | 修改 `trusted_host_interfaces` 后不生效 | Docker bridge driver option 不能原地更新；停止服务、删除旧 network 后重新 `up` |
 
 ---

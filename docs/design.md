@@ -2,7 +2,7 @@
 
 > **文档状态（2026-07）**
 > Phase 0–4 已落地实现，Phase 5 routing / IPAM / per-netns BIRD 已完成并迁移到 `docs/new/routing.md`。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 已实现 route announcement / IPAM record / `routing/netns`、AuthorizedRouteSet、per-netns BIRD config generator / birdc client / process manager、daemon routing reconcile、veth upstream、`higgs route` / `higgs ipam` 与 `higgs debug babel/routes/route` CLI，并通过 `make routing-dry-run-smoke` 验证。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 已实现 route announcement / IPAM record / `routing/netns`、AuthorizedRouteSet、per-netns BIRD config generator / birdc client / process manager、daemon routing reconcile、veth upstream、`higgs route` / `higgs ipam` 与 `higgs debug routing` CLI，并通过 `make routing-dry-run-smoke` 验证。
 >
 > 本文档保留架构总览与协议背景；routing / IPAM 的具体当前行为、record schema、授权规则、BIRD 运行时与诊断以 `docs/new/routing.md` 为准。旧的 `docs/phase5-route-record-design.md`、`docs/phase6-ipam-design.md`、`docs/phase5-7-per-netns-bird-design.md` 已被合并删除。
 
@@ -985,7 +985,7 @@ type PeerView struct {
 | StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot、root/container daemon-run gossip smoke 已实现 | CLI 进程级 smoke、重启恢复、撤销闭环 | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
 | XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
 | WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
-| 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug babel/routes/route`、BIRD neighbor/route driven rotate cutover gate 已落地；container root smoke、per-peer whitelist、策略路由后续补齐 |
+| 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug routing`、BIRD neighbor/route driven rotate cutover gate 已落地；container root smoke、per-peer whitelist、策略路由后续补齐 |
 | 防火墙 | 🟨 第一版已实现 | `nftables` 优先，`iptables` 兜底 | `pkg/firewall/` 已落地：按 instance/netns 生成 owner-bound filter/NAT plan，host ingress + redirect grace，nft/iptables CLI driver，dry-run/reconcile/debug；root/container smoke 待联合 BIRD 验证 |
 
 ---

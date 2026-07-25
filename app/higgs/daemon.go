@@ -807,11 +807,11 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "bird_dump":
-		if strings.ContainsAny(request.Command, "\r\n") {
-			writeControlResponse(conn, controlError(errors.New("bird_dump command must be a single line")))
+		dump, err := d.birdDumpForControl(ctx, request.NetNS, birdDebugView(request.BirdView))
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
 			return
 		}
-		dump := d.birdDumpForControl(ctx, request.NetNS, request.Command)
 		writeControlResponse(conn, controlResponse{
 			OK:       true,
 			BirdDump: dump,

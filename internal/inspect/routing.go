@@ -14,12 +14,14 @@ type BirdDumpResponse struct {
 }
 
 type BirdDumpInstance struct {
-	NetNS         string            `json:"netns"`
-	InstanceID    string            `json:"instance_id"`
-	ControlSocket string            `json:"control_socket"`
-	Command       string            `json:"command,omitempty"`
-	Raw           map[string]string `json:"raw,omitempty"`
-	Error         string            `json:"error,omitempty"`
+	NetNS             string            `json:"netns"`
+	InstanceID        string            `json:"instance_id"`
+	ControlSocket     string            `json:"control_socket"`
+	ConfigPath        string            `json:"config_path,omitempty"`
+	FilterDefinitions string            `json:"filter_definitions,omitempty"`
+	FilterError       string            `json:"filter_error,omitempty"`
+	Raw               map[string]string `json:"raw,omitempty"`
+	Error             string            `json:"error,omitempty"`
 }
 
 type BabelDebugView struct {

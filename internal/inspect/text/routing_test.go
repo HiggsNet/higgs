@@ -10,9 +10,11 @@ import (
 func TestWriteBirdDump(t *testing.T) {
 	dump := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{
 		"z": {
-			NetNS:         "z",
-			InstanceID:    "main",
-			ControlSocket: "/run/bird.ctl",
+			NetNS:             "z",
+			InstanceID:        "main",
+			ControlSocket:     "/run/bird.ctl",
+			ConfigPath:        "/run/bird.conf",
+			FilterDefinitions: "filter higgs_import_z {\n    reject;\n}",
 			Raw: map[string]string{
 				"show route": "10.0.0.0/24 unicast\n",
 			},
@@ -27,6 +29,9 @@ func TestWriteBirdDump(t *testing.T) {
 		"netns z",
 		"instance_id: main",
 		"control_socket: /run/bird.ctl",
+		"config_path: /run/bird.conf",
+		"filter_definitions:",
+		"filter higgs_import_z",
 		"command: show route",
 		"10.0.0.0/24 unicast",
 	} {

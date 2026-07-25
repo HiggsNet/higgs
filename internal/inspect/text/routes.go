@@ -15,6 +15,7 @@ func WriteRoutesDebug(w io.Writer, dump *inspecthttp.RoutesResponse) error {
 		dump = &inspecthttp.RoutesResponse{}
 	}
 	out := newLineWriter(w)
+	out.Linef("route_source: gossip_announcements_and_ipam_authorization")
 	out.Linef("local_zone: %s", dump.LocalZone)
 	out.Linef("export_prefixes: %d", len(dump.ExportSet))
 	for _, p := range dump.ExportSet {
@@ -36,7 +37,7 @@ func WriteRoutesDebug(w io.Writer, dump *inspecthttp.RoutesResponse) error {
 	for _, e := range dump.Errors {
 		out.Linef("  zone=%s prefix=%s code=%s detail=%s", e.Zone, dash(e.Prefix), e.Code, e.Detail)
 	}
-	out.Linef("bird_routes: %d instances", len(dump.BIRD))
+	out.Linef("bird_cross_view: %d instances", len(dump.BIRD))
 	for _, inst := range dump.BIRD {
 		out.Linef("netns %s", inst.NetNS)
 		out.Linef("  instance_id: %s", dash(inst.InstanceID))
@@ -65,6 +66,7 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 	}
 	prefixStr := prefix.String()
 	out := newLineWriter(w)
+	out.Linef("route_source: gossip_announcements_and_ipam_authorization")
 	out.Linef("prefix: %s", prefixStr)
 
 	localExport := slices.Contains(dump.ExportSet, prefixStr)
@@ -122,7 +124,7 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 		out.Linef("  zone=%s code=%s detail=%s", e.Zone, e.Code, e.Detail)
 	}
 	matches := BirdRoutesMatchingPrefix(dump, prefixStr)
-	out.Linef("bird_routes: %d", len(matches))
+	out.Linef("bird_cross_view: %d", len(matches))
 	for _, match := range matches {
 		out.Printf("  netns=%s instance=%s selected=%t authorized=%t import_allowed=%t",
 			match.NetNS, dash(match.InstanceID), match.Route.Selected, match.Route.Authorized, match.Route.ImportAllowed)
