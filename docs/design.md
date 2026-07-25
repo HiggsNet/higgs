@@ -1,10 +1,9 @@
 # Higgs Mesh VPN 控制平面设计
 
 > **文档状态（2026-07）**
-> Phase 0–4 已落地实现，Phase 5 routing / IPAM / per-netns BIRD 已完成并迁移到 `docs/new/routing.md`。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 已实现 route announcement / IPAM record / `routing/netns`、AuthorizedRouteSet、per-netns BIRD config generator / birdc client / process manager、daemon routing reconcile、veth upstream、`higgs route` / `higgs route ipam` 与 `higgs debug routing` CLI，并通过 `make routing-dry-run-smoke` 验证。
+> Phase 0–6 已全部落地：可信状态机与 gossip 同步、daemon 单 writer、StrongSwan/XFRM 建链（含端口 rotate、bidirectional takeover、双栈双链路）、per-netns BIRD/Babel 路由、事件驱动 daemon、防火墙、链路健康、撤销清理和 Observer MVP。Phase 7 的异构 transport 模型（7.1）、gossip chunk repair（7.3）、daemon 生产化（7.10）、稳态冗余优化（7.13–7.15）和 firewall backend-native hooks（7.16）已完成；Phase 8 应用层服务（`higgs-services`）与 Phase 9 Observer Web UI 重构已验收。各 Phase 完成情况见 `../todo.md`；剩余候选为 7.4 WireGuard 底座、7.5 GRE/VXLAN、7.6 SRv6、7.7/7.8 discovery/relay、7.9 admission 管理面、7.11 可观测性和 7.12 策略路由。
 >
-> 本文档保留架构总览与协议背景；routing / IPAM 的具体当前行为、record schema、授权规则、BIRD 运行时与诊断以 `docs/new/routing.md` 为准。旧的 `docs/phase5-route-record-design.md`、`docs/phase6-ipam-design.md`、`docs/phase5-7-per-netns-bird-design.md` 已被合并删除。
+> 本文档保留架构总览与协议背景；各模块的具体当前行为、record schema、配置字段和诊断以 `docs/new/` 下的模块文档（gossip / daemon / transport-ipsec / routing / firewall / health / observer / config / operations）为准。旧的 `docs/phase5-route-record-design.md`、`docs/phase6-ipam-design.md`、`docs/phase5-7-per-netns-bird-design.md` 已被合并删除。
 
 ## 原始需求摘要
 
@@ -42,8 +41,8 @@
 | 方向 | 决策 | 说明 |
 |------|------|------|
 | 配置同步机制 | **DNS 式层级作用域 (Zone) + Signed Merkle DAG + Gossip** | 整个系统的基石 |
-| 第一阶段传输 | **StrongSwan/IKEv2 + XFRM interface + BIRD Babel** | 动态路由、多 peer、namespace 和撤销清理作为主线；Phase 5 默认 BIRD 跑 Babel protocol；WireGuard 后移为可选轻量传输驱动 |
-| 跳频/多线路 | Phase 6 | 高级对抗/优化特性，待控制平面稳定后再做 |
+| 第一阶段传输 | **StrongSwan/IKEv2 + XFRM interface + BIRD Babel** | 动态路由、多 peer、namespace 和撤销清理作为主线；BIRD 跑 Babel protocol；WireGuard 后移为可选轻量传输驱动（7.4 候选） |
+| 跳频/多线路 | 低频端口 rotate 已实现（staged generation）；高频/对抗性 port hopping 留作远期候选 | 高级对抗/优化特性，待控制平面稳定后再做 |
 | 系统服务交互 | `vici`（StrongSwan）/ `netlink`（XFRM/路由/WG）/ `birdc`（BIRD）/ `exec`（兜底） | 按组件分层 |
 
 ### 1.1.1 文档分工
@@ -68,21 +67,22 @@ gossip 维护时尤其要避免三种混淆：
 │             app/higgs/  (CLI / daemon 入口)       │
 │  init · keygen · join · delegate · record        │
 │  verify · daemon · sync · debug · db             │
+│  app/higgs-services/  (Phase 8 应用层服务)        │
 ├──────────────┬───────────────┬───────────────────┤
 │  pkg/core/   │ pkg/transport/│  pkg/routing/     │
 │              │   drivers     │    adapters        │
 ├──────────────┼───────────────┼───────────────────┤
-│ ✅ identity  │ ✅ ipsec      │ 🟨 bird           │
-│ ✅ gossip    │   (Phase 4)   │   (Phase 5)        │
-│ ✅ zone      │               │                   │
-│ 🔲 merkle   │               │                   │
-│ ✅ crypto    │               │                   │
+│ ✅ identity  │ ✅ ipsec      │ ✅ bird           │
+│ ✅ gossip    │ 🔲 wireguard  │                   │
+│ ✅ zone      │               │ ✅ pkg/firewall   │
+│ 🔲 merkle   │               │ ✅ pkg/health     │
+│ ✅ crypto    │               │ ✅ internal/observer
 ├──────────────┴───────────────┴───────────────────┤
-│           overlay (Phase 6 规划)                  │
-│       vxlan (🔲)    seg6 (🔲)                    │
+│        overlay 封装（远期可选 7.5 / 7.6）          │
+│       vxlan (🔲)    seg6/srv6 (🔲)               │
 └──────────────────────────────────────────────────┘
 
-✅ = 已实现   🟨 = 部分实现/系统闭环扩展中   🔲 = 已建目录/存根，待实现
+✅ = 已实现   🔲 = 已建目录/存根，待实现
 ```
 
 ---
@@ -382,7 +382,7 @@ ipsec_address_source_order:
 - `previous`：端口轮换 grace 窗口内可回退的旧端口。
 - `range`：daemon 可在该范围内选择端口；也可配置固定端口。
 
-Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。这里需要区分两层能力：公告/planner 层允许远端优先尝试 current，并在 current 失败/backoff 时于 grace 内回退 previous；但 `previous` 不代表本机 StrongSwan 单实例已经同时监听新旧两组入口端口。系统层 rotate 已进入 staged 数据面状态机：daemon/reconcile 会加载独立 staged CHILD_SA/XFRM interface，观测 established 后进入双 running 保留窗口。高频/对抗性 port hopping、DNAT/redirect grace 和复杂多实例 listener 策略留到 Phase 6/7。
+Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/current/previous grace 的规划与 dry-run。`PlanPortRecord` 负责把本地策略、上一代公告和 grace window 转成待签名的 `ipsec/ports` payload；peer 侧继续通过 `ContactPoint` 组合当前地址候选和未过期端口候选。这里需要区分两层能力：公告/planner 层允许远端优先尝试 current，并在 current 失败/backoff 时于 grace 内回退 previous；但 `previous` 不代表本机 StrongSwan 单实例已经同时监听新旧两组入口端口。系统层 rotate 已进入 staged 数据面状态机：daemon/reconcile 会加载独立 staged CHILD_SA/XFRM interface，观测 established 后进入双 running 保留窗口。高频/对抗性 port hopping、DNAT/redirect grace 和复杂多实例 listener 策略留作远期候选，当前不在执行队列。
 
 平滑 rotate 的 Phase 4.4 目标是把 current/previous grace 变成系统可执行的 staged transition，而不只是远端选择候选端口。这里的 staged 可以按“预备/影子链路”理解：先在旧链路旁边搭一条新 generation 的候选 IPsec/XFRM 链路，确认新链路真的 established 后，再决定保留双 running、切换或回滚；它不是第三种端口，也不是立即替换旧链路。Phase 4.4 的早期 root/container 验证先跑通了 **bounded break-before-make**：旧 SA/connection 可被显式清理后再建立新 connection，证明 deadline/backoff/rollback 和 VICI/XFRM 观测闭环可用。后续 4.4.x 已把主线推进为 staged generation：新 generation 使用独立 `TransportID`、XFRM `if_id` 和 interface，`prepare_rotate` 不再要求先拆旧 SA。
 
@@ -390,7 +390,7 @@ Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/c
 
 1. **入口端口公告层**：`ipsec/ports.current.generation` 表示远端应优先尝试的新入口端口；`previous[].valid_until` 只表示远端还能尝试旧入口端口，不保证本机 StrongSwan 单实例已经同时监听 old/current。真正的 inbound 入口无断切换仍需要后续 DNAT/redirect grace 或多 listener 能力。
 2. **XFRM 数据面预备层**：reconcile 发现远端 generation 变化后，派生 staged connection/CHILD_SA/interface，也就是“先并排试建的新链路”。primary/outbound 或 secondary-takeover owner 会主动建立 staged generation；`inbound` / `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
-3. **双 running 保留层**：下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`。旧 generation 默认按 `overlays[].reconcile.rotate_retention` 保留 1h，给 Babel/route manager 后续 metric 收敛和回滚使用；保留窗口内 secondary-standby 不会因 takeover delay 到期而抢拨。Phase 5 可通过 per-instance `RotateCutoverReady` 输入把 cutover 继续压住，直到 Babel metric、邻居和路由收敛后再允许清旧 generation。
+3. **双 running 保留层**：下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`。旧 generation 默认按 `overlays[].reconcile.rotate_retention` 保留 1h，给 Babel/route manager 后续 metric 收敛和回滚使用；保留窗口内 secondary-standby 不会因 takeover delay 到期而抢拨。routing/health reconcile 已接入 per-instance `RotateCutoverReady` 门闩：BIRD staged interface 的 Babel 邻居与 selected route 未收敛时，即使 retention 到期也继续压住 cutover，收敛后才允许清旧 generation。
 4. **回滚和清理层**：staged SA 在 prepare deadline 前未建立则 `rollback_rotate`，只清 staged artifacts、保留旧 generation 并进入 backoff；retention 到期且 route manager 已允许 cutover，或旧 SA 已不存在且 staged SA 已 established，则 `commit_rotate` promote staged generation 并清理旧 connection/interface。
 
 endpoint 改变由外层 reconcile 先归类：如果 ContactPoint 地址/DNS 解析结果变化但 port generation 不变，它是普通 desired spec 变化，走 `update` / `repair`，不进入 rotate 子状态机；如果 endpoint 改变同时伴随 `ipsec/ports.current.generation` 改变，则新的 endpoint 会进入 staged spec，rotate 子状态机用这条候选新链路测试新地址/端口，旧链路在 testing/retention 窗口内保持可用。
@@ -492,7 +492,7 @@ overlays:
 
 ##### 双栈 path mode
 
-- `family-redundant`：每个地址族最多选择一条 ContactPoint。当前实现只取排序后的第一个 ContactPoint 建立一条 StrongSwan link；完整实现见 2.4.4.1。
+- `family-redundant`：每个地址族生成独立 `TransportLinkSpec`（`path_key=family:ipv4` / `family:ipv6`），两个双栈节点之间可同时存在一条 IPv4 link 和一条 IPv6 link，实现地址族级冗余。实现细节见 2.4.4.1。
 - `exhaustive`：尽量连接所有允许来源和端口组合，主要用于调试或特殊高可用场景。
 - 不使用语义模糊的 `single-best` 作为第一版名称；如果后续需要单条路径，可增加 `preferred-only`，并把排序规则写清楚。
 
@@ -503,33 +503,28 @@ overlays:
 - 公网节点主动拨入 NAT 后节点需要 IPv6、静态端口映射、已验证 observed external port、打洞或 relay；不能仅凭 `behind_nat` hint 假装可达。
 - 两端都在 NAT 后时，若无可验证公网 ContactPoint，应进入 `degraded`，debug 输出明确不可达原因。
 
-#### 2.4.4.1 IPv4/IPv6 双链路设计（预留）
+#### 2.4.4.1 IPv4/IPv6 双链路设计
 
-`family-redundant` 的设计目标是让两个双栈节点之间同时存在一条 IPv4 link 和一条 IPv6 link，实现地址族级冗余。当前代码只生成一个 `TransportLinkSpec` 并取首个 ContactPoint，因此该目标尚未实现。
-
-实现双链路需要：
+`family-redundant` 的设计目标是让两个双栈节点之间同时存在一条 IPv4 link 和一条 IPv6 link，实现地址族级冗余。该目标已实现：
 
 1. **每个 peer 每个地址族生成独立 `TransportLinkSpec`**
-   - `TransportLinkSpec.TransportID` 必须包含地址族或 link index，例如 `StableTransportID(local, peer, overlayID, family)`。
-   - 每个 spec 拥有独立的 XFRM `if_id` 和 interface name，例如 `hgs<hash_v4>` 和 `hgs<hash_v6>`。
+   - planner 按 `path_key`（`family:ipv4` / `family:ipv6`）拆分 desired spec，`LinkID` 派生输入包含 `path_key`，因此两个地址族获得不同的 `LinkID`。
+   - 每个 spec 拥有独立的 XFRM `if_id` 和 interface name（`hgs<8hex>`）。
 
 2. **独立 reconcile**
    - 每个 link 有独立的 `LinkInstance`、generation、rotate phase 和 takeover 状态。
-   - `ReconcileLinkInstances` 按 `TransportID` 区分 desired/current，而不是按 peer。
+   - `ReconcileLinkInstances` 按 `TransportID` 区分 desired/current，而不是按 peer；旧的单链路 `TransportID` 作为 legacy ID 兼容识别和迁移。
 
-3. **BIRD / 路由层支持多路径**
-   - BIRD Babel 在多个 `hgs*` interface 上发现同一 peer 的多个邻居。
-   - 需要 ECMP 或 metric-based preference；rotate cutover 门闩需要 per-link。
+3. **BIRD / 路由层多路径**
+   - per-netns BIRD 通过 `interface_pattern`（如 `hgs*`）自动发现同一 peer 的多个 XFRM interface，Babel 在多条链路上分别发现邻居并做 metric 选择。
+   - rotate cutover 门闩（`RotateCutoverReady`）按 link 独立。
 
 4. **防火墙规则覆盖多个 interface**
    - host ingress / redirect grace 继续匹配 interface pattern（如 `hgs*`）。
    - 每个 link 的 XFRM interface 都纳入 overlay firewall 的 forward/input 规则。
 
 5. **端口 rotate 独立进行**
-   - IPv4 和 IPv6 可以使用同一组 ports record，也可以未来扩展为 per-family ports。
-   - staged generation、rotate retention、takeover 都按 link 独立。
-
-该设计保留 `max_links_per_peer` 字段的语义，但当前先按单链路实现；双链路作为后续增强，不阻塞 role-only 模型。
+   - IPv4 和 IPv6 使用同一组 ports record；staged generation、rotate retention、takeover 都按 link 独立。
 
 #### 2.4.5 远端公告到本机 reconcile 的运行流程
 
@@ -551,7 +546,7 @@ gossip announce hint / catalog summary diff
 
 如果远端记录从“缺失/不匹配”变成“完整且匹配本地 MeshPolicy”，planner 会输出新的 `TransportLinkSpec`。reconciler 随后根据本地是否已有 `LinkInstance`、driver 是否已经能从 `ListSAs` 看到匹配 SA、desired spec hash 是否变化、是否处于 apply backoff，决定 `create`、`adopt`、`update`、`repair` 或 `noop`。daemon event drain 期间多次 state change 会合并为一次 IPsec `ListSAs` + reconcile/apply，所以同一轮收到 profile/address/port/key 多条 record 时不会对同一个 peer/group 重复加载 connection/interface。
 
-默认 `ipsec.driver` 为 `strongswan`，但没有本地 `overlays:` link group 时 daemon 不会初始化 VICI/XFRM driver，也不会发布 `ipsec/*` records；只跑 gossip 的节点仍可无特权启动。启用 `provider: strongswan` 的 link group 后，daemon 会创建真实 `GoviciClient`、通过 VICI 控制 StrongSwan，并使用 `SystemXFRMDriver` 管理 XFRM/netns；`ipsec.vici_socket` 可覆盖 charon VICI socket 路径。daemon 还会订阅 VICI `child-updown` / `ike-updown` 事件，但事件只标记 IPsec dirty 并进入同一套 reconcile，不直接创建或删除资源。非 root 开发/CI 可显式设置 `ipsec.driver: dry-run` 来验证 desired-state、action 和 debug 输出。root/container smoke 已覆盖两个 daemon service 在 `Run` 循环中自动发布 `ipsec/*` records、经 UDP gossip 同步后触发真实 StrongSwan/VICI + XFRM bring-up，并完成 tunnel ping；daemon reconcile 级 smoke 还覆盖启动恢复观测现有 SA、唯一 SA 断言、revocation teardown、VICI SA 消失、XFRM interface 删除和 tunnel ping 失败。外部 `build/higgs daemon` 双进程验证和 gossip revocation 传播仍作为后续 hardening。
+默认 `ipsec.driver` 为 `strongswan`，但没有本地 `overlays:` link group 时 daemon 不会初始化 VICI/XFRM driver，也不会发布 `ipsec/*` records；只跑 gossip 的节点仍可无特权启动。启用 `provider: strongswan` 的 link group 后，daemon 会创建真实 `GoviciClient`、通过 VICI 控制 StrongSwan，并使用 `SystemXFRMDriver` 管理 XFRM/netns；`ipsec.vici_socket` 可覆盖 charon VICI socket 路径。daemon 还会订阅 VICI `child-updown` / `ike-updown` 事件，但事件只标记 IPsec dirty 并进入同一套 reconcile，不直接创建或删除资源。非 root 开发/CI 可显式设置 `ipsec.driver: dry-run` 来验证 desired-state、action 和 debug 输出。root/container smoke 已覆盖两个 daemon service 在 `Run` 循环中自动发布 `ipsec/*` records、经 UDP gossip 同步后触发真实 StrongSwan/VICI + XFRM bring-up，并完成 tunnel ping；daemon reconcile 级 smoke 还覆盖启动恢复观测现有 SA、唯一 SA 断言、revocation teardown、VICI SA 消失、XFRM interface 删除和 tunnel ping 失败。gossip revocation 传播与撤销后的数据面清理已由 `make delegation-revoke-smoke` 和 `make revocation-data-plane-smoke` / `make revocation-data-plane-container-smoke` 验证。
 
 #### 2.4.6 LinkPlanner 输出
 
@@ -651,7 +646,7 @@ reconcile 摘要会持久化最近 desired `TransportLinkSpec` 快照和 driver 
 
 `LinkInstance.Owner` 是 daemon 自动清理资源的归属边界。新建实例会保存 `manager=higgs`、group id、instance id、transport id 和派生 owner token；reconcile 对“不再 desired”的旧实例只在 owner 字段与实例字段匹配、transport id 使用 `ipsec-*`、interface 使用 `hgs*` 命名时生成 teardown。apply 层对只有 persisted instance、没有 desired spec 的 teardown 再做一次同样校验，避免 daemon 误删管理员手工创建的 StrongSwan connection 或 XFRM interface。旧状态没有 token 时仍可通过 manager/group/instance/transport/name 校验迁移，带 token 的新状态会额外校验 token。
 
-StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对应一条 IKE connection 和一个 CHILD_SA，CHILD_SA 使用稳定 XFRM `if_id_in` / `if_id_out`，traffic selector 保持宽泛（IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`）。当 ContactPoint 使用自定义 NAT-T advertised/observed 端口时，StrongSwan 连接配置把该 NAT-T 端口写入 `remote_port`，并设置 `local_port=4500`、`encap=yes`，使初始 IKE 包走 NAT-T socket/non-ESP marker 路径；固定 500/4500 场景仍兼容。`load-conn` 调用会输出结构化 debug 日志，并自动脱敏 `pubkeys`/`privkey`/`data` 等敏感字段。Phase 4 只证明 peer-to-peer tunnel link 可用；多前缀授权、route filter 和 Babel import/export 留给 Phase 5。
+StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对应一条 IKE connection 和一个 CHILD_SA，CHILD_SA 使用稳定 XFRM `if_id_in` / `if_id_out`，traffic selector 保持宽泛（IPv4 tunnel link 使用 `0.0.0.0/0`，IPv6 tunnel link 使用 `::/0`）。当 ContactPoint 使用自定义 NAT-T advertised/observed 端口时，StrongSwan 连接配置把该 NAT-T 端口写入 `remote_port`，并设置 `local_port=4500`、`encap=yes`，使初始 IKE 包走 NAT-T socket/non-ESP marker 路径；固定 500/4500 场景仍兼容。`load-conn` 调用会输出结构化 debug 日志，并自动脱敏 `pubkeys`/`privkey`/`data` 等敏感字段。多前缀授权、route filter 和 Babel import/export 已在 per-netns BIRD 路由层实现，见 `docs/new/routing.md`。
 
 撤销或删除 link 时使用 `TeardownTransportLink` 的可审计顺序：先 terminate IKE_SA/CHILD_SA，再 unload StrongSwan connection，最后删除通过 `LinkInstance.Owner` 校验的 Higgs 管理 XFRM interface。daemon 在 teardown 成功后删除本地持久化 `LinkInstance`，让后续 state-change 或 restart reconcile 看到一个干净的 no-desired/no-instance 状态，而不是重复执行同一个 teardown。
 
@@ -670,7 +665,7 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 
 例如 `node-a.catofes.` 与 `node-b.catofes.` 都是 `both` 时，`node-a.catofes.` 字典序更小，所以 A 是 primary；B 是 secondary-standby。A 主动拨 B，B 只准备被动 responder。若 A 长时间无法建立 IKE_SA/CHILD_SA，B 才能按下面的 takeover 规则临时接管主动拨号，避免稳定排序把链路永久卡死在单侧不可达、单侧防火墙或单侧 NAT 映射异常上。
 
-**接管不引入新 gossip record：** 4.5 不新增 signed health record。secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。Phase 6/7 再考虑低频 signed/runtime health hint。
+**接管不引入新 gossip record：** 4.5 不新增 signed health record。secondary 只依据本机 `ListSAs`、本地 `LinkInstance` 超时、最近失败和 active state 计算接管。本机 runtime health 观测已由 `pkg/health` 提供（用于 rotate cutover 门闩等），signed health record 仍未引入。
 
 **Planner 角色模型：**
 
@@ -972,25 +967,25 @@ type PeerView struct {
 
 ## 五、关键技术选型
 
-| 组件 | 当前实现 | Phase 4+ 规划 | 备注 |
+| 组件 | 当前实现 | 后续候选 | 备注 |
 |------|----------|--------------|------|
 | Go 版本 | 1.25+ | — | 泛型、slog、标准库增强 |
-| 序列化（Gossip） | MessagePack（`higgs.gossip.m1\n...`），短期兼容旧 JSON magic | Protobuf 可选后续优化 | Phase 3.6 已切 MessagePack + 1200-byte UDP budget；proto 文件仅作协议形状参考 |
+| 序列化（Gossip） | MessagePack（`higgs.gossip.m1\n...`），短期兼容旧 JSON magic | Protobuf 可选后续优化 | 1200-byte UDP budget；proto 文件仅作协议形状参考 |
 | 序列化（Record 值） | JSON | — | 具体 record 格式（endpoint、policy 等）均为 JSON |
-| 配置文件 | YAML（`config.yaml`） | — | 默认 `./config.yaml`，可用 `HIGGS_CONFIG` 覆盖 |
+| 配置文件 | YAML（`config.yaml`） | — | 默认 `/etc/higgs/config.yaml`，可用 `HIGGS_CONFIG` 覆盖 |
 | 本地存储 | `bbolt` | — | 纯 Go，无 CGO；按 Zone 分 bucket |
 | 哈希 | `blake2b-256`（`golang.org/x/crypto`） | — | 用于 KeyID、RecordHash、ZoneRoot |
 | 签名 | ED25519（标准库） | — | 密钥加密存储：AES-GCM + bcrypt |
-| Daemon / 单 writer | `higgs daemon` + Unix control socket | systemd / 远程管理预留 | Phase 3 最小形态已实现 |
-| StrongSwan / IKEv2 控制 | 🟨 VICI driver 边界、dry-run apply、`list-sas` snapshot、root/container daemon-run gossip smoke 已实现 | CLI 进程级 smoke、重启恢复、撤销闭环 | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
-| XFRM / netns 控制 | 🟨 exec-based `SystemXFRMDriver` + preflight + dry-run apply 已实现 | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
-| WG 控制 | _未实现_（Phase 7 可选） | `wgctrl-go` | 轻量 fallback，不作为动态路由主线 |
-| 路由协议 | 🟨 Phase 5 第一版 | `bird` + `birdc` | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug routing`、BIRD neighbor/route driven rotate cutover gate 已落地；container root smoke、per-peer whitelist、策略路由后续补齐 |
-| 防火墙 | 🟨 第一版已实现 | `nftables` 优先，`iptables` 兜底 | `pkg/firewall/` 已落地：按 instance/netns 生成 owner-bound filter/NAT plan，host ingress + redirect grace，nft/iptables CLI driver，dry-run/reconcile/debug；root/container smoke 待联合 BIRD 验证 |
+| Daemon / 单 writer | `higgs daemon` + Unix control socket | systemd / 远程管理预留 | 事件循环 + per-peer SyncSession FSM；7.10 已生产化 |
+| StrongSwan / IKEv2 控制 | ✅ VICI driver、`list-sas` 观测、daemon reconcile、root/container smoke 全部落地 | — | 动态路由主线传输；`swanctl` 只做人肉 debug 对照 |
+| XFRM / netns 控制 | ✅ exec-based `SystemXFRMDriver` + preflight + dry-run | 后续可替换/增强为 netlink provider | 管理 XFRM interface、地址和 namespace；系统 smoke 显式 root 运行 |
+| WG 控制 | _未实现_（7.4 可选） | `wgctrl-go` | 仅有 7.1 异构 transport 实验 root smoke；轻量 fallback，不作为动态路由主线 |
+| 路由协议 | ✅ `bird` + `birdc` per-netns Babel | 7.12 策略路由与系统路由审计 | config generator、birdc client、process manager、daemon reconcile、`higgs route`/`debug routing`、BIRD neighbor/route driven rotate cutover gate、root/container smoke 已落地 |
+| 防火墙 | ✅ `pkg/firewall/`，`nftables` 优先，`iptables` 兜底 | — | 按 instance/netns 生成 owner-bound filter/NAT plan，host ingress + redirect grace，nft/iptables CLI driver，backend-native inline hooks（7.16），dry-run/reconcile/debug 与 root/container smoke 已落地 |
 
 ---
 
-## 六、当前实现现状（Phase 0–5 第一版）
+## 六、当前实现现状
 
 ### 已落地
 
@@ -1012,23 +1007,29 @@ type PeerView struct {
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
 | Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` / `app/higgs/daemon_sync.go` | ✅ 已实现，admin 写入、IPsec state-change hook、单 UDP reader、事件循环和 per-peer `SyncSession` FSM 已接入 |
 | CLI（root / join / delegate / zone / record / route / firewall / daemon / advanced（sync、recovery、gc）/ debug（verify、db）） | `app/higgs/` | ✅ 完整 |
-| 配置文件（YAML + 环境变量覆盖；`overlays[].routing` 将移除，改为 `netns` + `routing.instances[]`） | `app/higgs/config.go` | 🟨 待按 per-netns BIRD 调整 |
+| 配置文件（YAML + 环境变量覆盖；`netns` + `routing.instances[]` per-netns 模型） | `app/higgs/config.go` | ✅ 完整 |
 | Route Announcement / IPAM record 解析与校验 | `pkg/routing/records.go` | ✅ 完整 |
-| AuthorizedRouteSet（assignment/announcement 授权、重叠裁决） | `pkg/routing/authorization.go` | ✅ 第一版完整 |
+| AuthorizedRouteSet（assignment/announcement 授权、重叠裁决） | `pkg/routing/authorization.go` | ✅ 完整 |
+| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | ✅ 完整：IPsec public record 公告、Address/Port/ContactPoint 模型、LinkPlanner + skip reason、LinkInstance reconcile（create/update/adopt/repair/teardown/noop）、VICI/SystemXFRMDriver provider、daemon `Run` 循环真实 VICI/XFRM bring-up、重启恢复与撤销闭环、staged generation 端口轮换、bidirectional takeover、双栈双链路；root/container smoke 覆盖 |
+| BIRD 路由适配器 | `pkg/routing/bird/` | ✅ 完整：per-netns config generator、filter renderer、router-id derivation、birdc client、process manager、preflight；`make bird-babel-smoke` / `make bird-babel-container-smoke` 已验证真实 BIRD bring-up |
+| Firewall 规则同步 | `pkg/firewall/` + `app/higgs/firewall_reconcile.go` | ✅ 完整：overlay/host instance 按 netns 区分，nft/iptables CLI driver 在对应 netns 执行，owner scope 用 `host`/`<netns>`，backend-native inline hooks（7.16）；`make firewall-smoke` / `make firewall-container-smoke` / `make revocation-data-plane-smoke` 已验证 |
+| 链路健康探测与 rotate cutover 门闩 | `pkg/health/` + `app/higgs/health_reconcile.go` | ✅ 完整：rolling window、状态机迟滞、ICMP prober、`higgs debug health`、`RotateCutoverReady` 接入 IPsec reconcile；`make health-smoke` / `make health-fault-smoke` |
+| Peer lifecycle 与撤销数据面清理 | `app/higgs/` | ✅ 完整：stale/offline/cleanup 阈值，revocation deny-first 清理 firewall/routing/IPsec/peer-cache；`make peer-lifecycle-smoke` / `make revocation-cleanup-smoke` |
+| Observer 只读状态控制台 | `internal/observer/` + `internal/inspect/` + `internal/state/` | ✅ 完整：REST API、SSE 事件流、静态 UI（Phase 9 重构已验收）；`make observer-smoke` |
+| 应用层服务发布 | `app/higgs-services/` | ✅ Phase 8 已验收：`service.yaml` → IPAM/route/ACL/Compose 编排；`make services-smoke` |
 
-### 进行中/预留（Phase 4+）
+### 进行中/预留
 
 | 模块 | 包路径 | 状态 |
 |------|--------|------|
-| StrongSwan / XFRM 建链 | `pkg/transport/ipsec/` + `app/higgs/ipsec_reconcile.go` | 🟨 主体已完成：IPsec public record 公告、Address/Port/ContactPoint 模型、LinkPlanner + skip reason、LinkInstance reconcile（create/update/adopt/repair/teardown/noop）、dry-run/VICI SystemXFRMDriver provider、VICI IKE_SA/CHILD_SA bring-up（4.3）、daemon `Run` 循环 gossip 同步后真实 VICI/XFRM + tunnel ping（4.3）、daemon 级重启恢复及撤销闭环（4.3）、bounded break-before-make 端口轮换（4.4）、bidirectional takeover（4.5）。外部 `build/higgs daemon` 双 OS 进程 smoke 仍作为后续 hardening |
-| WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go，后移为可选 fallback |
-| BIRD 路由适配器 | `pkg/routing/bird/` | 🟨 第一版已落地：config generator、filter renderer、router-id derivation、birdc client、process manager、preflight；真实 BIRD bring-up 和 container smoke 待验证 |
-| Firewall 规则同步 | `pkg/firewall/` + `app/higgs/firewall_reconcile.go` | 🟨 第一版已实现：overlay/host instance 按 netns 区分，nft/iptables CLI driver 在对应 netns 执行，owner scope 用 `host`/`<netns>`，apply 时重建 nft table 清除 stale rules；dry-run/reconcile/debug 已落地；root/container smoke 待联合 BIRD 验证 |
-| Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go |
+| WireGuard 建链 | `pkg/transport/wireguard/` | 🔲 仅 doc.go 和 7.1 异构 transport 实验 root smoke（`HIGGS_WG_GRE_SMOKE=1`）；正式实现为可选 7.4 |
+| Merkle DAG 增量同步 | `pkg/core/merkle/` | 🔲 仅 doc.go；增量同步目前由 gossip 层的 catalog summary + page diff + object pull 承担 |
 | 多签 Authority（Threshold > 1） | `pkg/core/zone/types.go` | ⚠️ 数据结构已定义，运行时拒绝 |
 | Delegation 撤销（tombstone） | `pkg/core/zone/` + `app/higgs/` | ✅ 已实现 |
 | 细粒度 Capability 执行 | `pkg/crypto/sign.go` | ⚠️ 结构已定义；`route.announcement` 使用通用 `PermWrite` |
 | Public IP Reflector | `pkg/core/gossip/discovery.go` | ✅ HTTP client + local smoke |
+| Global Discovery / Relay Server | — | 🔲 可选 7.7 / 7.8 |
+| 策略路由与系统路由审计 | — | 🔲 远期 7.12 |
 
 ---
 
