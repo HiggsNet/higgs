@@ -149,7 +149,7 @@ func TestICMProberRunsBurstInOneProcess(t *testing.T) {
 	}
 }
 
-func TestICMProberUnansweredBurstReportsPacketLoss(t *testing.T) {
+func TestICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
 	// With -W the ping process exits on its own with a loss summary instead of
 	// lingering until the context deadline kills it ("signal: killed").
 	runner := &recordingCommandRunner{
@@ -163,8 +163,8 @@ func TestICMProberUnansweredBurstReportsPacketLoss(t *testing.T) {
 	if result.Success {
 		t.Fatal("probe success = true, want false for an unanswered burst")
 	}
-	if !strings.Contains(result.Error, "100% packet loss") {
-		t.Fatalf("probe error = %q, want ping packet-loss summary", result.Error)
+	if result.Error != "" {
+		t.Fatalf("probe error = %q, want ordinary packet loss to be a valid observation", result.Error)
 	}
 }
 

@@ -140,8 +140,8 @@ type LinkHealth struct {
 	Jitter          time.Duration
 	ConsecutiveFail int
 	LastSuccess     time.Time
-	LastError       string
-	LastReason      string
+	LastError       string // raw error from the latest probe execution
+	LastReason      string // stable state/failure reason for metrics and policy
 	NextProbeAt     time.Time
 	CutoverBlocking bool
 	Labels          MetricsLabels

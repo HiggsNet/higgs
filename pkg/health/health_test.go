@@ -94,6 +94,98 @@ func TestStateMachineHealthyToDegraded(t *testing.T) {
 	}
 }
 
+func TestStateMachineUnknownOnlyBeforeFirstObservation(t *testing.T) {
+	cfg := HysteresisConfig{
+		FailThresholdConsecutive: 3,
+		LossThreshold:            0.2,
+		DownLossThreshold:        0.6,
+		RecoverConsecutive:       2,
+	}
+	m := NewStateMachine(cfg)
+	now := time.Now()
+
+	if state := m.State("link1"); state != HealthStateUnknown {
+		t.Fatalf("initial state = %s, want unknown", state)
+	}
+	state, _ := m.Evaluate("link1", WindowSnapshot{
+		Sent: 1, Lost: 1, LossRatio: 1, ConsecutiveFails: 1,
+	}, "", now)
+	if state != HealthStateDegraded {
+		t.Fatalf("state after first failed observation = %s, want degraded", state)
+	}
+}
+
+func TestStateMachineLowLossIsHealthy(t *testing.T) {
+	cfg := HysteresisConfig{
+		FailThresholdConsecutive: 3,
+		LossThreshold:            0.2,
+		DownLossThreshold:        0.6,
+		RecoverConsecutive:       2,
+	}
+	m := NewStateMachine(cfg)
+	state, _ := m.Evaluate("link1", WindowSnapshot{
+		Sent: 20, Received: 19, Lost: 1, LossRatio: 0.05,
+	}, "", time.Now())
+	if state != HealthStateHealthy {
+		t.Fatalf("state with loss below threshold = %s, want healthy", state)
+	}
+}
+
+func TestStateMachineColdStartFailuresConvergeToDown(t *testing.T) {
+	cfg := HysteresisConfig{
+		FailThresholdConsecutive: 3,
+		LossThreshold:            0.2,
+		DownLossThreshold:        0.6,
+		RecoverConsecutive:       2,
+	}
+	m := NewStateMachine(cfg)
+	now := time.Now()
+	for failures := 1; failures <= 3; failures++ {
+		state, _ := m.Evaluate("link1", WindowSnapshot{
+			Sent:             failures,
+			Lost:             failures,
+			LossRatio:        1,
+			ConsecutiveFails: failures,
+		}, "", now)
+		want := HealthStateDegraded
+		if failures == 3 {
+			want = HealthStateDown
+		}
+		if state != want {
+			t.Fatalf("state after %d failures = %s, want %s", failures, state, want)
+		}
+	}
+}
+
+func TestStateMachineEstablishedLinkGoesDownAtConsecutiveFailureThreshold(t *testing.T) {
+	cfg := HysteresisConfig{
+		FailThresholdConsecutive: 3,
+		LossThreshold:            0.2,
+		DownLossThreshold:        0.6,
+		RecoverConsecutive:       2,
+	}
+	m := NewStateMachine(cfg)
+	now := time.Now()
+	m.Evaluate("link1", WindowSnapshot{Sent: 20, Received: 20}, "", now)
+
+	for failures := 1; failures <= 3; failures++ {
+		state, _ := m.Evaluate("link1", WindowSnapshot{
+			Sent:             20,
+			Received:         20 - failures,
+			Lost:             failures,
+			LossRatio:        float64(failures) / 20,
+			ConsecutiveFails: failures,
+		}, "", now)
+		want := HealthStateHealthy
+		if failures == 3 {
+			want = HealthStateDown
+		}
+		if state != want {
+			t.Fatalf("state after %d consecutive failures = %s, want %s", failures, state, want)
+		}
+	}
+}
+
 func TestStateMachineHysteresisRecovery(t *testing.T) {
 	cfg := HysteresisConfig{
 		FailThresholdConsecutive: 2,
@@ -156,6 +248,31 @@ func TestManagerTickAndSnapshot(t *testing.T) {
 	}
 	if snapshot[0].Received != 1 {
 		t.Fatalf("received = %d, want 1", snapshot[0].Received)
+	}
+}
+
+func TestManagerKeepsRawErrorSeparateFromStateReason(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Second, LossWindow: 5}
+	m := NewManager(cfg, DefaultHysteresisConfig(), &fakeProber{})
+	now := time.Now()
+	m.UpsertTarget(ProbeTarget{InstanceID: "link1", State: "up"}, now)
+
+	m.applyResult("link1", ProbeResult{Error: "netns interface missing: hgs0"}, now)
+	snapshot := m.Snapshot(now)
+	if got := snapshot[0].LastError; got != "netns interface missing: hgs0" {
+		t.Fatalf("last error = %q, want raw probe error", got)
+	}
+	if got := snapshot[0].LastReason; got != "netns_interface_missing" {
+		t.Fatalf("last reason = %q, want stable reason", got)
+	}
+
+	m.applyResult("link1", ProbeResult{}, now.Add(time.Second))
+	snapshot = m.Snapshot(now)
+	if got := snapshot[0].LastError; got != "" {
+		t.Fatalf("last error after ordinary packet loss = %q, want empty", got)
+	}
+	if got := snapshot[0].LastReason; got != "probe_timeout" {
+		t.Fatalf("last reason after ordinary packet loss = %q, want probe_timeout", got)
 	}
 }
 

@@ -9,7 +9,6 @@ type StateMachine struct {
 
 	// current state per instance
 	state         map[string]string
-	consec        map[string]int
 	consecRecover map[string]int
 }
 
@@ -30,7 +29,6 @@ func NewStateMachine(cfg HysteresisConfig) *StateMachine {
 	return &StateMachine{
 		cfg:           cfg,
 		state:         map[string]string{},
-		consec:        map[string]int{},
 		consecRecover: map[string]int{},
 	}
 }
@@ -38,29 +36,37 @@ func NewStateMachine(cfg HysteresisConfig) *StateMachine {
 // Evaluate applies a window snapshot and returns the new health state and a
 // failure reason (if the state is degraded/down/probe_error). now is the
 // evaluation time (usually the probe time).
-func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastReason string, now time.Time) (state string, reason string) {
+func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastError string, now time.Time) (state string, reason string) {
 	prev := m.state[instanceID]
 	if prev == "" {
 		prev = HealthStateUnknown
 	}
 
-	// probe_error is sticky: it's set by the scheduler when probes fail to
-	// dispatch (permission/netns/interface missing). Recovery requires
-	// consecutive successes.
-	if lastReason != "" && (prev == HealthStateProbeError || snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive) {
-		state, reason = HealthStateProbeError, lastReason
-	} else if snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive || snap.LossRatio >= m.cfg.DownLossThreshold {
-		if snap.LossRatio >= m.cfg.DownLossThreshold || snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive*2 {
-			state, reason = HealthStateDown, classifyFailReason(lastReason, snap)
+	// Unknown means that no observation exists. Once a probe has completed,
+	// report what that observation says instead of falling back to unknown for
+	// low-but-nonzero loss or while failure hysteresis is pending.
+	if snap.Sent == 0 {
+		state, reason = HealthStateUnknown, ""
+	} else if lastError != "" && (prev == HealthStateProbeError || snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive) {
+		// probe_error is sticky: it represents repeated failures to execute a
+		// useful probe (permission/netns/interface missing). Recovery requires
+		// consecutive successes.
+		state, reason = HealthStateProbeError, classifyFailReason(lastError, snap)
+	} else if snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive {
+		state, reason = HealthStateDown, classifyFailReason(lastError, snap)
+	} else if snap.LossRatio >= m.cfg.DownLossThreshold {
+		// A cold window makes the first failed sample look like 100% loss. Do
+		// not call the link down until at least the configured failure evidence
+		// has accumulated.
+		if snap.Sent >= m.cfg.FailThresholdConsecutive {
+			state, reason = HealthStateDown, classifyFailReason(lastError, snap)
 		} else {
-			state, reason = HealthStateDegraded, classifyFailReason(lastReason, snap)
+			state, reason = HealthStateDegraded, classifyFailReason(lastError, snap)
 		}
 	} else if snap.LossRatio >= m.cfg.LossThreshold {
-		state, reason = HealthStateDegraded, classifyFailReason(lastReason, snap)
-	} else if snap.Sent > 0 && snap.Lost == 0 {
-		state, reason = HealthStateHealthy, ""
+		state, reason = HealthStateDegraded, classifyFailReason(lastError, snap)
 	} else {
-		state, reason = HealthStateUnknown, ""
+		state, reason = HealthStateHealthy, ""
 	}
 
 	// Hysteresis for recovery.
@@ -75,19 +81,6 @@ func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastReas
 		}
 	} else {
 		m.consecRecover[instanceID] = 0
-	}
-
-	// Hysteresis for degradation: only flip once thresholds crossed.
-	if (prev == HealthStateHealthy || prev == HealthStateUnknown) && (state == HealthStateDegraded || state == HealthStateDown) {
-		m.consec[instanceID]++
-		if m.consec[instanceID] < m.cfg.FailThresholdConsecutive {
-			state = prev
-			reason = "hysteresis_pending"
-		} else {
-			m.consec[instanceID] = 0
-		}
-	} else {
-		m.consec[instanceID] = 0
 	}
 
 	m.state[instanceID] = state
@@ -111,7 +104,6 @@ func (m *StateMachine) SetProbeError(instanceID string, reason string) {
 // Reset clears state for an instance (used when link is removed).
 func (m *StateMachine) Reset(instanceID string) {
 	delete(m.state, instanceID)
-	delete(m.consec, instanceID)
 	delete(m.consecRecover, instanceID)
 }
 

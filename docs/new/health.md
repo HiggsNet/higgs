@@ -332,23 +332,25 @@ max(health.interval, IPsec reconcile flush 间隔)
 
 ### 6.2 状态机
 
-`pkg/health/state.go` 的 `StateMachine.Evaluate` 按以下顺序判定原始状态（`snap` 为窗口快照，`lastReason` 为最近一次错误串）：
+`pkg/health/state.go` 的 `StateMachine.Evaluate` 按以下顺序判定原始状态（`snap` 为窗口快照，`lastError` 为最近一次原始错误串）：
 
 ```text
-1. lastReason 非空 且 (prev == probe_error 或 连续失败 >= fail_threshold)
+1. sent == 0 → unknown
+2. lastError 非空 且 (prev == probe_error 或 连续失败 >= fail_threshold)
    → probe_error
-2. 连续失败 >= fail_threshold 或 loss >= down_loss_threshold：
-   - loss >= down_loss_threshold 或 连续失败 >= 2*fail_threshold → down
-   - 否则 → degraded
-3. loss >= loss_threshold → degraded
-4. sent > 0 且 lost == 0 → healthy
-5. 其他 → unknown
+3. 连续失败 >= fail_threshold → down
+4. loss >= down_loss_threshold：
+   - sent >= fail_threshold → down
+   - 冷启动样本不足 → degraded
+5. loss >= loss_threshold → degraded
+6. 其他（已有样本且 loss < loss_threshold）→ healthy
 ```
 
-随后应用双向迟滞：
+随后应用恢复迟滞：
 
 - **恢复迟滞**：prev ∈ {degraded, down, probe_error} 且新状态为 healthy 时，需连续 `recover_consecutive`（默认 5）次评估为 healthy 才真正翻回；期间保持 prev，reason 为 `recovering`。
-- **降级迟滞**：prev ∈ {healthy, unknown} 且新状态为 degraded/down 时，需连续 `fail_threshold_consecutive`（默认 3）次评估越阈才翻转；期间保持 prev，reason 为 `hysteresis_pending`。`probe_error`（规则 1）不走降级迟滞，直接命中。
+
+下降方向不再叠加第二层状态转换计数：`ConsecutiveFails` 与 rolling window 本身已经提供失败次数和丢包率证据。这样 `fail_threshold_consecutive`（默认 3）准确表示进入 down/probe_error 所需的连续失败次数，不会再在越过阈值后额外等待 3 次。初始 `unknown` 在首个样本后立即变为 healthy 或 degraded。
 
 ### 6.3 失败原因分类
 
@@ -363,7 +365,7 @@ max(health.interval, IPsec reconcile flush 间隔)
 | `probe_timeout` | 无错误串但窗口内全丢 |
 | `probe_failure` | 其他 |
 
-此外还有两个状态机产生的过渡 reason：`recovering`、`hysteresis_pending`（见 6.2），它们也会出现在 `LastError`/metrics `reason` label 中。
+状态机还会产生恢复过渡 reason `recovering`（见 6.2）。原始探测错误保留在 `LastError`；稳定分类和过渡 reason 写入 `LastReason` 与 metrics `reason` label，避免把动态错误串作为 label。
 
 ---
 

@@ -26,6 +26,7 @@ type Manager struct {
 	windows     map[string]*RollingWindow
 	states      *StateMachine
 	targets     map[string]ProbeTarget
+	lastError   map[string]string
 	lastReason  map[string]string
 	nextProbe   map[string]time.Time
 	errorsTotal map[string]int
@@ -64,6 +65,7 @@ func NewManager(cfg ProbeConfig, hyst HysteresisConfig, prober Prober) *Manager 
 		windows:     map[string]*RollingWindow{},
 		states:      NewStateMachine(hyst),
 		targets:     map[string]ProbeTarget{},
+		lastError:   map[string]string{},
 		lastReason:  map[string]string{},
 		nextProbe:   map[string]time.Time{},
 		errorsTotal: map[string]int{},
@@ -96,6 +98,7 @@ func (m *Manager) SetTargets(targets []ProbeTarget, now time.Time) {
 			delete(m.targets, id)
 			delete(m.windows, id)
 			delete(m.nextProbe, id)
+			delete(m.lastError, id)
 			delete(m.lastReason, id)
 			delete(m.errorsTotal, id)
 			delete(m.babelObs, id)
@@ -128,6 +131,7 @@ func (m *Manager) RemoveTarget(instanceID string) {
 	delete(m.targets, instanceID)
 	delete(m.windows, instanceID)
 	delete(m.nextProbe, instanceID)
+	delete(m.lastError, instanceID)
 	delete(m.lastReason, instanceID)
 	delete(m.errorsTotal, instanceID)
 	delete(m.babelObs, instanceID)
@@ -316,15 +320,16 @@ func (m *Manager) applyResult(instanceID string, result ProbeResult, now time.Ti
 	}
 	if result.Error != "" {
 		m.errorsTotal[instanceID]++
-		m.lastReason[instanceID] = result.Error
-	} else if result.Success {
-		delete(m.lastReason, instanceID)
+		m.lastError[instanceID] = result.Error
+	} else {
+		delete(m.lastError, instanceID)
 	}
-	state, reason := m.states.Evaluate(instanceID, snap, m.lastReason[instanceID], now)
-	if reason != "" {
+	_, reason := m.states.Evaluate(instanceID, snap, m.lastError[instanceID], now)
+	if reason == "" {
+		delete(m.lastReason, instanceID)
+	} else {
 		m.lastReason[instanceID] = reason
 	}
-	_ = state
 }
 
 // Snapshot returns the current health of all links.
@@ -372,7 +377,8 @@ func (m *Manager) Snapshot(now time.Time) []LinkHealth {
 			Jitter:          snap.Jitter,
 			ConsecutiveFail: snap.ConsecutiveFails,
 			LastSuccess:     snap.LastSuccess,
-			LastError:       m.lastReason[id],
+			LastError:       m.lastError[id],
+			LastReason:      m.lastReason[id],
 			NextProbeAt:     next,
 			CutoverBlocking: t.Staged && m.cutoverBlockingLocked(id),
 			Labels:          labels,
@@ -434,7 +440,8 @@ func (m *Manager) HealthFor(instanceID string, now time.Time) (LinkHealth, bool)
 		Jitter:          snap.Jitter,
 		ConsecutiveFail: snap.ConsecutiveFails,
 		LastSuccess:     snap.LastSuccess,
-		LastError:       m.lastReason[instanceID],
+		LastError:       m.lastError[instanceID],
+		LastReason:      m.lastReason[instanceID],
 		NextProbeAt:     m.nextProbe[instanceID],
 		CutoverBlocking: t.Staged && m.cutoverBlockingLocked(instanceID),
 		Labels:          labels,

@@ -65,7 +65,9 @@ func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 		return ProbeResult{InstanceID: target.InstanceID, Error: err.Error()}
 	}
 	if received == 0 {
-		return ProbeResult{InstanceID: target.InstanceID, Error: "ping returned no replies"}
+		// A completed ping with zero replies is a reachability observation, not
+		// a failure to execute the probe.
+		return ProbeResult{InstanceID: target.InstanceID}
 	}
 	// Preserve the previous burst policy: a partial burst is healthy only when
 	// more than half of the packets succeeded.
@@ -108,6 +110,11 @@ func (p *ICMProber) pingBurstExec(ctx context.Context, target ProbeTarget, timeo
 	}
 	if received > 0 {
 		return received, lastRTT, nil
+	}
+	if pingReceivedPattern.Match(out) {
+		// ping exits non-zero for ordinary packet loss. The packet summary makes
+		// that a valid probe result; reserve Error for invocation/setup faults.
+		return 0, 0, nil
 	}
 	if err != nil {
 		return 0, 0, pingExecError(err, out)
