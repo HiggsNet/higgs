@@ -1,0 +1,28 @@
+/* Design tokens — every color, font-size and spacing value in the UI
+   must resolve to one of these variables. Do not hardcode literals in
+   page styles. */
+
+:root {
+    /* Neutral palette */
+    --bg-0: #0b0e14;            /* page background */
+    --bg-1: #11151d;            /* sidebar / card background */
+    --bg-2: #171c26;            /* nested / hover background */
+    --border: #232a36;
+    --text-0: #e6e9ef;          /* primary text */
+    --text-1: #9aa4b2;          /* secondary text */
+    --text-2: #6b7482;          /* dimmed text */
+    --accent: #5b8def;
+    /* Semantic state colors (shared by badge / dot / banner) */
+    --ok: #3fb96f;
+    --warn: #d9a13b;
+    --err: #e05d5d;
+    --unknown: #6b7482;
+    /* Font-size scale */
+    --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px;
+    --fs-lg: 15px; --fs-xl: 20px; --fs-num: 26px;
+    /* Spacing scale (multiples of 4) */
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px;
+    --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+    --radius: 6px;
+    --mono: 'SF Mono', 'Monaco', 'Courier New', monospace;
+}

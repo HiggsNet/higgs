@@ -239,16 +239,18 @@ type Provider interface {
 
 ### 6.1 服务方式
 
-- UI 文件经 `//go:embed web/*` 内嵌进二进制（`internal/observer/web/`：`index.html` / `app.js` / `style.css`），无外部静态目录、无构建步骤。
-- `HandleStatic`（`server.go:267`）：GET 之外 → 405；`/api/` 前缀 → 404；路径清洗后读 `web/<path>`，未命中时 **fallback 到 `index.html`**（SPA 前端路由的前提）；按扩展名设置 Content-Type（html/css/js/json/svg，其余 octet-stream）。
+- UI 文件经 `//go:embed all:web` 内嵌进二进制（`internal/observer/web/`：`index.html`、`style/{tokens,base,pages}.css`、`src/` 原生 ES modules），无外部静态目录、无构建步骤。
+- `HandleStatic`（`server.go:250`）：GET 之外 → 405；`/api/` 前缀 → 404；路径清洗后读 `web/<path>`，未命中时 **fallback 到 `index.html`**（SPA 前端路由的前提）；按扩展名设置 Content-Type（html/css/js/json/svg，其余 octet-stream）。
 - `WebSubFS()` 暴露 `web/` 子树供测试使用。
 
-### 6.2 前端行为（`web/app.js`）
+### 6.2 前端行为（`web/src/`）
 
-- 原生 JS SPA，hash 路由，7 个页面：Overview / Gossip / Zones / Overlay / Health / Route / BIRD（侧栏见 `index.html`）。
-- 每页对应一个 `fetchAPI('<endpoint>')` 拉取：overview→status，gossip→peers，zones→zones，overlay→links，health→health，routes→routes，bird→bird。
-- 连接策略：`EventSource('/api/v1/events')` 收到 `connected` 后置为 **Live**；任一类目事件触发当前页刷新；`onerror` 时降级为 **Polling**（5s 轮询），并每 10s 尝试重建 SSE；侧栏指示器显示 Live / Polling / Disconnected 三态。
-- Health 页额外为每条 link 拉取 `/health/{id}/series?metric=rtt&range=30m&step=1m` 画 sparkline，详情图支持 5m/30m/1h/6h/24h 档位（step 10s–30m）；series 有多条 `lines` 时按 probe 视角分线，否则退化为单条 active 线。
+- 零构建原生 ES modules SPA：`main.js` 入口装配 `router.js`（hash 路由）+ `events.js`（SSE）+ `store.js`（按 endpoint 的缓存/失效/订阅）；页面模块在 `src/pages/*`，纯函数组件在 `src/components/*`，所有动态文本经 `src/format.js` 的 `esc()`。
+- hash 路由携带选中态与过滤条件（`#/<page>[/<selection>][?f=<filter>]`），可深链、刷新不丢；7 个页面：Overview / Gossip / Zones / Overlay · Control Plane / Routes / BIRD / Health · Data Plane。
+- 每页声明依赖的 endpoint（`deps`），store 负责拉取与并发去重：overview→status/links/health/zones，gossip→peers，zones→zones，overlay→links，health→health，routes→routes，bird→bird/status。
+- 连接策略：`EventSource('/api/v1/events')` 收到 `connected` 后置为 **Live**；事件按类型→endpoint 映射只失效并重取对应键（如 `link_updated`→`/links`、`health_updated`→`/health`），不再整页刷新；`onerror` 时降级为 **Polling**（5s 轮询当前页依赖的键），并每 10s 尝试重建 SSE；侧栏指示器显示 Live / Polling / Disconnected 三态。
+- 重绘前记录 `#content` 的 scrollTop / 活跃输入框 / `<details open>` 状态，重绘后恢复（取代早期 foldState 补丁）。
+- Health 页 sparkline 在卡片可见时才懒加载 `/health/{id}/series?metric=rtt&range=30m&step=1m`，详情图按 5m/30m/1h/6h/24h 档位手动加载（step 10s–30m）；series 有多条 `lines` 时按 probe 视角分线，否则退化为单条 active 线。
 
 ---
 
@@ -290,7 +292,7 @@ series 端点的数据完全来自 health 子系统的本地 JSONL spool（产�
 | SSE 续传 | 未实现 `Last-Event-ID`；断线期间的事件不重发，依赖前端轮询兜底 |
 | 设计中的部分端点 | `/api/v1/link-groups`、`/api/v1/zones/{zone}/records|delegations|revocations` 未实现（`/zones/{x}/records` 会被当作 zone filter 而 404） |
 | Events 页面 | 设计中的独立事件时间线页未实现；UI 只有 7 个页面，事件仅作为刷新触发器 |
-| 事件 payload | 所有广播 payload 为 nil（设计建议携带 `link_id` 等 key）；客户端只能整页刷新 |
+| 事件 payload | 所有广播 payload 为 nil（设计建议携带 `link_id` 等 key）；前端按事件类型做 endpoint 级失效，条目级失效待事件链路补完 |
 | `babel_rtt` / `babel_metric` series | spool 尚不含 BIRD 观测样本，查询显式报错 |
 | 非 loopback 保护 | 仅 warn 日志，无绑定确认开关或强制拒绝 |
 | 时序留存 | 短历史完全取决于 health spool 的 `local_spool_max_age`；spool 未配置时 Health 页无曲线 |

@@ -50,29 +50,38 @@ func TestStaticHandlerSPAFallbackContentType(t *testing.T) {
 	}
 }
 
-func TestStaticHandlerCSS(t *testing.T) {
+func TestStaticHandlerEmbeddedFiles(t *testing.T) {
+	cases := []struct {
+		path        string
+		contentType string
+	}{
+		{"/style/tokens.css", "text/css; charset=utf-8"},
+		{"/style/base.css", "text/css; charset=utf-8"},
+		{"/style/pages.css", "text/css; charset=utf-8"},
+		{"/src/main.js", "application/javascript; charset=utf-8"},
+		{"/src/format.js", "application/javascript; charset=utf-8"},
+		{"/src/store.js", "application/javascript; charset=utf-8"},
+		{"/src/events.js", "application/javascript; charset=utf-8"},
+		{"/src/router.js", "application/javascript; charset=utf-8"},
+		{"/src/components/badge.js", "application/javascript; charset=utf-8"},
+		{"/src/pages/overview.js", "application/javascript; charset=utf-8"},
+		{"/src/pages/health.js", "application/javascript; charset=utf-8"},
+	}
 	srv := newTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if ct := rr.Header().Get("Content-Type"); ct != "text/css; charset=utf-8" {
-		t.Errorf("content type = %q, want text/css; charset=utf-8", ct)
-	}
-}
-
-func TestStaticHandlerJS(t *testing.T) {
-	srv := newTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if ct := rr.Header().Get("Content-Type"); ct != "application/javascript; charset=utf-8" {
-		t.Errorf("content type = %q, want application/javascript; charset=utf-8", ct)
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rr := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("GET %s: status code = %d, want %d", tc.path, rr.Code, http.StatusOK)
+			continue
+		}
+		if ct := rr.Header().Get("Content-Type"); ct != tc.contentType {
+			t.Errorf("GET %s: content type = %q, want %q", tc.path, ct, tc.contentType)
+		}
+		if rr.Body.Len() == 0 {
+			t.Errorf("GET %s: body should not be empty", tc.path)
+		}
 	}
 }
 

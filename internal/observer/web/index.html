@@ -4,27 +4,33 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Higgs Observer</title>
-    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/style/tokens.css">
+    <link rel="stylesheet" href="/style/base.css">
+    <link rel="stylesheet" href="/style/pages.css">
 </head>
 <body>
 <div id="app">
     <nav id="sidebar">
         <div class="logo">Higgs Observer</div>
         <ul>
-            <li><a href="#/" class="nav-link active" data-page="overview">Overview</a></li>
+            <li><a href="#/" class="nav-link" data-page="overview">Overview</a></li>
+            <li class="nav-group">Network</li>
             <li><a href="#/gossip" class="nav-link" data-page="gossip">Gossip</a></li>
             <li><a href="#/zones" class="nav-link" data-page="zones">Zones</a></li>
-            <li><a href="#/overlay" class="nav-link" data-page="overlay">Overlay</a></li>
-            <li><a href="#/health" class="nav-link" data-page="health">Health</a></li>
-            <li><a href="#/routes" class="nav-link" data-page="routes">Route</a></li>
+            <li><a href="#/overlay" class="nav-link" data-page="overlay">Overlay · Control Plane</a></li>
+            <li><a href="#/routes" class="nav-link" data-page="routes">Routes</a></li>
             <li><a href="#/bird" class="nav-link" data-page="bird">BIRD</a></li>
+            <li class="nav-group">Monitoring</li>
+            <li><a href="#/health" class="nav-link" data-page="health">Health · Data Plane</a></li>
         </ul>
-        <div id="connection-status" class="status-disconnected">Disconnected</div>
+        <div id="connection-status" class="conn conn-disconnected">
+            <span class="dot dot-err"></span><span class="conn-label">Disconnected</span>
+        </div>
     </nav>
     <main id="content">
-        <div id="loading">Loading...</div>
+        <div class="loading">Loading…</div>
     </main>
 </div>
-<script src="/app.js"></script>
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>

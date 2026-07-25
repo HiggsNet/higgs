@@ -1,0 +1,149 @@
+/* Page-level styles. Colors/sizes resolve to tokens only. */
+
+/* ===== Overview ===== */
+
+.issue-list { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-5); }
+.issue-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: var(--fs-md);
+}
+.issue-row .issue-target { color: var(--text-0); font-weight: 600; }
+.issue-row .issue-summary { color: var(--text-1); flex: 1; overflow-wrap: anywhere; }
+.issue-row a { color: var(--accent); text-decoration: none; font-size: var(--fs-sm); white-space: nowrap; }
+.issue-row a:hover { text-decoration: underline; }
+
+/* ===== Zones: two-column layout ===== */
+
+.zone-layout {
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) 1fr;
+    gap: var(--sp-4);
+    align-items: start;
+}
+.zone-list { display: flex; flex-direction: column; gap: var(--sp-1); }
+.zone-item {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: var(--fs-md);
+}
+.zone-item:hover { background: var(--bg-2); }
+.zone-item.selected { border-color: var(--accent); }
+.zone-item .zone-path { flex: 1; overflow-wrap: anywhere; }
+.zone-item .zone-count { color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
+
+.zone-detail {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--sp-4);
+    min-width: 0;
+}
+.zone-detail h2 { margin-top: 0; font-family: var(--mono); font-size: var(--fs-lg); overflow-wrap: anywhere; }
+
+.global-root {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-4);
+    overflow-wrap: anywhere;
+}
+
+/* ===== Gossip ===== */
+
+.gossip-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr);
+    gap: var(--sp-4);
+    align-items: start;
+}
+.detail-panel {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--sp-4);
+    min-width: 0;
+}
+.detail-panel h2 { margin-top: 0; font-family: var(--mono); font-size: var(--fs-lg); overflow-wrap: anywhere; }
+
+/* ===== Health ===== */
+
+.history-panel { margin: var(--sp-2) 0 var(--sp-3); }
+.history-toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-3); }
+.range-btn { min-width: 52px; }
+
+.health-chart-body {
+    min-height: 268px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-0);
+    padding: var(--sp-3);
+    overflow-x: auto;
+}
+
+.chart-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-2);
+    color: var(--text-1);
+    font-size: var(--fs-sm);
+}
+.chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-2);
+    font-size: var(--fs-sm);
+}
+.legend-swatch {
+    display: inline-block;
+    width: 18px;
+    height: 3px;
+    margin-right: var(--sp-1);
+    vertical-align: middle;
+    border-radius: 2px;
+    background: var(--accent);
+}
+
+.history-chart { width: 100%; min-width: 560px; height: 240px; display: block; }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-axis { stroke: var(--text-2); stroke-width: 1; }
+.chart-label { fill: var(--text-2); font-size: var(--fs-xs); }
+.history-line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2.4;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+.history-point { fill: var(--accent); opacity: 0.85; }
+
+/* Line palette maps to semantic tokens (accent / ok / warn / err). */
+.line-1.history-line, .line-1.history-point { stroke: var(--ok); fill: var(--ok); }
+.legend-swatch.line-1 { background: var(--ok); }
+.line-2.history-line, .line-2.history-point { stroke: var(--warn); fill: var(--warn); }
+.legend-swatch.line-2 { background: var(--warn); }
+.line-3.history-line, .line-3.history-point { stroke: var(--err); fill: var(--err); }
+.legend-swatch.line-3 { background: var(--err); }
+
+/* ===== Routes ===== */
+
+.section-errors h2 { color: var(--err); }
+
+/* ===== Responsive page layouts ===== */
+
+@media (max-width: 1100px) {
+    .zone-layout, .gossip-layout { grid-template-columns: 1fr; }
+}

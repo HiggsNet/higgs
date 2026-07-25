@@ -24,18 +24,18 @@
 
 **约束：** 零构建（原生 ES Modules + 多 CSS 文件，无 Node 工具链）、零运行时依赖、纯 embed；注意 `//go:embed web/*` pattern 需随新增子目录扩大。
 
-- [ ] **9.1 设计基座**
+- [x] **9.1 设计基座**
   - `web/style/tokens.css`：中性灰底 + 单一 accent + 语义状态色（ok/warn/err/unknown）、字号/间距阶梯、radius token。
   - 布局壳重写：侧栏分组导航（总览 / 网络 / 监控）、底部连接状态三态指示、统一页头（标题 + 说明 + 页面级操作区）。
   - 基础组件收敛到 `style/base.css`：card、stat-card、badge、dot、table、kv、details、empty/loading/error 三态。
 
-- [ ] **9.2 前端模块化与重绘策略**
+- [x] **9.2 前端模块化与重绘策略**
   - `app.js`（1153 行单文件）拆分为 `web/src/` 原生 ES modules：`api.js` / `store.js` / `events.js` / `router.js` / `format.js` / `components/*` / `pages/*`，单文件 < ~200 行。
   - store 按 endpoint 缓存 + 事件类型到 endpoint 的失效映射，SSE 事件只重取受影响键，不再整页刷新。
   - 重绘保留 scrollTop / 输入 / `<details open>` 状态，删除 `foldState` 全局补丁。
   - Health 页 sparkline 懒加载，消除每次刷新每条 link 一个 series 请求的 N× 放大。
 
-- [ ] **9.3 页面信息架构重构**
+- [x] **9.3 页面信息架构重构**
   - Overview 仪表盘化：全局状态横幅 + 问题清单（带深链）优先，统计卡与 reconcile 摘要其次。
   - Overlay（控制面：planner/SA/reconcile/rotation）与 Health（数据面：探针/RTT/loss/曲线）职责分离，导航文案明确。
   - Zones 双栏布局；authority/proof/revocations/history/Raw JSON 全部收入 Inspect 折叠区；hash 截断 + 点击复制。
@@ -46,7 +46,7 @@
   - `daemon.go` 广播点携带轻量 payload（`link_id` / `peer_id`），前端条目级失效。
   - 落地 `event_buffer_seconds` 环形缓冲 + Events 时间线页（独立可裁）。
 
-- [ ] **9.5 测试与文档收口**
+- [x] **9.5 测试与文档收口**
   - `webapp_test.go` token 断言改写为模块化后的关键导出；`static_test.go` 覆盖新增子目录；`internal/observer` 与 `app/higgs` observer 族测试全绿。
   - `app/higgs/observer_api_*_test.go` 不应需要修改（REST 响应不变，9.4 除外），若需修改则说明越界。
   - `docs/new/observer.md` 第 6/9 节同步为重构后行为。

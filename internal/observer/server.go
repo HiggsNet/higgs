@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-//go:embed web/*
+//go:embed all:web
 var webFS embed.FS
 
 // Config is the transport-neutral observer server configuration.
