@@ -1011,7 +1011,7 @@ type PeerView struct {
 | Peer 动态发现（endpoint record 扫描、TTL/grace 管理） | `pkg/core/gossip/` | ✅ 完整 |
 | Bootstrap 准入 / 新节点首次接入死锁修复 | `pkg/core/gossip/transport.go` | ✅ 完整 |
 | Daemon 单 writer（长期 gossip、事件队列、control socket） | `app/higgs/daemon.go` / `app/higgs/daemon_sync.go` | ✅ 已实现，admin 写入、IPsec state-change hook、单 UDP reader、事件循环和 per-peer `SyncSession` FSM 已接入 |
-| CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug / db / route） | `app/higgs/` | ✅ 完整 |
+| CLI（init / join / keygen / delegate / record / verify / daemon / sync / debug（含 db）/ route） | `app/higgs/` | ✅ 完整 |
 | 配置文件（YAML + 环境变量覆盖；`overlays[].routing` 将移除，改为 `netns` + `routing.instances[]`） | `app/higgs/config.go` | 🟨 待按 per-netns BIRD 调整 |
 | Route Announcement / IPAM record 解析与校验 | `pkg/routing/records.go` | ✅ 完整 |
 | AuthorizedRouteSet（assignment/announcement 授权、重叠裁决） | `pkg/routing/authorization.go` | ✅ 第一版完整 |

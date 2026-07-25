@@ -33,7 +33,6 @@ func rootCommand() *cli.Command {
 			cmdRecovery(),
 			cmdDebug(),
 			cmdGC(),
-			cmdDB(),
 		},
 	}
 }
@@ -329,16 +328,17 @@ func cmdZone() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:      "show",
-				Usage:     "Show zone details as JSON",
-				UsageText: "higgs zone show <zone> [--history]",
+				Usage:     "Show a human-readable zone summary",
+				UsageText: "higgs zone show <zone> [--filter text] [--verbose]",
 				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "history", Usage: "Include bounded record history"},
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show matching delegations or revocations"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show authority, scope, expiry, and revocation details"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs zone show <zone> [--history]", 1)
+						return cli.Exit("usage: higgs zone show <zone> [--filter text] [--verbose]", 1)
 					}
-					return showZone(zone.ZonePath(cmd.Args().First()), cmd.Bool("history"))
+					return showZone(zone.ZonePath(cmd.Args().First()), cmd.String("filter"), cmd.Bool("verbose"))
 				},
 			},
 		},
@@ -350,6 +350,25 @@ func cmdRecord() *cli.Command {
 		Name:  "record",
 		Usage: "Record management commands",
 		Commands: []*cli.Command{
+			{
+				Name:      "list",
+				Usage:     "Browse records in a human-readable form",
+				UsageText: "higgs record list [zone] [--filter text] [--verbose]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show records whose key, type, or value contains this text"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show values, versions, timestamps, and history counts"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs record list [zone] [--filter text] [--verbose]", 1)
+					}
+					path := zone.ZonePath("")
+					if cmd.Args().Len() == 1 {
+						path = zone.ZonePath(cmd.Args().First())
+					}
+					return showRecords(path, cmd.String("filter"), cmd.Bool("verbose"))
+				},
+			},
 			{
 				Name:      "put",
 				Usage:     "Store a record in a zone",
@@ -372,16 +391,16 @@ func cmdRecord() *cli.Command {
 			},
 			{
 				Name:      "get",
-				Usage:     "Get a record from a zone as JSON",
-				UsageText: "higgs record get <zone> <key> [--history=N]",
+				Usage:     "Show one record in a human-readable form",
+				UsageText: "higgs record get <zone> <key> [--verbose]",
 				Flags: []cli.Flag{
-					&cli.IntFlag{Name: "history", Usage: "Include up to N previous versions in record_history"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show version, timestamp, and history count"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
-						return cli.Exit("usage: higgs record get <zone> <key>", 1)
+						return cli.Exit("usage: higgs record get <zone> <key> [--verbose]", 1)
 					}
-					return getRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Int("history"))
+					return getRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("verbose"))
 				},
 			},
 		},
@@ -543,12 +562,12 @@ func cmdDB() *cli.Command {
 			{
 				Name:      "dump",
 				Usage:     "Dump all database buckets and keys",
-				UsageText: "higgs db dump [zone]",
+				UsageText: "higgs debug db dump [zone]",
 				Description: "Print every bucket and key in the state database.\n" +
 					"If a zone is provided, only that zone bucket is shown (plus meta).",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() > 1 {
-						return cli.Exit("usage: higgs db dump [zone]", 1)
+						return cli.Exit("usage: higgs debug db dump [zone]", 1)
 					}
 					filter := ""
 					if cmd.Args().Len() > 0 {
@@ -563,7 +582,7 @@ func cmdDB() *cli.Command {
 				Description: "Print the number of keys and total size per bucket.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs db stats", 1)
+						return cli.Exit("usage: higgs debug db stats", 1)
 					}
 					return dbStats()
 				},

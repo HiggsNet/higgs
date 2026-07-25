@@ -9,7 +9,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-func showZone(path zone.ZonePath, includeHistory bool) error {
+func showZone(path zone.ZonePath, filter string, verbose bool) error {
 	state, err := loadState()
 	if err != nil {
 		return err
@@ -23,7 +23,22 @@ func showZone(path zone.ZonePath, includeHistory bool) error {
 		State:          zs,
 		Network:        state.Network,
 		Now:            timeNow(),
-		IncludeHistory: includeHistory,
+		IncludeHistory: false,
 	})
-	return inspecttext.WriteJSON(os.Stdout, out)
+	return inspecttext.WriteZone(os.Stdout, out, filter, verbose)
+}
+
+func showRecords(path zone.ZonePath, filter string, verbose bool) error {
+	state, err := loadState()
+	if err != nil {
+		return err
+	}
+	if path.Valid() && state.Network.Zones[path] == nil {
+		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	view := inspect.BuildRecordsDebug(inspect.RecordsDebugInput{
+		Network: state.Network,
+		Path:    path,
+	})
+	return inspecttext.WriteRecords(os.Stdout, view, filter, verbose)
 }

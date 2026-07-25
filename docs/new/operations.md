@@ -195,6 +195,7 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs sync run --interval 5
 ```bash
 higgs sync status --verbose
 higgs zone show node-b.catofes.
+higgs record list node-b.catofes. --filter identity
 higgs verify node-b.catofes.
 ```
 
@@ -204,6 +205,7 @@ Gossip 和 peer：
 higgs debug peer node-b.catofes.
 higgs debug peers
 higgs debug zone node-b.catofes.
+higgs debug zone node-b.catofes. --json --history
 higgs debug records node-b.catofes. --prefix endpoints/
 higgs debug endpoints
 higgs debug admission
@@ -225,17 +227,23 @@ higgs debug health
 higgs debug rotate-port
 ```
 
-通过 control socket 查询单条 record：
+通过 control socket 查询单条 record（默认输出面向人的文本）：
 
 ```bash
-higgs record get <zone> <key>
+higgs record get <zone> <key> --verbose
+```
+
+需要完整 JSON、签名、hash 或历史版本时使用 debug：
+
+```bash
+higgs debug record <zone> <key> --history 10
 ```
 
 底层数据库：
 
 ```bash
-higgs db stats
-higgs db dump
+higgs debug db stats
+higgs debug db dump
 ```
 
 `debug` 命令通常会优先读取 daemon 的 committed StateStore view；daemon 不在线时读取本地状态文件和最近一次 runtime snapshot。
@@ -460,7 +468,7 @@ higgs debug peer <peer-id>
 先确认本地是否写入、签名是否有效：
 
 ```bash
-higgs zone show <zone>
+higgs record list <zone> --filter <key-or-value>
 higgs verify <zone>
 ```
 

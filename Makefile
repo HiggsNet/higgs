@@ -284,7 +284,7 @@ phase1-smoke: build
 	if ! kill -0 "$$server_pid" >/dev/null 2>&1; then cat "$$tmp/b.log"; exit 1; fi; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a >/dev/null; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b.catofes. >"$$tmp/a.log" 2>&1 || grep -q 'pending zones' "$$tmp/a.log"; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q '"identity"'; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity | grep -q 'identity'; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	echo "Phase1 smoke passed"
 
@@ -293,7 +293,7 @@ phase1-smoke: build
 # 2. A/B 用最小 join bundle 加入，后续对端 delegation/record 通过同步获得。
 # 3. A/B 分别写入自己的 identity record。
 # 4. 先启动 B serve 让 A 拉取 B，再启动 A serve 让 B 拉取 A。
-# 5. 最后检查双方 zone show、sync status 和 verify，证明双向收敛。
+# 5. 最后检查双方 record list、sync status 和 verify，证明双向收敛。
 phase2-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/higgs-phase2-smoke"; \
@@ -335,8 +335,8 @@ phase2-smoke: build
 	sleep 1; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q '"identity"'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q '"identity"'; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter identity | grep -q 'identity'; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity | grep -q 'identity'; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | grep -q 'peer node-b.catofes.'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | grep -q 'peer node-a.catofes.'; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
@@ -383,13 +383,13 @@ phase2-run-smoke: build
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/b-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 2; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q '"identity"'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q '"identity"'; \
+	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity | grep -q 'identity'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity | grep -q 'identity'; \
 	kill "$$b_pid" >/dev/null 2>&1 || true; wait "$$b_pid" >/dev/null 2>&1 || true; b_pid=""; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b-restored >/dev/null; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/b-restart.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RvcmVk'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RvcmVk'; \
+	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter identity --verbose | grep -q 'value: node-b-restored'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter identity --verbose | grep -q 'value: node-b-restored'; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	a_root="$$(HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | awk '/^local_root:/ {print $$2}')"; \
 	b_root="$$(HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | awk '/^local_root:/ {print $$2}')"; \
@@ -431,8 +431,8 @@ phase3-daemon-smoke: build
 	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status --verbose | grep -q 'daemon: online'; \
 	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a-daemon >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q '"identity"'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q '"identity"'; \
+	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase3 daemon smoke passed"
@@ -470,8 +470,8 @@ phase3-daemon-fallback-smoke: build
 	[ -S "$$tmp/a/higgs.sock" ]; \
 	[ -S "$$tmp/b/higgs.sock" ]; \
 	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status --verbose | grep -q 'daemon: online'; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q '"identity"'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q '"identity"'; \
+	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase3 daemon fallback smoke passed"
@@ -562,7 +562,7 @@ multi-node-smoke: build
 	sleep 1; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q '"identity"'; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter identity | grep -q 'identity'; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status | grep -q 'peer node-a.catofes.'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b-restarted >/dev/null; \
@@ -572,13 +572,13 @@ multi-node-smoke: build
 	sleep 1; \
 	for i in 1 2 3 4 5 6 7 8; do \
 		HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-a.catofes. >"$$tmp/c-to-a-restart-$$i.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-restart-$$i.log"; \
-		if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'bm9kZS1iLXJlc3RhcnRlZA=='; then break; fi; \
+		if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter identity --verbose 2>/dev/null | grep -q 'value: node-b-restarted'; then break; fi; \
 		sleep 1; \
 	done; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RhcnRlZA=='; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. | grep -q 'bm9kZS1iLXJlc3RhcnRlZA=='; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter identity --verbose | grep -q 'value: node-b-restarted'; \
+	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter identity --verbose | grep -q 'value: node-b-restarted'; \
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	echo "Multi-node smoke passed"
 
@@ -617,8 +617,8 @@ chain-relay-smoke: build
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" "$$d_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" "$$tmp/d.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
-	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q 'bm9kZS1hLXJlbGF5'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q 'bm9kZS1hLXJlbGF5'; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity --verbose | grep -q 'value: node-a-relay'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity --verbose | grep -q 'value: node-a-relay'; \
 	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" "$$c_pid" "$$d_pid" >/dev/null 2>&1 || true; \
 	echo "Chain relay smoke passed"
@@ -654,11 +654,11 @@ discovery-smoke: build
 	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 2 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-c.catofes. 2>/dev/null | grep -q '"identity"'; then break; fi; \
+		if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-c.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; \
 		sleep 1; \
 	done; \
 	sleep 2; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-c.catofes. 2>/dev/null | grep -q '"identity"'; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-c.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-c.catofes. | grep -q 'resolved_addr:'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync status --verbose | grep -q 'discovered peer=node-c.catofes.'; \
 	kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; \
@@ -715,11 +715,11 @@ bootstrap-join-smoke: build
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) join accept "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync run --interval 1 >"$$tmp/node-b.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5 6 7 8; do \
-		if HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'sync/endpoint/udp'; then break; fi; \
+		if HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter sync/endpoint/udp 2>/dev/null | grep -q 'sync/endpoint/udp'; then break; fi; \
 		sleep 1; \
 	done; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'sync/endpoint/udp'; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q '"identity"'; \
+	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter sync/endpoint/udp 2>/dev/null | grep -q 'sync/endpoint/udp'; \
+	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
 	kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Bootstrap join smoke passed"
 
@@ -765,8 +765,8 @@ nat-observed-smoke: build
 	kill "$$a_pid" >/dev/null 2>&1 || true; wait "$$a_pid" >/dev/null 2>&1 || true; a_pid=""; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a-observed >"$$tmp/put.out"; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) sync once node-b.catofes. >"$$tmp/a-to-b.log" 2>&1 || grep -q 'pending zones' "$$tmp/a-to-b.log"; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bm9kZS1hLW9ic2VydmVk'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bm9kZS1hLW9ic2VydmVk'; \
+	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'value: node-a-observed'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'value: node-a-observed'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "NAT observed path smoke passed"
@@ -814,8 +814,8 @@ nat-daemon-observed-smoke: build
 	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:33563'; then echo "FAIL: B should not have discovered_addr" >&2; exit 1; fi; \
 	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. identity node-a-nat-daemon >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bm9kZS1hLW5hdC1kYWVtb24='; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bm9kZS1hLW5hdC1kYWVtb24='; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'value: node-a-nat-daemon'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'value: node-a-nat-daemon'; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "NAT daemon observed path smoke passed"
@@ -920,9 +920,9 @@ object-pull-smoke: build
 	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-a.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
 	sleep 3; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. | grep -q 'bigdata'; \
-	for i in $$(seq 1 30); do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes. 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-a.catofes.; exit 1; }; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter bigdata | grep -q 'bigdata'; \
+	for i in $$(seq 1 30); do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-a.catofes.; exit 1; }; \
 	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Object pull smoke passed"
@@ -969,8 +969,8 @@ chunk-fallback-smoke: build
 	large_value="$$(perl -e 'print "x" x 3000')"; \
 	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes. 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) zone show node-b.catofes.; exit 1; }; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
+	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record list node-b.catofes.; exit 1; }; \
 	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) verify node-b.catofes. >/dev/null; \
 	grep -q 'event=zone_applied.*via=udp_chunks.*zone=node-b.catofes\.' "$$tmp/a.log"; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \

@@ -28,12 +28,33 @@ func cmdDebug() *cli.Command {
 			{
 				Name:      "zone",
 				Usage:     "Show diagnostic state for a zone",
-				UsageText: "higgs debug zone <zone>",
+				UsageText: "higgs debug zone <zone> [--json] [--history]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "json", Usage: "Print the full diagnostic zone structure as JSON"},
+					&cli.BoolFlag{Name: "history", Usage: "Include bounded record history in JSON output"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs debug zone <zone>", 1)
+						return cli.Exit("usage: higgs debug zone <zone> [--json] [--history]", 1)
 					}
-					return debugZone(zone.ZonePath(cmd.Args().First()))
+					if cmd.Bool("history") && !cmd.Bool("json") {
+						return cli.Exit("--history requires --json", 1)
+					}
+					return debugZone(zone.ZonePath(cmd.Args().First()), cmd.Bool("json"), cmd.Bool("history"))
+				},
+			},
+			{
+				Name:      "record",
+				Usage:     "Show one full record structure as JSON",
+				UsageText: "higgs debug record <zone> <key> [--history N]",
+				Flags: []cli.Flag{
+					&cli.IntFlag{Name: "history", Usage: "Include up to N previous versions"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 2 {
+						return cli.Exit("usage: higgs debug record <zone> <key> [--history N]", 1)
+					}
+					return debugRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Int("history"))
 				},
 			},
 			{
@@ -207,6 +228,7 @@ func cmdDebug() *cli.Command {
 					})
 				},
 			},
+			cmdDB(),
 		},
 	}
 }

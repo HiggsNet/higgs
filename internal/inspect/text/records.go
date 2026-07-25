@@ -3,9 +3,65 @@ package text
 import (
 	"encoding/json"
 	"io"
+	"strings"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
+
+// WriteRecords prints records for operators without exposing hashes, signing
+// keys, or signatures. Those fields remain available through debug records.
+func WriteRecords(w io.Writer, view inspect.RecordsDebugView, filter string, verbose bool) error {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	zones := make([]inspect.RecordsDebugZoneView, 0, len(view.Zones))
+	recordCount := 0
+	for _, zoneView := range view.Zones {
+		filtered := inspect.RecordsDebugZoneView{Path: zoneView.Path}
+		for _, record := range zoneView.Records {
+			searchable := record.Key + " " + record.Type + " " + record.Value
+			if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
+				filtered.Records = append(filtered.Records, record)
+			}
+		}
+		if len(filtered.Records) > 0 || (filter == "" && len(view.Zones) == 1) {
+			recordCount += len(filtered.Records)
+			zones = append(zones, filtered)
+		}
+	}
+
+	out := newLineWriter(w)
+	out.Linef("zones: %d", len(zones))
+	out.Linef("records: %s", filteredCount(recordCount, view.RecordCount, filter))
+	for _, zoneView := range zones {
+		out.Blank()
+		out.Linef("zone: %s", zoneView.Path)
+		for _, record := range zoneView.Records {
+			if !verbose {
+				out.Linef("  %s type=%s", record.Key, dash(record.Type))
+				continue
+			}
+			out.Linef("  %s", record.Key)
+			out.Linef("    type: %s", dash(record.Type))
+			out.Linef("    value: %s", formatDebugRecordValue(record.Value))
+			out.Linef("    version: %d", record.Version)
+			out.Linef("    updated: %s", formatUnixTime(record.Timestamp))
+			out.Linef("    history: %d", record.HistoryCount)
+		}
+	}
+	return out.Err()
+}
+
+func WriteRecord(w io.Writer, record inspect.RecordDetailView, verbose bool) error {
+	out := newLineWriter(w)
+	out.Linef("record: %s/%s", record.Zone, record.Key)
+	out.Linef("type: %s", dash(record.Type))
+	out.Linef("value: %s", formatDebugRecordValue(record.Value))
+	if verbose {
+		out.Linef("version: %d", record.Version)
+		out.Linef("updated: %s", formatUnixTime(record.Timestamp))
+		out.Linef("history: %d", record.HistoryCount)
+	}
+	return out.Err()
+}
 
 func WriteRecordsDebug(w io.Writer, view inspect.RecordsDebugView, values bool) error {
 	out := newLineWriter(w)

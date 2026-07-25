@@ -236,7 +236,7 @@ smoke 失败时先看目标属于哪一层：
 
 | 场景 | 证据 |
 |------|------|
-| sync/gossip 不收敛 | 每个节点日志、`sync status --verbose`、`zone show`、record history、catalog/object pull 计数。 |
+| sync/gossip 不收敛 | 每个节点日志、`sync status --verbose`、`record list`、record history、catalog/object pull 计数。 |
 | daemon 行为异常 | control socket 是否在线、`sync status --verbose` 里的 daemon 状态、daemon 日志和本地 state DB。 |
 | IPsec/XFRM 异常 | preflight 输出、`debug links`、`debug health`、`swanctl --list-sas`、`ip xfrm state`、XFRM interface/address/route。 |
 | routing/BIRD 异常 | generated BIRD config、`debug routing`、BIRD control socket、neighbor 和 best route 输出。 |

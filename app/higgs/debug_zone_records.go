@@ -11,7 +11,7 @@ import (
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-func debugZone(path zone.ZonePath) error {
+func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -23,6 +23,16 @@ func debugZone(path zone.ZonePath) error {
 	view, err := buildDebugZoneView(state, path, rt.Now())
 	if err != nil {
 		return err
+	}
+	if jsonOutput {
+		detail := inspect.BuildZoneDetail(inspect.ZoneDetailInput{
+			Path:           path,
+			State:          state.Network.Zones[path],
+			Network:        state.Network,
+			Now:            rt.Now(),
+			IncludeHistory: includeHistory,
+		})
+		return inspecttext.WriteJSON(os.Stdout, detail)
 	}
 	return inspecttext.WriteZoneDebug(os.Stdout, view)
 }

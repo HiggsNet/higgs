@@ -8,6 +8,51 @@ import (
 	"github.com/Catofes/higgs/internal/inspect"
 )
 
+func TestWriteZoneIsHumanReadableAndFiltersDelegations(t *testing.T) {
+	view := inspect.ZoneDetail{
+		Path:   "catofes.",
+		Parent: ".",
+		Authority: &inspect.AuthorityView{
+			Epoch: 2, Threshold: 1,
+			Keys: []inspect.AuthorizedKeyView{{Capabilities: []inspect.CapabilityView{{
+				Permissions: []string{"write", "delegate"},
+			}}}},
+		},
+		Delegations: []inspect.DelegationView{
+			{
+				Child: "node-a.catofes.", Scope: "direct-child", AuthorityEpoch: 3,
+				AuthorityHash: "secret-hash", Signature: "secret-signature",
+				Authority: &inspect.AuthorityView{Keys: []inspect.AuthorizedKeyView{{Capabilities: []inspect.CapabilityView{{
+					Permissions: []string{"write"},
+				}}}}},
+			},
+			{Child: "node-b.catofes."},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteZone(&buf, view, "node-a", true); err != nil {
+		t.Fatalf("WriteZone: %v", err)
+	}
+	output := buf.String()
+	for _, want := range []string{
+		"zone: catofes.",
+		"status: active",
+		"permissions: delegate,write",
+		"authority: epoch=2 keys=1 threshold=1",
+		"delegations: 1/2",
+		"node-a.catofes. permissions=write scope=direct-child epoch=3 expires=-",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"node-b.catofes.", "secret-hash", "secret-signature", `"path"`} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("output unexpectedly contains %q:\n%s", unwanted, output)
+		}
+	}
+}
+
 func TestWriteZoneDebugPreservesLegacyLayout(t *testing.T) {
 	view := inspect.ZoneDebugView{
 		Detail: inspect.ZoneDetail{

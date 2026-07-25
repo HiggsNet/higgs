@@ -434,13 +434,14 @@ node A 和 node B 都不会接触 root/admin 私钥，也不会接触 `catofes.`
 
 ```bash
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record put node-a.catofes. identity node-a
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs zone show node-a.catofes.
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record list node-a.catofes.
 
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs record put node-b.catofes. identity node-b
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs zone show node-b.catofes.
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs record list node-b.catofes. --verbose
 ```
 
 Record 按 Zone/key 独立版本化。普通同步以签名有效的最高版本为 active state；旧版本只保留有限历史窗口用于审计和排障。
+`record list [zone]` 是面向人的浏览入口，支持 `--filter/-f` 和 `--verbose/-v`；hash、签名等底层字段由 `debug records` 提供。
 
 ## 数据库调试
 
@@ -448,13 +449,13 @@ bbolt 是二进制文件，不能直接查看。可以用内置的 debug 命令�
 
 ```bash
 # 查看所有 bucket 的 key 数量和大小统计
-build/higgs db stats
+build/higgs debug db stats
 
 # 打印全部数据库内容（JSON 美化）
-build/higgs db dump
+build/higgs debug db dump
 
 # 只打印指定 zone 的内容（会自动带上 _meta bucket）
-build/higgs db dump catofes.
+build/higgs debug db dump catofes.
 ```
 
 这些命令都以只读模式打开数据库，不会干扰正在运行的 `sync serve`、`sync run` 或 `daemon` 实例。
@@ -589,8 +590,8 @@ kill "$server_pid" >/dev/null 2>&1 || true
 wait "$server_pid" >/dev/null 2>&1 || true
 trap - EXIT
 
-HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs zone show node-b.catofes. | grep -q '"identity"'
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs zone show node-a.catofes. | grep -q '"identity"'
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs record list node-b.catofes. --filter identity | grep -q 'identity'
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record list node-a.catofes. --filter identity | grep -q 'identity'
 HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs verify node-b.catofes. >/dev/null
 HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs verify node-a.catofes. >/dev/null
 
@@ -651,7 +652,7 @@ kill "$server_pid" >/dev/null 2>&1 || true
 wait "$server_pid" >/dev/null 2>&1 || true
 trap - EXIT
 
-HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs zone show node-b.catofes. | grep -q '"identity"'
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs record list node-b.catofes. --filter identity | grep -q 'identity'
 HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs verify node-b.catofes. >/dev/null
 
 echo "three-node propagation passed: $tmp"
@@ -796,7 +797,7 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug zone node-a.catofes.
 make phase2-smoke
 ```
 
-该流程会创建独立的 `node-admin`、`zone-catofes-admin`、`node-a` 和 `node-b`，两端都通过 delegation bundle 加入；A/B 分别写入自己的 `identity` record 后轮流 `sync serve`/`sync once`，最后检查双方 `zone show`、`sync status` 和 `verify`。
+该流程会创建独立的 `node-admin`、`zone-catofes-admin`、`node-a` 和 `node-b`，两端都通过 delegation bundle 加入；A/B 分别写入自己的 `identity` record 后轮流 `sync serve`/`sync once`，最后检查双方 `record list`、`sync status` 和 `verify`。
 
 三节点传播可以直接跑：
 
@@ -889,7 +890,9 @@ build/higgs join request <zone> <key.json> [request.b64]
 build/higgs delegate issue [--permissions write,delegate,allocate-ip] <request-b64|request-file> [bundle.b64]
 build/higgs join accept <bundle-b64|bundle-file> [key.json]
 build/higgs delegate grant <zone> <permission>[,<permission>...] [bundle.b64]
-build/higgs zone show <zone>
+build/higgs zone show <zone> [--filter text] [--verbose]
+build/higgs record list [zone] [--filter text] [--verbose]
+build/higgs record get <zone> <key> [--verbose]
 build/higgs record put <zone> <key> <value> [type]
 build/higgs verify <zone>
 build/higgs daemon [--interval seconds]
@@ -903,9 +906,10 @@ build/higgs recovery pull-zone <zone> --from <peer-id>
 build/higgs recovery pull-chain <zone> --from <peer-id>
 build/higgs recovery cleanup-ipsec
 build/higgs debug peer <peer-id>
-build/higgs debug zone <zone>
-build/higgs db dump [zone]
-build/higgs db stats
+build/higgs debug zone <zone> [--json] [--history]
+build/higgs debug record <zone> <key> [--history N]
+build/higgs debug db dump [zone]
+build/higgs debug db stats
 ```
 
 ## Web 状态控制台（Observer）

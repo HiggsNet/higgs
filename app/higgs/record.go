@@ -50,34 +50,46 @@ func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, 
 	return nil
 }
 
-func getRecord(path zone.ZonePath, key string, history int) error {
-	rt, err := NewRuntime()
+func getRecord(path zone.ZonePath, key string, verbose bool) error {
+	record, err := loadRecord(path, key, 0)
 	if err != nil {
 		return err
 	}
+	return inspecttext.WriteRecord(os.Stdout, *record, verbose)
+}
+
+func debugRecord(path zone.ZonePath, key string, history int) error {
+	record, err := loadRecord(path, key, history)
+	if err != nil {
+		return err
+	}
+	return inspecttext.WriteJSON(os.Stdout, record)
+}
+
+func loadRecord(path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
+	rt, err := NewRuntime()
+	if err != nil {
+		return nil, err
+	}
 	if history < 0 {
-		return fmt.Errorf("history must be >= 0")
+		return nil, fmt.Errorf("history must be >= 0")
 	}
 	if record, ok, err := getRecordViaControl(rt, path, key, history); ok {
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return writeRecordJSON(record)
+		return record, nil
 	}
 	logControlFallback("record_get")
 	return getRecordDirect(rt, path, key, history)
 }
 
-func getRecordDirect(rt *Runtime, path zone.ZonePath, key string, history int) error {
+func getRecordDirect(rt *Runtime, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
 	state, err := rt.LoadState()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	record, err := lookupRecordDetail(state, path, key, history)
-	if err != nil {
-		return err
-	}
-	return writeRecordJSON(record)
+	return lookupRecordDetail(state, path, key, history)
 }
 
 func lookupRecordDetail(state *stateFile, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
@@ -97,10 +109,6 @@ func lookupRecordDetail(state *stateFile, path zone.ZonePath, key string, histor
 	}
 	view := inspect.BuildRecordDetail(rec, zs.RecordHistory[key], history)
 	return &view, nil
-}
-
-func writeRecordJSON(record *inspect.RecordDetailView) error {
-	return inspecttext.WriteJSON(os.Stdout, record)
 }
 
 func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
