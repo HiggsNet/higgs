@@ -442,6 +442,7 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs record list node-b.catofes. --
 
 Record 按 Zone/key 独立版本化。普通同步以签名有效的最高版本为 active state；旧版本只保留有限历史窗口用于审计和排障。
 `record list [zone]` 是面向人的浏览入口，支持 `--filter/-f` 和 `--verbose/-v`；hash、签名等底层字段由 `debug records` 提供。
+所有包含多个 zone 的列表都会把 `.` 和 `-` 视为层级分隔符，从右向左排序；因此同一域和区域后缀（例如 `a-pek.catofes.`、`b-pek.catofes.`）会连续显示。
 
 ## 数据库调试
 

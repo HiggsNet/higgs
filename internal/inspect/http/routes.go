@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"sort"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/routing/bird"
@@ -227,7 +228,7 @@ func authorizedZonesForPrefix(dump *RoutesResponse, prefix string) []string {
 			}
 		}
 	}
-	sort.Strings(zones)
+	inspect.SortZoneStrings(zones)
 	return zones
 }
 

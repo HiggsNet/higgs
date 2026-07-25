@@ -205,3 +205,32 @@ func TestBuildRecordsDebugFiltersByPrefix(t *testing.T) {
 		t.Fatalf("prefix leaked endpoint record: %+v", view.Zones[0].Records)
 	}
 }
+
+func TestBuildRecordsDebugGroupsZonesByDotAndHyphenSuffix(t *testing.T) {
+	network := zone.NewNetworkState()
+	for _, path := range []zone.ZonePath{
+		"a-sha.catofes.",
+		"b-pek.catofes.",
+		"a-pek.catofes.",
+		"alpha.catofes.",
+	} {
+		zs := zone.NewZoneState(path, nil)
+		zs.Records["identity"] = &zone.Record{Zone: path, Key: "identity"}
+		network.Zones[path] = zs
+	}
+	view := BuildRecordsDebug(RecordsDebugInput{Network: network})
+	want := []string{
+		"alpha.catofes.",
+		"a-pek.catofes.",
+		"b-pek.catofes.",
+		"a-sha.catofes.",
+	}
+	if len(view.Zones) != len(want) {
+		t.Fatalf("zones = %+v, want %d", view.Zones, len(want))
+	}
+	for i, path := range want {
+		if view.Zones[i].Path != path {
+			t.Fatalf("zones[%d] = %q, want %q; all=%+v", i, view.Zones[i].Path, path, view.Zones)
+		}
+	}
+}

@@ -2,7 +2,6 @@ package http
 
 import (
 	"encoding/hex"
-	"sort"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -65,9 +64,7 @@ func ZonesFromNetwork(ns *zone.NetworkState, nowUnix int64) ZonesResponse {
 }
 
 func sortZonePaths(paths []zone.ZonePath) {
-	sort.Slice(paths, func(i, j int) bool {
-		return inspect.ZonePathLess(string(paths[i]), string(paths[j]))
-	})
+	inspect.SortZonePaths(paths)
 }
 
 func globalRootHash(digests []gossip.ZoneDigest) []byte {

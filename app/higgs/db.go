@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	bolt "go.etcd.io/bbolt"
 )
@@ -52,7 +53,7 @@ func dbDump(filter string) error {
 		if err != nil {
 			return err
 		}
-		sort.Strings(zones)
+		inspect.SortZoneStrings(zones)
 		for _, zoneName := range zones {
 			if err := dumpZoneBucket(zone.ZonePath(zoneName), tx.Bucket([]byte("zone:"+zoneName))); err != nil {
 				return err
@@ -418,7 +419,7 @@ func sortedZoneKeys[V any](values map[zone.ZonePath]V) []zone.ZonePath {
 	for key := range values {
 		keys = append(keys, key)
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	inspect.SortZonePaths(keys)
 	return keys
 }
 

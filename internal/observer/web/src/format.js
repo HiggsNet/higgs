@@ -43,6 +43,25 @@ export function pct(v) {
     return `${esc(v)}%`;
 }
 
+// compareZones orders zone paths by reversed label order: split on '.' and
+// '-', then compare from the root-most label outward. This groups zones by
+// suffix first (e.g. all "*.catofes." together, all "*-pek.catofes." together).
+export function compareZones(a, b) {
+    const sa = String(a || '');
+    const sb = String(b || '');
+    const ta = sa.split(/[.-]/).filter(Boolean).reverse();
+    const tb = sb.split(/[.-]/).filter(Boolean).reverse();
+    for (let i = 0; i < Math.max(ta.length, tb.length); i++) {
+        if (ta[i] === undefined) return -1;
+        if (tb[i] === undefined) return 1;
+        if (ta[i] < tb[i]) return -1;
+        if (ta[i] > tb[i]) return 1;
+    }
+    if (sa < sb) return -1;
+    if (sa > sb) return 1;
+    return 0;
+}
+
 export function shortHash(s, n = 12) {
     if (!s) return '-';
     return s.length > n ? `${s.substring(0, n)}…` : s;

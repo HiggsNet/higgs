@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
+.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke zone-sort-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
 
 BINARY_NAME := higgs
 MAIN_PACKAGE := ./app/higgs
@@ -22,7 +22,7 @@ BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -s -w -X main.buildCommit=$(GIT_COMMIT) -X main.buildDescribe=$(GIT_DESCRIBE) -X main.buildDirty=$(GIT_DIRTY) -X main.buildTime=$(BUILD_TIME)
 CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
-SMOKE_TARGETS := join-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
+SMOKE_TARGETS := join-smoke zone-sort-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
 ROOT_SMOKE_TARGETS := ipsec-xfrm-smoke bird-babel-smoke firewall-smoke health-fault-smoke
 
 .PHONY: docker-build docker-run-example nix-build install-script-check
@@ -245,6 +245,11 @@ join-smoke: build
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) record put node-b.catofes. identity node-b >/dev/null; \
 	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	echo "Join smoke passed"
+
+zone-sort-smoke:
+	$(GO_ENV) $(GO) test ./internal/inspect -run 'Test(SortZoneStringsGroupsDotAndHyphenSuffixes|BuildRecordsDebugGroupsZonesByDotAndHyphenSuffix)'
+	$(GO_ENV) $(GO) test ./app/higgs -run '^TestSyncStatusGroupsZonesByDotAndHyphenSuffix$$'
+	@echo "Zone sort smoke passed"
 
 # phase1-smoke 流程：
 # 1. 创建 root、catofes、node-a、node-b 四个隔离状态目录。
@@ -994,6 +999,7 @@ help:
 	@echo "  smoke-all - Run all smoke tests"
 	@echo "  root-smoke - Run all real root data-plane smoke tests (requires root, NOT in smoke-all)"
 	@echo "  join-smoke - Run root/delegation/join smoke test"
+	@echo "  zone-sort-smoke - Verify hierarchical dot/hyphen zone ordering"
 	@echo "  phase1-smoke - Run a local two-peer gossip smoke test"
 	@echo "  phase2-smoke - Run bidirectional two-peer sync smoke test"
 	@echo "  phase2-run-smoke - Run sync run reconnect/recovery smoke test"

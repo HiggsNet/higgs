@@ -47,6 +47,38 @@ func TestSyncStatusAdapterProjectsPeerDiagnostics(t *testing.T) {
 	}
 }
 
+func TestSyncStatusGroupsZonesByDotAndHyphenSuffix(t *testing.T) {
+	network := zone.NewNetworkState()
+	for _, path := range []zone.ZonePath{
+		"a-sha.catofes.",
+		"b-pek.catofes.",
+		"a-pek.catofes.",
+		"alpha.catofes.",
+	} {
+		network.Zones[path] = zone.NewZoneState(path, nil)
+	}
+	view := buildSyncStatusView(
+		&stateFile{Network: network, SyncPeers: map[string]syncPeerState{}},
+		&syncConfigFile{},
+		time.Unix(1700000000, 0),
+		false,
+	)
+	want := []string{
+		"alpha.catofes.",
+		"a-pek.catofes.",
+		"b-pek.catofes.",
+		"a-sha.catofes.",
+	}
+	if len(view.Zones) != len(want) {
+		t.Fatalf("zones = %+v, want %d", view.Zones, len(want))
+	}
+	for i, path := range want {
+		if view.Zones[i].Zone != string(path) {
+			t.Fatalf("zones[%d] = %q, want %q; all=%+v", i, view.Zones[i].Zone, path, view.Zones)
+		}
+	}
+}
+
 func TestPeerDebugAdapterProjectsRuntimeStats(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	view := buildPeerDebugView(

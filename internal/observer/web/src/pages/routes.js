@@ -3,7 +3,7 @@
 
 import * as store from '../store.js';
 import { navigate } from '../router.js';
-import { esc } from '../format.js';
+import { esc, compareZones } from '../format.js';
 import { pageHeader, filterInput, banner, emptyState, loading, errorMsg } from '../components/card.js';
 import { tableWrap, emptyRow } from '../components/table.js';
 import { stateBadge } from '../components/badge.js';
@@ -35,14 +35,17 @@ export function render(container, route) {
 
     const exportSet = (data.export_set || []).filter(p => match(p));
     const authorized = Object.entries(data.authorized || {}).filter(([zone, prefixes]) =>
-        match(zone, ...(prefixes || [])));
+        match(zone, ...(prefixes || [])))
+        .sort(([a], [b]) => compareZones(a, b));
     const pools = (data.ipam_pools || []).filter(p => match(p.prefix, p.source, p.delegated_to));
     const assignments = (data.ipam_assignments || Object.entries(data.assignments || {}).map(([prefix, info]) => ({
         prefix,
         source: info.source,
         assigned_to: info.assigned_to,
-    }))).filter(a => match(a.prefix, a.source, a.assigned_to));
-    const errors = data.errors || [];
+    }))).filter(a => match(a.prefix, a.source, a.assigned_to))
+        .sort((a, b) => compareZones(a.assigned_to, b.assigned_to));
+    const errors = (data.errors || []).slice()
+        .sort((a, b) => compareZones(a.zone, b.zone) || String(a.prefix || '').localeCompare(String(b.prefix || '')));
 
     const errorBanner = errors.length
         ? banner(`${errors.length} authorization error${errors.length === 1 ? '' : 's'}`, 'err')

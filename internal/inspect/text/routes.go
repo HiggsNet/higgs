@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 )
 
@@ -25,7 +26,7 @@ func WriteRoutesDebug(w io.Writer, dump *inspecthttp.RoutesResponse) error {
 	for z := range dump.Authorized {
 		zones = append(zones, z)
 	}
-	sort.Strings(zones)
+	inspect.SortZoneStrings(zones)
 	out.Linef("authorized_prefixes: %d zones", len(zones))
 	for _, z := range zones {
 		out.Linef("zone %s", z)
@@ -80,7 +81,7 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 			zones = append(zones, z)
 		}
 	}
-	sort.Strings(zones)
+	inspect.SortZoneStrings(zones)
 	out.Linef("authorized: %t", authorized)
 	if len(zones) == 0 {
 		out.Println("announcing_zones: -")

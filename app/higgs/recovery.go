@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -431,16 +432,22 @@ func printPurgePlan(plan *purgePlan, suffix string) {
 	}
 	fmt.Printf("purge plan%s: zones=%d link_instances=%d sync_peers=%d\n",
 		suffix, len(plan.Zones), len(plan.LinkInstances), len(plan.SyncPeers))
-	for _, z := range plan.Zones {
+	zones := append([]zone.ZonePath(nil), plan.Zones...)
+	inspect.SortZonePaths(zones)
+	for _, z := range zones {
 		fmt.Printf("  zone %s\n", z)
 	}
 	for _, id := range plan.LinkInstances {
 		fmt.Printf("  link_instance %s\n", id)
 	}
-	for _, peerID := range plan.SyncPeers {
+	syncPeers := append([]string(nil), plan.SyncPeers...)
+	inspect.SortZoneStrings(syncPeers)
+	for _, peerID := range syncPeers {
 		fmt.Printf("  sync_peer %s\n", peerID)
 	}
-	for _, z := range plan.ManagedZoneSkipped {
+	skipped := append([]zone.ZonePath(nil), plan.ManagedZoneSkipped...)
+	inspect.SortZonePaths(skipped)
+	for _, z := range skipped {
 		fmt.Printf("  skipped (local identity) %s\n", z)
 	}
 }

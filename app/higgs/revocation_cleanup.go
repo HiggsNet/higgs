@@ -59,7 +59,7 @@ func ComputeRevocationImpact(state *stateFile, revokedZone zone.ZonePath, now ti
 			impact.AffectedSyncPeers = append(impact.AffectedSyncPeers, peerID)
 		}
 	}
-	sort.Strings(impact.AffectedSyncPeers)
+	inspect.SortZoneStrings(impact.AffectedSyncPeers)
 
 	// Configured bootstrap peers that are revoked.
 	if state.Network != nil {
@@ -72,7 +72,7 @@ func ComputeRevocationImpact(state *stateFile, revokedZone zone.ZonePath, now ti
 			impact.ConfiguredButRevoked = append(impact.ConfiguredButRevoked, string(revokedZone))
 		}
 	}
-	sort.Strings(impact.ConfiguredButRevoked)
+	inspect.SortZoneStrings(impact.ConfiguredButRevoked)
 
 	// Initialize all layer statuses as pending.
 	for _, layer := range []string{inspect.RevocationLayerIPsec, inspect.RevocationLayerRouting, inspect.RevocationLayerFirewall, inspect.RevocationLayerGossip} {
@@ -111,9 +111,7 @@ func computeRevokedSubtree(ns *zone.NetworkState, revokedZone zone.ZonePath, _ t
 			out = append(out, z)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i] < out[j]
-	})
+	inspect.SortZonePaths(out)
 	return out
 }
 
@@ -344,9 +342,7 @@ func AllRevocationImpact(state *stateFile, config *syncConfigFile, now time.Time
 	for z := range revokedZones {
 		zones = append(zones, z)
 	}
-	sort.Slice(zones, func(i, j int) bool {
-		return zones[i] < zones[j]
-	})
+	inspect.SortZonePaths(zones)
 	var out []inspect.RevocationImpact
 	for _, z := range zones {
 		impact := ComputeRevocationImpact(state, z, now)
@@ -360,7 +356,7 @@ func AllRevocationImpact(state *stateFile, config *syncConfigFile, now time.Time
 					impact.ConfiguredButRevoked = appendIfMissing(impact.ConfiguredButRevoked, string(sub))
 				}
 			}
-			sort.Strings(impact.ConfiguredButRevoked)
+			inspect.SortZoneStrings(impact.ConfiguredButRevoked)
 		}
 		out = append(out, impact)
 	}

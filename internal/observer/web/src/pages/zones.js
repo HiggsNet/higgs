@@ -5,7 +5,7 @@
 import * as store from '../store.js';
 import { fetchAPI } from '../api.js';
 import { navigate, renderCurrent } from '../router.js';
-import { esc, copyable } from '../format.js';
+import { esc, copyable, compareZones } from '../format.js';
 import { pageHeader, filterInput, emptyState, loading, errorMsg } from '../components/card.js';
 import { kvTable } from '../components/kv.js';
 import { jsonViewer } from '../components/jsonview.js';
@@ -74,7 +74,8 @@ export function render(container, route) {
     if (!entry) { container.innerHTML = header + loading(); return; }
     if (entry.error && !entry.data) { container.innerHTML = header + errorMsg(`Failed to load zones: ${entry.error.message}`); return; }
     const filter = (route.filter || '').toLowerCase();
-    const zones = (entry.data.zones || []).filter(z => !filter || (z.path || '').toLowerCase().includes(filter));
+    const zones = (entry.data.zones || []).filter(z => !filter || (z.path || '').toLowerCase().includes(filter))
+        .sort((a, b) => compareZones(a.path, b.path));
     container.innerHTML = `
         ${header}
         <div class="global-root">

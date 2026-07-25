@@ -123,8 +123,8 @@ func derivePeerStatuses(
 		}
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].PeerID < out[j].PeerID
+	sort.SliceStable(out, func(i, j int) bool {
+		return inspect.ZonePathLess(out[i].PeerID, out[j].PeerID)
 	})
 	return out
 }

@@ -37,7 +37,7 @@ func BuildPingDebugView(view PingDebugView) PingDebugView {
 	out := view
 	out.Targets = append([]PingTargetView(nil), view.Targets...)
 	out.AvailableZones = append([]string(nil), view.AvailableZones...)
-	sort.Strings(out.AvailableZones)
+	SortZoneStrings(out.AvailableZones)
 	sort.SliceStable(out.Targets, func(i, j int) bool {
 		a, b := out.Targets[i], out.Targets[j]
 		if ai, bi := PingTargetInstanceID(a), PingTargetInstanceID(b); ai != bi {

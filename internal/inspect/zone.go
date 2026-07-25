@@ -269,7 +269,7 @@ func BuildRecordsDebug(input RecordsDebugInput) RecordsDebugView {
 		for p := range input.Network.Zones {
 			paths = append(paths, p)
 		}
-		sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+		SortZonePaths(paths)
 	}
 	view.ZoneCount = len(paths)
 	for _, p := range paths {
@@ -428,7 +428,7 @@ func buildDelegationMap(delegations map[zone.ZonePath]*zone.Delegation) []Delega
 	for childPath := range delegations {
 		paths = append(paths, childPath)
 	}
-	sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+	SortZonePaths(paths)
 	out := make([]DelegationView, 0, len(paths))
 	for _, childPath := range paths {
 		out = append(out, BuildDelegation(delegations[childPath]))
@@ -441,7 +441,7 @@ func buildRevocationMap(revocations map[zone.ZonePath]*zone.DelegationRevocation
 	for childPath := range revocations {
 		paths = append(paths, childPath)
 	}
-	sort.Slice(paths, func(i, j int) bool { return paths[i] < paths[j] })
+	SortZonePaths(paths)
 	out := make([]RevocationView, 0, len(paths))
 	for _, childPath := range paths {
 		out = append(out, BuildRevocation(revocations[childPath]))

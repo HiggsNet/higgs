@@ -414,6 +414,18 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 			Revocations: len(zs.Revocations),
 		})
 	}
+	sort.SliceStable(view.Bootstrap, func(i, j int) bool {
+		return inspect.ZonePathLess(view.Bootstrap[i].PeerID, view.Bootstrap[j].PeerID)
+	})
+	sort.SliceStable(view.Discovered, func(i, j int) bool {
+		return inspect.ZonePathLess(view.Discovered[i].PeerID, view.Discovered[j].PeerID)
+	})
+	sort.SliceStable(view.Peers, func(i, j int) bool {
+		return inspect.ZonePathLess(view.Peers[i].PeerID, view.Peers[j].PeerID)
+	})
+	sort.SliceStable(view.Zones, func(i, j int) bool {
+		return inspect.ZonePathLess(view.Zones[i].Zone, view.Zones[j].Zone)
+	})
 	return view
 }
 

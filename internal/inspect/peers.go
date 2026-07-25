@@ -92,7 +92,7 @@ func BuildEndpointDebug(input EndpointDebugInput) EndpointDebugView {
 	for peerID := range input.Discovered {
 		peerIDs = append(peerIDs, peerID)
 	}
-	sort.Strings(peerIDs)
+	SortZoneStrings(peerIDs)
 	for _, peerID := range peerIDs {
 		endpoints := append([]PeerSignedEndpoint(nil), input.Discovered[peerID]...)
 		sort.SliceStable(endpoints, func(i, j int) bool {
@@ -511,6 +511,18 @@ func ZonePathLess(a, b string) bool {
 	return a < b
 }
 
+func SortZoneStrings(paths []string) {
+	sort.SliceStable(paths, func(i, j int) bool {
+		return ZonePathLess(paths[i], paths[j])
+	})
+}
+
+func SortZonePaths(paths []zone.ZonePath) {
+	sort.SliceStable(paths, func(i, j int) bool {
+		return ZonePathLess(string(paths[i]), string(paths[j]))
+	})
+}
+
 func zonePathLabels(path string) ([]string, bool) {
 	zp := zone.ZonePath(path)
 	if !zp.Valid() {
@@ -519,7 +531,9 @@ func zonePathLabels(path string) ([]string, bool) {
 	if zp.IsRoot() {
 		return nil, true
 	}
-	labels := strings.Split(strings.TrimSuffix(path, "."), ".")
+	labels := strings.FieldsFunc(strings.TrimSuffix(path, "."), func(r rune) bool {
+		return r == '.' || r == '-'
+	})
 	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
 		labels[i], labels[j] = labels[j], labels[i]
 	}

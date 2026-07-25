@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
 )
@@ -111,7 +112,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 		}
 		zones = append(zones, path)
 	}
-	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
+	inspect.SortZonePaths(zones)
 
 	for _, path := range zones {
 		zs := state.Network.Zones[path]
@@ -154,7 +155,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 		a := report.Announcements[i]
 		b := report.Announcements[j]
 		if a.Zone != b.Zone {
-			return a.Zone < b.Zone
+			return inspect.ZonePathLess(a.Zone, b.Zone)
 		}
 		if cmp := comparePrefixStrings(a.Prefix, b.Prefix); cmp != 0 {
 			return cmp < 0
