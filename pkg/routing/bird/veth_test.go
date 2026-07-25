@@ -26,8 +26,8 @@ func TestExecVethManagerSetsForwardingOnNewVethPair(t *testing.T) {
 	}
 
 	spec := VethSpec{
-		MeshInterface: "hgs-mesh",
-		PeerInterface: "hgs-peer",
+		MeshInterface: "hgvmesh",
+		PeerInterface: "hgvpeer",
 		MeshNetns:     "mesh-ns",
 		PeerNetns:     "",
 		MeshIPv4LL:    "169.254.1.1/30",
@@ -39,21 +39,21 @@ func TestExecVethManagerSetsForwardingOnNewVethPair(t *testing.T) {
 
 	got := vethCommandStrings(commands)
 	want := []string{
-		"ip netns exec mesh-ns ip link show hgs-mesh",
-		"ip netns exec mesh-ns ip link add hgs-mesh type veth peer name hgs-peer",
-		"ip netns exec mesh-ns ip link set hgs-mesh addrgenmode none",
-		"ip netns exec mesh-ns ip link set hgs-mesh up",
-		"ip netns exec mesh-ns ip link set hgs-peer netns 1",
-		"ip link set hgs-peer addrgenmode none",
-		"ip link set hgs-peer up",
-		"ip netns exec mesh-ns ip addr show hgs-mesh",
-		"ip netns exec mesh-ns ip addr replace 169.254.1.1/30 dev hgs-mesh",
-		"ip addr show hgs-peer",
-		"ip addr replace 169.254.1.2/30 dev hgs-peer",
-		"ip netns exec mesh-ns sysctl -w net.ipv4.conf.hgs-mesh.forwarding=1",
-		"ip netns exec mesh-ns sysctl -w net.ipv6.conf.hgs-mesh.forwarding=1",
-		"sysctl -w net.ipv4.conf.hgs-peer.forwarding=1",
-		"sysctl -w net.ipv6.conf.hgs-peer.forwarding=1",
+		"ip netns exec mesh-ns ip link show hgvmesh",
+		"ip netns exec mesh-ns ip link add hgvmesh type veth peer name hgvpeer",
+		"ip netns exec mesh-ns ip link set hgvmesh addrgenmode none",
+		"ip netns exec mesh-ns ip link set hgvmesh up",
+		"ip netns exec mesh-ns ip link set hgvpeer netns 1",
+		"ip link set hgvpeer addrgenmode none",
+		"ip link set hgvpeer up",
+		"ip netns exec mesh-ns ip addr show hgvmesh",
+		"ip netns exec mesh-ns ip addr replace 169.254.1.1/30 dev hgvmesh",
+		"ip addr show hgvpeer",
+		"ip addr replace 169.254.1.2/30 dev hgvpeer",
+		"ip netns exec mesh-ns sysctl -w net.ipv4.conf.hgvmesh.forwarding=1",
+		"ip netns exec mesh-ns sysctl -w net.ipv6.conf.hgvmesh.forwarding=1",
+		"sysctl -w net.ipv4.conf.hgvpeer.forwarding=1",
+		"sysctl -w net.ipv6.conf.hgvpeer.forwarding=1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
@@ -73,8 +73,8 @@ func TestExecVethManagerSetsForwardingOnBothEndsInSeparateNetns(t *testing.T) {
 	}
 
 	spec := VethSpec{
-		MeshInterface: "hgs-mesh",
-		PeerInterface: "hgs-peer",
+		MeshInterface: "hgvmesh",
+		PeerInterface: "hgvpeer",
 		MeshNetns:     "mesh-ns",
 		PeerNetns:     "peer-ns",
 	}
@@ -84,17 +84,17 @@ func TestExecVethManagerSetsForwardingOnBothEndsInSeparateNetns(t *testing.T) {
 
 	got := vethCommandStrings(commands)
 	wantPrefix := []string{
-		"ip netns exec mesh-ns ip link show hgs-mesh",
-		"ip netns exec mesh-ns ip link add hgs-mesh type veth peer name hgs-peer",
-		"ip netns exec mesh-ns ip link set hgs-mesh addrgenmode none",
-		"ip netns exec mesh-ns ip link set hgs-mesh up",
-		"ip netns exec mesh-ns ip link set hgs-peer netns peer-ns",
-		"ip netns exec peer-ns ip link set hgs-peer addrgenmode none",
-		"ip netns exec peer-ns ip link set hgs-peer up",
-		"ip netns exec mesh-ns sysctl -w net.ipv4.conf.hgs-mesh.forwarding=1",
-		"ip netns exec mesh-ns sysctl -w net.ipv6.conf.hgs-mesh.forwarding=1",
-		"ip netns exec peer-ns sysctl -w net.ipv4.conf.hgs-peer.forwarding=1",
-		"ip netns exec peer-ns sysctl -w net.ipv6.conf.hgs-peer.forwarding=1",
+		"ip netns exec mesh-ns ip link show hgvmesh",
+		"ip netns exec mesh-ns ip link add hgvmesh type veth peer name hgvpeer",
+		"ip netns exec mesh-ns ip link set hgvmesh addrgenmode none",
+		"ip netns exec mesh-ns ip link set hgvmesh up",
+		"ip netns exec mesh-ns ip link set hgvpeer netns peer-ns",
+		"ip netns exec peer-ns ip link set hgvpeer addrgenmode none",
+		"ip netns exec peer-ns ip link set hgvpeer up",
+		"ip netns exec mesh-ns sysctl -w net.ipv4.conf.hgvmesh.forwarding=1",
+		"ip netns exec mesh-ns sysctl -w net.ipv6.conf.hgvmesh.forwarding=1",
+		"ip netns exec peer-ns sysctl -w net.ipv4.conf.hgvpeer.forwarding=1",
+		"ip netns exec peer-ns sysctl -w net.ipv6.conf.hgvpeer.forwarding=1",
 	}
 	if !reflect.DeepEqual(got, wantPrefix) {
 		t.Fatalf("commands:\n got %#v\nwant %#v", got, wantPrefix)
@@ -112,8 +112,8 @@ func TestExecVethManagerReturnsSysctlError(t *testing.T) {
 	}
 
 	spec := VethSpec{
-		MeshInterface: "hgs-mesh",
-		PeerInterface: "hgs-peer",
+		MeshInterface: "hgvmesh",
+		PeerInterface: "hgvpeer",
 		MeshNetns:     "mesh-ns",
 		PeerNetns:     "",
 	}

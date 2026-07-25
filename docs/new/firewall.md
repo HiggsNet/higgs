@@ -44,7 +44,7 @@ host netns
 overlay netns (e.g. h2)
   ├─ XFRM tunnel interfaces: hgs*
   ├─ BIRD/Babel instance
-  ├─ optional veth upstream: hgs-upstream*
+  ├─ optional veth upstream: hgv* (default hgv2host)
   └─ Higgs-owned input/forward/output policy
 ```
 
@@ -119,8 +119,8 @@ type ForwardingPolicy struct {
 
 Planner 按接口角色分别处理流量：
 
-- `xfrm_tunnel`：mesh peer 之间的数据面接口，由 `xfrm_tunnel_pattern`（默认 `hgs*`）匹配。
-- `upstream_veth`：overlay netns 与 host/主网络之间的出入口，由 `upstream_patterns`（默认 `hgs-upstream*`）匹配。
+- `xfrm_tunnel`：mesh peer 之间的数据面接口；优先使用本 netns 当前 ready 的精确接口名，没有 runtime 输出时才回退到 `xfrm_tunnel_pattern`（默认 `hgs*`）。
+- `upstream_veth`：overlay netns 与 host/主网络之间的出入口。接口名只来自同 netns 的 `routing.instances[].upstream.mesh.interface`，默认 `hgv2host`；firewall 不维护第二份 upstream 名字。
 - `loopback`：本机服务。
 - underlay 接口不在 overlay netns 内处理；host 入口见第 4.4 节。
 
@@ -168,8 +168,7 @@ firewall:
 | `priority.prerouting` | string | `dstnat` | nft NAT prerouting base-chain priority |
 | `priority.postrouting` | string | `srcnat` | nft NAT postrouting base-chain priority |
 | `owner_prefix` | string | `higgs` | 命名前缀 |
-| `xfrm_tunnel_pattern` | string | `hgs*` | overlay XFRM 接口匹配模式 |
-| `upstream_patterns` | string list | `["hgs-upstream*"]` | upstream veth 接口匹配模式 |
+| `xfrm_tunnel_pattern` | string | `hgs*` | 尚无 live interface 时的 overlay XFRM 兼容回退模式 |
 | `local_services` | list | `[]` | overlay 内显式开放的服务 |
 | `host_ports.ike` | bool | 见下文 | host UDP 500 入口 |
 | `host_ports.natt` | bool | 见下文 | host UDP 4500 入口 |
@@ -284,8 +283,8 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 | `AssignmentPrefixes` | IPAM assignment 白名单 | 已组装，但当前 planner 未使用 |
 | `Forwarding` | 本 netns 的 forwarding policy | transit 决策 |
 | `Revoked` | revocation state | deny-first：从 allow set 中剔除 |
-| `LiveInterfaces` | 当前活跃 XFRM 接口 | 已组装，但当前 planner 未使用；实际按 `xfrm_tunnel_pattern` 匹配 |
-| `UpstreamInterfaces` | upstream veth 接口 | 已组装，但当前 planner 未使用；实际按 `upstream_patterns` 匹配 |
+| `LiveInterfaces` | 当前活跃 XFRM 接口 | 按 firewall instance 的 netns 过滤、去重后精确生成 XFRM 规则 |
+| `UpstreamInterfaces` | 同 netns routing upstream veth 接口 | routing 配置是唯一权威来源；去重后精确生成 upstream 规则 |
 | `AdvertisedCurrent/Previous*Ports` | 本地 signed `ipsec/ports` record | redirect grace |
 
 ### 4.2 PrefixSets
@@ -580,7 +579,7 @@ higgs debug preflight
 | `mode: external` | Higgs 只读取/诊断，不生成或修改规则 | 已在实例过滤、planner、plan 和 driver 层阻断变更；debug 仍显示配置与历史 reconcile 状态 | 已收口；切换到 external 不会清理此前 Higgs-owned 对象 | 已完成 |
 | Native inline rule 可移植性与校验 | 同一策略可跨 backend 表达，并在 apply 前完成完整语义校验 | `nft_hooks` / `iptables_hooks` 是两套原生语法；配置阶段只做边界和危险参数校验，真正的模块、match、target、表达式合法性由 nft/iptables apply 验证 | 异构节点需同时维护两套等价规则；语义错误到 reconcile 时才暴露 | 暂时不需要调整，由管理员自行控制 |
 | `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 | 暂不实现 |
-| Planner 派生输入接线 | 用 assignment 白名单和实际 live/upstream interface 精确生成规则 | `AssignmentPrefixes`、`LiveInterfaces`、`UpstreamInterfaces` 会被组装，但 planner 未使用；接口仍按 `hgs*` / `hgs-upstream*` 等 pattern 匹配 | 规则不能随单个接口 readiness 精确收缩，assignment 白名单没有独立二次校验 | 暂不实现 |
+| Assignment 白名单二次校验 | planner 独立校验允许进入规则的 assignment | `AssignmentPrefixes` 已组装但仍未使用；前缀规则依赖 `AuthorizedRouteSet` 派生结果 | 缺少 planner 层独立的 assignment 防御性复核 | 暂不实现 |
 | Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、目标 netns、host NAT hook、ipset 及 IPv4/IPv6 CLI | 已检查 `iptables` 与 `ip6tables` 必须同时存在；仍主要只检查 host PATH，`CAP_NET_ADMIN` 仅以 `nft list tables` 近似且不参与 backend 选择，daemon 也未调用 driver `Preflight` | 避免单栈半套策略；权限或目标 netns 不可用仍可能在 apply 才失败 | IPv4/IPv6 CLI 检查已完成；其余暂不实现 |
 | Backend 不可用时的失败策略 | 显式 backend 不可用应 fail closed 或阻止启动 | 无可用 backend 的 instance 不会转交 DryRunDriver；会记录 `LastError` 并输出结构化 `no_backend_available` / `backend_unavailable` warning | daemon 继续运行，但不会把未下发规则伪装为成功 | 已完成 warning 与 fail-closed per-instance reconcile |
 | netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 | 暂不实现 |

@@ -3,6 +3,7 @@ package firewall
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +100,54 @@ func TestBuildDesiredState_OverlayInput(t *testing.T) {
 	}
 	if !foundNonTransitDrop {
 		t.Error("non-transit forward chain missing XFRM-to-XFRM drop")
+	}
+}
+
+func TestBuildDesiredStateUsesExactRuntimeInterfaces(t *testing.T) {
+	spec := FirewallInstanceSpec{
+		ID:                "h2",
+		NetNS:             "h2",
+		Enabled:           true,
+		Mode:              ModeManaged,
+		DefaultPolicy:     DefaultPolicyDrop,
+		XFRMTunnelPattern: "hgs*",
+	}
+	input := FirewallPolicyInput{
+		LocalAssigned:      []netip.Prefix{mustPrefix(t, "2001:db8:1::/64")},
+		MeshAuthorized:     []netip.Prefix{mustPrefix(t, "2001:db8::/48")},
+		LiveInterfaces:     []string{"hgs22222222", "hgs11111111", "hgs11111111"},
+		UpstreamInterfaces: []string{"hgv2host"},
+	}
+	desired, err := BuildDesiredState(spec, input)
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+
+	var nonTransit, toUpstream, fromUpstream int
+	for _, rule := range desired.ForwardRules {
+		if strings.Contains(rule.IfaceIn, "*") || strings.Contains(rule.IfaceOut, "*") {
+			t.Fatalf("runtime interfaces must render exactly, got %+v", rule)
+		}
+		switch rule.Comment {
+		case "non-transit drop":
+			nonTransit++
+			if rule.IfaceIn == "hgv2host" || rule.IfaceOut == "hgv2host" {
+				t.Fatalf("upstream veth classified as XFRM: %+v", rule)
+			}
+		case "xfrm to upstream local assigned":
+			toUpstream++
+			if rule.IfaceOut != "hgv2host" {
+				t.Fatalf("xfrm-to-upstream rule = %+v", rule)
+			}
+		case "upstream to xfrm mesh authorized":
+			fromUpstream++
+			if rule.IfaceIn != "hgv2host" {
+				t.Fatalf("upstream-to-xfrm rule = %+v", rule)
+			}
+		}
+	}
+	if nonTransit != 4 || toUpstream != 2 || fromUpstream != 2 {
+		t.Fatalf("forward rule counts: non-transit=%d to-upstream=%d from-upstream=%d", nonTransit, toUpstream, fromUpstream)
 	}
 }
 

@@ -275,6 +275,7 @@ routing:
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
 - `upstream` 可让 Higgs 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。
 - `upstream.mode: static` 是默认模式；Higgs 会在 mesh 侧把本节点 assigned prefix 指向 `mesh.interface`，并在 external/host 侧把远端授权 mesh 前缀指向 `external.interface`，使用本节点 assigned prefix 的首个可用地址作为 route source。
+- 默认接口名前缀按角色分离：StrongSwan/XFRM 使用 `hgs*`，WireGuard device 使用 `hgw*`，WG 路径 GRE 使用 `hgg*`，veth 使用 `hgv*`；默认 upstream 两端为 `hgv2host` / `hgv2mesh`。
 - `ipam.announce` 选择由 daemon 持续发布的本节点 assignment。支持 `all`、`non-shared`、`shared`、`tag:<tag>` 和 `assignment:<CIDR>`。
 - 未匹配的 assignment 不由配置管理，可由 `higgs route announce/withdraw` 或服务控制；配置 reconcile 只撤销自己以 `controller:auto` 创建的记录。
 - 旧字段 `ipam.auto_announce_assigned_ips: true` 仍兼容，含义是自动管理全部本地 assignment；不能与 `ipam.announce` 同时使用。
@@ -306,6 +307,7 @@ firewall:
 - `disabled`：设为 `true` 时保留配置块但停止 reconcile。
 - 非 host instance 的 `netns` 引用顶层 `netns`；省略时使用 `netns.default`。
 - netns instance 默认匹配 `hgs*` XFRM tunnel interface。
+- upstream 接口名只配置在 `routing.instances[].upstream.mesh.interface`；firewall 按同一 netns 消费该精确名字，不提供独立的 upstream pattern。
 - host instance 用于 ingress、IKE/NAT-T 端口和 range 模式 redirect grace。
 - host instance 的 `listen_addrs`：用于 host ingress 和 DNAT/redirect 规则的监听地址，默认使用 `gossip.advertise_addrs`。
 - `host_ports`：控制是否管理 host IKE/NAT-T 端口规则（`ike`、`natt`）。

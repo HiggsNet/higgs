@@ -309,6 +309,7 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	if ars == nil || state == nil {
 		return input
 	}
+	runtimeNetNS := firewallRuntimeNetNS(config, spec.NetNS)
 
 	// Local assigned prefixes (AssignedTo == managed zone).
 	managedZone := state.ManagedZone
@@ -330,14 +331,22 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 
 	// Provider-neutral live Babel-facing interfaces.
 	for _, link := range linkOutputsFromState(state) {
-		if link.InterfaceName != "" && link.Readiness.Interface == "ready" {
+		if link.InterfaceName != "" &&
+			link.Readiness.Interface == "ready" &&
+			(link.Provider == "" || link.Provider == ipsec.ProviderStrongSwan) &&
+			(link.NetNS == "" || link.NetNS == runtimeNetNS) {
 			input.LiveInterfaces = append(input.LiveInterfaces, link.InterfaceName)
 		}
 	}
 
-	// Upstream interfaces from routing config.
+	// Upstream interfaces come only from routing instances in this firewall's
+	// namespace. This keeps routing as the sole authority for veth names.
 	for _, inst := range config.Routing.Instances {
-		if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.MeshInterface != "" {
+		if inst.Enabled &&
+			firewallRuntimeNetNS(config, inst.NetNS) == runtimeNetNS &&
+			inst.Upstream != nil &&
+			inst.Upstream.Enabled &&
+			inst.Upstream.MeshInterface != "" {
 			input.UpstreamInterfaces = append(input.UpstreamInterfaces, inst.Upstream.MeshInterface)
 		}
 	}
@@ -370,6 +379,16 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	}
 
 	return input
+}
+
+func firewallRuntimeNetNS(config *appConfig, name string) string {
+	if config == nil {
+		return name
+	}
+	if spec, ok := config.Netns.Names[name]; ok {
+		return routingNetNSTarget(spec)
+	}
+	return name
 }
 
 // extractIPsecRedirectPortsFromNetwork reads the signed ipsec/ports record from

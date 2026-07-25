@@ -463,6 +463,24 @@ firewall:
 	}
 }
 
+func TestParseConfigYAMLFirewallRejectsIndependentUpstreamPattern(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: h2
+firewall:
+  instances:
+    - id: h2
+      upstream_patterns: ["hgv*"]
+`
+	err := parseConfigYAML(input, config)
+	if err == nil || !strings.Contains(err.Error(), "upstream_patterns") {
+		t.Fatalf("error = %v, want upstream_patterns rejected; configure routing.instances[].upstream.mesh.interface", err)
+	}
+}
+
 func TestFirewallInstancesEnabled(t *testing.T) {
 	config := &appConfig{
 		Firewall: firewallConfig{
@@ -564,6 +582,49 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 	}
 	if len(input.AdvertisedPreviousNATTPorts) != 1 || input.AdvertisedPreviousNATTPorts[0] != 14400 {
 		t.Fatalf("previous NAT-T ports = %v, want [14400]", input.AdvertisedPreviousNATTPorts)
+	}
+}
+
+func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
+	state := &stateFile{
+		ManagedZone: "node-a.catofes.",
+		LinkInstances: map[string]linkInstanceState{
+			"a": {
+				ID:              "a",
+				ActualState:     "up",
+				InterfaceName:   "hgs11111111",
+				LocalTunnelAddr: "fe80::1%hgs11111111 netns=h2",
+			},
+			"b": {
+				ID:              "b",
+				ActualState:     "up",
+				InterfaceName:   "hgs22222222",
+				LocalTunnelAddr: "fe80::2%hgs22222222 netns=h3",
+			},
+		},
+	}
+	config := defaultAppConfig()
+	config.Netns.Names = map[string]ipsec.NetNSSpec{
+		"default": {Kind: ipsec.NetNSName, Name: "h2"},
+		"h2":      {Kind: ipsec.NetNSName, Name: "h2"},
+		"h3":      {Kind: ipsec.NetNSName, Name: "h3"},
+	}
+	config.Routing.Instances = []RoutingInstance{
+		{ID: "h2", NetNS: "h2", Enabled: true, Upstream: &UpstreamConfig{Enabled: true, MeshInterface: "hgv2host"}},
+		{ID: "h3", NetNS: "h3", Enabled: true, Upstream: &UpstreamConfig{Enabled: true, MeshInterface: "hgv3host"}},
+	}
+
+	input := buildFirewallPolicyInput(
+		firewall.FirewallInstanceSpec{ID: "h2", NetNS: "default"},
+		&routing.AuthorizedRouteSet{},
+		state,
+		config,
+	)
+	if len(input.LiveInterfaces) != 1 || input.LiveInterfaces[0] != "hgs11111111" {
+		t.Fatalf("live interfaces = %v, want h2 interface only", input.LiveInterfaces)
+	}
+	if len(input.UpstreamInterfaces) != 1 || input.UpstreamInterfaces[0] != "hgv2host" {
+		t.Fatalf("upstream interfaces = %v, want routing-owned h2 interface only", input.UpstreamInterfaces)
 	}
 }
 

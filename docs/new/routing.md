@@ -59,7 +59,7 @@ local routing / netns / forwarding policy ─────────┘        
 |---|---|
 | 实例配置 | `routing.instances[]`，每项引用一个 `netns` |
 | tunnel 接口 | 默认匹配 `hgs*`；同一实例可合并多个 interface pattern |
-| veth upstream 接口 | 默认 `hgs-2host*`，不加 `type tunnel` |
+| veth upstream 接口 | 默认 `hgv2host`，不加 `type tunnel` |
 | Router-ID | 由 managed Zone、trusted root hash 与稳定 netns label 派生 |
 | 路由表 | 默认写目标 netns 的 `main` table，也可指定数字 table ID |
 | forwarding | `netns.*.forwarding` 同时约束 BIRD export 与 firewall 的 transit 行为 |
@@ -355,7 +355,7 @@ host / external netns                         mesh netns (h2)
 ─────────────────────                         ───────────────
 services / containers                         BIRD + Babel + overlay tunnels
        │                                                  │
- hgs-2higgs  ───────────── veth pair ─────────────  hgs-2host
+ hgv2mesh  ───────────── veth pair ─────────────  hgv2host
        │                                                  │
 external kernel routes                           BIRD static / Babel interface
 ```
@@ -376,11 +376,11 @@ routing:
         mode: static
         create_veth: true
         mesh:
-          interface: hgs-2host
+          interface: hgv2host
           ipv4_ll: 169.254.254.1/30
           ipv6_ll: fe80::a1:1/64
         external:
-          interface: hgs-2higgs
+          interface: hgv2mesh
           # netns: ""        # 省略/空 = init host netns
           ipv4_ll: 169.254.254.2/30
           ipv6_ll: fe80::a1:2/64
@@ -390,8 +390,8 @@ routing:
 
 | 字段 | 默认值 |
 |---|---|
-| `mesh.interface` | `hgs-2host` |
-| `external.interface` | `hgs-2higgs` |
+| `mesh.interface` | `hgv2host` |
+| `external.interface` | `hgv2mesh` |
 | `mesh.ipv4_ll` / `external.ipv4_ll` | `169.254.254.1/30` / `169.254.254.2/30` |
 | `mesh.ipv6_ll` / `external.ipv6_ll` | `fe80::a1:1/64` / `fe80::a1:2/64` |
 | `create_veth` | `true` |
@@ -399,12 +399,14 @@ routing:
 
 `external.netns` 可引用另一个 namespace；省略/空表示 init/main host netns。`create_veth: false` 时 Higgs 仍按配置使用该接口，但管理员必须保证 veth、地址、up 状态与两端 namespace 已准备好。
 
+接口名前缀按资源角色分离：`hgs*` 为 StrongSwan/XFRM，`hgw*` 为 WireGuard device，`hgg*` 为 WireGuard 路径上的 GRE/Babel interface，`hgv*` 为 veth。这样 tunnel 的通配规则不会误匹配 upstream veth。所有名字必须满足 Linux 15 字符限制。
+
 ### 6.3 `static` 模式
 
 默认模式。Higgs 会：
 
 1. 在 `create_veth: true` 时创建或修复 veth pair、配置两端 link-local 地址并启用接口 forwarding；
-2. 让 mesh 内 BIRD 在 `hgs-2host*` 上运行 Babel；此接口**不是** tunnel，不使用 BIRD `type tunnel`；
+2. 让 mesh 内 BIRD 在 routing 配置给出的精确 upstream 接口（默认 `hgv2host`）上运行 Babel；此接口**不是** tunnel，不使用 BIRD `type tunnel`；
 3. 对本机 `assigned_to == managed_zone` 的前缀，在 mesh 内生成 BIRD static route，下一跳为 `mesh.interface`；
 4. 在 external 一侧为已授权的远端 announcement 写 kernel static route，下一跳为 mesh 端 link-local 地址，并排除本机自己持有的 assignment；
 5. 在 external 接口上配置本机 assignment 的首个可用地址，供这些回程路由选择 source address。

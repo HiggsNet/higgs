@@ -153,10 +153,6 @@ type ProcessExit struct {
 type UpstreamSpec struct {
 	// Interface is the veth endpoint inside the mesh netns.
 	Interface string `yaml:"interface" json:"interface"`
-
-	// InterfacePattern is the BIRD interface glob for upstream interfaces.
-	// Defaults to "hgs-2host*".
-	InterfacePattern string `yaml:"interface_pattern,omitempty" json:"interface_pattern,omitempty"`
 }
 
 // StaticRouteSpec describes a static route for the BIRD protocol static block.

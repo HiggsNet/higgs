@@ -261,11 +261,11 @@ routing:
       #   mode: static  # static | external
       #   create_veth: true          # default true; set false for pre-created veth pairs
       #   mesh:
-      #     interface: hgs-2host     # routing instance netns side, toward host
+      #     interface: hgv2host     # routing instance netns side, toward host
       #     ipv4_ll: 169.254.254.1/30
       #     ipv6_ll: fe80::a1:1/64
       #   external:
-      #     interface: hgs-2higgs    # host/upstream netns side, toward Higgs
+      #     interface: hgv2mesh    # host/upstream netns side, toward Higgs
       #     netns: ""                # optional; empty = init/main host netns
       #     ipv4_ll: 169.254.254.2/30
       #     ipv6_ll: fe80::a1:2/64

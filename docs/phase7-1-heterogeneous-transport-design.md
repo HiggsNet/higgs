@@ -238,6 +238,9 @@ destructive cleanup 必须同时满足：
 3. resource name 位于 Higgs 保留命名空间；
 4. desired 已删除、peer 已 revoke，或 lifecycle 明确进入 cleanup。
 
+保留接口名前缀按资源类型划分：`hgs*` 表示 StrongSwan/XFRM，`hgw*` 表示 WireGuard
+device，`hgg*` 表示 WireGuard 路径上的 GRE/Babel interface，`hgv*` 表示 veth。
+
 具体校验由 provider 实现：StrongSwan 检查 IKE/XFRM identity 与 legacy owner；WG/GRE 检查
 WG device、peer membership、GRE key/interface 和 firewall marker。
 
@@ -378,8 +381,8 @@ MTU 是 provider planner 的明确结果。WG/GRE 第一版沿用真实实验通
 BIRD 需要多个有序 interface policy blocks：
 
 ```text
-interface "hgs*"  { rxcost 96;  } // StrongSwan/XFRM
-interface "hgsg*" { rxcost 160; } // WG/GRE
+interface "hgs*" { rxcost 96;  } // StrongSwan/XFRM
+interface "hgg*" { rxcost 160; } // WireGuard path GRE
 ```
 
 实际命名前缀必须满足 Linux 15 字符限制。精确 interface 规则应优先于通配规则。
@@ -438,7 +441,7 @@ peer node-b.catofes.
     session=ready babel=neighbor health=healthy endpoint=[...]:4500
 
   mesh-wggre/wireguard-gre
-    state=degraded interface=hgsg... cost=160 mtu=1360
+    state=degraded interface=hgg... cost=160 mtu=1360
     session=ready babel=pending health=degraded endpoint=[...]:51820
 ```
 

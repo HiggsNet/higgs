@@ -237,64 +237,70 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	addRule(ChainForward, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_fwd_est"})
 	desired.HookPositions.PreForward = len(desired.ForwardRules)
 
-	xfrmPat := spec.XFRMTunnelPattern
-	if xfrmPat == "" {
-		xfrmPat = "hgs*"
-	}
-	upstreamPats := spec.UpstreamPatterns
-	if len(upstreamPats) == 0 {
-		upstreamPats = []string{"hgs-upstream*"}
-	}
+	xfrmIfaces := interfaceSelectors(input.LiveInterfaces, spec.XFRMTunnelPattern, "hgs*")
+	upstreamIfaces := interfaceSelectors(input.UpstreamInterfaces)
 
 	// XFRM -> XFRM authorized transit (only if forwarding policy allows)
 	if input.Forwarding.Transit {
 		meshV4 := prefixes.MeshAuthorizedV4
 		meshV6 := prefixes.MeshAuthorizedV6
 		if transit := filterTransitPrefixes(meshV4, meshV6, input.Forwarding); len(transit) > 0 {
-			addRule(ChainForward, Rule{
-				Action:   ActionAccept,
-				IfaceIn:  xfrmPat,
-				IfaceOut: xfrmPat,
-				Src:      transit,
-				Dst:      transit,
-				Comment:  "xfrm transit (transit enabled)",
-			})
+			for _, in := range xfrmIfaces {
+				for _, out := range xfrmIfaces {
+					addRule(ChainForward, Rule{
+						Action:   ActionAccept,
+						IfaceIn:  in,
+						IfaceOut: out,
+						Src:      transit,
+						Dst:      transit,
+						Comment:  "xfrm transit (transit enabled)",
+					})
+				}
+			}
 		}
 	} else {
 		// Non-transit: explicitly drop XFRM-to-XFRM
-		addRule(ChainForward, Rule{
-			Action:   ActionDrop,
-			IfaceIn:  xfrmPat,
-			IfaceOut: xfrmPat,
-			Comment:  "non-transit drop",
-		})
+		for _, in := range xfrmIfaces {
+			for _, out := range xfrmIfaces {
+				addRule(ChainForward, Rule{
+					Action:   ActionDrop,
+					IfaceIn:  in,
+					IfaceOut: out,
+					Comment:  "non-transit drop",
+				})
+			}
+		}
 	}
 
 	// XFRM -> upstream: allow mesh traffic to local assigned prefixes (egress to main network)
 	if len(prefixes.LocalAssignedV4) > 0 || len(prefixes.LocalAssignedV6) > 0 {
 		localAll := append(append([]netip.Prefix{}, prefixes.LocalAssignedV4...), prefixes.LocalAssignedV6...)
-		for _, up := range upstreamPats {
-			addRule(ChainForward, Rule{
-				Action:   ActionAccept,
-				IfaceIn:  xfrmPat,
-				IfaceOut: up,
-				Dst:      localAll,
-				Comment:  "xfrm to upstream local assigned",
-			})
+		for _, xfrm := range xfrmIfaces {
+			for _, upstream := range upstreamIfaces {
+				addRule(ChainForward, Rule{
+					Action:   ActionAccept,
+					IfaceIn:  xfrm,
+					IfaceOut: upstream,
+					Dst:      localAll,
+					Comment:  "xfrm to upstream local assigned",
+				})
+			}
 		}
 	}
 
 	// upstream -> XFRM: allow local/main network to reach mesh authorized prefixes
 	if len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0 {
 		meshAll := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
-		for _, up := range upstreamPats {
-			addRule(ChainForward, Rule{
-				Action:   ActionAccept,
-				IfaceIn:  up,
-				IfaceOut: xfrmPat,
-				Dst:      meshAll,
-				Comment:  "upstream to xfrm mesh authorized",
-			})
+		for _, upstream := range upstreamIfaces {
+			for _, xfrm := range xfrmIfaces {
+				addRule(ChainForward, Rule{
+					Action:   ActionAccept,
+					IfaceIn:  upstream,
+					IfaceOut: xfrm,
+					Dst:      meshAll,
+					Comment:  "upstream to xfrm mesh authorized",
+				})
+			}
 		}
 	}
 
@@ -315,6 +321,32 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	desired.HookPositions.PostOutput = len(desired.OutputRules)
 	// Output default to accept for overlay services; can be tightened.
 	addRule(ChainOutput, Rule{Action: ActionAccept, Comment: "default policy"})
+}
+
+func interfaceSelectors(primary []string, fallbacks ...string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, value := range primary {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		for _, value := range fallbacks {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			out = append(out, value)
+			break
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // buildHostRules generates host-side IKE/NAT-T ingress and optional redirect grace.

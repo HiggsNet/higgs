@@ -27,7 +27,6 @@ type FirewallInstanceConfig struct {
 	OwnerPrefix   string
 
 	XFRMTunnelPattern string
-	UpstreamPatterns  []string
 
 	LocalServices []firewall.LocalService
 
@@ -62,8 +61,7 @@ type firewallInstanceYAML struct {
 	DefaultPolicy string `yaml:"default_policy"`
 	OwnerPrefix   string `yaml:"owner_prefix"`
 
-	XFRMTunnelPattern string   `yaml:"xfrm_tunnel_pattern"`
-	UpstreamPatterns  []string `yaml:"upstream_patterns"`
+	XFRMTunnelPattern string `yaml:"xfrm_tunnel_pattern"`
 
 	LocalServices []localServiceYAML `yaml:"local_services"`
 
@@ -193,8 +191,6 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		xfrmPat = "hgs*"
 	}
 
-	upstreamPats := yi.UpstreamPatterns
-
 	localServices, err := parseLocalServices(yi.LocalServices)
 	if err != nil {
 		return FirewallInstanceConfig{}, fmt.Errorf("local_services: %w", err)
@@ -262,7 +258,6 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		DefaultPolicy:     defaultPolicy,
 		OwnerPrefix:       ownerPrefix,
 		XFRMTunnelPattern: xfrmPat,
-		UpstreamPatterns:  upstreamPats,
 		LocalServices:     localServices,
 		HostPorts:         hostPorts,
 		RedirectGrace:     redirectGrace,
@@ -417,7 +412,6 @@ func firewallInstanceSpecFromConfig(inst FirewallInstanceConfig, listenAddrs []n
 		DefaultPolicy:     inst.DefaultPolicy,
 		OwnerPrefix:       inst.OwnerPrefix,
 		XFRMTunnelPattern: inst.XFRMTunnelPattern,
-		UpstreamPatterns:  inst.UpstreamPatterns,
 		LocalServices:     inst.LocalServices,
 		HostPorts:         inst.HostPorts,
 		RedirectGrace:     inst.RedirectGrace,

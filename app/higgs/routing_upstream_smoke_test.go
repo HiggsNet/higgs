@@ -43,12 +43,12 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 			Enabled:    boolPtr(true),
 			CreateVeth: boolPtr(true),
 			Mesh: upstreamEndpointYAML{
-				Interface: "hgs-2host",
+				Interface: "hgv2host",
 				IPv4LL:    "169.254.0.1/30",
 				IPv6LL:    "fe80::1/64",
 			},
 			External: upstreamEndpointYAML{
-				Interface: "hgs-2higgs",
+				Interface: "hgv2mesh",
 				IPv4LL:    "169.254.0.2/30",
 				IPv6LL:    "fe80::2/64",
 			},
@@ -89,7 +89,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	if !fakeVM.ensureCalled {
 		t.Error("vethManager.EnsureVethPair was not called during reconcile")
 	}
-	if fakeVM.ensureSpec.MeshInterface != "hgs-2host" || fakeVM.ensureSpec.PeerInterface != "hgs-2higgs" {
+	if fakeVM.ensureSpec.MeshInterface != "hgv2host" || fakeVM.ensureSpec.PeerInterface != "hgv2mesh" {
 		t.Fatalf("veth interfaces = %q/%q", fakeVM.ensureSpec.MeshInterface, fakeVM.ensureSpec.PeerInterface)
 	}
 	if fakeVM.ensureSpec.MeshIPv4LL != "169.254.0.1/30" || fakeVM.ensureSpec.PeerIPv4LL != "169.254.0.2/30" {
@@ -101,8 +101,8 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	if !fakeRM.ensureCalled {
 		t.Error("upstreamRouteManager.EnsureRoutes was not called during reconcile")
 	}
-	if fakeRM.ensureSpec.NetNS != "" || fakeRM.ensureSpec.Interface != "hgs-2higgs" {
-		t.Fatalf("upstream route target = netns %q iface %q, want host hgs-2higgs", fakeRM.ensureSpec.NetNS, fakeRM.ensureSpec.Interface)
+	if fakeRM.ensureSpec.NetNS != "" || fakeRM.ensureSpec.Interface != "hgv2mesh" {
+		t.Fatalf("upstream route target = netns %q iface %q, want host hgv2mesh", fakeRM.ensureSpec.NetNS, fakeRM.ensureSpec.Interface)
 	}
 	if !prefixesContain(fakeRM.ensureSpec.Prefixes, "10.1.0.0/24") {
 		t.Fatalf("upstream routes missing remote prefix 10.1.0.0/24: %+v", fakeRM.ensureSpec.Prefixes)
@@ -141,7 +141,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	cfgStr := string(cfgBytes)
 
 	// Assert upstream interface block exists.
-	if !strings.Contains(cfgStr, `interface "hgs-2host*" {`) {
+	if !strings.Contains(cfgStr, `interface "hgv2host" {`) {
 		t.Errorf("BIRD config missing upstream interface block\n%s", cfgStr)
 	}
 
@@ -248,7 +248,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 		Upstream: &upstreamConfigYAML{
 			Enabled: boolPtr(true),
 			Mesh: upstreamEndpointYAML{
-				Interface: "hgs-2host",
+				Interface: "hgv2host",
 				IPv6LL:    "fe80::1/64",
 			},
 		},
@@ -274,8 +274,8 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	for _, sr := range spec.StaticRoutes {
 		if sr.Prefix == assignmentPrefix {
 			foundAssignment = true
-			if sr.Via != "hgs-2host" {
-				t.Errorf("static route via = %q, want hgs-2host", sr.Via)
+			if sr.Via != "hgv2host" {
+				t.Errorf("static route via = %q, want hgv2host", sr.Via)
 			}
 		}
 	}
@@ -295,7 +295,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	if !strings.Contains(cfgStr, "protocol static") {
 		t.Errorf("BIRD config missing protocol static block\n%s", cfgStr)
 	}
-	if !strings.Contains(cfgStr, `route 10.42.0.0/24 via "hgs-2host";`) {
+	if !strings.Contains(cfgStr, `route 10.42.0.0/24 via "hgv2host";`) {
 		t.Errorf("BIRD config missing static route for 10.42.0.0/24\n%s", cfgStr)
 	}
 
@@ -326,7 +326,7 @@ func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
 			Enabled: boolPtr(true),
 			Mode:    upstreamModeExternal,
 			Mesh: upstreamEndpointYAML{
-				Interface: "hgs-2host",
+				Interface: "hgv2host",
 			},
 		},
 	}}

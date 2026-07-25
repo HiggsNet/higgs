@@ -81,8 +81,7 @@ type FirewallInstanceSpec struct {
 	OwnerPrefix   string
 
 	// Interface roles for overlay instances.
-	XFRMTunnelPattern string   // e.g. "hgs*"
-	UpstreamPatterns  []string // e.g. ["hgs-upstream*"]
+	XFRMTunnelPattern string // compatibility fallback when no live interface is available
 
 	// Overlay data-plane inputs.
 	LocalServices    []LocalService
@@ -200,8 +199,11 @@ type FirewallPolicyInput struct {
 	// Revoked prefixes that must NOT appear in allow sets (audit only).
 	Revoked []netip.Prefix
 	// Live link interfaces (XFRM interface names) that should pass traffic.
+	// When present, the planner renders these exact names instead of the
+	// compatibility XFRMTunnelPattern.
 	LiveInterfaces []string
-	// Upstream interfaces.
+	// Upstream interfaces. Routing configuration is the sole authority for
+	// these names; the planner never invents an upstream fallback pattern.
 	UpstreamInterfaces []string
 	// AdvertisedCurrentIKEPorts are the currently advertised IKE entry ports
 	// from the local signed ipsec/ports record.

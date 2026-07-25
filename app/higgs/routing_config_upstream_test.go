@@ -15,11 +15,11 @@ instances:
     upstream:
       create_veth: true
       mesh:
-        interface: hgs-2host
+        interface: hgv2host
         ipv4_ll: "169.254.0.1/30"
         ipv6_ll: "fe80::1/64"
       external:
-        interface: hgs-2higgs
+        interface: hgv2mesh
         netns: ""
         ipv4_ll: "169.254.0.2/30"
         ipv6_ll: "fe80::2/64"
@@ -49,14 +49,14 @@ instances:
 	if inst.Upstream.Mode != upstreamModeStatic {
 		t.Errorf("mode = %q, want static", inst.Upstream.Mode)
 	}
-	if inst.Upstream.MeshInterface != "hgs-2host" {
-		t.Errorf("mesh interface = %q, want hgs-2host", inst.Upstream.MeshInterface)
+	if inst.Upstream.MeshInterface != "hgv2host" {
+		t.Errorf("mesh interface = %q, want hgv2host", inst.Upstream.MeshInterface)
 	}
 	if !inst.Upstream.CreateVeth {
 		t.Error("create_veth not set")
 	}
-	if inst.Upstream.ExternalInterface != "hgs-2higgs" {
-		t.Errorf("external interface = %q, want hgs-2higgs", inst.Upstream.ExternalInterface)
+	if inst.Upstream.ExternalInterface != "hgv2mesh" {
+		t.Errorf("external interface = %q, want hgv2mesh", inst.Upstream.ExternalInterface)
 	}
 	if inst.Upstream.ExternalNetns != "" {
 		t.Errorf("external netns = %q, want empty", inst.Upstream.ExternalNetns)
@@ -198,11 +198,11 @@ instances:
 	if inst.Upstream == nil || !inst.Upstream.Enabled {
 		t.Fatal("upstream should be enabled")
 	}
-	if inst.Upstream.MeshInterface != "hgs-2host" {
-		t.Errorf("default mesh interface = %q, want hgs-2host", inst.Upstream.MeshInterface)
+	if inst.Upstream.MeshInterface != "hgv2host" {
+		t.Errorf("default mesh interface = %q, want hgv2host", inst.Upstream.MeshInterface)
 	}
-	if inst.Upstream.ExternalInterface != "hgs-2higgs" {
-		t.Errorf("default external interface = %q, want hgs-2higgs", inst.Upstream.ExternalInterface)
+	if inst.Upstream.ExternalInterface != "hgv2mesh" {
+		t.Errorf("default external interface = %q, want hgv2mesh", inst.Upstream.ExternalInterface)
 	}
 	if !inst.Upstream.CreateVeth {
 		t.Error("default create_veth = false, want true")

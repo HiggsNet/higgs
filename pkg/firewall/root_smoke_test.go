@@ -66,7 +66,6 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 		DefaultPolicy:     DefaultPolicyDrop,
 		OwnerPrefix:       ownerPrefix,
 		XFRMTunnelPattern: "hgs+",
-		UpstreamPatterns:  []string{"up+"},
 		LocalServices: []LocalService{
 			{Proto: ProtoTCP, Port: 8080},
 		},
@@ -89,9 +88,11 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 		inlineWant = append(inlineWant, "higgs-inline-iptables-v4", "higgs-inline-iptables-v6")
 	}
 	input := FirewallPolicyInput{
-		LocalAssigned:  []netip.Prefix{mustPrefix(t, "10.42.0.2/32")},
-		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.1/32"), mustPrefix(t, "10.43.0.0/24")},
-		Revoked:        []netip.Prefix{mustPrefix(t, "10.99.0.0/24")},
+		LocalAssigned:      []netip.Prefix{mustPrefix(t, "10.42.0.2/32")},
+		MeshAuthorized:     []netip.Prefix{mustPrefix(t, "10.42.0.1/32"), mustPrefix(t, "10.43.0.0/24")},
+		Revoked:            []netip.Prefix{mustPrefix(t, "10.99.0.0/24")},
+		LiveInterfaces:     []string{"hgs0"},
+		UpstreamInterfaces: []string{"up0"},
 		Forwarding: ForwardingPolicy{
 			Transit:       true,
 			AllowPrefixes: []netip.Prefix{mustPrefix(t, "10.42.0.1/32"), mustPrefix(t, "10.42.0.2/32")},

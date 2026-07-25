@@ -240,8 +240,8 @@ routing:
 	if !inst.Upstream.CreateVeth {
 		t.Fatal("upstream create_veth should default to true")
 	}
-	if inst.Upstream.MeshInterface != "hgs-2host" || inst.Upstream.ExternalInterface != "hgs-2higgs" {
-		t.Fatalf("upstream interfaces = %q/%q, want hgs-2host/hgs-2higgs", inst.Upstream.MeshInterface, inst.Upstream.ExternalInterface)
+	if inst.Upstream.MeshInterface != "hgv2host" || inst.Upstream.ExternalInterface != "hgv2mesh" {
+		t.Fatalf("upstream interfaces = %q/%q, want hgv2host/hgv2mesh", inst.Upstream.MeshInterface, inst.Upstream.ExternalInterface)
 	}
 }
 

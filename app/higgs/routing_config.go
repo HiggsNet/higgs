@@ -156,6 +156,8 @@ const (
 	defaultMeshIPv6LL     = "fe80::a1:1/64"
 	defaultExternalIPv4LL = "169.254.254.2/30"
 	defaultExternalIPv6LL = "fe80::a1:2/64"
+	defaultMeshVeth       = "hgv2host"
+	defaultExternalVeth   = "hgv2mesh"
 )
 
 // parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
@@ -397,10 +399,10 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 
 	// Default endpoint interface names when upstream is enabled but not specified.
 	if uc.MeshInterface == "" {
-		uc.MeshInterface = "hgs-2host"
+		uc.MeshInterface = defaultMeshVeth
 	}
 	if uc.ExternalInterface == "" {
-		uc.ExternalInterface = "hgs-2higgs"
+		uc.ExternalInterface = defaultExternalVeth
 	}
 	if !oneOfUpstreamMode(uc.Mode) {
 		return nil, fmt.Errorf("unsupported mode %q", uc.Mode)

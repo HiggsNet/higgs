@@ -102,6 +102,9 @@ func validateSpec(spec BirdInstanceSpec) error {
 			return fmt.Errorf("bird: table id must be %q or a numeric kernel table id", defaultTableID)
 		}
 	}
+	if spec.Upstream != nil && strings.TrimSpace(spec.Upstream.Interface) == "" {
+		return fmt.Errorf("bird: upstream interface is required")
+	}
 	if !filepath.IsAbs(spec.ControlSocketPath) {
 		return fmt.Errorf("bird: control socket path must be absolute")
 	}
@@ -151,12 +154,8 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	// Determine if upstream is enabled and build upstream interface block.
 	var upstreamBlock *BabelInterfaceBlock
 	if spec.Upstream != nil {
-		pat := spec.Upstream.InterfacePattern
-		if pat == "" {
-			pat = "hgs-2host*"
-		}
 		upstreamBlock = &BabelInterfaceBlock{
-			InterfacePattern: pat,
+			InterfacePattern: spec.Upstream.Interface,
 			TypeTunnel:       false, // veth does NOT use type tunnel
 			MetricBase:       spec.MetricBase,
 		}
