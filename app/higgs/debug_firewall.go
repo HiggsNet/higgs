@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -112,6 +113,11 @@ func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfi
 			Transit:       policy.Transit,
 			AllowPrefixes: len(policy.AllowPrefixes),
 			DenyPrefixes:  len(policy.DenyPrefixes),
+			AllowFilters:  firewallPrefixStrings(policy.AllowPrefixes),
+			DenyFilters:   firewallPrefixStrings(policy.DenyPrefixes),
+			AllowPeers:    append([]string(nil), policy.AllowPeers...),
+			DenyPeers:     append([]string(nil), policy.DenyPeers...),
+			MetricHint:    policy.MetricHint,
 			IsHost:        inst.IsHost,
 			HostIKE:       inst.HostPorts.IKE,
 			HostNATT:      inst.HostPorts.NATT,
@@ -127,6 +133,14 @@ func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfi
 		input.Instances = append(input.Instances, instInput)
 	}
 	return inspect.BuildFirewallDebug(input)
+}
+
+func firewallPrefixStrings(prefixes []netip.Prefix) []string {
+	out := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		out = append(out, prefix.String())
+	}
+	return out
 }
 
 func firewallInlineHookViews(hooks firewall.NativeHooks) []inspect.FirewallInlineHookView {

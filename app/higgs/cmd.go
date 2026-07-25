@@ -16,20 +16,31 @@ func rootCommand() *cli.Command {
 		Usage:       "Higgs zone authority CLI",
 		Description: "A command-line tool for managing Higgs zones, keys, records, and sync.",
 		Commands: []*cli.Command{
-			cmdRoot(),
-			cmdKeygen(),
-			cmdJoin(),
-			cmdDelegate(),
-			cmdZone(),
-			cmdRecord(),
+			cmdGossip(),
+			cmdLinks(),
 			cmdRoute(),
-			cmdIPAM(),
 			cmdService(),
 			cmdFirewall(),
 			cmdVersion(),
 			cmdDaemon(),
 			cmdAdvanced(),
 			cmdDebug(),
+		},
+	}
+}
+
+func cmdGossip() *cli.Command {
+	return &cli.Command{
+		Name:  "gossip",
+		Usage: "Gossip identity, trust, zone, record, and peer commands",
+		Commands: []*cli.Command{
+			cmdRoot(),
+			cmdKeygen(),
+			cmdJoin(),
+			cmdDelegate(),
+			cmdZone(),
+			cmdRecord(),
+			cmdPeer(),
 		},
 	}
 }
@@ -72,26 +83,30 @@ func cmdFirewall() *cli.Command {
 	return &cli.Command{
 		Name:  "firewall",
 		Usage: "Show and manage local dynamic firewall policy",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show matching instance ids, scopes, policies, backends, prefixes, or services"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show transit filters, services, host policy, generation, and owned-object details"},
+		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 0 {
-				return cli.Exit("usage: higgs firewall [show|endpoint]", 1)
+				return cli.Exit("usage: higgs firewall [--filter text] [--verbose]", 1)
 			}
-			return showFirewall("", false)
+			return showFirewall(cmd.String("filter"), cmd.Bool("verbose"))
 		},
 		Commands: []*cli.Command{
 			{
 				Name:      "show",
-				Usage:     "Show a human-readable firewall summary",
+				Usage:     "Show local firewall policy",
 				UsageText: "higgs firewall show [--filter text] [--verbose]",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show matching instance ids, scopes, modes, or backends"},
-					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show policy, service, generation, and owned-object details"},
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show matching instance ids, scopes, policies, backends, prefixes, or services"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show transit filters, services, host policy, generation, and owned-object details"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
 						return cli.Exit("usage: higgs firewall show [--filter text] [--verbose]", 1)
 					}
-					return showFirewall(cmd.String("filter"), cmd.Bool("verbose"))
+					return showFirewall(effectiveStringFlag(cmd, "filter"), effectiveBoolFlag(cmd, "verbose"))
 				},
 			},
 			{
@@ -203,7 +218,7 @@ func cmdRoot() *cli.Command {
 				Description: "Create a new state database containing only the root zone.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs root init", 1)
+						return cli.Exit("usage: higgs gossip root init", 1)
 					}
 					return initRootState()
 				},
@@ -214,7 +229,7 @@ func cmdRoot() *cli.Command {
 				Description: "Display the public key of the root zone authority.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs root pubkey", 1)
+						return cli.Exit("usage: higgs gossip root pubkey", 1)
 					}
 					return rootPubkey()
 				},
@@ -227,12 +242,12 @@ func cmdKeygen() *cli.Command {
 	return &cli.Command{
 		Name:      "keygen",
 		Usage:     "Generate a new Ed25519 key pair",
-		UsageText: "higgs keygen <file>",
+		UsageText: "higgs gossip keygen <file>",
 		Description: "Generate a new Ed25519 private key and write it to the specified JSON file.\n" +
 			"The public key is printed to stdout.",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
-				return cli.Exit("usage: higgs keygen <file>", 1)
+				return cli.Exit("usage: higgs gossip keygen <file>", 1)
 			}
 			return keygen(cmd.Args().First())
 		},
@@ -247,19 +262,19 @@ func cmdJoin() *cli.Command {
 			{
 				Name:      "request",
 				Usage:     "Create a join request for a zone",
-				UsageText: "higgs join request <zone> <key.json> [request.b64]\n   higgs join request --from-config [request.b64]",
+				UsageText: "higgs gossip join request <zone> <key.json> [request.b64]\n   higgs gossip join request --from-config [request.b64]",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "from-config", Usage: "Create the request from managed_zone and identity.key_path in config.yaml"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Bool("from-config") {
 						if cmd.Args().Len() > 1 {
-							return cli.Exit("usage: higgs join request --from-config [request.b64]", 1)
+							return cli.Exit("usage: higgs gossip join request --from-config [request.b64]", 1)
 						}
 						return writeJoinRequestFromConfig(cmd.Args().First())
 					}
 					if cmd.Args().Len() < 2 || cmd.Args().Len() > 3 {
-						return cli.Exit("usage: higgs join request <zone> <key.json> [request.b64]", 1)
+						return cli.Exit("usage: higgs gossip join request <zone> <key.json> [request.b64]", 1)
 					}
 					return createJoinRequest(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Args().Get(2))
 				},
@@ -267,13 +282,13 @@ func cmdJoin() *cli.Command {
 			{
 				Name:      "accept",
 				Usage:     "Accept a join bundle",
-				UsageText: "higgs join accept [--direct] <bundle-b64|bundle-file> [key.json]",
+				UsageText: "higgs gossip join accept [--direct] <bundle-b64|bundle-file> [key.json]",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
-						return cli.Exit("usage: higgs join accept <bundle-b64|bundle-file> [key.json]", 1)
+						return cli.Exit("usage: higgs gossip join accept <bundle-b64|bundle-file> [key.json]", 1)
 					}
 					return acceptJoinBundle(cmd.Args().Get(0), cmd.Args().Get(1), cmd.Bool("direct"))
 				},
@@ -290,14 +305,14 @@ func cmdDelegate() *cli.Command {
 			{
 				Name:      "issue",
 				Usage:     "Issue a delegation from a join request",
-				UsageText: "higgs delegate issue [--permissions <permissions>] [--direct] <request-b64|request-file> [bundle.b64]",
+				UsageText: "higgs gossip delegate issue [--permissions <permissions>] [--direct] <request-b64|request-file> [bundle.b64]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "permissions", Usage: "Comma-separated permissions for the delegated zone"},
 					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
-						return cli.Exit("usage: higgs delegate issue [--permissions <permissions>] [--direct] <request-b64|request-file> [bundle.b64]", 1)
+						return cli.Exit("usage: higgs gossip delegate issue [--permissions <permissions>] [--direct] <request-b64|request-file> [bundle.b64]", 1)
 					}
 					permissions, err := parseOptionalDelegationPermissions(cmd.String("permissions"))
 					if err != nil {
@@ -309,7 +324,7 @@ func cmdDelegate() *cli.Command {
 			{
 				Name:      "grant",
 				Usage:     "Add permissions to an existing delegated zone",
-				UsageText: "higgs delegate grant [--direct] <zone> <permission>[,<permission>...] [bundle.b64]",
+				UsageText: "higgs gossip delegate grant [--direct] <zone> <permission>[,<permission>...] [bundle.b64]",
 				Description: "Increase the delegated zone authority epoch, add permissions to its authorized keys, " +
 					"and re-sign the parent delegation.",
 				Flags: []cli.Flag{
@@ -317,7 +332,7 @@ func cmdDelegate() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 2 || cmd.Args().Len() > 3 {
-						return cli.Exit("usage: higgs delegate grant <zone> <permission>[,<permission>...] [bundle.b64]", 1)
+						return cli.Exit("usage: higgs gossip delegate grant <zone> <permission>[,<permission>...] [bundle.b64]", 1)
 					}
 					permissions, err := parseAuthorityPermissions([]string{cmd.Args().Get(1)})
 					if err != nil {
@@ -329,13 +344,13 @@ func cmdDelegate() *cli.Command {
 			{
 				Name:      "revoke",
 				Usage:     "Revoke a child zone delegation",
-				UsageText: "higgs delegate revoke [--direct] <zone> [reason]",
+				UsageText: "higgs gossip delegate revoke [--direct] <zone> [reason]",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without contacting the daemon"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 1 || cmd.Args().Len() > 2 {
-						return cli.Exit("usage: higgs delegate revoke <zone> [reason]", 1)
+						return cli.Exit("usage: higgs gossip delegate revoke <zone> [reason]", 1)
 					}
 					reason := ""
 					if cmd.Args().Len() == 2 {
@@ -355,24 +370,76 @@ func parseOptionalDelegationPermissions(raw string) ([]zone.Permission, error) {
 	return parseAuthorityPermissions([]string{raw})
 }
 
+func effectiveStringFlag(cmd *cli.Command, name string) string {
+	for _, current := range cmd.Lineage() {
+		if localFlagSet(current, name) {
+			return current.String(name)
+		}
+	}
+	return cmd.String(name)
+}
+
+func effectiveBoolFlag(cmd *cli.Command, name string) bool {
+	for _, current := range cmd.Lineage() {
+		if localFlagSet(current, name) {
+			return current.Bool(name)
+		}
+	}
+	return cmd.Bool(name)
+}
+
+func localFlagSet(cmd *cli.Command, name string) bool {
+	for _, setName := range cmd.LocalFlagNames() {
+		if setName == name {
+			return true
+		}
+	}
+	return false
+}
+
 func cmdZone() *cli.Command {
 	return &cli.Command{
-		Name:  "zone",
-		Usage: "Zone inspection commands",
+		Name:      "zone",
+		Usage:     "Show known zones",
+		UsageText: "higgs gossip zone [zone] [--filter text] [--verbose]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show zones whose path contains this text"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show parent, permissions, history, revocation, and authority details"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() > 1 {
+				return cli.Exit("usage: higgs gossip zone [zone] [--filter text] [--verbose]", 1)
+			}
+			filter := cmd.String("filter")
+			if cmd.Args().Len() == 1 {
+				if filter != "" {
+					return cli.Exit("zone argument and --filter cannot be used together", 1)
+				}
+				filter = cmd.Args().First()
+			}
+			return showZones(filter, cmd.Bool("verbose"))
+		},
 		Commands: []*cli.Command{
 			{
 				Name:      "show",
-				Usage:     "Show a human-readable zone summary",
-				UsageText: "higgs zone show <zone> [--filter text] [--verbose]",
+				Usage:     "Show known zones",
+				UsageText: "higgs gossip zone show [zone] [--filter text] [--verbose]",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show matching delegations or revocations"},
-					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show authority, scope, expiry, and revocation details"},
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show zones whose path contains this text"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show parent, permissions, history, revocation, and authority details"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs zone show <zone> [--filter text] [--verbose]", 1)
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs gossip zone show [zone] [--filter text] [--verbose]", 1)
 					}
-					return showZone(zone.ZonePath(cmd.Args().First()), cmd.String("filter"), cmd.Bool("verbose"))
+					filter := effectiveStringFlag(cmd, "filter")
+					if cmd.Args().Len() == 1 {
+						if filter != "" {
+							return cli.Exit("zone argument and --filter cannot be used together", 1)
+						}
+						filter = cmd.Args().First()
+					}
+					return showZones(filter, effectiveBoolFlag(cmd, "verbose"))
 				},
 			},
 		},
@@ -381,20 +448,35 @@ func cmdZone() *cli.Command {
 
 func cmdRecord() *cli.Command {
 	return &cli.Command{
-		Name:  "record",
-		Usage: "Record management commands",
+		Name:      "record",
+		Usage:     "Browse and manage records",
+		UsageText: "higgs gossip record [zone] [--filter text] [--verbose]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show records whose key, type, or value contains this text"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show versions, timestamps, and history counts"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() > 1 {
+				return cli.Exit("usage: higgs gossip record [zone] [--filter text] [--verbose]", 1)
+			}
+			path := zone.ZonePath("")
+			if cmd.Args().Len() == 1 {
+				path = zone.ZonePath(cmd.Args().First())
+			}
+			return showRecords(path, cmd.String("filter"), cmd.Bool("verbose"))
+		},
 		Commands: []*cli.Command{
 			{
 				Name:      "list",
 				Usage:     "Browse records in a human-readable form",
-				UsageText: "higgs record list [zone] [--filter text] [--verbose]",
+				UsageText: "higgs gossip record list [zone] [--filter text] [--verbose]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show records whose key, type, or value contains this text"},
-					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show values, versions, timestamps, and history counts"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show versions, timestamps, and history counts"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() > 1 {
-						return cli.Exit("usage: higgs record list [zone] [--filter text] [--verbose]", 1)
+						return cli.Exit("usage: higgs gossip record list [zone] [--filter text] [--verbose]", 1)
 					}
 					path := zone.ZonePath("")
 					if cmd.Args().Len() == 1 {
@@ -406,7 +488,7 @@ func cmdRecord() *cli.Command {
 			{
 				Name:      "put",
 				Usage:     "Store a record in a zone",
-				UsageText: "higgs record put [--direct] <zone> <key> <value> [type]",
+				UsageText: "higgs gossip record put [--direct] <zone> <key> <value> [type]",
 				Description: "Store a key-value record in the specified zone.\n" +
 					"Optional type defaults to 'policy.string'.",
 				Flags: []cli.Flag{
@@ -414,7 +496,7 @@ func cmdRecord() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() < 3 || cmd.Args().Len() > 4 {
-						return cli.Exit("usage: higgs record put <zone> <key> <value> [type]", 1)
+						return cli.Exit("usage: higgs gossip record put <zone> <key> <value> [type]", 1)
 					}
 					recordType := "policy.string"
 					if cmd.Args().Len() > 3 {
@@ -426,13 +508,13 @@ func cmdRecord() *cli.Command {
 			{
 				Name:      "get",
 				Usage:     "Show one record in a human-readable form",
-				UsageText: "higgs record get <zone> <key> [--verbose]",
+				UsageText: "higgs gossip record get <zone> <key> [--verbose]",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show version, timestamp, and history count"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
-						return cli.Exit("usage: higgs record get <zone> <key> [--verbose]", 1)
+						return cli.Exit("usage: higgs gossip record get <zone> <key> [--verbose]", 1)
 					}
 					return getRecord(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("verbose"))
 				},
@@ -441,11 +523,141 @@ func cmdRecord() *cli.Command {
 	}
 }
 
+func cmdPeer() *cli.Command {
+	return &cli.Command{
+		Name:      "peer",
+		Usage:     "Show gossip peer connection and lifecycle state",
+		UsageText: "higgs gossip peer [peer] [--filter text] [--verbose]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show peers matching id, zone, state, or reason"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show timestamps, cleanup state, link counts, and diagnostics"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() > 1 {
+				return cli.Exit("usage: higgs gossip peer [peer] [--filter text] [--verbose]", 1)
+			}
+			filter := cmd.String("filter")
+			if cmd.Args().Len() == 1 {
+				if filter != "" {
+					return cli.Exit("peer argument and --filter cannot be used together", 1)
+				}
+				filter = cmd.Args().First()
+			}
+			return showPeers(filter, cmd.Bool("verbose"))
+		},
+		Commands: []*cli.Command{
+			{
+				Name:      "show",
+				Usage:     "Show gossip peer connection and lifecycle state",
+				UsageText: "higgs gossip peer show [peer] [--filter text] [--verbose]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show peers matching id, zone, state, or reason"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show timestamps, cleanup state, link counts, and diagnostics"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs gossip peer show [peer] [--filter text] [--verbose]", 1)
+					}
+					filter := effectiveStringFlag(cmd, "filter")
+					if cmd.Args().Len() == 1 {
+						if filter != "" {
+							return cli.Exit("peer argument and --filter cannot be used together", 1)
+						}
+						filter = cmd.Args().First()
+					}
+					return showPeers(filter, effectiveBoolFlag(cmd, "verbose"))
+				},
+			},
+		},
+	}
+}
+
+func cmdLinks() *cli.Command {
+	return &cli.Command{
+		Name:      "links",
+		Usage:     "Show transport link state",
+		UsageText: "higgs links [link-or-peer] [--filter text] [--verbose]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show links matching peer, id, group, endpoint, interface, or SA"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show tunnel, SA, rotation, health, owner, and routing details"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() > 1 {
+				return cli.Exit("usage: higgs links [link-or-peer] [--filter text] [--verbose]", 1)
+			}
+			filter := cmd.String("filter")
+			if cmd.Args().Len() == 1 {
+				if filter != "" {
+					return cli.Exit("link argument and --filter cannot be used together", 1)
+				}
+				filter = cmd.Args().First()
+			}
+			return showLinks(filter, cmd.Bool("verbose"))
+		},
+		Commands: []*cli.Command{
+			{
+				Name:      "show",
+				Usage:     "Show transport link state",
+				UsageText: "higgs links show [link-or-peer] [--filter text] [--verbose]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show links matching peer, id, group, endpoint, interface, or SA"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show tunnel, SA, rotation, health, owner, and routing details"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: higgs links show [link-or-peer] [--filter text] [--verbose]", 1)
+					}
+					filter := effectiveStringFlag(cmd, "filter")
+					if cmd.Args().Len() == 1 {
+						if filter != "" {
+							return cli.Exit("link argument and --filter cannot be used together", 1)
+						}
+						filter = cmd.Args().First()
+					}
+					return showLinks(filter, effectiveBoolFlag(cmd, "verbose"))
+				},
+			},
+		},
+	}
+}
+
 func cmdRoute() *cli.Command {
 	return &cli.Command{
-		Name:  "route",
-		Usage: "Route announcement commands",
+		Name:      "route",
+		Usage:     "Show and manage routes and IPAM",
+		UsageText: "higgs route [--filter text] [--all] [--verbose]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show routes matching prefix, zone, state, controller, or authorization"},
+			&cli.BoolFlag{Name: "all", Usage: "Include withdrawn announcements"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show controller, authorization, version, and record key"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: higgs route [--filter text] [--all] [--verbose]", 1)
+			}
+			return showRoutes(cmd.String("filter"), cmd.Bool("all"), cmd.Bool("verbose"))
+		},
 		Commands: []*cli.Command{
+			{
+				Name:      "show",
+				Usage:     "Show route announcements",
+				UsageText: "higgs route show [--filter text] [--all] [--verbose]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show routes matching prefix, zone, state, controller, or authorization"},
+					&cli.BoolFlag{Name: "all", Usage: "Include withdrawn announcements"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show controller, authorization, version, and record key"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs route show [--filter text] [--all] [--verbose]", 1)
+					}
+					return showRoutes(
+						effectiveStringFlag(cmd, "filter"),
+						effectiveBoolFlag(cmd, "all"),
+						effectiveBoolFlag(cmd, "verbose"),
+					)
+				},
+			},
 			{
 				Name:      "announce",
 				Usage:     "Announce a route prefix",
@@ -478,22 +690,7 @@ func cmdRoute() *cli.Command {
 					return withdrawRoute(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 				},
 			},
-			{
-				Name:      "show",
-				Usage:     "Show route announcements",
-				UsageText: "higgs route show [--zone <zone>] [--all] [--json]",
-				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "zone", Usage: "Filter by announcing zone"},
-					&cli.BoolFlag{Name: "all", Usage: "Include withdrawn announcements"},
-					&cli.BoolFlag{Name: "json", Usage: "Print structured JSON output"},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs route show [--zone <zone>] [--all] [--json]", 1)
-					}
-					return showRoutes(zone.ZonePath(cmd.String("zone")), cmd.Bool("all"), cmd.Bool("json"))
-				},
-			},
+			cmdIPAM(),
 		},
 	}
 }

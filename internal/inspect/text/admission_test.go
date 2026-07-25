@@ -40,7 +40,7 @@ func TestWriteAdmissionDiagnosis(t *testing.T) {
 		"pending_since: 1970-01-01T01:06:40Z",
 		"last_adoption_error: adoption failed",
 		"join_request: eyJqb2luIjoidGVzdCJ9",
-		"join_hint: higgs delegate issue <join_request> (on parent zone admin)",
+		"join_hint: higgs gossip delegate issue <join_request> (on parent zone admin)",
 		"boundary:",
 	}
 	for _, want := range required {

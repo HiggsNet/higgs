@@ -6,7 +6,43 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/higgs/pkg/core/zone"
 )
+
+func TestWritePeersUsesConnectionSummaryAndVerboseTables(t *testing.T) {
+	view := inspect.PeerLifecycleDebugView{Peers: []inspect.PeerStatusInfo{
+		{
+			PeerID: "node-a.catofes.", Zone: zone.ZonePath("node-a.catofes."),
+			State: "active", UpLinks: 1, ActualLinks: 1, DesiredLinks: 2,
+			LastSeenUnix: time.Unix(1700000000, 0).Unix(),
+		},
+		{
+			PeerID: "node-b.catofes.", Zone: zone.ZonePath("node-b.catofes."),
+			State: "offline", Reason: "sync_timeout", Detail: "last attempt failed",
+		},
+	}}
+	var summary strings.Builder
+	if err := WritePeers(&summary, view, "", false); err != nil {
+		t.Fatalf("WritePeers summary: %v", err)
+	}
+	for _, want := range []string{"PEER", "STATE", "LINKS", "LAST_SEEN", "node-a.catofes.", "1/1/2", "node-b.catofes.", "offline"} {
+		if !strings.Contains(summary.String(), want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary.String())
+		}
+	}
+	var verbose strings.Builder
+	if err := WritePeers(&verbose, view, "node-b", true); err != nil {
+		t.Fatalf("WritePeers verbose: %v", err)
+	}
+	for _, want := range []string{"peers: 1/2", "LAST_SYNC", "NEXT_CLEANUP", "DETAIL", "sync_timeout", "last attempt failed"} {
+		if !strings.Contains(verbose.String(), want) {
+			t.Fatalf("verbose output missing %q:\n%s", want, verbose.String())
+		}
+	}
+	if strings.Contains(verbose.String(), "node-a.catofes.") {
+		t.Fatalf("filter leaked node-a:\n%s", verbose.String())
+	}
+}
 
 func TestWritePeerLifecycleDebugNoPeers(t *testing.T) {
 	var buf strings.Builder

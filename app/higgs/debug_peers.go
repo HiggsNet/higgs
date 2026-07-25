@@ -34,6 +34,18 @@ func debugPeers(_ context.Context) error {
 	return writeDebugPeers(os.Stdout, rt, state)
 }
 
+func showPeers(filter string, verbose bool) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	return inspecttext.WritePeers(os.Stdout, buildPeerLifecycleDebugView(rt, state), filter, verbose)
+}
+
 // writeDebugPeers writes the peer status table to w. It is separated from
 // debugPeers for testability.
 func writeDebugPeers(w io.Writer, rt *Runtime, state *stateFile) error {

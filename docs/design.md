@@ -2,7 +2,7 @@
 
 > **文档状态（2026-07）**
 > Phase 0–4 已落地实现，Phase 5 routing / IPAM / per-netns BIRD 已完成并迁移到 `docs/new/routing.md`。
-> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 已实现 route announcement / IPAM record / `routing/netns`、AuthorizedRouteSet、per-netns BIRD config generator / birdc client / process manager、daemon routing reconcile、veth upstream、`higgs route` / `higgs ipam` 与 `higgs debug routing` CLI，并通过 `make routing-dry-run-smoke` 验证。
+> 各 Phase 完成情况见 `../todo.md`；Phase 4（StrongSwan/IKEv2 + XFRM interface 建链）已完整实现；Phase 5 已实现 route announcement / IPAM record / `routing/netns`、AuthorizedRouteSet、per-netns BIRD config generator / birdc client / process manager、daemon routing reconcile、veth upstream、`higgs route` / `higgs route ipam` 与 `higgs debug routing` CLI，并通过 `make routing-dry-run-smoke` 验证。
 >
 > 本文档保留架构总览与协议背景；routing / IPAM 的具体当前行为、record schema、授权规则、BIRD 运行时与诊断以 `docs/new/routing.md` 为准。旧的 `docs/phase5-route-record-design.md`、`docs/phase6-ipam-design.md`、`docs/phase5-7-per-netns-bird-design.md` 已被合并删除。
 

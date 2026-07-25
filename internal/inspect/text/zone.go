@@ -5,10 +5,77 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
+
+func WriteZones(w io.Writer, details []inspect.ZoneDetail, filter string, verbose bool) error {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	filtered := make([]inspect.ZoneDetail, 0, len(details))
+	for _, detail := range details {
+		status := "active"
+		if detail.Revoked {
+			status = "revoked"
+		}
+		searchable := strings.Join([]string{
+			detail.Path,
+			detail.Parent,
+			status,
+			authorityPermissions(detail.Authority),
+		}, " ")
+		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
+			filtered = append(filtered, detail)
+		}
+	}
+
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	out.Linef("zones: %s", filteredCount(len(filtered), len(details), filter))
+	if verbose {
+		out.Println("ZONE\tSTATUS\tPARENT\tPERMISSIONS\tRECORDS\tHISTORY\tDELEGATIONS\tREVOCATIONS\tAUTHORITY")
+	} else {
+		out.Println("ZONE\tSTATUS\tRECORDS\tDELEGATIONS")
+	}
+	for _, detail := range filtered {
+		status := "active"
+		if detail.Revoked {
+			status = "revoked"
+		}
+		if verbose {
+			out.Linef("%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s",
+				detail.Path,
+				status,
+				dash(detail.Parent),
+				authorityPermissions(detail.Authority),
+				detail.RecordCount,
+				detail.HistoryCount,
+				detail.DelegationCount,
+				detail.RevocationCount,
+				zoneAuthoritySummary(detail.Authority),
+			)
+		} else {
+			out.Linef("%s\t%s\t%d\t%d",
+				detail.Path,
+				status,
+				detail.RecordCount,
+				detail.DelegationCount,
+			)
+		}
+	}
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
+}
+
+func zoneAuthoritySummary(authority *inspect.AuthorityView) string {
+	if authority == nil {
+		return "-"
+	}
+	return fmt.Sprintf("epoch=%d keys=%d threshold=%d", authority.Epoch, len(authority.Keys), authority.Threshold)
+}
 
 // WriteZone prints the operator-facing zone view. Cryptographic material is
 // intentionally reserved for the debug commands.

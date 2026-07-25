@@ -53,6 +53,47 @@ func TestWriteZoneIsHumanReadableAndFiltersDelegations(t *testing.T) {
 	}
 }
 
+func TestWriteZonesUsesSummaryAndVerboseTables(t *testing.T) {
+	details := []inspect.ZoneDetail{
+		{
+			Path: "node-a.catofes.", Parent: "catofes.", RecordCount: 8,
+			HistoryCount: 2, DelegationCount: 1, RevocationCount: 1,
+			Authority: &inspect.AuthorityView{
+				Epoch: 3, Threshold: 1,
+				Keys: []inspect.AuthorizedKeyView{{Capabilities: []inspect.CapabilityView{{
+					Permissions: []string{"write"},
+				}}}},
+			},
+		},
+		{Path: "node-b.catofes.", Parent: "catofes.", RecordCount: 4, Revoked: true},
+	}
+	var summary bytes.Buffer
+	if err := WriteZones(&summary, details, "", false); err != nil {
+		t.Fatalf("WriteZones summary: %v", err)
+	}
+	for _, want := range []string{"ZONE", "STATUS", "RECORDS", "DELEGATIONS", "node-a.catofes.", "node-b.catofes.", "revoked"} {
+		if !strings.Contains(summary.String(), want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary.String())
+		}
+	}
+	if strings.Contains(summary.String(), "PERMISSIONS") {
+		t.Fatalf("summary unexpectedly contains verbose columns:\n%s", summary.String())
+	}
+
+	var verbose bytes.Buffer
+	if err := WriteZones(&verbose, details, "node-a", true); err != nil {
+		t.Fatalf("WriteZones verbose: %v", err)
+	}
+	for _, want := range []string{"zones: 1/2", "PARENT", "PERMISSIONS", "HISTORY", "REVOCATIONS", "AUTHORITY", "write", "epoch=3 keys=1 threshold=1"} {
+		if !strings.Contains(verbose.String(), want) {
+			t.Fatalf("verbose output missing %q:\n%s", want, verbose.String())
+		}
+	}
+	if strings.Contains(verbose.String(), "node-b.catofes.") {
+		t.Fatalf("filter leaked node-b:\n%s", verbose.String())
+	}
+}
+
 func TestWriteZoneDebugPreservesLegacyLayout(t *testing.T) {
 	view := inspect.ZoneDebugView{
 		Detail: inspect.ZoneDetail{

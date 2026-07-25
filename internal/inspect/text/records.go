@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
@@ -28,26 +29,41 @@ func WriteRecords(w io.Writer, view inspect.RecordsDebugView, filter string, ver
 		}
 	}
 
-	out := newLineWriter(w)
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
 	out.Linef("zones: %d", len(zones))
 	out.Linef("records: %s", filteredCount(recordCount, view.RecordCount, filter))
 	for _, zoneView := range zones {
 		out.Blank()
 		out.Linef("zone: %s", zoneView.Path)
+		if verbose {
+			out.Println("RECORD\tTYPE\tVALUE\tVERSION\tUPDATED\tHISTORY")
+		} else {
+			out.Println("RECORD\tTYPE\tVALUE")
+		}
 		for _, record := range zoneView.Records {
-			if !verbose {
-				out.Linef("  %s type=%s", record.Key, dash(record.Type))
-				continue
+			if verbose {
+				out.Linef("%s\t%s\t%s\t%d\t%s\t%d",
+					record.Key,
+					dash(record.Type),
+					formatRecordTableValue(record.Value),
+					record.Version,
+					formatUnixTime(record.Timestamp),
+					record.HistoryCount,
+				)
+			} else {
+				out.Linef("%s\t%s\t%s",
+					record.Key,
+					dash(record.Type),
+					formatRecordTableValue(record.Value),
+				)
 			}
-			out.Linef("  %s", record.Key)
-			out.Linef("    type: %s", dash(record.Type))
-			out.Linef("    value: %s", formatDebugRecordValue(record.Value))
-			out.Linef("    version: %d", record.Version)
-			out.Linef("    updated: %s", formatUnixTime(record.Timestamp))
-			out.Linef("    history: %d", record.HistoryCount)
 		}
 	}
-	return out.Err()
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
 }
 
 func WriteRecord(w io.Writer, record inspect.RecordDetailView, verbose bool) error {
@@ -95,4 +111,8 @@ func formatDebugRecordValue(value string) string {
 		}
 	}
 	return value
+}
+
+func formatRecordTableValue(value string) string {
+	return escapeTableCell(formatDebugRecordValue(value))
 }

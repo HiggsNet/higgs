@@ -447,18 +447,18 @@ ipam:
 
 ```bash
 # IPAM 管理
-higgs ipam pool create <zone> <prefix> --delegated-to <zone>
-higgs ipam assign <zone> <prefix> --to <zone> [--shared --tag <tag>]
-higgs ipam revoke assignment <zone> <prefix> [--to <zone>]
-higgs ipam revoke pool <zone> <prefix>
+higgs route ipam pool create <zone> <prefix> --delegated-to <zone>
+higgs route ipam assign <zone> <prefix> --to <zone> [--shared --tag <tag>]
+higgs route ipam revoke assignment <zone> <prefix> [--to <zone>]
+higgs route ipam revoke pool <zone> <prefix>
 
 # Route 管理
 higgs route announce <zone> <prefix>
 higgs route withdraw <zone> <prefix>
 
 # 诊断
-higgs ipam get <addr-or-prefix>
-higgs ipam mine
+higgs route ipam get <addr-or-prefix>
+higgs route ipam mine
 higgs debug routing status
 higgs debug routing routes
 higgs debug routing routes <prefix>

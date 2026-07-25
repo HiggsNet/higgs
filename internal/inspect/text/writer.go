@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -85,4 +86,12 @@ func shortText(value string, max int) string {
 		return value
 	}
 	return value[:max] + "..."
+}
+
+func escapeTableCell(value string) string {
+	return strings.NewReplacer(
+		"\t", `\t`,
+		"\r", `\r`,
+		"\n", `\n`,
+	).Replace(value)
 }

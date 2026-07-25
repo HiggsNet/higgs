@@ -4,10 +4,100 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
+
+func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, verbose bool) error {
+	links := inspect.FilterLinkViews(inspection.Links, filter)
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	out.Linef("links: %s", filteredCount(len(links), len(inspection.Links), filter))
+	out.Linef("desired: %d  actual_sas: %d  actions: %d  skipped: %d",
+		inspection.Summary.DesiredLinks,
+		inspection.Summary.ActualSAs,
+		len(inspect.FilterLinkActions(inspection.Actions, filter)),
+		len(inspect.FilterLinkSkips(inspection.Skipped, filter)),
+	)
+	out.LineIf(inspection.Summary.LastError != "", "last_error: %s", escapeTableCell(inspection.Summary.LastError))
+	if verbose {
+		out.Println("LINK\tPEER\tGROUP\tPATH\tTRANSPORT\tSTATE\tENDPOINT\tINTERFACE\tTUNNEL\tSA\tHEALTH\tROTATION\tROUTING\tOWNER\tERROR")
+	} else {
+		out.Println("LINK\tPEER\tTRANSPORT\tSTATE\tENDPOINT\tINTERFACE")
+	}
+	for _, link := range links {
+		if verbose {
+			out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+				link.ID,
+				link.PeerZone,
+				dash(link.GroupID),
+				dash(link.PathKey),
+				dash(link.TransportKind),
+				linkDisplayState(link),
+				dash(link.Endpoint),
+				formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID),
+				linkTunnelSummary(link),
+				linkSASummary(link),
+				linkHealthSummary(link),
+				dash(link.Rotation.Phase),
+				dash(link.Routing.BirdState),
+				dash(link.Owner.Manager),
+				escapeTableCell(link.LastError),
+			)
+		} else {
+			out.Linef("%s\t%s\t%s\t%s\t%s\t%s",
+				link.ID,
+				link.PeerZone,
+				dash(link.TransportKind),
+				linkDisplayState(link),
+				dash(link.Endpoint),
+				formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID),
+			)
+		}
+	}
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
+}
+
+func linkDisplayState(link inspect.LinkView) string {
+	if link.Missing {
+		return "missing"
+	}
+	return dash(firstNonEmpty(link.ActualState, link.State))
+}
+
+func linkTunnelSummary(link inspect.LinkView) string {
+	if link.LocalTunnelAddr == "" && link.PeerTunnelAddr == "" {
+		return "-"
+	}
+	return dash(link.LocalTunnelAddr) + "->" + dash(link.PeerTunnelAddr)
+}
+
+func linkSASummary(link inspect.LinkView) string {
+	if link.ActualSA == nil {
+		return dash(link.ChildSAName)
+	}
+	state := formatSAState(*link.ActualSA)
+	name := firstNonEmpty(link.ActualSA.ChildSA, link.ChildSAName)
+	if name == "" {
+		return state
+	}
+	return name + ":" + state
+}
+
+func linkHealthSummary(link inspect.LinkView) string {
+	if link.Health == nil {
+		return "-"
+	}
+	if link.Health.LastError != "" {
+		return defaultText(link.Health.State, "error") + ":" + escapeTableCell(link.Health.LastError)
+	}
+	return defaultText(link.Health.State, "-")
+}
 
 func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	out := newLineWriter(w)

@@ -32,7 +32,7 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 | 角色 | 做什么 | 不做什么 |
 |---|---|---|
 | `higgs` daemon / CLI | 保存普通和 shared Anycast assignment；校验服务 endpoint 属于当前 Zone 的 active assignment；显式宣告或撤销整个 assignment prefix；签名、发布和撤销固定的 `services/socks5` record；根据 Zone selector 动态维护 host FORWARD endpoint ACL | 不理解镜像、容器、Compose，不调用 Docker API |
-| `higgs-services` | 读取 service manifest；从 `higgs ipam mine` 解析本地 `auto` 和 shared assignment tag；规划多 network 下三个容器的地址；生成 Compose、SmartDNS 配置和状态锁文件；对待发布 endpoint 做 TCP 就绪检查；编排 ACL、route announcement 和 service record 的发布/撤销顺序 | 不启动容器、不管理容器生命周期 |
+| `higgs-services` | 读取 service manifest；从 `higgs route ipam mine` 解析本地 `auto` 和 shared assignment tag；规划多 network 下三个容器的地址；生成 Compose、SmartDNS 配置和状态锁文件；对待发布 endpoint 做 TCP 就绪检查；编排 ACL、route announcement 和 service record 的发布/撤销顺序 | 不启动容器、不管理容器生命周期 |
 | 管理员 | 执行 `docker compose up/down/pull`；负责非 shared assignment 的路由（通常经 `ipam.announce`） | — |
 
 `render` 只生成 artifact；`publish` 也不会启动容器。容器必须先由管理员通过 Compose 拉起，`publish` 的 TCP 就绪检查才有意义。
@@ -57,9 +57,9 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 跨节点共用的 Anycast 地址使用带稳定 tag 的 shared assignment：
 
 ```bash
-higgs ipam assign catofes. 2a0d:2905:0:4::/96 \
+higgs route ipam assign catofes. 2a0d:2905:0:4::/96 \
   --to node-a.catofes. --shared --tag socks5.cn
-higgs ipam assign catofes. 2a0d:2905:0:4::/96 \
+higgs route ipam assign catofes. 2a0d:2905:0:4::/96 \
   --to node-b.catofes. --shared --tag socks5.cn
 ```
 
@@ -71,7 +71,7 @@ higgs ipam assign catofes. 2a0d:2905:0:4::/96 \
 - 同一 owner 下的 shared assignment 按成员分别保存，可以精确撤销单个节点：
 
 ```bash
-higgs ipam revoke assignment catofes. 2a0d:2905:0:4::/96 --to node-a.catofes.
+higgs route ipam revoke assignment catofes. 2a0d:2905:0:4::/96 --to node-a.catofes.
 ```
 
 ### 2.2 Service record
@@ -183,7 +183,7 @@ Docker 可以在动态池中自动分配未指定地址；三个服务容器使�
 
 ## 4. 地址解析与 artifact 生成
 
-`higgs-services` 通过执行 `higgs ipam mine`（JSON 输出）获取本机 `managed_zone` 和 active assignment 列表，然后按 manifest 做纯函数式解析，产出带 config hash 的 resolved 结构。命令：
+`higgs-services` 通过执行 `higgs route ipam mine`（JSON 输出）获取本机 `managed_zone` 和 active assignment 列表，然后按 manifest 做纯函数式解析，产出带 config hash 的 resolved 结构。命令：
 
 ```bash
 higgs-services validate   # 打印 resolved JSON，便于检查
@@ -226,7 +226,7 @@ higgs-services publish
 
 ### 5.2 publish 内部步骤
 
-`publish` 先重新执行 `higgs ipam mine` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
+`publish` 先重新执行 `higgs route ipam mine` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
 
 1. 从本机对每个 endpoint 的地址和端口做 3 秒 TCP 就绪检查；任一失败即终止。
 2. 为每个 endpoint 安装或清理独立 ACL：配置了 `allow_zones` 时执行 `higgs firewall endpoint apply socks5-<network> --destination <ip> --protocol tcp --port <port> --allow-zone ...`；未配置时删除同名旧 ACL（表示不使用这套限制）。
@@ -304,7 +304,7 @@ sudo make services-smoke
 |---|---|
 | `publish` 报 “runtime assignment or config changed; run render again” | assignment 或 manifest 在 render 后发生变化，重新 `render` 再 `publish` |
 | TCP readiness 失败 | 容器未启动或角色地址冲突；确认先 `docker compose up -d`，且基址避开动态池与 gateway |
-| `auto` / `tag:` 解析失败 | `higgs ipam mine` 中同族 assignment 数量不等于 1，或 assignment 已失效 |
+| `auto` / `tag:` 解析失败 | `higgs route ipam mine` 中同族 assignment 数量不等于 1，或 assignment 已失效 |
 | endpoint ACL apply 报错 | host firewall instance 未启用或不是 `managed` 模式，或 backend 不可用；`higgs firewall endpoint list` 查看现状 |
 | 服务已发布但 mesh 内不可达 | shared 路由是否已 announce（`higgs debug routing routes` 方向）、host 聚合路由与 Docker connected route 的优先级、回程 static upstream |
 | 修改 `trusted_host_interfaces` 后不生效 | Docker bridge driver option 不能原地更新；停止服务、删除旧 network 后重新 `up` |

@@ -31,12 +31,18 @@ func TestWriteRecordsIsHumanReadableAndFilters(t *testing.T) {
 		"zones: 1",
 		"records: 1/2",
 		"zone: node-b.catofes.",
+		"RECORD",
+		"TYPE",
+		"VALUE",
+		"VERSION",
+		"UPDATED",
+		"HISTORY",
 		"identity",
-		"type: profile",
-		"value: node-b",
-		"version: 2",
-		"updated: 2023-11-14T22:13:20Z",
-		"history: 1",
+		"profile",
+		"node-b",
+		"2",
+		"2023-11-14T22:13:20Z",
+		"1",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, output.String())
@@ -46,6 +52,62 @@ func TestWriteRecordsIsHumanReadableAndFilters(t *testing.T) {
 		if strings.Contains(output.String(), unwanted) {
 			t.Fatalf("output unexpectedly contains %q:\n%s", unwanted, output.String())
 		}
+	}
+}
+
+func TestWriteRecordsShowsValuesByDefault(t *testing.T) {
+	view := inspect.RecordsDebugView{
+		ZoneCount:   1,
+		RecordCount: 1,
+		Zones: []inspect.RecordsDebugZoneView{{
+			Path: "node-b.catofes.",
+			Records: []inspect.RecordView{{
+				Key: "sync/endpoint/udp", Type: "sync.endpoint",
+				Value:   `{"address":"192.0.2.10","port":33434}`,
+				Version: 2, Timestamp: 1700000000, HistoryCount: 1,
+			}},
+		}},
+	}
+	var output strings.Builder
+	if err := WriteRecords(&output, view, "", false); err != nil {
+		t.Fatalf("WriteRecords: %v", err)
+	}
+	for _, want := range []string{
+		"RECORD",
+		"TYPE",
+		"VALUE",
+		"sync/endpoint/udp",
+		"sync.endpoint",
+		`{"address":"192.0.2.10","port":33434}`,
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, output.String())
+		}
+	}
+	for _, unwanted := range []string{"VERSION", "UPDATED", "HISTORY"} {
+		if strings.Contains(output.String(), unwanted) {
+			t.Fatalf("default output unexpectedly contains %q:\n%s", unwanted, output.String())
+		}
+	}
+}
+
+func TestWriteRecordsEscapesMultilineTableValues(t *testing.T) {
+	view := inspect.RecordsDebugView{
+		ZoneCount:   1,
+		RecordCount: 1,
+		Zones: []inspect.RecordsDebugZoneView{{
+			Path: "node-b.catofes.",
+			Records: []inspect.RecordView{{
+				Key: "note", Type: "policy.string", Value: "first\tsecond\nthird",
+			}},
+		}},
+	}
+	var output strings.Builder
+	if err := WriteRecords(&output, view, "", false); err != nil {
+		t.Fatalf("WriteRecords: %v", err)
+	}
+	if !strings.Contains(output.String(), `first\tsecond\nthird`) {
+		t.Fatalf("multiline value is not escaped in table:\n%s", output.String())
 	}
 }
 

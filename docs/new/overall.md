@@ -124,7 +124,7 @@ Observer 是只读 Web/API 控制台。它不应该直接操作 daemon 状态，
 
 Service 发布把“可信网络状态”和“容器部署”拆开。Higgs daemon 只负责网络原语：保存 shared Anycast assignment、校验并签名 `service.socks5.v1` record、显式宣告或撤销服务前缀、按 Zone selector 维护动态 endpoint ACL。它不理解镜像、容器或 Compose。
 
-独立工具 `higgs-services` 读取本机 `/etc/higgs/service.yaml`，通过 `higgs ipam mine` 解析本地和 shared Anycast 地址，生成 Docker Compose artifact，并在管理员拉起容器后编排 TCP 就绪检查、endpoint ACL、整段 assignment 的 route announce 和签名 service record 的发布/撤销顺序。
+独立工具 `higgs-services` 读取本机 `/etc/higgs/service.yaml`，通过 `higgs route ipam mine` 解析本地和 shared Anycast 地址，生成 Docker Compose artifact，并在管理员拉起容器后编排 TCP 就绪检查、endpoint ACL、整段 assignment 的 route announce 和签名 service record 的发布/撤销顺序。
 
 发布出去的签名事实只有 service record 本身（region、address、port）；容器拓扑、`allow_zones` 等部署与安全策略都留在本机。跨节点共用的服务地址使用带 tag 的 shared assignment，路由随服务健康状态宣告和撤销，与节点普通前缀的生命周期分开。
 

@@ -25,7 +25,7 @@ func cmdIPAM() *cli.Command {
 					{
 						Name:      "create",
 						Usage:     "Create or update an IPAM pool delegation",
-						UsageText: "higgs ipam pool create [--direct] <zone> <prefix> --delegated-to <zone>",
+						UsageText: "higgs route ipam pool create [--direct] <zone> <prefix> --delegated-to <zone>",
 						Description: "Delegate authority to assign prefixes from a pool to a sub-zone.\n" +
 							"The prefix is canonicalized before storage.",
 						Flags: []cli.Flag{
@@ -34,7 +34,7 @@ func cmdIPAM() *cli.Command {
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
-								return cli.Exit("usage: higgs ipam pool create <zone> <prefix> --delegated-to <zone>", 1)
+								return cli.Exit("usage: higgs route ipam pool create <zone> <prefix> --delegated-to <zone>", 1)
 							}
 							return createIPAMPool(
 								zone.ZonePath(cmd.Args().Get(0)),
@@ -47,14 +47,14 @@ func cmdIPAM() *cli.Command {
 					{
 						Name:        "revoke",
 						Usage:       "Revoke an IPAM pool delegation",
-						UsageText:   "higgs ipam pool revoke [--direct] <zone> <prefix>",
+						UsageText:   "higgs route ipam pool revoke [--direct] <zone> <prefix>",
 						Description: "Withdraw a previously created IPAM pool delegation by publishing a higher-version record with active=false.",
 						Flags: []cli.Flag{
 							&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon reconcile"},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
-								return cli.Exit("usage: higgs ipam revoke pool <zone> <prefix>", 1)
+								return cli.Exit("usage: higgs route ipam revoke pool <zone> <prefix>", 1)
 							}
 							return revokeIPAMPool(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 						},
@@ -64,7 +64,7 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:      "assign",
 				Usage:     "Assign a prefix to a zone",
-				UsageText: "higgs ipam assign [--direct] <zone> <prefix> --to <zone> [--shared] [--tag <tag>]",
+				UsageText: "higgs route ipam assign [--direct] <zone> <prefix> --to <zone> [--shared] [--tag <tag>]",
 				Description: "Assign a CIDR prefix to a zone so it may announce routes within it.\n" +
 					"The prefix is canonicalized before storage.\n" +
 					"--shared marks this as an anycast assignment, allowing multiple zones to hold the same prefix.",
@@ -76,7 +76,7 @@ func cmdIPAM() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 2 {
-						return cli.Exit("usage: higgs ipam assign <zone> <prefix> --to <zone> [--shared] [--tag <tag>]", 1)
+						return cli.Exit("usage: higgs route ipam assign <zone> <prefix> --to <zone> [--shared] [--tag <tag>]", 1)
 					}
 					return assignIPAM(
 						zone.ZonePath(cmd.Args().Get(0)),
@@ -91,12 +91,12 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:      "revoke",
 				Usage:     "Revoke an IPAM record",
-				UsageText: "higgs ipam revoke assignment|pool <zone> <prefix>",
+				UsageText: "higgs route ipam revoke assignment|pool <zone> <prefix>",
 				Commands: []*cli.Command{
 					{
 						Name:        "assignment",
 						Usage:       "Revoke an IPAM assignment",
-						UsageText:   "higgs ipam revoke assignment [--direct] [--to <zone>] <zone> <prefix>",
+						UsageText:   "higgs route ipam revoke assignment [--direct] [--to <zone>] <zone> <prefix>",
 						Description: "Withdraw a previously created IPAM assignment by publishing a higher-version record with active=false.",
 						Flags: []cli.Flag{
 							&cli.StringFlag{Name: "to", Usage: "Assigned member Zone; required when a shared prefix has multiple members"},
@@ -104,7 +104,7 @@ func cmdIPAM() *cli.Command {
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
-								return cli.Exit("usage: higgs ipam revoke assignment [--to <zone>] <zone> <prefix>", 1)
+								return cli.Exit("usage: higgs route ipam revoke assignment [--to <zone>] <zone> <prefix>", 1)
 							}
 							return revokeIPAMAssignmentTo(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), zone.ZonePath(cmd.String("to")), cmd.Bool("direct"))
 						},
@@ -112,14 +112,14 @@ func cmdIPAM() *cli.Command {
 					{
 						Name:        "pool",
 						Usage:       "Revoke an IPAM pool delegation",
-						UsageText:   "higgs ipam revoke pool [--direct] <zone> <prefix>",
+						UsageText:   "higgs route ipam revoke pool [--direct] <zone> <prefix>",
 						Description: "Withdraw a previously created IPAM pool delegation by publishing a higher-version record with active=false.",
 						Flags: []cli.Flag{
 							&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly without daemon reconcile"},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 2 {
-								return cli.Exit("usage: higgs ipam revoke pool <zone> <prefix>", 1)
+								return cli.Exit("usage: higgs route ipam revoke pool <zone> <prefix>", 1)
 							}
 							return revokeIPAMPool(zone.ZonePath(cmd.Args().Get(0)), cmd.Args().Get(1), cmd.Bool("direct"))
 						},
@@ -129,7 +129,7 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:      "assigned",
 				Usage:     "List authorized IPAM assignments",
-				UsageText: "higgs ipam assigned [--zone <zone>]",
+				UsageText: "higgs route ipam assigned [--zone <zone>]",
 				Description: "Print authorized IPAM assignments as JSON.\n" +
 					"If --zone is given, only assignments whose source or assigned_to matches are shown.",
 				Flags: []cli.Flag{
@@ -137,7 +137,7 @@ func cmdIPAM() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs ipam assigned [--zone <zone>]", 1)
+						return cli.Exit("usage: higgs route ipam assigned [--zone <zone>]", 1)
 					}
 					return listIPAMAssignments(zone.ZonePath(cmd.String("zone")))
 				},
@@ -145,11 +145,11 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:        "mine",
 				Usage:       "Show IPAM prefixes and pools for the local managed zone",
-				UsageText:   "higgs ipam mine",
+				UsageText:   "higgs route ipam mine",
 				Description: "Print the local managed zone's authorized IPAM assignments and owned pools as JSON.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs ipam mine", 1)
+						return cli.Exit("usage: higgs route ipam mine", 1)
 					}
 					return showLocalIPAM()
 				},
@@ -157,13 +157,13 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:      "get",
 				Usage:     "Explain IPAM ownership and assignment for an address or prefix",
-				UsageText: "higgs ipam get <addr-or-prefix> [--json]",
+				UsageText: "higgs route ipam get <addr-or-prefix> [--json]",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "json", Usage: "Print structured JSON output", Value: false},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: higgs ipam get <addr-or-prefix> [--json]", 1)
+						return cli.Exit("usage: higgs route ipam get <addr-or-prefix> [--json]", 1)
 					}
 					return getIPAM(cmd.Args().First(), cmd.Bool("json"))
 				},

@@ -180,7 +180,7 @@ key: /home/.../.higgs-public/node-a/node-a.key.json
 `*.request.b64` 是从 `config.yaml` 的 `managed_zone` 和 `identity.key_path` 生成的，等价于：
 
 ```bash
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs join request --from-config
+HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs gossip join request --from-config
 ```
 
 把每个节点的 `*.request.b64` 传回 admin 机器。只传 request，不传 `*.key.json`。
@@ -274,7 +274,7 @@ docs/scripts/public-gossip-node.sh put-identity \
 
 ```bash
 docs/scripts/public-gossip-node.sh status "$HOME/.higgs-public/node-b"
-HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs zone show node-a.catofes.
+HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs gossip zone show node-a.catofes.
 docs/scripts/public-gossip-node.sh verify "$HOME/.higgs-public/node-b" node-a.catofes.
 ```
 
@@ -344,7 +344,7 @@ docs/scripts/public-gossip-node.sh put-identity \
   node-a.catofes. \
   node-a-to-nat-b
 
-HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs zone show node-a.catofes.
+HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs gossip zone show node-a.catofes.
 HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs debug verify node-a.catofes.
 ```
 
@@ -375,7 +375,7 @@ docs/scripts/public-gossip-node.sh put-identity \
 
 ```bash
 HIGGS_CONFIG="$HIGGS_BASE/catofes-admin/config.yaml" \
-  "$HIGGS_BIN" delegate revoke node-c.catofes. public-test-revoke
+  "$HIGGS_BIN" gossip delegate revoke node-c.catofes. public-test-revoke
 ```
 
 如果 `catofes.` 管理 daemon 正在运行，`delegate revoke` 会通过本机 control socket 串行写入；daemon 不存在时才退回 direct/recovery 路径。让 `catofes-admin` 或任一已经获得该更新的节点参与 gossip 后，其他节点应逐步看到：

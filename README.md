@@ -266,8 +266,8 @@ gossip:
   listen_addr: 127.0.0.1:33433
 EOF
 
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root init
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs root pubkey
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs gossip root init
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs gossip root pubkey
 ```
 
 `root init` 只会创建：
@@ -299,20 +299,20 @@ EOF
 在 `zone-catofes-admin` 上生成 key 和加入申请：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs keygen /tmp/catofes.key.json
-CATOFES_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join request catofes. /tmp/catofes.key.json)
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs gossip keygen /tmp/catofes.key.json
+CATOFES_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs gossip join request catofes. /tmp/catofes.key.json)
 ```
 
 把 `CATOFES_REQUEST` 的 base64 内容复制给 `node-admin`，由根域 `.` 签发 `catofes.` 的 delegation：
 
 ```bash
-CATOFES_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate issue --permissions write,delegate,allocate-ip "$CATOFES_REQUEST")
+CATOFES_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs gossip delegate issue --permissions write,delegate,allocate-ip "$CATOFES_REQUEST")
 ```
 
 把 `CATOFES_BUNDLE` 的 base64 内容交还给 `zone-catofes-admin`：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept "$CATOFES_BUNDLE" /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs gossip join accept "$CATOFES_BUNDLE" /tmp/catofes.key.json
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs debug verify catofes.
 ```
 
@@ -325,8 +325,8 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs debug verify catofes.
 如果已有 delegation 缺少后续新增的 capability，不需要重建整个网络。由父 Zone 管理端提升子 Zone authority epoch 并重签 delegation，再把生成的 bundle 交给子 Zone 管理端接受即可：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs delegate grant catofes. allocate-ip /tmp/catofes-authority.b64
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes-authority.b64
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs gossip delegate grant catofes. allocate-ip /tmp/catofes-authority.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs gossip join accept /tmp/catofes-authority.b64
 ```
 
 首次 `join accept` 仍需要传入 `key.json`；已经加入的管理端接受 authority refresh bundle 时可以省略 key，CLI 会使用本地 state meta 中的 `zone_private_key` 校验并合并 authority 更新。
@@ -334,15 +334,15 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs join accept /tmp/catofes
 离线 root admin 写入的 root Zone records 可以通过 signed snapshot 文件交给在线管理端，而不需要让 root daemon 上线：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs ipam pool create . 10.212.0.0/14 --delegated-to .
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs ipam pool create . 10.212.0.0/18 --delegated-to catofes.
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs route ipam pool create . 10.212.0.0/14 --delegated-to .
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs route ipam pool create . 10.212.0.0/18 --delegated-to catofes.
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml build/higgs advanced recovery export-zone . /tmp/root-zone.b64
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs advanced recovery import-zone /tmp/root-zone.b64
 ```
 
 `advanced recovery import-zone` 会优先通过本机 daemon control socket 导入，输出中的 `via daemon` 表示在线 daemon 已经接收并保存了 snapshot；旧版本命令在 daemon 运行时直接写 DB 可能会被 daemon 的旧内存状态覆盖。
 
-IPAM 排查可以用 `build/higgs ipam mine` 查看本 `managed_zone` 的 assignment 与精确拥有的 pool；用 `build/higgs ipam get <addr-or-prefix> [--json]` 查看某个地址或前缀的 valid pool chain、best pool、assignment、route 和 `ipam_no_pool` / `ipam_unassigned` 等诊断。
+IPAM 排查可以用 `build/higgs route ipam mine` 查看本 `managed_zone` 的 assignment 与精确拥有的 pool；用 `build/higgs route ipam get <addr-or-prefix> [--json]` 查看某个地址或前缀的 valid pool chain、best pool、assignment、route 和 `ipam_no_pool` / `ipam_unassigned` 等诊断。
 
 ## 加入普通节点
 
@@ -367,20 +367,20 @@ EOF
 在 node A 上生成 key 和 join request：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs keygen /tmp/node-a.key.json
-NODE_A_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs join request node-a.catofes. /tmp/node-a.key.json)
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs gossip keygen /tmp/node-a.key.json
+NODE_A_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs gossip join request node-a.catofes. /tmp/node-a.key.json)
 ```
 
 把 `NODE_A_REQUEST` 的 base64 内容交给 `zone-catofes-admin`，由 `catofes.` 签发 delegation bundle：
 
 ```bash
-NODE_A_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate issue "$NODE_A_REQUEST")
+NODE_A_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs gossip delegate issue "$NODE_A_REQUEST")
 ```
 
 把 `NODE_A_BUNDLE` 的 base64 内容交还给 node A，然后导入：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs join accept "$NODE_A_BUNDLE" /tmp/node-a.key.json
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs gossip join accept "$NODE_A_BUNDLE" /tmp/node-a.key.json
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs debug verify node-a.catofes.
 ```
 
@@ -403,20 +403,20 @@ EOF
 在 node B 上生成 key 和 join request：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs keygen /tmp/node-b.key.json
-NODE_B_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs join request node-b.catofes. /tmp/node-b.key.json)
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs gossip keygen /tmp/node-b.key.json
+NODE_B_REQUEST=$(HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs gossip join request node-b.catofes. /tmp/node-b.key.json)
 ```
 
 把 `NODE_B_REQUEST` 的 base64 内容交给 `zone-catofes-admin`。然后在 `zone-catofes-admin` 上签发 delegation bundle：
 
 ```bash
-NODE_B_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs delegate issue "$NODE_B_REQUEST")
+NODE_B_BUNDLE=$(HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml build/higgs gossip delegate issue "$NODE_B_REQUEST")
 ```
 
 把 `NODE_B_BUNDLE` 的 base64 内容交还给 node B。然后在 node B 上导入：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs join accept "$NODE_B_BUNDLE" /tmp/node-b.key.json
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs gossip join accept "$NODE_B_BUNDLE" /tmp/node-b.key.json
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs debug verify node-b.catofes.
 ```
 
@@ -433,15 +433,15 @@ node A 和 node B 都不会接触 root/admin 私钥，也不会接触 `catofes.`
 加入后，普通节点可以在自己的 Zone 下签名写入 records：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record put node-a.catofes. identity node-a
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record list node-a.catofes.
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs gossip record put node-a.catofes. identity node-a
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs gossip record list node-a.catofes.
 
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs record put node-b.catofes. identity node-b
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs record list node-b.catofes. --verbose
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs gossip record put node-b.catofes. identity node-b
+HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs gossip record list node-b.catofes. --verbose
 ```
 
 Record 按 Zone/key 独立版本化。普通同步以签名有效的最高版本为 active state；旧版本只保留有限历史窗口用于审计和排障。
-`record list [zone]` 是面向人的浏览入口，支持 `--filter/-f` 和 `--verbose/-v`；hash、签名等底层字段由 `debug records` 提供。
+`gossip record list [zone]` 是面向人的表格浏览入口，默认显示 `RECORD / TYPE / VALUE`，支持 `--filter/-f`；`--verbose/-v` 额外显示版本、更新时间和历史数量，hash、签名等底层字段由 `debug records` 提供。
 所有包含多个 zone 的列表都会把 `.` 和 `-` 视为层级分隔符，从右向左排序；因此同一域和区域后缀（例如 `a-pek.catofes.`、`b-pek.catofes.`）会连续显示。
 
 ## 数据库调试
@@ -479,7 +479,7 @@ HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs advanced sync serve
 在 node A 上写入 record，并触发同步到 node B：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record put node-a.catofes. identity node-a
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs gossip record put node-a.catofes. identity node-a
 HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs advanced sync once node-b
 HIGGS_CONFIG=/tmp/higgs-b/config.yaml build/higgs advanced sync status
 ```
@@ -498,7 +498,7 @@ daemon 默认每 60 秒做一次出站摘要比较，也会在本地写入、收
 daemon 启动后，`record put` 会优先通过本机 control socket 提交给 daemon，由 daemon 签名、落盘并触发 outbound sync：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs record put node-a.catofes. identity node-a
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml build/higgs gossip record put node-a.catofes. identity node-a
 ```
 
 如果 daemon 不在，CLI 会回退到直接写 DB 的开发/恢复模式，并输出 warning 级别结构化日志 `component=control event=fallback operation=record_put reason="daemon control socket unavailable"`。下次 daemon 启动时会重新加载该状态并继续同步。
@@ -550,26 +550,26 @@ printf '%s\n' \
   "      addr: 127.0.0.1:33444" \
   > "$tmp/b/config.yaml"
 
-HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root init >/dev/null
-root_key="$(HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root pubkey)"
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs gossip root init >/dev/null
+root_key="$(HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs gossip root pubkey)"
 for node in catofes a b; do
   printf '%s\n' "trusted_root_public_key: $root_key" >> "$tmp/$node/config.yaml"
 done
 
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs keygen "$tmp/catofes.key.json" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.b64" >/dev/null
-HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.b64" "$tmp/catofes.bundle.b64" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.b64" "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip keygen "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.b64" >/dev/null
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs gossip delegate issue "$tmp/catofes.request.b64" "$tmp/catofes.bundle.b64" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip join accept "$tmp/catofes.bundle.b64" "$tmp/catofes.key.json" >/dev/null
 
 for node in a b; do
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs keygen "$tmp/node-$node.key.json" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.b64" >/dev/null
-  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.b64" "$tmp/node-$node.bundle.b64" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.b64" "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs gossip keygen "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs gossip join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip delegate issue "$tmp/node-$node.request.b64" "$tmp/node-$node.bundle.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs gossip join accept "$tmp/node-$node.bundle.b64" "$tmp/node-$node.key.json" >/dev/null
 done
 
-HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs record put node-a.catofes. identity node-a >/dev/null
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record put node-b.catofes. identity node-b >/dev/null
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs gossip record put node-a.catofes. identity node-a >/dev/null
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs gossip record put node-b.catofes. identity node-b >/dev/null
 
 HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs advanced sync serve >"$tmp/b.log" 2>&1 &
 server_pid="$!"
@@ -591,8 +591,8 @@ kill "$server_pid" >/dev/null 2>&1 || true
 wait "$server_pid" >/dev/null 2>&1 || true
 trap - EXIT
 
-HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs record list node-b.catofes. --filter identity | grep -q 'identity'
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record list node-a.catofes. --filter identity | grep -q 'identity'
+HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs gossip record list node-b.catofes. --filter identity | grep -q 'identity'
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs gossip record list node-a.catofes. --filter identity | grep -q 'identity'
 HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs debug verify node-b.catofes. >/dev/null
 HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs debug verify node-a.catofes. >/dev/null
 
@@ -620,25 +620,25 @@ printf '%s\n' "data_dir: $tmp/a" "gossip:" "  peer_id: node-a" "  listen_addr: 1
 printf '%s\n' "data_dir: $tmp/b" "gossip:" "  peer_id: node-b" "  listen_addr: 127.0.0.1:33455" "  bootstrap:" "    - id: node-a" "      addr: 127.0.0.1:33454" > "$tmp/b/config.yaml"
 printf '%s\n' "data_dir: $tmp/c" "gossip:" "  peer_id: node-c" "  listen_addr: 127.0.0.1:33457" "  bootstrap:" "    - id: node-a" "      addr: 127.0.0.1:33454" > "$tmp/c/config.yaml"
 
-HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root init >/dev/null
-root_key="$(HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs root pubkey)"
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs gossip root init >/dev/null
+root_key="$(HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs gossip root pubkey)"
 for node in catofes a b c; do
   printf '%s\n' "trusted_root_public_key: $root_key" >> "$tmp/$node/config.yaml"
 done
 
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs keygen "$tmp/catofes.key.json" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.b64" >/dev/null
-HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs delegate issue "$tmp/catofes.request.b64" "$tmp/catofes.bundle.b64" >/dev/null
-HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs join accept "$tmp/catofes.bundle.b64" "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip keygen "$tmp/catofes.key.json" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip join request catofes. "$tmp/catofes.key.json" "$tmp/catofes.request.b64" >/dev/null
+HIGGS_CONFIG="$tmp/admin/config.yaml" build/higgs gossip delegate issue "$tmp/catofes.request.b64" "$tmp/catofes.bundle.b64" >/dev/null
+HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip join accept "$tmp/catofes.bundle.b64" "$tmp/catofes.key.json" >/dev/null
 
 for node in a b c; do
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs keygen "$tmp/node-$node.key.json" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.b64" >/dev/null
-  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs delegate issue "$tmp/node-$node.request.b64" "$tmp/node-$node.bundle.b64" >/dev/null
-  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs join accept "$tmp/node-$node.bundle.b64" "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs gossip keygen "$tmp/node-$node.key.json" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs gossip join request "node-$node.catofes." "$tmp/node-$node.key.json" "$tmp/node-$node.request.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/catofes/config.yaml" build/higgs gossip delegate issue "$tmp/node-$node.request.b64" "$tmp/node-$node.bundle.b64" >/dev/null
+  HIGGS_CONFIG="$tmp/$node/config.yaml" build/higgs gossip join accept "$tmp/node-$node.bundle.b64" "$tmp/node-$node.key.json" >/dev/null
 done
 
-HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs record put node-b.catofes. identity node-b >/dev/null
+HIGGS_CONFIG="$tmp/b/config.yaml" build/higgs gossip record put node-b.catofes. identity node-b >/dev/null
 
 HIGGS_CONFIG="$tmp/a/config.yaml" build/higgs advanced sync serve >"$tmp/a.log" 2>&1 &
 server_pid="$!"
@@ -653,7 +653,7 @@ kill "$server_pid" >/dev/null 2>&1 || true
 wait "$server_pid" >/dev/null 2>&1 || true
 trap - EXIT
 
-HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs record list node-b.catofes. --filter identity | grep -q 'identity'
+HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs gossip record list node-b.catofes. --filter identity | grep -q 'identity'
 HIGGS_CONFIG="$tmp/c/config.yaml" build/higgs debug verify node-b.catofes. >/dev/null
 
 echo "three-node propagation passed: $tmp"
@@ -884,18 +884,25 @@ Firewall、peer lifecycle 和 revocation cleanup 已接入 daemon reconcile 边�
 ## CLI 汇总
 
 ```bash
-build/higgs root init
-build/higgs root pubkey
-build/higgs keygen <key.json>
-build/higgs join request <zone> <key.json> [request.b64]
-build/higgs delegate issue [--permissions write,delegate,allocate-ip] <request-b64|request-file> [bundle.b64]
-build/higgs join accept <bundle-b64|bundle-file> [key.json]
-build/higgs delegate grant <zone> <permission>[,<permission>...] [bundle.b64]
-build/higgs zone show <zone> [--filter text] [--verbose]
-build/higgs record list [zone] [--filter text] [--verbose]
-build/higgs record get <zone> <key> [--verbose]
-build/higgs record put <zone> <key> <value> [type]
-build/higgs firewall [show [--filter text] [--verbose]]
+build/higgs gossip root init
+build/higgs gossip root pubkey
+build/higgs gossip keygen <key.json>
+build/higgs gossip join request <zone> <key.json> [request.b64]
+build/higgs gossip delegate issue [--permissions write,delegate,allocate-ip] <request-b64|request-file> [bundle.b64]
+build/higgs gossip join accept <bundle-b64|bundle-file> [key.json]
+build/higgs gossip delegate grant <zone> <permission>[,<permission>...] [bundle.b64]
+build/higgs gossip zone show [zone] [--filter text] [--verbose]
+build/higgs gossip record list [zone] [--filter text] [--verbose]
+build/higgs gossip record get <zone> <key> [--verbose]
+build/higgs gossip record put <zone> <key> <value> [type]
+build/higgs gossip peer show [peer] [--filter text] [--verbose]
+build/higgs links show [link-or-peer] [--filter text] [--verbose]
+build/higgs route show [--filter text] [--all] [--verbose]
+build/higgs route announce <zone> <prefix>
+build/higgs route withdraw <zone> <prefix>
+build/higgs route ipam ...
+build/higgs firewall show [--filter text] [--verbose]
+build/higgs firewall endpoint ...
 build/higgs debug verify <zone>
 build/higgs daemon [--interval seconds]
 build/higgs advanced sync status [--verbose]

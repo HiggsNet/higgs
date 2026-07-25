@@ -26,6 +26,11 @@ type FirewallInstanceInput struct {
 	Transit       bool
 	AllowPrefixes int
 	DenyPrefixes  int
+	AllowFilters  []string
+	DenyFilters   []string
+	AllowPeers    []string
+	DenyPeers     []string
+	MetricHint    uint
 	LocalServices []FirewallLocalServiceView
 	IsHost        bool
 	HostIKE       bool
@@ -44,6 +49,11 @@ type FirewallInstanceView struct {
 	Transit         bool
 	AllowPrefixes   int
 	DenyPrefixes    int
+	AllowFilters    []string
+	DenyFilters     []string
+	AllowPeers      []string
+	DenyPeers       []string
+	MetricHint      uint
 	LocalServices   []FirewallLocalServiceView
 	IsHost          bool
 	HostIKE         bool
@@ -101,6 +111,11 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 			Transit:       inst.Transit,
 			AllowPrefixes: inst.AllowPrefixes,
 			DenyPrefixes:  inst.DenyPrefixes,
+			AllowFilters:  append([]string(nil), inst.AllowFilters...),
+			DenyFilters:   append([]string(nil), inst.DenyFilters...),
+			AllowPeers:    append([]string(nil), inst.AllowPeers...),
+			DenyPeers:     append([]string(nil), inst.DenyPeers...),
+			MetricHint:    inst.MetricHint,
 			LocalServices: append([]FirewallLocalServiceView(nil), inst.LocalServices...),
 			IsHost:        inst.IsHost,
 			HostIKE:       inst.HostIKE,

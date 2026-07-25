@@ -1,11 +1,68 @@
 package text
 
 import (
+	"fmt"
 	"io"
 	"sort"
+	"strings"
+	"text/tabwriter"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
+
+func WritePeers(w io.Writer, view inspect.PeerLifecycleDebugView, filter string, verbose bool) error {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	peers := make([]inspect.PeerStatusInfo, 0, len(view.Peers))
+	for _, peer := range view.Peers {
+		searchable := strings.Join([]string{
+			peer.PeerID,
+			string(peer.Zone),
+			peer.State,
+			peer.Reason,
+			peer.Detail,
+		}, " ")
+		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
+			peers = append(peers, peer)
+		}
+	}
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	out.Linef("peers: %s", filteredCount(len(peers), len(view.Peers), filter))
+	if verbose {
+		out.Println("PEER\tSTATE\tLINKS\tLAST_SEEN\tLAST_SYNC\tLAST_RECONCILE\tOFFLINE_SINCE\tNEXT_CLEANUP\tREASON\tDETAIL")
+	} else {
+		out.Println("PEER\tSTATE\tLINKS\tLAST_SEEN\tREASON")
+	}
+	for _, peer := range peers {
+		links := fmt.Sprintf("%d/%d/%d", peer.UpLinks, peer.ActualLinks, peer.DesiredLinks)
+		if verbose {
+			out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+				peer.PeerID,
+				dash(peer.State),
+				links,
+				formatUnixTime(peer.LastSeenUnix),
+				formatUnixTime(peer.LastSyncUnix),
+				formatUnixTime(peer.LastReconcileUnix),
+				formatUnixTime(peer.OfflineSinceUnix),
+				formatUnixTime(peer.NextCleanupUnix),
+				dash(peer.Reason),
+				escapeTableCell(peer.Detail),
+			)
+		} else {
+			out.Linef("%s\t%s\t%s\t%s\t%s",
+				peer.PeerID,
+				dash(peer.State),
+				links,
+				formatUnixTime(peer.LastSeenUnix),
+				dash(peer.Reason),
+			)
+		}
+	}
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
+}
 
 func WritePeerLifecycleDebug(w io.Writer, view inspect.PeerLifecycleDebugView) error {
 	out := newLineWriter(w)

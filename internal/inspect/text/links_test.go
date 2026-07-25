@@ -70,6 +70,47 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 	}
 }
 
+func TestWriteLinksUsesTransportSummaryAndVerboseTables(t *testing.T) {
+	inspection := inspect.LinkInspection{
+		Summary: inspect.LinkSummary{DesiredLinks: 2, ActualSAs: 1},
+		Links: []inspect.LinkView{
+			{
+				ID: "link-a", PeerZone: "node-a.catofes.", GroupID: "mesh",
+				PathKey: "public-v6", TransportKind: "strongswan", ActualState: "up",
+				Endpoint: "[2001:db8::1]:4500", InterfaceName: "hgs1", XFRMIfID: 1,
+				LocalTunnelAddr: "fd42::1", PeerTunnelAddr: "fd42::2",
+				ActualSA: &inspect.LinkSA{ChildSA: "child-a", Established: true},
+				Health:   &inspect.LinkHealth{State: "healthy"},
+				Rotation: inspect.LinkRotation{Phase: "stable"},
+				Routing:  inspect.LinkRouting{BirdState: "running"},
+				Owner:    inspect.LinkOwner{Manager: "ipsec"},
+			},
+			{ID: "link-b", PeerZone: "node-b.catofes.", Missing: true},
+		},
+	}
+	var summary strings.Builder
+	if err := WriteLinks(&summary, inspection, "", false); err != nil {
+		t.Fatalf("WriteLinks summary: %v", err)
+	}
+	for _, want := range []string{"LINK", "PEER", "TRANSPORT", "STATE", "ENDPOINT", "INTERFACE", "link-a", "strongswan", "link-b", "missing"} {
+		if !strings.Contains(summary.String(), want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary.String())
+		}
+	}
+	var verbose strings.Builder
+	if err := WriteLinks(&verbose, inspection, "link-a", true); err != nil {
+		t.Fatalf("WriteLinks verbose: %v", err)
+	}
+	for _, want := range []string{"links: 1/2", "GROUP", "PATH", "TUNNEL", "SA", "HEALTH", "ROTATION", "ROUTING", "OWNER", "fd42::1->fd42::2", "child-a:established", "healthy", "running"} {
+		if !strings.Contains(verbose.String(), want) {
+			t.Fatalf("verbose output missing %q:\n%s", want, verbose.String())
+		}
+	}
+	if strings.Contains(verbose.String(), "link-b") {
+		t.Fatalf("filter leaked link-b:\n%s", verbose.String())
+	}
+}
+
 func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 	var out strings.Builder
 	link := inspect.LinkView{

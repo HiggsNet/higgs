@@ -37,6 +37,26 @@ func debugLinks(filter string) error {
 	return writeDebugLinks(os.Stdout, rt, state, filter)
 }
 
+func showLinks(filter string, verbose bool) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	if response, ok, err := linksStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		if response.Links == nil {
+			return errors.New("daemon links_status response missing links")
+		}
+		return inspecttext.WriteLinks(os.Stdout, linkInspectionBuildFromControl(response.Links).Inspection, filter, verbose)
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	return inspecttext.WriteLinks(os.Stdout, buildLinkInspection(rt, state, nil).Inspection, filter, verbose)
+}
+
 func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) error {
 	build := buildLinkInspection(rt, state, nil)
 	return writeDebugLinksFromBuild(w, build, filter)

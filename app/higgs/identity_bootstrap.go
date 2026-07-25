@@ -223,12 +223,12 @@ func logAutoJoinPending(logger *appLogger, state *stateFile) {
 		return
 	}
 	if logger == nil {
-		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, text, "higgs join request --from-config")
+		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, text, "higgs gossip join request --from-config")
 		return
 	}
 	logger.Info("auto_join", "pending", map[string]any{
 		"zone":         state.ManagedZone,
 		"join_request": text,
-		"hint":         "higgs join request --from-config",
+		"hint":         "higgs gossip join request --from-config",
 	})
 }

@@ -114,9 +114,13 @@ func TestDelegationCommandsOwnPermissionManagement(t *testing.T) {
 	if authorityTestCommandByName(root.Commands, "authority") != nil {
 		t.Fatal("root command still exposes authority")
 	}
-	delegate := authorityTestCommandByName(root.Commands, "delegate")
+	gossip := authorityTestCommandByName(root.Commands, "gossip")
+	if gossip == nil {
+		t.Fatal("root command does not expose gossip")
+	}
+	delegate := authorityTestCommandByName(gossip.Commands, "delegate")
 	if delegate == nil {
-		t.Fatal("root command does not expose delegate")
+		t.Fatal("gossip command does not expose delegate")
 	}
 	want := []string{"issue", "grant", "revoke"}
 	if len(delegate.Commands) != len(want) {

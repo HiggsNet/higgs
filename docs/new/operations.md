@@ -27,27 +27,27 @@ sudo -E env HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs debug links
 Root admin 只管理 `.`：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs root init
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs root pubkey
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip root init
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip root pubkey
 ```
 
 一级管理 Zone 先生成 key 和 join request：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs keygen /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join request catofes. /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip keygen /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join request catofes. /tmp/catofes.key.json
 ```
 
 把 request 交给 root admin 签发：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate issue --permissions write,delegate,allocate-ip <request-payload>
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip delegate issue --permissions write,delegate,allocate-ip <request-payload>
 ```
 
 再把 bundle 交回管理 Zone：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept <bundle-payload> /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join accept <bundle-payload> /tmp/catofes.key.json
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs debug verify catofes.
 ```
 
@@ -58,8 +58,8 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs debug verify catofes.
 `root init` 创建的 root authority 默认拥有当前所有内建权限，包括 `delegate`、`write` 和 `allocate-ip`。route announcement 使用通用 `write`；子 Zone 默认只获得 `write,delegate`。如果一个管理 Zone需要分配 IPAM pool/assignment，应在 `delegate issue` 时显式加 `--permissions write,delegate,allocate-ip`。已有 delegation 可由父 Zone 管理端原地升级：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate grant catofes. allocate-ip catofes-authority.b64
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.b64
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip delegate grant catofes. allocate-ip catofes-authority.b64
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join accept catofes-authority.b64
 ```
 
 旧版本中若存在只拥有 `write:route`、`write:service` 或 `write:wireguard`、却没有通用 `write` 的 authority，父 Zone 应先补发包含 `write` 的 authority bundle。普通节点和 root 的默认 authority 原本已经包含 `write`，无需迁移；保留同一签名 key 时，authority refresh 后既有 route、service 和 WireGuard records 会按新的通用写权限重新通过验证。
@@ -69,8 +69,8 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept catofes-authority.
 如果 root admin 保持离线，它写入的 root Zone records 不会自动进入在线 gossip 网络。可以把 root Zone signed snapshot 导出成文件，再交给在线管理端导入：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs route ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs route ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
 HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs advanced recovery export-zone . root-zone.b64
 
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone root-zone.b64
@@ -80,7 +80,7 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone 
 
 `export-zone` / `import-zone` 搬运的是已签名 Zone snapshot，不搬运 root 私钥；导入端仍会按 trusted root、delegation chain 和 record signature 做验证。`import-zone` 会优先通过本机 daemon control socket 导入，输出里出现 `via daemon` 表示写入已经进入在线 daemon 的内存状态和 DB。如果目标节点没有 daemon 或你想显式跳过 control socket，加 `--direct` 直接写本地 DB。
 
-排查本机视角时用 `higgs ipam mine` 查看分配给 `managed_zone` 的 assignment 和本 Zone 精确拥有/发布的 pool；排查单个地址或前缀时用 `higgs ipam get <addr-or-prefix>`，必要时加 `--json` 取得 pool chain、best pool、assignment、route 和诊断码。
+排查本机视角时用 `higgs route ipam mine` 查看分配给 `managed_zone` 的 assignment 和本 Zone 精确拥有/发布的 pool；排查单个地址或前缀时用 `higgs route ipam get <addr-or-prefix>`，必要时加 `--json` 取得 pool chain、best pool、assignment、route 和诊断码。
 
 ## 启动 Daemon
 
@@ -144,13 +144,13 @@ CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在�
 
 ```bash
 # daemon 不在线时直接签发 delegation
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs delegate issue --direct --permissions write,delegate <request-payload>
+HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip delegate issue --direct --permissions write,delegate <request-payload>
 
 # 直接接受 join bundle
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs join accept --direct <bundle-payload> /tmp/catofes.key.json
+HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join accept --direct <bundle-payload> /tmp/catofes.key.json
 
 # 直接写 record
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs record put --direct node-a.catofes. endpoints/udp '{"endpoints": [...]}' json
+HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs gossip record put --direct node-a.catofes. endpoints/udp '{"endpoints": [...]}' json
 
 # 离线导入 root Zone snapshot
 HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone --direct root-zone.b64
@@ -194,8 +194,8 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync run --interval 5
 
 ```bash
 higgs advanced sync status --verbose
-higgs zone show node-b.catofes.
-higgs record list node-b.catofes. --filter identity
+higgs gossip zone show node-b.catofes.
+higgs gossip record list node-b.catofes. --filter identity
 higgs debug verify node-b.catofes.
 ```
 
@@ -231,7 +231,7 @@ higgs debug rotate-port
 通过 control socket 查询单条 record（默认输出面向人的文本）：
 
 ```bash
-higgs record get <zone> <key> --verbose
+higgs gossip record get <zone> <key> --verbose
 ```
 
 需要完整 JSON、签名、hash 或历史版本时使用 debug：
@@ -469,7 +469,7 @@ higgs debug peer <peer-id>
 先确认本地是否写入、签名是否有效：
 
 ```bash
-higgs record list <zone> --filter <key-or-value>
+higgs gossip record list <zone> --filter <key-or-value>
 higgs debug verify <zone>
 ```
 

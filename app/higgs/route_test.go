@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"path/filepath"
@@ -226,6 +227,37 @@ func TestBuildRouteShowReportListsActiveAndAllAnnouncements(t *testing.T) {
 	}
 	if report.Announcements[1].Prefix != "10.0.2.0/24" || report.Announcements[1].Active {
 		t.Fatalf("withdrawn announcement = %+v", report.Announcements[1])
+	}
+}
+
+func TestPrintRouteShowReportUsesFilteredVerboseTable(t *testing.T) {
+	report := &routeShowReport{
+		ManagedZone: "node-a.catofes.",
+		Announcements: []routeShowRow{
+			{
+				Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Active: true,
+				Authorized: true, Controller: "service", Version: 2,
+				Key: "routes/announcements/10.0.1.0_24",
+			},
+			{Zone: "node-b.catofes.", Prefix: "10.0.2.0/24", Active: false},
+		},
+	}
+	var output bytes.Buffer
+	if err := printRouteShowReport(&output, report, true, "node-a", true); err != nil {
+		t.Fatalf("printRouteShowReport: %v", err)
+	}
+	for _, want := range []string{
+		"announcements: 1/2",
+		"PREFIX", "ZONE", "STATE", "AUTHORIZATION", "CONTROLLER", "VERSION", "RECORD",
+		"10.0.1.0/24", "node-a.catofes.", "active", "authorized", "service",
+		"routes/announcements/10.0.1.0_24",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "node-b.catofes.") {
+		t.Fatalf("filter leaked node-b:\n%s", output.String())
 	}
 }
 

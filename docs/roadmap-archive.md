@@ -40,8 +40,8 @@
 
 - [x] **0.6 CLI 调试**
   - [x] `higgs init`
-  - [x] `higgs zone show <zone>`
-  - [x] `higgs record put <zone> <key> <value>`
+  - [x] `higgs gossip zone show <zone>`
+  - [x] `higgs gossip record put <zone> <key> <value>`
   - [x] `higgs verify <zone>`
   - [x] `higgs db dump [zone]`：以只读模式打开 bbolt，按 bucket 打印 key-value（JSON 美化）
   - [x] `higgs db stats`：统计各 bucket 的 key 数和数据大小
@@ -88,14 +88,14 @@
   - [x] 提供 `config.example.yaml`
 
 - [x] **1.5.2 根 Zone 与准入 CLI**
-  - [x] `higgs root init`：只创建根域 `.` 的 root authority
-  - [x] `higgs root pubkey`：输出根公钥，供其他节点配置 `trusted_root_public_key`
+  - [x] `higgs gossip root init`：只创建根域 `.` 的 root authority
+  - [x] `higgs gossip root pubkey`：输出根公钥，供其他节点配置 `trusted_root_public_key`
   - [x] root/admin 状态库与业务节点状态库分离；`node-admin` 只持有 `.` 的 root 私钥
   - [x] 一级管理 Zone（如 `catofes.`）也通过 join request / root delegation 独立加入，并由自己的管理私钥继续委派子 Zone
-  - [x] `higgs keygen <key.json>`：生成新节点 ED25519 keypair
-  - [x] `higgs join request <zone> <key.json> [request.b64]`：新节点生成可直接复制的 base64 加入申请
-  - [x] `higgs delegate issue <request-b64|request-file> [bundle.b64]`：父 Zone 持有者签发可直接复制的 base64 delegation bundle
-  - [x] `higgs join accept <bundle-b64|bundle-file> <key.json>`：新节点导入信任链和本 Zone authority
+  - [x] `higgs gossip keygen <key.json>`：生成新节点 ED25519 keypair
+  - [x] `higgs gossip join request <zone> <key.json> [request.b64]`：新节点生成可直接复制的 base64 加入申请
+  - [x] `higgs gossip delegate issue <request-b64|request-file> [bundle.b64]`：父 Zone 持有者签发可直接复制的 base64 delegation bundle
+  - [x] `higgs gossip join accept <bundle-b64|bundle-file> <key.json>`：新节点导入信任链和本 Zone authority
   - [x] 新节点不会接触 root/admin 私钥，只持有自己的 Zone 私钥
 
 - [x] **1.5.3 验证目标**
@@ -239,7 +239,7 @@
   - [x] 撤销后，本地 active state 将该 Zone 及其子树标记为 revoked/quarantined：停止接受该 Zone 新 record、停止 relay 其新 announce、停止将其 endpoints 加入 known peer table
   - [x] 保留已撤销 Zone 的历史数据用于审计和冲突排查，但默认查询、配置生成、peer discovery、route authorization 不再使用其 active records
   - [x] 清理撤销子树相关 sync peer 状态、discovered endpoints、relay fanout 队列，避免已撤销节点继续通过 relay 恢复活跃状态
-  - [x] 增加 CLI：`higgs delegate revoke <zone>` 由父 Zone 管理者签发撤销；`higgs debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
+  - [x] 增加 CLI：`higgs gossip delegate revoke <zone>` 由父 Zone 管理者签发撤销；`higgs debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
   - [x] 增加 gossip 同步语义：revocation/tombstone 必须进入 zone digest/snapshot，传播优先级高于普通 record，节点收到后立即触发 outbound sync/relay fanout
   - [x] 增加测试：撤销普通节点 Zone 后，其他节点拒绝其新 record 和 endpoint；撤销中间管理 Zone 后，其整个子树失效；重启后 revoked 状态仍持久化
     - 已补核心单测：父 Zone tombstone 传播后 VerifyChain/RecordSnapshot 拒绝 revoked child；revoked zone endpoint 不再进入 discovery；父 Zone revocation 覆盖整棵子树；bbolt 重启后 revocation 持久化。
@@ -435,7 +435,7 @@
   - [x] reload 只允许验证身份配置仍与当前 DB/运行态一致，不支持热切换身份；身份变更等价于新节点，不做 DB 迁移、覆盖或半更新
   - [x] 空 DB / 未初始化 DB 首次启动时，如果配置同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和 bootstrap peer，则自动创建最小 bootstrap state，不再要求人工 `join accept <bundle.b64> <key.json>`
   - [x] auto-join 节点启动后从 bootstrap peer 普通同步 root 到本 Zone 的 authority/delegation chain；只有验证 `trusted_root_public_key`、delegation chain 和本地 key public 均匹配后，才进入正常 record signing、endpoint publish、IPsec publish/reconcile
-  - [x] auto-join pending 时 daemon 日志直接打印可提交给父 Zone 管理节点的 base64 `join_request`，并提示可用 `higgs join request --from-config [request.b64]` 输出或保存同等内容；daemon 不引入 `join_request_path`，也不自动提交授权请求
+  - [x] auto-join pending 时 daemon 日志直接打印可提交给父 Zone 管理节点的 base64 `join_request`，并提示可用 `higgs gossip join request --from-config [request.b64]` 输出或保存同等内容；daemon 不引入 `join_request_path`，也不自动提交授权请求
   - [x] 保留 `join request` / `delegate issue` 作为父节点授权入口；父节点签发 delegation 后写入自身 active state，从节点重连后通过同步获得授权信息，bundle 文件导入只作为 recovery/debug 兼容路径
   - [x] 增加测试：空 DB auto-join happy path、key/public mismatch 拒绝启动、`managed_zone` mismatch 拒绝启动、reload 身份变化拒绝、已初始化 DB 与配置一致时可正常启动/reload
 
@@ -899,7 +899,7 @@
 
 - [x] **6.1 IPAM 闭环**
   - [x] 实现 pool/assignment 分离、pool enforcement、assignment 重叠检测和 `PermAllocateIP` 权限模型。
-  - [x] 增加 `higgs ipam` CLI：pool create、assign、revoke assignment/pool、assigned 查询。
+  - [x] 增加 `higgs route ipam` CLI：pool create、assign、revoke assignment/pool、assigned 查询。
   - [x] 支持 `ipam.auto_announce_assigned_ips` 自动宣告本节点合法 assignment，并随撤销收敛。
   - [x] 支持 routing upstream / veth pair / BIRD static route 集成，`TestBIRDUpstreamBabelRootSmoke` 覆盖 overlay netns 与 host ns BIRD Babel 互通。
   - [x] anycast/shared assignment 第一版落地：`IPAMAssignmentRecord.Shared`、授权/重叠例外、CLI `--shared`、单测覆盖 shared route announcement。
@@ -913,8 +913,8 @@
   - [x] 将 `isAssignmentPoolValid` 改为精确 owner 检查：assignment source 必须存在 `pool.DelegatedTo == assignment.Source` 且覆盖 assignment prefix 的 valid pool；`AssignedTo` 只表示使用者，不参与 pool ownership 校验。
   - [x] 保留现有 assignment overlap / anycast 语义，避免把 pool ownership 修复误扩展成禁止跨层 assign 或禁止 `Shared=true` anycast。
   - [x] 在 `app/higgs/ipam.go` 写入路径增加 dry-run 早失败：`createIPAMPoolWithRuntime` 拒绝 owner mismatch / pool overlap；`assignIPAMWithRuntime` 拒绝 `ipam_assignment_pool_mismatch` / `ipam_assignment_overlap`；最终正确性仍以 `BuildAuthorizedRouteSet` 为准。
-  - [x] 调整 `higgs ipam mine`：删除 `usable_by_managed_zone`，只保留 `published_by_managed_zone` 和 `delegated_to_managed_zone`，让输出匹配严格 owner 语义。
-  - [x] 新增 `higgs ipam get <addr-or-prefix>` 只读诊断命令：归一化地址/前缀，基于 valid `AllPools` / `AllAssignments` / authorized routes 输出 pool chain、best pool、assignment、assigned_to、route 和 diagnostics；默认输出 human-readable 文本，`--json` 输出结构化 view；无 pool 输出 `ipam_no_pool`，有 pool 无 assignment 输出 `ipam_unassigned`。
+  - [x] 调整 `higgs route ipam mine`：删除 `usable_by_managed_zone`，只保留 `published_by_managed_zone` 和 `delegated_to_managed_zone`，让输出匹配严格 owner 语义。
+  - [x] 新增 `higgs route ipam get <addr-or-prefix>` 只读诊断命令：归一化地址/前缀，基于 valid `AllPools` / `AllAssignments` / authorized routes 输出 pool chain、best pool、assignment、assigned_to、route 和 diagnostics；默认输出 human-readable 文本，`--json` 输出结构化 view；无 pool 输出 `ipam_no_pool`，有 pool 无 assignment 输出 `ipam_unassigned`。
   - [x] 补 `pkg/routing` 单测：root bootstrap pool、无 covering owner 的 delegated pool 拒绝、root 切 child pool 合法、child 再切 grandchild pool 合法、sibling/unrelated pool overlap 拒绝、ancestor self pool 不再授权 descendant assignment、显式 delegated pool 授权 assignment。
   - [x] 补 `app/higgs` CLI/runtime 单测：root bootstrap pool 可创建、无 owner covering pool 的子池创建失败、隐式继承 assignment 失败、显式 delegation assignment 成功、`ipam mine` 不再显示 `usable_by_managed_zone`，`ipam get` 默认文本和 `--json` 覆盖地址查询、prefix 查询、anycast/shared assignment、`ipam_no_pool` 和 `ipam_unassigned`。
   - [x] 更新操作文档和示例：`README.md`、`docs/new/config.md`、`docs/new/operations.md` 中明确 root/self pool 只是精确 owner 声明，子 zone 需要显式 pool delegation；offline root 仍通过 `recovery export-zone/import-zone` 迁移 root-owned IPAM records。
@@ -922,7 +922,7 @@
 
 - [x] **6.2 Auto-join 准入基线与诊断**
   - [x] 空 DB + config 首启可创建 pending bootstrap state，普通 gossip 同步到 parent delegation 后自动 materialize 本地 Zone。
-  - [x] pending 节点不发布 endpoint/IPsec/route 本机记录；`higgs join request --from-config` 可生成等价 join request。
+  - [x] pending 节点不发布 endpoint/IPsec/route 本机记录；`higgs gossip join request --from-config` 可生成等价 join request。
   - [x] 增加 `admissionState` 持久化、`diagnoseAutoJoinAdmission()`、`higgs debug admission` 和 `admission_status` control API。
   - [x] 增加 `higgs recovery pull-zone` / `pull-chain`，用于管理节点 DB 丢失后按 trust chain 拉取恢复。
 
@@ -1069,7 +1069,7 @@
 
 ### 8.2 独立 Compose 生成与 host/overlay 网络接入
 
-- 独立 `higgs-services` 读取 `/etc/higgs/service.yaml` 并通过 `higgs ipam mine` 生成覆盖全部双栈 external network 的 Compose；支持多 network、`auto`/`tag:` assignment、相对 base address 与 resolved lock。
+- 独立 `higgs-services` 读取 `/etc/higgs/service.yaml` 并通过 `higgs route ipam mine` 生成覆盖全部双栈 external network 的 Compose；支持多 network、`auto`/`tag:` assignment、相对 base address 与 resolved lock。
 - 固定 SOCKS5 输出 `socks`、`dns`、`h2` 三容器，只原子写 artifact，不执行 Docker 生命周期操作。
 - 校验 Docker subnet、host connected route、host→Higgs netns 聚合路由与 overlay→host static upstream；服务前缀的 Babel export 仍限于实际拥有/获授权前缀。
 

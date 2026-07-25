@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Catofes/higgs/internal/inspect"
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -46,22 +48,16 @@ func withdrawRoute(path zone.ZonePath, prefix string, direct bool) error {
 	return withdrawRouteWithRuntime(rt, path, prefix)
 }
 
-func showRoutes(filterZone zone.ZonePath, includeAll bool, jsonOut bool) error {
+func showRoutes(filter string, includeAll bool, verbose bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	report, err := buildRouteShowReport(rt, filterZone, includeAll)
+	report, err := buildRouteShowReport(rt, "", includeAll)
 	if err != nil {
 		return err
 	}
-	if jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(report)
-	}
-	printRouteShowReport(report, includeAll)
-	return nil
+	return printRouteShowReport(os.Stdout, report, includeAll, filter, verbose)
 }
 
 func announceRouteWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) error {
@@ -165,21 +161,47 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 	return report, nil
 }
 
-func printRouteShowReport(report *routeShowReport, includeAll bool) {
+func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool, filter string, verbose bool) error {
 	if report == nil {
 		report = &routeShowReport{}
 	}
-	fmt.Fprintf(os.Stdout, "managed_zone: %s\n", report.ManagedZone)
-	fmt.Fprintf(os.Stdout, "announcements: %d\n", len(report.Announcements))
-	if len(report.Announcements) == 0 {
-		if includeAll {
-			fmt.Fprintln(os.Stdout, "  -")
-		} else {
-			fmt.Fprintln(os.Stdout, "  - (use --all to include withdrawn announcements)")
-		}
-		return
-	}
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	rows := make([]routeShowRow, 0, len(report.Announcements))
 	for _, row := range report.Announcements {
+		state := "active"
+		if !row.Active {
+			state = "withdrawn"
+		}
+		authorization := "unauthorized"
+		if row.Authorized {
+			authorization = "authorized"
+		}
+		searchable := strings.Join([]string{
+			row.Prefix,
+			row.Zone,
+			state,
+			row.Controller,
+			authorization,
+			row.Key,
+		}, " ")
+		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
+			rows = append(rows, row)
+		}
+	}
+
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(table, "managed_zone: %s\n", report.ManagedZone)
+	if filter == "" {
+		fmt.Fprintf(table, "announcements: %d\n", len(rows))
+	} else {
+		fmt.Fprintf(table, "announcements: %d/%d\n", len(rows), len(report.Announcements))
+	}
+	if verbose {
+		fmt.Fprintln(table, "PREFIX\tZONE\tSTATE\tAUTHORIZATION\tCONTROLLER\tVERSION\tRECORD")
+	} else {
+		fmt.Fprintln(table, "PREFIX\tZONE\tSTATE\tAUTHORIZATION")
+	}
+	for _, row := range rows {
 		state := "active"
 		if !row.Active {
 			state = "withdrawn"
@@ -192,8 +214,17 @@ func printRouteShowReport(report *routeShowReport, includeAll bool) {
 		if row.Controller != "" {
 			controller = row.Controller
 		}
-		fmt.Fprintf(os.Stdout, "  %s  zone=%s  state=%s  controller=%s  %s  version=%d\n", row.Prefix, row.Zone, state, controller, authorized, row.Version)
+		if verbose {
+			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+				row.Prefix, row.Zone, state, authorized, controller, row.Version, row.Key)
+		} else {
+			fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", row.Prefix, row.Zone, state, authorized)
+		}
 	}
+	if len(rows) == 0 && !includeAll {
+		fmt.Fprintln(table, "hint: use --all to include withdrawn announcements")
+	}
+	return table.Flush()
 }
 
 func prepareRouteRecord(prefix string, active bool) (canonical, key string, value []byte, err error) {

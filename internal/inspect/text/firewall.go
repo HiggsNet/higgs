@@ -1,8 +1,10 @@
 package text
 
 import (
+	"fmt"
 	"io"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Catofes/higgs/internal/inspect"
 )
@@ -16,6 +18,7 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 	filter = strings.ToLower(strings.TrimSpace(filter))
 	instances := make([]inspect.FirewallInstanceView, 0, len(view.Instances))
 	for _, instance := range view.Instances {
+		services := firewallServiceList(instance.LocalServices)
 		searchable := strings.Join([]string{
 			instance.ID,
 			instance.Scope,
@@ -23,13 +26,20 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 			instance.Backend,
 			instance.ResolvedBackend,
 			instance.LastError,
+			instance.DefaultPolicy,
+			strings.Join(instance.AllowFilters, " "),
+			strings.Join(instance.DenyFilters, " "),
+			strings.Join(instance.AllowPeers, " "),
+			strings.Join(instance.DenyPeers, " "),
+			strings.Join(services, " "),
 		}, " ")
 		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
 			instances = append(instances, instance)
 		}
 	}
 
-	out := newLineWriter(w)
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
 	if view.LastError != "" {
 		out.Println("firewall: error")
 	} else {
@@ -37,31 +47,85 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 	}
 	out.LineIf(view.Backend != "", "backend: %s", view.Backend)
 	out.Linef("instances: %s", filteredCount(len(instances), len(view.Instances), filter))
+	if verbose {
+		out.Println("INSTANCE\tSCOPE\tMODE\tBACKEND\tSTATUS\tDEFAULT\tTRANSIT\tPREFIX_FILTERS\tPEER_FILTERS\tMETRIC\tSERVICES\tGENERATION\tOBJECTS")
+	} else {
+		out.Println("INSTANCE\tSCOPE\tMODE\tBACKEND\tSTATUS")
+	}
 	for _, instance := range instances {
 		backend := defaultText(instance.ResolvedBackend, defaultText(instance.Backend, "auto"))
-		out.Linef("  %s scope=%s mode=%s backend=%s status=%s",
-			instance.ID,
-			defaultText(instance.Scope, "-"),
-			defaultText(instance.Mode, "managed"),
-			backend,
-			firewallInstanceStatus(instance),
-		)
-		if !verbose {
-			continue
+		if verbose {
+			out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%t\t%d/%d\t%d/%d\t%d\t%d\t%d\t%d",
+				instance.ID,
+				defaultText(instance.Scope, "-"),
+				defaultText(instance.Mode, "managed"),
+				backend,
+				firewallInstanceStatus(instance),
+				defaultText(instance.DefaultPolicy, "drop"),
+				instance.Transit,
+				instance.AllowPrefixes,
+				instance.DenyPrefixes,
+				len(instance.AllowPeers),
+				len(instance.DenyPeers),
+				instance.MetricHint,
+				len(instance.LocalServices),
+				instance.Generation,
+				instance.OwnedObjects,
+			)
+		} else {
+			out.Linef("%s\t%s\t%s\t%s\t%s",
+				instance.ID,
+				defaultText(instance.Scope, "-"),
+				defaultText(instance.Mode, "managed"),
+				backend,
+				firewallInstanceStatus(instance),
+			)
 		}
-		out.Linef("    default_policy: %s", defaultText(instance.DefaultPolicy, "drop"))
-		out.Linef("    transit: %t", instance.Transit)
-		out.Linef("    prefixes: allow=%d deny=%d", instance.AllowPrefixes, instance.DenyPrefixes)
-		out.Linef("    local_services: %d", len(instance.LocalServices))
-		if instance.IsHost {
-			out.Linef("    host_ports: ike=%t natt=%t", instance.HostIKE, instance.HostNATT)
-		}
-		out.Linef("    generation: %d", instance.Generation)
-		out.Linef("    owned_objects: %d", instance.OwnedObjects)
-		out.LineIf(instance.LastError != "", "    last_error: %s", instance.LastError)
 	}
 	out.LineIf(view.LastError != "", "last_error: %s", view.LastError)
-	return out.Err()
+	if err := out.Err(); err != nil {
+		return err
+	}
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	if !verbose {
+		return nil
+	}
+
+	detail := newLineWriter(w)
+	for _, instance := range instances {
+		detail.Blank()
+		detail.Linef("instance: %s", instance.ID)
+		detail.Linef("  transit_policy: enabled=%t default=%s", instance.Transit, defaultText(instance.DefaultPolicy, "drop"))
+		detail.Linef("  allow_filters: %s", joinedOrDash(instance.AllowFilters))
+		detail.Linef("  deny_filters: %s", joinedOrDash(instance.DenyFilters))
+		detail.Linef("  allow_peers: %s", joinedOrDash(instance.AllowPeers))
+		detail.Linef("  deny_peers: %s", joinedOrDash(instance.DenyPeers))
+		detail.Linef("  metric_hint: %d", instance.MetricHint)
+		detail.Linef("  local_services: %s", joinedOrDash(firewallServiceList(instance.LocalServices)))
+		if instance.IsHost {
+			detail.Linef("  host_ports: ike=%t natt=%t redirect_grace=%t", instance.HostIKE, instance.HostNATT, instance.RedirectGrace)
+		}
+		detail.Linef("  owner_prefix: %s", dash(instance.OwnerPrefix))
+		detail.LineIf(instance.LastError != "", "  last_error: %s", instance.LastError)
+	}
+	return detail.Err()
+}
+
+func firewallServiceList(services []inspect.FirewallLocalServiceView) []string {
+	out := make([]string, 0, len(services))
+	for _, service := range services {
+		out = append(out, fmt.Sprintf("%s/%d", service.Proto, service.Port))
+	}
+	return out
+}
+
+func joinedOrDash(values []string) string {
+	if len(values) == 0 {
+		return "-"
+	}
+	return strings.Join(values, ", ")
 }
 
 func firewallInstanceStatus(instance inspect.FirewallInstanceView) string {

@@ -102,18 +102,18 @@ func run(args []string) error {
 }
 
 func queryAssignments(higgsBinary string) (runtimeIPAMReport, error) {
-	cmd := exec.Command(higgsBinary, "ipam", "mine")
+	cmd := exec.Command(higgsBinary, "route", "ipam", "mine")
 	out, err := cmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return runtimeIPAMReport{}, fmt.Errorf("higgs ipam mine: %s", exit.Stderr)
+			return runtimeIPAMReport{}, fmt.Errorf("higgs route ipam mine: %s", exit.Stderr)
 		}
-		return runtimeIPAMReport{}, fmt.Errorf("higgs ipam mine: %w", err)
+		return runtimeIPAMReport{}, fmt.Errorf("higgs route ipam mine: %w", err)
 	}
 	var report runtimeIPAMReport
 	if err := json.Unmarshal(out, &report); err != nil {
-		return runtimeIPAMReport{}, fmt.Errorf("decode higgs ipam mine output: %w", err)
+		return runtimeIPAMReport{}, fmt.Errorf("decode higgs route ipam mine output: %w", err)
 	}
 	return report, nil
 }
