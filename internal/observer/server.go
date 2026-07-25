@@ -74,7 +74,7 @@ func NewServer(provider Provider, cfg Config) *Server {
 	if !cfg.Enabled || provider == nil {
 		return nil
 	}
-	return &Server{config: cfg, provider: provider, hub: NewHub()}
+	return &Server{config: cfg, provider: provider, hub: NewHubWithBuffer(cfg.EventBufferSeconds)}
 }
 
 // Hub returns the server event hub.
@@ -100,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/routes", s.HandleRoutes)
 	mux.HandleFunc("/api/v1/bird", s.HandleBird)
 	mux.HandleFunc("/api/v1/events", s.HandleEvents)
+	mux.HandleFunc("/api/v1/events/recent", s.HandleRecentEvents)
 	mux.HandleFunc("/", s.HandleStatic)
 	return mux
 }
@@ -244,6 +245,15 @@ func (s *Server) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// HandleRecentEvents implements GET /api/v1/events/recent. It returns the
+// hub replay buffer (empty list when event buffering is disabled).
+func (s *Server) HandleRecentEvents(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	writeAPIOK(w, map[string]any{"events": s.hub.Recent()})
 }
 
 // HandleStatic serves the embedded static UI files.

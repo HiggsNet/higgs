@@ -370,7 +370,7 @@ observer:
 
 - `listen`：HTTP 监听地址，默认 `127.0.0.1:8080`。
 - `ui_path`：自定义 UI 静态文件路径；为空时使用内置 UI。
-- `event_buffer_seconds`：SSE 事件缓冲区保留时长；`0` 表示不限制。
+- `event_buffer_seconds`：SSE 事件回放缓冲的保留时长（秒），供 `GET /api/v1/events/recent` 与 UI Events 页使用；`0` 表示关闭缓冲（不保留历史事件）。
 - `disabled`：设为 `true` 时关闭 observer。
 
 Observer 是只读 HTTP/API 控制台，建议默认绑定 loopback，再由 SSH tunnel、反向代理或内网 ACL 暴露。

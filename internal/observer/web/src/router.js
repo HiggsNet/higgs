@@ -10,8 +10,9 @@ import * as overlay from './pages/overlay.js';
 import * as health from './pages/health.js';
 import * as routes from './pages/routes.js';
 import * as bird from './pages/bird.js';
+import * as timeline from './pages/timeline.js';
 
-const PAGES = { overview, gossip, zones, overlay, health, routes, bird };
+const PAGES = { overview, gossip, zones, overlay, health, routes, bird, events: timeline };
 
 let route = { page: 'overview', selected: '', filter: '' };
 

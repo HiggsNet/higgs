@@ -85,7 +85,7 @@ observer 的配置段为 `observer.*`（YAML），解析逻辑在 `app/higgs/obs
 | `enabled` / `disabled` | bool | 段缺失 = 禁用 | 段存在即启用，除非 `disabled: true`（或旧写法 `enabled: false`）；二者冲突时报错（`enabledFromPresence`） |
 | `listen` | `host:port` | `127.0.0.1:8080` | 监听地址；host 不能为空，port 须在 1–65535 |
 | `ui_path` | string | `""` | **已解析但未使用**（见第 9 节） |
-| `event_buffer_seconds` | int ≥ 0 | `0` | **已解析、透传但未使用**（见第 9 节） |
+| `event_buffer_seconds` | int ≥ 0 | `0` | 事件回放缓冲保留时长；`0` 关闭缓冲（见 5.4） |
 
 解析结果 `observerConfig{Enabled, BindAddr, Port, UIPath, EventBufferSeconds}` 在 `startObserverServer` 中被映射为 `observer.Config{Enabled, BindAddr, Port, EventBufferSeconds}`（`internal/observer/server.go`）。
 
@@ -163,6 +163,7 @@ type Provider interface {
 | `GET /api/v1/routes` | `Routes` | 授权路由集 | `RoutesResponse` |
 | `GET /api/v1/bird` | `Bird` | BIRD 实例观测 + 最近路由错误 | `BirdResponse` |
 | `GET /api/v1/events` | —（Hub） | SSE 事件流 | `text/event-stream` |
+| `GET /api/v1/events/recent` | —（Hub） | 事件回放缓冲（见 5.4） | `{"events": [...]}` |
 
 ### 4.2 全局状态 `/api/v1/status`
 
@@ -214,24 +215,30 @@ type Provider interface {
 ### 5.2 Hub 机制（`internal/observer/hub.go`）
 
 - 每个订阅者一个 **buffer=16** 的 channel；`Subscribe` 返回 channel 与 unsubscribe 闭包（从 map 删除并 close）。
-- `Broadcast` 为**非阻塞**：channel 已满的慢客户端直接丢弃该事件（`hub.go:50`），前端靠轮询兜底恢复。
-- 事件体 `Event{Type, Payload}` 刻意轻量：当前所有广播点 payload 均为 nil，客户端收到事件后重新拉取对应 REST 快照。
+- `Broadcast` 为**非阻塞**：channel 已满的慢客户端直接丢弃该事件，前端靠轮询兜底恢复；调用方未填时间戳时由 hub 填入（`Event.Time`，unix 秒）。
+- 事件体 `Event{Type, Time, Payload}` 刻意轻量：payload 只携带 id（列表），不带 diff、不带大对象；客户端收到事件后重新拉取对应 REST 快照。
 
-### 5.3 事件类型与触发点
+### 5.3 事件 payload 与触发点
 
-全部事件都在 `notifyStateChanged()`（`app/higgs/daemon.go:1500`）中按固定顺序发出：
+大部分事件都在 `notifyStateChanged()`（`app/higgs/daemon.go`）中按固定顺序发出；`health_updated` 另有一个 `handleHealthUpdate`（health reconcile 路径）触发点：
 
-| 事件 | 触发位置 | 含义 |
-|---|---|---|
-| `connected` | SSE 连接建立 | 握手帧（hub 之外，由 handler 直写） |
-| `state_changed` | `notifyStateChanged` 入口 | stateFile 发生替换（Zone digest 变化等） |
-| `route_changed` | firewall flush 之后 | 路由相关数据可能已变 |
-| `bird_updated` | 同上 | BIRD 观测数据可能已变 |
-| `link_updated` | routing/IPsec flush 之后 | link 实例/SA 状态可能已变 |
-| `peer_updated` | revocation 二次清理之后 | peer 列表/状态可能已变 |
-| `health_updated` | 同上 | 健康状态可能已变 |
+| 事件 | 触发位置 | Payload | 含义 |
+|---|---|---|---|
+| `connected` | SSE 连接建立 | `{client_id}` | 握手帧（hub 之外，由 handler 直写） |
+| `state_changed` | `notifyStateChanged` 入口 | nil | stateFile 发生替换（Zone digest 变化等） |
+| `route_changed` | firewall flush 之后 | nil | 路由相关数据可能已变 |
+| `bird_updated` | 同上 | nil | BIRD 观测数据可能已变 |
+| `link_updated` | routing/IPsec flush 之后 | `{link_ids: [...]}`（state.LinkInstances 键） | link 实例/SA 状态可能已变 |
+| `peer_updated` | revocation 二次清理之后 | `{peer_ids: [...]}`（state.SyncPeers 键） | peer 列表/状态可能已变 |
+| `health_updated` | 同上；及 `handleHealthUpdate` | `{link_ids: [...]}`（health.Manager 快照 targets） | 健康状态可能已变 |
 
-注意：事件语义是"**可能**有变化，请重新拉取"，不携带 diff；事件在 `drainingEvents` 时仍会在入口发 `state_changed`，后续事件被跳过（直接返回前）。
+注意：事件语义是"**可能**有变化，请重新拉取"；广播点是批量通知（`healthUpdates` 通道为 `chan struct{}`、flush 为全量 reconcile），拿不到单一条目 id，因此 payload 是快照派生的 id 列表而非单条 id。事件在 `drainingEvents` 时仍会在入口发 `state_changed`，后续事件被跳过（直接返回前）。
+
+### 5.4 事件回放缓冲与 `/api/v1/events/recent`
+
+- `observer.event_buffer_seconds > 0` 时 hub 启用回放缓冲：每次 `Broadcast` 先 prune 掉早于 `now - N` 秒的事件再追加，另有 1024 条硬上限防内存膨胀；`== 0`（默认）关闭缓冲，保持原语义。
+- `GET /api/v1/events/recent` 经 `requireGET`，返回 `{"events": hub.Recent()}`（按时间升序的副本）；缓冲关闭时返回空列表而非错误。
+- 前端 Events 页消费该端点，且任意 SSE 事件到达都会使 `/events/recent` 键失效重取。
 
 ---
 
@@ -246,9 +253,9 @@ type Provider interface {
 ### 6.2 前端行为（`web/src/`）
 
 - 零构建原生 ES modules SPA：`main.js` 入口装配 `router.js`（hash 路由）+ `events.js`（SSE）+ `store.js`（按 endpoint 的缓存/失效/订阅）；页面模块在 `src/pages/*`，纯函数组件在 `src/components/*`，所有动态文本经 `src/format.js` 的 `esc()`。
-- hash 路由携带选中态与过滤条件（`#/<page>[/<selection>][?f=<filter>]`），可深链、刷新不丢；7 个页面：Overview / Gossip / Zones / Overlay · Control Plane / Routes / BIRD / Health · Data Plane。
+- hash 路由携带选中态与过滤条件（`#/<page>[/<selection>][?f=<filter>]`），可深链、刷新不丢；8 个页面：Overview / Gossip / Zones / Overlay · Control Plane / Routes / BIRD / Health · Data Plane / Events（时间线页数据源为 `/events/recent`，需 `event_buffer_seconds > 0` 才有内容）。
 - 每页声明依赖的 endpoint（`deps`），store 负责拉取与并发去重：overview→status/links/health/zones，gossip→peers，zones→zones，overlay→links，health→health，routes→routes，bird→bird/status。
-- 连接策略：`EventSource('/api/v1/events')` 收到 `connected` 后置为 **Live**；事件按类型→endpoint 映射只失效并重取对应键（如 `link_updated`→`/links`、`health_updated`→`/health`），不再整页刷新；`onerror` 时降级为 **Polling**（5s 轮询当前页依赖的键），并每 10s 尝试重建 SSE；侧栏指示器显示 Live / Polling / Disconnected 三态。
+- 连接策略：`EventSource('/api/v1/events')` 收到 `connected` 后置为 **Live**；事件按类型→endpoint 映射只失效并重取对应键（如 `link_updated`→`/links`、`health_updated`→`/health`），不再整页刷新；携带 id 列表 payload 的事件（`peer_updated`/`health_updated`）还会做**条目级失效**——gossip 选中 peer 的详情缓存与 health sparkline 缓存只重取受影响条目；任意事件同时失效 `/events/recent` 键；`onerror` 时降级为 **Polling**（5s 轮询当前页依赖的键），并每 10s 尝试重建 SSE；侧栏指示器显示 Live / Polling / Disconnected 三态。
 - 重绘前记录 `#content` 的 scrollTop / 活跃输入框 / `<details open>` 状态，重绘后恢复（取代早期 foldState 补丁）。
 - Health 页 sparkline 在卡片可见时才懒加载 `/health/{id}/series?metric=rtt&range=30m&step=1m`，详情图按 5m/30m/1h/6h/24h 档位手动加载（step 10s–30m）；series 有多条 `lines` 时按 probe 视角分线，否则退化为单条 active 线。
 
@@ -288,11 +295,11 @@ series 端点的数据完全来自 health 子系统的本地 JSONL spool（产�
 | 项 | 现状 |
 |---|---|
 | `observer.ui_path` | 已解析、归一化（补前导 `/`），但 server 始终从根路径提供内嵌 UI，该值无任何消费方 |
-| `observer.event_buffer_seconds` | 已解析并透传到 `observer.Config`，但 SSE 无事件缓冲/回放，该值无消费方；hub 只有 per-subscriber 的 16 槽 channel，溢出即丢 |
+| `observer.event_buffer_seconds` | 已实现：hub 回放缓冲按时间窗保留（1024 条硬上限），`GET /api/v1/events/recent` 提供回放（见 5.4） |
 | SSE 续传 | 未实现 `Last-Event-ID`；断线期间的事件不重发，依赖前端轮询兜底 |
 | 设计中的部分端点 | `/api/v1/link-groups`、`/api/v1/zones/{zone}/records|delegations|revocations` 未实现（`/zones/{x}/records` 会被当作 zone filter 而 404） |
-| Events 页面 | 设计中的独立事件时间线页未实现；UI 只有 7 个页面，事件仅作为刷新触发器 |
-| 事件 payload | 所有广播 payload 为 nil（设计建议携带 `link_id` 等 key）；前端按事件类型做 endpoint 级失效，条目级失效待事件链路补完 |
+| Events 页面 | 已实现：Events 时间线页消费 `/events/recent`；SSE 续传（`Last-Event-ID`）仍未实现，断线期间靠轮询兜底 |
+| 事件 payload | 已实现 id 列表级 payload（`link_updated`/`health_updated` → `{link_ids}`、`peer_updated` → `{peer_ids}`），前端据此做条目级失效；无 diff、无单条精确 id（广播点为批量通知） |
 | `babel_rtt` / `babel_metric` series | spool 尚不含 BIRD 观测样本，查询显式报错 |
 | 非 loopback 保护 | 仅 warn 日志，无绑定确认开关或强制拒绝 |
 | 时序留存 | 短历史完全取决于 health spool 的 `local_spool_max_age`；spool 未配置时 Health 页无曲线 |

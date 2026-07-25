@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -100,6 +101,61 @@ func (d *DaemonService) notifyObserver(eventType string, payload any) {
 		return
 	}
 	d.observerHub.Broadcast(observer.Event{Type: eventType, Payload: payload})
+}
+
+// observerIDsPayload builds a lightweight {key: [sorted ids]} event payload.
+// Payloads carry ids only — never diffs or large objects. Returns nil when
+// there are no ids so the payload field is omitted entirely.
+func observerIDsPayload(key string, ids []string) map[string]any {
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	return map[string]any{key: ids}
+}
+
+// observerLinkIDsPayload returns {link_ids: [...]} derived from the current
+// state snapshot's link instance keys.
+func (d *DaemonService) observerLinkIDsPayload() any {
+	state, _, _ := d.snapshotState()
+	if state == nil || len(state.LinkInstances) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(state.LinkInstances))
+	for id := range state.LinkInstances {
+		ids = append(ids, id)
+	}
+	return observerIDsPayload("link_ids", ids)
+}
+
+// observerPeerIDsPayload returns {peer_ids: [...]} derived from the current
+// state snapshot's sync peer keys.
+func (d *DaemonService) observerPeerIDsPayload() any {
+	state, _, _ := d.snapshotState()
+	if state == nil || len(state.SyncPeers) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(state.SyncPeers))
+	for id := range state.SyncPeers {
+		ids = append(ids, id)
+	}
+	return observerIDsPayload("peer_ids", ids)
+}
+
+// observerHealthLinkIDsPayload returns {link_ids: [...]} derived from the
+// health manager's current target snapshot.
+func (d *DaemonService) observerHealthLinkIDsPayload() any {
+	if d == nil || d.health == nil || d.Sync == nil {
+		return nil
+	}
+	snapshot := d.health.Snapshot(d.Sync.now())
+	ids := make([]string, 0, len(snapshot))
+	for _, h := range snapshot {
+		if h.InstanceID != "" {
+			ids = append(ids, h.InstanceID)
+		}
+	}
+	return observerIDsPayload("link_ids", ids)
 }
 
 // handler returns the HTTP handler for the observer, including REST APIs,

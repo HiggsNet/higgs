@@ -63,8 +63,10 @@ func TestWebModulesExist(t *testing.T) {
 		"src/pages/zones.js",
 		"src/pages/overlay.js",
 		"src/pages/health.js",
+		"src/pages/health_history.js",
 		"src/pages/routes.js",
 		"src/pages/bird.js",
+		"src/pages/timeline.js",
 	} {
 		if _, err := fs.Stat(webFS, name); err != nil {
 			t.Errorf("web module %s missing: %v", name, err)
@@ -182,7 +184,7 @@ func TestPagesExportRenderAndDeps(t *testing.T) {
 	if webFS == nil {
 		t.Fatal("WebSubFS should not be nil")
 	}
-	for _, page := range []string{"overview", "gossip", "zones", "overlay", "health", "routes", "bird"} {
+	for _, page := range []string{"overview", "gossip", "zones", "overlay", "health", "routes", "bird", "timeline"} {
 		body := readWebFile(t, webFS, "src/pages/"+page+".js")
 		if !strings.Contains(body, "export function render") {
 			t.Errorf("src/pages/%s.js missing render export", page)

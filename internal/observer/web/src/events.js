@@ -1,5 +1,6 @@
 // events.js — SSE connection, event → endpoint invalidation mapping,
-// and fallback polling of the current page's watched keys only.
+// item-level invalidation for payload-carrying events, and fallback
+// polling of the current page's watched keys only.
 
 import { API_BASE } from './api.js';
 import * as store from './store.js';
@@ -14,6 +15,9 @@ const INVALIDATE = {
     bird_updated: ['/bird', '/status'],
 };
 
+// The replay-buffer timeline key is refetched on every event (when watched).
+const RECENT_KEY = '/events/recent';
+
 const POLL_INTERVAL_MS = 5000;
 const RECONNECT_MS = 10000;
 
@@ -21,13 +25,39 @@ let eventSource = null;
 let pollTimer = null;
 let mode = 'disconnected';
 
+// Item-level invalidation handlers: pages holding per-item caches (peer
+// detail, health sparklines) register fn(eventType, payload) here.
+const itemHandlers = new Set();
+
+export function onItemInvalidate(fn) {
+    itemHandlers.add(fn);
+    return () => itemHandlers.delete(fn);
+}
+
+function handleEvent(type, raw) {
+    let payload = null;
+    if (raw) {
+        try {
+            payload = (JSON.parse(raw) || {}).payload ?? null;
+        } catch {
+            payload = null;
+        }
+    }
+    for (const fn of itemHandlers) {
+        try {
+            fn(type, payload);
+        } catch { /* one bad handler must not break invalidation */ }
+    }
+    store.invalidate([...(INVALIDATE[type] || []), RECENT_KEY]);
+}
+
 export function connect() {
     close();
     try {
         eventSource = new EventSource(`${API_BASE}/events`);
         eventSource.addEventListener('connected', () => setMode('live'));
-        for (const [type, keys] of Object.entries(INVALIDATE)) {
-            eventSource.addEventListener(type, () => store.invalidate(keys));
+        for (const type of Object.keys(INVALIDATE)) {
+            eventSource.addEventListener(type, ev => handleEvent(type, ev.data));
         }
         eventSource.onerror = () => {
             close();

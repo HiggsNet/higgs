@@ -4,19 +4,28 @@
 import * as store from '../store.js';
 import { fetchAPI } from '../api.js';
 import { navigate } from '../router.js';
+import { onItemInvalidate } from '../events.js';
 import { esc, ms, pct, relTime } from '../format.js';
 import { pageHeader, filterInput, entityCard, entityField, emptyState, loading, errorMsg } from '../components/card.js';
 import { kvTable } from '../components/kv.js';
 import { stateBadge, dot } from '../components/badge.js';
-import { sparkline, healthChart } from '../components/chart.js';
+import { sparkline } from '../components/chart.js';
+import { historyPanel, bindHistory } from './health_history.js';
 
 export const deps = ['/health'];
 
-const RANGES = ['5m', '30m', '1h', '6h', '24h'];
-const RANGE_STEPS = { '5m': '10s', '30m': '1m', '1h': '2m', '6h': '10m', '24h': '30m' };
-
-// Sparkline series cache, invalidated when /health refetches.
-const sparkCache = new Map(); // instanceID -> {stamp, values}
+// Sparkline series cache, invalidated per link when health_updated carries
+// link_ids (item-level), cleared wholesale when it does not.
+const sparkCache = new Map(); // instanceID -> values
+onItemInvalidate((type, payload) => {
+    if (type !== 'health_updated') return;
+    const ids = payload && (payload.link_ids || (payload.link_id ? [payload.link_id] : null));
+    if (!ids) {
+        sparkCache.clear();
+        return;
+    }
+    ids.forEach(id => sparkCache.delete(id));
+});
 
 function healthValue(item) { return item ? (item.health || item) : null; }
 
@@ -25,16 +34,6 @@ function severityOf(h) {
     if (h.state === 'down') return 'err';
     if (h.state && h.state !== 'healthy') return 'warn';
     return h.cutover_blocking ? 'warn' : '';
-}
-
-function historyPanel(instanceID) {
-    if (!instanceID) return '<div class="muted">No link instance selected.</div>';
-    const buttons = RANGES.map(r =>
-        `<button type="button" class="btn range-btn${r === '30m' ? ' active' : ''}" data-health-range="${r}">${r}</button>`).join('');
-    return `<div class="history-panel" data-link-id="${esc(instanceID)}">
-        <div class="history-toolbar" role="group" aria-label="RTT history range">${buttons}</div>
-        <div class="health-chart-body muted">Open this section to load RTT history.</div>
-    </div>`;
 }
 
 function healthDetail(item, datasource) {
@@ -100,21 +99,22 @@ function linkCard(item, datasource) {
 }
 
 // Lazy sparklines: fetch a 30m series only when the card scrolls into
-// view, and only when /health data is newer than the cached series.
-function setupSparklines(root, stamp) {
+// view. Cache entries stay valid until the item-level invalidation above
+// removes them, so list refetches no longer re-fetch every series.
+function setupSparklines(root) {
     const load = async slot => {
         const id = slot.dataset.instance;
         if (!id) { slot.innerHTML = '<span class="muted">-</span>'; return; }
         const cached = sparkCache.get(id);
-        if (cached && cached.stamp === stamp) { slot.innerHTML = sparkline(cached.values); return; }
+        if (cached) { slot.innerHTML = sparkline(cached); return; }
         try {
             const data = await fetchAPI(`/health/${encodeURIComponent(id)}/series?metric=rtt&range=30m&step=1m`);
             const points = (data.series && data.series.points) || [];
             const values = points.map(p => Number(p.value)).filter(v => Number.isFinite(v));
-            sparkCache.set(id, { stamp, values });
+            sparkCache.set(id, values);
             if (slot.isConnected) slot.innerHTML = sparkline(values);
         } catch {
-            sparkCache.set(id, { stamp, values: [] });
+            sparkCache.set(id, []);
             if (slot.isConnected) slot.innerHTML = '<span class="muted">-</span>';
         }
     };
@@ -126,52 +126,6 @@ function setupSparklines(root, stamp) {
         });
     }, { root: document.getElementById('content') });
     slots.forEach(slot => observer.observe(slot));
-}
-
-async function loadHistory(detail, range) {
-    const panel = detail.querySelector('.history-panel');
-    const body = detail.querySelector('.health-chart-body');
-    if (!panel || !body) return;
-    const linkID = panel.dataset.linkId || '';
-    const step = RANGE_STEPS[range] || '1m';
-    const key = `${linkID}:${range}`;
-    if (body.dataset.loadedKey === key || body.dataset.loadingKey === key) return;
-    body.dataset.loadingKey = key;
-    body.classList.add('muted');
-    body.textContent = 'Loading RTT history…';
-    try {
-        const data = await fetchAPI(`/health/${encodeURIComponent(linkID)}/series?metric=rtt&range=${range}&step=${step}`);
-        const series = data.series || {};
-        body.classList.remove('muted');
-        body.innerHTML = healthChart(series, series.range || range, series.step || step);
-        body.dataset.loadedKey = key;
-    } catch (e) {
-        body.classList.add('muted');
-        body.textContent = `RTT history unavailable: ${e.message}`;
-    } finally {
-        delete body.dataset.loadingKey;
-    }
-}
-
-function bindHistory(root, datasource) {
-    if (!datasource || !datasource.configured) return;
-    const loadActive = detail => {
-        const active = detail.querySelector('[data-health-range].active');
-        loadHistory(detail, active ? active.dataset.healthRange : '30m');
-    };
-    root.querySelectorAll('details.health-details').forEach(detail => {
-        if (!detail.querySelector('.history-panel')) return;
-        detail.addEventListener('toggle', () => { if (detail.open) loadActive(detail); });
-        if (detail.open) loadActive(detail);
-    });
-    root.querySelectorAll('[data-health-range]').forEach(button => {
-        button.addEventListener('click', () => {
-            const detail = button.closest('details.health-details');
-            if (!detail) return;
-            detail.querySelectorAll('[data-health-range]').forEach(b => b.classList.toggle('active', b === button));
-            loadHistory(detail, button.dataset.healthRange);
-        });
-    });
 }
 
 export function render(container, route) {
@@ -201,6 +155,6 @@ export function render(container, route) {
     container.querySelector('#page-filter').addEventListener('input', ev => {
         navigate(route.page, route.selected, ev.target.value);
     });
-    setupSparklines(container, entry.updatedAt || 0);
+    setupSparklines(container);
     bindHistory(container, data.datasource);
 }

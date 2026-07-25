@@ -42,7 +42,7 @@
   - Routes 错误置顶 + zone 过滤；BIRD 错误醒目展示；Gossip diagnostics 格式化 kv。
   - 全局：相对时间、列表页文本过滤、选中态写入 hash 可深链。
 
-- [ ] **9.4 事件链路补完（可选，动后端）**
+- [x] **9.4 事件链路补完（可选，动后端）**
   - `daemon.go` 广播点携带轻量 payload（`link_id` / `peer_id`），前端条目级失效。
   - 落地 `event_buffer_seconds` 环形缓冲 + Events 时间线页（独立可裁）。
 

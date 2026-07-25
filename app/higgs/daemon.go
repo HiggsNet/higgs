@@ -1606,12 +1606,12 @@ func (d *DaemonService) notifyStateChanged() {
 	d.notifyObserver("bird_updated", nil)
 	d.flushRoutingReconcile(context.Background())
 	d.flushIPsecReconcile(context.Background())
-	d.notifyObserver("link_updated", nil)
+	d.notifyObserver("link_updated", d.observerLinkIDsPayload())
 	// Gossip peer cache cleanup runs again after teardown to ensure observed
 	// paths discovered/refreshed during the flush are cleared.
 	d.flushRevocationCleanup()
-	d.notifyObserver("peer_updated", nil)
-	d.notifyObserver("health_updated", nil)
+	d.notifyObserver("peer_updated", d.observerPeerIDsPayload())
+	d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
 }
 
 func (d *DaemonService) publishStateStoreRuntimeFlags() {

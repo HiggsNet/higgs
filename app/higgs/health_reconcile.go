@@ -200,7 +200,7 @@ func (d *DaemonService) handleHealthUpdate(now time.Time) {
 	if err := d.appendHealthSpool(now, d.healthStatusResponse()); err != nil && !errors.Is(err, errHealthSpoolNotConfigured) {
 		d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
 	}
-	d.notifyObserver("health_updated", nil)
+	d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
 }
 
 // healthStatusResponse builds the control API response for `health_status`.

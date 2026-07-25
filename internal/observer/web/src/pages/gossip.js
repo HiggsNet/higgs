@@ -3,6 +3,7 @@
 import * as store from '../store.js';
 import { fetchAPI } from '../api.js';
 import { navigate, renderCurrent } from '../router.js';
+import { onItemInvalidate } from '../events.js';
 import { esc, relTime, formatTime } from '../format.js';
 import { pageHeader, filterInput, entityCard, entityField, emptyState, loading, errorMsg } from '../components/card.js';
 import { tableWrap, emptyRow } from '../components/table.js';
@@ -13,6 +14,15 @@ export const deps = ['/peers'];
 
 // Detail cache keyed by selected peer; invalidated when /peers refetches.
 let detail = { id: '', stamp: 0, data: null, error: null };
+
+// peer_ids from the latest peer_updated payload. When the list refetch was
+// triggered by peers that do not include the selected one, the cached detail
+// is kept (item-level invalidation instead of a blanket detail refetch).
+let peerHint = null;
+onItemInvalidate((type, payload) => {
+    if (type !== 'peer_updated') return;
+    peerHint = payload ? (payload.peer_ids || (payload.peer_id ? [payload.peer_id] : null)) : null;
+});
 
 function kvFromObject(obj) {
     return Object.entries(obj || {}).map(([k, v]) => [
@@ -78,7 +88,12 @@ function detailPanel(route) {
 function ensureDetail(route) {
     if (!route.selected) return;
     const stamp = (store.get('/peers') || {}).updatedAt || 0;
+    if (detail.id === route.selected && detail.stamp !== stamp && peerHint && !peerHint.includes(route.selected)) {
+        // List refetched for unrelated peers; keep the cached detail.
+        detail.stamp = stamp;
+    }
     if (detail.id === route.selected && detail.stamp === stamp) return;
+    peerHint = null;
     detail = { id: route.selected, stamp, data: null, error: null };
     fetchAPI(`/peers/${encodeURIComponent(route.selected)}`)
         .then(data => { detail.data = data; rerender(); })

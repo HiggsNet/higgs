@@ -66,6 +66,8 @@ func TestStaticHandlerEmbeddedFiles(t *testing.T) {
 		{"/src/components/badge.js", "application/javascript; charset=utf-8"},
 		{"/src/pages/overview.js", "application/javascript; charset=utf-8"},
 		{"/src/pages/health.js", "application/javascript; charset=utf-8"},
+		{"/src/pages/health_history.js", "application/javascript; charset=utf-8"},
+		{"/src/pages/timeline.js", "application/javascript; charset=utf-8"},
 	}
 	srv := newTestServer()
 	for _, tc := range cases {
