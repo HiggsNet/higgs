@@ -152,7 +152,7 @@ type Provider interface {
 |---|---|---|---|
 | `GET /api/v1/status` | `Status` | daemon 全局摘要 | `StatusResponse` |
 | `GET /api/v1/zones` | `Zones("")` | Zone 树摘要列表 | `ZonesResponse` |
-| `GET /api/v1/zones/{zone}` | `Zones(zone)` | 单 Zone 详情（含 history） | `inspect.BuildZoneDetail` 输出 |
+| `GET /api/v1/zones/{zone}` | `Zones(zone)` | 单 Zone 详情（含 history）；根 zone `.` 无法作为路径段（ServeMux 会重定向），用 `GET /api/v1/zones?zone=.` | `inspect.BuildZoneDetail` 输出 |
 | `GET /api/v1/peers` | `Peers("")` | 全部 peer 同步状态 | `PeersResponse` |
 | `GET /api/v1/peers/{peer_id}` | `Peers(peerID)` | 单 peer 详情 | `PeerJSON` |
 | `GET /api/v1/links` | `Links("")` | link 实例与 reconcile 状态 | `LinksResponse` |

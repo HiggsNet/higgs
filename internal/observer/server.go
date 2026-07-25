@@ -154,8 +154,19 @@ func (s *Server) HandleZones(w http.ResponseWriter, r *http.Request) {
 	if !requireGET(w, r) {
 		return
 	}
-	data, err := s.provider.Zones(pathFilter(r.URL.Path, "/api/v1/zones"))
+	data, err := s.provider.Zones(zoneFilter(r))
 	writeProviderResult(w, data, err)
+}
+
+// zoneFilter extracts the zone filter from the path. The root zone "." cannot
+// be addressed as a path segment — ServeMux cleans "/api/v1/zones/." into a
+// redirect to "/api/v1/zones" — so it is accepted via ?zone=. instead.
+func zoneFilter(r *http.Request) string {
+	filter := pathFilter(r.URL.Path, "/api/v1/zones")
+	if filter == "" {
+		filter = r.URL.Query().Get("zone")
+	}
+	return filter
 }
 
 // HandlePeers implements GET /api/v1/peers and GET /api/v1/peers/{peer_id}.

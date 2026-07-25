@@ -63,7 +63,10 @@ function ensureDetail(route) {
     const stamp = (store.get('/zones') || {}).updatedAt || 0;
     if (detail.id === route.selected && detail.stamp === stamp) return;
     detail = { id: route.selected, stamp, data: null, error: null };
-    fetchAPI(`/zones/${encodeURIComponent(route.selected)}`)
+    // The root zone "." cannot be a URL path segment (ServeMux redirects it);
+    // it is fetched via the ?zone= query form instead.
+    const url = route.selected === '.' ? '/zones?zone=.' : `/zones/${encodeURIComponent(route.selected)}`;
+    fetchAPI(url)
         .then(data => { detail.data = data; renderCurrent(); })
         .catch(error => { detail.error = error; renderCurrent(); });
 }
