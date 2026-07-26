@@ -45,7 +45,7 @@ func TestPlanPortRecordRangeIsStableByGeneration(t *testing.T) {
 	if record.Current.IKE.Local != DefaultIKEPort || record.Current.NATT.Local != DefaultNATTPort {
 		t.Fatalf("local ports = %+v, want charon defaults", record.Current)
 	}
-	if record.Current.IKE.Advertised != 30001 || record.Current.NATT.Advertised != 30002 {
+	if record.Current.IKE.Advertised != 30000 || record.Current.NATT.Advertised != 30001 {
 		t.Fatalf("advertised ports = %+v, want selected range ports", record.Current)
 	}
 	again, err := PlanPortRecord(PortPlanOptions{
@@ -59,6 +59,42 @@ func TestPlanPortRecordRangeIsStableByGeneration(t *testing.T) {
 	}
 	if record.Current.IKE.Advertised != again.Current.IKE.Advertised || record.Current.NATT.Advertised != again.Current.NATT.Advertised {
 		t.Fatalf("range selection changed: %+v vs %+v", record.Current, again.Current)
+	}
+}
+
+func TestSelectPortsFromRangeUsesDisjointPairsAcrossRotate(t *testing.T) {
+	r := PortRange{From: 33500, To: 33599}
+	ike2, natt2, err := SelectPortsFromRange(r, 2)
+	if err != nil {
+		t.Fatalf("SelectPortsFromRange(generation 2): %v", err)
+	}
+	ike3, natt3, err := SelectPortsFromRange(r, 3)
+	if err != nil {
+		t.Fatalf("SelectPortsFromRange(generation 3): %v", err)
+	}
+	if ike2 != 33502 || natt2 != 33503 {
+		t.Fatalf("generation 2 ports = %d/%d, want 33502/33503", ike2, natt2)
+	}
+	if ike3 != 33504 || natt3 != 33505 {
+		t.Fatalf("generation 3 ports = %d/%d, want 33504/33505", ike3, natt3)
+	}
+	if ike2 == ike3 || ike2 == natt3 || natt2 == ike3 || natt2 == natt3 {
+		t.Fatalf("adjacent generations overlap: generation 2 = %d/%d, generation 3 = %d/%d", ike2, natt2, ike3, natt3)
+	}
+}
+
+func TestSelectPortsFromRangeWrapKeepsAdjacentGenerationsDisjoint(t *testing.T) {
+	r := PortRange{From: 30000, To: 30005}
+	ike3, natt3, err := SelectPortsFromRange(r, 3)
+	if err != nil {
+		t.Fatalf("SelectPortsFromRange(generation 3): %v", err)
+	}
+	ike4, natt4, err := SelectPortsFromRange(r, 4)
+	if err != nil {
+		t.Fatalf("SelectPortsFromRange(generation 4): %v", err)
+	}
+	if ike3 != 30004 || natt3 != 30005 || ike4 != 30000 || natt4 != 30001 {
+		t.Fatalf("wrapped ports = generation 3 %d/%d, generation 4 %d/%d", ike3, natt3, ike4, natt4)
 	}
 }
 
@@ -131,10 +167,10 @@ func TestPlanPortRecordDropsExpiredPreviousSelections(t *testing.T) {
 func TestPlanPortRecordRejectsTinyRange(t *testing.T) {
 	_, err := PlanPortRecord(PortPlanOptions{
 		Mode:       PortModeRange,
-		Range:      &PortRange{From: 30000, To: 30000},
+		Range:      &PortRange{From: 30000, To: 30002},
 		Generation: 1,
 	})
 	if err == nil {
-		t.Fatalf("PlanPortRecord should reject one-port range")
+		t.Fatalf("PlanPortRecord should reject a range without two complete port pairs")
 	}
 }

@@ -132,8 +132,10 @@ ipsec:
   # vici_socket: /run/charon.vici
 
   # fixed publishes the charon listener ports directly. range publishes
-  # deterministic advertised entry ports from port_range while charon keeps its
-  # stable local 500/4500 sockets. In range mode, host firewall instances
+  # deterministic, non-overlapping IKE/NAT-T port pairs from port_range while
+  # charon keeps its stable local 500/4500 sockets. Each generation advances by
+  # one pair (two ports); the range must contain at least four ports. In range
+  # mode, host firewall instances
   # default host_ports.ike/natt and redirect_grace to enabled so advertised
   # entry ports DNAT back to charon and outbound charon source ports are
   # rewritten to current advertised ports; explicitly disable them if another

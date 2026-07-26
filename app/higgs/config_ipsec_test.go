@@ -187,3 +187,21 @@ ipsec:
 		t.Fatalf("parseConfigYAML should reject invalid port_range")
 	}
 }
+
+func TestParseConfigYAMLRejectsPortRangeWithoutTwoPairs(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+ipsec:
+  port_mode: range
+  port_range:
+    from: 30000
+    to: 30002
+`
+	err := parseConfigYAML(input, config)
+	if err == nil {
+		t.Fatalf("parseConfigYAML should reject a port_range without two complete pairs")
+	}
+	if !strings.Contains(err.Error(), "two IKE/NAT-T port pairs") {
+		t.Fatalf("error = %v", err)
+	}
+}

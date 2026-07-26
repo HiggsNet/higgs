@@ -156,7 +156,7 @@ ipsec:
 - `role`：`out`、`in`、`both`。表达本节点 IPsec 连接意图；默认 `both`。
 - `driver`：`strongswan` 或 `dry-run`。默认 `strongswan`；无 root/VICI/XFRM 的开发环境用 `dry-run`。
 - `vici_socket`：StrongSwan VICI socket 路径。Higgs 不负责启动 charon。
-- `port_mode`：`fixed` 或 `range`。`range` 需要配置 `port_range`。
+- `port_mode`：`fixed` 或 `range`。`range` 需要配置至少包含 4 个端口的 `port_range`；每个 generation 使用一组不重叠的 IKE/NAT-T 相邻端口，rotate 时前进 2 个端口。
 - `port_rotate_interval`：range 模式下 advertised port 的轮换周期；为 0 时不主动轮换。
 - `port_previous_grace`：旧 advertised port 保留窗口，必须覆盖 overlay rotate retention。
 - `announce_addrs` / `announce_dns`：IPsec 专用地址或 DNS 发布来源，独立于 `gossip.advertise_addrs`。

@@ -109,12 +109,20 @@ func SelectPortsFromRange(r PortRange, generation uint64) (uint16, uint16, error
 		return 0, 0, fmt.Errorf("invalid port range %d-%d", r.From, r.To)
 	}
 	width := uint32(r.To) - uint32(r.From) + 1
-	if width < 2 {
-		return 0, 0, fmt.Errorf("port range %d-%d must contain at least two ports", r.From, r.To)
+	if width < 4 {
+		return 0, 0, fmt.Errorf("port range %d-%d must contain at least two IKE/NAT-T port pairs", r.From, r.To)
 	}
-	offset := uint32(generation % uint64(width))
-	ike := uint16(uint32(r.From) + offset)
-	natt := uint16(uint32(r.From) + ((offset + 1) % width))
+	// A generation owns a non-overlapping pair of advertised entry ports.
+	// Advancing by one port would make the previous generation's NAT-T port
+	// equal the current generation's IKE port while both are kept for grace.
+	pairCount := width / 2
+	generationIndex := generation
+	if generationIndex > 0 {
+		generationIndex--
+	}
+	pairIndex := uint32(generationIndex % uint64(pairCount))
+	ike := uint16(uint32(r.From) + pairIndex*2)
+	natt := ike + 1
 	return ike, natt, nil
 }
 

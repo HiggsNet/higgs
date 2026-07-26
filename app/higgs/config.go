@@ -545,6 +545,9 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		if file.IPsec.PortRange.From == 0 || file.IPsec.PortRange.To == 0 || file.IPsec.PortRange.From > file.IPsec.PortRange.To {
 			return fmt.Errorf("invalid ipsec.port_range %d-%d", file.IPsec.PortRange.From, file.IPsec.PortRange.To)
 		}
+		if uint32(file.IPsec.PortRange.To)-uint32(file.IPsec.PortRange.From)+1 < 4 {
+			return fmt.Errorf("ipsec.port_range %d-%d must contain at least two IKE/NAT-T port pairs", file.IPsec.PortRange.From, file.IPsec.PortRange.To)
+		}
 		config.IPsec.PortRange = file.IPsec.PortRange
 	}
 	if file.IPsec.PortRotateInterval != "" {
