@@ -513,7 +513,7 @@ staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface nam
 - takeover 有 lease（默认 5min）和 cooldown（默认 2min）
 - 已有匹配 SA 时优先 adopt，不再纠结谁先拨
 - revocation、profile/transport-key mismatch 禁止 takeover（信任失败不是连通性失败）
-- 同 runtime 的重复 SA 全部稳定 2min 后，由 secondary 按 IKE unique ID 精确 GC
+- 同 runtime 的重复 SA 全部稳定 2min 后，primary/secondary 都可按 IKE unique ID 精确 GC；primary 保留最老的 outbound SA，secondary 保留最老的 inbound SA，双方选择同一条 canonical SA
 
 ## XFRM interface 生命周期
 

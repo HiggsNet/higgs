@@ -91,7 +91,10 @@ func (p *RawICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeC
 		return ProbeResult{InstanceID: target.InstanceID, Error: result.err.Error()}
 	}
 	if result.received == 0 {
-		return ProbeResult{InstanceID: target.InstanceID, Error: "raw ICMP returned no replies"}
+		// An unanswered burst is a valid reachability observation. Reserve
+		// Error for failures to create, bind, or use the probe socket so the
+		// state machine reports packet loss as degraded/down, not probe_error.
+		return ProbeResult{InstanceID: target.InstanceID}
 	}
 	burst := cfg.Burst
 	if burst <= 0 {

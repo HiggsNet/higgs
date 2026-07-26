@@ -14,14 +14,13 @@ export function historyPanel(instanceID) {
         `<button type="button" class="btn range-btn${r === '30m' ? ' active' : ''}" data-health-range="${r}">${r}</button>`).join('');
     return `<div class="history-panel" data-link-id="${esc(instanceID)}">
         <div class="history-toolbar" role="group" aria-label="RTT history range">${buttons}</div>
-        <div class="health-chart-body muted">Open this section to load RTT history.</div>
+        <div class="health-chart-body muted">Loading RTT history…</div>
     </div>`;
 }
 
-async function loadHistory(detail, range) {
-    const panel = detail.querySelector('.history-panel');
-    const body = detail.querySelector('.health-chart-body');
-    if (!panel || !body) return;
+async function loadHistory(panel, range) {
+    const body = panel.querySelector('.health-chart-body');
+    if (!body) return;
     const linkID = panel.dataset.linkId || '';
     const step = RANGE_STEPS[range] || '1m';
     const key = `${linkID}:${range}`;
@@ -45,21 +44,17 @@ async function loadHistory(detail, range) {
 
 export function bindHistory(root, datasource) {
     if (!datasource || !datasource.configured) return;
-    const loadActive = detail => {
-        const active = detail.querySelector('[data-health-range].active');
-        loadHistory(detail, active ? active.dataset.healthRange : '30m');
+    const loadActive = panel => {
+        const active = panel.querySelector('[data-health-range].active');
+        loadHistory(panel, active ? active.dataset.healthRange : '30m');
     };
-    root.querySelectorAll('details.health-details').forEach(detail => {
-        if (!detail.querySelector('.history-panel')) return;
-        detail.addEventListener('toggle', () => { if (detail.open) loadActive(detail); });
-        if (detail.open) loadActive(detail);
-    });
+    root.querySelectorAll('.history-panel').forEach(loadActive);
     root.querySelectorAll('[data-health-range]').forEach(button => {
         button.addEventListener('click', () => {
-            const detail = button.closest('details.health-details');
-            if (!detail) return;
-            detail.querySelectorAll('[data-health-range]').forEach(b => b.classList.toggle('active', b === button));
-            loadHistory(detail, button.dataset.healthRange);
+            const panel = button.closest('.history-panel');
+            if (!panel) return;
+            panel.querySelectorAll('[data-health-range]').forEach(b => b.classList.toggle('active', b === button));
+            loadHistory(panel, button.dataset.healthRange);
         });
     });
 }

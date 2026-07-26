@@ -21,8 +21,8 @@ func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
 	for _, t := range targets {
 		out.Linef("  %s", t.InstanceID)
 		out.Linef("    peer=%s overlay=%s", t.PeerZone, t.Overlay)
-		out.Linef("    probe_id=%s role=%s interface=%s local=%s peer_addr=%s",
-			t.ProbeID, firstNonEmpty(t.ProbeRole, "active"), t.InterfaceName, t.LocalTunnelAddr, t.PeerTunnelAddr)
+		out.Linef("    probe_id=%s role=%s underlay=%s interface=%s local=%s peer_addr=%s",
+			t.ProbeID, firstNonEmpty(t.ProbeRole, "active"), dash(t.UnderlayFamily), t.InterfaceName, t.LocalTunnelAddr, t.PeerTunnelAddr)
 		out.Linef("    state=%s staged=%v", t.State, t.Staged)
 	}
 	if view.Live != nil {

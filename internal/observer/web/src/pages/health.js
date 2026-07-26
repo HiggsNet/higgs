@@ -6,7 +6,7 @@ import { fetchAPI } from '../api.js';
 import { navigate } from '../router.js';
 import { onItemInvalidate } from '../events.js';
 import { esc, ms, pct, relTime } from '../format.js';
-import { pageHeader, filterInput, entityCard, entityField, emptyState, loading, errorMsg } from '../components/card.js';
+import { pageHeader, filterInput, emptyState, loading, errorMsg } from '../components/card.js';
 import { kvTable } from '../components/kv.js';
 import { stateBadge, dot } from '../components/badge.js';
 import { sparkline } from '../components/chart.js';
@@ -36,7 +36,18 @@ function severityOf(h) {
     return h.cutover_blocking ? 'warn' : '';
 }
 
-function healthDetail(item, datasource) {
+function linkRow(item, selected) {
+    const h = healthValue(item) || {};
+    return `<div class="link-item${selected ? ' selected' : ''}" data-link="${esc(h.instance_id || '')}">
+        ${dot(h.state || 'unknown')}
+        <span class="link-zone">${esc(item.peer_zone || '-')}</span>
+        <span class="link-family">${esc(item.group_id || '-')}</span>
+        ${stateBadge(h.state || 'unknown')}
+    </div>`;
+}
+
+function detailPanel(item, datasource) {
+    if (!item) return emptyState('Select a link to inspect probe state and history');
     const h = healthValue(item) || {};
     const desired = item.desired || {};
     const history = datasource && datasource.configured
@@ -58,6 +69,7 @@ function healthDetail(item, datasource) {
         ['Last RTT', ms(h.last_rtt_ms)], ['EWMA RTT', ms(h.ewma_rtt_ms)],
         ['P50 RTT', ms(h.p50_rtt_ms)], ['P95 RTT', ms(h.p95_rtt_ms)],
         ['P99 RTT', ms(h.p99_rtt_ms)], ['Jitter', ms(h.jitter_ms)],
+        ['Trend (30m)', `<span class="sparkline-slot" data-instance="${esc(h.instance_id || '')}"><span class="muted">…</span></span>`],
     ]);
     const link = kvTable([
         ['Peer', esc(item.peer_zone || '-')],
@@ -67,35 +79,15 @@ function healthDetail(item, datasource) {
         ['Peer Tunnel', `<code>${esc(item.peer_tunnel_addr || desired.peer_tunnel_addr || '-')}</code>`],
         ['Endpoint', `<code>${esc(item.endpoint || desired.endpoint || '-')}</code>`],
     ]);
-    return `<details class="record-details health-details">
-        <summary>Health diagnostics · ${esc(h.instance_id || '-')}${h.probe_role ? ` · ${esc(h.probe_role)}` : ''}</summary>
+    return `<section class="detail-panel">
+        <h2>${esc(h.instance_id || '-')}</h2>
         <div class="detail-grid">
             <section><h3>Probe</h3>${probe}</section>
             <section><h3>Latency</h3>${latency}</section>
             <section><h3>Link</h3>${link}</section>
         </div>
         <section class="health-history-section"><h3>RTT History</h3>${history}</section>
-    </details>`;
-}
-
-function linkCard(item, datasource) {
-    const h = healthValue(item) || {};
-    return entityCard({
-        title: h.instance_id || '-',
-        dot: dot(h.state || 'unknown'),
-        subtitle: `${esc(item.peer_zone || '-')} · ${esc(item.group_id || '-')}`,
-        severity: severityOf(h),
-        fields: [
-            entityField('State', stateBadge(h.state)),
-            entityField('RTT', ms(h.last_rtt_ms)),
-            entityField('Loss', pct(h.loss_ratio_pct)),
-            entityField('Jitter', ms(h.jitter_ms)),
-            entityField('Trend', `<span class="sparkline-slot" data-instance="${esc(h.instance_id || '')}"><span class="muted">…</span></span>`),
-            entityField('Cutover Block', h.cutover_blocking ? 'Yes' : 'No'),
-        ],
-        details: healthDetail(item, datasource),
-        wide: true,
-    });
+    </section>`;
 }
 
 // Lazy sparklines: fetch a 30m series only when the card scrolls into
@@ -149,11 +141,18 @@ export function render(container, route) {
         })
         .slice()
         .sort((a, b) => rank(a) - rank(b));
+    const selected = links.find(item => (healthValue(item) || {}).instance_id === route.selected) || null;
     container.innerHTML = `
         ${header}
-        <div class="entity-list">${links.map(item => linkCard(item, data.datasource)).join('') || emptyState('No health data available')}</div>`;
+        <div class="overlay-layout">
+            <div class="link-list">${links.map(item => linkRow(item, (healthValue(item) || {}).instance_id === route.selected)).join('') || emptyState('No health data available')}</div>
+            <div id="health-detail">${detailPanel(selected, data.datasource)}</div>
+        </div>`;
     container.querySelector('#page-filter').addEventListener('input', ev => {
         navigate(route.page, route.selected, ev.target.value);
+    });
+    container.querySelectorAll('[data-link]').forEach(item => {
+        item.addEventListener('click', () => navigate('health', item.dataset.link, route.filter));
     });
     setupSparklines(container);
     bindHistory(container, data.datasource);

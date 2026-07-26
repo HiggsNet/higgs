@@ -5,7 +5,7 @@ import { fetchAPI } from '../api.js';
 import { navigate, renderCurrent } from '../router.js';
 import { onItemInvalidate } from '../events.js';
 import { esc, relTime, formatTime } from '../format.js';
-import { pageHeader, filterInput, entityCard, entityField, emptyState, loading, errorMsg } from '../components/card.js';
+import { pageHeader, filterInput, emptyState, loading, errorMsg } from '../components/card.js';
 import { tableWrap, emptyRow } from '../components/table.js';
 import { kvTable } from '../components/kv.js';
 import { dot } from '../components/badge.js';
@@ -46,7 +46,7 @@ function diagnostics(peer) {
 
 function endpointTable(endpoints) {
     if (!endpoints || endpoints.length === 0) return emptyState('No endpoints');
-    return tableWrap(`<table>
+    return tableWrap(`<table class="endpoint-table">
         <thead><tr><th>Addr</th><th>Source</th><th>Protocol</th><th>Scope</th><th>Priority</th><th>Last Observed</th><th>Selected</th></tr></thead>
         <tbody>${endpoints.map(ep => `
             <tr>
@@ -112,23 +112,19 @@ export function render(container, route) {
     const filter = (route.filter || '').toLowerCase();
     const peers = (entry.data.peers || []).filter(p =>
         !filter || (p.peer_id || '').toLowerCase().includes(filter) || (p.source || '').toLowerCase().includes(filter));
-    const cards = peers.map(p => entityCard({
-        title: p.peer_id,
-        dot: dot(p.last_error ? 'error' : (p.failure_count ? 'degraded' : 'up')),
-        subtitle: `${esc(p.source || '-')} · synced ${relTime(p.last_sync_unix)}`,
-        fields: [
-            entityField('Failures', esc(p.failure_count || 0)),
-            entityField('Last Error', `<code>${esc(p.last_error || '-')}</code>`),
-        ],
-        clickable: true,
-        selected: route.selected === p.peer_id,
-        dataAttr: 'peer',
-        dataKey: p.peer_id,
-    })).join('');
+    const cards = peers.map(p => {
+        const status = p.last_error ? 'error' : (p.failure_count ? 'degraded' : 'up');
+        const err = p.last_error ? ` · <span class="peer-err">${esc(p.last_error)}</span>` : '';
+        return `<div class="peer-item${route.selected === p.peer_id ? ' selected' : ''}" data-peer="${esc(p.peer_id)}">
+            ${dot(status)}
+            <span class="peer-id">${esc(p.peer_id)}</span>
+            <span class="peer-sub">${esc(p.source || '-')} · synced ${relTime(p.last_sync_unix)}${err}</span>
+        </div>`;
+    }).join('');
     container.innerHTML = `
         ${header}
         <div class="gossip-layout">
-            <div class="entity-list">${cards || emptyState('No peers match')}</div>
+            <div class="peer-list">${cards || emptyState('No peers match')}</div>
             <div id="peer-detail">${detailPanel(route)}</div>
         </div>`;
     container.querySelector('#page-filter').addEventListener('input', ev => {

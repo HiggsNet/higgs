@@ -26,8 +26,8 @@ func (fakeProber) Type() string { return health.ProbeTypeICMP }
 
 func TestSelectTargetsByZoneFamilyAndRole(t *testing.T) {
 	targets := []health.ProbeTarget{
-		{InstanceID: "b4", PeerZone: "node-b.", ProbeRole: "active", PeerTunnelAddr: netip.MustParseAddr("10.0.0.2")},
-		{InstanceID: "b6", PeerZone: "node-b.", ProbeRole: "active", PeerTunnelAddr: netip.MustParseAddr("fd00::2")},
+		{InstanceID: "b4", PeerZone: "node-b.", ProbeRole: "active", UnderlayFamily: "ipv4", PeerTunnelAddr: netip.MustParseAddr("fd00::2")},
+		{InstanceID: "b6", PeerZone: "node-b.", ProbeRole: "active", UnderlayFamily: "ipv6", PeerTunnelAddr: netip.MustParseAddr("fd00::3")},
 		{InstanceID: "cold", PeerZone: "node-c.", ProbeRole: "old", PeerTunnelAddr: netip.MustParseAddr("fd00::3")},
 		{InstanceID: "cstaged", PeerZone: "node-c.", ProbeRole: "staged", PeerTunnelAddr: netip.MustParseAddr("fd00::4")},
 		{InstanceID: "bad", PeerZone: "node-c."},
@@ -88,8 +88,8 @@ func TestResolveOptionsUsesExplicitFallbackAndDefaults(t *testing.T) {
 
 func TestRunUsesProber(t *testing.T) {
 	targets := []health.ProbeTarget{
-		{ProbeID: "t1", InstanceID: "t1", PeerZone: "z.", ProbeRole: "active", PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"), LocalTunnelAddr: netip.MustParseAddr("10.0.0.1")},
-		{ProbeID: "t2", InstanceID: "t2", PeerZone: "z.", ProbeRole: "staged", PeerTunnelAddr: netip.MustParseAddr("fd00::2"), LocalTunnelAddr: netip.MustParseAddr("fd00::1")},
+		{ProbeID: "t1", InstanceID: "t1", PeerZone: "z.", ProbeRole: "active", UnderlayFamily: "ipv4", PeerTunnelAddr: netip.MustParseAddr("fd00::2"), LocalTunnelAddr: netip.MustParseAddr("fd00::1")},
+		{ProbeID: "t2", InstanceID: "t2", PeerZone: "z.", ProbeRole: "staged", UnderlayFamily: "ipv6", PeerTunnelAddr: netip.MustParseAddr("fd00::4"), LocalTunnelAddr: netip.MustParseAddr("fd00::3")},
 	}
 	fake := &fakeProber{byProbeID: map[string]health.ProbeResult{
 		"t1": {Success: true, RTT: 2 * time.Millisecond},
@@ -116,12 +116,13 @@ func TestBuildDebugView(t *testing.T) {
 			ProbeID:         "t1",
 			InstanceID:      "link-1",
 			ProbeRole:       "staged",
+			UnderlayFamily:  "ipv4",
 			InterfaceName:   "hgs-new",
 			NetNS:           "higgstesth2",
 			LocalTunnelAddr: netip.MustParseAddr("fd00::1"),
 			PeerTunnelAddr:  netip.MustParseAddr("fd00::2"),
 		},
-		Family: "ipv6",
+		Family: "ipv4",
 		Result: health.ProbeResult{Success: true, RTT: time.Millisecond},
 	}}
 	view := BuildDebugView("node-b.", outcomes, []string{"node-a.", "node-b."}, 4, time.Second)
@@ -132,7 +133,7 @@ func TestBuildDebugView(t *testing.T) {
 		t.Fatalf("targets = %d, want 1", len(view.Targets))
 	}
 	target := view.Targets[0]
-	if target.InstanceID != "link-1" || target.Role != "staged" || target.Family != "ipv6" || target.NetNS != "higgstesth2" {
+	if target.InstanceID != "link-1" || target.Role != "staged" || target.Family != "ipv4" || target.TunnelFamily != "ipv6" || target.NetNS != "higgstesth2" {
 		t.Fatalf("target = %+v", target)
 	}
 	if !target.Success || target.RTT != time.Millisecond {

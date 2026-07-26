@@ -8,14 +8,16 @@ import (
 const DuplicateSAGCGrace = 2 * time.Minute
 
 // PlanDuplicateSAGC returns precise, unique-ID based cleanup actions for
-// duplicate SAs of the same runtime connection. Only the canonical secondary
-// performs cleanup, avoiding a race in which both peers delete the survivor.
+// duplicate SAs of the same runtime connection. Each canonical role selects
+// the same underlying survivor from its local perspective: primary keeps its
+// oldest outbound SA, while secondary keeps its oldest inbound SA.
 func PlanDuplicateSAGC(desired []TransportLinkSpec, instances map[string]LinkInstance, sas []SAState, roles map[string]string) []ReconcileAction {
 	var actions []ReconcileAction
 	for i := range desired {
 		spec := desired[i]
 		id := LinkInstanceID(spec)
-		if roleForSpec(id, spec, roles) != InitiatorRoleSecondaryStandby {
+		role := roleForSpec(id, spec, roles)
+		if role != InitiatorRolePrimary && role != InitiatorRoleSecondaryStandby {
 			continue
 		}
 		inst, ok := instances[id]
@@ -27,11 +29,13 @@ func PlanDuplicateSAGC(desired []TransportLinkSpec, instances map[string]LinkIns
 			continue
 		}
 
-		// The canonical primary's SA is inbound on the secondary. Prefer the
-		// oldest inbound SA, then remove every other exact-runtime duplicate.
+		// The canonical primary's SA is outbound on primary and inbound on
+		// secondary. Both sides therefore select the same IKE_SA even when
+		// their GC passes run concurrently.
+		wantInitiator := role == InitiatorRolePrimary
 		survivor := -1
 		for j := range candidates {
-			if candidates[j].Initiator {
+			if candidates[j].Initiator != wantInitiator {
 				continue
 			}
 			if survivor < 0 || olderSA(candidates[j], candidates[survivor]) {
@@ -39,8 +43,8 @@ func PlanDuplicateSAGC(desired []TransportLinkSpec, instances map[string]LinkIns
 			}
 		}
 		if survivor < 0 {
-			// The primary has not recovered. Retaining a locally initiated
-			// takeover is safer than dropping the only working direction.
+			// The canonical direction is absent. Retaining every SA is safer
+			// than deleting the only working takeover or responder path.
 			continue
 		}
 		for j := range candidates {

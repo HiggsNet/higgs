@@ -20,8 +20,8 @@ function linkRow(li, selected) {
     const state = li.state || li.actual_state || '';
     return `<div class="link-item${selected ? ' selected' : ''}" data-link="${esc(li.id || '')}">
         ${dot(state || 'unknown')}
-        <span class="link-id">${esc(li.id || '-')}</span>
         <span class="link-zone">${esc(li.peer_zone || '-')}</span>
+        <span class="link-family">${esc(li.group_id || '-')}</span>
         ${stateBadge(state || 'unknown')}
     </div>`;
 }

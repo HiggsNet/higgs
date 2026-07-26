@@ -73,7 +73,7 @@ func SelectTargetsResolved(targets []health.ProbeTarget, peerZone string, opts R
 		if string(target.PeerZone) != peerZone {
 			continue
 		}
-		if opts.Family != "" && FamilyFor(target.PeerTunnelAddr) != opts.Family {
+		if opts.Family != "" && FamilyForTarget(target) != opts.Family {
 			continue
 		}
 		if opts.Role != "" && Role(target) != opts.Role {
@@ -93,7 +93,7 @@ func Run(ctx context.Context, prober health.Prober, targets []health.ProbeTarget
 		}
 		out = append(out, Outcome{
 			Target: target,
-			Family: FamilyFor(target.PeerTunnelAddr),
+			Family: FamilyForTarget(target),
 			Result: result,
 		})
 	}
@@ -109,17 +109,18 @@ func BuildDebugView(peerZone string, outcomes []Outcome, availableZones []string
 	}
 	for _, outcome := range outcomes {
 		view.Targets = append(view.Targets, inspect.PingTargetView{
-			InstanceID:  outcome.Target.InstanceID,
-			ProbeID:     outcome.Target.ProbeID,
-			Role:        Role(outcome.Target),
-			Family:      outcome.Family,
-			Interface:   outcome.Target.InterfaceName,
-			NetNS:       outcome.Target.NetNS,
-			LocalTunnel: outcome.Target.LocalTunnelAddr.String(),
-			PeerTunnel:  outcome.Target.PeerTunnelAddr.String(),
-			Success:     outcome.Result.Success,
-			RTT:         outcome.Result.RTT,
-			Error:       outcome.Result.Error,
+			InstanceID:   outcome.Target.InstanceID,
+			ProbeID:      outcome.Target.ProbeID,
+			Role:         Role(outcome.Target),
+			Family:       outcome.Family,
+			TunnelFamily: FamilyFor(outcome.Target.PeerTunnelAddr),
+			Interface:    outcome.Target.InterfaceName,
+			NetNS:        outcome.Target.NetNS,
+			LocalTunnel:  outcome.Target.LocalTunnelAddr.String(),
+			PeerTunnel:   outcome.Target.PeerTunnelAddr.String(),
+			Success:      outcome.Result.Success,
+			RTT:          outcome.Result.RTT,
+			Error:        outcome.Result.Error,
 		})
 	}
 	return inspect.BuildPingDebugView(view)
@@ -145,6 +146,16 @@ func FamilyFor(addr netip.Addr) string {
 		return "ipv6"
 	}
 	return "ipv4"
+}
+
+// FamilyForTarget returns the underlay path family when the planner retained
+// it. Older snapshots without that field fall back to the tunnel address
+// family so debug ping remains usable across upgrades.
+func FamilyForTarget(target health.ProbeTarget) string {
+	if target.UnderlayFamily == "ipv4" || target.UnderlayFamily == "ipv6" {
+		return target.UnderlayFamily
+	}
+	return FamilyFor(target.PeerTunnelAddr)
 }
 
 func Role(target health.ProbeTarget) string {

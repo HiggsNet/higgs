@@ -21,16 +21,18 @@ func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {
 	}
 	out.Linef("count: %d timeout: %s", view.Count, view.Timeout)
 	out.Blank()
-	for _, instance := range view.Instances {
+	for i, instance := range view.Instances {
+		if i > 0 {
+			out.Blank()
+		}
 		out.Linef("instance %s", instance.InstanceID)
 		for _, row := range instance.Rows {
-			out.Linef("  role=%s family=%s", inspect.PingTargetRole(row), row.Family)
+			out.Linef("  role=%s underlay=%s tunnel=%s", inspect.PingTargetRole(row), row.Family, dash(row.TunnelFamily))
 			if row.NetNS != "" {
 				out.Linef("    interface: %s  netns: %s", dash(row.Interface), row.NetNS)
 			} else {
 				out.Linef("    interface: %s", dash(row.Interface))
 			}
-			out.Blank()
 			out.Linef("    local: %s  peer: %s", dash(row.LocalTunnel), dash(row.PeerTunnel))
 			out.Linef("    result: %s", formatPingResult(row))
 		}

@@ -200,6 +200,7 @@ type LinkAction struct {
 	GroupID    string `json:"group_id,omitempty"`
 	PeerZone   string `json:"peer_zone,omitempty"`
 	Reason     string `json:"reason,omitempty"`
+	SAUniqueID uint64 `json:"sa_unique_id,omitempty"`
 }
 
 type LinkSkip struct {
@@ -283,6 +284,7 @@ func BuildLinkActionFromRuntime(item higgsstate.LinkActionState) LinkAction {
 		GroupID:    item.GroupID,
 		PeerZone:   string(item.PeerZone),
 		Reason:     item.Reason,
+		SAUniqueID: item.SAUniqueID,
 	}
 }
 

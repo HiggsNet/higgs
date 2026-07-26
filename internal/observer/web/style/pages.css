@@ -64,10 +64,44 @@
 
 .gossip-layout {
     display: grid;
-    grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr);
+    grid-template-columns: minmax(240px, 320px) 1fr;
     gap: var(--sp-4);
     align-items: start;
 }
+.peer-list { display: flex; flex-direction: column; gap: 2px; }
+.peer-item {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2);
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: var(--fs-sm);
+}
+.peer-item:hover { background: var(--bg-2); }
+.peer-item.selected { border-color: var(--accent); }
+.peer-item .peer-id {
+    font-family: var(--mono);
+    color: var(--text-0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.peer-item .peer-sub {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.peer-item .peer-err { color: var(--err); }
+
+.endpoint-table th, .endpoint-table td { white-space: nowrap; }
+.endpoint-table td:first-child { min-width: 210px; }
+
 .detail-panel {
     background: var(--bg-1);
     border: 1px solid var(--border);
@@ -164,8 +198,13 @@
 }
 .link-item:hover { background: var(--bg-2); }
 .link-item.selected { border-color: var(--accent); }
-.link-item .link-id { font-family: var(--mono); color: var(--text-0); white-space: nowrap; }
 .link-item .link-zone {
+    color: var(--text-0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.link-item .link-family {
     flex: 1;
     min-width: 0;
     color: var(--text-1);

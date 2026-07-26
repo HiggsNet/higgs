@@ -694,7 +694,7 @@ StrongSwan connection 渲染为 route-based VPN：每条 `TransportLinkSpec` 对
 - takeover 有 lease（默认 5min）与 cooldown（默认 2min）：secondary 接管成功后维持稳定窗口；takeover 超时或失败后进入 cooldown，期间不反复 apply；cooldown 过期后可 retry。
 - primary 后续恢复时若已有 SA 则 adopt，不会立刻抢回主动权导致重连风暴。
 
-若同一 runtime connection 因极端竞态形成多条 SA，canonical secondary 会等待所有重复 SA 稳定 2min，再按 StrongSwan IKE unique ID 精确删除非 canonical SA；端口代际、地址族或 rotate staged runtime 不参与该 GC。
+若同一 runtime connection 因极端竞态形成多条 SA，双方都会等待所有重复 SA 稳定 2min，再按 StrongSwan IKE unique ID 精确删除非 canonical SA。primary 保留最老的 outbound SA，secondary 保留最老的 inbound SA，因此两端即使并发 GC 也会选择同一条 canonical SA；端口代际、地址族或 rotate staged runtime 不参与该 GC。
 
 **Debug 输出：** `higgs debug links` 显示 `initiator_role`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_error`。reconcile reason 区分 `standby_responder_prepare`、`takeover_startup_grace`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_cooldown_active`、`secondary_takeover_pending`。
 

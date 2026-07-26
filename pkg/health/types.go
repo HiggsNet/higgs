@@ -34,6 +34,7 @@ type ProbeTarget struct {
 	Overlay         string
 	NetNS           string
 	InterfaceName   string
+	UnderlayFamily  string
 	LocalTunnelAddr netip.Addr
 	PeerTunnelAddr  netip.Addr
 	Generation      uint64

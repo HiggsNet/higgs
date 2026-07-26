@@ -49,6 +49,7 @@ func healthTargetsFromState(state *stateFile, localZone string, _ []ipsec.LinkGr
 			Overlay:         output.GroupID,
 			NetNS:           output.NetNS,
 			InterfaceName:   output.InterfaceName,
+			UnderlayFamily:  underlayFamilyFromPathKey(output.PathKey),
 			Generation:      output.Generation,
 			ProbeRole:       probeRole,
 			State:           output.State,
@@ -66,6 +67,14 @@ func healthTargetsFromState(state *stateFile, localZone string, _ []ipsec.LinkGr
 		targets = append(targets, target)
 	}
 	return targets
+}
+
+func underlayFamilyFromPathKey(pathKey string) string {
+	family, ok := strings.CutPrefix(pathKey, "family:")
+	if !ok || (family != ipsec.FamilyIPv4 && family != ipsec.FamilyIPv6) {
+		return ""
+	}
+	return family
 }
 
 func hasStagedLinkOutput(state *stateFile, linkID string) bool {
@@ -278,6 +287,7 @@ func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthPro
 			PeerZone:        target.PeerZone,
 			Overlay:         target.Overlay,
 			InterfaceName:   target.InterfaceName,
+			UnderlayFamily:  target.UnderlayFamily,
 			LocalTunnelAddr: target.LocalTunnelAddr.String(),
 			PeerTunnelAddr:  target.PeerTunnelAddr.String(),
 			ProbeRole:       target.ProbeRole,

@@ -140,6 +140,9 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 	if target.InterfaceName != "hgsa0f3bb66" || target.NetNS != "higgstesth2" {
 		t.Fatalf("target scope = iface %q netns %q, want hgsa0f3bb66/higgstesth2", target.InterfaceName, target.NetNS)
 	}
+	if target.UnderlayFamily != ipsec.FamilyIPv4 {
+		t.Fatalf("underlay family = %q, want ipv4", target.UnderlayFamily)
+	}
 }
 
 func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *testing.T) {

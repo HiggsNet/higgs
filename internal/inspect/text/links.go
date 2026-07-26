@@ -132,11 +132,12 @@ func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	}
 	out.Linef("actions: %d", len(inspection.Actions))
 	for _, action := range inspection.Actions {
-		out.Linef("- action=%s instance=%s group=%s peer=%s reason=%s",
+		out.Linef("- action=%s instance=%s group=%s peer=%s sa_unique_id=%s reason=%s",
 			action.Action,
 			dash(action.InstanceID),
 			dash(action.GroupID),
 			action.PeerZone,
+			formatUint64OrDash(action.SAUniqueID),
 			dash(action.Reason),
 		)
 	}
@@ -199,12 +200,29 @@ func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.
 	out.Linef("    phase: %s", dash(link.Takeover.Phase))
 	out.Linef("    until: %s", formatUnixTime(link.Takeover.Until))
 	out.Linef("    observed_initiator: %s", dash(link.Takeover.ObservedInitiator))
-	out.Linef("  health:")
+	out.Linef("  lifecycle:")
 	out.Linef("    owner: %s", dash(link.Owner.Manager))
 	out.Linef("    failures: %d", link.FailureCount)
 	out.Linef("    backoff_until: %s", formatUnixTime(link.BackoffUntil))
 	out.Linef("    last_error: %s", dash(link.LastError))
 	out.Linef("    takeover_error: %s", dash(link.Takeover.LastError))
+	out.Linef("  health:")
+	if link.Health == nil {
+		out.Linef("    state: unavailable")
+	} else {
+		health := link.Health
+		out.Linef("    state: %s", dash(health.State))
+		out.Linef("    probe_id: %s", dash(firstNonEmpty(health.ProbeID, health.InstanceID)))
+		out.Linef("    role: %s", dash(firstNonEmpty(health.ProbeRole, "active")))
+		out.Linef("    probe_type: %s", dash(health.ProbeType))
+		out.Linef("    sent/received/lost: %d/%d/%d", health.Sent, health.Received, health.Lost)
+		out.Linef("    loss: %d%%", health.LossRatio)
+		out.Linef("    rtt last/ewma: %dms/%dms", health.LastRTTMs, health.EWMARTTMs)
+		out.Linef("    consecutive_fail: %d", health.ConsecutiveFail)
+		out.Linef("    last_error: %s", dash(health.LastError))
+		out.Linef("    next_probe: %s", formatUnixTime(health.NextProbeUnix))
+		out.Linef("    cutover_blocking: %t", health.CutoverBlocking)
+	}
 	out.Linef("  routing:")
 	out.Linef("    bird_state: %s", link.Routing.BirdState)
 	out.Linef("    bird_neighbors: %s", link.Routing.BirdNeighbors)
@@ -377,4 +395,11 @@ func formatSAState(sa inspect.LinkSA) string {
 		return strings.ToLower(sa.IKEState)
 	}
 	return "present"
+}
+
+func formatUint64OrDash(value uint64) string {
+	if value == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", value)
 }

@@ -20,17 +20,18 @@ type PingInstanceView struct {
 }
 
 type PingTargetView struct {
-	InstanceID  string
-	ProbeID     string
-	Role        string
-	Family      string
-	Interface   string
-	NetNS       string
-	LocalTunnel string
-	PeerTunnel  string
-	Success     bool
-	RTT         time.Duration
-	Error       string
+	InstanceID   string
+	ProbeID      string
+	Role         string
+	Family       string
+	TunnelFamily string
+	Interface    string
+	NetNS        string
+	LocalTunnel  string
+	PeerTunnel   string
+	Success      bool
+	RTT          time.Duration
+	Error        string
 }
 
 func BuildPingDebugView(view PingDebugView) PingDebugView {

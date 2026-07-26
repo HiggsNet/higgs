@@ -209,12 +209,12 @@ func cmdDebug() *cli.Command {
 				Usage:     "Ping the remote StrongSwan peer over each IPsec SA for a zone",
 				UsageText: "higgs debug ping <zone> [--count N] [--timeout D] [--family ipv4|ipv6] [--role active|old|staged]",
 				Description: "Send ICMP echo requests to the peer tunnel address of every IPsec link instance " +
-					"matching the peer zone, across IPv4/IPv6 and across both the old and new SA during a rotate. " +
+					"matching the peer zone, across IPv4/IPv6 underlay paths and across both the old and new SA during a rotate. " +
 					"Runs in the CLI process (requires root/CAP_NET_RAW and netns access).",
 				Flags: []cli.Flag{
 					&cli.IntFlag{Name: "count", Aliases: []string{"c"}, Usage: "ICMP requests per target (default 4, or health.burst)"},
 					&cli.DurationFlag{Name: "timeout", Usage: "Per-request timeout (default 1s, or health.timeout)"},
-					&cli.StringFlag{Name: "family", Usage: "Restrict to ipv4 or ipv6"},
+					&cli.StringFlag{Name: "family", Usage: "Restrict to the ipv4 or ipv6 underlay path"},
 					&cli.StringFlag{Name: "role", Usage: "Restrict to SA role: active, old, or staged"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {

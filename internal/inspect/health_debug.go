@@ -13,6 +13,7 @@ type HealthProbeTargetView struct {
 	PeerZone        string
 	Overlay         string
 	InterfaceName   string
+	UnderlayFamily  string
 	LocalTunnelAddr string
 	PeerTunnelAddr  string
 	ProbeRole       string

@@ -35,6 +35,21 @@ func TestRawICMProberUsesWorkerAndPreservesBurstMajority(t *testing.T) {
 	}
 }
 
+func TestRawICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
+	worker := &fakeRawICMPWorker{result: rawProbeResult{}}
+	p := NewRawICMProber(nil)
+	p.new = func(string) (rawICMPWorker, error) { return worker, nil }
+	target := ProbeTarget{InstanceID: "link-a", PeerTunnelAddr: netip.MustParseAddr("192.0.2.2")}
+
+	got := p.Probe(context.Background(), target, ProbeConfig{Burst: 3})
+	if got.Success {
+		t.Fatal("probe success = true, want false for an unanswered burst")
+	}
+	if got.Error != "" {
+		t.Fatalf("probe error = %q, want ordinary packet loss to be a valid observation", got.Error)
+	}
+}
+
 func TestRawICMProberFallsBackOnlyForLocalSetupFailure(t *testing.T) {
 	fallback := &countingRawFallback{}
 	worker := &fakeRawICMPWorker{result: rawProbeResult{err: errors.New("operation not permitted"), unavailable: true}}

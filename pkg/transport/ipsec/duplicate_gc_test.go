@@ -34,7 +34,7 @@ func TestPlanDuplicateSAGCSecondaryRemovesNonCanonicalSAAfterGrace(t *testing.T)
 	}
 }
 
-func TestPlanDuplicateSAGCWaitsForEverySAAndRunsOnlyOnSecondary(t *testing.T) {
+func TestPlanDuplicateSAGCWaitsForEverySAAndCleansOnPrimary(t *testing.T) {
 	spec := duplicateGCTestSpec()
 	inst := NewLinkInstance(spec, LinkStateUp, time.Unix(1000, 0))
 	sas := []SAState{
@@ -51,13 +51,33 @@ func TestPlanDuplicateSAGCWaitsForEverySAAndRunsOnlyOnSecondary(t *testing.T) {
 	}
 
 	sas[1] = duplicateGCTestSA(spec, 18, true, 180)
-	if actions := PlanDuplicateSAGC(
+	actions := PlanDuplicateSAGC(
 		[]TransportLinkSpec{spec},
 		map[string]LinkInstance{inst.ID: inst},
 		sas,
 		map[string]string{inst.ID: InitiatorRolePrimary},
-	); len(actions) != 0 {
-		t.Fatalf("primary emitted GC actions = %+v", actions)
+	)
+	if len(actions) != 1 || actions[0].SAUniqueID != 12 {
+		t.Fatalf("primary actions = %+v, want cleanup of inbound duplicate #12", actions)
+	}
+}
+
+func TestPlanDuplicateSAGCPrimaryKeepsCanonicalOutboundSA(t *testing.T) {
+	spec := duplicateGCTestSpec()
+	inst := NewLinkInstance(spec, LinkStateUp, time.Unix(1000, 0))
+	sas := []SAState{
+		duplicateGCTestSA(spec, 12, true, 240),
+		duplicateGCTestSA(spec, 18, false, 180),
+	}
+
+	actions := PlanDuplicateSAGC(
+		[]TransportLinkSpec{spec},
+		map[string]LinkInstance{inst.ID: inst},
+		sas,
+		map[string]string{inst.ID: InitiatorRolePrimary},
+	)
+	if len(actions) != 1 || actions[0].SAUniqueID != 18 {
+		t.Fatalf("actions = %+v, want cleanup of inbound duplicate #18", actions)
 	}
 }
 

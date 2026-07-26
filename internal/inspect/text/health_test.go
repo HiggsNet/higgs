@@ -75,8 +75,8 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Link health (2 links):",
-		"probe_id=link-a role=active interface=hgs-a local=fd00::3 peer_addr=fd00::4",
-		"probe_id=link-b#staged role=staged interface=hgs-b local=fd00::1 peer_addr=fd00::2",
+		"probe_id=link-a role=active underlay=- interface=hgs-a local=fd00::3 peer_addr=fd00::4",
+		"probe_id=link-b#staged role=staged underlay=- interface=hgs-b local=fd00::1 peer_addr=fd00::2",
 		"Live health state:",
 		"link-b#staged: state=healthy role=staged probe=icmp",
 		"sent=4 received=3 lost=1 loss=25%",
