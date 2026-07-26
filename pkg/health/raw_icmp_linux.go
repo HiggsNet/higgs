@@ -23,7 +23,8 @@ import (
 // RawICMProber sends echo requests through raw sockets. A worker is pinned to
 // one OS thread for every target network namespace: switching a Go thread with
 // setns is thread-local, so it must never be returned to the runtime pool.
-// Sockets are cached by source/interface inside that worker.
+// The worker creates and caches namespace-bound sockets by source/interface;
+// probes on distinct sockets then run concurrently without another setns.
 //
 // If raw sockets or setns are unavailable, Probe delegates to fallback. This
 // makes CAP_NET_RAW/CAP_SYS_ADMIN deployment mistakes non-disruptive while
@@ -152,18 +153,24 @@ type rawICMPJob struct {
 }
 
 type rawICMPNamespaceWorker struct {
-	netns string
-	jobs  chan rawICMPJob
-	done  chan struct{}
-	mu    sync.RWMutex
-	once  sync.Once
+	netns       string
+	jobs        chan rawICMPJob
+	done        chan struct{}
+	openSocket  func(rawSocketKey) (int, uint32, error)
+	closeSocket func(int) error
+	probeSocket func(rawICMPJob, rawSocketKey, int, uint32) rawProbeResult
+	mu          sync.RWMutex
+	once        sync.Once
 }
 
 func newRawICMPWorker(netns string) (rawICMPWorker, error) {
 	w := &rawICMPNamespaceWorker{
-		netns: netns,
-		jobs:  make(chan rawICMPJob),
-		done:  make(chan struct{}),
+		netns:       netns,
+		jobs:        make(chan rawICMPJob),
+		done:        make(chan struct{}),
+		openSocket:  openRawICMPSocket,
+		closeSocket: unix.Close,
+		probeSocket: probeRawICMP,
 	}
 	ready := make(chan error, 1)
 	go w.run(ready)
@@ -201,10 +208,12 @@ func (w *rawICMPNamespaceWorker) run(ready chan<- error) {
 	}
 	ready <- nil
 
-	sockets := make(map[rawSocketKey]int)
+	sockets := make(map[rawSocketKey]*rawICMPSocket)
+	var probes sync.WaitGroup
 	defer func() {
-		for _, fd := range sockets {
-			_ = unix.Close(fd)
+		probes.Wait()
+		for _, socket := range sockets {
+			_ = w.closeSocket(socket.fd)
 		}
 		if restoreFD >= 0 {
 			_ = unix.Setns(restoreFD, unix.CLONE_NEWNET)
@@ -217,14 +226,29 @@ func (w *rawICMPNamespaceWorker) run(ready chan<- error) {
 	}()
 
 	for job := range w.jobs {
-		job.result <- probeRawICMP(job, sockets)
+		key := rawSocketKeyForTarget(job.target)
+		socket := sockets[key]
+		if socket == nil {
+			fd, zoneID, err := w.openSocket(key)
+			if err != nil {
+				job.result <- rawProbeResult{err: fmt.Errorf("open raw ICMP socket: %w", err), unavailable: true}
+				continue
+			}
+			socket = newRawICMPSocket(fd, zoneID)
+			sockets[key] = socket
+		}
+		probes.Add(1)
+		go func(job rawICMPJob, key rawSocketKey, socket *rawICMPSocket) {
+			defer probes.Done()
+			job.result <- socket.probe(job, key, w.probeSocket)
+		}(job, key, socket)
 	}
 }
 
 func (w *rawICMPNamespaceWorker) probe(ctx context.Context, target ProbeTarget, cfg ProbeConfig, id uint16, seq *atomic.Uint32) rawProbeResult {
 	// Do not let Close race a channel send. Holding the read lock through the
-	// result also makes Close wait for the in-flight probe to release its raw
-	// socket on the owning OS thread.
+	// result also makes Close wait for the in-flight probe before closing its
+	// cached raw socket.
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	job := rawICMPJob{ctx: ctx, target: target, cfg: cfg, id: id, seq: seq, result: make(chan rawProbeResult, 1)}
@@ -260,7 +284,46 @@ type rawSocketKey struct {
 	iface  string
 }
 
-func probeRawICMP(job rawICMPJob, sockets map[rawSocketKey]int) rawProbeResult {
+// rawICMPSocket serializes probes sharing one bound socket. Different
+// source/interface keys have independent sockets and can be probed
+// concurrently after the namespace worker creates them.
+type rawICMPSocket struct {
+	fd     int
+	zoneID uint32
+	ready  chan struct{}
+}
+
+func newRawICMPSocket(fd int, zoneID uint32) *rawICMPSocket {
+	socket := &rawICMPSocket{fd: fd, zoneID: zoneID, ready: make(chan struct{}, 1)}
+	socket.ready <- struct{}{}
+	return socket
+}
+
+func (s *rawICMPSocket) probe(
+	job rawICMPJob,
+	key rawSocketKey,
+	run func(rawICMPJob, rawSocketKey, int, uint32) rawProbeResult,
+) rawProbeResult {
+	select {
+	case <-s.ready:
+		defer func() { s.ready <- struct{}{} }()
+	case <-job.ctx.Done():
+		return rawProbeResult{err: job.ctx.Err()}
+	}
+	return run(job, key, s.fd, s.zoneID)
+}
+
+func rawSocketKeyForTarget(target ProbeTarget) rawSocketKey {
+	key := rawSocketKey{source: target.LocalTunnelAddr, iface: target.InterfaceName}
+	if target.PeerTunnelAddr.Is6() {
+		key.family = unix.AF_INET6
+	} else {
+		key.family = unix.AF_INET
+	}
+	return key
+}
+
+func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawProbeResult {
 	burst := job.cfg.Burst
 	if burst <= 0 {
 		burst = 3
@@ -268,21 +331,6 @@ func probeRawICMP(job rawICMPJob, sockets map[rawSocketKey]int) rawProbeResult {
 	timeout := job.cfg.Timeout
 	if timeout <= 0 {
 		timeout = time.Second
-	}
-	key := rawSocketKey{source: job.target.LocalTunnelAddr, iface: job.target.InterfaceName}
-	if job.target.PeerTunnelAddr.Is6() {
-		key.family = unix.AF_INET6
-	} else {
-		key.family = unix.AF_INET
-	}
-	fd, ok := sockets[key]
-	if !ok {
-		var err error
-		fd, err = openRawICMPSocket(key)
-		if err != nil {
-			return rawProbeResult{err: fmt.Errorf("open raw ICMP socket: %w", err), unavailable: true}
-		}
-		sockets[key] = fd
 	}
 
 	deadline := time.Now().Add(timeout * time.Duration(burst))
@@ -313,7 +361,7 @@ func probeRawICMP(job rawICMPJob, sockets map[rawSocketKey]int) rawProbeResult {
 		}
 		sequence := uint16(job.seq.Add(1))
 		packet := makeICMPEchoPacket(key.family, job.id, sequence)
-		if err := unix.Sendto(fd, packet, 0, rawDestination(job.target, key.family)); err != nil {
+		if err := unix.Sendto(fd, packet, 0, rawDestination(job.target, key.family, zoneID)); err != nil {
 			return rawProbeResult{received: received, lastRTT: lastRTT, err: fmt.Errorf("send raw ICMP echo: %w", err)}
 		}
 		pending[sequence] = time.Now()
@@ -327,18 +375,18 @@ func probeRawICMP(job rawICMPJob, sockets map[rawSocketKey]int) rawProbeResult {
 	return rawProbeResult{received: received, lastRTT: lastRTT}
 }
 
-func openRawICMPSocket(key rawSocketKey) (int, error) {
+func openRawICMPSocket(key rawSocketKey) (int, uint32, error) {
 	protocol := unix.IPPROTO_ICMP
 	if key.family == unix.AF_INET6 {
 		protocol = unix.IPPROTO_ICMPV6
 	}
 	fd, err := unix.Socket(key.family, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, protocol)
 	if err != nil {
-		return -1, err
+		return -1, 0, err
 	}
-	closeOnError := func(err error) (int, error) {
+	closeOnError := func(err error) (int, uint32, error) {
 		_ = unix.Close(fd)
-		return -1, err
+		return -1, 0, err
 	}
 	if key.iface != "" {
 		if err := unix.SetsockoptString(fd, unix.SOL_SOCKET, unix.SO_BINDTODEVICE, key.iface); err != nil {
@@ -356,17 +404,19 @@ func openRawICMPSocket(key rawSocketKey) (int, error) {
 		if key.source.IsValid() {
 			addr.Addr = key.source.As16()
 		}
+		var zoneID uint32
 		if key.iface != "" {
 			iface, err := interfaceIndex(key.iface)
 			if err != nil {
 				return closeOnError(err)
 			}
-			addr.ZoneId = uint32(iface)
+			zoneID = uint32(iface)
+			addr.ZoneId = zoneID
 		}
 		if err := unix.Bind(fd, &addr); err != nil {
 			return closeOnError(err)
 		}
-		return fd, nil
+		return fd, zoneID, nil
 	}
 	addr := unix.SockaddrInet4{}
 	if key.source.IsValid() {
@@ -375,16 +425,14 @@ func openRawICMPSocket(key rawSocketKey) (int, error) {
 	if err := unix.Bind(fd, &addr); err != nil {
 		return closeOnError(err)
 	}
-	return fd, nil
+	return fd, 0, nil
 }
 
-func rawDestination(target ProbeTarget, family int) unix.Sockaddr {
+func rawDestination(target ProbeTarget, family int, zoneID uint32) unix.Sockaddr {
 	if family == unix.AF_INET6 {
 		addr := unix.SockaddrInet6{Addr: target.PeerTunnelAddr.As16()}
-		if target.InterfaceName != "" && target.PeerTunnelAddr.IsLinkLocalUnicast() {
-			if index, err := interfaceIndex(target.InterfaceName); err == nil {
-				addr.ZoneId = uint32(index)
-			}
+		if target.PeerTunnelAddr.IsLinkLocalUnicast() {
+			addr.ZoneId = zoneID
 		}
 		return &addr
 	}

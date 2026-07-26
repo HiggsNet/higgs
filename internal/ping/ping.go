@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -85,18 +86,24 @@ func SelectTargetsResolved(targets []health.ProbeTarget, peerZone string, opts R
 }
 
 func Run(ctx context.Context, prober health.Prober, targets []health.ProbeTarget, cfg health.ProbeConfig) []Outcome {
-	out := make([]Outcome, 0, len(targets))
-	for _, target := range targets {
-		result := health.ProbeResult{InstanceID: target.InstanceID, Error: "no prober configured"}
-		if prober != nil {
-			result = prober.Probe(ctx, target, cfg)
-		}
-		out = append(out, Outcome{
-			Target: target,
-			Family: FamilyForTarget(target),
-			Result: result,
-		})
+	out := make([]Outcome, len(targets))
+	var wg sync.WaitGroup
+	wg.Add(len(targets))
+	for i, target := range targets {
+		go func() {
+			defer wg.Done()
+			result := health.ProbeResult{InstanceID: target.InstanceID, Error: "no prober configured"}
+			if prober != nil {
+				result = prober.Probe(ctx, target, cfg)
+			}
+			out[i] = Outcome{
+				Target: target,
+				Family: FamilyForTarget(target),
+				Result: result,
+			}
+		}()
 	}
+	wg.Wait()
 	return out
 }
 

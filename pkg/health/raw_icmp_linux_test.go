@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestRawICMProberUsesWorkerAndPreservesBurstMajority(t *testing.T) {
@@ -97,6 +99,132 @@ func TestRawICMProberFallsBackWhenNamespaceWorkerCannotStart(t *testing.T) {
 	}
 	if fallback.calls != 1 {
 		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
+	}
+}
+
+func TestRawICMPNamespaceWorkerRunsDifferentSocketsConcurrently(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var nextFD atomic.Int32
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	worker := &rawICMPNamespaceWorker{
+		jobs: make(chan rawICMPJob),
+		done: make(chan struct{}),
+		openSocket: func(rawSocketKey) (int, uint32, error) {
+			return int(nextFD.Add(1)), 0, nil
+		},
+		closeSocket: func(int) error { return nil },
+		probeSocket: func(_ rawICMPJob, key rawSocketKey, _ int, _ uint32) rawProbeResult {
+			current := active.Add(1)
+			for {
+				previous := maxActive.Load()
+				if current <= previous || maxActive.CompareAndSwap(previous, current) {
+					break
+				}
+			}
+			started <- key.iface
+			<-release
+			active.Add(-1)
+			return rawProbeResult{received: 1}
+		},
+	}
+	ready := make(chan error, 1)
+	go worker.run(ready)
+	if err := <-ready; err != nil {
+		t.Fatalf("start raw worker: %v", err)
+	}
+	t.Cleanup(worker.close)
+
+	var seq atomic.Uint32
+	results := make(chan rawProbeResult, 2)
+	for i, target := range []ProbeTarget{
+		{InstanceID: "old", InterfaceName: "hgs-old", LocalTunnelAddr: netip.MustParseAddr("fe80::1"), PeerTunnelAddr: netip.MustParseAddr("fe80::2")},
+		{InstanceID: "active", InterfaceName: "hgs-active", LocalTunnelAddr: netip.MustParseAddr("fe80::3"), PeerTunnelAddr: netip.MustParseAddr("fe80::4")},
+	} {
+		go func(i int, target ProbeTarget) {
+			results <- worker.probe(context.Background(), target, ProbeConfig{Burst: 1}, uint16(i+1), &seq)
+		}(i, target)
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			worker.close()
+			t.Fatal("different raw ICMP sockets did not start concurrently")
+		}
+	}
+	gotMaxActive := maxActive.Load()
+	close(release)
+	for range 2 {
+		if result := <-results; result.received != 1 || result.err != nil {
+			t.Fatalf("probe result = %+v, want one reply", result)
+		}
+	}
+	worker.close()
+	if gotMaxActive != 2 {
+		t.Fatalf("maximum active socket probes = %d, want 2", gotMaxActive)
+	}
+}
+
+func TestRawICMPSocketSerializesSharedSocket(t *testing.T) {
+	socket := newRawICMPSocket(1, 0)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	run := func(rawICMPJob, rawSocketKey, int, uint32) rawProbeResult {
+		current := active.Add(1)
+		for {
+			previous := maxActive.Load()
+			if current <= previous || maxActive.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		started <- struct{}{}
+		<-release
+		active.Add(-1)
+		return rawProbeResult{received: 1}
+	}
+	results := make(chan rawProbeResult, 2)
+	for range 2 {
+		go func() {
+			results <- socket.probe(rawICMPJob{ctx: context.Background()}, rawSocketKey{}, run)
+		}()
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first shared-socket probe did not start")
+	}
+	select {
+	case <-started:
+		t.Fatal("shared-socket probes ran concurrently")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	for range 2 {
+		if result := <-results; result.received != 1 || result.err != nil {
+			t.Fatalf("probe result = %+v, want one reply", result)
+		}
+	}
+	if got := maxActive.Load(); got != 1 {
+		t.Fatalf("maximum active shared-socket probes = %d, want 1", got)
+	}
+}
+
+func TestRawDestinationUsesZoneCapturedInNamespace(t *testing.T) {
+	target := ProbeTarget{
+		InterfaceName:  "only-visible-inside-netns",
+		PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
+	}
+	destination, ok := rawDestination(target, unix.AF_INET6, 42).(*unix.SockaddrInet6)
+	if !ok {
+		t.Fatalf("destination type = %T, want IPv6", destination)
+	}
+	if destination.ZoneId != 42 {
+		t.Fatalf("destination zone = %d, want 42", destination.ZoneId)
 	}
 }
 

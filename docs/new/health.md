@@ -207,8 +207,10 @@ d.health = newHealthManager(cfg,
 
 Linux 上默认使用进程内 raw ICMP。每个目标 network namespace 有一个固定
 OS thread 的 worker；worker 仅在启动时 `setns`，并按协议族、源地址、接口
-复用 raw socket。steady state 不再执行 `ip netns exec`、fork `ping` 或创建
-临时 mount，因此不会产生 probe 子进程风暴。
+创建和复用 raw socket。socket 创建后与目标 netns 绑定，不同 socket key
+上的 probe 可并发执行；共享同一 socket 的 probe 仍串行，避免互相消费 ICMP
+reply。steady state 不再执行 `ip netns exec`、fork `ping` 或创建临时 mount，
+因此不会产生 probe 子进程风暴。
 
 - 需要 daemon 自身具备 `CAP_NET_RAW`（创建 raw socket）；进入非 host netns
   还需要 `CAP_SYS_ADMIN`。`UID 0` 通常具有这些 capability，但 systemd 的

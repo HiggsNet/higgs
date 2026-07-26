@@ -3,6 +3,7 @@ package ping
 import (
 	"context"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,18 +12,18 @@ import (
 
 type fakeProber struct {
 	byProbeID map[string]health.ProbeResult
-	calls     int
+	calls     atomic.Int32
 }
 
 func (f *fakeProber) Probe(_ context.Context, target health.ProbeTarget, _ health.ProbeConfig) health.ProbeResult {
-	f.calls++
+	f.calls.Add(1)
 	if result, ok := f.byProbeID[target.ProbeID]; ok {
 		return result
 	}
 	return health.ProbeResult{InstanceID: target.InstanceID, Error: "no fake result"}
 }
 
-func (fakeProber) Type() string { return health.ProbeTypeICMP }
+func (*fakeProber) Type() string { return health.ProbeTypeICMP }
 
 func TestSelectTargetsByZoneFamilyAndRole(t *testing.T) {
 	targets := []health.ProbeTarget{
@@ -99,14 +100,61 @@ func TestRunUsesProber(t *testing.T) {
 	if len(outcomes) != 2 {
 		t.Fatalf("outcomes = %d, want 2", len(outcomes))
 	}
-	if fake.calls != 2 {
-		t.Fatalf("prober called %d times, want 2", fake.calls)
+	if calls := fake.calls.Load(); calls != 2 {
+		t.Fatalf("prober called %d times, want 2", calls)
 	}
 	if outcomes[0].Family != "ipv4" || !outcomes[0].Result.Success {
 		t.Fatalf("outcome[0] = %+v, want ipv4 success", outcomes[0])
 	}
 	if outcomes[1].Family != "ipv6" || outcomes[1].Result.Success || outcomes[1].Result.Error == "" {
 		t.Fatalf("outcome[1] = %+v, want ipv6 failure with error", outcomes[1])
+	}
+}
+
+type blockingProber struct {
+	started chan string
+	release chan struct{}
+}
+
+func (p *blockingProber) Probe(_ context.Context, target health.ProbeTarget, _ health.ProbeConfig) health.ProbeResult {
+	p.started <- target.ProbeID
+	<-p.release
+	return health.ProbeResult{InstanceID: target.InstanceID, Success: true}
+}
+
+func (*blockingProber) Type() string { return health.ProbeTypeICMP }
+
+func TestRunProbesTargetsConcurrentlyAndPreservesOrder(t *testing.T) {
+	targets := []health.ProbeTarget{
+		{ProbeID: "first", InstanceID: "first", UnderlayFamily: "ipv4", PeerTunnelAddr: netip.MustParseAddr("fe80::1")},
+		{ProbeID: "second", InstanceID: "second", UnderlayFamily: "ipv6", PeerTunnelAddr: netip.MustParseAddr("fe80::2")},
+	}
+	prober := &blockingProber{
+		started: make(chan string, len(targets)),
+		release: make(chan struct{}),
+	}
+	done := make(chan []Outcome, 1)
+	go func() {
+		done <- Run(context.Background(), prober, targets, health.ProbeConfig{})
+	}()
+
+	for range targets {
+		select {
+		case <-prober.started:
+		case <-time.After(time.Second):
+			close(prober.release)
+			t.Fatal("not all probes started before the first probe completed")
+		}
+	}
+	close(prober.release)
+	outcomes := <-done
+	if len(outcomes) != len(targets) {
+		t.Fatalf("outcomes = %d, want %d", len(outcomes), len(targets))
+	}
+	for i, target := range targets {
+		if outcomes[i].Target.ProbeID != target.ProbeID {
+			t.Fatalf("outcome[%d] probe ID = %q, want %q", i, outcomes[i].Target.ProbeID, target.ProbeID)
+		}
 	}
 }
 
