@@ -8,7 +8,7 @@ import { onItemInvalidate } from '../events.js';
 import { esc, ms, pct, relTime } from '../format.js';
 import { pageHeader, filterInput, emptyState, loading, errorMsg } from '../components/card.js';
 import { kvTable } from '../components/kv.js';
-import { stateBadge, dot } from '../components/badge.js';
+import { stateBadge, badge, dot } from '../components/badge.js';
 import { sparkline } from '../components/chart.js';
 import { historyPanel, bindHistory } from './health_history.js';
 
@@ -36,12 +36,27 @@ function severityOf(h) {
     return h.cutover_blocking ? 'warn' : '';
 }
 
-function linkRow(item, selected) {
+// Rows are keyed by probe (probe_id), not link instance: during rotation a
+// single instance_id has active/staged/old probes that must stay distinct.
+function probeID(item) {
     const h = healthValue(item) || {};
-    return `<div class="link-item${selected ? ' selected' : ''}" data-link="${esc(h.instance_id || '')}">
+    return h.probe_id || h.instance_id || '';
+}
+
+function roleBadge(h) {
+    const role = h.probe_role || '';
+    if (!role) return '';
+    const tone = role === 'active' ? 'ok' : role === 'staged' ? 'warn' : 'unknown';
+    return badge(role, tone);
+}
+
+function linkRow(item, selected, showRole) {
+    const h = healthValue(item) || {};
+    return `<div class="link-item${selected ? ' selected' : ''}" data-link="${esc(probeID(item))}">
         ${dot(h.state || 'unknown')}
         <span class="link-zone">${esc(item.peer_zone || '-')}</span>
         <span class="link-family">${esc(item.group_id || '-')}</span>
+        ${showRole ? roleBadge(h) : ''}
         ${stateBadge(h.state || 'unknown')}
     </div>`;
 }
@@ -80,7 +95,7 @@ function detailPanel(item, datasource) {
         ['Endpoint', `<code>${esc(item.endpoint || desired.endpoint || '-')}</code>`],
     ]);
     return `<section class="detail-panel">
-        <h2>${esc(h.instance_id || '-')}</h2>
+        <h2>${esc(probeID(item) || '-')} ${roleBadge(h)}</h2>
         <div class="detail-grid">
             <section><h3>Probe</h3>${probe}</section>
             <section><h3>Latency</h3>${latency}</section>
@@ -136,16 +151,31 @@ export function render(container, route) {
             const h = healthValue(item) || {};
             return !filter
                 || (h.instance_id || '').toLowerCase().includes(filter)
+                || (h.probe_id || '').toLowerCase().includes(filter)
+                || (h.probe_role || '').toLowerCase().includes(filter)
                 || (item.peer_zone || '').toLowerCase().includes(filter)
                 || (item.group_id || '').toLowerCase().includes(filter);
         })
         .slice()
         .sort((a, b) => rank(a) - rank(b));
-    const selected = links.find(item => (healthValue(item) || {}).instance_id === route.selected) || null;
+    // Select by probe id (unique per active/staged/old probe); fall back to
+    // the active probe when a deep link carries only the link instance id.
+    const selected = links.find(item => probeID(item) === route.selected)
+        || links.find(item => {
+            const h = healthValue(item) || {};
+            return h.instance_id === route.selected && (!h.probe_role || h.probe_role === 'active');
+        })
+        || null;
+    // Rotation: several probes share one instance id — mark each row's role.
+    const instanceCount = new Map();
+    links.forEach(item => {
+        const id = (healthValue(item) || {}).instance_id || '';
+        instanceCount.set(id, (instanceCount.get(id) || 0) + 1);
+    });
     container.innerHTML = `
         ${header}
         <div class="overlay-layout">
-            <div class="link-list">${links.map(item => linkRow(item, (healthValue(item) || {}).instance_id === route.selected)).join('') || emptyState('No health data available')}</div>
+            <div class="link-list">${links.map(item => linkRow(item, item === selected, instanceCount.get((healthValue(item) || {}).instance_id || '') > 1)).join('') || emptyState('No health data available')}</div>
             <div id="health-detail">${detailPanel(selected, data.datasource)}</div>
         </div>`;
     container.querySelector('#page-filter').addEventListener('input', ev => {
