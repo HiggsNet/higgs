@@ -158,9 +158,10 @@ func cmdService() *cli.Command {
 		Usage: "Publish and withdraw signed application service records",
 		Commands: []*cli.Command{
 			{
-				Name:      "publish",
-				Usage:     "Publish a SOCKS5 endpoint owned by the managed zone",
-				UsageText: "higgs service publish --endpoint <region,address,port>... [--direct]",
+				Name:                      "publish",
+				Usage:                     "Publish a SOCKS5 endpoint owned by the managed zone",
+				UsageText:                 "higgs service publish --endpoint <region,address,port>... [--direct]",
+				DisableSliceFlagSeparator: true,
 				Flags: []cli.Flag{
 					&cli.StringSliceFlag{Name: "endpoint", Usage: "Endpoint as region,address,port; repeat for multiple networks"},
 					&cli.StringFlag{Name: "region", Usage: "Legacy single-endpoint region"},

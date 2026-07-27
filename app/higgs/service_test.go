@@ -1,13 +1,42 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
 	higgsservice "github.com/Catofes/higgs/pkg/service"
+	"github.com/urfave/cli/v3"
 )
+
+func TestServicePublishCLIKeepsCommaDelimitedEndpointsIntact(t *testing.T) {
+	service := cmdService()
+	publish := commandByName(service.Commands, "publish")
+	if publish == nil {
+		t.Fatal("publish command is missing")
+	}
+	var got []string
+	publish.Action = func(_ context.Context, cmd *cli.Command) error {
+		got = cmd.StringSlice("endpoint")
+		return nil
+	}
+	root := &cli.Command{Name: "higgs", Commands: []*cli.Command{service}}
+	args := []string{
+		"higgs", "service", "publish",
+		"--endpoint", "local,2a0d:2905:1:4::20,3128",
+		"--endpoint", "cn,2a0d:2905:1:5::20,3128",
+	}
+	if err := root.Run(context.Background(), args); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"local,2a0d:2905:1:4::20,3128", "cn,2a0d:2905:1:5::20,3128"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("endpoint flags = %#v, want %#v", got, want)
+	}
+}
 
 func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
