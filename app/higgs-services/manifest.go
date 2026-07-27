@@ -17,6 +17,8 @@ import (
 const (
 	defaultOutputDir = "/etc/higgs/services"
 	defaultGostImage = "gogost/gost:3.2.6"
+	defaultHTTPUser  = "higgs"
+	defaultHTTPPass  = "2a0d"
 )
 
 type manifest struct {
@@ -49,11 +51,17 @@ type socks5Config struct {
 	Networks   map[string]string `yaml:"networks"`
 	AllowZones []string          `yaml:"allow_zones,omitempty"`
 	Resolver   resolverConfig    `yaml:"resolver,omitempty"`
+	HTTPAuth   proxyAuthConfig   `yaml:"http_auth,omitempty"`
 }
 
 type resolverConfig struct {
 	Mode    string   `yaml:"mode,omitempty" json:"mode"`
 	Servers []string `yaml:"servers,omitempty" json:"servers"`
+}
+
+type proxyAuthConfig struct {
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
 }
 
 type publishConfig map[string]string
@@ -126,6 +134,7 @@ type resolvedSOCKS5 struct {
 	Port       uint16                       `json:"port"`
 	AllowZones []string                     `json:"allow_zones,omitempty"`
 	Resolver   resolverConfig               `json:"resolver"`
+	HTTPAuth   proxyAuthConfig              `json:"-"`
 	Networks   map[string]resolvedRoleAddrs `json:"networks"`
 	ConfigHash string                       `json:"config_hash"`
 	Endpoints  []resolvedEndpoint           `json:"endpoints"`
@@ -247,7 +256,12 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		return resolvedManifest{}, fmt.Errorf("socks5.resolver: %w", err)
 	}
 	configured.Resolver = resolver
-	service := resolvedSOCKS5{Port: configured.Port, Resolver: resolver, Networks: map[string]resolvedRoleAddrs{}}
+	httpAuth, err := normalizeHTTPAuth(configured.HTTPAuth)
+	if err != nil {
+		return resolvedManifest{}, fmt.Errorf("socks5.http_auth: %w", err)
+	}
+	configured.HTTPAuth = httpAuth
+	service := resolvedSOCKS5{Port: configured.Port, Resolver: resolver, HTTPAuth: httpAuth, Networks: map[string]resolvedRoleAddrs{}}
 	for _, raw := range configured.AllowZones {
 		selector, err := higgsservice.ParseZoneSelector(raw)
 		if err != nil {
@@ -358,6 +372,19 @@ func normalizeResolver(value resolverConfig) (resolverConfig, error) {
 		servers = append(servers, server)
 	}
 	value.Servers = servers
+	return value, nil
+}
+
+func normalizeHTTPAuth(value proxyAuthConfig) (proxyAuthConfig, error) {
+	if value.Username == "" && value.Password == "" {
+		return proxyAuthConfig{Username: defaultHTTPUser, Password: defaultHTTPPass}, nil
+	}
+	if strings.TrimSpace(value.Username) == "" || value.Password == "" {
+		return proxyAuthConfig{}, fmt.Errorf("username and password must both be set")
+	}
+	if strings.ContainsAny(value.Username, "\t\n\r") || strings.ContainsAny(value.Password, "\n\r") {
+		return proxyAuthConfig{}, fmt.Errorf("username and password must be single-line values")
+	}
 	return value, nil
 }
 

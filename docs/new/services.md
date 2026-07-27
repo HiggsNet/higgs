@@ -143,6 +143,9 @@ socks5:
   resolver:
     mode: ipv4_first
     servers: [8.8.8.8, 1.1.1.1]
+  http_auth:
+    username: higgs
+    password: 2a0d
   # allow_zones:
   #   - clients.catofes.
 ```
@@ -152,6 +155,7 @@ socks5:
 - `socks5.networks`：每个已连接 network 的服务相对基址。
 - `publish`：`network: region` 映射，只发布列出的 network；本地和 Anycast endpoint 可以同时发布任意多个。为兼容旧配置，标量形式 `publish: main` 和顶层 `region` 仍可读取，新配置应使用映射形式。
 - `resolver`：可选的 GOST v3 内置 resolver 配置。`mode` 默认为 `ipv4_first`，还可设为 `ipv6_first`、`ipv4_only`、`ipv6_only`；`servers` 默认为 `8.8.8.8`、`1.1.1.1`。`*_first` 只是偏好，偏好地址族无结果时仍可返回另一地址族；`*_only` 才是严格过滤。
+- `http_auth`：HTTP proxy 的 Basic 认证；为兼容旧 `share/socks5` 模板，默认用户名/密码为 `higgs` / `2a0d`，可同时覆盖两项。SOCKS5 保持 NO AUTH。两项只配置其一会导致校验失败。
 - `allow_zones`：可选的 Zone selector 列表，见第 6 节。
 - `output_dir`：artifact 根目录，默认 `/etc/higgs/services`。
 - `images`：通常省略。固定默认值为稳定版 `gogost/gost:3.2.6`，只有需要私有仓库或统一升级时才全局覆盖。
@@ -180,8 +184,8 @@ Docker 可以在动态池中自动分配未指定地址；两个服务容器使�
 
 | 角色 | 地址偏移 | 容器 |
 |---|---|---|
-| `socks` | 基址 +0 | GOST v3，`socks5` handler |
-| `h2` | 基址 +1 | GOST v3，`http` handler |
+| `socks` | 基址 +0 | GOST v3，NO AUTH `socks5` handler |
+| `h2` | 基址 +1 | GOST v3，带 Basic 认证的 `http` handler |
 
 解析器会检查角色地址位于 Docker subnet 内，且不与 gateway 或动态池冲突；不同 network 的同族 subnet 不允许重叠。
 
@@ -204,8 +208,8 @@ higgs-services render     # 生成全部 artifact
 /etc/higgs/services/
   networks/docker-compose.yml     # 全部 Docker network，project higgs-networks
   socks5/docker-compose.yml       # 两个 GOST v3 容器，project higgs-socks5
-  socks5/config/socks.yaml        # SOCKS5 listener 与内置 resolver
-  socks5/config/h2.yaml           # HTTP listener 与内置 resolver
+  socks5/config/socks.yaml        # SOCKS5 listener 与内置 resolver，0600
+  socks5/config/h2.yaml           # HTTP listener、Basic 认证与内置 resolver，0600
   resolved.json                   # 整个 resolved manifest
   socks5/resolved.json            # render 锁：config hash、managed zone、endpoints
   socks5/published.json           # publish 锁：上次实际发布状态

@@ -37,6 +37,9 @@ func TestResolveAndRenderManifest(t *testing.T) {
 	if service.Resolver.Mode != "ipv4_first" || strings.Join(service.Resolver.Servers, ",") != "8.8.8.8,1.1.1.1" {
 		t.Fatalf("resolved resolver = %#v", service.Resolver)
 	}
+	if service.HTTPAuth.Username != "higgs" || service.HTTPAuth.Password != "2a0d" {
+		t.Fatalf("resolved HTTP auth = %#v", service.HTTPAuth)
+	}
 	resolved.ManagedZone = "node-a.catofes."
 	legacyConfig := filepath.Join(output, "socks5", "config", "smartdns.conf")
 	if err := os.MkdirAll(filepath.Dir(legacyConfig), 0o755); err != nil {
@@ -79,11 +82,17 @@ func TestResolveAndRenderManifest(t *testing.T) {
 			t.Fatalf("SOCKS GOST config missing %q:\n%s", want, socksConfig)
 		}
 	}
+	if strings.Contains(socksConfig, "auth:") {
+		t.Fatalf("SOCKS5 must remain NO AUTH:\n%s", socksConfig)
+	}
 	h2Config := readTestFile(t, filepath.Join(output, "socks5", "config", "h2.yaml"))
-	for _, want := range []string{"name: h2", "type: http", "prefer: ipv4"} {
+	for _, want := range []string{"name: h2", "type: http", "auth:", "username: higgs", "password: 2a0d", "prefer: ipv4"} {
 		if !strings.Contains(h2Config, want) {
 			t.Fatalf("H2 GOST config missing %q:\n%s", want, h2Config)
 		}
+	}
+	if info, err := os.Stat(filepath.Join(output, "socks5", "config", "h2.yaml")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("H2 config mode = %v, %v; want 0600", info, err)
 	}
 }
 
@@ -184,6 +193,25 @@ func TestResolveManifestRejectsPublishNetworkWithOversizedACLName(t *testing.T) 
 	_, err := resolveManifest(configured, []runtimeAssignment{{Prefix: "fd42:1::/64"}})
 	if err == nil || !strings.Contains(err.Error(), "too long") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNormalizeHTTPAuth(t *testing.T) {
+	if got, err := normalizeHTTPAuth(proxyAuthConfig{}); err != nil || got.Username != "higgs" || got.Password != "2a0d" {
+		t.Fatalf("default HTTP auth = %#v, %v", got, err)
+	}
+	custom := proxyAuthConfig{Username: "proxy", Password: "secret"}
+	if got, err := normalizeHTTPAuth(custom); err != nil || got != custom {
+		t.Fatalf("custom HTTP auth = %#v, %v", got, err)
+	}
+	for _, invalid := range []proxyAuthConfig{
+		{Username: "proxy"},
+		{Password: "secret"},
+		{Username: "proxy\nadmin", Password: "secret"},
+	} {
+		if _, err := normalizeHTTPAuth(invalid); err == nil {
+			t.Fatalf("accepted invalid HTTP auth %#v", invalid)
+		}
 	}
 }
 

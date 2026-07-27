@@ -65,7 +65,13 @@ type gostService struct {
 }
 
 type gostPluginType struct {
-	Type string `yaml:"type"`
+	Type string    `yaml:"type"`
+	Auth *gostAuth `yaml:"auth,omitempty"`
+}
+
+type gostAuth struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type gostResolver struct {
@@ -163,10 +169,10 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 	if err := writeYAML(filepath.Join(dir, "docker-compose.yml"), file); err != nil {
 		return err
 	}
-	if err := renderGOSTConfig(filepath.Join(dir, "config", "socks.yaml"), "socks", "socks5", service.Port, service.Resolver); err != nil {
+	if err := renderGOSTConfig(filepath.Join(dir, "config", "socks.yaml"), "socks", "socks5", service.Port, service.Resolver, nil); err != nil {
 		return err
 	}
-	if err := renderGOSTConfig(filepath.Join(dir, "config", "h2.yaml"), "h2", "http", service.Port, service.Resolver); err != nil {
+	if err := renderGOSTConfig(filepath.Join(dir, "config", "h2.yaml"), "h2", "http", service.Port, service.Resolver, &service.HTTPAuth); err != nil {
 		return err
 	}
 	if err := os.Remove(filepath.Join(dir, "config", "smartdns.conf")); err != nil && !os.IsNotExist(err) {
@@ -179,7 +185,7 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 	return atomicWrite(filepath.Join(dir, "resolved.json"), append(data, '\n'), 0o644)
 }
 
-func renderGOSTConfig(path, name, handler string, port uint16, resolver resolverConfig) error {
+func renderGOSTConfig(path, name, handler string, port uint16, resolver resolverConfig, auth *proxyAuthConfig) error {
 	nameservers := make([]gostNameserver, 0, len(resolver.Servers))
 	for _, server := range resolver.Servers {
 		nameserver := gostNameserver{Addr: server}
@@ -195,14 +201,18 @@ func renderGOSTConfig(path, name, handler string, port uint16, resolver resolver
 		}
 		nameservers = append(nameservers, nameserver)
 	}
+	handlerConfig := gostPluginType{Type: handler}
+	if auth != nil {
+		handlerConfig.Auth = &gostAuth{Username: auth.Username, Password: auth.Password}
+	}
 	config := gostConfig{
 		Services: []gostService{{
 			Name: name, Addr: fmt.Sprintf("[::]:%d", port), Resolver: "service-resolver",
-			Handler: gostPluginType{Type: handler}, Listener: gostPluginType{Type: "tcp"},
+			Handler: handlerConfig, Listener: gostPluginType{Type: "tcp"},
 		}},
 		Resolvers: []gostResolver{{Name: "service-resolver", Nameservers: nameservers}},
 	}
-	return writeYAML(path, config)
+	return writeYAMLMode(path, config, 0o600)
 }
 
 func composeBridgeDriverOpts(interfaces []string) map[string]string {
@@ -240,11 +250,15 @@ func containsColon(value string) bool {
 }
 
 func writeYAML(path string, value any) error {
+	return writeYAMLMode(path, value, 0o644)
+}
+
+func writeYAMLMode(path string, value any, mode os.FileMode) error {
 	data, err := yaml.Marshal(value)
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, data, 0o644)
+	return atomicWrite(path, data, mode)
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

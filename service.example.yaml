@@ -47,6 +47,11 @@ socks5:
   # resolver:
   #   mode: ipv4_first
   #   servers: [8.8.8.8, 1.1.1.1]
+  # The HTTP proxy keeps the legacy Basic authentication defaults shown below.
+  # SOCKS5 intentionally remains NO AUTH.
+  # http_auth:
+  #   username: higgs
+  #   password: 2a0d
 
 # Defaults are pinned to a stable image.
 # Override globally only when required.
