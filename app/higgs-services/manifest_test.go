@@ -62,7 +62,7 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		t.Fatalf("rendered lock = %+v", lock)
 	}
 	networkCompose := readTestFile(t, filepath.Join(output, "networks", "docker-compose.yml"))
-	for _, want := range []string{"services:", "owner:", "scale: 0", "name: higgs-main", "fd42:1::/112", "driver_opts:", "com.docker.network.bridge.trusted_host_interfaces: hgs0:hgs1"} {
+	for _, want := range []string{"services:", "owner:", "scale: 0", "name: higgs-main", "fd42:1::/112", "driver_opts:", "com.docker.network.bridge.trusted_host_interfaces: hgs0:hgs1", "com.docker.network.bridge.gateway_mode_ipv6: nat-unprotected"} {
 		if !strings.Contains(networkCompose, want) {
 			t.Fatalf("network compose missing %q:\n%s", want, networkCompose)
 		}
@@ -77,7 +77,7 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		t.Fatalf("service compose still contains SmartDNS dependency:\n%s", serviceCompose)
 	}
 	socksConfig := readTestFile(t, filepath.Join(output, "socks5", "config", "socks.yaml"))
-	for _, want := range []string{"name: socks", "addr: '[::]:3128'", "resolver: service-resolver", "type: socks5", "prefer: ipv4"} {
+	for _, want := range []string{"name: socks", "addr: '[::]:3128'", "resolver: service-resolver", "type: socks5", "metadata:", "udp: true", "udpBufferSize: 65535", "prefer: ipv4"} {
 		if !strings.Contains(socksConfig, want) {
 			t.Fatalf("SOCKS GOST config missing %q:\n%s", want, socksConfig)
 		}
@@ -90,6 +90,9 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		if !strings.Contains(h2Config, want) {
 			t.Fatalf("H2 GOST config missing %q:\n%s", want, h2Config)
 		}
+	}
+	if strings.Contains(h2Config, "udp:") {
+		t.Fatalf("HTTP config unexpectedly enables SOCKS5 UDP:\n%s", h2Config)
 	}
 	if info, err := os.Stat(filepath.Join(output, "socks5", "config", "h2.yaml")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("H2 config mode = %v, %v; want 0600", info, err)
@@ -135,6 +138,43 @@ func TestResolveManifestAppliesAndOverridesNetworkDefaults(t *testing.T) {
 	}
 	if got := strings.Join(resolved.Networks["cn"].TrustedHostInterfaces, ","); got != "hgs0" {
 		t.Fatalf("cn trusted interfaces = %q, want override hgs0", got)
+	}
+}
+
+func TestComposeBridgeDriverOptsUsesServiceAddressFamily(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		address    string
+		gatewayOpt string
+	}{
+		{name: "IPv4", address: "172.30.0.20", gatewayOpt: "com.docker.network.bridge.gateway_mode_ipv4"},
+		{name: "IPv6", address: "fd42::20", gatewayOpt: "com.docker.network.bridge.gateway_mode_ipv6"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := composeBridgeDriverOpts([]string{"hgv2mesh"}, test.address)
+			if options["com.docker.network.bridge.trusted_host_interfaces"] != "hgv2mesh" {
+				t.Fatalf("driver options = %#v", options)
+			}
+			if options[test.gatewayOpt] != "nat-unprotected" || len(options) != 2 {
+				t.Fatalf("driver options = %#v", options)
+			}
+		})
+	}
+}
+
+func TestPublishedServiceAddressExcludesAttachedUnpublishedNetwork(t *testing.T) {
+	service := resolvedSOCKS5{
+		Networks: map[string]resolvedRoleAddrs{
+			"main":  {SOCKS: "fd42:1::20"},
+			"admin": {SOCKS: "fd42:2::20"},
+		},
+		Endpoints: []resolvedEndpoint{{Network: "main", Address: "fd42:1::20"}},
+	}
+	if got := publishedServiceAddress(service, "main"); got != "fd42:1::20" {
+		t.Fatalf("published address = %q", got)
+	}
+	if got := publishedServiceAddress(service, "admin"); got != "" {
+		t.Fatalf("unpublished address = %q, want empty", got)
 	}
 }
 

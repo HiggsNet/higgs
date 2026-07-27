@@ -354,7 +354,12 @@ host 实例生成以下规则：
 
 #### Endpoint ACL（forward 链）
 
-`EndpointACL` 通过 control API 应用，只允许匹配 Zone selector 的源访问指定目的端口。每个 endpoint 生成“允许+默认 drop”两条规则，实现 fail-closed。
+`EndpointACL` 通过 control API 应用，只允许匹配 Zone selector 的源访问指定目标。它支持两种 scope：
+
+- `port`：兼容原有行为，匹配 destination、TCP/UDP protocol 和固定 port。
+- `ip`：只匹配 destination IP，不限制 protocol/port；用于 GOST SOCKS5 UDP ASSOCIATE 这类动态分配 relay port 的服务。
+
+每个 endpoint 都生成“允许+默认 drop”规则，实现 fail-closed。IP scope 的 allow/drop 不带 L4 条件，因此该地址应专用于同一安全域内的服务；不同认证或授权边界应使用不同容器 IP。
 
 ```go
 // app/higgs/endpoint_acl.go

@@ -150,13 +150,13 @@ socks5:
   #   - clients.catofes.
 ```
 
-- `network_defaults.trusted_host_interfaces`：可选的全局 Docker direct-routing 可信入接口，应用到每个 network；接口名以本机实际、稳定的 host 侧 XFRM/WireGuard/veth ingress 为准。
-- `networks`：容器实际连接的 Docker network。单个 network 也可配置 `trusted_host_interfaces`，配置后替换全局默认值；生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option。
+- `network_defaults.trusted_host_interfaces`：可选的全局 Docker direct-routing 可信入接口，应用到每个 network；接口名以本机实际、稳定的 host 侧 XFRM/WireGuard/veth ingress 为准。在默认 `nat`/`routed` filtering 下，它让这些接口可直达已 publish 端口；它既不单独开放未 publish 端口，也不是 `nat-unprotected` 地址族的安全边界。
+- `networks`：容器实际连接的 Docker network。单个 network 也可配置 `trusted_host_interfaces`，配置后替换全局默认值；生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option。对列入 `socks5.publish` 的 network 及其 service address family，renderer 还自动设置 `com.docker.network.bridge.gateway_mode_ipv4/ipv6: nat-unprotected`，使 routed overlay 可以直达该 service IP 的动态 UDP relay port；访问边界由 Higgs endpoint ACL 负责。只连接但未 publish 的 network 不启用这一模式。
 - `socks5.networks`：每个已连接 network 的服务相对基址。
 - `publish`：`network: region` 映射，只发布列出的 network；本地和 Anycast endpoint 可以同时发布任意多个。为兼容旧配置，标量形式 `publish: main` 和顶层 `region` 仍可读取，新配置应使用映射形式。
 - `resolver`：可选的 GOST v3 内置 resolver 配置。`mode` 默认为 `ipv4_first`，还可设为 `ipv6_first`、`ipv4_only`、`ipv6_only`；`servers` 默认为 `8.8.8.8`、`1.1.1.1`。`*_first` 只是偏好，偏好地址族无结果时仍可返回另一地址族；`*_only` 才是严格过滤。
 - `http_auth`：HTTP proxy 的 Basic 认证；为兼容旧 `share/socks5` 模板，默认用户名/密码为 `higgs` / `2a0d`，可同时覆盖两项。SOCKS5 保持 NO AUTH。两项只配置其一会导致校验失败。
-- `allow_zones`：可选的 Zone selector 列表，见第 6 节。
+- `allow_zones`：可选的 Zone selector 列表，见第 6 节。配置后分别为 SOCKS5 和 HTTP 地址安装 IP-scope ACL；未配置表示这两个地址不使用 Higgs endpoint ACL 限制。
 - `output_dir`：artifact 根目录，默认 `/etc/higgs/services`。
 - `images`：通常省略。固定默认值为稳定版 `gogost/gost:3.2.6`，只有需要私有仓库或统一升级时才全局覆盖。
 - `port`：SOCKS5 端口，默认 3128。
@@ -184,7 +184,7 @@ Docker 可以在动态池中自动分配未指定地址；两个服务容器使�
 
 | 角色 | 地址偏移 | 容器 |
 |---|---|---|
-| `socks` | 基址 +0 | GOST v3，NO AUTH `socks5` handler |
+| `socks` | 基址 +0 | GOST v3，NO AUTH `socks5` handler，启用 TCP CONNECT 和 UDP ASSOCIATE |
 | `h2` | 基址 +1 | GOST v3，带 Basic 认证的 `http` handler |
 
 解析器会检查角色地址位于 Docker subnet 内，且不与 gateway 或动态池冲突；不同 network 的同族 subnet 不允许重叠。
@@ -208,7 +208,7 @@ higgs-services render     # 生成全部 artifact
 /etc/higgs/services/
   networks/docker-compose.yml     # 全部 Docker network，project higgs-networks
   socks5/docker-compose.yml       # 两个 GOST v3 容器，project higgs-socks5
-  socks5/config/socks.yaml        # SOCKS5 listener 与内置 resolver，0600
+  socks5/config/socks.yaml        # SOCKS5 TCP/UDP listener 与内置 resolver，0600
   socks5/config/h2.yaml           # HTTP listener、Basic 认证与内置 resolver，0600
   resolved.json                   # 整个 resolved manifest
   socks5/resolved.json            # render 锁：config hash、managed zone、endpoints
@@ -218,9 +218,23 @@ higgs-services render     # 生成全部 artifact
 - Docker network 名自动为 `higgs-<network>`；Compose project name 固定为 `higgs-networks` 和 `higgs-socks5`，无需也无法在 manifest 中配置。`higgs-networks` 内含一个连接全部 network、`scale: 0` 的 `owner` 服务，使纯网络项目可以通过标准 `docker compose up -d` 创建；它不会启动占位容器。
 - SOCKS5 Compose 引用 network 为 `external: true`，因此必须先起 networks project。
 - 从旧版三容器部署升级时，重新 render 会删除旧的 `smartdns.conf`；启动新版 Compose 必须使用 `--remove-orphans`（或先 `down`），以删除已经不在配置中的 `dns` 容器。旧 manifest 中若显式配置了 `images.smartdns`，也应删除该字段。
-- 服务端口同时发布到 `127.0.0.1` / `[::1]` loopback：这只是让 Docker 将端口标记为 direct-routing 可访问，overlay 访问仍使用容器 endpoint IP。
-- Docker bridge 的 driver option 不能原地更新。修改 `trusted_host_interfaces` 后，先停止依赖该 network 的服务，删除旧 Docker network，再重新执行 Compose 命令。
+- 服务 TCP 端口仍发布到 `127.0.0.1` / `[::1]` loopback，供 host 本地诊断；publish readiness 从 host 直接检查容器 endpoint IP，overlay 访问也不依赖 port publishing。
+- 需要 Docker Engine 28 或更新版本。Docker 默认 gateway mode 会在 `DOCKER` filter chain 阻止直达未 publish 端口；`nat-unprotected` 明确关闭这个逐端口过滤，才能承载 SOCKS5 动态 UDP relay。`trusted_host_interfaces` 与 gateway mode 的区别见 Docker 官方 [Port publishing and mapping](https://docs.docker.com/engine/network/port-publishing/)。
+- Docker bridge 的 driver option 不能原地更新。首次启用本功能或修改 `trusted_host_interfaces` 后，先停止依赖该 network 的服务，删除旧 Docker network，再重新执行 Compose 命令。
 - 所有文件原子写入（临时文件 + rename）。
+
+从旧 bridge 配置升级时，应先升级并重启 Higgs daemon/CLI 与 `higgs-services`，再按以下顺序重建。必须先停止服务容器，否则 Docker 不会删除仍在使用的 network：
+
+```bash
+higgs-services render
+docker compose -f /etc/higgs/services/socks5/docker-compose.yml down
+docker compose -f /etc/higgs/services/networks/docker-compose.yml down
+docker compose -f /etc/higgs/services/networks/docker-compose.yml up -d
+docker compose -f /etc/higgs/services/socks5/docker-compose.yml up -d --remove-orphans
+higgs-services publish
+```
+
+如果使用了自定义 `output_dir`，相应替换路径。若还有其他 Compose project 或手工容器连接 `higgs-*` network，先处理这些 attachment；不要强制删除仍承载其他工作负载的 network。
 
 ---
 
@@ -240,13 +254,13 @@ higgs-services publish
 
 `publish` 先重新执行 `higgs route ipam mine` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
 
-1. 从本机对每个 endpoint 的地址和端口做 3 秒 TCP 就绪检查；任一失败即终止。
-2. 为每个 endpoint 安装或清理独立 ACL：配置了 `allow_zones` 时执行 `higgs firewall endpoint apply socks5-<network> --destination <ip> --protocol tcp --port <port> --allow-zone ...`；未配置时删除同名旧 ACL（表示不使用这套限制）。
+1. 从本机分别对每个 endpoint 的 SOCKS5 和 HTTP 地址、TCP 端口做 3 秒就绪检查；任一失败即终止。该检查不执行 UDP ASSOCIATE。
+2. 为每个 endpoint 安装或清理两条独立 ACL：配置了 `allow_zones` 时，分别执行 `higgs firewall endpoint apply socks5-<network> --destination <socks-ip> --scope ip --allow-zone ...` 和 `higgs firewall endpoint apply h2-<network> --destination <http-ip> --scope ip --allow-zone ...`；未配置时删除两条旧 ACL（表示不使用这套限制）。
 3. 对 shared endpoint 执行 `higgs route announce <zone> <assignment>`，宣告整个 assignment prefix；非 shared endpoint 的路由由 `ipam.announce` 或管理员负责，`higgs-services` 不碰。
 4. 用一条 `higgs service publish --endpoint region,address,port...` 发布所有 endpoints（daemon 侧做第 2.3 节的授权检查并签名入 gossip）。
 5. 对照 `published.json` 清理上一版不再使用的 route 和 ACL，写入新的 `published.json`。
 
-endpoint ACL 名为 `socks5-<network>`；受防火墙对象命名限制，`socks5-` 加 network 名总长不能超过 63 字符，manifest 解析时即报错。
+endpoint ACL 名分别为 `socks5-<network>` 和 `h2-<network>`；受防火墙对象命名限制，较长的 `socks5-` 名总长不能超过 63 字符，manifest 解析时即报错。
 
 ### 5.3 withdraw
 
@@ -284,7 +298,8 @@ higgs-services withdraw
 
 ```text
 higgs-services publish
-  → higgs firewall endpoint apply socks5-<network> ... --allow-zone <selector>
+  → higgs firewall endpoint apply socks5-<network> ... --scope ip --allow-zone <selector>
+  → higgs firewall endpoint apply h2-<network> ... --scope ip --allow-zone <selector>
   → daemon 校验并持久化到本机状态文件（EndpointACLs）
   → firewall reconcile 时 resolveEndpointServices() 重新解析 selector
   → host 实例 forward 链生成 per-endpoint allow + 精确 drop
@@ -295,8 +310,11 @@ daemon 侧约束（`app/higgs/endpoint_acl.go`）：
 - 必须存在启用的 host firewall instance，且 `mode: managed`、backend 可解析为 nftables 或 iptables；否则 apply 直接报错。`external` 模式的实例不参与 endpoint ACL enforcement。
 - ACL destination 必须属于当前 managed Zone 的 active assignment（普通和 shared 均可）。
 - selector 至少一个；对不需要限制的 endpoint 应删除整条 ACL，而不是放空 selector。
+- `scope: port` 要求 `protocol` 和 `port`，并兼容 scope 字段不存在的旧状态；`scope: ip` 禁止携带这两个字段。`higgs-services` 生成的两条服务 ACL 使用 IP scope，因为 SOCKS5 UDP relay port 是动态的，并且 HTTP 使用独立地址。
 
-reconcile 时，daemon 用 `AuthorizedRouteSet.Announced` 把每个 selector 匹配 Zone 当前 active、已授权的 **overlay route prefix**（不是 IPsec underlay announce IP）解析为来源集合，按地址族过滤后生成规则。每个 endpoint 先生成来源 allow，再生成 destination/protocol/port 的精确 drop；selector 暂时匹配不到有效前缀时仍保留 drop，**不会退化为开放**（fail-closed）。route announcement、IPAM assignment、Zone revoke 或 announce IP 变化都会触发重新解析。规则形状见 [firewall.md](firewall.md) 第 4.4 节。
+reconcile 时，daemon 用 `AuthorizedRouteSet.Announced` 把每个 selector 匹配 Zone 当前 active、已授权的 **overlay route prefix**（不是 IPsec underlay announce IP）解析为来源集合，按地址族过滤后生成规则。每个 endpoint 先生成来源 allow，再生成相同 scope 的精确 drop；IP scope 只匹配 destination，覆盖该 IP 的全部 TCP/UDP 端口。selector 暂时匹配不到有效前缀时仍保留 drop，**不会退化为开放**（fail-closed）。route announcement、IPAM assignment、Zone revoke 或 announce IP 变化都会触发重新解析。规则形状见 [firewall.md](firewall.md) 第 4.4 节。
+
+由于 `nat-unprotected` 本身不做端口过滤，省略 `allow_zones` 会让任何能够路由到 role IP 的来源访问该 IP 的全部监听端口；这是显式的 unrestricted 模式。不要在 `socks`/`h2` 容器地址上附带运行其他安全边界不同的服务。
 
 ---
 
@@ -308,7 +326,7 @@ Phase 8 的端到端验收入口是显式 root smoke，不在 `root-smoke` 或 `
 sudo make services-smoke
 ```
 
-它先跑 `app/higgs-services` 单元测试，再以真实 Docker bridge、SOCKS5 与目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、两端 BIRD/Babel 验证端到端代理数据面（包括实际完成一次 SOCKS5 代理 TCP 请求、Docker connected route 优先于更宽聚合路由的断言），并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker、`ip`、`bird`/`birdc` 和 `nft`；创建的 netns、Docker network 和容器在测试结束时清理。详见 [testing.md](testing.md)。
+它先跑 `app/higgs-services` 单元测试，再以真实 Docker bridge（`nat-unprotected`）、未 publish 的 SOCKS5 容器端口、IP-scope host ACL、目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、两端 BIRD/Babel 验证端到端代理数据面（包括实际完成一次 SOCKS5 代理 TCP 请求、Docker connected route 优先于更宽聚合路由的断言），并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker 28+、`ip`、`bird`/`birdc` 和 `nft`；创建的 netns、Docker network 和容器在测试结束时清理。详见 [testing.md](testing.md)。
 
 常见问题：
 
@@ -318,14 +336,14 @@ sudo make services-smoke
 | TCP readiness 失败 | 容器未启动或角色地址冲突；确认先 `docker compose up -d`，且基址避开动态池与 gateway |
 | `auto` / `tag:` 解析失败 | `higgs route ipam mine` 中同族 assignment 数量不等于 1，或 assignment 已失效 |
 | endpoint ACL apply 报错 | host firewall instance 未启用或不是 `managed` 模式，或 backend 不可用；`higgs firewall endpoint list` 查看现状 |
-| 服务已发布但 mesh 内不可达 | shared 路由是否已 announce（`higgs debug routing routes` 方向）、host 聚合路由与 Docker connected route 的优先级、回程 static upstream |
-| 修改 `trusted_host_interfaces` 后不生效 | Docker bridge driver option 不能原地更新；停止服务、删除旧 network 后重新 `up` |
+| 服务已发布但 mesh 内不可达 | Docker 是否为 28+，服务地址族是否为 `nat-unprotected`，shared 路由是否已 announce（`higgs debug routing routes` 方向）、host 聚合路由与 Docker connected route 的优先级、回程 static upstream |
+| 修改 bridge driver option 后不生效 | Docker bridge driver option 不能原地更新；停止服务、删除旧 network 后重新 `up` |
 
 ---
 
 ## 8. 已知限制
 
-- TCP 就绪检查只说明地址可达、端口在监听，不验证 SOCKS5 握手、DNS 或真实代理出口。
+- TCP 就绪检查只说明两个角色的地址可达、端口在监听，不验证 SOCKS5 握手、UDP ASSOCIATE、DNS 或真实代理出口。
 - 当前只有固定的 `socks5` 一套服务；通用多服务 record 类型没有实现。
 - 客户端 service selection / health policy 与应用层 source-routing relay 不属于本数据面，按产品需求作为独立后续项目评估。
 - `published.json`/`resolved.json` 是本机状态锁，不进入 gossip；多节点部署同一 Anycast 服务时各节点独立执行 publish/withdraw。

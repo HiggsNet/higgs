@@ -15,12 +15,17 @@ import (
 	higgsservice "github.com/Catofes/higgs/pkg/service"
 )
 
-func applyEndpointACL(name, destination, protocol string, port uint16, selectors []string) error {
+const (
+	endpointACLScopePort = "port"
+	endpointACLScopeIP   = "ip"
+)
+
+func applyEndpointACL(name, destination, scope, protocol string, port uint16, selectors []string) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	acl, err := validateEndpointACL(endpointACL{Name: name, Destination: destination, Protocol: protocol, Port: port, Selectors: selectors})
+	acl, err := validateEndpointACL(endpointACL{Name: name, Destination: destination, Scope: scope, Protocol: protocol, Port: port, Selectors: selectors})
 	if err != nil {
 		return err
 	}
@@ -66,6 +71,7 @@ func listEndpointACLs() error {
 
 func validateEndpointACL(acl endpointACL) (endpointACL, error) {
 	acl.Name = strings.TrimSpace(acl.Name)
+	acl.Scope = strings.ToLower(strings.TrimSpace(acl.Scope))
 	acl.Protocol = strings.ToLower(strings.TrimSpace(acl.Protocol))
 	if _, err := higgsservice.NormalizeID(acl.Name); err != nil {
 		return endpointACL{}, fmt.Errorf("endpoint ACL name: %w", err)
@@ -75,11 +81,23 @@ func validateEndpointACL(acl endpointACL) (endpointACL, error) {
 		return endpointACL{}, fmt.Errorf("endpoint ACL destination: %w", err)
 	}
 	acl.Destination = address.Unmap().String()
-	if acl.Protocol != firewall.ProtoTCP && acl.Protocol != firewall.ProtoUDP {
-		return endpointACL{}, errors.New("endpoint ACL protocol must be tcp or udp")
+	if acl.Scope == "" {
+		acl.Scope = endpointACLScopePort
 	}
-	if acl.Port == 0 {
-		return endpointACL{}, errors.New("endpoint ACL port is required")
+	switch acl.Scope {
+	case endpointACLScopeIP:
+		if acl.Protocol != "" || acl.Port != 0 {
+			return endpointACL{}, errors.New("IP-scope endpoint ACL must not specify protocol or port")
+		}
+	case endpointACLScopePort:
+		if acl.Protocol != firewall.ProtoTCP && acl.Protocol != firewall.ProtoUDP {
+			return endpointACL{}, errors.New("port-scope endpoint ACL protocol must be tcp or udp")
+		}
+		if acl.Port == 0 {
+			return endpointACL{}, errors.New("port-scope endpoint ACL port is required")
+		}
+	default:
+		return endpointACL{}, errors.New("endpoint ACL scope must be ip or port")
 	}
 	if len(acl.Selectors) == 0 {
 		return endpointACL{}, errors.New("endpoint ACL requires at least one selector; omit the ACL for an unrestricted endpoint")

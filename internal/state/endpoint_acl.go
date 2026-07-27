@@ -6,7 +6,8 @@ package state
 type EndpointACL struct {
 	Name        string   `json:"name"`
 	Destination string   `json:"destination"`
-	Protocol    string   `json:"protocol"`
-	Port        uint16   `json:"port"`
+	Scope       string   `json:"scope,omitempty"`
+	Protocol    string   `json:"protocol,omitempty"`
+	Port        uint16   `json:"port,omitempty"`
 	Selectors   []string `json:"selectors"`
 }

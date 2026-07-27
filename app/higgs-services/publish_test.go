@@ -33,6 +33,9 @@ func TestPublishResolvedServiceOrdersReadinessACLRouteAndRecord(t *testing.T) {
 			Port:       uint16(listener.Addr().(*net.TCPAddr).Port),
 			ConfigHash: "test-config",
 			AllowZones: []string{"*.catofes."},
+			Networks: map[string]resolvedRoleAddrs{
+				"cn": {SOCKS: "127.0.0.1", H2: "127.0.0.1"},
+			},
 			Endpoints: []resolvedEndpoint{{
 				Network: "cn", Region: "cn", Address: "127.0.0.1",
 				Port: uint16(listener.Addr().(*net.TCPAddr).Port), Assignment: "10.42.0.0/24", Shared: true,
@@ -55,7 +58,8 @@ func TestPublishResolvedServiceOrdersReadinessACLRouteAndRecord(t *testing.T) {
 	}
 	lines := strings.Fields(strings.TrimSpace(string(data)))
 	want := []string{
-		"firewall endpoint apply socks5-cn --destination 127.0.0.1 --protocol tcp --port " + fmt.Sprint(listener.Addr().(*net.TCPAddr).Port) + " --allow-zone *.catofes.",
+		"firewall endpoint apply socks5-cn --destination 127.0.0.1 --scope ip --allow-zone *.catofes.",
+		"firewall endpoint apply h2-cn --destination 127.0.0.1 --scope ip --allow-zone *.catofes.",
 		"route announce node-a.catofes. 10.42.0.0/24",
 		"service publish --endpoint cn,127.0.0.1," + fmt.Sprint(listener.Addr().(*net.TCPAddr).Port),
 	}
@@ -76,7 +80,10 @@ func TestPublishResolvedServiceDoesNotPublishWhenEndpointIsNotReady(t *testing.T
 		SOCKS5: resolvedSOCKS5{
 			Port:       1,
 			ConfigHash: "test-config",
-			Endpoints:  []resolvedEndpoint{{Network: "main", Region: "local", Address: "127.0.0.1", Port: 1, Assignment: "10.42.0.0/24"}},
+			Networks: map[string]resolvedRoleAddrs{
+				"main": {SOCKS: "127.0.0.1", H2: "127.0.0.1"},
+			},
+			Endpoints: []resolvedEndpoint{{Network: "main", Region: "local", Address: "127.0.0.1", Port: 1, Assignment: "10.42.0.0/24"}},
 		},
 	}
 	if err := writeSOCKS5Lock(filepath.Join(outputDir, "socks5", "resolved.json"), renderedSOCKS5Lock{resolvedSOCKS5: manifest.SOCKS5, ManagedZone: manifest.ManagedZone}); err != nil {

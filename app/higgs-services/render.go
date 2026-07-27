@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,8 +66,9 @@ type gostService struct {
 }
 
 type gostPluginType struct {
-	Type string    `yaml:"type"`
-	Auth *gostAuth `yaml:"auth,omitempty"`
+	Type     string         `yaml:"type"`
+	Auth     *gostAuth      `yaml:"auth,omitempty"`
+	Metadata map[string]any `yaml:"metadata,omitempty"`
 }
 
 type gostAuth struct {
@@ -117,6 +119,7 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 	}
 	for _, id := range sortedKeys(manifest.Networks) {
 		network := manifest.Networks[id]
+		serviceAddress := publishedServiceAddress(manifest.SOCKS5, id)
 		configs := make([]composeNetworkIPAMConfig, 0, 2)
 		if network.IPv4 != nil {
 			configs = append(configs, composeNetworkIPAMConfig{Subnet: network.IPv4.Subnet, IPRange: network.IPv4.IPRange, Gateway: network.IPv4.Gateway})
@@ -126,12 +129,21 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 		}
 		file.Networks[id] = composeNetwork{
 			Name: network.Name, Driver: "bridge", EnableIPv6: network.IPv6 != nil,
-			DriverOpts: composeBridgeDriverOpts(network.TrustedHostInterfaces),
+			DriverOpts: composeBridgeDriverOpts(network.TrustedHostInterfaces, serviceAddress),
 			IPAM:       &composeNetworkIPAM{Driver: "default", Config: configs},
 		}
 		file.Services["owner"].Networks[id] = composeServiceAttachment{}
 	}
 	return writeYAML(filepath.Join(manifest.OutputDir, "networks", "docker-compose.yml"), file)
+}
+
+func publishedServiceAddress(service resolvedSOCKS5, network string) string {
+	for _, endpoint := range service.Endpoints {
+		if endpoint.Network == network {
+			return endpoint.Address
+		}
+	}
+	return ""
 }
 
 func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) error {
@@ -202,6 +214,9 @@ func renderGOSTConfig(path, name, handler string, port uint16, resolver resolver
 		nameservers = append(nameservers, nameserver)
 	}
 	handlerConfig := gostPluginType{Type: handler}
+	if handler == "socks5" {
+		handlerConfig.Metadata = map[string]any{"udp": true, "udpBufferSize": 65535}
+	}
 	if auth != nil {
 		handlerConfig.Auth = &gostAuth{Username: auth.Username, Password: auth.Password}
 	}
@@ -215,11 +230,22 @@ func renderGOSTConfig(path, name, handler string, port uint16, resolver resolver
 	return writeYAMLMode(path, config, 0o600)
 }
 
-func composeBridgeDriverOpts(interfaces []string) map[string]string {
-	if len(interfaces) == 0 {
+func composeBridgeDriverOpts(interfaces []string, serviceAddress string) map[string]string {
+	options := map[string]string{}
+	if len(interfaces) > 0 {
+		options["com.docker.network.bridge.trusted_host_interfaces"] = strings.Join(interfaces, ":")
+	}
+	if address, err := netip.ParseAddr(serviceAddress); err == nil {
+		family := "ipv6"
+		if address.Is4() {
+			family = "ipv4"
+		}
+		options["com.docker.network.bridge.gateway_mode_"+family] = "nat-unprotected"
+	}
+	if len(options) == 0 {
 		return nil
 	}
-	return map[string]string{"com.docker.network.bridge.trusted_host_interfaces": strings.Join(interfaces, ":")}
+	return options
 }
 
 func composeLoopbackPorts(port uint16, hasIPv4, hasIPv6 bool) []string {

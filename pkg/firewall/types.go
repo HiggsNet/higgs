@@ -41,7 +41,8 @@ type LocalService struct {
 }
 
 // EndpointService is a forwarded service endpoint, normally a container on a
-// host Docker bridge. Sources are already resolved from trusted Zone state.
+// host Docker bridge. Empty Proto and zero Port make the rule IP-scoped.
+// Sources are already resolved from trusted Zone state.
 type EndpointService struct {
 	Name        string
 	Proto       string

@@ -52,6 +52,27 @@ func TestBuildDesiredStateHostEndpointACLEmptySourcesOnlyDrops(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredStateHostEndpointACLIPScope(t *testing.T) {
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "host", NetNS: "host", IsHost: true, Mode: ModeManaged,
+		EndpointServices: []EndpointService{{
+			Name: "egress-ip", Destination: netip.MustParseAddr("fd42::20"),
+			Sources: []netip.Prefix{netip.MustParsePrefix("fd10::/64")},
+		}},
+	}, FirewallPolicyInput{})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	if len(desired.ForwardRules) != 2 {
+		t.Fatalf("forward rules = %+v", desired.ForwardRules)
+	}
+	for _, rule := range desired.ForwardRules {
+		if rule.Proto != "" || rule.Port != 0 {
+			t.Fatalf("IP-scope rule contains protocol/port: %+v", rule)
+		}
+	}
+}
+
 func TestBuildDesiredState_OverlayInput(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID:                "higgstesth2",

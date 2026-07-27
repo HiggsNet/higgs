@@ -113,18 +113,19 @@ func cmdFirewall() *cli.Command {
 				Name: "endpoint", Usage: "Manage forwarded endpoint ACLs",
 				Commands: []*cli.Command{
 					{
-						Name: "apply", UsageText: "higgs firewall endpoint apply <name> --destination <ip> --protocol <tcp|udp> --port <port> --allow-zone <selector>...",
+						Name: "apply", UsageText: "higgs firewall endpoint apply <name> --destination <ip> [--scope ip | --protocol <tcp|udp> --port <port>] --allow-zone <selector>...",
 						Flags: []cli.Flag{
 							&cli.StringFlag{Name: "destination", Required: true},
-							&cli.StringFlag{Name: "protocol", Required: true},
-							&cli.UintFlag{Name: "port", Required: true},
+							&cli.StringFlag{Name: "scope", Value: endpointACLScopePort},
+							&cli.StringFlag{Name: "protocol"},
+							&cli.UintFlag{Name: "port"},
 							&cli.StringSliceFlag{Name: "allow-zone", Required: true},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 1 || cmd.Uint("port") > 65535 {
 								return cli.Exit("invalid endpoint ACL arguments", 1)
 							}
-							return applyEndpointACL(cmd.Args().First(), cmd.String("destination"), cmd.String("protocol"), uint16(cmd.Uint("port")), cmd.StringSlice("allow-zone"))
+							return applyEndpointACL(cmd.Args().First(), cmd.String("destination"), cmd.String("scope"), cmd.String("protocol"), uint16(cmd.Uint("port")), cmd.StringSlice("allow-zone"))
 						},
 					},
 					{

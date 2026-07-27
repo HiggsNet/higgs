@@ -62,6 +62,9 @@ func run(args []string) error {
 			if err := runHiggs(*higgsBinary, "firewall", "endpoint", "remove", endpointACLName(endpoint.Network)); err != nil {
 				return err
 			}
+			if err := runHiggs(*higgsBinary, "firewall", "endpoint", "remove", httpEndpointACLName(endpoint.Network)); err != nil {
+				return err
+			}
 		}
 		lock.Endpoints = nil
 		return writeSOCKS5Lock(filepath.Join(manifest.OutputDir, "socks5", "published.json"), lock)
@@ -128,24 +131,48 @@ func publishResolvedService(higgsBinary string, manifest resolvedManifest) error
 		return errors.New("socks5 runtime assignment or config changed; run render again")
 	}
 	for _, endpoint := range service.Endpoints {
-		connection, err := net.DialTimeout("tcp", net.JoinHostPort(endpoint.Address, fmt.Sprint(endpoint.Port)), 3*time.Second)
-		if err != nil {
-			return fmt.Errorf("socks5 endpoint %s TCP readiness check failed: %w", endpoint.Network, err)
+		roles, ok := service.Networks[endpoint.Network]
+		if !ok {
+			return fmt.Errorf("socks5 endpoint %s has no rendered role addresses", endpoint.Network)
 		}
-		connection.Close()
+		for _, target := range []struct {
+			role    string
+			address string
+		}{
+			{role: "socks", address: roles.SOCKS},
+			{role: "http", address: roles.H2},
+		} {
+			connection, err := net.DialTimeout("tcp", net.JoinHostPort(target.address, fmt.Sprint(endpoint.Port)), 3*time.Second)
+			if err != nil {
+				return fmt.Errorf("socks5 endpoint %s %s TCP readiness check failed: %w", endpoint.Network, target.role, err)
+			}
+			connection.Close()
+		}
 	}
 	for _, endpoint := range service.Endpoints {
-		aclName := endpointACLName(endpoint.Network)
+		roles := service.Networks[endpoint.Network]
 		if len(service.AllowZones) > 0 {
-			args := []string{"firewall", "endpoint", "apply", aclName, "--destination", endpoint.Address, "--protocol", "tcp", "--port", fmt.Sprint(endpoint.Port)}
-			for _, selector := range service.AllowZones {
-				args = append(args, "--allow-zone", selector)
+			for _, acl := range []struct {
+				name        string
+				destination string
+			}{
+				{name: endpointACLName(endpoint.Network), destination: roles.SOCKS},
+				{name: httpEndpointACLName(endpoint.Network), destination: roles.H2},
+			} {
+				args := []string{"firewall", "endpoint", "apply", acl.name, "--destination", acl.destination, "--scope", "ip"}
+				for _, selector := range service.AllowZones {
+					args = append(args, "--allow-zone", selector)
+				}
+				if err := runHiggs(higgsBinary, args...); err != nil {
+					return fmt.Errorf("apply endpoint ACL before publish: %w", err)
+				}
 			}
-			if err := runHiggs(higgsBinary, args...); err != nil {
-				return fmt.Errorf("apply endpoint ACL before publish: %w", err)
+		} else {
+			for _, aclName := range []string{endpointACLName(endpoint.Network), httpEndpointACLName(endpoint.Network)} {
+				if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", aclName); err != nil {
+					return fmt.Errorf("remove stale endpoint ACL before unrestricted publish: %w", err)
+				}
 			}
-		} else if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", aclName); err != nil {
-			return fmt.Errorf("remove stale endpoint ACL before unrestricted publish: %w", err)
 		}
 		if serviceControlsRoute(endpoint) {
 			if err := runHiggs(higgsBinary, "route", "announce", manifest.ManagedZone, endpoint.Assignment); err != nil {
@@ -172,6 +199,9 @@ func publishResolvedService(higgsBinary string, manifest resolvedManifest) error
 			}
 		}
 		if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", endpointACLName(old.Network)); err != nil {
+			return err
+		}
+		if err := runHiggs(higgsBinary, "firewall", "endpoint", "remove", httpEndpointACLName(old.Network)); err != nil {
 			return err
 		}
 	}
@@ -232,6 +262,8 @@ func endpointStillPublished(old resolvedEndpoint, current []resolvedEndpoint) bo
 func serviceControlsRoute(endpoint resolvedEndpoint) bool { return endpoint.Shared }
 
 func endpointACLName(network string) string { return socks5ServiceName + "-" + network }
+
+func httpEndpointACLName(network string) string { return "h2-" + network }
 
 func runHiggs(binary string, args ...string) error {
 	cmd := exec.Command(binary, args...)
