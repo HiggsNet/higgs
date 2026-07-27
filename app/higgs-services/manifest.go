@@ -21,11 +21,12 @@ const (
 )
 
 type manifest struct {
-	Version   int                      `yaml:"version"`
-	OutputDir string                   `yaml:"output_dir,omitempty"`
-	Images    imageConfig              `yaml:"images,omitempty"`
-	Networks  map[string]networkConfig `yaml:"networks"`
-	SOCKS5    socks5Config             `yaml:"socks5"`
+	Version         int                      `yaml:"version"`
+	OutputDir       string                   `yaml:"output_dir,omitempty"`
+	Images          imageConfig              `yaml:"images,omitempty"`
+	NetworkDefaults networkDefaults          `yaml:"network_defaults,omitempty"`
+	Networks        map[string]networkConfig `yaml:"networks"`
+	SOCKS5          socks5Config             `yaml:"socks5"`
 }
 
 type imageConfig struct {
@@ -36,6 +37,10 @@ type imageConfig struct {
 type networkConfig struct {
 	IPv4                  string   `yaml:"ipv4,omitempty"`
 	IPv6                  string   `yaml:"ipv6,omitempty"`
+	TrustedHostInterfaces []string `yaml:"trusted_host_interfaces,omitempty"`
+}
+
+type networkDefaults struct {
 	TrustedHostInterfaces []string `yaml:"trusted_host_interfaces,omitempty"`
 }
 
@@ -190,7 +195,11 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		if id != name {
 			return resolvedManifest{}, fmt.Errorf("network name %q is not canonical; use %q", name, id)
 		}
-		trustedInterfaces, err := normalizeTrustedHostInterfaces(configured.TrustedHostInterfaces)
+		trustedInterfaceConfig := configured.TrustedHostInterfaces
+		if len(trustedInterfaceConfig) == 0 {
+			trustedInterfaceConfig = value.NetworkDefaults.TrustedHostInterfaces
+		}
+		trustedInterfaces, err := normalizeTrustedHostInterfaces(trustedInterfaceConfig)
 		if err != nil {
 			return resolvedManifest{}, fmt.Errorf("network %s trusted_host_interfaces: %w", name, err)
 		}

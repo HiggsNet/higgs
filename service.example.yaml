@@ -2,10 +2,19 @@
 # higgs-services renderer, not to the Higgs daemon.
 version: 1
 
+# Defaults inherited by every network. A network-level value overrides this
+# list. The default upstream veth's host-side name is hgv2mesh; use the actual
+# stable host ingress interface (for example hgs0 when the overlay itself runs
+# in the host namespace).
+# network_defaults:
+#   trusted_host_interfaces: [hgv2mesh]
+
 networks:
   main:
     ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
     ipv6: "auto;::/112;::100/120;::1"
+    # Optional per-network override:
+    # trusted_host_interfaces: [hgv2mesh]
   # The main non-shared assignment is normally kept reachable by
   # config.yaml: ipam.announce: [non-shared]. higgs-services does not own it.
   # Shared Anycast networks use stable IPAM tags. The local main network does

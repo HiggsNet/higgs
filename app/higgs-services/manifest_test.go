@@ -46,7 +46,7 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		t.Fatalf("rendered lock = %+v", lock)
 	}
 	networkCompose := readTestFile(t, filepath.Join(output, "networks", "docker-compose.yml"))
-	for _, want := range []string{"name: higgs-main", "fd42:1::/112", "driver_opts:", "com.docker.network.bridge.trusted_host_interfaces: hgs0:hgs1"} {
+	for _, want := range []string{"services:", "owner:", "scale: 0", "name: higgs-main", "fd42:1::/112", "driver_opts:", "com.docker.network.bridge.trusted_host_interfaces: hgs0:hgs1"} {
 		if !strings.Contains(networkCompose, want) {
 			t.Fatalf("network compose missing %q:\n%s", want, networkCompose)
 		}
@@ -70,6 +70,34 @@ func TestResolveManifestRejectsInvalidTrustedHostInterface(t *testing.T) {
 	_, err := resolveManifest(configured, []runtimeAssignment{{Prefix: "fd42:1::/64"}})
 	if err == nil || !strings.Contains(err.Error(), "trusted_host_interfaces") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResolveManifestAppliesAndOverridesNetworkDefaults(t *testing.T) {
+	configured := manifest{
+		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		NetworkDefaults: networkDefaults{TrustedHostInterfaces: []string{"hgv2mesh"}},
+		Networks: map[string]networkConfig{
+			"main": {IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1"},
+			"cn": {
+				IPv6:                  "assignment:fd42:2::/64;::/112;::100/120;::1",
+				TrustedHostInterfaces: []string{"hgs0"},
+			},
+		},
+		SOCKS5: socks5Config{
+			Publish:  publishConfig{"main": "local", "cn": "cn"},
+			Networks: map[string]string{"main": "::20", "cn": "::20"},
+		},
+	}
+	resolved, err := resolveManifest(configured, []runtimeAssignment{{Prefix: "fd42:1::/64"}, {Prefix: "fd42:2::/64"}})
+	if err != nil {
+		t.Fatalf("resolveManifest: %v", err)
+	}
+	if got := strings.Join(resolved.Networks["main"].TrustedHostInterfaces, ","); got != "hgv2mesh" {
+		t.Fatalf("main trusted interfaces = %q, want inherited hgv2mesh", got)
+	}
+	if got := strings.Join(resolved.Networks["cn"].TrustedHostInterfaces, ","); got != "hgs0" {
+		t.Fatalf("cn trusted interfaces = %q, want override hgs0", got)
 	}
 }
 

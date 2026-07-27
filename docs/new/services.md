@@ -118,12 +118,14 @@ higgs route ipam revoke assignment catofes. 2a0d:2905:0:4::/96 --to node-a.catof
 ```yaml
 version: 1
 
+network_defaults:
+  # Docker direct-routing 的可信 host 侧 overlay/upstream 入接口。
+  trusted_host_interfaces: [hgv2mesh]
+
 networks:
   node:
     ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
     ipv6: "auto;::/112;::100/120;::1"
-    # Docker direct-routing 的可信 overlay 入接口；按本机实际接口填写。
-    trusted_host_interfaces: [hgs0]
   cn:
     ipv6: "tag:socks5.cn;::/112;::100/120;::1"
   asia:
@@ -142,7 +144,8 @@ socks5:
   #   - clients.catofes.
 ```
 
-- `networks`：容器实际连接的 Docker network。`trusted_host_interfaces` 可选，生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option；接口名以本机实际、稳定的 XFRM/WireGuard/veth ingress 为准。
+- `network_defaults.trusted_host_interfaces`：可选的全局 Docker direct-routing 可信入接口，应用到每个 network；接口名以本机实际、稳定的 host 侧 XFRM/WireGuard/veth ingress 为准。
+- `networks`：容器实际连接的 Docker network。单个 network 也可配置 `trusted_host_interfaces`，配置后替换全局默认值；生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option。
 - `socks5.networks`：每个已连接 network 的服务相对基址。
 - `publish`：`network: region` 映射，只发布列出的 network；本地和 Anycast endpoint 可以同时发布任意多个。为兼容旧配置，标量形式 `publish: main` 和顶层 `region` 仍可读取，新配置应使用映射形式。
 - `allow_zones`：可选的 Zone selector 列表，见第 6 节。
@@ -204,7 +207,7 @@ higgs-services render     # 生成全部 artifact
   socks5/published.json           # publish 锁：上次实际发布状态
 ```
 
-- Docker network 名自动为 `higgs-<network>`；Compose project name 固定为 `higgs-networks` 和 `higgs-socks5`，无需也无法在 manifest 中配置。
+- Docker network 名自动为 `higgs-<network>`；Compose project name 固定为 `higgs-networks` 和 `higgs-socks5`，无需也无法在 manifest 中配置。`higgs-networks` 内含一个连接全部 network、`scale: 0` 的 `owner` 服务，使纯网络项目可以通过标准 `docker compose up -d` 创建；它不会启动占位容器。
 - SOCKS5 Compose 引用 network 为 `external: true`，因此必须先起 networks project。
 - 服务端口同时发布到 `127.0.0.1` / `[::1]` loopback：这只是让 Docker 将端口标记为 direct-routing 可访问，overlay 访问仍使用容器 endpoint IP。
 - Docker bridge 的 driver option 不能原地更新。修改 `trusted_host_interfaces` 后，先停止依赖该 network 的服务，删除旧 Docker network，再重新执行 Compose 命令。

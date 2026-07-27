@@ -38,7 +38,8 @@ type composeNetworkIPAMConfig struct {
 
 type composeService struct {
 	Image     string                              `yaml:"image"`
-	Restart   string                              `yaml:"restart"`
+	Restart   string                              `yaml:"restart,omitempty"`
+	Scale     *int                                `yaml:"scale,omitempty"`
 	Networks  map[string]composeServiceAttachment `yaml:"networks"`
 	Ports     []string                            `yaml:"ports,omitempty"`
 	Command   []string                            `yaml:"command,omitempty"`
@@ -66,7 +67,21 @@ func renderArtifacts(manifest resolvedManifest) error {
 }
 
 func renderNetworkCompose(manifest resolvedManifest) error {
-	file := composeFile{Name: "higgs-networks", Networks: map[string]composeNetwork{}}
+	scaleZero := 0
+	// Compose rejects projects without a selected service before creating their
+	// networks. A scale-zero owner keeps the networks under an independent
+	// Compose lifecycle without leaving a placeholder container running.
+	file := composeFile{
+		Name:     "higgs-networks",
+		Networks: map[string]composeNetwork{},
+		Services: map[string]composeService{
+			"owner": {
+				Image:    manifest.Images.Gost,
+				Scale:    &scaleZero,
+				Networks: map[string]composeServiceAttachment{},
+			},
+		},
+	}
 	for _, id := range sortedKeys(manifest.Networks) {
 		network := manifest.Networks[id]
 		configs := make([]composeNetworkIPAMConfig, 0, 2)
@@ -81,6 +96,7 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 			DriverOpts: composeBridgeDriverOpts(network.TrustedHostInterfaces),
 			IPAM:       &composeNetworkIPAM{Driver: "default", Config: configs},
 		}
+		file.Services["owner"].Networks[id] = composeServiceAttachment{}
 	}
 	return writeYAML(filepath.Join(manifest.OutputDir, "networks", "docker-compose.yml"), file)
 }
