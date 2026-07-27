@@ -37,19 +37,46 @@ type composeNetworkIPAMConfig struct {
 }
 
 type composeService struct {
-	Image     string                              `yaml:"image"`
-	Restart   string                              `yaml:"restart,omitempty"`
-	Scale     *int                                `yaml:"scale,omitempty"`
-	Networks  map[string]composeServiceAttachment `yaml:"networks"`
-	Ports     []string                            `yaml:"ports,omitempty"`
-	Command   []string                            `yaml:"command,omitempty"`
-	Volumes   []string                            `yaml:"volumes,omitempty"`
-	DependsOn []string                            `yaml:"depends_on,omitempty"`
+	Image    string                              `yaml:"image"`
+	Restart  string                              `yaml:"restart,omitempty"`
+	Scale    *int                                `yaml:"scale,omitempty"`
+	Networks map[string]composeServiceAttachment `yaml:"networks"`
+	Ports    []string                            `yaml:"ports,omitempty"`
+	Command  []string                            `yaml:"command,omitempty"`
+	Volumes  []string                            `yaml:"volumes,omitempty"`
 }
 
 type composeServiceAttachment struct {
 	IPv4Address string `yaml:"ipv4_address,omitempty"`
 	IPv6Address string `yaml:"ipv6_address,omitempty"`
+}
+
+type gostConfig struct {
+	Services  []gostService  `yaml:"services"`
+	Resolvers []gostResolver `yaml:"resolvers"`
+}
+
+type gostService struct {
+	Name     string         `yaml:"name"`
+	Addr     string         `yaml:"addr"`
+	Resolver string         `yaml:"resolver"`
+	Handler  gostPluginType `yaml:"handler"`
+	Listener gostPluginType `yaml:"listener"`
+}
+
+type gostPluginType struct {
+	Type string `yaml:"type"`
+}
+
+type gostResolver struct {
+	Name        string           `yaml:"name"`
+	Nameservers []gostNameserver `yaml:"nameservers"`
+}
+
+type gostNameserver struct {
+	Addr   string `yaml:"addr"`
+	Prefer string `yaml:"prefer,omitempty"`
+	Only   string `yaml:"only,omitempty"`
 }
 
 func renderArtifacts(manifest resolvedManifest) error {
@@ -104,7 +131,6 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) error {
 	networks := map[string]composeNetwork{}
 	socksNetworks := map[string]composeServiceAttachment{}
-	dnsNetworks := map[string]composeServiceAttachment{}
 	h2Networks := map[string]composeServiceAttachment{}
 	var hasIPv4, hasIPv6 bool
 	for _, id := range sortedKeys(service.Networks) {
@@ -112,7 +138,6 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 		roles := service.Networks[id]
 		networks[id] = composeNetwork{Name: network.Name, External: true}
 		socksNetworks[id] = attachmentForAddress(roles.SOCKS)
-		dnsNetworks[id] = attachmentForAddress(roles.DNS)
 		h2Networks[id] = attachmentForAddress(roles.H2)
 		hasIPv4 = hasIPv4 || network.IPv4 != nil
 		hasIPv6 = hasIPv6 || network.IPv6 != nil
@@ -124,16 +149,13 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 		Services: map[string]composeService{
 			"socks": {
 				Image: manifest.Images.Gost, Restart: "unless-stopped", Networks: socksNetworks,
-				Ports:   ports,
-				Command: []string{"-L", fmt.Sprintf("socks5://[::]:%d?dns=dns:53", service.Port)}, DependsOn: []string{"dns"},
-			},
-			"dns": {
-				Image: manifest.Images.SmartDNS, Restart: "unless-stopped", Networks: dnsNetworks,
-				Volumes: []string{"./config/smartdns.conf:/etc/smartdns/smartdns.conf:ro"},
+				Ports: ports, Command: []string{"-C", "/etc/gost/gost.yaml"},
+				Volumes: []string{"./config/socks.yaml:/etc/gost/gost.yaml:ro"},
 			},
 			"h2": {
 				Image: manifest.Images.Gost, Restart: "unless-stopped", Networks: h2Networks,
-				Command: []string{"-L", fmt.Sprintf("http://[::]:%d?dns=dns:53", service.Port)}, DependsOn: []string{"dns"},
+				Command: []string{"-C", "/etc/gost/gost.yaml"},
+				Volumes: []string{"./config/h2.yaml:/etc/gost/gost.yaml:ro"},
 			},
 		},
 	}
@@ -141,7 +163,13 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 	if err := writeYAML(filepath.Join(dir, "docker-compose.yml"), file); err != nil {
 		return err
 	}
-	if err := atomicWrite(filepath.Join(dir, "config", "smartdns.conf"), []byte("bind [::]:53\ncache-size 4096\nserver 8.8.8.8\nserver 1.1.1.1\ndualstack-ip-selection yes\n"), 0o644); err != nil {
+	if err := renderGOSTConfig(filepath.Join(dir, "config", "socks.yaml"), "socks", "socks5", service.Port, service.Resolver); err != nil {
+		return err
+	}
+	if err := renderGOSTConfig(filepath.Join(dir, "config", "h2.yaml"), "h2", "http", service.Port, service.Resolver); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(dir, "config", "smartdns.conf")); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	data, err := json.MarshalIndent(renderedSOCKS5Lock{resolvedSOCKS5: service, ManagedZone: manifest.ManagedZone}, "", "  ")
@@ -149,6 +177,32 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 		return err
 	}
 	return atomicWrite(filepath.Join(dir, "resolved.json"), append(data, '\n'), 0o644)
+}
+
+func renderGOSTConfig(path, name, handler string, port uint16, resolver resolverConfig) error {
+	nameservers := make([]gostNameserver, 0, len(resolver.Servers))
+	for _, server := range resolver.Servers {
+		nameserver := gostNameserver{Addr: server}
+		switch resolver.Mode {
+		case "ipv4_first":
+			nameserver.Prefer = "ipv4"
+		case "ipv6_first":
+			nameserver.Prefer = "ipv6"
+		case "ipv4_only":
+			nameserver.Only = "ipv4"
+		case "ipv6_only":
+			nameserver.Only = "ipv6"
+		}
+		nameservers = append(nameservers, nameserver)
+	}
+	config := gostConfig{
+		Services: []gostService{{
+			Name: name, Addr: fmt.Sprintf("[::]:%d", port), Resolver: "service-resolver",
+			Handler: gostPluginType{Type: handler}, Listener: gostPluginType{Type: "tcp"},
+		}},
+		Resolvers: []gostResolver{{Name: "service-resolver", Nameservers: nameservers}},
+	}
+	return writeYAML(path, config)
 }
 
 func composeBridgeDriverOpts(interfaces []string) map[string]string {

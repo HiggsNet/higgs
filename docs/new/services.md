@@ -6,7 +6,7 @@
 
 Service 发布把“可信网络状态”和“容器部署”拆开：Higgs daemon 管理 IPAM、路由宣告、签名 service record 和动态防火墙授权，但**不理解镜像、容器或 Compose，也不会调用 Docker API**；独立程序 `higgs-services` 读取 `/etc/higgs/service.yaml`，从 Higgs 运行态解析地址并生成 Docker Compose artifact，再编排 ACL、route announcement 和 service record 的发布顺序。
 
-当前只提供一套固定名为 `socks5` 的服务，由 `socks`、`dns`、`h2` 三个容器组成，不需要实例名、Compose project name 或 container name。
+当前只提供一套固定名为 `socks5` 的服务，由 `socks`、`h2` 两个 GOST v3 容器组成，不需要实例名、Compose project name 或 container name。域名解析由各容器内的 GOST resolver 完成，默认优先返回 IPv4。
 
 相关文档：IPAM assignment 与路由授权见 [routing.md](routing.md)，endpoint ACL 的规则生成见 [firewall.md](firewall.md)，`ipam.announce` 配置见 [config.md](config.md)，验收入口见 [testing.md](testing.md)。
 
@@ -32,7 +32,7 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 | 角色 | 做什么 | 不做什么 |
 |---|---|---|
 | `higgs` daemon / CLI | 保存普通和 shared Anycast assignment；校验服务 endpoint 属于当前 Zone 的 active assignment；显式宣告或撤销整个 assignment prefix；签名、发布和撤销固定的 `services/socks5` record；根据 Zone selector 动态维护 host FORWARD endpoint ACL | 不理解镜像、容器、Compose，不调用 Docker API |
-| `higgs-services` | 读取 service manifest；从 `higgs route ipam mine` 解析本地 `auto` 和 shared assignment tag；规划多 network 下三个容器的地址；生成 Compose、SmartDNS 配置和状态锁文件；对待发布 endpoint 做 TCP 就绪检查；编排 ACL、route announcement 和 service record 的发布/撤销顺序 | 不启动容器、不管理容器生命周期 |
+| `higgs-services` | 读取 service manifest；从 `higgs route ipam mine` 解析本地 `auto` 和 shared assignment tag；规划多 network 下两个容器的地址；生成 Compose、GOST 配置和状态锁文件；对待发布 endpoint 做 TCP 就绪检查；编排 ACL、route announcement 和 service record 的发布/撤销顺序 | 不启动容器、不管理容器生命周期 |
 | 管理员 | 执行 `docker compose up/down/pull`；负责非 shared assignment 的路由（通常经 `ipam.announce`） | — |
 
 `render` 只生成 artifact；`publish` 也不会启动容器。容器必须先由管理员通过 Compose 拉起，`publish` 的 TCP 就绪检查才有意义。
@@ -42,7 +42,7 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 | 位置 | 内容 |
 |---|---|
 | [`pkg/service`](../../pkg/service) | `service.socks5.v1` record 解析/校验/授权、Zone selector |
-| [`app/higgs-services`](../../app/higgs-services) | manifest 解析（`manifest.go`）、Compose/SmartDNS 渲染（`render.go`）、publish/withdraw 编排（`main.go`） |
+| [`app/higgs-services`](../../app/higgs-services) | manifest 解析（`manifest.go`）、Compose/GOST 渲染（`render.go`）、publish/withdraw 编排（`main.go`） |
 | [`app/higgs/service.go`](../../app/higgs/service.go) | `higgs service publish/withdraw`，record 签名提交 |
 | [`app/higgs/endpoint_acl.go`](../../app/higgs/endpoint_acl.go) | `higgs firewall endpoint` 命令与 daemon 侧 endpoint ACL 事件处理 |
 
@@ -140,6 +140,9 @@ socks5:
     node: local
     cn: cn
     asia: asia
+  resolver:
+    mode: ipv4_first
+    servers: [8.8.8.8, 1.1.1.1]
   # allow_zones:
   #   - clients.catofes.
 ```
@@ -148,9 +151,10 @@ socks5:
 - `networks`：容器实际连接的 Docker network。单个 network 也可配置 `trusted_host_interfaces`，配置后替换全局默认值；生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option。
 - `socks5.networks`：每个已连接 network 的服务相对基址。
 - `publish`：`network: region` 映射，只发布列出的 network；本地和 Anycast endpoint 可以同时发布任意多个。为兼容旧配置，标量形式 `publish: main` 和顶层 `region` 仍可读取，新配置应使用映射形式。
+- `resolver`：可选的 GOST v3 内置 resolver 配置。`mode` 默认为 `ipv4_first`，还可设为 `ipv6_first`、`ipv4_only`、`ipv6_only`；`servers` 默认为 `8.8.8.8`、`1.1.1.1`。`*_first` 只是偏好，偏好地址族无结果时仍可返回另一地址族；`*_only` 才是严格过滤。
 - `allow_zones`：可选的 Zone selector 列表，见第 6 节。
 - `output_dir`：artifact 根目录，默认 `/etc/higgs/services`。
-- `images`：通常省略。固定默认值为 `ginuerzh/gost:2.11.5` 和 `ghcr.io/higgsnet/smartdns:v1.0.4`，只有需要私有仓库或统一升级时才全局覆盖。
+- `images`：通常省略。固定默认值为稳定版 `gogost/gost:3.2.6`，只有需要私有仓库或统一升级时才全局覆盖。
 - `port`：SOCKS5 端口，默认 3128。
 
 manifest 解析使用 `KnownFields(true)`，未知字段直接报错；network 名必须是小写 canonical service ID。
@@ -172,13 +176,12 @@ IPv4 和 IPv6 使用相同格式：
 
 IPv6 assignment 来源允许后三段使用 `::` 开头的相对值。例如 assignment 为 `2a0d:2905:0:4::/96` 时，`::/112`、`::100/120`、`::1` 分别解析为该 `/96` 内的 Docker subnet、动态池和网关。
 
-Docker 可以在动态池中自动分配未指定地址；三个服务容器使用静态相对基址，并要求落在动态池之外。例如 `::20` 产生：
+Docker 可以在动态池中自动分配未指定地址；两个服务容器使用静态相对基址，并要求落在动态池之外。例如 `::20` 产生：
 
 | 角色 | 地址偏移 | 容器 |
 |---|---|---|
-| `socks` | 基址 +0 | gost，`socks5://` 监听 |
-| `dns` | 基址 +1 | SmartDNS |
-| `h2` | 基址 +2 | gost，`http://` 监听 |
+| `socks` | 基址 +0 | GOST v3，`socks5` handler |
+| `h2` | 基址 +1 | GOST v3，`http` handler |
 
 解析器会检查角色地址位于 Docker subnet 内，且不与 gateway 或动态池冲突；不同 network 的同族 subnet 不允许重叠。
 
@@ -200,8 +203,9 @@ higgs-services render     # 生成全部 artifact
 ```text
 /etc/higgs/services/
   networks/docker-compose.yml     # 全部 Docker network，project higgs-networks
-  socks5/docker-compose.yml       # 三个服务容器，project higgs-socks5
-  socks5/config/smartdns.conf     # 固定内容：bind [::]:53，上游 8.8.8.8 / 1.1.1.1
+  socks5/docker-compose.yml       # 两个 GOST v3 容器，project higgs-socks5
+  socks5/config/socks.yaml        # SOCKS5 listener 与内置 resolver
+  socks5/config/h2.yaml           # HTTP listener 与内置 resolver
   resolved.json                   # 整个 resolved manifest
   socks5/resolved.json            # render 锁：config hash、managed zone、endpoints
   socks5/published.json           # publish 锁：上次实际发布状态
@@ -209,6 +213,7 @@ higgs-services render     # 生成全部 artifact
 
 - Docker network 名自动为 `higgs-<network>`；Compose project name 固定为 `higgs-networks` 和 `higgs-socks5`，无需也无法在 manifest 中配置。`higgs-networks` 内含一个连接全部 network、`scale: 0` 的 `owner` 服务，使纯网络项目可以通过标准 `docker compose up -d` 创建；它不会启动占位容器。
 - SOCKS5 Compose 引用 network 为 `external: true`，因此必须先起 networks project。
+- 从旧版三容器部署升级时，重新 render 会删除旧的 `smartdns.conf`；启动新版 Compose 必须使用 `--remove-orphans`（或先 `down`），以删除已经不在配置中的 `dns` 容器。旧 manifest 中若显式配置了 `images.smartdns`，也应删除该字段。
 - 服务端口同时发布到 `127.0.0.1` / `[::1]` loopback：这只是让 Docker 将端口标记为 direct-routing 可访问，overlay 访问仍使用容器 endpoint IP。
 - Docker bridge 的 driver option 不能原地更新。修改 `trusted_host_interfaces` 后，先停止依赖该 network 的服务，删除旧 Docker network，再重新执行 Compose 命令。
 - 所有文件原子写入（临时文件 + rename）。
@@ -223,7 +228,7 @@ higgs-services render     # 生成全部 artifact
 higgs-services validate
 higgs-services render
 docker compose -f /etc/higgs/services/networks/docker-compose.yml up -d
-docker compose -f /etc/higgs/services/socks5/docker-compose.yml up -d
+docker compose -f /etc/higgs/services/socks5/docker-compose.yml up -d --remove-orphans
 higgs-services publish
 ```
 

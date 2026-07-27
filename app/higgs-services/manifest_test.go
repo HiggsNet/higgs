@@ -11,7 +11,7 @@ func TestResolveAndRenderManifest(t *testing.T) {
 	output := t.TempDir()
 	configured := manifest{
 		Version: 1, OutputDir: output,
-		Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		Images: imageConfig{Gost: defaultGostImage},
 		Networks: map[string]networkConfig{
 			"main": {IPv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1", IPv6: "auto;::/112;::100/120;::1", TrustedHostInterfaces: []string{"hgs1", "hgs0"}},
 			"cn":   {IPv6: "assignment:fd42:2::/64;::/112;::100/120;::1"},
@@ -31,12 +31,25 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		t.Fatalf("resolveManifest: %v", err)
 	}
 	service := resolved.SOCKS5
-	if len(service.Endpoints) != 2 || service.Endpoints[1].Address != "fd42:1::20" || service.Networks["main"].DNS != "fd42:1::21" || service.Networks["main"].H2 != "fd42:1::22" {
+	if len(service.Endpoints) != 2 || service.Endpoints[1].Address != "fd42:1::20" || service.Networks["main"].H2 != "fd42:1::21" {
 		t.Fatalf("resolved service = %#v", service)
 	}
+	if service.Resolver.Mode != "ipv4_first" || strings.Join(service.Resolver.Servers, ",") != "8.8.8.8,1.1.1.1" {
+		t.Fatalf("resolved resolver = %#v", service.Resolver)
+	}
 	resolved.ManagedZone = "node-a.catofes."
+	legacyConfig := filepath.Join(output, "socks5", "config", "smartdns.conf")
+	if err := os.MkdirAll(filepath.Dir(legacyConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyConfig, []byte("obsolete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := renderArtifacts(resolved); err != nil {
 		t.Fatalf("renderArtifacts: %v", err)
+	}
+	if _, err := os.Stat(legacyConfig); !os.IsNotExist(err) {
+		t.Fatalf("legacy SmartDNS config was not removed: %v", err)
 	}
 	lock, err := loadRenderedSOCKS5(output)
 	if err != nil {
@@ -52,16 +65,31 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		}
 	}
 	serviceCompose := readTestFile(t, filepath.Join(output, "socks5", "docker-compose.yml"))
-	for _, want := range []string{"name: higgs-socks5", "socks:", "dns:", "h2:", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "ipv6_address: fd42:1::22", "127.0.0.1:3128:3128", "[::1]:3128:3128"} {
+	for _, want := range []string{"name: higgs-socks5", "socks:", "h2:", "gogost/gost:3.2.6", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "127.0.0.1:3128:3128", "[::1]:3128:3128", "./config/socks.yaml:/etc/gost/gost.yaml:ro", "./config/h2.yaml:/etc/gost/gost.yaml:ro"} {
 		if !strings.Contains(serviceCompose, want) {
 			t.Fatalf("service compose missing %q:\n%s", want, serviceCompose)
+		}
+	}
+	if strings.Contains(serviceCompose, "\n    dns:") || strings.Contains(serviceCompose, "depends_on:") {
+		t.Fatalf("service compose still contains SmartDNS dependency:\n%s", serviceCompose)
+	}
+	socksConfig := readTestFile(t, filepath.Join(output, "socks5", "config", "socks.yaml"))
+	for _, want := range []string{"name: socks", "addr: '[::]:3128'", "resolver: service-resolver", "type: socks5", "prefer: ipv4"} {
+		if !strings.Contains(socksConfig, want) {
+			t.Fatalf("SOCKS GOST config missing %q:\n%s", want, socksConfig)
+		}
+	}
+	h2Config := readTestFile(t, filepath.Join(output, "socks5", "config", "h2.yaml"))
+	for _, want := range []string{"name: h2", "type: http", "prefer: ipv4"} {
+		if !strings.Contains(h2Config, want) {
+			t.Fatalf("H2 GOST config missing %q:\n%s", want, h2Config)
 		}
 	}
 }
 
 func TestResolveManifestRejectsInvalidTrustedHostInterface(t *testing.T) {
 	configured := manifest{
-		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage},
 		Networks: map[string]networkConfig{"main": {
 			IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1", TrustedHostInterfaces: []string{"hgs0:eth0"},
 		}},
@@ -75,7 +103,7 @@ func TestResolveManifestRejectsInvalidTrustedHostInterface(t *testing.T) {
 
 func TestResolveManifestAppliesAndOverridesNetworkDefaults(t *testing.T) {
 	configured := manifest{
-		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage},
 		NetworkDefaults: networkDefaults{TrustedHostInterfaces: []string{"hgv2mesh"}},
 		Networks: map[string]networkConfig{
 			"main": {IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1"},
@@ -103,7 +131,7 @@ func TestResolveManifestAppliesAndOverridesNetworkDefaults(t *testing.T) {
 
 func TestResolveManifestRejectsDynamicRoleAddress(t *testing.T) {
 	configured := manifest{
-		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage},
 		Networks: map[string]networkConfig{"main": {IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1"}},
 		SOCKS5:   socks5Config{Publish: publishConfig{"main": "test"}, Networks: map[string]string{"main": "::100"}},
 	}
@@ -115,7 +143,7 @@ func TestResolveManifestRejectsDynamicRoleAddress(t *testing.T) {
 
 func TestResolveManifestPublishesAutoAndTaggedSharedEndpoints(t *testing.T) {
 	configured := manifest{
-		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage},
 		Networks: map[string]networkConfig{
 			"node": {IPv6: "auto;::/112;::100/120;::1"},
 			"cn":   {IPv6: "tag:socks5.cn;::/112;::100/120;::1"},
@@ -146,7 +174,7 @@ func TestResolveManifestPublishesAutoAndTaggedSharedEndpoints(t *testing.T) {
 func TestResolveManifestRejectsPublishNetworkWithOversizedACLName(t *testing.T) {
 	name := strings.Repeat("a", 63)
 	configured := manifest{
-		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage, SmartDNS: defaultSmartDNSImage},
+		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage},
 		Networks: map[string]networkConfig{name: {IPv6: "auto;::/112;::100/120;::1"}},
 		SOCKS5: socks5Config{
 			Publish:  publishConfig{name: "local"},
@@ -156,6 +184,37 @@ func TestResolveManifestRejectsPublishNetworkWithOversizedACLName(t *testing.T) 
 	_, err := resolveManifest(configured, []runtimeAssignment{{Prefix: "fd42:1::/64"}})
 	if err == nil || !strings.Contains(err.Error(), "too long") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNormalizeResolver(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		configured resolverConfig
+		wantMode   string
+		wantServer string
+		wantError  string
+	}{
+		{name: "defaults", wantMode: "ipv4_first", wantServer: "8.8.8.8,1.1.1.1"},
+		{name: "IPv4 only", configured: resolverConfig{Mode: "ipv4_only", Servers: []string{"9.9.9.9", "9.9.9.9"}}, wantMode: "ipv4_only", wantServer: "9.9.9.9"},
+		{name: "invalid mode", configured: resolverConfig{Mode: "fastest"}, wantError: "unsupported mode"},
+		{name: "empty server", configured: resolverConfig{Servers: []string{" "}}, wantError: "single-line"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := normalizeResolver(test.configured)
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Mode != test.wantMode || strings.Join(resolved.Servers, ",") != test.wantServer {
+				t.Fatalf("resolver = %#v", resolved)
+			}
+		})
 	}
 }
 

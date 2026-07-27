@@ -26,7 +26,7 @@ networks:
 
 socks5:
   networks:
-    # Base address: socks=::20, dns=::21, h2=::22.
+    # Base address: socks=::20, h2=::21.
     main: "::20"
     # cn: "::20"
     # asia: "::20"
@@ -42,12 +42,16 @@ socks5:
   # allow_zones:
   #   - clients.catofes.
   #   - "*.partners.catofes."
+  # GOST v3's built-in resolver defaults to IPv4-first. Other modes:
+  # ipv6_first, ipv4_only, ipv6_only.
+  # resolver:
+  #   mode: ipv4_first
+  #   servers: [8.8.8.8, 1.1.1.1]
 
-# Defaults are pinned to the images already used by the repository templates.
+# Defaults are pinned to a stable image.
 # Override globally only when required.
 # images:
-#   gost: ginuerzh/gost:2.11.5
-#   smartdns: ghcr.io/higgsnet/smartdns:v1.0.4
+#   gost: gogost/gost:3.2.6
 
 # Artifact root defaults to /etc/higgs/services.
 # output_dir: /etc/higgs/services

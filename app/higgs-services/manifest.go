@@ -15,9 +15,8 @@ import (
 )
 
 const (
-	defaultOutputDir     = "/etc/higgs/services"
-	defaultGostImage     = "ginuerzh/gost:2.11.5"
-	defaultSmartDNSImage = "ghcr.io/higgsnet/smartdns:v1.0.4"
+	defaultOutputDir = "/etc/higgs/services"
+	defaultGostImage = "gogost/gost:3.2.6"
 )
 
 type manifest struct {
@@ -30,8 +29,7 @@ type manifest struct {
 }
 
 type imageConfig struct {
-	Gost     string `yaml:"gost,omitempty"`
-	SmartDNS string `yaml:"smartdns,omitempty"`
+	Gost string `yaml:"gost,omitempty"`
 }
 
 type networkConfig struct {
@@ -50,6 +48,12 @@ type socks5Config struct {
 	Port       uint16            `yaml:"port,omitempty"`
 	Networks   map[string]string `yaml:"networks"`
 	AllowZones []string          `yaml:"allow_zones,omitempty"`
+	Resolver   resolverConfig    `yaml:"resolver,omitempty"`
+}
+
+type resolverConfig struct {
+	Mode    string   `yaml:"mode,omitempty" json:"mode"`
+	Servers []string `yaml:"servers,omitempty" json:"servers"`
 }
 
 type publishConfig map[string]string
@@ -121,6 +125,7 @@ type resolvedIPAM struct {
 type resolvedSOCKS5 struct {
 	Port       uint16                       `json:"port"`
 	AllowZones []string                     `json:"allow_zones,omitempty"`
+	Resolver   resolverConfig               `json:"resolver"`
 	Networks   map[string]resolvedRoleAddrs `json:"networks"`
 	ConfigHash string                       `json:"config_hash"`
 	Endpoints  []resolvedEndpoint           `json:"endpoints"`
@@ -138,7 +143,6 @@ type resolvedEndpoint struct {
 
 type resolvedRoleAddrs struct {
 	SOCKS         string `json:"socks"`
-	DNS           string `json:"dns"`
 	H2            string `json:"h2"`
 	Assignment    string `json:"assignment,omitempty"`
 	Shared        bool   `json:"shared,omitempty"`
@@ -167,9 +171,6 @@ func loadManifest(path string) (manifest, error) {
 	}
 	if value.Images.Gost == "" {
 		value.Images.Gost = defaultGostImage
-	}
-	if value.Images.SmartDNS == "" {
-		value.Images.SmartDNS = defaultSmartDNSImage
 	}
 	if len(value.Networks) == 0 {
 		return manifest{}, fmt.Errorf("networks is required")
@@ -241,7 +242,12 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 	if len(configured.Networks) == 0 {
 		return resolvedManifest{}, fmt.Errorf("socks5.networks is required")
 	}
-	service := resolvedSOCKS5{Port: configured.Port, Networks: map[string]resolvedRoleAddrs{}}
+	resolver, err := normalizeResolver(configured.Resolver)
+	if err != nil {
+		return resolvedManifest{}, fmt.Errorf("socks5.resolver: %w", err)
+	}
+	configured.Resolver = resolver
+	service := resolvedSOCKS5{Port: configured.Port, Resolver: resolver, Networks: map[string]resolvedRoleAddrs{}}
 	for _, raw := range configured.AllowZones {
 		selector, err := higgsservice.ParseZoneSelector(raw)
 		if err != nil {
@@ -324,6 +330,35 @@ func normalizeTrustedHostInterfaces(values []string) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func normalizeResolver(value resolverConfig) (resolverConfig, error) {
+	if value.Mode == "" {
+		value.Mode = "ipv4_first"
+	}
+	switch value.Mode {
+	case "ipv4_first", "ipv6_first", "ipv4_only", "ipv6_only":
+	default:
+		return resolverConfig{}, fmt.Errorf("unsupported mode %q", value.Mode)
+	}
+	if len(value.Servers) == 0 {
+		value.Servers = []string{"8.8.8.8", "1.1.1.1"}
+	}
+	seen := make(map[string]struct{}, len(value.Servers))
+	servers := make([]string, 0, len(value.Servers))
+	for _, server := range value.Servers {
+		server = strings.TrimSpace(server)
+		if server == "" || strings.ContainsAny(server, "\t\n\r") {
+			return resolverConfig{}, fmt.Errorf("servers must contain non-empty single-line addresses")
+		}
+		if _, ok := seen[server]; ok {
+			continue
+		}
+		seen[server] = struct{}{}
+		servers = append(servers, server)
+	}
+	value.Servers = servers
+	return value, nil
 }
 
 func resolveDescriptor(raw string, family int, assignments []assignmentCandidate) (resolvedIPAM, error) {
@@ -440,7 +475,7 @@ func resolveServiceBase(raw string, network resolvedNetwork) (netip.Addr, *resol
 func resolveRoleAddresses(base netip.Addr, ipam resolvedIPAM) (resolvedRoleAddrs, error) {
 	subnet, dynamic := netip.MustParsePrefix(ipam.Subnet), netip.MustParsePrefix(ipam.IPRange)
 	gateway := netip.MustParseAddr(ipam.Gateway)
-	values := make([]netip.Addr, 3)
+	values := make([]netip.Addr, 2)
 	for i := range values {
 		addr, err := addSmallOffset(base, i)
 		if err != nil {
@@ -451,7 +486,7 @@ func resolveRoleAddresses(base netip.Addr, ipam resolvedIPAM) (resolvedRoleAddrs
 		}
 		values[i] = addr
 	}
-	return resolvedRoleAddrs{SOCKS: values[0].String(), DNS: values[1].String(), H2: values[2].String()}, nil
+	return resolvedRoleAddrs{SOCKS: values[0].String(), H2: values[1].String()}, nil
 }
 
 func resolvePrefix(raw string, family int, base netip.Prefix) (netip.Prefix, error) {
