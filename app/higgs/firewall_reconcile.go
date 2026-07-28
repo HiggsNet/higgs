@@ -72,8 +72,9 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 			"nft":       preflight.NFTNetlink,
 			"iptables":  preflight.Iptables,
 			"ip6tables": preflight.IptablesV6,
+			"ipset":     preflight.IPSet,
 			"net_admin": preflight.CAPNetAdmin,
-			"message":   "no complete nft or iptables/ip6tables backend available; firewall rules will not be applied",
+			"message":   "no complete nft or iptables/ip6tables/ipset backend available; firewall rules will not be applied",
 		})
 	}
 

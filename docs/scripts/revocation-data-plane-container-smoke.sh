@@ -46,6 +46,7 @@ RUN apt-get update \
     golang \
     iproute2 \
     iputils-ping \
+    ipset \
     iptables \
     nftables \
     bird2 \

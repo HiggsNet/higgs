@@ -240,17 +240,23 @@ type FirewallDesiredState struct {
 
 // Rule is a single backend-agnostic firewall rule.
 type Rule struct {
-	ID       string
-	Chain    string // input | forward | output
-	Action   string // accept | drop
-	Proto    string // tcp | udp | icmp | ipv6-icmp | ""
-	Src      []netip.Prefix
-	Dst      []netip.Prefix
+	ID     string
+	Chain  string // input | forward | output
+	Action string // accept | drop
+	Proto  string // tcp | udp | icmp | ipv6-icmp | ""
+	Src    []netip.Prefix
+	Dst    []netip.Prefix
+	// IfaceIn/IfaceOut are portable selectors. For XFRM rules they may be
+	// relaxed role prefixes so iptables can avoid an interface cross-product.
 	IfaceIn  string
 	IfaceOut string
-	Port     uint16   // destination port, 0 = any
-	CtStates []string // conntrack states to match: established | related | invalid
-	Comment  string
+	// IfacesIn/IfacesOut are exact selector sets. nft prefers these sets;
+	// iptables uses them only when no portable scalar selector is available.
+	IfacesIn  []string
+	IfacesOut []string
+	Port      uint16   // destination port, 0 = any
+	CtStates  []string // conntrack states to match: established | related | invalid
+	Comment   string
 }
 
 // HostIngressRule is a host-side allow rule for IKE/NAT-T entry ports.
@@ -304,6 +310,7 @@ type FirewallPreflight struct {
 	Iptables        string // iptables IPv4 command availability
 	IptablesV6      string // ip6tables command availability
 	IptablesVariant string
+	IPSet           string // ipset userspace/kernel capability
 	HostNATHook     string
 	NetNSStatus     string
 	Conflicts       []string

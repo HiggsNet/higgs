@@ -20,6 +20,8 @@ type fakeCommandRunner struct {
 	existingRules  map[string]bool
 	ruleArgs       map[string][]string
 	ruleCounts     map[string]int
+	ipsets         map[string]bool
+	ipsetMembers   map[string]map[string]bool
 	failContains   string
 	nftBatchErr    error
 }
@@ -49,9 +51,63 @@ func (f *fakeCommandRunner) run(ctx context.Context, name string, args ...string
 	if name == "iptables" || name == "ip6tables" {
 		return f.runIPTables(name, args)
 	}
+	if name == "ipset" {
+		return f.runIPSet(args)
+	}
 	// Simulate `nft list tables` returning empty (no owned objects).
 	if len(args) >= 1 && args[0] == "list" {
 		return []byte(""), nil
+	}
+	return []byte(""), nil
+}
+
+func (f *fakeCommandRunner) runIPSet(args []string) ([]byte, error) {
+	if f.ipsets == nil {
+		f.ipsets = make(map[string]bool)
+	}
+	if f.ipsetMembers == nil {
+		f.ipsetMembers = make(map[string]map[string]bool)
+	}
+	if f.failContains != "" && strings.Contains(strings.Join(args, " "), f.failContains) {
+		return nil, errors.New("injected ipset failure")
+	}
+	if len(args) == 0 {
+		return nil, errors.New("missing ipset operation")
+	}
+	switch args[0] {
+	case "list":
+		if len(args) >= 2 && args[1] == "-name" {
+			var names []string
+			for name := range f.ipsets {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			return []byte(strings.Join(names, "\n")), nil
+		}
+	case "create":
+		if len(args) < 2 {
+			return nil, errors.New("missing ipset name")
+		}
+		f.ipsets[args[1]] = true
+		if f.ipsetMembers[args[1]] == nil {
+			f.ipsetMembers[args[1]] = make(map[string]bool)
+		}
+	case "flush":
+		if len(args) < 2 || !f.ipsets[args[1]] {
+			return nil, errors.New("ipset does not exist")
+		}
+		f.ipsetMembers[args[1]] = make(map[string]bool)
+	case "add":
+		if len(args) < 3 || !f.ipsets[args[1]] {
+			return nil, errors.New("ipset does not exist")
+		}
+		f.ipsetMembers[args[1]][args[2]] = true
+	case "destroy":
+		if len(args) < 2 || !f.ipsets[args[1]] {
+			return nil, errors.New("ipset does not exist")
+		}
+		delete(f.ipsets, args[1])
+		delete(f.ipsetMembers, args[1])
 	}
 	return []byte(""), nil
 }
@@ -551,6 +607,20 @@ func TestRenderNFTRuleCtState(t *testing.T) {
 	est := renderNFTRule(Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related"})
 	if !strings.Contains(est, "ct state { established, related } accept") {
 		t.Errorf("established/related rendered as %q", est)
+	}
+}
+
+func TestRenderNFTRuleInterfaceSets(t *testing.T) {
+	rendered := renderNFTRule(Rule{
+		IfaceIn:   "hgs*",
+		IfaceOut:  "hgs*",
+		Action:    ActionAccept,
+		IfacesIn:  []string{"hgs11111111", "hgs22222222"},
+		IfacesOut: []string{"hgs11111111", "hgs22222222"},
+	})
+	want := `iifname { hgs11111111, hgs22222222 } oifname { hgs11111111, hgs22222222 } accept`
+	if rendered != want {
+		t.Fatalf("interface sets rendered as %q, want %q", rendered, want)
 	}
 }
 

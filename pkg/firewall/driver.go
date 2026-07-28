@@ -74,6 +74,7 @@ func PreflightProbe(ctx context.Context) FirewallPreflight {
 		CAPNetAdmin: "unknown",
 		Iptables:    "unavailable",
 		IptablesV6:  "unavailable",
+		IPSet:       "unavailable",
 	}
 
 	// Check nft binary availability (proxy for nftables support).
@@ -98,6 +99,10 @@ func PreflightProbe(ctx context.Context) FirewallPreflight {
 		_ = ip6tPath
 		pf.IptablesV6 = "available"
 	}
+	if ipsetPath, err := exec.LookPath("ipset"); err == nil {
+		_ = ipsetPath
+		pf.IPSet = "available"
+	}
 	if IPTablesAvailable(pf) && (pf.Backend == BackendAuto || pf.NFTNetlink != "ok") {
 		pf.Backend = BackendIptables
 	}
@@ -113,11 +118,13 @@ func PreflightProbe(ctx context.Context) FirewallPreflight {
 	return pf
 }
 
-// IPTablesAvailable requires both address families. An empty IptablesV6 is
-// retained as available for hand-constructed legacy test fixtures; probes
-// always populate the field explicitly.
+// IPTablesAvailable requires both address families and ipset. Empty
+// IptablesV6/IPSet fields remain available for hand-constructed legacy test
+// fixtures; probes always populate both fields explicitly.
 func IPTablesAvailable(pf FirewallPreflight) bool {
-	return pf.Iptables == "available" && (pf.IptablesV6 == "" || pf.IptablesV6 == "available")
+	return pf.Iptables == "available" &&
+		(pf.IptablesV6 == "" || pf.IptablesV6 == "available") &&
+		(pf.IPSet == "" || pf.IPSet == "available")
 }
 
 func detectIptablesVariant() string {
@@ -197,7 +204,7 @@ func ResolveBackendForInstance(spec FirewallInstanceSpec, pf FirewallPreflight) 
 			configured = BackendNFT
 		case hasIPTablesInline && !hasNFTInline:
 			if !IPTablesAvailable(pf) {
-				return BackendNone, fmt.Errorf("firewall instance %s: iptables_hooks require both iptables and ip6tables, but one is unavailable", spec.ID)
+				return BackendNone, fmt.Errorf("firewall instance %s: iptables_hooks require iptables, ip6tables, and ipset, but one is unavailable", spec.ID)
 			}
 			configured = BackendIptables
 		}

@@ -44,6 +44,7 @@ RUN apt-get update \
     make \
     golang \
     iproute2 \
+    ipset \
     iptables \
     nftables \
     util-linux \

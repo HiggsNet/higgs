@@ -212,7 +212,7 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `phase7-1-bird-experiment` | 显式运行较慢的 Phase 7.1 双接口静态 `rxcost` 方向性、故障切换与恢复实验；不包含在 `bird-babel-smoke` 或 `root-smoke`。 |
 | `phase7-1-wg-gre-experiment` | 显式运行 Phase 7.1 三节点共享 WG device、transit-only AllowedIPs、per-peer GRE/Babel、业务前缀转发、MTU/cleanup，以及复用逻辑 key 的 staged WG device rotate、Babel cutover、listener/firewall grace 和引用计数 cleanup；不包含在默认 smoke。 |
 | `bird-babel-container-smoke` | 在 privileged container 中运行 BIRD/Babel smoke。 |
-| `firewall-smoke` | 使用真实 nftables/iptables backend 验证 firewall 规则 apply 和清理。 |
+| `firewall-smoke` | 使用真实 nftables/iptables backend 验证 firewall 规则 apply 和清理；iptables 子项需要同时安装 `ipset`。 |
 | `firewall-container-smoke` | 在 privileged container 中运行 firewall 数据面 smoke。 |
 | `health-smoke` | 验证 health manager、OpenMetrics render、本地 spool/series、真实 BIRD selected route 进入 rotate cutover gate，以及 `tc netem` 丢包注入后的状态切换和恢复。 |
 | `health-fault-smoke` | `health-smoke` 的显式故障注入别名，用于表达该 lane 覆盖 BIRD cutover gate、数据面丢包和恢复。 |

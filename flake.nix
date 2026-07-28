@@ -96,6 +96,7 @@
                 bird2
                 iproute2
                 iputils
+                ipset
                 iptables
                 nftables
                 procps
@@ -129,6 +130,7 @@
               pkgs.go
               pkgs.gopls
               pkgs.iproute2
+              pkgs.ipset
               pkgs.iptables
               pkgs.nftables
               pkgs.strongswan

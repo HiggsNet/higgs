@@ -3,6 +3,7 @@ package firewall
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -146,28 +147,39 @@ func TestBuildDesiredStateUsesExactRuntimeInterfaces(t *testing.T) {
 
 	var nonTransit, toUpstream, fromUpstream int
 	for _, rule := range desired.ForwardRules {
-		if strings.Contains(rule.IfaceIn, "*") || strings.Contains(rule.IfaceOut, "*") {
-			t.Fatalf("runtime interfaces must render exactly, got %+v", rule)
+		for _, iface := range append(append([]string{}, rule.IfacesIn...), rule.IfacesOut...) {
+			if strings.Contains(iface, "*") {
+				t.Fatalf("runtime interfaces must render exactly, got %+v", rule)
+			}
 		}
 		switch rule.Comment {
 		case "non-transit drop":
 			nonTransit++
-			if rule.IfaceIn == "hgv2host" || rule.IfaceOut == "hgv2host" {
+			if rule.IfaceIn != "hgs*" || rule.IfaceOut != "hgs*" {
+				t.Fatalf("iptables XFRM compatibility selectors = (%q, %q), want hgs* in both directions", rule.IfaceIn, rule.IfaceOut)
+			}
+			if slices.Contains(rule.IfacesIn, "hgv2host") || slices.Contains(rule.IfacesOut, "hgv2host") {
 				t.Fatalf("upstream veth classified as XFRM: %+v", rule)
 			}
 		case "xfrm to upstream local assigned":
 			toUpstream++
-			if rule.IfaceOut != "hgv2host" {
+			if rule.IfaceIn != "hgs*" || rule.IfaceOut != "hgv2host" {
+				t.Fatalf("iptables xfrm-to-upstream selectors = (%q, %q)", rule.IfaceIn, rule.IfaceOut)
+			}
+			if !slices.Equal(rule.IfacesOut, []string{"hgv2host"}) {
 				t.Fatalf("xfrm-to-upstream rule = %+v", rule)
 			}
 		case "upstream to xfrm mesh authorized":
 			fromUpstream++
-			if rule.IfaceIn != "hgv2host" {
+			if rule.IfaceIn != "hgv2host" || rule.IfaceOut != "hgs*" {
+				t.Fatalf("iptables upstream-to-xfrm selectors = (%q, %q)", rule.IfaceIn, rule.IfaceOut)
+			}
+			if !slices.Equal(rule.IfacesIn, []string{"hgv2host"}) {
 				t.Fatalf("upstream-to-xfrm rule = %+v", rule)
 			}
 		}
 	}
-	if nonTransit != 4 || toUpstream != 2 || fromUpstream != 2 {
+	if nonTransit != 1 || toUpstream != 1 || fromUpstream != 1 {
 		t.Fatalf("forward rule counts: non-transit=%d to-upstream=%d from-upstream=%d", nonTransit, toUpstream, fromUpstream)
 	}
 }
@@ -597,6 +609,11 @@ func TestResolveBackend(t *testing.T) {
 	pf2.IptablesV6 = "unavailable"
 	if got := ResolveBackend(BackendIptables, pf2); got != BackendNone {
 		t.Errorf("ResolveBackend(iptables, ip6tables unavailable) = %s, want none", got)
+	}
+	pf2.IptablesV6 = "available"
+	pf2.IPSet = "unavailable"
+	if got := ResolveBackend(BackendIptables, pf2); got != BackendNone {
+		t.Errorf("ResolveBackend(iptables, ipset unavailable) = %s, want none", got)
 	}
 }
 

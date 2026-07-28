@@ -239,69 +239,66 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 
 	xfrmIfaces := interfaceSelectors(input.LiveInterfaces, spec.XFRMTunnelPattern, "hgs*")
 	upstreamIfaces := interfaceSelectors(input.UpstreamInterfaces)
+	xfrmCompat := strings.TrimSpace(spec.XFRMTunnelPattern)
+	if xfrmCompat == "" {
+		xfrmCompat = "hgs*"
+	}
+	upstreamCompat := singletonInterfaceSelector(upstreamIfaces)
 
 	// XFRM -> XFRM authorized transit (only if forwarding policy allows)
 	if input.Forwarding.Transit {
 		meshV4 := prefixes.MeshAuthorizedV4
 		meshV6 := prefixes.MeshAuthorizedV6
 		if transit := filterTransitPrefixes(meshV4, meshV6, input.Forwarding); len(transit) > 0 {
-			for _, in := range xfrmIfaces {
-				for _, out := range xfrmIfaces {
-					addRule(ChainForward, Rule{
-						Action:   ActionAccept,
-						IfaceIn:  in,
-						IfaceOut: out,
-						Src:      transit,
-						Dst:      transit,
-						Comment:  "xfrm transit (transit enabled)",
-					})
-				}
-			}
+			addRule(ChainForward, Rule{
+				Action:    ActionAccept,
+				IfaceIn:   xfrmCompat,
+				IfaceOut:  xfrmCompat,
+				IfacesIn:  xfrmIfaces,
+				IfacesOut: xfrmIfaces,
+				Src:       transit,
+				Dst:       transit,
+				Comment:   "xfrm transit (transit enabled)",
+			})
 		}
 	} else {
 		// Non-transit: explicitly drop XFRM-to-XFRM
-		for _, in := range xfrmIfaces {
-			for _, out := range xfrmIfaces {
-				addRule(ChainForward, Rule{
-					Action:   ActionDrop,
-					IfaceIn:  in,
-					IfaceOut: out,
-					Comment:  "non-transit drop",
-				})
-			}
-		}
+		addRule(ChainForward, Rule{
+			Action:    ActionDrop,
+			IfaceIn:   xfrmCompat,
+			IfaceOut:  xfrmCompat,
+			IfacesIn:  xfrmIfaces,
+			IfacesOut: xfrmIfaces,
+			Comment:   "non-transit drop",
+		})
 	}
 
 	// XFRM -> upstream: allow mesh traffic to local assigned prefixes (egress to main network)
-	if len(prefixes.LocalAssignedV4) > 0 || len(prefixes.LocalAssignedV6) > 0 {
+	if len(upstreamIfaces) > 0 && (len(prefixes.LocalAssignedV4) > 0 || len(prefixes.LocalAssignedV6) > 0) {
 		localAll := append(append([]netip.Prefix{}, prefixes.LocalAssignedV4...), prefixes.LocalAssignedV6...)
-		for _, xfrm := range xfrmIfaces {
-			for _, upstream := range upstreamIfaces {
-				addRule(ChainForward, Rule{
-					Action:   ActionAccept,
-					IfaceIn:  xfrm,
-					IfaceOut: upstream,
-					Dst:      localAll,
-					Comment:  "xfrm to upstream local assigned",
-				})
-			}
-		}
+		addRule(ChainForward, Rule{
+			Action:    ActionAccept,
+			IfaceIn:   xfrmCompat,
+			IfaceOut:  upstreamCompat,
+			IfacesIn:  xfrmIfaces,
+			IfacesOut: upstreamIfaces,
+			Dst:       localAll,
+			Comment:   "xfrm to upstream local assigned",
+		})
 	}
 
 	// upstream -> XFRM: allow local/main network to reach mesh authorized prefixes
-	if len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0 {
+	if len(upstreamIfaces) > 0 && (len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0) {
 		meshAll := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
-		for _, upstream := range upstreamIfaces {
-			for _, xfrm := range xfrmIfaces {
-				addRule(ChainForward, Rule{
-					Action:   ActionAccept,
-					IfaceIn:  upstream,
-					IfaceOut: xfrm,
-					Dst:      meshAll,
-					Comment:  "upstream to xfrm mesh authorized",
-				})
-			}
-		}
+		addRule(ChainForward, Rule{
+			Action:    ActionAccept,
+			IfaceIn:   upstreamCompat,
+			IfaceOut:  xfrmCompat,
+			IfacesIn:  upstreamIfaces,
+			IfacesOut: xfrmIfaces,
+			Dst:       meshAll,
+			Comment:   "upstream to xfrm mesh authorized",
+		})
 	}
 
 	desired.HookPositions.PostForward = len(desired.ForwardRules)
@@ -347,6 +344,13 @@ func interfaceSelectors(primary []string, fallbacks ...string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func singletonInterfaceSelector(values []string) string {
+	if len(values) == 1 {
+		return values[0]
+	}
+	return ""
 }
 
 // buildHostRules generates host-side IKE/NAT-T ingress and optional redirect grace.
@@ -587,13 +591,13 @@ func DesiredStateHash(desired *FirewallDesiredState) string {
 		fmt.Fprintln(h, "rev6", p.String())
 	}
 	for _, r := range desired.InputRules {
-		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "in", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.IfacesIn, r.IfacesOut, r.CtStates, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.ForwardRules {
-		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "fwd", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.IfacesIn, r.IfacesOut, r.CtStates, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.OutputRules {
-		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.CtStates, r.Src, r.Dst, r.Comment)
+		fmt.Fprintln(h, "out", r.Action, r.Proto, r.Port, r.IfaceIn, r.IfaceOut, r.IfacesIn, r.IfacesOut, r.CtStates, r.Src, r.Dst, r.Comment)
 	}
 	for _, r := range desired.HostIngress {
 		fmt.Fprintln(h, "hi", r.Proto, r.Port, r.DstAddr.String(), r.Comment)

@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -57,6 +58,12 @@ func (d *IPTablesDriver) Preflight(ctx context.Context, spec FirewallInstanceSpe
 		}
 		if _, err := d.run(ctx, "ip6tables", "-L", "INPUT"); err != nil {
 			pf.IptablesV6 = "permission_denied"
+			if pf.Backend == BackendIptables {
+				pf.Backend = BackendNone
+			}
+		}
+		if _, err := d.run(ctx, "ipset", "list", "-name"); err != nil {
+			pf.IPSet = "permission_denied"
 			if pf.Backend == BackendIptables {
 				pf.Backend = BackendNone
 			}
@@ -148,14 +155,26 @@ type iptablesManagedChainSpec struct {
 	builtin   string
 	canonical string
 	code      string
-	rules     func(chain string) ([]iptablesCommand, error)
+	rules     func(chain string) (iptablesRenderedRules, error)
 }
 
 type preparedIPTablesChain struct {
 	binary     string
 	spec       iptablesManagedChainSpec
 	generation string
+	ipsets     []string
 	activated  bool
+}
+
+type iptablesRenderedRules struct {
+	commands []iptablesCommand
+	ipsets   []iptablesSetSpec
+}
+
+type iptablesSetSpec struct {
+	name     string
+	family   string
+	prefixes []netip.Prefix
 }
 
 func iptablesApplyFailure(result FirewallApplyResult, message string) (FirewallApplyResult, error) {
@@ -182,11 +201,15 @@ func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string
 		return nil
 	}
 	tableName := iptablesTableName(desired)
-	ruleBuilder := func(rules []Rule, insertions ...iptablesHookInsertion) func(string) ([]iptablesCommand, error) {
-		return func(chain string) ([]iptablesCommand, error) {
-			return buildIPTablesInterleavedCommands("", chain, len(rules), func(i int) []iptablesCommand {
-				return iptablesRuleCommands(chain, rules[i], marker)
+	ruleBuilder := func(rules []Rule, insertions ...iptablesHookInsertion) func(string) (iptablesRenderedRules, error) {
+		return func(chain string) (iptablesRenderedRules, error) {
+			var ipsets []iptablesSetSpec
+			commands, err := buildIPTablesInterleavedCommands("", chain, len(rules), func(i int) []iptablesCommand {
+				rendered := iptablesRuleCommandsWithIPSets(tableName, chain, rules[i], marker)
+				ipsets = append(ipsets, rendered.ipsets...)
+				return rendered.commands
 			}, insertions...)
+			return iptablesRenderedRules{commands: commands, ipsets: dedupIPTablesSetSpecs(ipsets)}, err
 		}
 	}
 
@@ -204,8 +227,8 @@ func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string
 		}
 	}
 
-	inputRules := func(chain string) ([]iptablesCommand, error) {
-		return buildIPTablesInterleavedCommands("", chain, len(desired.HostIngress), func(i int) []iptablesCommand {
+	inputRules := func(chain string) (iptablesRenderedRules, error) {
+		commands, err := buildIPTablesInterleavedCommands("", chain, len(desired.HostIngress), func(i int) []iptablesCommand {
 			hi := desired.HostIngress[i]
 			var commands []iptablesCommand
 			args := []string{"-A", chain, "-p", iptablesProto(hi.Proto)}
@@ -224,6 +247,7 @@ func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string
 			iptablesHookInsertion{index: desired.HookPositions.HostPreInput, ipv4: desired.NativeHooks.IPTables.IPv4.HostPreInput, ipv6: desired.NativeHooks.IPTables.IPv6.HostPreInput},
 			iptablesHookInsertion{index: desired.HookPositions.HostPostInput, ipv4: desired.NativeHooks.IPTables.IPv4.HostPostInput, ipv6: desired.NativeHooks.IPTables.IPv6.HostPostInput},
 		)
+		return iptablesRenderedRules{commands: commands}, err
 	}
 	specs := []iptablesManagedChainSpec{
 		{builtin: "INPUT", canonical: tableName + "_input", code: "i", rules: inputRules},
@@ -236,8 +260,8 @@ func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string
 	if len(desired.NatRedirects) > 0 || len(desired.NativeHooks.IPTables.IPv4.HostPrePrerouting) > 0 || len(desired.NativeHooks.IPTables.IPv4.HostPostPrerouting) > 0 || len(desired.NativeHooks.IPTables.IPv6.HostPrePrerouting) > 0 || len(desired.NativeHooks.IPTables.IPv6.HostPostPrerouting) > 0 {
 		specs = append(specs, iptablesManagedChainSpec{
 			table: "nat", builtin: "PREROUTING", canonical: tableName + "_prerouting", code: "r",
-			rules: func(chain string) ([]iptablesCommand, error) {
-				return buildIPTablesInterleavedCommands("nat", chain, len(desired.NatRedirects), func(i int) []iptablesCommand {
+			rules: func(chain string) (iptablesRenderedRules, error) {
+				commands, err := buildIPTablesInterleavedCommands("nat", chain, len(desired.NatRedirects), func(i int) []iptablesCommand {
 					nr := desired.NatRedirects[i]
 					var commands []iptablesCommand
 					args := []string{"-t", "nat", "-A", chain, "-p", iptablesProto(nr.Proto)}
@@ -256,13 +280,14 @@ func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string
 					iptablesHookInsertion{index: desired.HookPositions.HostPrePrerouting, ipv4: desired.NativeHooks.IPTables.IPv4.HostPrePrerouting, ipv6: desired.NativeHooks.IPTables.IPv6.HostPrePrerouting},
 					iptablesHookInsertion{index: desired.HookPositions.HostPostPrerouting, ipv4: desired.NativeHooks.IPTables.IPv4.HostPostPrerouting, ipv6: desired.NativeHooks.IPTables.IPv6.HostPostPrerouting},
 				)
+				return iptablesRenderedRules{commands: commands}, err
 			},
 		})
 	}
 	if len(desired.NatSources) > 0 {
 		specs = append(specs, iptablesManagedChainSpec{
 			table: "nat", builtin: "POSTROUTING", canonical: tableName + "_postrouting", code: "s",
-			rules: func(chain string) ([]iptablesCommand, error) {
+			rules: func(chain string) (iptablesRenderedRules, error) {
 				var commands []iptablesCommand
 				for _, ns := range desired.NatSources {
 					args := []string{"-t", "nat", "-A", chain, "-p", iptablesProto(ns.Proto)}
@@ -280,7 +305,7 @@ func buildIPTablesManagedChainSpecs(desired *FirewallDesiredState, marker string
 						commands = append(commands, iptablesCommand{binary: binary, args: args})
 					}
 				}
-				return commands, nil
+				return iptablesRenderedRules{commands: commands}, nil
 			},
 		})
 	}
@@ -344,11 +369,22 @@ func (d *IPTablesDriver) prepareIPTablesGeneration(
 		applied++
 	}
 
-	commands, err := spec.rules(generation)
+	rendered, err := spec.rules(generation)
 	if err != nil {
 		return item, applied, fmt.Errorf("%s render generation %s: %w", binary, generation, err)
 	}
-	for _, command := range commands {
+	for _, setSpec := range rendered.ipsets {
+		if (binary == "iptables") != (setSpec.family == "inet") {
+			continue
+		}
+		item.ipsets = append(item.ipsets, setSpec.name)
+		setApplied, err := d.prepareIPSet(ctx, setSpec)
+		applied += setApplied
+		if err != nil {
+			return item, applied, fmt.Errorf("%s prepare ipset %s: %w", binary, setSpec.name, err)
+		}
+	}
+	for _, command := range rendered.commands {
 		if command.binary != binary {
 			continue
 		}
@@ -358,6 +394,25 @@ func (d *IPTablesDriver) prepareIPTablesGeneration(
 		applied++
 	}
 	return item, applied, nil
+}
+
+func (d *IPTablesDriver) prepareIPSet(ctx context.Context, spec iptablesSetSpec) (int, error) {
+	applied := 0
+	if _, err := d.run(ctx, "ipset", "create", spec.name, "hash:net", "family", spec.family, "-exist"); err != nil {
+		return applied, err
+	}
+	applied++
+	if _, err := d.run(ctx, "ipset", "flush", spec.name); err != nil {
+		return applied, err
+	}
+	applied++
+	for _, prefix := range spec.prefixes {
+		if _, err := d.run(ctx, "ipset", "add", spec.name, prefix.String(), "-exist"); err != nil {
+			return applied, err
+		}
+		applied++
+	}
+	return applied, nil
 }
 
 func (d *IPTablesDriver) iptablesJumpExists(ctx context.Context, binary, table, builtin, target, marker string) bool {
@@ -371,7 +426,9 @@ func (d *IPTablesDriver) discardPreparedIPTablesChains(ctx context.Context, prep
 			continue
 		}
 		_, _ = d.run(ctx, item.binary, iptablesArgs(item.spec.table, "-F", item.generation)...)
-		_, _ = d.run(ctx, item.binary, iptablesArgs(item.spec.table, "-X", item.generation)...)
+		if _, err := d.run(ctx, item.binary, iptablesArgs(item.spec.table, "-X", item.generation)...); err == nil {
+			d.destroyIPSets(ctx, item.ipsets)
+		}
 	}
 }
 
@@ -395,9 +452,17 @@ func (d *IPTablesDriver) rollbackPreparedIPTablesChains(ctx context.Context, pre
 		}
 		if _, err := d.run(ctx, item.binary, iptablesArgs(item.spec.table, "-X", item.generation)...); err != nil {
 			errs = append(errs, fmt.Sprintf("%s delete %s: %v", item.binary, item.generation, err))
+			continue
 		}
+		d.destroyIPSets(ctx, item.ipsets)
 	}
 	return errs
+}
+
+func (d *IPTablesDriver) destroyIPSets(ctx context.Context, names []string) {
+	for _, name := range names {
+		_, _ = d.run(ctx, "ipset", "destroy", name)
+	}
 }
 
 func iptablesChainKey(binary, table, chain string) string {
@@ -458,7 +523,59 @@ func (d *IPTablesDriver) cleanupOldIPTablesGenerations(
 			}
 		}
 	}
+	cleaned, setErrs := d.cleanupOrphanIPSets(ctx, tableName)
+	applied += cleaned
+	errs = append(errs, setErrs...)
 	return applied, errs
+}
+
+func (d *IPTablesDriver) cleanupOrphanIPSets(ctx context.Context, tableName string) (int, []string) {
+	out, err := d.run(ctx, "ipset", "list", "-name")
+	if err != nil {
+		return 0, []string{fmt.Sprintf("ipset list for cleanup: %v", err)}
+	}
+	referenced := make(map[string]bool)
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		for _, table := range []string{"", "nat"} {
+			rules, listErr := d.run(ctx, binary, iptablesArgs(table, "-S")...)
+			if listErr != nil {
+				return 0, []string{fmt.Sprintf("%s list %s table for ipset cleanup: %v", binary, iptablesTableLabel(table), listErr)}
+			}
+			for _, name := range referencedIPSets(string(rules)) {
+				referenced[name] = true
+			}
+		}
+	}
+	prefix := iptablesIPSetPrefix(tableName)
+	applied := 0
+	var errs []string
+	for _, name := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(name, prefix) || referenced[name] {
+			continue
+		}
+		if _, err := d.run(ctx, "ipset", "destroy", name); err != nil {
+			errs = append(errs, fmt.Sprintf("destroy stale ipset %s: %v", name, err))
+			continue
+		}
+		applied++
+	}
+	return applied, errs
+}
+
+func referencedIPSets(rules string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, line := range strings.Split(rules, "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] != "--match-set" || seen[fields[i+1]] {
+				continue
+			}
+			seen[fields[i+1]] = true
+			out = append(out, fields[i+1])
+		}
+	}
+	return out
 }
 
 func iptablesTableLabel(table string) string {
@@ -629,6 +746,8 @@ func (d *IPTablesDriver) DeleteStale(ctx context.Context, refs []FirewallObjectR
 				}
 			}
 		}
+		_, setErrs := d.cleanupOrphanIPSets(ctx, tableName)
+		errs = append(errs, setErrs...)
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("iptables stale cleanup: %s", strings.Join(errs, "; "))
@@ -713,59 +832,118 @@ func buildIPTablesInterleavedCommands(table, chain string, genericCount int, ren
 	return commands, nil
 }
 
-func iptablesRuleCommands(chain string, r Rule, marker string) []iptablesCommand {
-	var commands []iptablesCommand
-	for _, match := range iptablesMatchArgSets(r) {
-		args := append([]string{"-A", chain}, match...)
-		args = append(args, "-j", strings.ToUpper(r.Action))
-		args = append(args, "-m", "comment", "--comment", marker+":"+r.Comment)
-
-		// Determine if this rule is for IPv4, IPv6, or both.
-		// If the rule contains ICMPv6 protocol, it's IPv6-only.
-		// Otherwise, check source/destination addresses.
-		binary := selectIPTablesBinaryForMatch(r, match)
-		binaries := []string{binary}
-		// Rules without any address-family-specific match (no icmp/icmpv6
-		// protocol, no v4/v6 prefixes) apply to both families; install them
-		// for both iptables and ip6tables.
-		if (r.Proto == "" || r.Proto == ProtoTCP || r.Proto == ProtoUDP) && len(r.Src) == 0 && len(r.Dst) == 0 {
-			binaries = []string{"iptables", "ip6tables"}
-		}
-		for _, bin := range binaries {
-			commands = append(commands, iptablesCommand{binary: bin, args: args})
+func iptablesRuleCommandsWithIPSets(tableName, chain string, r Rule, marker string) iptablesRenderedRules {
+	var rendered iptablesRenderedRules
+	bases := iptablesInterfaceMatchArgSets(r)
+	for _, family := range iptablesFamiliesForRule(r) {
+		srcs := prefixesForIPTablesFamily(r.Src, family.is4)
+		dsts := prefixesForIPTablesFamily(r.Dst, family.is4)
+		for _, base := range bases {
+			args := append([]string{"-A", chain}, base...)
+			args, rendered.ipsets = appendIPTablesPrefixMatch(
+				args, rendered.ipsets, tableName, chain, "s", "src", family.ipsetFamily, srcs,
+			)
+			args, rendered.ipsets = appendIPTablesPrefixMatch(
+				args, rendered.ipsets, tableName, chain, "d", "dst", family.ipsetFamily, dsts,
+			)
+			args = append(args, "-j", strings.ToUpper(r.Action), "-m", "comment", "--comment", marker+":"+r.Comment)
+			rendered.commands = append(rendered.commands, iptablesCommand{binary: family.binary, args: args})
 		}
 	}
-	return commands
+	rendered.ipsets = dedupIPTablesSetSpecs(rendered.ipsets)
+	return rendered
 }
 
-// selectIPTablesBinaryForMatch determines whether to use iptables or ip6tables
-// based on the rule protocol and address match parameters.
-func selectIPTablesBinaryForMatch(r Rule, match []string) string {
-	// If the rule explicitly specifies ICMPv6, use ip6tables.
-	if r.Proto == ProtoICMPv6 || r.Proto == "ipv6-icmp" {
-		return "ip6tables"
-	}
+type iptablesRuleFamily struct {
+	binary      string
+	ipsetFamily string
+	is4         bool
+}
 
-	// Check source/destination addresses in match args.
-	for i := 0; i < len(match)-1; i++ {
-		if match[i] == "-s" || match[i] == "-d" {
-			addr := match[i+1]
-			if ip, err := netip.ParseAddr(addr); err == nil {
-				if ip.Is6() {
-					return "ip6tables"
-				}
-			}
-			// If it's a prefix, check the address.
-			if prefix, err := netip.ParsePrefix(addr); err == nil {
-				if prefix.Addr().Is6() {
-					return "ip6tables"
-				}
-			}
+func iptablesFamiliesForRule(r Rule) []iptablesRuleFamily {
+	candidates := []iptablesRuleFamily{
+		{binary: "iptables", ipsetFamily: "inet", is4: true},
+		{binary: "ip6tables", ipsetFamily: "inet6", is4: false},
+	}
+	var out []iptablesRuleFamily
+	for _, family := range candidates {
+		if r.Proto == ProtoICMPv6 && family.is4 {
+			continue
+		}
+		if r.Proto == ProtoICMP && !family.is4 {
+			continue
+		}
+		if len(r.Src) > 0 && len(prefixesForIPTablesFamily(r.Src, family.is4)) == 0 {
+			continue
+		}
+		if len(r.Dst) > 0 && len(prefixesForIPTablesFamily(r.Dst, family.is4)) == 0 {
+			continue
+		}
+		out = append(out, family)
+	}
+	return out
+}
+
+func prefixesForIPTablesFamily(prefixes []netip.Prefix, is4 bool) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		if prefix.IsValid() && prefix.Addr().Is4() == is4 {
+			out = append(out, prefix)
 		}
 	}
+	return out
+}
 
-	// Default to iptables for IPv4 or dual-stack (inet semantics).
-	return "iptables"
+func appendIPTablesPrefixMatch(
+	args []string,
+	ipsets []iptablesSetSpec,
+	tableName, chain string,
+	side, direction, family string,
+	prefixes []netip.Prefix,
+) ([]string, []iptablesSetSpec) {
+	switch len(prefixes) {
+	case 0:
+		return args, ipsets
+	case 1:
+		return append(args, "-"+side, prefixes[0].String()), ipsets
+	default:
+		name := iptablesIPSetName(tableName, chain, family, prefixes)
+		args = append(args, "-m", "set", "--match-set", name, direction)
+		ipsets = append(ipsets, iptablesSetSpec{name: name, family: family, prefixes: append([]netip.Prefix(nil), prefixes...)})
+		return args, ipsets
+	}
+}
+
+func iptablesIPSetName(tableName, chain, family string, prefixes []netip.Prefix) string {
+	scopeHash := sha256.Sum256([]byte(tableName))
+	var material strings.Builder
+	fmt.Fprintf(&material, "%s|%s", chain, family)
+	for _, prefix := range prefixes {
+		material.WriteByte('|')
+		material.WriteString(prefix.String())
+	}
+	setHash := sha256.Sum256([]byte(material.String()))
+	// ipset names are limited to 31 characters. The scope component prevents
+	// cross-instance cleanup; the content component includes generation/slot.
+	return fmt.Sprintf("hgs_%x_%x", scopeHash[:4], setHash[:8])
+}
+
+func iptablesIPSetPrefix(tableName string) string {
+	scopeHash := sha256.Sum256([]byte(tableName))
+	return fmt.Sprintf("hgs_%x_", scopeHash[:4])
+}
+
+func dedupIPTablesSetSpecs(specs []iptablesSetSpec) []iptablesSetSpec {
+	seen := make(map[string]bool, len(specs))
+	out := make([]iptablesSetSpec, 0, len(specs))
+	for _, spec := range specs {
+		if seen[spec.name] {
+			continue
+		}
+		seen[spec.name] = true
+		out = append(out, spec)
+	}
+	return out
 }
 
 func iptablesBinariesForAddr(addr netip.Addr) []string {
@@ -778,36 +956,31 @@ func iptablesBinariesForAddr(addr netip.Addr) []string {
 	return []string{"iptables"}
 }
 
-func iptablesMatchArgSets(r Rule) [][]string {
-	base := iptablesBaseMatchArgs(r)
-	srcs := r.Src
-	dsts := r.Dst
-	if len(srcs) == 0 {
-		srcs = []netip.Prefix{netip.Prefix{}}
-	}
-	if len(dsts) == 0 {
-		dsts = []netip.Prefix{netip.Prefix{}}
-	}
-
-	var out [][]string
-	for _, src := range srcs {
-		for _, dst := range dsts {
-			if src.IsValid() && dst.IsValid() && src.Addr().Is4() != dst.Addr().Is4() {
-				// A single iptables/ip6tables rule cannot mix address
-				// families. Such a pair can never match and is invalid CLI.
-				continue
-			}
-			args := append([]string{}, base...)
-			if src.IsValid() {
-				args = append(args, "-s", src.String())
-			}
-			if dst.IsValid() {
-				args = append(args, "-d", dst.String())
-			}
-			out = append(out, args)
+func iptablesInterfaceMatchArgSets(r Rule) [][]string {
+	ins := iptablesInterfaceSelectors(r.IfaceIn, r.IfacesIn)
+	outs := iptablesInterfaceSelectors(r.IfaceOut, r.IfacesOut)
+	out := make([][]string, 0, len(ins)*len(outs))
+	for _, in := range ins {
+		for _, ifaceOut := range outs {
+			scalar := r
+			scalar.IfaceIn = in
+			scalar.IfaceOut = ifaceOut
+			scalar.IfacesIn = nil
+			scalar.IfacesOut = nil
+			out = append(out, iptablesBaseMatchArgs(scalar))
 		}
 	}
 	return out
+}
+
+func iptablesInterfaceSelectors(portable string, exact []string) []string {
+	if portable != "" {
+		return []string{portable}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return []string{""}
 }
 
 func iptablesBaseMatchArgs(r Rule) []string {

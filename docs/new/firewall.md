@@ -119,7 +119,7 @@ type ForwardingPolicy struct {
 
 Planner 按接口角色分别处理流量：
 
-- `xfrm_tunnel`：mesh peer 之间的数据面接口；优先使用本 netns 当前 ready 的精确接口名，没有 runtime 输出时才回退到 `xfrm_tunnel_pattern`（默认 `hgs*`）。
+- `xfrm_tunnel`：mesh peer 之间的数据面接口；nft 优先使用本 netns 当前 ready 的精确接口名集合，没有 runtime 输出时才回退到 `xfrm_tunnel_pattern`（默认 `hgs*`）。iptables 为避免接口对笛卡尔积，直接按该 pattern 匹配 XFRM 接口。
 - `upstream_veth`：overlay netns 与 host/主网络之间的出入口。接口名只来自同 netns 的 `routing.instances[].upstream.mesh.interface`，默认 `hgv2host`；firewall 不维护第二份 upstream 名字。
 - `loopback`：本机服务。
 - underlay 接口不在 overlay netns 内处理；host 入口见第 4.4 节。
@@ -168,7 +168,7 @@ firewall:
 | `priority.prerouting` | string | `dstnat` | nft NAT prerouting base-chain priority |
 | `priority.postrouting` | string | `srcnat` | nft NAT postrouting base-chain priority |
 | `owner_prefix` | string | `higgs` | 命名前缀 |
-| `xfrm_tunnel_pattern` | string | `hgs*` | 尚无 live interface 时的 overlay XFRM 兼容回退模式 |
+| `xfrm_tunnel_pattern` | string | `hgs*` | nft 尚无 live interface 时的回退模式；iptables 始终用它避免接口组合展开 |
 | `local_services` | list | `[]` | overlay 内显式开放的服务 |
 | `host_ports.ike` | bool | 见下文 | host UDP 500 入口 |
 | `host_ports.natt` | bool | 见下文 | host UDP 4500 入口 |
@@ -283,7 +283,7 @@ func BuildDesiredState(spec FirewallInstanceSpec, input FirewallPolicyInput) (*F
 | `AssignmentPrefixes` | IPAM assignment 白名单 | 已组装，但当前 planner 未使用 |
 | `Forwarding` | 本 netns 的 forwarding policy | transit 决策 |
 | `Revoked` | revocation state | deny-first：从 allow set 中剔除 |
-| `LiveInterfaces` | 当前活跃 XFRM 接口 | 按 firewall instance 的 netns 过滤、去重后精确生成 XFRM 规则 |
+| `LiveInterfaces` | 当前活跃 XFRM 接口 | 按 firewall instance 的 netns 过滤、去重；nft 精确生成接口集合，iptables 使用 `xfrm_tunnel_pattern` |
 | `UpstreamInterfaces` | 同 netns routing upstream veth 接口 | routing 配置是唯一权威来源；去重后精确生成 upstream 规则 |
 | `AdvertisedCurrent/Previous*Ports` | 本地 signed `ipsec/ports` record | redirect grace |
 
@@ -444,6 +444,9 @@ overlay 实例的 driver 会把所有命令用 `ip netns exec <netns>` 包装后
 - `iptables_hooks.ipv4/ipv6` 原生 inline rule 直接写入对应 family 的 inactive generation，不创建外部 chain。
 - 地址族处理：带 v4/v6 前缀或地址的规则按族只进对应 binary；族中立规则（无前缀匹配、非 ICMP 协议，如 loopback、babel、conntrack、default policy）同时下发到 `iptables` 与 `ip6tables`；ICMP 规则按族分别渲染（`-p icmp` 只进 `iptables`，`-p icmpv6` 只进 `ip6tables`）。
 - 接口前缀模式在 planner 中使用 nft 风格尾随 `*`；iptables 渲染时转换为 xtables 的尾随 `+`（例如 `hgs*` → `hgs+`）。
+- XFRM 规则使用 `xfrm_tunnel_pattern` 的前缀匹配，避免按实时接口的 `iif × oif` 组合展开；upstream veth 仍使用 routing 配置给出的精确接口名。这个后端差异有意用较宽的接口角色边界换取固定数量的 transit 规则。
+- 两个及以上的 source/destination prefix 使用 generation-scoped `hash:net` ipset，并由单条规则通过 `-m set --match-set` 查询；单个 prefix 仍直接使用 `-s` / `-d`。set 名包含 instance scope 与 generation，inactive set 填充完成后才切换 built-in jump，旧 generation chain 删除后再清理无引用 set。
+- iptables backend 要求 `iptables`、`ip6tables` 和 `ipset` 同时可用；set 创建、填充或引用失败会中止 staging，当前 active generation 保持不变。
 
 ### 5.4 dry-run 后端（`DryRunDriver`）
 
@@ -465,7 +468,7 @@ func PreflightProbe(ctx context.Context) FirewallPreflight
 3. 都不可用时 `Backend=none`。
 4. `CAP_NET_ADMIN` 通过 `nft list tables` 做尽力探测。
 
-> **注意**：daemon 选择 backend 时使用上述全局探测，不调用具体 driver 的 `Preflight`；`CAP_NET_ADMIN` 结果也不参与选择。当前不检测 netlink API、host NAT hook、ipset、目标 netns 内可执行性等能力，详见第 8 节。无完整 backend 时，daemon 会记录 `no_backend_available` / `backend_unavailable` warning，并在实例状态中保留错误，不会伪装为 dry-run 成功。
+> **注意**：daemon 选择 backend 时使用上述全局探测，不调用具体 driver 的 `Preflight`；`CAP_NET_ADMIN` 结果也不参与选择。当前会检查 `iptables`、`ip6tables`、`ipset` 的 host PATH，但不预先验证 netlink API、host NAT hook、目标 netns 内可执行性以及 `xt_set` 内核 match；这些能力在 staging apply 时 fail-closed 验证。详见第 8 节。无完整 backend 时，daemon 会记录 `no_backend_available` / `backend_unavailable` warning，并在实例状态中保留错误，不会伪装为 dry-run 成功。
 
 ### 5.6 Plan diff
 
@@ -594,7 +597,7 @@ higgs debug preflight
 | Native inline rule 可移植性与校验 | 同一策略可跨 backend 表达，并在 apply 前完成完整语义校验 | `nft_hooks` / `iptables_hooks` 是两套原生语法；配置阶段只做边界和危险参数校验，真正的模块、match、target、表达式合法性由 nft/iptables apply 验证 | 异构节点需同时维护两套等价规则；语义错误到 reconcile 时才暴露 | 暂时不需要调整，由管理员自行控制 |
 | `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 | 暂不实现 |
 | Assignment 白名单二次校验 | planner 独立校验允许进入规则的 assignment | `AssignmentPrefixes` 已组装但仍未使用；前缀规则依赖 `AuthorizedRouteSet` 派生结果 | 缺少 planner 层独立的 assignment 防御性复核 | 暂不实现 |
-| Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、目标 netns、host NAT hook、ipset 及 IPv4/IPv6 CLI | 已检查 `iptables` 与 `ip6tables` 必须同时存在；仍主要只检查 host PATH，`CAP_NET_ADMIN` 仅以 `nft list tables` 近似且不参与 backend 选择，daemon 也未调用 driver `Preflight` | 避免单栈半套策略；权限或目标 netns 不可用仍可能在 apply 才失败 | IPv4/IPv6 CLI 检查已完成；其余暂不实现 |
+| Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、目标 netns、host NAT hook、ipset 及 IPv4/IPv6 CLI | 已检查 `iptables`、`ip6tables` 与 `ipset` 必须同时存在；仍主要只检查 host PATH，`CAP_NET_ADMIN` 仅以 `nft list tables` 近似且不参与 backend 选择，daemon 也未调用 driver `Preflight` | 避免单栈或缺少 set 支持的半套策略；权限、`xt_set` 或目标 netns 不可用仍可能在 staging apply 才失败 | CLI 检查已完成；内核能力与目标 netns 探测暂不实现 |
 | Backend 不可用时的失败策略 | 显式 backend 不可用应 fail closed 或阻止启动 | 无可用 backend 的 instance 不会转交 DryRunDriver；会记录 `LastError` 并输出结构化 `no_backend_available` / `backend_unavailable` warning | daemon 继续运行，但不会把未下发规则伪装为成功 | 已完成 warning 与 fail-closed per-instance reconcile |
 | netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 | 暂不实现 |
 | 无变更 reconcile | `policy_hash` 未变化时 no-op | `PlanDiff` 只比较对象名；nft 每次 apply 原子整表替换，iptables 每次 apply 重建并切换同 hash 的另一个 `a`/`b` 槽位 | 无业务变更也会产生内核写入；nft 有短暂事务切换成本，iptables builtin jump 会经历一次 generation 切换 | 问题不大 暂时保留 |

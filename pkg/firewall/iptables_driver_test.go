@@ -3,6 +3,7 @@ package firewall
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -54,6 +55,115 @@ func TestIPTablesDriver_ApplyOverlay(t *testing.T) {
 	}
 	if !foundChainCreate {
 		t.Error("expected iptables -N chain creation")
+	}
+}
+
+func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	driver := &IPTablesDriver{Command: runner.run}
+	prefixes := make([]netip.Prefix, 0, 30)
+	for i := 0; i < 30; i++ {
+		prefixes = append(prefixes, netip.MustParsePrefix(fmt.Sprintf("2001:db8:%x::/64", i)))
+	}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+	}, FirewallPolicyInput{
+		MeshAuthorized: prefixes,
+		LiveInterfaces: []string{"hgs1", "hgs2", "hgs3"},
+		Forwarding: ForwardingPolicy{
+			Transit:       true,
+			AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("h2", desired, FirewallObservedState{})
+	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+
+	if len(runner.ipsets) != 1 {
+		t.Fatalf("managed ipsets = %v, want one shared source/destination set", runner.ipsets)
+	}
+	for name, members := range runner.ipsetMembers {
+		if len(members) != 30 {
+			t.Fatalf("ipset %s has %d members, want 30", name, len(members))
+		}
+	}
+	transitRules := 0
+	for _, command := range runner.commands {
+		text := commandText(command)
+		if command.name == "ip6tables" && strings.Contains(text, "xfrm transit (transit enabled)") {
+			transitRules++
+			if !strings.Contains(text, "-i hgs+ -o hgs+") ||
+				strings.Count(text, "--match-set") != 2 ||
+				!strings.Contains(text, " src ") ||
+				!strings.Contains(text, " dst ") {
+				t.Fatalf("transit rule does not use source and destination ipset lookups: %s", text)
+			}
+		}
+	}
+	if transitRules != 1 {
+		t.Fatalf("transit rule count = %d, want 1", transitRules)
+	}
+
+	firstSets := make(map[string]bool, len(runner.ipsets))
+	for name := range runner.ipsets {
+		firstSets[name] = true
+	}
+	runner.commands = nil
+	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+	if len(runner.ipsets) != 1 {
+		t.Fatalf("ipsets after generation cutover = %v, want only active generation", runner.ipsets)
+	}
+	for name := range firstSets {
+		if runner.ipsets[name] {
+			t.Fatalf("stale generation ipset %s survived cutover", name)
+		}
+	}
+}
+
+func TestIPTablesDriver_IPSetPreparationFailureKeepsActiveGeneration(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	driver := &IPTablesDriver{Command: runner.run}
+	prefixes := []netip.Prefix{
+		netip.MustParsePrefix("10.1.0.0/24"),
+		netip.MustParsePrefix("10.2.0.0/24"),
+	}
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+	}, FirewallPolicyInput{
+		MeshAuthorized: prefixes,
+		Forwarding:     ForwardingPolicy{Transit: true, AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
+	})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+	plan := PlanDiff("h2", desired, FirewallObservedState{})
+	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	activeSets := make(map[string]bool, len(runner.ipsets))
+	for name := range runner.ipsets {
+		activeSets[name] = true
+	}
+
+	runner.failContains = "add "
+	if _, err := driver.Apply(context.Background(), plan, desired); err == nil {
+		t.Fatal("second Apply succeeded despite injected ipset population failure")
+	}
+	if len(runner.ipsets) != len(activeSets) {
+		t.Fatalf("ipsets after failed staging = %v, want active %v", runner.ipsets, activeSets)
+	}
+	for name := range activeSets {
+		if !runner.ipsets[name] {
+			t.Fatalf("active ipset %s was removed after failed staging", name)
+		}
 	}
 }
 
@@ -763,35 +873,63 @@ func commandIndex(commands []executedCommand, binary, fragment string) int {
 	return -1
 }
 
-func TestIPTablesMatchArgSetsSkipsCrossFamilyPairs(t *testing.T) {
+func TestIPTablesInterfaceMatchArgSetsExpandsExactSets(t *testing.T) {
 	rule := Rule{
-		Action: ActionAccept,
-		Src: []netip.Prefix{
-			netip.MustParsePrefix("10.0.0.0/8"),
-			netip.MustParsePrefix("2001:db8::/32"),
-		},
-		Dst: []netip.Prefix{
-			netip.MustParsePrefix("192.0.2.0/24"),
-			netip.MustParsePrefix("2001:db8:1::/48"),
-		},
+		IfacesIn:  []string{"hgs1", "hgs2"},
+		IfacesOut: []string{"hgs1", "hgs2"},
 	}
-	matches := iptablesMatchArgSets(rule)
-	if len(matches) != 2 {
-		t.Fatalf("match sets = %v, want two same-family pairs", matches)
+	matches := iptablesInterfaceMatchArgSets(rule)
+	if len(matches) != 4 {
+		t.Fatalf("interface set expansion produced %d matches, want 4: %v", len(matches), matches)
 	}
-	for _, match := range matches {
-		var src, dst netip.Prefix
-		for i := 0; i+1 < len(match); i++ {
-			switch match[i] {
-			case "-s":
-				src = netip.MustParsePrefix(match[i+1])
-			case "-d":
-				dst = netip.MustParsePrefix(match[i+1])
-			}
+}
+
+func TestIPTablesInterfaceMatchArgSetsPrefersPortableSelectors(t *testing.T) {
+	rule := Rule{
+		IfaceIn:   "hgs*",
+		IfaceOut:  "hgs*",
+		IfacesIn:  []string{"hgs1", "hgs2"},
+		IfacesOut: []string{"hgs1", "hgs2"},
+	}
+	matches := iptablesInterfaceMatchArgSets(rule)
+	if len(matches) != 1 {
+		t.Fatalf("portable selectors produced %d matches, want 1: %v", len(matches), matches)
+	}
+	got := strings.Join(matches[0], " ")
+	if got != "-i hgs+ -o hgs+" {
+		t.Fatalf("portable selectors rendered as %q, want %q", got, "-i hgs+ -o hgs+")
+	}
+}
+
+func TestIPTablesRuleCommandsWithIPSetsKeepsFamiliesSeparate(t *testing.T) {
+	v4 := []netip.Prefix{
+		netip.MustParsePrefix("10.1.0.0/24"),
+		netip.MustParsePrefix("10.2.0.0/24"),
+	}
+	v6 := []netip.Prefix{
+		netip.MustParsePrefix("2001:db8:1::/64"),
+		netip.MustParsePrefix("2001:db8:2::/64"),
+	}
+	rule := Rule{
+		Action:   ActionAccept,
+		IfaceIn:  "hgs*",
+		IfaceOut: "hgs*",
+		Src:      append(append([]netip.Prefix{}, v4...), v6...),
+		Dst:      append(append([]netip.Prefix{}, v4...), v6...),
+	}
+	rendered := iptablesRuleCommandsWithIPSets("higgs_h2", "higgs_h2_f_deadbeef0000a", rule, "higgs-h2")
+	if len(rendered.commands) != 2 || len(rendered.ipsets) != 2 {
+		t.Fatalf("dual-stack rendering = %d commands, %d sets; want 2 and 2", len(rendered.commands), len(rendered.ipsets))
+	}
+	families := make(map[string]bool)
+	for _, spec := range rendered.ipsets {
+		families[spec.family] = true
+		if len(spec.name) > 31 {
+			t.Fatalf("ipset name %q exceeds 31 characters", spec.name)
 		}
-		if !src.IsValid() || !dst.IsValid() || src.Addr().Is4() != dst.Addr().Is4() {
-			t.Fatalf("cross-family or incomplete match generated: %v", match)
-		}
+	}
+	if !families["inet"] || !families["inet6"] {
+		t.Fatalf("ipset families = %v, want inet and inet6", families)
 	}
 }
 

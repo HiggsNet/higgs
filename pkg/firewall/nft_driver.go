@@ -369,11 +369,11 @@ func buildNFTChainRules(tableName, chainName string, genericCount int, renderGen
 
 func renderNFTRule(r Rule) string {
 	var parts []string
-	if r.IfaceIn != "" {
-		parts = append(parts, "iifname", quoteNFTVal(r.IfaceIn))
+	if match := renderNFTIfaceMatch("iifname", r.IfaceIn, r.IfacesIn); match != "" {
+		parts = append(parts, match)
 	}
-	if r.IfaceOut != "" {
-		parts = append(parts, "oifname", quoteNFTVal(r.IfaceOut))
+	if match := renderNFTIfaceMatch("oifname", r.IfaceOut, r.IfacesOut); match != "" {
+		parts = append(parts, match)
 	}
 	switch r.Proto {
 	case ProtoTCP:
@@ -406,6 +406,23 @@ func renderNFTRule(r Rule) string {
 		parts = append(parts, fmt.Sprintf("comment %s", quoteNFTVal(r.Comment)))
 	}
 	return strings.Join(parts, " ")
+}
+
+func renderNFTIfaceMatch(keyword, single string, values []string) string {
+	if len(values) == 0 {
+		if single == "" {
+			return ""
+		}
+		return keyword + " " + quoteNFTVal(single)
+	}
+	if len(values) == 1 {
+		return keyword + " " + quoteNFTVal(values[0])
+	}
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, quoteNFTVal(value))
+	}
+	return fmt.Sprintf("%s { %s }", keyword, strings.Join(quoted, ", "))
 }
 
 func renderNFTHostIngressRule(hi HostIngressRule) string {

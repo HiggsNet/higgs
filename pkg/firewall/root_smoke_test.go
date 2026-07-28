@@ -41,12 +41,13 @@ func TestFirewallBackendsRootSmoke(t *testing.T) {
 
 	_, iptablesErr := exec.LookPath("iptables")
 	_, ip6tablesErr := exec.LookPath("ip6tables")
-	if iptablesErr == nil && ip6tablesErr == nil {
+	_, ipsetErr := exec.LookPath("ipset")
+	if iptablesErr == nil && ip6tablesErr == nil && ipsetErr == nil {
 		t.Run("iptables", func(t *testing.T) {
 			runFirewallBackendRootSmoke(t, ctx, nsName, "iptables")
 		})
 	} else {
-		t.Log("iptables/ip6tables not both available; skipping iptables backend root smoke")
+		t.Log("iptables/ip6tables/ipset not all available; skipping iptables backend root smoke")
 	}
 }
 
@@ -240,6 +241,11 @@ func firewallBackendDump(t *testing.T, ctx context.Context, nsName, backend, own
 				lines = append(lines, line)
 			}
 		}
+		ipsets, err := exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "ipset", "save").CombinedOutput()
+		if err != nil {
+			t.Fatalf("ipset save: %v\noutput: %s", err, string(ipsets))
+		}
+		lines = append(lines, string(ipsets))
 		return strings.Join(lines, "\n")
 	default:
 		return ""

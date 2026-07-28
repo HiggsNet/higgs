@@ -145,7 +145,7 @@ func TestResolveBackendForInstanceHonorsInlineHookBackend(t *testing.T) {
 	}
 
 	pf.IptablesV6 = "unavailable"
-	if _, err := ResolveBackendForInstance(iptablesOnly, pf); err == nil || !strings.Contains(err.Error(), "iptables_hooks require both iptables and ip6tables") {
+	if _, err := ResolveBackendForInstance(iptablesOnly, pf); err == nil || !strings.Contains(err.Error(), "iptables_hooks require iptables, ip6tables, and ipset") {
 		t.Fatalf("iptables-only unavailable error = %v", err)
 	}
 }
