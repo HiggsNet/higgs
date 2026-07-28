@@ -277,6 +277,9 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 			if sr.Via != "hgv2host" {
 				t.Errorf("static route via = %q, want hgv2host", sr.Via)
 			}
+			if sr.NextHop.String() != "169.254.254.2" {
+				t.Errorf("static route next hop = %s, want 169.254.254.2", sr.NextHop)
+			}
 		}
 	}
 	if !foundAssignment {
@@ -295,7 +298,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	if !strings.Contains(cfgStr, "protocol static") {
 		t.Errorf("BIRD config missing protocol static block\n%s", cfgStr)
 	}
-	if !strings.Contains(cfgStr, `route 10.42.0.0/24 via "hgv2host";`) {
+	if !strings.Contains(cfgStr, `route 10.42.0.0/24 via 169.254.254.2 dev "hgv2host";`) {
 		t.Errorf("BIRD config missing static route for 10.42.0.0/24\n%s", cfgStr)
 	}
 

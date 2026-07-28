@@ -364,6 +364,14 @@ func renderStaticRouteLine(b *bytes.Buffer, r StaticRoute) {
 		fmt.Fprintf(b, "    route %s blackhole;\n", r.Prefix.String())
 		return
 	}
+	if r.NextHop.IsValid() && r.Via != "" {
+		fmt.Fprintf(b, "    route %s via %s dev %q;\n", r.Prefix.String(), r.NextHop.String(), r.Via)
+		return
+	}
+	if r.NextHop.IsValid() {
+		fmt.Fprintf(b, "    route %s via %s;\n", r.Prefix.String(), r.NextHop.String())
+		return
+	}
 	if r.Via != "" {
 		fmt.Fprintf(b, "    route %s via \"%s\";\n", r.Prefix.String(), r.Via)
 		return

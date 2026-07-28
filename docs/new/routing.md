@@ -407,7 +407,7 @@ routing:
 
 1. 在 `create_veth: true` 时创建或修复 veth pair、配置两端 link-local 地址并启用接口 forwarding；
 2. 让 mesh 内 BIRD 在 routing 配置给出的精确 upstream 接口（默认 `hgv2host`）上运行 Babel；此接口**不是** tunnel，不使用 BIRD `type tunnel`；
-3. 对本机 `assigned_to == managed_zone` 的前缀，在 mesh 内生成 BIRD static route，下一跳为 `mesh.interface`；
+3. 对本机 `assigned_to == managed_zone` 的前缀，在 mesh 内生成 BIRD static route，下一跳为 external 端对应地址族的 link-local，并用 `mesh.interface` 固定出口；
 4. 在 external 一侧为已授权的远端 announcement 写 kernel static route，下一跳为 mesh 端 link-local 地址，并排除本机自己持有的 assignment；
 5. 在 external 接口上配置本机 assignment 的首个可用地址，供这些回程路由选择 source address。
 

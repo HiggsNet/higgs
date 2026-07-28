@@ -94,6 +94,26 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 	}
 }
 
+func TestGenerateWithStaticRouteGatewayAndInterface(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.NetNSName = "higgstesth2"
+	spec.StaticRoutes = []StaticRouteSpec{
+		{
+			Prefix:  netip.MustParsePrefix("2001:db8:1::/48"),
+			Via:     "hgv2-host",
+			NextHop: netip.MustParseAddr("fe80::a1:2"),
+		},
+	}
+
+	cfg, err := (DefaultConfigGenerator{}).Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	if got := string(cfg); !strings.Contains(got, `route 2001:db8:1::/48 via fe80::a1:2 dev "hgv2-host";`) {
+		t.Errorf("missing IPv6 gateway route pinned to interface\n%s", got)
+	}
+}
+
 func TestGenerateWithBlackholeStaticRoute(t *testing.T) {
 	spec := testBirdInstanceSpec()
 	spec.NetNSName = "higgstesth2"

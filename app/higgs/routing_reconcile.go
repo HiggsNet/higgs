@@ -749,17 +749,35 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 	if ars != nil && managedZone.Valid() && upstreamStaticRoutesEnabled(inst.Upstream) {
 		for _, prefix := range localAssignedPrefixes(ars, managedZone) {
 			via := ""
+			var nextHop netip.Addr
 			if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == upstreamModeStatic {
 				via = inst.Upstream.MeshInterface
+				nextHop = upstreamPeerNextHop(prefix, inst.Upstream)
 			}
 			spec.StaticRoutes = append(spec.StaticRoutes, bird.StaticRouteSpec{
-				Prefix: prefix,
-				Via:    via,
+				Prefix:  prefix,
+				Via:     via,
+				NextHop: nextHop,
 			})
 		}
 	}
 
 	return spec
+}
+
+func upstreamPeerNextHop(prefix netip.Prefix, upstream *UpstreamConfig) netip.Addr {
+	if upstream == nil {
+		return netip.Addr{}
+	}
+	value := upstream.ExternalIPv6LL
+	if prefix.Addr().Is4() {
+		value = upstream.ExternalIPv4LL
+	}
+	parsed, err := netip.ParsePrefix(value)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return parsed.Addr()
 }
 
 func upstreamStaticRoutesEnabled(upstream *UpstreamConfig) bool {

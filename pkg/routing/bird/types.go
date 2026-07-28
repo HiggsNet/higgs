@@ -160,9 +160,12 @@ type StaticRouteSpec struct {
 	// Prefix is the CIDR to announce.
 	Prefix netip.Prefix `yaml:"prefix" json:"prefix"`
 
-	// Via is the interface name for "via" routes. When empty, the route
-	// is a blackhole route.
+	// Via is the egress interface name. With NextHop it pins the gateway to
+	// that interface; without NextHop it describes an on-link direct route.
 	Via string `yaml:"via,omitempty" json:"via,omitempty"`
+
+	// NextHop is the gateway address. Link-local IPv6 gateways require Via.
+	NextHop netip.Addr `yaml:"next_hop,omitempty" json:"next_hop,omitempty"`
 
 	// Blackhole forces a blackhole route even if Via is set.
 	Blackhole bool `yaml:"blackhole,omitempty" json:"blackhole,omitempty"`
@@ -200,7 +203,8 @@ type StaticRouteBlock struct {
 // StaticRoute is a single route line within a protocol static block.
 type StaticRoute struct {
 	Prefix    netip.Prefix
-	Via       string // interface name for "via" routes; empty for blackhole
+	Via       string
+	NextHop   netip.Addr
 	Blackhole bool
 }
 
