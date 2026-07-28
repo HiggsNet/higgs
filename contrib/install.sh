@@ -9,18 +9,22 @@ service_dir="${HIGGS_SYSTEMD_DIR:-/etc/systemd/system}"
 update_only=false
 install_service=true
 enable_service=false
+skip_dependency_check=${HIGGS_SKIP_DEPENDENCY_CHECK:-false}
 
 usage() {
 	cat <<'EOF'
 Install Higgs from a GitHub Release.
 
-Usage: install.sh [--version VERSION] [--install-dir DIR] [--no-service] [--enable-service] [--update]
+Usage: install.sh [--version VERSION] [--install-dir DIR] [--no-service] [--enable-service] [--skip-dependency-check] [--update]
 
 Options:
   --version VERSION   Release tag to install (default: latest)
   --install-dir DIR   Binary destination (default: /usr/local/bin)
   --no-service        Do not install the systemd service
   --enable-service    Enable higgsnet.service after installing it (does not start it)
+  --skip-dependency-check
+                      Skip host runtime dependency checks (for control-plane-only
+                      or externally managed deployments)
   --update            Do nothing when the installed version is current
   -h, --help          Show this help
 
@@ -29,7 +33,46 @@ Environment:
   HIGGS_VERSION            Same as --version
   HIGGS_INSTALL_DIR        Same as --install-dir
   HIGGS_SYSTEMD_DIR        systemd unit directory (default: /etc/systemd/system)
+  HIGGS_SKIP_DEPENDENCY_CHECK
+                           Set to true to skip runtime dependency checks
 EOF
+}
+
+check_runtime_dependencies() {
+	missing=
+	for dependency in ip ping bird birdc nft iptables ip6tables ipset swanctl; do
+		if ! command -v "$dependency" >/dev/null 2>&1; then
+			if [ -n "$missing" ]; then
+				missing="${missing}, ${dependency}"
+			else
+				missing=$dependency
+			fi
+		fi
+	done
+
+	if [ -z "$missing" ]; then
+		echo "Runtime dependency check passed"
+		return 0
+	fi
+
+	cat >&2 <<EOF
+error: missing Higgs runtime commands: ${missing}
+
+A full data-plane installation needs:
+  iproute2: ip
+  iputils: ping
+  BIRD 2.x: bird, birdc
+  nftables: nft
+  iptables fallback: iptables, ip6tables, ipset
+  StrongSwan: swanctl (with a running charon/VICI service when IPsec is enabled)
+
+Debian/Ubuntu example:
+  apt install bird2 iproute2 ipset iptables iputils-ping nftables strongswan-charon strongswan-swanctl
+
+Install the missing dependencies and retry. For a control-plane-only or
+externally managed deployment, pass --skip-dependency-check explicitly.
+EOF
+	return 1
 }
 
 while [ "$#" -gt 0 ]; do
@@ -54,6 +97,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--enable-service)
 			enable_service=true
+			shift
+			;;
+		--skip-dependency-check)
+			skip_dependency_check=true
 			shift
 			;;
 		-h|--help)
@@ -86,6 +133,15 @@ case "$(uname -m)" in
 	x86_64|amd64) arch=amd64 ;;
 	aarch64|arm64) arch=arm64 ;;
 	*) echo "error: unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+case "$skip_dependency_check" in
+	true) ;;
+	false) check_runtime_dependencies ;;
+	*)
+		echo "error: HIGGS_SKIP_DEPENDENCY_CHECK must be true or false" >&2
+		exit 2
+		;;
 esac
 
 if [ "$version" = latest ]; then

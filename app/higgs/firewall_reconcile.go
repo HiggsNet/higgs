@@ -118,7 +118,8 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 			d.logWarn("firewall", "backend_unavailable", map[string]any{
 				"instance": instCfg.ID, "configured_backend": instCfg.Backend,
 				"nft": preflight.NFTNetlink, "iptables": preflight.Iptables,
-				"ip6tables": preflight.IptablesV6, "message": message,
+				"ip6tables": preflight.IptablesV6, "ipset": preflight.IPSet,
+				"message": message,
 			})
 			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 			entry.LastRunUnix = now.Unix()

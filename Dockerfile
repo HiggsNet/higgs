@@ -27,6 +27,7 @@ RUN apt-get update \
         bird2 \
         ca-certificates \
         iproute2 \
+        ipset \
         iptables \
         iputils-ping \
         nftables \

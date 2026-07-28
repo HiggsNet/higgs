@@ -19,6 +19,11 @@ curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/insta
 curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/update.sh | sh
 ```
 
+安装和更新会在替换二进制前检查完整数据面依赖，包括 `ip`、`ping`、
+BIRD 2.x、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时会
+列出命令并退出；仅部署控制面或由外部环境提供依赖时，可以显式传入
+`--skip-dependency-check`（管道执行时使用 `sh -s -- --skip-dependency-check`）。
+
 其他安装方式：
 
 - **Docker**：`make docker-build` 构建镜像；真实数据面（IPsec/XFRM、BIRD、firewall、netns）需要 `--privileged --network host`。

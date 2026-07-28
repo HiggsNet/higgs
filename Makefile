@@ -60,6 +60,10 @@ install:
 install-script-check:
 	@sh -n contrib/install.sh contrib/update.sh
 	@contrib/install.sh --help >/dev/null
+	@output="$$(mktemp)"; trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+	HIGGS_SKIP_DEPENDENCY_CHECK=invalid contrib/install.sh --version test --no-service >"$$output" 2>&1; \
+	status=$$?; test "$$status" -eq 2; \
+	grep -q 'HIGGS_SKIP_DEPENDENCY_CHECK must be true or false' "$$output"
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)
