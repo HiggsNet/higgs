@@ -248,7 +248,7 @@ type ZoneSnapshot struct {
 higgs.gossip.m1\n<msgpack payload with version=1>
 ```
 
-- 短期兼容读取旧 JSON magic `higgs.gossip.v1\n`
+- 仅接受 MessagePack magic `higgs.gossip.m1\n`
 - 未知 magic → `unsupported_codec`
 - 未知 `version` → `unsupported_wire_version`
 

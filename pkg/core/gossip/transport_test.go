@@ -1,12 +1,13 @@
 package gossip
 
 import (
-	"encoding/json"
 	"errors"
 	"net"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func TestAddKnownPeerID(t *testing.T) {
@@ -310,11 +311,11 @@ func sendRawBytes(addr *net.UDPAddr, data []byte) error {
 }
 
 func rawWireMessage(message *Message) ([]byte, error) {
-	payload, err := json.Marshal(message)
+	payload, err := msgpack.Marshal(message)
 	if err != nil {
 		return nil, err
 	}
-	data := append([]byte(nil), wireMagicJSON...)
+	data := append([]byte(nil), wireMagicMsgpack...)
 	data = append(data, payload...)
 	return data, nil
 }

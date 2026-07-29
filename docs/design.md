@@ -970,7 +970,7 @@ type PeerView struct {
 | 组件 | 当前实现 | 后续候选 | 备注 |
 |------|----------|--------------|------|
 | Go 版本 | 1.25+ | — | 泛型、slog、标准库增强 |
-| 序列化（Gossip） | MessagePack（`higgs.gossip.m1\n...`），短期兼容旧 JSON magic | Protobuf 可选后续优化 | 1200-byte UDP budget；proto 文件仅作协议形状参考 |
+| 序列化（Gossip） | MessagePack（`higgs.gossip.m1\n...`） | Protobuf 可选后续优化 | 1200-byte UDP budget；proto 文件仅作协议形状参考 |
 | 序列化（Record 值） | JSON | — | 具体 record 格式（endpoint、policy 等）均为 JSON |
 | 配置文件 | YAML（`config.yaml`） | — | 默认 `/etc/higgs/config.yaml`，可用 `HIGGS_CONFIG` 覆盖 |
 | 本地存储 | `bbolt` | — | 纯 Go，无 CGO；按 Zone 分 bucket |
@@ -998,7 +998,7 @@ type PeerView struct {
 | bbolt 持久化（LoadNetwork / SaveNetwork / 元数据） | `pkg/core/zone/` | ✅ 完整 |
 | NetworkState：Get（fallback 继承）/ Put / PutAt | `pkg/core/zone/` | ✅ 完整 |
 | 配置化身份初始化 | `app/higgs/identity_bootstrap.go` | ✅ `managed_zone` / `identity.key_path` identity overlay、空 DB pending bootstrap state、reload 不可变校验和 pending 签名 gating 已实现 |
-| Gossip 传输层（UDP、magic frame、MessagePack codec，短期兼容旧 JSON magic） | `pkg/core/gossip/` | ✅ 完整 |
+| Gossip 传输层（UDP、magic frame、MessagePack codec） | `pkg/core/gossip/` | ✅ 完整 |
 | Anti-replay（nonce + 时间戳 ±5min 窗口） | `pkg/core/gossip/` | ✅ 完整 |
 | 速率配额（每 peer 字节 + 对象 token bucket） | `pkg/core/gossip/` | ✅ 完整 |
 | Zone 摘要与快照同步 | `pkg/core/gossip/` | ✅ 完整 |

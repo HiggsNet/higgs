@@ -1,12 +1,30 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
+
+func TestBuildDebugPeerViewRejectsUnknownZone(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	state := &stateFile{
+		Network:   zone.NewNetworkState(),
+		SyncPeers: map[string]syncPeerState{"node-b.catofes.": {}},
+	}
+	config := &syncConfigFile{PeerID: "node-a.catofes."}
+
+	_, err := buildDebugPeerView(state, config, "ss", now)
+	if !errors.Is(err, zone.ErrZoneNotFound) {
+		t.Fatalf("buildDebugPeerView error = %v, want ErrZoneNotFound", err)
+	}
+	if got, want := err.Error(), "zone not found: ss"; got != want {
+		t.Fatalf("buildDebugPeerView error = %q, want %q", got, want)
+	}
+}
 
 func TestSyncStatusAdapterProjectsPeerDiagnostics(t *testing.T) {
 	now := time.Unix(1700000000, 0)

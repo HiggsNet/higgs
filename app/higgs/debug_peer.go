@@ -7,17 +7,13 @@ import (
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
+	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
 func debugPeer(peerID string) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
-	}
-	if response, ok, err := daemonStatusViaControl(rt); err != nil {
-		return err
-	} else if ok {
-		fmt.Printf("daemon: online peer_id=%s\n", response.PeerID)
 	}
 	state, err := rt.LoadState()
 	if err != nil {
@@ -28,6 +24,25 @@ func debugPeer(peerID string) error {
 		return err
 	}
 	now := rt.Now()
+	view, err := buildDebugPeerView(state, config, peerID, now)
+	if err != nil {
+		return err
+	}
+	if response, ok, err := daemonStatusViaControl(rt); err != nil {
+		return err
+	} else if ok {
+		fmt.Printf("daemon: online peer_id=%s\n", response.PeerID)
+	}
+	return inspecttext.WritePeerDebug(os.Stdout, view)
+}
+
+func buildDebugPeerView(state *stateFile, config *syncConfigFile, peerID string, now time.Time) (inspect.PeerDebugView, error) {
+	if state == nil {
+		return inspect.PeerDebugView{}, fmt.Errorf("state is nil")
+	}
+	if !inspect.PeerKnown(inspectPeerSetInput(state, config, now), peerID) {
+		return inspect.PeerDebugView{}, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, peerID)
+	}
 	known := configuredKnownPeers(config)
 	peerState := state.SyncPeers[peerID]
 	source, configuredAddr := bootstrapPeerSource(config, peerID)
@@ -39,7 +54,7 @@ func debugPeer(peerID string) error {
 	if selected := selectedPeerEndpointAddr(endpoints); selected != "" {
 		resolved = selected
 	}
-	return inspecttext.WritePeerDebug(os.Stdout, buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, now))
+	return buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, now), nil
 }
 
 func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerState syncPeerState, now time.Time) inspect.PeerDebugView {

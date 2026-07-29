@@ -133,7 +133,7 @@ func MarshalMessage(message *Message) ([]byte, error) {
 	return encodeMessage(DefaultSendCodec, message)
 }
 
-// UnmarshalMessage decodes a Message from raw wire bytes, auto-detecting codec.
+// UnmarshalMessage decodes a MessagePack Message from raw wire bytes.
 func UnmarshalMessage(data []byte) (*Message, error) {
 	return decodeMessage(data)
 }

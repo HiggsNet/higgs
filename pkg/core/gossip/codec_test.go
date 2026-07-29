@@ -36,31 +36,6 @@ func TestMsgpackCodecRoundTrip(t *testing.T) {
 	}
 }
 
-func TestJSONCodecBackwardCompat(t *testing.T) {
-	message := &Message{
-		Type:      MessagePong,
-		PeerID:    "node-b",
-		Nonce:     7,
-		Timestamp: 1717171717,
-		Pong:      &Pong{Summary: &CatalogSummary{CatalogRoot: []byte{5}, ZoneCount: 1}},
-	}
-	codec := jsonCodec{}
-	data, err := encodeMessage(codec, message)
-	if err != nil {
-		t.Fatalf("encodeMessage: %v", err)
-	}
-	if !bytes.HasPrefix(data, wireMagicJSON) {
-		t.Fatalf("expected JSON magic prefix, got %q", data[:len(wireMagicJSON)])
-	}
-	got, err := decodeMessage(data)
-	if err != nil {
-		t.Fatalf("decodeMessage: %v", err)
-	}
-	if got.Type != MessagePong || got.Pong.Summary == nil || got.Pong.Summary.ZoneCount != 1 {
-		t.Fatalf("round-trip mismatch: %+v", got)
-	}
-}
-
 func TestObjectChunkCodecRoundTrip(t *testing.T) {
 	message := &Message{
 		Type:      MessageObjectChunk,
@@ -94,35 +69,25 @@ func TestObjectChunkCodecRoundTrip(t *testing.T) {
 	}
 }
 
-func TestUnknownCodecRejected(t *testing.T) {
-	data := append([]byte("higgs.gossip.x9\n"), []byte(`{}`)...)
-	_, err := decodeMessage(data)
-	if err == nil {
-		t.Fatalf("expected error for unknown codec")
-	}
-	if RejectReason(err) != "unsupported_codec" {
-		t.Fatalf("RejectReason = %q, want unsupported_codec; err=%v", RejectReason(err), err)
+func TestUnsupportedCodecsRejected(t *testing.T) {
+	for _, magic := range []string{
+		"higgs.gossip.v1\n", // retired JSON codec
+		"higgs.gossip.x9\n", // unknown codec
+	} {
+		data := append([]byte(magic), []byte(`{}`)...)
+		_, err := decodeMessage(data)
+		if err == nil {
+			t.Fatalf("decodeMessage(%q) succeeded, want error", magic)
+		}
+		if RejectReason(err) != "unsupported_codec" {
+			t.Fatalf("RejectReason(%q) = %q, want unsupported_codec; err=%v", magic, RejectReason(err), err)
+		}
 	}
 }
 
 func TestDefaultSendCodecIsMsgpack(t *testing.T) {
 	if _, ok := DefaultSendCodec.(msgpackCodec); !ok {
 		t.Fatalf("DefaultSendCodec should be msgpackCodec, got %T", DefaultSendCodec)
-	}
-}
-
-func BenchmarkPingJSON(b *testing.B) {
-	message := &Message{
-		Type:      MessagePing,
-		PeerID:    "node-a.catofes.",
-		Nonce:     123456789,
-		Timestamp: 1717171717,
-		Ping:      &Ping{Summary: &CatalogSummary{CatalogRoot: make([]byte, 32), ZoneCount: 2}},
-	}
-	codec := jsonCodec{}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = encodeMessage(codec, message)
 	}
 }
 
@@ -138,69 +103,6 @@ func BenchmarkPingMsgpack(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = encodeMessage(codec, message)
-	}
-}
-
-func TestMsgpackSmallerThanJSON(t *testing.T) {
-	message := &Message{
-		Type:      MessageAnnounce,
-		PeerID:    "node-a.catofes.",
-		Nonce:     999,
-		Timestamp: 1717171717,
-		Announce: &Announce{
-			Zones: []ZoneDigest{{Zone: "catofes.", RootHash: make([]byte, 32)}},
-		},
-	}
-	jsonData, _ := encodeMessage(jsonCodec{}, message)
-	msgpackData, _ := encodeMessage(msgpackCodec{}, message)
-	if len(msgpackData) >= len(jsonData) {
-		t.Fatalf("msgpack (%d bytes) should be smaller than JSON (%d bytes)", len(msgpackData), len(jsonData))
-	}
-	t.Logf("JSON=%d bytes, MessagePack=%d bytes, savings=%d bytes", len(jsonData), len(msgpackData), len(jsonData)-len(msgpackData))
-}
-
-func TestTypicalMessagePackSizesBeatJSON(t *testing.T) {
-	digest := ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
-
-	cases := []struct {
-		name    string
-		message *Message
-	}{
-		{
-			name:    "ping summary",
-			message: commonWireMessage(MessagePing, &Ping{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil, nil),
-		},
-		{
-			name:    "pong summary",
-			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
-		},
-		{
-			name:    "fetch zone",
-			message: commonWireMessage(MessageFetchZone, nil, nil, &FetchZone{Zone: "node-a.catofes."}, nil, nil),
-		},
-		{
-			name:    "fetch record",
-			message: commonWireMessage(MessageFetchRecord, nil, nil, nil, &FetchRecord{Zone: "node-a.catofes.", Key: "identity", Version: 7}, nil),
-		},
-		{
-			name:    "announce digest",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}}),
-		},
-	}
-
-	for _, tc := range cases {
-		jsonData, err := encodeMessage(jsonCodec{}, tc.message)
-		if err != nil {
-			t.Fatalf("%s JSON encode: %v", tc.name, err)
-		}
-		msgpackData, err := encodeMessage(msgpackCodec{}, tc.message)
-		if err != nil {
-			t.Fatalf("%s MessagePack encode: %v", tc.name, err)
-		}
-		if len(msgpackData) >= len(jsonData) {
-			t.Fatalf("%s MessagePack size = %d, want less than JSON size %d", tc.name, len(msgpackData), len(jsonData))
-		}
-		t.Logf("%s JSON=%d MessagePack=%d savings=%d", tc.name, len(jsonData), len(msgpackData), len(jsonData)-len(msgpackData))
 	}
 }
 
