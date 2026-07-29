@@ -193,7 +193,7 @@ Docker 可以在动态池中自动分配未指定地址；两个服务容器使�
 
 ## 4. 地址解析与 artifact 生成
 
-`higgs-services` 通过执行 `higgs route ipam mine`（JSON 输出）获取本机 `managed_zone` 和 active assignment 列表，然后按 manifest 做纯函数式解析，产出带 config hash 的 resolved 结构。命令：
+`higgs-services` 通过执行 `higgs route ipam mine --json` 获取本机 `managed_zone` 和 active assignment 列表，然后按 manifest 做纯函数式解析，产出带 config hash 的 resolved 结构。面向管理员直接运行 `higgs route ipam mine` 时，默认输出表格。命令：
 
 ```bash
 higgs-services validate   # 打印 resolved JSON，便于检查
@@ -252,7 +252,7 @@ higgs-services publish
 
 ### 5.2 publish 内部步骤
 
-`publish` 先重新执行 `higgs route ipam mine` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
+`publish` 先重新执行 `higgs route ipam mine --json` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
 
 1. 从本机分别对每个 endpoint 的 SOCKS5 和 HTTP 地址、TCP 端口做 3 秒就绪检查；任一失败即终止。该检查不执行 UDP ASSOCIATE。
 2. 为每个 endpoint 安装或清理两条独立 ACL：配置了 `allow_zones` 时，分别执行 `higgs firewall endpoint apply socks5-<network> --destination <socks-ip> --scope ip --allow-zone ...` 和 `higgs firewall endpoint apply h2-<network> --destination <http-ip> --scope ip --allow-zone ...`；未配置时删除两条旧 ACL（表示不使用这套限制）。

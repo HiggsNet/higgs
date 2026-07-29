@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
@@ -130,7 +133,7 @@ func cmdIPAM() *cli.Command {
 				Name:      "assigned",
 				Usage:     "List authorized IPAM assignments",
 				UsageText: "higgs route ipam assigned [--zone <zone>]",
-				Description: "Print authorized IPAM assignments as JSON.\n" +
+				Description: "Print authorized IPAM assignments as a table.\n" +
 					"If --zone is given, only assignments whose source or assigned_to matches are shown.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "zone", Usage: "Filter by source or assigned zone"},
@@ -145,13 +148,16 @@ func cmdIPAM() *cli.Command {
 			{
 				Name:        "mine",
 				Usage:       "Show IPAM prefixes and pools for the local managed zone",
-				UsageText:   "higgs route ipam mine",
-				Description: "Print the local managed zone's authorized IPAM assignments and owned pools as JSON.",
+				UsageText:   "higgs route ipam mine [--json]",
+				Description: "Print the local managed zone's authorized IPAM assignments and owned pools as tables.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "json", Usage: "Print structured JSON output", Value: false},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: higgs route ipam mine", 1)
+						return cli.Exit("usage: higgs route ipam mine [--json]", 1)
 					}
-					return showLocalIPAM()
+					return showLocalIPAM(cmd.Bool("json"))
 				},
 			},
 			{
@@ -565,6 +571,18 @@ func listIPAMAssignments(filterZone zone.ZonePath) error {
 }
 
 func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error {
+	return listIPAMAssignmentsWithRuntimeTo(os.Stdout, rt, filterZone)
+}
+
+type ipamAssignmentRow struct {
+	Prefix     string
+	Source     string
+	AssignedTo string
+	Shared     bool
+	Tag        string
+}
+
+func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *Runtime, filterZone zone.ZonePath) error {
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -574,20 +592,13 @@ func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error
 		return err
 	}
 
-	type assignmentRow struct {
-		Prefix     string `json:"prefix"`
-		Source     string `json:"source"`
-		AssignedTo string `json:"assigned_to"`
-		Shared     bool   `json:"shared,omitempty"`
-		Tag        string `json:"tag,omitempty"`
-	}
-	rows := make([]assignmentRow, 0, len(ars.AllAssignments))
+	rows := make([]ipamAssignmentRow, 0, len(ars.AllAssignments))
 	filter := string(filterZone)
 	for _, entry := range ars.AllAssignments {
 		if filter != "" && string(entry.Source) != filter && string(entry.AssignedTo) != filter {
 			continue
 		}
-		rows = append(rows, assignmentRow{
+		rows = append(rows, ipamAssignmentRow{
 			Prefix:     entry.Prefix.String(),
 			Source:     string(entry.Source),
 			AssignedTo: string(entry.AssignedTo),
@@ -603,34 +614,47 @@ func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error
 		}
 		return pi.Bits() < pj.Bits()
 	})
-
-	out, err := json.MarshalIndent(rows, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(out))
-	return nil
+	return writeIPAMAssignments(w, rows)
 }
 
-func showLocalIPAM() error {
+func writeIPAMAssignments(w io.Writer, rows []ipamAssignmentRow) error {
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(table, "assignments: %d\n", len(rows))
+	fmt.Fprintln(table, "PREFIX\tSOURCE\tASSIGNED_TO\tMODE\tTAG")
+	for _, row := range rows {
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+			row.Prefix,
+			row.Source,
+			row.AssignedTo,
+			ipamAssignmentMode(row.Shared),
+			dash(row.Tag),
+		)
+	}
+	return table.Flush()
+}
+
+func showLocalIPAM(jsonOut bool) error {
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
 	}
-	return showLocalIPAMWithRuntime(rt)
+	return showLocalIPAMWithRuntime(rt, jsonOut)
 }
 
-func showLocalIPAMWithRuntime(rt *Runtime) error {
+func showLocalIPAMWithRuntime(rt *Runtime, jsonOut bool) error {
 	report, err := buildIPAMMineReport(rt)
 	if err != nil {
 		return err
 	}
-	out, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
+	if jsonOut {
+		out, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(out))
+		return nil
 	}
-	fmt.Println(string(out))
-	return nil
+	return writeIPAMMineReport(os.Stdout, report)
 }
 
 type ipamMineReport struct {
@@ -651,6 +675,33 @@ type ipamMinePoolRow struct {
 	Source      string   `json:"source"`
 	DelegatedTo string   `json:"delegated_to"`
 	Relation    []string `json:"relation"`
+}
+
+func writeIPAMMineReport(w io.Writer, report *ipamMineReport) error {
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(table, "managed_zone: %s\n", report.ManagedZone)
+	fmt.Fprintf(table, "assignments: %d\n", len(report.Assignments))
+	fmt.Fprintln(table, "PREFIX\tSOURCE\tMODE\tTAG")
+	for _, row := range report.Assignments {
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n",
+			row.Prefix,
+			row.Source,
+			ipamAssignmentMode(row.Shared),
+			dash(row.Tag),
+		)
+	}
+	fmt.Fprintln(table)
+	fmt.Fprintf(table, "pools: %d\n", len(report.Pools))
+	fmt.Fprintln(table, "PREFIX\tSOURCE\tDELEGATED_TO\tRELATION")
+	for _, row := range report.Pools {
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n",
+			row.Prefix,
+			row.Source,
+			row.DelegatedTo,
+			dash(strings.Join(row.Relation, ",")),
+		)
+	}
+	return table.Flush()
 }
 
 func buildIPAMMineReport(rt *Runtime) (*ipamMineReport, error) {
@@ -744,8 +795,7 @@ func getIPAM(query string, jsonOut bool) error {
 		fmt.Println(string(out))
 		return nil
 	}
-	printIPAMGetReport(report)
-	return nil
+	return writeIPAMGetReport(os.Stdout, report)
 }
 
 type ipamGetReport struct {
@@ -919,66 +969,60 @@ func containsPrefixLocal(outer, inner netip.Prefix) bool {
 	return outer.Contains(inner.Masked().Addr())
 }
 
-func printIPAMGetReport(report *ipamGetReport) {
-	fmt.Printf("query: %s\n\n", report.Query)
-	printIPAMGetPools(report)
-	printIPAMGetAssignments(report)
-	printIPAMGetRoutes(report)
-	printIPAMGetDiagnostics(report)
-}
+func writeIPAMGetReport(w io.Writer, report *ipamGetReport) error {
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(table, "query: %s\n", report.Query)
 
-func printIPAMGetPools(report *ipamGetReport) {
-	if len(report.PoolChain) == 0 {
-		fmt.Println("pool chain: none")
-		fmt.Println("best pool: none")
-		return
-	}
-	fmt.Println("pool chain:")
-	for _, pool := range report.PoolChain {
-		fmt.Printf("  %s  source=%s  delegated_to=%s  relation=%s\n", pool.Prefix, pool.Source, pool.DelegatedTo, pool.Relation)
-	}
-	fmt.Println()
-	fmt.Println("best pool:")
-	fmt.Printf("  %s  source=%s  delegated_to=%s\n", report.BestPool.Prefix, report.BestPool.Source, report.BestPool.DelegatedTo)
-}
-
-func printIPAMGetAssignments(report *ipamGetReport) {
-	fmt.Println()
-	if len(report.Assignments) == 0 {
-		fmt.Println("assignment: none")
-		return
-	}
-	fmt.Println("assignment:")
-	for _, assignment := range report.Assignments {
-		shared := ""
-		if assignment.Shared {
-			shared = "  shared=true"
+	fmt.Fprintf(table, "pools: %d\n", len(report.PoolChain))
+	fmt.Fprintln(table, "PREFIX\tSOURCE\tDELEGATED_TO\tRELATION\tBEST")
+	for i, pool := range report.PoolChain {
+		best := "-"
+		if i == len(report.PoolChain)-1 {
+			best = "yes"
 		}
-		fmt.Printf("  %s  source=%s  assigned_to=%s%s\n", assignment.Prefix, assignment.Source, assignment.AssignedTo, shared)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+			pool.Prefix,
+			pool.Source,
+			pool.DelegatedTo,
+			dash(pool.Relation),
+			best,
+		)
 	}
-}
 
-func printIPAMGetRoutes(report *ipamGetReport) {
-	if len(report.Routes) == 0 {
-		fmt.Println("routes: none")
-		return
+	fmt.Fprintln(table)
+	fmt.Fprintf(table, "assignments: %d\n", len(report.Assignments))
+	fmt.Fprintln(table, "PREFIX\tSOURCE\tASSIGNED_TO\tMODE\tTAG")
+	for _, assignment := range report.Assignments {
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+			assignment.Prefix,
+			assignment.Source,
+			assignment.AssignedTo,
+			ipamAssignmentMode(assignment.Shared),
+			dash(assignment.Tag),
+		)
 	}
-	fmt.Println("routes:")
+
+	fmt.Fprintln(table)
+	fmt.Fprintf(table, "routes: %d\n", len(report.Routes))
+	fmt.Fprintln(table, "PREFIX\tSOURCE")
 	for _, route := range report.Routes {
-		fmt.Printf("  %s  source=%s\n", route.Prefix, route.Source)
+		fmt.Fprintf(table, "%s\t%s\n", route.Prefix, route.Source)
 	}
+
+	fmt.Fprintln(table)
+	fmt.Fprintf(table, "diagnostics: %d\n", len(report.Diagnostics))
+	fmt.Fprintln(table, "CODE\tDETAIL")
+	for _, diag := range report.Diagnostics {
+		fmt.Fprintf(table, "%s\t%s\n", diag.Code, strings.ReplaceAll(diag.Detail, "\n", "\\n"))
+	}
+	return table.Flush()
 }
 
-func printIPAMGetDiagnostics(report *ipamGetReport) {
-	fmt.Println()
-	if len(report.Diagnostics) == 0 {
-		fmt.Println("diagnostics: none")
-		return
+func ipamAssignmentMode(shared bool) string {
+	if shared {
+		return "shared"
 	}
-	fmt.Println("diagnostics:")
-	for _, diag := range report.Diagnostics {
-		fmt.Printf("  %s  %s\n", diag.Code, diag.Detail)
-	}
+	return "exclusive"
 }
 
 func comparePrefixStrings(a, b string) int {

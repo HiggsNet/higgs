@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"path/filepath"
@@ -283,17 +284,34 @@ func TestListIPAMAssignments(t *testing.T) {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
-	if err := listIPAMAssignmentsWithRuntime(rt, ""); err != nil {
+	var output bytes.Buffer
+	if err := listIPAMAssignmentsWithRuntimeTo(&output, rt, ""); err != nil {
 		t.Fatalf("listIPAMAssignments failed: %v", err)
 	}
-
-	if err := listIPAMAssignmentsWithRuntime(rt, "node.pek.catofes."); err != nil {
-		t.Fatalf("listIPAMAssignments with filter failed: %v", err)
+	for _, want := range []string{"assignments: 1", "PREFIX", "SOURCE", "ASSIGNED_TO", "MODE", "TAG", "10.0.1.0/24", "exclusive"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("assignment table missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(output.String()), "[") {
+		t.Fatalf("assignment output is still JSON:\n%s", output.String())
 	}
 
-	err := listIPAMAssignmentsWithRuntime(rt, "other.catofes.")
+	output.Reset()
+	if err := listIPAMAssignmentsWithRuntimeTo(&output, rt, "node.pek.catofes."); err != nil {
+		t.Fatalf("listIPAMAssignments with filter failed: %v", err)
+	}
+	if !strings.Contains(output.String(), "assignments: 1") {
+		t.Fatalf("filtered assignment table:\n%s", output.String())
+	}
+
+	output.Reset()
+	err := listIPAMAssignmentsWithRuntimeTo(&output, rt, "other.catofes.")
 	if err != nil {
 		t.Fatalf("listIPAMAssignments with non-matching filter failed: %v", err)
+	}
+	if !strings.Contains(output.String(), "assignments: 0") {
+		t.Fatalf("empty assignment table:\n%s", output.String())
 	}
 }
 
@@ -318,6 +336,16 @@ func TestIPAMGetExplainsPoolChainAndAssignment(t *testing.T) {
 	}
 	if report.AssignedTo == nil || *report.AssignedTo != "node.pek.catofes." {
 		t.Fatalf("AssignedTo = %v, want node.pek.catofes.", report.AssignedTo)
+	}
+
+	var output bytes.Buffer
+	if err := writeIPAMGetReport(&output, report); err != nil {
+		t.Fatalf("writeIPAMGetReport: %v", err)
+	}
+	for _, want := range []string{"query: 10.0.1.42/32", "pools:", "BEST", "assignments: 1", "ASSIGNED_TO", "routes:", "diagnostics:"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("IPAM get table missing %q:\n%s", want, output.String())
+		}
 	}
 }
 
@@ -405,6 +433,19 @@ func TestBuildIPAMMineReport(t *testing.T) {
 	}
 	if !seenPublished || !seenDelegated {
 		t.Fatalf("Pools = %+v, want published and delegated relations", report.Pools)
+	}
+
+	var output bytes.Buffer
+	if err := writeIPAMMineReport(&output, report); err != nil {
+		t.Fatalf("writeIPAMMineReport: %v", err)
+	}
+	for _, want := range []string{"managed_zone: pek.catofes.", "assignments: 1", "PREFIX", "MODE", "pools: 2", "DELEGATED_TO", "RELATION"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("IPAM mine table missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(output.String()), "{") {
+		t.Fatalf("IPAM mine output is still JSON:\n%s", output.String())
 	}
 }
 

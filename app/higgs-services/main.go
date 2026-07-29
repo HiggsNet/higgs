@@ -105,7 +105,7 @@ func run(args []string) error {
 }
 
 func queryAssignments(higgsBinary string) (runtimeIPAMReport, error) {
-	cmd := exec.Command(higgsBinary, "route", "ipam", "mine")
+	cmd := exec.Command(higgsBinary, "route", "ipam", "mine", "--json")
 	out, err := cmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
