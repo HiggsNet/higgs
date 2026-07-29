@@ -54,8 +54,13 @@ type rawProbeResult struct {
 	lastRTT  time.Duration
 	err      error
 	// unavailable is reserved for local setup failures. Packet send failures
-	// and timeouts must not cause a second exec-based probe.
+	// normally do not cause a second exec-based probe, except for local route
+	// errors that indicate a cached interface-bound socket has gone stale.
 	unavailable bool
+	// reopen asks the namespace worker to retire this socket and retry opening
+	// it after a bounded backoff. It is only set for errors that can be caused
+	// by deleting and recreating an interface behind SO_BINDTODEVICE.
+	reopen bool
 }
 
 // NewRawICMProber creates the preferred in-process ICMP prober. fallback is
@@ -159,6 +164,7 @@ type rawICMPNamespaceWorker struct {
 	openSocket  func(rawSocketKey) (int, uint32, error)
 	closeSocket func(int) error
 	probeSocket func(rawICMPJob, rawSocketKey, int, uint32) rawProbeResult
+	now         func() time.Time
 	mu          sync.RWMutex
 	once        sync.Once
 }
@@ -171,6 +177,7 @@ func newRawICMPWorker(netns string) (rawICMPWorker, error) {
 		openSocket:  openRawICMPSocket,
 		closeSocket: unix.Close,
 		probeSocket: probeRawICMP,
+		now:         time.Now,
 	}
 	ready := make(chan error, 1)
 	go w.run(ready)
@@ -183,6 +190,9 @@ func newRawICMPWorker(netns string) (rawICMPWorker, error) {
 func (w *rawICMPNamespaceWorker) run(ready chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	if w.now == nil {
+		w.now = time.Now
+	}
 
 	var restoreFD, targetFD int = -1, -1
 	var err error
@@ -208,12 +218,12 @@ func (w *rawICMPNamespaceWorker) run(ready chan<- error) {
 	}
 	ready <- nil
 
-	sockets := make(map[rawSocketKey]*rawICMPSocket)
+	sockets := make(map[rawSocketKey]*rawICMPSocketSlot)
 	var probes sync.WaitGroup
 	defer func() {
 		probes.Wait()
-		for _, socket := range sockets {
-			_ = w.closeSocket(socket.fd)
+		for _, slot := range sockets {
+			slot.close()
 		}
 		if restoreFD >= 0 {
 			_ = unix.Setns(restoreFD, unix.CLONE_NEWNET)
@@ -227,21 +237,33 @@ func (w *rawICMPNamespaceWorker) run(ready chan<- error) {
 
 	for job := range w.jobs {
 		key := rawSocketKeyForTarget(job.target)
-		socket := sockets[key]
-		if socket == nil {
+		slot := sockets[key]
+		if slot == nil {
+			slot = &rawICMPSocketSlot{}
+			sockets[key] = slot
+		}
+		socket, err := slot.acquire(w.now(), job.cfg.Interval, func() (*rawICMPSocket, error) {
 			fd, zoneID, err := w.openSocket(key)
 			if err != nil {
-				job.result <- rawProbeResult{err: fmt.Errorf("open raw ICMP socket: %w", err), unavailable: true}
-				continue
+				return nil, err
 			}
-			socket = newRawICMPSocket(fd, zoneID)
-			sockets[key] = socket
+			return newRawICMPSocket(fd, zoneID, w.closeSocket), nil
+		})
+		if err != nil {
+			job.result <- rawProbeResult{err: err, unavailable: true}
+			continue
 		}
 		probes.Add(1)
-		go func(job rawICMPJob, key rawSocketKey, socket *rawICMPSocket) {
+		go func(job rawICMPJob, key rawSocketKey, slot *rawICMPSocketSlot, socket *rawICMPSocket) {
 			defer probes.Done()
-			job.result <- socket.probe(job, key, w.probeSocket)
-		}(job, key, socket)
+			result := socket.probe(job, key, w.probeSocket)
+			if result.reopen {
+				slot.invalidate(socket, w.now(), job.cfg.Interval, result.err)
+			} else if result.err == nil {
+				slot.markSuccess(socket)
+			}
+			job.result <- result
+		}(job, key, slot, socket)
 	}
 }
 
@@ -284,17 +306,125 @@ type rawSocketKey struct {
 	iface  string
 }
 
+const (
+	rawICMPReopenMinDelay = 15 * time.Second
+	rawICMPReopenMaxDelay = 2 * time.Minute
+)
+
+// rawICMPSocketSlot retains retry state after its socket is retired. This
+// prevents a persistent local routing fault from opening a new raw socket on
+// every health interval while allowing exec-ping fallback during the backoff.
+type rawICMPSocketSlot struct {
+	mu                  sync.Mutex
+	socket              *rawICMPSocket
+	consecutiveFailures int
+	retryAfter          time.Time
+	lastErr             error
+}
+
+func (s *rawICMPSocketSlot) acquire(
+	now time.Time,
+	interval time.Duration,
+	open func() (*rawICMPSocket, error),
+) (*rawICMPSocket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.socket != nil {
+		return s.socket, nil
+	}
+	if now.Before(s.retryAfter) {
+		return nil, fmt.Errorf("raw ICMP socket reopen backoff after: %w", s.lastErr)
+	}
+	socket, err := open()
+	if err != nil {
+		wrapped := fmt.Errorf("open raw ICMP socket: %w", err)
+		s.recordFailure(now, interval, wrapped)
+		return nil, wrapped
+	}
+	s.socket = socket
+	return socket, nil
+}
+
+func (s *rawICMPSocketSlot) invalidate(socket *rawICMPSocket, now time.Time, interval time.Duration, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.socket != socket {
+		return
+	}
+	s.socket = nil
+	s.recordFailure(now, interval, err)
+}
+
+func (s *rawICMPSocketSlot) markSuccess(socket *rawICMPSocket) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.socket != socket {
+		return
+	}
+	s.consecutiveFailures = 0
+	s.retryAfter = time.Time{}
+	s.lastErr = nil
+}
+
+func (s *rawICMPSocketSlot) recordFailure(now time.Time, interval time.Duration, err error) {
+	s.consecutiveFailures++
+	s.retryAfter = now.Add(rawICMPSocketReopenDelay(interval, s.consecutiveFailures))
+	s.lastErr = err
+}
+
+func (s *rawICMPSocketSlot) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.socket != nil {
+		s.socket.close()
+		s.socket = nil
+	}
+}
+
+func rawICMPSocketReopenDelay(interval time.Duration, failures int) time.Duration {
+	base := 3 * interval
+	if base < rawICMPReopenMinDelay {
+		base = rawICMPReopenMinDelay
+	}
+	if base > rawICMPReopenMaxDelay {
+		base = rawICMPReopenMaxDelay
+	}
+	delay := base
+	for i := 1; i < failures && delay < rawICMPReopenMaxDelay; i++ {
+		if delay > rawICMPReopenMaxDelay/2 {
+			return rawICMPReopenMaxDelay
+		}
+		delay *= 2
+	}
+	if delay > rawICMPReopenMaxDelay {
+		return rawICMPReopenMaxDelay
+	}
+	return delay
+}
+
 // rawICMPSocket serializes probes sharing one bound socket. Different
 // source/interface keys have independent sockets and can be probed
 // concurrently after the namespace worker creates them.
 type rawICMPSocket struct {
-	fd     int
-	zoneID uint32
-	ready  chan struct{}
+	fd          int
+	zoneID      uint32
+	ready       chan struct{}
+	closeSocket func(int) error
+	closeOnce   sync.Once
+	staleErr    error
 }
 
-func newRawICMPSocket(fd int, zoneID uint32) *rawICMPSocket {
-	socket := &rawICMPSocket{fd: fd, zoneID: zoneID, ready: make(chan struct{}, 1)}
+func newRawICMPSocket(fd int, zoneID uint32, closers ...func(int) error) *rawICMPSocket {
+	closeSocket := unix.Close
+	if len(closers) > 0 && closers[0] != nil {
+		closeSocket = closers[0]
+	}
+	socket := &rawICMPSocket{
+		fd:          fd,
+		zoneID:      zoneID,
+		ready:       make(chan struct{}, 1),
+		closeSocket: closeSocket,
+	}
 	socket.ready <- struct{}{}
 	return socket
 }
@@ -310,7 +440,24 @@ func (s *rawICMPSocket) probe(
 	case <-job.ctx.Done():
 		return rawProbeResult{err: job.ctx.Err()}
 	}
-	return run(job, key, s.fd, s.zoneID)
+	if s.staleErr != nil {
+		return rawProbeResult{
+			err:         fmt.Errorf("raw ICMP socket retired after: %w", s.staleErr),
+			unavailable: true,
+		}
+	}
+	result := run(job, key, s.fd, s.zoneID)
+	if result.reopen {
+		s.staleErr = result.err
+		s.close()
+	}
+	return result
+}
+
+func (s *rawICMPSocket) close() {
+	s.closeOnce.Do(func() {
+		_ = s.closeSocket(s.fd)
+	})
 }
 
 func rawSocketKeyForTarget(target ProbeTarget) rawSocketKey {
@@ -362,7 +509,14 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 		sequence := uint16(job.seq.Add(1))
 		packet := makeICMPEchoPacket(key.family, job.id, sequence)
 		if err := unix.Sendto(fd, packet, 0, rawDestination(job.target, key.family, zoneID)); err != nil {
-			return rawProbeResult{received: received, lastRTT: lastRTT, err: fmt.Errorf("send raw ICMP echo: %w", err)}
+			reopen := shouldReopenRawICMPSocket(err)
+			return rawProbeResult{
+				received:    received,
+				lastRTT:     lastRTT,
+				err:         fmt.Errorf("send raw ICMP echo: %w", err),
+				unavailable: reopen,
+				reopen:      reopen,
+			}
 		}
 		pending[sequence] = time.Now()
 	}
@@ -373,6 +527,12 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 		return rawProbeResult{received: received, lastRTT: lastRTT, err: err}
 	}
 	return rawProbeResult{received: received, lastRTT: lastRTT}
+}
+
+func shouldReopenRawICMPSocket(err error) bool {
+	return errors.Is(err, unix.ENETUNREACH) ||
+		errors.Is(err, unix.ENODEV) ||
+		errors.Is(err, unix.EADDRNOTAVAIL)
 }
 
 func openRawICMPSocket(key rawSocketKey) (int, uint32, error) {

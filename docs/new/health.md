@@ -218,8 +218,12 @@ reply。steady state 不再执行 `ip netns exec`、fork `ping` 或创建临时 
   namespace 仍可能把它们移除。
 - IPv4、IPv6 和 IPv6 link-local（以接口 index 作为 scope）均走 raw socket；
   burst 仍以 200ms 间隔发出，成功数超过失败数才健康。
-- raw socket / `setns` 的本地 setup 失败会自动退回下述 `ICMProber`；网络
-  不可达、丢包和超时不会触发第二次 exec probe，避免误掩盖数据面问题。
+- raw socket / `setns` 的本地 setup 失败会自动退回下述 `ICMProber`。raw
+  `sendto` 返回 `ENETUNREACH`、`ENODEV` 或 `EADDRNOTAVAIL` 时，视为缓存的
+  `SO_BINDTODEVICE` socket 可能因接口同名重建而失效：本轮退回 exec-ping，
+  淘汰旧 socket，并按 `max(3 × health interval, 15s)` 起步做指数退避重建，
+  上限 2 分钟。退避期间继续用 exec-ping，不会每轮重开 raw socket。其他发送
+  错误、普通丢包和超时不会触发第二次 probe，避免误掩盖数据面问题。
 - worker 在 daemon 生命周期内持有 namespace 和 socket；netns 被删除并重建
   后需要重启 daemon 才能让 worker 进入新的 namespace（root smoke 覆盖前不
   应将此行为视为已经验收）。
@@ -512,7 +516,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 | 项 | 设计期望 | 当前实现 | 影响 |
 |---|---|---|---|
 | 探测执行模型 | 有界并发、不阻塞 loop | 独立 health 协程以约 1s timer 投递任务；固定大小 worker pool 经 channel 执行 ping，完成后以 channel 通知 daemon | 健康 interval 不受 IPsec reconcile 间隔限制，慢 ping 不阻塞 daemon event loop |
-| ICMP 快路径 | raw socket（`ip4:icmp`）优先，ping 兜底 | Linux 默认 raw socket；无 capability 时回退 `ip netns exec ping` | raw 成功时 RTT 不含进程创建开销；netns 删除/重建的长期行为仍待 root smoke |
+| ICMP 快路径 | raw socket（`ip4:icmp`）优先，ping 兜底 | Linux 默认 raw socket；无 capability 或检测到 stale interface-bound socket 时回退 `ip netns exec ping`，后者按退避节奏重建 | raw 成功时 RTT 不含进程创建开销；整个 netns 删除/重建的长期行为仍待 root smoke |
 | UDP fallback | ICMP 不可用时降级 UDP keepalive | fallback 未接线；UDPProber 语义弱（write 成功即可达） | 无 ICMP 权限时只能得到 probe_error |
 | Babel RTT/metric | 普通 link 也采集被动指标、出 `higgs_link_babel_*` | 只为 staged link 采集 neighbor/route 布尔与最小 metric；series API 显式报未实现 | 被动质量数据基本不可用 |
 | BIRD metric 联动 | degraded/down 先调高 BIRD metric | 未实现 | 健康结果不影响选路 |

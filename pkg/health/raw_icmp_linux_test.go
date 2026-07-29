@@ -5,6 +5,7 @@ package health
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"sync/atomic"
 	"testing"
@@ -52,7 +53,7 @@ func TestRawICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
 	}
 }
 
-func TestRawICMProberFallsBackOnlyForLocalSetupFailure(t *testing.T) {
+func TestRawICMProberFallsBackOnlyForUnavailableRawFailure(t *testing.T) {
 	fallback := &countingRawFallback{}
 	worker := &fakeRawICMPWorker{result: rawProbeResult{err: errors.New("operation not permitted"), unavailable: true}}
 	var reportedTarget ProbeTarget
@@ -84,6 +85,21 @@ func TestRawICMProberFallsBackOnlyForLocalSetupFailure(t *testing.T) {
 	}
 	if reportedErr != nil {
 		t.Fatalf("packet error unexpectedly reported as fallback: %v", reportedErr)
+	}
+
+	worker.result = rawProbeResult{
+		err:         fmt.Errorf("send raw ICMP echo: %w", unix.ENETUNREACH),
+		unavailable: true,
+		reopen:      true,
+	}
+	if got := p.Probe(context.Background(), target, ProbeConfig{}); !got.Success {
+		t.Fatalf("stale-socket fallback result = %+v, want success", got)
+	}
+	if fallback.calls != 2 {
+		t.Fatalf("fallback calls after stale socket = %d, want 2", fallback.calls)
+	}
+	if !errors.Is(reportedErr, unix.ENETUNREACH) {
+		t.Fatalf("stale-socket fallback report = %v, want ENETUNREACH", reportedErr)
 	}
 }
 
@@ -211,6 +227,95 @@ func TestRawICMPSocketSerializesSharedSocket(t *testing.T) {
 	}
 	if got := maxActive.Load(); got != 1 {
 		t.Fatalf("maximum active shared-socket probes = %d, want 1", got)
+	}
+}
+
+func TestRawICMPNamespaceWorkerFallsBackAndRateLimitsStaleSocketReopen(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	var opens atomic.Int32
+	var closes atomic.Int32
+	var probes atomic.Int32
+	worker := &rawICMPNamespaceWorker{
+		jobs: make(chan rawICMPJob),
+		done: make(chan struct{}),
+		openSocket: func(rawSocketKey) (int, uint32, error) {
+			return int(opens.Add(1)), 42, nil
+		},
+		closeSocket: func(int) error {
+			closes.Add(1)
+			return nil
+		},
+		probeSocket: func(_ rawICMPJob, _ rawSocketKey, _ int, _ uint32) rawProbeResult {
+			if probes.Add(1) == 1 {
+				return rawProbeResult{
+					err:         fmt.Errorf("send raw ICMP echo: %w", unix.ENETUNREACH),
+					unavailable: true,
+					reopen:      true,
+				}
+			}
+			return rawProbeResult{received: 1}
+		},
+		now: func() time.Time { return now },
+	}
+	ready := make(chan error, 1)
+	go worker.run(ready)
+	if err := <-ready; err != nil {
+		t.Fatalf("start raw worker: %v", err)
+	}
+	t.Cleanup(worker.close)
+
+	var seq atomic.Uint32
+	target := ProbeTarget{
+		InstanceID:      "link-a",
+		InterfaceName:   "hgs0",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
+		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
+	}
+	cfg := ProbeConfig{Burst: 1, Interval: 5 * time.Second}
+	first := worker.probe(context.Background(), target, cfg, 1, &seq)
+	if !first.unavailable || !first.reopen || !errors.Is(first.err, unix.ENETUNREACH) {
+		t.Fatalf("first result = %+v, want recoverable send error", first)
+	}
+	if opens.Load() != 1 || closes.Load() != 1 || probes.Load() != 1 {
+		t.Fatalf("after stale result opens/closes/probes = %d/%d/%d, want 1/1/1", opens.Load(), closes.Load(), probes.Load())
+	}
+
+	second := worker.probe(context.Background(), target, cfg, 1, &seq)
+	if !second.unavailable || second.reopen {
+		t.Fatalf("backoff result = %+v, want fallback without another reopen", second)
+	}
+	if opens.Load() != 1 || probes.Load() != 1 {
+		t.Fatalf("backoff opened or probed again: opens/probes = %d/%d", opens.Load(), probes.Load())
+	}
+
+	now = now.Add(rawICMPSocketReopenDelay(cfg.Interval, 1))
+	third := worker.probe(context.Background(), target, cfg, 1, &seq)
+	if third.err != nil || third.received != 1 {
+		t.Fatalf("reopened result = %+v, want one reply", third)
+	}
+	if opens.Load() != 2 || probes.Load() != 2 {
+		t.Fatalf("after cooldown opens/probes = %d/%d, want 2/2", opens.Load(), probes.Load())
+	}
+}
+
+func TestRawICMPSocketReopenDelayBacksOffAndCaps(t *testing.T) {
+	interval := 5 * time.Second
+	want := []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 2 * time.Minute}
+	for i, expected := range want {
+		if got := rawICMPSocketReopenDelay(interval, i+1); got != expected {
+			t.Errorf("delay for failure %d = %s, want %s", i+1, got, expected)
+		}
+	}
+}
+
+func TestShouldReopenRawICMPSocket(t *testing.T) {
+	for _, err := range []error{unix.ENETUNREACH, unix.ENODEV, unix.EADDRNOTAVAIL} {
+		if !shouldReopenRawICMPSocket(fmt.Errorf("send: %w", err)) {
+			t.Errorf("shouldReopenRawICMPSocket(%v) = false, want true", err)
+		}
+	}
+	if shouldReopenRawICMPSocket(unix.EPERM) {
+		t.Fatal("shouldReopenRawICMPSocket(EPERM) = true, want false")
 	}
 }
 
