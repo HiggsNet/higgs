@@ -815,6 +815,17 @@ func (d *DaemonService) saveCommittedState() error {
 	return saveState(committedState)
 }
 
+func (d *DaemonService) saveCommittedMeta() error {
+	if d == nil || d.StateStore == nil {
+		return nil
+	}
+	committedState, _ := d.StateStore.routingSnapshot()
+	if d.Sync != nil {
+		return d.Sync.saveStateMetaSnapshot(committedState)
+	}
+	return saveStateMeta(committedState)
+}
+
 func changedLinkInstanceIDs(base, next map[string]linkInstanceState) []string {
 	seen := make(map[string]bool, len(base)+len(next))
 	var out []string

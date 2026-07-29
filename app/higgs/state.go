@@ -102,16 +102,22 @@ func cloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstan
 	}
 	out := make(map[string]*BirdInstanceState, len(in))
 	for id, inst := range in {
-		if inst == nil {
-			continue
+		if cloned := cloneBirdInstance(inst); cloned != nil {
+			out[id] = cloned
 		}
-		copyInst := *inst
-		if inst.Overlays != nil {
-			copyInst.Overlays = append([]string(nil), inst.Overlays...)
-		}
-		out[id] = &copyInst
 	}
 	return out
+}
+
+func cloneBirdInstance(inst *BirdInstanceState) *BirdInstanceState {
+	if inst == nil {
+		return nil
+	}
+	out := *inst
+	if inst.Overlays != nil {
+		out.Overlays = append([]string(nil), inst.Overlays...)
+	}
+	return &out
 }
 
 type routingReconcileState = higgsstate.RoutingReconcileState
@@ -303,6 +309,15 @@ func saveState(state *stateFile) error {
 	return rt.SaveState(state)
 }
 
+func saveStateMeta(state *stateFile) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	_, err = saveStateMetaAtWithFileInfo(rt.StatePath, state)
+	return err
+}
+
 func saveStateAt(path string, state *stateFile) error {
 	_, err := saveStateAtWithFileInfo(path, state)
 	return err
@@ -334,7 +349,47 @@ func saveStateAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error)
 		}
 	}
 
-	meta := stateMeta{
+	if err := store.SaveMetaJSON(cliMetaKey, stateMetaFromState(state)); err != nil {
+		return nil, err
+	}
+	if err := store.SaveNetwork(state.Network); err != nil {
+		return nil, err
+	}
+	return closeStateStoreWithFileInfo(path, store, &closed)
+}
+
+// saveStateMetaAtWithFileInfo persists daemon-local runtime/configuration
+// metadata without rewriting the immutable zone Network.
+func saveStateMetaAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error) {
+	// A routing-only write may be the first persistence operation in tests,
+	// recovery, or a freshly bootstrapped deployment. Seed the complete DB
+	// before using the metadata-only fast path.
+	if info, err := os.Stat(path); errors.Is(err, os.ErrNotExist) || (err == nil && info.Size() == 0) {
+		return saveStateAtWithFileInfo(path, state)
+	} else if err != nil {
+		return nil, err
+	}
+	store, err := zone.OpenBoltStore(path, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = store.Close()
+		}
+	}()
+	if err := store.SaveMetaJSON(cliMetaKey, stateMetaFromState(state)); err != nil {
+		return nil, err
+	}
+	return closeStateStoreWithFileInfo(path, store, &closed)
+}
+
+func stateMetaFromState(state *stateFile) stateMeta {
+	if state == nil {
+		return stateMeta{}
+	}
+	return stateMeta{
 		ManagedZone:       state.ManagedZone,
 		IdentityKeyPath:   state.IdentityKeyPath,
 		RootPrivateKey:    state.RootPrivateKey,
@@ -350,18 +405,15 @@ func saveStateAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error)
 		BirdInstances:     state.BirdInstances,
 		Admission:         state.Admission,
 	}
-	if err := store.SaveMetaJSON(cliMetaKey, &meta); err != nil {
-		return nil, err
-	}
-	if err := store.SaveNetwork(state.Network); err != nil {
-		return nil, err
-	}
+}
+
+func closeStateStoreWithFileInfo(path string, store *zone.BoltStore, closed *bool) (os.FileInfo, error) {
 	beforeClose, beforeErr := os.Stat(path)
 	if err := store.Close(); err != nil {
-		closed = true
+		*closed = true
 		return nil, err
 	}
-	closed = true
+	*closed = true
 	afterClose, afterErr := os.Stat(path)
 	if beforeErr != nil || afterErr != nil || !sameStateFileInfo(beforeClose, afterClose) {
 		return nil, nil

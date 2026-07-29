@@ -421,4 +421,40 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
+
+	beforeNoopRev := service.StateStore.Meta().Revision
+	now = now.Add(defaultRoutingReconcileInterval)
+	service.routingDirty = true
+	if !service.flushRoutingReconcile(context.Background()) {
+		t.Fatal("second routing reconcile was not flushed")
+	}
+	if afterNoopRev := service.StateStore.Meta().Revision; afterNoopRev != beforeNoopRev {
+		t.Fatalf("no-op routing reconcile advanced revision: before=%d after=%d", beforeNoopRev, afterNoopRev)
+	}
+	if got := service.routingLastRun(nil); got != now.Unix() {
+		t.Fatalf("runtime routing last run = %d, want %d", got, now.Unix())
+	}
+}
+
+func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
+	initial := &stateFile{
+		ManagedZone: "node-a.catofes.",
+		Network:     cloneTestNetworkState(),
+		BirdInstances: map[string]*BirdInstanceState{
+			"mesh": {NetNSName: "mesh", State: birdInstanceStateRunning},
+		},
+		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
+	}
+	service := &DaemonService{StateStore: NewDaemonStateStore(initial)}
+	workspace, rev := service.StateStore.routingSnapshot()
+	baseBird := cloneBirdInstances(workspace.BirdInstances)
+	baseReconcile := cloneRoutingReconcileState(workspace.RoutingReconcile)
+	workspace.RoutingReconcile.LastRunUnix = 20
+
+	if err := service.commitRoutingReconcileResult(rev, baseBird, baseReconcile, workspace); err != nil {
+		t.Fatalf("commitRoutingReconcileResult: %v", err)
+	}
+	if got := service.StateStore.Meta().Revision; got != rev {
+		t.Fatalf("timestamp-only result advanced revision: got %d want %d", got, rev)
+	}
 }

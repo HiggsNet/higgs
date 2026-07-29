@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -47,6 +48,7 @@ type DaemonService struct {
 	ipsecTakeoverNotBefore time.Time
 	routingDirty           bool
 	routingForceReload     bool
+	routingLastRunUnix     atomic.Int64
 	firewallDirty          bool
 
 	syncSessions      map[string]*SyncSession
@@ -171,6 +173,9 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 		StateStore:        NewDaemonStateStore(state),
 		PeerObservability: peerObservability,
+	}
+	if state != nil && state.RoutingReconcile != nil {
+		d.routingLastRunUnix.Store(state.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
 	d.syncSessions = make(map[string]*SyncSession)
@@ -1553,6 +1558,18 @@ func (d *DaemonService) snapshotState() (*stateFile, uint64, daemonStateStoreMet
 		meta.Revision = rev
 	}
 	return state, rev, meta
+}
+
+func (d *DaemonService) routingLastRun(state *stateFile) int64 {
+	if d != nil {
+		if lastRun := d.routingLastRunUnix.Load(); lastRun != 0 {
+			return lastRun
+		}
+	}
+	if state != nil && state.RoutingReconcile != nil {
+		return state.RoutingReconcile.LastRunUnix
+	}
+	return 0
 }
 
 func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {

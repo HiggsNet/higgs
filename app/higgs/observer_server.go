@@ -200,10 +200,7 @@ func (p *observerProvider) Status() (any, error) {
 	if state.IPsecReconcile != nil {
 		ipsecLastRunUnix = state.IPsecReconcile.LastRunUnix
 	}
-	var routingLastRunUnix int64
-	if state.RoutingReconcile != nil {
-		routingLastRunUnix = state.RoutingReconcile.LastRunUnix
-	}
+	routingLastRunUnix := d.routingLastRun(state)
 	peerID := ""
 	listenAddr := ""
 	managedZone := ""

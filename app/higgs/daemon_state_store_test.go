@@ -2,12 +2,15 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
+
+var benchmarkStateSnapshot *stateFile
 
 func TestDaemonStateStoreSnapshotReturnsCommittedClone(t *testing.T) {
 	store := NewDaemonStateStore(&stateFile{
@@ -33,6 +36,96 @@ func TestDaemonStateStoreSnapshotReturnsCommittedClone(t *testing.T) {
 	if string(again.Network.Zones["node-a.catofes."].Records["endpoint"].Value) != "endpoint-a" {
 		t.Fatalf("nested snapshot mutation leaked into store: %q", string(again.Network.Zones["node-a.catofes."].Records["endpoint"].Value))
 	}
+}
+
+func TestDaemonStateStoreRoutingSnapshotSharesNetworkAndDetachesOwnedState(t *testing.T) {
+	initial := &stateFile{
+		ManagedZone: "node-a.catofes.",
+		Network:     cloneTestNetworkState(),
+		BirdInstances: map[string]*BirdInstanceState{
+			"mesh": {NetNSName: "mesh", Overlays: []string{"main"}},
+		},
+		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
+	}
+	store := NewDaemonStateStore(initial)
+
+	var committedNetwork *zone.NetworkState
+	store.ReadCommitted(func(state *stateFile) {
+		committedNetwork = state.Network
+	})
+	snapshot, rev := store.routingSnapshot()
+	if snapshot.Network != committedNetwork {
+		t.Fatal("routing snapshot copied Network instead of sharing it")
+	}
+	snapshot.BirdInstances["mesh"].Overlays[0] = "changed"
+	snapshot.RoutingReconcile.LastRunUnix = 20
+
+	store.ReadCommitted(func(state *stateFile) {
+		if got := state.BirdInstances["mesh"].Overlays[0]; got != "main" {
+			t.Fatalf("routing snapshot BirdInstances mutation leaked: %q", got)
+		}
+		if got := state.RoutingReconcile.LastRunUnix; got != 10 {
+			t.Fatalf("routing snapshot reconcile mutation leaked: %d", got)
+		}
+	})
+
+	nextRev, committed := store.commitRoutingIfRevision(rev, snapshot.BirdInstances, snapshot.RoutingReconcile)
+	if !committed || nextRev != rev+1 {
+		t.Fatalf("routing commit = (%d, %t), want (%d, true)", nextRev, committed, rev+1)
+	}
+	store.ReadCommitted(func(state *stateFile) {
+		if state.Network != committedNetwork {
+			t.Fatal("routing commit copied Network instead of sharing it")
+		}
+		if got := state.BirdInstances["mesh"].Overlays[0]; got != "changed" {
+			t.Fatalf("routing commit overlay = %q, want changed", got)
+		}
+	})
+
+	snapshot.BirdInstances["mesh"].Overlays[0] = "retained-mutation"
+	store.ReadCommitted(func(state *stateFile) {
+		if got := state.BirdInstances["mesh"].Overlays[0]; got != "changed" {
+			t.Fatalf("post-commit input mutation leaked: %q", got)
+		}
+	})
+}
+
+func BenchmarkDaemonStateStoreSnapshotStrategies(b *testing.B) {
+	network := cloneTestNetworkState()
+	zs := network.Zones["node-a.catofes."]
+	for i := 0; i < 1000; i++ {
+		key := fmt.Sprintf("record-%04d", i)
+		zs.Records[key] = &zone.Record{
+			Zone:      "node-a.catofes.",
+			Key:       key,
+			Type:      "benchmark",
+			Value:     make([]byte, 128),
+			ValueHash: make([]byte, 32),
+			Signature: make([]byte, 64),
+			Version:   1,
+		}
+	}
+	store := NewDaemonStateStore(&stateFile{
+		ManagedZone: "node-a.catofes.",
+		Network:     network,
+		BirdInstances: map[string]*BirdInstanceState{
+			"mesh": {NetNSName: "mesh", Overlays: []string{"main"}},
+		},
+		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
+	})
+
+	b.Run("full-json-snapshot", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			benchmarkStateSnapshot, _ = store.Snapshot()
+		}
+	})
+	b.Run("routing-cow-snapshot", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			benchmarkStateSnapshot, _ = store.routingSnapshot()
+		}
+	})
 }
 
 func TestDaemonStateStoreZoneDigestsReturnsDetachedProjection(t *testing.T) {

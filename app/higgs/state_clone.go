@@ -52,6 +52,14 @@ func cloneStateFileRootSharingChildren(s *stateFile) *stateFile {
 	}
 }
 
+func cloneRoutingReconcileState(in *routingReconcileState) *routingReconcileState {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
 func cloneSyncPeerState(in syncPeerState) syncPeerState {
 	out := in
 	if in.ObservedGraceAddrs != nil {

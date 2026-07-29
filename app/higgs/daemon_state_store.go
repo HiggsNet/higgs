@@ -72,6 +72,24 @@ func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
 	return cloneStateFile(committed), rev
 }
 
+// routingSnapshot returns a routing-owned workspace without serializing the
+// complete daemon state. Network and unrelated children remain shared and must
+// be treated as immutable. The fields routing reconcile mutates are detached.
+func (s *DaemonStateStore) routingSnapshot() (*stateFile, uint64) {
+	if s == nil {
+		return nil, 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.committed == nil {
+		return nil, s.revision
+	}
+	snapshot := cloneStateFileRootSharingChildren(s.committed)
+	snapshot.BirdInstances = cloneBirdInstances(s.committed.BirdInstances)
+	snapshot.RoutingReconcile = cloneRoutingReconcileState(s.committed.RoutingReconcile)
+	return snapshot, s.revision
+}
+
 // ZoneDigests returns a detached digest projection of the committed state.
 // It keeps the state pointer private and avoids cloning the complete Network
 // for callers that only need its gossip digest.
@@ -337,6 +355,27 @@ func (s *DaemonStateStore) CommitIfRevision(rev uint64, fn func(*stateFile) erro
 		return rev, false, err
 	}
 	return s.commitWorkspaceIfRevision(rev, next)
+}
+
+// commitRoutingIfRevision replaces only routing-owned state. It preserves the
+// immutable Network and all unrelated state blocks by structural sharing.
+func (s *DaemonStateStore) commitRoutingIfRevision(rev uint64, birdInstances map[string]*BirdInstanceState, reconcile *routingReconcileState) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	nextBirdInstances := cloneBirdInstances(birdInstances)
+	nextReconcile := cloneRoutingReconcileState(reconcile)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != rev {
+		return s.revision, false
+	}
+	next := cloneStateFileRootSharingChildren(s.committed)
+	next.BirdInstances = nextBirdInstances
+	next.RoutingReconcile = nextReconcile
+	s.commitLocked(next)
+	return s.revision, true
 }
 
 func (s *DaemonStateStore) ReplaceCommitted(state *stateFile) uint64 {

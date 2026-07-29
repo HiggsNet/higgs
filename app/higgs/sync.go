@@ -295,6 +295,21 @@ func (sr *SyncRuntime) saveStateSnapshot(state *stateFile) error {
 	return nil
 }
 
+func (sr *SyncRuntime) saveStateMetaSnapshot(state *stateFile) error {
+	if sr == nil || sr.App == nil {
+		return saveStateMeta(state)
+	}
+	sr.reloadStateStamp = stateFileStamp{}
+	info, err := saveStateMetaAtWithFileInfo(sr.App.StatePath, state)
+	if err != nil {
+		return err
+	}
+	if info != nil {
+		sr.reloadStateStamp = stateFileStamp{path: sr.App.StatePath, info: info}
+	}
+	return nil
+}
+
 func (sr *SyncRuntime) loadState() (*stateFile, error) {
 	if sr != nil && sr.App != nil {
 		return sr.App.LoadState()
