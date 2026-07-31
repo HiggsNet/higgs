@@ -43,15 +43,24 @@ func NewRealClock() Clock { return realClock{} }
 // loop via the events channel. It never executes callbacks in the timer
 // goroutine that mutate sync state.
 type TimerManager struct {
-	clock  Clock
-	events chan<- SyncEvent
-	mu     sync.Mutex
-	timers map[timerKey]Timer
+	clock    Clock
+	events   chan<- SyncEvent
+	mu       sync.Mutex
+	timers   map[timerKey]*managedTimer
+	stopped  bool
+	done     chan struct{}
+	stopDone chan struct{}
+	waiters  sync.WaitGroup
 }
 
 type timerKey struct {
 	peerID string
 	kind   string
+}
+
+type managedTimer struct {
+	timer  Timer
+	cancel chan struct{}
 }
 
 // NewTimerManager creates a timer manager. If clock is nil it uses the real
@@ -61,30 +70,41 @@ func NewTimerManager(clock Clock, events chan<- SyncEvent) *TimerManager {
 		clock = NewRealClock()
 	}
 	return &TimerManager{
-		clock:  clock,
-		events: events,
-		timers: make(map[timerKey]Timer),
+		clock:    clock,
+		events:   events,
+		timers:   make(map[timerKey]*managedTimer),
+		done:     make(chan struct{}),
+		stopDone: make(chan struct{}),
 	}
 }
 
 // Start arms a timer. It replaces any existing timer for (peerID, kind).
 func (tm *TimerManager) Start(peerID, kind string, deadline time.Time) {
 	tm.mu.Lock()
-	defer tm.mu.Unlock()
+	if tm.stopped {
+		tm.mu.Unlock()
+		return
+	}
 
 	key := timerKey{peerID: peerID, kind: kind}
 	if old, ok := tm.timers[key]; ok {
-		old.Stop()
+		old.timer.Stop()
+		close(old.cancel)
 	}
 
 	d := deadline.Sub(tm.clock.Now())
 	if d < 0 {
 		d = 0
 	}
-	timer := tm.clock.NewTimer(d)
-	tm.timers[key] = timer
+	entry := &managedTimer{
+		timer:  tm.clock.NewTimer(d),
+		cancel: make(chan struct{}),
+	}
+	tm.timers[key] = entry
+	tm.waiters.Add(1)
+	tm.mu.Unlock()
 
-	go tm.waitAndPost(key, timer, peerID, kind)
+	go tm.waitAndPost(key, entry, peerID, kind)
 }
 
 // Cancel stops the timer for (peerID, kind) if it exists.
@@ -92,7 +112,8 @@ func (tm *TimerManager) Cancel(peerID, kind string) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if old, ok := tm.timers[timerKey{peerID: peerID, kind: kind}]; ok {
-		old.Stop()
+		old.timer.Stop()
+		close(old.cancel)
 		delete(tm.timers, timerKey{peerID: peerID, kind: kind})
 	}
 }
@@ -103,19 +124,55 @@ func (tm *TimerManager) CancelAll(peerID string) {
 	defer tm.mu.Unlock()
 	for key, t := range tm.timers {
 		if key.peerID == peerID {
-			t.Stop()
+			t.timer.Stop()
+			close(t.cancel)
 			delete(tm.timers, key)
 		}
 	}
 }
 
-func (tm *TimerManager) waitAndPost(key timerKey, timer Timer, peerID, kind string) {
-	firedAt := <-timer.C()
+// Stop cancels every timer and waits for all timer goroutines to exit. Start is
+// a no-op after Stop begins. Stop is safe to call more than once.
+func (tm *TimerManager) Stop() {
 	tm.mu.Lock()
-	// Only post if this timer is still the current one for the key.
-	if cur, ok := tm.timers[key]; ok && cur == timer {
+	if tm.stopped {
+		stopDone := tm.stopDone
+		tm.mu.Unlock()
+		<-stopDone
+		return
+	}
+	tm.stopped = true
+	close(tm.done)
+	for key, entry := range tm.timers {
+		entry.timer.Stop()
+		close(entry.cancel)
 		delete(tm.timers, key)
 	}
+	tm.mu.Unlock()
+
+	tm.waiters.Wait()
+	close(tm.stopDone)
+}
+
+func (tm *TimerManager) waitAndPost(key timerKey, entry *managedTimer, peerID, kind string) {
+	defer tm.waiters.Done()
+
+	select {
+	case <-entry.timer.C():
+	case <-entry.cancel:
+		return
+	case <-tm.done:
+		return
+	}
+
+	tm.mu.Lock()
+	// A canceled or replaced timer must not post a stale timeout event.
+	cur, ok := tm.timers[key]
+	if !ok || cur != entry || tm.stopped {
+		tm.mu.Unlock()
+		return
+	}
+	delete(tm.timers, key)
 	tm.mu.Unlock()
 
 	var ev SyncEvent
@@ -127,12 +184,11 @@ func (tm *TimerManager) waitAndPost(key timerKey, timer Timer, peerID, kind stri
 	default:
 		return
 	}
-	// Use non-blocking send so a stale timer cannot block shutdown.
+	// Bound delivery and let manager shutdown interrupt a full event queue.
 	select {
 	case tm.events <- ev:
+	case <-tm.done:
 	case <-time.After(5 * time.Second):
 		// Event loop may have stopped; drop.
-		_ = firedAt
 	}
-
 }

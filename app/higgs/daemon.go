@@ -248,6 +248,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			return err
 		}
 	}
+	if d.timerManager != nil {
+		defer func() {
+			if d.timerManager != nil {
+				d.timerManager.Stop()
+			}
+		}()
+	}
 	defer d.closeConfiguredIPsecDriver()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

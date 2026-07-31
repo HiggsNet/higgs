@@ -34,6 +34,9 @@ func (d *DaemonService) EnableEventLoopSync(clock Clock) {
 			clock = NewRealClock()
 		}
 	}
+	if d.timerManager != nil {
+		d.timerManager.Stop()
+	}
 	d.timerManager = NewTimerManager(clock, d.syncEvents)
 }
 

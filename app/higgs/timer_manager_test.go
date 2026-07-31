@@ -78,6 +78,32 @@ func (t *fakeTimer) Reset(d time.Duration) bool {
 	return wasActive
 }
 
+type channelTimer struct {
+	c chan time.Time
+}
+
+func newChannelTimer() *channelTimer {
+	return &channelTimer{c: make(chan time.Time, 1)}
+}
+
+func (t *channelTimer) C() <-chan time.Time      { return t.c }
+func (t *channelTimer) Stop() bool               { return false }
+func (t *channelTimer) Reset(time.Duration) bool { return false }
+
+func requireTimerManagerStops(t *testing.T, tm *TimerManager) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		tm.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("TimerManager.Stop did not wait for timer goroutines to exit")
+	}
+}
+
 func TestTimerManagerPostsRoundTimeout(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
 	events := make(chan SyncEvent, 1)
@@ -98,6 +124,7 @@ func TestTimerManagerPostsRoundTimeout(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for round timeout event")
 	}
+	requireTimerManagerStops(t, tm)
 }
 
 func TestTimerManagerPostsCatalogPageTimeout(t *testing.T) {
@@ -120,6 +147,7 @@ func TestTimerManagerPostsCatalogPageTimeout(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for catalog page timeout event")
 	}
+	requireTimerManagerStops(t, tm)
 }
 
 func TestTimerManagerCancelPreventsEvent(t *testing.T) {
@@ -136,6 +164,7 @@ func TestTimerManagerCancelPreventsEvent(t *testing.T) {
 		t.Fatalf("expected no event after cancel, got %T", ev)
 	case <-time.After(50 * time.Millisecond):
 	}
+	requireTimerManagerStops(t, tm)
 }
 
 func TestTimerManagerStartReplacesExistingTimer(t *testing.T) {
@@ -160,6 +189,7 @@ func TestTimerManagerStartReplacesExistingTimer(t *testing.T) {
 		t.Fatalf("old timer should not fire, got %T", ev)
 	case <-time.After(50 * time.Millisecond):
 	}
+	requireTimerManagerStops(t, tm)
 }
 
 func TestTimerManagerCancelAllForPeer(t *testing.T) {
@@ -177,4 +207,63 @@ func TestTimerManagerCancelAllForPeer(t *testing.T) {
 		t.Fatalf("expected no events after CancelAll, got %T", ev)
 	case <-time.After(50 * time.Millisecond):
 	}
+	requireTimerManagerStops(t, tm)
+}
+
+func TestTimerManagerStopCancelsAllWaiters(t *testing.T) {
+	clock := newFakeClock(time.Unix(1000, 0))
+	events := make(chan SyncEvent, 2)
+	tm := NewTimerManager(clock, events)
+
+	tm.Start("peer-a", "round", clock.Now().Add(time.Hour))
+	tm.Start("peer-b", "catalog_page", clock.Now().Add(time.Hour))
+	requireTimerManagerStops(t, tm)
+
+	clock.Advance(2 * time.Hour)
+	select {
+	case ev := <-events:
+		t.Fatalf("expected no event after Stop, got %T", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestTimerManagerStaleFiredTimerDoesNotPost(t *testing.T) {
+	clock := newFakeClock(time.Unix(1000, 0))
+	events := make(chan SyncEvent, 1)
+	tm := NewTimerManager(clock, events)
+	key := timerKey{peerID: "peer-a", kind: "round"}
+	staleTimer := newChannelTimer()
+	stale := &managedTimer{timer: staleTimer, cancel: make(chan struct{})}
+	current := &managedTimer{timer: newChannelTimer(), cancel: make(chan struct{})}
+
+	tm.mu.Lock()
+	tm.timers[key] = current
+	tm.waiters.Add(1)
+	tm.mu.Unlock()
+	staleTimer.c <- clock.Now()
+	go tm.waitAndPost(key, stale, key.peerID, key.kind)
+
+	select {
+	case ev := <-events:
+		t.Fatalf("stale timer posted event %T", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+	requireTimerManagerStops(t, tm)
+}
+
+func TestTimerManagerStopIsIdempotent(t *testing.T) {
+	tm := NewTimerManager(newFakeClock(time.Unix(1000, 0)), make(chan SyncEvent, 1))
+	requireTimerManagerStops(t, tm)
+	requireTimerManagerStops(t, tm)
+}
+
+func TestTimerManagerRepeatedCancelDoesNotRetainWaiters(t *testing.T) {
+	clock := newFakeClock(time.Unix(1000, 0))
+	tm := NewTimerManager(clock, make(chan SyncEvent, 1))
+
+	for i := 0; i < 2500; i++ {
+		tm.Start("peer-a", "round", clock.Now().Add(time.Hour))
+		tm.Cancel("peer-a", "round")
+	}
+	requireTimerManagerStops(t, tm)
 }
