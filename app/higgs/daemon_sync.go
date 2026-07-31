@@ -45,25 +45,8 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 		return nil
 	}
 	now := d.Sync.now()
-	var peers []string
-	var peerStates map[string]syncPeerState
-	var summary *gossip.CatalogSummary
-	var digests []gossip.ZoneDigest
-	var summaryErr error
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state == nil || state.Network == nil {
-			return
-		}
-		peers = outboundSyncPeersAt(state, d.Sync.Config, now)
-		peerStates = make(map[string]syncPeerState, len(peers))
-		for _, peerID := range peers {
-			peerStates[peerID] = state.SyncPeers[peerID]
-		}
-		summary, summaryErr = gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
-		if summaryErr == nil {
-			digests = gossip.ZoneDigests(state.Network)
-		}
-	})
+	projection := d.StateStore.syncTimerProjection(d.Sync.Config, now, d.syncDatagramBudget())
+	peers := projection.peers
 	if len(peers) == 0 {
 		return nil
 	}
@@ -71,12 +54,12 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 		"peer_count": len(peers),
 		"force":      force,
 	})
-	if summaryErr != nil {
-		d.logWarn("sync", "catalog_summary_failed", map[string]any{"error": summaryErr})
+	if projection.err != nil {
+		d.logWarn("sync", "catalog_summary_failed", map[string]any{"error": projection.err})
 		return nil
 	}
 	for _, peerID := range peers {
-		if !force && backoffRemaining(peerStates[peerID], now) > 0 {
+		if !force && backoffRemaining(projection.peerStates[peerID], now) > 0 {
 			d.logDebug("sync", "event_loop_skipped", map[string]any{
 				"peer_id": peerID,
 				"reason":  "backoff",
@@ -93,8 +76,8 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 		d.syncSessions[peerID] = NewSyncSession(peerID)
 		event := &SyncTimerEvent{
 			PeerID:       peerID,
-			LocalDigests: digests,
-			LocalSummary: summary,
+			LocalDigests: projection.digests,
+			LocalSummary: projection.summary,
 		}
 		select {
 		case d.syncEvents <- event:
@@ -253,13 +236,7 @@ func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
 	if d == nil || d.Sync == nil || d.Sync.Transport == nil || ping == nil {
 		return nil
 	}
-	var summary *gossip.CatalogSummary
-	var err error
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state != nil && state.Network != nil {
-			summary, err = gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
-		}
-	})
+	summary, err := d.StateStore.catalogSummaryProjection(d.syncDatagramBudget())
 	if err != nil {
 		return err
 	}
@@ -289,13 +266,7 @@ func (d *DaemonService) maybeShortcutSyncFromPingSummary(peerID string, remoteSu
 	if d == nil || d.Sync == nil || remoteSummary == nil {
 		return nil
 	}
-	var localSummary *gossip.CatalogSummary
-	var err error
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state != nil && state.Network != nil {
-			localSummary, err = gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
-		}
-	})
+	localSummary, err := d.StateStore.catalogSummaryProjection(d.syncDatagramBudget())
 	if err != nil {
 		d.logWarn("sync", "catalog_summary_failed", map[string]any{
 			"peer_id": peerID,
@@ -353,18 +324,7 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		return nil
 	}
 	now := d.Sync.now()
-	var summary *gossip.CatalogSummary
-	var digests []gossip.ZoneDigest
-	var err error
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state == nil || state.Network == nil {
-			return
-		}
-		summary, err = gossip.CatalogSummaryFor(state.Network, d.syncDatagramBudget())
-		if err == nil {
-			digests = gossip.ZoneDigests(state.Network)
-		}
-	})
+	summary, digests, err := d.StateStore.catalogStateProjection(d.syncDatagramBudget())
 	if err != nil {
 		d.logWarn("sync", "catalog_summary_failed", map[string]any{
 			"peer_id": peerID,
@@ -415,13 +375,7 @@ func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
 		return nil
 	}
 	budget := d.syncDatagramBudget()
-	var page *gossip.CatalogPage
-	var err error
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state != nil && state.Network != nil {
-			page, err = gossip.CatalogPageFor(state.Network, cursor, budget)
-		}
-	})
+	page, err := d.StateStore.catalogPageProjection(cursor, budget)
 	if err != nil {
 		now := d.Sync.now()
 		recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
@@ -450,18 +404,7 @@ func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) erro
 		return nil
 	}
 	budget := d.syncDatagramBudget()
-	var plan snapshotDatagramPlan
-	var err error
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state == nil || state.Network == nil {
-			return
-		}
-		if state.Network.Zones[path] == nil {
-			err = fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-			return
-		}
-		plan = planSnapshotDatagrams(state.Network, []zone.ZonePath{path}, budget, d.Sync.now())
-	})
+	plan, err := d.StateStore.fetchZonePlanProjection(path, budget, d.Sync.now())
 	if err != nil {
 		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
 			"peer_id": peerID,
@@ -478,12 +421,12 @@ func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath
 	if d == nil || d.Sync == nil || d.Sync.Transport == nil {
 		return nil
 	}
-	state, _, _ := d.snapshotState()
-	if state == nil || state.Network == nil {
+	now := d.Sync.now()
+	plan, snapshot, err := d.StateStore.fetchZoneChunkProjection(path, d.syncDatagramBudget(), now)
+	if err != nil || snapshot == nil {
 		return nil
 	}
-	now := d.Sync.now()
-	diag, err := sendSnapshotsWithDiagnostics(state.Network, d.Sync.Transport, peerID, []zone.ZonePath{path}, now, true, d.Sync.logger())
+	diag, err := sendDetachedSnapshotWithDiagnostics(snapshot, plan, d.Sync.Transport, peerID, now, d.Sync.logger())
 	recordDatagramSendDiagnostics(d.PeerObservability, peerID, diag, d.syncDatagramBudget(), now)
 	return err
 }
@@ -548,12 +491,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	case *CatalogSummaryReceivedEvent:
 		recordCatalogSummary(d.PeerObservability, peerID, e.Summary, d.Sync.now())
 	case *CatalogPageReceivedEvent:
-		d.StateStore.ReadCommitted(func(state *stateFile) {
-			if state != nil && state.Network != nil {
-				e.LocalEntries = gossip.ZoneDigests(state.Network)
-				e.Page = filterRemoteCatalogPage(state, peerID, e.Page, d.Sync.now())
-			}
-		})
+		e.LocalEntries, e.Page = d.StateStore.filteredCatalogProjection(peerID, e.Page, d.Sync.now())
 		recordCatalogPage(d.PeerObservability, peerID, e.Page, d.Sync.now())
 	}
 	oldState := session.State
@@ -868,11 +806,10 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	}
 	peerID := session.PeerID
 	now := d.Sync.now()
-	stateSnapshot, _, _ := d.snapshotState()
-	if stateSnapshot == nil || stateSnapshot.Network == nil {
+	stateProjection := d.StateStore.syncStateProjection()
+	if !stateProjection.loaded {
 		return false
 	}
-	configureValidation(stateSnapshot.Network)
 
 	var changed bool
 	limits := syncLimits(d.Sync.Config)
@@ -886,7 +823,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			if a.Snapshot == nil {
 				continue
 			}
-			if a.Snapshot.Zone == stateSnapshot.ManagedZone {
+			if a.Snapshot.Zone == stateProjection.managedZone {
 				// Never accept a snapshot for our own managed zone from a peer;
 				// we are the authority for it.
 				d.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
@@ -945,13 +882,13 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	// Persistence is coalesced with any SaveStateAction below so a batch writes
 	// the state file at most once.
 	if changed {
-		stateSnapshot, _, _ = d.snapshotState()
+		stateProjection = d.StateStore.syncStateProjection()
 	}
 
 	// Applied object-pull or chunk-fallback snapshots may leave a zone pending
 	// until the FSM sees local state again. Reconcile before sending more I/O.
-	if !session.Done() && stateSnapshot != nil && stateSnapshot.Network != nil {
-		reconcileActions := session.reconcilePendingWithState(stateSnapshot.Network)
+	if !session.Done() && stateProjection.loaded {
+		reconcileActions := session.reconcilePendingWithDigests(stateProjection.digests)
 		actions = append(actions, reconcileActions...)
 	}
 
@@ -971,10 +908,10 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 				FetchCatalogPage: &gossip.FetchCatalogPage{Cursor: a.Cursor},
 			})
 		case SendCatalogPageAction:
-			if stateSnapshot == nil || stateSnapshot.Network == nil {
+			if !stateProjection.loaded {
 				continue
 			}
-			page, err := gossip.CatalogPageFor(stateSnapshot.Network, a.Cursor, budget)
+			page, err := gossip.CatalogPageForDigests(stateProjection.digests, a.Cursor, budget)
 			if err != nil {
 				now := d.Sync.now()
 				recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
@@ -1077,15 +1014,7 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 	if d == nil || d.objectPullPool == nil || d.Sync == nil {
 		return
 	}
-	var addr string
-	var stateAvailable bool
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state == nil {
-			return
-		}
-		stateAvailable = true
-		addr = resolvePeerTCPAddr(state, d.Sync.Config, peerID)
-	})
+	addr, stateAvailable := d.StateStore.peerTCPAddrProjection(d.Sync.Config, peerID)
 	if !stateAvailable {
 		err := fmt.Errorf("no committed state for peer %s", peerID)
 		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
@@ -1192,20 +1121,8 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	}
 	now := d.Sync.now()
 	relayed := 0
-	var localDigests []gossip.ZoneDigest
-	var peers []string
-	var peerStates map[string]syncPeerState
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state == nil || state.Network == nil {
-			return
-		}
-		localDigests = gossip.ZoneDigests(state.Network)
-		peers = outboundSyncPeersAt(state, d.Sync.Config, now)
-		peerStates = make(map[string]syncPeerState, len(peers))
-		for _, peerID := range peers {
-			peerStates[peerID] = state.SyncPeers[peerID]
-		}
-	})
+	projection := d.StateStore.relayProjection(d.Sync.Config, now)
+	localDigests, peers, peerStates := projection.digests, projection.peers, projection.peerStates
 	for _, peerID := range peers {
 		if peerID == sourcePeerID {
 			continue

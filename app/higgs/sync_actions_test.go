@@ -303,7 +303,7 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 	session := NewSyncSession("node-b.catofes.")
 	beforeRevision := service.StateStore.Meta().Revision
 	var beforeRoot, beforeParent, beforeChild *zone.ZoneState
-	service.StateStore.ReadCommitted(func(committed *stateFile) {
+	readCommittedForTest(service.StateStore, func(committed *stateFile) {
 		beforeRoot = committed.Network.Zones[zone.RootZone]
 		beforeParent = committed.Network.Zones["catofes."]
 		beforeChild = committed.Network.Zones["node-b.catofes."]
@@ -321,7 +321,7 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 	if revision := service.StateStore.Meta().Revision; revision != beforeRevision+1 {
 		t.Fatalf("revision = %d, want one batch publication after %d", revision, beforeRevision)
 	}
-	service.StateStore.ReadCommitted(func(committed *stateFile) {
+	readCommittedForTest(service.StateStore, func(committed *stateFile) {
 		if committed.Network.Zones[zone.RootZone] != beforeRoot {
 			t.Fatal("unmodified root zone was not shared by batch commit")
 		}

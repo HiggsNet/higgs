@@ -76,13 +76,9 @@ func buildPeerLifecycleDebugView(rt *Runtime, state *stateFile) inspect.PeerLife
 // peerStatusSnapshotForControl returns the peer status list for a daemon
 // control API response. It is called from the control handler when the
 // `peers_status` method is invoked.
-func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo, daemonStateStoreMeta) {
+func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo, daemonStateStoreMeta, bool) {
 	if d == nil || d.Sync == nil {
-		return nil, daemonStateStoreMeta{}
-	}
-	state, _, meta := d.snapshotState()
-	if state == nil {
-		return nil, meta
+		return nil, daemonStateStoreMeta{}, false
 	}
 	now := d.Sync.now()
 	cfg := inspect.PeerLifecycleConfig{}
@@ -90,5 +86,5 @@ func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo
 		cfg = d.Sync.App.Config.PeerLifecycle
 	}
 	hasOverlay := d.Sync.App != nil && d.Sync.App.Config != nil && len(d.Sync.App.Config.IPsec.LinkGroups) > 0
-	return derivePeerStatuses(state, now, cfg, hasOverlay), meta
+	return d.StateStore.peerStatusProjection(now, cfg, hasOverlay)
 }

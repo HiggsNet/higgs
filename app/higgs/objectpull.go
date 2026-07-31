@@ -259,10 +259,7 @@ func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossi
 	if d == nil || d.StateStore == nil {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
 	}
-	var response *gossip.ObjectPullResponse
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		response = objectPullResponseFromState(state, req, time.Now())
-	})
+	response := d.StateStore.objectPullProjection(req, time.Now())
 	if response == nil {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
 	}

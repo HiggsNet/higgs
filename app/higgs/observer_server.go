@@ -10,12 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/higgs/internal/inspect"
 	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/zone"
-	"github.com/Catofes/higgs/pkg/routing"
 )
 
 type observerServer struct {
@@ -117,13 +115,9 @@ func observerIDsPayload(key string, ids []string) map[string]any {
 // observerLinkIDsPayload returns {link_ids: [...]} derived from the current
 // state snapshot's link instance keys.
 func (d *DaemonService) observerLinkIDsPayload() any {
-	state, _, _ := d.snapshotState()
-	if state == nil || len(state.LinkInstances) == 0 {
+	ids := d.StateStore.linkIDsProjection()
+	if len(ids) == 0 {
 		return nil
-	}
-	ids := make([]string, 0, len(state.LinkInstances))
-	for id := range state.LinkInstances {
-		ids = append(ids, id)
 	}
 	return observerIDsPayload("link_ids", ids)
 }
@@ -131,13 +125,9 @@ func (d *DaemonService) observerLinkIDsPayload() any {
 // observerPeerIDsPayload returns {peer_ids: [...]} derived from the current
 // state snapshot's sync peer keys.
 func (d *DaemonService) observerPeerIDsPayload() any {
-	state, _, _ := d.snapshotState()
-	if state == nil || len(state.SyncPeers) == 0 {
+	ids := d.StateStore.peerIDsProjection()
+	if len(ids) == 0 {
 		return nil
-	}
-	ids := make([]string, 0, len(state.SyncPeers))
-	for id := range state.SyncPeers {
-		ids = append(ids, id)
 	}
 	return observerIDsPayload("peer_ids", ids)
 }
@@ -169,38 +159,14 @@ func (p *observerProvider) Status() (any, error) {
 	if d == nil || d.Sync == nil {
 		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
 	}
-	state, _, meta := d.snapshotState()
-	if state == nil {
+	projection := d.StateStore.statusProjection()
+	if !projection.loaded {
 		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
 	}
-	var linkInstances int
-	var desiredLinks int
-	var lastLinkError string
-	var lastRoutingError string
-	if state.IPsecReconcile != nil {
-		lastLinkError = state.IPsecReconcile.LastError
-		desiredLinks = state.IPsecReconcile.DesiredLinks
+	routingLastRunUnix := projection.routingLastRunUnix
+	if lastRun := d.routingLastRunUnix.Load(); lastRun != 0 {
+		routingLastRunUnix = lastRun
 	}
-	if state.RoutingReconcile != nil {
-		lastRoutingError = state.RoutingReconcile.LastError
-	}
-	linkInstances = len(state.LinkInstances)
-	knownZones := 0
-	if state.Network != nil {
-		knownZones = len(state.Network.Zones)
-	}
-	knownPeers := len(state.SyncPeers)
-	var lastSyncUnix int64
-	for _, peer := range state.SyncPeers {
-		if peer.LastSyncUnix > lastSyncUnix {
-			lastSyncUnix = peer.LastSyncUnix
-		}
-	}
-	var ipsecLastRunUnix int64
-	if state.IPsecReconcile != nil {
-		ipsecLastRunUnix = state.IPsecReconcile.LastRunUnix
-	}
-	routingLastRunUnix := d.routingLastRun(state)
 	peerID := ""
 	listenAddr := ""
 	managedZone := ""
@@ -208,24 +174,24 @@ func (p *observerProvider) Status() (any, error) {
 		peerID = d.Sync.Config.PeerID
 		listenAddr = d.Sync.Config.ListenAddr
 	}
-	managedZone = string(state.ManagedZone)
+	managedZone = string(projection.managedZone)
 	return inspecthttp.BuildStatusResponse(inspecthttp.StatusInput{
 		PeerID:             peerID,
 		ManagedZone:        managedZone,
 		ListenAddr:         listenAddr,
 		DaemonOnline:       true,
-		StateRevision:      meta.Revision,
-		SnapshotTimeUnix:   meta.SnapshotTime.Unix(),
-		Dirty:              meta.Dirty,
-		ReconcileProgress:  meta.ReconcileProgress,
-		KnownZones:         knownZones,
-		KnownPeers:         knownPeers,
-		LinkInstances:      linkInstances,
-		DesiredLinks:       desiredLinks,
-		LastLinkError:      lastLinkError,
-		LastRoutingError:   lastRoutingError,
-		LastSyncUnix:       lastSyncUnix,
-		IPsecLastRunUnix:   ipsecLastRunUnix,
+		StateRevision:      projection.meta.Revision,
+		SnapshotTimeUnix:   projection.meta.SnapshotTime.Unix(),
+		Dirty:              projection.meta.Dirty,
+		ReconcileProgress:  projection.meta.ReconcileProgress,
+		KnownZones:         projection.knownZones,
+		KnownPeers:         projection.knownPeers,
+		LinkInstances:      projection.linkInstances,
+		DesiredLinks:       projection.desiredLinks,
+		LastLinkError:      projection.lastLinkError,
+		LastRoutingError:   projection.lastRoutingError,
+		LastSyncUnix:       projection.lastSyncUnix,
+		IPsecLastRunUnix:   projection.ipsecLastRunUnix,
 		RoutingLastRunUnix: routingLastRunUnix,
 	}), nil
 }
@@ -235,30 +201,20 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	if d == nil || d.Sync == nil {
 		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
 	}
-	state, _, _ := d.snapshotState()
-	if state == nil {
-		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
-	}
-	if state.Network == nil {
-		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
-	}
 	now := d.Sync.now()
+	zp := zone.ZonePath(zoneFilter)
+	projection := d.StateStore.zonesProjection(zp, now)
+	if !projection.loaded {
+		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
+	}
 	// Single zone detail
 	if zoneFilter != "" {
-		zp := zone.ZonePath(zoneFilter)
-		zs := state.Network.Zones[zp]
-		if zs == nil {
+		if !projection.found {
 			return nil, observer.Errorf(http.StatusNotFound, "zone not found")
 		}
-		return inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-			Path:           zp,
-			State:          zs,
-			Network:        state.Network,
-			Now:            now,
-			IncludeHistory: true,
-		}), nil
+		return projection.detail, nil
 	}
-	return inspecthttp.ZonesFromNetwork(state.Network, now.Unix()), nil
+	return projection.list, nil
 }
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
@@ -266,44 +222,22 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	if d == nil || d.Sync == nil {
 		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
 	}
-	state, _, _ := d.snapshotState()
-	if state == nil {
+	observabilitySnapshots := d.peerObservabilitySnapshots()
+	projection := d.StateStore.peersProjection(d.Sync.Config, d.Sync.now(), observabilitySnapshots)
+	if !projection.loaded {
 		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
 	}
-	peerSet := inspectPeerSetInput(state, d.Sync.Config, d.Sync.now())
-	observabilitySnapshots := d.peerObservabilitySnapshots()
-	for peerID := range observabilitySnapshots {
-		peerSet.RuntimeIDs = append(peerSet.RuntimeIDs, peerID)
-	}
-	peerIDs := inspect.BuildPeerIDs(peerSet)
 	// Single peer detail
 	if peerFilter != "" {
-		ps := d.mergePeerObservability(state.SyncPeers[peerFilter], observabilitySnapshots[peerFilter])
-		if !inspect.PeerKnown(peerSet, peerFilter) {
+		if !projection.known[peerFilter] {
 			return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 		}
-		return inspecthttp.PeerFromInputs(
-			peerFilter,
-			bootstrapAddrForPeer(d.Sync.Config, peerFilter),
-			inspectPeerEndpoints(peerFilter, ps, d.Sync.Config, state.Network, d.Sync.now()),
-			ps,
-		), nil
+		return projection.peers[peerFilter], nil
 	}
 	// All peers
-	peers := make([]inspecthttp.PeerJSON, 0, len(peerIDs))
-	seen := make(map[string]bool, len(peerIDs))
-	for _, id := range peerIDs {
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		ps := d.mergePeerObservability(state.SyncPeers[id], observabilitySnapshots[id])
-		peers = append(peers, inspecthttp.PeerFromInputs(
-			id,
-			bootstrapAddrForPeer(d.Sync.Config, id),
-			inspectPeerEndpoints(id, ps, d.Sync.Config, state.Network, d.Sync.now()),
-			ps,
-		))
+	peers := make([]inspecthttp.PeerJSON, 0, len(projection.order))
+	for _, id := range projection.order {
+		peers = append(peers, projection.peers[id])
 	}
 	return inspecthttp.PeersResponse{Peers: peers}, nil
 }
@@ -335,12 +269,11 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	if d == nil || d.Sync == nil {
 		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
-	state, _, _ := d.snapshotState()
-	if state == nil {
+	projection := d.StateStore.linksStatusProjection(observerRuntime(d), d.healthStatusResponse())
+	if !projection.loaded {
 		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
-	build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
-	view := build.Inspection
+	view := projection.build.Inspection
 	// Single link detail
 	if linkFilter != "" {
 		for _, link := range view.Links {
@@ -366,28 +299,7 @@ func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]inspect
 			HealthLinks: inspectHealthLinks(links),
 		}), nil
 	}
-	state, _, _ := d.snapshotState()
-	if state == nil {
-		return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{
-			HealthLinks: inspectHealthLinks(links),
-		}), nil
-	}
-	reconcile := state.IPsecReconcile
-	desiredByID := map[string]desiredLinkState{}
-	if reconcile != nil {
-		desiredByID = desiredByInstanceID(reconcile.Desired)
-	}
-	return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{
-		HealthLinks: inspectHealthLinks(links),
-		Instances:   inspectHealthInstances(state.LinkInstances),
-		Desired:     inspectHealthDesired(desiredByID),
-		Unknown: func(instanceID string) any {
-			return healthLinkJSON{
-				InstanceID: instanceID,
-				State:      "unknown",
-			}
-		},
-	}), nil
+	return d.StateStore.healthContextProjection(links), nil
 }
 
 func inspectHealthLinks(links []healthLinkJSON) []inspecthttp.HealthLinkContextInput {
@@ -524,13 +436,11 @@ func (p *observerProvider) Routes() (any, error) {
 	if d == nil || d.Sync == nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
-	state, _, _ := d.snapshotState()
-	if state == nil {
+	projection := d.StateStore.routesProjection(d.Sync.now())
+	if !projection.loaded || projection.err != nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
-	now := d.Sync.now()
-	ars, _ := routing.BuildAuthorizedRouteSet(state.Network, now)
-	return inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars), nil
+	return projection.routes, nil
 }
 
 func (p *observerProvider) Bird() (any, error) {
@@ -538,16 +448,12 @@ func (p *observerProvider) Bird() (any, error) {
 	if d == nil || d.Sync == nil {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
-	state, _, _ := d.snapshotState()
-	if state == nil {
+	projection := d.StateStore.birdStatusProjection()
+	if !projection.loaded {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
-	lastRoutingError := ""
-	if state.RoutingReconcile != nil {
-		lastRoutingError = state.RoutingReconcile.LastError
-	}
 	return inspecthttp.BirdResponse{
-		Instances:        cloneBirdInstances(state.BirdInstances),
-		LastRoutingError: lastRoutingError,
+		Instances:        projection.instances,
+		LastRoutingError: projection.lastRoutingError,
 	}, nil
 }

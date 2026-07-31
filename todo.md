@@ -162,19 +162,20 @@
       - 删除只服务于 stale merge 的 helper/测试，增加防护测试：reconcile 被测试桩阻塞时人工推进 revision，旧 routing 结果不得覆盖新 state，服务必须重新标 dirty。生产路径出现 stale 应记录足够诊断信息，因为它意味着 single-writer 假设被绕过。
       - 已完成：删除按 netns 重取 snapshot/比较 base/合并的 stale fallback；CAS stale 现在记录 source/current revision 与 changed netns，保留最新 committed 并发布 routing dirty。阻塞式 BIRD 测试覆盖 reconcile 中途推进全局 revision，确认旧 `BirdInstances`/`RoutingReconcile` 被整体丢弃且不会额外升 revision；auto-announce 后 refresh 保留。相关 app race、全量 `make check` 与 routing dry-run smoke 通过。
 
-    - [ ] **7.11.6.3 以完整手写 clone 替换 JSON round-trip**
+    - [x] **7.11.6.3 以完整手写 clone 替换 JSON round-trip**
       - `cloneStateFile` 保持现有输入输出、nil 处理、detached 语义和 validation 配置语义，但不再调用 `json.Marshal`/`json.Unmarshal`。不得在本步骤删除 `BeginUpdate` 或 commit 的任一次 clone。
       - clone 代码按类型所有权集中：`NetworkState`/`ZoneState`/authority/delegation/revocation/record/history 由 zone/core 层提供完整 clone；daemon-local state 为私钥 byte slice、SyncPeers、IPsec key/port、LinkInstances、IPsecReconcile slices、RoutingReconcile、FirewallReconcile、EndpointACL selectors、Bird overlays 和 Admission 分别提供显式 clone helper。
       - 明确保留 nil 与 empty map/slice 的区别；复制所有 `[]byte`、map、slice、pointer 和嵌套 pointer；函数 hook 不得通过 JSON 偶然丢失，app clone 完成后仍保证 `RecordVerifier`/`RecordHasher` 配置正确；不得复制 `stateFile.mu`。
       - 扩充 clone 完整性测试：修改 clone 的每个可变叶子均不得影响原值，反向修改原值也不得影响 clone；增加字段清单/schema guard，使 `stateFile` 或核心状态类型新增字段时测试强制提醒更新 clone。
       - 保留 record-heavy fixture benchmark，并增加包含 SyncPeers/IPsec/routing/firewall 的完整 `stateFile` benchmark；记录 JSON 基线与手写 clone 的 ns/op、B/op、allocs/op，随后重跑 2026-07-31 同负载 perf。
-      - 实现与代码验收已完成，等待同负载常驻 daemon 的实机 perf/strace 后勾选：`cloneStateFile` 和 core Network 已改为完整手写 clone，完整性、双向隔离、nil/empty、nil entry、validation hook 与 schema guard 测试通过。1000 records + 完整 peer/IPsec/routing/firewall fixture（3 次）中，JSON 基线为 4.39-4.43 ms / 1.15 MB / 8,968 allocs，手写 clone 为 0.222-0.246 ms / 479 KB / 4,057 allocs，约快 18-20 倍；当前环境没有运行中的同负载 Higgs daemon，尚未执行 `perf-cpu-check.sh`，因此本项暂不标完成且不提前进入 7.11.6.4。
+      - 已完成：`cloneStateFile` 和 core Network 已改为完整手写 clone，完整性、双向隔离、nil/empty、nil entry、validation hook 与 schema guard 测试通过。1000 records + 完整 peer/IPsec/routing/firewall fixture（最终 3 次）中，JSON 基线为 4.52-4.59 ms / 1.23-1.32 MB / 8,969-8,971 allocs，手写 clone 为 0.230-0.239 ms / 479 KB / 4,057 allocs，约快 19-20 倍。另以独立 data/control/UDP/observer 的 1000-record 常驻 daemon 执行并发 observer status 实测：`strace -f -c` 覆盖 630,976 个 HTTP 200 响应；无超时截断的 5 秒文件 trace 完成 216,853 个 HTTP 200（43,356 req/s，p50 0.154 ms、p99 0.908 ms），并确认状态 DB 仅在启动阶段打开，并发读取阶段没有状态文件 open/fsync/fdatasync。宿主机 `perf_event_paranoid=4` 且容器无 `CAP_PERFMON`，root `perf record` 亦被内核拒绝，已保留明确诊断而不修改宿主 sysctl。
 
-    - [ ] **7.11.6.4 用 detached 只读投影替换高频完整 Snapshot**
+    - [x] **7.11.6.4 用 detached 只读投影替换高频完整 Snapshot**
       - 盘点 `snapshotState()`/`Snapshot()` 调用，按调用频率和返回数据量排序；优先替换只需要 ManagedZone、zone digests、catalog page、peer endpoint、route/link summary 的路径。
       - projection 必须在锁内完成必要读取并返回独立标量、slice/map 或 DTO；不得让 `*stateFile`、`*NetworkState`、zone map、record pointer 从通用只读 API 逸出。`configureValidation` 只能作用于 detached Network root，不能在 read path 修改共享 committed。
       - persistence 单独提供受限的 committed immutable view/lease：取得某一 revision 的 root 后可在锁外编码，因为旧 root 永不修改；接口只供保存适配器使用，不升级为通用裸指针 API。保存完成时记录的文件 marker 必须对应实际编码的 revision。
       - 每替换一个 projection 都补充 detached/retain 测试，并确认调用方的日志、transport、磁盘和 hook 副作用发生在 store 锁外。
+      - 已完成：删除生产通用 `ReadCommitted(func(*stateFile))` 与 `snapshotState()`，按 status/record/ACL/BIRD/routes/link/peer/health/revocation、sync timer/catalog/digest/fetch/object-pull/relay/discovery、GC/purge/auto-announce 等调用形状提供锁内构造的 detached DTO/scalar projection；传输、日志、BIRD 查询、observer 编码与磁盘保存均在解锁后执行。持久化仅保留私有 `committedStateLease{state, revision}`，直接编码不可变 committed root，并在成功关闭 DB 后记录与实际 root 对应的 revision marker；retain/嵌套可变叶子和 schema guard 回归通过。生产完整 Snapshot 仅保留 daemon 启动 transport 初始化、独立启动兼容读取和任意 `OnStateChanged` hook 的显式 detached clone。1000-record benchmark（最终 3 次）中完整 Snapshot 为 239-248 us / 473 KB / 4,026 allocs，status projection 为 29.1-29.4 ns / 0 B / 0 allocs，persistence lease 为 4.61-4.71 ns / 0 B / 0 allocs；app/gossip/zone race、全量 `make check`、chain relay、object pull 和 routing dry-run smoke 均通过。
 
     - [x] **7.11.6.5 收敛 typed COW mutation，仍使用全局 revision**
       - typed API 的目的只是表达字段所有权并减少复制，不提供并行 writer merge：Peer 路径复用现有 `UpdateSyncPeer`；Routing 只拥有 `BirdInstances`/`RoutingReconcile`；IPsec 只拥有 transport key/port、LinkInstances 和 IPsecReconcile；Firewall 只拥有 EndpointACLs/FirewallReconcile；Network mutation 使用独立入口。

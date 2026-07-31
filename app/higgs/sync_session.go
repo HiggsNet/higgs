@@ -396,16 +396,24 @@ func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAct
 	if ns == nil {
 		return nil
 	}
+	return s.reconcilePendingWithDigests(gossip.ZoneDigests(ns))
+}
+
+func (s *SyncSession) reconcilePendingWithDigests(digests []gossip.ZoneDigest) []SyncAction {
+	local := make(map[zone.ZonePath][]byte, len(digests))
+	for _, digest := range digests {
+		local[digest.Zone] = digest.RootHash
+	}
 	for z := range s.pendingZones {
 		expected, ok := s.expectedDigests[z]
 		if !ok {
 			continue
 		}
-		zs := ns.Zones[z]
-		if zs == nil {
+		root, ok := local[z]
+		if !ok {
 			continue
 		}
-		if bytes.Equal(expected.RootHash, gossip.ZoneRoot(zs)) {
+		if bytes.Equal(expected.RootHash, root) {
 			delete(s.pendingZones, z)
 			delete(s.expectedDigests, z)
 			delete(s.objectPullInflight, z)

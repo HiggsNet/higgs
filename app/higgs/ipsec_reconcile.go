@@ -672,11 +672,7 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, workspace *stateF
 		})
 		return nil
 	}
-	committedState, _, _ := d.snapshotState()
-	if d.Sync != nil {
-		return d.Sync.saveStateSnapshot(committedState)
-	}
-	return saveState(committedState)
+	return d.saveCommittedState()
 }
 
 func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err error) {
@@ -714,31 +710,31 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 		})
 		return
 	}
-	committedState, _, _ := d.snapshotState()
-	if d.Sync != nil {
-		if saveErr := d.Sync.saveStateSnapshot(committedState); saveErr != nil {
-			d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": saveErr})
-		}
+	if saveErr := d.saveCommittedState(); saveErr != nil {
+		d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": saveErr})
 	}
 }
 
 func (d *DaemonService) saveCommittedState() error {
-	committedState, _, _ := d.snapshotState()
-	if d.Sync != nil {
-		return d.Sync.saveStateSnapshot(committedState)
+	if d == nil || d.StateStore == nil {
+		return nil
 	}
-	return saveState(committedState)
+	lease := d.StateStore.persistenceLease()
+	if d.Sync != nil {
+		return d.Sync.saveStateSnapshotAtRevision(lease.state, lease.revision)
+	}
+	return saveState(lease.state)
 }
 
 func (d *DaemonService) saveCommittedMeta() error {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}
-	committedState, _ := d.StateStore.routingSnapshot()
+	lease := d.StateStore.persistenceLease()
 	if d.Sync != nil {
-		return d.Sync.saveStateMetaSnapshot(committedState)
+		return d.Sync.saveStateMetaSnapshotAtRevision(lease.state, lease.revision)
 	}
-	return saveStateMeta(committedState)
+	return saveStateMeta(lease.state)
 }
 
 // buildIPsecContactPointQuality builds a per-peer, per-contact-point quality

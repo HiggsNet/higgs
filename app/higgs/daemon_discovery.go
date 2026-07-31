@@ -179,18 +179,7 @@ func (d *DaemonService) seedObservedPeerPath(peerID string) {
 		return
 	}
 	now := d.Sync.now()
-	var paths []gossip.ObservedPath
-	var prefer, ok bool
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state == nil {
-			return
-		}
-		paths, prefer, ok = plannedObservedPaths(syncPeerMutationView{
-			ManagedZone: state.ManagedZone,
-			Network:     state.Network,
-			SyncPeers:   state.SyncPeers,
-		}, peerID, state.SyncPeers[peerID], now)
-	})
+	paths, prefer, ok := d.StateStore.observedPathsProjection(peerID, now)
 	if !ok {
 		d.Sync.Transport.RemoveObservedPeerAddr(peerID)
 		return

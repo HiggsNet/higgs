@@ -1035,19 +1035,11 @@ func (d *DaemonService) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRou
 		return false, nil
 	}
 
-	var (
-		needed  bool
-		planErr error
-	)
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		plan, err := d.autoAnnounceAssignedIPsPlanForState(state, ars)
-		planErr = err
-		needed = plan.changed()
-	})
+	plan, planErr := d.StateStore.autoAnnouncePlanProjection(d, ars)
 	if planErr != nil {
 		return false, planErr
 	}
-	if !needed {
+	if !plan.changed() {
 		return false, nil
 	}
 

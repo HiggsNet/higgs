@@ -9,20 +9,17 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
 	"github.com/Catofes/higgs/internal/observability"
 	"github.com/Catofes/higgs/internal/observer"
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/health"
-	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -315,9 +312,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		logAutoJoinPending(d.Log, state)
-	})
+	logAutoJoinPendingProjection(d.Log, d.StateStore.autoJoinLogProjection())
 
 	nextSync := d.Sync.now()
 	nextEndpointPublish := d.Sync.now()
@@ -572,24 +567,16 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 	switch request.Method {
 	case "status":
-		var linkInstances int
-		var desiredLinks int
-		var lastLinkError string
-		state, _, meta := d.snapshotState()
-		if state != nil {
-			linkInstances = len(state.LinkInstances)
-			desiredLinks = desiredIPsecLinks(state)
-			lastLinkError = lastIPsecReconcileError(state)
-		}
+		projection := d.StateStore.statusProjection()
 		response := controlResponse{
 			OK:            true,
 			PeerID:        d.Sync.Config.PeerID,
-			LinkInstances: linkInstances,
-			DesiredLinks:  desiredLinks,
-			LastLinkError: lastLinkError,
+			LinkInstances: projection.linkInstances,
+			DesiredLinks:  projection.desiredLinks,
+			LastLinkError: projection.lastLinkError,
 			Message:       "daemon online",
 		}
-		applyStateStoreMeta(&response, meta)
+		applyStateStoreMeta(&response, projection.meta)
 		writeControlResponse(conn, response)
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
@@ -648,12 +635,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		state, _, meta := d.snapshotState()
-		if state == nil {
-			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
-			return
-		}
-		record, err := lookupRecordDetail(state, zone.ZonePath(request.Zone), request.Key, request.History)
+		record, meta, err := d.StateStore.recordDetailProjection(zone.ZonePath(request.Zone), request.Key, request.History)
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
@@ -680,14 +662,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "endpoint ACL removed"})
 	case "endpoint_acl_list":
-		state, _, meta := d.snapshotState()
-		var acls []endpointACL
-		if state != nil {
-			for _, acl := range state.EndpointACLs {
-				acls = append(acls, acl)
-			}
-			sort.Slice(acls, func(i, j int) bool { return acls[i].Name < acls[j].Name })
-		}
+		acls, meta := d.StateStore.endpointACLProjection()
 		response := controlResponse{OK: true, EndpointACLs: acls, Message: "endpoint ACL list"}
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
@@ -838,22 +813,14 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "shutdown scheduled"})
 	case "bird_status":
-		var instances map[string]*BirdInstanceState
-		var lastRoutingError string
-		state, _, meta := d.snapshotState()
-		if state != nil {
-			instances = cloneBirdInstances(state.BirdInstances)
-			if state.RoutingReconcile != nil {
-				lastRoutingError = state.RoutingReconcile.LastError
-			}
-		}
+		projection := d.StateStore.birdStatusProjection()
 		response := controlResponse{
 			OK:               true,
-			BirdInstances:    instances,
-			LastRoutingError: lastRoutingError,
+			BirdInstances:    projection.instances,
+			LastRoutingError: projection.lastRoutingError,
 			Message:          "bird status",
 		}
-		applyStateStoreMeta(&response, meta)
+		applyStateStoreMeta(&response, projection.meta)
 		writeControlResponse(conn, response)
 	case "bird_dump":
 		dump, err := d.birdDumpForControl(ctx, request.NetNS, birdDebugView(request.BirdView))
@@ -867,41 +834,34 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			Message:  "bird dump",
 		})
 	case "routes_dump":
-		state, _, meta := d.snapshotState()
-		if state == nil {
-			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
-			return
-		}
+		projection := d.StateStore.routesProjection(d.Sync.now())
 		var routingInstances []RoutingInstance
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Config != nil {
 			routingInstances = append([]RoutingInstance(nil), d.Sync.App.Config.Routing.Instances...)
 		}
-		if state.Network == nil {
+		if !projection.loaded {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		ars, err := routing.BuildAuthorizedRouteSet(state.Network, d.Sync.now())
-		if err != nil {
-			writeControlResponse(conn, controlError(err))
+		if projection.err != nil {
+			writeControlResponse(conn, controlError(projection.err))
 			return
 		}
-		routesDump := inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars)
-		birdStates := cloneBirdInstances(state.BirdInstances)
-		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdStates)
+		routesDump := projection.routes
+		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, projection.bird)
 		response := controlResponse{
 			OK:         true,
 			RoutesDump: routesDump,
 			Message:    "routes dump",
 		}
-		applyStateStoreMeta(&response, meta)
+		applyStateStoreMeta(&response, projection.meta)
 		writeControlResponse(conn, response)
 	case "admission_status":
-		state, _, meta := d.snapshotState()
-		if state == nil {
+		diagnosis, meta, loaded := d.StateStore.admissionProjection(d.Sync.now())
+		if !loaded {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		diagnosis := diagnoseAutoJoinAdmission(state, d.Sync.now())
 		response := controlResponse{
 			OK:        true,
 			PeerID:    d.Sync.Config.PeerID,
@@ -911,12 +871,11 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "firewall_status":
-		state, _, meta := d.snapshotState()
-		if state == nil {
+		fwSnapshot, meta, loaded := d.StateStore.firewallStatusProjection()
+		if !loaded {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		fwSnapshot := cloneFirewallReconcileState(state.FirewallReconcile)
 		response := controlResponse{
 			OK:                true,
 			FirewallReconcile: fwSnapshot,
@@ -925,30 +884,27 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "links_status":
-		state, _, meta := d.snapshotState()
-		if state == nil {
+		projection := d.StateStore.linksStatusProjection(observerRuntime(d), d.healthStatusResponse())
+		if !projection.loaded {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		build := buildLinkInspectionFromReconcile(observerRuntime(d), state, d.healthStatusResponse())
-		links := linkInspectionControlFromBuild(build)
-		if state.IPsecReconcile != nil {
-			links.ActualSAs = append([]linkSAState(nil), state.IPsecReconcile.ActualSAs...)
-		}
+		links := linkInspectionControlFromBuild(projection.build)
+		links.ActualSAs = projection.actualSAs
 		response := controlResponse{
 			OK:      true,
 			PeerID:  d.Sync.Config.PeerID,
 			Links:   links,
 			Message: "links status",
 		}
-		applyStateStoreMeta(&response, meta)
+		applyStateStoreMeta(&response, projection.meta)
 		writeControlResponse(conn, response)
 	case "peers_status":
-		if state, _, _ := d.snapshotState(); state == nil {
+		peerStatuses, meta, loaded := d.peerStatusSnapshotForControl()
+		if !loaded {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		peerStatuses, meta := d.peerStatusSnapshotForControl()
 		response := controlResponse{
 			OK:           true,
 			PeerID:       d.Sync.Config.PeerID,
@@ -958,12 +914,11 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "revoke_status":
-		state, _, meta := d.snapshotState()
-		if state == nil {
+		impacts, meta, loaded := d.StateStore.revocationImpactProjection(d.Sync.Config, d.Sync.now())
+		if !loaded {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		impacts := AllRevocationImpact(state, d.Sync.Config, d.Sync.now())
 		response := controlResponse{
 			OK:               true,
 			PeerID:           d.Sync.Config.PeerID,
@@ -1193,12 +1148,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if err != nil {
 		return err
 	}
-	var currentIdentityKeyPath string
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state != nil {
-			currentIdentityKeyPath = state.IdentityKeyPath
-		}
-	})
+	currentIdentityKeyPath := d.StateStore.identityKeyPathProjection()
 	if currentIdentityKeyPath != "" && latest.IdentityKeyPath != "" && latest.IdentityKeyPath != currentIdentityKeyPath {
 		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, latest.IdentityKeyPath)
 	}
@@ -1348,8 +1298,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 		return nil, errors.New("daemon service is not initialized")
 	}
 	if !apply {
-		snapshot, _, _ := d.snapshotState()
-		return planPurgeRevokedZones(snapshot, d.Sync.App.Now(), target)
+		return d.StateStore.purgePlanProjection(d.Sync.App.Now(), target)
 	}
 	var plan *purgePlan
 	if _, err := d.StateStore.Update(func(state *stateFile) error {
@@ -1649,21 +1598,6 @@ func (d *DaemonService) currentState() *stateFile {
 	return state
 }
 
-func (d *DaemonService) snapshotState() (*stateFile, uint64, daemonStateStoreMeta) {
-	if d == nil {
-		return nil, 0, daemonStateStoreMeta{}
-	}
-	if d.StateStore == nil {
-		return nil, 0, daemonStateStoreMeta{}
-	}
-	state, rev := d.StateStore.Snapshot()
-	meta := d.StateStore.Meta()
-	if meta.Revision == 0 {
-		meta.Revision = rev
-	}
-	return state, rev, meta
-}
-
 func (d *DaemonService) routingLastRun(state *stateFile) int64 {
 	if d != nil {
 		if lastRun := d.routingLastRunUnix.Load(); lastRun != 0 {
@@ -1698,7 +1632,7 @@ func (d *DaemonService) replaceCommittedState(state *stateFile) {
 
 func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
-		state, _, _ := d.snapshotState()
+		state, _ := d.StateStore.Snapshot()
 		d.Hooks.OnStateChanged(state)
 	}
 	// Phase 6.7: notify the read-only observer so it can push SSE events.
@@ -1765,13 +1699,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 	// This function is called after every sync-state update. Most calls have no
 	// revocations, so check the immutable committed state first and avoid the
 	// copy-on-write transaction (which deep-copies the whole state through JSON).
-	var revokedZones map[zone.ZonePath]bool
-	d.StateStore.ReadCommitted(func(state *stateFile) {
-		if state == nil || state.Network == nil {
-			return
-		}
-		revokedZones = CollectAllRevokedZones(state, d.Sync.now())
-	})
+	revokedZones := d.StateStore.revokedZonesProjection(d.Sync.now())
 	if len(revokedZones) == 0 {
 		return
 	}
@@ -2003,8 +1931,7 @@ func (d *DaemonService) ipsecReconcileInterval() time.Duration {
 	}
 	groups := d.Sync.App.Config.IPsec.LinkGroups
 	if len(groups) == 0 {
-		state, _, _ := d.snapshotState()
-		if state != nil && len(state.LinkInstances) > 0 {
+		if d.StateStore.hasLinkInstancesProjection() {
 			return defaultIPsecReconcileInterval
 		}
 		return 0

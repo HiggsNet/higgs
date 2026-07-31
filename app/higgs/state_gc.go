@@ -50,8 +50,7 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 	}
 	var plan *stateGCPlan
 	if !apply {
-		state, _, _ := d.snapshotState()
-		return buildStateGCPlan(d.Sync.App.Config, state), nil
+		return d.StateStore.stateGCPlanProjection(d.Sync.App.Config), nil
 	}
 	_, err := d.runStateStoreWriteIfChanged(func(state *stateFile) (bool, error) {
 		plan = buildStateGCPlan(d.Sync.App.Config, state)
@@ -61,8 +60,7 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 		return nil, err
 	}
 	if plan == nil {
-		state, _, _ := d.snapshotState()
-		plan = buildStateGCPlan(d.Sync.App.Config, state)
+		plan = d.StateStore.stateGCPlanProjection(d.Sync.App.Config)
 	}
 	return plan, nil
 }

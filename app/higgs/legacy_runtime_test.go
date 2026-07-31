@@ -35,7 +35,7 @@ func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string,
 	if d == nil || d.StateStore == nil {
 		return
 	}
-	d.StateStore.ReadCommitted(func(state *stateFile) {
+	readCommittedForTest(d.StateStore, func(state *stateFile) {
 		d.recordBirdHealthObservationUnavailableForState(state, netnsName, overlays)
 	})
 }
@@ -44,7 +44,7 @@ func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays [
 	if d == nil || d.StateStore == nil {
 		return
 	}
-	d.StateStore.ReadCommitted(func(state *stateFile) {
+	readCommittedForTest(d.StateStore, func(state *stateFile) {
 		d.recordBirdHealthObservationForState(state, netnsName, overlays, observed)
 	})
 }
