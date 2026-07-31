@@ -12,6 +12,8 @@ make check
 
 `make check` 会执行格式化、`go vet`、`go test ./...` 和构建。Makefile 默认使用 `/tmp/higgs-gocache` 与 `/tmp/higgs-gomodcache`，便于在受限环境里复用缓存。
 
+测试包会强制从各自的临时 `data_dir` 推导 control socket；普通 smoke 和 root-smoke 也会为每次 Make 调用创建私有 `TMPDIR`，并按各测试节点的 `data_dir` 隔离 socket。即使误用 `sudo make test` 或 `sudo make smoke`，测试写操作也不会连接生产 `/run/higgs/higgs.sock`。聚合 smoke 成功后会删除私有目录，失败时保留现场用于排障。
+
 只构建：
 
 ```bash

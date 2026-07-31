@@ -15,6 +15,7 @@ Higgs 默认读取 `/etc/higgs/config.yaml`。本地开发或同一机器多节�
 - `HIGGS_CONFIG` 覆盖默认配置路径。
 - `HIGGS_STATE` 覆盖最终状态数据库路径，优先级高于配置里的 `state_path`。排障时要确认它没有指向另一个节点。
 - `HIGGS_CONTROL_SOCKET` 覆盖 control socket 路径，优先级高于由运行身份和 `data_dir` 推导的默认值。
+- `HIGGS_CONTROL_SOCKET_SCOPE=data-dir` 强制从 `data_dir` 推导 control socket；主要用于 root 身份下的隔离测试，避免连接 `/run/higgs/higgs.sock`。
 - `HIGGS_LOG_LEVEL` 临时覆盖配置里的 `log.level`，常用于排障。
 - `trusted_root_public_key` 也兼容 `root_public_key` / `trusted_root_key`。
 - gossip 身份、bootstrap、同步限额和 endpoint discovery 必须写在 `gossip:` 下。

@@ -24,6 +24,22 @@ CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
 SMOKE_TARGETS := join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
 ROOT_SMOKE_TARGETS := ipsec-xfrm-smoke bird-babel-smoke firewall-smoke health-fault-smoke
+ISOLATED_SMOKE_TARGETS := smoke smoke-all root-smoke $(SMOKE_TARGETS) $(ROOT_SMOKE_TARGETS)
+
+# Every smoke invocation gets a private TMPDIR and derives one control socket per
+# test data_dir. This is especially important under sudo: root otherwise defaults
+# to the live /run/higgs/higgs.sock and a smoke mutation can reach production state.
+ifneq ($(strip $(filter $(ISOLATED_SMOKE_TARGETS),$(MAKECMDGOALS))),)
+SMOKE_TMP_BASE := $(if $(TMPDIR),$(TMPDIR),/tmp)
+SMOKE_RUN_DIR := $(shell mktemp -d "$(SMOKE_TMP_BASE)/higgs-smoke.XXXXXX")
+ifeq ($(strip $(SMOKE_RUN_DIR)),)
+$(error failed to create isolated smoke directory below $(SMOKE_TMP_BASE))
+endif
+$(ISOLATED_SMOKE_TARGETS): export TMPDIR := $(SMOKE_RUN_DIR)
+$(ISOLATED_SMOKE_TARGETS): export HIGGS_CONTROL_SOCKET :=
+$(ISOLATED_SMOKE_TARGETS): export HIGGS_CONTROL_SOCKET_SCOPE := data-dir
+$(ISOLATED_SMOKE_TARGETS): export HIGGS_STATE :=
+endif
 
 .PHONY: docker-build docker-run-example nix-build install-script-check
 
@@ -113,10 +129,12 @@ smoke: smoke-all
 
 smoke-all: $(SMOKE_TARGETS)
 	@echo "All smoke tests passed"
+	@rm -rf "$(SMOKE_RUN_DIR)"
 
 root-smoke: $(ROOT_SMOKE_TARGETS)
 	@HIGGS_REVOCATION_DATA_PLANE_SKIP_SHARED=1 GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/revocation-data-plane-smoke.sh
 	@echo "All root data-plane smoke tests passed"
+	@rm -rf "$(SMOKE_RUN_DIR)"
 
 ipsec-xfrm-preflight:
 	@docs/scripts/ipsec-xfrm-preflight.sh

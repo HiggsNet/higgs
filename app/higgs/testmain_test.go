@@ -34,6 +34,10 @@ func installTestConfigDefaults(dir string) error {
 		return err
 	}
 	os.Unsetenv("HIGGS_STATE")
+	os.Unsetenv("HIGGS_CONTROL_SOCKET")
+	if err := os.Setenv("HIGGS_CONTROL_SOCKET_SCOPE", "data-dir"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -56,5 +60,11 @@ func TestPackageTestsUseIsolatedConfigDefaults(t *testing.T) {
 	}
 	if statePath != config.StatePath {
 		t.Fatalf("configuredStatePath = %q, want config StatePath %q", statePath, config.StatePath)
+	}
+
+	controlPath := controlSocketPath(config)
+	wantControlPath := filepath.Join(config.DataDir, controlSocketName)
+	if controlPath != wantControlPath {
+		t.Fatalf("controlSocketPath = %q, want isolated path %q", controlPath, wantControlPath)
 	}
 }

@@ -173,9 +173,16 @@ func controlSocketPath(config *appConfig) string {
 	if path := os.Getenv("HIGGS_CONTROL_SOCKET"); path != "" {
 		return path
 	}
+	if os.Getenv("HIGGS_CONTROL_SOCKET_SCOPE") == "data-dir" {
+		return dataDirControlSocketPath(config)
+	}
 	if os.Geteuid() == 0 {
 		return filepath.Join("/run/higgs", controlSocketName)
 	}
+	return dataDirControlSocketPath(config)
+}
+
+func dataDirControlSocketPath(config *appConfig) string {
 	dataDir := "."
 	if config != nil && config.DataDir != "" {
 		dataDir = config.DataDir
