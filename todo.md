@@ -183,13 +183,23 @@
       - 为每类 typed mutation 增加 ownership 测试：未拥有的子结构应保持共享且不可修改，拥有的所有可变叶子必须 detached；保留 race、retained callback 和 stale 防护测试。
       - 已完成：Routing 延用 `routingSnapshot`/CAS；IPsec 新增完整 key/port/link/reconcile owned snapshot/commit；Firewall 新增 ACL/reconcile owned snapshot/commit；Network 新增独立 snapshot/commit 并迁移 daemon `record_put`。已删除 IPsec stale instance/owner-token merge、stale diagnostic 回写和 Firewall 在新 revision 上重提旧 summary；所有 stale 结果现在整体丢弃、记录 source/current revision 并 dirty 重跑。ownership、retained input、stale 与 race 测试、全量 `make check`、chain relay、routing/IPsec/firewall dry-run smoke 均通过；使用 Nix StrongSwan PATH 的完整 `make root-smoke` 也通过，覆盖 StrongSwan/XFRM lifecycle/IKE/takeover/rotate、BIRD/Babel exchange/filter/failover/adopt、nft firewall、health fault injection 和 revocation deny-first。
 
-    - [ ] **7.11.6.6 实现 Network target-zone COW**
+    - [ ] **7.11.6.6 收敛 daemon authoritative mutation 与 fail-closed control 写入**
+      - 事故背景：root 身份运行测试时，CLI 使用测试临时 DB 中的 synthetic root pool 完成 IPAM dry-run，却把 mutation 通过生产 `/run/higgs/higgs.sock` 作为通用 `record_put` 交给 daemon；daemon 未按自己的当前 Network 重新执行 pool ownership/assignment covering 校验，最终在生产 `catofes.` 写入测试 pool/assignments。测试/smoke 已先增加私有 `TMPDIR`、按 `data_dir` 派生 control socket、清空 `HIGGS_STATE` 覆盖和 root 回归测试作为止血，但这不能替代 authoritative mutation 修复。
+      - 所有在线 mutation 必须只向 daemon 发送 typed intent；client 只负责 CLI 参数解析、类型编码和展示响应，不加载本地 StateStore、不执行任何依赖 Network/revision 的预校验，也不在 client/daemon 之间维护两套 semantic validation。daemon 在 single-writer 事件循环中基于当前 committed StateStore revision 完成输入规范化、权限、当前对象状态、跨 record 约束和撤销条件校验，再构造/签名 record、typed COW commit、持久化并触发对应 reconcile；预览如有需要也必须作为 daemon typed dry-run 请求执行。
+      - 将每类操作收敛成接收 `(committed state, typed intent)`、返回 `(candidate/typed patch, effects, error)` 的纯领域 mutation，验证与构造不可拆开且成功前无外部副作用。在线 handler 在 daemon single-writer 内调用它；显式 `--direct` 的 recovery/offline 路径在取得独占状态后复用同一领域 mutation，再完成持久化，不能另留一套 client/direct 验证实现。
+      - 新增 typed control methods 覆盖 `ipam_pool_create/revoke`、`ipam_assignment_create/revoke`、`route_announce/withdraw`、`service_publish/withdraw`；IPAM 必须在 daemon 当前 Network 上校验 `allocate-ip`、pool ownership/covering、overlap/shared/tag，route 必须校验 assignment 与当前 active record，service 必须校验 managed zone、endpoint schema 和当前 authorized assignment。
+      - 通用 `record_put` 只保留非保留命名空间的普通应用/policy record；拒绝 `ipam/`、`routes/`、`services/`、`routing/`、`ipsec/`、endpoint/sync 等 daemon-owned key/type，防止调用者绕过 typed API 写入结构合法但语义无效、或覆盖 daemon 生命周期 record。保留命名空间和 key/type 配对必须集中定义并有表驱动测试。
+      - mutation control socket 不可用时一律 fail closed；只有用户显式传入 `--direct` 的 recovery/offline 命令才可写本地 DB。逐项删除 record、IPAM、route、service、delegation issue/grant/revoke、join accept、recovery import/purge、state GC、IPsec cleanup 的隐式 direct fallback；只读 status/debug/list 仍可安全回退离线视图。Endpoint ACL 与 rotate-port 已有的 require-daemon 行为保持不变。
+      - 审计现有 typed handlers：delegation、recovery、Endpoint ACL、GC、rotate/cleanup 继续由 daemon 当前状态重验；将 `join_accept` 从内部直接 `SaveState` 后 reload 收敛到 typed StateStore COW；Endpoint ACL 的 assignment 校验和 commit 应绑定同一 source revision，意外 stale 时丢弃并重试/报错，不跨 revision 接受旧判断。
+      - 回归测试必须故意让 CLI 本地 DB 与 daemon committed state 不一致：本地有 pool/assignment 而 daemon 没有、本地旧 active record 而 daemon 已撤销/替换、本地 service endpoint 合法而 daemon assignment 已变化；在线 client 不应读取该本地 DB，daemon 应按自己的 revision 接受或拒绝，拒绝时 revision、record/history、磁盘和 reconcile 均不变。另覆盖 daemon typed dry-run 与真实 mutation 使用同一验证结果、online/direct 复用同一领域 mutation、raw `record_put` 保留命名空间拒绝、socket 缺失 mutation 不落盘、显式 `--direct` 才允许离线恢复，以及旧 client/new daemon 的 fail-closed 兼容行为。
+
+    - [ ] **7.11.6.7 实现 Network target-zone COW**
       - 在 7.11.6.1 的失败原子性稳定后，将 Network 写入从完整 Network clone 收敛为：浅复制 `NetworkState` root、复制 `Zones` map、完整复制目标 `ZoneState` 及实际会修改的 records/history/delegation/revocation；其他 zone 跨 revision 只读共享。
       - `ApplySnapshot`/Network mutation 应返回 detached 新 Network 或 typed patch，不直接修改传入 Network。validation 可在新 root 上读取共享祖先 zone，但只能修改 detached 目标 zone；成功后一次性挂到新 state root，失败直接丢弃 candidate。
       - 第一版不启用 `MerkleRoot`/digest cache；当前 root 缓存没有覆盖所有 mutation 的完整失效协议，不能与 target-zone COW 同时引入。
       - 测试覆盖：未修改 zone 确实共享、目标 zone 完全 detached、祖先 delegation/revocation 读取正确、目标 records/history 更新不泄漏、失败不变、连续更新同一 zone、不同 zone 顺序更新和 race。benchmark 分别使用单大 zone、多小 zone 和 history-heavy fixture。
 
-    - [ ] **7.11.6.7 最后评估批量 `ApplySnapshot`**
+    - [ ] **7.11.6.8 最后评估批量 `ApplySnapshot`**
       - 只有单 action 原子性、target-zone COW 和 typed Network commit 均验收后才开始；若新 perf 已不再显示 snapshot commit/persist 为热点，本项可以继续保留而不实现。
       - 必须保留当前“合法 action 成功、非法 action 被拒绝、后续 action 继续”的部分成功语义。每个 action 使用独立 savepoint：从批次工作 Network 创建 candidate，成功才推进批次工作副本，失败丢弃该 candidate 并记录 rejected digest。
       - 批次结束后最多一次 committed root 发布和一次持久化；日志、事件通知、transport send 等副作用只能基于成功提交的结果执行。虽然 single-writer 下正常不会 stale，意外 stale 时仍应丢弃整个批次结果并重新排队，不能直接重放带副作用的 callback。
@@ -263,8 +273,8 @@
 
 ## 下一步
 
-1. 当前执行队列为 7.11.6 StateStore 正确性、手写 clone 与分层 COW，严格按 7.11.6.1 → 7.11.6.7 的阶段门推进；第一窄切口是 `ApplySnapshot` 失败原子性，第二窄切口是删除 routing stale 字段级 merge。
-2. 每完成一个 7.11.6 子阶段都先运行对应测试、race、benchmark 和同负载 perf，再决定是否继续下一结构优化；7.11.6.7 批量 snapshot apply 不是必做项。
+1. 当前执行队列为 7.11.6 StateStore 正确性、手写 clone 与分层 COW；鉴于已发生测试 mutation 串入生产 daemon 的事故，先完成 7.11.6.6 authoritative mutation/fail-closed 安全收口，再继续 7.11.6.7 target-zone COW，最后评估 7.11.6.8 批量 snapshot apply。
+2. 每完成一个 7.11.6 子阶段都先运行对应测试、race、benchmark 和同负载 perf，再决定是否继续下一结构优化；7.11.6.8 批量 snapshot apply 不是必做项。
 3. StateStore 性能主线收口后，再按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
 4. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
 5. Phase 8、Phase 9 已完成验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
