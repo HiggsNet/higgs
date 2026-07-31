@@ -186,7 +186,7 @@ func TestMaintainExistingXFRMInterfacesSkipsLinkWithActiveAction(t *testing.T) {
 	}
 }
 
-func TestDaemonIPsecReconcileMergesInstanceWhenRevisionChanged(t *testing.T) {
+func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4050, 0)
 	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
@@ -219,21 +219,21 @@ func TestDaemonIPsecReconcileMergesInstanceWhenRevisionChanged(t *testing.T) {
 	if err := service.reconcileIPsecLinks(context.Background()); err != nil {
 		t.Fatalf("reconcileIPsecLinks: %v", err)
 	}
-	if service.ipsecDirty {
-		t.Fatal("ipsecDirty = true, want token-compatible instance merge to complete")
+	if !service.ipsecDirty {
+		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, rev := service.StateStore.Snapshot()
+	if rev != baseRev+1 {
+		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
+	}
 	if snapshot.IdentityKeyPath != "newer-revision" {
 		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
 	}
-	if len(snapshot.LinkInstances) != 1 {
-		t.Fatalf("link instances = %+v, want stale-revision instance result merged", snapshot.LinkInstances)
+	if len(snapshot.LinkInstances) != 0 {
+		t.Fatalf("link instances = %+v, want stale result discarded", snapshot.LinkInstances)
 	}
-	if snapshot.IPsecReconcile == nil {
-		t.Fatal("ipsec reconcile summary missing")
-	}
-	if snapshot.IPsecReconcile.SourceRevision != baseRev || snapshot.IPsecReconcile.Stale || !snapshot.IPsecReconcile.Committed {
-		t.Fatalf("ipsec reconcile summary = %+v, want committed summary for source revision %d", snapshot.IPsecReconcile, baseRev)
+	if snapshot.IPsecReconcile != nil {
+		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded", snapshot.IPsecReconcile)
 	}
 }
 
@@ -285,11 +285,8 @@ func TestDaemonIPsecReconcileStaleInstanceTokenDoesNotOverwriteCurrent(t *testin
 			t.Fatalf("link instance owner token = %q, want current conflicting token preserved", inst.Owner.Token)
 		}
 	}
-	if snapshot.IPsecReconcile == nil {
-		t.Fatal("ipsec reconcile summary missing, want stale diagnostic")
-	}
-	if snapshot.IPsecReconcile.SourceRevision != baseRev || !snapshot.IPsecReconcile.Stale || snapshot.IPsecReconcile.Committed {
-		t.Fatalf("ipsec reconcile summary = %+v, want stale diagnostic for source revision %d", snapshot.IPsecReconcile, baseRev)
+	if snapshot.IPsecReconcile != nil {
+		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded from source revision %d", snapshot.IPsecReconcile, baseRev)
 	}
 }
 

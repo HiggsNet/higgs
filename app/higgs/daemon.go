@@ -1498,23 +1498,25 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 		return 0, errors.New("daemon service is not initialized")
 	}
 	d.StateStore.ReplaceCommitted(latest)
+	workspace, rev := d.StateStore.networkSnapshot()
+	if workspace == nil || workspace.Network == nil {
+		return 0, errors.New("daemon state network is nil")
+	}
 	var version uint64
 	var recordCount int
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		record, err := buildSignedRecordAt(state, event.Zone, event.Key, event.Value, event.Type, d.Sync.now())
-		if err != nil {
-			return err
-		}
-		if err := state.Network.Put(record); err != nil {
-			return err
-		}
-		version = record.Version
-		if zs := state.Network.Zones[event.Zone]; zs != nil {
-			recordCount = len(zs.Records)
-		}
-		return nil
-	}); err != nil {
+	record, err := buildSignedRecordAt(workspace, event.Zone, event.Key, event.Value, event.Type, d.Sync.now())
+	if err != nil {
 		return 0, err
+	}
+	if err := workspace.Network.Put(record); err != nil {
+		return 0, err
+	}
+	version = record.Version
+	if zs := workspace.Network.Zones[event.Zone]; zs != nil {
+		recordCount = len(zs.Records)
+	}
+	if _, committed := d.StateStore.commitNetworkIfRevision(rev, workspace.Network); !committed {
+		return 0, errDaemonStateRevisionStale
 	}
 	d.logInfo("daemon", "record_put_persist", map[string]any{
 		"zone":         event.Zone,

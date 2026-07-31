@@ -176,11 +176,12 @@
       - persistence 单独提供受限的 committed immutable view/lease：取得某一 revision 的 root 后可在锁外编码，因为旧 root 永不修改；接口只供保存适配器使用，不升级为通用裸指针 API。保存完成时记录的文件 marker 必须对应实际编码的 revision。
       - 每替换一个 projection 都补充 detached/retain 测试，并确认调用方的日志、transport、磁盘和 hook 副作用发生在 store 锁外。
 
-    - [ ] **7.11.6.5 收敛 typed COW mutation，仍使用全局 revision**
+    - [x] **7.11.6.5 收敛 typed COW mutation，仍使用全局 revision**
       - typed API 的目的只是表达字段所有权并减少复制，不提供并行 writer merge：Peer 路径复用现有 `UpdateSyncPeer`；Routing 只拥有 `BirdInstances`/`RoutingReconcile`；IPsec 只拥有 transport key/port、LinkInstances 和 IPsecReconcile；Firewall 只拥有 EndpointACLs/FirewallReconcile；Network mutation 使用独立入口。
       - 开始事务时只复制该事务会修改的字段；提交时在锁内确认全局 revision 未变化，从当前 committed root 显式构造新 root并替换 detached owned fields。stale 时丢弃结果、标记相应 dirty/重新排队，禁止字段级 merge。
       - mutation callback 必须无 transport、文件、网络、日志计数和其他外部副作用；需要执行的外部动作在 commit 成功后进行。routing/IPsec reconcile 中本来就先执行的幂等系统操作维持现有模型，但若最终 commit 意外 stale，必须 dirty 重跑，不能伪造已提交状态。
       - 为每类 typed mutation 增加 ownership 测试：未拥有的子结构应保持共享且不可修改，拥有的所有可变叶子必须 detached；保留 race、retained callback 和 stale 防护测试。
+      - 已完成：Routing 延用 `routingSnapshot`/CAS；IPsec 新增完整 key/port/link/reconcile owned snapshot/commit；Firewall 新增 ACL/reconcile owned snapshot/commit；Network 新增独立 snapshot/commit 并迁移 daemon `record_put`。已删除 IPsec stale instance/owner-token merge、stale diagnostic 回写和 Firewall 在新 revision 上重提旧 summary；所有 stale 结果现在整体丢弃、记录 source/current revision 并 dirty 重跑。ownership、retained input、stale 与 race 测试、全量 `make check`、chain relay、routing/IPsec/firewall dry-run smoke 均通过；使用 Nix StrongSwan PATH 的完整 `make root-smoke` 也通过，覆盖 StrongSwan/XFRM lifecycle/IKE/takeover/rotate、BIRD/Babel exchange/filter/failover/adopt、nft firewall、health fault injection 和 revocation deny-first。
 
     - [ ] **7.11.6.6 实现 Network target-zone COW**
       - 在 7.11.6.1 的失败原子性稳定后，将 Network 写入从完整 Network clone 收敛为：浅复制 `NetworkState` root、复制 `Zones` map、完整复制目标 `ZoneState` 及实际会修改的 records/history/delegation/revocation；其他 zone 跨 revision 只读共享。

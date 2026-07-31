@@ -90,6 +90,61 @@ func (s *DaemonStateStore) routingSnapshot() (*stateFile, uint64) {
 	return snapshot, s.revision
 }
 
+// ipsecSnapshot returns a workspace that owns the complete IPsec field family.
+// Network and unrelated controller state remain shared and read-only.
+func (s *DaemonStateStore) ipsecSnapshot() (*stateFile, uint64) {
+	if s == nil {
+		return nil, 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.committed == nil {
+		return nil, s.revision
+	}
+	snapshot := cloneStateFileRootSharingChildren(s.committed)
+	snapshot.IPsecTransportKey = cloneIPsecTransportKeyState(s.committed.IPsecTransportKey)
+	snapshot.IPsecPortRecord = cloneIPsecPortRecordState(s.committed.IPsecPortRecord)
+	snapshot.LinkInstances = cloneLinkInstances(s.committed.LinkInstances)
+	snapshot.IPsecReconcile = cloneIPsecReconcileState(s.committed.IPsecReconcile)
+	return snapshot, s.revision
+}
+
+// firewallSnapshot returns a workspace that owns the complete firewall field
+// family. Network and unrelated controller state remain shared and read-only.
+func (s *DaemonStateStore) firewallSnapshot() (*stateFile, uint64) {
+	if s == nil {
+		return nil, 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.committed == nil {
+		return nil, s.revision
+	}
+	snapshot := cloneStateFileRootSharingChildren(s.committed)
+	snapshot.EndpointACLs = cloneEndpointACLs(s.committed.EndpointACLs)
+	snapshot.FirewallReconcile = cloneFirewallReconcileState(s.committed.FirewallReconcile)
+	return snapshot, s.revision
+}
+
+// networkSnapshot returns a workspace that owns Network only. Other state
+// fields remain shared and must be treated as immutable.
+func (s *DaemonStateStore) networkSnapshot() (*stateFile, uint64) {
+	if s == nil {
+		return nil, 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.committed == nil {
+		return nil, s.revision
+	}
+	snapshot := cloneStateFileRootSharingChildren(s.committed)
+	snapshot.Network = zone.CloneNetworkState(s.committed.Network)
+	if snapshot.Network != nil {
+		configureValidation(snapshot.Network)
+	}
+	return snapshot, s.revision
+}
+
 // ZoneDigests returns a detached digest projection of the committed state.
 // It keeps the state pointer private and avoids cloning the complete Network
 // for callers that only need its gossip digest.
@@ -374,6 +429,75 @@ func (s *DaemonStateStore) commitRoutingIfRevision(rev uint64, birdInstances map
 	next := cloneStateFileRootSharingChildren(s.committed)
 	next.BirdInstances = nextBirdInstances
 	next.RoutingReconcile = nextReconcile
+	s.commitLocked(next)
+	return s.revision, true
+}
+
+// commitIPsecIfRevision replaces the complete IPsec-owned field family. A
+// stale global revision discards the complete result.
+func (s *DaemonStateStore) commitIPsecIfRevision(rev uint64, transportKey *ipsecTransportKeyState, portRecord *ipsecPortRecordState, linkInstances map[string]linkInstanceState, reconcile *ipsecReconcileState) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	nextTransportKey := cloneIPsecTransportKeyState(transportKey)
+	nextPortRecord := cloneIPsecPortRecordState(portRecord)
+	nextLinkInstances := cloneLinkInstances(linkInstances)
+	nextReconcile := cloneIPsecReconcileState(reconcile)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != rev {
+		return s.revision, false
+	}
+	next := cloneStateFileRootSharingChildren(s.committed)
+	next.IPsecTransportKey = nextTransportKey
+	next.IPsecPortRecord = nextPortRecord
+	next.LinkInstances = nextLinkInstances
+	next.IPsecReconcile = nextReconcile
+	s.commitLocked(next)
+	return s.revision, true
+}
+
+// commitFirewallIfRevision replaces only firewall-owned state. A stale global
+// revision discards the complete result instead of retrying it on a newer root.
+func (s *DaemonStateStore) commitFirewallIfRevision(rev uint64, endpointACLs map[string]endpointACL, reconcile *firewallReconcileState) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	nextEndpointACLs := cloneEndpointACLs(endpointACLs)
+	nextReconcile := cloneFirewallReconcileState(reconcile)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != rev {
+		return s.revision, false
+	}
+	next := cloneStateFileRootSharingChildren(s.committed)
+	next.EndpointACLs = nextEndpointACLs
+	next.FirewallReconcile = nextReconcile
+	s.commitLocked(next)
+	return s.revision, true
+}
+
+// commitNetworkIfRevision replaces only the authoritative Network. The input
+// is detached before publication so callers may retain or mutate their
+// workspace after commit without affecting committed state.
+func (s *DaemonStateStore) commitNetworkIfRevision(rev uint64, network *zone.NetworkState) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	nextNetwork := zone.CloneNetworkState(network)
+	if nextNetwork != nil {
+		configureValidation(nextNetwork)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != rev {
+		return s.revision, false
+	}
+	next := cloneStateFileRootSharingChildren(s.committed)
+	next.Network = nextNetwork
 	s.commitLocked(next)
 	return s.revision, true
 }

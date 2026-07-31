@@ -30,7 +30,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	snapshot, rev, _ := d.snapshotState()
+	snapshot, rev := d.StateStore.firewallSnapshot()
 	if snapshot == nil {
 		return nil
 	}
@@ -54,7 +54,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	ars, err := routing.BuildAuthorizedRouteSet(snapshot.Network, now)
 	if err != nil {
 		summary.LastError = err.Error()
-		_ = d.commitFirewallReconcileResult(rev, summary)
+		_ = d.commitFirewallReconcileResult(rev, snapshot.EndpointACLs, summary)
 		return fmt.Errorf("firewall build authorized route set: %w", err)
 	}
 
@@ -187,7 +187,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		summary.LastError = ""
 	}
 
-	if err := d.commitFirewallReconcileResult(rev, summary); err != nil {
+	if err := d.commitFirewallReconcileResult(rev, snapshot.EndpointACLs, summary); err != nil {
 		return fmt.Errorf("save firewall reconcile state: %w", err)
 	}
 	return firstErr
@@ -205,34 +205,19 @@ func getOrCreateFirewallEntry(state *firewallReconcileState, id string) *firewal
 	return entry
 }
 
-func (d *DaemonService) commitFirewallReconcileResult(rev uint64, summary *firewallReconcileState) error {
+func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs map[string]endpointACL, summary *firewallReconcileState) error {
 	if d == nil || d.StateStore == nil || summary == nil {
 		return nil
 	}
-	_, committed, err := d.StateStore.CommitIfRevision(rev, func(state *stateFile) error {
-		state.FirewallReconcile = cloneFirewallReconcileState(summary)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
+	currentRev, committed := d.StateStore.commitFirewallIfRevision(rev, endpointACLs, summary)
 	if !committed {
-		current := d.StateStore.Meta().Revision
-		_, retryCommitted, retryErr := d.StateStore.CommitIfRevision(current, func(state *stateFile) error {
-			state.FirewallReconcile = cloneFirewallReconcileState(summary)
-			return nil
-		})
-		if retryErr != nil {
-			return retryErr
-		}
-		if !retryCommitted {
-			d.firewallDirty = true
-			d.publishStateStoreRuntimeFlags()
-			return nil
-		}
 		d.firewallDirty = true
 		d.publishStateStoreRuntimeFlags()
-		return d.saveCommittedState()
+		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
+			"source_revision":  rev,
+			"current_revision": currentRev,
+		})
+		return nil
 	}
 	return d.saveCommittedState()
 }

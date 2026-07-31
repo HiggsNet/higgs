@@ -8,6 +8,7 @@ import (
 
 	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 var benchmarkStateSnapshot *stateFile
@@ -86,6 +87,195 @@ func TestDaemonStateStoreRoutingSnapshotSharesNetworkAndDetachesOwnedState(t *te
 	store.ReadCommitted(func(state *stateFile) {
 		if got := state.BirdInstances["mesh"].Overlays[0]; got != "changed" {
 			t.Fatalf("post-commit input mutation leaked: %q", got)
+		}
+	})
+}
+
+func TestDaemonStateStoreIPsecTypedCOWOwnershipAndStale(t *testing.T) {
+	initial := &stateFile{
+		ManagedZone:       "node-a.catofes.",
+		Network:           cloneTestNetworkState(),
+		IPsecTransportKey: &ipsecTransportKeyState{PrivateKey: []byte("private")},
+		IPsecPortRecord:   &ipsecPortRecordState{Range: &ipsec.PortRange{From: 4500, To: 4510}},
+		LinkInstances:     map[string]linkInstanceState{"link-a": {ID: "link-a", Owner: linkOwnerState{Token: "owner-a"}}},
+		IPsecReconcile:    &ipsecReconcileState{Desired: []desiredLinkState{{InstanceID: "link-a"}}},
+		RoutingReconcile:  &routingReconcileState{LastError: "routing"},
+	}
+	store := NewDaemonStateStore(initial)
+
+	var committedNetwork *zone.NetworkState
+	var committedRouting *routingReconcileState
+	store.ReadCommitted(func(state *stateFile) {
+		committedNetwork = state.Network
+		committedRouting = state.RoutingReconcile
+	})
+	snapshot, rev := store.ipsecSnapshot()
+	if snapshot.Network != committedNetwork || snapshot.RoutingReconcile != committedRouting {
+		t.Fatal("IPsec snapshot copied or replaced an unowned field")
+	}
+	snapshot.IPsecTransportKey.PrivateKey[0] = 'P'
+	snapshot.IPsecPortRecord.Range.From = 4600
+	snapshot.LinkInstances["link-a"] = linkInstanceState{ID: "changed"}
+	snapshot.IPsecReconcile.Desired[0].InstanceID = "changed"
+	store.ReadCommitted(func(state *stateFile) {
+		if string(state.IPsecTransportKey.PrivateKey) != "private" ||
+			state.IPsecPortRecord.Range.From != 4500 ||
+			state.LinkInstances["link-a"].ID != "link-a" ||
+			state.IPsecReconcile.Desired[0].InstanceID != "link-a" {
+			t.Fatalf("IPsec workspace mutation leaked into committed state: %#v", state)
+		}
+	})
+
+	nextRev, committed := store.commitIPsecIfRevision(rev, snapshot.IPsecTransportKey, snapshot.IPsecPortRecord, snapshot.LinkInstances, snapshot.IPsecReconcile)
+	if !committed || nextRev != rev+1 {
+		t.Fatalf("IPsec typed commit = (%d, %t), want (%d, true)", nextRev, committed, rev+1)
+	}
+	snapshot.IPsecReconcile.Desired[0].InstanceID = "retained"
+	store.ReadCommitted(func(state *stateFile) {
+		if state.Network != committedNetwork || state.RoutingReconcile != committedRouting {
+			t.Fatal("IPsec commit replaced an unowned field")
+		}
+		if state.IPsecReconcile.Desired[0].InstanceID != "changed" {
+			t.Fatalf("retained IPsec input mutated committed state: %#v", state.IPsecReconcile)
+		}
+	})
+
+	stale, staleRev := store.ipsecSnapshot()
+	if _, err := store.Update(func(state *stateFile) error {
+		state.IdentityKeyPath = "newer"
+		return nil
+	}); err != nil {
+		t.Fatalf("advance revision: %v", err)
+	}
+	if current, ok := store.commitIPsecIfRevision(staleRev, stale.IPsecTransportKey, stale.IPsecPortRecord, map[string]linkInstanceState{"stale": {ID: "stale"}}, stale.IPsecReconcile); ok || current != staleRev+1 {
+		t.Fatalf("stale IPsec commit = (%d, %t), want (%d, false)", current, ok, staleRev+1)
+	}
+	store.ReadCommitted(func(state *stateFile) {
+		if _, ok := state.LinkInstances["stale"]; ok {
+			t.Fatal("stale IPsec result overwrote committed state")
+		}
+	})
+}
+
+func TestDaemonStateStoreFirewallTypedCOWOwnershipAndStale(t *testing.T) {
+	initial := &stateFile{
+		Network: cloneTestNetworkState(),
+		EndpointACLs: map[string]endpointACL{
+			"api": {Name: "api", Selectors: []string{"zone:catofes."}},
+		},
+		FirewallReconcile: &firewallReconcileState{Instances: map[string]*firewallInstanceReconcileStateEntry{
+			"host": {PolicyHash: "old"},
+		}},
+		IPsecReconcile: &ipsecReconcileState{LastError: "ipsec"},
+	}
+	store := NewDaemonStateStore(initial)
+	var committedNetwork *zone.NetworkState
+	var committedIPsec *ipsecReconcileState
+	store.ReadCommitted(func(state *stateFile) {
+		committedNetwork = state.Network
+		committedIPsec = state.IPsecReconcile
+	})
+
+	snapshot, rev := store.firewallSnapshot()
+	if snapshot.Network != committedNetwork || snapshot.IPsecReconcile != committedIPsec {
+		t.Fatal("firewall snapshot copied or replaced an unowned field")
+	}
+	acl := snapshot.EndpointACLs["api"]
+	acl.Selectors[0] = "zone:changed."
+	snapshot.EndpointACLs["api"] = acl
+	snapshot.FirewallReconcile.Instances["host"].PolicyHash = "changed"
+	store.ReadCommitted(func(state *stateFile) {
+		if state.EndpointACLs["api"].Selectors[0] != "zone:catofes." ||
+			state.FirewallReconcile.Instances["host"].PolicyHash != "old" {
+			t.Fatal("firewall workspace mutation leaked into committed state")
+		}
+	})
+
+	nextRev, committed := store.commitFirewallIfRevision(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile)
+	if !committed || nextRev != rev+1 {
+		t.Fatalf("firewall typed commit = (%d, %t), want (%d, true)", nextRev, committed, rev+1)
+	}
+	snapshot.FirewallReconcile.Instances["host"].PolicyHash = "retained"
+	store.ReadCommitted(func(state *stateFile) {
+		if state.Network != committedNetwork || state.IPsecReconcile != committedIPsec {
+			t.Fatal("firewall commit replaced an unowned field")
+		}
+		if state.FirewallReconcile.Instances["host"].PolicyHash != "changed" {
+			t.Fatal("retained firewall input mutated committed state")
+		}
+	})
+
+	stale, staleRev := store.firewallSnapshot()
+	if _, err := store.Update(func(state *stateFile) error {
+		state.IdentityKeyPath = "newer"
+		return nil
+	}); err != nil {
+		t.Fatalf("advance revision: %v", err)
+	}
+	stale.FirewallReconcile.LastError = "stale"
+	if current, ok := store.commitFirewallIfRevision(staleRev, stale.EndpointACLs, stale.FirewallReconcile); ok || current != staleRev+1 {
+		t.Fatalf("stale firewall commit = (%d, %t), want (%d, false)", current, ok, staleRev+1)
+	}
+	store.ReadCommitted(func(state *stateFile) {
+		if state.FirewallReconcile.LastError == "stale" {
+			t.Fatal("stale firewall result overwrote committed state")
+		}
+	})
+}
+
+func TestDaemonStateStoreNetworkTypedCOWOwnershipRetainAndStale(t *testing.T) {
+	initial := &stateFile{
+		Network:          cloneTestNetworkState(),
+		IPsecReconcile:   &ipsecReconcileState{LastError: "ipsec"},
+		EndpointACLs:     map[string]endpointACL{"api": {Name: "api"}},
+		RoutingReconcile: &routingReconcileState{LastError: "routing"},
+	}
+	store := NewDaemonStateStore(initial)
+	var committedIPsec *ipsecReconcileState
+	var committedRouting *routingReconcileState
+	store.ReadCommitted(func(state *stateFile) {
+		committedIPsec = state.IPsecReconcile
+		committedRouting = state.RoutingReconcile
+	})
+
+	snapshot, rev := store.networkSnapshot()
+	if snapshot.IPsecReconcile != committedIPsec || snapshot.RoutingReconcile != committedRouting {
+		t.Fatal("Network snapshot copied or replaced an unowned field")
+	}
+	snapshot.Network.Zones["node-a.catofes."].Records["endpoint"].Value[0] = 'N'
+	store.ReadCommitted(func(state *stateFile) {
+		if string(state.Network.Zones["node-a.catofes."].Records["endpoint"].Value) != "endpoint-a" {
+			t.Fatal("Network workspace mutation leaked into committed state")
+		}
+	})
+	nextRev, committed := store.commitNetworkIfRevision(rev, snapshot.Network)
+	if !committed || nextRev != rev+1 {
+		t.Fatalf("Network typed commit = (%d, %t), want (%d, true)", nextRev, committed, rev+1)
+	}
+	snapshot.Network.Zones["node-a.catofes."].Records["endpoint"].Value[0] = 'R'
+	store.ReadCommitted(func(state *stateFile) {
+		if state.IPsecReconcile != committedIPsec || state.RoutingReconcile != committedRouting {
+			t.Fatal("Network commit replaced an unowned field")
+		}
+		if got := state.Network.Zones["node-a.catofes."].Records["endpoint"].Value[0]; got != 'N' {
+			t.Fatalf("retained Network input mutated committed state: %q", got)
+		}
+	})
+
+	stale, staleRev := store.networkSnapshot()
+	if _, err := store.Update(func(state *stateFile) error {
+		state.IdentityKeyPath = "newer"
+		return nil
+	}); err != nil {
+		t.Fatalf("advance revision: %v", err)
+	}
+	stale.Network.GlobalRoot = []byte("stale")
+	if current, ok := store.commitNetworkIfRevision(staleRev, stale.Network); ok || current != staleRev+1 {
+		t.Fatalf("stale Network commit = (%d, %t), want (%d, false)", current, ok, staleRev+1)
+	}
+	store.ReadCommitted(func(state *stateFile) {
+		if string(state.Network.GlobalRoot) == "stale" {
+			t.Fatal("stale Network result overwrote committed state")
 		}
 	})
 }

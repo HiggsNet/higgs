@@ -818,6 +818,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newDaemonService(rt, state, config, time.Second)
+	baseRev := service.StateStore.Meta().Revision
 	driver := &captureFirewallOwnerDriver{}
 	driver.onApply = func() {
 		if _, err := service.StateStore.Update(func(state *stateFile) error {
@@ -836,12 +837,15 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if !service.firewallDirty {
 		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, rev := service.StateStore.Snapshot()
+	if rev != baseRev+1 {
+		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
+	}
 	if snapshot.IdentityKeyPath != "newer-firewall-revision" {
 		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
 	}
-	if snapshot.FirewallReconcile == nil || snapshot.FirewallReconcile.Instances["higgstesth2"] == nil {
-		t.Fatalf("firewall reconcile summary = %+v, want committed stale summary", snapshot.FirewallReconcile)
+	if snapshot.FirewallReconcile != nil {
+		t.Fatalf("firewall reconcile summary = %+v, want stale summary discarded", snapshot.FirewallReconcile)
 	}
 }
 

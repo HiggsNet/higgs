@@ -17,12 +17,11 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	snapshot, rev, _ := d.snapshotState()
+	snapshot, rev := d.StateStore.ipsecSnapshot()
 	if snapshot == nil {
 		return nil
 	}
 	groups := append([]ipsec.LinkGroupSpec(nil), d.Sync.App.Config.IPsec.LinkGroups...)
-	baseInstances := snapshot.LinkInstances
 	if snapshot.ManagedZone.IsRoot() || !snapshot.ManagedZone.Valid() {
 		return nil
 	}
@@ -93,7 +92,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			netns := netnsForAction(action, groups)
 			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-				if saveErr := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+				if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
 				}
 				return err
@@ -101,7 +100,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			if shouldAssignIPsecDiagnosticAddresses(action) {
 				if err := d.assignIPsecDiagnosticAddresses(ctx, xfrmDriver, *action.Spec, diagnosticPrefixes); err != nil {
 					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-					if saveErr := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+					if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
 					}
 					return err
@@ -111,12 +110,12 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		}
 	}
 	if err := d.maintainExistingXFRMInterfaces(ctx, xfrmDriver, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes); err != nil {
-		if saveErr := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+		if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
 		return err
 	}
-	if err := d.commitIPsecReconcileResult(rev, baseInstances, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
+	if err := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
@@ -656,36 +655,21 @@ func (d *DaemonService) ipsecDrivers() (ipsec.IPsecDriver, ipsec.XFRMDriver) {
 	return ipsecDriver, xfrmDriver
 }
 
-func (d *DaemonService) commitIPsecReconcileResult(rev uint64, baseInstances map[string]linkInstanceState, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
-	if d == nil || d.StateStore == nil {
+func (d *DaemonService) commitIPsecReconcileResult(rev uint64, workspace *stateFile, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
+	if d == nil || d.StateStore == nil || workspace == nil {
 		return nil
 	}
 	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
 	summary.Committed = true
 	nextInstances := linkInstancesFromIPsec(instances)
-	_, committed, err := d.StateStore.CommitIfRevision(rev, func(state *stateFile) error {
-		state.LinkInstances = nextInstances
-		state.IPsecReconcile = summary
-		return nil
-	})
-	if err != nil {
-		return err
-	}
+	currentRev, committed := d.StateStore.commitIPsecIfRevision(rev, workspace.IPsecTransportKey, workspace.IPsecPortRecord, nextInstances, summary)
 	if !committed {
-		merged, err := d.commitIPsecReconcileResultByInstance(baseInstances, nextInstances, summary)
-		if err != nil {
-			return err
-		}
-		if merged {
-			return nil
-		}
-		summary.Committed = false
-		summary.Stale = true
-		if err := d.recordStaleIPsecReconcileResult(summary); err != nil {
-			return err
-		}
 		d.ipsecDirty = true
 		d.publishStateStoreRuntimeFlags()
+		d.logWarn("ipsec", "stale_reconcile_result", map[string]any{
+			"source_revision":  rev,
+			"current_revision": currentRev,
+		})
 		return nil
 	}
 	committedState, _, _ := d.snapshotState()
@@ -695,82 +679,39 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, baseInstances map
 	return saveState(committedState)
 }
 
-func (d *DaemonService) commitIPsecReconcileResultByInstance(base, next map[string]linkInstanceState, summary *ipsecReconcileState) (bool, error) {
-	if d == nil || d.StateStore == nil || summary == nil {
-		return false, nil
-	}
-	changed := changedLinkInstanceIDs(base, next)
-	current, currentRev := d.StateStore.Snapshot()
-	if current == nil {
-		return false, nil
-	}
-	if len(changed) == 0 {
-		_, committed, err := d.StateStore.CommitIfRevision(currentRev, func(state *stateFile) error {
-			state.IPsecReconcile = summary
-			return nil
-		})
-		if err != nil || !committed {
-			return false, err
-		}
-		return true, d.saveCommittedState()
-	}
-	if !linkInstanceCommitTokensMatch(base, current.LinkInstances, changed) {
-		return false, nil
-	}
-	_, committed, err := d.StateStore.CommitIfRevision(currentRev, func(state *stateFile) error {
-		if state.LinkInstances == nil {
-			state.LinkInstances = make(map[string]linkInstanceState)
-		}
-		for _, id := range changed {
-			inst, ok := next[id]
-			if !ok {
-				delete(state.LinkInstances, id)
-				continue
-			}
-			state.LinkInstances[id] = inst
-		}
-		state.IPsecReconcile = summary
-		return nil
-	})
-	if err != nil || !committed {
-		return false, err
-	}
-	return true, d.saveCommittedState()
-}
-
 func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 	if d == nil || d.StateStore == nil || err == nil {
 		return
 	}
-	_, committed, commitErr := d.StateStore.CommitIfRevision(rev, func(state *stateFile) error {
-		reconcile := state.IPsecReconcile
-		if reconcile == nil {
-			reconcile = &ipsecReconcileState{}
-		}
-		reconcile.LastRunUnix = unix
-		reconcile.SourceRevision = rev
-		reconcile.Committed = true
-		reconcile.Stale = false
-		reconcile.LastError = err.Error()
-		state.IPsecReconcile = reconcile
-		return nil
-	})
-	if commitErr != nil {
-		d.logWarn("ipsec", "record_reconcile_error_failed", map[string]any{"error": commitErr})
-		return
-	}
-	if !committed {
-		if staleErr := d.recordStaleIPsecReconcileResult(&ipsecReconcileState{
-			LastRunUnix:    unix,
-			SourceRevision: rev,
-			Committed:      false,
-			Stale:          true,
-			LastError:      err.Error(),
-		}); staleErr != nil {
-			d.logWarn("ipsec", "record_stale_reconcile_error_failed", map[string]any{"error": staleErr})
-		}
+	snapshot, snapshotRev := d.StateStore.ipsecSnapshot()
+	if snapshot == nil || snapshotRev != rev {
 		d.ipsecDirty = true
 		d.publishStateStoreRuntimeFlags()
+		d.logWarn("ipsec", "stale_reconcile_error", map[string]any{
+			"source_revision":  rev,
+			"current_revision": snapshotRev,
+			"error":            err,
+		})
+		return
+	}
+	reconcile := snapshot.IPsecReconcile
+	if reconcile == nil {
+		reconcile = &ipsecReconcileState{}
+	}
+	reconcile.LastRunUnix = unix
+	reconcile.SourceRevision = rev
+	reconcile.Committed = true
+	reconcile.Stale = false
+	reconcile.LastError = err.Error()
+	currentRev, committed := d.StateStore.commitIPsecIfRevision(rev, snapshot.IPsecTransportKey, snapshot.IPsecPortRecord, snapshot.LinkInstances, reconcile)
+	if !committed {
+		d.ipsecDirty = true
+		d.publishStateStoreRuntimeFlags()
+		d.logWarn("ipsec", "stale_reconcile_error", map[string]any{
+			"source_revision":  rev,
+			"current_revision": currentRev,
+			"error":            err,
+		})
 		return
 	}
 	committedState, _, _ := d.snapshotState()
@@ -779,32 +720,6 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 			d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": saveErr})
 		}
 	}
-}
-
-func (d *DaemonService) recordStaleIPsecReconcileResult(summary *ipsecReconcileState) error {
-	if d == nil || d.StateStore == nil || summary == nil {
-		return nil
-	}
-	current := d.StateStore.Meta().Revision
-	_, committed, err := d.StateStore.CommitIfRevision(current, func(state *stateFile) error {
-		existing := state.IPsecReconcile
-		if existing != nil && existing.LastRunUnix > summary.LastRunUnix {
-			return nil
-		}
-		state.IPsecReconcile = summary
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if !committed {
-		return nil
-	}
-	committedState, _, _ := d.snapshotState()
-	if d.Sync != nil {
-		return d.Sync.saveStateSnapshot(committedState)
-	}
-	return saveState(committedState)
 }
 
 func (d *DaemonService) saveCommittedState() error {
@@ -824,52 +739,6 @@ func (d *DaemonService) saveCommittedMeta() error {
 		return d.Sync.saveStateMetaSnapshot(committedState)
 	}
 	return saveStateMeta(committedState)
-}
-
-func changedLinkInstanceIDs(base, next map[string]linkInstanceState) []string {
-	seen := make(map[string]bool, len(base)+len(next))
-	var out []string
-	for id, baseInst := range base {
-		seen[id] = true
-		nextInst, ok := next[id]
-		if !ok || nextInst != baseInst {
-			out = append(out, id)
-		}
-	}
-	for id := range next {
-		if !seen[id] {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-func linkInstanceCommitTokensMatch(base, current map[string]linkInstanceState, ids []string) bool {
-	for _, id := range ids {
-		baseInst, baseOK := base[id]
-		currentInst, currentOK := current[id]
-		if !baseOK {
-			if currentOK {
-				return false
-			}
-			continue
-		}
-		if !currentOK {
-			return false
-		}
-		baseToken := baseInst.Owner.Token
-		currentToken := currentInst.Owner.Token
-		if baseToken == "" || currentToken == "" {
-			if baseInst != currentInst {
-				return false
-			}
-			continue
-		}
-		if baseToken != currentToken {
-			return false
-		}
-	}
-	return true
 }
 
 // buildIPsecContactPointQuality builds a per-peer, per-contact-point quality
