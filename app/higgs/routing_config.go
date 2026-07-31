@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"net/netip"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Catofes/higgs/pkg/firewall"
+	"github.com/Catofes/higgs/pkg/routing/bird"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
@@ -308,7 +310,12 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 	configDir := filepath.Join(dataDir, "bird")
 	controlSocket := yi.ControlSocket
 	if controlSocket == "" {
-		controlSocket = filepath.Join(configDir, fmt.Sprintf("bird-%s.ctl", netnsName))
+		controlSocket, err = defaultBirdControlSocketPath(configDir, netnsName)
+		if err != nil {
+			return RoutingInstance{}, err
+		}
+	} else if err := validateBirdControlSocketPath(controlSocket); err != nil {
+		return RoutingInstance{}, err
 	}
 	pidFile := yi.PIDFile
 	if pidFile == "" {
@@ -344,6 +351,34 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		RouterIDLabel:  yi.RouterIDLabel,
 		Upstream:       upstream,
 	}, nil
+}
+
+func defaultBirdControlSocketPath(configDir, netnsName string) (string, error) {
+	path := filepath.Join(configDir, fmt.Sprintf("bird-%s.ctl", netnsName))
+	if len(path) <= bird.MaxControlSocketPathBytes {
+		return path, nil
+	}
+
+	sum := sha256.Sum256([]byte(netnsName))
+	path = filepath.Join(configDir, fmt.Sprintf("bird-%x.ctl", sum[:8]))
+	if len(path) <= bird.MaxControlSocketPathBytes {
+		return path, nil
+	}
+
+	// A long data_dir can consume the entire sockaddr_un budget even after the
+	// filename is hashed. Managed BIRD already needs a runtime socket, so use a
+	// stable path below /run keyed by the complete desired path. Including the
+	// data-dir-derived path keeps concurrent isolated smoke runs distinct.
+	sum = sha256.Sum256([]byte(path))
+	path = filepath.Join("/run/higgs/bird", fmt.Sprintf("bird-%x.ctl", sum[:8]))
+	return path, validateBirdControlSocketPath(path)
+}
+
+func validateBirdControlSocketPath(path string) error {
+	if len(path) > bird.MaxControlSocketPathBytes {
+		return fmt.Errorf("BIRD control socket path is %d bytes, exceeds Linux limit %d: %s", len(path), bird.MaxControlSocketPathBytes, path)
+	}
+	return nil
 }
 
 func routingNetNSTarget(spec ipsec.NetNSSpec) string {

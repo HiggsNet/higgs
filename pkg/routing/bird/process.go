@@ -78,6 +78,9 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 			return fmt.Errorf("bird path must be absolute: %s", p)
 		}
 	}
+	if len(spec.ControlSocketPath) > MaxControlSocketPathBytes {
+		return fmt.Errorf("BIRD control socket path is %d bytes, exceeds Linux limit %d: %s", len(spec.ControlSocketPath), MaxControlSocketPathBytes, spec.ControlSocketPath)
+	}
 
 	binary, err := pm.resolveBinary()
 	if err != nil {
@@ -86,6 +89,9 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 
 	if pm.adoptExisting(spec) {
 		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(spec.ControlSocketPath), 0o700); err != nil {
+		return fmt.Errorf("create BIRD control socket directory: %w", err)
 	}
 
 	args := []string{

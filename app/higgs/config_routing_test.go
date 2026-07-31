@@ -1,9 +1,12 @@
 package main
 
 import (
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/Catofes/higgs/pkg/routing/bird"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestParseConfigYAMLRoutingInstances(t *testing.T) {
@@ -212,6 +215,72 @@ routing:
 	}
 	if inst.ConfigFile != filepath.Join(config.DataDir, "bird", "bird-higgstesth2.conf") {
 		t.Fatalf("inst.ConfigFile = %q, want resolved-netns-derived path", inst.ConfigFile)
+	}
+}
+
+func TestParseRoutingInstanceShortensLongDefaultControlSocket(t *testing.T) {
+	dataDir := t.TempDir()
+	netnsName := "higgs-bird-adopt-1785506688595201909"
+	netns := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"default": {Kind: ipsec.NetNSName, Name: netnsName},
+	}}
+	instance, err := parseRoutingInstance(routingInstanceYAML{ID: "main"}, netns, dataDir)
+	if err != nil {
+		t.Fatalf("parseRoutingInstance: %v", err)
+	}
+	raw := filepath.Join(dataDir, "bird", "bird-"+netnsName+".ctl")
+	if len(raw) <= bird.MaxControlSocketPathBytes {
+		t.Fatalf("test fixture raw socket path = %d bytes, want over %d", len(raw), bird.MaxControlSocketPathBytes)
+	}
+	if len(instance.ControlSocket) > bird.MaxControlSocketPathBytes {
+		t.Fatalf("shortened control socket = %d bytes: %s", len(instance.ControlSocket), instance.ControlSocket)
+	}
+	if instance.ControlSocket == raw || !strings.HasPrefix(filepath.Base(instance.ControlSocket), "bird-") || filepath.Ext(instance.ControlSocket) != ".ctl" {
+		t.Fatalf("shortened control socket = %q, want stable bird hash filename", instance.ControlSocket)
+	}
+
+	again, err := parseRoutingInstance(routingInstanceYAML{ID: "main"}, netns, dataDir)
+	if err != nil {
+		t.Fatalf("parseRoutingInstance(second): %v", err)
+	}
+	if again.ControlSocket != instance.ControlSocket {
+		t.Fatalf("shortened control socket is not stable: %q != %q", again.ControlSocket, instance.ControlSocket)
+	}
+	if instance.PIDFile != filepath.Join(dataDir, "bird", "bird-"+netnsName+".pid") ||
+		instance.ConfigFile != filepath.Join(dataDir, "bird", "bird-"+netnsName+".conf") {
+		t.Fatal("non-socket BIRD paths were unexpectedly shortened")
+	}
+}
+
+func TestParseRoutingInstanceUsesRuntimeSocketWhenDataDirIsTooLong(t *testing.T) {
+	netns := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"default": {Kind: ipsec.NetNSName, Name: "higgs-test"},
+	}}
+	longDataDir := filepath.Join("/tmp", strings.Repeat("d", bird.MaxControlSocketPathBytes))
+	instance, err := parseRoutingInstance(routingInstanceYAML{ID: "main"}, netns, longDataDir)
+	if err != nil {
+		t.Fatalf("parseRoutingInstance long data dir: %v", err)
+	}
+	if !strings.HasPrefix(instance.ControlSocket, "/run/higgs/bird/bird-") || len(instance.ControlSocket) > bird.MaxControlSocketPathBytes {
+		t.Fatalf("runtime control socket = %q", instance.ControlSocket)
+	}
+	other, err := parseRoutingInstance(routingInstanceYAML{ID: "main"}, netns, longDataDir+"-other")
+	if err != nil {
+		t.Fatalf("parseRoutingInstance other long data dir: %v", err)
+	}
+	if other.ControlSocket == instance.ControlSocket {
+		t.Fatal("different data dirs produced the same runtime control socket")
+	}
+}
+
+func TestParseRoutingInstanceRejectsExplicitOverlongControlSocket(t *testing.T) {
+	netns := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"default": {Kind: ipsec.NetNSName, Name: "higgs-test"},
+	}}
+	tooLong := "/" + strings.Repeat("x", bird.MaxControlSocketPathBytes) + ".ctl"
+	_, err := parseRoutingInstance(routingInstanceYAML{ID: "main", ControlSocket: tooLong}, netns, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "exceeds Linux limit") {
+		t.Fatalf("parseRoutingInstance explicit long socket error = %v", err)
 	}
 }
 

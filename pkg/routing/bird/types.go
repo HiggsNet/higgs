@@ -9,6 +9,10 @@ import (
 type BirdMode string
 
 const (
+	// MaxControlSocketPathBytes is Linux's maximum filesystem pathname for an
+	// AF_UNIX socket: sockaddr_un.sun_path is 108 bytes including trailing NUL.
+	MaxControlSocketPathBytes = 107
+
 	// BirdModeManaged means Higgs creates the netns, generates the config,
 	// starts the BIRD process, and performs crash recovery.
 	BirdModeManaged BirdMode = "managed"

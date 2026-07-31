@@ -168,6 +168,16 @@ func TestExecProcessManagerStartRejectsNonManagedModes(t *testing.T) {
 	}
 }
 
+func TestExecProcessManagerStartRejectsOverlongControlSocketPath(t *testing.T) {
+	spec := managedSpec(t.TempDir())
+	spec.ControlSocketPath = "/" + strings.Repeat("x", MaxControlSocketPathBytes)
+	pm := NewExecProcessManager("")
+	err := pm.Start(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "exceeds Linux limit") {
+		t.Fatalf("Start overlong control socket error = %v", err)
+	}
+}
+
 func TestExecProcessManagerStartAdoptsExistingPidfile(t *testing.T) {
 	tmp := t.TempDir()
 	mr := &mockRunner{}

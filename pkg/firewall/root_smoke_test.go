@@ -11,6 +11,46 @@ import (
 	"time"
 )
 
+func TestFilterIPTablesOwnedDumpSelectsActiveOwnerGeneration(t *testing.T) {
+	const (
+		scope  = "shared-scope"
+		tableA = "hfi_shared-scope"
+		tableB = "hfir_shared-scope"
+		setA   = "set_a"
+		setB   = "set_b"
+	)
+	chainA := iptablesGenerationChain(tableA, "i", "aaaaaaaaaaaa", 'a')
+	chainB := iptablesGenerationChain(tableB, "i", "bbbbbbbbbbbb", 'a')
+	rules := strings.Join([]string{
+		fmt.Sprintf("-A INPUT -m comment --comment higgs-%s -j %s", scope, chainA),
+		fmt.Sprintf("-A INPUT -m comment --comment higgs-%s -j %s", scope, chainB),
+		"-N " + chainA,
+		"-N " + chainB,
+		fmt.Sprintf("-A %s -s 198.51.100.1/32 -m comment --comment inline-a -j ACCEPT", chainA),
+		fmt.Sprintf("-A %s -m set --match-set %s src -j ACCEPT", chainA, setA),
+		fmt.Sprintf("-A %s -s 198.51.100.2/32 -m comment --comment inline-b -j ACCEPT", chainB),
+		fmt.Sprintf("-A %s -m set --match-set %s src -j ACCEPT", chainB, setB),
+	}, "\n")
+	ipsets := strings.Join([]string{
+		"create " + setA + " hash:net family inet",
+		"add " + setA + " 10.42.0.0/24",
+		"create " + setB + " hash:net family inet",
+		"add " + setB + " 10.43.0.0/24",
+	}, "\n")
+
+	got := filterIPTablesOwnedDump(rules, ipsets, tableA, "higgs-"+scope)
+	for _, want := range []string{chainA, "inline-a", "10.42.0.0/24"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("filtered dump missing %q:\n%s", want, got)
+		}
+	}
+	for _, reject := range []string{chainB, "inline-b", "10.43.0.0/24"} {
+		if strings.Contains(got, reject) {
+			t.Fatalf("filtered dump unexpectedly contains %q:\n%s", reject, got)
+		}
+	}
+}
+
 func TestFirewallBackendsRootSmoke(t *testing.T) {
 	if os.Getenv("HIGGS_FIREWALL_SMOKE") != "1" {
 		t.Skip("set HIGGS_FIREWALL_SMOKE=1 to run the root/system firewall smoke")
@@ -226,30 +266,106 @@ func firewallBackendDump(t *testing.T, ctx context.Context, nsName, backend, own
 		}
 		return string(out)
 	case BackendIptables:
-		var dumps []string
+		var ruleDumps []string
 		for _, binary := range []string{"iptables", "ip6tables"} {
 			out, err := exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-S").CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s -S: %v\noutput: %s", binary, err, string(out))
 			}
 			nat, _ := exec.CommandContext(ctx, "ip", "netns", "exec", nsName, binary, "-t", "nat", "-S").CombinedOutput()
-			dumps = append(dumps, string(out), string(nat))
-		}
-		var lines []string
-		for _, line := range strings.Split(strings.Join(dumps, "\n"), "\n") {
-			if strings.Contains(line, tableName) {
-				lines = append(lines, line)
-			}
+			ruleDumps = append(ruleDumps, string(out), string(nat))
 		}
 		ipsets, err := exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "ipset", "save").CombinedOutput()
 		if err != nil {
 			t.Fatalf("ipset save: %v\noutput: %s", err, string(ipsets))
 		}
-		lines = append(lines, string(ipsets))
-		return strings.Join(lines, "\n")
+		return filterIPTablesOwnedDump(strings.Join(ruleDumps, "\n"), string(ipsets), tableName, "higgs-"+scope)
 	default:
 		return ""
 	}
+}
+
+func filterIPTablesOwnedDump(rules, ipsets, tableName, ownerMarker string) string {
+	chains := make(map[string]struct{})
+	for _, line := range strings.Split(rules, "\n") {
+		if !strings.Contains(line, ownerMarker) {
+			continue
+		}
+		if target := iptablesJumpTarget(line); isIPTablesSmokeChain(tableName, target) {
+			chains[target] = struct{}{}
+		}
+	}
+
+	// Follow generation-chain jumps as well, so this remains correct if the
+	// driver later splits a hook across multiple private chains.
+	for changed := true; changed; {
+		changed = false
+		for _, line := range strings.Split(rules, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 3 || fields[0] != "-A" {
+				continue
+			}
+			if _, ok := chains[fields[1]]; !ok {
+				continue
+			}
+			target := iptablesJumpTarget(line)
+			if target == "" {
+				continue
+			}
+			if _, ok := chains[target]; !ok {
+				chains[target] = struct{}{}
+				changed = true
+			}
+		}
+	}
+
+	sets := make(map[string]struct{})
+	var selected []string
+	for _, line := range strings.Split(rules, "\n") {
+		fields := strings.Fields(line)
+		owned := false
+		if len(fields) >= 2 && (fields[0] == "-N" || fields[0] == "-A") {
+			_, owned = chains[fields[1]]
+		}
+		if !owned {
+			continue
+		}
+		selected = append(selected, line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "--match-set" {
+				sets[fields[i+1]] = struct{}{}
+			}
+		}
+	}
+	for _, line := range strings.Split(ipsets, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if _, ok := sets[fields[1]]; ok {
+			selected = append(selected, line)
+		}
+	}
+	return strings.Join(selected, "\n")
+}
+
+func isIPTablesSmokeChain(tableName, chain string) bool {
+	for _, code := range []string{"i", "f", "o", "r", "s"} {
+		if isIPTablesGenerationChain(tableName, code, chain) {
+			return true
+		}
+	}
+	return false
+}
+
+func iptablesJumpTarget(line string) string {
+	fields := strings.Fields(line)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "-j" {
+			return fields[i+1]
+		}
+	}
+	return ""
 }
 
 func cleanupFirewallBackend(t *testing.T, ctx context.Context, nsName, backend, ownerPrefix, scope string) {
