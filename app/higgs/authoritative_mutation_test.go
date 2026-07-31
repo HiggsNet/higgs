@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -266,8 +265,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 		t.Fatalf("LoadState: %v", err)
 	}
 	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
 	response := controlRequestViaPipe(t, service, controlRequest{

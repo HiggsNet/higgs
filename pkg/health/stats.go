@@ -1,7 +1,7 @@
 package health
 
 import (
-	"sort"
+	"slices"
 	"sync"
 	"time"
 )
@@ -100,7 +100,7 @@ func (w *RollingWindow) Snapshot() WindowSnapshot {
 	}
 	snap.LossRatio = float64(snap.Lost) / float64(snap.Sent)
 	if len(rtts) > 0 {
-		sort.Slice(rtts, func(i, j int) bool { return rtts[i] < rtts[j] })
+		slices.Sort(rtts)
 		snap.MinRTT = rtts[0]
 		snap.MaxRTT = rtts[len(rtts)-1]
 		snap.P50RTT = percentile(rtts, 50)

@@ -117,10 +117,7 @@ func BuildPeerLifecycleStatus(input PeerLifecycleInput) PeerStatusInfo {
 		return info
 	}
 	cfg := NormalizePeerLifecycleConfig(input.Config)
-	info.LastSeenUnix = input.ObservedLastSeenUnix
-	if input.LastSyncUnix > info.LastSeenUnix {
-		info.LastSeenUnix = input.LastSyncUnix
-	}
+	info.LastSeenUnix = max(input.LastSyncUnix, input.ObservedLastSeenUnix)
 	info.LastSyncUnix = input.LastSyncUnix
 	info.UpLinks = input.UpLinks
 	info.ActualLinks = input.ActualLinks

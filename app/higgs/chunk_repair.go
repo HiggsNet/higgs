@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/hex"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -94,7 +94,7 @@ func (c *sentChunkCache) repair(peerID string, nack *gossip.ObjectChunkNACK, now
 		return nil
 	}
 	indexes := append([]uint16(nil), nack.Missing...)
-	sort.Slice(indexes, func(i, j int) bool { return indexes[i] < indexes[j] })
+	slices.Sort(indexes)
 	parts := make([]string, 0, len(indexes))
 	for _, index := range indexes {
 		parts = append(parts, string(rune(index)))

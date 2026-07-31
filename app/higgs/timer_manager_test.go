@@ -261,7 +261,7 @@ func TestTimerManagerRepeatedCancelDoesNotRetainWaiters(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
 	tm := NewTimerManager(clock, make(chan SyncEvent, 1))
 
-	for i := 0; i < 2500; i++ {
+	for range 2500 {
 		tm.Start("peer-a", "round", clock.Now().Add(time.Hour))
 		tm.Cancel("peer-a", "round")
 	}

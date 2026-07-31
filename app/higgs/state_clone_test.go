@@ -228,7 +228,7 @@ func BenchmarkCloneStateFile(b *testing.B) {
 		Admission:         &admissionState{Pending: true},
 	}
 	zs := state.Network.Zones["node-a.catofes."]
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := string(rune(i + 1))
 		zs.Records[key] = &zone.Record{Zone: "node-a.catofes.", Key: key, Value: make([]byte, 128), ValueHash: make([]byte, 32), Signature: make([]byte, 64), Version: 1}
 	}

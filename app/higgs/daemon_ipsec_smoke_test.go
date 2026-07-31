@@ -951,7 +951,7 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	go func() { errCh <- serviceB.Run(runCtx) }()
 	defer func() {
 		stopDaemons()
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			if err := <-errCh; err != nil {
 				t.Fatalf("daemon Run returned error: %v", err)
 			}

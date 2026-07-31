@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -387,10 +388,5 @@ func prefixesContain(prefixes []netip.Prefix, want string) bool {
 	if err != nil {
 		return false
 	}
-	for _, got := range prefixes {
-		if got == prefix {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(prefixes, prefix)
 }

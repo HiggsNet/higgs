@@ -287,7 +287,7 @@ func firewallBackendDump(t *testing.T, ctx context.Context, nsName, backend, own
 
 func filterIPTablesOwnedDump(rules, ipsets, tableName, ownerMarker string) string {
 	chains := make(map[string]struct{})
-	for _, line := range strings.Split(rules, "\n") {
+	for line := range strings.SplitSeq(rules, "\n") {
 		if !strings.Contains(line, ownerMarker) {
 			continue
 		}
@@ -300,7 +300,7 @@ func filterIPTablesOwnedDump(rules, ipsets, tableName, ownerMarker string) strin
 	// driver later splits a hook across multiple private chains.
 	for changed := true; changed; {
 		changed = false
-		for _, line := range strings.Split(rules, "\n") {
+		for line := range strings.SplitSeq(rules, "\n") {
 			fields := strings.Fields(line)
 			if len(fields) < 3 || fields[0] != "-A" {
 				continue
@@ -321,7 +321,7 @@ func filterIPTablesOwnedDump(rules, ipsets, tableName, ownerMarker string) strin
 
 	sets := make(map[string]struct{})
 	var selected []string
-	for _, line := range strings.Split(rules, "\n") {
+	for line := range strings.SplitSeq(rules, "\n") {
 		fields := strings.Fields(line)
 		owned := false
 		if len(fields) >= 2 && (fields[0] == "-N" || fields[0] == "-A") {
@@ -337,7 +337,7 @@ func filterIPTablesOwnedDump(rules, ipsets, tableName, ownerMarker string) strin
 			}
 		}
 	}
-	for _, line := range strings.Split(ipsets, "\n") {
+	for line := range strings.SplitSeq(ipsets, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue

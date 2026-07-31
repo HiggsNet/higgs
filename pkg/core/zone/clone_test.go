@@ -208,17 +208,17 @@ func BenchmarkCloneNetworkStateForZone(b *testing.B) {
 
 func cloneCOWFixture(zoneCount, recordsPerZone, historyPerRecord int) *NetworkState {
 	network := NewNetworkState()
-	for zoneIndex := 0; zoneIndex < zoneCount; zoneIndex++ {
+	for zoneIndex := range zoneCount {
 		path := ZonePath(fmt.Sprintf("zone-%d.catofes.", zoneIndex))
 		state := NewZoneState(path, &ZoneAuthority{
 			Zone: path,
 			Keys: []AuthorizedKey{{Key: []byte("authority-key")}},
 		})
 		state.MerkleRoot = []byte("not-a-cache")
-		for recordIndex := 0; recordIndex < recordsPerZone; recordIndex++ {
+		for recordIndex := range recordsPerZone {
 			key := fmt.Sprintf("record-%d", recordIndex)
 			state.Records[key] = &Record{Zone: path, Key: key, Value: []byte("active"), Version: uint64(historyPerRecord + 1)}
-			for historyIndex := 0; historyIndex < historyPerRecord; historyIndex++ {
+			for historyIndex := range historyPerRecord {
 				state.RecordHistory[key] = append(state.RecordHistory[key], &Record{
 					Zone: path, Key: key, Value: []byte("history"), Version: uint64(historyIndex + 1),
 				})

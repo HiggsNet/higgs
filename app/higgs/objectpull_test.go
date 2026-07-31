@@ -350,11 +350,11 @@ func TestOfflineObjectPullExpiredDeadlineDoesNotPersistDiagnostics(t *testing.T)
 }
 
 func TestObjectPullConcurrencyLimit(t *testing.T) {
-	for i := 0; i < maxObjectPullConcurrency; i++ {
+	for range maxObjectPullConcurrency {
 		objectPullClientLimiter <- struct{}{}
 	}
 	defer func() {
-		for i := 0; i < maxObjectPullConcurrency; i++ {
+		for range maxObjectPullConcurrency {
 			<-objectPullClientLimiter
 		}
 	}()
@@ -370,7 +370,7 @@ func TestObjectPullConcurrencyLimit(t *testing.T) {
 
 func TestObjectPullServerConcurrencyLimit(t *testing.T) {
 	var releases []func()
-	for i := 0; i < maxObjectPullServerConcurrency; i++ {
+	for i := range maxObjectPullServerConcurrency {
 		release, ok := acquireObjectPullServerSlot()
 		if !ok {
 			t.Fatalf("acquire server slot %d failed", i)
@@ -391,7 +391,7 @@ func TestObjectPullServerConcurrencyLimit(t *testing.T) {
 
 func TestObjectPullPerPeerInflightLimit(t *testing.T) {
 	var releases []func()
-	for i := 0; i < maxObjectPullPerPeerInflight; i++ {
+	for i := range maxObjectPullPerPeerInflight {
 		release, err := objectPullPeerLimiter.acquire("node-b.catofes.")
 		if err != nil {
 			t.Fatalf("acquire(%d): %v", i, err)

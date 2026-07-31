@@ -96,17 +96,17 @@ func healthProbeID(instanceID, role string) string {
 // stripScope removes the %iface and netns=... suffixes from a scoped tunnel
 // address string before parsing.
 func stripScope(s string) string {
-	if i := strings.Index(s, "%"); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, "%"); ok {
+		return before
 	}
-	if i := strings.Index(s, " "); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, " "); ok {
+		return before
 	}
 	return s
 }
 
 func scopedNetNS(s string) string {
-	for _, field := range strings.Fields(s) {
+	for field := range strings.FieldsSeq(s) {
 		if netns, ok := strings.CutPrefix(field, "netns="); ok {
 			return strings.TrimSpace(netns)
 		}

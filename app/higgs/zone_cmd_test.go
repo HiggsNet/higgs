@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/urfave/cli/v3"
@@ -134,10 +135,8 @@ func commandFlagByName(command *cli.Command, name string) cli.Flag {
 		return nil
 	}
 	for _, flag := range command.Flags {
-		for _, flagName := range flag.Names() {
-			if flagName == name {
-				return flag
-			}
+		if slices.Contains(flag.Names(), name) {
+			return flag
 		}
 	}
 	return nil

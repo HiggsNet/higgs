@@ -295,7 +295,7 @@ var errorCodeRe = regexp.MustCompile(`(?m)^[89]\d{3}[- ]`)
 
 // summarizeError extracts the first error-looking line from a response.
 func summarizeError(output string) string {
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		if len(line) >= 4 {
 			code := line[:4]

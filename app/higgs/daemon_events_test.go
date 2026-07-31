@@ -345,14 +345,13 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newDaemonService(rt, state, config, time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
 	const writes = 8
 	var wg sync.WaitGroup
 	errs := make(chan error, writes)
-	for i := 0; i < writes; i++ {
+	for i := range writes {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -629,8 +628,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 		t.Fatalf("handleDelegateIssueEvent(node-b): %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
 	nodeCPub, _, err := ed25519.GenerateKey(nil)

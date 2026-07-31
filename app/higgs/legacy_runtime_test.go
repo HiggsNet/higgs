@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -127,7 +127,7 @@ func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.Peer
 			out = append(out, peer.Zone)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 

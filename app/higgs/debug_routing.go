@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/netip"
 	"os"
 	"strings"
@@ -227,14 +228,10 @@ func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *contr
 func buildBabelDebugView(rt *Runtime, state *stateFile, response *controlResponse) inspect.BabelDebugView {
 	instances := map[string]*BirdInstanceState{}
 	if response != nil && response.BirdInstances != nil {
-		for id, inst := range response.BirdInstances {
-			instances[id] = inst
-		}
+		maps.Copy(instances, response.BirdInstances)
 	}
 	if len(instances) == 0 && state != nil && state.BirdInstances != nil {
-		for id, inst := range state.BirdInstances {
-			instances[id] = inst
-		}
+		maps.Copy(instances, state.BirdInstances)
 	}
 	routingInstances := []RoutingInstance{}
 	if rt != nil && rt.Config != nil {

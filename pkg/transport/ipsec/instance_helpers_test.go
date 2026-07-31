@@ -1,5 +1,7 @@
 package ipsec
 
+import "slices"
+
 func stagedRuntimeID(inst LinkInstance, generation uint64) string {
 	return RuntimeConnectionID(firstNonEmptyString(inst.LinkID, inst.ID), generation, inst.TransportKind)
 }
@@ -19,10 +21,5 @@ func runtimeSpecForPortGeneration(spec TransportLinkSpec, generation uint64) Tra
 }
 
 func stringSliceContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }

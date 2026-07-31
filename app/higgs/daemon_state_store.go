@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -324,7 +325,7 @@ func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPee
 		return 0, errors.New("sync peer update function is nil")
 	}
 	var currentRev uint64
-	for attempt := 0; attempt < maxSyncPeerUpdateAttempts; attempt++ {
+	for range maxSyncPeerUpdateAttempts {
 		s.mu.RLock()
 		base := s.committed
 		baseRev := s.revision
@@ -349,9 +350,7 @@ func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPee
 		next.SyncPeers = make(map[string]syncPeerState)
 		if base != nil && base.SyncPeers != nil {
 			next.SyncPeers = make(map[string]syncPeerState, len(base.SyncPeers)+1)
-			for id, state := range base.SyncPeers {
-				next.SyncPeers[id] = state
-			}
+			maps.Copy(next.SyncPeers, base.SyncPeers)
 		}
 		next.SyncPeers[peerID] = committedPeer
 
@@ -381,7 +380,7 @@ func (s *DaemonStateStore) updateSyncPeersWithView(fn func(syncPeerMutationView)
 		return 0, false, errors.New("sync peers update function is nil")
 	}
 	var currentRev uint64
-	for attempt := 0; attempt < maxSyncPeerUpdateAttempts; attempt++ {
+	for range maxSyncPeerUpdateAttempts {
 		s.mu.RLock()
 		base := s.committed
 		baseRev := s.revision
@@ -409,9 +408,7 @@ func (s *DaemonStateStore) updateSyncPeersWithView(fn func(syncPeerMutationView)
 
 		next := cloneStateFileRootSharingChildren(base)
 		next.SyncPeers = make(map[string]syncPeerState, len(view.SyncPeers)+len(updates))
-		for id, state := range view.SyncPeers {
-			next.SyncPeers[id] = state
-		}
+		maps.Copy(next.SyncPeers, view.SyncPeers)
 		for id, state := range updates {
 			if id == "" {
 				return baseRev, false, errors.New("sync peer id is empty")

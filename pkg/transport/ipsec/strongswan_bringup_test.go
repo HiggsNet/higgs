@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -842,13 +843,7 @@ func waitForSA(ctx context.Context, client *GoviciClient, name string) error {
 		if err != nil {
 			return err
 		}
-		established := false
-		for _, event := range events {
-			if saEstablished(event) {
-				established = true
-				break
-			}
-		}
+		established := slices.ContainsFunc(events, saEstablished)
 		if established {
 			return nil
 		}

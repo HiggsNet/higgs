@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -391,12 +392,7 @@ func effectiveBoolFlag(cmd *cli.Command, name string) bool {
 }
 
 func localFlagSet(cmd *cli.Command, name string) bool {
-	for _, setName := range cmd.LocalFlagNames() {
-		if setName == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(cmd.LocalFlagNames(), name)
 }
 
 func cmdZone() *cli.Command {

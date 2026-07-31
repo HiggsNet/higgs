@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -23,13 +24,7 @@ func TestAddKnownPeerID(t *testing.T) {
 
 	transport.AddKnownPeerID("peer-a")
 
-	found := false
-	for _, id := range transport.KnownPeerIDs() {
-		if id == "peer-a" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(transport.KnownPeerIDs(), "peer-a")
 	if !found {
 		t.Fatalf("KnownPeerIDs() does not contain peer-a")
 	}

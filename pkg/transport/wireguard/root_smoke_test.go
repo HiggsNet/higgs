@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,8 +46,8 @@ func TestWireGuardGREThreeNodeRootSmoke(t *testing.T) {
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			for i := len(managers) - 1; i >= 0; i-- {
-				_ = managers[i].Stop(context.Background(), specs[i])
+			for i, manager := range slices.Backward(managers) {
+				_ = manager.Stop(context.Background(), specs[i])
 			}
 			for _, ns := range []string{nsA, nsB, nsC} {
 				_ = exec.Command("ip", "netns", "delete", ns).Run()
@@ -166,8 +167,8 @@ func TestWireGuardGREStagedRotateRootSmoke(t *testing.T) {
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			for i := len(managers) - 1; i >= 0; i-- {
-				_ = managers[i].Stop(context.Background(), specs[i])
+			for i, manager := range slices.Backward(managers) {
+				_ = manager.Stop(context.Background(), specs[i])
 			}
 			for _, ns := range []string{nsA, nsB, nsC} {
 				_ = exec.Command("ip", "netns", "delete", ns).Run()
@@ -446,7 +447,7 @@ protocol babel {
 func waitForBirdRoutes(t *testing.T, ctx context.Context, socketPath string, prefixes []string) {
 	t.Helper()
 	var last string
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "route").CombinedOutput()
 		last = string(out)
 		if err == nil {
@@ -466,7 +467,7 @@ func waitForBirdRoutes(t *testing.T, ctx context.Context, socketPath string, pre
 func waitForBirdRouteViaInterface(t *testing.T, ctx context.Context, socketPath, prefix, iface string) {
 	t.Helper()
 	var last string
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "route", "all", prefix).CombinedOutput()
 		last = string(out)
 		if err == nil && strings.Contains(last, prefix) && strings.Contains(last, iface) {

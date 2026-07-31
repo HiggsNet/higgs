@@ -372,7 +372,7 @@ func phase8DeleteDockerUserRule(tag string) {
 	if err != nil {
 		return
 	}
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		if !strings.Contains(line, "comment \""+tag+"\"") {
 			continue
 		}

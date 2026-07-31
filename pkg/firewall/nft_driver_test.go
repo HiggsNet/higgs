@@ -170,8 +170,8 @@ func (f *fakeCommandRunner) runIPTables(binary string, args []string) ([]byte, e
 			var lines []string
 			prefix := binary + ":" + table + ":"
 			for key := range f.existingChains {
-				if strings.HasPrefix(key, prefix) {
-					lines = append(lines, "-N "+strings.TrimPrefix(key, prefix))
+				if after, ok := strings.CutPrefix(key, prefix); ok {
+					lines = append(lines, "-N "+after)
 				}
 			}
 			for key, args := range f.ruleArgs {

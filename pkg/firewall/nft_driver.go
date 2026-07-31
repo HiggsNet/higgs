@@ -531,7 +531,7 @@ func quoteNFTVal(s string) string {
 // parseNFTListOutput parses `nft list table` output to extract owned objects.
 func parseNFTListOutput(output, tableName string) FirewallObservedState {
 	var state FirewallObservedState
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "table ") {
 			fields := strings.Fields(line)

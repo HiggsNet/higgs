@@ -28,8 +28,8 @@ func ParseZoneSelector(raw string) (ZoneSelector, error) {
 	if value == "*." {
 		return ZoneSelector{kind: ZoneSelectorAll, base: zone.RootZone}, nil
 	}
-	if strings.HasPrefix(value, "*.") {
-		base := zone.ZonePath(strings.TrimPrefix(value, "*."))
+	if after, ok := strings.CutPrefix(value, "*."); ok {
+		base := zone.ZonePath(after)
 		if base == zone.RootZone || !base.Valid() {
 			return ZoneSelector{}, fmt.Errorf("invalid subtree zone selector %q", raw)
 		}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"maps"
+
 	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
@@ -75,10 +77,7 @@ func cloneSyncPeerState(in syncPeerState) syncPeerState {
 		copy(out.ObservedGraceAddrs, in.ObservedGraceAddrs)
 	}
 	if in.RejectedDigests != nil {
-		out.RejectedDigests = make(map[string]rejectedDigestState, len(in.RejectedDigests))
-		for key, rejected := range in.RejectedDigests {
-			out.RejectedDigests[key] = rejected
-		}
+		out.RejectedDigests = maps.Clone(in.RejectedDigests)
 	}
 	if in.DatagramStats != nil {
 		stats := *in.DatagramStats
@@ -128,11 +127,7 @@ func cloneLinkInstances(in map[string]linkInstanceState) map[string]linkInstance
 	if in == nil {
 		return nil
 	}
-	out := make(map[string]linkInstanceState, len(in))
-	for id, instance := range in {
-		out[id] = instance
-	}
-	return out
+	return maps.Clone(in)
 }
 
 func cloneIPsecReconcileState(in *ipsecReconcileState) *ipsecReconcileState {

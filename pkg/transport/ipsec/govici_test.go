@@ -400,14 +400,14 @@ func TestStrongSwanDriverLimitsConcurrentAsyncInitiates(t *testing.T) {
 		InitiateAsync:         true,
 		InitiateClientTimeout: time.Second,
 	}
-	for i := 0; i < callCount; i++ {
+	for i := range callCount {
 		child := fmt.Sprintf("ipsec-child-%d", i)
 		if err := driver.InitiateChild(context.Background(), child); err != nil {
 			t.Fatalf("InitiateChild(%q): %v", child, err)
 		}
 	}
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		select {
 		case <-client.started:
 		case <-time.After(time.Second):
@@ -429,7 +429,7 @@ func TestStrongSwanDriverLimitsConcurrentAsyncInitiates(t *testing.T) {
 	for i := 1; i < callCount; i++ {
 		client.release <- struct{}{}
 	}
-	for i := 0; i < callCount; i++ {
+	for i := range callCount {
 		select {
 		case err := <-client.finished:
 			if err != nil {

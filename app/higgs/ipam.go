@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -526,10 +527,8 @@ func checkIPAMWriteCapability(state *stateFile, path zone.ZonePath, key string) 
 			if capability.KeyPrefix != "" && !strings.HasPrefix(key, capability.KeyPrefix) {
 				continue
 			}
-			for _, permission := range capability.Permissions {
-				if permission == zone.PermAllocateIP {
-					return nil
-				}
+			if slices.Contains(capability.Permissions, zone.PermAllocateIP) {
+				return nil
 			}
 		}
 	}

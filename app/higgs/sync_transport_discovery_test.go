@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,13 +23,7 @@ func TestOpenSyncTransportAddsVerifiedZones(t *testing.T) {
 	}
 	defer transport.Close()
 
-	found := false
-	for _, id := range transport.KnownPeerIDs() {
-		if id == "node-b.catofes." {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(transport.KnownPeerIDs(), "node-b.catofes.")
 	if !found {
 		t.Fatalf("KnownPeerIDs() does not contain node-b.catofes.")
 	}
@@ -61,13 +56,7 @@ func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {
 
 	sr.addVerifiedZonePeers(state)
 
-	found := false
-	for _, id := range transport.KnownPeerIDs() {
-		if id == "node-b.catofes." {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(transport.KnownPeerIDs(), "node-b.catofes.")
 	if !found {
 		t.Fatalf("KnownPeerIDs() does not contain delegated node-b.catofes.")
 	}

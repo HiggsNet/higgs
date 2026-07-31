@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -283,7 +284,7 @@ func planPurgeRevokedZones(state *stateFile, now time.Time, target zone.ZonePath
 	for z := range candidates {
 		zones = append(zones, z)
 	}
-	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
+	slices.Sort(zones)
 	plan.Zones = zones
 
 	for id, inst := range state.LinkInstances {
@@ -300,9 +301,7 @@ func planPurgeRevokedZones(state *stateFile, now time.Time, target zone.ZonePath
 	}
 	sort.Strings(plan.SyncPeers)
 
-	sort.Slice(plan.ManagedZoneSkipped, func(i, j int) bool {
-		return plan.ManagedZoneSkipped[i] < plan.ManagedZoneSkipped[j]
-	})
+	slices.Sort(plan.ManagedZoneSkipped)
 	return plan, nil
 }
 
@@ -364,10 +363,8 @@ func AllRevocationImpact(state *stateFile, config *syncConfigFile, now time.Time
 }
 
 func appendIfMissing(slice []string, val string) []string {
-	for _, s := range slice {
-		if s == val {
-			return slice
-		}
+	if slices.Contains(slice, val) {
+		return slice
 	}
 	return append(slice, val)
 }

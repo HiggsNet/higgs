@@ -851,10 +851,7 @@ func (t *Transport) RecordAddrFailure(peerID string, addr *net.UDPAddr) {
 	state.FailureCount++
 	state.LastFailure = now
 	if state.FailureCount >= addrFailureBackoffThreshold {
-		backoff := addrFailureBackoffBase * time.Duration(1<<minInt(state.FailureCount-addrFailureBackoffThreshold, 6))
-		if backoff > addrFailureBackoffMax {
-			backoff = addrFailureBackoffMax
-		}
+		backoff := min(addrFailureBackoffBase*time.Duration(1<<minInt(state.FailureCount-addrFailureBackoffThreshold, 6)), addrFailureBackoffMax)
 		state.BackoffUntil = now.Add(backoff)
 	}
 }

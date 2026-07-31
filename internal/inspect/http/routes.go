@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -221,11 +222,8 @@ func authorizedZonesForPrefix(dump *RoutesResponse, prefix string) []string {
 	}
 	zones := make([]string, 0)
 	for z, prefixes := range dump.Authorized {
-		for _, p := range prefixes {
-			if p == prefix {
-				zones = append(zones, z)
-				break
-			}
+		if slices.Contains(prefixes, prefix) {
+			zones = append(zones, z)
 		}
 	}
 	inspect.SortZoneStrings(zones)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -307,9 +308,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		startFields["config_path"] = configPath()
 		startFields["state_path"] = d.Sync.App.StatePath
 	}
-	for k, v := range buildInfoFields() {
-		startFields[k] = v
-	}
+	maps.Copy(startFields, buildInfoFields())
 	d.logInfo("daemon", "started", startFields)
 	d.logDebug("daemon", "startup_publish_begin", nil)
 	if _, err := d.prepareStartupState(); err != nil {
@@ -1978,10 +1977,7 @@ func sleepBeforeRetry(ctx context.Context, d time.Duration) bool {
 }
 
 func nextRetryBackoff(current time.Duration) time.Duration {
-	next := current * 2
-	if next > time.Minute {
-		next = time.Minute
-	}
+	next := min(current*2, time.Minute)
 	return next
 }
 

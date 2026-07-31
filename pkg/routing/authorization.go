@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -262,12 +263,7 @@ func IsZoneAncestor(ancestor, child zone.ZonePath) bool {
 	if ancestor == child {
 		return true
 	}
-	for _, a := range child.Ancestors() {
-		if a == ancestor {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(child.Ancestors(), ancestor)
 }
 
 // IsInDelegationChain reports whether candidate is equal to target or is a
@@ -370,7 +366,7 @@ func hasValidCoveringOwnerPool(valid map[*PoolEntry]bool, pool *PoolEntry) bool 
 
 func validatePoolOverlaps(pools []*PoolEntry) (kept []*PoolEntry, bad map[*PoolEntry]bool) {
 	bad = make(map[*PoolEntry]bool)
-	for i := 0; i < len(pools); i++ {
+	for i := range pools {
 		for j := i + 1; j < len(pools); j++ {
 			a, b := pools[i], pools[j]
 			if !a.Prefix.Overlaps(b.Prefix) {
@@ -465,7 +461,7 @@ func isAssignmentPoolValid(ars *AuthorizedRouteSet, assignment *AssignmentEntry)
 // assignments and a set of rejected assignments for error reporting.
 func validateAssignmentOverlaps(assignments []*AssignmentEntry, ns *zone.NetworkState) (kept []*AssignmentEntry, bad map[*AssignmentEntry]bool) {
 	bad = make(map[*AssignmentEntry]bool)
-	for i := 0; i < len(assignments); i++ {
+	for i := range assignments {
 		for j := i + 1; j < len(assignments); j++ {
 			a, b := assignments[i], assignments[j]
 			if !a.Prefix.Overlaps(b.Prefix) {
@@ -567,7 +563,7 @@ func (ars *AuthorizedRouteSet) addError(z zone.ZonePath, p netip.Prefix, code, d
 func resolveOverlaps(entries []*RouteEntry, ars *AuthorizedRouteSet, ns *zone.NetworkState) []*RouteEntry {
 	bad := make(map[*RouteEntry]bool)
 
-	for i := 0; i < len(entries); i++ {
+	for i := range entries {
 		for j := i + 1; j < len(entries); j++ {
 			a, b := entries[i], entries[j]
 			if !a.Prefix.Overlaps(b.Prefix) {

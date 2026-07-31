@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -38,8 +37,7 @@ func TestObjectPullPoolPullsZoneAsync(t *testing.T) {
 
 	results := make(chan ObjectPullResult, 1)
 	pool := newObjectPullPool(results, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	pool.Start(ctx)
 	defer pool.Stop()
 
@@ -66,8 +64,7 @@ func TestObjectPullPoolPullsZoneAsync(t *testing.T) {
 func TestObjectPullPoolReturnsErrorForUnreachable(t *testing.T) {
 	results := make(chan ObjectPullResult, 1)
 	pool := newObjectPullPool(results, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	pool.Start(ctx)
 	defer pool.Stop()
 

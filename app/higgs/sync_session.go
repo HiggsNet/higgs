@@ -524,18 +524,12 @@ func (s *SyncSession) EstimatedRTT() time.Duration {
 }
 
 func (s *SyncSession) catalogPageTimeout() time.Duration {
-	d := time.Duration(kCatalogPageTimeoutMultiplier) * s.EstimatedRTT()
-	if d < MinCatalogPageTimeout {
-		d = MinCatalogPageTimeout
-	}
+	d := max(time.Duration(kCatalogPageTimeoutMultiplier)*s.EstimatedRTT(), MinCatalogPageTimeout)
 	return d
 }
 
 func (s *SyncSession) roundTimeout() time.Duration {
-	d := time.Duration(kRoundMultiplier)*s.EstimatedRTT() + ObjectPullBudget
-	if d < MinRoundTimeout {
-		d = MinRoundTimeout
-	}
+	d := max(time.Duration(kRoundMultiplier)*s.EstimatedRTT()+ObjectPullBudget, MinRoundTimeout)
 	return d
 }
 

@@ -39,7 +39,7 @@ var (
 // stripCodes removes BIRD CLI numeric prefixes like "1001-" or "0001 " from each line.
 func stripCodes(output string) string {
 	var out strings.Builder
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if codePrefixRe.MatchString(line) {
 			line = line[5:]
 		}
@@ -229,8 +229,8 @@ func parseInterfaces(output string) []BirdInterface {
 	output = stripCodes(output)
 	var ifaces []BirdInterface
 
-	lines := strings.Split(output, "\n")
-	for _, raw := range lines {
+	lines := strings.SplitSeq(output, "\n")
+	for raw := range lines {
 		line := strings.TrimRight(raw, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue

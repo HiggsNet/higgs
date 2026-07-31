@@ -51,7 +51,7 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	client := http.Client{Timeout: time.Second}
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/status", port)
 	var resp *http.Response
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		resp, err = client.Get(url)
 		if err == nil {
 			break

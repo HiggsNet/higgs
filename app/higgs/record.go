@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,10 +60,8 @@ func validateGenericRecordPut(key, recordType string) error {
 		ipsec.RecordTypeOverlayIntent,
 		"sync.endpoint",
 	}
-	for _, reserved := range reservedTypes {
-		if recordType == reserved {
-			return fmt.Errorf("record_put type %q is daemon-owned; use its typed control method", recordType)
-		}
+	if slices.Contains(reservedTypes, recordType) {
+		return fmt.Errorf("record_put type %q is daemon-owned; use its typed control method", recordType)
 	}
 	return nil
 }

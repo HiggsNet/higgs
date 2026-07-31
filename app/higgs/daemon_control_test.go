@@ -43,8 +43,7 @@ func TestDaemonControlStatus(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 	service.ControlSocketPath = filepath.Join(t.TempDir(), "higgs.sock")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	stop, err := service.startControlServer(ctx)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
@@ -129,8 +128,7 @@ func TestDaemonControlRoutingReload(t *testing.T) {
 	}
 	service := newDaemonService(rt, state, config, time.Second)
 	service.routingDirty = false
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
 	response := controlRequestViaPipe(t, service, controlRequest{Method: "routing_reload"})

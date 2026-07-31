@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1575,12 +1576,9 @@ func sendZoneSnapshotChunks(ns *zone.NetworkState, transport *gossip.Transport, 
 		return 0, fmt.Errorf("create chunk transfer id: %w", err)
 	}
 	chunks := make([]*gossip.ObjectChunk, 0, total)
-	for i := 0; i < total; i++ {
+	for i := range total {
 		start := i * chunkSize
-		end := start + chunkSize
-		if end > len(data) {
-			end = len(data)
-		}
+		end := min(start+chunkSize, len(data))
 		chunks = append(chunks, &gossip.ObjectChunk{
 			TransferID: append([]byte(nil), transferID...),
 			Object:     gossip.ObjectPullZone, Zone: path,
@@ -1655,7 +1653,7 @@ func planSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget 
 		return snapshotDatagramPlan{}
 	}
 	zones = append([]zone.ZonePath(nil), zones...)
-	sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
+	slices.Sort(zones)
 
 	var digests []gossip.ZoneDigest
 	var oversized []oversizedDatagramObject

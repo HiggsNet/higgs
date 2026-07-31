@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
@@ -284,8 +285,8 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 func recoveryChainZones(path zone.ZonePath) []zone.ZonePath {
 	ancestors := path.Ancestors()
 	out := make([]zone.ZonePath, 0, len(ancestors))
-	for i := len(ancestors) - 1; i >= 0; i-- {
-		out = append(out, ancestors[i])
+	for _, ancestor := range slices.Backward(ancestors) {
+		out = append(out, ancestor)
 	}
 	return out
 }

@@ -85,7 +85,7 @@ func TestSSEHubBufferPrunesByTimeWindow(t *testing.T) {
 
 func TestSSEHubBufferHardCap(t *testing.T) {
 	hub := NewHubWithBuffer(3600)
-	for i := 0; i < maxBufferedEvents+10; i++ {
+	for range maxBufferedEvents + 10 {
 		hub.Broadcast(Event{Type: "flood"})
 	}
 	if got := len(hub.Recent()); got != maxBufferedEvents {

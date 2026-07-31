@@ -1,5 +1,7 @@
 package zone
 
+import "maps"
+
 // CloneNetworkState returns a complete detached copy of ns. Validation
 // functions are immutable configuration and are intentionally retained.
 func CloneNetworkState(ns *NetworkState) *NetworkState {
@@ -38,10 +40,7 @@ func CloneNetworkStateForZone(ns *NetworkState, path ZonePath) *NetworkState {
 		out.Zones = make(map[ZonePath]*ZoneState)
 		return &out
 	}
-	out.Zones = make(map[ZonePath]*ZoneState, len(ns.Zones)+1)
-	for zonePath, state := range ns.Zones {
-		out.Zones[zonePath] = state
-	}
+	out.Zones = maps.Clone(ns.Zones)
 	if state, ok := ns.Zones[path]; ok {
 		out.Zones[path] = cloneZoneState(state)
 	}

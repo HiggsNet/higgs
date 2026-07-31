@@ -83,7 +83,7 @@ func ParseMeshPolicyRule(raw string) (MeshPolicyRule, error) {
 		return MeshPolicyRule{}, fmt.Errorf("mesh policy rule %q uses deprecated accept query; use role instead", raw)
 	}
 	if rawSources := firstQuery(query, "source"); rawSources != "" {
-		for _, source := range strings.Split(rawSources, ",") {
+		for source := range strings.SplitSeq(rawSources, ",") {
 			source = strings.TrimSpace(source)
 			if source == "" {
 				continue

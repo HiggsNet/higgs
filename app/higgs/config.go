@@ -924,7 +924,7 @@ func (list *configStringList) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	*list = (*list)[:0]
-	for _, v := range strings.Split(value, ",") {
+	for v := range strings.SplitSeq(value, ",") {
 		if v = strings.TrimSpace(v); v != "" {
 			*list = append(*list, v)
 		}

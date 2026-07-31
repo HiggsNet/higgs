@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -42,13 +43,7 @@ func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
 		t.Fatalf("expired observed path was not cleared: %+v", peer)
 	}
 
-	foundKnown := false
-	for _, peerID := range plan.knownPeerIDs {
-		if peerID == "node-b.catofes." {
-			foundKnown = true
-			break
-		}
-	}
+	foundKnown := slices.Contains(plan.knownPeerIDs, "node-b.catofes.")
 	if !foundKnown {
 		t.Fatal("verified node-b was not included in known-peer plan")
 	}

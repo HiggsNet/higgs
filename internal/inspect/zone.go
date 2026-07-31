@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -408,8 +409,8 @@ func buildRecordHistory(history map[string][]*zone.Record) []RecordView {
 	out := make([]RecordView, 0)
 	for _, key := range keys {
 		versions := history[key]
-		for i := len(versions) - 1; i >= 0; i-- {
-			out = append(out, BuildRecord(versions[i], 0))
+		for _, version := range slices.Backward(versions) {
+			out = append(out, BuildRecord(version, 0))
 		}
 	}
 	return out

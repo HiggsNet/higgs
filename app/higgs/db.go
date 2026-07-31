@@ -37,8 +37,8 @@ func dbDump(filter string) error {
 		zones := make([]string, 0)
 		err := tx.ForEach(func(name []byte, b *bolt.Bucket) error {
 			bucketName := string(name)
-			if strings.HasPrefix(bucketName, "zone:") {
-				zoneName := strings.TrimPrefix(bucketName, "zone:")
+			if after, ok := strings.CutPrefix(bucketName, "zone:"); ok {
+				zoneName := after
 				if filter == "" || filter == zoneName {
 					zones = append(zones, zoneName)
 				}

@@ -79,14 +79,14 @@ func TestStateMachineHealthyToDegraded(t *testing.T) {
 	m := NewStateMachine(cfg)
 	now := time.Now()
 	// Start healthy.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 5, Lost: 0}, "", now)
 	}
 	if state := m.State("link1"); state != HealthStateHealthy {
 		t.Fatalf("state = %s, want healthy", state)
 	}
 	// Inject consecutive failures.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 0, Lost: 5, LossRatio: 1.0, ConsecutiveFails: i + 1}, "", now)
 	}
 	if state := m.State("link1"); state != HealthStateDown {
@@ -196,7 +196,7 @@ func TestStateMachineHysteresisRecovery(t *testing.T) {
 	m := NewStateMachine(cfg)
 	now := time.Now()
 	// Force into degraded state.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 0, Lost: 5, LossRatio: 1.0, ConsecutiveFails: i + 1}, "", now)
 	}
 	if state := m.State("link1"); state != HealthStateDown {
@@ -208,7 +208,7 @@ func TestStateMachineHysteresisRecovery(t *testing.T) {
 		t.Fatalf("state = %s, should not be healthy after single success (hysteresis)", state)
 	}
 	// After enough consecutive successes, recover.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		m.Evaluate("link1", WindowSnapshot{Sent: 1, Received: 1, Lost: 0}, "", now)
 	}
 	if state := m.State("link1"); state != HealthStateHealthy {
@@ -317,8 +317,7 @@ func TestManagerTickAsyncReturnsBeforeProbeCompletes(t *testing.T) {
 	m.nextProbe["link-a"] = now.Add(-time.Second)
 	m.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	updates := m.StartAsync(ctx)
 	if got := m.TickAsync(ctx, now); got != 1 {
 		t.Fatalf("dispatched = %d, want 1", got)

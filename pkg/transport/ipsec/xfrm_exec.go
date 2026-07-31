@@ -308,7 +308,7 @@ func (d SystemXFRMDriver) interfaceAddresses(ctx context.Context, netns NetNSSpe
 		return nil, err
 	}
 	var addrs []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		fields := strings.Fields(line)
 		for i, field := range fields {
 			if (field == "inet" || field == "inet6") && i+1 < len(fields) {
@@ -352,7 +352,7 @@ func parseIPLinkFlags(out string) (map[string]bool, bool) {
 	}
 	raw := out[start+1 : start+1+end]
 	flags := make(map[string]bool)
-	for _, flag := range strings.Split(raw, ",") {
+	for flag := range strings.SplitSeq(raw, ",") {
 		flag = strings.ToUpper(strings.TrimSpace(flag))
 		if flag == "" {
 			continue

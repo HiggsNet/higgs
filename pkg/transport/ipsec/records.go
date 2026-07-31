@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -832,12 +833,7 @@ func refreshForAddress(address AddressAdvertisement, recordUpdatedAt int64) time
 }
 
 func familyAllowed(family string, allowed []string) bool {
-	for _, candidate := range allowed {
-		if family == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, family)
 }
 
 func portSelectionExpired(selection PortSelection, now time.Time) bool {
@@ -983,12 +979,7 @@ func sourceAllowed(source string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
 	}
-	for _, candidate := range allowed {
-		if source == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, source)
 }
 
 func candidateAllowed(candidate AddressCandidate, opts AddressCandidateOptions) bool {
@@ -1019,10 +1010,5 @@ func ValidPortMode(mode string) bool {
 }
 
 func oneOf(value string, allowed ...string) bool {
-	for _, item := range allowed {
-		if value == item {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, value)
 }

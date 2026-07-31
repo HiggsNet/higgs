@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -479,16 +480,12 @@ func PeerKnown(input PeerSetInput, peerID string) bool {
 	if peerID == "" {
 		return false
 	}
-	for _, local := range input.LocalIDs {
-		if peerID == local {
-			return false
-		}
+	if slices.Contains(input.LocalIDs, peerID) {
+		return false
 	}
 	for _, ids := range [][]string{input.RuntimeIDs, input.BootstrapIDs, input.SignedIDs} {
-		for _, id := range ids {
-			if peerID == id {
-				return true
-			}
+		if slices.Contains(ids, peerID) {
+			return true
 		}
 	}
 	return false

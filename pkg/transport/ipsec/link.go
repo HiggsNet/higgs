@@ -384,7 +384,7 @@ func deriveLinkLocalAddresses(local, peer zone.ZonePath, linkID string, addressE
 	}
 	lowerAddr := prefix.Addr().As16()
 	higherAddr := prefix.Addr().As16()
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		lowerAddr[8+i] = byte(lowerID >> (56 - i*8))
 		higherAddr[8+i] = byte(higherID >> (56 - i*8))
 	}
@@ -416,7 +416,7 @@ func derivePoolAddresses(local, peer zone.ZonePath, linkID string, addressEpoch 
 }
 
 func deriveInterfaceID(linkID string, addressEpoch uint64, family, mode, pool, role string, maxRetry int) (uint64, error) {
-	for retry := 0; retry < maxRetry; retry++ {
+	for retry := range maxRetry {
 		hash := higgscrypto.Hash(
 			[]byte("higgs.ipsec.tunnel-address.v2"),
 			[]byte(linkID),
@@ -444,7 +444,7 @@ func derivePoolAddr(linkID string, addressEpoch uint64, pool netip.Prefix, role 
 		}
 		hostBits := uint32(32 - bits)
 		mask := uint32(1)<<hostBits - 1
-		for retry := 0; retry < maxRetry; retry++ {
+		for retry := range maxRetry {
 			hash := higgscrypto.Hash(
 				[]byte("higgs.ipsec.tunnel-address.v2"),
 				[]byte(linkID),
@@ -478,7 +478,7 @@ func derivePoolAddr(linkID string, addressEpoch uint64, pool netip.Prefix, role 
 	hostMask := big.NewInt(1)
 	hostMask.Lsh(hostMask, uint(hostBits))
 	hostMask.Sub(hostMask, big.NewInt(1))
-	for retry := 0; retry < maxRetry; retry++ {
+	for retry := range maxRetry {
 		hash := higgscrypto.Hash(
 			[]byte("higgs.ipsec.tunnel-address.v2"),
 			[]byte(linkID),

@@ -417,7 +417,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	}
 	recoverAt := faultAt
 	var recoveredState string
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		recoverAt = recoverAt.Add(time.Second)
 		if dispatched := manager.Tick(context.Background(), recoverAt); dispatched != 1 {
 			t.Fatalf("health probes after fault recovery = %d, want 1", dispatched)
@@ -633,7 +633,7 @@ func healthSmokeBirdSpec(nsName, tmpDir, iface string, routerID uint32) bird.Bir
 func waitForHealthSmokeBirdRoute(t *testing.T, ctx context.Context, socketPath, prefix, iface string) *bird.BirdObservedState {
 	t.Helper()
 	var last string
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "route", "all").CombinedOutput()
 		last = string(out)
 		if err == nil && strings.Contains(last, prefix) && strings.Contains(last, iface) {

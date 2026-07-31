@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -30,8 +29,7 @@ func TestGossipPacketReceiverForwardsPackets(t *testing.T) {
 	transportA.AddPeer("test-b", transportB.LocalAddr())
 	transportB.AddPeer("test-a", transportA.LocalAddr())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	packetCh, stopRecv := startGossipPacketReceiver(ctx, transportB, nil)
 	defer stopRecv()
@@ -65,8 +63,7 @@ func TestGossipPacketReceiverTimeoutNotLogged(t *testing.T) {
 	defer transport.Close()
 
 	var warned bool
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, func(_, _ string, _ map[string]any) {
 		warned = true
@@ -98,8 +95,7 @@ func TestGossipPacketReceiverStopsOnClose(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, nil)
 	stopRecv()
@@ -125,8 +121,7 @@ func TestGossipPacketReceiverNetErrClosedNotLogged(t *testing.T) {
 	}
 
 	var warned bool
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, func(_, _ string, _ map[string]any) {
 		warned = true

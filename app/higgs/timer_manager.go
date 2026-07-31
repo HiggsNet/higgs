@@ -92,10 +92,7 @@ func (tm *TimerManager) Start(peerID, kind string, deadline time.Time) {
 		close(old.cancel)
 	}
 
-	d := deadline.Sub(tm.clock.Now())
-	if d < 0 {
-		d = 0
-	}
+	d := max(deadline.Sub(tm.clock.Now()), 0)
 	entry := &managedTimer{
 		timer:  tm.clock.NewTimer(d),
 		cancel: make(chan struct{}),

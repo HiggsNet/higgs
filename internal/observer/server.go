@@ -194,8 +194,8 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	linkFilter := pathFilter(r.URL.Path, "/api/v1/health")
-	if strings.HasSuffix(linkFilter, "/series") {
-		linkID := strings.TrimSuffix(linkFilter, "/series")
+	if before, ok := strings.CutSuffix(linkFilter, "/series"); ok {
+		linkID := before
 		linkID = strings.TrimSuffix(linkID, "/")
 		data, err := s.provider.HealthSeries(linkID, queryMap(r))
 		writeProviderResult(w, data, err)

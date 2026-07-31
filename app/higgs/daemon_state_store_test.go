@@ -283,7 +283,7 @@ func TestDaemonStateStoreNetworkTypedCOWOwnershipRetainAndStale(t *testing.T) {
 func BenchmarkDaemonStateStoreSnapshotStrategies(b *testing.B) {
 	network := cloneTestNetworkState()
 	zs := network.Zones["node-a.catofes."]
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("record-%04d", i)
 		zs.Records[key] = &zone.Record{
 			Zone:      "node-a.catofes.",

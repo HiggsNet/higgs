@@ -3,7 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -30,7 +30,7 @@ func parseAuthorityPermissions(input []string) ([]zone.Permission, error) {
 	var out []zone.Permission
 	seen := map[zone.Permission]bool{}
 	for _, raw := range input {
-		for _, part := range strings.Split(raw, ",") {
+		for part := range strings.SplitSeq(raw, ",") {
 			perm, err := parseAuthorityPermission(strings.TrimSpace(part))
 			if err != nil {
 				return nil, err
@@ -45,7 +45,7 @@ func parseAuthorityPermissions(input []string) ([]zone.Permission, error) {
 	if len(out) == 0 {
 		return nil, errors.New("at least one permission is required")
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out, nil
 }
 
@@ -201,8 +201,6 @@ func grantPermissionsToAuthority(authority *zone.ZoneAuthority, permissions []zo
 			capability.Permissions = append(capability.Permissions, perm)
 			seen[perm] = true
 		}
-		sort.Slice(capability.Permissions, func(i, j int) bool {
-			return capability.Permissions[i] < capability.Permissions[j]
-		})
+		slices.Sort(capability.Permissions)
 	}
 }

@@ -100,7 +100,7 @@ func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 	// Add many delegations to inflate the zone skeleton.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		child := zone.ZonePath("child-" + string(rune('a'+i%26)) + ".catofes.")
 		pub, priv, err := ed25519.GenerateKey(nil)
 		if err != nil {
@@ -220,7 +220,7 @@ func TestPlanSnapshotDatagramsIgnoresRecordPayloadSize(t *testing.T) {
 
 func TestCatalogSyncAvoidsOversizedFullDigestPing(t *testing.T) {
 	var digests []gossip.ZoneDigest
-	for i := 0; i < 80; i++ {
+	for i := range 80 {
 		digests = append(digests, gossip.ZoneDigest{
 			Zone:     zone.ZonePath("node-" + string(rune('a'+i%26)) + "-" + string(rune('a'+i/26)) + ".catofes."),
 			RootHash: bytes.Repeat([]byte{byte(i)}, 32),

@@ -676,10 +676,7 @@ func (d *StrongSwanDriver) viciInitiateRequest(child string) map[string]any {
 	if d != nil && d.InitiateTimeout > 0 {
 		timeout = d.InitiateTimeout
 	}
-	timeoutMillis := timeout.Milliseconds()
-	if timeoutMillis < 1 {
-		timeoutMillis = 1
-	}
+	timeoutMillis := max(timeout.Milliseconds(), 1)
 	return map[string]any{
 		"child":   child,
 		"timeout": fmt.Sprintf("%d", timeoutMillis),

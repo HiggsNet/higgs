@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
@@ -155,10 +156,8 @@ func authorityHasPermission(authority *zone.ZoneAuthority, permission zone.Permi
 	}
 	for _, key := range authority.Keys {
 		for _, capability := range key.Capabilities {
-			for _, existing := range capability.Permissions {
-				if existing == permission {
-					return true
-				}
+			if slices.Contains(capability.Permissions, permission) {
+				return true
 			}
 		}
 	}

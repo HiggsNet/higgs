@@ -255,7 +255,7 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 
 	// Poll for Babel neighbor establishment (up to 20 seconds).
 	neighborFound := false
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", specA.ControlSocketPath, "show", "protocols").CombinedOutput()
 		if err == nil && strings.Contains(string(out), "babel1") && strings.Contains(string(out), "up") {
 			neighborFound = true
@@ -269,7 +269,7 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 
 	// Poll for route learning: B should learn 10.0.1.0/24 from A.
 	routeLearned := false
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", specB.ControlSocketPath, "show", "route").CombinedOutput()
 		if err == nil && strings.Contains(string(out), "10.0.1.0/24") {
 			routeLearned = true
@@ -401,7 +401,7 @@ func TestBabelImportFilterNegativeRootSmoke(t *testing.T) {
 
 	var lastRoutes string
 	allowedSeen := false
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", specB.ControlSocketPath, "show", "route").CombinedOutput()
 		lastRoutes = string(out)
 		if err == nil && strings.Contains(lastRoutes, allowedPrefix) {
@@ -722,7 +722,7 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 	t.Cleanup(func() { _ = overlayPM.Stop(context.Background(), overlaySpec) })
 
 	// Wait for host BIRD control socket.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if _, err := os.Stat(hostSocketPath); err == nil {
 			break
 		}
@@ -753,7 +753,7 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 
 	// Poll for host BIRD to learn overlay's prefix 172.16.2.0/24.
 	hostLearned := false
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", hostSocketPath, "show", "route").CombinedOutput()
 		if err == nil && strings.Contains(string(out), "172.16.2.0/24") {
 			hostLearned = true
@@ -767,7 +767,7 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 
 	// Poll for overlay BIRD to learn host's prefix 172.16.1.0/24.
 	overlayLearned := false
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", overlaySocketPath, "show", "route").CombinedOutput()
 		if err == nil && strings.Contains(string(out), "172.16.1.0/24") {
 			overlayLearned = true
@@ -1186,7 +1186,7 @@ func waitForBabelNeighborsWithin(t *testing.T, ctx context.Context, socketPath s
 	}
 
 	var last string
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "babel", "neighbors").CombinedOutput()
 		last = string(out)
 		if err == nil {
@@ -1208,7 +1208,7 @@ func waitForBabelNeighborsWithin(t *testing.T, ctx context.Context, socketPath s
 func waitForSelectedAnycastIfaceWithin(t *testing.T, ctx context.Context, socketPath, prefix string, allowedIfaces []string, forbiddenIface string, attempts int) (string, string) {
 	t.Helper()
 	var last string
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 		out, err := exec.CommandContext(ctx, "birdc", "-s", socketPath, "show", "route", "all").CombinedOutput()
 		last = string(out)
 		if err == nil {

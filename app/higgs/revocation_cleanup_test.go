@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -153,13 +154,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 
 	impact := ComputeRevocationImpact(state, "node-b.catofes.", now)
 	// The leaf should be in the subtree.
-	found := false
-	for _, z := range impact.RevokedSubtree {
-		if z == leafZone {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(impact.RevokedSubtree, leafZone)
 	if !found {
 		t.Fatalf("leaf zone %s not found in subtree %v", leafZone, impact.RevokedSubtree)
 	}
@@ -678,12 +673,7 @@ func lastFirewallDesired(t *testing.T, driver *captureFirewallDriver) *firewall.
 
 func prefixIn(prefixes []netip.Prefix, want string) bool {
 	prefix := netip.MustParsePrefix(want)
-	for _, got := range prefixes {
-		if got == prefix {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(prefixes, prefix)
 }
 
 func readBirdConfigForNetns(t *testing.T, state *stateFile, netns string) string {
@@ -729,13 +719,7 @@ func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}
-	found := false
-	for _, id := range impacts[0].ConfiguredButRevoked {
-		if id == "node-b.catofes." {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(impacts[0].ConfiguredButRevoked, "node-b.catofes.")
 	if !found {
 		t.Fatalf("node-b.catofes. not in configured_but_revoked: %v", impacts[0].ConfiguredButRevoked)
 	}

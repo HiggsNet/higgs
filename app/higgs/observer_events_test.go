@@ -104,7 +104,7 @@ func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
 	defer unsubscribe()
 	d.notifyStateChanged()
 	var linkEvent, peerEvent *observer.Event
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		select {
 		case ev := <-ch:
 			switch ev.Type {

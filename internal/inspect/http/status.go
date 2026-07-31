@@ -40,10 +40,7 @@ type StatusInput struct {
 }
 
 func BuildStatusResponse(input StatusInput) StatusResponse {
-	lastReconcileUnix := input.IPsecLastRunUnix
-	if input.RoutingLastRunUnix > lastReconcileUnix {
-		lastReconcileUnix = input.RoutingLastRunUnix
-	}
+	lastReconcileUnix := max(input.RoutingLastRunUnix, input.IPsecLastRunUnix)
 	return StatusResponse{
 		PeerID:            input.PeerID,
 		ManagedZone:       input.ManagedZone,

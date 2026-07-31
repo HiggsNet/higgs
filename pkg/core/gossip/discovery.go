@@ -136,10 +136,7 @@ func endpointExpired(ep EndpointEntry, record EndpointRecord, now time.Time) boo
 	if ttl <= 0 {
 		ttl = DefaultEndpointTTL
 	}
-	grace := time.Duration(record.GraceSeconds) * time.Second
-	if grace < 0 {
-		grace = 0
-	}
+	grace := max(time.Duration(record.GraceSeconds)*time.Second, 0)
 	if ep.LastObserved == 0 {
 		return false
 	}
@@ -368,7 +365,6 @@ func QueryPublicIPsWithQuery(reflectors []string, timeout time.Duration, query f
 	outCh := make(chan result, len(reflectors))
 
 	for _, r := range reflectors {
-		r := r
 		go func() {
 			ip, err := query([]string{r}, timeout)
 			select {
@@ -419,7 +415,6 @@ func queryPublicIPsWithClient(reflectors []string, client *http.Client) ([]net.I
 	outCh := make(chan result, len(reflectors))
 
 	for _, r := range reflectors {
-		r := r
 		go func() {
 			ip, err := queryPublicIPCtx(ctx, client, r)
 			select {

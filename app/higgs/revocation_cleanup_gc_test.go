@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -281,10 +282,5 @@ func equalStrings(got, want []string) bool {
 }
 
 func zonePathContains(haystack []zone.ZonePath, needle zone.ZonePath) bool {
-	for _, z := range haystack {
-		if z == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }

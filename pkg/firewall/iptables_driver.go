@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -319,10 +320,7 @@ func iptablesGenerationChain(tableName, code, hash string, slot byte) string {
 	}
 	suffix := "_" + code + "_" + hash + string(slot)
 	const maxChainName = 28
-	prefixLen := maxChainName - len(suffix)
-	if prefixLen < 1 {
-		prefixLen = 1
-	}
+	prefixLen := max(maxChainName-len(suffix), 1)
 	prefix := tableName
 	if len(prefix) > prefixLen {
 		prefix = prefix[:prefixLen]
@@ -434,8 +432,8 @@ func (d *IPTablesDriver) discardPreparedIPTablesChains(ctx context.Context, prep
 
 func (d *IPTablesDriver) rollbackPreparedIPTablesChains(ctx context.Context, prepared []preparedIPTablesChain, marker string) []string {
 	var errs []string
-	for i := len(prepared) - 1; i >= 0; i-- {
-		item := prepared[i]
+	for _, item := range slices.Backward(prepared) {
+
 		if item.binary == "" || item.generation == "" {
 			continue
 		}
@@ -491,7 +489,7 @@ func (d *IPTablesDriver) cleanupOldIPTablesGenerations(
 					continue
 				}
 				deleteArgs := iptablesArgs(table, "-D", chain.builtin, "-j", chain.name, "-m", "comment", "--comment", marker)
-				for attempts := 0; attempts < 4096; attempts++ {
+				for range 4096 {
 					if _, err := d.run(ctx, binary, deleteArgs...); err != nil {
 						break
 					}
@@ -549,7 +547,7 @@ func (d *IPTablesDriver) cleanupOrphanIPSets(ctx context.Context, tableName stri
 	prefix := iptablesIPSetPrefix(tableName)
 	applied := 0
 	var errs []string
-	for _, name := range strings.Fields(string(out)) {
+	for name := range strings.FieldsSeq(string(out)) {
 		if !strings.HasPrefix(name, prefix) || referenced[name] {
 			continue
 		}
@@ -565,7 +563,7 @@ func (d *IPTablesDriver) cleanupOrphanIPSets(ctx context.Context, tableName stri
 func referencedIPSets(rules string) []string {
 	seen := make(map[string]bool)
 	var out []string
-	for _, line := range strings.Split(rules, "\n") {
+	for line := range strings.SplitSeq(rules, "\n") {
 		fields := strings.Fields(line)
 		for i := 0; i+1 < len(fields); i++ {
 			if fields[i] != "--match-set" || seen[fields[i+1]] {
@@ -593,7 +591,7 @@ type managedIPTablesActualChain struct {
 func parseManagedIPTablesActualChains(output, tableName, table string) []managedIPTablesActualChain {
 	seen := make(map[string]bool)
 	var chains []managedIPTablesActualChain
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) != 2 || fields[0] != "-N" {
 			continue
@@ -611,7 +609,7 @@ func parseManagedIPTablesActualChains(output, tableName, table string) []managed
 }
 
 func iptablesChainReferenced(output, target string) bool {
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		for i := 0; i+1 < len(fields); i++ {
 			if fields[i] == "-j" && fields[i+1] == target {
@@ -655,7 +653,7 @@ func (d *IPTablesDriver) deleteLegacyNATBaseRules(ctx context.Context, marker st
 
 func legacyNATRuleNumbers(output, marker string) []int {
 	var numbers []int
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if !strings.Contains(line, marker+":") {
 			continue
 		}
@@ -768,7 +766,7 @@ func iptablesObjectTableName(ref FirewallObjectRef) (string, bool) {
 
 func matchingIPTablesJumpDeletes(output, builtin, target string) [][]string {
 	var deletes [][]string
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) < 4 || fields[0] != "-A" || fields[1] != builtin {
 			continue
@@ -1028,7 +1026,7 @@ func iptablesProto(proto string) string {
 func parseIPTablesChains(output, tableName, table string) []FirewallObjectRef {
 	var refs []FirewallObjectRef
 	seen := make(map[string]bool)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		// Lines like "-N higgs_h2_INPUT" or "-A higgs_h2_INPUT ..."
 		if !strings.HasPrefix(line, "-N ") && !strings.HasPrefix(line, "-A ") {

@@ -501,12 +501,7 @@ func linkOutputBelongsToBirdInstance(link higgsstate.LinkOutput, netnsName strin
 	if len(overlays) == 0 {
 		return true
 	}
-	for _, overlay := range overlays {
-		if overlay == link.GroupID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(overlays, link.GroupID)
 }
 
 func birdObservationForInterface(instanceID, probeID, iface string, observed *bird.BirdObservedState) health.BabelObservation {

@@ -382,13 +382,7 @@ func (s *rawICMPSocketSlot) close() {
 }
 
 func rawICMPSocketReopenDelay(interval time.Duration, failures int) time.Duration {
-	base := 3 * interval
-	if base < rawICMPReopenMinDelay {
-		base = rawICMPReopenMinDelay
-	}
-	if base > rawICMPReopenMaxDelay {
-		base = rawICMPReopenMaxDelay
-	}
+	base := min(max(3*interval, rawICMPReopenMinDelay), rawICMPReopenMaxDelay)
 	delay := base
 	for i := 1; i < failures && delay < rawICMPReopenMaxDelay; i++ {
 		if delay > rawICMPReopenMaxDelay/2 {
@@ -700,10 +694,7 @@ func waitRawICMP(ctx context.Context, fd int, until time.Time, drain func() erro
 		if remaining <= 0 {
 			return nil
 		}
-		milliseconds := int((remaining + time.Millisecond - 1) / time.Millisecond)
-		if milliseconds < 1 {
-			milliseconds = 1
-		}
+		milliseconds := max(int((remaining+time.Millisecond-1)/time.Millisecond), 1)
 		_, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, milliseconds)
 		if err != nil && !errors.Is(err, syscall.EINTR) {
 			return err

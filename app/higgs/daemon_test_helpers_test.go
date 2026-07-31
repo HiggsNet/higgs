@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -533,10 +534,8 @@ func waitDaemonTestSA(ctx context.Context, client *ipsec.GoviciClient, name stri
 		if err != nil {
 			return err
 		}
-		for _, event := range events {
-			if daemonTestSAEstablished(event) {
-				return nil
-			}
+		if slices.ContainsFunc(events, daemonTestSAEstablished) {
+			return nil
 		}
 		select {
 		case <-ctx.Done():

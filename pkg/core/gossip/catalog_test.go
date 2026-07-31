@@ -10,7 +10,7 @@ import (
 
 func TestCatalogPageForDigestsIsBoundedAndStable(t *testing.T) {
 	var entries []ZoneDigest
-	for i := 0; i < 80; i++ {
+	for i := range 80 {
 		entries = append(entries, ZoneDigest{
 			Zone:     zone.ZonePath("node-" + string(rune('a'+i%26)) + "-" + string(rune('a'+i/26)) + ".catofes."),
 			RootHash: bytes.Repeat([]byte{byte(i)}, 32),

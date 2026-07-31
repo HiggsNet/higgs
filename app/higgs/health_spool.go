@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -326,7 +327,7 @@ func bucketHealthSamples(samples []healthSpoolSample, metric string, start time.
 	for key := range buckets {
 		keys = append(keys, key)
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	slices.Sort(keys)
 	points := make([]healthSeriesPoint, 0, len(keys))
 	for _, key := range keys {
 		agg := buckets[key]

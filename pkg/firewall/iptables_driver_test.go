@@ -62,7 +62,7 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	driver := &IPTablesDriver{Command: runner.run}
 	prefixes := make([]netip.Prefix, 0, 30)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		prefixes = append(prefixes, netip.MustParsePrefix(fmt.Sprintf("2001:db8:%x::/64", i)))
 	}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
@@ -817,7 +817,7 @@ func TestIPTablesDriver_MigrationDrainsAllLegacyDuplicateJumps(t *testing.T) {
 	jump := []string{"INPUT", "-j", legacy, "-m", "comment", "--comment", "higgs-higgstesth2"}
 	for _, binary := range []string{"iptables", "ip6tables"} {
 		runner.seedIPTablesChain(binary, "filter", legacy)
-		for i := 0; i < duplicates; i++ {
+		for range duplicates {
 			runner.seedIPTablesRule(binary, "filter", jump)
 		}
 	}

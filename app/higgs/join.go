@@ -4,8 +4,9 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
@@ -203,7 +204,7 @@ func delegationCapabilities(permissions []zone.Permission) []zone.Capability {
 		return defaultDelegationCapabilities()
 	}
 	out := append([]zone.Permission(nil), permissions...)
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return []zone.Capability{{Permissions: out}}
 }
 
@@ -476,15 +477,11 @@ func mergeJoinBundleNetwork(dst *zone.NetworkState, src *zone.NetworkState) {
 		if target.Delegations == nil {
 			target.Delegations = make(map[zone.ZonePath]*zone.Delegation)
 		}
-		for child, delegation := range source.Delegations {
-			target.Delegations[child] = delegation
-		}
+		maps.Copy(target.Delegations, source.Delegations)
 		if target.Revocations == nil {
 			target.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
 		}
-		for child, revocation := range source.Revocations {
-			target.Revocations[child] = revocation
-		}
+		maps.Copy(target.Revocations, source.Revocations)
 	}
 }
 
@@ -594,8 +591,8 @@ func minimalNetworkForJoinBundle(ns *zone.NetworkState, target zone.ZonePath) (*
 	}
 	out := zone.NewNetworkState()
 	ancestors := target.Ancestors()
-	for i := len(ancestors) - 1; i >= 0; i-- {
-		path := ancestors[i]
+	for _, path := range slices.Backward(ancestors) {
+
 		source := ns.Zones[path]
 		if source == nil || source.Authority == nil {
 			return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)

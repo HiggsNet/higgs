@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"strings"
@@ -393,9 +394,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		now = time.Now()
 	}
 	result := ReconcileResult{Instances: map[string]LinkInstance{}}
-	for id, inst := range in.Instances {
-		result.Instances[id] = inst
-	}
+	maps.Copy(result.Instances, in.Instances)
 	desiredByID := map[string]TransportLinkSpec{}
 	for _, spec := range in.Desired {
 		desiredByID[LinkInstanceID(spec)] = spec

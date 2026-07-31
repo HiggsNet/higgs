@@ -91,9 +91,9 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	}
 
 	// Export filter should contain only the local prefix.
-	importIdx := strings.Index(cfg, "filter higgs_import_higgstesth2")
+	found := strings.Contains(cfg, "filter higgs_import_higgstesth2")
 	exportIdx := strings.Index(cfg, "filter higgs_export_higgstesth2")
-	if importIdx == -1 || exportIdx == -1 {
+	if !found || exportIdx == -1 {
 		t.Fatalf("missing import/export filters")
 	}
 	exportFilter := cfg[exportIdx:]

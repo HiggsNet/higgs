@@ -782,7 +782,7 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return nil, false, errors.New("daemon service is not initialized")
 	}
-	for attempt := 0; attempt < maxSyncPeerUpdateAttempts; attempt++ {
+	for range maxSyncPeerUpdateAttempts {
 		state, revision := d.StateStore.snapshotApplyWorkspace()
 		if state == nil || state.Network == nil {
 			return nil, false, errors.New("daemon state network is nil")

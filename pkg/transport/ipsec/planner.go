@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
@@ -556,7 +557,7 @@ func sortedZones(ns *zone.NetworkState) []zone.ZonePath {
 		}
 		out = append(out, peer)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -618,10 +619,8 @@ func recordFamilies(record *AddressRecord) []string {
 
 func familiesOverlap(left, right []string) bool {
 	for _, l := range left {
-		for _, r := range right {
-			if l == r {
-				return true
-			}
+		if slices.Contains(right, l) {
+			return true
 		}
 	}
 	return false
