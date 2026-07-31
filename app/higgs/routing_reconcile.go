@@ -199,51 +199,18 @@ func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[st
 	if routingReconcileResultEqual(baseBird, baseReconcile, result.BirdInstances, result.RoutingReconcile) {
 		return nil
 	}
-	_, committed := d.StateStore.commitRoutingIfRevision(rev, result.BirdInstances, result.RoutingReconcile)
+	currentRev, committed := d.StateStore.commitRoutingIfRevision(rev, result.BirdInstances, result.RoutingReconcile)
 	if !committed {
-		merged, err := d.commitRoutingBirdInstancesByNetNS(baseBird, result.BirdInstances, result.RoutingReconcile)
-		if err != nil {
-			return err
-		}
-		if merged {
-			return nil
-		}
 		d.routingDirty = true
 		d.publishStateStoreRuntimeFlags()
+		d.logWarn("routing", "stale_reconcile_result", map[string]any{
+			"source_revision":  rev,
+			"current_revision": currentRev,
+			"changed_netns":    changedBirdInstanceNetNS(baseBird, result.BirdInstances),
+		})
 		return nil
 	}
 	return d.saveCommittedMeta()
-}
-
-func (d *DaemonService) commitRoutingBirdInstancesByNetNS(base, next map[string]*BirdInstanceState, reconcile *routingReconcileState) (bool, error) {
-	if d == nil || d.StateStore == nil {
-		return false, nil
-	}
-	changed := changedBirdInstanceNetNS(base, next)
-	current, currentRev := d.StateStore.routingSnapshot()
-	if current == nil {
-		return false, nil
-	}
-	if len(changed) > 0 && !birdInstanceCommitBasesMatch(base, current.BirdInstances, changed) {
-		return false, nil
-	}
-	mergedBird := cloneBirdInstances(current.BirdInstances)
-	if mergedBird == nil {
-		mergedBird = make(map[string]*BirdInstanceState)
-	}
-	for _, netns := range changed {
-		inst, ok := next[netns]
-		if !ok || inst == nil {
-			delete(mergedBird, netns)
-			continue
-		}
-		mergedBird[netns] = cloneBirdInstance(inst)
-	}
-	_, committed := d.StateStore.commitRoutingIfRevision(currentRev, mergedBird, reconcile)
-	if !committed {
-		return false, nil
-	}
-	return true, d.saveCommittedMeta()
 }
 
 func routingReconcileResultEqual(baseBird map[string]*BirdInstanceState, baseReconcile *routingReconcileState, nextBird map[string]*BirdInstanceState, nextReconcile *routingReconcileState) bool {
@@ -274,19 +241,6 @@ func changedBirdInstanceNetNS(base, next map[string]*BirdInstanceState) []string
 		}
 	}
 	return out
-}
-
-// birdInstanceCommitBasesMatch verifies that no other writer changed a BIRD
-// instance touched by this reconcile after its workspace was created. Owner
-// tokens identify resources, but they are stable across runtime state changes
-// and therefore cannot serve as optimistic-concurrency versions.
-func birdInstanceCommitBasesMatch(base, current map[string]*BirdInstanceState, netnsNames []string) bool {
-	for _, netns := range netnsNames {
-		if !birdInstanceStatesEqual(base[netns], current[netns]) {
-			return false
-		}
-	}
-	return true
 }
 
 func birdInstanceStatesEqual(a, b *BirdInstanceState) bool {

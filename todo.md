@@ -148,17 +148,19 @@
     - 通用 `StateStore.Update` 在 typed mutation 完成前继续保留 detached workspace 和 commit 前第二次 clone，防止 callback retain `Workspace()` 后污染 committed。每个 typed COW API 只拥有明确字段，不向 callback 暴露完整可写 `*stateFile`。
     - 每个子阶段独立落地、独立 benchmark/测试；前一阶段的正确性和 perf 数据验收后再进入下一阶段。不得为了达到最终 COW 形态而在一个改动中同时重写 sync、routing、IPsec、firewall 和 persistence。
 
-    - [ ] **7.11.6.1 修复 `ApplySnapshot` 失败原子性**
+    - [x] **7.11.6.1 修复 `ApplySnapshot` 失败原子性**
       - 当前 `gossip.ApplySnapshot` 使用完整 candidate 验证 trust chain，但验证后转而修改传入 `NetworkState`；delegation/revocation 已写入或部分 record 已 `PutAt` 后发生错误时，调用者可能提交部分 snapshot。
       - 将 authority、parent proof、delegation、revocation、record/history 的全部变更先应用到 detached candidate；只有所有验证和 record apply 完成后才一次性安装结果。任何错误返回时，传入 Network 的字段、map、slice、record/history、root 和 validation hook 均保持不变。
       - 保持现有 stale record、record conflict、apply count、delegation count、auto-join 和 rejected digest 对外语义。snapshot apply 失败只记录 rejected digest；失败 snapshot 不得借由外层 `StateStore.Update` 提交 Network 的部分变化。
       - 测试至少覆盖：trust chain 失败、delegation/revocation 校验失败、前一条 record 成功而后一条失败、stale/conflict 被跳过、成功 apply；失败用序列化状态或逐字段断言验证前后 Network 等价，并运行 `pkg/core/gossip` race 测试。
+      - 已完成：snapshot 的 trust、delegation、revocation 和有序 record 合并全部在完整 detached candidate 上执行，成功后才一次替换传入 Network；candidate clone 保留 nil/empty 形态、root、validation hook 和 nil zone entry。回归测试覆盖全部失败点、stale/conflict 跳过、成功 history 更新及 retained target/snapshot 隔离；`go test -race ./pkg/core/gossip ./pkg/core/zone`、全量测试、`make check`、chain relay/object pull/routing dry-run smoke 均通过。
 
-    - [ ] **7.11.6.2 删除 routing stale 字段级 merge**
+    - [x] **7.11.6.2 删除 routing stale 字段级 merge**
       - 保留 `routingSnapshot()`：只深拷贝 routing-owned 的 `BirdInstances`、`RoutingReconcile`，`Network`、link/IPsec 和其他 committed 子结构继续只读共享。
       - `commitRoutingIfRevision` 正常成功时按现有方式替换 routing-owned 字段；全局 revision stale 时不再调用 `commitRoutingBirdInstancesByNetNS`，不比较 owner token，也不按 netns merge。直接保留最新 committed、设置 `routingDirty` 并等待下一次完整 reconcile。
       - auto-announce 在同一 reconcile 内主动更新 Network 后必须继续重新取得 routing snapshot/revision，并基于提交后的 Network 重建 authorized route set；不得因为 single-writer 假设删除这次 refresh。
       - 删除只服务于 stale merge 的 helper/测试，增加防护测试：reconcile 被测试桩阻塞时人工推进 revision，旧 routing 结果不得覆盖新 state，服务必须重新标 dirty。生产路径出现 stale 应记录足够诊断信息，因为它意味着 single-writer 假设被绕过。
+      - 已完成：删除按 netns 重取 snapshot/比较 base/合并的 stale fallback；CAS stale 现在记录 source/current revision 与 changed netns，保留最新 committed 并发布 routing dirty。阻塞式 BIRD 测试覆盖 reconcile 中途推进全局 revision，确认旧 `BirdInstances`/`RoutingReconcile` 被整体丢弃且不会额外升 revision；auto-announce 后 refresh 保留。相关 app race、全量 `make check` 与 routing dry-run smoke 通过。
 
     - [ ] **7.11.6.3 以完整手写 clone 替换 JSON round-trip**
       - `cloneStateFile` 保持现有输入输出、nil 处理、detached 语义和 validation 配置语义，但不再调用 `json.Marshal`/`json.Unmarshal`。不得在本步骤删除 `BeginUpdate` 或 commit 的任一次 clone。
@@ -166,6 +168,7 @@
       - 明确保留 nil 与 empty map/slice 的区别；复制所有 `[]byte`、map、slice、pointer 和嵌套 pointer；函数 hook 不得通过 JSON 偶然丢失，app clone 完成后仍保证 `RecordVerifier`/`RecordHasher` 配置正确；不得复制 `stateFile.mu`。
       - 扩充 clone 完整性测试：修改 clone 的每个可变叶子均不得影响原值，反向修改原值也不得影响 clone；增加字段清单/schema guard，使 `stateFile` 或核心状态类型新增字段时测试强制提醒更新 clone。
       - 保留 record-heavy fixture benchmark，并增加包含 SyncPeers/IPsec/routing/firewall 的完整 `stateFile` benchmark；记录 JSON 基线与手写 clone 的 ns/op、B/op、allocs/op，随后重跑 2026-07-31 同负载 perf。
+      - 实现与代码验收已完成，等待同负载常驻 daemon 的实机 perf/strace 后勾选：`cloneStateFile` 和 core Network 已改为完整手写 clone，完整性、双向隔离、nil/empty、nil entry、validation hook 与 schema guard 测试通过。1000 records + 完整 peer/IPsec/routing/firewall fixture（3 次）中，JSON 基线为 4.39-4.43 ms / 1.15 MB / 8,968 allocs，手写 clone 为 0.222-0.246 ms / 479 KB / 4,057 allocs，约快 18-20 倍；当前环境没有运行中的同负载 Higgs daemon，尚未执行 `perf-cpu-check.sh`，因此本项暂不标完成且不提前进入 7.11.6.4。
 
     - [ ] **7.11.6.4 用 detached 只读投影替换高频完整 Snapshot**
       - 盘点 `snapshotState()`/`Snapshot()` 调用，按调用频率和返回数据量排序；优先替换只需要 ManagedZone、zone digests、catalog page、peer endpoint、route/link summary 的路径。

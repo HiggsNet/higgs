@@ -114,7 +114,7 @@ func BenchmarkDaemonStateStoreSnapshotStrategies(b *testing.B) {
 		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
 	})
 
-	b.Run("full-json-snapshot", func(b *testing.B) {
+	b.Run("full-handwritten-snapshot", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			benchmarkStateSnapshot, _ = store.Snapshot()

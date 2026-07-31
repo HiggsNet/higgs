@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/Catofes/higgs/pkg/routing/bird"
+	"fmt"
 	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"path/filepath"
 	"strings"
@@ -216,7 +216,7 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 	}
 }
 
-func TestReconcileRoutingMergesBirdInstanceWhenRevisionChanged(t *testing.T) {
+func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	state, config := buildTestNetworkStateForRouting(t)
 	now := time.Unix(4010, 0)
 
@@ -240,36 +240,71 @@ func TestReconcileRoutingMergesBirdInstanceWhenRevisionChanged(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	pm := &fakeBirdProcessManager{running: false}
-	service := newDaemonService(rt, state, config, time.Second)
-	pm.onStart = func(bird.BirdInstanceSpec) {
-		if _, err := service.StateStore.Update(func(state *stateFile) error {
-			state.IdentityKeyPath = "newer-routing-revision"
-			return nil
-		}); err != nil {
-			t.Fatalf("advance state revision during routing apply: %v", err)
-		}
+	pm := &blockingBirdProcessManager{
+		startedCh: make(chan struct{}),
+		unblock:   make(chan struct{}),
 	}
+	service := newDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	}
+	var logs strings.Builder
+	service.Log = &appLogger{level: logLevelDebug, out: &logs, now: func() time.Time { return now }}
 
-	if err := service.reconcileRouting(context.Background()); err != nil {
+	initialRev := service.StateStore.Meta().Revision
+	done := make(chan error, 1)
+	go func() {
+		done <- service.reconcileRouting(context.Background())
+	}()
+	select {
+	case <-pm.startedCh:
+	case <-time.After(time.Second):
+		close(pm.unblock)
+		t.Fatal("routing reconcile did not enter blocking BIRD start")
+	}
+
+	newerRev, err := service.StateStore.Update(func(state *stateFile) error {
+		state.IdentityKeyPath = "newer-routing-revision"
+		return nil
+	})
+	if err != nil {
+		close(pm.unblock)
+		t.Fatalf("advance state revision during routing apply: %v", err)
+	}
+	if newerRev != initialRev+1 {
+		close(pm.unblock)
+		t.Fatalf("newer revision = %d, want %d", newerRev, initialRev+1)
+	}
+	close(pm.unblock)
+	if err := <-done; err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
-	if service.routingDirty {
-		t.Fatal("routingDirty = true, want token-compatible BIRD instance merge to complete")
+	if !service.routingDirty {
+		t.Fatal("routingDirty = false, want stale reconcile to be retried")
+	}
+	meta := service.StateStore.Meta()
+	if meta.Revision != newerRev {
+		t.Fatalf("stale reconcile advanced revision: got %d want %d", meta.Revision, newerRev)
+	}
+	if !meta.Dirty.Routing {
+		t.Fatal("state store routing dirty flag = false, want retry visible to readers")
 	}
 	snapshot, _ := service.StateStore.Snapshot()
 	if snapshot.IdentityKeyPath != "newer-routing-revision" {
 		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
 	}
-	if len(snapshot.BirdInstances) != 1 || snapshot.BirdInstances["higgstesth2"] == nil {
-		t.Fatalf("bird instances = %+v, want merged higgstesth2 instance", snapshot.BirdInstances)
+	if len(snapshot.BirdInstances) != 0 {
+		t.Fatalf("bird instances = %+v, want stale result discarded", snapshot.BirdInstances)
 	}
-	if snapshot.RoutingReconcile == nil || snapshot.RoutingReconcile.LastError != "" {
-		t.Fatalf("routing reconcile = %+v, want successful summary", snapshot.RoutingReconcile)
+	if snapshot.RoutingReconcile != nil {
+		t.Fatalf("routing reconcile = %+v, want stale summary discarded", snapshot.RoutingReconcile)
+	}
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, "event=stale_reconcile_result") ||
+		!strings.Contains(logOutput, "source_revision="+fmt.Sprint(initialRev)) ||
+		!strings.Contains(logOutput, "current_revision="+fmt.Sprint(newerRev)) {
+		t.Fatalf("stale reconcile log lacks revision diagnostics: %s", logOutput)
 	}
 }
 

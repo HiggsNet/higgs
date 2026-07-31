@@ -102,9 +102,7 @@ func cloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstan
 	}
 	out := make(map[string]*BirdInstanceState, len(in))
 	for id, inst := range in {
-		if cloned := cloneBirdInstance(inst); cloned != nil {
-			out[id] = cloned
-		}
+		out[id] = cloneBirdInstance(inst)
 	}
 	return out
 }
@@ -115,7 +113,8 @@ func cloneBirdInstance(inst *BirdInstanceState) *BirdInstanceState {
 	}
 	out := *inst
 	if inst.Overlays != nil {
-		out.Overlays = append([]string(nil), inst.Overlays...)
+		out.Overlays = make([]string, len(inst.Overlays))
+		copy(out.Overlays, inst.Overlays)
 	}
 	return &out
 }
@@ -131,6 +130,7 @@ func cloneFirewallReconcileState(in *firewallReconcileState) *firewallReconcileS
 		out.Instances = make(map[string]*firewallInstanceReconcileStateEntry, len(in.Instances))
 		for id, entry := range in.Instances {
 			if entry == nil {
+				out.Instances[id] = nil
 				continue
 			}
 			copyEntry := *entry

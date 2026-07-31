@@ -3,9 +3,11 @@ package gossip
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -228,6 +230,212 @@ func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	}
 }
 
+func TestApplySnapshotTrustFailureLeavesNetworkUnchanged(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, _ := testNetwork(t)
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	untrustedPublicKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(untrusted): %v", err)
+	}
+	snapshot.Authority.Keys[0].Key = untrustedPublicKey
+
+	target := snapshotAtomicityTarget(source)
+	before := captureNetworkState(t, target)
+	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrUntrustedZone) {
+		t.Fatalf("ApplySnapshot = %v, want ErrUntrustedZone", err)
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotDelegationFailureLeavesNetworkUnchanged(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	childPublicKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(child): %v", err)
+	}
+	childAuthority := zone.ZoneAuthority{
+		Zone:      "node-a.catofes.",
+		Epoch:     1,
+		Threshold: higgscrypto.SupportedThreshold,
+		Keys: []zone.AuthorizedKey{{
+			Key: childPublicKey,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+	delegation := &zone.Delegation{
+		ZoneName:  childAuthority.Zone,
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: childAuthority,
+	}
+	if err := higgscrypto.SignDelegation(delegation, "catofes.", zonePrivateKey); err != nil {
+		t.Fatalf("SignDelegation(child): %v", err)
+	}
+	delegation.Signature[0] ^= 0xff
+
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	snapshot.Delegations[delegation.ZoneName] = delegation
+
+	target := snapshotAtomicityTarget(source)
+	before := captureNetworkState(t, target)
+	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err == nil {
+		t.Fatal("ApplySnapshot succeeded with an invalid delegation")
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotRevocationFailureLeavesNetworkUnchanged(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	revocation := &zone.DelegationRevocation{
+		ChildZone:             "node-a.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: 1,
+		RevokedAuthorityHash:  []byte("child-authority"),
+		Reason:                "test",
+		RevokedAt:             now.Unix(),
+	}
+	if err := higgscrypto.SignDelegationRevocation(revocation, "catofes.", zonePrivateKey); err != nil {
+		t.Fatalf("SignDelegationRevocation(child): %v", err)
+	}
+	revocation.Signature[0] ^= 0xff
+
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	snapshot.Revocations[revocation.ChildZone] = revocation
+
+	target := snapshotAtomicityTarget(source)
+	before := captureNetworkState(t, target)
+	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err == nil {
+		t.Fatal("ApplySnapshot succeeded with an invalid revocation")
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotRecordFailureAfterSuccessLeavesNetworkUnchanged(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	first := signedRecord(t, zonePrivateKey, "catofes.", "a-valid", []byte("first"), 1, nil, now.Unix())
+	if err := source.PutAt(first, now); err != nil {
+		t.Fatalf("PutAt(first): %v", err)
+	}
+	second := signedRecord(t, zonePrivateKey, "catofes.", "z-invalid", []byte("second"), 1, nil, now.Unix())
+	if err := source.PutAt(second, now); err != nil {
+		t.Fatalf("PutAt(second): %v", err)
+	}
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	snapshot.Records["z-invalid"].Signature[0] ^= 0xff
+
+	target := snapshotAtomicityTarget(source)
+	delete(target.Zones["catofes."].Records, "a-valid")
+	delete(target.Zones["catofes."].Records, "z-invalid")
+	before := captureNetworkState(t, target)
+	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err == nil {
+		t.Fatal("ApplySnapshot succeeded with an invalid second record")
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotSkipsStaleAndConflictingRecords(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	stale := signedRecord(t, zonePrivateKey, "catofes.", "stale", []byte("remote-v1"), 1, nil, now.Unix())
+	conflict := signedRecord(t, zonePrivateKey, "catofes.", "conflict", []byte("remote"), 1, nil, now.Unix())
+	if err := source.PutAt(stale, now); err != nil {
+		t.Fatalf("PutAt(stale): %v", err)
+	}
+	if err := source.PutAt(conflict, now); err != nil {
+		t.Fatalf("PutAt(conflict): %v", err)
+	}
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	target := cloneNetworkState(source)
+	target.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	targetStaleV1 := signedRecord(t, zonePrivateKey, "catofes.", "stale", []byte("local-v1"), 1, nil, now.Unix())
+	targetStaleV2 := signedRecord(t, zonePrivateKey, "catofes.", "stale", []byte("local-v2"), 2, higgscrypto.RecordHash(targetStaleV1), now.Unix()+1)
+	target.Zones["catofes."].Records["stale"] = targetStaleV2
+	target.Zones["catofes."].Records["conflict"] = signedRecord(t, zonePrivateKey, "catofes.", "conflict", []byte("local"), 1, nil, now.Unix())
+
+	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
+	}
+	if result.Records != 0 {
+		t.Fatalf("applied records = %d, want 0", result.Records)
+	}
+	if got := string(target.Zones["catofes."].Records["stale"].Value); got != "local-v2" {
+		t.Fatalf("stale record = %q, want local-v2", got)
+	}
+	if got := string(target.Zones["catofes."].Records["conflict"].Value); got != "local" {
+		t.Fatalf("conflicting record = %q, want local", got)
+	}
+}
+
+func TestApplySnapshotSuccessInstallsDetachedCandidate(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	v1 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v1"), 1, nil, now.Unix())
+	if err := source.PutAt(v1, now); err != nil {
+		t.Fatalf("PutAt(v1): %v", err)
+	}
+	target := cloneNetworkState(source)
+	target.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	target.Zones[zone.RootZone].RecordHistory = nil
+	previousTargetZone := target.Zones["catofes."]
+
+	v2 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v2"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
+	if err := source.PutAt(v2, now); err != nil {
+		t.Fatalf("PutAt(v2): %v", err)
+	}
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
+	}
+	if result.Records != 1 {
+		t.Fatalf("applied records = %d, want 1", result.Records)
+	}
+	if target.Zones["catofes."] == previousTargetZone {
+		t.Fatal("successful apply retained the old mutable target zone")
+	}
+	if target.Zones[zone.RootZone].RecordHistory != nil {
+		t.Fatalf("unrelated nil record history became non-nil: %#v", target.Zones[zone.RootZone].RecordHistory)
+	}
+	history := target.Zones["catofes."].RecordHistory["identity"]
+	if len(history) != 1 || string(history[0].Value) != "v1" {
+		t.Fatalf("record history = %#v, want detached v1", history)
+	}
+
+	previousTargetZone.Records["identity"].Value[0] = 'x'
+	snapshot.Records["identity"].Value[0] = 'y'
+	if got := string(target.Zones["catofes."].Records["identity"].Value); got != "v2" {
+		t.Fatalf("installed record changed through retained input: %q", got)
+	}
+}
+
 func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, _, zonePriv := testNetworkWithKeys(t)
@@ -416,6 +624,57 @@ func emptySnapshotTarget(source *zone.NetworkState) *zone.NetworkState {
 	target.Zones["catofes."].Records = make(map[string]*zone.Record)
 	target.Zones["catofes."].RecordHistory = make(map[string][]*zone.Record)
 	return target
+}
+
+type capturedNetworkState struct {
+	data            []byte
+	verifierPointer uintptr
+	hasherPointer   uintptr
+}
+
+func snapshotAtomicityTarget(source *zone.NetworkState) *zone.NetworkState {
+	target := cloneNetworkState(source)
+	target.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	target.GlobalRoot = []byte("global-root")
+	target.Zones["catofes."].MerkleRoot = []byte("zone-root")
+	target.Zones["catofes."].RecordHistory["local"] = []*zone.Record{{
+		Zone:    "catofes.",
+		Key:     "local",
+		Type:    "test",
+		Value:   []byte("history"),
+		Version: 1,
+	}}
+	return target
+}
+
+func captureNetworkState(t *testing.T, ns *zone.NetworkState) capturedNetworkState {
+	t.Helper()
+	data, err := json.Marshal(ns)
+	if err != nil {
+		t.Fatalf("Marshal(network state): %v", err)
+	}
+	return capturedNetworkState{
+		data:            data,
+		verifierPointer: reflect.ValueOf(ns.RecordVerifier).Pointer(),
+		hasherPointer:   reflect.ValueOf(ns.RecordHasher).Pointer(),
+	}
+}
+
+func assertNetworkStateUnchanged(t *testing.T, ns *zone.NetworkState, before capturedNetworkState) {
+	t.Helper()
+	data, err := json.Marshal(ns)
+	if err != nil {
+		t.Fatalf("Marshal(network state after apply): %v", err)
+	}
+	if !bytes.Equal(data, before.data) {
+		t.Fatalf("network state changed after failed apply:\nbefore: %s\nafter:  %s", before.data, data)
+	}
+	if got := reflect.ValueOf(ns.RecordVerifier).Pointer(); got != before.verifierPointer {
+		t.Fatalf("record verifier changed after failed apply: got %x, want %x", got, before.verifierPointer)
+	}
+	if got := reflect.ValueOf(ns.RecordHasher).Pointer(); got != before.hasherPointer {
+		t.Fatalf("record hasher changed after failed apply: got %x, want %x", got, before.hasherPointer)
+	}
 }
 
 func testNetwork(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey) {
