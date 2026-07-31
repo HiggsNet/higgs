@@ -84,9 +84,11 @@ func TestJoinFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
-	if _, err := gossip.ApplySnapshot(siblingBundle.Network, nodeBSnapshot, timeNow(), gossip.DefaultSyncLimits()); err != nil {
+	nextNetwork, _, err := gossip.ApplySnapshot(siblingBundle.Network, nodeBSnapshot, timeNow(), gossip.DefaultSyncLimits())
+	if err != nil {
 		t.Fatalf("ApplySnapshot(node-b into node-a bundle): %v", err)
 	}
+	siblingBundle.Network = nextNetwork
 
 	t.Setenv("HIGGS_CONFIG", nodeConfig)
 	if err := acceptJoinBundle(bundlePath, keyPath, true); err != nil {

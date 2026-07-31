@@ -78,43 +78,47 @@ func RecordSnapshotFor(ns *zone.NetworkState, fetch *FetchRecord) (*RecordSnapsh
 	return nil, fmt.Errorf("%w: %s/%s", zone.ErrRecordNotFound, fetch.Zone, fetch.Key)
 }
 
-func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits) (*ApplyResult, error) {
+// ApplySnapshot validates and applies snapshot to a detached target-zone COW
+// candidate. It never mutates ns. On success the caller owns the returned
+// NetworkState and may publish it atomically; on failure no candidate is
+// returned.
+func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits) (*zone.NetworkState, *ApplyResult, error) {
 	if ns == nil {
-		return nil, errors.New("network state is nil")
+		return nil, nil, errors.New("network state is nil")
 	}
 	if snapshot == nil {
-		return nil, errors.New("zone snapshot is nil")
+		return nil, nil, errors.New("zone snapshot is nil")
 	}
 	if !snapshot.Zone.Valid() {
-		return nil, zone.ErrInvalidZonePath
+		return nil, nil, zone.ErrInvalidZonePath
 	}
 	if ns.IsZoneRevoked(snapshot.Zone, now) {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneRevoked, snapshot.Zone)
+		return nil, nil, fmt.Errorf("%w: %s", zone.ErrZoneRevoked, snapshot.Zone)
 	}
 	if limits == (SyncLimits{}) {
 		limits = DefaultSyncLimits()
 	}
 	if err := checkSnapshotLimits(snapshot, limits); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	candidate := cloneNetworkState(ns)
+	candidate := zone.CloneNetworkStateForZone(ns, snapshot.Zone)
 	candidate.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
 	active := candidate.Zones[snapshot.Zone]
 	candidate.Zones[snapshot.Zone] = snapshotZoneState(snapshot)
 	if err := higgscrypto.VerifyChain(candidate, snapshot.Zone, now); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUntrustedZone, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrUntrustedZone, err)
 	}
 
 	zs := candidate.Zones[snapshot.Zone]
 	for child, delegation := range zs.Delegations {
 		if err := higgscrypto.VerifyDelegation(delegation, zs.Authority, snapshot.Zone, now); err != nil {
-			return nil, fmt.Errorf("verify delegation %s: %w", child, err)
+			return nil, nil, fmt.Errorf("verify delegation %s: %w", child, err)
 		}
 	}
 	for child, revocation := range zs.Revocations {
 		if err := higgscrypto.VerifyDelegationRevocation(revocation, zs.Authority, snapshot.Zone, now); err != nil {
-			return nil, fmt.Errorf("verify revocation %s: %w", child, err)
+			return nil, nil, fmt.Errorf("verify revocation %s: %w", child, err)
 		}
 	}
 
@@ -156,7 +160,7 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 		case errors.Is(err, zone.ErrStaleRecord), errors.Is(err, zone.ErrRecordConflict):
 			continue
 		default:
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -165,8 +169,7 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 		Records:    applied,
 		Delegation: len(active.Delegations),
 	}
-	*ns = *candidate
-	return result, nil
+	return candidate, result, nil
 }
 
 func checkSnapshotLimits(snapshot *ZoneSnapshot, limits SyncLimits) error {

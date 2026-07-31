@@ -194,17 +194,19 @@
       - 回归测试必须故意让 CLI 本地 DB 与 daemon committed state 不一致：本地有 pool/assignment 而 daemon 没有、本地旧 active record 而 daemon 已撤销/替换、本地 service endpoint 合法而 daemon assignment 已变化；在线 client 不应读取该本地 DB，daemon 应按自己的 revision 接受或拒绝，拒绝时 revision、record/history、磁盘和 reconcile 均不变。另覆盖 daemon typed dry-run 与真实 mutation 使用同一验证结果、online/direct 复用同一领域 mutation、raw `record_put` 保留命名空间拒绝、socket 缺失 mutation 不落盘、显式 `--direct` 才允许离线恢复，以及旧 client/new daemon 的 fail-closed 兼容行为。
       - 已完成：IPAM pool/assignment、route announce/withdraw 和 SOCKS5 service publish/withdraw 全部改为 typed intent；client 在线路径不再加载本地 StateStore，daemon 在 committed revision 的 detached Network workspace 上完成规范化、权限、pool/assignment/active-record/service endpoint 校验、签名和一次提交，direct 路径复用相同领域 mutation。通用 `record_put` 在 control 和 event 两层集中拒绝 IPAM/routes/services/routing/IPsec/sync endpoint 的保留 key/type；旧 client 的 raw 保留命名空间写会 fail closed。除 daemon 启动前的 `root init` bootstrap 外，所有管理 mutation 在 socket 缺失时返回错误，离线恢复/写入必须显式 `--direct`，Makefile smoke fixture 也已逐项显式声明；原 fallback smoke 改为验证先拒绝且不落盘、再显式 direct。daemon `runStateStoreWrite`、join accept、Endpoint ACL 和 IPsec cleanup 均改以 committed StateStore 为 authority，其中 join accept 不再内部 SaveState/reload，Endpoint ACL 校验与 firewall-owned CAS 绑定同一 revision。回归覆盖磁盘与 committed pool 状态双向不一致、拒绝不升 revision/不落盘、typed dry-run、direct/daemon 同源错误、typed control event、raw 保留命名空间拒绝和 socket 缺失不落盘；app/gossip race、全量 `make check`、admin daemon、phase3 fail-closed、chain relay、delegation revoke、routing/IPsec/firewall dry-run smoke 均通过。
 
-    - [ ] **7.11.6.7 实现 Network target-zone COW**
+    - [x] **7.11.6.7 实现 Network target-zone COW**
       - 在 7.11.6.1 的失败原子性稳定后，将 Network 写入从完整 Network clone 收敛为：浅复制 `NetworkState` root、复制 `Zones` map、完整复制目标 `ZoneState` 及实际会修改的 records/history/delegation/revocation；其他 zone 跨 revision 只读共享。
       - `ApplySnapshot`/Network mutation 应返回 detached 新 Network 或 typed patch，不直接修改传入 Network。validation 可在新 root 上读取共享祖先 zone，但只能修改 detached 目标 zone；成功后一次性挂到新 state root，失败直接丢弃 candidate。
       - 第一版不启用 `MerkleRoot`/digest cache；当前 root 缓存没有覆盖所有 mutation 的完整失效协议，不能与 target-zone COW 同时引入。
       - 测试覆盖：未修改 zone 确实共享、目标 zone 完全 detached、祖先 delegation/revocation 读取正确、目标 records/history 更新不泄漏、失败不变、连续更新同一 zone、不同 zone 顺序更新和 race。benchmark 分别使用单大 zone、多小 zone 和 history-heavy fixture。
+      - 已完成：新增 `CloneNetworkStateForZone`，仅浅复制 Network root、复制 `Zones` map 并完整 detach 目标 `ZoneState`；`ApplySnapshot` 改为返回 detached candidate，不再修改输入，祖先 zone 保持只读共享。daemon 普通 record、IPAM、route、service typed mutation 也改用 target-zone workspace 和 ownership-transfer CAS commit，candidate validation 不再完整 clone Network；未引入 `MerkleRoot`/digest cache。回归覆盖结构共享、目标深层隔离、失败原子性、祖先 proof/revocation、同 zone 连续更新、不同 zone 正反顺序和 race；benchmark 覆盖单大 zone、多小 zone与 history-heavy fixture。
 
-    - [ ] **7.11.6.8 最后评估批量 `ApplySnapshot`**
+    - [x] **7.11.6.8 最后评估批量 `ApplySnapshot`**
       - 只有单 action 原子性、target-zone COW 和 typed Network commit 均验收后才开始；若新 perf 已不再显示 snapshot commit/persist 为热点，本项可以继续保留而不实现。
       - 必须保留当前“合法 action 成功、非法 action 被拒绝、后续 action 继续”的部分成功语义。每个 action 使用独立 savepoint：从批次工作 Network 创建 candidate，成功才推进批次工作副本，失败丢弃该 candidate 并记录 rejected digest。
       - 批次结束后最多一次 committed root 发布和一次持久化；日志、事件通知、transport send 等副作用只能基于成功提交的结果执行。虽然 single-writer 下正常不会 stale，意外 stale 时仍应丢弃整个批次结果并重新排队，不能直接重放带副作用的 callback。
       - 明确并测试可见性变化：读者从“可能看到逐 action 的中间 revision”变为“只看到最终批次 revision”。若该变化不可接受，则保持逐 action commit，只复用 target-zone COW，不实施批量发布。
+      - 已完成：同一 sync event 的 snapshot actions 先收集为批次，每个 action 从当前批次工作 Network 创建独立 target-zone candidate；合法 action 推进 savepoint，非法 action 只记录 rejected digest，后续 action 继续。批次最终通过一次 CAS 发布一个 committed revision，成功后只持久化一次；stale 会丢弃并从新 committed root 重新计算整批，日志和 transport 等外部副作用均移到成功发布后。可见性明确为读者只观察到最终批次 revision；回归覆盖“成功—拒绝—后续成功”的部分成功、rejected digest、未修改 zone 共享、两个成功 target detach、单 revision 发布和持久化 reload。
 
     **阶段验收**
     - 必跑 `go test ./pkg/core/gossip ./pkg/core/zone ./app/higgs`、相关 `-race` 测试、`make check` 以及 snapshot/routing/sync smoke；涉及真实 BIRD/IPsec 行为的步骤继续跑对应 root smoke。
@@ -274,8 +276,7 @@
 
 ## 下一步
 
-1. 当前执行队列为 7.11.6 StateStore 正确性、手写 clone 与分层 COW；7.11.6.6 authoritative mutation/fail-closed 安全收口已完成，下一步继续 7.11.6.7 target-zone COW，最后评估 7.11.6.8 批量 snapshot apply。
-2. 每完成一个 7.11.6 子阶段都先运行对应测试、race、benchmark 和同负载 perf，再决定是否继续下一结构优化；7.11.6.8 批量 snapshot apply 不是必做项。
-3. StateStore 性能主线收口后，再按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
-4. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-5. Phase 8、Phase 9 已完成验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
+1. 7.11.6 StateStore 正确性、手写 clone、分层/target-zone COW 与批量 snapshot apply 已完成；后续先保持相同 fixture 观察实机 perf，不继续引入 `MerkleRoot`/digest cache，除非 profile 再次证明 digest 计算为热点。
+2. StateStore 性能主线已收口；下一步按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel，WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
+3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
+4. Phase 8、Phase 9 已完成验收；客户端服务选择和应用层 relay 按需作为独立项目评估。

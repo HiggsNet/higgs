@@ -281,6 +281,71 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	}
 }
 
+func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2210, 0)
+	validParent, err := gossip.Snapshot(state.Network, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(catofes): %v", err)
+	}
+	invalidParent, err := gossip.Snapshot(state.Network, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(invalid catofes): %v", err)
+	}
+	invalidParent.Authority.Keys[0].Key[0] ^= 0xff
+	validChild, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+
+	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "higgs.db"), Clock: func() time.Time { return now }}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	session := NewSyncSession("node-b.catofes.")
+	beforeRevision := service.StateStore.Meta().Revision
+	var beforeRoot, beforeParent, beforeChild *zone.ZoneState
+	service.StateStore.ReadCommitted(func(committed *stateFile) {
+		beforeRoot = committed.Network.Zones[zone.RootZone]
+		beforeParent = committed.Network.Zones["catofes."]
+		beforeChild = committed.Network.Zones["node-b.catofes."]
+	})
+
+	changed := service.executeSyncActions(context.Background(), session, []SyncAction{
+		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: validParent},
+		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: invalidParent},
+		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: validChild},
+	})
+	if !changed {
+		t.Fatal("executeSyncActions changed = false, want partial success")
+	}
+
+	if revision := service.StateStore.Meta().Revision; revision != beforeRevision+1 {
+		t.Fatalf("revision = %d, want one batch publication after %d", revision, beforeRevision)
+	}
+	service.StateStore.ReadCommitted(func(committed *stateFile) {
+		if committed.Network.Zones[zone.RootZone] != beforeRoot {
+			t.Fatal("unmodified root zone was not shared by batch commit")
+		}
+		if committed.Network.Zones["catofes."] == beforeParent {
+			t.Fatal("successful parent savepoint was not detached")
+		}
+		if committed.Network.Zones["node-b.catofes."] == beforeChild {
+			t.Fatal("later successful child savepoint did not run")
+		}
+		rejected, ok := committed.SyncPeers[session.PeerID].RejectedDigests[rejectedDigestKey("catofes.")]
+		if !ok || rejected.Reason == "" {
+			t.Fatalf("invalid middle savepoint rejection = %+v, present=%t", rejected, ok)
+		}
+	})
+
+	reloaded, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if reloaded.Network.Zones["catofes."] == nil || reloaded.Network.Zones["node-b.catofes."] == nil {
+		t.Fatal("persisted batch is missing a successful snapshot")
+	}
+}
+
 func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	udpChunkAssemblies = newChunkAssemblyStore()
 	sourceState, _ := buildTestNetworkState(t)

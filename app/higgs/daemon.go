@@ -1063,26 +1063,26 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		version, err := d.handleRecordPutEvent(event.RecordPut)
 		return daemonEventResult{Version: version, Error: err}, err == nil, false
 	case daemonEventIPAMMutation:
-		result, err := d.handleRecordMutationEvent(func(state *stateFile) (*recordMutationResult, error) {
-			if event.IPAM == nil {
-				return nil, errors.New("ipam mutation event is nil")
-			}
+		if event.IPAM == nil {
+			return daemonEventResult{Error: errors.New("ipam mutation event is nil")}, false, false
+		}
+		result, err := d.handleRecordMutationEvent(event.IPAM.Zone, func(state *stateFile) (*recordMutationResult, error) {
 			return applyIPAMMutation(state, *event.IPAM, d.Sync.now())
 		})
 		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
 	case daemonEventRouteMutation:
-		result, err := d.handleRecordMutationEvent(func(state *stateFile) (*recordMutationResult, error) {
-			if event.Route == nil {
-				return nil, errors.New("route mutation event is nil")
-			}
+		if event.Route == nil {
+			return daemonEventResult{Error: errors.New("route mutation event is nil")}, false, false
+		}
+		result, err := d.handleRecordMutationEvent(event.Route.Zone, func(state *stateFile) (*recordMutationResult, error) {
 			return applyRouteMutation(state, *event.Route, d.Sync.now())
 		})
 		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
 	case daemonEventServiceMutation:
-		result, err := d.handleRecordMutationEvent(func(state *stateFile) (*recordMutationResult, error) {
-			if event.Service == nil {
-				return nil, errors.New("service mutation event is nil")
-			}
+		if event.Service == nil {
+			return daemonEventResult{Error: errors.New("service mutation event is nil")}, false, false
+		}
+		result, err := d.handleRecordMutationEvent("", func(state *stateFile) (*recordMutationResult, error) {
 			return applyServiceMutation(state, *event.Service, d.Sync.now())
 		})
 		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
@@ -1556,7 +1556,7 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	if d.StateStore == nil {
 		return 0, errors.New("daemon service is not initialized")
 	}
-	workspace, rev := d.StateStore.networkSnapshot()
+	workspace, rev := d.StateStore.networkZoneSnapshot(event.Zone)
 	if workspace == nil || workspace.Network == nil {
 		return 0, errors.New("daemon state network is nil")
 	}
@@ -1573,7 +1573,7 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	if zs := workspace.Network.Zones[event.Zone]; zs != nil {
 		recordCount = len(zs.Records)
 	}
-	if _, committed := d.StateStore.commitNetworkIfRevision(rev, workspace.Network); !committed {
+	if _, committed := d.StateStore.commitNetworkCandidateIfRevision(rev, workspace.Network); !committed {
 		return 0, errDaemonStateRevisionStale
 	}
 	d.logInfo("daemon", "record_put_persist", map[string]any{
@@ -1598,11 +1598,11 @@ func recordMutationVersion(result *recordMutationResult) uint64 {
 	return result.Version
 }
 
-func (d *DaemonService) handleRecordMutationEvent(apply func(*stateFile) (*recordMutationResult, error)) (*recordMutationResult, error) {
+func (d *DaemonService) handleRecordMutationEvent(targetZone zone.ZonePath, apply func(*stateFile) (*recordMutationResult, error)) (*recordMutationResult, error) {
 	if d == nil || d.Sync == nil || d.StateStore == nil || apply == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
-	workspace, rev := d.StateStore.networkSnapshot()
+	workspace, rev := d.StateStore.networkZoneSnapshot(targetZone)
 	if workspace == nil || workspace.Network == nil {
 		return nil, errors.New("daemon state network is nil")
 	}
@@ -1616,7 +1616,7 @@ func (d *DaemonService) handleRecordMutationEvent(apply func(*stateFile) (*recor
 	if result.DryRun {
 		return result, nil
 	}
-	if _, committed := d.StateStore.commitNetworkIfRevision(rev, workspace.Network); !committed {
+	if _, committed := d.StateStore.commitNetworkCandidateIfRevision(rev, workspace.Network); !committed {
 		return nil, errDaemonStateRevisionStale
 	}
 	if err := d.saveCommittedState(); err != nil {

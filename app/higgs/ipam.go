@@ -362,7 +362,7 @@ func applyIPAMMutation(state *stateFile, request ipamMutationRequest, now time.T
 }
 
 func validateIPAMCandidate(state *stateFile, path zone.ZonePath, key string, value []byte, recordType, canonical string, now time.Time, rejectCodes ...string) error {
-	ns := cloneNetworkStateForCandidateValidation(state.Network)
+	ns := cloneNetworkStateForCandidateValidation(state.Network, path)
 	zs := ns.Zones[path]
 	if zs == nil {
 		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)

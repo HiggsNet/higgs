@@ -20,6 +20,34 @@ func CloneNetworkState(ns *NetworkState) *NetworkState {
 	return out
 }
 
+// CloneNetworkStateForZone returns a copy-on-write NetworkState candidate for
+// mutations confined to path. The NetworkState root and Zones map are
+// detached, path is cloned completely, and every other zone remains shared
+// and must be treated as immutable.
+//
+// MerkleRoot and GlobalRoot are copied as ordinary data. They are not used as
+// mutable digest caches, so target-zone COW does not introduce a cache
+// invalidation protocol.
+func CloneNetworkStateForZone(ns *NetworkState, path ZonePath) *NetworkState {
+	if ns == nil {
+		return nil
+	}
+	out := *ns
+	out.GlobalRoot = cloneBytes(ns.GlobalRoot)
+	if ns.Zones == nil {
+		out.Zones = make(map[ZonePath]*ZoneState)
+		return &out
+	}
+	out.Zones = make(map[ZonePath]*ZoneState, len(ns.Zones)+1)
+	for zonePath, state := range ns.Zones {
+		out.Zones[zonePath] = state
+	}
+	if state, ok := ns.Zones[path]; ok {
+		out.Zones[path] = cloneZoneState(state)
+	}
+	return &out
+}
+
 func cloneZoneState(state *ZoneState) *ZoneState {
 	if state == nil {
 		return nil

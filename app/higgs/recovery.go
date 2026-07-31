@@ -313,7 +313,7 @@ func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.Z
 	}
 	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
-	result, err := gossip.ApplySnapshot(state.Network, snapshot, rt.Now(), limits)
+	nextNetwork, result, err := gossip.ApplySnapshot(state.Network, snapshot, rt.Now(), limits)
 	if err != nil {
 		return nil, err
 	}
@@ -321,9 +321,10 @@ func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.Z
 	if rt.Config != nil {
 		trustedRoot = rt.Config.TrustedRootPublicKey
 	}
-	if err := verifyConfiguredRootTrustAt(state.Network, trustedRoot); err != nil {
+	if err := verifyConfiguredRootTrustAt(nextNetwork, trustedRoot); err != nil {
 		return nil, err
 	}
+	state.Network = nextNetwork
 	return result, nil
 }
 

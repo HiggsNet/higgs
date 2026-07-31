@@ -761,65 +761,105 @@ func (b *syncPeerStateMutationBatch) commit(d *DaemonService) {
 	d.recordSyncPeerStateBatch(b.peerID, strings.Join(labels, ","), fns...)
 }
 
-func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
-	if d == nil || d.Sync == nil || action.Snapshot == nil {
-		return nil, false, nil
-	}
-	if d.StateStore == nil {
+type syncSnapshotApply struct {
+	action ApplySnapshotAction
+	limits gossip.SyncLimits
+}
+
+type syncSnapshotOutcome struct {
+	result      *gossip.ApplyResult
+	applyErr    error
+	adopted     bool
+	adoptionErr error
+	managedZone zone.ZonePath
+}
+
+// applySyncSnapshotBatch gives every action an independent target-zone COW
+// savepoint, then publishes the final working root once. The callback body is
+// pure with respect to external effects, so an unexpected stale revision can
+// discard and recompute the complete batch safely.
+func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnapshotApply, now time.Time) ([]syncSnapshotOutcome, bool, error) {
+	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return nil, false, errors.New("daemon service is not initialized")
 	}
-
-	var result *gossip.ApplyResult
-	var applied bool
-	var applyErr error
-	var adopted bool
-	var adoptionErr error
-	var managedZone zone.ZonePath
-	_, err := d.StateStore.Update(func(state *stateFile) error {
+	for attempt := 0; attempt < maxSyncPeerUpdateAttempts; attempt++ {
+		state, revision := d.StateStore.snapshotApplyWorkspace()
 		if state == nil || state.Network == nil {
-			return errors.New("daemon state network is nil")
+			return nil, false, errors.New("daemon state network is nil")
 		}
-		if state.Network.RecordVerifier == nil {
-			configureValidation(state.Network)
+		outcomes := make([]syncSnapshotOutcome, len(applies))
+		dirty := false
+		for i, apply := range applies {
+			snapshot := apply.action.Snapshot
+			if snapshot == nil {
+				continue
+			}
+			outcome := &outcomes[i]
+			outcome.managedZone = state.ManagedZone
+			nextNetwork, result, err := gossip.ApplySnapshot(state.Network, snapshot, now, apply.limits)
+			if err != nil {
+				outcome.applyErr = err
+				recordRejectedDigest(state, peerID, digestForSnapshot(snapshot), gossip.RejectReason(err), now)
+				dirty = true
+				continue
+			}
+
+			// Successful action: advancing state.Network is this action's
+			// savepoint commit. A later rejected action cannot mutate it.
+			state.Network = nextNetwork
+			clearRejectedDigest(state, peerID, snapshot.Zone)
+			outcome.result = result
+			outcome.adopted, outcome.adoptionErr = tryAdoptAutoJoinDelegation(state, now)
+			recordAdoptionResult(state, outcome.adopted, outcome.adoptionErr, now)
+			if !outcome.adopted && outcome.adoptionErr == nil {
+				recordBootstrapSyncSuccess(state, peerID, d.Sync.Config, now)
+			}
+			dirty = true
 		}
-		managedZone = state.ManagedZone
-		nextResult, err := gossip.ApplySnapshot(state.Network, action.Snapshot, now, limits)
-		if err != nil {
-			applyErr = err
-			recordRejectedDigest(state, peerID, digestForSnapshot(action.Snapshot), gossip.RejectReason(err), now)
-			return nil
+		if !dirty {
+			return outcomes, false, nil
 		}
-		clearRejectedDigest(state, peerID, action.Snapshot.Zone)
-		result = nextResult
-		applied = true
-		adopted, adoptionErr = tryAdoptAutoJoinDelegation(state, now)
-		recordAdoptionResult(state, adopted, adoptionErr, now)
-		if !adopted && adoptionErr == nil {
-			recordBootstrapSyncSuccess(state, peerID, d.Sync.Config, now)
+		if _, committed := d.StateStore.commitSnapshotApplyIfRevision(revision, state); committed {
+			return outcomes, true, nil
 		}
-		return nil
-	})
+	}
+	return nil, false, errDaemonStateRevisionStale
+}
+
+func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotOutcome) {
+	if outcome.adoptionErr != nil {
+		d.logWarn("auto_join", "adopt_failed", map[string]any{
+			"peer_id": peerID,
+			"zone":    outcome.managedZone,
+			"via":     "event_loop",
+			"error":   outcome.adoptionErr,
+		})
+	} else if outcome.adopted {
+		d.logInfo("auto_join", "adopted", map[string]any{
+			"peer_id": peerID,
+			"zone":    outcome.managedZone,
+			"via":     "event_loop",
+		})
+	}
+}
+
+func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
+	if action.Snapshot == nil {
+		return nil, false, nil
+	}
+	outcomes, committed, err := d.applySyncSnapshotBatch(peerID, []syncSnapshotApply{{action: action, limits: limits}}, now)
 	if err != nil {
 		return nil, false, err
 	}
-	if !applied {
-		return nil, false, applyErr
+	if !committed || len(outcomes) == 0 {
+		return nil, false, nil
 	}
-	if adoptionErr != nil {
-		d.logWarn("auto_join", "adopt_failed", map[string]any{
-			"peer_id": peerID,
-			"zone":    managedZone,
-			"via":     "event_loop",
-			"error":   adoptionErr,
-		})
-	} else if adopted {
-		d.logInfo("auto_join", "adopted", map[string]any{
-			"peer_id": peerID,
-			"zone":    managedZone,
-			"via":     "event_loop",
-		})
+	outcome := outcomes[0]
+	if outcome.applyErr != nil {
+		return nil, false, outcome.applyErr
 	}
-	return result, true, nil
+	d.logSnapshotAdoption(peerID, outcome)
+	return outcome.result, true, nil
 }
 
 func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, session *SyncSession, actions []SyncAction, mutations *syncPeerStateMutationBatch) bool {
@@ -837,7 +877,9 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	var changed bool
 	limits := syncLimits(d.Sync.Config)
 
-	// First pass: apply snapshots and records.
+	// First pass: collect snapshots. They are validated with independent COW
+	// savepoints and published as one final revision below.
+	var snapshotApplies []syncSnapshotApply
 	for _, action := range actions {
 		switch a := action.(type) {
 		case ApplySnapshotAction:
@@ -858,35 +900,51 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 				applyLimits = limits
 				applyLimits.MaxBytes = 8 << 20
 			}
-			result, applied, err := d.applySyncSnapshotAction(peerID, a, applyLimits, now)
-			if err != nil {
-				d.logWarn("sync", "zone_apply_failed", map[string]any{
-					"peer_id": peerID,
-					"zone":    a.Snapshot.Zone,
-					"reason":  gossip.RejectReason(err),
-					"error":   err,
-				})
-				continue
-			}
-			if !applied {
-				continue
-			}
-			changed = true
-			d.logInfo("sync", "zone_applied", map[string]any{
-				"peer_id":     peerID,
-				"zone":        a.Snapshot.Zone,
-				"records":     result.Records,
-				"delegations": result.Delegation,
-				"via":         "event_loop",
+			snapshotApplies = append(snapshotApplies, syncSnapshotApply{action: a, limits: applyLimits})
+		}
+	}
+	if len(snapshotApplies) > 0 {
+		outcomes, _, err := d.applySyncSnapshotBatch(peerID, snapshotApplies, now)
+		if err != nil {
+			d.logWarn("sync", "snapshot_batch_commit_failed", map[string]any{
+				"peer_id": peerID,
+				"error":   err,
 			})
+			// Do not execute transport/timer callbacks derived from a batch
+			// that was never published.
+			return false
+		} else {
+			for i, outcome := range outcomes {
+				apply := snapshotApplies[i]
+				if outcome.applyErr != nil {
+					d.logWarn("sync", "zone_apply_failed", map[string]any{
+						"peer_id": peerID,
+						"zone":    apply.action.Snapshot.Zone,
+						"reason":  gossip.RejectReason(outcome.applyErr),
+						"error":   outcome.applyErr,
+					})
+					continue
+				}
+				if outcome.result == nil {
+					continue
+				}
+				changed = true
+				d.logSnapshotAdoption(peerID, outcome)
+				d.logInfo("sync", "zone_applied", map[string]any{
+					"peer_id":     peerID,
+					"zone":        apply.action.Snapshot.Zone,
+					"records":     outcome.result.Records,
+					"delegations": outcome.result.Delegation,
+					"via":         "event_loop",
+				})
+			}
 		}
 	}
 
-	// Second pass: persist once if any apply succeeded.
+	// Second pass: refresh the reader view after the single batch publication.
+	// Persistence is coalesced with any SaveStateAction below so a batch writes
+	// the state file at most once.
 	if changed {
-		if err := d.saveCommittedState(); err != nil {
-			d.logWarn("sync", "save_failed", map[string]any{"peer_id": peerID, "error": err})
-		}
 		stateSnapshot, _, _ = d.snapshotState()
 	}
 
@@ -967,6 +1025,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	}
 
 	// Final pass: backoff and save-state actions.
+	persisted := false
 	for _, action := range actions {
 		switch a := action.(type) {
 		case RecordBackoffAction:
@@ -988,6 +1047,10 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 				}
 				mutations.commit(d)
 			}
+			if persisted {
+				continue
+			}
+			persisted = true
 			if err := d.saveCommittedState(); err != nil {
 				d.logWarn("sync", "save_failed", map[string]any{
 					"peer_id": peerID,
@@ -995,6 +1058,15 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 					"error":   err,
 				})
 			}
+		}
+	}
+	if changed && !persisted {
+		if err := d.saveCommittedState(); err != nil {
+			d.logWarn("sync", "save_failed", map[string]any{
+				"peer_id": peerID,
+				"reason":  "snapshot_batch",
+				"error":   err,
+			})
 		}
 	}
 

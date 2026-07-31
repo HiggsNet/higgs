@@ -2,6 +2,7 @@ package zone
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -117,6 +118,115 @@ func TestCloneNetworkStateDeepCopiesMutableStateAndPreservesShape(t *testing.T) 
 	if string(cloned.Zones["catofes."].Records["identity"].PrevHash) != "prev-hash" {
 		t.Fatal("original mutation leaked into cloned network state")
 	}
+}
+
+func TestCloneNetworkStateForZoneSharesOnlyUnmodifiedZones(t *testing.T) {
+	original := cloneCOWFixture(3, 2, 2)
+	targetPath := ZonePath("zone-1.catofes.")
+	candidate := CloneNetworkStateForZone(original, targetPath)
+	if candidate == original {
+		t.Fatal("NetworkState root was not detached")
+	}
+	if candidate.Zones[targetPath] == original.Zones[targetPath] {
+		t.Fatal("target zone was not detached")
+	}
+	for path, state := range original.Zones {
+		if path != targetPath && candidate.Zones[path] != state {
+			t.Fatalf("unmodified zone %s was not shared", path)
+		}
+	}
+
+	target := candidate.Zones[targetPath]
+	target.Authority.Keys[0].Key[0] ^= 0xff
+	target.Records["record-0"].Value[0] ^= 0xff
+	target.RecordHistory["record-0"][0].Value[0] ^= 0xff
+	target.MerkleRoot[0] ^= 0xff
+	originalTarget := original.Zones[targetPath]
+	if reflect.DeepEqual(target.Authority, originalTarget.Authority) ||
+		reflect.DeepEqual(target.Records["record-0"], originalTarget.Records["record-0"]) ||
+		reflect.DeepEqual(target.RecordHistory["record-0"][0], originalTarget.RecordHistory["record-0"][0]) ||
+		reflect.DeepEqual(target.MerkleRoot, originalTarget.MerkleRoot) {
+		t.Fatal("nested target-zone state remained shared")
+	}
+}
+
+func TestCloneNetworkStateForZoneSequentialDifferentZones(t *testing.T) {
+	base := cloneCOWFixture(3, 1, 1)
+	a := ZonePath("zone-0.catofes.")
+	b := ZonePath("zone-1.catofes.")
+	c := ZonePath("zone-2.catofes.")
+
+	first := CloneNetworkStateForZone(base, a)
+	first.Zones[a].Records["record-0"].Value = []byte("first")
+	second := CloneNetworkStateForZone(first, b)
+	second.Zones[b].Records["record-0"].Value = []byte("second")
+
+	if second.Zones[a] != first.Zones[a] {
+		t.Fatal("first updated zone was not shared into the next revision")
+	}
+	if second.Zones[b] == first.Zones[b] {
+		t.Fatal("second target zone was not detached")
+	}
+	if second.Zones[c] != base.Zones[c] {
+		t.Fatal("never-modified zone was not shared across revisions")
+	}
+	if string(base.Zones[a].Records["record-0"].Value) == "first" ||
+		string(base.Zones[b].Records["record-0"].Value) == "second" {
+		t.Fatal("sequential updates leaked into the base revision")
+	}
+
+	// Reversing the order must preserve the same ownership rule.
+	reverseFirst := CloneNetworkStateForZone(base, b)
+	reverseSecond := CloneNetworkStateForZone(reverseFirst, a)
+	if reverseSecond.Zones[b] != reverseFirst.Zones[b] || reverseSecond.Zones[a] == reverseFirst.Zones[a] {
+		t.Fatal("reverse-order target-zone ownership is incorrect")
+	}
+}
+
+func BenchmarkCloneNetworkStateForZone(b *testing.B) {
+	fixtures := []struct {
+		name       string
+		network    *NetworkState
+		targetPath ZonePath
+	}{
+		{name: "single_large_zone", network: cloneCOWFixture(1, 4096, 0), targetPath: "zone-0.catofes."},
+		{name: "many_small_zones", network: cloneCOWFixture(4096, 1, 0), targetPath: "zone-2048.catofes."},
+		{name: "history_heavy", network: cloneCOWFixture(1, 256, MaxRecordHistoryPerKey), targetPath: "zone-0.catofes."},
+	}
+	for _, fixture := range fixtures {
+		b.Run(fixture.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				candidate := CloneNetworkStateForZone(fixture.network, fixture.targetPath)
+				if candidate == nil {
+					b.Fatal("nil candidate")
+				}
+			}
+		})
+	}
+}
+
+func cloneCOWFixture(zoneCount, recordsPerZone, historyPerRecord int) *NetworkState {
+	network := NewNetworkState()
+	for zoneIndex := 0; zoneIndex < zoneCount; zoneIndex++ {
+		path := ZonePath(fmt.Sprintf("zone-%d.catofes.", zoneIndex))
+		state := NewZoneState(path, &ZoneAuthority{
+			Zone: path,
+			Keys: []AuthorizedKey{{Key: []byte("authority-key")}},
+		})
+		state.MerkleRoot = []byte("not-a-cache")
+		for recordIndex := 0; recordIndex < recordsPerZone; recordIndex++ {
+			key := fmt.Sprintf("record-%d", recordIndex)
+			state.Records[key] = &Record{Zone: path, Key: key, Value: []byte("active"), Version: uint64(historyPerRecord + 1)}
+			for historyIndex := 0; historyIndex < historyPerRecord; historyIndex++ {
+				state.RecordHistory[key] = append(state.RecordHistory[key], &Record{
+					Zone: path, Key: key, Value: []byte("history"), Version: uint64(historyIndex + 1),
+				})
+			}
+		}
+		network.Zones[path] = state
+	}
+	return network
 }
 
 func TestCloneNetworkStateSchemaGuard(t *testing.T) {

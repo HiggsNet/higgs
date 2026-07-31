@@ -24,11 +24,11 @@ type recordMutationResult struct {
 	DryRun  bool
 }
 
-func cloneNetworkStateForCandidateValidation(ns *zone.NetworkState) *zone.NetworkState {
+func cloneNetworkStateForCandidateValidation(ns *zone.NetworkState, path zone.ZonePath) *zone.NetworkState {
 	if ns == nil {
 		return zone.NewNetworkState()
 	}
-	return zone.CloneNetworkState(ns)
+	return zone.CloneNetworkStateForZone(ns, path)
 }
 
 func validateGenericRecordPut(key, recordType string) error {

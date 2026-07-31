@@ -145,6 +145,48 @@ func (s *DaemonStateStore) networkSnapshot() (*stateFile, uint64) {
 	return snapshot, s.revision
 }
 
+// networkZoneSnapshot returns a workspace that owns exactly one mutable zone.
+// An empty path selects the committed managed zone. All other state children
+// and Network zones remain shared and read-only.
+func (s *DaemonStateStore) networkZoneSnapshot(path zone.ZonePath) (*stateFile, uint64) {
+	if s == nil {
+		return nil, 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.committed == nil {
+		return nil, s.revision
+	}
+	if path == "" {
+		path = s.committed.ManagedZone
+	}
+	workspace := cloneStateFileRootSharingChildren(s.committed)
+	workspace.Network = zone.CloneNetworkStateForZone(s.committed.Network, path)
+	if workspace.Network != nil {
+		configureValidation(workspace.Network)
+	}
+	return workspace, s.revision
+}
+
+// snapshotApplyWorkspace returns an isolated root for one batch of snapshot
+// actions. Network starts shared and immutable; each successful ApplySnapshot
+// replaces it with a target-zone COW candidate. SyncPeers and Admission are
+// detached because accepted/rejected snapshot bookkeeping mutates them.
+func (s *DaemonStateStore) snapshotApplyWorkspace() (*stateFile, uint64) {
+	if s == nil {
+		return nil, 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.committed == nil {
+		return nil, s.revision
+	}
+	workspace := cloneStateFileRootSharingChildren(s.committed)
+	workspace.SyncPeers = cloneSyncPeers(s.committed.SyncPeers)
+	workspace.Admission = cloneAdmissionState(s.committed.Admission)
+	return workspace, s.revision
+}
+
 // ZoneDigests returns a detached digest projection of the committed state.
 // It keeps the state pointer private and avoids cloning the complete Network
 // for callers that only need its gossip digest.
@@ -499,6 +541,41 @@ func (s *DaemonStateStore) commitNetworkIfRevision(rev uint64, network *zone.Net
 	next := cloneStateFileRootSharingChildren(s.committed)
 	next.Network = nextNetwork
 	s.commitLocked(next)
+	return s.revision, true
+}
+
+// commitNetworkCandidateIfRevision transfers ownership of a detached Network
+// COW candidate into the committed root without cloning it again. Callers must
+// not retain or mutate candidate after this call.
+func (s *DaemonStateStore) commitNetworkCandidateIfRevision(rev uint64, candidate *zone.NetworkState) (uint64, bool) {
+	if s == nil || candidate == nil {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != rev {
+		return s.revision, false
+	}
+	next := cloneStateFileRootSharingChildren(s.committed)
+	next.Network = candidate
+	s.commitLocked(next)
+	return s.revision, true
+}
+
+// commitSnapshotApplyIfRevision publishes an owned snapshot batch workspace.
+// The workspace must come from snapshotApplyWorkspace and must not be retained
+// or mutated after this call. Its unchanged children and non-target zones are
+// immutable values shared with the source revision.
+func (s *DaemonStateStore) commitSnapshotApplyIfRevision(rev uint64, workspace *stateFile) (uint64, bool) {
+	if s == nil || workspace == nil {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != rev {
+		return s.revision, false
+	}
+	s.commitLocked(workspace)
 	return s.revision, true
 }
 

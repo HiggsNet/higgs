@@ -214,7 +214,7 @@ func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	target.Zones["catofes."].Records = make(map[string]*zone.Record)
 	target.Zones["catofes."].RecordHistory = make(map[string][]*zone.Record)
 	target.Zones["catofes."].Records["obsolete"] = signedRecord(t, zonePriv, "catofes.", "obsolete", []byte("old"), 1, nil, now.Unix())
-	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	result, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestApplySnapshotTrustFailureLeavesNetworkUnchanged(t *testing.T) {
 
 	target := snapshotAtomicityTarget(source)
 	before := captureNetworkState(t, target)
-	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrUntrustedZone) {
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrUntrustedZone) {
 		t.Fatalf("ApplySnapshot = %v, want ErrUntrustedZone", err)
 	}
 	assertNetworkStateUnchanged(t, target, before)
@@ -287,7 +287,7 @@ func TestApplySnapshotDelegationFailureLeavesNetworkUnchanged(t *testing.T) {
 
 	target := snapshotAtomicityTarget(source)
 	before := captureNetworkState(t, target)
-	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err == nil {
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); err == nil {
 		t.Fatal("ApplySnapshot succeeded with an invalid delegation")
 	}
 	assertNetworkStateUnchanged(t, target, before)
@@ -317,7 +317,7 @@ func TestApplySnapshotRevocationFailureLeavesNetworkUnchanged(t *testing.T) {
 
 	target := snapshotAtomicityTarget(source)
 	before := captureNetworkState(t, target)
-	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err == nil {
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); err == nil {
 		t.Fatal("ApplySnapshot succeeded with an invalid revocation")
 	}
 	assertNetworkStateUnchanged(t, target, before)
@@ -345,7 +345,7 @@ func TestApplySnapshotRecordFailureAfterSuccessLeavesNetworkUnchanged(t *testing
 	delete(target.Zones["catofes."].Records, "a-valid")
 	delete(target.Zones["catofes."].Records, "z-invalid")
 	before := captureNetworkState(t, target)
-	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err == nil {
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); err == nil {
 		t.Fatal("ApplySnapshot succeeded with an invalid second record")
 	}
 	assertNetworkStateUnchanged(t, target, before)
@@ -375,7 +375,7 @@ func TestApplySnapshotSkipsStaleAndConflictingRecords(t *testing.T) {
 	target.Zones["catofes."].Records["stale"] = targetStaleV2
 	target.Zones["catofes."].Records["conflict"] = signedRecord(t, zonePrivateKey, "catofes.", "conflict", []byte("local"), 1, nil, now.Unix())
 
-	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	result, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestApplySnapshotSuccessInstallsDetachedCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	result, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot: %v", err)
 	}
@@ -433,6 +433,100 @@ func TestApplySnapshotSuccessInstallsDetachedCandidate(t *testing.T) {
 	snapshot.Records["identity"].Value[0] = 'y'
 	if got := string(target.Zones["catofes."].Records["identity"].Value); got != "v2" {
 		t.Fatalf("installed record changed through retained input: %q", got)
+	}
+}
+
+func TestApplySnapshotReturnsTargetZoneCOWCandidate(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	record := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("remote"), 1, nil, now.Unix())
+	if err := source.PutAt(record, now); err != nil {
+		t.Fatalf("PutAt(record): %v", err)
+	}
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	target := cloneNetworkState(source)
+	delete(target.Zones["catofes."].Records, "identity")
+	originalRoot := target.Zones[zone.RootZone]
+	originalTarget := target.Zones["catofes."]
+	candidate, result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
+	}
+	if result.Records != 1 {
+		t.Fatalf("applied records = %d, want 1", result.Records)
+	}
+	if candidate == target {
+		t.Fatal("candidate reused input NetworkState root")
+	}
+	if candidate.Zones[zone.RootZone] != originalRoot {
+		t.Fatal("unmodified root zone was not structurally shared")
+	}
+	if candidate.Zones["catofes."] == originalTarget {
+		t.Fatal("target zone was not detached")
+	}
+	if target.Zones["catofes."].Records["identity"] != nil {
+		t.Fatal("candidate record update leaked into input NetworkState")
+	}
+
+	// The complete mutable target zone, including values nested below its
+	// maps/slices, must be owned by the candidate.
+	candidate.Zones["catofes."].Authority.Keys[0].Key[0] ^= 0xff
+	candidate.Zones["catofes."].Records["identity"].Value[0] = 'x'
+	if bytes.Equal(candidate.Zones["catofes."].Authority.Keys[0].Key, originalTarget.Authority.Keys[0].Key) {
+		t.Fatal("target authority remained shared")
+	}
+	if target.Zones["catofes."].Records["identity"] != nil {
+		t.Fatal("target records map remained shared")
+	}
+}
+
+func TestApplySnapshotSequentialTargetZoneCOW(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	v1 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v1"), 1, nil, now.Unix())
+	if err := source.PutAt(v1, now); err != nil {
+		t.Fatalf("PutAt(v1): %v", err)
+	}
+	snapshot1, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(v1): %v", err)
+	}
+	v2 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v2"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
+	if err := source.PutAt(v2, now); err != nil {
+		t.Fatalf("PutAt(v2): %v", err)
+	}
+	snapshot2, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(v2): %v", err)
+	}
+
+	base := emptySnapshotTarget(source)
+	first, _, err := ApplySnapshot(base, snapshot1, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatalf("ApplySnapshot(v1): %v", err)
+	}
+	firstTarget := first.Zones["catofes."]
+	second, _, err := ApplySnapshot(first, snapshot2, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatalf("ApplySnapshot(v2): %v", err)
+	}
+	if second.Zones[zone.RootZone] != first.Zones[zone.RootZone] {
+		t.Fatal("unmodified ancestor was not shared across sequential candidates")
+	}
+	if second.Zones["catofes."] == firstTarget {
+		t.Fatal("second update reused first mutable target zone")
+	}
+	if got := string(firstTarget.Records["identity"].Value); got != "v1" {
+		t.Fatalf("second update leaked into first candidate: %q", got)
+	}
+	if got := string(second.Zones["catofes."].Records["identity"].Value); got != "v2" {
+		t.Fatalf("second candidate record = %q, want v2", got)
 	}
 }
 
@@ -482,7 +576,7 @@ func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 	delete(target.Zones["catofes."].Delegations, zone.ZonePath("node-b.catofes."))
 	delete(target.Zones, zone.ZonePath("node-b.catofes."))
 
-	if _, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits()); err != nil {
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); err != nil {
 		t.Fatalf("ApplySnapshot: %v", err)
 	}
 	if err := higgscrypto.VerifyChain(target, "node-b.catofes.", now); err != nil {
@@ -515,7 +609,7 @@ func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 		t.Fatalf("Snapshot(root): %v", err)
 	}
 	target, _ := testNetwork(t)
-	result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	result, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot(root): %v", err)
 	}
@@ -575,19 +669,19 @@ func TestApplySnapshotRejectsRecordLimit(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	target := emptySnapshotTarget(source)
-	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: DefaultMaxMessage}); err != nil {
+	if _, err := applySnapshotForTest(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: DefaultMaxMessage}); err != nil {
 		t.Fatalf("ApplySnapshot without record limit: %v", err)
 	}
 	target = emptySnapshotTarget(source)
-	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 2, MaxBytes: DefaultMaxMessage}); err != nil {
+	if _, err := applySnapshotForTest(target, snapshot, now, SyncLimits{MaxRecords: 2, MaxBytes: DefaultMaxMessage}); err != nil {
 		t.Fatalf("ApplySnapshot at record limit: %v", err)
 	}
 	target = emptySnapshotTarget(source)
-	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: 1}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
+	if _, err := applySnapshotForTest(target, snapshot, now, SyncLimits{MaxRecords: 0, MaxBytes: 1}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
 		t.Fatalf("ApplySnapshot byte limit = %v, want ErrZoneSnapshotTooLarge", err)
 	}
 	target = emptySnapshotTarget(source)
-	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: DefaultMaxMessage}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
+	if _, err := applySnapshotForTest(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: DefaultMaxMessage}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
 		t.Fatalf("ApplySnapshot record limit = %v, want ErrZoneSnapshotTooLarge", err)
 	}
 }
@@ -610,13 +704,24 @@ func TestApplySnapshotAcceptsAndRejectsByteBoundary(t *testing.T) {
 	}
 
 	target := emptySnapshotTarget(source)
-	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: len(data)}); err != nil {
+	if _, err := applySnapshotForTest(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: len(data)}); err != nil {
 		t.Fatalf("ApplySnapshot at byte limit: %v", err)
 	}
 	target = emptySnapshotTarget(source)
-	if _, err := ApplySnapshot(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: len(data) - 1}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
+	if _, err := applySnapshotForTest(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: len(data) - 1}); !errors.Is(err, ErrZoneSnapshotTooLarge) {
 		t.Fatalf("ApplySnapshot below byte limit = %v, want ErrZoneSnapshotTooLarge", err)
 	}
+}
+
+// applySnapshotForTest preserves the older in-place test setup while the
+// production API exposes candidate publication explicitly.
+func applySnapshotForTest(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits) (*ApplyResult, error) {
+	candidate, result, err := ApplySnapshot(ns, snapshot, now, limits)
+	if err != nil {
+		return nil, err
+	}
+	*ns = *candidate
+	return result, nil
 }
 
 func emptySnapshotTarget(source *zone.NetworkState) *zone.NetworkState {

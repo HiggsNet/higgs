@@ -131,8 +131,8 @@ func applyRouteMutation(state *stateFile, request routeMutationRequest, now time
 }
 
 func validateRouteCandidate(state *stateFile, record *zone.Record, canonical string, now time.Time) error {
-	ns := cloneNetworkStateForCandidateValidation(state.Network)
 	path := record.Zone
+	ns := cloneNetworkStateForCandidateValidation(state.Network, path)
 	zs := ns.Zones[path]
 	if zs == nil {
 		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
