@@ -84,13 +84,15 @@ const (
 	defaultPeerObservabilityTTL                      = 24 * time.Hour
 	defaultPeerObservabilityLimit                    = 2048
 	daemonEventRecordPut             daemonEventType = "record_put"
+	daemonEventIPAMMutation          daemonEventType = "ipam_mutate"
+	daemonEventRouteMutation         daemonEventType = "route_mutate"
+	daemonEventServiceMutation       daemonEventType = "service_mutate"
 	daemonEventDelegateIssue         daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke        daemonEventType = "delegate_revoke"
 	daemonEventDelegateGrant         daemonEventType = "delegate_grant"
 	daemonEventRecoveryImportZone    daemonEventType = "recovery_import_zone"
 	daemonEventRecoveryPurgeRevoked  daemonEventType = "recovery_purge_revoked"
 	daemonEventJoinAccept            daemonEventType = "join_accept"
-	daemonEventRootInit              daemonEventType = "root_init"
 	daemonEventPacket                daemonEventType = "packet"
 	daemonEventSyncTimer             daemonEventType = "timer_sync"
 	daemonEventEndpointTimer         daemonEventType = "timer_endpoint_publish"
@@ -123,6 +125,9 @@ type daemonEvent struct {
 	VICIEvent   ipsec.VICIEvent
 	ForceSync   bool
 	EndpointACL *endpointACL
+	IPAM        *ipamMutationRequest
+	Route       *routeMutationRequest
+	Service     *serviceMutationRequest
 	Context     context.Context
 	Reply       chan daemonEventResult
 }
@@ -606,6 +611,39 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
+	case "ipam_mutate":
+		if request.IPAM == nil {
+			writeControlResponse(conn, controlError(errors.New("ipam_mutate requires ipam request")))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPAMMutation, IPAM: request.IPAM})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
+	case "route_mutate":
+		if request.Route == nil {
+			writeControlResponse(conn, controlError(errors.New("route_mutate requires route request")))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventRouteMutation, Route: request.Route})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
+	case "service_mutate":
+		if request.Service == nil {
+			writeControlResponse(conn, controlError(errors.New("service_mutate requires service request")))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventServiceMutation, Service: request.Service})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
 	case "record_get":
 		if err := validateControlRecordGet(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -986,7 +1024,9 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 			if event.Type == daemonEventIPsecCleanup && result.Error == nil {
 				ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
 			}
-			if event.Type == daemonEventRecordPut && event.RecordPut != nil && strings.HasPrefix(event.RecordPut.Key, routing.RecordKeyPrefixRoutes) && result.Error == nil {
+			routingMutationCommitted := (event.Type == daemonEventIPAMMutation && event.IPAM != nil && !event.IPAM.DryRun) ||
+				(event.Type == daemonEventRouteMutation && event.Route != nil && !event.Route.DryRun)
+			if routingMutationCommitted && result.Error == nil {
 				flushed, err := d.flushRoutingReconcileResult(ctx)
 				routingFlushed = flushed || routingFlushed
 				if err != nil {
@@ -1022,6 +1062,30 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	case daemonEventRecordPut:
 		version, err := d.handleRecordPutEvent(event.RecordPut)
 		return daemonEventResult{Version: version, Error: err}, err == nil, false
+	case daemonEventIPAMMutation:
+		result, err := d.handleRecordMutationEvent(func(state *stateFile) (*recordMutationResult, error) {
+			if event.IPAM == nil {
+				return nil, errors.New("ipam mutation event is nil")
+			}
+			return applyIPAMMutation(state, *event.IPAM, d.Sync.now())
+		})
+		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
+	case daemonEventRouteMutation:
+		result, err := d.handleRecordMutationEvent(func(state *stateFile) (*recordMutationResult, error) {
+			if event.Route == nil {
+				return nil, errors.New("route mutation event is nil")
+			}
+			return applyRouteMutation(state, *event.Route, d.Sync.now())
+		})
+		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
+	case daemonEventServiceMutation:
+		result, err := d.handleRecordMutationEvent(func(state *stateFile) (*recordMutationResult, error) {
+			if event.Service == nil {
+				return nil, errors.New("service mutation event is nil")
+			}
+			return applyServiceMutation(state, *event.Service, d.Sync.now())
+		})
+		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
 	case daemonEventDelegateIssue:
 		result, err := d.handleDelegateIssueEvent(event.JoinRequest, event.Permissions)
 		if err != nil {
@@ -1061,9 +1125,6 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 			return daemonEventResult{Error: err}, false, false
 		}
 		return daemonEventResult{Zone: result.Zone, RootPublicKey: result.RootPublicKey}, true, false
-	case daemonEventRootInit:
-		rootKey, err := d.handleRootInitEvent()
-		return daemonEventResult{Zone: zone.RootZone, RootPublicKey: rootKey, Error: err}, false, false
 	case daemonEventSyncTimer:
 		return daemonEventResult{Error: d.handleSyncTimerEvent(controlContext(event.Context), event.ForceSync)}, false, false
 	case daemonEventEndpointTimer:
@@ -1230,11 +1291,6 @@ func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
 	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	latest, err := d.Sync.loadState()
-	if err != nil {
-		return err
-	}
-	d.StateStore.ReplaceCommitted(latest)
 	if _, err := d.StateStore.Update(fn); err != nil {
 		return err
 	}
@@ -1250,26 +1306,30 @@ func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
 
 // runStateStoreWriteIfChanged is like runStateStoreWrite, but the update
 // function reports whether the state actually changed. When it reports false,
-// the loaded state is discarded without replacing the committed snapshot,
-// incrementing the revision, or notifying downstream layers. This avoids
+// the detached workspace is discarded without replacing the committed
+// snapshot, incrementing the revision, or notifying downstream layers. This avoids
 // duplicate IPsec/routing/firewall flushes when the endpoint timer (or similar
 // periodic writer) produces a no-op publish.
 func (d *DaemonService) runStateStoreWriteIfChanged(fn func(*stateFile) (bool, error)) (bool, error) {
 	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
-	latest, err := d.Sync.loadState()
+	update, err := d.StateStore.BeginUpdate()
 	if err != nil {
 		return false, err
 	}
-	changed, err := fn(latest)
+	changed, err := fn(update.Workspace())
 	if err != nil {
 		return false, err
 	}
 	if !changed {
 		return false, nil
 	}
-	d.StateStore.ReplaceCommitted(latest)
+	if _, committed, err := update.Commit(); err != nil {
+		return false, err
+	} else if !committed {
+		return false, errDaemonStateRevisionStale
+	}
 	if err := d.saveCommittedState(); err != nil {
 		return false, err
 	}
@@ -1285,14 +1345,9 @@ func (d *DaemonService) runStateStoreWriteIfChanged(fn func(*stateFile) (bool, e
 // executes the deletions, persists, and notifies subsystems so the running node
 // reconciles (e.g. tears down orphaned IPsec for removed link instances).
 func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zone.ZonePath, apply bool) (*purgePlan, error) {
-	latest, err := d.Sync.loadState()
-	if err != nil {
-		return nil, err
-	}
 	if d.StateStore == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
-	d.StateStore.ReplaceCommitted(latest)
 	if !apply {
 		snapshot, _, _ := d.snapshotState()
 		return planPurgeRevokedZones(snapshot, d.Sync.App.Now(), target)
@@ -1352,24 +1407,29 @@ func (d *DaemonService) cleanupPurgePlanIPsecLinks(ctx context.Context, state *s
 }
 
 func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	result, err := acceptJoinBundleInState(d.Sync.App, bundle, key)
-	if err != nil {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.StateStore == nil {
+		return nil, errors.New("daemon service is not initialized")
+	}
+	var result *joinAcceptResult
+	if _, err := d.StateStore.Update(func(state *stateFile) error {
+		candidate, prepared, err := prepareJoinAcceptedState(d.Sync.App, state, bundle, key)
+		if err != nil {
+			return err
+		}
+		installPreparedState(state, candidate)
+		result = prepared
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	latest, err := d.Sync.loadState()
-	if err != nil {
+	if err := d.saveCommittedState(); err != nil {
 		return nil, err
 	}
-	d.replaceCommittedState(latest)
 	if d.Sync.Transport != nil {
 		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	return result, nil
-}
-
-func (d *DaemonService) handleRootInitEvent() ([]byte, error) {
-	return nil, errors.New("root init via daemon is only valid before a daemon has loaded state; stop the daemon and run root init as recovery/direct initialization")
 }
 
 // processPacketEvent dispatches packet handling without a mutable stateFile
@@ -1490,14 +1550,12 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	if event == nil {
 		return 0, errors.New("record_put event is nil")
 	}
-	latest, err := d.Sync.loadState()
-	if err != nil {
+	if err := validateGenericRecordPut(event.Key, event.Type); err != nil {
 		return 0, err
 	}
 	if d.StateStore == nil {
 		return 0, errors.New("daemon service is not initialized")
 	}
-	d.StateStore.ReplaceCommitted(latest)
 	workspace, rev := d.StateStore.networkSnapshot()
 	if workspace == nil || workspace.Network == nil {
 		return 0, errors.New("daemon state network is nil")
@@ -1531,6 +1589,44 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	}
 	d.notifyStateChanged()
 	return version, nil
+}
+
+func recordMutationVersion(result *recordMutationResult) uint64 {
+	if result == nil {
+		return 0
+	}
+	return result.Version
+}
+
+func (d *DaemonService) handleRecordMutationEvent(apply func(*stateFile) (*recordMutationResult, error)) (*recordMutationResult, error) {
+	if d == nil || d.Sync == nil || d.StateStore == nil || apply == nil {
+		return nil, errors.New("daemon service is not initialized")
+	}
+	workspace, rev := d.StateStore.networkSnapshot()
+	if workspace == nil || workspace.Network == nil {
+		return nil, errors.New("daemon state network is nil")
+	}
+	result, err := apply(workspace)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("authoritative mutation returned no result")
+	}
+	if result.DryRun {
+		return result, nil
+	}
+	if _, committed := d.StateStore.commitNetworkIfRevision(rev, workspace.Network); !committed {
+		return nil, errDaemonStateRevisionStale
+	}
+	if err := d.saveCommittedState(); err != nil {
+		return nil, err
+	}
+	if d.Sync.Transport != nil {
+		d.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return result, nil
 }
 
 func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {

@@ -111,6 +111,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 
 func TestIPAMRoutingSmoke(t *testing.T) {
 	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	rt.DisableControl = true
 	now := rt.Now()
 
 	// Publish pool and assignment as the catofes. administrator.
@@ -125,7 +126,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 
 	// Announce a route as node-a.catofes.
 	if err := runWithZonePrivateKey(rt, signers["node-a.catofes."], func() error {
-		return announceRouteWithRuntime(rt, "node-a.catofes.", "10.0.1.0/24")
+		return mutateRouteWithRuntime(rt, "node-a.catofes.", "10.0.1.0/24", true)
 	}); err != nil {
 		t.Fatalf("node-a route announce: %v", err)
 	}
@@ -194,6 +195,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 
 func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	rt.DisableControl = true
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = true
 	now := rt.Now()
 

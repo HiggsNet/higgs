@@ -391,7 +391,7 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 	}
 }
 
-func TestDaemonRecordPutReloadsLatestStateBeforeSave(t *testing.T) {
+func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4000, 0)
 	rt := &Runtime{
@@ -436,8 +436,8 @@ func TestDaemonRecordPutReloadsLatestStateBeforeSave(t *testing.T) {
 		t.Fatalf("LoadState(latest): %v", err)
 	}
 	records := latest.Network.Zones["node-b.catofes."].Records
-	if records["external"] == nil {
-		t.Fatalf("external record was overwritten by stale daemon state")
+	if records["external"] != nil {
+		t.Fatalf("out-of-band disk record replaced daemon committed authority")
 	}
 	if records["daemon"] == nil {
 		t.Fatalf("daemon record missing")

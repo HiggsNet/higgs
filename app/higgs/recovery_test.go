@@ -77,10 +77,10 @@ func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
 		t.Fatalf("createJoinRequest(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", adminConfig)
-	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil, false); err != nil {
+	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil, true); err != nil {
 		t.Fatalf("issueDelegation(catofes): %v", err)
 	}
-	if err := createIPAMPool(".", "2a0d:2905::/32", ".", false); err != nil {
+	if err := createIPAMPool(".", "2a0d:2905::/32", ".", true); err != nil {
 		t.Fatalf("createIPAMPool(root): %v", err)
 	}
 	if err := recoveryExportZone(zone.RootZone, rootSnapshotPath); err != nil {
@@ -88,10 +88,10 @@ func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
 	}
 
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
-	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, false); err != nil {
+	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, true); err != nil {
 		t.Fatalf("acceptJoinBundle(catofes): %v", err)
 	}
-	if err := recoveryImportZone(rootSnapshotPath, false); err != nil {
+	if err := recoveryImportZone(rootSnapshotPath, true); err != nil {
 		t.Fatalf("recoveryImportZone(root): %v", err)
 	}
 	state, err := loadState()
@@ -130,10 +130,10 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 		t.Fatalf("createJoinRequest(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", adminConfig)
-	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil, false); err != nil {
+	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil, true); err != nil {
 		t.Fatalf("issueDelegation(catofes): %v", err)
 	}
-	if err := createIPAMPool(".", "2a0d:2905::/32", ".", false); err != nil {
+	if err := createIPAMPool(".", "2a0d:2905::/32", ".", true); err != nil {
 		t.Fatalf("createIPAMPool(root): %v", err)
 	}
 	adminState, err := loadState()
@@ -146,7 +146,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	}
 
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
-	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, false); err != nil {
+	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, true); err != nil {
 		t.Fatalf("acceptJoinBundle(catofes): %v", err)
 	}
 	rt, err := NewRuntime()

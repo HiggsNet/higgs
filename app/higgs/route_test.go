@@ -17,7 +17,7 @@ import (
 func TestAnnounceAndWithdrawRouteDirect(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 
-	if err := announceRouteWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, "10.0.1.0/24", true); err != nil {
 		t.Fatalf("announceRoute failed: %v", err)
 	}
 
@@ -50,7 +50,7 @@ func TestAnnounceAndWithdrawRouteDirect(t *testing.T) {
 		t.Fatalf("record version = %d, want 1", rec.Version)
 	}
 
-	if err := withdrawRouteWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, "10.0.1.0/24", false); err != nil {
 		t.Fatalf("withdrawRoute failed: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestAnnounceAndWithdrawRouteDirect(t *testing.T) {
 func TestAnnounceRouteCanonicalizesPrefix(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 
-	if err := announceRouteWithRuntime(rt, managed, "10.0.1.1/24"); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, "10.0.1.1/24", true); err != nil {
 		t.Fatalf("announceRoute failed: %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestAnnounceRouteCanonicalizesPrefix(t *testing.T) {
 func TestWithdrawWithoutAnnouncementFails(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 
-	err := withdrawRouteWithRuntime(rt, managed, "10.0.2.0/24")
+	err := mutateRouteWithRuntime(rt, managed, "10.0.2.0/24", false)
 	if err == nil {
 		t.Fatalf("withdrawRoute without announcement succeeded, want error")
 	}
@@ -117,13 +117,13 @@ func TestReannounceAfterWithdraw(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 	prefix := "10.0.3.0/24"
 
-	if err := announceRouteWithRuntime(rt, managed, prefix); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, prefix, true); err != nil {
 		t.Fatalf("first announce failed: %v", err)
 	}
-	if err := withdrawRouteWithRuntime(rt, managed, prefix); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, prefix, false); err != nil {
 		t.Fatalf("withdraw failed: %v", err)
 	}
-	if err := announceRouteWithRuntime(rt, managed, prefix); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, prefix, true); err != nil {
 		t.Fatalf("re-announce failed: %v", err)
 	}
 
@@ -154,7 +154,7 @@ func TestReannounceAfterWithdraw(t *testing.T) {
 func TestAnnounceRouteInvalidPrefix(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 
-	err := announceRouteWithRuntime(rt, managed, "not-a-prefix")
+	err := mutateRouteWithRuntime(rt, managed, "not-a-prefix", true)
 	if err == nil {
 		t.Fatalf("announceRoute with invalid prefix succeeded, want error")
 	}
@@ -166,7 +166,7 @@ func TestAnnounceRouteInvalidPrefix(t *testing.T) {
 func TestAnnounceRouteRequiresWriteCapability(t *testing.T) {
 	rt, managed := buildRouteTestRuntimeWithoutWriteCapability(t)
 
-	err := announceRouteWithRuntime(rt, managed, "10.0.1.0/24")
+	err := mutateRouteWithRuntime(rt, managed, "10.0.1.0/24", true)
 	if err == nil {
 		t.Fatalf("announceRoute without write capability succeeded, want error")
 	}
@@ -179,13 +179,13 @@ func TestWithdrawAlreadyWithdrawnFails(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 	prefix := "10.0.4.0/24"
 
-	if err := announceRouteWithRuntime(rt, managed, prefix); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, prefix, true); err != nil {
 		t.Fatalf("announce failed: %v", err)
 	}
-	if err := withdrawRouteWithRuntime(rt, managed, prefix); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, prefix, false); err != nil {
 		t.Fatalf("withdraw failed: %v", err)
 	}
-	err := withdrawRouteWithRuntime(rt, managed, prefix)
+	err := mutateRouteWithRuntime(rt, managed, prefix, false)
 	if err == nil {
 		t.Fatalf("second withdraw succeeded, want error")
 	}
@@ -197,13 +197,13 @@ func TestWithdrawAlreadyWithdrawnFails(t *testing.T) {
 func TestBuildRouteShowReportListsActiveAndAllAnnouncements(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 
-	if err := announceRouteWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, "10.0.1.0/24", true); err != nil {
 		t.Fatalf("announce active route: %v", err)
 	}
-	if err := announceRouteWithRuntime(rt, managed, "10.0.2.0/24"); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, "10.0.2.0/24", true); err != nil {
 		t.Fatalf("announce withdrawn route: %v", err)
 	}
-	if err := withdrawRouteWithRuntime(rt, managed, "10.0.2.0/24"); err != nil {
+	if err := mutateRouteWithRuntime(rt, managed, "10.0.2.0/24", false); err != nil {
 		t.Fatalf("withdraw route: %v", err)
 	}
 
@@ -352,6 +352,9 @@ func buildRouteTestRuntimeWithWriteCapability(t *testing.T, writeCap bool) (*Run
 	ns.Zones[managed] = zone.NewZoneState(managed, childAuthority)
 	ns.Zones[zone.RootZone].Delegations[parent] = catofesDelegation
 	ns.Zones[parent].Delegations[managed] = pekDelegation
+	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
+	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/16", parent)
+	addUnsignedRouteAssignmentForTest(ns, parent, "10.0.0.0/16", managed)
 	configureValidation(ns)
 	if err := higgscrypto.VerifyChain(ns, managed, time.Unix(1000, 0)); err != nil {
 		t.Fatalf("VerifyChain: %v", err)
@@ -371,4 +374,24 @@ func buildRouteTestRuntimeWithWriteCapability(t *testing.T, writeCap bool) (*Run
 		t.Fatalf("SaveState: %v", err)
 	}
 	return rt, managed
+}
+
+func addUnsignedRouteAssignmentForTest(ns *zone.NetworkState, source zone.ZonePath, prefix string, assignedTo zone.ZonePath) {
+	canonical, err := routing.CanonicalizePrefix(prefix)
+	if err != nil {
+		panic(err)
+	}
+	key, err := routing.NormalizeIPAMAssignmentKey(prefix)
+	if err != nil {
+		panic(err)
+	}
+	value, err := json.Marshal(routing.IPAMAssignmentRecord{
+		Version: 1, Prefix: canonical, AssignedTo: assignedTo, Active: true,
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Zones[source].Records[key] = &zone.Record{
+		Zone: source, Key: key, Type: routing.RecordTypeIPAMAssignment, Value: value,
+	}
 }

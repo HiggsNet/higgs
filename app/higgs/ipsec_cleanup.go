@@ -38,7 +38,7 @@ func cleanupIPsecViaControl(rt *Runtime, includeOrphans bool) (*controlResponse,
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "ipsec_cleanup", Orphans: includeOrphans})
 	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
+		return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
 	}
 	return response, true, err
 }
@@ -96,14 +96,14 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.App == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
-	latest, err := d.Sync.loadState()
-	if err != nil {
-		return 0, 0, err
+	workspace, rev := d.StateStore.ipsecSnapshot()
+	if workspace == nil {
+		return 0, 0, errors.New("daemon state is not loaded")
 	}
 	ipsecDriver := d.IPsecDriver
 	xfrmDriver := d.XFRMDriver
 	var closeFn func() error
-	if len(latest.LinkInstances) > 0 || includeOrphans {
+	if len(workspace.LinkInstances) > 0 || includeOrphans {
 		if ipsecDriver == nil || xfrmDriver == nil {
 			drivers, err := newIPsecCleanupDrivers(d.Sync.App.Config)
 			if err != nil {
@@ -140,13 +140,17 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 		return nil
 	}
 
-	if d.StateStore == nil {
-		return cleaned, orphans, errors.New("daemon service is not initialized")
-	}
-
-	d.StateStore.ReplaceCommitted(latest)
-	if _, err := d.StateStore.Update(cleanupState); err != nil {
+	if err := cleanupState(workspace); err != nil {
 		return cleaned, orphans, err
+	}
+	if _, committed := d.StateStore.commitIPsecIfRevision(
+		rev,
+		workspace.IPsecTransportKey,
+		workspace.IPsecPortRecord,
+		workspace.LinkInstances,
+		workspace.IPsecReconcile,
+	); !committed {
+		return cleaned, orphans, errDaemonStateRevisionStale
 	}
 	if err := d.saveCommittedState(); err != nil {
 		return cleaned, orphans, err

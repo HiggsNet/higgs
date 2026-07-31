@@ -194,7 +194,7 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) error {
 	if !d.hasEnforcingHostFirewall() {
 		return errors.New("endpoint ACL requires an enabled managed host firewall instance with an available nftables or iptables backend")
 	}
-	snapshot, _, _ := d.snapshotState()
+	snapshot, rev := d.StateStore.firewallSnapshot()
 	if snapshot == nil || snapshot.Network == nil {
 		return errors.New("daemon state is not loaded")
 	}
@@ -213,13 +213,11 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) error {
 	if !owned {
 		return fmt.Errorf("endpoint ACL destination %s is outside the managed Zone's active assignments", destination)
 	}
-	return d.runStateStoreWrite(func(state *stateFile) error {
-		if state.EndpointACLs == nil {
-			state.EndpointACLs = make(map[string]endpointACL)
-		}
-		state.EndpointACLs[validated.Name] = validated
-		return nil
-	})
+	if snapshot.EndpointACLs == nil {
+		snapshot.EndpointACLs = make(map[string]endpointACL)
+	}
+	snapshot.EndpointACLs[validated.Name] = validated
+	return d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile)
 }
 
 func (d *DaemonService) handleEndpointACLRemoveEvent(name string) error {
@@ -227,10 +225,29 @@ func (d *DaemonService) handleEndpointACLRemoveEvent(name string) error {
 	if err != nil {
 		return err
 	}
-	return d.runStateStoreWrite(func(state *stateFile) error {
-		delete(state.EndpointACLs, name)
-		return nil
-	})
+	snapshot, rev := d.StateStore.firewallSnapshot()
+	if snapshot == nil {
+		return errors.New("daemon state is not loaded")
+	}
+	delete(snapshot.EndpointACLs, name)
+	return d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile)
+}
+
+func (d *DaemonService) commitEndpointACLMutation(rev uint64, acls map[string]endpointACL, reconcile *firewallReconcileState) error {
+	if d == nil || d.StateStore == nil {
+		return errors.New("daemon service is not initialized")
+	}
+	if _, committed := d.StateStore.commitFirewallIfRevision(rev, acls, reconcile); !committed {
+		return errDaemonStateRevisionStale
+	}
+	if err := d.saveCommittedState(); err != nil {
+		return err
+	}
+	if d.Sync != nil && d.Sync.Transport != nil {
+		d.updateDiscoveredPeers()
+	}
+	d.notifyStateChanged()
+	return nil
 }
 
 func (d *DaemonService) hasEnforcingHostFirewall() bool {

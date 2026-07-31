@@ -326,57 +326,97 @@ func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
 }
 
 func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	if bundle.Version != 1 {
-		return nil, fmt.Errorf("unsupported join bundle version: %d", bundle.Version)
+	var existing *stateFile
+	if loaded, err := rt.LoadState(); err == nil {
+		existing = loaded
 	}
-	if bundle.Network == nil {
-		return nil, errors.New("join bundle network is nil")
-	}
-	if key == nil {
-		var err error
-		key, err = joinAcceptKeyFromState(rt, bundle.Zone)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := validatePrivateKeyFile(key); err != nil {
+	state, result, err := prepareJoinAcceptedState(rt, existing, bundle, key)
+	if err != nil {
 		return nil, err
-	}
-	zs := bundle.Network.Zones[bundle.Zone]
-	if zs == nil || zs.Authority == nil {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, bundle.Zone)
-	}
-	if !authorityHasKey(zs.Authority, key.PublicKey) {
-		return nil, errors.New("private key does not match delegated zone authority")
-	}
-	configureValidation(bundle.Network)
-	normalizeState(bundle.Network)
-	if err := higgscrypto.VerifyChain(bundle.Network, bundle.Zone, rt.Now()); err != nil {
-		return nil, err
-	}
-	state := &stateFile{
-		ManagedZone:    bundle.Zone,
-		ZonePrivateKey: key.PrivateKey,
-		Network:        bundle.Network,
-	}
-	if existing, err := rt.LoadState(); err == nil && existing.ManagedZone == bundle.Zone {
-		state = existing
-		state.ManagedZone = bundle.Zone
-		state.ZonePrivateKey = key.PrivateKey
-		if state.Network == nil {
-			state.Network = zone.NewNetworkState()
-		}
-		mergeJoinBundleNetwork(state.Network, bundle.Network)
-		configureValidation(state.Network)
-		normalizeState(state.Network)
-		if err := higgscrypto.VerifyChain(state.Network, bundle.Zone, rt.Now()); err != nil {
-			return nil, err
-		}
 	}
 	if err := rt.SaveState(state); err != nil {
 		return nil, err
 	}
-	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: bundle.RootPublicKey}, nil
+	return result, nil
+}
+
+func prepareJoinAcceptedState(rt *Runtime, existing *stateFile, bundle *joinBundle, key *privateKeyFile) (*stateFile, *joinAcceptResult, error) {
+	if rt == nil {
+		return nil, nil, errors.New("runtime is nil")
+	}
+	if bundle == nil {
+		return nil, nil, errors.New("join bundle is nil")
+	}
+	if bundle.Version != 1 {
+		return nil, nil, fmt.Errorf("unsupported join bundle version: %d", bundle.Version)
+	}
+	if bundle.Network == nil {
+		return nil, nil, errors.New("join bundle network is nil")
+	}
+	if key == nil {
+		var err error
+		key, err = joinAcceptKeyFromStateFile(existing, bundle.Zone)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := validatePrivateKeyFile(key); err != nil {
+		return nil, nil, err
+	}
+	zs := bundle.Network.Zones[bundle.Zone]
+	if zs == nil || zs.Authority == nil {
+		return nil, nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, bundle.Zone)
+	}
+	if !authorityHasKey(zs.Authority, key.PublicKey) {
+		return nil, nil, errors.New("private key does not match delegated zone authority")
+	}
+	bundleNetwork := zone.CloneNetworkState(bundle.Network)
+	configureValidation(bundleNetwork)
+	normalizeState(bundleNetwork)
+	if err := higgscrypto.VerifyChain(bundleNetwork, bundle.Zone, rt.Now()); err != nil {
+		return nil, nil, err
+	}
+	state := &stateFile{
+		ManagedZone:    bundle.Zone,
+		ZonePrivateKey: append([]byte(nil), key.PrivateKey...),
+		Network:        bundleNetwork,
+	}
+	if existing != nil && existing.ManagedZone == bundle.Zone {
+		state = cloneStateFile(existing)
+		state.ManagedZone = bundle.Zone
+		state.ZonePrivateKey = append([]byte(nil), key.PrivateKey...)
+		if state.Network == nil {
+			state.Network = zone.NewNetworkState()
+		}
+		mergeJoinBundleNetwork(state.Network, bundleNetwork)
+		configureValidation(state.Network)
+		normalizeState(state.Network)
+		if err := higgscrypto.VerifyChain(state.Network, bundle.Zone, rt.Now()); err != nil {
+			return nil, nil, err
+		}
+	}
+	return state, &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
+}
+
+func installPreparedState(dst, src *stateFile) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.ManagedZone = src.ManagedZone
+	dst.IdentityKeyPath = src.IdentityKeyPath
+	dst.RootPrivateKey = src.RootPrivateKey
+	dst.ZonePrivateKey = src.ZonePrivateKey
+	dst.Network = src.Network
+	dst.SyncPeers = src.SyncPeers
+	dst.IPsecTransportKey = src.IPsecTransportKey
+	dst.IPsecPortRecord = src.IPsecPortRecord
+	dst.LinkInstances = src.LinkInstances
+	dst.IPsecReconcile = src.IPsecReconcile
+	dst.RoutingReconcile = src.RoutingReconcile
+	dst.FirewallReconcile = src.FirewallReconcile
+	dst.EndpointACLs = src.EndpointACLs
+	dst.BirdInstances = src.BirdInstances
+	dst.Admission = src.Admission
 }
 
 func optionalJoinAcceptKey(_ *Runtime, keyPath string) (*privateKeyFile, error) {
@@ -394,6 +434,13 @@ func joinAcceptKeyFromState(rt *Runtime, expectedZone zone.ZonePath) (*privateKe
 	if err != nil {
 		return nil, fmt.Errorf("join accept requires key.json because existing state could not be loaded: %w", err)
 	}
+	return joinAcceptKeyFromStateFile(state, expectedZone)
+}
+
+func joinAcceptKeyFromStateFile(state *stateFile, expectedZone zone.ZonePath) (*privateKeyFile, error) {
+	if state == nil {
+		return nil, errors.New("join accept requires key.json because no existing state is available")
+	}
 	if state.ManagedZone != expectedZone {
 		return nil, fmt.Errorf("join accept requires key.json because existing state manages %s, not %s", state.ManagedZone, expectedZone)
 	}
@@ -403,8 +450,8 @@ func joinAcceptKeyFromState(rt *Runtime, expectedZone zone.ZonePath) (*privateKe
 	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
 	return &privateKeyFile{
 		Type:       "higgs.ed25519.private.v1",
-		PublicKey:  pub,
-		PrivateKey: state.ZonePrivateKey,
+		PublicKey:  append([]byte(nil), pub...),
+		PrivateKey: append([]byte(nil), state.ZonePrivateKey...),
 	}, nil
 }
 

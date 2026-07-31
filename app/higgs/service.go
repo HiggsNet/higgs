@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
@@ -14,6 +16,17 @@ import (
 )
 
 const socks5RecordName = "socks5"
+
+type serviceMutationRequest struct {
+	Operation string                        `json:"operation"`
+	Endpoints []higgsservice.SOCKS5Endpoint `json:"endpoints,omitempty"`
+	DryRun    bool                          `json:"dry_run,omitempty"`
+}
+
+const (
+	serviceOperationPublish  = "publish"
+	serviceOperationWithdraw = "withdraw"
+)
 
 func publishSOCKS5Endpoints(endpoints []higgsservice.SOCKS5Endpoint, direct bool) error {
 	rt, err := NewRuntime()
@@ -25,26 +38,10 @@ func publishSOCKS5Endpoints(endpoints []higgsservice.SOCKS5Endpoint, direct bool
 }
 
 func publishSOCKS5EndpointsWithRuntime(rt *Runtime, endpoints []higgsservice.SOCKS5Endpoint) error {
-	canonical := make([]higgsservice.SOCKS5Endpoint, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		addr, err := netip.ParseAddr(endpoint.Address)
-		if err != nil {
-			return fmt.Errorf("invalid service address %q: %w", endpoint.Address, err)
-		}
-		endpoint.Address = addr.String()
-		canonical = append(canonical, endpoint)
-	}
-	sort.Slice(canonical, func(i, j int) bool {
-		if canonical[i].Region != canonical[j].Region {
-			return canonical[i].Region < canonical[j].Region
-		}
-		return canonical[i].Address < canonical[j].Address
-	})
-	value := higgsservice.SOCKS5Record{Type: higgsservice.TypeSOCKS5, Endpoints: canonical}
-	if err := value.Validate(); err != nil {
-		return err
-	}
-	return submitSOCKS5ServiceRecord(rt, value, "published")
+	return submitServiceMutation(rt, serviceMutationRequest{
+		Operation: serviceOperationPublish,
+		Endpoints: append([]higgsservice.SOCKS5Endpoint(nil), endpoints...),
+	}, "published")
 }
 
 func parseSOCKS5EndpointFlags(values []string, legacyRegion, legacyAddress string, legacyPort uint16) ([]higgsservice.SOCKS5Endpoint, error) {
@@ -82,62 +79,110 @@ func withdrawSOCKS5Service(direct bool) error {
 }
 
 func withdrawSOCKS5ServiceWithRuntime(rt *Runtime) error {
-	key, _ := higgsservice.RecordKey(socks5RecordName)
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
-	zs := state.Network.Zones[state.ManagedZone]
-	if zs == nil || zs.Records[key] == nil {
-		return fmt.Errorf("service %q is not published", socks5RecordName)
-	}
-	current, err := higgsservice.ParseSOCKS5Record(zs.Records[key])
-	if err != nil {
-		return fmt.Errorf("current service record is invalid: %w", err)
-	}
-	if !current.IsActive() {
-		return nil
-	}
-	active := false
-	current.Active = &active
-	return submitSOCKS5ServiceRecord(rt, *current, "withdrew")
+	return submitServiceMutation(rt, serviceMutationRequest{Operation: serviceOperationWithdraw}, "withdrew")
 }
 
-func submitSOCKS5ServiceRecord(rt *Runtime, value higgsservice.SOCKS5Record, operation string) error {
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
-	key, err := higgsservice.RecordKey(socks5RecordName)
-	if err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("marshal service record: %w", err)
-	}
-	candidate := &zone.Record{Zone: state.ManagedZone, Key: key, Type: higgsservice.RecordTypeSOCKS5, Value: encoded}
-	if value.IsActive() {
-		ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
-		if err != nil {
-			return fmt.Errorf("build route authorization: %w", err)
-		}
-		if _, err := higgsservice.AuthorizeSOCKS5Record(candidate, ars); err != nil {
-			return err
-		}
-	}
-	if version, ok, err := putRecordViaControl(rt, state.ManagedZone, key, encoded, higgsservice.RecordTypeSOCKS5); ok {
+func submitServiceMutation(rt *Runtime, request serviceMutationRequest, operation string) error {
+	if version, ok, err := mutateServiceViaControl(rt, request); ok {
 		if err != nil {
 			return err
 		}
 		fmt.Printf("%s service %s version %d via daemon\n", operation, socks5RecordName, version)
 		return nil
 	}
-	if !rt.DisableControl {
-		logControlFallback("service_submit")
-	}
-	if err := putRecordDirect(rt, state.ManagedZone, key, encoded, higgsservice.RecordTypeSOCKS5); err != nil {
+	state, err := rt.LoadState()
+	if err != nil {
 		return err
 	}
+	result, err := applyServiceMutation(state, request, rt.Now())
+	if err != nil {
+		return err
+	}
+	if !result.DryRun {
+		if err := rt.SaveState(state); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("%s service %s version %d\n", operation, socks5RecordName, result.Version)
 	return nil
+}
+
+func applyServiceMutation(state *stateFile, request serviceMutationRequest, now time.Time) (*recordMutationResult, error) {
+	if state == nil || state.Network == nil {
+		return nil, errors.New("state is nil")
+	}
+	path := state.ManagedZone
+	if !path.Valid() {
+		return nil, fmt.Errorf("invalid managed zone: %s", path)
+	}
+	key, err := higgsservice.RecordKey(socks5RecordName)
+	if err != nil {
+		return nil, err
+	}
+	var value higgsservice.SOCKS5Record
+	switch request.Operation {
+	case serviceOperationPublish:
+		canonical := make([]higgsservice.SOCKS5Endpoint, 0, len(request.Endpoints))
+		for _, endpoint := range request.Endpoints {
+			addr, err := netip.ParseAddr(endpoint.Address)
+			if err != nil {
+				return nil, fmt.Errorf("invalid service address %q: %w", endpoint.Address, err)
+			}
+			endpoint.Address = addr.String()
+			canonical = append(canonical, endpoint)
+		}
+		sort.Slice(canonical, func(i, j int) bool {
+			if canonical[i].Region != canonical[j].Region {
+				return canonical[i].Region < canonical[j].Region
+			}
+			return canonical[i].Address < canonical[j].Address
+		})
+		value = higgsservice.SOCKS5Record{Type: higgsservice.TypeSOCKS5, Endpoints: canonical}
+		if err := value.Validate(); err != nil {
+			return nil, err
+		}
+	case serviceOperationWithdraw:
+		zs := state.Network.Zones[path]
+		if zs == nil || zs.Records[key] == nil {
+			return nil, fmt.Errorf("service %q is not published", socks5RecordName)
+		}
+		current, err := higgsservice.ParseSOCKS5Record(zs.Records[key])
+		if err != nil {
+			return nil, fmt.Errorf("current service record is invalid: %w", err)
+		}
+		if !current.IsActive() {
+			return nil, fmt.Errorf("service %q is already withdrawn", socks5RecordName)
+		}
+		active := false
+		current.Active = &active
+		value = *current
+	default:
+		return nil, fmt.Errorf("unsupported service operation %q", request.Operation)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal service record: %w", err)
+	}
+	if value.IsActive() {
+		candidate := &zone.Record{Zone: path, Key: key, Type: higgsservice.RecordTypeSOCKS5, Value: encoded}
+		ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+		if err != nil {
+			return nil, fmt.Errorf("build route authorization: %w", err)
+		}
+		if _, err := higgsservice.AuthorizeSOCKS5Record(candidate, ars); err != nil {
+			return nil, err
+		}
+	}
+	record, err := buildSignedRecordAt(state, path, key, encoded, higgsservice.RecordTypeSOCKS5, now)
+	if err != nil {
+		return nil, err
+	}
+	result := &recordMutationResult{Zone: path, Key: key, Version: record.Version, DryRun: request.DryRun}
+	if request.DryRun {
+		return result, nil
+	}
+	if err := state.Network.Put(record); err != nil {
+		return nil, err
+	}
+	return result, nil
 }

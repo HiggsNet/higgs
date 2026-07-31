@@ -25,24 +25,27 @@ import (
 const controlSocketName = "higgs.sock"
 
 type controlRequest struct {
-	Method      string               `json:"method"`
-	Zone        string               `json:"zone,omitempty"`
-	Key         string               `json:"key,omitempty"`
-	Value       []byte               `json:"value,omitempty"`
-	ValueText   string               `json:"value_text,omitempty"`
-	Type        string               `json:"type,omitempty"`
-	History     int                  `json:"history,omitempty"`
-	Reason      string               `json:"reason,omitempty"`
-	JoinRequest *joinRequest         `json:"join_request,omitempty"`
-	JoinBundle  *joinBundle          `json:"join_bundle,omitempty"`
-	PrivateKey  *privateKeyFile      `json:"private_key,omitempty"`
-	Permissions []zone.Permission    `json:"permissions,omitempty"`
-	Snapshot    *gossip.ZoneSnapshot `json:"snapshot,omitempty"`
-	Apply       bool                 `json:"apply,omitempty"`
-	Orphans     bool                 `json:"orphans,omitempty"`
-	NetNS       string               `json:"netns,omitempty"`
-	BirdView    string               `json:"bird_view,omitempty"`
-	EndpointACL *endpointACL         `json:"endpoint_acl,omitempty"`
+	Method      string                  `json:"method"`
+	Zone        string                  `json:"zone,omitempty"`
+	Key         string                  `json:"key,omitempty"`
+	Value       []byte                  `json:"value,omitempty"`
+	ValueText   string                  `json:"value_text,omitempty"`
+	Type        string                  `json:"type,omitempty"`
+	History     int                     `json:"history,omitempty"`
+	Reason      string                  `json:"reason,omitempty"`
+	JoinRequest *joinRequest            `json:"join_request,omitempty"`
+	JoinBundle  *joinBundle             `json:"join_bundle,omitempty"`
+	PrivateKey  *privateKeyFile         `json:"private_key,omitempty"`
+	Permissions []zone.Permission       `json:"permissions,omitempty"`
+	Snapshot    *gossip.ZoneSnapshot    `json:"snapshot,omitempty"`
+	Apply       bool                    `json:"apply,omitempty"`
+	Orphans     bool                    `json:"orphans,omitempty"`
+	NetNS       string                  `json:"netns,omitempty"`
+	BirdView    string                  `json:"bird_view,omitempty"`
+	EndpointACL *endpointACL            `json:"endpoint_acl,omitempty"`
+	IPAM        *ipamMutationRequest    `json:"ipam,omitempty"`
+	Route       *routeMutationRequest   `json:"route,omitempty"`
+	Service     *serviceMutationRequest `json:"service,omitempty"`
 }
 
 type controlResponse struct {
@@ -274,7 +277,10 @@ func stateGCViaControl(rt *Runtime, apply bool) (*controlResponse, bool, error) 
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "state_gc", Apply: apply})
 	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
+		if !apply {
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
 	}
 	return response, true, err
 }
@@ -344,11 +350,50 @@ func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []by
 	})
 	if err != nil {
 		if isControlSocketUnavailable(err) {
-			return 0, false, nil
+			return 0, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
 		}
 		return 0, true, err
 	}
 	return response.Version, true, nil
+}
+
+func mutateIPAMViaControl(rt *Runtime, request ipamMutationRequest) (uint64, bool, error) {
+	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "ipam_mutate", IPAM: &request})
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	return response.Version, true, nil
+}
+
+func mutateRouteViaControl(rt *Runtime, request routeMutationRequest) (uint64, bool, error) {
+	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "route_mutate", Route: &request})
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	return response.Version, true, nil
+}
+
+func mutateServiceViaControl(rt *Runtime, request serviceMutationRequest) (uint64, bool, error) {
+	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "service_mutate", Service: &request})
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	return response.Version, true, nil
+}
+
+func sendMutationControlRequest(rt *Runtime, request controlRequest) (*controlResponse, bool, error) {
+	if rt != nil && rt.DisableControl {
+		return nil, false, nil
+	}
+	socketPath := controlSocketPath(nil)
+	if rt != nil {
+		socketPath = controlSocketPath(rt.Config)
+	}
+	response, err := sendControlRequest(socketPath, request)
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
+	}
+	return response, true, err
 }
 
 func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, bool, error) {
@@ -459,9 +504,19 @@ func acceptJoinBundleViaControl(rt *Runtime, bundle *joinBundle, key *privateKey
 }
 
 func initRootViaControl(rt *Runtime) (ed25519.PublicKey, bool, error) {
-	response, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "root_init"})
-	if err != nil || !ok {
-		return nil, ok, err
+	// root init is an offline bootstrap operation. Probe an existing daemon only
+	// to prevent resetting state it has already loaded; a missing socket is the
+	// normal initialization case and must not require --direct.
+	socketPath := controlSocketPath(nil)
+	if rt != nil {
+		socketPath = controlSocketPath(rt.Config)
+	}
+	response, err := sendControlRequest(socketPath, controlRequest{Method: "root_init"})
+	if err != nil {
+		if isControlSocketUnavailable(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
 	}
 	return response.RootPublicKey, true, nil
 }
@@ -477,7 +532,7 @@ func sendAdminControlRequest(rt *Runtime, request controlRequest) (*controlRespo
 	response, err := sendControlRequest(socketPath, request)
 	if err != nil {
 		if isControlSocketUnavailable(err) {
-			return nil, false, nil
+			return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
 		}
 		return nil, true, err
 	}
@@ -543,7 +598,7 @@ func validateControlRecordPut(request controlRequest) error {
 	if request.Type == "" {
 		return fmt.Errorf("record_put requires type")
 	}
-	return nil
+	return validateGenericRecordPut(request.Key, request.Type)
 }
 
 func validateControlRecordGet(request controlRequest) error {

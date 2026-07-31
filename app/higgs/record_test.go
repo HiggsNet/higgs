@@ -3,8 +3,41 @@ package main
 import (
 	"testing"
 
+	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/higgs/pkg/routing"
+	higgsservice "github.com/Catofes/higgs/pkg/service"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
+
+func TestGenericRecordPutRejectsDaemonOwnedKeysAndTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        string
+		recordType string
+		wantError  bool
+	}{
+		{name: "ordinary application record", key: "apps/example", recordType: "application.example.v1"},
+		{name: "ipam pool key", key: routing.RecordKeyPrefixIPAMPools + "10.0.0.0_8", recordType: "application.example.v1", wantError: true},
+		{name: "ipam assignment key", key: routing.RecordKeyPrefixIPAMAssignments + "10.0.0.0_8", recordType: "application.example.v1", wantError: true},
+		{name: "route key", key: routing.RecordKeyPrefixRoutes + "10.0.0.0_8", recordType: "application.example.v1", wantError: true},
+		{name: "service key", key: higgsservice.RecordKeyPrefix + "socks5", recordType: "application.example.v1", wantError: true},
+		{name: "routing key", key: routing.RecordKeyRoutingNetns, recordType: "application.example.v1", wantError: true},
+		{name: "ipsec key", key: ipsec.RecordKeyPorts, recordType: "application.example.v1", wantError: true},
+		{name: "sync key", key: gossip.EndpointRecordKeyUDP, recordType: "application.example.v1", wantError: true},
+		{name: "reserved type outside namespace", key: "apps/example", recordType: routing.RecordTypeIPAMPool, wantError: true},
+		{name: "service type outside namespace", key: "apps/example", recordType: higgsservice.RecordTypeSOCKS5, wantError: true},
+		{name: "endpoint type outside namespace", key: "apps/example", recordType: "sync.endpoint", wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateGenericRecordPut(tt.key, tt.recordType)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("validateGenericRecordPut(%q, %q) error = %v, wantError=%t", tt.key, tt.recordType, err, tt.wantError)
+			}
+		})
+	}
+}
 
 func TestLookupRecordDetail(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)

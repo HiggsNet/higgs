@@ -4,13 +4,68 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
 	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
+	"github.com/Catofes/higgs/pkg/core/gossip"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/higgs/pkg/routing"
+	higgsservice "github.com/Catofes/higgs/pkg/service"
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
+
+type recordMutationResult struct {
+	Zone    zone.ZonePath
+	Key     string
+	Version uint64
+	DryRun  bool
+}
+
+func cloneNetworkStateForCandidateValidation(ns *zone.NetworkState) *zone.NetworkState {
+	if ns == nil {
+		return zone.NewNetworkState()
+	}
+	return zone.CloneNetworkState(ns)
+}
+
+func validateGenericRecordPut(key, recordType string) error {
+	reservedPrefixes := []string{
+		routing.RecordKeyPrefixIPAMPools,
+		routing.RecordKeyPrefixIPAMAssignments,
+		routing.RecordKeyPrefixRoutes,
+		higgsservice.RecordKeyPrefix,
+		"routing/",
+		"ipsec/",
+		gossip.EndpointRecordKeyPrefix,
+	}
+	for _, prefix := range reservedPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return fmt.Errorf("record_put key %q is daemon-owned; use its typed control method", key)
+		}
+	}
+	reservedTypes := []string{
+		routing.RecordTypeIPAMPool,
+		routing.RecordTypeIPAMAssignment,
+		routing.RecordTypeRouteAnnouncement,
+		routing.RecordTypeRoutingNetns,
+		higgsservice.RecordTypeSOCKS5,
+		ipsec.RecordTypeProfile,
+		ipsec.RecordTypeAddresses,
+		ipsec.RecordTypePorts,
+		ipsec.RecordTypeTransportKey,
+		ipsec.RecordTypeOverlayIntent,
+		"sync.endpoint",
+	}
+	for _, reserved := range reservedTypes {
+		if recordType == reserved {
+			return fmt.Errorf("record_put type %q is daemon-owned; use its typed control method", recordType)
+		}
+	}
+	return nil
+}
 
 func putRecord(path zone.ZonePath, key string, value []byte, recordType string, direct bool) error {
 	rt, err := NewRuntime()
@@ -32,6 +87,9 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string, 
 }
 
 func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) error {
+	if err := validateGenericRecordPut(key, recordType); err != nil {
+		return err
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err

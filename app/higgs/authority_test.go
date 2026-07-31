@@ -53,14 +53,14 @@ func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 		t.Fatalf("createJoinRequest(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", adminConfig)
-	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil, false); err != nil {
+	if err := issueDelegation(catofesRequestPath, catofesBundlePath, nil, true); err != nil {
 		t.Fatalf("issueDelegation(catofes): %v", err)
 	}
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
-	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, false); err != nil {
+	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, true); err != nil {
 		t.Fatalf("acceptJoinBundle(initial): %v", err)
 	}
-	if err := putRecord("catofes.", "local-note", []byte("keep me"), "policy.string", false); err != nil {
+	if err := putRecord("catofes.", "local-note", []byte("keep me"), "policy.string", true); err != nil {
 		t.Fatalf("putRecord(catofes local): %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 		t.Fatalf("catofes authority unexpectedly has allocate-ip before grant")
 	}
 
-	if err := grantDelegationPermissions("catofes.", []zone.Permission{zone.PermAllocateIP}, grantBundlePath, false); err != nil {
+	if err := grantDelegationPermissions("catofes.", []zone.Permission{zone.PermAllocateIP}, grantBundlePath, true); err != nil {
 		t.Fatalf("grantDelegationPermissions(catofes): %v", err)
 	}
 	state, err = loadState()
@@ -94,7 +94,7 @@ func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 	}
 
 	t.Setenv("HIGGS_CONFIG", catofesConfig)
-	if err := acceptJoinBundle(grantBundlePath, "", false); err != nil {
+	if err := acceptJoinBundle(grantBundlePath, "", true); err != nil {
 		t.Fatalf("acceptJoinBundle(grant): %v", err)
 	}
 	childState, err := loadState()

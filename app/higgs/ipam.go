@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -10,10 +11,28 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
 	"github.com/urfave/cli/v3"
+)
+
+type ipamMutationRequest struct {
+	Operation string        `json:"operation"`
+	Zone      zone.ZonePath `json:"zone"`
+	Prefix    string        `json:"prefix"`
+	Target    zone.ZonePath `json:"target,omitempty"`
+	Shared    bool          `json:"shared,omitempty"`
+	Tag       string        `json:"tag,omitempty"`
+	DryRun    bool          `json:"dry_run,omitempty"`
+}
+
+const (
+	ipamOperationPoolCreate       = "pool_create"
+	ipamOperationPoolRevoke       = "pool_revoke"
+	ipamOperationAssignmentCreate = "assignment_create"
+	ipamOperationAssignmentRevoke = "assignment_revoke"
 )
 
 func cmdIPAM() *cli.Command {
@@ -188,14 +207,10 @@ func createIPAMPool(path zone.ZonePath, prefix string, delegatedTo zone.ZonePath
 }
 
 func createIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, delegatedTo zone.ZonePath) error {
-	canonical, key, value, err := prepareIPAMPoolRecord(prefix, delegatedTo, true)
-	if err != nil {
-		return err
-	}
-	if err := dryRunIPAMRecord(rt, path, key, value, routing.RecordTypeIPAMPool, canonical, "ipam_pool_owner_mismatch", "ipam_pool_overlap"); err != nil {
-		return err
-	}
-	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMPool, true, "created")
+	return submitIPAMMutation(rt, ipamMutationRequest{
+		Operation: ipamOperationPoolCreate,
+		Zone:      path, Prefix: prefix, Target: delegatedTo,
+	}, "created")
 }
 
 func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string, direct bool) error {
@@ -208,14 +223,10 @@ func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, sha
 }
 
 func assignIPAMWithRuntimeTag(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string) error {
-	canonical, key, value, err := prepareIPAMAssignmentRecordTag(prefix, assignedTo, true, shared, tag)
-	if err != nil {
-		return err
-	}
-	if err := dryRunIPAMRecord(rt, path, key, value, routing.RecordTypeIPAMAssignment, canonical, "ipam_assignment_pool_mismatch", "ipam_assignment_overlap"); err != nil {
-		return err
-	}
-	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMAssignment, true, "assigned")
+	return submitIPAMMutation(rt, ipamMutationRequest{
+		Operation: ipamOperationAssignmentCreate,
+		Zone:      path, Prefix: prefix, Target: assignedTo, Shared: shared, Tag: tag,
+	}, "assigned")
 }
 
 func revokeIPAMPool(path zone.ZonePath, prefix string, direct bool) error {
@@ -228,15 +239,10 @@ func revokeIPAMPool(path zone.ZonePath, prefix string, direct bool) error {
 }
 
 func revokeIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) error {
-	canonical, key, delegatedTo, err := currentIPAMPoolInfo(rt, path, prefix)
-	if err != nil {
-		return err
-	}
-	value, err := marshalIPAMPoolRecord(canonical, delegatedTo, false)
-	if err != nil {
-		return err
-	}
-	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMPool, false, "revoked")
+	return submitIPAMMutation(rt, ipamMutationRequest{
+		Operation: ipamOperationPoolRevoke,
+		Zone:      path, Prefix: prefix,
+	}, "revoked")
 }
 
 func revokeIPAMAssignmentTo(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, direct bool) error {
@@ -249,15 +255,206 @@ func revokeIPAMAssignmentTo(path zone.ZonePath, prefix string, assignedTo zone.Z
 }
 
 func revokeIPAMAssignmentWithRuntimeTo(rt *Runtime, path zone.ZonePath, prefix string, target zone.ZonePath) error {
-	canonical, key, assignedTo, shared, tag, err := currentIPAMAssignmentInfoFor(rt, path, prefix, target)
+	return submitIPAMMutation(rt, ipamMutationRequest{
+		Operation: ipamOperationAssignmentRevoke,
+		Zone:      path, Prefix: prefix, Target: target,
+	}, "revoked")
+}
+
+func submitIPAMMutation(rt *Runtime, request ipamMutationRequest, operation string) error {
+	if version, ok, err := mutateIPAMViaControl(rt, request); ok {
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s IPAM %s version %d via daemon\n", operation, request.Prefix, version)
+		return nil
+	}
+	state, err := rt.LoadState()
 	if err != nil {
 		return err
 	}
-	value, err := marshalIPAMAssignmentRecordTag(canonical, assignedTo, false, shared, tag)
+	result, err := applyIPAMMutation(state, request, rt.Now())
 	if err != nil {
 		return err
 	}
-	return submitIPAMRecord(rt, path, key, value, canonical, routing.RecordTypeIPAMAssignment, false, "revoked")
+	if !result.DryRun {
+		if err := rt.SaveState(state); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("%s %s/%s version %d\n", operation, result.Zone, result.Key, result.Version)
+	return nil
+}
+
+func applyIPAMMutation(state *stateFile, request ipamMutationRequest, now time.Time) (*recordMutationResult, error) {
+	if state == nil || state.Network == nil {
+		return nil, errors.New("state is nil")
+	}
+	if !request.Zone.Valid() {
+		return nil, fmt.Errorf("invalid IPAM zone: %s", request.Zone)
+	}
+
+	var canonical, key, recordType string
+	var value []byte
+	var err error
+	switch request.Operation {
+	case ipamOperationPoolCreate:
+		if !request.Target.Valid() {
+			return nil, fmt.Errorf("invalid delegated zone: %s", request.Target)
+		}
+		canonical, key, value, err = prepareIPAMPoolRecord(request.Prefix, request.Target, true)
+		recordType = routing.RecordTypeIPAMPool
+	case ipamOperationPoolRevoke:
+		var delegatedTo zone.ZonePath
+		canonical, key, delegatedTo, err = currentIPAMPoolInfoInState(state, request.Zone, request.Prefix)
+		if err == nil {
+			value, err = marshalIPAMPoolRecord(canonical, delegatedTo, false)
+		}
+		recordType = routing.RecordTypeIPAMPool
+	case ipamOperationAssignmentCreate:
+		if !request.Target.Valid() {
+			return nil, fmt.Errorf("invalid assigned zone: %s", request.Target)
+		}
+		canonical, key, value, err = prepareIPAMAssignmentRecordTag(request.Prefix, request.Target, true, request.Shared, request.Tag)
+		recordType = routing.RecordTypeIPAMAssignment
+	case ipamOperationAssignmentRevoke:
+		var assignedTo zone.ZonePath
+		var shared bool
+		var tag string
+		canonical, key, assignedTo, shared, tag, err = currentIPAMAssignmentInfoInState(state, request.Zone, request.Prefix, request.Target)
+		if err == nil {
+			value, err = marshalIPAMAssignmentRecordTag(canonical, assignedTo, false, shared, tag)
+		}
+		recordType = routing.RecordTypeIPAMAssignment
+	default:
+		return nil, fmt.Errorf("unsupported IPAM operation %q", request.Operation)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := checkIPAMWriteCapability(state, request.Zone, key); err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(request.Operation, "_create") {
+		rejectCodes := []string{"ipam_assignment_pool_mismatch", "ipam_assignment_overlap"}
+		if recordType == routing.RecordTypeIPAMPool {
+			rejectCodes = []string{"ipam_pool_owner_mismatch", "ipam_pool_overlap"}
+		}
+		if err := validateIPAMCandidate(state, request.Zone, key, value, recordType, canonical, now, rejectCodes...); err != nil {
+			return nil, err
+		}
+	} else if err := checkIPAMRevokeAllowed(state, request.Zone, key, canonical, recordType); err != nil {
+		return nil, err
+	}
+
+	record, err := buildSignedRecordAt(state, request.Zone, key, value, recordType, now)
+	if err != nil {
+		return nil, err
+	}
+	result := &recordMutationResult{Zone: request.Zone, Key: key, Version: record.Version, DryRun: request.DryRun}
+	if request.DryRun {
+		return result, nil
+	}
+	if err := state.Network.Put(record); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func validateIPAMCandidate(state *stateFile, path zone.ZonePath, key string, value []byte, recordType, canonical string, now time.Time, rejectCodes ...string) error {
+	ns := cloneNetworkStateForCandidateValidation(state.Network)
+	zs := ns.Zones[path]
+	if zs == nil {
+		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	zs.Records[key] = &zone.Record{Zone: path, Key: key, Type: recordType, Value: append([]byte(nil), value...)}
+	ars, err := routing.BuildAuthorizedRouteSet(ns, now)
+	if err != nil {
+		return err
+	}
+	reject := make(map[string]bool, len(rejectCodes))
+	for _, code := range rejectCodes {
+		reject[code] = true
+	}
+	for _, authErr := range ars.Errors {
+		if authErr.Zone == path && authErr.Prefix.String() == canonical && reject[authErr.Code] {
+			return fmt.Errorf("%s: %s", authErr.Code, authErr.Detail)
+		}
+	}
+	return nil
+}
+
+func currentIPAMPoolInfoInState(state *stateFile, path zone.ZonePath, prefix string) (canonical, key string, delegatedTo zone.ZonePath, err error) {
+	canonical, err = routing.CanonicalizePrefix(prefix)
+	if err != nil {
+		return "", "", "", fmt.Errorf("invalid prefix %q: %w", prefix, err)
+	}
+	key, err = routing.NormalizeIPAMPoolKey(prefix)
+	if err != nil {
+		return "", "", "", fmt.Errorf("normalize pool key for %q: %w", prefix, err)
+	}
+	zs := state.Network.Zones[path]
+	if zs == nil {
+		return "", "", "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	current := zs.Records[key]
+	if current == nil {
+		return "", "", "", fmt.Errorf("no active ipam.pool for %s in %s", canonical, path)
+	}
+	pool, err := routing.ParseIPAMPoolRecord(current)
+	if err != nil {
+		return "", "", "", fmt.Errorf("current pool record for %s is invalid: %w", canonical, err)
+	}
+	if !pool.Active {
+		return "", "", "", fmt.Errorf("pool %s in %s is already revoked", canonical, path)
+	}
+	return canonical, key, pool.DelegatedTo, nil
+}
+
+func currentIPAMAssignmentInfoInState(state *stateFile, path zone.ZonePath, prefix string, target zone.ZonePath) (canonical, key string, assignedTo zone.ZonePath, shared bool, tag string, err error) {
+	canonical, err = routing.CanonicalizePrefix(prefix)
+	if err != nil {
+		return "", "", "", false, "", fmt.Errorf("invalid prefix %q: %w", prefix, err)
+	}
+	baseKey, err := routing.NormalizeIPAMAssignmentKey(prefix)
+	if err != nil {
+		return "", "", "", false, "", fmt.Errorf("normalize assignment key for %q: %w", prefix, err)
+	}
+	zs := state.Network.Zones[path]
+	if zs == nil {
+		return "", "", "", false, "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	type match struct {
+		key    string
+		record *routing.IPAMAssignmentRecord
+	}
+	var matches []match
+	foundRevoked := false
+	for candidateKey, current := range zs.Records {
+		if candidateKey != baseKey && !strings.HasPrefix(candidateKey, baseKey+"#") {
+			continue
+		}
+		assignment, parseErr := routing.ParseIPAMAssignmentRecord(current)
+		if parseErr != nil || assignment.Prefix != canonical || (target.Valid() && assignment.AssignedTo != target) {
+			continue
+		}
+		if !assignment.Active {
+			foundRevoked = true
+			continue
+		}
+		matches = append(matches, match{key: candidateKey, record: assignment})
+	}
+	if len(matches) == 0 {
+		if foundRevoked {
+			return "", "", "", false, "", fmt.Errorf("assignment %s in %s is already revoked", canonical, path)
+		}
+		return "", "", "", false, "", fmt.Errorf("no active ipam.assignment for %s in %s", canonical, path)
+	}
+	if len(matches) > 1 {
+		return "", "", "", false, "", fmt.Errorf("multiple shared assignments exist for %s in %s; specify --to", canonical, path)
+	}
+	assignment := matches[0].record
+	return canonical, matches[0].key, assignment.AssignedTo, assignment.Shared, assignment.Tag, nil
 }
 
 func prepareIPAMPoolRecord(prefix string, delegatedTo zone.ZonePath, active bool) (canonical, key string, value []byte, err error) {
@@ -314,194 +511,6 @@ func marshalIPAMAssignmentRecordTag(canonical string, assignedTo zone.ZonePath, 
 		return nil, fmt.Errorf("marshal ipam assignment record: %w", err)
 	}
 	return value, nil
-}
-
-func currentIPAMPoolInfo(rt *Runtime, path zone.ZonePath, prefix string) (canonical, key string, delegatedTo zone.ZonePath, err error) {
-	canonical, err = routing.CanonicalizePrefix(prefix)
-	if err != nil {
-		return "", "", "", fmt.Errorf("invalid prefix %q: %w", prefix, err)
-	}
-	key, err = routing.NormalizeIPAMPoolKey(prefix)
-	if err != nil {
-		return "", "", "", fmt.Errorf("normalize pool key for %q: %w", prefix, err)
-	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return "", "", "", err
-	}
-	zs := state.Network.Zones[path]
-	if zs == nil {
-		return "", "", "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	current := zs.Records[key]
-	if current == nil {
-		return "", "", "", fmt.Errorf("no active ipam.pool for %s in %s", canonical, path)
-	}
-	pool, err := routing.ParseIPAMPoolRecord(current)
-	if err != nil {
-		return "", "", "", fmt.Errorf("current pool record for %s is invalid: %w", canonical, err)
-	}
-	if !pool.Active {
-		return "", "", "", fmt.Errorf("pool %s in %s is already revoked", canonical, path)
-	}
-	return canonical, key, pool.DelegatedTo, nil
-}
-
-func currentIPAMAssignmentInfoFor(rt *Runtime, path zone.ZonePath, prefix string, target zone.ZonePath) (canonical, key string, assignedTo zone.ZonePath, shared bool, tag string, err error) {
-	canonical, err = routing.CanonicalizePrefix(prefix)
-	if err != nil {
-		return "", "", "", false, "", fmt.Errorf("invalid prefix %q: %w", prefix, err)
-	}
-	baseKey, err := routing.NormalizeIPAMAssignmentKey(prefix)
-	if err != nil {
-		return "", "", "", false, "", fmt.Errorf("normalize assignment key for %q: %w", prefix, err)
-	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return "", "", "", false, "", err
-	}
-	zs := state.Network.Zones[path]
-	if zs == nil {
-		return "", "", "", false, "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	type match struct {
-		key    string
-		record *routing.IPAMAssignmentRecord
-	}
-	var matches []match
-	foundRevoked := false
-	for candidateKey, current := range zs.Records {
-		if candidateKey != baseKey && !strings.HasPrefix(candidateKey, baseKey+"#") {
-			continue
-		}
-		assignment, parseErr := routing.ParseIPAMAssignmentRecord(current)
-		if parseErr != nil || assignment.Prefix != canonical {
-			continue
-		}
-		if target.Valid() && assignment.AssignedTo != target {
-			continue
-		}
-		if !assignment.Active {
-			foundRevoked = true
-			continue
-		}
-		matches = append(matches, match{key: candidateKey, record: assignment})
-	}
-	if len(matches) == 0 {
-		if foundRevoked {
-			return "", "", "", false, "", fmt.Errorf("assignment %s in %s is already revoked", canonical, path)
-		}
-		return "", "", "", false, "", fmt.Errorf("no active ipam.assignment for %s in %s", canonical, path)
-	}
-	if len(matches) > 1 {
-		return "", "", "", false, "", fmt.Errorf("multiple shared assignments exist for %s in %s; specify --to", canonical, path)
-	}
-	assignment := matches[0].record
-	return canonical, matches[0].key, assignment.AssignedTo, assignment.Shared, assignment.Tag, nil
-}
-
-func submitIPAMRecord(rt *Runtime, path zone.ZonePath, key string, value []byte, canonical string, recordType string, active bool, op string) error {
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
-	if err := checkIPAMWriteCapability(state, path, key); err != nil {
-		return err
-	}
-	if !active {
-		if err := checkIPAMRevokeAllowed(state, path, key, canonical, recordType); err != nil {
-			return err
-		}
-	}
-
-	if version, ok, err := putRecordViaControl(rt, path, key, value, recordType); ok {
-		if err != nil {
-			return err
-		}
-		fmt.Printf("%s %s/%s version %d via daemon\n", op, path, key, version)
-		return nil
-	}
-	if !rt.DisableControl {
-		logControlFallback("ipam_submit")
-	}
-	return putIPAMRecordDirect(rt, path, key, value, recordType, state)
-}
-
-func putIPAMRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string, state *stateFile) error {
-	if state == nil {
-		var err error
-		state, err = rt.LoadState()
-		if err != nil {
-			return err
-		}
-	}
-	record, err := buildSignedRecordAt(state, path, key, value, recordType, rt.Now())
-	if err != nil {
-		return err
-	}
-	if err := state.Network.Put(record); err != nil {
-		return err
-	}
-	if err := rt.SaveState(state); err != nil {
-		return err
-	}
-	fmt.Printf("put %s/%s version %d\n", path, key, record.Version)
-	return nil
-}
-
-func dryRunIPAMRecord(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType, canonical string, rejectCodes ...string) error {
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
-	if err := checkIPAMWriteCapability(state, path, key); err != nil {
-		return err
-	}
-	ns := cloneNetworkStateForIPAMDryRun(state.Network)
-	zs := ns.Zones[path]
-	if zs == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	zs.Records[key] = &zone.Record{Zone: path, Key: key, Type: recordType, Value: value}
-	ars, err := routing.BuildAuthorizedRouteSet(ns, rt.Now())
-	if err != nil {
-		return err
-	}
-	reject := make(map[string]bool, len(rejectCodes))
-	for _, code := range rejectCodes {
-		reject[code] = true
-	}
-	for _, authErr := range ars.Errors {
-		if authErr.Zone != path || authErr.Prefix.String() != canonical || !reject[authErr.Code] {
-			continue
-		}
-		return fmt.Errorf("%s: %s", authErr.Code, authErr.Detail)
-	}
-	return nil
-}
-
-func cloneNetworkStateForIPAMDryRun(ns *zone.NetworkState) *zone.NetworkState {
-	if ns == nil {
-		return zone.NewNetworkState()
-	}
-	clone := &zone.NetworkState{
-		Zones:          make(map[zone.ZonePath]*zone.ZoneState, len(ns.Zones)),
-		GlobalRoot:     ns.GlobalRoot,
-		RecordVerifier: ns.RecordVerifier,
-		RecordHasher:   ns.RecordHasher,
-	}
-	for path, zs := range ns.Zones {
-		if zs == nil {
-			continue
-		}
-		czs := *zs
-		czs.Records = make(map[string]*zone.Record, len(zs.Records))
-		for key, rec := range zs.Records {
-			czs.Records[key] = rec
-		}
-		clone.Zones[path] = &czs
-	}
-	return clone
 }
 
 func checkIPAMWriteCapability(state *stateFile, path zone.ZonePath, key string) error {
