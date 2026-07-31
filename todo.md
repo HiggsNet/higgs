@@ -18,7 +18,7 @@
 - [x] Phase 7.13-7.15 稳态冗余优化（XFRM maintenance、endpoint timer、unsolicited ping）。
 - [x] Phase 7.16 Firewall backend-native inline hooks 及后续收口（external mode、ip6tables 双栈探测、`higgs debug firewall` flag、nft priority 配置）。详细实现归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
 
-## Phase 9: Observer Web UI 重构（当前执行队列）
+## Phase 9: Observer Web UI 重构（已完成）
 
 **目标：** 解决现有 observer 网页视觉陈旧、信息架构混乱的问题。设计定稿见 [docs/new/observer-ui-redesign.md](docs/new/observer-ui-redesign.md)；observer 只读定位、REST API 形状与安全模型不变。
 
@@ -78,13 +78,16 @@
   - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
   - Health probe 性能：已实现按 netns 常驻的 raw-ICMP worker，worker 固定 OS thread 后 `setns` 并按源/接口复用 ICMP socket；raw socket / `setns` 的 setup 失败自动回退 exec prober，消除正常路径的 `ip netns exec ping` fork/exec/mount 开销。待完成 root smoke：IPv4、IPv6 link-local scope、netns 删除/重建、`CAP_NET_RAW` / `CAP_SYS_ADMIN` / `NoNewPrivileges` 缺失时的降级；验收后再确认默认路径的长期运行行为。
-  - **Daemon state-store 性能（perf 2026-07-24）**
-    - 当前模型是全局 `revision` + optimistic CAS 的粗粒度 COW；问题不在 commit 语义，而在 `BeginUpdate`、`Commit`、install 和 publish 反复通过 JSON round-trip 复制完整 state，体积最大的 `Network` 因此反复分配、base64 编解码并增加 GC/缺页压力。
+  - **Daemon state-store 性能（perf 2026-07-24，2026-07-31 复核）**
+    - daemon 生产写路径由主事件循环串行执行；packet receiver、object-pull、health 和 control 后台 goroutine 只投递事件或更新独立 observability，正常运行时不会并发执行两个 routing reconcile，也不会在 reconcile 中途插入另一个 committed writer。`DaemonStateStore` 的锁仍用于并发读和边界防护，全局 `revision` 用于排序及检测意外绕过 single-writer 的写入，而不是把多 writer 当作正常工作模式。
+    - 当前 committed root 及其可达子结构必须永久不可变；写操作只修改 detached workspace 或 typed COW 拥有的字段，发布时在锁内替换一次 root。`Snapshot()` 在取得 root/revision 后释放锁再复制是安全的，前提正是旧 root 不再原地修改。
+    - 当前主要成本不在 commit 语义，而在 `BeginUpdate`、`Commit` 和只读 snapshot 反复通过 JSON round-trip 复制完整 state，体积最大的 `Network` 因此反复分配、base64 编解码并增加 GC/缺页压力。
     - 实机 `higgsnet db stats` 显示逻辑有效数据约 1,094,124 bytes：`_meta` 约 34,099 bytes（3.1%），所有 `zone:*` bucket 约 1,060,025 bytes（96.9%）。磁盘文件约 4 MB 是 bbolt 页、空闲页和索引等分配后的文件大小；此前提及的 48 MB 是 health spool，不是 Network/state DB。
     - [x] 将每个 `zone/key` 的 `RecordHistory` 上限从 128 收紧为最近 16 条；新写入持续按 16 条截断，加载旧数据库时也裁掉更早历史，下一次成功保存会重写逻辑值。bbolt 文件不会因此自动缩小，物理回收若有需要应另做离线 compact，不纳入当前 CPU 修复。
     - 保留通用 `StateStore.Update` 当前的完整隔离语义：不得直接转移 workspace 所有权，也不得单独删除 commit 的第二次 clone。`Workspace()` 仍会把裸指针交给调用者，且 callback 可以 retain 指针；在 typed mutation 收口前，第二次 clone 是 committed 私有性的保证。
     - 不把完整 clone 移入 store 锁内；仅把 clone 延后到第一次 revision 检查之后只能优化 stale transaction，当前 perf 未证明 stale 是热点，不作为独立优化。
-    - 暂不引入 per-chunk revision，第一版结构共享继续使用全局 revision/CAS；暂不做手写全量深拷贝。手写 clone 只能降低复制单价、不能消除完整 Network 复制，并有新增字段遗漏风险；完成下面局部 COW 后若残余 clone 仍可测量，再以真实 fixture benchmark 和 clone 完整性测试评估。
+    - 不引入 component/per-chunk revision。typed COW 继续使用单一全局 revision；按 single-writer 设计，stale 属于异常防护，必须丢弃结果并重新排队，不能通过字段级 merge 把基于旧输入计算的结果合入新 root。若未来明确把 routing/IPsec reconcile 改为后台并行计算，再单独设计 read-set/component revision。
+    - 决定先实现完整手写深拷贝，作为保持现有事务边界不变的低风险降本层。2026-07-31 使用 1000 records、每条 128-byte value 的同一 Network fixture 复核：JSON clone 为 4.61-4.90 ms、1.47-1.56 MB、约 10,055 allocs；现有类型化手写 Network clone 为 0.212-0.226 ms、471 KB、4,013 allocs，约快 21-23 倍。该结果只代表 record-heavy Network，不把它直接外推为整机固定收益；手写 clone 之后仍需以同负载 perf 决定后续 COW 优先级。
     - `ZoneState.MerkleRoot` 当前没有完整的计算/失效维护，不能直接作为 digest cache。只有未来 perf 再次证明 zone digest 是热点，并覆盖 record/history、delegation、revocation、snapshot apply、recovery/import/purge、join/adoption 等所有 Network mutation 后，才考虑启用。
     - 不新增高基数内部 metrics；阶段验收继续由开发者手工运行 perf/strace，对比 idle CPU、clone/alloc、`LoadNetwork` 和 fork/exec。
 
@@ -136,10 +139,62 @@
     - PING、catalog summary/page、hint session、timer、普通 `FETCH_ZONE`、relay、object-pull 与 observed-path seed 已改为 committed view 内生成 detached projection；回调外发送消息、更新 transport 或记录日志。完整 chunk fallback 与 reconcile 继续使用隔离 snapshot，避免在 committed 读锁中执行外部副作用。
     - routing reconcile 的 auto-announce 后第二次 snapshot 保留；空 firewall/routing flush、peer 局部写和 daemon 自写 reload 回归测试检查 revision 不被隐式 republish、committed state 不被旧快照替换。1 MiB Network 的服务级 `recordSyncPeerState` 隔离基准约 0.92–1.00 µs / 2.10 KB / 10 alloc，对照通用 full update 约 15.5–15.8 ms / 6.44–7.08 MB / 136–139 alloc。
 
-  - [ ] **7.11.6 按新 perf 决定是否实现 Network/per-zone COW**
-    - 若 Network mutation 仍是热点，再复制 `Zones` map、目标 zone 及实际修改的 records/history 层，其他 zone 只读共享；继续使用全局 CAS，不预先引入版本集合和 stale merge。
-    - digest cache/MerkleRoot 维护属于本阶段的可选后续，不与 `UpdateSyncPeer` 首阶段绑定。
-    - 收益统计必须去重：`recordSyncPeerState` 的 inclusive 栈已包含 `BeginUpdate`、`Commit` 和 install，`snapshotState` 也可能包含 install；GC/缺页是 clone 的伴生成本，不能与 inclusive 百分比直接相加。每阶段以同负载新 perf 确认下一步，不把静态上界当固定收益。
+  - [ ] **7.11.6 StateStore 正确性、手写 clone 与分层 COW**
+
+    **目标与边界**
+    - 在不改变 daemon single-writer、磁盘格式、wire 格式、sync 部分成功语义和现有 control/observer DTO 的前提下，先修复 snapshot apply 的失败原子性，再降低完整 clone 单价，最后逐步消除不必要的完整 clone。
+    - 保留一个全局 `revision`。本阶段不增加 Network/Link/IPsec/Routing/Peer component revision，不支持两个 routing reconcile 并行合并，也不把 StateStore 扩展为通用多 writer MVCC。
+    - committed root 及所有共享子结构一经发布不得原地修改；任何会写 map、slice、pointer 或 validation hook 的代码必须先取得该对象的独占副本。只读共享可以跨 revision 保留，Go GC 负责旧 root 生命周期。
+    - 通用 `StateStore.Update` 在 typed mutation 完成前继续保留 detached workspace 和 commit 前第二次 clone，防止 callback retain `Workspace()` 后污染 committed。每个 typed COW API 只拥有明确字段，不向 callback 暴露完整可写 `*stateFile`。
+    - 每个子阶段独立落地、独立 benchmark/测试；前一阶段的正确性和 perf 数据验收后再进入下一阶段。不得为了达到最终 COW 形态而在一个改动中同时重写 sync、routing、IPsec、firewall 和 persistence。
+
+    - [ ] **7.11.6.1 修复 `ApplySnapshot` 失败原子性**
+      - 当前 `gossip.ApplySnapshot` 使用完整 candidate 验证 trust chain，但验证后转而修改传入 `NetworkState`；delegation/revocation 已写入或部分 record 已 `PutAt` 后发生错误时，调用者可能提交部分 snapshot。
+      - 将 authority、parent proof、delegation、revocation、record/history 的全部变更先应用到 detached candidate；只有所有验证和 record apply 完成后才一次性安装结果。任何错误返回时，传入 Network 的字段、map、slice、record/history、root 和 validation hook 均保持不变。
+      - 保持现有 stale record、record conflict、apply count、delegation count、auto-join 和 rejected digest 对外语义。snapshot apply 失败只记录 rejected digest；失败 snapshot 不得借由外层 `StateStore.Update` 提交 Network 的部分变化。
+      - 测试至少覆盖：trust chain 失败、delegation/revocation 校验失败、前一条 record 成功而后一条失败、stale/conflict 被跳过、成功 apply；失败用序列化状态或逐字段断言验证前后 Network 等价，并运行 `pkg/core/gossip` race 测试。
+
+    - [ ] **7.11.6.2 删除 routing stale 字段级 merge**
+      - 保留 `routingSnapshot()`：只深拷贝 routing-owned 的 `BirdInstances`、`RoutingReconcile`，`Network`、link/IPsec 和其他 committed 子结构继续只读共享。
+      - `commitRoutingIfRevision` 正常成功时按现有方式替换 routing-owned 字段；全局 revision stale 时不再调用 `commitRoutingBirdInstancesByNetNS`，不比较 owner token，也不按 netns merge。直接保留最新 committed、设置 `routingDirty` 并等待下一次完整 reconcile。
+      - auto-announce 在同一 reconcile 内主动更新 Network 后必须继续重新取得 routing snapshot/revision，并基于提交后的 Network 重建 authorized route set；不得因为 single-writer 假设删除这次 refresh。
+      - 删除只服务于 stale merge 的 helper/测试，增加防护测试：reconcile 被测试桩阻塞时人工推进 revision，旧 routing 结果不得覆盖新 state，服务必须重新标 dirty。生产路径出现 stale 应记录足够诊断信息，因为它意味着 single-writer 假设被绕过。
+
+    - [ ] **7.11.6.3 以完整手写 clone 替换 JSON round-trip**
+      - `cloneStateFile` 保持现有输入输出、nil 处理、detached 语义和 validation 配置语义，但不再调用 `json.Marshal`/`json.Unmarshal`。不得在本步骤删除 `BeginUpdate` 或 commit 的任一次 clone。
+      - clone 代码按类型所有权集中：`NetworkState`/`ZoneState`/authority/delegation/revocation/record/history 由 zone/core 层提供完整 clone；daemon-local state 为私钥 byte slice、SyncPeers、IPsec key/port、LinkInstances、IPsecReconcile slices、RoutingReconcile、FirewallReconcile、EndpointACL selectors、Bird overlays 和 Admission 分别提供显式 clone helper。
+      - 明确保留 nil 与 empty map/slice 的区别；复制所有 `[]byte`、map、slice、pointer 和嵌套 pointer；函数 hook 不得通过 JSON 偶然丢失，app clone 完成后仍保证 `RecordVerifier`/`RecordHasher` 配置正确；不得复制 `stateFile.mu`。
+      - 扩充 clone 完整性测试：修改 clone 的每个可变叶子均不得影响原值，反向修改原值也不得影响 clone；增加字段清单/schema guard，使 `stateFile` 或核心状态类型新增字段时测试强制提醒更新 clone。
+      - 保留 record-heavy fixture benchmark，并增加包含 SyncPeers/IPsec/routing/firewall 的完整 `stateFile` benchmark；记录 JSON 基线与手写 clone 的 ns/op、B/op、allocs/op，随后重跑 2026-07-31 同负载 perf。
+
+    - [ ] **7.11.6.4 用 detached 只读投影替换高频完整 Snapshot**
+      - 盘点 `snapshotState()`/`Snapshot()` 调用，按调用频率和返回数据量排序；优先替换只需要 ManagedZone、zone digests、catalog page、peer endpoint、route/link summary 的路径。
+      - projection 必须在锁内完成必要读取并返回独立标量、slice/map 或 DTO；不得让 `*stateFile`、`*NetworkState`、zone map、record pointer 从通用只读 API 逸出。`configureValidation` 只能作用于 detached Network root，不能在 read path 修改共享 committed。
+      - persistence 单独提供受限的 committed immutable view/lease：取得某一 revision 的 root 后可在锁外编码，因为旧 root 永不修改；接口只供保存适配器使用，不升级为通用裸指针 API。保存完成时记录的文件 marker 必须对应实际编码的 revision。
+      - 每替换一个 projection 都补充 detached/retain 测试，并确认调用方的日志、transport、磁盘和 hook 副作用发生在 store 锁外。
+
+    - [ ] **7.11.6.5 收敛 typed COW mutation，仍使用全局 revision**
+      - typed API 的目的只是表达字段所有权并减少复制，不提供并行 writer merge：Peer 路径复用现有 `UpdateSyncPeer`；Routing 只拥有 `BirdInstances`/`RoutingReconcile`；IPsec 只拥有 transport key/port、LinkInstances 和 IPsecReconcile；Firewall 只拥有 EndpointACLs/FirewallReconcile；Network mutation 使用独立入口。
+      - 开始事务时只复制该事务会修改的字段；提交时在锁内确认全局 revision 未变化，从当前 committed root 显式构造新 root并替换 detached owned fields。stale 时丢弃结果、标记相应 dirty/重新排队，禁止字段级 merge。
+      - mutation callback 必须无 transport、文件、网络、日志计数和其他外部副作用；需要执行的外部动作在 commit 成功后进行。routing/IPsec reconcile 中本来就先执行的幂等系统操作维持现有模型，但若最终 commit 意外 stale，必须 dirty 重跑，不能伪造已提交状态。
+      - 为每类 typed mutation 增加 ownership 测试：未拥有的子结构应保持共享且不可修改，拥有的所有可变叶子必须 detached；保留 race、retained callback 和 stale 防护测试。
+
+    - [ ] **7.11.6.6 实现 Network target-zone COW**
+      - 在 7.11.6.1 的失败原子性稳定后，将 Network 写入从完整 Network clone 收敛为：浅复制 `NetworkState` root、复制 `Zones` map、完整复制目标 `ZoneState` 及实际会修改的 records/history/delegation/revocation；其他 zone 跨 revision 只读共享。
+      - `ApplySnapshot`/Network mutation 应返回 detached 新 Network 或 typed patch，不直接修改传入 Network。validation 可在新 root 上读取共享祖先 zone，但只能修改 detached 目标 zone；成功后一次性挂到新 state root，失败直接丢弃 candidate。
+      - 第一版不启用 `MerkleRoot`/digest cache；当前 root 缓存没有覆盖所有 mutation 的完整失效协议，不能与 target-zone COW 同时引入。
+      - 测试覆盖：未修改 zone 确实共享、目标 zone 完全 detached、祖先 delegation/revocation 读取正确、目标 records/history 更新不泄漏、失败不变、连续更新同一 zone、不同 zone 顺序更新和 race。benchmark 分别使用单大 zone、多小 zone 和 history-heavy fixture。
+
+    - [ ] **7.11.6.7 最后评估批量 `ApplySnapshot`**
+      - 只有单 action 原子性、target-zone COW 和 typed Network commit 均验收后才开始；若新 perf 已不再显示 snapshot commit/persist 为热点，本项可以继续保留而不实现。
+      - 必须保留当前“合法 action 成功、非法 action 被拒绝、后续 action 继续”的部分成功语义。每个 action 使用独立 savepoint：从批次工作 Network 创建 candidate，成功才推进批次工作副本，失败丢弃该 candidate 并记录 rejected digest。
+      - 批次结束后最多一次 committed root 发布和一次持久化；日志、事件通知、transport send 等副作用只能基于成功提交的结果执行。虽然 single-writer 下正常不会 stale，意外 stale 时仍应丢弃整个批次结果并重新排队，不能直接重放带副作用的 callback。
+      - 明确并测试可见性变化：读者从“可能看到逐 action 的中间 revision”变为“只看到最终批次 revision”。若该变化不可接受，则保持逐 action commit，只复用 target-zone COW，不实施批量发布。
+
+    **阶段验收**
+    - 必跑 `go test ./pkg/core/gossip ./pkg/core/zone ./app/higgs`、相关 `-race` 测试、`make check` 以及 snapshot/routing/sync smoke；涉及真实 BIRD/IPsec 行为的步骤继续跑对应 root smoke。
+    - 每一性能步骤使用相同 fixture 和相同实机负载记录 wall/CPU、clone 栈、alloc/GC、minor/major fault、bbolt 与 fork/exec；收益统计不得把 inclusive clone、GC 和缺页百分比直接相加。
+    - 完成标志：snapshot apply 失败无任何 Network 变化；routing 不再进行 stale merge；JSON clone 不再出现在 daemon state clone 热路径；高频纯读不复制完整 Network；typed writer 只复制 owned fields；target-zone 写入成本随目标 zone 而非整个 Network 增长。
 
   - [ ] **7.11.7 `app/higgs` 与 state ownership 后续模块化（性能收口后）**
     - `app/higgs` 当前仍同时承载 daemon wiring、sync runtime、state adapter 和多个 reconcile 写侧，后续确有继续拆分价值；但本轮不机械搬迁整个 `stateFile`，也不在同一改动中同时重构 sync/IPsec/routing/firewall。
@@ -204,7 +259,8 @@
 
 ## 下一步
 
-1. 当前执行队列为 Phase 9 Observer Web UI 重构（9.1 → 9.3 顺序实施，9.4 可选，9.5 收口），设计见 [docs/new/observer-ui-redesign.md](docs/new/observer-ui-redesign.md)。
-2. 其后窄实现切口按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
-3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-4. Phase 8 已完成 root 数据面验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
+1. 当前执行队列为 7.11.6 StateStore 正确性、手写 clone 与分层 COW，严格按 7.11.6.1 → 7.11.6.7 的阶段门推进；第一窄切口是 `ApplySnapshot` 失败原子性，第二窄切口是删除 routing stale 字段级 merge。
+2. 每完成一个 7.11.6 子阶段都先运行对应测试、race、benchmark 和同负载 perf，再决定是否继续下一结构优化；7.11.6.7 批量 snapshot apply 不是必做项。
+3. StateStore 性能主线收口后，再按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
+4. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
+5. Phase 8、Phase 9 已完成验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
