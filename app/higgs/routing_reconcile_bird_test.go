@@ -458,3 +458,43 @@ func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
 		t.Fatalf("timestamp-only result advanced revision: got %d want %d", got, rev)
 	}
 }
+
+func TestCommitRoutingReconcileResultRejectsChangedBirdInstanceWithSameOwner(t *testing.T) {
+	initial := &stateFile{
+		ManagedZone: "node-a.catofes.",
+		Network:     cloneTestNetworkState(),
+		BirdInstances: map[string]*BirdInstanceState{
+			"mesh": {
+				NetNSName: "mesh",
+				Owner:     bird.BirdResourceOwner{Token: "stable-owner"},
+				State:     birdInstanceStatePending,
+			},
+		},
+		RoutingReconcile: &routingReconcileState{},
+	}
+	service := &DaemonService{StateStore: NewDaemonStateStore(initial)}
+	workspace, rev := service.StateStore.routingSnapshot()
+	baseBird := cloneBirdInstances(workspace.BirdInstances)
+	baseReconcile := cloneRoutingReconcileState(workspace.RoutingReconcile)
+	workspace.BirdInstances["mesh"].State = birdInstanceStateRunning
+
+	if _, err := service.StateStore.Update(func(state *stateFile) error {
+		state.BirdInstances["mesh"].State = birdInstanceStateDegraded
+		state.BirdInstances["mesh"].LastError = "newer observation"
+		return nil
+	}); err != nil {
+		t.Fatalf("advance BIRD state: %v", err)
+	}
+
+	if err := service.commitRoutingReconcileResult(rev, baseBird, baseReconcile, workspace); err != nil {
+		t.Fatalf("commitRoutingReconcileResult: %v", err)
+	}
+	if !service.routingDirty {
+		t.Fatal("routingDirty = false, want conflicting reconcile to be retried")
+	}
+	snapshot, _ := service.StateStore.Snapshot()
+	got := snapshot.BirdInstances["mesh"]
+	if got == nil || got.State != birdInstanceStateDegraded || got.LastError != "newer observation" {
+		t.Fatalf("newer BIRD state was overwritten: %+v", got)
+	}
+}

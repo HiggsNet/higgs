@@ -224,7 +224,7 @@ func (d *DaemonService) commitRoutingBirdInstancesByNetNS(base, next map[string]
 	if current == nil {
 		return false, nil
 	}
-	if len(changed) > 0 && !birdInstanceCommitTokensMatch(base, current.BirdInstances, changed) {
+	if len(changed) > 0 && !birdInstanceCommitBasesMatch(base, current.BirdInstances, changed) {
 		return false, nil
 	}
 	mergedBird := cloneBirdInstances(current.BirdInstances)
@@ -276,26 +276,13 @@ func changedBirdInstanceNetNS(base, next map[string]*BirdInstanceState) []string
 	return out
 }
 
-func birdInstanceCommitTokensMatch(base, current map[string]*BirdInstanceState, netnsNames []string) bool {
+// birdInstanceCommitBasesMatch verifies that no other writer changed a BIRD
+// instance touched by this reconcile after its workspace was created. Owner
+// tokens identify resources, but they are stable across runtime state changes
+// and therefore cannot serve as optimistic-concurrency versions.
+func birdInstanceCommitBasesMatch(base, current map[string]*BirdInstanceState, netnsNames []string) bool {
 	for _, netns := range netnsNames {
-		baseInst := base[netns]
-		currentInst := current[netns]
-		if baseInst == nil {
-			if currentInst != nil {
-				return false
-			}
-			continue
-		}
-		if currentInst == nil {
-			return false
-		}
-		if baseInst.Owner.Token == "" || currentInst.Owner.Token == "" {
-			if !birdInstanceStatesEqual(baseInst, currentInst) {
-				return false
-			}
-			continue
-		}
-		if baseInst.Owner.Token != currentInst.Owner.Token {
+		if !birdInstanceStatesEqual(base[netns], current[netns]) {
 			return false
 		}
 	}

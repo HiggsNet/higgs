@@ -88,9 +88,6 @@ func (s *BoltStore) SaveNetwork(ns *NetworkState) error {
 			if err != nil {
 				return err
 			}
-			if zs.Path == "" {
-				zs.Path = path
-			}
 			if err := putJSON(bucket, keyAuthority, zs.Authority); err != nil {
 				return err
 			}

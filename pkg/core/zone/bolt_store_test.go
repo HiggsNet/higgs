@@ -76,6 +76,39 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 	}
 }
 
+func TestBoltStoreSaveNetworkDoesNotMutateZonePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "higgs.db")
+	store, err := OpenBoltStore(path, 0o600)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	const zonePath ZonePath = "node1.catofes."
+	zs := NewZoneState("", &ZoneAuthority{
+		Zone:      zonePath,
+		Epoch:     1,
+		Threshold: 1,
+	})
+	ns := NewNetworkState()
+	ns.Zones[zonePath] = zs
+
+	if err := store.SaveNetwork(ns); err != nil {
+		t.Fatalf("SaveNetwork: %v", err)
+	}
+	if zs.Path != "" {
+		t.Fatalf("SaveNetwork mutated zone path: got %q want empty", zs.Path)
+	}
+
+	loaded, err := store.LoadNetwork()
+	if err != nil {
+		t.Fatalf("LoadNetwork: %v", err)
+	}
+	if got := loaded.Zones[zonePath]; got == nil || got.Path != zonePath {
+		t.Fatalf("loaded zone = %#v, want path %q", got, zonePath)
+	}
+}
+
 func TestBoltStoreLoadTrimsLegacyRecordHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "higgs.db")
 	store, err := OpenBoltStore(path, 0o600)
