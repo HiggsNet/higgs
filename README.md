@@ -20,13 +20,17 @@ curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/updat
 ```
 
 安装和更新会在替换二进制前检查完整数据面依赖，包括 `ip`、`ping`、
-BIRD 2.x、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时会
+BIRD 2.14+、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时会
 列出命令并退出；仅部署控制面或由外部环境提供依赖时，可以显式传入
 `--skip-dependency-check`（管道执行时使用 `sh -s -- --skip-dependency-check`）。
 
+原生安装是主要部署路径：它直接集成 systemd、宿主数据面和
+`higgs-services` 生成的服务编排 artifact。Docker 是固定用户态依赖的备用路径，
+不取代管理员对宿主网络、Compose 和服务生命周期的管理。
+
 其他安装方式：
 
-- **Docker**：`make docker-build` 构建镜像；真实数据面（IPsec/XFRM、BIRD、firewall、netns）需要 `--privileged --network host`。
+- **Docker**：`make docker-build` 构建基于 Ubuntu 24.04 的运行时镜像，镜像同时包含 `higgs` 与 `higgs-services`；真实数据面（IPsec/XFRM、BIRD、firewall、netns）仍需要 `--privileged --network host` 和兼容的宿主 Linux 内核。
 - **Nix**：`nix build .#higgsnet`，并提供 NixOS module（`services.higgsnet.enable = true`）；`nix develop` 提供完整开发/数据面调试环境。
 - **源码**：`make build`，产物在 `build/higgs`。
 

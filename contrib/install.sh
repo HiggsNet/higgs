@@ -50,29 +50,47 @@ check_runtime_dependencies() {
 		fi
 	done
 
-	if [ -z "$missing" ]; then
-		echo "Runtime dependency check passed"
-		return 0
-	fi
-
-	cat >&2 <<EOF
+	if [ -n "$missing" ]; then
+		cat >&2 <<EOF
 error: missing Higgs runtime commands: ${missing}
 
 A full data-plane installation needs:
   iproute2: ip
   iputils: ping
-  BIRD 2.x: bird, birdc
+  BIRD 2.14+: bird, birdc
   nftables: nft
   iptables fallback: iptables, ip6tables, ipset
   StrongSwan: swanctl (with a running charon/VICI service when IPsec is enabled)
 
-Debian/Ubuntu example:
+Ubuntu 24.04+ example:
   apt install bird2 iproute2 ipset iptables iputils-ping nftables strongswan-charon strongswan-swanctl
+
+Other distributions must provide BIRD 2.14 or newer; for example, Debian
+Bookworm's stock BIRD 2.0.12 package is too old for the supported baseline.
 
 Install the missing dependencies and retry. For a control-plane-only or
 externally managed deployment, pass --skip-dependency-check explicitly.
 EOF
-	return 1
+		return 1
+	fi
+
+	bird_version_raw=$(bird --version 2>&1 | sed -n '1p')
+	bird_version=$(printf '%s\n' "$bird_version_raw" | sed -n 's/^.*BIRD version \([0-9][0-9.]*\).*$/\1/p')
+	bird_major=$(printf '%s\n' "$bird_version" | cut -d. -f1)
+	bird_minor=$(printf '%s\n' "$bird_version" | cut -d. -f2)
+	if [ -z "$bird_major" ] || [ -z "$bird_minor" ] || ! { [ "$bird_major" -gt 2 ] || { [ "$bird_major" -eq 2 ] && [ "$bird_minor" -ge 14 ]; }; } 2>/dev/null; then
+		cat >&2 <<EOF
+error: unsupported BIRD version: ${bird_version_raw:-unknown}
+
+Higgs native data-plane installations require BIRD 2.14 or newer.
+Ubuntu 24.04 and newer provide a compatible bird2 package. For a
+control-plane-only or externally managed deployment, pass
+--skip-dependency-check explicitly.
+EOF
+		return 1
+	fi
+
+	echo "Runtime dependency check passed (BIRD ${bird_version})"
 }
 
 while [ "$#" -gt 0 ]; do

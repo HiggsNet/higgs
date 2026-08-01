@@ -2,6 +2,8 @@
 
 ARG GO_VERSION=1.25
 
+# The builder distribution does not become part of the final image; both Go
+# binaries are built with CGO disabled below.
 FROM golang:${GO_VERSION}-bookworm AS build
 
 WORKDIR /src
@@ -20,26 +22,36 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -o /out/higgs-services ./app/higgs-services
 
-FROM debian:bookworm-slim
+# Match the primary native compatibility baseline and its BIRD 2.14 package.
+FROM ubuntu:24.04
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bird2 \
         ca-certificates \
         iproute2 \
         ipset \
         iptables \
         iputils-ping \
+        libstrongswan-extra-plugins \
+        libstrongswan-standard-plugins \
         nftables \
         strongswan \
         strongswan-charon \
         strongswan-swanctl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && bird_version="$(bird --version 2>&1 | sed -n 's/^.*BIRD version \([0-9][0-9.]*\).*$/\1/p')" \
+    && bird_major="$(printf '%s\n' "$bird_version" | cut -d. -f1)" \
+    && bird_minor="$(printf '%s\n' "$bird_version" | cut -d. -f2)" \
+    && test -n "$bird_major" \
+    && test -n "$bird_minor" \
+    && { test "$bird_major" -gt 2 || { test "$bird_major" -eq 2 && test "$bird_minor" -ge 14; }; }
 
 COPY --from=build /out/higgs /usr/local/bin/higgs
 COPY --from=build /out/higgs-services /usr/local/bin/higgs-services
 
 ENV HIGGS_CONFIG=/etc/higgs/config.yaml
+ENV PATH="/usr/lib/ipsec:${PATH}"
 VOLUME ["/etc/higgs", "/var/lib/higgs"]
 EXPOSE 33434/udp
 
