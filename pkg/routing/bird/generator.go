@@ -105,6 +105,11 @@ func validateSpec(spec BirdInstanceSpec) error {
 	if spec.Upstream != nil && strings.TrimSpace(spec.Upstream.Interface) == "" {
 		return fmt.Errorf("bird: upstream interface is required")
 	}
+	for _, route := range spec.StaticRoutes {
+		if route.NextHop.IsValid() && route.Via != "" && !isBirdQuotedSymbol(route.Via) {
+			return fmt.Errorf("bird: static route interface %q cannot be represented as a BIRD scoped next-hop", route.Via)
+		}
+	}
 	if !filepath.IsAbs(spec.ControlSocketPath) {
 		return fmt.Errorf("bird: control socket path must be absolute")
 	}
@@ -365,7 +370,10 @@ func renderStaticRouteLine(b *bytes.Buffer, r StaticRoute) {
 		return
 	}
 	if r.NextHop.IsValid() && r.Via != "" {
-		fmt.Fprintf(b, "    route %s via %s dev %q;\n", r.Prefix.String(), r.NextHop.String(), r.Via)
+		// BIRD 2.14 (shipped by Ubuntu 24.04) does not accept the newer
+		// "via GATEWAY dev INTERFACE" form. A scoped next-hop is accepted by
+		// both BIRD 2.14 and newer BIRD 2.x releases.
+		fmt.Fprintf(b, "    route %s via %s%%'%s';\n", r.Prefix.String(), r.NextHop.String(), r.Via)
 		return
 	}
 	if r.NextHop.IsValid() {
@@ -373,11 +381,31 @@ func renderStaticRouteLine(b *bytes.Buffer, r StaticRoute) {
 		return
 	}
 	if r.Via != "" {
-		fmt.Fprintf(b, "    route %s via \"%s\";\n", r.Prefix.String(), r.Via)
+		fmt.Fprintf(b, "    route %s via %q;\n", r.Prefix.String(), r.Via)
 		return
 	}
 	// No via and no blackhole: default to blackhole for safety.
 	fmt.Fprintf(b, "    route %s blackhole;\n", r.Prefix.String())
+}
+
+// isBirdQuotedSymbol reports whether s can be emitted inside BIRD's
+// apostrophe-quoted symbol syntax. Scoped next-hops use this syntax for
+// interface names (for example, 192.0.2.1%'eth0').
+func isBirdQuotedSymbol(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_', r == '-', r == '.', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func formatRouterID(id uint32) string {

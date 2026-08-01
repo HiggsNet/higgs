@@ -109,8 +109,24 @@ func TestGenerateWithStaticRouteGatewayAndInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
 	}
-	if got := string(cfg); !strings.Contains(got, `route 2001:db8:1::/48 via fe80::a1:2 dev "hgv2-host";`) {
+	if got := string(cfg); !strings.Contains(got, `route 2001:db8:1::/48 via fe80::a1:2%'hgv2-host';`) {
 		t.Errorf("missing IPv6 gateway route pinned to interface\n%s", got)
+	}
+}
+
+func TestGenerateRejectsUnrepresentableScopedInterface(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.StaticRoutes = []StaticRouteSpec{
+		{
+			Prefix:  netip.MustParsePrefix("2001:db8:1::/48"),
+			Via:     "hgv2'host",
+			NextHop: netip.MustParseAddr("fe80::a1:2"),
+		},
+	}
+
+	_, err := (DefaultConfigGenerator{}).Generate(spec, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot be represented as a BIRD scoped next-hop") {
+		t.Fatalf("Generate error = %v, want scoped next-hop interface validation error", err)
 	}
 }
 

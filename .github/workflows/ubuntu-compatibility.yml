@@ -1,0 +1,33 @@
+name: Ubuntu compatibility
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-24-04:
+    name: Ubuntu 24.04 / BIRD 2.14
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Ubuntu data-plane dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bird2 iproute2 iputils-ping
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Run BIRD/Babel root smoke
+        run: sudo env "PATH=$PATH" make GO="$(command -v go)" bird-babel-smoke

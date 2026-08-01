@@ -164,8 +164,9 @@ type StaticRouteSpec struct {
 	// Prefix is the CIDR to announce.
 	Prefix netip.Prefix `yaml:"prefix" json:"prefix"`
 
-	// Via is the egress interface name. With NextHop it pins the gateway to
-	// that interface; without NextHop it describes an on-link direct route.
+	// Via is the egress interface name. With NextHop it pins the gateway using
+	// BIRD's scoped next-hop syntax; without NextHop it describes an on-link
+	// direct route.
 	Via string `yaml:"via,omitempty" json:"via,omitempty"`
 
 	// NextHop is the gateway address. Link-local IPv6 gateways require Via.

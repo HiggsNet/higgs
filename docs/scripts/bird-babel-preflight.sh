@@ -33,15 +33,17 @@ check "ip command" command -v ip
 check "ping command" command -v ping
 check "named netns create/delete" sh -c 'set -e; ns="higgs-bird-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" true'
 
-# Check BIRD version >= 2.0
+# Check the oldest BIRD release covered by the Ubuntu compatibility matrix.
+# Ubuntu 24.04 ships BIRD 2.14.
 if command -v bird >/dev/null 2>&1; then
   bird_version_raw="$(bird --version 2>&1 | head -1)"
   bird_version="$(printf '%s\n' "$bird_version_raw" | sed -n 's/^.*BIRD version \([0-9][0-9.]*\).*$/\1/p')"
   bird_major="$(printf '%s\n' "$bird_version" | cut -d. -f1)"
-  if [ -n "$bird_major" ] && [ "$bird_major" -ge 2 ] 2>/dev/null; then
+  bird_minor="$(printf '%s\n' "$bird_version" | cut -d. -f2)"
+  if [ -n "$bird_major" ] && [ -n "$bird_minor" ] && { [ "$bird_major" -gt 2 ] || { [ "$bird_major" -eq 2 ] && [ "$bird_minor" -ge 14 ]; }; } 2>/dev/null; then
     printf '[ok]   bird-version %s\n' "$bird_version"
   else
-    printf '[fail] bird-version: expected >=2.0, got %q\n' "$bird_version_raw" >&2
+    printf '[fail] bird-version: expected >=2.14, got %q\n' "$bird_version_raw" >&2
     failures=$((failures + 1))
   fi
 fi

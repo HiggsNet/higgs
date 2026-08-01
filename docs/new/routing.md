@@ -63,7 +63,7 @@ local routing / netns / forwarding policy ─────────┘        
 | Router-ID | 由 managed Zone、trusted root hash 与稳定 netns label 派生 |
 | 路由表 | 默认写目标 netns 的 `main` table，也可指定数字 table ID |
 | forwarding | `netns.*.forwarding` 同时约束 BIRD export 与 firewall 的 transit 行为 |
-| BIRD 版本 | 需要 BIRD 2.x；`higgs debug preflight` 会检查 |
+| BIRD 版本 | 需要 BIRD 2.14+；该基线覆盖 Ubuntu 24.04 自带的 BIRD 2.14 |
 
 ---
 
