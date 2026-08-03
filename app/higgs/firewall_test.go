@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -582,6 +583,34 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 	}
 	if len(input.AdvertisedPreviousNATTPorts) != 1 || input.AdvertisedPreviousNATTPorts[0] != 14400 {
 		t.Fatalf("previous NAT-T ports = %v, want [14400]", input.AdvertisedPreviousNATTPorts)
+	}
+}
+
+func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
+	prefix := netip.MustParsePrefix("2a0d:2905::/96")
+	ars := &routing.AuthorizedRouteSet{
+		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
+			prefix: {
+				Prefix:     prefix,
+				AssignedTo: "node-a.catofes.",
+				Shared:     true,
+			},
+		},
+		AllAssignments: []*routing.AssignmentEntry{
+			{Prefix: prefix, AssignedTo: "node-a.catofes.", Shared: true},
+			{Prefix: prefix, AssignedTo: "node-b.catofes.", Shared: true},
+		},
+	}
+
+	input := buildFirewallPolicyInput(
+		firewall.FirewallInstanceSpec{ID: "h2", NetNS: "h2"},
+		ars,
+		&stateFile{ManagedZone: "node-b.catofes."},
+		defaultAppConfig(),
+	)
+
+	if len(input.LocalAssigned) != 1 || input.LocalAssigned[0] != prefix {
+		t.Fatalf("local assigned = %v, want shared prefix %s", input.LocalAssigned, prefix)
 	}
 }
 

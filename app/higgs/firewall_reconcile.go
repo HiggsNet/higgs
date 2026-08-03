@@ -300,11 +300,10 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 
 	// Local assigned prefixes (AssignedTo == managed zone).
 	managedZone := state.ManagedZone
-	for prefix, entry := range ars.Assignments {
-		if entry.AssignedTo == managedZone {
-			input.LocalAssigned = append(input.LocalAssigned, prefix)
-		}
-	}
+	// Use AllAssignments through the shared helper: Assignments keeps only one
+	// representative per prefix, so it can hide this zone's membership in a
+	// shared/anycast assignment when another zone is the representative.
+	input.LocalAssigned = append(input.LocalAssigned, localAssignedPrefixes(ars, managedZone)...)
 
 	// All authorized mesh prefixes.
 	for _, prefixes := range ars.Announced {
