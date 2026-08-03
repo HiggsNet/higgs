@@ -243,3 +243,20 @@ func TestLocalAssignedPrefixesUsesAllAssignments(t *testing.T) {
 		t.Fatalf("localAssignedPrefixes = %+v, want [%s]", got, prefix)
 	}
 }
+
+func TestExternalUpstreamSourcePrefixesExcludeSharedAssignments(t *testing.T) {
+	local := netip.MustParsePrefix("2a0d:2905:1:7::/64")
+	shared := netip.MustParsePrefix("2a0d:2905::/96")
+	ars := &routing.AuthorizedRouteSet{
+		AllAssignments: []*routing.AssignmentEntry{
+			{Prefix: local, AssignedTo: "node-a.catofes."},
+			{Prefix: shared, AssignedTo: "node-a.catofes.", Shared: true, Tag: "edge.c"},
+		},
+	}
+
+	got := externalUpstreamSourcePrefixes(ars, "node-a.catofes.")
+	want := netip.MustParsePrefix("2a0d:2905:1:7::1/64")
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("external source prefixes = %v, want only non-shared source %s", got, want)
+	}
+}

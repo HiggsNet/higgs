@@ -410,7 +410,7 @@ routing:
 2. 让 mesh 内 BIRD 在 routing 配置给出的精确 upstream 接口（默认 `hgv2host`）上运行 Babel；此接口**不是** tunnel，不使用 BIRD `type tunnel`；
 3. 对本机 `assigned_to == managed_zone` 的前缀，在 mesh 内生成 BIRD static route，下一跳为 external 端对应地址族的 link-local，并用 `mesh.interface` 固定出口；
 4. 在 external 一侧为已授权的远端 announcement 写 kernel static route，下一跳为 mesh 端 link-local 地址，并排除本机自己持有的 assignment；
-5. 在 external 接口上配置本机 assignment 的首个可用地址，供这些回程路由选择 source address。
+5. 在 external 接口上配置本机非 shared assignment 的首个可用地址，供这些回程路由选择 source address；shared/Anycast assignment 只保留为服务路由，不配置到 veth。
 
 `static` 的 BIRD static route 表示“本机拥有该前缀且其实际承载在 external 一侧”，不等于扩大 BIRD export 权限。一个前缀仍须有有效 announcement 才会被 export。
 
@@ -418,7 +418,7 @@ routing:
 
 `external` 模式让 Higgs 保留 mesh 侧的 BIRD/Babel veth interface，但不生成本机 static route，也不在 external 一侧写 kernel route。它适合 host 或另一个 namespace 已由管理员运行 BIRD/FRR/babeld，或有自定义策略路由的场景。路由、转发和 firewall 都由管理员负责。
 
-external 模式可显式设置 `install_source_addresses: true`，让 Higgs 在自己管理的 external veth endpoint 上安装从本节点 assignment 派生的源地址。地址保留 assignment 的 prefix length，因此会在 external endpoint 上生成对应的 connected route；管理员必须移除其他接口上冲突的 connected prefix。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
+external 模式可显式设置 `install_source_addresses: true`，让 Higgs 在自己管理的 external veth endpoint 上安装从本节点非 shared assignment 派生的源地址。shared/Anycast assignment 不会安装到 veth。地址保留 assignment 的 prefix length，因此会在 external endpoint 上生成对应的 connected route；管理员必须移除其他接口上冲突的 connected prefix。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
 
 ### 6.5 边界
 

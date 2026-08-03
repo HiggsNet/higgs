@@ -94,7 +94,7 @@ type UpstreamConfig struct {
 	Enabled                bool
 	Mode                   string // static or external
 	CreateVeth             bool   // if true, Higgs creates and maintains the veth pair
-	InstallSourceAddresses bool   // install local assignment source identities on the external endpoint
+	InstallSourceAddresses bool   // install non-shared local assignment source identities on the external endpoint
 	MeshInterface          string // routing instance netns side of the veth pair
 	MeshIPv4LL             string // optional IPv4 link-local for the mesh side
 	MeshIPv6LL             string // optional IPv6 link-local for the mesh side

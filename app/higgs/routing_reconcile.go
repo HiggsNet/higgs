@@ -795,20 +795,30 @@ func authorizedPrefixes(ars *routing.AuthorizedRouteSet, zones []zone.ZonePath) 
 }
 
 func localAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
+	return localAssignedPrefixesMatching(ars, managedZone, nil)
+}
+
+func localNonSharedAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
+	return localAssignedPrefixesMatching(ars, managedZone, func(entry *routing.AssignmentEntry) bool {
+		return !entry.Shared
+	})
+}
+
+func localAssignedPrefixesMatching(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath, match func(*routing.AssignmentEntry) bool) []netip.Prefix {
 	if ars == nil || !managedZone.Valid() {
 		return nil
 	}
 	outSet := make(map[netip.Prefix]struct{})
 	if len(ars.AllAssignments) > 0 {
 		for _, entry := range ars.AllAssignments {
-			if entry == nil || entry.AssignedTo != managedZone {
+			if entry == nil || entry.AssignedTo != managedZone || (match != nil && !match(entry)) {
 				continue
 			}
 			outSet[entry.Prefix] = struct{}{}
 		}
 	} else {
 		for prefix, entry := range ars.Assignments {
-			if entry == nil || entry.AssignedTo != managedZone {
+			if entry == nil || entry.AssignedTo != managedZone || (match != nil && !match(entry)) {
 				continue
 			}
 			outSet[prefix] = struct{}{}
@@ -895,7 +905,10 @@ func externalUpstreamRoutePrefixes(ars *routing.AuthorizedRouteSet, managedZone 
 }
 
 func externalUpstreamSourcePrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
-	localAssigned := localAssignedPrefixes(ars, managedZone)
+	// Source identities belong to the node itself. Shared/anycast prefixes are
+	// served behind the upstream veth and must remain routes, not addresses on
+	// the veth endpoint itself.
+	localAssigned := localNonSharedAssignedPrefixes(ars, managedZone)
 	out := make([]netip.Prefix, 0, len(localAssigned))
 	seen := make(map[netip.Prefix]struct{}, len(localAssigned))
 	for _, prefix := range localAssigned {
