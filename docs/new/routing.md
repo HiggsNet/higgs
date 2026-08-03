@@ -396,6 +396,7 @@ routing:
 | `mesh.ipv6_ll` / `external.ipv6_ll` | `fe80::a1:1/64` / `fe80::a1:2/64` |
 | `create_veth` | `true` |
 | `mode` | `static` |
+| `install_source_addresses` | static 模式为 `true`；external 模式为 `false` |
 
 `external.netns` 可引用另一个 namespace；省略/空表示 init/main host netns。`create_veth: false` 时 Higgs 仍按配置使用该接口，但管理员必须保证 veth、地址、up 状态与两端 namespace 已准备好。
 
@@ -415,7 +416,9 @@ routing:
 
 ### 6.4 `external` 模式
 
-`external` 模式让 Higgs 保留 mesh 侧的 BIRD/Babel veth interface，但不生成本机 static route，也不在 external 一侧写 kernel route。它适合 host 或另一个 namespace 已由管理员运行 BIRD/FRR/babeld，或有自定义策略路由的场景。两端地址、路由、转发和 firewall 都由管理员负责。
+`external` 模式让 Higgs 保留 mesh 侧的 BIRD/Babel veth interface，但不生成本机 static route，也不在 external 一侧写 kernel route。它适合 host 或另一个 namespace 已由管理员运行 BIRD/FRR/babeld，或有自定义策略路由的场景。路由、转发和 firewall 都由管理员负责。
+
+external 模式可显式设置 `install_source_addresses: true`，让 Higgs 在自己管理的 external veth endpoint 上安装从本节点 assignment 派生的源地址。地址保留 assignment 的 prefix length，因此会在 external endpoint 上生成对应的 connected route；管理员必须移除其他接口上冲突的 connected prefix。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
 
 ### 6.5 边界
 

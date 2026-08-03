@@ -309,6 +309,61 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 }
 
+func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing.T) {
+	state, syncConfig := buildTestNetworkStateForRouting(t)
+	now := time.Unix(4000, 0)
+
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+		ID:              "main",
+		Provider:        ipsec.ProviderStrongSwan,
+		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+		DefaultPathMode: ipsec.PathModeFamilyRedundant,
+	}}
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"higgstesth2": {Kind: ipsec.NetNSName, Name: "higgstesth2", Create: true},
+	}}
+	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{
+		ID:           "main",
+		NetNS:        "higgstesth2",
+		Enabled:      boolPtr(true),
+		Mode:         ipsec.RoutingModeManaged,
+		InterfacePat: "hgs*",
+		Upstream: &upstreamConfigYAML{
+			Enabled:                boolPtr(true),
+			Mode:                   upstreamModeExternal,
+			CreateVeth:             boolPtr(true),
+			InstallSourceAddresses: boolPtr(true),
+		},
+	}}, appConfig.Netns, appConfig.DataDir)
+
+	rt := &Runtime{
+		Config:    appConfig,
+		StatePath: filepath.Join(t.TempDir(), "higgs.db"),
+		Clock:     func() time.Time { return now },
+	}
+	fakeRM := &fakeUpstreamRouteManager{}
+	service := newDaemonService(rt, state, syncConfig, time.Second)
+	service.birdProcessManager = &fakeBirdProcessManager{running: false}
+	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} }
+	service.vethManager = &fakeVethManager{}
+	service.upstreamRouteManager = fakeRM
+
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting: %v", err)
+	}
+	if !fakeRM.ensureCalled {
+		t.Fatal("external upstream did not reconcile source addresses")
+	}
+	if len(fakeRM.ensureSpec.Prefixes) != 0 {
+		t.Fatalf("external upstream installed static routes: %+v", fakeRM.ensureSpec.Prefixes)
+	}
+	if !prefixesContain(fakeRM.ensureSpec.SourcePrefixes, "10.0.0.1/16") {
+		t.Fatalf("external source addresses = %+v, want 10.0.0.1/16", fakeRM.ensureSpec.SourcePrefixes)
+	}
+}
+
 func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
 	now := time.Unix(1000, 0)
 	state, _, signers, _ := buildIPAMRoutingSmokeNetworkState(t)

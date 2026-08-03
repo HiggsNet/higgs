@@ -262,6 +262,10 @@ routing:
       # upstream:  # upstream: {} or any non-disabled upstream block enables it.
       #   mode: static  # static | external
       #   create_veth: true          # default true; set false for pre-created veth pairs
+      #   # Install assignment-derived source identities on the external veth.
+      #   # Defaults to true for static mode and false for external mode. In
+      #   # external mode no remote static routes are added.
+      #   install_source_addresses: false
       #   mesh:
       #     interface: hgv2host     # routing instance netns side, toward host
       #     ipv4_ll: 169.254.254.1/30

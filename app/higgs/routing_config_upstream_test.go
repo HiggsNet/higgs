@@ -49,6 +49,9 @@ instances:
 	if inst.Upstream.Mode != upstreamModeStatic {
 		t.Errorf("mode = %q, want static", inst.Upstream.Mode)
 	}
+	if !inst.Upstream.InstallSourceAddresses {
+		t.Error("static mode should install source addresses by default")
+	}
 	if inst.Upstream.MeshInterface != "hgv2host" {
 		t.Errorf("mesh interface = %q, want hgv2host", inst.Upstream.MeshInterface)
 	}
@@ -82,6 +85,7 @@ instances:
     netns: higgstesth2
     upstream:
       mode: external
+      install_source_addresses: true
 `
 	var yamlCfg routingInstancesYAML
 	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
@@ -98,6 +102,34 @@ instances:
 	inst := cfg.Instances[0]
 	if inst.Upstream == nil || inst.Upstream.Mode != upstreamModeExternal {
 		t.Fatalf("upstream mode = %#v, want external", inst.Upstream)
+	}
+	if !inst.Upstream.InstallSourceAddresses {
+		t.Fatal("install_source_addresses = false, want explicit true")
+	}
+}
+
+func TestParseUpstreamConfigExternalModeDoesNotInstallSourceAddressesByDefault(t *testing.T) {
+	yamlInput := `
+instances:
+  - id: main
+    netns: higgstesth2
+    upstream:
+      mode: external
+`
+	var yamlCfg routingInstancesYAML
+	if err := yaml.Unmarshal([]byte(yamlInput), &yamlCfg); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+
+	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"higgstesth2": {Kind: "name", Name: "higgstesth2", Create: true},
+	}}
+	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
+	if err != nil {
+		t.Fatalf("parseRoutingConfigInstances: %v", err)
+	}
+	if cfg.Instances[0].Upstream.InstallSourceAddresses {
+		t.Fatal("external mode should not install source addresses by default")
 	}
 }
 

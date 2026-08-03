@@ -91,16 +91,17 @@ type RoutingInstance struct {
 // UpstreamConfig holds optional veth upstream configuration that connects
 // the mesh netns to the main network (init netns or another ns).
 type UpstreamConfig struct {
-	Enabled           bool
-	Mode              string // static or external
-	CreateVeth        bool   // if true, Higgs creates and maintains the veth pair
-	MeshInterface     string // routing instance netns side of the veth pair
-	MeshIPv4LL        string // optional IPv4 link-local for the mesh side
-	MeshIPv6LL        string // optional IPv6 link-local for the mesh side
-	ExternalInterface string // host/upstream netns side of the veth pair
-	ExternalNetns     string // empty = init/main host netns
-	ExternalIPv4LL    string // optional IPv4 link-local for the external side
-	ExternalIPv6LL    string // optional IPv6 link-local for the external side
+	Enabled                bool
+	Mode                   string // static or external
+	CreateVeth             bool   // if true, Higgs creates and maintains the veth pair
+	InstallSourceAddresses bool   // install local assignment source identities on the external endpoint
+	MeshInterface          string // routing instance netns side of the veth pair
+	MeshIPv4LL             string // optional IPv4 link-local for the mesh side
+	MeshIPv6LL             string // optional IPv6 link-local for the mesh side
+	ExternalInterface      string // host/upstream netns side of the veth pair
+	ExternalNetns          string // empty = init/main host netns
+	ExternalIPv4LL         string // optional IPv4 link-local for the external side
+	ExternalIPv6LL         string // optional IPv6 link-local for the external side
 }
 
 // routingInstancesYAML is the raw YAML model for the top-level `routing:` section.
@@ -132,12 +133,13 @@ type routingInstanceYAML struct {
 
 // upstreamConfigYAML is the raw YAML model for routing.instances[].upstream.
 type upstreamConfigYAML struct {
-	Enabled    *bool                `yaml:"enabled"`
-	Disabled   *bool                `yaml:"disabled"`
-	Mode       string               `yaml:"mode"`
-	CreateVeth *bool                `yaml:"create_veth"`
-	Mesh       upstreamEndpointYAML `yaml:"mesh"`
-	External   upstreamEndpointYAML `yaml:"external"`
+	Enabled                *bool                `yaml:"enabled"`
+	Disabled               *bool                `yaml:"disabled"`
+	Mode                   string               `yaml:"mode"`
+	CreateVeth             *bool                `yaml:"create_veth"`
+	InstallSourceAddresses *bool                `yaml:"install_source_addresses"`
+	Mesh                   upstreamEndpointYAML `yaml:"mesh"`
+	External               upstreamEndpointYAML `yaml:"external"`
 }
 
 type upstreamEndpointYAML struct {
@@ -412,8 +414,15 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 		ExternalIPv4LL:    strings.TrimSpace(yu.External.IPv4LL),
 		ExternalIPv6LL:    strings.TrimSpace(yu.External.IPv6LL),
 	}
+	// Static mode historically installed an address from each local assignment
+	// on the external endpoint. Preserve that default while allowing external
+	// routing daemons to opt into address management independently.
+	uc.InstallSourceAddresses = uc.Mode == upstreamModeStatic
 	if yu.CreateVeth != nil {
 		uc.CreateVeth = *yu.CreateVeth
+	}
+	if yu.InstallSourceAddresses != nil {
+		uc.InstallSourceAddresses = *yu.InstallSourceAddresses
 	}
 
 	// Apply default link-local addresses when upstream is enabled and the user

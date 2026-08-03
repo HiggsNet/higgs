@@ -320,16 +320,25 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			return fmt.Errorf("ensure upstream veth for netns %q: %w", netnsName, err)
 		}
 	}
-	if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == upstreamModeStatic {
+	if inst.Upstream != nil && inst.Upstream.Enabled &&
+		(inst.Upstream.Mode == upstreamModeStatic || inst.Upstream.InstallSourceAddresses) {
 		rm := d.upstreamRouteManager
 		if rm == nil {
 			rm = newExecUpstreamRouteManager()
 		}
+		var routePrefixes []netip.Prefix
+		if inst.Upstream.Mode == upstreamModeStatic {
+			routePrefixes = externalUpstreamRoutePrefixes(ars, state.ManagedZone)
+		}
+		var sourcePrefixes []netip.Prefix
+		if inst.Upstream.InstallSourceAddresses {
+			sourcePrefixes = externalUpstreamSourcePrefixes(ars, state.ManagedZone)
+		}
 		rspec := upstreamRouteSpec{
 			NetNS:          inst.Upstream.ExternalNetns,
 			Interface:      inst.Upstream.ExternalInterface,
-			Prefixes:       externalUpstreamRoutePrefixes(ars, state.ManagedZone),
-			SourcePrefixes: externalUpstreamSourcePrefixes(ars, state.ManagedZone),
+			Prefixes:       routePrefixes,
+			SourcePrefixes: sourcePrefixes,
 			MeshIPv4LL:     inst.Upstream.MeshIPv4LL,
 			MeshIPv6LL:     inst.Upstream.MeshIPv6LL,
 		}
