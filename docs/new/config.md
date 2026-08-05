@@ -146,7 +146,8 @@ ipsec:
   # port_previous_grace: 2h
 
   announce_addrs:
-    - 203.0.113.10:4500
+    - 203.0.113.10
+    - 2001:db8::10
   announce_dns:
     - vpn-a.example.com
   announce_gossip_endpoints: true
@@ -156,11 +157,11 @@ ipsec:
 
 - `role`：`out`、`in`、`both`。表达本节点 IPsec 连接意图；默认 `both`。
 - `driver`：`strongswan` 或 `dry-run`。默认 `strongswan`；无 root/VICI/XFRM 的开发环境用 `dry-run`。
-- `vici_socket`：StrongSwan VICI socket 路径。Higgs 不负责启动 charon。
+- `vici_socket`：StrongSwan VICI socket 路径。Higgs 进程不直接管理 charon；仓库提供的 `higgsnet.service` 会拉起并等待 `strongswan.service`，其他启动方式需要另行启动 charon。
 - `port_mode`：`fixed` 或 `range`。`range` 需要配置至少包含 4 个端口的 `port_range`；每个 generation 使用一组不重叠的 IKE/NAT-T 相邻端口，rotate 时前进 2 个端口。
 - `port_rotate_interval`：range 模式下 advertised port 的轮换周期；为 0 时不主动轮换。
 - `port_previous_grace`：旧 advertised port 保留窗口，必须覆盖 overlay rotate retention。
-- `announce_addrs` / `announce_dns`：IPsec 专用地址或 DNS 发布来源，独立于 `gossip.advertise_addrs`。
+- `announce_addrs` / `announce_dns`：IPsec 专用地址或 DNS 发布来源，独立于 `gossip.advertise_addrs`。`announce_addrs` 只接受不带端口的 IPv4/IPv6 地址；IKE/NAT-T 端口由 `port_mode` / `port_range` 单独发布。
 - `announce_gossip_endpoints`：是否把 gossip endpoint discovery 的地址也作为 IPsec 地址候选来源，默认 true。
 
 ## Overlay Link Policy
@@ -399,7 +400,7 @@ peer_lifecycle:
 
 ## 常见配置边界
 
-- `gossip.advertise_addrs` 是 gossip endpoint；`ipsec.announce_addrs` / `ipsec.announce_dns` 是 IPsec endpoint。
+- `gossip.advertise_addrs` 是带端口的 gossip endpoint；`ipsec.announce_addrs` / `ipsec.announce_dns` 只发布 IPsec 地址或 DNS 名，IPsec 端口单独配置。
 - `ipsec:` 只配置 provider；`overlays[]` 才是是否参与 mesh 建链的开关。
 - `netns` 是本机 runtime 归属，不进入 gossip。
 - `overlays[].connect/deny` 是本机策略，不进入 gossip。

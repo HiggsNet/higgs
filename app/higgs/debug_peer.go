@@ -43,9 +43,25 @@ func buildDebugPeerView(state *stateFile, config *syncConfigFile, peerID string,
 	if !inspect.PeerKnown(inspectPeerSetInput(state, config, now), peerID) {
 		return inspect.PeerDebugView{}, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, peerID)
 	}
+	return buildGossipPeerView(state, config, peerID, now), nil
+}
+
+func buildGossipPeerViews(state *stateFile, config *syncConfigFile, now time.Time) []inspect.PeerDebugView {
+	if state == nil {
+		return nil
+	}
+	peerIDs := inspect.BuildPeerIDs(inspectPeerSetInput(state, config, now))
+	views := make([]inspect.PeerDebugView, 0, len(peerIDs))
+	for _, peerID := range peerIDs {
+		views = append(views, buildGossipPeerView(state, config, peerID, now))
+	}
+	return views
+}
+
+func buildGossipPeerView(state *stateFile, config *syncConfigFile, peerID string, now time.Time) inspect.PeerDebugView {
 	known := configuredKnownPeers(config)
 	peerState := state.SyncPeers[peerID]
-	source, configuredAddr := bootstrapPeerSource(config, peerID)
+	source, configuredAddr := gossipPeerSource(config, peerID, peerState)
 	endpoints := inspectPeerEndpoints(peerID, peerState, config, state.Network, now)
 	resolved := "-"
 	if addr := known[peerID]; addr != nil {
@@ -54,7 +70,7 @@ func buildDebugPeerView(state *stateFile, config *syncConfigFile, peerID string,
 	if selected := selectedPeerEndpointAddr(endpoints); selected != "" {
 		resolved = selected
 	}
-	return buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, now), nil
+	return buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, now)
 }
 
 func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerState syncPeerState, now time.Time) inspect.PeerDebugView {
@@ -69,10 +85,23 @@ func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerSta
 }
 
 func bootstrapPeerSource(config *syncConfigFile, peerID string) (string, string) {
+	if config == nil {
+		return "unknown", ""
+	}
 	for _, peer := range config.Bootstrap {
 		if peer.ID == peerID {
 			return "bootstrap", peer.Addr
 		}
 	}
 	return "unknown", ""
+}
+
+func gossipPeerSource(config *syncConfigFile, peerID string, peerState syncPeerState) (string, string) {
+	if source, configuredAddr := bootstrapPeerSource(config, peerID); source == "bootstrap" {
+		return source, configuredAddr
+	}
+	if peerState.ObservedAddr != "" {
+		return "observed", ""
+	}
+	return "discovered", ""
 }

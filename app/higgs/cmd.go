@@ -524,11 +524,12 @@ func cmdRecord() *cli.Command {
 func cmdPeer() *cli.Command {
 	return &cli.Command{
 		Name:      "peer",
-		Usage:     "Show gossip peer connection and lifecycle state",
+		Aliases:   []string{"peers"},
+		Usage:     "Show gossip peer connectivity and sync state",
 		UsageText: "higgs gossip peer [peer] [--filter text] [--verbose]",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show peers matching id, zone, state, or reason"},
-			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show timestamps, cleanup state, link counts, and diagnostics"},
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show peers matching gossip id, endpoint, status, or error"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show endpoint, retry, relay, datagram, and object-pull diagnostics"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() > 1 {
@@ -546,11 +547,11 @@ func cmdPeer() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:      "show",
-				Usage:     "Show gossip peer connection and lifecycle state",
+				Usage:     "Show gossip peer connectivity and sync state",
 				UsageText: "higgs gossip peer show [peer] [--filter text] [--verbose]",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show peers matching id, zone, state, or reason"},
-					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show timestamps, cleanup state, link counts, and diagnostics"},
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show peers matching gossip id, endpoint, status, or error"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show endpoint, retry, relay, datagram, and object-pull diagnostics"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() > 1 {

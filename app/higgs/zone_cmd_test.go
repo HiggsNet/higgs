@@ -95,6 +95,9 @@ func TestHumanCommandsUsePlaneOrientedShowViews(t *testing.T) {
 		t.Fatal("record get still exposes diagnostic history")
 	}
 	peerCommand := commandByName(gossip.Commands, "peer")
+	if !slices.Contains(peerCommand.Aliases, "peers") {
+		t.Fatal("gossip peer command does not expose peers alias")
+	}
 	requireCommandFlags(t, commandByName(peerCommand.Commands, "show"), "filter", "verbose")
 
 	links := commandByName(root.Commands, "links")

@@ -126,9 +126,10 @@ ipsec:
   # Default driver is strongswan. For unprivileged development or CI without
   # charon/VICI/XFRM, explicitly set driver: dry-run.
   # driver: strongswan
-  # Higgs does not start charon; strongswan mode connects to an existing VICI
-  # socket from a system-managed or externally started charon process. Empty
-  # uses govici/strongSwan's default socket path.
+  # Higgs does not manage charon directly; strongswan mode connects to an
+  # existing VICI socket. The packaged higgsnet.service wants and orders itself
+  # after strongswan.service; other launch methods must start charon separately.
+  # Empty uses govici/strongSwan's default socket path.
   # vici_socket: /run/charon.vici
 
   # fixed publishes the charon listener ports directly. range publishes
@@ -155,7 +156,8 @@ ipsec:
   # gossip endpoint discovery (reflector + interface scan) as discovery/reflector
   # /local sources.
   # announce_addrs:
-  #   - 203.0.113.10:4500
+  #   - 203.0.113.10
+  #   - 2001:db8::10
   # announce_dns:
   #   - vpn.example.com
   # announce_gossip_endpoints: true

@@ -370,8 +370,12 @@ func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time)
 
 	// 1. IPsec-specific manual addresses (highest priority).
 	for _, candidate := range config.IPsec.AnnounceAddrs {
-		addr, _ := splitAdvertiseAddress(candidate)
-		if addr == "" || seen[addr] {
+		parsed, err := netip.ParseAddr(strings.TrimSpace(candidate))
+		if err != nil {
+			continue
+		}
+		addr := parsed.String()
+		if seen[addr] {
 			continue
 		}
 		family := ipsecFamily(addr)

@@ -1,7 +1,7 @@
 [Unit]
 Description=Higgs mesh daemon
 After=network-online.target strongswan.service
-Wants=network-online.target
+Wants=network-online.target strongswan.service
 
 [Service]
 Type=simple

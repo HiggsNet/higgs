@@ -451,7 +451,7 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 
 func TestLocalIPsecAddressRecordAnnounceAddrs(t *testing.T) {
 	config := defaultAppConfig()
-	config.IPsec.AnnounceAddrs = []string{"203.0.113.5:4500", "[2001:db8::5]:4500"}
+	config.IPsec.AnnounceAddrs = []string{"203.0.113.5", "2001:db8::5"}
 	config.ListenAddr = "0.0.0.0:4500"
 
 	record := localIPsecAddressRecord(config, nil, time.Now())
@@ -651,7 +651,7 @@ func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
 
 	config := defaultAppConfig()
 	config.AdvertiseAddrs = []string{"203.0.113.10:33434"}
-	config.IPsec.AnnounceAddrs = []string{"203.0.113.10:4500"}
+	config.IPsec.AnnounceAddrs = []string{"203.0.113.10"}
 	config.ListenAddr = "0.0.0.0:33434"
 
 	er := gossip.EndpointRecord{

@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Catofes/higgs/pkg/transport/ipsec"
 )
 
 func TestParseConfigYAMLIPsecDriver(t *testing.T) {
@@ -38,8 +39,8 @@ func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
 	config := defaultAppConfig()
 	input := `ipsec:
   announce_addrs:
-    - 203.0.113.10:4500
-    - "[2001:db8::10]:4500"
+    - 203.0.113.10
+    - 2001:db8::10
   announce_dns:
     - vpn.example.com
     - vpn6.example.com
@@ -49,7 +50,7 @@ func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if len(config.IPsec.AnnounceAddrs) != 2 || config.IPsec.AnnounceAddrs[0] != "203.0.113.10:4500" || config.IPsec.AnnounceAddrs[1] != "[2001:db8::10]:4500" {
+	if len(config.IPsec.AnnounceAddrs) != 2 || config.IPsec.AnnounceAddrs[0] != "203.0.113.10" || config.IPsec.AnnounceAddrs[1] != "2001:db8::10" {
 		t.Fatalf("AnnounceAddrs = %v", config.IPsec.AnnounceAddrs)
 	}
 	if len(config.IPsec.AnnounceDNS) != 2 || config.IPsec.AnnounceDNS[0] != "vpn.example.com" || config.IPsec.AnnounceDNS[1] != "vpn6.example.com" {
@@ -57,6 +58,17 @@ func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
 	}
 	if config.IPsec.AnnounceGossipEndpoints {
 		t.Fatalf("AnnounceGossipEndpoints = true, want false")
+	}
+}
+
+func TestParseConfigYAMLIPsecAnnouncementsRejectPorts(t *testing.T) {
+	for _, candidate := range []string{"203.0.113.10:4500", "[2001:db8::10]:4500"} {
+		config := defaultAppConfig()
+		input := "ipsec:\n  announce_addrs:\n    - \"" + candidate + "\"\n"
+		err := parseConfigYAML(input, config)
+		if err == nil || !strings.Contains(err.Error(), "without a port") {
+			t.Fatalf("parseConfigYAML(%q) error = %v, want address-without-port error", candidate, err)
+		}
 	}
 }
 

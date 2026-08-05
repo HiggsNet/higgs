@@ -1,7 +1,6 @@
 package text
 
 import (
-	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -10,53 +9,61 @@ import (
 	"github.com/Catofes/higgs/internal/inspect"
 )
 
-func WritePeers(w io.Writer, view inspect.PeerLifecycleDebugView, filter string, verbose bool) error {
+func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string, verbose bool) error {
 	filter = strings.ToLower(strings.TrimSpace(filter))
-	peers := make([]inspect.PeerStatusInfo, 0, len(view.Peers))
-	for _, peer := range view.Peers {
+	matching := make([]inspect.PeerDebugView, 0, len(peers))
+	for _, peer := range peers {
 		searchable := strings.Join([]string{
 			peer.PeerID,
-			string(peer.Zone),
-			peer.State,
-			peer.Reason,
-			peer.Detail,
+			peer.Source,
+			peer.ConfiguredAddr,
+			peer.ResolvedAddr,
+			peer.Status,
+			peer.LastError,
+			peer.KnownEndpoint,
+			peer.DiscoveredAddr,
+			peer.ObservedAddr,
+			peer.LastUpdateSource,
 		}, " ")
 		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
-			peers = append(peers, peer)
+			matching = append(matching, peer)
 		}
 	}
+
+	if verbose {
+		out := newLineWriter(w)
+		out.Linef("peers: %s", filteredCount(len(matching), len(peers), filter))
+		out.Blank()
+		if err := out.Err(); err != nil {
+			return err
+		}
+		for _, peer := range matching {
+			if err := WritePeerDebug(w, peer); err != nil {
+				return err
+			}
+			out = newLineWriter(w)
+			out.Blank()
+			if err := out.Err(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
-	out.Linef("peers: %s", filteredCount(len(peers), len(view.Peers), filter))
-	if verbose {
-		out.Println("PEER\tSTATE\tLINKS\tLAST_SEEN\tLAST_SYNC\tLAST_RECONCILE\tOFFLINE_SINCE\tNEXT_CLEANUP\tREASON\tDETAIL")
-	} else {
-		out.Println("PEER\tSTATE\tLINKS\tLAST_SEEN\tREASON")
-	}
-	for _, peer := range peers {
-		links := fmt.Sprintf("%d/%d/%d", peer.UpLinks, peer.ActualLinks, peer.DesiredLinks)
-		if verbose {
-			out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
-				peer.PeerID,
-				dash(peer.State),
-				links,
-				formatUnixTime(peer.LastSeenUnix),
-				formatUnixTime(peer.LastSyncUnix),
-				formatUnixTime(peer.LastReconcileUnix),
-				formatUnixTime(peer.OfflineSinceUnix),
-				formatUnixTime(peer.NextCleanupUnix),
-				dash(peer.Reason),
-				escapeTableCell(peer.Detail),
-			)
-		} else {
-			out.Linef("%s\t%s\t%s\t%s\t%s",
-				peer.PeerID,
-				dash(peer.State),
-				links,
-				formatUnixTime(peer.LastSeenUnix),
-				dash(peer.Reason),
-			)
-		}
+	out.Linef("peers: %s", filteredCount(len(matching), len(peers), filter))
+	out.Println("PEER\tSOURCE\tENDPOINT\tSTATUS\tLAST_SYNC\tNEXT_RETRY\tLAST_ERROR")
+	for _, peer := range matching {
+		out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			peer.PeerID,
+			dash(peer.Source),
+			dash(peer.ResolvedAddr),
+			dash(peer.Status),
+			dash(peer.LastSuccess),
+			dash(peer.NextRetry),
+			escapeTableCell(dash(peer.LastError)),
+		)
 	}
 	if err := out.Err(); err != nil {
 		return err

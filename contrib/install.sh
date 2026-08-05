@@ -49,10 +49,17 @@ check_runtime_dependencies() {
 			fi
 		fi
 	done
+	if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && ! systemctl cat strongswan.service >/dev/null 2>&1; then
+		if [ -n "$missing" ]; then
+			missing="${missing}, strongswan.service"
+		else
+			missing=strongswan.service
+		fi
+	fi
 
 	if [ -n "$missing" ]; then
 		cat >&2 <<EOF
-error: missing Higgs runtime commands: ${missing}
+error: missing Higgs runtime dependencies: ${missing}
 
 A full data-plane installation needs:
   iproute2: ip
@@ -60,10 +67,14 @@ A full data-plane installation needs:
   BIRD 2.14+: bird, birdc
   nftables: nft
   iptables fallback: iptables, ip6tables, ipset
-  StrongSwan: swanctl (with a running charon/VICI service when IPsec is enabled)
+  StrongSwan: swanctl and strongswan.service (with charon/VICI running when IPsec is enabled)
 
 Ubuntu 24.04+ example:
-  apt install bird2 iproute2 ipset iptables iputils-ping nftables strongswan-charon strongswan-swanctl
+  apt install bird2 charon-systemd iproute2 ipset iptables iputils-ping nftables strongswan-swanctl
+
+On Ubuntu, charon-systemd provides the strongswan.service unit and the VICI-
+enabled charon daemon used by swanctl. Installing strongswan-swanctl alone only
+provides the client command.
 
 Other distributions must provide BIRD 2.14 or newer; for example, Debian
 Bookworm's stock BIRD 2.0.12 package is too old for the supported baseline.

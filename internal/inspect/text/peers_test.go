@@ -6,35 +6,41 @@ import (
 	"time"
 
 	"github.com/Catofes/higgs/internal/inspect"
-	"github.com/Catofes/higgs/pkg/core/zone"
 )
 
-func TestWritePeersUsesConnectionSummaryAndVerboseTables(t *testing.T) {
-	view := inspect.PeerLifecycleDebugView{Peers: []inspect.PeerStatusInfo{
+func TestWriteGossipPeersUsesGossipRuntimeFields(t *testing.T) {
+	peers := []inspect.PeerDebugView{
 		{
-			PeerID: "node-a.catofes.", Zone: zone.ZonePath("node-a.catofes."),
-			State: "active", UpLinks: 1, ActualLinks: 1, DesiredLinks: 2,
-			LastSeenUnix: time.Unix(1700000000, 0).Unix(),
+			PeerID: "node-a.catofes.", Source: "bootstrap", ResolvedAddr: "192.0.2.10:33434",
+			Status: "online", LastSuccess: "2023-11-14T22:13:20Z", NextRetry: "-",
 		},
 		{
-			PeerID: "node-b.catofes.", Zone: zone.ZonePath("node-b.catofes."),
-			State: "offline", Reason: "sync_timeout", Detail: "last attempt failed",
+			PeerID: "node-b.catofes.", Source: "discovered", ResolvedAddr: "198.51.100.20:33434",
+			Status: "backoff", LastSuccess: "never", NextRetry: "2023-11-14T22:14:20Z", LastError: "ping timeout",
+			ObservedAddr: "198.51.100.21:33434", ObservedStatus: "active", LastUpdateSource: "pong",
 		},
-	}}
-	var summary strings.Builder
-	if err := WritePeers(&summary, view, "", false); err != nil {
-		t.Fatalf("WritePeers summary: %v", err)
 	}
-	for _, want := range []string{"PEER", "STATE", "LINKS", "LAST_SEEN", "node-a.catofes.", "1/1/2", "node-b.catofes.", "offline"} {
+
+	var summary strings.Builder
+	if err := WriteGossipPeers(&summary, peers, "", false); err != nil {
+		t.Fatalf("WriteGossipPeers summary: %v", err)
+	}
+	for _, want := range []string{"PEER", "SOURCE", "ENDPOINT", "STATUS", "LAST_SYNC", "NEXT_RETRY", "LAST_ERROR", "192.0.2.10:33434", "ping timeout"} {
 		if !strings.Contains(summary.String(), want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary.String())
 		}
 	}
-	var verbose strings.Builder
-	if err := WritePeers(&verbose, view, "node-b", true); err != nil {
-		t.Fatalf("WritePeers verbose: %v", err)
+	for _, unwanted := range []string{"LINKS", "desired_links", "up_links", "last_reconcile"} {
+		if strings.Contains(summary.String(), unwanted) {
+			t.Fatalf("summary contains transport field %q:\n%s", unwanted, summary.String())
+		}
 	}
-	for _, want := range []string{"peers: 1/2", "LAST_SYNC", "NEXT_CLEANUP", "DETAIL", "sync_timeout", "last attempt failed"} {
+
+	var verbose strings.Builder
+	if err := WriteGossipPeers(&verbose, peers, "node-b", true); err != nil {
+		t.Fatalf("WriteGossipPeers verbose: %v", err)
+	}
+	for _, want := range []string{"peers: 1/2", "peer_id: node-b.catofes.", "observed_addr: 198.51.100.21:33434", "last_update_source: pong", "datagram_too_large_dropped:"} {
 		if !strings.Contains(verbose.String(), want) {
 			t.Fatalf("verbose output missing %q:\n%s", want, verbose.String())
 		}

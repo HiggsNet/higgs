@@ -564,7 +564,14 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 		config.IPsec.PortPreviousGrace = d
 	}
-	config.IPsec.AnnounceAddrs = append(config.IPsec.AnnounceAddrs, file.IPsec.AnnounceAddrs...)
+	for _, raw := range file.IPsec.AnnounceAddrs {
+		candidate := strings.TrimSpace(raw)
+		addr, err := netip.ParseAddr(candidate)
+		if err != nil {
+			return fmt.Errorf("invalid ipsec.announce_addrs entry %q: expected an IP address without a port", raw)
+		}
+		config.IPsec.AnnounceAddrs = append(config.IPsec.AnnounceAddrs, addr.String())
+	}
 	config.IPsec.AnnounceDNS = append(config.IPsec.AnnounceDNS, file.IPsec.AnnounceDNS...)
 	if file.IPsec.AnnounceGossipEndpoints != nil {
 		config.IPsec.AnnounceGossipEndpoints = *file.IPsec.AnnounceGossipEndpoints
