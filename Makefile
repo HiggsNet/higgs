@@ -278,8 +278,8 @@ record-view-smoke:
 	@echo "Record view smoke passed"
 
 cli-surface-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ShowFlagsWorkBeforeAndAfterSubcommand|HumanCommandsUsePlaneOrientedShowViews|DelegationCommandsOwnPermissionManagement|PrintRouteShowReportUsesFilteredVerboseTable)'
-	$(GO_ENV) $(GO) test ./internal/inspect/text -run 'TestWrite(ZonesUsesSummaryAndVerboseTables|PeersUsesConnectionSummaryAndVerboseTables|LinksUsesTransportSummaryAndVerboseTables|FirewallSummaryFiltersAndHidesDebugDetails)'
+	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ShowFlagsWorkBeforeAndAfterSubcommand|HumanCommandsUsePlaneOrientedShowViews|DelegationCommandsOwnPermissionManagement|PrintRouteShowReportUsesFilteredVerboseTable|ServiceCLIExposesTableAndLocalViews)'
+	$(GO_ENV) $(GO) test ./internal/inspect/text -run 'TestWrite(ZonesUsesSummaryAndVerboseTables|GossipPeersUsesGossipRuntimeFields|LinksUsesTransportSummaryAndVerboseTables|FirewallSummaryFiltersAndHidesDebugDetails|ServicesShowsPublishedAndLocalServices)'
 	@echo "CLI surface smoke passed"
 
 # phase1-smoke 流程：
@@ -1035,7 +1035,7 @@ help:
 	@echo "  join-smoke - Run root/delegation/join smoke test"
 	@echo "  zone-sort-smoke - Verify hierarchical dot/hyphen zone ordering"
 	@echo "  record-view-smoke - Verify human record values and verbose metadata"
-	@echo "  cli-surface-smoke - Verify gossip/links/route/firewall show hierarchy and tables"
+	@echo "  cli-surface-smoke - Verify gossip/links/route/firewall/service show hierarchy and tables"
 	@echo "  phase1-smoke - Run a local two-peer gossip smoke test"
 	@echo "  phase2-smoke - Run bidirectional two-peer sync smoke test"
 	@echo "  phase2-run-smoke - Run sync run reconnect/recovery smoke test"

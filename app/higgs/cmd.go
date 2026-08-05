@@ -155,9 +155,66 @@ func cmdFirewall() *cli.Command {
 
 func cmdService() *cli.Command {
 	return &cli.Command{
-		Name:  "service",
-		Usage: "Publish and withdraw signed application service records",
+		Name:      "service",
+		Usage:     "Show and manage signed application service records",
+		UsageText: "higgs service [--filter text] [--local] [--all] [--verbose]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show services matching id, type, owner, region, endpoint, or status"},
+			&cli.BoolFlag{Name: "local", Usage: "Only show services published by the managed zone"},
+			&cli.BoolFlag{Name: "all", Usage: "Include withdrawn services"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show version, update time, record key, and parse errors"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: higgs service [--filter text] [--local] [--all] [--verbose]", 1)
+			}
+			return showServices(cmd.String("filter"), cmd.Bool("all"), cmd.Bool("local"), cmd.Bool("verbose"))
+		},
 		Commands: []*cli.Command{
+			{
+				Name:      "show",
+				Aliases:   []string{"list"},
+				Usage:     "Show publicly advertised services",
+				UsageText: "higgs service show [--filter text] [--local] [--all] [--verbose]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show services matching id, type, owner, region, endpoint, or status"},
+					&cli.BoolFlag{Name: "local", Usage: "Only show services published by the managed zone"},
+					&cli.BoolFlag{Name: "all", Usage: "Include withdrawn services"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show version, update time, record key, and parse errors"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs service show [--filter text] [--local] [--all] [--verbose]", 1)
+					}
+					return showServices(
+						effectiveStringFlag(cmd, "filter"),
+						effectiveBoolFlag(cmd, "all"),
+						effectiveBoolFlag(cmd, "local"),
+						effectiveBoolFlag(cmd, "verbose"),
+					)
+				},
+			},
+			{
+				Name:      "mine",
+				Usage:     "Show services published by the managed zone",
+				UsageText: "higgs service mine [--filter text] [--all] [--verbose]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show local services matching id, type, region, endpoint, or status"},
+					&cli.BoolFlag{Name: "all", Usage: "Include withdrawn services"},
+					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show version, update time, record key, and parse errors"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: higgs service mine [--filter text] [--all] [--verbose]", 1)
+					}
+					return showServices(
+						effectiveStringFlag(cmd, "filter"),
+						effectiveBoolFlag(cmd, "all"),
+						true,
+						effectiveBoolFlag(cmd, "verbose"),
+					)
+				},
+			},
 			{
 				Name:                      "publish",
 				Usage:                     "Publish a SOCKS5 endpoint owned by the managed zone",

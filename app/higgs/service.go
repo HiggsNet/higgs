@@ -5,17 +5,37 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Catofes/higgs/internal/inspect"
+	inspecttext "github.com/Catofes/higgs/internal/inspect/text"
 	"github.com/Catofes/higgs/pkg/core/zone"
 	"github.com/Catofes/higgs/pkg/routing"
 	higgsservice "github.com/Catofes/higgs/pkg/service"
 )
 
 const socks5RecordName = "socks5"
+
+func showServices(filter string, includeAll, localOnly, verbose bool) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	state, err := rt.LoadState()
+	if err != nil {
+		return err
+	}
+	view := inspect.BuildServiceInspection(inspect.ServiceInspectionInput{
+		Network:     state.Network,
+		ManagedZone: state.ManagedZone,
+		Now:         rt.Now(),
+	})
+	return inspecttext.WriteServices(os.Stdout, view, filter, includeAll, localOnly, verbose)
+}
 
 type serviceMutationRequest struct {
 	Operation string                        `json:"operation"`

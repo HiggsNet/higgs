@@ -43,7 +43,7 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 |---|---|
 | [`pkg/service`](../../pkg/service) | `service.socks5.v1` record 解析/校验/授权、Zone selector |
 | [`app/higgs-services`](../../app/higgs-services) | manifest 解析（`manifest.go`）、Compose/GOST 渲染（`render.go`）、publish/withdraw 编排（`main.go`） |
-| [`app/higgs/service.go`](../../app/higgs/service.go) | `higgs service publish/withdraw`，record 签名提交 |
+| [`app/higgs/service.go`](../../app/higgs/service.go) | `higgs service` 公开/本机 service 表格，以及 `publish/withdraw` record 签名提交 |
 | [`app/higgs/endpoint_acl.go`](../../app/higgs/endpoint_acl.go) | `higgs firewall endpoint` 命令与 daemon 侧 endpoint ACL 事件处理 |
 
 ---
@@ -92,6 +92,17 @@ higgs route ipam revoke assignment catofes. 2a0d:2905:0:4::/96 --to node-a.catof
 - `active` 字段可选：缺省视为 active；撤销通过写入 `active: false` 实现，record 本身保留。
 - 兼容旧格式：没有 `active` 字段、只有单个 `region/address/port` 的 record 仍可读取；但 legacy 字段与 `endpoints` 不能同时出现。
 - 地址必须是 canonical 形式、可用 unicast；同一 `region/address/port` 不允许重复。
+
+`higgs service`（等价于 `higgs service show`）以表格列出 gossip state 中当前 active 的公开 service，并用 `OWNER` / `SCOPE=local|remote` 标明发布者以及是否由本机 managed zone 发布。常用过滤入口：
+
+```bash
+higgs service                    # 全部 active 公开 service，包含本机
+higgs service mine               # 仅本机发布的 active service
+higgs service --local            # 同上
+higgs service --all --verbose    # 包含 withdrawn，并显示 record 元数据
+```
+
+多 endpoint service 在表格中按 endpoint 展开；IPv6 endpoint 使用 `[address]:port` 表示。无法解析的 `services/*` record 会显示为 `invalid`，并在 `--verbose` 下给出错误。
 
 ### 2.3 Record 授权
 

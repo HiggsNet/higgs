@@ -38,6 +38,24 @@ func TestServicePublishCLIKeepsCommaDelimitedEndpointsIntact(t *testing.T) {
 	}
 }
 
+func TestServiceCLIExposesTableAndLocalViews(t *testing.T) {
+	service := cmdService()
+	if service.Action == nil {
+		t.Fatal("service command does not default to the table view")
+	}
+	requireCommandFlags(t, service, "filter", "local", "all", "verbose")
+	show := commandByName(service.Commands, "show")
+	if show == nil {
+		t.Fatal("service show command is missing")
+	}
+	requireCommandFlags(t, show, "filter", "local", "all", "verbose")
+	mine := commandByName(service.Commands, "mine")
+	if mine == nil {
+		t.Fatal("service mine command is missing")
+	}
+	requireCommandFlags(t, mine, "filter", "all", "verbose")
+}
+
 func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
 	state, err := rt.LoadState()
