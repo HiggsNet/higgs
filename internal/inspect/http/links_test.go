@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Catofes/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {

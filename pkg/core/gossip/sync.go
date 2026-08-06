@@ -9,8 +9,8 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	photoncrypto "github.com/Catofes/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 var (

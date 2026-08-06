@@ -1,6 +1,6 @@
 package inspect
 
-import "github.com/Catofes/photon/pkg/core/zone"
+import "github.com/HiggsNet/photon/pkg/core/zone"
 
 const (
 	AdmissionReasonAdopted                = "adopted"

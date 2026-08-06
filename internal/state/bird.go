@@ -1,6 +1,6 @@
 package state
 
-import "github.com/Catofes/photon/pkg/routing/bird"
+import "github.com/HiggsNet/photon/pkg/routing/bird"
 
 type BirdInstanceState struct {
 	NetNSName        string                 `json:"netns_name"`

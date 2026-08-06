@@ -12,14 +12,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Catofes/photon/internal/controlapi"
-	"github.com/Catofes/photon/internal/inspect"
-	inspecthttp "github.com/Catofes/photon/internal/inspect/http"
-	photonstate "github.com/Catofes/photon/internal/state"
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/routing/bird"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/internal/controlapi"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
+	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 const controlSocketName = "photon.sock"

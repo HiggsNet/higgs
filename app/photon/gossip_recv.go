@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 // startGossipPacketReceiver starts a goroutine that blocks on

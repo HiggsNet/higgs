@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
-	photoncrypto "github.com/Catofes/photon/pkg/crypto"
-	"github.com/Catofes/photon/pkg/routing"
-	photonservice "github.com/Catofes/photon/pkg/service"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/routing"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type recordMutationResult struct {

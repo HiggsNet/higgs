@@ -8,9 +8,9 @@ import (
 	"net/netip"
 	"os"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	"github.com/Catofes/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/urfave/cli/v3"
 )
 

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/photon/pkg/routing/bird"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestParseConfigYAMLRoutingInstances(t *testing.T) {

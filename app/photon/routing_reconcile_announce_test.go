@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/Catofes/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/routing"
 	"net/netip"
 	"testing"
 	"time"

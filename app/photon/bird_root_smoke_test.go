@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/health"
-	"github.com/Catofes/photon/pkg/routing/bird"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // TestDaemonBIRDRoutingRootSmoke verifies that the daemon routing reconcile

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 type fakeProber struct {

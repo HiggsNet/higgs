@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/vmihailenco/msgpack/v5"
 )
 

@@ -3,7 +3,7 @@ package main
 import (
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func syncDebugLogger(config *syncConfigFile) func(gossip.Event) {

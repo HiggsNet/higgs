@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T) {

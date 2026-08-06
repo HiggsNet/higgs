@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/internal/observer"
+	"github.com/HiggsNet/photon/internal/observer"
 )
 
 func TestObserverStartObserverServerDisabled(t *testing.T) {

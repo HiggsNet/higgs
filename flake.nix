@@ -45,7 +45,7 @@
 
             meta = {
               description = "Trust-first network configuration control plane";
-              homepage = "https://github.com/Catofes/photon";
+              homepage = "https://github.com/HiggsNet/photon";
               license = pkgs.lib.licenses.mit;
               mainProgram = "photon";
               platforms = pkgs.lib.platforms.linux;

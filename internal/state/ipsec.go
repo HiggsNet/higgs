@@ -1,8 +1,8 @@
 package state
 
 import (
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // IPsecTransportKeyState stores the local node's IPsec transport key.

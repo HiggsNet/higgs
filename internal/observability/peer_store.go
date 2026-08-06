@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	photonstate "github.com/Catofes/photon/internal/state"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 // PeerSnapshot contains diagnostics that are safe to lose on daemon restart.

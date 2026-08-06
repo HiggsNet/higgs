@@ -2,7 +2,7 @@
 
 set -eu
 
-repo="${PHOTON_GITHUB_REPOSITORY:-Catofes/photon}"
+repo="${PHOTON_GITHUB_REPOSITORY:-HiggsNet/photon}"
 version="${PHOTON_VERSION:-latest}"
 install_dir="${PHOTON_INSTALL_DIR:-/usr/local/bin}"
 service_dir="${PHOTON_SYSTEMD_DIR:-/etc/systemd/system}"
@@ -29,7 +29,7 @@ Options:
   -h, --help          Show this help
 
 Environment:
-  PHOTON_GITHUB_REPOSITORY  GitHub owner/repository (default: Catofes/photon)
+  PHOTON_GITHUB_REPOSITORY  GitHub owner/repository (default: HiggsNet/photon)
   PHOTON_VERSION            Same as --version
   PHOTON_INSTALL_DIR        Same as --install-dir
   PHOTON_SYSTEMD_DIR        systemd unit directory (default: /etc/systemd/system)

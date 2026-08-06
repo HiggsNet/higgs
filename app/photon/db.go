@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Catofes/photon/internal/inspect"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	bolt "go.etcd.io/bbolt"
 )
 

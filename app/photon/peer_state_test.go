@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	"github.com/Catofes/photon/pkg/core/zone"
-	photoncrypto "github.com/Catofes/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 // buildPeerStateTestNetwork creates a minimal network state for peer lifecycle

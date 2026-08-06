@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestSaveStateMetaDoesNotRewriteNetwork(t *testing.T) {

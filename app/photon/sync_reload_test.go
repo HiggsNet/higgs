@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func TestSyncRuntimeReloadStateIfChangedSkipsUnchangedStateFile(t *testing.T) {

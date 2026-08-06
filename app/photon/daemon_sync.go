@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // runtimeClock wraps a Runtime-style func() time.Time into the Clock interface.

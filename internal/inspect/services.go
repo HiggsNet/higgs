@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	photonservice "github.com/Catofes/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
 type ServiceInspectionInput struct {

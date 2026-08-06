@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func (sr *SyncRuntime) publishIPsecRecordsInState(state *stateFile) (bool, error) {

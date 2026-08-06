@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDaemonControlErrorResponses(t *testing.T) {

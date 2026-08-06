@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 var errDaemonStateRevisionStale = errors.New("daemon state revision is stale")

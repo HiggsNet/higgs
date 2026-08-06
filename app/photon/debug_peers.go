@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 )
 
 // debugPeers implements `photon debug peers`: it prints the derived lifecycle

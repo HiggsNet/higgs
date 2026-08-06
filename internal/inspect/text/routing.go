@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Catofes/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func WriteBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {

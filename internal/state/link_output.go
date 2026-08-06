@@ -3,7 +3,7 @@ package state
 import (
 	"net/netip"
 
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // LinkOutput is the provider-neutral, read-only view of one Babel-facing

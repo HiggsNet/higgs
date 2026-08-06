@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/Catofes/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, verbose bool) error {

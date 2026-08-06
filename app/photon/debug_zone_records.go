@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 // handleObjectChunk keeps UDP assembly and transport repair outside the

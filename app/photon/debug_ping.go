@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	pingdebug "github.com/Catofes/photon/internal/ping"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/health"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	pingdebug "github.com/HiggsNet/photon/internal/ping"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // debugPing resolves the IPsec link targets for a peer zone and pings each one

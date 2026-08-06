@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Catofes/photon/internal/inspect"
-	photonstate "github.com/Catofes/photon/internal/state"
+	"github.com/HiggsNet/photon/internal/inspect"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 func TestPeersResponsePreservesObserverSchema(t *testing.T) {

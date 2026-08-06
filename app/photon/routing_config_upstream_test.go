@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"gopkg.in/yaml.v3"
 )
 

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 // routePacket demuxes an inbound packet to either an active SyncSession or the

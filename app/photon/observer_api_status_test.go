@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/internal/observer"
+	"github.com/HiggsNet/photon/internal/observer"
 )
 
 func TestObserverStatusAPI(t *testing.T) {

@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strconv"
 
-	photonstate "github.com/Catofes/photon/internal/state"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // linkOutputsFromState projects provider-owned runtime state into the common

@@ -1,6 +1,6 @@
 package inspect
 
-import photonstate "github.com/Catofes/photon/internal/state"
+import photonstate "github.com/HiggsNet/photon/internal/state"
 
 const (
 	RoutingModeManaged           = "managed"

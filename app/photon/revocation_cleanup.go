@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // ComputeRevocationImpact computes the full impact of a revocation on the

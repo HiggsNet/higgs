@@ -1,6 +1,6 @@
 package state
 
-import "github.com/Catofes/photon/pkg/core/zone"
+import "github.com/HiggsNet/photon/pkg/core/zone"
 
 // LinkInstanceState is the persisted runtime state of a single IPsec link
 // instance.

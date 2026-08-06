@@ -18,7 +18,7 @@
 8. 不保留 `higgs`、`higgsnet`、`higgs-services` 命令、软链接、wrapper 或 systemd alias。
 9. 默认部署视为新网络初始化：重新创建 root、身份、delegation、record 和节点加入关系。
 
-Go module 的目标暂按当前 canonical module owner 写为 `github.com/Catofes/photon`。如果仓库在实施前迁移到其他 GitHub owner，必须先冻结最终 URL，再一次性修改 module、源码 import、Nix metadata、安装脚本和文档链接，避免再次重命名。
+Go module 和 GitHub 仓库的 canonical 路径已冻结为 `github.com/HiggsNet/photon`。module、源码 import、protobuf `go_package`、Nix metadata、安装脚本和文档链接均以此为准。
 
 ## 2. 不在本次范围内
 
@@ -38,7 +38,7 @@ Go module 的目标暂按当前 canonical module owner 写为 `github.com/Catofe
 |---|---|---|
 | 产品名 | `Higgs` | `Photon` |
 | 仓库名 | `higgs` | `photon` |
-| Go module | `github.com/Catofes/higgs` | `github.com/Catofes/photon` |
+| Go module | `github.com/HiggsNet/higgs` | `github.com/HiggsNet/photon` |
 | 主源码目录 | `app/higgs` | `app/photon` |
 | 服务源码目录 | `app/higgs-services` | `app/photon-services` |
 | 主二进制 | `higgs` / 部署时的 `higgsnet` | `photon` |
@@ -132,7 +132,7 @@ Go module 的目标暂按当前 canonical module owner 写为 `github.com/Catofe
 
 ### 阶段 0：冻结基线
 
-- [ ] 确认最终 GitHub owner 和 repository URL（本地实现暂按 `github.com/Catofes/photon`）。
+- [x] 确认最终 GitHub owner 和 repository URL 为 `github.com/HiggsNet/photon`。
 - [x] 确认工作区初始状态，记录当前 commit。
 - [x] 在改名前运行 `go test ./...`，确认基线全绿。
 - [x] 确认不保留旧生产身份、数据库或现网互通能力。

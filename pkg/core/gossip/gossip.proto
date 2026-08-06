@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package photon.gossip.v1;
 
-option go_package = "github.com/Catofes/photon/pkg/core/gossip/gossippb";
+option go_package = "github.com/HiggsNet/photon/pkg/core/gossip/gossippb";
 
 message Message {
   string peer_id = 1;

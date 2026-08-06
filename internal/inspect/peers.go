@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	photonstate "github.com/Catofes/photon/internal/state"
-	"github.com/Catofes/photon/pkg/core/zone"
+	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 type PeerSetInput struct {

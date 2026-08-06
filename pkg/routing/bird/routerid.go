@@ -3,8 +3,8 @@ package bird
 import (
 	"encoding/binary"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	photoncrypto "github.com/Catofes/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 // StableRouterID returns a deterministic 32-bit router id for a BIRD instance

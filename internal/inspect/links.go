@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	photonstate "github.com/Catofes/photon/internal/state"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type LinkInput struct {

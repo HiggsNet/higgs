@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	"github.com/Catofes/photon/pkg/health"
+	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 const (

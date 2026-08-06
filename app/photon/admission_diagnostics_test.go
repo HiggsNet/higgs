@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {

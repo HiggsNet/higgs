@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	pingdebug "github.com/Catofes/photon/internal/ping"
-	"github.com/Catofes/photon/pkg/core/zone"
+	pingdebug "github.com/HiggsNet/photon/internal/ping"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/urfave/cli/v3"
 )
 

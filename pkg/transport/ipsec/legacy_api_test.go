@@ -1,6 +1,6 @@
 package ipsec
 
-import "github.com/Catofes/photon/pkg/core/zone"
+import "github.com/HiggsNet/photon/pkg/core/zone"
 
 // Compatibility helpers keep focused tests on the lower-level implementations
 // without retaining these convenience APIs in production builds.

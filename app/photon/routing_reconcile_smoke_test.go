@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"github.com/Catofes/photon/pkg/routing"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net/netip"
 	"path/filepath"
 	"strings"

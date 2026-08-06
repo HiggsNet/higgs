@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func TestRoutePacketHitsActiveSession(t *testing.T) {

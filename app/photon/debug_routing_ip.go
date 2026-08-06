@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type routingIPCommandRunner func(context.Context, string, ...string) ([]byte, error)

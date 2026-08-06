@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/routing"
-	"github.com/Catofes/photon/pkg/routing/bird"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // TestUpstreamRoutingDryRunSmoke verifies that the upstream veth + static route

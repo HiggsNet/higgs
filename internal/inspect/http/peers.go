@@ -1,8 +1,8 @@
 package http
 
 import (
-	"github.com/Catofes/photon/internal/inspect"
-	photonstate "github.com/Catofes/photon/internal/state"
+	"github.com/HiggsNet/photon/internal/inspect"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 type PeersResponse struct {

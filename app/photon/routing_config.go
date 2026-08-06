@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Catofes/photon/pkg/firewall"
-	"github.com/Catofes/photon/pkg/routing/bird"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // netnsConfig holds the set of named network namespaces the node declares.

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	inspecthttp "github.com/Catofes/photon/internal/inspect/http"
-	"github.com/Catofes/photon/internal/observability"
-	"github.com/Catofes/photon/internal/observer"
-	"github.com/Catofes/photon/pkg/core/zone"
+	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
+	"github.com/HiggsNet/photon/internal/observability"
+	"github.com/HiggsNet/photon/internal/observer"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 type observerServer struct {

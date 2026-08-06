@@ -6,9 +6,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	photonstate "github.com/Catofes/photon/internal/state"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 func debugLinks(filter string) error {

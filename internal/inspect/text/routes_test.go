@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	inspecthttp "github.com/Catofes/photon/internal/inspect/http"
-	"github.com/Catofes/photon/pkg/routing/bird"
+	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {

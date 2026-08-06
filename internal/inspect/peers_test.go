@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	photonstate "github.com/Catofes/photon/internal/state"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 func TestBuildPeerIDsMergesFiltersAndSorts(t *testing.T) {

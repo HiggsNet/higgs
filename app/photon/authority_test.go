@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/urfave/cli/v3"
 )
 

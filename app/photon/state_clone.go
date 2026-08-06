@@ -3,7 +3,7 @@ package main
 import (
 	"maps"
 
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func cloneStateFile(s *stateFile) *stateFile {

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"strings"
 	"testing"
 	"time"

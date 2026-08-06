@@ -4,7 +4,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func WriteRotateDebug(w io.Writer, view inspect.RotateDebugView) error {

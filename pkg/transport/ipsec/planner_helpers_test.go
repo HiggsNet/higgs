@@ -1,7 +1,7 @@
 package ipsec
 
 import (
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"testing"
 	"time"
 )

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecthttp "github.com/Catofes/photon/internal/inspect/http"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	"github.com/Catofes/photon/pkg/routing"
-	"github.com/Catofes/photon/pkg/routing/bird"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 

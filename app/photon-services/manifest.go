@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	photonservice "github.com/Catofes/photon/pkg/service"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 	"gopkg.in/yaml.v3"
 )
 

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/routing"
-	photonservice "github.com/Catofes/photon/pkg/service"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
 const socks5RecordName = "socks5"

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // SyncSessionState is the state of a per-peer sync FSM.

@@ -3,7 +3,7 @@ package inspect
 import (
 	"testing"
 
-	photonstate "github.com/Catofes/photon/internal/state"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 func TestBuildFirewallDebugView(t *testing.T) {

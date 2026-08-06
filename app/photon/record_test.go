@@ -3,11 +3,11 @@ package main
 import (
 	"testing"
 
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/routing"
-	photonservice "github.com/Catofes/photon/pkg/service"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestGenericRecordPutRejectsDaemonOwnedKeysAndTypes(t *testing.T) {

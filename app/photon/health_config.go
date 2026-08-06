@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 // healthConfig is the application-layer configuration for link health probes

@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Catofes/photon/pkg/firewall"
-	"github.com/Catofes/photon/pkg/routing"
-	photonservice "github.com/Catofes/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/routing"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
 const (

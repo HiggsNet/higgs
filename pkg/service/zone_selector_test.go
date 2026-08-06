@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestZoneSelectorMatches(t *testing.T) {

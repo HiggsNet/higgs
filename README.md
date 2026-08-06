@@ -10,13 +10,13 @@ Photon 是一个实验性的“信任优先” mesh VPN 控制平面。它不把
 Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（安装为 `/usr/local/bin/photon`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Catofes/photon/master/contrib/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/install.sh | sh
 ```
 
 更新到最新 Release：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Catofes/photon/master/contrib/update.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/update.sh | sh
 ```
 
 安装和更新会在替换二进制前检查完整数据面依赖，包括 `ip`、`ping`、

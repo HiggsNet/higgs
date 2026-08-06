@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"github.com/Catofes/photon/pkg/routing/bird"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"path/filepath"
 	"strings"
 	"testing"

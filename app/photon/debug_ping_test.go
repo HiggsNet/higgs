@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	pingdebug "github.com/Catofes/photon/internal/ping"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/health"
+	pingdebug "github.com/HiggsNet/photon/internal/ping"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 // pingDebugTargets builds the health targets for a fixture state with a

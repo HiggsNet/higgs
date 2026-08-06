@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/routing"
-	photonservice "github.com/Catofes/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
 func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testing.T) {

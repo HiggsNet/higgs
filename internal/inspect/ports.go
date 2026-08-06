@@ -5,7 +5,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func DebugPortGenerationSummary(spec *ipsec.TransportLinkSpec, rotation LinkRotation) string {

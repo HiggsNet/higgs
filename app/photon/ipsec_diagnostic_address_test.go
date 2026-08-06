@@ -5,7 +5,7 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDiagnosticAddressForPrefixUsesReservedSuffix(t *testing.T) {

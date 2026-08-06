@@ -43,7 +43,7 @@
       ];
       meta = {
         description = "Trust-first network configuration control plane";
-        homepage = "https://github.com/Catofes/photon";
+        homepage = "https://github.com/HiggsNet/photon";
         license = lib.licenses.mit;
         mainProgram = "photon";
         platforms = lib.platforms.linux;

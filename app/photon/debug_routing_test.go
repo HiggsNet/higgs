@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 

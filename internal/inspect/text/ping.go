@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func WritePingDebug(w io.Writer, view inspect.PingDebugView) error {

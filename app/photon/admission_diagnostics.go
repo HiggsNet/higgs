@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecttext "github.com/Catofes/photon/internal/inspect/text"
-	photoncrypto "github.com/Catofes/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 // diagnoseAutoJoinAdmission examines the local state and produces a

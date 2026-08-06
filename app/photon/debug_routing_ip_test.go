@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestRoutingIPRouteCommandScopesNamespace(t *testing.T) {

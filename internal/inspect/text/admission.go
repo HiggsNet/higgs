@@ -3,7 +3,7 @@ package text
 import (
 	"io"
 
-	"github.com/Catofes/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func WriteAdmissionDiagnosis(w io.Writer, d inspect.AdmissionDiagnosis) error {

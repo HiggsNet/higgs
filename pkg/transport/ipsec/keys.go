@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	photoncrypto "github.com/Catofes/photon/pkg/crypto"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 type TransportPrivateKey struct {

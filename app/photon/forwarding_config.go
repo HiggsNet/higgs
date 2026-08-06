@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/Catofes/photon/pkg/firewall"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // forwardingYAML is the raw forwarding policy nested under a netns entry.

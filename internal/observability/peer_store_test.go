@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	photonstate "github.com/Catofes/photon/internal/state"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 func TestPeerStoreSnapshotIsDetachedAndConcurrent(t *testing.T) {

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/Catofes/photon/internal/observer"
+	"github.com/HiggsNet/photon/internal/observer"
 )
 
 func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {

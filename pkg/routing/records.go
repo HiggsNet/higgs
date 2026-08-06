@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 var assignmentTagPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62})$`)

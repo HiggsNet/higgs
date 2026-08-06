@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	photoncrypto "github.com/Catofes/photon/pkg/crypto"
-	"github.com/Catofes/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/routing"
 )
 
 func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {

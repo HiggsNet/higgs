@@ -2,7 +2,7 @@ package ipsec
 
 import (
 	"errors"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"strings"
 	"testing"
 	"time"

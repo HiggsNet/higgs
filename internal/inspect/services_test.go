@@ -3,8 +3,8 @@ package inspect
 import (
 	"testing"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	photonservice "github.com/Catofes/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
 func TestBuildServiceInspectionIncludesLocalAndRemoteServices(t *testing.T) {

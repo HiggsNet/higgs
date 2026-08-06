@@ -5,9 +5,9 @@ import (
 	"net"
 	"sort"
 
-	"github.com/Catofes/photon/internal/inspect"
-	photonstate "github.com/Catofes/photon/internal/state"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/internal/inspect"
+	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type linkInspectionBuild struct {

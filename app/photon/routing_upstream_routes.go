@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type execUpstreamRouteManager struct {

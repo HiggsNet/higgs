@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/firewall"
-	"github.com/Catofes/photon/pkg/routing"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 const defaultFirewallReconcileInterval = 30 * time.Second

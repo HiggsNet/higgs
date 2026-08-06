@@ -3,9 +3,9 @@ package main
 import (
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func inspectPeerSetInput(state *stateFile, config *syncConfigFile, now time.Time) inspect.PeerSetInput {

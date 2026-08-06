@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecthttp "github.com/Catofes/photon/internal/inspect/http"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 )
 
 func WriteRoutesDebug(w io.Writer, dump *inspecthttp.RoutesResponse) error {

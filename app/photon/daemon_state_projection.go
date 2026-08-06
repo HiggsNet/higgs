@@ -5,14 +5,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Catofes/photon/internal/inspect"
-	inspecthttp "github.com/Catofes/photon/internal/inspect/http"
-	"github.com/Catofes/photon/internal/observability"
-	"github.com/Catofes/photon/pkg/core/gossip"
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/health"
-	"github.com/Catofes/photon/pkg/routing"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
+	"github.com/HiggsNet/photon/internal/observability"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type daemonStatusProjection struct {

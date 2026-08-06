@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestNewDaemonServiceDefaultsInterval(t *testing.T) {

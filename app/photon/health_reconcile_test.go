@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/core/zone"
-	"github.com/Catofes/photon/pkg/health"
-	"github.com/Catofes/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestHealthTargetsParseScopedNetNS(t *testing.T) {

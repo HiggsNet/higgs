@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 // TestWireGuardGREThreeNodeRootSmoke is the Phase 7.1.b validation experiment.
