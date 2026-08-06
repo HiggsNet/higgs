@@ -5,19 +5,25 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
     in
     {
-      packages = forAllSystems (system:
+      packages = forAllSystems (
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           version = pkgs.lib.removeSuffix "\n" (builtins.readFile ./VERSION);
           cleanSrc = pkgs.lib.cleanSourceWith {
             src = ./.;
-            filter = path: type:
+            filter =
+              path: type:
               type != "socket"
               && !(pkgs.lib.hasInfix "/.photon" path)
               && !(pkgs.lib.hasInfix "/.public-test" path)
@@ -31,7 +37,10 @@
             src = cleanSrc;
             vendorHash = "sha256-v0SzEL0agW+0qwx4mvoOW0JSemkaAm5FgCpg7zHfsxs=";
 
-            subPackages = [ "app/photon" "app/photon-services" ];
+            subPackages = [
+              "app/photon"
+              "app/photon-services"
+            ];
             # Unit and root smoke tests are run explicitly by CI/Make targets.
             # Nix packaging only needs to compile the installable binaries.
             doCheck = false;
@@ -55,11 +64,50 @@
         {
           default = photon;
           photon = photon;
-        });
+        }
+      );
 
-      nixosModules.default = { config, lib, pkgs, ... }:
+      nixosModules.default =
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
         let
           cfg = config.services.photon;
+          settingsFormat = pkgs.formats.yaml { };
+          generatedConfig = settingsFormat.generate "photon-config.yaml" cfg.settings;
+          configFile =
+            if cfg.configFile != null then
+              cfg.configFile
+            else if cfg.settings != { } then
+              generatedConfig
+            else
+              "/etc/photon/config.yaml";
+          settingsIPsecConfigured = cfg.settings ? ipsec;
+          settingsIPsec = cfg.settings.ipsec or { };
+          settingsIPsecDriver = settingsIPsec.driver or "strongswan";
+          settingsIPsecPortMode = settingsIPsec.port_mode or "fixed";
+          settingsIPsecPortRange = settingsIPsec.port_range or null;
+          validPortRange =
+            range:
+            range != null
+            && builtins.isAttrs range
+            && range ? from
+            && range ? to
+            && builtins.isInt range.from
+            && builtins.isInt range.to
+            && range.from >= 0
+            && range.from <= 65535
+            && range.to >= 0
+            && range.to <= 65535
+            && range.from <= range.to;
+          inferIPsecFirewall = settingsIPsecConfigured && settingsIPsecDriver != "dry-run";
+          openIPsecFirewall = cfg.openFirewall && (inferIPsecFirewall || cfg.ipsecFirewall.enable);
+          inferredIPsecPortRange = if settingsIPsecPortMode == "range" then settingsIPsecPortRange else null;
+          effectiveIPsecPortRange =
+            if cfg.ipsecFirewall.portRange != null then cfg.ipsecFirewall.portRange else inferredIPsecPortRange;
         in
         {
           options.services.photon = {
@@ -73,20 +121,97 @@
             };
 
             configFile = lib.mkOption {
-              type = lib.types.str;
-              default = "/etc/photon/config.yaml";
-              description = "Path to the Photon configuration file.";
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "/run/secrets/photon/config.yaml";
+              description = ''
+                Path to an externally managed Photon YAML configuration file.
+                This is useful when another deployment system owns the file or
+                when it contains values that must not be copied into the Nix
+                store. This option and services.photon.settings are mutually
+                exclusive. When neither is set, Photon reads
+                /etc/photon/config.yaml for backwards compatibility.
+              '';
             };
-          };
 
-          config = lib.mkIf cfg.enable {
-            systemd.services.photon = {
-              description = "Photon mesh daemon";
-              wantedBy = [ "multi-user.target" ];
-              wants = [ "network-online.target" ];
-              after = [ "network-online.target" "strongswan.service" ];
-              environment.PHOTON_CONFIG = cfg.configFile;
-              path = with pkgs; [
+            settings = lib.mkOption {
+              type = settingsFormat.type;
+              default = { };
+              example = lib.literalExpression ''
+                {
+                  data_dir = "/var/lib/photon";
+                  trusted_root_public_key = "base64-public-key";
+                  gossip = {
+                    peer_id = "node-a.example.";
+                    listen_addr = "[::]:33434";
+                    bootstrap = [
+                      {
+                        id = "node-b.example.";
+                        addr = "192.0.2.2:33434";
+                      }
+                    ];
+                  };
+                  ipsec = {
+                    role = "both";
+                    driver = "strongswan";
+                  };
+                }
+              '';
+              description = ''
+                Photon configuration rendered to YAML. Attribute names map
+                directly to config.yaml keys; see config.example.yaml in the
+                Photon source tree for all supported sections and defaults.
+                The generated file is stored in the world-readable Nix store,
+                so secret values must be referenced by path or supplied through
+                services.photon.configFile instead.
+              '';
+            };
+
+            logLevel = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.enum [
+                  "debug"
+                  "info"
+                  "warn"
+                  "error"
+                ]
+              );
+              default = null;
+              example = "info";
+              description = ''
+                Runtime log level set through PHOTON_LOG_LEVEL. A non-null
+                value overrides the level in services.photon.settings.log.
+              '';
+            };
+
+            environment = lib.mkOption {
+              type = lib.types.attrsOf lib.types.str;
+              default = { };
+              example = {
+                GODEBUG = "netdns=go";
+              };
+              description = ''
+                Additional environment variables for the Photon service.
+                PHOTON_CONFIG is managed by this module and must not be set
+                here; use configFile or settings instead.
+              '';
+            };
+
+            environmentFiles = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              example = [ "/run/secrets/photon/environment" ];
+              description = ''
+                Environment files read by systemd before Photon starts. Prefix
+                a path with "-" to make a missing file non-fatal. These files
+                can safely provide deployment-specific or secret environment
+                values without placing them in the Nix store.
+              '';
+            };
+
+            runtimePackages = lib.mkOption {
+              type = lib.types.listOf lib.types.package;
+              default = with pkgs; [
                 bird2
                 iproute2
                 iputils
@@ -96,24 +221,269 @@
                 procps
                 strongswan
               ];
+              defaultText = lib.literalExpression ''
+                with pkgs; [ bird2 iproute2 iputils ipset iptables nftables procps strongswan ]
+              '';
+              description = ''
+                Packages added to the daemon's PATH for data-plane operations.
+                Replace this list to select different implementations, or use
+                extraPackages to append tools while retaining the defaults.
+              '';
+            };
+
+            extraPackages = lib.mkOption {
+              type = lib.types.listOf lib.types.package;
+              default = [ ];
+              example = lib.literalExpression "with pkgs; [ wireguard-tools ]";
+              description = "Additional packages added to the Photon service PATH.";
+            };
+
+            strongswanService = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = "strongswan.service";
+              example = "strongswan-swanctl.service";
+              description = ''
+                systemd unit that must be started before Photon. Set to null
+                for dry-run deployments or when StrongSwan is managed outside
+                systemd.
+              '';
+            };
+
+            openFirewall = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Whether to open Photon ports in the NixOS firewall. This opens
+                gossipPort/UDP and, when set, observerPort/TCP. When settings
+                contains a non-dry-run ipsec section, it also opens UDP 500,
+                UDP 4500, and the configured IPsec port range. For configFile,
+                configure ipsecFirewall explicitly because Nix cannot inspect
+                the external YAML file.
+              '';
+            };
+
+            gossipPort = lib.mkOption {
+              type = lib.types.port;
+              default = 33434;
+              description = ''
+                UDP gossip port opened when openFirewall is true. Keep this in
+                sync with the port in settings.gossip.listen_addr.
+              '';
+            };
+
+            observerPort = lib.mkOption {
+              type = lib.types.nullOr lib.types.port;
+              default = null;
+              example = 8080;
+              description = ''
+                TCP observer port opened when openFirewall is true. Keep this
+                in sync with settings.observer.listen. Null opens no TCP port.
+              '';
+            };
+
+            ipsecFirewall = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = ''
+                  Whether openFirewall should open the fixed StrongSwan IKE
+                  and NAT-T listener ports, UDP 500 and UDP 4500. This is
+                  inferred automatically from services.photon.settings.ipsec.
+                  Enable it explicitly when configFile supplies the Photon
+                  configuration.
+                '';
+              };
+
+              portRange = lib.mkOption {
+                type = lib.types.nullOr (
+                  lib.types.submodule {
+                    options = {
+                      from = lib.mkOption {
+                        type = lib.types.port;
+                        example = 33401;
+                        description = "First UDP port in the advertised IPsec range.";
+                      };
+                      to = lib.mkOption {
+                        type = lib.types.port;
+                        example = 33499;
+                        description = "Last UDP port in the advertised IPsec range.";
+                      };
+                    };
+                  }
+                );
+                default = null;
+                example = {
+                  from = 33401;
+                  to = 33499;
+                };
+                description = ''
+                  UDP range opened for IPsec advertised entry ports. With
+                  settings, this is inferred from ipsec.port_range when
+                  ipsec.port_mode is range. Set it explicitly when configFile
+                  contains a range-mode configuration.
+                '';
+              };
+            };
+
+            user = lib.mkOption {
+              type = lib.types.str;
+              default = "root";
+              description = ''
+                User account used to run Photon. Real network namespace, XFRM,
+                routing, and firewall reconciliation normally require root.
+              '';
+            };
+
+            group = lib.mkOption {
+              type = lib.types.str;
+              default = "root";
+              description = "Group used to run Photon.";
+            };
+
+            restartPolicy = lib.mkOption {
+              type = lib.types.enum [
+                "no"
+                "on-success"
+                "on-failure"
+                "on-abnormal"
+                "on-abort"
+                "on-watchdog"
+                "always"
+              ];
+              default = "on-failure";
+              description = "systemd restart policy for the Photon daemon.";
+            };
+
+            restartSec = lib.mkOption {
+              type = lib.types.ints.unsigned;
+              default = 2;
+              description = "Seconds systemd waits before restarting Photon.";
+            };
+
+            extraServiceConfig = lib.mkOption {
+              type = lib.types.attrsOf lib.types.anything;
+              default = { };
+              example = {
+                Nice = 5;
+                OOMScoreAdjust = -250;
+              };
+              description = ''
+                Additional or overriding values for the systemd serviceConfig
+                attribute set. Use this for deployment-specific limits and
+                sandboxing settings.
+              '';
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            assertions = [
+              {
+                assertion = cfg.configFile == null || cfg.settings == { };
+                message = ''
+                  services.photon.configFile and services.photon.settings cannot
+                  be used together; choose an external file or generated YAML.
+                '';
+              }
+              {
+                assertion = !(cfg.environment ? PHOTON_CONFIG);
+                message = ''
+                  services.photon.environment.PHOTON_CONFIG is managed by the
+                  module; use services.photon.configFile or settings instead.
+                '';
+              }
+              {
+                assertion = cfg.logLevel == null || !(cfg.environment ? PHOTON_LOG_LEVEL);
+                message = ''
+                  Set the log level with either services.photon.logLevel or
+                  services.photon.environment.PHOTON_LOG_LEVEL, not both.
+                '';
+              }
+              {
+                assertion =
+                  !(cfg.openFirewall && inferIPsecFirewall && settingsIPsecPortMode == "range")
+                  || validPortRange settingsIPsecPortRange;
+                message = ''
+                  services.photon.settings.ipsec.port_mode is "range", so
+                  settings.ipsec.port_range must contain valid from/to ports
+                  with from less than or equal to to.
+                '';
+              }
+              {
+                assertion =
+                  cfg.ipsecFirewall.portRange == null
+                  || cfg.ipsecFirewall.portRange.from <= cfg.ipsecFirewall.portRange.to;
+                message = ''
+                  services.photon.ipsecFirewall.portRange.from must be less
+                  than or equal to portRange.to.
+                '';
+              }
+              {
+                assertion =
+                  cfg.configFile == null || cfg.ipsecFirewall.portRange == null || cfg.ipsecFirewall.enable;
+                message = ''
+                  services.photon.ipsecFirewall.enable must be true when an
+                  explicit portRange is used with configFile.
+                '';
+              }
+            ];
+
+            networking.firewall.allowedUDPPorts = lib.unique (
+              lib.optional cfg.openFirewall cfg.gossipPort
+              ++ lib.optionals openIPsecFirewall [
+                500
+                4500
+              ]
+            );
+            networking.firewall.allowedUDPPortRanges =
+              lib.optional (openIPsecFirewall && validPortRange effectiveIPsecPortRange)
+                {
+                  inherit (effectiveIPsecPortRange) from to;
+                };
+            networking.firewall.allowedTCPPorts = lib.optional (
+              cfg.openFirewall && cfg.observerPort != null
+            ) cfg.observerPort;
+
+            systemd.services.photon = {
+              description = "Photon mesh daemon";
+              wantedBy = [ "multi-user.target" ];
+              wants = [
+                "network-online.target"
+              ]
+              ++ lib.optional (cfg.strongswanService != null) cfg.strongswanService;
+              after = [
+                "network-online.target"
+              ]
+              ++ lib.optional (cfg.strongswanService != null) cfg.strongswanService;
+              environment =
+                cfg.environment
+                // {
+                  PHOTON_CONFIG = configFile;
+                }
+                // lib.optionalAttrs (cfg.logLevel != null) {
+                  PHOTON_LOG_LEVEL = cfg.logLevel;
+                };
+              path = cfg.runtimePackages ++ cfg.extraPackages;
               serviceConfig = {
                 Type = "simple";
-                User = "root";
-                Group = "root";
+                User = cfg.user;
+                Group = cfg.group;
                 ExecStart = "${lib.getExe cfg.package} daemon";
-                Restart = "on-failure";
-                RestartSec = 2;
+                Restart = cfg.restartPolicy;
+                RestartSec = cfg.restartSec;
                 TimeoutStopSec = 30;
                 RuntimeDirectory = "photon";
                 RuntimeDirectoryMode = "0700";
                 UMask = "0077";
                 LimitNOFILE = 65536;
-              };
+                EnvironmentFile = cfg.environmentFiles;
+              }
+              // cfg.extraServiceConfig;
             };
           };
         };
 
-      devShells = forAllSystems (system:
+      devShells = forAllSystems (
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in
@@ -131,6 +501,7 @@
               pkgs.wireguard-tools
             ];
           };
-        });
+        }
+      );
     };
 }
