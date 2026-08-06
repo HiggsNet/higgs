@@ -31,7 +31,7 @@ BIRD 2.14+、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时
 其他安装方式：
 
 - **Docker**：`make docker-build` 构建基于 Ubuntu 24.04 的运行时镜像，镜像同时包含 `photon` 与 `photon-services`；真实数据面（IPsec/XFRM、BIRD、firewall、netns）仍需要 `--privileged --network host` 和兼容的宿主 Linux 内核。
-- **Nix**：`nix build .#photon` 构建软件包，`nix develop` 进入开发环境；NixOS 可导入 `nixosModules.default` 并启用 `services.photon.enable`。
+- **Nix**：`nix build .#photon` 构建软件包，`nix develop` 进入开发环境；NixOS 可导入 `nixosModules.default`，通过 `services.photon` 管理 daemon 和可选的 `photon-services` systemd 部署。
 - **源码**：`make build`，产物在 `build/photon`。
 
 ## 快速开始

@@ -43,6 +43,9 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		if !manifest.SOCKS5.configured() {
+			return errors.New("service manifest does not configure socks5")
+		}
 		if *outputDir != "" {
 			manifest.OutputDir = *outputDir
 		}
@@ -123,6 +126,9 @@ func queryAssignments(photonBinary string) (runtimeIPAMReport, error) {
 
 func publishResolvedService(photonBinary string, manifest resolvedManifest) error {
 	service := manifest.SOCKS5
+	if !service.configured() {
+		return errors.New("service manifest does not configure socks5")
+	}
 	rendered, err := loadRenderedSOCKS5(manifest.OutputDir)
 	if err != nil {
 		return err

@@ -54,6 +54,22 @@ type socks5Config struct {
 	HTTPAuth   proxyAuthConfig   `yaml:"http_auth,omitempty"`
 }
 
+// configured distinguishes an omitted/empty socks5 block from a partially
+// configured service. The latter must still go through normal validation so a
+// typo such as socks5.networks without socks5.publish does not silently turn
+// the manifest into network-only mode.
+func (c socks5Config) configured() bool {
+	return c.Region != "" ||
+		len(c.Publish) != 0 ||
+		c.Port != 0 ||
+		len(c.Networks) != 0 ||
+		len(c.AllowZones) != 0 ||
+		c.Resolver.Mode != "" ||
+		len(c.Resolver.Servers) != 0 ||
+		c.HTTPAuth.Username != "" ||
+		c.HTTPAuth.Password != ""
+}
+
 type resolverConfig struct {
 	Mode    string   `yaml:"mode,omitempty" json:"mode"`
 	Servers []string `yaml:"servers,omitempty" json:"servers"`
@@ -138,6 +154,10 @@ type resolvedSOCKS5 struct {
 	Networks   map[string]resolvedRoleAddrs `json:"networks"`
 	ConfigHash string                       `json:"config_hash"`
 	Endpoints  []resolvedEndpoint           `json:"endpoints"`
+}
+
+func (s resolvedSOCKS5) configured() bool {
+	return s.ConfigHash != "" || len(s.Networks) != 0 || len(s.Endpoints) != 0
 }
 
 type resolvedEndpoint struct {
@@ -240,6 +260,9 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 			}
 		}
 		result.Networks[name] = network
+	}
+	if !value.SOCKS5.configured() {
+		return result, nil
 	}
 	configured := value.SOCKS5
 	if configured.Port == 0 {

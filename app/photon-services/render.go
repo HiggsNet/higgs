@@ -91,8 +91,10 @@ func renderArtifacts(manifest resolvedManifest) error {
 	if err := renderNetworkCompose(manifest); err != nil {
 		return err
 	}
-	if err := renderSOCKS5Compose(manifest, manifest.SOCKS5); err != nil {
-		return err
+	if manifest.SOCKS5.configured() {
+		if err := renderSOCKS5Compose(manifest, manifest.SOCKS5); err != nil {
+			return err
+		}
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

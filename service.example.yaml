@@ -27,6 +27,8 @@ networks:
   # asia:
   #   ipv6: "tag:socks5.asia;::/112;::100/120;::1"
 
+# The entire socks5 block is optional. Omit it when photon-services should only
+# render/manage the Docker networks for other applications.
 socks5:
   networks:
     # Base address: socks=::20, h2=::21.

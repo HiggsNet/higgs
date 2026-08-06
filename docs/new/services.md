@@ -32,7 +32,7 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Photon da
 | 角色 | 做什么 | 不做什么 |
 |---|---|---|
 | `photon` daemon / CLI | 保存普通和 shared Anycast assignment；校验服务 endpoint 属于当前 Zone 的 active assignment；显式宣告或撤销整个 assignment prefix；签名、发布和撤销固定的 `services/socks5` record；根据 Zone selector 动态维护 host FORWARD endpoint ACL | 不理解镜像、容器、Compose，不调用 Docker API |
-| `photon-services` | 读取 service manifest；从 `photon route ipam mine` 解析本地 `auto` 和 shared assignment tag；规划多 network 下两个容器的地址；生成 Compose、GOST 配置和状态锁文件；对待发布 endpoint 做 TCP 就绪检查；编排 ACL、route announcement 和 service record 的发布/撤销顺序 | 不启动容器、不管理容器生命周期 |
+| `photon-services` | 读取 service manifest；从 `photon route ipam mine` 解析本地 `auto` 和 shared assignment tag；生成可独立使用的 Docker network Compose；配置了 `socks5` 时再规划两个容器的地址、生成 GOST artifact，并编排发布/撤销顺序 | 不直接启动容器、不管理容器生命周期 |
 | 管理员 | 执行 `docker compose up/down/pull`；负责非 shared assignment 的路由（通常经 `ipam.announce`） | — |
 
 `render` 只生成 artifact；`publish` 也不会启动容器。容器必须先由管理员通过 Compose 拉起，`publish` 的 TCP 就绪检查才有意义。
@@ -163,6 +163,7 @@ socks5:
 
 - `network_defaults.trusted_host_interfaces`：可选的全局 Docker direct-routing 可信入接口，应用到每个 network；接口名以本机实际、稳定的 host 侧 XFRM/WireGuard/veth ingress 为准。在默认 `nat`/`routed` filtering 下，它让这些接口可直达已 publish 端口；它既不单独开放未 publish 端口，也不是 `nat-unprotected` 地址族的安全边界。
 - `networks`：容器实际连接的 Docker network。单个 network 也可配置 `trusted_host_interfaces`，配置后替换全局默认值；生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option。对列入 `socks5.publish` 的 network 及其 service address family，renderer 还自动设置 `com.docker.network.bridge.gateway_mode_ipv4/ipv6: nat-unprotected`，使 routed overlay 可以直达该 service IP 的动态 UDP relay port；访问边界由 Photon endpoint ACL 负责。只连接但未 publish 的 network 不启用这一模式。
+- `socks5`：整个 block 可选。省略或使用空 block 时进入 network-only 模式，只生成 networks Compose，不生成 GOST/SOCKS5 artifact，也不能执行 `publish` / `withdraw`。
 - `socks5.networks`：每个已连接 network 的服务相对基址。
 - `publish`：`network: region` 映射，只发布列出的 network；本地和 Anycast endpoint 可以同时发布任意多个。为兼容旧配置，标量形式 `publish: main` 和顶层 `region` 仍可读取，新配置应使用映射形式。
 - `resolver`：可选的 GOST v3 内置 resolver 配置。`mode` 默认为 `ipv4_first`，还可设为 `ipv6_first`、`ipv4_only`、`ipv6_only`；`servers` 默认为 `8.8.8.8`、`1.1.1.1`。`*_first` 只是偏好，偏好地址族无结果时仍可返回另一地址族；`*_only` 才是严格过滤。
@@ -213,7 +214,7 @@ photon-services render     # 生成全部 artifact
 
 通用 flag：`-config`（默认 `/etc/photon/service.yaml`）、`-photon`（photon CLI 路径）、`-output`（覆盖 `output_dir`）。
 
-生成文件：
+生成文件（network-only 模式只有 `networks/docker-compose.yml` 和顶层 `resolved.json`）：
 
 ```text
 /etc/photon/services/

@@ -99,6 +99,46 @@ func TestResolveAndRenderManifest(t *testing.T) {
 	}
 }
 
+func TestResolveAndRenderNetworkOnlyManifest(t *testing.T) {
+	output := t.TempDir()
+	configured := manifest{
+		Version:   1,
+		OutputDir: output,
+		Images:    imageConfig{Gost: defaultGostImage},
+		Networks: map[string]networkConfig{
+			"main": {IPv6: "assignment:fd42:1::/64;::/112;::100/120;::1"},
+		},
+	}
+
+	resolved, err := resolveManifest(configured, []runtimeAssignment{{Prefix: "fd42:1::/64"}})
+	if err != nil {
+		t.Fatalf("resolveManifest: %v", err)
+	}
+	if resolved.SOCKS5.configured() {
+		t.Fatalf("network-only manifest unexpectedly configured SOCKS5: %#v", resolved.SOCKS5)
+	}
+	resolved.ManagedZone = "node-a.catofes."
+	if err := renderArtifacts(resolved); err != nil {
+		t.Fatalf("renderArtifacts: %v", err)
+	}
+
+	networkCompose := readTestFile(t, filepath.Join(output, "networks", "docker-compose.yml"))
+	for _, want := range []string{"name: photon-networks", "name: photon-main", "fd42:1::/112"} {
+		if !strings.Contains(networkCompose, want) {
+			t.Fatalf("network compose missing %q:\n%s", want, networkCompose)
+		}
+	}
+	if strings.Contains(networkCompose, "gateway_mode_ipv6: nat-unprotected") {
+		t.Fatalf("network-only compose unexpectedly used a SOCKS5 gateway mode:\n%s", networkCompose)
+	}
+	if _, err := os.Stat(filepath.Join(output, "socks5", "docker-compose.yml")); !os.IsNotExist(err) {
+		t.Fatalf("network-only render created SOCKS5 compose: %v", err)
+	}
+	if err := publishResolvedService("photon", resolved); err == nil || !strings.Contains(err.Error(), "does not configure socks5") {
+		t.Fatalf("network-only publish error = %v", err)
+	}
+}
+
 func TestResolveManifestRejectsInvalidTrustedHostInterface(t *testing.T) {
 	configured := manifest{
 		Version: 1, OutputDir: t.TempDir(), Images: imageConfig{Gost: defaultGostImage},
