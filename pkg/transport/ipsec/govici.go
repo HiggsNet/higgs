@@ -36,6 +36,7 @@ type ReconnectingVICIClient struct {
 	factory VICIClientFactory
 	client  VICIClient
 	closeFn func() error
+	closed  bool
 }
 
 func NewGoviciClient(socketPath string) (*GoviciClient, error) {
@@ -169,6 +170,7 @@ func (c *ReconnectingVICIClient) Close() error {
 	closeFn := c.closeFn
 	c.client = nil
 	c.closeFn = nil
+	c.closed = true
 	c.mu.Unlock()
 	if closeFn != nil {
 		return closeFn()
@@ -182,10 +184,25 @@ func (c *ReconnectingVICIClient) current() (VICIClient, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.client == nil {
+	if c.closed {
+		return nil, net.ErrClosed
+	}
+	if c.client != nil {
+		return c.client, nil
+	}
+	// A previous reconnect may have failed while charon was still down. Keep
+	// the wrapper usable so the watcher's next backoff attempt can dial the
+	// newly-created VICI socket.
+	if c.factory == nil {
 		return nil, errMissingGoviciSession()
 	}
-	return c.client, nil
+	client, closeFn, err := c.factory()
+	if err != nil {
+		return nil, err
+	}
+	c.client = client
+	c.closeFn = closeFn
+	return client, nil
 }
 
 func (c *ReconnectingVICIClient) reconnect(stale VICIClient) (VICIClient, error) {
@@ -194,6 +211,9 @@ func (c *ReconnectingVICIClient) reconnect(stale VICIClient) (VICIClient, error)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return nil, net.ErrClosed
+	}
 	if c.client != stale && c.client != nil {
 		return c.client, nil
 	}

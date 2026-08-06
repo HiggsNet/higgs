@@ -479,6 +479,48 @@ func TestReconnectingVICIClientRetriesStreamingAfterBrokenPipe(t *testing.T) {
 	}
 }
 
+func TestReconnectingVICIClientRecoversAfterReconnectDialFailure(t *testing.T) {
+	closed := 0
+	factoryCalls := 0
+	client, err := NewReconnectingVICIClient(func() (VICIClient, func() error, error) {
+		factoryCalls++
+		switch factoryCalls {
+		case 1:
+			return &scriptedVICIClient{streamErr: errors.New("read unix @->/run/charon.vici: connection reset by peer")}, func() error {
+				closed++
+				return nil
+			}, nil
+		case 2:
+			return nil, nil, errors.New("dial unix /run/charon.vici: connect: connection refused")
+		default:
+			return &scriptedVICIClient{streamOut: []map[string]any{{"ipsec-main-ab": map[string]any{"state": "ESTABLISHED"}}}}, func() error {
+				closed++
+				return nil
+			}, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewReconnectingVICIClient: %v", err)
+	}
+
+	if _, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil); err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("first CallStreaming error = %v, want reconnect dial failure", err)
+	}
+	events, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil)
+	if err != nil {
+		t.Fatalf("second CallStreaming: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want one event after VICI becomes available", events)
+	}
+	if factoryCalls != 3 {
+		t.Fatalf("factory calls = %d, want initial dial, failed redial, and successful redial", factoryCalls)
+	}
+	if closed != 1 {
+		t.Fatalf("closed = %d, want stale client closed once", closed)
+	}
+}
+
 func TestStrongSwanDriverLogsVICILoadConnectionConfig(t *testing.T) {
 	session := &fakeGoviciSession{}
 	client := &GoviciClient{Session: session}
