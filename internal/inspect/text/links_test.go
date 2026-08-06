@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
@@ -22,10 +22,10 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 				GroupID:         "main",
 				ActualState:     "up",
 				Endpoint:        "198.51.100.10:4500",
-				InterfaceName:   "hgs123",
+				InterfaceName:   "phx123",
 				XFRMIfID:        123,
-				LocalTunnelAddr: "fe80::1%hgs123",
-				PeerTunnelAddr:  "fe80::2%hgs123",
+				LocalTunnelAddr: "fe80::1%phx123",
+				PeerTunnelAddr:  "fe80::2%phx123",
 				DesiredSpecHash: "abcdef1234567890",
 				Routing: inspect.LinkRouting{
 					BirdState:      "running",
@@ -80,7 +80,7 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 		"matched_links: 1",
 		"link link-1",
 		"peer: node-b.catofes.",
-		"interface: hgs123(123)",
+		"interface: phx123(123)",
 		"sa_state: established",
 		"reqid: 55",
 		"lifecycle:",
@@ -105,7 +105,7 @@ func TestWriteLinksUsesTransportSummaryAndVerboseTables(t *testing.T) {
 			{
 				ID: "link-a", PeerZone: "node-a.catofes.", GroupID: "mesh",
 				PathKey: "public-v6", TransportKind: "strongswan", ActualState: "up",
-				Endpoint: "[2001:db8::1]:4500", InterfaceName: "hgs1", XFRMIfID: 1,
+				Endpoint: "[2001:db8::1]:4500", InterfaceName: "phx1", XFRMIfID: 1,
 				LocalTunnelAddr: "fd42::1", PeerTunnelAddr: "fd42::2",
 				ActualSA: &inspect.LinkSA{ChildSA: "child-a", Established: true},
 				Health:   &inspect.LinkHealth{State: "healthy"},
@@ -151,15 +151,15 @@ func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 		DesiredSpecHash: "actual-hash",
 		ActualState:     "up",
 		Endpoint:        "123.57.143.66:30002",
-		InterfaceName:   "hgs1be3f390",
+		InterfaceName:   "phx1be3f390",
 		XFRMIfID:        467923856,
-		LocalTunnelAddr: "fe80::old-local%hgs1be3f390 netns=higgstesth2",
-		PeerTunnelAddr:  "fe80::old-peer%hgs1be3f390 netns=higgstesth2",
+		LocalTunnelAddr: "fe80::old-local%phx1be3f390 netns=photontesth2",
+		PeerTunnelAddr:  "fe80::old-peer%phx1be3f390 netns=photontesth2",
 		Desired: &inspect.DesiredLink{
 			TransportID:     "ipsec-f46fb3d71fe8-r2",
 			DesiredSpecHash: "desired-hash",
-			LocalTunnelAddr: "fe80::new-local%hgs28e3c6e5 netns=higgstesth2",
-			PeerTunnelAddr:  "fe80::new-peer%hgs28e3c6e5 netns=higgstesth2",
+			LocalTunnelAddr: "fe80::new-local%phx28e3c6e5 netns=photontesth2",
+			PeerTunnelAddr:  "fe80::new-peer%phx28e3c6e5 netns=photontesth2",
 		},
 	}
 
@@ -175,15 +175,15 @@ func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 	for _, want := range []string{
 		"    runtime_id: ipsec-526e55bae2e1",
 		"    endpoint: 123.57.143.66:30002",
-		"    interface: hgs1be3f390(467923856)",
-		"    local_tunnel: fe80::old-local%hgs1be3f390 netns=higgstesth2",
-		"    peer_tunnel: fe80::old-peer%hgs1be3f390 netns=higgstesth2",
+		"    interface: phx1be3f390(467923856)",
+		"    local_tunnel: fe80::old-local%phx1be3f390 netns=photontesth2",
+		"    peer_tunnel: fe80::old-peer%phx1be3f390 netns=photontesth2",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)
 		}
 	}
-	if strings.Contains(output, "fe80::new-local%hgs28e3c6e5") || strings.Contains(output, "fe80::new-peer%hgs28e3c6e5") {
+	if strings.Contains(output, "fe80::new-local%phx28e3c6e5") || strings.Contains(output, "fe80::new-peer%phx28e3c6e5") {
 		t.Fatalf("debug links planner mixed desired tunnel into active runtime block:\n%s", output)
 	}
 }

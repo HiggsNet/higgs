@@ -1,6 +1,6 @@
 // Package controlapi contains the transport-level client boundary for the
-// local Higgs daemon control API. Business DTOs and daemon dispatch remain in
-// app/higgs until their surface is stable.
+// local Photon daemon control API. Business DTOs and daemon dispatch remain in
+// app/photon until their surface is stable.
 package controlapi
 
 import (

@@ -1,6 +1,6 @@
 package http
 
-import "github.com/Catofes/higgs/internal/inspect"
+import "github.com/Catofes/photon/internal/inspect"
 
 type LinksResponse struct {
 	Instances    []LinkJSON           `json:"instances"`

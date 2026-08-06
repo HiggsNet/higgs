@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 var assignmentTagPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62})$`)
@@ -34,7 +34,7 @@ const (
 // control-plane cross-audit of learned Babel routes.
 type RoutingNetnsRecord struct {
 	Version int      `json:"version"` // schema version, 1
-	Netns   []string `json:"netns"`   // stable netns names (e.g. ["h2", "host"])
+	Netns   []string `json:"netns"`   // stable netns names (e.g. ["photon", "host"])
 }
 
 // RouteAnnouncementRecord represents a route announcement or withdrawal

@@ -71,8 +71,9 @@ func TestObjectChunkCodecRoundTrip(t *testing.T) {
 
 func TestUnsupportedCodecsRejected(t *testing.T) {
 	for _, magic := range []string{
-		"higgs.gossip.v1\n", // retired JSON codec
-		"higgs.gossip.x9\n", // unknown codec
+		"higgs.gossip.m1\n",  // pre-Photon wire format
+		"photon.gossip.v1\n", // retired JSON codec
+		"photon.gossip.x9\n", // unknown codec
 	} {
 		data := append([]byte(magic), []byte(`{}`)...)
 		_, err := decodeMessage(data)

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	higgsstate "github.com/Catofes/higgs/internal/state"
+	photonstate "github.com/Catofes/photon/internal/state"
 )
 
 func TestBuildPeerIDsMergesFiltersAndSorts(t *testing.T) {
@@ -219,7 +219,7 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 		Source:         "bootstrap",
 		ConfiguredAddr: "127.0.0.1:9999",
 		ResolvedAddr:   "127.0.0.1:2000",
-		PeerRuntimeState: higgsstate.PeerRuntimeState{
+		PeerRuntimeState: photonstate.PeerRuntimeState{
 			LastSyncUnix:          now.Add(-time.Minute).Unix(),
 			BackoffUntilUnix:      now.Add(30 * time.Second).Unix(),
 			DiscoveredAddr:        "127.0.0.1:2000",
@@ -234,10 +234,10 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 			LastRelaySuppression:  "relay_throttled",
 			LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
 			ActivePullState:       "object_pulling",
-			DatagramStats: &higgsstate.PeerDatagramStats{
+			DatagramStats: &photonstate.PeerDatagramStats{
 				TooLargeDropped: 2,
 			},
-			ObjectPullStats: &higgsstate.PeerObjectPullStats{
+			ObjectPullStats: &photonstate.PeerObjectPullStats{
 				Attempts: 3,
 			},
 		},
@@ -264,7 +264,7 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 
-	flow := BuildPeerSyncFlowFromRuntime(higgsstate.PeerRuntimeState{
+	flow := BuildPeerSyncFlowFromRuntime(photonstate.PeerRuntimeState{
 		ActivePullUpdatedUnix: now.Unix(),
 		LastHintUnix:          now.Add(-time.Minute).Unix(),
 		LastResponderUnix:     now.Add(-2 * time.Minute).Unix(),
@@ -273,8 +273,8 @@ func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 		t.Fatalf("sync flow timestamps = %+v", flow)
 	}
 
-	datagram := BuildPeerDatagramStatsFromRuntime(higgsstate.PeerRuntimeState{
-		DatagramStats: &higgsstate.PeerDatagramStats{
+	datagram := BuildPeerDatagramStatsFromRuntime(photonstate.PeerRuntimeState{
+		DatagramStats: &photonstate.PeerDatagramStats{
 			LastCatalogUnix:  now.Unix(),
 			LastTooLargeUnix: now.Add(-time.Minute).Unix(),
 		},
@@ -283,8 +283,8 @@ func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 		t.Fatalf("datagram timestamps = %+v", datagram)
 	}
 
-	objectPull := BuildPeerObjectPullStatsFromRuntime(higgsstate.PeerRuntimeState{
-		ObjectPullStats: &higgsstate.PeerObjectPullStats{
+	objectPull := BuildPeerObjectPullStatsFromRuntime(photonstate.PeerRuntimeState{
+		ObjectPullStats: &photonstate.PeerObjectPullStats{
 			LastUnix: now.Unix(),
 		},
 	})

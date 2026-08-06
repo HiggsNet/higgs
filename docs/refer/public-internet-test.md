@@ -15,7 +15,7 @@
 docs/scripts/public-gossip-node.sh
 ```
 
-脚本只是把现有 CLI 命令组合成可重复流程；不会绕过 Higgs 的签名链或信任模型。
+脚本只是把现有 CLI 命令组合成可重复流程；不会绕过 Photon 的签名链或信任模型。
 
 ## 当前边界
 
@@ -62,11 +62,11 @@ admin 工作目录可以放在你的本机，也可以放在其中一台服务�
 所有机器：
 
 ```bash
-git clone <repo> higgs
-cd higgs
+git clone <repo> photon
+cd photon
 make build
 chmod +x docs/scripts/public-gossip-node.sh
-export HIGGS_BIN="$PWD/build/higgs"
+export PHOTON_BIN="$PWD/build/photon"
 ```
 
 所有公网节点放通 gossip UDP 端口，以及同数字端口的 TCP object pull：
@@ -90,16 +90,16 @@ sudo ufw allow 33435/tcp
 在 admin 机器上：
 
 ```bash
-cd higgs
-export HIGGS_BIN="$PWD/build/higgs"
-export HIGGS_BASE="$PWD/.public-test"
+cd photon
+export PHOTON_BIN="$PWD/build/photon"
+export PHOTON_BASE="$PWD/.public-test"
 
-mkdir -p "$HIGGS_BASE"
+mkdir -p "$PHOTON_BASE"
 docs/scripts/public-gossip-node.sh admin-init \
-  "$HIGGS_BASE" \
+  "$PHOTON_BASE" \
   catofes. \
   0.0.0.0:33435 \
-  203.0.113.9:33435 | tee "$HIGGS_BASE/admin-init.log"
+  203.0.113.9:33435 | tee "$PHOTON_BASE/admin-init.log"
 ```
 
 输出里会有三行关键结果：
@@ -115,7 +115,7 @@ admin_zone_dir: .public-test/catofes-admin
 在 tmux / screen 或 systemd 中启动 `catofes.` 管理 daemon，让后续签发的 delegation 能通过 gossip 传播给 auto-join 节点：
 
 ```bash
-docs/scripts/public-gossip-node.sh auto-run "$HIGGS_BASE/catofes-admin" 5
+docs/scripts/public-gossip-node.sh auto-run "$PHOTON_BASE/catofes-admin" 5
 ```
 
 把 `root_public_key` 复制给每台公网节点。下面用：
@@ -129,12 +129,12 @@ root_key="<paste root_public_key>"
 node-a：
 
 ```bash
-cd higgs
-export HIGGS_BIN="$PWD/build/higgs"
+cd photon
+export PHOTON_BIN="$PWD/build/photon"
 root_key="<paste root_public_key>"
 
 docs/scripts/public-gossip-node.sh node-init \
-  "$HOME/.higgs-public/node-a" \
+  "$HOME/.photon-public/node-a" \
   node-a.catofes. \
   "[::]:33434" \
   203.0.113.10:33434 \
@@ -147,12 +147,12 @@ docs/scripts/public-gossip-node.sh node-init \
 node-b：
 
 ```bash
-cd higgs
-export HIGGS_BIN="$PWD/build/higgs"
+cd photon
+export PHOTON_BIN="$PWD/build/photon"
 root_key="<paste root_public_key>"
 
 docs/scripts/public-gossip-node.sh node-init \
-  "$HOME/.higgs-public/node-b" \
+  "$HOME/.photon-public/node-b" \
   node-b.catofes. \
   "[::]:33434" \
   203.0.113.11:33434 \
@@ -173,14 +173,14 @@ node-c 同理，把 Zone 和公网地址改成 `node-c.catofes.` / `203.0.113.12
 并输出：
 
 ```text
-request: /home/.../.higgs-public/node-a/node-a.request.b64
-key: /home/.../.higgs-public/node-a/node-a.key.json
+request: /home/.../.photon-public/node-a/node-a.request.b64
+key: /home/.../.photon-public/node-a/node-a.key.json
 ```
 
 `*.request.b64` 是从 `config.yaml` 的 `managed_zone` 和 `identity.key_path` 生成的，等价于：
 
 ```bash
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs gossip join request --from-config
+PHOTON_CONFIG="$HOME/.photon-public/node-a/config.yaml" build/photon gossip join request --from-config
 ```
 
 把每个节点的 `*.request.b64` 传回 admin 机器。只传 request，不传 `*.key.json`。
@@ -188,9 +188,9 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs gossip join re
 示例：
 
 ```bash
-scp node-a:~/.higgs-public/node-a/node-a.request.b64 "$HIGGS_BASE/"
-scp node-b:~/.higgs-public/node-b/node-b.request.b64 "$HIGGS_BASE/"
-scp node-c:~/.higgs-public/node-c/node-c.request.b64 "$HIGGS_BASE/"
+scp node-a:~/.photon-public/node-a/node-a.request.b64 "$PHOTON_BASE/"
+scp node-b:~/.photon-public/node-b/node-b.request.b64 "$PHOTON_BASE/"
+scp node-c:~/.photon-public/node-c/node-c.request.b64 "$PHOTON_BASE/"
 ```
 
 ## 3. Admin 批量签发
@@ -200,7 +200,7 @@ scp node-c:~/.higgs-public/node-c/node-c.request.b64 "$HIGGS_BASE/"
 node-a：
 
 ```bash
-docs/scripts/public-gossip-node.sh auto-run "$HOME/.higgs-public/node-a" 5
+docs/scripts/public-gossip-node.sh auto-run "$HOME/.photon-public/node-a" 5
 ```
 
 node-b / node-c 同理。测试时可以直接在 tmux / screen 里跑；长期运行再改成 systemd。
@@ -209,10 +209,10 @@ node-b / node-c 同理。测试时可以直接在 tmux / screen 里跑；长期�
 
 ```bash
 docs/scripts/public-gossip-node.sh issue-nodes \
-  "$HIGGS_BASE/catofes-admin" \
-  "$HIGGS_BASE/node-a.request.b64" \
-  "$HIGGS_BASE/node-b.request.b64" \
-  "$HIGGS_BASE/node-c.request.b64"
+  "$PHOTON_BASE/catofes-admin" \
+  "$PHOTON_BASE/node-a.request.b64" \
+  "$PHOTON_BASE/node-b.request.b64" \
+  "$PHOTON_BASE/node-c.request.b64"
 ```
 
 脚本会生成：
@@ -231,13 +231,13 @@ bundle: .public-test/node-c.bundle.b64
 
 ```ini
 [Unit]
-Description=Higgs daemon public gossip test
+Description=Photon daemon public gossip test
 After=network-online.target
 
 [Service]
-WorkingDirectory=/opt/higgs
-Environment=HIGGS_CONFIG=/home/higgs/.higgs-public/node-a/config.yaml
-ExecStart=/opt/higgs/build/higgs daemon
+WorkingDirectory=/opt/photon
+Environment=PHOTON_CONFIG=/home/photon/.photon-public/node-a/config.yaml
+ExecStart=/opt/photon/build/photon daemon
 Restart=always
 RestartSec=3
 
@@ -248,8 +248,8 @@ WantedBy=multi-user.target
 授权同步完成后，每个节点上应看到：
 
 ```bash
-docs/scripts/public-gossip-node.sh status "$HOME/.higgs-public/node-a"
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug verify node-a.catofes.
+docs/scripts/public-gossip-node.sh status "$HOME/.photon-public/node-a"
+PHOTON_CONFIG="$HOME/.photon-public/node-a/config.yaml" build/photon debug verify node-a.catofes.
 ```
 
 预期：
@@ -265,7 +265,7 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug verify n
 
 ```bash
 docs/scripts/public-gossip-node.sh put-identity \
-  "$HOME/.higgs-public/node-a" \
+  "$HOME/.photon-public/node-a" \
   node-a.catofes. \
   node-a-public
 ```
@@ -273,9 +273,9 @@ docs/scripts/public-gossip-node.sh put-identity \
 在 node-b / node-c 验证：
 
 ```bash
-docs/scripts/public-gossip-node.sh status "$HOME/.higgs-public/node-b"
-HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs gossip zone show node-a.catofes.
-docs/scripts/public-gossip-node.sh verify "$HOME/.higgs-public/node-b" node-a.catofes.
+docs/scripts/public-gossip-node.sh status "$HOME/.photon-public/node-b"
+PHOTON_CONFIG="$HOME/.photon-public/node-b/config.yaml" build/photon gossip zone show node-a.catofes.
+docs/scripts/public-gossip-node.sh verify "$HOME/.photon-public/node-b" node-a.catofes.
 ```
 
 预期：
@@ -295,7 +295,7 @@ docs/scripts/public-gossip-node.sh verify "$HOME/.higgs-public/node-b" node-a.ca
 
 ```bash
 docs/scripts/public-gossip-node.sh node-init \
-  "$HOME/.higgs-public/node-b" \
+  "$HOME/.photon-public/node-b" \
   node-b.catofes. \
   "[::]:33434" \
   "" \
@@ -326,8 +326,8 @@ quota
 auto-join 授权收敛后，在公网 node-a 上检查：
 
 ```bash
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug peer node-b.catofes.
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs advanced sync status --verbose
+PHOTON_CONFIG="$HOME/.photon-public/node-a/config.yaml" build/photon debug peer node-b.catofes.
+PHOTON_CONFIG="$HOME/.photon-public/node-a/config.yaml" build/photon advanced sync status --verbose
 ```
 
 预期：
@@ -340,12 +340,12 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs advanced sync 
 
 ```bash
 docs/scripts/public-gossip-node.sh put-identity \
-  "$HOME/.higgs-public/node-a" \
+  "$HOME/.photon-public/node-a" \
   node-a.catofes. \
   node-a-to-nat-b
 
-HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs gossip zone show node-a.catofes.
-HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs debug verify node-a.catofes.
+PHOTON_CONFIG="$HOME/.photon-public/node-b/config.yaml" build/photon gossip zone show node-a.catofes.
+PHOTON_CONFIG="$HOME/.photon-public/node-b/config.yaml" build/photon debug verify node-a.catofes.
 ```
 
 如果 `observed_status` 很快过期，说明 NAT 映射生命周期较短；缩短 daemon interval，或后续引入 relay / hole punching。
@@ -355,14 +355,14 @@ HIGGS_CONFIG="$HOME/.higgs-public/node-b/config.yaml" build/higgs debug verify n
 停止 node-b daemon：
 
 ```bash
-pkill -f 'higgs daemon'
+pkill -f 'photon daemon'
 ```
 
 在 node-a 写入更高版本：
 
 ```bash
 docs/scripts/public-gossip-node.sh put-identity \
-  "$HOME/.higgs-public/node-a" \
+  "$HOME/.photon-public/node-a" \
   node-a.catofes. \
   node-a-after-b-down
 ```
@@ -374,15 +374,15 @@ docs/scripts/public-gossip-node.sh put-identity \
 在 admin 机器上撤销 node-c：
 
 ```bash
-HIGGS_CONFIG="$HIGGS_BASE/catofes-admin/config.yaml" \
-  "$HIGGS_BIN" gossip delegate revoke node-c.catofes. public-test-revoke
+PHOTON_CONFIG="$PHOTON_BASE/catofes-admin/config.yaml" \
+  "$PHOTON_BIN" gossip delegate revoke node-c.catofes. public-test-revoke
 ```
 
 如果 `catofes.` 管理 daemon 正在运行，`delegate revoke` 会通过本机 control socket 串行写入；daemon 不存在时才退回 direct/recovery 路径。让 `catofes-admin` 或任一已经获得该更新的节点参与 gossip 后，其他节点应逐步看到：
 
 ```bash
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug zone node-c.catofes.
-HIGGS_CONFIG="$HOME/.higgs-public/node-a/config.yaml" build/higgs debug verify node-c.catofes.
+PHOTON_CONFIG="$HOME/.photon-public/node-a/config.yaml" build/photon debug zone node-c.catofes.
+PHOTON_CONFIG="$HOME/.photon-public/node-a/config.yaml" build/photon debug verify node-c.catofes.
 ```
 
 预期：

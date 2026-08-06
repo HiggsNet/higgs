@@ -1,10 +1,10 @@
-# Higgs Firewall 设计与实现
+# Photon Firewall 设计与实现
 
 > **本文档状态：2026-07**
-> 描述 Higgs firewall 子系统的当前实现：`pkg/firewall` 的 planner 与 backend driver、`app/higgs` 中的 reconcile 集成，以及 `higgs debug firewall` 等诊断命令。
+> 描述 Photon firewall 子系统的当前实现：`pkg/firewall` 的 planner 与 backend driver、`app/photon` 中的 reconcile 集成，以及 `photon debug firewall` 等诊断命令。
 > 本文以当前代码为准；文中会显式标注已实现行为与原设计的差异或待完善项。原 Phase 6.3 设计文档已并入本文（差异与后续方向见第 8 节），不再单独保留。
 
-Firewall 是 Higgs overlay data-plane 的安全边界执行器。它把已通过 Zone trust chain 验证的 IPAM、route announcement、revocation state 和本地配置策略，收敛成 Linux 防火墙规则。它**不是**通用主机防火墙，不管理 SSH、Docker、Kubernetes 等发行版默认规则。
+Firewall 是 Photon overlay data-plane 的安全边界执行器。它把已通过 Zone trust chain 验证的 IPAM、route announcement、revocation state 和本地配置策略，收敛成 Linux 防火墙规则。它**不是**通用主机防火墙，不管理 SSH、Docker、Kubernetes 等发行版默认规则。
 
 完整配置字段见 [config.md](config.md)，daemon reconcile 调度见 [daemon.md](daemon.md)，IPsec 端口与链路细节见 [transport-ipsec.md](transport-ipsec.md)。
 
@@ -30,25 +30,25 @@ Firewall 是 Higgs overlay data-plane 的安全边界执行器。它把已通过
 | 层面 | 做什么 | 不做什么 |
 |---|---|---|
 | overlay/data-plane netns | 默认 drop 未授权流量；放行 mesh 授权前缀、BIRD/Babel 控制流量、本地显式服务 | 不管理 host 全局防火墙、不处理 underlay 入口 |
-| host netns | 仅管理 Higgs 必须的最小入口：当前为 IKE/NAT-T allow 与端口 rotate 的 DNAT/redirect grace；WireGuard 仅有 planner 预留 | 不接管 Docker、Kubernetes、发行版默认规则 |
-| reconcile 语义 | `managed` instance 的 Higgs-owned 对象会在启动和状态变化时重新生成；`external` 只读 | 当前不是内容级 no-op：nft 会整表替换，iptables 会切换 generation；停止、禁用、切换为 external 或移除实例时不会自动清理旧对象（见第 8 节） |
+| host netns | 仅管理 Photon 必须的最小入口：当前为 IKE/NAT-T allow 与端口 rotate 的 DNAT/redirect grace；WireGuard 仅有 planner 预留 | 不接管 Docker、Kubernetes、发行版默认规则 |
+| reconcile 语义 | `managed` instance 的 Photon-owned 对象会在启动和状态变化时重新生成；`external` 只读 | 当前不是内容级 no-op：nft 会整表替换，iptables 会切换 generation；停止、禁用、切换为 external 或移除实例时不会自动清理旧对象（见第 8 节） |
 
 ### 1.2 命名空间边界
 
 ```text
 host netns
-  ├─ Higgs-owned host ingress allow (当前为 IKE/NAT-T；WG 尚未接入配置)
+  ├─ Photon-owned host ingress allow (当前为 IKE/NAT-T；WG 尚未接入配置)
   ├─ optional old/current port redirect grace
-  └─ non-Higgs firewall rules stay untouched
+  └─ non-Photon firewall rules stay untouched
 
-overlay netns (e.g. h2)
-  ├─ XFRM tunnel interfaces: hgs*
+overlay netns (e.g. photon)
+  ├─ XFRM tunnel interfaces: phx*
   ├─ BIRD/Babel instance
-  ├─ optional veth upstream: hgv* (default hgv2host)
-  └─ Higgs-owned input/forward/output policy
+  ├─ optional veth upstream: phv* (default phv2host)
+  └─ Photon-owned input/forward/output policy
 ```
 
-Firewall 跟随 netns 隔离边界：一个 netns 对应一个 firewall instance。host 单独作为一个特殊 instance。主策略放在 overlay netns，是因为 overlay 的路由和业务前缀已经按 netns 隔离，防火墙跟随该边界最自然；host 上可能已有管理员、发行版或容器运行时管理的防火墙，因此 host 侧只保留 Higgs 必须拥有的最小入口。端口 rotate / NAT-T 入口规则无法完全留在 overlay netns，只能作为 host 上明确的独立 plan 处理。
+Firewall 跟随 netns 隔离边界：一个 netns 对应一个 firewall instance。host 单独作为一个特殊 instance。主策略放在 overlay netns，是因为 overlay 的路由和业务前缀已经按 netns 隔离，防火墙跟随该边界最自然；host 上可能已有管理员、发行版或容器运行时管理的防火墙，因此 host 侧只保留 Photon 必须拥有的最小入口。端口 rotate / NAT-T 入口规则无法完全留在 overlay netns，只能作为 host 上明确的独立 plan 处理。
 
 ---
 
@@ -56,20 +56,20 @@ Firewall 跟随 netns 隔离边界：一个 netns 对应一个 firewall instance
 
 ### 2.1 Owner
 
-Higgs 所有防火墙对象通过 `Owner` 标记，以便与管理员规则区分：
+Photon 所有防火墙对象通过 `Owner` 标记，以便与管理员规则区分：
 
 ```go
 // pkg/firewall/types.go
 type Owner struct {
-    Manager     string // 始终为 "higgs"
+    Manager     string // 始终为 "photon"
     InstanceID  string // host 为 "host"，overlay 为实际 netns 名
-    OwnerPrefix string // 默认 "higgs"
+    OwnerPrefix string // 默认 "photon"
     Generation  uint64 // desired-state generation
     Token       string // prefix + scope + id 的 sha256 前 12 位
 }
 ```
 
-- 命名前缀决定 table/chain/set 名称。overlay 实例默认表名为 `higgs_<netns>`，如 `higgs_h2`；host 实例为 `higgs_host`。
+- 命名前缀决定 table/chain/set 名称。overlay 实例默认表名为 `photon_<netns>`，如 `photon_h2`；host 实例为 `photon_host`。
 - `Token` 由 `OwnerToken(spec)` 生成，用于稳定识别同一实例的历史对象。
 
 ### 2.2 Instance
@@ -84,14 +84,14 @@ type Owner struct {
 | `Mode` | `managed` / `external` / `disabled` |
 | `Backend` | `auto` / `nft` / `iptables` / `none` |
 | `DefaultPolicy` | `drop` 或 `accept`，默认 `drop` |
-| `OwnerPrefix` | 命名前缀，默认 `higgs` |
+| `OwnerPrefix` | 命名前缀，默认 `photon` |
 
-Instance scope（用于 owner 和命名）以实际 netns 名为准，而不是配置里的 `id`。例如 `id: host-ipsec, host: true` 归属到 `higgs_host`。
+Instance scope（用于 owner 和命名）以实际 netns 名为准，而不是配置里的 `id`。例如 `id: host-ipsec, host: true` 归属到 `photon_host`。
 
 ### 2.3 Mode
 
-- `managed`：Higgs 拥有并管理该 netns 的防火墙规则。
-- `external`：Higgs 只在 debug 中展示该 instance，不参与 reconcile、endpoint ACL enforcement 或 driver apply；不会修改现有规则。
+- `managed`：Photon 拥有并管理该 netns 的防火墙规则。
+- `external`：Photon 只在 debug 中展示该 instance，不参与 reconcile、endpoint ACL enforcement 或 driver apply；不会修改现有规则。
 - `disabled`：不参与后续 reconcile；如果该实例以前启用过，当前实现不会自动删除其旧规则。
 
 ### 2.4 ForwardingPolicy
@@ -119,8 +119,8 @@ type ForwardingPolicy struct {
 
 Planner 按接口角色分别处理流量：
 
-- `xfrm_tunnel`：mesh peer 之间的数据面接口；nft 优先使用本 netns 当前 ready 的精确接口名集合，没有 runtime 输出时才回退到 `xfrm_tunnel_pattern`（默认 `hgs*`）。iptables 为避免接口对笛卡尔积，直接按该 pattern 匹配 XFRM 接口。
-- `upstream_veth`：overlay netns 与 host/主网络之间的出入口。接口名只来自同 netns 的 `routing.instances[].upstream.mesh.interface`，默认 `hgv2host`；firewall 不维护第二份 upstream 名字。
+- `xfrm_tunnel`：mesh peer 之间的数据面接口；nft 优先使用本 netns 当前 ready 的精确接口名集合，没有 runtime 输出时才回退到 `xfrm_tunnel_pattern`（默认 `phx*`）。iptables 为避免接口对笛卡尔积，直接按该 pattern 匹配 XFRM 接口。
+- `upstream_veth`：overlay netns 与 host/主网络之间的出入口。接口名只来自同 netns 的 `routing.instances[].upstream.mesh.interface`，默认 `phv2host`；firewall 不维护第二份 upstream 名字。
 - `loopback`：本机服务。
 - underlay 接口不在 overlay netns 内处理；host 入口见第 4.4 节。
 
@@ -136,11 +136,11 @@ Planner 按接口角色分别处理流量：
 netns:
   default:
     kind: name
-    name: h2
+    name: photon
 
 firewall:
   instances:
-    - id: h2
+    - id: photon
       netns: default
       default_policy: drop
 
@@ -167,8 +167,8 @@ firewall:
 | `priority.filter` | string | `filter` | nft input/forward/output base-chain priority |
 | `priority.prerouting` | string | `dstnat` | nft NAT prerouting base-chain priority |
 | `priority.postrouting` | string | `srcnat` | nft NAT postrouting base-chain priority |
-| `owner_prefix` | string | `higgs` | 命名前缀 |
-| `xfrm_tunnel_pattern` | string | `hgs*` | nft 尚无 live interface 时的回退模式；iptables 始终用它避免接口组合展开 |
+| `owner_prefix` | string | `photon` | 命名前缀 |
+| `xfrm_tunnel_pattern` | string | `phx*` | nft 尚无 live interface 时的回退模式；iptables 始终用它避免接口组合展开 |
 | `local_services` | list | `[]` | overlay 内显式开放的服务 |
 | `host_ports.ike` | bool | 见下文 | host UDP 500 入口 |
 | `host_ports.natt` | bool | 见下文 | host UDP 4500 入口 |
@@ -197,7 +197,7 @@ priority:
 当 `ipsec.port_mode=range` 时，host 实例会自动启用 `host_ports.ike` 和 `host_ports.natt`，并启用 `redirect_grace`，以便端口范围模式正常工作。这些默认值可被显式配置覆盖。
 
 ```go
-// app/higgs/firewall_config.go:189-214
+// app/photon/firewall_config.go:189-214
 rangeMode := isHost && ipsecCfg.PortMode == ipsec.PortModeRange
 if rangeMode {
     hostPorts.IKE = true
@@ -228,18 +228,18 @@ local_services:
 
 ### 3.6 Backend-native inline hooks
 
-`nft_hooks` 和 `iptables_hooks` 把单条 backend 原生 rule body 直接编入 Higgs 管理的 table/generation。两套语法不是可移植 DSL；同一配置可同时提供两套等价规则，实际只渲染最终选中 backend 的配置。
+`nft_hooks` 和 `iptables_hooks` 把单条 backend 原生 rule body 直接编入 Photon 管理的 table/generation。两套语法不是可移植 DSL；同一配置可同时提供两套等价规则，实际只渲染最终选中 backend 的配置。
 
 ```yaml
 firewall:
   instances:
-    - id: h2
+    - id: photon
       backend: auto
       nft_hooks:
         pre_input:
           - 'ip saddr 10.20.0.0/16 tcp dport 22 accept'
         post_forward:
-          - 'counter log prefix "higgs-forward "'
+          - 'counter log prefix "photon-forward "'
       iptables_hooks:
         ipv4:
           pre_input:
@@ -254,11 +254,11 @@ firewall:
 - 每个 hook point 是字符串列表，可以写多条规则，严格保持 YAML 顺序。
 - overlay 支持 `pre_input` / `post_input`、`pre_forward` / `post_forward`、`pre_output` / `post_output`。
 - host 支持 `host_pre_input` / `host_post_input` 和 `host_pre_prerouting` / `host_post_prerouting`。
-- `pre_input` 位于 invalid drop 和 loopback accept 之后；`pre_forward` 位于 invalid drop 和 established/related accept 之后；`pre_output` 位于 Higgs output 规则之前。所有 `post_*` 都位于 Higgs 生成规则之后、terminal default verdict 之前。
-- nft 表达式随 Higgs 规则进入同一个 `nft -f` 事务，失败时旧 table 保持生效。
+- `pre_input` 位于 invalid drop 和 loopback accept 之后；`pre_forward` 位于 invalid drop 和 established/related accept 之后；`pre_output` 位于 Photon output 规则之前。所有 `post_*` 都位于 Photon 生成规则之后、terminal default verdict 之前。
+- nft 表达式随 Photon 规则进入同一个 `nft -f` 事务，失败时旧 table 保持生效。
 - iptables 表达式先写入 inactive generation；IPv4/IPv6 都准备完成后才切换内置链 jump，切换失败会尝试回滚已激活的新 jump。
 - 表达式只能是当前 chain 的 rule body。配置会拒绝换行、分号、shell 元字符、nft object command，以及 iptables 的 `-A/-I/-D/-N/-X/-F/-P/-t` 等规则/chain/table 管理参数；命令始终以 argv 执行，不经过 shell。
-- 原生 verdict（如 `ACCEPT`、`DROP`、`RETURN`）会影响后续 Higgs 规则是否可达，管理员需自行负责业务语义。
+- 原生 verdict（如 `ACCEPT`、`DROP`、`RETURN`）会影响后续 Photon 规则是否可达，管理员需自行负责业务语义。
 - `backend: auto` 只有一套 inline 配置时会选择对应 backend；两套都存在时使用正常探测优先级。显式 backend 只有另一套配置时会报错，不会静默忽略。
 
 ---
@@ -362,7 +362,7 @@ host 实例生成以下规则：
 每个 endpoint 都生成“允许+默认 drop”规则，实现 fail-closed。IP scope 的 allow/drop 不带 L4 条件，因此该地址应专用于同一安全域内的服务；不同认证或授权边界应使用不同容器 IP。
 
 ```go
-// app/higgs/endpoint_acl.go
+// app/photon/endpoint_acl.go
 if len(endpoint.Sources) > 0 {
     // accept rule
 } else {
@@ -430,20 +430,20 @@ overlay 实例的 driver 会把所有命令用 `ip netns exec <netns>` 包装后
 - 使用 `nft` CLI（非 netlink API）。
 - 所有对象放在 `inet` family 的表 `<owner_prefix>_<scope>` 中。
 - overlay 创建 `input`、`forward`、`output` chain；host 额外创建 `prerouting`、`postrouting`。
-- Mesh 前缀使用 `set`，命名如 `higgs_h2_mesh_v4`、`higgs_h2_mesh_v6`，带 `flags interval`。
+- Mesh 前缀使用 `set`，命名如 `photon_h2_mesh_v4`、`photon_h2_mesh_v6`，带 `flags interval`。
 - `Apply` 把 delete/recreate、set、chain 与 rule 渲染到同一个 batch 文件，通过单次 `nft -f` 事务提交；任一语句失败时内核拒绝整批变更，旧 table 继续生效。
 - 支持 `nft_hooks` 原生 inline rule，并与 managed rules 一起进入同一个 batch 事务。
 
 ### 5.3 iptables 后端（`IPTablesDriver`）
 
 - 同时操作 `iptables` 与 `ip6tables`。
-- planner/ListOwned 使用 `higgs_<scope>_input/forward/output` 及 host NAT chain 作为逻辑对象；内核中的实际策略使用带 desired hash 与 `a`/`b` 槽位的 generation chain。解析时只识别严格格式的 managed chain，避免误清理非 Higgs 对象。
-- 使用 `-m comment --comment higgs-<scope>` 标记 Higgs 规则。
+- planner/ListOwned 使用 `photon_<scope>_input/forward/output` 及 host NAT chain 作为逻辑对象；内核中的实际策略使用带 desired hash 与 `a`/`b` 槽位的 generation chain。解析时只识别严格格式的 managed chain，避免误清理非 Photon 对象。
+- 使用 `-m comment --comment photon-<scope>` 标记 Photon 规则。
 - 每次 Apply 先在未激活槽中完整生成 INPUT/FORWARD/OUTPUT 及所需 NAT chain；全部 IPv4/IPv6 staging chain 填充成功后，才在 builtin chain 顶部插入新 jump，随后移除旧 jump 和旧 generation。准备失败不会修改当前入口，切换失败则保留旧 jump。
 - NAT redirect 使用 generation prerouting chain 中的 `REDIRECT --to-ports`；source rewrite 使用 generation postrouting chain 中的 `MASQUERADE --to-ports`。
 - `iptables_hooks.ipv4/ipv6` 原生 inline rule 直接写入对应 family 的 inactive generation，不创建外部 chain。
 - 地址族处理：带 v4/v6 前缀或地址的规则按族只进对应 binary；族中立规则（无前缀匹配、非 ICMP 协议，如 loopback、babel、conntrack、default policy）同时下发到 `iptables` 与 `ip6tables`；ICMP 规则按族分别渲染（`-p icmp` 只进 `iptables`，`-p icmpv6` 只进 `ip6tables`）。
-- 接口前缀模式在 planner 中使用 nft 风格尾随 `*`；iptables 渲染时转换为 xtables 的尾随 `+`（例如 `hgs*` → `hgs+`）。
+- 接口前缀模式在 planner 中使用 nft 风格尾随 `*`；iptables 渲染时转换为 xtables 的尾随 `+`（例如 `phx*` → `phx+`）。
 - XFRM 规则使用 `xfrm_tunnel_pattern` 的前缀匹配，避免按实时接口的 `iif × oif` 组合展开；upstream veth 仍使用 routing 配置给出的精确接口名。这个后端差异有意用较宽的接口角色边界换取固定数量的 transit 规则。
 - 两个及以上的 source/destination prefix 使用 generation-scoped `hash:net` ipset，并由单条规则通过 `-m set --match-set` 查询；单个 prefix 仍直接使用 `-s` / `-d`。set 名包含 instance scope 与 generation，inactive set 填充完成后才切换 built-in jump，旧 generation chain 删除后再清理无引用 set。
 - iptables backend 要求 `iptables`、`ip6tables` 和 `ipset` 同时可用；set 创建、填充或引用失败会中止 staging，当前 active generation 保持不变。
@@ -491,7 +491,7 @@ func PlanDiff(instanceID string, desired *FirewallDesiredState, observed Firewal
 
 ### 6.1 触发时机
 
-Firewall reconcile 在 `app/higgs/firewall_reconcile.go` 中实现，触发时机见 [daemon.md](daemon.md)：
+Firewall reconcile 在 `app/photon/firewall_reconcile.go` 中实现，触发时机见 [daemon.md](daemon.md)：
 
 - daemon 启动时 `recoverFirewallOnStart` 设置 `firewallDirty=true` 并 flush。
 - `notifyStateChanged`（网络状态、Zone record、endpoint ACL 等变化）触发 flush。
@@ -540,7 +540,7 @@ type FirewallReconcileInstance struct {
 
 `reconcileFirewall` 按 instance 隔离失败，单个实例出错不影响其他实例：
 
-- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并持久化，可由 `higgs debug firewall` 查看。
+- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并持久化，可由 `photon debug firewall` 查看。
 - nft driver 使用单次 batch 事务，任一命令失败时整批不提交，旧 ruleset 保持不变。
 - iptables driver 的 staging 阶段遇错立即停止并删除未激活链，旧 generation 保持生效；所有 staging chain 完成后才进入切换阶段。iptables 与 ip6tables 以及不同 table 之间没有跨后端的统一内核事务，因此切换阶段若失败会补偿删除此前已激活的新 jump 并保留旧 generation；若补偿命令本身也失败，错误会记录到 reconcile 状态，下一轮继续收敛。
 - backend 不可用（nft 缺失且 `iptables` / `ip6tables` 之一缺失）：daemon 记录 `no_backend_available` 或 `backend_unavailable` warning，并在该 instance 的 `LastError` 中保留失败；不会退化为 dry-run 成功。系统上已有的旧规则保持不动。
@@ -550,31 +550,31 @@ type FirewallReconcileInstance struct {
 
 ## 7. Debug 与诊断
 
-### 7.1 higgs firewall show
+### 7.1 photon firewall show
 
 ```bash
-higgs firewall
-higgs firewall show [--filter <text>] [--verbose]
+photon firewall
+photon firewall show [--filter <text>] [--verbose]
 ```
 
 这是面向 operator 的日常状态入口。默认按 instance 显示 scope、mode、实际 backend 和 active/pending/error 状态；`--filter/-f` 可按 instance ID、scope、mode 或 backend 过滤，`--verbose/-v` 增加 policy、prefix、service、generation 和 owned-object 计数。它不显示 policy hash 或 inline hook 原始表达式。
 
-### 7.2 higgs debug firewall
+### 7.2 photon debug firewall
 
 ```bash
-higgs debug firewall [--netns <name> | --host] [--json]
+photon debug firewall [--netns <name> | --host] [--json]
 ```
 
 默认输出每个 instance 的期望规则、owned 对象、reconcile 状态、配置 backend 和实际 resolved backend。`--netns` 可按 netns 或 instance ID 筛选，`--host` 只显示 host instance，`--json` 输出同一视图的 JSON；`--host` 与 `--netns` 互斥。配置了 inline hooks 时，还会逐条显示 backend、iptables family、hook point、原始表达式及状态：`active` 表示属于当前实际 backend，`inactive` 表示为异构主机保留但本机未使用，`pending` 表示该实例尚无 reconcile backend 结果。实现见：
 
 - `internal/inspect/firewall.go`：构造 debug 视图
 - `internal/inspect/text/firewall.go`：文本化输出
-- `app/higgs/debug_firewall.go`：CLI 注册
+- `app/photon/debug_firewall.go`：CLI 注册
 
-### 7.3 higgs debug preflight
+### 7.3 photon debug preflight
 
 ```bash
-higgs debug preflight
+photon debug preflight
 ```
 
 输出 backend 探测结果：`nft` 是否可用、`iptables` 是否可用、`CAP_NET_ADMIN` 状态等。
@@ -583,7 +583,7 @@ higgs debug preflight
 
 - `pkg/firewall/*_test.go`：planner 与 driver 单元测试。
 - `pkg/firewall/root_smoke_test.go`：需要 root / netns 的 backend smoke 测试。
-- `app/higgs/firewall_test.go`：daemon 级 firewall 测试。
+- `app/photon/firewall_test.go`：daemon 级 firewall 测试。
 
 ---
 
@@ -593,7 +593,7 @@ higgs debug preflight
 
 | 项 | 设计期望 | 当前实现 | 影响 | 下一步 |
 |---|---|---|---|---|
-| `mode: external` | Higgs 只读取/诊断，不生成或修改规则 | 已在实例过滤、planner、plan 和 driver 层阻断变更；debug 仍显示配置与历史 reconcile 状态 | 已收口；切换到 external 不会清理此前 Higgs-owned 对象 | 已完成 |
+| `mode: external` | Photon 只读取/诊断，不生成或修改规则 | 已在实例过滤、planner、plan 和 driver 层阻断变更；debug 仍显示配置与历史 reconcile 状态 | 已收口；切换到 external 不会清理此前 Photon-owned 对象 | 已完成 |
 | Native inline rule 可移植性与校验 | 同一策略可跨 backend 表达，并在 apply 前完成完整语义校验 | `nft_hooks` / `iptables_hooks` 是两套原生语法；配置阶段只做边界和危险参数校验，真正的模块、match、target、表达式合法性由 nft/iptables apply 验证 | 异构节点需同时维护两套等价规则；语义错误到 reconcile 时才暴露 | 暂时不需要调整，由管理员自行控制 |
 | `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 | 暂不实现 |
 | Assignment 白名单二次校验 | planner 独立校验允许进入规则的 assignment | `AssignmentPrefixes` 已组装但仍未使用；前缀规则依赖 `AuthorizedRouteSet` 派生结果 | 缺少 planner 层独立的 assignment 防御性复核 | 暂不实现 |
@@ -604,20 +604,20 @@ higgs debug preflight
 | Generation 递增 | 每次成功 apply 递增并可追踪历史 | iptables 物理 chain 已带 desired hash 和 `a`/`b` staging 槽，但 NFT/IPTables/DryRun driver 对外仍返回 `Generation: 1` | 持久化/debug 状态无法按 generation 区分历史，也不能表达实际槽位 | 问题不大 暂时保留 |
 | 生命周期与跨 backend 清理 | shutdown、禁用/删除实例、scope/prefix/backend 变化时回滚旧 owned rules | daemon 不调用 `DeleteStale`；只对当前启用实例、当前 scope 和当前 backend 做 reconcile。禁用/删除实例、退出、改变 owner/scope 或切换 backend 不会遍历并清理旧 backend 对象 | 旧 nft table 或 iptables chain/jump 可能长期残留，并与新策略同时生效 | 问题不大 暂时保留 |
 | 周期 reconcile timer | 设计建议有周期 timer | 定义了 `defaultFirewallReconcileInterval`（30s）但主循环未调度 | 只靠事件触发 | 问题不大 暂时保留 |
-| 冲突检测 | 检测非 Higgs 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 | 问题不大 暂时保留 |
+| 冲突检测 | 检测非 Photon 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 | 问题不大 暂时保留 |
 | 优先级配置 | nft base-chain priority 可按 hook 阶段配置 | 已支持 `priority.filter`、`priority.prerouting`、`priority.postrouting`；默认分别是 `filter`、`dstnat`、`srcnat`，只允许对应基准加整数偏移 | 可以在不混淆 DNAT/SNAT 阶段的前提下与管理员 chain 排序 | 已完成 |
 | `AllowPeers`/`DenyPeers` | 按 peer zone 过滤 transit | 字段存在但**未实际使用** | 仅前缀过滤生效 | 问题不大 暂时保留 |
 | WireGuard host 配置接线 | `host_ports.wg`、当前/历史 advertised WG port 驱动 ingress 与 grace | type/planner 中有 `WG`、`WGPort`、`AdvertisedPreviousWGPorts` 预留，但 YAML `host_ports` 只接受 `ike`/`natt`，daemon 也不填充 WG 端口输入 | 目前不能从 `config.yaml` 启用 WireGuard host firewall/grace | wg没实现前不需要进一步推进 |
 | debug 命令 flag | `--netns` / `--host` / `--dry-run` / `--json` | 已支持 `--netns`（也可按 instance ID）、`--host` 与 `--json`；未实现 `--dry-run` plan | 日常定位与机器读取已收口；仍不能从 CLI 预演完整 plan | 仅 dry-run 暂不实现 |
-| 命名约定 | 建议 `HIGGS-H2-INPUT` | 逻辑对象为 `higgs_h2_input`，iptables 物理 chain 另带 hash/双槽 generation 后缀 | 风格差异 | 问题不大 |
+| 命名约定 | 建议 `PHOTON-H2-INPUT` | 逻辑对象为 `photon_h2_input`，iptables 物理 chain 另带 hash/双槽 generation 后缀 | 风格差异 | 问题不大 |
 
 
 ### 8.1 使用建议
 
-- 生产环境可显式配置 `backend: nft` 或 `backend: iptables` 来固定选择，但“显式”不等于 backend 可用时强制失败；仍应检查 `higgs debug firewall` 的 `resolved_backend` / `LastError` 和 daemon warning，避免实际落入 dry-run。
-- `mode: external` 可用于将 instance 交给外部管理器：Higgs 不会再修改它；切换前已有的 Higgs-owned 规则仍需由管理员确认并清理。
+- 生产环境可显式配置 `backend: nft` 或 `backend: iptables` 来固定选择，但“显式”不等于 backend 可用时强制失败；仍应检查 `photon debug firewall` 的 `resolved_backend` / `LastError` 和 daemon warning，避免实际落入 dry-run。
+- `mode: external` 可用于将 instance 交给外部管理器：Photon 不会再修改它；切换前已有的 Photon-owned 规则仍需由管理员确认并清理。
 - host 实例在 `ipsec.port_mode=range` 时默认启用 redirect grace；若使用固定端口，可关闭 `redirect_grace`。
-- daemon 升级、停止、禁用实例或切换 backend 后，建议手动检查并清理残留的 Higgs-owned table/chain（`nft list tables`、`iptables -S`、`ip6tables -S`）。
+- daemon 升级、停止、禁用实例或切换 backend 后，建议手动检查并清理残留的 Photon-owned table/chain（`nft list tables`、`iptables -S`、`ip6tables -S`）。
 
 ### 8.2 后续设计方向
 

@@ -1,4 +1,4 @@
-# Higgs Todo
+# Photon Todo
 
 设计文档见 [docs/design.md](docs/design.md)。本文件只保留可执行任务。
 
@@ -11,12 +11,12 @@
 - [x] Phase 4：StrongSwan/XFRM 主线、daemon admin 写入、auto-join、planner/reconcile、host-born XFRM、低频 rotate、bidirectional takeover。
 - [x] Phase 5：BIRD Babel、route authorization、per-netns BIRD 配置模型、routing debug 和 dry-run smoke 基座。
 - [x] Phase 6.0-6.7.6：事件驱动控制面、IPAM、准入诊断、防火墙、动态 peer、撤销清理、链路健康和 Observer MVP 主线。
-- [x] Phase 6.7.7：`app/higgs` 模块化重构第一阶段（Observer/debug/inspect 先行）。`internal/observer`、`internal/inspect`、`internal/inspect/http`、`internal/inspect/text` 和 `internal/state` 已承接读侧 view、HTTP DTO、CLI presenter、通用 observer handler 和共享 snapshot 类型；`app/higgs` 保留 executable wiring、daemon provider、control/live/offline source adapter。详细归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)，后续约束见 [docs/app-higgs-modularization-design.md](docs/app-higgs-modularization-design.md)。
+- [x] Phase 6.7.7：`app/photon` 模块化重构第一阶段（Observer/debug/inspect 先行）。`internal/observer`、`internal/inspect`、`internal/inspect/http`、`internal/inspect/text` 和 `internal/state` 已承接读侧 view、HTTP DTO、CLI presenter、通用 observer handler 和共享 snapshot 类型；`app/photon` 保留 executable wiring、daemon provider、control/live/offline source adapter。详细归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)，后续约束见 [docs/app-photon-modularization-design.md](docs/app-photon-modularization-design.md)。
 - [x] Phase 7.1 异构 TransportLink 并行共存（模型、实验与公共边界已冻结）。
 - [x] Phase 7.3 Gossip UDP object chunk repair。
 - [x] Phase 7.10 Daemon / 本地控制接口生产化。
 - [x] Phase 7.13-7.15 稳态冗余优化（XFRM maintenance、endpoint timer、unsolicited ping）。
-- [x] Phase 7.16 Firewall backend-native inline hooks 及后续收口（external mode、ip6tables 双栈探测、`higgs debug firewall` flag、nft priority 配置）。详细实现归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
+- [x] Phase 7.16 Firewall backend-native inline hooks 及后续收口（external mode、ip6tables 双栈探测、`photon debug firewall` flag、nft priority 配置）。详细实现归档见 [docs/roadmap-archive.md](docs/roadmap-archive.md)。
 
 ## Phase 9: Observer Web UI 重构（已完成）
 
@@ -47,8 +47,8 @@
   - 落地 `event_buffer_seconds` 环形缓冲 + Events 时间线页（独立可裁）。
 
 - [x] **9.5 测试与文档收口**
-  - `webapp_test.go` token 断言改写为模块化后的关键导出；`static_test.go` 覆盖新增子目录；`internal/observer` 与 `app/higgs` observer 族测试全绿。
-  - `app/higgs/observer_api_*_test.go` 不应需要修改（REST 响应不变，9.4 除外），若需修改则说明越界。
+  - `webapp_test.go` token 断言改写为模块化后的关键导出；`static_test.go` 覆盖新增子目录；`internal/observer` 与 `app/photon` observer 族测试全绿。
+  - `app/photon/observer_api_*_test.go` 不应需要修改（REST 响应不变，9.4 除外），若需修改则说明越界。
   - `docs/new/observer.md` 第 6/9 节同步为重构后行为。
 
 ## Phase 7: 生产化收口与高级能力候选
@@ -75,14 +75,14 @@
 - [ ] **7.11 运维与可观测性**
   - Prometheus/OpenMetrics 导出：节点数、链路状态、gossip 流量、zone 数量、chunk repair、object pull、health probe。
   - 先按 7.11.0 将 peer 纯诊断数据从 committed state 拆到独立 observability store；不能用 peer ID、endpoint 或原始错误串作为 metrics label。
-  - 梳理 `higgs status`、`higgs zones`、`higgs peers`、`higgs sync` 等面向日常运维的简洁 CLI。
+  - 梳理 `photon status`、`photon zones`、`photon peers`、`photon sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
   - Health probe 性能：已实现按 netns 常驻的 raw-ICMP worker，worker 固定 OS thread 后 `setns` 并按源/接口复用 ICMP socket；raw socket / `setns` 的 setup 失败自动回退 exec prober，消除正常路径的 `ip netns exec ping` fork/exec/mount 开销。待完成 root smoke：IPv4、IPv6 link-local scope、netns 删除/重建、`CAP_NET_RAW` / `CAP_SYS_ADMIN` / `NoNewPrivileges` 缺失时的降级；验收后再确认默认路径的长期运行行为。
   - **Daemon state-store 性能（perf 2026-07-24，2026-07-31 复核）**
     - daemon 生产写路径由主事件循环串行执行；packet receiver、object-pull、health 和 control 后台 goroutine 只投递事件或更新独立 observability，正常运行时不会并发执行两个 routing reconcile，也不会在 reconcile 中途插入另一个 committed writer。`DaemonStateStore` 的锁仍用于并发读和边界防护，全局 `revision` 用于排序及检测意外绕过 single-writer 的写入，而不是把多 writer 当作正常工作模式。
     - 当前 committed root 及其可达子结构必须永久不可变；写操作只修改 detached workspace 或 typed COW 拥有的字段，发布时在锁内替换一次 root。`Snapshot()` 在取得 root/revision 后释放锁再复制是安全的，前提正是旧 root 不再原地修改。
     - 当前主要成本不在 commit 语义，而在 `BeginUpdate`、`Commit` 和只读 snapshot 反复通过 JSON round-trip 复制完整 state，体积最大的 `Network` 因此反复分配、base64 编解码并增加 GC/缺页压力。
-    - 实机 `higgsnet db stats` 显示逻辑有效数据约 1,094,124 bytes：`_meta` 约 34,099 bytes（3.1%），所有 `zone:*` bucket 约 1,060,025 bytes（96.9%）。磁盘文件约 4 MB 是 bbolt 页、空闲页和索引等分配后的文件大小；此前提及的 48 MB 是 health spool，不是 Network/state DB。
+    - 实机 `photon db stats` 显示逻辑有效数据约 1,094,124 bytes：`_meta` 约 34,099 bytes（3.1%），所有 `zone:*` bucket 约 1,060,025 bytes（96.9%）。磁盘文件约 4 MB 是 bbolt 页、空闲页和索引等分配后的文件大小；此前提及的 48 MB 是 health spool，不是 Network/state DB。
     - [x] 将每个 `zone/key` 的 `RecordHistory` 上限从 128 收紧为最近 16 条；新写入持续按 16 条截断，加载旧数据库时也裁掉更早历史，下一次成功保存会重写逻辑值。bbolt 文件不会因此自动缩小，物理回收若有需要应另做离线 compact，不纳入当前 CPU 修复。
     - 保留通用 `StateStore.Update` 当前的完整隔离语义：不得直接转移 workspace 所有权，也不得单独删除 commit 的第二次 clone。`Workspace()` 仍会把裸指针交给调用者，且 callback 可以 retain 指针；在 typed mutation 收口前，第二次 clone 是 committed 私有性的保证。
     - 不把完整 clone 移入 store 锁内；仅把 clone 延后到第一次 revision 检查之后只能优化 stale transaction，当前 perf 未证明 stale 是热点，不作为独立优化。
@@ -92,11 +92,11 @@
     - 不新增高基数内部 metrics；阶段验收继续由开发者手工运行 perf/strace，对比 idle CPU、clone/alloc、`LoadNetwork` 和 fork/exec。
 
   - [x] **7.11.0 先拆 committed control state 与纯 observability**
-    - 这一步是 state-store 性能优化的前置阶段。Phase 6.7.7 已把 inspect/readmodel/presenter 从 `app/higgs` 拆出，但数据所有权仍集中在 `stateFile`：代码模块化不等于存储模型已经模块化。先消除不该发生的 commit，再优化剩余 commit 的复制方式。
+    - 这一步是 state-store 性能优化的前置阶段。Phase 6.7.7 已把 inspect/readmodel/presenter 从 `app/photon` 拆出，但数据所有权仍集中在 `stateFile`：代码模块化不等于存储模型已经模块化。先消除不该发生的 commit，再优化剩余 commit 的复制方式。
     - 先按语义把数据分为三层：必须强一致和持久化的权威状态；会影响调度、路径选择和重启收敛的控制器运行状态；只供 observer/debug/status 使用、允许丢失或短暂不一致的 observability。readmodel 在读取时合并 committed control snapshot、observability snapshot 和 health/BIRD actual snapshot，现有 CLI/HTTP DTO 尽量保持不变。
     - 第一窄切口只迁移已经确认纯诊断的 `DatagramStats` 和 `ObjectPullStats`，包括其中的 catalog/page/reject、too-large、repair/fallback 计数与最近一次详情。随后逐字段审计并考虑迁移 hint accepted/suppressed、read-only responder、active-pull 展示状态、relay suppression reason 和其他最近一次 action/error detail；不能因为字段显示在 debug 页面就认定它是纯诊断。
     - `BackoffUntilUnix`、`FailureCount`、`LastRelayUnix`、`DiscoveredAddr`、observed path/TTL/grace、`LastSyncUnix`、`RejectedDigests` 等仍影响同步、限流或实际路径，先留在 control state。`LastError` 当前也参与 observed/discovered path 判断，迁移前应先拆成稳定的控制错误码/状态和仅展示的错误文本。
-    - 引入有界的 `PeerObservabilityStore`，优先放在窄职责的 `internal/observability`，由 `app/higgs` 负责 wiring，由 `internal/inspect` 继续负责纯 view 构建；不要把 mutable store 放进 `internal/inspect`。store 自带独立锁或分片、按 peer snapshot 和删除/过期能力，不持有 `stateFile` 或 committed 子结构指针。
+    - 引入有界的 `PeerObservabilityStore`，优先放在窄职责的 `internal/observability`，由 `app/photon` 负责 wiring，由 `internal/inspect` 继续负责纯 view 构建；不要把 mutable store 放进 `internal/inspect`。store 自带独立锁或分片、按 peer snapshot 和删除/过期能力，不持有 `stateFile` 或 committed 子结构指针。
     - 第一版 diagnostics 不随主 state 持久化，daemon restart 后计数归零；旧 state 中遗留字段可兼容读取但不再回写。live observer/debug 合并新 store，offline DB 诊断允许显示 unavailable/reset。若以后确有历史需求，再低频批量写独立 spool/metrics store，不能重新推动主 revision。
     - 将 `recordDatagram*`、`recordCatalog*`、`recordObjectPull*` 等调用改写为 observability store 更新后，不得调用 `StateStore.Update`、install、publish 或 `SaveState`。补充并发 snapshot、peer 清理、restart reset、旧 state 兼容以及 CLI/HTTP schema 测试，再跑相同负载 perf 判断剩余 `recordSyncPeerState` 热点。
 
@@ -185,7 +185,7 @@
       - 已完成：Routing 延用 `routingSnapshot`/CAS；IPsec 新增完整 key/port/link/reconcile owned snapshot/commit；Firewall 新增 ACL/reconcile owned snapshot/commit；Network 新增独立 snapshot/commit 并迁移 daemon `record_put`。已删除 IPsec stale instance/owner-token merge、stale diagnostic 回写和 Firewall 在新 revision 上重提旧 summary；所有 stale 结果现在整体丢弃、记录 source/current revision 并 dirty 重跑。ownership、retained input、stale 与 race 测试、全量 `make check`、chain relay、routing/IPsec/firewall dry-run smoke 均通过；使用 Nix StrongSwan PATH 的完整 `make root-smoke` 也通过，覆盖 StrongSwan/XFRM lifecycle/IKE/takeover/rotate、BIRD/Babel exchange/filter/failover/adopt、nft firewall、health fault injection 和 revocation deny-first。
 
     - [x] **7.11.6.6 收敛 daemon authoritative mutation 与 fail-closed control 写入**
-      - 事故背景：root 身份运行测试时，CLI 使用测试临时 DB 中的 synthetic root pool 完成 IPAM dry-run，却把 mutation 通过生产 `/run/higgs/higgs.sock` 作为通用 `record_put` 交给 daemon；daemon 未按自己的当前 Network 重新执行 pool ownership/assignment covering 校验，最终在生产 `catofes.` 写入测试 pool/assignments。测试/smoke 已先增加私有 `TMPDIR`、按 `data_dir` 派生 control socket、清空 `HIGGS_STATE` 覆盖和 root 回归测试作为止血，但这不能替代 authoritative mutation 修复。
+      - 事故背景：root 身份运行测试时，CLI 使用测试临时 DB 中的 synthetic root pool 完成 IPAM dry-run，却把 mutation 通过生产 `/run/photon/photon.sock` 作为通用 `record_put` 交给 daemon；daemon 未按自己的当前 Network 重新执行 pool ownership/assignment covering 校验，最终在生产 `catofes.` 写入测试 pool/assignments。测试/smoke 已先增加私有 `TMPDIR`、按 `data_dir` 派生 control socket、清空 `PHOTON_STATE` 覆盖和 root 回归测试作为止血，但这不能替代 authoritative mutation 修复。
       - 所有在线 mutation 必须只向 daemon 发送 typed intent；client 只负责 CLI 参数解析、类型编码和展示响应，不加载本地 StateStore、不执行任何依赖 Network/revision 的预校验，也不在 client/daemon 之间维护两套 semantic validation。daemon 在 single-writer 事件循环中基于当前 committed StateStore revision 完成输入规范化、权限、当前对象状态、跨 record 约束和撤销条件校验，再构造/签名 record、typed COW commit、持久化并触发对应 reconcile；预览如有需要也必须作为 daemon typed dry-run 请求执行。
       - 将每类操作收敛成接收 `(committed state, typed intent)`、返回 `(candidate/typed patch, effects, error)` 的纯领域 mutation，验证与构造不可拆开且成功前无外部副作用。在线 handler 在 daemon single-writer 内调用它；显式 `--direct` 的 recovery/offline 路径在取得独占状态后复用同一领域 mutation，再完成持久化，不能另留一套 client/direct 验证实现。
       - 新增 typed control methods 覆盖 `ipam_pool_create/revoke`、`ipam_assignment_create/revoke`、`route_announce/withdraw`、`service_publish/withdraw`；IPAM 必须在 daemon 当前 Network 上校验 `allocate-ip`、pool ownership/covering、overlap/shared/tag，route 必须校验 assignment 与当前 active record，service 必须校验 managed zone、endpoint schema 和当前 authorized assignment。
@@ -210,12 +210,12 @@
       - 已完成：同一 sync event 的 snapshot actions 先收集为批次，每个 action 从当前批次工作 Network 创建独立 target-zone candidate；合法 action 推进 savepoint，非法 action 只记录 rejected digest，后续 action 继续。批次最终通过一次 CAS 发布一个 committed revision，成功后只持久化一次；stale 会丢弃并从新 committed root 重新计算整批，日志和 transport 等外部副作用均移到成功发布后。可见性明确为读者只观察到最终批次 revision；回归覆盖“成功—拒绝—后续成功”的部分成功、rejected digest、未修改 zone 共享、两个成功 target detach、单 revision 发布和持久化 reload。
 
     **阶段验收**
-    - 必跑 `go test ./pkg/core/gossip ./pkg/core/zone ./app/higgs`、相关 `-race` 测试、`make check` 以及 snapshot/routing/sync smoke；涉及真实 BIRD/IPsec 行为的步骤继续跑对应 root smoke。
+    - 必跑 `go test ./pkg/core/gossip ./pkg/core/zone ./app/photon`、相关 `-race` 测试、`make check` 以及 snapshot/routing/sync smoke；涉及真实 BIRD/IPsec 行为的步骤继续跑对应 root smoke。
     - 每一性能步骤使用相同 fixture 和相同实机负载记录 wall/CPU、clone 栈、alloc/GC、minor/major fault、bbolt 与 fork/exec；收益统计不得把 inclusive clone、GC 和缺页百分比直接相加。
     - 完成标志：snapshot apply 失败无任何 Network 变化；routing 不再进行 stale merge；JSON clone 不再出现在 daemon state clone 热路径；高频纯读不复制完整 Network；typed writer 只复制 owned fields；target-zone 写入成本随目标 zone 而非整个 Network 增长。
 
-  - [ ] **7.11.7 `app/higgs` 与 state ownership 后续模块化（性能收口后）**
-    - `app/higgs` 当前仍同时承载 daemon wiring、sync runtime、state adapter 和多个 reconcile 写侧，后续确有继续拆分价值；但本轮不机械搬迁整个 `stateFile`，也不在同一改动中同时重构 sync/IPsec/routing/firewall。
+  - [ ] **7.11.7 `app/photon` 与 state ownership 后续模块化（性能收口后）**
+    - `app/photon` 当前仍同时承载 daemon wiring、sync runtime、state adapter 和多个 reconcile 写侧，后续确有继续拆分价值；但本轮不机械搬迁整个 `stateFile`，也不在同一改动中同时重构 sync/IPsec/routing/firewall。
     - 先通过 7.11.0 验证一个完整的窄切口：独立数据所有者/store、app wiring、inspect view 合并、兼容测试。该边界稳定后，再按“权威 state / controller runtime state / observability”逐块迁移，而不是创建一批没有稳定 API 的空 package。
     - 后续候选包括：持久化 control-state store、peer sync controller state、reconcile observation store，以及 health/BIRD/actual source adapter。`Network`、密钥、owner token、rotate/adoption 等生命周期状态的归属必须由重启恢复语义决定，不能仅按文件大小或字段名字移动。
     - 每次只迁一个字段族并保持磁盘格式、wire 格式和 control/observer schema 的兼容；模块化不阻塞当前性能修复，是否继续拆由 7.11.0-7.11.5 完成后的新 perf 和调用关系决定。
@@ -223,7 +223,7 @@
 - [ ] **7.9 可选 Admission 管理面**
   - 在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交。
   - 第一版 admission 仍不引入新的公网 request 协议，也不让 leaf 自动把 join request 写入 gossip active state。
-  - 候选命令：`higgs join pending`、`higgs join approve <request-id>`、`higgs join reject <request-id>`。
+  - 候选命令：`photon join pending`、`photon join approve <request-id>`、`photon join reject <request-id>`。
   - admission policy 仅覆盖父 Zone 有权签发/写入的对象，不配置本机 MeshPolicy / link group / connect-deny override。
 
 - [ ] **7.4 WireGuard 传输底座与上层 per-peer 接口（可选实验）**
@@ -246,8 +246,8 @@
 
 - [ ] **7.12 可选策略路由与系统路由审计（远期）**
   - 当前主线保持一个 netns 一个 BIRD 实例，BIRD 直接写该 netns 的 main table；默认不启用额外 `ip rule` / per-overlay table 隔离。
-  - 如后续需要 external BIRD、管理员自定义策略路由、或非默认共享 netns 拓扑，再补 `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出。
-  - route-table auditor 仅作为可选兜底，用于交叉检查 Higgs authorized route set、BIRD learned/installed routes 与内核 route table 是否一致。
+  - 如后续需要 external BIRD、管理员自定义策略路由、或非默认共享 netns 拓扑，再补 `ip rule` / fwmark / iif-oif 策略路由和 `/run/photon/rt_tables.d` 诊断输出。
+  - route-table auditor 仅作为可选兜底，用于交叉检查 Photon authorized route set、BIRD learned/installed routes 与内核 route table 是否一致。
 
 ## Phase 7 之后的远期后续
 
@@ -257,18 +257,18 @@
 
 ## Phase 8: 应用层服务与代理（已验收）
 
-**目标：** 在 Higgs L3 mesh 上提供可发现、可授权的内网 SOCKS5 服务，同时支持本地唯一 endpoint 和 shared Anycast endpoint；应用层源路由 relay 保持独立演进。
+**目标：** 在 Photon L3 mesh 上提供可发现、可授权的内网 SOCKS5 服务，同时支持本地唯一 endpoint 和 shared Anycast endpoint；应用层源路由 relay 保持独立演进。
 
 **设计边界：**
-- Higgs 只负责服务地址归属、签名 record 发布/撤销和动态防火墙授权；独立 `higgs-services` 读取 `/etc/higgs/service.yaml` 并生成 Docker Compose/代理配置。两者都不通过 Docker API 管理容器生命周期，Compose 由管理员检查后手工启停。
+- Photon 只负责服务地址归属、签名 record 发布/撤销和动态防火墙授权；独立 `photon-services` 读取 `/etc/photon/service.yaml` 并生成 Docker Compose/代理配置。两者都不通过 Docker API 管理容器生命周期，Compose 由管理员检查后手工启停。
 - 本地网络通过 `auto` 选择当前节点唯一的非 shared assignment；Anycast 网络通过 shared assignment 的稳定 tag（如 `socks5.cn`）选择，`region` 仍只是公开 endpoint 的服务选择属性。
-- Docker bridge 位于 host netns，容器地址属于 Higgs 管理的服务前缀；host 侧通过指向 Higgs netns 的聚合路由和 Docker connected route 最长前缀匹配，overlay 侧复用显式 `routing.instances[].upstream` 返回 host。
-- SOCKS5 第一版可使用 `NO AUTH`，由 Higgs overlay 身份/前缀和本机 firewall 提供 zone/node 级授权；这不承诺同一节点内的用户级身份区分。
+- Docker bridge 位于 host netns，容器地址属于 Photon 管理的服务前缀；host 侧通过指向 Photon netns 的聚合路由和 Docker connected route 最长前缀匹配，overlay 侧复用显式 `routing.instances[].upstream` 返回 host。
+- SOCKS5 第一版可使用 `NO AUTH`，由 Photon overlay 身份/前缀和本机 firewall 提供 zone/node 级授权；这不承诺同一节点内的用户级身份区分。
 
 - [x] **8.4 本地与 Anycast 数据面验证**
   - 已实现 `services-smoke`：真实 Docker bridge 上运行 SOCKS5 和目标 TCP 容器；client netns 经 BIRD/Babel、host route 和 static upstream 回程完成代理请求。
-  - root smoke 断言 Docker connected route 优先于更宽的 host -> overlay 聚合路由；另一 Higgs 前缀仍命中该聚合路由。
-  - non-owner service publish、shared tag 冲突、空 ACL selector fail-closed、未监听 endpoint 不发布分别由 `pkg/service`、routing、firewall 与 `higgs-services` 单元测试覆盖；shared prefix 成员故障收敛复用 BIRD Anycast root smoke。
+  - root smoke 断言 Docker connected route 优先于更宽的 host -> overlay 聚合路由；另一 Photon 前缀仍命中该聚合路由。
+  - non-owner service publish、shared tag 冲突、空 ACL selector fail-closed、未监听 endpoint 不发布分别由 `pkg/service`、routing、firewall 与 `photon-services` 单元测试覆盖；shared prefix 成员故障收敛复用 BIRD Anycast root smoke。
   - 已于 2026-07-21 在允许 netns、具备目标 host firewall 配置的 root 环境执行 `sudo make services-smoke` 并通过。
 
 - **8.5 不纳入 Phase 8**：客户端 service selection/health policy 不是 SOCKS5 发布数据面；Anycast 的 L3 选路和故障收敛交给 BIRD/Babel。出现明确客户端需求后再独立设计。

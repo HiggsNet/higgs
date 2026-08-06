@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/internal/inspect"
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/internal/inspect"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 func TestWriteRevocationImpactsNoRevokedZones(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgsservice "github.com/Catofes/higgs/pkg/service"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photonservice "github.com/Catofes/photon/pkg/service"
 )
 
 type ServiceInspectionInput struct {
@@ -61,26 +61,26 @@ func BuildServiceInspection(input ServiceInspectionInput) ServiceInspection {
 		}
 		keys := make([]string, 0, len(state.Records))
 		for key := range state.Records {
-			if strings.HasPrefix(key, higgsservice.RecordKeyPrefix) {
+			if strings.HasPrefix(key, photonservice.RecordKeyPrefix) {
 				keys = append(keys, key)
 			}
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
 			record := state.Records[key]
-			if record == nil || record.Type != higgsservice.RecordTypeSOCKS5 {
+			if record == nil || record.Type != photonservice.RecordTypeSOCKS5 {
 				continue
 			}
 			serviceView := ServiceView{
-				ID:          strings.TrimPrefix(key, higgsservice.RecordKeyPrefix),
-				Type:        higgsservice.TypeSOCKS5,
+				ID:          strings.TrimPrefix(key, photonservice.RecordKeyPrefix),
+				Type:        photonservice.TypeSOCKS5,
 				Owner:       path,
 				Local:       path == input.ManagedZone,
 				Version:     record.Version,
 				UpdatedUnix: record.Timestamp,
 				RecordKey:   record.Key,
 			}
-			value, err := higgsservice.ParseSOCKS5Record(record)
+			value, err := photonservice.ParseSOCKS5Record(record)
 			if err != nil {
 				serviceView.Status = "invalid"
 				serviceView.Error = err.Error()

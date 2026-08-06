@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 const (
@@ -161,7 +161,7 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 		LastTransition:  now.Unix(),
 		InitiatorRole:   spec.InitiatorRole,
 		Owner: ResourceOwner{
-			Manager:     "higgs",
+			Manager:     "photon",
 			GroupID:     spec.OverlayID,
 			InstanceID:  LinkInstanceID(spec),
 			LinkID:      LinkInstanceID(spec),
@@ -251,23 +251,23 @@ func TransportLinkSpecHash(spec TransportLinkSpec) string {
 	if err != nil {
 		panic(fmt.Sprintf("marshal transport link spec: %v", err))
 	}
-	sum := higgscrypto.Hash(data)
+	sum := photoncrypto.Hash(data)
 	return hex.EncodeToString(sum[:])
 }
 
 func ResourceOwnerToken(linkID, runtimeConnectionID string) string {
-	sum := higgscrypto.Hash([]byte("higgs.ipsec.owner.v2"), []byte{0}, []byte(linkID), []byte{0}, []byte(runtimeConnectionID), []byte{0}, []byte("owner-token"))
+	sum := photoncrypto.Hash([]byte("photon.ipsec.owner.v2"), []byte{0}, []byte(linkID), []byte{0}, []byte(runtimeConnectionID), []byte{0}, []byte("owner-token"))
 	return hex.EncodeToString(sum[:8])
 }
 
 func LegacyResourceOwnerToken(groupID, instanceID, transportID string) string {
-	sum := higgscrypto.Hash([]byte("higgs.ipsec.owner.v1"), []byte{0}, []byte(groupID), []byte{0}, []byte(instanceID), []byte{0}, []byte(transportID))
+	sum := photoncrypto.Hash([]byte("photon.ipsec.owner.v1"), []byte{0}, []byte(groupID), []byte{0}, []byte(instanceID), []byte{0}, []byte(transportID))
 	return hex.EncodeToString(sum[:8])
 }
 
 func (o ResourceOwner) Validate(instance LinkInstance) error {
-	if o.Manager != "higgs" {
-		return fmt.Errorf("resource is not managed by higgs")
+	if o.Manager != "photon" {
+		return fmt.Errorf("resource is not managed by photon")
 	}
 	if o.GroupID == "" || o.InstanceID == "" || o.TransportID == "" {
 		return fmt.Errorf("resource owner is incomplete")
@@ -290,10 +290,10 @@ func (o ResourceOwner) Validate(instance LinkInstance) error {
 		return fmt.Errorf("resource owner token mismatch")
 	}
 	if instance.TransportID != "" && !strings.HasPrefix(instance.TransportID, "ipsec-") {
-		return fmt.Errorf("transport id %q does not use higgs ipsec naming", instance.TransportID)
+		return fmt.Errorf("transport id %q does not use photon ipsec naming", instance.TransportID)
 	}
-	if instance.InterfaceName != "" && !strings.HasPrefix(instance.InterfaceName, "hgs") {
-		return fmt.Errorf("interface %q does not use higgs naming", instance.InterfaceName)
+	if instance.InterfaceName != "" && !strings.HasPrefix(instance.InterfaceName, "phx") {
+		return fmt.Errorf("interface %q does not use photon naming", instance.InterfaceName)
 	}
 	return nil
 }

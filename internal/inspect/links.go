@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	higgsstate "github.com/Catofes/higgs/internal/state"
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	photonstate "github.com/Catofes/photon/internal/state"
+	"github.com/Catofes/photon/pkg/transport/ipsec"
 )
 
 type LinkInput struct {
@@ -123,7 +123,7 @@ type LinkInstance struct {
 }
 
 // LinkOwner is a read-only alias of the shared runtime owner state.
-type LinkOwner = higgsstate.LinkOwnerState
+type LinkOwner = photonstate.LinkOwnerState
 
 type DesiredLink struct {
 	InstanceID      string `json:"instance_id,omitempty"`
@@ -141,7 +141,7 @@ type DesiredLink struct {
 }
 
 // LinkSA is a read-only alias of the shared runtime SA state.
-type LinkSA = higgsstate.LinkSAState
+type LinkSA = photonstate.LinkSAState
 
 type LinkHealth struct {
 	ProbeID         string `json:"probe_id,omitempty"`
@@ -213,7 +213,7 @@ type LinkSkip struct {
 // BuildLinkInstanceFromRuntime builds an inspect view of a link instance from
 // the shared runtime state. Routing is supplied separately because it is
 // derived from the BIRD runtime snapshot.
-func BuildLinkInstanceFromRuntime(inst higgsstate.LinkInstanceState, routing LinkRouting) LinkInstance {
+func BuildLinkInstanceFromRuntime(inst photonstate.LinkInstanceState, routing LinkRouting) LinkInstance {
 	return LinkInstance{
 		ID:                    inst.ID,
 		GroupID:               inst.GroupID,
@@ -258,7 +258,7 @@ func BuildLinkInstanceFromRuntime(inst higgsstate.LinkInstanceState, routing Lin
 
 // BuildDesiredLinkFromRuntime builds an inspect view of a desired link from the
 // shared runtime state.
-func BuildDesiredLinkFromRuntime(item higgsstate.DesiredLinkState) DesiredLink {
+func BuildDesiredLinkFromRuntime(item photonstate.DesiredLinkState) DesiredLink {
 	return DesiredLink{
 		InstanceID:      item.InstanceID,
 		GroupID:         item.GroupID,
@@ -277,7 +277,7 @@ func BuildDesiredLinkFromRuntime(item higgsstate.DesiredLinkState) DesiredLink {
 
 // BuildLinkActionFromRuntime builds an inspect view of a reconcile action from
 // the shared runtime state.
-func BuildLinkActionFromRuntime(item higgsstate.LinkActionState) LinkAction {
+func BuildLinkActionFromRuntime(item photonstate.LinkActionState) LinkAction {
 	return LinkAction{
 		Action:     item.Action,
 		InstanceID: item.InstanceID,
@@ -290,7 +290,7 @@ func BuildLinkActionFromRuntime(item higgsstate.LinkActionState) LinkAction {
 
 // BuildLinkSkipFromRuntime builds an inspect view of a skipped peer from the
 // shared runtime state.
-func BuildLinkSkipFromRuntime(item higgsstate.LinkSkipState) LinkSkip {
+func BuildLinkSkipFromRuntime(item photonstate.LinkSkipState) LinkSkip {
 	return LinkSkip{
 		GroupID: item.GroupID,
 		Peer:    string(item.Peer),

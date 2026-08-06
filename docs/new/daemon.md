@@ -1,9 +1,9 @@
-# Higgs Daemon 设计与实现
+# Photon Daemon 设计与实现
 
 > **本文档状态：2026-07**
-> 描述 `higgs daemon` 的架构、事件循环、单 writer 模式、control socket、reconcile 调度和本机状态管理。不展开 transport、routing、firewall、health 等子模块的内部细节——那些在各自的文档中说明。
+> 描述 `photon daemon` 的架构、事件循环、单 writer 模式、control socket、reconcile 调度和本机状态管理。不展开 transport、routing、firewall、health 等子模块的内部细节——那些在各自的文档中说明。
 
-Higgs daemon 是长期运行的控制循环。它把所有子系统——gossip、admin 写入、端点发布、object pull、transport reconcile、routing reconcile、firewall reconcile、health 和 observer——放在同一个本机控制边界内。
+Photon daemon 是长期运行的控制循环。它把所有子系统——gossip、admin 写入、端点发布、object pull、transport reconcile、routing reconcile、firewall reconcile、health 和 observer——放在同一个本机控制边界内。
 
 ---
 
@@ -35,7 +35,7 @@ Higgs daemon 是长期运行的控制循环。它把所有子系统——gossip�
 
 ## 1. 架构概览
 
-Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调用时重新加载全部状态，而是持续运行一个事件循环，按需调度各子系统的 reconcile。
+Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调用时重新加载全部状态，而是持续运行一个事件循环，按需调度各子系统的 reconcile。
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -76,7 +76,7 @@ Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调�
 
 ## 2. DaemonService 结构
 
-`DaemonService` 定义在 [`app/higgs/daemon.go`](../../app/higgs/daemon.go) 中，是 daemon 的核心结构体。
+`DaemonService` 定义在 [`app/photon/daemon.go`](../../app/photon/daemon.go) 中，是 daemon 的核心结构体。
 
 主要字段：
 
@@ -98,7 +98,7 @@ Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调�
 | `objectPullPool` | `*objectPullPool` | TCP object pull 连接池 |
 | `timerManager` | `*TimerManager` | Sync session 定时器管理 |
 
-**DaemonEvent 类型**（[`daemon.go:70-95`](../../app/higgs/daemon.go#L70-L95)）：
+**DaemonEvent 类型**（[`daemon.go:70-95`](../../app/photon/daemon.go#L70-L95)）：
 
 事件通过 `daemonEvent` 结构体传递，主要字段包括 `Type`（事件类型）、`Context`（上下文）和 `Reply`（结果通道）。`enqueueEvent()` 把事件放进 `Events` 通道，然后阻塞等待 `Reply` 返回结果。这样，control socket 侧的 admin 操作能拿到明确的完成或失败信号。
 
@@ -116,7 +116,7 @@ Daemon 是 Higgs 中唯一长期运行的系统进程。它不在每次 CLI 调�
 
 ## 3. 事件循环
 
-Daemon 启动流程（[`daemonRun()`](../../app/higgs/daemon.go#L1522-L1540)）：
+Daemon 启动流程（[`daemonRun()`](../../app/photon/daemon.go#L1522-L1540)）：
 
 ```
 daemonRun()
@@ -127,7 +127,7 @@ daemonRun()
  └─ service.Run()         进入事件循环
 ```
 
-`Run()` 方法（[`daemon.go:183-417`](../../app/higgs/daemon.go#L183-L417)）：
+`Run()` 方法（[`daemon.go:183-417`](../../app/photon/daemon.go#L183-L417)）：
 
 1. **初始化驱动**：配置 IPsec (StrongSwan VICI + XFRM) 驱动
 2. **启动子服务**：
@@ -188,7 +188,7 @@ for {
 }
 ```
 
-**processEvents() 阶段**（[`daemon.go:860-895`](../../app/higgs/daemon.go#L860-L895)）：
+**processEvents() 阶段**（[`daemon.go:860-895`](../../app/photon/daemon.go#L860-L895)）：
 
 非阻塞 drain 所有已排队事件，处理完后以 **Phase 6.5 拒绝优先顺序**执行 flush：
 1. `flushRevocationCleanup()` — 清理已吊销 zone 的 gossip peer cache
@@ -249,7 +249,7 @@ Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（如 record put�
 
 ### 4.2 DaemonStateStore
 
-`DaemonStateStore` 是 daemon 的状态中心，定义在 [`daemon_state_store.go`](../../app/higgs/daemon_state_store.go)。它维护：
+`DaemonStateStore` 是 daemon 的状态中心，定义在 [`daemon_state_store.go`](../../app/photon/daemon_state_store.go)。它维护：
 
 | 字段 | 作用 |
 |------|------|
@@ -295,9 +295,9 @@ IPsec、routing、firewall 的 reconcile 不再长时间持有 committed state �
 
 ### 4.5 状态文件
 
-状态持久化在 BoltDB 文件中（路径由 `config.yaml` 的 `state_path` 指定，默认 `<data_dir>/higgs.db`）。
+状态持久化在 BoltDB 文件中（路径由 `config.yaml` 的 `state_path` 指定，默认 `<data_dir>/photon.db`）。
 
-`stateFile` 结构包含（[`state.go:18-34`](../../app/higgs/state.go#L18-L34)）：
+`stateFile` 结构包含（[`state.go:18-34`](../../app/photon/state.go#L18-L34)）：
 
 | 字段 | 作用 |
 |------|------|
@@ -318,7 +318,7 @@ IPsec、routing、firewall 的 reconcile 不再长时间持有 committed state �
 
 ### 4.6 状态变化通知
 
-`notifyStateChanged()`（[`daemon.go:1426-1462`](../../app/higgs/daemon.go#L1426-L1462)）：
+`notifyStateChanged()`（[`daemon.go:1426-1462`](../../app/photon/daemon.go#L1426-L1462)）：
 
 当状态变化时（sync 成功应用了 Zone snapshot、admin 写入 record 等），daemon 会：
 1. 调用 `OnStateChanged` hook（测试用）
@@ -380,7 +380,7 @@ Daemon 运行期间，推荐所有写操作都通过 control socket。如果外�
 
 Daemon 通过 Unix domain socket 暴露控制接口。
 
-- root 默认路径 `/run/higgs/higgs.sock`，非 root 默认 `<data_dir>/higgs.sock`，`HIGGS_CONTROL_SOCKET` 可覆盖
+- root 默认路径 `/run/photon/photon.sock`，非 root 默认 `<data_dir>/photon.sock`，`PHOTON_CONTROL_SOCKET` 可覆盖
 - 协议是简单 JSON request/response
 - 安全边界只有 Unix 文件权限（父目录 `0700`，socket `0600`），**没有应用层方法级鉴权**
 
@@ -390,18 +390,18 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 
 状态写入类命令和恢复类命令支持显式 `--direct`，跳过 control socket 直接写本地 DB。使用 direct 时调用者需自行保证没有 daemon 在管理同一状态文件或 IPsec/XFRM 对象；direct 只持久化 signed record，不会触发 routing reconcile。
 
-控制方法覆盖状态读写、delegation 管理、节点加入、恢复操作、runtime 触发（`sync_trigger`/`reload`/`routing_reload`/`shutdown`）以及各类诊断接口。完整列表见 `app/higgs/daemon.go` 中 `handleControlConn` 的 switch。
+控制方法覆盖状态读写、delegation 管理、节点加入、恢复操作、runtime 触发（`sync_trigger`/`reload`/`routing_reload`/`shutdown`）以及各类诊断接口。完整列表见 `app/photon/daemon.go` 中 `handleControlConn` 的 switch。
 
 ### 5.1 systemd 运行约定
 
-仓库提供 [`contrib/systemd/higgsnet.service`](../../contrib/systemd/higgsnet.service) 示例。service 使用 `RuntimeDirectory=higgs` 创建 `/run/higgs`，因此不需要预先手工创建运行目录，也不需要单独的 `.socket` unit。当前 daemon 自己创建并管理 Unix socket，尚不支持 systemd socket activation。
+仓库提供 [`contrib/systemd/photon.service`](../../contrib/systemd/photon.service) 示例。service 使用 `RuntimeDirectory=photon` 创建 `/run/photon`，因此不需要预先手工创建运行目录，也不需要单独的 `.socket` unit。当前 daemon 自己创建并管理 Unix socket，尚不支持 systemd socket activation。
 
 安装后至少需要确认：
 
-- `ExecStart` 指向实际安装的 `higgs` 二进制；
-- `/etc/higgs/config.yaml` 和 identity/private key 仅允许运行用户读取；
+- `ExecStart` 指向实际安装的 `photon` 二进制；
+- `/etc/photon/config.yaml` 和 identity/private key 仅允许运行用户读取；
 - 如果启用 StrongSwan/XFRM、netns 或防火墙 apply，service 需要相应的 root/capability 权限；
-- root CLI 与 daemon 使用相同的 `HIGGS_CONFIG`，从而共同定位 `/run/higgs/higgs.sock` 和同一份状态。
+- root CLI 与 daemon 使用相同的 `PHOTON_CONFIG`，从而共同定位 `/run/photon/photon.sock` 和同一份状态。
 
 示例使用 `Restart=on-failure`、`RestartSec=2s` 和 `TimeoutStopSec=30s`：异常退出会重启；正常 shutdown 或 `SIGTERM` 不会重启；停止超过 30 秒后才强制结束。
 
@@ -409,7 +409,7 @@ control socket 先启动、后于 Observer 停止。任一服务启动失败都�
 
 ### 5.2 状态持久化、停止与崩溃恢复
 
-签名状态、peer sync 状态和 reconcile 快照写入 BoltDB；socket、连接、内存事件和进行中的 sync session 不持久化。正常关闭使用 `higgs daemon --shutdown` 或 `SIGTERM`。
+签名状态、peer sync 状态和 reconcile 快照写入 BoltDB；socket、连接、内存事件和进行中的 sync session 不持久化。正常关闭使用 `photon daemon --shutdown` 或 `SIGTERM`。
 
 崩溃后，daemon 从最后一次成功提交的状态启动，重新发布本机记录并 reconcile 数据面；未完成的同步由定时任务重试。状态库无法打开时启动失败，不会用空状态覆盖原文件。
 

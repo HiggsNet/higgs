@@ -23,7 +23,7 @@ type ProcessManager interface {
 	// table, and control socket), Start adopts it instead of spawning a new one.
 	Start(ctx context.Context, spec BirdInstanceSpec) error
 
-	// Stop gracefully stops the BIRD process and removes Higgs-owned
+	// Stop gracefully stops the BIRD process and removes Photon-owned
 	// pid/control-socket/config files when ownership checks pass.
 	Stop(ctx context.Context, spec BirdInstanceSpec) error
 
@@ -161,7 +161,7 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 	return nil
 }
 
-// Stop gracefully stops the BIRD process and removes Higgs-owned files.
+// Stop gracefully stops the BIRD process and removes Photon-owned files.
 func (pm *ExecProcessManager) Stop(ctx context.Context, spec BirdInstanceSpec) error {
 	pm.mu.Lock()
 	pid := pm.pid
@@ -311,7 +311,7 @@ func waitStatusString(status syscall.WaitStatus) string {
 }
 
 func birdResourceCleanupAllowed(owner BirdResourceOwner, resource string) bool {
-	if owner.Manager != "higgs" || owner.InstanceID == "" || owner.NetNSName == "" || owner.Token == "" {
+	if owner.Manager != "photon" || owner.InstanceID == "" || owner.NetNSName == "" || owner.Token == "" {
 		return false
 	}
 	switch resource {
@@ -333,7 +333,7 @@ func birdResourceCleanupAllowed(owner BirdResourceOwner, resource string) bool {
 // OwnerToken derives the base token for one managed BIRD instance.
 func OwnerToken(instanceID, netnsName string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
-		"higgs.bird.owner.v1",
+		"photon.bird.owner.v1",
 		instanceID,
 		netnsName,
 		"owner",
@@ -344,7 +344,7 @@ func OwnerToken(instanceID, netnsName string) string {
 // ResourceToken derives a token for one concrete managed BIRD resource.
 func ResourceToken(owner BirdResourceOwner, resource string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
-		"higgs.bird.owner.v1",
+		"photon.bird.owner.v1",
 		owner.InstanceID,
 		owner.NetNSName,
 		owner.Token,

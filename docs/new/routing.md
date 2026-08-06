@@ -1,4 +1,4 @@
-# Higgs Routing 与 IPAM
+# Photon Routing 与 IPAM
 
 > **本文档状态：2026-07**
 > `docs/new/` 模块化文档迁移后的 routing / IPAM 当前行为入口。
@@ -58,8 +58,8 @@ local routing / netns / forwarding policy ─────────┘        
 | 项目 | 当前行为 |
 |---|---|
 | 实例配置 | `routing.instances[]`，每项引用一个 `netns` |
-| tunnel 接口 | 默认匹配 `hgs*`；同一实例可合并多个 interface pattern |
-| veth upstream 接口 | 默认 `hgv2host`，不加 `type tunnel` |
+| tunnel 接口 | 默认匹配 `phx*`；同一实例可合并多个 interface pattern |
+| veth upstream 接口 | 默认 `phv2host`，不加 `type tunnel` |
 | Router-ID | 由 managed Zone、trusted root hash 与稳定 netns label 派生 |
 | 路由表 | 默认写目标 netns 的 `main` table，也可指定数字 table ID |
 | forwarding | `netns.*.forwarding` 同时约束 BIRD export 与 firewall 的 transit 行为 |
@@ -149,7 +149,7 @@ record 模型不支持显式删除。撤回使用同一 key 的更高版本，�
 ```json
 {
   "version": 1,
-  "netns": ["h2"]
+  "netns": ["photon"]
 }
 ```
 
@@ -282,10 +282,10 @@ node-a.pek.catofes.
 
 - `netns` 决定它在哪个 namespace 内运行；
 - `provider` 当前只支持 `bird`；
-- `mode` 可为 `managed`（Higgs 启停配置）、`external`（只观测已有 BIRD）或 `disabled`；
+- `mode` 可为 `managed`（Photon 启停配置）、`external`（只观测已有 BIRD）或 `disabled`；
 - `shutdown_policy` 默认 `persist`：daemon 退出不停止 BIRD，重启后通过 pid/control socket adopt；
 - `table` 指定 BIRD 主表名；
-- `interface_pattern` 匹配 XFRM tunnel 接口，默认 `hgs*`。
+- `interface_pattern` 匹配 XFRM tunnel 接口，默认 `phx*`。
 
 Router-ID 由 `StableRouterID(localZone, rootTrust, netnsName)` 派生：
 
@@ -340,7 +340,7 @@ Import filter 不验证“这个 Babel 邻居正是 announcement 的 owner”。
 | 控制面交叉审计 | daemon 定期从 `birdc show route all` 读取路由，通过 Router-ID + `routing/netns` 反推 zone，验证前缀权限 | ✅ |
 | BIRD per-peer / Router-ID filter | 当前 BIRD 2.x filter 语言未暴露 `babel_router_id`，实时来源验证不可行 | — |
 
-直接 per-peer import filter 不可行的根本原因是 Babel 的距离向量传播：A 从 B 学到 C 的路由时，B 只是转发者，filter 若按 B 的权限拒绝就会破坏全网可达性。因此 Phase 5.7 之后的安全模型保持为：BIRD 负责边界过滤，Higgs daemon 负责来源审计。
+直接 per-peer import filter 不可行的根本原因是 Babel 的距离向量传播：A 从 B 学到 C 的路由时，B 只是转发者，filter 若按 B 的权限拒绝就会破坏全网可达性。因此 Phase 5.7 之后的安全模型保持为：BIRD 负责边界过滤，Photon daemon 负责来源审计。
 
 ---
 
@@ -348,14 +348,14 @@ Import filter 不验证“这个 Babel 邻居正是 announcement 的 owner”。
 
 ### 6.1 何时需要 upstream
 
-overlay 与 BIRD 通常位于独立 mesh netns，例如 `h2`。host 上的容器、服务进程或另一个 namespace 若要访问 mesh 前缀，就需要一个明确的出入口。`routing.instances[].upstream` 用一对 veth 连接两个网络边界：
+overlay 与 BIRD 通常位于独立 mesh netns，例如 `photon`。host 上的容器、服务进程或另一个 namespace 若要访问 mesh 前缀，就需要一个明确的出入口。`routing.instances[].upstream` 用一对 veth 连接两个网络边界：
 
 ```text
-host / external netns                         mesh netns (h2)
+host / external netns                         mesh netns (photon)
 ─────────────────────                         ───────────────
 services / containers                         BIRD + Babel + overlay tunnels
        │                                                  │
- hgv2mesh  ───────────── veth pair ─────────────  hgv2host
+ phv2mesh  ───────────── veth pair ─────────────  phv2host
        │                                                  │
 external kernel routes                           BIRD static / Babel interface
 ```
@@ -371,16 +371,16 @@ routing:
       netns: default
       provider: bird
       mode: managed
-      interface_pattern: hgs*
+      interface_pattern: phx*
       upstream:
         mode: static
         create_veth: true
         mesh:
-          interface: hgv2host
+          interface: phv2host
           ipv4_ll: 169.254.254.1/30
           ipv6_ll: fe80::a1:1/64
         external:
-          interface: hgv2mesh
+          interface: phv2mesh
           # netns: ""        # 省略/空 = init host netns
           ipv4_ll: 169.254.254.2/30
           ipv6_ll: fe80::a1:2/64
@@ -390,24 +390,24 @@ routing:
 
 | 字段 | 默认值 |
 |---|---|
-| `mesh.interface` | `hgv2host` |
-| `external.interface` | `hgv2mesh` |
+| `mesh.interface` | `phv2host` |
+| `external.interface` | `phv2mesh` |
 | `mesh.ipv4_ll` / `external.ipv4_ll` | `169.254.254.1/30` / `169.254.254.2/30` |
 | `mesh.ipv6_ll` / `external.ipv6_ll` | `fe80::a1:1/64` / `fe80::a1:2/64` |
 | `create_veth` | `true` |
 | `mode` | `static` |
 | `install_source_addresses` | static 模式为 `true`；external 模式为 `false` |
 
-`external.netns` 可引用另一个 namespace；省略/空表示 init/main host netns。`create_veth: false` 时 Higgs 仍按配置使用该接口，但管理员必须保证 veth、地址、up 状态与两端 namespace 已准备好。
+`external.netns` 可引用另一个 namespace；省略/空表示 init/main host netns。`create_veth: false` 时 Photon 仍按配置使用该接口，但管理员必须保证 veth、地址、up 状态与两端 namespace 已准备好。
 
-接口名前缀按资源角色分离：`hgs*` 为 StrongSwan/XFRM，`hgw*` 为 WireGuard device，`hgg*` 为 WireGuard 路径上的 GRE/Babel interface，`hgv*` 为 veth。这样 tunnel 的通配规则不会误匹配 upstream veth。所有名字必须满足 Linux 15 字符限制。
+接口名前缀按资源角色分离：`phx*` 为 StrongSwan/XFRM，`phw*` 为 WireGuard device，`phg*` 为 WireGuard 路径上的 GRE/Babel interface，`phv*` 为 veth。这样 tunnel 的通配规则不会误匹配 upstream veth。所有名字必须满足 Linux 15 字符限制。
 
 ### 6.3 `static` 模式
 
-默认模式。Higgs 会：
+默认模式。Photon 会：
 
 1. 在 `create_veth: true` 时创建或修复 veth pair、配置两端 link-local 地址并启用接口 forwarding；
-2. 让 mesh 内 BIRD 在 routing 配置给出的精确 upstream 接口（默认 `hgv2host`）上运行 Babel；此接口**不是** tunnel，不使用 BIRD `type tunnel`；
+2. 让 mesh 内 BIRD 在 routing 配置给出的精确 upstream 接口（默认 `phv2host`）上运行 Babel；此接口**不是** tunnel，不使用 BIRD `type tunnel`；
 3. 对本机 `assigned_to == managed_zone` 的前缀，在 mesh 内生成 BIRD static route，下一跳为 external 端对应地址族的 link-local，并用 `mesh.interface` 固定出口；
 4. 在 external 一侧为已授权的远端 announcement 写 kernel static route，下一跳为 mesh 端 link-local 地址，并排除本机自己持有的 assignment；
 5. 在 external 接口上配置本机非 shared assignment 的首个可用地址，供这些回程路由选择 source address；shared/Anycast assignment 只保留为服务路由，不配置到 veth。
@@ -416,9 +416,9 @@ routing:
 
 ### 6.4 `external` 模式
 
-`external` 模式让 Higgs 保留 mesh 侧的 BIRD/Babel veth interface，但不生成本机 static route，也不在 external 一侧写 kernel route。它适合 host 或另一个 namespace 已由管理员运行 BIRD/FRR/babeld，或有自定义策略路由的场景。路由、转发和 firewall 都由管理员负责。
+`external` 模式让 Photon 保留 mesh 侧的 BIRD/Babel veth interface，但不生成本机 static route，也不在 external 一侧写 kernel route。它适合 host 或另一个 namespace 已由管理员运行 BIRD/FRR/babeld，或有自定义策略路由的场景。路由、转发和 firewall 都由管理员负责。
 
-external 模式可显式设置 `install_source_addresses: true`，让 Higgs 在自己管理的 external veth endpoint 上安装从本节点非 shared assignment 派生的源地址。shared/Anycast assignment 不会安装到 veth。地址保留 assignment 的 prefix length，因此会在 external endpoint 上生成对应的 connected route；管理员必须移除其他接口上冲突的 connected prefix。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
+external 模式可显式设置 `install_source_addresses: true`，让 Photon 在自己管理的 external veth endpoint 上安装从本节点非 shared assignment 派生的源地址。shared/Anycast assignment 不会安装到 veth。地址保留 assignment 的 prefix length，因此会在 external endpoint 上生成对应的 connected route；管理员必须移除其他接口上冲突的 connected prefix。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
 
 ### 6.5 边界
 
@@ -450,27 +450,27 @@ ipam:
 
 ```bash
 # IPAM 管理
-higgs route ipam pool create <zone> <prefix> --delegated-to <zone>
-higgs route ipam assign <zone> <prefix> --to <zone> [--shared --tag <tag>]
-higgs route ipam revoke assignment <zone> <prefix> [--to <zone>]
-higgs route ipam revoke pool <zone> <prefix>
+photon route ipam pool create <zone> <prefix> --delegated-to <zone>
+photon route ipam assign <zone> <prefix> --to <zone> [--shared --tag <tag>]
+photon route ipam revoke assignment <zone> <prefix> [--to <zone>]
+photon route ipam revoke pool <zone> <prefix>
 
 # Route 管理
-higgs route announce <zone> <prefix>
-higgs route withdraw <zone> <prefix>
+photon route announce <zone> <prefix>
+photon route withdraw <zone> <prefix>
 
 # 诊断
-higgs route ipam get <addr-or-prefix>
-higgs route ipam mine
-higgs debug routing status
-higgs debug routing routes
-higgs debug routing routes <prefix>
-higgs debug routing bird status
-higgs debug routing bird interface
-higgs debug routing bird filter
-higgs debug routing bird route
-higgs debug routing ip route
-higgs debug routing reload
+photon route ipam get <addr-or-prefix>
+photon route ipam mine
+photon debug routing status
+photon debug routing routes
+photon debug routing routes <prefix>
+photon debug routing bird status
+photon debug routing bird interface
+photon debug routing bird filter
+photon debug routing bird route
+photon debug routing ip route
+photon debug routing reload
 ```
 
 `routing routes` 以 gossip 中的 route announcement 和 IPAM 授权记录为主，并在 daemon 在线时附带
@@ -484,7 +484,7 @@ BIRD RIB 交叉视图；它不是 netns 的内核路由表。`routing bird route
 
 优先按以下顺序：
 
-1. assignment / announcement 是否在 `AuthorizedRouteSet`（`higgs debug routing routes`）。
+1. assignment / announcement 是否在 `AuthorizedRouteSet`（`photon debug routing routes`）。
 2. tunnel 或 veth 接口是否 up、地址是否正确。
 3. BIRD 邻居是否建立（`show babel neighbors`）。
 4. 内核路由是否安装（`show route all`、`ip route`）。
@@ -500,11 +500,11 @@ BIRD 正常不代表前缀已获授权；record 已获授权也不代表本机�
 | record schema、canonical key | `pkg/routing/records.go` |
 | pool / assignment / route authorization | `pkg/routing/authorization.go` |
 | record type capability 验证 | `pkg/crypto/sign.go` |
-| CLI IPAM / route 写入 | `app/higgs/ipam.go`、`app/higgs/route.go` |
-| routing reconcile、auto announcement、external routes | `app/higgs/routing_reconcile.go`、`app/higgs/routing_upstream_routes.go` |
+| CLI IPAM / route 写入 | `app/photon/ipam.go`、`app/photon/route.go` |
+| routing reconcile、auto announcement、external routes | `app/photon/routing_reconcile.go`、`app/photon/routing_upstream_routes.go` |
 | BIRD config、filter、process、veth | `pkg/routing/bird/` |
 | Router-ID 派生 | `pkg/routing/bird/routerid.go` |
 | BIRD 版本预检 | `pkg/routing/bird/preflight.go` |
-| `routing/netns` record 发布 | `app/higgs/routing_reconcile.go` |
+| `routing/netns` record 发布 | `app/photon/routing_reconcile.go` |
 
 旧的 Phase 设计文档已被本文替代；若发现实现与本文不一致，优先修实现，再更新本文。

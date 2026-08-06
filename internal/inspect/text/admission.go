@@ -3,7 +3,7 @@ package text
 import (
 	"io"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func WriteAdmissionDiagnosis(w io.Writer, d inspect.AdmissionDiagnosis) error {
@@ -24,7 +24,7 @@ func WriteAdmissionDiagnosis(w io.Writer, d inspect.AdmissionDiagnosis) error {
 	out.LineIf(d.LastAdoptionError != "", "last_adoption_error: %s", d.LastAdoptionError)
 	if d.JoinRequestB64 != "" {
 		out.Linef("join_request: %s", d.JoinRequestB64)
-		out.Linef("join_hint: %s", "higgs gossip delegate issue <join_request> (on parent zone admin)")
+		out.Linef("join_hint: %s", "photon gossip delegate issue <join_request> (on parent zone admin)")
 	}
 	out.Linef("boundary: auto-join only completes identity materialization; TransportLink presence depends on local overlay/link group config, peer ipsec/* records, peer MeshPolicy and provider apply state")
 	return out.Err()

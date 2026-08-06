@@ -3,7 +3,7 @@ package inspect
 import (
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 const (

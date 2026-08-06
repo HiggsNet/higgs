@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestWriteEndpointsDebug(t *testing.T) {

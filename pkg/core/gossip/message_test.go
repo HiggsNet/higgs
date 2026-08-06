@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -191,13 +191,13 @@ func TestZoneDigestsAreStable(t *testing.T) {
 func TestApplySnapshotVerifiesAndMergesWholeZone(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 
 	v1 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix())
 	if err := source.PutAt(v1, now); err != nil {
 		t.Fatalf("PutAt(v1): %v", err)
 	}
-	v2 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-b"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
+	v2 := signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-b"), 2, photoncrypto.RecordHash(v1), now.Unix()+1)
 	if err := source.PutAt(v2, now); err != nil {
 		t.Fatalf("PutAt(v2): %v", err)
 	}
@@ -261,7 +261,7 @@ func TestApplySnapshotDelegationFailureLeavesNetworkUnchanged(t *testing.T) {
 	childAuthority := zone.ZoneAuthority{
 		Zone:      "node-a.catofes.",
 		Epoch:     1,
-		Threshold: higgscrypto.SupportedThreshold,
+		Threshold: photoncrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
 			Key: childPublicKey,
 			Capabilities: []zone.Capability{{
@@ -274,7 +274,7 @@ func TestApplySnapshotDelegationFailureLeavesNetworkUnchanged(t *testing.T) {
 		Scope:     zone.DelegationScopeDirectChild,
 		Authority: childAuthority,
 	}
-	if err := higgscrypto.SignDelegation(delegation, "catofes.", zonePrivateKey); err != nil {
+	if err := photoncrypto.SignDelegation(delegation, "catofes.", zonePrivateKey); err != nil {
 		t.Fatalf("SignDelegation(child): %v", err)
 	}
 	delegation.Signature[0] ^= 0xff
@@ -304,7 +304,7 @@ func TestApplySnapshotRevocationFailureLeavesNetworkUnchanged(t *testing.T) {
 		Reason:                "test",
 		RevokedAt:             now.Unix(),
 	}
-	if err := higgscrypto.SignDelegationRevocation(revocation, "catofes.", zonePrivateKey); err != nil {
+	if err := photoncrypto.SignDelegationRevocation(revocation, "catofes.", zonePrivateKey); err != nil {
 		t.Fatalf("SignDelegationRevocation(child): %v", err)
 	}
 	revocation.Signature[0] ^= 0xff
@@ -326,7 +326,7 @@ func TestApplySnapshotRevocationFailureLeavesNetworkUnchanged(t *testing.T) {
 func TestApplySnapshotRecordFailureAfterSuccessLeavesNetworkUnchanged(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePrivateKey := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	first := signedRecord(t, zonePrivateKey, "catofes.", "a-valid", []byte("first"), 1, nil, now.Unix())
 	if err := source.PutAt(first, now); err != nil {
 		t.Fatalf("PutAt(first): %v", err)
@@ -354,7 +354,7 @@ func TestApplySnapshotRecordFailureAfterSuccessLeavesNetworkUnchanged(t *testing
 func TestApplySnapshotSkipsStaleAndConflictingRecords(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePrivateKey := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	stale := signedRecord(t, zonePrivateKey, "catofes.", "stale", []byte("remote-v1"), 1, nil, now.Unix())
 	conflict := signedRecord(t, zonePrivateKey, "catofes.", "conflict", []byte("remote"), 1, nil, now.Unix())
 	if err := source.PutAt(stale, now); err != nil {
@@ -369,9 +369,9 @@ func TestApplySnapshotSkipsStaleAndConflictingRecords(t *testing.T) {
 	}
 
 	target := cloneNetworkState(source)
-	target.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	target.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	targetStaleV1 := signedRecord(t, zonePrivateKey, "catofes.", "stale", []byte("local-v1"), 1, nil, now.Unix())
-	targetStaleV2 := signedRecord(t, zonePrivateKey, "catofes.", "stale", []byte("local-v2"), 2, higgscrypto.RecordHash(targetStaleV1), now.Unix()+1)
+	targetStaleV2 := signedRecord(t, zonePrivateKey, "catofes.", "stale", []byte("local-v2"), 2, photoncrypto.RecordHash(targetStaleV1), now.Unix()+1)
 	target.Zones["catofes."].Records["stale"] = targetStaleV2
 	target.Zones["catofes."].Records["conflict"] = signedRecord(t, zonePrivateKey, "catofes.", "conflict", []byte("local"), 1, nil, now.Unix())
 
@@ -393,17 +393,17 @@ func TestApplySnapshotSkipsStaleAndConflictingRecords(t *testing.T) {
 func TestApplySnapshotSuccessInstallsDetachedCandidate(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePrivateKey := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	v1 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v1"), 1, nil, now.Unix())
 	if err := source.PutAt(v1, now); err != nil {
 		t.Fatalf("PutAt(v1): %v", err)
 	}
 	target := cloneNetworkState(source)
-	target.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	target.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	target.Zones[zone.RootZone].RecordHistory = nil
 	previousTargetZone := target.Zones["catofes."]
 
-	v2 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v2"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
+	v2 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v2"), 2, photoncrypto.RecordHash(v1), now.Unix()+1)
 	if err := source.PutAt(v2, now); err != nil {
 		t.Fatalf("PutAt(v2): %v", err)
 	}
@@ -439,7 +439,7 @@ func TestApplySnapshotSuccessInstallsDetachedCandidate(t *testing.T) {
 func TestApplySnapshotReturnsTargetZoneCOWCandidate(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePrivateKey := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	record := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("remote"), 1, nil, now.Unix())
 	if err := source.PutAt(record, now); err != nil {
 		t.Fatalf("PutAt(record): %v", err)
@@ -488,7 +488,7 @@ func TestApplySnapshotReturnsTargetZoneCOWCandidate(t *testing.T) {
 func TestApplySnapshotSequentialTargetZoneCOW(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePrivateKey := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	v1 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v1"), 1, nil, now.Unix())
 	if err := source.PutAt(v1, now); err != nil {
 		t.Fatalf("PutAt(v1): %v", err)
@@ -497,7 +497,7 @@ func TestApplySnapshotSequentialTargetZoneCOW(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot(v1): %v", err)
 	}
-	v2 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v2"), 2, higgscrypto.RecordHash(v1), now.Unix()+1)
+	v2 := signedRecord(t, zonePrivateKey, "catofes.", "identity", []byte("v2"), 2, photoncrypto.RecordHash(v1), now.Unix()+1)
 	if err := source.PutAt(v2, now); err != nil {
 		t.Fatalf("PutAt(v2): %v", err)
 	}
@@ -533,7 +533,7 @@ func TestApplySnapshotSequentialTargetZoneCOW(t *testing.T) {
 func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, _, zonePriv := testNetworkWithKeys(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	nodePub, nodePriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey(node): %v", err)
@@ -541,7 +541,7 @@ func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 	nodeAuthority := &zone.ZoneAuthority{
 		Zone:      "node-b.catofes.",
 		Epoch:     1,
-		Threshold: higgscrypto.SupportedThreshold,
+		Threshold: photoncrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
 			Key: nodePub,
 			Capabilities: []zone.Capability{{
@@ -554,7 +554,7 @@ func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 		Scope:     zone.DelegationScopeDirectChild,
 		Authority: *nodeAuthority,
 	}
-	if err := higgscrypto.SignDelegation(delegation, "catofes.", zonePriv); err != nil {
+	if err := photoncrypto.SignDelegation(delegation, "catofes.", zonePriv); err != nil {
 		t.Fatalf("SignDelegation(node-b): %v", err)
 	}
 	source.Zones["catofes."].Delegations["node-b.catofes."] = delegation
@@ -579,7 +579,7 @@ func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); err != nil {
 		t.Fatalf("ApplySnapshot: %v", err)
 	}
-	if err := higgscrypto.VerifyChain(target, "node-b.catofes.", now); err != nil {
+	if err := photoncrypto.VerifyChain(target, "node-b.catofes.", now); err != nil {
 		t.Fatalf("VerifyChain(node-b): %v", err)
 	}
 }
@@ -587,7 +587,7 @@ func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, rootPriv, _ := testNetworkWithKeys(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 
 	delegation := source.Zones[zone.RootZone].Delegations["catofes."]
 	revocation := &zone.DelegationRevocation{
@@ -598,7 +598,7 @@ func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 		Reason:                "compromised",
 		RevokedAt:             now.Unix(),
 	}
-	if err := higgscrypto.SignDelegationRevocation(revocation, zone.RootZone, rootPriv); err != nil {
+	if err := photoncrypto.SignDelegationRevocation(revocation, zone.RootZone, rootPriv); err != nil {
 		t.Fatalf("SignDelegationRevocation: %v", err)
 	}
 	source.Zones[zone.RootZone].Revocations["catofes."] = revocation
@@ -619,7 +619,7 @@ func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 	if !target.IsZoneRevoked("catofes.", now) {
 		t.Fatalf("catofes. was not marked revoked")
 	}
-	if err := higgscrypto.VerifyChain(target, "catofes.", now); !errors.Is(err, zone.ErrZoneRevoked) {
+	if err := photoncrypto.VerifyChain(target, "catofes.", now); !errors.Is(err, zone.ErrZoneRevoked) {
 		t.Fatalf("VerifyChain = %v, want ErrZoneRevoked", err)
 	}
 }
@@ -627,7 +627,7 @@ func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 func TestRevokedZoneEndpointsAreNotDiscovered(t *testing.T) {
 	now := time.Unix(1000, 0)
 	ns, rootPriv, zonePriv := testNetworkWithKeys(t)
-	ns.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	ns.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	value := []byte(`{"endpoints":[{"address":"192.0.2.10","port":33434,"protocol":"udp"}],"updated_at":1000}`)
 	record := signedRecord(t, zonePriv, "catofes.", EndpointRecordKeyUDP, value, 1, nil, now.Unix())
 	if err := ns.PutAt(record, now); err != nil {
@@ -645,7 +645,7 @@ func TestRevokedZoneEndpointsAreNotDiscovered(t *testing.T) {
 		Reason:                "retired",
 		RevokedAt:             now.Unix(),
 	}
-	if err := higgscrypto.SignDelegationRevocation(revocation, zone.RootZone, rootPriv); err != nil {
+	if err := photoncrypto.SignDelegationRevocation(revocation, zone.RootZone, rootPriv); err != nil {
 		t.Fatalf("SignDelegationRevocation: %v", err)
 	}
 	ns.Zones[zone.RootZone].Revocations["catofes."] = revocation
@@ -657,7 +657,7 @@ func TestRevokedZoneEndpointsAreNotDiscovered(t *testing.T) {
 func TestApplySnapshotRejectsRecordLimit(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	if err := source.PutAt(signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix()), now); err != nil {
 		t.Fatalf("PutAt(identity): %v", err)
 	}
@@ -689,7 +689,7 @@ func TestApplySnapshotRejectsRecordLimit(t *testing.T) {
 func TestApplySnapshotAcceptsAndRejectsByteBoundary(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)
-	source.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	if err := source.PutAt(signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix()), now); err != nil {
 		t.Fatalf("PutAt(identity): %v", err)
 	}
@@ -739,7 +739,7 @@ type capturedNetworkState struct {
 
 func snapshotAtomicityTarget(source *zone.NetworkState) *zone.NetworkState {
 	target := cloneNetworkState(source)
-	target.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	target.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	target.GlobalRoot = []byte("global-root")
 	target.Zones["catofes."].MerkleRoot = []byte("zone-root")
 	target.Zones["catofes."].RecordHistory["local"] = []*zone.Record{{
@@ -802,7 +802,7 @@ func testNetworkWithKeys(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey, 
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, &zone.ZoneAuthority{
 		Zone:      zone.RootZone,
 		Epoch:     1,
-		Threshold: higgscrypto.SupportedThreshold,
+		Threshold: photoncrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
 			Key: rootPub,
 			Capabilities: []zone.Capability{{
@@ -813,7 +813,7 @@ func testNetworkWithKeys(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey, 
 	authority := &zone.ZoneAuthority{
 		Zone:      "catofes.",
 		Epoch:     1,
-		Threshold: higgscrypto.SupportedThreshold,
+		Threshold: photoncrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
 			Key: zonePub,
 			Capabilities: []zone.Capability{{
@@ -827,7 +827,7 @@ func testNetworkWithKeys(t *testing.T) (*zone.NetworkState, ed25519.PrivateKey, 
 		Scope:     zone.DelegationScopeDirectChild,
 		Authority: *authority,
 	}
-	if err := higgscrypto.SignDelegation(delegation, zone.RootZone, rootPriv); err != nil {
+	if err := photoncrypto.SignDelegation(delegation, zone.RootZone, rootPriv); err != nil {
 		t.Fatalf("SignDelegation: %v", err)
 	}
 	ns.Zones[zone.RootZone].Delegations["catofes."] = delegation
@@ -845,7 +845,7 @@ func signedRecord(t *testing.T, priv ed25519.PrivateKey, path zone.ZonePath, key
 		PrevHash:  prev,
 		Timestamp: ts,
 	}
-	if err := higgscrypto.SignRecord(record, priv); err != nil {
+	if err := photoncrypto.SignRecord(record, priv); err != nil {
 		t.Fatalf("SignRecord: %v", err)
 	}
 	return record

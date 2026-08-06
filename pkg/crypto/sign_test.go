@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 func TestSignAndVerifyRecord(t *testing.T) {
@@ -47,6 +47,49 @@ func TestSignAndVerifyRecord(t *testing.T) {
 	record.Value = []byte("tampered")
 	if err := VerifyRecord(record, authority, time.Unix(123, 0)); err == nil {
 		t.Fatalf("VerifyRecord accepted tampered value")
+	}
+}
+
+func TestVerifyRecordRejectsPrePhotonDomainSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	authority := &zone.ZoneAuthority{
+		Zone:      "node1.catofes.",
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{
+			Key: pub,
+			Capabilities: []zone.Capability{{
+				Permissions: []zone.Permission{zone.PermWrite},
+			}},
+		}},
+	}
+	record := &zone.Record{
+		Zone:      "node1.catofes.",
+		Key:       "identity",
+		Type:      "node.identity",
+		Value:     []byte("node1"),
+		Version:   1,
+		Timestamp: 123,
+		ValueHash: Hash([]byte("node1")),
+		SignedBy:  append([]byte(nil), pub...),
+	}
+	var legacy builder
+	legacy.str("higgs.record.v1")
+	legacy.str(record.Zone.String())
+	legacy.str(record.Key)
+	legacy.str(record.Type)
+	legacy.bytes(record.ValueHash)
+	legacy.u64(record.Version)
+	legacy.bytes(record.PrevHash)
+	legacy.i64(record.Timestamp)
+	legacy.bytes(KeyID(record.SignedBy))
+	record.Signature = ed25519.Sign(priv, legacy.out)
+
+	if err := VerifyRecord(record, authority, time.Unix(123, 0)); err == nil {
+		t.Fatal("VerifyRecord accepted a pre-Photon domain signature")
 	}
 }
 

@@ -6,8 +6,8 @@
 set -euo pipefail
 
 go_cmd="${GO:-go}"
-go_cache="${GOCACHE:-/tmp/higgs-gocache}"
-go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
+go_cache="${GOCACHE:-/tmp/photon-gocache}"
+go_mod_cache="${GOMODCACHE:-/tmp/photon-gomodcache}"
 wg_binary="${WG:-}"
 if [ -z "$wg_binary" ]; then
   wg_binary="$(command -v wg || true)"
@@ -19,7 +19,7 @@ fi
 
 docs/scripts/bird-babel-preflight.sh
 
-probe_ns="higgs-wggre-preflight-$$"
+probe_ns="photon-wggre-preflight-$$"
 cleanup() {
   ip netns delete "$probe_ns" >/dev/null 2>&1 || true
 }
@@ -31,8 +31,8 @@ ip netns exec "$probe_ns" "$wg_binary" show wg-probe >/dev/null
 cleanup
 trap - EXIT
 
-HIGGS_WG_GRE_SMOKE=1 \
-  HIGGS_WG_BINARY="$wg_binary" \
+PHOTON_WG_GRE_SMOKE=1 \
+  PHOTON_WG_BINARY="$wg_binary" \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \

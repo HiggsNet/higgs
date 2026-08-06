@@ -76,13 +76,13 @@ func TestBuildDesiredStateHostEndpointACLIPScope(t *testing.T) {
 
 func TestBuildDesiredState_OverlayInput(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID:                "higgstesth2",
-		NetNS:             "higgstesth2",
+		ID:                "photontesth2",
+		NetNS:             "photontesth2",
 		Enabled:           true,
 		Mode:              ModeManaged,
 		Backend:           BackendAuto,
 		DefaultPolicy:     DefaultPolicyDrop,
-		XFRMTunnelPattern: "hgs*",
+		XFRMTunnelPattern: "phx*",
 	}
 	input := FirewallPolicyInput{
 		LocalAssigned:      []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -127,18 +127,18 @@ func TestBuildDesiredState_OverlayInput(t *testing.T) {
 
 func TestBuildDesiredStateUsesExactRuntimeInterfaces(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID:                "h2",
-		NetNS:             "h2",
+		ID:                "photon",
+		NetNS:             "photon",
 		Enabled:           true,
 		Mode:              ModeManaged,
 		DefaultPolicy:     DefaultPolicyDrop,
-		XFRMTunnelPattern: "hgs*",
+		XFRMTunnelPattern: "phx*",
 	}
 	input := FirewallPolicyInput{
 		LocalAssigned:      []netip.Prefix{mustPrefix(t, "2001:db8:1::/64")},
 		MeshAuthorized:     []netip.Prefix{mustPrefix(t, "2001:db8::/48")},
-		LiveInterfaces:     []string{"hgs22222222", "hgs11111111", "hgs11111111"},
-		UpstreamInterfaces: []string{"hgv2host"},
+		LiveInterfaces:     []string{"phx22222222", "phx11111111", "phx11111111"},
+		UpstreamInterfaces: []string{"phv2host"},
 	}
 	desired, err := BuildDesiredState(spec, input)
 	if err != nil {
@@ -155,26 +155,26 @@ func TestBuildDesiredStateUsesExactRuntimeInterfaces(t *testing.T) {
 		switch rule.Comment {
 		case "non-transit drop":
 			nonTransit++
-			if rule.IfaceIn != "hgs*" || rule.IfaceOut != "hgs*" {
-				t.Fatalf("iptables XFRM compatibility selectors = (%q, %q), want hgs* in both directions", rule.IfaceIn, rule.IfaceOut)
+			if rule.IfaceIn != "phx*" || rule.IfaceOut != "phx*" {
+				t.Fatalf("iptables XFRM compatibility selectors = (%q, %q), want phx* in both directions", rule.IfaceIn, rule.IfaceOut)
 			}
-			if slices.Contains(rule.IfacesIn, "hgv2host") || slices.Contains(rule.IfacesOut, "hgv2host") {
+			if slices.Contains(rule.IfacesIn, "phv2host") || slices.Contains(rule.IfacesOut, "phv2host") {
 				t.Fatalf("upstream veth classified as XFRM: %+v", rule)
 			}
 		case "xfrm to upstream local assigned":
 			toUpstream++
-			if rule.IfaceIn != "hgs*" || rule.IfaceOut != "hgv2host" {
+			if rule.IfaceIn != "phx*" || rule.IfaceOut != "phv2host" {
 				t.Fatalf("iptables xfrm-to-upstream selectors = (%q, %q)", rule.IfaceIn, rule.IfaceOut)
 			}
-			if !slices.Equal(rule.IfacesOut, []string{"hgv2host"}) {
+			if !slices.Equal(rule.IfacesOut, []string{"phv2host"}) {
 				t.Fatalf("xfrm-to-upstream rule = %+v", rule)
 			}
 		case "upstream to xfrm mesh authorized":
 			fromUpstream++
-			if rule.IfaceIn != "hgv2host" || rule.IfaceOut != "hgs*" {
+			if rule.IfaceIn != "phv2host" || rule.IfaceOut != "phx*" {
 				t.Fatalf("iptables upstream-to-xfrm selectors = (%q, %q)", rule.IfaceIn, rule.IfaceOut)
 			}
-			if !slices.Equal(rule.IfacesIn, []string{"hgv2host"}) {
+			if !slices.Equal(rule.IfacesIn, []string{"phv2host"}) {
 				t.Fatalf("upstream-to-xfrm rule = %+v", rule)
 			}
 		}
@@ -186,12 +186,12 @@ func TestBuildDesiredStateUsesExactRuntimeInterfaces(t *testing.T) {
 
 func TestBuildDesiredState_TransitEnabled(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID:                "higgstesth2",
-		NetNS:             "higgstesth2",
+		ID:                "photontesth2",
+		NetNS:             "photontesth2",
 		Enabled:           true,
 		Mode:              ModeManaged,
 		DefaultPolicy:     DefaultPolicyDrop,
-		XFRMTunnelPattern: "hgs*",
+		XFRMTunnelPattern: "phx*",
 	}
 	input := FirewallPolicyInput{
 		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -217,8 +217,8 @@ func TestBuildDesiredState_TransitEnabled(t *testing.T) {
 
 func TestBuildDesiredState_TransitAllowFilters(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	// Allow only 10.42.0.0/24, mesh has 10.42 and 10.43.
 	input := FirewallPolicyInput{
@@ -375,7 +375,7 @@ func TestBuildDesiredState_HostIngressListenAddrsBinding(t *testing.T) {
 
 func TestBuildDesiredState_Disabled(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID:   "higgstesth2",
+		ID:   "photontesth2",
 		Mode: ModeDisabled,
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
@@ -397,8 +397,8 @@ func TestBuildDesiredState_MissingID(t *testing.T) {
 
 func TestBuildDesiredState_LocalServices(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 		LocalServices: []LocalService{
 			{Proto: "tcp", Port: 8080},
 		},
@@ -423,8 +423,8 @@ func TestBuildDesiredState_LocalServices(t *testing.T) {
 
 func TestDesiredStateHash_Stable(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	input := FirewallPolicyInput{
 		LocalAssigned: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -443,8 +443,8 @@ func TestDesiredStateHash_Stable(t *testing.T) {
 
 func TestDesiredStateHash_ChangesOnPrefixChange(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	d1, _ := BuildDesiredState(spec, FirewallPolicyInput{
 		LocalAssigned: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -458,7 +458,7 @@ func TestDesiredStateHash_ChangesOnPrefixChange(t *testing.T) {
 }
 
 func TestOwnerToken_Stable(t *testing.T) {
-	spec := FirewallInstanceSpec{ID: "higgstesth2", NetNS: "higgstesth2", OwnerPrefix: "higgs"}
+	spec := FirewallInstanceSpec{ID: "photontesth2", NetNS: "photontesth2", OwnerPrefix: "photon"}
 	t1 := OwnerToken(spec)
 	t2 := OwnerToken(spec)
 	if t1 != t2 {
@@ -470,7 +470,7 @@ func TestOwnerToken_Stable(t *testing.T) {
 }
 
 func TestOwnerToken_DifferentInstances(t *testing.T) {
-	a := OwnerToken(FirewallInstanceSpec{ID: "higgstesth2", NetNS: "higgstesth2"})
+	a := OwnerToken(FirewallInstanceSpec{ID: "photontesth2", NetNS: "photontesth2"})
 	b := OwnerToken(FirewallInstanceSpec{ID: "host", NetNS: "host", IsHost: true})
 	if a == b {
 		t.Error("different instances should have different owner tokens")
@@ -479,7 +479,7 @@ func TestOwnerToken_DifferentInstances(t *testing.T) {
 
 func TestDesiredObjects_Overlay(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
 	}
 	input := FirewallPolicyInput{
 		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -509,7 +509,7 @@ func TestDesiredObjects_Overlay(t *testing.T) {
 
 func TestPlanDiff_CreateAdoptDelete(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
 	}
 	input := FirewallPolicyInput{
 		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -519,11 +519,11 @@ func TestPlanDiff_CreateAdoptDelete(t *testing.T) {
 	// Observed has a matching table (adopt) and a stale extra chain (delete).
 	observed := FirewallObservedState{
 		Objects: []FirewallObjectRef{
-			{Kind: "table", Family: "inet", Name: "higgs_higgstesth2"},
-			{Kind: "chain", Family: "inet", Name: "higgs_higgstesth2_stale_extra"},
+			{Kind: "table", Family: "inet", Name: "photon_photontesth2"},
+			{Kind: "chain", Family: "inet", Name: "photon_photontesth2_stale_extra"},
 		},
 	}
-	plan := PlanDiff("higgstesth2", desired, observed)
+	plan := PlanDiff("photontesth2", desired, observed)
 
 	createCount := 0
 	adoptCount := 0
@@ -552,7 +552,7 @@ func TestPlanDiff_CreateAdoptDelete(t *testing.T) {
 func TestDryRunDriver_PlanApply(t *testing.T) {
 	driver := NewDryRunDriver()
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
 	}
 	input := FirewallPolicyInput{
 		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -619,8 +619,8 @@ func TestResolveBackend(t *testing.T) {
 
 func TestBuildDesiredState_InvalidDropFirst(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
@@ -650,7 +650,7 @@ func TestBuildDesiredState_InvalidDropFirst(t *testing.T) {
 
 func TestBuildDesiredStateExternalDoesNotManageObjects(t *testing.T) {
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "external", NetNS: "h2", Enabled: true, Mode: ModeExternal,
+		ID: "external", NetNS: "photon", Enabled: true, Mode: ModeExternal,
 	}, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
@@ -661,14 +661,14 @@ func TestBuildDesiredStateExternalDoesNotManageObjects(t *testing.T) {
 	if len(desired.InputRules) != 0 || len(desired.ForwardRules) != 0 || len(desired.OutputRules) != 0 {
 		t.Fatalf("external desired rules = %+v, want none", desired)
 	}
-	plan := PlanDiff("external", desired, FirewallObservedState{Objects: []FirewallObjectRef{{Kind: "table", Family: "inet", Name: "higgs_h2"}}})
+	plan := PlanDiff("external", desired, FirewallObservedState{Objects: []FirewallObjectRef{{Kind: "table", Family: "inet", Name: "photon_h2"}}})
 	if len(plan.Actions) != 0 {
 		t.Fatalf("external plan actions = %+v, want none", plan.Actions)
 	}
 }
 
 func TestDesiredStateHashIncludesChainPriorities(t *testing.T) {
-	base := FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged}
+	base := FirewallInstanceSpec{ID: "photon", NetNS: "photon", Mode: ModeManaged}
 	first, err := BuildDesiredState(base, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState default: %v", err)
@@ -686,8 +686,8 @@ func TestDesiredStateHashIncludesChainPriorities(t *testing.T) {
 
 func TestBuildDesiredState_EstablishedRelatedCtState(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
@@ -715,8 +715,8 @@ func TestBuildDesiredState_EstablishedRelatedCtState(t *testing.T) {
 
 func TestBuildDesiredState_RevokedPrefixesExcluded(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	input := FirewallPolicyInput{
 		LocalAssigned:  []netip.Prefix{mustPrefix(t, "10.42.0.0/24"), mustPrefix(t, "10.99.0.0/24")},
@@ -753,8 +753,8 @@ func TestBuildDesiredState_RevokedPrefixesExcluded(t *testing.T) {
 
 func TestBuildDesiredState_RevokedHashChanges(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	base := FirewallPolicyInput{
 		LocalAssigned: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -772,8 +772,8 @@ func TestBuildDesiredState_RevokedHashChanges(t *testing.T) {
 
 func TestBuildDesiredState_TransitDenyPrefixes(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}
 	input := FirewallPolicyInput{
 		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24"), mustPrefix(t, "10.99.0.0/24")},
@@ -801,8 +801,8 @@ func TestBuildDesiredState_TransitDenyPrefixes(t *testing.T) {
 
 func TestBuildDesiredState_DefaultPolicyAccept(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyAccept, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyAccept, XFRMTunnelPattern: "phx*",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {

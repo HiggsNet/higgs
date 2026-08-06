@@ -7,7 +7,7 @@ import (
 
 func TestBirdResponsePreservesObserverSchema(t *testing.T) {
 	got := BirdResponse{
-		Instances:        map[string]any{"hgs-main": map[string]any{"state": "running"}},
+		Instances:        map[string]any{"phx-main": map[string]any{"state": "running"}},
 		LastRoutingError: "bird failed",
 	}
 	data, err := json.Marshal(got)

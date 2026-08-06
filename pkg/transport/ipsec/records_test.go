@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 func TestParseIPsecRecordsAndBuildContactPoints(t *testing.T) {
@@ -367,7 +367,7 @@ func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
 	group := LinkGroupSpec{
 		ID:                "ipsec-main",
 		Name:              "main ipsec overlay",
-		NetNS:             NetNSSpec{Kind: "name", Name: "higgs-ipsec"},
+		NetNS:             NetNSSpec{Kind: "name", Name: "photon-ipsec"},
 		TunnelAddressPool: netip.MustParsePrefix("fd00:1234::/120"),
 		Reconcile: ReconcilePolicy{
 			IntervalSeconds: 30,
@@ -393,7 +393,7 @@ func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
 	if len(normalized.AddressSourceOrder) != len(defaultAddressSourceOrder) {
 		t.Fatalf("address source order = %+v", normalized.AddressSourceOrder)
 	}
-	if normalized.NetNS.Target() != "higgs-ipsec" || normalized.NetNS.Create {
+	if normalized.NetNS.Target() != "photon-ipsec" || normalized.NetNS.Create {
 		t.Fatalf("netns = %+v", normalized.NetNS)
 	}
 	local, peer, err := group.TunnelAddresses(1)
@@ -409,7 +409,7 @@ func TestNewTransportLinkSpecForGroupInheritsGroupBoundary(t *testing.T) {
 	group := LinkGroupSpec{
 		ID:                "ipsec-main",
 		Provider:          ProviderStrongSwan,
-		NetNS:             NetNSSpec{Kind: "path", Path: "/run/netns/higgs-ipsec"},
+		NetNS:             NetNSSpec{Kind: "path", Path: "/run/netns/photon-ipsec"},
 		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
 		MaxPeers:          16,
 		MaxLinksPerPeer:   2,
@@ -444,7 +444,7 @@ func TestNewTransportLinkSpecForGroupInheritsGroupBoundary(t *testing.T) {
 	if spec.PathMode != PathModeFamilyRedundant {
 		t.Fatalf("spec planner fields = %+v", spec)
 	}
-	if spec.NetNS != "/run/netns/higgs-ipsec" {
+	if spec.NetNS != "/run/netns/photon-ipsec" {
 		t.Fatalf("NetNS = %q", spec.NetNS)
 	}
 	if spec.LocalTunnelAddr.String() != "10.44.0.2" || spec.PeerTunnelAddr.String() != "10.44.0.1" {
@@ -648,13 +648,13 @@ func TestDeriveTunnelAddressesSequentialPoolLegacy(t *testing.T) {
 func TestPlanApplyShowsScopedLinkLocalAddress(t *testing.T) {
 	spec := TransportLinkSpec{
 		TransportID:     "ipsec-1",
-		InterfaceName:   "hgs1234",
+		InterfaceName:   "phx1234",
 		XFRMIfID:        1234,
-		NetNS:           "higgstesth2",
+		NetNS:           "photontesth2",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
 	}
-	plan := PlanApply(spec, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	plan := PlanApply(spec, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	var assign *ApplyOperation
 	for i := range plan.Operations {
 		if plan.Operations[i].Action == "assign_address" {
@@ -665,10 +665,10 @@ func TestPlanApplyShowsScopedLinkLocalAddress(t *testing.T) {
 	if assign == nil {
 		t.Fatalf("assign_address operation missing: %+v", plan.Operations)
 	}
-	if !strings.Contains(assign.Detail, "fe80::1%hgs1234") {
+	if !strings.Contains(assign.Detail, "fe80::1%phx1234") {
 		t.Fatalf("assign_address detail %q missing scoped link-local address", assign.Detail)
 	}
-	if !strings.Contains(assign.Detail, "netns=higgstesth2") {
+	if !strings.Contains(assign.Detail, "netns=photontesth2") {
 		t.Fatalf("assign_address detail %q missing netns scope", assign.Detail)
 	}
 }
@@ -789,7 +789,7 @@ func TestShouldInitiateBidirectionalTieBreak(t *testing.T) {
 
 func TestDryRunDriverRecordsApplyOrderInputs(t *testing.T) {
 	driver := &DryRunDriver{}
-	spec := TransportLinkSpec{TransportID: "ipsec-1", InterfaceName: "hgs1"}
+	spec := TransportLinkSpec{TransportID: "ipsec-1", InterfaceName: "phx1"}
 	if err := driver.EnsureNamespace(context.Background(), NetNSSpec{}); err != nil {
 		t.Fatalf("EnsureNamespace: %v", err)
 	}
@@ -816,7 +816,7 @@ func TestApplyTransportLinkRecordsAuditablePlanAndOrder(t *testing.T) {
 		LocalZone:       "node-a.catofes.",
 		PeerZone:        "node-b.catofes.",
 		TransportID:     "ipsec-1",
-		InterfaceName:   "hgs1",
+		InterfaceName:   "phx1",
 		XFRMIfID:        42,
 		NetNS:           DefaultNetNSName,
 		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
@@ -837,7 +837,7 @@ func TestApplyTransportLinkRecordsAuditablePlanAndOrder(t *testing.T) {
 	if len(driver.Namespaces) != 1 || len(driver.Connections) != 1 || len(driver.Interfaces) != 1 || len(driver.Addresses) != 1 {
 		t.Fatalf("driver = %+v", driver)
 	}
-	if driver.Addresses[0] != "hgs1=fd00:1234::1/128" {
+	if driver.Addresses[0] != "phx1=fd00:1234::1/128" {
 		t.Fatalf("address assignment = %+v", driver.Addresses)
 	}
 }
@@ -848,7 +848,7 @@ func TestApplyTransportLinkAssignsLinkLocalPrefixForBabel(t *testing.T) {
 		LocalZone:       "node-a.catofes.",
 		PeerZone:        "node-b.catofes.",
 		TransportID:     "ipsec-1",
-		InterfaceName:   "hgs1",
+		InterfaceName:   "phx1",
 		XFRMIfID:        42,
 		NetNS:           DefaultNetNSName,
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
@@ -856,7 +856,7 @@ func TestApplyTransportLinkAssignsLinkLocalPrefixForBabel(t *testing.T) {
 	if _, err := ApplyTransportLink(context.Background(), driver, driver, spec, NetNSSpec{}); err != nil {
 		t.Fatalf("ApplyTransportLink: %v", err)
 	}
-	if len(driver.Addresses) != 1 || driver.Addresses[0] != "hgs1=fe80::1234/64" {
+	if len(driver.Addresses) != 1 || driver.Addresses[0] != "phx1=fe80::1234/64" {
 		t.Fatalf("address assignment = %+v", driver.Addresses)
 	}
 }
@@ -1010,7 +1010,7 @@ func TestTeardownTransportLinkRecordsOrder(t *testing.T) {
 	spec := TransportLinkSpec{
 		TransportID:   "ipsec-main",
 		PeerZone:      "node-b.catofes.",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 		NetNS:         DefaultNetNSName,
 	}

@@ -6,15 +6,15 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 const (
-	DomainRecord       = "higgs.record.v1"
-	DomainDelegation   = "higgs.delegation.v1"
-	DomainRevocation   = "higgs.delegation-revocation.v1"
-	DomainAuthority    = "higgs.authority.v1"
-	DomainGossip       = "higgs.gossip.v1"
+	DomainRecord       = "photon.record.v1"
+	DomainDelegation   = "photon.delegation.v1"
+	DomainRevocation   = "photon.delegation-revocation.v1"
+	DomainAuthority    = "photon.authority.v1"
+	DomainGossip       = "photon.gossip.v1"
 	SupportedThreshold = uint8(1)
 )
 

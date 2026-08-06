@@ -18,9 +18,9 @@ ARG BUILD_TIME=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X main.buildCommit=${COMMIT} -X main.buildDescribe=${VERSION} -X main.buildDirty=${DIRTY} -X main.buildTime=${BUILD_TIME}" \
-    -o /out/higgs ./app/higgs \
+    -o /out/photon ./app/photon \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath \
-    -o /out/higgs-services ./app/higgs-services
+    -o /out/photon-services ./app/photon-services
 
 # Match the primary native compatibility baseline and its BIRD 2.14 package.
 FROM ubuntu:24.04
@@ -47,13 +47,13 @@ RUN apt-get update \
     && test -n "$bird_minor" \
     && { test "$bird_major" -gt 2 || { test "$bird_major" -eq 2 && test "$bird_minor" -ge 14; }; }
 
-COPY --from=build /out/higgs /usr/local/bin/higgs
-COPY --from=build /out/higgs-services /usr/local/bin/higgs-services
+COPY --from=build /out/photon /usr/local/bin/photon
+COPY --from=build /out/photon-services /usr/local/bin/photon-services
 
-ENV HIGGS_CONFIG=/etc/higgs/config.yaml
+ENV PHOTON_CONFIG=/etc/photon/config.yaml
 ENV PATH="/usr/lib/ipsec:${PATH}"
-VOLUME ["/etc/higgs", "/var/lib/higgs"]
+VOLUME ["/etc/photon", "/var/lib/photon"]
 EXPOSE 33434/udp
 
-ENTRYPOINT ["higgs"]
+ENTRYPOINT ["photon"]
 CMD ["version"]

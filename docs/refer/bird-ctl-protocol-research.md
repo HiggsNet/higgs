@@ -1,6 +1,6 @@
 # BIRD control (ctl) 协议与健康检查/debug 解析调研
 
-> 调研目标：明确 BIRD `birdc` Unix socket 控制协议的返回格式，核对 Higgs 当前在健康检查与 debug 命令中对 BIRD 输出的解析是否存在假设错误、版本相关正则不一致等问题。
+> 调研目标：明确 BIRD `birdc` Unix socket 控制协议的返回格式，核对 Photon 当前在健康检查与 debug 命令中对 BIRD 输出的解析是否存在假设错误、版本相关正则不一致等问题。
 >
 > 环境：BIRD 2.19.1（`/run/current-system/sw/bin/bird`），源码参考 CZ-NIC/bird（当前 shallow clone 为 2.19.0）。
 
@@ -45,9 +45,9 @@ else
     /* 无法识别 */
 ```
 
-> **Higgs 现状**：`pkg/routing/bird/client.go` 的 `completeResponse()` 基本符合该协议：扫描到 `0000 ` 或任意 `XXXX ` 最终行即结束；`stripCodes()` 也能正确去掉 `XXXX-` / `XXXX ` 前缀。协议层本身没有明显问题。
+> **Photon 现状**：`pkg/routing/bird/client.go` 的 `completeResponse()` 基本符合该协议：扫描到 `0000 ` 或任意 `XXXX ` 最终行即结束；`stripCodes()` 也能正确去掉 `XXXX-` / `XXXX ` 前缀。协议层本身没有明显问题。
 
-## 2. 各命令实际输出格式与 Higgs 解析对照
+## 2. 各命令实际输出格式与 Photon 解析对照
 
 以下均为 BIRD 2.19.1 实测输出（使用 `birdc -v` 显示原始码）。
 
@@ -77,7 +77,7 @@ cli_msg(-1011, "Last reconfiguration on %s", tim);
 cli_msg(13, "Daemon is up and running");
 ```
 
-**Higgs 解析**：`parseStatus()` 使用正则提取 `BIRD x.x.x`、`Router ID`、时间戳。与源码一致，**无明显问题**。
+**Photon 解析**：`parseStatus()` 使用正则提取 `BIRD x.x.x`、`Router ID`、时间戳。与源码一致，**无明显问题**。
 
 ### 2.2 `show protocols all`
 
@@ -111,7 +111,7 @@ if (verbose) {
 }
 ```
 
-**Higgs 解析**：
+**Photon 解析**：
 
 - `protocolHeaderRe` 匹配 `Name Proto Table State Since Info`。
 - `protocolRowRe` 按空白分 6 列。
@@ -132,7 +132,7 @@ if (verbose) {
 1003-	10.16.255.8/22 (Preferred, scope site)
      	2408:8207:1852:dd30:43fc:3c79:23a2:fb39/64 (Secondary, scope univ)
      	...
-1001-vlan.5.higgs up (index=3)
+1001-vlan.5.photon up (index=3)
 1001-br-0566fa9804df up (index=5 master=br-0566fa9804df)
 ```
 
@@ -151,9 +151,9 @@ WALK_LIST(a, i->addrs)
 
 注意：**输出没有 `Interface State MTU Link-local` 之类的表头**；第一行直接就是接口名。
 
-**Higgs 解析**：`interfaceHeaderRe = (?im)^\s*(?:Interface|Iface)\s+`，`parseInterfaces()` 在找到该 header 之前会一直 `continue`。由于真实输出没有这样的 header，**`parseInterfaces()` 会返回空列表**。这是一个明确的 bug。
+**Photon 解析**：`interfaceHeaderRe = (?im)^\s*(?:Interface|Iface)\s+`，`parseInterfaces()` 在找到该 header 之前会一直 `continue`。由于真实输出没有这样的 header，**`parseInterfaces()` 会返回空列表**。这是一个明确的 bug。
 
-Higgs 测试里的 `sampleShowInterfaces` 是人工构造的：
+Photon 测试里的 `sampleShowInterfaces` 是人工构造的：
 
 ```text
 1002-Interface  State  MTU  Link-local
@@ -167,13 +167,13 @@ eth0       up     1500 fe80::1
 ```text
 1007-Table master4:
      172.18.0.0/16        unicast [direct1 13:05:41.763] ! (240)
-     	dev br-0566fa9804df
+        dev br-0566fa9804df
 1008-	Type: device univ
 1007-10.16.252.0/22       unicast [direct1 13:05:41.763] ! (240)
-     	dev eth0
+        dev eth0
 1008-	Type: device univ
 1007-2a0d:2904:0:f5f5::e:0/112 unicast [direct1 13:05:41.763] ! (240)
-     	dev vlan.5.higgs
+        dev vlan.5.photon
 1008-	Type: device univ
 ```
 
@@ -193,7 +193,7 @@ if (a->dest == RTD_UNICAST)
     }
 ```
 
-**Higgs 解析**：
+**Photon 解析**：
 
 - `routeLineRe`：`^\s*(\S+?)\s+(?:unicast|multicast)?\s*\[([^\]]+)\]\s*(\*)?\s*\((\d+)(?:/\d+)?\)`
   - 能匹配 `[proto timestamp] * (pref)` 与 `[proto timestamp] ! (pref)`，因为 `!` 不被 `(\*)?` 消费，后续 `\s*` 会吃掉空格。
@@ -232,7 +232,7 @@ cli_msg(-1024, "%-25I %-10s %6u %6u %6u %7t %-4s %9t",
 
 即当前格式为 **IP address | Interface | Metric | ...**（IP 在前）。
 
-**Higgs 解析**：`parseBabelNeighbors()` 同时识别两种 header：
+**Photon 解析**：`parseBabelNeighbors()` 同时识别两种 header：
 
 - `babelLegacyHeaderRe = ^\s*Interface\s+Neighbor`（Interface 在前）
 - `babelV219HeaderRe   = ^\s*IP\s+address\s+Interface\s+Metric`（IP 在前）
@@ -252,9 +252,9 @@ cli_msg(-1024, "%-25I %-10s %6u %6u %6u %7t %-4s %9t",
 | 2.16 | `IP address Interface Metric Routes Hellos Expires Auth RTT (ms)` | IP-first |
 | 2.19.0/2.19.1 | `IP address Interface Metric Routes Hellos Expires Auth RTT (ms)` | IP-first |
 
-**结论**：在官方 BIRD 1.6.8 到 2.19.1 的所有版本中，`show babel neighbors` 都是 **IP 地址在前、Interface 在后的 5~8 列格式**，从未出现过 Higgs 代码里假设的 `Interface Neighbor Metric` 3 列 Interface-first 格式。
+**结论**：在官方 BIRD 1.6.8 到 2.19.1 的所有版本中，`show babel neighbors` 都是 **IP 地址在前、Interface 在后的 5~8 列格式**，从未出现过 Photon 代码里假设的 `Interface Neighbor Metric` 3 列 Interface-first 格式。
 
-Higgs 测试夹具里的：
+Photon 测试夹具里的：
 
 ```text
 Interface  Neighbor           Metric
@@ -266,7 +266,7 @@ eth0       fe80::2             256
 - `babelV219HeaderRe` 分支能正确处理所有官方 BIRD 版本。
 - `babelLegacyHeaderRe` 分支基于错误假设，永远不会匹配到真实的 BIRD 输出；即使误匹配，按 3 列解析也会把 IP 地址和接口名填反。
 
-> 注：Higgs 预检要求 BIRD ≥ 2.0，因此 BIRD 1.6.8 本就不在支持范围内；但即使扩展到 1.6.x，也仍然是 IP-first。如果确实需要支持某个非官方 fork 或补丁版出现的 Interface-first 输出，应当在注释中明确说明其来源，而不是泛称为 "legacy"。
+> 注：Photon 预检要求 BIRD ≥ 2.0，因此 BIRD 1.6.8 本就不在支持范围内；但即使扩展到 1.6.x，也仍然是 IP-first。如果确实需要支持某个非官方 fork 或补丁版出现的 Interface-first 输出，应当在注释中明确说明其来源，而不是泛称为 "legacy"。
 
 ## 3. 健康检查与 debug 命令中的实际影响
 
@@ -274,7 +274,7 @@ eth0       fe80::2             256
 
 相关代码：
 
-- `app/higgs/routing_reconcile.go:birdObservationForInterface()`
+- `app/photon/routing_reconcile.go:birdObservationForInterface()`
 - `pkg/health/manager.go:cutoverBlockingLocked()`
 
 逻辑：只有 staged 链路的 `Neighbor == true && Route == true` 时，才允许 IPsec 切换。
@@ -283,26 +283,26 @@ eth0       fe80::2             256
 - `Route` 依赖 `parseRoutes()` 与 `birdRouteIsBabel()`：
   - 判断条件为 `Protocol` 含 `babel` 或 `Source` 含 `babel`。
   - 由于 `Source` 基本不会被填入，实际只看 `Protocol`。
-  - Babel 路由的 `Protocol` 是 `higgs_babel_<netns>`，含 `babel`，因此能匹配。
-  - 但如果某条 Babel 路由是 on-link 且使用 `dev <iface>`，Higgs 解析不到 `Iface`，该路由会被忽略，可能导致 `Route` 误判为 false。
+  - Babel 路由的 `Protocol` 是 `photon_babel_<netns>`，含 `babel`，因此能匹配。
+  - 但如果某条 Babel 路由是 on-link 且使用 `dev <iface>`，Photon 解析不到 `Iface`，该路由会被忽略，可能导致 `Route` 误判为 false。
 - `Interfaces` 未被健康检查直接依赖，但 `birdObservationForInterface()` 的参数 `iface` 来自链路状态而非 BIRD 接口表。
 
 **风险**：在特定场景（on-link Babel 路由、或路由通过 `dev` 而非 `via` 表达）下，健康检查可能错误地认为没有可用路由，从而阻塞切换。
 
-### 3.2 `higgs debug bird-dump`
+### 3.2 `photon debug bird-dump`
 
 相关代码：
 
-- `app/higgs/debug_routing.go:debugBirdDumpWithRuntime()`、`birdDumpOffline()`
+- `app/photon/debug_routing.go:debugBirdDumpWithRuntime()`、`birdDumpOffline()`
 - 默认命令集：`show status`、`show protocols all`、`show route all`、`show interfaces`、`show babel neighbors`、各 internal table 的 `show route table <t> all`。
 
 `bird-dump` 主要调用 `client.Raw()`，对原始文本输出友好，**本身不依赖解析器**。但如果用户通过 daemon 的 `routes_dump` 控制接口查看结构化数据，则会受到 `parseRoutes()` / `parseInterfaces()` 准确性的影响。
 
-### 3.3 `higgs debug babel`
+### 3.3 `photon debug babel`
 
 相关代码：
 
-- `app/higgs/debug_routing.go:debugBabelWithRuntime()`、`buildBabelDebugView()`
+- `app/photon/debug_routing.go:debugBabelWithRuntime()`、`buildBabelDebugView()`
 
 该命令优先通过 daemon 控制接口获取 `bird_status`，回退到本地状态文件。若 daemon 返回的 `BirdInstances` 中接口/路由/邻居数据来自 `Client.Status()` 的解析结果，则 `show interfaces` 解析为空会直接影响 debug 视图的完整性。
 
@@ -342,7 +342,7 @@ eth0       fe80::2             256
 
 ### 5.3 版本策略
 
-- Higgs 当前要求 BIRD ≥ 2.0。建议：
+- Photon 当前要求 BIRD ≥ 2.0。建议：
   - 明确声明官方支持的最小 BIRD 版本（如 2.15+ 或 2.19+）。
   - 重新评估 `parseBabelNeighbors()` 中的 `babelLegacyHeaderRe` 分支：若无法提供对应的真实 BIRD 版本，应删除该分支及虚构测试夹具，避免误导后续维护者。
 - 定期对照目标 BIRD 版本的源码更新 fixture，而不是仅依赖运行时的主观假设。

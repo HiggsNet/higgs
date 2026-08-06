@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 type TransportPrivateKey struct {
@@ -90,7 +90,7 @@ func DecodeTransportPublicKey(record TransportKeyRecord) ([]byte, error) {
 }
 
 func TransportKeyFingerprint(algorithm string, publicKey []byte) string {
-	sum := higgscrypto.Hash([]byte("higgs.ipsec.transport-key.v1"), []byte{0}, []byte(algorithm), []byte{0}, publicKey)
+	sum := photoncrypto.Hash([]byte("photon.ipsec.transport-key.v1"), []byte{0}, []byte(algorithm), []byte{0}, publicKey)
 	encoded := hex.EncodeToString(sum)
 	parts := make([]string, 0, len(encoded)/2)
 	for i := 0; i < len(encoded); i += 2 {

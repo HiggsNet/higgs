@@ -60,22 +60,22 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then dirty="true"; fi
           built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           ldflags="-s -w -X main.buildCommit=${commit} -X main.buildDescribe=${describe} -X main.buildDirty=${dirty} -X main.buildTime=${built_at}"
-          out="dist/higgs-${version}-${GOOS}-${GOARCH}"
+          out="dist/photon-${version}-${GOOS}-${GOARCH}"
           mkdir -p "$out"
-          go build -trimpath -ldflags "$ldflags" -o "$out/higgs" ./app/higgs
-          go build -trimpath -o "$out/higgs-services" ./app/higgs-services
-          cp README.md config.example.yaml service.example.yaml contrib/systemd/higgsnet.service "$out/"
+          go build -trimpath -ldflags "$ldflags" -o "$out/photon" ./app/photon
+          go build -trimpath -o "$out/photon-services" ./app/photon-services
+          cp README.md config.example.yaml service.example.yaml contrib/systemd/photon.service "$out/"
           tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
 
       - name: Checksums
         run: |
           cd dist
-          sha256sum *.tar.gz > "higgs-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
+          sha256sum *.tar.gz > "photon-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: higgs-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: photon-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/*.tar.gz
             dist/*.sha256
@@ -211,7 +211,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: higgs-*
+          pattern: photon-*
           path: dist
           merge-multiple: true
 

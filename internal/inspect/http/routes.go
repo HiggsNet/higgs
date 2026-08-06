@@ -5,10 +5,10 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/Catofes/higgs/internal/inspect"
-	"github.com/Catofes/higgs/pkg/core/zone"
-	"github.com/Catofes/higgs/pkg/routing"
-	"github.com/Catofes/higgs/pkg/routing/bird"
+	"github.com/Catofes/photon/internal/inspect"
+	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/routing"
+	"github.com/Catofes/photon/pkg/routing/bird"
 )
 
 type RoutesResponse struct {

@@ -79,7 +79,7 @@ func (m *ExecVethManager) EnsureVethPair(ctx context.Context, spec VethSpec) err
 		}
 
 		// Disable the kernel's automatic IPv6 link-local address generation
-		// (FE80::/64 based on MAC) before bringing the interface up, so Higgs
+		// (FE80::/64 based on MAC) before bringing the interface up, so Photon
 		// remains in control of which addresses are present on the veth.
 		if err := m.disableAutoLinkLocal(ctx, spec.MeshNetns, spec.MeshInterface); err != nil {
 			return err

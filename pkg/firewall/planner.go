@@ -237,11 +237,11 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	addRule(ChainForward, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_fwd_est"})
 	desired.HookPositions.PreForward = len(desired.ForwardRules)
 
-	xfrmIfaces := interfaceSelectors(input.LiveInterfaces, spec.XFRMTunnelPattern, "hgs*")
+	xfrmIfaces := interfaceSelectors(input.LiveInterfaces, spec.XFRMTunnelPattern, "phx*")
 	upstreamIfaces := interfaceSelectors(input.UpstreamInterfaces)
 	xfrmCompat := strings.TrimSpace(spec.XFRMTunnelPattern)
 	if xfrmCompat == "" {
-		xfrmCompat = "hgs*"
+		xfrmCompat = "phx*"
 	}
 	upstreamCompat := singletonInterfaceSelector(upstreamIfaces)
 
@@ -535,7 +535,7 @@ func defaultPolicyVerb(policy string) string {
 func chainNameSuffix(spec FirewallInstanceSpec) string {
 	prefix := spec.OwnerPrefix
 	if prefix == "" {
-		prefix = "higgs"
+		prefix = "photon"
 	}
 	if spec.IsHost {
 		return prefix + "_host"
@@ -630,7 +630,7 @@ func writeNativeHooksHash(h interface{ Write([]byte) (int, error) }, hooks Nativ
 func OwnerToken(spec FirewallInstanceSpec) string {
 	prefix := spec.OwnerPrefix
 	if prefix == "" {
-		prefix = "higgs"
+		prefix = "photon"
 	}
 	target := spec.NetNS
 	if spec.IsHost {
@@ -648,7 +648,7 @@ func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
 	}
 	prefix := desired.Instance.OwnerPrefix
 	if prefix == "" {
-		prefix = "higgs"
+		prefix = "photon"
 	}
 	target := desired.Instance.NetNS
 	if desired.Instance.IsHost {

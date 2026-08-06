@@ -43,14 +43,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build runtime image
-        run: docker build --build-arg VERSION=ci -t higgs:ubuntu-24.04-ci .
+        run: docker build --build-arg VERSION=ci -t photon:ubuntu-24.04-ci .
 
       - name: Verify runtime image
         run: |
-          docker run --rm higgs:ubuntu-24.04-ci version
-          docker run --rm --entrypoint /bin/sh higgs:ubuntu-24.04-ci -ec '
-            command -v higgs
-            command -v higgs-services
+          docker run --rm photon:ubuntu-24.04-ci version
+          docker run --rm --entrypoint /bin/sh photon:ubuntu-24.04-ci -ec '
+            command -v photon
+            command -v photon-services
             command -v charon
             command -v swanctl
             bird --version

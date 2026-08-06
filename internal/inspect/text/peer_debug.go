@@ -3,7 +3,7 @@ package text
 import (
 	"io"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func WritePeerDebug(w io.Writer, view inspect.PeerDebugView) error {

@@ -45,7 +45,7 @@ StrongSwanDriver + SystemXFRMDriver    ← VICI + iproute2 实际建/拆/修链�
 LinkInstance（写回持久化）              ← 本机 runtime 状态锚点
        │
        ▼
-Routing / Firewall / Health 消费       ← hgs* interface + tunnel address
+Routing / Firewall / Health 消费       ← phx* interface + tunnel address
 ```
 
 关键点：
@@ -186,7 +186,7 @@ ipsec:
 
 netns:
   default:
-    name: h2
+    name: photon
 
 overlays:
   - id: ipsec-main
@@ -228,7 +228,7 @@ overlays:
 | **StrongSwan charon** | `load-key` 加载 transport private key → `load-conn` 加载 IKE connection → `initiate` 发起 CHILD_SA → `terminate` / `unload-conn` 做撤销清理 |
 | **XFRM interface** | 在 charon netns（通常是 host）创建 → move 到 overlay netns → set addrgenmode none → up → 分配 tunnel address（derived-link-local + derived-pool IPv4/ IPv6） |
 | **LinkInstance（持久化）** | 每条逻辑链路一个，记录 desired spec hash、实际状态、XFRM if_id、IKE/CHILD_SA 名称、endpoint、owner、failure count、backoff、rotate phase 和最近错误 |
-| **Routing 模块** | 暴露 `hgs*` XFRM interface 给 BIRD/Babel 发现邻居；IPv4 tunnel address 作为 Babel interface address |
+| **Routing 模块** | 暴露 `phx*` XFRM interface 给 BIRD/Babel 发现邻居；IPv4 tunnel address 作为 Babel interface address |
 | **Firewall 模块** | XFRM interface 和 tunnel address 进入对应 netns 后，firewall 按 interface pattern 生成 forward/input 规则 |
 | **Health 模块** | `LinkInstance.ActualState` 决定链路是否可用，影响健康探测；后续可作为 cutover gate 的输入 |
 
@@ -268,7 +268,7 @@ type TransportLinkSpec struct {
     AuthRef         string
     ContactPoints   []ContactPoint
     XFRMIfID        uint32
-    InterfaceName   string          // hgs<8hex>
+    InterfaceName   string          // phx<8hex>
     LocalTunnelAddr netip.Addr
     PeerTunnelAddr  netip.Addr
     LocalAddress    string
@@ -288,8 +288,8 @@ type TransportLinkSpec struct {
 | `RuntimeConnectionID` | `short(hash(LinkID, generation, provider, "runtime"))` | StrongSwan connection 名 |
 | `ChildSAName` | `RuntimeConnectionID + "-child"` | CHILD_SA 名 |
 | `XFRMIfID` | `uint32(hash(LinkID, generation, provider, "xfrm-if-id"))` | XFRM if_id |
-| `InterfaceName` | `hgs<8hex>` 从 `XFRMIfID` 派生 | Linux interface 名 |
-| `OwnerToken` | `hash("higgs.ipsec.owner.v2", LinkID, RuntimeConnectionID, "owner-token")` | 清理时的归属校验 |
+| `InterfaceName` | `phx<8hex>` 从 `XFRMIfID` 派生 | Linux interface 名 |
+| `OwnerToken` | `hash("photon.ipsec.owner.v2", LinkID, RuntimeConnectionID, "owner-token")` | 清理时的归属校验 |
 
 Tunnel address 也从 `LinkID` 派生：`derive(LinkID, address_epoch, mode, pool, role)`。`role` 为 sorted peer pair 中的 `lower`/`higher`；`address_epoch=0` 为普通稳定地址，staged generation 使用 `address_epoch=<generation>` 避免新旧 interface 地址冲突。
 
@@ -344,7 +344,7 @@ type LinkInstance struct {
 
 ### Reconcile 主循环
 
-一次完整的 IPsec reconcile 由 `reconcileIPsecLinks`（`app/higgs/ipsec_reconcile.go`）驱动。
+一次完整的 IPsec reconcile 由 `reconcileIPsecLinks`（`app/photon/ipsec_reconcile.go`）驱动。
 `TransportLinkSpec` 不是直接“变成 interface”：它先是 desired state，再与持久化 state 和
 真实 SA/XFRM observation 比较，产出 `ReconcileAction` 操作图，最后才由 driver 落成系统资源。
 
@@ -390,7 +390,7 @@ type LinkInstance struct {
                          v
           commit LinkInstances + IPsecReconcileState + save state
                          v
-          routing / firewall / health consume hgs* interface and runtime state
+          routing / firewall / health consume phx* interface and runtime state
 ```
 
 对象职责：
@@ -421,7 +421,7 @@ desired spec
 `teardown` 是反向且带 owner guard 的操作图：
 
 ```text
-owner + Higgs resource marker verified
+owner + Photon resource marker verified
   -> TerminateSA
   -> UnloadConnection
   -> UnloadPrivateKey（无其他引用时）
@@ -502,7 +502,7 @@ Idle → Preparing（加载独立 staged connection/SA/XFRM interface）
              → Rollback（staged SA 在规定时限内未建立，清理 staged 保留旧链路）
 ```
 
-staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running 期间 overlay netns 同时有两个 `hgs*` interface。
+staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running 期间 overlay netns 同时有两个 `phx*` interface。
 
 ### Bidirectional Takeover（4.5）
 
@@ -522,9 +522,9 @@ staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface nam
 ### 正确形态（当前实现）
 
 ```
-host netns:                        overlay netns (h2):
-  charon / VICI                       moved XFRM interface hgs...
-  XFRM state/policy (by StrongSwan)   tunnel address on hgs...
+host netns:                        overlay netns (photon):
+  charon / VICI                       moved XFRM interface phx...
+  XFRM state/policy (by StrongSwan)   tunnel address on phx...
   XFRM interface 创建位置              BIRD/Babel + overlay routes
 ```
 
@@ -570,7 +570,7 @@ host netns:                        overlay netns (h2):
 ### 首选诊断命令
 
 ```
-higgs debug links
+photon debug links
 ```
 
 输出包含每条链路的：
@@ -621,8 +621,8 @@ ip link show type xfrm
 
 # 目标 overlay netns
 ip netns exec <name> ip link show type xfrm
-ip netns exec <name> ip addr show dev hgs*
-ip netns exec <name> ip route show dev hgs*
+ip netns exec <name> ip addr show dev phx*
+ip netns exec <name> ip route show dev phx*
 ```
 确认 interface 在正确的 overlay netns，有正确地址，且状态为 UP。
 

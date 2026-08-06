@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-vici_socket="${HIGGS_VICI_SOCKET:-/run/charon.vici}"
-ike_port="${HIGGS_IPSEC_IKE_PORT:-500}"
-natt_port="${HIGGS_IPSEC_NATT_PORT:-4500}"
-check_udp="${HIGGS_IPSEC_CHECK_UDP:-0}"
+vici_socket="${PHOTON_VICI_SOCKET:-/run/charon.vici}"
+ike_port="${PHOTON_IPSEC_IKE_PORT:-500}"
+natt_port="${PHOTON_IPSEC_NATT_PORT:-4500}"
+check_udp="${PHOTON_IPSEC_CHECK_UDP:-0}"
 
 failures=0
 
 check() {
   local name="$1"
   shift
-  if "$@" >/tmp/higgs-ipsec-preflight.out 2>&1; then
+  if "$@" >/tmp/photon-ipsec-preflight.out 2>&1; then
     printf '[ok]   %s\n' "$name"
   else
     printf '[fail] %s: ' "$name"
-    tr '\n' ' ' </tmp/higgs-ipsec-preflight.out
+    tr '\n' ' ' </tmp/photon-ipsec-preflight.out
     printf '\n'
     failures=$((failures + 1))
   fi
@@ -37,9 +37,9 @@ check "swanctl command" command -v swanctl
 check "charon command" command -v charon
 check "ping command" command -v ping
 check "kernel xfrm" sh -c 'test -e /proc/net/xfrm_stat || test -e /proc/net/xfrm_policy'
-check "xfrm interface support" sh -c 'set -e; iface="hgsxfrm$$"; trap "ip link delete \"$iface\" >/dev/null 2>&1 || true" EXIT; ip link add "$iface" type xfrm if_id 1'
-check "host-born xfrm netns move" sh -c 'set -e; ns="higgs-xfrm-preflight-$$"; iface="hgsxfrmm$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true; ip link delete \"$iface\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip link add "$iface" type xfrm if_id 2; ip link set "$iface" netns "$ns"; ip netns exec "$ns" ip link show dev "$iface"'
-check "named netns create/delete" sh -c 'set -e; ns="higgs-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" true'
+check "xfrm interface support" sh -c 'set -e; iface="phxxfrm$$"; trap "ip link delete \"$iface\" >/dev/null 2>&1 || true" EXIT; ip link add "$iface" type xfrm if_id 1'
+check "host-born xfrm netns move" sh -c 'set -e; ns="photon-xfrm-preflight-$$"; iface="phxxfrmm$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true; ip link delete \"$iface\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip link add "$iface" type xfrm if_id 2; ip link set "$iface" netns "$ns"; ip netns exec "$ns" ip link show dev "$iface"'
+check "named netns create/delete" sh -c 'set -e; ns="photon-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" true'
 
 if [ "$check_udp" = "1" ]; then
   check "udp ike port" sh -c "python3 - <<PY
@@ -55,10 +55,10 @@ s.bind(('0.0.0.0', int('$natt_port')))
 s.close()
 PY"
 else
-  printf '[skip] udp port bindability (set HIGGS_IPSEC_CHECK_UDP=1)\n'
+  printf '[skip] udp port bindability (set PHOTON_IPSEC_CHECK_UDP=1)\n'
 fi
 
-rm -f /tmp/higgs-ipsec-preflight.out
+rm -f /tmp/photon-ipsec-preflight.out
 
 if [ "$failures" -ne 0 ]; then
   printf 'ipsec/xfrm preflight failed: %s check(s)\n' "$failures" >&2

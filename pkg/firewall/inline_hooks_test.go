@@ -7,7 +7,7 @@ import (
 
 func TestBuildDesiredStateInlineHookPositionsAndHash(t *testing.T) {
 	spec := FirewallInstanceSpec{
-		ID: "h2", NetNS: "h2", Mode: ModeManaged, Backend: BackendAuto,
+		ID: "photon", NetNS: "photon", Mode: ModeManaged, Backend: BackendAuto,
 		NativeHooks: NativeHooks{NFT: InlineHookRules{
 			PreInput:    []string{"tcp dport 22 accept"},
 			PostInput:   []string{"counter"},
@@ -53,28 +53,28 @@ func TestBuildDesiredStateRejectsInvalidInlineHooks(t *testing.T) {
 	}{
 		{
 			name: "nft object command",
-			spec: FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged, NativeHooks: NativeHooks{
+			spec: FirewallInstanceSpec{ID: "photon", NetNS: "photon", Mode: ModeManaged, NativeHooks: NativeHooks{
 				NFT: InlineHookRules{PreInput: []string{"add table inet escaped"}},
 			}},
 			wantErr: "expression body",
 		},
 		{
 			name: "iptables chain operation",
-			spec: FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged, NativeHooks: NativeHooks{
+			spec: FirewallInstanceSpec{ID: "photon", NetNS: "photon", Mode: ModeManaged, NativeHooks: NativeHooks{
 				IPTables: IPTablesInlineHooks{IPv4: InlineHookRules{PreInput: []string{"-A INPUT -j ACCEPT"}}},
 			}},
 			wantErr: "may manage rules",
 		},
 		{
 			name: "host point on overlay",
-			spec: FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged, NativeHooks: NativeHooks{
+			spec: FirewallInstanceSpec{ID: "photon", NetNS: "photon", Mode: ModeManaged, NativeHooks: NativeHooks{
 				NFT: InlineHookRules{HostPreInput: []string{"counter"}},
 			}},
 			wantErr: "host inline hooks require a host instance",
 		},
 		{
 			name: "explicit backend mismatch",
-			spec: FirewallInstanceSpec{ID: "h2", NetNS: "h2", Mode: ModeManaged, Backend: BackendNFT,
+			spec: FirewallInstanceSpec{ID: "photon", NetNS: "photon", Mode: ModeManaged, Backend: BackendNFT,
 				NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{IPv4: InlineHookRules{PreInput: []string{"-j ACCEPT"}}}},
 			},
 			wantErr: "only iptables_hooks",
@@ -120,7 +120,7 @@ func TestHostInlinePreroutingCreatesManagedObject(t *testing.T) {
 func TestResolveBackendForInstanceHonorsInlineHookBackend(t *testing.T) {
 	pf := FirewallPreflight{Backend: BackendNFT, NFTNetlink: "ok", Iptables: "available"}
 	iptablesOnly := FirewallInstanceSpec{
-		ID: "h2", Backend: BackendAuto,
+		ID: "photon", Backend: BackendAuto,
 		NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{IPv4: InlineHookRules{PreInput: []string{"-j ACCEPT"}}}},
 	}
 	got, err := ResolveBackendForInstance(iptablesOnly, pf)
@@ -129,7 +129,7 @@ func TestResolveBackendForInstanceHonorsInlineHookBackend(t *testing.T) {
 	}
 
 	nftOnly := FirewallInstanceSpec{
-		ID: "h2", Backend: BackendAuto,
+		ID: "photon", Backend: BackendAuto,
 		NativeHooks: NativeHooks{NFT: InlineHookRules{PreInput: []string{"counter"}}},
 	}
 	got, err = ResolveBackendForInstance(nftOnly, pf)

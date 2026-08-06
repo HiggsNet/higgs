@@ -2,7 +2,7 @@
 
 > **历史参考文档**
 >
-> Higgs Phase 5 已决定采用 **BIRD** 作为默认 Babel 路由后端。本文档保留为 babeld 能力调研记录，不再作为项目主实现路径参考。
+> Photon Phase 5 已决定采用 **BIRD** 作为默认 Babel 路由后端。本文档保留为 babeld 能力调研记录，不再作为项目主实现路径参考。
 
 > 调研日期: 2026-06-13
 > babeld 版本: 1.13.1 (NixOS 24.11)
@@ -96,35 +96,35 @@ ok
 
 格式与之前记录一致，仍然是非正式 API，版本间可能变化。
 
-## 对 Higgs Phase 5 的影响（修正）
+## 对 Photon Phase 5 的影响（修正）
 
 ### 影响 1: 接口可以动态管理，不必依赖 SIGHUP
 
 **之前结论**：managed mode 必须用 SIGHUP reload 来增删接口。  
-**修正**：Higgs 可以通过 `-G` 读写 control socket 实时增删接口。
+**修正**：Photon 可以通过 `-G` 读写 control socket 实时增删接口。
 
 ```
 # 添加 IPsec link 对应的接口
-interface hgsxxxx type tunnel
+interface phxxxxx type tunnel
 
 # 移除已下线的接口
-flush interface hgsxxxx
+flush interface phxxxxx
 ```
 
-这样 Higgs IPsec reconcile 后，可以直接把 up 的 tunnel 接口动态加入 babeld，不需要重写配置文件 + SIGHUP。
+这样 Photon IPsec reconcile 后，可以直接把 up 的 tunnel 接口动态加入 babeld，不需要重写配置文件 + SIGHUP。
 
 ### 影响 2: filter 仍然只能静态声明
 
 `in`/`out`/`redistribute`/`install` filter 无法在运行时修改。所以之前设计的 "双层过滤" 方案依然成立：
 
-- babeld 侧使用宽松的静态 filter（例如 `in if hgsxxxx allow`）
-- Higgs 在 kernel route table 层面做授权过滤，定期清理未授权路由
+- babeld 侧使用宽松的静态 filter（例如 `in if phxxxxx allow`）
+- Photon 在 kernel route table 层面做授权过滤，定期清理未授权路由
 
 ### 影响 3: xroute（export 前缀集）仍然无法动态调整 filter
 
 由于 `redistribute` filter 只能在初始化阶段设置，export 前缀集的变化有两种应对方式：
 
-1. **broad filter + kernel 路由控制**：配置 `redistribute local allow` 等宽松规则，Higgs 通过控制 kernel route table 中实际存在哪些本地路由来决定哪些前缀被宣告。
+1. **broad filter + kernel 路由控制**：配置 `redistribute local allow` 等宽松规则，Photon 通过控制 kernel route table 中实际存在哪些本地路由来决定哪些前缀被宣告。
 2. **配置文件重写 + SIGHUP**：如果 export set 变化频繁且需要精确控制，仍需要 reload。
 
 ### 影响 4: routing table 仍然只能在启动时指定
@@ -141,7 +141,7 @@ flush interface hgsxxxx
 
 ```
 ┌─────────────────────────────────────────────┐
-│                  Higgs daemon                │
+│                  Photon daemon                │
 ├─────────────────────────────────────────────┤
 │  IPsec Reconciler                            │
 │  ├── 发现 up/down 的 IPsec tunnel 接口        │

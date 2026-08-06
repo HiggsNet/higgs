@@ -19,7 +19,7 @@
         src = ./.;
         filter = path: type:
           type != "socket"
-          && !(lib.hasInfix "/.higgs" path)
+          && !(lib.hasInfix "/.photon" path)
           && !(lib.hasInfix "/.public-test" path)
           && !(lib.hasInfix "/build" path)
           && !(lib.hasInfix "/dist" path)
@@ -27,11 +27,11 @@
       };
     in
     buildGoModule {
-      pname = "higgs";
+      pname = "photon";
       inherit version;
       src = cleanSrc;
       vendorHash = "sha256-v0SzEL0agW+0qwx4mvoOW0JSemkaAm5FgCpg7zHfsxs=";
-      subPackages = [ "app/higgs" "app/higgs-services" ];
+      subPackages = [ "app/photon" "app/photon-services" ];
       doCheck = false;
       ldflags = [
         "-s"
@@ -43,9 +43,9 @@
       ];
       meta = {
         description = "Trust-first network configuration control plane";
-        homepage = "https://github.com/Catofes/higgs";
+        homepage = "https://github.com/Catofes/photon";
         license = lib.licenses.mit;
-        mainProgram = "higgs";
+        mainProgram = "photon";
         platforms = lib.platforms.linux;
       };
     }

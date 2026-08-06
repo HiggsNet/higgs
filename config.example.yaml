@@ -1,4 +1,4 @@
-# Higgs example configuration.
+# Photon example configuration.
 #
 # Copy this file to config.yaml and fill the identity/trust fields for the
 # node you are running. The default runtime is deliberately conservative:
@@ -10,8 +10,8 @@
 # 1. Local identity, state, and gossip
 # -----------------------------------------------------------------------------
 
-# Default data_dir is /etc/higgs. Use a relative path for local development.
-# data_dir: .higgs
+# Default data_dir is /etc/photon. Use a relative path for local development.
+# data_dir: .photon
 
 # Base64 encoded raw 32-byte ED25519 public key for the trusted root zone.
 # CLI output uses base64; existing hex values are still accepted.
@@ -28,7 +28,7 @@ gossip:
   # material in config.yaml.
   # init:
   #   managed_zone: node-a.catofes.
-  #   key_path: .higgs/identity.key.json
+  #   key_path: .photon/identity.key.json
 
   peer_id: node-a.catofes.
   listen_addr: "[::]:33434"
@@ -37,7 +37,7 @@ gossip:
     - id: node-b.catofes.
       addr: 127.0.0.1:33435
 
-  # Public-internet safe defaults. Higgs does not depend on IP fragmentation.
+  # Public-internet safe defaults. Photon does not depend on IP fragmentation.
   # max_datagram_bytes: 1200
   # max_sync_zones: 16
   # max_sync_records: 1024
@@ -77,14 +77,14 @@ gossip:
 # Runtime logs default to stderr. Set log.mode when a daemon should also copy
 # structured logs to a file or syslog. Supported modes: stderr, file, syslog,
 # stderr+file, stderr+syslog.
-# Supported levels: debug, info, warn, error. HIGGS_LOG_LEVEL overrides this.
+# Supported levels: debug, info, warn, error. PHOTON_LOG_LEVEL overrides this.
 # log:
 #   level: info
 #   mode: stderr+file
-#   file: /var/log/higgs.log
+#   file: /var/log/photon.log
 
 # Dynamic peer lifecycle. Stale/offline peers are retained with lower retry
-# pressure; cleanup_after removes Higgs-owned SA/interface/route/firewall state.
+# pressure; cleanup_after removes Photon-owned SA/interface/route/firewall state.
 # peer_lifecycle:
 #   stale_after: 15m
 #   offline_after: 12h
@@ -101,7 +101,7 @@ gossip:
 # when their netns field is omitted.
 netns:
   default:
-    name: h2
+    name: photon
     # kind defaults to name and create defaults to true. Set create: false to
     # reuse an existing netns. Declaring forwarding enables transit; omit it to
     # disable transit.
@@ -115,7 +115,7 @@ netns:
 
 ipsec:
   # This section configures the local IPsec provider. It does not, by itself,
-  # publish IPsec capability records. Higgs publishes ipsec/* records only
+  # publish IPsec capability records. Photon publishes ipsec/* records only
   # when a local overlay/link group below selects provider: strongswan.
   #
   # role declares this node's IPsec mesh behavior: out, in, or both.
@@ -126,8 +126,8 @@ ipsec:
   # Default driver is strongswan. For unprivileged development or CI without
   # charon/VICI/XFRM, explicitly set driver: dry-run.
   # driver: strongswan
-  # Higgs does not manage charon directly; strongswan mode connects to an
-  # existing VICI socket. The packaged higgsnet.service wants and orders itself
+  # Photon does not manage charon directly; strongswan mode connects to an
+  # existing VICI socket. The packaged photon.service wants and orders itself
   # after strongswan.service; other launch methods must start charon separately.
   # Empty uses govici/strongSwan's default socket path.
   # vici_socket: /run/charon.vici
@@ -242,25 +242,25 @@ routing:
       # protocol stanza inside the generated bird.conf; babeld is not supported.
       # provider: bird
       # mode: managed
-      # shutdown_policy: persist  # persist keeps BIRD running across Higgs restarts; use stop for lab teardown.
+      # shutdown_policy: persist  # persist keeps BIRD running across Photon restarts; use stop for lab teardown.
       # table: main
       # metric_base: 100
       # metric_staged: 200
       # metric_draining: 500
-      # interface_pattern: hgs*
+      # interface_pattern: phx*
       # Optional equal-cost multipath support. When enabled, BIRD renders
       # `ecmp on` (or `ecmp on limit N`) in the Babel protocol block.
       # ecmp: true
       # ecmp_limit: 16
 
-      # Optional veth upstream for main-network Babel peering. Higgs starts BIRD
+      # Optional veth upstream for main-network Babel peering. Photon starts BIRD
       # in the routing instance netns; BIRD itself cannot switch namespaces
       # after start. The upstream veth mesh side also uses this instance netns.
       # If upstream is omitted, local assigned prefixes are exported with a
       # local blackhole route in this netns. If upstream is enabled, mode
       # defaults to static: local assigned prefixes are routed toward the veth.
       # mode: external only makes mesh-side BIRD listen on the veth; host-side
-      # routing/BIRD is administrator-managed and Higgs does not add static routes.
+      # routing/BIRD is administrator-managed and Photon does not add static routes.
       # upstream:  # upstream: {} or any non-disabled upstream block enables it.
       #   mode: static  # static | external
       #   create_veth: true          # default true; set false for pre-created veth pairs
@@ -269,18 +269,18 @@ routing:
       #   # external mode no remote static routes are added.
       #   install_source_addresses: false
       #   mesh:
-      #     interface: hgv2host     # routing instance netns side, toward host
+      #     interface: phv2host     # routing instance netns side, toward host
       #     ipv4_ll: 169.254.254.1/30
       #     ipv6_ll: fe80::a1:1/64
       #   external:
-      #     interface: hgv2mesh    # host/upstream netns side, toward Higgs
+      #     interface: phv2mesh    # host/upstream netns side, toward Photon
       #     netns: ""                # optional; empty = init/main host netns
       #     ipv4_ll: 169.254.254.2/30
       #     ipv6_ll: fe80::a1:2/64
 
-# Application deployment is intentionally not part of the Higgs daemon
-# configuration. `higgs-services` reads /etc/higgs/service.yaml, queries the
-# current IPAM state through the Higgs CLI, and renders Docker Compose files.
+# Application deployment is intentionally not part of the Photon daemon
+# configuration. `photon-services` reads /etc/photon/service.yaml, queries the
+# current IPAM state through the Photon CLI, and renders Docker Compose files.
 # See service.example.yaml and docs/new/services.md.
 
 # -----------------------------------------------------------------------------
@@ -289,14 +289,14 @@ routing:
 
 firewall:
   instances:
-    - id: h2
+    - id: photon
       # Non-host firewall instances default to netns.default.
       # netns: default
       # disabled: true
       # mode: managed
       # backend: auto
       # default_policy: drop
-      # xfrm_tunnel_pattern: hgs*
+      # xfrm_tunnel_pattern: phx*
       # nft base-chain priorities. Defaults are filter, dstnat, and srcnat.
       # Effective only with backend: nft; each value is its required base plus
       # an optional spaced integer offset, for example "filter - 1".
@@ -363,7 +363,7 @@ firewall:
 #     # Disabled unless enabled is explicitly set to true.
 #     enabled: false
 #     # Local spool is used by observer /api/v1/health/<link_id>/series.
-#     local_spool_path: .higgs/health-spool
+#     local_spool_path: .photon/health-spool
 #     local_spool_max_age: 6h
 #     # Optional future push integration.
 #     remote_write_url: http://victoriametrics:8428/api/v1/write

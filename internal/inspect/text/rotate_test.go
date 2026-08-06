@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestWriteRotateDebug(t *testing.T) {
@@ -37,11 +37,11 @@ func TestWriteRotateDebug(t *testing.T) {
 				Port:            "30002",
 				RuntimeID:       "ipsec-current",
 				ChildSAName:     "ipsec-current-child",
-				InterfaceName:   "hgs1",
+				InterfaceName:   "phx1",
 				XFRMIfID:        100,
 				Endpoint:        "203.0.113.10:30002",
-				LocalTunnelAddr: "fe80::1%hgs1",
-				PeerTunnelAddr:  "fe80::2%hgs1",
+				LocalTunnelAddr: "fe80::1%phx1",
+				PeerTunnelAddr:  "fe80::2%phx1",
 			},
 			Staged: inspect.RotateRuntimeView{
 				State:       "expected_new",
@@ -73,7 +73,7 @@ func TestWriteRotateDebug(t *testing.T) {
 		"link link-1",
 		"port_generation select/runtime/staged: 2/1/2",
 		"port local/remote/runtime/staged: 4500/30002/30002/30003",
-		"interface: hgs1(100)",
+		"interface: phx1(100)",
 		"stored_matching_sas: 1",
 		"name=ipsec-current child=ipsec-current-child state=established if_id=100 reqid=200",
 	} {

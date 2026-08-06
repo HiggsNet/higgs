@@ -17,10 +17,10 @@ type CommandRunner func(ctx context.Context, name string, args ...string) ([]byt
 // It is the primary backend for Phase 6.3.6.
 //
 // Design:
-//   - All Higgs-owned objects live in an inet table named "<prefix>_<scope>".
+//   - All Photon-owned objects live in an inet table named "<prefix>_<scope>".
 //   - Chains within the table handle input/forward/output/prerouting.
 //   - Prefix sets are nft sets; rules reference them.
-//   - ListOwned parses `nft list table` output for Higgs-owned objects.
+//   - ListOwned parses `nft list table` output for Photon-owned objects.
 //   - Apply renders one nft batch file so the kernel commits the whole ruleset
 //     transaction atomically.
 //
@@ -128,7 +128,7 @@ func renderNFTBatch(commands [][]string) string {
 }
 
 func writeNFTBatch(script string) (string, error) {
-	file, err := os.CreateTemp("", "higgs-nft-*.nft")
+	file, err := os.CreateTemp("", "photon-nft-*.nft")
 	if err != nil {
 		return "", err
 	}
@@ -153,7 +153,7 @@ func writeNFTBatch(script string) (string, error) {
 func (d *NFTDriver) ListOwned(ctx context.Context, owner Owner) (FirewallObservedState, error) {
 	prefix := owner.OwnerPrefix
 	if prefix == "" {
-		prefix = "higgs"
+		prefix = "photon"
 	}
 	scope := owner.InstanceID
 	tableName := prefix + "_" + scope
@@ -186,7 +186,7 @@ func (d *NFTDriver) DeleteStale(ctx context.Context, refs []FirewallObjectRef) e
 func buildNFTApplyCommands(plan FirewallPlan, desired *FirewallDesiredState) [][]string {
 	prefix := desired.Instance.OwnerPrefix
 	if prefix == "" {
-		prefix = "higgs"
+		prefix = "photon"
 	}
 	scope := desired.Instance.NetNS
 	if desired.Instance.IsHost {

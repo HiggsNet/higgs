@@ -7,8 +7,8 @@ if [ -n "$script_dir" ] && [ -f "${script_dir}/install.sh" ]; then
 	exec sh "${script_dir}/install.sh" --update "$@"
 fi
 
-repo="${HIGGS_GITHUB_REPOSITORY:-HiggsNet/higgs}"
-ref="${HIGGS_INSTALLER_REF:-master}"
+repo="${PHOTON_GITHUB_REPOSITORY:-Catofes/photon}"
+ref="${PHOTON_INSTALLER_REF:-master}"
 tmp_file=$(mktemp)
 trap 'rm -f "$tmp_file"' EXIT HUP INT TERM
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func WriteServices(w io.Writer, view inspect.ServiceInspection, filter string, includeAll, localOnly, verbose bool) error {

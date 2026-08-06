@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 func TestCanonicalizePrefix(t *testing.T) {

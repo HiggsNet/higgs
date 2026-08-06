@@ -15,8 +15,8 @@ import (
 // It is the fallback backend for Phase 6.3.6 when nftables is not available.
 //
 // Design:
-//   - All Higgs-owned rules use a comment marker "higgs-<scope>" for ownership tracking.
-//   - Chains are created with a Higgs-specific name prefix.
+//   - All Photon-owned rules use a comment marker "photon-<scope>" for ownership tracking.
+//   - Chains are created with a Photon-specific name prefix.
 //   - ListOwned parses `iptables -S` / `iptables -t nat -S` output.
 //   - Apply populates an inactive generation chain before switching the
 //     built-in-chain jump, so preparation failures keep the old policy active.
@@ -188,7 +188,7 @@ func iptablesApplyFailure(result FirewallApplyResult, message string) (FirewallA
 func iptablesTableName(desired *FirewallDesiredState) string {
 	prefix := desired.Instance.OwnerPrefix
 	if prefix == "" {
-		prefix = "higgs"
+		prefix = "photon"
 	}
 	scope := desired.Instance.NetNS
 	if desired.Instance.IsHost {
@@ -505,7 +505,7 @@ func (d *IPTablesDriver) cleanupOldIPTablesGenerations(
 					continue
 				}
 				if iptablesChainReferenced(string(after), chain.name) {
-					errs = append(errs, fmt.Sprintf("%s stale chain %s still has non-Higgs references", binary, chain.name))
+					errs = append(errs, fmt.Sprintf("%s stale chain %s still has non-Photon references", binary, chain.name))
 					continue
 				}
 				if _, err := d.run(ctx, binary, iptablesArgs(table, "-F", chain.name)...); err != nil {
@@ -625,7 +625,7 @@ func iptablesOwnerMarker(desired *FirewallDesiredState) string {
 	if desired.Instance.IsHost {
 		scope = "host"
 	}
-	return "higgs-" + scope
+	return "photon-" + scope
 }
 
 func (d *IPTablesDriver) deleteLegacyNATBaseRules(ctx context.Context, marker string) (int, []string) {
@@ -673,7 +673,7 @@ func legacyNATRuleNumbers(output, marker string) []int {
 func (d *IPTablesDriver) ListOwned(ctx context.Context, owner Owner) (FirewallObservedState, error) {
 	prefix := owner.OwnerPrefix
 	if prefix == "" {
-		prefix = "higgs"
+		prefix = "photon"
 	}
 	tableName := prefix + "_" + owner.InstanceID
 	var state FirewallObservedState
@@ -923,12 +923,12 @@ func iptablesIPSetName(tableName, chain, family string, prefixes []netip.Prefix)
 	setHash := sha256.Sum256([]byte(material.String()))
 	// ipset names are limited to 31 characters. The scope component prevents
 	// cross-instance cleanup; the content component includes generation/slot.
-	return fmt.Sprintf("hgs_%x_%x", scopeHash[:4], setHash[:8])
+	return fmt.Sprintf("phs_%x_%x", scopeHash[:4], setHash[:8])
 }
 
 func iptablesIPSetPrefix(tableName string) string {
 	scopeHash := sha256.Sum256([]byte(tableName))
-	return fmt.Sprintf("hgs_%x_", scopeHash[:4])
+	return fmt.Sprintf("phs_%x_", scopeHash[:4])
 }
 
 func dedupIPTablesSetSpecs(specs []iptablesSetSpec) []iptablesSetSpec {
@@ -1021,14 +1021,14 @@ func iptablesProto(proto string) string {
 }
 
 // parseIPTablesChains parses `iptables -S` output and returns only exact
-// Higgs-managed chain names. Prefix matching is intentionally insufficient:
+// Photon-managed chain names. Prefix matching is intentionally insufficient:
 // unrelated administrator-owned chains may share the instance prefix.
 func parseIPTablesChains(output, tableName, table string) []FirewallObjectRef {
 	var refs []FirewallObjectRef
 	seen := make(map[string]bool)
 	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
-		// Lines like "-N higgs_h2_INPUT" or "-A higgs_h2_INPUT ..."
+		// Lines like "-N photon_h2_INPUT" or "-A photon_h2_INPUT ..."
 		if !strings.HasPrefix(line, "-N ") && !strings.HasPrefix(line, "-A ") {
 			continue
 		}

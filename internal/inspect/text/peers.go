@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string, verbose bool) error {

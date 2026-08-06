@@ -20,7 +20,7 @@ func TestRotateSpecUsesIndependentXFRMInterface(t *testing.T) {
 		LocalZone:     "node-a.catofes.",
 		PeerZone:      "node-b.catofes.",
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 		ContactPoints: []ContactPoint{{
 			Address:    "198.51.100.20",
@@ -48,7 +48,7 @@ func TestTransportLinkSpecHashIgnoresRuntimeQuality(t *testing.T) {
 		LocalZone:     "node-a.catofes.",
 		PeerZone:      "node-b.catofes.",
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 		ContactPoints: []ContactPoint{{
 			Address:      "198.51.100.20",
@@ -86,7 +86,7 @@ func TestRotateSpecForSecondaryStandbyUsesInboundTrap(t *testing.T) {
 		PeerZone:      "node-a.catofes.",
 		InitiatorRole: InitiatorRolePrimary,
 		TransportID:   "ipsec-main-ba",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 		ContactPoints: []ContactPoint{{
 			Address:    "198.51.100.10",

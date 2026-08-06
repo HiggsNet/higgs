@@ -2,7 +2,7 @@ package ipsec
 
 import (
 	"context"
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 	"net/netip"
 	"testing"
 	"time"
@@ -18,7 +18,7 @@ func TestReconcileMatchesSameRuntimeSAByPathFamily(t *testing.T) {
 		LinkID:          StableLinkID("node-a.catofes.", "node-b.catofes.", "ipsec-main", "family:ipv4"),
 		PathKey:         "family:ipv4",
 		TransportID:     "ipsec-same-runtime",
-		InterfaceName:   "hgs1",
+		InterfaceName:   "phx1",
 		XFRMIfID:        77,
 		Generation:      3,
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),

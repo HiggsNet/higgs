@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/Catofes/higgs/internal/inspect"
-	"github.com/Catofes/higgs/pkg/core/gossip"
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/internal/inspect"
+	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 type ZonesResponse struct {
@@ -42,7 +42,7 @@ func ZonesFromNetwork(ns *zone.NetworkState, nowUnix int64) ZonesResponse {
 		}
 		rootHash := ""
 		if zs.Authority != nil {
-			rootHash = hex.EncodeToString(higgscrypto.AuthorityHash(zs.Authority))
+			rootHash = hex.EncodeToString(photoncrypto.AuthorityHash(zs.Authority))
 		}
 		zones = append(zones, ZoneSummaryJSON{
 			Path:        string(path),
@@ -72,5 +72,5 @@ func globalRootHash(digests []gossip.ZoneDigest) []byte {
 	for _, digest := range digests {
 		parts = append(parts, []byte(digest.Zone), digest.RootHash)
 	}
-	return higgscrypto.Hash(parts...)
+	return photoncrypto.Hash(parts...)
 }

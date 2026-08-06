@@ -4,14 +4,14 @@ import (
 	"sync"
 	"time"
 
-	higgsstate "github.com/Catofes/higgs/internal/state"
+	photonstate "github.com/Catofes/photon/internal/state"
 )
 
 // PeerSnapshot contains diagnostics that are safe to lose on daemon restart.
 // Values returned by PeerObservabilityStore are detached from the mutable store.
 type PeerSnapshot struct {
-	DatagramStats   *higgsstate.PeerDatagramStats
-	ObjectPullStats *higgsstate.PeerObjectPullStats
+	DatagramStats   *photonstate.PeerDatagramStats
+	ObjectPullStats *photonstate.PeerObjectPullStats
 }
 
 type peerEntry struct {

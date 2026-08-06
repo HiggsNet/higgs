@@ -1,22 +1,22 @@
-# Higgs
+# Photon
 
-Higgs 是一个实验性的“信任优先” mesh VPN 控制平面。它不把任何单节点的本地配置当成全网真相，而是先维护一份可验证、最终一致的 Zone 状态数据库，再由每个节点的 daemon 把已验证状态收敛成本机的 gossip、IPsec/XFRM、BIRD/Babel、firewall、health 和 observer 等运行时配置。
+Photon 是一个实验性的“信任优先” mesh VPN 控制平面。它不把任何单节点的本地配置当成全网真相，而是先维护一份可验证、最终一致的 Zone 状态数据库，再由每个节点的 daemon 把已验证状态收敛成本机的 gossip、IPsec/XFRM、BIRD/Babel、firewall、health 和 observer 等运行时配置。
 
 - 整体架构与模块划分：[docs/new/overall.md](docs/new/overall.md)
 - 详细设计文档：[docs/design.md](docs/design.md)
 
 ## 安装
 
-Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（安装为 `/usr/local/bin/higgsnet`）：
+Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（安装为 `/usr/local/bin/photon`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Catofes/photon/master/contrib/install.sh | sh
 ```
 
 更新到最新 Release：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/higgs/master/contrib/update.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Catofes/photon/master/contrib/update.sh | sh
 ```
 
 安装和更新会在替换二进制前检查完整数据面依赖，包括 `ip`、`ping`、
@@ -25,23 +25,23 @@ BIRD 2.14+、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时
 `--skip-dependency-check`（管道执行时使用 `sh -s -- --skip-dependency-check`）。
 
 原生安装是主要部署路径：它直接集成 systemd、宿主数据面和
-`higgs-services` 生成的服务编排 artifact。Docker 是固定用户态依赖的备用路径，
+`photon-services` 生成的服务编排 artifact。Docker 是固定用户态依赖的备用路径，
 不取代管理员对宿主网络、Compose 和服务生命周期的管理。
 
 其他安装方式：
 
-- **Docker**：`make docker-build` 构建基于 Ubuntu 24.04 的运行时镜像，镜像同时包含 `higgs` 与 `higgs-services`；真实数据面（IPsec/XFRM、BIRD、firewall、netns）仍需要 `--privileged --network host` 和兼容的宿主 Linux 内核。
-- **Nix**：`nix build .#higgsnet`，并提供 NixOS module（`services.higgsnet.enable = true`）；`nix develop` 提供完整开发/数据面调试环境。
-- **源码**：`make build`，产物在 `build/higgs`。
+- **Docker**：`make docker-build` 构建基于 Ubuntu 24.04 的运行时镜像，镜像同时包含 `photon` 与 `photon-services`；真实数据面（IPsec/XFRM、BIRD、firewall、netns）仍需要 `--privileged --network host` 和兼容的宿主 Linux 内核。
+- **Nix**：`nix build .#photon`，并提供 NixOS module（`services.photon.enable = true`）；`nix develop` 提供完整开发/数据面调试环境。
+- **源码**：`make build`，产物在 `build/photon`。
 
 ## 快速开始
 
-默认读取 `/etc/higgs/config.yaml`，可用 `HIGGS_CONFIG=/path/to/config.yaml` 覆盖。本地开发或同机多节点时建议始终显式指定 `HIGGS_CONFIG`。
+默认读取 `/etc/photon/config.yaml`，可用 `PHOTON_CONFIG=/path/to/config.yaml` 覆盖。本地开发或同机多节点时建议始终显式指定 `PHOTON_CONFIG`。
 
 最小节点配置：
 
 ```yaml
-data_dir: /etc/higgs
+data_dir: /etc/photon
 trusted_root_public_key: <base64-ed25519-public-key>
 
 gossip:
@@ -52,17 +52,17 @@ gossip:
       addr: 203.0.113.20:33434
   init:
     managed_zone: node-a.catofes.
-    key_path: /etc/higgs/identity.key.json
+    key_path: /etc/photon/identity.key.json
 ```
 
 加入网络的基本流程：节点生成 key 并提交 join request，由父 Zone 管理端签发 delegation bundle，节点接受 bundle 后即可运行：
 
 ```bash
-build/higgs gossip keygen identity.key.json
-build/higgs gossip join request node-a.catofes. identity.key.json      # 交给管理端
-build/higgs gossip delegate issue <request.b64>                        # 管理端签发
-build/higgs gossip join accept <bundle.b64> identity.key.json          # 节点导入
-build/higgs daemon                                                     # 长期运行入口
+build/photon gossip keygen identity.key.json
+build/photon gossip join request node-a.catofes. identity.key.json      # 交给管理端
+build/photon gossip delegate issue <request.b64>                        # 管理端签发
+build/photon gossip join accept <bundle.b64> identity.key.json          # 节点导入
+build/photon daemon                                                     # 长期运行入口
 ```
 
 完整的从零搭建（root admin → 一级管理 Zone → 普通节点）见 [docs/new/operations.md](docs/new/operations.md)。所有配置项的带注释模板见 [config.example.yaml](config.example.yaml)，字段参考见 [docs/new/config.md](docs/new/config.md)。

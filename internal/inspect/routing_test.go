@@ -3,7 +3,7 @@ package inspect
 import (
 	"testing"
 
-	higgsstate "github.com/Catofes/higgs/internal/state"
+	photonstate "github.com/Catofes/photon/internal/state"
 )
 
 func TestBuildBabelDebug(t *testing.T) {
@@ -11,7 +11,7 @@ func TestBuildBabelDebug(t *testing.T) {
 		LastReconcileError: "reload failed",
 		Instances: []BabelInstanceInput{
 			{
-				NetNS:      "higgstesth2",
+				NetNS:      "photontesth2",
 				InstanceID: "main",
 				Enabled:    true,
 			},
@@ -28,12 +28,12 @@ func TestBuildBabelDebug(t *testing.T) {
 				Enabled:    false,
 			},
 		},
-		RuntimeStates: map[string]*higgsstate.BirdInstanceState{
-			"higgstesth2": {
+		RuntimeStates: map[string]*photonstate.BirdInstanceState{
+			"photontesth2": {
 				RouterID:       12345,
-				ControlSocket:  "/run/higgs/bird/bird-main.ctl",
-				ConfigPath:     "/run/higgs/bird/bird-main.conf",
-				PIDFile:        "/run/higgs/bird/bird-main.pid",
+				ControlSocket:  "/run/photon/bird/bird-main.ctl",
+				ConfigPath:     "/run/photon/bird/bird-main.conf",
+				PIDFile:        "/run/photon/bird/bird-main.pid",
 				LastConfigHash: "deadbeef",
 				Overlays:       []string{"main"},
 				State:          "running",
@@ -71,7 +71,7 @@ func TestBuildBabelDebugCopiesRuntimeSlices(t *testing.T) {
 	overlays := []string{"main"}
 	view := BuildBabelDebug(BabelDebugInput{
 		Instances: []BabelInstanceInput{{NetNS: "n", InstanceID: "main", Enabled: true}},
-		RuntimeStates: map[string]*higgsstate.BirdInstanceState{
+		RuntimeStates: map[string]*photonstate.BirdInstanceState{
 			"n": {Overlays: overlays},
 		},
 	})

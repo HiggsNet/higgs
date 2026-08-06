@@ -7,7 +7,7 @@ import (
 )
 
 func TestBoltStoreSaveLoadNetwork(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "higgs.db")
+	path := filepath.Join(t.TempDir(), "photon.db")
 	store, err := OpenBoltStore(path, 0o600)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
@@ -77,7 +77,7 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 }
 
 func TestBoltStoreSaveNetworkDoesNotMutateZonePath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "higgs.db")
+	path := filepath.Join(t.TempDir(), "photon.db")
 	store, err := OpenBoltStore(path, 0o600)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
@@ -110,7 +110,7 @@ func TestBoltStoreSaveNetworkDoesNotMutateZonePath(t *testing.T) {
 }
 
 func TestBoltStoreLoadTrimsLegacyRecordHistory(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "higgs.db")
+	path := filepath.Join(t.TempDir(), "photon.db")
 	store, err := OpenBoltStore(path, 0o600)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
@@ -153,7 +153,7 @@ func TestBoltStoreLoadTrimsLegacyRecordHistory(t *testing.T) {
 }
 
 func TestBoltStoreLoadRestoresLatestActiveRecord(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "higgs.db")
+	path := filepath.Join(t.TempDir(), "photon.db")
 	store, err := OpenBoltStore(path, 0o600)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
@@ -207,7 +207,7 @@ func TestBoltStoreLoadRestoresLatestActiveRecord(t *testing.T) {
 }
 
 func TestBoltStoreSaveNetworkDeletesRemovedZoneBuckets(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "higgs.db")
+	path := filepath.Join(t.TempDir(), "photon.db")
 	store, err := OpenBoltStore(path, 0o600)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)

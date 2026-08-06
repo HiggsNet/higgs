@@ -1,10 +1,10 @@
-data_dir: /var/lib/higgs
+data_dir: /var/lib/photon
 trusted_root_public_key: <base64-ed25519-public-key>
 
 gossip:
   init:
     managed_zone: node-a.catofes.
-    key_path: /var/lib/higgs/identity.key.json
+    key_path: /var/lib/photon/identity.key.json
   peer_id: node-a.catofes.
   listen_addr: "[::]:33434"
   bootstrap: []

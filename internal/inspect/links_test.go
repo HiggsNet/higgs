@@ -59,7 +59,7 @@ func TestBuildLinksShowsMissingPlannedLinksWhenNoInstancesExist(t *testing.T) {
 			InstanceID:    "link-b",
 			GroupID:       "main",
 			PeerZone:      "node-b.example.",
-			InterfaceName: "hgs0",
+			InterfaceName: "phx0",
 			XFRMIfID:      42,
 		}},
 	})
@@ -71,7 +71,7 @@ func TestBuildLinksShowsMissingPlannedLinksWhenNoInstancesExist(t *testing.T) {
 		t.Fatalf("links = %d, want 1", len(got.Links))
 	}
 	link := got.Links[0]
-	if !link.Missing || link.State != "missing" || link.InterfaceName != "hgs0" || link.XFRMIfID != 42 {
+	if !link.Missing || link.State != "missing" || link.InterfaceName != "phx0" || link.XFRMIfID != 42 {
 		t.Fatalf("link = %+v, want missing planned link", link)
 	}
 }
@@ -106,14 +106,14 @@ func TestFilterLinkViewsMatchesPeerAndRuntimeFields(t *testing.T) {
 			PeerZone:      "node-a.catofes.",
 			LinkID:        "link-a",
 			TransportID:   "ipsec-current",
-			InterfaceName: "hgs11111111",
+			InterfaceName: "phx11111111",
 		},
 		{
 			ID:            "ipsec-main/node-b.catofes.",
 			PeerZone:      "node-b.catofes.",
 			LinkID:        "link-b",
 			TransportID:   "ipsec-staged-r2",
-			InterfaceName: "hgs22222222",
+			InterfaceName: "phx22222222",
 		},
 	}
 

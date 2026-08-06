@@ -46,7 +46,7 @@ func fakeBirdBinary(t *testing.T) string {
 
 func managedSpec(tmp string) BirdInstanceSpec {
 	owner := BirdResourceOwner{
-		Manager:    "higgs",
+		Manager:    "photon",
 		InstanceID: "test-overlay",
 		NetNSName:  "test-overlay",
 	}
@@ -110,7 +110,7 @@ func TestExecProcessManagerStartNamedNetNS(t *testing.T) {
 	pm.socketWaitTimeout = 100 * time.Millisecond
 
 	spec := managedSpec(tmp)
-	spec.NetNS = NetNSSpec{Kind: "name", Name: "higgs-test", Create: true}
+	spec.NetNS = NetNSSpec{Kind: "name", Name: "photon-test", Create: true}
 
 	if err := pm.Start(context.Background(), spec); err == nil {
 		t.Fatal("expected Start to fail when socket does not appear")
@@ -118,12 +118,12 @@ func TestExecProcessManagerStartNamedNetNS(t *testing.T) {
 
 	var foundAdd, foundExec bool
 	for _, cmd := range mr.cmds {
-		if cmd.name == "ip" && len(cmd.args) >= 3 && cmd.args[0] == "netns" && cmd.args[1] == "add" && cmd.args[2] == "higgs-test" {
+		if cmd.name == "ip" && len(cmd.args) >= 3 && cmd.args[0] == "netns" && cmd.args[1] == "add" && cmd.args[2] == "photon-test" {
 			foundAdd = true
 		}
-		if cmd.name == "ip" && len(cmd.args) >= 3 && cmd.args[0] == "netns" && cmd.args[1] == "exec" && cmd.args[2] == "higgs-test" {
+		if cmd.name == "ip" && len(cmd.args) >= 3 && cmd.args[0] == "netns" && cmd.args[1] == "exec" && cmd.args[2] == "photon-test" {
 			foundExec = true
-			want := []string{"netns", "exec", "higgs-test", pm.birdBinary, "-c", spec.ConfigPath, "-s", spec.ControlSocketPath, "-P", spec.PIDFilePath}
+			want := []string{"netns", "exec", "photon-test", pm.birdBinary, "-c", spec.ConfigPath, "-s", spec.ControlSocketPath, "-P", spec.PIDFilePath}
 			if !slices.Equal(cmd.args, want) {
 				t.Errorf("expected exec args %v, got %v", want, cmd.args)
 			}
@@ -207,10 +207,10 @@ func TestExecProcessManagerStartAdoptsExistingPidfile(t *testing.T) {
 
 func TestEnsureNamedNetNSAcceptsExistingNamespace(t *testing.T) {
 	runner := func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "sh", "-c", `echo 'Cannot create namespace file "/run/netns/higgs-test": File exists' >&2; exit 1`)
+		return exec.CommandContext(ctx, "sh", "-c", `echo 'Cannot create namespace file "/run/netns/photon-test": File exists' >&2; exit 1`)
 	}
 
-	if err := ensureNamedNetNSWithRunner(context.Background(), "higgs-test", runner); err != nil {
+	if err := ensureNamedNetNSWithRunner(context.Background(), "photon-test", runner); err != nil {
 		t.Fatalf("expected existing netns to be accepted, got %v", err)
 	}
 }
@@ -220,7 +220,7 @@ func TestEnsureNamedNetNSIncludesCommandOutputOnFailure(t *testing.T) {
 		return exec.CommandContext(ctx, "sh", "-c", `echo 'mount --make-shared /run/netns failed' >&2; exit 1`)
 	}
 
-	err := ensureNamedNetNSWithRunner(context.Background(), "higgs-test", runner)
+	err := ensureNamedNetNSWithRunner(context.Background(), "photon-test", runner)
 	if err == nil {
 		t.Fatal("expected error")
 	}

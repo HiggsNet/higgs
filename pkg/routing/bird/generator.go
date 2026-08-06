@@ -62,7 +62,7 @@ func applyDefaults(spec BirdInstanceSpec) BirdInstanceSpec {
 		spec.InterfacePattern = ""
 	}
 	if len(spec.InterfacePatterns) == 0 {
-		spec.InterfacePatterns = []string{"hgs*"}
+		spec.InterfacePatterns = []string{"phx*"}
 	}
 	return spec
 }
@@ -127,13 +127,13 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	internalTable := spec.InternalTableName
 	ipv4Table := internalTable + "4"
 	ipv6Table := internalTable + "6"
-	kernelName := "higgs_kern_" + suffix
+	kernelName := "photon_kern_" + suffix
 	kernelName4 := kernelName + "4"
 	kernelName6 := kernelName + "6"
-	babelName := "higgs_babel_" + suffix
-	importFilterName := "higgs_import_" + suffix
-	exportFilterName := "higgs_export_" + suffix
-	staticName := "higgs_static_" + suffix
+	babelName := "photon_babel_" + suffix
+	importFilterName := "photon_import_" + suffix
+	exportFilterName := "photon_export_" + suffix
+	staticName := "photon_static_" + suffix
 
 	var kernelTableID uint32
 	if spec.TableID != defaultTableID {
@@ -153,7 +153,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 
 	interfacePatterns := spec.InterfacePatterns
 	if len(interfacePatterns) == 0 {
-		interfacePatterns = []string{"hgs*"}
+		interfacePatterns = []string{"phx*"}
 	}
 
 	// Determine if upstream is enabled and build upstream interface block.
@@ -228,7 +228,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 }
 
 // renderInterfacePatterns renders multiple BIRD interface patterns as a
-// comma-separated list of quoted strings, e.g. "hgs*", "wg*".
+// comma-separated list of quoted strings, e.g. "phx*", "wg*".
 func renderInterfacePatterns(patterns []string) string {
 	quoted := make([]string, len(patterns))
 	for i, p := range patterns {
@@ -240,7 +240,7 @@ func renderInterfacePatterns(patterns []string) string {
 func renderConfig(cfg BirdConfig) ([]byte, error) {
 	var b bytes.Buffer
 
-	fmt.Fprintln(&b, "# Higgs-generated BIRD config")
+	fmt.Fprintln(&b, "# Photon-generated BIRD config")
 	fmt.Fprintln(&b, "# Do not edit manually.")
 	fmt.Fprintln(&b)
 	fmt.Fprintf(&b, "%s;\n", cfg.LogTarget)
@@ -441,7 +441,7 @@ func sanitizeNetNSName(name string) string {
 }
 
 func defaultInternalTableName(netnsName string) string {
-	return "higgs_" + sanitizeNetNSName(netnsName)
+	return "photon_" + sanitizeNetNSName(netnsName)
 }
 
 // InternalRouteTableNames returns the BIRD IPv4 and IPv6 table names generated

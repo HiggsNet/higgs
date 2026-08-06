@@ -12,7 +12,7 @@ import (
 func TestIPTablesDriver_Preflight(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
-	pf, err := d.Preflight(context.Background(), FirewallInstanceSpec{ID: "higgstesth2"})
+	pf, err := d.Preflight(context.Background(), FirewallInstanceSpec{ID: "photontesth2"})
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
@@ -25,9 +25,9 @@ func TestIPTablesDriver_ApplyOverlay(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
-		OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
+		OwnerPrefix: "photon",
 	}
 	input := FirewallPolicyInput{
 		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -36,7 +36,7 @@ func TestIPTablesDriver_ApplyOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("higgstesth2", desired, FirewallObservedState{})
+	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
 	result, err := d.Apply(context.Background(), plan, desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -66,11 +66,11 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 		prefixes = append(prefixes, netip.MustParsePrefix(fmt.Sprintf("2001:db8:%x::/64", i)))
 	}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+		ID: "photon", NetNS: "photon", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*", OwnerPrefix: "photon",
 	}, FirewallPolicyInput{
 		MeshAuthorized: prefixes,
-		LiveInterfaces: []string{"hgs1", "hgs2", "hgs3"},
+		LiveInterfaces: []string{"phx1", "phx2", "phx3"},
 		Forwarding: ForwardingPolicy{
 			Transit:       true,
 			AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")},
@@ -79,7 +79,7 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("h2", desired, FirewallObservedState{})
+	plan := PlanDiff("photon", desired, FirewallObservedState{})
 	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 		text := commandText(command)
 		if command.name == "ip6tables" && strings.Contains(text, "xfrm transit (transit enabled)") {
 			transitRules++
-			if !strings.Contains(text, "-i hgs+ -o hgs+") ||
+			if !strings.Contains(text, "-i phx+ -o phx+") ||
 				strings.Count(text, "--match-set") != 2 ||
 				!strings.Contains(text, " src ") ||
 				!strings.Contains(text, " dst ") {
@@ -135,8 +135,8 @@ func TestIPTablesDriver_IPSetPreparationFailureKeepsActiveGeneration(t *testing.
 		netip.MustParsePrefix("10.2.0.0/24"),
 	}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "h2", NetNS: "h2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+		ID: "photon", NetNS: "photon", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*", OwnerPrefix: "photon",
 	}, FirewallPolicyInput{
 		MeshAuthorized: prefixes,
 		Forwarding:     ForwardingPolicy{Transit: true, AllowPrefixes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
@@ -144,7 +144,7 @@ func TestIPTablesDriver_IPSetPreparationFailureKeepsActiveGeneration(t *testing.
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("h2", desired, FirewallObservedState{})
+	plan := PlanDiff("photon", desired, FirewallObservedState{})
 	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestIPTablesDriver_IPSetPreparationFailureKeepsActiveGeneration(t *testing.
 
 func TestIPTablesDriver_ExternalDoesNotApply(t *testing.T) {
 	runner := &fakeCommandRunner{}
-	desired, err := BuildDesiredState(FirewallInstanceSpec{ID: "external", NetNS: "h2", Mode: ModeExternal}, FirewallPolicyInput{})
+	desired, err := BuildDesiredState(FirewallInstanceSpec{ID: "external", NetNS: "photon", Mode: ModeExternal}, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestIPTablesDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
-		OwnerPrefix:   "higgs",
+		OwnerPrefix:   "photon",
 		HostPorts:     HostPortConfig{IKE: true, NATT: true},
 		RedirectGrace: RedirectGrace{Enabled: true},
 	}
@@ -220,7 +220,7 @@ func TestIPTablesDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
-		OwnerPrefix:   "higgs",
+		OwnerPrefix:   "photon",
 		HostPorts:     HostPortConfig{IKE: true, NATT: true},
 		RedirectGrace: RedirectGrace{Enabled: true},
 	}
@@ -235,7 +235,7 @@ func TestIPTablesDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	assertCommandContains(t, runner.commands, "iptables", "-t nat -A higgs_host_s_")
+	assertCommandContains(t, runner.commands, "iptables", "-t nat -A photon_host_s_")
 	assertCommandContains(t, runner.commands, "iptables", "-p udp --sport 4500 -j MASQUERADE --to-ports 33403")
 }
 
@@ -248,7 +248,7 @@ func TestIPTablesDriver_HostAddressFamilyCommands(t *testing.T) {
 		IsHost:        true,
 		Enabled:       true,
 		Mode:          ModeManaged,
-		OwnerPrefix:   "higgs",
+		OwnerPrefix:   "photon",
 		HostPorts:     HostPortConfig{IKE: true},
 		RedirectGrace: RedirectGrace{Enabled: true},
 		ListenAddrs: []netip.Addr{
@@ -286,7 +286,7 @@ func TestIPTablesDriver_HostAddressFamilyCommands(t *testing.T) {
 func TestIPTablesDriver_ListOwned(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
-	state, err := d.ListOwned(context.Background(), Owner{OwnerPrefix: "higgs", InstanceID: "higgstesth2"})
+	state, err := d.ListOwned(context.Background(), Owner{OwnerPrefix: "photon", InstanceID: "photontesth2"})
 	if err != nil {
 		t.Fatalf("ListOwned: %v", err)
 	}
@@ -297,12 +297,12 @@ func TestIPTablesDriver_ListOwned(t *testing.T) {
 
 func TestIPTablesDriver_DeleteStale(t *testing.T) {
 	runner := &fakeCommandRunner{existingChains: map[string]bool{
-		"iptables:filter:higgs_higgstesth2_input":  true,
-		"ip6tables:filter:higgs_higgstesth2_input": true,
+		"iptables:filter:photon_photontesth2_input":  true,
+		"ip6tables:filter:photon_photontesth2_input": true,
 	}}
 	d := &IPTablesDriver{Command: runner.run}
 	refs := []FirewallObjectRef{
-		{Kind: "chain", Family: "inet", Name: "higgs_higgstesth2_input"},
+		{Kind: "chain", Family: "inet", Name: "photon_photontesth2_input"},
 	}
 	if err := d.DeleteStale(context.Background(), refs); err != nil {
 		t.Fatalf("DeleteStale: %v", err)
@@ -326,19 +326,19 @@ func TestIPTablesDriver_DeleteStale(t *testing.T) {
 }
 
 func TestParseIPTablesChains(t *testing.T) {
-	output := "-N higgs_higgstesth2_INPUT\n-A higgs_higgstesth2_INPUT -p udp --dport 500 -j ACCEPT\n-N higgs_higgstesth2_FORWARD\n-N higgs_higgstesth2_pre_user\n-A INPUT -j higgs_higgstesth2_INPUT\n-N other_chain"
-	refs := parseIPTablesChains(output, "higgs_higgstesth2", "filter")
+	output := "-N photon_photontesth2_INPUT\n-A photon_photontesth2_INPUT -p udp --dport 500 -j ACCEPT\n-N photon_photontesth2_FORWARD\n-N photon_photontesth2_pre_user\n-A INPUT -j photon_photontesth2_INPUT\n-N other_chain"
+	refs := parseIPTablesChains(output, "photon_photontesth2", "filter")
 	if len(refs) != 2 {
-		t.Fatalf("expected 2 higgs-owned chains, got %d", len(refs))
+		t.Fatalf("expected 2 photon-owned chains, got %d", len(refs))
 	}
 	for _, ref := range refs {
-		if !strings.HasPrefix(ref.Name, "higgs_higgstesth2") {
-			t.Errorf("non-higgs chain in result: %s", ref.Name)
+		if !strings.HasPrefix(ref.Name, "photon_photontesth2") {
+			t.Errorf("non-photon chain in result: %s", ref.Name)
 		}
 	}
 	natRefs := parseIPTablesChains(
-		"-N higgs_higgstesth2_prerouting\n-N higgs_higgstesth2_postrouting\n-N higgs_higgstesth2_nat_user",
-		"higgs_higgstesth2", "nat",
+		"-N photon_photontesth2_prerouting\n-N photon_photontesth2_postrouting\n-N photon_photontesth2_nat_user",
+		"photon_photontesth2", "nat",
 	)
 	if len(natRefs) != 2 || natRefs[0].Kind != "nat_redirect" || natRefs[1].Kind != "nat_source" {
 		t.Fatalf("nat refs = %+v, want redirect/source managed objects only", natRefs)
@@ -517,15 +517,15 @@ func TestIPTablesDriver_CtStateCommands(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
-		OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
+		OwnerPrefix: "photon",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("higgstesth2", desired, FirewallObservedState{})
+	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
 	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -540,15 +540,15 @@ func TestIPTablesDriver_FamilyNeutralAndICMPCommands(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
-		OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
+		OwnerPrefix: "photon",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("higgstesth2", desired, FirewallObservedState{})
+	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
 	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestIPTablesDriver_FamilyNeutralAndICMPCommands(t *testing.T) {
 	for _, binary := range []string{"iptables", "ip6tables"} {
 		assertCommandContains(t, runner.commands, binary, "-i lo -j ACCEPT")
 		assertCommandContains(t, runner.commands, binary, "-p udp --dport 6696 -j ACCEPT")
-		assertCommandContains(t, runner.commands, binary, "-i hgs+ -o hgs+ -j DROP")
+		assertCommandContains(t, runner.commands, binary, "-i phx+ -o phx+ -j DROP")
 	}
 
 	// No cross-family ICMP rendering.
@@ -579,7 +579,7 @@ func TestIPTablesDriver_FamilyNeutralAndICMPCommands(t *testing.T) {
 	// Every accept rule in the overlay INPUT chain must carry at least one
 	// match; an unconditional accept before the default policy would nullify
 	// the default drop.
-	chain := "higgs_higgstesth2_input"
+	chain := "photon_photontesth2_input"
 	for _, cmd := range runner.commands {
 		args := strings.Join(cmd.args, " ")
 		if !strings.Contains(args, "-A "+chain) || !strings.Contains(args, "-j ACCEPT") {
@@ -602,7 +602,7 @@ func TestIPTablesDriverInlineHooksKeepFamiliesAndOrderSeparate(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	driver := &IPTablesDriver{Command: runner.run}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "h2", NetNS: "h2", Mode: ModeManaged, Backend: BackendIptables, OwnerPrefix: "higgs",
+		ID: "photon", NetNS: "photon", Mode: ModeManaged, Backend: BackendIptables, OwnerPrefix: "photon",
 		NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{
 			IPv4: InlineHookRules{PreInput: []string{
 				`-s 10.20.0.0/16 -p tcp --dport 22 -j ACCEPT`,
@@ -616,7 +616,7 @@ func TestIPTablesDriverInlineHooksKeepFamiliesAndOrderSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := driver.Apply(context.Background(), PlanDiff("h2", desired, FirewallObservedState{}), desired); err != nil {
+	if _, err := driver.Apply(context.Background(), PlanDiff("photon", desired, FirewallObservedState{}), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	first := commandIndex(runner.commands, "iptables", "-s 10.20.0.0/16")
@@ -640,7 +640,7 @@ func TestIPTablesDriverHostPreroutingInlineRuleUsesNATTable(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	driver := &IPTablesDriver{Command: runner.run}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "host", NetNS: "host", IsHost: true, Mode: ModeManaged, Backend: BackendIptables, OwnerPrefix: "higgs",
+		ID: "host", NetNS: "host", IsHost: true, Mode: ModeManaged, Backend: BackendIptables, OwnerPrefix: "photon",
 		NativeHooks: NativeHooks{IPTables: IPTablesInlineHooks{
 			IPv4: InlineHookRules{HostPrePrerouting: []string{`-p tcp --dport 8080 -j ACCEPT`}},
 		}},
@@ -651,7 +651,7 @@ func TestIPTablesDriverHostPreroutingInlineRuleUsesNATTable(t *testing.T) {
 	if _, err := driver.Apply(context.Background(), PlanDiff("host", desired, FirewallObservedState{}), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	assertCommandContains(t, runner.commands, "iptables", "-t nat -A higgs_host_r_")
+	assertCommandContains(t, runner.commands, "iptables", "-t nat -A photon_host_r_")
 	assertCommandContains(t, runner.commands, "iptables", "-p tcp --dport 8080 -j ACCEPT")
 }
 
@@ -659,9 +659,9 @@ func TestIPTablesDriver_ReconcileExistingManagedChains(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
-		OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
+		OwnerPrefix: "photon",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
@@ -672,7 +672,7 @@ func TestIPTablesDriver_ReconcileExistingManagedChains(t *testing.T) {
 		t.Fatalf("first Apply: %v", err)
 	}
 
-	observed, err := d.ListOwned(context.Background(), Owner{OwnerPrefix: "higgs", InstanceID: spec.NetNS})
+	observed, err := d.ListOwned(context.Background(), Owner{OwnerPrefix: "photon", InstanceID: spec.NetNS})
 	if err != nil {
 		t.Fatalf("ListOwned after first apply: %v", err)
 	}
@@ -717,8 +717,8 @@ func TestIPTablesDriver_PrepareFailureKeepsActiveGeneration(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	driver := &IPTablesDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*", OwnerPrefix: "photon",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
@@ -746,7 +746,7 @@ func TestIPTablesDriver_PrepareFailureKeepsActiveGeneration(t *testing.T) {
 		if !runner.existingChains[binary+":filter:"+activeInput] {
 			t.Errorf("%s active generation was removed after staging failure", binary)
 		}
-		jump := []string{"INPUT", "-j", activeInput, "-m", "comment", "--comment", "higgs-higgstesth2"}
+		jump := []string{"INPUT", "-j", activeInput, "-m", "comment", "--comment", "photon-photontesth2"}
 		key := binary + ":filter:" + strings.Join(jump, "\x00")
 		if !runner.existingRules[key] {
 			t.Errorf("%s active jump was removed after staging failure", binary)
@@ -764,8 +764,8 @@ func TestIPTablesDriver_ActivationFailureRollsBackOtherFamily(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	driver := &IPTablesDriver{Command: runner.run}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*", OwnerPrefix: "photon",
 	}, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
@@ -796,11 +796,11 @@ func TestIPTablesDriver_ActivationFailureRollsBackOtherFamily(t *testing.T) {
 		t.Fatal("activation failure was not injected")
 	}
 	for _, binary := range []string{"iptables", "ip6tables"} {
-		activeJump := []string{"INPUT", "-j", activeInput, "-m", "comment", "--comment", "higgs-higgstesth2"}
+		activeJump := []string{"INPUT", "-j", activeInput, "-m", "comment", "--comment", "photon-photontesth2"}
 		if !runner.existingRules[binary+":filter:"+strings.Join(activeJump, "\x00")] {
 			t.Errorf("%s old active jump missing after activation rollback", binary)
 		}
-		stagingJump := []string{"INPUT", "-j", stagingInput, "-m", "comment", "--comment", "higgs-higgstesth2"}
+		stagingJump := []string{"INPUT", "-j", stagingInput, "-m", "comment", "--comment", "photon-photontesth2"}
 		if runner.existingRules[binary+":filter:"+strings.Join(stagingJump, "\x00")] {
 			t.Errorf("%s staging jump remained after activation rollback", binary)
 		}
@@ -813,8 +813,8 @@ func TestIPTablesDriver_ActivationFailureRollsBackOtherFamily(t *testing.T) {
 func TestIPTablesDriver_MigrationDrainsAllLegacyDuplicateJumps(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	const duplicates = 12
-	legacy := "higgs_higgstesth2_INPUT"
-	jump := []string{"INPUT", "-j", legacy, "-m", "comment", "--comment", "higgs-higgstesth2"}
+	legacy := "photon_photontesth2_INPUT"
+	jump := []string{"INPUT", "-j", legacy, "-m", "comment", "--comment", "photon-photontesth2"}
 	for _, binary := range []string{"iptables", "ip6tables"} {
 		runner.seedIPTablesChain(binary, "filter", legacy)
 		for range duplicates {
@@ -823,8 +823,8 @@ func TestIPTablesDriver_MigrationDrainsAllLegacyDuplicateJumps(t *testing.T) {
 	}
 	driver := &IPTablesDriver{Command: runner.run}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*", OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*", OwnerPrefix: "photon",
 	}, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
@@ -850,7 +850,7 @@ func TestIPTablesDriver_MigrationDrainsAllLegacyDuplicateJumps(t *testing.T) {
 }
 
 func TestIPTablesGenerationChainNameIsBoundedAndRecognized(t *testing.T) {
-	tableName := "higgs_a_very_long_network_namespace_name"
+	tableName := "photon_a_very_long_network_namespace_name"
 	chain := iptablesGenerationChain(tableName, "i", "0123456789abcdef", 'a')
 	if len(chain) > 28 {
 		t.Fatalf("generation chain %q has length %d, want <= 28", chain, len(chain))
@@ -875,8 +875,8 @@ func commandIndex(commands []executedCommand, binary, fragment string) int {
 
 func TestIPTablesInterfaceMatchArgSetsExpandsExactSets(t *testing.T) {
 	rule := Rule{
-		IfacesIn:  []string{"hgs1", "hgs2"},
-		IfacesOut: []string{"hgs1", "hgs2"},
+		IfacesIn:  []string{"phx1", "phx2"},
+		IfacesOut: []string{"phx1", "phx2"},
 	}
 	matches := iptablesInterfaceMatchArgSets(rule)
 	if len(matches) != 4 {
@@ -886,18 +886,18 @@ func TestIPTablesInterfaceMatchArgSetsExpandsExactSets(t *testing.T) {
 
 func TestIPTablesInterfaceMatchArgSetsPrefersPortableSelectors(t *testing.T) {
 	rule := Rule{
-		IfaceIn:   "hgs*",
-		IfaceOut:  "hgs*",
-		IfacesIn:  []string{"hgs1", "hgs2"},
-		IfacesOut: []string{"hgs1", "hgs2"},
+		IfaceIn:   "phx*",
+		IfaceOut:  "phx*",
+		IfacesIn:  []string{"phx1", "phx2"},
+		IfacesOut: []string{"phx1", "phx2"},
 	}
 	matches := iptablesInterfaceMatchArgSets(rule)
 	if len(matches) != 1 {
 		t.Fatalf("portable selectors produced %d matches, want 1: %v", len(matches), matches)
 	}
 	got := strings.Join(matches[0], " ")
-	if got != "-i hgs+ -o hgs+" {
-		t.Fatalf("portable selectors rendered as %q, want %q", got, "-i hgs+ -o hgs+")
+	if got != "-i phx+ -o phx+" {
+		t.Fatalf("portable selectors rendered as %q, want %q", got, "-i phx+ -o phx+")
 	}
 }
 
@@ -912,12 +912,12 @@ func TestIPTablesRuleCommandsWithIPSetsKeepsFamiliesSeparate(t *testing.T) {
 	}
 	rule := Rule{
 		Action:   ActionAccept,
-		IfaceIn:  "hgs*",
-		IfaceOut: "hgs*",
+		IfaceIn:  "phx*",
+		IfaceOut: "phx*",
 		Src:      append(append([]netip.Prefix{}, v4...), v6...),
 		Dst:      append(append([]netip.Prefix{}, v4...), v6...),
 	}
-	rendered := iptablesRuleCommandsWithIPSets("higgs_h2", "higgs_h2_f_deadbeef0000a", rule, "higgs-h2")
+	rendered := iptablesRuleCommandsWithIPSets("photon_h2", "photon_h2_f_deadbeef0000a", rule, "photon-photon")
 	if len(rendered.commands) != 2 || len(rendered.ipsets) != 2 {
 		t.Fatalf("dual-stack rendering = %d commands, %d sets; want 2 and 2", len(rendered.commands), len(rendered.ipsets))
 	}
@@ -936,7 +936,7 @@ func TestIPTablesRuleCommandsWithIPSetsKeepsFamiliesSeparate(t *testing.T) {
 func TestPlanDiffKeepsObservedNATChains(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
-		OwnerPrefix: "higgs", RedirectGrace: RedirectGrace{Enabled: true},
+		OwnerPrefix: "photon", RedirectGrace: RedirectGrace{Enabled: true},
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{
 		AdvertisedCurrentNATTPorts: []uint16{33403},
@@ -945,10 +945,10 @@ func TestPlanDiffKeepsObservedNATChains(t *testing.T) {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
 	observed := FirewallObservedState{Objects: []FirewallObjectRef{
-		{Kind: "table", Family: "inet", Name: "higgs_host"},
-		{Kind: "chain", Family: "inet", Name: "higgs_host_input"},
-		{Kind: "nat_redirect", Family: "inet", Name: "higgs_host_prerouting"},
-		{Kind: "nat_source", Family: "inet", Name: "higgs_host_postrouting"},
+		{Kind: "table", Family: "inet", Name: "photon_host"},
+		{Kind: "chain", Family: "inet", Name: "photon_host_input"},
+		{Kind: "nat_redirect", Family: "inet", Name: "photon_host_prerouting"},
+		{Kind: "nat_source", Family: "inet", Name: "photon_host_postrouting"},
 	}}
 	for _, action := range PlanDiff(spec.ID, desired, observed).Actions {
 		if action.Action == "delete" {
@@ -960,7 +960,7 @@ func TestPlanDiffKeepsObservedNATChains(t *testing.T) {
 func TestIPTablesApplyRemovesDisabledNATChainsFromNATTable(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
-		OwnerPrefix: "higgs",
+		OwnerPrefix: "photon",
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
 	if err != nil {
@@ -968,22 +968,22 @@ func TestIPTablesApplyRemovesDisabledNATChainsFromNATTable(t *testing.T) {
 	}
 	runner := &fakeCommandRunner{}
 	for _, binary := range []string{"iptables", "ip6tables"} {
-		runner.seedIPTablesChain(binary, "nat", "higgs_host_prerouting")
-		runner.seedIPTablesRule(binary, "nat", []string{"PREROUTING", "-j", "higgs_host_prerouting", "-m", "comment", "--comment", "higgs-host"})
-		runner.seedIPTablesChain(binary, "nat", "higgs_host_postrouting")
-		runner.seedIPTablesRule(binary, "nat", []string{"POSTROUTING", "-j", "higgs_host_postrouting", "-m", "comment", "--comment", "higgs-host"})
+		runner.seedIPTablesChain(binary, "nat", "photon_host_prerouting")
+		runner.seedIPTablesRule(binary, "nat", []string{"PREROUTING", "-j", "photon_host_prerouting", "-m", "comment", "--comment", "photon-host"})
+		runner.seedIPTablesChain(binary, "nat", "photon_host_postrouting")
+		runner.seedIPTablesRule(binary, "nat", []string{"POSTROUTING", "-j", "photon_host_postrouting", "-m", "comment", "--comment", "photon-host"})
 	}
 	driver := &IPTablesDriver{Command: runner.run}
 	if _, err := driver.Apply(context.Background(), FirewallPlan{}, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	for _, want := range []string{
-		"-t nat -D PREROUTING -j higgs_host_prerouting",
-		"-t nat -F higgs_host_prerouting",
-		"-t nat -X higgs_host_prerouting",
-		"-t nat -D POSTROUTING -j higgs_host_postrouting",
-		"-t nat -F higgs_host_postrouting",
-		"-t nat -X higgs_host_postrouting",
+		"-t nat -D PREROUTING -j photon_host_prerouting",
+		"-t nat -F photon_host_prerouting",
+		"-t nat -X photon_host_prerouting",
+		"-t nat -D POSTROUTING -j photon_host_postrouting",
+		"-t nat -F photon_host_postrouting",
+		"-t nat -X photon_host_postrouting",
 	} {
 		found := false
 		for _, cmd := range runner.commands {
@@ -1002,9 +1002,9 @@ func TestLegacyNATRuleNumbersDescending(t *testing.T) {
 	output := `Chain PREROUTING (policy ACCEPT)
 num  target     prot opt source destination
 1    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* other */ redir ports 500
-2    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* higgs-host:old one */ redir ports 500
-5    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* higgs-host:old two */ redir ports 4500`
-	got := legacyNATRuleNumbers(output, "higgs-host")
+2    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* photon-host:old one */ redir ports 500
+5    REDIRECT   udp  --  0.0.0.0/0 0.0.0.0/0 /* photon-host:old two */ redir ports 4500`
+	got := legacyNATRuleNumbers(output, "photon-host")
 	if len(got) != 2 || got[0] != 5 || got[1] != 2 {
 		t.Fatalf("legacy rule numbers = %v, want [5 2]", got)
 	}

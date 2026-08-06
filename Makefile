@@ -1,15 +1,15 @@
 .PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
 
-BINARY_NAME := higgs
-MAIN_PACKAGE := ./app/higgs
-SERVICES_BINARY_NAME := higgs-services
-SERVICES_MAIN_PACKAGE := ./app/higgs-services
+BINARY_NAME := photon
+MAIN_PACKAGE := ./app/photon
+SERVICES_BINARY_NAME := photon-services
+SERVICES_MAIN_PACKAGE := ./app/photon-services
 BUILD_DIR := build
 GO := go
-GO_CACHE ?= /tmp/higgs-gocache
-GO_MOD_CACHE ?= /tmp/higgs-gomodcache
+GO_CACHE ?= /tmp/photon-gocache
+GO_MOD_CACHE ?= /tmp/photon-gomodcache
 DOCKER ?= docker
-DOCKER_IMAGE ?= higgs:dev
+DOCKER_IMAGE ?= photon:dev
 RELEASE_REMOTE ?= origin
 RELEASE_VERSION := $(shell tr -d '\r\n' < VERSION 2>/dev/null)
 RELEASE_TAG := v$(RELEASE_VERSION)
@@ -28,17 +28,17 @@ ISOLATED_SMOKE_TARGETS := smoke smoke-all root-smoke $(SMOKE_TARGETS) $(ROOT_SMO
 
 # Every smoke invocation gets a private TMPDIR and derives one control socket per
 # test data_dir. This is especially important under sudo: root otherwise defaults
-# to the live /run/higgs/higgs.sock and a smoke mutation can reach production state.
+# to the live /run/photon/photon.sock and a smoke mutation can reach production state.
 ifneq ($(strip $(filter $(ISOLATED_SMOKE_TARGETS),$(MAKECMDGOALS))),)
 SMOKE_TMP_BASE := $(if $(TMPDIR),$(TMPDIR),/tmp)
-SMOKE_RUN_DIR := $(shell mktemp -d "$(SMOKE_TMP_BASE)/higgs-smoke.XXXXXX")
+SMOKE_RUN_DIR := $(shell mktemp -d "$(SMOKE_TMP_BASE)/photon-smoke.XXXXXX")
 ifeq ($(strip $(SMOKE_RUN_DIR)),)
 $(error failed to create isolated smoke directory below $(SMOKE_TMP_BASE))
 endif
 $(ISOLATED_SMOKE_TARGETS): export TMPDIR := $(SMOKE_RUN_DIR)
-$(ISOLATED_SMOKE_TARGETS): export HIGGS_CONTROL_SOCKET :=
-$(ISOLATED_SMOKE_TARGETS): export HIGGS_CONTROL_SOCKET_SCOPE := data-dir
-$(ISOLATED_SMOKE_TARGETS): export HIGGS_STATE :=
+$(ISOLATED_SMOKE_TARGETS): export PHOTON_CONTROL_SOCKET :=
+$(ISOLATED_SMOKE_TARGETS): export PHOTON_CONTROL_SOCKET_SCOPE := data-dir
+$(ISOLATED_SMOKE_TARGETS): export PHOTON_STATE :=
 endif
 
 .PHONY: docker-build docker-run-example nix-build install-script-check
@@ -77,9 +77,9 @@ install-script-check:
 	@sh -n contrib/install.sh contrib/update.sh
 	@contrib/install.sh --help >/dev/null
 	@output="$$(mktemp)"; trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-	HIGGS_SKIP_DEPENDENCY_CHECK=invalid contrib/install.sh --version test --no-service >"$$output" 2>&1; \
+	PHOTON_SKIP_DEPENDENCY_CHECK=invalid contrib/install.sh --version test --no-service >"$$output" 2>&1; \
 	status=$$?; test "$$status" -eq 2; \
-	grep -q 'HIGGS_SKIP_DEPENDENCY_CHECK must be true or false' "$$output"
+	grep -q 'PHOTON_SKIP_DEPENDENCY_CHECK must be true or false' "$$output"
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)
@@ -94,12 +94,12 @@ docker-build:
 
 docker-run-example:
 	$(DOCKER) run --rm --privileged --network host \
-		-v "$${PWD}/docker/config.example.yaml:/etc/higgs/config.yaml:ro" \
-		-v "$${PWD}/.higgs:/var/lib/higgs" \
+		-v "$${PWD}/docker/config.example.yaml:/etc/photon/config.yaml:ro" \
+		-v "$${PWD}/.photon:/var/lib/photon" \
 		"$(DOCKER_IMAGE)" version
 
 nix-build:
-	nix build .#higgs
+	nix build .#photon
 
 # Release flow: first make release-check, then make release-tag, then
 # make release-push. Neither target commits nor pushes the current branch.
@@ -132,7 +132,7 @@ smoke-all: $(SMOKE_TARGETS)
 	@rm -rf "$(SMOKE_RUN_DIR)"
 
 root-smoke: $(ROOT_SMOKE_TARGETS)
-	@HIGGS_REVOCATION_DATA_PLANE_SKIP_SHARED=1 GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/revocation-data-plane-smoke.sh
+	@PHOTON_REVOCATION_DATA_PLANE_SKIP_SHARED=1 GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/revocation-data-plane-smoke.sh
 	@echo "All root data-plane smoke tests passed"
 	@rm -rf "$(SMOKE_RUN_DIR)"
 
@@ -165,7 +165,7 @@ ipsec-dry-run-smoke:
 	@echo "IPsec dry-run smoke passed"
 
 routing-dry-run-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(RoutingDryRunSmoke|IPAMRoutingSmoke|AutoAnnounceAssignedIPsRoutingSmoke)' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'Test(RoutingDryRunSmoke|IPAMRoutingSmoke|AutoAnnounceAssignedIPsRoutingSmoke)' -v
 	@echo "Routing dry-run smoke passed"
 
 ipsec-policy-smoke:
@@ -174,12 +174,12 @@ ipsec-policy-smoke:
 
 firewall-dry-run-smoke:
 	$(GO_ENV) $(GO) test ./pkg/firewall
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ParseConfigYAMLFirewall|TestFirewallInstancesEnabled|TestFirewallInstanceSpecFromConfig|TestReconcileFirewall|TestDebugFirewall)' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'Test(ParseConfigYAMLFirewall|TestFirewallInstancesEnabled|TestFirewallInstanceSpecFromConfig|TestReconcileFirewall|TestDebugFirewall)' -v
 	$(GO_ENV) $(GO) test ./internal/inspect/text -run '^TestWriteFirewall' -v
 	@echo "Firewall dry-run smoke passed"
 
 firewall-smoke: build
-	@HIGGS_FIREWALL_SMOKE=1 $(GO_ENV) $(GO) test ./pkg/firewall -run 'TestFirewallBackendsRootSmoke' -count=1 -v
+	@PHOTON_FIREWALL_SMOKE=1 $(GO_ENV) $(GO) test ./pkg/firewall -run 'TestFirewallBackendsRootSmoke' -count=1 -v
 	@echo "Firewall root smoke passed"
 
 firewall-container-smoke:
@@ -187,9 +187,9 @@ firewall-container-smoke:
 
 health-smoke: build
 	$(GO_ENV) $(GO) test ./pkg/health -run 'Test(Manager|CollectMetricsAndRender)' -v
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(HealthTargets|ConfigureHealthManager|HealthLocalSpool|ReconcileRoutingFeedsBirdObservationToRotateCutoverGate)' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'Test(HealthTargets|ConfigureHealthManager|HealthLocalSpool|ReconcileRoutingFeedsBirdObservationToRotateCutoverGate)' -v
 	@docs/scripts/bird-babel-preflight.sh
-	@HIGGS_HEALTH_SMOKE=1 $(GO_ENV) $(GO) test ./app/higgs -run '^TestDaemonHealthBIRDCutoverGateRootSmoke$$' -count=1 -v
+	@PHOTON_HEALTH_SMOKE=1 $(GO_ENV) $(GO) test ./app/photon -run '^TestDaemonHealthBIRDCutoverGateRootSmoke$$' -count=1 -v
 	@echo "Health root smoke passed"
 
 health-fault-smoke: health-smoke
@@ -199,17 +199,17 @@ health-fault-container-smoke:
 	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/health-fault-container-smoke.sh
 
 services-smoke: build
-	$(GO_ENV) $(GO) test ./app/higgs-services -count=1 -v
-	@HIGGS_SERVICES_SMOKE=1 $(GO_ENV) $(GO) test ./app/higgs-services -run '^TestSOCKS5DockerBridgeBabelRootSmoke$$' -count=1 -v
-	@HIGGS_BIRD_SMOKE=1 $(GO_ENV) $(GO) test ./pkg/routing/bird -run '^TestBabelAnycastFailoverRootSmoke$$' -count=1 -v
+	$(GO_ENV) $(GO) test ./app/photon-services -count=1 -v
+	@PHOTON_SERVICES_SMOKE=1 $(GO_ENV) $(GO) test ./app/photon-services -run '^TestSOCKS5DockerBridgeBabelRootSmoke$$' -count=1 -v
+	@PHOTON_BIRD_SMOKE=1 $(GO_ENV) $(GO) test ./pkg/routing/bird -run '^TestBabelAnycastFailoverRootSmoke$$' -count=1 -v
 	@echo "Phase 8 services root smoke passed"
 
 peer-lifecycle-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'TestDerivePeerStatus|TestPeerStatus|TestShouldBlockReconnect|TestCollectRevokedPeerZones|TestParsePeerLifecycleConfig|TestWriteDebugPeers|TestRevokedLinkPeers|TestDaemonRemoteAppliedEventUpdatesPeerState' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'TestDerivePeerStatus|TestPeerStatus|TestShouldBlockReconnect|TestCollectRevokedPeerZones|TestParsePeerLifecycleConfig|TestWriteDebugPeers|TestRevokedLinkPeers|TestDaemonRemoteAppliedEventUpdatesPeerState' -v
 	@echo "Peer lifecycle smoke passed"
 
 revocation-cleanup-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'TestRevocation|TestCollectAllRevokedZones|TestCleanupRevokedPeerCache|TestConfiguredBootstrapPeerRevoked|TestWriteRevocationImpacts|TestDaemonFlushRevocationCleanup|TestDaemonRevocationCleanupPeerCache|TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'TestRevocation|TestCollectAllRevokedZones|TestCleanupRevokedPeerCache|TestConfiguredBootstrapPeerRevoked|TestWriteRevocationImpacts|TestDaemonFlushRevocationCleanup|TestDaemonRevocationCleanupPeerCache|TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate' -v
 	@echo "Revocation cleanup smoke passed"
 
 revocation-data-plane-smoke: build
@@ -219,7 +219,7 @@ revocation-data-plane-container-smoke:
 	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/revocation-data-plane-container-smoke.sh
 
 observer-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ParseObserverConfig|ObserverConfig|SSEHub|Observer(Status|Handler|Zones|Peers|Links|Health|Routes|Bird|Events|Static|StartObserver|NotifyObserver)|Web(SubFS|AppEscapesHTML|AppPreservesFoldState))' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'Test(ParseObserverConfig|ObserverConfig|SSEHub|Observer(Status|Handler|Zones|Peers|Links|Health|Routes|Bird|Events|Static|StartObserver|NotifyObserver)|Web(SubFS|AppEscapesHTML|AppPreservesFoldState))' -v
 	@echo "Observer smoke passed"
 
 # Smoke 目标约定：
@@ -245,32 +245,32 @@ observer-smoke:
 # 6. 该目标不启动 UDP，只验证离线准入、权限、密钥、bundle 和本地持久化。
 join-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-join-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-join-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/node-b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43433' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43434' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/node-b" 'gossip:' '  peer_id: node-b' '  listen_addr: 127.0.0.1:43435' > "$$tmp/node-b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct --permissions write,delegate "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	if HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip zone show catofes. | grep -q 'allocate-ip'; then exit 1; fi; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate grant --direct catofes. allocate-ip "$$tmp/catofes.grant.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.grant.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip zone show catofes. | grep -q 'allocate-ip'; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct --permissions write,delegate "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	if PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip zone show catofes. | grep -q 'allocate-ip'; then exit 1; fi; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate grant --direct catofes. allocate-ip "$$tmp/catofes.grant.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.grant.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip zone show catofes. | grep -q 'allocate-ip'; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	echo "Join smoke passed"
 
 zone-sort-smoke:
 	$(GO_ENV) $(GO) test ./internal/inspect -run 'Test(SortZoneStringsGroupsDotAndHyphenSuffixes|BuildRecordsDebugGroupsZonesByDotAndHyphenSuffix)'
-	$(GO_ENV) $(GO) test ./app/higgs -run '^TestSyncStatusGroupsZonesByDotAndHyphenSuffix$$'
+	$(GO_ENV) $(GO) test ./app/photon -run '^TestSyncStatusGroupsZonesByDotAndHyphenSuffix$$'
 	@echo "Zone sort smoke passed"
 
 record-view-smoke:
@@ -278,7 +278,7 @@ record-view-smoke:
 	@echo "Record view smoke passed"
 
 cli-surface-smoke:
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(ShowFlagsWorkBeforeAndAfterSubcommand|HumanCommandsUsePlaneOrientedShowViews|DelegationCommandsOwnPermissionManagement|PrintRouteShowReportUsesFilteredVerboseTable|ServiceCLIExposesTableAndLocalViews)'
+	$(GO_ENV) $(GO) test ./app/photon -run 'Test(ShowFlagsWorkBeforeAndAfterSubcommand|HumanCommandsUsePlaneOrientedShowViews|DelegationCommandsOwnPermissionManagement|PrintRouteShowReportUsesFilteredVerboseTable|ServiceCLIExposesTableAndLocalViews)'
 	$(GO_ENV) $(GO) test ./internal/inspect/text -run 'TestWrite(ZonesUsesSummaryAndVerboseTables|GossipPeersUsesGossipRuntimeFields|LinksUsesTransportSummaryAndVerboseTables|FirewallSummaryFiltersAndHidesDebugDetails|ServicesShowsPublishedAndLocalServices)'
 	@echo "CLI surface smoke passed"
 
@@ -290,38 +290,38 @@ cli-surface-smoke:
 # 5. sync once 允许 pending zones；最终只断言 B 已收到并可展示 A 的 record。
 phase1-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-phase1-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-phase1-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43433' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43436' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43434' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43435' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43435' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43434' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/b.log" 2>&1 & \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/b.log" 2>&1 & \
 	server_pid="$$!"; \
 	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	if ! kill -0 "$$server_pid" >/dev/null 2>&1; then cat "$$tmp/b.log"; exit 1; fi; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a.log" 2>&1 || grep -q 'pending zones' "$$tmp/a.log"; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a.log" 2>&1 || grep -q 'pending zones' "$$tmp/a.log"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	echo "Phase1 smoke passed"
 
@@ -333,53 +333,53 @@ phase1-smoke: build
 # 5. 最后检查双方 record list、sync status 和 verify，证明双向收敛。
 phase2-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-phase2-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-phase2-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43443' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43446' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43444' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43445' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43445' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43444' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/b.log" 2>&1 & server_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/b.log" 2>&1 & server_pid="$$!"; \
 	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a.log" 2>&1 || grep -q 'pending zones' "$$tmp/a.log"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a.log" 2>&1 || grep -q 'pending zones' "$$tmp/a.log"; \
 	sleep 1; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b.log" 2>&1 || grep -q 'pending zones' "$$tmp/b.log"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b.log" 2>&1 || grep -q 'pending zones' "$$tmp/b.log"; \
 	sleep 1; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity | grep -q 'identity'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-b.catofes.'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-a.catofes.'; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-b.catofes.'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-a.catofes.'; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	echo "Phase2 two-node smoke passed"
 
 # phase2-run-smoke 流程：
@@ -390,46 +390,46 @@ phase2-smoke: build
 # 5. 断言 A 自动收到 B 的新 record，A/B verified state 的 root 一致。
 phase2-run-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-phase2-run-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-phase2-run-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43463' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43466' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43464' '  advertise_addr: 127.0.0.1:43464' '  publish_endpoints: false' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43465' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43465' '  advertise_addr: 127.0.0.1:43465' '  publish_endpoints: false' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43464' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	b_pid=""; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/b-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 2; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	for i in 1 2 3 4 5; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
 	kill "$$b_pid" >/dev/null 2>&1 || true; wait "$$b_pid" >/dev/null 2>&1 || true; b_pid=""; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b-restored >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/b-restart.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restored'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restored'; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	a_root="$$(HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | awk '/^local_root:/ {print $$2}')"; \
-	b_root="$$(HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | awk '/^local_root:/ {print $$2}')"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b-restored >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/b-restart.log" 2>&1 & b_pid="$$!"; \
+	for i in 1 2 3 4 5; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restored'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restored'; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	a_root="$$(PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | awk '/^local_root:/ {print $$2}')"; \
+	b_root="$$(PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | awk '/^local_root:/ {print $$2}')"; \
 	[ "$$a_root" = "$$b_root" ]; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase2 sync run smoke passed"
@@ -442,35 +442,35 @@ phase2-run-smoke: build
 # 5. 在 B 上 verify A，证明 daemon 写入和同步路径都有效。
 phase3-daemon-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-phase3-daemon-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-phase3-daemon-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43520' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43521' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43522' '  advertise_addr: 127.0.0.1:43522' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43523' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43523' '  advertise_addr: 127.0.0.1:43523' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43522' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONTROL_SOCKET="$$tmp/b/photon.sock" PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	sleep 4; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/higgs.sock" ] && [ -S "$$tmp/b/higgs.sock" ]; then break; fi; sleep 1; done; \
-	[ -S "$$tmp/a/higgs.sock" ]; \
-	[ -S "$$tmp/b/higgs.sock" ]; \
-	for i in 1 2 3 4 5; do if HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose 2>/dev/null | grep -q 'daemon: online'; then break; fi; sleep 1; done; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'daemon: online'; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-daemon >"$$tmp/record-put.out"; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/photon.sock" ] && [ -S "$$tmp/b/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/a/photon.sock" ]; \
+	[ -S "$$tmp/b/photon.sock" ]; \
+	for i in 1 2 3 4 5; do if PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose 2>/dev/null | grep -q 'daemon: online'; then break; fi; sleep 1; done; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'daemon: online'; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-daemon >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase3 daemon smoke passed"
 
@@ -482,36 +482,36 @@ phase3-daemon-smoke: build
 # 5. verify A，确保显式 direct 写入不会在 daemon 接管后丢失。
 phase3-daemon-fallback-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-phase3-daemon-fallback-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-phase3-daemon-fallback-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43530' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43531' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43532' '  advertise_addr: 127.0.0.1:43532' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43533' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43533' '  advertise_addr: 127.0.0.1:43533' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43532' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	if HIGGS_CONTROL_SOCKET="$$tmp/a/missing.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-rejected 2>"$$tmp/fallback.err" >/dev/null; then exit 1; fi; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	if PHOTON_CONTROL_SOCKET="$$tmp/a/missing.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-rejected 2>"$$tmp/fallback.err" >/dev/null; then exit 1; fi; \
 	grep -q 'daemon control socket unavailable' "$$tmp/fallback.err"; \
-	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity >/dev/null 2>&1; then exit 1; fi; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a-direct >/dev/null; \
-	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity >/dev/null 2>&1; then exit 1; fi; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a-direct >/dev/null; \
+	PHOTON_CONTROL_SOCKET="$$tmp/b/photon.sock" PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	sleep 4; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/fallback.err" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/higgs.sock" ] && [ -S "$$tmp/b/higgs.sock" ]; then break; fi; sleep 1; done; \
-	[ -S "$$tmp/a/higgs.sock" ]; \
-	[ -S "$$tmp/b/higgs.sock" ]; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'daemon: online'; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/photon.sock" ] && [ -S "$$tmp/b/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/a/photon.sock" ]; \
+	[ -S "$$tmp/b/photon.sock" ]; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'daemon: online'; \
+	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase3 daemon fail-closed smoke passed"
 
@@ -524,41 +524,41 @@ phase3-daemon-fallback-smoke: build
 # 5. 通过 catofes. control socket 撤销 node-b，验证 revocation 持久化且 direct delegation 被清理。
 admin-daemon-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-admin-daemon-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-admin-daemon-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/node-b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43540' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43541' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/node-b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43542' > "$$tmp/node-b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes node-b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/admin.log" 2>&1 & admin_pid="$$!"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/admin/photon.sock" PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/admin.log" 2>&1 & admin_pid="$$!"; \
 	trap 'status="$$?"; kill "$$admin_pid" "$${catofes_pid:-}" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/admin.log" "$$tmp/catofes.log" "$$tmp/catofes-issue.out" "$$tmp/catofes-grant.out" "$$tmp/node-b-issue.out" "$$tmp/revoke.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	for i in 1 2 3 4 5; do if [ -S "$$tmp/admin/higgs.sock" ]; then break; fi; sleep 1; done; \
-	[ -S "$$tmp/admin/higgs.sock" ]; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >"$$tmp/catofes-issue.out"; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/admin/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/admin/photon.sock" ]; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONTROL_SOCKET="$$tmp/admin/photon.sock" PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >"$$tmp/catofes-issue.out"; \
 	grep -q 'via daemon' "$$tmp/catofes-issue.out"; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONTROL_SOCKET="$$tmp/admin/higgs.sock" HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate grant catofes. allocate-ip "$$tmp/catofes.grant.json" >"$$tmp/catofes-grant.out"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONTROL_SOCKET="$$tmp/admin/photon.sock" PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate grant catofes. allocate-ip "$$tmp/catofes.grant.json" >"$$tmp/catofes-grant.out"; \
 	grep -q 'via daemon' "$$tmp/catofes-grant.out"; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.grant.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip zone show catofes. | grep -q 'allocate-ip'; \
-	HIGGS_CONTROL_SOCKET="$$tmp/catofes/higgs.sock" HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
-	for i in 1 2 3 4 5; do if [ -S "$$tmp/catofes/higgs.sock" ]; then break; fi; sleep 1; done; \
-	[ -S "$$tmp/catofes/higgs.sock" ]; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	HIGGS_CONTROL_SOCKET="$$tmp/catofes/higgs.sock" HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >"$$tmp/node-b-issue.out"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.grant.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip zone show catofes. | grep -q 'allocate-ip'; \
+	PHOTON_CONTROL_SOCKET="$$tmp/catofes/photon.sock" PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/catofes/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/catofes/photon.sock" ]; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	PHOTON_CONTROL_SOCKET="$$tmp/catofes/photon.sock" PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >"$$tmp/node-b-issue.out"; \
 	grep -q 'via daemon' "$$tmp/node-b-issue.out"; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	HIGGS_CONTROL_SOCKET="$$tmp/catofes/higgs.sock" HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate revoke node-b.catofes. admin-daemon-smoke >"$$tmp/revoke.out"; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONTROL_SOCKET="$$tmp/catofes/photon.sock" PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate revoke node-b.catofes. admin-daemon-smoke >"$$tmp/revoke.out"; \
 	grep -q 'via daemon' "$$tmp/revoke.out"; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked'; \
-	if HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked'; \
+	if PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
 	kill "$$admin_pid" "$$catofes_pid" >/dev/null 2>&1 || true; \
 	echo "Admin daemon smoke passed"
 
@@ -571,7 +571,7 @@ admin-daemon-smoke: build
 # 6. 断言 A 和 C 都看到 B 的新版本，验证重启恢复和 latest-record 收敛。
 multi-node-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-multi-node-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-multi-node-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43453' > "$$tmp/admin/config.yaml"; \
@@ -579,46 +579,46 @@ multi-node-smoke: build
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43454' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43455' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43457' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43455' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43454' > "$$tmp/b/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/c" 'gossip:' '  peer_id: node-c.catofes.' '  listen_addr: 127.0.0.1:43457' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43454' > "$$tmp/c/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b c; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
-	for node in a b c; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
-	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b c; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
+	for node in a b c; do PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
+	for node in a b c; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
 	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/a-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a.log"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a.log"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a.log"; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a.log"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a-2.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-2.log"; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a-2.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-2.log"; \
 	sleep 1; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity | grep -q 'identity'; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-a.catofes.'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b-restarted >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a-restart.log" 2>&1 & server_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-a.catofes.'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b-restarted >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a-restart.log" 2>&1 & server_pid="$$!"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a-restart.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a-restart.log"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a-restart.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a-restart.log"; \
 	sleep 1; \
 	for i in 1 2 3 4 5 6 7 8; do \
-		HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a-restart-$$i.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-restart-$$i.log"; \
-		if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-b-restarted'; then break; fi; \
+		PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a-restart-$$i.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-restart-$$i.log"; \
+		if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-b-restarted'; then break; fi; \
 		sleep 1; \
 	done; \
 	kill "$$server_pid" >/dev/null 2>&1 || true; \
 	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restarted'; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restarted'; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restarted'; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restarted'; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	echo "Multi-node smoke passed"
 
 # chain-relay-smoke 流程：
@@ -629,7 +629,7 @@ multi-node-smoke: build
 # 5. 等待 D 收到并 verify A，验证 relay fanout 与周期 digest 收敛。
 chain-relay-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-chain-relay-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-chain-relay-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c" "$$tmp/d"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43473' > "$$tmp/admin/config.yaml"; \
@@ -638,27 +638,27 @@ chain-relay-smoke: build
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43475' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43474' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43476' > "$$tmp/b/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/c" 'gossip:' '  peer_id: node-c.catofes.' '  listen_addr: 127.0.0.1:43476' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43475' '    - id: node-d.catofes.' '      addr: 127.0.0.1:43477' > "$$tmp/c/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/d" 'gossip:' '  peer_id: node-d.catofes.' '  listen_addr: 127.0.0.1:43477' '  bootstrap:' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43476' > "$$tmp/d/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b c d; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b c d; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
-	for node in a b c d; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
-	for node in a b c d; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a-relay >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
-	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/d.log" 2>&1 & d_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b c d; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
+	for node in a b c d; do PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
+	for node in a b c d; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a-relay >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/d.log" 2>&1 & d_pid="$$!"; \
 	a_pid=""; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" "$$d_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" "$$tmp/d.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
-	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose | grep -q 'node-a-relay'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose | grep -q 'node-a-relay'; \
-	HIGGS_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if PHOTON_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose | grep -q 'node-a-relay'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose | grep -q 'node-a-relay'; \
+	PHOTON_CONFIG="$$tmp/d/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" "$$c_pid" "$$d_pid" >/dev/null 2>&1 || true; \
 	echo "Chain relay smoke passed"
 
@@ -670,7 +670,7 @@ chain-relay-smoke: build
 # 5. 用 debug peer 和 sync status --verbose 断言 discovery 对操作者可见。
 discovery-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-discovery-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-discovery-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43493' > "$$tmp/admin/config.yaml"; \
@@ -678,28 +678,28 @@ discovery-smoke: build
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a' '  listen_addr: 127.0.0.1:43494' '  bootstrap:' '    - id: node-b' '      addr: 127.0.0.1:43495' '    - id: node-c' '      addr: 127.0.0.1:43497' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b' '  listen_addr: 127.0.0.1:43495' '  bootstrap:' '    - id: node-a' '      addr: 127.0.0.1:43494' > "$$tmp/b/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/c" 'gossip:' '  peer_id: node-c' '  listen_addr: 127.0.0.1:43497' '  bootstrap:' '    - id: node-a' '      addr: 127.0.0.1:43494' > "$$tmp/c/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b c; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-c.catofes. identity node-c >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 2 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b c; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-c.catofes. identity node-c >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 2 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	sleep 2; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 2 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 2 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 2 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 2 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-c.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; \
+		if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-c.catofes. --filter identity 2>/dev/null | grep -q 'identity'; then break; fi; \
 		sleep 1; \
 	done; \
 	sleep 2; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-c.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-c.catofes. | grep -q 'resolved_addr:'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-c.catofes.'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-c.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-c.catofes. | grep -q 'resolved_addr:'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-c.catofes.'; \
 	kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; \
 	echo "Discovery smoke passed"
 
@@ -709,7 +709,7 @@ discovery-smoke: build
 # 3. 验证 reflector 结果进入本地 endpoint candidate 收集。
 # 4. 验证 reflector-derived endpoint 可被签名发布。
 reflector-smoke:
-	$(GO_ENV) $(GO) test -v ./pkg/core/gossip ./app/higgs -run 'Test(QueryPublicIP|CollectLocalEndpointsWithReflectors|ReflectorEndpointPublishSmoke)'
+	$(GO_ENV) $(GO) test -v ./pkg/core/gossip ./app/photon -run 'Test(QueryPublicIP|CollectLocalEndpointsWithReflectors|ReflectorEndpointPublishSmoke)'
 
 # bootstrap-join-smoke 流程：
 # 1. 准备 catofes、node-a、node-b，其中 B 只知道 bootstrap A。
@@ -720,7 +720,7 @@ reflector-smoke:
 # 6. 断言 A 看到 B 的 endpoint，B 也看到 A 的既有 record，覆盖首次接入死锁。
 bootstrap-join-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-bootstrap-join-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-bootstrap-join-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/node-a" "$$tmp/node-b"; \
 	catofes_pid=""; a_pid=""; b_pid=""; \
@@ -729,36 +729,36 @@ bootstrap-join-smoke: build
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43501' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/node-a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43502' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43501' > "$$tmp/node-a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/node-b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43503' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43502' > "$$tmp/node-b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes node-a node-b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	sleep 2; \
 	if ! kill -0 "$$catofes_pid" >/dev/null 2>&1; then cat "$$tmp/catofes.log"; exit 1; fi; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >"$$tmp/node-a-bootstrap.log" 2>&1; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/node-a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >"$$tmp/node-a-bootstrap.log" 2>&1; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/node-a.log" 2>&1 & a_pid="$$!"; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/node-b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/node-b.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5 6 7 8; do \
-		if HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter sync/endpoint/udp 2>/dev/null | grep -q 'sync/endpoint/udp'; then break; fi; \
+		if PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter sync/endpoint/udp 2>/dev/null | grep -q 'sync/endpoint/udp'; then break; fi; \
 		sleep 1; \
 	done; \
-	HIGGS_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter sync/endpoint/udp 2>/dev/null | grep -q 'sync/endpoint/udp'; \
-	HIGGS_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter sync/endpoint/udp 2>/dev/null | grep -q 'sync/endpoint/udp'; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
 	kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Bootstrap join smoke passed"
 
@@ -771,42 +771,42 @@ bootstrap-join-smoke: build
 # 6. 断言 B 收到 A 的 record，证明无 signed endpoint 时仍可用 verified observed path 返回同步。
 nat-observed-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-nat-observed-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-nat-observed-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43540' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43541' '  publish_endpoints: false' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43542' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43541' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43543' '  publish_endpoints: false' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43542' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	a_pid=""; b_pid=""; \
 	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$$tmp/b.log" "$$tmp/put.out" "$$tmp/a-to-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	kill "$$catofes_pid" >/dev/null 2>&1 || true; wait "$$catofes_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	sleep 1; \
 	if ! kill -0 "$$a_pid" >/dev/null 2>&1; then cat "$$tmp/a.log"; exit 1; fi; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. 2>/dev/null | grep -q 'observed_status: active'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_addr: 127.0.0.1:43543'; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_status: active'; \
-	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:43543'; then exit 1; fi; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. 2>/dev/null | grep -q 'observed_status: active'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_addr: 127.0.0.1:43543'; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_status: active'; \
+	if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:43543'; then exit 1; fi; \
 	kill "$$a_pid" >/dev/null 2>&1 || true; wait "$$a_pid" >/dev/null 2>&1 || true; a_pid=""; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a-observed >"$$tmp/put.out"; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a-to-b.log" 2>&1 || grep -q 'pending zones' "$$tmp/a-to-b.log"; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-observed'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-observed'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a-observed >"$$tmp/put.out"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a-to-b.log" 2>&1 || grep -q 'pending zones' "$$tmp/a-to-b.log"; \
+	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-observed'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-observed'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "NAT observed path smoke passed"
 
@@ -819,43 +819,43 @@ nat-observed-smoke: build
 # 6. 等待 B 收到并 verify A，确保 daemon 路径与 direct CLI 的 NAT observed 行为一致。
 nat-daemon-observed-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-nat-daemon-observed-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-nat-daemon-observed-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43560' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43561' '  publish_endpoints: false' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43562' '  advertise_addr: 127.0.0.1:43562' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43561' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43563' '  publish_endpoints: false' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43562' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	a_pid=""; b_pid=""; \
 	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$$tmp/b.log" "$$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >/dev/null; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	kill "$$catofes_pid" >/dev/null 2>&1 || true; wait "$$catofes_pid" >/dev/null 2>&1 || true; catofes_pid=""; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	sleep 2; \
-	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/higgs.sock" ] && [ -S "$$tmp/b/higgs.sock" ]; then break; fi; sleep 1; done; \
-	[ -S "$$tmp/a/higgs.sock" ]; \
-	[ -S "$$tmp/b/higgs.sock" ]; \
-	for i in 1 2 3 4 5 6 7 8; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. 2>/dev/null | grep -q 'observed_status: active'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_addr: 127.0.0.1:43563'; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_status: active'; \
-	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:43563'; then echo "FAIL: B should not have discovered_addr" >&2; exit 1; fi; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-nat-daemon >"$$tmp/record-put.out"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/b/photon.sock" PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/photon.sock" ] && [ -S "$$tmp/b/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/a/photon.sock" ]; \
+	[ -S "$$tmp/b/photon.sock" ]; \
+	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. 2>/dev/null | grep -q 'observed_status: active'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_addr: 127.0.0.1:43563'; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_status: active'; \
+	if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:43563'; then echo "FAIL: B should not have discovered_addr" >&2; exit 1; fi; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-nat-daemon >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-nat-daemon'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-nat-daemon'; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-nat-daemon'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-nat-daemon'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "NAT daemon observed path smoke passed"
 
@@ -868,7 +868,7 @@ nat-daemon-observed-smoke: build
 # 6. 断言 A 的 discovered peers 不再包含 B，防止撤销节点通过旧 endpoint 复活。
 delegation-revoke-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-delegation-revoke-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-delegation-revoke-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43510' > "$$tmp/admin/config.yaml"; \
@@ -876,53 +876,53 @@ delegation-revoke-smoke: build
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43512' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43511' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43513' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43514' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43513' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43512' > "$$tmp/b/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/c" 'gossip:' '  peer_id: node-c.catofes.' '  listen_addr: 127.0.0.1:43514' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43511' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43512' > "$$tmp/c/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b c; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
-	for node in b c a; do HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
-	for node in a b c; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/b-seed.log" 2>&1 & b_seed_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b c; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; done; \
+	for node in b c a; do PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
+	for node in a b c; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/b-seed.log" 2>&1 & b_seed_pid="$$!"; \
 	sleep 1; kill "$$b_seed_pid" >/dev/null 2>&1 || true; wait "$$b_seed_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	catofes_pid=""; \
 	trap 'status="$$?"; kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/catofes.log" "$$tmp/b-to-a.log" "$$tmp/c-to-a.log" "$$tmp/a-from-catofes.log" "$$tmp/c-from-catofes.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
 	for i in 1 2 3 4 5; do \
-		HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -Eq 'pending zones|sync receive timed out' "$$tmp/b-to-a.log"; \
-		if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. >/dev/null 2>&1; then break; fi; \
+		PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -Eq 'pending zones|sync receive timed out' "$$tmp/b-to-a.log"; \
+		if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. >/dev/null 2>&1; then break; fi; \
 		sleep 1; \
 	done; \
 	for i in 1 2 3 4 5; do \
-		HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -Eq 'pending zones|sync receive timed out' "$$tmp/c-to-a.log"; \
-		if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. >/dev/null 2>&1; then break; fi; \
+		PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -Eq 'pending zones|sync receive timed out' "$$tmp/c-to-a.log"; \
+		if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. >/dev/null 2>&1; then break; fi; \
 		sleep 1; \
 	done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; \
 	kill "$$a_pid" >/dev/null 2>&1 || true; \
 	wait "$$a_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate revoke --direct node-b.catofes. retired >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate revoke --direct node-b.catofes. retired >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync run --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	sleep 1; \
 	for node in a c; do \
 		for i in 1 2 3; do \
-			HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >"$$tmp/$$node-from-catofes.log" 2>&1 || grep -Eq 'pending zones|gossip peer quota exceeded|sync receive timed out' "$$tmp/$$node-from-catofes.log"; \
-			if HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. 2>/dev/null | grep -q 'revoked: true'; then break; fi; \
+			PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >"$$tmp/$$node-from-catofes.log" 2>&1 || grep -Eq 'pending zones|gossip peer quota exceeded|sync receive timed out' "$$tmp/$$node-from-catofes.log"; \
+			if PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. 2>/dev/null | grep -q 'revoked: true'; then break; fi; \
 			sleep 1; \
 		done; \
 	done; \
-	if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
-	if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
-	HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
-	if HIGGS_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; then exit 1; fi; \
+	if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
+	if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
+	if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; then exit 1; fi; \
 	kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; \
 	echo "Delegation revoke smoke passed"
 
@@ -934,36 +934,36 @@ delegation-revoke-smoke: build
 # 5. 断言 B 能看到 bigdata 并 verify A，证明不依赖 IP fragmentation。
 object-pull-smoke: build
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-object-pull-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-object-pull-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43540' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43541' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43542' '  advertise_addr: 127.0.0.1:43542' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43543' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43543' '  advertise_addr: 127.0.0.1:43543' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43542' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONTROL_SOCKET="$$tmp/b/photon.sock" PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	sleep 4; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/higgs.sock" ] && [ -S "$$tmp/b/higgs.sock" ]; then break; fi; sleep 1; done; \
-	[ -S "$$tmp/a/higgs.sock" ]; \
-	[ -S "$$tmp/b/higgs.sock" ]; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/photon.sock" ] && [ -S "$$tmp/b/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/a/photon.sock" ]; \
+	[ -S "$$tmp/b/photon.sock" ]; \
 	large_value="$$(perl -e 'print "x" x 3000')"; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
 	sleep 3; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter bigdata | grep -q 'bigdata'; \
-	for i in $$(seq 1 30); do if HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes.; exit 1; }; \
-	HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter bigdata | grep -q 'bigdata'; \
+	for i in $$(seq 1 30); do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata' || { PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes.; exit 1; }; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Object pull smoke passed"
 
@@ -979,46 +979,46 @@ object-pull-smoke: build
 #    多个 UDP object_chunk 发给 A。
 # 7. 断言 A 收到 bigdata，且 A 的 daemon 日志确认该 zone 经 UDP chunks apply。
 chunk-fallback-smoke: build
-	$(GO_ENV) $(GO) test ./app/higgs -run 'Test(SentChunkCache|MissingChunkIndexes|ChunkAssemblyQuietNACK)'
+	$(GO_ENV) $(GO) test ./app/photon -run 'Test(SentChunkCache|MissingChunkIndexes|ChunkAssemblyQuietNACK)'
 	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/higgs-chunk-fallback-smoke"; \
+	tmp="$${TMPDIR:-/tmp}/photon-chunk-fallback-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43590' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: catofes.' '  listen_addr: 127.0.0.1:43591' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43592' '  advertise_addr: 127.0.0.1:43592' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43593' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43593' '  advertise_addr: 127.0.0.1:43593' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43592' > "$$tmp/b/config.yaml"; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
+	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b; do HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; HIGGS_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; HIGGS_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
+	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
 	perl -e 'use IO::Socket::INET; my $$s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 43593, Proto => "tcp", Listen => 1, Reuse => 1) or die $$!; sleep 3600' & tcp_blocker_pid="$$!"; \
 	sleep 0.5; \
-	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/b/photon.sock" PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	sleep 2; \
 	kill "$$tcp_blocker_pid" >/dev/null 2>&1 || true; wait "$$tcp_blocker_pid" >/dev/null 2>&1 || true; \
-	HIGGS_CONTROL_SOCKET="$$tmp/a/higgs.sock" HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 30 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/higgs.sock" ] && [ -S "$$tmp/b/higgs.sock" ]; then break; fi; sleep 1; done; \
-	[ -S "$$tmp/a/higgs.sock" ]; \
-	[ -S "$$tmp/b/higgs.sock" ]; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/photon.sock" ] && [ -S "$$tmp/b/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/a/photon.sock" ]; \
+	[ -S "$$tmp/b/photon.sock" ]; \
 	large_value="$$(perl -e 'print "x" x 3000')"; \
-	HIGGS_CONTROL_SOCKET="$$tmp/b/higgs.sock" HIGGS_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-b.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
+	PHOTON_CONTROL_SOCKET="$$tmp/b/photon.sock" PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-b.catofes. bigdata "$$large_value" test.data >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do if HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata' || { HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes.; exit 1; }; \
-	HIGGS_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata' || { PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes.; exit 1; }; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	grep -q 'event=zone_applied.*via=udp_chunks.*zone=node-b.catofes\.' "$$tmp/a.log"; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Chunk fallback smoke passed"
 
 help:
 	@echo "Available targets:"
-	@echo "  build   - Build the higgs binary to $(BUILD_DIR)/"
+	@echo "  build   - Build the photon binary to $(BUILD_DIR)/"
 	@echo "  clean   - Remove build artifacts"
 	@echo "  test    - Run all tests"
 	@echo "  fmt     - Format Go source code"
@@ -1027,8 +1027,8 @@ help:
 	@echo "  release-check - Validate VERSION/repository state and run release tests"
 	@echo "  release-tag - Create local v<VERSION> tag after release checks"
 	@echo "  release-push - Push the local release tag to $(RELEASE_REMOTE)"
-	@echo "  install - Install higgs to GOPATH/bin"
-	@echo "  run     - Build and run higgs"
+	@echo "  install - Install photon to GOPATH/bin"
+	@echo "  run     - Build and run photon"
 	@echo "  smoke   - Run all smoke tests"
 	@echo "  smoke-all - Run all smoke tests"
 	@echo "  root-smoke - Run all real root data-plane smoke tests (requires root, NOT in smoke-all)"

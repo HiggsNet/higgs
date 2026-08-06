@@ -1,4 +1,4 @@
-# Higgs 测试入口
+# Photon 测试入口
 
 本文整理源码树里的验证命令和 smoke 目标。它面向开发、CI 和系统集成验证；日常部署、排障和恢复操作见 `docs/new/operations.md`。
 
@@ -10,9 +10,9 @@
 make check
 ```
 
-`make check` 会执行格式化、`go vet`、`go test ./...` 和构建。Makefile 默认使用 `/tmp/higgs-gocache` 与 `/tmp/higgs-gomodcache`，便于在受限环境里复用缓存。
+`make check` 会执行格式化、`go vet`、`go test ./...` 和构建。Makefile 默认使用 `/tmp/photon-gocache` 与 `/tmp/photon-gomodcache`，便于在受限环境里复用缓存。
 
-测试包会强制从各自的临时 `data_dir` 推导 control socket；普通 smoke 和 root-smoke 也会为每次 Make 调用创建私有 `TMPDIR`，并按各测试节点的 `data_dir` 隔离 socket。即使误用 `sudo make test` 或 `sudo make smoke`，测试写操作也不会连接生产 `/run/higgs/higgs.sock`。聚合 smoke 成功后会删除私有目录，失败时保留现场用于排障。
+测试包会强制从各自的临时 `data_dir` 推导 control socket；普通 smoke 和 root-smoke 也会为每次 Make 调用创建私有 `TMPDIR`，并按各测试节点的 `data_dir` 隔离 socket。即使误用 `sudo make test` 或 `sudo make smoke`，测试写操作也不会连接生产 `/run/photon/photon.sock`。聚合 smoke 成功后会删除私有目录，失败时保留现场用于排障。
 
 只构建：
 
@@ -188,18 +188,18 @@ sudo make services-smoke
 container 目标默认使用 Docker，也可以切到 Podman：
 
 ```bash
-HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
+PHOTON_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 ```
 
 这些目标会按需构建并复用缓存镜像和 Go cache volume。常用覆盖项：
 
 | 变量 | 说明 |
 |------|------|
-| `HIGGS_CONTAINER_RUNTIME` | 容器运行时，默认 `docker`。 |
-| `HIGGS_CONTAINER_USERNS` | Docker 默认使用 `host` user namespace；设为空可禁用该参数做对比。 |
-| `HIGGS_IPSEC_XFRM_IMAGE` / `HIGGS_BIRD_IMAGE` / `HIGGS_FIREWALL_IMAGE` / `HIGGS_HEALTH_FAULT_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_IMAGE` | 数据面 smoke 的基础镜像，默认 `ubuntu:24.04`。 |
-| `HIGGS_IPSEC_XFRM_REBUILD_IMAGE` / `HIGGS_BIRD_REBUILD_IMAGE` / `HIGGS_FIREWALL_REBUILD_IMAGE` / `HIGGS_HEALTH_FAULT_REBUILD_IMAGE` / `HIGGS_REVOCATION_DATA_PLANE_REBUILD_IMAGE` | 设为 `1` 时强制重建对应缓存镜像。 |
-| `GO_CACHE` / `GO_MOD_CACHE` | Makefile 侧 Go cache 目录，默认 `/tmp/higgs-gocache` 和 `/tmp/higgs-gomodcache`。 |
+| `PHOTON_CONTAINER_RUNTIME` | 容器运行时，默认 `docker`。 |
+| `PHOTON_CONTAINER_USERNS` | Docker 默认使用 `host` user namespace；设为空可禁用该参数做对比。 |
+| `PHOTON_IPSEC_XFRM_IMAGE` / `PHOTON_BIRD_IMAGE` / `PHOTON_FIREWALL_IMAGE` / `PHOTON_HEALTH_FAULT_IMAGE` / `PHOTON_REVOCATION_DATA_PLANE_IMAGE` | 数据面 smoke 的基础镜像，默认 `ubuntu:24.04`。 |
+| `PHOTON_IPSEC_XFRM_REBUILD_IMAGE` / `PHOTON_BIRD_REBUILD_IMAGE` / `PHOTON_FIREWALL_REBUILD_IMAGE` / `PHOTON_HEALTH_FAULT_REBUILD_IMAGE` / `PHOTON_REVOCATION_DATA_PLANE_REBUILD_IMAGE` | 设为 `1` 时强制重建对应缓存镜像。 |
+| `GO_CACHE` / `GO_MOD_CACHE` | Makefile 侧 Go cache 目录，默认 `/tmp/photon-gocache` 和 `/tmp/photon-gomodcache`。 |
 
 真实数据面目标说明：
 
@@ -221,7 +221,7 @@ HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `health-fault-container-smoke` | 在 privileged container 中运行 health fault-injection smoke。 |
 | `revocation-data-plane-smoke` | 组合 firewall、BIRD 和 StrongSwan 的 revocation 数据面验证，需要 root。 |
 | `revocation-data-plane-container-smoke` | 在 privileged container 中运行组合 revocation 数据面验证。 |
-| `services-smoke` | Phase 8 的显式 root 入口。先跑 `app/higgs-services` 单元测试，再以真实 Docker bridge、SOCKS5 与目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、BIRD/Babel 验证端到端代理数据面，并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker、`ip`、`bird`/`birdc` 和 `nft`；不包含在 `root-smoke` 或 `smoke-all`。 |
+| `services-smoke` | Phase 8 的显式 root 入口。先跑 `app/photon-services` 单元测试，再以真实 Docker bridge、SOCKS5 与目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、BIRD/Babel 验证端到端代理数据面，并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker、`ip`、`bird`/`birdc` 和 `nft`；不包含在 `root-smoke` 或 `smoke-all`。 |
 
 ## 失败判断
 

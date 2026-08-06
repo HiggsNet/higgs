@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 const (
@@ -113,6 +113,9 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 		}
 		if plan.Desired[i].PeerZone != plan.Desired[j].PeerZone {
 			return plan.Desired[i].PeerZone < plan.Desired[j].PeerZone
+		}
+		if plan.Desired[i].PathKey != plan.Desired[j].PathKey {
+			return plan.Desired[i].PathKey < plan.Desired[j].PathKey
 		}
 		return plan.Desired[i].TransportID < plan.Desired[j].TransportID
 	})

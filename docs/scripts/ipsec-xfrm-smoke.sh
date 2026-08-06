@@ -2,8 +2,8 @@
 set -euo pipefail
 
 go_cmd="${GO:-go}"
-go_cache="${GOCACHE:-/tmp/higgs-gocache}"
-go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
+go_cache="${GOCACHE:-/tmp/photon-gocache}"
+go_mod_cache="${GOMODCACHE:-/tmp/photon-gomodcache}"
 
 dump_diagnostics() {
   printf '\n[ipsec-xfrm-smoke] diagnostics\n' >&2
@@ -25,61 +25,61 @@ trap 'rc=$?; if [ "$rc" -ne 0 ]; then dump_diagnostics; fi; exit "$rc"' EXIT
 
 docs/scripts/ipsec-xfrm-preflight.sh
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/transport/ipsec -run '^TestSystemXFRMDriver(IntegrationSmoke|PeerTunnelPingSmoke)$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverLoadsKeyAndConnection$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./app/higgs -run '^TestDaemonReconcileUsesSystemXFRMDriverSmoke$' -count=1
+  "$go_cmd" test ./app/photon -run '^TestDaemonReconcileUsesSystemXFRMDriverSmoke$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverIKEBringupSmoke$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
   "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanBidirectionalTakeoverSmoke$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupSmoke$' -count=1
+  "$go_cmd" test ./app/photon -run '^TestDaemonStrongSwanReconcileBringupSmoke$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanPortRotationSmoke$' -count=1
+  "$go_cmd" test ./app/photon -run '^TestDaemonStrongSwanPortRotationSmoke$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./app/higgs -run '^TestDaemonRunGossipStrongSwanBringupSmoke$' -count=1
+  "$go_cmd" test ./app/photon -run '^TestDaemonRunGossipStrongSwanBringupSmoke$' -count=1
 
-HIGGS_IPSEC_XFRM_SMOKE=1 \
+PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke$' -count=1
+  "$go_cmd" test ./app/photon -run '^TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke$' -count=1
 
-if [ "${HIGGS_IPSEC_XFRM_SMOKE_CONTAINER:-0}" = "1" ]; then
+if [ "${PHOTON_IPSEC_XFRM_SMOKE_CONTAINER:-0}" = "1" ]; then
   printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping SKIPPED in container + StrongSwan key/conn load + StrongSwan IKE bring-up + StrongSwan bidirectional takeover + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'
 else
   printf 'ipsec/xfrm smoke passed (preflight + SystemXFRMDriver lifecycle + peer tunnel ping + StrongSwan key/conn load + StrongSwan IKE bring-up + StrongSwan bidirectional takeover + daemon reconcile system apply + daemon StrongSwan/XFRM bring-up + daemon port rotation + daemon run gossip StrongSwan bring-up + derived-pool bring-up)\n'

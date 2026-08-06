@@ -1,9 +1,9 @@
-# Higgs Gossip 协议与设计
+# Photon Gossip 协议与设计
 
 > **本文档状态：2026-07**  
 > 描述当前 gossip 实现的设计、协议与架构。专注于 gossip 控制面本身，不涉及 IPsec/overlay 等上层应用。
 
-Higgs gossip 是 Higgs 控制面中负责在节点之间同步签名 Zone 状态的协议层。它不关心上层应用的语义——只负责把已签名的 Zone authority、delegation、record 和 revocation 高效、安全地传播到全网节点。
+Photon gossip 是 Photon 控制面中负责在节点之间同步签名 Zone 状态的协议层。它不关心上层应用的语义——只负责把已签名的 Zone authority、delegation、record 和 revocation 高效、安全地传播到全网节点。
 
 ---
 
@@ -27,7 +27,7 @@ Higgs gossip 是 Higgs 控制面中负责在节点之间同步签名 Zone 状态
 
 ### 1.1 设计原则
 
-Higgs gossip 仅传播**已签名的 Zone 状态**。任何进入 active state 的数据都必须通过 Zone authority、parent delegation、record signature 和 root digest 的完整验证；传输路径只负责把对象交到验证层。
+Photon gossip 仅传播**已签名的 Zone 状态**。任何进入 active state 的数据都必须通过 Zone authority、parent delegation、record signature 和 root digest 的完整验证；传输路径只负责把对象交到验证层。
 
 ### 1.2 三层传输角色
 
@@ -245,10 +245,10 @@ type ZoneSnapshot struct {
 默认 UDP wire codec 是 **MessagePack**，消息以 magic prefix 开头：
 
 ```
-higgs.gossip.m1\n<msgpack payload with version=1>
+photon.gossip.m1\n<msgpack payload with version=1>
 ```
 
-- 仅接受 MessagePack magic `higgs.gossip.m1\n`
+- 仅接受 MessagePack magic `photon.gossip.m1\n`
 - 未知 magic → `unsupported_codec`
 - 未知 `version` → `unsupported_wire_version`
 
@@ -885,4 +885,4 @@ bootstrap 节点同时加入入站白名单和出站地址簿。运行时发现�
 - `DefaultPort = 33434`、`DefaultMaxMessage = 1200`（[`pkg/core/gossip/message.go`](pkg/core/gossip/message.go)）
 - `DefaultSyncLimits: MaxZones=16, MaxRecords=1024`（[`pkg/core/gossip/sync.go`](pkg/core/gossip/sync.go)）
 - `DefaultEndpointTTL=3h, DefaultEndpointRefresh=30m, DefaultEndpointGrace=10m`（[`pkg/core/gossip/discovery.go`](pkg/core/gossip/discovery.go)）
-- `defaultAppConfig` 中 `ReflectorInterval=5m, ReflectorTimeout=3s, PublishEndpoints=true, FilterPrivateIPv4=true`（[`app/higgs/config.go`](app/higgs/config.go)）
+- `defaultAppConfig` 中 `ReflectorInterval=5m, ReflectorTimeout=3s, PublishEndpoints=true, FilterPrivateIPv4=true`（[`app/photon/config.go`](app/photon/config.go)）

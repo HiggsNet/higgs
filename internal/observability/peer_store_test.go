@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	higgsstate "github.com/Catofes/higgs/internal/state"
+	photonstate "github.com/Catofes/photon/internal/state"
 )
 
 func TestPeerStoreSnapshotIsDetachedAndConcurrent(t *testing.T) {
@@ -18,7 +18,7 @@ func TestPeerStoreSnapshotIsDetachedAndConcurrent(t *testing.T) {
 			for range 100 {
 				store.Update("peer-a", now, func(snapshot *PeerSnapshot) {
 					if snapshot.DatagramStats == nil {
-						snapshot.DatagramStats = &higgsstate.PeerDatagramStats{}
+						snapshot.DatagramStats = &photonstate.PeerDatagramStats{}
 					}
 					snapshot.DatagramStats.ChunkFallbacks++
 				})
@@ -43,7 +43,7 @@ func TestPeerStoreBoundsDeletesAndExpiresEntries(t *testing.T) {
 	base := time.Unix(100, 0)
 	update := func(peerID string, now time.Time) {
 		store.Update(peerID, now, func(snapshot *PeerSnapshot) {
-			snapshot.ObjectPullStats = &higgsstate.PeerObjectPullStats{LastSourcePeer: peerID}
+			snapshot.ObjectPullStats = &photonstate.PeerObjectPullStats{LastSourcePeer: peerID}
 		})
 	}
 	update("peer-b", base)
@@ -71,7 +71,7 @@ func TestPeerStoreSnapshotsAreDetached(t *testing.T) {
 	for i := range 2 {
 		peerID := fmt.Sprintf("peer-%d", i)
 		store.Update(peerID, now, func(snapshot *PeerSnapshot) {
-			snapshot.DatagramStats = &higgsstate.PeerDatagramStats{ChunkRepairChunks: 2}
+			snapshot.DatagramStats = &photonstate.PeerDatagramStats{ChunkRepairChunks: 2}
 		})
 	}
 	all := store.Snapshots(now)

@@ -1,6 +1,6 @@
-# Higgs 配置结构
+# Photon 配置结构
 
-Higgs 默认读取 `/etc/higgs/config.yaml`。本地开发或同一机器多节点运行时，通常用 `HIGGS_CONFIG=/path/to/config.yaml` 指定配置文件。
+Photon 默认读取 `/etc/photon/config.yaml`。本地开发或同一机器多节点运行时，通常用 `PHOTON_CONFIG=/path/to/config.yaml` 指定配置文件。
 
 配置文件描述的是**本机 daemon 如何运行**，不是全网数据库本身。会进入 gossip 的内容必须由本节点签名成 Zone record；本地配置只决定是否发布这些 record，以及如何把 verified active state 收敛成本机 runtime 状态。
 
@@ -12,24 +12,24 @@ Higgs 默认读取 `/etc/higgs/config.yaml`。本地开发或同一机器多节�
 
 几个读取规则需要注意：
 
-- `HIGGS_CONFIG` 覆盖默认配置路径。
-- `HIGGS_STATE` 覆盖最终状态数据库路径，优先级高于配置里的 `state_path`。排障时要确认它没有指向另一个节点。
-- `HIGGS_CONTROL_SOCKET` 覆盖 control socket 路径，优先级高于由运行身份和 `data_dir` 推导的默认值。
-- `HIGGS_CONTROL_SOCKET_SCOPE=data-dir` 强制从 `data_dir` 推导 control socket；主要用于 root 身份下的隔离测试，避免连接 `/run/higgs/higgs.sock`。
-- `HIGGS_LOG_LEVEL` 临时覆盖配置里的 `log.level`，常用于排障。
+- `PHOTON_CONFIG` 覆盖默认配置路径。
+- `PHOTON_STATE` 覆盖最终状态数据库路径，优先级高于配置里的 `state_path`。排障时要确认它没有指向另一个节点。
+- `PHOTON_CONTROL_SOCKET` 覆盖 control socket 路径，优先级高于由运行身份和 `data_dir` 推导的默认值。
+- `PHOTON_CONTROL_SOCKET_SCOPE=data-dir` 强制从 `data_dir` 推导 control socket；主要用于 root 身份下的隔离测试，避免连接 `/run/photon/photon.sock`。
+- `PHOTON_LOG_LEVEL` 临时覆盖配置里的 `log.level`，常用于排障。
 - `trusted_root_public_key` 也兼容 `root_public_key` / `trusted_root_key`。
 - gossip 身份、bootstrap、同步限额和 endpoint discovery 必须写在 `gossip:` 下。
 - 一些列表字段仍兼容旧的逗号分隔字符串，但新配置应使用 YAML list。
 - duration 字段使用 Go duration 写法，例如 `5s`、`10m`、`1h`。
 
-默认状态目录是 `/etc/higgs`，默认数据库是 `<data_dir>/higgs.db`。配置里的 `state_path` 可以显式指定数据库文件路径；`HIGGS_STATE` 又能覆盖 `state_path`。如果没有显式配置文件，程序会使用内置默认值；真正部署建议始终写明 `data_dir`、`trusted_root_public_key`、`gossip.peer_id` 和必要的 `gossip.bootstrap`。
+默认状态目录是 `/etc/photon`，默认数据库是 `<data_dir>/photon.db`。配置里的 `state_path` 可以显式指定数据库文件路径；`PHOTON_STATE` 又能覆盖 `state_path`。如果没有显式配置文件，程序会使用内置默认值；真正部署建议始终写明 `data_dir`、`trusted_root_public_key`、`gossip.peer_id` 和必要的 `gossip.bootstrap`。
 
 ## 最小节点配置
 
 一个只跑 gossip/daemon 的普通节点大致需要：
 
 ```yaml
-data_dir: /etc/higgs
+data_dir: /etc/photon
 trusted_root_public_key: <base64-ed25519-public-key>
 
 gossip:
@@ -40,7 +40,7 @@ gossip:
       addr: 203.0.113.20:33434
   init:
     managed_zone: node-a.catofes.
-    key_path: /etc/higgs/identity.key.json
+    key_path: /etc/photon/identity.key.json
 ```
 
 字段含义：
@@ -105,10 +105,10 @@ gossip:
 log:
   level: info
   mode: stderr+file
-  file: /var/log/higgs.log
+  file: /var/log/photon.log
 ```
 
-支持级别是 `debug`、`info`、`warn`、`error`。`HIGGS_LOG_LEVEL=debug` 可以临时覆盖配置，常用于排查 gossip、object pull、relay、IPsec reconcile 和限流原因。
+支持级别是 `debug`、`info`、`warn`、`error`。`PHOTON_LOG_LEVEL=debug` 可以临时覆盖配置，常用于排查 gossip、object pull、relay、IPsec reconcile 和限流原因。
 
 ## Netns
 
@@ -117,7 +117,7 @@ log:
 ```yaml
 netns:
   default:
-    name: h2
+    name: photon
     # kind defaults to name; create defaults to true.
     # Set create: false to reuse an existing netns.
     # Declaring forwarding enables transit; omit it to disable transit.
@@ -130,7 +130,7 @@ netns:
 
 `default` 是 overlay link group、routing instance 和非 host firewall instance 的默认 netns。其他名字，例如 `edge`，与 `default` 并列声明，供 `overlays[].netns`、`routing.instances[].netns` 和 `firewall.instances[].netns` 引用。
 
-`kind` 默认为 `name`，命名 netns 的 `create` 默认为 `true`；只有显式写 `create: false` 时才复用已有 namespace。`forwarding` 属于 netns，并由该 netns 中的 BIRD 与 firewall 共同消费；声明该段即默认 `transit: true`，省略时等同于 `transit: false`。如有需要仍可显式写 `transit: false` 覆盖。`transit: false` 只禁止本节点充当 XFRM-to-XFRM mesh 中继；Higgs 仍会按运行需要开启内核 IPv4/IPv6 forwarding。`allow_prefixes` / `deny_prefixes` 限制允许中继和继续宣告的授权前缀。
+`kind` 默认为 `name`，命名 netns 的 `create` 默认为 `true`；只有显式写 `create: false` 时才复用已有 namespace。`forwarding` 属于 netns，并由该 netns 中的 BIRD 与 firewall 共同消费；声明该段即默认 `transit: true`，省略时等同于 `transit: false`。如有需要仍可显式写 `transit: false` 覆盖。`transit: false` 只禁止本节点充当 XFRM-to-XFRM mesh 中继；Photon 仍会按运行需要开启内核 IPv4/IPv6 forwarding。`allow_prefixes` / `deny_prefixes` 限制允许中继和继续宣告的授权前缀。
 
 ## IPsec Provider
 
@@ -157,7 +157,7 @@ ipsec:
 
 - `role`：`out`、`in`、`both`。表达本节点 IPsec 连接意图；默认 `both`。
 - `driver`：`strongswan` 或 `dry-run`。默认 `strongswan`；无 root/VICI/XFRM 的开发环境用 `dry-run`。
-- `vici_socket`：StrongSwan VICI socket 路径。Higgs 进程不直接管理 charon；仓库提供的 `higgsnet.service` 会拉起并等待 `strongswan.service`，其他启动方式需要另行启动 charon。
+- `vici_socket`：StrongSwan VICI socket 路径。Photon 进程不直接管理 charon；仓库提供的 `photon.service` 会拉起并等待 `strongswan.service`，其他启动方式需要另行启动 charon。
 - `port_mode`：`fixed` 或 `range`。`range` 需要配置至少包含 4 个端口的 `port_range`；每个 generation 使用一组不重叠的 IKE/NAT-T 相邻端口，rotate 时前进 2 个端口。
 - `port_rotate_interval`：range 模式下 advertised port 的轮换周期；为 0 时不主动轮换。
 - `port_previous_grace`：旧 advertised port 保留窗口，必须覆盖 overlay rotate retention。
@@ -261,7 +261,7 @@ routing:
       metric_base: 100
       metric_staged: 200
       metric_draining: 500
-      interface_pattern: hgs*
+      interface_pattern: phx*
 ```
 
 字段说明：
@@ -270,16 +270,16 @@ routing:
 - `provider` 当前只支持 `bird`。
 - `mode` 可为 `managed`、`external`、`disabled`。
 - `disabled`：设为 `true` 时保留配置块但停止 reconcile。
-- `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Higgs 启动和配置，但默认不会随 Higgs daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
+- `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Photon 启动和配置，但默认不会随 Photon daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
 - `table`：BIRD 主路由表名。
 - `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，分别用于正常、staged rotate、draining 状态。
-- `interface_pattern`：匹配本 instance 内 XFRM tunnel interface 的模式，默认 `hgs*`。
+- `interface_pattern`：匹配本 instance 内 XFRM tunnel interface 的模式，默认 `phx*`。
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
-- `upstream` 可让 Higgs 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。
-- `upstream.mode: static` 是默认模式；Higgs 会在 mesh 侧把本节点 assigned prefix 指向 `mesh.interface`，并在 external/host 侧把远端授权 mesh 前缀指向 `external.interface`，使用本节点非 shared assigned prefix 的首个可用地址作为 route source；shared/Anycast prefix 不配置到 veth。
-- 默认接口名前缀按角色分离：StrongSwan/XFRM 使用 `hgs*`，WireGuard device 使用 `hgw*`，WG 路径 GRE 使用 `hgg*`，veth 使用 `hgv*`；默认 upstream 两端为 `hgv2host` / `hgv2mesh`。
+- `upstream` 可让 Photon 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。
+- `upstream.mode: static` 是默认模式；Photon 会在 mesh 侧把本节点 assigned prefix 指向 `mesh.interface`，并在 external/host 侧把远端授权 mesh 前缀指向 `external.interface`，使用本节点非 shared assigned prefix 的首个可用地址作为 route source；shared/Anycast prefix 不配置到 veth。
+- 默认接口名前缀按角色分离：StrongSwan/XFRM 使用 `phx*`，WireGuard device 使用 `phw*`，WG 路径 GRE 使用 `phg*`，veth 使用 `phv*`；默认 upstream 两端为 `phv2host` / `phv2mesh`。
 - `ipam.announce` 选择由 daemon 持续发布的本节点 assignment。支持 `all`、`non-shared`、`shared`、`tag:<tag>` 和 `assignment:<CIDR>`。
-- 未匹配的 assignment 不由配置管理，可由 `higgs route announce/withdraw` 或服务控制；配置 reconcile 只撤销自己以 `controller:auto` 创建的记录。
+- 未匹配的 assignment 不由配置管理，可由 `photon route announce/withdraw` 或服务控制；配置 reconcile 只撤销自己以 `controller:auto` 创建的记录。
 - 旧字段 `ipam.auto_announce_assigned_ips: true` 仍兼容，含义是自动管理全部本地 assignment；不能与 `ipam.announce` 同时使用。
 
 ## Firewall
@@ -289,12 +289,12 @@ Firewall 配置按 instance 声明。instance 可以绑定某个 netns，也可�
 ```yaml
 firewall:
   instances:
-    - id: h2
+    - id: photon
       # netns: default
       mode: managed
       backend: auto
       default_policy: drop
-      xfrm_tunnel_pattern: hgs*
+      xfrm_tunnel_pattern: phx*
 
     - id: host-ipsec
       host: true
@@ -308,7 +308,7 @@ firewall:
 - `mode` 可为 `managed`、`external`、`disabled`。
 - `disabled`：设为 `true` 时保留配置块但停止 reconcile。
 - 非 host instance 的 `netns` 引用顶层 `netns`；省略时使用 `netns.default`。
-- netns instance 默认匹配 `hgs*` XFRM tunnel interface。
+- netns instance 默认匹配 `phx*` XFRM tunnel interface。
 - upstream 接口名只配置在 `routing.instances[].upstream.mesh.interface`；firewall 按同一 netns 消费该精确名字，不提供独立的 upstream pattern。
 - host instance 用于 ingress、IKE/NAT-T 端口和 range 模式 redirect grace。
 - host instance 的 `listen_addrs`：用于 host ingress 和 DNAT/redirect 规则的监听地址，默认使用 `gossip.advertise_addrs`。
@@ -336,7 +336,7 @@ health:
   metrics:
     # Metrics persistence is disabled unless explicitly enabled.
     enabled: false
-    local_spool_path: /var/lib/higgs/health-spool
+    local_spool_path: /var/lib/photon/health-spool
     local_spool_max_age: 6h
     remote_write_url: http://victoriametrics:8428/api/v1/write
     remote_write_queue_capacity: 1024
@@ -379,7 +379,7 @@ Observer 是只读 HTTP/API 控制台，建议默认绑定 loopback，再由 SSH
 
 ## Peer Lifecycle
 
-`peer_lifecycle` 控制本机如何看待长期未同步、未观测到的 peer，以及何时清理 Higgs-owned runtime 资源。它不删除 gossip 数据库里的 Zone records，也不会向全网同步“删除 peer”的状态。
+`peer_lifecycle` 控制本机如何看待长期未同步、未观测到的 peer，以及何时清理 Photon-owned runtime 资源。它不删除 gossip 数据库里的 Zone records，也不会向全网同步“删除 peer”的状态。
 
 ```yaml
 peer_lifecycle:
@@ -393,7 +393,7 @@ peer_lifecycle:
 
 - `stale_after`：超过这个时间未同步/未观测到 peer 后，本机把它标记为 `stale`。默认仍保留已有 SA，避免短暂网络抖动就拆链。
 - `offline_after`：超过这个时间后，本机把 peer 标记为 `offline`，新的主动连接和重试会更保守。
-- `cleanup_after`：长期 offline 后，本机可以清理 Higgs-owned 数据面资源，例如 IPsec SA、XFRM interface、routing/firewall 状态和 peer cache 里的可达地址。
+- `cleanup_after`：长期 offline 后，本机可以清理 Photon-owned 数据面资源，例如 IPsec SA、XFRM interface、routing/firewall 状态和 peer cache 里的可达地址。
 - `keep_sa_while_stale`：peer 只是 `stale` 时是否保留已有 SA，默认 `true`。
 
 约束是 `stale_after < offline_after < cleanup_after`。被撤销的 peer 会走更主动的本机清理路径；revocation 本身是 signed state，会继续通过 gossip 同步和保留用于验证/审计。

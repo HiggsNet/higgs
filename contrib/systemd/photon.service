@@ -1,0 +1,21 @@
+[Unit]
+Description=Photon mesh daemon
+After=network-online.target strongswan.service
+Wants=network-online.target strongswan.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=PHOTON_CONFIG=/etc/photon/config.yaml
+ExecStart=/usr/local/bin/photon daemon
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=30s
+RuntimeDirectory=photon
+RuntimeDirectoryMode=0700
+UMask=0077
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

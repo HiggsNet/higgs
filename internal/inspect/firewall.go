@@ -1,6 +1,6 @@
 package inspect
 
-import higgsstate "github.com/Catofes/higgs/internal/state"
+import photonstate "github.com/Catofes/photon/internal/state"
 
 const FirewallModeManaged = "managed"
 
@@ -12,7 +12,7 @@ type FirewallDebugView struct {
 
 type FirewallDebugInput struct {
 	Instances []FirewallInstanceInput
-	Reconcile *higgsstate.FirewallReconcileState
+	Reconcile *photonstate.FirewallReconcileState
 }
 
 type FirewallInstanceInput struct {
@@ -146,7 +146,7 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 	return view
 }
 
-func firewallReconcileInstance(reconcile *higgsstate.FirewallReconcileState, id string) (*higgsstate.FirewallReconcileInstance, bool) {
+func firewallReconcileInstance(reconcile *photonstate.FirewallReconcileState, id string) (*photonstate.FirewallReconcileInstance, bool) {
 	if reconcile == nil || reconcile.Instances == nil {
 		return nil, false
 	}

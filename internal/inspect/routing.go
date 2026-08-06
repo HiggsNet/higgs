@@ -1,6 +1,6 @@
 package inspect
 
-import higgsstate "github.com/Catofes/higgs/internal/state"
+import photonstate "github.com/Catofes/photon/internal/state"
 
 const (
 	RoutingModeManaged           = "managed"
@@ -32,7 +32,7 @@ type BabelDebugView struct {
 type BabelDebugInput struct {
 	LastReconcileError string
 	Instances          []BabelInstanceInput
-	RuntimeStates      map[string]*higgsstate.BirdInstanceState
+	RuntimeStates      map[string]*photonstate.BirdInstanceState
 }
 
 type BabelInstanceInput struct {

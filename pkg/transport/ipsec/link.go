@@ -8,15 +8,15 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 const (
 	NetNSHost        = "host"
 	NetNSName        = "name"
 	NetNSPath        = "path"
-	DefaultNetNSName = "h2"
+	DefaultNetNSName = "photon"
 	DefaultPathKey   = "default"
 
 	TunnelAddressDerivedLinkLocal TunnelAddressMode = "derived-link-local"
@@ -417,8 +417,8 @@ func derivePoolAddresses(local, peer zone.ZonePath, linkID string, addressEpoch 
 
 func deriveInterfaceID(linkID string, addressEpoch uint64, family, mode, pool, role string, maxRetry int) (uint64, error) {
 	for retry := range maxRetry {
-		hash := higgscrypto.Hash(
-			[]byte("higgs.ipsec.tunnel-address.v2"),
+		hash := photoncrypto.Hash(
+			[]byte("photon.ipsec.tunnel-address.v2"),
 			[]byte(linkID),
 			[]byte(fmt.Sprintf("%d", addressEpoch)),
 			[]byte(family),
@@ -445,8 +445,8 @@ func derivePoolAddr(linkID string, addressEpoch uint64, pool netip.Prefix, role 
 		hostBits := uint32(32 - bits)
 		mask := uint32(1)<<hostBits - 1
 		for retry := range maxRetry {
-			hash := higgscrypto.Hash(
-				[]byte("higgs.ipsec.tunnel-address.v2"),
+			hash := photoncrypto.Hash(
+				[]byte("photon.ipsec.tunnel-address.v2"),
 				[]byte(linkID),
 				[]byte(fmt.Sprintf("%d", addressEpoch)),
 				[]byte(FamilyIPv4),
@@ -479,8 +479,8 @@ func derivePoolAddr(linkID string, addressEpoch uint64, pool netip.Prefix, role 
 	hostMask.Lsh(hostMask, uint(hostBits))
 	hostMask.Sub(hostMask, big.NewInt(1))
 	for retry := range maxRetry {
-		hash := higgscrypto.Hash(
-			[]byte("higgs.ipsec.tunnel-address.v2"),
+		hash := photoncrypto.Hash(
+			[]byte("photon.ipsec.tunnel-address.v2"),
 			[]byte(linkID),
 			[]byte(fmt.Sprintf("%d", addressEpoch)),
 			[]byte(FamilyIPv6),
@@ -641,8 +641,8 @@ func StableLinkID(local, peer zone.ZonePath, overlayID, pathKey string) string {
 		pathKey = DefaultPathKey
 	}
 	lower, higher := sortedPair(local, peer)
-	hash := higgscrypto.Hash(
-		[]byte("higgs.ipsec.link.v1"),
+	hash := photoncrypto.Hash(
+		[]byte("photon.ipsec.link.v1"),
 		[]byte{0},
 		[]byte(lower),
 		[]byte{0},
@@ -659,8 +659,8 @@ func RuntimeConnectionID(linkID string, generation uint64, provider string) stri
 	if provider == "" {
 		provider = ProviderStrongSwan
 	}
-	hash := higgscrypto.Hash(
-		[]byte("higgs.ipsec.runtime.v1"),
+	hash := photoncrypto.Hash(
+		[]byte("photon.ipsec.runtime.v1"),
 		[]byte{0},
 		[]byte(linkID),
 		[]byte{0},
@@ -688,8 +688,8 @@ func RuntimeXFRMIfID(linkID string, generation uint64, provider string) uint32 {
 	if provider == "" {
 		provider = ProviderStrongSwan
 	}
-	hash := higgscrypto.Hash(
-		[]byte("higgs.ipsec.xfrm.v1"),
+	hash := photoncrypto.Hash(
+		[]byte("photon.ipsec.xfrm.v1"),
 		[]byte{0},
 		[]byte(linkID),
 		[]byte{0},
@@ -711,12 +711,12 @@ func LegacyStableTransportID(local, peer zone.ZonePath, overlayID string, family
 	if len(family) > 0 && family[0] != "" {
 		parts = append(parts, []byte{0}, []byte(family[0]))
 	}
-	hash := higgscrypto.Hash(parts...)
+	hash := photoncrypto.Hash(parts...)
 	return "ipsec-" + hex.EncodeToString(hash[:6])
 }
 
 func StableXFRMIfID(local, peer zone.ZonePath, transportID string) uint32 {
-	hash := higgscrypto.Hash([]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(transportID))
+	hash := photoncrypto.Hash([]byte(local), []byte{0}, []byte(peer), []byte{0}, []byte(transportID))
 	ifID := binary.BigEndian.Uint32(hash[:4])
 	if ifID == 0 {
 		return 1
@@ -725,7 +725,7 @@ func StableXFRMIfID(local, peer zone.ZonePath, transportID string) uint32 {
 }
 
 func StableInterfaceName(ifID uint32) string {
-	return fmt.Sprintf("hgs%x", ifID)
+	return fmt.Sprintf("phx%x", ifID)
 }
 
 // InitiatorRoleForPeer returns the local runtime role for a peer link based

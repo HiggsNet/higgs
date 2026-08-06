@@ -5,19 +5,19 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 var ErrCatalogPageTooLarge = fmt.Errorf("catalog page exceeds datagram budget")
 
 func CatalogRoot(entries []ZoneDigest) []byte {
 	parts := make([][]byte, 0, 1+len(entries)*3)
-	parts = append(parts, []byte("higgs.catalog.v1"))
+	parts = append(parts, []byte("photon.catalog.v1"))
 	for _, entry := range entries {
 		parts = append(parts, []byte(entry.Zone), entry.RootHash)
 	}
-	return higgscrypto.Hash(parts...)
+	return photoncrypto.Hash(parts...)
 }
 
 func CatalogSummaryFor(ns *zone.NetworkState, budget int) (*CatalogSummary, error) {

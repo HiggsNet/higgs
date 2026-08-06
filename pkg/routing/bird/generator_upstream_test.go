@@ -8,9 +8,9 @@ import (
 
 func TestGenerateWithUpstreamInterface(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "higgstesth2"
+	spec.NetNSName = "photontesth2"
 	spec.Upstream = &UpstreamSpec{
-		Interface: "hgv2host",
+		Interface: "phv2host",
 	}
 
 	gen := DefaultConfigGenerator{}
@@ -21,15 +21,15 @@ func TestGenerateWithUpstreamInterface(t *testing.T) {
 	s := string(cfg)
 
 	// Must have the primary XFRM tunnel interface block with type tunnel.
-	if !strings.Contains(s, `interface "hgs*" {`) {
-		t.Errorf("missing primary interface block with hgs*\n%s", s)
+	if !strings.Contains(s, `interface "phx*" {`) {
+		t.Errorf("missing primary interface block with phx*\n%s", s)
 	}
 	if !strings.Contains(s, "type tunnel;") {
 		t.Errorf("missing type tunnel in primary interface block\n%s", s)
 	}
 
 	// Must have the upstream veth interface block WITHOUT type tunnel.
-	if !strings.Contains(s, `interface "hgv2host" {`) {
+	if !strings.Contains(s, `interface "phv2host" {`) {
 		t.Errorf("missing upstream interface block\n%s", s)
 	}
 	// Count type tunnel occurrences: should be exactly 1 (only in primary block).
@@ -40,7 +40,7 @@ func TestGenerateWithUpstreamInterface(t *testing.T) {
 
 func TestGenerateWithoutUpstreamNoExtraInterface(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "higgstesth2"
+	spec.NetNSName = "photontesth2"
 
 	gen := DefaultConfigGenerator{}
 	cfg, err := gen.Generate(spec, nil, nil)
@@ -50,26 +50,26 @@ func TestGenerateWithoutUpstreamNoExtraInterface(t *testing.T) {
 	s := string(cfg)
 
 	// Should NOT have any upstream interface block.
-	if strings.Contains(s, "hgv2host") {
+	if strings.Contains(s, "phv2host") {
 		t.Errorf("upstream interface block present when not configured\n%s", s)
 	}
 	// Must still have the primary interface block.
-	if !strings.Contains(s, `interface "hgs*" {`) {
+	if !strings.Contains(s, `interface "phx*" {`) {
 		t.Errorf("missing primary interface block\n%s", s)
 	}
 }
 
 func TestGenerateWithStaticRoutes(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "higgstesth2"
+	spec.NetNSName = "photontesth2"
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
-			Via:    "hgv2host",
+			Via:    "phv2host",
 		},
 		{
 			Prefix: netip.MustParsePrefix("2001:db8:1::/48"),
-			Via:    "hgv2host",
+			Via:    "phv2host",
 		},
 	}
 
@@ -81,26 +81,26 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 	s := string(cfg)
 
 	// Must have a protocol static block.
-	if !strings.Contains(s, "protocol static higgs_static_higgstesth2 {") {
+	if !strings.Contains(s, "protocol static photon_static_photontesth2 {") {
 		t.Errorf("missing protocol static block\n%s", s)
 	}
 	// Must have the IPv4 route via the upstream interface.
-	if !strings.Contains(s, `route 10.0.0.0/24 via "hgv2host";`) {
+	if !strings.Contains(s, `route 10.0.0.0/24 via "phv2host";`) {
 		t.Errorf("missing IPv4 static route via interface\n%s", s)
 	}
 	// Must have the IPv6 route via the upstream interface.
-	if !strings.Contains(s, `route 2001:db8:1::/48 via "hgv2host";`) {
+	if !strings.Contains(s, `route 2001:db8:1::/48 via "phv2host";`) {
 		t.Errorf("missing IPv6 static route via interface\n%s", s)
 	}
 }
 
 func TestGenerateWithStaticRouteGatewayAndInterface(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "higgstesth2"
+	spec.NetNSName = "photontesth2"
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix:  netip.MustParsePrefix("2001:db8:1::/48"),
-			Via:     "hgv2-host",
+			Via:     "phv2-host",
 			NextHop: netip.MustParseAddr("fe80::a1:2"),
 		},
 	}
@@ -109,7 +109,7 @@ func TestGenerateWithStaticRouteGatewayAndInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
 	}
-	if got := string(cfg); !strings.Contains(got, `route 2001:db8:1::/48 via fe80::a1:2%'hgv2-host';`) {
+	if got := string(cfg); !strings.Contains(got, `route 2001:db8:1::/48 via fe80::a1:2%'phv2-host';`) {
 		t.Errorf("missing IPv6 gateway route pinned to interface\n%s", got)
 	}
 }
@@ -119,7 +119,7 @@ func TestGenerateRejectsUnrepresentableScopedInterface(t *testing.T) {
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix:  netip.MustParsePrefix("2001:db8:1::/48"),
-			Via:     "hgv2'host",
+			Via:     "phv2'host",
 			NextHop: netip.MustParseAddr("fe80::a1:2"),
 		},
 	}
@@ -132,7 +132,7 @@ func TestGenerateRejectsUnrepresentableScopedInterface(t *testing.T) {
 
 func TestGenerateWithBlackholeStaticRoute(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "higgstesth2"
+	spec.NetNSName = "photontesth2"
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix:    netip.MustParsePrefix("10.0.0.0/24"),
@@ -154,7 +154,7 @@ func TestGenerateWithBlackholeStaticRoute(t *testing.T) {
 
 func TestGenerateWithStaticRouteNoVia(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "higgstesth2"
+	spec.NetNSName = "photontesth2"
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
@@ -191,14 +191,14 @@ func TestGenerateWithoutStaticRoutesNoStaticBlock(t *testing.T) {
 
 func TestGenerateWithUpstreamAndStaticRoutes(t *testing.T) {
 	spec := testBirdInstanceSpec()
-	spec.NetNSName = "higgstesth2"
+	spec.NetNSName = "photontesth2"
 	spec.Upstream = &UpstreamSpec{
-		Interface: "hgv2host",
+		Interface: "phv2host",
 	}
 	spec.StaticRoutes = []StaticRouteSpec{
 		{
 			Prefix: netip.MustParsePrefix("10.0.0.0/24"),
-			Via:    "hgv2host",
+			Via:    "phv2host",
 		},
 	}
 
@@ -210,13 +210,13 @@ func TestGenerateWithUpstreamAndStaticRoutes(t *testing.T) {
 	s := string(cfg)
 
 	// Both upstream interface block and static routes.
-	if !strings.Contains(s, `interface "hgv2host" {`) {
+	if !strings.Contains(s, `interface "phv2host" {`) {
 		t.Errorf("missing upstream interface block\n%s", s)
 	}
 	if !strings.Contains(s, "protocol static") {
 		t.Errorf("missing protocol static block\n%s", s)
 	}
-	if !strings.Contains(s, `route 10.0.0.0/24 via "hgv2host";`) {
+	if !strings.Contains(s, `route 10.0.0.0/24 via "phv2host";`) {
 		t.Errorf("missing static route via upstream interface\n%s", s)
 	}
 }

@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	wireMagicMsgpack    = []byte("higgs.gossip.m1\n")
+	wireMagicMsgpack    = []byte("photon.gossip.m1\n")
 	wireVersionLatest   = 1
 	ErrUnsupportedCodec = errors.New("unsupported gossip codec")
 )

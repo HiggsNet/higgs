@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 set -u
 
-HIGGS_BIN="${HIGGS_BIN:-build/higgs}"
-FILTER="${HIGGS_ROTATE_FILTER:-}"
-LOG_FILE="${HIGGS_LOG_FILE:-}"
-HIGGS_PID="${HIGGS_PID:-}"
-CONFIG_FILE="${HIGGS_CONFIG_FILE:-/etc/higgs/config.yaml}"
-LINES="${HIGGS_DEBUG_LINES:-300}"
-NETNS_LIST="${HIGGS_NETNS_LIST:-}"
+PHOTON_BIN="${PHOTON_BIN:-build/photon}"
+FILTER="${PHOTON_ROTATE_FILTER:-}"
+LOG_FILE="${PHOTON_LOG_FILE:-}"
+PHOTON_PID="${PHOTON_PID:-}"
+CONFIG_FILE="${PHOTON_CONFIG_FILE:-/etc/photon/config.yaml}"
+LINES="${PHOTON_DEBUG_LINES:-300}"
+NETNS_LIST="${PHOTON_NETNS_LIST:-}"
 
 section() {
   printf '\n===== %s =====\n' "$1"
@@ -18,21 +18,21 @@ run() {
   "$@" 2>&1 || true
 }
 
-higgs_debug() {
+photon_debug() {
   if [ -n "$FILTER" ]; then
-    run "$HIGGS_BIN" debug "$1" --filter "$FILTER"
+    run "$PHOTON_BIN" debug "$1" --filter "$FILTER"
   else
-    run "$HIGGS_BIN" debug "$1"
+    run "$PHOTON_BIN" debug "$1"
   fi
 }
 
-higgs_pids() {
-  if [ -n "$HIGGS_PID" ]; then
-    printf '%s\n' "$HIGGS_PID"
+photon_pids() {
+  if [ -n "$PHOTON_PID" ]; then
+    printf '%s\n' "$PHOTON_PID"
     return
   fi
   ps -eo pid=,args= 2>/dev/null | awk '
-    $0 ~ /(^|[[:space:]])([^[:space:]]*\/)?build\/higgs([[:space:]]|$)/ {
+    $0 ~ /(^|[[:space:]])([^[:space:]]*\/)?build\/photon([[:space:]]|$)/ {
       print $1
     }
   '
@@ -50,21 +50,21 @@ section "time"
 run date -Is
 run uname -a
 
-section "higgs process"
-PIDS="$(higgs_pids | tr '\n' ' ')"
-printf 'matched_build_higgs_pids: %s\n' "${PIDS:-none}"
+section "photon process"
+PIDS="$(photon_pids | tr '\n' ' ')"
+printf 'matched_build_photon_pids: %s\n' "${PIDS:-none}"
 
-section "higgs config"
+section "photon config"
 run sed -n 1,240p "$CONFIG_FILE"
 
-section "higgs status"
-run "$HIGGS_BIN" debug peers
-higgs_debug links
-run "$HIGGS_BIN" debug health
-higgs_debug rotate
+section "photon status"
+run "$PHOTON_BIN" debug peers
+photon_debug links
+run "$PHOTON_BIN" debug health
+photon_debug rotate
 
-section "higgs active ipsec records"
-run "$HIGGS_BIN" debug records --prefix ipsec/ --values
+section "photon active ipsec records"
+run "$PHOTON_BIN" debug records --prefix ipsec/ --values
 
 section "strongswan status"
 run swanctl --stats
@@ -97,17 +97,17 @@ for ns in $NETNS_NAMES; do
   run ip netns exec "$ns" cat /proc/net/xfrm_stat
 done
 
-section "higgs logs"
+section "photon logs"
 if [ -n "$LOG_FILE" ]; then
   run tail -n "$LINES" "$LOG_FILE"
 else
   if [ -n "$PIDS" ]; then
     for pid in $PIDS; do
-      section "higgs journal pid $pid"
+      section "photon journal pid $pid"
       run journalctl "_PID=$pid" -n "$LINES" --no-pager
     done
   else
-    printf 'no build/higgs pid found; set HIGGS_PID=<pid> or HIGGS_LOG_FILE=<path>\n'
+    printf 'no build/photon pid found; set PHOTON_PID=<pid> or PHOTON_LOG_FILE=<path>\n'
   fi
 fi
 

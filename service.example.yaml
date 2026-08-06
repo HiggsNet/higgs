@@ -1,25 +1,25 @@
-# Install as /etc/higgs/service.yaml. This file belongs to the standalone
-# higgs-services renderer, not to the Higgs daemon.
+# Install as /etc/photon/service.yaml. This file belongs to the standalone
+# photon-services renderer, not to the Photon daemon.
 version: 1
 
 # Defaults inherited by every network. A network-level value overrides this
-# list. The default upstream veth's host-side name is hgv2mesh; use the actual
-# stable host ingress interface (for example hgs0 when the overlay itself runs
+# list. The default upstream veth's host-side name is phv2mesh; use the actual
+# stable host ingress interface (for example phx0 when the overlay itself runs
 # in the host namespace). For the address family used by a service endpoint,
 # render also sets Docker gateway_mode to nat-unprotected. In that family
-# trusted_host_interfaces is not a security boundary; Higgs' IP-scoped endpoint
+# trusted_host_interfaces is not a security boundary; Photon' IP-scoped endpoint
 # ACL is the access boundary.
 # network_defaults:
-#   trusted_host_interfaces: [hgv2mesh]
+#   trusted_host_interfaces: [phv2mesh]
 
 networks:
   main:
     ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
     ipv6: "auto;::/112;::100/120;::1"
     # Optional per-network override:
-    # trusted_host_interfaces: [hgv2mesh]
+    # trusted_host_interfaces: [phv2mesh]
   # The main non-shared assignment is normally kept reachable by
-  # config.yaml: ipam.announce: [non-shared]. higgs-services does not own it.
+  # config.yaml: ipam.announce: [non-shared]. photon-services does not own it.
   # Shared Anycast networks use stable IPAM tags. The local main network does
   # not need a tag: auto intentionally selects the node's unique assignment.
   # cn:
@@ -41,7 +41,7 @@ socks5:
     # cn: cn
     # asia: asia
   # Optional local endpoint ACL. publish installs one IP-scoped ACL for each
-  # of the socks (::20) and HTTP (::21) addresses through the running Higgs
+  # of the socks (::20) and HTTP (::21) addresses through the running Photon
   # daemon before publishing the signed service record.
   # allow_zones:
   #   - clients.catofes.
@@ -56,7 +56,7 @@ socks5:
   # ASSOCIATE. Its UDP relay uses dynamically allocated container ports, which
   # is why access control is scoped to the whole service IP.
   # http_auth:
-  #   username: higgs
+  #   username: photon
   #   password: 2a0d
 
 # Defaults are pinned to a stable image.
@@ -64,5 +64,5 @@ socks5:
 # images:
 #   gost: gogost/gost:3.2.6
 
-# Artifact root defaults to /etc/higgs/services.
-# output_dir: /etc/higgs/services
+# Artifact root defaults to /etc/photon/services.
+# output_dir: /etc/photon/services

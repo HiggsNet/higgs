@@ -22,8 +22,8 @@ func TestFilterIPTablesOwnedDumpSelectsActiveOwnerGeneration(t *testing.T) {
 	chainA := iptablesGenerationChain(tableA, "i", "aaaaaaaaaaaa", 'a')
 	chainB := iptablesGenerationChain(tableB, "i", "bbbbbbbbbbbb", 'a')
 	rules := strings.Join([]string{
-		fmt.Sprintf("-A INPUT -m comment --comment higgs-%s -j %s", scope, chainA),
-		fmt.Sprintf("-A INPUT -m comment --comment higgs-%s -j %s", scope, chainB),
+		fmt.Sprintf("-A INPUT -m comment --comment photon-%s -j %s", scope, chainA),
+		fmt.Sprintf("-A INPUT -m comment --comment photon-%s -j %s", scope, chainB),
 		"-N " + chainA,
 		"-N " + chainB,
 		fmt.Sprintf("-A %s -s 198.51.100.1/32 -m comment --comment inline-a -j ACCEPT", chainA),
@@ -38,7 +38,7 @@ func TestFilterIPTablesOwnedDumpSelectsActiveOwnerGeneration(t *testing.T) {
 		"add " + setB + " 10.43.0.0/24",
 	}, "\n")
 
-	got := filterIPTablesOwnedDump(rules, ipsets, tableA, "higgs-"+scope)
+	got := filterIPTablesOwnedDump(rules, ipsets, tableA, "photon-"+scope)
 	for _, want := range []string{chainA, "inline-a", "10.42.0.0/24"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("filtered dump missing %q:\n%s", want, got)
@@ -52,8 +52,8 @@ func TestFilterIPTablesOwnedDumpSelectsActiveOwnerGeneration(t *testing.T) {
 }
 
 func TestFirewallBackendsRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_FIREWALL_SMOKE") != "1" {
-		t.Skip("set HIGGS_FIREWALL_SMOKE=1 to run the root/system firewall smoke")
+	if os.Getenv("PHOTON_FIREWALL_SMOKE") != "1" {
+		t.Skip("set PHOTON_FIREWALL_SMOKE=1 to run the root/system firewall smoke")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -106,7 +106,7 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 		Backend:           backend,
 		DefaultPolicy:     DefaultPolicyDrop,
 		OwnerPrefix:       ownerPrefix,
-		XFRMTunnelPattern: "hgs+",
+		XFRMTunnelPattern: "phx+",
 		LocalServices: []LocalService{
 			{Proto: ProtoTCP, Port: 8080},
 		},
@@ -115,24 +115,24 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 	switch backend {
 	case BackendNFT:
 		spec.NativeHooks.NFT.PreInput = []string{
-			`ip saddr 198.51.100.7 counter comment "higgs-inline-nft-v4"`,
-			`ip6 saddr 2001:db8:ffff::7 counter comment "higgs-inline-nft-v6"`,
+			`ip saddr 198.51.100.7 counter comment "photon-inline-nft-v4"`,
+			`ip6 saddr 2001:db8:ffff::7 counter comment "photon-inline-nft-v6"`,
 		}
-		inlineWant = append(inlineWant, "higgs-inline-nft-v4", "higgs-inline-nft-v6")
+		inlineWant = append(inlineWant, "photon-inline-nft-v4", "photon-inline-nft-v6")
 	case BackendIptables:
 		spec.NativeHooks.IPTables.IPv4.PreInput = []string{
-			`-s 198.51.100.7/32 -m comment --comment "higgs-inline-iptables-v4" -j ACCEPT`,
+			`-s 198.51.100.7/32 -m comment --comment "photon-inline-iptables-v4" -j ACCEPT`,
 		}
 		spec.NativeHooks.IPTables.IPv6.PreInput = []string{
-			`-s 2001:db8:ffff::7/128 -m comment --comment "higgs-inline-iptables-v6" -j ACCEPT`,
+			`-s 2001:db8:ffff::7/128 -m comment --comment "photon-inline-iptables-v6" -j ACCEPT`,
 		}
-		inlineWant = append(inlineWant, "higgs-inline-iptables-v4", "higgs-inline-iptables-v6")
+		inlineWant = append(inlineWant, "photon-inline-iptables-v4", "photon-inline-iptables-v6")
 	}
 	input := FirewallPolicyInput{
 		LocalAssigned:      []netip.Prefix{mustPrefix(t, "10.42.0.2/32")},
 		MeshAuthorized:     []netip.Prefix{mustPrefix(t, "10.42.0.1/32"), mustPrefix(t, "10.43.0.0/24")},
 		Revoked:            []netip.Prefix{mustPrefix(t, "10.99.0.0/24")},
-		LiveInterfaces:     []string{"hgs0"},
+		LiveInterfaces:     []string{"phx0"},
 		UpstreamInterfaces: []string{"up0"},
 		Forwarding: ForwardingPolicy{
 			Transit:       true,
@@ -197,13 +197,13 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 	hostInlineWant := []string{}
 	switch backend {
 	case BackendNFT:
-		hostSpec.NativeHooks.NFT.HostPreInput = []string{`udp dport 16000 counter comment "higgs-inline-host-input"`}
-		hostSpec.NativeHooks.NFT.HostPrePrerouting = []string{`tcp dport 18080 counter comment "higgs-inline-host-prerouting"`}
-		hostInlineWant = append(hostInlineWant, "higgs-inline-host-input", "higgs-inline-host-prerouting")
+		hostSpec.NativeHooks.NFT.HostPreInput = []string{`udp dport 16000 counter comment "photon-inline-host-input"`}
+		hostSpec.NativeHooks.NFT.HostPrePrerouting = []string{`tcp dport 18080 counter comment "photon-inline-host-prerouting"`}
+		hostInlineWant = append(hostInlineWant, "photon-inline-host-input", "photon-inline-host-prerouting")
 	case BackendIptables:
-		hostSpec.NativeHooks.IPTables.IPv4.HostPreInput = []string{`-p udp --dport 16000 -m comment --comment "higgs-inline-host-input"`}
-		hostSpec.NativeHooks.IPTables.IPv4.HostPrePrerouting = []string{`-p tcp --dport 18080 -m comment --comment "higgs-inline-host-prerouting"`}
-		hostInlineWant = append(hostInlineWant, "higgs-inline-host-input", "higgs-inline-host-prerouting")
+		hostSpec.NativeHooks.IPTables.IPv4.HostPreInput = []string{`-p udp --dport 16000 -m comment --comment "photon-inline-host-input"`}
+		hostSpec.NativeHooks.IPTables.IPv4.HostPrePrerouting = []string{`-p tcp --dport 18080 -m comment --comment "photon-inline-host-prerouting"`}
+		hostInlineWant = append(hostInlineWant, "photon-inline-host-input", "photon-inline-host-prerouting")
 	}
 	hostInput := FirewallPolicyInput{
 		AdvertisedPreviousIKEPorts:  []uint16{500},
@@ -279,7 +279,7 @@ func firewallBackendDump(t *testing.T, ctx context.Context, nsName, backend, own
 		if err != nil {
 			t.Fatalf("ipset save: %v\noutput: %s", err, string(ipsets))
 		}
-		return filterIPTablesOwnedDump(strings.Join(ruleDumps, "\n"), string(ipsets), tableName, "higgs-"+scope)
+		return filterIPTablesOwnedDump(strings.Join(ruleDumps, "\n"), string(ipsets), tableName, "photon-"+scope)
 	default:
 		return ""
 	}

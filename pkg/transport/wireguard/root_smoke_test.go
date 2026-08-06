@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/routing/bird"
+	"github.com/Catofes/photon/pkg/routing/bird"
 )
 
 // TestWireGuardGREThreeNodeRootSmoke is the Phase 7.1.b validation experiment.
@@ -20,13 +20,13 @@ import (
 // dedicated GRE interface for Babel, while WireGuard AllowedIPs contain only
 // transit /32s. Babel learns and forwards service prefixes over the GRE links.
 func TestWireGuardGREThreeNodeRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_WG_GRE_SMOKE") != "1" {
-		t.Skip("set HIGGS_WG_GRE_SMOKE=1 to run the Phase 7.1 WireGuard/GRE root experiment")
+	if os.Getenv("PHOTON_WG_GRE_SMOKE") != "1" {
+		t.Skip("set PHOTON_WG_GRE_SMOKE=1 to run the Phase 7.1 WireGuard/GRE root experiment")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	wgBinary := os.Getenv("HIGGS_WG_BINARY")
+	wgBinary := os.Getenv("PHOTON_WG_BINARY")
 	if wgBinary == "" {
 		wgBinary = "wg"
 	}
@@ -36,9 +36,9 @@ func TestWireGuardGREThreeNodeRootSmoke(t *testing.T) {
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	short := suffix[len(suffix)-4:]
-	nsA, nsB, nsC := "higgs-wggre-a-"+suffix, "higgs-wggre-b-"+suffix, "higgs-wggre-c-"+suffix
-	aB, bA := "hgvab"+short, "hgvba"+short
-	aC, cA := "hgvac"+short, "hgvca"+short
+	nsA, nsB, nsC := "photon-wggre-a-"+suffix, "photon-wggre-b-"+suffix, "photon-wggre-c-"+suffix
+	aB, bA := "phvab"+short, "phvba"+short
+	aC, cA := "phvac"+short, "phvca"+short
 	tmpA, tmpB, tmpC := t.TempDir(), t.TempDir(), t.TempDir()
 
 	var managers []*bird.ExecProcessManager
@@ -74,7 +74,7 @@ func TestWireGuardGREThreeNodeRootSmoke(t *testing.T) {
 	configureWGDevice(t, ctx, wgBinary, nsB, privateB, "10.200.0.2/32", []wgPeer{{publicKey: publicA, allowedIP: "10.200.0.1/32", endpoint: "192.0.2.1:51820"}})
 	configureWGDevice(t, ctx, wgBinary, nsC, privateC, "10.200.0.3/32", []wgPeer{{publicKey: publicA, allowedIP: "10.200.0.1/32", endpoint: "192.0.2.5:51820"}})
 	for _, route := range []struct{ ns, peer string }{{nsA, "10.200.0.2/32"}, {nsA, "10.200.0.3/32"}, {nsB, "10.200.0.1/32"}, {nsC, "10.200.0.1/32"}} {
-		runSmokeCommand(t, ctx, "ip", "netns", "exec", route.ns, "ip", "route", "add", route.peer, "dev", "hgw7")
+		runSmokeCommand(t, ctx, "ip", "netns", "exec", route.ns, "ip", "route", "add", route.peer, "dev", "phw7")
 	}
 
 	assertWGPeers(t, ctx, wgBinary, nsA, 2, []string{"10.200.0.2/32", "10.200.0.3/32"})
@@ -83,10 +83,10 @@ func TestWireGuardGREThreeNodeRootSmoke(t *testing.T) {
 	pingSmoke(t, ctx, nsA, "10.200.0.2")
 	pingSmoke(t, ctx, nsA, "10.200.0.3")
 
-	configureGRE(t, ctx, nsA, "hgg-ab", "10.200.0.1", "10.200.0.2", "7101", "10.210.1.1/30", "fe80::1:1/64")
-	configureGRE(t, ctx, nsB, "hgg-ba", "10.200.0.2", "10.200.0.1", "7101", "10.210.1.2/30", "fe80::1:2/64")
-	configureGRE(t, ctx, nsA, "hgg-ac", "10.200.0.1", "10.200.0.3", "7102", "10.210.2.1/30", "fe80::2:1/64")
-	configureGRE(t, ctx, nsC, "hgg-ca", "10.200.0.3", "10.200.0.1", "7102", "10.210.2.2/30", "fe80::2:2/64")
+	configureGRE(t, ctx, nsA, "phg-ab", "10.200.0.1", "10.200.0.2", "7101", "10.210.1.1/30", "fe80::1:1/64")
+	configureGRE(t, ctx, nsB, "phg-ba", "10.200.0.2", "10.200.0.1", "7101", "10.210.1.2/30", "fe80::1:2/64")
+	configureGRE(t, ctx, nsA, "phg-ac", "10.200.0.1", "10.200.0.3", "7102", "10.210.2.1/30", "fe80::2:1/64")
+	configureGRE(t, ctx, nsC, "phg-ca", "10.200.0.3", "10.200.0.1", "7102", "10.210.2.2/30", "fe80::2:2/64")
 	configureServiceInterface(t, ctx, nsB, "10.220.2.1/24")
 	configureServiceInterface(t, ctx, nsC, "10.220.3.1/24")
 
@@ -115,7 +115,7 @@ func TestWireGuardGREThreeNodeRootSmoke(t *testing.T) {
 	waitForBirdRoutes(t, ctx, specs[1].ControlSocketPath, []string{"10.220.3.0/24"})
 	pingSmokeFrom(t, ctx, nsB, "10.220.2.1", "10.220.3.1")
 
-	for _, item := range []struct{ ns, iface string }{{nsA, "hgg-ab"}, {nsA, "hgg-ac"}, {nsB, "hgg-ba"}, {nsC, "hgg-ca"}} {
+	for _, item := range []struct{ ns, iface string }{{nsA, "phg-ab"}, {nsA, "phg-ac"}, {nsB, "phg-ba"}, {nsC, "phg-ca"}} {
 		out := runSmokeCommand(t, ctx, "ip", "netns", "exec", item.ns, "ip", "-o", "link", "show", "dev", item.iface)
 		if !strings.Contains(out, "mtu 1360") {
 			t.Fatalf("%s/%s MTU mismatch, output: %s", item.ns, item.iface, out)
@@ -138,13 +138,13 @@ func TestWireGuardGREThreeNodeRootSmoke(t *testing.T) {
 // own transit addresses and GRE interfaces, so Babel can observe and cut over
 // to the staged path before the old shared device is released.
 func TestWireGuardGREStagedRotateRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_WG_GRE_SMOKE") != "1" {
-		t.Skip("set HIGGS_WG_GRE_SMOKE=1 to run the Phase 7.1 WireGuard/GRE root experiment")
+	if os.Getenv("PHOTON_WG_GRE_SMOKE") != "1" {
+		t.Skip("set PHOTON_WG_GRE_SMOKE=1 to run the Phase 7.1 WireGuard/GRE root experiment")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	wgBinary := os.Getenv("HIGGS_WG_BINARY")
+	wgBinary := os.Getenv("PHOTON_WG_BINARY")
 	if wgBinary == "" {
 		wgBinary = "wg"
 	}
@@ -157,9 +157,9 @@ func TestWireGuardGREStagedRotateRootSmoke(t *testing.T) {
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	short := suffix[len(suffix)-4:]
-	nsA, nsB, nsC := "higgs-wgrot-a-"+suffix, "higgs-wgrot-b-"+suffix, "higgs-wgrot-c-"+suffix
-	aB, bA := "hgvab"+short, "hgvba"+short
-	aC, cA := "hgvac"+short, "hgvca"+short
+	nsA, nsB, nsC := "photon-wgrot-a-"+suffix, "photon-wgrot-b-"+suffix, "photon-wgrot-c-"+suffix
+	aB, bA := "phvab"+short, "phvba"+short
+	aC, cA := "phvac"+short, "phvca"+short
 	tmpA, tmpB, tmpC := t.TempDir(), t.TempDir(), t.TempDir()
 
 	var managers []*bird.ExecProcessManager
@@ -189,16 +189,16 @@ func TestWireGuardGREStagedRotateRootSmoke(t *testing.T) {
 	privateB, publicB := generateWGKeyPair(t, ctx, wgBinary, filepath.Join(tmpB, "wg.key"))
 	privateC, publicC := generateWGKeyPair(t, ctx, wgBinary, filepath.Join(tmpC, "wg.key"))
 	oldPeersA := []wgPeer{{publicKey: publicB, allowedIP: "10.230.0.2/32", endpoint: "198.51.100.2:51820"}, {publicKey: publicC, allowedIP: "10.230.0.3/32", endpoint: "198.51.100.6:51820"}}
-	configureWGDeviceNamed(t, ctx, wgBinary, nsA, "hgw71", privateA, "10.230.0.1/32", 51820, oldPeersA)
-	configureWGDeviceNamed(t, ctx, wgBinary, nsB, "hgw71", privateB, "10.230.0.2/32", 51820, []wgPeer{{publicKey: publicA, allowedIP: "10.230.0.1/32", endpoint: "198.51.100.1:51820"}})
-	configureWGDeviceNamed(t, ctx, wgBinary, nsC, "hgw71", privateC, "10.230.0.3/32", 51820, []wgPeer{{publicKey: publicA, allowedIP: "10.230.0.1/32", endpoint: "198.51.100.5:51820"}})
+	configureWGDeviceNamed(t, ctx, wgBinary, nsA, "phw71", privateA, "10.230.0.1/32", 51820, oldPeersA)
+	configureWGDeviceNamed(t, ctx, wgBinary, nsB, "phw71", privateB, "10.230.0.2/32", 51820, []wgPeer{{publicKey: publicA, allowedIP: "10.230.0.1/32", endpoint: "198.51.100.1:51820"}})
+	configureWGDeviceNamed(t, ctx, wgBinary, nsC, "phw71", privateC, "10.230.0.3/32", 51820, []wgPeer{{publicKey: publicA, allowedIP: "10.230.0.1/32", endpoint: "198.51.100.5:51820"}})
 	for _, route := range []struct{ ns, peer string }{{nsA, "10.230.0.2/32"}, {nsA, "10.230.0.3/32"}, {nsB, "10.230.0.1/32"}, {nsC, "10.230.0.1/32"}} {
-		runSmokeCommand(t, ctx, "ip", "netns", "exec", route.ns, "ip", "route", "add", route.peer, "dev", "hgw71")
+		runSmokeCommand(t, ctx, "ip", "netns", "exec", route.ns, "ip", "route", "add", route.peer, "dev", "phw71")
 	}
-	configureGRE(t, ctx, nsA, "hgg1ab", "10.230.0.1", "10.230.0.2", "7111", "10.231.1.1/30", "fe80::11:1/64")
-	configureGRE(t, ctx, nsB, "hgg1ba", "10.230.0.2", "10.230.0.1", "7111", "10.231.1.2/30", "fe80::11:2/64")
-	configureGRE(t, ctx, nsA, "hgg1ac", "10.230.0.1", "10.230.0.3", "7112", "10.231.2.1/30", "fe80::12:1/64")
-	configureGRE(t, ctx, nsC, "hgg1ca", "10.230.0.3", "10.230.0.1", "7112", "10.231.2.2/30", "fe80::12:2/64")
+	configureGRE(t, ctx, nsA, "phg1ab", "10.230.0.1", "10.230.0.2", "7111", "10.231.1.1/30", "fe80::11:1/64")
+	configureGRE(t, ctx, nsB, "phg1ba", "10.230.0.2", "10.230.0.1", "7111", "10.231.1.2/30", "fe80::11:2/64")
+	configureGRE(t, ctx, nsA, "phg1ac", "10.230.0.1", "10.230.0.3", "7112", "10.231.2.1/30", "fe80::12:1/64")
+	configureGRE(t, ctx, nsC, "phg1ca", "10.230.0.3", "10.230.0.1", "7112", "10.231.2.2/30", "fe80::12:2/64")
 	configureServiceInterface(t, ctx, nsB, "10.232.2.1/24")
 	configureServiceInterface(t, ctx, nsC, "10.232.3.1/24")
 
@@ -218,18 +218,18 @@ func TestWireGuardGREStagedRotateRootSmoke(t *testing.T) {
 	// Generation 2 deliberately reuses each node's logical device key and peer
 	// public keys, but has a new listener, transit epoch and GRE interfaces.
 	stagedPeersA := []wgPeer{{publicKey: publicB, allowedIP: "10.240.0.2/32", endpoint: "198.51.100.2:51821"}, {publicKey: publicC, allowedIP: "10.240.0.3/32", endpoint: "198.51.100.6:51821"}}
-	configureWGDeviceNamed(t, ctx, wgBinary, nsA, "hgw72", privateA, "10.240.0.1/32", 51821, stagedPeersA)
-	configureWGDeviceNamed(t, ctx, wgBinary, nsB, "hgw72", privateB, "10.240.0.2/32", 51821, []wgPeer{{publicKey: publicA, allowedIP: "10.240.0.1/32", endpoint: "198.51.100.1:51821"}})
-	configureWGDeviceNamed(t, ctx, wgBinary, nsC, "hgw72", privateC, "10.240.0.3/32", 51821, []wgPeer{{publicKey: publicA, allowedIP: "10.240.0.1/32", endpoint: "198.51.100.5:51821"}})
+	configureWGDeviceNamed(t, ctx, wgBinary, nsA, "phw72", privateA, "10.240.0.1/32", 51821, stagedPeersA)
+	configureWGDeviceNamed(t, ctx, wgBinary, nsB, "phw72", privateB, "10.240.0.2/32", 51821, []wgPeer{{publicKey: publicA, allowedIP: "10.240.0.1/32", endpoint: "198.51.100.1:51821"}})
+	configureWGDeviceNamed(t, ctx, wgBinary, nsC, "phw72", privateC, "10.240.0.3/32", 51821, []wgPeer{{publicKey: publicA, allowedIP: "10.240.0.1/32", endpoint: "198.51.100.5:51821"}})
 	for _, route := range []struct{ ns, peer string }{{nsA, "10.240.0.2/32"}, {nsA, "10.240.0.3/32"}, {nsB, "10.240.0.1/32"}, {nsC, "10.240.0.1/32"}} {
-		runSmokeCommand(t, ctx, "ip", "netns", "exec", route.ns, "ip", "route", "add", route.peer, "dev", "hgw72")
+		runSmokeCommand(t, ctx, "ip", "netns", "exec", route.ns, "ip", "route", "add", route.peer, "dev", "phw72")
 	}
-	configureGRE(t, ctx, nsA, "hgg2ab", "10.240.0.1", "10.240.0.2", "7211", "10.241.1.1/30", "fe80::21:1/64")
-	configureGRE(t, ctx, nsB, "hgg2ba", "10.240.0.2", "10.240.0.1", "7211", "10.241.1.2/30", "fe80::21:2/64")
-	configureGRE(t, ctx, nsA, "hgg2ac", "10.240.0.1", "10.240.0.3", "7212", "10.241.2.1/30", "fe80::22:1/64")
-	configureGRE(t, ctx, nsC, "hgg2ca", "10.240.0.3", "10.240.0.1", "7212", "10.241.2.2/30", "fe80::22:2/64")
+	configureGRE(t, ctx, nsA, "phg2ab", "10.240.0.1", "10.240.0.2", "7211", "10.241.1.1/30", "fe80::21:1/64")
+	configureGRE(t, ctx, nsB, "phg2ba", "10.240.0.2", "10.240.0.1", "7211", "10.241.1.2/30", "fe80::21:2/64")
+	configureGRE(t, ctx, nsA, "phg2ac", "10.240.0.1", "10.240.0.3", "7212", "10.241.2.1/30", "fe80::22:1/64")
+	configureGRE(t, ctx, nsC, "phg2ca", "10.240.0.3", "10.240.0.1", "7212", "10.241.2.2/30", "fe80::22:2/64")
 
-	for _, item := range []struct{ ns, iface string }{{nsA, "hgw71"}, {nsA, "hgw72"}, {nsB, "hgw71"}, {nsB, "hgw72"}, {nsC, "hgw71"}, {nsC, "hgw72"}} {
+	for _, item := range []struct{ ns, iface string }{{nsA, "phw71"}, {nsA, "phw72"}, {nsB, "phw71"}, {nsB, "phw72"}, {nsC, "phw71"}, {nsC, "phw72"}} {
 		assertWGDevice(t, ctx, wgBinary, item.ns, item.iface)
 	}
 	for _, item := range []struct{ ns, port string }{{nsA, "51820"}, {nsA, "51821"}, {nsB, "51820"}, {nsB, "51821"}, {nsC, "51820"}, {nsC, "51821"}} {
@@ -241,26 +241,26 @@ func TestWireGuardGREStagedRotateRootSmoke(t *testing.T) {
 
 	// Both generations are now routable. With the old GRE links withdrawn,
 	// Babel must select the independently observed staged interfaces.
-	for _, item := range []struct{ ns, iface string }{{nsA, "hgg1ab"}, {nsA, "hgg1ac"}, {nsB, "hgg1ba"}, {nsC, "hgg1ca"}} {
+	for _, item := range []struct{ ns, iface string }{{nsA, "phg1ab"}, {nsA, "phg1ac"}, {nsB, "phg1ba"}, {nsC, "phg1ca"}} {
 		runSmokeCommand(t, ctx, "ip", "netns", "exec", item.ns, "ip", "link", "set", item.iface, "down")
 	}
-	waitForBirdRouteViaInterface(t, ctx, specs[0].ControlSocketPath, "10.232.2.0/24", "hgg2ab")
-	waitForBirdRouteViaInterface(t, ctx, specs[0].ControlSocketPath, "10.232.3.0/24", "hgg2ac")
+	waitForBirdRouteViaInterface(t, ctx, specs[0].ControlSocketPath, "10.232.2.0/24", "phg2ab")
+	waitForBirdRouteViaInterface(t, ctx, specs[0].ControlSocketPath, "10.232.3.0/24", "phg2ac")
 	pingSmokeFrom(t, ctx, nsB, "10.232.2.1", "10.232.3.1")
 
 	// Releasing B's old link must keep A's old shared device alive for C. Only
 	// after the final old peer is removed may that device be deleted.
-	runSmokeCommand(t, ctx, "ip", "netns", "exec", nsA, wgBinary, "set", "hgw71", "peer", publicB, "remove")
-	assertWGPeerCount(t, ctx, wgBinary, nsA, "hgw71", 1)
-	runSmokeCommand(t, ctx, "ip", "netns", "exec", nsB, "ip", "link", "delete", "hgw71")
-	runSmokeCommand(t, ctx, "ip", "netns", "exec", nsA, wgBinary, "set", "hgw71", "peer", publicC, "remove")
-	assertWGPeerCount(t, ctx, wgBinary, nsA, "hgw71", 0)
+	runSmokeCommand(t, ctx, "ip", "netns", "exec", nsA, wgBinary, "set", "phw71", "peer", publicB, "remove")
+	assertWGPeerCount(t, ctx, wgBinary, nsA, "phw71", 1)
+	runSmokeCommand(t, ctx, "ip", "netns", "exec", nsB, "ip", "link", "delete", "phw71")
+	runSmokeCommand(t, ctx, "ip", "netns", "exec", nsA, wgBinary, "set", "phw71", "peer", publicC, "remove")
+	assertWGPeerCount(t, ctx, wgBinary, nsA, "phw71", 0)
 	for _, ns := range []string{nsA, nsC} {
-		runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, "ip", "link", "delete", "hgw71")
+		runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, "ip", "link", "delete", "phw71")
 	}
 	for _, ns := range []string{nsA, nsB, nsC} {
-		out := runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, "ip", "-o", "link", "show", "dev", "hgw72")
-		if !strings.Contains(out, "hgw72") {
+		out := runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, "ip", "-o", "link", "show", "dev", "phw72")
+		if !strings.Contains(out, "phw72") {
 			t.Fatalf("%s staged device disappeared while cleaning old generation: %s", ns, out)
 		}
 	}
@@ -317,7 +317,7 @@ func generateWGKeyPair(t *testing.T, ctx context.Context, wgBinary, privatePath 
 }
 
 func configureWGDevice(t *testing.T, ctx context.Context, wgBinary, ns, privatePath, address string, peers []wgPeer) {
-	configureWGDeviceNamed(t, ctx, wgBinary, ns, "hgw7", privatePath, address, 51820, peers)
+	configureWGDeviceNamed(t, ctx, wgBinary, ns, "phw7", privatePath, address, 51820, peers)
 }
 
 func configureWGDeviceNamed(t *testing.T, ctx context.Context, wgBinary, ns, device, privatePath, address string, listenPort uint16, peers []wgPeer) {
@@ -350,7 +350,7 @@ func assertWGPeerCount(t *testing.T, ctx context.Context, wgBinary, ns, device s
 
 func ensureUDPPortAllowed(t *testing.T, ctx context.Context, ns, port string) {
 	t.Helper()
-	const table = "higgs_wg_rotate"
+	const table = "photon_wg_rotate"
 	if _, err := exec.CommandContext(ctx, "ip", "netns", "exec", ns, "nft", "list", "table", "inet", table).CombinedOutput(); err != nil {
 		runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, "nft", "add", "table", "inet", table)
 		runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, "nft", "add", "chain", "inet", table, "input", "{", "type", "filter", "hook", "input", "priority", "0;", "policy", "accept;", "}")
@@ -364,11 +364,11 @@ func ensureUDPPortAllowed(t *testing.T, ctx context.Context, ns, port string) {
 
 func assertWGPeers(t *testing.T, ctx context.Context, wgBinary, ns string, wantPeers int, wantAllowed []string) {
 	t.Helper()
-	peers := strings.Fields(runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, wgBinary, "show", "hgw7", "peers"))
+	peers := strings.Fields(runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, wgBinary, "show", "phw7", "peers"))
 	if len(peers) != wantPeers {
 		t.Fatalf("%s WireGuard peers = %d, want %d", ns, len(peers), wantPeers)
 	}
-	allowed := runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, wgBinary, "show", "hgw7", "allowed-ips")
+	allowed := runSmokeCommand(t, ctx, "ip", "netns", "exec", ns, wgBinary, "show", "phw7", "allowed-ips")
 	for _, prefix := range wantAllowed {
 		if !strings.Contains(allowed, prefix) {
 			t.Fatalf("%s WireGuard AllowedIPs missing %s: %s", ns, prefix, allowed)
@@ -435,7 +435,7 @@ protocol babel {
         import all;
         export where source = RTS_BABEL || source = RTS_DEVICE;
     };
-    interface "hgg*" {
+    interface "phg*" {
         type tunnel;
         hello interval 1 s;
         update interval 1 s;

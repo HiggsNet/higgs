@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestWriteBirdDump(t *testing.T) {
@@ -14,7 +14,7 @@ func TestWriteBirdDump(t *testing.T) {
 			InstanceID:        "main",
 			ControlSocket:     "/run/bird.ctl",
 			ConfigPath:        "/run/bird.conf",
-			FilterDefinitions: "filter higgs_import_z {\n    reject;\n}",
+			FilterDefinitions: "filter photon_import_z {\n    reject;\n}",
 			Raw: map[string]string{
 				"show route": "10.0.0.0/24 unicast\n",
 			},
@@ -31,7 +31,7 @@ func TestWriteBirdDump(t *testing.T) {
 		"control_socket: /run/bird.ctl",
 		"config_path: /run/bird.conf",
 		"filter_definitions:",
-		"filter higgs_import_z",
+		"filter photon_import_z",
 		"command: show route",
 		"10.0.0.0/24 unicast",
 	} {
@@ -46,15 +46,15 @@ func TestWriteBabelDebug(t *testing.T) {
 		LastReconcileError: "reload failed",
 		Instances: []inspect.BabelInstanceView{
 			{
-				NetNS:          "higgstesth2",
+				NetNS:          "photontesth2",
 				InstanceID:     "main",
 				Mode:           "managed",
 				ShutdownPolicy: "persist",
 				Enabled:        true,
 				RouterID:       12345,
-				ControlSocket:  "/run/higgs/bird/bird-main.ctl",
-				ConfigPath:     "/run/higgs/bird/bird-main.conf",
-				PIDFile:        "/run/higgs/bird/bird-main.pid",
+				ControlSocket:  "/run/photon/bird/bird-main.ctl",
+				ConfigPath:     "/run/photon/bird/bird-main.conf",
+				PIDFile:        "/run/photon/bird/bird-main.pid",
 				LastConfigHash: "deadbeef1234567890abcdef",
 				Overlays:       []string{"main"},
 				State:          "running",
@@ -75,7 +75,7 @@ func TestWriteBabelDebug(t *testing.T) {
 	output := buf.String()
 	for _, want := range []string{
 		"last_reconcile_error: reload failed",
-		"netns higgstesth2",
+		"netns photontesth2",
 		"shutdown_policy: persist",
 		"router_id: 12345",
 		"last_config_hash: deadbeef1234",

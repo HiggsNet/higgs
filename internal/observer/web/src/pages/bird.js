@@ -41,7 +41,7 @@ export function render(container, route) {
                 </tr>`).join('')}</tbody>
         </table>`)}
         <h3>CLI Reference</h3>
-        <code>higgs debug babel</code>`;
+        <code>photon debug babel</code>`;
     container.querySelector('#page-filter').addEventListener('input', ev => {
         navigate(route.page, route.selected, ev.target.value);
     });

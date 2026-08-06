@@ -21,7 +21,7 @@ BIRD 的 Babel `type tunnel` 与 babeld 的 `type tunnel` **在 RTT 测量原理
 - ❌ 不测乱序、应用层 QoS、NAT/QoS 降级细节。
 - ❌ RTT 基于 Babel 控制面小包，可能与真实业务流质量有偏差。
 
-对 Higgs Phase 5 来说，Babel 的 RTT/loss 信号足够做 **路径排序、active/backup 选择、rotate cutover 健康判断**；若需要更细粒度的质量评估（如带宽探测、持续丢包率、RTT 分位数），仍需 Higgs 自有的链路健康探测层（见 `todo.md` 6.6 链路健康检测）。
+对 Photon Phase 5 来说，Babel 的 RTT/loss 信号足够做 **路径排序、active/backup 选择、rotate cutover 健康判断**；若需要更细粒度的质量评估（如带宽探测、持续丢包率、RTT 分位数），仍需 Photon 自有的链路健康探测层（见 `todo.md` 6.6 链路健康检测）。
 
 ## 2. 核心机制对比
 
@@ -97,19 +97,19 @@ add neighbour ... if <INT> reach ffff ureach 0000 rxcost 96 txcost 96 cost ...
 - OpenWrt 的 ubus `babeld get_neighbours` 会返回 JSON，其中包含 `"rtt"` 字段。
 - FRR 的 `show babel neighbor` 会同时显示 `rtt` 和 `rttcost`。
 
-因此，若 Higgs 选择 babeld，需要额外解析 ubus/ubus-bindings 或自己 patch 输出才能拿到实时 RTT；BIRD 则通过 `birdc show babel neigh` 原生支持。
+因此，若 Photon 选择 babeld，需要额外解析 ubus/ubus-bindings 或自己 patch 输出才能拿到实时 RTT；BIRD 则通过 `birdc show babel neigh` 原生支持。
 
 ## 4. 配置示例
 
 ### 4.1 BIRD tunnel 模式（完整质量相关参数）
 
 ```bird
-protocol babel higgs_babel_main {
+protocol babel photon_babel_main {
     ipv4 { ... };
     ipv6 { ... };
     ecmp on limit 16;
 
-    interface "hgs*" {
+    interface "phx*" {
         type tunnel;
         rxcost 96;
         hello interval 4 s;
@@ -131,7 +131,7 @@ protocol babel higgs_babel_main {
 ```
 default type tunnel
 
-interface hgsxxxx
+interface phxxxxx
     rxcost 96
     link-quality true
     enable-timestamps true
@@ -141,12 +141,12 @@ interface hgsxxxx
     max-rtt-penalty 96
 ```
 
-## 5. 对 Higgs Phase 5 的意义
+## 5. 对 Photon Phase 5 的意义
 
 ### 5.1 能做什么
 
 1. **路径质量排序**：同一远端前缀若经多个 XFRM tunnel 学到，BIRD/babeld 会把 RTT 更高或丢包更严重的 tunnel 排在后面。
-2. **staged rotate 就绪判断**：Higgs 可读取 `birdc show babel neigh` 的 RTT 与 route metric，判断新 staged tunnel 是否已收敛、质量是否优于旧 tunnel，再设置 `RotateCutoverReady=true`。
+2. **staged rotate 就绪判断**：Photon 可读取 `birdc show babel neigh` 的 RTT 与 route metric，判断新 staged tunnel 是否已收敛、质量是否优于旧 tunnel，再设置 `RotateCutoverReady=true`。
 3. **active/backup 与 ECMP**：BIRD 的 `ecmp on` + `ecmp weight` 可在 metric 相等时生成多下一跳；metric 不等时自动主备。
 
 ### 5.2 不能做什么
@@ -171,4 +171,4 @@ interface hgsxxxx
 - BIRD `link quality` patch (2023): https://bird.network.cz/pipermail/bird-users/2023-June/017037.html
 - babeld(8) manpage: https://www.irif.fr/~jch/software/babel/babeld.html
 - RFC 8967: MAC Authentication for Babel; RFC 8966: The Babel Routing Protocol
-- Higgs 既有文档：`docs/bird-babel-alternative-findings.md`、`docs/babeld-control-protocol-findings.md`
+- Photon 既有文档：`docs/bird-babel-alternative-findings.md`、`docs/babeld-control-protocol-findings.md`

@@ -106,7 +106,7 @@ func duplicateGCTestSpec() TransportLinkSpec {
 		Provider:      ProviderStrongSwan,
 		PathKey:       "family:ipv4",
 		TransportID:   "ipsec-duplicate",
-		InterfaceName: "hgs1234",
+		InterfaceName: "phx1234",
 		XFRMIfID:      0x1234,
 	}
 }

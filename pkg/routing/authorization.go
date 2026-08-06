@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 // RouteEntry represents an active, authorized route announcement.

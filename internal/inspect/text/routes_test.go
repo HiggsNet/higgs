@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	inspecthttp "github.com/Catofes/higgs/internal/inspect/http"
-	"github.com/Catofes/higgs/pkg/routing/bird"
+	inspecthttp "github.com/Catofes/photon/internal/inspect/http"
+	"github.com/Catofes/photon/pkg/routing/bird"
 )
 
 func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
@@ -23,21 +23,21 @@ func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
 		},
 	}
 	dump.BIRD = []inspecthttp.BirdRoutesView{{
-		NetNS:      "higgstesth2",
+		NetNS:      "photontesth2",
 		InstanceID: "main",
 		State:      "running",
 		Routes: inspecthttp.BuildBirdRouteViews(dump, []bird.BirdRoute{
 			{
 				Prefix:   netip.MustParsePrefix("10.1.0.0/24"),
 				Protocol: "babel1",
-				Iface:    "hgs-node-b",
+				Iface:    "phx-node-b",
 				Metric:   96,
 				Selected: true,
 			},
 			{
 				Prefix:   netip.MustParsePrefix("10.2.0.0/24"),
 				Protocol: "babel1",
-				Iface:    "hgs-node-c",
+				Iface:    "phx-node-c",
 				Metric:   128,
 				Selected: true,
 			},
@@ -53,9 +53,9 @@ func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
 	for _, want := range []string{
 		"route_source: gossip_announcements_and_ipam_authorization",
 		"bird_cross_view: 1 instances",
-		"netns higgstesth2",
-		"10.1.0.0/24 selected=true authorized=true import_allowed=true zones=node-b.catofes. protocol=babel1 iface=hgs-node-b metric=96",
-		"10.2.0.0/24 selected=true authorized=false import_allowed=false protocol=babel1 iface=hgs-node-c metric=128",
+		"netns photontesth2",
+		"10.1.0.0/24 selected=true authorized=true import_allowed=true zones=node-b.catofes. protocol=babel1 iface=phx-node-b metric=96",
+		"10.2.0.0/24 selected=true authorized=false import_allowed=false protocol=babel1 iface=phx-node-c metric=128",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)
@@ -74,12 +74,12 @@ func TestWriteRouteDebugShowsPrefixExplanationAndBirdMatch(t *testing.T) {
 			"10.1.0.0/16": {Source: "catofes.", AssignedTo: "node-b.catofes."},
 		},
 		BIRD: []inspecthttp.BirdRoutesView{{
-			NetNS:      "higgstesth2",
+			NetNS:      "photontesth2",
 			InstanceID: "main",
 			Routes: []inspecthttp.BirdRouteView{{
 				Prefix:        "10.1.0.0/24",
 				Protocol:      "babel1",
-				Iface:         "hgs-node-b",
+				Iface:         "phx-node-b",
 				Metric:        96,
 				Selected:      true,
 				Authorized:    true,
@@ -101,7 +101,7 @@ func TestWriteRouteDebugShowsPrefixExplanationAndBirdMatch(t *testing.T) {
 		"announcing_zones: node-b.catofes.",
 		"assignment_assigned_to: node-b.catofes.",
 		"bird_cross_view: 1",
-		"netns=higgstesth2 instance=main selected=true authorized=true import_allowed=true protocol=babel1 iface=hgs-node-b metric=96",
+		"netns=photontesth2 instance=main selected=true authorized=true import_allowed=true protocol=babel1 iface=phx-node-b metric=96",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)

@@ -4,23 +4,23 @@
 # `make bird-babel-smoke`. Mirrors ipsec-xfrm-container-smoke.sh.
 set -euo pipefail
 
-container_runtime="${HIGGS_CONTAINER_RUNTIME:-docker}"
-base_image="${HIGGS_BIRD_IMAGE:-ubuntu:24.04}"
+container_runtime="${PHOTON_CONTAINER_RUNTIME:-docker}"
+base_image="${PHOTON_BIRD_IMAGE:-ubuntu:24.04}"
 cache_suffix="${base_image//[^A-Za-z0-9_.-]/-}"
-cache_image="${HIGGS_BIRD_CACHE_IMAGE:-higgs-bird-babel-smoke:${cache_suffix}}"
-rebuild_image="${HIGGS_BIRD_REBUILD_IMAGE:-0}"
-container_userns="${HIGGS_CONTAINER_USERNS:-host}"
-go_cache="${GOCACHE:-/tmp/higgs-gocache}"
-go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
-cache_prefix="${HIGGS_BIRD_CACHE_PREFIX:-higgs-bird-babel}"
-go_cache_volume="${HIGGS_BIRD_GO_CACHE_VOLUME:-${cache_prefix}-gocache}"
-go_mod_cache_volume="${HIGGS_BIRD_GO_MOD_CACHE_VOLUME:-${cache_prefix}-gomodcache}"
+cache_image="${PHOTON_BIRD_CACHE_IMAGE:-photon-bird-babel-smoke:${cache_suffix}}"
+rebuild_image="${PHOTON_BIRD_REBUILD_IMAGE:-0}"
+container_userns="${PHOTON_CONTAINER_USERNS:-host}"
+go_cache="${GOCACHE:-/tmp/photon-gocache}"
+go_mod_cache="${GOMODCACHE:-/tmp/photon-gomodcache}"
+cache_prefix="${PHOTON_BIRD_CACHE_PREFIX:-photon-bird-babel}"
+go_cache_volume="${PHOTON_BIRD_GO_CACHE_VOLUME:-${cache_prefix}-gocache}"
+go_mod_cache_volume="${PHOTON_BIRD_GO_MOD_CACHE_VOLUME:-${cache_prefix}-gomodcache}"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 host_uid="$(id -u)"
 host_gid="$(id -g)"
 
 if ! command -v "$container_runtime" >/dev/null 2>&1; then
-  printf 'container runtime %q not found; set HIGGS_CONTAINER_RUNTIME=docker or podman\n' "$container_runtime" >&2
+  printf 'container runtime %q not found; set PHOTON_CONTAINER_RUNTIME=docker or podman\n' "$container_runtime" >&2
   exit 1
 fi
 
@@ -33,7 +33,7 @@ ensure_image() {
     return
   fi
 
-  build_ctx="$(mktemp -d "${TMPDIR:-/tmp}/higgs-bird-image.XXXXXX")"
+  build_ctx="$(mktemp -d "${TMPDIR:-/tmp}/photon-bird-image.XXXXXX")"
   trap 'rm -rf "$build_ctx"' EXIT
   cat > "$build_ctx/Dockerfile" <<'DOCKERFILE'
 ARG BASE_IMAGE=ubuntu:24.04
@@ -103,7 +103,7 @@ cache_args=(
   -e GOCACHE="$go_cache" \
   -e GOMODCACHE="$go_mod_cache" \
   -e CGO_ENABLED="${CGO_ENABLED:-0}" \
-  -e HIGGS_BIRD_SMOKE_CONTAINER=1 \
+  -e PHOTON_BIRD_SMOKE_CONTAINER=1 \
   "$cache_image" bash -lc '
     set -euo pipefail
     trap '\''if [ -d /work/build ]; then chown -R "$HOST_UID:$HOST_GID" /work/build || true; fi'\'' EXIT

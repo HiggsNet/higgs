@@ -208,11 +208,11 @@ func pingSourceAddress(target ProbeTarget) string {
 	return target.InterfaceName
 }
 
-// udpMagic is a fixed magic header for Higgs UDP keepalive probes.
-var udpMagic = []byte("HIGGS-HC")
+// udpMagic is a fixed magic header for Photon UDP keepalive probes.
+var udpMagic = []byte("PHOTON-HC")
 
 // UDPProber implements Prober using UDP keepalive packets. It does not require
-// CAP_NET_RAW but requires the peer to run a Higgs UDP probe listener (or any
+// CAP_NET_RAW but requires the peer to run a Photon UDP probe listener (or any
 // UDP service that replies with ICMP port unreachable).
 type UDPProber struct {
 	runner CommandRunner

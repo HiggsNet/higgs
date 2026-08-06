@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/gossip"
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/gossip"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 type ZoneDetailInput struct {
@@ -186,7 +186,7 @@ func BuildZoneDebug(input ZoneDebugInput) (ZoneDebugView, bool) {
 		return ZoneDebugView{}, false
 	}
 	verifyResult := "ok"
-	if err := higgscrypto.VerifyChain(input.Network, input.Path, input.Now); err != nil {
+	if err := photoncrypto.VerifyChain(input.Network, input.Path, input.Now); err != nil {
 		verifyResult = err.Error()
 	}
 	var activeRevocation *RevocationView
@@ -220,7 +220,7 @@ func BuildRecord(rec *zone.Record, historyCount int) RecordView {
 		Value:        string(rec.Value),
 		ValueB64:     base64.StdEncoding.EncodeToString(rec.Value),
 		ValueHash:    hexOrEmpty(rec.ValueHash),
-		RecordHash:   hexOrEmpty(higgscrypto.RecordHash(rec)),
+		RecordHash:   hexOrEmpty(photoncrypto.RecordHash(rec)),
 		PrevHash:     hexOrEmpty(rec.PrevHash),
 		Timestamp:    rec.Timestamp,
 		SignedBy:     hexOrEmpty(rec.SignedBy),
@@ -320,7 +320,7 @@ func BuildAuthority(authority *zone.ZoneAuthority) *AuthorityView {
 		}
 		keys = append(keys, AuthorizedKeyView{
 			Key:          hexOrEmpty(key.Key),
-			KeyID:        hexOrEmpty(higgscrypto.KeyID(key.Key)),
+			KeyID:        hexOrEmpty(photoncrypto.KeyID(key.Key)),
 			NotBefore:    key.NotBefore,
 			NotAfter:     key.NotAfter,
 			Capabilities: caps,
@@ -384,7 +384,7 @@ func AuthorityHashHex(authority *zone.ZoneAuthority) string {
 	if authority == nil {
 		return ""
 	}
-	return hexOrEmpty(higgscrypto.AuthorityHash(authority))
+	return hexOrEmpty(photoncrypto.AuthorityHash(authority))
 }
 
 func buildRecords(records map[string]*zone.Record, history map[string][]*zone.Record) []RecordView {

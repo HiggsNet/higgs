@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/health"
+	"github.com/Catofes/photon/pkg/health"
 )
 
 type fakeProber struct {
@@ -165,8 +165,8 @@ func TestBuildDebugView(t *testing.T) {
 			InstanceID:      "link-1",
 			ProbeRole:       "staged",
 			UnderlayFamily:  "ipv4",
-			InterfaceName:   "hgs-new",
-			NetNS:           "higgstesth2",
+			InterfaceName:   "phx-new",
+			NetNS:           "photontesth2",
 			LocalTunnelAddr: netip.MustParseAddr("fd00::1"),
 			PeerTunnelAddr:  netip.MustParseAddr("fd00::2"),
 		},
@@ -181,7 +181,7 @@ func TestBuildDebugView(t *testing.T) {
 		t.Fatalf("targets = %d, want 1", len(view.Targets))
 	}
 	target := view.Targets[0]
-	if target.InstanceID != "link-1" || target.Role != "staged" || target.Family != "ipv4" || target.TunnelFamily != "ipv6" || target.NetNS != "higgstesth2" {
+	if target.InstanceID != "link-1" || target.Role != "staged" || target.Family != "ipv4" || target.TunnelFamily != "ipv6" || target.NetNS != "photontesth2" {
 		t.Fatalf("target = %+v", target)
 	}
 	if !target.Success || target.RTT != time.Millisecond {

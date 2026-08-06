@@ -17,14 +17,14 @@ import (
 // start and stop a real BIRD daemon inside a named network namespace.
 // It requires root or CAP_NET_ADMIN + CAP_SYS_ADMIN and bird/birdc on PATH.
 func TestExecProcessManagerRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
-		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD process manager smoke")
+	if os.Getenv("PHOTON_BIRD_SMOKE") != "1" {
+		t.Skip("set PHOTON_BIRD_SMOKE=1 to run the root/system BIRD process manager smoke")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	nsName := "higgs-bird-pm-" + suffix
+	nsName := "photon-bird-pm-" + suffix
 	tmpDir := t.TempDir()
 
 	t.Cleanup(func() {
@@ -50,7 +50,7 @@ func TestExecProcessManagerRootSmoke(t *testing.T) {
 		PIDFilePath:       filepath.Join(tmpDir, "bird.pid"),
 		ConfigPath:        filepath.Join(tmpDir, "bird.conf"),
 		TableID:           "main",
-		InterfacePatterns: []string{"hgs*"},
+		InterfacePatterns: []string{"phx*"},
 		MetricBase:        100,
 		MetricStaged:      200,
 		MetricDraining:    500,
@@ -117,8 +117,8 @@ func TestExecProcessManagerRootSmoke(t *testing.T) {
 // that Babel neighbors are discovered and a route from one side is learned
 // by the other.
 func TestBabelTwoNodeRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
-		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD Babel two-node smoke")
+	if os.Getenv("PHOTON_BIRD_SMOKE") != "1" {
+		t.Skip("set PHOTON_BIRD_SMOKE=1 to run the root/system BIRD Babel two-node smoke")
 	}
 
 	// In container environments, IPv6 Babel may fail due to neighbor
@@ -128,8 +128,8 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 	defer cancel()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	nsA := "higgs-bird-a-" + suffix
-	nsB := "higgs-bird-b-" + suffix
+	nsA := "photon-bird-a-" + suffix
+	nsB := "photon-bird-b-" + suffix
 	vethA := "hgbirda" + suffix[len(suffix)-4:]
 	vethB := "hgbirdb" + suffix[len(suffix)-4:]
 	tmpA := t.TempDir()
@@ -204,7 +204,7 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 	}
 	specB = withTestBirdOwner(specB)
 
-	// The BIRD config generator normally targets "hgs*" tunnel interfaces.
+	// The BIRD config generator normally targets "phx*" tunnel interfaces.
 	// For the root smoke we use a raw config that works with a regular veth.
 	// We generate a minimal config manually to avoid the generator's tunnel-
 	// specific assumptions.
@@ -287,16 +287,16 @@ func TestBabelTwoNodeRootSmoke(t *testing.T) {
 // import filter accepts an authorized prefix while rejecting an unauthorized
 // prefix announced by the same neighbor.
 func TestBabelImportFilterNegativeRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
-		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD Babel negative smoke")
+	if os.Getenv("PHOTON_BIRD_SMOKE") != "1" {
+		t.Skip("set PHOTON_BIRD_SMOKE=1 to run the root/system BIRD Babel negative smoke")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	nsA := "higgs-bird-neg-a-" + suffix
-	nsB := "higgs-bird-neg-b-" + suffix
+	nsA := "photon-bird-neg-a-" + suffix
+	nsB := "photon-bird-neg-b-" + suffix
 	vethA := "hgnega" + suffix[len(suffix)-4:]
 	vethB := "hgnegb" + suffix[len(suffix)-4:]
 	tmpA := t.TempDir()
@@ -435,17 +435,17 @@ func TestBabelImportFilterNegativeRootSmoke(t *testing.T) {
 // selected speaker is stopped. This intentionally does not assert ECMP: the
 // test verifies convergence and failover, not kernel multi-next-hop behavior.
 func TestBabelAnycastFailoverRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
-		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD Babel anycast smoke")
+	if os.Getenv("PHOTON_BIRD_SMOKE") != "1" {
+		t.Skip("set PHOTON_BIRD_SMOKE=1 to run the root/system BIRD Babel anycast smoke")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	nsR := "higgs-bird-any-r-" + suffix
-	nsA := "higgs-bird-any-a-" + suffix
-	nsB := "higgs-bird-any-b-" + suffix
+	nsR := "photon-bird-any-r-" + suffix
+	nsA := "photon-bird-any-a-" + suffix
+	nsB := "photon-bird-any-b-" + suffix
 	vethRA := "hganyra" + suffix[len(suffix)-4:]
 	vethA := "hganya" + suffix[len(suffix)-4:]
 	vethRB := "hganyrb" + suffix[len(suffix)-4:]
@@ -612,14 +612,14 @@ func TestBabelAnycastFailoverRootSmoke(t *testing.T) {
 // Host announces 172.16.1.0/24, overlay announces 172.16.2.0/24.
 // After convergence, both sides should have learned each other's prefix.
 func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
-		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the root/system BIRD upstream Babel smoke")
+	if os.Getenv("PHOTON_BIRD_SMOKE") != "1" {
+		t.Skip("set PHOTON_BIRD_SMOKE=1 to run the root/system BIRD upstream Babel smoke")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	overlayNS := "higgs-bird-up-" + suffix
+	overlayNS := "photon-bird-up-" + suffix
 	vethHost := "hguph" + suffix[len(suffix)-4:]
 	vethOverlay := "hgupo" + suffix[len(suffix)-4:]
 	tmpHost := t.TempDir()
@@ -789,16 +789,16 @@ func TestBIRDUpstreamBabelRootSmoke(t *testing.T) {
 // traffic towards the other node. It also proves that the lower-cost interface
 // is restored after a link failure without health changing BIRD policy.
 func TestBabelDualInterfaceCostFailoverRootSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_BIRD_SMOKE") != "1" {
-		t.Skip("set HIGGS_BIRD_SMOKE=1 to run the Phase 7.1 dual-interface BIRD/Babel root experiment")
+	if os.Getenv("PHOTON_BIRD_SMOKE") != "1" {
+		t.Skip("set PHOTON_BIRD_SMOKE=1 to run the Phase 7.1 dual-interface BIRD/Babel root experiment")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	nsA := "higgs-bird-dual-a-" + suffix
-	nsB := "higgs-bird-dual-b-" + suffix
+	nsA := "photon-bird-dual-a-" + suffix
+	nsB := "photon-bird-dual-b-" + suffix
 	aLeft, bLeft := "hgdla"+suffix[len(suffix)-4:], "hgdlb"+suffix[len(suffix)-4:]
 	aRight, bRight := "hgdra"+suffix[len(suffix)-4:], "hgdrb"+suffix[len(suffix)-4:]
 	tmpA, tmpB := t.TempDir(), t.TempDir()
@@ -904,7 +904,7 @@ func TestBabelDualInterfaceCostFailoverRootSmoke(t *testing.T) {
 // - Exports the static route to Babel and imports Babel routes to kernel
 func withTestBirdOwner(spec BirdInstanceSpec) BirdInstanceSpec {
 	owner := BirdResourceOwner{
-		Manager:    "higgs",
+		Manager:    "photon",
 		InstanceID: spec.NetNSName,
 		NetNSName:  spec.NetNSName,
 	}
@@ -999,13 +999,13 @@ func generateBabelFilterSmokeConfig(spec BirdInstanceSpec, iface string, staticP
 	importFilter := "import all;"
 	if len(importAllowed) > 0 {
 		var rules strings.Builder
-		rules.WriteString("filter higgs_import4 {\n")
+		rules.WriteString("filter photon_import4 {\n")
 		for _, prefix := range importAllowed {
 			fmt.Fprintf(&rules, "    if net = %s then accept;\n", prefix)
 		}
 		rules.WriteString("    reject;\n")
 		rules.WriteString("}\n\n")
-		importFilter = "import filter higgs_import4;"
+		importFilter = "import filter photon_import4;"
 		return fmt.Sprintf(`# Minimal Babel config generated by TestBabelImportFilterNegativeRootSmoke
 log "%s" all;
 debug protocols all;

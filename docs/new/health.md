@@ -1,10 +1,10 @@
-# Higgs Link Health 设计与实现
+# Photon Link Health 设计与实现
 
 > **本文档状态：2026-07**
-> 描述 Higgs 链路健康子系统的当前实现：`pkg/health` 的 probe、rolling window、状态机与 metrics，`app/higgs` 中的 target 推导、reconcile 集成、rotate cutover gate 和本地 spool，以及 debug/observer 诊断面。
+> 描述 Photon 链路健康子系统的当前实现：`pkg/health` 的 probe、rolling window、状态机与 metrics，`app/photon` 中的 target 推导、reconcile 集成、rotate cutover gate 和本地 spool，以及 debug/observer 诊断面。
 > 本文以当前代码为准；与原 Phase 6.6 设计文档（`docs/phase6-link-health-design.md`）的差异在第 10 节显式标注，原设计文档仅作背景参考。
 
-Link Health 是 Higgs 的本机链路质量观测子系统。它对每条 `LinkInstance`（含 rotate 期间的 staged generation）做低频主动探测，产出本地健康状态、RTT/loss/jitter 统计、rotate cutover gate 和时序样本。它是对 BIRD/Babel RTT metric 的**补充**：不替代 Babel 选路，不写入 gossip active state，也不代表 peer 身份失效——revocation 仍由安全路径处理。
+Link Health 是 Photon 的本机链路质量观测子系统。它对每条 `LinkInstance`（含 rotate 期间的 staged generation）做低频主动探测，产出本地健康状态、RTT/loss/jitter 统计、rotate cutover gate 和时序样本。它是对 BIRD/Babel RTT metric 的**补充**：不替代 Babel 选路，不写入 gossip active state，也不代表 peer 身份失效——revocation 仍由安全路径处理。
 
 完整配置字段见 [config.md](config.md)，daemon reconcile 调度见 [daemon.md](daemon.md)，rotate 生命周期见 [transport-ipsec.md](transport-ipsec.md)，BIRD 观测的采集入口见 [routing.md](routing.md)。
 
@@ -48,14 +48,14 @@ Link Health 是 Higgs 的本机链路质量观测子系统。它对每条 `LinkI
 ```text
 daemon event loop
   └─ flushIPsecReconcile            # IPsec reconcile 完成后
-       └─ reconcileHealth           # app/higgs/health_reconcile.go
+       └─ reconcileHealth           # app/photon/health_reconcile.go
             ├─ healthTargetsFromState   # 从 stateFile 推导 ProbeTarget
             ├─ Manager.SetTargets       # 全量替换 target 集合
             ├─ Manager.Tick             # 同步探测所有到期 target
             └─ appendHealthSpool        # 有探测发生时写 JSONL 样本
 
 routing reconcile
-  └─ observeBirdForHealth           # app/higgs/routing_reconcile.go
+  └─ observeBirdForHealth           # app/photon/routing_reconcile.go
        └─ Manager.SetBabelObservation   # staged link 的 BIRD neighbor/route
 
 IPsec reconcile 输入
@@ -68,7 +68,7 @@ IPsec reconcile 输入
 
 ### 2.1 ProbeTarget
 
-探测对象以 `LinkInstance` 为主键，由 `healthTargetsFromState`（`app/higgs/health_reconcile.go`）从 stateFile 的 `LinkInstances` + IPsec reconcile desired state 推导：
+探测对象以 `LinkInstance` 为主键，由 `healthTargetsFromState`（`app/photon/health_reconcile.go`）从 stateFile 的 `LinkInstances` + IPsec reconcile desired state 推导：
 
 | 字段 | 来源 | 说明 |
 |---|---|---|
@@ -154,7 +154,7 @@ health:
   interval: 5s
   metrics:
     enabled: true
-    local_spool_path: /var/lib/higgs/health-spool
+    local_spool_path: /var/lib/photon/health-spool
 ```
 
 ### 3.3 字段说明
@@ -196,7 +196,7 @@ type Prober interface {
 
 `ProbeResult` 携带 `RTT`、`Success` 和原始 `Error` 字符串；`Error` 只进入 debug 展示和 reason 分类，**不作为 metrics label**。每次 `Probe` 调用（含整个 burst）只产生 rolling window 中的一条样本。
 
-daemon 在 `configureHealthManager`（`app/higgs/daemon.go`）中优先注入 raw-ICMP prober：
+daemon 在 `configureHealthManager`（`app/photon/daemon.go`）中优先注入 raw-ICMP prober：
 
 ```go
 d.health = newHealthManager(cfg,
@@ -249,7 +249,7 @@ network namespace 和 mount setup。
 
 ### 4.4 UDPProber
 
-`NewUDPProber` 存在但**未被 daemon 使用**（仅作为 `NewICMProber` 的兼容参数传入，ICMP 失败不会 fallback 到 UDP）。其语义也很弱：向 `<peer tunnel addr>:33434` 写入带 `HIGGS-HC` magic 和 nonce 的 UDP 包，write 成功即视为 L3 可达，不校验任何回复。不要把它当作可靠健康证据。
+`NewUDPProber` 存在但**未被 daemon 使用**（仅作为 `NewICMProber` 的兼容参数传入，ICMP 失败不会 fallback 到 UDP）。其语义也很弱：向 `<peer tunnel addr>:33434` 写入带 `PHOTON-HC` magic 和 nonce 的 UDP 包，write 成功即视为 L3 可达，不校验任何回复。不要把它当作可靠健康证据。
 
 ### 4.5 nopProber
 
@@ -261,7 +261,7 @@ network namespace 和 mount setup。
 
 ### 5.1 集成点
 
-Health 没有独立的定时器。唯一的驱动入口是 `reconcileHealth`（`app/higgs/health_reconcile.go`），它在 `flushIPsecReconcile` 末尾被调用（`app/higgs/daemon.go`）：
+Health 没有独立的定时器。唯一的驱动入口是 `reconcileHealth`（`app/photon/health_reconcile.go`），它在 `flushIPsecReconcile` 末尾被调用（`app/photon/daemon.go`）：
 
 ```text
 flushIPsecReconcile
@@ -381,7 +381,7 @@ max(health.interval, IPsec reconcile flush 间隔)
 
 ```text
 health.Manager.RotateCutoverReadiness()
-  → DaemonService.ipsecRotateCutoverReady()        # app/higgs/ipsec_reconcile.go
+  → DaemonService.ipsecRotateCutoverReady()        # app/photon/ipsec_reconcile.go
   → ipsec.ReconcileInputs.RotateCutoverReady       # map[instanceID]bool
   → handleRotate 中决定是否允许 cutover
 ```
@@ -407,7 +407,7 @@ health.Manager.RotateCutoverReadiness()
 
 ### 7.3 BIRD 观测采集
 
-routing reconcile 处理每个 BIRD instance 后调用 `observeBirdForHealth`（`app/higgs/routing_reconcile.go`）：
+routing reconcile 处理每个 BIRD instance 后调用 `observeBirdForHealth`（`app/photon/routing_reconcile.go`）：
 
 - 以 2 秒超时查询 BIRD status（`birdHealthObservationTimeout`）。
 - 只为 **staged** link（`RuntimeRole == "staged"`）生成观测：按接口名匹配 Babel neighbor 与 selected route，`Metric` 取两者中的最小正值。
@@ -425,11 +425,11 @@ routing reconcile 处理每个 BIRD instance 后调用 `observeBirdForHealth`（
 
 | 指标 | 类型 | 说明 |
 |---|---|---|
-| `higgs_link_probe_rtt_seconds` | gauge | 最近探测 RTT（秒），LastRTT>0 时输出 |
-| `higgs_link_probe_loss_ratio` | gauge | 窗口丢包率，Sent>0 时输出 |
-| `higgs_link_probe_jitter_seconds` | gauge | jitter（秒），Jitter>0 时输出 |
-| `higgs_link_health_state` | gauge | 状态编码 0–5（见 2.4） |
-| `higgs_link_probe_errors_total` | counter | per-link 探测错误总数，为 0 不输出 |
+| `photon_link_probe_rtt_seconds` | gauge | 最近探测 RTT（秒），LastRTT>0 时输出 |
+| `photon_link_probe_loss_ratio` | gauge | 窗口丢包率，Sent>0 时输出 |
+| `photon_link_probe_jitter_seconds` | gauge | jitter（秒），Jitter>0 时输出 |
+| `photon_link_health_state` | gauge | 状态编码 0–5（见 2.4） |
+| `photon_link_probe_errors_total` | counter | per-link 探测错误总数，为 0 不输出 |
 
 label 集合（低基数约束，`writeLabels`）：`local_zone`、`peer_zone`、`overlay`、`probe_id`、`instance_id`、`netns`、`generation`、`probe_role`、`probe_type`、`reason`。空值 label 不输出；endpoint IP、nonce、原始错误串禁止作为 label。
 
@@ -441,7 +441,7 @@ label 集合（低基数约束，`writeLabels`）：`local_zone`、`peer_zone`�
 
 ```json
 {"unix_ms": 1752700000000, "probe_id": "link-a#staged", "instance_id": "link-a",
- "probe_role": "staged", "interface_name": "hgs12", "state": "healthy",
+ "probe_role": "staged", "interface_name": "phx12", "state": "healthy",
  "probe_type": "icmp", "rtt_ms": 12, "loss_ratio_pct": 0, "jitter_ms": 1,
  "sent": 20, "received": 20, "lost": 0}
 ```
@@ -452,7 +452,7 @@ label 集合（低基数约束，`writeLabels`）：`local_zone`、`peer_zone`�
 
 ### 8.3 时序查询
 
-`queryHealthSpoolSeries`（`app/higgs/health_spool.go`）从 spool 聚合单条 link 的时序：
+`queryHealthSpoolSeries`（`app/photon/health_spool.go`）从 spool 聚合单条 link 的时序：
 
 - `metric`：`rtt`（ms，仅正值样本）/ `loss`（百分比）/ `jitter`（ms，仅正值样本）/ `state`（状态编码）。`babel_rtt`、`babel_metric` 显式返回"not available in the local health spool yet"。
 - `range`：默认 1h，上限被 clamp 到 `local_spool_max_age`。
@@ -468,10 +468,10 @@ label 集合（低基数约束，`writeLabels`）：`local_zone`、`peer_zone`�
 
 ## 9. Debug 与诊断
 
-### 9.1 higgs debug health
+### 9.1 photon debug health
 
 ```bash
-higgs debug health
+photon debug health
 ```
 
 输出分两段（`internal/inspect/text/health.go`）：
@@ -481,9 +481,9 @@ higgs debug health
 
 daemon 不在运行或 health 未启用时只有第一段。
 
-### 9.2 higgs debug links 与 control API
+### 9.2 photon debug links 与 control API
 
-- `links_status` control 方法把 `healthStatusResponse()` 并入 link inspection，`higgs debug links` 与 `/api/v1/links` 因此带 per-link health summary。
+- `links_status` control 方法把 `healthStatusResponse()` 并入 link inspection，`photon debug links` 与 `/api/v1/links` 因此带 per-link health summary。
 - `health_status` control 方法返回全量 `healthLinkJSON`（时间字段为毫秒整数，loss 为百分比整数）。
 
 ### 9.3 Observer
@@ -504,8 +504,8 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 - `sudo env PATH="$PATH" make health-smoke`：除 manager/metrics 单测外，还会在
   两个真实 named netns 的 veth 链路上运行 raw-ICMP、BIRD cutover 和 `tc netem`
   故障/恢复验证；需要 root、`ip`、`bird`/`birdc`、`tc` 与 daemon 所需 capability。
-- `app/higgs/health_config_test.go`、`health_reconcile_test.go`：配置解析与 daemon 级集成测试。
-- `app/higgs/bird_root_smoke_test.go` 含 cutover gate 的 root smoke 用例。
+- `app/photon/health_config_test.go`、`health_reconcile_test.go`：配置解析与 daemon 级集成测试。
+- `app/photon/bird_root_smoke_test.go` 含 cutover gate 的 root smoke 用例。
 
 ---
 
@@ -518,7 +518,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 | 探测执行模型 | 有界并发、不阻塞 loop | 独立 health 协程以约 1s timer 投递任务；固定大小 worker pool 经 channel 执行 ping，完成后以 channel 通知 daemon | 健康 interval 不受 IPsec reconcile 间隔限制，慢 ping 不阻塞 daemon event loop |
 | ICMP 快路径 | raw socket（`ip4:icmp`）优先，ping 兜底 | Linux 默认 raw socket；无 capability 或检测到 stale interface-bound socket 时回退 `ip netns exec ping`，后者按退避节奏重建 | raw 成功时 RTT 不含进程创建开销；整个 netns 删除/重建的长期行为仍待 root smoke |
 | UDP fallback | ICMP 不可用时降级 UDP keepalive | fallback 未接线；UDPProber 语义弱（write 成功即可达） | 无 ICMP 权限时只能得到 probe_error |
-| Babel RTT/metric | 普通 link 也采集被动指标、出 `higgs_link_babel_*` | 只为 staged link 采集 neighbor/route 布尔与最小 metric；series API 显式报未实现 | 被动质量数据基本不可用 |
+| Babel RTT/metric | 普通 link 也采集被动指标、出 `photon_link_babel_*` | 只为 staged link 采集 neighbor/route 布尔与最小 metric；series API 显式报未实现 | 被动质量数据基本不可用 |
 | BIRD metric 联动 | degraded/down 先调高 BIRD metric | 未实现 | 健康结果不影响选路 |
 | 防火墙联动 | 可选按 link state 收紧 forward allow | 未实现 | 健康 down 不改变防火墙 |
 | `/metrics` 端点 | daemon 暴露 OpenMetrics | 渲染代码存在但未接线，仅单测覆盖 | 无法被 Prometheus 直接 scrape |
@@ -535,7 +535,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 - 控制 `timeout`、`burst` 与 `max_concurrent_probes`：worker pool 同时最多运行该并发数的 link；`burst` 内的单包请求仍会串行执行，但不会阻塞 daemon 主循环。
 - 确认运行环境 `ping` 可用（容器内需要 cap_net_raw 或 setuid ping），否则所有 link 会收敛到 `probe_error`。
 - 需要 observer 时序图时务必配置 `metrics.local_spool_path`；不配置则只有实时状态，没有历史。
-- 排障 rotate 停滞时先看 `higgs debug health` 的 `cutover_blocking` 与 staged 视角的 BIRD 观测——BIRD 不可达也会 hold 住 cutover。
+- 排障 rotate 停滞时先看 `photon debug health` 的 `cutover_blocking` 与 staged 视角的 BIRD 观测——BIRD 不可达也会 hold 住 cutover。
 
 ### 10.2 后续设计方向
 

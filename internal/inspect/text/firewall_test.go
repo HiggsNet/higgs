@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestWriteFirewallSummaryFiltersAndHidesDebugDetails(t *testing.T) {
@@ -12,7 +12,7 @@ func TestWriteFirewallSummaryFiltersAndHidesDebugDetails(t *testing.T) {
 		Backend: "nft",
 		Instances: []inspect.FirewallInstanceView{
 			{
-				ID: "mesh-a", Scope: "higgs-a", Mode: "managed",
+				ID: "mesh-a", Scope: "photon-a", Mode: "managed",
 				ResolvedBackend: "nft", DefaultPolicy: "drop", Transit: true,
 				AllowPrefixes: 2, AllowFilters: []string{"10.42.0.0/24", "fd42::/64"},
 				AllowPeers: []string{"*-pek.catofes."}, DenyPeers: []string{"blocked.catofes."}, MetricHint: 20,
@@ -20,7 +20,7 @@ func TestWriteFirewallSummaryFiltersAndHidesDebugDetails(t *testing.T) {
 				Generation:    5, OwnedObjects: 10, PolicyHash: "secret-policy-hash",
 				InlineHooks: []inspect.FirewallInlineHookView{{Expression: "secret hook"}},
 			},
-			{ID: "mesh-b", Scope: "higgs-b", Mode: "disabled"},
+			{ID: "mesh-b", Scope: "photon-b", Mode: "disabled"},
 		},
 	}
 	var buf strings.Builder
@@ -36,7 +36,7 @@ func TestWriteFirewallSummaryFiltersAndHidesDebugDetails(t *testing.T) {
 		"SCOPE",
 		"TRANSIT",
 		"mesh-a",
-		"higgs-a",
+		"photon-a",
 		"transit_policy: enabled=true default=drop",
 		"allow_filters: 10.42.0.0/24, fd42::/64",
 		"deny_filters: -",
@@ -71,8 +71,8 @@ func TestWriteDebugFirewallInstanceOutput(t *testing.T) {
 		Backend: "dry-run",
 		Instances: []inspect.FirewallInstanceView{
 			{
-				ID:              "higgstesth2",
-				Scope:           "higgstesth2",
+				ID:              "photontesth2",
+				Scope:           "photontesth2",
 				Mode:            "managed",
 				Backend:         "auto",
 				ResolvedBackend: "nft",
@@ -109,7 +109,7 @@ func TestWriteDebugFirewallInstanceOutput(t *testing.T) {
 	required := []string{
 		"backend: dry-run",
 		"resolved_backend: nft",
-		"instance higgstesth2",
+		"instance photontesth2",
 		"transit: true",
 		"allow_prefixes: 2",
 		"deny_prefixes: 1",

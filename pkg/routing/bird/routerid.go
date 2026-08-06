@@ -3,8 +3,8 @@ package bird
 import (
 	"encoding/binary"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 // StableRouterID returns a deterministic 32-bit router id for a BIRD instance
@@ -14,10 +14,10 @@ import (
 //
 // In the per-netns model, one netns = one BIRD instance = one Router-ID.
 // The netnsName should be the stable identifier returned by NetNSSpec.Target()
-// (e.g. "h2" for a named netns, "host" for the host netns). For path netns,
+// (e.g. "photon" for a named netns, "host" for the host netns). For path netns,
 // the caller must supply an explicit router_id_label from configuration.
 func StableRouterID(localZone zone.ZonePath, rootTrust []byte, netnsName string) uint32 {
-	digest := higgscrypto.Hash(
+	digest := photoncrypto.Hash(
 		[]byte(localZone),
 		rootTrust,
 		[]byte(netnsName),

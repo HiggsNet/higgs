@@ -5,18 +5,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 func testBirdInstanceSpec() BirdInstanceSpec {
 	return BirdInstanceSpec{
 		RouterID:          0x01020304,
 		NetNSName:         "ipsec-main",
-		ControlSocketPath: "/run/higgs/bird-ipsec-main.ctl",
-		PIDFilePath:       "/run/higgs/bird-ipsec-main.pid",
-		ConfigPath:        "/etc/higgs/bird-ipsec-main.conf",
+		ControlSocketPath: "/run/photon/bird-ipsec-main.ctl",
+		PIDFilePath:       "/run/photon/bird-ipsec-main.pid",
+		ConfigPath:        "/etc/photon/bird-ipsec-main.conf",
 		Mode:              BirdModeManaged,
-		InterfacePattern:  "hgs*",
+		InterfacePattern:  "phx*",
 	}
 }
 
@@ -37,8 +37,8 @@ func TestGenerateManagedConfig(t *testing.T) {
 	}
 	s := string(cfg)
 
-	if !strings.Contains(s, "Higgs-generated BIRD config") {
-		t.Error("missing Higgs-generated header comment")
+	if !strings.Contains(s, "Photon-generated BIRD config") {
+		t.Error("missing Photon-generated header comment")
 	}
 	if !strings.Contains(s, "Do not edit manually") {
 		t.Error("missing manual-edit warning")
@@ -55,19 +55,19 @@ func TestGenerateManagedConfig(t *testing.T) {
 	if !strings.Contains(s, "scan time 5;") {
 		t.Error("missing default device scan time")
 	}
-	if !strings.Contains(s, "ipv4 table higgs_ipsec_main4;") {
+	if !strings.Contains(s, "ipv4 table photon_ipsec_main4;") {
 		t.Error("missing ipv4 table declaration")
 	}
-	if !strings.Contains(s, "ipv6 table higgs_ipsec_main6;") {
+	if !strings.Contains(s, "ipv6 table photon_ipsec_main6;") {
 		t.Error("missing ipv6 table declaration")
 	}
-	if !strings.Contains(s, "protocol kernel higgs_kern_ipsec_main") {
+	if !strings.Contains(s, "protocol kernel photon_kern_ipsec_main") {
 		t.Error("missing kernel protocol block")
 	}
-	if !strings.Contains(s, "protocol babel higgs_babel_ipsec_main") {
+	if !strings.Contains(s, "protocol babel photon_babel_ipsec_main") {
 		t.Error("missing babel protocol block")
 	}
-	if !strings.Contains(s, "interface \"hgs*\"") {
+	if !strings.Contains(s, "interface \"phx*\"") {
 		t.Error("missing interface pattern")
 	}
 	if !strings.Contains(s, "type tunnel;") {
@@ -76,10 +76,10 @@ func TestGenerateManagedConfig(t *testing.T) {
 	if !strings.Contains(s, "rxcost 100;") {
 		t.Error("missing default rxcost")
 	}
-	if !strings.Contains(s, "filter higgs_import_ipsec_main") {
+	if !strings.Contains(s, "filter photon_import_ipsec_main") {
 		t.Error("missing import filter")
 	}
-	if !strings.Contains(s, "filter higgs_export_ipsec_main") {
+	if !strings.Contains(s, "filter photon_export_ipsec_main") {
 		t.Error("missing export filter")
 	}
 }
@@ -201,11 +201,11 @@ func TestDefaultsApplied(t *testing.T) {
 	spec := BirdInstanceSpec{
 		RouterID:          0x01020304,
 		NetNSName:         "ipsec-main",
-		ControlSocketPath: "/run/higgs/bird-ipsec-main.ctl",
-		PIDFilePath:       "/run/higgs/bird-ipsec-main.pid",
-		ConfigPath:        "/etc/higgs/bird-ipsec-main.conf",
+		ControlSocketPath: "/run/photon/bird-ipsec-main.ctl",
+		PIDFilePath:       "/run/photon/bird-ipsec-main.pid",
+		ConfigPath:        "/etc/photon/bird-ipsec-main.conf",
 		Mode:              BirdModeManaged,
-		InterfacePattern:  "hgs*",
+		InterfacePattern:  "phx*",
 	}
 
 	gen := DefaultConfigGenerator{}
@@ -229,7 +229,7 @@ func TestDefaultsApplied(t *testing.T) {
 func TestRenderMultipleInterfacePatterns(t *testing.T) {
 	spec := testBirdInstanceSpec()
 	spec.InterfacePattern = ""
-	spec.InterfacePatterns = []string{"hgs-live0", "hgs-live1"}
+	spec.InterfacePatterns = []string{"phx-live0", "phx-live1"}
 
 	gen := DefaultConfigGenerator{}
 	cfg, err := gen.Generate(spec, nil, nil)
@@ -237,7 +237,7 @@ func TestRenderMultipleInterfacePatterns(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 	s := string(cfg)
-	if !strings.Contains(s, `interface "hgs-live0", "hgs-live1" {`) {
+	if !strings.Contains(s, `interface "phx-live0", "phx-live1" {`) {
 		t.Fatalf("interface pattern list not comma-separated:\n%s", s)
 	}
 }

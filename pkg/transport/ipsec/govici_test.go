@@ -736,7 +736,7 @@ func sampleStrongSwanSpec() TransportLinkSpec {
 		TransportID:   "ipsec-main-ab",
 		LocalZone:     "node-a.catofes.",
 		PeerZone:      "node-b.catofes.",
-		InterfaceName: "hgsab0",
+		InterfaceName: "phxab0",
 		XFRMIfID:      77,
 		ContactPoints: []ContactPoint{{
 			Address:  "198.51.100.20",

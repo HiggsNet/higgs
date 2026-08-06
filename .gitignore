@@ -2,11 +2,11 @@ bin
 .vscode
 build
 result
-.higgs.db
-.higgs
-/higgs
+.photon.db
+.photon
+/photon
 .public-test
-app/higgs/.higgs.db
+app/photon/.photon.db
 .claude
 .codex
 .agents

@@ -148,7 +148,7 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 
 func ChildSAName(spec TransportLinkSpec) string {
 	if spec.TransportID == "" {
-		return "higgs-child"
+		return "photon-child"
 	}
 	return spec.TransportID + "-child"
 }
@@ -176,7 +176,7 @@ func BaseConnectionName(transportID string) string {
 }
 
 func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
-	// Higgs drives active CHILD_SA establishment exclusively through its
+	// Photon drives active CHILD_SA establishment exclusively through its
 	// explicit VICI initiate path.  Keep the loaded child passive so a
 	// secondary-standby responder can't be promoted implicitly by traffic
 	// hitting a trap policy during a rolling or batch restart.

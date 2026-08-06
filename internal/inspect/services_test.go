@@ -3,8 +3,8 @@ package inspect
 import (
 	"testing"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgsservice "github.com/Catofes/higgs/pkg/service"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photonservice "github.com/Catofes/photon/pkg/service"
 )
 
 func TestBuildServiceInspectionIncludesLocalAndRemoteServices(t *testing.T) {
@@ -14,11 +14,11 @@ func TestBuildServiceInspectionIncludesLocalAndRemoteServices(t *testing.T) {
 	network.Zones[local] = zone.NewZoneState(local, nil)
 	network.Zones[remote] = zone.NewZoneState(remote, nil)
 	network.Zones[local].Records["services/socks5"] = &zone.Record{
-		Zone: local, Key: "services/socks5", Type: higgsservice.RecordTypeSOCKS5, Version: 2, Timestamp: 200,
+		Zone: local, Key: "services/socks5", Type: photonservice.RecordTypeSOCKS5, Version: 2, Timestamp: 200,
 		Value: []byte(`{"type":"socks5","endpoints":[{"region":"local","address":"fd42:1::20","port":3128}]}`),
 	}
 	network.Zones[remote].Records["services/socks5"] = &zone.Record{
-		Zone: remote, Key: "services/socks5", Type: higgsservice.RecordTypeSOCKS5, Version: 3, Timestamp: 300,
+		Zone: remote, Key: "services/socks5", Type: photonservice.RecordTypeSOCKS5, Version: 3, Timestamp: 300,
 		Value: []byte(`{"type":"socks5","endpoints":[{"region":"cn","address":"198.51.100.20","port":1080}],"active":false}`),
 	}
 
@@ -39,7 +39,7 @@ func TestBuildServiceInspectionReportsInvalidServiceRecord(t *testing.T) {
 	owner := zone.ZonePath("node-a.catofes.")
 	network.Zones[owner] = zone.NewZoneState(owner, nil)
 	network.Zones[owner].Records["services/socks5"] = &zone.Record{
-		Zone: owner, Key: "services/socks5", Type: higgsservice.RecordTypeSOCKS5,
+		Zone: owner, Key: "services/socks5", Type: photonservice.RecordTypeSOCKS5,
 		Value: []byte(`{"type":"socks5"}`),
 	}
 

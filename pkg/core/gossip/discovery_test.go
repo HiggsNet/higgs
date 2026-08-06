@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 func TestLocalEndpointsToRecordWithPolicyKeepsOldEndpointDuringGrace(t *testing.T) {

@@ -1,0 +1,342 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/health"
+	"github.com/Catofes/photon/pkg/transport/ipsec"
+)
+
+func TestHealthTargetsParseScopedNetNS(t *testing.T) {
+	state := &stateFile{
+		ManagedZone: zone.ZonePath("node-a.catofes."),
+		LinkInstances: map[string]linkInstanceState{
+			"link-1": {ActualState: "up"},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         "blue",
+				PeerZone:        zone.ZonePath("node-b.catofes."),
+				InterfaceName:   "phx0",
+				LocalTunnelAddr: "fd00::1%phx0 netns=photontesth2",
+				PeerTunnelAddr:  "fd00::2%phx0 netns=photontesth2",
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(state.ManagedZone), nil)
+	if len(targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(targets))
+	}
+	target := targets[0]
+	if target.NetNS != "photontesth2" {
+		t.Fatalf("target NetNS = %q, want photontesth2", target.NetNS)
+	}
+	if got := target.PeerTunnelAddr.String(); got != "fd00::2" {
+		t.Fatalf("peer tunnel addr = %q, want fd00::2", got)
+	}
+	if got := target.LocalTunnelAddr.String(); got != "fd00::1" {
+		t.Fatalf("local tunnel addr = %q, want fd00::1", got)
+	}
+}
+
+func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
+	state := &stateFile{
+		ManagedZone: zone.ZonePath("node-a.catofes."),
+		LinkInstances: map[string]linkInstanceState{
+			"link-1": {
+				ActualState:           "up",
+				InterfaceName:         "phx-old",
+				LocalTunnelAddr:       "fe80::10",
+				PeerTunnelAddr:        "fe80::20",
+				StagedGeneration:      2,
+				RotatePhase:           "testing_new",
+				StagedInterfaceName:   "phx-new",
+				StagedLocalTunnelAddr: "fe80::11",
+				StagedPeerTunnelAddr:  "fe80::21",
+			},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         "blue",
+				PeerZone:        zone.ZonePath("node-b.catofes."),
+				InterfaceName:   "phx-desired",
+				LocalTunnelAddr: "fe80::1%phx-desired netns=photontesth2",
+				PeerTunnelAddr:  "fe80::2%phx-desired netns=photontesth2",
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(state.ManagedZone), nil)
+	if len(targets) != 2 {
+		t.Fatalf("targets = %d, want 2", len(targets))
+	}
+	byRole := map[string]health.ProbeTarget{}
+	for _, target := range targets {
+		byRole[target.ProbeRole] = target
+	}
+	if old := byRole["old"]; old.InterfaceName != "phx-old" || old.ProbeID != "link-1#old" || old.Staged {
+		t.Fatalf("old target = %+v, want old interface without staged flag", old)
+	}
+	if old := byRole["old"]; old.LocalTunnelAddr.String() != "fe80::10" || old.PeerTunnelAddr.String() != "fe80::20" {
+		t.Fatalf("old target addrs = %s/%s, want persisted old runtime addrs", old.LocalTunnelAddr, old.PeerTunnelAddr)
+	}
+	if staged := byRole["staged"]; staged.InterfaceName != "phx-new" || staged.ProbeID != "link-1#staged" || !staged.Staged {
+		t.Fatalf("staged target = %+v, want staged interface", staged)
+	}
+	if staged := byRole["staged"]; staged.LocalTunnelAddr.String() != "fe80::11" || staged.PeerTunnelAddr.String() != "fe80::21" {
+		t.Fatalf("staged target addrs = %s/%s, want persisted staged runtime addrs", staged.LocalTunnelAddr, staged.PeerTunnelAddr)
+	}
+	if staged := byRole["staged"]; staged.State != "up" {
+		t.Fatalf("staged target state = %q, want up", staged.State)
+	}
+}
+
+func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) {
+	local := zone.ZonePath("less.catofes.")
+	peer := zone.ZonePath("more.catofes.")
+	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
+	state := &stateFile{
+		ManagedZone: local,
+		LinkInstances: map[string]linkInstanceState{
+			"link-1": {
+				ID:               "link-1",
+				ActualState:      "up",
+				InterfaceName:    "phxa0f3bb66",
+				RemoteGeneration: 1,
+			},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      "link-1",
+				GroupID:         group.ID,
+				PeerZone:        peer,
+				LinkID:          "link-1",
+				PathKey:         "family:ipv4",
+				InterfaceName:   "phxa0f3bb66",
+				LocalTunnelAddr: "fe80::7454:3eca:1ff:6f5a%phxa0f3bb66 netns=photontesth2",
+				PeerTunnelAddr:  "fe80::91eb:8d94:108b:d6d%phxa0f3bb66 netns=photontesth2",
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(local), []ipsec.LinkGroupSpec{group})
+	if len(targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(targets))
+	}
+	target := targets[0]
+	if got := target.LocalTunnelAddr.String(); got != "fe80::7454:3eca:1ff:6f5a" {
+		t.Fatalf("local tunnel addr = %q, want persisted desired address", got)
+	}
+	if got := target.PeerTunnelAddr.String(); got != "fe80::91eb:8d94:108b:d6d" {
+		t.Fatalf("peer tunnel addr = %q, want persisted desired address", got)
+	}
+	if target.InterfaceName != "phxa0f3bb66" || target.NetNS != "photontesth2" {
+		t.Fatalf("target scope = iface %q netns %q, want phxa0f3bb66/photontesth2", target.InterfaceName, target.NetNS)
+	}
+	if target.UnderlayFamily != ipsec.FamilyIPv4 {
+		t.Fatalf("underlay family = %q, want ipv4", target.UnderlayFamily)
+	}
+}
+
+func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *testing.T) {
+	local := zone.ZonePath("node-a.catofes.")
+	peer := zone.ZonePath("node-b.catofes.")
+	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
+	linkID := "link-1"
+	pathKey := "family:ipv4"
+	newLocal, newPeer, err := group.DeriveTunnelAddressesForLink(local, peer, linkID, pathKey, 2, 0)
+	if err != nil {
+		t.Fatalf("derive staged tunnel addresses: %v", err)
+	}
+	state := &stateFile{
+		ManagedZone: local,
+		LinkInstances: map[string]linkInstanceState{
+			linkID: {
+				ID:                  linkID,
+				ActualState:         "up",
+				InterfaceName:       "phx-old",
+				RemoteGeneration:    1,
+				StagedGeneration:    2,
+				RotatePhase:         "testing_new",
+				StagedInterfaceName: "phx-new",
+			},
+		},
+		IPsecReconcile: &ipsecReconcileState{
+			Desired: []desiredLinkState{{
+				InstanceID:      linkID,
+				GroupID:         group.ID,
+				PeerZone:        peer,
+				LinkID:          linkID,
+				PathKey:         pathKey,
+				InterfaceName:   "phx-new",
+				LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(newLocal, "phx-new", "photontesth2"),
+				PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(newPeer, "phx-new", "photontesth2"),
+			}},
+		},
+	}
+
+	targets := healthTargetsFromState(state, string(local), []ipsec.LinkGroupSpec{group})
+	if len(targets) != 0 {
+		t.Fatalf("targets = %+v, want no guessed rotate probes without persisted runtime tunnel addrs", targets)
+	}
+}
+
+func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
+	cfg := defaultHealthConfig()
+	cfg.Enabled = true
+	cfg.Interval = time.Nanosecond
+	cfg.Timeout = time.Nanosecond
+	cfg.Jitter = 0
+	cfg.FailThreshold = 1
+
+	d := &DaemonService{
+		Sync: &SyncRuntime{
+			App: &Runtime{Config: &appConfig{Health: cfg}},
+		},
+	}
+	d.configureHealthManager()
+	if d.health == nil {
+		t.Fatal("health manager was not configured")
+	}
+
+	now := time.Unix(100, 0)
+	d.health.SetTargets([]health.ProbeTarget{{
+		InstanceID: "link-1",
+		State:      "up",
+	}}, now)
+	if got := d.health.Tick(context.Background(), now.Add(time.Second)); got != 1 {
+		t.Fatalf("dispatched probes = %d, want 1", got)
+	}
+	snapshot := d.health.Snapshot(now.Add(time.Second))
+	if len(snapshot) != 1 {
+		t.Fatalf("snapshot links = %d, want 1", len(snapshot))
+	}
+	if strings.Contains(snapshot[0].LastError, "no prober configured") {
+		t.Fatalf("health manager used nop prober: last_error=%q", snapshot[0].LastError)
+	}
+	if snapshot[0].LastError != "peer address missing" {
+		t.Fatalf("last_error = %q, want peer address missing", snapshot[0].LastError)
+	}
+}
+
+func TestHealthLocalSpoolQuerySeries(t *testing.T) {
+	cfg := defaultHealthConfig()
+	cfg.MetricsEnabled = true
+	cfg.LocalSpoolPath = t.TempDir()
+	cfg.LocalSpoolMaxAge = time.Hour
+	appCfg := &appConfig{Health: cfg}
+	d := &DaemonService{
+		Sync: &SyncRuntime{
+			App: &Runtime{Config: appCfg},
+		},
+	}
+	now := time.Unix(2000, 0)
+	if err := d.appendHealthSpool(now.Add(-10*time.Minute), []healthLinkJSON{{
+		InstanceID: "link-1",
+		State:      "healthy",
+		ProbeType:  "icmp",
+		LastRTTMs:  10,
+		LossRatio:  0,
+		JitterMs:   1,
+		Sent:       3,
+		Received:   3,
+	}}); err != nil {
+		t.Fatalf("appendHealthSpool old: %v", err)
+	}
+	if err := d.appendHealthSpool(now, []healthLinkJSON{{
+		InstanceID: "link-1",
+		State:      "degraded",
+		ProbeType:  "icmp",
+		LastRTTMs:  20,
+		LossRatio:  25,
+		JitterMs:   2,
+		Sent:       4,
+		Received:   3,
+		Lost:       1,
+	}}); err != nil {
+		t.Fatalf("appendHealthSpool current: %v", err)
+	}
+
+	series, err := queryHealthSpoolSeries(appCfg, "link-1", healthSeriesQuery{
+		Metric: "rtt",
+		Range:  30 * time.Minute,
+		Step:   time.Minute,
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("queryHealthSpoolSeries: %v", err)
+	}
+	if series.Metric != "rtt" || series.Unit != "ms" {
+		t.Fatalf("series metadata = %s/%s, want rtt/ms", series.Metric, series.Unit)
+	}
+	if len(series.Points) != 2 {
+		t.Fatalf("points = %#v, want 2 points", series.Points)
+	}
+	if got := series.Points[1].Value; got != 20 {
+		t.Fatalf("latest rtt point = %v, want 20", got)
+	}
+}
+
+func TestHealthLocalSpoolQueryKeepsRotateProbeLines(t *testing.T) {
+	cfg := defaultHealthConfig()
+	cfg.MetricsEnabled = true
+	cfg.LocalSpoolPath = t.TempDir()
+	cfg.LocalSpoolMaxAge = time.Hour
+	appCfg := &appConfig{Health: cfg}
+	now := time.Unix(4000, 0)
+	d := &DaemonService{
+		Sync: &SyncRuntime{
+			App: &Runtime{Config: appCfg},
+		},
+	}
+	if err := d.appendHealthSpool(now, []healthLinkJSON{
+		{
+			ProbeID:    "link-1#old",
+			InstanceID: "link-1",
+			ProbeRole:  "old",
+			State:      "healthy",
+			ProbeType:  "icmp",
+			LastRTTMs:  30,
+		},
+		{
+			ProbeID:    "link-1#staged",
+			InstanceID: "link-1",
+			ProbeRole:  "staged",
+			State:      "healthy",
+			ProbeType:  "icmp",
+			LastRTTMs:  12,
+		},
+	}); err != nil {
+		t.Fatalf("appendHealthSpool: %v", err)
+	}
+
+	series, err := queryHealthSpoolSeries(appCfg, "link-1", healthSeriesQuery{
+		Metric: "rtt",
+		Range:  time.Minute,
+		Step:   time.Minute,
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("queryHealthSpoolSeries: %v", err)
+	}
+	if len(series.Lines) != 2 {
+		t.Fatalf("lines = %#v, want old and staged", series.Lines)
+	}
+	got := map[string]float64{}
+	for _, line := range series.Lines {
+		if len(line.Points) != 1 {
+			t.Fatalf("line %#v points = %d, want 1", line, len(line.Points))
+		}
+		got[line.ProbeRole] = line.Points[0].Value
+	}
+	if got["old"] != 30 || got["staged"] != 12 {
+		t.Fatalf("line values = %#v, want old=30 staged=12", got)
+	}
+}

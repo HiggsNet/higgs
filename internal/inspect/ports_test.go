@@ -3,7 +3,7 @@ package inspect
 import (
 	"testing"
 
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	"github.com/Catofes/photon/pkg/transport/ipsec"
 )
 
 func TestDebugIPsecPortsPreferContactAndRuntimeEndpoints(t *testing.T) {

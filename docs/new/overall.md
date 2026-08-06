@@ -1,8 +1,8 @@
-# Higgs 整体结构
+# Photon 整体结构
 
-Higgs 是一个 mesh VPN 控制平面。它不把某个节点的本地配置当成全网真相，而是先维护一份可验证、最终一致的 Zone 状态数据库，再由每个节点的 daemon 把这份状态收敛成本机的网络配置。
+Photon 是一个 mesh VPN 控制平面。它不把某个节点的本地配置当成全网真相，而是先维护一份可验证、最终一致的 Zone 状态数据库，再由每个节点的 daemon 把这份状态收敛成本机的网络配置。
 
-换句话说，Higgs 分成两层：
+换句话说，Photon 分成两层：
 
 - **全网事实层**：哪些 Zone 存在、谁有权限写入、节点发布了哪些 endpoint、transport key、route、IPAM 等记录。
 - **本机执行层**：本节点根据已验证状态和本地策略，去配置 IPsec/WireGuard、BIRD/Babel、firewall、health probe 和 observer。
@@ -31,7 +31,7 @@ Higgs 是一个 mesh VPN 控制平面。它不把某个节点的本地配置当�
 | `firewall.md` | nftables/iptables 规则生成、host ingress、redirect grace、owner 清理 |
 | `health.md` | 链路探测、BIRD 观测、metric/cutover gate、metrics 输出 |
 | `observer.md` | 只读 Web/API 控制台、SSE、inspect read model 和 CLI debug 复用 |
-| `services.md` | `higgs-services` 工具、service manifest、shared Anycast assignment、service record、动态 endpoint ACL 和发布/撤销编排 |
+| `services.md` | `photon-services` 工具、service manifest、shared Anycast assignment、service record、动态 endpoint ACL 和发布/撤销编排 |
 | `config.md` | 用户配置文件结构、默认值和常见部署形态 |
 | `operations.md` | 常用运行命令、排障路径和恢复操作 |
 | `testing.md` | `make check`、轻量 smoke 和真实数据面 smoke 的验证入口 |
@@ -40,7 +40,7 @@ Higgs 是一个 mesh VPN 控制平面。它不把某个节点的本地配置当�
 
 ### 1. Zone / Gossip 状态层
 
-Zone 是 Higgs 的核心数据模型。每个 Zone 有自己的 authority、delegation 和 signed records。节点只接受能从本地 trusted root 验证到的状态。
+Zone 是 Photon 的核心数据模型。每个 Zone 有自己的 authority、delegation 和 signed records。节点只接受能从本地 trusted root 验证到的状态。
 
 Gossip 负责把这些 signed Zone state 在 peer 之间同步。它维护的是控制面数据库，不直接修改系统网络。它的主要职责是：
 
@@ -52,7 +52,7 @@ Gossip 负责把这些 signed Zone state 在 peer 之间同步。它维护的是
 
 ### 2. Daemon 控制循环
 
-`higgs daemon` 是长期运行入口。它把 gossip、admin 写入、endpoint 发布、object pull、relay、transport reconcile、routing reconcile、firewall reconcile、health 和 observer 放在同一个本机控制边界内。
+`photon daemon` 是长期运行入口。它把 gossip、admin 写入、endpoint 发布、object pull、relay、transport reconcile、routing reconcile、firewall reconcile、health 和 observer 放在同一个本机控制边界内。
 
 daemon 的关键职责是：
 
@@ -91,7 +91,7 @@ Firewall 模块负责把本机 overlay 安全策略收敛成系统规则。当�
 - overlay/netns 内的 filter 规则。
 - host ingress 规则。
 - IPsec 端口 redirect grace。
-- Higgs-owned 规则的 owner 标记、恢复和清理。
+- Photon-owned 规则的 owner 标记、恢复和清理。
 
 Firewall 规则是本机 runtime 状态，不进入 gossip。Gossip 中的 signed state 只提供 peer、route、transport intent 等事实来源。
 
@@ -122,9 +122,9 @@ Observer 是只读 Web/API 控制台。它不应该直接操作 daemon 状态，
 
 ### 8. Service 发布
 
-Service 发布把“可信网络状态”和“容器部署”拆开。Higgs daemon 只负责网络原语：保存 shared Anycast assignment、校验并签名 `service.socks5.v1` record、显式宣告或撤销服务前缀、按 Zone selector 维护动态 endpoint ACL。它不理解镜像、容器或 Compose。
+Service 发布把“可信网络状态”和“容器部署”拆开。Photon daemon 只负责网络原语：保存 shared Anycast assignment、校验并签名 `service.socks5.v1` record、显式宣告或撤销服务前缀、按 Zone selector 维护动态 endpoint ACL。它不理解镜像、容器或 Compose。
 
-独立工具 `higgs-services` 读取本机 `/etc/higgs/service.yaml`，通过 `higgs route ipam mine` 解析本地和 shared Anycast 地址，生成 Docker Compose artifact，并在管理员拉起容器后编排 TCP 就绪检查、endpoint ACL、整段 assignment 的 route announce 和签名 service record 的发布/撤销顺序。
+独立工具 `photon-services` 读取本机 `/etc/photon/service.yaml`，通过 `photon route ipam mine` 解析本地和 shared Anycast 地址，生成 Docker Compose artifact，并在管理员拉起容器后编排 TCP 就绪检查、endpoint ACL、整段 assignment 的 route announce 和签名 service record 的发布/撤销顺序。
 
 发布出去的签名事实只有 service record 本身（region、address、port）；容器拓扑、`allow_zones` 等部署与安全策略都留在本机。跨节点共用的服务地址使用带 tag 的 shared assignment，路由随服务健康状态宣告和撤销，与节点普通前缀的生命周期分开。
 
@@ -149,6 +149,6 @@ Service 发布把“可信网络状态”和“容器部署”拆开。Higgs dae
 - Endpoint、DNS、reflector、observed path 只影响可达性候选，不替代 Zone trust chain。
 - StrongSwan、WireGuard、BIRD、nftables/iptables 都是本机 runtime driver；它们的失败不改变 signed state 的真实性。
 - Debug/Observer 应展示“已验证事实 + 本机期望状态 + 实际 runtime 状态”的差异，而不是只展示某一层。
-- 服务发布是 operator 驱动的独立流程：daemon 只提供 signed record、路由宣告和动态 ACL 原语，容器部署和生命周期由 `higgs-services` 与管理员负责。
+- 服务发布是 operator 驱动的独立流程：daemon 只提供 signed record、路由宣告和动态 ACL 原语，容器部署和生命周期由 `photon-services` 与管理员负责。
 
 这个边界是后续拆文档的主线：每个模块都要讲清楚自己在哪一层，读什么，写什么，以及不负责什么。

@@ -12,8 +12,8 @@ import (
 )
 
 func TestStrongSwanDriverLoadsKeyAndConnection(t *testing.T) {
-	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
-		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
+	if os.Getenv("PHOTON_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set PHOTON_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -76,7 +76,7 @@ func TestStrongSwanDriverLoadsKeyAndConnection(t *testing.T) {
 		IKEIdentity:              "node-a.catofes.",
 		ContactPoints:            []ContactPoint{{Address: "127.0.0.1", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
 		XFRMIfID:                 424242,
-		InterfaceName:            "hgsint0",
+		InterfaceName:            "phxint0",
 		LocalTunnelAddr:          mustAddr("10.55.0.1"),
 		PeerTunnelAddr:           mustAddr("10.55.0.2"),
 		NetNS:                    "",

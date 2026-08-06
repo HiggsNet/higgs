@@ -15,8 +15,8 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
 		InstanceID:      "link-1",
-		NetNS:           "higgstesth2",
-		InterfaceName:   "hgs431bcb9f",
+		NetNS:           "photontesth2",
+		InterfaceName:   "phx431bcb9f",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::7888:86ec:66e0:2620"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::b09d:5f83:3e81:d064"),
 		State:           "up",
@@ -33,11 +33,11 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 		t.Fatalf("command name = %q, want ip", runner.name)
 	}
 	want := []string{
-		"netns", "exec", "higgstesth2",
+		"netns", "exec", "photontesth2",
 		"ping", "-6", "-n", "-c", "1",
 		"-W", "0.05",
-		"-I", "fe80::7888:86ec:66e0:2620%hgs431bcb9f",
-		"fe80::b09d:5f83:3e81:d064%hgs431bcb9f",
+		"-I", "fe80::7888:86ec:66e0:2620%phx431bcb9f",
+		"fe80::b09d:5f83:3e81:d064%phx431bcb9f",
 	}
 	if !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command args = %#v, want %#v", runner.args, want)
@@ -57,8 +57,8 @@ func TestICMProberIncludesPingOutputInError(t *testing.T) {
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
 		InstanceID:     "link-1",
-		NetNS:          "higgstesth2",
-		InterfaceName:  "hgs0",
+		NetNS:          "photontesth2",
+		InterfaceName:  "phx0",
 		PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
 		State:          "up",
 	}
@@ -88,8 +88,8 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
 		InstanceID:      "link-1",
-		NetNS:           "higgstesth2",
-		InterfaceName:   "hgs0",
+		NetNS:           "photontesth2",
+		InterfaceName:   "phx0",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
 		State:           "up",
@@ -104,17 +104,17 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 	}
 	want := [][]string{
 		{
-			"netns", "exec", "higgstesth2",
+			"netns", "exec", "photontesth2",
 			"ping", "-6", "-n", "-c", "1",
 			"-W", "0.05",
-			"-I", "fe80::1%hgs0",
-			"fe80::2%hgs0",
+			"-I", "fe80::1%phx0",
+			"fe80::2%phx0",
 		},
 		{
-			"netns", "exec", "higgstesth2",
+			"netns", "exec", "photontesth2",
 			"ping", "-6", "-n", "-c", "1",
 			"-W", "0.05",
-			"fe80::2%hgs0",
+			"fe80::2%phx0",
 		},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
@@ -131,7 +131,7 @@ func TestICMProberRunsBurstInOneProcess(t *testing.T) {
 	prober := NewICMProber(runner, nil)
 	target := ProbeTarget{
 		InstanceID:     "link-1",
-		NetNS:          "higgstesth2",
+		NetNS:          "photontesth2",
 		PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),
 		State:          "up",
 	}
@@ -143,7 +143,7 @@ func TestICMProberRunsBurstInOneProcess(t *testing.T) {
 	if result.RTT != 3750*time.Microsecond {
 		t.Fatalf("probe RTT = %s, want 3.75ms", result.RTT)
 	}
-	want := []string{"netns", "exec", "higgstesth2", "ping", "-n", "-c", "3", "-i", "0.2", "-W", "1", "192.0.2.2"}
+	want := []string{"netns", "exec", "photontesth2", "ping", "-n", "-c", "3", "-i", "0.2", "-W", "1", "192.0.2.2"}
 	if !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command args = %#v, want %#v", runner.args, want)
 	}
@@ -203,12 +203,12 @@ func TestParsePingBurstOutput(t *testing.T) {
 func TestPingTargetAddressScopesLinkLocal(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:     "link-1",
-		InterfaceName:  "hgs0",
+		InterfaceName:  "phx0",
 		PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
 		State:          "up",
 	}
 
-	if got := pingTargetAddress(target); got != "fe80::2%hgs0" {
+	if got := pingTargetAddress(target); got != "fe80::2%phx0" {
 		t.Fatalf("ping target address = %q, want scoped link-local", got)
 	}
 }
@@ -216,13 +216,13 @@ func TestPingTargetAddressScopesLinkLocal(t *testing.T) {
 func TestPingSourceAddressPrefersLocalTunnelAddressForLinkLocalTarget(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:      "link-1",
-		InterfaceName:   "hgs0",
+		InterfaceName:   "phx0",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
 		State:           "up",
 	}
 
-	if got := pingSourceAddress(target); got != "fe80::1%hgs0" {
+	if got := pingSourceAddress(target); got != "fe80::1%phx0" {
 		t.Fatalf("ping source address = %q, want scoped local tunnel address", got)
 	}
 }
@@ -230,7 +230,7 @@ func TestPingSourceAddressPrefersLocalTunnelAddressForLinkLocalTarget(t *testing
 func TestPingSourceAddressPrefersLocalTunnelAddressForNonLinkLocalTarget(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:      "link-1",
-		InterfaceName:   "hgs0",
+		InterfaceName:   "phx0",
 		LocalTunnelAddr: netip.MustParseAddr("fd00::1"),
 		PeerTunnelAddr:  netip.MustParseAddr("fd00::2"),
 		State:           "up",
@@ -244,12 +244,12 @@ func TestPingSourceAddressPrefersLocalTunnelAddressForNonLinkLocalTarget(t *test
 func TestPingSourceAddressFallsBackToInterface(t *testing.T) {
 	target := ProbeTarget{
 		InstanceID:     "link-1",
-		InterfaceName:  "hgs0",
+		InterfaceName:  "phx0",
 		PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
 		State:          "up",
 	}
 
-	if got := pingSourceAddress(target); got != "hgs0" {
+	if got := pingSourceAddress(target); got != "phx0" {
 		t.Fatalf("ping source address = %q, want interface fallback", got)
 	}
 }

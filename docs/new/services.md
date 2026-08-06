@@ -1,10 +1,10 @@
-# Higgs Services 设计与实现
+# Photon Services 设计与实现
 
 > **本文档状态：2026-07**
-> 描述 Higgs 服务发布子系统的当前实现：`pkg/service` 的 record 与授权模型、独立工具 `higgs-services`（`app/higgs-services`）的 manifest 解析、artifact 生成和发布编排，以及 daemon 侧的动态 endpoint ACL。
+> 描述 Photon 服务发布子系统的当前实现：`pkg/service` 的 record 与授权模型、独立工具 `photon-services`（`app/photon-services`）的 manifest 解析、artifact 生成和发布编排，以及 daemon 侧的动态 endpoint ACL。
 > 本文以当前代码为准。原 Phase 8 设计文档的内容已并入本文，不再单独保留。
 
-Service 发布把“可信网络状态”和“容器部署”拆开：Higgs daemon 管理 IPAM、路由宣告、签名 service record 和动态防火墙授权，但**不理解镜像、容器或 Compose，也不会调用 Docker API**；独立程序 `higgs-services` 读取 `/etc/higgs/service.yaml`，从 Higgs 运行态解析地址并生成 Docker Compose artifact，再编排 ACL、route announcement 和 service record 的发布顺序。
+Service 发布把“可信网络状态”和“容器部署”拆开：Photon daemon 管理 IPAM、路由宣告、签名 service record 和动态防火墙授权，但**不理解镜像、容器或 Compose，也不会调用 Docker API**；独立程序 `photon-services` 读取 `/etc/photon/service.yaml`，从 Photon 运行态解析地址并生成 Docker Compose artifact，再编排 ACL、route announcement 和 service record 的发布顺序。
 
 当前只提供一套固定名为 `socks5` 的服务，由 `socks`、`h2` 两个 GOST v3 容器组成，不需要实例名、Compose project name 或 container name。域名解析由各容器内的 GOST resolver 完成，默认优先返回 IPv4。
 
@@ -31,8 +31,8 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 
 | 角色 | 做什么 | 不做什么 |
 |---|---|---|
-| `higgs` daemon / CLI | 保存普通和 shared Anycast assignment；校验服务 endpoint 属于当前 Zone 的 active assignment；显式宣告或撤销整个 assignment prefix；签名、发布和撤销固定的 `services/socks5` record；根据 Zone selector 动态维护 host FORWARD endpoint ACL | 不理解镜像、容器、Compose，不调用 Docker API |
-| `higgs-services` | 读取 service manifest；从 `higgs route ipam mine` 解析本地 `auto` 和 shared assignment tag；规划多 network 下两个容器的地址；生成 Compose、GOST 配置和状态锁文件；对待发布 endpoint 做 TCP 就绪检查；编排 ACL、route announcement 和 service record 的发布/撤销顺序 | 不启动容器、不管理容器生命周期 |
+| `photon` daemon / CLI | 保存普通和 shared Anycast assignment；校验服务 endpoint 属于当前 Zone 的 active assignment；显式宣告或撤销整个 assignment prefix；签名、发布和撤销固定的 `services/socks5` record；根据 Zone selector 动态维护 host FORWARD endpoint ACL | 不理解镜像、容器、Compose，不调用 Docker API |
+| `photon-services` | 读取 service manifest；从 `photon route ipam mine` 解析本地 `auto` 和 shared assignment tag；规划多 network 下两个容器的地址；生成 Compose、GOST 配置和状态锁文件；对待发布 endpoint 做 TCP 就绪检查；编排 ACL、route announcement 和 service record 的发布/撤销顺序 | 不启动容器、不管理容器生命周期 |
 | 管理员 | 执行 `docker compose up/down/pull`；负责非 shared assignment 的路由（通常经 `ipam.announce`） | — |
 
 `render` 只生成 artifact；`publish` 也不会启动容器。容器必须先由管理员通过 Compose 拉起，`publish` 的 TCP 就绪检查才有意义。
@@ -42,9 +42,9 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 | 位置 | 内容 |
 |---|---|
 | [`pkg/service`](../../pkg/service) | `service.socks5.v1` record 解析/校验/授权、Zone selector |
-| [`app/higgs-services`](../../app/higgs-services) | manifest 解析（`manifest.go`）、Compose/GOST 渲染（`render.go`）、publish/withdraw 编排（`main.go`） |
-| [`app/higgs/service.go`](../../app/higgs/service.go) | `higgs service` 公开/本机 service 表格，以及 `publish/withdraw` record 签名提交 |
-| [`app/higgs/endpoint_acl.go`](../../app/higgs/endpoint_acl.go) | `higgs firewall endpoint` 命令与 daemon 侧 endpoint ACL 事件处理 |
+| [`app/photon-services`](../../app/photon-services) | manifest 解析（`manifest.go`）、Compose/GOST 渲染（`render.go`）、publish/withdraw 编排（`main.go`） |
+| [`app/photon/service.go`](../../app/photon/service.go) | `photon service` 公开/本机 service 表格，以及 `publish/withdraw` record 签名提交 |
+| [`app/photon/endpoint_acl.go`](../../app/photon/endpoint_acl.go) | `photon firewall endpoint` 命令与 daemon 侧 endpoint ACL 事件处理 |
 
 ---
 
@@ -57,9 +57,9 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Higgs dae
 跨节点共用的 Anycast 地址使用带稳定 tag 的 shared assignment：
 
 ```bash
-higgs route ipam assign catofes. 2a0d:2905:0:4::/96 \
+photon route ipam assign catofes. 2a0d:2905:0:4::/96 \
   --to node-a.catofes. --shared --tag socks5.cn
-higgs route ipam assign catofes. 2a0d:2905:0:4::/96 \
+photon route ipam assign catofes. 2a0d:2905:0:4::/96 \
   --to node-b.catofes. --shared --tag socks5.cn
 ```
 
@@ -71,7 +71,7 @@ higgs route ipam assign catofes. 2a0d:2905:0:4::/96 \
 - 同一 owner 下的 shared assignment 按成员分别保存，可以精确撤销单个节点：
 
 ```bash
-higgs route ipam revoke assignment catofes. 2a0d:2905:0:4::/96 --to node-a.catofes.
+photon route ipam revoke assignment catofes. 2a0d:2905:0:4::/96 --to node-a.catofes.
 ```
 
 ### 2.2 Service record
@@ -93,20 +93,20 @@ higgs route ipam revoke assignment catofes. 2a0d:2905:0:4::/96 --to node-a.catof
 - 兼容旧格式：没有 `active` 字段、只有单个 `region/address/port` 的 record 仍可读取；但 legacy 字段与 `endpoints` 不能同时出现。
 - 地址必须是 canonical 形式、可用 unicast；同一 `region/address/port` 不允许重复。
 
-`higgs service`（等价于 `higgs service show`）以表格列出 gossip state 中当前 active 的公开 service，并用 `OWNER` / `SCOPE=local|remote` 标明发布者以及是否由本机 managed zone 发布。常用过滤入口：
+`photon service`（等价于 `photon service show`）以表格列出 gossip state 中当前 active 的公开 service，并用 `OWNER` / `SCOPE=local|remote` 标明发布者以及是否由本机 managed zone 发布。常用过滤入口：
 
 ```bash
-higgs service                    # 全部 active 公开 service，包含本机
-higgs service mine               # 仅本机发布的 active service
-higgs service --local            # 同上
-higgs service --all --verbose    # 包含 withdrawn，并显示 record 元数据
+photon service                    # 全部 active 公开 service，包含本机
+photon service mine               # 仅本机发布的 active service
+photon service --local            # 同上
+photon service --all --verbose    # 包含 withdrawn，并显示 record 元数据
 ```
 
 多 endpoint service 在表格中按 endpoint 展开；IPv6 endpoint 使用 `[address]:port` 表示。无法解析的 `services/*` record 会显示为 `invalid`，并在 `--verbose` 下给出错误。
 
 ### 2.3 Record 授权
 
-发布时（`higgs service publish`）daemon 会对 active record 做授权检查：每个 endpoint 地址必须落在签发 Zone 自己的 active IPAM assignment 内，普通和 shared assignment 都可以授权（`AuthorizeSOCKS5Record`，复用 `routing.BuildAuthorizedRouteSet`，与 Babel 路由发布使用同一授权边界）。`active: false` 的撤销 record 跳过授权，保证服务地址失效后仍能撤销。
+发布时（`photon service publish`）daemon 会对 active record 做授权检查：每个 endpoint 地址必须落在签发 Zone 自己的 active IPAM assignment 内，普通和 shared assignment 都可以授权（`AuthorizeSOCKS5Record`，复用 `routing.BuildAuthorizedRouteSet`，与 Babel 路由发布使用同一授权边界）。`active: false` 的撤销 record 跳过授权，保证服务地址失效后仍能撤销。
 
 ### 2.4 Zone selector
 
@@ -124,14 +124,14 @@ higgs service --all --verbose    # 包含 withdrawn，并显示 record 元数据
 
 ## 3. 配置模型
 
-`higgs-services` 的全部输入是 `/etc/higgs/service.yaml`（可用 `-config` 覆盖）。完整示例见仓库根目录 [`service.example.yaml`](../../service.example.yaml)。一个同时发布本地 endpoint、CN Anycast 和 Asia Anycast 的配置：
+`photon-services` 的全部输入是 `/etc/photon/service.yaml`（可用 `-config` 覆盖）。完整示例见仓库根目录 [`service.example.yaml`](../../service.example.yaml)。一个同时发布本地 endpoint、CN Anycast 和 Asia Anycast 的配置：
 
 ```yaml
 version: 1
 
 network_defaults:
   # Docker direct-routing 的可信 host 侧 overlay/upstream 入接口。
-  trusted_host_interfaces: [hgv2mesh]
+  trusted_host_interfaces: [phv2mesh]
 
 networks:
   node:
@@ -155,20 +155,20 @@ socks5:
     mode: ipv4_first
     servers: [8.8.8.8, 1.1.1.1]
   http_auth:
-    username: higgs
+    username: photon
     password: 2a0d
   # allow_zones:
   #   - clients.catofes.
 ```
 
 - `network_defaults.trusted_host_interfaces`：可选的全局 Docker direct-routing 可信入接口，应用到每个 network；接口名以本机实际、稳定的 host 侧 XFRM/WireGuard/veth ingress 为准。在默认 `nat`/`routed` filtering 下，它让这些接口可直达已 publish 端口；它既不单独开放未 publish 端口，也不是 `nat-unprotected` 地址族的安全边界。
-- `networks`：容器实际连接的 Docker network。单个 network 也可配置 `trusted_host_interfaces`，配置后替换全局默认值；生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option。对列入 `socks5.publish` 的 network 及其 service address family，renderer 还自动设置 `com.docker.network.bridge.gateway_mode_ipv4/ipv6: nat-unprotected`，使 routed overlay 可以直达该 service IP 的动态 UDP relay port；访问边界由 Higgs endpoint ACL 负责。只连接但未 publish 的 network 不启用这一模式。
+- `networks`：容器实际连接的 Docker network。单个 network 也可配置 `trusted_host_interfaces`，配置后替换全局默认值；生成 Compose 时成为 Docker bridge 的 `com.docker.network.bridge.trusted_host_interfaces` driver option。对列入 `socks5.publish` 的 network 及其 service address family，renderer 还自动设置 `com.docker.network.bridge.gateway_mode_ipv4/ipv6: nat-unprotected`，使 routed overlay 可以直达该 service IP 的动态 UDP relay port；访问边界由 Photon endpoint ACL 负责。只连接但未 publish 的 network 不启用这一模式。
 - `socks5.networks`：每个已连接 network 的服务相对基址。
 - `publish`：`network: region` 映射，只发布列出的 network；本地和 Anycast endpoint 可以同时发布任意多个。为兼容旧配置，标量形式 `publish: main` 和顶层 `region` 仍可读取，新配置应使用映射形式。
 - `resolver`：可选的 GOST v3 内置 resolver 配置。`mode` 默认为 `ipv4_first`，还可设为 `ipv6_first`、`ipv4_only`、`ipv6_only`；`servers` 默认为 `8.8.8.8`、`1.1.1.1`。`*_first` 只是偏好，偏好地址族无结果时仍可返回另一地址族；`*_only` 才是严格过滤。
-- `http_auth`：HTTP proxy 的 Basic 认证；为兼容旧 `share/socks5` 模板，默认用户名/密码为 `higgs` / `2a0d`，可同时覆盖两项。SOCKS5 保持 NO AUTH。两项只配置其一会导致校验失败。
-- `allow_zones`：可选的 Zone selector 列表，见第 6 节。配置后分别为 SOCKS5 和 HTTP 地址安装 IP-scope ACL；未配置表示这两个地址不使用 Higgs endpoint ACL 限制。
-- `output_dir`：artifact 根目录，默认 `/etc/higgs/services`。
+- `http_auth`：HTTP proxy 的 Basic 认证；为兼容旧 `share/socks5` 模板，默认用户名/密码为 `photon` / `2a0d`，可同时覆盖两项。SOCKS5 保持 NO AUTH。两项只配置其一会导致校验失败。
+- `allow_zones`：可选的 Zone selector 列表，见第 6 节。配置后分别为 SOCKS5 和 HTTP 地址安装 IP-scope ACL；未配置表示这两个地址不使用 Photon endpoint ACL 限制。
+- `output_dir`：artifact 根目录，默认 `/etc/photon/services`。
 - `images`：通常省略。固定默认值为稳定版 `gogost/gost:3.2.6`，只有需要私有仓库或统一升级时才全局覆盖。
 - `port`：SOCKS5 端口，默认 3128。
 
@@ -184,7 +184,7 @@ IPv4 和 IPv6 使用相同格式：
 
 | 来源 | 含义 |
 |---|---|
-| `local` | 纯 host Docker 网络，不使用 Higgs IPAM；后三段必须写完整地址 |
+| `local` | 纯 host Docker 网络，不使用 Photon IPAM；后三段必须写完整地址 |
 | `auto` | 当前节点同地址族唯一的 active、非 shared assignment；数量不等于 1 时解析失败 |
 | `assignment:<CIDR>` | 明确选择当前节点的一个 active assignment |
 | `tag:<tag>` | 当前节点同地址族唯一的、带该 tag 的 active shared assignment；数量不等于 1 时解析失败 |
@@ -204,21 +204,21 @@ Docker 可以在动态池中自动分配未指定地址；两个服务容器使�
 
 ## 4. 地址解析与 artifact 生成
 
-`higgs-services` 通过执行 `higgs route ipam mine --json` 获取本机 `managed_zone` 和 active assignment 列表，然后按 manifest 做纯函数式解析，产出带 config hash 的 resolved 结构。面向管理员直接运行 `higgs route ipam mine` 时，默认输出表格。命令：
+`photon-services` 通过执行 `photon route ipam mine --json` 获取本机 `managed_zone` 和 active assignment 列表，然后按 manifest 做纯函数式解析，产出带 config hash 的 resolved 结构。面向管理员直接运行 `photon route ipam mine` 时，默认输出表格。命令：
 
 ```bash
-higgs-services validate   # 打印 resolved JSON，便于检查
-higgs-services render     # 生成全部 artifact
+photon-services validate   # 打印 resolved JSON，便于检查
+photon-services render     # 生成全部 artifact
 ```
 
-通用 flag：`-config`（默认 `/etc/higgs/service.yaml`）、`-higgs`（higgs CLI 路径）、`-output`（覆盖 `output_dir`）。
+通用 flag：`-config`（默认 `/etc/photon/service.yaml`）、`-photon`（photon CLI 路径）、`-output`（覆盖 `output_dir`）。
 
 生成文件：
 
 ```text
-/etc/higgs/services/
-  networks/docker-compose.yml     # 全部 Docker network，project higgs-networks
-  socks5/docker-compose.yml       # 两个 GOST v3 容器，project higgs-socks5
+/etc/photon/services/
+  networks/docker-compose.yml     # 全部 Docker network，project photon-networks
+  socks5/docker-compose.yml       # 两个 GOST v3 容器，project photon-socks5
   socks5/config/socks.yaml        # SOCKS5 TCP/UDP listener 与内置 resolver，0600
   socks5/config/h2.yaml           # HTTP listener、Basic 认证与内置 resolver，0600
   resolved.json                   # 整个 resolved manifest
@@ -226,7 +226,7 @@ higgs-services render     # 生成全部 artifact
   socks5/published.json           # publish 锁：上次实际发布状态
 ```
 
-- Docker network 名自动为 `higgs-<network>`；Compose project name 固定为 `higgs-networks` 和 `higgs-socks5`，无需也无法在 manifest 中配置。`higgs-networks` 内含一个连接全部 network、`scale: 0` 的 `owner` 服务，使纯网络项目可以通过标准 `docker compose up -d` 创建；它不会启动占位容器。
+- Docker network 名自动为 `photon-<network>`；Compose project name 固定为 `photon-networks` 和 `photon-socks5`，无需也无法在 manifest 中配置。`photon-networks` 内含一个连接全部 network、`scale: 0` 的 `owner` 服务，使纯网络项目可以通过标准 `docker compose up -d` 创建；它不会启动占位容器。
 - SOCKS5 Compose 引用 network 为 `external: true`，因此必须先起 networks project。
 - 从旧版三容器部署升级时，重新 render 会删除旧的 `smartdns.conf`；启动新版 Compose 必须使用 `--remove-orphans`（或先 `down`），以删除已经不在配置中的 `dns` 容器。旧 manifest 中若显式配置了 `images.smartdns`，也应删除该字段。
 - 服务 TCP 端口仍发布到 `127.0.0.1` / `[::1]` loopback，供 host 本地诊断；publish readiness 从 host 直接检查容器 endpoint IP，overlay 访问也不依赖 port publishing。
@@ -234,18 +234,18 @@ higgs-services render     # 生成全部 artifact
 - Docker bridge 的 driver option 不能原地更新。首次启用本功能或修改 `trusted_host_interfaces` 后，先停止依赖该 network 的服务，删除旧 Docker network，再重新执行 Compose 命令。
 - 所有文件原子写入（临时文件 + rename）。
 
-从旧 bridge 配置升级时，应先升级并重启 Higgs daemon/CLI 与 `higgs-services`，再按以下顺序重建。必须先停止服务容器，否则 Docker 不会删除仍在使用的 network：
+从旧 bridge 配置升级时，应先升级并重启 Photon daemon/CLI 与 `photon-services`，再按以下顺序重建。必须先停止服务容器，否则 Docker 不会删除仍在使用的 network：
 
 ```bash
-higgs-services render
-docker compose -f /etc/higgs/services/socks5/docker-compose.yml down
-docker compose -f /etc/higgs/services/networks/docker-compose.yml down
-docker compose -f /etc/higgs/services/networks/docker-compose.yml up -d
-docker compose -f /etc/higgs/services/socks5/docker-compose.yml up -d --remove-orphans
-higgs-services publish
+photon-services render
+docker compose -f /etc/photon/services/socks5/docker-compose.yml down
+docker compose -f /etc/photon/services/networks/docker-compose.yml down
+docker compose -f /etc/photon/services/networks/docker-compose.yml up -d
+docker compose -f /etc/photon/services/socks5/docker-compose.yml up -d --remove-orphans
+photon-services publish
 ```
 
-如果使用了自定义 `output_dir`，相应替换路径。若还有其他 Compose project 或手工容器连接 `higgs-*` network，先处理这些 attachment；不要强制删除仍承载其他工作负载的 network。
+如果使用了自定义 `output_dir`，相应替换路径。若还有其他 Compose project 或手工容器连接 `photon-*` network，先处理这些 attachment；不要强制删除仍承载其他工作负载的 network。
 
 ---
 
@@ -254,21 +254,21 @@ higgs-services publish
 ### 5.1 标准流程
 
 ```bash
-higgs-services validate
-higgs-services render
-docker compose -f /etc/higgs/services/networks/docker-compose.yml up -d
-docker compose -f /etc/higgs/services/socks5/docker-compose.yml up -d --remove-orphans
-higgs-services publish
+photon-services validate
+photon-services render
+docker compose -f /etc/photon/services/networks/docker-compose.yml up -d
+docker compose -f /etc/photon/services/socks5/docker-compose.yml up -d --remove-orphans
+photon-services publish
 ```
 
 ### 5.2 publish 内部步骤
 
-`publish` 先重新执行 `higgs route ipam mine --json` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
+`publish` 先重新执行 `photon route ipam mine --json` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
 
 1. 从本机分别对每个 endpoint 的 SOCKS5 和 HTTP 地址、TCP 端口做 3 秒就绪检查；任一失败即终止。该检查不执行 UDP ASSOCIATE。
-2. 为每个 endpoint 安装或清理两条独立 ACL：配置了 `allow_zones` 时，分别执行 `higgs firewall endpoint apply socks5-<network> --destination <socks-ip> --scope ip --allow-zone ...` 和 `higgs firewall endpoint apply h2-<network> --destination <http-ip> --scope ip --allow-zone ...`；未配置时删除两条旧 ACL（表示不使用这套限制）。
-3. 对 shared endpoint 执行 `higgs route announce <zone> <assignment>`，宣告整个 assignment prefix；非 shared endpoint 的路由由 `ipam.announce` 或管理员负责，`higgs-services` 不碰。
-4. 用一条 `higgs service publish --endpoint region,address,port...` 发布所有 endpoints（daemon 侧做第 2.3 节的授权检查并签名入 gossip）。
+2. 为每个 endpoint 安装或清理两条独立 ACL：配置了 `allow_zones` 时，分别执行 `photon firewall endpoint apply socks5-<network> --destination <socks-ip> --scope ip --allow-zone ...` 和 `photon firewall endpoint apply h2-<network> --destination <http-ip> --scope ip --allow-zone ...`；未配置时删除两条旧 ACL（表示不使用这套限制）。
+3. 对 shared endpoint 执行 `photon route announce <zone> <assignment>`，宣告整个 assignment prefix；非 shared endpoint 的路由由 `ipam.announce` 或管理员负责，`photon-services` 不碰。
+4. 用一条 `photon service publish --endpoint region,address,port...` 发布所有 endpoints（daemon 侧做第 2.3 节的授权检查并签名入 gossip）。
 5. 对照 `published.json` 清理上一版不再使用的 route 和 ACL，写入新的 `published.json`。
 
 endpoint ACL 名分别为 `socks5-<network>` 和 `h2-<network>`；受防火墙对象命名限制，较长的 `socks5-` 名总长不能超过 63 字符，manifest 解析时即报错。
@@ -276,10 +276,10 @@ endpoint ACL 名分别为 `socks5-<network>` 和 `h2-<network>`；受防火墙�
 ### 5.3 withdraw
 
 ```bash
-higgs-services withdraw
+photon-services withdraw
 ```
 
-按 `published.json`（不存在时回退 `resolved.json`）记录的上次发布状态执行：先 `higgs service withdraw` 写入 `active: false` 的 service record，再逐个撤销 shared endpoint 的 route（`higgs route withdraw`）并删除全部 endpoint ACL，最后清空 `published.json` 的 endpoints。容器本身仍由管理员用 `docker compose down` 停止。
+按 `published.json`（不存在时回退 `resolved.json`）记录的上次发布状态执行：先 `photon service withdraw` 写入 `active: false` 的 service record，再逐个撤销 shared endpoint 的 route（`photon route withdraw`）并删除全部 endpoint ACL，最后清空 `published.json` 的 endpoints。容器本身仍由管理员用 `docker compose down` 停止。
 
 ### 5.4 为什么宣告 assignment 而不是 `/128`
 
@@ -298,7 +298,7 @@ higgs-services withdraw
 | assignment 类型 | 路由由谁管 |
 |---|---|
 | 普通非 shared | 通常写入 `ipam.announce: [non-shared]`，由 daemon 持续宣告；服务停止不应撤销它，因为前缀可能同时承载节点地址 |
-| 服务 Anycast（如 `tag:socks5.cn`） | 不写入 `ipam.announce`，由 `higgs-services publish/withdraw` 随服务状态宣告和撤销 |
+| 服务 Anycast（如 `tag:socks5.cn`） | 不写入 `ipam.announce`，由 `photon-services publish/withdraw` 随服务状态宣告和撤销 |
 | 长期边缘 Anycast（如 `tag:edge.c`） | 可显式写入 `ipam.announce: [tag:edge.c]`，由 daemon 持续宣告 |
 
 ---
@@ -308,20 +308,20 @@ higgs-services withdraw
 `allow_zones` 不进入公开 service record，而是落实为本机 host firewall 的 forward 规则。链路：
 
 ```text
-higgs-services publish
-  → higgs firewall endpoint apply socks5-<network> ... --scope ip --allow-zone <selector>
-  → higgs firewall endpoint apply h2-<network> ... --scope ip --allow-zone <selector>
+photon-services publish
+  → photon firewall endpoint apply socks5-<network> ... --scope ip --allow-zone <selector>
+  → photon firewall endpoint apply h2-<network> ... --scope ip --allow-zone <selector>
   → daemon 校验并持久化到本机状态文件（EndpointACLs）
   → firewall reconcile 时 resolveEndpointServices() 重新解析 selector
   → host 实例 forward 链生成 per-endpoint allow + 精确 drop
 ```
 
-daemon 侧约束（`app/higgs/endpoint_acl.go`）：
+daemon 侧约束（`app/photon/endpoint_acl.go`）：
 
 - 必须存在启用的 host firewall instance，且 `mode: managed`、backend 可解析为 nftables 或 iptables；否则 apply 直接报错。`external` 模式的实例不参与 endpoint ACL enforcement。
 - ACL destination 必须属于当前 managed Zone 的 active assignment（普通和 shared 均可）。
 - selector 至少一个；对不需要限制的 endpoint 应删除整条 ACL，而不是放空 selector。
-- `scope: port` 要求 `protocol` 和 `port`，并兼容 scope 字段不存在的旧状态；`scope: ip` 禁止携带这两个字段。`higgs-services` 生成的两条服务 ACL 使用 IP scope，因为 SOCKS5 UDP relay port 是动态的，并且 HTTP 使用独立地址。
+- `scope: port` 要求 `protocol` 和 `port`，并兼容 scope 字段不存在的旧状态；`scope: ip` 禁止携带这两个字段。`photon-services` 生成的两条服务 ACL 使用 IP scope，因为 SOCKS5 UDP relay port 是动态的，并且 HTTP 使用独立地址。
 
 reconcile 时，daemon 用 `AuthorizedRouteSet.Announced` 把每个 selector 匹配 Zone 当前 active、已授权的 **overlay route prefix**（不是 IPsec underlay announce IP）解析为来源集合，按地址族过滤后生成规则。每个 endpoint 先生成来源 allow，再生成相同 scope 的精确 drop；IP scope 只匹配 destination，覆盖该 IP 的全部 TCP/UDP 端口。selector 暂时匹配不到有效前缀时仍保留 drop，**不会退化为开放**（fail-closed）。route announcement、IPAM assignment、Zone revoke 或 announce IP 变化都会触发重新解析。规则形状见 [firewall.md](firewall.md) 第 4.4 节。
 
@@ -337,7 +337,7 @@ Phase 8 的端到端验收入口是显式 root smoke，不在 `root-smoke` 或 `
 sudo make services-smoke
 ```
 
-它先跑 `app/higgs-services` 单元测试，再以真实 Docker bridge（`nat-unprotected`）、未 publish 的 SOCKS5 容器端口、IP-scope host ACL、目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、两端 BIRD/Babel 验证端到端代理数据面（包括实际完成一次 SOCKS5 代理 TCP 请求、Docker connected route 优先于更宽聚合路由的断言），并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker 28+、`ip`、`bird`/`birdc` 和 `nft`；创建的 netns、Docker network 和容器在测试结束时清理。详见 [testing.md](testing.md)。
+它先跑 `app/photon-services` 单元测试，再以真实 Docker bridge（`nat-unprotected`）、未 publish 的 SOCKS5 容器端口、IP-scope host ACL、目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、两端 BIRD/Babel 验证端到端代理数据面（包括实际完成一次 SOCKS5 代理 TCP 请求、Docker connected route 优先于更宽聚合路由的断言），并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker 28+、`ip`、`bird`/`birdc` 和 `nft`；创建的 netns、Docker network 和容器在测试结束时清理。详见 [testing.md](testing.md)。
 
 常见问题：
 
@@ -345,9 +345,9 @@ sudo make services-smoke
 |---|---|
 | `publish` 报 “runtime assignment or config changed; run render again” | assignment 或 manifest 在 render 后发生变化，重新 `render` 再 `publish` |
 | TCP readiness 失败 | 容器未启动或角色地址冲突；确认先 `docker compose up -d`，且基址避开动态池与 gateway |
-| `auto` / `tag:` 解析失败 | `higgs route ipam mine` 中同族 assignment 数量不等于 1，或 assignment 已失效 |
-| endpoint ACL apply 报错 | host firewall instance 未启用或不是 `managed` 模式，或 backend 不可用；`higgs firewall endpoint list` 查看现状 |
-| 服务已发布但 mesh 内不可达 | Docker 是否为 28+，服务地址族是否为 `nat-unprotected`，shared 路由是否已 announce（`higgs debug routing routes` 方向）、host 聚合路由与 Docker connected route 的优先级、回程 static upstream |
+| `auto` / `tag:` 解析失败 | `photon route ipam mine` 中同族 assignment 数量不等于 1，或 assignment 已失效 |
+| endpoint ACL apply 报错 | host firewall instance 未启用或不是 `managed` 模式，或 backend 不可用；`photon firewall endpoint list` 查看现状 |
+| 服务已发布但 mesh 内不可达 | Docker 是否为 28+，服务地址族是否为 `nat-unprotected`，shared 路由是否已 announce（`photon debug routing routes` 方向）、host 聚合路由与 Docker connected route 的优先级、回程 static upstream |
 | 修改 bridge driver option 后不生效 | Docker bridge driver option 不能原地更新；停止服务、删除旧 network 后重新 `up` |
 
 ---

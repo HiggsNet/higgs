@@ -5,15 +5,15 @@
 #   docs/scripts/perf-cpu-check.sh [PID|PROCESS] [SECONDS] [OUTPUT_DIR]
 #
 # Examples:
-#   docs/scripts/perf-cpu-check.sh higgsnet 60
-#   docs/scripts/perf-cpu-check.sh 1234 120 /tmp/higgsnet-perf-1234
+#   docs/scripts/perf-cpu-check.sh photon 60
+#   docs/scripts/perf-cpu-check.sh 1234 120 /tmp/photon-perf-1234
 #
 # Set CALL_GRAPH=fp to lower profiling overhead.  The default DWARF unwind is
 # more reliable for Go stacks, at the cost of a small amount of overhead.
 
 set -euo pipefail
 
-target="${1:-higgsnet}"
+target="${1:-photon}"
 seconds="${2:-60}"
 output_dir="${3:-./perf-$(date +%Y%m%d-%H%M%S)}"
 call_graph="${CALL_GRAPH:-dwarf,16384}"
@@ -114,6 +114,6 @@ Done.  Read these first:
 Interactive drill-down:
   sudo perf report --input $output_dir/perf.data
 
-If Higgs frames are still shown as raw addresses, profile a binary built
+If Photon frames are still shown as raw addresses, profile a binary built
 without '-ldflags -s -w' (the release/Nix package is stripped), then rerun.
 EOF

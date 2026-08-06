@@ -4,8 +4,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 func ZoneDigests(ns *zone.NetworkState) []ZoneDigest {
@@ -36,7 +36,7 @@ func ZoneRoot(zs *zone.ZoneState) []byte {
 		return nil
 	}
 	parts := make([][]byte, 0, 1+len(zs.Delegations)+len(zs.Revocations)+len(zs.Records))
-	parts = append(parts, higgscrypto.AuthorityHash(zs.Authority))
+	parts = append(parts, photoncrypto.AuthorityHash(zs.Authority))
 
 	delegationZones := make([]string, 0, len(zs.Delegations))
 	for path := range zs.Delegations {
@@ -48,7 +48,7 @@ func ZoneRoot(zs *zone.ZoneState) []byte {
 		if delegation == nil {
 			continue
 		}
-		parts = append(parts, higgscrypto.Hash(
+		parts = append(parts, photoncrypto.Hash(
 			[]byte("delegation"),
 			[]byte(path),
 			delegation.AuthorityHash,
@@ -66,7 +66,7 @@ func ZoneRoot(zs *zone.ZoneState) []byte {
 		if revocation == nil {
 			continue
 		}
-		parts = append(parts, higgscrypto.Hash(
+		parts = append(parts, photoncrypto.Hash(
 			[]byte("revocation"),
 			[]byte(path),
 			revocation.RevokedAuthorityHash,
@@ -84,11 +84,11 @@ func ZoneRoot(zs *zone.ZoneState) []byte {
 		if record == nil {
 			continue
 		}
-		parts = append(parts, higgscrypto.Hash(
+		parts = append(parts, photoncrypto.Hash(
 			[]byte("record"),
 			[]byte(key),
-			higgscrypto.RecordHash(record),
+			photoncrypto.RecordHash(record),
 		))
 	}
-	return higgscrypto.Hash(parts...)
+	return photoncrypto.Hash(parts...)
 }

@@ -283,7 +283,7 @@ func (f *fakeCommandRunner) runIPTables(binary string, args []string) ([]byte, e
 func TestNFTDriver_Preflight(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &NFTDriver{Command: runner.run}
-	pf, err := d.Preflight(context.Background(), FirewallInstanceSpec{ID: "higgstesth2"})
+	pf, err := d.Preflight(context.Background(), FirewallInstanceSpec{ID: "photontesth2"})
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
@@ -296,9 +296,9 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &NFTDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
-		OwnerPrefix: "higgs",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
+		OwnerPrefix: "photon",
 	}
 	input := FirewallPolicyInput{
 		MeshAuthorized: []netip.Prefix{mustPrefix(t, "10.42.0.0/24")},
@@ -308,7 +308,7 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
 	// Empty observed state -> all objects are create.
-	plan := PlanDiff("higgstesth2", desired, FirewallObservedState{})
+	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
 	result, err := d.Apply(context.Background(), plan, desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -320,7 +320,7 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 		t.Fatalf("commands = %v, want one atomic nft transaction", runner.commands)
 	}
 	batch := commandText(runner.commands[0])
-	if !strings.Contains(batch, "add table inet higgs_higgstesth2") {
+	if !strings.Contains(batch, "add table inet photon_photontesth2") {
 		t.Errorf("expected table creation in nft batch:\n%s", batch)
 	}
 	for _, want := range []string{
@@ -336,7 +336,7 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 
 func TestNFTDriver_ExternalDoesNotApply(t *testing.T) {
 	runner := &fakeCommandRunner{}
-	desired, err := BuildDesiredState(FirewallInstanceSpec{ID: "external", NetNS: "h2", Mode: ModeExternal}, FirewallPolicyInput{})
+	desired, err := BuildDesiredState(FirewallInstanceSpec{ID: "external", NetNS: "photon", Mode: ModeExternal}, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	d := &NFTDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
-		OwnerPrefix:   "higgs",
+		OwnerPrefix:   "photon",
 		HostPorts:     HostPortConfig{IKE: true, NATT: true},
 		RedirectGrace: RedirectGrace{Enabled: true},
 	}
@@ -384,7 +384,7 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 		if strings.Contains(argsStr, "prerouting") && strings.Contains(argsStr, "nat") {
 			foundNatChain = true
 		}
-		if strings.Contains(argsStr, "higgs_host_input") && strings.Contains(argsStr, "hook input") {
+		if strings.Contains(argsStr, "photon_host_input") && strings.Contains(argsStr, "hook input") {
 			foundInputChain = true
 		}
 	}
@@ -431,7 +431,7 @@ func TestNFTDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	d := &NFTDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
-		OwnerPrefix:   "higgs",
+		OwnerPrefix:   "photon",
 		HostPorts:     HostPortConfig{IKE: true, NATT: true},
 		RedirectGrace: RedirectGrace{Enabled: true},
 	}
@@ -470,7 +470,7 @@ func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
 	d := &NFTDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
 		ID: "host-ipsec", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
-		OwnerPrefix: "higgs",
+		OwnerPrefix: "photon",
 		HostPorts:   HostPortConfig{IKE: true, NATT: true},
 	}
 	desired, err := BuildDesiredState(spec, FirewallPolicyInput{})
@@ -478,8 +478,8 @@ func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
 	plan := PlanDiff("host-ipsec", desired, FirewallObservedState{Objects: []FirewallObjectRef{
-		{Kind: "table", Family: "inet", Name: "higgs_host"},
-		{Kind: "chain", Family: "inet", Name: "higgs_host_input"},
+		{Kind: "table", Family: "inet", Name: "photon_host"},
+		{Kind: "chain", Family: "inet", Name: "photon_host_input"},
 	}})
 	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -488,10 +488,10 @@ func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
 		t.Fatalf("commands = %v, want one atomic nft transaction", runner.commands)
 	}
 	batch := runner.commands[0].input
-	if !strings.HasPrefix(batch, "delete table inet higgs_host\n") {
+	if !strings.HasPrefix(batch, "delete table inet photon_host\n") {
 		t.Fatalf("batch = %q, want table delete first", batch)
 	}
-	if !strings.Contains(batch, "add table inet higgs_host\n") {
+	if !strings.Contains(batch, "add table inet photon_host\n") {
 		t.Fatalf("missing table rebuild in transaction:\n%s", batch)
 	}
 }
@@ -500,8 +500,8 @@ func TestNFTDriver_ApplyTransactionFailureReportsNoAppliedCommands(t *testing.T)
 	runner := &fakeCommandRunner{nftBatchErr: errors.New("syntax error")}
 	d := &NFTDriver{Command: runner.run}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "higgstesth2", NetNS: "higgstesth2", Enabled: true, Mode: ModeManaged,
-		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "hgs*",
+		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
 	}, FirewallPolicyInput{})
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
@@ -520,12 +520,12 @@ func TestNFTDriver_ApplyTransactionFailureReportsNoAppliedCommands(t *testing.T)
 
 func TestNFTDriver_ListOwned(t *testing.T) {
 	// Simulate nft list table output.
-	output := `table inet higgs_higgstesth2 {
-	chain higgs_higgstesth2_input { type filter hook input priority 0; policy accept; }
-	chain higgs_higgstesth2_forward { type filter hook forward priority 0; policy accept; }
-	set higgs_higgstesth2_mesh_v4 { type ipv4_addr; }
+	output := `table inet photon_photontesth2 {
+	chain photon_photontesth2_input { type filter hook input priority 0; policy accept; }
+	chain photon_photontesth2_forward { type filter hook forward priority 0; policy accept; }
+	set photon_photontesth2_mesh_v4 { type ipv4_addr; }
 }`
-	state := parseNFTListOutput(output, "higgs_higgstesth2")
+	state := parseNFTListOutput(output, "photon_photontesth2")
 	if len(state.Objects) == 0 {
 		t.Fatal("expected owned objects")
 	}
@@ -555,7 +555,7 @@ func TestNFTDriver_ListOwned(t *testing.T) {
 
 func TestNFTDriver_NetNSExecution(t *testing.T) {
 	runner := &fakeCommandRunner{}
-	d := &NFTDriver{Command: runner.run, NetNS: "higgstesth2"}
+	d := &NFTDriver{Command: runner.run, NetNS: "photontesth2"}
 	_, _ = d.run(context.Background(), "list", "tables")
 	if len(runner.commands) == 0 {
 		t.Fatal("expected command execution")
@@ -564,8 +564,8 @@ func TestNFTDriver_NetNSExecution(t *testing.T) {
 	if cmd.name != "ip" {
 		t.Errorf("expected ip command for netns exec, got %s", cmd.name)
 	}
-	if len(cmd.args) < 4 || cmd.args[0] != "netns" || cmd.args[1] != "exec" || cmd.args[2] != "higgstesth2" {
-		t.Errorf("expected ip netns exec higgstesth2 nft, got %v", cmd.args)
+	if len(cmd.args) < 4 || cmd.args[0] != "netns" || cmd.args[1] != "exec" || cmd.args[2] != "photontesth2" {
+		t.Errorf("expected ip netns exec photontesth2 nft, got %v", cmd.args)
 	}
 }
 
@@ -573,8 +573,8 @@ func TestNFTDriver_DeleteStale(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &NFTDriver{Command: runner.run}
 	refs := []FirewallObjectRef{
-		{Kind: "chain", Family: "inet", Name: "higgs_higgstesth2_stale"},
-		{Kind: "table", Family: "inet", Name: "higgs_old"},
+		{Kind: "chain", Family: "inet", Name: "photon_photontesth2_stale"},
+		{Kind: "table", Family: "inet", Name: "photon_old"},
 	}
 	if err := d.DeleteStale(context.Background(), refs); err != nil {
 		t.Fatalf("DeleteStale: %v", err)
@@ -612,13 +612,13 @@ func TestRenderNFTRuleCtState(t *testing.T) {
 
 func TestRenderNFTRuleInterfaceSets(t *testing.T) {
 	rendered := renderNFTRule(Rule{
-		IfaceIn:   "hgs*",
-		IfaceOut:  "hgs*",
+		IfaceIn:   "phx*",
+		IfaceOut:  "phx*",
 		Action:    ActionAccept,
-		IfacesIn:  []string{"hgs11111111", "hgs22222222"},
-		IfacesOut: []string{"hgs11111111", "hgs22222222"},
+		IfacesIn:  []string{"phx11111111", "phx22222222"},
+		IfacesOut: []string{"phx11111111", "phx22222222"},
 	})
-	want := `iifname { hgs11111111, hgs22222222 } oifname { hgs11111111, hgs22222222 } accept`
+	want := `iifname { phx11111111, phx22222222 } oifname { phx11111111, phx22222222 } accept`
 	if rendered != want {
 		t.Fatalf("interface sets rendered as %q, want %q", rendered, want)
 	}
@@ -628,7 +628,7 @@ func TestNFTDriverInlineHooksAreRenderedInPlannerOrder(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	driver := &NFTDriver{Command: runner.run}
 	desired, err := BuildDesiredState(FirewallInstanceSpec{
-		ID: "h2", NetNS: "h2", Mode: ModeManaged, Backend: BackendNFT, OwnerPrefix: "higgs",
+		ID: "photon", NetNS: "photon", Mode: ModeManaged, Backend: BackendNFT, OwnerPrefix: "photon",
 		NativeHooks: NativeHooks{NFT: InlineHookRules{
 			PreInput:  []string{`tcp dport 2222 accept comment "native-pre"`},
 			PostInput: []string{`counter comment "native-post"`},
@@ -637,7 +637,7 @@ func TestNFTDriverInlineHooksAreRenderedInPlannerOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := driver.Apply(context.Background(), PlanDiff("h2", desired, FirewallObservedState{}), desired); err != nil {
+	if _, err := driver.Apply(context.Background(), PlanDiff("photon", desired, FirewallObservedState{}), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	var batch string

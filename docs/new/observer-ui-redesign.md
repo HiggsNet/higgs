@@ -202,7 +202,7 @@ internal/observer/web/
 | 9.2 模块化 | app.js 拆分为 ES modules；store + 局部失效；删除 foldState 补丁 | 单文件 < ~200 行；SSE 事件只重取受影响键；重绘不丢滚动/折叠/输入 |
 | 9.3 页面重构 | 第 6 节逐页落地 | 每页首要问题明确；Raw JSON 全入折叠区；列表页可过滤；选中态可深链 |
 | 9.4 事件链路（可选） | 事件 payload；Events 页 | payload 到达前端并触发条目级刷新 |
-| 9.5 收口 | 测试与文档 | `internal/observer` 与 `app/higgs` observer 族测试全绿；observer.md 第 6/9 节同步 |
+| 9.5 收口 | 测试与文档 | `internal/observer` 与 `app/photon` observer 族测试全绿；observer.md 第 6/9 节同步 |
 
 阶段 9.1–9.3 是本设计的主体，按顺序实施；9.4 与 9.5 独立收尾。
 
@@ -210,4 +210,4 @@ internal/observer/web/
 
 - **Go 侧**：`internal/observer` 现有测试族保持绿色；`webapp_test.go` 按 token 断言的用例（esc token、foldState token）随重构改写为对新模块关键导出与 `esc()` 覆盖的断言；`static_test.go` 覆盖新增子目录文件的 embed 与 Content-Type。
 - **JS 侧**：维持零构建原则，不引入 JS 测试框架；以 Go embed 测试 + 手工浏览器验证为准。重构完成后在真实 daemon 上逐页走查第 6 节的验收点。
-- **回归基线**：重构前后各 REST 端点响应不变（9.4 除外），`app/higgs/observer_api_*_test.go` 不应需要修改；若必须修改则说明改动越界，需回头审查。
+- **回归基线**：重构前后各 REST 端点响应不变（9.4 除外），`app/photon/observer_api_*_test.go` 不应需要修改；若必须修改则说明改动越界，需回头审查。

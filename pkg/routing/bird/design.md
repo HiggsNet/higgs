@@ -2,13 +2,13 @@
 
 > Scope: `pkg/routing/bird/`
 >
-> Goal: define the public Go API and BIRD configuration model for the Higgs
+> Goal: define the public Go API and BIRD configuration model for the Photon
 > BIRD/Babel routing adapter. This file is a design document only — no
 > implementation files are produced here.
 
 ## Package overview
 
-`package bird` implements the Higgs routing adapter for the BIRD routing
+`package bird` implements the Photon routing adapter for the BIRD routing
 daemon running the Babel protocol. It is split into three concerns:
 
 1. **Configuration generation** — turn a `BirdInstanceSpec` and authorized
@@ -20,11 +20,11 @@ daemon running the Babel protocol. It is split into three concerns:
    correct network namespace.
 
 The package intentionally keeps a thin, testable API surface. Higher-level
-reconcilers in Higgs own the lifecycle timing and policy decisions.
+reconcilers in Photon own the lifecycle timing and policy decisions.
 
 ## Dependencies
 
-The API uses only standard-library networking and Higgs core packages:
+The API uses only standard-library networking and Photon core packages:
 
 ```go
 import (
@@ -32,8 +32,8 @@ import (
     "net/netip"
     "time"
 
-    "github.com/Catofes/higgs/pkg/core/zone"
-    higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+    "github.com/Catofes/photon/pkg/core/zone"
+    photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 ```
 
@@ -45,16 +45,16 @@ import (
 ### `BirdMode`
 
 ```go
-// BirdMode controls how Higgs relates to the BIRD daemon for one overlay.
+// BirdMode controls how Photon relates to the BIRD daemon for one overlay.
 type BirdMode string
 
 const (
-    // BirdModeManaged means Higgs creates the netns, generates the config,
+    // BirdModeManaged means Photon creates the netns, generates the config,
     // starts the BIRD process, and performs crash recovery.
     BirdModeManaged BirdMode = "managed"
 
     // BirdModeExternal means an external operator owns the BIRD process.
-    // Higgs only connects via the control socket to configure and observe.
+    // Photon only connects via the control socket to configure and observe.
     BirdModeExternal BirdMode = "external"
 
     // BirdModeDisabled disables routing for the overlay. No config is
@@ -102,7 +102,7 @@ type BirdInstanceSpec struct {
     // dotted-quad in bird.conf. Use StableRouterID to derive it.
     RouterID uint32 `yaml:"router_id" json:"router_id"`
 
-    // OverlayID identifies the Higgs overlay this instance serves.
+    // OverlayID identifies the Photon overlay this instance serves.
     OverlayID string `yaml:"overlay_id" json:"overlay_id"`
 
     // NetNS is the network namespace where the BIRD daemon must run.
@@ -127,7 +127,7 @@ type BirdInstanceSpec struct {
     MetricStaged    uint `yaml:"metric_staged" json:"metric_staged"`
     MetricDraining  uint `yaml:"metric_draining" json:"metric_draining"`
 
-    // InterfacePattern is the BIRD interface glob, e.g. "hgs*".
+    // InterfacePattern is the BIRD interface glob, e.g. "phx*".
     InterfacePattern string `yaml:"interface_pattern" json:"interface_pattern"`
 
     // Mode selects managed / external / disabled behavior.
@@ -352,7 +352,7 @@ type ProcessManager interface {
     // table, and control socket), Start adopts it instead of spawning a new one.
     Start(ctx context.Context, spec BirdInstanceSpec) error
 
-    // Stop gracefully stops the BIRD process and removes Higgs-owned
+    // Stop gracefully stops the BIRD process and removes Photon-owned
     // pid/control-socket/config files when ownership checks pass.
     Stop(ctx context.Context, spec BirdInstanceSpec) error
 
@@ -380,15 +380,15 @@ func RenderFilter(
 Typical usage:
 
 ```go
-importFilter := RenderFilter("higgs_import", importSet, spec.BogonPrefixes)
-exportFilter := RenderFilter("higgs_export", exportSet, spec.BogonPrefixes)
+importFilter := RenderFilter("photon_import", importSet, spec.BogonPrefixes)
+exportFilter := RenderFilter("photon_export", exportSet, spec.BogonPrefixes)
 ```
 
 The returned text includes the surrounding `filter <name> { ... }` block.
 Example body for an import filter:
 
 ```bird
-filter higgs_import_100 {
+filter photon_import_100 {
     if net ~ [ 0.0.0.0/0, ::/0 ] then reject;
     if net ~ [ 10.0.0.0/8{18,28}, 2001:db8::/32{48,96} ] then accept;
     reject;
@@ -412,7 +412,7 @@ Implementation sketch (do not commit as production code):
 
 ```go
 func StableRouterID(localZone zone.ZonePath, rootTrust []byte, overlayID string) uint32 {
-    digest := higgscrypto.Hash(
+    digest := photoncrypto.Hash(
         []byte(localZone),
         rootTrust,
         []byte(overlayID),
@@ -425,43 +425,43 @@ func StableRouterID(localZone zone.ZonePath, rootTrust []byte, overlayID string)
 }
 ```
 
-The router id is persisted by the caller (e.g. in Higgs state DB) so it does
+The router id is persisted by the caller (e.g. in Photon state DB) so it does
 not change across restarts. Do **not** enable BIRD's `randomize router id`;
-Higgs guarantees stability.
+Photon guarantees stability.
 
 ## Example BIRD config snippets
 
 ### Minimal managed overlay config
 
 ```bird
-# Higgs-generated BIRD config for overlay ipsec-main
+# Photon-generated BIRD config for overlay ipsec-main
 # Do not edit manually.
 
 log syslog all;
 router id 1.2.3.4;
 # Control socket path is set on the bird command line with -s.
 # The optional extra socket inside the config uses the 'cli' directive:
-# cli "/run/higgs/bird-ipsec-main.ctl";
+# cli "/run/photon/bird-ipsec-main.ctl";
 
 protocol device {
     scan time 5;
 }
 
-ipv4 table higgs_ipsec_main;
-ipv6 table higgs_ipsec_main;
+ipv4 table photon_ipsec_main;
+ipv6 table photon_ipsec_main;
 
-protocol kernel higgs_kern_ipsec_main {
-    ipv4 { table higgs_ipsec_main; export all; };
-    ipv6 { table higgs_ipsec_main; export all; };
+protocol kernel photon_kern_ipsec_main {
+    ipv4 { table photon_ipsec_main; export all; };
+    ipv6 { table photon_ipsec_main; export all; };
 }
 ```
 
 ### Kernel sync for a non-main table
 
 ```bird
-protocol kernel higgs_kern_100 {
-    ipv4 { table higgs_100; export all; };
-    ipv6 { table higgs_100; export all; };
+protocol kernel photon_kern_100 {
+    ipv4 { table photon_100; export all; };
+    ipv6 { table photon_100; export all; };
     kernel table 100;
 }
 ```
@@ -469,21 +469,21 @@ protocol kernel higgs_kern_100 {
 ### Babel protocol block
 
 ```bird
-protocol babel higgs_babel_ipsec_main {
+protocol babel photon_babel_ipsec_main {
     ipv4 {
-        table higgs_ipsec_main;
-        import filter higgs_import_ipsec_main;
-        export filter higgs_export_ipsec_main;
+        table photon_ipsec_main;
+        import filter photon_import_ipsec_main;
+        export filter photon_export_ipsec_main;
     };
     ipv6 {
-        table higgs_ipsec_main;
-        import filter higgs_import_ipsec_main;
-        export filter higgs_export_ipsec_main;
+        table photon_ipsec_main;
+        import filter photon_import_ipsec_main;
+        export filter photon_export_ipsec_main;
     };
 
     ecmp on limit 16;
 
-    interface "hgs*" {
+    interface "phx*" {
         type tunnel;
         rxcost 96;
         hello interval 4 s;
@@ -495,13 +495,13 @@ protocol babel higgs_babel_ipsec_main {
 ### Import/export filters
 
 ```bird
-filter higgs_import_ipsec_main {
+filter photon_import_ipsec_main {
     if net ~ [ 0.0.0.0/0, ::/0 ] then reject;
     if net ~ [ 10.0.0.0/8{18,28}, 2001:db8::/32{48,96} ] then accept;
     reject;
 }
 
-filter higgs_export_ipsec_main {
+filter photon_export_ipsec_main {
     if source ~ [ RTS_STATIC, RTS_INHERIT ] then accept;
     reject;
 }
@@ -515,7 +515,7 @@ filter higgs_export_ipsec_main {
 - In `managed` mode, the process manager must run BIRD inside the target
   netns, e.g. `ip netns exec <ns> bird -c <conf> -s <ctl> -P <pid>`.
 - The control socket is a filesystem object; the client can connect from
-  Higgs' netns as long as the socket path is reachable. BIRD's replies
+  Photon' netns as long as the socket path is reachable. BIRD's replies
   reflect BIRD's own netns.
 - Filter changes are applied with `configure soft` followed by
   `reload in <proto>` / `reload out <proto>`. Structural changes (table
@@ -525,4 +525,4 @@ filter higgs_export_ipsec_main {
   `show protocols all`, `show route all`, `show interfaces`) and parse each
   independently so a parse failure in one area does not discard all data.
 - All generated config files should carry a header comment identifying them
-  as Higgs-generated and warn against manual edits.
+  as Photon-generated and warn against manual edits.

@@ -2,7 +2,7 @@ package ipsec
 
 import (
 	"context"
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 	"testing"
 	"time"
 )
@@ -619,7 +619,7 @@ func TestReconcileRecoversRotatedRuntimeMetadataFromSA(t *testing.T) {
 		Provider:      ProviderStrongSwan,
 		LinkID:        "link-stable",
 		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
-		InterfaceName: "hgs-old",
+		InterfaceName: "phx-old",
 		XFRMIfID:      1001,
 		Generation:    2,
 		ContactPoints: []ContactPoint{{
@@ -670,7 +670,7 @@ func TestReconcileUpdatesWhenEstablishedSAEndpointPortIsStale(t *testing.T) {
 		Provider:      ProviderStrongSwan,
 		LinkID:        "link-stable",
 		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      1001,
 		Generation:    1,
 		ContactPoints: []ContactPoint{{
@@ -717,7 +717,7 @@ func TestReconcileDoesNotAdoptEstablishedSAWithWrongRemoteIdentity(t *testing.T)
 		Provider:      ProviderStrongSwan,
 		LinkID:        "link-stable",
 		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      1001,
 		Generation:    1,
 		ContactPoints: []ContactPoint{{
@@ -762,7 +762,7 @@ func TestReconcileUpdatesWhenEstablishedSAIdentityIsStale(t *testing.T) {
 		Provider:      ProviderStrongSwan,
 		LinkID:        "link-stable",
 		TransportID:   RuntimeConnectionID("link-stable", 0, ProviderStrongSwan),
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      1001,
 		Generation:    1,
 		ContactPoints: []ContactPoint{{

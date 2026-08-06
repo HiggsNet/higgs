@@ -7,18 +7,18 @@
 
 ## 结论先行
 
-**Higgs Phase 5 默认采用 BIRD 跑 Babel protocol。**
+**Photon Phase 5 默认采用 BIRD 跑 Babel protocol。**
 
-相比 babeld，BIRD 在 Higgs 场景下有几个显著优势：
+相比 babeld，BIRD 在 Photon 场景下有几个显著优势：
 
-- ✅ **interface pattern 自动发现**：配置 `interface "hgs*" { ... }` 后，只要 Higgs 创建/删除以 `hgs` 开头的 XFRM 接口，BIRD 会自动开始/停止在该接口上跑 Babel，不需要 Higgs 逐条发送 `interface`/`flush interface` 命令。
+- ✅ **interface pattern 自动发现**：配置 `interface "phx*" { ... }` 后，只要 Photon 创建/删除以 `phx` 开头的 XFRM 接口，BIRD 会自动开始/停止在该接口上跑 Babel，不需要 Photon 逐条发送 `interface`/`flush interface` 命令。
 - ✅ **平滑配置重载**：`birdc configure` / `birdc configure soft` + `reload in/out` 可以在不重启 daemon 的情况下更新 filter，避免 babeld SIGHUP 实际等价于进程重启的问题。
 - ✅ **filter 语言更强大**：支持基于 `ifname`、`net`、`source`、`from`、`babel_metric` 等的过滤，天然可按 peer interface 做 whitelist。
-- ✅ **多 routing table**：原生支持多 table + kernel table 同步，适合 Higgs 每 overlay 独立 table 的设计。
+- ✅ **多 routing table**：原生支持多 table + kernel table 同步，适合 Photon 每 overlay 独立 table 的设计。
 - ✅ **IPv4/IPv6 双栈**：同一 BIRD 实例内同时支持，无需像 babeld 那样为不同 AF 分别处理。
 - ✅ **认证配置直接**：per-interface HMAC 密码直接在配置里声明，不需要运行时注入 key。
 
-代价是 BIRD 更大更复杂，Higgs 需要维护 `bird.conf` 生成器和 `birdc` CLI client。
+代价是 BIRD 更大更复杂，Photon 需要维护 `bird.conf` 生成器和 `birdc` CLI client。
 
 ## 关键能力逐项（BIRD 作为 Phase 5 后端）
 
@@ -28,9 +28,9 @@
 | 动态接口发现 | ✅ **interface pattern 自动匹配** | BIRD 监听内核接口事件，自动增删 |
 | filter 修改 | ⚠️ 需 `birdc configure` 重载 | `configure soft` + `reload in/out` 可减少协议重启 |
 | routing table 切换 | ⚠️ 重载配置，必要时重启相关 protocol | 比 babeld 灵活，但仍非完全动态 |
-| 多 routing table | ✅ 多 table + pipe + kernel sync | 适合 Higgs 每 overlay 独立 table |
+| 多 routing table | ✅ 多 table + pipe + kernel sync | 适合 Photon 每 overlay 独立 table |
 | 认证 | ✅ per-interface password/HMAC | BIRD 配置即可，无需运行时命令 |
-| 控制接口 | ✅ `birdc` / stable CLI | 成熟，但 Higgs 需解析文本输出 |
+| 控制接口 | ✅ `birdc` / stable CLI | 成熟，但 Photon 需解析文本输出 |
 | IPv4+IPv6 | ✅ 同一实例双 channel | BIRD 2.x 起同时支持 |
 
 ## BIRD 的动态接口机制（源码确认）
@@ -68,7 +68,7 @@ babel_if_notify(struct proto *P, unsigned flags, struct iface *iface)
 - Babel 收到事件后，用 `iface_patt_find()` 匹配配置里的 interface pattern（支持 `*` 通配）。
 - 匹配成功且接口 up、有 link-local 地址、支持组播，就自动 `babel_add_iface()`；接口 down 则 `babel_remove_iface()` 并 flush 邻居/路由。
 
-这意味着 Higgs 的 IPsec reconcile 只需要做它本来该做的事：创建/删除/上/下 XFRM 接口。BIRD 会自动感知并启用/停用 Babel，不需要 Higgs 再维护一个 "已加入 BIRD 的接口集合"。
+这意味着 Photon 的 IPsec reconcile 只需要做它本来该做的事：创建/删除/上/下 XFRM 接口。BIRD 会自动感知并启用/停用 Babel，不需要 Photon 再维护一个 "已加入 BIRD 的接口集合"。
 
 ## 网络命名空间启动模型
 
@@ -78,12 +78,12 @@ BIRD **没有内置的 namespace 切换能力**，配置里也没有 `namespace`
 
 ```bash
 # named netns
-ip netns add h2
-ip netns exec h2 bird -c /run/higgs/bird-ipsec-main.conf -s /run/higgs/bird-ipsec-main.ctl
+ip netns add photon
+ip netns exec photon bird -c /run/photon/bird-ipsec-main.conf -s /run/photon/bird-ipsec-main.ctl
 
 # 或 systemd service
-NetworkNamespacePath=/run/netns/h2
-ExecStart=/usr/sbin/bird -f -c /run/higgs/bird-ipsec-main.conf -s /run/higgs/bird-ipsec-main.ctl
+NetworkNamespacePath=/run/netns/photon
+ExecStart=/usr/sbin/bird -f -c /run/photon/bird-ipsec-main.conf -s /run/photon/bird-ipsec-main.ctl
 ```
 
 要点：
@@ -91,10 +91,10 @@ ExecStart=/usr/sbin/bird -f -c /run/higgs/bird-ipsec-main.conf -s /run/higgs/bir
 - BIRD 启动后通过 netlink 看到的接口、地址、路由都是它所在 netns 的，因此 BIRD daemon 必须与对应 XFRM interface 处于同一 netns。
 - `birdc` 通过 Unix domain socket 与 BIRD 通信；socket 是文件系统对象，可以在不同 netns 间访问（只要 mount namespace 共享路径），但 BIRD 回复的 `show interfaces` / `show route` 等状态反映的是 BIRD 自身 netns 的数据。
 - 每个 `LinkGroupSpec.NetNS` / overlay data-plane 必须启动**独立的 BIRD 实例**和**独立的 control socket**，不同 netns 不能共享同一个 BIRD 实例或 socket。
-- Higgs daemon 的 BIRD Process Manager 负责：创建/确保目标 named netns、生成 `bird.conf`、在目标 netns 内 `exec` BIRD、维护 pid/control socket 路径、退出时按 ownership 清理。
+- Photon daemon 的 BIRD Process Manager 负责：创建/确保目标 named netns、生成 `bird.conf`、在目标 netns 内 `exec` BIRD、维护 pid/control socket 路径、退出时按 ownership 清理。
 - netns 切换需要 `CAP_SYS_ADMIN` / root 或 privileged container；XFRM/link 操作需要 `CAP_NET_ADMIN`。preflight 必须在启动 BIRD 前检查这些权限。
 
-## Higgs 配置模型
+## Photon 配置模型
 
 ### `overlays[].routing` 配置段
 
@@ -108,12 +108,12 @@ overlays:
       # disabled: true           # 临时保留配置但不启用该 overlay 路由
       provider: bird             # Phase 5 仅支持 bird provider
       mode: managed              # managed | external | disabled
-      netns: h2                  # 默认继承 LinkGroupSpec.NetNS
-      control_socket: /run/higgs/bird-ipsec-main.ctl
-      pid_file: /run/higgs/bird-ipsec-main.pid
+      netns: photon                  # 默认继承 LinkGroupSpec.NetNS
+      control_socket: /run/photon/bird-ipsec-main.ctl
+      pid_file: /run/photon/bird-ipsec-main.pid
       router_id: 1.2.3.4         # 可选，默认从 local zone + trusted root + overlay id 确定性派生
       table: main                # kernel routing table；独立 netns 时默认 main 即可
-      # table_name: higgs_100    # BIRD 内部 table 名；非 main table 时才需要
+      # table_name: photon_100    # BIRD 内部 table 名；非 main table 时才需要
       # priority: 100            # ip rule 优先级；仅在非 main table 或共享 netns 策略路由时生效
       metric_base: 100           # 正常接口的 Babel metric
       metric_staged: 200         # staged generation 接口的 metric
@@ -133,7 +133,7 @@ overlays:
 |------|------|------|------|
 | `enabled` | bool | 是 | 是否在该 overlay 上启用路由 |
 | `protocol` | string | 是 | 固定为 `bird` |
-| `mode` | string | 是 | `managed`（Higgs 启动监管）/ `external`（连接已有 BIRD）/ `disabled` |
+| `mode` | string | 是 | `managed`（Photon 启动监管）/ `external`（连接已有 BIRD）/ `disabled` |
 | `netns` | string | 否 | BIRD daemon 运行的 netns，默认继承 LinkGroup |
 | `control_socket` | string | 是 | birdc UNIX control socket 路径 |
 | `pid_file` | string | 是 | BIRD pid 文件路径 |
@@ -149,11 +149,11 @@ overlays:
 
 ## BIRD 配置模板
 
-Higgs 为每个启用 routing 的 overlay 生成一份 `bird.conf`：
+Photon 为每个启用 routing 的 overlay 生成一份 `bird.conf`：
 
 ```bird
-# Higgs-generated BIRD config for overlay ipsec-main
-# Do not edit manually; use Higgs control interface instead.
+# Photon-generated BIRD config for overlay ipsec-main
+# Do not edit manually; use Photon control interface instead.
 
 log syslog all;
 # debug protocols all;
@@ -161,7 +161,7 @@ log syslog all;
 router id 1.2.3.4;
 
 # Listen on birdc control socket
-listen "unix" "/run/higgs/bird-ipsec-main.ctl";
+listen "unix" "/run/photon/bird-ipsec-main.ctl";
 
 # Scan kernel interfaces for pattern matching
 protocol device {
@@ -169,47 +169,47 @@ protocol device {
 }
 
 # Per-overlay internal routing tables
-ipv4 table higgs_100;
-ipv6 table higgs_100;
+ipv4 table photon_100;
+ipv6 table photon_100;
 
 # Sync with kernel table 100
-protocol kernel higgs_kern_100 {
-    ipv4 { table higgs_100; export all; };
-    ipv6 { table higgs_100; export all; };
+protocol kernel photon_kern_100 {
+    ipv4 { table photon_100; export all; };
+    ipv6 { table photon_100; export all; };
     kernel table 100;
 }
 
 # Import filter: only accept prefixes authorized for the peer interface
-filter higgs_import_100 {
+filter photon_import_100 {
     if net = 0.0.0.0/0 then reject;
     if net ~ [ 10.0.0.0/8+ ] then accept;   # example authorized aggregate
     if source ~ [ RTS_BABEL ] then {
-        # additional per-peer whitelist logic generated by Higgs
+        # additional per-peer whitelist logic generated by Photon
         accept;
     }
     reject;
 }
 
 # Export filter: only announce local authorized prefixes
-filter higgs_export_100 {
+filter photon_export_100 {
     if source ~ [ RTS_STATIC, RTS_INHERIT ] then accept;
     reject;
 }
 
 # Babel protocol instance
-protocol babel higgs_babel_100 {
+protocol babel photon_babel_100 {
     ipv4 {
-        table higgs_100;
-        import filter higgs_import_100;
-        export filter higgs_export_100;
+        table photon_100;
+        import filter photon_import_100;
+        export filter photon_export_100;
     };
     ipv6 {
-        table higgs_100;
-        import filter higgs_import_100;
-        export filter higgs_export_100;
+        table photon_100;
+        import filter photon_import_100;
+        export filter photon_export_100;
     };
 
-    interface "hgs*" {
+    interface "phx*" {
         type tunnel;
         rxcost 96;
         hello interval 4;
@@ -224,17 +224,17 @@ protocol babel higgs_babel_100 {
 - `listen "unix"` 让 birdc 通过 Unix domain socket 连接。
 - `protocol device` 扫描接口变化，触发 interface pattern 匹配。
 - `protocol kernel` 把 BIRD 内部 table 同步到指定的 kernel table。
-- `protocol babel` 绑定到所有 `hgs*` 接口；Higgs 的 XFRM 接口名带 `hgs` 前缀。
-- filter 由 Higgs 根据 `AuthorizedRouteSet` 生成，变化时通过 `birdc configure` 重载。
+- `protocol babel` 绑定到所有 `phx*` 接口；Photon 的 XFRM 接口名带 `phx` 前缀。
+- filter 由 Photon 根据 `AuthorizedRouteSet` 生成，变化时通过 `birdc configure` 重载。
 
 ## Filter 更新流程
 
 当 route authorization 计算出新的 per-peer whitelist 后：
 
-1. Higgs 重写 `bird.conf` 中相关 filter 定义。
-2. 执行 `birdc -s /run/higgs/bird-ipsec-main.ctl configure soft`。
+1. Photon 重写 `bird.conf` 中相关 filter 定义。
+2. 执行 `birdc -s /run/photon/bird-ipsec-main.ctl configure soft`。
 3. BIRD 以 soft 方式应用新配置：已接受的路由继续传播，新路由按新 filter 处理。
-4. 再执行 `birdc reload in higgs_babel_100` / `birdc reload out higgs_babel_100` 让现有路由重新过 filter。
+4. 再执行 `birdc reload in photon_babel_100` / `birdc reload out photon_babel_100` 让现有路由重新过 filter。
 5. 观测 `show route` / `show protocols`，确认未授权路由已从 kernel table 移除。
 
 如果 filter 变化涉及 routing table 结构（如新增 overlay table），则使用普通 `birdc configure` 而不是 `configure soft`，BIRD 会按需重启相关 protocol。
@@ -243,10 +243,10 @@ protocol babel higgs_babel_100 {
 
 ```
 ┌─────────────────────────────────────────────┐
-│                  Higgs daemon                │
+│                  Photon daemon                │
 ├─────────────────────────────────────────────┤
 │  IPsec Reconciler                            │
-│  ├── 创建/删除 XFRM interface (prefix hgs*)   │
+│  ├── 创建/删除 XFRM interface (prefix phx*)   │
 │  └── 分配 link-local / tunnel address        │
 ├─────────────────────────────────────────────┤
 │  Route Authorization                         │
@@ -258,7 +258,7 @@ protocol babel higgs_babel_100 {
 │  BIRD Config Generator                       │
 │  ├── 每 overlay 生成一份 bird.conf           │
 │  ├── ipv4/ipv6 table + kernel sync           │
-│  ├── babel protocol + interface "hgs*"       │
+│  ├── babel protocol + interface "phx*"       │
 │  ├── import/export filter (精确或宽松)        │
 │  └── password / authentication               │
 ├─────────────────────────────────────────────┤
@@ -278,26 +278,26 @@ protocol babel higgs_babel_100 {
 
 ## 与 IPsec staged rotate 的协作
 
-- 新 XFRM interface（如 `hgsxxxx-staged`）创建后，BIRD 的 `protocol device` 会在扫描周期内发现它。
-- 如果 staged interface 也匹配 `hgs*` pattern，它会自动加入 Babel；Higgs 通过 BIRD filter 或接口参数控制其 metric（`metric_base` / `metric_staged` / `metric_draining`）。
-- 只有观测到新 Babel neighbor 与关键路由收敛后，Higgs 才向 IPsec reconcile 提供 `RotateCutoverReady=true`。
+- 新 XFRM interface（如 `phxxxxx-staged`）创建后，BIRD 的 `protocol device` 会在扫描周期内发现它。
+- 如果 staged interface 也匹配 `phx*` pattern，它会自动加入 Babel；Photon 通过 BIRD filter 或接口参数控制其 metric（`metric_base` / `metric_staged` / `metric_draining`）。
+- 只有观测到新 Babel neighbor 与关键路由收敛后，Photon 才向 IPsec reconcile 提供 `RotateCutoverReady=true`。
 - 旧 interface 进入 draining 期间提高 metric，保留作为退路；最终被删除时 BIRD 自动 retract 相关路由。
 
 ## BIRD 生命周期设计
 
 ### managed 模式
 
-Higgs daemon 作为 BIRD 的父进程/监管者：
+Photon daemon 作为 BIRD 的父进程/监管者：
 
 1. **启动 / 领养**
-   - 确保目标 named netns 已存在（Higgs 创建或复用）。
-   - 将 `router-id`、interface pattern、filter、table、metric 等渲染为 `/run/higgs/bird-<overlay>.conf`。
+   - 确保目标 named netns 已存在（Photon 创建或复用）。
+   - 将 `router-id`、interface pattern、filter、table、metric 等渲染为 `/run/photon/bird-<overlay>.conf`。
    - 启动前检查 pidfile：若已存在且进程仍在运行、router-id/table 匹配，则直接 adopt（发送 `birdc configure` 同步最新 conf），避免重复启动。
    - 否则在该 netns 内执行：
      ```bash
-     ip netns exec <ns> bird -c /run/higgs/bird-<overlay>.conf \
-                             -s /run/higgs/bird-<overlay>.ctl \
-                             -P /run/higgs/bird-<overlay>.pid
+     ip netns exec <ns> bird -c /run/photon/bird-<overlay>.conf \
+                             -s /run/photon/bird-<overlay>.ctl \
+                             -P /run/photon/bird-<overlay>.pid
      ```
    - 等待 control socket 出现，执行 `birdc -s ... show status` 确认可用。
 
@@ -308,32 +308,32 @@ Higgs daemon 作为 BIRD 的父进程/监管者：
 
 3. **优雅退出**
    - daemon shutdown 时先 `birdc -s ... down`（或 SIGTERM），等待进程退出。
-   - 删除 Higgs-owned 的 pid、control socket、conf 文件（带 owner token 校验）。
+   - 删除 Photon-owned 的 pid、control socket、conf 文件（带 owner token 校验）。
 
 4. **崩溃恢复**
    - daemon 事件循环中周期性 `waitpid(NO HANG)` 或 `show status` 探测。
    - BIRD 异常退出后，用同一份持久化 router-id 和 conf 重新拉起；连续崩溃进入指数 backoff。
-   - **不要启用 BIRD 的 `randomize router id`**：Higgs 已经保证 router-id 持久稳定，随机化会导致序列号问题变成 router-id 抖动问题。
+   - **不要启用 BIRD 的 `randomize router id`**：Photon 已经保证 router-id 持久稳定，随机化会导致序列号问题变成 router-id 抖动问题。
 
 ### external 模式
 
-- Higgs 不启动/不停止 BIRD，只通过 control socket 执行 `configure`/`show`。
-- 启动 reconcile 时校验 router-id、table、netns、socket 权限、interface pattern 是否匹配 Higgs 期望。
+- Photon 不启动/不停止 BIRD，只通过 control socket 执行 `configure`/`show`。
+- 启动 reconcile 时校验 router-id、table、netns、socket 权限、interface pattern 是否匹配 Photon 期望。
 - control socket 丢失或 `show status` 失败时标记 `degraded`，记录 error，不主动重启。
 
-## 通过 `higgs` 命令 dump BIRD 路由状态
+## 通过 `photon` 命令 dump BIRD 路由状态
 
 CLI 通过 daemon control socket 请求 BIRD 快照，避免用户手动进 netns 执行 `birdc`：
 
 ```bash
 # 每个 overlay 的 BIRD 实例状态
-higgs debug babel [overlay-id]
+photon debug babel [overlay-id]
 
-# Higgs 授权路由集 + BIRD 实际学到/安装的路由
-higgs debug routes
+# Photon 授权路由集 + BIRD 实际学到/安装的路由
+photon debug routes
 
 # 单条前缀的完整证据链
-higgs debug route <prefix>
+photon debug route <prefix>
 ```
 
 daemon 侧的 birdc client 执行以下命令并解析为结构化数据：
@@ -349,7 +349,7 @@ daemon 侧的 birdc client 执行以下命令并解析为结构化数据：
 
 解析策略：
 
-- birdc 输出是文本表格，按固定列对齐；Higgs 用正则/列解析，并在解析失败时返回原始文本 + `parse_warning`。
+- birdc 输出是文本表格，按固定列对齐；Photon 用正则/列解析，并在解析失败时返回原始文本 + `parse_warning`。
 - 建议将最近一次解析结果落盘到 `state.BirdObservedState`，供 `debug babel` 离线使用。
 - 命令执行带超时（如 5s），超时时返回部分缓存数据并标记 `stale`。
 
@@ -358,12 +358,12 @@ daemon 侧的 birdc client 执行以下命令并解析为结构化数据：
 BIRD Babel 为 tunnel 接口提供专用模式：
 
 ```bird
-protocol babel higgs_babel_main {
+protocol babel photon_babel_main {
     ipv4 { ... };
     ipv6 { ... };
     ecmp on limit 16;          # 可选：等 metric 多路径
 
-    interface "hgs*" {
+    interface "phx*" {
         type tunnel;
         rxcost 96;             # 基础 cost，影响邻居选路
         hello interval 4 s;
@@ -381,17 +381,17 @@ protocol babel higgs_babel_main {
 - `type tunnel` 等价于 wired + 开启 RTT-based metric，默认 `rxcost 96`。
 - Babel 到同一前缀的多条路径按综合 metric 排序；**metric 最小者进入 FIB**。
 - 若开启 `ecmp on [limit N]` 且多条路径 metric 相等，BIRD 会生成多下一跳 ECMP 路由；`ecmp weight` 可调整流量比例。
-- Higgs 可用不同 `rxcost` / `rtt cost` 区分 staged/draining 接口：
+- Photon 可用不同 `rxcost` / `rtt cost` 区分 staged/draining 接口：
   - `metric_base` → 正常接口 `rxcost 96`
   - `metric_staged` → staged 接口 `rxcost 200`
   - `metric_draining` → draining 接口 `rxcost 500`
-- 这意味着 BIRD 本身就能做 **active/backup 选路** 和 **多路径负载均衡**，不需要 Higgs 再写 kernel route 去干预 next-hop。
+- 这意味着 BIRD 本身就能做 **active/backup 选路** 和 **多路径负载均衡**，不需要 Photon 再写 kernel route 去干预 next-hop。
 
 ## 风险与待验证项
 
 - [x] BIRD 在目标 netns 中启动并监听 UNIX control socket 的具体命令和权限模型。
 - [ ] `birdc configure soft` + `reload in/out` 在 filter 变化时的实际收敛时间和路由中断窗口。
-- [ ] interface pattern `hgs*` 在新接口创建后多久触发 Babel，是否稳定。
+- [ ] interface pattern `phx*` 在新接口创建后多久触发 Babel，是否稳定。
 - [ ] 接口删除时 BIRD 是否正确发送 wildcard retraction，邻居多久感知。
 - [ ] BIRD 的 Babel 实现与 babeld 的互操作性（如果网络中混跑）。
 - [ ] BIRD 二进制在 NixOS / target 容器镜像中的体积和依赖。

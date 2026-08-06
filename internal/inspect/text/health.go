@@ -3,7 +3,7 @@ package text
 import (
 	"io"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {

@@ -1,4 +1,4 @@
-// Package firewall provides the Phase 6.3 Higgs overlay data-plane firewall
+// Package firewall provides the Phase 6.3 Photon overlay data-plane firewall
 // security boundary.
 //
 // The firewall planner consumes already-verified derived state (AuthorizedRouteSet,
@@ -13,12 +13,12 @@ import (
 	"net/netip"
 )
 
-// Owner identifies Higgs-owned firewall objects so reconcile can distinguish
+// Owner identifies Photon-owned firewall objects so reconcile can distinguish
 // them from administrator-managed rules.
 type Owner struct {
-	Manager     string // always "higgs"
-	InstanceID  string // netns-level instance id, e.g. "h2" or "host"
-	OwnerPrefix string // name prefix, default "higgs"
+	Manager     string // always "photon"
+	InstanceID  string // netns-level instance id, e.g. "photon" or "host"
+	OwnerPrefix string // name prefix, default "photon"
 	Generation  uint64 // desired-state generation
 	Token       string // stable owner token derived from instance/prefix
 }
@@ -98,11 +98,11 @@ type FirewallInstanceSpec struct {
 	Priorities     ChainPriorities
 
 	// NativeHooks are backend-native inline rule expressions compiled into
-	// Higgs-managed chains. They are intentionally not a portable rule DSL.
+	// Photon-managed chains. They are intentionally not a portable rule DSL.
 	NativeHooks NativeHooks
 }
 
-// HookPoint identifies a stable insertion point inside a Higgs-managed chain.
+// HookPoint identifies a stable insertion point inside a Photon-managed chain.
 type HookPoint string
 
 const (

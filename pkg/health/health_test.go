@@ -226,7 +226,7 @@ func TestManagerTickAndSnapshot(t *testing.T) {
 		InstanceID:     "link1",
 		PeerZone:       "peer.",
 		Overlay:        "group1",
-		InterfaceName:  "hgs1",
+		InterfaceName:  "phx1",
 		PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
 		State:          "up",
 	}
@@ -257,9 +257,9 @@ func TestManagerKeepsRawErrorSeparateFromStateReason(t *testing.T) {
 	now := time.Now()
 	m.UpsertTarget(ProbeTarget{InstanceID: "link1", State: "up"}, now)
 
-	m.applyResult("link1", ProbeResult{Error: "netns interface missing: hgs0"}, now)
+	m.applyResult("link1", ProbeResult{Error: "netns interface missing: phx0"}, now)
 	snapshot := m.Snapshot(now)
-	if got := snapshot[0].LastError; got != "netns interface missing: hgs0" {
+	if got := snapshot[0].LastError; got != "netns interface missing: phx0" {
 		t.Fatalf("last error = %q, want raw probe error", got)
 	}
 	if got := snapshot[0].LastReason; got != "netns_interface_missing" {
@@ -348,7 +348,7 @@ func TestManagerRotateCutoverReadiness(t *testing.T) {
 		InstanceID:     "staged-link",
 		PeerZone:       "peer.",
 		Overlay:        "group1",
-		InterfaceName:  "hgs2",
+		InterfaceName:  "phx2",
 		PeerTunnelAddr: netip.MustParseAddr("10.0.0.3"),
 		State:          "staged",
 		Staged:         true,
@@ -381,7 +381,7 @@ func TestManagerRotateCutoverReadinessRequiresBabelObservationWhenPresent(t *tes
 		ProbeRole:      "staged",
 		PeerZone:       "peer.",
 		Overlay:        "group1",
-		InterfaceName:  "hgs-new",
+		InterfaceName:  "phx-new",
 		PeerTunnelAddr: netip.MustParseAddr("10.0.0.3"),
 		State:          "up",
 		Staged:         true,
@@ -417,7 +417,7 @@ func TestManagerKeepsRotateProbeTargetsSeparate(t *testing.T) {
 			ProbeID:        "link1#old",
 			InstanceID:     "link1",
 			ProbeRole:      "old",
-			InterfaceName:  "hgs-old",
+			InterfaceName:  "phx-old",
 			PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
 			State:          "up",
 		},
@@ -425,7 +425,7 @@ func TestManagerKeepsRotateProbeTargetsSeparate(t *testing.T) {
 			ProbeID:        "link1#staged",
 			InstanceID:     "link1",
 			ProbeRole:      "staged",
-			InterfaceName:  "hgs-new",
+			InterfaceName:  "phx-new",
 			PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
 			State:          "up",
 			Staged:         true,
@@ -446,7 +446,7 @@ func TestManagerKeepsRotateProbeTargetsSeparate(t *testing.T) {
 	for _, h := range snapshot {
 		byRole[h.ProbeRole] = h
 	}
-	if byRole["old"].InterfaceName != "hgs-old" || byRole["staged"].InterfaceName != "hgs-new" {
+	if byRole["old"].InterfaceName != "phx-old" || byRole["staged"].InterfaceName != "phx-new" {
 		t.Fatalf("snapshot by role = %#v, want old/new interfaces", byRole)
 	}
 	readiness := m.RotateCutoverReadiness()
@@ -464,7 +464,7 @@ func TestManagerRemoveTarget(t *testing.T) {
 		InstanceID:     "link1",
 		PeerZone:       "peer.",
 		Overlay:        "group1",
-		InterfaceName:  "hgs1",
+		InterfaceName:  "phx1",
 		PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"),
 		State:          "up",
 	}

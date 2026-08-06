@@ -4,8 +4,8 @@
 .agents
 .claude
 .vscode
-.higgs
-.higgs.db
+.photon
+.photon.db
 .public-test
 build
 bin

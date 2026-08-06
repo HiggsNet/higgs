@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	"github.com/Catofes/higgs/pkg/routing"
-	"github.com/Catofes/higgs/pkg/routing/bird"
+	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/routing"
+	"github.com/Catofes/photon/pkg/routing/bird"
 )
 
 func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
@@ -130,14 +130,14 @@ func TestBuildBirdRouteViewsAnnotatesAuthorizedAndImportAllowed(t *testing.T) {
 		{
 			Prefix:   netip.MustParsePrefix("10.0.2.0/24"),
 			Protocol: "babel",
-			Iface:    "hgs-b",
+			Iface:    "phx-b",
 			Metric:   128,
 			Selected: true,
 		},
 		{
 			Prefix:   netip.MustParsePrefix("10.0.0.0/24"),
 			Protocol: "babel",
-			Iface:    "hgs-a",
+			Iface:    "phx-a",
 			Metric:   96,
 			Selected: true,
 		},

@@ -3,15 +3,15 @@ package inspect
 import (
 	"testing"
 
-	higgsstate "github.com/Catofes/higgs/internal/state"
+	photonstate "github.com/Catofes/photon/internal/state"
 )
 
 func TestBuildFirewallDebugView(t *testing.T) {
 	view := BuildFirewallDebug(FirewallDebugInput{
 		Instances: []FirewallInstanceInput{
 			{
-				ID:            "higgstesth2",
-				Scope:         "higgstesth2",
+				ID:            "photontesth2",
+				Scope:         "photontesth2",
 				Enabled:       true,
 				Mode:          FirewallModeManaged,
 				Backend:       "auto",
@@ -32,10 +32,10 @@ func TestBuildFirewallDebugView(t *testing.T) {
 				RedirectGrace: true,
 			},
 		},
-		Reconcile: &higgsstate.FirewallReconcileState{
+		Reconcile: &photonstate.FirewallReconcileState{
 			Backend: "dry-run",
-			Instances: map[string]*higgsstate.FirewallReconcileInstance{
-				"higgstesth2": {Backend: "nft", Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
+			Instances: map[string]*photonstate.FirewallReconcileInstance{
+				"photontesth2": {Backend: "nft", Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 			},
 		},
 	})
@@ -45,7 +45,7 @@ func TestBuildFirewallDebugView(t *testing.T) {
 	if len(view.Instances) != 2 {
 		t.Fatalf("instances = %d, want 2", len(view.Instances))
 	}
-	if got := view.Instances[0]; got.ID != "higgstesth2" || got.Generation != 5 || got.OwnedObjects != 10 || got.PolicyHash != "abc123" {
+	if got := view.Instances[0]; got.ID != "photontesth2" || got.Generation != 5 || got.OwnedObjects != 10 || got.PolicyHash != "abc123" {
 		t.Fatalf("first instance = %+v, want reconcile fields", got)
 	}
 	if got := view.Instances[0]; got.ResolvedBackend != "nft" || len(got.InlineHooks) != 2 || got.InlineHooks[0].State != "active" || got.InlineHooks[1].State != "inactive" {

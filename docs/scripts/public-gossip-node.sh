@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-bin="${HIGGS_BIN:-build/higgs}"
+bin="${PHOTON_BIN:-build/photon}"
 
 usage() {
   cat <<'USAGE'
@@ -22,7 +22,7 @@ Usage:
   public-gossip-node.sh verify <dir> <zone>
 
 Environment:
-  HIGGS_BIN defaults to build/higgs.
+  PHOTON_BIN defaults to build/photon.
 USAGE
 }
 
@@ -56,7 +56,7 @@ bundle_path_for_request() {
 
 require_bin() {
   if [ ! -x "$bin" ]; then
-    printf 'Higgs binary not found or not executable: %s\n' "$bin" >&2
+    printf 'Photon binary not found or not executable: %s\n' "$bin" >&2
     exit 1
   fi
 }
@@ -71,8 +71,8 @@ root_init() {
     printf '  peer_id: node-admin\n'
     printf '  listen_addr: 127.0.0.1:33433\n'
   } >"$(config_path "$dir")"
-  HIGGS_CONFIG="$(config_path "$dir")" "$bin" root init
-  HIGGS_CONFIG="$(config_path "$dir")" "$bin" root pubkey
+  PHOTON_CONFIG="$(config_path "$dir")" "$bin" root init
+  PHOTON_CONFIG="$(config_path "$dir")" "$bin" root pubkey
 }
 
 write_config() {
@@ -124,15 +124,15 @@ make_key_request() {
   zone="$2"
   key="$3"
   request="$4"
-  HIGGS_CONFIG="$(config_path "$dir")" "$bin" keygen "$key"
-  HIGGS_CONFIG="$(config_path "$dir")" "$bin" join request "$zone" "$key" "$request"
+  PHOTON_CONFIG="$(config_path "$dir")" "$bin" keygen "$key"
+  PHOTON_CONFIG="$(config_path "$dir")" "$bin" join request "$zone" "$key" "$request"
 }
 
 make_configured_request() {
   local dir request
   dir="$1"
   request="$2"
-  HIGGS_CONFIG="$(config_path "$dir")" "$bin" join request --from-config "$request"
+  PHOTON_CONFIG="$(config_path "$dir")" "$bin" join request --from-config "$request"
 }
 
 issue_bundle() {
@@ -140,7 +140,7 @@ issue_bundle() {
   admin_dir="$1"
   request="$2"
   bundle="$3"
-  HIGGS_CONFIG="$(config_path "$admin_dir")" "$bin" delegate issue "$request" "$bundle"
+  PHOTON_CONFIG="$(config_path "$admin_dir")" "$bin" delegate issue "$request" "$bundle"
 }
 
 accept_bundle() {
@@ -148,7 +148,7 @@ accept_bundle() {
   dir="$1"
   bundle="$2"
   key="$3"
-  HIGGS_CONFIG="$(config_path "$dir")" "$bin" join accept "$bundle" "$key"
+  PHOTON_CONFIG="$(config_path "$dir")" "$bin" join accept "$bundle" "$key"
 }
 
 if [ "$#" -lt 1 ]; then
@@ -194,7 +194,7 @@ case "$cmd" in
     key="$(key_path "$dir" "$zone")"
     request="$(request_path "$dir" "$zone")"
     mkdir -p "$dir"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" keygen "$key"
+    PHOTON_CONFIG="$(config_path "$dir")" "$bin" keygen "$key"
     CONFIG_MANAGED_ZONE="$zone"
     CONFIG_IDENTITY_KEY_PATH="$key"
     write_config "$dir" "$zone" "$listen_addr" "$advertise_addr" "$root_key" "$@"
@@ -220,13 +220,13 @@ case "$cmd" in
     bundle="$3"
     interval="${4:-5}"
     accept_bundle "$dir" "$bundle" "$(key_path "$dir" "$zone")"
-    exec env HIGGS_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
+    exec env PHOTON_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
     ;;
   auto-run)
     if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; exit 1; fi
     dir="$1"
     interval="${2:-5}"
-    exec env HIGGS_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
+    exec env PHOTON_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
     ;;
   root-init)
     if [ "$#" -ne 1 ]; then usage; exit 1; fi
@@ -262,25 +262,25 @@ case "$cmd" in
     if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; exit 1; fi
     dir="$1"
     interval="${2:-5}"
-    exec env HIGGS_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
+    exec env PHOTON_CONFIG="$(config_path "$dir")" "$bin" daemon --interval "$interval"
     ;;
   put-identity)
     if [ "$#" -ne 3 ]; then usage; exit 1; fi
     dir="$1"
     zone="$2"
     value="$3"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" record put "$zone" identity "$value"
+    PHOTON_CONFIG="$(config_path "$dir")" "$bin" record put "$zone" identity "$value"
     ;;
   status)
     if [ "$#" -ne 1 ]; then usage; exit 1; fi
     dir="$1"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" advanced sync status --verbose
+    PHOTON_CONFIG="$(config_path "$dir")" "$bin" advanced sync status --verbose
     ;;
   verify)
     if [ "$#" -ne 2 ]; then usage; exit 1; fi
     dir="$1"
     zone="$2"
-    HIGGS_CONFIG="$(config_path "$dir")" "$bin" debug verify "$zone"
+    PHOTON_CONFIG="$(config_path "$dir")" "$bin" debug verify "$zone"
     ;;
   *)
     usage

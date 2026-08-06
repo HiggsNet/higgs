@@ -5,12 +5,12 @@
 set -euo pipefail
 
 go_cmd="${GO:-go}"
-go_cache="${GOCACHE:-/tmp/higgs-gocache}"
-go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
+go_cache="${GOCACHE:-/tmp/photon-gocache}"
+go_mod_cache="${GOMODCACHE:-/tmp/photon-gomodcache}"
 
 docs/scripts/bird-babel-preflight.sh
 
-HIGGS_BIRD_SMOKE=1 \
+PHOTON_BIRD_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \

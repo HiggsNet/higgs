@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestWritePingDebugOutput(t *testing.T) {
@@ -20,8 +20,8 @@ func TestWritePingDebugOutput(t *testing.T) {
 				Role:         "active",
 				Family:       "ipv4",
 				TunnelFamily: "ipv6",
-				Interface:    "hgs0",
-				NetNS:        "higgstesth2",
+				Interface:    "phx0",
+				NetNS:        "photontesth2",
 				LocalTunnel:  "10.0.0.1",
 				PeerTunnel:   "10.0.0.2",
 				Success:      true,
@@ -33,7 +33,7 @@ func TestWritePingDebugOutput(t *testing.T) {
 				Role:         "staged",
 				Family:       "ipv6",
 				TunnelFamily: "ipv6",
-				Interface:    "hgs-new",
+				Interface:    "phx-new",
 				LocalTunnel:  "fd00::1",
 				PeerTunnel:   "fd00::2",
 				Error:        "100% packet loss",
@@ -51,7 +51,7 @@ func TestWritePingDebugOutput(t *testing.T) {
 		"count: 4 timeout: 1s",
 		"instance t1",
 		"role=active underlay=ipv4 tunnel=ipv6",
-		"interface: hgs0  netns: higgstesth2",
+		"interface: phx0  netns: photontesth2",
 		"result: ok rtt=2.3ms",
 		"role=staged underlay=ipv6 tunnel=ipv6",
 		`result: fail error="100% packet loss"`,
@@ -100,7 +100,7 @@ func TestWritePingDebugSeparatesInstancesNotFields(t *testing.T) {
 				Role:         "active",
 				Family:       "ipv6",
 				TunnelFamily: "ipv6",
-				Interface:    "hgs0",
+				Interface:    "phx0",
 				LocalTunnel:  "fe80::1",
 				PeerTunnel:   "fe80::2",
 			},
@@ -109,7 +109,7 @@ func TestWritePingDebugSeparatesInstancesNotFields(t *testing.T) {
 				Role:         "active",
 				Family:       "ipv6",
 				TunnelFamily: "ipv6",
-				Interface:    "hgs1",
+				Interface:    "phx1",
 				LocalTunnel:  "fe80::3",
 				PeerTunnel:   "fe80::4",
 			},
@@ -120,7 +120,7 @@ func TestWritePingDebugSeparatesInstancesNotFields(t *testing.T) {
 		t.Fatalf("WritePingDebug: %v", err)
 	}
 	got := buf.String()
-	if strings.Contains(got, "interface: hgs0\n\n    local:") {
+	if strings.Contains(got, "interface: phx0\n\n    local:") {
 		t.Fatalf("unexpected blank line within target fields:\n%s", got)
 	}
 	if !strings.Contains(got, "    result: fail\n\ninstance t2") {

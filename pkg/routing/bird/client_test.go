@@ -56,14 +56,14 @@ const sampleShowBabelNeighbors = `1024-babel1:
 `
 
 const sampleShowBabelNeighborsV219 = `BIRD 2.19.1 ready.
-higgs_babel_h2:
+photon_babel_h2:
 IP address                Interface  Metric Routes Hellos Expires Auth  RTT (ms)
-fe80::dc29:e1e4:3622:bde5 hgs1d556624    100      1     16   5.391 No       5.009
+fe80::dc29:e1e4:3622:bde5 phx1d556624    100      1     16   5.391 No       5.009
 0000`
 
-const sampleShowHiggsH26Routes = `Table higgs_h26:
-2a0d:2905:1:2::/64   unicast [higgs_babel_h2 2026-07-10] * (130/100) [00:00:00:00:f7:24:52:c9]
-        via fe80::dc29:e1e4:3622:bde5 on hgs1d556624
+const sampleShowPhotonRoutes = `Table photon_photon6:
+2a0d:2905:1:2::/64   unicast [photon_babel_h2 2026-07-10] * (130/100) [00:00:00:00:f7:24:52:c9]
+        via fe80::dc29:e1e4:3622:bde5 on phx1d556624
 0000`
 
 // fakeServer is a minimal birdc-style Unix socket server for tests.
@@ -237,10 +237,10 @@ func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
 			return sampleShowStatus
 		case "show protocols all":
 			return sampleShowProtocols
-		case "show route table higgs_h24 all":
-			return "Table higgs_h24:\n0000 \n"
-		case "show route table higgs_h26 all":
-			return sampleShowHiggsH26Routes + " \n"
+		case "show route table photon_photon4 all":
+			return "Table photon_photon4:\n0000 \n"
+		case "show route table photon_photon6 all":
+			return sampleShowPhotonRoutes + " \n"
 		case "show interfaces":
 			return sampleShowInterfaces
 		case "show babel neighbors":
@@ -251,7 +251,7 @@ func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
 	})
 	defer server.close()
 
-	client := NewClientWithRouteTables(server.socket, 5*time.Second, InternalRouteTableNames("h2"))
+	client := NewClientWithRouteTables(server.socket, 5*time.Second, InternalRouteTableNames("photon"))
 	state, err := client.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status failed: %v", err)
@@ -259,14 +259,14 @@ func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
 	if state.Stale {
 		t.Fatalf("unexpected stale state, warnings: %v", state.Warnings)
 	}
-	if len(state.Neighbors) != 1 || state.Neighbors[0].Interface != "hgs1d556624" {
+	if len(state.Neighbors) != 1 || state.Neighbors[0].Interface != "phx1d556624" {
 		t.Fatalf("neighbors = %#v", state.Neighbors)
 	}
 	if len(state.Routes) != 1 {
 		t.Fatalf("routes = %#v", state.Routes)
 	}
 	route := state.Routes[0]
-	if !route.Selected || route.Iface != "hgs1d556624" || route.Metric != 130 {
+	if !route.Selected || route.Iface != "phx1d556624" || route.Metric != 130 {
 		t.Fatalf("route = %#v", route)
 	}
 }
@@ -323,7 +323,7 @@ func TestConfigureSuccessAndError(t *testing.T) {
 }
 
 func TestConfigureQuotesConfigPath(t *testing.T) {
-	const path = `/tmp/higgs bird-"next".conf`
+	const path = `/tmp/photon bird-"next".conf`
 	var commands []string
 	server := newFakeServer(t, func(cmd string) string {
 		commands = append(commands, cmd)
@@ -339,7 +339,7 @@ func TestConfigureQuotesConfigPath(t *testing.T) {
 		t.Fatalf("ConfigureSoft: %v", err)
 	}
 
-	want := []string{`configure "/tmp/higgs bird-\"next\".conf"`, `configure soft "/tmp/higgs bird-\"next\".conf"`}
+	want := []string{`configure "/tmp/photon bird-\"next\".conf"`, `configure soft "/tmp/photon bird-\"next\".conf"`}
 	if len(commands) != len(want) || commands[0] != want[0] || commands[1] != want[1] {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}

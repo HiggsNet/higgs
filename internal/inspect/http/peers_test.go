@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
-	higgsstate "github.com/Catofes/higgs/internal/state"
+	"github.com/Catofes/photon/internal/inspect"
+	photonstate "github.com/Catofes/photon/internal/state"
 )
 
 func TestPeersResponsePreservesObserverSchema(t *testing.T) {
@@ -13,7 +13,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 		PeerID:         "node-b.catofes.",
 		Source:         "bootstrap",
 		ConfiguredAddr: "192.0.2.10:33434",
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(higgsstate.PeerRuntimeState{
+		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{
 			LastSyncUnix:          900,
 			LastAttemptUnix:       850,
 			BackoffUntilUnix:      950,
@@ -24,7 +24,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 			LastRelaySuppressedAt: 910,
 			ObservedAddr:          "198.51.100.9:33434",
 			ObservedSource:        "verified_packet",
-			DatagramStats: &higgsstate.PeerDatagramStats{
+			DatagramStats: &photonstate.PeerDatagramStats{
 				ChunkFallbacks: 2,
 			},
 		}),
@@ -55,7 +55,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 func TestPeersResponseKeepsZeroValueSchemaFields(t *testing.T) {
 	got := PeersResponse{Peers: []PeerJSON{{
 		PeerID:          "node-b.catofes.",
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(higgsstate.PeerRuntimeState{}),
+		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{}),
 	}}}
 	data, err := json.Marshal(got)
 	if err != nil {

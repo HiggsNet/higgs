@@ -1,4 +1,4 @@
-module github.com/Catofes/higgs
+module github.com/Catofes/photon
 
 go 1.25.0
 

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-container_runtime="${HIGGS_CONTAINER_RUNTIME:-docker}"
-base_image="${HIGGS_REVOCATION_DATA_PLANE_IMAGE:-ubuntu:24.04}"
+container_runtime="${PHOTON_CONTAINER_RUNTIME:-docker}"
+base_image="${PHOTON_REVOCATION_DATA_PLANE_IMAGE:-ubuntu:24.04}"
 cache_suffix="${base_image//[^A-Za-z0-9_.-]/-}"
-cache_image="${HIGGS_REVOCATION_DATA_PLANE_CACHE_IMAGE:-higgs-revocation-data-plane-smoke:${cache_suffix}}"
-rebuild_image="${HIGGS_REVOCATION_DATA_PLANE_REBUILD_IMAGE:-0}"
-container_userns="${HIGGS_CONTAINER_USERNS:-host}"
-go_cache="${GOCACHE:-/tmp/higgs-gocache}"
-go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
-cache_prefix="${HIGGS_REVOCATION_DATA_PLANE_CACHE_PREFIX:-higgs-revocation-data-plane}"
-go_cache_volume="${HIGGS_REVOCATION_DATA_PLANE_GO_CACHE_VOLUME:-${cache_prefix}-gocache}"
-go_mod_cache_volume="${HIGGS_REVOCATION_DATA_PLANE_GO_MOD_CACHE_VOLUME:-${cache_prefix}-gomodcache}"
+cache_image="${PHOTON_REVOCATION_DATA_PLANE_CACHE_IMAGE:-photon-revocation-data-plane-smoke:${cache_suffix}}"
+rebuild_image="${PHOTON_REVOCATION_DATA_PLANE_REBUILD_IMAGE:-0}"
+container_userns="${PHOTON_CONTAINER_USERNS:-host}"
+go_cache="${GOCACHE:-/tmp/photon-gocache}"
+go_mod_cache="${GOMODCACHE:-/tmp/photon-gomodcache}"
+cache_prefix="${PHOTON_REVOCATION_DATA_PLANE_CACHE_PREFIX:-photon-revocation-data-plane}"
+go_cache_volume="${PHOTON_REVOCATION_DATA_PLANE_GO_CACHE_VOLUME:-${cache_prefix}-gocache}"
+go_mod_cache_volume="${PHOTON_REVOCATION_DATA_PLANE_GO_MOD_CACHE_VOLUME:-${cache_prefix}-gomodcache}"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 host_uid="$(id -u)"
 host_gid="$(id -g)"
 
 if ! command -v "$container_runtime" >/dev/null 2>&1; then
-  printf 'container runtime %q not found; set HIGGS_CONTAINER_RUNTIME=docker or podman\n' "$container_runtime" >&2
+  printf 'container runtime %q not found; set PHOTON_CONTAINER_RUNTIME=docker or podman\n' "$container_runtime" >&2
   exit 1
 fi
 
@@ -30,7 +30,7 @@ ensure_image() {
     return
   fi
 
-  build_ctx="$(mktemp -d "${TMPDIR:-/tmp}/higgs-revocation-data-plane-image.XXXXXX")"
+  build_ctx="$(mktemp -d "${TMPDIR:-/tmp}/photon-revocation-data-plane-image.XXXXXX")"
   trap 'rm -rf "$build_ctx"' EXIT
   cat > "$build_ctx/Dockerfile" <<'DOCKERFILE'
 ARG BASE_IMAGE=ubuntu:24.04
@@ -106,9 +106,9 @@ cache_args=(
   -e GOCACHE="$go_cache" \
   -e GOMODCACHE="$go_mod_cache" \
   -e CGO_ENABLED="${CGO_ENABLED:-0}" \
-  -e HIGGS_FIREWALL_CONTAINER_SMOKE=1 \
-  -e HIGGS_BIRD_SMOKE_CONTAINER=1 \
-  -e HIGGS_IPSEC_XFRM_SMOKE_CONTAINER=1 \
+  -e PHOTON_FIREWALL_CONTAINER_SMOKE=1 \
+  -e PHOTON_BIRD_SMOKE_CONTAINER=1 \
+  -e PHOTON_IPSEC_XFRM_SMOKE_CONTAINER=1 \
   "$cache_image" bash -lc '
     set -euo pipefail
     mkdir -p /run

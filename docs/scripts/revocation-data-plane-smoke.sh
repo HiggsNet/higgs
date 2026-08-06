@@ -5,9 +5,9 @@
 set -euo pipefail
 
 go_cmd="${GO:-go}"
-go_cache="${GOCACHE:-/tmp/higgs-gocache}"
-go_mod_cache="${GOMODCACHE:-/tmp/higgs-gomodcache}"
-skip_shared="${HIGGS_REVOCATION_DATA_PLANE_SKIP_SHARED:-0}"
+go_cache="${GOCACHE:-/tmp/photon-gocache}"
+go_mod_cache="${GOMODCACHE:-/tmp/photon-gomodcache}"
+skip_shared="${PHOTON_REVOCATION_DATA_PLANE_SKIP_SHARED:-0}"
 make_env=(
   "GO=$go_cmd"
   "GOCACHE=$go_cache"
@@ -51,16 +51,16 @@ else
 
   printf '[revocation-data-plane-smoke] StrongSwan/XFRM revocation-relevant real smoke\n'
   docs/scripts/ipsec-xfrm-preflight.sh
-  HIGGS_IPSEC_XFRM_SMOKE=1 \
+  PHOTON_IPSEC_XFRM_SMOKE=1 \
     GOCACHE="$go_cache" \
     GOMODCACHE="$go_mod_cache" \
     CGO_ENABLED="${CGO_ENABLED:-0}" \
     "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverIKEBringupSmoke$' -count=1
-  HIGGS_IPSEC_XFRM_SMOKE=1 \
+  PHOTON_IPSEC_XFRM_SMOKE=1 \
     GOCACHE="$go_cache" \
     GOMODCACHE="$go_mod_cache" \
     CGO_ENABLED="${CGO_ENABLED:-0}" \
-    "$go_cmd" test ./app/higgs -run '^TestDaemonStrongSwanReconcileBringupSmoke$' -count=1
+    "$go_cmd" test ./app/photon -run '^TestDaemonStrongSwanReconcileBringupSmoke$' -count=1
 fi
 
 printf '[revocation-data-plane-smoke] daemon revocation deny-first ordering smoke\n'

@@ -12,11 +12,11 @@ func TestHealthResponsePreservesObserverSchema(t *testing.T) {
 			Health:          map[string]any{"instance_id": "link-1", "state": "unknown"},
 			PeerZone:        "node-b.catofes.",
 			GroupID:         "blue",
-			InterfaceName:   "hgs0",
+			InterfaceName:   "phx0",
 			Endpoint:        "198.51.100.10:4500",
 			ActualState:     "up",
-			LocalTunnelAddr: "fd00::1%hgs0",
-			PeerTunnelAddr:  "fd00::2%hgs0",
+			LocalTunnelAddr: "fd00::1%phx0",
+			PeerTunnelAddr:  "fd00::2%phx0",
 		}},
 	}
 	data, err := json.Marshal(got)
@@ -66,7 +66,7 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 				ID:            "link-a",
 				PeerZone:      "node-a.catofes.",
 				GroupID:       "blue",
-				InterfaceName: "hgs-a",
+				InterfaceName: "phx-a",
 				Endpoint:      "198.51.100.10:4500",
 				ActualState:   "up",
 				Instance:      map[string]any{"id": "link-a"},
@@ -75,7 +75,7 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 				ID:            "link-b",
 				PeerZone:      "node-b.catofes.",
 				GroupID:       "blue",
-				InterfaceName: "hgs-b",
+				InterfaceName: "phx-b",
 				Endpoint:      "198.51.100.11:4500",
 				ActualState:   "up",
 				Instance:      map[string]any{"id": "link-b"},
@@ -103,7 +103,7 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("context len = %d, want 2: %#v", len(got), got)
 	}
-	if got[0].SortInstanceID != "link-a" || got[0].PeerZone != "node-a.catofes." || got[0].InterfaceName != "hgs-a" {
+	if got[0].SortInstanceID != "link-a" || got[0].PeerZone != "node-a.catofes." || got[0].InterfaceName != "phx-a" {
 		t.Fatalf("missing-link context = %#v", got[0])
 	}
 	health, ok := got[0].Health.(map[string]any)

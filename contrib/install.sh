@@ -2,18 +2,18 @@
 
 set -eu
 
-repo="${HIGGS_GITHUB_REPOSITORY:-HiggsNet/higgs}"
-version="${HIGGS_VERSION:-latest}"
-install_dir="${HIGGS_INSTALL_DIR:-/usr/local/bin}"
-service_dir="${HIGGS_SYSTEMD_DIR:-/etc/systemd/system}"
+repo="${PHOTON_GITHUB_REPOSITORY:-Catofes/photon}"
+version="${PHOTON_VERSION:-latest}"
+install_dir="${PHOTON_INSTALL_DIR:-/usr/local/bin}"
+service_dir="${PHOTON_SYSTEMD_DIR:-/etc/systemd/system}"
 update_only=false
 install_service=true
 enable_service=false
-skip_dependency_check=${HIGGS_SKIP_DEPENDENCY_CHECK:-false}
+skip_dependency_check=${PHOTON_SKIP_DEPENDENCY_CHECK:-false}
 
 usage() {
 	cat <<'EOF'
-Install Higgs from a GitHub Release.
+Install Photon from a GitHub Release.
 
 Usage: install.sh [--version VERSION] [--install-dir DIR] [--no-service] [--enable-service] [--skip-dependency-check] [--update]
 
@@ -21,7 +21,7 @@ Options:
   --version VERSION   Release tag to install (default: latest)
   --install-dir DIR   Binary destination (default: /usr/local/bin)
   --no-service        Do not install the systemd service
-  --enable-service    Enable higgsnet.service after installing it (does not start it)
+  --enable-service    Enable photon.service after installing it (does not start it)
   --skip-dependency-check
                       Skip host runtime dependency checks (for control-plane-only
                       or externally managed deployments)
@@ -29,11 +29,11 @@ Options:
   -h, --help          Show this help
 
 Environment:
-  HIGGS_GITHUB_REPOSITORY  GitHub owner/repository (default: HiggsNet/higgs)
-  HIGGS_VERSION            Same as --version
-  HIGGS_INSTALL_DIR        Same as --install-dir
-  HIGGS_SYSTEMD_DIR        systemd unit directory (default: /etc/systemd/system)
-  HIGGS_SKIP_DEPENDENCY_CHECK
+  PHOTON_GITHUB_REPOSITORY  GitHub owner/repository (default: Catofes/photon)
+  PHOTON_VERSION            Same as --version
+  PHOTON_INSTALL_DIR        Same as --install-dir
+  PHOTON_SYSTEMD_DIR        systemd unit directory (default: /etc/systemd/system)
+  PHOTON_SKIP_DEPENDENCY_CHECK
                            Set to true to skip runtime dependency checks
 EOF
 }
@@ -59,7 +59,7 @@ check_runtime_dependencies() {
 
 	if [ -n "$missing" ]; then
 		cat >&2 <<EOF
-error: missing Higgs runtime dependencies: ${missing}
+error: missing Photon runtime dependencies: ${missing}
 
 A full data-plane installation needs:
   iproute2: ip
@@ -93,7 +93,7 @@ EOF
 		cat >&2 <<EOF
 error: unsupported BIRD version: ${bird_version_raw:-unknown}
 
-Higgs native data-plane installations require BIRD 2.14 or newer.
+Photon native data-plane installations require BIRD 2.14 or newer.
 Ubuntu 24.04 and newer provide a compatible bird2 package. For a
 control-plane-only or externally managed deployment, pass
 --skip-dependency-check explicitly.
@@ -168,7 +168,7 @@ case "$skip_dependency_check" in
 	true) ;;
 	false) check_runtime_dependencies ;;
 	*)
-		echo "error: HIGGS_SKIP_DEPENDENCY_CHECK must be true or false" >&2
+		echo "error: PHOTON_SKIP_DEPENDENCY_CHECK must be true or false" >&2
 		exit 2
 		;;
 esac
@@ -188,21 +188,21 @@ case "$version" in
 esac
 
 already_current=false
-if [ "$update_only" = true ] && command -v higgsnet >/dev/null 2>&1 && command -v higgs-services >/dev/null 2>&1; then
-	current=$(higgsnet version 2>/dev/null | sed -n '1s/^higgs //p')
+if [ "$update_only" = true ] && command -v photon >/dev/null 2>&1 && command -v photon-services >/dev/null 2>&1; then
+	current=$(photon version 2>/dev/null | sed -n '1s/^photon //p')
 	if [ "$current" = "$version" ]; then
 		already_current=true
 	fi
 fi
 
-archive="higgs-${version}-${os}-${arch}.tar.gz"
-checksum="higgs-${os}-${arch}.sha256"
+archive="photon-${version}-${os}-${arch}.tar.gz"
+checksum="photon-${os}-${arch}.sha256"
 base_url="https://github.com/${repo}/releases/download/${version}"
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 if [ "$already_current" = false ]; then
-	echo "Downloading higgs ${version} for ${os}/${arch}..."
+	echo "Downloading photon ${version} for ${os}/${arch}..."
 	curl -fL --retry 3 -o "${tmp_dir}/${archive}" "${base_url}/${archive}"
 	curl -fL --retry 3 -o "${tmp_dir}/${checksum}" "${base_url}/${checksum}"
 	(
@@ -210,52 +210,52 @@ if [ "$already_current" = false ]; then
 		sha256sum -c "$checksum"
 	)
 	tar -xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
-	binary="${tmp_dir}/higgs-${version}-${os}-${arch}/higgs"
-	services_binary="${tmp_dir}/higgs-${version}-${os}-${arch}/higgs-services"
-	[ -x "$binary" ] || { echo "error: release archive does not contain higgs" >&2; exit 1; }
-	[ -x "$services_binary" ] || { echo "error: release archive does not contain higgs-services" >&2; exit 1; }
+	binary="${tmp_dir}/photon-${version}-${os}-${arch}/photon"
+	services_binary="${tmp_dir}/photon-${version}-${os}-${arch}/photon-services"
+	[ -x "$binary" ] || { echo "error: release archive does not contain photon" >&2; exit 1; }
+	[ -x "$services_binary" ] || { echo "error: release archive does not contain photon-services" >&2; exit 1; }
 
 	if [ -d "$install_dir" ] && [ -w "$install_dir" ]; then
-		install -m 0755 "$binary" "${install_dir}/higgsnet"
-		install -m 0755 "$services_binary" "${install_dir}/higgs-services"
+		install -m 0755 "$binary" "${install_dir}/photon"
+		install -m 0755 "$services_binary" "${install_dir}/photon-services"
 	elif [ ! -e "$install_dir" ] && [ -w "$(dirname "$install_dir")" ]; then
 		mkdir -p "$install_dir"
-		install -m 0755 "$binary" "${install_dir}/higgsnet"
-		install -m 0755 "$services_binary" "${install_dir}/higgs-services"
+		install -m 0755 "$binary" "${install_dir}/photon"
+		install -m 0755 "$services_binary" "${install_dir}/photon-services"
 	elif command -v sudo >/dev/null 2>&1; then
 		sudo install -d "$install_dir"
-		sudo install -m 0755 "$binary" "${install_dir}/higgsnet"
-		sudo install -m 0755 "$services_binary" "${install_dir}/higgs-services"
+		sudo install -m 0755 "$binary" "${install_dir}/photon"
+		sudo install -m 0755 "$services_binary" "${install_dir}/photon-services"
 	else
-		echo "error: ${install_dir} is not writable; rerun as root or set HIGGS_INSTALL_DIR" >&2
+		echo "error: ${install_dir} is not writable; rerun as root or set PHOTON_INSTALL_DIR" >&2
 		exit 1
 	fi
 
-	echo "Installed higgsnet ${version} and higgs-services to ${install_dir}"
-	"${install_dir}/higgsnet" version
+	echo "Installed photon ${version} and photon-services to ${install_dir}"
+	"${install_dir}/photon" version
 else
-	echo "higgsnet ${version} is already installed"
+	echo "photon ${version} is already installed"
 fi
 
 if [ "$install_service" = true ]; then
-	service_source="${tmp_dir}/higgsnet.service"
-	archive_service="${tmp_dir}/higgs-${version}-${os}-${arch}/higgsnet.service"
+	service_source="${tmp_dir}/photon.service"
+	archive_service="${tmp_dir}/photon-${version}-${os}-${arch}/photon.service"
 	if [ -f "$archive_service" ]; then
 		cp "$archive_service" "$service_source.source"
 	elif ! curl -fsL --retry 3 -o "$service_source.source" \
-		"https://raw.githubusercontent.com/${repo}/${version}/contrib/systemd/higgsnet.service"; then
-		installer_ref="${HIGGS_INSTALLER_REF:-master}"
+		"https://raw.githubusercontent.com/${repo}/${version}/contrib/systemd/photon.service"; then
+		installer_ref="${PHOTON_INSTALLER_REF:-master}"
 		curl -fL --retry 3 -o "$service_source.source" \
-			"https://raw.githubusercontent.com/${repo}/${installer_ref}/contrib/systemd/higgsnet.service"
+			"https://raw.githubusercontent.com/${repo}/${installer_ref}/contrib/systemd/photon.service"
 	fi
-	sed "s|^ExecStart=.*|ExecStart=${install_dir}/higgsnet daemon|" \
+	sed "s|^ExecStart=.*|ExecStart=${install_dir}/photon daemon|" \
 		"$service_source.source" > "$service_source"
 
 	if [ -d "$service_dir" ] && [ -w "$service_dir" ]; then
-		install -m 0644 "$service_source" "${service_dir}/higgsnet.service"
+		install -m 0644 "$service_source" "${service_dir}/photon.service"
 	elif command -v sudo >/dev/null 2>&1; then
 		sudo install -d "$service_dir"
-		sudo install -m 0644 "$service_source" "${service_dir}/higgsnet.service"
+		sudo install -m 0644 "$service_source" "${service_dir}/photon.service"
 	else
 		echo "error: ${service_dir} is not writable; rerun as root or use --no-service" >&2
 		exit 1
@@ -264,11 +264,11 @@ if [ "$install_service" = true ]; then
 	if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
 		if [ "$(id -u)" -eq 0 ]; then
 			systemctl daemon-reload
-			[ "$enable_service" = false ] || systemctl enable higgsnet.service
+			[ "$enable_service" = false ] || systemctl enable photon.service
 		else
 			sudo systemctl daemon-reload
-			[ "$enable_service" = false ] || sudo systemctl enable higgsnet.service
+			[ "$enable_service" = false ] || sudo systemctl enable photon.service
 		fi
 	fi
-	echo "Installed ${service_dir}/higgsnet.service (not started)"
+	echo "Installed ${service_dir}/photon.service (not started)"
 fi

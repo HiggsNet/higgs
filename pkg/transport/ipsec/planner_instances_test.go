@@ -2,7 +2,7 @@ package ipsec
 
 import (
 	"errors"
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +16,7 @@ func TestReconcileLinkInstancesCreatesAdoptsRepairsAndTeardowns(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	result := ReconcileLinkInstances(ReconcileInputs{Desired: []TransportLinkSpec{spec}, Now: now})
@@ -24,7 +24,7 @@ func TestReconcileLinkInstancesCreatesAdoptsRepairsAndTeardowns(t *testing.T) {
 		t.Fatalf("create action missing: %+v", result.Actions)
 	}
 	instance := result.Instances[LinkInstanceID(spec)]
-	if instance.Owner.Manager != "higgs" || instance.Owner.Token == "" || instance.DesiredSpecHash == "" {
+	if instance.Owner.Manager != "photon" || instance.Owner.Token == "" || instance.DesiredSpecHash == "" {
 		t.Fatalf("instance = %+v", instance)
 	}
 	if err := instance.Owner.Validate(instance); err != nil {
@@ -104,7 +104,7 @@ func TestReconcileLinkInstancesRevocationWinsOverDesiredState(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	result := ReconcileLinkInstances(ReconcileInputs{
@@ -131,7 +131,7 @@ func TestReconcileLinkInstancesHonorsApplyBackoff(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	inst := NewLinkInstance(spec, LinkStateUp, now)
@@ -177,7 +177,7 @@ func TestReconcileLinkInstancesRetriesConnectingWithoutSAAfterBackoff(t *testing
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	inst := NewLinkInstance(spec, LinkStateConnecting, now)
@@ -244,7 +244,7 @@ func TestReconcileLinkInstancesWaitsForObservedConnectingSA(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	inst := NewLinkInstance(spec, LinkStateConnecting, now)
@@ -284,7 +284,7 @@ func TestReconcileLinkInstancesEstablishedSAWinsOverBackoff(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	inst := NewLinkInstance(spec, LinkStateConnecting, now)

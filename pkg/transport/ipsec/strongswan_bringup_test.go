@@ -20,15 +20,15 @@ import (
 // two charon instances running in separate network namespaces, creates XFRM
 // interfaces, assigns tunnel addresses, and verifies bidirectional ping.
 func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
-		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
+	if os.Getenv("PHOTON_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set PHOTON_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	suffix := time.Now().UTC().Format("20060102150405")
-	nsA := "higgs-ike-a-" + suffix
-	nsB := "higgs-ike-b-" + suffix
+	nsA := "photon-ike-a-" + suffix
+	nsB := "photon-ike-b-" + suffix
 	viciA := "/tmp/charon-" + nsA + ".vici"
 	viciB := "/tmp/charon-" + nsB + ".vici"
 
@@ -42,16 +42,16 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	// Create network namespaces and a veth pair connecting them.
 	runIP(t, ctx, "netns", "add", nsA)
 	runIP(t, ctx, "netns", "add", nsB)
-	runIP(t, ctx, "link", "add", "hgvetha", "type", "veth", "peer", "name", "hgvethb")
-	runIP(t, ctx, "link", "set", "hgvetha", "netns", nsA)
-	runIP(t, ctx, "link", "set", "hgvethb", "netns", nsB)
+	runIP(t, ctx, "link", "add", "phvetha", "type", "veth", "peer", "name", "phvethb")
+	runIP(t, ctx, "link", "set", "phvetha", "netns", nsA)
+	runIP(t, ctx, "link", "set", "phvethb", "netns", nsB)
 	for _, args := range [][]string{
 		{"netns", "exec", nsA, "ip", "link", "set", "lo", "up"},
 		{"netns", "exec", nsB, "ip", "link", "set", "lo", "up"},
-		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.1/30", "dev", "hgvetha"},
-		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.2/30", "dev", "hgvethb"},
-		{"netns", "exec", nsA, "ip", "link", "set", "hgvetha", "up"},
-		{"netns", "exec", nsB, "ip", "link", "set", "hgvethb", "up"},
+		{"netns", "exec", nsA, "ip", "addr", "add", "192.0.2.1/30", "dev", "phvetha"},
+		{"netns", "exec", nsB, "ip", "addr", "add", "192.0.2.2/30", "dev", "phvethb"},
+		{"netns", "exec", nsA, "ip", "link", "set", "phvetha", "up"},
+		{"netns", "exec", nsB, "ip", "link", "set", "phvethb", "up"},
 	} {
 		runIP(t, ctx, args...)
 	}
@@ -67,20 +67,20 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write strongswan.conf B: %v", err)
 	}
-	piddirA, err := os.MkdirTemp("", "higgs-piddir-a-*")
+	piddirA, err := os.MkdirTemp("", "photon-piddir-a-*")
 	if err != nil {
 		t.Fatalf("create piddir A: %v", err)
 	}
-	piddirB, err := os.MkdirTemp("", "higgs-piddir-b-*")
+	piddirB, err := os.MkdirTemp("", "photon-piddir-b-*")
 	if err != nil {
 		t.Fatalf("create piddir B: %v", err)
 	}
 
-	logA, err := os.CreateTemp("", "higgs-charon-a-*.log")
+	logA, err := os.CreateTemp("", "photon-charon-a-*.log")
 	if err != nil {
 		t.Fatalf("create log A: %v", err)
 	}
-	logB, err := os.CreateTemp("", "higgs-charon-b-*.log")
+	logB, err := os.CreateTemp("", "photon-charon-b-*.log")
 	if err != nil {
 		t.Fatalf("create log B: %v", err)
 	}
@@ -144,8 +144,8 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 
 	const ifIDA = uint32(424244)
 	const ifIDB = uint32(424344)
-	ifaceA := "hgsikea0"
-	ifaceB := "hgsikeb0"
+	ifaceA := "phxikea0"
+	ifaceB := "phxikeb0"
 	transportAtoB := "ipsec-ike-a-b"
 	transportBtoA := "ipsec-ike-b-a"
 
@@ -223,7 +223,7 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	}
 
 	// Wait until both sides report an established SA. The loaded children use
-	// trap policies; Higgs triggers establishment explicitly through VICI.
+	// trap policies; Photon triggers establishment explicitly through VICI.
 	if err := waitForSA(ctx, clientA, transportAtoB); err != nil {
 		t.Fatalf("wait for SA on A: %v", err)
 	}
@@ -251,15 +251,15 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 // if_id and logs whether StrongSwan establishes the staged SA while the old SA
 // is still alive.
 func TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke(t *testing.T) {
-	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
-		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
+	if os.Getenv("PHOTON_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set PHOTON_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 	defer cancel()
 
 	suffix := time.Now().UTC().Format("20060102150405")
-	nsA := "higgs-unload-a-" + suffix
-	nsB := "higgs-unload-b-" + suffix
+	nsA := "photon-unload-a-" + suffix
+	nsB := "photon-unload-b-" + suffix
 	viciA := "/tmp/charon-" + nsA + ".vici"
 	viciB := "/tmp/charon-" + nsB + ".vici"
 
@@ -294,19 +294,19 @@ func TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write strongswan.conf B: %v", err)
 	}
-	piddirA, err := os.MkdirTemp("", "higgs-unload-piddir-a-*")
+	piddirA, err := os.MkdirTemp("", "photon-unload-piddir-a-*")
 	if err != nil {
 		t.Fatalf("create piddir A: %v", err)
 	}
-	piddirB, err := os.MkdirTemp("", "higgs-unload-piddir-b-*")
+	piddirB, err := os.MkdirTemp("", "photon-unload-piddir-b-*")
 	if err != nil {
 		t.Fatalf("create piddir B: %v", err)
 	}
-	logA, err := os.CreateTemp("", "higgs-unload-charon-a-*.log")
+	logA, err := os.CreateTemp("", "photon-unload-charon-a-*.log")
 	if err != nil {
 		t.Fatalf("create log A: %v", err)
 	}
-	logB, err := os.CreateTemp("", "higgs-unload-charon-b-*.log")
+	logB, err := os.CreateTemp("", "photon-unload-charon-b-*.log")
 	if err != nil {
 		t.Fatalf("create log B: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke(t *testing.T) {
 		LocalAddress:             "192.0.2.9",
 		ContactPoints:            []ContactPoint{{Address: "192.0.2.10", IKEPort: DefaultIKEPort, NATTPort: DefaultNATTPort}},
 		XFRMIfID:                 424446,
-		InterfaceName:            "hgsunloada0",
+		InterfaceName:            "phxunloada0",
 		LocalTunnelAddr:          addrA,
 		PeerTunnelAddr:           addrB,
 		NetNS:                    nsA,
@@ -404,7 +404,7 @@ func TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke(t *testing.T) {
 		IKEIdentity:              "node-b.",
 		LocalAddress:             "192.0.2.10",
 		XFRMIfID:                 424546,
-		InterfaceName:            "hgsunloadb0",
+		InterfaceName:            "phxunloadb0",
 		LocalTunnelAddr:          addrB,
 		PeerTunnelAddr:           addrA,
 		NetNS:                    nsB,
@@ -453,13 +453,13 @@ func TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke(t *testing.T) {
 	stagedA := specA
 	stagedA.TransportID = RotateConnectionName(specA.TransportID, 2)
 	stagedA.XFRMIfID = 424447
-	stagedA.InterfaceName = "hgsunloada2"
+	stagedA.InterfaceName = "phxunloada2"
 	stagedA.LocalTunnelAddr = stagedAddrA
 	stagedA.PeerTunnelAddr = stagedAddrB
 	stagedB := specB
 	stagedB.TransportID = RotateConnectionName(specB.TransportID, 2)
 	stagedB.XFRMIfID = 424547
-	stagedB.InterfaceName = "hgsunloadb2"
+	stagedB.InterfaceName = "phxunloadb2"
 	stagedB.LocalTunnelAddr = stagedAddrB
 	stagedB.PeerTunnelAddr = stagedAddrA
 
@@ -495,15 +495,15 @@ func TestStrongSwanUnloadConnectionKeepsEstablishedSASmoke(t *testing.T) {
 // IKE is still reachable"; the secondary starts in standby, then reconcile
 // promotes it to takeover and establishes the SA.
 func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
-	if os.Getenv("HIGGS_IPSEC_XFRM_SMOKE") != "1" {
-		t.Skip("set HIGGS_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
+	if os.Getenv("PHOTON_IPSEC_XFRM_SMOKE") != "1" {
+		t.Skip("set PHOTON_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	suffix := time.Now().UTC().Format("20060102150405")
-	nsA := "higgs-take-a-" + suffix
-	nsB := "higgs-take-b-" + suffix
+	nsA := "photon-take-a-" + suffix
+	nsB := "photon-take-b-" + suffix
 	viciA := "/tmp/charon-" + nsA + ".vici"
 	viciB := "/tmp/charon-" + nsB + ".vici"
 
@@ -538,19 +538,19 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write strongswan.conf B: %v", err)
 	}
-	piddirA, err := os.MkdirTemp("", "higgs-take-piddir-a-*")
+	piddirA, err := os.MkdirTemp("", "photon-take-piddir-a-*")
 	if err != nil {
 		t.Fatalf("create piddir A: %v", err)
 	}
-	piddirB, err := os.MkdirTemp("", "higgs-take-piddir-b-*")
+	piddirB, err := os.MkdirTemp("", "photon-take-piddir-b-*")
 	if err != nil {
 		t.Fatalf("create piddir B: %v", err)
 	}
-	logA, err := os.CreateTemp("", "higgs-take-charon-a-*.log")
+	logA, err := os.CreateTemp("", "photon-take-charon-a-*.log")
 	if err != nil {
 		t.Fatalf("create log A: %v", err)
 	}
-	logB, err := os.CreateTemp("", "higgs-take-charon-b-*.log")
+	logB, err := os.CreateTemp("", "photon-take-charon-b-*.log")
 	if err != nil {
 		t.Fatalf("create log B: %v", err)
 	}
@@ -607,8 +607,8 @@ func TestStrongSwanBidirectionalTakeoverSmoke(t *testing.T) {
 
 	const ifIDA = uint32(424245)
 	const ifIDB = uint32(424345)
-	ifaceA := "hgstakea0"
-	ifaceB := "hgstakeb0"
+	ifaceA := "phxtakea0"
+	ifaceB := "phxtakeb0"
 	transportA := "ipsec-takeover-a"
 	transportB := "ipsec-takeover-b"
 	group := LinkGroupSpec{

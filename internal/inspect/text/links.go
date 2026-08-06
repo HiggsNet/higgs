@@ -6,8 +6,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/Catofes/higgs/internal/inspect"
-	"github.com/Catofes/higgs/pkg/transport/ipsec"
+	"github.com/Catofes/photon/internal/inspect"
+	"github.com/Catofes/photon/pkg/transport/ipsec"
 )
 
 func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, verbose bool) error {

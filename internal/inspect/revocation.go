@@ -1,6 +1,6 @@
 package inspect
 
-import "github.com/Catofes/higgs/pkg/core/zone"
+import "github.com/Catofes/photon/pkg/core/zone"
 
 // RevocationImpact describes the set of objects affected by a revocation.
 type RevocationImpact struct {

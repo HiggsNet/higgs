@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestWriteHealthDebugNoTargets(t *testing.T) {
@@ -25,7 +25,7 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 				InstanceID:      "link-b",
 				PeerZone:        "node-b.catofes.",
 				Overlay:         "blue",
-				InterfaceName:   "hgs-b",
+				InterfaceName:   "phx-b",
 				LocalTunnelAddr: "fd00::1",
 				PeerTunnelAddr:  "fd00::2",
 				ProbeRole:       "staged",
@@ -37,7 +37,7 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 				InstanceID:      "link-a",
 				PeerZone:        "node-a.catofes.",
 				Overlay:         "blue",
-				InterfaceName:   "hgs-a",
+				InterfaceName:   "phx-a",
 				LocalTunnelAddr: "fd00::3",
 				PeerTunnelAddr:  "fd00::4",
 				State:           "up",
@@ -75,8 +75,8 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Link health (2 links):",
-		"probe_id=link-a role=active underlay=- interface=hgs-a local=fd00::3 peer_addr=fd00::4",
-		"probe_id=link-b#staged role=staged underlay=- interface=hgs-b local=fd00::1 peer_addr=fd00::2",
+		"probe_id=link-a role=active underlay=- interface=phx-a local=fd00::3 peer_addr=fd00::4",
+		"probe_id=link-b#staged role=staged underlay=- interface=phx-b local=fd00::1 peer_addr=fd00::2",
 		"Live health state:",
 		"link-b#staged: state=healthy role=staged probe=icmp",
 		"sent=4 received=3 lost=1 loss=25%",

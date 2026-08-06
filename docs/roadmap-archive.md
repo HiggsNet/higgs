@@ -1,4 +1,4 @@
-# Higgs Roadmap Archive
+# Photon Roadmap Archive
 
 本文件从 `todo.md` 拆出，用来保存阶段历史清单、已完成细节和旧阶段遗留的后续设计决策。主 `todo.md` 只保留当前可执行任务、未来计划和指向本归档的摘要链接。
 
@@ -7,7 +7,7 @@
 **目标：** 在单机完成可验证的配置状态机，不依赖网络。
 
 - [x] **0.1 项目结构**
-  - 入口目录：沿用当前 `app/higgs/`；后续如需要标准 Go 布局，再迁移到 `cmd/higgs/`
+  - 入口目录：沿用当前 `app/photon/`；后续如需要标准 Go 布局，再迁移到 `cmd/photon/`
   - [x] 已创建：`pkg/core/zone/`, `pkg/crypto/`
   - [x] 待创建：`pkg/core/{identity,merkle,gossip}`, `pkg/transport/wireguard/`, `pkg/routing/bird/`
   - Go 版本已按当前依赖更新为 `go 1.25.0`
@@ -39,12 +39,12 @@
   - [x] 保留 bounded `RecordHistory` 用于版本审计；普通同步不再维护 pending 补前驱状态
 
 - [x] **0.6 CLI 调试**
-  - [x] `higgs init`
-  - [x] `higgs gossip zone show <zone>`
-  - [x] `higgs gossip record put <zone> <key> <value>`
-  - [x] `higgs verify <zone>`
-  - [x] `higgs db dump [zone]`：以只读模式打开 bbolt，按 bucket 打印 key-value（JSON 美化）
-  - [x] `higgs db stats`：统计各 bucket 的 key 数和数据大小
+  - [x] `photon init`
+  - [x] `photon gossip zone show <zone>`
+  - [x] `photon gossip record put <zone> <key> <value>`
+  - [x] `photon verify <zone>`
+  - [x] `photon db dump [zone]`：以只读模式打开 bbolt，按 bucket 打印 key-value（JSON 美化）
+  - [x] `photon db stats`：统计各 bucket 的 key 数和数据大小
 
 ## Phase 1: 两节点 Zone 同步（预计 1-2 周）
 
@@ -70,17 +70,17 @@
 
 - [x] **1.4 闭环验证**
   - [x] 节点 A 修改本地 Zone Record
-  - [x] Gossip 到节点 B（`higgs sync serve` + `higgs sync once <peer>`）
+  - [x] Gossip 到节点 B（`photon sync serve` + `photon sync once <peer>`）
   - [x] B 验证通过后 active store 可见
-  - [x] CLI: `higgs sync status`
+  - [x] CLI: `photon sync status`
 
 ## Phase 1.5: 配置与节点准入工具（已完成）
 
 **目标：** 把 Phase 1 的手工状态准备收敛成固定配置文件和可重复的 join/delegation 流程。
 
 - [x] **1.5.1 固定配置文件**
-  - [x] 默认读取 `config.yaml`，可用 `HIGGS_CONFIG=/path/to/config.yaml` 覆盖
-  - [x] 配置数据库目录：`data_dir` / `database_dir`，默认状态库为 `<data_dir>/higgs.db`
+  - [x] 默认读取 `config.yaml`，可用 `PHOTON_CONFIG=/path/to/config.yaml` 覆盖
+  - [x] 配置数据库目录：`data_dir` / `database_dir`，默认状态库为 `<data_dir>/photon.db`
   - [x] 配置监听地址：`listen_addr`，或用 `listen_port` 生成 `:<port>`
   - [x] 配置 bootstrap allowlist：`bootstrap: [{id, addr}]`
   - [x] 配置根信任公钥：`trusted_root_public_key`（默认 base64，兼容 hex 的 ED25519 public key）
@@ -88,14 +88,14 @@
   - [x] 提供 `config.example.yaml`
 
 - [x] **1.5.2 根 Zone 与准入 CLI**
-  - [x] `higgs gossip root init`：只创建根域 `.` 的 root authority
-  - [x] `higgs gossip root pubkey`：输出根公钥，供其他节点配置 `trusted_root_public_key`
+  - [x] `photon gossip root init`：只创建根域 `.` 的 root authority
+  - [x] `photon gossip root pubkey`：输出根公钥，供其他节点配置 `trusted_root_public_key`
   - [x] root/admin 状态库与业务节点状态库分离；`node-admin` 只持有 `.` 的 root 私钥
   - [x] 一级管理 Zone（如 `catofes.`）也通过 join request / root delegation 独立加入，并由自己的管理私钥继续委派子 Zone
-  - [x] `higgs gossip keygen <key.json>`：生成新节点 ED25519 keypair
-  - [x] `higgs gossip join request <zone> <key.json> [request.b64]`：新节点生成可直接复制的 base64 加入申请
-  - [x] `higgs gossip delegate issue <request-b64|request-file> [bundle.b64]`：父 Zone 持有者签发可直接复制的 base64 delegation bundle
-  - [x] `higgs gossip join accept <bundle-b64|bundle-file> <key.json>`：新节点导入信任链和本 Zone authority
+  - [x] `photon gossip keygen <key.json>`：生成新节点 ED25519 keypair
+  - [x] `photon gossip join request <zone> <key.json> [request.b64]`：新节点生成可直接复制的 base64 加入申请
+  - [x] `photon gossip delegate issue <request-b64|request-file> [bundle.b64]`：父 Zone 持有者签发可直接复制的 base64 delegation bundle
+  - [x] `photon gossip join accept <bundle-b64|bundle-file> <key.json>`：新节点导入信任链和本 Zone authority
   - [x] 新节点不会接触 root/admin 私钥，只持有自己的 Zone 私钥
 
 - [x] **1.5.3 验证目标**
@@ -123,7 +123,7 @@
   - [x] 增加 `make multi-node-smoke`，覆盖 3 节点本机流程
 
 - [x] **2.3 同步状态可观测性**
-  - [x] `higgs sync status` 输出每个 peer 的最近同步时间、已知 Zone 数和本地 root hash
+  - [x] `photon sync status` 输出每个 peer 的最近同步时间、已知 Zone 数和本地 root hash
   - [x] 显示 local root hash / per-zone root hash / last error
   - [x] 扩展 `sync status` 用于排查 bootstrap 与 allowlist
 
@@ -132,12 +132,12 @@
   - [x] 输出消息方向、peer id、message type、zone 数、record 数、字节数、耗时
   - [x] 记录 reject 原因：unknown peer、addr mismatch、message too large、replay、quota、verify failed、unsupported wire version
   - [x] `sync status --verbose` 显示 bootstrap peers、discovered peers、allowlist 来源、resolved addr、last_success、last_error
-  - [x] 增加 `higgs debug peer <peer-id>`：查看某个 peer 的最近同步、错误、backoff、known endpoint、发现来源
-  - [x] 增加 `higgs debug zone <zone>`：查看 zone root、record/history 数量、delegation、parent proof、验证结果
-  - [x] 支持 `HIGGS_LOG_LEVEL=debug` 或配置项开启详细日志，默认保持简洁输出
+  - [x] 增加 `photon debug peer <peer-id>`：查看某个 peer 的最近同步、错误、backoff、known endpoint、发现来源
+  - [x] 增加 `photon debug zone <zone>`：查看 zone root、record/history 数量、delegation、parent proof、验证结果
+  - [x] 支持 `PHOTON_LOG_LEVEL=debug` 或配置项开启详细日志，默认保持简洁输出
 
 - [x] **2.5 自动重连与周期同步**
-  - [x] 增加长期运行模式：`higgs sync run`
+  - [x] 增加长期运行模式：`photon sync run`
   - [x] `sync run` 同时执行 UDP serve 与周期性 outbound sync
   - [x] 对 bootstrap peers 定时执行摘要比较和缺失 Zone/Record 补齐
   - [x] peer 失败后记录 `last_error`，并使用 backoff 避免紧密重试
@@ -176,7 +176,7 @@
   - [x] 将 discovered peers 合并到运行时 known peer table，bootstrap 作为种子节点保留
   - [x] 接收包时仍按 peer id + endpoint allowlist 校验，避免 unknown peer 直接注入状态
   - [x] endpoint 变更后更新 known peer table，过期/撤销后标记 stale 或移除
-  - [x] 增加 CLI 诊断：`higgs debug endpoints` 显示本机候选 endpoints、discovered peers；`sync status --verbose` 显示 discovered peers；`debug peer` 显示 discovered_addr
+  - [x] 增加 CLI 诊断：`photon debug endpoints` 显示本机候选 endpoints、discovered peers；`sync status --verbose` 显示 discovered peers；`debug peer` 显示 discovered_addr
   - [x] 增加 smoke：`make discovery-smoke` 验证新 peer 发布 signed endpoint record 并经 gossip 传播后其他节点可动态发现
   - [x] 增加 smoke：公网 endpoint 由 reflector 自动发现并签名发布；IP 变化后自动发布新版本，其他节点验证 record 后更新 known peer table，并在失败时回退 bootstrap/static endpoint
 
@@ -239,7 +239,7 @@
   - [x] 撤销后，本地 active state 将该 Zone 及其子树标记为 revoked/quarantined：停止接受该 Zone 新 record、停止 relay 其新 announce、停止将其 endpoints 加入 known peer table
   - [x] 保留已撤销 Zone 的历史数据用于审计和冲突排查，但默认查询、配置生成、peer discovery、route authorization 不再使用其 active records
   - [x] 清理撤销子树相关 sync peer 状态、discovered endpoints、relay fanout 队列，避免已撤销节点继续通过 relay 恢复活跃状态
-  - [x] 增加 CLI：`higgs gossip delegate revoke <zone>` 由父 Zone 管理者签发撤销；`higgs debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
+  - [x] 增加 CLI：`photon gossip delegate revoke <zone>` 由父 Zone 管理者签发撤销；`photon debug zone <zone>` 显示 revoked 状态、撤销来源、撤销时间和影响子树
   - [x] 增加 gossip 同步语义：revocation/tombstone 必须进入 zone digest/snapshot，传播优先级高于普通 record，节点收到后立即触发 outbound sync/relay fanout
   - [x] 增加测试：撤销普通节点 Zone 后，其他节点拒绝其新 record 和 endpoint；撤销中间管理 Zone 后，其整个子树失效；重启后 revoked 状态仍持久化
     - 已补核心单测：父 Zone tombstone 传播后 VerifyChain/RecordSnapshot 拒绝 revoked child；revoked zone endpoint 不再进入 discovery；父 Zone revocation 覆盖整棵子树；bbolt 重启后 revocation 持久化。
@@ -256,7 +256,7 @@
     - [x] `Transport.lastSeenAddrs`：Send() 无静态 outbound 地址时，回退到最近 inbound 包的 UDP 源地址，使 A 能在无 B 的 endpoint record 时仍回复首条 Pong
   - [x] 安全边界：入站白名单放宽到「有合法 delegation chain」的 zone，但消息内容仍经过完整 `VerifyChain` / `VerifyRecord` 验证，信任根不变
   - [x] 增加 `pkg/core/gossip/transport_test.go`：AddKnownPeerID / lastSeenAddrs 单元测试
-  - [x] 增加 `app/higgs/sync_test.go`：openSyncTransport / updateDiscoveredPeers 单元测试（构造 root→catofes→node-b delegation chain）
+  - [x] 增加 `app/photon/sync_test.go`：openSyncTransport / updateDiscoveredPeers 单元测试（构造 root→catofes→node-b delegation chain）
   - [x] 增加 `make bootstrap-join-smoke`：验证全新节点 B 只配置 bootstrap A、A 有 B 的 zone 但无 endpoint record 时，双向 gossip 同步成功建立
 
 ## Phase 3: 最小节点 daemon / 单 writer 边界（预计 1-2 周）
@@ -266,14 +266,14 @@
 - [x] **3.1 Daemon 服务骨架**
   - [x] 明确 Phase 2 → Phase 3 边界：同步已经具备最终一致性；Phase 3 的首要风险是长期进程、CLI 写入和 WG apply 同时改 state，因此先做 daemon 单 writer，再做 WG
   - [x] 抽出 `SyncService` / `DaemonService`：复用 `sync run` 的 UDP serve、周期 outbound sync、endpoint publish、relay fanout、backoff/rejected digest 逻辑，避免维护两套同步主循环
-  - [x] 增加 `higgs daemon` 常驻模式：加载一次 config/state，启动 UDP transport，进入统一事件循环，并为后续 WG/Babel/firewall apply 预留 state-change hook
+  - [x] 增加 `photon daemon` 常驻模式：加载一次 config/state，启动 UDP transport，进入统一事件循环，并为后续 WG/Babel/firewall apply 预留 state-change hook
   - [x] 明确 daemon 是本节点 state DB 的唯一长期 writer：`record put`、endpoint publish、sync apply、sync trigger、未来 WG apply 相关状态都通过 daemon 串行执行
 
 - [x] **3.2 本地事件队列与控制接口**
   - [x] 定义最小内存事件队列：local record put、remote announce applied、timer tick、manual sync trigger、shutdown/reload；同一队列串行落盘和触发后续动作
     - 已接入 local `record_put`、manual `sync_trigger`、`shutdown`；UDP packet / remote announce applied、endpoint publish timer、outbound sync timer 也已统一为 daemon event handler 分支
   - [x] 提供最小 Unix domain socket control API：`status`、`record_put`、`sync_trigger`、`reload`、`shutdown`；只做本机接口，不做远程管理
-  - [x] 约定 socket 路径和权限：默认 `/run/higgs/higgs.sock` 或 `<data_dir>/higgs.sock` fallback；默认只允许本机同用户/管理员访问
+  - [x] 约定 socket 路径和权限：默认 `/run/photon/photon.sock` 或 `<data_dir>/photon.sock` fallback；默认只允许本机同用户/管理员访问
 
 - [x] **3.3 CLI client 化与兼容模式**
   - [x] CLI 在检测到 daemon control socket 存在时优先作为 client 提交写命令；daemon 不存在时保留当前直接写 DB 的开发/恢复模式，并输出明确提示
@@ -331,14 +331,14 @@
     - `max_datagram_bytes` / `target_datagram_bytes` 优先于旧字段；发送端通过 MessagePack wire size preflight 和 `Transport.Send` 双重限制，超预算对象转 object pull / digest-only announce
   - [x] debug/status 输出当前 datagram 预算、最近丢弃/拒绝的大包、拆包统计，避免只看到 `quota` / timeout 难以定位
     - `sync status --verbose` 已输出 `max_datagram_bytes` / `wire_codec`，并按 peer 显示持久化的 oversized UDP drop、digest-only announce 和 UDP chunk fallback 计数；`debug peer` 显示最近 oversized 对象、zone/key、bytes/limit。第一版主路径无 UDP chunk，因此 fallback 计数保持为显式 0。
-  - [x] README 和公网手册明确：Higgs gossip 不依赖 IP fragmentation；调大上限只是实验/内网诊断选项，不是公网推荐配置
+  - [x] README 和公网手册明确：Photon gossip 不依赖 IP fragmentation；调大上限只是实验/内网诊断选项，不是公网推荐配置
 
 - [x] **3.6.2 MessagePack wire codec / 压缩协议**
   - [x] 设计并切换 gossip wire codec：从当前 JSON payload 迁移到 MessagePack，避免一开始引入 protobuf/protoc codegen；protobuf 保留为未来极限优化或强 schema 需求的 optional later 路线
   - [x] Go struct 使用短 tag（如 `msgpack:"t"` / `msgpack:"z"` / `msgpack:"r"`）压缩字段名，让 MessagePack 体积接近 protobuf，同时保持开发和调试轻量
   - [x] 二进制格式必须直接承载 `bytes` 字段（pubkey、signature、hash、record value），避免 JSON base64 与字段名开销放大数据包
   - [x] 定义 wire version / codec negotiation：保留 magic/version，支持短期 JSON v1 兼容或明确升级窗口；未知 codec 返回 `unsupported_wire_version` / `unsupported_codec`
-    - 默认发送 `higgs.gossip.m1` MessagePack；接收端短期兼容旧 JSON magic；未知 codec / version 已有单测覆盖
+    - 默认发送 `photon.gossip.m1` MessagePack；接收端短期兼容旧 JSON magic；未知 codec / version 已有单测覆盖
   - [x] 为常见消息建立 size benchmark：Ping/Pong、metadata snapshot、single record、endpoint record、delegation/revocation；以 1200-byte datagram 预算评估剩余 headroom
     - 已补 `TestCommonMessageSizesWithinDatagramBudget`，覆盖 Ping/Pong、metadata snapshot、single record、endpoint record、delegation snapshot、revocation snapshot 的默认 MessagePack wire size，并按 1200-byte budget 断言。
   - [x] 评估是否需要通用压缩（如 zstd）但默认不对 UDP 小包启用；压缩只允许用于大 object pull，且必须有阈值、最大解压大小和 CPU/内存上限，避免解压炸弹和小包负收益
@@ -409,7 +409,7 @@
   - [x] 引入无方向 `LinkID` / `PairID` 作为两节点同一逻辑 link 的唯一基础身份：`hash(sorted(local_zone, peer_zone), overlay_id, path_key)`；`path_key` 第一版为 `default` 或 `family:ipv4` / `family:ipv6`。
   - [x] `LinkInstance`、routing/debug/health read model 以稳定 `LinkID` 为主键；runtime connection、generation、interface 作为观测 label，避免 rotate 后历史断裂。
   - [x] 将 `TransportID` 降级为 runtime resource id：`RuntimeConnectionID = "ipsec-" + short(hash(LinkID, generation, provider, "runtime"))`，staged generation 使用 `-r<generation>` 短名；`ChildSAName = RuntimeConnectionID + "-child"`。
-  - [x] XFRM 与 interface 从 runtime 派生：`XFRMIfID = uint32(hash(LinkID, generation, provider, "xfrm-if-id"))`，0 改为 1；`InterfaceName = hgs<8hex>`，保持 Linux 15 字符限制。
+  - [x] XFRM 与 interface 从 runtime 派生：`XFRMIfID = uint32(hash(LinkID, generation, provider, "xfrm-if-id"))`，0 改为 1；`InterfaceName = phx<8hex>`，保持 Linux 15 字符限制。
   - [x] owner token 从 `hash(LinkID, RuntimeConnectionID, "owner-token")` 派生，用于 create/adopt/cleanup/revocation 的 owner guard；兼容旧 `TransportID` owner token 的迁移/清理。
   - [x] `derived-link-local` / `derived-pool` 地址改为从 `LinkID + address_epoch + mode + pool? + lower/higher` 派生；`address_epoch=0` 为稳定地址，staged old/new 同 family 双 running 时用 generation 作为 epoch，尤其避免 `derived-pool` 地址复用。
   - [x] `derived-pool` 派生把 pool 纳入 hash：IPv4 跳过 network/broadcast/不可用 host，IPv6 跳过 pool base/不可用地址，通过 retry 处理候选不可用。
@@ -435,7 +435,7 @@
   - [x] reload 只允许验证身份配置仍与当前 DB/运行态一致，不支持热切换身份；身份变更等价于新节点，不做 DB 迁移、覆盖或半更新
   - [x] 空 DB / 未初始化 DB 首次启动时，如果配置同时提供 `managed_zone`、`trusted_root_public_key`、`identity.key_path` 和 bootstrap peer，则自动创建最小 bootstrap state，不再要求人工 `join accept <bundle.b64> <key.json>`
   - [x] auto-join 节点启动后从 bootstrap peer 普通同步 root 到本 Zone 的 authority/delegation chain；只有验证 `trusted_root_public_key`、delegation chain 和本地 key public 均匹配后，才进入正常 record signing、endpoint publish、IPsec publish/reconcile
-  - [x] auto-join pending 时 daemon 日志直接打印可提交给父 Zone 管理节点的 base64 `join_request`，并提示可用 `higgs gossip join request --from-config [request.b64]` 输出或保存同等内容；daemon 不引入 `join_request_path`，也不自动提交授权请求
+  - [x] auto-join pending 时 daemon 日志直接打印可提交给父 Zone 管理节点的 base64 `join_request`，并提示可用 `photon gossip join request --from-config [request.b64]` 输出或保存同等内容；daemon 不引入 `join_request_path`，也不自动提交授权请求
   - [x] 保留 `join request` / `delegate issue` 作为父节点授权入口；父节点签发 delegation 后写入自身 active state，从节点重连后通过同步获得授权信息，bundle 文件导入只作为 recovery/debug 兼容路径
   - [x] 增加测试：空 DB auto-join happy path、key/public mismatch 拒绝启动、`managed_zone` mismatch 拒绝启动、reload 身份变化拒绝、已初始化 DB 与配置一致时可正常启动/reload
 
@@ -465,9 +465,9 @@
   - [x] 做运行依赖检测：VICI socket / `charon` 可用性、strongSwan XFRM 支持、Linux kernel/iproute2 XFRM interface 支持、`CAP_NET_ADMIN`/root 权限、UDP 500/4500 或自定义端口可用性
   - [x] 稳定派生 XFRM `if_id` 与 interface name：基于 local zone + peer zone + transport id hash，`if_id` 使用 32-bit 值，接口名满足 Linux 15 字符限制并处理冲突
   - [x] 第一版默认一条 peer link 一个 XFRM interface；后续再评估 shared XFRM interface 或 in/out 分离 interface
-  - [x] 定义 netns 配置来源：`config.yaml` 暴露 `netns.default` / `netns.names`，link group 通过 `overlays[].netns` 引用声明的 netns；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:h2` 且允许创建，避免 XFRM/Babel overlay data-plane 默认落在 host ns；`overlay.default_netns` / `ipsec.default_netns` 仅保留为旧配置兼容别名
-  - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Higgs 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
-  - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `h2`）、在目标 named netns 内创建 XFRM interface、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
+  - [x] 定义 netns 配置来源：`config.yaml` 暴露 `netns.default` / `netns.names`，link group 通过 `overlays[].netns` 引用声明的 netns；单条 `TransportLinkSpec` 可继承或覆盖；默认 netns 为 `name:photon` 且允许创建，避免 XFRM/Babel overlay data-plane 默认落在 host ns；`overlay.default_netns` / `ipsec.default_netns` 仅保留为旧配置兼容别名
+  - [x] 定义 namespace ensure 边界：`XFRMDriver.EnsureNamespace` 在 interface 创建前确保目标 ns；dry-run 记录将创建的 ns；真实 provider 后续只自动创建 Photon 配置声明且带归属边界的 named ns，`host` 和 path ns 不隐式创建
+  - [x] 实现真实 XFRM/netns provider：创建缺失的 named netns（默认 `photon`）、在目标 named netns 内创建 XFRM interface、分配 tunnel address；失败时进入 degraded/error 并保留可审计的 apply plan
     - 已增加 `SystemXFRMDriver`：通过 `ip`/iproute2 执行 named netns ensure、XFRM interface create/up、address replace 和 delete；named netns 下直接执行 `ip netns exec <ns> ip link add ... type xfrm`，避免依赖 host-side link move；path netns 第一版只做存在性检查，需 bind 到 `/var/run/netns` 后按 named netns 管理。
   - [x] CHILD_SA 使用 route-based VPN 模型，traffic selector 可保持宽泛；Phase 4 只负责 peer-to-peer tunnel link，路由前缀授权留给 Phase 5 Babel/route filter
     - `BuildLoadConnMessage` 渲染 VICI `load-conn` message：每条 link 一个 child，`mode=tunnel`，`if_id_in/out` 使用稳定 XFRM if_id；IPv4/IPv6 tunnel address 仅决定宽泛 selector family（`0.0.0.0/0` 或 `::/0`），多前缀授权不进入 Phase 4。
@@ -514,8 +514,8 @@
     - [x] `InitiateChild` 支持异步模式：默认通过独立 VICI client 在后台发起 `initiate`，不阻塞 reconcile 主路径；同一 CHILD_SA 的并发异步发起请求合并，避免重复触发。
     - [x] SA 建立引入宽限期：LinkInstance 进入 `connecting` 后，若已观测到部分 SA 状态或在 3 分钟建立宽限期内，reconcile 保持 noop 而非立即判定失败；宽限期过后仍未 established 才进入 repair/backoff。
     - [x] repair 路径主动重试 CHILD_SA 建立：`ApplyReconcileAction` 对 `ReconcileActionRepair` 在重新 `load-conn` + ensure XFRM 后显式调用 `InitiateTransportChild`，避免失败链路只反复更新 connection 而不重新发起。
-  - [x] 定义 Higgs 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Higgs owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
-    - [x] `LinkInstance.Owner` 记录 `manager=higgs`、group、instance、transport id 和派生 owner token；reconcile 对不再 desired 的 persisted instance 先校验 owner 字段、token、`ipsec-*` transport id 与 `hgs*` interface 命名，无法证明归属的资源保留为 noop，不自动 teardown。
+  - [x] 定义 Photon 管理资源归属规则：StrongSwan connection/child、XFRM interface、地址、临时路由等必须能追溯到 `LinkGroupSpec` + `LinkInstance`；daemon 只自动修改/清理带 Photon owner 标记或命名约定且可验证归属的资源，避免误删管理员手工配置
+    - [x] `LinkInstance.Owner` 记录 `manager=photon`、group、instance、transport id 和派生 owner token；reconcile 对不再 desired 的 persisted instance 先校验 owner 字段、token、`ipsec-*` transport id 与 `phx*` interface 命名，无法证明归属的资源保留为 noop，不自动 teardown。
     - [x] `ApplyReconcileAction` 对只有 `LinkInstance`、没有 desired spec 的 teardown 再执行 owner guard，防止 revocation/restart recovery 路径误删管理员手工 StrongSwan/XFRM 资源；旧状态无 token 时仍可凭 manager/group/instance/transport/name 匹配迁移。
   - [x] daemon 启动恢复时重建 link state：重新计算每个 link group 的 desired specs，读取持久化 `LinkInstance`，查询 driver 实际 connection/interface/SA；匹配则 adopt，缺失则 create，漂移则 repair，多余或已撤销则 teardown，保证重启后不会重复创建或遗留旧 link
     - [x] reconcile 核心已覆盖 adopt/create/repair/teardown 判定；daemon 持久化加载和 IPsec driver SA 查询已接入 state-change reconcile，真实 XFRM 实际状态观测仍待系统 driver 接入。
@@ -525,8 +525,8 @@
     - [x] reconcile 输入支持 revoked peer 集合；revocation 命中时即使 desired spec 仍存在也进入 `removing` 并产生 teardown action。
     - [x] planner 对 revoked peer 停止输出 desired spec；daemon 对已存在实例执行 owner-guarded teardown，成功后删除本地 `LinkInstance`，避免 endpoint fallback、rekey 或下一轮 reconcile 重新拉起。
   - [x] 暴露 control API/debug 输出：link 列表、desired vs actual、SA 状态、XFRM interface、`if_id`、endpoint、rekey/reconnect 原因、最近错误
-    - [x] `daemon status` control response 增加 link instance 数、desired link 数和最近 reconcile error；新增 `higgs debug links` 输出持久化 link、最近 action/skip、interface、`if_id`、endpoint、owner、failure count、backoff 与最近错误。
-    - [x] daemon reconcile 摘要持久化最近 desired `TransportLinkSpec` 快照和 driver `ListSAs` 观测；`higgs debug links` 会重新按当前 active state + `LinkGroupSpec` 规划 desired links，并与已落盘 `LinkInstance` / 最近 SA 快照并排展示 desired hash、actual hash、CHILD_SA、SA endpoint、backoff 和 apply error，便于排查“应该建什么”和“实际 StrongSwan 看到什么”的差异。
+    - [x] `daemon status` control response 增加 link instance 数、desired link 数和最近 reconcile error；新增 `photon debug links` 输出持久化 link、最近 action/skip、interface、`if_id`、endpoint、owner、failure count、backoff 与最近错误。
+    - [x] daemon reconcile 摘要持久化最近 desired `TransportLinkSpec` 快照和 driver `ListSAs` 观测；`photon debug links` 会重新按当前 active state + `LinkGroupSpec` 规划 desired links，并与已落盘 `LinkInstance` / 最近 SA 快照并排展示 desired hash、actual hash、CHILD_SA、SA endpoint、backoff 和 apply error，便于排查“应该建什么”和“实际 StrongSwan 看到什么”的差异。
   - [x] 增加 fake driver 单元测试：create/update/delete/revoke/restart recovery；真实 StrongSwan/XFRM smoke 留到 4.3
 
 - [x] **4.2.x role-only initiator model（消除双 initiator race）**
@@ -544,7 +544,7 @@
     - `primary` / `secondary-takeover` 设置 `start_action=start`（或按需 initiate）。
     - 非主动 role 设置 `start_action=trap` 或仅 responder，不主动发起 CHILD_SA。
   - IPsec record 公告：
-    - `app/higgs/ipsec_publish.go` 把本地 `ipsec.role` 写入 `ProfileRecord.Role`，不再硬编码本机角色。
+    - `app/photon/ipsec_publish.go` 把本地 `ipsec.role` 写入 `ProfileRecord.Role`，不再硬编码本机角色。
   - NAT reachability hint 保守化（同一次改造顺带修复）：
     - `localIPsecNATProfile` 不能仅凭存在 public address 就标记 `inbound_reachable=true`；只有管理员显式声明或 reflector/observed 证据才标记 reachable，默认 `unknown`。
   - 测试：
@@ -561,10 +561,10 @@
     - `SelectContactPointsWithOptions(family-redundant)` 按 family 分组，返回每个 family 最高排序 ContactPoint。
     - `PlanTransportLinks` 为每个可用 family 生成独立 `TransportLinkSpec`。
     - `TransportLinkSpec.TransportID` 引入 family/link index 派生，例如 `StableTransportID(local, peer, overlayID, family)`。
-    - 每个 spec 拥有独立 XFRM `if_id` 和 interface name（如 `hgs<hash_v4>` 和 `hgs<hash_v6>`），15 字符限制内处理冲突。
+    - 每个 spec 拥有独立 XFRM `if_id` 和 interface name（如 `phx<hash_v4>` 和 `phx<hash_v6>`），15 字符限制内处理冲突。
     - `ReconcileLinkInstances` 按 `TransportID` 而不是按 peer 匹配 desired/current；每个 link 有独立 `LinkInstance`、generation、rotate phase 和 takeover 状态。
-    - 防火墙规则继续按 interface pattern（`hgs*`）匹配多个 XFRM interface；overlay 链的 forward/input 规则覆盖所有 link interface。
-    - BIRD/Babel 在多个 `hgs*` interface 上发现同一 peer 的多个邻居；ECMP 或 metric preference 由 Phase 5 路由层处理，但 IPsec reconcile 必须能独立管理每个 link。
+    - 防火墙规则继续按 interface pattern（`phx*`）匹配多个 XFRM interface；overlay 链的 forward/input 规则覆盖所有 link interface。
+    - BIRD/Babel 在多个 `phx*` interface 上发现同一 peer 的多个邻居；ECMP 或 metric preference 由 Phase 5 路由层处理，但 IPsec reconcile 必须能独立管理每个 link。
   - 边界：
     - `max_links_per_peer` 继续保留语义，但 Phase 4 先实现 family-redundant 两条；超出 family 数量的候选仍丢弃。
     - IPv4/IPv6 共享同一组 ports record；未来可扩展为 per-family ports，但不在本次改造。
@@ -589,13 +589,13 @@
     - 已补 planner dry-run 测试：NAT 后本地节点可主动规划到公网 inbound peer；反向拨入 `behind_nat` 且只有 private/unknown ContactPoint 的 peer 会返回 `no_inbound_nat_evidence`，带 observed external port 的 `nat-observed` ContactPoint 则允许规划。daemon debug/degraded 展示留到 control/apply 接线。
   - [x] 增加真实环境前置检查命令：检测 Linux、root 或 `CAP_NET_ADMIN`、VICI socket/`charon`、XFRM interface 支持、`ip`/`swanctl` 可用性；缺失时给出明确 skip/error，而不是半途留下 connection/interface
     - 已增加 `make ipsec-xfrm-preflight` 与 `docs/strongswan-xfrm-test.md`，真实 `ipsec-xfrm-smoke` 仍保持显式 root/system integration 目标，默认不纳入 `smoke-all`。
-  - [x] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Higgs daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步、link group/netns 配置和 transport key record 发布
-    - [x] 已增加显式 `make ipsec-xfrm-smoke` 系统集成入口，默认不纳入 `smoke-all`；运行时先执行 preflight，再用 `HIGGS_IPSEC_XFRM_SMOKE=1` 跑真实 `SystemXFRMDriver` named netns / XFRM interface / address / delete lifecycle 测试，失败时输出 netns、XFRM state/policy、link 和 `swanctl --list-sas` 诊断。
+  - [x] 增加 `make ipsec-xfrm-smoke`：在支持 root network namespace 的 Linux 主机上启动两个 Photon daemon、两个 isolated test namespace/配置目录，完成 root/delegation/join、gossip 同步、link group/netns 配置和 transport key record 发布
+    - [x] 已增加显式 `make ipsec-xfrm-smoke` 系统集成入口，默认不纳入 `smoke-all`；运行时先执行 preflight，再用 `PHOTON_IPSEC_XFRM_SMOKE=1` 跑真实 `SystemXFRMDriver` named netns / XFRM interface / address / delete lifecycle 测试，失败时输出 netns、XFRM state/policy、link 和 `swanctl --list-sas` 诊断。
     - [x] root/system smoke 不再只停留在非 root dry-run：`make ipsec-xfrm-smoke` 必须作为显式 privileged 目标运行，测试机器可用 `sudo make ipsec-xfrm-smoke`、root VM，或具备 netns/XFRM 所需 capability 的 privileged container；默认 `make check` / `smoke-all` 仍不要求 root。
     - [x] 增加 `make ipsec-xfrm-container-smoke`：自动启动 privileged Ubuntu container、挂载当前 repo、复用已构建的本地 smoke 镜像和 Go cache volume、启动 charon 后运行 `make ipsec-xfrm-smoke`，避免每次重新 apt install / 下载 Go module；文档明确 NixOS over LXC、CI nested container 等外层受限环境即使内层 Docker 使用 `--privileged` 也可能被外层拦截，preflight 必须以真实 named netns create/delete、XFRM interface 和 VICI socket 能力检查为准。
     - [x] 增加 root-gated 双 namespace XFRM 数据面基座：创建 `ns-a/ns-b`、veth underlay、两端 XFRM interface、tunnel address、手工 XFRM state/policy，并验证 A/B tunnel IP ping；这一步先证明宿主权限、kernel XFRM interface、named netns 内 interface create、route-based dataplane 都可用。
     - [x] `SystemXFRMDriver` smoke 已改为在目标 named netns 内直接创建 XFRM interface，并同步容器脚本中的 nested netns wrapper，减少 privileged container/LXC 环境中 host-side link move 失败导致的误判；完整 daemon/VICI IKE bring-up 仍由下一条未完成项跟踪。
-    - [x] 已将 XFRM interface/address apply 接到 Higgs daemon reconcile：root-gated `app/higgs` smoke 使用真实 `SystemXFRMDriver` 由 daemon 创建 named netns 内的 XFRM interface、分配 tunnel host prefix，并在 link group 删除后通过 daemon teardown 清理 interface；当前仍用 dry-run IPsec driver，IKE_SA/CHILD_SA 与 XFRM state 仍待 StrongSwan/VICI bring-up 接入。
+    - [x] 已将 XFRM interface/address apply 接到 Photon daemon reconcile：root-gated `app/photon` smoke 使用真实 `SystemXFRMDriver` 由 daemon 创建 named netns 内的 XFRM interface、分配 tunnel host prefix，并在 link group 删除后通过 daemon teardown 清理 interface；当前仍用 dry-run IPsec driver，IKE_SA/CHILD_SA 与 XFRM state 仍待 StrongSwan/VICI bring-up 接入。
     - [x] 已接入真实 govici 客户端边界：`GoviciClient` 使用 `github.com/strongswan/govici/vici` 连接 charon VICI socket，把现有 `StrongSwanDriver` 的 `load-conn` / `terminate` / `unload-conn` / streaming `list-sas` map 结构转换为 VICI message；单测覆盖 `load-conn` 嵌套 message 与 `list-sas` 事件解析，为后续系统 smoke 从 fake IPsec driver 切到真实 VICI driver 做准备。
     - [x] daemon 已支持通过 `config.yaml` 显式选择真实 StrongSwan/XFRM provider：默认 `ipsec.driver: dry-run` 保持非 root/无 charon 环境可运行；设置 `ipsec.driver: strongswan` 时启动或 `reload` 会创建真实 `GoviciClient` 和 `SystemXFRMDriver`，`ipsec.vici_socket` 可覆盖 charon VICI socket，连接失败会在启动/reload 阶段明确报错。
     - [x] daemon 已能在配置了 `overlays:` / link group 后自动发布本节点 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` records：transport key 独立于 Zone signing key 并持久化到本地 state meta，重复发布不会抖动 fingerprint 或 record version；地址使用本机 `advertise_addrs` / `listen_addr` 派生，端口使用当前 fixed IKE/NAT-T 边界。
@@ -606,11 +606,11 @@
     - [x] 增加真实 daemon reconcile + StrongSwan/VICI + XFRM bring-up 测试：`TestDaemonStrongSwanReconcileBringupSmoke` 在 root/container smoke 中启动两个 named netns、两个隔离 charon/VICI 实例和 veth underlay，构造已验证的 root -> `catofes.` -> `node-a`/`node-b` active state 与 signed `ipsec/*` records，让两个 daemon service 通过真实 `StrongSwanDriver` + `SystemXFRMDriver` 自动加载 private key/connection、创建 XFRM interface、分配 tunnel address、观测 VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 A/B tunnel IP 双向 `ping` 通。
     - [x] 扩展真实 daemon reconcile smoke 的恢复/撤销段：同一 charon/XFRM 实例保持运行时重建 node-a daemon service，启动 reconcile 必须通过 VICI `ListSAs` 观测已有 SA、保持唯一 established SA，并继续 tunnel ping；已有 `up` 实例可保持 noop，缺失/旧状态才 adopt/repair；随后注入父 Zone 对 `node-b.catofes.` 的 revocation，daemon 必须 terminate/unload、删除 XFRM interface、清空 `LinkInstance`、输出 revoked skip reason，且 tunnel ping 失败。
     - [x] 修正 planner tunnel address 分配：同一 peer pair 独立规划时按 Zone 字典序稳定镜像 tunnel IP，避免 A/B 两端都把 pool 第一个地址当 local；新增 planner 回归测试锁住 A local/B peer 与 B local/A peer 互为镜像。
-    - [x] 增加 daemon `Run` 循环级 root/container smoke：`TestDaemonRunGossipStrongSwanBringupSmoke` 启动两个 daemon service、两个 isolated named netns、两个隔离 charon/VICI 实例和 veth underlay；两端各自自动发布 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` records，经 UDP gossip 同步对端 Zone 后，从 verified active state 自动触发真实 `StrongSwanDriver` + `SystemXFRMDriver` reconcile，观测 VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 A/B tunnel IP 双向 `ping`。该 smoke 使用真实 daemon service 主循环，但还不是外部 `build/higgs daemon` OS 进程。
-    - [x] 4.3 最小闭环以 Go 测试内 daemon service 为系统边界完成；外部 `build/higgs daemon` 双 OS 进程、进程重启和 gossip revocation 传播保留到 Phase 7.8 daemon 生产化/hardening，不再阻塞 StrongSwan/XFRM 最小链路闭环。
+    - [x] 增加 daemon `Run` 循环级 root/container smoke：`TestDaemonRunGossipStrongSwanBringupSmoke` 启动两个 daemon service、两个 isolated named netns、两个隔离 charon/VICI 实例和 veth underlay；两端各自自动发布 signed `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`、`ipsec/transport-key` records，经 UDP gossip 同步对端 Zone 后，从 verified active state 自动触发真实 `StrongSwanDriver` + `SystemXFRMDriver` reconcile，观测 VICI `list-sas` 后把 `LinkInstance` 推进到 `up`，并验证 A/B tunnel IP 双向 `ping`。该 smoke 使用真实 daemon service 主循环，但还不是外部 `build/photon daemon` OS 进程。
+    - [x] 4.3 最小闭环以 Go 测试内 daemon service 为系统边界完成；外部 `build/photon daemon` 双 OS 进程、进程重启和 gossip revocation 传播保留到 Phase 7.8 daemon 生产化/hardening，不再阻塞 StrongSwan/XFRM 最小链路闭环。
     - [x] 在 root smoke 中补齐权限说明和失败分层：`CAP_NET_ADMIN` 覆盖 XFRM/link 操作，named netns 通常还需要 root 或 `CAP_SYS_ADMIN`/privileged container，VICI socket 还取决于 charon/swanctl 的本机访问权限；preflight 必须在资源创建前给出明确失败。
   - [x] smoke 断言 daemon 自动为对方加载 StrongSwan connection/secret，创建 XFRM interface，分配本地/远端 tunnel address，并在 debug 输出中显示 `LinkInstance` 从 `pending/configuring/connecting` 进入 `up`
-    - [x] daemon 状态机已区分 provider apply 成功后的 `connecting` 与 driver SA 观测后的 `up`；新增 daemon A/B dry-run 测试断言 connection/interface/address apply、SA snapshot adopt、`higgs debug links` 中的 `state=up`、identity、reqid 与 endpoint 字段；root-gated system smoke 已断言 daemon 使用真实 `SystemXFRMDriver` 创建/清理 XFRM interface 和 tunnel address。
+    - [x] daemon 状态机已区分 provider apply 成功后的 `connecting` 与 driver SA 观测后的 `up`；新增 daemon A/B dry-run 测试断言 connection/interface/address apply、SA snapshot adopt、`photon debug links` 中的 `state=up`、identity、reqid 与 endpoint 字段；root-gated system smoke 已断言 daemon 使用真实 `SystemXFRMDriver` 创建/清理 XFRM interface 和 tunnel address。
     - [x] daemon-level root smoke 已把真实 `load-key`/`load-conn`/XFRM interface/address 接到 daemon reconcile，并通过 dual-charon VICI SA 观测把 `LinkInstance` 推进到 `up`；完整 CLI daemon 进程 + gossip 入口仍待后续扩展。
     - [x] daemon run smoke 已覆盖自动发布 `ipsec/*` records、UDP gossip 同步、真实 StrongSwan/VICI + XFRM apply、`LinkInstance=up` 和 tunnel ping；仍保留 CLI OS 进程化验证作为可选加严项。
   - [x] smoke 使用 VICI/`swanctl --list-sas` 双重观测 IKE_SA/CHILD_SA：断言 peer identity、CHILD_SA name、reqid/if_id、local/remote endpoint 与 `TransportLinkSpec` 一致
@@ -618,12 +618,12 @@
     - [x] govici streaming `list-sas` 客户端适配已落地，避免用 `swanctl` 输出解析作为 daemon 核心控制面；driver 层 `TestStrongSwanDriverIKEBringupSmoke` 和 daemon-level `TestDaemonStrongSwanReconcileBringupSmoke` 都通过 VICI streaming `list-sas` 观测到 IKE_SA/CHILD_SA 并断言 identity/if_id/child 字段；`swanctl --list-sas` 保留为失败诊断/人工对照。
     - [x] root smoke 失败诊断统一输出 netns、host XFRM link/state/policy 和 `swanctl --list-sas`；daemon run smoke 在测试内额外输出 charon log、每个 namespace 的 link/address/route/XFRM state/policy，便于交叉核对 VICI snapshot 与系统实际状态。
   - [x] driver 层 smoke 验证数据面：A/B 通过 tunnel IP 互相 `ping` 成功；`TestStrongSwanDriverIKEBringupSmoke` 失败时输出 charon log、VICI SA 列表、`ip link`、`ip xfrm state/policy` 和 namespace 信息。
-  - [x] smoke 验证 daemon 级数据面：双 Higgs daemon 同步后 A/B 通过 tunnel IP 互相 `ping` 成功；抓取失败时输出 daemon log、VICI SA 列表、`ip link`、`ip xfrm state/policy`、`ip route` 和 namespace 信息
-    - [x] root/container smoke 已覆盖 daemon reconcile 级数据面：两个 daemon service 基于已验证 active state 使用真实 VICI/XFRM 建链并完成 A/B tunnel IP 双向 `ping`；失败时输出 charon log、VICI/swanctl、netns、link、route、XFRM state/policy 诊断。完整双 `higgs daemon` 进程 + gossip 同步后的同一断言仍保留为后续项。
-    - [x] root/container smoke 已扩展到 daemon `Run` 循环级：双方自动发布并 gossip 同步 `ipsec/*` records 后真实建链、进入 `up` 并双向 tunnel ping；失败时保留 charon log、VICI/swanctl 和 namespace 诊断。外部 CLI `build/higgs daemon` 进程级 smoke 仍可作为后续 hardening，但不再阻塞 4.3 最小闭环。
+  - [x] smoke 验证 daemon 级数据面：双 Photon daemon 同步后 A/B 通过 tunnel IP 互相 `ping` 成功；抓取失败时输出 daemon log、VICI SA 列表、`ip link`、`ip xfrm state/policy`、`ip route` 和 namespace 信息
+    - [x] root/container smoke 已覆盖 daemon reconcile 级数据面：两个 daemon service 基于已验证 active state 使用真实 VICI/XFRM 建链并完成 A/B tunnel IP 双向 `ping`；失败时输出 charon log、VICI/swanctl、netns、link、route、XFRM state/policy 诊断。完整双 `photon daemon` 进程 + gossip 同步后的同一断言仍保留为后续项。
+    - [x] root/container smoke 已扩展到 daemon `Run` 循环级：双方自动发布并 gossip 同步 `ipsec/*` records 后真实建链、进入 `up` 并双向 tunnel ping；失败时保留 charon log、VICI/swanctl 和 namespace 诊断。外部 CLI `build/photon daemon` 进程级 smoke 仍可作为后续 hardening，但不再阻塞 4.3 最小闭环。
   - [x] 覆盖 daemon 级重启恢复：停止并重启任一 daemon 后，daemon 从 active state + StrongSwan/XFRM 实际状态恢复或 repair，最终仍只有一组有效 connection/interface/SA，tunnel ping 恢复
     - [x] daemon dry-run 已覆盖启动恢复：已有 SA 时 adopt 为 `up`，已有 `LinkInstance` 但 driver SA 缺失时进入 repair 并重新执行 connection/interface/address apply；driver 层真实 StrongSwan/XFRM 测试已验证首次 bring-up 后 tunnel ping；root/container daemon-level smoke 已验证重启后唯一 connection/interface/SA 和 tunnel ping。
-    - [x] root/container smoke 已覆盖真实 daemon service 重启恢复：保留 charon/VICI/XFRM 运行态，重建 daemon service 后启动 reconcile 观测现有 IKE_SA/CHILD_SA，已有 `up` 状态保持 noop，缺失/旧状态走 adopt/repair；断言 established SA 仍只有一组并且 tunnel ping 恢复。外部 `build/higgs daemon` OS 进程重启仍作为后续 hardening。
+    - [x] root/container smoke 已覆盖真实 daemon service 重启恢复：保留 charon/VICI/XFRM 运行态，重建 daemon service 后启动 reconcile 观测现有 IKE_SA/CHILD_SA，已有 `up` 状态保持 noop，缺失/旧状态走 adopt/repair；断言 established SA 仍只有一组并且 tunnel ping 恢复。外部 `build/photon daemon` OS 进程重启仍作为后续 hardening。
   - [x] 覆盖撤销闭环：父 Zone 签发 peer revocation 后，远端 daemon 收敛并立即 teardown IKE_SA/CHILD_SA、删除 XFRM interface/地址/临时路由，清空 `LinkInstance`，tunnel ping 失败且不会被 reconnect/backoff 拉起
     - [x] daemon dry-run 已覆盖 revocation 后 planner 不再输出 desired link、reconcile 执行 terminate/unload/delete interface、清空 `LinkInstance`，下一轮不会因 backoff/reconnect 重建；driver 层真实 StrongSwan/XFRM 测试已验证 teardown 后 interface/address 清理；root/container daemon-level smoke 已验证 IKE_SA/CHILD_SA 终止和 ping 失败断言。
     - [x] root/container smoke 已覆盖真实 daemon service 撤销：注入父 Zone revocation 后 planner 输出 `revoked_zone` skip，reconcile terminate/unload/delete XFRM interface，清空 `LinkInstance`，VICI 不再观测到该 SA，tunnel ping 失败。当前断言针对一端撤销收敛，完整双外部 daemon 进程 gossip revocation 传播仍作为后续 hardening。
@@ -641,9 +641,9 @@
   - [x] 扩展内部模型：
     - 在 `LinkGroupSpec` 中加入 `TunnelAddressSpec`，表达 mode、family、pool；保留 `TunnelAddressPool` 作为过渡字段。
     - `TransportLinkSpec` 继续携带本地/远端 tunnel address；`FormatScopedTunnelAddress` / `debug links` 输出 scoped link-local 地址。
-    - `ApplyPlan` / `debug links` 输出 link-local 地址时显示 interface scope，例如 `fe80::...%hgsxxxx`。
+    - `ApplyPlan` / `debug links` 输出 link-local 地址时显示 interface scope，例如 `fe80::...%phxxxxx`。
   - [x] 实现确定性派生函数：
-    - 新增 `DeriveTunnelAddresses(local, peer, group, linkIndex)`，使用项目已有 `higgscrypto.Hash` 做稳定派生。
+    - 新增 `DeriveTunnelAddresses(local, peer, group, linkIndex)`，使用项目已有 `photoncrypto.Hash` 做稳定派生。
     - hash 输入包含 group ID、按字典序排序的 peer pair、端点 role（lower/higher）、address family、address mode、provider/link index；A/B 两端独立规划得到镜像地址。
     - IPv6 `derived-link-local` 固定使用 `fe80::/64`，派生 interface-id 并过滤不可用结果。
     - IPv6/IPv4 `derived-pool` 从配置 prefix 内派生 host bits，过滤 network/broadcast/全 0/全 1 host。
@@ -652,7 +652,7 @@
     - `NewTransportLinkSpecForGroup` 默认走 `DeriveTunnelAddresses`；legacy sequential mode 走旧顺序逻辑。
     - StrongSwan `BuildLoadConnMessage` 仍只根据 tunnel address family 选择宽泛 selector（IPv4 `0.0.0.0/0`、IPv6 `::/0`）。
     - XFRM interface 在 up 前设置 `addrgenmode none`，避免内核自动派生随机 link-local；`AssignAddress` 对 IPv6 link-local 使用 `/64`，peer route/selector 仍按对端 `/128` 精确匹配。
-    - `higgs debug links` 展示 scoped local/remote tunnel address。
+    - `photon debug links` 展示 scoped local/remote tunnel address。
   - 验证：
     - [x] config 单测：新结构化配置、旧 `tunnel_address_pool` 兼容、同时配置冲突、非法 mode/family/prefix、IPv4 默认 disabled 都有断言。
     - [x] planner 单测：A/B 镜像、不同 overlay/provider/link index 地址不同、IPv6 link-local 落在 `fe80::/64`、IPv4 derived-pool 落在 pool 且避开不可用 host。
@@ -660,7 +660,7 @@
     - [x] root smoke：link-local 模式 XFRM interface 分配 scoped tunnel address，`ping6`/`route` 显式带 interface；新增 `TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke` 覆盖 IPv4 derived-pool。
 
 - [x] **4.3.2 host-born XFRM interface / 内嵌 VICI event 生命周期**
-  - 目标：借鉴 `swan-updown` 的关键原理，但不依赖外部 updown script；由 Higgs daemon 内嵌管理 StrongSwan CHILD_SA 与 XFRM interface 生命周期。设计稿已落地并并入 `docs/new/transport-ipsec.md` 的 XFRM interface 生命周期章节；原 `docs/strongswan-xfrm-netns-lifecycle-design.md` 已删除。
+  - 目标：借鉴 `swan-updown` 的关键原理，但不依赖外部 updown script；由 Photon daemon 内嵌管理 StrongSwan CHILD_SA 与 XFRM interface 生命周期。设计稿已落地并并入 `docs/new/transport-ipsec.md` 的 XFRM interface 生命周期章节；原 `docs/strongswan-xfrm-netns-lifecycle-design.md` 已删除。
   - 修正 namespace 模型：单 host charon 负责 IKE/NAT-T、VICI、XFRM state/policy；XFRM interface 必须先在 charon/state/policy 所在 host netns 创建，再 move 到 `TransportLinkSpec.NetNS` / overlay netns，地址和 BIRD/Babel 继续在 overlay netns 内配置。
   - 更新 `SystemXFRMDriver.EnsureInterface`：named netns 目标下改为 host `ip link add <iface> type xfrm if_id <id>` -> `ip link set <iface> netns <target>` -> target netns `ip link set dev <iface> up`；已有目标 netns interface 直接 adopt/up，已有 host 残留则 move 后 adopt。
   - 保持 `ApplyTransportLink` 高层顺序不变：ensure namespace -> load key -> load connection -> ensure interface -> assign address；变化只在真实 XFRM driver 的 interface 出生点和 move 语义。
@@ -684,7 +684,7 @@
   - [x] 扩展状态模型：
     - [x] `LinkInstance` 增加 selected contact、remote port generation、rotation phase（`idle`、`preparing`、`testing_new`、`cutover`、`rollback`、`cleanup`）、staged ike/child name、rollback deadline、last rotate error。本地 port generation 通过持久化 `IPsecPortRecord` 跟踪。
     - [x] staged connection 通过 `rotateSpec` 从 desired spec 派生，使用独立 transport id；`TransportLinkSpecHash` 继续表示期望状态，旋转由 generation 变化触发而不是被误识别为普通 update。
-    - [x] `higgs debug links` 显示 rotate phase、remote/staged generation、staged ike name、rotate deadline、last error。
+    - [x] `photon debug links` 显示 rotate phase、remote/staged generation、staged ike name、rotate deadline、last error。
   - [x] 扩展 planner/reconcile：
     - [x] 当远端 `ipsec/ports` generation 变化时，reconcile 进入 rotation 状态机而不是直接 update/tear down 旧 SA。
     - [x] reconcile 在 `idle -> preparing` 阶段加载新 connection/child，但保留旧 connection/SA；`testing_new` 阶段观察新 SA 是否 established；成功后进入 `cutover`（卸载旧 connection），失败则进入 `rollback` 并继续使用 previous。
@@ -692,7 +692,7 @@
     - [x] daemon 重启时从持久化 `LinkInstance` + 当前 `ipsec/ports` + `ListSAs` 恢复 rotate phase；staged SA 已存在则直接 commit，stale staged generation 则 cleanup。
   - [x] 明确命名和 owner 规则：
     - [x] staged connection/child 名称稳定可推导：`RotateConnectionName(transportID, generation)` / `RotateChildSAName(transportID, generation)`。
-    - [x] teardown 对 Higgs owner 匹配的实例执行；旋转清理只终止/卸载 staged connection，不删除共享的 XFRM interface/address。
+    - [x] teardown 对 Photon owner 匹配的实例执行；旋转清理只终止/卸载 staged connection，不删除共享的 XFRM interface/address。
     - [x] revocation/policy deny/transport key mismatch 仍走强制 teardown，不进入 rotate 状态机。
   - [x] 失败与回滚边界：
     - [x] staged SA 未在 deadline 内建立则 rollback，记录错误并进入 backoff。
@@ -705,7 +705,7 @@
     - [x] 配置单测：`ipsec.port_mode` / `port_range` / `port_rotate_interval` / `port_previous_grace` 解析与校验。
     - [x] daemon 级单测：`notifyStateChanged` 触发 reconcile 后生成 `prepare_rotate`，`LinkInstance` 正确记录 staged generation/ike name。
     - [x] root smoke：已选择 B) bounded break-before-make 作为 Phase 4.4 可执行系统路径：`prepare_rotate` 先终止旧 SA，再加载/发起 staged connection，下一轮 observe 到新 SA 后 commit 清理旧 connection，并通过 tunnel ping 验证恢复；`TestDaemonStrongSwanPortRotationSmoke` 已接入 `make ipsec-xfrm-smoke` / `make ipsec-xfrm-container-smoke`，并在 privileged container 中完成复验。该验证证明的是 deadline/backoff/rollback 管理下的短断恢复，不是 zero-downtime rotate。
-    - [x] container smoke 全量回归：`TestDaemonStrongSwanPortRotationSmoke` 通过；`TestSystemXFRMDriverPeerTunnelPingSmoke` 因容器/LXC 内 IPv6/xfrm 邻居解析限制失败，判定为与 4.4 无关的既有环境问题，已在容器 smoke 中通过 `HIGGS_IPSEC_XFRM_SMOKE_CONTAINER=1` 跳过该用例，其余 XFRM/StrongSwan/daemon smoke 继续运行。
+    - [x] container smoke 全量回归：`TestDaemonStrongSwanPortRotationSmoke` 通过；`TestSystemXFRMDriverPeerTunnelPingSmoke` 因容器/LXC 内 IPv6/xfrm 邻居解析限制失败，判定为与 4.4 无关的既有环境问题，已在容器 smoke 中通过 `PHOTON_IPSEC_XFRM_SMOKE_CONTAINER=1` 跳过该用例，其余 XFRM/StrongSwan/daemon smoke 继续运行。
       - 2026-06-12 container root 实验确认：共享 XFRM interface/同一 if_id/同一 traffic selector 下，“先建 staged CHILD_SA 再清旧 SA”会被 StrongSwan/内核策略拒绝，VICI `initiate` 返回 `establishing CHILD_SA ... failed`；真正无中断平滑切换后续只能走 A) staged generation 使用独立 XFRM interface/if_id，commit 时切换 route，或 C) Phase 6/7 DNAT/redirect grace，由防火墙 owner 管理新旧端口转发。
 
 - [x] **4.4.x 真正平滑 rotate / staged transition（已归档）**
@@ -756,7 +756,7 @@
     - takeover 有 lease（默认 5min）与 cooldown（默认 2min）：secondary 接管成功后维持稳定窗口；takeover 超时或失败后进入 cooldown，期间不反复 apply；cooldown 过期后可 retry。
     - primary 后续恢复时若已有 SA 则 adopt，不会立刻抢回主动权导致重连风暴。
   - [x] debug / operator 输出：
-    - `higgs debug links` 显示 `initiator_role`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_error`。
+    - `photon debug links` 显示 `initiator_role`、`takeover_phase`、`takeover_until`、`observed_initiator`、`takeover_error`。
     - reconcile noop reason 区分 `bidirectional_standby`、`takeover_delay_active`、`takeover_no_contact_point`、`takeover_cooldown_active`、`secondary_takeover_pending`。
   - 验证：
     - [x] dry-run：A/B 都 `role=both` 时初始只由稳定排序胜出的一侧 create；另一侧进入 standby/noop，并在 debug 中说明原因。
@@ -768,22 +768,22 @@
 
 ## Phase 5: BIRD Babel 路由 + Route Authorization Filter（预计 3-4 周）
 
-**目标：** 在 Higgs 管理的 XFRM/TransportLink 接口上跑 Babel 协议，发现邻居、学习路由，并且只导入、导出经过 Zone/IPAM 授权的前缀；策略路由、路由表 ownership、debug 观测和 Phase 4 staged rotate cutover 形成闭环。
+**目标：** 在 Photon 管理的 XFRM/TransportLink 接口上跑 Babel 协议，发现邻居、学习路由，并且只导入、导出经过 Zone/IPAM 授权的前缀；策略路由、路由表 ownership、debug 观测和 Phase 4 staged rotate cutover 形成闭环。
 
 **核心决策：**
-- 默认由 `higgs daemon` 拉起并监管 BIRD Babel daemon 子进程，和 IPsec/XFRM reconcile 处于同一个单 writer 事件循环。这样 state/apply 顺序、重启恢复、撤销清理、rotate cutover gate 都由 Higgs 统一控制。
+- 默认由 `photon daemon` 拉起并监管 BIRD Babel daemon 子进程，和 IPsec/XFRM reconcile 处于同一个单 writer 事件循环。这样 state/apply 顺序、重启恢复、撤销清理、rotate cutover gate 都由 Photon 统一控制。
 - **后端实现：BIRD**
   - 项目已决定 Phase 5 默认采用 `bird` 跑 Babel protocol。详见 `docs/bird-babel-alternative-findings.md`。
-  - BIRD 支持 `interface "hgs*"` 自动发现 XFRM 接口、多 routing table、IPv4/IPv6 双栈、更平滑的 `birdc configure` filter 重载和更丰富的 filter 语言。
+  - BIRD 支持 `interface "phx*"` 自动发现 XFRM 接口、多 routing table、IPv4/IPv6 双栈、更平滑的 `birdc configure` filter 重载和更丰富的 filter 语言。
   - 代价是体积更大、需要维护 `bird.conf` 生成器和 `birdc` CLI client。
-- 支持 `mode=external`：管理员用 systemd 启动 BIRD daemon，Higgs 只连接已存在的 birdc control socket 并校验 router-id、netns、routing table、interface ownership。该模式用于发行版集成/生产托管，但第一版 smoke 以 Higgs-owned 模式为主。
+- 支持 `mode=external`：管理员用 systemd 启动 BIRD daemon，Photon 只连接已存在的 birdc control socket 并校验 router-id、netns、routing table、interface ownership。该模式用于发行版集成/生产托管，但第一版 smoke 以 Photon-owned 模式为主。
 - 每个 `LinkGroupSpec.NetNS` / overlay data-plane 启动一个 Babel daemon 实例；不同 netns 不共享 control socket。daemon 必须和对应 XFRM interface 处于同一 netns。
-  - BIRD 自身不能切换 netns，必须由 Higgs Process Manager 在目标 netns 内启动（如 `ip netns exec <ns> bird ...` 或 systemd `NetworkNamespacePath`）。
+  - BIRD 自身不能切换 netns，必须由 Photon Process Manager 在目标 netns 内启动（如 `ip netns exec <ns> bird ...` 或 systemd `NetworkNamespacePath`）。
 - Babel router-id 是本地持久运行态，不进入 gossip：优先读取本地 state 中保存的 overlay router-id；不存在时从 `local zone + trusted root + overlay id` 确定性派生 64-bit id 并落盘。router-id 不等于 peer id，也不随接口/IP/端口变化而变化。
   - 正常场景禁止管理员手工配置 router-id；配置中的 `router_id` 只保留为迁移/恢复覆盖，且加载时必须校验与派生值一致或给出明确警告。
 - Phase 5 route source 分三层：`ipam/assignments/*` 表示谁拥有/可使用某地址或前缀；`routes/announcements/*` 表示节点想发布哪些业务前缀；本地 config 可有 `route.export_static` 作为临时/恢复 override。只有 assignment 与 announcement 同时通过授权校验的前缀才能导出或被远端导入。
 - 默认 overlay 业务前缀池应通过 root/父 Zone 的 `policy/default-ip-pool` 或 `ipam/pools/*` 统一声明，而不是硬编码在代码里。默认建议使用私有/ULA 空间（如 `fd00::/48`）并配合独立 route table/netns 使用，避免污染 host main table；若使用公网可路由前缀（如 `2001:da8::/48`），必须通过 IPAM assignment 显式授权，并在 import/export filter 中校验，防止误泄漏到公网。
-- 默认不接受 default route、underlay/transport endpoint 前缀、loopback/link-local/multicast、Higgs 保留 tunnel-address pool、未授权更宽聚合前缀；是否允许 `0.0.0.0/0` / `::/0` 必须以后续显式 policy record 开启。
+- 默认不接受 default route、underlay/transport endpoint 前缀、loopback/link-local/multicast、Photon 保留 tunnel-address pool、未授权更宽聚合前缀；是否允许 `0.0.0.0/0` / `::/0` 必须以后续显式 policy record 开启。
 - Babel learned routes 不直接污染 host main table。当 overlay 使用独立 netns 时，BIRD 直接把路由写入该 netns 的 main table 即可，netns 本身就是隔离边界，**不需要额外配置独立 route table / `ip rule`**。
 - per-overlay route table / `ip rule` 只作为可选能力保留：当多个 overlay 共享同一个 netns、或管理员显式需要策略路由、或 `mode=external` 接入手动部署的 BIRD 时才启用。默认 `table: main`（即该 netns 的 table 254），`priority` 仅在该 overlay 使用非 main table 时生效。
 
@@ -792,11 +792,11 @@
   - [x] managed 模式骨架：daemon 在目标 netns 内启动 BIRD daemon，传入固定 router-id、control socket、pid/log 路径、routing table（默认该 netns 的 main table）；daemon 退出时按 ownership 清理子进程和 socket。
     - [x] 启动流程：确保 netns 存在 → 生成 `bird.conf` → `ip netns exec <ns> bird -c ... -s ... -P <pidfile>` → 等待 control socket 出现。
     - [x] 配置热重载：filter/接口参数变化时重写 `bird.conf`，执行 `birdc configure`（当前先使用普通 configure；后续可优化为 soft + reload in/out）。
-    - [x] 优雅退出：Stop 先发 `birdc down`，再 SIGTERM，再删 Higgs-owned pid/socket/config。
+    - [x] 优雅退出：Stop 先发 `birdc down`，再 SIGTERM，再删 Photon-owned pid/socket/config。
       - 2026-07-03 已把 daemon shutdown 接到 managed BIRD teardown：退出时只对本 daemon 已持有的 managed process manager 调用 Stop，`mode=external` 不触碰。
     - [x] 崩溃恢复/backoff：`ExecProcessManager` 通过 `waitpid`/`Wait` 记录 managed process exit，daemon reconcile 按指数 backoff 标记 degraded，到期后自动重拉起并清理 crash 状态。
   - [x] external 模式骨架：daemon 只校验配置并连接现有 socket，不杀进程。
-  - [x] preflight：`bird.BirdPreflight` 检测 bird/birdc/ip/ip netns 可用性；`higgs debug preflight` 后续统一接入。
+  - [x] preflight：`bird.BirdPreflight` 检测 bird/birdc/ip/ip netns 可用性；`photon debug preflight` 后续统一接入。
   - [x] owner token 细化到 control socket/pid/config/route table/rule：`BirdResourceOwner` 持久化 per-resource token，Stop 只清理 owner 校验通过的 runtime 文件；route table/rule token 先进入 spec/state，为后续策略路由清理复用同一归属边界。
 
 - [x] **5.1 Babel daemon control client 与 adapter**
@@ -804,7 +804,7 @@
   - [x] birdc client 能力：连接 control socket、执行 `configure`、`configure soft`、`reload in/out`、解析 `show status`/`show protocols`/`show route`/`show interfaces`/`show babel neighbors` 输出、超时与错误码检测。
   - [x] 定义纯函数 desired model：`BirdInstanceSpec`、`BirdConfig`、`KernelProtocolBlock`、`BabelProtocolBlock`、`FilterBlock`、`BirdObservedState` 等。
   - [x] daemon reconcile 顺序：IPsec desired/up snapshot -> BIRD desired config -> route authorization -> BIRD config apply (`birdc configure`) -> observe routes/neighbors -> 写入 debug snapshot。策略路由 table/rule 步骤随 5.4 后续补齐。
-  - [x] **BIRD 后端**：依赖 interface pattern `"hgs*"` 自动发现 XFRM 接口；teardown/revocation 时由 BIRD 自动 retract。
+  - [x] **BIRD 后端**：依赖 interface pattern `"phx*"` 自动发现 XFRM 接口；teardown/revocation 时由 BIRD 自动 retract。
   - [x] **tunnel 模式选路**：`type tunnel` + `rxcost` + `ecmp on limit 16` 已生成到 bird.conf。
   - [x] staged generation 接入 `RotateCutoverReady=true`：IPsec reconcile 已消费 health-manager readiness；routing reconcile 会把 BIRD staged interface 的 Babel neighbor 与 selected route 观测写入 health manager，缺少收敛时继续阻断 cutover。
     - 2026-07-03 已接线：`BabelObservation` 按 `instance#staged` probe target 参与 readiness；BIRD 观测只在对应 staged interface 同时有 neighbor 和 selected Babel route 时放行。
@@ -826,24 +826,24 @@
 - [x] **5.4 策略路由与路由表 ownership（第一版）**
   - [x] BIRD config 支持 `kernel table <id>` 和非 main internal table；默认仍使用 main table（独立 netns 隔离）。
   - [x] ECMP：`ecmp on limit 16` 已写入 bird.conf。
-  - [ ] `ip rule` / fwmark / iif-oif 策略路由和 `/run/higgs/rt_tables.d` 诊断输出已降级为 Phase 7.12 远期增强。
+  - [ ] `ip rule` / fwmark / iif-oif 策略路由和 `/run/photon/rt_tables.d` 诊断输出已降级为 Phase 7.12 远期增强。
   - [ ] 多 overlay 共享同一 netns 时的 table/rule 隔离留到后续。
   - [ ] teardown/revocation 对 table routes/rules 的 owner-guarded 清理随策略路由一起补齐。
 
 - [x] **5.5 Operator / Debug 命令（第一版）**
-  - [x] `higgs debug babel`：显示 overlay BIRD mode、pid/socket、router-id、table、state、last error。
-  - [x] `higgs debug routes`：显示 local export set、authorized route set、authorization errors。
-  - [x] `higgs debug route <prefix>`：解释前缀的授权状态、宣告来源、assignment 依据。
-  - [x] `higgs debug links` 扩展 `routing:` 列：bird_state、bird_neighbors、bird_best_routes。
+  - [x] `photon debug babel`：显示 overlay BIRD mode、pid/socket、router-id、table、state、last error。
+  - [x] `photon debug routes`：显示 local export set、authorized route set、authorization errors。
+  - [x] `photon debug route <prefix>`：解释前缀的授权状态、宣告来源、assignment 依据。
+  - [x] `photon debug links` 扩展 `routing:` 列：bird_state、bird_neighbors、bird_best_routes。
   - [x] control method `bird_status` / `routes_dump` 已加入；daemon status 已包含 routing reconcile last error。
   - [x] `routing_reload` control method 和 `bird_dump`（完整 birdc 原始输出）已补齐。
-  - [x] Higgs 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图已补齐：`routes_dump` / `debug routes` / `debug route <prefix>` 接入 BIRD live route cross-view，按 prefix 标注 selected、authorized exact match、assignment/import 范围命中和来源 zone。
+  - [x] Photon 侧 authorized route set 与 BIRD 侧 learned/installed routes 的交叉视图已补齐：`routes_dump` / `debug routes` / `debug route <prefix>` 接入 BIRD live route cross-view，按 prefix 标注 selected、authorized exact match、assignment/import 范围命中和来源 zone。
 
 - [x] **5.6 闭环验证（第一版）**
   - [x] 单元测试：`StableRouterID`、`AuthorizedRouteSet`（assignment/announcement/撤销/重叠/default route）、BIRD config/filter、birdc client、process manager、daemon routing reconcile。
   - [x] dry-run smoke：`make routing-dry-run-smoke` 验证两节点 route authorization + BIRD config 生成。
-  - [x] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）：已增加 `make bird-babel-smoke` / `make bird-babel-container-smoke` 基础设施和 Go root smoke 测试骨架（`HIGGS_BIRD_SMOKE=1`），覆盖 managed BIRD lifecycle、两节点 Babel 邻居+路由学习、daemon routing reconcile、veth upstream。完整 3 节点 + StrongSwan/XFRM + managed BIRD 联合 smoke 仍待后续接入。
-  - [x] managed BIRD 默认随 Higgs daemon 退出保持运行，重启后 adopt；如需实验室 teardown 可显式配置 `shutdown_policy: stop`。
+  - [x] container root smoke（3 节点 + StrongSwan/XFRM + managed BIRD + 跨节点业务 ping）：已增加 `make bird-babel-smoke` / `make bird-babel-container-smoke` 基础设施和 Go root smoke 测试骨架（`PHOTON_BIRD_SMOKE=1`），覆盖 managed BIRD lifecycle、两节点 Babel 邻居+路由学习、daemon routing reconcile、veth upstream。完整 3 节点 + StrongSwan/XFRM + managed BIRD 联合 smoke 仍待后续接入。
+  - [x] managed BIRD 默认随 Photon daemon 退出保持运行，重启后 adopt；如需实验室 teardown 可显式配置 `shutdown_policy: stop`。
   - [x] restart/adopt smoke 随真实 BIRD 数据面补齐：daemon 默认退出不停止 managed BIRD，新 daemon/process manager 通过 pidfile/control socket adopt 原进程，避免 Babel 会话被控制面重启打断。
   - [x] negative smoke 随真实 BIRD 数据面补齐：用真实 BIRD 验证未授权 prefix 不被 import/selected/安装。
   - [ ] 跨数据面 rotate smoke 已降级为 Phase 7 之后远期增强：结合端口/IPsec rotate 与真实 BIRD route/metric 观测验证数据面切换窗口。
@@ -862,20 +862,20 @@
   - [x] `pkg/transport/ipsec/link.go`：从 `LinkGroupSpec` 中移除 `Routing` 字段；`TransportLinkSpec` 保留 `NetNS`。
   - [x] `pkg/routing/bird/routerid.go`：`StableRouterID` 改为 `(localZone, rootTrust, netnsName)` 三个参数；`netnsName` 使用 `NetNSSpec.Target()`，path netns 要求配置 `router_id_label`。
   - [x] `pkg/routing/records.go`：新增 `routing.netns.v1` record 类型、key `routing/netns`、解析函数；schema 包含 `version` 和 `netns` 列表。
-  - [x] `app/higgs/ipsec_publish.go`（或独立文件）：daemon 在发布 IPsec records 时同步发布本节点 `routing/netns` record；记录值从 `routing.instances[].netns` 推导。
-  - [x] `app/higgs/config.go`：解析新 `netns` / `routing.instances` 配置，校验每个 overlay 引用的 netns 存在；path netns 用于 routing 时必须设置 `router_id_label`。
-  - [x] `app/higgs/state.go`：`BirdInstances` key 从 overlay ID 改为 netns name；`BirdInstanceState.OverlayID` 改为 `NetNSName`。
+  - [x] `app/photon/ipsec_publish.go`（或独立文件）：daemon 在发布 IPsec records 时同步发布本节点 `routing/netns` record；记录值从 `routing.instances[].netns` 推导。
+  - [x] `app/photon/config.go`：解析新 `netns` / `routing.instances` 配置，校验每个 overlay 引用的 netns 存在；path netns 用于 routing 时必须设置 `router_id_label`。
+  - [x] `app/photon/state.go`：`BirdInstances` key 从 overlay ID 改为 netns name；`BirdInstanceState.OverlayID` 改为 `NetNSName`。
   - [x] `pkg/routing/bird/types.go`：`BirdInstanceSpec.OverlayID` 改为 `NetNSName`；增加 `InterfacePatterns []string` 支持多 overlay 接口合并。
   - [x] `pkg/routing/bird/generator.go`：config 内部 table/protocol/filter 命名改用 netns name；支持多 interface pattern。
-  - [x] `app/higgs/routing_reconcile.go`：按 netns 分组 overlays，每个 netns 生成一个 BIRD 实例；合并该 netns 下所有 overlay 的接口 pattern。
-  - [x] `app/higgs/daemon.go` / `control.go` / `diagnostics.go` / `debug_routing.go`：`bird_status`、`debug babel`、`debug links` 输出按 netns 展示实例，并列出该 netns 下的 overlays。
+  - [x] `app/photon/routing_reconcile.go`：按 netns 分组 overlays，每个 netns 生成一个 BIRD 实例；合并该 netns 下所有 overlay 的接口 pattern。
+  - [x] `app/photon/daemon.go` / `control.go` / `diagnostics.go` / `debug_routing.go`：`bird_status`、`debug babel`、`debug links` 输出按 netns 展示实例，并列出该 netns 下的 overlays。
   - [x] `pkg/routing/bird/preflight.go`：增加 BIRD 版本检查，断言 >= 2.0（项目依赖 BIRD 2.x 语法）。
   - [x] 测试改造：`routing_reconcile_test.go`、`pkg/routing/bird/generator_test.go`、`debug_routing_test.go` 中 BIRD 实例查找、filter/table 名称断言改为 netns 维度。
   - [x] smoke：`make routing-dry-run-smoke` 覆盖多 overlay 共享同一 netns 场景。
 
 ## Phase 6: IPAM / 准入 / 防火墙 / 链路健康（已完成主线归档）
 
-**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/higgs` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/new/routing.md`、`docs/new/daemon.md`（原 `docs/phase6-event-driven-design.md` 已并入并删除）、`docs/new/firewall.md`（原 `docs/phase6-firewall-design.md` 已并入并删除）、`docs/web-status-dashboard-design.md`、`docs/app-higgs-modularization-design.md`。
+**归档状态：** Phase 6 主线、增强 smoke 和 6.7.7 `app/photon` 模块化重构均已从主 `todo.md` 移出；主 TODO 只保留当前 Phase 7 可执行队列、远期后续和摘要链接。完整实现细节可回看对应设计文档：`docs/new/routing.md`、`docs/new/daemon.md`（原 `docs/phase6-event-driven-design.md` 已并入并删除）、`docs/new/firewall.md`（原 `docs/phase6-firewall-design.md` 已并入并删除）、`docs/web-status-dashboard-design.md`、`docs/app-photon-modularization-design.md`。
 
 - [x] **6.0 事件驱动控制面重构**
   - [x] 默认启用 event loop + `SyncSession` FSM；packet demux、timer manager、异步 object pull、UDP chunk fallback、relay fanout 均接入事件循环。
@@ -895,11 +895,11 @@
   - [x] 将 `ANNOUNCE` 处理收敛为 hint：不再把 UDP announce payload 作为正确性主路径；收到 hint 后创建或唤醒 active pull session，由 catalog diff/object pull 决定实际拉取内容。
   - [x] 删除旧兼容字段路径：现代 event-loop 不再使用旧 Ping/Pong digest/fetch 字段、反向 fetch 动作、服务中状态和 eager object pull；wire codec 与旧 `sync.go` receive 路径已随 6.0 事件循环收尾删除。
   - [x] 更新观测面：`sync status --verbose` / `debug peer` 可区分 active pull、read-only responder、hint suppressed/accepted、object pull/chunk fallback 结果；per-peer `sync_flow` / debug 展开字段包含 `active_pull_state`、`active_pull_last_event`、hint accepted/suppressed、read-only responder kind/zone/last。
-  - [x] 验证：`go test ./app/higgs -run 'TestSyncStatusVerboseOutput|TestDebugPeerOutput|TestDaemonEventLoopAnnounceIsHint|TestDaemonEventLoopResponderDoesNotStealActiveSession'`、`go test ./app/higgs ./pkg/core/gossip`、`make check`。
+  - [x] 验证：`go test ./app/photon -run 'TestSyncStatusVerboseOutput|TestDebugPeerOutput|TestDaemonEventLoopAnnounceIsHint|TestDaemonEventLoopResponderDoesNotStealActiveSession'`、`go test ./app/photon ./pkg/core/gossip`、`make check`。
 
 - [x] **6.1 IPAM 闭环**
   - [x] 实现 pool/assignment 分离、pool enforcement、assignment 重叠检测和 `PermAllocateIP` 权限模型。
-  - [x] 增加 `higgs route ipam` CLI：pool create、assign、revoke assignment/pool、assigned 查询。
+  - [x] 增加 `photon route ipam` CLI：pool create、assign、revoke assignment/pool、assigned 查询。
   - [x] 支持 `ipam.auto_announce_assigned_ips` 自动宣告本节点合法 assignment，并随撤销收敛。
   - [x] 支持 routing upstream / veth pair / BIRD static route 集成，`TestBIRDUpstreamBabelRootSmoke` 覆盖 overlay netns 与 host ns BIRD Babel 互通。
   - [x] anycast/shared assignment 第一版落地：`IPAMAssignmentRecord.Shared`、授权/重叠例外、CLI `--shared`、单测覆盖 shared route announcement。
@@ -912,39 +912,39 @@
   - [x] 实现 pool overlap 校验：允许 owner 从自己拥有的覆盖 pool 切子 pool；拒绝 sibling/unrelated owner 的相同、包含或部分重叠 prefix；非法 pool 输出 `ipam_pool_owner_mismatch` 或 `ipam_pool_overlap`，且不得进入 `AllPools`。
   - [x] 将 `isAssignmentPoolValid` 改为精确 owner 检查：assignment source 必须存在 `pool.DelegatedTo == assignment.Source` 且覆盖 assignment prefix 的 valid pool；`AssignedTo` 只表示使用者，不参与 pool ownership 校验。
   - [x] 保留现有 assignment overlap / anycast 语义，避免把 pool ownership 修复误扩展成禁止跨层 assign 或禁止 `Shared=true` anycast。
-  - [x] 在 `app/higgs/ipam.go` 写入路径增加 dry-run 早失败：`createIPAMPoolWithRuntime` 拒绝 owner mismatch / pool overlap；`assignIPAMWithRuntime` 拒绝 `ipam_assignment_pool_mismatch` / `ipam_assignment_overlap`；最终正确性仍以 `BuildAuthorizedRouteSet` 为准。
-  - [x] 调整 `higgs route ipam mine`：删除 `usable_by_managed_zone`，只保留 `published_by_managed_zone` 和 `delegated_to_managed_zone`，让输出匹配严格 owner 语义。
-  - [x] 新增 `higgs route ipam get <addr-or-prefix>` 只读诊断命令：归一化地址/前缀，基于 valid `AllPools` / `AllAssignments` / authorized routes 输出 pool chain、best pool、assignment、assigned_to、route 和 diagnostics；默认输出 human-readable 文本，`--json` 输出结构化 view；无 pool 输出 `ipam_no_pool`，有 pool 无 assignment 输出 `ipam_unassigned`。
+  - [x] 在 `app/photon/ipam.go` 写入路径增加 dry-run 早失败：`createIPAMPoolWithRuntime` 拒绝 owner mismatch / pool overlap；`assignIPAMWithRuntime` 拒绝 `ipam_assignment_pool_mismatch` / `ipam_assignment_overlap`；最终正确性仍以 `BuildAuthorizedRouteSet` 为准。
+  - [x] 调整 `photon route ipam mine`：删除 `usable_by_managed_zone`，只保留 `published_by_managed_zone` 和 `delegated_to_managed_zone`，让输出匹配严格 owner 语义。
+  - [x] 新增 `photon route ipam get <addr-or-prefix>` 只读诊断命令：归一化地址/前缀，基于 valid `AllPools` / `AllAssignments` / authorized routes 输出 pool chain、best pool、assignment、assigned_to、route 和 diagnostics；默认输出 human-readable 文本，`--json` 输出结构化 view；无 pool 输出 `ipam_no_pool`，有 pool 无 assignment 输出 `ipam_unassigned`。
   - [x] 补 `pkg/routing` 单测：root bootstrap pool、无 covering owner 的 delegated pool 拒绝、root 切 child pool 合法、child 再切 grandchild pool 合法、sibling/unrelated pool overlap 拒绝、ancestor self pool 不再授权 descendant assignment、显式 delegated pool 授权 assignment。
-  - [x] 补 `app/higgs` CLI/runtime 单测：root bootstrap pool 可创建、无 owner covering pool 的子池创建失败、隐式继承 assignment 失败、显式 delegation assignment 成功、`ipam mine` 不再显示 `usable_by_managed_zone`，`ipam get` 默认文本和 `--json` 覆盖地址查询、prefix 查询、anycast/shared assignment、`ipam_no_pool` 和 `ipam_unassigned`。
+  - [x] 补 `app/photon` CLI/runtime 单测：root bootstrap pool 可创建、无 owner covering pool 的子池创建失败、隐式继承 assignment 失败、显式 delegation assignment 成功、`ipam mine` 不再显示 `usable_by_managed_zone`，`ipam get` 默认文本和 `--json` 覆盖地址查询、prefix 查询、anycast/shared assignment、`ipam_no_pool` 和 `ipam_unassigned`。
   - [x] 更新操作文档和示例：`README.md`、`docs/new/config.md`、`docs/new/operations.md` 中明确 root/self pool 只是精确 owner 声明，子 zone 需要显式 pool delegation；offline root 仍通过 `recovery export-zone/import-zone` 迁移 root-owned IPAM records。
-  - [x] 验证：先跑 focused `GOCACHE=/tmp/higgs-gocache GOMODCACHE=/tmp/higgs-gomodcache go test ./pkg/routing ./app/higgs -run 'Test(IPAM|Pool|Assignment|Recovery|Authority)'`，再跑 `make check`；若 broad `app/higgs` 受 sandbox UDP 限制影响，记录具体失败并保留 focused 结果。
+  - [x] 验证：先跑 focused `GOCACHE=/tmp/photon-gocache GOMODCACHE=/tmp/photon-gomodcache go test ./pkg/routing ./app/photon -run 'Test(IPAM|Pool|Assignment|Recovery|Authority)'`，再跑 `make check`；若 broad `app/photon` 受 sandbox UDP 限制影响，记录具体失败并保留 focused 结果。
 
 - [x] **6.2 Auto-join 准入基线与诊断**
   - [x] 空 DB + config 首启可创建 pending bootstrap state，普通 gossip 同步到 parent delegation 后自动 materialize 本地 Zone。
-  - [x] pending 节点不发布 endpoint/IPsec/route 本机记录；`higgs gossip join request --from-config` 可生成等价 join request。
-  - [x] 增加 `admissionState` 持久化、`diagnoseAutoJoinAdmission()`、`higgs debug admission` 和 `admission_status` control API。
-  - [x] 增加 `higgs recovery pull-zone` / `pull-chain`，用于管理节点 DB 丢失后按 trust chain 拉取恢复。
+  - [x] pending 节点不发布 endpoint/IPsec/route 本机记录；`photon gossip join request --from-config` 可生成等价 join request。
+  - [x] 增加 `admissionState` 持久化、`diagnoseAutoJoinAdmission()`、`photon debug admission` 和 `admission_status` control API。
+  - [x] 增加 `photon recovery pull-zone` / `pull-chain`，用于管理节点 DB 丢失后按 trust chain 拉取恢复。
 
 - [x] **6.3 防火墙规则同步**
   - [x] 新增 `firewall.instances[]` 配置、owner token/table-chain 命名、dry-run diff、hook、managed/external/disabled 模式。
   - [x] overlay netns 生成 input/forward/output policy；host netns 只管理 IKE/NAT-T ingress 与 port rotate redirect grace。
   - [x] forwarding policy 与 BIRD export/import 共享，revocation deny-first 从 allow set 中剔除 revoked prefix。
-  - [x] nftables backend 优先、iptables fallback、per-instance netns 执行、owned stale cleanup 和 `higgs debug firewall` 操作面已完成。
+  - [x] nftables backend 优先、iptables fallback、per-instance netns 执行、owned stale cleanup 和 `photon debug firewall` 操作面已完成。
 
 - [x] **6.4 动态 Peer 管理**
   - [x] 本地派生 peer 状态：eligible、discovered、connecting、active、stale、offline、policy_denied、config_error、revoked。
   - [x] 支持 stale/offline/cleanup 阈值、endpoint/profile/key/port 变化 dirty fanout、revocation 高优先级路径。
-  - [x] 增加 `higgs debug peers` 和 `peers_status` control API，展示 reason、severity、last sync/reconcile、cleanup timer。
+  - [x] 增加 `photon debug peers` 和 `peers_status` control API，展示 reason、severity、last sync/reconcile、cleanup timer。
 
 - [x] **6.5 撤销后的传输与路由清理**
   - [x] 计算 `RevocationImpact`，覆盖 IPsec/XFRM、BIRD/routing、防火墙、gossip peer cache 和 configured bootstrap 诊断。
   - [x] deny-first 顺序落地：revocation cleanup -> firewall -> routing -> IPsec -> peer cache cleanup，单层失败不回滚安全删除。
-  - [x] 增加 `higgs debug revoke-impact`、`revoke_status` control API、debug links/routes/firewall 的 revoked reason 展示。
+  - [x] 增加 `photon debug revoke-impact`、`revoke_status` control API、debug links/routes/firewall 的 revoked reason 展示。
 
 - [x] **6.6 链路健康检测**
   - [x] 新增 `pkg/health`：rolling window、状态机、ICMP/UDP prober、manager、OpenMetrics 渲染和 rotate cutover gate。
-  - [x] daemon 接入 `health.*` 配置、`health_status` control API、`higgs debug health`、health probe tick 与 `RotateCutoverReady` 门闩。
+  - [x] daemon 接入 `health.*` 配置、`health_status` control API、`photon debug health`、health probe tick 与 `RotateCutoverReady` 门闩。
   - [x] 本地 metrics/spool schema 与低基数标签边界已定义；长期 TSDB 默认推荐 VictoriaMetrics single-node。
 
 - [x] **6.7 Observer 只读状态控制台 MVP**
@@ -962,17 +962,17 @@
   - [ ] Observer 深度增强已降级为 Phase 7 之后远期增强：拓扑图、zone tree、VictoriaMetrics/Prometheus-compatible datasource/push 集成、BIRD protocols/routes/neighbors 深度解析。
 
 
-## Phase 6.7.7: `app/higgs` 模块化重构（Observer/debug 先行，已完成）
+## Phase 6.7.7: `app/photon` 模块化重构（Observer/debug 先行，已完成）
 
-**设计文档：** `docs/app-higgs-modularization-design.md`
+**设计文档：** `docs/app-photon-modularization-design.md`
 
-**完成背景：** `app/higgs` 曾同时承载 CLI wiring、daemon lifecycle、sync runtime、reconcile、observer、debug presenter 和 readmodel 推理。6.7.7 以 Observer/debug/inspect 为低风险第一刀，把可复用只读 view、reason、HTTP DTO 和 CLI presenter 从 executable 包中拆出，同时保留 `app/higgs` 作为 runtime/source adapter。
+**完成背景：** `app/photon` 曾同时承载 CLI wiring、daemon lifecycle、sync runtime、reconcile、observer、debug presenter 和 readmodel 推理。6.7.7 以 Observer/debug/inspect 为低风险第一刀，把可复用只读 view、reason、HTTP DTO 和 CLI presenter 从 executable 包中拆出，同时保留 `app/photon` 作为 runtime/source adapter。
 
 **完成结果：**
-- `internal/observer` 承接 HTTP routing、SSE、static web、API envelope、method/404/SSE/static/webapp 等通用 handler 测试；`app/higgs` 只保留 daemon provider、observer 启停和 health spool/runtime adapter。
+- `internal/observer` 承接 HTTP routing、SSE、static web、API envelope、method/404/SSE/static/webapp 等通用 handler 测试；`app/photon` 只保留 daemon provider、observer 启停和 health spool/runtime adapter。
 - `internal/inspect` 建立 links、zones/records、peers/endpoints、peer lifecycle、routes/BIRD、health、revocation、firewall、admission、rotate、ping、sync status 等共享 readmodel/builder/filter/reason。
 - `internal/inspect/http` 承接 observer status/zones/peers/links/health/routes/BIRD DTO builder，稳定 HTTP schema，避免 observer 直接依赖 app 私有 state 或原始 runtime struct。
-- `internal/inspect/text` 承接 debug/zone/record/peer/endpoints/links/routes/routing/health/revocation/firewall/admission/rotate/ping/sync status 文本 presenter 和 focused output 测试；`app/higgs/debug_*.go` 保留命令注册、参数解析、control socket/live/offline source 选择。
+- `internal/inspect/text` 承接 debug/zone/record/peer/endpoints/links/routes/routing/health/revocation/firewall/admission/rotate/ping/sync status 文本 presenter 和 focused output 测试；`app/photon/debug_*.go` 保留命令注册、参数解析、control socket/live/offline source 选择。
 - `internal/state` 承接跨 app/inspect/control/observer 共享的只读 snapshot 类型，例如 `PeerRuntimeState`、link runtime state、BIRD/firewall reconcile state；app 层通过 alias 表达 state ownership。
 - `sync status` 与 `debug peer` 复用 `inspect.BuildPeerDebugFromRuntime`，peer status/backoff/next retry/observed path/datagram/object pull 诊断不再在 app 和 inspect 重复推理。
 - manual rotate-port 输出下沉为 `inspect.ManualPortRotateView` + `inspect/text.WriteManualPortRotateResult`；app 层只做结果投影。
@@ -985,7 +985,7 @@
 - `sync.go`、`daemon.go`、`ipsec_reconcile.go`、`routing_reconcile.go`、`config.go` 仍是后续模块化主战场，但不属于 6.7.7 收尾阻塞。
 
 **验收覆盖：**
-- `go test ./app/higgs ./internal/...` 通过。
+- `go test ./app/photon ./internal/...` 通过。
 - `internal/inspect`、`internal/inspect/http`、`internal/inspect/text`、`internal/observer` 已补 focused builder/schema/output/handler 测试。
 - Observer/debug app 层测试保留 daemon provider、source fallback、config/wiring 和 committed snapshot 行为覆盖。
 
@@ -1010,7 +1010,7 @@
 - `TestLongBirdReconcileDoesNotBlockCommittedReaders`
 - `TestLongFirewallReconcileDoesNotBlockCommittedReaders`
 - IPsec/firewall stale commit 测试覆盖旧 snapshot result 不覆盖新 revision，并在冲突时重新置 dirty。
-- `make check` 通过，包含 `go fmt ./...`、`go vet ./...`、`go test ./...`、`go build ./app/higgs`。
+- `make check` 通过，包含 `go fmt ./...`、`go vet ./...`、`go test ./...`、`go build ./app/photon`。
 
 
 ## Phase 7 已完成项归档
@@ -1030,7 +1030,7 @@
 ### 7.16 Firewall backend-native inline hooks
 
 - `firewall.instances[]` 支持 `nft_hooks` 及按 `ipv4` / `ipv6` 分组的 `iptables_hooks`；两套配置可并存，`backend: auto` 会选择可用且匹配已配置 hook 的 backend，debug 明确标记 active/inactive。
-- 覆盖 overlay 的 `pre/post_input`、`pre/post_forward`、`pre/post_output` 与 host 的 `host_pre/post_input`、`host_pre/post_prerouting`。hook 规则按 YAML 顺序编入 Higgs managed chain/generation；invalid drop 等基础安全规则和 post hook 的相对位置由 planner 测试锁定。
+- 覆盖 overlay 的 `pre/post_input`、`pre/post_forward`、`pre/post_output` 与 host 的 `host_pre/post_input`、`host_pre/post_prerouting`。hook 规则按 YAML 顺序编入 Photon managed chain/generation；invalid drop 等基础安全规则和 post hook 的相对位置由 planner 测试锁定。
 - nft 规则作为单条 rule body 与 managed table 进入同一个原子 batch；iptables 按 argv 执行，拒绝 shell 元字符和 chain/table 管理参数，并在 IPv4/IPv6 inactive generation 均准备成功后才切换 builtin-chain jump，失败时保留/回滚旧 generation。
 - 移除了旧 `hooks:` 管理员外部 chain 入口及其兼容逻辑；只保留 backend-native inline hooks。hook 点、backend、family、顺序和原始表达式都进入 desired-state hash。
 - 增加 hook 配置/strict field、顺序、backend 选择、双栈 family、危险参数、staging/activation rollback、dry-run/debug 等单元测试，并完成 nft overlay/host root smoke。真实 iptables root smoke 仍需在同时具备 `iptables` 与 `ip6tables` 的环境复验。
@@ -1047,7 +1047,7 @@
 ### 7.10 Daemon / 本地控制接口生产化
 
 - daemon 统一承担 gossip、committed state 和各数据面 runtime apply；CLI 写入优先走 Unix control socket，显式 `--direct` 仅用于离线或恢复场景。
-- control socket 固定为 root-only：默认 `/run/higgs/higgs.sock`，目录/socket 权限 `0700`/`0600`；拒绝覆盖活跃 socket 或同名普通文件，仅清理确认失效的 socket。
+- control socket 固定为 root-only：默认 `/run/photon/photon.sock`，目录/socket 权限 `0700`/`0600`；拒绝覆盖活跃 socket 或同名普通文件，仅清理确认失效的 socket。
 - fallback 只接受 socket 不存在或明确 `ECONNREFUSED`；超时、权限、连接重置和协议错误不回退到直接 DB 写入。
 - `internal/controlapi` 承担 Unix JSON transport、deadline 和 unavailable 分类。公共业务 DTO/typed client 暂不迁移，等出现实际复用需求再评估。
 - 不做多用户 owner/group、只读/管理方法分级或 TCP listener；远程管理有需求时再单独设计鉴权。
@@ -1064,19 +1064,19 @@
 ### 8.1 最小 service record 与显式发布
 
 - 定义 `services/socks5` / `service.socks5.v1` record，支持 endpoints 数组、多 endpoint、旧单 endpoint 字段与可选 `active`。
-- `higgs service publish/withdraw` 校验地址归属当前节点 active assignment（普通或 shared），撤销通过 `active:false` 新版本表达。
-- service record 使用通用 `write`、严格 schema 与 route-authorization 归属验证；Higgs 主配置不再包含 Docker/Compose/service instance 模型。
+- `photon service publish/withdraw` 校验地址归属当前节点 active assignment（普通或 shared），撤销通过 `active:false` 新版本表达。
+- service record 使用通用 `write`、严格 schema 与 route-authorization 归属验证；Photon 主配置不再包含 Docker/Compose/service instance 模型。
 
 ### 8.2 独立 Compose 生成与 host/overlay 网络接入
 
-- 独立 `higgs-services` 读取 `/etc/higgs/service.yaml` 并通过 `higgs route ipam mine` 生成覆盖全部双栈 external network 的 Compose；支持多 network、`auto`/`tag:` assignment、相对 base address 与 resolved lock。
+- 独立 `photon-services` 读取 `/etc/photon/service.yaml` 并通过 `photon route ipam mine` 生成覆盖全部双栈 external network 的 Compose；支持多 network、`auto`/`tag:` assignment、相对 base address 与 resolved lock。
 - 固定 SOCKS5 输出 `socks`、`dns`、`h2` 三容器，只原子写 artifact，不执行 Docker 生命周期操作。
-- 校验 Docker subnet、host connected route、host→Higgs netns 聚合路由与 overlay→host static upstream；服务前缀的 Babel export 仍限于实际拥有/获授权前缀。
+- 校验 Docker subnet、host connected route、host→Photon netns 聚合路由与 overlay→host static upstream；服务前缀的 Babel export 仍限于实际拥有/获授权前缀。
 
 ### 8.3 发布、防火墙与运行状态
 
 - 通用 endpoint ACL 持久化 `{destination, protocol, port, selectors}`，动态解析授权 overlay 来源；host FORWARD 先 allow 后精确 drop，空匹配 fail-closed。
-- `higgs-services publish` 校验 resolved lock / assignment、TCP 健康与 ACL，再发布多 endpoint record；withdraw 按 record、shared route、ACL 的顺序清理。
+- `photon-services publish` 校验 resolved lock / assignment、TCP 健康与 ACL，再发布多 endpoint record；withdraw 按 record、shared route、ACL 的顺序清理。
 - 增加 `services` / `proxy` 本机诊断，展示地址归属、路由、firewall、readiness 与当前 record。
 
 ### 8.6 IPAM shared Anycast 与多网络发布

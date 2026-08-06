@@ -6,11 +6,11 @@ set -euo pipefail
 check() {
   local name="$1"
   shift
-  if "$@" >/tmp/higgs-bird-preflight.out 2>&1; then
+  if "$@" >/tmp/photon-bird-preflight.out 2>&1; then
     printf '[ok]   %s\n' "$name"
   else
     printf '[fail] %s: ' "$name"
-    tr '\n' ' ' </tmp/higgs-bird-preflight.out
+    tr '\n' ' ' </tmp/photon-bird-preflight.out
     printf '\n'
     failures=$((failures + 1))
   fi
@@ -31,7 +31,7 @@ check "bird binary" command -v bird
 check "birdc binary" command -v birdc
 check "ip command" command -v ip
 check "ping command" command -v ping
-check "named netns create/delete" sh -c 'set -e; ns="higgs-bird-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" true'
+check "named netns create/delete" sh -c 'set -e; ns="photon-bird-preflight-$$"; trap "ip netns delete \"$ns\" >/dev/null 2>&1 || true" EXIT; ip netns add "$ns"; ip netns exec "$ns" true'
 
 # Check the oldest BIRD release covered by the Ubuntu compatibility matrix.
 # Ubuntu 24.04 ships BIRD 2.14.
@@ -48,7 +48,7 @@ if command -v bird >/dev/null 2>&1; then
   fi
 fi
 
-rm -f /tmp/higgs-bird-preflight.out
+rm -f /tmp/photon-bird-preflight.out
 
 if [ "$failures" -ne 0 ]; then
   printf 'bird/babel preflight failed: %s check(s)\n' "$failures" >&2

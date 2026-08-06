@@ -14,7 +14,7 @@ make ipsec-xfrm-container-smoke
 该目标会调用 `docs/scripts/ipsec-xfrm-container-smoke.sh`，自动完成：
 
 - 首次运行时基于 `ubuntu:24.04` 构建本地缓存镜像
-  `higgs-ipsec-xfrm-smoke:ubuntu-24.04`；后续运行复用该镜像，避免重复
+  `photon-ipsec-xfrm-smoke:ubuntu-24.04`；后续运行复用该镜像，避免重复
   `apt-get update/install`。
 - 使用 `docker` 启动一次性 privileged container。
 - 挂载当前 repo 到 `/work`，工作目录设为 `/work`。
@@ -28,19 +28,19 @@ make ipsec-xfrm-container-smoke
 可用环境变量覆盖默认值：
 
 ```sh
-HIGGS_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
-HIGGS_IPSEC_XFRM_IMAGE=ubuntu:24.04 make ipsec-xfrm-container-smoke
-HIGGS_IPSEC_XFRM_CACHE_IMAGE=my-higgs-xfrm-smoke:latest make ipsec-xfrm-container-smoke
-HIGGS_IPSEC_XFRM_REBUILD_IMAGE=1 make ipsec-xfrm-container-smoke
-HIGGS_IPSEC_XFRM_GO_CACHE_VOLUME=my-higgs-gocache make ipsec-xfrm-container-smoke
-HIGGS_IPSEC_XFRM_GO_MOD_CACHE_VOLUME=my-higgs-gomodcache make ipsec-xfrm-container-smoke
-HIGGS_CONTAINER_USERNS= make ipsec-xfrm-container-smoke
+PHOTON_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
+PHOTON_IPSEC_XFRM_IMAGE=ubuntu:24.04 make ipsec-xfrm-container-smoke
+PHOTON_IPSEC_XFRM_CACHE_IMAGE=my-photon-xfrm-smoke:latest make ipsec-xfrm-container-smoke
+PHOTON_IPSEC_XFRM_REBUILD_IMAGE=1 make ipsec-xfrm-container-smoke
+PHOTON_IPSEC_XFRM_GO_CACHE_VOLUME=my-photon-gocache make ipsec-xfrm-container-smoke
+PHOTON_IPSEC_XFRM_GO_MOD_CACHE_VOLUME=my-photon-gomodcache make ipsec-xfrm-container-smoke
+PHOTON_CONTAINER_USERNS= make ipsec-xfrm-container-smoke
 ```
 
 Docker 默认额外使用 `--userns=host`。这不是扩大外层 LXC 权限的魔法开关；它只是
 避免 Docker 在已经 unprivileged LXC 的环境里再加一层 user namespace remap，从而
 减少 mount/sysfs/netns 行为被二次映射弄坏的概率。若要验证它是否影响当前机器，可
-用 `HIGGS_CONTAINER_USERNS=` 临时关闭。
+用 `PHOTON_CONTAINER_USERNS=` 临时关闭。
 
 如果要手工复现容器步骤，等价形式是：
 
@@ -72,12 +72,12 @@ make ipsec-xfrm-preflight
 
 - Linux 内核是否支持 XFRM。
 - 当前进程是否是 root，或是否具备有效 `CAP_NET_ADMIN`。
-- VICI socket 是否存在；默认是 `/run/charon.vici`，可用 `HIGGS_VICI_SOCKET` 覆盖。
+- VICI socket 是否存在；默认是 `/run/charon.vici`，可用 `PHOTON_VICI_SOCKET` 覆盖。
 - `ip`、`swanctl`、`charon` 是否可用。
 - `ip link type xfrm` 是否可用。
 - named netns 是否能真实 create/delete；这一步能提前发现 LXC/嵌套容器里常见的
   `/run/netns` 或 mount namespace 限制。
-- 当 `HIGGS_IPSEC_CHECK_UDP=1` 时，额外检查 IKE/NAT-T UDP 端口是否可绑定。
+- 当 `PHOTON_IPSEC_CHECK_UDP=1` 时，额外检查 IKE/NAT-T UDP 端口是否可绑定。
 
 如果 preflight 失败，先修宿主机环境。不要让半途失败的 smoke 留下 connection 或
 interface。
@@ -98,10 +98,10 @@ make ipsec-xfrm-container-smoke
 
 该目标不会进入 `make smoke-all`。它会：
 
-1. 构建 `build/higgs`。
+1. 构建 `build/photon`。
 2. 运行 `docs/scripts/ipsec-xfrm-preflight.sh`；任何 root/CAP、VICI、charon、
    iproute2 或 XFRM 能力缺失都会在创建资源前失败。
-3. 设置 `HIGGS_IPSEC_XFRM_SMOKE=1`，运行
+3. 设置 `PHOTON_IPSEC_XFRM_SMOKE=1`，运行
    `TestSystemXFRMDriverIntegrationSmoke`、
    `TestSystemXFRMDriverPeerTunnelPingSmoke`、
    `TestStrongSwanDriverLoadsKeyAndConnection`、
@@ -118,7 +118,7 @@ make ipsec-xfrm-container-smoke
    创建 XFRM interface、分配 tunnel address，验证 A/B tunnel IP 能互相 `ping`；该测试位于
    `pkg/transport/ipsec` driver 层，不经过完整 daemon/gossip，但验证 StrongSwan/XFRM/VICI
    数据面闭环。
-7. 通过 Higgs daemon reconcile 路径创建一次性的 named netns 内 XFRM interface，
+7. 通过 Photon daemon reconcile 路径创建一次性的 named netns 内 XFRM interface，
    分配 tunnel host prefix，并在 link group 删除后由 daemon teardown 清理 interface。
 8. 在两个 named netns 中启动隔离 charon/VICI 实例，构造已验证的
    root -> `catofes.` -> `node-a`/`node-b` active state 与 signed `ipsec/*`
@@ -154,7 +154,7 @@ tunnel ping；daemon run smoke 进一步覆盖自动发布 `ipsec/*` records、U
 同步和真实 VICI/XFRM apply 的同一闭环。
 
 StrongSwan 控制面已有真实 govici 客户端边界：`GoviciClient` 连接 charon VICI
-socket，并把 Higgs 内部 `StrongSwanDriver` 生成的 `load-conn`、`terminate`、
+socket，并把 Photon 内部 `StrongSwanDriver` 生成的 `load-conn`、`terminate`、
 `unload-conn` 和 streaming `list-sas` 调用转换为 govici `Message`。这条路径
 避免在 daemon 核心控制面解析 `swanctl` 输出；`swanctl --list-sas` 仍保留为
 失败诊断和人工对照。
@@ -196,13 +196,13 @@ root/container smoke 现在已经覆盖 daemon `Run` 循环下的对端 `ipsec/*
 smoke 还覆盖启动恢复观测现有 SA、唯一 SA 断言、revocation teardown、VICI SA
 消失、XFRM interface 删除、tunnel ping 失败、bounded break-before-make 端口
 轮换（4.4）和 bidirectional takeover（4.5）。它们仍是 Go 测试内的 daemon
-service，不是外部 `build/higgs daemon` OS 进程；后续如果需要继续收紧，可以把同一
+service，不是外部 `build/photon daemon` OS 进程；后续如果需要继续收紧，可以把同一
 断言扩展到 CLI 进程启动和双外部 daemon 进程的 gossip revocation 传播。外部
 OS 进程级 smoke 不阻塞 Phase 4 闭环，属于后续 hardening/7.8 生产化阶段。
 
 ## 3. 最小手工 StrongSwan 健康检查
 
-在接入 Higgs daemon reconcile 前，先确认宿主机能跑最小 route-based IPsec 链路：
+在接入 Photon daemon reconcile 前，先确认宿主机能跑最小 route-based IPsec 链路：
 
 1. 启动或 reload StrongSwan，并确认 VICI 可用：
 
@@ -216,29 +216,29 @@ swanctl --stats
 ip link help xfrm >/dev/null
 ```
 
-3. 在 Higgs 之外创建一次性 namespace/interface 组合：
+3. 在 Photon 之外创建一次性 namespace/interface 组合：
 
 ```sh
-ip netns add h2-a
-ip link add hgs-test-a type xfrm if_id 4242
-ip link set hgs-test-a netns h2-a
-ip netns exec h2-a ip addr replace fd00:1200::1/64 dev hgs-test-a
-ip netns exec h2-a ip link set dev hgs-test-a up
-ip netns exec h2-a ip link show hgs-test-a
+ip netns add photon-a
+ip link add phx-test-a type xfrm if_id 4242
+ip link set phx-test-a netns photon-a
+ip netns exec photon-a ip addr replace fd00:1200::1/64 dev phx-test-a
+ip netns exec photon-a ip link set dev phx-test-a up
+ip netns exec photon-a ip link show phx-test-a
 ```
 
 清理：
 
 ```sh
-ip netns exec h2-a ip link delete hgs-test-a || true
-ip netns delete h2-a
+ip netns exec photon-a ip link delete phx-test-a || true
+ip netns delete photon-a
 ```
 
-这一步用于把 kernel/iproute2 问题和 Higgs 控制面问题分开排查。
+这一步用于把 kernel/iproute2 问题和 Photon 控制面问题分开排查。
 
-## 4. Higgs Provider Apply 检查
+## 4. Photon Provider Apply 检查
 
-第一个真正面向 Higgs 的检查，是先不接 VICI，只验证 XFRM/netns apply：
+第一个真正面向 Photon 的检查，是先不接 VICI，只验证 XFRM/netns apply：
 
 - 从 verified `ipsec/*` records 和本地 `LinkGroupSpec` 构造 `TransportLinkSpec`。
 - 使用带默认 `netns.default` 的 `SystemXFRMDriver`；`overlay.default_netns` / `ipsec.default_netns` 仅作为旧配置兼容别名。
@@ -260,12 +260,12 @@ ip netns delete h2-a
 
 完整双节点进程级版本的 `make ipsec-xfrm-smoke` 只应在 preflight 通过后扩展：
 
-1. 创建两个 Higgs 数据目录和两个 named namespace，例如 `h2-a` 和
-   `h2-b`.
+1. 创建两个 Photon 数据目录和两个 named namespace，例如 `photon-a` 和
+   `photon-b`.
 2. 完成 root -> `catofes.` -> `node-a.catofes.` / `node-b.catofes.` join。
 3. 每个节点发布已签名的 `ipsec/profile`、`ipsec/addresses`、`ipsec/ports`
    和 `ipsec/transport-key` records。
-4. 启动两端 `higgs daemon` 进程，让 gossip 收敛。
+4. 启动两端 `photon daemon` 进程，让 gossip 收敛。
 5. link planner 从 verified active state 加本地 `LinkGroupSpec` 推导对称的
    `TransportLinkSpec`；不应需要为每个 peer 手写 link。
 6. StrongSwan provider 通过 VICI 加载 connection 和 secret。`swanctl` 只作为人工
@@ -295,7 +295,7 @@ root/container smoke 已覆盖当前 daemon service 级恢复与撤销：
   再次把它拉起；当前测试断言 revoked skip reason、VICI SA 消失、XFRM interface
   删除、`LinkInstance` 清空和 tunnel ping 失败。
 
-尚未覆盖的是两个外部 `build/higgs daemon` OS 进程之间通过 gossip 传播 revocation
+尚未覆盖的是两个外部 `build/photon daemon` OS 进程之间通过 gossip 传播 revocation
 后的同一组断言；这属于更高保真的 hardening，不再阻塞 Phase 4.3 最小闭环。
 
 Phase 4 只做到 peer-to-peer tunnel link 可用。Babel routing 和 prefix authorization
@@ -315,4 +315,4 @@ Phase 4 只做到 peer-to-peer tunnel link 可用。Babel routing 和 prefix aut
 
 5. **repair 主动重试 CHILD_SA**：`ReconcileActionRepair` 在重新 `load-conn` + ensure XFRM 后会显式调用 `InitiateTransportChild`，避免失败链路只反复更新 connection 而不重新发起。
 
-6. **防火墙按 instance netns 执行**：如果配置了 `firewall.instances[]`，overlay instance 的 nft/iptables 命令会在对应 netns 内执行，host instance 仍在 host namespace；owner scope 使用 `host`/`<netns>` 而不是配置 id。nftables apply 会重建同名 Higgs table 以清除 stale rules。
+6. **防火墙按 instance netns 执行**：如果配置了 `firewall.instances[]`，overlay instance 的 nft/iptables 命令会在对应 netns 内执行，host instance 仍在 host namespace；owner scope 使用 `host`/`<netns>` 而不是配置 id。nftables apply 会重建同名 Photon table 以清除 stale rules。

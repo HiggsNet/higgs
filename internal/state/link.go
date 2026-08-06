@@ -1,6 +1,6 @@
 package state
 
-import "github.com/Catofes/higgs/pkg/core/zone"
+import "github.com/Catofes/photon/pkg/core/zone"
 
 // LinkInstanceState is the persisted runtime state of a single IPsec link
 // instance.
@@ -48,7 +48,7 @@ type LinkInstanceState struct {
 	SAAbsentCount     int    `json:"sa_absent_count,omitempty"`
 }
 
-// LinkOwnerState identifies the Higgs owner of a link instance.
+// LinkOwnerState identifies the Photon owner of a link instance.
 type LinkOwnerState struct {
 	Manager     string `json:"manager,omitempty"`
 	GroupID     string `json:"group_id,omitempty"`

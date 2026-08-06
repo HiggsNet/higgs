@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// BirdMode controls how Higgs relates to the BIRD daemon for one overlay.
+// BirdMode controls how Photon relates to the BIRD daemon for one overlay.
 type BirdMode string
 
 const (
@@ -13,12 +13,12 @@ const (
 	// AF_UNIX socket: sockaddr_un.sun_path is 108 bytes including trailing NUL.
 	MaxControlSocketPathBytes = 107
 
-	// BirdModeManaged means Higgs creates the netns, generates the config,
+	// BirdModeManaged means Photon creates the netns, generates the config,
 	// starts the BIRD process, and performs crash recovery.
 	BirdModeManaged BirdMode = "managed"
 
 	// BirdModeExternal means an external operator owns the BIRD process.
-	// Higgs only connects via the control socket to configure and observe.
+	// Photon only connects via the control socket to configure and observe.
 	BirdModeExternal BirdMode = "external"
 
 	// BirdModeDisabled disables routing for the overlay. No config is
@@ -70,7 +70,7 @@ type BirdInstanceSpec struct {
 	PIDFilePath       string `yaml:"pid_file" json:"pid_file"`
 	ConfigPath        string `yaml:"config_path" json:"config_path"`
 
-	// Owner proves which Higgs-managed runtime resources may be cleaned up
+	// Owner proves which Photon-managed runtime resources may be cleaned up
 	// during teardown. Empty tokens retain legacy process teardown but skip
 	// path/resource cleanup.
 	Owner BirdResourceOwner `yaml:"owner,omitempty" json:"owner,omitempty"`
@@ -89,7 +89,7 @@ type BirdInstanceSpec struct {
 	MetricStaged   uint `yaml:"metric_staged" json:"metric_staged"`
 	MetricDraining uint `yaml:"metric_draining" json:"metric_draining"`
 
-	// InterfacePatterns are the BIRD interface globs, e.g. ["hgs*"].
+	// InterfacePatterns are the BIRD interface globs, e.g. ["phx*"].
 	// Multiple patterns allow one BIRD instance to discover interfaces from
 	// multiple overlays sharing the same netns.
 	InterfacePatterns []string `yaml:"interface_patterns,omitempty" json:"interface_patterns,omitempty"`

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Catofes/higgs/internal/inspect"
+	"github.com/Catofes/photon/internal/inspect"
 )
 
 func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {
@@ -24,10 +24,10 @@ func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {
 			State:           "up",
 			ActualState:     "up",
 			Endpoint:        "198.51.100.10:4500",
-			InterfaceName:   "hgs0",
+			InterfaceName:   "phx0",
 			XFRMIfID:        42,
 			DesiredSpecHash: "abcdef0123456789",
-			Desired:         &inspect.DesiredLink{PeerTunnelAddr: "fd00::2%hgs0"},
+			Desired:         &inspect.DesiredLink{PeerTunnelAddr: "fd00::2%phx0"},
 			ActualSA:        &inspect.LinkSA{ReqID: 77, RemoteIdentity: "node-b.catofes."},
 			Routing:         inspect.LinkRouting{BirdState: "running"},
 		}},

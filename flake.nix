@@ -1,5 +1,5 @@
 {
-  description = "Higgs trust-first network configuration system";
+  description = "Photon trust-first network configuration system";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -19,19 +19,19 @@
             src = ./.;
             filter = path: type:
               type != "socket"
-              && !(pkgs.lib.hasInfix "/.higgs" path)
+              && !(pkgs.lib.hasInfix "/.photon" path)
               && !(pkgs.lib.hasInfix "/.public-test" path)
               && !(pkgs.lib.hasInfix "/build" path)
               && !(pkgs.lib.hasInfix "/dist" path)
               && !(pkgs.lib.hasSuffix "/result" path);
           };
-          higgsnet = pkgs.buildGoModule {
-            pname = "higgsnet";
+          photon = pkgs.buildGoModule {
+            pname = "photon";
             inherit version;
             src = cleanSrc;
             vendorHash = "sha256-v0SzEL0agW+0qwx4mvoOW0JSemkaAm5FgCpg7zHfsxs=";
 
-            subPackages = [ "app/higgs" "app/higgs-services" ];
+            subPackages = [ "app/photon" "app/photon-services" ];
             # Unit and root smoke tests are run explicitly by CI/Make targets.
             # Nix packaging only needs to compile the installable binaries.
             doCheck = false;
@@ -43,55 +43,49 @@
               "-X main.buildTime=unknown"
             ];
 
-            postInstall = ''
-              mv $out/bin/higgs $out/bin/higgsnet
-            '';
-
             meta = {
               description = "Trust-first network configuration control plane";
-              homepage = "https://github.com/Catofes/higgs";
+              homepage = "https://github.com/Catofes/photon";
               license = pkgs.lib.licenses.mit;
-              mainProgram = "higgsnet";
+              mainProgram = "photon";
               platforms = pkgs.lib.platforms.linux;
             };
           };
         in
         {
-          default = higgsnet;
-          higgsnet = higgsnet;
-          # Keep the old flake attribute as a compatibility alias.
-          higgs = higgsnet;
+          default = photon;
+          photon = photon;
         });
 
       nixosModules.default = { config, lib, pkgs, ... }:
         let
-          cfg = config.services.higgsnet;
+          cfg = config.services.photon;
         in
         {
-          options.services.higgsnet = {
-            enable = lib.mkEnableOption "Higgs mesh daemon";
+          options.services.photon = {
+            enable = lib.mkEnableOption "Photon mesh daemon";
 
             package = lib.mkOption {
               type = lib.types.package;
               default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
               defaultText = lib.literalExpression "self.packages.\${pkgs.stdenv.hostPlatform.system}.default";
-              description = "Higgs package to run.";
+              description = "Photon package to run.";
             };
 
             configFile = lib.mkOption {
               type = lib.types.str;
-              default = "/etc/higgs/config.yaml";
-              description = "Path to the Higgs configuration file.";
+              default = "/etc/photon/config.yaml";
+              description = "Path to the Photon configuration file.";
             };
           };
 
           config = lib.mkIf cfg.enable {
-            systemd.services.higgsnet = {
-              description = "Higgs mesh daemon";
+            systemd.services.photon = {
+              description = "Photon mesh daemon";
               wantedBy = [ "multi-user.target" ];
               wants = [ "network-online.target" ];
               after = [ "network-online.target" "strongswan.service" ];
-              environment.HIGGS_CONFIG = cfg.configFile;
+              environment.PHOTON_CONFIG = cfg.configFile;
               path = with pkgs; [
                 bird2
                 iproute2
@@ -110,7 +104,7 @@
                 Restart = "on-failure";
                 RestartSec = 2;
                 TimeoutStopSec = 30;
-                RuntimeDirectory = "higgs";
+                RuntimeDirectory = "photon";
                 RuntimeDirectoryMode = "0700";
                 UMask = "0077";
                 LimitNOFILE = 65536;

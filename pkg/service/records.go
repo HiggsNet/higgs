@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/routing"
 )
 
 const (

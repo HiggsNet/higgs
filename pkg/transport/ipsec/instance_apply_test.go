@@ -14,7 +14,7 @@ func TestApplyReconcileActionPrepareRotateSkipsPrivateKeyLoad(t *testing.T) {
 		OverlayID:                "ipsec-main",
 		Provider:                 ProviderStrongSwan,
 		TransportID:              "ipsec-main-ab",
-		InterfaceName:            "hgs1",
+		InterfaceName:            "phx1",
 		XFRMIfID:                 77,
 		LocalPrivateKey:          []byte("private-key-material"),
 		LocalPrivateKeyAlgorithm: AlgorithmEd25519,
@@ -32,7 +32,7 @@ func TestApplyReconcileActionPrepareRotateSkipsPrivateKeyLoad(t *testing.T) {
 	_, err := ApplyReconcileAction(context.TODO(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionPrepareRotate,
 		Spec:   &stagedSpec,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 		InitiatorRole: InitiatorRolePrimary,
 		ContactPoints: []ContactPoint{{
@@ -77,7 +77,7 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 		Action:   ReconcileActionPrepareRotate,
 		Spec:     &stagedSpec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestApplyReconcileActionPrepareResponderRotateKeepsOldSA(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ba",
-		InterfaceName: "hgs-old",
+		InterfaceName: "phx-old",
 		XFRMIfID:      77,
 	}
 	stagedSpec := rotateSpecForRole(spec, 2, InitiatorRoleSecondaryStandby)
@@ -117,7 +117,7 @@ func TestApplyReconcileActionPrepareResponderRotateKeepsOldSA(t *testing.T) {
 		Action:   ReconcileActionPrepareRotate,
 		Spec:     &stagedSpec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestApplyReconcileActionRepairInitiatesChild(t *testing.T) {
 		OverlayID:       "ipsec-main",
 		Provider:        ProviderStrongSwan,
 		TransportID:     "ipsec-main-ab",
-		InterfaceName:   "hgs1",
+		InterfaceName:   "phx1",
 		XFRMIfID:        77,
 		InitiatorRole:   InitiatorRolePrimary,
 		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
@@ -155,7 +155,7 @@ func TestApplyReconcileActionRepairInitiatesChild(t *testing.T) {
 	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionRepair,
 		Spec:   &spec,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestApplyReconcileActionCreateInitiatesActiveChild(t *testing.T) {
 		OverlayID:       "ipsec-main",
 		Provider:        ProviderStrongSwan,
 		TransportID:     "ipsec-main-ab",
-		InterfaceName:   "hgs1",
+		InterfaceName:   "phx1",
 		XFRMIfID:        77,
 		InitiatorRole:   InitiatorRoleSecondaryTakeover,
 		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
@@ -191,7 +191,7 @@ func TestApplyReconcileActionCreateInitiatesActiveChild(t *testing.T) {
 	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionCreate,
 		Spec:   &spec,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T)
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 		ContactPoints: []ContactPoint{{
 			Address:    "198.51.100.20",
@@ -238,7 +238,7 @@ func TestApplyReconcileActionUpdateReplacesOldConnectionBeforeLoad(t *testing.T)
 		Action:   ReconcileActionUpdate,
 		Spec:     &newSpec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestApplyReconcileActionPrepareRotateUnloadsBaseConfig(t *testing.T) {
 		Provider:        ProviderStrongSwan,
 		LinkID:          "link-stable",
 		TransportID:     RuntimeConnectionID("link-stable", 2, ProviderStrongSwan),
-		InterfaceName:   "hgs2",
+		InterfaceName:   "phx2",
 		XFRMIfID:        78,
 		InitiatorRole:   InitiatorRolePrimary,
 		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::2"),
@@ -287,7 +287,7 @@ func TestApplyReconcileActionPrepareRotateUnloadsBaseConfig(t *testing.T) {
 		Action:   ReconcileActionPrepareRotate,
 		Spec:     &spec,
 		Instance: &inst,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true}); err != nil {
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true}); err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
 	if !stringSliceContains(ipsecDrv.Unloaded, inst.IKEName) {
@@ -305,7 +305,7 @@ func TestApplyReconcileActionCommitRotateTeardownsOldGeneration(t *testing.T) {
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ab",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	ipsecDrv := &DryRunDriver{}
@@ -335,7 +335,7 @@ func TestApplyReconcileActionPrepareRotateInitiatesActiveChild(t *testing.T) {
 		OverlayID:       "ipsec-main",
 		Provider:        ProviderStrongSwan,
 		TransportID:     "ipsec-main-ab",
-		InterfaceName:   "hgs1",
+		InterfaceName:   "phx1",
 		XFRMIfID:        77,
 		InitiatorRole:   InitiatorRolePrimary,
 		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
@@ -353,7 +353,7 @@ func TestApplyReconcileActionPrepareRotateInitiatesActiveChild(t *testing.T) {
 	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionPrepareRotate,
 		Spec:   &stagedSpec,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true})
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true})
 	if err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestApplyReconcileActionPrepareRotateResponderDoesNotInitiate(t *testing.T)
 		OverlayID:     "ipsec-main",
 		Provider:      ProviderStrongSwan,
 		TransportID:   "ipsec-main-ba",
-		InterfaceName: "hgs1",
+		InterfaceName: "phx1",
 		XFRMIfID:      77,
 	}
 	stagedSpec := rotateSpecForRole(spec, 2, InitiatorRoleSecondaryStandby)
@@ -382,7 +382,7 @@ func TestApplyReconcileActionPrepareRotateResponderDoesNotInitiate(t *testing.T)
 	if _, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
 		Action: ReconcileActionPrepareRotate,
 		Spec:   &stagedSpec,
-	}, NetNSSpec{Kind: NetNSName, Name: "higgstesth2", Create: true}); err != nil {
+	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true}); err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
 	if len(ipsecDrv.Initiated) != 0 {

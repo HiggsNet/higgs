@@ -155,8 +155,8 @@ func TestRawICMPNamespaceWorkerRunsDifferentSocketsConcurrently(t *testing.T) {
 	var seq atomic.Uint32
 	results := make(chan rawProbeResult, 2)
 	for i, target := range []ProbeTarget{
-		{InstanceID: "old", InterfaceName: "hgs-old", LocalTunnelAddr: netip.MustParseAddr("fe80::1"), PeerTunnelAddr: netip.MustParseAddr("fe80::2")},
-		{InstanceID: "active", InterfaceName: "hgs-active", LocalTunnelAddr: netip.MustParseAddr("fe80::3"), PeerTunnelAddr: netip.MustParseAddr("fe80::4")},
+		{InstanceID: "old", InterfaceName: "phx-old", LocalTunnelAddr: netip.MustParseAddr("fe80::1"), PeerTunnelAddr: netip.MustParseAddr("fe80::2")},
+		{InstanceID: "active", InterfaceName: "phx-active", LocalTunnelAddr: netip.MustParseAddr("fe80::3"), PeerTunnelAddr: netip.MustParseAddr("fe80::4")},
 	} {
 		go func(i int, target ProbeTarget) {
 			results <- worker.probe(context.Background(), target, ProbeConfig{Burst: 1}, uint16(i+1), &seq)
@@ -267,7 +267,7 @@ func TestRawICMPNamespaceWorkerFallsBackAndRateLimitsStaleSocketReopen(t *testin
 	var seq atomic.Uint32
 	target := ProbeTarget{
 		InstanceID:      "link-a",
-		InterfaceName:   "hgs0",
+		InterfaceName:   "phx0",
 		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
 		PeerTunnelAddr:  netip.MustParseAddr("fe80::2"),
 	}

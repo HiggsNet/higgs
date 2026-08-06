@@ -1,24 +1,24 @@
-# Higgs 日常操作
+# Photon 日常操作
 
 本文整理当前实现下最常用的运行、检查和恢复路径。它面向 operator：先让节点安全跑起来，再知道出问题时从哪里看。
 
-命令示例默认使用已安装到 PATH 的 `higgs`。
+命令示例默认使用已安装到 PATH 的 `photon`。
 
 ## 配置选择
 
-默认配置路径是 `/etc/higgs/config.yaml`。多节点实验时应显式指定：
+默认配置路径是 `/etc/photon/config.yaml`。多节点实验时应显式指定：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync status
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync status
 ```
 
 如果用 `sudo` 排查系统数据面，注意保留环境变量：
 
 ```bash
-sudo -E env HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs debug links
+sudo -E env PHOTON_CONFIG=/tmp/photon-a/config.yaml photon debug links
 ```
 
-否则 root 进程可能读取 `/etc/higgs/config.yaml` 或另一个状态库，导致 debug 输出和你以为的节点不一致。
+否则 root 进程可能读取 `/etc/photon/config.yaml` 或另一个状态库，导致 debug 输出和你以为的节点不一致。
 
 ## 初始化信任链
 
@@ -27,28 +27,28 @@ sudo -E env HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs debug links
 Root admin 只管理 `.`：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip root init
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip root pubkey
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip root init
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip root pubkey
 ```
 
 一级管理 Zone 先生成 key 和 join request：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip keygen /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join request catofes. /tmp/catofes.key.json
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip keygen /tmp/catofes.key.json
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join request catofes. /tmp/catofes.key.json
 ```
 
 把 request 交给 root admin 签发：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip delegate issue --permissions write,delegate,allocate-ip <request-payload>
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip delegate issue --permissions write,delegate,allocate-ip <request-payload>
 ```
 
 再把 bundle 交回管理 Zone：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join accept <bundle-payload> /tmp/catofes.key.json
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs debug verify catofes.
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join accept <bundle-payload> /tmp/catofes.key.json
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon debug verify catofes.
 ```
 
 普通节点重复同样流程，只是 delegation 由 `catofes.` 管理节点签发，而不是 root admin 直接签发。
@@ -58,8 +58,8 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs debug verify catofes.
 `root init` 创建的 root authority 默认拥有当前所有内建权限，包括 `delegate`、`write` 和 `allocate-ip`。route announcement 使用通用 `write`；子 Zone 默认只获得 `write,delegate`。如果一个管理 Zone需要分配 IPAM pool/assignment，应在 `delegate issue` 时显式加 `--permissions write,delegate,allocate-ip`。已有 delegation 可由父 Zone 管理端原地升级：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip delegate grant catofes. allocate-ip catofes-authority.b64
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join accept catofes-authority.b64
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip delegate grant catofes. allocate-ip catofes-authority.b64
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join accept catofes-authority.b64
 ```
 
 旧版本中若存在只拥有 `write:route`、`write:service` 或 `write:wireguard`、却没有通用 `write` 的 authority，父 Zone 应先补发包含 `write` 的 authority bundle。普通节点和 root 的默认 authority 原本已经包含 `write`，无需迁移；保留同一签名 key 时，authority refresh 后既有 route、service 和 WireGuard records 会按新的通用写权限重新通过验证。
@@ -69,38 +69,38 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join accept catofes-aut
 如果 root admin 保持离线，它写入的 root Zone records 不会自动进入在线 gossip 网络。可以把 root Zone signed snapshot 导出成文件，再交给在线管理端导入：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs route ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs route ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs advanced recovery export-zone . root-zone.b64
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon route ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon route ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon advanced recovery export-zone . root-zone.b64
 
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone root-zone.b64
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon advanced recovery import-zone root-zone.b64
 ```
 
 `delegated_to` 是精确 owner，不是向下继承开关。第一条 `delegated_to=.` 只让 root 拥有 `/32`；第二条才让 `catofes.` 精确拥有 `/58`，从而可以继续切子池或发布 assignment。子 Zone 不能直接使用 ancestor 的 self pool；缺少显式覆盖 pool 时，CLI 会以 `ipam_pool_owner_mismatch` 或 `ipam_assignment_pool_mismatch` 早失败。
 
 `export-zone` / `import-zone` 搬运的是已签名 Zone snapshot，不搬运 root 私钥；导入端仍会按 trusted root、delegation chain 和 record signature 做验证。`import-zone` 会优先通过本机 daemon control socket 导入，输出里出现 `via daemon` 表示写入已经进入在线 daemon 的内存状态和 DB。如果目标节点没有 daemon 或你想显式跳过 control socket，加 `--direct` 直接写本地 DB。
 
-排查本机视角时用 `higgs route ipam mine` 查看分配给 `managed_zone` 的 assignment 和本 Zone 精确拥有/发布的 pool；排查单个地址或前缀时用 `higgs route ipam get <addr-or-prefix>`，必要时加 `--json` 取得 pool chain、best pool、assignment、route 和诊断码。
+排查本机视角时用 `photon route ipam mine` 查看分配给 `managed_zone` 的 assignment 和本 Zone 精确拥有/发布的 pool；排查单个地址或前缀时用 `photon route ipam get <addr-or-prefix>`，必要时加 `--json` 取得 pool chain、best pool、assignment、route 和诊断码。
 
 ## 启动 Daemon
 
-推荐长期运行入口是 `higgs daemon`：
+推荐长期运行入口是 `photon daemon`：
 
 ```bash
-HIGGS_CONFIG=/etc/higgs/config.yaml higgs daemon
+PHOTON_CONFIG=/etc/photon/config.yaml photon daemon
 ```
 
 临时排障时可以指定较短 interval，靠事件触发同步：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs daemon --interval 60
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon daemon --interval 60
 ```
 
 优雅关闭：
 
 ```bash
 # 通过 control socket 关闭
-higgs daemon --shutdown
+photon daemon --shutdown
 
 # 或向进程发送 SIGTERM
 kill -TERM <pid>
@@ -109,8 +109,8 @@ kill -TERM <pid>
 使用 systemd 时直接运行：
 
 ```bash
-systemctl stop higgsnet.service
-systemctl restart higgsnet.service
+systemctl stop photon.service
+systemctl restart photon.service
 ```
 
 示例 unit 会在异常退出后重启；正常停止不重启；停止超时为 30 秒。
@@ -124,7 +124,7 @@ daemon 做这些事：
 - 执行 IPsec、routing、firewall、health reconcile。
 - 提供 Observer API/UI。
 
-崩溃重启后，daemon 从 BoltDB 恢复并重新 reconcile；未完成的同步会自动重试。BIRD 默认使用 `shutdown_policy: persist` 跨 Higgs 重启保留，实验环境可设为 `stop`。详细生命周期见 [Daemon 设计与实现](daemon.md#52-状态持久化停止与崩溃恢复)。
+崩溃重启后，daemon 从 BoltDB 恢复并重新 reconcile；未完成的同步会自动重试。BIRD 默认使用 `shutdown_policy: persist` 跨 Photon 重启保留，实验环境可设为 `stop`。详细生命周期见 [Daemon 设计与实现](daemon.md#52-状态持久化停止与崩溃恢复)。
 
 CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在线时，部分命令会回退为直接写本地状态。你也可以显式加 `--direct` 跳过 control socket 探测，直接写本地 DB。
 
@@ -144,16 +144,16 @@ CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在�
 
 ```bash
 # daemon 不在线时直接签发 delegation
-HIGGS_CONFIG=/tmp/higgs-admin/config.yaml higgs gossip delegate issue --direct --permissions write,delegate <request-payload>
+PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip delegate issue --direct --permissions write,delegate <request-payload>
 
 # 直接接受 join bundle
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs gossip join accept --direct <bundle-payload> /tmp/catofes.key.json
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join accept --direct <bundle-payload> /tmp/catofes.key.json
 
 # 直接写 record
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs gossip record put --direct node-a.catofes. endpoints/udp '{"endpoints": [...]}' json
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon gossip record put --direct node-a.catofes. endpoints/udp '{"endpoints": [...]}' json
 
 # 离线导入 root Zone snapshot
-HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone --direct root-zone.b64
+PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon advanced recovery import-zone --direct root-zone.b64
 ```
 
 **注意**：使用 `--direct` 前必须确认没有 daemon 正在管理同一份状态文件或相同的 IPsec/XFRM 对象，否则可能产生并发写或数据面状态不一致。
@@ -165,25 +165,25 @@ HIGGS_CONFIG=/tmp/higgs-catofes/config.yaml higgs advanced recovery import-zone 
 查看同步状态：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync status --verbose
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync status --verbose
 ```
 
 对某个 peer 执行一次同步：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync once node-b.catofes.
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync once node-b.catofes.
 ```
 
 启动兼容的被动 UDP 服务：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-b/config.yaml higgs advanced sync serve
+PHOTON_CONFIG=/tmp/photon-b/config.yaml photon advanced sync serve
 ```
 
 旧的常驻同步入口仍可用，但 daemon 是推荐入口：
 
 ```bash
-HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync run --interval 5
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync run --interval 5
 ```
 
 `advanced sync once` 如果输出 pending zones，通常表示对端已返回摘要，但还有对象需要继续拉取；再跑一轮或交给 daemon 后台收敛。
@@ -193,58 +193,58 @@ HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs advanced sync run --interval 5
 基础状态：
 
 ```bash
-higgs advanced sync status --verbose
-higgs gossip zone show node-b.catofes.
-higgs gossip record list node-b.catofes. --filter identity
-higgs debug verify node-b.catofes.
+photon advanced sync status --verbose
+photon gossip zone show node-b.catofes.
+photon gossip record list node-b.catofes. --filter identity
+photon debug verify node-b.catofes.
 ```
 
 Gossip 和 peer：
 
 ```bash
-higgs debug peer node-b.catofes.
-higgs debug peers
-higgs debug zone node-b.catofes.
-higgs debug zone node-b.catofes. --json --history
-higgs debug records node-b.catofes. --prefix endpoints/
-higgs debug endpoints
-higgs debug admission
-higgs debug revoke-impact node-b.catofes.
+photon debug peer node-b.catofes.
+photon debug peers
+photon debug zone node-b.catofes.
+photon debug zone node-b.catofes. --json --history
+photon debug records node-b.catofes. --prefix endpoints/
+photon debug endpoints
+photon debug admission
+photon debug revoke-impact node-b.catofes.
 ```
 
 数据面：
 
 ```bash
-higgs debug links
-higgs debug routing routes
-higgs debug routing routes 10.42.0.0/24
-higgs debug routing status
-higgs debug routing bird status
-higgs debug routing bird route
-higgs debug routing ip route
-higgs debug firewall
-higgs firewall show --verbose
-higgs debug health
-higgs debug rotate-port
+photon debug links
+photon debug routing routes
+photon debug routing routes 10.42.0.0/24
+photon debug routing status
+photon debug routing bird status
+photon debug routing bird route
+photon debug routing ip route
+photon debug firewall
+photon firewall show --verbose
+photon debug health
+photon debug rotate-port
 ```
 
 通过 control socket 查询单条 record（默认输出面向人的文本）：
 
 ```bash
-higgs gossip record get <zone> <key> --verbose
+photon gossip record get <zone> <key> --verbose
 ```
 
 需要完整 JSON、签名、hash 或历史版本时使用 debug：
 
 ```bash
-higgs debug record <zone> <key> --history 10
+photon debug record <zone> <key> --history 10
 ```
 
 底层数据库：
 
 ```bash
-higgs debug db stats
-higgs debug db dump
+photon debug db stats
+photon debug db dump
 ```
 
 `debug` 命令通常会优先读取 daemon 的 committed StateStore view；daemon 不在线时读取本地状态文件和最近一次 runtime snapshot。
@@ -254,7 +254,7 @@ higgs debug db dump
 临时打开：
 
 ```bash
-HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs daemon
+PHOTON_LOG_LEVEL=debug PHOTON_CONFIG=/tmp/photon-a/config.yaml photon daemon
 ```
 
 或写入配置：
@@ -263,7 +263,7 @@ HIGGS_LOG_LEVEL=debug HIGGS_CONFIG=/tmp/higgs-a/config.yaml higgs daemon
 log:
   level: debug
   mode: stderr+file
-  file: /var/log/higgs.log
+  file: /var/log/photon.log
 ```
 
 debug log 常见字段包括 peer、message type、zone/record 数量、字节数、耗时、reject reason、object pull、relay、quota、IPsec reconcile action 等。
@@ -320,16 +320,16 @@ Observer 适合看当前节点的 zones、peers、links、routes、BIRD、health
 ```yaml
 health:
   metrics:
-    local_spool_path: /var/lib/higgs/health-spool
+    local_spool_path: /var/lib/photon/health-spool
 ```
 
 ## IPsec / StrongSwan 排障
 
-先从 Higgs 自己的视角看：
+先从 Photon 自己的视角看：
 
 ```bash
-HIGGS_CONFIG=/etc/higgs/config.yaml higgs debug links
-HIGGS_CONFIG=/etc/higgs/config.yaml higgs debug endpoints
+PHOTON_CONFIG=/etc/photon/config.yaml photon debug links
+PHOTON_CONFIG=/etc/photon/config.yaml photon debug endpoints
 ```
 
 再看系统状态：
@@ -344,9 +344,9 @@ ip link show type xfrm
 如果使用 netns：
 
 ```bash
-ip netns exec h2 ip link
-ip netns exec h2 ip route
-ip netns exec h2 ip -6 route
+ip netns exec photon ip link
+ip netns exec photon ip route
+ip netns exec photon ip -6 route
 ```
 
 排查时按层分开：
@@ -361,35 +361,35 @@ ip netns exec h2 ip -6 route
 
 ## Routing / BIRD 排障
 
-先看 Higgs read model：
+先看 Photon read model：
 
 ```bash
-higgs debug routing routes
-higgs debug routing routes 10.42.0.0/24
-higgs debug routing status
-higgs debug routing bird interface
-higgs debug routing bird filter
-higgs debug routing bird route
-higgs debug routing ip route --netns higgstesth2
-higgs debug links
+photon debug routing routes
+photon debug routing routes 10.42.0.0/24
+photon debug routing status
+photon debug routing bird interface
+photon debug routing bird filter
+photon debug routing bird route
+photon debug routing ip route --netns photontesth2
+photon debug links
 ```
 
 再看 BIRD：
 
 ```bash
-birdc -s /var/lib/higgs/bird/bird-default.ctl show status
-birdc -s /var/lib/higgs/bird/bird-default.ctl show protocols
-birdc -s /var/lib/higgs/bird/bird-default.ctl show route all
+birdc -s /var/lib/photon/bird/bird-default.ctl show status
+birdc -s /var/lib/photon/bird/bird-default.ctl show protocols
+birdc -s /var/lib/photon/bird/bird-default.ctl show route all
 ```
 
 实际 control socket 路径取决于 `routing.instances[].control_socket`，未配置时在 `<data_dir>/bird/` 下。
 
 ## Firewall 排障
 
-Higgs 视角：
+Photon 视角：
 
 ```bash
-higgs debug firewall
+photon debug firewall
 ```
 
 系统视角：
@@ -403,49 +403,49 @@ iptables -t nat -S
 如果 firewall instance 绑定 netns，要在对应 namespace 中查看：
 
 ```bash
-ip netns exec h2 nft list ruleset
-ip netns exec h2 iptables -S
+ip netns exec photon nft list ruleset
+ip netns exec photon iptables -S
 ```
 
-Higgs 只应管理带 owner 边界的规则。发现规则残留时，先确认它是否是 Higgs-owned，再决定是否用 recovery 或手工清理。
+Photon 只应管理带 owner 边界的规则。发现规则残留时，先确认它是否是 Photon-owned，再决定是否用 recovery 或手工清理。
 
 ## 恢复操作
 
 从 peer 显式拉回某个 Zone：
 
 ```bash
-higgs advanced recovery pull-zone node-b.catofes. --from node-b.catofes.
+photon advanced recovery pull-zone node-b.catofes. --from node-b.catofes.
 ```
 
 拉回某个 Zone 及祖先链：
 
 ```bash
-higgs advanced recovery pull-chain node-b.catofes. --from node-b.catofes.
+photon advanced recovery pull-chain node-b.catofes. --from node-b.catofes.
 ```
 
-清理本机 Higgs 管理的 IPsec 链路：
+清理本机 Photon 管理的 IPsec 链路：
 
 ```bash
-sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs advanced recovery cleanup-ipsec
+sudo -E env PHOTON_CONFIG=/etc/photon/config.yaml photon advanced recovery cleanup-ipsec
 
 # 明确跳过 daemon 探测
-sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs advanced recovery cleanup-ipsec --direct
+sudo -E env PHOTON_CONFIG=/etc/photon/config.yaml photon advanced recovery cleanup-ipsec --direct
 ```
 
-`cleanup-ipsec` 会优先走 daemon；daemon 不在线时直接读取本地状态并调用配置的 IPsec/XFRM driver。加 `--direct` 可显式跳过 control socket 探测。它会拒绝清理无法验证为 Higgs-owned 的 link。
+`cleanup-ipsec` 会优先走 daemon；daemon 不在线时直接读取本地状态并调用配置的 IPsec/XFRM driver。加 `--direct` 可显式跳过 control socket 探测。它会拒绝清理无法验证为 Photon-owned 的 link。
 
 ## 关键路径与注意事项
 
-关键文件路径（默认 `<data_dir>` 由 `HIGGS_CONFIG` 或 `config.yaml` 中的 `data_dir` 决定）：
+关键文件路径（默认 `<data_dir>` 由 `PHOTON_CONFIG` 或 `config.yaml` 中的 `data_dir` 决定）：
 
-- 状态数据库：`<data_dir>/higgs.db`（BoltDB，含 Network、meta）
-- Control socket：root 为 `/run/higgs/higgs.sock`；非 root 为 `<data_dir>/higgs.sock`；`HIGGS_CONTROL_SOCKET` 可覆盖
+- 状态数据库：`<data_dir>/photon.db`（BoltDB，含 Network、meta）
+- Control socket：root 为 `/run/photon/photon.sock`；非 root 为 `<data_dir>/photon.sock`；`PHOTON_CONTROL_SOCKET` 可覆盖
 - 配置文件：`<data_dir>/config.yaml`
 - BIRD 配置：`<data_dir>/bird-<instance>.conf`
 
 运行注意事项：
 
-- **daemon 是单 writer**：不要同时运行多个 `higgs daemon` 实例操作同一个 state 文件。
+- **daemon 是单 writer**：不要同时运行多个 `photon daemon` 实例操作同一个 state 文件。
 - **reload**：`reload` 命令会重新加载配置和状态文件，但不允许切换 `state_path`、control socket 路径或 identity key。
 - **root init 不能通过 daemon 执行**：root zone 初始化需要在 daemon 启动前以 recovery/direct 方式执行。
 - **状态文件外部修改**：daemon 事件循环会检测磁盘状态文件是否被外部修改，检测到变化后自动加载并触发 reconcile。
@@ -457,20 +457,20 @@ sudo -E env HIGGS_CONFIG=/etc/higgs/config.yaml higgs advanced recovery cleanup-
 先查：
 
 ```bash
-higgs advanced sync status --verbose
-higgs debug endpoints
-higgs debug peer <peer-id>
+photon advanced sync status --verbose
+photon debug endpoints
+photon debug peer <peer-id>
 ```
 
-重点确认 `peer_id`、bootstrap 地址、`publish_endpoints`、endpoint discovery mode、trusted root，以及命令是否读了正确的 `HIGGS_CONFIG`。
+重点确认 `peer_id`、bootstrap 地址、`publish_endpoints`、endpoint discovery mode、trusted root，以及命令是否读了正确的 `PHOTON_CONFIG`。
 
 **record 没传播**
 
 先确认本地是否写入、签名是否有效：
 
 ```bash
-higgs gossip record list <zone> --filter <key-or-value>
-higgs debug verify <zone>
+photon gossip record list <zone> --filter <key-or-value>
+photon debug verify <zone>
 ```
 
 再看同步状态和 debug log。大对象或 UDP 受限环境下，object pull / UDP chunk fallback 可能是关键路径。
@@ -488,8 +488,8 @@ higgs debug verify <zone>
 优先检查环境：
 
 ```bash
-env | rg 'HIGGS_CONFIG|HIGGS_STATE|HIGGS_CONTROL_SOCKET'
-sudo -E env | rg 'HIGGS_CONFIG|HIGGS_STATE|HIGGS_CONTROL_SOCKET'
+env | rg 'PHOTON_CONFIG|PHOTON_STATE|PHOTON_CONTROL_SOCKET'
+sudo -E env | rg 'PHOTON_CONFIG|PHOTON_STATE|PHOTON_CONTROL_SOCKET'
 ```
 
 很多“状态不一致”其实是 root 进程读了另一个 config 或另一个 state path。

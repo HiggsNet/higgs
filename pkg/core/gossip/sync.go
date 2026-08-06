@@ -9,8 +9,8 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 var (
@@ -103,21 +103,21 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	}
 
 	candidate := zone.CloneNetworkStateForZone(ns, snapshot.Zone)
-	candidate.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	candidate.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	active := candidate.Zones[snapshot.Zone]
 	candidate.Zones[snapshot.Zone] = snapshotZoneState(snapshot)
-	if err := higgscrypto.VerifyChain(candidate, snapshot.Zone, now); err != nil {
+	if err := photoncrypto.VerifyChain(candidate, snapshot.Zone, now); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrUntrustedZone, err)
 	}
 
 	zs := candidate.Zones[snapshot.Zone]
 	for child, delegation := range zs.Delegations {
-		if err := higgscrypto.VerifyDelegation(delegation, zs.Authority, snapshot.Zone, now); err != nil {
+		if err := photoncrypto.VerifyDelegation(delegation, zs.Authority, snapshot.Zone, now); err != nil {
 			return nil, nil, fmt.Errorf("verify delegation %s: %w", child, err)
 		}
 	}
 	for child, revocation := range zs.Revocations {
-		if err := higgscrypto.VerifyDelegationRevocation(revocation, zs.Authority, snapshot.Zone, now); err != nil {
+		if err := photoncrypto.VerifyDelegationRevocation(revocation, zs.Authority, snapshot.Zone, now); err != nil {
 			return nil, nil, fmt.Errorf("verify revocation %s: %w", child, err)
 		}
 	}
@@ -208,7 +208,7 @@ func orderedSnapshotRecords(snapshot *ZoneSnapshot) []*zone.Record {
 		records := byKey[key]
 		sort.SliceStable(records, func(i, j int) bool {
 			if records[i].Version == records[j].Version {
-				return bytes.Compare(higgscrypto.RecordHash(records[i]), higgscrypto.RecordHash(records[j])) < 0
+				return bytes.Compare(photoncrypto.RecordHash(records[i]), photoncrypto.RecordHash(records[j])) < 0
 			}
 			return records[i].Version < records[j].Version
 		})

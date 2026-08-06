@@ -1,6 +1,6 @@
 # Phase 7.1：StrongSwan/XFRM 与 WG/GRE 并行链路设计
 
-本文定义 Higgs 同时运行 StrongSwan/XFRM 与 WireGuard/GRE 两套 TransportLink 的最终边界。
+本文定义 Photon 同时运行 StrongSwan/XFRM 与 WireGuard/GRE 两套 TransportLink 的最终边界。
 它只保留已经冻结、能够直接指导实现的内容；执行队列见 [`todo.md`](../todo.md)。
 
 ## 1. 状态与目标
@@ -235,11 +235,11 @@ destructive cleanup 必须同时满足：
 
 1. persisted owner/token 匹配；
 2. provider-specific live marker 匹配；
-3. resource name 位于 Higgs 保留命名空间；
+3. resource name 位于 Photon 保留命名空间；
 4. desired 已删除、peer 已 revoke，或 lifecycle 明确进入 cleanup。
 
-保留接口名前缀按资源类型划分：`hgs*` 表示 StrongSwan/XFRM，`hgw*` 表示 WireGuard
-device，`hgg*` 表示 WireGuard 路径上的 GRE/Babel interface，`hgv*` 表示 veth。
+保留接口名前缀按资源类型划分：`phx*` 表示 StrongSwan/XFRM，`phw*` 表示 WireGuard
+device，`phg*` 表示 WireGuard 路径上的 GRE/Babel interface，`phv*` 表示 veth。
 
 具体校验由 provider 实现：StrongSwan 检查 IKE/XFRM identity 与 legacy owner；WG/GRE 检查
 WG device、peer membership、GRE key/interface 和 firewall marker。
@@ -252,11 +252,11 @@ WG device、peer membership、GRE key/interface 和 firewall marker。
 overlays:
   - id: mesh-ipsec
     provider: strongswan
-    netns: h2
+    netns: photon
 
   - id: mesh-wggre
     provider: wireguard-gre
-    netns: h2
+    netns: photon
 ```
 
 signed record 只表达远端事实/能力，本地配置表达是否启用和如何使用：
@@ -381,8 +381,8 @@ MTU 是 provider planner 的明确结果。WG/GRE 第一版沿用真实实验通
 BIRD 需要多个有序 interface policy blocks：
 
 ```text
-interface "hgs*" { rxcost 96;  } // StrongSwan/XFRM
-interface "hgg*" { rxcost 160; } // WireGuard path GRE
+interface "phx*" { rxcost 96;  } // StrongSwan/XFRM
+interface "phg*" { rxcost 160; } // WireGuard path GRE
 ```
 
 实际命名前缀必须满足 Linux 15 字符限制。精确 interface 规则应优先于通配规则。
@@ -437,11 +437,11 @@ cleanup：
 ```text
 peer node-b.catofes.
   mesh-ipsec/strongswan
-    state=up interface=hgs... cost=96 mtu=1400
+    state=up interface=phx... cost=96 mtu=1400
     session=ready babel=neighbor health=healthy endpoint=[...]:4500
 
   mesh-wggre/wireguard-gre
-    state=degraded interface=hgg... cost=160 mtu=1360
+    state=degraded interface=phg... cost=160 mtu=1360
     session=ready babel=pending health=degraded endpoint=[...]:51820
 ```
 

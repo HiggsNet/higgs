@@ -1,0 +1,309 @@
+package main
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/routing"
+	photonservice "github.com/Catofes/photon/pkg/service"
+)
+
+func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	committed, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(committed): %v", err)
+	}
+	parent := managed.Parent()
+	removeIPAMPoolForTest(committed.Network, parent, "10.0.0.0/16")
+
+	service := newDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
+	beforeRevision := service.StateStore.Meta().Revision
+	result, syncNow, _ := service.handleEvent(daemonEvent{
+		Type: daemonEventIPAMMutation,
+		IPAM: &ipamMutationRequest{
+			Operation: ipamOperationAssignmentCreate,
+			Zone:      managed, Prefix: "10.0.1.0/24", Target: managed,
+		},
+	})
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "ipam_assignment_pool_mismatch") {
+		t.Fatalf("IPAM mutation error = %v, want daemon committed pool mismatch", result.Error)
+	}
+	if syncNow {
+		t.Fatal("rejected mutation requested sync")
+	}
+	if got := service.StateStore.Meta().Revision; got != beforeRevision {
+		t.Fatalf("revision changed on rejection: before=%d after=%d", beforeRevision, got)
+	}
+	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.Network.Zones[managed].Records[key] != nil {
+		t.Fatal("rejected assignment entered committed state")
+	}
+	disk, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(disk): %v", err)
+	}
+	if disk.Network.Zones[managed].Records[key] != nil {
+		t.Fatal("rejected assignment entered disk state")
+	}
+}
+
+func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	committed, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(committed): %v", err)
+	}
+	olderDisk, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(older disk): %v", err)
+	}
+	removeIPAMPoolForTest(olderDisk.Network, managed.Parent(), "10.0.0.0/16")
+	if err := rt.SaveState(olderDisk); err != nil {
+		t.Fatalf("SaveState(older disk): %v", err)
+	}
+
+	service := newDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
+	result, _, _ := service.handleEvent(daemonEvent{
+		Type: daemonEventIPAMMutation,
+		IPAM: &ipamMutationRequest{
+			Operation: ipamOperationAssignmentCreate,
+			Zone:      managed, Prefix: "10.0.1.0/24", Target: managed,
+		},
+	})
+	if result.Error != nil {
+		t.Fatalf("IPAM mutation rejected committed authority: %v", result.Error)
+	}
+	if result.Version != 1 {
+		t.Fatalf("version = %d, want 1", result.Version)
+	}
+	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
+	disk, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(disk): %v", err)
+	}
+	if disk.Network.Zones[managed].Records[key] == nil {
+		t.Fatal("accepted committed-state assignment was not persisted")
+	}
+}
+
+func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if _, err := applyIPAMMutation(state, ipamMutationRequest{
+		Operation: ipamOperationAssignmentCreate,
+		Zone:      managed, Prefix: "10.0.4.0/24", Target: managed,
+	}, rt.Now()); err != nil {
+		t.Fatalf("apply assignment: %v", err)
+	}
+	if _, err := applyRouteMutation(state, routeMutationRequest{
+		Zone: managed, Prefix: "10.0.4.0/24", Active: true,
+	}, rt.Now()); err != nil {
+		t.Fatalf("apply active route: %v", err)
+	}
+	activeDisk := cloneStateFile(state)
+	if _, err := applyRouteMutation(state, routeMutationRequest{
+		Zone: managed, Prefix: "10.0.4.0/24", Active: false,
+	}, rt.Now().Add(time.Second)); err != nil {
+		t.Fatalf("withdraw committed route: %v", err)
+	}
+	if err := rt.SaveState(activeDisk); err != nil {
+		t.Fatalf("SaveState(active disk): %v", err)
+	}
+
+	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	before := service.StateStore.Meta()
+	result, _, _ := service.handleEvent(daemonEvent{
+		Type:  daemonEventRouteMutation,
+		Route: &routeMutationRequest{Zone: managed, Prefix: "10.0.4.0/24", Active: false},
+	})
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "already withdrawn") {
+		t.Fatalf("route mutation error = %v, want committed already-withdrawn rejection", result.Error)
+	}
+	after := service.StateStore.Meta()
+	if after.Revision != before.Revision || after.Dirty != before.Dirty {
+		t.Fatalf("rejected route changed store meta: before=%+v after=%+v", before, after)
+	}
+	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.4.0/24")
+	disk, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(disk): %v", err)
+	}
+	ann, err := routing.ParseRouteAnnouncementRecord(disk.Network.Zones[managed].Records[key])
+	if err != nil || !ann.Active {
+		t.Fatalf("rejected daemon mutation changed disk active route: ann=%+v err=%v", ann, err)
+	}
+}
+
+func TestDaemonServiceMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	committed, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(committed): %v", err)
+	}
+	disk := cloneStateFile(committed)
+	if _, err := applyIPAMMutation(disk, ipamMutationRequest{
+		Operation: ipamOperationAssignmentCreate,
+		Zone:      managed, Prefix: "10.0.5.0/24", Target: managed,
+	}, rt.Now()); err != nil {
+		t.Fatalf("apply disk assignment: %v", err)
+	}
+	if err := rt.SaveState(disk); err != nil {
+		t.Fatalf("SaveState(disk assignment): %v", err)
+	}
+
+	service := newDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
+	before := service.StateStore.Meta()
+	result, _, _ := service.handleEvent(daemonEvent{
+		Type: daemonEventServiceMutation,
+		Service: &serviceMutationRequest{
+			Operation: serviceOperationPublish,
+			Endpoints: []photonservice.SOCKS5Endpoint{{Region: "test", Address: "10.0.5.10", Port: 1080}},
+		},
+	})
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "service_address_unauthorized") {
+		t.Fatalf("service mutation error = %v, want committed assignment rejection", result.Error)
+	}
+	after := service.StateStore.Meta()
+	if after.Revision != before.Revision || after.Dirty != before.Dirty {
+		t.Fatalf("rejected service changed store meta: before=%+v after=%+v", before, after)
+	}
+	key, _ := photonservice.RecordKey(socks5RecordName)
+	reloaded, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState(disk): %v", err)
+	}
+	if reloaded.Network.Zones[managed].Records[key] != nil {
+		t.Fatal("rejected service mutation entered disk state")
+	}
+}
+
+func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	before := service.StateStore.Meta().Revision
+	result, syncNow, _ := service.handleEvent(daemonEvent{
+		Type: daemonEventIPAMMutation,
+		IPAM: &ipamMutationRequest{
+			Operation: ipamOperationAssignmentCreate,
+			Zone:      managed, Prefix: "10.0.2.0/24", Target: managed, DryRun: true,
+		},
+	})
+	if result.Error != nil {
+		t.Fatalf("dry-run mutation: %v", result.Error)
+	}
+	if syncNow {
+		t.Fatal("dry-run requested sync")
+	}
+	if got := service.StateStore.Meta().Revision; got != before {
+		t.Fatalf("dry-run revision changed: before=%d after=%d", before, got)
+	}
+	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.2.0/24")
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.Network.Zones[managed].Records[key] != nil {
+		t.Fatal("dry-run record entered committed state")
+	}
+}
+
+func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	removeIPAMPoolForTest(state.Network, managed.Parent(), "10.0.0.0/16")
+	request := ipamMutationRequest{
+		Operation: ipamOperationAssignmentCreate,
+		Zone:      managed, Prefix: "10.0.3.0/24", Target: zone.ZonePath(managed),
+	}
+	_, directErr := applyIPAMMutation(state, request, rt.Now())
+	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventIPAMMutation, IPAM: &request})
+	if directErr == nil || result.Error == nil {
+		t.Fatalf("validation results direct=%v daemon=%v, want both rejected", directErr, result.Error)
+	}
+	if directErr.Error() != result.Error.Error() {
+		t.Fatalf("validation diverged: direct=%q daemon=%q", directErr, result.Error)
+	}
+}
+
+func TestUnavailableMutationControlFailsClosedWithoutDiskWrite(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	rt.DisableControl = false
+	t.Setenv("PHOTON_CONTROL_SOCKET", rt.StatePath+".missing.sock")
+	request := ipamMutationRequest{
+		Operation: ipamOperationAssignmentCreate,
+		Zone:      managed, Prefix: "10.0.9.0/24", Target: managed,
+	}
+	if _, controlled, err := mutateIPAMViaControl(rt, request); err == nil || !controlled {
+		t.Fatalf("mutateIPAMViaControl controlled/error = %t/%v, want fail-closed control error", controlled, err)
+	}
+	key, _ := routing.NormalizeIPAMAssignmentKey(request.Prefix)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if state.Network.Zones[managed].Records[key] != nil {
+		t.Fatal("socket-unavailable mutation wrote the local DB")
+	}
+}
+
+func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	state, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	ctx := t.Context()
+	go pumpDaemonEvents(ctx, service)
+
+	response := controlRequestViaPipe(t, service, controlRequest{
+		Method: "ipam_mutate",
+		IPAM: &ipamMutationRequest{
+			Operation: ipamOperationAssignmentCreate,
+			Zone:      managed, Prefix: "10.0.8.0/24", Target: managed,
+		},
+	})
+	if !response.OK || response.Version != 1 {
+		t.Fatalf("ipam_mutate response = %+v", response)
+	}
+	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.8.0/24")
+	snapshot, _ := service.StateStore.Snapshot()
+	if snapshot.Network.Zones[managed].Records[key] == nil {
+		t.Fatal("typed control mutation did not enter committed state")
+	}
+}
+
+func TestDaemonRawRecordPutRejectsReservedNamespaceWithoutRevision(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	service := newDaemonService(&Runtime{Config: defaultAppConfig(), Clock: time.Now}, state, config, time.Second)
+	before := service.StateStore.Meta().Revision
+	result, syncNow, _ := service.handleEvent(daemonEvent{
+		Type: daemonEventRecordPut,
+		RecordPut: &daemonRecordPut{
+			Zone: zone.ZonePath("node-b.catofes."),
+			Key:  routing.RecordKeyPrefixRoutes + "10.0.0.0_24",
+			Type: "application.fake",
+		},
+	})
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "daemon-owned") {
+		t.Fatalf("reserved record_put error = %v", result.Error)
+	}
+	if syncNow {
+		t.Fatal("rejected raw record requested sync")
+	}
+	if got := service.StateStore.Meta().Revision; got != before {
+		t.Fatalf("revision changed on reserved raw record: before=%d after=%d", before, got)
+	}
+}

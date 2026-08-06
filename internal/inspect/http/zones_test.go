@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/core/zone"
 )
 
 func TestZonesFromNetworkSortsAndSummarizesZones(t *testing.T) {

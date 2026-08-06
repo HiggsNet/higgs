@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	higgscrypto "github.com/Catofes/higgs/pkg/crypto"
+	"github.com/Catofes/photon/pkg/core/zone"
+	photoncrypto "github.com/Catofes/photon/pkg/crypto"
 )
 
 func TestBuildZoneDetailSortsRecordsAndIncludesHistory(t *testing.T) {
@@ -36,7 +36,7 @@ func TestBuildZoneDetailSortsRecordsAndIncludesHistory(t *testing.T) {
 		Version:   2,
 		Timestamp: 20,
 	}
-	if err := higgscrypto.SignRecord(active, priv); err != nil {
+	if err := photoncrypto.SignRecord(active, priv); err != nil {
 		t.Fatalf("SignRecord(active): %v", err)
 	}
 	old := &zone.Record{
@@ -47,7 +47,7 @@ func TestBuildZoneDetailSortsRecordsAndIncludesHistory(t *testing.T) {
 		Version:   1,
 		Timestamp: 10,
 	}
-	if err := higgscrypto.SignRecord(old, priv); err != nil {
+	if err := photoncrypto.SignRecord(old, priv); err != nil {
 		t.Fatalf("SignRecord(old): %v", err)
 	}
 	zs := zone.NewZoneState("node-a.catofes.", authority)
@@ -110,7 +110,7 @@ func TestBuildZoneDebugBuildsDetailAndDigest(t *testing.T) {
 	zs := zone.NewZoneState("node-a.catofes.", nil)
 	zs.Records["identity"] = &zone.Record{Zone: "node-a.catofes.", Key: "identity", Type: "profile", Value: []byte("node-a"), Version: 1}
 	network := &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{"node-a.catofes.": zs}}
-	network.ConfigureRecordValidation(higgscrypto.VerifyRecord, higgscrypto.RecordHash)
+	network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 
 	got, ok := BuildZoneDebug(ZoneDebugInput{
 		Network: network,

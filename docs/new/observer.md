@@ -1,10 +1,10 @@
-# Higgs Observer（只读 Web 状态控制台）设计与实现
+# Photon Observer（只读 Web 状态控制台）设计与实现
 
 > **本文档状态：2026-07**
-> 描述 Higgs 只读 observer 的当前实现：`internal/observer` 的 HTTP server / SSE hub / 内嵌静态 UI，`app/higgs` 中的配置解析、Provider 接线与事件广播，以及健康时序（local spool）数据源。
+> 描述 Photon 只读 observer 的当前实现：`internal/observer` 的 HTTP server / SSE hub / 内嵌静态 UI，`app/photon` 中的配置解析、Provider 接线与事件广播，以及健康时序（local spool）数据源。
 > 本文以当前代码为准；与原设计文档（`docs/web-status-dashboard-design.md`）的差异在第 9 节显式标注，原设计文档仅作背景参考。
 
-Observer 是 Higgs daemon 的**只读观测面**。它在 daemon 进程内启动一个独立 HTTP 监听，对外提供 REST 快照 API、SSE 事件流和一个零构建的静态 Web UI，用于可视化 daemon 的实时状态（Zone/Peer/Link/Health/Route/BIRD）。它**不接受任何写操作**：所有 API 仅响应 GET，不修改 daemon 状态，也不经过 control socket 的认证通道。
+Observer 是 Photon daemon 的**只读观测面**。它在 daemon 进程内启动一个独立 HTTP 监听，对外提供 REST 快照 API、SSE 事件流和一个零构建的静态 Web UI，用于可视化 daemon 的实时状态（Zone/Peer/Link/Health/Route/BIRD）。它**不接受任何写操作**：所有 API 仅响应 GET，不修改 daemon 状态，也不经过 control socket 的认证通道。
 
 完整配置字段见 [config.md](config.md)，状态来源（stateFile / StateStore 快照）见 [daemon.md](daemon.md)，健康状态与 spool 的产生见 [health.md](health.md)，授权路由集与 BIRD 观测见 [routing.md](routing.md)。
 
@@ -45,7 +45,7 @@ Observer 是 Higgs daemon 的**只读观测面**。它在 daemon 进程内启动
 ### 1.3 架构位置
 
 ```text
-daemon event loop（app/higgs/daemon.go）
+daemon event loop（app/photon/daemon.go）
   └─ notifyStateChanged()                 # 检测到状态变化后
        ├─ notifyObserver("state_changed") # 经 d.observerHub 广播（hub 为 nil 时 no-op）
        ├─ flushFirewallReconcile
@@ -61,7 +61,7 @@ daemon 启动序列（daemon.go run）
 
 HTTP 请求路径
   └─ observer.Server.Handler              # internal/observer/server.go
-       ├─ /api/v1/*  → Provider 方法（app/higgs/observer_server.go 实现）
+       ├─ /api/v1/*  → Provider 方法（app/photon/observer_server.go 实现）
        ├─ /api/v1/events → Hub.Subscribe（SSE）
        └─ /*         → 内嵌 webFS 静态文件（SPA fallback 到 index.html）
 ```
@@ -70,7 +70,7 @@ HTTP 请求路径
 
 ## 2. 配置模型
 
-observer 的配置段为 `observer.*`（YAML），解析逻辑在 `app/higgs/observer_config.go`：
+observer 的配置段为 `observer.*`（YAML），解析逻辑在 `app/photon/observer_config.go`：
 
 ```yaml
 # observer:
@@ -105,8 +105,8 @@ observer 的配置段为 `observer.*`（YAML），解析逻辑在 `app/higgs/obs
 |---|---|---|
 | transport-neutral server | `internal/observer/server.go` | 路由注册、统一响应包装、SSE handler、静态文件服务；不认识 daemon 类型，只依赖 `Provider` 接口 |
 | 事件 hub | `internal/observer/hub.go` | 订阅者集合管理与非阻塞广播 |
-| app 层接线 | `app/higgs/observer_server.go` | `observerProvider` 实现 `Provider`，从 daemon 快照构造各端点数据；`startObserverServer` 生命周期；`notifyObserver` 广播入口 |
-| 配置 | `app/higgs/observer_config.go` | `observer.*` YAML 解析与校验 |
+| app 层接线 | `app/photon/observer_server.go` | `observerProvider` 实现 `Provider`，从 daemon 快照构造各端点数据；`startObserverServer` 生命周期；`notifyObserver` 广播入口 |
+| 配置 | `app/photon/observer_config.go` | `observer.*` YAML 解析与校验 |
 
 `Provider` 接口（`server.go:42`）是 server 与 daemon 之间的唯一耦合点：
 
@@ -220,7 +220,7 @@ type Provider interface {
 
 ### 5.3 事件 payload 与触发点
 
-大部分事件都在 `notifyStateChanged()`（`app/higgs/daemon.go`）中按固定顺序发出；`health_updated` 另有一个 `handleHealthUpdate`（health reconcile 路径）触发点：
+大部分事件都在 `notifyStateChanged()`（`app/photon/daemon.go`）中按固定顺序发出；`health_updated` 另有一个 `handleHealthUpdate`（health reconcile 路径）触发点：
 
 | 事件 | 触发位置 | Payload | 含义 |
 |---|---|---|---|
@@ -263,7 +263,7 @@ type Provider interface {
 
 ## 7. 健康时序数据源（local spool）
 
-series 端点的数据完全来自 health 子系统的本地 JSONL spool（产生侧见 [health.md](health.md) 第 8 节），查询实现在 `app/higgs/health_spool.go`：
+series 端点的数据完全来自 health 子系统的本地 JSONL spool（产生侧见 [health.md](health.md) 第 8 节），查询实现在 `app/photon/health_spool.go`：
 
 - 配置前提：`health.metrics` 启用且 `local_spool_path` 非空（`healthSpoolConfigured`）；未配置时 series 返回 **503 health datasource not_configured**，`datasource` 信息为 `{configured: false, type: "none"}`。
 - 查询参数（`/api/v1/health/{link_id}/series`）：
@@ -304,7 +304,7 @@ series 端点的数据完全来自 health 子系统的本地 JSONL spool（产�
 | 非 loopback 保护 | 仅 warn 日志，无绑定确认开关或强制拒绝 |
 | 时序留存 | 短历史完全取决于 health spool 的 `local_spool_max_age`；spool 未配置时 Health 页无曲线 |
 
-测试覆盖：`internal/observer` 的 `hub_test.go`（订阅/广播/慢客户端）、`events_test.go`（SSE 帧）、`server_method_test.go`（非 GET 拒绝）、`static_test.go`（静态服务与 SPA fallback）、`webapp_test.go`（内嵌资源完整性）；`app/higgs` 的 `observer_config_test` 族（随配置测试）、`observer_server_test.go`（启动/事件广播）、`observer_api_status_test.go` 与 `observer_api_resources_test.go`（各端点响应与 404/405 行为）。
+测试覆盖：`internal/observer` 的 `hub_test.go`（订阅/广播/慢客户端）、`events_test.go`（SSE 帧）、`server_method_test.go`（非 GET 拒绝）、`static_test.go`（静态服务与 SPA fallback）、`webapp_test.go`（内嵌资源完整性）；`app/photon` 的 `observer_config_test` 族（随配置测试）、`observer_server_test.go`（启动/事件广播）、`observer_api_status_test.go` 与 `observer_api_resources_test.go`（各端点响应与 404/405 行为）。
 
 ---
 
@@ -332,7 +332,7 @@ observer 当前只读。若后续需要支持 Web 控制，建议按以下阶段
 并在 UI 上：
 
 - Route 页面增加「控制面路由 vs 数据面学习路由」对比视图。
-- Health 页面把 BIRD neighbor RTT/metric 与 Higgs probe RTT/loss 放在同一 link 详情里对比。
+- Health 页面把 BIRD neighbor RTT/metric 与 Photon probe RTT/loss 放在同一 link 详情里对比。
 - 增加前缀树 / 路径分析图。
 
 ### 10.3 metrics/remote write 与 observer 的关系
@@ -348,7 +348,7 @@ observer 第一版实现前已决策的关键问题：
 
 1. **前端技术栈**：第一版采用原生 HTML/CSS/JS，不引入 Node.js 构建链；拓扑图库后续增强时再引入。
 2. **默认启用策略**：未声明 `observer:` 时默认关闭；声明后默认监听 `127.0.0.1:8080`，可用 `disabled: true` 暂停。
-3. **离线诊断子命令**：第一版只提供 daemon 内嵌 observer；独立的 `higgs observer` 离线 DB viewer 延后到后续阶段。
+3. **离线诊断子命令**：第一版只提供 daemon 内嵌 observer；独立的 `photon observer` 离线 DB viewer 延后到后续阶段。
 4. **SSE 持久化/回放**：SSE 仅做实时通知，不持久化、不重放；前端断线后自动降级为 5s 轮询。
 5. **拓扑图优先级**：第一版以表格 + raw JSON 为主，可视化拓扑图留到后续增强。
 

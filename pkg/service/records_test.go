@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Catofes/higgs/pkg/core/zone"
-	"github.com/Catofes/higgs/pkg/routing"
+	"github.com/Catofes/photon/pkg/core/zone"
+	"github.com/Catofes/photon/pkg/routing"
 )
 
 func TestParseSOCKS5RecordStrictSchema(t *testing.T) {
