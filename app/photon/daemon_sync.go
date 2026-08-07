@@ -709,6 +709,8 @@ type syncSnapshotOutcome struct {
 	applyErr    error
 	adopted     bool
 	adoptionErr error
+	refreshed   bool
+	refreshErr  error
 	managedZone zone.ZonePath
 }
 
@@ -742,12 +744,27 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 				continue
 			}
 
+			// A parent snapshot can carry a newer authority for our managed
+			// Zone. Apply that authority envelope in the same savepoint while
+			// preserving all locally-owned Zone contents.
+			previousNetwork := state.Network
+			state.Network = nextNetwork
+			outcome.adopted, outcome.adoptionErr = tryAdoptAutoJoinDelegation(state, now)
+			if outcome.adoptionErr == nil {
+				outcome.refreshed, outcome.refreshErr = tryRefreshManagedZoneAuthority(state, now)
+			}
+			if outcome.refreshErr != nil {
+				state.Network = previousNetwork
+				outcome.applyErr = fmt.Errorf("refresh managed zone authority: %w", outcome.refreshErr)
+				recordRejectedDigest(state, peerID, digestForSnapshot(snapshot), gossip.RejectReason(outcome.applyErr), now)
+				dirty = true
+				continue
+			}
+
 			// Successful action: advancing state.Network is this action's
 			// savepoint commit. A later rejected action cannot mutate it.
-			state.Network = nextNetwork
 			clearRejectedDigest(state, peerID, snapshot.Zone)
 			outcome.result = result
-			outcome.adopted, outcome.adoptionErr = tryAdoptAutoJoinDelegation(state, now)
 			recordAdoptionResult(state, outcome.adopted, outcome.adoptionErr, now)
 			if !outcome.adopted && outcome.adoptionErr == nil {
 				recordBootstrapSyncSuccess(state, peerID, d.Sync.Config, now)
@@ -777,6 +794,18 @@ func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotO
 			"peer_id": peerID,
 			"zone":    outcome.managedZone,
 			"via":     "event_loop",
+		})
+	}
+	if outcome.refreshErr != nil {
+		d.logWarn("authority", "managed_zone_refresh_failed", map[string]any{
+			"peer_id": peerID,
+			"zone":    outcome.managedZone,
+			"error":   outcome.refreshErr,
+		})
+	} else if outcome.refreshed {
+		d.logInfo("authority", "managed_zone_refreshed", map[string]any{
+			"peer_id": peerID,
+			"zone":    outcome.managedZone,
 		})
 	}
 }

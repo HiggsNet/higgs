@@ -67,6 +67,68 @@ func TestLoadStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	}
 }
 
+func TestLoadStateAutoJoinWithoutBootstrapReportsActionableError(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, _ := writeTestPrivateKey(t, dir, "node-b")
+	rootPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root): %v", err)
+	}
+	config := defaultAppConfig()
+	config.StatePath = filepath.Join(dir, "photon.db")
+	config.ManagedZone = "node-b.catofes."
+	config.Identity.KeyPath = keyPath
+	config.TrustedRootPublicKey = rootPub
+	rt := &Runtime{Config: config, StatePath: config.StatePath}
+
+	_, err = rt.LoadState()
+	if err == nil {
+		t.Fatal("LoadState accepted auto-join config without gossip.bootstrap")
+	}
+	for _, want := range []string{"cannot initialize empty state for auto-join", "gossip.bootstrap", "at least one peer is required"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("LoadState error = %q, want substring %q", err, want)
+		}
+	}
+}
+
+func TestValidateAutoJoinBootstrapConfigReportsSpecificMissingFields(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, _ := writeTestPrivateKey(t, dir, "identity")
+	rootPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(root): %v", err)
+	}
+	valid := func() *appConfig {
+		config := defaultAppConfig()
+		config.ManagedZone = "node-b.catofes."
+		config.Identity.KeyPath = keyPath
+		config.TrustedRootPublicKey = rootPub
+		config.Bootstrap = []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}}
+		return config
+	}
+	tests := []struct {
+		name   string
+		mutate func(*appConfig)
+		want   string
+	}{
+		{name: "managed zone", mutate: func(config *appConfig) { config.ManagedZone = "" }, want: "gossip.init.managed_zone"},
+		{name: "identity key", mutate: func(config *appConfig) { config.Identity.KeyPath = "" }, want: "gossip.init.key_path"},
+		{name: "trusted root", mutate: func(config *appConfig) { config.TrustedRootPublicKey = nil }, want: "trusted_root_public_key"},
+		{name: "bootstrap", mutate: func(config *appConfig) { config.Bootstrap = nil }, want: "gossip.bootstrap"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := valid()
+			tt.mutate(config)
+			err := validateAutoJoinBootstrapConfig(config)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validateAutoJoinBootstrapConfig error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestTryAdoptAutoJoinDelegationCreatesManagedZone(t *testing.T) {
 	dir := t.TempDir()
 	state, keyPath := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)

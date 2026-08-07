@@ -1450,6 +1450,10 @@ func (d *DaemonService) prepareStartupState() (bool, error) {
 	if state == nil {
 		return false, errors.New("daemon startup state is nil")
 	}
+	authorityRefreshed, err := tryRefreshManagedZoneAuthority(state, d.Sync.now())
+	if err != nil {
+		return false, fmt.Errorf("refresh managed zone authority at startup: %w", err)
+	}
 
 	var previousAdmission *admissionState
 	if state.Admission != nil {
@@ -1457,7 +1461,7 @@ func (d *DaemonService) prepareStartupState() (bool, error) {
 		previousAdmission = &value
 	}
 	updateAdmissionOnPending(state, d.Sync.now())
-	changed := !sameAdmissionState(previousAdmission, state.Admission)
+	changed := authorityRefreshed || !sameAdmissionState(previousAdmission, state.Admission)
 
 	endpointChanged, err := d.Sync.publishEndpointRecordInState(state)
 	if err != nil {
@@ -1483,6 +1487,12 @@ func (d *DaemonService) prepareStartupState() (bool, error) {
 	}
 	if err := d.saveCommittedState(); err != nil {
 		return false, err
+	}
+	if authorityRefreshed {
+		d.logInfo("authority", "managed_zone_refreshed", map[string]any{
+			"zone": state.ManagedZone,
+			"via":  "startup",
+		})
 	}
 	return true, nil
 }

@@ -59,10 +59,17 @@ PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon debug verify catofes.
 
 ```bash
 PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip delegate grant catofes. allocate-ip catofes-authority.b64
+```
+
+父管理端在线参与 gossip 时，子节点同步到新版父 Zone snapshot 后，会验证父 delegation、epoch 和本地 identity key，并只刷新自己缓存的 authority 与直接 parent proof；本 Zone 的 records、子 delegation、revocation 和 history 不会被远端 snapshot 覆盖。这个刷新与父 snapshot 原子提交，不会暴露“父 delegation 已更新、本地 authority 仍是旧 epoch”的半更新状态。daemon 启动时也会根据已缓存的父 delegation 执行同样的刷新，使升级前已经形成的半更新状态自动恢复。
+
+bundle 仍可用于父管理端离线、gossip 不可达或需要显式交付的场景：
+
+```bash
 PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join accept catofes-authority.b64
 ```
 
-旧版本中若存在只拥有 `write:route`、`write:service` 或 `write:wireguard`、却没有通用 `write` 的 authority，父 Zone 应先补发包含 `write` 的 authority bundle。普通节点和 root 的默认 authority 原本已经包含 `write`，无需迁移；保留同一签名 key 时，authority refresh 后既有 route、service 和 WireGuard records 会按新的通用写权限重新通过验证。
+旧版本中若存在只拥有 `write:route`、`write:service` 或 `write:wireguard`、却没有通用 `write` 的 authority，父 Zone 应先补发包含 `write` 的 authority。普通节点和 root 的默认 authority 原本已经包含 `write`，无需迁移；保留同一签名 key 时，authority refresh 后既有 route、service 和 WireGuard records 会按新的通用写权限重新通过验证。
 
 首次 `join accept` 仍需要传入 `key.json`；已经加入的管理端接受 authority refresh bundle 时可以省略 key，CLI 会使用本地 state meta 中的 `zone_private_key` 校验并保留原有本地状态。
 
