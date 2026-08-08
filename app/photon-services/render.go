@@ -42,7 +42,6 @@ type composeService struct {
 	Restart  string                              `yaml:"restart,omitempty"`
 	Scale    *int                                `yaml:"scale,omitempty"`
 	Networks map[string]composeServiceAttachment `yaml:"networks"`
-	Ports    []string                            `yaml:"ports,omitempty"`
 	Command  []string                            `yaml:"command,omitempty"`
 	Volumes  []string                            `yaml:"volumes,omitempty"`
 }
@@ -152,24 +151,20 @@ func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) erro
 	networks := map[string]composeNetwork{}
 	socksNetworks := map[string]composeServiceAttachment{}
 	h2Networks := map[string]composeServiceAttachment{}
-	var hasIPv4, hasIPv6 bool
 	for _, id := range sortedKeys(service.Networks) {
 		network := manifest.Networks[id]
 		roles := service.Networks[id]
 		networks[id] = composeNetwork{Name: network.Name, External: true}
 		socksNetworks[id] = attachmentForAddress(roles.SOCKS)
 		h2Networks[id] = attachmentForAddress(roles.H2)
-		hasIPv4 = hasIPv4 || network.IPv4 != nil
-		hasIPv6 = hasIPv6 || network.IPv6 != nil
 	}
-	ports := composeLoopbackPorts(service.Port, hasIPv4, hasIPv6)
 	file := composeFile{
 		Name:     "photon-socks5",
 		Networks: networks,
 		Services: map[string]composeService{
 			"socks": {
 				Image: manifest.Images.Gost, Restart: "unless-stopped", Networks: socksNetworks,
-				Ports: ports, Command: []string{"-C", "/etc/gost/gost.yaml"},
+				Command: []string{"-C", "/etc/gost/gost.yaml"},
 				Volumes: []string{"./config/socks.yaml:/etc/gost/gost.yaml:ro"},
 			},
 			"h2": {
@@ -248,17 +243,6 @@ func composeBridgeDriverOpts(interfaces []string, serviceAddress string) map[str
 		return nil
 	}
 	return options
-}
-
-func composeLoopbackPorts(port uint16, hasIPv4, hasIPv6 bool) []string {
-	ports := make([]string, 0, 2)
-	if hasIPv4 {
-		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:%d", port, port))
-	}
-	if hasIPv6 {
-		ports = append(ports, fmt.Sprintf("[::1]:%d:%d", port, port))
-	}
-	return ports
 }
 
 func attachmentForAddress(address string) composeServiceAttachment {

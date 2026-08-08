@@ -230,7 +230,7 @@ photon-services render     # 生成全部 artifact
 - Docker network 名自动为 `photon-<network>`；Compose project name 固定为 `photon-networks` 和 `photon-socks5`，无需也无法在 manifest 中配置。`photon-networks` 内含一个连接全部 network、`scale: 0` 的 `owner` 服务，使纯网络项目可以通过标准 `docker compose up -d` 创建；它不会启动占位容器。
 - SOCKS5 Compose 引用 network 为 `external: true`，因此必须先起 networks project。
 - 从旧版三容器部署升级时，重新 render 会删除旧的 `smartdns.conf`；启动新版 Compose 必须使用 `--remove-orphans`（或先 `down`），以删除已经不在配置中的 `dns` 容器。旧 manifest 中若显式配置了 `images.smartdns`，也应删除该字段。
-- 服务 TCP 端口仍发布到 `127.0.0.1` / `[::1]` loopback，供 host 本地诊断；publish readiness 从 host 直接检查容器 endpoint IP，overlay 访问也不依赖 port publishing。
+- 服务不向 host 发布端口；publish readiness 从 host 直接检查容器 endpoint IP，overlay 也直接访问该 endpoint IP。
 - 需要 Docker Engine 28 或更新版本。Docker 默认 gateway mode 会在 `DOCKER` filter chain 阻止直达未 publish 端口；`nat-unprotected` 明确关闭这个逐端口过滤，才能承载 SOCKS5 动态 UDP relay。`trusted_host_interfaces` 与 gateway mode 的区别见 Docker 官方 [Port publishing and mapping](https://docs.docker.com/engine/network/port-publishing/)。
 - Docker bridge 的 driver option 不能原地更新。首次启用本功能或修改 `trusted_host_interfaces` 后，先停止依赖该 network 的服务，删除旧 Docker network，再重新执行 Compose 命令。
 - 所有文件原子写入（临时文件 + rename）。

@@ -68,10 +68,13 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		}
 	}
 	serviceCompose := readTestFile(t, filepath.Join(output, "socks5", "docker-compose.yml"))
-	for _, want := range []string{"name: photon-socks5", "socks:", "h2:", "gogost/gost:3.2.6", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "127.0.0.1:3128:3128", "[::1]:3128:3128", "./config/socks.yaml:/etc/gost/gost.yaml:ro", "./config/h2.yaml:/etc/gost/gost.yaml:ro"} {
+	for _, want := range []string{"name: photon-socks5", "socks:", "h2:", "gogost/gost:3.2.6", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "./config/socks.yaml:/etc/gost/gost.yaml:ro", "./config/h2.yaml:/etc/gost/gost.yaml:ro"} {
 		if !strings.Contains(serviceCompose, want) {
 			t.Fatalf("service compose missing %q:\n%s", want, serviceCompose)
 		}
+	}
+	if strings.Contains(serviceCompose, "ports:") {
+		t.Fatalf("service compose unexpectedly publishes host ports:\n%s", serviceCompose)
 	}
 	if strings.Contains(serviceCompose, "\n    dns:") || strings.Contains(serviceCompose, "depends_on:") {
 		t.Fatalf("service compose still contains SmartDNS dependency:\n%s", serviceCompose)
