@@ -81,8 +81,6 @@
           configFile =
             if cfg.configFile != null then
               cfg.configFile
-            else if cfg.settings != { } then
-              generatedConfig
             else
               "/etc/photon/config.yaml";
           settingsIPsecConfigured = cfg.settings ? ipsec;
@@ -113,8 +111,6 @@
           serviceManifestFile =
             if deploymentCfg.configFile != null then
               deploymentCfg.configFile
-            else if deploymentCfg.settings != { } then
-              generatedServiceManifest
             else
               "/etc/photon/service.yaml";
           photonServices = lib.getExe' deploymentCfg.package "photon-services";
@@ -175,9 +171,10 @@
                 Photon configuration rendered to YAML. Attribute names map
                 directly to config.yaml keys; see config.example.yaml in the
                 Photon source tree for all supported sections and defaults.
-                The generated file is stored in the world-readable Nix store,
-                so secret values must be referenced by path or supplied through
-                services.photon.configFile instead.
+                The generated file is available as /etc/photon/config.yaml and
+                backed by the world-readable Nix store, so secret values must
+                be referenced by path or supplied through services.photon.configFile
+                instead.
               '';
             };
 
@@ -378,9 +375,10 @@
                 '';
                 description = ''
                   photon-services manifest rendered to YAML. Attribute names
-                  map directly to service.yaml. The result is stored in the
-                  world-readable Nix store; use configFile when the manifest
-                  contains credentials such as socks5.http_auth.password.
+                  map directly to service.yaml. The generated file is available
+                  as /etc/photon/service.yaml and backed by the world-readable
+                  Nix store; use configFile when the manifest contains
+                  credentials such as socks5.http_auth.password.
                 '';
               };
 
@@ -578,6 +576,10 @@
                 cfg.openFirewall && cfg.observerPort != null
               ) cfg.observerPort;
 
+              environment.etc."photon/config.yaml" = lib.mkIf (cfg.configFile == null && cfg.settings != { }) {
+                source = generatedConfig;
+              };
+
               systemd.services.photon = {
                 description = "Photon mesh daemon";
                 wantedBy = [ "multi-user.target" ];
@@ -660,6 +662,12 @@
               ];
 
               virtualisation.docker.enable = lib.mkDefault true;
+
+              environment.etc."photon/service.yaml" = lib.mkIf (
+                deploymentCfg.configFile == null && deploymentCfg.settings != { }
+              ) {
+                source = generatedServiceManifest;
+              };
 
               systemd.targets.photon-services = {
                 description = "Photon application services";
