@@ -83,6 +83,8 @@
               cfg.configFile
             else
               "/etc/photon/config.yaml";
+          generatedConfigRestartTriggers =
+            lib.optional (cfg.configFile == null && cfg.settings != { }) generatedConfig;
           settingsIPsecConfigured = cfg.settings ? ipsec;
           settingsIPsec = cfg.settings.ipsec or { };
           settingsIPsecDriver = settingsIPsec.driver or "strongswan";
@@ -113,6 +115,9 @@
               deploymentCfg.configFile
             else
               "/etc/photon/service.yaml";
+          generatedServiceManifestRestartTriggers =
+            lib.optional (deploymentCfg.configFile == null && deploymentCfg.settings != { })
+              generatedServiceManifest;
           photonServices = lib.getExe' deploymentCfg.package "photon-services";
           photonCLI = lib.getExe deploymentCfg.package;
           dockerCLI = lib.getExe deploymentCfg.dockerPackage;
@@ -583,6 +588,7 @@
               systemd.services.photon = {
                 description = "Photon mesh daemon";
                 wantedBy = [ "multi-user.target" ];
+                restartTriggers = generatedConfigRestartTriggers;
                 wants = [
                   "network-online.target"
                 ]
@@ -694,6 +700,7 @@
                 photon-services-render = {
                   description = "Render Photon application service artifacts";
                   partOf = [ "photon-services.target" ];
+                  restartTriggers = generatedServiceManifestRestartTriggers;
                   requires = [ "photon.service" ];
                   after = [ "photon.service" ];
                   before = [ "photon-services-networks.service" ];
@@ -729,6 +736,7 @@
                 photon-services-networks = {
                   description = "Manage Photon Docker networks";
                   partOf = [ "photon-services.target" ];
+                  restartTriggers = generatedServiceManifestRestartTriggers;
                   requires = [
                     deploymentCfg.dockerService
                     "photon-services-render.service"
@@ -770,6 +778,7 @@
                 photon-services-socks5 = {
                   description = "Manage Photon SOCKS5 containers";
                   partOf = [ "photon-services.target" ];
+                  restartTriggers = generatedServiceManifestRestartTriggers;
                   requires = [
                     deploymentCfg.dockerService
                     "photon-services-networks.service"
@@ -809,6 +818,7 @@
                 photon-services-publish = {
                   description = "Publish Photon application services";
                   partOf = [ "photon-services.target" ];
+                  restartTriggers = generatedServiceManifestRestartTriggers;
                   requires = [
                     "photon.service"
                     "photon-services-socks5.service"
