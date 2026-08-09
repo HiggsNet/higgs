@@ -43,6 +43,7 @@ const (
 	RotatePhasePreparing   = "preparing"
 	RotatePhaseTestingNew  = "testing_new"
 	RotatePhaseDualRunning = "dual_running"
+	RotatePhaseDraining    = "draining"
 	RotatePhaseCutover     = "cutover"
 	RotatePhaseRollback    = "rollback"
 	RotatePhaseCleanup     = "cleanup"
@@ -110,18 +111,19 @@ type ResourceOwner struct {
 }
 
 type ReconcileInputs struct {
-	Desired              []TransportLinkSpec
-	Instances            map[string]LinkInstance
-	SAs                  []SAState
-	Now                  time.Time
-	Revoked              map[zone.ZonePath]bool
-	Roles                map[string]string
-	GroupSpecs           map[string]LinkGroupSpec
-	GroupBackoff         map[string]BackoffPolicy
-	GroupRotateRetention map[string]int
-	RotateCutoverReady   map[string]bool
-	PrepareStandby       bool
-	TakeoverNotBefore    time.Time
+	Desired               []TransportLinkSpec
+	Instances             map[string]LinkInstance
+	SAs                   []SAState
+	Now                   time.Time
+	Revoked               map[zone.ZonePath]bool
+	Roles                 map[string]string
+	GroupSpecs            map[string]LinkGroupSpec
+	GroupBackoff          map[string]BackoffPolicy
+	GroupRotateRetention  map[string]int
+	RotateActivationReady map[string]bool
+	RotateCutoverReady    map[string]bool
+	PrepareStandby        bool
+	TakeoverNotBefore     time.Time
 }
 
 type ReconcileResult struct {
@@ -435,7 +437,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			if sa.Established && !saIdentityMatchesSpec(sa, spec) {
 				sa = SAState{}
 			}
-			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), in.GroupBackoff, in.GroupRotateRetention, in.RotateCutoverReady, in.PrepareStandby, in.TakeoverNotBefore, now)
+			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), in.GroupBackoff, in.GroupRotateRetention, in.RotateActivationReady, in.RotateCutoverReady, in.PrepareStandby, in.TakeoverNotBefore, now)
 			continue
 		}
 		// Primary / outbound initiator path.
@@ -458,7 +460,8 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			existing.RemoteGeneration = desiredGen
 		}
 		if existing.RemoteGeneration != desiredGen {
-			result.handleRotate(id, spec, existing, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), rotateRetentionForSpec(spec, in.GroupRotateRetention), rotateCutoverReady(id, in.RotateCutoverReady), now, role)
+			activationReady, activationGated := rotateActivationReady(id, in.RotateActivationReady)
+			result.handleRotate(id, spec, existing, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), rotateRetentionForSpec(spec, in.GroupRotateRetention), activationReady, activationGated, rotateCutoverReady(id, in.RotateCutoverReady), now, role)
 			continue
 		}
 		existing = result.clearStagedIfIdle(existing, in.SAs, now)
@@ -596,7 +599,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	return result
 }
 
-func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, group LinkGroupSpec, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, rotateCutover map[string]bool, prepareStandby bool, takeoverNotBefore time.Time, now time.Time) {
+func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, group LinkGroupSpec, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, rotateActivation, rotateCutover map[string]bool, prepareStandby bool, takeoverNotBefore time.Time, now time.Time) {
 	policy := groupBackoffForSpec(spec, groupBackoff)
 	if exists {
 		desiredGen := contactGeneration(spec)
@@ -608,7 +611,8 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 			if existing.InitiatorRole == InitiatorRoleSecondaryTakeover {
 				rotateRole = InitiatorRoleSecondaryTakeover
 			}
-			r.handleRotate(id, spec, existing, sas, group, rotateRetentionForSpec(spec, groupRotateRetention), rotateCutoverReady(id, rotateCutover), now, rotateRole)
+			activationReady, activationGated := rotateActivationReady(id, rotateActivation)
+			r.handleRotate(id, spec, existing, sas, group, rotateRetentionForSpec(spec, groupRotateRetention), activationReady, activationGated, rotateCutoverReady(id, rotateCutover), now, rotateRole)
 			return
 		}
 	}
@@ -746,7 +750,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	r.add(ReconcileActionCreate, &takeoverSpec, &inst, reason)
 }
 
-func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, group LinkGroupSpec, retention time.Duration, cutoverReady bool, now time.Time, initiatorRole string) {
+func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, group LinkGroupSpec, retention time.Duration, activationReady, activationGated, cutoverReady bool, now time.Time, initiatorRole string) {
 	desiredGen := contactGeneration(spec)
 	if existing.StagedGeneration != 0 && existing.StagedGeneration != desiredGen {
 		inst := existing
@@ -772,28 +776,51 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 				oldSAWasStaged = true
 				oldSA = SAState{}
 			}
-			if oldSA.Established && retention > 0 && (existing.RotatePhase != RotatePhaseDualRunning || existing.RotateDeadline == 0) {
+			retentionStarted := existing.RotatePhase == RotatePhaseDualRunning || existing.RotatePhase == RotatePhaseDraining
+			if oldSA.Established && retention > 0 && (!retentionStarted || existing.RotateDeadline == 0) {
 				inst := existing
 				inst.ActualState = LinkStateUp
 				inst.RotatePhase = RotatePhaseDualRunning
+				if activationGated && activationReady {
+					inst.RotatePhase = RotatePhaseDraining
+				}
 				inst.RotateDeadline = now.Add(retention).Unix()
 				inst.LastTransition = now.Unix()
 				r.Instances[id] = inst
 				r.add(ReconcileActionNoop, &spec, &inst, "rotate retention active")
 				return
 			}
-			if oldSA.Established && existing.RotatePhase == RotatePhaseDualRunning && existing.RotateDeadline != 0 && now.Before(time.Unix(existing.RotateDeadline, 0)) {
+			if oldSA.Established && existing.RotateDeadline != 0 && now.Before(time.Unix(existing.RotateDeadline, 0)) {
+				inst := existing
+				inst.ActualState = LinkStateUp
+				inst.RotatePhase = RotatePhaseDualRunning
+				if activationGated && activationReady {
+					inst.RotatePhase = RotatePhaseDraining
+				}
+				r.Instances[id] = inst
+				r.add(ReconcileActionNoop, &spec, &inst, "rotate retention active")
+				return
+			}
+			if oldSA.Established && activationGated && !activationReady {
 				inst := existing
 				inst.ActualState = LinkStateUp
 				inst.RotatePhase = RotatePhaseDualRunning
 				r.Instances[id] = inst
-				r.add(ReconcileActionNoop, &spec, &inst, "rotate retention active")
+				r.add(ReconcileActionNoop, &spec, &inst, "route_activation_pending")
+				return
+			}
+			if oldSA.Established && activationGated && existing.RotatePhase != RotatePhaseDraining {
+				inst := existing
+				inst.ActualState = LinkStateUp
+				inst.RotatePhase = RotatePhaseDraining
+				r.Instances[id] = inst
+				r.add(ReconcileActionNoop, &spec, &inst, "route_cutover_pending")
 				return
 			}
 			if oldSA.Established && !cutoverReady {
 				inst := existing
 				inst.ActualState = LinkStateUp
-				inst.RotatePhase = RotatePhaseDualRunning
+				inst.RotatePhase = RotatePhaseDraining
 				r.Instances[id] = inst
 				r.add(ReconcileActionNoop, &spec, &inst, "route_cutover_pending")
 				return
@@ -1134,6 +1161,17 @@ func rotateCutoverReady(id string, readiness map[string]bool) bool {
 	return ready
 }
 
+func rotateActivationReady(id string, readiness map[string]bool) (ready, gated bool) {
+	if readiness == nil {
+		return true, false
+	}
+	ready, ok := readiness[id]
+	if !ok {
+		return false, true
+	}
+	return ready, true
+}
+
 func takeoverDelayFor(policy BackoffPolicy, failureCount int) time.Duration {
 	if failureCount < 0 {
 		failureCount = 0
@@ -1213,7 +1251,7 @@ func suppressTakeoverDuringRotate(inst LinkInstance, now time.Time) (bool, strin
 		return false, ""
 	}
 	switch inst.RotatePhase {
-	case RotatePhaseDualRunning:
+	case RotatePhaseDualRunning, RotatePhaseDraining:
 		return true, "rotate_retention_active"
 	case RotatePhasePreparing, RotatePhaseTestingNew:
 		if inst.StagedGeneration != 0 {

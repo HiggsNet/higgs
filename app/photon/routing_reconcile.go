@@ -292,6 +292,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 	instState.RouterID = routerID
 
 	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns, ars, state.ManagedZone)
+	spec.InterfacePolicies = birdRotateInterfacePolicies(state, netnsName, overlays, inst)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
@@ -719,6 +720,59 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 	}
 
 	return spec
+}
+
+func birdRotateInterfacePolicies(state *stateFile, netnsName string, overlays []string, routingInst RoutingInstance) []bird.BabelInterfacePolicy {
+	if state == nil {
+		return nil
+	}
+	metrics := make(map[string]uint)
+	for _, link := range linkOutputsFromState(state) {
+		if link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {
+			continue
+		}
+		instanceID := strings.TrimSuffix(link.ID, "#"+photonstate.LinkRuntimeStaged)
+		instance, ok := linkInstanceStateByLinkID(state.LinkInstances, instanceID)
+		if !ok || instance.StagedInterfaceName == "" {
+			continue
+		}
+		metric := routingInst.MetricBase
+		if link.RuntimeRole == photonstate.LinkRuntimeStaged {
+			metric = routingInst.MetricStaged
+		}
+		if instance.RotatePhase == ipsec.RotatePhaseDraining {
+			if link.RuntimeRole == photonstate.LinkRuntimeStaged {
+				metric = routingInst.MetricBase
+			} else {
+				metric = routingInst.MetricDraining
+			}
+		}
+		if previous := metrics[link.InterfaceName]; metric > previous {
+			metrics[link.InterfaceName] = metric
+		}
+	}
+	interfaces := make([]string, 0, len(metrics))
+	for iface := range metrics {
+		interfaces = append(interfaces, iface)
+	}
+	sort.Strings(interfaces)
+	policies := make([]bird.BabelInterfacePolicy, 0, len(interfaces))
+	for _, iface := range interfaces {
+		policies = append(policies, bird.BabelInterfacePolicy{InterfaceName: iface, Metric: metrics[iface]})
+	}
+	return policies
+}
+
+func linkInstanceStateByLinkID(instances map[string]linkInstanceState, id string) (linkInstanceState, bool) {
+	if instance, ok := instances[id]; ok {
+		return instance, true
+	}
+	for _, instance := range instances {
+		if firstNonEmpty(instance.LinkID, instance.ID) == id {
+			return instance, true
+		}
+	}
+	return linkInstanceState{}, false
 }
 
 func upstreamPeerNextHop(prefix netip.Prefix, upstream *UpstreamConfig) netip.Addr {

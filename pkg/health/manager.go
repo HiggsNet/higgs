@@ -482,11 +482,39 @@ func (m *Manager) RotateCutoverReadiness() map[string]bool {
 	return out
 }
 
-func (m *Manager) cutoverBlockingLocked(instanceID string) bool {
+// RotateActivationReadiness reports whether a staged link is safe to make
+// preferred. Unlike RotateCutoverReadiness, it deliberately does not require a
+// selected Babel route: that route can only become selected after routing has
+// lowered the staged interface cost and raised the old interface cost.
+func (m *Manager) RotateActivationReadiness() map[string]bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]bool{}
+	for id := range m.targets {
+		t := m.targets[id]
+		if !t.Staged {
+			continue
+		}
+		out[t.InstanceID] = !m.activationBlockingLocked(id)
+	}
+	return out
+}
+
+func (m *Manager) activationBlockingLocked(instanceID string) bool {
 	state := m.states.State(instanceID)
 	switch state {
 	case HealthStateHealthy, HealthStateDegraded:
 	default:
+		return true
+	}
+	if obs, ok := m.babelObs[instanceID]; ok && !obs.Neighbor {
+		return true
+	}
+	return false
+}
+
+func (m *Manager) cutoverBlockingLocked(instanceID string) bool {
+	if m.activationBlockingLocked(instanceID) {
 		return true
 	}
 	if obs, ok := m.babelObs[instanceID]; ok && (!obs.Neighbor || !obs.Route) {

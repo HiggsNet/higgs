@@ -471,12 +471,13 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 			{Name: existing.IKEName, Established: true},
 			{Name: existing.StagedIKEName, Established: true},
 		},
-		Now:                now,
-		RotateCutoverReady: map[string]bool{existing.ID: false},
+		Now:                   now,
+		RotateActivationReady: map[string]bool{existing.ID: false},
+		RotateCutoverReady:    map[string]bool{existing.ID: false},
 	})
 
-	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "route_cutover_pending" {
-		t.Fatalf("expected route cutover pending noop, got %+v", result.Actions)
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "route_activation_pending" {
+		t.Fatalf("expected route activation pending noop, got %+v", result.Actions)
 	}
 	inst := result.Instances[existing.ID]
 	if inst.RemoteGeneration != 1 || inst.StagedGeneration != 2 {
@@ -487,6 +488,24 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 	}
 	if inst.RotatePhase != RotatePhaseDualRunning {
 		t.Fatalf("rotate phase = %q, want dual_running", inst.RotatePhase)
+	}
+
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{newSpec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs: []SAState{
+			{Name: existing.IKEName, Established: true},
+			{Name: existing.StagedIKEName, Established: true},
+		},
+		Now:                   now,
+		RotateActivationReady: map[string]bool{existing.ID: true},
+		RotateCutoverReady:    map[string]bool{existing.ID: false},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Reason != "route_cutover_pending" {
+		t.Fatalf("actions = %+v, want route cutover pending", result.Actions)
+	}
+	if phase := result.Instances[existing.ID].RotatePhase; phase != RotatePhaseDraining {
+		t.Fatalf("rotate phase = %q, want draining", phase)
 	}
 }
 

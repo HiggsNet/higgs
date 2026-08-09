@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -105,6 +106,19 @@ func validateSpec(spec BirdInstanceSpec) error {
 	if spec.Upstream != nil && strings.TrimSpace(spec.Upstream.Interface) == "" {
 		return fmt.Errorf("bird: upstream interface is required")
 	}
+	seenInterfaces := make(map[string]struct{}, len(spec.InterfacePolicies))
+	for _, policy := range spec.InterfacePolicies {
+		if strings.TrimSpace(policy.InterfaceName) == "" {
+			return fmt.Errorf("bird: interface policy name is required")
+		}
+		if policy.Metric == 0 {
+			return fmt.Errorf("bird: interface policy metric for %q must be positive", policy.InterfaceName)
+		}
+		if _, exists := seenInterfaces[policy.InterfaceName]; exists {
+			return fmt.Errorf("bird: duplicate interface policy for %q", policy.InterfaceName)
+		}
+		seenInterfaces[policy.InterfaceName] = struct{}{}
+	}
 	for _, route := range spec.StaticRoutes {
 		if route.NextHop.IsValid() && route.Via != "" && !isBirdQuotedSymbol(route.Via) {
 			return fmt.Errorf("bird: static route interface %q cannot be represented as a BIRD scoped next-hop", route.Via)
@@ -165,6 +179,17 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			MetricBase:       spec.MetricBase,
 		}
 	}
+	interfaceBlocks := make([]BabelInterfaceBlock, 0, len(spec.InterfacePolicies))
+	for _, policy := range spec.InterfacePolicies {
+		interfaceBlocks = append(interfaceBlocks, BabelInterfaceBlock{
+			InterfacePattern: policy.InterfaceName,
+			TypeTunnel:       true,
+			MetricBase:       policy.Metric,
+		})
+	}
+	sort.Slice(interfaceBlocks, func(i, j int) bool {
+		return interfaceBlocks[i].InterfacePattern < interfaceBlocks[j].InterfacePattern
+	})
 
 	// Build static route block if any static routes are specified.
 	var staticBlocks []StaticRouteBlock
@@ -218,6 +243,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			MetricBase:       spec.MetricBase,
 			MetricStaged:     spec.MetricStaged,
 			MetricDraining:   spec.MetricDraining,
+			InterfaceBlocks:  interfaceBlocks,
 			Auth:             spec.BabelAuth,
 			UpstreamBlock:    upstreamBlock,
 		},
@@ -313,6 +339,9 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		}
 		fmt.Fprintln(&b, "    };")
 	}
+	for _, block := range cfg.Babel.InterfaceBlocks {
+		renderBabelInterfaceBlock(&b, block, cfg.Babel.Auth)
+	}
 	if cfg.Babel.InterfacePattern != "" {
 		fmt.Fprintf(&b, "    interface %s {\n", cfg.Babel.InterfacePattern)
 		if cfg.Babel.TypeTunnel {
@@ -344,6 +373,20 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 	}
 
 	return b.Bytes(), nil
+}
+
+func renderBabelInterfaceBlock(b *bytes.Buffer, block BabelInterfaceBlock, auth *BabelAuthSpec) {
+	fmt.Fprintf(b, "    interface %q {\n", block.InterfacePattern)
+	if block.TypeTunnel {
+		fmt.Fprintln(b, "        type tunnel;")
+	}
+	fmt.Fprintf(b, "        rxcost %d;\n", block.MetricBase)
+	fmt.Fprintln(b, "        hello interval 4 s;")
+	fmt.Fprintln(b, "        update interval 4 s;")
+	if auth != nil && auth.Enabled {
+		fmt.Fprintf(b, "        auth %q key id %d password %q;\n", auth.Algorithm, auth.KeyID, auth.Password)
+	}
+	fmt.Fprintln(b, "    };")
 }
 
 // renderStaticRouteBlock renders one "protocol static { ... }" block.

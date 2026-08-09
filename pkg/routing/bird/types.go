@@ -89,6 +89,11 @@ type BirdInstanceSpec struct {
 	MetricStaged   uint `yaml:"metric_staged" json:"metric_staged"`
 	MetricDraining uint `yaml:"metric_draining" json:"metric_draining"`
 
+	// InterfacePolicies override the metric for concrete runtime interfaces.
+	// They are rendered before the catch-all interface patterns because BIRD
+	// applies the first matching interface definition.
+	InterfacePolicies []BabelInterfacePolicy `yaml:"interface_policies,omitempty" json:"interface_policies,omitempty"`
+
 	// InterfacePatterns are the BIRD interface globs, e.g. ["phx*"].
 	// Multiple patterns allow one BIRD instance to discover interfaces from
 	// multiple overlays sharing the same netns.
@@ -238,8 +243,16 @@ type BabelProtocolBlock struct {
 	MetricBase       uint
 	MetricStaged     uint
 	MetricDraining   uint
+	InterfaceBlocks  []BabelInterfaceBlock
 	Auth             *BabelAuthSpec
 	UpstreamBlock    *BabelInterfaceBlock // optional second interface block for veth upstream
+}
+
+// BabelInterfacePolicy assigns a receive cost to one concrete Babel-facing
+// runtime interface.
+type BabelInterfacePolicy struct {
+	InterfaceName string `yaml:"interface_name" json:"interface_name"`
+	Metric        uint   `yaml:"metric" json:"metric"`
 }
 
 // BabelInterfaceBlock describes one "interface ... { ... }" block inside a

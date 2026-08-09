@@ -396,6 +396,9 @@ func TestManagerRotateCutoverReadinessRequiresBabelObservationWhenPresent(t *tes
 	}
 
 	m.SetBabelObservation(BabelObservation{ProbeID: "link1#staged", InstanceID: "link1", Neighbor: true, Route: false})
+	if ready := m.RotateActivationReadiness()["link1"]; !ready {
+		t.Fatalf("staged link should be activation-ready with health and Babel neighbor")
+	}
 	if ready := m.RotateCutoverReadiness()["link1"]; ready {
 		t.Fatalf("staged link should not be ready while BIRD route is not converged")
 	}

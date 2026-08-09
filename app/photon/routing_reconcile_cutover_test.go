@@ -8,6 +8,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net/netip"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -100,4 +101,41 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
 		t.Fatalf("cutover should be blocked when fresh BIRD observation is unavailable")
 	}
+}
+
+func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
+	state := &stateFile{LinkInstances: map[string]linkInstanceState{
+		"link-1": {
+			ID:                    "link-1",
+			GroupID:               "main",
+			ActualState:           "up",
+			InterfaceName:         "phx-old",
+			LocalTunnelAddr:       "fe80::1%phx-old netns=photon",
+			PeerTunnelAddr:        "fe80::2%phx-old netns=photon",
+			StagedGeneration:      2,
+			RotatePhase:           ipsec.RotatePhaseDualRunning,
+			StagedInterfaceName:   "phx-new",
+			StagedLocalTunnelAddr: "fe80::3%phx-new netns=photon",
+			StagedPeerTunnelAddr:  "fe80::4%phx-new netns=photon",
+		},
+	}}
+	routingInst := RoutingInstance{MetricBase: 100, MetricStaged: 200, MetricDraining: 500}
+
+	wantPolicies := func(phase string, want map[string]uint) {
+		t.Helper()
+		instance := state.LinkInstances["link-1"]
+		instance.RotatePhase = phase
+		state.LinkInstances["link-1"] = instance
+		got := birdRotateInterfacePolicies(state, "photon", []string{"main"}, routingInst)
+		gotMap := make(map[string]uint, len(got))
+		for _, policy := range got {
+			gotMap[policy.InterfaceName] = policy.Metric
+		}
+		if !reflect.DeepEqual(gotMap, want) {
+			t.Fatalf("phase %q policies = %#v, want %#v", phase, gotMap, want)
+		}
+	}
+
+	wantPolicies(ipsec.RotatePhaseDualRunning, map[string]uint{"phx-old": 100, "phx-new": 200})
+	wantPolicies(ipsec.RotatePhaseDraining, map[string]uint{"phx-old": 500, "phx-new": 100})
 }

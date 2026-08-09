@@ -519,7 +519,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 | ICMP 快路径 | raw socket（`ip4:icmp`）优先，ping 兜底 | Linux 默认 raw socket；无 capability 或检测到 stale interface-bound socket 时回退 `ip netns exec ping`，后者按退避节奏重建 | raw 成功时 RTT 不含进程创建开销；整个 netns 删除/重建的长期行为仍待 root smoke |
 | UDP fallback | ICMP 不可用时降级 UDP keepalive | fallback 未接线；UDPProber 语义弱（write 成功即可达） | 无 ICMP 权限时只能得到 probe_error |
 | Babel RTT/metric | 普通 link 也采集被动指标、出 `photon_link_babel_*` | 只为 staged link 采集 neighbor/route 布尔与最小 metric；series API 显式报未实现 | 被动质量数据基本不可用 |
-| BIRD metric 联动 | degraded/down 先调高 BIRD metric | 未实现 | 健康结果不影响选路 |
+| BIRD metric 联动 | degraded/down 先调高 BIRD metric | rotate old/staged 已接入两阶段 metric 翻转；普通 link degraded/down 联动仍未实现 | rotate 可先迁流量再清旧链路；普通链路健康结果仍不影响选路 |
 | 防火墙联动 | 可选按 link state 收紧 forward allow | 未实现 | 健康 down 不改变防火墙 |
 | `/metrics` 端点 | daemon 暴露 OpenMetrics | 渲染代码存在但未接线，仅单测覆盖 | 无法被 Prometheus 直接 scrape |
 | remote write | 可选推送到 VictoriaMetrics 等 | 配置已解析、无消费者 | 集中式 TSDB 需自行桥接 |

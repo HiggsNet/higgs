@@ -242,6 +242,29 @@ func TestRenderMultipleInterfacePatterns(t *testing.T) {
 	}
 }
 
+func TestRenderConcreteInterfacePoliciesBeforeCatchAll(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.InterfacePolicies = []BabelInterfacePolicy{
+		{InterfaceName: "phx-new", Metric: 100},
+		{InterfaceName: "phx-old", Metric: 500},
+	}
+
+	cfg, err := (DefaultConfigGenerator{}).Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+	oldBlock := "interface \"phx-old\" {\n        type tunnel;\n        rxcost 500;"
+	newBlock := "interface \"phx-new\" {\n        type tunnel;\n        rxcost 100;"
+	catchAll := `interface "phx*" {`
+	if !strings.Contains(s, oldBlock) || !strings.Contains(s, newBlock) {
+		t.Fatalf("missing concrete interface policies:\n%s", s)
+	}
+	if strings.Index(s, oldBlock) > strings.Index(s, catchAll) || strings.Index(s, newBlock) > strings.Index(s, catchAll) {
+		t.Fatalf("concrete policies must precede catch-all first match:\n%s", s)
+	}
+}
+
 func TestIPv4AndIPv6Prefixes(t *testing.T) {
 	spec := testBirdInstanceSpec()
 	importSet := []netip.Prefix{

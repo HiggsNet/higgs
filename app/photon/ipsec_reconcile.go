@@ -61,18 +61,19 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	}
 	markMissingXFRMLinkInstances(instances, missingXFRMLinks, now)
 	result := ipsec.ReconcileLinkInstances(ipsec.ReconcileInputs{
-		Desired:              plan.Desired,
-		Instances:            instances,
-		SAs:                  sas,
-		Now:                  now,
-		Revoked:              revokedLinkPeers(snapshot, now),
-		Roles:                plan.Roles,
-		GroupSpecs:           groupSpecMap(groups),
-		GroupBackoff:         groupBackoffMap(groups),
-		GroupRotateRetention: groupRotateRetentionMap(groups),
-		RotateCutoverReady:   d.ipsecRotateCutoverReady(),
-		PrepareStandby:       d.ipsecPrepareStandby,
-		TakeoverNotBefore:    d.ipsecTakeoverNotBefore,
+		Desired:               plan.Desired,
+		Instances:             instances,
+		SAs:                   sas,
+		Now:                   now,
+		Revoked:               revokedLinkPeers(snapshot, now),
+		Roles:                 plan.Roles,
+		GroupSpecs:            groupSpecMap(groups),
+		GroupBackoff:          groupBackoffMap(groups),
+		GroupRotateRetention:  groupRotateRetentionMap(groups),
+		RotateActivationReady: d.ipsecRotateActivationReady(),
+		RotateCutoverReady:    d.ipsecRotateCutoverReady(),
+		PrepareStandby:        d.ipsecPrepareStandby,
+		TakeoverNotBefore:     d.ipsecTakeoverNotBefore,
 	})
 	result.Actions = append(result.Actions, ipsec.PlanDuplicateSAGC(plan.Desired, result.Instances, sas, plan.Roles)...)
 	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(snapshot, now)
@@ -376,6 +377,13 @@ func (d *DaemonService) ipsecRotateCutoverReady() map[string]bool {
 		return nil
 	}
 	return d.health.RotateCutoverReadiness()
+}
+
+func (d *DaemonService) ipsecRotateActivationReady() map[string]bool {
+	if d == nil || d.health == nil {
+		return nil
+	}
+	return d.health.RotateActivationReadiness()
 }
 
 func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any {

@@ -498,11 +498,13 @@ Staged connection 的 apply 有两个额外边界：复用已加载的 transport
 Idle → Preparing（加载独立 staged connection/SA/XFRM interface）
      → TestingNew（观测 staged SA 是否 established）
          → DualRunning（新旧两条链路并行，保留窗口默认 1h）
-             → Cutover（保留到期后 promote staged；BIRD metric/邻居 gate 仍是后续接入项）
+             → Draining（staged 健康且 Babel neighbor 就绪；new 使用正常 cost，old 调高为 draining cost）
+                 → Cutover（保留到期且 staged route selected 后 promote staged）
+                 → DualRunning（staged 健康或邻居回退，恢复 old 优先）
              → Rollback（staged SA 在规定时限内未建立，清理 staged 保留旧链路）
 ```
 
-staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running 期间 overlay netns 同时有两个 `phx*` interface。
+staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running/draining 期间 overlay netns 同时有两个 `phx*` interface。BIRD 为具体 runtime interface 生成优先于通配规则的精确 policy：验证阶段 old=`metric_base`、staged=`metric_staged`；迁流量阶段 old=`metric_draining`、staged=`metric_base`。
 
 ### Bidirectional Takeover（4.5）
 
@@ -596,7 +598,8 @@ photon debug links
 | link 反复在 connecting/error 间翻转 | 检查 `LinkInstance` 中的 last_error 和 backoff；可能是 endpoint/ports 不可达 |
 | XFRM interface 有 TX dropped | XFRM state/policy 在 host，interface 在 overlay netns——确认 host-born 路径正确 |
 | revocation 后 SA 被反复拉起 | owner token 不匹配、残留 `LinkInstance` 未清理、或 teardown 没有成功删除 connection |
-| `dual_running` 不推进 cutover | 先看 retention 窗口、staged SA 观测和 last rotate error；若 health/BIRD cutover gate 已接入，还需确认 staged interface 已有 Babel neighbor 和 selected Babel route |
+| `dual_running` 不进入 `draining` | staged interface 尚未通过健康探测，或尚未形成 Babel neighbor |
+| `draining` 不推进 cutover | 先看 retention 窗口和 last rotate error，再确认 staged interface 已成为 selected Babel route；健康或 neighbor 回退会恢复为 `dual_running` |
 | SA 已 established 但 `LinkInstance` 仍是 `connecting` | reconcile 未触发，或 VICI `list-sas` 没有观测到匹配的 SA（检查 child name/reqid/if_id 是否匹配） |
 
 ### 辅助观测手段
