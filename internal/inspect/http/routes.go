@@ -12,14 +12,15 @@ import (
 )
 
 type RoutesResponse struct {
-	LocalZone       zone.ZonePath              `json:"local_zone"`
-	ExportSet       []string                   `json:"export_set"`
-	Authorized      map[string][]string        `json:"authorized"`
-	Assignments     map[string]RouteAssignment `json:"assignments"`
-	IPAMPools       []IPAMPool                 `json:"ipam_pools"`
-	IPAMAssignments []IPAMAssignment           `json:"ipam_assignments"`
-	Errors          []RouteAuthorizationError  `json:"errors"`
-	BIRD            []BirdRoutesView           `json:"bird,omitempty"`
+	LocalZone        zone.ZonePath              `json:"local_zone"`
+	ExportSet        []string                   `json:"export_set"`
+	Authorized       map[string][]string        `json:"authorized"`
+	SharedAuthorized map[string][]string        `json:"shared_authorized,omitempty"`
+	Assignments      map[string]RouteAssignment `json:"assignments"`
+	IPAMPools        []IPAMPool                 `json:"ipam_pools"`
+	IPAMAssignments  []IPAMAssignment           `json:"ipam_assignments"`
+	Errors           []RouteAuthorizationError  `json:"errors"`
+	BIRD             []BirdRoutesView           `json:"bird,omitempty"`
 }
 
 type RouteAssignment struct {
@@ -80,13 +81,21 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 	sortPrefixStrings(exportSet)
 
 	authorized := make(map[string][]string, len(ars.Announced))
+	sharedAuthorized := make(map[string][]string)
 	for z, prefixes := range ars.Announced {
 		ps := make([]string, 0, len(prefixes))
-		for p := range prefixes {
+		for p, entry := range prefixes {
 			ps = append(ps, p.String())
+			if entry != nil && entry.SharedAssignment {
+				prefix := p.String()
+				sharedAuthorized[prefix] = append(sharedAuthorized[prefix], string(z))
+			}
 		}
 		sortPrefixStrings(ps)
 		authorized[string(z)] = ps
+	}
+	for prefix := range sharedAuthorized {
+		inspect.SortZoneStrings(sharedAuthorized[prefix])
 	}
 
 	assignments := make(map[string]RouteAssignment, len(ars.Assignments))
@@ -169,13 +178,14 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 	}
 
 	return &RoutesResponse{
-		LocalZone:       managedZone,
-		ExportSet:       exportSet,
-		Authorized:      authorized,
-		Assignments:     assignments,
-		IPAMPools:       ipamPools,
-		IPAMAssignments: ipamAssignments,
-		Errors:          errors,
+		LocalZone:        managedZone,
+		ExportSet:        exportSet,
+		Authorized:       authorized,
+		SharedAuthorized: sharedAuthorized,
+		Assignments:      assignments,
+		IPAMPools:        ipamPools,
+		IPAMAssignments:  ipamAssignments,
+		Errors:           errors,
 	}
 }
 

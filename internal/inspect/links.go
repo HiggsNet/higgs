@@ -437,6 +437,12 @@ func BuildLinks(input LinkInput) LinkInspection {
 			links = append(links, missingLinkFromDesired(desired))
 		}
 	}
+	sort.SliceStable(links, func(i, j int) bool {
+		if links[i].PeerZone != links[j].PeerZone {
+			return ZonePathLess(links[j].PeerZone, links[i].PeerZone)
+		}
+		return links[i].ID < links[j].ID
+	})
 
 	return LinkInspection{
 		Summary: LinkSummary{

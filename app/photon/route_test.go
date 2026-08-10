@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -258,6 +259,52 @@ func TestPrintRouteShowReportUsesFilteredVerboseTable(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "node-b.catofes.") {
 		t.Fatalf("filter leaked node-b:\n%s", output.String())
+	}
+}
+
+func TestPrintRouteShowReportSeparatesAndGroupsSharedAnnouncements(t *testing.T) {
+	report := &routeShowReport{
+		ManagedZone: "node-a.catofes.",
+		Announcements: []routeShowRow{
+			{Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Active: true, Authorized: true},
+			{Zone: "node-b.catofes.", Prefix: "10.0.9.0/24", Shared: true, Active: true, Authorized: true},
+			{Zone: "node-c.catofes.", Prefix: "10.0.9.0/24", Shared: true, Active: true, Authorized: true},
+		},
+	}
+	var output bytes.Buffer
+	if err := printRouteShowReport(&output, report, false, "", false); err != nil {
+		t.Fatalf("printRouteShowReport: %v", err)
+	}
+	got := output.String()
+	for _, want := range []string{
+		"non_shared_announcements: 1",
+		"shared_announcements: 2 (1 prefixes)",
+		"node-b.catofes.",
+		"node-c.catofes.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+	if count := strings.Count(got, "10.0.9.0/24"); count != 1 {
+		t.Fatalf("shared prefix rendered %d times, want once:\n%s", count, got)
+	}
+}
+
+func TestRouteUsesSharedAssignment(t *testing.T) {
+	ars := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{
+		{
+			Prefix:     netip.MustParsePrefix("10.0.9.0/24"),
+			Source:     "catofes.",
+			AssignedTo: "node-a.catofes.",
+			Shared:     true,
+		},
+	}}
+	if !routeUsesSharedAssignment(ars, "node-a.catofes.", "10.0.9.0/24") {
+		t.Fatal("shared assignment was not detected")
+	}
+	if routeUsesSharedAssignment(ars, "node-b.catofes.", "10.0.9.0/24") {
+		t.Fatal("assignment for another node was detected as shared")
 	}
 }
 

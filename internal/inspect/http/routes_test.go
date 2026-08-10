@@ -115,6 +115,25 @@ func TestRoutesFromAuthorizedSetUsesAllIPAMAssignments(t *testing.T) {
 	}
 }
 
+func TestRoutesFromAuthorizedSetGroupsSharedAuthorizedRoutes(t *testing.T) {
+	prefix := netip.MustParsePrefix("10.0.9.0/24")
+	ars := &routing.AuthorizedRouteSet{Announced: map[zone.ZonePath]map[netip.Prefix]*routing.RouteEntry{
+		"node-b.catofes.": {prefix: {SharedAssignment: true}},
+		"node-a.catofes.": {prefix: {SharedAssignment: true}},
+		"node-c.catofes.": {netip.MustParsePrefix("10.0.8.0/24"): {}},
+	}}
+
+	resp := RoutesFromAuthorizedSet("node-a.catofes.", ars)
+	want := []string{"node-a.catofes.", "node-b.catofes."}
+	got := resp.SharedAuthorized[prefix.String()]
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("shared authorized = %#v, want %#v", got, want)
+	}
+	if _, ok := resp.SharedAuthorized["10.0.8.0/24"]; ok {
+		t.Fatalf("non-shared route included in shared groups: %#v", resp.SharedAuthorized)
+	}
+}
+
 func TestBuildBirdRouteViewsAnnotatesAuthorizedAndImportAllowed(t *testing.T) {
 	dump := &RoutesResponse{
 		Authorized: map[string][]string{

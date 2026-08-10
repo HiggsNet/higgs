@@ -99,6 +99,24 @@ func TestBuildLinksMatchesRotatedRuntimeSAByIKEName(t *testing.T) {
 	}
 }
 
+func TestBuildLinksSortsByPeerZoneDescendingBeforeLinkID(t *testing.T) {
+	got := BuildLinks(LinkInput{Instances: []LinkInstance{
+		{ID: "link-z", PeerZone: "node-a.example."},
+		{ID: "link-a", PeerZone: "node-z.example."},
+		{ID: "link-b", PeerZone: "node-z.example."},
+	}})
+
+	want := []string{"link-a", "link-b", "link-z"}
+	if len(got.Links) != len(want) {
+		t.Fatalf("links = %d, want %d", len(got.Links), len(want))
+	}
+	for i, id := range want {
+		if got.Links[i].ID != id {
+			t.Fatalf("links[%d] = %q, want %q; links=%+v", i, got.Links[i].ID, id, got.Links)
+		}
+	}
+}
+
 func TestFilterLinkViewsMatchesPeerAndRuntimeFields(t *testing.T) {
 	links := []LinkView{
 		{

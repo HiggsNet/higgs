@@ -194,3 +194,34 @@ func TestPagesExportRenderAndDeps(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutesPageGroupsSharedPrefixesAndParticipants(t *testing.T) {
+	webFS := webSubFSForTest()
+	if webFS == nil {
+		t.Fatal("WebSubFS should not be nil")
+	}
+	body := readWebFile(t, webFS, "src/pages/routes.js")
+	for _, token := range []string{
+		"groupSharedAssignments",
+		"Non-shared Authorized Prefixes by Zone",
+		"Shared Authorized Prefixes",
+		"Non-shared IPAM Assignments",
+		"Shared IPAM Assignments",
+		"Participating Nodes",
+	} {
+		if !strings.Contains(body, token) {
+			t.Errorf("routes page missing grouped shared-route token %q", token)
+		}
+	}
+}
+
+func TestOverlayPageSortsLinksByPeerZoneDescending(t *testing.T) {
+	webFS := webSubFSForTest()
+	if webFS == nil {
+		t.Fatal("WebSubFS should not be nil")
+	}
+	body := readWebFile(t, webFS, "src/pages/overlay.js")
+	if !strings.Contains(body, "compareZones(b.peer_zone, a.peer_zone)") {
+		t.Fatal("overlay page does not sort links by peer zone descending")
+	}
+}

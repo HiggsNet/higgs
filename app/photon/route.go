@@ -32,6 +32,7 @@ type routeShowReport struct {
 type routeShowRow struct {
 	Zone       string `json:"zone"`
 	Prefix     string `json:"prefix"`
+	Shared     bool   `json:"shared,omitempty"`
 	Active     bool   `json:"active"`
 	Controller string `json:"controller,omitempty"`
 	Authorized bool   `json:"authorized"`
@@ -170,14 +171,22 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 		return report, nil
 	}
 	authorized := map[string]map[string]struct{}{}
-	if ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now()); err == nil && ars != nil {
+	sharedRoutes := map[string]map[string]struct{}{}
+	ars, arsErr := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	if arsErr == nil && ars != nil {
 		for z, prefixes := range ars.Announced {
 			key := string(z)
 			if authorized[key] == nil {
 				authorized[key] = map[string]struct{}{}
 			}
-			for prefix := range prefixes {
+			if sharedRoutes[key] == nil {
+				sharedRoutes[key] = map[string]struct{}{}
+			}
+			for prefix, entry := range prefixes {
 				authorized[key][prefix.String()] = struct{}{}
+				if entry != nil && entry.SharedAssignment {
+					sharedRoutes[key][prefix.String()] = struct{}{}
+				}
 			}
 		}
 	}
@@ -217,9 +226,14 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 				prefix = p.Masked().String()
 			}
 			_, isAuthorized := authorized[string(path)][prefix]
+			_, isShared := sharedRoutes[string(path)][prefix]
+			if !isShared {
+				isShared = routeUsesSharedAssignment(ars, path, prefix)
+			}
 			report.Announcements = append(report.Announcements, routeShowRow{
 				Zone:       string(path),
 				Prefix:     prefix,
+				Shared:     isShared,
 				Active:     ann.Active,
 				Controller: ann.Controller,
 				Authorized: isAuthorized,
@@ -257,12 +271,17 @@ func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool,
 		if row.Authorized {
 			authorization = "authorized"
 		}
+		mode := "non-shared"
+		if row.Shared {
+			mode = "shared"
+		}
 		searchable := strings.Join([]string{
 			row.Prefix,
 			row.Zone,
 			state,
 			row.Controller,
 			authorization,
+			mode,
 			row.Key,
 		}, " ")
 		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
@@ -277,35 +296,106 @@ func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool,
 	} else {
 		fmt.Fprintf(table, "announcements: %d/%d\n", len(rows), len(report.Announcements))
 	}
-	if verbose {
-		fmt.Fprintln(table, "PREFIX\tZONE\tSTATE\tAUTHORIZATION\tCONTROLLER\tVERSION\tRECORD")
-	} else {
-		fmt.Fprintln(table, "PREFIX\tZONE\tSTATE\tAUTHORIZATION")
-	}
+	nonSharedRows := make([]routeShowRow, 0, len(rows))
+	sharedRows := make([]routeShowRow, 0, len(rows))
 	for _, row := range rows {
-		state := "active"
-		if !row.Active {
-			state = "withdrawn"
-		}
-		authorized := "unauthorized"
-		if row.Authorized {
-			authorized = "authorized"
-		}
-		controller := "explicit"
-		if row.Controller != "" {
-			controller = row.Controller
-		}
-		if verbose {
-			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
-				row.Prefix, row.Zone, state, authorized, controller, row.Version, row.Key)
+		if row.Shared {
+			sharedRows = append(sharedRows, row)
 		} else {
-			fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", row.Prefix, row.Zone, state, authorized)
+			nonSharedRows = append(nonSharedRows, row)
 		}
+	}
+
+	fmt.Fprintf(table, "non_shared_announcements: %d\n", len(nonSharedRows))
+	printRouteShowHeader(table, verbose)
+	for _, row := range nonSharedRows {
+		printRouteShowRow(table, row.Prefix, row, verbose)
+	}
+
+	sort.SliceStable(sharedRows, func(i, j int) bool {
+		if cmp := comparePrefixStrings(sharedRows[i].Prefix, sharedRows[j].Prefix); cmp != 0 {
+			return cmp < 0
+		}
+		if sharedRows[i].Zone != sharedRows[j].Zone {
+			return inspect.ZonePathLess(sharedRows[i].Zone, sharedRows[j].Zone)
+		}
+		return sharedRows[i].Key < sharedRows[j].Key
+	})
+	sharedPrefixes := 0
+	lastPrefix := ""
+	for _, row := range sharedRows {
+		if row.Prefix != lastPrefix {
+			sharedPrefixes++
+			lastPrefix = row.Prefix
+		}
+	}
+	fmt.Fprintf(table, "shared_announcements: %d (%d prefixes)\n", len(sharedRows), sharedPrefixes)
+	printRouteShowHeader(table, verbose)
+	lastPrefix = ""
+	for _, row := range sharedRows {
+		displayPrefix := ""
+		if row.Prefix != lastPrefix {
+			displayPrefix = row.Prefix
+			lastPrefix = row.Prefix
+		}
+		printRouteShowRow(table, displayPrefix, row, verbose)
 	}
 	if len(rows) == 0 && !includeAll {
 		fmt.Fprintln(table, "hint: use --all to include withdrawn announcements")
 	}
 	return table.Flush()
+}
+
+func printRouteShowHeader(w io.Writer, verbose bool) {
+	if verbose {
+		fmt.Fprintln(w, "PREFIX\tZONE\tSTATE\tAUTHORIZATION\tCONTROLLER\tVERSION\tRECORD")
+	} else {
+		fmt.Fprintln(w, "PREFIX\tZONE\tSTATE\tAUTHORIZATION")
+	}
+}
+
+func printRouteShowRow(w io.Writer, prefix string, row routeShowRow, verbose bool) {
+	state := "active"
+	if !row.Active {
+		state = "withdrawn"
+	}
+	authorized := "unauthorized"
+	if row.Authorized {
+		authorized = "authorized"
+	}
+	controller := "explicit"
+	if row.Controller != "" {
+		controller = row.Controller
+	}
+	if verbose {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+			prefix, row.Zone, state, authorized, controller, row.Version, row.Key)
+	} else {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", prefix, row.Zone, state, authorized)
+	}
+}
+
+func routeUsesSharedAssignment(ars *routing.AuthorizedRouteSet, path zone.ZonePath, prefix string) bool {
+	if ars == nil {
+		return false
+	}
+	routePrefix, err := netip.ParsePrefix(prefix)
+	if err != nil {
+		return false
+	}
+	for _, ancestor := range path.Ancestors() {
+		for _, entry := range ars.AllAssignments {
+			if entry == nil || entry.Source != ancestor || entry.Prefix.Bits() > routePrefix.Bits() || !entry.Prefix.Contains(routePrefix.Masked().Addr()) {
+				continue
+			}
+			usable := routing.IsZoneAncestor(entry.AssignedTo, path) ||
+				(routing.IsZoneAncestor(path, entry.AssignedTo) && entry.Source == path)
+			if usable {
+				return entry.Shared
+			}
+		}
+	}
+	return false
 }
 
 func prepareRouteRecord(prefix string, active bool) (canonical, key string, value []byte, err error) {

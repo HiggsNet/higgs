@@ -229,6 +229,20 @@
 .inspect-grid section h3 { margin-top: 0; }
 .inspect-grid .kv-table th { width: auto; padding-right: var(--sp-3); }
 
+/* ===== Routes: grouped shared-prefix participants ===== */
+
+.route-participants {
+    display: grid;
+    gap: 0.3rem;
+}
+
+.route-participant {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
 /* ===== Responsive page layouts ===== */
 
 @media (max-width: 1100px) {

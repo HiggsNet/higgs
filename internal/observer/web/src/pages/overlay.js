@@ -148,7 +148,7 @@ export function render(container, route) {
         || (li.id || '').toLowerCase().includes(filter)
         || (li.peer_zone || '').toLowerCase().includes(filter)
         || (li.group_id || '').toLowerCase().includes(filter));
-    instances.sort((a, b) => compareZones(a.peer_zone, b.peer_zone)
+    instances.sort((a, b) => compareZones(b.peer_zone, a.peer_zone)
         || String(a.id || '').localeCompare(String(b.id || '')));
     const selected = instances.find(li => li.id === route.selected) || null;
     container.innerHTML = `
