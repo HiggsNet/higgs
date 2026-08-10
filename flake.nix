@@ -612,6 +612,7 @@
                   Group = cfg.group;
                   ExecStart = "${lib.getExe cfg.package} daemon";
                   Restart = cfg.restartPolicy;
+                  RestartMode = "direct";
                   RestartSec = cfg.restartSec;
                   TimeoutStopSec = 30;
                   RuntimeDirectory = "photon";
@@ -725,6 +726,7 @@
                     User = "root";
                     Group = "root";
                     Restart = "on-failure";
+                    RestartMode = "direct";
                     RestartSec = deploymentCfg.restartSec;
                     TimeoutStartSec = 120;
                     UMask = "0027";
@@ -764,6 +766,7 @@
                     User = "root";
                     Group = "root";
                     Restart = "on-failure";
+                    RestartMode = "direct";
                     RestartSec = deploymentCfg.restartSec;
                     TimeoutStartSec = 300;
                     TimeoutStopSec = 120;
@@ -806,6 +809,7 @@
                     User = "root";
                     Group = "root";
                     Restart = "on-failure";
+                    RestartMode = "direct";
                     RestartSec = deploymentCfg.restartSec;
                     TimeoutStartSec = 300;
                     TimeoutStopSec = 120;
@@ -850,6 +854,7 @@
                     User = "root";
                     Group = "root";
                     Restart = "on-failure";
+                    RestartMode = "direct";
                     RestartSec = deploymentCfg.restartSec;
                     TimeoutStartSec = 120;
                     TimeoutStopSec = 120;
