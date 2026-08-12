@@ -44,6 +44,7 @@ func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
   announce_dns:
     - vpn.example.com
     - vpn6.example.com
+  announce_dns_reconnect_after: 2m
   announce_gossip_endpoints: false
 `
 	if err := parseConfigYAML(input, config); err != nil {
@@ -55,6 +56,9 @@ func TestParseConfigYAMLIPsecAnnouncements(t *testing.T) {
 	}
 	if len(config.IPsec.AnnounceDNS) != 2 || config.IPsec.AnnounceDNS[0] != "vpn.example.com" || config.IPsec.AnnounceDNS[1] != "vpn6.example.com" {
 		t.Fatalf("AnnounceDNS = %v", config.IPsec.AnnounceDNS)
+	}
+	if config.IPsec.AnnounceDNSReconnectAfter != 2*time.Minute {
+		t.Fatalf("AnnounceDNSReconnectAfter = %s, want 2m", config.IPsec.AnnounceDNSReconnectAfter)
 	}
 	if config.IPsec.AnnounceGossipEndpoints {
 		t.Fatalf("AnnounceGossipEndpoints = true, want false")

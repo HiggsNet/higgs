@@ -150,6 +150,7 @@ ipsec:
     - 2001:db8::10
   announce_dns:
     - vpn-a.example.com
+  announce_dns_reconnect_after: 5m
   announce_gossip_endpoints: true
 ```
 
@@ -162,6 +163,7 @@ ipsec:
 - `port_rotate_interval`：range 模式下 advertised port 的轮换周期；为 0 时不主动轮换。
 - `port_previous_grace`：旧 advertised port 保留窗口，必须覆盖 overlay rotate retention。
 - `announce_addrs` / `announce_dns`：IPsec 专用地址或 DNS 发布来源，独立于 `gossip.advertise_addrs`。`announce_addrs` 只接受不带端口的 IPv4/IPv6 地址；IKE/NAT-T 端口由 `port_mode` / `port_range` 单独发布。
+- `announce_dns_reconnect_after`：默认 `5m`。主动拨号端发现当前 SA 的本地地址已不在自身 `announce_dns` 解析结果中，并且超过该时间未收到入站包时，重建连接；设为 `0` 禁用。DNS 解析失败或 NAT 导致地址作用域不可比较时不会重建。
 - `announce_gossip_endpoints`：是否把 gossip endpoint discovery 的地址也作为 IPsec 地址候选来源，默认 true。
 
 ## Overlay Link Policy

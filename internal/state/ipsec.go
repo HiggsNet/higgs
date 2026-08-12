@@ -63,6 +63,10 @@ type LinkSAState struct {
 	InitiatorKnown  bool   `json:"initiator_known,omitempty"`
 	IKEAgeSeconds   uint64 `json:"ike_age_seconds,omitempty"`
 	ChildAgeSeconds uint64 `json:"child_age_seconds,omitempty"`
+	InboundBytes    uint64 `json:"inbound_bytes,omitempty"`
+	InboundPackets  uint64 `json:"inbound_packets,omitempty"`
+	InboundIdleSecs uint64 `json:"inbound_idle_seconds,omitempty"`
+	InboundKnown    bool   `json:"inbound_activity_known,omitempty"`
 	Peer            string `json:"peer,omitempty"`
 	ChildSA         string `json:"child_sa,omitempty"`
 	IKEState        string `json:"ike_state,omitempty"`

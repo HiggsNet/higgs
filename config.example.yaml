@@ -160,6 +160,10 @@ ipsec:
   #   - 2001:db8::10
   # announce_dns:
   #   - vpn.example.com
+  # If an initiator's established SA still uses an address removed from its own
+  # announce_dns and has received no traffic for this long, rebuild the SA.
+  # Set to 0 to disable. Default: 5m.
+  # announce_dns_reconnect_after: 5m
   # announce_gossip_endpoints: true
 
 # Uncomment an overlay/link group to participate in the StrongSwan mesh. This

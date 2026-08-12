@@ -124,6 +124,7 @@ type ReconcileInputs struct {
 	RotateCutoverReady    map[string]bool
 	PrepareStandby        bool
 	TakeoverNotBefore     time.Time
+	ForceUpdates          map[string]string
 }
 
 type ReconcileResult struct {
@@ -470,6 +471,19 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			result.Instances[id] = existing
 		}
 		sa := findInstanceSA(in.SAs, existing)
+		if reason := in.ForceUpdates[id]; reason != "" && sa.Established {
+			if inLinkBackoff(existing, now) {
+				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
+				continue
+			}
+			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
+			inst.FailureCount = existing.FailureCount
+			inst.BackoffUntil = existing.BackoffUntil
+			inst.LastError = existing.LastError
+			result.Instances[id] = inst
+			result.add(ReconcileActionUpdate, &spec, &inst, reason)
+			continue
+		}
 		specHash := TransportLinkSpecHash(spec)
 		if existing.DesiredSpecHash != specHash {
 			if inLinkBackoff(existing, now) {

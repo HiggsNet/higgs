@@ -22,6 +22,9 @@ func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 					"if-id-out":    "4e",
 					"state":        "INSTALLED",
 					"install-time": "175",
+					"bytes-in":     "4096",
+					"packets-in":   "32",
+					"use-in":       "45",
 				},
 			},
 		},
@@ -44,6 +47,9 @@ func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 	}
 	if got.UniqueID != 42 || !got.InitiatorKnown || !got.Initiator || got.IKEAgeSeconds != 180 || got.ChildAgeSeconds != 175 {
 		t.Fatalf("GC fields = %+v", got)
+	}
+	if !got.InboundKnown || got.InboundBytes != 4096 || got.InboundPackets != 32 || got.InboundIdleSecs != 45 {
+		t.Fatalf("inbound activity fields = %+v", got)
 	}
 }
 

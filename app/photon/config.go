@@ -162,32 +162,34 @@ type overlayConfig struct {
 type overlayDefaultsYAML struct{}
 
 type ipsecConfig struct {
-	DefaultNetNS            ipsec.NetNSSpec
-	LinkGroups              []ipsec.LinkGroupSpec
-	Role                    string
-	Driver                  string
-	VICISocket              string
-	PortMode                string
-	PortRange               ipsec.PortRange
-	PortRotateInterval      time.Duration
-	PortPreviousGrace       time.Duration
-	AnnounceAddrs           []string
-	AnnounceDNS             []string
-	AnnounceGossipEndpoints bool
+	DefaultNetNS              ipsec.NetNSSpec
+	LinkGroups                []ipsec.LinkGroupSpec
+	Role                      string
+	Driver                    string
+	VICISocket                string
+	PortMode                  string
+	PortRange                 ipsec.PortRange
+	PortRotateInterval        time.Duration
+	PortPreviousGrace         time.Duration
+	AnnounceAddrs             []string
+	AnnounceDNS               []string
+	AnnounceDNSReconnectAfter time.Duration
+	AnnounceGossipEndpoints   bool
 }
 
 type ipsecConfigYAML struct {
-	Role                    string           `yaml:"role"`
-	DeprecatedAccept        string           `yaml:"accept"`
-	Driver                  string           `yaml:"driver"`
-	VICISocket              string           `yaml:"vici_socket"`
-	PortMode                string           `yaml:"port_mode"`
-	PortRange               ipsec.PortRange  `yaml:"port_range"`
-	PortRotateInterval      string           `yaml:"port_rotate_interval"`
-	PortPreviousGrace       string           `yaml:"port_previous_grace"`
-	AnnounceAddrs           configStringList `yaml:"announce_addrs"`
-	AnnounceDNS             configStringList `yaml:"announce_dns"`
-	AnnounceGossipEndpoints *bool            `yaml:"announce_gossip_endpoints"`
+	Role                      string           `yaml:"role"`
+	DeprecatedAccept          string           `yaml:"accept"`
+	Driver                    string           `yaml:"driver"`
+	VICISocket                string           `yaml:"vici_socket"`
+	PortMode                  string           `yaml:"port_mode"`
+	PortRange                 ipsec.PortRange  `yaml:"port_range"`
+	PortRotateInterval        string           `yaml:"port_rotate_interval"`
+	PortPreviousGrace         string           `yaml:"port_previous_grace"`
+	AnnounceAddrs             configStringList `yaml:"announce_addrs"`
+	AnnounceDNS               configStringList `yaml:"announce_dns"`
+	AnnounceDNSReconnectAfter string           `yaml:"announce_dns_reconnect_after"`
+	AnnounceGossipEndpoints   *bool            `yaml:"announce_gossip_endpoints"`
 }
 
 type ipamConfig struct {
@@ -295,13 +297,14 @@ func defaultAppConfig() *appConfig {
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
 		IPsec: ipsecConfig{
-			DefaultNetNS:            ipsec.NetNSSpec{}.Normalized(),
-			Role:                    ipsec.RoleBoth,
-			Driver:                  ipsecDriverStrongSwan,
-			PortMode:                ipsec.PortModeFixed,
-			PortRotateInterval:      0,
-			PortPreviousGrace:       defaultIPsecPortPreviousGrace,
-			AnnounceGossipEndpoints: true,
+			DefaultNetNS:              ipsec.NetNSSpec{}.Normalized(),
+			Role:                      ipsec.RoleBoth,
+			Driver:                    ipsecDriverStrongSwan,
+			PortMode:                  ipsec.PortModeFixed,
+			PortRotateInterval:        0,
+			PortPreviousGrace:         defaultIPsecPortPreviousGrace,
+			AnnounceGossipEndpoints:   true,
+			AnnounceDNSReconnectAfter: 5 * time.Minute,
 		},
 		IPAM: ipamConfig{
 			AutoAnnounceAssignedIPs: false,
@@ -573,6 +576,16 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		config.IPsec.AnnounceAddrs = append(config.IPsec.AnnounceAddrs, addr.String())
 	}
 	config.IPsec.AnnounceDNS = append(config.IPsec.AnnounceDNS, file.IPsec.AnnounceDNS...)
+	if file.IPsec.AnnounceDNSReconnectAfter != "" {
+		d, err := parseConfigDuration(file.IPsec.AnnounceDNSReconnectAfter, "ipsec.announce_dns_reconnect_after")
+		if err != nil {
+			return err
+		}
+		if d < 0 {
+			return fmt.Errorf("ipsec.announce_dns_reconnect_after must not be negative")
+		}
+		config.IPsec.AnnounceDNSReconnectAfter = d
+	}
 	if file.IPsec.AnnounceGossipEndpoints != nil {
 		config.IPsec.AnnounceGossipEndpoints = *file.IPsec.AnnounceGossipEndpoints
 	}

@@ -102,6 +102,23 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	}
 }
 
+func TestReconcileForceUpdateRebuildsEstablishedSA(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{LocalZone: "node-a.", PeerZone: "node-b.", OverlayID: "main", Provider: ProviderStrongSwan, TransportID: "link-a", InitiatorRole: InitiatorRolePrimary}
+	instance := NewLinkInstance(spec, LinkStateUp, now.Add(-time.Hour))
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:      []TransportLinkSpec{spec},
+		Instances:    map[string]LinkInstance{instance.ID: instance},
+		SAs:          []SAState{{Name: instance.IKEName, Established: true}},
+		Now:          now,
+		ForceUpdates: map[string]string{instance.ID: "local announce DNS changed after inbound idle"},
+	})
+	action := firstAction(result, ReconcileActionUpdate)
+	if action == nil || action.Reason != "local announce DNS changed after inbound idle" {
+		t.Fatalf("actions = %+v, want forced update", result.Actions)
+	}
+}
+
 func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

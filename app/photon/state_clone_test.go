@@ -181,7 +181,7 @@ func TestCloneStateFileSchemaGuard(t *testing.T) {
 	assertStateCloneFields(t, linkOwnerState{}, "Manager", "GroupID", "InstanceID", "LinkID", "TransportID", "Token")
 	assertStateCloneFields(t, ipsecReconcileState{}, "LastRunUnix", "SourceRevision", "Committed", "Stale", "DesiredLinks", "Desired", "ActualSAs", "Actions", "Skipped", "LastError")
 	assertStateCloneFields(t, desiredLinkState{}, "InstanceID", "GroupID", "PeerZone", "LinkID", "PathKey", "TransportID", "DesiredSpecHash", "InterfaceName", "XFRMIfID", "Endpoint", "LocalTunnelAddr", "PeerTunnelAddr")
-	assertStateCloneFields(t, linkSAState{}, "Name", "UniqueID", "Initiator", "InitiatorKnown", "IKEAgeSeconds", "ChildAgeSeconds", "Peer", "ChildSA", "IKEState", "ChildState", "XFRMIfID", "ReqID", "LocalIdentity", "RemoteIdentity", "LocalEndpoint", "RemoteEndpoint", "Endpoint", "Established")
+	assertStateCloneFields(t, linkSAState{}, "Name", "UniqueID", "Initiator", "InitiatorKnown", "IKEAgeSeconds", "ChildAgeSeconds", "InboundBytes", "InboundPackets", "InboundIdleSecs", "InboundKnown", "Peer", "ChildSA", "IKEState", "ChildState", "XFRMIfID", "ReqID", "LocalIdentity", "RemoteIdentity", "LocalEndpoint", "RemoteEndpoint", "Endpoint", "Established")
 	assertStateCloneFields(t, linkActionState{}, "Action", "InstanceID", "GroupID", "PeerZone", "Reason", "SAUniqueID")
 	assertStateCloneFields(t, linkSkipState{}, "GroupID", "Peer", "Reason", "Detail")
 	assertStateCloneFields(t, routingReconcileState{}, "LastRunUnix", "LastError")

@@ -139,19 +139,25 @@ func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []linkSAState {
 	out := make([]linkSAState, 0, len(sas))
 	for _, sa := range sas {
 		out = append(out, linkSAState{
-			Name:           sa.Name,
-			Peer:           sa.Peer,
-			ChildSA:        sa.ChildSA,
-			IKEState:       sa.IKEState,
-			ChildState:     sa.ChildState,
-			XFRMIfID:       sa.XFRMIfID,
-			ReqID:          sa.ReqID,
-			LocalIdentity:  sa.LocalIdentity,
-			RemoteIdentity: sa.RemoteIdentity,
-			LocalEndpoint:  sa.LocalEndpoint,
-			RemoteEndpoint: sa.RemoteEndpoint,
-			Endpoint:       sa.Endpoint,
-			Established:    sa.Established,
+			Name:            sa.Name,
+			IKEAgeSeconds:   sa.IKEAgeSeconds,
+			ChildAgeSeconds: sa.ChildAgeSeconds,
+			InboundBytes:    sa.InboundBytes,
+			InboundPackets:  sa.InboundPackets,
+			InboundIdleSecs: sa.InboundIdleSecs,
+			InboundKnown:    sa.InboundKnown,
+			Peer:            sa.Peer,
+			ChildSA:         sa.ChildSA,
+			IKEState:        sa.IKEState,
+			ChildState:      sa.ChildState,
+			XFRMIfID:        sa.XFRMIfID,
+			ReqID:           sa.ReqID,
+			LocalIdentity:   sa.LocalIdentity,
+			RemoteIdentity:  sa.RemoteIdentity,
+			LocalEndpoint:   sa.LocalEndpoint,
+			RemoteEndpoint:  sa.RemoteEndpoint,
+			Endpoint:        sa.Endpoint,
+			Established:     sa.Established,
 		})
 	}
 	return out

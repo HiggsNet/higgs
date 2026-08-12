@@ -47,6 +47,10 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
 	instances := linkInstancesToIPsec(snapshot.LinkInstances)
+	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.Sync.App.Config.IPsec, plan.Desired, instances, sas, net.DefaultResolver)
+	if err != nil {
+		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
+	}
 	d.logDebug("ipsec", "reconcile_observed", map[string]any{
 		"managed_zone": snapshot.ManagedZone.String(),
 		"groups":       len(groups),
@@ -74,6 +78,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		RotateCutoverReady:    d.ipsecRotateCutoverReady(),
 		PrepareStandby:        d.ipsecPrepareStandby,
 		TakeoverNotBefore:     d.ipsecTakeoverNotBefore,
+		ForceUpdates:          forceUpdates,
 	})
 	result.Actions = append(result.Actions, ipsec.PlanDuplicateSAGC(plan.Desired, result.Instances, sas, plan.Roles)...)
 	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(snapshot, now)
@@ -120,6 +125,116 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
+}
+
+type ipLookupResolver interface {
+	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
+
+// localAnnounceDNSForceUpdates detects the asymmetric case where this node is
+// the initiator and its own advertised DNS address moved while StrongSwan still
+// reports the old SA as established. It uses the live SA endpoint and traffic
+// counters instead of persisting a second DNS snapshot.
+func localAnnounceDNSForceUpdates(ctx context.Context, config ipsecConfig, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, sas []ipsec.SAState, resolver ipLookupResolver) (map[string]string, error) {
+	if len(config.AnnounceDNS) == 0 || config.AnnounceDNSReconnectAfter <= 0 || resolver == nil {
+		return nil, nil
+	}
+	resolved := make(map[netip.Addr]struct{})
+	for _, host := range config.AnnounceDNS {
+		addresses, err := resolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			// A partial answer set is unsafe: the current SA may correspond to
+			// the name that failed, so force no reconnect this round.
+			return nil, fmt.Errorf("resolve local announce DNS %q: %w", host, err)
+		}
+		for _, address := range addresses {
+			if address.IP == nil {
+				continue
+			}
+			if addr, ok := netip.AddrFromSlice(address.IP); ok {
+				resolved[addr.Unmap()] = struct{}{}
+			}
+		}
+	}
+	if len(resolved) == 0 {
+		return nil, nil
+	}
+
+	threshold := uint64(config.AnnounceDNSReconnectAfter / time.Second)
+	updates := make(map[string]string)
+	for _, spec := range desired {
+		if !ipsec.IsActiveInitiatorRole(spec.InitiatorRole) {
+			continue
+		}
+		id := ipsec.LinkInstanceID(spec)
+		instance, ok := instances[id]
+		if !ok {
+			continue
+		}
+		sa := localDNSInstanceSA(sas, instance)
+		if !sa.Established || !sa.InitiatorKnown || !sa.Initiator || !sa.InboundKnown || !saInboundIdleFor(sa, threshold) {
+			continue
+		}
+		localAddr, ok := endpointAddr(sa.LocalEndpoint)
+		if !ok {
+			continue
+		}
+		if _, present := resolved[localAddr]; present {
+			continue
+		}
+		compatible := false
+		for address := range resolved {
+			if address.Is4() == localAddr.Is4() && addressScope(address) == addressScope(localAddr) {
+				compatible = true
+				break
+			}
+		}
+		if compatible {
+			updates[id] = "local announce DNS changed after inbound idle"
+		}
+	}
+	if len(updates) == 0 {
+		return nil, nil
+	}
+	return updates, nil
+}
+
+func localDNSInstanceSA(sas []ipsec.SAState, instance ipsec.LinkInstance) ipsec.SAState {
+	for _, sa := range sas {
+		if sa.Name == instance.IKEName || sa.ChildSA == instance.ChildSAName || (instance.XFRMIfID != 0 && sa.XFRMIfID == instance.XFRMIfID) {
+			return sa
+		}
+	}
+	return ipsec.SAState{}
+}
+
+func saInboundIdleFor(sa ipsec.SAState, threshold uint64) bool {
+	if threshold == 0 {
+		return false
+	}
+	if sa.InboundPackets == 0 {
+		return max(sa.ChildAgeSeconds, sa.IKEAgeSeconds) >= threshold
+	}
+	return sa.InboundIdleSecs >= threshold
+}
+
+func endpointAddr(endpoint string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		host = strings.Trim(endpoint, "[]")
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil || addr.IsUnspecified() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
+func addressScope(addr netip.Addr) string {
+	if addr.IsPrivate() || netip.MustParsePrefix("100.64.0.0/10").Contains(addr) {
+		return "private"
+	}
+	return "public"
 }
 
 func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, actions []ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec, diagnosticPrefixes []netip.Prefix) error {
@@ -857,6 +972,10 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 			InitiatorKnown:  sa.InitiatorKnown,
 			IKEAgeSeconds:   sa.IKEAgeSeconds,
 			ChildAgeSeconds: sa.ChildAgeSeconds,
+			InboundBytes:    sa.InboundBytes,
+			InboundPackets:  sa.InboundPackets,
+			InboundIdleSecs: sa.InboundIdleSecs,
+			InboundKnown:    sa.InboundKnown,
 			Peer:            sa.Peer,
 			ChildSA:         sa.ChildSA,
 			IKEState:        sa.IKEState,

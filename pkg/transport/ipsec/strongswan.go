@@ -280,6 +280,12 @@ func parseSAStates(event map[string]any) []SAState {
 			childState.XFRMIfID = firstHexUint32(child["if-id-out"], child["if-id-in"])
 			childState.ReqID = uint32Value(child["reqid"])
 			childState.ChildAgeSeconds = uint64Value(child["install-time"])
+			childState.InboundBytes, _ = firstUint64Value(child, "bytes-in", "bytes_in")
+			inboundPackets, packetsKnown := firstUint64Value(child, "packets-in", "packets_in")
+			inboundIdle, idleKnown := firstUint64Value(child, "use-in", "use_in")
+			childState.InboundPackets = inboundPackets
+			childState.InboundIdleSecs = inboundIdle
+			childState.InboundKnown = packetsKnown && (childState.InboundPackets == 0 || idleKnown)
 			childState.Established = strongSwanSAEstablished(childState.IKEState, childState.ChildState)
 			states = append(states, childState)
 		}
@@ -289,6 +295,17 @@ func parseSAStates(event map[string]any) []SAState {
 		}
 	}
 	return states
+}
+
+func firstUint64Value(values map[string]any, keys ...string) (uint64, bool) {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		return uint64Value(value), true
+	}
+	return 0, false
 }
 
 func parseConnectionStates(event map[string]any) []ConnectionState {

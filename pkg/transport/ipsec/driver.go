@@ -27,6 +27,10 @@ type SAState struct {
 	InitiatorKnown  bool
 	IKEAgeSeconds   uint64
 	ChildAgeSeconds uint64
+	InboundBytes    uint64
+	InboundPackets  uint64
+	InboundIdleSecs uint64
+	InboundKnown    bool
 	Peer            string
 	ChildSA         string
 	IKEState        string
