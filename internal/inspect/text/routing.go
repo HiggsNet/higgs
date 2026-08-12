@@ -4,6 +4,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 )
@@ -39,6 +40,9 @@ func WriteBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 		}
 		sort.Strings(commands)
 		for _, cmd := range commands {
+			if isStructuredBirdCommand(cmd) {
+				continue
+			}
 			out.Linef("  command: %s", cmd)
 			raw := strings.TrimRight(inst.Raw[cmd], "\n")
 			if raw == "" {
@@ -49,8 +53,106 @@ func WriteBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 				out.Linef("    %s", line)
 			}
 		}
+		if err := out.Err(); err != nil {
+			return err
+		}
+		if err := writeBirdInterfaceContexts(w, inst.Interfaces); err != nil {
+			return err
+		}
+		if err := writeBirdNeighbors(w, inst.Neighbors); err != nil {
+			return err
+		}
+		if err := writeBirdBabelRoutes(w, inst.BabelRoutes); err != nil {
+			return err
+		}
+		if err := writeBirdBabelEntries(w, inst.BabelEntries); err != nil {
+			return err
+		}
 	}
 	return out.Err()
+}
+
+func isStructuredBirdCommand(command string) bool {
+	switch command {
+	case "show babel neighbors", "show babel routes", "show babel entries":
+		return true
+	default:
+		return false
+	}
+}
+
+func writeBirdInterfaceContexts(w io.Writer, rows []inspect.BirdInterfaceContext) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	out.Println("  Photon interface mapping:")
+	out.Println("  INTERFACE\tZONE\tFAMILY\tLINK\tROLE")
+	for _, row := range rows {
+		out.Linef("  %s\t%s\t%s\t%s\t%s", row.Name, dash(row.Zone), dash(row.Family), dash(row.LinkID), dash(row.RuntimeRole))
+	}
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
+}
+
+func writeBirdNeighbors(w io.Writer, rows []inspect.BirdBabelNeighbor) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	out.Linef("  Babel neighbors (%d):", len(rows))
+	out.Println("  ADDRESS\tINTERFACE\tZONE\tFAMILY\tMETRIC\tROUTES\tHELLOS\tEXPIRES\tAUTH\tRTT(ms)\tPROTOCOL")
+	for _, row := range rows {
+		out.Linef("  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			row.Address, row.Interface, dash(row.Zone), dash(row.Family), row.Metric, row.Routes, row.Hellos,
+			row.Expires, row.Auth, row.RTT, dash(row.Protocol))
+	}
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
+}
+
+func writeBirdBabelRoutes(w io.Writer, rows []inspect.BirdBabelRoute) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	out.Linef("  Babel routes (%d):", len(rows))
+	out.Println("  PREFIX\tNEXTHOP\tINTERFACE\tZONE\tFAMILY\tMETRIC\tFLAG\tSEQNO\tEXPIRES\tPROTOCOL")
+	for _, row := range rows {
+		out.Linef("  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			row.Prefix, row.Nexthop, row.Interface, dash(row.Zone), dash(row.Family), row.Metric,
+			dash(row.Flag), row.Seqno, row.Expires, dash(row.Protocol))
+	}
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
+}
+
+func writeBirdBabelEntries(w io.Writer, rows []inspect.BirdBabelEntry) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	out.Linef("  Babel entries (%d):", len(rows))
+	out.Println("  PREFIX\tROUTER ID\tMETRIC\tSEQNO\tROUTES\tSOURCES\tSELECTED INTERFACE\tZONE\tFAMILY\tPROTOCOL")
+	for _, row := range rows {
+		out.Linef("  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			row.Prefix, row.RouterID, row.Metric, row.Seqno, row.Routes, row.Sources,
+			dash(row.Interface), dash(row.Zone), dash(row.Family), dash(row.Protocol))
+	}
+	if err := out.Err(); err != nil {
+		return err
+	}
+	return table.Flush()
 }
 
 func WriteBabelDebug(w io.Writer, view inspect.BabelDebugView) error {

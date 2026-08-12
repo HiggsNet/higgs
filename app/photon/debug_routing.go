@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/netip"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -141,6 +142,7 @@ func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspec
 			}
 			item.Raw[cmd] = out
 		}
+		enrichBirdDumpInstance(&item, state)
 		response.Instances[inst.NetNS] = item
 	}
 	return response, nil
@@ -149,16 +151,167 @@ func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspec
 func birdDebugCommands(view birdDebugView) ([]string, error) {
 	switch view {
 	case birdDebugStatus:
-		return []string{"show status", "show protocols all", "show babel neighbors"}, nil
+		return []string{"show status", "show protocols all", "show babel neighbors", "show babel routes", "show babel entries"}, nil
 	case birdDebugInterface:
 		return []string{"show interfaces"}, nil
 	case birdDebugFilter:
 		return []string{"show symbols filter"}, nil
 	case birdDebugRoute:
-		return []string{"show route table all where source = RTS_BABEL all"}, nil
+		return []string{"show route table all where source = RTS_BABEL all", "show babel routes"}, nil
 	default:
 		return nil, fmt.Errorf("unsupported bird debug view %q", view)
 	}
+}
+
+func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, state *stateFile) {
+	if item == nil {
+		return
+	}
+	contexts := birdInterfaceContexts(state, item.NetNS)
+	item.Interfaces = make([]inspect.BirdInterfaceContext, 0, len(contexts))
+	for _, context := range contexts {
+		item.Interfaces = append(item.Interfaces, context)
+	}
+	sort.Slice(item.Interfaces, func(i, j int) bool { return item.Interfaces[i].Name < item.Interfaces[j].Name })
+
+	if raw, ok := item.Raw["show babel neighbors"]; ok {
+		item.Neighbors = parseBirdBabelNeighbors(raw, contexts)
+	}
+	if raw, ok := item.Raw["show babel routes"]; ok {
+		item.BabelRoutes = parseBirdBabelRoutes(raw, contexts)
+	}
+	if raw, ok := item.Raw["show babel entries"]; ok {
+		item.BabelEntries = parseBirdBabelEntries(raw, item.BabelRoutes, contexts)
+	}
+}
+
+func birdInterfaceContexts(state *stateFile, netnsName string) map[string]inspect.BirdInterfaceContext {
+	contexts := map[string]inspect.BirdInterfaceContext{}
+	for _, output := range linkOutputsFromState(state) {
+		if output.InterfaceName == "" || (output.NetNS != "" && netnsName != "" && output.NetNS != netnsName) {
+			continue
+		}
+		contexts[output.InterfaceName] = inspect.BirdInterfaceContext{
+			Name:        output.InterfaceName,
+			Zone:        string(output.PeerZone),
+			Family:      underlayFamilyFromPathKey(output.PathKey),
+			LinkID:      output.ID,
+			RuntimeRole: output.RuntimeRole,
+		}
+	}
+	return contexts
+}
+
+func parseBirdBabelNeighbors(raw string, contexts map[string]inspect.BirdInterfaceContext) []inspect.BirdBabelNeighbor {
+	var out []inspect.BirdBabelNeighbor
+	protocol := ""
+	inTable := false
+	for line := range strings.SplitSeq(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
+			protocol = strings.TrimSuffix(trimmed, ":")
+			inTable = false
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 3 && fields[0] == "IP" && fields[1] == "address" {
+			inTable = true
+			continue
+		}
+		if !inTable || len(fields) < 8 {
+			continue
+		}
+		context := contexts[fields[1]]
+		out = append(out, inspect.BirdBabelNeighbor{
+			Protocol: protocol, Address: fields[0], Interface: fields[1], Zone: context.Zone, Family: context.Family,
+			Metric: fields[2], Routes: fields[3], Hellos: fields[4], Expires: fields[5], Auth: fields[6], RTT: fields[7],
+		})
+		// Some BIRD versions render the RTT unit as a separate final token;
+		// the value itself is always the penultimate or final numeric field.
+		out[len(out)-1].RTT = fields[len(fields)-1]
+	}
+	return out
+}
+
+func parseBirdBabelRoutes(raw string, contexts map[string]inspect.BirdInterfaceContext) []inspect.BirdBabelRoute {
+	var out []inspect.BirdBabelRoute
+	protocol := ""
+	inTable := false
+	for line := range strings.SplitSeq(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
+			protocol = strings.TrimSuffix(trimmed, ":")
+			inTable = false
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 2 && fields[0] == "Prefix" && fields[1] == "Nexthop" {
+			inTable = true
+			continue
+		}
+		if !inTable || len(fields) < 6 {
+			continue
+		}
+		flag := ""
+		seqIndex := 4
+		if fields[4] == "*" || fields[4] == "+" {
+			flag = fields[4]
+			seqIndex = 5
+		}
+		if len(fields) <= seqIndex+1 {
+			continue
+		}
+		context := contexts[fields[2]]
+		out = append(out, inspect.BirdBabelRoute{
+			Protocol: protocol, Prefix: fields[0], Nexthop: fields[1], Interface: fields[2], Zone: context.Zone,
+			Family: context.Family, Metric: fields[3], Flag: flag, Seqno: fields[seqIndex], Expires: fields[seqIndex+1],
+		})
+	}
+	return out
+}
+
+func parseBirdBabelEntries(raw string, routes []inspect.BirdBabelRoute, contexts map[string]inspect.BirdInterfaceContext) []inspect.BirdBabelEntry {
+	selected := map[string]inspect.BirdBabelRoute{}
+	for _, route := range routes {
+		if route.Flag == "*" {
+			selected[route.Protocol+"\x00"+route.Prefix] = route
+		}
+	}
+	var out []inspect.BirdBabelEntry
+	protocol := ""
+	inTable := false
+	for line := range strings.SplitSeq(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
+			protocol = strings.TrimSuffix(trimmed, ":")
+			inTable = false
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 2 && fields[0] == "Prefix" && fields[1] == "Router" {
+			inTable = true
+			continue
+		}
+		if !inTable || len(fields) < 6 {
+			continue
+		}
+		route := selected[protocol+"\x00"+fields[0]]
+		context := contexts[route.Interface]
+		out = append(out, inspect.BirdBabelEntry{
+			Protocol: protocol, Prefix: fields[0], RouterID: fields[1], Metric: fields[2], Seqno: fields[3],
+			Routes: fields[4], Sources: fields[5], Interface: route.Interface, Zone: context.Zone, Family: context.Family,
+		})
+	}
+	return out
 }
 
 func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string) {

@@ -14,14 +14,69 @@ type BirdDumpResponse struct {
 }
 
 type BirdDumpInstance struct {
-	NetNS             string            `json:"netns"`
-	InstanceID        string            `json:"instance_id"`
-	ControlSocket     string            `json:"control_socket"`
-	ConfigPath        string            `json:"config_path,omitempty"`
-	FilterDefinitions string            `json:"filter_definitions,omitempty"`
-	FilterError       string            `json:"filter_error,omitempty"`
-	Raw               map[string]string `json:"raw,omitempty"`
-	Error             string            `json:"error,omitempty"`
+	NetNS             string                 `json:"netns"`
+	InstanceID        string                 `json:"instance_id"`
+	ControlSocket     string                 `json:"control_socket"`
+	ConfigPath        string                 `json:"config_path,omitempty"`
+	FilterDefinitions string                 `json:"filter_definitions,omitempty"`
+	FilterError       string                 `json:"filter_error,omitempty"`
+	Raw               map[string]string      `json:"raw,omitempty"`
+	Interfaces        []BirdInterfaceContext `json:"interfaces,omitempty"`
+	Neighbors         []BirdBabelNeighbor    `json:"neighbors,omitempty"`
+	BabelRoutes       []BirdBabelRoute       `json:"babel_routes,omitempty"`
+	BabelEntries      []BirdBabelEntry       `json:"babel_entries,omitempty"`
+	Error             string                 `json:"error,omitempty"`
+}
+
+// BirdInterfaceContext connects BIRD's kernel-facing interface name to the
+// Photon link that owns it. Family is the underlay path family, not the
+// address family of the Babel prefix.
+type BirdInterfaceContext struct {
+	Name        string `json:"name"`
+	Zone        string `json:"zone,omitempty"`
+	Family      string `json:"family,omitempty"`
+	LinkID      string `json:"link_id,omitempty"`
+	RuntimeRole string `json:"runtime_role,omitempty"`
+}
+
+type BirdBabelNeighbor struct {
+	Protocol  string `json:"protocol,omitempty"`
+	Address   string `json:"address"`
+	Interface string `json:"interface"`
+	Zone      string `json:"zone,omitempty"`
+	Family    string `json:"family,omitempty"`
+	Metric    string `json:"metric,omitempty"`
+	Routes    string `json:"routes,omitempty"`
+	Hellos    string `json:"hellos,omitempty"`
+	Expires   string `json:"expires,omitempty"`
+	Auth      string `json:"auth,omitempty"`
+	RTT       string `json:"rtt_ms,omitempty"`
+}
+
+type BirdBabelRoute struct {
+	Protocol  string `json:"protocol,omitempty"`
+	Prefix    string `json:"prefix"`
+	Nexthop   string `json:"nexthop,omitempty"`
+	Interface string `json:"interface,omitempty"`
+	Zone      string `json:"zone,omitempty"`
+	Family    string `json:"family,omitempty"`
+	Metric    string `json:"metric,omitempty"`
+	Flag      string `json:"flag,omitempty"`
+	Seqno     string `json:"seqno,omitempty"`
+	Expires   string `json:"expires,omitempty"`
+}
+
+type BirdBabelEntry struct {
+	Protocol  string `json:"protocol,omitempty"`
+	Prefix    string `json:"prefix"`
+	RouterID  string `json:"router_id,omitempty"`
+	Metric    string `json:"metric,omitempty"`
+	Seqno     string `json:"seqno,omitempty"`
+	Routes    string `json:"routes,omitempty"`
+	Sources   string `json:"sources,omitempty"`
+	Interface string `json:"selected_interface,omitempty"`
+	Zone      string `json:"zone,omitempty"`
+	Family    string `json:"family,omitempty"`
 }
 
 type BabelDebugView struct {

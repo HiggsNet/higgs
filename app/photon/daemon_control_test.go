@@ -173,8 +173,8 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	if inst.ControlSocket != "/run/photon/bird-photontesth2.ctl" || inst.Raw[command] == "" {
 		t.Fatalf("bird_dump instance = %#v", inst)
 	}
-	if len(client.rawCommands) != 1 || client.rawCommands[0] != command {
-		t.Fatalf("raw commands = %#v, want %q", client.rawCommands, command)
+	if len(client.rawCommands) != 2 || client.rawCommands[0] != command || client.rawCommands[1] != "show babel routes" {
+		t.Fatalf("raw commands = %#v, want BIRD RIB and Babel routes", client.rawCommands)
 	}
 }
 

@@ -70,19 +70,24 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 		t.Fatalf("WriteHealthDebug: %v", err)
 	}
 	out := buf.String()
-	if strings.Index(out, "  link-a\n") > strings.Index(out, "  link-b\n") {
+	if strings.Index(out, "link-a") > strings.Index(out, "link-b") {
 		t.Fatalf("targets are not sorted by instance id:\n%s", out)
 	}
 	for _, want := range []string{
 		"Link health (2 links):",
-		"probe_id=link-a role=active underlay=- interface=phx-a local=fd00::3 peer_addr=fd00::4",
-		"probe_id=link-b#staged role=staged underlay=- interface=phx-b local=fd00::1 peer_addr=fd00::2",
-		"Live health state:",
-		"link-b#staged: state=healthy role=staged probe=icmp",
-		"sent=4 received=3 lost=1 loss=25%",
-		"rtt last=30ms ewma=25ms p50=20ms p95=40ms p99=45ms jitter=5ms",
-		"last_error=timeout consecutive_fail=2",
-		"cutover_blocking=true",
+		"LINK    PROBE ID",
+		"link-a  link-a",
+		"node-a.catofes.",
+		"fd00::3->fd00::4",
+		"link-b  link-b#staged",
+		"node-b.catofes.",
+		"fd00::1->fd00::2",
+		"healthy  icmp",
+		"4/3/1",
+		"25%",
+		"30/25/20/40/45ms",
+		"5ms",
+		"blocked  timeout",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected %q in output:\n%s", want, out)

@@ -1,7 +1,9 @@
 package text
 
 import (
+	"fmt"
 	"io"
+	"text/tabwriter"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 )
@@ -11,43 +13,111 @@ func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
 	if w == nil {
 		return nil
 	}
-	out := newLineWriter(w)
 	targets := view.Targets
 	if len(targets) == 0 {
+		out := newLineWriter(w)
 		out.Println("No link instances to probe.")
 		return out.Err()
 	}
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	out := newLineWriter(table)
+	liveByProbe := make(map[string]inspect.HealthLiveView, len(view.Live))
+	for _, live := range view.Live {
+		key := firstNonEmpty(live.ProbeID, live.InstanceID)
+		liveByProbe[key] = live
+	}
 	out.Linef("Link health (%d links):", len(targets))
+	out.Println("LINK\tPROBE ID\tPEER\tOVERLAY\tROLE\tFAMILY\tINTERFACE\tLOCAL->PEER\tLINK STATE\tHEALTH\tPROBE\tPACKETS\tLOSS\tRTT (LAST/EWMA/P50/P95/P99)\tJITTER\tFAILS\tCUTOVER\tERROR")
 	for _, t := range targets {
-		out.Linef("  %s", t.InstanceID)
-		out.Linef("    peer=%s overlay=%s", t.PeerZone, t.Overlay)
-		out.Linef("    probe_id=%s role=%s underlay=%s interface=%s local=%s peer_addr=%s",
-			t.ProbeID, firstNonEmpty(t.ProbeRole, "active"), dash(t.UnderlayFamily), t.InterfaceName, t.LocalTunnelAddr, t.PeerTunnelAddr)
-		out.Linef("    state=%s staged=%v", t.State, t.Staged)
+		probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
+		live, hasLive := liveByProbe[probeID]
+		out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			t.InstanceID,
+			probeID,
+			dash(t.PeerZone),
+			dash(t.Overlay),
+			firstNonEmpty(t.ProbeRole, "active"),
+			dash(t.UnderlayFamily),
+			dash(t.InterfaceName),
+			formatHealthTunnel(t.LocalTunnelAddr, t.PeerTunnelAddr),
+			dash(t.State),
+			healthLiveState(live, hasLive),
+			dash(live.ProbeType),
+			healthPackets(live, hasLive),
+			healthLoss(live, hasLive),
+			healthRTT(live, hasLive),
+			healthMillis(live.JitterMs, hasLive),
+			healthFailures(live, hasLive),
+			healthCutover(live, hasLive, t.Staged || t.ProbeRole == "staged"),
+			escapeTableCell(dash(live.LastError)),
+		)
 	}
-	if view.Live != nil {
-		out.Println("\nLive health state:")
-		if err := out.Err(); err != nil {
-			return err
-		}
-		for _, l := range view.Live {
-			if err := writeHealthLive(w, l); err != nil {
-				return err
-			}
-		}
+	if err := out.Err(); err != nil {
+		return err
 	}
-	return out.Err()
+	return table.Flush()
 }
 
-func writeHealthLive(w io.Writer, l inspect.HealthLiveView) error {
-	out := newLineWriter(w)
-	out.Linef("  %s: state=%s role=%s probe=%s", firstNonEmpty(l.ProbeID, l.InstanceID), l.State, firstNonEmpty(l.ProbeRole, "active"), l.ProbeType)
-	out.LineIf(l.Sent > 0, "    sent=%d received=%d lost=%d loss=%d%%", l.Sent, l.Received, l.Lost, l.LossRatio)
-	out.LineIf(l.LastRTTMs > 0, "    rtt last=%dms ewma=%dms p50=%dms p95=%dms p99=%dms jitter=%dms",
-		l.LastRTTMs, l.EWMARTTMs, l.P50RTTMs, l.P95RTTMs, l.P99RTTMs, l.JitterMs)
-	out.LineIf(l.LastError != "", "    last_error=%s consecutive_fail=%d", l.LastError, l.ConsecutiveFail)
-	out.LineIf(l.CutoverBlocking, "    cutover_blocking=true")
-	return out.Err()
+func formatHealthTunnel(local, peer string) string {
+	if local == "" && peer == "" {
+		return "-"
+	}
+	return dash(local) + "->" + dash(peer)
+}
+
+func healthLiveState(live inspect.HealthLiveView, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return dash(live.State)
+}
+
+func healthPackets(live inspect.HealthLiveView, ok bool) string {
+	if !ok || live.Sent == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d/%d/%d", live.Sent, live.Received, live.Lost)
+}
+
+func healthLoss(live inspect.HealthLiveView, ok bool) string {
+	if !ok || live.Sent == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d%%", live.LossRatio)
+}
+
+func healthRTT(live inspect.HealthLiveView, ok bool) string {
+	if !ok || (live.LastRTTMs == 0 && live.EWMARTTMs == 0 && live.P95RTTMs == 0) {
+		return "-"
+	}
+	return fmt.Sprintf("%d/%d/%d/%d/%dms", live.LastRTTMs, live.EWMARTTMs, live.P50RTTMs, live.P95RTTMs, live.P99RTTMs)
+}
+
+func healthMillis(value int64, ok bool) string {
+	if !ok || value == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%dms", value)
+}
+
+func healthFailures(live inspect.HealthLiveView, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return fmt.Sprintf("%d", live.ConsecutiveFail)
+}
+
+func healthCutover(live inspect.HealthLiveView, ok, staged bool) string {
+	if !ok {
+		return "-"
+	}
+	if live.CutoverBlocking {
+		return "blocked"
+	}
+	if staged {
+		return "ready"
+	}
+	return "-"
 }
 
 func firstNonEmpty(values ...string) string {

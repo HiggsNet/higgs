@@ -312,7 +312,7 @@ func debugRoutingBirdCommands() []*cli.Command {
 		view  birdDebugView
 	}
 	specs := []birdCommand{
-		{name: "status", usage: "Show live BIRD status, protocols, and Babel neighbors", view: birdDebugStatus},
+		{name: "status", usage: "Show live BIRD status, protocols, Babel neighbors, routes, and entries", view: birdDebugStatus},
 		{name: "interface", usage: "Show interfaces visible to BIRD", view: birdDebugInterface},
 		{name: "filter", usage: "Show active filter symbols and generated filter definitions", view: birdDebugFilter},
 		{name: "route", usage: "Show routes learned by the Babel protocol", view: birdDebugRoute},

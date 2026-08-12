@@ -18,6 +18,10 @@ func TestWriteBirdDump(t *testing.T) {
 			Raw: map[string]string{
 				"show route": "10.0.0.0/24 unicast\n",
 			},
+			Interfaces:   []inspect.BirdInterfaceContext{{Name: "phx1", Zone: "node-b.catofes.", Family: "ipv6", LinkID: "link-b", RuntimeRole: "active"}},
+			Neighbors:    []inspect.BirdBabelNeighbor{{Address: "fe80::2", Interface: "phx1", Zone: "node-b.catofes.", Family: "ipv6", Metric: "100", Routes: "2", Hellos: "16", Expires: "5.2", Auth: "No", RTT: "3.2", Protocol: "babel1"}},
+			BabelRoutes:  []inspect.BirdBabelRoute{{Prefix: "fd00::/64", Nexthop: "fe80::2", Interface: "phx1", Zone: "node-b.catofes.", Family: "ipv6", Metric: "100", Flag: "*", Seqno: "42", Expires: "5.2", Protocol: "babel1"}},
+			BabelEntries: []inspect.BirdBabelEntry{{Prefix: "fd00::/64", RouterID: "00:00:00:00:00:00:00:02", Metric: "100", Seqno: "42", Routes: "1", Sources: "1", Interface: "phx1", Zone: "node-b.catofes.", Family: "ipv6", Protocol: "babel1"}},
 		},
 	}}
 	var buf strings.Builder
@@ -34,6 +38,13 @@ func TestWriteBirdDump(t *testing.T) {
 		"filter photon_import_z",
 		"command: show route",
 		"10.0.0.0/24 unicast",
+		"Photon interface mapping:",
+		"Babel neighbors (1):",
+		"Babel routes (1):",
+		"Babel entries (1):",
+		"node-b.catofes.",
+		"phx1",
+		"fd00::/64",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)

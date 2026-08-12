@@ -614,6 +614,10 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName string
 	if err != nil {
 		return nil, err
 	}
+	var state *stateFile
+	if d.StateStore != nil {
+		state, _ = d.StateStore.Snapshot()
+	}
 	for _, inst := range d.Sync.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
@@ -647,6 +651,7 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName string
 			}
 			item.Raw[cmd] = out
 		}
+		enrichBirdDumpInstance(&item, state)
 		response.Instances[inst.NetNS] = item
 	}
 	return response, nil
