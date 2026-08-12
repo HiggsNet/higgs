@@ -231,7 +231,8 @@ photon debug routing bird route
 photon debug routing ip route
 photon debug firewall
 photon firewall show --verbose
-photon debug health
+photon health
+photon health --sort rtt --verbose
 photon debug rotate-port
 ```
 

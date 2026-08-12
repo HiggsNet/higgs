@@ -12,6 +12,7 @@ import (
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	"github.com/urfave/cli/v3"
 )
 
 // newHealthManager creates a health.Manager from app config. Returns nil when
@@ -240,8 +241,12 @@ func (d *DaemonService) healthStatusResponse() []healthLinkJSON {
 	return out
 }
 
-// debugHealth prints the current link health state to stdout.
-func debugHealth() error {
+// showHealth prints the current link health state to stdout.
+func showHealth(sortBy string, verbose bool) error {
+	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
+	if sortBy != inspect.HealthSortPeer && sortBy != inspect.HealthSortRTT {
+		return cli.Exit("--sort must be peer or rtt", 1)
+	}
 	rt, err := NewRuntime()
 	if err != nil {
 		return err
@@ -267,7 +272,7 @@ func debugHealth() error {
 	if links := liveDaemonHealthSnapshot(rt); links != nil {
 		view.Live = inspectHealthLiveLinks(links)
 	}
-	return inspecttext.WriteHealthDebug(os.Stdout, view)
+	return inspecttext.WriteHealth(os.Stdout, view, sortBy, verbose)
 }
 
 func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthProbeTargetView {

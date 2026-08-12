@@ -466,20 +466,21 @@ label 集合（低基数约束，`writeLabels`）：`local_zone`、`peer_zone`�
 
 ---
 
-## 9. Debug 与诊断
+## 9. Health 与诊断
 
-### 9.1 photon debug health
+### 9.1 photon health
 
 ```bash
-photon debug health
+photon health
+photon health --sort rtt
+photon health --verbose
 ```
 
-输出分两段（`internal/inspect/text/health.go`）：
+默认输出面向日常巡检的核心列：peer、role、underlay family、health、loss、RTT、jitter 与 cutover 状态。`--sort peer|rtt` 分别按 peer 或实时延迟排序；没有 RTT 样本的 link 排在最后。
 
-1. **Target 列表**：从 stateFile 重建的探测目标（不依赖 daemon 存活、不依赖 health 启用）——instance、peer zone、overlay、probe_id、role、interface、两端 tunnel 地址、link 状态、staged 标记。
-2. **Live health state**：daemon 存活且 health 启用时，通过 control socket `health_status` 拿到的实时窗口统计——state、probe 类型、sent/received/lost/loss、RTT（last/ewma/p50/p95/p99）、jitter、连续失败、last_error、`cutover_blocking`。
+加 `--verbose` 后额外显示 instance/link ID、probe ID、overlay、interface、两端 tunnel 地址、link 状态、probe 类型、sent/received/lost、RTT（last/ewma/p50/p95/p99）、连续失败与 last error。目标数据从 stateFile 重建；daemon 存活且 health 启用时，通过 control socket `health_status` 合并实时窗口统计。
 
-daemon 不在运行或 health 未启用时只有第一段。
+daemon 不在运行或 health 未启用时，仍会显示从本地 state 重建的目标；实时 health、loss 与 RTT 等列显示为 `-`。
 
 ### 9.2 photon debug links 与 control API
 
@@ -535,7 +536,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 - 控制 `timeout`、`burst` 与 `max_concurrent_probes`：worker pool 同时最多运行该并发数的 link；`burst` 内的单包请求仍会串行执行，但不会阻塞 daemon 主循环。
 - 确认运行环境 `ping` 可用（容器内需要 cap_net_raw 或 setuid ping），否则所有 link 会收敛到 `probe_error`。
 - 需要 observer 时序图时务必配置 `metrics.local_spool_path`；不配置则只有实时状态，没有历史。
-- 排障 rotate 停滞时先看 `photon debug health` 的 `cutover_blocking` 与 staged 视角的 BIRD 观测——BIRD 不可达也会 hold 住 cutover。
+- 排障 rotate 停滞时先看 `photon health --verbose` 的 cutover 状态与 staged 视角的 BIRD 观测——BIRD 不可达也会 hold 住 cutover。
 
 ### 10.2 后续设计方向
 

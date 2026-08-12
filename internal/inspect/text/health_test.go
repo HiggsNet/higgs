@@ -94,3 +94,31 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteHealthConciseHidesDiagnosticColumns(t *testing.T) {
+	view := inspect.HealthDebugView{
+		Targets: []inspect.HealthProbeTargetView{{
+			ProbeID: "probe-secret", InstanceID: "link-secret", PeerZone: "node-b.",
+			ProbeRole: "active", UnderlayFamily: "ipv6", InterfaceName: "phx0",
+		}},
+		Live: []inspect.HealthLiveView{{
+			ProbeID: "probe-secret", State: "healthy", Sent: 10, Received: 9,
+			LossRatio: 10, EWMARTTMs: 12, JitterMs: 2, LastError: "hidden error",
+		}},
+	}
+	var buf strings.Builder
+	if err := WriteHealth(&buf, view, inspect.HealthSortPeer, false); err != nil {
+		t.Fatalf("WriteHealth: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"PEER", "ROLE", "FAMILY", "HEALTH", "LOSS", "RTT", "node-b.", "healthy", "10%", "12ms"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in concise output:\n%s", want, out)
+		}
+	}
+	for _, hidden := range []string{"LINK", "PROBE ID", "probe-secret", "link-secret", "phx0", "hidden error", "10/9/"} {
+		if strings.Contains(out, hidden) {
+			t.Fatalf("unexpected %q in concise output:\n%s", hidden, out)
+		}
+	}
+}

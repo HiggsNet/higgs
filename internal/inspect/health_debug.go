@@ -2,6 +2,11 @@ package inspect
 
 import "sort"
 
+const (
+	HealthSortPeer = "peer"
+	HealthSortRTT  = "rtt"
+)
+
 type HealthDebugView struct {
 	Targets []HealthProbeTargetView
 	Live    []HealthLiveView
@@ -43,17 +48,60 @@ type HealthLiveView struct {
 }
 
 func BuildHealthDebugView(view HealthDebugView) HealthDebugView {
+	return BuildHealthView(view, HealthSortPeer)
+}
+
+func BuildHealthView(view HealthDebugView, sortBy string) HealthDebugView {
 	out := view
 	out.Targets = append([]HealthProbeTargetView(nil), view.Targets...)
 	out.Live = append([]HealthLiveView(nil), view.Live...)
+	liveByProbe := make(map[string]HealthLiveView, len(out.Live))
+	for _, live := range out.Live {
+		key := live.ProbeID
+		if key == "" {
+			key = live.InstanceID
+		}
+		liveByProbe[key] = live
+	}
 	sort.SliceStable(out.Targets, func(i, j int) bool {
-		if out.Targets[i].InstanceID != out.Targets[j].InstanceID {
-			return out.Targets[i].InstanceID < out.Targets[j].InstanceID
+		left, right := out.Targets[i], out.Targets[j]
+		if sortBy == HealthSortRTT {
+			leftRTT, leftOK := healthSortRTT(liveByProbe[healthTargetProbeID(left)])
+			rightRTT, rightOK := healthSortRTT(liveByProbe[healthTargetProbeID(right)])
+			if leftOK != rightOK {
+				return leftOK
+			}
+			if leftOK && leftRTT != rightRTT {
+				return leftRTT < rightRTT
+			}
 		}
-		if out.Targets[i].ProbeRole != out.Targets[j].ProbeRole {
-			return out.Targets[i].ProbeRole < out.Targets[j].ProbeRole
+		if left.PeerZone != right.PeerZone {
+			return left.PeerZone < right.PeerZone
 		}
-		return out.Targets[i].ProbeID < out.Targets[j].ProbeID
+		if left.InstanceID != right.InstanceID {
+			return left.InstanceID < right.InstanceID
+		}
+		if left.ProbeRole != right.ProbeRole {
+			return left.ProbeRole < right.ProbeRole
+		}
+		return left.ProbeID < right.ProbeID
 	})
 	return out
+}
+
+func healthTargetProbeID(target HealthProbeTargetView) string {
+	if target.ProbeID != "" {
+		return target.ProbeID
+	}
+	return target.InstanceID
+}
+
+func healthSortRTT(live HealthLiveView) (int64, bool) {
+	if live.EWMARTTMs > 0 {
+		return live.EWMARTTMs, true
+	}
+	if live.LastRTTMs > 0 {
+		return live.LastRTTMs, true
+	}
+	return 0, false
 }

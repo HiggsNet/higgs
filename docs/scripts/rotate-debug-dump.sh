@@ -60,7 +60,7 @@ run sed -n 1,240p "$CONFIG_FILE"
 section "photon status"
 run "$PHOTON_BIN" debug peers
 photon_debug links
-run "$PHOTON_BIN" debug health
+run "$PHOTON_BIN" health --verbose
 photon_debug rotate
 
 section "photon active ipsec records"

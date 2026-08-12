@@ -102,6 +102,8 @@ func TestHumanCommandsUsePlaneOrientedShowViews(t *testing.T) {
 
 	links := commandByName(root.Commands, "links")
 	requireCommandFlags(t, commandByName(links.Commands, "show"), "filter", "verbose")
+	health := commandByName(root.Commands, "health")
+	requireCommandFlags(t, health, "sort", "verbose")
 
 	route := commandByName(root.Commands, "route")
 	requireCommandFlags(t, commandByName(route.Commands, "show"), "filter", "verbose")
@@ -110,6 +112,9 @@ func TestHumanCommandsUsePlaneOrientedShowViews(t *testing.T) {
 	}
 
 	debug := commandByName(root.Commands, "debug")
+	if commandByName(debug.Commands, "health") != nil {
+		t.Fatal("health should be a root command, not a debug subcommand")
+	}
 	debugZone := commandByName(debug.Commands, "zone")
 	requireCommandFlags(t, debugZone, "json", "history")
 	debugRecord := commandByName(debug.Commands, "record")

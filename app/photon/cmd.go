@@ -22,10 +22,30 @@ func rootCommand() *cli.Command {
 			cmdRoute(),
 			cmdService(),
 			cmdFirewall(),
+			cmdHealth(),
 			cmdVersion(),
 			cmdDaemon(),
 			cmdAdvanced(),
 			cmdDebug(),
+		},
+	}
+}
+
+func cmdHealth() *cli.Command {
+	return &cli.Command{
+		Name:        "health",
+		Usage:       "Show link health probe state",
+		UsageText:   "photon health [--sort peer|rtt] [--verbose]",
+		Description: "Display per-link health, loss, latency, jitter, and rotate cutover readiness.",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "sort", Value: "peer", Usage: "Sort rows by peer or latency (peer|rtt)"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show link/probe IDs, interfaces, tunnel addresses, packet counts, RTT percentiles, and errors"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: photon health [--sort peer|rtt] [--verbose]", 1)
+			}
+			return showHealth(cmd.String("sort"), cmd.Bool("verbose"))
 		},
 	}
 }

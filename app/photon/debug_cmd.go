@@ -160,14 +160,6 @@ func cmdDebug() *cli.Command {
 				},
 			},
 			{
-				Name:        "health",
-				Usage:       "Show link health probe state",
-				Description: "Display per-link health state, probe RTT/loss/jitter and rotate cutover gate.",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return debugHealth()
-				},
-			},
-			{
 				Name:      "rotate-port",
 				Usage:     "Manually rotate the local advertised IPsec ports",
 				UsageText: "photon debug rotate-port [--direct]",

@@ -240,7 +240,7 @@ smoke 失败时先看目标属于哪一层：
 |------|------|
 | sync/gossip 不收敛 | 每个节点日志、`advanced sync status --verbose`、`record list`、record history、catalog/object pull 计数。 |
 | daemon 行为异常 | control socket 是否在线、`advanced sync status --verbose` 里的 daemon 状态、daemon 日志和本地 state DB。 |
-| IPsec/XFRM 异常 | preflight 输出、`debug links`、`debug health`、`swanctl --list-sas`、`ip xfrm state`、XFRM interface/address/route。 |
+| IPsec/XFRM 异常 | preflight 输出、`debug links`、`health --verbose`、`swanctl --list-sas`、`ip xfrm state`、XFRM interface/address/route。 |
 | routing/BIRD 异常 | generated BIRD config、`debug routing`、BIRD control socket、neighbor 和 best route 输出。 |
 | firewall/revocation 异常 | planned rules、实际 nftables/iptables 规则、revocation impacts、peer cache 和 link teardown 日志。 |
 | sandbox/CI 异常 | `Operation not permitted`、`socket: operation not permitted`、容器 privileged 能力、Seccomp/NoNewPrivs 状态。 |

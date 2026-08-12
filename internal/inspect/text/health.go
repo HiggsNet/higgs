@@ -8,8 +8,8 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 )
 
-func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
-	view = inspect.BuildHealthDebugView(view)
+func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbose bool) error {
+	view = inspect.BuildHealthView(view, sortBy)
 	if w == nil {
 		return nil
 	}
@@ -27,6 +27,27 @@ func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
 		liveByProbe[key] = live
 	}
 	out.Linef("Link health (%d links):", len(targets))
+	if !verbose {
+		out.Println("PEER\tROLE\tFAMILY\tHEALTH\tLOSS\tRTT\tJITTER\tCUTOVER")
+		for _, t := range targets {
+			probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
+			live, hasLive := liveByProbe[probeID]
+			out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+				dash(t.PeerZone),
+				firstNonEmpty(t.ProbeRole, "active"),
+				dash(t.UnderlayFamily),
+				healthLiveState(live, hasLive),
+				healthLoss(live, hasLive),
+				healthPrimaryRTT(live, hasLive),
+				healthMillis(live.JitterMs, hasLive),
+				healthCutover(live, hasLive, t.Staged || t.ProbeRole == "staged"),
+			)
+		}
+		if err := out.Err(); err != nil {
+			return err
+		}
+		return table.Flush()
+	}
 	out.Println("LINK\tPROBE ID\tPEER\tOVERLAY\tROLE\tFAMILY\tINTERFACE\tLOCAL->PEER\tLINK STATE\tHEALTH\tPROBE\tPACKETS\tLOSS\tRTT (LAST/EWMA/P50/P95/P99)\tJITTER\tFAILS\tCUTOVER\tERROR")
 	for _, t := range targets {
 		probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
@@ -56,6 +77,12 @@ func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
 		return err
 	}
 	return table.Flush()
+}
+
+// WriteHealthDebug preserves the detailed diagnostic rendering for callers
+// that explicitly request the legacy debug view.
+func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
+	return WriteHealth(w, view, inspect.HealthSortPeer, true)
 }
 
 func formatHealthTunnel(local, peer string) string {
@@ -91,6 +118,19 @@ func healthRTT(live inspect.HealthLiveView, ok bool) string {
 		return "-"
 	}
 	return fmt.Sprintf("%d/%d/%d/%d/%dms", live.LastRTTMs, live.EWMARTTMs, live.P50RTTMs, live.P95RTTMs, live.P99RTTMs)
+}
+
+func healthPrimaryRTT(live inspect.HealthLiveView, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	if live.EWMARTTMs > 0 {
+		return fmt.Sprintf("%dms", live.EWMARTTMs)
+	}
+	if live.LastRTTMs > 0 {
+		return fmt.Sprintf("%dms", live.LastRTTMs)
+	}
+	return "-"
 }
 
 func healthMillis(value int64, ok bool) string {
