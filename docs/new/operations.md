@@ -2,7 +2,9 @@
 
 本文整理当前实现下最常用的运行、检查和恢复路径。它面向 operator：先让节点安全跑起来，再知道出问题时从哪里看。
 
-命令示例默认使用已安装到 PATH 的 `photon`。
+命令示例默认使用已安装到 PATH 的 `photon`。固定双实例安装中，管理节点使用
+`photon-admin`；它由安装脚本的 `--admin` 开关安装，并自动选择 `/etc/photon/admin`
+下的配置和数据库，不需要手工传环境变量。
 
 ## 配置选择
 
@@ -27,8 +29,8 @@ sudo -E env PHOTON_CONFIG=/tmp/photon-a/config.yaml photon debug links
 Root admin 只管理 `.`：
 
 ```bash
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip root init
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip root pubkey
+photon-admin gossip root init
+photon-admin gossip root pubkey
 ```
 
 一级管理 Zone 先生成 key 和 join request：
@@ -41,7 +43,7 @@ PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join request catofes
 把 request 交给 root admin 签发：
 
 ```bash
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip delegate issue --permissions write,delegate,allocate-ip <request-payload>
+photon-admin gossip delegate issue --permissions write,delegate,allocate-ip <request-payload>
 ```
 
 再把 bundle 交回管理 Zone：
@@ -58,7 +60,7 @@ PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon debug verify catofes.
 `root init` 创建的 root authority 默认拥有当前所有内建权限，包括 `delegate`、`write` 和 `allocate-ip`。route announcement 使用通用 `write`；子 Zone 默认只获得 `write,delegate`。如果一个管理 Zone需要分配 IPAM pool/assignment，应在 `delegate issue` 时显式加 `--permissions write,delegate,allocate-ip`。已有 delegation 可由父 Zone 管理端原地升级：
 
 ```bash
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip delegate grant catofes. allocate-ip catofes-authority.b64
+photon-admin gossip delegate grant catofes. allocate-ip catofes-authority.b64
 ```
 
 父管理端在线参与 gossip 时，子节点同步到新版父 Zone snapshot 后，会验证父 delegation、epoch 和本地 identity key，并只刷新自己缓存的 authority 与直接 parent proof；本 Zone 的 records、子 delegation、revocation 和 history 不会被远端 snapshot 覆盖。这个刷新与父 snapshot 原子提交，不会暴露“父 delegation 已更新、本地 authority 仍是旧 epoch”的半更新状态。daemon 启动时也会根据已缓存的父 delegation 执行同样的刷新，使升级前已经形成的半更新状态自动恢复。
@@ -76,9 +78,9 @@ PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join accept catofes-
 如果 root admin 保持离线，它写入的 root Zone records 不会自动进入在线 gossip 网络。可以把 root Zone signed snapshot 导出成文件，再交给在线管理端导入：
 
 ```bash
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon route ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon route ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon advanced recovery export-zone . root-zone.b64
+photon-admin route ipam pool create --direct . 2a0d:2905::/32 --delegated-to .
+photon-admin route ipam pool create --direct . 2a0d:2905::/58 --delegated-to catofes.
+photon-admin advanced recovery export-zone . root-zone.b64
 
 PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon advanced recovery import-zone root-zone.b64
 ```
@@ -131,7 +133,7 @@ daemon 做这些事：
 - 执行 IPsec、routing、firewall、health reconcile。
 - 提供 Observer API/UI。
 
-崩溃重启后，daemon 从 BoltDB 恢复并重新 reconcile；未完成的同步会自动重试。BIRD 默认使用 `shutdown_policy: persist` 跨 Photon 重启保留，实验环境可设为 `stop`。详细生命周期见 [Daemon 设计与实现](daemon.md#52-状态持久化停止与崩溃恢复)。
+崩溃重启后，daemon 从 BoltDB 恢复并重新 reconcile；未完成的同步会自动重试。BIRD 默认使用 `shutdown_policy: persist` 跨 Photon 重启保留，实验环境可设为 `stop`。详细生命周期见 [Daemon 设计与实现](daemon.md#53-状态持久化停止与崩溃恢复)。同机运行节点与管理身份时，分别使用 `photon.service` / `photon-admin.service` 和 `photon` / `photon-admin` 命令，隔离要求见[同机双实例](daemon.md#52-同机双实例)。
 
 CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在线时，部分命令会回退为直接写本地状态。你也可以显式加 `--direct` 跳过 control socket 探测，直接写本地 DB。
 
@@ -151,7 +153,7 @@ CLI 写操作会优先尝试 running daemon 的 control socket；daemon 不在�
 
 ```bash
 # daemon 不在线时直接签发 delegation
-PHOTON_CONFIG=/tmp/photon-admin/config.yaml photon gossip delegate issue --direct --permissions write,delegate <request-payload>
+photon-admin gossip delegate issue --direct --permissions write,delegate <request-payload>
 
 # 直接接受 join bundle
 PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon gossip join accept --direct <bundle-payload> /tmp/catofes.key.json

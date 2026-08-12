@@ -7,7 +7,8 @@ Photon 是一个实验性的“信任优先” mesh VPN 控制平面。它不把
 
 ## 安装
 
-Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（安装为 `/usr/local/bin/photon`）：
+Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（默认安装 `photon`、
+`photon-services` 和 `photon.service`）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/install.sh | sh
@@ -27,6 +28,24 @@ BIRD 2.14+、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时
 原生安装是主要部署路径：它直接集成 systemd、宿主数据面和
 `photon-services` 生成的服务编排 artifact。Docker 是固定用户态依赖的备用路径，
 不取代管理员对宿主网络、Compose 和服务生命周期的管理。
+
+需要在同一主机额外运行一个管理节点时，显式传入 `--admin`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/install.sh | \
+  sudo sh -s -- --admin
+```
+
+这时才会额外安装 `photon-admin` 和 `photon-admin.service`，并创建 admin 最小配置；
+不带 `--admin` 不会创建或修改任何 admin 文件。
+`photon-admin` 是包装命令，自动选择 `/etc/photon/admin/config.yaml`、
+`/etc/photon/admin/photon.db` 和独立 control socket，因此执行管理命令无需手工传环境变量。
+普通节点仍使用 `/etc/photon/config.yaml` 和 `/etc/photon/photon.db`。建议 admin 只运行
+authority/gossip 控制面，不配置 overlays、routing 或 firewall。详细约束见
+[daemon 文档](docs/new/daemon.md#52-同机双实例)。
+
+`update.sh` 会检测已有的 `photon-admin`：已安装 admin 的节点会自动一起更新，普通节点
+仍只更新普通组件。
 
 其他安装方式：
 

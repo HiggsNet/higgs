@@ -8,6 +8,8 @@ Type=simple
 User=root
 Group=root
 Environment=PHOTON_CONFIG=/etc/photon/config.yaml
+Environment=PHOTON_STATE=/etc/photon/photon.db
+Environment=PHOTON_CONTROL_SOCKET=/run/photon/photon.sock
 ExecStart=/usr/local/bin/photon daemon
 Restart=on-failure
 RestartSec=2s

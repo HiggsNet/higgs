@@ -27,7 +27,8 @@ Photon daemon 是长期运行的控制循环。它把所有子系统——gossip
    - 4.9 [状态持久化边界](#49-状态持久化边界)
 5. [Control Socket](#5-control-socket)
    - 5.1 [systemd 运行约定](#51-systemd-运行约定)
-   - 5.2 [状态持久化、停止与崩溃恢复](#52-状态持久化停止与崩溃恢复)
+   - 5.2 [同机双实例](#52-同机双实例)
+   - 5.3 [状态持久化、停止与崩溃恢复](#53-状态持久化停止与崩溃恢复)
 6. [Reconcile 调度](#6-reconcile-调度)
 7. [子模块集成](#7-子模块集成)
 
@@ -407,7 +408,57 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 
 control socket 先启动、后于 Observer 停止。任一服务启动失败都会终止启动并清理已有 listener。control socket 使用父目录 `0700`、socket `0600`，只允许 root 管理，不做方法级鉴权。
 
-### 5.2 状态持久化、停止与崩溃恢复
+### 5.2 同机双实例
+
+同一主机最多运行固定的两个角色：普通节点与一个管理节点。发布和升级仍只有一份
+`/usr/local/bin/photon` Go 二进制；安装器另外安装 `/usr/local/bin/photon-admin`
+shell 包装器，并准备两个明确命名的 systemd unit：
+
+默认安装只准备普通节点。仅当安装命令显式传入 `--admin` 时，才额外安装 admin
+包装器、配置和 service：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/install.sh | \
+  sudo sh -s -- --admin
+```
+
+后续运行 `update.sh` 时会检测已经存在的 `photon-admin` 并自动保持双实例更新，普通
+节点不会因为一次常规更新而新增 admin 角色。
+
+| 资源 | 普通节点 | 管理节点 |
+|---|---|---|
+| 命令 | `photon` | `photon-admin` |
+| systemd unit | `photon.service` | `photon-admin.service` |
+| 配置 | `/etc/photon/config.yaml` | `/etc/photon/admin/config.yaml` |
+| 数据库 | `/etc/photon/photon.db` | `/etc/photon/admin/photon.db` |
+| control socket | `/run/photon/photon.sock` | `/run/photon-admin/photon.sock` |
+
+`photon-admin` 在每次执行时设置 admin 的配置、数据库和 control socket，然后 `exec`
+同目录下的 `photon`。它是可供 `sudo`、systemd 和自动化脚本直接调用的包装命令，
+不是依赖交互式 shell 初始化的 alias。正常命令不会误连普通节点：
+
+```bash
+photon health
+photon-admin gossip delegate issue request.json
+photon-admin health --verbose
+```
+
+安装器仅在 `/etc/photon/admin/config.yaml` 不存在时创建最小配置，不覆盖已有 identity、
+key、数据库或配置；最小配置将 admin gossip 监听端口设为 `33435`，避开普通节点默认
+的 `33434`。完成两套身份初始化并确保其他显式监听端口也不同后启动：
+
+```bash
+systemctl enable --now photon.service photon-admin.service
+journalctl -u photon.service -u photon-admin.service -f
+```
+
+推荐让普通节点独占 IPsec、BIRD、firewall 和 health 数据面；admin 只承担独立的
+authority/gossip 管理身份，不配置 overlays、routing instance 或 firewall instance。
+这样两者不会竞争宿主 StrongSwan、XFRM、BIRD、路由表和防火墙对象。如果将来确实
+需要让 admin 运行第二套完整数据面，应当另行设计 netns 和独立 charon/VICI 隔离，
+不由当前固定双实例安装方案隐式支持。
+
+### 5.3 状态持久化、停止与崩溃恢复
 
 签名状态、peer sync 状态和 reconcile 快照写入 BoltDB；socket、连接、内存事件和进行中的 sync session 不持久化。正常关闭使用 `photon daemon --shutdown` 或 `SIGTERM`。
 

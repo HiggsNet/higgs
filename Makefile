@@ -74,8 +74,19 @@ install:
 	$(GO_ENV) $(GO) install $(SERVICES_MAIN_PACKAGE)
 
 install-script-check:
-	@sh -n contrib/install.sh contrib/update.sh
-	@contrib/install.sh --help >/dev/null
+	@sh -n contrib/install.sh contrib/update.sh contrib/photon-admin
+	@contrib/install.sh --help | grep -q -- '--admin'
+	@grep -q 'install_admin=false' contrib/install.sh
+	@grep -q 'if \[ "$$install_admin" = true \]; then' contrib/install.sh
+	@grep -q 'Environment=PHOTON_STATE=/etc/photon/photon.db' contrib/systemd/photon.service
+	@grep -q 'Environment=PHOTON_ADMIN_CONFIG=/etc/photon/admin/config.yaml' contrib/systemd/photon-admin.service
+	@grep -q 'Environment=PHOTON_ADMIN_STATE=/etc/photon/admin/photon.db' contrib/systemd/photon-admin.service
+	@grep -q 'Environment=PHOTON_ADMIN_CONTROL_SOCKET=/run/photon-admin/photon.sock' contrib/systemd/photon-admin.service
+	@grep -q 'exec "$${PHOTON_ADMIN_BINARY:-$${script_dir}/photon}" "$$@"' contrib/photon-admin
+	@output="$$(PHOTON_CONFIG=wrong PHOTON_STATE=wrong PHOTON_CONTROL_SOCKET=wrong PHOTON_ADMIN_BINARY=env contrib/photon-admin)"; \
+	printf '%s\n' "$$output" | grep -qx 'PHOTON_CONFIG=/etc/photon/admin/config.yaml'; \
+	printf '%s\n' "$$output" | grep -qx 'PHOTON_STATE=/etc/photon/admin/photon.db'; \
+	printf '%s\n' "$$output" | grep -qx 'PHOTON_CONTROL_SOCKET=/run/photon-admin/photon.sock'
 	@output="$$(mktemp)"; trap 'rm -f "$$output"' EXIT HUP INT TERM; \
 	PHOTON_SKIP_DEPENDENCY_CHECK=invalid contrib/install.sh --version test --no-service >"$$output" 2>&1; \
 	status=$$?; test "$$status" -eq 2; \

@@ -64,7 +64,7 @@ jobs:
           mkdir -p "$out"
           go build -trimpath -ldflags "$ldflags" -o "$out/photon" ./app/photon
           go build -trimpath -o "$out/photon-services" ./app/photon-services
-          cp README.md config.example.yaml service.example.yaml contrib/systemd/photon.service "$out/"
+          cp README.md config.example.yaml service.example.yaml contrib/photon-admin contrib/systemd/photon.service contrib/systemd/photon-admin.service "$out/"
           tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
 
       - name: Checksums

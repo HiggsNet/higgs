@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+PHOTON_CONFIG=${PHOTON_ADMIN_CONFIG:-/etc/photon/admin/config.yaml}
+PHOTON_STATE=${PHOTON_ADMIN_STATE:-/etc/photon/admin/photon.db}
+PHOTON_CONTROL_SOCKET=${PHOTON_ADMIN_CONTROL_SOCKET:-/run/photon-admin/photon.sock}
+
+export PHOTON_CONFIG PHOTON_STATE PHOTON_CONTROL_SOCKET
+
+exec "${PHOTON_ADMIN_BINARY:-${script_dir}/photon}" "$@"
