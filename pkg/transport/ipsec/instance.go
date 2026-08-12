@@ -465,13 +465,14 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			result.handleRotate(id, spec, existing, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), rotateRetentionForSpec(spec, in.GroupRotateRetention), activationReady, activationGated, rotateCutoverReady(id, in.RotateCutoverReady), now, role)
 			continue
 		}
+		rotateActive := existing.StagedGeneration != 0 || existing.RotatePhase != RotatePhaseIdle
 		existing = result.clearStagedIfIdle(existing, in.SAs, now)
 		if existing.StagedGeneration == 0 && existing.RemoteGeneration == desiredGen {
 			existing = syncInstanceDesiredRuntime(existing, spec)
 			result.Instances[id] = existing
 		}
 		sa := findInstanceSA(in.SAs, existing)
-		if reason := in.ForceUpdates[id]; reason != "" && sa.Established {
+		if reason := in.ForceUpdates[id]; reason != "" && sa.Established && !rotateActive {
 			if inLinkBackoff(existing, now) {
 				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
 				continue
