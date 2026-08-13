@@ -53,9 +53,9 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
 	out.Linef("peers: %s", filteredCount(len(matching), len(peers), filter))
-	out.Println("PEER\tSOURCE\tENDPOINT\tSTATUS\tLAST_SYNC\tNEXT_RETRY\tLAST_ERROR")
+	rows := [][]string{{"PEER", "SOURCE", "ENDPOINT", "STATUS", "LAST_SYNC", "NEXT_RETRY", "LAST_ERROR"}}
 	for _, peer := range matching {
-		out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s",
+		rows = append(rows, []string{
 			peer.PeerID,
 			dash(peer.Source),
 			dash(peer.ResolvedAddr),
@@ -63,8 +63,9 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 			dash(peer.LastSuccess),
 			dash(peer.NextRetry),
 			escapeTableCell(dash(peer.LastError)),
-		)
+		})
 	}
+	writeAlignedRows(out, rows, 0)
 	if err := out.Err(); err != nil {
 		return err
 	}

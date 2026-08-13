@@ -33,10 +33,11 @@ func WriteZones(w io.Writer, details []inspect.ZoneDetail, filter string, verbos
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
 	out.Linef("zones: %s", filteredCount(len(filtered), len(details), filter))
+	rows := make([][]string, 0, len(filtered)+1)
 	if verbose {
-		out.Println("ZONE\tSTATUS\tPARENT\tPERMISSIONS\tRECORDS\tHISTORY\tDELEGATIONS\tREVOCATIONS\tAUTHORITY")
+		rows = append(rows, []string{"ZONE", "STATUS", "PARENT", "PERMISSIONS", "RECORDS", "HISTORY", "DELEGATIONS", "REVOCATIONS", "AUTHORITY"})
 	} else {
-		out.Println("ZONE\tSTATUS\tRECORDS\tDELEGATIONS")
+		rows = append(rows, []string{"ZONE", "STATUS", "RECORDS", "DELEGATIONS"})
 	}
 	for _, detail := range filtered {
 		status := "active"
@@ -44,25 +45,30 @@ func WriteZones(w io.Writer, details []inspect.ZoneDetail, filter string, verbos
 			status = "revoked"
 		}
 		if verbose {
-			out.Linef("%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s",
+			rows = append(rows, []string{
 				detail.Path,
 				status,
 				dash(detail.Parent),
 				authorityPermissions(detail.Authority),
-				detail.RecordCount,
-				detail.HistoryCount,
-				detail.DelegationCount,
-				detail.RevocationCount,
+				fmt.Sprint(detail.RecordCount),
+				fmt.Sprint(detail.HistoryCount),
+				fmt.Sprint(detail.DelegationCount),
+				fmt.Sprint(detail.RevocationCount),
 				zoneAuthoritySummary(detail.Authority),
-			)
+			})
 		} else {
-			out.Linef("%s\t%s\t%d\t%d",
+			rows = append(rows, []string{
 				detail.Path,
 				status,
-				detail.RecordCount,
-				detail.DelegationCount,
-			)
+				fmt.Sprint(detail.RecordCount),
+				fmt.Sprint(detail.DelegationCount),
+			})
 		}
+	}
+	if verbose {
+		writeAlignedRows(out, rows, 0, 2)
+	} else {
+		writeAlignedRows(out, rows, 0)
 	}
 	if err := out.Err(); err != nil {
 		return err

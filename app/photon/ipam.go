@@ -14,6 +14,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/urfave/cli/v3"
@@ -614,29 +616,40 @@ func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *Runtime, filterZone zone.
 			Tag:        entry.Tag,
 		})
 	}
+	sortIPAMAssignmentRows(rows)
+	return writeIPAMAssignments(w, rows)
+}
+
+func sortIPAMAssignmentRows(rows []ipamAssignmentRow) {
 	sort.Slice(rows, func(i, j int) bool {
-		pi, _ := netip.ParsePrefix(rows[i].Prefix)
-		pj, _ := netip.ParsePrefix(rows[j].Prefix)
-		if cmp := strings.Compare(pi.Addr().String(), pj.Addr().String()); cmp != 0 {
+		if cmp := comparePrefixStrings(rows[i].Prefix, rows[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
-		return pi.Bits() < pj.Bits()
+		if rows[i].AssignedTo != rows[j].AssignedTo {
+			return inspect.ZonePathLess(rows[i].AssignedTo, rows[j].AssignedTo)
+		}
+		if rows[i].Source != rows[j].Source {
+			return inspect.ZonePathLess(rows[i].Source, rows[j].Source)
+		}
+		return rows[i].Tag < rows[j].Tag
 	})
-	return writeIPAMAssignments(w, rows)
 }
 
 func writeIPAMAssignments(w io.Writer, rows []ipamAssignmentRow) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(table, "assignments: %d\n", len(rows))
-	fmt.Fprintln(table, "PREFIX\tSOURCE\tASSIGNED_TO\tMODE\tTAG")
+	tableRows := [][]string{{"PREFIX", "SOURCE", "ASSIGNED_TO", "MODE", "TAG"}}
 	for _, row := range rows {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+		tableRows = append(tableRows, []string{
 			row.Prefix,
 			row.Source,
 			row.AssignedTo,
 			ipamAssignmentMode(row.Shared),
 			dash(row.Tag),
-		)
+		})
+	}
+	if err := inspecttext.WriteAlignedRows(table, tableRows, 1, 2); err != nil {
+		return err
 	}
 	return table.Flush()
 }
@@ -689,25 +702,31 @@ func writeIPAMMineReport(w io.Writer, report *ipamMineReport) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(table, "managed_zone: %s\n", report.ManagedZone)
 	fmt.Fprintf(table, "assignments: %d\n", len(report.Assignments))
-	fmt.Fprintln(table, "PREFIX\tSOURCE\tMODE\tTAG")
+	assignmentRows := [][]string{{"PREFIX", "SOURCE", "MODE", "TAG"}}
 	for _, row := range report.Assignments {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n",
+		assignmentRows = append(assignmentRows, []string{
 			row.Prefix,
 			row.Source,
 			ipamAssignmentMode(row.Shared),
 			dash(row.Tag),
-		)
+		})
+	}
+	if err := inspecttext.WriteAlignedRows(table, assignmentRows, 1); err != nil {
+		return err
 	}
 	fmt.Fprintln(table)
 	fmt.Fprintf(table, "pools: %d\n", len(report.Pools))
-	fmt.Fprintln(table, "PREFIX\tSOURCE\tDELEGATED_TO\tRELATION")
+	poolRows := [][]string{{"PREFIX", "SOURCE", "DELEGATED_TO", "RELATION"}}
 	for _, row := range report.Pools {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n",
+		poolRows = append(poolRows, []string{
 			row.Prefix,
 			row.Source,
 			row.DelegatedTo,
 			dash(strings.Join(row.Relation, ",")),
-		)
+		})
+	}
+	if err := inspecttext.WriteAlignedRows(table, poolRows, 1, 2); err != nil {
+		return err
 	}
 	return table.Flush()
 }
@@ -982,39 +1001,48 @@ func writeIPAMGetReport(w io.Writer, report *ipamGetReport) error {
 	fmt.Fprintf(table, "query: %s\n", report.Query)
 
 	fmt.Fprintf(table, "pools: %d\n", len(report.PoolChain))
-	fmt.Fprintln(table, "PREFIX\tSOURCE\tDELEGATED_TO\tRELATION\tBEST")
+	poolRows := [][]string{{"PREFIX", "SOURCE", "DELEGATED_TO", "RELATION", "BEST"}}
 	for i, pool := range report.PoolChain {
 		best := "-"
 		if i == len(report.PoolChain)-1 {
 			best = "yes"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+		poolRows = append(poolRows, []string{
 			pool.Prefix,
 			pool.Source,
 			pool.DelegatedTo,
 			dash(pool.Relation),
 			best,
-		)
+		})
+	}
+	if err := inspecttext.WriteAlignedRows(table, poolRows, 1, 2); err != nil {
+		return err
 	}
 
 	fmt.Fprintln(table)
 	fmt.Fprintf(table, "assignments: %d\n", len(report.Assignments))
-	fmt.Fprintln(table, "PREFIX\tSOURCE\tASSIGNED_TO\tMODE\tTAG")
+	assignmentRows := [][]string{{"PREFIX", "SOURCE", "ASSIGNED_TO", "MODE", "TAG"}}
 	for _, assignment := range report.Assignments {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+		assignmentRows = append(assignmentRows, []string{
 			assignment.Prefix,
 			assignment.Source,
 			assignment.AssignedTo,
 			ipamAssignmentMode(assignment.Shared),
 			dash(assignment.Tag),
-		)
+		})
+	}
+	if err := inspecttext.WriteAlignedRows(table, assignmentRows, 1, 2); err != nil {
+		return err
 	}
 
 	fmt.Fprintln(table)
 	fmt.Fprintf(table, "routes: %d\n", len(report.Routes))
-	fmt.Fprintln(table, "PREFIX\tSOURCE")
+	routeRows := [][]string{{"PREFIX", "SOURCE"}}
 	for _, route := range report.Routes {
-		fmt.Fprintf(table, "%s\t%s\n", route.Prefix, route.Source)
+		routeRows = append(routeRows, []string{route.Prefix, route.Source})
+	}
+	if err := inspecttext.WriteAlignedRows(table, routeRows, 1); err != nil {
+		return err
 	}
 
 	fmt.Fprintln(table)
@@ -1039,8 +1067,13 @@ func comparePrefixStrings(a, b string) int {
 	if errA != nil || errB != nil {
 		return strings.Compare(a, b)
 	}
-	if cmp := strings.Compare(pa.Addr().String(), pb.Addr().String()); cmp != 0 {
-		return cmp
+	pa = pa.Masked()
+	pb = pb.Masked()
+	if pa.Addr().Less(pb.Addr()) {
+		return -1
+	}
+	if pb.Addr().Less(pa.Addr()) {
+		return 1
 	}
 	if pa.Bits() < pb.Bits() {
 		return -1

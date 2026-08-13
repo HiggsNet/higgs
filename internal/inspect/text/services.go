@@ -47,10 +47,11 @@ func WriteServices(w io.Writer, view inspect.ServiceInspection, filter string, i
 	out.Linef("managed_zone: %s", dash(string(view.ManagedZone)))
 	out.Linef("services: %s", filteredCount(len(services), eligibleCount, filter))
 	out.Linef("endpoints: %d", endpointCount)
+	rows := make([][]string, 0, endpointCount+1)
 	if verbose {
-		out.Println("SERVICE\tTYPE\tOWNER\tSCOPE\tREGION\tENDPOINT\tSTATUS\tVERSION\tUPDATED\tRECORD\tERROR")
+		rows = append(rows, []string{"SERVICE", "TYPE", "OWNER", "SCOPE", "REGION", "ENDPOINT", "STATUS", "VERSION", "UPDATED", "RECORD", "ERROR"})
 	} else {
-		out.Println("SERVICE\tTYPE\tOWNER\tSCOPE\tREGION\tENDPOINT\tSTATUS")
+		rows = append(rows, []string{"SERVICE", "TYPE", "OWNER", "SCOPE", "REGION", "ENDPOINT", "STATUS"})
 	}
 	for _, service := range services {
 		endpoints := service.Endpoints
@@ -67,32 +68,33 @@ func WriteServices(w io.Writer, view inspect.ServiceInspection, filter string, i
 				address = net.JoinHostPort(endpoint.Address, fmt.Sprint(endpoint.Port))
 			}
 			if verbose {
-				out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s",
+				rows = append(rows, []string{
 					service.ID,
 					dash(service.Type),
-					service.Owner,
+					string(service.Owner),
 					scope,
 					dash(endpoint.Region),
 					address,
 					dash(service.Status),
-					service.Version,
+					fmt.Sprint(service.Version),
 					formatUnixTime(service.UpdatedUnix),
 					dash(service.RecordKey),
 					escapeTableCell(dash(service.Error)),
-				)
+				})
 			} else {
-				out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s",
+				rows = append(rows, []string{
 					service.ID,
 					dash(service.Type),
-					service.Owner,
+					string(service.Owner),
 					scope,
 					dash(endpoint.Region),
 					address,
 					dash(service.Status),
-				)
+				})
 			}
 		}
 	}
+	writeAlignedRows(out, rows, 2)
 	if err := out.Err(); err != nil {
 		return err
 	}

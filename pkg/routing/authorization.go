@@ -18,7 +18,8 @@ type RouteEntry struct {
 	Source           zone.ZonePath
 	Prefix           netip.Prefix
 	Announcement     *RouteAnnouncementRecord
-	SharedAssignment bool // backed by an anycast/shared IPAM assignment
+	SharedAssignment bool   // backed by an anycast/shared IPAM assignment
+	AssignmentTag    string // tag of the assignment that authorized this route
 }
 
 // AssignmentEntry represents an active IPAM assignment record.
@@ -191,6 +192,7 @@ func BuildAuthorizedRouteSet(ns *zone.NetworkState, now time.Time) (*AuthorizedR
 	for _, entry := range pendingRoutes {
 		if assignment := findAssignmentForPrefix(ars, entry.Source, entry.Prefix); assignment != nil {
 			entry.SharedAssignment = assignment.Shared
+			entry.AssignmentTag = assignment.Tag
 			authorized = append(authorized, entry)
 		} else {
 			ars.addError(entry.Source, entry.Prefix, "route_unauthorized_no_assignment", "no matching assignment")

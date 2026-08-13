@@ -516,6 +516,27 @@ func TestSharedAssignmentTagRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSortIPAMAssignmentRowsUsesPrefixThenAssignedZone(t *testing.T) {
+	rows := []ipamAssignmentRow{
+		{Prefix: "2001:db8::/32", AssignedTo: "a.example."},
+		{Prefix: "10.0.0.0/8", AssignedTo: "z.example."},
+		{Prefix: "2.0.0.0/8", AssignedTo: "c.example."},
+		{Prefix: "10.0.0.0/8", AssignedTo: "a.example."},
+	}
+	sortIPAMAssignmentRows(rows)
+	want := []string{
+		"2.0.0.0/8 c.example.",
+		"10.0.0.0/8 a.example.",
+		"10.0.0.0/8 z.example.",
+		"2001:db8::/32 a.example.",
+	}
+	for i, row := range rows {
+		if got := row.Prefix + " " + row.AssignedTo; got != want[i] {
+			t.Fatalf("row %d = %q, want %q (all rows: %+v)", i, got, want[i], rows)
+		}
+	}
+}
+
 func stringSliceContains(values []string, want string) bool {
 	return slices.Contains(values, want)
 }

@@ -239,8 +239,16 @@
 .route-participant {
     display: flex;
     align-items: baseline;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 1rem;
+}
+
+.route-participant .zone-value {
+    text-align: right;
+}
+
+.routes-table .zone-column {
+    text-align: right;
 }
 
 /* ===== Responsive page layouts ===== */

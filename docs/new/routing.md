@@ -456,12 +456,14 @@ photon route ipam revoke assignment <zone> <prefix> [--to <zone>]
 photon route ipam revoke pool <zone> <prefix>
 
 # Route 管理
+photon route
 photon route announce <zone> <prefix>
 photon route withdraw <zone> <prefix>
 
 # 诊断
 photon route ipam get <addr-or-prefix>
 photon route ipam mine
+photon-admin route ipam assigned
 photon debug routing status
 photon debug routing routes
 photon debug routing routes <prefix>
@@ -472,6 +474,12 @@ photon debug routing bird route
 photon debug routing ip route
 photon debug routing reload
 ```
+
+`photon route` 的 announcement 表会显示授权它的 assignment Tag，并按规范化 IP
+prefix 排序；相同 prefix 再按 zone 排序。`photon-admin route ipam assigned` 也使用
+prefix、assigned zone 的排序优先级。Observer 的 route、IPAM 和授权错误视图采用相同顺序，
+并显示 route/assignment Tag。CLI 和 Observer 表格中的 zone 语义列统一右对齐，便于比较
+不同层级的 Zone 名称。
 
 `routing routes` 以 gossip 中的 route announcement 和 IPAM 授权记录为主，并在 daemon 在线时附带
 BIRD RIB 交叉视图；它不是 netns 的内核路由表。`routing bird route` 只查询 BIRD 中由 Babel

@@ -14,7 +14,7 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 	managed := zone.ZonePath("node-a.catofes.")
 	announced := map[zone.ZonePath]map[netip.Prefix]*routing.RouteEntry{
 		managed: {
-			netip.MustParsePrefix("10.0.1.0/24"): {},
+			netip.MustParsePrefix("10.0.1.0/24"): {AssignmentTag: "edge.cn"},
 			netip.MustParsePrefix("10.0.0.0/24"): {},
 		},
 		"node-b.catofes.": {
@@ -38,6 +38,7 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 			Prefix:     netip.MustParsePrefix("10.0.0.0/16"),
 			Source:     "catofes.",
 			AssignedTo: managed,
+			Tag:        "edge.cn",
 		}},
 		Errors: []routing.RouteAuthorizationError{{
 			Zone:   "node-b.catofes.",
@@ -63,6 +64,12 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 	if len(resp.IPAMAssignments) != 1 || resp.IPAMAssignments[0].Prefix != "10.0.0.0/16" || resp.IPAMAssignments[0].AssignedTo != string(managed) {
 		t.Fatalf("ipam assignments = %#v", resp.IPAMAssignments)
 	}
+	if resp.IPAMAssignments[0].Tag != "edge.cn" {
+		t.Fatalf("ipam assignment tag = %q, want edge.cn", resp.IPAMAssignments[0].Tag)
+	}
+	if len(resp.AuthorizedRoutes) != 3 || resp.AuthorizedRoutes[1].Prefix != "10.0.1.0/24" || resp.AuthorizedRoutes[1].Tag != "edge.cn" {
+		t.Fatalf("authorized routes = %#v", resp.AuthorizedRoutes)
+	}
 	if len(resp.Errors) != 1 || resp.Errors[0].Code != "route_unassigned" || resp.Errors[0].Prefix != "10.2.0.0/24" {
 		t.Fatalf("errors = %#v", resp.Errors)
 	}
@@ -75,7 +82,7 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, key := range []string{"local_zone", "export_set", "authorized", "assignments", "ipam_pools", "ipam_assignments", "errors"} {
+	for _, key := range []string{"local_zone", "export_set", "authorized", "authorized_routes", "assignments", "ipam_pools", "ipam_assignments", "errors"} {
 		if _, ok := decoded[key]; !ok {
 			t.Fatalf("missing JSON key %q in %s", key, raw)
 		}

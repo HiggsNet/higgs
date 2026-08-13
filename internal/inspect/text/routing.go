@@ -88,10 +88,11 @@ func writeBirdInterfaceContexts(w io.Writer, rows []inspect.BirdInterfaceContext
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
 	out.Println("  Photon interface mapping:")
-	out.Println("  INTERFACE\tZONE\tFAMILY\tLINK\tROLE")
+	tableRows := [][]string{{"  INTERFACE", "ZONE", "FAMILY", "LINK", "ROLE"}}
 	for _, row := range rows {
-		out.Linef("  %s\t%s\t%s\t%s\t%s", row.Name, dash(row.Zone), dash(row.Family), dash(row.LinkID), dash(row.RuntimeRole))
+		tableRows = append(tableRows, []string{"  " + row.Name, dash(row.Zone), dash(row.Family), dash(row.LinkID), dash(row.RuntimeRole)})
 	}
+	writeAlignedRows(out, tableRows, 1)
 	if err := out.Err(); err != nil {
 		return err
 	}
@@ -105,12 +106,13 @@ func writeBirdNeighbors(w io.Writer, rows []inspect.BirdBabelNeighbor) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
 	out.Linef("  Babel neighbors (%d):", len(rows))
-	out.Println("  ADDRESS\tINTERFACE\tZONE\tFAMILY\tMETRIC\tROUTES\tHELLOS\tEXPIRES\tAUTH\tRTT(ms)\tPROTOCOL")
+	tableRows := [][]string{{"  ADDRESS", "INTERFACE", "ZONE", "FAMILY", "METRIC", "ROUTES", "HELLOS", "EXPIRES", "AUTH", "RTT(ms)", "PROTOCOL"}}
 	for _, row := range rows {
-		out.Linef("  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
-			row.Address, row.Interface, dash(row.Zone), dash(row.Family), row.Metric, row.Routes, row.Hellos,
-			row.Expires, row.Auth, row.RTT, dash(row.Protocol))
+		tableRows = append(tableRows, []string{
+			"  " + row.Address, row.Interface, dash(row.Zone), dash(row.Family), row.Metric, row.Routes, row.Hellos,
+			row.Expires, row.Auth, row.RTT, dash(row.Protocol)})
 	}
+	writeAlignedRows(out, tableRows, 2)
 	if err := out.Err(); err != nil {
 		return err
 	}
@@ -124,12 +126,13 @@ func writeBirdBabelRoutes(w io.Writer, rows []inspect.BirdBabelRoute) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
 	out.Linef("  Babel routes (%d):", len(rows))
-	out.Println("  PREFIX\tNEXTHOP\tINTERFACE\tZONE\tFAMILY\tMETRIC\tFLAG\tSEQNO\tEXPIRES\tPROTOCOL")
+	tableRows := [][]string{{"  PREFIX", "NEXTHOP", "INTERFACE", "ZONE", "FAMILY", "METRIC", "FLAG", "SEQNO", "EXPIRES", "PROTOCOL"}}
 	for _, row := range rows {
-		out.Linef("  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
-			row.Prefix, row.Nexthop, row.Interface, dash(row.Zone), dash(row.Family), row.Metric,
-			dash(row.Flag), row.Seqno, row.Expires, dash(row.Protocol))
+		tableRows = append(tableRows, []string{
+			"  " + row.Prefix, row.Nexthop, row.Interface, dash(row.Zone), dash(row.Family), row.Metric,
+			dash(row.Flag), row.Seqno, row.Expires, dash(row.Protocol)})
 	}
+	writeAlignedRows(out, tableRows, 3)
 	if err := out.Err(); err != nil {
 		return err
 	}
@@ -143,12 +146,13 @@ func writeBirdBabelEntries(w io.Writer, rows []inspect.BirdBabelEntry) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
 	out.Linef("  Babel entries (%d):", len(rows))
-	out.Println("  PREFIX\tROUTER ID\tMETRIC\tSEQNO\tROUTES\tSOURCES\tSELECTED INTERFACE\tZONE\tFAMILY\tPROTOCOL")
+	tableRows := [][]string{{"  PREFIX", "ROUTER ID", "METRIC", "SEQNO", "ROUTES", "SOURCES", "SELECTED INTERFACE", "ZONE", "FAMILY", "PROTOCOL"}}
 	for _, row := range rows {
-		out.Linef("  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
-			row.Prefix, row.RouterID, row.Metric, row.Seqno, row.Routes, row.Sources,
-			dash(row.Interface), dash(row.Zone), dash(row.Family), dash(row.Protocol))
+		tableRows = append(tableRows, []string{
+			"  " + row.Prefix, row.RouterID, row.Metric, row.Seqno, row.Routes, row.Sources,
+			dash(row.Interface), dash(row.Zone), dash(row.Family), dash(row.Protocol)})
 	}
+	writeAlignedRows(out, tableRows, 7)
 	if err := out.Err(); err != nil {
 		return err
 	}

@@ -28,11 +28,11 @@ func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbo
 	}
 	out.Linef("Link health (%d links):", len(targets))
 	if !verbose {
-		out.Println("PEER\tROLE\tFAMILY\tHEALTH\tLOSS\tRTT\tJITTER\tCUTOVER")
+		rows := [][]string{{"PEER", "ROLE", "FAMILY", "HEALTH", "LOSS", "RTT", "JITTER", "CUTOVER"}}
 		for _, t := range targets {
 			probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
 			live, hasLive := liveByProbe[probeID]
-			out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			rows = append(rows, []string{
 				dash(t.PeerZone),
 				firstNonEmpty(t.ProbeRole, "active"),
 				dash(t.UnderlayFamily),
@@ -41,18 +41,19 @@ func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbo
 				healthPrimaryRTT(live, hasLive),
 				healthMillis(live.JitterMs, hasLive),
 				healthCutover(live, hasLive, t.Staged || t.ProbeRole == "staged"),
-			)
+			})
 		}
+		writeAlignedRows(out, rows, 0)
 		if err := out.Err(); err != nil {
 			return err
 		}
 		return table.Flush()
 	}
-	out.Println("LINK\tPROBE ID\tPEER\tOVERLAY\tROLE\tFAMILY\tINTERFACE\tLOCAL->PEER\tLINK STATE\tHEALTH\tPROBE\tPACKETS\tLOSS\tRTT (LAST/EWMA/P50/P95/P99)\tJITTER\tFAILS\tCUTOVER\tERROR")
+	rows := [][]string{{"LINK", "PROBE ID", "PEER", "OVERLAY", "ROLE", "FAMILY", "INTERFACE", "LOCAL->PEER", "LINK STATE", "HEALTH", "PROBE", "PACKETS", "LOSS", "RTT (LAST/EWMA/P50/P95/P99)", "JITTER", "FAILS", "CUTOVER", "ERROR"}}
 	for _, t := range targets {
 		probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
 		live, hasLive := liveByProbe[probeID]
-		out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+		rows = append(rows, []string{
 			t.InstanceID,
 			probeID,
 			dash(t.PeerZone),
@@ -71,8 +72,9 @@ func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbo
 			healthFailures(live, hasLive),
 			healthCutover(live, hasLive, t.Staged || t.ProbeRole == "staged"),
 			escapeTableCell(dash(live.LastError)),
-		)
+		})
 	}
+	writeAlignedRows(out, rows, 2)
 	if err := out.Err(); err != nil {
 		return err
 	}

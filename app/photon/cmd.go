@@ -703,7 +703,7 @@ func cmdRoute() *cli.Command {
 		Usage:     "Show and manage routes and IPAM",
 		UsageText: "photon route [--filter text] [--all] [--verbose]",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show routes matching prefix, zone, state, controller, or authorization"},
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show routes matching prefix, zone, tag, state, controller, or authorization"},
 			&cli.BoolFlag{Name: "all", Usage: "Include withdrawn announcements"},
 			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show controller, authorization, version, and record key"},
 		},
@@ -719,7 +719,7 @@ func cmdRoute() *cli.Command {
 				Usage:     "Show route announcements",
 				UsageText: "photon route show [--filter text] [--all] [--verbose]",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show routes matching prefix, zone, state, controller, or authorization"},
+					&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show routes matching prefix, zone, tag, state, controller, or authorization"},
 					&cli.BoolFlag{Name: "all", Usage: "Include withdrawn announcements"},
 					&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show controller, authorization, version, and record key"},
 				},

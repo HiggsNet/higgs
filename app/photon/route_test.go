@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/netip"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -231,12 +232,30 @@ func TestBuildRouteShowReportListsActiveAndAllAnnouncements(t *testing.T) {
 	}
 }
 
+func TestBuildRouteShowReportIncludesAssignmentTag(t *testing.T) {
+	rt, managed := buildIPAMTestRuntime(t)
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.4.0/24", managed, true, "edge.cn"); err != nil {
+		t.Fatalf("assign tagged IPAM prefix: %v", err)
+	}
+	if err := mutateRouteWithRuntime(rt, managed, "10.0.4.0/24", true); err != nil {
+		t.Fatalf("announce tagged route: %v", err)
+	}
+
+	report, err := buildRouteShowReport(rt, managed, false)
+	if err != nil {
+		t.Fatalf("buildRouteShowReport: %v", err)
+	}
+	if len(report.Announcements) != 1 || report.Announcements[0].Tag != "edge.cn" {
+		t.Fatalf("announcements = %+v, want tag edge.cn", report.Announcements)
+	}
+}
+
 func TestPrintRouteShowReportUsesFilteredVerboseTable(t *testing.T) {
 	report := &routeShowReport{
 		ManagedZone: "node-a.catofes.",
 		Announcements: []routeShowRow{
 			{
-				Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Active: true,
+				Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Tag: "edge.cn", Active: true,
 				Authorized: true, Controller: "service", Version: 2,
 				Key: "routes/announcements/10.0.1.0_24",
 			},
@@ -249,8 +268,8 @@ func TestPrintRouteShowReportUsesFilteredVerboseTable(t *testing.T) {
 	}
 	for _, want := range []string{
 		"announcements: 1/2",
-		"PREFIX", "ZONE", "STATE", "AUTHORIZATION", "CONTROLLER", "VERSION", "RECORD",
-		"10.0.1.0/24", "node-a.catofes.", "active", "authorized", "service",
+		"PREFIX", "ZONE", "TAG", "STATE", "AUTHORIZATION", "CONTROLLER", "VERSION", "RECORD",
+		"10.0.1.0/24", "node-a.catofes.", "edge.cn", "active", "authorized", "service",
 		"routes/announcements/10.0.1.0_24",
 	} {
 		if !strings.Contains(output.String(), want) {
@@ -259,6 +278,27 @@ func TestPrintRouteShowReportUsesFilteredVerboseTable(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "node-b.catofes.") {
 		t.Fatalf("filter leaked node-b:\n%s", output.String())
+	}
+}
+
+func TestSortRouteShowRowsUsesPrefixBeforeZone(t *testing.T) {
+	rows := []routeShowRow{
+		{Zone: "a.example.", Prefix: "2001:db8:2::/64", Key: "z"},
+		{Zone: "z.example.", Prefix: "10.0.0.0/8", Key: "z"},
+		{Zone: "c.example.", Prefix: "2.0.0.0/8", Key: "z"},
+		{Zone: "b.example.", Prefix: "2001:db8:1::/64", Key: "z"},
+		{Zone: "a.example.", Prefix: "10.0.0.0/8", Key: "a"},
+	}
+	sortRouteShowRows(rows)
+	want := []routeShowRow{
+		{Zone: "c.example.", Prefix: "2.0.0.0/8", Key: "z"},
+		{Zone: "a.example.", Prefix: "10.0.0.0/8", Key: "a"},
+		{Zone: "z.example.", Prefix: "10.0.0.0/8", Key: "z"},
+		{Zone: "b.example.", Prefix: "2001:db8:1::/64", Key: "z"},
+		{Zone: "a.example.", Prefix: "2001:db8:2::/64", Key: "z"},
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("rows = %+v, want prefix-first %+v", rows, want)
 	}
 }
 
@@ -288,6 +328,35 @@ func TestPrintRouteShowReportSeparatesAndGroupsSharedAnnouncements(t *testing.T)
 	}
 	if count := strings.Count(got, "10.0.9.0/24"); count != 1 {
 		t.Fatalf("shared prefix rendered %d times, want once:\n%s", count, got)
+	}
+}
+
+func TestPrintRouteShowReportRightAlignsZoneColumn(t *testing.T) {
+	report := &routeShowReport{
+		Announcements: []routeShowRow{
+			{Zone: ".", Prefix: "10.0.0.0/8", Active: true, Authorized: true},
+			{Zone: "node-a.catofes.", Prefix: "10.1.0.0/16", Active: true, Authorized: true},
+		},
+	}
+	var output bytes.Buffer
+	if err := printRouteShowReport(&output, report, false, "", false); err != nil {
+		t.Fatalf("printRouteShowReport: %v", err)
+	}
+	lines := strings.Split(output.String(), "\n")
+	var shortLine, longLine string
+	for _, line := range lines {
+		switch {
+		case strings.Contains(line, "10.0.0.0/8"):
+			shortLine = line
+		case strings.Contains(line, "10.1.0.0/16"):
+			longLine = line
+		}
+	}
+	shortEnd := strings.LastIndex(shortLine, ".") + 1
+	longStart := strings.Index(longLine, "node-a.catofes.")
+	longEnd := longStart + len("node-a.catofes.")
+	if shortLine == "" || longLine == "" || shortEnd != longEnd {
+		t.Fatalf("ZONE cells are not right-aligned (ends %d/%d):\n%s", shortEnd, longEnd, output.String())
 	}
 }
 

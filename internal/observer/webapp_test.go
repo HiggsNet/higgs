@@ -208,6 +208,10 @@ func TestRoutesPageGroupsSharedPrefixesAndParticipants(t *testing.T) {
 		"Non-shared IPAM Assignments",
 		"Shared IPAM Assignments",
 		"Participating Nodes",
+		"authorized_routes",
+		"comparePrefixes",
+		"<th>Tag</th>",
+		"zone-column",
 	} {
 		if !strings.Contains(body, token) {
 			t.Errorf("routes page missing grouped shared-route token %q", token)

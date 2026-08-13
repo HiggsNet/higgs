@@ -22,14 +22,15 @@ func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, v
 		len(inspect.FilterLinkSkips(inspection.Skipped, filter)),
 	)
 	out.LineIf(inspection.Summary.LastError != "", "last_error: %s", escapeTableCell(inspection.Summary.LastError))
+	rows := make([][]string, 0, len(links)+1)
 	if verbose {
-		out.Println("LINK\tPEER\tGROUP\tPATH\tTRANSPORT\tSTATE\tENDPOINT\tINTERFACE\tTUNNEL\tSA\tHEALTH\tROTATION\tROUTING\tOWNER\tERROR")
+		rows = append(rows, []string{"LINK", "PEER", "GROUP", "PATH", "TRANSPORT", "STATE", "ENDPOINT", "INTERFACE", "TUNNEL", "SA", "HEALTH", "ROTATION", "ROUTING", "OWNER", "ERROR"})
 	} else {
-		out.Println("LINK\tPEER\tTRANSPORT\tSTATE\tENDPOINT\tINTERFACE")
+		rows = append(rows, []string{"LINK", "PEER", "TRANSPORT", "STATE", "ENDPOINT", "INTERFACE"})
 	}
 	for _, link := range links {
 		if verbose {
-			out.Linef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			rows = append(rows, []string{
 				link.ID,
 				link.PeerZone,
 				dash(link.GroupID),
@@ -45,18 +46,19 @@ func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, v
 				dash(link.Routing.BirdState),
 				dash(link.Owner.Manager),
 				escapeTableCell(link.LastError),
-			)
+			})
 		} else {
-			out.Linef("%s\t%s\t%s\t%s\t%s\t%s",
+			rows = append(rows, []string{
 				link.ID,
 				link.PeerZone,
 				dash(link.TransportKind),
 				linkDisplayState(link),
 				dash(link.Endpoint),
 				formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID),
-			)
+			})
 		}
 	}
+	writeAlignedRows(out, rows, 1)
 	if err := out.Err(); err != nil {
 		return err
 	}

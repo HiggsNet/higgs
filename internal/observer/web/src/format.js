@@ -62,6 +62,32 @@ export function compareZones(a, b) {
     return 0;
 }
 
+export function comparePrefixes(a, b) {
+    const parse = value => {
+        const [address = '', bits = ''] = String(value || '').split('/');
+        if (address.includes(':')) {
+            const halves = address.split('::');
+            const left = halves[0] ? halves[0].split(':').filter(Boolean) : [];
+            const right = halves.length > 1 && halves[1] ? halves[1].split(':').filter(Boolean) : [];
+            if (halves.length > 2 || left.length + right.length > 8) return null;
+            const words = [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
+            if (words.length !== 8 || words.some(word => !/^[0-9a-f]{1,4}$/i.test(word))) return null;
+            return { family: 6, bytes: words.map(word => Number.parseInt(word, 16)), bits: Number(bits) };
+        }
+        const octets = address.split('.').map(Number);
+        if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return null;
+        return { family: 4, bytes: octets, bits: Number(bits) };
+    };
+    const pa = parse(a);
+    const pb = parse(b);
+    if (!pa || !pb) return String(a || '').localeCompare(String(b || ''));
+    if (pa.family !== pb.family) return pa.family - pb.family;
+    for (let i = 0; i < pa.bytes.length; i++) {
+        if (pa.bytes[i] !== pb.bytes[i]) return pa.bytes[i] - pb.bytes[i];
+    }
+    return pa.bits - pb.bits;
+}
+
 export function shortHash(s, n = 12) {
     if (!s) return '-';
     return s.length > n ? `${s.substring(0, n)}…` : s;

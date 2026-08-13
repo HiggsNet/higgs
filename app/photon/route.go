@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 )
@@ -32,6 +33,7 @@ type routeShowReport struct {
 type routeShowRow struct {
 	Zone       string `json:"zone"`
 	Prefix     string `json:"prefix"`
+	Tag        string `json:"tag,omitempty"`
 	Shared     bool   `json:"shared,omitempty"`
 	Active     bool   `json:"active"`
 	Controller string `json:"controller,omitempty"`
@@ -172,6 +174,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 	}
 	authorized := map[string]map[string]struct{}{}
 	sharedRoutes := map[string]map[string]struct{}{}
+	routeTags := map[string]map[string]string{}
 	ars, arsErr := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if arsErr == nil && ars != nil {
 		for z, prefixes := range ars.Announced {
@@ -182,10 +185,16 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 			if sharedRoutes[key] == nil {
 				sharedRoutes[key] = map[string]struct{}{}
 			}
+			if routeTags[key] == nil {
+				routeTags[key] = map[string]string{}
+			}
 			for prefix, entry := range prefixes {
 				authorized[key][prefix.String()] = struct{}{}
-				if entry != nil && entry.SharedAssignment {
-					sharedRoutes[key][prefix.String()] = struct{}{}
+				if entry != nil {
+					routeTags[key][prefix.String()] = entry.AssignmentTag
+					if entry.SharedAssignment {
+						sharedRoutes[key][prefix.String()] = struct{}{}
+					}
 				}
 			}
 		}
@@ -233,6 +242,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 			report.Announcements = append(report.Announcements, routeShowRow{
 				Zone:       string(path),
 				Prefix:     prefix,
+				Tag:        routeTags[string(path)][prefix],
 				Shared:     isShared,
 				Active:     ann.Active,
 				Controller: ann.Controller,
@@ -242,18 +252,22 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 			})
 		}
 	}
-	sort.Slice(report.Announcements, func(i, j int) bool {
-		a := report.Announcements[i]
-		b := report.Announcements[j]
-		if a.Zone != b.Zone {
-			return inspect.ZonePathLess(a.Zone, b.Zone)
-		}
+	sortRouteShowRows(report.Announcements)
+	return report, nil
+}
+
+func sortRouteShowRows(rows []routeShowRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		a := rows[i]
+		b := rows[j]
 		if cmp := comparePrefixStrings(a.Prefix, b.Prefix); cmp != 0 {
 			return cmp < 0
 		}
+		if a.Zone != b.Zone {
+			return inspect.ZonePathLess(a.Zone, b.Zone)
+		}
 		return a.Key < b.Key
 	})
-	return report, nil
 }
 
 func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool, filter string, verbose bool) error {
@@ -278,6 +292,7 @@ func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool,
 		searchable := strings.Join([]string{
 			row.Prefix,
 			row.Zone,
+			row.Tag,
 			state,
 			row.Controller,
 			authorization,
@@ -307,9 +322,8 @@ func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool,
 	}
 
 	fmt.Fprintf(table, "non_shared_announcements: %d\n", len(nonSharedRows))
-	printRouteShowHeader(table, verbose)
-	for _, row := range nonSharedRows {
-		printRouteShowRow(table, row.Prefix, row, verbose)
+	if err := printRouteShowRows(table, nonSharedRows, verbose, false); err != nil {
+		return err
 	}
 
 	sort.SliceStable(sharedRows, func(i, j int) bool {
@@ -330,15 +344,8 @@ func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool,
 		}
 	}
 	fmt.Fprintf(table, "shared_announcements: %d (%d prefixes)\n", len(sharedRows), sharedPrefixes)
-	printRouteShowHeader(table, verbose)
-	lastPrefix = ""
-	for _, row := range sharedRows {
-		displayPrefix := ""
-		if row.Prefix != lastPrefix {
-			displayPrefix = row.Prefix
-			lastPrefix = row.Prefix
-		}
-		printRouteShowRow(table, displayPrefix, row, verbose)
+	if err := printRouteShowRows(table, sharedRows, verbose, true); err != nil {
+		return err
 	}
 	if len(rows) == 0 && !includeAll {
 		fmt.Fprintln(table, "hint: use --all to include withdrawn announcements")
@@ -346,15 +353,14 @@ func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool,
 	return table.Flush()
 }
 
-func printRouteShowHeader(w io.Writer, verbose bool) {
+func routeShowHeader(verbose bool) []string {
 	if verbose {
-		fmt.Fprintln(w, "PREFIX\tZONE\tSTATE\tAUTHORIZATION\tCONTROLLER\tVERSION\tRECORD")
-	} else {
-		fmt.Fprintln(w, "PREFIX\tZONE\tSTATE\tAUTHORIZATION")
+		return []string{"PREFIX", "ZONE", "TAG", "STATE", "AUTHORIZATION", "CONTROLLER", "VERSION", "RECORD"}
 	}
+	return []string{"PREFIX", "ZONE", "TAG", "STATE", "AUTHORIZATION"}
 }
 
-func printRouteShowRow(w io.Writer, prefix string, row routeShowRow, verbose bool) {
+func routeShowCells(prefix string, row routeShowRow, verbose bool) []string {
 	state := "active"
 	if !row.Active {
 		state = "withdrawn"
@@ -368,11 +374,26 @@ func printRouteShowRow(w io.Writer, prefix string, row routeShowRow, verbose boo
 		controller = row.Controller
 	}
 	if verbose {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
-			prefix, row.Zone, state, authorized, controller, row.Version, row.Key)
-	} else {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", prefix, row.Zone, state, authorized)
+		return []string{prefix, row.Zone, dash(row.Tag), state, authorized, controller, fmt.Sprint(row.Version), row.Key}
 	}
+	return []string{prefix, row.Zone, dash(row.Tag), state, authorized}
+}
+
+func printRouteShowRows(w io.Writer, routeRows []routeShowRow, verbose, groupPrefix bool) error {
+	rows := [][]string{routeShowHeader(verbose)}
+	lastPrefix := ""
+	for _, row := range routeRows {
+		prefix := row.Prefix
+		if groupPrefix {
+			if prefix == lastPrefix {
+				prefix = ""
+			} else {
+				lastPrefix = prefix
+			}
+		}
+		rows = append(rows, routeShowCells(prefix, row, verbose))
+	}
+	return inspecttext.WriteAlignedRows(w, rows, 1)
 }
 
 func routeUsesSharedAssignment(ars *routing.AuthorizedRouteSet, path zone.ZonePath, prefix string) bool {

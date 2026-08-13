@@ -97,7 +97,7 @@ func TestBasicAnnouncementSameZone(t *testing.T) {
 		mkRecord("pek.catofes.", mustKeyPool("10.0.1.0/24"), RecordTypeIPAMPool,
 			mustJSON(IPAMPoolRecord{Version: 1, Prefix: "10.0.1.0/24", DelegatedTo: "pek.catofes.", Active: true})),
 		mkRecord("pek.catofes.", mustKeyAssignment("10.0.1.0/24"), RecordTypeIPAMAssignment,
-			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "pek.catofes.", Active: true})),
+			mustJSON(IPAMAssignmentRecord{Version: 1, Prefix: "10.0.1.0/24", AssignedTo: "pek.catofes.", Active: true, Shared: true, Tag: "edge.cn"})),
 		mkRecord("pek.catofes.", mustKeyRoute("10.0.1.0/24"), RecordTypeRouteAnnouncement,
 			mustJSON(RouteAnnouncementRecord{Version: 1, Prefix: "10.0.1.0/24", Active: true})),
 	)
@@ -112,8 +112,12 @@ func TestBasicAnnouncementSameZone(t *testing.T) {
 	if ars.Announced["pek.catofes."] == nil {
 		t.Fatalf("expected announcements for pek.catofes.")
 	}
-	if ars.Announced["pek.catofes."][netip.MustParsePrefix("10.0.1.0/24")] == nil {
+	entry := ars.Announced["pek.catofes."][netip.MustParsePrefix("10.0.1.0/24")]
+	if entry == nil {
 		t.Fatalf("expected 10.0.1.0/24 to be authorized")
+	}
+	if entry.AssignmentTag != "edge.cn" {
+		t.Fatalf("assignment tag = %q, want edge.cn", entry.AssignmentTag)
 	}
 }
 
