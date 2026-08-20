@@ -21,6 +21,7 @@ func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {
 			ID:              "link-1",
 			PeerZone:        "node-b.catofes.",
 			GroupID:         "blue",
+			IKEName:         "ipsec-link-1-r13",
 			State:           "up",
 			ActualState:     "up",
 			Endpoint:        "198.51.100.10:4500",
@@ -48,7 +49,7 @@ func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {
 	}
 	instances := decoded["instances"].([]any)
 	link := instances[0].(map[string]any)
-	if link["peer_zone"] != "node-b.catofes." || link["xfrm_if_id"] != float64(42) {
+	if link["peer_zone"] != "node-b.catofes." || link["ike_name"] != "ipsec-link-1-r13" || link["xfrm_if_id"] != float64(42) {
 		t.Fatalf("link fields missing: %#v", link)
 	}
 	if link["raw"] == nil {

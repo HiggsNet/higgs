@@ -58,6 +58,7 @@ type LinkView struct {
 	LinkID          string
 	PathKey         string
 	TransportID     string
+	IKEName         string
 	State           string
 	ActualState     string
 	Endpoint        string
@@ -350,6 +351,7 @@ func linkMatchesFilter(link LinkView, filter string) bool {
 		link.LinkID,
 		link.PathKey,
 		link.TransportID,
+		link.IKEName,
 		link.Endpoint,
 		link.InterfaceName,
 		link.ChildSAName,
@@ -493,6 +495,7 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 		LinkID:          inst.LinkID,
 		PathKey:         inst.PathKey,
 		TransportID:     inst.TransportID,
+		IKEName:         inst.IKEName,
 		State:           firstNonEmpty(inst.ActualState, "unknown"),
 		ActualState:     inst.ActualState,
 		Endpoint:        firstNonEmpty(inst.Endpoint, desired.Endpoint),

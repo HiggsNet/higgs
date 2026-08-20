@@ -18,6 +18,7 @@ type LinkJSON struct {
 	GroupID         string               `json:"group_id,omitempty"`
 	TransportKind   string               `json:"transport_kind,omitempty"`
 	TransportID     string               `json:"transport_id,omitempty"`
+	IKEName         string               `json:"ike_name,omitempty"`
 	State           string               `json:"state,omitempty"`
 	ActualState     string               `json:"actual_state,omitempty"`
 	Endpoint        string               `json:"endpoint,omitempty"`
@@ -61,6 +62,7 @@ func LinkFromInspect(link inspect.LinkView) LinkJSON {
 		GroupID:         link.GroupID,
 		TransportKind:   link.TransportKind,
 		TransportID:     link.TransportID,
+		IKEName:         link.IKEName,
 		State:           link.State,
 		ActualState:     link.ActualState,
 		Endpoint:        link.Endpoint,

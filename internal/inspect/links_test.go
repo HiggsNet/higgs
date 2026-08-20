@@ -97,6 +97,9 @@ func TestBuildLinksMatchesRotatedRuntimeSAByIKEName(t *testing.T) {
 	if got.Links[0].ActualSA == nil || got.Links[0].ActualSA.Name != "ipsec-base-r2" {
 		t.Fatalf("actual sa = %+v, want rotated runtime SA", got.Links[0].ActualSA)
 	}
+	if got.Links[0].IKEName != "ipsec-base-r2" {
+		t.Fatalf("ike name = %q, want rotated runtime name", got.Links[0].IKEName)
+	}
 }
 
 func TestBuildLinksSortsByPeerZoneDescendingBeforeLinkID(t *testing.T) {

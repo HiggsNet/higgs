@@ -147,7 +147,8 @@ func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 		GroupID:         "ipsec-main",
 		LinkID:          "link-1",
 		PathKey:         "family:ipv4",
-		TransportID:     "ipsec-526e55bae2e1",
+		TransportID:     "ipsec-526e55bae2e1-r12",
+		IKEName:         "ipsec-f46fb3d71fe8-r13",
 		DesiredSpecHash: "actual-hash",
 		ActualState:     "up",
 		Endpoint:        "123.57.143.66:30002",
@@ -173,7 +174,7 @@ func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 	}
 	output := out.String()
 	for _, want := range []string{
-		"    runtime_id: ipsec-526e55bae2e1",
+		"    runtime_id: ipsec-f46fb3d71fe8-r13",
 		"    endpoint: 123.57.143.66:30002",
 		"    interface: phx1be3f390(467923856)",
 		"    local_tunnel: fe80::old-local%phx1be3f390 netns=photontesth2",

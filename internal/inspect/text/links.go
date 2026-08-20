@@ -172,7 +172,7 @@ func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.
 	out.Linef("  planner:")
 	out.Linef("    link_id: %s", dash(firstNonEmpty(link.LinkID, desired.LinkID)))
 	out.Linef("    path_key: %s", dash(firstNonEmpty(link.PathKey, desired.PathKey)))
-	out.Linef("    runtime_id: %s", dash(firstNonEmpty(link.TransportID, desired.TransportID)))
+	out.Linef("    runtime_id: %s", dash(firstNonEmpty(link.IKEName, link.TransportID, desired.TransportID)))
 	out.Linef("    desired_hash: %s", dash(shortTextHash(desired.DesiredSpecHash)))
 	out.Linef("    actual_hash: %s", dash(shortTextHash(link.DesiredSpecHash)))
 	out.Linef("    endpoint: %s", dash(link.Endpoint))

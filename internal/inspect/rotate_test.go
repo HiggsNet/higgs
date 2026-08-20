@@ -95,8 +95,9 @@ func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
 	link := LinkView{
 		ID:              "link-1",
 		LinkID:          "link-1",
-		TransportID:     "ipsec-526e55bae2e1",
-		ChildSAName:     "ipsec-526e55bae2e1-child",
+		TransportID:     "ipsec-526e55bae2e1-r12",
+		IKEName:         "ipsec-f46fb3d71fe8-r13",
+		ChildSAName:     "ipsec-f46fb3d71fe8-r13-child",
 		InterfaceName:   "phx1be3f390",
 		XFRMIfID:        467923856,
 		Endpoint:        "123.57.143.66:30002",
@@ -119,6 +120,9 @@ func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
 	}
 
 	got := RotateRuntimeCurrent(link, spec)
+	if got.RuntimeID != link.IKEName {
+		t.Fatalf("current runtime id = %q, want active IKE name %q", got.RuntimeID, link.IKEName)
+	}
 	if got.Port != "30002" || got.Endpoint != "123.57.143.66:30002" {
 		t.Fatalf("current endpoint/port = %q/%q, want active runtime 123.57.143.66:30002/30002", got.Endpoint, got.Port)
 	}

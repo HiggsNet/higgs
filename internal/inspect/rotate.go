@@ -121,7 +121,7 @@ func RotateRuntimeCurrent(link LinkView, spec *ipsec.TransportLinkSpec) RotateRu
 		State:           "expected_current",
 		Generation:      link.Rotation.RemoteGeneration,
 		Port:            DebugEndpointPort(link.Endpoint),
-		RuntimeID:       link.TransportID,
+		RuntimeID:       firstNonEmpty(link.IKEName, link.TransportID),
 		ChildSAName:     link.ChildSAName,
 		InterfaceName:   link.InterfaceName,
 		XFRMIfID:        link.XFRMIfID,
@@ -211,6 +211,7 @@ func RotateSAMatchesLink(link LinkView, sa LinkSA) bool {
 		return true
 	}
 	return nonEmptyMatches(link.ID, sa.Name, sa.ChildSA) ||
+		nonEmptyMatches(link.IKEName, sa.Name, sa.ChildSA) ||
 		nonEmptyMatches(link.TransportID, sa.Name, sa.ChildSA) ||
 		nonEmptyMatches(link.ChildSAName, sa.Name, sa.ChildSA) ||
 		nonEmptyMatches(link.Rotation.StagedIKEName, sa.Name, sa.ChildSA) ||
