@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -31,6 +32,12 @@ routing:
       metric_base: 150
       metric_staged: 250
       metric_draining: 550
+      rtt_cost: 80
+      rtt_min: 5ms
+      rtt_max: 450ms
+      rtt_decay: 9
+      hello_interval: 2s
+      update_interval: 20s
       ecmp: false
       ecmp_limit: 8
       interface_pattern: phx*
@@ -81,6 +88,12 @@ routing:
 	}
 	if inst.MetricDraining != 550 {
 		t.Fatalf("inst.MetricDraining = %d, want 550", inst.MetricDraining)
+	}
+	if inst.RTTCost != 80 || inst.RTTMin != 5*time.Millisecond || inst.RTTMax != 450*time.Millisecond || inst.RTTDecay != 9 {
+		t.Fatalf("inst RTT tuning = cost %d min %s max %s decay %d", inst.RTTCost, inst.RTTMin, inst.RTTMax, inst.RTTDecay)
+	}
+	if inst.HelloInterval != 2*time.Second || inst.UpdateInterval != 20*time.Second {
+		t.Fatalf("inst Babel intervals = hello %s update %s", inst.HelloInterval, inst.UpdateInterval)
 	}
 	if inst.ECMP {
 		t.Fatalf("inst.ECMP = true, want false")
@@ -154,6 +167,12 @@ routing:
 	if inst.MetricDraining != 500 {
 		t.Fatalf("inst.MetricDraining = %d, want 500", inst.MetricDraining)
 	}
+	if inst.RTTCost != bird.DefaultBabelRTTCost || inst.RTTMin != bird.DefaultBabelRTTMin || inst.RTTMax != bird.DefaultBabelRTTMax || inst.RTTDecay != bird.DefaultBabelRTTDecay {
+		t.Fatalf("inst default RTT tuning = cost %d min %s max %s decay %d", inst.RTTCost, inst.RTTMin, inst.RTTMax, inst.RTTDecay)
+	}
+	if inst.HelloInterval != bird.DefaultBabelHelloInterval || inst.UpdateInterval != bird.DefaultBabelUpdateInterval {
+		t.Fatalf("inst default Babel intervals = hello %s update %s", inst.HelloInterval, inst.UpdateInterval)
+	}
 	if !inst.ECMP {
 		t.Fatalf("inst.ECMP = false, want true")
 	}
@@ -181,6 +200,37 @@ routing:
 `
 	if err := parseConfigYAML(input, config); err == nil {
 		t.Fatal("parseConfigYAML should reject unsupported routing.instances[].shutdown_policy")
+	}
+}
+
+func TestParseConfigYAMLRoutingInstancesRejectsInvalidBabelTuning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config string
+	}{
+		{name: "RTT cost too large", config: "rtt_cost: 65535"},
+		{name: "RTT max before min", config: "rtt_min: 20ms\n      rtt_max: 10ms"},
+		{name: "RTT decay too large", config: "rtt_decay: 257"},
+		{name: "sub-millisecond interval", config: "hello_interval: 500us"},
+		{name: "negative update interval", config: "update_interval: -1s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := defaultAppConfig()
+			input := `
+netns:
+  default:
+    kind: name
+    name: photontesth2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: photontesth2
+      ` + tc.config + "\n"
+			if err := parseConfigYAML(input, config); err == nil {
+				t.Fatalf("parseConfigYAML should reject:\n%s", input)
+			}
+		})
 	}
 }
 

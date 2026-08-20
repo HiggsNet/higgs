@@ -263,6 +263,12 @@ routing:
       metric_base: 100
       metric_staged: 200
       metric_draining: 500
+      rtt_cost: 64
+      rtt_min: 10ms
+      rtt_max: 500ms
+      rtt_decay: 12
+      hello_interval: 4s
+      update_interval: 16s
       interface_pattern: phx*
 ```
 
@@ -275,6 +281,12 @@ routing:
 - `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Photon 启动和配置，但默认不会随 Photon daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
 - `table`：BIRD 主路由表名。
 - `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，分别用于正常、staged rotate、draining 状态。
+- `rtt_cost`：tunnel 接口的最大 RTT 附加 cost，默认 `64`。RTT 仍参与选路，但相较 BIRD tunnel 的原生默认值 `96` 更不容易压过基础 cost；必须小于 `65535`。
+- `rtt_min` / `rtt_max`：RTT 附加 cost 的线性区间，默认 `10ms` / `500ms`。低于 min 不加 cost，高于 max 使用完整 `rtt_cost`。
+- `rtt_decay`：BIRD RTT 指数移动平均的衰减因子，范围 `1..256`，默认 `12`；数值越小，保留历史越久、对短时抖动越不敏感。
+- `hello_interval`：Babel Hello 周期，默认 `4s`，同时影响邻居故障检测速度。
+- `update_interval`：周期性全量路由更新间隔，默认 `16s`；Babel 的 triggered update 不受它限制。
+- 上述时长字段接受 Go duration 格式，精度至少为 `1ms` 且必须为整毫秒；RTT 参数只用于 `type tunnel` 接口，upstream veth 仅使用 Hello/Update 间隔。
 - `interface_pattern`：匹配本 instance 内 XFRM tunnel interface 的模式，默认 `phx*`。
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
 - `upstream` 可让 Photon 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。

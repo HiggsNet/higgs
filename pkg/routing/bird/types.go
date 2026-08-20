@@ -89,6 +89,17 @@ type BirdInstanceSpec struct {
 	MetricStaged   uint `yaml:"metric_staged" json:"metric_staged"`
 	MetricDraining uint `yaml:"metric_draining" json:"metric_draining"`
 
+	// Babel tunnel quality tuning. RTT samples are smoothed before their
+	// bounded cost is added to the nominal receive cost. The Hello interval
+	// also controls neighbor failure detection; the Update interval controls
+	// periodic full route dumps, not triggered updates.
+	BabelRTTCost        uint          `yaml:"babel_rtt_cost,omitempty" json:"babel_rtt_cost,omitempty"`
+	BabelRTTMin         time.Duration `yaml:"babel_rtt_min,omitempty" json:"babel_rtt_min,omitempty"`
+	BabelRTTMax         time.Duration `yaml:"babel_rtt_max,omitempty" json:"babel_rtt_max,omitempty"`
+	BabelRTTDecay       uint          `yaml:"babel_rtt_decay,omitempty" json:"babel_rtt_decay,omitempty"`
+	BabelHelloInterval  time.Duration `yaml:"babel_hello_interval,omitempty" json:"babel_hello_interval,omitempty"`
+	BabelUpdateInterval time.Duration `yaml:"babel_update_interval,omitempty" json:"babel_update_interval,omitempty"`
+
 	// InterfacePolicies override the metric for concrete runtime interfaces.
 	// They are rendered before the catch-all interface patterns because BIRD
 	// applies the first matching interface definition.
@@ -243,6 +254,12 @@ type BabelProtocolBlock struct {
 	MetricBase       uint
 	MetricStaged     uint
 	MetricDraining   uint
+	RTTCost          uint
+	RTTMin           time.Duration
+	RTTMax           time.Duration
+	RTTDecay         uint
+	HelloInterval    time.Duration
+	UpdateInterval   time.Duration
 	InterfaceBlocks  []BabelInterfaceBlock
 	Auth             *BabelAuthSpec
 	UpstreamBlock    *BabelInterfaceBlock // optional second interface block for veth upstream
@@ -263,6 +280,12 @@ type BabelInterfaceBlock struct {
 	InterfacePattern string
 	TypeTunnel       bool
 	MetricBase       uint
+	RTTCost          uint
+	RTTMin           time.Duration
+	RTTMax           time.Duration
+	RTTDecay         uint
+	HelloInterval    time.Duration
+	UpdateInterval   time.Duration
 }
 
 // FilterBlock is a named BIRD filter function.

@@ -18,6 +18,15 @@ const (
 	defaultMetricDraining = 500
 	defaultDeviceScanTime = 5 * time.Second
 	defaultLogTarget      = "log syslog all"
+
+	// Default Babel tunnel tuning keeps RTT relevant for route selection while
+	// avoiding next-hop changes caused by millisecond-scale jitter.
+	DefaultBabelRTTCost        = 64
+	DefaultBabelRTTMin         = 10 * time.Millisecond
+	DefaultBabelRTTMax         = 500 * time.Millisecond
+	DefaultBabelRTTDecay       = 12
+	DefaultBabelHelloInterval  = 4 * time.Second
+	DefaultBabelUpdateInterval = 16 * time.Second
 )
 
 // DefaultConfigGenerator generates BIRD configuration files from
@@ -50,6 +59,24 @@ func applyDefaults(spec BirdInstanceSpec) BirdInstanceSpec {
 	}
 	if spec.DeviceScanTime == 0 {
 		spec.DeviceScanTime = defaultDeviceScanTime
+	}
+	if spec.BabelRTTCost == 0 {
+		spec.BabelRTTCost = DefaultBabelRTTCost
+	}
+	if spec.BabelRTTMin == 0 {
+		spec.BabelRTTMin = DefaultBabelRTTMin
+	}
+	if spec.BabelRTTMax == 0 {
+		spec.BabelRTTMax = DefaultBabelRTTMax
+	}
+	if spec.BabelRTTDecay == 0 {
+		spec.BabelRTTDecay = DefaultBabelRTTDecay
+	}
+	if spec.BabelHelloInterval == 0 {
+		spec.BabelHelloInterval = DefaultBabelHelloInterval
+	}
+	if spec.BabelUpdateInterval == 0 {
+		spec.BabelUpdateInterval = DefaultBabelUpdateInterval
 	}
 	if spec.LogTarget == "" {
 		spec.LogTarget = defaultLogTarget
@@ -119,6 +146,27 @@ func validateSpec(spec BirdInstanceSpec) error {
 		}
 		seenInterfaces[policy.InterfaceName] = struct{}{}
 	}
+	if spec.BabelRTTCost >= 65535 {
+		return fmt.Errorf("bird: Babel RTT cost must be less than 65535")
+	}
+	if spec.BabelRTTDecay < 1 || spec.BabelRTTDecay > 256 {
+		return fmt.Errorf("bird: Babel RTT decay must be between 1 and 256")
+	}
+	if err := validateBabelDuration("RTT min", spec.BabelRTTMin); err != nil {
+		return err
+	}
+	if err := validateBabelDuration("RTT max", spec.BabelRTTMax); err != nil {
+		return err
+	}
+	if spec.BabelRTTMax <= spec.BabelRTTMin {
+		return fmt.Errorf("bird: Babel RTT max must be greater than RTT min")
+	}
+	if err := validateBabelDuration("Hello interval", spec.BabelHelloInterval); err != nil {
+		return err
+	}
+	if err := validateBabelDuration("Update interval", spec.BabelUpdateInterval); err != nil {
+		return err
+	}
 	for _, route := range spec.StaticRoutes {
 		if route.NextHop.IsValid() && route.Via != "" && !isBirdQuotedSymbol(route.Via) {
 			return fmt.Errorf("bird: static route interface %q cannot be represented as a BIRD scoped next-hop", route.Via)
@@ -132,6 +180,13 @@ func validateSpec(spec BirdInstanceSpec) error {
 	}
 	if !filepath.IsAbs(spec.ConfigPath) {
 		return fmt.Errorf("bird: config path must be absolute")
+	}
+	return nil
+}
+
+func validateBabelDuration(name string, value time.Duration) error {
+	if value < time.Millisecond || value%time.Millisecond != 0 {
+		return fmt.Errorf("bird: Babel %s must be a positive whole number of milliseconds", name)
 	}
 	return nil
 }
@@ -177,6 +232,8 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			InterfacePattern: spec.Upstream.Interface,
 			TypeTunnel:       false, // veth does NOT use type tunnel
 			MetricBase:       spec.MetricBase,
+			HelloInterval:    spec.BabelHelloInterval,
+			UpdateInterval:   spec.BabelUpdateInterval,
 		}
 	}
 	interfaceBlocks := make([]BabelInterfaceBlock, 0, len(spec.InterfacePolicies))
@@ -185,6 +242,12 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			InterfacePattern: policy.InterfaceName,
 			TypeTunnel:       true,
 			MetricBase:       policy.Metric,
+			RTTCost:          spec.BabelRTTCost,
+			RTTMin:           spec.BabelRTTMin,
+			RTTMax:           spec.BabelRTTMax,
+			RTTDecay:         spec.BabelRTTDecay,
+			HelloInterval:    spec.BabelHelloInterval,
+			UpdateInterval:   spec.BabelUpdateInterval,
 		})
 	}
 	sort.Slice(interfaceBlocks, func(i, j int) bool {
@@ -243,6 +306,12 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			MetricBase:       spec.MetricBase,
 			MetricStaged:     spec.MetricStaged,
 			MetricDraining:   spec.MetricDraining,
+			RTTCost:          spec.BabelRTTCost,
+			RTTMin:           spec.BabelRTTMin,
+			RTTMax:           spec.BabelRTTMax,
+			RTTDecay:         spec.BabelRTTDecay,
+			HelloInterval:    spec.BabelHelloInterval,
+			UpdateInterval:   spec.BabelUpdateInterval,
 			InterfaceBlocks:  interfaceBlocks,
 			Auth:             spec.BabelAuth,
 			UpstreamBlock:    upstreamBlock,
@@ -348,8 +417,10 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 			fmt.Fprintln(&b, "        type tunnel;")
 		}
 		fmt.Fprintf(&b, "        rxcost %d;\n", cfg.Babel.MetricBase)
-		fmt.Fprintln(&b, "        hello interval 4 s;")
-		fmt.Fprintln(&b, "        update interval 4 s;")
+		if cfg.Babel.TypeTunnel {
+			renderBabelTunnelTuning(&b, cfg.Babel.RTTCost, cfg.Babel.RTTMin, cfg.Babel.RTTMax, cfg.Babel.RTTDecay)
+		}
+		renderBabelIntervals(&b, cfg.Babel.HelloInterval, cfg.Babel.UpdateInterval)
 		if cfg.Babel.Auth != nil && cfg.Babel.Auth.Enabled {
 			fmt.Fprintf(&b, "        auth %q key id %d password %q;\n", cfg.Babel.Auth.Algorithm, cfg.Babel.Auth.KeyID, cfg.Babel.Auth.Password)
 		}
@@ -361,8 +432,7 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		fmt.Fprintf(&b, "    interface %q {\n", ub.InterfacePattern)
 		// Do NOT emit "type tunnel" for veth — it uses default multicast/unicast.
 		fmt.Fprintf(&b, "        rxcost %d;\n", ub.MetricBase)
-		fmt.Fprintln(&b, "        hello interval 4 s;")
-		fmt.Fprintln(&b, "        update interval 4 s;")
+		renderBabelIntervals(&b, ub.HelloInterval, ub.UpdateInterval)
 		fmt.Fprintln(&b, "    };")
 	}
 	fmt.Fprintln(&b, "}")
@@ -381,12 +451,33 @@ func renderBabelInterfaceBlock(b *bytes.Buffer, block BabelInterfaceBlock, auth 
 		fmt.Fprintln(b, "        type tunnel;")
 	}
 	fmt.Fprintf(b, "        rxcost %d;\n", block.MetricBase)
-	fmt.Fprintln(b, "        hello interval 4 s;")
-	fmt.Fprintln(b, "        update interval 4 s;")
+	if block.TypeTunnel {
+		renderBabelTunnelTuning(b, block.RTTCost, block.RTTMin, block.RTTMax, block.RTTDecay)
+	}
+	renderBabelIntervals(b, block.HelloInterval, block.UpdateInterval)
 	if auth != nil && auth.Enabled {
 		fmt.Fprintf(b, "        auth %q key id %d password %q;\n", auth.Algorithm, auth.KeyID, auth.Password)
 	}
 	fmt.Fprintln(b, "    };")
+}
+
+func renderBabelTunnelTuning(b *bytes.Buffer, cost uint, min, max time.Duration, decay uint) {
+	fmt.Fprintf(b, "        rtt cost %d;\n", cost)
+	fmt.Fprintf(b, "        rtt min %s;\n", formatBabelDuration(min))
+	fmt.Fprintf(b, "        rtt max %s;\n", formatBabelDuration(max))
+	fmt.Fprintf(b, "        rtt decay %d;\n", decay)
+}
+
+func renderBabelIntervals(b *bytes.Buffer, hello, update time.Duration) {
+	fmt.Fprintf(b, "        hello interval %s;\n", formatBabelDuration(hello))
+	fmt.Fprintf(b, "        update interval %s;\n", formatBabelDuration(update))
+}
+
+func formatBabelDuration(value time.Duration) string {
+	if value%time.Second == 0 {
+		return fmt.Sprintf("%d s", value/time.Second)
+	}
+	return fmt.Sprintf("%d ms", value/time.Millisecond)
 }
 
 // renderStaticRouteBlock renders one "protocol static { ... }" block.

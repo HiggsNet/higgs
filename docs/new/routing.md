@@ -60,6 +60,8 @@ local routing / netns / forwarding policy ─────────┘        
 | 实例配置 | `routing.instances[]`，每项引用一个 `netns` |
 | tunnel 接口 | 默认匹配 `phx*`；同一实例可合并多个 interface pattern |
 | veth upstream 接口 | 默认 `phv2host`，不加 `type tunnel` |
+| RTT 选路 | 默认 `cost=64`、`min=10ms`、`max=500ms`、`decay=12`，保留 RTT 选路并抑制短时抖动 |
+| Babel 周期 | Hello 默认 `4s`；周期性全量 Update 默认 `16s`，triggered update 不受该间隔限制 |
 | Router-ID | 由 managed Zone、trusted root hash 与稳定 netns label 派生 |
 | 路由表 | 默认写目标 netns 的 `main` table，也可指定数字 table ID |
 | forwarding | `netns.*.forwarding` 同时约束 BIRD export 与 firewall 的 transit 行为 |

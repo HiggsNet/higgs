@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -80,6 +81,12 @@ type RoutingInstance struct {
 	MetricBase     uint
 	MetricStaged   uint
 	MetricDraining uint
+	RTTCost        uint
+	RTTMin         time.Duration
+	RTTMax         time.Duration
+	RTTDecay       uint
+	HelloInterval  time.Duration
+	UpdateInterval time.Duration
 	ECMP           bool
 	ECMPLimit      uint
 	InterfacePat   string
@@ -124,6 +131,12 @@ type routingInstanceYAML struct {
 	MetricBase     uint                `yaml:"metric_base"`
 	MetricStaged   uint                `yaml:"metric_staged"`
 	MetricDraining uint                `yaml:"metric_draining"`
+	RTTCost        uint                `yaml:"rtt_cost"`
+	RTTMin         string              `yaml:"rtt_min"`
+	RTTMax         string              `yaml:"rtt_max"`
+	RTTDecay       uint                `yaml:"rtt_decay"`
+	HelloInterval  string              `yaml:"hello_interval"`
+	UpdateInterval string              `yaml:"update_interval"`
 	ECMP           *bool               `yaml:"ecmp"`
 	ECMPLimit      uint                `yaml:"ecmp_limit"`
 	InterfacePat   string              `yaml:"interface_pattern"`
@@ -296,6 +309,39 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 	if metricDraining == 0 {
 		metricDraining = ipsec.DefaultMetricDrained
 	}
+	rttCost := yi.RTTCost
+	if rttCost == 0 {
+		rttCost = bird.DefaultBabelRTTCost
+	}
+	if rttCost >= 65535 {
+		return RoutingInstance{}, fmt.Errorf("rtt_cost must be less than 65535")
+	}
+	rttMin, err := parseRoutingBabelDuration(yi.RTTMin, bird.DefaultBabelRTTMin, "rtt_min")
+	if err != nil {
+		return RoutingInstance{}, err
+	}
+	rttMax, err := parseRoutingBabelDuration(yi.RTTMax, bird.DefaultBabelRTTMax, "rtt_max")
+	if err != nil {
+		return RoutingInstance{}, err
+	}
+	if rttMax <= rttMin {
+		return RoutingInstance{}, fmt.Errorf("rtt_max must be greater than rtt_min")
+	}
+	rttDecay := yi.RTTDecay
+	if rttDecay == 0 {
+		rttDecay = bird.DefaultBabelRTTDecay
+	}
+	if rttDecay > 256 {
+		return RoutingInstance{}, fmt.Errorf("rtt_decay must be between 1 and 256")
+	}
+	helloInterval, err := parseRoutingBabelDuration(yi.HelloInterval, bird.DefaultBabelHelloInterval, "hello_interval")
+	if err != nil {
+		return RoutingInstance{}, err
+	}
+	updateInterval, err := parseRoutingBabelDuration(yi.UpdateInterval, bird.DefaultBabelUpdateInterval, "update_interval")
+	if err != nil {
+		return RoutingInstance{}, err
+	}
 	ecmp := true
 	if yi.ECMP != nil {
 		ecmp = *yi.ECMP
@@ -347,12 +393,32 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		MetricBase:     metricBase,
 		MetricStaged:   metricStaged,
 		MetricDraining: metricDraining,
+		RTTCost:        rttCost,
+		RTTMin:         rttMin,
+		RTTMax:         rttMax,
+		RTTDecay:       rttDecay,
+		HelloInterval:  helloInterval,
+		UpdateInterval: updateInterval,
 		ECMP:           ecmp,
 		ECMPLimit:      ecmpLimit,
 		InterfacePat:   ifacePat,
 		RouterIDLabel:  yi.RouterIDLabel,
 		Upstream:       upstream,
 	}, nil
+}
+
+func parseRoutingBabelDuration(raw string, fallback time.Duration, field string) (time.Duration, error) {
+	if strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %q", field, raw)
+	}
+	if value < time.Millisecond || value%time.Millisecond != 0 {
+		return 0, fmt.Errorf("%s must be a positive whole number of milliseconds", field)
+	}
+	return value, nil
 }
 
 func defaultBirdControlSocketPath(configDir, netnsName string) (string, error) {

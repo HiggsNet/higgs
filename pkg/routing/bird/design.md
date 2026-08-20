@@ -123,9 +123,16 @@ type BirdInstanceSpec struct {
     InternalTableName string `yaml:"internal_table_name,omitempty" json:"internal_table_name,omitempty"`
 
     // Metrics applied to Babel interfaces of different generations.
-    MetricBase      uint `yaml:"metric_base" json:"metric_base"`
-    MetricStaged    uint `yaml:"metric_staged" json:"metric_staged"`
-    MetricDraining  uint `yaml:"metric_draining" json:"metric_draining"`
+    MetricBase     uint `yaml:"metric_base" json:"metric_base"`
+    MetricStaged   uint `yaml:"metric_staged" json:"metric_staged"`
+    MetricDraining uint `yaml:"metric_draining" json:"metric_draining"`
+
+    BabelRTTCost        uint
+    BabelRTTMin         time.Duration
+    BabelRTTMax         time.Duration
+    BabelRTTDecay       uint
+    BabelHelloInterval  time.Duration
+    BabelUpdateInterval time.Duration
 
     // InterfacePattern is the BIRD interface glob, e.g. "phx*".
     InterfacePattern string `yaml:"interface_pattern" json:"interface_pattern"`
@@ -163,6 +170,12 @@ Defaults the generator should apply:
 | `MetricBase` | `100` |
 | `MetricStaged` | `200` |
 | `MetricDraining` | `500` |
+| `BabelRTTCost` | `64` |
+| `BabelRTTMin` | `10ms` |
+| `BabelRTTMax` | `500ms` |
+| `BabelRTTDecay` | `12` |
+| `BabelHelloInterval` | `4s` |
+| `BabelUpdateInterval` | `16s` |
 | `DeviceScanTime` | `5s` |
 | `LogTarget` | `"log syslog all"` |
 
@@ -486,8 +499,12 @@ protocol babel photon_babel_ipsec_main {
     interface "phx*" {
         type tunnel;
         rxcost 96;
+        rtt cost 64;
+        rtt min 10 ms;
+        rtt max 500 ms;
+        rtt decay 12;
         hello interval 4 s;
-        update interval 4 s;
+        update interval 16 s;
     };
 }
 ```

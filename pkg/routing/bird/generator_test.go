@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -75,6 +76,18 @@ func TestGenerateManagedConfig(t *testing.T) {
 	}
 	if !strings.Contains(s, "rxcost 100;") {
 		t.Error("missing default rxcost")
+	}
+	for _, want := range []string{
+		"rtt cost 64;",
+		"rtt min 10 ms;",
+		"rtt max 500 ms;",
+		"rtt decay 12;",
+		"hello interval 4 s;",
+		"update interval 16 s;",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing default Babel tuning %q", want)
+		}
 	}
 	if !strings.Contains(s, "filter photon_import_ipsec_main") {
 		t.Error("missing import filter")
@@ -262,6 +275,91 @@ func TestRenderConcreteInterfacePoliciesBeforeCatchAll(t *testing.T) {
 	}
 	if strings.Index(s, oldBlock) > strings.Index(s, catchAll) || strings.Index(s, newBlock) > strings.Index(s, catchAll) {
 		t.Fatalf("concrete policies must precede catch-all first match:\n%s", s)
+	}
+}
+
+func TestRenderCustomBabelTuningOnTunnelInterfaces(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.BabelRTTCost = 80
+	spec.BabelRTTMin = 5 * time.Millisecond
+	spec.BabelRTTMax = 450 * time.Millisecond
+	spec.BabelRTTDecay = 9
+	spec.BabelHelloInterval = 2 * time.Second
+	spec.BabelUpdateInterval = 20 * time.Second
+	spec.InterfacePolicies = []BabelInterfacePolicy{{InterfaceName: "phx-live", Metric: 125}}
+
+	cfg, err := (DefaultConfigGenerator{}).Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+	for _, blockStart := range []string{`interface "phx-live" {`, `interface "phx*" {`} {
+		start := strings.Index(s, blockStart)
+		if start < 0 {
+			t.Fatalf("missing interface block %q:\n%s", blockStart, s)
+		}
+		end := strings.Index(s[start:], "    };")
+		if end < 0 {
+			t.Fatalf("unterminated interface block %q:\n%s", blockStart, s)
+		}
+		block := s[start : start+end]
+		for _, want := range []string{
+			"rtt cost 80;", "rtt min 5 ms;", "rtt max 450 ms;", "rtt decay 9;",
+			"hello interval 2 s;", "update interval 20 s;",
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("interface block %q missing %q:\n%s", blockStart, want, block)
+			}
+		}
+	}
+}
+
+func TestRenderUpstreamUsesIntervalsWithoutRTTTuning(t *testing.T) {
+	spec := testBirdInstanceSpec()
+	spec.BabelHelloInterval = 2 * time.Second
+	spec.BabelUpdateInterval = 20 * time.Second
+	spec.Upstream = &UpstreamSpec{Interface: "phv2host"}
+
+	cfg, err := (DefaultConfigGenerator{}).Generate(spec, nil, nil)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	s := string(cfg)
+	start := strings.Index(s, `interface "phv2host" {`)
+	if start < 0 {
+		t.Fatalf("missing upstream block:\n%s", s)
+	}
+	end := strings.Index(s[start:], "    };")
+	block := s[start : start+end]
+	if strings.Contains(block, "type tunnel;") || strings.Contains(block, "rtt cost") {
+		t.Fatalf("upstream block must not enable tunnel RTT tuning:\n%s", block)
+	}
+	if !strings.Contains(block, "hello interval 2 s;") || !strings.Contains(block, "update interval 20 s;") {
+		t.Fatalf("upstream block missing configured intervals:\n%s", block)
+	}
+}
+
+func TestRejectInvalidBabelTuning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*BirdInstanceSpec)
+	}{
+		{name: "RTT cost too large", mutate: func(spec *BirdInstanceSpec) { spec.BabelRTTCost = 65535 }},
+		{name: "RTT max before min", mutate: func(spec *BirdInstanceSpec) {
+			spec.BabelRTTMin = 20 * time.Millisecond
+			spec.BabelRTTMax = 10 * time.Millisecond
+		}},
+		{name: "RTT decay too large", mutate: func(spec *BirdInstanceSpec) { spec.BabelRTTDecay = 257 }},
+		{name: "sub-millisecond Hello", mutate: func(spec *BirdInstanceSpec) { spec.BabelHelloInterval = 500 * time.Microsecond }},
+		{name: "negative Update", mutate: func(spec *BirdInstanceSpec) { spec.BabelUpdateInterval = -time.Second }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := testBirdInstanceSpec()
+			tc.mutate(&spec)
+			if _, err := (DefaultConfigGenerator{}).Generate(spec, nil, nil); err == nil {
+				t.Fatal("Generate should reject invalid Babel tuning")
+			}
+		})
 	}
 }
 
