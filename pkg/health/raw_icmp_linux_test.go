@@ -38,6 +38,27 @@ func TestRawICMProberUsesWorkerAndPreservesBurstMajority(t *testing.T) {
 	}
 }
 
+func TestRawICMProberReportsPacketCountsForEveryBurstOutcome(t *testing.T) {
+	for _, received := range []int{3, 2, 1, 0} {
+		t.Run(fmt.Sprintf("%d_of_3", received), func(t *testing.T) {
+			worker := &fakeRawICMPWorker{result: rawProbeResult{sent: 3, received: received, lastRTT: 4 * time.Millisecond}}
+			p := NewRawICMProber(nil)
+			p.new = func(string) (rawICMPWorker, error) { return worker, nil }
+			got := p.Probe(context.Background(), ProbeTarget{
+				InstanceID:     "link-a",
+				PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),
+			}, ProbeConfig{Burst: 3})
+			wantSuccess := received >= 2
+			if got.Error != "" || got.Sent != 3 || got.Received != received || got.Lost != 3-received || got.Success != wantSuccess {
+				t.Fatalf("probe result = %+v, want sent/received/lost=3/%d/%d success=%t", got, received, 3-received, wantSuccess)
+			}
+			if received == 0 && got.RTT != 0 {
+				t.Fatalf("zero-reply RTT = %v, want zero", got.RTT)
+			}
+		})
+	}
+}
+
 func TestRawICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
 	worker := &fakeRawICMPWorker{result: rawProbeResult{}}
 	p := NewRawICMProber(nil)

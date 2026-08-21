@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -31,6 +32,10 @@ type Provider interface {
 	HealthSeries(linkID string, query map[string]string) (any, error)
 	Routes() (any, error)
 	Bird() (any, error)
+}
+
+type openMetricsProvider interface {
+	OpenMetrics() (string, error)
 }
 
 // APIError carries an HTTP status code for provider failures.
@@ -101,8 +106,29 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/bird", s.HandleBird)
 	mux.HandleFunc("/api/v1/events", s.HandleEvents)
 	mux.HandleFunc("/api/v1/events/recent", s.HandleRecentEvents)
+	mux.HandleFunc("/metrics", s.HandleMetrics)
 	mux.HandleFunc("/", s.HandleStatic)
 	return mux
+}
+
+// HandleMetrics exposes the optional daemon health OpenMetrics snapshot.
+func (s *Server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	provider, ok := s.provider.(openMetricsProvider)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := provider.OpenMetrics()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/openmetrics-text; version=1.0.0; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, body)
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {

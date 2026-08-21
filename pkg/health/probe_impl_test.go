@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -184,6 +185,44 @@ func TestICMProberBurstRequiresMajorityOfReplies(t *testing.T) {
 	}
 	if result.Error != "" {
 		t.Fatalf("probe error = %q, want partial loss without a command error", result.Error)
+	}
+}
+
+func TestICMProberReportsPacketCountsForEveryBurstOutcome(t *testing.T) {
+	tests := []struct {
+		name     string
+		received int
+		success  bool
+	}{
+		{name: "3_of_3", received: 3, success: true},
+		{name: "2_of_3", received: 2, success: true},
+		{name: "1_of_3", received: 1, success: false},
+		{name: "0_of_3", received: 0, success: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output strings.Builder
+			for seq := 1; seq <= tt.received; seq++ {
+				fmt.Fprintf(&output, "64 bytes from 192.0.2.2: icmp_seq=%d ttl=64 time=%d ms\n", seq, seq)
+			}
+			fmt.Fprintf(&output, "3 packets transmitted, %d received, packet loss\n", tt.received)
+			var runErr error
+			if tt.received < 3 {
+				runErr = errors.New("exit status 1")
+			}
+			runner := &recordingCommandRunner{out: []byte(output.String()), err: runErr}
+			prober := NewICMProber(runner, nil)
+			result := prober.Probe(context.Background(), ProbeTarget{
+				InstanceID:     "link-1",
+				PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),
+			}, ProbeConfig{Timeout: time.Second, Burst: 3})
+			if result.Error != "" || result.Sent != 3 || result.Received != tt.received || result.Lost != 3-tt.received || result.Success != tt.success {
+				t.Fatalf("probe result = %+v, want sent/received/lost=3/%d/%d success=%t", result, tt.received, 3-tt.received, tt.success)
+			}
+			if tt.received == 0 && result.RTT != 0 {
+				t.Fatalf("zero-reply RTT = %v, want zero", result.RTT)
+			}
+		})
 	}
 }
 

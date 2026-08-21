@@ -26,12 +26,13 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return nil
 	}
 	now := d.Sync.now()
+	dnsResolver := d.ipsecReconcileDNSResolver()
 	plan := ipsec.LinkPlan{}
 	if len(groups) > 0 {
 		var err error
 		plan, err = ipsec.PlanTransportLinks(ctx, snapshot.Network, snapshot.ManagedZone, groups, ipsec.LinkPlannerOptions{
 			Now:                 now,
-			DNSResolver:         net.DefaultResolver,
+			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(snapshot, now),
 		})
 		if err != nil {
@@ -47,7 +48,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
 	instances := linkInstancesToIPsec(snapshot.LinkInstances)
-	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.Sync.App.Config.IPsec, plan.Desired, instances, sas, net.DefaultResolver)
+	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.Sync.App.Config.IPsec, plan.Desired, instances, sas, dnsResolver)
 	if err != nil {
 		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
 	}
@@ -125,6 +126,21 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
+}
+
+func (d *DaemonService) ipsecReconcileDNSResolver() ipsec.DNSResolver {
+	if d != nil && d.ipsecDNSResolver != nil {
+		return d.ipsecDNSResolver
+	}
+	now := time.Now
+	if d != nil && d.Sync != nil {
+		now = d.Sync.now
+	}
+	resolver := ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{Now: now})
+	if d != nil {
+		d.ipsecDNSResolver = resolver
+	}
+	return resolver
 }
 
 type ipLookupResolver interface {

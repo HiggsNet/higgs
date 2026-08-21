@@ -6,12 +6,57 @@ import (
 	"time"
 )
 
-// ProbeResult is the outcome of a single probe attempt.
+// ProbeResult is the outcome of a single probe burst. Sent/Received/Lost are
+// packet counts. RTT is the last successful reply RTT in the burst, including
+// partial bursts; it is zero when no reply was received.
 type ProbeResult struct {
 	InstanceID string
+	Sent       int
+	Received   int
+	Lost       int
 	RTT        time.Duration
-	Success    bool
-	Error      string // raw error string, NOT used as a metrics label
+	// Success retains the burst-level majority policy used for consecutive
+	// failure hysteresis. Packet loss and link state thresholds use the counts
+	// above, not this aggregate bit.
+	Success bool
+	Error   string // raw error string, NOT used as a metrics label
+}
+
+func normalizeProbeResult(result ProbeResult) ProbeResult {
+	if result.Sent < 0 {
+		result.Sent = 0
+	}
+	if result.Received < 0 {
+		result.Received = 0
+	}
+	if result.Lost < 0 {
+		result.Lost = 0
+	}
+	if result.Sent == 0 && result.Received == 0 && result.Lost == 0 {
+		// Preserve source compatibility for simple/third-party probers that only
+		// populated Success. Execution errors genuinely sent no known packets.
+		if result.Error == "" {
+			result.Sent = 1
+			if result.Success {
+				result.Received = 1
+			} else {
+				result.Lost = 1
+			}
+		}
+	} else {
+		if result.Sent == 0 {
+			result.Sent = result.Received + result.Lost
+		}
+		if result.Received > result.Sent {
+			result.Received = result.Sent
+		}
+		result.Lost = result.Sent - result.Received
+	}
+	result.Success = result.Error == "" && result.Received > result.Lost
+	if result.Received == 0 {
+		result.RTT = 0
+	}
+	return result
 }
 
 // Prober executes active probes. Implementations include ICMP echo and UDP
@@ -34,7 +79,7 @@ type ProbeRunner interface {
 type nopProber struct{}
 
 func (nopProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConfig) ProbeResult {
-	return ProbeResult{InstanceID: target.InstanceID, Success: false, Error: "no prober configured"}
+	return ProbeResult{InstanceID: target.InstanceID, Error: "no prober configured"}
 }
 
 func (nopProber) Type() string { return ProbeTypeICMP }

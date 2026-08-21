@@ -197,8 +197,8 @@ firewall-container-smoke:
 	@GO="$(GO)" GOCACHE="$(GO_CACHE)" GOMODCACHE="$(GO_MOD_CACHE)" CGO_ENABLED="$(CGO_ENABLED)" docs/scripts/firewall-container-smoke.sh
 
 health-smoke: build
-	$(GO_ENV) $(GO) test ./pkg/health -run 'Test(Manager|CollectMetricsAndRender)' -v
-	$(GO_ENV) $(GO) test ./app/photon -run 'Test(HealthTargets|ConfigureHealthManager|HealthLocalSpool|ReconcileRoutingFeedsBirdObservationToRotateCutoverGate)' -v
+	$(GO_ENV) $(GO) test ./pkg/health -run 'Test(Manager|RollingWindow|StateMachine|ICMProber|RawICMProber|CollectMetricsAndRender)' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'Test(HealthTargets|ConfigureHealthManager|HealthStatusAndSpool|HealthLocalSpool|ReconcileRoutingFeedsBirdObservationToRotateCutoverGate)' -v
 	@docs/scripts/bird-babel-preflight.sh
 	@PHOTON_HEALTH_SMOKE=1 $(GO_ENV) $(GO) test ./app/photon -run '^TestDaemonHealthBIRDCutoverGateRootSmoke$$' -count=1 -v
 	@echo "Health root smoke passed"

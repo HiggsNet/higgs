@@ -59,9 +59,12 @@ func (t ProbeTarget) ShouldProbe() bool {
 
 // ProbeConfig is the per-link probe scheduling configuration.
 type ProbeConfig struct {
-	Interval      time.Duration
-	Timeout       time.Duration
-	Burst         int
+	Interval time.Duration
+	Timeout  time.Duration
+	Burst    int
+	// LossWindow is the number of probe bursts retained. Packet counters inside
+	// each burst are summed, so loss ratios are packet-level while the time
+	// horizon remains compatible with the previous burst-level window.
 	LossWindow    int
 	Jitter        time.Duration
 	MaxConcurrent int

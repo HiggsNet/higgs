@@ -310,7 +310,7 @@ func (m *Manager) applyResult(instanceID string, result ProbeResult, now time.Ti
 	if !ok {
 		return
 	}
-	window.Record(now, result.RTT, result.Success)
+	window.RecordProbe(now, result)
 	snap := window.Snapshot()
 
 	m.mu.Lock()

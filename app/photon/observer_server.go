@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 type observerServer struct {
@@ -368,6 +370,31 @@ func (p *observerProvider) Health(linkFilter string) (any, error) {
 		Datasource: healthDatasourceInfo(observerAppConfig(d)),
 		Links:      contextualLinks,
 	}, nil
+}
+
+func (p *observerProvider) OpenMetrics() (string, error) {
+	d := p.daemon
+	config := observerAppConfig(d)
+	if config == nil || !config.Health.MetricsEnabled {
+		return "", fmt.Errorf("health metrics are not enabled")
+	}
+	if d == nil || d.health == nil {
+		return "", fmt.Errorf("health manager is not configured")
+	}
+	links := d.health.Snapshot(observerNow(d))
+	errorsTotal := make(map[string]int, len(links))
+	for _, link := range links {
+		key := link.ProbeID
+		if key == "" {
+			key = link.InstanceID
+		}
+		errorsTotal[key] = d.health.ErrorsTotal(key)
+	}
+	var output bytes.Buffer
+	if err := health.RenderOpenMetrics(&output, health.CollectMetrics(links), errorsTotal); err != nil {
+		return "", err
+	}
+	return output.String(), nil
 }
 
 func (p *observerProvider) HealthSeries(linkID string, query map[string]string) (any, error) {

@@ -56,6 +56,35 @@ func TestRollingWindowEvicts(t *testing.T) {
 	}
 }
 
+func TestRollingWindowCountsPacketsAcrossBursts(t *testing.T) {
+	w := NewRollingWindow(3)
+	now := time.Now()
+	w.RecordProbe(now, ProbeResult{Sent: 3, Received: 3, RTT: 10 * time.Millisecond})
+	w.RecordProbe(now.Add(time.Second), ProbeResult{Sent: 3, Received: 2, RTT: 20 * time.Millisecond})
+	w.RecordProbe(now.Add(2*time.Second), ProbeResult{Sent: 3, Received: 1, RTT: 30 * time.Millisecond})
+	snap := w.Snapshot()
+	if snap.Bursts != 3 || snap.Sent != 9 || snap.Received != 6 || snap.Lost != 3 {
+		t.Fatalf("three-burst snapshot = %+v, want bursts=3 packets=9/6/3", snap)
+	}
+	if snap.LossRatio < 0.33 || snap.LossRatio > 0.34 {
+		t.Fatalf("loss ratio = %f, want one third", snap.LossRatio)
+	}
+	if snap.LastRTT != 30*time.Millisecond {
+		t.Fatalf("last RTT = %v, want partial burst RTT 30ms", snap.LastRTT)
+	}
+
+	// Evict the 3/3 burst. The window remains three bursts, but its packet
+	// totals now reflect 2/3 + 1/3 + 0/3 exactly.
+	w.RecordProbe(now.Add(3*time.Second), ProbeResult{Sent: 3})
+	snap = w.Snapshot()
+	if snap.Bursts != 3 || snap.Sent != 9 || snap.Received != 3 || snap.Lost != 6 {
+		t.Fatalf("evicted snapshot = %+v, want bursts=3 packets=9/3/6", snap)
+	}
+	if snap.LastRTT != 0 {
+		t.Fatalf("last RTT after unanswered burst = %v, want zero", snap.LastRTT)
+	}
+}
+
 func TestRollingWindowJitter(t *testing.T) {
 	w := NewRollingWindow(10)
 	now := time.Now()
@@ -128,6 +157,62 @@ func TestStateMachineLowLossIsHealthy(t *testing.T) {
 	}, "", time.Now())
 	if state != HealthStateHealthy {
 		t.Fatalf("state with loss below threshold = %s, want healthy", state)
+	}
+}
+
+func TestStateMachineUsesPacketLossWithoutChangingBurstColdStart(t *testing.T) {
+	cfg := HysteresisConfig{
+		FailThresholdConsecutive: 3,
+		LossThreshold:            0.2,
+		DownLossThreshold:        0.6,
+		RecoverConsecutive:       2,
+	}
+	tests := []struct {
+		name     string
+		received int
+		want     string
+	}{
+		{name: "ten_percent", received: 9, want: HealthStateHealthy},
+		{name: "thirty_percent", received: 7, want: HealthStateDegraded},
+		{name: "seventy_percent", received: 3, want: HealthStateDown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			window := NewRollingWindow(20)
+			machine := NewStateMachine(cfg)
+			var state string
+			for burst := range 3 {
+				window.RecordProbe(time.Now(), ProbeResult{Sent: 10, Received: tt.received})
+				state, _ = machine.Evaluate("link1", window.Snapshot(), "", time.Now())
+				if tt.want == HealthStateDown && burst < 2 && state == HealthStateDown {
+					t.Fatalf("state after burst %d = down; cold-start gate must remain burst-based", burst+1)
+				}
+			}
+			if state != tt.want {
+				t.Fatalf("state at %s loss = %s, want %s", tt.name, state, tt.want)
+			}
+		})
+	}
+}
+
+func TestStateMachineExecutionErrorsRemainBurstBased(t *testing.T) {
+	m := NewStateMachine(DefaultHysteresisConfig())
+	w := NewRollingWindow(20)
+	for burst := range 3 {
+		w.RecordProbe(time.Now(), ProbeResult{Error: "permission denied"})
+		state, reason := m.Evaluate("link1", w.Snapshot(), "permission denied", time.Now())
+		want := HealthStateDegraded
+		if burst == 2 {
+			want = HealthStateProbeError
+		}
+		if state != want || reason != "permission_denied" {
+			t.Fatalf("burst %d state/reason = %s/%s, want %s/permission_denied", burst+1, state, reason, want)
+		}
+		if snap := w.Snapshot(); snap.Sent != 0 {
+			t.Fatalf("execution error sent packets = %d, want 0", snap.Sent)
+		} else if snap.LossRatio != 0 {
+			t.Fatalf("execution error loss ratio = %v, want 0", snap.LossRatio)
+		}
 	}
 }
 

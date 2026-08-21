@@ -165,7 +165,7 @@ health:
 | `interval` | duration | `5s` | 探测间隔（必须为正；实际生效频率见 5.4） |
 | `timeout` | duration | `1s` | 单次 ping 超时（必须为正） |
 | `burst` | int | `3` | 每次探测发送的 ping 次数 |
-| `loss_window` | int | `20` | rolling window 容量（样本数） |
+| `loss_window` | int | `20` | rolling window 容量（burst 数）；窗口内 loss 按真实 ICMP 包数累计 |
 | `jitter` | duration | `500ms` | 间隔抖动，interval ± uniform(0, jitter) |
 | `max_concurrent_probes` | int | `8` | 并发上限（**当前不生效**，见 5.3） |
 | `fail_threshold_consecutive` | int | `3` | 降级/失败判定的连续失败阈值 |
@@ -320,34 +320,34 @@ max(health.interval, IPsec reconcile flush 间隔)
 
 ### 6.1 RollingWindow
 
-`pkg/health/stats.go`。每条 probe 视角一个环形缓冲（容量 `loss_window`，默认 20），元素为 `{时间, RTT, 成功}`。注意样本粒度是**每次 Probe 调用**（burst 已聚合），不是每个 ping 包。
+`pkg/health/stats.go`。每条 probe 视角一个环形缓冲（容量 `loss_window`，默认 20），元素为 `{时间, sent, received, lost, RTT, burst 成功}`。窗口的时间跨度仍按最近 N 次 Probe/burst 控制，但 `Sent` / `Received` / `Lost` 与 loss ratio 都累计真实 ICMP 包数。
+
+RTT 聚合规则固定为：每个 burst 记录最后一个成功回复的 RTT；`1/3`、`2/3` 等部分回复仍保留 RTT，`0/3` 记 0。窗口百分位使用这些 per-burst RTT；jitter 使用按时间顺序相邻的 replied burst RTT 绝对差均值。
 
 `Snapshot()` 计算：
 
 | 统计量 | 说明 |
 |---|---|
-| `Sent` / `Received` / `Lost` / `LossRatio` | 窗口内样本计数与丢包率 |
-| `LastRTT` | 最近一条样本的 RTT（失败样本记 0） |
-| `EWMARTT` | 指数加权平均，α=0.3，只对成功样本更新 |
-| `MinRTT` / `MaxRTT` / `P50RTT` / `P95RTT` / `P99RTT` | 窗口内成功样本的极值与近秩百分位（`idx=(n-1)*pct/100`） |
-| `Jitter` | **排序后** RTT 序列相邻差绝对值的均值（见下方注意） |
-| `ConsecutiveFails` | 当前连续失败样本数 |
-| `LastSuccess` | 最近成功时间 |
-
-> **注意**：`Jitter` 在按大小排序后的 RTT 数组上计算，而不是按时间顺序的连续样本。这与设计文档"连续 RTT 样本的平均绝对偏差"表述不同，排序后的值系统地偏小，只宜作相对参考。
+| `Sent` / `Received` / `Lost` / `LossRatio` | 窗口内真实包计数与包级丢包率 |
+| `LastRTT` | 最近一个 burst 最后成功回复的 RTT；零回复记 0 |
+| `EWMARTT` | 指数加权平均，α=0.3，对所有至少收到一个回复的 burst 更新 |
+| `MinRTT` / `MaxRTT` / `P50RTT` / `P95RTT` / `P99RTT` | 窗口内 per-burst RTT 的极值与近秩百分位（`idx=(n-1)*pct/100`） |
+| `Jitter` | 按时间顺序相邻 replied burst RTT 差绝对值的均值 |
+| `ConsecutiveFails` | 当前连续失败 burst 数；多数回复策略保持兼容 |
+| `LastSuccess` | 最近收到任一回复的时间 |
 
 ### 6.2 状态机
 
 `pkg/health/state.go` 的 `StateMachine.Evaluate` 按以下顺序判定原始状态（`snap` 为窗口快照，`lastError` 为最近一次原始错误串）：
 
 ```text
-1. sent == 0 → unknown
+1. burst observation == 0 → unknown
 2. lastError 非空 且 (prev == probe_error 或 连续失败 >= fail_threshold)
    → probe_error
 3. 连续失败 >= fail_threshold → down
 4. loss >= down_loss_threshold：
-   - sent >= fail_threshold → down
-   - 冷启动样本不足 → degraded
+   - burst observation >= fail_threshold → down
+   - 冷启动 burst 不足 → degraded
 5. loss >= loss_threshold → degraded
 6. 其他（已有样本且 loss < loss_threshold）→ healthy
 ```
@@ -357,6 +357,8 @@ max(health.interval, IPsec reconcile flush 间隔)
 - **恢复迟滞**：prev ∈ {degraded, down, probe_error} 且新状态为 healthy 时，需连续 `recover_consecutive`（默认 5）次评估为 healthy 才真正翻回；期间保持 prev，reason 为 `recovering`。
 
 下降方向不再叠加第二层状态转换计数：`ConsecutiveFails` 与 rolling window 本身已经提供失败次数和丢包率证据。这样 `fail_threshold_consecutive`（默认 3）准确表示进入 down/probe_error 所需的连续失败次数，不会再在越过阈值后额外等待 3 次。初始 `unknown` 在首个样本后立即变为 healthy 或 degraded。
+
+兼容策略：`loss_threshold` / `down_loss_threshold` 从失败 burst 比例迁移为真实包丢失比例；`loss_window`、`fail_threshold_consecutive`、冷启动 down 门槛和恢复迟滞仍以 burst 为单位。因此 `2/3` 不再伪装成 0% loss，但单个 `0/3` 也不会因为产生 3 个 lost packet 而绕过原先的三次 burst 冷启动门槛。
 
 ### 6.3 失败原因分类
 
@@ -426,6 +428,9 @@ routing reconcile 处理每个 BIRD instance 后调用 `observeBirdForHealth`（
 | 指标 | 类型 | 说明 |
 |---|---|---|
 | `photon_link_probe_rtt_seconds` | gauge | 最近探测 RTT（秒），LastRTT>0 时输出 |
+| `photon_link_probe_packets_sent` | gauge | rolling window 内真实发送包数 |
+| `photon_link_probe_packets_received` | gauge | rolling window 内真实回复包数 |
+| `photon_link_probe_packets_lost` | gauge | rolling window 内真实丢失包数 |
 | `photon_link_probe_loss_ratio` | gauge | 窗口丢包率，Sent>0 时输出 |
 | `photon_link_probe_jitter_seconds` | gauge | jitter（秒），Jitter>0 时输出 |
 | `photon_link_health_state` | gauge | 状态编码 0–5（见 2.4） |
@@ -433,7 +438,7 @@ routing reconcile 处理每个 BIRD instance 后调用 `observeBirdForHealth`（
 
 label 集合（低基数约束，`writeLabels`）：`local_zone`、`peer_zone`、`overlay`、`probe_id`、`instance_id`、`netns`、`generation`、`probe_role`、`probe_type`、`reason`。空值 label 不输出；endpoint IP、nonce、原始错误串禁止作为 label。
 
-> **注意**：这套渲染当前**没有接线**——daemon 和 observer 都没有 `/metrics` 端点，`RenderOpenMetrics` 只在单元测试中被调用。当前实际可用的时序通道是下方的本地 spool + observer API。
+Observer 启用且 `health.metrics.enabled: true` 时，`GET /metrics` 以 OpenMetrics 1.0 文本暴露这些当前窗口指标；本地历史时序仍由下方 spool + observer series API 提供。
 
 ### 8.2 本地 spool
 
@@ -496,6 +501,7 @@ daemon 不在运行或 health 未启用时，仍会显示从本地 state 重建�
 | `GET /api/v1/health` | 全部 link 的健康状态 + link instance/desired 上下文 + datasource 信息 |
 | `GET /api/v1/health/{link_id}` | 单条 link 详情（按 InstanceID 或 ProbeID 匹配） |
 | `GET /api/v1/health/{link_id}/series?metric=&range=&step=&probe_role=` | 时序（8.3）；spool 未配置返回 503 |
+| `GET /metrics` | `health.metrics.enabled: true` 时输出当前 health OpenMetrics；否则 503 |
 
 Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `health_updated` 事件推送（`notifyObserver`，在状态变化 flush 尾部发出）。跨节点、长时间图表仍建议接外部 TSDB + Grafana。
 
@@ -504,7 +510,7 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 - `go test ./pkg/health/`：rolling window、状态机迟滞、probe 聚合、metrics 渲染等单元测试。
 - `sudo env PATH="$PATH" make health-smoke`：除 manager/metrics 单测外，还会在
   两个真实 named netns 的 veth 链路上运行 raw-ICMP、BIRD cutover 和 `tc netem`
-  故障/恢复验证；需要 root、`ip`、`bird`/`birdc`、`tc` 与 daemon 所需 capability。
+  故障/恢复验证；需要 root、`ip`、`bird`/`birdc`、`nft`、`tc` 与 daemon 所需 capability。
 - `app/photon/health_config_test.go`、`health_reconcile_test.go`：配置解析与 daemon 级集成测试。
 - `app/photon/bird_root_smoke_test.go` 含 cutover gate 的 root smoke 用例。
 
@@ -522,12 +528,10 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 | Babel RTT/metric | 普通 link 也采集被动指标、出 `photon_link_babel_*` | 只为 staged link 采集 neighbor/route 布尔与最小 metric；series API 显式报未实现 | 被动质量数据基本不可用 |
 | BIRD metric 联动 | degraded/down 先调高 BIRD metric | rotate old/staged 已接入两阶段 metric 翻转；普通 link degraded/down 联动仍未实现 | rotate 可先迁流量再清旧链路；普通链路健康结果仍不影响选路 |
 | 防火墙联动 | 可选按 link state 收紧 forward allow | 未实现 | 健康 down 不改变防火墙 |
-| `/metrics` 端点 | daemon 暴露 OpenMetrics | 渲染代码存在但未接线，仅单测覆盖 | 无法被 Prometheus 直接 scrape |
 | remote write | 可选推送到 VictoriaMetrics 等 | 配置已解析、无消费者 | 集中式 TSDB 需自行桥接 |
 | `suppressed` 状态 | 维护窗口抑制 | 无任何产生路径 | 仅为保留编码 |
 | `SetProbeError` | 调度失败直接置 probe_error | 方法定义了但无调用方 | probe_error 只经状态机路径进入 |
 | 状态落盘 | 状态变化/阈值 crossing 写 stateFile | 完全内存态 | daemon 重启后从 unknown 重新收敛 |
-| Jitter 计算 | 时间序连续样本的平均绝对偏差 | 对**排序后** RTT 序列计算 | 数值系统性偏小，仅作相对参考 |
 | spool 写入粒度 | 按 probe sample 写 | 按 flush 批量写全量快照 | 样本时间密度跟随 flush 节奏 |
 
 ### 10.1 使用建议

@@ -364,6 +364,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	if state := healthSmokeState(t, manager, now); state != health.HealthStateHealthy {
 		t.Fatalf("health state after initial real probe = %s, want healthy", state)
 	}
+	healthSmokePacketLossRates(t, ctx, nsA, nsB, vethA)
 
 	service := &DaemonService{
 		health: manager,
@@ -435,6 +436,77 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 		t.Fatal("cutover should be ready again after data-plane recovery and selected BIRD route")
 	}
 	t.Logf("Health+BIRD fault-injection root smoke: selected route %s on %s survived loss injection and recovery", remotePrefix, vethA)
+}
+
+func healthSmokePacketLossRates(t *testing.T, ctx context.Context, sourceNetNS, targetNetNS, iface string) {
+	t.Helper()
+	if _, err := exec.LookPath("nft"); err != nil {
+		t.Fatalf("nft is required for deterministic health packet-loss smoke: %v", err)
+	}
+	const table = "photon_health_loss"
+	deleteTable := func() {
+		_ = exec.Command("ip", "netns", "exec", targetNetNS, "nft", "delete", "table", "inet", table).Run()
+	}
+	deleteTable()
+	t.Cleanup(deleteTable)
+
+	tests := []struct {
+		name      string
+		dropOfTen int
+		bursts    int
+		wantState string
+	}{
+		{name: "10_percent", dropOfTen: 1, bursts: 1, wantState: health.HealthStateHealthy},
+		{name: "30_percent", dropOfTen: 3, bursts: 1, wantState: health.HealthStateDegraded},
+		{name: "70_percent", dropOfTen: 7, bursts: 3, wantState: health.HealthStateDown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deleteTable()
+			commands := [][]string{
+				{"add", "table", "inet", table},
+				{"add", "chain", "inet", table, "input", "{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "accept", ";", "}"},
+				{"add", "rule", "inet", table, "input", "ip", "protocol", "icmp", "icmp", "type", "echo-request", "numgen", "inc", "mod", "10", "<", strconv.Itoa(test.dropOfTen), "drop"},
+			}
+			for _, args := range commands {
+				commandArgs := append([]string{"netns", "exec", targetNetNS, "nft"}, args...)
+				if output, err := exec.CommandContext(ctx, "ip", commandArgs...).CombinedOutput(); err != nil {
+					t.Fatalf("nft %s: %v\noutput: %s", strings.Join(args, " "), err, output)
+				}
+			}
+
+			rawProber := health.NewRawICMProber(nil)
+			t.Cleanup(rawProber.Close)
+			probeManager := health.NewManager(
+				health.ProbeConfig{Interval: -time.Second, Timeout: 250 * time.Millisecond, Burst: 10, LossWindow: 20, MaxConcurrent: 1},
+				health.DefaultHysteresisConfig(),
+				rawProber,
+			)
+			probeManager.UpsertTarget(health.ProbeTarget{
+				InstanceID:      "packet-loss-" + test.name,
+				NetNS:           sourceNetNS,
+				InterfaceName:   iface,
+				LocalTunnelAddr: netip.MustParseAddr("10.99.4.1"),
+				PeerTunnelAddr:  netip.MustParseAddr("10.99.4.2"),
+				State:           "up",
+			}, time.Now())
+			for range test.bursts {
+				if dispatched := probeManager.Tick(ctx, time.Now()); dispatched != 1 {
+					t.Fatalf("health probes dispatched = %d, want 1", dispatched)
+				}
+			}
+			snapshot := probeManager.Snapshot(time.Now())
+			wantSent := 10 * test.bursts
+			wantLost := test.dropOfTen * test.bursts
+			if len(snapshot) != 1 || snapshot[0].Sent != wantSent || snapshot[0].Lost != wantLost || snapshot[0].Received != wantSent-wantLost {
+				t.Fatalf("packet loss snapshot = %+v, want sent/received/lost=%d/%d/%d", snapshot, wantSent, wantSent-wantLost, wantLost)
+			}
+			if snapshot[0].State != test.wantState {
+				t.Fatalf("packet loss state = %s, want %s", snapshot[0].State, test.wantState)
+			}
+		})
+	}
+	deleteTable()
 }
 
 // TestDaemonBIRDUpstreamRootSmoke verifies the veth upstream pipeline with

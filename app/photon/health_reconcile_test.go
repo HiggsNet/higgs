@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -226,6 +227,62 @@ func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 	}
 }
 
+func TestHealthStatusAndSpoolUsePacketCounts(t *testing.T) {
+	now := time.Unix(1500, 0)
+	cfg := defaultHealthConfig()
+	cfg.MetricsEnabled = true
+	cfg.LocalSpoolPath = t.TempDir()
+	cfg.LocalSpoolMaxAge = time.Hour
+	manager := health.NewManager(health.ProbeConfig{
+		Interval:      time.Nanosecond,
+		Burst:         3,
+		LossWindow:    20,
+		MaxConcurrent: 1,
+	}, health.DefaultHysteresisConfig(), packetCountHealthProber{})
+	manager.SetTargets([]health.ProbeTarget{{
+		InstanceID:     "link-1",
+		PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),
+		State:          "up",
+	}}, now)
+	if got := manager.Tick(context.Background(), now.Add(time.Second)); got != 1 {
+		t.Fatalf("dispatched probes = %d, want 1", got)
+	}
+	d := &DaemonService{
+		Sync:   &SyncRuntime{App: &Runtime{Config: &appConfig{Health: cfg}, Clock: func() time.Time { return now.Add(time.Second) }}},
+		health: manager,
+	}
+	links := d.healthStatusResponse()
+	if len(links) != 1 || links[0].Sent != 3 || links[0].Received != 2 || links[0].Lost != 1 || links[0].LossRatio != 33 || links[0].State != health.HealthStateDegraded {
+		t.Fatalf("health status = %+v, want degraded with packet counts 3/2/1 and 33%% loss", links)
+	}
+	metrics, err := (&observerProvider{daemon: d}).OpenMetrics()
+	if err != nil {
+		t.Fatalf("OpenMetrics: %v", err)
+	}
+	for _, want := range []string{
+		"photon_link_probe_packets_sent{",
+		"} 3\n",
+		"photon_link_probe_packets_received{",
+		"} 2\n",
+		"photon_link_probe_packets_lost{",
+		"} 1\n",
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("OpenMetrics missing %q:\n%s", want, metrics)
+		}
+	}
+	if err := d.appendHealthSpool(now, links); err != nil {
+		t.Fatalf("appendHealthSpool: %v", err)
+	}
+	samples, err := readAllHealthSpoolSamples(healthSpoolFile(d.Sync.App.Config))
+	if err != nil {
+		t.Fatalf("readAllHealthSpoolSamples: %v", err)
+	}
+	if len(samples) != 1 || samples[0].Sent != 3 || samples[0].Received != 2 || samples[0].Lost != 1 || samples[0].LossRatioPct != 33 {
+		t.Fatalf("health spool = %+v, want packet counts 3/2/1 and 33%% loss", samples)
+	}
+}
+
 func TestHealthLocalSpoolQuerySeries(t *testing.T) {
 	cfg := defaultHealthConfig()
 	cfg.MetricsEnabled = true
@@ -283,6 +340,21 @@ func TestHealthLocalSpoolQuerySeries(t *testing.T) {
 		t.Fatalf("latest rtt point = %v, want 20", got)
 	}
 }
+
+type packetCountHealthProber struct{}
+
+func (packetCountHealthProber) Probe(_ context.Context, target health.ProbeTarget, _ health.ProbeConfig) health.ProbeResult {
+	return health.ProbeResult{
+		InstanceID: target.InstanceID,
+		Sent:       3,
+		Received:   2,
+		Lost:       1,
+		RTT:        5 * time.Millisecond,
+		Success:    true,
+	}
+}
+
+func (packetCountHealthProber) Type() string { return health.ProbeTypeICMP }
 
 func TestHealthLocalSpoolQueryKeepsRotateProbeLines(t *testing.T) {
 	cfg := defaultHealthConfig()

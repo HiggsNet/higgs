@@ -50,6 +50,7 @@ type rawICMPWorker interface {
 }
 
 type rawProbeResult struct {
+	sent     int
 	received int
 	lastRTT  time.Duration
 	err      error
@@ -93,24 +94,34 @@ func (p *RawICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeC
 	if result.unavailable {
 		return p.fallbackOrError(ctx, target, cfg, result.err)
 	}
-	if result.err != nil {
-		return ProbeResult{InstanceID: target.InstanceID, Error: result.err.Error()}
-	}
-	if result.received == 0 {
-		// An unanswered burst is a valid reachability observation. Reserve
-		// Error for failures to create, bind, or use the probe socket so the
-		// state machine reports packet loss as degraded/down, not probe_error.
-		return ProbeResult{InstanceID: target.InstanceID}
-	}
 	burst := cfg.Burst
 	if burst <= 0 {
 		burst = 3
 	}
-	return ProbeResult{
-		InstanceID: target.InstanceID,
-		RTT:        result.lastRTT,
-		Success:    result.received > burst-result.received,
+	sent := result.sent
+	if sent == 0 && result.err == nil {
+		// A completed raw worker result represents the configured burst. This
+		// also preserves compatibility with worker implementations predating
+		// explicit sent accounting.
+		sent = burst
 	}
+	received := min(max(result.received, 0), sent)
+	rtt := result.lastRTT
+	if received == 0 {
+		rtt = 0
+	}
+	probeResult := ProbeResult{
+		InstanceID: target.InstanceID,
+		Sent:       sent,
+		Received:   received,
+		Lost:       sent - received,
+		RTT:        rtt,
+		Success:    result.err == nil && received > sent-received,
+	}
+	if result.err != nil {
+		probeResult.Error = result.err.Error()
+	}
+	return probeResult
 }
 
 func (p *RawICMProber) fallbackOrError(ctx context.Context, target ProbeTarget, cfg ProbeConfig, rawErr error) ProbeResult {
@@ -479,6 +490,7 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 		deadline = d
 	}
 	pending := make(map[uint16]time.Time, burst)
+	var sent int
 	var received int
 	var lastRTT time.Duration
 	drain := func() error {
@@ -498,13 +510,14 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 	for i := 0; i < burst; i++ {
 		nextSend := start.Add(time.Duration(i) * pingBurstInterval)
 		if err := waitRawICMP(job.ctx, fd, nextSend, drain); err != nil {
-			return rawProbeResult{received: received, lastRTT: lastRTT, err: err}
+			return rawProbeResult{sent: sent, received: received, lastRTT: lastRTT, err: err}
 		}
 		sequence := uint16(job.seq.Add(1))
 		packet := makeICMPEchoPacket(key.family, job.id, sequence)
 		if err := unix.Sendto(fd, packet, 0, rawDestination(job.target, key.family, zoneID)); err != nil {
 			reopen := shouldReopenRawICMPSocket(err)
 			return rawProbeResult{
+				sent:        sent,
 				received:    received,
 				lastRTT:     lastRTT,
 				err:         fmt.Errorf("send raw ICMP echo: %w", err),
@@ -512,15 +525,16 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 				reopen:      reopen,
 			}
 		}
+		sent++
 		pending[sequence] = time.Now()
 	}
 	if err := waitRawICMP(job.ctx, fd, deadline, drain); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return rawProbeResult{received: received, lastRTT: lastRTT}
+			return rawProbeResult{sent: sent, received: received, lastRTT: lastRTT}
 		}
-		return rawProbeResult{received: received, lastRTT: lastRTT, err: err}
+		return rawProbeResult{sent: sent, received: received, lastRTT: lastRTT, err: err}
 	}
-	return rawProbeResult{received: received, lastRTT: lastRTT}
+	return rawProbeResult{sent: sent, received: received, lastRTT: lastRTT}
 }
 
 func shouldReopenRawICMPSocket(err error) bool {

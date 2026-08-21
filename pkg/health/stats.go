@@ -11,9 +11,12 @@ const ewmaAlpha = 0.3
 
 // sample is a single probe result stored in the rolling window.
 type sample struct {
-	at      time.Time
-	rtt     time.Duration
-	success bool
+	at       time.Time
+	rtt      time.Duration
+	sent     int
+	received int
+	lost     int
+	success  bool
 }
 
 // RollingWindow keeps a bounded ring buffer of probe results and computes
@@ -40,27 +43,42 @@ func NewRollingWindow(capacity int) *RollingWindow {
 	}
 }
 
-// Record inserts a probe result into the window.
+// Record inserts a legacy one-packet probe result into the window.
 func (w *RollingWindow) Record(at time.Time, rtt time.Duration, success bool) {
+	w.RecordProbe(at, ProbeResult{RTT: rtt, Success: success})
+}
+
+// RecordProbe inserts a packet-counted probe burst into the window.
+func (w *RollingWindow) RecordProbe(at time.Time, result ProbeResult) {
+	result = normalizeProbeResult(result)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.samples[w.head] = sample{at: at, rtt: rtt, success: success}
+	w.samples[w.head] = sample{
+		at:       at,
+		rtt:      result.RTT,
+		sent:     result.Sent,
+		received: result.Received,
+		lost:     result.Lost,
+		success:  result.Success,
+	}
 	w.head = (w.head + 1) % w.cap
 	if w.count < w.cap {
 		w.count++
 	}
-	if success {
+	if result.Success {
 		w.consec = 0
-		w.lastOK = at
-		if rtt > 0 {
-			if w.ewma == 0 {
-				w.ewma = rtt
-			} else {
-				w.ewma = time.Duration(float64(w.ewma)*(1-ewmaAlpha) + float64(rtt)*ewmaAlpha)
-			}
-		}
 	} else {
 		w.consec++
+	}
+	if result.Received > 0 {
+		w.lastOK = at
+		if result.RTT > 0 {
+			if w.ewma == 0 {
+				w.ewma = result.RTT
+			} else {
+				w.ewma = time.Duration(float64(w.ewma)*(1-ewmaAlpha) + float64(result.RTT)*ewmaAlpha)
+			}
+		}
 	}
 }
 
@@ -69,7 +87,7 @@ func (w *RollingWindow) Snapshot() WindowSnapshot {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	snap := WindowSnapshot{
-		Sent:             w.count,
+		Bursts:           w.count,
 		ConsecutiveFails: w.consec,
 		EWMARTT:          w.ewma,
 		LastSuccess:      w.lastOK,
@@ -81,31 +99,31 @@ func (w *RollingWindow) Snapshot() WindowSnapshot {
 	idx := (w.head - w.count + w.cap) % w.cap
 	for i := 0; i < w.count; i++ {
 		s := w.samples[(idx+i)%w.cap]
-		if s.success {
-			snap.Received++
-			if i == w.count-1 || snap.LastRTT == 0 {
-				snap.LastRTT = s.rtt
-			}
+		snap.Sent += s.sent
+		snap.Received += s.received
+		snap.Lost += s.lost
+		if s.received > 0 && s.rtt > 0 {
 			rtts = append(rtts, s.rtt)
-		} else {
-			snap.Lost++
 		}
 	}
 	// LastRTT should be the most recent sample's RTT (success or not).
 	last := w.samples[(w.head-1+w.cap)%w.cap]
-	if last.success {
+	if last.received > 0 {
 		snap.LastRTT = last.rtt
 	} else {
 		snap.LastRTT = 0
 	}
-	snap.LossRatio = float64(snap.Lost) / float64(snap.Sent)
+	if snap.Sent > 0 {
+		snap.LossRatio = float64(snap.Lost) / float64(snap.Sent)
+	}
 	if len(rtts) > 0 {
-		slices.Sort(rtts)
-		snap.MinRTT = rtts[0]
-		snap.MaxRTT = rtts[len(rtts)-1]
-		snap.P50RTT = percentile(rtts, 50)
-		snap.P95RTT = percentile(rtts, 95)
-		snap.P99RTT = percentile(rtts, 99)
+		sortedRTTs := slices.Clone(rtts)
+		slices.Sort(sortedRTTs)
+		snap.MinRTT = sortedRTTs[0]
+		snap.MaxRTT = sortedRTTs[len(sortedRTTs)-1]
+		snap.P50RTT = percentile(sortedRTTs, 50)
+		snap.P95RTT = percentile(sortedRTTs, 95)
+		snap.P99RTT = percentile(sortedRTTs, 99)
 		snap.Jitter = computeJitter(rtts)
 	}
 	return snap
@@ -113,6 +131,7 @@ func (w *RollingWindow) Snapshot() WindowSnapshot {
 
 // WindowSnapshot is the aggregate view of a RollingWindow.
 type WindowSnapshot struct {
+	Bursts           int
 	Sent             int
 	Received         int
 	Lost             int
@@ -148,20 +167,20 @@ func percentile(sorted []time.Duration, pct int) time.Duration {
 	return sorted[idx]
 }
 
-func computeJitter(sorted []time.Duration) time.Duration {
-	if len(sorted) < 2 {
+func computeJitter(ordered []time.Duration) time.Duration {
+	if len(ordered) < 2 {
 		return 0
 	}
 	// Mean absolute deviation of consecutive RTT samples.
 	var sum time.Duration
-	prev := sorted[0]
-	for i := 1; i < len(sorted); i++ {
-		d := sorted[i] - prev
+	prev := ordered[0]
+	for i := 1; i < len(ordered); i++ {
+		d := ordered[i] - prev
 		if d < 0 {
 			d = -d
 		}
 		sum += d
-		prev = sorted[i]
+		prev = ordered[i]
 	}
-	return sum / time.Duration(len(sorted)-1)
+	return sum / time.Duration(len(ordered)-1)
 }

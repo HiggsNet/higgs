@@ -359,7 +359,7 @@ health:
 字段说明：
 
 - `interval` / `timeout` / `burst`：探测间隔、单次超时和连续探测次数。
-- `loss_window`：计算丢包率的滑动窗口大小。
+- `loss_window`：滑动窗口保留的 burst 数；窗口内 sent/received/lost 和 loss ratio 按真实 ICMP 包数累计。
 - `jitter`：RTT 抖动阈值，用于判断链路质量。
 - `max_concurrent_probes`：同时进行的探测数量上限。
 - `fail_threshold_consecutive` / `recover_consecutive`：连续失败/恢复多少次后切换状态。

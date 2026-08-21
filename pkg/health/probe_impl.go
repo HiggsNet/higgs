@@ -64,15 +64,17 @@ func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 	if err != nil {
 		return ProbeResult{InstanceID: target.InstanceID, Error: err.Error()}
 	}
-	if received == 0 {
-		// A completed ping with zero replies is a reachability observation, not
-		// a failure to execute the probe.
-		return ProbeResult{InstanceID: target.InstanceID}
+	if received < 0 {
+		received = 0
 	}
-	// Preserve the previous burst policy: a partial burst is healthy only when
-	// more than half of the packets succeeded.
+	if received > burst {
+		received = burst
+	}
 	return ProbeResult{
 		InstanceID: target.InstanceID,
+		Sent:       burst,
+		Received:   received,
+		Lost:       burst - received,
 		RTT:        lastRTT,
 		Success:    received > burst-received,
 	}
@@ -259,5 +261,5 @@ func (p *UDPProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 	}
 	// We don't expect a reply; treat successful write as reachability evidence.
 	rtt := time.Since(start)
-	return ProbeResult{InstanceID: target.InstanceID, RTT: rtt, Success: true}
+	return ProbeResult{InstanceID: target.InstanceID, Sent: 1, Received: 1, RTT: rtt, Success: true}
 }

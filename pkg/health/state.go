@@ -45,7 +45,12 @@ func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastErro
 	// Unknown means that no observation exists. Once a probe has completed,
 	// report what that observation says instead of falling back to unknown for
 	// low-but-nonzero loss or while failure hysteresis is pending.
-	if snap.Sent == 0 {
+	observations := snap.Bursts
+	if observations == 0 && snap.Sent > 0 {
+		// Compatibility for callers constructing WindowSnapshot directly.
+		observations = snap.Sent
+	}
+	if observations == 0 {
 		state, reason = HealthStateUnknown, ""
 	} else if lastError != "" && (prev == HealthStateProbeError || snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive) {
 		// probe_error is sticky: it represents repeated failures to execute a
@@ -54,11 +59,15 @@ func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastErro
 		state, reason = HealthStateProbeError, classifyFailReason(lastError, snap)
 	} else if snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive {
 		state, reason = HealthStateDown, classifyFailReason(lastError, snap)
+	} else if snap.Sent == 0 {
+		// The probe ran but could not send packets. Before the repeated-error
+		// threshold this is degraded, matching the old one-sample error behavior.
+		state, reason = HealthStateDegraded, classifyFailReason(lastError, snap)
 	} else if snap.LossRatio >= m.cfg.DownLossThreshold {
 		// A cold window makes the first failed sample look like 100% loss. Do
 		// not call the link down until at least the configured failure evidence
 		// has accumulated.
-		if snap.Sent >= m.cfg.FailThresholdConsecutive {
+		if observations >= m.cfg.FailThresholdConsecutive {
 			state, reason = HealthStateDown, classifyFailReason(lastError, snap)
 		} else {
 			state, reason = HealthStateDegraded, classifyFailReason(lastError, snap)

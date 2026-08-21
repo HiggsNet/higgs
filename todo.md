@@ -78,6 +78,7 @@
   - 梳理 `photon status`、`photon zones`、`photon peers`、`photon sync` 等面向日常运维的简洁 CLI。
   - Observer 后续增强另见 Phase 7 之后远期后续。
   - Health probe 性能：已实现按 netns 常驻的 raw-ICMP worker，worker 固定 OS thread 后 `setns` 并按源/接口复用 ICMP socket；raw socket / `setns` 的 setup 失败自动回退 exec prober，消除正常路径的 `ip netns exec ping` fork/exec/mount 开销。待完成 root smoke：IPv4、IPv6 link-local scope、netns 删除/重建、`CAP_NET_RAW` / `CAP_SYS_ADMIN` / `NoNewPrivileges` 缺失时的降级；验收后再确认默认路径的长期运行行为。
+  - [x] **Health burst 按包统计与链路状态精度**：`ProbeResult`、rolling window、状态机、CLI/Observer、spool 与 OpenMetrics 已改为累计真实 sent/received/lost；RTT 明确定义为每个 burst 最后一个成功回复的 RTT，部分回复保留 RTT，jitter 按时间序相邻 replied burst 计算。`loss_window`、连续失败、冷启动 down 门槛与恢复迟滞仍按 burst 计数，仅 loss threshold 改用包级比例，以保持生产告警灵敏度。单测覆盖 `3/3`、`2/3`、`1/3`、`0/3`、跨 burst window、raw/exec 一致性、执行错误；root smoke 在真实 netns 以确定性 10%/30%/70% 丢包验证包计数及 healthy/degraded/down 状态，并保留 100% loss/cutover/recovery 验收。Observer 在 metrics 启用时新增 `/metrics`。
   - **Daemon state-store 性能（perf 2026-07-24，2026-07-31 复核）**
     - daemon 生产写路径由主事件循环串行执行；packet receiver、object-pull、health 和 control 后台 goroutine 只投递事件或更新独立 observability，正常运行时不会并发执行两个 routing reconcile，也不会在 reconcile 中途插入另一个 committed writer。`DaemonStateStore` 的锁仍用于并发读和边界防护，全局 `revision` 用于排序及检测意外绕过 single-writer 的写入，而不是把多 writer 当作正常工作模式。
     - 当前 committed root 及其可达子结构必须永久不可变；写操作只修改 detached workspace 或 typed COW 拥有的字段，发布时在锁内替换一次 root。`Snapshot()` 在取得 root/revision 后释放锁再复制是安全的，前提正是旧 root 不再原地修改。

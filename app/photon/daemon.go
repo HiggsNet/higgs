@@ -33,6 +33,7 @@ type DaemonService struct {
 	PeerObservability      *observability.PeerObservabilityStore
 	IPsecDriver            ipsec.IPsecDriver
 	XFRMDriver             ipsec.XFRMDriver
+	ipsecDNSResolver       ipsec.DNSResolver
 	closeIPsecDriver       func() error
 	health                 *health.Manager
 	healthUpdates          <-chan struct{}
@@ -177,6 +178,9 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		StateStore:        NewDaemonStateStore(state),
 		PeerObservability: peerObservability,
 	}
+	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
+		Now: d.Sync.now,
+	})
 	if state != nil && state.RoutingReconcile != nil {
 		d.routingLastRunUnix.Store(state.RoutingReconcile.LastRunUnix)
 	}

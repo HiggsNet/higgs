@@ -173,11 +173,17 @@ type StrongSwanDriver struct {
 	InitiateConcurrency   int
 	InitiateClientFactory func() (VICIClient, func() error, error)
 
-	keyIDs        map[string]string
-	keyIDsMu      sync.Mutex
-	initiateMu    sync.Mutex
-	initiateBusy  map[string]struct{}
-	initiateSlots chan struct{}
+	privateKeyBindings map[string]string
+	privateKeys        map[string]*strongSwanPrivateKeyRef
+	privateKeyMu       sync.Mutex
+	initiateMu         sync.Mutex
+	initiateBusy       map[string]struct{}
+	initiateSlots      chan struct{}
+}
+
+type strongSwanPrivateKeyRef struct {
+	keyID string
+	refs  int
 }
 
 func PlanApply(spec TransportLinkSpec, netns NetNSSpec) ApplyPlan {
@@ -613,28 +619,40 @@ func (d *StrongSwanDriver) LoadPrivateKey(ctx context.Context, id string, key []
 	if len(key) == 0 {
 		return fmt.Errorf("private key data is required")
 	}
-	ctx, cancel := d.viciContext(ctx)
-	defer cancel()
-	pemBytes, err := PEMEncodePrivateKey(key)
+	if algorithm == "" {
+		algorithm = AlgorithmEd25519
+	}
+	publicKey, err := DeriveTransportPublicKey(key, algorithm)
 	if err != nil {
 		return err
 	}
-	resp, err := d.VICI.Call(ctx, "load-key", map[string]any{
-		"type": KeyTypeForAlgorithm(algorithm),
-		"data": string(pemBytes),
-	})
-	if err != nil {
+	fingerprint := TransportKeyFingerprint(algorithm, publicKey)
+
+	d.privateKeyMu.Lock()
+	defer d.privateKeyMu.Unlock()
+	if d.privateKeyBindings == nil {
+		d.privateKeyBindings = make(map[string]string)
+	}
+	if d.privateKeys == nil {
+		d.privateKeys = make(map[string]*strongSwanPrivateKeyRef)
+	}
+	oldFingerprint := d.privateKeyBindings[id]
+	if oldFingerprint == fingerprint {
+		return nil
+	}
+	if err := d.acquirePrivateKeyLocked(ctx, fingerprint, key, algorithm); err != nil {
 		return err
 	}
-	keyID := stringValue(resp["id"])
-	if keyID != "" {
-		d.keyIDsMu.Lock()
-		if d.keyIDs == nil {
-			d.keyIDs = make(map[string]string)
+	if oldFingerprint != "" {
+		if err := d.releasePrivateKeyLocked(ctx, oldFingerprint); err != nil {
+			rollbackErr := d.releasePrivateKeyLocked(ctx, fingerprint)
+			if rollbackErr != nil {
+				return fmt.Errorf("replace private key for %q: release old key: %v; rollback new key: %w", id, err, rollbackErr)
+			}
+			return fmt.Errorf("replace private key for %q: %w", id, err)
 		}
-		d.keyIDs[id] = keyID
-		d.keyIDsMu.Unlock()
 	}
+	d.privateKeyBindings[id] = fingerprint
 	return nil
 }
 
@@ -648,17 +666,66 @@ func (d *StrongSwanDriver) UnloadPrivateKey(ctx context.Context, id string) erro
 	if d.KeyDir != "" {
 		_ = os.Remove(filepath.Join(d.KeyDir, id+"-peer.pub.pem"))
 	}
-	d.keyIDsMu.Lock()
-	keyID := d.keyIDs[id]
-	delete(d.keyIDs, id)
-	d.keyIDsMu.Unlock()
-	if keyID == "" {
+	d.privateKeyMu.Lock()
+	defer d.privateKeyMu.Unlock()
+	fingerprint := d.privateKeyBindings[id]
+	if fingerprint == "" {
 		return nil
 	}
-	ctx, cancel := d.viciContext(ctx)
+	if err := d.releasePrivateKeyLocked(ctx, fingerprint); err != nil {
+		return err
+	}
+	delete(d.privateKeyBindings, id)
+	return nil
+}
+
+func (d *StrongSwanDriver) acquirePrivateKeyLocked(ctx context.Context, fingerprint string, key []byte, algorithm string) error {
+	if ref := d.privateKeys[fingerprint]; ref != nil {
+		ref.refs++
+		return nil
+	}
+	pemBytes, err := PEMEncodePrivateKey(key)
+	if err != nil {
+		return err
+	}
+	callCtx, cancel := d.viciContext(ctx)
 	defer cancel()
-	_, err := d.VICI.Call(ctx, "unload-key", map[string]any{"id": keyID})
-	return err
+	resp, err := d.VICI.Call(callCtx, "load-key", map[string]any{
+		"type": KeyTypeForAlgorithm(algorithm),
+		"data": string(pemBytes),
+	})
+	if err != nil {
+		return err
+	}
+	d.privateKeys[fingerprint] = &strongSwanPrivateKeyRef{
+		keyID: stringValue(resp["id"]),
+		refs:  1,
+	}
+	return nil
+}
+
+func (d *StrongSwanDriver) releasePrivateKeyLocked(ctx context.Context, fingerprint string) error {
+	ref := d.privateKeys[fingerprint]
+	if ref == nil {
+		return nil
+	}
+	if ref.refs > 1 {
+		ref.refs--
+		return nil
+	}
+	if ref.keyID != "" {
+		callCtx, cancel := d.viciContext(ctx)
+		defer cancel()
+		if _, err := d.VICI.Call(callCtx, "unload-key", map[string]any{"id": ref.keyID}); err != nil && !isVICIKeyNotFound(err) {
+			return err
+		}
+	}
+	delete(d.privateKeys, fingerprint)
+	return nil
+}
+
+func isVICIKeyNotFound(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "key not found")
 }
 
 func (d *StrongSwanDriver) viciContext(ctx context.Context) (context.Context, context.CancelFunc) {
