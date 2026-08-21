@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -392,6 +393,27 @@ func TestManagerTickCapsConcurrentProbes(t *testing.T) {
 	}
 }
 
+func TestManagerReserveDuePrefersOldestDeadline(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Hour, Timeout: time.Second, Burst: 1, LossWindow: 5, MaxConcurrent: 2}
+	m := NewManager(cfg, DefaultHysteresisConfig(), &fakeProber{})
+	now := time.Now()
+	for id, due := range map[string]time.Time{
+		"link-a": now.Add(-time.Second),
+		"link-b": now.Add(-5 * time.Second),
+		"link-z": now.Add(-10 * time.Second),
+	} {
+		m.UpsertTarget(ProbeTarget{InstanceID: id, PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"), State: "up"}, now)
+		m.mu.Lock()
+		m.nextProbe[id] = due
+		m.mu.Unlock()
+	}
+
+	pending := m.reserveDue(context.Background(), now)
+	if len(pending) != 2 || pending[0].id != "link-z" || pending[1].id != "link-b" {
+		t.Fatalf("reserved probes = %#v, want oldest deadlines link-z then link-b", pending)
+	}
+}
+
 func TestManagerTickAsyncReturnsBeforeProbeCompletes(t *testing.T) {
 	cfg := ProbeConfig{Interval: time.Hour, Timeout: time.Second, Burst: 1, LossWindow: 5, MaxConcurrent: 1}
 	prober := newBlockingProber()
@@ -419,6 +441,34 @@ func TestManagerTickAsyncReturnsBeforeProbeCompletes(t *testing.T) {
 	}
 	if snapshot := m.Snapshot(time.Now()); snapshot[0].Received != 1 {
 		t.Fatalf("received = %d, want 1", snapshot[0].Received)
+	}
+}
+
+func TestManagerAsyncProbeHardDeadlineReleasesWorker(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Hour, Timeout: 10 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 1}
+	prober := newStubbornProber()
+	m := NewManager(cfg, DefaultHysteresisConfig(), prober)
+	now := time.Now()
+	m.UpsertTarget(ProbeTarget{InstanceID: "link-a", PeerTunnelAddr: netip.MustParseAddr("10.0.0.2"), State: "up"}, now)
+	m.mu.Lock()
+	m.nextProbe["link-a"] = now.Add(-time.Second)
+	m.mu.Unlock()
+
+	updates := m.StartAsync(t.Context())
+	if got := m.TickAsync(t.Context(), now); got != 1 {
+		t.Fatalf("dispatched = %d, want 1", got)
+	}
+	<-prober.started
+	select {
+	case <-updates:
+	case <-time.After(time.Second):
+		close(prober.release)
+		t.Fatal("hard deadline did not release async worker")
+	}
+	close(prober.release)
+	snapshot := m.Snapshot(time.Now())
+	if !strings.Contains(snapshot[0].LastError, "probe deadline exceeded") {
+		t.Fatalf("last error = %q, want hard deadline error", snapshot[0].LastError)
 	}
 }
 
@@ -603,6 +653,23 @@ type blockingProber struct {
 	active  int
 	max     int
 }
+
+type stubbornProber struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func newStubbornProber() *stubbornProber {
+	return &stubbornProber{started: make(chan struct{}, 1), release: make(chan struct{})}
+}
+
+func (p *stubbornProber) Probe(context.Context, ProbeTarget, ProbeConfig) ProbeResult {
+	p.started <- struct{}{}
+	<-p.release
+	return ProbeResult{Success: true, RTT: time.Millisecond}
+}
+
+func (p *stubbornProber) Type() string { return ProbeTypeICMP }
 
 func newBlockingProber() *blockingProber {
 	return &blockingProber{started: make(chan struct{}, 3), release: make(chan struct{})}

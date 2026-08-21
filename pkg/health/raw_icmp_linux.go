@@ -493,11 +493,11 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 	var sent int
 	var received int
 	var lastRTT time.Duration
-	drain := func() error {
+	drain := func() (bool, error) {
 		for {
 			seq, ok := readRawICMPReply(fd, key.family, job.id)
 			if !ok {
-				return nil
+				return sent == burst && len(pending) == 0, nil
 			}
 			if sent, known := pending[seq]; known {
 				delete(pending, seq)
@@ -696,10 +696,14 @@ func parseRawICMPReply(packet []byte, family int, id uint16) (uint16, bool) {
 	return binary.BigEndian.Uint16(packet[6:8]), true
 }
 
-func waitRawICMP(ctx context.Context, fd int, until time.Time, drain func() error) error {
+func waitRawICMP(ctx context.Context, fd int, until time.Time, drain func() (bool, error)) error {
 	for {
-		if err := drain(); err != nil {
+		done, err := drain()
+		if err != nil {
 			return err
+		}
+		if done {
+			return nil
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -709,7 +713,7 @@ func waitRawICMP(ctx context.Context, fd int, until time.Time, drain func() erro
 			return nil
 		}
 		milliseconds := max(int((remaining+time.Millisecond-1)/time.Millisecond), 1)
-		_, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, milliseconds)
+		_, err = unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, milliseconds)
 		if err != nil && !errors.Is(err, syscall.EINTR) {
 			return err
 		}

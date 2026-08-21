@@ -524,12 +524,15 @@ func birdObservationForInterface(instanceID, probeID, iface string, observed *bi
 			continue
 		}
 		obs.Neighbor = true
+		if n.Routes > 0 {
+			obs.Route = true
+		}
 		if n.Metric > 0 && (obs.Metric == 0 || int(n.Metric) < obs.Metric) {
 			obs.Metric = int(n.Metric)
 		}
 	}
 	for _, r := range observed.Routes {
-		if r.Iface == iface && r.Selected && birdRouteIsBabel(r) {
+		if r.Iface == iface && birdRouteIsBabel(r) {
 			obs.Route = true
 			if r.Metric > 0 && (obs.Metric == 0 || int(r.Metric) < obs.Metric) {
 				obs.Metric = int(r.Metric)

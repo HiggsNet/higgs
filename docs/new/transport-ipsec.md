@@ -499,7 +499,7 @@ Idle → Preparing（加载独立 staged connection/SA/XFRM interface）
      → TestingNew（观测 staged SA 是否 established）
          → DualRunning（新旧两条链路并行，保留窗口默认 1h）
              → Draining（staged 健康且 Babel neighbor 就绪；new 使用正常 cost，old 调高为 draining cost）
-                 → Cutover（保留到期且 staged route selected 后 promote staged）
+                 → Cutover（保留到期且 staged 接口已学到 Babel route 后 promote staged）
                  → DualRunning（staged 健康或邻居回退，恢复 old 优先）
              → Rollback（staged SA 在规定时限内未建立，清理 staged 保留旧链路）
 ```
@@ -599,7 +599,7 @@ photon debug links
 | XFRM interface 有 TX dropped | XFRM state/policy 在 host，interface 在 overlay netns——确认 host-born 路径正确 |
 | revocation 后 SA 被反复拉起 | owner token 不匹配、残留 `LinkInstance` 未清理、或 teardown 没有成功删除 connection |
 | `dual_running` 不进入 `draining` | staged interface 尚未通过健康探测，或尚未形成 Babel neighbor |
-| `draining` 不推进 cutover | 先看 retention 窗口和 last rotate error，再确认 staged interface 已成为 selected Babel route；健康或 neighbor 回退会恢复为 `dual_running` |
+| `draining` 不推进 cutover | 先看 retention 窗口和 last rotate error，再确认 staged interface 有 Babel neighbor 且已从该接口学到 route；健康或 neighbor 回退会恢复为 `dual_running` |
 | SA 已 established 但 `LinkInstance` 仍是 `connecting` | reconcile 未触发，或 VICI `list-sas` 没有观测到匹配的 SA（检查 child name/reqid/if_id 是否匹配） |
 
 ### 辅助观测手段

@@ -216,7 +216,7 @@ PHOTON_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `bird-babel-container-smoke` | 在 privileged container 中运行 BIRD/Babel smoke。 |
 | `firewall-smoke` | 使用真实 nftables/iptables backend 验证 firewall 规则 apply 和清理；iptables 子项需要同时安装 `ipset`。 |
 | `firewall-container-smoke` | 在 privileged container 中运行 firewall 数据面 smoke。 |
-| `health-smoke` | 验证 health manager、OpenMetrics render、本地 spool/series、真实 BIRD selected route 进入 rotate cutover gate，以及 `tc netem` 丢包注入后的状态切换和恢复。 |
+| `health-smoke` | 验证 health manager、OpenMetrics render、本地 spool/series、真实 BIRD neighbor/route 进入 rotate cutover gate，以及 `tc netem` 丢包注入后的状态切换和恢复。 |
 | `health-fault-smoke` | `health-smoke` 的显式故障注入别名，用于表达该 lane 覆盖 BIRD cutover gate、数据面丢包和恢复。 |
 | `health-fault-container-smoke` | 在 privileged container 中运行 health fault-injection smoke。 |
 | `revocation-data-plane-smoke` | 组合 firewall、BIRD 和 StrongSwan 的 revocation 数据面验证，需要 root。 |

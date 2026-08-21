@@ -228,6 +228,9 @@ func TestStatusParsing(t *testing.T) {
 	if len(state.Neighbors) > 0 && state.Neighbors[0].Protocol != "babel1" {
 		t.Errorf("neighbor protocol = %q, want babel1", state.Neighbors[0].Protocol)
 	}
+	if len(state.Neighbors) > 0 && state.Neighbors[0].Routes != 1 {
+		t.Errorf("neighbor routes = %d, want 1", state.Neighbors[0].Routes)
+	}
 }
 
 func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
@@ -259,7 +262,7 @@ func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
 	if state.Stale {
 		t.Fatalf("unexpected stale state, warnings: %v", state.Warnings)
 	}
-	if len(state.Neighbors) != 1 || state.Neighbors[0].Interface != "phx1d556624" {
+	if len(state.Neighbors) != 1 || state.Neighbors[0].Interface != "phx1d556624" || state.Neighbors[0].Routes != 1 {
 		t.Fatalf("neighbors = %#v", state.Neighbors)
 	}
 	if len(state.Routes) != 1 {

@@ -221,11 +221,42 @@ func (m *Manager) runAsyncWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-m.asyncJobs:
-			result := m.prober.Probe(job.ctx, job.target, m.cfg)
+			result := m.runAsyncProbe(job)
 			now := time.Now()
 			m.applyResult(job.id, result, now)
 			m.finishProbe(job.id, now)
 			m.notifyAsyncUpdate()
+		}
+	}
+}
+
+const asyncProbeDeadlineGrace = 250 * time.Millisecond
+
+// runAsyncProbe puts a hard upper bound around the Prober contract. Production
+// probers honor context cancellation, while the buffered result channel also
+// lets the worker move on if an implementation fails to return after cancel.
+func (m *Manager) runAsyncProbe(job probeDispatch) ProbeResult {
+	timeout := m.cfg.Timeout
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	burst := m.cfg.Burst
+	if burst <= 0 {
+		burst = 3
+	}
+	probeCtx, cancel := context.WithTimeout(job.ctx, timeout*time.Duration(burst)+asyncProbeDeadlineGrace)
+	defer cancel()
+	results := make(chan ProbeResult, 1)
+	go func() {
+		results <- m.prober.Probe(probeCtx, job.target, m.cfg)
+	}()
+	select {
+	case result := <-results:
+		return result
+	case <-probeCtx.Done():
+		return ProbeResult{
+			InstanceID: job.target.InstanceID,
+			Error:      "probe deadline exceeded: " + probeCtx.Err().Error(),
 		}
 	}
 }
@@ -250,7 +281,13 @@ func (m *Manager) reserveDue(ctx context.Context, now time.Time) []probeDispatch
 			due = append(due, id)
 		}
 	}
-	sort.Strings(due)
+	sort.Slice(due, func(i, j int) bool {
+		left, right := m.nextProbe[due[i]], m.nextProbe[due[j]]
+		if !left.Equal(right) {
+			return left.Before(right)
+		}
+		return due[i] < due[j]
+	})
 	if len(due) > available {
 		due = due[:available]
 	}
@@ -484,8 +521,8 @@ func (m *Manager) RotateCutoverReadiness() map[string]bool {
 
 // RotateActivationReadiness reports whether a staged link is safe to make
 // preferred. Unlike RotateCutoverReadiness, it deliberately does not require a
-// selected Babel route: that route can only become selected after routing has
-// lowered the staged interface cost and raised the old interface cost.
+// Babel route learned through the staged interface: that route may only appear
+// after routing has lowered the staged interface cost and raised the old cost.
 func (m *Manager) RotateActivationReadiness() map[string]bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

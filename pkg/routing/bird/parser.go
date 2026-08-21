@@ -294,10 +294,10 @@ func parseBabelNeighbors(output string) []BirdNeighbor {
 		}
 
 		fields := strings.Fields(line)
-		if len(fields) < 3 {
+		if len(fields) < 4 {
 			continue
 		}
-		addrText, iface, metricText := fields[0], fields[1], fields[2]
+		addrText, iface, metricText, routesText := fields[0], fields[1], fields[2], fields[3]
 		addr, err := netip.ParseAddr(addrText)
 		if err != nil {
 			continue
@@ -306,7 +306,17 @@ func parseBabelNeighbors(output string) []BirdNeighbor {
 		if err != nil {
 			continue
 		}
-		neighbors = append(neighbors, BirdNeighbor{Interface: iface, Address: addr, Protocol: protocol, Metric: uint32(metric)})
+		routes, err := strconv.Atoi(routesText)
+		if err != nil || routes < 0 {
+			continue
+		}
+		neighbors = append(neighbors, BirdNeighbor{
+			Interface: iface,
+			Address:   addr,
+			Protocol:  protocol,
+			Metric:    uint32(metric),
+			Routes:    routes,
+		})
 	}
 	return neighbors
 }

@@ -131,8 +131,8 @@ type BabelObservation struct {
     InstanceID string
     Neighbor   bool          // BIRD 里存在该接口的 Babel neighbor
     RTT        time.Duration // 当前采集路径未填充
-    Metric     int           // neighbor/selected route 的最小 metric
-    Route      bool          // 存在该接口的 selected Babel route
+    Metric     int           // neighbor/Babel route 的最小 metric
+    Route      bool          // 存在从该接口学到的 Babel route，不要求全局 selected
 }
 ```
 
@@ -167,7 +167,7 @@ health:
 | `burst` | int | `3` | 每次探测发送的 ping 次数 |
 | `loss_window` | int | `20` | rolling window 容量（burst 数）；窗口内 loss 按真实 ICMP 包数累计 |
 | `jitter` | duration | `500ms` | 间隔抖动，interval ± uniform(0, jitter) |
-| `max_concurrent_probes` | int | `8` | 并发上限（**当前不生效**，见 5.3） |
+| `max_concurrent_probes` | int | `8` | 异步 probe worker 并发上限 |
 | `fail_threshold_consecutive` | int | `3` | 降级/失败判定的连续失败阈值 |
 | `loss_threshold` | string(float) | `0.2` | degraded 丢包率阈值，0.0–1.0 |
 | `down_loss_threshold` | string(float) | `0.6` | down 丢包率阈值；必须 ≥ `loss_threshold` |
@@ -217,7 +217,8 @@ reply。steady state 不再执行 `ip netns exec`、fork `ping` 或创建临时 
   `CapabilityBoundingSet`、`AmbientCapabilities`、`NoNewPrivileges` 或 user
   namespace 仍可能把它们移除。
 - IPv4、IPv6 和 IPv6 link-local（以接口 index 作为 scope）均走 raw socket；
-  burst 仍以 200ms 间隔发出，成功数超过失败数才健康。
+  burst 仍以 200ms 间隔发出，成功数超过失败数才健康；收齐当前 burst
+  的所有 reply 后立即完成，不再等待整个 `timeout × burst` 窗口。
 - raw socket / `setns` 的本地 setup 失败会自动退回下述 `ICMProber`。raw
   `sendto` 返回 `ENETUNREACH`、`ENODEV` 或 `EADDRNOTAVAIL` 时，视为缓存的
   `SO_BINDTODEVICE` socket 可能因接口同名重建而失效：本轮退回 exec-ping，
@@ -261,22 +262,16 @@ network namespace 和 mount setup。
 
 ### 5.1 集成点
 
-Health 没有独立的定时器。唯一的驱动入口是 `reconcileHealth`（`app/photon/health_reconcile.go`），它在 `flushIPsecReconcile` 末尾被调用（`app/photon/daemon.go`）：
+Health 由独立的 1s scheduler ticker 驱动。`reconcileHealth`（`app/photon/health_reconcile.go`）
+在 `flushIPsecReconcile` 末尾重建 target；实际 probe 由固定大小 worker pool 异步执行：
 
 ```text
-flushIPsecReconcile
-  ├─ reconcileIPsecLinks   # IPsec reconcile 本体
-  └─ reconcileHealth       # 1. healthTargetsFromState 重建 target
-                           # 2. Manager.SetTargets 全量替换
-                           # 3. Manager.Tick 探测所有到期 target
-                           # 4. 有探测时 appendHealthSpool
+flushIPsecReconcile → reconcileHealth → Manager.SetTargets
+1s scheduler ticker → Manager.TickAsync → bounded worker pool
+probe completion → healthUpdates → spool + observer notification
 ```
 
-因此 health 的调度节奏完全继承 IPsec reconcile flush 的触发源：
-
-- sync timer（`d.Interval`）到期；
-- IPsec reconcile interval timer（各 link group `reconcile.interval_seconds` 的最小值，默认 1 分钟）到期；
-- 各类事件 flush（`notifyStateChanged`、VICI lifecycle 事件、config reload 等）。
+target 变化仍与 IPsec reconcile 保持一致，但 probe 节奏不再受 IPsec reconcile interval 限制。
 
 ### 5.2 SetTargets 语义
 
@@ -287,26 +282,20 @@ flushIPsecReconcile
 
 ### 5.3 Tick 语义
 
-`Manager.Tick(ctx, now)` 的行为：
+daemon 使用 `Manager.TickAsync(ctx, now)`，行为如下：
 
-1. 收集所有 `nextProbe <= now` 的 target（按 ProbeID 排序）。
-2. **同步串行**执行每个 target 的 `Probe`（含 burst 次 ping），逐个把结果写入 window 并评估状态机。
-3. 所有到期 target 的 `nextProbe` 重置为 `now + jitteredInterval()`。
+1. 收集所有 `nextProbe <= now` 的 target，按最早 `nextProbe` 排序，同时到期再以 ProbeID 破平局。
+2. 最多保留 `max_concurrent_probes - inFlight` 个任务并投递给 worker pool。
+3. 每个异步 probe 都有 `timeout × burst + 250ms` 硬 deadline；即使 prober 忽略 context，worker 也会释放并继续后续任务。
+4. probe 完成后写入 window，并将该 target 的 `nextProbe` 重置为完成时刻 `+ jitteredInterval()`。
 
-两个由此而来的事实：
-
-- **Tick 阻塞 event loop**。每次 flush 会把所有到期 target 一次性探测完，最坏阻塞时间 ≈ target 数 × burst × timeout。target 多、timeout 大时会把 daemon 事件循环拖慢。
-- **`max_concurrent_probes` 当前不生效**。Tick 收集 due 列表时 `inFlight` 恒为 0（同步执行，上一 tick 已归零），限流条件永远为真，所有到期 target 都会被探测。
+`Manager.Tick` 仍保留给单次命令和测试使用，但 daemon 正常运行不走该同步路径。
 
 ### 5.4 实际探测频率
 
-由于 Tick 只在 IPsec reconcile flush 时运行，稳态下每条 link 的实际探测间隔是：
-
-```text
-max(health.interval, IPsec reconcile flush 间隔)
-```
-
-默认配置下 flush 间隔约 1 分钟（或 group `reconcile.interval_seconds`），因此 `health.interval: 5s` 在稳态**达不到** 5s——它只在 flush 因事件频繁发生时才可能生效。这与原设计"daemon event loop 以短 timer（约 1s）驱动 Tick"不同，是当前实现最重要的行为差异（见第 10 节）。
+稳态下每条 link 的下次探测时间从上次完成时计算，理想间隔为
+`probe duration + health.interval ± jitter`。worker pool 过载时可能延后，但按最早到期时间调度保证不会因 ProbeID
+字典序而永久饥饿。
 
 ### 5.5 失败语义
 
@@ -412,7 +401,10 @@ health.Manager.RotateCutoverReadiness()
 routing reconcile 处理每个 BIRD instance 后调用 `observeBirdForHealth`（`app/photon/routing_reconcile.go`）：
 
 - 以 2 秒超时查询 BIRD status（`birdHealthObservationTimeout`）。
-- 只为 **staged** link（`RuntimeRole == "staged"`）生成观测：按接口名匹配 Babel neighbor 与 selected route，`Metric` 取两者中的最小正值。
+- 只为 **staged** link（`RuntimeRole == "staged"`）生成观测：按接口名匹配 Babel neighbor，并使用
+  `show babel neighbors` 的 `Routes` 计数确认确实从该接口学到 route；同时也接受
+  BIRD route snapshot 中匹配该接口的 Babel route。两条路径都不要求 route 是全局 selected，
+  `Metric` 取 neighbor/route 中的最小正值。
 - BIRD 查询失败时写入空观测（`Neighbor=false, Route=false`）——这会使对应 staged link 的 cutover gate 阻塞。也就是说 **BIRD 不可达期间 rotate cutover 会被 hold 住**，这是有意为之的保守行为。
 
 普通 active link 的 Babel RTT/metric 当前不采集、不出现在任何输出中（见第 10 节）。

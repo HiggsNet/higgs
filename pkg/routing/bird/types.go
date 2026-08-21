@@ -368,6 +368,7 @@ type BirdNeighbor struct {
 	Address   netip.Addr
 	Protocol  string
 	Metric    uint32
+	Routes    int
 	Reach     uint16 // babel reachability bitmap, when available
 }
 

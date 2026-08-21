@@ -251,6 +251,24 @@ func TestRawICMPSocketSerializesSharedSocket(t *testing.T) {
 	}
 }
 
+func TestWaitRawICMPReturnsAsSoonAsBurstCompletes(t *testing.T) {
+	started := time.Now()
+	calls := 0
+	err := waitRawICMP(context.Background(), -1, started.Add(time.Second), func() (bool, error) {
+		calls++
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("waitRawICMP: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("drain calls = %d, want 1", calls)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("completed burst waited %s, want immediate return", elapsed)
+	}
+}
+
 func TestRawICMPNamespaceWorkerFallsBackAndRateLimitsStaleSocketReopen(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	var opens atomic.Int32

@@ -67,7 +67,6 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 
 	client := &fakeBirdClient{status: &bird.BirdObservedState{
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96}},
-		Routes:    []bird.BirdRoute{{Iface: "phx-new", Protocol: "babel1", Selected: false, Metric: 96}},
 	}}
 	service := newDaemonService(rt, state, config, time.Second)
 	service.health = manager
@@ -77,21 +76,20 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	}
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
-		t.Fatalf("reconcileRouting without selected route: %v", err)
+		t.Fatalf("reconcileRouting without staged route: %v", err)
 	}
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
-		t.Fatalf("cutover should stay blocked until BIRD has a selected staged route")
+		t.Fatalf("cutover should stay blocked until BIRD has a staged route")
 	}
 
 	client.status = &bird.BirdObservedState{
-		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96}},
-		Routes:    []bird.BirdRoute{{Iface: "phx-new", Protocol: "babel1", Selected: true, Metric: 96}},
+		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96, Routes: 1}},
 	}
 	if err := service.reconcileRouting(context.Background()); err != nil {
-		t.Fatalf("reconcileRouting with selected route: %v", err)
+		t.Fatalf("reconcileRouting with staged neighbor route: %v", err)
 	}
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; !ready {
-		t.Fatalf("cutover should be ready after BIRD neighbor and selected route converge")
+		t.Fatalf("cutover should be ready after BIRD neighbor and staged route converge")
 	}
 
 	client.statusErr = errors.New("birdc unavailable")
@@ -100,6 +98,22 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	}
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
 		t.Fatalf("cutover should be blocked when fresh BIRD observation is unavailable")
+	}
+}
+
+func TestBirdObservationAcceptsUnselectedBabelRouteOnStagedInterface(t *testing.T) {
+	observed := &bird.BirdObservedState{
+		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 128}},
+		Routes: []bird.BirdRoute{{
+			Iface:    "phx-new",
+			Protocol: "babel1",
+			Selected: false,
+			Metric:   96,
+		}},
+	}
+	obs := birdObservationForInterface("link-1", "link-1#staged", "phx-new", observed)
+	if !obs.Neighbor || !obs.Route || obs.Metric != 96 {
+		t.Fatalf("observation = %+v, want neighbor and unselected staged route", obs)
 	}
 }
 
