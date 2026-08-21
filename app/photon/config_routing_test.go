@@ -161,14 +161,20 @@ routing:
 	if inst.MetricBase != 100 {
 		t.Fatalf("inst.MetricBase = %d, want 100", inst.MetricBase)
 	}
-	if inst.MetricStaged != 200 {
-		t.Fatalf("inst.MetricStaged = %d, want 200", inst.MetricStaged)
+	if inst.MetricStaged != 1200 {
+		t.Fatalf("inst.MetricStaged = %d, want 1200", inst.MetricStaged)
 	}
-	if inst.MetricDraining != 500 {
-		t.Fatalf("inst.MetricDraining = %d, want 500", inst.MetricDraining)
+	if inst.MetricDraining != 2400 {
+		t.Fatalf("inst.MetricDraining = %d, want 2400", inst.MetricDraining)
 	}
 	if inst.RTTCost != bird.DefaultBabelRTTCost || inst.RTTMin != bird.DefaultBabelRTTMin || inst.RTTMax != bird.DefaultBabelRTTMax || inst.RTTDecay != bird.DefaultBabelRTTDecay {
 		t.Fatalf("inst default RTT tuning = cost %d min %s max %s decay %d", inst.RTTCost, inst.RTTMin, inst.RTTMax, inst.RTTDecay)
+	}
+	if inst.MetricBase+inst.RTTCost >= inst.MetricStaged {
+		t.Fatalf("normal metric plus max RTT penalty must stay below staged metric")
+	}
+	if inst.MetricStaged+inst.RTTCost >= inst.MetricDraining {
+		t.Fatalf("staged metric plus max RTT penalty must stay below draining metric")
 	}
 	if inst.HelloInterval != bird.DefaultBabelHelloInterval || inst.UpdateInterval != bird.DefaultBabelUpdateInterval {
 		t.Fatalf("inst default Babel intervals = hello %s update %s", inst.HelloInterval, inst.UpdateInterval)

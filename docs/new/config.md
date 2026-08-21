@@ -261,9 +261,9 @@ routing:
       shutdown_policy: persist
       table: main
       metric_base: 100
-      metric_staged: 200
-      metric_draining: 500
-      rtt_cost: 64
+      metric_staged: 1200
+      metric_draining: 2400
+      rtt_cost: 1024
       rtt_min: 10ms
       rtt_max: 500ms
       rtt_decay: 12
@@ -280,12 +280,13 @@ routing:
 - `disabled`：设为 `true` 时保留配置块但停止 reconcile。
 - `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Photon 启动和配置，但默认不会随 Photon daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
 - `table`：BIRD 主路由表名。
-- `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，分别用于正常、staged rotate、draining 状态。
-- `rtt_cost`：mesh 接口的最大 RTT 附加 cost，默认 `64`。mesh 使用 `type wireless` 的 ETX 丢包度量，并显式保留 RTT 度量；必须小于 `65535`。
+- `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，默认 `100` / `1200` / `2400`，分别用于正常、staged rotate、draining 状态。默认间距大于最大 RTT penalty，避免低延迟的旧 tunnel 反转轮换优先级。
+- `rtt_cost`：mesh 接口的最大 RTT 附加 cost，默认 `1024`。配合默认 `rtt_min=10ms`、`rtt_max=500ms` 和 `rxcost=100`，relay 的总 RTT 每降低约 `48ms` 即可抵消多一跳的基础 cost；必须小于 `65535`。
 - `rtt_min` / `rtt_max`：RTT 附加 cost 的线性区间，默认 `10ms` / `500ms`。低于 min 不加 cost，高于 max 使用完整 `rtt_cost`。
 - `rtt_decay`：BIRD RTT 指数移动平均的衰减因子，范围 `1..256`，默认 `12`；数值越小，保留历史越久、对短时抖动越不敏感。
 - `hello_interval`：Babel Hello 周期，默认 `4s`，同时影响邻居故障检测速度。
 - `update_interval`：周期性全量路由更新间隔，默认 `16s`，即默认 Hello 周期的 4 倍；路由变化仍通过 triggered update 传播，不会等待下一次周期更新。
+- Photon 始终为 Babel protocol 生成 `randomize router id`。全局 32-bit BIRD router ID 仍保持稳定；Babel 每次协议实例启动时只随机化其 64-bit origin ID 的高 32 位，避免 sequence number 重置后的 announce 被邻居当作旧更新。
 - 上述时长字段接受 Go duration 格式，精度至少为 `1ms` 且必须为整毫秒；ETX/RTT 参数只用于 mesh 接口，upstream veth 仅使用 Hello/Update 间隔。
 - `interface_pattern`：匹配本 instance 内 XFRM tunnel interface 的模式，默认 `phx*`。
 - 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。

@@ -437,7 +437,9 @@ routing:
       pid_file: /run/photon/bird-photon.pid
       table: main
       metric_base: 100
-      rtt_cost: 64
+      metric_staged: 1200
+      metric_draining: 2400
+      rtt_cost: 1024
       rtt_min: 10ms
       rtt_max: 500ms
       rtt_decay: 12

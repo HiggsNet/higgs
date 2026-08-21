@@ -14,14 +14,15 @@ import (
 const (
 	defaultTableID        = "main"
 	defaultMetricBase     = 100
-	defaultMetricStaged   = 200
-	defaultMetricDraining = 500
+	defaultMetricStaged   = 1200
+	defaultMetricDraining = 2400
 	defaultDeviceScanTime = 5 * time.Second
 	defaultLogTarget      = "log syslog all"
 
-	// Default Babel tunnel tuning keeps RTT relevant for route selection while
-	// avoiding next-hop changes caused by millisecond-scale jitter.
-	DefaultBabelRTTCost        = 64
+	// Default Babel mesh tuning makes roughly 48 ms of total RTT improvement
+	// worth one additional lossless hop. The slow RTT EMA limits reactions to
+	// millisecond-scale jitter.
+	DefaultBabelRTTCost        = 1024
 	DefaultBabelRTTMin         = 10 * time.Millisecond
 	DefaultBabelRTTMax         = 500 * time.Millisecond
 	DefaultBabelRTTDecay       = 12
@@ -389,6 +390,11 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 	}
 
 	fmt.Fprintf(&b, "protocol babel %s {\n", cfg.Babel.Name)
+	// BIRD resets the Babel sequence number when the protocol instance starts.
+	// Randomizing the high half of Babel's 64-bit router ID prevents peers from
+	// rejecting post-restart announcements as stale while preserving Photon's
+	// stable 32-bit BIRD router ID in the low half.
+	fmt.Fprintln(&b, "    randomize router id;")
 	if cfg.Babel.IPv4Table != "" {
 		fmt.Fprintln(&b, "    ipv4 {")
 		fmt.Fprintf(&b, "        table %s;\n", cfg.Babel.IPv4Table)

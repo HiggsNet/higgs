@@ -107,7 +107,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		t.Errorf("babel interface should use configured XFRM interface pattern:\n%s", cfg)
 	}
 	for _, want := range []string{
-		"rtt cost 64;", "rtt min 10 ms;", "rtt max 500 ms;", "rtt decay 12;",
+		"rtt cost 1024;", "rtt min 10 ms;", "rtt max 500 ms;", "rtt decay 12;",
 		"hello interval 4 s;", "update interval 16 s;",
 	} {
 		if !strings.Contains(cfg, want) {

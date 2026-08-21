@@ -60,6 +60,8 @@ local routing / netns / forwarding policy ─────────┘        
 | 实例配置 | `routing.instances[]`，每项引用一个 `netns` |
 | mesh tunnel 接口 | 默认匹配 `phx*`；使用 BIRD `type wireless` 的渐进 ETX 度量，并显式启用 RTT；同一实例可合并多个 interface pattern |
 | veth upstream 接口 | 默认 `phv2host`，使用 BIRD 默认 wired 行为，不启用 ETX/RTT |
+
+Photon 在每个托管 Babel protocol 中启用 `randomize router id`。这不会改变持久化的全局 BIRD router ID；它只在 Babel 实例启动时随机化协议内部 64-bit origin ID 的高 32 位，避免重启后从 1 开始的 sequence number 被其他节点按旧 announce 拒绝。
 | RTT 选路 | 默认 `cost=64`、`min=10ms`、`max=500ms`、`decay=12`，保留 RTT 选路并抑制短时抖动 |
 | Babel 周期 | Hello 默认 `4s`；周期性全量 Update 默认 `16s`，triggered update 不受该间隔限制 |
 | Router-ID | 由 managed Zone、trusted root hash 与稳定 netns label 派生 |

@@ -168,9 +168,9 @@ Defaults the generator should apply:
 |-------|---------|
 | `TableID` | `"main"` |
 | `MetricBase` | `100` |
-| `MetricStaged` | `200` |
-| `MetricDraining` | `500` |
-| `BabelRTTCost` | `64` |
+| `MetricStaged` | `1200` |
+| `MetricDraining` | `2400` |
+| `BabelRTTCost` | `1024` |
 | `BabelRTTMin` | `10ms` |
 | `BabelRTTMax` | `500ms` |
 | `BabelRTTDecay` | `12` |
@@ -439,9 +439,13 @@ func StableRouterID(localZone zone.ZonePath, rootTrust []byte, overlayID string)
 }
 ```
 
-The router id is persisted by the caller (e.g. in Photon state DB) so it does
-not change across restarts. Do **not** enable BIRD's `randomize router id`;
-Photon guarantees stability.
+The global 32-bit BIRD router id is persisted by the caller (e.g. in Photon
+state DB) so it does not change across restarts. The generated Babel protocol
+still enables `randomize router id`: BIRD keeps the stable global ID in the low
+32 bits and randomizes the high 32 bits of Babel's 64-bit origin ID whenever
+the protocol instance starts. This prevents a restarted Babel instance, whose
+sequence number starts again at 1, from having its announcements rejected as
+stale by peers.
 
 ## Example BIRD config snippets
 
@@ -484,6 +488,8 @@ protocol kernel photon_kern_100 {
 
 ```bird
 protocol babel photon_babel_ipsec_main {
+    randomize router id;
+
     ipv4 {
         table photon_ipsec_main;
         import filter photon_import_ipsec_main;
@@ -499,8 +505,8 @@ protocol babel photon_babel_ipsec_main {
 
     interface "phx*" {
         type wireless;
-        rxcost 96;
-        rtt cost 64;
+        rxcost 100;
+        rtt cost 1024;
         rtt min 10 ms;
         rtt max 500 ms;
         rtt decay 12;

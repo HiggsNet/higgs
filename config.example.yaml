@@ -249,8 +249,8 @@ routing:
       # shutdown_policy: persist  # persist keeps BIRD running across Photon restarts; use stop for lab teardown.
       # table: main
       # metric_base: 100
-      # metric_staged: 200
-      # metric_draining: 500
+      # metric_staged: 1200
+      # metric_draining: 2400
       # interface_pattern: phx*
       # Optional equal-cost multipath support. When enabled, BIRD renders
       # `ecmp on` (or `ecmp on limit N`) in the Babel protocol block.

@@ -68,6 +68,12 @@ func TestGenerateManagedConfig(t *testing.T) {
 	if !strings.Contains(s, "protocol babel photon_babel_ipsec_main") {
 		t.Error("missing babel protocol block")
 	}
+	if !strings.Contains(s, "    randomize router id;") {
+		t.Error("missing Babel router ID randomization for restart-safe sequence numbers")
+	}
+	if cnt := strings.Count(s, "randomize router id;"); cnt != 1 {
+		t.Errorf("expected exactly one Babel router ID randomization directive, got %d", cnt)
+	}
 	if !strings.Contains(s, "interface \"phx*\"") {
 		t.Error("missing interface pattern")
 	}
@@ -81,7 +87,7 @@ func TestGenerateManagedConfig(t *testing.T) {
 		t.Error("missing default rxcost")
 	}
 	for _, want := range []string{
-		"rtt cost 64;",
+		"rtt cost 1024;",
 		"rtt min 10 ms;",
 		"rtt max 500 ms;",
 		"rtt decay 12;",

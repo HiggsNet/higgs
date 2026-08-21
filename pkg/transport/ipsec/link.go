@@ -604,8 +604,8 @@ const (
 	DefaultRoutingMode   = RoutingModeManaged
 	DefaultRoutingTable  = "main"
 	DefaultMetricBase    = 100
-	DefaultMetricStaged  = 200
-	DefaultMetricDrained = 500
+	DefaultMetricStaged  = 1200
+	DefaultMetricDrained = 2400
 )
 
 func (n NetNSSpec) Target() string {
