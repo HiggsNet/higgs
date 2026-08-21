@@ -230,7 +230,8 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	if spec.Upstream != nil {
 		upstreamBlock = &BabelInterfaceBlock{
 			InterfacePattern: spec.Upstream.Interface,
-			TypeTunnel:       false, // veth does NOT use type tunnel
+			InterfaceType:    BabelInterfaceTypeDefault,
+			RTTMetrics:       false,
 			MetricBase:       spec.MetricBase,
 			HelloInterval:    spec.BabelHelloInterval,
 			UpdateInterval:   spec.BabelUpdateInterval,
@@ -240,7 +241,8 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	for _, policy := range spec.InterfacePolicies {
 		interfaceBlocks = append(interfaceBlocks, BabelInterfaceBlock{
 			InterfacePattern: policy.InterfaceName,
-			TypeTunnel:       true,
+			InterfaceType:    BabelInterfaceTypeWireless,
+			RTTMetrics:       true,
 			MetricBase:       policy.Metric,
 			RTTCost:          spec.BabelRTTCost,
 			RTTMin:           spec.BabelRTTMin,
@@ -302,7 +304,8 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			IPv4Table:        ipv4Table,
 			IPv6Table:        ipv6Table,
 			InterfacePattern: renderInterfacePatterns(interfacePatterns),
-			TypeTunnel:       true,
+			InterfaceType:    BabelInterfaceTypeWireless,
+			RTTMetrics:       true,
 			MetricBase:       spec.MetricBase,
 			MetricStaged:     spec.MetricStaged,
 			MetricDraining:   spec.MetricDraining,
@@ -413,12 +416,12 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 	}
 	if cfg.Babel.InterfacePattern != "" {
 		fmt.Fprintf(&b, "    interface %s {\n", cfg.Babel.InterfacePattern)
-		if cfg.Babel.TypeTunnel {
-			fmt.Fprintln(&b, "        type tunnel;")
+		if cfg.Babel.InterfaceType != BabelInterfaceTypeDefault {
+			fmt.Fprintf(&b, "        type %s;\n", cfg.Babel.InterfaceType)
 		}
 		fmt.Fprintf(&b, "        rxcost %d;\n", cfg.Babel.MetricBase)
-		if cfg.Babel.TypeTunnel {
-			renderBabelTunnelTuning(&b, cfg.Babel.RTTCost, cfg.Babel.RTTMin, cfg.Babel.RTTMax, cfg.Babel.RTTDecay)
+		if cfg.Babel.RTTMetrics {
+			renderBabelRTTTuning(&b, cfg.Babel.RTTCost, cfg.Babel.RTTMin, cfg.Babel.RTTMax, cfg.Babel.RTTDecay)
 		}
 		renderBabelIntervals(&b, cfg.Babel.HelloInterval, cfg.Babel.UpdateInterval)
 		if cfg.Babel.Auth != nil && cfg.Babel.Auth.Enabled {
@@ -426,11 +429,11 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 		}
 		fmt.Fprintln(&b, "    };")
 	}
-	// Upstream veth interface block (no type tunnel).
+	// Upstream veth interface block (default wired behavior, no RTT metrics).
 	if cfg.Babel.UpstreamBlock != nil {
 		ub := cfg.Babel.UpstreamBlock
 		fmt.Fprintf(&b, "    interface %q {\n", ub.InterfacePattern)
-		// Do NOT emit "type tunnel" for veth — it uses default multicast/unicast.
+		// Do not emit a type for veth; BIRD's default wired behavior is used.
 		fmt.Fprintf(&b, "        rxcost %d;\n", ub.MetricBase)
 		renderBabelIntervals(&b, ub.HelloInterval, ub.UpdateInterval)
 		fmt.Fprintln(&b, "    };")
@@ -447,12 +450,12 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 
 func renderBabelInterfaceBlock(b *bytes.Buffer, block BabelInterfaceBlock, auth *BabelAuthSpec) {
 	fmt.Fprintf(b, "    interface %q {\n", block.InterfacePattern)
-	if block.TypeTunnel {
-		fmt.Fprintln(b, "        type tunnel;")
+	if block.InterfaceType != BabelInterfaceTypeDefault {
+		fmt.Fprintf(b, "        type %s;\n", block.InterfaceType)
 	}
 	fmt.Fprintf(b, "        rxcost %d;\n", block.MetricBase)
-	if block.TypeTunnel {
-		renderBabelTunnelTuning(b, block.RTTCost, block.RTTMin, block.RTTMax, block.RTTDecay)
+	if block.RTTMetrics {
+		renderBabelRTTTuning(b, block.RTTCost, block.RTTMin, block.RTTMax, block.RTTDecay)
 	}
 	renderBabelIntervals(b, block.HelloInterval, block.UpdateInterval)
 	if auth != nil && auth.Enabled {
@@ -461,7 +464,7 @@ func renderBabelInterfaceBlock(b *bytes.Buffer, block BabelInterfaceBlock, auth 
 	fmt.Fprintln(b, "    };")
 }
 
-func renderBabelTunnelTuning(b *bytes.Buffer, cost uint, min, max time.Duration, decay uint) {
+func renderBabelRTTTuning(b *bytes.Buffer, cost uint, min, max time.Duration, decay uint) {
 	fmt.Fprintf(b, "        rtt cost %d;\n", cost)
 	fmt.Fprintf(b, "        rtt min %s;\n", formatBabelDuration(min))
 	fmt.Fprintf(b, "        rtt max %s;\n", formatBabelDuration(max))

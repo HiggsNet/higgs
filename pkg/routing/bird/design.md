@@ -223,7 +223,8 @@ type BabelProtocolBlock struct {
     IPv4Table        string
     IPv6Table        string
     InterfacePattern string
-    TypeTunnel       bool
+    InterfaceType    BabelInterfaceType
+    RTTMetrics       bool
     MetricBase       uint
     MetricStaged     uint
     MetricDraining   uint
@@ -497,7 +498,7 @@ protocol babel photon_babel_ipsec_main {
     ecmp on limit 16;
 
     interface "phx*" {
-        type tunnel;
+        type wireless;
         rxcost 96;
         rtt cost 64;
         rtt min 10 ms;

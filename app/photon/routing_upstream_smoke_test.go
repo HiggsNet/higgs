@@ -146,14 +146,14 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 		t.Errorf("BIRD config missing upstream interface block\n%s", cfgStr)
 	}
 
-	// Assert primary interface has type tunnel.
-	if !strings.Contains(cfgStr, "type tunnel;") {
-		t.Errorf("BIRD config missing type tunnel in primary block\n%s", cfgStr)
+	// Assert the primary mesh interface uses gradual ETX costing.
+	if !strings.Contains(cfgStr, "type wireless;") {
+		t.Errorf("BIRD config missing type wireless in primary block\n%s", cfgStr)
 	}
 
-	// Count type tunnel: exactly 1 (only primary, NOT upstream).
-	if cnt := strings.Count(cfgStr, "type tunnel;"); cnt != 1 {
-		t.Errorf("expected exactly 1 type tunnel, got %d\n%s", cnt, cfgStr)
+	// Exactly one wireless block: primary mesh only, not upstream.
+	if cnt := strings.Count(cfgStr, "type wireless;"); cnt != 1 {
+		t.Errorf("expected exactly 1 type wireless, got %d\n%s", cnt, cfgStr)
 	}
 
 	// Assert default route rejection in filters.

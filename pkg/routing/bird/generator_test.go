@@ -71,8 +71,11 @@ func TestGenerateManagedConfig(t *testing.T) {
 	if !strings.Contains(s, "interface \"phx*\"") {
 		t.Error("missing interface pattern")
 	}
-	if !strings.Contains(s, "type tunnel;") {
-		t.Error("missing type tunnel directive")
+	if !strings.Contains(s, "type wireless;") {
+		t.Error("missing type wireless directive")
+	}
+	if strings.Contains(s, "type tunnel;") {
+		t.Error("mesh interfaces must not use binary tunnel reachability")
 	}
 	if !strings.Contains(s, "rxcost 100;") {
 		t.Error("missing default rxcost")
@@ -267,8 +270,8 @@ func TestRenderConcreteInterfacePoliciesBeforeCatchAll(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 	s := string(cfg)
-	oldBlock := "interface \"phx-old\" {\n        type tunnel;\n        rxcost 500;"
-	newBlock := "interface \"phx-new\" {\n        type tunnel;\n        rxcost 100;"
+	oldBlock := "interface \"phx-old\" {\n        type wireless;\n        rxcost 500;"
+	newBlock := "interface \"phx-new\" {\n        type wireless;\n        rxcost 100;"
 	catchAll := `interface "phx*" {`
 	if !strings.Contains(s, oldBlock) || !strings.Contains(s, newBlock) {
 		t.Fatalf("missing concrete interface policies:\n%s", s)
@@ -278,7 +281,7 @@ func TestRenderConcreteInterfacePoliciesBeforeCatchAll(t *testing.T) {
 	}
 }
 
-func TestRenderCustomBabelTuningOnTunnelInterfaces(t *testing.T) {
+func TestRenderCustomBabelTuningOnWirelessMeshInterfaces(t *testing.T) {
 	spec := testBirdInstanceSpec()
 	spec.BabelRTTCost = 80
 	spec.BabelRTTMin = 5 * time.Millisecond
@@ -303,6 +306,9 @@ func TestRenderCustomBabelTuningOnTunnelInterfaces(t *testing.T) {
 			t.Fatalf("unterminated interface block %q:\n%s", blockStart, s)
 		}
 		block := s[start : start+end]
+		if !strings.Contains(block, "type wireless;") {
+			t.Errorf("interface block %q must use wireless ETX costing:\n%s", blockStart, block)
+		}
 		for _, want := range []string{
 			"rtt cost 80;", "rtt min 5 ms;", "rtt max 450 ms;", "rtt decay 9;",
 			"hello interval 2 s;", "update interval 20 s;",
@@ -331,8 +337,8 @@ func TestRenderUpstreamUsesIntervalsWithoutRTTTuning(t *testing.T) {
 	}
 	end := strings.Index(s[start:], "    };")
 	block := s[start : start+end]
-	if strings.Contains(block, "type tunnel;") || strings.Contains(block, "rtt cost") {
-		t.Fatalf("upstream block must not enable tunnel RTT tuning:\n%s", block)
+	if strings.Contains(block, "type wireless;") || strings.Contains(block, "rtt cost") {
+		t.Fatalf("upstream block must not enable mesh ETX/RTT tuning:\n%s", block)
 	}
 	if !strings.Contains(block, "hello interval 2 s;") || !strings.Contains(block, "update interval 20 s;") {
 		t.Fatalf("upstream block missing configured intervals:\n%s", block)

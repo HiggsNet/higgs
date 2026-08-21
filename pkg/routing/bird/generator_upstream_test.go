@@ -20,21 +20,21 @@ func TestGenerateWithUpstreamInterface(t *testing.T) {
 	}
 	s := string(cfg)
 
-	// Must have the primary XFRM tunnel interface block with type tunnel.
+	// The primary XFRM mesh interface uses wireless ETX costing plus RTT.
 	if !strings.Contains(s, `interface "phx*" {`) {
 		t.Errorf("missing primary interface block with phx*\n%s", s)
 	}
-	if !strings.Contains(s, "type tunnel;") {
-		t.Errorf("missing type tunnel in primary interface block\n%s", s)
+	if !strings.Contains(s, "type wireless;") {
+		t.Errorf("missing type wireless in primary interface block\n%s", s)
 	}
 
-	// Must have the upstream veth interface block WITHOUT type tunnel.
+	// The upstream veth interface block must not use wireless ETX costing.
 	if !strings.Contains(s, `interface "phv2host" {`) {
 		t.Errorf("missing upstream interface block\n%s", s)
 	}
-	// Count type tunnel occurrences: should be exactly 1 (only in primary block).
-	if cnt := strings.Count(s, "type tunnel;"); cnt != 1 {
-		t.Errorf("expected exactly 1 'type tunnel;' but got %d in:\n%s", cnt, s)
+	// Count wireless occurrences: exactly one, in the primary mesh block.
+	if cnt := strings.Count(s, "type wireless;"); cnt != 1 {
+		t.Errorf("expected exactly 1 'type wireless;' but got %d in:\n%s", cnt, s)
 	}
 }
 

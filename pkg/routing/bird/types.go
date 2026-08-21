@@ -250,7 +250,8 @@ type BabelProtocolBlock struct {
 	IPv4Table        string
 	IPv6Table        string
 	InterfacePattern string
-	TypeTunnel       bool
+	InterfaceType    BabelInterfaceType
+	RTTMetrics       bool
 	MetricBase       uint
 	MetricStaged     uint
 	MetricDraining   uint
@@ -265,6 +266,17 @@ type BabelProtocolBlock struct {
 	UpstreamBlock    *BabelInterfaceBlock // optional second interface block for veth upstream
 }
 
+// BabelInterfaceType selects BIRD's per-interface link-quality algorithm.
+// Photon mesh interfaces use wireless even though the carrier is an XFRM
+// tunnel: in BIRD, wireless means gradual ETX loss costing instead of the
+// wired/tunnel k-out-of-j reachability threshold.
+type BabelInterfaceType string
+
+const (
+	BabelInterfaceTypeDefault  BabelInterfaceType = ""
+	BabelInterfaceTypeWireless BabelInterfaceType = "wireless"
+)
+
 // BabelInterfacePolicy assigns a receive cost to one concrete Babel-facing
 // runtime interface.
 type BabelInterfacePolicy struct {
@@ -273,12 +285,13 @@ type BabelInterfacePolicy struct {
 }
 
 // BabelInterfaceBlock describes one "interface ... { ... }" block inside a
-// Babel protocol. The primary XFRM tunnel block is rendered inline in
+// Babel protocol. The primary XFRM mesh block is rendered inline in
 // BabelProtocolBlock; the upstream veth block uses this separate struct
-// because it must NOT have type tunnel.
+// because it uses BIRD's default wired behavior and no RTT metrics.
 type BabelInterfaceBlock struct {
 	InterfacePattern string
-	TypeTunnel       bool
+	InterfaceType    BabelInterfaceType
+	RTTMetrics       bool
 	MetricBase       uint
 	RTTCost          uint
 	RTTMin           time.Duration
