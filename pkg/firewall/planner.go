@@ -230,13 +230,6 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	addRule(ChainInput, Rule{Action: defaultPolicyVerb(defaultPolicy), Comment: "default policy"})
 
 	// --- forward chain ---
-	// 1. invalid drop (ct state)
-	addRule(ChainForward, Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
-
-	// 2. established/related
-	addRule(ChainForward, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_fwd_est"})
-	desired.HookPositions.PreForward = len(desired.ForwardRules)
-
 	xfrmIfaces := interfaceSelectors(input.LiveInterfaces, spec.XFRMTunnelPattern, "phx*")
 	upstreamIfaces := interfaceSelectors(input.UpstreamInterfaces)
 	xfrmCompat := strings.TrimSpace(spec.XFRMTunnelPattern)
@@ -244,12 +237,67 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		xfrmCompat = "phx*"
 	}
 	upstreamCompat := singletonInterfaceSelector(upstreamIfaces)
+	meshAll := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
+	localAll := append(append([]netip.Prefix{}, prefixes.LocalAssignedV4...), prefixes.LocalAssignedV6...)
+	var transit []netip.Prefix
+	if input.Forwarding.Transit {
+		transit = filterTransitPrefixes(prefixes.MeshAuthorizedV4, prefixes.MeshAuthorizedV6, input.Forwarding)
+	}
+
+	// A routed mesh may legitimately use different forward and reverse paths.
+	// In that case an intermediate router can observe SYN followed by ACK/data
+	// without observing the SYN-ACK, and conntrack classifies the latter packets
+	// as INVALID. Admit only the same interface/prefix-scoped traffic that the
+	// normal transit rules below authorize before applying the generic INVALID
+	// drop. Normal NEW/ESTABLISHED traffic still follows the original hook order.
+	if len(transit) > 0 {
+		addRule(ChainForward, Rule{
+			Action:    ActionAccept,
+			IfaceIn:   xfrmCompat,
+			IfaceOut:  xfrmCompat,
+			IfacesIn:  xfrmIfaces,
+			IfacesOut: xfrmIfaces,
+			Src:       transit,
+			Dst:       transit,
+			CtStates:  []string{CtStateInvalid},
+			Comment:   "xfrm transit asymmetric invalid accept",
+		})
+	}
+	if len(upstreamIfaces) > 0 && len(localAll) > 0 {
+		addRule(ChainForward, Rule{
+			Action:    ActionAccept,
+			IfaceIn:   xfrmCompat,
+			IfaceOut:  upstreamCompat,
+			IfacesIn:  xfrmIfaces,
+			IfacesOut: upstreamIfaces,
+			Dst:       localAll,
+			CtStates:  []string{CtStateInvalid},
+			Comment:   "xfrm to upstream asymmetric invalid accept",
+		})
+	}
+	if len(upstreamIfaces) > 0 && len(meshAll) > 0 {
+		addRule(ChainForward, Rule{
+			Action:    ActionAccept,
+			IfaceIn:   upstreamCompat,
+			IfaceOut:  xfrmCompat,
+			IfacesIn:  upstreamIfaces,
+			IfacesOut: xfrmIfaces,
+			Dst:       meshAll,
+			CtStates:  []string{CtStateInvalid},
+			Comment:   "upstream to xfrm asymmetric invalid accept",
+		})
+	}
+
+	// Reject all other invalid traffic, including invalid non-transit traffic.
+	addRule(ChainForward, Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
+
+	// Preserve stateful fast-path behavior for traffic seen in both directions.
+	addRule(ChainForward, Rule{Action: ActionAccept, CtStates: []string{CtStateEstablished, CtStateRelated}, Comment: "established related", ID: chainSuffix + "_fwd_est"})
+	desired.HookPositions.PreForward = len(desired.ForwardRules)
 
 	// XFRM -> XFRM authorized transit (only if forwarding policy allows)
 	if input.Forwarding.Transit {
-		meshV4 := prefixes.MeshAuthorizedV4
-		meshV6 := prefixes.MeshAuthorizedV6
-		if transit := filterTransitPrefixes(meshV4, meshV6, input.Forwarding); len(transit) > 0 {
+		if len(transit) > 0 {
 			addRule(ChainForward, Rule{
 				Action:    ActionAccept,
 				IfaceIn:   xfrmCompat,
@@ -274,8 +322,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	}
 
 	// XFRM -> upstream: allow mesh traffic to local assigned prefixes (egress to main network)
-	if len(upstreamIfaces) > 0 && (len(prefixes.LocalAssignedV4) > 0 || len(prefixes.LocalAssignedV6) > 0) {
-		localAll := append(append([]netip.Prefix{}, prefixes.LocalAssignedV4...), prefixes.LocalAssignedV6...)
+	if len(upstreamIfaces) > 0 && len(localAll) > 0 {
 		addRule(ChainForward, Rule{
 			Action:    ActionAccept,
 			IfaceIn:   xfrmCompat,
@@ -288,8 +335,7 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 	}
 
 	// upstream -> XFRM: allow local/main network to reach mesh authorized prefixes
-	if len(upstreamIfaces) > 0 && (len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0) {
-		meshAll := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
+	if len(upstreamIfaces) > 0 && len(meshAll) > 0 {
 		addRule(ChainForward, Rule{
 			Action:    ActionAccept,
 			IfaceIn:   upstreamCompat,

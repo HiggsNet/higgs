@@ -205,13 +205,75 @@ func TestBuildDesiredState_TransitEnabled(t *testing.T) {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
 	foundTransitAccept := false
+	foundAsymmetricInvalidAccept := false
 	for _, r := range desired.ForwardRules {
 		if r.Action == ActionAccept && r.Comment == "xfrm transit (transit enabled)" {
 			foundTransitAccept = true
 		}
+		if r.Action == ActionAccept && r.Comment == "xfrm transit asymmetric invalid accept" {
+			foundAsymmetricInvalidAccept = true
+			if len(r.CtStates) != 1 || r.CtStates[0] != CtStateInvalid {
+				t.Fatalf("asymmetric transit ct states = %v, want [invalid]", r.CtStates)
+			}
+		}
 	}
 	if !foundTransitAccept {
 		t.Error("transit enabled but no XFRM transit accept rule")
+	}
+	if !foundAsymmetricInvalidAccept {
+		t.Error("transit enabled but no asymmetric INVALID exception")
+	}
+}
+
+func TestBuildDesiredState_AsymmetricTransitInvalidAcceptedBeforeDrop(t *testing.T) {
+	desired, err := BuildDesiredState(FirewallInstanceSpec{
+		ID: "photon", NetNS: "photon", Enabled: true, Mode: ModeManaged,
+		DefaultPolicy: DefaultPolicyDrop, XFRMTunnelPattern: "phx*",
+	}, FirewallPolicyInput{
+		LocalAssigned:      []netip.Prefix{mustPrefix(t, "2a0d:2905:0:f5f5::/80")},
+		MeshAuthorized:     []netip.Prefix{mustPrefix(t, "2a0d:2905:0:f5f5::/80"), mustPrefix(t, "2a0d:2905:1:7::/64")},
+		LiveInterfaces:     []string{"phx11111111", "phx22222222"},
+		UpstreamInterfaces: []string{"phv2host"},
+		Forwarding: ForwardingPolicy{
+			Transit:       true,
+			AllowPrefixes: []netip.Prefix{mustPrefix(t, "2a0d:2905::/32")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildDesiredState: %v", err)
+	}
+
+	invalidDrop := slices.IndexFunc(desired.ForwardRules, func(rule Rule) bool { return rule.Comment == "invalid drop" })
+	if invalidDrop < 0 {
+		t.Fatal("forward INVALID drop not found")
+	}
+	earlyComments := map[string]bool{
+		"xfrm transit asymmetric invalid accept":     false,
+		"xfrm to upstream asymmetric invalid accept": false,
+		"upstream to xfrm asymmetric invalid accept": false,
+	}
+	for i, rule := range desired.ForwardRules {
+		if _, ok := earlyComments[rule.Comment]; !ok {
+			continue
+		}
+		earlyComments[rule.Comment] = true
+		if rule.Action != ActionAccept || len(rule.CtStates) != 1 || rule.CtStates[0] != CtStateInvalid {
+			t.Fatalf("early asymmetric rule = %+v, want scoped INVALID accept", rule)
+		}
+		if i >= invalidDrop {
+			t.Fatalf("early asymmetric rule %q is not before invalid drop", rule.Comment)
+		}
+	}
+	for comment, found := range earlyComments {
+		if !found {
+			t.Errorf("early asymmetric rule %q not found", comment)
+		}
+	}
+	if desired.InputRules[0].Comment != "invalid drop" {
+		t.Fatalf("input first rule = %+v, want INVALID drop unchanged", desired.InputRules[0])
+	}
+	if desired.ForwardRules[invalidDrop+1].Comment != "established related" {
+		t.Fatalf("rule after INVALID drop = %+v, want established/related", desired.ForwardRules[invalidDrop+1])
 	}
 }
 

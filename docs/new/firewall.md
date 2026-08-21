@@ -254,7 +254,7 @@ firewall:
 - 每个 hook point 是字符串列表，可以写多条规则，严格保持 YAML 顺序。
 - overlay 支持 `pre_input` / `post_input`、`pre_forward` / `post_forward`、`pre_output` / `post_output`。
 - host 支持 `host_pre_input` / `host_post_input` 和 `host_pre_prerouting` / `host_post_prerouting`。
-- `pre_input` 位于 invalid drop 和 loopback accept 之后；`pre_forward` 位于 invalid drop 和 established/related accept 之后；`pre_output` 位于 Photon output 规则之前。所有 `post_*` 都位于 Photon 生成规则之后、terminal default verdict 之前。
+- `pre_input` 位于 invalid drop 和 loopback accept 之后；`pre_forward` 位于 scoped asymmetric-transit INVALID accept、通用 invalid drop 和 established/related accept 之后；`pre_output` 位于 Photon output 规则之前。所有 `post_*` 都位于 Photon 生成规则之后、terminal default verdict 之前。
 - nft 表达式随 Photon 规则进入同一个 `nft -f` 事务，失败时旧 table 保持生效。
 - iptables 表达式先写入 inactive generation；IPv4/IPv6 都准备完成后才切换内置链 jump，切换失败会尝试回滚已激活的新 jump。
 - 表达式只能是当前 chain 的 rule body。配置会拒绝换行、分号、shell 元字符、nft object command，以及 iptables 的 `-A/-I/-D/-N/-X/-F/-P/-t` 等规则/chain/table 管理参数；命令始终以 argv 执行，不经过 shell。
@@ -325,15 +325,18 @@ overlay 实例生成 `input`、`forward`、`output` 三条 filter chain。
 #### forward chain
 
 ```text
-1. invalid drop (ct state)
-2. established/related accept (ct state)
-3. pre_forward hook
-4. XFRM->XFRM：transit=false 则 drop；transit=true 则按 forwarding policy allow
-5. XFRM->upstream：允许到 local assigned 前缀
-6. upstream->XFRM：允许到 mesh authorized 前缀
-7. post_forward hook
-8. default policy (drop / accept)
+1. scoped asymmetric-transit INVALID accept：仅匹配后续 transit allow 的接口、前缀和 ct state invalid
+2. invalid drop (ct state)：拒绝其余 invalid，包括非 transit 流量
+3. established/related accept (ct state)
+4. pre_forward hook
+5. XFRM->XFRM：transit=false 则 drop；transit=true 则按 forwarding policy allow
+6. XFRM->upstream：允许到 local assigned 前缀
+7. upstream->XFRM：允许到 mesh authorized 前缀
+8. post_forward hook
+9. default policy (drop / accept)
 ```
+
+非对称路由下，中间节点可能看到 SYN 及后续 ACK/data，却看不到反方向的 SYN-ACK，因而把后续包标成 `INVALID`。前置例外只放行原本已由接口和授权前缀约束的 transit 流量；input chain 与其他 forward 流量仍先执行通用 `INVALID drop`。
 
 #### output chain
 
