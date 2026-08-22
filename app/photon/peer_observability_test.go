@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestPersistentSyncPeersDropsDiagnosticsWithoutMutatingInput(t *testing.T) {
@@ -72,24 +71,5 @@ func TestSaveStateDoesNotRewriteLegacyPeerDiagnostics(t *testing.T) {
 	}
 	if peer.DatagramStats != nil || peer.ObjectPullStats != nil {
 		t.Fatalf("diagnostics were rewritten to state DB: %#v", peer)
-	}
-}
-
-func TestDaemonObservabilityResetsLegacyDiagnosticsOnRestart(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	normalizeSyncPeers(state)
-	state.SyncPeers["peer-a.catofes."] = syncPeerState{
-		LastSyncUnix:    42,
-		DatagramStats:   &datagramStats{ChunkFallbacks: 2},
-		ObjectPullStats: &objectPullStats{Attempts: 3},
-	}
-	service := newDaemonService(&Runtime{Clock: func() time.Time { return time.Unix(100, 0) }}, state, config, time.Second)
-
-	merged := service.mergePeerObservability(state.SyncPeers["peer-a.catofes."], service.peerObservabilitySnapshots()["peer-a.catofes."])
-	if merged.LastSyncUnix != 42 {
-		t.Fatalf("control state did not survive restart projection: %#v", merged)
-	}
-	if merged.DatagramStats != nil || merged.ObjectPullStats != nil {
-		t.Fatalf("legacy diagnostics survived daemon restart: %#v", merged)
 	}
 }

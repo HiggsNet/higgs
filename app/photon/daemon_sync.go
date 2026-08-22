@@ -140,8 +140,8 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 			if msg.FetchZone == nil {
 				return nil
 			}
-			// Chunk fallback requests use sendSnapshots, which knows how to split
-			// oversized zone snapshots into UDP object chunks.
+			// Chunk fallback requests split detached zone snapshots into UDP
+			// object chunks.
 			// Keep them out of the active pull FSM as a read-only responder path.
 			if msg.FetchZone.ChunkFallback {
 				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
@@ -266,27 +266,11 @@ func (d *DaemonService) respondPingWithSummary(peerID string, ping *gossip.Ping)
 	return summary, nil
 }
 
-// maybeShortcutSyncFromPingSummary checks whether an unsolicited ping's catalog
-// summary already matches the local catalog root. If it does, we record the
-// peer sync state and skip creating a SyncSession, avoiding a redundant
-// ping-pong round. If roots differ (or summary generation fails), it falls back
-// to handleAnnounceHint.
-func (d *DaemonService) maybeShortcutSyncFromPingSummary(peerID string, remoteSummary *gossip.CatalogSummary) error {
-	if d == nil || d.Sync == nil || remoteSummary == nil {
-		return nil
-	}
-	localSummary, err := d.StateStore.catalogSummaryProjection(d.syncDatagramBudget())
-	if err != nil {
-		d.logWarn("sync", "catalog_summary_failed", map[string]any{
-			"peer_id": peerID,
-			"reason":  "ping_summary_shortcut",
-			"error":   err,
-		})
-		return d.handleAnnounceHint(peerID)
-	}
-	return d.maybeShortcutSyncFromPingSummaryWithLocal(peerID, remoteSummary, localSummary)
-}
-
+// maybeShortcutSyncFromPingSummaryWithLocal checks whether an unsolicited
+// ping's catalog summary already matches the local catalog root. If it does, we
+// record the peer sync state and skip creating a SyncSession, avoiding a
+// redundant ping-pong round. If roots differ, it falls back to
+// handleAnnounceHint.
 func (d *DaemonService) maybeShortcutSyncFromPingSummaryWithLocal(peerID string, remoteSummary, localSummary *gossip.CatalogSummary) error {
 	if localSummary == nil {
 		return nil

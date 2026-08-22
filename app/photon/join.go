@@ -427,17 +427,6 @@ func optionalJoinAcceptKey(_ *Runtime, keyPath string) (*privateKeyFile, error) 
 	return nil, nil
 }
 
-func joinAcceptKeyFromState(rt *Runtime, expectedZone zone.ZonePath) (*privateKeyFile, error) {
-	if rt == nil {
-		return nil, errors.New("join accept requires key.json when no runtime is available")
-	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return nil, fmt.Errorf("join accept requires key.json because existing state could not be loaded: %w", err)
-	}
-	return joinAcceptKeyFromStateFile(state, expectedZone)
-}
-
 func joinAcceptKeyFromStateFile(state *stateFile, expectedZone zone.ZonePath) (*privateKeyFile, error) {
 	if state == nil {
 		return nil, errors.New("join accept requires key.json because no existing state is available")

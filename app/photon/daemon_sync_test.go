@@ -303,9 +303,13 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CatalogSummaryFor: %v", err)
 	}
+	localSummary, err := service.StateStore.catalogSummaryProjection(service.syncDatagramBudget())
+	if err != nil {
+		t.Fatalf("catalogSummaryProjection: %v", err)
+	}
 	before := service.StateStore.Meta().Revision
-	if err := service.maybeShortcutSyncFromPingSummary("peer-a", summary); err != nil {
-		t.Fatalf("maybeShortcutSyncFromPingSummary: %v", err)
+	if err := service.maybeShortcutSyncFromPingSummaryWithLocal("peer-a", summary, localSummary); err != nil {
+		t.Fatalf("maybeShortcutSyncFromPingSummaryWithLocal: %v", err)
 	}
 	after := service.StateStore.Meta().Revision
 	if after != before+1 {

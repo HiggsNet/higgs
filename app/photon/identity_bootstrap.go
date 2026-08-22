@@ -316,27 +316,6 @@ func replaceDirectParentProof(existing []*zone.Delegation, managed zone.ZonePath
 	return out
 }
 
-func logAutoJoinPending(logger *appLogger, state *stateFile) {
-	if !autoJoinPending(state) || len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
-		return
-	}
-	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
-	request := joinRequest{Version: 1, Zone: state.ManagedZone, PublicKey: pub}
-	text, err := encodeBase64JSON(&request)
-	if err != nil {
-		return
-	}
-	if logger == nil {
-		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, text, "photon gossip join request --from-config")
-		return
-	}
-	logger.Info("auto_join", "pending", map[string]any{
-		"zone":         state.ManagedZone,
-		"join_request": text,
-		"hint":         "photon gossip join request --from-config",
-	})
-}
-
 func logAutoJoinPendingProjection(logger *appLogger, projection autoJoinLogProjection) {
 	if !projection.pending {
 		return

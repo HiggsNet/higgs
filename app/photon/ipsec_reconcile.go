@@ -1246,20 +1246,6 @@ func summarizeContactEndpoint(points []ipsec.ContactPoint) string {
 	return points[0].Host
 }
 
-func desiredIPsecLinks(state *stateFile) int {
-	if state == nil || state.IPsecReconcile == nil {
-		return 0
-	}
-	return state.IPsecReconcile.DesiredLinks
-}
-
-func lastIPsecReconcileError(state *stateFile) string {
-	if state == nil || state.IPsecReconcile == nil {
-		return ""
-	}
-	return state.IPsecReconcile.LastError
-}
-
 func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.LinkInstance {
 	out := make(map[string]ipsec.LinkInstance, len(in))
 	for id, inst := range in {

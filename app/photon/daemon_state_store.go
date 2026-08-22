@@ -127,25 +127,6 @@ func (s *DaemonStateStore) firewallSnapshot() (*stateFile, uint64) {
 	return snapshot, s.revision
 }
 
-// networkSnapshot returns a workspace that owns Network only. Other state
-// fields remain shared and must be treated as immutable.
-func (s *DaemonStateStore) networkSnapshot() (*stateFile, uint64) {
-	if s == nil {
-		return nil, 0
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil, s.revision
-	}
-	snapshot := cloneStateFileRootSharingChildren(s.committed)
-	snapshot.Network = zone.CloneNetworkState(s.committed.Network)
-	if snapshot.Network != nil {
-		configureValidation(snapshot.Network)
-	}
-	return snapshot, s.revision
-}
-
 // networkZoneSnapshot returns a workspace that owns exactly one mutable zone.
 // An empty path selects the committed managed zone. All other state children
 // and Network zones remain shared and read-only.
@@ -496,29 +477,6 @@ func (s *DaemonStateStore) commitFirewallIfRevision(rev uint64, endpointACLs map
 	next := cloneStateFileRootSharingChildren(s.committed)
 	next.EndpointACLs = nextEndpointACLs
 	next.FirewallReconcile = nextReconcile
-	s.commitLocked(next)
-	return s.revision, true
-}
-
-// commitNetworkIfRevision replaces only the authoritative Network. The input
-// is detached before publication so callers may retain or mutate their
-// workspace after commit without affecting committed state.
-func (s *DaemonStateStore) commitNetworkIfRevision(rev uint64, network *zone.NetworkState) (uint64, bool) {
-	if s == nil {
-		return 0, false
-	}
-	nextNetwork := zone.CloneNetworkState(network)
-	if nextNetwork != nil {
-		configureValidation(nextNetwork)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.revision != rev {
-		return s.revision, false
-	}
-	next := cloneStateFileRootSharingChildren(s.committed)
-	next.Network = nextNetwork
 	s.commitLocked(next)
 	return s.revision, true
 }

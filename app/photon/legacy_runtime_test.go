@@ -22,7 +22,7 @@ func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 	if err != nil || !changed {
 		return err
 	}
-	if err := sr.saveStateSnapshot(state); err != nil {
+	if err := sr.saveStateSnapshotAtRevision(state, 0); err != nil {
 		return err
 	}
 	if sr != nil && state != nil {

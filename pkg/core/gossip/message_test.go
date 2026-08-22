@@ -16,6 +16,13 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
+func cloneNetworkState(ns *zone.NetworkState) *zone.NetworkState {
+	if ns == nil {
+		return zone.NewNetworkState()
+	}
+	return zone.CloneNetworkState(ns)
+}
+
 func TestMarshalUnmarshalPing(t *testing.T) {
 	message := &Message{
 		Type:      MessagePing,

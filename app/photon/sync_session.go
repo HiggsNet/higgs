@@ -398,16 +398,6 @@ func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAc
 	}, nil
 }
 
-// reconcilePendingWithState removes pending zones whose local root hash now
-// matches the digest advertised by the peer after object pull or chunk fallback
-// has applied a snapshot.
-func (s *SyncSession) reconcilePendingWithState(ns *zone.NetworkState) []SyncAction {
-	if ns == nil {
-		return nil
-	}
-	return s.reconcilePendingWithDigests(gossip.ZoneDigests(ns))
-}
-
 func (s *SyncSession) reconcilePendingWithDigests(digests []gossip.ZoneDigest) []SyncAction {
 	local := make(map[zone.ZonePath][]byte, len(digests))
 	for _, digest := range digests {

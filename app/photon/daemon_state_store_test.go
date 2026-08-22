@@ -234,7 +234,7 @@ func TestDaemonStateStoreFirewallTypedCOWOwnershipAndStale(t *testing.T) {
 	})
 }
 
-func TestDaemonStateStoreNetworkTypedCOWOwnershipRetainAndStale(t *testing.T) {
+func TestDaemonStateStoreNetworkTypedCOWOwnershipAndStale(t *testing.T) {
 	initial := &stateFile{
 		Network:          cloneTestNetworkState(),
 		IPsecReconcile:   &ipsecReconcileState{LastError: "ipsec"},
@@ -249,31 +249,30 @@ func TestDaemonStateStoreNetworkTypedCOWOwnershipRetainAndStale(t *testing.T) {
 		committedRouting = state.RoutingReconcile
 	})
 
-	snapshot, rev := store.networkSnapshot()
-	if snapshot.IPsecReconcile != committedIPsec || snapshot.RoutingReconcile != committedRouting {
-		t.Fatal("Network snapshot copied or replaced an unowned field")
+	workspace, rev := store.networkZoneSnapshot("node-a.catofes.")
+	if workspace.IPsecReconcile != committedIPsec || workspace.RoutingReconcile != committedRouting {
+		t.Fatal("Network zone workspace copied or replaced an unowned field")
 	}
-	snapshot.Network.Zones["node-a.catofes."].Records["endpoint"].Value[0] = 'N'
+	workspace.Network.Zones["node-a.catofes."].Records["endpoint"].Value[0] = 'N'
 	readCommittedForTest(store, func(state *stateFile) {
 		if string(state.Network.Zones["node-a.catofes."].Records["endpoint"].Value) != "endpoint-a" {
 			t.Fatal("Network workspace mutation leaked into committed state")
 		}
 	})
-	nextRev, committed := store.commitNetworkIfRevision(rev, snapshot.Network)
+	nextRev, committed := store.commitNetworkCandidateIfRevision(rev, workspace.Network)
 	if !committed || nextRev != rev+1 {
 		t.Fatalf("Network typed commit = (%d, %t), want (%d, true)", nextRev, committed, rev+1)
 	}
-	snapshot.Network.Zones["node-a.catofes."].Records["endpoint"].Value[0] = 'R'
 	readCommittedForTest(store, func(state *stateFile) {
 		if state.IPsecReconcile != committedIPsec || state.RoutingReconcile != committedRouting {
 			t.Fatal("Network commit replaced an unowned field")
 		}
 		if got := state.Network.Zones["node-a.catofes."].Records["endpoint"].Value[0]; got != 'N' {
-			t.Fatalf("retained Network input mutated committed state: %q", got)
+			t.Fatalf("Network candidate was not committed: %q", got)
 		}
 	})
 
-	stale, staleRev := store.networkSnapshot()
+	stale, staleRev := store.networkZoneSnapshot("node-a.catofes.")
 	if _, err := store.Update(func(state *stateFile) error {
 		state.IdentityKeyPath = "newer"
 		return nil
@@ -281,7 +280,7 @@ func TestDaemonStateStoreNetworkTypedCOWOwnershipRetainAndStale(t *testing.T) {
 		t.Fatalf("advance revision: %v", err)
 	}
 	stale.Network.GlobalRoot = []byte("stale")
-	if current, ok := store.commitNetworkIfRevision(staleRev, stale.Network); ok || current != staleRev+1 {
+	if current, ok := store.commitNetworkCandidateIfRevision(staleRev, stale.Network); ok || current != staleRev+1 {
 		t.Fatalf("stale Network commit = (%d, %t), want (%d, false)", current, ok, staleRev+1)
 	}
 	readCommittedForTest(store, func(state *stateFile) {

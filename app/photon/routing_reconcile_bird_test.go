@@ -431,7 +431,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	if afterNoopRev := service.StateStore.Meta().Revision; afterNoopRev != beforeNoopRev {
 		t.Fatalf("no-op routing reconcile advanced revision: before=%d after=%d", beforeNoopRev, afterNoopRev)
 	}
-	if got := service.routingLastRun(nil); got != now.Unix() {
+	if got := service.routingLastRunUnix.Load(); got != now.Unix() {
 		t.Fatalf("runtime routing last run = %d, want %d", got, now.Unix())
 	}
 }

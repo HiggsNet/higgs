@@ -254,13 +254,6 @@ func snapshotParentProof(ns *zone.NetworkState, path zone.ZonePath, zs *zone.Zon
 	return append([]*zone.Delegation{cloneDelegation(delegation)}, proof...)
 }
 
-func cloneNetworkState(ns *zone.NetworkState) *zone.NetworkState {
-	if ns == nil {
-		return zone.NewNetworkState()
-	}
-	return zone.CloneNetworkState(ns)
-}
-
 func countRecords(records map[string][]*zone.Record) int {
 	var out int
 	for _, list := range records {

@@ -160,6 +160,14 @@ func (t *Transport) MaxMessageBytes() int {
 	return t.maxMessageBytes
 }
 
+// PeerID returns the local peer ID attached to outbound messages.
+func (t *Transport) PeerID() string {
+	if t == nil {
+		return ""
+	}
+	return t.peerID
+}
+
 func (t *Transport) Close() error {
 	if t == nil || t.conn == nil {
 		return nil

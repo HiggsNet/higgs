@@ -12,7 +12,8 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func TestSendSnapshotsSkipsOversizedRecords(t *testing.T) {
+func TestSendDetachedSnapshotsChunksOversizedRecords(t *testing.T) {
+	resetUDPSentChunkCacheForTest(t)
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	now := time.Unix(1000, 0)
@@ -49,12 +50,22 @@ func TestSendSnapshotsSkipsOversizedRecords(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("peer", []*net.UDPAddr{transport.LocalAddr()})
 
-	if _, err := sendSnapshotsWithDiagnostics(state.Network, transport, "peer", []zone.ZonePath{"node-b.catofes."}, now, false, nil); err != nil {
-		t.Fatalf("sendSnapshotsWithDiagnostics returned error for oversized record: %v", err)
+	plan := planSnapshotDatagrams(state.Network, []zone.ZonePath{"node-b.catofes."}, transport.MaxMessageBytes(), now)
+	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	diag, err := sendDetachedSnapshotWithDiagnostics(snapshot, plan, transport, "peer", now, nil)
+	if err != nil {
+		t.Fatalf("sendDetachedSnapshotWithDiagnostics returned error for oversized record: %v", err)
+	}
+	if diag.ChunkFallbacks == 0 {
+		t.Fatal("sendDetachedSnapshotWithDiagnostics sent no snapshot chunks")
 	}
 }
 
-func TestSendSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T) {
+func TestSendDetachedSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T) {
+	resetUDPSentChunkCacheForTest(t)
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	now := time.Unix(1000, 0)
@@ -87,16 +98,22 @@ func TestSendSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("node-b.catofes.", []*net.UDPAddr{transport.LocalAddr()})
 
-	diag, err := sendSnapshotsWithDiagnostics(state.Network, transport, "node-b.catofes.", []zone.ZonePath{"node-b.catofes."}, now, false, nil)
+	plan := planSnapshotDatagrams(state.Network, []zone.ZonePath{"node-b.catofes."}, transport.MaxMessageBytes(), now)
+	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
 	if err != nil {
-		t.Fatalf("sendSnapshotsWithDiagnostics: %v", err)
+		t.Fatalf("Snapshot: %v", err)
+	}
+	diag, err := sendDetachedSnapshotWithDiagnostics(snapshot, plan, transport, "node-b.catofes.", now, nil)
+	if err != nil {
+		t.Fatalf("sendDetachedSnapshotWithDiagnostics: %v", err)
 	}
 	if len(diag.Oversized) != 0 {
 		t.Fatalf("diagnostics = %#v, want no record payload accounting for hint-only announce", diag)
 	}
 }
 
-func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
+func TestSendDetachedSnapshotsChunksOversizedSkeleton(t *testing.T) {
+	resetUDPSentChunkCacheForTest(t)
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	// Add many delegations to inflate the zone skeleton.
@@ -142,9 +159,28 @@ func TestSendSnapshotsSkipsOversizedSkeleton(t *testing.T) {
 	defer transport.Close()
 	transport.SetPeerAddrs("peer", []*net.UDPAddr{transport.LocalAddr()})
 
-	if _, err := sendSnapshotsWithDiagnostics(state.Network, transport, "peer", []zone.ZonePath{"catofes."}, time.Now(), false, nil); err != nil {
-		t.Fatalf("sendSnapshotsWithDiagnostics returned error for oversized skeleton: %v", err)
+	now := time.Now()
+	plan := planSnapshotDatagrams(state.Network, []zone.ZonePath{"catofes."}, transport.MaxMessageBytes(), now)
+	snapshot, err := gossip.Snapshot(state.Network, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
 	}
+	diag, err := sendDetachedSnapshotWithDiagnostics(snapshot, plan, transport, "peer", now, nil)
+	if err != nil {
+		t.Fatalf("sendDetachedSnapshotWithDiagnostics returned error for oversized skeleton: %v", err)
+	}
+	if diag.ChunkFallbacks == 0 {
+		t.Fatal("sendDetachedSnapshotWithDiagnostics sent no snapshot chunks")
+	}
+}
+
+func resetUDPSentChunkCacheForTest(t *testing.T) {
+	t.Helper()
+	original := udpSentChunkCache
+	udpSentChunkCache = newSentChunkCache()
+	t.Cleanup(func() {
+		udpSentChunkCache = original
+	})
 }
 
 func TestPlanSnapshotDatagramsEmitsDigestHintsOnly(t *testing.T) {

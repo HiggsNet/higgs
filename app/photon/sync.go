@@ -280,10 +280,6 @@ func (s *chunkAssemblyStore) dropPeer(peerID string) {
 	}
 }
 
-func (sr *SyncRuntime) saveStateSnapshot(state *stateFile) error {
-	return sr.saveStateSnapshotAtRevision(state, 0)
-}
-
 func (sr *SyncRuntime) saveStateSnapshotAtRevision(state *stateFile, revision uint64) error {
 	if sr == nil || sr.App == nil {
 		return saveState(state)
@@ -299,10 +295,6 @@ func (sr *SyncRuntime) saveStateSnapshotAtRevision(state *stateFile, revision ui
 		sr.reloadStateStamp = stateFileStamp{path: sr.App.StatePath, info: info, revision: revision}
 	}
 	return nil
-}
-
-func (sr *SyncRuntime) saveStateMetaSnapshot(state *stateFile) error {
-	return sr.saveStateMetaSnapshotAtRevision(state, 0)
 }
 
 func (sr *SyncRuntime) saveStateMetaSnapshotAtRevision(state *stateFile, revision uint64) error {
@@ -1510,62 +1502,6 @@ type datagramSendDiagnostics struct {
 	ChunkFallbacks int
 }
 
-func sendSnapshotsWithDiagnostics(ns *zone.NetworkState, transport *gossip.Transport, peerID string, zones []zone.ZonePath, now time.Time, allowChunks bool, logger *appLogger) (datagramSendDiagnostics, error) {
-	var diag datagramSendDiagnostics
-	plan := planSnapshotDatagrams(ns, zones, transport.MaxMessageBytes(), now)
-	chunkZones := make(map[zone.ZonePath]bool)
-	if allowChunks && ns != nil {
-		for _, path := range zones {
-			if zs := ns.Zones[path]; zs != nil && !ns.IsZoneRevoked(path, now) {
-				chunkZones[path] = true
-			}
-		}
-	}
-	for _, oversized := range plan.Oversized {
-		diag.Oversized = append(diag.Oversized, oversized)
-		if logger != nil && logger.debugEnabled() {
-			logger.Debug("transport", "datagram_too_large", map[string]any{
-				"peer_id": peerID,
-				"object":  oversized.Object,
-				"zone":    oversized.Zone,
-				"key":     oversized.Key,
-				"bytes":   oversized.Size,
-				"limit":   transport.MaxMessageBytes(),
-				"action":  "skip_udp",
-			})
-		}
-	}
-	for _, announce := range plan.Announces {
-		msg := &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}
-		if err := transport.Send(peerID, msg); err != nil {
-			return diag, err
-		}
-	}
-	for path := range chunkZones {
-		chunks, err := sendZoneSnapshotChunks(ns, transport, peerID, path, now)
-		diag.ChunkFallbacks += chunks
-		if err != nil {
-			return diag, err
-		}
-	}
-	return diag, nil
-}
-
-func sendZoneSnapshotChunks(ns *zone.NetworkState, transport *gossip.Transport, peerID string, path zone.ZonePath, now time.Time) (int, error) {
-	if ns == nil || transport == nil || ns.IsZoneRevoked(path, now) {
-		return 0, nil
-	}
-	zs := ns.Zones[path]
-	if zs == nil {
-		return 0, nil
-	}
-	snapshot, err := gossip.Snapshot(ns, path)
-	if err != nil {
-		return 0, nil
-	}
-	return sendDetachedZoneSnapshotChunks(snapshot, transport, peerID, now)
-}
-
 func sendDetachedSnapshotWithDiagnostics(snapshot *gossip.ZoneSnapshot, plan snapshotDatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
 	diag := datagramSendDiagnostics{Oversized: append([]oversizedDatagramObject(nil), plan.Oversized...)}
 	for _, oversized := range plan.Oversized {
@@ -1597,7 +1533,7 @@ func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *go
 	if len(data) > maxChunkObjectBytes {
 		return 0, fmt.Errorf("chunk zone snapshot %s exceeds max %d bytes", snapshot.Zone, maxChunkObjectBytes)
 	}
-	chunkSize := maxObjectChunkDataSize(transport.MaxMessageBytes(), peerID, snapshot.Zone)
+	chunkSize := maxObjectChunkDataSize(transport.MaxMessageBytes(), transport.PeerID(), snapshot.Zone)
 	if chunkSize <= 0 {
 		return 0, gossip.ErrMessageTooLarge
 	}
@@ -1639,7 +1575,7 @@ func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *go
 	return sent, nil
 }
 
-func maxObjectChunkDataSize(budget int, peerID string, path zone.ZonePath) int {
+func maxObjectChunkDataSize(budget int, senderID string, path zone.ZonePath) int {
 	if budget <= 0 {
 		return 0
 	}
@@ -1649,16 +1585,17 @@ func maxObjectChunkDataSize(budget int, peerID string, path zone.ZonePath) int {
 		mid := (low + high) / 2
 		data, err := gossip.MarshalMessage(&gossip.Message{
 			Type:      gossip.MessageObjectChunk,
-			PeerID:    peerID,
-			Nonce:     1,
-			Timestamp: 1,
+			PeerID:    senderID,
+			Nonce:     ^uint64(0),
+			Timestamp: int64(^uint64(0) >> 1),
 			ObjectChunk: &gossip.ObjectChunk{
 				TransferID: make([]byte, 16),
 				Object:     gossip.ObjectPullZone,
 				Zone:       path,
 				RootHash:   make([]byte, 32),
 				ObjectHash: make([]byte, 32),
-				Total:      1,
+				Index:      ^uint16(0) - 1,
+				Total:      ^uint16(0),
 				Data:       make([]byte, mid),
 			},
 		})

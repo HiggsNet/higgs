@@ -1611,18 +1611,6 @@ func (d *DaemonService) currentState() *stateFile {
 	return state
 }
 
-func (d *DaemonService) routingLastRun(state *stateFile) int64 {
-	if d != nil {
-		if lastRun := d.routingLastRunUnix.Load(); lastRun != 0 {
-			return lastRun
-		}
-	}
-	if state != nil && state.RoutingReconcile != nil {
-		return state.RoutingReconcile.LastRunUnix
-	}
-	return 0
-}
-
 func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
 	if response == nil {
 		return

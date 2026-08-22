@@ -1111,15 +1111,11 @@ func isDryRunConnectError(err error) bool {
 	return strings.Contains(msg, "dial") || strings.Contains(msg, "no such file") || strings.Contains(msg, "connection refused")
 }
 
-// autoAnnounceAssignedIPs publishes or withdraws routes/announcements/* records
-// for every IPAM assignment whose assigned_to equals this node's managed zone.
-// It commits network record changes through the daemon state store so routing
-// reconcile can run BIRD work from a refreshed committed snapshot.
-func (d *DaemonService) autoAnnounceAssignedIPs(ars *routing.AuthorizedRouteSet) error {
-	_, err := d.autoAnnounceAssignedIPsResult(ars)
-	return err
-}
-
+// autoAnnounceAssignedIPsResult publishes or withdraws routes/announcements/*
+// records for every IPAM assignment whose assigned_to equals this node's
+// managed zone. It commits network record changes through the daemon state
+// store so routing reconcile can run BIRD work from a refreshed committed
+// snapshot.
 func (d *DaemonService) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) (bool, error) {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.StateStore == nil {
 		return false, nil

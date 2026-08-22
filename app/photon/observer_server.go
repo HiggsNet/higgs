@@ -255,17 +255,6 @@ func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.Pe
 	return d.PeerObservability.Snapshots(now)
 }
 
-func (d *DaemonService) mergePeerObservability(state syncPeerState, snapshot observability.PeerSnapshot) syncPeerState {
-	if d == nil || d.PeerObservability == nil {
-		return state
-	}
-	// Legacy state files may still contain these fields. A running daemon
-	// deliberately ignores them so diagnostics reset on restart.
-	state.DatagramStats = snapshot.DatagramStats
-	state.ObjectPullStats = snapshot.ObjectPullStats
-	return state
-}
-
 func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil {

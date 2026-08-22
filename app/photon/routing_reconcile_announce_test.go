@@ -16,7 +16,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	snapshot, _ := service.StateStore.Snapshot()
@@ -33,7 +33,7 @@ func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
 	beforeRev := service.StateStore.Meta().Revision
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	if afterRev := service.StateStore.Meta().Revision; afterRev != beforeRev {
@@ -120,7 +120,7 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	if len(ars.Errors) == 0 {
 		t.Fatalf("expected authorization errors for un-pooled assignment")
 	}
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
 		},
 	}
 
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
@@ -178,7 +178,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 		{Prefix: netip.MustParsePrefix("10.0.3.0/24"), AssignedTo: "node-a.catofes.", Shared: true, Tag: "socks5.cn"},
 	}}
 
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	snapshot, _ := service.StateStore.Snapshot()
@@ -196,7 +196,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	}
 
 	service.Sync.App.Config.IPAM.Announce = []string{"non-shared"}
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after config change: %v", err)
 	}
 	snapshot, _ = service.StateStore.Snapshot()
@@ -211,7 +211,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	}
 
 	service.Sync.App.Config.IPAM.Announce = nil
-	if err := service.autoAnnounceAssignedIPs(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after removing all selectors: %v", err)
 	}
 	snapshot, _ = service.StateStore.Snapshot()
