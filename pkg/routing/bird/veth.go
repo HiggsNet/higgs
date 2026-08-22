@@ -46,13 +46,17 @@ type VethSpec struct {
 
 // ExecVethManager implements VethManager using the `ip` command.
 type ExecVethManager struct {
-	runner func(ctx context.Context, cmd string, args ...string) *exec.Cmd
+	runner     func(ctx context.Context, cmd string, args ...string) *exec.Cmd
+	ipPath     string
+	sysctlPath string
 }
 
 // NewExecVethManager returns a VethManager that uses `ip` directly.
 func NewExecVethManager() *ExecVethManager {
 	return &ExecVethManager{
-		runner: exec.CommandContext,
+		runner:     exec.CommandContext,
+		ipPath:     resolveVethExecutable("ip"),
+		sysctlPath: resolveVethExecutable("sysctl"),
 	}
 }
 
@@ -60,6 +64,13 @@ var _ VethManager = (*ExecVethManager)(nil)
 
 // EnsureVethPair creates the veth pair and configures addresses.
 func (m *ExecVethManager) EnsureVethPair(ctx context.Context, spec VethSpec) error {
+	if handled, err := m.ensureObservedVethPair(ctx, spec); handled {
+		return err
+	}
+	return m.ensureVethPairLegacy(ctx, spec)
+}
+
+func (m *ExecVethManager) ensureVethPairLegacy(ctx context.Context, spec VethSpec) error {
 	if spec.MeshInterface == "" || spec.PeerInterface == "" {
 		return fmt.Errorf("veth: mesh and peer interface names are required")
 	}

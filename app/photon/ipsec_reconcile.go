@@ -1052,10 +1052,16 @@ func (d *DaemonService) saveCommittedState() error {
 		return nil
 	}
 	lease := d.StateStore.persistenceLease()
+	var err error
 	if d.Sync != nil {
-		return d.Sync.saveStateSnapshotAtRevision(lease.state, lease.revision)
+		err = d.Sync.saveStateSnapshotAtRevision(lease.state, lease.revision)
+	} else {
+		err = saveState(lease.state)
 	}
-	return saveState(lease.state)
+	if err == nil {
+		d.noteMetadataPersisted(lease.revision)
+	}
+	return err
 }
 
 func (d *DaemonService) saveCommittedMeta() error {
@@ -1063,10 +1069,16 @@ func (d *DaemonService) saveCommittedMeta() error {
 		return nil
 	}
 	lease := d.StateStore.persistenceLease()
+	var err error
 	if d.Sync != nil {
-		return d.Sync.saveStateMetaSnapshotAtRevision(lease.state, lease.revision)
+		err = d.Sync.saveStateMetaSnapshotAtRevision(lease.state, lease.revision)
+	} else {
+		err = saveStateMeta(lease.state)
 	}
-	return saveStateMeta(lease.state)
+	if err == nil {
+		d.noteMetadataPersisted(lease.revision)
+	}
+	return err
 }
 
 // buildIPsecContactPointQuality builds a per-peer, per-contact-point quality

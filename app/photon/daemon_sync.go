@@ -1041,7 +1041,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 		if persistenceScope == SyncPersistenceNetwork {
 			err = d.saveCommittedState()
 		} else {
-			err = d.saveCommittedMeta()
+			d.markMetadataCheckpointDirty()
 		}
 		if err != nil {
 			d.logWarn("sync", "save_failed", map[string]any{

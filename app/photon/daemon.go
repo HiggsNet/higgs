@@ -49,6 +49,9 @@ type DaemonService struct {
 	routingForceReload     bool
 	routingLastRunUnix     atomic.Int64
 	firewallDirty          bool
+	metadataCheckpointMu   sync.Mutex
+	metadataCheckpoint     metadataCheckpointState
+	metadataCheckpointSave func() error
 
 	syncSessions      map[string]*SyncSession
 	pendingSyncHints  map[string]bool
@@ -337,6 +340,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.recoverFirewallOnStart(ctx)
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
+	defer d.flushMetadataCheckpointOnShutdown()
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -372,7 +376,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if latest, changed, err := d.Sync.reloadStateIfChanged(lastObservedDigests); err != nil {
 			d.logWarn("daemon", "reload_failed", map[string]any{"error": err})
 		} else if changed {
+			rebasedPeerMetadata := d.rebasePendingPeerMetadata(latest)
 			d.replaceCommittedState(latest)
+			if rebasedPeerMetadata {
+				d.advanceMetadataCheckpointRevision(d.StateStore.Meta().Revision)
+			}
 			lastObservedDigests = gossip.ZoneDigests(latest.Network)
 			nextSync = now
 			forceSync = true
@@ -421,9 +429,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 			}
 		}
+		if err := d.flushMetadataCheckpoint(false); err != nil {
+			d.logWarn("state", "metadata_checkpoint_failed", map[string]any{"error": err})
+		}
 		// Wait for the next event. Use a dedicated receiver goroutine so UDP
 		// reads block until a packet arrives instead of polling every 250 ms.
-		wait := d.nextTimerWait(nextSync, nextEndpointPublish, nextIPsecReconcile, nextRoutingReconcile)
+		wait := d.nextTimerWait(nextSync, nextEndpointPublish, nextIPsecReconcile, nextRoutingReconcile, d.metadataCheckpointDue())
 		if wait <= 0 {
 			continue
 		}
