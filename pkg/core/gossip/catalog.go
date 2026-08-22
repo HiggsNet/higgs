@@ -21,7 +21,13 @@ func CatalogRoot(entries []ZoneDigest) []byte {
 }
 
 func CatalogSummaryFor(ns *zone.NetworkState, budget int) (*CatalogSummary, error) {
-	entries := ZoneDigests(ns)
+	return CatalogSummaryForDigests(ZoneDigests(ns), budget)
+}
+
+// CatalogSummaryForDigests builds a catalog summary from an already computed
+// digest projection. Callers that need both values can avoid hashing every
+// zone twice while retaining the same catalog-root construction.
+func CatalogSummaryForDigests(entries []ZoneDigest, budget int) (*CatalogSummary, error) {
 	root := CatalogRoot(entries)
 	return &CatalogSummary{
 		CatalogRoot: root,

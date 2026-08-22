@@ -411,9 +411,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			// Starting an asynchronous sync session is not itself a data-plane
 			// input change. Applied sync results call notifyStateChanged, while
 			// the independent reconcile timers remain the safety net.
-			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
-				lastObservedDigests = d.zoneDigests()
-			}
 			nextSync = now.Add(d.Interval)
 			forceSync = false
 		}
@@ -468,13 +465,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 					"reason":  gossip.RejectReason(result.Error),
 				}, result.Error))
 			}
-			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
-				lastObservedDigests = d.zoneDigests()
-			}
 		case event := <-d.syncEvents:
 			timer.Stop()
-			d.handleSyncEvent(ctx, event)
-			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
+			if d.handleSyncEvent(ctx, event) {
 				lastObservedDigests = d.zoneDigests()
 			}
 		case result := <-d.objectPullResults:
@@ -1719,21 +1712,24 @@ func (d *DaemonService) flushRevocationCleanup() {
 	// This function is called after every sync-state update. Most calls have no
 	// revocations, so check the immutable committed state first and avoid the
 	// copy-on-write transaction (which deep-copies the whole state through JSON).
-	revokedZones := d.StateStore.revokedZonesProjection(d.Sync.now())
-	if len(revokedZones) == 0 {
+	projection := d.StateStore.revocationCleanupProjection(d.Sync.now())
+	if len(projection.revokedZones) == 0 {
 		return
 	}
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		// Recompute inside the transaction in case a newer state was committed
-		// after the read-only fast-path check.
-		d.flushRevocationCleanupLocked(state)
-		return nil
-	}); err != nil {
-		d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
-		return
+	d.noteReconcileFlush("revocation_cleanup")
+	if projection.needsStateCleanup {
+		if _, err := d.StateStore.Update(func(state *stateFile) error {
+			// Recompute inside the transaction in case a newer state was committed
+			// after the read-only fast-path check.
+			d.flushRevocationCleanupLocked(state)
+			return nil
+		}); err != nil {
+			d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
+			return
+		}
 	}
 	for peerID := range d.peerObservabilitySnapshots() {
-		if revokedZones[zone.ZonePath(peerID)] {
+		if projection.revokedZones[zone.ZonePath(peerID)] {
 			d.PeerObservability.Delete(peerID)
 		}
 	}
@@ -1748,7 +1744,6 @@ func (d *DaemonService) flushRevocationCleanupLocked(state *stateFile) {
 	if len(revokedZones) == 0 {
 		return
 	}
-	d.noteReconcileFlush("revocation_cleanup")
 	CleanupRevokedPeerCache(state, revokedZones)
 }
 

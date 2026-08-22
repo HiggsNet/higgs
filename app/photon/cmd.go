@@ -793,12 +793,15 @@ func cmdDaemon() *cli.Command {
 		Description: "Run gossip serving and periodic outbound sync through the Phase 3 daemon service.",
 		Flags: []cli.Flag{
 			&cli.IntFlag{Name: "interval", Value: int(defaultDaemonInterval.Seconds()), Usage: "Outbound sync interval in seconds"},
+			&cli.StringFlag{Name: "cpu-profile", Usage: "Write a bounded CPU profile to a new absolute local path"},
+			&cli.DurationFlag{Name: "cpu-profile-duration", Value: defaultCPUProfileDuration, Usage: "CPU profile duration (maximum 30m)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 0 {
-				return cli.Exit("usage: photon daemon [--interval seconds]", 1)
+				return cli.Exit("usage: photon daemon [--interval seconds] [--cpu-profile absolute-path] [--cpu-profile-duration duration]", 1)
 			}
-			return daemonRun(ctx, time.Duration(cmd.Int("interval"))*time.Second)
+			interval := time.Duration(cmd.Int("interval")) * time.Second
+			return daemonRunProfiled(ctx, interval, cmd.String("cpu-profile"), cmd.Duration("cpu-profile-duration"))
 		},
 	}
 }

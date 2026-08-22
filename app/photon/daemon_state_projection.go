@@ -356,10 +356,8 @@ func (s *DaemonStateStore) syncTimerProjection(config *syncConfigFile, now time.
 	for _, peerID := range out.peers {
 		out.peerStates[peerID] = cloneSyncPeerState(state.SyncPeers[peerID])
 	}
-	out.summary, out.err = gossip.CatalogSummaryFor(state.Network, budget)
-	if out.err == nil {
-		out.digests = gossip.ZoneDigests(state.Network)
-	}
+	out.digests = gossip.ZoneDigests(state.Network)
+	out.summary, out.err = gossip.CatalogSummaryForDigests(out.digests, budget)
 	return out
 }
 
@@ -384,11 +382,12 @@ func (s *DaemonStateStore) catalogStateProjection(budget int) (*gossip.CatalogSu
 	if s.committed == nil || s.committed.Network == nil {
 		return nil, nil, nil
 	}
-	summary, err := gossip.CatalogSummaryFor(s.committed.Network, budget)
+	digests := gossip.ZoneDigests(s.committed.Network)
+	summary, err := gossip.CatalogSummaryForDigests(digests, budget)
 	if err != nil {
 		return nil, nil, err
 	}
-	return summary, gossip.ZoneDigests(s.committed.Network), nil
+	return summary, digests, nil
 }
 
 func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*gossip.CatalogPage, error) {
@@ -554,16 +553,29 @@ func (s *DaemonStateStore) healthTargetsProjection(groups []ipsec.LinkGroupSpec)
 	return localZone, healthTargetsFromState(s.committed, localZone, groups)
 }
 
-func (s *DaemonStateStore) revokedZonesProjection(now time.Time) map[zone.ZonePath]bool {
+type revocationCleanupProjection struct {
+	revokedZones      map[zone.ZonePath]bool
+	needsStateCleanup bool
+}
+
+func (s *DaemonStateStore) revocationCleanupProjection(now time.Time) revocationCleanupProjection {
 	if s == nil {
-		return nil
+		return revocationCleanupProjection{}
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.committed == nil || s.committed.Network == nil {
-		return nil
+		return revocationCleanupProjection{}
 	}
-	return CollectAllRevokedZones(s.committed, now)
+	revokedZones := CollectAllRevokedZones(s.committed, now)
+	projection := revocationCleanupProjection{revokedZones: revokedZones}
+	for peerID, peer := range s.committed.SyncPeers {
+		if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
+			projection.needsStateCleanup = true
+			break
+		}
+	}
+	return projection
 }
 
 func (s *DaemonStateStore) identityKeyPathProjection() string {

@@ -350,6 +350,59 @@ func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.
 	}
 }
 
+func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(4140, 0)
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {LastError: "zone revoked", LastUpdateSource: "revoked"},
+	}
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	service := newDaemonService(rt, state, config, time.Second)
+	recordDatagramChunkFallback(service.PeerObservability, "node-b.catofes.", now)
+	before := service.StateStore.Meta().Revision
+
+	service.flushRevocationCleanup()
+
+	if after := service.StateStore.Meta().Revision; after != before {
+		t.Fatalf("state revision after already-clean cleanup = %d, want %d", after, before)
+	}
+	if _, ok := service.PeerObservability.Snapshot("node-b.catofes.", now); ok {
+		t.Fatal("already-clean fast path retained revoked peer observability")
+	}
+}
+
+func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
+	state, config := buildTestNetworkState(b)
+	now := time.Unix(4140, 0)
+	state.SyncPeers = map[string]syncPeerState{
+		"node-b.catofes.": {LastError: "zone revoked", LastUpdateSource: "revoked"},
+	}
+	parent := state.Network.Zones["catofes."]
+	delegation := parent.Delegations["node-b.catofes."]
+	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+		ChildZone:             "node-b.catofes.",
+		ParentZone:            "catofes.",
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+		RevokedAuthorityHash:  delegation.AuthorityHash,
+		RevokedAt:             now.Add(-time.Second).Unix(),
+	}
+	service := newDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, time.Second)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		service.flushRevocationCleanup()
+	}
+}
+
 func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)

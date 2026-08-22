@@ -8,6 +8,20 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
+func TestCatalogSummaryForDigestsMatchesCatalogRoot(t *testing.T) {
+	entries := []ZoneDigest{
+		{Zone: "a.catofes.", RootHash: bytes.Repeat([]byte{1}, 32)},
+		{Zone: "b.catofes.", RootHash: bytes.Repeat([]byte{2}, 32)},
+	}
+	summary, err := CatalogSummaryForDigests(entries, DefaultDatagramBudget)
+	if err != nil {
+		t.Fatalf("CatalogSummaryForDigests: %v", err)
+	}
+	if summary.ZoneCount != len(entries) || !bytes.Equal(summary.CatalogRoot, CatalogRoot(entries)) {
+		t.Fatalf("summary = %#v, want zone_count=%d root=%x", summary, len(entries), CatalogRoot(entries))
+	}
+}
+
 func TestCatalogPageForDigestsIsBoundedAndStable(t *testing.T) {
 	var entries []ZoneDigest
 	for i := range 80 {

@@ -179,11 +179,12 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 			if msg.Ping == nil {
 				return nil
 			}
-			if err := d.respondPing(msg.PeerID, msg.Ping); err != nil {
+			localSummary, err := d.respondPingWithSummary(msg.PeerID, msg.Ping)
+			if err != nil {
 				return err
 			}
 			if msg.Ping.Summary != nil {
-				return d.maybeShortcutSyncFromPingSummary(msg.PeerID, msg.Ping.Summary)
+				return d.maybeShortcutSyncFromPingSummaryWithLocal(msg.PeerID, msg.Ping.Summary, localSummary)
 			}
 			return nil
 		case gossip.MessageFetchZone:
@@ -233,15 +234,23 @@ func packetReadOnlyResponder(msg *gossip.Message) (string, zone.ZonePath, bool) 
 }
 
 func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
-	if d == nil || d.Sync == nil || d.Sync.Transport == nil || ping == nil {
-		return nil
+	_, err := d.respondPingWithSummary(peerID, ping)
+	return err
+}
+
+func (d *DaemonService) respondPingWithSummary(peerID string, ping *gossip.Ping) (*gossip.CatalogSummary, error) {
+	if d == nil || d.Sync == nil || ping == nil {
+		return nil, nil
 	}
 	summary, err := d.StateStore.catalogSummaryProjection(d.syncDatagramBudget())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if summary == nil {
-		return nil
+		return nil, nil
+	}
+	if d.Sync.Transport == nil {
+		return summary, nil
 	}
 	recordCatalogSummary(d.PeerObservability, peerID, summary, d.Sync.now())
 	d.sendSyncMessage(peerID, &gossip.Message{
@@ -254,7 +263,7 @@ func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
 			FetchCatalogPage: &gossip.FetchCatalogPage{},
 		})
 	}
-	return nil
+	return summary, nil
 }
 
 // maybeShortcutSyncFromPingSummary checks whether an unsolicited ping's catalog
@@ -275,6 +284,10 @@ func (d *DaemonService) maybeShortcutSyncFromPingSummary(peerID string, remoteSu
 		})
 		return d.handleAnnounceHint(peerID)
 	}
+	return d.maybeShortcutSyncFromPingSummaryWithLocal(peerID, remoteSummary, localSummary)
+}
+
+func (d *DaemonService) maybeShortcutSyncFromPingSummaryWithLocal(peerID string, remoteSummary, localSummary *gossip.CatalogSummary) error {
 	if localSummary == nil {
 		return nil
 	}
@@ -464,11 +477,11 @@ func (d *DaemonService) respondAnnouncePlan(peerID string, plan snapshotDatagram
 	return nil
 }
 
-func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
+func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) bool {
 	peerID := syncEventPeerID(event)
 	if peerID == "" {
 		d.logDebug("sync", "event_dropped", map[string]any{"reason": "no_peer_id"})
-		return
+		return false
 	}
 	session := d.syncSessions[peerID]
 	if session == nil {
@@ -476,7 +489,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 			"peer_id": peerID,
 			"reason":  "no_session",
 		})
-		return
+		return false
 	}
 	// Enrich packet-derived events with current-state derivations right before
 	// the FSM consumes them, so stale snapshots are not used after state changes
@@ -532,6 +545,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) {
 	if session.Done() {
 		d.completeSyncSessionAfterPeerState(session, changed)
 	}
+	return changed
 }
 
 func syncEventName(event SyncEvent) string {

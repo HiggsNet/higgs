@@ -190,6 +190,29 @@ func CleanupRevokedPeerCache(state *stateFile, revokedZones map[zone.ZonePath]bo
 	}
 }
 
+// peerNeedsRevocationCleanup reports whether CleanupRevokedPeerCache would
+// change the runtime-owned fields of one peer. Keeping this comparison next to
+// the mutator prevents the daemon fast path from drifting away from the
+// deny-first cleanup semantics.
+func peerNeedsRevocationCleanup(peer syncPeerState) bool {
+	return peer.DiscoveredAddr != "" ||
+		peer.DiscoveredAtUnix != 0 ||
+		peer.ObservedAddr != "" ||
+		peer.ObservedFirstSeenUnix != 0 ||
+		peer.ObservedLastSeenUnix != 0 ||
+		peer.ObservedLastSyncUnix != 0 ||
+		peer.ObservedUntilUnix != 0 ||
+		peer.ObservedSource != "" ||
+		peer.ObservedFailureCount != 0 ||
+		peer.ObservedGraceAddrs != nil ||
+		peer.DatagramStats != nil ||
+		peer.ObjectPullStats != nil ||
+		peer.BackoffUntilUnix != 0 ||
+		peer.FailureCount != 0 ||
+		peer.LastError != "zone revoked" ||
+		peer.LastUpdateSource != "revoked"
+}
+
 // CollectAllRevokedZones returns all zones that are currently revoked,
 // including descendants. This expands on collectRevokedPeerZones by scanning
 // all zones in the active state, not just those with LinkInstances/SyncPeers.

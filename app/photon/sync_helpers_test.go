@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func buildTestNetworkState(t *testing.T) (*stateFile, *syncConfigFile) {
+func buildTestNetworkState(t testing.TB) (*stateFile, *syncConfigFile) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)

@@ -26,14 +26,16 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	peerID := "node-b.catofes."
 	service.syncSessions[peerID] = NewSyncSession(peerID)
 
-	service.handleSyncEvent(context.Background(), &CatalogSummaryReceivedEvent{
+	if changed := service.handleSyncEvent(context.Background(), &CatalogSummaryReceivedEvent{
 		PeerID: peerID,
 		Summary: &gossip.CatalogSummary{
 			CatalogRoot: []byte{0x21, 0x22},
 			ZoneCount:   2,
 			NextCursor:  "next-page",
 		},
-	})
+	}); changed {
+		t.Fatal("metadata-only catalog event reported a Network change")
+	}
 
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]

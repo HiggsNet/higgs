@@ -104,6 +104,8 @@ func TestHumanCommandsUsePlaneOrientedShowViews(t *testing.T) {
 	requireCommandFlags(t, commandByName(links.Commands, "show"), "filter", "verbose")
 	health := commandByName(root.Commands, "health")
 	requireCommandFlags(t, health, "sort", "verbose")
+	daemon := commandByName(root.Commands, "daemon")
+	requireCommandFlags(t, daemon, "interval", "cpu-profile", "cpu-profile-duration")
 
 	route := commandByName(root.Commands, "route")
 	requireCommandFlags(t, commandByName(route.Commands, "show"), "filter", "verbose")
