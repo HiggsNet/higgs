@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestBoltStoreSaveLoadNetwork(t *testing.T) {
@@ -74,6 +76,89 @@ func TestBoltStoreSaveLoadNetwork(t *testing.T) {
 	if revocation.Reason != "retired" || revocation.RevokedAt != 123 {
 		t.Fatalf("loaded revocation = %#v, want retired at 123", revocation)
 	}
+}
+
+func TestBoltStoreCombinedSaveUsesOneTransactionAndSkipsNoop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photon.db")
+	store, err := OpenBoltStore(path, 0o600)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	ns := NewNetworkState()
+	ns.Zones[RootZone] = NewZoneState(RootZone, &ZoneAuthority{Zone: RootZone, Epoch: 1, Threshold: 1})
+	before := boltStoreTxID(t, store)
+	if err := store.SaveNetworkAndMetaJSON("daemon", map[string]string{"state": "ready"}, ns); err != nil {
+		t.Fatalf("SaveNetworkAndMetaJSON: %v", err)
+	}
+	after := boltStoreTxID(t, store)
+	if after != before+1 {
+		t.Fatalf("combined save tx id = %d, want one commit after %d", after, before)
+	}
+	if err := store.SaveNetworkAndMetaJSON("daemon", map[string]string{"state": "ready"}, ns); err != nil {
+		t.Fatalf("SaveNetworkAndMetaJSON(no-op): %v", err)
+	}
+	if got := boltStoreTxID(t, store); got != after {
+		t.Fatalf("no-op save tx id = %d, want unchanged %d", got, after)
+	}
+
+	ns.Zones[RootZone].Authority.Epoch = 2
+	if err := store.SaveNetworkAndMetaJSON("daemon", map[string]string{"state": "updated"}, ns); err != nil {
+		t.Fatalf("SaveNetworkAndMetaJSON(update): %v", err)
+	}
+	if got := boltStoreTxID(t, store); got != after+1 {
+		t.Fatalf("combined update tx id = %d, want %d", got, after+1)
+	}
+}
+
+func TestBoltStoreCombinedSaveValidationFailureIsAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photon.db")
+	store, err := OpenBoltStore(path, 0o600)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	ns := NewNetworkState()
+	ns.Zones[RootZone] = NewZoneState(RootZone, &ZoneAuthority{Zone: RootZone, Epoch: 1, Threshold: 1})
+	if err := store.SaveNetworkAndMetaJSON("daemon", "ready", ns); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	before := boltStoreTxID(t, store)
+	ns.Zones[RootZone].Authority.Epoch = 2
+	if err := store.SaveNetworkAndMetaJSON("daemon", make(chan int), ns); err == nil {
+		t.Fatal("combined save with unsupported metadata unexpectedly succeeded")
+	}
+	if got := boltStoreTxID(t, store); got != before {
+		t.Fatalf("failed combined save tx id = %d, want unchanged %d", got, before)
+	}
+	loaded, err := store.LoadNetwork()
+	if err != nil {
+		t.Fatalf("LoadNetwork: %v", err)
+	}
+	if got := loaded.Zones[RootZone].Authority.Epoch; got != 1 {
+		t.Fatalf("failed combined save persisted Network epoch %d, want 1", got)
+	}
+	var meta string
+	if err := store.LoadMetaJSON("daemon", &meta); err != nil {
+		t.Fatalf("LoadMetaJSON: %v", err)
+	}
+	if meta != "ready" {
+		t.Fatalf("failed combined save persisted metadata %q, want ready", meta)
+	}
+}
+
+func boltStoreTxID(t *testing.T, store *BoltStore) int {
+	t.Helper()
+	var id int
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		id = tx.ID()
+		return nil
+	}); err != nil {
+		t.Fatalf("read transaction id: %v", err)
+	}
+	return id
 }
 
 func TestBoltStoreSaveNetworkDoesNotMutateZonePath(t *testing.T) {

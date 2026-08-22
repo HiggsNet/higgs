@@ -349,10 +349,7 @@ func saveStateAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error)
 		}
 	}
 
-	if err := store.SaveMetaJSON(cliMetaKey, stateMetaFromState(state)); err != nil {
-		return nil, err
-	}
-	if err := store.SaveNetwork(state.Network); err != nil {
+	if err := store.SaveNetworkAndMetaJSON(cliMetaKey, stateMetaFromState(state), state.Network); err != nil {
 		return nil, err
 	}
 	return closeStateStoreWithFileInfo(path, store, &closed)

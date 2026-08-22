@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net/netip"
@@ -9,6 +10,167 @@ import (
 	"testing"
 	"time"
 )
+
+type batchObservedIPsecDriver struct {
+	observedIPsecDriver
+	batchErr           error
+	batchCalls         int
+	inspectCalls       int
+	observedEnsureCall int
+}
+
+func (d *batchObservedIPsecDriver) InspectLinks(_ context.Context, specs []ipsec.TransportLinkSpec) ([]ipsec.XFRMLinkState, error) {
+	d.batchCalls++
+	if d.batchErr != nil {
+		return nil, d.batchErr
+	}
+	states := make([]ipsec.XFRMLinkState, len(specs))
+	for i, spec := range specs {
+		states[i] = healthyObservedXFRMState(spec)
+	}
+	return states, nil
+}
+
+func (d *batchObservedIPsecDriver) InspectLink(ctx context.Context, spec ipsec.TransportLinkSpec) (ipsec.XFRMLinkState, error) {
+	d.inspectCalls++
+	return d.observedIPsecDriver.InspectLink(ctx, spec)
+}
+
+func (d *batchObservedIPsecDriver) EnsureObservedInterfaces(context.Context, []ipsec.XFRMObservedInterface) error {
+	d.observedEnsureCall++
+	return nil
+}
+
+func healthyObservedXFRMState(spec ipsec.TransportLinkSpec) ipsec.XFRMLinkState {
+	state := ipsec.XFRMLinkState{
+		NetNS:                    ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: spec.NetNS}.Normalized(),
+		NamespaceExists:          true,
+		InterfaceExists:          true,
+		FlagsKnown:               true,
+		InterfaceUp:              true,
+		Multicast:                true,
+		IPv6AddrGenModeKnown:     true,
+		IPv6AddrGenDisabled:      true,
+		NamespaceForwardingKnown: true,
+		NamespaceForwarding:      true,
+		InterfaceForwardingKnown: true,
+		InterfaceForwarding:      true,
+	}
+	if spec.LocalTunnelAddr.IsValid() {
+		state.Addresses = []netip.Prefix{netip.PrefixFrom(spec.LocalTunnelAddr, 128)}
+	}
+	return state
+}
+
+func TestXFRMReconcileReusesHealthyBatchObservation(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "main",
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "phx1",
+		NetNS:           "photon",
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
+	driver := &batchObservedIPsecDriver{}
+	service := &DaemonService{}
+	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
+
+	observed := service.observeXFRMLinksForReconcile(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, instances, nil)
+	if observed == nil || driver.batchCalls != 1 {
+		t.Fatalf("batch observation = %v, calls = %d", observed, driver.batchCalls)
+	}
+	if _, missing, err := service.filterSAsWithMissingXFRMLinks(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
+		t.Fatalf("filterSAsWithMissingXFRMLinks: %v", err)
+	} else if len(missing) != 0 {
+		t.Fatalf("missing = %+v, want none", missing)
+	}
+	if err := service.maintainExistingXFRMInterfaces(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, instances, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}, nil, nil, observed); err != nil {
+		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
+	}
+	if driver.inspectCalls != 0 || driver.observedEnsureCall != 0 || len(driver.Interfaces) != 0 || len(driver.Addresses) != 0 {
+		t.Fatalf("healthy batch caused work: inspect=%d ensure=%d interfaces=%v addresses=%v", driver.inspectCalls, driver.observedEnsureCall, driver.Interfaces, driver.Addresses)
+	}
+}
+
+func TestXFRMReconcileFallsBackWhenBatchObservationFails(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{TransportID: "ipsec-main-ab", InterfaceName: "phx1", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::1")}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
+	driver := &batchObservedIPsecDriver{batchErr: errors.New("unsupported iproute2 JSON")}
+	service := &DaemonService{}
+	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
+
+	observed := service.observeXFRMLinksForReconcile(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, instances, nil)
+	if observed != nil {
+		t.Fatal("failed batch observation should return nil for fail-closed fallback")
+	}
+	if _, _, err := service.filterSAsWithMissingXFRMLinks(context.Background(), driver, []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
+		t.Fatalf("fallback filter: %v", err)
+	}
+	if driver.inspectCalls == 0 {
+		t.Fatal("fallback did not use per-interface inspection")
+	}
+}
+
+func TestIPsecReconcileSummaryEqualityIgnoresLiveObservations(t *testing.T) {
+	base := &ipsecReconcileState{
+		LastRunUnix:    100,
+		SourceRevision: 7,
+		Committed:      true,
+		DesiredLinks:   1,
+		ActualSAs: []linkSAState{
+			{Name: "z", UniqueID: 2, IKEState: "ESTABLISHED", IKEAgeSeconds: 10, InboundBytes: 100},
+			{Name: "a", UniqueID: 1, IKEState: "ESTABLISHED", ChildAgeSeconds: 20, InboundPackets: 4},
+		},
+	}
+	next := cloneIPsecReconcileState(base)
+	next.LastRunUnix = 200
+	next.SourceRevision = 12
+	next.ActualSAs[0].IKEAgeSeconds = 110
+	next.ActualSAs[0].InboundBytes = 1000
+	next.ActualSAs[1].ChildAgeSeconds = 120
+	next.ActualSAs[1].InboundPackets = 40
+	next.ActualSAs[0], next.ActualSAs[1] = next.ActualSAs[1], next.ActualSAs[0]
+	if !ipsecReconcileSummaryEqual(base, next) {
+		t.Fatal("live timestamp/counter/order changes should be equivalent")
+	}
+	next.ActualSAs[0].IKEState = "DOWN"
+	if ipsecReconcileSummaryEqual(base, next) {
+		t.Fatal("stable SA state change should not be equivalent")
+	}
+}
+
+func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(3990, 0)
+	rt := &Runtime{
+		Config:    defaultAppConfig(),
+		StatePath: filepath.Join(t.TempDir(), "photon.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	firstRev := service.StateStore.Meta().Revision
+	service.recordIPsecReconcileError(firstRev, now.Unix(), errors.New("vici unavailable"))
+	committedRev := service.StateStore.Meta().Revision
+	if committedRev != firstRev+1 {
+		t.Fatalf("first error revision = %d, want %d", committedRev, firstRev+1)
+	}
+
+	now = now.Add(time.Minute)
+	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici unavailable"))
+	if got := service.StateStore.Meta().Revision; got != committedRev {
+		t.Fatalf("repeated identical error revision = %d, want unchanged %d", got, committedRev)
+	}
+
+	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici timeout"))
+	if got := service.StateStore.Meta().Revision; got != committedRev+1 {
+		t.Fatalf("changed error revision = %d, want %d", got, committedRev+1)
+	}
+}
 
 func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	state, config := buildTestNetworkState(t)

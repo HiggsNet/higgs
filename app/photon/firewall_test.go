@@ -17,6 +17,58 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
+func TestFirewallReconcileResultEqualityIgnoresRunTimestamps(t *testing.T) {
+	base := &firewallReconcileState{
+		Backend:     firewall.BackendNFT,
+		LastRunUnix: 100,
+		Instances: map[string]*firewallInstanceReconcileStateEntry{
+			"overlay": {
+				Backend:      firewall.BackendNFT,
+				Generation:   3,
+				LastRunUnix:  100,
+				PolicyHash:   "policy-v1",
+				OwnedObjects: 8,
+			},
+		},
+	}
+	next := cloneFirewallReconcileState(base)
+	next.LastRunUnix = 200
+	next.Instances["overlay"].LastRunUnix = 200
+	if !firewallReconcileResultEqual(nil, base, nil, next) {
+		t.Fatal("timestamp-only firewall result should be equivalent")
+	}
+	next.Instances["overlay"].PolicyHash = "policy-v2"
+	if firewallReconcileResultEqual(nil, base, nil, next) {
+		t.Fatal("policy change should not be equivalent")
+	}
+}
+
+func TestCommitFirewallReconcileResultSkipsTimestampOnlyResult(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	state.FirewallReconcile = &firewallReconcileState{
+		Backend:     firewall.BackendNone,
+		LastRunUnix: 100,
+		Instances: map[string]*firewallInstanceReconcileStateEntry{
+			"overlay": {Backend: firewall.BackendNone, Generation: 1, LastRunUnix: 100, PolicyHash: "same"},
+		},
+	}
+	rt := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db")}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	service := newDaemonService(rt, state, config, time.Second)
+	rev := service.StateStore.Meta().Revision
+	next := cloneFirewallReconcileState(state.FirewallReconcile)
+	next.LastRunUnix = 200
+	next.Instances["overlay"].LastRunUnix = 200
+	if err := service.commitFirewallReconcileResult(rev, state.EndpointACLs, next); err != nil {
+		t.Fatalf("commitFirewallReconcileResult: %v", err)
+	}
+	if got := service.StateStore.Meta().Revision; got != rev {
+		t.Fatalf("timestamp-only result revision = %d, want unchanged %d", got, rev)
+	}
+}
+
 func TestParseConfigYAMLFirewallOverlay(t *testing.T) {
 	config := defaultAppConfig()
 	input := `

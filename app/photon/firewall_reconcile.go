@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -209,6 +210,19 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs m
 	if d == nil || d.StateStore == nil || summary == nil {
 		return nil
 	}
+	snapshot, snapshotRev := d.StateStore.firewallSnapshot()
+	if snapshot == nil || snapshotRev != rev {
+		d.firewallDirty = true
+		d.publishStateStoreRuntimeFlags()
+		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
+			"source_revision":  rev,
+			"current_revision": snapshotRev,
+		})
+		return nil
+	}
+	if firewallReconcileResultEqual(snapshot.EndpointACLs, snapshot.FirewallReconcile, endpointACLs, summary) {
+		return nil
+	}
 	currentRev, committed := d.StateStore.commitFirewallIfRevision(rev, endpointACLs, summary)
 	if !committed {
 		d.firewallDirty = true
@@ -219,7 +233,31 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs m
 		})
 		return nil
 	}
-	return d.saveCommittedState()
+	return d.saveCommittedMeta()
+}
+
+func firewallReconcileResultEqual(baseACLs map[string]endpointACL, base *firewallReconcileState, nextACLs map[string]endpointACL, next *firewallReconcileState) bool {
+	if !reflect.DeepEqual(baseACLs, nextACLs) {
+		return false
+	}
+	if base == nil || next == nil {
+		return base == nil && next == nil
+	}
+	base = cloneFirewallReconcileState(base)
+	next = cloneFirewallReconcileState(next)
+	base.LastRunUnix = 0
+	next.LastRunUnix = 0
+	for _, entry := range base.Instances {
+		if entry != nil {
+			entry.LastRunUnix = 0
+		}
+	}
+	for _, entry := range next.Instances {
+		if entry != nil {
+			entry.LastRunUnix = 0
+		}
+	}
+	return reflect.DeepEqual(base, next)
 }
 
 func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {

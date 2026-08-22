@@ -869,8 +869,9 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			snapshotApplies = append(snapshotApplies, syncSnapshotApply{action: a, limits: applyLimits})
 		}
 	}
+	snapshotBatchCommitted := false
 	if len(snapshotApplies) > 0 {
-		outcomes, _, err := d.applySyncSnapshotBatch(peerID, snapshotApplies, now)
+		outcomes, committed, err := d.applySyncSnapshotBatch(peerID, snapshotApplies, now)
 		if err != nil {
 			d.logWarn("sync", "snapshot_batch_commit_failed", map[string]any{
 				"peer_id": peerID,
@@ -880,6 +881,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			// that was never published.
 			return false
 		} else {
+			snapshotBatchCommitted = committed
 			for i, outcome := range outcomes {
 				apply := snapshotApplies[i]
 				if outcome.applyErr != nil {
@@ -990,8 +992,12 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 		}
 	}
 
-	// Final pass: backoff and save-state actions.
-	persisted := false
+	// Final pass: backoff and persistence intent. Snapshot application is the
+	// authoritative source for whether this event changed Network; an action
+	// that only records peer runtime state must not rewrite every zone bucket.
+	persistenceRequested := snapshotBatchCommitted
+	persistenceScope := SyncPersistenceMeta
+	persistenceReason := "snapshot_batch"
 	for _, action := range actions {
 		switch a := action.(type) {
 		case RecordBackoffAction:
@@ -1013,24 +1019,34 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 				}
 				mutations.commit(d)
 			}
-			if persisted {
-				continue
+			persistenceRequested = true
+			actionScope := a.Persistence
+			if actionScope == SyncPersistenceUnspecified {
+				// An omitted intent stays fail-safe for future callers. Current
+				// metadata-only FSM actions all opt in explicitly.
+				actionScope = SyncPersistenceNetwork
 			}
-			persisted = true
-			if err := d.saveCommittedState(); err != nil {
-				d.logWarn("sync", "save_failed", map[string]any{
-					"peer_id": peerID,
-					"reason":  a.Reason,
-					"error":   err,
-				})
+			if actionScope > persistenceScope {
+				persistenceScope = actionScope
 			}
+			persistenceReason = a.Reason
 		}
 	}
-	if changed && !persisted {
-		if err := d.saveCommittedState(); err != nil {
+	if changed {
+		persistenceRequested = true
+		persistenceScope = SyncPersistenceNetwork
+	}
+	if persistenceRequested {
+		var err error
+		if persistenceScope == SyncPersistenceNetwork {
+			err = d.saveCommittedState()
+		} else {
+			err = d.saveCommittedMeta()
+		}
+		if err != nil {
 			d.logWarn("sync", "save_failed", map[string]any{
 				"peer_id": peerID,
-				"reason":  "snapshot_batch",
+				"reason":  persistenceReason,
 				"error":   err,
 			})
 		}

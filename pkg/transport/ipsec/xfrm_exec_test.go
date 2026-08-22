@@ -17,6 +17,100 @@ type recordedCommand struct {
 	args []string
 }
 
+func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "photon"},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			switch strings.Join(args, " ") {
+			case "-j netns list":
+				return []byte(`[{"name":"photon"}]`), nil
+			case "netns exec photon ip -j -d link show":
+				return []byte(`[
+					{"ifname":"phx1","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none"},
+					{"ifname":"phx2","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none"}
+				]`), nil
+			case "netns exec photon ip -j addr show":
+				return []byte(`[
+					{"ifname":"phx1","addr_info":[{"local":"fe80::1","prefixlen":64},{"local":"fd00::fff4","prefixlen":128}]},
+					{"ifname":"phx2","addr_info":[{"local":"fe80::2","prefixlen":64}]}
+				]`), nil
+			default:
+				if len(args) > 4 && strings.Join(args[:4], " ") == "netns exec photon sysctl" {
+					return []byte("1\n1\n1\n1\n1\n1\n1\n1\n"), nil
+				}
+				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
+			}
+		},
+	}
+	specs := []TransportLinkSpec{
+		{InterfaceName: "phx1", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::1")},
+		{InterfaceName: "phx2", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::2")},
+	}
+
+	states, err := driver.InspectLinks(context.Background(), specs)
+	if err != nil {
+		t.Fatalf("InspectLinks: %v", err)
+	}
+	if len(commands) != 4 {
+		t.Fatalf("batch commands = %d, want 4: %#v", len(commands), commandStrings(commands))
+	}
+	if len(states) != 2 || !states[0].InterfaceUp || !states[0].Multicast || !states[0].IPv6AddrGenDisabled || !states[0].NamespaceForwarding || !states[0].InterfaceForwarding {
+		t.Fatalf("states = %+v, want healthy observed links", states)
+	}
+	if got := states[0].Addresses; len(got) != 2 || got[1] != netip.MustParsePrefix("fd00::fff4/128") {
+		t.Fatalf("phx1 addresses = %+v", got)
+	}
+
+	beforeEnsure := len(commands)
+	items := []XFRMObservedInterface{{Spec: specs[0], State: states[0]}, {Spec: specs[1], State: states[1]}}
+	if err := driver.EnsureObservedInterfaces(context.Background(), items); err != nil {
+		t.Fatalf("EnsureObservedInterfaces: %v", err)
+	}
+	if len(commands) != beforeEnsure {
+		t.Fatalf("healthy ensure issued mutations: %v", commandStrings(commands[beforeEnsure:]))
+	}
+}
+
+func TestSystemXFRMDriverEnsureObservedInterfacesRepairsOnlyKnownDrift(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "photon"},
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			return nil, nil
+		},
+	}
+	spec := TransportLinkSpec{InterfaceName: "phx1", NetNS: "photon"}
+	state := XFRMLinkState{
+		NetNS:                    NetNSSpec{Kind: NetNSName, Name: "photon"},
+		NamespaceExists:          true,
+		InterfaceExists:          true,
+		FlagsKnown:               true,
+		InterfaceUp:              false,
+		Multicast:                true,
+		IPv6AddrGenModeKnown:     true,
+		IPv6AddrGenDisabled:      true,
+		NamespaceForwardingKnown: true,
+		NamespaceForwarding:      true,
+		InterfaceForwardingKnown: true,
+		InterfaceForwarding:      false,
+	}
+
+	if err := driver.EnsureObservedInterfaces(context.Background(), []XFRMObservedInterface{{Spec: spec, State: state}}); err != nil {
+		t.Fatalf("EnsureObservedInterfaces: %v", err)
+	}
+	want := []string{
+		"ip netns exec photon ip link set phx1 up",
+		"ip netns exec photon sysctl -w net.ipv4.conf.phx1.forwarding=1",
+		"ip netns exec photon sysctl -w net.ipv6.conf.phx1.forwarding=1",
+	}
+	if got := commandStrings(commands); !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands:\n got %#v\nwant %#v", got, want)
+	}
+}
+
 func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{

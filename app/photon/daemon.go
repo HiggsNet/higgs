@@ -400,14 +400,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if result.Error != nil {
 				d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
 			}
-			d.ipsecDirty = true
-			d.routingDirty = true
-			if d.flushIPsecReconcile(ctx) {
-				nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
-			}
-			if d.flushRoutingReconcile(ctx) {
-				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
-			}
+			// Starting an asynchronous sync session is not itself a data-plane
+			// input change. Applied sync results call notifyStateChanged, while
+			// the independent reconcile timers remain the safety net.
 			if !sameZoneDigests(lastObservedDigests, d.zoneDigests()) {
 				lastObservedDigests = d.zoneDigests()
 			}

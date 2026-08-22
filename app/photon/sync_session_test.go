@@ -58,6 +58,9 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 		t.Fatalf("expected state completed, got %s", s.State)
 	}
 	assertActionTypes(t, actions, []string{"SaveStateAction"})
+	if save := actions[0].(SaveStateAction); save.Persistence != SyncPersistenceMeta {
+		t.Fatalf("save persistence = %v, want metadata-only", save.Persistence)
+	}
 }
 
 func TestSyncSessionPongWithMissingZones(t *testing.T) {

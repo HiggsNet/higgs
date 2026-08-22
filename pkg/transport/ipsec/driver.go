@@ -108,17 +108,40 @@ type XFRMExtraAddressAssigner interface {
 }
 
 type XFRMLinkState struct {
-	NetNS           NetNSSpec
-	NamespaceExists bool
-	InterfaceExists bool
-	FlagsKnown      bool
-	InterfaceUp     bool
-	Multicast       bool
-	Addresses       []netip.Prefix
+	NetNS                    NetNSSpec
+	NamespaceExists          bool
+	InterfaceExists          bool
+	FlagsKnown               bool
+	InterfaceUp              bool
+	Multicast                bool
+	IPv6AddrGenModeKnown     bool
+	IPv6AddrGenDisabled      bool
+	NamespaceForwardingKnown bool
+	NamespaceForwarding      bool
+	InterfaceForwardingKnown bool
+	InterfaceForwarding      bool
+	Addresses                []netip.Prefix
 }
 
 type XFRMLinkInspector interface {
 	InspectLink(context.Context, TransportLinkSpec) (XFRMLinkState, error)
+}
+
+// XFRMLinkBatchInspector observes all requested interfaces with a bounded
+// number of namespace-wide reads. Results are aligned with specs.
+type XFRMLinkBatchInspector interface {
+	InspectLinks(context.Context, []TransportLinkSpec) ([]XFRMLinkState, error)
+}
+
+type XFRMObservedInterface struct {
+	Spec  TransportLinkSpec
+	State XFRMLinkState
+}
+
+// XFRMObservedEnsurer applies only drift found in a preceding observation.
+// A healthy input must be a mutation-free no-op.
+type XFRMObservedEnsurer interface {
+	EnsureObservedInterfaces(context.Context, []XFRMObservedInterface) error
 }
 
 type XFRMSAFilter interface {

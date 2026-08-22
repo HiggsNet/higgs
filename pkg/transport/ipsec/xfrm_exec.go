@@ -17,6 +17,9 @@ type SystemXFRMDriver struct {
 	Stat         func(string) error
 	DefaultNetNS NetNSSpec
 	StateNetNS   NetNSSpec
+	IPPath       string
+	SysctlPath   string
+	TruePath     string
 }
 
 func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
@@ -25,6 +28,9 @@ func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
 		Stat:         statPath,
 		DefaultNetNS: defaultNetNS.Normalized(),
 		StateNetNS:   NetNSSpec{Kind: NetNSHost},
+		IPPath:       resolveExecutable("ip"),
+		SysctlPath:   resolveExecutable("sysctl"),
+		TruePath:     resolveExecutable("true"),
 	}
 }
 
@@ -52,7 +58,7 @@ func (d SystemXFRMDriver) EnsureNamespace(ctx context.Context, spec NetNSSpec) e
 		if !spec.Create {
 			return fmt.Errorf("netns %q does not exist and create=false", spec.Name)
 		}
-		if err := d.run(ctx, "ip", "netns", "add", spec.Name); err != nil {
+		if err := d.run(ctx, d.ipCommand(), "netns", "add", spec.Name); err != nil {
 			return err
 		}
 		return d.enableNamespaceForwarding(ctx, spec)
@@ -237,7 +243,7 @@ func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) erro
 		return d.runInNetNS(ctx, netns, "link", "delete", name)
 	}
 	if d.linkExists(ctx, NetNSSpec{Kind: NetNSHost}, name) {
-		return d.run(ctx, "ip", "link", "delete", name)
+		return d.run(ctx, d.ipCommand(), "link", "delete", name)
 	}
 	return nil
 }
@@ -385,12 +391,12 @@ func (d SystemXFRMDriver) stateNetNS() NetNSSpec {
 }
 
 func (d SystemXFRMDriver) netnsExists(ctx context.Context, name string) bool {
-	return d.commandSucceeds(ctx, "ip", "netns", "exec", name, "true")
+	return d.commandSucceeds(ctx, d.ipCommand(), "netns", "exec", name, d.trueCommand())
 }
 
 func (d SystemXFRMDriver) linkExists(ctx context.Context, netns NetNSSpec, name string) bool {
 	if netns.Normalized().Kind == NetNSHost {
-		return d.commandSucceeds(ctx, "ip", "link", "show", "dev", name)
+		return d.commandSucceeds(ctx, d.ipCommand(), "link", "show", "dev", name)
 	}
 	return d.commandSucceedsInNetNS(ctx, netns, "link", "show", "dev", name)
 }
@@ -428,7 +434,7 @@ func (d SystemXFRMDriver) moveLink(ctx context.Context, name string, netns NetNS
 	case NetNSHost:
 		return nil
 	case NetNSName:
-		return d.run(ctx, "ip", "link", "set", name, "netns", netns.Name)
+		return d.run(ctx, d.ipCommand(), "link", "set", name, "netns", netns.Name)
 	case NetNSPath:
 		return fmt.Errorf("moving links to path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
 	default:
@@ -479,25 +485,25 @@ func (d SystemXFRMDriver) runInNetNS(ctx context.Context, netns NetNSSpec, args 
 func (d SystemXFRMDriver) outputInNetNS(ctx context.Context, netns NetNSSpec, args ...string) ([]byte, error) {
 	netns = netns.Normalized()
 	if netns.Kind == NetNSHost {
-		return d.output(ctx, "ip", args...)
+		return d.output(ctx, d.ipCommand(), args...)
 	}
 	if netns.Kind == NetNSPath {
 		return nil, fmt.Errorf("path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
 	}
-	full := append([]string{"netns", "exec", netns.Name, "ip"}, args...)
-	return d.output(ctx, "ip", full...)
+	full := append([]string{"netns", "exec", netns.Name, d.ipCommand()}, args...)
+	return d.output(ctx, d.ipCommand(), full...)
 }
 
 func (d SystemXFRMDriver) commandSucceedsInNetNS(ctx context.Context, netns NetNSSpec, args ...string) bool {
 	netns = netns.Normalized()
 	if netns.Kind == NetNSHost {
-		return d.commandSucceeds(ctx, "ip", args...)
+		return d.commandSucceeds(ctx, d.ipCommand(), args...)
 	}
 	if netns.Kind == NetNSPath {
 		return false
 	}
-	full := append([]string{"netns", "exec", netns.Name, "ip"}, args...)
-	return d.commandSucceeds(ctx, "ip", full...)
+	full := append([]string{"netns", "exec", netns.Name, d.ipCommand()}, args...)
+	return d.commandSucceeds(ctx, d.ipCommand(), full...)
 }
 
 func (d SystemXFRMDriver) commandSucceeds(ctx context.Context, name string, args ...string) bool {
@@ -534,6 +540,35 @@ func statPath(path string) error {
 	return err
 }
 
+func resolveExecutable(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return name
+	}
+	return path
+}
+
+func (d SystemXFRMDriver) ipCommand() string {
+	if d.IPPath != "" {
+		return d.IPPath
+	}
+	return "ip"
+}
+
+func (d SystemXFRMDriver) sysctlCommand() string {
+	if d.SysctlPath != "" {
+		return d.SysctlPath
+	}
+	return "sysctl"
+}
+
+func (d SystemXFRMDriver) trueCommand() string {
+	if d.TruePath != "" {
+		return d.TruePath
+	}
+	return "true"
+}
+
 func (d SystemXFRMDriver) enableNamespaceForwarding(ctx context.Context, netns NetNSSpec) error {
 	params := []string{
 		"net.ipv4.conf.all.forwarding=1",
@@ -566,10 +601,10 @@ func (d SystemXFRMDriver) sysctl(ctx context.Context, netns NetNSSpec, args ...s
 	netns = netns.Normalized()
 	switch netns.Kind {
 	case NetNSHost:
-		return d.run(ctx, "sysctl", args...)
+		return d.run(ctx, d.sysctlCommand(), args...)
 	case NetNSName:
-		full := append([]string{"netns", "exec", netns.Name, "sysctl"}, args...)
-		return d.run(ctx, "ip", full...)
+		full := append([]string{"netns", "exec", netns.Name, d.sysctlCommand()}, args...)
+		return d.run(ctx, d.ipCommand(), full...)
 	case NetNSPath:
 		return fmt.Errorf("path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
 	default:

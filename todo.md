@@ -224,6 +224,13 @@
 
   - [ ] **7.11.8 收敛稳态 bbolt 写放大（实机问题，2026-08-22）**
 
+    **实现进度（2026-08-22）**
+    - [x] P0-A 第一窄切口：`SaveStateAction` 已携带显式 persistence scope；pong、matching/empty catalog、timeout/backoff 等 peer-only 路径改为 metadata-only，同批 snapshot 实际改变 Network 时由执行器自动升级为完整保存。未声明 scope 的未来调用默认 fail-safe 为完整保存。
+    - [x] P0-B：IPsec/Firewall 已增加 substantive equality；时间戳、IPsec SA age/traffic counter 与 SA 返回顺序等纯采样变化不推进 revision，link lifecycle/owner/backoff、稳定 SA 状态、desired/action/skip、Firewall policy/backend/generation/error 等变化仍提交。重复相同 IPsec error 已去重，首次/变化/恢复仍保存；两类 reconcile 的实质 metadata 变化均改为 metadata-only。
+    - [x] P1 存储窄切口：完整 state 的 `_meta` 与 Network 已合并为单一 bbolt transaction；JSON value 先稳定序列化并与现值比较，相同值不 `Put`，整笔无变化时 rollback 为 no-op。新增/删除 zone、失败回滚和 metadata-only 兼容路径保留。
+    - [ ] P2 checkpoint、常驻 DB handle 与 typed changed-zone set 尚未实施；先用本轮 P0/P1 在 `less` 复测。当前仍保持每个 peer completion 立即 metadata fsync，不改变 LastSync/backoff/endpoint 的重启语义。
+    - [ ] 验证进度：新增 transaction ID、原子失败、reconcile equality/error 去重测试，`make check`、完整 `make smoke-all` 与 Nix StrongSwan PATH 下的 `make root-smoke` 已通过；受执行平台授权额度限制，本轮 `go test -race ./app/photon ./pkg/core/gossip ./pkg/core/zone` 未能启动，仍需补跑。`less` 候选版 65 秒 `write_bytes` 为 2,838,528 bytes（基线 39,849,984，下降 92.9%），75 秒 `pwrite64`/`fdatasync` 为 72/36（基线 1320/88）；页重写已基本收口，但 per-peer metadata fsync 仍使 fdatasync 未达到个位数，留给 P2 checkpoint。
+
     **现场基线与根因**
     - `less`（17 peers、约 23 条 XFRM link）运行 19 小时后，`photon` 主进程 `/proc/<pid>/io` 的 `write_bytes` 约 47.8 GB；BIRD 只写 4 KB，journal 总占用约 495 MB，写盘主体可确定为 Photon 自身。`systemctl status` 的约 88.1 GB 同时累计了 device-mapper `254:0` 和底层块设备 `8:0` 的同一批 I/O，不能当作真实物理写入量，但去重后的约 47.8 GB 仍异常。
     - 无 strace 的 65 秒稳态采样写入 39,849,984 bytes、发生 3,459 次 write syscall，按当前负载约为 53 GB/天；4 MB 的 `/etc/photon/photon.db` 没有持续同比增长，问题是反复覆盖 bbolt 页并同步落盘。
@@ -271,6 +278,13 @@
     - 必跑 `go test -race ./app/photon ./pkg/core/gossip ./pkg/core/zone`、`make check`、chain relay、object pull、delegation revoke、IPsec/firewall/routing smoke。分阶段实机验收：P0-A 后无差异 sync 不再调用 `SaveNetwork`，物理写入至少下降 80%；P0-B/P2 后 75 秒稳态 `fdatasync` 从 88 降到个位数、65 秒 `write_bytes` 以约 1 MiB 为目标且不得超过 2 MiB。peer 状态、重启恢复和同步收敛时间不得退化。
 
   - [ ] **7.11.9 消除 IPsec/XFRM 稳态 reconcile 子进程风暴（实机问题，2026-08-22）**
+
+    **实现进度（2026-08-22）**
+    - [x] P0 命令后端第一窄切口：`SystemXFRMDriver` 新增按 netns 批量观测；同一 namespace 使用一次 `ip -j -d link show`、一次 `ip -j addr show` 和一次批量 forwarding sysctl 读取形成 immutable snapshot，pre-filter 与 maintenance 复用同一份结果。批量 JSON/字段读取失败会记录 fallback 并回到原逐接口 inspection，不把 unknown 当 healthy。
+    - [x] P0 drift-only apply：批量 snapshot 同时覆盖 UP/MULTICAST、IPv6 addrgen、namespace/interface forwarding、主地址和 diagnostic `/128`；健康接口零 mutation，单项漂移只修对应 flag/sysctl/address。namespace forwarding 每 namespace 至多修一次，既有 create/move/action 顺序未改变。
+    - [x] P0 PATH 探测：driver 构造时解析 `ip`/`sysctl`/`true` 绝对路径，并把绝对内层命令交给 `ip netns exec`，减少每轮 execvp PATH 失败探测；保留零值 driver 的旧命令名以兼容 fake runner。
+    - [x] P1 第一窄切口：sync timer 只启动异步 session，不再无条件 dirty/立即 flush IPsec 与 Routing。真实 snapshot apply 仍由 `notifyStateChanged` deny-first 唤醒三层，VICI/control/health 等原事件路径不变，独立 IPsec/Routing periodic timer 继续兜底。
+    - [x] 验证进度：新增批量解析、健康零 mutation、单项漂移、同轮 snapshot 复用和批量失败回退测试；目标节点已确认 `ip -j netns list`、link/addr JSON 与多 key `sysctl -n` 格式兼容。`make check`、完整 `make smoke-all` 与 Nix StrongSwan PATH 下的 `make root-smoke` 均通过，覆盖 restart/adopt、IKE/takeover/rotate、BIRD/Babel、nft、health fault 和 revocation deny-first。`less` 候选版 20 秒真正 `execve` 尝试为 41、成功 25（基线 552，尝试数下降 92.6%，达到 <50 目标）；其中 XFRM 健康轮只有 netns/link/addr/forwarding 批量 observe，无 mutation/fallback，剩余命令主要是独立 routing veth reconcile。65 秒 cgroup CPU 为 1.410 秒（约单核 2.17%，相对基线 3.004 秒下降约 53%）；XFRM 目标已达成，但总 CPU 尚未达到约 1%，后续应单独 profile routing periodic reconcile，不在本窄切口扩大修改面。
 
     **现场基线与根因**
     - cgroup 生命周期 CPU 约为单核 6%；无调试器的 65 秒窗口消耗 3.00 秒 CPU（约单核 4.6%），主要呈每分钟 reconcile 突发，而不是 BIRD 常驻计算。
