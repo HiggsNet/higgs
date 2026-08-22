@@ -56,8 +56,9 @@
 **目标：** 先把 daemon/control/运维面补到可长期运行，再按真实需求推进异构 TransportLink 并行、可靠性补强和可选传输能力。Phase 7 不要求按编号顺序执行。
 
 **当前建议顺序：**
-1. 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel，按实际需求选择下一窄切口。
-2. 7.2 高频 port hopping、7.4 WireGuard、7.5 GRE/VXLAN、7.6 SRv6 保持可选，等需求和实验环境明确后再开。
+1. 先完成 7.11.8/7.11.9 的稳态磁盘写入与 reconcile CPU 收口，并在真实 17-peer / 23-link 节点上复测。
+2. 随后选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel 的下一窄切口。
+3. 7.2 高频 port hopping、7.4 WireGuard、7.5 GRE/VXLAN、7.6 SRv6 保持可选，等需求和实验环境明确后再开。
 
 - [ ] **7.7 可选 Global Discovery Server**
   - 作为独立公网 rendezvous 服务，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 discovery 仍以 signed endpoint record + gossip 为主。
@@ -221,6 +222,87 @@
     - 后续候选包括：持久化 control-state store、peer sync controller state、reconcile observation store，以及 health/BIRD/actual source adapter。`Network`、密钥、owner token、rotate/adoption 等生命周期状态的归属必须由重启恢复语义决定，不能仅按文件大小或字段名字移动。
     - 每次只迁一个字段族并保持磁盘格式、wire 格式和 control/observer schema 的兼容；模块化不阻塞当前性能修复，是否继续拆由 7.11.0-7.11.5 完成后的新 perf 和调用关系决定。
 
+  - [ ] **7.11.8 收敛稳态 bbolt 写放大（实机问题，2026-08-22）**
+
+    **现场基线与根因**
+    - `less`（17 peers、约 23 条 XFRM link）运行 19 小时后，`photon` 主进程 `/proc/<pid>/io` 的 `write_bytes` 约 47.8 GB；BIRD 只写 4 KB，journal 总占用约 495 MB，写盘主体可确定为 Photon 自身。`systemctl status` 的约 88.1 GB 同时累计了 device-mapper `254:0` 和底层块设备 `8:0` 的同一批 I/O，不能当作真实物理写入量，但去重后的约 47.8 GB 仍异常。
+    - 无 strace 的 65 秒稳态采样写入 39,849,984 bytes、发生 3,459 次 write syscall，按当前负载约为 53 GB/天；4 MB 的 `/etc/photon/photon.db` 没有持续同比增长，问题是反复覆盖 bbolt 页并同步落盘。
+    - 75 秒 syscall 采样捕获 1,320 次 `pwrite64` 和 88 次 `fdatasync`。一轮 60 秒同步中，17 个 peer 的 `LAST_SYNC` 几乎集中在同一秒；`SyncSession` 在 pong/catalog 无差异时仍生成 `SaveStateAction`，每个 peer 随后分别调用完整 `saveCommittedState()`。
+    - `saveStateAtWithFileInfo` 每次先用一个 bbolt transaction 写 `_meta`，再用第二个 transaction 调用 `SaveNetwork`；一次完整 save 至少包含两次 commit/fsync，而且崩溃可能停在“新 meta + 旧 Network”的中间状态。`SaveNetwork` 又会遍历所有 zone 并重新 Put authority/proof/delegation/revocation/records/history/root；bbolt 不会因为调用方 Put 的字节相同就自动替 Photon 省掉所有 dirty page 写入。
+    - 每次保存还会重新 `bolt.Open -> mmap/freelist -> transaction -> Close/munmap`。这是额外 CPU/锁开销，但在当前架构中也让外部 CLI 有机会取得 bbolt 文件锁；它不是可以脱离多进程协调语义“顺手复用句柄”的独立低风险改动。
+    - IPsec 成功 summary 每轮都会更新 `LastRunUnix`/`SourceRevision` 并完整保存；`recordIPsecReconcileError` 的持续同错误路径也会每轮完整保存。Firewall 每次实际 flush 都会更新 summary/每实例 `LastRunUnix`，没有 substantive equality 检查并直接完整保存。需要注意：当前 no-diff sync timer 不直接周期 flush Firewall，Firewall 主要由启动和真实 state-change 通知触发；但它一旦运行就必定 commit/save，仍是明确的次级写放大源。
+
+    **优化顺序与兼容边界**
+
+    **P0-A：先停止无差异同步重写 Network**
+    - 引入明确的持久化意图/dirty family，至少区分 `Network` 权威数据和 daemon-local metadata。所有调用点必须显式声明写入范围；发生 zone/delegation/revocation/record/history 变化时仍同步执行完整持久化并在成功后才对管理请求确认，不能降低权威 mutation 的 durability。
+    - 第一窄切口只把 pong/catalog 无差异完成、round timeout/backoff 等只修改 `SyncPeers` 的路径改为 `saveCommittedMeta()`；snapshot/object chunk/typed Network mutation 仍走完整保存。保持现有 `_meta` JSON 和 zone bucket 格式，不做数据库迁移，旧二进制与离线 debug/db 命令应继续可读。
+    - 不把 `LastSyncUnix`、backoff、failure 或 discovered/observed endpoint 笼统归类为纯 observability：`LastSyncUnix` 参与 recent discovered address 的 grace 判断，backoff/failure 参与下一轮调度，observed/discovered 状态影响连通路径。第一步仍保持这些字段每次同步完成后立即 metadata-only 落盘，只消除 Network rewrite，以最小化语义变化。
+    - `SaveStateAction` 应携带或由 action result 推导 `networkChanged/metaChanged`，不能只靠 reason 字符串判断。成功 snapshot 与 peer completion 同属一个 action batch 时只做一次完整保存；失败/rejected digest 若只改 peer metadata，则只做 metadata 保存。
+
+    **P0-B：IPsec/Firewall substantive equality 与错误去重**
+    - 仿照 `routingReconcileResultEqual` 为 IPsec 和 Firewall 定义字段所有权清晰的 substantive comparator。比较时忽略经审计确认纯运行观测的 `LastRunUnix`；IPsec 的 `SourceRevision`、`Committed`、`Stale` 是否影响 restart/debug 必须逐字段证明后才能排除，不能简单把整个 summary 清零比较。
+    - IPsec 必须同时比较 transport key/port、LinkInstances、desired/actual SA、actions/skips、rotate/takeover/draining、owner token 和稳定错误状态；Firewall 必须比较 EndpointACL、backend、policy hash、generation、owned object 数与稳定错误状态。实质结果相同则不升 committed revision、不持久化、不触发下游通知。
+    - 有实质变化但 Network 未变时统一走 `saveCommittedMeta()`。`recordIPsecReconcileError` 对连续相同错误做去重：首次出现、错误类别/内容变化和恢复清零需要提交；相同错误仅刷新纯 live observation，不得每分钟 full save。错误去重不能压掉 failure count、backoff、stale/dirty 或 owner lifecycle 的真实变化。
+    - Firewall 的优化不能改变 deny-first 顺序。ACL、revocation、authorized route 或 backend-owned object 变化仍必须在 control 请求返回前 apply 并持久化；这里只跳过“输入、observed、plan、result 均等价”的重复 summary。
+
+    **P1：存储层原子事务与相同值兜底**
+    - 将完整 state save 的 `_meta` 与 Network 写入合并到同一个 bbolt `Update`，把一次完整保存从两个事务降为一个，并消除 crash 时 meta/network 跨事务不一致窗口。先把现有 store helper 重构为接收同一 `*bolt.Tx` 的内部函数；metadata-only 路径仍保持单独一个 transaction。
+    - 为 JSON value 写入提供 `putJSONIfChanged`：先稳定序列化，再与当前 bucket value 做 `bytes.Equal`，相同则不调用 `Put`；追踪本事务是否发生 Put/Delete，没有任何逻辑变化时通过受控 no-op/rollback 路径退出并用 syscall 测试确认不产生 fsync。必须保持 nil/empty、bucket create/delete 和 stale zone 删除语义。
+    - 不用当前 `ZoneState.MerkleRoot` 判断 zone 是否变化：现有 TODO 已记录其计算/失效维护不完整。若相同值 guard 后仍需 zone delta，优先从 typed Network mutation 显式传递 changed/deleted zone set，并在保存失败时把 dirty set 与后续 mutation 做并集；不能用可能过期的 root 跳过权威写入。
+    - 第一阶段继续保持每次保存独立打开/关闭 bbolt。常驻 DB handle 只能在 daemon 成为唯一在线 writer、所有管理写走 control socket、direct 模式要求 daemon 停止，并明确外部变更/reload/file-lock 行为之后单独评估；写量收口后先复测 Open/Close 是否仍是可见热点。
+
+    **P2：有界 metadata checkpoint（仅在 P0/P1 验收后）**
+    - 先逐字段形成 restart 语义表：权威/安全字段必须同步落盘；backoff/failure 丢失会导致重启后额外重试；`LastSyncUnix` 丢失可能让 recent discovered endpoint 失效；纯展示时间/计数可以丢失。只有明确最坏影响和恢复路径后，才允许把相应字段从 per-peer fsync 改为 checkpoint。
+    - 启用延迟 checkpoint 前必须修正 `handleSyncTimerEvent` 的无条件 `LoadState -> ReplaceCommitted`：当前立即保存语义下它不会覆盖未落盘内存 mutation，但延迟后会直接丢失 metadata dirty。sync timer 应只在文件 marker 证明存在真实外部修改时 reload；若本地仍 dirty，必须先按 typed ownership 定义 flush/rebase/conflict 顺序，不能把磁盘旧 metadata 或本地旧 Network 任一方盲目覆盖到另一方。
+    - `daemon.go` 的 sync timer 只负责启动一批异步 session，不代表该轮 peer 已全部完成，不能在那里直接“每轮保存一次”。合并器应由 metadata dirty generation 驱动：短 debounce 合并同秒完成的 peer、设置最大 flush deadline，并在所有本轮 session terminal 时提前 flush；新一轮、管理 mutation 和 shutdown 不得错误清掉旧 dirty generation。
+    - 初始最大丢失窗口不超过一个 sync interval；如需扩到 5–10 分钟，必须先证明 endpoint grace、peer lifecycle/cleanup、backoff storm 和 bootstrap-only 节点重启行为可接受。SIGTERM/正常 shutdown 必须有界 flush；save 失败保持 dirty、指数退避重试，后续成功保存覆盖失败期间全部 metadata 变化。`kill -9` 明确允许只丢失最后一次成功 checkpoint 之后的非权威 metadata。
+    - Network/admin/security mutation 不进入延迟队列。执行同步权威保存时可以顺带吸收当前 metadata dirty，但只有该事务成功后才能清 dirty；失败不得因稍后的 metadata-only save 而把未持久化 Network revision 标记为已保存。
+
+    **共同限制与观测**
+    - 不以 bbolt `NoSync`/`NoFreelistSync`、tmpfs 或关闭持久化作为修复；这些措施会改变断电/崩溃恢复保证。单纯增大 daemon interval 只允许作为临时运维缓解，不能作为验收结果。
+    - 增加低基数持久化观测：按 `network/meta` 与固定 reason family 统计 requested、executed、no-op、coalesced、failed、duration；不得使用 peer ID、zone 或原始错误作为 metrics label。测试可注入 saver，精确断言每个事件的完整保存/metadata 保存次数。
+
+    **回归与验收**
+    - 单测覆盖：无差异 pong、matching/empty catalog、round timeout/backoff、含 snapshot 的部分成功批次、object chunk、endpoint publish、IPsec rotate/takeover、重复/变化/恢复的 reconcile error、Firewall ACL、routing auto-announce，以及连续 save failure 后恢复。逐项断言内存 revision、磁盘 reload 结果、dirty/retry 和通知顺序不变。
+    - 增加 bbolt transaction/bucket 级回归：完整 save 只 commit 一次且 meta/network 要么同时可见要么都不可见；metadata-only save 不改写任何 `zone:*` value；相同值 guard 不 Put；Network save 仍完整保存新增/删除 zone、record/history 和 revocation。保存失败不能更新 reload marker，也不能向调用方报告成功。
+    - checkpoint 测试使用可控 clock/saver 覆盖 17 peer 同秒完成、交错完成、active session 超时、deadline flush、保存期间又变 dirty、失败重试、SIGTERM flush 和 `kill -9` 后从最后 checkpoint 恢复；特别验证 LastSync/discovered grace、backoff 和 peer lifecycle，不只检查 debug 时间戳。
+    - 保留外部 state 写入检测、daemon 自写 marker、显式 direct 模式和多进程 bbolt file lock 的既有测试；任何常驻句柄实验必须额外证明在线 CLI 不死锁、不永久阻塞且外部写入不会被 reload marker 屏蔽。
+    - 必跑 `go test -race ./app/photon ./pkg/core/gossip ./pkg/core/zone`、`make check`、chain relay、object pull、delegation revoke、IPsec/firewall/routing smoke。分阶段实机验收：P0-A 后无差异 sync 不再调用 `SaveNetwork`，物理写入至少下降 80%；P0-B/P2 后 75 秒稳态 `fdatasync` 从 88 降到个位数、65 秒 `write_bytes` 以约 1 MiB 为目标且不得超过 2 MiB。peer 状态、重启恢复和同步收敛时间不得退化。
+
+  - [ ] **7.11.9 消除 IPsec/XFRM 稳态 reconcile 子进程风暴（实机问题，2026-08-22）**
+
+    **现场基线与根因**
+    - cgroup 生命周期 CPU 约为单核 6%；无调试器的 65 秒窗口消耗 3.00 秒 CPU（约单核 4.6%），主要呈每分钟 reconcile 突发，而不是 BIRD 常驻计算。
+    - 20 秒 process trace 捕获 552 次 `execve` 尝试，其中 229 次执行 iproute2 `ip`；其余包含 `true`、`sysctl` 及 `execvp` 沿 PATH 的失败探测。典型序列为每条 link 重复执行 `ip netns exec photon ip link show`、IPv4/IPv6 addr show/replace、namespace `true` 和 forwarding sysctl。
+    - daemon 每轮 sync 启动后都无条件把 IPsec/Routing 标记为 dirty 并立即 flush；同时 IPsec 默认 1 分钟、Routing 默认 30 秒仍有 periodic safety reconcile。即时 flush 会重置下一次 deadline，因此不是简单把两个计时器次数相加，但它把“本轮只是发送 ping、尚无新输入”也当成 reconcile 输入，造成不必要的突发。
+    - `SystemXFRMDriver.EnsureInterface` 对已存在接口仍逐条确保 namespace、addrgen、multicast、link up 和 forwarding，`InspectLink` 也按 link 独立查询。接口数增长时 fork/exec、`ip netns exec` namespace 切换和文本解析成本近似按 link 数线性放大。
+
+    **优化顺序与兼容边界**
+
+    **P0：先把单轮 XFRM reconcile 变成 no-op cheap path**
+    - 先给 command runner 增加仅测试/诊断使用的固定 operation family 计数，建立一轮 reconcile 的 observe/mutate 命令清单；不能为了降低计数而取消周期性 drift 检查。缓存只能作为加速提示，内核实际状态仍是 reconcile authority。
+    - 将 reconcile 明确拆成 `Observe -> Plan -> Apply -> Re-observe/Commit`：先按 netns 批量取得 link/address/namespace/forwarding 状态，构造不可变 observed snapshot，再只对缺失或不一致项执行 add/move/addr replace/flag/sysctl。健康接口的第二轮 no-op reconcile 不得执行 mutation 命令。
+    - 第一阶段可继续使用现有命令 backend，但每个 netns 的 namespace existence 与 forwarding 只检查/设置一次，link/address 尽量用 `ip -j` 批量读取；解析失败或字段未知时 fail closed 到现有逐项检查，不得把 unknown 当作 already-correct。
+    - 消除嵌套命令的 PATH 扫描：启动时解析受支持的 `ip`/`sysctl` 绝对路径并传给 netns wrapper，同时保留 NixOS 与普通发行版 PATH/安装探测测试。该项只减少 exec 探测，不能替代 observe/plan 去重。
+    - 命令版 no-op 路径稳定后，再评估 rtnetlink + 每 netns 常驻 `setns` worker。若采用，worker 必须 `runtime.LockOSThread`、进入和恢复 namespace、支持 namespace 删除/重建、context cancel 与有界退出；不得让 Go runtime 的其他 goroutine 意外留在目标 netns。
+    - 不在本阶段并行执行同一 netns 的 mutation，也不打乱 create/move/configure/up/route/BIRD 的既有顺序。StrongSwan SA、XFRM if_id、owner token、staged/draining/takeover、地址替换、IPv6 link-local 和 BIRD interface 可见性的现有语义必须保持。
+    - 不以单纯增大 reconcile interval 作为修复；那会线性增加接口/namespace 漂移后的修复延迟。只有在 no-op 成本收口后，才根据明确的恢复 SLO 调整 periodic safety interval。
+
+    **P1：按真实输入标 dirty，消除 sync timer 假唤醒**
+    - 删除 `daemon.go` 中 sync timer 后的无条件 `ipsecDirty/routingDirty` 之前，先定义 typed dirty reasons/input generations，不能只比较 zone digest。Routing 的输入至少包括授权 route/announcement、link output、配置、BIRD lifecycle/force reload；IPsec 的输入还包括 transport contact-point quality、DNS/port generation、VICI lifecycle、rotate/takeover/draining/backoff deadline 和配置。
+    - sync timer 仅启动 session，不应立刻触发 reconcile。成功 snapshot/record mutation、peer endpoint/path quality 的实质变化、link lifecycle event、配置 reload 或时间 deadline 到达时，分别标记对应 layer dirty；同一 event drain 内多个原因合并为一次 reconcile。纯 `LastAttemptUnix`/相同 catalog completion 不应唤醒数据面。
+    - 保留现有 periodic safety reconcile，用于修复进程外 drift、namespace/interface 被管理员删除、BIRD/StrongSwan 状态变化但事件丢失等情况。event-driven dirty 负责低延迟，periodic timer 负责最终自愈；两者命中同一时刻必须合并，不能连续跑两遍。
+    - deny-first/security 事件不得等待普通 debounce：revocation、ACL 收紧和授权 route 撤销仍按 Firewall -> Routing -> IPsec 的现有顺序立即 flush。新增/放宽策略可以合并，但必须保持 control 请求目前要求的同步 apply/错误返回语义。
+    - 为每类 dirty reason 增加表驱动测试，证明“输入变化一定唤醒、纯观测变化不唤醒、丢失事件仍由 periodic 修复”。不得用 committed 全局 revision 是否变化作为唯一条件，因为 peer metadata revision 可能变化而数据面输入不变，transport runtime 也可能变化而 Network digest 不变。
+
+    **回归与验收**
+    - fake runner 测试精确覆盖首次创建、第二轮完全 no-op、单接口 down、multicast/addrgen 漂移、IPv4/IPv6 地址缺失或多余、forwarding 被关闭、接口被移回 host、namespace 删除重建，以及 observe/parse/apply 中途失败。no-op 必须零 mutation，任一漂移必须在下一轮修复。
+    - root smoke 覆盖 daemon restart/adopt、23-link 规模、StrongSwan SA 与 XFRM link 映射、rotate/takeover/draining、BIRD 邻居/路由不中断、namespace 删除重建及 revocation deny-first；优化前后比较最终 `ip -j link/addr`、sysctl、SAs、routes 和 persisted owner state，而不只比较命令数。
+    - 保留每个外部命令的 context timeout、错误输出截断、partial apply 后 dirty 重跑和 shutdown cancel 行为。批量 observe 失败时不得提交虚假的 healthy 状态，也不得清除原有可恢复的 LinkInstances。
+    - 调度测试额外覆盖：no-diff sync 不触发数据面、snapshot/endpoint/quality/VICI/config/deadline 分别触发正确 layer、同 tick timer+event 只 reconcile 一次、事件漏失后 periodic 自愈，以及 revocation/ACL deny-first 不被 debounce。
+    - 必跑 IPsec/XFRM 单测与 race、完整 `make root-smoke`、BIRD/Babel、health fault、firewall 和 revocation smoke。真实节点以相同 20/65 秒窗口复测；目标是健康稳态每轮外部命令数量从 O(links) mutation 降为 O(netns) observe、20 秒 `execve` 从 552 降到 50 以下（成功执行数量至少下降 90%），cgroup 单核占用从约 5–6% 降到 1% 左右且至少下降 60%，同时漂移修复时间和数据面连通性不退化。
+
 - [ ] **7.9 可选 Admission 管理面**
   - 在 auto-join 主链路和本地控制接口稳定后，再考虑父 Zone 管理节点的 join request inbox、审核队列、批量 approve/reject 和受限网络化提交。
   - 第一版 admission 仍不引入新的公网 request 协议，也不让 leaf 自动把 join request 写入 gossip active state。
@@ -278,7 +360,9 @@
 
 ## 下一步
 
-1. 7.11.6 StateStore 正确性、手写 clone、分层/target-zone COW 与批量 snapshot apply 已完成；后续先保持相同 fixture 观察实机 perf，不继续引入 `MerkleRoot`/digest cache，除非 profile 再次证明 digest 计算为热点。
-2. StateStore 性能主线已收口；下一步按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel，WG 底座与 GRE/VXLAN 正式实现继续作为可选 7.4/7.5。
-3. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-4. Phase 8、Phase 9 已完成验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
+1. 先完成 7.11.8：将无差异 peer/control-state 写入从完整 Network save 分离，并以 `less` 相同负载复测 bbolt 页写与 fsync；不得降低权威 mutation 的同步持久化保证。
+2. 再完成 7.11.9：把 XFRM reconcile 收敛为批量 observe、按 drift apply，并用完整 root smoke 验证 restart/rotate/takeover/BIRD/撤销行为。
+3. 7.11.6 StateStore 正确性、手写 clone、分层/target-zone COW 与批量 snapshot apply 已完成；继续保持现有全局 revision 和不可变 committed root，不引入 `MerkleRoot`/digest cache，除非新 profile 再次证明 digest 计算为热点。
+4. 上述稳态问题收口后，再按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 与 GRE/VXLAN 继续作为可选 7.4/7.5。
+5. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
+6. Phase 8、Phase 9 已完成验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
