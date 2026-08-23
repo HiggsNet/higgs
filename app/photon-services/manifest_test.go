@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestResolveAndRenderManifest(t *testing.T) {
@@ -68,10 +70,29 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		}
 	}
 	serviceCompose := readTestFile(t, filepath.Join(output, "socks5", "docker-compose.yml"))
-	for _, want := range []string{"name: photon-socks5", "socks:", "h2:", "gogost/gost:3.2.6", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "./config/socks.yaml:/etc/gost/gost.yaml:ro", "./config/h2.yaml:/etc/gost/gost.yaml:ro"} {
+	for _, want := range []string{"name: photon-socks5", "socks-main:", "socks-cn:", "h2:", "gogost/gost:3.2.6", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "./config/socks.yaml:/etc/gost/gost.yaml:ro", "./config/h2.yaml:/etc/gost/gost.yaml:ro"} {
 		if !strings.Contains(serviceCompose, want) {
 			t.Fatalf("service compose missing %q:\n%s", want, serviceCompose)
 		}
+	}
+	var compose composeFile
+	if err := yaml.Unmarshal([]byte(serviceCompose), &compose); err != nil {
+		t.Fatalf("decode service compose: %v", err)
+	}
+	for _, network := range []string{"main", "cn"} {
+		service, ok := compose.Services["socks-"+network]
+		if !ok {
+			t.Fatalf("service compose missing socks-%s: %+v", network, compose.Services)
+		}
+		if len(service.Networks) != 1 {
+			t.Fatalf("socks-%s networks = %+v, want one isolated attachment", network, service.Networks)
+		}
+		if _, ok := service.Networks[network]; !ok {
+			t.Fatalf("socks-%s attached to %+v, want %s", network, service.Networks, network)
+		}
+	}
+	if _, ok := compose.Services["socks"]; ok {
+		t.Fatalf("service compose retained multi-network socks container: %+v", compose.Services["socks"])
 	}
 	if strings.Contains(serviceCompose, "ports:") {
 		t.Fatalf("service compose unexpectedly publishes host ports:\n%s", serviceCompose)

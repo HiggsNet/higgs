@@ -6,7 +6,7 @@
 
 Service 发布把“可信网络状态”和“容器部署”拆开：Photon daemon 管理 IPAM、路由宣告、签名 service record 和动态防火墙授权，但**不理解镜像、容器或 Compose，也不会调用 Docker API**；独立程序 `photon-services` 读取 `/etc/photon/service.yaml`，从 Photon 运行态解析地址并生成 Docker Compose artifact，再编排 ACL、route announcement 和 service record 的发布顺序。
 
-当前只提供一套固定名为 `socks5` 的服务，由 `socks`、`h2` 两个 GOST v3 容器组成，不需要实例名、Compose project name 或 container name。域名解析由各容器内的 GOST resolver 完成，默认优先返回 IPv4。
+当前只提供一套固定名为 `socks5` 的服务。每个发布 network 生成一个只连接该 network 的 `socks-<network>` GOST v3 容器，HTTP proxy 由一个 `h2` GOST v3 容器提供。域名解析由各容器内的 GOST resolver 完成，默认优先返回 IPv4。
 
 相关文档：IPAM assignment 与路由授权见 [routing.md](routing.md)，endpoint ACL 的规则生成见 [firewall.md](firewall.md)，`ipam.announce` 配置见 [config.md](config.md)，验收入口见 [testing.md](testing.md)。
 
@@ -32,10 +32,10 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Photon da
 | 角色 | 做什么 | 不做什么 |
 |---|---|---|
 | `photon` daemon / CLI | 保存普通和 shared Anycast assignment；校验服务 endpoint 属于当前 Zone 的 active assignment；显式宣告或撤销整个 assignment prefix；签名、发布和撤销固定的 `services/socks5` record；根据 Zone selector 动态维护 host FORWARD endpoint ACL | 不理解镜像、容器、Compose，不调用 Docker API |
-| `photon-services` | 读取 service manifest；从 `photon route ipam mine` 解析本地 `auto` 和 shared assignment tag；生成可独立使用的 Docker network Compose；配置了 `socks5` 时再规划两个容器的地址、生成 GOST artifact，并编排发布/撤销顺序 | 不直接启动容器、不管理容器生命周期 |
+| `photon-services` | 读取 service manifest；从 `photon route ipam mine` 解析本地 `auto` 和 shared assignment tag；生成可独立使用的 Docker network Compose；配置了 `socks5` 时再规划每个 endpoint 的隔离 SOCKS 容器和 HTTP 容器地址、生成 GOST artifact，并编排发布/撤销顺序 | 不直接启动容器、不管理容器生命周期 |
 | 管理员 | 执行 `docker compose up/down/pull`；负责非 shared assignment 的路由（通常经 `ipam.announce`） | — |
 
-`render` 只生成 artifact；`publish` 也不会启动容器。容器必须先由管理员通过 Compose 拉起，`publish` 的 TCP 就绪检查才有意义。
+`render` 只生成 artifact；`publish` 也不会启动容器。容器必须先由管理员通过 Compose 拉起，`publish` 的 TCP 与 UDP DNS 就绪检查才有意义。
 
 ### 1.2 代码位置
 
@@ -192,11 +192,11 @@ IPv4 和 IPv6 使用相同格式：
 
 IPv6 assignment 来源允许后三段使用 `::` 开头的相对值。例如 assignment 为 `2a0d:2905:0:4::/96` 时，`::/112`、`::100/120`、`::1` 分别解析为该 `/96` 内的 Docker subnet、动态池和网关。
 
-Docker 可以在动态池中自动分配未指定地址；两个服务容器使用静态相对基址，并要求落在动态池之外。例如 `::20` 产生：
+Docker 可以在动态池中自动分配未指定地址；服务角色使用静态相对基址，并要求落在动态池之外。例如 `::20` 产生：
 
 | 角色 | 地址偏移 | 容器 |
 |---|---|---|
-| `socks` | 基址 +0 | GOST v3，NO AUTH `socks5` handler，启用 TCP CONNECT 和 UDP ASSOCIATE |
+| `socks-<network>` | 基址 +0 | 每个发布 network 一个单网卡 GOST v3 容器；NO AUTH `socks5` handler，启用 TCP CONNECT 和 UDP ASSOCIATE |
 | `h2` | 基址 +1 | GOST v3，带 Basic 认证的 `http` handler |
 
 解析器会检查角色地址位于 Docker subnet 内，且不与 gateway 或动态池冲突；不同 network 的同族 subnet 不允许重叠。
@@ -219,7 +219,7 @@ photon-services render     # 生成全部 artifact
 ```text
 /etc/photon/services/
   networks/docker-compose.yml     # 全部 Docker network，project photon-networks
-  socks5/docker-compose.yml       # 两个 GOST v3 容器，project photon-socks5
+  socks5/docker-compose.yml       # 每个 endpoint 的 SOCKS 容器及一个 HTTP 容器，project photon-socks5
   socks5/config/socks.yaml        # SOCKS5 TCP/UDP listener 与内置 resolver，0600
   socks5/config/h2.yaml           # HTTP listener、Basic 认证与内置 resolver，0600
   resolved.json                   # 整个 resolved manifest
@@ -229,6 +229,7 @@ photon-services render     # 生成全部 artifact
 
 - Docker network 名自动为 `photon-<network>`；Compose project name 固定为 `photon-networks` 和 `photon-socks5`，无需也无法在 manifest 中配置。`photon-networks` 内含一个连接全部 network、`scale: 0` 的 `owner` 服务，使纯网络项目可以通过标准 `docker compose up -d` 创建；它不会启动占位容器。
 - SOCKS5 Compose 引用 network 为 `external: true`，因此必须先起 networks project。
+- `socks-<network>` 只连接它发布 endpoint 所属的一个 Docker network。不要把同一个 SOCKS5/UDP GOST 进程重新连接到多个服务 network；通配 listener 的动态 UDP relay 否则可能按默认路由选择另一 endpoint 地址作为回包源地址。
 - 从旧版三容器部署升级时，重新 render 会删除旧的 `smartdns.conf`；启动新版 Compose 必须使用 `--remove-orphans`（或先 `down`），以删除已经不在配置中的 `dns` 容器。旧 manifest 中若显式配置了 `images.smartdns`，也应删除该字段。
 - 服务不向 host 发布端口；publish readiness 从 host 直接检查容器 endpoint IP，overlay 也直接访问该 endpoint IP。
 - 需要 Docker Engine 28 或更新版本。Docker 默认 gateway mode 会在 `DOCKER` filter chain 阻止直达未 publish 端口；`nat-unprotected` 明确关闭这个逐端口过滤，才能承载 SOCKS5 动态 UDP relay。`trusted_host_interfaces` 与 gateway mode 的区别见 Docker 官方 [Port publishing and mapping](https://docs.docker.com/engine/network/port-publishing/)。
@@ -266,7 +267,7 @@ photon-services publish
 
 `publish` 先重新执行 `photon route ipam mine --json` 并重新解析 manifest，要求当前解析结果与 `socks5/resolved.json` 的 config hash、managed zone 和 endpoints **完全一致**；assignment 或配置变化后必须先重新 `render`。随后依次：
 
-1. 从本机分别对每个 endpoint 的 SOCKS5 和 HTTP 地址、TCP 端口做 3 秒就绪检查；任一失败即终止。该检查不执行 UDP ASSOCIATE。
+1. 从本机分别对每个 endpoint 的 SOCKS5 和 HTTP 地址、TCP 端口做就绪检查，并通过 SOCKS5 UDP ASSOCIATE 向配置中第一个兼容的普通 UDP resolver 发出真实 `example.com` DNS 查询。检查要求响应 DNS ID 一致、rcode 成功且至少有一条答案，同时要求 UDP 包的实际源 IP/端口与服务端返回的动态 relay IP/端口完全一致；任一失败即终止。TLS/HTTPS-only resolver 配置需要同时提供一个 plain、`udp://` 或 `dns://` resolver 用于该探针。
 2. 为每个 endpoint 安装或清理两条独立 ACL：配置了 `allow_zones` 时，分别执行 `photon firewall endpoint apply socks5-<network> --destination <socks-ip> --scope ip --allow-zone ...` 和 `photon firewall endpoint apply h2-<network> --destination <http-ip> --scope ip --allow-zone ...`；未配置时删除两条旧 ACL（表示不使用这套限制）。
 3. 对 shared endpoint 执行 `photon route announce <zone> <assignment>`，宣告整个 assignment prefix；非 shared endpoint 的路由由 `ipam.announce` 或管理员负责，`photon-services` 不碰。
 4. 用一条 `photon service publish --endpoint region,address,port...` 发布所有 endpoints（daemon 侧做第 2.3 节的授权检查并签名入 gossip）。
@@ -338,7 +339,7 @@ Phase 8 的端到端验收入口是显式 root smoke，不在 `root-smoke` 或 `
 sudo make services-smoke
 ```
 
-它先跑 `app/photon-services` 单元测试，再以真实 Docker bridge（`nat-unprotected`）、未 publish 的 SOCKS5 容器端口、IP-scope host ACL、目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、两端 BIRD/Babel 验证端到端代理数据面（包括实际完成一次 SOCKS5 代理 TCP 请求、Docker connected route 优先于更宽聚合路由的断言），并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker 28+、`ip`、`bird`/`birdc` 和 `nft`；创建的 netns、Docker network 和容器在测试结束时清理。详见 [testing.md](testing.md)。
+它先跑 `app/photon-services` 单元测试，再以真实 Docker bridge（`nat-unprotected`）、未 publish 的 SOCKS5 容器端口、IP-scope host ACL、目标 TCP/UDP DNS 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、两端 BIRD/Babel 验证端到端代理数据面。测试实际完成 SOCKS5 TCP CONNECT 和 UDP ASSOCIATE，验证 DNS ID、两条答案以及动态 relay 回包源 IP/端口，并断言 Docker connected route 优先于更宽聚合路由；最后运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker 28+、`ip`、`bird`/`birdc` 和 `nft`；创建的 netns、Docker network 和容器在测试结束时清理。详见 [testing.md](testing.md)。
 
 常见问题：
 
@@ -355,7 +356,7 @@ sudo make services-smoke
 
 ## 8. 已知限制
 
-- TCP 就绪检查只说明两个角色的地址可达、端口在监听，不验证 SOCKS5 握手、UDP ASSOCIATE、DNS 或真实代理出口。
+- publish 的 UDP DNS 探针依赖配置中至少一个普通 UDP resolver；它验证 SOCKS5 UDP relay 和 DNS 出口，不替代对全部 resolver、全部目标地址族的持续监控。
 - 当前只有固定的 `socks5` 一套服务；通用多服务 record 类型没有实现。
 - 客户端 service selection / health policy 与应用层 source-routing relay 不属于本数据面，按产品需求作为独立后续项目评估。
 - `published.json`/`resolved.json` 是本机状态锁，不进入 gossip；多节点部署同一 Anycast 服务时各节点独立执行 publish/withdraw。

@@ -221,7 +221,7 @@ PHOTON_CONTAINER_RUNTIME=podman make ipsec-xfrm-container-smoke
 | `health-fault-container-smoke` | 在 privileged container 中运行 health fault-injection smoke。 |
 | `revocation-data-plane-smoke` | 组合 firewall、BIRD 和 StrongSwan 的 revocation 数据面验证，需要 root。 |
 | `revocation-data-plane-container-smoke` | 在 privileged container 中运行组合 revocation 数据面验证。 |
-| `services-smoke` | Phase 8 的显式 root 入口。先跑 `app/photon-services` 单元测试，再以真实 Docker bridge、SOCKS5 与目标 TCP 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、BIRD/Babel 验证端到端代理数据面，并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker、`ip`、`bird`/`birdc` 和 `nft`；不包含在 `root-smoke` 或 `smoke-all`。 |
+| `services-smoke` | Phase 8 的显式 root 入口。先跑 `app/photon-services` 单元测试，再以真实 Docker bridge、SOCKS5 与目标 TCP/UDP DNS 容器、host 到 overlay 聚合路由、overlay 到 host static upstream、BIRD/Babel 验证端到端代理数据面；覆盖 TCP CONNECT、UDP ASSOCIATE、DNS ID/答案和动态 relay 回包源 IP/端口，并运行 BIRD Anycast 成员故障收敛测试。需要 root、Docker、`ip`、`bird`/`birdc` 和 `nft`；不包含在 `root-smoke` 或 `smoke-all`。 |
 
 ## 失败判断
 

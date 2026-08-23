@@ -149,30 +149,40 @@ func publishedServiceAddress(service resolvedSOCKS5, network string) string {
 
 func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) error {
 	networks := map[string]composeNetwork{}
-	socksNetworks := map[string]composeServiceAttachment{}
 	h2Networks := map[string]composeServiceAttachment{}
 	for _, id := range sortedKeys(service.Networks) {
 		network := manifest.Networks[id]
 		roles := service.Networks[id]
 		networks[id] = composeNetwork{Name: network.Name, External: true}
-		socksNetworks[id] = attachmentForAddress(roles.SOCKS)
 		h2Networks[id] = attachmentForAddress(roles.H2)
 	}
 	file := composeFile{
 		Name:     "photon-socks5",
 		Networks: networks,
 		Services: map[string]composeService{
-			"socks": {
-				Image: manifest.Images.Gost, Restart: "unless-stopped", Networks: socksNetworks,
-				Command: []string{"-C", "/etc/gost/gost.yaml"},
-				Volumes: []string{"./config/socks.yaml:/etc/gost/gost.yaml:ro"},
-			},
 			"h2": {
 				Image: manifest.Images.Gost, Restart: "unless-stopped", Networks: h2Networks,
 				Command: []string{"-C", "/etc/gost/gost.yaml"},
 				Volumes: []string{"./config/h2.yaml:/etc/gost/gost.yaml:ro"},
 			},
 		},
+	}
+	// A SOCKS5 UDP relay must reply from the address to which the client sent
+	// its datagram. GOST does not retain that ingress address when a wildcard
+	// listener is attached to multiple Docker networks: its dynamic UDP socket
+	// follows the container's default route instead. Give every published
+	// endpoint a single-homed GOST process so the kernel's only eligible service
+	// address is the endpoint address.
+	for _, endpoint := range service.Endpoints {
+		roles := service.Networks[endpoint.Network]
+		file.Services["socks-"+endpoint.Network] = composeService{
+			Image: manifest.Images.Gost, Restart: "unless-stopped",
+			Networks: map[string]composeServiceAttachment{
+				endpoint.Network: attachmentForAddress(roles.SOCKS),
+			},
+			Command: []string{"-C", "/etc/gost/gost.yaml"},
+			Volumes: []string{"./config/socks.yaml:/etc/gost/gost.yaml:ro"},
+		}
 	}
 	dir := filepath.Join(manifest.OutputDir, "socks5")
 	if err := writeYAML(filepath.Join(dir, "docker-compose.yml"), file); err != nil {

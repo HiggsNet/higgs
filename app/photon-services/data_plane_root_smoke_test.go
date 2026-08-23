@@ -218,31 +218,23 @@ func servePhase8SOCKS5(client net.Conn) {
 		return
 	}
 	request := make([]byte, 4)
-	if _, err := io.ReadFull(reader, request); err != nil || request[1] != 1 {
+	if _, err := io.ReadFull(reader, request); err != nil || request[0] != 5 || request[2] != 0 {
 		return
 	}
-	var host string
-	switch request[3] {
+	target, err := readPhase8SOCKSAddress(reader, request[3])
+	if err != nil {
+		return
+	}
+	switch request[1] {
 	case 1:
-		addr := make([]byte, 4)
-		if _, err := io.ReadFull(reader, addr); err != nil {
-			return
-		}
-		host = net.IP(addr).String()
-	case 4:
-		addr := make([]byte, 16)
-		if _, err := io.ReadFull(reader, addr); err != nil {
-			return
-		}
-		host = net.IP(addr).String()
-	default:
-		return
+		servePhase8SOCKSConnect(client, reader, target)
+	case 3:
+		servePhase8SOCKSUDPAssociate(client)
 	}
-	port := make([]byte, 2)
-	if _, err := io.ReadFull(reader, port); err != nil {
-		return
-	}
-	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(host, fmt.Sprint(binary.BigEndian.Uint16(port))), 5*time.Second)
+}
+
+func servePhase8SOCKSConnect(client net.Conn, reader io.Reader, target *net.UDPAddr) {
+	upstream, err := net.DialTimeout("tcp", target.String(), 5*time.Second)
 	if err != nil {
 		_, _ = client.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
@@ -256,7 +248,89 @@ func servePhase8SOCKS5(client net.Conn) {
 	_, _ = io.Copy(client, upstream)
 }
 
+func servePhase8SOCKSUDPAssociate(client net.Conn) {
+	local := client.LocalAddr().(*net.TCPAddr)
+	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: local.IP.To4()})
+	if err != nil {
+		_, _ = client.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer relay.Close()
+	relayAddr := relay.LocalAddr().(*net.UDPAddr)
+	reply := phase8SOCKSUDPHeader(relayAddr)
+	reply[0] = 5
+	if _, err := client.Write(reply); err != nil {
+		return
+	}
+	_ = relay.SetDeadline(time.Now().Add(10 * time.Second))
+	packet := make([]byte, 65535)
+	n, clientAddr, err := relay.ReadFromUDP(packet)
+	if err != nil {
+		return
+	}
+	target, payload, err := parsePhase8SOCKSUDPDatagram(packet[:n])
+	if err != nil {
+		return
+	}
+	if _, err := relay.WriteToUDP(payload, target); err != nil {
+		return
+	}
+	n, upstreamAddr, err := relay.ReadFromUDP(packet)
+	if err != nil {
+		return
+	}
+	response := append(phase8SOCKSUDPHeader(upstreamAddr), packet[:n]...)
+	_, _ = relay.WriteToUDP(response, clientAddr)
+}
+
+func readPhase8SOCKSAddress(reader io.Reader, atyp byte) (*net.UDPAddr, error) {
+	var size int
+	switch atyp {
+	case 1:
+		size = net.IPv4len
+	case 4:
+		size = net.IPv6len
+	default:
+		return nil, fmt.Errorf("unsupported SOCKS address type %d", atyp)
+	}
+	address := make([]byte, size+2)
+	if _, err := io.ReadFull(reader, address); err != nil {
+		return nil, err
+	}
+	return &net.UDPAddr{IP: net.IP(address[:size]), Port: int(binary.BigEndian.Uint16(address[size:]))}, nil
+}
+
+func phase8SOCKSUDPHeader(address *net.UDPAddr) []byte {
+	ip := address.IP.To4()
+	header := []byte{0, 0, 0, 1}
+	header = append(header, ip...)
+	return binary.BigEndian.AppendUint16(header, uint16(address.Port))
+}
+
+func parsePhase8SOCKSUDPDatagram(packet []byte) (*net.UDPAddr, []byte, error) {
+	if len(packet) < 10 || packet[0] != 0 || packet[1] != 0 || packet[2] != 0 {
+		return nil, nil, fmt.Errorf("invalid SOCKS UDP header")
+	}
+	target, err := readPhase8SOCKSAddress(strings.NewReader(string(packet[4:])), packet[3])
+	if err != nil {
+		return nil, nil, err
+	}
+	headerSize := 4 + net.IPv4len + 2
+	if packet[3] == 4 {
+		headerSize = 4 + net.IPv6len + 2
+	}
+	return target, packet[headerSize:], nil
+}
+
 func runPhase8EchoServer() int {
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 8080})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer udp.Close()
+	go servePhase8DNSServer(udp)
+
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -275,6 +349,35 @@ func runPhase8EchoServer() int {
 			}
 		}()
 	}
+}
+
+func servePhase8DNSServer(conn *net.UDPConn) {
+	packet := make([]byte, 512)
+	for {
+		n, peer, err := conn.ReadFromUDP(packet)
+		if err != nil {
+			return
+		}
+		response, err := phase8DNSResponse(packet[:n])
+		if err == nil {
+			_, _ = conn.WriteToUDP(response, peer)
+		}
+	}
+}
+
+func phase8DNSResponse(query []byte) ([]byte, error) {
+	if len(query) < 12 {
+		return nil, fmt.Errorf("short DNS query")
+	}
+	response := append([]byte(nil), query...)
+	response[2], response[3] = 0x81, 0x80
+	response[6], response[7] = 0, 2
+	answer := func(address byte) []byte {
+		return []byte{0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, address}
+	}
+	response = append(response, answer(1)...)
+	response = append(response, answer(2)...)
+	return response, nil
 }
 
 func runPhase8SOCKS5Client() int {
@@ -317,7 +420,77 @@ func runPhase8SOCKS5Client() int {
 	if _, err := io.ReadFull(conn, result); err != nil || string(result) != "phase8-ok" {
 		return 1
 	}
+	if err := conn.Close(); err != nil {
+		return 1
+	}
+	if err := runPhase8SOCKS5UDPClient(source); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	return 0
+}
+
+func runPhase8SOCKS5UDPClient(source net.IP) error {
+	control, err := (&net.Dialer{Timeout: 10 * time.Second, LocalAddr: &net.TCPAddr{IP: source}}).Dial("tcp", os.Getenv("PHOTON_PHASE8_SOCKS"))
+	if err != nil {
+		return err
+	}
+	defer control.Close()
+	if _, err := control.Write([]byte{5, 1, 0}); err != nil {
+		return err
+	}
+	greeting := make([]byte, 2)
+	if _, err := io.ReadFull(control, greeting); err != nil || string(greeting) != string([]byte{5, 0}) {
+		return fmt.Errorf("SOCKS UDP greeting failed: %v, %v", greeting, err)
+	}
+	if _, err := control.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+		return err
+	}
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(control, reply); err != nil || reply[1] != 0 || reply[3] != 1 {
+		return fmt.Errorf("SOCKS UDP associate failed: %v, %v", reply, err)
+	}
+	relay := &net.UDPAddr{IP: net.IP(reply[4:8]), Port: int(binary.BigEndian.Uint16(reply[8:10]))}
+	if relay.Port == 0 {
+		return fmt.Errorf("SOCKS UDP associate returned zero relay port")
+	}
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: source.To4()})
+	if err != nil {
+		return err
+	}
+	defer udp.Close()
+	if err := udp.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
+	echoHost, _, err := net.SplitHostPort(os.Getenv("PHOTON_PHASE8_ECHO"))
+	if err != nil {
+		return err
+	}
+	target := &net.UDPAddr{IP: net.ParseIP(echoHost).To4(), Port: 8080}
+	query := []byte{0x50, 0x58, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 5, 's', 'm', 'o', 'k', 'e', 6, 'p', 'h', 'o', 't', 'o', 'n', 0, 0, 1, 0, 1}
+	packet := append(phase8SOCKSUDPHeader(target), query...)
+	if _, err := udp.WriteToUDP(packet, relay); err != nil {
+		return err
+	}
+	response := make([]byte, 512)
+	n, sourceAddr, err := udp.ReadFromUDP(response)
+	if err != nil {
+		return err
+	}
+	if !sourceAddr.IP.Equal(relay.IP) || sourceAddr.Port != relay.Port {
+		return fmt.Errorf("SOCKS UDP reply source = %s, want relay %s", sourceAddr, relay)
+	}
+	responseTarget, dns, err := parsePhase8SOCKSUDPDatagram(response[:n])
+	if err != nil {
+		return err
+	}
+	if !responseTarget.IP.Equal(target.IP) || responseTarget.Port != target.Port {
+		return fmt.Errorf("SOCKS UDP response target = %s, want %s", responseTarget, target)
+	}
+	if len(dns) < 12 || dns[0] != query[0] || dns[1] != query[1] || dns[2]&0x80 == 0 || binary.BigEndian.Uint16(dns[6:8]) != 2 {
+		return fmt.Errorf("invalid DNS response ID/answers: %x", dns)
+	}
+	return nil
 }
 
 func runPhase8Command(t *testing.T, ctx context.Context, name string, args ...string) {

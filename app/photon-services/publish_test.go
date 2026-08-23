@@ -21,9 +21,15 @@ func TestPublishResolvedServiceOrdersReadinessACLRouteAndRecord(t *testing.T) {
 			if err != nil {
 				return
 			}
-			_ = conn.Close()
+			go servePhase8SOCKS5(conn)
 		}
 	}()
+	dns, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen DNS: %v", err)
+	}
+	defer dns.Close()
+	go servePhase8DNSServer(dns)
 
 	outputDir := t.TempDir()
 	manifest := resolvedManifest{
@@ -33,6 +39,7 @@ func TestPublishResolvedServiceOrdersReadinessACLRouteAndRecord(t *testing.T) {
 			Port:       uint16(listener.Addr().(*net.TCPAddr).Port),
 			ConfigHash: "test-config",
 			AllowZones: []string{"*.catofes."},
+			Resolver:   resolverConfig{Mode: "ipv4_first", Servers: []string{dns.LocalAddr().String()}},
 			Networks: map[string]resolvedRoleAddrs{
 				"cn": {SOCKS: "127.0.0.1", H2: "127.0.0.1"},
 			},

@@ -154,6 +154,9 @@ func publishResolvedService(photonBinary string, manifest resolvedManifest) erro
 			}
 			connection.Close()
 		}
+		if err := checkSOCKS5UDPDNS(net.JoinHostPort(roles.SOCKS, fmt.Sprint(endpoint.Port)), service.Resolver, 5*time.Second); err != nil {
+			return fmt.Errorf("socks5 endpoint %s UDP DNS readiness check failed: %w", endpoint.Network, err)
+		}
 	}
 	for _, endpoint := range service.Endpoints {
 		roles := service.Networks[endpoint.Network]
