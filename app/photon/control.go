@@ -270,6 +270,15 @@ func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
+func peersStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, controlRequest{Method: "peers_status"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
 func stateGCViaControl(rt *Runtime, apply bool) (*controlResponse, bool, error) {
 	if rt != nil && rt.DisableControl {
 		return nil, false, nil

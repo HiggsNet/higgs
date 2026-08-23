@@ -58,6 +58,9 @@ func TestShowFlagsWorkBeforeAndAfterSubcommand(t *testing.T) {
 
 func TestHumanCommandsUsePlaneOrientedShowViews(t *testing.T) {
 	root := rootCommand()
+	if commandByName(root.Commands, "status") == nil {
+		t.Fatal("root command does not expose status")
+	}
 	if commandByName(root.Commands, "db") != nil {
 		t.Fatal("root command unexpectedly exposes low-level db")
 	}

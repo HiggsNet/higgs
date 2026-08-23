@@ -33,11 +33,26 @@ func TestBuildHealthViewSortsByPeerOrRTT(t *testing.T) {
 	}
 
 	byPeer := BuildHealthView(view, HealthSortPeer)
-	if byPeer.Targets[0].ProbeID != "slow" || byPeer.Targets[1].ProbeID != "fast" || byPeer.Targets[2].ProbeID != "missing" {
+	if byPeer.Targets[0].ProbeID != "missing" || byPeer.Targets[1].ProbeID != "fast" || byPeer.Targets[2].ProbeID != "slow" {
 		t.Fatalf("peer sort = %+v", byPeer.Targets)
 	}
 	byRTT := BuildHealthView(view, HealthSortRTT)
 	if byRTT.Targets[0].ProbeID != "fast" || byRTT.Targets[1].ProbeID != "slow" || byRTT.Targets[2].ProbeID != "missing" {
 		t.Fatalf("rtt sort = %+v", byRTT.Targets)
+	}
+}
+
+func TestBuildHealthViewPeerSortMatchesLinksZoneOrdering(t *testing.T) {
+	view := BuildHealthView(HealthDebugView{Targets: []HealthProbeTargetView{
+		{ProbeID: "child", InstanceID: "c", PeerZone: "node-a.example."},
+		{ProbeID: "parent", InstanceID: "p", PeerZone: "example."},
+		{ProbeID: "last", InstanceID: "z", PeerZone: "node-z.example."},
+	}}, HealthSortPeer)
+
+	want := []string{"last", "child", "parent"}
+	for i, probeID := range want {
+		if view.Targets[i].ProbeID != probeID {
+			t.Fatalf("targets[%d] = %q, want %q; targets=%+v", i, view.Targets[i].ProbeID, probeID, view.Targets)
+		}
 	}
 }

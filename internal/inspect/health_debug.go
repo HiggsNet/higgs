@@ -76,7 +76,7 @@ func BuildHealthView(view HealthDebugView, sortBy string) HealthDebugView {
 			}
 		}
 		if left.PeerZone != right.PeerZone {
-			return left.PeerZone < right.PeerZone
+			return ZonePathLess(right.PeerZone, left.PeerZone)
 		}
 		if left.InstanceID != right.InstanceID {
 			return left.InstanceID < right.InstanceID

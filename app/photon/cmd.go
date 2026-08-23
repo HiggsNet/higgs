@@ -17,6 +17,7 @@ func rootCommand() *cli.Command {
 		Usage:       "Photon zone authority CLI",
 		Description: "A command-line tool for managing Photon zones, keys, records, and sync.",
 		Commands: []*cli.Command{
+			cmdStatus(),
 			cmdGossip(),
 			cmdLinks(),
 			cmdRoute(),
@@ -27,6 +28,20 @@ func rootCommand() *cli.Command {
 			cmdDaemon(),
 			cmdAdvanced(),
 			cmdDebug(),
+		},
+	}
+}
+
+func cmdStatus() *cli.Command {
+	return &cli.Command{
+		Name:      "status",
+		Usage:     "Show the current Photon node status",
+		UsageText: "photon status",
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			if cmd.Args().Len() != 0 {
+				return cli.Exit("usage: photon status", 1)
+			}
+			return showStatus()
 		},
 	}
 }

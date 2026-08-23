@@ -70,8 +70,8 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 		t.Fatalf("WriteHealthDebug: %v", err)
 	}
 	out := buf.String()
-	if strings.Index(out, "link-a") > strings.Index(out, "link-b") {
-		t.Fatalf("targets are not sorted by instance id:\n%s", out)
+	if strings.Index(out, "link-b") > strings.Index(out, "link-a") {
+		t.Fatalf("targets are not sorted by peer name descending:\n%s", out)
 	}
 	for _, want := range []string{
 		"Link health (2 links):",
