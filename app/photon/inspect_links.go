@@ -136,8 +136,9 @@ func plannedInspectDesiredLinks(rt *Runtime, state *stateFile) ([]inspect.Desire
 		return nil, specs, nil
 	}
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{
-		Now:         rt.Now(),
-		DNSResolver: net.DefaultResolver,
+		Now:           rt.Now(),
+		DNSResolver:   net.DefaultResolver,
+		ExcludedPeers: peerLifecycleExcludedPeers(state, rt.Now(), rt.Config.PeerLifecycle),
 	})
 	if err != nil {
 		return nil, specs, err

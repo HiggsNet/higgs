@@ -329,6 +329,10 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	nextRoutingReconcile := nextRoutingReconcileTime(d.Sync.now(), routingReconcileInterval)
 	lastObservedDigests := d.zoneDigests()
 	d.updateDiscoveredPeers()
+	// Apply persisted lifecycle policy before startup recovery so stale signed
+	// records cannot recreate links that already exceeded cleanup_after.
+	d.flushRevocationCleanup()
+	d.flushPeerLifecycleCleanup()
 	d.logDebug("daemon", "startup_recovery_begin", nil)
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "ipsec"})
 	d.recoverIPsecLinksOnStart(ctx)
@@ -404,6 +408,10 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			nextEndpointPublish = now.Add(interval)
 		}
 		if !now.Before(nextSync) {
+			if d.flushPeerLifecycleCleanup() {
+				d.updateDiscoveredPeers()
+				d.notifyStateChanged()
+			}
 			result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventSyncTimer, ForceSync: forceSync, Context: ctx})
 			if result.Error != nil {
 				d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
@@ -1645,6 +1653,9 @@ func (d *DaemonService) notifyStateChanged() {
 	// firewall/routing/IPsec flush so that allow sets and desired links are
 	// computed without revoked entries.
 	d.flushRevocationCleanup()
+	// Long-offline peers use a separate persisted local marker: their cache is
+	// removed here and IPsec planning excludes them until a successful sync.
+	d.flushPeerLifecycleCleanup()
 
 	if d.drainingEvents {
 		d.ipsecDirty = true

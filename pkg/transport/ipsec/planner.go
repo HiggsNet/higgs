@@ -15,6 +15,7 @@ import (
 const (
 	SkipLocalZone             = "local_zone"
 	SkipRevokedZone           = "revoked_zone"
+	SkipLifecycleCleanup      = "lifecycle_cleanup"
 	SkipMissingRecords        = "missing_ipsec_records"
 	SkipDisabledProfile       = "disabled_profile"
 	SkipUnsupportedPathMode   = "unsupported_path_mode"
@@ -35,6 +36,7 @@ type LinkPlannerOptions struct {
 	DNSResolver         DNSResolver
 	AllowPrivateLocal   bool
 	ContactPointQuality map[zone.ZonePath]map[string]ContactPointQuality
+	ExcludedPeers       map[zone.ZonePath]string
 }
 
 type LinkPlan struct {
@@ -85,6 +87,10 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 			}
 			if ns.IsZoneRevoked(peer, now) {
 				plan.skip(group.ID, peer, SkipRevokedZone, "")
+				continue
+			}
+			if detail, excluded := opts.ExcludedPeers[peer]; excluded {
+				plan.skip(group.ID, peer, SkipLifecycleCleanup, detail)
 				continue
 			}
 			specs, ok, skip, nextIndex, err := planPeerLink(ctx, ns, local, peer, group, connectRules, denyRules, selectedPeers, linkIndex, now, opts)

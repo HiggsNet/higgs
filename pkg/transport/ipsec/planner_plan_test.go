@@ -45,6 +45,30 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksSkipsLifecycleExcludedPeer(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{ID: "ipsec-main", TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29")}
+	setOverlayIntentTunnelAddress(t, ns, "node-b.catofes.", group.normalizedTunnelAddress(), now)
+
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{
+		Now:           now,
+		ExcludedPeers: map[zone.ZonePath]string{"node-b.catofes.": "cleanup_after_exceeded"},
+	})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 0 || !hasSkip(plan.Skipped, "node-b.catofes.", SkipLifecycleCleanup) {
+		t.Fatalf("plan = %+v, want lifecycle cleanup skip and no desired link", plan)
+	}
+}
+
 func TestPlanTransportLinksDerivesRuntimeNamesFromActiveGeneration(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

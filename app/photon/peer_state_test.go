@@ -256,6 +256,25 @@ func TestDerivePeerStatusCleanupAfterThreshold(t *testing.T) {
 	}
 }
 
+func TestDerivePeerStatusCleanupAfterOverridesStaleLinkState(t *testing.T) {
+	state, _, _, _ := buildPeerStateTestNetwork(t)
+	now := time.Unix(200_000, 0)
+	cfg := inspect.DefaultPeerLifecycleConfig()
+	state.SyncPeers["node-b.catofes."] = syncPeerState{
+		LastSyncUnix: now.Add(-cfg.CleanupAfter - time.Minute).Unix(),
+	}
+	state.LinkInstances["stale-link"] = linkInstanceState{
+		ID:          "stale-link",
+		PeerZone:    "node-b.catofes.",
+		ActualState: "connecting",
+	}
+
+	info := derivePeerStatus(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != inspect.PeerStateOffline || info.Reason != "cleanup_after_exceeded" {
+		t.Fatalf("status = %+v, want cleanup_after_exceeded", info)
+	}
+}
+
 func TestDerivePeerStatusNeverSeen(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
 	now := time.Unix(2000, 0)

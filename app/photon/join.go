@@ -409,6 +409,7 @@ func installPreparedState(dst, src *stateFile) {
 	dst.ZonePrivateKey = src.ZonePrivateKey
 	dst.Network = src.Network
 	dst.SyncPeers = src.SyncPeers
+	dst.PeerCleanups = src.PeerCleanups
 	dst.IPsecTransportKey = src.IPsecTransportKey
 	dst.IPsecPortRecord = src.IPsecPortRecord
 	dst.LinkInstances = src.LinkInstances
@@ -475,13 +476,19 @@ func mergeJoinBundleNetwork(dst *zone.NetworkState, src *zone.NetworkState) {
 }
 
 func cleanupRevokedPeerState(state *stateFile, revoked zone.ZonePath) {
-	if state == nil || len(state.SyncPeers) == 0 {
+	if state == nil {
 		return
 	}
 	for peerID := range state.SyncPeers {
 		path := zone.ZonePath(peerID)
 		if path == revoked || isZoneDescendantOf(path, revoked) {
 			delete(state.SyncPeers, peerID)
+		}
+	}
+	for peerID := range state.PeerCleanups {
+		path := zone.ZonePath(peerID)
+		if path == revoked || isZoneDescendantOf(path, revoked) {
+			delete(state.PeerCleanups, peerID)
 		}
 	}
 }

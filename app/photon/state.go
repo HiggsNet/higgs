@@ -24,6 +24,7 @@ type stateFile struct {
 	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
 	Network           *zone.NetworkState `json:"network"`
 	SyncPeers         map[string]syncPeerState
+	PeerCleanups      map[string]peerLifecycleCleanupState
 	IPsecTransportKey *ipsecTransportKeyState
 	IPsecPortRecord   *ipsecPortRecordState
 	LinkInstances     map[string]linkInstanceState
@@ -72,20 +73,21 @@ func (s *stateFile) WithRLock(fn func()) {
 }
 
 type stateMeta struct {
-	ManagedZone       zone.ZonePath                 `json:"managed_zone"`
-	IdentityKeyPath   string                        `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey            `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey            `json:"zone_private_key"`
-	SyncPeers         map[string]syncPeerState      `json:"sync_peers,omitempty"`
-	IPsecTransportKey *ipsecTransportKeyState       `json:"ipsec_transport_key,omitempty"`
-	IPsecPortRecord   *ipsecPortRecordState         `json:"ipsec_port_record,omitempty"`
-	LinkInstances     map[string]linkInstanceState  `json:"link_instances,omitempty"`
-	IPsecReconcile    *ipsecReconcileState          `json:"ipsec_reconcile,omitempty"`
-	RoutingReconcile  *routingReconcileState        `json:"routing_reconcile,omitempty"`
-	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
-	EndpointACLs      map[string]endpointACL        `json:"endpoint_acls,omitempty"`
-	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
-	Admission         *admissionState               `json:"admission,omitempty"`
+	ManagedZone       zone.ZonePath                        `json:"managed_zone"`
+	IdentityKeyPath   string                               `json:"identity_key_path,omitempty"`
+	RootPrivateKey    ed25519.PrivateKey                   `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey                   `json:"zone_private_key"`
+	SyncPeers         map[string]syncPeerState             `json:"sync_peers,omitempty"`
+	PeerCleanups      map[string]peerLifecycleCleanupState `json:"peer_cleanups,omitempty"`
+	IPsecTransportKey *ipsecTransportKeyState              `json:"ipsec_transport_key,omitempty"`
+	IPsecPortRecord   *ipsecPortRecordState                `json:"ipsec_port_record,omitempty"`
+	LinkInstances     map[string]linkInstanceState         `json:"link_instances,omitempty"`
+	IPsecReconcile    *ipsecReconcileState                 `json:"ipsec_reconcile,omitempty"`
+	RoutingReconcile  *routingReconcileState               `json:"routing_reconcile,omitempty"`
+	FirewallReconcile *firewallReconcileState              `json:"firewall_reconcile,omitempty"`
+	EndpointACLs      map[string]endpointACL               `json:"endpoint_acls,omitempty"`
+	BirdInstances     map[string]*BirdInstanceState        `json:"bird_instances,omitempty"`
+	Admission         *admissionState                      `json:"admission,omitempty"`
 }
 
 type firewallReconcileState = photonstate.FirewallReconcileState
@@ -157,6 +159,16 @@ type observedGraceAddrState = photonstate.PeerObservedGraceAddrState
 type datagramStats = photonstate.PeerDatagramStats
 type objectPullStats = photonstate.PeerObjectPullStats
 type rejectedDigestState = photonstate.PeerRejectedDigest
+
+// peerLifecycleCleanupState is a local, persisted suppression marker. It is
+// deliberately separate from SyncPeers so cleanup_after can remove the peer
+// cache without allowing still-valid, stale Zone records to recreate data-plane
+// links before the peer has successfully synchronized again.
+type peerLifecycleCleanupState struct {
+	LastActiveUnix int64  `json:"last_active_unix,omitempty"`
+	CleanupUnix    int64  `json:"cleanup_unix"`
+	Reason         string `json:"reason"`
+}
 
 type syncConfigFile struct {
 	PeerID                 string           `json:"peer_id"`
@@ -269,6 +281,7 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		ZonePrivateKey:    meta.ZonePrivateKey,
 		Network:           ns,
 		SyncPeers:         meta.SyncPeers,
+		PeerCleanups:      meta.PeerCleanups,
 		IPsecTransportKey: meta.IPsecTransportKey,
 		IPsecPortRecord:   meta.IPsecPortRecord,
 		LinkInstances:     meta.LinkInstances,
@@ -392,6 +405,7 @@ func stateMetaFromState(state *stateFile) stateMeta {
 		RootPrivateKey:    state.RootPrivateKey,
 		ZonePrivateKey:    state.ZonePrivateKey,
 		SyncPeers:         persistentSyncPeers(state.SyncPeers),
+		PeerCleanups:      state.PeerCleanups,
 		IPsecTransportKey: state.IPsecTransportKey,
 		IPsecPortRecord:   state.IPsecPortRecord,
 		LinkInstances:     state.LinkInstances,
@@ -488,6 +502,9 @@ func normalizeState(ns *zone.NetworkState) {
 func normalizeSyncPeers(state *stateFile) {
 	if state.SyncPeers == nil {
 		state.SyncPeers = make(map[string]syncPeerState)
+	}
+	if state.PeerCleanups == nil {
+		state.PeerCleanups = make(map[string]peerLifecycleCleanupState)
 	}
 }
 

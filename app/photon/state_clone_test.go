@@ -16,6 +16,9 @@ func TestCloneStateFileDeepCopiesMutableState(t *testing.T) {
 		ZonePrivateKey: []byte("zone-private-key"),
 		Network:        cloneTestNetworkState(),
 		SyncPeers:      cloneTestSyncPeers(),
+		PeerCleanups: map[string]peerLifecycleCleanupState{
+			"peer-a": {LastActiveUnix: 10, CleanupUnix: 20, Reason: peerCleanupReasonOffline},
+		},
 		IPsecTransportKey: &ipsecTransportKeyState{
 			PublicKey:  []byte("transport-public"),
 			PrivateKey: []byte("transport-private"),
@@ -61,6 +64,9 @@ func TestCloneStateFileDeepCopiesMutableState(t *testing.T) {
 	cloned.SyncPeers["peer-a"].RejectedDigests["digest-a"] = rejectedDigestState{Reason: "changed"}
 	cloned.SyncPeers["peer-a"].DatagramStats.ChunkFallbacks = 2
 	cloned.SyncPeers["peer-a"].ObjectPullStats.Attempts = 2
+	cleanup := cloned.PeerCleanups["peer-a"]
+	cleanup.Reason = "changed"
+	cloned.PeerCleanups["peer-a"] = cleanup
 	cloned.IPsecTransportKey.PublicKey[0] = 'P'
 	cloned.IPsecTransportKey.PrivateKey[0] = 'S'
 	cloned.IPsecPortRecord.Range.From = 4600
@@ -101,6 +107,9 @@ func TestCloneStateFileDeepCopiesMutableState(t *testing.T) {
 	if original.SyncPeers["peer-a"].DatagramStats.ChunkFallbacks != 1 ||
 		original.SyncPeers["peer-a"].ObjectPullStats.Attempts != 1 {
 		t.Fatalf("peer diagnostic pointers shared: %#v", original.SyncPeers["peer-a"])
+	}
+	if original.PeerCleanups["peer-a"].Reason != peerCleanupReasonOffline {
+		t.Fatalf("peer cleanup map shared: %#v", original.PeerCleanups)
 	}
 	if string(original.IPsecTransportKey.PublicKey) != "transport-public" ||
 		string(original.IPsecTransportKey.PrivateKey) != "transport-private" {
@@ -156,6 +165,7 @@ func TestCloneStateFilePreservesNilAndEmptyShape(t *testing.T) {
 		RootPrivateKey:    []byte{},
 		ZonePrivateKey:    nil,
 		SyncPeers:         map[string]syncPeerState{},
+		PeerCleanups:      map[string]peerLifecycleCleanupState{},
 		LinkInstances:     map[string]linkInstanceState{},
 		EndpointACLs:      map[string]endpointACL{"empty": {Selectors: []string{}}},
 		BirdInstances:     map[string]*BirdInstanceState{},
@@ -164,7 +174,7 @@ func TestCloneStateFilePreservesNilAndEmptyShape(t *testing.T) {
 	}
 	cloned := cloneStateFile(original)
 	if cloned.RootPrivateKey == nil || cloned.ZonePrivateKey != nil ||
-		cloned.SyncPeers == nil || cloned.LinkInstances == nil || cloned.EndpointACLs == nil ||
+		cloned.SyncPeers == nil || cloned.PeerCleanups == nil || cloned.LinkInstances == nil || cloned.EndpointACLs == nil ||
 		cloned.EndpointACLs["empty"].Selectors == nil || cloned.BirdInstances == nil ||
 		cloned.IPsecReconcile.Desired == nil || cloned.IPsecReconcile.ActualSAs != nil ||
 		cloned.IPsecReconcile.Actions == nil || cloned.IPsecReconcile.Skipped != nil ||
@@ -174,7 +184,8 @@ func TestCloneStateFilePreservesNilAndEmptyShape(t *testing.T) {
 }
 
 func TestCloneStateFileSchemaGuard(t *testing.T) {
-	assertStateCloneFields(t, stateFile{}, "mu", "ManagedZone", "IdentityKeyPath", "RootPrivateKey", "ZonePrivateKey", "Network", "SyncPeers", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances", "IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission")
+	assertStateCloneFields(t, stateFile{}, "mu", "ManagedZone", "IdentityKeyPath", "RootPrivateKey", "ZonePrivateKey", "Network", "SyncPeers", "PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances", "IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission")
+	assertStateCloneFields(t, peerLifecycleCleanupState{}, "LastActiveUnix", "CleanupUnix", "Reason")
 	assertStateCloneFields(t, ipsecTransportKeyState{}, "Kind", "Algorithm", "PublicKey", "PrivateKey", "Fingerprint", "NotBefore", "NotAfter", "UpdatedAt")
 	assertStateCloneFields(t, ipsecPortRecordState{}, "Mode", "Range", "Generation", "UpdatedAt")
 	assertStateCloneFields(t, linkInstanceState{}, "ID", "GroupID", "PeerZone", "TransportKind", "LinkID", "PathKey", "TransportID", "DesiredSpecHash", "ActualState", "InterfaceName", "XFRMIfID", "LocalTunnelAddr", "PeerTunnelAddr", "IKEName", "ChildSAName", "Endpoint", "RemoteGeneration", "StagedGeneration", "RotatePhase", "StagedIKEName", "StagedChildSAName", "StagedInterfaceName", "StagedXFRMIfID", "StagedLocalTunnelAddr", "StagedPeerTunnelAddr", "RotateDeadline", "LastError", "FailureCount", "BackoffUntil", "LastTransition", "Owner", "InitiatorRole", "TakeoverPhase", "TakeoverStartedAt", "TakeoverUntil", "LastTakeoverError", "ObservedInitiator", "SAAbsentSince", "SAAbsentCount")

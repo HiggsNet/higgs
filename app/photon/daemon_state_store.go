@@ -51,9 +51,10 @@ type DaemonStateUpdate struct {
 }
 
 type syncPeerMutationView struct {
-	ManagedZone zone.ZonePath
-	Network     *zone.NetworkState
-	SyncPeers   map[string]syncPeerState
+	ManagedZone  zone.ZonePath
+	Network      *zone.NetworkState
+	SyncPeers    map[string]syncPeerState
+	PeerCleanups map[string]peerLifecycleCleanupState
 }
 
 func NewDaemonStateStore(initial *stateFile) *DaemonStateStore {
@@ -301,6 +302,7 @@ func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPee
 			view.ManagedZone = base.ManagedZone
 			view.Network = base.Network
 			view.SyncPeers = base.SyncPeers
+			view.PeerCleanups = base.PeerCleanups
 		}
 		s.mu.RUnlock()
 
@@ -316,6 +318,10 @@ func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPee
 			maps.Copy(next.SyncPeers, base.SyncPeers)
 		}
 		next.SyncPeers[peerID] = committedPeer
+		if cleanup, ok := view.PeerCleanups[peerID]; ok && committedPeer.LastSyncUnix > cleanup.LastActiveUnix {
+			next.PeerCleanups = maps.Clone(view.PeerCleanups)
+			delete(next.PeerCleanups, peerID)
+		}
 
 		s.mu.Lock()
 		if s.revision == baseRev {
@@ -352,6 +358,7 @@ func (s *DaemonStateStore) updateSyncPeersWithView(fn func(syncPeerMutationView)
 			view.ManagedZone = base.ManagedZone
 			view.Network = base.Network
 			view.SyncPeers = base.SyncPeers
+			view.PeerCleanups = base.PeerCleanups
 		}
 		s.mu.RUnlock()
 		updates, err := fn(view)

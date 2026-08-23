@@ -346,6 +346,7 @@ func executePurgePlan(state *stateFile, plan *purgePlan) {
 	}
 	for _, peerID := range plan.SyncPeers {
 		delete(state.SyncPeers, peerID)
+		delete(state.PeerCleanups, peerID)
 	}
 }
 

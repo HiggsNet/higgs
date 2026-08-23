@@ -221,6 +221,15 @@ func (s *DaemonStateStore) peerStatusProjection(now time.Time, cfg inspect.PeerL
 	return derivePeerStatuses(s.committed, now, cfg, hasOverlay), s.metaLocked(), true
 }
 
+func (s *DaemonStateStore) peerLifecycleCleanupProjection(now time.Time, cfg inspect.PeerLifecycleConfig) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return peerLifecycleCleanupRequired(s.committed, now, cfg)
+}
+
 func (s *DaemonStateStore) revocationImpactProjection(config *syncConfigFile, now time.Time) ([]inspect.RevocationImpact, daemonStateStoreMeta, bool) {
 	if s == nil {
 		return nil, daemonStateStoreMeta{}, false
@@ -534,9 +543,10 @@ func (s *DaemonStateStore) observedPathsProjection(peerID string, now time.Time)
 	}
 	state := s.committed
 	return plannedObservedPaths(syncPeerMutationView{
-		ManagedZone: state.ManagedZone,
-		Network:     state.Network,
-		SyncPeers:   state.SyncPeers,
+		ManagedZone:  state.ManagedZone,
+		Network:      state.Network,
+		SyncPeers:    state.SyncPeers,
+		PeerCleanups: state.PeerCleanups,
 	}, peerID, cloneSyncPeerState(state.SyncPeers[peerID]), now)
 }
 

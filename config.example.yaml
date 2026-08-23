@@ -83,8 +83,9 @@ gossip:
 #   mode: stderr+file
 #   file: /var/log/photon.log
 
-# Dynamic peer lifecycle. Stale/offline peers are retained with lower retry
-# pressure; cleanup_after removes Photon-owned SA/interface/route/firewall state.
+# Dynamic peer lifecycle. cleanup_after removes the local SyncPeers cache and
+# Photon-owned data-plane links after the peer has not synchronized or been
+# observed for the configured window. A successful sync enables the peer again.
 # peer_lifecycle:
 #   stale_after: 15m
 #   offline_after: 12h

@@ -36,6 +36,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			Now:                 now,
 			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(snapshot, now),
+			ExcludedPeers:       peerLifecycleExcludedPeers(snapshot, now, d.Sync.App.Config.PeerLifecycle),
 		})
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)

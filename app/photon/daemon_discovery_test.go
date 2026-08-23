@@ -100,6 +100,30 @@ func TestPlanDaemonDiscoveredPeersNoStateChangeStillRepairsTransport(t *testing.
 	}
 }
 
+func TestPlanDaemonDiscoveredPeersKeepsLifecycleCleanedCacheAbsent(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(time.Now().Unix(), 0)
+	putSignedEndpointRecord(t, state, "203.0.113.10", 33434, now, 1)
+	view := syncPeerMutationView{
+		ManagedZone: state.ManagedZone,
+		Network:     state.Network,
+		SyncPeers:   map[string]syncPeerState{},
+		PeerCleanups: map[string]peerLifecycleCleanupState{
+			"node-b.catofes.": {CleanupUnix: now.Unix(), Reason: peerCleanupReasonOffline},
+		},
+	}
+
+	updates, plan := planDaemonDiscoveredPeers(view, config, now)
+	if _, ok := updates["node-b.catofes."]; ok {
+		t.Fatalf("lifecycle-cleaned peer cache was recreated: %+v", updates)
+	}
+	transport := &gossip.Transport{}
+	applyDaemonDiscoveryPlan(transport, plan)
+	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
+		t.Fatalf("lifecycle-cleaned peer is not dialable for recovery: %v", addr)
+	}
+}
+
 func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevision(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(time.Now().Unix(), 0)

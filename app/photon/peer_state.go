@@ -23,6 +23,13 @@ func peerLifecycleInputFromState(state *stateFile, peerID string, peerZone zone.
 	ps := state.SyncPeers[peerID]
 	input.LastSyncUnix = ps.LastSyncUnix
 	input.ObservedLastSeenUnix = ps.ObservedLastSeenUnix
+	if cleanup, ok := state.PeerCleanups[peerID]; ok {
+		input.LifecycleCleanupUnix = cleanup.CleanupUnix
+		input.LifecycleCleanupReason = cleanup.Reason
+		if input.LastSyncUnix == 0 {
+			input.LastSyncUnix = cleanup.LastActiveUnix
+		}
+	}
 	input.HasIPsecConfig = hasIPsecConfig(state)
 	if state.Network != nil {
 		input.PeerZoneKnown = state.Network.Zones[peerZone] != nil
@@ -97,6 +104,9 @@ func derivePeerStatuses(
 
 	for peerID := range state.SyncPeers {
 		// Derive zone from peer id: peer id is typically the zone FQDN.
+		addPeer(peerID, zone.ZonePath(peerID))
+	}
+	for peerID := range state.PeerCleanups {
 		addPeer(peerID, zone.ZonePath(peerID))
 	}
 	for _, inst := range state.LinkInstances {

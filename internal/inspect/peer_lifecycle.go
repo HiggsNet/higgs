@@ -45,24 +45,26 @@ type PeerLifecycleDebugInput struct {
 }
 
 type PeerLifecycleInput struct {
-	PeerID               string
-	PeerZone             zone.ZonePath
-	StateAvailable       bool
-	PeerZoneKnown        bool
-	ZoneRevoked          bool
-	HasIPsecConfig       bool
-	HasOverlayConfig     bool
-	PeerHasIPsecRecords  bool
-	PolicyDeniedReason   string
-	PolicyDeniedDetail   string
-	LastSyncUnix         int64
-	ObservedLastSeenUnix int64
-	UpLinks              int
-	ActualLinks          int
-	DesiredLinks         int
-	LastTransitionUnix   int64
-	Now                  time.Time
-	Config               PeerLifecycleConfig
+	PeerID                 string
+	PeerZone               zone.ZonePath
+	StateAvailable         bool
+	PeerZoneKnown          bool
+	ZoneRevoked            bool
+	HasIPsecConfig         bool
+	HasOverlayConfig       bool
+	PeerHasIPsecRecords    bool
+	PolicyDeniedReason     string
+	PolicyDeniedDetail     string
+	LastSyncUnix           int64
+	ObservedLastSeenUnix   int64
+	UpLinks                int
+	ActualLinks            int
+	DesiredLinks           int
+	LastTransitionUnix     int64
+	LifecycleCleanupUnix   int64
+	LifecycleCleanupReason string
+	Now                    time.Time
+	Config                 PeerLifecycleConfig
 }
 
 func DefaultPeerLifecycleConfig() PeerLifecycleConfig {
@@ -129,10 +131,34 @@ func BuildPeerLifecycleStatus(input PeerLifecycleInput) PeerStatusInfo {
 		info.Reason = "zone_revoked"
 		return info
 	}
+	if input.LifecycleCleanupReason == "cleanup_after_exceeded" {
+		info.State = PeerStateOffline
+		info.Reason = "cleanup_after_exceeded"
+		info.OfflineSinceUnix = input.LastSyncUnix
+		info.NextCleanupUnix = input.LifecycleCleanupUnix
+		return info
+	}
 	if !input.PeerZoneKnown {
 		info.State = PeerStateConfigError
 		info.Reason = "peer_zone_unknown"
 		return info
+	}
+	lastActive := input.LastSyncUnix
+	if input.ObservedLastSeenUnix > 0 && input.ObservedLastSeenUnix > lastActive {
+		lastActive = input.ObservedLastSeenUnix
+	}
+	if lastActive != 0 {
+		lastActiveTime := time.Unix(lastActive, 0)
+		if input.Now.Sub(lastActiveTime) >= cfg.CleanupAfter {
+			// cleanup_after is an owner-resource retention limit, so it must
+			// override stale LinkInstances/desired snapshots that are precisely
+			// the resources the daemon is about to remove.
+			info.State = PeerStateOffline
+			info.Reason = "cleanup_after_exceeded"
+			info.OfflineSinceUnix = lastActive
+			info.NextCleanupUnix = input.Now.Unix()
+			return info
+		}
 	}
 	if input.DesiredLinks == 0 && input.HasIPsecConfig {
 		if input.PolicyDeniedReason != "" {
@@ -165,10 +191,6 @@ func BuildPeerLifecycleStatus(input PeerLifecycleInput) PeerStatusInfo {
 		return info
 	}
 
-	lastActive := input.LastSyncUnix
-	if input.ObservedLastSeenUnix > 0 && input.ObservedLastSeenUnix > lastActive {
-		lastActive = input.ObservedLastSeenUnix
-	}
 	if lastActive == 0 {
 		if input.HasIPsecConfig {
 			info.State = PeerStateEligible
@@ -182,12 +204,6 @@ func BuildPeerLifecycleStatus(input PeerLifecycleInput) PeerStatusInfo {
 	lastActiveTime := time.Unix(lastActive, 0)
 	elapsed := input.Now.Sub(lastActiveTime)
 	info.OfflineSinceUnix = lastActive
-	if elapsed >= cfg.CleanupAfter {
-		info.State = PeerStateOffline
-		info.Reason = "cleanup_after_exceeded"
-		info.NextCleanupUnix = input.Now.Unix()
-		return info
-	}
 	if elapsed >= cfg.OfflineAfter {
 		info.State = PeerStateOffline
 		info.Reason = "offline_after_exceeded"

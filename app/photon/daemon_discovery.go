@@ -78,6 +78,12 @@ func planDaemonDiscoveredPeers(view syncPeerMutationView, config *syncConfigFile
 		action := plan.peers[peerID]
 		action.setAddrs = addrs
 		plan.peers[peerID] = action
+		// A lifecycle-cleaned peer remains dialable so a successful gossip
+		// exchange can prove recovery, but its cache entry stays absent until
+		// that success clears the persisted suppression marker.
+		if _, suppressed := view.PeerCleanups[peerID]; suppressed {
+			continue
+		}
 
 		next := cloneSyncPeerState(current)
 		addr := addrs[0].String()

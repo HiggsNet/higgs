@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"maps"
+	"time"
+)
 
 const (
 	defaultMetadataCheckpointMaxDelay = time.Minute
@@ -132,6 +135,7 @@ func (d *DaemonService) rebasePendingPeerMetadata(latest *stateFile) bool {
 		return false
 	}
 	latest.SyncPeers = cloneSyncPeers(current.SyncPeers)
+	latest.PeerCleanups = maps.Clone(current.PeerCleanups)
 	return true
 }
 
