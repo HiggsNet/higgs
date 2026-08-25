@@ -532,23 +532,30 @@ package dependency: app -> host -> gossip -> state -> zone
     `digest.go` 及旧定义/summary wrapper。`pkg/core/gossip/catalog.go` 只保留 cursor 校验和依赖实际 MessagePack
     Message wire-size 的分页装箱，未增加 forwarding API；纯 projection/root/diff 测试归入 state，wire budget/
     codec/session 测试留在 gossip。公共 state/gossip/host/trust race 与全量 `make check`（含 Windows amd64）通过。
-- [ ] B：让 Engine 输出 timer/read/apply/send/pull Action，迁出 event queue/TimerManager；实现公共
-  HostRuntime + Scheduler 的 memory vertical slice，并证明 Linux/Windows adapter 使用同一 action executor。
+- [x] B：Engine 输出平台无关的 timer/apply/send/pull/persist Action，HostRuntime 通过只读 state capability
+  取得执行阶段所需投影；event queue/TimerManager 已迁出协议 Engine。公共 HostRuntime + Scheduler memory
+  vertical slice 已证明 Linux/Windows adapter 使用同一 action executor。
   - [x] B1：完成 timer memory vertical slice：新增 `pkg/core/host.Runtime` bounded queue 和单 heap/wakeup
     Scheduler；Linux daemon、sync serve/once、object-pull result 和测试均切换到该 queue。Timer fire 携带
     namespace/owner/key/generation/deadline，消费时校验 generation；同 deadline 稳定排序、replace/cancel、
     namespace cancel、queue-full 不丢 timeout、stop/idempotence/manual clock 已覆盖，公共包 race 与全量
     `make check`（含 Windows amd64 build）通过。
-  - [ ] B2：state DTO 迁移后，把 read/apply/send/pull/persist action executor 和 object-pull completion
+  - [x] B2：state DTO 迁移后，把 read/apply/send/pull/persist action executor 和 object-pull completion
     收入公共 HostRuntime，并用 memory Linux/Windows adapter 证明只有一个 action ordering switch。
     - [x] B2a：删除未进入 wire 的 `LocalDigests/SendPingAction.Digests`、无生产者的
       `SendCatalogPageAction` 和 Linux `objectPullResultToEvent` 包装；将 chunk fallback 改为语义明确的
       `SendChunkFallbackAction`。gossip 统一把 send action 映射为 `OutboundMessage`，host 统一把 action
       分类为 apply/outbound/pull/timer/backoff/persistence phase 并合并 persistence scope；Linux executor
       已改为消费公共 plan，不再维护 send/apply/pull/timer/terminal action type switch。
-    - [ ] B2b：为公共 plan 注入 verified-state、transport、object-pull、metadata/persistence controllers，
-      将 phase 执行和 object-pull completion enqueue 收入 HostRuntime；用 memory Linux/Windows adapter
-      断言完全相同的 ordering、失败短路和 persistence intent。
+    - [x] B2b：公共 `host.GossipActionController` 注入 verified-state、transport、object-pull、backoff 与
+      metadata/persistence capabilities；`HostRuntime.ExecuteGossipActions` 唯一拥有 state read、snapshot
+      apply、apply 后重新投影/reconcile、send、pull、timer、backoff、persistence 的执行顺序和失败短路。
+      公共 inbound executor 同时接管 PING/PONG、bounded catalog responder、session event enqueue、announce/
+      object-chunk 分发，Linux 已删除 `InboundActionKind` switch、`respondPing*`、catalog responder 和 summary
+      shortcut 协议包装。object-pull completion 由公共 DTO 映射为 FSM event 并进入同一 bounded queue；Linux
+      只保留 transport diagnostics。显式 memory Linux/Windows capability adapter 已逐项断言相同 ordering、
+      apply failure short-circuit 和 persistence intent；公共 host/Linux daemon race、全量 `make check`（含
+      Windows amd64 build）通过。
 - [ ] C：实现内存 VerifiedStore、revision/CAS、local/remote transaction、ChangeSet 和 fake Repository；覆盖
   retain、失败不变、success-reject-success、auto-join/refresh COW、concurrent read 与单 writer/race。
 - [ ] D：实现公共 verified codec/transaction 与平台唯一 RuntimeStateStore 的 bbolt composition、旧 schema

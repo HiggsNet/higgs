@@ -380,18 +380,6 @@ func (s *DaemonStateStore) catalogSummaryProjection() *corestate.CatalogSummary 
 	return corestate.CatalogSummaryFor(s.committed.Network)
 }
 
-func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*corestate.CatalogPage, error) {
-	if s == nil {
-		return nil, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil || s.committed.Network == nil {
-		return nil, nil
-	}
-	return gossip.CatalogPageForDigests(corestate.ZoneDigests(s.committed.Network), cursor, budget)
-}
-
 type syncStateProjection struct {
 	loaded      bool
 	managedZone zone.ZonePath

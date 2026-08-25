@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net"
 	"path/filepath"
 	"slices"
@@ -111,11 +112,25 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	service.Sync.Transport = transportB
+	message := &gossip.Message{
+		Type:   gossip.MessagePing,
+		PeerID: "node-a.catofes.",
+		Ping:   &gossip.Ping{Summary: remoteSummary},
+	}
+	controller := &daemonGossipActionController{
+		daemon: service,
+		now:    service.Sync.now(),
+		limits: syncLimits(config),
+	}
 	state.Lock()
-	err = service.respondPing("node-a.catofes.", &gossip.Ping{Summary: remoteSummary})
+	err = service.hostRuntime.ExecuteGossipInbound(
+		context.Background(),
+		service.hostRuntime.Gossip.PlanInbound(&gossip.Packet{Message: message}),
+		controller,
+	)
 	state.Unlock()
 	if err != nil {
-		t.Fatalf("respondPing: %v", err)
+		t.Fatalf("ExecuteGossipInbound: %v", err)
 	}
 
 	deadline := time.Now().Add(time.Second)

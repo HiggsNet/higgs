@@ -475,8 +475,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			}
 		case result := <-d.objectPullResults:
 			timer.Stop()
-			d.observeObjectPullResult(result)
-			d.enqueueObjectPullResult(result)
+			d.acceptObjectPullResult(result)
 		case <-d.healthUpdates:
 			timer.Stop()
 			d.handleHealthUpdate(d.Sync.now())

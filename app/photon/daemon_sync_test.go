@@ -302,10 +302,23 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 	}, state, config, time.Second)
 
 	summary := corestate.CatalogSummaryFor(state.Network)
-	localSummary := service.StateStore.catalogSummaryProjection()
+	message := &gossip.Message{
+		Type:   gossip.MessagePing,
+		PeerID: "peer-a",
+		Ping:   &gossip.Ping{Summary: summary},
+	}
+	controller := &daemonGossipActionController{
+		daemon: service,
+		now:    now,
+		limits: syncLimits(config),
+	}
 	before := service.StateStore.Meta().Revision
-	if err := service.maybeShortcutSyncFromPingSummaryWithLocal("peer-a", summary, localSummary); err != nil {
-		t.Fatalf("maybeShortcutSyncFromPingSummaryWithLocal: %v", err)
+	if err := service.hostRuntime.ExecuteGossipInbound(
+		context.Background(),
+		service.hostRuntime.Gossip.PlanInbound(&gossip.Packet{Message: message}),
+		controller,
+	); err != nil {
+		t.Fatalf("ExecuteGossipInbound: %v", err)
 	}
 	after := service.StateStore.Meta().Revision
 	if after != before+1 {

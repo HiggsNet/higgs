@@ -343,8 +343,7 @@ func syncServe(ctx context.Context) error {
 				service.handleSyncEvent(ctx, event)
 			}
 		case result := <-service.objectPullResults:
-			service.observeObjectPullResult(result)
-			service.enqueueObjectPullResult(result)
+			service.acceptObjectPullResult(result)
 		}
 	}
 }
@@ -412,8 +411,7 @@ func syncOnce(peerID string) error {
 			}
 		case result := <-service.objectPullResults:
 			responderQuietUntil = time.Time{}
-			service.observeObjectPullResult(result)
-			service.enqueueObjectPullResult(result)
+			service.acceptObjectPullResult(result)
 		default:
 			deadline := time.Now().Add(100 * time.Millisecond)
 			if drained && !responderQuietUntil.IsZero() && responderQuietUntil.Before(deadline) {

@@ -131,14 +131,16 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 		t.Fatalf("timer peer projection mutation leaked: %q", got)
 	}
 
-	page, err := store.catalogPageProjection("", budget)
+	projection := store.syncStateProjection()
+	page, err := gossip.CatalogPageForDigests(projection.digests, "", budget)
 	if err != nil || page == nil || len(page.Entries) == 0 {
 		t.Fatalf("catalog page projection = %#v, err=%v", page, err)
 	}
 	wantDigestRoot := append([]byte(nil), page.Entries[0].RootHash...)
 	page.CatalogRoot[0] ^= 0xff
 	page.Entries[0].RootHash[0] ^= 0xff
-	againPage, err := store.catalogPageProjection("", budget)
+	againProjection := store.syncStateProjection()
+	againPage, err := gossip.CatalogPageForDigests(againProjection.digests, "", budget)
 	if err != nil || string(againPage.CatalogRoot) != string(wantCatalogRoot) || string(againPage.Entries[0].RootHash) != string(wantDigestRoot) {
 		t.Fatalf("catalog page projection mutation leaked: %#v, err=%v", againPage, err)
 	}

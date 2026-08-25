@@ -149,14 +149,28 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	unlock := state.Unlock
 	done := make(chan error, 1)
 	go func() {
-		done <- service.respondFetchCatalogPage(peerID, "")
+		message := &gossip.Message{
+			Type:             gossip.MessageFetchCatalogPage,
+			PeerID:           peerID,
+			FetchCatalogPage: &gossip.FetchCatalogPage{},
+		}
+		controller := &daemonGossipActionController{
+			daemon: service,
+			now:    now,
+			limits: syncLimits(config),
+		}
+		done <- service.hostRuntime.ExecuteGossipInbound(
+			context.Background(),
+			service.hostRuntime.Gossip.PlanInbound(&gossip.Packet{Message: message}),
+			controller,
+		)
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
 			unlock()
-			t.Fatalf("respondFetchCatalogPage: %v", err)
+			t.Fatalf("ExecuteGossipInbound: %v", err)
 		}
 	case <-time.After(time.Second):
 		unlock()

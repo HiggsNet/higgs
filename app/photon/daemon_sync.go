@@ -72,7 +72,7 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 	return nil
 }
 
-func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ context.Context) error {
+func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx context.Context) error {
 	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil {
 		msg := packet.Message
 		now := d.Sync.now()
@@ -92,100 +92,12 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 		d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...)
 		d.seedObservedPeerPath(msg.PeerID)
 	}
-	for _, action := range d.hostRuntime.Gossip.PlanInbound(packet) {
-		msg := action.Message
-		if msg == nil {
-			continue
-		}
-		switch action.Kind {
-		case gossip.InboundPostSessionEvent:
-			// An active inbound PING both advances the session from its catalog
-			// summary and receives a responder PONG. A full event queue must not
-			// suppress that response.
-			if msg.Type == gossip.MessagePing {
-				_ = d.postSyncEvent(action.Event)
-				continue
-			}
-			return d.postSyncEvent(action.Event)
-		case gossip.InboundRespondPing:
-			if action.ActiveSession {
-				return d.respondPing(msg.PeerID, msg.Ping)
-			}
-			localSummary, err := d.respondPingWithSummary(msg.PeerID, msg.Ping)
-			if err != nil {
-				return err
-			}
-			if msg.Ping.Summary != nil {
-				return d.maybeShortcutSyncFromPingSummaryWithLocal(msg.PeerID, msg.Ping.Summary, localSummary)
-			}
-			return nil
-		case gossip.InboundRespondFetchZone:
-			if msg.FetchZone.ChunkFallback {
-				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
-			}
-			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
-		case gossip.InboundRespondFetchCatalogPage:
-			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
-		case gossip.InboundHandleAnnounce:
-			return d.handleAnnounceHint(msg.PeerID)
-		case gossip.InboundHandleObjectChunk:
-			return d.handleObjectChunk(msg, syncLimits(d.Sync.Config))
-		case gossip.InboundHandleObjectChunkNACK:
-			return d.Sync.handleObjectChunkNACK(msg)
-		}
+	controller := &daemonGossipActionController{
+		daemon: d,
+		now:    d.Sync.now(),
+		limits: syncLimits(d.Sync.Config),
 	}
-	return nil
-}
-
-func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
-	_, err := d.respondPingWithSummary(peerID, ping)
-	return err
-}
-
-func (d *DaemonService) respondPingWithSummary(peerID string, ping *gossip.Ping) (*corestate.CatalogSummary, error) {
-	if d == nil || d.Sync == nil || ping == nil {
-		return nil, nil
-	}
-	summary := d.StateStore.catalogSummaryProjection()
-	if summary == nil {
-		return nil, nil
-	}
-	if d.Sync.Transport == nil {
-		return summary, nil
-	}
-	recordCatalogSummary(d.PeerObservability, peerID, summary, d.Sync.now())
-	for _, message := range gossip.PlanPingResponse(ping, summary) {
-		d.sendSyncMessage(peerID, message)
-	}
-	return summary, nil
-}
-
-// maybeShortcutSyncFromPingSummaryWithLocal checks whether an unsolicited
-// ping's catalog summary already matches the local catalog root. If it does, we
-// record the peer sync state and skip creating a gossip.SyncSession, avoiding a
-// redundant ping-pong round. If roots differ, it falls back to
-// handleAnnounceHint.
-func (d *DaemonService) maybeShortcutSyncFromPingSummaryWithLocal(peerID string, remoteSummary, localSummary *corestate.CatalogSummary) error {
-	if localSummary == nil {
-		return nil
-	}
-	if !gossip.CatalogRootsMatch(remoteSummary, localSummary) {
-		return d.handleAnnounceHint(peerID)
-	}
-	now := d.Sync.now()
-	d.recordSyncPeerStateBatch(peerID, "sync_hint,peer_sync",
-		func(state *stateFile) {
-			recordSyncHint(state, peerID, "ping_summary_match", "", true, now)
-		},
-		func(state *stateFile) {
-			recordPeerSyncAt(state, peerID, nil, now)
-		},
-	)
-	d.logDebug("sync", "ping_summary_shortcut", map[string]any{
-		"peer_id": peerID,
-		"reason":  "catalog_root_match",
-	})
-	return nil
+	return d.hostRuntime.ExecuteGossipInbound(ctx, d.hostRuntime.Gossip.PlanInbound(packet), controller)
 }
 
 func (d *DaemonService) handleAnnounceHint(peerID string) error {
@@ -217,10 +129,11 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		return nil
 	}
 	session := d.hostRuntime.Gossip.NewSession(peerID)
-	if err := d.postSyncEvent(&gossip.SyncTimerEvent{
+	if err := d.hostRuntime.PostGossip(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
 		LocalSummary: summary,
 	}); err != nil {
+		d.logWarn("sync", "event_dropped", map[string]any{"reason": "sync_events_full"})
 		d.hostRuntime.Gossip.RemoveSession(peerID)
 		return err
 	}
@@ -238,44 +151,6 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 	})
 	return nil
 }
-
-func (d *DaemonService) postSyncEvent(event gossip.SyncEvent) error {
-	if err := d.hostRuntime.PostGossip(event); err != nil {
-		d.logWarn("sync", "event_dropped", map[string]any{"reason": "sync_events_full"})
-		return err
-	}
-	return nil
-}
-
-func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
-	if d == nil || d.Sync == nil {
-		return nil
-	}
-	budget := d.syncDatagramBudget()
-	page, err := d.StateStore.catalogPageProjection(cursor, budget)
-	if err != nil {
-		now := d.Sync.now()
-		recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
-		recordCatalogReject(d.PeerObservability, peerID, cursor, gossip.RejectReason(err), now)
-		d.logWarn("sync", "catalog_page_failed", map[string]any{
-			"peer_id": peerID,
-			"cursor":  cursor,
-			"error":   err,
-			"via":     "responder",
-		})
-		return nil
-	}
-	if page == nil {
-		return nil
-	}
-	recordCatalogPage(d.PeerObservability, peerID, page, d.Sync.now())
-	d.sendSyncMessage(peerID, &gossip.Message{
-		Type:        gossip.MessageCatalogPage,
-		CatalogPage: page,
-	})
-	return nil
-}
-
 func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) error {
 	if d == nil || d.Sync == nil {
 		return nil
@@ -660,169 +535,212 @@ func (d *DaemonService) applySyncSnapshotAction(peerID string, action gossip.App
 	return outcome.result, true, nil
 }
 
-func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, session *gossip.SyncSession, actions []gossip.SyncAction, mutations *syncPeerStateMutationBatch) bool {
-	if len(actions) == 0 {
-		return false
-	}
-	peerID := session.PeerID
-	now := d.Sync.now()
-	stateProjection := d.StateStore.syncStateProjection()
-	if !stateProjection.loaded {
-		return false
-	}
+type daemonGossipActionController struct {
+	daemon    *DaemonService
+	mutations *syncPeerStateMutationBatch
+	now       time.Time
+	limits    corestate.SyncLimits
+}
 
-	var changed bool
-	limits := syncLimits(d.Sync.Config)
-	actionPlan := corehost.PlanGossipActions(actions)
+func (controller *daemonGossipActionController) GossipStateView(context.Context) corehost.GossipStateView {
+	projection := controller.daemon.StateStore.syncStateProjection()
+	return corehost.GossipStateView{Loaded: projection.loaded, Digests: projection.digests}
+}
 
-	// First pass: collect snapshots. They are validated with independent COW
-	// savepoints and published as one final revision below.
-	var snapshotApplies []syncSnapshotApply
-	for _, action := range actionPlan.Snapshots {
+func (controller *daemonGossipActionController) GossipDatagramBudget() int {
+	return controller.daemon.syncDatagramBudget()
+}
+
+func (controller *daemonGossipActionController) ObserveGossipCatalogSummary(peerID string, summary *corestate.CatalogSummary) {
+	recordCatalogSummary(controller.daemon.PeerObservability, peerID, summary, controller.now)
+}
+
+func (controller *daemonGossipActionController) ObserveGossipCatalogPage(peerID string, page *corestate.CatalogPage) {
+	recordCatalogPage(controller.daemon.PeerObservability, peerID, page, controller.now)
+}
+
+func (controller *daemonGossipActionController) ObserveGossipCatalogReject(peerID, cursor string, err error) {
+	budget := controller.GossipDatagramBudget()
+	recordDatagramTooLarge(controller.daemon.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, controller.now)
+	recordCatalogReject(controller.daemon.PeerObservability, peerID, cursor, gossip.RejectReason(err), controller.now)
+	controller.daemon.logWarn("sync", "catalog_page_failed", map[string]any{
+		"peer_id": peerID,
+		"cursor":  cursor,
+		"error":   err,
+		"via":     "responder",
+	})
+}
+
+func (controller *daemonGossipActionController) RecordGossipSummaryMatch(_ context.Context, peerID string) error {
+	controller.daemon.recordSyncPeerStateBatch(peerID, "sync_hint,peer_sync",
+		func(state *stateFile) {
+			recordSyncHint(state, peerID, "ping_summary_match", "", true, controller.now)
+		},
+		func(state *stateFile) {
+			recordPeerSyncAt(state, peerID, nil, controller.now)
+		},
+	)
+	controller.daemon.logDebug("sync", "ping_summary_shortcut", map[string]any{
+		"peer_id": peerID,
+		"reason":  "catalog_root_match",
+	})
+	return nil
+}
+
+func (controller *daemonGossipActionController) HandleGossipAnnounceHint(_ context.Context, peerID string) error {
+	return controller.daemon.handleAnnounceHint(peerID)
+}
+
+func (controller *daemonGossipActionController) RespondGossipFetchZone(_ context.Context, peerID string, request *gossip.FetchZone) error {
+	if request == nil {
+		return nil
+	}
+	if request.ChunkFallback {
+		return controller.daemon.respondFetchZoneChunks(peerID, request.Zone)
+	}
+	return controller.daemon.respondFetchZone(peerID, request.Zone)
+}
+
+func (controller *daemonGossipActionController) HandleGossipObjectChunk(_ context.Context, message *gossip.Message) error {
+	return controller.daemon.handleObjectChunk(message, controller.limits)
+}
+
+func (controller *daemonGossipActionController) HandleGossipObjectChunkNACK(_ context.Context, message *gossip.Message) error {
+	return controller.daemon.Sync.handleObjectChunkNACK(message)
+}
+
+func (controller *daemonGossipActionController) ApplyGossipSnapshots(_ context.Context, peerID string, actions []gossip.ApplySnapshotAction) (corehost.GossipSnapshotApplyResult, error) {
+	projection := controller.daemon.StateStore.syncStateProjection()
+	var applies []syncSnapshotApply
+	for _, action := range actions {
 		if action.Snapshot == nil {
 			continue
 		}
-		if action.Snapshot.Zone == stateProjection.managedZone {
-			// Never accept a snapshot for our own managed zone from a peer;
-			// we are the authority for it.
-			d.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
+		if action.Snapshot.Zone == projection.managedZone {
+			controller.daemon.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
 				"peer_id": peerID,
 				"zone":    action.Snapshot.Zone,
 			})
 			continue
 		}
-		applyLimits := limits
+		limits := controller.limits
 		if action.RelaxedLimits {
-			applyLimits.MaxBytes = 8 << 20
+			limits.MaxBytes = 8 << 20
 		}
-		snapshotApplies = append(snapshotApplies, syncSnapshotApply{action: action, limits: applyLimits})
+		applies = append(applies, syncSnapshotApply{action: action, limits: limits})
 	}
-	snapshotBatchCommitted := false
-	if len(snapshotApplies) > 0 {
-		outcomes, committed, err := d.applySyncSnapshotBatch(peerID, snapshotApplies, now)
-		if err != nil {
-			d.logWarn("sync", "snapshot_batch_commit_failed", map[string]any{
+	if len(applies) == 0 {
+		return corehost.GossipSnapshotApplyResult{}, nil
+	}
+	outcomes, committed, err := controller.daemon.applySyncSnapshotBatch(peerID, applies, controller.now)
+	if err != nil {
+		return corehost.GossipSnapshotApplyResult{}, err
+	}
+	changed := false
+	for i, outcome := range outcomes {
+		apply := applies[i]
+		if outcome.applyErr != nil {
+			controller.daemon.logWarn("sync", "zone_apply_failed", map[string]any{
 				"peer_id": peerID,
-				"error":   err,
+				"zone":    apply.action.Snapshot.Zone,
+				"reason":  gossip.RejectReason(outcome.applyErr),
+				"error":   outcome.applyErr,
 			})
-			// Do not execute transport/timer callbacks derived from a batch
-			// that was never published.
-			return false
-		} else {
-			snapshotBatchCommitted = committed
-			for i, outcome := range outcomes {
-				apply := snapshotApplies[i]
-				if outcome.applyErr != nil {
-					d.logWarn("sync", "zone_apply_failed", map[string]any{
-						"peer_id": peerID,
-						"zone":    apply.action.Snapshot.Zone,
-						"reason":  gossip.RejectReason(outcome.applyErr),
-						"error":   outcome.applyErr,
-					})
-					continue
-				}
-				if outcome.result == nil {
-					continue
-				}
-				changed = true
-				d.logSnapshotAdoption(peerID, outcome)
-				d.logInfo("sync", "zone_applied", map[string]any{
-					"peer_id":     peerID,
-					"zone":        apply.action.Snapshot.Zone,
-					"records":     outcome.result.Records,
-					"delegations": outcome.result.Delegation,
-					"via":         "event_loop",
-				})
-			}
+			continue
 		}
+		if outcome.result == nil {
+			continue
+		}
+		changed = true
+		controller.daemon.logSnapshotAdoption(peerID, outcome)
+		controller.daemon.logInfo("sync", "zone_applied", map[string]any{
+			"peer_id":     peerID,
+			"zone":        apply.action.Snapshot.Zone,
+			"records":     outcome.result.Records,
+			"delegations": outcome.result.Delegation,
+			"via":         "event_loop",
+		})
 	}
+	return corehost.GossipSnapshotApplyResult{StateCommitted: committed, NetworkChanged: changed}, nil
+}
 
-	// Second pass: refresh the reader view after the single batch publication.
-	// Persistence is coalesced with any gossip.SaveStateAction below so a batch writes
-	// the state file at most once.
-	if changed {
-		stateProjection = d.StateStore.syncStateProjection()
-	}
+func (controller *daemonGossipActionController) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
+	controller.daemon.sendSyncMessage(outbound.PeerID, outbound.Message)
+	return nil
+}
 
-	// Applied object-pull or chunk-fallback snapshots may leave a zone pending
-	// until the FSM sees local state again. Reconcile before sending more I/O.
-	if !session.Done() && stateProjection.loaded {
-		reconcileActions := session.ReconcilePendingWithDigests(stateProjection.digests)
-		actions = append(actions, reconcileActions...)
-		actionPlan = corehost.PlanGossipActions(actions)
-	}
+func (controller *daemonGossipActionController) StartGossipObjectPull(ctx context.Context, action gossip.StartObjectPullAction) error {
+	controller.daemon.submitObjectPull(ctx, action.PeerID, action.Zone, controller.now)
+	return nil
+}
 
-	// Third pass: gossip owns action-to-wire mapping; the host owns I/O.
-	for _, outbound := range actionPlan.Outbound {
-		d.sendSyncMessage(outbound.PeerID, outbound.Message)
-	}
-
-	// Fourth pass: start async object pulls.
-	for _, pull := range actionPlan.ObjectPulls {
-		d.submitObjectPull(ctx, pull.PeerID, pull.Zone, now)
-	}
-
-	// Fifth pass: timer actions.
-	for _, timer := range actionPlan.Timers {
-		if _, err := d.hostRuntime.ApplyGossipTimerAction(timer); err != nil {
-			d.logWarn("sync", "timer_action_failed", map[string]any{
-				"peer_id": peerID,
-				"error":   err,
+func (controller *daemonGossipActionController) RecordGossipBackoffs(_ context.Context, backoffs []gossip.RecordBackoffAction) error {
+	for _, backoff := range backoffs {
+		if controller.mutations == nil {
+			controller.daemon.recordSyncPeerState(backoff.PeerID, "peer_backoff", func(state *stateFile) {
+				recordPeerBackoff(state, backoff.PeerID, backoff.Err, controller.now)
 			})
+			continue
 		}
+		peerID := backoff.PeerID
+		actionErr := backoff.Err
+		controller.mutations.add("peer_backoff", func(state *stateFile) {
+			recordPeerBackoff(state, peerID, actionErr, controller.now)
+		})
 	}
+	return nil
+}
 
-	// Final pass: backoff and persistence intent. Snapshot application is the
-	// authoritative source for whether this event changed Network; an action
-	// that only records peer runtime state must not rewrite every zone bucket.
-	persistenceRequested := snapshotBatchCommitted
-	persistenceScope := gossip.SyncPersistenceMeta
-	persistenceReason := "snapshot_batch"
-	for _, backoff := range actionPlan.Backoffs {
-		if mutations == nil {
-			d.recordSyncPeerState(backoff.PeerID, "peer_backoff", func(state *stateFile) {
-				recordPeerBackoff(state, backoff.PeerID, backoff.Err, now)
+func (controller *daemonGossipActionController) PersistGossip(_ context.Context, intent corehost.GossipPersistenceIntent, completion *corehost.GossipCompletionIntent) error {
+	if controller.mutations != nil {
+		if completion != nil && !controller.mutations.completionRecorded {
+			peerID := completion.PeerID
+			completionErr := completion.Err
+			controller.mutations.add("peer_sync", func(state *stateFile) {
+				recordPeerSyncAt(state, peerID, completionErr, controller.now)
 			})
-		} else {
-			actionPeerID := backoff.PeerID
-			actionErr := backoff.Err
-			mutations.add("peer_backoff", func(state *stateFile) {
-				recordPeerBackoff(state, actionPeerID, actionErr, now)
-			})
+			controller.mutations.completionRecorded = true
 		}
+		controller.mutations.commit(controller.daemon)
 	}
-	if actionPlan.Persistence.Requested {
-		if mutations != nil {
-			if session.Done() {
-				mutations.addCompletion(session, now)
-			}
-			mutations.commit(d)
-		}
-		persistenceRequested = true
-		persistenceScope = actionPlan.Persistence.Scope
-		persistenceReason = actionPlan.Persistence.Reason
+	if intent.Scope == gossip.SyncPersistenceNetwork {
+		return controller.daemon.saveCommittedState()
 	}
-	if changed {
-		persistenceRequested = true
-		persistenceScope = gossip.SyncPersistenceNetwork
-	}
-	if persistenceRequested {
-		var err error
-		if persistenceScope == gossip.SyncPersistenceNetwork {
-			err = d.saveCommittedState()
-		} else {
-			d.markMetadataCheckpointDirty()
-		}
-		if err != nil {
-			d.logWarn("sync", "save_failed", map[string]any{
-				"peer_id": peerID,
-				"reason":  persistenceReason,
-				"error":   err,
-			})
-		}
-	}
+	controller.daemon.markMetadataCheckpointDirty()
+	return nil
+}
 
-	return changed
+func (controller *daemonGossipActionController) ReportGossipIssue(issue corehost.GossipExecutionIssue) {
+	event := "gossip_effect_failed"
+	switch issue.Phase {
+	case corehost.GossipPhaseApply:
+		event = "snapshot_batch_commit_failed"
+	case corehost.GossipPhaseInbound:
+		event = "event_dropped"
+	case corehost.GossipPhaseTimer:
+		event = "timer_action_failed"
+	case corehost.GossipPhasePersistence:
+		event = "save_failed"
+	}
+	controller.daemon.logWarn("sync", event, map[string]any{
+		"peer_id": issue.PeerID,
+		"phase":   issue.Phase,
+		"error":   issue.Err,
+	})
+}
+
+func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, session *gossip.SyncSession, actions []gossip.SyncAction, mutations *syncPeerStateMutationBatch) bool {
+	if len(actions) == 0 || session == nil {
+		return false
+	}
+	controller := &daemonGossipActionController{
+		daemon:    d,
+		mutations: mutations,
+		now:       d.Sync.now(),
+		limits:    syncLimits(d.Sync.Config),
+	}
+	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, controller)
+	return result.NetworkChanged
 }
 
 func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, path zone.ZonePath, now time.Time) {
@@ -833,28 +751,29 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 	if !stateAvailable {
 		err := fmt.Errorf("no committed state for peer %s", peerID)
 		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.observeObjectPullResult(result)
-		d.enqueueObjectPullResult(result)
+		d.acceptObjectPullResult(result)
 		return
 	}
 	if addr == "" {
 		err := fmt.Errorf("no TCP address for peer %s", peerID)
 		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.observeObjectPullResult(result)
-		d.enqueueObjectPullResult(result)
+		d.acceptObjectPullResult(result)
 		return
 	}
 	d.observeObjectPullAttempt(peerID, path, now)
 	if !d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: peerID, Zone: path, Addr: addr}) {
 		err := errors.New("object pull submit failed")
 		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.observeObjectPullResult(result)
-		d.enqueueObjectPullResult(result)
+		d.acceptObjectPullResult(result)
 	}
 }
 
-func (d *DaemonService) enqueueObjectPullResult(result ObjectPullResult) {
-	if err := d.hostRuntime.PostGossip(&gossip.ObjectPullResultEvent{
+// acceptObjectPullResult is the sole ingress for completed platform pull work:
+// Linux records transport diagnostics, then HostRuntime maps and orders the
+// common completion with packet and timer events.
+func (d *DaemonService) acceptObjectPullResult(result ObjectPullResult) {
+	d.observeObjectPullResult(result)
+	if err := d.hostRuntime.PostGossipObjectPullCompletion(corehost.GossipObjectPullCompletion{
 		PeerID:   result.PeerID,
 		Zone:     result.Zone,
 		Snapshot: result.Snapshot,
