@@ -1491,6 +1491,10 @@ func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
 }
 
 func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
+	return sr.handleObjectChunkNACKFrom(message, nil)
+}
+
+func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {
 	if sr == nil || sr.Transport == nil || message == nil || message.ObjectChunkNACK == nil {
 		return nil
 	}
@@ -1500,7 +1504,14 @@ func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 		return nil
 	}
 	for _, chunk := range chunks {
-		if err := sr.Transport.Send(message.PeerID, &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}); err != nil {
+		msg := &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}
+		var err error
+		if replyAddr != nil {
+			err = sr.Transport.SendTo(message.PeerID, replyAddr, msg)
+		} else {
+			err = sr.Transport.Send(message.PeerID, msg)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -1514,6 +1525,10 @@ type datagramSendDiagnostics struct {
 }
 
 func sendDetachedSnapshotWithDiagnostics(snapshot *gossip.ZoneSnapshot, plan snapshotDatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
+	return sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, transport, peerID, nil, now, logger)
+}
+
+func sendDetachedSnapshotWithDiagnosticsTo(snapshot *gossip.ZoneSnapshot, plan snapshotDatagramPlan, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
 	diag := datagramSendDiagnostics{Oversized: append([]oversizedDatagramObject(nil), plan.Oversized...)}
 	for _, oversized := range plan.Oversized {
 		if logger != nil && logger.debugEnabled() {
@@ -1524,16 +1539,27 @@ func sendDetachedSnapshotWithDiagnostics(snapshot *gossip.ZoneSnapshot, plan sna
 		}
 	}
 	for _, announce := range plan.Announces {
-		if err := transport.Send(peerID, &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}); err != nil {
+		msg := &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}
+		var err error
+		if replyAddr != nil {
+			err = transport.SendTo(peerID, replyAddr, msg)
+		} else {
+			err = transport.Send(peerID, msg)
+		}
+		if err != nil {
 			return diag, err
 		}
 	}
-	chunks, err := sendDetachedZoneSnapshotChunks(snapshot, transport, peerID, now)
+	chunks, err := sendDetachedZoneSnapshotChunksTo(snapshot, transport, peerID, replyAddr, now)
 	diag.ChunkFallbacks = chunks
 	return diag, err
 }
 
 func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *gossip.Transport, peerID string, now time.Time) (int, error) {
+	return sendDetachedZoneSnapshotChunksTo(snapshot, transport, peerID, nil, now)
+}
+
+func sendDetachedZoneSnapshotChunksTo(snapshot *gossip.ZoneSnapshot, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time) (int, error) {
 	if snapshot == nil || transport == nil {
 		return 0, nil
 	}
@@ -1578,7 +1604,13 @@ func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *go
 			Type:        gossip.MessageObjectChunk,
 			ObjectChunk: chunk,
 		}
-		if err := transport.Send(peerID, msg); err != nil {
+		var err error
+		if replyAddr != nil {
+			err = transport.SendTo(peerID, replyAddr, msg)
+		} else {
+			err = transport.Send(peerID, msg)
+		}
+		if err != nil {
 			return sent, err
 		}
 		sent++

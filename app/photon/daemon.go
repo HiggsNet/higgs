@@ -54,6 +54,7 @@ type DaemonService struct {
 	metadataCheckpointSave func() error
 
 	syncSessions      map[string]*SyncSession
+	syncIngressRoutes map[string]syncIngressRoute
 	pendingSyncHints  map[string]bool
 	syncEvents        chan SyncEvent
 	objectPullResults chan ObjectPullResult
@@ -190,6 +191,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
 	d.syncSessions = make(map[string]*SyncSession)
+	d.syncIngressRoutes = make(map[string]syncIngressRoute)
 	d.pendingSyncHints = make(map[string]bool)
 	d.syncEvents = make(chan SyncEvent, 64)
 	d.objectPullResults = make(chan ObjectPullResult, 64)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net"
 	"path/filepath"
 	"slices"
@@ -59,6 +60,115 @@ func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {
 	found := slices.Contains(transport.KnownPeerIDs(), "node-b.catofes.")
 	if !found {
 		t.Fatalf("KnownPeerIDs() does not contain delegated node-b.catofes.")
+	}
+}
+
+func TestSyncIngressRouteExpiresWithoutBecomingDurable(t *testing.T) {
+	now := time.Unix(1000, 0)
+	service := &DaemonService{}
+	addr := &net.UDPAddr{IP: net.ParseIP("198.51.100.20"), Port: 42000}
+	service.rememberSyncIngressRoute("node-b.catofes.", addr, now)
+
+	got := service.syncIngressRouteAddr("node-b.catofes.", now.Add(syncIngressRouteTTL-time.Second))
+	if got == nil || got.String() != addr.String() {
+		t.Fatalf("active ingress route = %v, want %v", got, addr)
+	}
+	if got := service.syncIngressRouteAddr("node-b.catofes.", now.Add(syncIngressRouteTTL)); got != nil {
+		t.Fatalf("expired ingress route = %v, want nil", got)
+	}
+}
+
+func TestPingResponderRepliesToInboundSourceBeforePeerZoneIsVerified(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	delete(state.Network.Zones, zone.ZonePath("node-b.catofes."))
+	now := time.Unix(123, 0)
+	rt := &Runtime{
+		StatePath: filepath.Join(t.TempDir(), "photon.db"),
+		Clock:     func() time.Time { return now },
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	transportA, err := gossip.Listen(gossip.Config{
+		PeerID:     config.PeerID,
+		ListenAddr: "127.0.0.1:0",
+		KnownPeers: map[string]*net.UDPAddr{
+			"node-b.catofes.": {IP: net.ParseIP("192.0.2.10"), Port: 33434},
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(A): %v", err)
+	}
+	defer transportA.Close()
+
+	transportB, err := gossip.Listen(gossip.Config{
+		PeerID:     "node-b.catofes.",
+		ListenAddr: "127.0.0.1:0",
+		KnownPeers: map[string]*net.UDPAddr{config.PeerID: transportA.LocalAddr()},
+		Clock:      func() time.Time { return now },
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(B): %v", err)
+	}
+	defer transportB.Close()
+
+	if err := transportB.Send(config.PeerID, &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{}}); err != nil {
+		t.Fatalf("Send(B -> A): %v", err)
+	}
+	if err := transportA.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline(A): %v", err)
+	}
+	packet, err := transportA.Receive()
+	if err != nil {
+		t.Fatalf("Receive(A): %v", err)
+	}
+
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service.Sync.Transport = transportA
+	if err := service.handlePacketEventSyncSession(packet, context.Background()); err != nil {
+		t.Fatalf("handlePacketEventSyncSession: %v", err)
+	}
+
+	if err := transportB.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline(B): %v", err)
+	}
+	reply, err := transportB.Receive()
+	if err != nil {
+		t.Fatalf("Receive(B): %v", err)
+	}
+	if reply.Message.Type != gossip.MessagePong {
+		t.Fatalf("reply type = %s, want pong", reply.Message.Type)
+	}
+
+	session := NewSyncSession("node-b.catofes.")
+	service.syncSessions[session.PeerID] = session
+	service.executeSyncActions(context.Background(), session, []SyncAction{SendFetchZoneAction{
+		PeerID:        session.PeerID,
+		Zone:          "catofes.",
+		ChunkFallback: true,
+	}})
+	if err := transportB.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline(B fallback): %v", err)
+	}
+	pull, err := transportB.Receive()
+	if err != nil {
+		t.Fatalf("Receive(B fallback): %v", err)
+	}
+	if pull.Message.Type != gossip.MessageFetchZone || pull.Message.FetchZone == nil || !pull.Message.FetchZone.ChunkFallback {
+		t.Fatalf("active pull = %#v, want chunk-fallback fetch_zone", pull.Message)
+	}
+	if got := transportA.LastSendAddr("node-b.catofes."); got == nil || got.String() != packet.Addr.String() {
+		t.Fatalf("A last sent addr = %v, want inbound source %q", got, packet.Addr)
+	}
+
+	session.State = SyncSessionCompleted
+	service.completeSyncSessionAfterPeerState(session, false)
+	if got := service.syncIngressRouteAddr(session.PeerID, now); got != nil {
+		t.Fatalf("session ingress route remained after completion: %v", got)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -12,7 +13,11 @@ import (
 // handleObjectChunk keeps UDP assembly and transport repair outside the FSM,
 // then returns the decoded snapshot to the active session. The session emits
 // ApplySnapshotAction and waits for SnapshotAppliedEvent before completing.
-func (d *DaemonService) handleObjectChunk(message *gossip.Message, _ gossip.SyncLimits) error {
+func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits gossip.SyncLimits) error {
+	return d.handleObjectChunkFrom(message, nil, limits)
+}
+
+func (d *DaemonService) handleObjectChunkFrom(message *gossip.Message, replyAddr *net.UDPAddr, _ gossip.SyncLimits) error {
 	if d == nil || d.Sync == nil {
 		return errors.New("daemon service is not initialized")
 	}
@@ -31,10 +36,17 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, _ gossip.Sync
 	if !complete {
 		if d.Sync.Transport != nil {
 			udpChunkAssemblies.scheduleRepair(message.PeerID, chunk, func(nack *gossip.ObjectChunkNACK) {
-				if err := d.Sync.Transport.Send(message.PeerID, &gossip.Message{
+				msg := &gossip.Message{
 					Type:            gossip.MessageObjectChunkNACK,
 					ObjectChunkNACK: nack,
-				}); err == nil {
+				}
+				var err error
+				if replyAddr != nil {
+					err = d.Sync.Transport.SendTo(message.PeerID, replyAddr, msg)
+				} else {
+					err = d.Sync.Transport.Send(message.PeerID, msg)
+				}
+				if err == nil {
 					recordDatagramRepairNACK(d.PeerObservability, message.PeerID, false, d.Sync.now())
 				}
 			})
