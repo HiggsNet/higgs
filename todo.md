@@ -96,9 +96,26 @@ authorization 和 transport records 作为可信事实来源。
   Windows 资源所有权审计，再决定是否纳入；该缺失不阻塞下面的 Windows 骨架和 portable
   contract。
 
+**实现进度（2026-08-25）：**
+
+- [x] 新建 `app/photon-windows`，提供独立 `photon-windows.exe`、`version`/`help` 和
+  Windows amd64 交叉编译；Wintun/service 尚未接入前不暴露假的 `run`/connected 状态。
+- [x] 新建 `docs/photon-windows/design.md`，冻结 leaf-only、单 active gateway、split
+  tunnel、用户态 IKEv2/ESP/Babel/SADR 和平台资源注入边界，并记录 route-origin 剩余风险。
+- [x] 新建 `internal/photonclient` portable contract：TUN、共享 datagram、network
+  observer、secure key store、verified state source、clock 和资源完整性/MTU 校验。
+- [x] 实现 portable runtime 的 created/starting/running/stopping/stopped/failed 状态、
+  同步 ready、意外退出 fail-closed、并发 Start/Stop 串行化和 owned resource 关闭；memory
+  TUN/datagram/network/state/key store 与 manual clock 测试替身已覆盖复制、rebind、timer 和
+  lifecycle。
+- [x] Makefile 增加 `photon-windows-build`、`photon-windows-cross-build`、
+  `photon-windows-test`，并把 Windows amd64 compile guard 纳入 `make check`；当前复用候选
+  `pkg/core/zone`、`pkg/core/gossip`、`pkg/crypto`、`pkg/routing`、`pkg/transport/ipsec` 已通过
+  Windows amd64 编译。
+
 ### 10.0 冻结 v1 契约与威胁模型
 
-- [ ] 新建 `docs/photon-windows/design.md`，把本节产品边界转为版本化设计；至少画清
+- [x] 新建 `docs/photon-windows/design.md`，把本节产品边界转为版本化设计；至少画清
   `Windows stack -> Wintun -> packet engine -> SADR -> per-peer ESP -> shared UDP ->
   Photon gateway` 的数据流，以及 Babel control packet 不经过 Wintun、直接在 ESP 内层
   per-peer 收发的旁路。
@@ -154,7 +171,7 @@ authorization 和 transport records 作为可信事实来源。
 
 ### 10.2 Portable core contract 先行
 
-- [ ] 在写 Wintun 前冻结平台接口，并为每个接口定义资源所有者、并发模型、关闭顺序、
+- [x] 在写 Wintun 前冻结平台接口，并为每个接口定义资源所有者、并发模型、关闭顺序、
   backpressure 和 error semantics。最小接口族：
   - `TunnelDevice`：batch read/write、MTU、name/LUID metadata、close；
   - `DatagramTransport`：共享 UDP receive/send、peer endpoint、rebind、close；
@@ -165,10 +182,10 @@ authorization 和 transport records 作为可信事实来源。
 - [ ] portable core 不得自行创建 TUN、bind 系统 socket、修改 OS route/DNS、安装 service、
   读取 Windows registry 或监听 Unix signal。平台 adapter 创建并注入资源，core 只消费
   capability。
-- [ ] 增加 memory TUN、fake datagram、fake network observer、fake key store 和 manual
+- [x] 增加 memory TUN、fake datagram、fake network observer、fake key store 和 manual
   clock；无管理员权限完成 `inner packet -> route lookup -> fake ESP/peer -> datagram` 及
   反向注入的端到端测试。
-- [ ] 定义统一 lifecycle：`Start(ctx)` 成功前不宣告 ready；任一关键 receive loop 退出要
+- [x] 定义统一 lifecycle：`Start(ctx)` 成功前不宣告 ready；任一关键 receive loop 退出要
   使 runtime 进入 degraded/failed，而不是静默停止；shutdown 顺序为停止新 TUN read、
   撤销路由、关闭 peer/SA、关闭 UDP、关闭 Wintun session/adapter、落盘安全状态。
 - [ ] 定义 packet ownership：buffer pool 借用/归还规则、最大 inner/outer packet、batch

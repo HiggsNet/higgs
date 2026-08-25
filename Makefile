@@ -1,9 +1,11 @@
-.PHONY: all build clean test test-verbose fmt vet check install run smoke smoke-all root-smoke join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
+.PHONY: all build clean test test-verbose fmt vet check install run photon-windows-build photon-windows-cross-build photon-windows-test smoke smoke-all root-smoke join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
 
 BINARY_NAME := photon
 MAIN_PACKAGE := ./app/photon
 SERVICES_BINARY_NAME := photon-services
 SERVICES_MAIN_PACKAGE := ./app/photon-services
+PHOTON_WINDOWS_BINARY_NAME := photon-windows.exe
+PHOTON_WINDOWS_MAIN_PACKAGE := ./app/photon-windows
 BUILD_DIR := build
 GO := go
 GO_CACHE ?= /tmp/photon-gocache
@@ -22,6 +24,8 @@ BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -s -w -X main.buildCommit=$(GIT_COMMIT) -X main.buildDescribe=$(GIT_DESCRIBE) -X main.buildDirty=$(GIT_DIRTY) -X main.buildTime=$(BUILD_TIME)
 CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
+WINDOWS_GO_MOD_CACHE ?= /tmp/photon-windows-gomodcache
+WINDOWS_AMD64_GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(WINDOWS_GO_MOD_CACHE) CGO_ENABLED=0 GOOS=windows GOARCH=amd64
 SMOKE_TARGETS := join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
 ROOT_SMOKE_TARGETS := ipsec-xfrm-smoke bird-babel-smoke firewall-smoke health-fault-smoke
 ISOLATED_SMOKE_TARGETS := smoke smoke-all root-smoke $(SMOKE_TARGETS) $(ROOT_SMOKE_TARGETS)
@@ -67,7 +71,18 @@ fmt:
 vet:
 	$(GO_ENV) $(GO) vet ./...
 
-check: fmt vet test build
+check: fmt vet test build photon-windows-cross-build
+
+photon-windows-build: photon-windows-cross-build
+
+photon-windows-cross-build:
+	@mkdir -p $(BUILD_DIR)/windows-amd64
+	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME) $(PHOTON_WINDOWS_MAIN_PACKAGE)
+	$(WINDOWS_AMD64_GO_ENV) $(GO) build ./internal/photonclient/... ./pkg/core/zone ./pkg/core/gossip ./pkg/crypto ./pkg/routing ./pkg/transport/ipsec
+	@echo "Built: $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)"
+
+photon-windows-test:
+	$(GO_ENV) $(GO) test ./internal/photonclient/... $(PHOTON_WINDOWS_MAIN_PACKAGE)
 
 install:
 	$(GO_ENV) $(GO) install $(MAIN_PACKAGE)
@@ -1035,6 +1050,8 @@ help:
 	@echo "  fmt     - Format Go source code"
 	@echo "  vet     - Run go vet"
 	@echo "  check   - Run fmt, vet, test, and build"
+	@echo "  photon-windows-build - Cross-build Photon Windows for windows/amd64"
+	@echo "  photon-windows-test - Run Photon Windows portable tests"
 	@echo "  release-check - Validate VERSION/repository state and run release tests"
 	@echo "  release-tag - Create local v<VERSION> tag after release checks"
 	@echo "  release-push - Push the local release tag to $(RELEASE_REMOTE)"
