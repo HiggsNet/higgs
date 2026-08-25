@@ -32,15 +32,15 @@ func PlanSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget 
 	zones = append([]zone.ZonePath(nil), zones...)
 	slices.Sort(zones)
 
-	var digests []ZoneDigest
+	var digests []corestate.ZoneDigest
 	var oversized []OversizedDatagramObject
 	for _, path := range zones {
 		zs := ns.Zones[path]
 		if zs == nil || ns.IsZoneRevoked(path, now) {
 			continue
 		}
-		digest := ZoneDigest{Zone: path, RootHash: ZoneRoot(zs)}
-		digestSize := AnnounceWireSize(&Announce{Zones: []ZoneDigest{digest}})
+		digest := corestate.ZoneDigest{Zone: path, RootHash: corestate.ZoneRoot(zs)}
+		digestSize := AnnounceWireSize(&Announce{Zones: []corestate.ZoneDigest{digest}})
 		if digestSize > budget {
 			oversized = append(oversized, OversizedDatagramObject{Object: "announce_digest", Zone: path, Size: digestSize})
 			continue
@@ -50,17 +50,17 @@ func PlanSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget 
 	return DatagramPlan{Announces: PackDigestAnnounces(digests, budget), Oversized: oversized}
 }
 
-func PackDigestAnnounces(digests []ZoneDigest, budget int) []*Announce {
+func PackDigestAnnounces(digests []corestate.ZoneDigest, budget int) []*Announce {
 	var out []*Announce
-	var current []ZoneDigest
+	var current []corestate.ZoneDigest
 	for _, digest := range digests {
-		next := append(append([]ZoneDigest(nil), current...), digest)
+		next := append(append([]corestate.ZoneDigest(nil), current...), digest)
 		if len(current) == 0 && AnnounceWireSize(&Announce{Zones: next}) > budget {
 			continue
 		}
 		if len(current) > 0 && AnnounceWireSize(&Announce{Zones: next}) > budget {
 			out = append(out, &Announce{Zones: current})
-			current = []ZoneDigest{digest}
+			current = []corestate.ZoneDigest{digest}
 			continue
 		}
 		current = next
@@ -145,7 +145,7 @@ func BuildZoneSnapshotChunks(snapshot *corestate.ZoneSnapshot, budget int, sende
 		return nil, fmt.Errorf("chunk zone snapshot %s needs invalid chunk count %d", snapshot.Zone, total)
 	}
 	objectHash := sha256.Sum256(data)
-	rootHash := ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))
+	rootHash := corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))
 	chunks := make([]*ObjectChunk, 0, total)
 	for i := range total {
 		start := i * chunkSize

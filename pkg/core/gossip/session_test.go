@@ -12,7 +12,7 @@ import (
 func TestSyncSessionIdleToPingSent(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	digests := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
+	digests := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
 	actions, err := s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: digests}, now)
 	if err != nil {
@@ -41,7 +41,7 @@ func TestSyncSessionIdleToPingSent(t *testing.T) {
 func TestSyncSessionPongNoDifferences(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	digests := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
+	digests := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: digests}, now)
 	now = now.Add(100 * time.Millisecond)
@@ -66,7 +66,7 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
+	local := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: local}, now)
 	now = now.Add(50 * time.Millisecond)
@@ -95,16 +95,16 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 func TestSyncSessionCatalogSummaryFetchesPages(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	localRoot := CatalogRoot([]ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
-	remoteRoot := CatalogRoot([]ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
+	localRoot := corestate.CatalogRoot([]corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
+	remoteRoot := corestate.CatalogRoot([]corestate.ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
+		LocalSummary: &corestate.CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
 	}, now)
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -118,12 +118,12 @@ func TestSyncSessionCatalogSummaryFetchesPages(t *testing.T) {
 func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	localRoot := CatalogRoot([]ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
-	remoteRoot := CatalogRoot([]ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
+	localRoot := corestate.CatalogRoot([]corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
+	remoteRoot := corestate.CatalogRoot([]corestate.ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
+		LocalSummary: &corestate.CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
 	}, now)
 	if s.State != SyncSessionSummarySent {
 		t.Fatalf("expected state summary_sent, got %s", s.State)
@@ -142,7 +142,7 @@ func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 
 	actions, err = s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 	if err != nil {
 		t.Fatalf("OnEvent(pong): %v", err)
@@ -156,22 +156,22 @@ func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
-	remote := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
-	root := CatalogRoot(remote)
+	local := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := corestate.CatalogRoot(remote)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &CatalogSummary{CatalogRoot: CatalogRoot(local), ZoneCount: 1},
+		LocalSummary: &corestate.CatalogSummary{CatalogRoot: corestate.CatalogRoot(local), ZoneCount: 1},
 	}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 
 	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
 		PeerID:       "peer-a",
-		Page:         &CatalogPage{CatalogRoot: root, Entries: remote},
+		Page:         &corestate.CatalogPage{CatalogRoot: root, Entries: remote},
 		LocalEntries: local,
 	}, now.Add(20*time.Millisecond))
 	if err != nil {
@@ -189,22 +189,22 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
-	remote := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
-	root := CatalogRoot(remote)
+	local := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := corestate.CatalogRoot(remote)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &CatalogSummary{CatalogRoot: CatalogRoot(local), ZoneCount: 1},
+		LocalSummary: &corestate.CatalogSummary{CatalogRoot: corestate.CatalogRoot(local), ZoneCount: 1},
 	}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 
 	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
 		PeerID:       "peer-a",
-		Page:         &CatalogPage{CatalogRoot: []byte("wrong-root"), Entries: remote},
+		Page:         &corestate.CatalogPage{CatalogRoot: []byte("wrong-root"), Entries: remote},
 		LocalEntries: local,
 	}, now.Add(20*time.Millisecond))
 	if err != nil {
@@ -219,16 +219,16 @@ func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 func TestSyncSessionCatalogPageBeforeTimerDoesNotPanic(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
-	remote := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
-	root := CatalogRoot(remote)
+	local := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := corestate.CatalogRoot(remote)
 
 	// A catalog page may arrive for a freshly created session before the
 	// SyncTimerEvent has been processed (e.g. the timer event was dropped
 	// because the event channel was full). The session must not panic.
 	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
 		PeerID:       "peer-a",
-		Page:         &CatalogPage{CatalogRoot: root, Entries: remote},
+		Page:         &corestate.CatalogPage{CatalogRoot: root, Entries: remote},
 		LocalEntries: local,
 	}, now)
 	if err != nil {

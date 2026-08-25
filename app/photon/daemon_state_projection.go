@@ -344,12 +344,11 @@ type syncTimerProjection struct {
 	loaded     bool
 	peers      []string
 	peerStates map[string]syncPeerState
-	summary    *gossip.CatalogSummary
-	digests    []gossip.ZoneDigest
-	err        error
+	summary    *corestate.CatalogSummary
+	digests    []corestate.ZoneDigest
 }
 
-func (s *DaemonStateStore) syncTimerProjection(config *syncConfigFile, now time.Time, budget int) syncTimerProjection {
+func (s *DaemonStateStore) syncTimerProjection(config *syncConfigFile, now time.Time) syncTimerProjection {
 	var out syncTimerProjection
 	if s == nil {
 		return out
@@ -366,41 +365,37 @@ func (s *DaemonStateStore) syncTimerProjection(config *syncConfigFile, now time.
 	for _, peerID := range out.peers {
 		out.peerStates[peerID] = cloneSyncPeerState(state.SyncPeers[peerID])
 	}
-	out.digests = gossip.ZoneDigests(state.Network)
-	out.summary, out.err = gossip.CatalogSummaryForDigests(out.digests, budget)
+	out.digests = corestate.ZoneDigests(state.Network)
+	out.summary = corestate.CatalogSummaryForDigests(out.digests)
 	return out
 }
 
-func (s *DaemonStateStore) catalogSummaryProjection(budget int) (*gossip.CatalogSummary, error) {
+func (s *DaemonStateStore) catalogSummaryProjection() *corestate.CatalogSummary {
 	if s == nil {
-		return nil, nil
+		return nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.committed == nil || s.committed.Network == nil {
-		return nil, nil
+		return nil
 	}
-	return gossip.CatalogSummaryFor(s.committed.Network, budget)
+	return corestate.CatalogSummaryFor(s.committed.Network)
 }
 
-func (s *DaemonStateStore) catalogStateProjection(budget int) (*gossip.CatalogSummary, []gossip.ZoneDigest, error) {
+func (s *DaemonStateStore) catalogStateProjection() (*corestate.CatalogSummary, []corestate.ZoneDigest) {
 	if s == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.committed == nil || s.committed.Network == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	digests := gossip.ZoneDigests(s.committed.Network)
-	summary, err := gossip.CatalogSummaryForDigests(digests, budget)
-	if err != nil {
-		return nil, nil, err
-	}
-	return summary, digests, nil
+	digests := corestate.ZoneDigests(s.committed.Network)
+	return corestate.CatalogSummaryForDigests(digests), digests
 }
 
-func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*gossip.CatalogPage, error) {
+func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*corestate.CatalogPage, error) {
 	if s == nil {
 		return nil, nil
 	}
@@ -409,13 +404,13 @@ func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*go
 	if s.committed == nil || s.committed.Network == nil {
 		return nil, nil
 	}
-	return gossip.CatalogPageFor(s.committed.Network, cursor, budget)
+	return gossip.CatalogPageForDigests(corestate.ZoneDigests(s.committed.Network), cursor, budget)
 }
 
 type syncStateProjection struct {
 	loaded      bool
 	managedZone zone.ZonePath
-	digests     []gossip.ZoneDigest
+	digests     []corestate.ZoneDigest
 }
 
 func (s *DaemonStateStore) syncStateProjection() syncStateProjection {
@@ -430,11 +425,11 @@ func (s *DaemonStateStore) syncStateProjection() syncStateProjection {
 	}
 	out.loaded = true
 	out.managedZone = s.committed.ManagedZone
-	out.digests = gossip.ZoneDigests(s.committed.Network)
+	out.digests = corestate.ZoneDigests(s.committed.Network)
 	return out
 }
 
-func (s *DaemonStateStore) filteredCatalogProjection(peerID string, page *gossip.CatalogPage, now time.Time) ([]gossip.ZoneDigest, *gossip.CatalogPage) {
+func (s *DaemonStateStore) filteredCatalogProjection(peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
 	if s == nil {
 		return nil, page
 	}
@@ -443,7 +438,7 @@ func (s *DaemonStateStore) filteredCatalogProjection(peerID string, page *gossip
 	if s.committed == nil || s.committed.Network == nil {
 		return nil, page
 	}
-	return gossip.ZoneDigests(s.committed.Network), filterRemoteCatalogPage(s.committed, peerID, page, now)
+	return corestate.ZoneDigests(s.committed.Network), filterRemoteCatalogPage(s.committed, peerID, page, now)
 }
 
 func (s *DaemonStateStore) fetchZonePlanProjection(path zone.ZonePath, budget int, now time.Time) (gossip.DatagramPlan, error) {
@@ -509,7 +504,7 @@ func (s *DaemonStateStore) peerTCPAddrProjection(config *syncConfigFile, peerID 
 }
 
 type relayProjection struct {
-	digests    []gossip.ZoneDigest
+	digests    []corestate.ZoneDigest
 	peers      []string
 	peerStates map[string]syncPeerState
 }
@@ -524,7 +519,7 @@ func (s *DaemonStateStore) relayProjection(config *syncConfigFile, now time.Time
 	if s.committed == nil || s.committed.Network == nil {
 		return out
 	}
-	out.digests = gossip.ZoneDigests(s.committed.Network)
+	out.digests = corestate.ZoneDigests(s.committed.Network)
 	out.peers = outboundSyncPeersAt(s.committed, config, now)
 	out.peerStates = make(map[string]syncPeerState, len(out.peers))
 	for _, peerID := range out.peers {

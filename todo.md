@@ -521,14 +521,17 @@ package dependency: app -> host -> gossip -> state -> zone
 
 **验收与迁移顺序：**
 
-- [ ] A：先移动 state-domain DTO/纯函数并消除 import cycle；所有现有 Linux 调用直接改用新包，删除旧
+- [x] A：先移动 state-domain DTO/纯函数并消除 import cycle；所有现有 Linux 调用直接改用新包，删除旧
   alias/wrapper。跑 state/gossip/zone unit、fuzz/codec compatibility 和 Windows compile guard。
   - [x] A1：`ZoneSnapshot`/`RecordSnapshot`、`SyncLimits`、`ApplyResult` 和 snapshot create/record projection/
     verify/apply/target-zone COW 已整体迁入 `pkg/core/state`；gossip wire/object-pull/action 直接引用 state DTO，
     Linux daemon/recovery/join/trust adapter 直接调用 state API。已删除 `pkg/core/gossip/sync.go` 和全部旧定义，
     未保留 alias/forwarder；snapshot 原子性、chain、revocation、limit 测试同步迁入 state。
-  - [ ] A2：迁移 `ZoneDigest`、catalog DTO/root/diff/state projection；只把依赖 Message wire-size 的分页装箱
-    留在 gossip，禁止为了旧调用路径增加 gossip forwarding API。
+  - [x] A2：`ZoneDigest`、`CatalogSummary`、`CatalogPage`、`ZoneDigests/ZoneRoot`、catalog root/summary/diff
+    已迁入 `pkg/core/state`，Linux daemon/inspect 与 gossip FSM/wire 直接引用 state DTO/API；删除 gossip
+    `digest.go` 及旧定义/summary wrapper。`pkg/core/gossip/catalog.go` 只保留 cursor 校验和依赖实际 MessagePack
+    Message wire-size 的分页装箱，未增加 forwarding API；纯 projection/root/diff 测试归入 state，wire budget/
+    codec/session 测试留在 gossip。公共 state/gossip/host/trust race 与全量 `make check`（含 Windows amd64）通过。
 - [ ] B：让 Engine 输出 timer/read/apply/send/pull Action，迁出 event queue/TimerManager；实现公共
   HostRuntime + Scheduler 的 memory vertical slice，并证明 Linux/Windows adapter 使用同一 action executor。
   - [x] B1：完成 timer memory vertical slice：新增 `pkg/core/host.Runtime` bounded queue 和单 heap/wakeup
@@ -1071,7 +1074,7 @@ package dependency: app -> host -> gossip -> state -> zone
 
 ## 下一步
 
-1. 10.3A B1 已完成：Engine 已收敛为同步 FSM/session registry，公共 HostRuntime queue + Scheduler 已替换 Linux gossip 的 Engine queue/TimerManager。当前继续执行 A：迁移 state-domain DTO/纯函数并删除 gossip 旧定义；随后执行 B2 公共 read/apply/send/pull/persist executor。
+1. 10.3A A、B1 已完成：state-domain snapshot/digest/catalog DTO 与纯函数已从 gossip 迁出，Engine 已收敛为同步 FSM/session registry，公共 HostRuntime queue + Scheduler 已替换 Linux gossip 的 Engine queue/TimerManager。下一步执行 B2：收敛公共 read/apply/send/pull/persist action executor 与 object-pull completion ordering。
 2. 随后执行 10.3A C/D/E：公共 VerifiedStore、单 RuntimeStateStore bbolt transaction/schema migration；Linux 保留单 daemon writer，先切换 verified sub-root，再用公共 HostRuntime 替换平台无关 event/action loop。全量 race/smoke 通过后才让 Windows 接网络 gossip。
 3. 完成 10.3A F 后继续 10.3 gateway/route desired adapter；Windows 只注入 capabilities/controllers，预置 snapshot 和网络同步必须复用相同 HostRuntime/VerifiedStore，禁止静态 registry 或 Windows 专属 state 旁路。
 4. 然后按共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization 实现；每层先有 parser/state tests 和 fuzz，再接真实 Wintun。

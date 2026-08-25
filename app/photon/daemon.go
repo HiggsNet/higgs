@@ -379,7 +379,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if rebasedPeerMetadata {
 				d.advanceMetadataCheckpointRevision(d.StateStore.Meta().Revision)
 			}
-			lastObservedDigests = gossip.ZoneDigests(latest.Network)
+			lastObservedDigests = corestate.ZoneDigests(latest.Network)
 			nextSync = now
 			forceSync = true
 			d.updateDiscoveredPeers()
@@ -1410,7 +1410,7 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	return d.handleSyncTimerEventLoop(ctx, force)
 }
 
-func (d *DaemonService) zoneDigests() []gossip.ZoneDigest {
+func (d *DaemonService) zoneDigests() []corestate.ZoneDigest {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}

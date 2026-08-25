@@ -1,45 +1,15 @@
 package gossip
 
 import (
-	"bytes"
 	"fmt"
 	"strconv"
 
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 var ErrCatalogPageTooLarge = fmt.Errorf("catalog page exceeds datagram budget")
 
-func CatalogRoot(entries []ZoneDigest) []byte {
-	parts := make([][]byte, 0, 1+len(entries)*3)
-	parts = append(parts, []byte("photon.catalog.v1"))
-	for _, entry := range entries {
-		parts = append(parts, []byte(entry.Zone), entry.RootHash)
-	}
-	return photoncrypto.Hash(parts...)
-}
-
-func CatalogSummaryFor(ns *zone.NetworkState, budget int) (*CatalogSummary, error) {
-	return CatalogSummaryForDigests(ZoneDigests(ns), budget)
-}
-
-// CatalogSummaryForDigests builds a catalog summary from an already computed
-// digest projection. Callers that need both values can avoid hashing every
-// zone twice while retaining the same catalog-root construction.
-func CatalogSummaryForDigests(entries []ZoneDigest, budget int) (*CatalogSummary, error) {
-	root := CatalogRoot(entries)
-	return &CatalogSummary{
-		CatalogRoot: root,
-		ZoneCount:   len(entries),
-	}, nil
-}
-
-func CatalogPageFor(ns *zone.NetworkState, cursor string, budget int) (*CatalogPage, error) {
-	return CatalogPageForDigests(ZoneDigests(ns), cursor, budget)
-}
-
-func CatalogPageForDigests(entries []ZoneDigest, cursor string, budget int) (*CatalogPage, error) {
+func CatalogPageForDigests(entries []corestate.ZoneDigest, cursor string, budget int) (*corestate.CatalogPage, error) {
 	if budget <= 0 {
 		budget = DefaultDatagramBudget
 	}
@@ -47,12 +17,12 @@ func CatalogPageForDigests(entries []ZoneDigest, cursor string, budget int) (*Ca
 	if err != nil {
 		return nil, err
 	}
-	root := CatalogRoot(entries)
-	page := &CatalogPage{CatalogRoot: root}
+	root := corestate.CatalogRoot(entries)
+	page := &corestate.CatalogPage{CatalogRoot: root}
 	for i := start; i < len(entries); i++ {
-		next := &CatalogPage{
+		next := &corestate.CatalogPage{
 			CatalogRoot: root,
-			Entries:     append(append([]ZoneDigest(nil), page.Entries...), entries[i]),
+			Entries:     append(append([]corestate.ZoneDigest(nil), page.Entries...), entries[i]),
 		}
 		if i+1 < len(entries) {
 			next.NextCursor = strconv.Itoa(i + 1)
@@ -71,23 +41,6 @@ func CatalogPageForDigests(entries []ZoneDigest, cursor string, budget int) (*Ca
 		page = next
 	}
 	return page, nil
-}
-
-func CatalogDiff(local []ZoneDigest, remote []ZoneDigest) []ZoneDigest {
-	localByZone := make(map[zone.ZonePath][]byte, len(local))
-	for _, entry := range local {
-		localByZone[entry.Zone] = entry.RootHash
-	}
-	var out []ZoneDigest
-	for _, entry := range remote {
-		if !entry.Zone.Valid() {
-			continue
-		}
-		if !bytes.Equal(localByZone[entry.Zone], entry.RootHash) {
-			out = append(out, entry)
-		}
-	}
-	return out
 }
 
 func parseCatalogCursor(cursor string, length int) (int, error) {

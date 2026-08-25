@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestDaemonEventLoopSyncSession(t *testing.T) {
@@ -156,7 +158,7 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	session := gossip.NewSyncSession(peerID)
 	_, _ = session.OnEvent(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
-		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(nil), ZoneCount: 0},
+		LocalSummary: &corestate.CatalogSummary{CatalogRoot: corestate.CatalogRoot(nil), ZoneCount: 0},
 	}, now)
 	if session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("expected setup state summary_sent, got %s", session.State)
@@ -213,16 +215,16 @@ func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
 	service := newDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
-	beforeRoot := append([]byte(nil), gossip.ZoneRoot(state.Network.Zones["node-b.catofes."])...)
+	beforeRoot := append([]byte(nil), corestate.ZoneRoot(state.Network.Zones["node-b.catofes."])...)
 	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
 		Type:     gossip.MessageAnnounce,
 		PeerID:   "peer-a",
-		Announce: &gossip.Announce{Zones: []gossip.ZoneDigest{{Zone: "node-b.catofes.", RootHash: []byte("remote-root")}}},
+		Announce: &gossip.Announce{Zones: []corestate.ZoneDigest{{Zone: "node-b.catofes.", RootHash: []byte("remote-root")}}},
 	}}, context.Background())
 	if err != nil {
 		t.Fatalf("process announce: %v", err)
 	}
-	if afterRoot := gossip.ZoneRoot(state.Network.Zones["node-b.catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
+	if afterRoot := corestate.ZoneRoot(state.Network.Zones["node-b.catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatal("announce changed zone state directly; want hint-only ingress")
 	}
 	session := service.hostRuntime.Gossip.Session("peer-a")
@@ -260,12 +262,9 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	peerID := "peer-a"
-	localSummary, err := gossip.CatalogSummaryFor(state.Network, service.syncDatagramBudget())
-	if err != nil {
-		t.Fatalf("CatalogSummaryFor: %v", err)
-	}
+	localSummary := corestate.CatalogSummaryFor(state.Network)
 
-	err = service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
 		Type:   gossip.MessagePing,
 		PeerID: peerID,
 		Ping:   &gossip.Ping{Summary: localSummary},
@@ -302,14 +301,8 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 		Clock:  func() time.Time { return now },
 	}, state, config, time.Second)
 
-	summary, err := gossip.CatalogSummaryFor(state.Network, service.syncDatagramBudget())
-	if err != nil {
-		t.Fatalf("CatalogSummaryFor: %v", err)
-	}
-	localSummary, err := service.StateStore.catalogSummaryProjection(service.syncDatagramBudget())
-	if err != nil {
-		t.Fatalf("catalogSummaryProjection: %v", err)
-	}
+	summary := corestate.CatalogSummaryFor(state.Network)
+	localSummary := service.StateStore.catalogSummaryProjection()
 	before := service.StateStore.Meta().Revision
 	if err := service.maybeShortcutSyncFromPingSummaryWithLocal("peer-a", summary, localSummary); err != nil {
 		t.Fatalf("maybeShortcutSyncFromPingSummaryWithLocal: %v", err)
@@ -361,7 +354,7 @@ func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
 	session := gossip.NewSyncSession(peerID)
 	if _, err := session.OnEvent(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
-		LocalSummary: &gossip.CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 1},
+		LocalSummary: &corestate.CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 1},
 	}, now); err != nil {
 		t.Fatalf("start sync session: %v", err)
 	}
@@ -398,7 +391,7 @@ func TestDaemonUnsolicitedPingSummaryMismatchStartsSession(t *testing.T) {
 	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
 		Type:   gossip.MessagePing,
 		PeerID: peerID,
-		Ping:   &gossip.Ping{Summary: &gossip.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
+		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
 	}}, context.Background())
 	if err != nil {
 		t.Fatalf("process ping: %v", err)
@@ -427,7 +420,7 @@ func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 	session := gossip.NewSyncSession(peerID)
 	_, _ = session.OnEvent(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
-		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(nil), ZoneCount: 0},
+		LocalSummary: &corestate.CatalogSummary{CatalogRoot: corestate.CatalogRoot(nil), ZoneCount: 0},
 	}, now)
 	if session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("expected setup state summary_sent, got %s", session.State)

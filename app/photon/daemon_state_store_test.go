@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -343,7 +343,7 @@ func BenchmarkDaemonStateStoreSnapshotStrategies(b *testing.B) {
 func TestDaemonStateStoreZoneDigestsReturnsDetachedProjection(t *testing.T) {
 	state := &stateFile{ManagedZone: "node-a.catofes.", Network: cloneTestNetworkState()}
 	store := NewDaemonStateStore(state)
-	want := gossip.ZoneDigests(state.Network)
+	want := corestate.ZoneDigests(state.Network)
 
 	got := store.ZoneDigests()
 	if !sameZoneDigests(got, want) {

@@ -29,7 +29,7 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 
 	if changed := service.handleSyncEvent(context.Background(), &gossip.CatalogSummaryReceivedEvent{
 		PeerID: peerID,
-		Summary: &gossip.CatalogSummary{
+		Summary: &corestate.CatalogSummary{
 			CatalogRoot: []byte{0x21, 0x22},
 			ZoneCount:   2,
 			NextCursor:  "next-page",
@@ -79,7 +79,7 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	go func() {
 		service.handleSyncEvent(context.Background(), &gossip.CatalogSummaryReceivedEvent{
 			PeerID: peerID,
-			Summary: &gossip.CatalogSummary{
+			Summary: &corestate.CatalogSummary{
 				CatalogRoot: []byte{0x31, 0x32},
 				ZoneCount:   3,
 			},
@@ -361,7 +361,7 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 		t.Fatalf("EncodeZoneSnapshotObject: %v", err)
 	}
 	objectHash := sha256.Sum256(data)
-	rootHash := gossip.ZoneRoot(sourceState.Network.Zones["catofes."])
+	rootHash := corestate.ZoneRoot(sourceState.Network.Zones["catofes."])
 
 	targetState := cloneStateFile(sourceState)
 	delete(targetState.Network.Zones, zone.ZonePath("catofes."))
@@ -451,7 +451,7 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 	beforeRev := service.StateStore.Meta().Revision
-	rootHash := gossip.ZoneRoot(state.Network.Zones["catofes."])
+	rootHash := corestate.ZoneRoot(state.Network.Zones["catofes."])
 
 	err := service.handleObjectChunk(&gossip.Message{
 		Type:   gossip.MessageObjectChunk,

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -235,7 +235,7 @@ func BuildRecord(rec *zone.Record, historyCount int) RecordView {
 }
 
 func zoneDigestRootHex(ns *zone.NetworkState, path zone.ZonePath) string {
-	for _, digest := range gossip.ZoneDigests(ns) {
+	for _, digest := range corestate.ZoneDigests(ns) {
 		if digest.Zone == path {
 			return hex.EncodeToString(digest.RootHash)
 		}

@@ -10,6 +10,7 @@ import (
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -517,7 +518,7 @@ func timeNow() time.Time {
 	return time.Now()
 }
 
-func globalRootHash(digests []gossip.ZoneDigest) []byte {
+func globalRootHash(digests []corestate.ZoneDigest) []byte {
 	parts := make([][]byte, 0, len(digests)*2)
 	for _, digest := range digests {
 		parts = append(parts, []byte(digest.Zone), digest.RootHash)

@@ -36,7 +36,7 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 		return nil
 	}
 	now := d.Sync.now()
-	projection := d.StateStore.syncTimerProjection(d.Sync.Config, now, d.syncDatagramBudget())
+	projection := d.StateStore.syncTimerProjection(d.Sync.Config, now)
 	peers := projection.peers
 	if len(peers) == 0 {
 		return nil
@@ -45,10 +45,6 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 		"peer_count": len(peers),
 		"force":      force,
 	})
-	if projection.err != nil {
-		d.logWarn("sync", "catalog_summary_failed", map[string]any{"error": projection.err})
-		return nil
-	}
 	for _, peerID := range peers {
 		if !force && backoffRemaining(projection.peerStates[peerID], now) > 0 {
 			d.logDebug("sync", "event_loop_skipped", map[string]any{
@@ -147,14 +143,11 @@ func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
 	return err
 }
 
-func (d *DaemonService) respondPingWithSummary(peerID string, ping *gossip.Ping) (*gossip.CatalogSummary, error) {
+func (d *DaemonService) respondPingWithSummary(peerID string, ping *gossip.Ping) (*corestate.CatalogSummary, error) {
 	if d == nil || d.Sync == nil || ping == nil {
 		return nil, nil
 	}
-	summary, err := d.StateStore.catalogSummaryProjection(d.syncDatagramBudget())
-	if err != nil {
-		return nil, err
-	}
+	summary := d.StateStore.catalogSummaryProjection()
 	if summary == nil {
 		return nil, nil
 	}
@@ -173,7 +166,7 @@ func (d *DaemonService) respondPingWithSummary(peerID string, ping *gossip.Ping)
 // record the peer sync state and skip creating a gossip.SyncSession, avoiding a
 // redundant ping-pong round. If roots differ, it falls back to
 // handleAnnounceHint.
-func (d *DaemonService) maybeShortcutSyncFromPingSummaryWithLocal(peerID string, remoteSummary, localSummary *gossip.CatalogSummary) error {
+func (d *DaemonService) maybeShortcutSyncFromPingSummaryWithLocal(peerID string, remoteSummary, localSummary *corestate.CatalogSummary) error {
 	if localSummary == nil {
 		return nil
 	}
@@ -220,15 +213,7 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		return nil
 	}
 	now := d.Sync.now()
-	summary, digests, err := d.StateStore.catalogStateProjection(d.syncDatagramBudget())
-	if err != nil {
-		d.logWarn("sync", "catalog_summary_failed", map[string]any{
-			"peer_id": peerID,
-			"reason":  reason,
-			"error":   err,
-		})
-		return nil
-	}
+	summary, digests := d.StateStore.catalogStateProjection()
 	if summary == nil {
 		return nil
 	}
@@ -427,12 +412,12 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 	return changed
 }
 
-func filterRemoteCatalogPage(state *stateFile, peerID string, page *gossip.CatalogPage, now time.Time) *gossip.CatalogPage {
+func filterRemoteCatalogPage(state *stateFile, peerID string, page *corestate.CatalogPage, now time.Time) *corestate.CatalogPage {
 	if page == nil || state == nil || len(page.Entries) == 0 {
 		return page
 	}
 	filtered := *page
-	filtered.Entries = make([]gossip.ZoneDigest, 0, len(page.Entries))
+	filtered.Entries = make([]corestate.ZoneDigest, 0, len(page.Entries))
 	for _, entry := range page.Entries {
 		if shouldSkipRemoteZone(state, peerID, entry.Zone, entry.RootHash, now) {
 			continue
@@ -1047,13 +1032,13 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	}
 }
 
-func digestForSnapshot(snapshot *corestate.ZoneSnapshot) gossip.ZoneDigest {
+func digestForSnapshot(snapshot *corestate.ZoneSnapshot) corestate.ZoneDigest {
 	if snapshot == nil {
-		return gossip.ZoneDigest{}
+		return corestate.ZoneDigest{}
 	}
-	return gossip.ZoneDigest{
+	return corestate.ZoneDigest{
 		Zone:     snapshot.Zone,
-		RootHash: gossip.ZoneRoot(zoneStateFromSnapshot(snapshot)),
+		RootHash: corestate.ZoneRoot(zoneStateFromSnapshot(snapshot)),
 	}
 }
 

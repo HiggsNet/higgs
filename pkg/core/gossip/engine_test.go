@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestEngineOwnsSessionsAndPlansInbound(t *testing.T) {
@@ -26,7 +28,7 @@ func TestEngineHandleEventAndProtocolFailure(t *testing.T) {
 	engine := NewEngine()
 	session := engine.NewSession("peer-a")
 	now := time.Unix(100, 0)
-	result := engine.HandleEvent(&SyncTimerEvent{PeerID: "peer-a", LocalSummary: &CatalogSummary{}}, now)
+	result := engine.HandleEvent(&SyncTimerEvent{PeerID: "peer-a", LocalSummary: &corestate.CatalogSummary{}}, now)
 	if !result.Accepted || result.Session != session || result.OldState != SyncSessionIdle || session.State != SyncSessionSummarySent {
 		t.Fatalf("result = %#v session=%#v", result, session)
 	}
@@ -35,7 +37,7 @@ func TestEngineHandleEventAndProtocolFailure(t *testing.T) {
 		t.Fatalf("unknown result = %#v, want rejected", unknown)
 	}
 
-	bad := &CatalogPageReceivedEvent{PeerID: "peer-a", Page: &CatalogPage{CatalogRoot: []byte("wrong")}}
+	bad := &CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: []byte("wrong")}}
 	result = engine.HandleEvent(bad, now)
 	if !result.Accepted || result.Err != nil {
 		// This event is ignored in summary-sent without a prior remote root;

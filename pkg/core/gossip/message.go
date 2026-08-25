@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -36,45 +37,27 @@ type Message struct {
 	Nonce     uint64      `json:"nonce" msgpack:"n"`
 	Timestamp int64       `json:"timestamp" msgpack:"ts"`
 
-	Ping             *Ping             `json:"ping,omitempty" msgpack:"g,omitempty"`
-	Pong             *Pong             `json:"pong,omitempty" msgpack:"o,omitempty"`
-	FetchZone        *FetchZone        `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
-	FetchRecord      *FetchRecord      `json:"fetch_record,omitempty" msgpack:"r,omitempty"`
-	FetchCatalogPage *FetchCatalogPage `json:"fetch_catalog_page,omitempty" msgpack:"fc,omitempty"`
-	CatalogPage      *CatalogPage      `json:"catalog_page,omitempty" msgpack:"cp,omitempty"`
-	Announce         *Announce         `json:"announce,omitempty" msgpack:"a,omitempty"`
-	ObjectChunk      *ObjectChunk      `json:"object_chunk,omitempty" msgpack:"c,omitempty"`
-	ObjectChunkNACK  *ObjectChunkNACK  `json:"object_chunk_nack,omitempty" msgpack:"cn,omitempty"`
-}
-
-type ZoneDigest struct {
-	Zone     zone.ZonePath `json:"zone" msgpack:"z"`
-	RootHash []byte        `json:"root_hash" msgpack:"h"`
+	Ping             *Ping                  `json:"ping,omitempty" msgpack:"g,omitempty"`
+	Pong             *Pong                  `json:"pong,omitempty" msgpack:"o,omitempty"`
+	FetchZone        *FetchZone             `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
+	FetchRecord      *FetchRecord           `json:"fetch_record,omitempty" msgpack:"r,omitempty"`
+	FetchCatalogPage *FetchCatalogPage      `json:"fetch_catalog_page,omitempty" msgpack:"fc,omitempty"`
+	CatalogPage      *corestate.CatalogPage `json:"catalog_page,omitempty" msgpack:"cp,omitempty"`
+	Announce         *Announce              `json:"announce,omitempty" msgpack:"a,omitempty"`
+	ObjectChunk      *ObjectChunk           `json:"object_chunk,omitempty" msgpack:"c,omitempty"`
+	ObjectChunkNACK  *ObjectChunkNACK       `json:"object_chunk_nack,omitempty" msgpack:"cn,omitempty"`
 }
 
 type Ping struct {
-	Summary *CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
+	Summary *corestate.CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
 }
 
 type Pong struct {
-	Summary *CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
-}
-
-type CatalogSummary struct {
-	CatalogRoot []byte       `json:"catalog_root" msgpack:"r"`
-	ZoneCount   int          `json:"zone_count" msgpack:"z"`
-	FirstPage   *CatalogPage `json:"first_page,omitempty" msgpack:"p,omitempty"`
-	NextCursor  string       `json:"next_cursor,omitempty" msgpack:"c,omitempty"`
+	Summary *corestate.CatalogSummary `json:"summary,omitempty" msgpack:"s,omitempty"`
 }
 
 type FetchCatalogPage struct {
 	Cursor string `json:"cursor,omitempty" msgpack:"c,omitempty"`
-}
-
-type CatalogPage struct {
-	CatalogRoot []byte       `json:"catalog_root" msgpack:"r"`
-	Entries     []ZoneDigest `json:"entries" msgpack:"e"`
-	NextCursor  string       `json:"next_cursor,omitempty" msgpack:"c,omitempty"`
 }
 
 type FetchZone struct {
@@ -89,7 +72,7 @@ type FetchRecord struct {
 }
 
 type Announce struct {
-	Zones []ZoneDigest `json:"zones,omitempty" msgpack:"z,omitempty"`
+	Zones []corestate.ZoneDigest `json:"zones,omitempty" msgpack:"z,omitempty"`
 }
 
 type ObjectChunk struct {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -101,11 +102,8 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 	defer transportB.Close()
 	transportA.AddPeer(config.PeerID, transportB.LocalAddr())
 
-	localSummary, err := gossip.CatalogSummaryFor(state.Network, gossip.DefaultDatagramBudget)
-	if err != nil {
-		t.Fatalf("CatalogSummaryFor: %v", err)
-	}
-	remoteSummary := &gossip.CatalogSummary{
+	localSummary := corestate.CatalogSummaryFor(state.Network)
+	remoteSummary := &corestate.CatalogSummary{
 		CatalogRoot: append([]byte(nil), localSummary.CatalogRoot...),
 		ZoneCount:   localSummary.ZoneCount,
 	}

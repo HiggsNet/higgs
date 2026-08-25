@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestSyncRuntimeReloadStateIfChangedSkipsUnchangedStateFile(t *testing.T) {
@@ -27,7 +27,7 @@ func TestSyncRuntimeReloadStateIfChangedSkipsUnchangedStateFile(t *testing.T) {
 		}
 		return next, nil
 	}
-	previous := gossip.ZoneDigests(state.Network)
+	previous := corestate.ZoneDigests(state.Network)
 
 	if latest, changed, err := sr.reloadStateIfChangedWith(previous, load); err != nil || changed || latest != state {
 		t.Fatalf("first reload = (%p, %t, %v), want current state without change", latest, changed, err)
@@ -73,7 +73,7 @@ func TestSyncRuntimeReloadStateIfChangedDoesNotCacheRacingFile(t *testing.T) {
 		}
 		return state, nil
 	}
-	previous := gossip.ZoneDigests(state.Network)
+	previous := corestate.ZoneDigests(state.Network)
 
 	if _, changed, err := sr.reloadStateIfChangedWith(previous, load); err != nil || changed {
 		t.Fatalf("racing reload changed=%t err=%v", changed, err)
@@ -104,7 +104,7 @@ func TestSyncRuntimeReloadStateIfChangedSkipsStableSelfWrite(t *testing.T) {
 		loads++
 		return rt.LoadState()
 	}
-	previous := gossip.ZoneDigests(state.Network)
+	previous := corestate.ZoneDigests(state.Network)
 	latest, changed, err := sr.reloadStateIfChangedWith(previous, load)
 	if err != nil || changed || latest != nil {
 		t.Fatalf("reload after self write = (%p, %t, %v), want no replacement", latest, changed, err)

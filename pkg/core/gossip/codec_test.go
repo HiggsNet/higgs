@@ -3,6 +3,8 @@ package gossip
 import (
 	"bytes"
 	"testing"
+
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestMsgpackCodecRoundTrip(t *testing.T) {
@@ -11,7 +13,7 @@ func TestMsgpackCodecRoundTrip(t *testing.T) {
 		PeerID:    "node-a",
 		Nonce:     42,
 		Timestamp: 1717171717,
-		Ping: &Ping{Summary: &CatalogSummary{
+		Ping: &Ping{Summary: &corestate.CatalogSummary{
 			CatalogRoot: []byte{1, 2, 3, 4},
 			ZoneCount:   1,
 		}},
@@ -98,7 +100,7 @@ func BenchmarkPingMsgpack(b *testing.B) {
 		PeerID:    "node-a.catofes.",
 		Nonce:     123456789,
 		Timestamp: 1717171717,
-		Ping:      &Ping{Summary: &CatalogSummary{CatalogRoot: make([]byte, 32), ZoneCount: 2}},
+		Ping:      &Ping{Summary: &corestate.CatalogSummary{CatalogRoot: make([]byte, 32), ZoneCount: 2}},
 	}
 	codec := msgpackCodec{}
 	b.ResetTimer()
@@ -108,7 +110,7 @@ func BenchmarkPingMsgpack(b *testing.B) {
 }
 
 func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
-	digest := ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
+	digest := corestate.ZoneDigest{Zone: "node-a.catofes.", RootHash: make([]byte, 32)}
 
 	cases := []struct {
 		name    string
@@ -116,15 +118,15 @@ func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 	}{
 		{
 			name:    "ping",
-			message: commonWireMessage(MessagePing, &Ping{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil, nil),
+			message: commonWireMessage(MessagePing, &Ping{Summary: &corestate.CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil, nil),
 		},
 		{
 			name:    "pong",
-			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
+			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
 		},
 		{
 			name:    "announce digest",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []ZoneDigest{digest}}),
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []corestate.ZoneDigest{digest}}),
 		},
 	}
 

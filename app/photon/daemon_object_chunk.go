@@ -82,7 +82,7 @@ func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *go
 	}
 	if _, err := d.StateStore.UpdateSyncPeer(peerID, func(peer *syncPeerState) error {
 		state := &stateFile{SyncPeers: map[string]syncPeerState{peerID: *peer}}
-		recordRejectedDigest(state, peerID, gossip.ZoneDigest{
+		recordRejectedDigest(state, peerID, corestate.ZoneDigest{
 			Zone:     chunk.Zone,
 			RootHash: chunk.RootHash,
 		}, gossip.RejectReason(applyErr), now)

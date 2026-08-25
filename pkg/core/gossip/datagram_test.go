@@ -57,9 +57,9 @@ func TestPlanSnapshotDatagramsIgnoresRecordPayloadSize(t *testing.T) {
 }
 
 func TestPackDigestAnnouncesRespectsBudget(t *testing.T) {
-	var digests []ZoneDigest
+	var digests []corestate.ZoneDigest
 	for i := range 20 {
-		digests = append(digests, ZoneDigest{Zone: zone.ZonePath(string(rune('a'+i)) + ".catofes."), RootHash: bytes.Repeat([]byte{byte(i)}, 32)})
+		digests = append(digests, corestate.ZoneDigest{Zone: zone.ZonePath(string(rune('a'+i)) + ".catofes."), RootHash: bytes.Repeat([]byte{byte(i)}, 32)})
 	}
 	announces := PackDigestAnnounces(digests, 300)
 	if len(announces) < 2 {

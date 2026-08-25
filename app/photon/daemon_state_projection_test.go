@@ -113,8 +113,8 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 	now := time.Unix(100, 0)
 	budget := gossip.DefaultMaxMessage
 
-	timer := store.syncTimerProjection(config, now, budget)
-	if timer.err != nil || timer.summary == nil || len(timer.digests) == 0 || len(timer.peerStates) != 1 {
+	timer := store.syncTimerProjection(config, now)
+	if timer.summary == nil || len(timer.digests) == 0 || len(timer.peerStates) != 1 {
 		t.Fatalf("timer projection = %+v", timer)
 	}
 	wantCatalogRoot := append([]byte(nil), timer.summary.CatalogRoot...)
@@ -125,7 +125,7 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 	peer.ObservedGraceAddrs[0].Addr = "changed"
 	timer.peerStates["peer-a"] = peer
 
-	againTimer := store.syncTimerProjection(config, now, budget)
+	againTimer := store.syncTimerProjection(config, now)
 	if string(againTimer.summary.CatalogRoot) != string(wantCatalogRoot) {
 		t.Fatal("catalog summary projection mutation leaked")
 	}

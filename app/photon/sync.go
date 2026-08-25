@@ -170,7 +170,7 @@ func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now 
 }
 
 func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusView {
-	digests := gossip.ZoneDigests(state.Network)
+	digests := corestate.ZoneDigests(state.Network)
 	view := inspect.SyncStatusView{
 		PeerID:       config.PeerID,
 		ListenAddr:   config.ListenAddr,
@@ -444,14 +444,14 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 	return daemonRun(ctx, interval)
 }
 
-func (sr *SyncRuntime) reloadStateIfChanged(previous []gossip.ZoneDigest) (*stateFile, bool, error) {
+func (sr *SyncRuntime) reloadStateIfChanged(previous []corestate.ZoneDigest) (*stateFile, bool, error) {
 	return sr.reloadStateIfChangedWith(previous, sr.loadState)
 }
 
 // reloadStateIfChangedWith reloads only when the state DB changed. The loader
 // argument keeps the file-change gate independently testable; production uses
 // sr.loadState.
-func (sr *SyncRuntime) reloadStateIfChangedWith(previous []gossip.ZoneDigest, load func() (*stateFile, error)) (*stateFile, bool, error) {
+func (sr *SyncRuntime) reloadStateIfChangedWith(previous []corestate.ZoneDigest, load func() (*stateFile, error)) (*stateFile, bool, error) {
 	path := sr.stateFilePath()
 	var before os.FileInfo
 	if path != "" {
@@ -479,7 +479,7 @@ func (sr *SyncRuntime) reloadStateIfChangedWith(previous []gossip.ZoneDigest, lo
 			sr.reloadStateStamp = stateFileStamp{}
 		}
 	}
-	if !sameZoneDigests(previous, gossip.ZoneDigests(latest.Network)) {
+	if !sameZoneDigests(previous, corestate.ZoneDigests(latest.Network)) {
 		return latest, true, nil
 	}
 	return latest, false, nil
@@ -530,7 +530,7 @@ func (e *syncPendingZonesError) PendingZones() []string {
 	return zonePathStrings(e.zones)
 }
 
-func sameZoneDigests(a, b []gossip.ZoneDigest) bool {
+func sameZoneDigests(a, b []corestate.ZoneDigest) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -576,7 +576,7 @@ func isRejectedDigestActive(state *stateFile, peerID string, path zone.ZonePath,
 
 // recordRejectedDigest mutates state.SyncPeers. The caller must hold the write
 // lock on state.
-func recordRejectedDigest(state *stateFile, peerID string, digest gossip.ZoneDigest, reason string, now time.Time) {
+func recordRejectedDigest(state *stateFile, peerID string, digest corestate.ZoneDigest, reason string, now time.Time) {
 	if state == nil || peerID == "" || !digest.Zone.Valid() || len(digest.RootHash) == 0 {
 		return
 	}
@@ -1450,7 +1450,7 @@ func recordDatagramRepairSent(store *observability.PeerObservabilityStore, peerI
 	})
 }
 
-func recordCatalogSummary(store *observability.PeerObservabilityStore, peerID string, summary *gossip.CatalogSummary, now time.Time) {
+func recordCatalogSummary(store *observability.PeerObservabilityStore, peerID string, summary *corestate.CatalogSummary, now time.Time) {
 	if store == nil || peerID == "" || summary == nil {
 		return
 	}
@@ -1469,7 +1469,7 @@ func recordCatalogSummary(store *observability.PeerObservabilityStore, peerID st
 	})
 }
 
-func recordCatalogPage(store *observability.PeerObservabilityStore, peerID string, page *gossip.CatalogPage, now time.Time) {
+func recordCatalogPage(store *observability.PeerObservabilityStore, peerID string, page *corestate.CatalogPage, now time.Time) {
 	if store == nil || peerID == "" || page == nil {
 		return
 	}

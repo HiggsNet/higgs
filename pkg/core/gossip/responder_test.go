@@ -1,6 +1,10 @@
 package gossip
 
-import "testing"
+import (
+	"testing"
+
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
+)
 
 func TestClassifyReadOnlyRequest(t *testing.T) {
 	tests := []struct {
@@ -28,7 +32,7 @@ func TestClassifyReadOnlyRequest(t *testing.T) {
 }
 
 func TestPlanPingResponse(t *testing.T) {
-	local := &CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 2}
+	local := &corestate.CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 2}
 	if messages := PlanPingResponse(nil, local); len(messages) != 0 {
 		t.Fatalf("nil ping messages = %#v, want none", messages)
 	}
@@ -42,8 +46,8 @@ func TestPlanPingResponse(t *testing.T) {
 		count int
 	}{
 		{"no_remote_summary", &Ping{}, 1},
-		{"matching_root", &Ping{Summary: &CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 99}}, 1},
-		{"different_root", &Ping{Summary: &CatalogSummary{CatalogRoot: []byte("remote"), ZoneCount: 2}}, 2},
+		{"matching_root", &Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 99}}, 1},
+		{"different_root", &Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote"), ZoneCount: 2}}, 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			messages := PlanPingResponse(test.ping, local)
@@ -61,11 +65,11 @@ func TestPlanPingResponse(t *testing.T) {
 }
 
 func TestCatalogRootsMatchRequiresNonNilSummaries(t *testing.T) {
-	root := &CatalogSummary{CatalogRoot: []byte("root")}
+	root := &corestate.CatalogSummary{CatalogRoot: []byte("root")}
 	if CatalogRootsMatch(nil, root) || CatalogRootsMatch(root, nil) {
 		t.Fatal("nil catalog summary matched")
 	}
-	if !CatalogRootsMatch(root, &CatalogSummary{CatalogRoot: []byte("root"), ZoneCount: 99}) {
+	if !CatalogRootsMatch(root, &corestate.CatalogSummary{CatalogRoot: []byte("root"), ZoneCount: 99}) {
 		t.Fatal("equal catalog roots did not match")
 	}
 }

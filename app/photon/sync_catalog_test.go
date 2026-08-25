@@ -15,7 +15,7 @@ import (
 func TestFilterRemoteCatalogPageSkipsManagedZone(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."
-	page := &gossip.CatalogPage{Entries: []gossip.ZoneDigest{
+	page := &corestate.CatalogPage{Entries: []corestate.ZoneDigest{
 		{Zone: state.ManagedZone, RootHash: []byte("remote-own-root")},
 		{Zone: "catofes.", RootHash: []byte("remote-parent-root")},
 	}}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -26,7 +27,7 @@ func TestMarshalUnmarshalPing(t *testing.T) {
 		PeerID:    "node-a",
 		Nonce:     1,
 		Timestamp: 123,
-		Ping: &Ping{Summary: &CatalogSummary{
+		Ping: &Ping{Summary: &corestate.CatalogSummary{
 			CatalogRoot: []byte{1, 2, 3},
 			ZoneCount:   1,
 		}},
@@ -166,31 +167,6 @@ func TestPeerQuotasPrunesInactivePeers(t *testing.T) {
 	}
 }
 
-func TestZoneDigestsAreStable(t *testing.T) {
-	ns := zone.NewNetworkState()
-	ns.Zones["catofes."] = zone.NewZoneState("catofes.", &zone.ZoneAuthority{
-		Zone:      "catofes.",
-		Epoch:     1,
-		Threshold: 1,
-	})
-	ns.Zones["catofes."].Records["identity"] = &zone.Record{
-		Zone:      "catofes.",
-		Key:       "identity",
-		Type:      "node.identity",
-		Value:     []byte("node"),
-		ValueHash: []byte{1},
-		Version:   1,
-		Timestamp: 123,
-	}
-	first := ZoneDigests(ns)
-	second := ZoneDigests(ns)
-	if len(first) != 1 || len(second) != 1 {
-		t.Fatalf("ZoneDigests lengths = %d/%d, want 1/1", len(first), len(second))
-	}
-	if !bytes.Equal(first[0].RootHash, second[0].RootHash) {
-		t.Fatalf("ZoneDigests root hash changed for same state")
-	}
-}
 func TestRevokedZoneEndpointsAreNotDiscovered(t *testing.T) {
 	now := time.Unix(1000, 0)
 	ns, rootPriv, zonePriv := testNetworkWithKeys(t)

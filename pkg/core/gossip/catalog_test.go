@@ -5,27 +5,14 @@ import (
 	"errors"
 	"testing"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func TestCatalogSummaryForDigestsMatchesCatalogRoot(t *testing.T) {
-	entries := []ZoneDigest{
-		{Zone: "a.catofes.", RootHash: bytes.Repeat([]byte{1}, 32)},
-		{Zone: "b.catofes.", RootHash: bytes.Repeat([]byte{2}, 32)},
-	}
-	summary, err := CatalogSummaryForDigests(entries, DefaultDatagramBudget)
-	if err != nil {
-		t.Fatalf("CatalogSummaryForDigests: %v", err)
-	}
-	if summary.ZoneCount != len(entries) || !bytes.Equal(summary.CatalogRoot, CatalogRoot(entries)) {
-		t.Fatalf("summary = %#v, want zone_count=%d root=%x", summary, len(entries), CatalogRoot(entries))
-	}
-}
-
 func TestCatalogPageForDigestsIsBoundedAndStable(t *testing.T) {
-	var entries []ZoneDigest
+	var entries []corestate.ZoneDigest
 	for i := range 80 {
-		entries = append(entries, ZoneDigest{
+		entries = append(entries, corestate.ZoneDigest{
 			Zone:     zone.ZonePath("node-" + string(rune('a'+i%26)) + "-" + string(rune('a'+i/26)) + ".catofes."),
 			RootHash: bytes.Repeat([]byte{byte(i)}, 32),
 		})
@@ -56,7 +43,7 @@ func TestCatalogPageForDigestsIsBoundedAndStable(t *testing.T) {
 }
 
 func TestCatalogPageForDigestsEmptyPage(t *testing.T) {
-	entries := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("root")}}
+	entries := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("root")}}
 	page, err := CatalogPageForDigests(entries, "1", DefaultDatagramBudget)
 	if err != nil {
 		t.Fatalf("CatalogPageForDigests: %v", err)
@@ -67,7 +54,7 @@ func TestCatalogPageForDigestsEmptyPage(t *testing.T) {
 }
 
 func TestCatalogPageForDigestsFailsClosedForOversizedEntry(t *testing.T) {
-	entries := []ZoneDigest{{
+	entries := []corestate.ZoneDigest{{
 		Zone:     zone.ZonePath("very-long-node-name-that-cannot-fit-small-budget.catofes."),
 		RootHash: bytes.Repeat([]byte{1}, 32),
 	}}
@@ -78,14 +65,14 @@ func TestCatalogPageForDigestsFailsClosedForOversizedEntry(t *testing.T) {
 }
 
 func TestCatalogSyncMessagesFitDatagramBudget(t *testing.T) {
-	var digests []ZoneDigest
+	var digests []corestate.ZoneDigest
 	for i := range 80 {
-		digests = append(digests, ZoneDigest{
+		digests = append(digests, corestate.ZoneDigest{
 			Zone:     zone.ZonePath("node-" + string(rune('a'+i%26)) + "-" + string(rune('a'+i/26)) + ".catofes."),
 			RootHash: bytes.Repeat([]byte{byte(i)}, 32),
 		})
 	}
-	summary := &CatalogSummary{CatalogRoot: CatalogRoot(digests), ZoneCount: len(digests)}
+	summary := corestate.CatalogSummaryForDigests(digests)
 	if size := MessageWireSize(&Message{Type: MessagePing, Ping: &Ping{Summary: summary}}); size > DefaultDatagramBudget {
 		t.Fatalf("catalog summary ping size=%d exceeds %d", size, DefaultDatagramBudget)
 	}

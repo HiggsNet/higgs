@@ -47,8 +47,8 @@ type SyncEvent interface {
 
 type SyncTimerEvent struct {
 	PeerID       string
-	LocalDigests []ZoneDigest
-	LocalSummary *CatalogSummary
+	LocalDigests []corestate.ZoneDigest
+	LocalSummary *corestate.CatalogSummary
 }
 
 func (*SyncTimerEvent) SyncEventMarker() {}
@@ -63,15 +63,15 @@ func (*PongReceivedEvent) SyncEventMarker() {}
 
 type CatalogSummaryReceivedEvent struct {
 	PeerID  string
-	Summary *CatalogSummary
+	Summary *corestate.CatalogSummary
 }
 
 func (*CatalogSummaryReceivedEvent) SyncEventMarker() {}
 
 type CatalogPageReceivedEvent struct {
 	PeerID       string
-	Page         *CatalogPage
-	LocalEntries []ZoneDigest
+	Page         *corestate.CatalogPage
+	LocalEntries []corestate.ZoneDigest
 }
 
 func (*CatalogPageReceivedEvent) SyncEventMarker() {}
@@ -113,8 +113,8 @@ type SyncAction interface {
 
 type SendPingAction struct {
 	PeerID  string
-	Digests []ZoneDigest
-	Summary *CatalogSummary
+	Digests []corestate.ZoneDigest
+	Summary *corestate.CatalogSummary
 }
 
 func (SendPingAction) isSyncAction() {}
@@ -207,7 +207,7 @@ type SyncSession struct {
 	chunkFallbackZones map[zone.ZonePath]bool
 	// expectedDigests maps pending zones to the remote root hash advertised in
 	// the PONG. Used to detect stale or incomplete UDP announces.
-	expectedDigests   map[zone.ZonePath]ZoneDigest
+	expectedDigests   map[zone.ZonePath]corestate.ZoneDigest
 	localCatalogRoot  []byte
 	remoteCatalogRoot []byte
 	lastCatalogCursor string
@@ -228,7 +228,7 @@ func NewSyncSession(peerID string) *SyncSession {
 		pendingZones:       make(map[zone.ZonePath]bool),
 		objectPullInflight: make(map[zone.ZonePath]bool),
 		chunkFallbackZones: make(map[zone.ZonePath]bool),
-		expectedDigests:    make(map[zone.ZonePath]ZoneDigest),
+		expectedDigests:    make(map[zone.ZonePath]corestate.ZoneDigest),
 		estimatedRTT:       InitialRTT,
 	}
 }
@@ -266,7 +266,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.pendingZones = make(map[zone.ZonePath]bool)
 	s.objectPullInflight = make(map[zone.ZonePath]bool)
 	s.chunkFallbackZones = make(map[zone.ZonePath]bool)
-	s.expectedDigests = make(map[zone.ZonePath]ZoneDigest)
+	s.expectedDigests = make(map[zone.ZonePath]corestate.ZoneDigest)
 	s.localCatalogRoot = nil
 	if e.LocalSummary != nil {
 		s.localCatalogRoot = append([]byte(nil), e.LocalSummary.CatalogRoot...)
@@ -320,7 +320,7 @@ func (s *SyncSession) onCatalogSummaryReceived(e *CatalogSummaryReceivedEvent, n
 	return s.handleCatalogSummary(e.PeerID, e.Summary, now)
 }
 
-func (s *SyncSession) handleCatalogSummary(peerID string, summary *CatalogSummary, now time.Time) ([]SyncAction, error) {
+func (s *SyncSession) handleCatalogSummary(peerID string, summary *corestate.CatalogSummary, now time.Time) ([]SyncAction, error) {
 	if summary == nil {
 		return nil, nil
 	}
@@ -332,7 +332,7 @@ func (s *SyncSession) handleCatalogSummary(peerID string, summary *CatalogSummar
 		s.State = SyncSessionCompleted
 		return []SyncAction{SaveStateAction{Reason: "sync completed after matching catalog summary", Persistence: SyncPersistenceMeta}}, nil
 	}
-	if summary.ZoneCount == 0 || bytes.Equal(summary.CatalogRoot, CatalogRoot(nil)) {
+	if summary.ZoneCount == 0 || bytes.Equal(summary.CatalogRoot, corestate.CatalogRoot(nil)) {
 		s.State = SyncSessionCompleted
 		return []SyncAction{SaveStateAction{Reason: "sync completed after empty catalog summary", Persistence: SyncPersistenceMeta}}, nil
 	}
@@ -364,7 +364,7 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	}
 	s.State = SyncSessionCatalogDiffing
 	var actions []SyncAction
-	for _, diff := range CatalogDiff(e.LocalEntries, e.Page.Entries) {
+	for _, diff := range corestate.CatalogDiff(e.LocalEntries, e.Page.Entries) {
 		s.pendingZones[diff.Zone] = true
 		s.expectedDigests[diff.Zone] = diff
 		if !s.objectPullInflight[diff.Zone] {
@@ -403,7 +403,7 @@ func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAc
 	}, nil
 }
 
-func (s *SyncSession) reconcilePendingWithDigests(digests []ZoneDigest) []SyncAction {
+func (s *SyncSession) reconcilePendingWithDigests(digests []corestate.ZoneDigest) []SyncAction {
 	local := make(map[zone.ZonePath][]byte, len(digests))
 	for _, digest := range digests {
 		local[digest.Zone] = digest.RootHash
@@ -561,7 +561,7 @@ func (s *SyncSession) InflightCount() int {
 
 // ReconcilePendingWithDigests completes pending zones whose verified local
 // digest now matches the peer's advertised digest.
-func (s *SyncSession) ReconcilePendingWithDigests(digests []ZoneDigest) []SyncAction {
+func (s *SyncSession) ReconcilePendingWithDigests(digests []corestate.ZoneDigest) []SyncAction {
 	return s.reconcilePendingWithDigests(digests)
 }
 

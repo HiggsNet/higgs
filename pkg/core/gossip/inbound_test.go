@@ -3,12 +3,14 @@ package gossip
 import (
 	"reflect"
 	"testing"
+
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestPlanInboundPacketActiveMessageActions(t *testing.T) {
 	peerID := "peer-a"
 	sessions := map[string]*SyncSession{peerID: NewSyncSession(peerID)}
-	summary := &CatalogSummary{CatalogRoot: []byte("root"), ZoneCount: 1}
+	summary := &corestate.CatalogSummary{CatalogRoot: []byte("root"), ZoneCount: 1}
 	tests := []struct {
 		name    string
 		message *Message
@@ -19,7 +21,7 @@ func TestPlanInboundPacketActiveMessageActions(t *testing.T) {
 		{"pong", &Message{Type: MessagePong, PeerID: peerID, Pong: &Pong{Summary: summary}}, []InboundActionKind{InboundPostSessionEvent}, &PongReceivedEvent{}},
 		{"fetch_zone", &Message{Type: MessageFetchZone, PeerID: peerID, FetchZone: &FetchZone{Zone: "catofes."}}, []InboundActionKind{InboundRespondFetchZone}, nil},
 		{"fetch_catalog", &Message{Type: MessageFetchCatalogPage, PeerID: peerID, FetchCatalogPage: &FetchCatalogPage{}}, []InboundActionKind{InboundRespondFetchCatalogPage}, nil},
-		{"catalog_page", &Message{Type: MessageCatalogPage, PeerID: peerID, CatalogPage: &CatalogPage{}}, []InboundActionKind{InboundPostSessionEvent}, &CatalogPageReceivedEvent{}},
+		{"catalog_page", &Message{Type: MessageCatalogPage, PeerID: peerID, CatalogPage: &corestate.CatalogPage{}}, []InboundActionKind{InboundPostSessionEvent}, &CatalogPageReceivedEvent{}},
 		{"announce", &Message{Type: MessageAnnounce, PeerID: peerID}, []InboundActionKind{InboundHandleAnnounce}, nil},
 		{"object_chunk", &Message{Type: MessageObjectChunk, PeerID: peerID}, []InboundActionKind{InboundHandleObjectChunk}, nil},
 		{"object_chunk_nack", &Message{Type: MessageObjectChunkNACK, PeerID: peerID}, []InboundActionKind{InboundHandleObjectChunkNACK}, nil},
@@ -73,7 +75,7 @@ func TestPlanInboundPacketIgnoresInvalidAndUnsolicitedPullResults(t *testing.T) 
 		{Type: MessagePong, PeerID: peerID, Pong: &Pong{}},
 		{Type: MessageFetchZone, PeerID: peerID},
 		{Type: MessageFetchCatalogPage, PeerID: peerID},
-		{Type: MessageCatalogPage, PeerID: peerID, CatalogPage: &CatalogPage{}},
+		{Type: MessageCatalogPage, PeerID: peerID, CatalogPage: &corestate.CatalogPage{}},
 		{Type: MessageObjectChunk, PeerID: peerID},
 		{Type: MessageType("unknown"), PeerID: peerID},
 	}

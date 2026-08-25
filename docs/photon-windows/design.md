@@ -90,9 +90,10 @@ pkg/core + pkg/crypto + pkg/routing + pkg/transport/ipsec
   reusable Photon verified facts and transport record model
 ```
 
-Gossip 不做 Windows 分支。Linux daemon 与 Photon Windows 直接链接同一个
-`pkg/core/gossip`，共享 wire message、catalog、object-pull、chunk、quota、`Snapshot` 和
-`ApplySnapshot`。Windows 只注入 datagram/network adapter；不得复制一份协议源码到
+Gossip 不做 Windows 分支。`pkg/core/state` 统一拥有 verified snapshot、zone digest、catalog DTO/
+root/diff/projection 和 `ApplySnapshot`；`pkg/core/gossip` 直接引用这些 DTO，统一拥有 wire message、
+依赖实际 wire-size 的 catalog page 装箱、object-pull、chunk 与 quota。Linux daemon 与 Photon Windows
+直接链接同一组公共包，Windows 只注入 datagram/network adapter；不得复制协议源码到
 `internal/photonwindows`，也不得引入 Windows 专属 snapshot 或“精简 gossip”语义。
 每 peer 无 I/O 的同步 FSM 也位于 `pkg/core/gossip`；Linux daemon 和 Photon Windows 直接
 引用公共事件、action 与状态机，不在各自入口保留类型别名或转发函数。
@@ -110,10 +111,11 @@ nil payload 的 fail-closed 行为；Linux/Windows executor 只执行 action 所
 Read-only fetch 分类与 Ping response message planning 同样共享：公共逻辑固定 responder 标签、
 catalog-root equality，以及 Pong 后按需请求 catalog page 的顺序；executor 负责读取本地 summary、
 观测和实际发送。
-`gossip.Engine` 是平台无关的 single-writer orchestration root，拥有 per-peer session registry、
-pending announce hint、bounded `SyncEvent` queue 和 protocol timers。共享 `TimerClock` 固定 timer
-replace/cancel、stale 防护、背压和 stop 语义。Linux daemon 与 Photon Windows 都把共享 receive
-loop 产出的 verified packet 交给 Engine，再执行它返回的 action。
+`gossip.Engine` 是同步 FSM/session registry：拥有 per-peer session 与 pending announce hint，但不拥有
+event queue、timer 资源、数据库或平台副作用。公共 `host.Runtime` 拥有 bounded event queue 和单
+heap/wakeup Scheduler；timer policy/期限仍由 gossip session action 决定，Scheduler 只统一执行
+replace/cancel、generation stale 防护、背压和 stop。Linux daemon 与 Photon Windows 都把共享 receive
+loop 产出的 verified packet 注入同一 HostRuntime，再按相同顺序执行 Engine 返回的 action。
 
 因此平台注入边界不只有 UDP：至少还包括 timer clock、verified state projection、snapshot
 apply/object-pull completion，以及 send/persistence/log effect executor。公共 gossip 不 bind socket、
@@ -122,9 +124,9 @@ adapter 不泄漏进状态机。
 UDP object chunk assembly、quiet-period NACK 和 sent-chunk repair cache 也复用
 `pkg/core/gossip` 的同一实现。共享策略固定 object/hash/metadata 校验、per-peer inflight、
 repair rounds、NACK index、TTL 和内存 byte 上限；Linux/Windows executor 只负责实际发送
-NACK/chunk 以及将完整对象交回 `ApplySnapshot`。
+NACK/chunk 以及将完整对象交回 `state.ApplySnapshot`。
 Datagram announce planning、wire-size/MTU budget 计算和 zone snapshot chunk packing 也位于
-同一个包。它统一排序、oversized 分类、object/root hash 与 chunk metadata；平台 executor
+gossip。它直接使用 state 的 `ZoneRoot`，统一排序、oversized 分类、object/root hash 与 chunk metadata；平台 executor
 只提供随机 transfer ID，并承担 sent cache、UDP send 和日志副作用。
 
 portable core 不得：

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -173,7 +173,7 @@ func (s *DaemonStateStore) snapshotApplyWorkspace() (*stateFile, uint64) {
 // ZoneDigests returns a detached digest projection of the committed state.
 // It keeps the state pointer private and avoids cloning the complete Network
 // for callers that only need its gossip digest.
-func (s *DaemonStateStore) ZoneDigests() []gossip.ZoneDigest {
+func (s *DaemonStateStore) ZoneDigests() []corestate.ZoneDigest {
 	if s == nil {
 		return nil
 	}
@@ -182,7 +182,7 @@ func (s *DaemonStateStore) ZoneDigests() []gossip.ZoneDigest {
 	if s.committed == nil {
 		return nil
 	}
-	return gossip.ZoneDigests(s.committed.Network)
+	return corestate.ZoneDigests(s.committed.Network)
 }
 
 func (s *DaemonStateStore) Meta() daemonStateStoreMeta {
