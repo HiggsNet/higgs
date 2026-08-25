@@ -49,7 +49,7 @@ func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays [
 	})
 }
 
-func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) {
+func (d *DaemonService) completeSyncSession(session *gossip.SyncSession, changed bool) {
 	if session == nil {
 		return
 	}
@@ -147,7 +147,7 @@ func publishSOCKS5ServiceWithRuntime(rt *Runtime, region, address string, port u
 	return publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: region, Address: address, Port: port}})
 }
 
-func (d *DaemonService) executeSyncActions(ctx context.Context, session *SyncSession, actions []SyncAction) bool {
+func (d *DaemonService) executeSyncActions(ctx context.Context, session *gossip.SyncSession, actions []gossip.SyncAction) bool {
 	return d.executeSyncActionsWithMutations(ctx, session, actions, nil)
 }
 

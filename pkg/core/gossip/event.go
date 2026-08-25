@@ -1,0 +1,53 @@
+package gossip
+
+import "fmt"
+
+// SyncEventName returns the stable diagnostic name for a session event.
+func SyncEventName(event SyncEvent) string {
+	switch event.(type) {
+	case *SyncTimerEvent:
+		return "sync_timer"
+	case *PongReceivedEvent:
+		return "pong"
+	case *CatalogSummaryReceivedEvent:
+		return "catalog_summary"
+	case *CatalogPageReceivedEvent:
+		return "catalog_page"
+	case *CatalogPageTimeoutEvent:
+		return "catalog_page_timeout"
+	case *RoundTimeoutEvent:
+		return "round_timeout"
+	case *ObjectPullResultEvent:
+		return "object_pull_result"
+	case *ObjectChunkEvent:
+		return "object_chunk"
+	default:
+		return fmt.Sprintf("%T", event)
+	}
+}
+
+// SyncEventPeerID returns the peer owning a session event. Demux-only packet
+// events intentionally return an empty ID because they have not been decoded
+// into a session event yet.
+func SyncEventPeerID(event SyncEvent) string {
+	switch event := event.(type) {
+	case *SyncTimerEvent:
+		return event.PeerID
+	case *PongReceivedEvent:
+		return event.PeerID
+	case *CatalogSummaryReceivedEvent:
+		return event.PeerID
+	case *CatalogPageReceivedEvent:
+		return event.PeerID
+	case *CatalogPageTimeoutEvent:
+		return event.PeerID
+	case *RoundTimeoutEvent:
+		return event.PeerID
+	case *ObjectPullResultEvent:
+		return event.PeerID
+	case *ObjectChunkEvent:
+		return event.PeerID
+	default:
+		return ""
+	}
+}

@@ -24,9 +24,9 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
-	service.syncSessions[peerID] = NewSyncSession(peerID)
+	service.syncSessions[peerID] = gossip.NewSyncSession(peerID)
 
-	if changed := service.handleSyncEvent(context.Background(), &CatalogSummaryReceivedEvent{
+	if changed := service.handleSyncEvent(context.Background(), &gossip.CatalogSummaryReceivedEvent{
 		PeerID: peerID,
 		Summary: &gossip.CatalogSummary{
 			CatalogRoot: []byte{0x21, 0x22},
@@ -50,7 +50,7 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	if stats.LastCatalogRootHex != "2122" || stats.LastCatalogZoneCount != 2 || stats.LastCatalogCursor != "next-page" {
 		t.Fatalf("catalog stats = %+v, want committed summary", stats)
 	}
-	if peerState.ActivePullState != string(SyncSessionCatalogDiffing) || peerState.ActivePullLastEvent != "catalog_summary" {
+	if peerState.ActivePullState != string(gossip.SyncSessionCatalogDiffing) || peerState.ActivePullLastEvent != "catalog_summary" {
 		t.Fatalf("active pull = state %q event %q, want committed catalog diffing summary", peerState.ActivePullState, peerState.ActivePullLastEvent)
 	}
 	if peerState.DatagramStats != nil {
@@ -70,13 +70,13 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
-	service.syncSessions[peerID] = NewSyncSession(peerID)
+	service.syncSessions[peerID] = gossip.NewSyncSession(peerID)
 
 	state.Lock()
 	unlock := state.Unlock
 	done := make(chan struct{})
 	go func() {
-		service.handleSyncEvent(context.Background(), &CatalogSummaryReceivedEvent{
+		service.handleSyncEvent(context.Background(), &gossip.CatalogSummaryReceivedEvent{
 			PeerID: peerID,
 			Summary: &gossip.CatalogSummary{
 				CatalogRoot: []byte{0x31, 0x32},
@@ -100,7 +100,7 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	if !ok || observed.DatagramStats == nil || observed.DatagramStats.LastCatalogRootHex != "3132" {
 		t.Fatalf("catalog stats = %+v, want observability summary", observed.DatagramStats)
 	}
-	if peerState.ActivePullState != string(SyncSessionCatalogDiffing) {
+	if peerState.ActivePullState != string(gossip.SyncSessionCatalogDiffing) {
 		t.Fatalf("active pull state = %q, want catalog diffing", peerState.ActivePullState)
 	}
 }
@@ -262,11 +262,11 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	session := NewSyncSession("node-b.catofes.")
+	session := gossip.NewSyncSession("node-b.catofes.")
 	state.Lock()
 	unlock := state.Unlock
-	changed := service.executeSyncActions(context.Background(), session, []SyncAction{
-		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
+	changed := service.executeSyncActions(context.Background(), session, []gossip.SyncAction{
+		gossip.ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
 	})
 	unlock()
 	if !changed {
@@ -302,7 +302,7 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	session := NewSyncSession("node-b.catofes.")
+	session := gossip.NewSyncSession("node-b.catofes.")
 	beforeRevision := service.StateStore.Meta().Revision
 	var beforeRoot, beforeParent, beforeChild *zone.ZoneState
 	readCommittedForTest(service.StateStore, func(committed *stateFile) {
@@ -311,10 +311,10 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 		beforeChild = committed.Network.Zones["node-b.catofes."]
 	})
 
-	changed := service.executeSyncActions(context.Background(), session, []SyncAction{
-		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: validParent},
-		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: invalidParent},
-		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: validChild},
+	changed := service.executeSyncActions(context.Background(), session, []gossip.SyncAction{
+		gossip.ApplySnapshotAction{PeerID: session.PeerID, Snapshot: validParent},
+		gossip.ApplySnapshotAction{PeerID: session.PeerID, Snapshot: invalidParent},
+		gossip.ApplySnapshotAction{PeerID: session.PeerID, Snapshot: validChild},
 	})
 	if !changed {
 		t.Fatal("executeSyncActions changed = false, want partial success")
@@ -349,7 +349,7 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 }
 
 func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
-	udpChunkAssemblies = newChunkAssemblyStore()
+	udpChunkAssemblies = gossip.NewChunkAssemblyStore()
 	sourceState, _ := buildTestNetworkState(t)
 	snapshot, err := gossip.Snapshot(sourceState.Network, "catofes.")
 	if err != nil {
@@ -440,7 +440,7 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 }
 
 func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
-	udpChunkAssemblies = newChunkAssemblyStore()
+	udpChunkAssemblies = gossip.NewChunkAssemblyStore()
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2240, 0)
 	rt := &Runtime{

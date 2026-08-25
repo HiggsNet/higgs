@@ -76,3 +76,30 @@ func TestCatalogPageForDigestsFailsClosedForOversizedEntry(t *testing.T) {
 		t.Fatalf("CatalogPageForDigests err=%v, want ErrCatalogPageTooLarge", err)
 	}
 }
+
+func TestCatalogSyncMessagesFitDatagramBudget(t *testing.T) {
+	var digests []ZoneDigest
+	for i := range 80 {
+		digests = append(digests, ZoneDigest{
+			Zone:     zone.ZonePath("node-" + string(rune('a'+i%26)) + "-" + string(rune('a'+i/26)) + ".catofes."),
+			RootHash: bytes.Repeat([]byte{byte(i)}, 32),
+		})
+	}
+	summary := &CatalogSummary{CatalogRoot: CatalogRoot(digests), ZoneCount: len(digests)}
+	if size := MessageWireSize(&Message{Type: MessagePing, Ping: &Ping{Summary: summary}}); size > DefaultDatagramBudget {
+		t.Fatalf("catalog summary ping size=%d exceeds %d", size, DefaultDatagramBudget)
+	}
+	for cursor := ""; ; {
+		page, err := CatalogPageForDigests(digests, cursor, DefaultDatagramBudget)
+		if err != nil {
+			t.Fatalf("CatalogPageForDigests(%q): %v", cursor, err)
+		}
+		if size := MessageWireSize(&Message{Type: MessageCatalogPage, CatalogPage: page}); size > DefaultDatagramBudget {
+			t.Fatalf("catalog page size=%d exceeds %d", size, DefaultDatagramBudget)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+}

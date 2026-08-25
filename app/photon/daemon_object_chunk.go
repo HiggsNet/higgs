@@ -51,7 +51,7 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits gossip
 
 	pullLimits := limits
 	pullLimits.MaxBytes = gossip.MaxChunkObjectBytes
-	result, applied, err := d.applySyncSnapshotAction(message.PeerID, ApplySnapshotAction{
+	result, applied, err := d.applySyncSnapshotAction(message.PeerID, gossip.ApplySnapshotAction{
 		PeerID:        message.PeerID,
 		Snapshot:      snapshot,
 		RelaxedLimits: true,

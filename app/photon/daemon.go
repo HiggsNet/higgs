@@ -53,9 +53,9 @@ type DaemonService struct {
 	metadataCheckpoint     metadataCheckpointState
 	metadataCheckpointSave func() error
 
-	syncSessions      map[string]*SyncSession
+	syncSessions      map[string]*gossip.SyncSession
 	pendingSyncHints  map[string]bool
-	syncEvents        chan SyncEvent
+	syncEvents        chan gossip.SyncEvent
 	objectPullResults chan ObjectPullResult
 	objectPullPool    *objectPullPool
 	timerManager      *TimerManager
@@ -188,9 +188,9 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		d.routingLastRunUnix.Store(state.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
-	d.syncSessions = make(map[string]*SyncSession)
+	d.syncSessions = make(map[string]*gossip.SyncSession)
 	d.pendingSyncHints = make(map[string]bool)
-	d.syncEvents = make(chan SyncEvent, 64)
+	d.syncEvents = make(chan gossip.SyncEvent, 64)
 	d.objectPullResults = make(chan ObjectPullResult, 64)
 	d.objectPullPool = newObjectPullPool(d.objectPullResults, 0)
 	d.timerManager = NewTimerManager(NewRealClock(), d.syncEvents)
@@ -277,7 +277,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, func(c, e string, f map[string]any) { d.logWarn(c, e, f) })
+	packetCh, stopRecv := gossip.StartPacketReceiver(ctx, transport, gossip.DefaultPacketReceiveBuffer, func(err error) {
+		d.logWarn("transport", "receive_failed", map[string]any{"error": err})
+	})
 	defer stopRecv()
 	objectPullListener, err := startObjectPullServer(d)
 	if err != nil {

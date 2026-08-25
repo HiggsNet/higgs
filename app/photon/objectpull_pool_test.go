@@ -85,7 +85,7 @@ func TestObjectPullPoolReturnsErrorForUnreachable(t *testing.T) {
 	}
 }
 
-// Ensure ObjectPullResult can be mapped to SyncEvent ObjectPullResultEvent.
+// Ensure ObjectPullResult can be mapped to gossip.ObjectPullResultEvent.
 func TestObjectPullResultMapsToSyncEvent(t *testing.T) {
 	res := ObjectPullResult{
 		PeerID:   "peer-a",
@@ -93,9 +93,9 @@ func TestObjectPullResultMapsToSyncEvent(t *testing.T) {
 		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
 	}
 	ev := objectPullResultToEvent(res)
-	ore, ok := ev.(*ObjectPullResultEvent)
+	ore, ok := ev.(*gossip.ObjectPullResultEvent)
 	if !ok {
-		t.Fatalf("expected ObjectPullResultEvent, got %T", ev)
+		t.Fatalf("expected gossip.ObjectPullResultEvent, got %T", ev)
 	}
 	if ore.PeerID != res.PeerID || ore.Zone != res.Zone {
 		t.Fatalf("event mismatch: %+v", ore)

@@ -445,35 +445,35 @@ func (s *DaemonStateStore) filteredCatalogProjection(peerID string, page *gossip
 	return gossip.ZoneDigests(s.committed.Network), filterRemoteCatalogPage(s.committed, peerID, page, now)
 }
 
-func (s *DaemonStateStore) fetchZonePlanProjection(path zone.ZonePath, budget int, now time.Time) (snapshotDatagramPlan, error) {
+func (s *DaemonStateStore) fetchZonePlanProjection(path zone.ZonePath, budget int, now time.Time) (gossip.DatagramPlan, error) {
 	if s == nil {
-		return snapshotDatagramPlan{}, nil
+		return gossip.DatagramPlan{}, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.committed == nil || s.committed.Network == nil {
-		return snapshotDatagramPlan{}, nil
+		return gossip.DatagramPlan{}, nil
 	}
 	if s.committed.Network.Zones[path] == nil {
-		return snapshotDatagramPlan{}, &zoneNotFoundProjectionError{path: path}
+		return gossip.DatagramPlan{}, &zoneNotFoundProjectionError{path: path}
 	}
-	return planSnapshotDatagrams(s.committed.Network, []zone.ZonePath{path}, budget, now), nil
+	return gossip.PlanSnapshotDatagrams(s.committed.Network, []zone.ZonePath{path}, budget, now), nil
 }
 
-func (s *DaemonStateStore) fetchZoneChunkProjection(path zone.ZonePath, budget int, now time.Time) (snapshotDatagramPlan, *gossip.ZoneSnapshot, error) {
+func (s *DaemonStateStore) fetchZoneChunkProjection(path zone.ZonePath, budget int, now time.Time) (gossip.DatagramPlan, *gossip.ZoneSnapshot, error) {
 	if s == nil {
-		return snapshotDatagramPlan{}, nil, nil
+		return gossip.DatagramPlan{}, nil, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.committed == nil || s.committed.Network == nil {
-		return snapshotDatagramPlan{}, nil, nil
+		return gossip.DatagramPlan{}, nil, nil
 	}
 	network := s.committed.Network
 	if network.Zones[path] == nil {
-		return snapshotDatagramPlan{}, nil, &zoneNotFoundProjectionError{path: path}
+		return gossip.DatagramPlan{}, nil, &zoneNotFoundProjectionError{path: path}
 	}
-	plan := planSnapshotDatagrams(network, []zone.ZonePath{path}, budget, now)
+	plan := gossip.PlanSnapshotDatagrams(network, []zone.ZonePath{path}, budget, now)
 	if network.IsZoneRevoked(path, now) {
 		return plan, nil, nil
 	}

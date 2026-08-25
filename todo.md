@@ -121,21 +121,29 @@ authorization 和 transport records 作为可信事实来源。
   record、revocation 和有效期后才发布 detached `StateSnapshot`；篡改 record、错误 root、
   revoked managed zone 已有负向测试。
 - [x] 将原先位于 Linux `app/photon/sync_session.go` 的无 I/O per-peer gossip FSM 与完整单测
-  原样抽到现有 `pkg/core/gossip` 公共包；Linux 通过类型别名继续使用同一状态机，Windows
-  compile guard 覆盖同一包。Linux event loop、bbolt commit、日志仍留在 composition layer，未把
-  Linux 专属副作用错误抽进公共协议包。
+  原样抽到现有 `pkg/core/gossip` 公共包；Linux 与 Windows 直接引用同一状态机，Windows
+  compile guard 覆盖同一包。Linux event loop、bbolt commit、日志仍留在 composition layer，
+  未把 Linux 专属副作用错误抽进公共协议包。
 - [x] 将 `gossip_recv.go` 的有界 receive loop 抽到现有 `pkg/core/gossip`：公共实现只依赖
   `PacketReceiver.Receive/Close`，固定 bounded backpressure、timeout/close 静默、普通错误
-  回调后继续和幂等 stop/资源 ownership；Linux 文件降为日志适配薄层。memory contract tests
-  不需要 socket 权限，Windows 后续可直接注入自己的 receiver。
+  回调后继续和幂等 stop/资源 ownership；Linux composition root 直接调用公共 API 并就地映射
+  日志。memory contract tests 不需要 socket 权限，Windows 后续可直接注入自己的 receiver。
 - [x] 将 `packet_demux.go` 的 active-session/unsolicited classifier 与事件类型抽到现有
-  `pkg/core/gossip`；Linux 文件只保留类型别名和一行兼容调用。公共测试覆盖 active hit、
-  miss、nil packet/message 和 nil session entry，classifier 不解释 message type，也不持有
-  daemon、存储或平台日志依赖。
+  `pkg/core/gossip`；Linux 直接调用公共 classifier，不保留类型别名或转发函数。公共测试覆盖
+  active hit、miss、nil packet/message 和 nil session entry，classifier 不解释 message type，
+  也不持有 daemon、存储或平台日志依赖。
 - [x] 将 chunk assembly、quiet-period NACK、sent-chunk repair cache 与全部 quota/TTL/hash
-  policy 抽到现有 `pkg/core/gossip`；Linux 只保留两个兼容 constructor 和发送/apply 副作用。
+  policy 抽到现有 `pkg/core/gossip`；Linux 直接创建公共 store/cache，只保留发送/apply 副作用。
   原 repair 测试迁入公共包，并补齐 metadata tamper、object hash mismatch、per-peer inflight
   和 cache 输入/输出深拷贝负向测试；Windows 后续不得另写一套 chunk repair。
+- [x] 将 datagram announce planning、wire-size 计算和 zone snapshot chunk packing 抽到现有
+  `pkg/core/gossip`；排序、MTU budget、oversized 分类、object/root hash 和 chunk metadata
+  由 Linux/Windows 共用同一实现。Linux executor 只生成随机 transfer ID、写 repair cache、
+  调用 UDP send 和记录观测事件，所有调用点直接使用公共类型和函数。
+- [x] 删除抽取后遗留在 `app/photon` 的 session alias、packet demux、receive、chunk constructor
+  和 datagram forwarding 五组兼容壳；共享行为测试迁到 `pkg/core/gossip`，daemon timer 测试归位
+  到 timer manager。同步事件名和 peer ID 提取也进入同一公共包，Linux/Windows executor 不再
+  重复维护 event type switch。
 
 ### 10.0 冻结 v1 契约与威胁模型
 

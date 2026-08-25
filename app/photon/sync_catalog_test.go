@@ -39,7 +39,7 @@ func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 	snapshot := &gossip.ZoneSnapshot{Zone: "node-b.catofes.", Authority: state.Network.Zones["node-b.catofes."].Authority, Records: map[string]*zone.Record{"bad": badRecord}}
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, _, err := service.applySyncSnapshotAction("node-b.catofes.", ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err == nil {
+	if _, _, err := service.applySyncSnapshotAction("node-b.catofes.", gossip.ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err == nil {
 		t.Fatal("applySyncSnapshotAction accepted an invalid snapshot")
 	}
 	committed, _ := service.StateStore.Snapshot()
@@ -72,7 +72,7 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, committed, err := service.applySyncSnapshotAction("root-admin", ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err != nil {
+	if _, committed, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err != nil {
 		t.Fatalf("applySyncSnapshotAction(root grant): %v", err)
 	} else if !committed {
 		t.Fatal("root grant snapshot was not committed")
@@ -124,7 +124,7 @@ func TestParentSnapshotRejectsManagedAuthorityRefreshForDifferentKey(t *testing.
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, _, err := service.applySyncSnapshotAction("root-admin", ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err == nil {
+	if _, _, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err == nil {
 		t.Fatal("managed authority refresh accepted a different identity key")
 	}
 

@@ -3,6 +3,8 @@ package main
 import (
 	"sync"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 // Clock abstracts time for testability. The real implementation uses the
@@ -44,7 +46,7 @@ func NewRealClock() Clock { return realClock{} }
 // goroutine that mutate sync state.
 type TimerManager struct {
 	clock    Clock
-	events   chan<- SyncEvent
+	events   chan<- gossip.SyncEvent
 	mu       sync.Mutex
 	timers   map[timerKey]*managedTimer
 	stopped  bool
@@ -65,7 +67,7 @@ type managedTimer struct {
 
 // NewTimerManager creates a timer manager. If clock is nil it uses the real
 // system clock.
-func NewTimerManager(clock Clock, events chan<- SyncEvent) *TimerManager {
+func NewTimerManager(clock Clock, events chan<- gossip.SyncEvent) *TimerManager {
 	if clock == nil {
 		clock = NewRealClock()
 	}
@@ -172,12 +174,12 @@ func (tm *TimerManager) waitAndPost(key timerKey, entry *managedTimer, peerID, k
 	delete(tm.timers, key)
 	tm.mu.Unlock()
 
-	var ev SyncEvent
+	var ev gossip.SyncEvent
 	switch kind {
 	case "round":
-		ev = &RoundTimeoutEvent{PeerID: peerID}
+		ev = &gossip.RoundTimeoutEvent{PeerID: peerID}
 	case "catalog_page":
-		ev = &CatalogPageTimeoutEvent{PeerID: peerID}
+		ev = &gossip.CatalogPageTimeoutEvent{PeerID: peerID}
 	default:
 		return
 	}

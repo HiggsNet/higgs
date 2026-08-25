@@ -54,7 +54,7 @@ func TestSyncStatusAdapterProjectsPeerDiagnostics(t *testing.T) {
 	if peer.PeerID != "node-b.catofes." || peer.ConfiguredAddr != "127.0.0.1:9999" {
 		t.Fatalf("bootstrap peer = %+v", peer)
 	}
-	if peer.SyncFlow.ActivePullState != string(SyncSessionObjectPulling) || peer.SyncFlow.ReadOnlyResponder != 3 {
+	if peer.SyncFlow.ActivePullState != string(gossip.SyncSessionObjectPulling) || peer.SyncFlow.ReadOnlyResponder != 3 {
 		t.Fatalf("sync flow = %+v", peer.SyncFlow)
 	}
 	if peer.DatagramStats.TooLargeDropped != 2 || peer.DatagramStats.DigestOnlyAnnounces != 1 {
@@ -114,7 +114,7 @@ func TestPeerDebugAdapterProjectsRuntimeStats(t *testing.T) {
 	if view.DiscoveredAddr != "127.0.0.1:2000" || view.ObservedAddr != "127.0.0.1:3000" || view.LastUpdateSource != "node-c.catofes." {
 		t.Fatalf("peer endpoint fields = %+v", view)
 	}
-	if view.SyncFlow.ActivePullState != string(SyncSessionObjectPulling) || view.SyncFlow.ActivePullLastEvent != "catalog_page" {
+	if view.SyncFlow.ActivePullState != string(gossip.SyncSessionObjectPulling) || view.SyncFlow.ActivePullLastEvent != "catalog_page" {
 		t.Fatalf("sync flow = %+v", view.SyncFlow)
 	}
 	if view.DatagramStats.TooLargeDropped != 2 || view.DatagramStats.LastTooLargeObject != "record" {
@@ -137,7 +137,7 @@ func diagnosticSyncPeerState(now time.Time) syncPeerState {
 		ObservedUntilUnix:     now.Add(time.Hour).Unix(),
 		ObservedSource:        string(gossip.MessagePing),
 		LastUpdateSource:      "node-c.catofes.",
-		ActivePullState:       string(SyncSessionObjectPulling),
+		ActivePullState:       string(gossip.SyncSessionObjectPulling),
 		ActivePullLastEvent:   "catalog_page",
 		ActivePullUpdatedUnix: now.Unix(),
 		HintAccepted:          2,

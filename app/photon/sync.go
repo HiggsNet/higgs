@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,7 +11,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,7 +34,8 @@ const observedPathMigrationGrace = time.Minute
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
-var udpChunkAssemblies = newChunkAssemblyStore()
+var udpChunkAssemblies = gossip.NewChunkAssemblyStore()
+var udpSentChunkCache = gossip.NewSentChunkCache()
 
 type SyncRuntime struct {
 	App           *Runtime
@@ -303,7 +302,9 @@ func syncServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	packetCh, stopRecv := startGossipPacketReceiver(ctx, transport, logger.Warn)
+	packetCh, stopRecv := gossip.StartPacketReceiver(ctx, transport, gossip.DefaultPacketReceiveBuffer, func(err error) {
+		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
+	})
 	defer stopRecv()
 	service.Sync.Transport = transport
 	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), service.objectPullResponse)
@@ -1320,12 +1321,12 @@ func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 }
 
 type datagramSendDiagnostics struct {
-	Oversized      []oversizedDatagramObject
+	Oversized      []gossip.OversizedDatagramObject
 	ChunkFallbacks int
 }
 
-func sendDetachedSnapshotWithDiagnostics(snapshot *gossip.ZoneSnapshot, plan snapshotDatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
-	diag := datagramSendDiagnostics{Oversized: append([]oversizedDatagramObject(nil), plan.Oversized...)}
+func sendDetachedSnapshotWithDiagnostics(snapshot *gossip.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
+	diag := datagramSendDiagnostics{Oversized: append([]gossip.OversizedDatagramObject(nil), plan.Oversized...)}
 	for _, oversized := range plan.Oversized {
 		if logger != nil && logger.debugEnabled() {
 			logger.Debug("transport", "datagram_too_large", map[string]any{
@@ -1348,37 +1349,13 @@ func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *go
 	if snapshot == nil || transport == nil {
 		return 0, nil
 	}
-	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
-	if err != nil {
-		return 0, err
-	}
-	if len(data) > gossip.MaxChunkObjectBytes {
-		return 0, fmt.Errorf("chunk zone snapshot %s exceeds max %d bytes", snapshot.Zone, gossip.MaxChunkObjectBytes)
-	}
-	chunkSize := maxObjectChunkDataSize(transport.MaxMessageBytes(), transport.PeerID(), snapshot.Zone)
-	if chunkSize <= 0 {
-		return 0, gossip.ErrMessageTooLarge
-	}
-	total := (len(data) + chunkSize - 1) / chunkSize
-	if total <= 0 || total > int(^uint16(0)) {
-		return 0, fmt.Errorf("chunk zone snapshot %s needs invalid chunk count %d", snapshot.Zone, total)
-	}
-	objectHash := sha256.Sum256(data)
-	rootHash := gossip.ZoneRoot(zoneStateFromSnapshot(snapshot))
 	transferID := make([]byte, 16)
 	if _, err := rand.Read(transferID); err != nil {
 		return 0, fmt.Errorf("create chunk transfer id: %w", err)
 	}
-	chunks := make([]*gossip.ObjectChunk, 0, total)
-	for i := range total {
-		start := i * chunkSize
-		end := min(start+chunkSize, len(data))
-		chunks = append(chunks, &gossip.ObjectChunk{
-			TransferID: append([]byte(nil), transferID...),
-			Object:     gossip.ObjectPullZone, Zone: snapshot.Zone,
-			RootHash: append([]byte(nil), rootHash...), ObjectHash: append([]byte(nil), objectHash[:]...),
-			Index: uint16(i), Total: uint16(total), Data: data[start:end],
-		})
+	chunks, err := gossip.BuildZoneSnapshotChunks(snapshot, transport.MaxMessageBytes(), transport.PeerID(), transferID)
+	if err != nil {
+		return 0, err
 	}
 	if !udpSentChunkCache.Put(peerID, transferID, chunks, now) {
 		return 0, errors.New("chunk send cache limits exceeded")
@@ -1395,118 +1372,6 @@ func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *go
 		sent++
 	}
 	return sent, nil
-}
-
-func maxObjectChunkDataSize(budget int, senderID string, path zone.ZonePath) int {
-	if budget <= 0 {
-		return 0
-	}
-	low, high := 1, budget
-	best := 0
-	for low <= high {
-		mid := (low + high) / 2
-		data, err := gossip.MarshalMessage(&gossip.Message{
-			Type:      gossip.MessageObjectChunk,
-			PeerID:    senderID,
-			Nonce:     ^uint64(0),
-			Timestamp: int64(^uint64(0) >> 1),
-			ObjectChunk: &gossip.ObjectChunk{
-				TransferID: make([]byte, 16),
-				Object:     gossip.ObjectPullZone,
-				Zone:       path,
-				RootHash:   make([]byte, 32),
-				ObjectHash: make([]byte, 32),
-				Index:      ^uint16(0) - 1,
-				Total:      ^uint16(0),
-				Data:       make([]byte, mid),
-			},
-		})
-		if err == nil && len(data) <= budget {
-			best = mid
-			low = mid + 1
-			continue
-		}
-		high = mid - 1
-	}
-	return best
-}
-
-type snapshotDatagramPlan struct {
-	Announces []*gossip.Announce
-	Oversized []oversizedDatagramObject
-}
-
-type oversizedDatagramObject struct {
-	Object string
-	Zone   zone.ZonePath
-	Key    string
-	Size   int
-}
-
-func planSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget int, now time.Time) snapshotDatagramPlan {
-	if ns == nil || budget <= 0 {
-		return snapshotDatagramPlan{}
-	}
-	zones = append([]zone.ZonePath(nil), zones...)
-	slices.Sort(zones)
-
-	var digests []gossip.ZoneDigest
-	var oversized []oversizedDatagramObject
-
-	for _, path := range zones {
-		zs := ns.Zones[path]
-		if zs == nil || ns.IsZoneRevoked(path, now) {
-			continue
-		}
-		digest := gossip.ZoneDigest{Zone: path, RootHash: gossip.ZoneRoot(zs)}
-		digestSize := announceWireSize(&gossip.Announce{Zones: []gossip.ZoneDigest{digest}})
-		if digestSize > budget {
-			oversized = append(oversized, oversizedDatagramObject{Object: "announce_digest", Zone: path, Size: digestSize})
-			continue
-		}
-		digests = append(digests, digest)
-	}
-
-	var announces []*gossip.Announce
-	announces = append(announces, packDigestAnnounces(digests, budget)...)
-	return snapshotDatagramPlan{Announces: announces, Oversized: oversized}
-}
-
-func packDigestAnnounces(digests []gossip.ZoneDigest, budget int) []*gossip.Announce {
-	var out []*gossip.Announce
-	var current []gossip.ZoneDigest
-	for _, digest := range digests {
-		next := append(append([]gossip.ZoneDigest(nil), current...), digest)
-		if len(current) == 0 && announceWireSize(&gossip.Announce{Zones: next}) > budget {
-			continue
-		}
-		if len(current) > 0 && announceWireSize(&gossip.Announce{Zones: next}) > budget {
-			out = append(out, &gossip.Announce{Zones: current})
-			current = []gossip.ZoneDigest{digest}
-			continue
-		}
-		current = next
-	}
-	if len(current) > 0 {
-		out = append(out, &gossip.Announce{Zones: current})
-	}
-	return out
-}
-
-func announceWireSize(announce *gossip.Announce) int {
-	size, err := gossip.WireEncodeSize(&gossip.Message{Type: gossip.MessageAnnounce, Announce: announce})
-	if err != nil {
-		return 1 << 30
-	}
-	return size
-}
-
-func messageWireSize(msg *gossip.Message) int {
-	size, err := gossip.WireEncodeSize(msg)
-	if err != nil {
-		return 1 << 30
-	}
-	return size
 }
 
 func recordDatagramTooLarge(store *observability.PeerObservabilityStore, peerID, direction, object string, zoneName zone.ZonePath, key string, size, limit int, now time.Time) {

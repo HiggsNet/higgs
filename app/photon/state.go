@@ -550,7 +550,7 @@ func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time)
 	state.SyncPeers[peerID] = peerState
 }
 
-func recordSyncActivePull(state *stateFile, peerID, event string, session *SyncSession, now time.Time) {
+func recordSyncActivePull(state *stateFile, peerID, event string, session *gossip.SyncSession, now time.Time) {
 	if state == nil || peerID == "" {
 		return
 	}
