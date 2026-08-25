@@ -8,10 +8,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-type unknownSyncEvent struct{}
-
-func (*unknownSyncEvent) SyncEventMarker() {}
-
 func TestSyncSessionIdleToPingSent(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
@@ -132,7 +128,7 @@ func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 		t.Fatalf("expected state summary_sent, got %s", s.State)
 	}
 
-	actions, err := s.OnEvent(&unknownSyncEvent{}, now.Add(5*time.Millisecond))
+	actions, err := s.OnEvent(&PacketEvent{}, now.Add(5*time.Millisecond))
 	if err == nil {
 		t.Fatal("PacketEvent unexpectedly entered SyncSession")
 	}

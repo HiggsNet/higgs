@@ -96,6 +96,17 @@ Gossip 不做 Windows 分支。Linux daemon 与 Photon Windows 直接链接同�
 `internal/photonwindows`，也不得引入 Windows 专属 snapshot 或“精简 gossip”语义。
 每 peer 无 I/O 的同步 FSM 也位于 `pkg/core/gossip`；Linux daemon 通过兼容别名执行其
 action，Photon Windows 后续直接调用同一状态机。
+有界 packet receive loop 同样位于 `pkg/core/gossip`，只依赖 `PacketReceiver` 的
+`Receive/Close` capability。Linux `Transport` 与未来 Windows adapter 共用该 loop；默认
+队列为 64，backpressure 会暂停下一次 receive，不创建 per-packet goroutine。stop 拥有并
+关闭 receiver，以解除不感知 context 的阻塞读取。
+active-session/unsolicited packet classifier 也位于同一 `pkg/core/gossip`；它只按已验证
+message 的 `PeerID` 查询当前 `SyncSession` map，不解释 message type。Linux 与 Windows 的
+executor 分别处理 responder、状态提交和平台日志，不能把这些副作用放回 classifier。
+UDP object chunk assembly、quiet-period NACK 和 sent-chunk repair cache 也复用
+`pkg/core/gossip` 的同一实现。共享策略固定 object/hash/metadata 校验、per-peer inflight、
+repair rounds、NACK index、TTL 和内存 byte 上限；Linux/Windows executor 只负责实际发送
+NACK/chunk 以及将完整对象交回 `ApplySnapshot`。
 
 portable core 不得：
 

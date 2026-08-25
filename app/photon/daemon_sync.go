@@ -493,7 +493,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) bo
 	}
 	oldState := session.State
 	if _, ok := event.(*RoundTimeoutEvent); ok {
-		udpChunkAssemblies.dropPeer(peerID)
+		udpChunkAssemblies.DropPeer(peerID)
 	}
 	actions, err := session.OnEvent(event, d.Sync.now())
 	if err != nil {

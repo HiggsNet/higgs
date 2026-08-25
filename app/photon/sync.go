@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
@@ -34,36 +33,10 @@ const maxRelayFanoutPerUpdate = 8
 const rejectedDigestTTL = 10 * time.Minute
 const observedPathTTL = 3 * time.Minute
 const observedPathMigrationGrace = time.Minute
-const chunkAssemblyTTL = 2 * time.Minute
-const maxChunkObjectBytes = 8 << 20
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
 var udpChunkAssemblies = newChunkAssemblyStore()
-
-type chunkAssemblyStore struct {
-	mu      sync.Mutex
-	entries map[string]*chunkAssembly
-}
-
-type chunkAssembly struct {
-	peerID       string
-	object       gossip.ObjectPullRequestType
-	zone         zone.ZonePath
-	key          string
-	version      uint64
-	rootHash     []byte
-	objectHash   []byte
-	transferID   []byte
-	total        uint16
-	chunks       [][]byte
-	received     int
-	bytes        int
-	created      time.Time
-	updated      time.Time
-	repairRounds int
-	repairTimer  *time.Timer
-}
 
 type SyncRuntime struct {
 	App           *Runtime
@@ -130,154 +103,6 @@ func (sr *SyncRuntime) logger() *appLogger {
 		logger.now = sr.App.Now
 	}
 	return logger
-}
-
-func newChunkAssemblyStore() *chunkAssemblyStore {
-	return &chunkAssemblyStore{entries: make(map[string]*chunkAssembly)}
-}
-
-func chunkAssemblyKey(peerID string, chunk *gossip.ObjectChunk) string {
-	if chunk == nil {
-		return ""
-	}
-	return peerID + "|" + hex.EncodeToString(chunk.TransferID)
-}
-
-func (s *chunkAssemblyStore) add(peerID string, chunk *gossip.ObjectChunk, now time.Time) ([]byte, bool, error) {
-	if s == nil || chunk == nil {
-		return nil, false, errors.New("chunk assembly input is nil")
-	}
-	key := chunkAssemblyKey(peerID, chunk)
-	if key == "" {
-		return nil, false, errors.New("chunk assembly key is empty")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pruneLocked(now)
-	entry := s.entries[key]
-	if entry == nil {
-		peerInflight := 0
-		for _, candidate := range s.entries {
-			if candidate != nil && candidate.peerID == peerID {
-				peerInflight++
-			}
-		}
-		if peerInflight >= maxChunkPeerInflight {
-			return nil, false, errors.New("peer chunk inflight limit exceeded")
-		}
-		entry = &chunkAssembly{
-			peerID:     peerID,
-			object:     chunk.Object,
-			zone:       chunk.Zone,
-			key:        chunk.Key,
-			version:    chunk.Version,
-			rootHash:   append([]byte(nil), chunk.RootHash...),
-			objectHash: append([]byte(nil), chunk.ObjectHash...),
-			transferID: append([]byte(nil), chunk.TransferID...),
-			total:      chunk.Total,
-			chunks:     make([][]byte, chunk.Total),
-			created:    now,
-		}
-		s.entries[key] = entry
-	}
-	if entry.total != chunk.Total || entry.object != chunk.Object || entry.zone != chunk.Zone || entry.key != chunk.Key || entry.version != chunk.Version || !bytes.Equal(entry.transferID, chunk.TransferID) || !bytes.Equal(entry.objectHash, chunk.ObjectHash) || !bytes.Equal(entry.rootHash, chunk.RootHash) {
-		delete(s.entries, key)
-		return nil, false, errors.New("chunk metadata changed during assembly")
-	}
-	if chunk.Index >= entry.total {
-		return nil, false, errors.New("chunk index out of range")
-	}
-	if entry.chunks[chunk.Index] == nil {
-		entry.chunks[chunk.Index] = append([]byte(nil), chunk.Data...)
-		entry.received++
-		entry.bytes += len(chunk.Data)
-		if entry.bytes > maxChunkObjectBytes {
-			delete(s.entries, key)
-			return nil, false, fmt.Errorf("chunk object exceeds max %d bytes", maxChunkObjectBytes)
-		}
-	}
-	entry.updated = now
-	if entry.received != int(entry.total) {
-		return nil, false, nil
-	}
-	if entry.repairTimer != nil {
-		entry.repairTimer.Stop()
-	}
-	data := make([]byte, 0, entry.bytes)
-	for _, part := range entry.chunks {
-		if part == nil {
-			return nil, false, nil
-		}
-		data = append(data, part...)
-	}
-	hash := sha256.Sum256(data)
-	if !bytes.Equal(hash[:], entry.objectHash) {
-		delete(s.entries, key)
-		return nil, false, errors.New("chunk object hash mismatch")
-	}
-	delete(s.entries, key)
-	return data, true, nil
-}
-
-func (s *chunkAssemblyStore) scheduleRepair(peerID string, chunk *gossip.ObjectChunk, send func(*gossip.ObjectChunkNACK)) {
-	if s == nil || chunk == nil || send == nil {
-		return
-	}
-	key := chunkAssemblyKey(peerID, chunk)
-	s.mu.Lock()
-	entry := s.entries[key]
-	if entry == nil || entry.received == int(entry.total) || entry.repairRounds >= maxChunkRepairRounds {
-		s.mu.Unlock()
-		return
-	}
-	if entry.repairTimer != nil {
-		entry.repairTimer.Stop()
-	}
-	entry.repairTimer = time.AfterFunc(chunkRepairQuiet, func() {
-		s.mu.Lock()
-		current := s.entries[key]
-		if current == nil || current.received == int(current.total) || current.repairRounds >= maxChunkRepairRounds {
-			s.mu.Unlock()
-			return
-		}
-		missing := missingChunkIndexes(current.chunks, maxChunkNACKIndexes)
-		if len(missing) == 0 {
-			s.mu.Unlock()
-			return
-		}
-		current.repairRounds++
-		transferID := append([]byte(nil), current.transferID...)
-		s.mu.Unlock()
-		send(&gossip.ObjectChunkNACK{TransferID: transferID, Missing: missing})
-	})
-	s.mu.Unlock()
-}
-
-func (s *chunkAssemblyStore) pruneLocked(now time.Time) {
-	for key, entry := range s.entries {
-		if entry == nil || now.Sub(entry.updated) > chunkAssemblyTTL && now.Sub(entry.created) > chunkAssemblyTTL {
-			if entry != nil && entry.repairTimer != nil {
-				entry.repairTimer.Stop()
-			}
-			delete(s.entries, key)
-		}
-	}
-}
-
-func (s *chunkAssemblyStore) dropPeer(peerID string) {
-	if s == nil || peerID == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for key, entry := range s.entries {
-		if entry != nil && entry.peerID == peerID {
-			if entry.repairTimer != nil {
-				entry.repairTimer.Stop()
-			}
-			delete(s.entries, key)
-		}
-	}
 }
 
 func (sr *SyncRuntime) saveStateSnapshotAtRevision(state *stateFile, revision uint64) error {
@@ -1480,7 +1305,7 @@ func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 	if sr == nil || sr.Transport == nil || message == nil || message.ObjectChunkNACK == nil {
 		return nil
 	}
-	chunks := udpSentChunkCache.repair(message.PeerID, message.ObjectChunkNACK, sr.now())
+	chunks := udpSentChunkCache.Repair(message.PeerID, message.ObjectChunkNACK, sr.now())
 	if len(chunks) == 0 {
 		recordDatagramRepairNACK(sr.Observability, message.PeerID, true, sr.now())
 		return nil
@@ -1527,8 +1352,8 @@ func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *go
 	if err != nil {
 		return 0, err
 	}
-	if len(data) > maxChunkObjectBytes {
-		return 0, fmt.Errorf("chunk zone snapshot %s exceeds max %d bytes", snapshot.Zone, maxChunkObjectBytes)
+	if len(data) > gossip.MaxChunkObjectBytes {
+		return 0, fmt.Errorf("chunk zone snapshot %s exceeds max %d bytes", snapshot.Zone, gossip.MaxChunkObjectBytes)
 	}
 	chunkSize := maxObjectChunkDataSize(transport.MaxMessageBytes(), transport.PeerID(), snapshot.Zone)
 	if chunkSize <= 0 {
@@ -1555,7 +1380,7 @@ func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *go
 			Index: uint16(i), Total: uint16(total), Data: data[start:end],
 		})
 	}
-	if !udpSentChunkCache.put(peerID, transferID, chunks, now) {
+	if !udpSentChunkCache.Put(peerID, transferID, chunks, now) {
 		return 0, errors.New("chunk send cache limits exceeded")
 	}
 	sent := 0

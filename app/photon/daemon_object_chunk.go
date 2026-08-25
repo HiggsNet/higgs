@@ -21,14 +21,14 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits gossip
 
 	chunk := message.ObjectChunk
 	now := d.Sync.now()
-	data, complete, err := udpChunkAssemblies.add(message.PeerID, chunk, now)
+	data, complete, err := udpChunkAssemblies.Add(message.PeerID, chunk, now)
 	if err != nil {
 		d.recordObjectChunkRejectedDigest(message.PeerID, chunk, err, now)
 		return err
 	}
 	if !complete {
 		if d.Sync.Transport != nil {
-			udpChunkAssemblies.scheduleRepair(message.PeerID, chunk, func(nack *gossip.ObjectChunkNACK) {
+			udpChunkAssemblies.ScheduleRepair(message.PeerID, chunk, func(nack *gossip.ObjectChunkNACK) {
 				if err := d.Sync.Transport.Send(message.PeerID, &gossip.Message{
 					Type:            gossip.MessageObjectChunkNACK,
 					ObjectChunkNACK: nack,
@@ -50,7 +50,7 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits gossip
 	}
 
 	pullLimits := limits
-	pullLimits.MaxBytes = maxChunkObjectBytes
+	pullLimits.MaxBytes = gossip.MaxChunkObjectBytes
 	result, applied, err := d.applySyncSnapshotAction(message.PeerID, ApplySnapshotAction{
 		PeerID:        message.PeerID,
 		Snapshot:      snapshot,
