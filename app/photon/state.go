@@ -449,16 +449,7 @@ func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.Public
 	if len(trustRoot) == 0 {
 		return nil
 	}
-	root := ns.Zones[zone.RootZone]
-	if root == nil || root.Authority == nil {
-		return errors.New("trusted root public key configured but root authority is missing")
-	}
-	for _, key := range root.Authority.Keys {
-		if equalPublicKey(key.Key, trustRoot) {
-			return nil
-		}
-	}
-	return errors.New("root authority does not match trusted_root_public_key in config.yaml")
+	return photoncrypto.VerifyPinnedRoot(ns, trustRoot)
 }
 
 func equalPublicKey(a, b ed25519.PublicKey) bool {

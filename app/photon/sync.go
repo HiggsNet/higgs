@@ -571,11 +571,8 @@ func syncOnce(peerID string) error {
 		}
 		select {
 		case <-ctx.Done():
-			if session := service.syncSessions[peerID]; session != nil && len(session.pendingZones) > 0 {
-				pending := make([]zone.ZonePath, 0, len(session.pendingZones))
-				for path := range session.pendingZones {
-					pending = append(pending, path)
-				}
+			if session := service.syncSessions[peerID]; session != nil && session.PendingCount() > 0 {
+				pending := session.PendingZones()
 				return &syncPendingZonesError{zones: pending}
 			}
 			return errors.New("sync receive timed out")

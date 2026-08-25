@@ -1,18 +1,21 @@
-package main
+package gossip
 
 import (
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
+
+type unknownSyncEvent struct{}
+
+func (*unknownSyncEvent) SyncEventMarker() {}
 
 func TestSyncSessionIdleToPingSent(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	digests := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
+	digests := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
 	actions, err := s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: digests}, now)
 	if err != nil {
@@ -41,14 +44,14 @@ func TestSyncSessionIdleToPingSent(t *testing.T) {
 func TestSyncSessionPongNoDifferences(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	digests := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
+	digests := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: digests}, now)
 	now = now.Add(100 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: nil,
 	}, now)
 	if err != nil {
@@ -66,14 +69,14 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
+	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: local}, now)
 	now = now.Add(50 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
 	if err != nil {
@@ -95,16 +98,16 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 func TestSyncSessionCatalogSummaryFetchesPages(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	localRoot := gossip.CatalogRoot([]gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
-	remoteRoot := gossip.CatalogRoot([]gossip.ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
+	localRoot := CatalogRoot([]ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
+	remoteRoot := CatalogRoot([]ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &gossip.CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
+		LocalSummary: &CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
 	}, now)
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &gossip.Pong{Summary: &gossip.CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -118,18 +121,18 @@ func TestSyncSessionCatalogSummaryFetchesPages(t *testing.T) {
 func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	localRoot := gossip.CatalogRoot([]gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
-	remoteRoot := gossip.CatalogRoot([]gossip.ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
+	localRoot := CatalogRoot([]ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
+	remoteRoot := CatalogRoot([]ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &gossip.CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
+		LocalSummary: &CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
 	}, now)
 	if s.State != SyncSessionSummarySent {
 		t.Fatalf("expected state summary_sent, got %s", s.State)
 	}
 
-	actions, err := s.OnEvent(&PacketEvent{}, now.Add(5*time.Millisecond))
+	actions, err := s.OnEvent(&unknownSyncEvent{}, now.Add(5*time.Millisecond))
 	if err == nil {
 		t.Fatal("PacketEvent unexpectedly entered SyncSession")
 	}
@@ -142,7 +145,7 @@ func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 
 	actions, err = s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &gossip.Pong{Summary: &gossip.CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 	if err != nil {
 		t.Fatalf("OnEvent(pong): %v", err)
@@ -156,22 +159,22 @@ func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
 func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
-	remote := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
-	root := gossip.CatalogRoot(remote)
+	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := CatalogRoot(remote)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(local), ZoneCount: 1},
+		LocalSummary: &CatalogSummary{CatalogRoot: CatalogRoot(local), ZoneCount: 1},
 	}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &gossip.Pong{Summary: &gossip.CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 
 	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
 		PeerID:       "peer-a",
-		Page:         &gossip.CatalogPage{CatalogRoot: root, Entries: remote},
+		Page:         &CatalogPage{CatalogRoot: root, Entries: remote},
 		LocalEntries: local,
 	}, now.Add(20*time.Millisecond))
 	if err != nil {
@@ -189,22 +192,22 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
-	remote := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
-	root := gossip.CatalogRoot(remote)
+	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := CatalogRoot(remote)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{
 		PeerID:       "peer-a",
-		LocalSummary: &gossip.CatalogSummary{CatalogRoot: gossip.CatalogRoot(local), ZoneCount: 1},
+		LocalSummary: &CatalogSummary{CatalogRoot: CatalogRoot(local), ZoneCount: 1},
 	}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID: "peer-a",
-		Pong:   &gossip.Pong{Summary: &gossip.CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
+		Pong:   &Pong{Summary: &CatalogSummary{CatalogRoot: root, ZoneCount: 1}},
 	}, now.Add(10*time.Millisecond))
 
 	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
 		PeerID:       "peer-a",
-		Page:         &gossip.CatalogPage{CatalogRoot: []byte("wrong-root"), Entries: remote},
+		Page:         &CatalogPage{CatalogRoot: []byte("wrong-root"), Entries: remote},
 		LocalEntries: local,
 	}, now.Add(20*time.Millisecond))
 	if err != nil {
@@ -219,16 +222,16 @@ func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 func TestSyncSessionCatalogPageBeforeTimerDoesNotPanic(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
-	remote := []gossip.ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
-	root := gossip.CatalogRoot(remote)
+	local := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
+	remote := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("remote")}}
+	root := CatalogRoot(remote)
 
 	// A catalog page may arrive for a freshly created session before the
 	// SyncTimerEvent has been processed (e.g. the timer event was dropped
 	// because the event channel was full). The session must not panic.
 	actions, err := s.OnEvent(&CatalogPageReceivedEvent{
 		PeerID:       "peer-a",
-		Page:         &gossip.CatalogPage{CatalogRoot: root, Entries: remote},
+		Page:         &CatalogPage{CatalogRoot: root, Entries: remote},
 		LocalEntries: local,
 	}, now)
 	if err != nil {
@@ -247,7 +250,7 @@ func TestSyncSessionPongMissingZonesStartsObjectPull(t *testing.T) {
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes.", "node-b.catofes."},
 	}, now)
 	if err != nil {
@@ -266,7 +269,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
 	}, now)
 
@@ -279,7 +282,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	actions1, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "catofes.",
-		Snapshot: &gossip.ZoneSnapshot{Zone: "catofes."},
+		Snapshot: &ZoneSnapshot{Zone: "catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -293,7 +296,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	actions2, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -311,7 +314,7 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
 	}, now)
 
@@ -335,7 +338,7 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	actions2, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -353,14 +356,14 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
 
 	actions, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -378,7 +381,7 @@ func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
 
@@ -407,7 +410,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
-		Pong:         &gossip.Pong{},
+		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
 	_, _ = s.OnEvent(&ObjectPullResultEvent{PeerID: "peer-a", Zone: "node-a.catofes.", Err: errors.New("tcp unreachable")}, now)
@@ -415,7 +418,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	actions, err := s.OnEvent(&ObjectChunkEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -447,7 +450,7 @@ func TestSyncSessionRTTAwareTimeouts(t *testing.T) {
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
 	// Simulate a 600ms RTT.
-	_, _ = s.OnEvent(&PongReceivedEvent{PeerID: "peer-a", Pong: &gossip.Pong{}}, now.Add(600*time.Millisecond))
+	_, _ = s.OnEvent(&PongReceivedEvent{PeerID: "peer-a", Pong: &Pong{}}, now.Add(600*time.Millisecond))
 
 	catalogPage := s.catalogPageTimeout()
 	expectedMin := time.Duration(kCatalogPageTimeoutMultiplier) * 600 * time.Millisecond

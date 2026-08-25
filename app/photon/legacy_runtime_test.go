@@ -55,7 +55,7 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 	}
 	peerID := session.PeerID
 	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
-		recordPeerSyncAt(state, peerID, session.lastError, d.Sync.now())
+		recordPeerSyncAt(state, peerID, session.LastError(), d.Sync.now())
 	})
 	d.completeSyncSessionAfterPeerState(session, changed)
 }

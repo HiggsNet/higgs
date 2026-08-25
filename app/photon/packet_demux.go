@@ -23,7 +23,7 @@ type PacketEvent struct {
 	Packet  *gossip.Packet
 }
 
-func (*PacketEvent) isSyncEvent() {}
+func (*PacketEvent) SyncEventMarker() {}
 
 // UnsolicitedPacketEvent is delivered when a UDP packet does not match any
 // active sync session; it is handled by the general packet path.
@@ -31,4 +31,4 @@ type UnsolicitedPacketEvent struct {
 	Packet *gossip.Packet
 }
 
-func (*UnsolicitedPacketEvent) isSyncEvent() {}
+func (*UnsolicitedPacketEvent) SyncEventMarker() {}

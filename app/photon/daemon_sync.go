@@ -501,8 +501,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) bo
 			"peer_id": peerID,
 			"error":   err,
 		})
-		session.State = SyncSessionFailed
-		session.lastError = err
+		session.Fail(err)
 	}
 	eventName := syncEventName(event)
 	eventNow := d.Sync.now()
@@ -517,8 +516,8 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) bo
 			"event":     fmt.Sprintf("%T", event),
 			"old_state": oldState,
 			"new_state": session.State,
-			"pending":   len(session.pendingZones),
-			"inflight":  len(session.objectPullInflight),
+			"pending":   session.PendingCount(),
+			"inflight":  session.InflightCount(),
 		})
 	}
 	changed := d.executeSyncActionsWithMutations(ctx, session, actions, mutations)
@@ -675,7 +674,7 @@ func (b *syncPeerStateMutationBatch) addCompletion(session *SyncSession, now tim
 		return
 	}
 	peerID := session.PeerID
-	lastError := session.lastError
+	lastError := session.LastError()
 	b.add("peer_sync", func(state *stateFile) {
 		recordPeerSyncAt(state, peerID, lastError, now)
 	})
@@ -917,7 +916,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	// Applied object-pull or chunk-fallback snapshots may leave a zone pending
 	// until the FSM sees local state again. Reconcile before sending more I/O.
 	if !session.Done() && stateProjection.loaded {
-		reconcileActions := session.reconcilePendingWithDigests(stateProjection.digests)
+		reconcileActions := session.ReconcilePendingWithDigests(stateProjection.digests)
 		actions = append(actions, reconcileActions...)
 	}
 
@@ -1136,7 +1135,7 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, 
 	d.timerManager.CancelAll(peerID)
 	// Only mark the last-used address as failing for timeout-like errors; do
 	// not penalize the address for internal/event handling failures.
-	if session.lastError != nil && d.Sync.Transport != nil && strings.Contains(session.lastError.Error(), "timeout") {
+	if session.LastError() != nil && d.Sync.Transport != nil && strings.Contains(session.LastError().Error(), "timeout") {
 		if lastAddr := d.Sync.Transport.LastSendAddr(peerID); lastAddr != nil {
 			d.Sync.Transport.RecordAddrFailure(peerID, lastAddr)
 		}

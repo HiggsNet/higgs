@@ -1,4 +1,7 @@
-package main
+// Package gossip contains the platform-neutral per-peer Photon gossip sync
+// state machine. Linux and leaf clients execute its returned actions through
+// their own persistence, timer and transport adapters.
+package gossip
 
 import (
 	"bytes"
@@ -6,7 +9,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -24,7 +26,7 @@ const (
 	SyncSessionFailed         SyncSessionState = "failed"
 )
 
-// RTT-aware timeout defaults. These match docs/new/gossip.md and docs/new/daemon.md.
+// RTT-aware timeout defaults. These match docs/new/md and docs/new/daemon.md.
 const (
 	MinCatalogPageTimeout = 250 * time.Millisecond
 	MinRoundTimeout       = 5 * time.Second
@@ -37,69 +39,69 @@ const (
 
 // SyncEvent is an event delivered to a SyncSession by the daemon event loop.
 type SyncEvent interface {
-	isSyncEvent()
+	SyncEventMarker()
 }
 
 type SyncTimerEvent struct {
 	PeerID       string
-	LocalDigests []gossip.ZoneDigest
-	LocalSummary *gossip.CatalogSummary
+	LocalDigests []ZoneDigest
+	LocalSummary *CatalogSummary
 }
 
-func (*SyncTimerEvent) isSyncEvent() {}
+func (*SyncTimerEvent) SyncEventMarker() {}
 
 type PongReceivedEvent struct {
 	PeerID       string
-	Pong         *gossip.Pong
+	Pong         *Pong
 	MissingZones []zone.ZonePath // populated by the event loop before OnEvent
 }
 
-func (*PongReceivedEvent) isSyncEvent() {}
+func (*PongReceivedEvent) SyncEventMarker() {}
 
 type CatalogSummaryReceivedEvent struct {
 	PeerID  string
-	Summary *gossip.CatalogSummary
+	Summary *CatalogSummary
 }
 
-func (*CatalogSummaryReceivedEvent) isSyncEvent() {}
+func (*CatalogSummaryReceivedEvent) SyncEventMarker() {}
 
 type CatalogPageReceivedEvent struct {
 	PeerID       string
-	Page         *gossip.CatalogPage
-	LocalEntries []gossip.ZoneDigest
+	Page         *CatalogPage
+	LocalEntries []ZoneDigest
 }
 
-func (*CatalogPageReceivedEvent) isSyncEvent() {}
+func (*CatalogPageReceivedEvent) SyncEventMarker() {}
 
 type CatalogPageTimeoutEvent struct {
 	PeerID string
 }
 
-func (*CatalogPageTimeoutEvent) isSyncEvent() {}
+func (*CatalogPageTimeoutEvent) SyncEventMarker() {}
 
 type RoundTimeoutEvent struct {
 	PeerID string
 }
 
-func (*RoundTimeoutEvent) isSyncEvent() {}
+func (*RoundTimeoutEvent) SyncEventMarker() {}
 
 type ObjectPullResultEvent struct {
 	PeerID   string
 	Zone     zone.ZonePath
-	Snapshot *gossip.ZoneSnapshot
+	Snapshot *ZoneSnapshot
 	Err      error
 }
 
-func (*ObjectPullResultEvent) isSyncEvent() {}
+func (*ObjectPullResultEvent) SyncEventMarker() {}
 
 type ObjectChunkEvent struct {
 	PeerID   string
 	Zone     zone.ZonePath
-	Snapshot *gossip.ZoneSnapshot
+	Snapshot *ZoneSnapshot
 	Err      error
 }
 
-func (*ObjectChunkEvent) isSyncEvent() {}
+func (*ObjectChunkEvent) SyncEventMarker() {}
 
 // SyncAction is an action returned by SyncSession.OnEvent for the event loop to execute.
 type SyncAction interface {
@@ -108,8 +110,8 @@ type SyncAction interface {
 
 type SendPingAction struct {
 	PeerID  string
-	Digests []gossip.ZoneDigest
-	Summary *gossip.CatalogSummary
+	Digests []ZoneDigest
+	Summary *CatalogSummary
 }
 
 func (SendPingAction) isSyncAction() {}
@@ -145,7 +147,7 @@ func (StartObjectPullAction) isSyncAction() {}
 
 type ApplySnapshotAction struct {
 	PeerID        string
-	Snapshot      *gossip.ZoneSnapshot
+	Snapshot      *ZoneSnapshot
 	RelaxedLimits bool // set for object-pull / chunk-fallback snapshots
 }
 
@@ -202,7 +204,7 @@ type SyncSession struct {
 	chunkFallbackZones map[zone.ZonePath]bool
 	// expectedDigests maps pending zones to the remote root hash advertised in
 	// the PONG. Used to detect stale or incomplete UDP announces.
-	expectedDigests   map[zone.ZonePath]gossip.ZoneDigest
+	expectedDigests   map[zone.ZonePath]ZoneDigest
 	localCatalogRoot  []byte
 	remoteCatalogRoot []byte
 	lastCatalogCursor string
@@ -223,7 +225,7 @@ func NewSyncSession(peerID string) *SyncSession {
 		pendingZones:       make(map[zone.ZonePath]bool),
 		objectPullInflight: make(map[zone.ZonePath]bool),
 		chunkFallbackZones: make(map[zone.ZonePath]bool),
-		expectedDigests:    make(map[zone.ZonePath]gossip.ZoneDigest),
+		expectedDigests:    make(map[zone.ZonePath]ZoneDigest),
 		estimatedRTT:       InitialRTT,
 	}
 }
@@ -261,7 +263,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.pendingZones = make(map[zone.ZonePath]bool)
 	s.objectPullInflight = make(map[zone.ZonePath]bool)
 	s.chunkFallbackZones = make(map[zone.ZonePath]bool)
-	s.expectedDigests = make(map[zone.ZonePath]gossip.ZoneDigest)
+	s.expectedDigests = make(map[zone.ZonePath]ZoneDigest)
 	s.localCatalogRoot = nil
 	if e.LocalSummary != nil {
 		s.localCatalogRoot = append([]byte(nil), e.LocalSummary.CatalogRoot...)
@@ -315,7 +317,7 @@ func (s *SyncSession) onCatalogSummaryReceived(e *CatalogSummaryReceivedEvent, n
 	return s.handleCatalogSummary(e.PeerID, e.Summary, now)
 }
 
-func (s *SyncSession) handleCatalogSummary(peerID string, summary *gossip.CatalogSummary, now time.Time) ([]SyncAction, error) {
+func (s *SyncSession) handleCatalogSummary(peerID string, summary *CatalogSummary, now time.Time) ([]SyncAction, error) {
 	if summary == nil {
 		return nil, nil
 	}
@@ -327,7 +329,7 @@ func (s *SyncSession) handleCatalogSummary(peerID string, summary *gossip.Catalo
 		s.State = SyncSessionCompleted
 		return []SyncAction{SaveStateAction{Reason: "sync completed after matching catalog summary", Persistence: SyncPersistenceMeta}}, nil
 	}
-	if summary.ZoneCount == 0 || bytes.Equal(summary.CatalogRoot, gossip.CatalogRoot(nil)) {
+	if summary.ZoneCount == 0 || bytes.Equal(summary.CatalogRoot, CatalogRoot(nil)) {
 		s.State = SyncSessionCompleted
 		return []SyncAction{SaveStateAction{Reason: "sync completed after empty catalog summary", Persistence: SyncPersistenceMeta}}, nil
 	}
@@ -359,7 +361,7 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	}
 	s.State = SyncSessionCatalogDiffing
 	var actions []SyncAction
-	for _, diff := range gossip.CatalogDiff(e.LocalEntries, e.Page.Entries) {
+	for _, diff := range CatalogDiff(e.LocalEntries, e.Page.Entries) {
 		s.pendingZones[diff.Zone] = true
 		s.expectedDigests[diff.Zone] = diff
 		if !s.objectPullInflight[diff.Zone] {
@@ -398,7 +400,7 @@ func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAc
 	}, nil
 }
 
-func (s *SyncSession) reconcilePendingWithDigests(digests []gossip.ZoneDigest) []SyncAction {
+func (s *SyncSession) reconcilePendingWithDigests(digests []ZoneDigest) []SyncAction {
 	local := make(map[zone.ZonePath][]byte, len(digests))
 	for _, digest := range digests {
 		local[digest.Zone] = digest.RootHash
@@ -528,6 +530,42 @@ func (s *SyncSession) EstimatedRTT() time.Duration {
 		return InitialRTT
 	}
 	return s.estimatedRTT
+}
+
+// LastError is the terminal error recorded by the state machine, if any.
+func (s *SyncSession) LastError() error {
+	return s.lastError
+}
+
+// PendingCount reports how many advertised zones still need reconciliation.
+func (s *SyncSession) PendingCount() int {
+	return len(s.pendingZones)
+}
+
+// PendingZones returns a detached list of zones not yet reconciled.
+func (s *SyncSession) PendingZones() []zone.ZonePath {
+	out := make([]zone.ZonePath, 0, len(s.pendingZones))
+	for path := range s.pendingZones {
+		out = append(out, path)
+	}
+	return out
+}
+
+// InflightCount reports outstanding object-pull operations.
+func (s *SyncSession) InflightCount() int {
+	return len(s.objectPullInflight)
+}
+
+// ReconcilePendingWithDigests completes pending zones whose verified local
+// digest now matches the peer's advertised digest.
+func (s *SyncSession) ReconcilePendingWithDigests(digests []ZoneDigest) []SyncAction {
+	return s.reconcilePendingWithDigests(digests)
+}
+
+// Fail records an adapter or executor error as a terminal session failure.
+func (s *SyncSession) Fail(err error) {
+	s.State = SyncSessionFailed
+	s.lastError = err
 }
 
 func (s *SyncSession) catalogPageTimeout() time.Duration {
