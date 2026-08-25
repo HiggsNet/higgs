@@ -12,9 +12,8 @@ import (
 func TestSyncSessionIdleToPingSent(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	digests := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
-	actions, err := s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: digests}, now)
+	actions, err := s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
@@ -25,8 +24,8 @@ func TestSyncSessionIdleToPingSent(t *testing.T) {
 	assertActionTypes(t, actions, []string{"SendPingAction", "StartTimerAction"})
 
 	ping := actions[0].(SendPingAction)
-	if len(ping.Digests) != 1 || ping.Digests[0].Zone != "catofes." {
-		t.Fatalf("unexpected ping digests: %+v", ping.Digests)
+	if ping.PeerID != "peer-a" {
+		t.Fatalf("ping peer = %q, want peer-a", ping.PeerID)
 	}
 
 	round := actions[1].(StartTimerAction)
@@ -41,9 +40,8 @@ func TestSyncSessionIdleToPingSent(t *testing.T) {
 func TestSyncSessionPongNoDifferences(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	digests := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: digests}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	now = now.Add(100 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
@@ -66,9 +64,8 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
-	local := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("h1")}}
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: local}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	now = now.Add(50 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
@@ -244,7 +241,7 @@ func TestSyncSessionPongMissingZonesStartsObjectPull(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	actions, err := s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
@@ -263,7 +260,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
@@ -308,7 +305,7 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
@@ -328,7 +325,7 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	if s.State != SyncSessionObjectPulling {
 		t.Fatalf("expected state object_pulling after first error with in-flight pull, got %s", s.State)
 	}
-	assertActionTypes(t, actions1, []string{"SendFetchZoneAction"})
+	assertActionTypes(t, actions1, []string{"SendChunkFallbackAction"})
 
 	// Second pull succeeds. Because a zone needs chunk fallback, we transition
 	// to chunk_fallback instead of completed.
@@ -350,7 +347,7 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
@@ -375,7 +372,7 @@ func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
@@ -393,9 +390,9 @@ func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
 	if s.State != SyncSessionChunkFallback {
 		t.Fatalf("expected state chunk_fallback, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SendFetchZoneAction"})
-	fz := actions[0].(SendFetchZoneAction)
-	if !fz.ChunkFallback || fz.Zone != "node-a.catofes." {
+	assertActionTypes(t, actions, []string{"SendChunkFallbackAction"})
+	fz := actions[0].(SendChunkFallbackAction)
+	if fz.Zone != "node-a.catofes." {
 		t.Fatalf("unexpected fetch zone action: %+v", fz)
 	}
 }
@@ -404,7 +401,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
@@ -430,7 +427,7 @@ func TestSyncSessionRoundTimeout(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	actions, err := s.OnEvent(&RoundTimeoutEvent{PeerID: "peer-a"}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -445,7 +442,7 @@ func TestSyncSessionRTTAwareTimeouts(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a", LocalDigests: nil}, now)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	// Simulate a 600ms RTT.
 	_, _ = s.OnEvent(&PongReceivedEvent{PeerID: "peer-a", Pong: &Pong{}}, now.Add(600*time.Millisecond))
 
@@ -497,12 +494,10 @@ func actionType(a SyncAction) string {
 	switch a.(type) {
 	case SendPingAction:
 		return "SendPingAction"
-	case SendFetchZoneAction:
-		return "SendFetchZoneAction"
+	case SendChunkFallbackAction:
+		return "SendChunkFallbackAction"
 	case SendFetchCatalogPageAction:
 		return "SendFetchCatalogPageAction"
-	case SendCatalogPageAction:
-		return "SendCatalogPageAction"
 	case StartObjectPullAction:
 		return "StartObjectPullAction"
 	case ApplySnapshotAction:

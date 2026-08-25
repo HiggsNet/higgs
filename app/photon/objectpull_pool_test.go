@@ -4,8 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -83,22 +81,5 @@ func TestObjectPullPoolReturnsErrorForUnreachable(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for object pull result")
-	}
-}
-
-// Ensure ObjectPullResult can be mapped to gossip.ObjectPullResultEvent.
-func TestObjectPullResultMapsToSyncEvent(t *testing.T) {
-	res := ObjectPullResult{
-		PeerID:   "peer-a",
-		Zone:     "node-a.catofes.",
-		Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."},
-	}
-	ev := objectPullResultToEvent(res)
-	ore, ok := ev.(*gossip.ObjectPullResultEvent)
-	if !ok {
-		t.Fatalf("expected gossip.ObjectPullResultEvent, got %T", ev)
-	}
-	if ore.PeerID != res.PeerID || ore.Zone != res.Zone {
-		t.Fatalf("event mismatch: %+v", ore)
 	}
 }

@@ -1107,7 +1107,7 @@ SyncTimerEvent
   -> Completed / Failed
 ```
 
-对应事件包括 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，动作包括 `SendFetchCatalogPageAction`、`SendCatalogPageAction`。`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，但不能作为 catalog diff 或完整对象事务的 correctness baseline。只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
+对应事件包括 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，FSM 动作为 `SendFetchCatalogPageAction`；入站 catalog page 请求由公共 responder planner 处理，不再保留无生产者的 `SendCatalogPageAction`。`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，但不能作为 catalog diff 或完整对象事务的 correctness baseline。只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
 
 ### 7.4 MTU / TCP Pull / UDP Chunk 的集成
 

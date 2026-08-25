@@ -116,6 +116,9 @@ event queue、timer 资源、数据库或平台副作用。公共 `host.Runtime`
 heap/wakeup Scheduler；timer policy/期限仍由 gossip session action 决定，Scheduler 只统一执行
 replace/cancel、generation stale 防护、背压和 stop。Linux daemon 与 Photon Windows 都把共享 receive
 loop 产出的 verified packet 注入同一 HostRuntime，再按相同顺序执行 Engine 返回的 action。
+send action 到 wire message 的映射由 gossip 唯一实现；HostRuntime 的公共 action plan 固定
+apply -> outbound -> object-pull -> timer -> backoff/persistence 分相和 persistence scope 合并。
+平台 controller 只执行各相，不得再次按具体 gossip action 类型建立 switch。
 
 因此平台注入边界不只有 UDP：至少还包括 timer clock、verified state projection、snapshot
 apply/object-pull completion，以及 send/persistence/log effect executor。公共 gossip 不 bind socket、

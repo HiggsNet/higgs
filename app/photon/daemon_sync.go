@@ -63,7 +63,6 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 		d.hostRuntime.Gossip.NewSession(peerID)
 		event := &gossip.SyncTimerEvent{
 			PeerID:       peerID,
-			LocalDigests: projection.digests,
 			LocalSummary: projection.summary,
 		}
 		if err := d.hostRuntime.PostGossip(event); err != nil {
@@ -213,14 +212,13 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		return nil
 	}
 	now := d.Sync.now()
-	summary, digests := d.StateStore.catalogStateProjection()
+	summary := d.StateStore.catalogSummaryProjection()
 	if summary == nil {
 		return nil
 	}
 	session := d.hostRuntime.Gossip.NewSession(peerID)
 	if err := d.postSyncEvent(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
-		LocalDigests: digests,
 		LocalSummary: summary,
 	}); err != nil {
 		d.hostRuntime.Gossip.RemoveSession(peerID)
@@ -675,32 +673,29 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 
 	var changed bool
 	limits := syncLimits(d.Sync.Config)
+	actionPlan := corehost.PlanGossipActions(actions)
 
 	// First pass: collect snapshots. They are validated with independent COW
 	// savepoints and published as one final revision below.
 	var snapshotApplies []syncSnapshotApply
-	for _, action := range actions {
-		switch a := action.(type) {
-		case gossip.ApplySnapshotAction:
-			if a.Snapshot == nil {
-				continue
-			}
-			if a.Snapshot.Zone == stateProjection.managedZone {
-				// Never accept a snapshot for our own managed zone from a peer;
-				// we are the authority for it.
-				d.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
-					"peer_id": peerID,
-					"zone":    a.Snapshot.Zone,
-				})
-				continue
-			}
-			applyLimits := limits
-			if a.RelaxedLimits {
-				applyLimits = limits
-				applyLimits.MaxBytes = 8 << 20
-			}
-			snapshotApplies = append(snapshotApplies, syncSnapshotApply{action: a, limits: applyLimits})
+	for _, action := range actionPlan.Snapshots {
+		if action.Snapshot == nil {
+			continue
 		}
+		if action.Snapshot.Zone == stateProjection.managedZone {
+			// Never accept a snapshot for our own managed zone from a peer;
+			// we are the authority for it.
+			d.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
+				"peer_id": peerID,
+				"zone":    action.Snapshot.Zone,
+			})
+			continue
+		}
+		applyLimits := limits
+		if action.RelaxedLimits {
+			applyLimits.MaxBytes = 8 << 20
+		}
+		snapshotApplies = append(snapshotApplies, syncSnapshotApply{action: action, limits: applyLimits})
 	}
 	snapshotBatchCommitted := false
 	if len(snapshotApplies) > 0 {
@@ -754,77 +749,26 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	if !session.Done() && stateProjection.loaded {
 		reconcileActions := session.ReconcilePendingWithDigests(stateProjection.digests)
 		actions = append(actions, reconcileActions...)
+		actionPlan = corehost.PlanGossipActions(actions)
 	}
 
-	// Third pass: send messages.
-	budget := gossip.DefaultMaxMessage
-	budget = d.syncDatagramBudget()
-	for _, action := range actions {
-		switch a := action.(type) {
-		case gossip.SendPingAction:
-			d.sendSyncMessage(peerID, &gossip.Message{
-				Type: gossip.MessagePing,
-				Ping: &gossip.Ping{Summary: a.Summary},
-			})
-		case gossip.SendFetchCatalogPageAction:
-			d.sendSyncMessage(peerID, &gossip.Message{
-				Type:             gossip.MessageFetchCatalogPage,
-				FetchCatalogPage: &gossip.FetchCatalogPage{Cursor: a.Cursor},
-			})
-		case gossip.SendCatalogPageAction:
-			if !stateProjection.loaded {
-				continue
-			}
-			page, err := gossip.CatalogPageForDigests(stateProjection.digests, a.Cursor, budget)
-			if err != nil {
-				now := d.Sync.now()
-				recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
-				recordCatalogReject(d.PeerObservability, peerID, a.Cursor, gossip.RejectReason(err), now)
-				d.logWarn("sync", "catalog_page_failed", map[string]any{
-					"peer_id": peerID,
-					"cursor":  a.Cursor,
-					"error":   err,
-				})
-				continue
-			}
-			recordCatalogPage(d.PeerObservability, peerID, page, d.Sync.now())
-			d.sendSyncMessage(peerID, &gossip.Message{
-				Type:        gossip.MessageCatalogPage,
-				CatalogPage: page,
-			})
-		case gossip.SendFetchZoneAction:
-			if !a.ChunkFallback {
-				d.logDebug("sync", "fetch_zone_ignored", map[string]any{
-					"peer_id": peerID,
-					"zone":    a.Zone,
-					"reason":  "ordinary_fetch_zone_disabled",
-				})
-				continue
-			}
-			d.sendSyncMessage(peerID, &gossip.Message{
-				Type:      gossip.MessageFetchZone,
-				FetchZone: &gossip.FetchZone{Zone: a.Zone, ChunkFallback: a.ChunkFallback},
-			})
-		}
+	// Third pass: gossip owns action-to-wire mapping; the host owns I/O.
+	for _, outbound := range actionPlan.Outbound {
+		d.sendSyncMessage(outbound.PeerID, outbound.Message)
 	}
 
 	// Fourth pass: start async object pulls.
-	for _, action := range actions {
-		if a, ok := action.(gossip.StartObjectPullAction); ok {
-			d.submitObjectPull(ctx, a.PeerID, a.Zone, now)
-		}
+	for _, pull := range actionPlan.ObjectPulls {
+		d.submitObjectPull(ctx, pull.PeerID, pull.Zone, now)
 	}
 
 	// Fifth pass: timer actions.
-	for _, action := range actions {
-		switch a := action.(type) {
-		case gossip.StartTimerAction, gossip.CancelTimerAction:
-			if _, err := d.hostRuntime.ApplyGossipTimerAction(a); err != nil {
-				d.logWarn("sync", "timer_action_failed", map[string]any{
-					"peer_id": peerID,
-					"error":   err,
-				})
-			}
+	for _, timer := range actionPlan.Timers {
+		if _, err := d.hostRuntime.ApplyGossipTimerAction(timer); err != nil {
+			d.logWarn("sync", "timer_action_failed", map[string]any{
+				"peer_id": peerID,
+				"error":   err,
+			})
 		}
 	}
 
@@ -834,39 +778,29 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	persistenceRequested := snapshotBatchCommitted
 	persistenceScope := gossip.SyncPersistenceMeta
 	persistenceReason := "snapshot_batch"
-	for _, action := range actions {
-		switch a := action.(type) {
-		case gossip.RecordBackoffAction:
-			if mutations == nil {
-				d.recordSyncPeerState(a.PeerID, "peer_backoff", func(state *stateFile) {
-					recordPeerBackoff(state, a.PeerID, a.Err, now)
-				})
-			} else {
-				actionPeerID := a.PeerID
-				actionErr := a.Err
-				mutations.add("peer_backoff", func(state *stateFile) {
-					recordPeerBackoff(state, actionPeerID, actionErr, now)
-				})
-			}
-		case gossip.SaveStateAction:
-			if mutations != nil {
-				if session.Done() {
-					mutations.addCompletion(session, now)
-				}
-				mutations.commit(d)
-			}
-			persistenceRequested = true
-			actionScope := a.Persistence
-			if actionScope == gossip.SyncPersistenceUnspecified {
-				// An omitted intent stays fail-safe for future callers. Current
-				// metadata-only FSM actions all opt in explicitly.
-				actionScope = gossip.SyncPersistenceNetwork
-			}
-			if actionScope > persistenceScope {
-				persistenceScope = actionScope
-			}
-			persistenceReason = a.Reason
+	for _, backoff := range actionPlan.Backoffs {
+		if mutations == nil {
+			d.recordSyncPeerState(backoff.PeerID, "peer_backoff", func(state *stateFile) {
+				recordPeerBackoff(state, backoff.PeerID, backoff.Err, now)
+			})
+		} else {
+			actionPeerID := backoff.PeerID
+			actionErr := backoff.Err
+			mutations.add("peer_backoff", func(state *stateFile) {
+				recordPeerBackoff(state, actionPeerID, actionErr, now)
+			})
 		}
+	}
+	if actionPlan.Persistence.Requested {
+		if mutations != nil {
+			if session.Done() {
+				mutations.addCompletion(session, now)
+			}
+			mutations.commit(d)
+		}
+		persistenceRequested = true
+		persistenceScope = actionPlan.Persistence.Scope
+		persistenceReason = actionPlan.Persistence.Reason
 	}
 	if changed {
 		persistenceRequested = true
@@ -920,7 +854,12 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 }
 
 func (d *DaemonService) enqueueObjectPullResult(result ObjectPullResult) {
-	if err := d.hostRuntime.PostGossip(objectPullResultToEvent(result)); err != nil {
+	if err := d.hostRuntime.PostGossip(&gossip.ObjectPullResultEvent{
+		PeerID:   result.PeerID,
+		Zone:     result.Zone,
+		Snapshot: result.Snapshot,
+		Err:      result.Err,
+	}); err != nil {
 		d.logWarn("sync", "object_pull_result_dropped", map[string]any{
 			"peer_id": result.PeerID,
 			"zone":    result.Zone,
@@ -1000,7 +939,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	now := d.Sync.now()
 	relayed := 0
 	projection := d.StateStore.relayProjection(d.Sync.Config, now)
-	localDigests, peers, peerStates := projection.digests, projection.peers, projection.peerStates
+	peers, peerStates := projection.peers, projection.peerStates
 	for _, peerID := range peers {
 		if peerID == sourcePeerID {
 			continue
@@ -1023,7 +962,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			continue
 		}
 		d.hostRuntime.Gossip.NewSession(peerID)
-		if err := d.hostRuntime.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}); err != nil {
+		if err := d.hostRuntime.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID}); err != nil {
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
 		}
 		d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {

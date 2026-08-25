@@ -1050,7 +1050,12 @@ func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transport
 			}
 			select {
 			case res := <-svc.objectPullResults:
-				_ = svc.postSyncEvent(objectPullResultToEvent(res))
+				_ = svc.postSyncEvent(&gossip.ObjectPullResultEvent{
+					PeerID:   res.PeerID,
+					Zone:     res.Zone,
+					Snapshot: res.Snapshot,
+					Err:      res.Err,
+				})
 				processed = true
 			default:
 			}

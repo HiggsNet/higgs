@@ -345,7 +345,6 @@ type syncTimerProjection struct {
 	peers      []string
 	peerStates map[string]syncPeerState
 	summary    *corestate.CatalogSummary
-	digests    []corestate.ZoneDigest
 }
 
 func (s *DaemonStateStore) syncTimerProjection(config *syncConfigFile, now time.Time) syncTimerProjection {
@@ -365,8 +364,7 @@ func (s *DaemonStateStore) syncTimerProjection(config *syncConfigFile, now time.
 	for _, peerID := range out.peers {
 		out.peerStates[peerID] = cloneSyncPeerState(state.SyncPeers[peerID])
 	}
-	out.digests = corestate.ZoneDigests(state.Network)
-	out.summary = corestate.CatalogSummaryForDigests(out.digests)
+	out.summary = corestate.CatalogSummaryFor(state.Network)
 	return out
 }
 
@@ -380,19 +378,6 @@ func (s *DaemonStateStore) catalogSummaryProjection() *corestate.CatalogSummary 
 		return nil
 	}
 	return corestate.CatalogSummaryFor(s.committed.Network)
-}
-
-func (s *DaemonStateStore) catalogStateProjection() (*corestate.CatalogSummary, []corestate.ZoneDigest) {
-	if s == nil {
-		return nil, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil || s.committed.Network == nil {
-		return nil, nil
-	}
-	digests := corestate.ZoneDigests(s.committed.Network)
-	return corestate.CatalogSummaryForDigests(digests), digests
 }
 
 func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*corestate.CatalogPage, error) {
@@ -504,7 +489,6 @@ func (s *DaemonStateStore) peerTCPAddrProjection(config *syncConfigFile, peerID 
 }
 
 type relayProjection struct {
-	digests    []corestate.ZoneDigest
 	peers      []string
 	peerStates map[string]syncPeerState
 }
@@ -519,7 +503,6 @@ func (s *DaemonStateStore) relayProjection(config *syncConfigFile, now time.Time
 	if s.committed == nil || s.committed.Network == nil {
 		return out
 	}
-	out.digests = corestate.ZoneDigests(s.committed.Network)
 	out.peers = outboundSyncPeersAt(s.committed, config, now)
 	out.peerStates = make(map[string]syncPeerState, len(out.peers))
 	for _, peerID := range out.peers {

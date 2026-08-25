@@ -601,14 +601,3 @@ func errString(err error) string {
 	}
 	return err.Error()
 }
-
-// objectPullResultToEvent converts a worker result to the gossip.SyncEvent consumed by
-// the daemon event loop.
-func objectPullResultToEvent(res ObjectPullResult) gossip.SyncEvent {
-	return &gossip.ObjectPullResultEvent{
-		PeerID:   res.PeerID,
-		Zone:     res.Zone,
-		Snapshot: res.Snapshot,
-		Err:      res.Err,
-	}
-}

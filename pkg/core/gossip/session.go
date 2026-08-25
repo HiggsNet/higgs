@@ -47,7 +47,6 @@ type SyncEvent interface {
 
 type SyncTimerEvent struct {
 	PeerID       string
-	LocalDigests []corestate.ZoneDigest
 	LocalSummary *corestate.CatalogSummary
 }
 
@@ -113,19 +112,17 @@ type SyncAction interface {
 
 type SendPingAction struct {
 	PeerID  string
-	Digests []corestate.ZoneDigest
 	Summary *corestate.CatalogSummary
 }
 
 func (SendPingAction) isSyncAction() {}
 
-type SendFetchZoneAction struct {
-	PeerID        string
-	Zone          zone.ZonePath
-	ChunkFallback bool
+type SendChunkFallbackAction struct {
+	PeerID string
+	Zone   zone.ZonePath
 }
 
-func (SendFetchZoneAction) isSyncAction() {}
+func (SendChunkFallbackAction) isSyncAction() {}
 
 type SendFetchCatalogPageAction struct {
 	PeerID string
@@ -133,13 +130,6 @@ type SendFetchCatalogPageAction struct {
 }
 
 func (SendFetchCatalogPageAction) isSyncAction() {}
-
-type SendCatalogPageAction struct {
-	PeerID string
-	Cursor string
-}
-
-func (SendCatalogPageAction) isSyncAction() {}
 
 type StartObjectPullAction struct {
 	PeerID string
@@ -275,7 +265,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.lastCatalogCursor = ""
 
 	return []SyncAction{
-		SendPingAction{PeerID: e.PeerID, Digests: e.LocalDigests, Summary: e.LocalSummary},
+		SendPingAction{PeerID: e.PeerID, Summary: e.LocalSummary},
 		StartTimerAction{PeerID: e.PeerID, Kind: TimerKindRound, Deadline: now.Add(s.roundTimeout())},
 	}, nil
 }
@@ -458,7 +448,7 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 
 	if e.Err != nil {
 		s.chunkFallbackZones[e.Zone] = true
-		actions = append(actions, SendFetchZoneAction{PeerID: e.PeerID, Zone: e.Zone, ChunkFallback: true})
+		actions = append(actions, SendChunkFallbackAction{PeerID: e.PeerID, Zone: e.Zone})
 	} else if e.Snapshot != nil {
 		s.pendingZones[e.Snapshot.Zone] = false
 		delete(s.pendingZones, e.Snapshot.Zone)

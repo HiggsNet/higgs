@@ -541,6 +541,14 @@ package dependency: app -> host -> gossip -> state -> zone
     `make check`（含 Windows amd64 build）通过。
   - [ ] B2：state DTO 迁移后，把 read/apply/send/pull/persist action executor 和 object-pull completion
     收入公共 HostRuntime，并用 memory Linux/Windows adapter 证明只有一个 action ordering switch。
+    - [x] B2a：删除未进入 wire 的 `LocalDigests/SendPingAction.Digests`、无生产者的
+      `SendCatalogPageAction` 和 Linux `objectPullResultToEvent` 包装；将 chunk fallback 改为语义明确的
+      `SendChunkFallbackAction`。gossip 统一把 send action 映射为 `OutboundMessage`，host 统一把 action
+      分类为 apply/outbound/pull/timer/backoff/persistence phase 并合并 persistence scope；Linux executor
+      已改为消费公共 plan，不再维护 send/apply/pull/timer/terminal action type switch。
+    - [ ] B2b：为公共 plan 注入 verified-state、transport、object-pull、metadata/persistence controllers，
+      将 phase 执行和 object-pull completion enqueue 收入 HostRuntime；用 memory Linux/Windows adapter
+      断言完全相同的 ordering、失败短路和 persistence intent。
 - [ ] C：实现内存 VerifiedStore、revision/CAS、local/remote transaction、ChangeSet 和 fake Repository；覆盖
   retain、失败不变、success-reject-success、auto-join/refresh COW、concurrent read 与单 writer/race。
 - [ ] D：实现公共 verified codec/transaction 与平台唯一 RuntimeStateStore 的 bbolt composition、旧 schema

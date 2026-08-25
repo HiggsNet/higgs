@@ -114,13 +114,11 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 	budget := gossip.DefaultMaxMessage
 
 	timer := store.syncTimerProjection(config, now)
-	if timer.summary == nil || len(timer.digests) == 0 || len(timer.peerStates) != 1 {
+	if timer.summary == nil || len(timer.peerStates) != 1 {
 		t.Fatalf("timer projection = %+v", timer)
 	}
 	wantCatalogRoot := append([]byte(nil), timer.summary.CatalogRoot...)
-	wantDigestRoot := append([]byte(nil), timer.digests[0].RootHash...)
 	timer.summary.CatalogRoot[0] ^= 0xff
-	timer.digests[0].RootHash[0] ^= 0xff
 	peer := timer.peerStates["peer-a"]
 	peer.ObservedGraceAddrs[0].Addr = "changed"
 	timer.peerStates["peer-a"] = peer
@@ -128,9 +126,6 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 	againTimer := store.syncTimerProjection(config, now)
 	if string(againTimer.summary.CatalogRoot) != string(wantCatalogRoot) {
 		t.Fatal("catalog summary projection mutation leaked")
-	}
-	if string(againTimer.digests[0].RootHash) != string(wantDigestRoot) {
-		t.Fatal("zone digest projection mutation leaked")
 	}
 	if got := againTimer.peerStates["peer-a"].ObservedGraceAddrs[0].Addr; got != "203.0.113.1:4500" {
 		t.Fatalf("timer peer projection mutation leaked: %q", got)
@@ -140,6 +135,7 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 	if err != nil || page == nil || len(page.Entries) == 0 {
 		t.Fatalf("catalog page projection = %#v, err=%v", page, err)
 	}
+	wantDigestRoot := append([]byte(nil), page.Entries[0].RootHash...)
 	page.CatalogRoot[0] ^= 0xff
 	page.Entries[0].RootHash[0] ^= 0xff
 	againPage, err := store.catalogPageProjection("", budget)
