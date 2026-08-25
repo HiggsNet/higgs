@@ -337,8 +337,10 @@ func syncServe(ctx context.Context) error {
 					"error":   err,
 				}, err))
 			}
-		case event := <-service.syncEngine.Events():
-			service.handleSyncEvent(ctx, event)
+		case hostEvent := <-service.hostRuntime.Events():
+			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
+				service.handleSyncEvent(ctx, event)
+			}
 		case result := <-service.objectPullResults:
 			service.observeObjectPullResult(result)
 			service.enqueueObjectPullResult(result)
@@ -384,7 +386,7 @@ func syncOnce(peerID string) error {
 	var responderQuietUntil time.Time
 	for {
 		drained := false
-		if service.syncEngine.Session(peerID) == nil && service.syncEngine.PendingEventCount() == 0 && len(service.objectPullResults) == 0 {
+		if service.hostRuntime.Gossip.Session(peerID) == nil && service.hostRuntime.PendingEventCount() == 0 && len(service.objectPullResults) == 0 {
 			drained = true
 			if responderQuietUntil.IsZero() {
 				responderQuietUntil = time.Now().Add(syncOnceResponderQuiet)
@@ -397,14 +399,16 @@ func syncOnce(peerID string) error {
 		}
 		select {
 		case <-ctx.Done():
-			if session := service.syncEngine.Session(peerID); session != nil && session.PendingCount() > 0 {
+			if session := service.hostRuntime.Gossip.Session(peerID); session != nil && session.PendingCount() > 0 {
 				pending := session.PendingZones()
 				return &syncPendingZonesError{zones: pending}
 			}
 			return errors.New("sync receive timed out")
-		case event := <-service.syncEngine.Events():
+		case hostEvent := <-service.hostRuntime.Events():
 			responderQuietUntil = time.Time{}
-			service.handleSyncEvent(ctx, event)
+			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
+				service.handleSyncEvent(ctx, event)
+			}
 		case result := <-service.objectPullResults:
 			responderQuietUntil = time.Time{}
 			service.observeObjectPullResult(result)

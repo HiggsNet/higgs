@@ -18,6 +18,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -53,7 +54,7 @@ type DaemonService struct {
 	metadataCheckpoint     metadataCheckpointState
 	metadataCheckpointSave func() error
 
-	syncEngine        *gossip.Engine
+	hostRuntime       *corehost.Runtime
 	objectPullResults chan ObjectPullResult
 	objectPullPool    *objectPullPool
 
@@ -185,7 +186,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		d.routingLastRunUnix.Store(state.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
-	d.syncEngine = gossip.NewEngine(gossip.NewTimerClock(nil), gossip.DefaultSyncEventBuffer)
+	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
 	d.objectPullResults = make(chan ObjectPullResult, 64)
 	d.objectPullPool = newObjectPullPool(d.objectPullResults, 0)
 	d.configureHealthManager()
@@ -252,8 +253,8 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	if d.syncEngine != nil {
-		defer d.syncEngine.Stop()
+	if d.hostRuntime != nil {
+		defer d.hostRuntime.Stop()
 	}
 	defer d.closeConfiguredIPsecDriver()
 	defer func() {
@@ -465,9 +466,10 @@ func (d *DaemonService) Run(ctx context.Context) error {
 					"reason":  gossip.RejectReason(result.Error),
 				}, result.Error))
 			}
-		case event := <-d.syncEngine.Events():
+		case hostEvent := <-d.hostRuntime.Events():
 			timer.Stop()
-			if d.handleSyncEvent(ctx, event) {
+			event, ok := d.hostRuntime.GossipEventFor(hostEvent)
+			if ok && d.handleSyncEvent(ctx, event) {
 				lastObservedDigests = d.zoneDigests()
 			}
 		case result := <-d.objectPullResults:

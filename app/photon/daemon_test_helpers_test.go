@@ -1041,9 +1041,11 @@ func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transport
 		processed := false
 		for _, svc := range services {
 			select {
-			case ev := <-svc.syncEngine.Events():
-				svc.handleSyncEvent(ctx, ev)
-				processed = true
+			case hostEvent := <-svc.hostRuntime.Events():
+				if ev, ok := svc.hostRuntime.GossipEventFor(hostEvent); ok {
+					svc.handleSyncEvent(ctx, ev)
+					processed = true
+				}
 			default:
 			}
 			select {

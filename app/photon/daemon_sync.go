@@ -8,25 +8,26 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // EnableEventLoopSync configures the event-loop gossip.SyncSession clock. The
 // event-loop sync path is the only daemon sync path; this helper remains for
 // tests that need a fake clock.
-func (d *DaemonService) EnableEventLoopSync(clock gossip.TimerClock) {
+func (d *DaemonService) EnableEventLoopSync(clock corehost.Clock) {
 	if clock == nil {
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Clock != nil {
-			clock = gossip.NewTimerClock(d.Sync.App.Clock)
+			clock = corehost.NewClock(d.Sync.App.Clock)
 		} else {
-			clock = gossip.NewTimerClock(nil)
+			clock = corehost.NewClock(nil)
 		}
 	}
-	if d.syncEngine == nil {
-		d.syncEngine = gossip.NewEngine(clock, gossip.DefaultSyncEventBuffer)
+	if d.hostRuntime == nil {
+		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer)
 		return
 	}
-	d.syncEngine.ResetTimers(clock)
+	d.hostRuntime.ResetScheduler(clock)
 }
 
 func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) error {
@@ -55,20 +56,20 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 			})
 			continue
 		}
-		if d.syncEngine.HasActiveSession(peerID) {
+		if d.hostRuntime.Gossip.HasActiveSession(peerID) {
 			d.logDebug("sync", "event_loop_skipped", map[string]any{
 				"peer_id": peerID,
 				"reason":  "session_active",
 			})
 			continue
 		}
-		d.syncEngine.NewSession(peerID)
+		d.hostRuntime.Gossip.NewSession(peerID)
 		event := &gossip.SyncTimerEvent{
 			PeerID:       peerID,
 			LocalDigests: projection.digests,
 			LocalSummary: projection.summary,
 		}
-		if err := d.syncEngine.Post(event); err != nil {
+		if err := d.hostRuntime.PostGossip(event); err != nil {
 			d.logWarn("sync", "event_loop_full", map[string]any{"peer_id": peerID})
 		}
 	}
@@ -95,7 +96,7 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 		d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...)
 		d.seedObservedPeerPath(msg.PeerID)
 	}
-	for _, action := range d.syncEngine.PlanInbound(packet) {
+	for _, action := range d.hostRuntime.Gossip.PlanInbound(packet) {
 		msg := action.Message
 		if msg == nil {
 			continue
@@ -199,8 +200,8 @@ func (d *DaemonService) handleAnnounceHint(peerID string) error {
 		return nil
 	}
 	now := d.Sync.now()
-	if d.syncEngine.HasActiveSession(peerID) {
-		d.syncEngine.DeferHint(peerID)
+	if d.hostRuntime.Gossip.HasActiveSession(peerID) {
+		d.hostRuntime.Gossip.DeferHint(peerID)
 		d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
 			recordSyncHint(state, peerID, "announce_hint", "session_active", false, now)
 		})
@@ -230,13 +231,13 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 	if summary == nil {
 		return nil
 	}
-	session := d.syncEngine.NewSession(peerID)
+	session := d.hostRuntime.Gossip.NewSession(peerID)
 	if err := d.postSyncEvent(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
 		LocalDigests: digests,
 		LocalSummary: summary,
 	}); err != nil {
-		d.syncEngine.RemoveSession(peerID)
+		d.hostRuntime.Gossip.RemoveSession(peerID)
 		return err
 	}
 	d.recordSyncPeerStateBatch(peerID, "sync_hint,active_pull",
@@ -255,7 +256,7 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 }
 
 func (d *DaemonService) postSyncEvent(event gossip.SyncEvent) error {
-	if err := d.syncEngine.Post(event); err != nil {
+	if err := d.hostRuntime.PostGossip(event); err != nil {
 		d.logWarn("sync", "event_dropped", map[string]any{"reason": "sync_events_full"})
 		return err
 	}
@@ -362,7 +363,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 		d.logDebug("sync", "event_dropped", map[string]any{"reason": "no_peer_id"})
 		return false
 	}
-	session := d.syncEngine.Session(peerID)
+	session := d.hostRuntime.Gossip.Session(peerID)
 	if session == nil {
 		d.logDebug("sync", "event_dropped", map[string]any{
 			"peer_id": peerID,
@@ -389,7 +390,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 	if _, ok := event.(*gossip.RoundTimeoutEvent); ok {
 		udpChunkAssemblies.DropPeer(peerID)
 	}
-	engineResult := d.syncEngine.HandleEvent(event, d.Sync.now())
+	engineResult := d.hostRuntime.Gossip.HandleEvent(event, d.Sync.now())
 	if engineResult.Err != nil {
 		d.logWarn("sync", "session_event_error", map[string]any{
 			"peer_id": peerID,
@@ -831,10 +832,13 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	// Fifth pass: timer actions.
 	for _, action := range actions {
 		switch a := action.(type) {
-		case gossip.StartTimerAction:
-			d.syncEngine.StartTimer(a.PeerID, a.Kind, a.Deadline)
-		case gossip.CancelTimerAction:
-			d.syncEngine.CancelTimer(a.PeerID, a.Kind)
+		case gossip.StartTimerAction, gossip.CancelTimerAction:
+			if _, err := d.hostRuntime.ApplyGossipTimerAction(a); err != nil {
+				d.logWarn("sync", "timer_action_failed", map[string]any{
+					"peer_id": peerID,
+					"error":   err,
+				})
+			}
 		}
 	}
 
@@ -930,7 +934,7 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 }
 
 func (d *DaemonService) enqueueObjectPullResult(result ObjectPullResult) {
-	if err := d.syncEngine.Post(objectPullResultToEvent(result)); err != nil {
+	if err := d.hostRuntime.PostGossip(objectPullResultToEvent(result)); err != nil {
 		d.logWarn("sync", "object_pull_result_dropped", map[string]any{
 			"peer_id": result.PeerID,
 			"zone":    result.Zone,
@@ -979,7 +983,7 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *gossip.SyncSe
 		return
 	}
 	peerID := session.PeerID
-	d.syncEngine.CancelPeerTimers(peerID)
+	d.hostRuntime.CancelGossipTimers(peerID)
 	// Only mark the last-used address as failing for timeout-like errors; do
 	// not penalize the address for internal/event handling failures.
 	if session.LastError() != nil && d.Sync.Transport != nil && strings.Contains(session.LastError().Error(), "timeout") {
@@ -997,8 +1001,8 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *gossip.SyncSe
 			d.logWarn("sync", "session_save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
 	}
-	d.syncEngine.RemoveSession(peerID)
-	if d.syncEngine.TakePendingHint(peerID) {
+	d.hostRuntime.Gossip.RemoveSession(peerID)
+	if d.hostRuntime.Gossip.TakePendingHint(peerID) {
 		_ = d.startHintedSyncSession(peerID, "announce_hint_followup")
 	}
 }
@@ -1029,11 +1033,11 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			continue
 		}
 		relayed++
-		if d.syncEngine.HasActiveSession(peerID) {
+		if d.hostRuntime.Gossip.HasActiveSession(peerID) {
 			continue
 		}
-		d.syncEngine.NewSession(peerID)
-		if err := d.syncEngine.Post(&gossip.SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}); err != nil {
+		d.hostRuntime.Gossip.NewSession(peerID)
+		if err := d.hostRuntime.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}); err != nil {
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
 		}
 		d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {

@@ -32,6 +32,8 @@ const (
 	MinRoundTimeout       = 5 * time.Second
 	ObjectPullBudget      = 5 * time.Second
 	InitialRTT            = 1 * time.Second
+	TimerKindRound        = "round"
+	TimerKindCatalogPage  = "catalog_page"
 
 	kCatalogPageTimeoutMultiplier = 3
 	kRoundMultiplier              = 5

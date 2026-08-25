@@ -152,17 +152,15 @@ authorization 和 transport records 作为可信事实来源。
   `pkg/core/gossip`：`fetch_zone`、`chunk_fallback`、`catalog_page` 标签及 nil payload 策略只有
   一个来源；Pong 必须先发，remote root 不同时再发 `FETCH_CATALOG_PAGE`。Linux 只读取 committed
   catalog、记录观测并按顺序发送 planner 生成的 message。
-- [x] 将 per-peer protocol timer manager 从 `app/photon` 整体迁入 `pkg/core/gossip`，共享
-  `TimerClock`、round/catalog-page kind、replace/cancel/cancel-all、stale timer 防护、bounded event
-  delivery 和幂等 stop；完整 timer 测试同步迁移，app 只保留实现公共 clock contract 的集成替身。
-- [x] 新增共享 `gossip.Engine` 作为 single-writer protocol orchestration：统一拥有 session registry、
-  pending announce hint、bounded `SyncEvent` queue 和 timers，并提供 inbound planning、event FSM
-  advance、session lifecycle 与 timer API。Linux 删除对应四份本地字段，直接消费 Engine event
-  channel 和执行公共 action；Engine 不依赖 daemon、StateStore、日志或具体 UDP socket。
-- [ ] 按 10.3A 将上述 Engine event queue/timer ownership 视为过渡状态：最终 Engine 只保留同步协议
-  registry/FSM，timer deadline policy 通过 action 表达；公共 HostRuntime 统一拥有 event queue、scheduler、
-  object-pull completion 和 action execution。不得让 Linux/Windows 各写一份 host loop，也不得让
-  Engine/controller 各自创建 ticker/goroutine timer。
+- [x] 曾将 per-peer protocol timer manager 从 `app/photon` 迁入 `pkg/core/gossip` 作为去重过渡；10.3A
+  首个切口已继续删除该 `TimerManager/TimerClock`，通用调度资源与完整测试现位于 `pkg/core/host`，
+  gossip 只保留 round/catalog-page kind、deadline policy 和 start/cancel action。
+- [x] `gossip.Engine` 已从过渡期的 single-writer orchestration 收敛为同步协议对象：只拥有 session
+  registry、pending announce hint、inbound planning 和 FSM advance，不再拥有 event channel、clock、timer、
+  goroutine、stop/reset 或 resource API。Linux 已改从同一个 `host.Runtime` queue 消费 gossip 事件。
+- [ ] 继续把当前仍在 Linux daemon 的 object-pull completion 编排和 action/state/persistence executor 迁入
+  公共 HostRuntime；不得让 Linux/Windows 各写一份 host loop，也不得让 Engine/controller 各自创建
+  ticker/goroutine timer。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制
@@ -338,10 +336,11 @@ package dependency: app -> host -> gossip -> state -> zone
 
 **计时器 ownership：**
 
-- [ ] 将 timer 分为“deadline policy”和“调度资源”：gossip session/controller 决定 timer key、deadline、
-  replace/cancel 和 timeout 后状态转移；公共 HostRuntime 的一个 Scheduler 拥有 timer heap、唯一 wakeup、
-  event delivery、stop/drain 和 manual-clock test hook。Engine/controller 均不得持有 `time.Timer`、ticker、
-  timer goroutine 或直接向自己的 channel 投递 timeout。
+- [x] gossip timer 已分为“deadline policy”和“调度资源”：session 决定 timer key、deadline、replace/cancel
+  和 timeout 状态转移；公共 HostRuntime 的 Scheduler 拥有 deadline heap、唯一 wakeup loop、event delivery、
+  stop/drain 和 manual-clock test hook。Engine 已无 `time.Timer`、ticker、timer goroutine 或 event channel。
+- [ ] controller timer 随 controller/runtime 迁移接入同一个 Scheduler；迁移后 controller 同样不得持有
+  ticker、timer goroutine 或直接向私有 channel 投递 timeout。
 - [ ] `gossip.Engine.Handle` 保持同步确定性：输入 `Packet/Event/TimerFired/ObjectPullCompleted`，输出有序
   `ScheduleTimer`、`CancelTimer`、read/apply/send/pull 等 Action。Engine 不拥有 event channel 和
   TimerManager；HostRuntime 执行 timer action，到期后把 `TimerFired{Owner, Key, Generation, Deadline}`
@@ -349,8 +348,8 @@ package dependency: app -> host -> gossip -> state -> zone
 - [ ] Scheduler 使用 namespaced owner/key 支持 gossip round/catalog、peer backoff、metadata checkpoint、
   controller debounce/maintenance，以及后续 IKE retransmit/DPD、Babel hello/expiry；协议/controller 只看到
   自己 namespace 的 fire event。安全撤销/deny 不经过 debounce，立即进入 event queue 高优先级路径。
-- [ ] 从 `pkg/core/gossip.TimerManager` 迁移通用 heap/wakeup 实现和 manual-clock tests 到公共 host，保留
-  gossip timer kind/action/FSM tests在 gossip。迁移完成删除 Engine 的 `events chan`、`timers` 字段及
+- [x] 从 `pkg/core/gossip.TimerManager` 迁移通用 heap/wakeup 实现和 manual-clock tests 到公共 host，保留
+  gossip timer kind/action/FSM tests 在 gossip。迁移完成删除 Engine 的 `events chan`、`timers` 字段及
   `StartTimer/CancelTimer/ResetTimers/Events/Post` 资源方法；所有生产事件统一由 HostRuntime queue 背压。
 - [ ] 验证 timer 公平性和关闭语义：同 deadline 稳定排序、单次 wakeup 批量 drain 有上限、controller timer
   storm 不饿死 gossip/security event、queue full 不静默丢 timeout、Stop 后不再投递、fake clock 前进可
@@ -526,6 +525,13 @@ package dependency: app -> host -> gossip -> state -> zone
   alias/wrapper。跑 state/gossip/zone unit、fuzz/codec compatibility 和 Windows compile guard。
 - [ ] B：让 Engine 输出 timer/read/apply/send/pull Action，迁出 event queue/TimerManager；实现公共
   HostRuntime + Scheduler 的 memory vertical slice，并证明 Linux/Windows adapter 使用同一 action executor。
+  - [x] B1：完成 timer memory vertical slice：新增 `pkg/core/host.Runtime` bounded queue 和单 heap/wakeup
+    Scheduler；Linux daemon、sync serve/once、object-pull result 和测试均切换到该 queue。Timer fire 携带
+    namespace/owner/key/generation/deadline，消费时校验 generation；同 deadline 稳定排序、replace/cancel、
+    namespace cancel、queue-full 不丢 timeout、stop/idempotence/manual clock 已覆盖，公共包 race 与全量
+    `make check`（含 Windows amd64 build）通过。
+  - [ ] B2：state DTO 迁移后，把 read/apply/send/pull/persist action executor 和 object-pull completion
+    收入公共 HostRuntime，并用 memory Linux/Windows adapter 证明只有一个 action ordering switch。
 - [ ] C：实现内存 VerifiedStore、revision/CAS、local/remote transaction、ChangeSet 和 fake Repository；覆盖
   retain、失败不变、success-reject-success、auto-join/refresh COW、concurrent read 与单 writer/race。
 - [ ] D：实现公共 verified codec/transaction 与平台唯一 RuntimeStateStore 的 bbolt composition、旧 schema
@@ -1058,7 +1064,7 @@ package dependency: app -> host -> gossip -> state -> zone
 
 ## 下一步
 
-1. 当前先执行 10.3A A/B：冻结包依赖，迁移 state-domain DTO；把 Engine 收敛成同步 FSM/action producer，并实现公共 HostRuntime event queue + Scheduler 的 memory vertical slice。
+1. 10.3A B1 已完成：Engine 已收敛为同步 FSM/session registry，公共 HostRuntime queue + Scheduler 已替换 Linux gossip 的 Engine queue/TimerManager。当前继续执行 A：迁移 state-domain DTO/纯函数并删除 gossip 旧定义；随后执行 B2 公共 read/apply/send/pull/persist executor。
 2. 随后执行 10.3A C/D/E：公共 VerifiedStore、单 RuntimeStateStore bbolt transaction/schema migration；Linux 保留单 daemon writer，先切换 verified sub-root，再用公共 HostRuntime 替换平台无关 event/action loop。全量 race/smoke 通过后才让 Windows 接网络 gossip。
 3. 完成 10.3A F 后继续 10.3 gateway/route desired adapter；Windows 只注入 capabilities/controllers，预置 snapshot 和网络同步必须复用相同 HostRuntime/VerifiedStore，禁止静态 registry 或 Windows 专属 state 旁路。
 4. 然后按共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization 实现；每层先有 parser/state tests 和 fuzz，再接真实 Wintun。

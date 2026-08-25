@@ -59,8 +59,8 @@ Gossip 运行于事件驱动的 daemon 架构中：
 │  └────────────┘    └──────────────┘  │                 │
 │                                      ▼                 │
 │  ┌────────────┐    ┌──────────────┐   ┌───────────┐   │
-│  │TimerManager│───▶│ Sync Events  │──▶│ SyncSession│   │
-│  │            │    │ (queue)      │   │ (FSM)     │   │
+│  │host        │───▶│ host Events  │──▶│gossip     │   │
+│  │Scheduler   │    │ (bounded)    │   │Engine/FSM │   │
 │  └────────────┘    └──────────────┘   └─────┬─────┘   │
 │                                             │ actions │
 │                                    ┌────────▼────────┐│
@@ -72,7 +72,8 @@ Gossip 运行于事件驱动的 daemon 架构中：
 
 关键特征：
 - **单一 UDP reader**：只有 `startGossipPacketReceiver` 调用 `transport.Receive()`
-- **统一事件入口**：packet、timer、object-pull result 都先变成 `SyncEvent`，再由 event loop 驱动 `SyncSession.OnEvent`
+- **统一资源 ownership**：`pkg/core/host.Runtime` 拥有 bounded event queue 和 Scheduler；`gossip.Engine` 不持有 channel、clock、timer 或 goroutine
+- **统一事件入口**：packet、timer、object-pull result 都进入 HostRuntime queue，再由 event loop 驱动 `SyncSession.OnEvent`
 - **串行事件处理**：所有状态变更经 daemon event loop 串行处理，无需额外锁
 - **FSM 无 I/O**：`SyncSession.OnEvent` 不执行 I/O，只返回 `SyncAction` 由事件循环执行
 
@@ -741,7 +742,7 @@ daemon Run() 主循环:
   │  3. 检查 endpoint publish timer                           │
   │  4. 检查 sync timer (handleSyncTimerEventLoop)           │
   │  5. 检查 IPsec / routing reconcile timer                  │
-  │  6. 等待：Events / packetCh / syncEvents / timer          │
+  │  6. 等待：Events / packetCh / hostRuntime.Events / timer │
   └──────────────────────────────────────────────────────────┘
 ```
 
@@ -751,7 +752,7 @@ daemon Run() 主循环:
 |------|------|------|
 | 控制请求 | `d.Events` | control socket 操作（record_put, delegate_issue 等） |
 | UDP 数据包 | `packetCh` | `startGossipPacketReceiver` 收到的 gossip 消息 |
-| 同步事件 | `d.syncEvents` | SyncSession 的 FSM 事件 |
+| 同步事件 | `d.hostRuntime.Events()` | 外部 gossip event 与 namespaced `TimerFired` |
 | 定时器 | `timer.C` | 周期同步、endpoint publish、IPsec reconcile |
 | Object pull 结果 | `d.objectPullResults` | 异步 TCP pull 完成通知 |
 
@@ -783,16 +784,20 @@ gossip packet 事件直接以 StateStore committed state 为唯一权威。`hand
 
 **unsolicited PING 的处理**：无匹配 session 时，带 `Summary` 的 `PING` 先由 `respondPing` 回复 `PONG`（如果 root 不一致还会额外发送 `FETCH_CATALOG_PAGE`），然后进入 `maybeShortcutSyncFromPingSummary`。root 一致则记录 peer sync 状态并直接返回；不一致或 summary 生成失败则回退到 `handleAnnounceHint`，按 hint 创建/唤醒 active pull。
 
-### 11.4 TimerManager
+### 11.4 HostRuntime Scheduler
 
-`TimerManager` 管理所有 SyncSession 相关的定时器：
+`SyncSession` 通过 `StartTimerAction` / `CancelTimerAction` 表达 deadline policy；公共
+`pkg/core/host.Scheduler` 管理调度资源：
 
 | Timer 类型 | 用途 | 超时计算 |
 |------------|------|----------|
 | `round` | 整轮超时 | `max(5s, 5 × RTT) + 5s` |
 | `catalog_page` | catalog 分页超时 | `max(250ms, 3 × RTT)` |
 
-当 session 完成或失败时，所有关联 timer 被取消。
+Scheduler 使用 `(namespace, owner, key, generation)` 标识 timer，以一个 deadline heap 和一个 wakeup loop
+完成 replace/cancel/delivery。到期事件先进入 HostRuntime bounded queue，single-writer 消费时再校验 generation；
+因此 cancel/replace 后已经排队的旧 fire 也不会推进 session。队列满时 timeout 等待消费或 shutdown，不静默丢弃。
+当 session 完成或失败时，HostRuntime 取消该 peer 在 gossip namespace 下的所有 timer。
 
 ### 11.5 状态变更通知链
 

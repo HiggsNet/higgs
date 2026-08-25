@@ -1,60 +1,19 @@
 package gossip
 
-import (
-	"errors"
-	"time"
-)
+import "time"
 
-const DefaultSyncEventBuffer = 64
-
-var ErrSyncEventQueueFull = errors.New("gossip sync event queue full")
-
-// Engine owns the mutable per-peer protocol sessions, pending hints, event
-// queue and protocol timers. It is intentionally single-writer: platform event
-// loops call its methods serially, while TimerManager only posts events.
+// Engine owns only mutable per-peer protocol state. It is a synchronous,
+// deterministic protocol machine: the HostRuntime serially supplies events and
+// executes the returned actions.
 type Engine struct {
 	sessions     map[string]*SyncSession
 	pendingHints map[string]bool
-	events       chan SyncEvent
-	timers       *TimerManager
 }
 
-func NewEngine(clock TimerClock, eventBuffer int) *Engine {
-	if eventBuffer <= 0 {
-		eventBuffer = DefaultSyncEventBuffer
-	}
-	engine := &Engine{
+func NewEngine() *Engine {
+	return &Engine{
 		sessions:     make(map[string]*SyncSession),
 		pendingHints: make(map[string]bool),
-		events:       make(chan SyncEvent, eventBuffer),
-	}
-	engine.timers = NewTimerManager(clock, engine.events)
-	return engine
-}
-
-func (engine *Engine) Events() <-chan SyncEvent {
-	if engine == nil {
-		return nil
-	}
-	return engine.events
-}
-
-func (engine *Engine) PendingEventCount() int {
-	if engine == nil {
-		return 0
-	}
-	return len(engine.events)
-}
-
-func (engine *Engine) Post(event SyncEvent) error {
-	if engine == nil || event == nil {
-		return nil
-	}
-	select {
-	case engine.events <- event:
-		return nil
-	default:
-		return ErrSyncEventQueueFull
 	}
 }
 
@@ -152,38 +111,4 @@ func (engine *Engine) TakePendingHint(peerID string) bool {
 	}
 	delete(engine.pendingHints, peerID)
 	return true
-}
-
-func (engine *Engine) StartTimer(peerID, kind string, deadline time.Time) {
-	if engine != nil && engine.timers != nil {
-		engine.timers.Start(peerID, kind, deadline)
-	}
-}
-
-func (engine *Engine) CancelTimer(peerID, kind string) {
-	if engine != nil && engine.timers != nil {
-		engine.timers.Cancel(peerID, kind)
-	}
-}
-
-func (engine *Engine) CancelPeerTimers(peerID string) {
-	if engine != nil && engine.timers != nil {
-		engine.timers.CancelAll(peerID)
-	}
-}
-
-func (engine *Engine) ResetTimers(clock TimerClock) {
-	if engine == nil {
-		return
-	}
-	if engine.timers != nil {
-		engine.timers.Stop()
-	}
-	engine.timers = NewTimerManager(clock, engine.events)
-}
-
-func (engine *Engine) Stop() {
-	if engine != nil && engine.timers != nil {
-		engine.timers.Stop()
-	}
 }

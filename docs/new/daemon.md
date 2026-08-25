@@ -95,9 +95,8 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 | `ipsecDirty` | `bool` | IPsec reconcile 待调度标记 |
 | `routingDirty` | `bool` | Routing reconcile 待调度标记 |
 | `firewallDirty` | `bool` | Firewall reconcile 待调度标记 |
-| `syncSessions` | `map[string]*SyncSession` | 活跃的 gossip sync session |
+| `hostRuntime` | `*host.Runtime` | 公共 bounded gossip event queue、Scheduler 与纯 `gossip.Engine` owner |
 | `objectPullPool` | `*objectPullPool` | TCP object pull 连接池 |
-| `timerManager` | `*TimerManager` | Sync session 定时器管理 |
 
 **DaemonEvent 类型**（[`daemon.go:70-95`](../../app/photon/daemon.go#L70-L95)）：
 
@@ -215,17 +214,21 @@ Demuxer 只按 `peer_id` 路由，不解释 message type；message type 由 `Syn
 1. 把 summary 转成 `CatalogSummaryReceivedEvent` 交给 session FSM。
 2. 直接回复 `PONG` summary（respondPing）。
 
-### 3.2 Timer Manager
+### 3.2 HostRuntime Scheduler
 
-`TimerManager` 管理所有 SyncSession 相关的定时器。每个 timer 用 `(peerID, kind)` 作为 key，`kind` 包括：
+`gossip.SyncSession` 只返回 start/cancel timer action，不创建计时资源。公共 `pkg/core/host.Runtime`
+执行 action，其 Scheduler 用 `(namespace, owner, key, generation)` 管理 timer；gossip 当前使用：
 
 - `round`：整轮同步超时。
 - `catalog_page`：catalog page 请求超时。
-- `backoff`：peer 可再次尝试的时间点。
 
-Timer 到期后向 `syncEvents` channel post 对应事件，由事件循环统一处理；timer callback 本身不直接修改状态。Session 进入 `Completed` / `Failed` 时，取消该 peer 的所有 timer。
+Scheduler 只有一个 deadline heap 和一个 wakeup loop。Timer 到期后把带 deadline/generation 的 `TimerFired`
+投递到 HostRuntime bounded queue；事件循环消费时再次验证 generation，再转换为 gossip timeout event。
+timer callback 不直接修改 session/state；队列满时不会按固定超时丢弃。Session 进入 `Completed` / `Failed`
+时，取消该 peer 在 gossip namespace 下的所有 timer。
 
-`TimerManager` 支持 fake clock 注入，方便单测模拟超时。
+Scheduler 支持 fake clock 注入，稳定覆盖同 deadline 顺序、replace/cancel、stale generation、queue backpressure
+和 stop 语义。
 
 ### 3.3 Async Object Pull
 

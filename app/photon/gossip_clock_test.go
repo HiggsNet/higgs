@@ -4,11 +4,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
 
-// fakeClock is the daemon integration adapter for the shared gossip timer
-// contract. TimerManager behavior itself is tested in pkg/core/gossip.
+// fakeClock is the daemon integration adapter for the shared host scheduler
+// contract. Scheduler behavior itself is tested in pkg/core/host.
 type fakeClock struct {
 	mu     sync.Mutex
 	now    time.Time
@@ -23,7 +23,7 @@ func (clock *fakeClock) Now() time.Time {
 	return clock.now
 }
 
-func (clock *fakeClock) NewTimer(after time.Duration) gossip.EventTimer {
+func (clock *fakeClock) NewTimer(after time.Duration) corehost.EventTimer {
 	clock.mu.Lock()
 	defer clock.mu.Unlock()
 	timer := &fakeGossipTimer{clock: clock, when: clock.now.Add(after), channel: make(chan time.Time, 1)}

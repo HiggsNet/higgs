@@ -105,11 +105,11 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	for {
 		pumpEventLoopSync(ctx, []*DaemonService{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
 		aActive := false
-		if s := serviceA.syncEngine.Session(configB.PeerID); s != nil && !s.Done() {
+		if s := serviceA.hostRuntime.Gossip.Session(configB.PeerID); s != nil && !s.Done() {
 			aActive = true
 		}
 		bActive := false
-		if s := serviceB.syncEngine.Session(configA.PeerID); s != nil && !s.Done() {
+		if s := serviceB.hostRuntime.Gossip.Session(configA.PeerID); s != nil && !s.Done() {
 			bActive = true
 		}
 		if !aActive && !bActive {
@@ -118,10 +118,10 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 		fc.Advance(5 * time.Second)
 	}
 
-	if serviceA.syncEngine.Session(configB.PeerID) != nil {
+	if serviceA.hostRuntime.Gossip.Session(configB.PeerID) != nil {
 		t.Fatalf("session for B still active on A")
 	}
-	if serviceB.syncEngine.Session(configA.PeerID) != nil {
+	if serviceB.hostRuntime.Gossip.Session(configA.PeerID) != nil {
 		t.Fatalf("session for A still active on B")
 	}
 
@@ -161,7 +161,7 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	if session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("expected setup state summary_sent, got %s", session.State)
 	}
-	service.syncEngine.SetSession(peerID, session)
+	service.hostRuntime.Gossip.SetSession(peerID, session)
 
 	before := service.StateStore.Meta().Revision
 	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
@@ -175,7 +175,7 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	if session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("fetch catalog page changed active session state to %s", session.State)
 	}
-	if got := service.syncEngine.PendingEventCount(); got != 0 {
+	if got := service.hostRuntime.PendingEventCount(); got != 0 {
 		t.Fatalf("fetch catalog page queued %d sync events, want none", got)
 	}
 	if after := service.StateStore.Meta().Revision; after != before+1 {
@@ -194,7 +194,7 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	if session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("fetch zone changed active session state to %s", session.State)
 	}
-	if got := service.syncEngine.PendingEventCount(); got != 0 {
+	if got := service.hostRuntime.PendingEventCount(); got != 0 {
 		t.Fatalf("fetch zone queued %d sync events, want none", got)
 	}
 	if after := service.StateStore.Meta().Revision; after != before+1 {
@@ -225,14 +225,17 @@ func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
 	if afterRoot := gossip.ZoneRoot(state.Network.Zones["node-b.catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatal("announce changed zone state directly; want hint-only ingress")
 	}
-	session := service.syncEngine.Session("peer-a")
+	session := service.hostRuntime.Gossip.Session("peer-a")
 	if session == nil || session.State != gossip.SyncSessionIdle {
 		t.Fatalf("announce hint session = %+v, want idle session queued for active pull", session)
 	}
-	if got := service.syncEngine.PendingEventCount(); got != 1 {
+	if got := service.hostRuntime.PendingEventCount(); got != 1 {
 		t.Fatalf("announce hint queued %d events, want one sync timer", got)
 	}
-	ev := <-service.syncEngine.Events()
+	ev, ok := service.hostRuntime.GossipEventFor(<-service.hostRuntime.Events())
+	if !ok {
+		t.Fatal("announce hint did not produce a gossip event")
+	}
 	timer, ok := ev.(*gossip.SyncTimerEvent)
 	if !ok {
 		t.Fatalf("announce hint event = %T, want gossip.SyncTimerEvent", ev)
@@ -271,10 +274,10 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 		t.Fatalf("process ping: %v", err)
 	}
 
-	if session := service.syncEngine.Session(peerID); session != nil {
+	if session := service.hostRuntime.Gossip.Session(peerID); session != nil {
 		t.Fatalf("expected no session for matching summary, got %+v", session)
 	}
-	if got := service.syncEngine.PendingEventCount(); got != 0 {
+	if got := service.hostRuntime.PendingEventCount(); got != 0 {
 		t.Fatalf("expected no sync events, got %d", got)
 	}
 
@@ -362,7 +365,7 @@ func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
 	}, now); err != nil {
 		t.Fatalf("start sync session: %v", err)
 	}
-	service.syncEngine.SetSession(peerID, session)
+	service.hostRuntime.Gossip.SetSession(peerID, session)
 
 	before := service.StateStore.Meta().Revision
 	service.handleSyncEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: peerID})
@@ -401,10 +404,10 @@ func TestDaemonUnsolicitedPingSummaryMismatchStartsSession(t *testing.T) {
 		t.Fatalf("process ping: %v", err)
 	}
 
-	if session := service.syncEngine.Session(peerID); session == nil || session.State != gossip.SyncSessionIdle {
+	if session := service.hostRuntime.Gossip.Session(peerID); session == nil || session.State != gossip.SyncSessionIdle {
 		t.Fatalf("expected idle session for mismatched summary, got %+v", session)
 	}
-	if got := service.syncEngine.PendingEventCount(); got != 1 {
+	if got := service.hostRuntime.PendingEventCount(); got != 1 {
 		t.Fatalf("expected one sync timer event, got %d", got)
 	}
 }
@@ -429,7 +432,7 @@ func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 	if session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("expected setup state summary_sent, got %s", session.State)
 	}
-	service.syncEngine.SetSession(peerID, session)
+	service.hostRuntime.Gossip.SetSession(peerID, session)
 
 	err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
 		Type:     gossip.MessageAnnounce,
@@ -442,21 +445,24 @@ func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 	if session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("announce changed active session state to %s", session.State)
 	}
-	if got := service.syncEngine.PendingEventCount(); got != 0 {
+	if got := service.hostRuntime.PendingEventCount(); got != 0 {
 		t.Fatalf("active announce queued %d sync events, want none", got)
 	}
-	if !service.syncEngine.PendingHint(peerID) {
+	if !service.hostRuntime.Gossip.PendingHint(peerID) {
 		t.Fatal("active announce did not record a follow-up hint")
 	}
 	session.State = gossip.SyncSessionCompleted
 	service.completeSyncSession(session, false)
-	if service.syncEngine.PendingHint(peerID) {
+	if service.hostRuntime.Gossip.PendingHint(peerID) {
 		t.Fatal("follow-up hint was not consumed after session completion")
 	}
-	if got := service.syncEngine.PendingEventCount(); got != 1 {
+	if got := service.hostRuntime.PendingEventCount(); got != 1 {
 		t.Fatalf("follow-up hint queued %d sync events, want one", got)
 	}
-	ev := <-service.syncEngine.Events()
+	ev, ok := service.hostRuntime.GossipEventFor(<-service.hostRuntime.Events())
+	if !ok {
+		t.Fatal("follow-up hint did not produce a gossip event")
+	}
 	timer, ok := ev.(*gossip.SyncTimerEvent)
 	if !ok {
 		t.Fatalf("follow-up hint event = %T, want gossip.SyncTimerEvent", ev)

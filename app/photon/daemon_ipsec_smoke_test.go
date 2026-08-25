@@ -1185,11 +1185,11 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	for {
 		pumpEventLoopSync(ctx, []*DaemonService{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
 		aActive := false
-		if s := serviceA.syncEngine.Session(configB.PeerID); s != nil && !s.Done() {
+		if s := serviceA.hostRuntime.Gossip.Session(configB.PeerID); s != nil && !s.Done() {
 			aActive = true
 		}
 		bActive := false
-		if s := serviceB.syncEngine.Session(configA.PeerID); s != nil && !s.Done() {
+		if s := serviceB.hostRuntime.Gossip.Session(configA.PeerID); s != nil && !s.Done() {
 			bActive = true
 		}
 		if !aActive && !bActive {

@@ -7,8 +7,7 @@ import (
 )
 
 func TestEngineOwnsSessionsAndPlansInbound(t *testing.T) {
-	engine := NewEngine(nil, 1)
-	defer engine.Stop()
+	engine := NewEngine()
 	session := engine.NewSession("peer-a")
 	if engine.Session("peer-a") != session || !engine.HasActiveSession("peer-a") {
 		t.Fatal("engine did not retain active session")
@@ -24,8 +23,7 @@ func TestEngineOwnsSessionsAndPlansInbound(t *testing.T) {
 }
 
 func TestEngineHandleEventAndProtocolFailure(t *testing.T) {
-	engine := NewEngine(nil, 1)
-	defer engine.Stop()
+	engine := NewEngine()
 	session := engine.NewSession("peer-a")
 	now := time.Unix(100, 0)
 	result := engine.HandleEvent(&SyncTimerEvent{PeerID: "peer-a", LocalSummary: &CatalogSummary{}}, now)
@@ -50,19 +48,8 @@ func TestEngineHandleEventAndProtocolFailure(t *testing.T) {
 	}
 }
 
-func TestEngineEventQueueAndPendingHints(t *testing.T) {
-	engine := NewEngine(nil, 1)
-	defer engine.Stop()
-	event := &RoundTimeoutEvent{PeerID: "peer-a"}
-	if err := engine.Post(event); err != nil {
-		t.Fatalf("Post: %v", err)
-	}
-	if err := engine.Post(event); !errors.Is(err, ErrSyncEventQueueFull) {
-		t.Fatalf("full Post err = %v, want ErrSyncEventQueueFull", err)
-	}
-	if engine.PendingEventCount() != 1 || <-engine.Events() != event {
-		t.Fatal("event queue did not preserve event")
-	}
+func TestEnginePendingHints(t *testing.T) {
+	engine := NewEngine()
 	engine.DeferHint("peer-a")
 	if !engine.PendingHint("peer-a") || !engine.TakePendingHint("peer-a") || engine.PendingHint("peer-a") {
 		t.Fatal("pending hint lifecycle failed")

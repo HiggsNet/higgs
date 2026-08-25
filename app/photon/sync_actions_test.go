@@ -24,7 +24,7 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
-	service.syncEngine.SetSession(peerID, gossip.NewSyncSession(peerID))
+	service.hostRuntime.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
 
 	if changed := service.handleSyncEvent(context.Background(), &gossip.CatalogSummaryReceivedEvent{
 		PeerID: peerID,
@@ -70,7 +70,7 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
-	service.syncEngine.SetSession(peerID, gossip.NewSyncSession(peerID))
+	service.hostRuntime.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
 
 	state.Lock()
 	unlock := state.Unlock
