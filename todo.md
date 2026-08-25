@@ -51,14 +51,345 @@
   - `app/photon/observer_api_*_test.go` 不应需要修改（REST 响应不变，9.4 除外），若需修改则说明越界。
   - `docs/new/observer.md` 第 6/9 节同步为重构后行为。
 
+## Phase 10: Photon Windows（当前新主线）
+
+**目标：** 在 `app/photon-windows` 新建独立子程序，产物名为
+`photon-windows.exe`，先实现一个可在 Windows 上长期运行的 Photon 叶子客户端。
+它使用 Wintun 承接 L3 流量，在用户态完成 IKEv2 initiator、ESP、Babel leaf 和
+source-specific route lookup，并继续以 Photon 已验证 Zone state、IPAM、route
+authorization 和 transport records 作为可信事实来源。
+
+**项目命名与边界：**
+
+- 对外项目只叫 **Photon Windows** 和未来的 **Photon Android**，分别对应两个明确的
+  平台项目；Windows service、可执行文件、安装包、配置目录和
+  IPC 名称都使用 Windows 专属名称。
+- 当前只创建 `app/photon-windows`。Photon Android 暂不创建空工程、不引入
+  Gradle/Kotlin/gomobile 构建，也不让 Android 的功耗与生命周期约束阻塞 Windows
+  vertical slice。
+- 允许两个产品未来复用不拥有平台资源的 portable Go core；共享库只是内部实现，不是
+  第三个产品。Wintun、Windows Service、IP Helper、named pipe、Event Log 等代码必须留在
+  Windows adapter，不能泄漏进 portable core。
+- v1 是 **outbound-only leaf/stub**：不做 transit、不做 IKE responder、不做
+  lite-to-lite、不转发从一个 gateway 学到的路由到另一个 gateway。先支持一个 active
+  gateway；standby 第一版只保留配置与低频候选状态，不同时维持第二套活跃 Babel/ESP。
+- Windows 第一条可验收路径是 split tunnel；full tunnel、DNS/NRPT、kill switch、GUI、
+  auto-update 和多 active gateway 都在基础安全闭环之后实施。
+- 不复用 Windows native VPN profile/WFP IPsec 作为主数据面。其单 gateway、认证与算法
+  profile 无法表达 Photon raw Ed25519、多 peer、用户态 Babel/SADR 和自定义端口语义；
+  Photon Windows 使用 Wintun + 用户态 IKEv2/ESP。
+
+**已核对参考：**
+
+- 前置调研见 [docs/photon-lite-research.md](docs/photon-lite-research.md)。实现参考固定在
+  `NickCao/ranet-lite@24a24a2ff380c9f8ceb0092d640daa32e86b5eb5`，不要随 upstream
+  master 漂移。该快照约 11.3k 行 Go，已具备 IKE initiator、ESP、共享 UDP/SPI mux、
+  Babel leaf、SADR 和有序 TUN pipeline。
+- `ranet-lite` 是设计与互操作参考，不直接 fork：其静态 registry、Linux/Unix signal、
+  TUN 资源所有权和随机 Babel Router ID 不符合 Photon/Windows 边界；其 module 还要求
+  Go 1.26.3，而 Photon 当前是 Go 1.25.0。
+- `ranet-lite` 为 MIT。任何复制或实质派生的源文件必须保留来源、commit、原版权和 MIT
+  notice，并在 `THIRD_PARTY_NOTICES` 中列出；只参考 RFC 后独立实现的文件也要在设计记录
+  中说明来源边界。
+- 当前仓库与既有调研中没有名为 `RightLight` / `NetLight` 的源码或链接。如果它们是
+  `ranet-lite` 之外的项目，取得准确仓库 URL/版本后先做 license、代码结构、协议范围和
+  Windows 资源所有权审计，再决定是否纳入；该缺失不阻塞下面的 Windows 骨架和 portable
+  contract。
+
+### 10.0 冻结 v1 契约与威胁模型
+
+- [ ] 新建 `docs/photon-windows/design.md`，把本节产品边界转为版本化设计；至少画清
+  `Windows stack -> Wintun -> packet engine -> SADR -> per-peer ESP -> shared UDP ->
+  Photon gateway` 的数据流，以及 Babel control packet 不经过 Wintun、直接在 ESP 内层
+  per-peer 收发的旁路。
+- [ ] 冻结首个支持矩阵：开发/CI 先保证 Windows 11 amd64，随后覆盖仍在微软支持期内的
+  Windows 10/11 amd64；arm64 只在 amd64 vertical slice 通过后开启。明确不承诺 32-bit、
+  Windows 7/8、Windows Server Core GUI 或未经测试的 Wine 行为。
+- [ ] 冻结首版算法集：Ed25519 raw public-key auth、X25519、AES-GCM-16、
+  ChaCha20-Poly1305、SHA-256 PRF、UDP encapsulation；每个算法必须与 Photon StrongSwan
+  responder 的实际 proposal 一致，不能只凭 ranet-lite 默认值假设互操作。
+- [ ] 冻结路由模式：v1 只向 Wintun 安装稳定 Photon/IPAM aggregate split routes；Babel
+  learned route 只写用户态 SADR table，不随每次 update 反复改 Windows route table。
+  full tunnel 后续必须同时解决 DNS、underlay endpoint bypass 和断线泄漏，不能只添加
+  `0.0.0.0/0` / `::/0`。
+- [ ] 冻结身份与 bootstrap：本机使用 Photon Zone identity 和 transport key；gateway
+  只能来自已验证的 `ipsec/profile`、addresses、ports、transport-key 与兼容 overlay
+  intent。静态 endpoint 只能作为 bootstrap hint，不能替代签名记录或放宽 peer auth。
+- [ ] 写明 v1 route-origin 威胁边界：Babel route 在安装前必须通过
+  `AuthorizedRouteSet`；还需决定 Babel 64-bit Router ID 如何稳定绑定到 verified Zone。
+  在端到端 origin binding 完成前，只允许显式信任的单 gateway，并记录“已认证 gateway
+  可冒充另一个已授权 origin”的剩余风险；不得把这一状态标为 production secure。
+- [ ] 定义恢复与撤销 SLO：revocation/authorization withdrawal 收到后立即停止新流量并
+  删除相关 SADR route/SA；service crash/restart 后不遗留 Photon-Windows-owned route；网络切换
+  v1 允许 teardown/reconnect，不要求 MOBIKE，但必须有明确恢复时限和状态展示。
+
+### 10.1 仓库骨架、构建边界与命名
+
+- [ ] 新建 `app/photon-windows`，第一版只做 composition root 和命令入口；业务协议不得
+  继续堆进 `main.go`。建议目录边界：
+  - `internal/photonclient`：portable runtime、packet pipeline、peer lifecycle；
+  - `internal/photonclient/ike`、`esp`、`babel`、`sadr`、`transport`：协议窄包；
+  - `internal/photonclient/trust`：Photon verified state 到 client desired state 的 adapter；
+  - `internal/photonwindows`：service、Wintun、IP Helper、named pipe、Event Log；
+  - `app/photon-windows`：CLI 参数、Windows/service wiring、version。
+- [ ] 提供非 Windows 可构建的 portable packages 和 `windows` build-tag adapter。Linux 上的
+  `go test ./...` 不应因为导入 `x/sys/windows` 或 Wintun 失败；`app/photon-windows`
+  在非 Windows 要么用清晰 stub 返回 unsupported，要么仅由 Windows build target 编译。
+- [ ] 增加 Makefile 目标：`photon-windows-build`、`photon-windows-cross-build`、
+  `photon-windows-test`、`photon-windows-package`；`make check` 至少覆盖 portable
+  单测和 `GOOS=windows GOARCH=amd64` 编译，不在普通 Linux CI 尝试运行 Windows 二进制。
+- [ ] 固定命名：可执行文件 `photon-windows.exe`，SCM service name
+  `PhotonWindows`，display name `Photon Windows`，adapter base name
+  `Photon Windows`，control pipe `\\.\pipe\photon-windows-control`。不要沿用
+  `photon-lite` / `ranet-lite` 作为运行时资源名。
+- [ ] 固定默认目录并允许显式覆盖：配置与持久状态放在
+  `%ProgramData%\HiggsNet\Photon Windows\`，日志优先 Windows Event Log；开发态
+  `run --console --config <path>` 可使用用户指定目录，不默默读取 Photon Linux 路径。
+- [ ] 增加 Windows-aware version 输出与 build metadata；版本、commit、Go version、
+  Wintun DLL/driver version、schema version 可从 CLI/IPC 查询，日志不得输出私钥、完整 key
+  material、IKE AUTH payload 或未截断的敏感配置。
+- [ ] 建立 `THIRD_PARTY_NOTICES` 和 dependency/license 检查。Wintun DLL 必须从明确版本和
+  hash 获取，不能下载 “latest” 后直接随包发布；明确 DLL/driver 的签名校验、升级与卸载
+  所有权。
+
+### 10.2 Portable core contract 先行
+
+- [ ] 在写 Wintun 前冻结平台接口，并为每个接口定义资源所有者、并发模型、关闭顺序、
+  backpressure 和 error semantics。最小接口族：
+  - `TunnelDevice`：batch read/write、MTU、name/LUID metadata、close；
+  - `DatagramTransport`：共享 UDP receive/send、peer endpoint、rebind、close；
+  - `NetworkObserver`：interface/default-route/address/cost 变化事件；
+  - `SecureKeyStore`：load/create signer、零化临时 key buffer、可迁移 schema；
+  - `Clock/Scheduler`：单 deadline heap、可测试 timer，不在协议包中散落 ticker；
+  - `StateSource`：detached verified snapshot + revision/change stream。
+- [ ] portable core 不得自行创建 TUN、bind 系统 socket、修改 OS route/DNS、安装 service、
+  读取 Windows registry 或监听 Unix signal。平台 adapter 创建并注入资源，core 只消费
+  capability。
+- [ ] 增加 memory TUN、fake datagram、fake network observer、fake key store 和 manual
+  clock；无管理员权限完成 `inner packet -> route lookup -> fake ESP/peer -> datagram` 及
+  反向注入的端到端测试。
+- [ ] 定义统一 lifecycle：`Start(ctx)` 成功前不宣告 ready；任一关键 receive loop 退出要
+  使 runtime 进入 degraded/failed，而不是静默停止；shutdown 顺序为停止新 TUN read、
+  撤销路由、关闭 peer/SA、关闭 UDP、关闭 Wintun session/adapter、落盘安全状态。
+- [ ] 定义 packet ownership：buffer pool 借用/归还规则、最大 inner/outer packet、batch
+  上限、有界 channel 和过载策略。不得 per-packet goroutine；加密并行可以乱序执行但同一
+  flow/读批次的发射顺序必须按已定义语义保持。
+- [ ] 定义 MTU 计算：从 underlay MTU 扣除 IPv4/IPv6 + UDP + non-ESP/ESP + AEAD/padding
+  开销，Wintun MTU 至少满足 IPv6 1280；先禁用依赖未验证 GSO/offload 的路径，并对超长
+  inner packet 给出可观测丢弃/ICMP 策略。
+
+### 10.3 Photon verified state 与配置
+
+- [ ] 盘点 `pkg/core/zone`、`pkg/core/gossip`、`pkg/crypto`、`pkg/routing` 和
+  `pkg/transport/ipsec` 的 Windows buildability，形成复用矩阵：纯协议/验证代码直接复用；
+  app state、VICI、XFRM、BIRD、netns、firewall、health 等 Linux runtime 绝不进入
+  Photon Windows dependency graph。
+- [ ] 新建 Photon Windows 独立配置 schema。最小字段包括 trusted root、managed
+  zone/identity、state path、overlay id、gateway selector/bootstrap hints、Wintun adapter、
+  split aggregates、MTU、log level 和 reconnect policy；默认 fail closed，未知字段报错，
+  提供 `config validate`。
+- [ ] 第一窄切口支持加载已签名的预置 Photon state/snapshot，验证 delegation、record、
+  revocation、有效期和 root trust 后才生成 client desired state；不能引入 ranet-lite
+  `registry.json` 作为生产旁路。
+- [ ] 随后接入受限 gossip/object-pull：leaf 只同步所需 Zone/record，可通过 gateway relay
+  获取 signed objects；网络数据永远先进入现有 verify/apply 边界，再触发 transport/routing
+  reconcile。恶意或过大对象必须受 quota、replay、chunk 和 bounded history 限制。
+- [ ] 从 verified records 生成 gateway candidate：同时满足 identity/key、address/port、
+  overlay/path/tunnel address compatibility 和本地 selector；撤销或任一 record 不完整时
+  立即失效，不沿用陈旧 endpoint/key 无限重试。
+- [ ] 复用 `BuildAuthorizedRouteSet` 并包成窄 `RouteAuthorizer`。Babel install/replace 前
+  检查 source/destination、origin/zone binding、assignment 与 announcement；authorization
+  变化必须反向清扫已经安装的 SADR entry，不能只影响新 update。
+- [ ] 私钥第一版至少使用 Windows DPAPI machine scope 加密后落盘，并限制文件 ACL 为
+  SYSTEM/Administrators/service identity；评估 CNG/NCrypt non-exportable key 是否支持所需
+  Ed25519 签名。不能复制 Photon 当前明文 bbolt 私钥限制到 Windows 新产品。
+- [ ] 持久化只保存重启恢复所需状态：verified Zone store、identity reference、Babel
+  originate seqno、schema/version 和必要 endpoint hints；SA traffic keys、临时 DH secret、
+  UDP session 和 raw decrypted packet 不落盘。
+
+### 10.4 用户态 IKEv2 initiator
+
+- [ ] 先写 `docs/photon-windows/ranet-lite-port-map.md`，逐文件标明 ranet-lite IKE
+  parser/crypto/state machine 是“独立重写、带 MIT notice 移植、暂不采用”中的哪一种；
+  不直接 import upstream `internal/ike`，也不为此强行把主 module 升到 Go 1.26。
+- [ ] 将 codec/parser 与会话状态机拆开：header/payload/SA proposal/SK/AUTH/NAT-T 可做
+  deterministic unit/fuzz；随机数、时钟、UDP、peer identity 和 key signer 全部注入。
+- [ ] 实现 initiator-only `IKE_SA_INIT -> IKE_AUTH -> CHILD_SA`，强制验证 responder
+  identity 与 verified `ipsec/transport-key`；拒绝 unknown critical payload、downgrade、
+  proposal mismatch、错误 SPI/message ID、重复/越序 response 和未验证 AUTH。
+- [ ] 与 Photon StrongSwan responder 对齐 ID encoding、raw Ed25519 RFC 7427/8420、
+  traffic selector、NAT-T non-ESP marker、custom remote port、encap、DPD 和 delete 行为；
+  建立固定 StrongSwan config/pcap/日志脱敏互操作 fixture。
+- [ ] 实现 CHILD_SA rekey、IKE SA rekey、新旧 inbound SA overlap、simultaneous rekey
+  collision 和 delete；失败指数退避带 jitter，sequence 即将耗尽时必须提前 rekey，不能
+  允许 32-bit ESP sequence wrap。
+- [ ] v1 网络变化时取消旧会话、rebind 共享 UDP、重新选择 verified endpoint 并全量重连；
+  暂不实现 MOBIKE，但必须避免旧 receive loop/SA 在新网络继续接收或写 Wintun。
+- [ ] parser/状态机测试覆盖 RFC vectors、malformed length、duplicate payload、unknown
+  critical、AUTH failure、replay、timeout、loss/dup/reorder、rekey collision 和 context
+  cancellation；fuzz corpus 不含真实 key/packet capture。
+
+### 10.5 用户态 ESP 与共享 UDP Hub
+
+- [ ] ESP 同样先完成 port map/license 决策；AES-GCM/ChaCha20-Poly1305 使用 Go 标准库或
+  `x/crypto`，不自写 primitive。SA API 必须区分 inbound/outbound ownership，并支持 rekey
+  overlap 后确定性回收旧 SA。
+- [ ] 实现 tunnel-mode IPv4/IPv6 encap/decap，严格验证 SPI、sequence、AEAD tag、padding、
+  Next Header、IPv4 header/total length 和 IPv6 payload length；任何失败只增加有界分类
+  计数，不把原始密文/明文写日志。
+- [ ] anti-replay window 默认与 StrongSwan peer profile 对齐，使用并发安全 bitmap/sliding
+  window；测试 window 边界、duplicate、too-old、large jump、并发 receive 和 disabled
+  配置。生产配置不得无提示关闭 replay protection。
+- [ ] 一个共享 UDP socket 承载所有候选 peer；IKE 按 initiator SPI、ESP 按 inbound SPI
+  demux。注册/替换/注销必须原子，未知 SPI、零 SPI、短包和 channel 满不得阻塞全 hub。
+- [ ] Windows UDP adapter 使用阻塞或 IOCP/event-driven receive，不做 100ms polling；
+  支持 IPv4/IPv6 endpoint、socket buffer、context cancellation 和网络变化 rebind。v1 不为
+  每 peer 创建独立 socket/ticker。
+- [ ] 明确 UDP send batch 在 Windows 不可用时的退化路径；先保证正确性与有界队列，再
+  优化 `WSASendMsg`/RIO/IOCP。增加 loss/dup/reorder/delay/MTU black-hole network simulator。
+- [ ] metrics 至少包含包/字节、auth/replay/padding/length drop、unknown SPI、queue drop、
+  rekey、reconnect 和当前 endpoint；label 不使用 raw IP、Zone、SPI 或错误字符串造成高基数。
+
+### 10.6 Babel leaf、SADR 与 route authorization
+
+- [ ] 移植/重写标准 Babel wire codec：Hello、IHU、Update、AckReq/Ack、Route Request、
+  Seqno Request、RTT extension 和 source-specific update；codec 与 speaker 分离并加入 RFC
+  vector、unknown TLV、sub-TLV、truncation 和 fuzz 测试。
+- [ ] speaker 只 originate 本节点被 Photon 授权的 prefix；永不把 learned route
+  re-advertise 给另一 peer，永不声称 transit。控制包构造成内层 IPv6 link-local UDP/6696
+  后直接走指定 ESP peer，不依赖 Windows multicast、scope route 或外部 babeld/BIRD。
+- [ ] Router ID 从 root trust hash + managed Zone + overlay/path label 稳定派生，并持久化
+  originate seqno。先完成与 Photon/BIRD 所用 Babel Router ID 表示的映射设计，再启用多
+  origin route authorization；随机 Router ID 只允许测试 fixture。
+- [ ] 实现 per-peer neighbor state、Hello/IHU expiry、RTT cost、triggered update、route
+  selection 和 peer-down 立即撤回；desktop 初始 interval 与 Photon BIRD peer profile 显式
+  对齐，不直接继承 ranet-lite 或现有 BIRD 的默认值。
+- [ ] SADR lookup 规则固定为 destination longest match 优先、相同 destination specificity
+  下 source longest match；equal metric/seqno/Router ID tie-break 必须 deterministic。
+  route table update 与 packet lookup 并发安全，snapshot 不泄漏可变内部指针。
+- [ ] route install 的唯一入口顺序为 decode/neighbor validation -> Babel selection ->
+  Photon authorization -> SADR commit；authorization 拒绝、撤销、neighbor down、peer SA down
+  都要删除已选 route，不能依赖下一次 periodic expiry。
+- [ ] memory pipeline 端到端覆盖：两个 gateway 候选、route metric 切换、source-specific
+  prefix、unauthorized update、revocation、route expiry、peer loss 和并发 TUN traffic；确认
+  leaf 不会反射或重宣告 learned route。
+
+### 10.7 Windows 平台层
+
+- [ ] Wintun adapter 直接使用固定版本官方 API/binding：load signed DLL、create/open
+  adapter、start session、receive/release packet、allocate/send packet、end session、close
+  adapter。区分“本次创建”和“既有 adopt”，只删除本 service 明确拥有且 generation 匹配的
+  adapter。
+- [ ] 设计 Wintun ring capacity、read cancellation 和 shutdown；receive packet 必须及时
+  release，send allocation 失败要形成 backpressure/drop counter，service stop 不得卡死在
+  blocking receive。真实 Windows 测试覆盖 adapter 已存在、残留 session、DLL 缺失/签名
+  错误和驱动升级。
+- [ ] 用 IP Helper API 管理 address/route/interface metric，不 shell out 到 `netsh`、
+  PowerShell 或 `route.exe`。通过 adapter LUID/index 精确定位，记录 owned address/route 的
+  key 与 generation，adopt 前做 substantive equality，cleanup 不删除管理员或其他 VPN 的
+  资源。
+- [ ] route apply 使用 `Observe -> Plan -> Apply -> Re-observe`；启动中途失败要回滚本次
+  owned 资源，service crash 后下次启动可 adopt/repair，外部删除后 periodic safety
+  reconcile 可恢复。split aggregate 变更和撤销必须按 deny-first 顺序先收紧 route/packet
+  admission，再建立新 SA/放宽。
+- [ ] 使用 `x/sys/windows/svc` 接入 SCM，正确处理 Start/Stop/Shutdown/Preshutdown 和
+  interrogate；启动 pending/checkpoint/wait hint 合法，只有 Wintun、route、UDP 和 core
+  ready 后报告 Running。stop 有硬 deadline，超时记录未完成层但不能无限阻塞系统关机。
+- [ ] 提供 `run --console` 复用同一 runtime，Ctrl-C/console close 只由 Windows build file
+  处理。service 与 console 不能同时拥有同一个 state/adapter；用命名 mutex/文件锁明确
+  单实例。
+- [ ] 网络变化通过 Windows Network List/IP Helper notification 进入 `NetworkObserver`，
+  事件去抖后触发 endpoint 重选、UDP rebind、IKE reconnect 和 MTU 重算；不能靠固定短
+  interval polling default route。
+- [ ] Windows Event Log 采用结构化 event ID/severity，敏感字段统一脱敏；debug 文件日志
+  必须显式 opt-in、ACL 收紧并有大小/保留上限。崩溃报告不得包含 key、packet plaintext
+  或完整配置。
+
+### 10.8 本地控制面与可观测性
+
+- [ ] service 暴露 versioned named-pipe IPC，不开放默认 TCP listener。pipe ACL 默认仅
+  SYSTEM/Administrators 可写；普通交互用户是否可只读查询需单独授权设计，不能使用
+  Everyone/Authenticated Users 全写权限。
+- [ ] 首版 IPC/CLI 方法：`status`、`peers`、`routes`、`diagnostics`、`reload`、
+  `service install/start/stop/uninstall`。所有 mutation 必须由 service single writer 执行；
+  CLI socket/pipe 不可用时 fail closed，不直接编辑 live state。
+- [ ] status 至少展示 service/core/Wintun/UDP/IKE/CHILD_SA/Babel/trust state 的分层状态、
+  verified state revision、adapter LUID/name、MTU、active gateway、最近重连原因和 route
+  数量；不得只给一个含义模糊的 connected 布尔值。
+- [ ] `config validate` 和只读 offline diagnostics 可以不启动 service；涉及 identity/key 的
+  输出只显示算法、fingerprint 和 storage backend，不显示私钥或完整 AUTH material。
+- [ ] reload 先 parse/verify/plan，验证失败保持旧 runtime；需要替换 Wintun address/route/
+  gateway 的变更使用 generation 和可回滚 cutover，不先拆掉可用路径再发现新配置非法。
+- [ ] metrics/diagnostics 使用有界、低基数字段；named pipe request 有大小、并发、deadline
+  和 method allowlist，畸形请求不能拖住 packet/SCM loop。
+
+### 10.9 Windows vertical slice 与互操作验收
+
+- [ ] 建立一台 Windows VM + 一台 Linux Photon gateway 的可重复 test rig。Linux 端运行
+  Photon StrongSwan/BIRD，Windows 端安装固定 Wintun；fixture 使用临时 root/Zone/key，绝不
+  接触生产 mesh。
+- [ ] 第一里程碑：service 启动 -> Wintun ready -> split aggregate/address 可见 -> shared
+  UDP bind -> verified gateway selected；此阶段允许 IKE/ESP fake，但 restart/adopt/cleanup
+  必须真实验证。
+- [ ] 第二里程碑：真实 IKE_AUTH/CHILD_SA 与 StrongSwan 建立，双向用户态 ESP 承载 IPv4
+  和 IPv6 tunnel ping；断言 AUTH、proposal、SPI、selector、NAT-T/custom port 和 MTU。
+- [ ] 第三里程碑：Windows 内嵌 Babel 与 gateway BIRD 建邻，授权 IPv4/IPv6/SADR route
+  能选路；伪造未授权 prefix、错误 Router ID/origin、撤销 record 后不得继续转发。
+- [ ] 第四里程碑：CHILD/IKE rekey、packet loss/dup/reorder、sequence/replay、gateway
+  restart、Windows service restart、Wi-Fi/Ethernet 切换、sleep/resume、adapter/route 外部
+  删除和 abrupt process kill 后均能有界恢复。
+- [ ] teardown 验收：normal stop/uninstall 删除本产品 owned route/address/session/adapter；
+  保留管理员预建或其他产品资源。kill/crash 后下次启动可识别残留并 adopt/repair；无法
+  判断 ownership 时保守保留并给出诊断，不能误删。
+- [ ] 建立 throughput/CPU/memory 基线：小包 PPS、单流/多流吞吐、加密 worker、Wintun
+  ring、UDP queue、idle CPU、working set；先记录真实基线再定门槛，不用 ranet-lite Linux
+  数字替代 Windows 测量。
+
+### 10.10 安全、测试、CI 与发布门槛
+
+- [ ] portable 单测在 Linux/Windows 都运行；每次提交至少执行 `go test ./...`、关键包
+  `-race`（Windows runner）、`go vet`、`GOOS=windows GOARCH=amd64` 完整编译和依赖图
+  Linux-only import guard。
+- [ ] IKE/ESP/Babel/IP parser 持续 fuzz；corpus 覆盖 malformed/truncated/oversized packet、
+  unknown critical payload、SPI spoof、replay、padding、inner IP、route TLV 和 decoder
+  allocation bomb。每个入口先做长度/数量上限再分配。
+- [ ] crypto/state tests 覆盖 RFC/IANA vectors、nonce/IV uniqueness、sequence exhaustion、
+  anti-replay、AUTH mismatch、rekey overlap/collision 和 zeroization best effort；进入生产前做
+  独立协议/密码学安全审计。
+- [ ] Windows integration CI 使用隔离 runner/VM；需要管理员/driver 的测试显式分层，普通
+  PR 不静默跳过后报告成功。保存脱敏日志、state transition 和 pcap metadata，失败 artifact
+  不含 key/plaintext。
+- [ ] 发布先做开发 ZIP/manifest，再做签名 installer。installer 必须校验管理员权限、
+  Windows/arch、Wintun version/hash、配置迁移和正在运行的 service；升级可回滚，卸载需
+  询问是否保留 identity/config，不能默认删除不可恢复身份。
+- [ ] EXE、DLL、driver/installer 全部 Authenticode 签名并生成 SHA-256 checksum/SBOM；构建
+  锁定 Go/module/Wintun 版本，可从 clean checkout 重现。auto-update 在签名、回滚与 service
+  事务升级设计完成前保持关闭。
+- [ ] production gate：真实 StrongSwan/BIRD 互操作矩阵、72h soak、sleep/resume 与网络切换、
+  crash/restart、route/DNS leak 检查、revocation fail-closed、外部安全审计全部通过；否则
+  明确标记 prototype/experimental。
+
+### Photon Android（后续独立项目，当前不实施）
+
+- [ ] Windows vertical slice 稳定后，另开 `app/photon-android` 与 Android 专属设计，不把
+  Windows service/Wintun/IP Helper adapter 复制进 Android。
+- [ ] Android 必须由 Kotlin `VpnService` 拥有授权、TUN FD、protected UDP socket、
+  foreground/always-on、underlying network 和 lifecycle，再向 portable core 注入资源。
+- [ ] Android 开工即建立 no-VPN/native IKE/current core 的功耗基线，测 CPU/timer wakeup、
+  WLAN/cellular active time、Doze、Wi-Fi/cellular handoff、app kill/reboot/upgrade/revoke；
+  Windows desktop interval 不得直接作为 Android 默认值。
+- [ ] Android 低功耗必须采用 event-driven receive、统一 deadline heap、一个 active gateway、
+  timer coalescing、1-2 个 crypto worker 和 gateway-side mobile Babel/DPD profile；具体门槛由
+  真机 prototype 数据决定。
+
 ## Phase 7: 生产化收口与高级能力候选
 
 **目标：** 先把 daemon/control/运维面补到可长期运行，再按真实需求推进异构 TransportLink 并行、可靠性补强和可选传输能力。Phase 7 不要求按编号顺序执行。
 
 **当前建议顺序：**
-1. 先完成 7.11.8/7.11.9 的稳态磁盘写入与 reconcile CPU 收口，并在真实 17-peer / 23-link 节点上复测。
-2. 随后选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel 的下一窄切口。
-3. 7.2 高频 port hopping、7.4 WireGuard、7.5 GRE/VXLAN、7.6 SRv6 保持可选，等需求和实验环境明确后再开。
+1. Phase 7 的 7.11.8/7.11.9 已完成主要实现与真实节点复测；保留尚未实施的常驻 DB handle、rtnetlink 等长期候选，不阻塞新主线。
+2. 当前工程优先级转到 Phase 10 Photon Windows；7.7/7.8 discovery/relay 或 7.11 metrics/readmodel 等待明确需求后再开。
+3. 7.2 高频 port hopping、7.4 WireGuard、7.5 GRE/VXLAN、7.6 SRv6 继续保持可选，不与 Photon Windows 的用户态 IKEv2/ESP vertical slice 混做。
 
 - [ ] **7.7 可选 Global Discovery Server**
   - 作为独立公网 rendezvous 服务，只用于无稳定 bootstrap、IP 频繁变化、复杂 NAT 等场景；默认 discovery 仍以 signed endpoint record + gossip 为主。
@@ -380,9 +711,10 @@
 
 ## 下一步
 
-1. 先完成 7.11.8：将无差异 peer/control-state 写入从完整 Network save 分离，并以 `less` 相同负载复测 bbolt 页写与 fsync；不得降低权威 mutation 的同步持久化保证。
-2. 再完成 7.11.9：把 XFRM reconcile 收敛为批量 observe、按 drift apply，并用完整 root smoke 验证 restart/rotate/takeover/BIRD/撤销行为。
-3. 7.11.6 StateStore 正确性、手写 clone、分层/target-zone COW 与批量 snapshot apply 已完成；继续保持现有全局 revision 和不可变 committed root，不引入 `MerkleRoot`/digest cache，除非新 profile 再次证明 digest 计算为热点。
-4. 上述稳态问题收口后，再按需求选择 7.7/7.8 discovery/relay 或 7.11 metrics/readmodel；WG 与 GRE/VXLAN 继续作为可选 7.4/7.5。
-5. 后续模块化不再单独扩大范围；新增 debug/observer/control 输出默认走 `internal/inspect` view + `inspect/text` 或 `inspect/http` presenter，写侧/daemon adapter 继续留在 app 层直到接口稳定；公共 control DTO/typed client 等出现实际复用需求再迁移。
-6. Phase 8、Phase 9 已完成验收；客户端服务选择和应用层 relay 按需作为独立项目评估。
+1. 当前先执行 10.0/10.1：冻结 Photon Windows v1 契约、威胁模型、目录/命名与构建边界，然后创建 `app/photon-windows` 的最小可交叉编译骨架。
+2. 紧接着执行 10.2：先落 portable resource contract、manual clock、memory TUN/fake datagram 和 lifecycle 测试；平台资源尚未注入时 core 不得自行创建 TUN/socket/route。
+3. 再按 10.3 完成 Photon verified state 到 gateway/route desired state 的窄 adapter；预置 signed snapshot vertical slice 通过后才接受网络同步对象，禁止以静态 registry 绕过信任链。
+4. 协议实现顺序为共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization；每层先有 parser/state tests 和 fuzz，再接真实 Wintun。
+5. Windows adapter 顺序为 Wintun session -> IP Helper address/route ownership -> SCM service -> named-pipe IPC -> network-change/rebind；每层都验证 restart/adopt/cleanup，不能把 route/driver 残留留给安装器兜底。
+6. Photon Android 保持独立后续项目；只保留 portable core 的平台无关性，不创建 Android 空工程，也不让移动端功耗优化改变当前 Windows desktop vertical slice。
+7. Phase 7 的稳态写放大/XFRM CPU 收口已经达到 todo 中记录的实机指标；继续保留其未完成长期候选，但当前实现优先级让位于 Photon Windows。Phase 8、Phase 9 已完成验收。
