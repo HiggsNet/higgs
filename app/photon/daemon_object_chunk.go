@@ -84,4 +84,5 @@ func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *go
 		})
 		return
 	}
+	d.markMetadataCheckpointDirty()
 }

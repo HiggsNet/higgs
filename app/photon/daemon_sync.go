@@ -621,7 +621,9 @@ func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...fu
 			"label":   label,
 			"error":   err,
 		})
+		return
 	}
+	d.markMetadataCheckpointDirty()
 }
 
 func (d *DaemonService) recordPacketPeerStateBatch(peerID, label string, fns ...func(*stateFile)) {
@@ -647,7 +649,9 @@ func (d *DaemonService) recordPacketPeerStateBatch(peerID, label string, fns ...
 			"label":   label,
 			"error":   err,
 		})
+		return
 	}
+	d.markMetadataCheckpointDirtyWithin(verifiedPacketMetadataCheckpointMaxDelay)
 }
 
 type syncPeerStateMutation struct {
@@ -708,6 +712,13 @@ type syncSnapshotApply struct {
 	limits gossip.SyncLimits
 }
 
+func snapshotApplyVia(action ApplySnapshotAction) string {
+	if action.Via != "" {
+		return action.Via
+	}
+	return "event_loop"
+}
+
 type syncSnapshotOutcome struct {
 	result         *gossip.ApplyResult
 	applyErr       error
@@ -728,6 +739,8 @@ type syncSnapshotCommit struct {
 }
 
 var errSnapshotRootMismatch = errors.New("snapshot root does not match advertised catalog digest")
+
+const verifiedPacketMetadataCheckpointMaxDelay = 250 * time.Millisecond
 
 // applySyncSnapshotBatch gives every action an independent target-zone COW
 // savepoint, then publishes the final working root once. The callback body is
@@ -804,18 +817,6 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 			// savepoint commit. A later rejected action cannot mutate it.
 			outcome.result = result
 			outcome.networkChanged = result.NetworkChanged || outcome.adopted || outcome.refreshed
-			if len(apply.action.ExpectedRoot) > 0 {
-				localRoot := gossip.ZoneRoot(state.Network.Zones[snapshot.Zone])
-				if !bytes.Equal(localRoot, apply.action.ExpectedRoot) {
-					outcome.applyErr = fmt.Errorf("snapshot apply did not converge %s: expected %x, local %x", snapshot.Zone, apply.action.ExpectedRoot, localRoot)
-					state.Network = previousNetwork
-					outcome.result = nil
-					outcome.networkChanged = false
-					recordRejectedDigest(state, peerID, gossip.ZoneDigest{Zone: snapshot.Zone, RootHash: apply.action.ExpectedRoot}, gossip.RejectReason(outcome.applyErr), now)
-					dirty = true
-					continue
-				}
-			}
 			peerState := state.SyncPeers[peerID]
 			_, hadRejectedDigest := peerState.RejectedDigests[rejectedDigestKey(snapshot.Zone)]
 			if !hadRejectedDigest {
@@ -950,10 +951,9 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			for _, apply := range snapshotApplies {
 				if apply.action.ReportResult && apply.action.Snapshot != nil {
 					_ = d.postSyncEvent(&SnapshotAppliedEvent{
-						PeerID:       peerID,
-						Zone:         apply.action.Snapshot.Zone,
-						ExpectedRoot: append([]byte(nil), apply.action.ExpectedRoot...),
-						Err:          err,
+						PeerID: peerID,
+						Zone:   apply.action.Snapshot.Zone,
+						Err:    err,
 					})
 				}
 			}
@@ -983,7 +983,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 					d.logDebug("sync", "zone_apply_noop", map[string]any{
 						"peer_id": peerID,
 						"zone":    apply.action.Snapshot.Zone,
-						"via":     "event_loop",
+						"via":     snapshotApplyVia(apply.action),
 					})
 					continue
 				}
@@ -992,7 +992,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 					"zone":        apply.action.Snapshot.Zone,
 					"records":     outcome.result.Records,
 					"delegations": outcome.result.Delegation,
-					"via":         "event_loop",
+					"via":         snapshotApplyVia(apply.action),
 				})
 			}
 		}
@@ -1009,20 +1009,13 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			continue
 		}
 		event := &SnapshotAppliedEvent{
-			PeerID:       peerID,
-			Zone:         apply.action.Snapshot.Zone,
-			ExpectedRoot: append([]byte(nil), apply.action.ExpectedRoot...),
+			PeerID: peerID,
+			Zone:   apply.action.Snapshot.Zone,
 		}
 		if i >= len(snapshotOutcomes) {
 			event.Err = errors.New("snapshot apply produced no outcome")
 		} else {
 			event.Err = snapshotOutcomes[i].applyErr
-		}
-		for _, digest := range stateProjection.digests {
-			if digest.Zone == event.Zone {
-				event.LocalRoot = append([]byte(nil), digest.RootHash...)
-				break
-			}
 		}
 		_ = d.postSyncEvent(event)
 	}

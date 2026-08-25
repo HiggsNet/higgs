@@ -474,6 +474,7 @@ func syncServe(ctx context.Context) error {
 	}
 	logger := newAppLogger(config)
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	defer service.flushMetadataCheckpointOnShutdown()
 	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err
@@ -495,6 +496,8 @@ func syncServe(ctx context.Context) error {
 		"peer_id": config.PeerID,
 		"addr":    transport.LocalAddr(),
 	})
+	checkpointTicker := time.NewTicker(250 * time.Millisecond)
+	defer checkpointTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -516,6 +519,10 @@ func syncServe(ctx context.Context) error {
 		case result := <-service.objectPullResults:
 			service.observeObjectPullResult(result)
 			service.enqueueObjectPullResult(result)
+		case <-checkpointTicker.C:
+			if err := service.flushMetadataCheckpoint(true); err != nil {
+				logger.Warn("state", "metadata_checkpoint_failed", map[string]any{"error": err})
+			}
 		}
 	}
 }
@@ -534,6 +541,7 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	defer service.flushMetadataCheckpointOnShutdown()
 	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err

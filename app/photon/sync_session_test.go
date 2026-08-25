@@ -195,7 +195,7 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	}
 	assertActionTypes(t, applyActions, []string{"ApplySnapshotAction"})
 	apply := applyActions[0].(ApplySnapshotAction)
-	if !apply.ReportResult || !bytes.Equal(apply.ExpectedRoot, remote[0].RootHash) {
+	if !apply.ReportResult || !bytes.Equal(apply.ExpectedRoot, remote[0].RootHash) || apply.Via != "object_pull" {
 		t.Fatalf("apply action completion/root binding = %+v, want %x", apply, remote[0].RootHash)
 	}
 }
@@ -400,6 +400,9 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 		t.Fatalf("expected state object_pulling while apply is pending, got %s", s.State)
 	}
 	assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
+	if apply := actions[0].(ApplySnapshotAction); apply.Via != "object_pull" {
+		t.Fatalf("object pull apply via = %q, want object_pull", apply.Via)
+	}
 	ack, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "node-a.catofes."}, now)
 	if err != nil {
 		t.Fatalf("SnapshotAppliedEvent: %v", err)
@@ -463,6 +466,9 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 		t.Fatalf("expected state chunk_fallback while apply is pending, got %s", s.State)
 	}
 	assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
+	if apply := actions[0].(ApplySnapshotAction); apply.Via != "udp_chunks" {
+		t.Fatalf("chunk apply via = %q, want udp_chunks", apply.Via)
+	}
 	ack, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "node-a.catofes."}, now)
 	if err != nil {
 		t.Fatalf("SnapshotAppliedEvent: %v", err)
@@ -473,7 +479,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	assertActionTypes(t, ack, []string{"SaveStateAction"})
 }
 
-func TestSyncSessionSnapshotAppliedRequiresExpectedRoot(t *testing.T) {
+func TestSyncSessionSnapshotAppliedCompletesAfterValidatedMerge(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	s.State = SyncSessionObjectPulling
 	s.pendingZones["catofes."] = true
@@ -481,17 +487,16 @@ func TestSyncSessionSnapshotAppliedRequiresExpectedRoot(t *testing.T) {
 	s.expectedDigests["catofes."] = gossip.ZoneDigest{Zone: "catofes.", RootHash: []byte("expected")}
 
 	actions, err := s.OnEvent(&SnapshotAppliedEvent{
-		PeerID:    "peer-a",
-		Zone:      "catofes.",
-		LocalRoot: []byte("different"),
+		PeerID: "peer-a",
+		Zone:   "catofes.",
 	}, time.Unix(1000, 0))
 	if err != nil {
 		t.Fatalf("SnapshotAppliedEvent: %v", err)
 	}
-	if s.State != SyncSessionFailed {
-		t.Fatalf("state = %s, want failed", s.State)
+	if s.State != SyncSessionCompleted {
+		t.Fatalf("state = %s, want completed", s.State)
 	}
-	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction"})
+	assertActionTypes(t, actions, []string{"SaveStateAction"})
 }
 
 func TestSyncSessionRoundTimeout(t *testing.T) {

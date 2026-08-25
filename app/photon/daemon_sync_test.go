@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func TestDaemonEventLoopSyncSession(t *testing.T) {
@@ -244,7 +246,7 @@ func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
 
 func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	now := time.Unix(1000, 0)
+	now := time.Unix(123, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "state.db"),
@@ -256,17 +258,23 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	service := newDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
-	peerID := "peer-a"
+	peerID := "node-b.catofes."
+	if !peerChainVerified(state, peerID, now) {
+		t.Fatal("test peer chain is not verified")
+	}
 	localSummary, err := gossip.CatalogSummaryFor(state.Network, service.syncDatagramBudget())
 	if err != nil {
 		t.Fatalf("CatalogSummaryFor: %v", err)
 	}
 
-	err = service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
-		Type:   gossip.MessagePing,
-		PeerID: peerID,
-		Ping:   &gossip.Ping{Summary: localSummary},
-	}}, context.Background())
+	err = service.processPacketEvent(&gossip.Packet{
+		Addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434},
+		Message: &gossip.Message{
+			Type:   gossip.MessagePing,
+			PeerID: peerID,
+			Ping:   &gossip.Ping{Summary: localSummary},
+		},
+	}, context.Background())
 	if err != nil {
 		t.Fatalf("process ping: %v", err)
 	}
@@ -288,6 +296,22 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	}
 	if peerState.BackoffUntilUnix != 0 {
 		t.Fatalf("BackoffUntilUnix = %d, want 0", peerState.BackoffUntilUnix)
+	}
+	if peerState.ObservedAddr != "127.0.0.1:33434" {
+		t.Fatalf("ObservedAddr = %q, want verified packet source", peerState.ObservedAddr)
+	}
+	if got, want := service.metadataCheckpointDue(), now.Add(verifiedPacketMetadataCheckpointMaxDelay); !got.Equal(want) {
+		t.Fatalf("verified packet checkpoint due = %s, want %s", got, want)
+	}
+	if err := service.flushMetadataCheckpoint(true); err != nil {
+		t.Fatalf("flushMetadataCheckpoint: %v", err)
+	}
+	persisted, err := rt.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := persisted.SyncPeers[peerID].LastSyncUnix; got != now.Unix() {
+		t.Fatalf("persisted LastSyncUnix = %d, want %d", got, now.Unix())
 	}
 }
 

@@ -389,7 +389,7 @@ func TestExecuteSyncActionsRejectsSnapshotOutsideAdvertisedRoot(t *testing.T) {
 	}
 }
 
-func TestExecuteSyncActionsRejectsAdvertisedRootThatCannotConverge(t *testing.T) {
+func TestExecuteSyncActionsAcceptsAdvertisedSnapshotWhenMergeKeepsNewerLocalState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2208, 0)
 	staleSnapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
@@ -415,26 +415,26 @@ func TestExecuteSyncActionsRejectsAdvertisedRootThatCannotConverge(t *testing.T)
 		ReportResult: true,
 	}})
 	if changed {
-		t.Fatal("non-converging stale snapshot changed Network")
+		t.Fatal("stale snapshot changed Network")
 	}
 	committed, _ := service.StateStore.Snapshot()
 	if afterRoot := gossip.ZoneRoot(committed.Network.Zones[staleSnapshot.Zone]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatalf("non-converging snapshot changed local root: before=%x after=%x", beforeRoot, afterRoot)
 	}
 	if committed.Network.Zones[staleSnapshot.Zone].Records[localRecord.Key] == nil {
-		t.Fatal("non-converging snapshot removed newer local record")
+		t.Fatal("stale snapshot removed newer local record")
 	}
-	if !isRejectedDigestActive(committed, session.PeerID, staleSnapshot.Zone, expectedRoot, now.Add(time.Minute)) {
-		t.Fatal("non-converging advertised root was not rejected")
+	if isRejectedDigestActive(committed, session.PeerID, staleSnapshot.Zone, expectedRoot, now.Add(time.Minute)) {
+		t.Fatal("valid advertised snapshot was rejected because the merge retained newer local state")
 	}
 	select {
 	case event := <-service.syncEvents:
 		applied, ok := event.(*SnapshotAppliedEvent)
-		if !ok || applied.Err == nil {
-			t.Fatalf("apply completion = %#v, want convergence error", event)
+		if !ok || applied.Err != nil {
+			t.Fatalf("apply completion = %#v, want successful merge acknowledgement", event)
 		}
 	default:
-		t.Fatal("non-converging snapshot did not report apply completion")
+		t.Fatal("stale snapshot did not report apply completion")
 	}
 }
 

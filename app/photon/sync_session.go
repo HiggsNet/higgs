@@ -102,14 +102,13 @@ type ObjectChunkEvent struct {
 func (*ObjectChunkEvent) isSyncEvent() {}
 
 // SnapshotAppliedEvent is the runtime's acknowledgement for a previously
-// emitted ApplySnapshotAction. The FSM must not clear pendingZones or complete
-// a round until the committed local root is known.
+// emitted ApplySnapshotAction. The action's ExpectedRoot binds the fetched
+// snapshot itself; a successful merge may retain newer local objects and
+// therefore need not produce that exact root locally.
 type SnapshotAppliedEvent struct {
-	PeerID       string
-	Zone         zone.ZonePath
-	ExpectedRoot []byte
-	LocalRoot    []byte
-	Err          error
+	PeerID string
+	Zone   zone.ZonePath
+	Err    error
 }
 
 func (*SnapshotAppliedEvent) isSyncEvent() {}
@@ -161,7 +160,8 @@ type ApplySnapshotAction struct {
 	Snapshot      *gossip.ZoneSnapshot
 	ExpectedRoot  []byte
 	ReportResult  bool
-	RelaxedLimits bool // set for object-pull / chunk-fallback snapshots
+	RelaxedLimits bool   // set for object-pull / chunk-fallback snapshots
+	Via           string // diagnostic source; execution and transaction semantics are shared
 }
 
 func (ApplySnapshotAction) isSyncAction() {}
@@ -495,6 +495,7 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 			ExpectedRoot:  s.expectedRoot(e.Zone),
 			ReportResult:  true,
 			RelaxedLimits: true,
+			Via:           "object_pull",
 		})
 	}
 
@@ -549,6 +550,7 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 			ExpectedRoot:  s.expectedRoot(e.Zone),
 			ReportResult:  true,
 			RelaxedLimits: true,
+			Via:           "udp_chunks",
 		}}, nil
 	}
 	return nil, nil
@@ -561,13 +563,6 @@ func (s *SyncSession) onSnapshotApplied(e *SnapshotAppliedEvent) ([]SyncAction, 
 	delete(s.snapshotApplyPending, e.Zone)
 	if e.Err != nil {
 		return s.failSnapshotApply(e.PeerID, e.Zone, e.Err, nil)
-	}
-	expected := e.ExpectedRoot
-	if len(expected) == 0 {
-		expected = s.expectedRoot(e.Zone)
-	}
-	if len(expected) > 0 && !bytes.Equal(expected, e.LocalRoot) {
-		return s.failSnapshotApply(e.PeerID, e.Zone, fmt.Errorf("snapshot apply root mismatch for %s: expected %x, local %x", e.Zone, expected, e.LocalRoot), nil)
 	}
 
 	delete(s.pendingZones, e.Zone)
