@@ -90,6 +90,13 @@ pkg/core + pkg/crypto + pkg/routing + pkg/transport/ipsec
   reusable Photon verified facts and transport record model
 ```
 
+Gossip 不做 Windows 分支。Linux daemon 与 Photon Windows 直接链接同一个
+`pkg/core/gossip`，共享 wire message、catalog、object-pull、chunk、quota、`Snapshot` 和
+`ApplySnapshot`。Windows 只注入 datagram/network adapter；不得复制一份协议源码到
+`internal/photonwindows`，也不得引入 Windows 专属 snapshot 或“精简 gossip”语义。
+每 peer 无 I/O 的同步 FSM 也位于 `pkg/core/gossip`；Linux daemon 通过兼容别名执行其
+action，Photon Windows 后续直接调用同一状态机。
+
 portable core 不得：
 
 - 创建 Wintun/TUN；
@@ -129,6 +136,8 @@ runtime 猜测。service crash 后下一次启动只能 adopt 带匹配 owner/ge
 - runtime 状态与资源关闭语义；
 - system/manual clock；
 - memory tunnel 和 memory datagram transport；
+- Photon Windows schema v1 与离线 `config validate`；
+- 预置 bbolt state 经共享 `gossip.Snapshot`/`ApplySnapshot` 重建为 verified static source；
 - Linux unit tests 与 Windows amd64 compile guard。
 
 Wintun、IP Helper、SCM、IKE/ESP/Babel 实现分别在后续窄切口加入。未实现的命令不得伪造

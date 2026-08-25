@@ -112,6 +112,18 @@ authorization 和 transport records 作为可信事实来源。
   `photon-windows-test`，并把 Windows amd64 compile guard 纳入 `make check`；当前复用候选
   `pkg/core/zone`、`pkg/core/gossip`、`pkg/crypto`、`pkg/routing`、`pkg/transport/ipsec` 已通过
   Windows amd64 编译。
+- [x] 新建 Photon Windows schema v1 和 `config validate`：root trust、managed zone、
+  identity key reference、bbolt state、overlay/split aggregates、gateway selector/bootstrap
+  hints、Wintun、log、reconnect 均严格解析；未知字段、多 YAML 文档、full-tunnel default
+  route 和不完整配置 fail closed。
+- [x] 新建 `internal/photonclient/trust` 预置状态 adapter：不复制 gossip 实现，而是把现有
+  bbolt Zone state 逐层送入共享 `gossip.Snapshot`/`ApplySnapshot`，校验 root pin、delegation、
+  record、revocation 和有效期后才发布 detached `StateSnapshot`；篡改 record、错误 root、
+  revoked managed zone 已有负向测试。
+- [x] 将原先位于 Linux `app/photon/sync_session.go` 的无 I/O per-peer gossip FSM 与完整单测
+  原样抽到现有 `pkg/core/gossip` 公共包；Linux 通过类型别名继续使用同一状态机，Windows
+  compile guard 覆盖同一包。Linux event loop、bbolt commit、日志仍留在 composition layer，未把
+  Linux 专属副作用错误抽进公共协议包。
 
 ### 10.0 冻结 v1 契约与威胁模型
 
@@ -197,20 +209,22 @@ authorization 和 transport records 作为可信事实来源。
 
 ### 10.3 Photon verified state 与配置
 
-- [ ] 盘点 `pkg/core/zone`、`pkg/core/gossip`、`pkg/crypto`、`pkg/routing` 和
+- [x] 盘点 `pkg/core/zone`、`pkg/core/gossip`、`pkg/crypto`、`pkg/routing` 和
   `pkg/transport/ipsec` 的 Windows buildability，形成复用矩阵：纯协议/验证代码直接复用；
   app state、VICI、XFRM、BIRD、netns、firewall、health 等 Linux runtime 绝不进入
   Photon Windows dependency graph。
-- [ ] 新建 Photon Windows 独立配置 schema。最小字段包括 trusted root、managed
+- [x] 新建 Photon Windows 独立配置 schema。最小字段包括 trusted root、managed
   zone/identity、state path、overlay id、gateway selector/bootstrap hints、Wintun adapter、
   split aggregates、MTU、log level 和 reconnect policy；默认 fail closed，未知字段报错，
   提供 `config validate`。
-- [ ] 第一窄切口支持加载已签名的预置 Photon state/snapshot，验证 delegation、record、
+- [x] 第一窄切口支持加载已签名的预置 Photon state/snapshot，验证 delegation、record、
   revocation、有效期和 root trust 后才生成 client desired state；不能引入 ranet-lite
   `registry.json` 作为生产旁路。
-- [ ] 随后接入受限 gossip/object-pull：leaf 只同步所需 Zone/record，可通过 gateway relay
-  获取 signed objects；网络数据永远先进入现有 verify/apply 边界，再触发 transport/routing
-  reconcile。恶意或过大对象必须受 quota、replay、chunk 和 bounded history 限制。
+- [x] Windows 与 Linux 必须直接复用同一套 `pkg/core/gossip` message、catalog、object-pull、
+  quota 和 `ApplySnapshot`/verify 语义；不 fork 协议、不新增 Windows 专属 snapshot，也不另写
+  一套“精简 gossip”。平台差异只允许存在于 UDP/network observer 等资源 adapter。leaf 可只
+  请求运行所需的 Zone/record，但网络对象仍走现有共享 verify/apply 边界，再触发
+  transport/routing reconcile；replay、chunk、bounded history 等行为随共享实现一起演进。
 - [ ] 从 verified records 生成 gateway candidate：同时满足 identity/key、address/port、
   overlay/path/tunnel address compatibility 和本地 selector；撤销或任一 record 不完整时
   立即失效，不沿用陈旧 endpoint/key 无限重试。
@@ -730,7 +744,7 @@ authorization 和 transport records 作为可信事实来源。
 
 1. 当前先执行 10.0/10.1：冻结 Photon Windows v1 契约、威胁模型、目录/命名与构建边界，然后创建 `app/photon-windows` 的最小可交叉编译骨架。
 2. 紧接着执行 10.2：先落 portable resource contract、manual clock、memory TUN/fake datagram 和 lifecycle 测试；平台资源尚未注入时 core 不得自行创建 TUN/socket/route。
-3. 再按 10.3 完成 Photon verified state 到 gateway/route desired state 的窄 adapter；预置 signed snapshot vertical slice 通过后才接受网络同步对象，禁止以静态 registry 绕过信任链。
+3. 再按 10.3 完成 Photon verified state 到 gateway/route desired state 的窄 adapter；预置 signed snapshot vertical slice 通过后才接受网络同步对象，禁止以静态 registry 绕过信任链；gossip/message/object-pull/`ApplySnapshot` 与 Linux 复用同一实现，不建立 Windows 分支协议。
 4. 协议实现顺序为共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization；每层先有 parser/state tests 和 fuzz，再接真实 Wintun。
 5. Windows adapter 顺序为 Wintun session -> IP Helper address/route ownership -> SCM service -> named-pipe IPC -> network-change/rebind；每层都验证 restart/adopt/cleanup，不能把 route/driver 残留留给安装器兜底。
 6. Photon Android 保持独立后续项目；只保留 portable core 的平台无关性，不创建 Android 空工程，也不让移动端功耗优化改变当前 Windows desktop vertical slice。

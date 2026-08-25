@@ -1,0 +1,35 @@
+# Photon Windows schema v1. Bootstrap hints locate a candidate only; the
+# gateway identity and all usable routes still require verified Photon records.
+schema_version: 1
+trusted_root_public_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+managed_zone: laptop-a.catofes.
+
+identity:
+  key_id: photon-zone-identity
+
+state:
+  path: 'C:\ProgramData\HiggsNet\Photon Windows\photon.db'
+
+overlay:
+  id: main
+  split_routes:
+    - 10.42.0.0/16
+    - fd42::/16
+
+gateway:
+  allowed_zones:
+    - gateway-a.catofes.
+  bootstrap_hints:
+    - peer: gateway-a.catofes.
+      address: gateway.example.net:33434
+
+wintun:
+  adapter_name: Photon Windows
+  mtu: 1400
+
+log:
+  level: info
+
+reconnect:
+  initial_backoff: 1s
+  max_backoff: 1m
