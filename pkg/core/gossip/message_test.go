@@ -389,11 +389,45 @@ func TestApplySnapshotSkipsStaleAndConflictingRecords(t *testing.T) {
 	if result.Records != 0 {
 		t.Fatalf("applied records = %d, want 0", result.Records)
 	}
+	if result.NetworkChanged || result.ZoneRootChanged || result.AuthorityChanged {
+		t.Fatalf("stale/conflicting snapshot reported network change: %+v", result)
+	}
 	if got := string(target.Zones["catofes."].Records["stale"].Value); got != "local-v2" {
 		t.Fatalf("stale record = %q, want local-v2", got)
 	}
 	if got := string(target.Zones["catofes."].Records["conflict"].Value); got != "local" {
 		t.Fatalf("conflicting record = %q, want local", got)
+	}
+}
+
+func TestApplySnapshotPartialSnapshotDoesNotReportNetworkChange(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, zonePrivateKey := testNetwork(t)
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(empty catofes): %v", err)
+	}
+
+	target := cloneNetworkState(source)
+	target.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
+	local := signedRecord(t, zonePrivateKey, "catofes.", "local-only", []byte("newer-local-state"), 1, nil, now.Unix())
+	if err := target.PutAt(local, now); err != nil {
+		t.Fatalf("PutAt(local-only): %v", err)
+	}
+	beforeRoot := append([]byte(nil), ZoneRoot(target.Zones["catofes."])...)
+
+	result, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatalf("ApplySnapshot(partial): %v", err)
+	}
+	if result.NetworkChanged || result.ZoneRootChanged || result.AuthorityChanged {
+		t.Fatalf("partial snapshot reported network change: %+v", result)
+	}
+	if afterRoot := ZoneRoot(target.Zones["catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
+		t.Fatalf("partial snapshot changed local root: before=%x after=%x", beforeRoot, afterRoot)
+	}
+	if target.Zones["catofes."].Records[local.Key] == nil {
+		t.Fatal("partial snapshot removed local-only record")
 	}
 }
 
@@ -424,6 +458,9 @@ func TestApplySnapshotSuccessInstallsDetachedCandidate(t *testing.T) {
 	}
 	if result.Records != 1 {
 		t.Fatalf("applied records = %d, want 1", result.Records)
+	}
+	if !result.NetworkChanged || !result.ZoneRootChanged {
+		t.Fatalf("new record snapshot change flags = %+v, want network/root changed", result)
 	}
 	if target.Zones["catofes."] == previousTargetZone {
 		t.Fatal("successful apply retained the old mutable target zone")

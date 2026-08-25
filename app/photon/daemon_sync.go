@@ -521,15 +521,15 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) bo
 			"inflight":  len(session.objectPullInflight),
 		})
 	}
-	changed := d.executeSyncActionsWithMutations(ctx, session, actions, mutations)
+	networkChanged := d.executeSyncActionsWithMutations(ctx, session, actions, mutations)
 	if session.Done() {
 		mutations.addCompletion(session, eventNow)
 	}
 	mutations.commit(d)
 	if session.Done() {
-		d.completeSyncSessionAfterPeerState(session, changed)
+		d.completeSyncSessionAfterPeerState(session, networkChanged)
 	}
-	return changed
+	return networkChanged
 }
 
 func syncEventName(event SyncEvent) string {
@@ -703,27 +703,45 @@ type syncSnapshotApply struct {
 }
 
 type syncSnapshotOutcome struct {
-	result      *gossip.ApplyResult
-	applyErr    error
-	adopted     bool
-	adoptionErr error
-	refreshed   bool
-	refreshErr  error
-	managedZone zone.ZonePath
+	result         *gossip.ApplyResult
+	applyErr       error
+	networkChanged bool
+	adopted        bool
+	adoptionErr    error
+	refreshed      bool
+	refreshErr     error
+	managedZone    zone.ZonePath
+}
+
+// syncSnapshotCommit separates publication of the detached state workspace
+// from a real Network transition. A successful snapshot may still commit
+// peer/admission metadata while leaving every relevant Zone root unchanged.
+type syncSnapshotCommit struct {
+	StateCommitted bool
+	NetworkChanged bool
 }
 
 // applySyncSnapshotBatch gives every action an independent target-zone COW
 // savepoint, then publishes the final working root once. The callback body is
 // pure with respect to external effects, so an unexpected stale revision can
 // discard and recompute the complete batch safely.
-func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnapshotApply, now time.Time) ([]syncSnapshotOutcome, bool, error) {
+func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnapshotApply, now time.Time) ([]syncSnapshotOutcome, syncSnapshotCommit, error) {
 	if d == nil || d.Sync == nil || d.StateStore == nil {
-		return nil, false, errors.New("daemon service is not initialized")
+		return nil, syncSnapshotCommit{}, errors.New("daemon service is not initialized")
 	}
 	for range maxSyncPeerUpdateAttempts {
 		state, revision := d.StateStore.snapshotApplyWorkspace()
 		if state == nil || state.Network == nil {
-			return nil, false, errors.New("daemon state network is nil")
+			return nil, syncSnapshotCommit{}, errors.New("daemon state network is nil")
+		}
+		beforeRoots := make(map[zone.ZonePath][]byte, len(applies)+1)
+		for _, apply := range applies {
+			if snapshot := apply.action.Snapshot; snapshot != nil {
+				beforeRoots[snapshot.Zone] = append([]byte(nil), gossip.ZoneRoot(state.Network.Zones[snapshot.Zone])...)
+			}
+		}
+		if state.ManagedZone.Valid() {
+			beforeRoots[state.ManagedZone] = append([]byte(nil), gossip.ZoneRoot(state.Network.Zones[state.ManagedZone])...)
 		}
 		outcomes := make([]syncSnapshotOutcome, len(applies))
 		dirty := false
@@ -747,6 +765,12 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 			// preserving all locally-owned Zone contents.
 			previousNetwork := state.Network
 			state.Network = nextNetwork
+			// ApplySnapshot detaches only snapshot.Zone. Authority adoption and
+			// refresh may mutate ManagedZone as a secondary effect, so detach it
+			// as well before entering those helpers.
+			if state.ManagedZone.Valid() && state.ManagedZone != snapshot.Zone {
+				state.Network = zone.CloneNetworkStateForZone(state.Network, state.ManagedZone)
+			}
 			outcome.adopted, outcome.adoptionErr = tryAdoptAutoJoinDelegation(state, now)
 			if outcome.adoptionErr == nil {
 				outcome.refreshed, outcome.refreshErr = tryRefreshManagedZoneAuthority(state, now)
@@ -761,22 +785,40 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 
 			// Successful action: advancing state.Network is this action's
 			// savepoint commit. A later rejected action cannot mutate it.
+			peerState := state.SyncPeers[peerID]
+			_, hadRejectedDigest := peerState.RejectedDigests[rejectedDigestKey(snapshot.Zone)]
+			if !hadRejectedDigest {
+				_, hadRejectedDigest = peerState.RejectedDigests[snapshot.Zone.String()]
+			}
 			clearRejectedDigest(state, peerID, snapshot.Zone)
 			outcome.result = result
-			recordAdoptionResult(state, outcome.adopted, outcome.adoptionErr, now)
-			if !outcome.adopted && outcome.adoptionErr == nil {
-				recordBootstrapSyncSuccess(state, peerID, d.Sync.Config, now)
+			outcome.networkChanged = result.NetworkChanged || outcome.adopted || outcome.refreshed
+			metadataChanged := hadRejectedDigest
+			if outcome.adopted || outcome.adoptionErr != nil {
+				recordAdoptionResult(state, outcome.adopted, outcome.adoptionErr, now)
+				metadataChanged = true
 			}
-			dirty = true
+			if !outcome.adopted && outcome.adoptionErr == nil && state.Admission != nil && state.Admission.Pending && isBootstrapPeer(d.Sync.Config, peerID) {
+				recordBootstrapSyncSuccess(state, peerID, d.Sync.Config, now)
+				metadataChanged = true
+			}
+			dirty = dirty || outcome.networkChanged || metadataChanged
 		}
 		if !dirty {
-			return outcomes, false, nil
+			return outcomes, syncSnapshotCommit{}, nil
 		}
 		if _, committed := d.StateStore.commitSnapshotApplyIfRevision(revision, state); committed {
-			return outcomes, true, nil
+			commit := syncSnapshotCommit{StateCommitted: true}
+			for path, beforeRoot := range beforeRoots {
+				if !bytes.Equal(beforeRoot, gossip.ZoneRoot(state.Network.Zones[path])) {
+					commit.NetworkChanged = true
+					break
+				}
+			}
+			return outcomes, commit, nil
 		}
 	}
-	return nil, false, errDaemonStateRevisionStale
+	return nil, syncSnapshotCommit{}, errDaemonStateRevisionStale
 }
 
 func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotOutcome) {
@@ -808,23 +850,23 @@ func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotO
 	}
 }
 
-func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
+func (d *DaemonService) applySyncSnapshotAction(peerID string, action ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, syncSnapshotCommit, error) {
 	if action.Snapshot == nil {
-		return nil, false, nil
+		return nil, syncSnapshotCommit{}, nil
 	}
-	outcomes, committed, err := d.applySyncSnapshotBatch(peerID, []syncSnapshotApply{{action: action, limits: limits}}, now)
+	outcomes, commit, err := d.applySyncSnapshotBatch(peerID, []syncSnapshotApply{{action: action, limits: limits}}, now)
 	if err != nil {
-		return nil, false, err
+		return nil, syncSnapshotCommit{}, err
 	}
-	if !committed || len(outcomes) == 0 {
-		return nil, false, nil
+	if !commit.StateCommitted || len(outcomes) == 0 {
+		return nil, commit, nil
 	}
 	outcome := outcomes[0]
 	if outcome.applyErr != nil {
-		return nil, false, outcome.applyErr
+		return nil, commit, outcome.applyErr
 	}
 	d.logSnapshotAdoption(peerID, outcome)
-	return outcome.result, true, nil
+	return outcome.result, commit, nil
 }
 
 func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, session *SyncSession, actions []SyncAction, mutations *syncPeerStateMutationBatch) bool {
@@ -838,7 +880,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 		return false
 	}
 
-	var changed bool
+	var networkChanged bool
 	limits := syncLimits(d.Sync.Config)
 
 	// First pass: collect snapshots. They are validated with independent COW
@@ -867,9 +909,9 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			snapshotApplies = append(snapshotApplies, syncSnapshotApply{action: a, limits: applyLimits})
 		}
 	}
-	snapshotBatchCommitted := false
+	snapshotCommit := syncSnapshotCommit{}
 	if len(snapshotApplies) > 0 {
-		outcomes, committed, err := d.applySyncSnapshotBatch(peerID, snapshotApplies, now)
+		outcomes, commit, err := d.applySyncSnapshotBatch(peerID, snapshotApplies, now)
 		if err != nil {
 			d.logWarn("sync", "snapshot_batch_commit_failed", map[string]any{
 				"peer_id": peerID,
@@ -879,7 +921,8 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			// that was never published.
 			return false
 		} else {
-			snapshotBatchCommitted = committed
+			snapshotCommit = commit
+			networkChanged = commit.NetworkChanged
 			for i, outcome := range outcomes {
 				apply := snapshotApplies[i]
 				if outcome.applyErr != nil {
@@ -894,8 +937,15 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 				if outcome.result == nil {
 					continue
 				}
-				changed = true
 				d.logSnapshotAdoption(peerID, outcome)
+				if !commit.NetworkChanged || !outcome.networkChanged {
+					d.logDebug("sync", "zone_apply_noop", map[string]any{
+						"peer_id": peerID,
+						"zone":    apply.action.Snapshot.Zone,
+						"via":     "event_loop",
+					})
+					continue
+				}
 				d.logInfo("sync", "zone_applied", map[string]any{
 					"peer_id":     peerID,
 					"zone":        apply.action.Snapshot.Zone,
@@ -910,7 +960,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	// Second pass: refresh the reader view after the single batch publication.
 	// Persistence is coalesced with any SaveStateAction below so a batch writes
 	// the state file at most once.
-	if changed {
+	if networkChanged {
 		stateProjection = d.StateStore.syncStateProjection()
 	}
 
@@ -993,7 +1043,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	// Final pass: backoff and persistence intent. Snapshot application is the
 	// authoritative source for whether this event changed Network; an action
 	// that only records peer runtime state must not rewrite every zone bucket.
-	persistenceRequested := snapshotBatchCommitted
+	persistenceRequested := snapshotCommit.StateCommitted
 	persistenceScope := SyncPersistenceMeta
 	persistenceReason := "snapshot_batch"
 	for _, action := range actions {
@@ -1030,7 +1080,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			persistenceReason = a.Reason
 		}
 	}
-	if changed {
+	if networkChanged {
 		persistenceRequested = true
 		persistenceScope = SyncPersistenceNetwork
 	}
@@ -1050,7 +1100,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 		}
 	}
 
-	return changed
+	return networkChanged
 }
 
 func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, path zone.ZonePath, now time.Time) {
@@ -1128,7 +1178,7 @@ func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
 	}
 }
 
-func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, changed bool) {
+func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, networkChanged bool) {
 	if session == nil {
 		return
 	}
@@ -1141,7 +1191,7 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, 
 			d.Sync.Transport.RecordAddrFailure(peerID, lastAddr)
 		}
 	}
-	if session.State == SyncSessionCompleted && changed {
+	if session.State == SyncSessionCompleted && networkChanged {
 		if d.Sync.Transport != nil {
 			d.updateDiscoveredPeers()
 		}

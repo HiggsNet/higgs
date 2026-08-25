@@ -72,9 +72,9 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, committed, err := service.applySyncSnapshotAction("root-admin", ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err != nil {
+	if _, commit, err := service.applySyncSnapshotAction("root-admin", ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err != nil {
 		t.Fatalf("applySyncSnapshotAction(root grant): %v", err)
-	} else if !committed {
+	} else if !commit.StateCommitted || !commit.NetworkChanged {
 		t.Fatal("root grant snapshot was not committed")
 	}
 

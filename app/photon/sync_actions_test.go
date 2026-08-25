@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"net"
@@ -283,6 +284,72 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	}
 }
 
+func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2205, 0)
+	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+	recordRejectedDigest(state, "node-b.catofes.", digestForSnapshot(snapshot), "previous transient rejection", now.Add(-time.Minute))
+
+	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
+	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	session := NewSyncSession("node-b.catofes.")
+	beforeRevision := service.StateStore.Meta().Revision
+	beforeRoot := append([]byte(nil), gossip.ZoneRoot(state.Network.Zones["node-b.catofes."])...)
+
+	changed := service.executeSyncActions(context.Background(), session, []SyncAction{
+		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: snapshot},
+	})
+	if changed {
+		t.Fatal("executeSyncActions changed = true for identical snapshot")
+	}
+	if revision := service.StateStore.Meta().Revision; revision != beforeRevision+1 {
+		t.Fatalf("revision = %d, want metadata commit after %d", revision, beforeRevision)
+	}
+	committed, _ := service.StateStore.Snapshot()
+	if afterRoot := gossip.ZoneRoot(committed.Network.Zones["node-b.catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
+		t.Fatalf("no-op snapshot changed zone root: before=%x after=%x", beforeRoot, afterRoot)
+	}
+	if due := service.metadataCheckpointDue(); due.IsZero() {
+		t.Fatal("metadata-only state commit did not schedule a checkpoint")
+	}
+
+	notifications := 0
+	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+	session.State = SyncSessionCompleted
+	service.syncSessions[session.PeerID] = session
+	service.completeSyncSessionAfterPeerState(session, changed)
+	if notifications != 0 {
+		t.Fatalf("no-op snapshot emitted %d state-change notifications", notifications)
+	}
+}
+
+func TestExecuteSyncActionsPureNoopDoesNotCommit(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2206, 0)
+	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+
+	service := newDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	session := NewSyncSession("node-b.catofes.")
+	beforeRevision := service.StateStore.Meta().Revision
+	if changed := service.executeSyncActions(context.Background(), session, []SyncAction{
+		ApplySnapshotAction{PeerID: session.PeerID, Snapshot: snapshot},
+	}); changed {
+		t.Fatal("pure no-op snapshot reported NetworkChanged")
+	}
+	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
+		t.Fatalf("pure no-op revision = %d, want unchanged %d", revision, beforeRevision)
+	}
+	if due := service.metadataCheckpointDue(); !due.IsZero() {
+		t.Fatalf("pure no-op scheduled metadata checkpoint at %s", due)
+	}
+}
+
 func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2210, 0)
@@ -295,7 +362,13 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 		t.Fatalf("Snapshot(invalid catofes): %v", err)
 	}
 	invalidParent.Authority.Keys[0].Key[0] ^= 0xff
-	validChild, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	childSource := cloneStateFile(state)
+	childRecord, err := buildSignedRecordAt(childSource, "node-b.catofes.", "batch-record", []byte("remote"), "policy.string", now)
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt(node-b): %v", err)
+	}
+	childSource.Network.Zones["node-b.catofes."].Records[childRecord.Key] = childRecord
+	validChild, err := gossip.Snapshot(childSource.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}

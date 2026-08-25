@@ -49,7 +49,7 @@ func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays [
 	})
 }
 
-func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) {
+func (d *DaemonService) completeSyncSession(session *SyncSession, networkChanged bool) {
 	if session == nil {
 		return
 	}
@@ -57,7 +57,7 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, changed bool) 
 	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
 		recordPeerSyncAt(state, peerID, session.lastError, d.Sync.now())
 	})
-	d.completeSyncSessionAfterPeerState(session, changed)
+	d.completeSyncSessionAfterPeerState(session, networkChanged)
 }
 
 func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {

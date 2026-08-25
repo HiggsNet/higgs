@@ -51,15 +51,18 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits gossip
 
 	pullLimits := limits
 	pullLimits.MaxBytes = maxChunkObjectBytes
-	result, applied, err := d.applySyncSnapshotAction(message.PeerID, ApplySnapshotAction{
+	result, commit, err := d.applySyncSnapshotAction(message.PeerID, ApplySnapshotAction{
 		PeerID:        message.PeerID,
 		Snapshot:      snapshot,
 		RelaxedLimits: true,
 	}, pullLimits, now)
+	if commit.StateCommitted && !commit.NetworkChanged {
+		d.markMetadataCheckpointDirty()
+	}
 	if err != nil {
 		return err
 	}
-	if !applied {
+	if !commit.NetworkChanged {
 		return nil
 	}
 

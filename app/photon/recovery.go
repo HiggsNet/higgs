@@ -188,8 +188,10 @@ func recoveryImportZone(input string, direct bool) error {
 	if err != nil {
 		return err
 	}
-	if err := rt.SaveState(state); err != nil {
-		return err
+	if result.NetworkChanged {
+		if err := rt.SaveState(state); err != nil {
+			return err
+		}
 	}
 	revocations := 0
 	if zs := state.Network.Zones[result.Zone]; zs != nil {
@@ -200,8 +202,8 @@ func recoveryImportZone(input string, direct bool) error {
 }
 
 func printRecoveryImportResult(result *gossip.ApplyResult, revocations int, suffix string) {
-	fmt.Printf("imported zone %s snapshot%s: records_applied=%d delegations=%d revocations=%d\n",
-		result.Zone, suffix, result.Records, result.Delegation, revocations)
+	fmt.Printf("imported zone %s snapshot%s: network_changed=%t records_applied=%d delegations=%d revocations=%d\n",
+		result.Zone, suffix, result.NetworkChanged, result.Records, result.Delegation, revocations)
 }
 
 func recoveryPullZone(ctx context.Context, path zone.ZonePath, peerID string, timeout time.Duration) error {
@@ -268,16 +270,22 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 		}
 		results = append(results, result)
 	}
-	if err := rt.SaveState(state); err != nil {
-		return err
+	networkChanged := false
+	for _, result := range results {
+		networkChanged = networkChanged || result.NetworkChanged
+	}
+	if networkChanged {
+		if err := rt.SaveState(state); err != nil {
+			return err
+		}
 	}
 	for _, result := range results {
 		revocations := 0
 		if zs := state.Network.Zones[result.Zone]; zs != nil {
 			revocations = len(zs.Revocations)
 		}
-		fmt.Printf("recovered zone %s from %s: records_applied=%d delegations=%d revocations=%d\n",
-			result.Zone, peerID, result.Records, result.Delegation, revocations)
+		fmt.Printf("recovered zone %s from %s: network_changed=%t records_applied=%d delegations=%d revocations=%d\n",
+			result.Zone, peerID, result.NetworkChanged, result.Records, result.Delegation, revocations)
 	}
 	return nil
 }

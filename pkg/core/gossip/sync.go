@@ -25,9 +25,12 @@ type SyncLimits struct {
 }
 
 type ApplyResult struct {
-	Zone       zone.ZonePath
-	Records    int
-	Delegation int
+	Zone             zone.ZonePath
+	Records          int
+	Delegation       int
+	ZoneRootChanged  bool
+	AuthorityChanged bool
+	NetworkChanged   bool
 }
 
 func DefaultSyncLimits() SyncLimits {
@@ -102,6 +105,13 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 		return nil, nil, err
 	}
 
+	beforeZone := ns.Zones[snapshot.Zone]
+	beforeRoot := ZoneRoot(beforeZone)
+	var beforeAuthority []byte
+	if beforeZone != nil {
+		beforeAuthority = photoncrypto.AuthorityHash(beforeZone.Authority)
+	}
+
 	candidate := zone.CloneNetworkStateForZone(ns, snapshot.Zone)
 	candidate.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	active := candidate.Zones[snapshot.Zone]
@@ -164,10 +174,17 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 		}
 	}
 
+	afterRoot := ZoneRoot(active)
+	afterAuthority := photoncrypto.AuthorityHash(active.Authority)
+	rootChanged := !bytes.Equal(beforeRoot, afterRoot)
+	authorityChanged := !bytes.Equal(beforeAuthority, afterAuthority)
 	result := &ApplyResult{
-		Zone:       snapshot.Zone,
-		Records:    applied,
-		Delegation: len(active.Delegations),
+		Zone:             snapshot.Zone,
+		Records:          applied,
+		Delegation:       len(active.Delegations),
+		ZoneRootChanged:  rootChanged,
+		AuthorityChanged: authorityChanged,
+		NetworkChanged:   rootChanged || authorityChanged,
 	}
 	return candidate, result, nil
 }

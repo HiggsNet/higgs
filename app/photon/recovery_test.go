@@ -53,6 +53,33 @@ func TestRecoveryApplySnapshotRestoresManagedZoneDelegations(t *testing.T) {
 	}
 }
 
+func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+
+	service := newDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	notifications := 0
+	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+	beforeRevision := service.StateStore.Meta().Revision
+	result, _, err := service.handleRecoveryImportZoneEvent(snapshot)
+	if err != nil {
+		t.Fatalf("handleRecoveryImportZoneEvent(no-op): %v", err)
+	}
+	if result.NetworkChanged {
+		t.Fatalf("identical recovery snapshot result = %+v, want no network change", result)
+	}
+	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
+		t.Fatalf("no-op recovery revision = %d, want unchanged %d", revision, beforeRevision)
+	}
+	if notifications != 0 {
+		t.Fatalf("no-op recovery emitted %d state-change notifications", notifications)
+	}
+}
+
 func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
 	dir := t.TempDir()
 	adminConfig := filepath.Join(dir, "admin.yaml")

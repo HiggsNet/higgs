@@ -152,6 +152,7 @@ type daemonEventResult struct {
 	Records        int
 	Delegations    int
 	Revocations    int
+	NetworkChanged bool
 	Purge          *purgePlan
 	StateGC        *stateGCPlan
 	Error          error
@@ -726,6 +727,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			RecordsApplied: result.Records,
 			Delegations:    result.Delegations,
 			Revocations:    result.Revocations,
+			NetworkChanged: result.NetworkChanged,
 		})
 	case "delegate_revoke":
 		if err := validateControlDelegateRevoke(request); err != nil {
@@ -1069,11 +1071,12 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 			return daemonEventResult{Error: err}, false, false
 		}
 		return daemonEventResult{
-			Zone:        result.Zone,
-			Records:     result.Records,
-			Delegations: result.Delegation,
-			Revocations: revocations,
-		}, true, false
+			Zone:           result.Zone,
+			Records:        result.Records,
+			Delegations:    result.Delegation,
+			Revocations:    revocations,
+			NetworkChanged: result.NetworkChanged,
+		}, result.NetworkChanged, false
 	case daemonEventDelegateRevoke:
 		err := d.handleDelegateRevokeEvent(event.Zone, event.Reason)
 		return daemonEventResult{Zone: event.Zone, Error: err}, err == nil, false
@@ -1223,17 +1226,17 @@ func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions
 func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *gossip.ZoneSnapshot) (*gossip.ApplyResult, int, error) {
 	var result *gossip.ApplyResult
 	var revocations int
-	err := d.runStateStoreWrite(func(state *stateFile) error {
+	_, err := d.runStateStoreWriteIfChanged(func(state *stateFile) (bool, error) {
 		var err error
 		result, err = applyRecoveryZoneSnapshot(d.Sync.App, state, snapshot)
 		if err != nil {
-			return err
+			return false, err
 		}
 		revocations = 0
 		if zs := state.Network.Zones[result.Zone]; zs != nil {
 			revocations = len(zs.Revocations)
 		}
-		return nil
+		return result.NetworkChanged, nil
 	})
 	if err != nil {
 		return nil, 0, err

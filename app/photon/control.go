@@ -81,6 +81,7 @@ type controlResponse struct {
 	RecordsApplied    int                           `json:"records_applied,omitempty"`
 	Delegations       int                           `json:"delegations,omitempty"`
 	Revocations       int                           `json:"revocations,omitempty"`
+	NetworkChanged    bool                          `json:"network_changed,omitempty"`
 	PurgePlan         *purgePlan                    `json:"purge_plan,omitempty"`
 	EndpointACLs      []endpointACL                 `json:"endpoint_acls,omitempty"`
 	StateGC           *stateGCPlan                  `json:"state_gc,omitempty"`
@@ -476,9 +477,10 @@ func importRecoveryZoneViaControl(rt *Runtime, snapshot *gossip.ZoneSnapshot) (*
 		return nil, 0, ok, err
 	}
 	return &gossip.ApplyResult{
-		Zone:       response.Zone,
-		Records:    response.RecordsApplied,
-		Delegation: response.Delegations,
+		Zone:           response.Zone,
+		Records:        response.RecordsApplied,
+		Delegation:     response.Delegations,
+		NetworkChanged: response.NetworkChanged,
 	}, response.Revocations, true, nil
 }
 
