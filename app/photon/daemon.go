@@ -53,12 +53,9 @@ type DaemonService struct {
 	metadataCheckpoint     metadataCheckpointState
 	metadataCheckpointSave func() error
 
-	syncSessions      map[string]*gossip.SyncSession
-	pendingSyncHints  map[string]bool
-	syncEvents        chan gossip.SyncEvent
+	syncEngine        *gossip.Engine
 	objectPullResults chan ObjectPullResult
 	objectPullPool    *objectPullPool
-	timerManager      *TimerManager
 
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager   birdProcessManager
@@ -188,12 +185,9 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		d.routingLastRunUnix.Store(state.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
-	d.syncSessions = make(map[string]*gossip.SyncSession)
-	d.pendingSyncHints = make(map[string]bool)
-	d.syncEvents = make(chan gossip.SyncEvent, 64)
+	d.syncEngine = gossip.NewEngine(gossip.NewTimerClock(nil), gossip.DefaultSyncEventBuffer)
 	d.objectPullResults = make(chan ObjectPullResult, 64)
 	d.objectPullPool = newObjectPullPool(d.objectPullResults, 0)
-	d.timerManager = NewTimerManager(NewRealClock(), d.syncEvents)
 	d.configureHealthManager()
 	return d
 }
@@ -258,12 +252,8 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	if d.timerManager != nil {
-		defer func() {
-			if d.timerManager != nil {
-				d.timerManager.Stop()
-			}
-		}()
+	if d.syncEngine != nil {
+		defer d.syncEngine.Stop()
 	}
 	defer d.closeConfiguredIPsecDriver()
 	defer func() {
@@ -475,7 +465,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 					"reason":  gossip.RejectReason(result.Error),
 				}, result.Error))
 			}
-		case event := <-d.syncEvents:
+		case event := <-d.syncEngine.Events():
 			timer.Stop()
 			if d.handleSyncEvent(ctx, event) {
 				lastObservedDigests = d.zoneDigests()

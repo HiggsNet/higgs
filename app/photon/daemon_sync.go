@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,32 +11,22 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-// runtimeClock wraps a Runtime-style func() time.Time into the Clock interface.
-type runtimeClock struct {
-	now func() time.Time
-}
-
-func (c *runtimeClock) Now() time.Time { return c.now() }
-
-func (c *runtimeClock) NewTimer(d time.Duration) Timer {
-	return &realTimer{Timer: time.NewTimer(d)}
-}
-
 // EnableEventLoopSync configures the event-loop gossip.SyncSession clock. The
 // event-loop sync path is the only daemon sync path; this helper remains for
 // tests that need a fake clock.
-func (d *DaemonService) EnableEventLoopSync(clock Clock) {
+func (d *DaemonService) EnableEventLoopSync(clock gossip.TimerClock) {
 	if clock == nil {
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Clock != nil {
-			clock = &runtimeClock{now: d.Sync.App.Clock}
+			clock = gossip.NewTimerClock(d.Sync.App.Clock)
 		} else {
-			clock = NewRealClock()
+			clock = gossip.NewTimerClock(nil)
 		}
 	}
-	if d.timerManager != nil {
-		d.timerManager.Stop()
+	if d.syncEngine == nil {
+		d.syncEngine = gossip.NewEngine(clock, gossip.DefaultSyncEventBuffer)
+		return
 	}
-	d.timerManager = NewTimerManager(clock, d.syncEvents)
+	d.syncEngine.ResetTimers(clock)
 }
 
 func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) error {
@@ -66,22 +55,20 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 			})
 			continue
 		}
-		if existing, ok := d.syncSessions[peerID]; ok && !existing.Done() {
+		if d.syncEngine.HasActiveSession(peerID) {
 			d.logDebug("sync", "event_loop_skipped", map[string]any{
 				"peer_id": peerID,
 				"reason":  "session_active",
 			})
 			continue
 		}
-		d.syncSessions[peerID] = gossip.NewSyncSession(peerID)
+		d.syncEngine.NewSession(peerID)
 		event := &gossip.SyncTimerEvent{
 			PeerID:       peerID,
 			LocalDigests: projection.digests,
 			LocalSummary: projection.summary,
 		}
-		select {
-		case d.syncEvents <- event:
-		default:
+		if err := d.syncEngine.Post(event); err != nil {
 			d.logWarn("sync", "event_loop_full", map[string]any{"peer_id": peerID})
 		}
 	}
@@ -98,86 +85,34 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 			},
 		}
 		label := "observed_path"
-		if kind, zoneName, ok := packetReadOnlyResponder(msg); ok &&
-			(kind != "chunk_fallback" || d.Sync.Transport != nil) {
+		if request, ok := gossip.ClassifyReadOnlyRequest(msg); ok &&
+			(request.Kind != gossip.ReadOnlyChunkFallback || d.Sync.Transport != nil) {
 			label += ",read_only_responder"
 			mutations = append(mutations, func(state *stateFile) {
-				recordReadOnlyResponder(state, msg.PeerID, kind, zoneName, now)
+				recordReadOnlyResponder(state, msg.PeerID, string(request.Kind), request.Zone, now)
 			})
 		}
 		d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...)
 		d.seedObservedPeerPath(msg.PeerID)
 	}
-	event := gossip.RoutePacket(packet, d.syncSessions)
-	switch ev := event.(type) {
-	case *gossip.PacketEvent:
-		msg := ev.Packet.Message
-		switch msg.Type {
-		case gossip.MessagePing:
-			// A inbound ping carries the peer's zone digests, which is enough
-			// for our active session to decide what to pull. This is important
-			// when the local session's own initial ping was lost (e.g. the peer
-			// was not yet listening): without this, the session would stay in
-			// ping_sent until the round timer fires and never converge.
-			if msg.Ping != nil {
-				if msg.Ping.Summary != nil {
-					_ = d.postSyncEvent(&gossip.CatalogSummaryReceivedEvent{
-						PeerID:  msg.PeerID,
-						Summary: msg.Ping.Summary,
-					})
-				}
-			}
-			return d.respondPing(msg.PeerID, msg.Ping)
-		case gossip.MessagePong:
-			if msg.Pong == nil {
-				return nil
-			}
-			return d.postSyncEvent(&gossip.PongReceivedEvent{
-				PeerID: msg.PeerID,
-				Pong:   msg.Pong,
-			})
-		case gossip.MessageFetchZone:
-			if msg.FetchZone == nil {
-				return nil
-			}
-			// Chunk fallback requests split detached zone snapshots into UDP
-			// object chunks.
-			// Keep them out of the active pull FSM as a read-only responder path.
-			if msg.FetchZone.ChunkFallback {
-				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
-			}
-			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
-		case gossip.MessageFetchCatalogPage:
-			if msg.FetchCatalogPage == nil {
-				return nil
-			}
-			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
-		case gossip.MessageCatalogPage:
-			if msg.CatalogPage == nil {
-				return nil
-			}
-			return d.postSyncEvent(&gossip.CatalogPageReceivedEvent{
-				PeerID: msg.PeerID,
-				Page:   msg.CatalogPage,
-			})
-		case gossip.MessageAnnounce:
-			return d.handleAnnounceHint(msg.PeerID)
-		case gossip.MessageObjectChunk:
-			return d.handleObjectChunk(msg, syncLimits(d.Sync.Config))
-		case gossip.MessageObjectChunkNACK:
-			return d.Sync.handleObjectChunkNACK(msg)
-		default:
-			return nil
+	for _, action := range d.syncEngine.PlanInbound(packet) {
+		msg := action.Message
+		if msg == nil {
+			continue
 		}
-	case *gossip.UnsolicitedPacketEvent:
-		if packet == nil || packet.Message == nil {
-			return nil
-		}
-		msg := packet.Message
-		switch msg.Type {
-		case gossip.MessagePing:
-			if msg.Ping == nil {
-				return nil
+		switch action.Kind {
+		case gossip.InboundPostSessionEvent:
+			// An active inbound PING both advances the session from its catalog
+			// summary and receives a responder PONG. A full event queue must not
+			// suppress that response.
+			if msg.Type == gossip.MessagePing {
+				_ = d.postSyncEvent(action.Event)
+				continue
+			}
+			return d.postSyncEvent(action.Event)
+		case gossip.InboundRespondPing:
+			if action.ActiveSession {
+				return d.respondPing(msg.PeerID, msg.Ping)
 			}
 			localSummary, err := d.respondPingWithSummary(msg.PeerID, msg.Ping)
 			if err != nil {
@@ -187,50 +122,22 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, _ co
 				return d.maybeShortcutSyncFromPingSummaryWithLocal(msg.PeerID, msg.Ping.Summary, localSummary)
 			}
 			return nil
-		case gossip.MessageFetchZone:
-			if msg.FetchZone == nil {
-				return nil
-			}
+		case gossip.InboundRespondFetchZone:
 			if msg.FetchZone.ChunkFallback {
 				return d.respondFetchZoneChunks(msg.PeerID, msg.FetchZone.Zone)
 			}
 			return d.respondFetchZone(msg.PeerID, msg.FetchZone.Zone)
-		case gossip.MessageFetchCatalogPage:
-			if msg.FetchCatalogPage == nil {
-				return nil
-			}
+		case gossip.InboundRespondFetchCatalogPage:
 			return d.respondFetchCatalogPage(msg.PeerID, msg.FetchCatalogPage.Cursor)
-		case gossip.MessageAnnounce:
+		case gossip.InboundHandleAnnounce:
 			return d.handleAnnounceHint(msg.PeerID)
-		case gossip.MessageObjectChunkNACK:
+		case gossip.InboundHandleObjectChunk:
+			return d.handleObjectChunk(msg, syncLimits(d.Sync.Config))
+		case gossip.InboundHandleObjectChunkNACK:
 			return d.Sync.handleObjectChunkNACK(msg)
-		default:
-			return nil
-		}
-	default:
-		return nil
-	}
-}
-
-func packetReadOnlyResponder(msg *gossip.Message) (string, zone.ZonePath, bool) {
-	if msg == nil {
-		return "", "", false
-	}
-	switch msg.Type {
-	case gossip.MessageFetchZone:
-		if msg.FetchZone == nil {
-			return "", "", false
-		}
-		if msg.FetchZone.ChunkFallback {
-			return "chunk_fallback", msg.FetchZone.Zone, true
-		}
-		return "fetch_zone", msg.FetchZone.Zone, true
-	case gossip.MessageFetchCatalogPage:
-		if msg.FetchCatalogPage != nil {
-			return "catalog_page", "", true
 		}
 	}
-	return "", "", false
+	return nil
 }
 
 func (d *DaemonService) respondPing(peerID string, ping *gossip.Ping) error {
@@ -253,15 +160,8 @@ func (d *DaemonService) respondPingWithSummary(peerID string, ping *gossip.Ping)
 		return summary, nil
 	}
 	recordCatalogSummary(d.PeerObservability, peerID, summary, d.Sync.now())
-	d.sendSyncMessage(peerID, &gossip.Message{
-		Type: gossip.MessagePong,
-		Pong: &gossip.Pong{Summary: summary},
-	})
-	if ping.Summary != nil && !bytes.Equal(ping.Summary.CatalogRoot, summary.CatalogRoot) {
-		d.sendSyncMessage(peerID, &gossip.Message{
-			Type:             gossip.MessageFetchCatalogPage,
-			FetchCatalogPage: &gossip.FetchCatalogPage{},
-		})
+	for _, message := range gossip.PlanPingResponse(ping, summary) {
+		d.sendSyncMessage(peerID, message)
 	}
 	return summary, nil
 }
@@ -275,7 +175,7 @@ func (d *DaemonService) maybeShortcutSyncFromPingSummaryWithLocal(peerID string,
 	if localSummary == nil {
 		return nil
 	}
-	if !bytes.Equal(remoteSummary.CatalogRoot, localSummary.CatalogRoot) {
+	if !gossip.CatalogRootsMatch(remoteSummary, localSummary) {
 		return d.handleAnnounceHint(peerID)
 	}
 	now := d.Sync.now()
@@ -299,11 +199,8 @@ func (d *DaemonService) handleAnnounceHint(peerID string) error {
 		return nil
 	}
 	now := d.Sync.now()
-	if existing, ok := d.syncSessions[peerID]; ok && existing != nil && !existing.Done() {
-		if d.pendingSyncHints == nil {
-			d.pendingSyncHints = make(map[string]bool)
-		}
-		d.pendingSyncHints[peerID] = true
+	if d.syncEngine.HasActiveSession(peerID) {
+		d.syncEngine.DeferHint(peerID)
 		d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
 			recordSyncHint(state, peerID, "announce_hint", "session_active", false, now)
 		})
@@ -333,13 +230,13 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 	if summary == nil {
 		return nil
 	}
-	d.syncSessions[peerID] = gossip.NewSyncSession(peerID)
+	session := d.syncEngine.NewSession(peerID)
 	if err := d.postSyncEvent(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
 		LocalDigests: digests,
 		LocalSummary: summary,
 	}); err != nil {
-		delete(d.syncSessions, peerID)
+		d.syncEngine.RemoveSession(peerID)
 		return err
 	}
 	d.recordSyncPeerStateBatch(peerID, "sync_hint,active_pull",
@@ -347,7 +244,7 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 			recordSyncHint(state, peerID, reason, "", true, now)
 		},
 		func(state *stateFile) {
-			recordSyncActivePull(state, peerID, "hint_queued", d.syncSessions[peerID], now)
+			recordSyncActivePull(state, peerID, "hint_queued", session, now)
 		},
 	)
 	d.logDebug("sync", "hinted_sync_started", map[string]any{
@@ -358,13 +255,11 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 }
 
 func (d *DaemonService) postSyncEvent(event gossip.SyncEvent) error {
-	select {
-	case d.syncEvents <- event:
-		return nil
-	default:
+	if err := d.syncEngine.Post(event); err != nil {
 		d.logWarn("sync", "event_dropped", map[string]any{"reason": "sync_events_full"})
-		return errors.New("sync event channel full")
+		return err
 	}
+	return nil
 }
 
 func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
@@ -467,7 +362,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 		d.logDebug("sync", "event_dropped", map[string]any{"reason": "no_peer_id"})
 		return false
 	}
-	session := d.syncSessions[peerID]
+	session := d.syncEngine.Session(peerID)
 	if session == nil {
 		d.logDebug("sync", "event_dropped", map[string]any{
 			"peer_id": peerID,
@@ -491,18 +386,17 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 		e.LocalEntries, e.Page = d.StateStore.filteredCatalogProjection(peerID, e.Page, d.Sync.now())
 		recordCatalogPage(d.PeerObservability, peerID, e.Page, d.Sync.now())
 	}
-	oldState := session.State
 	if _, ok := event.(*gossip.RoundTimeoutEvent); ok {
 		udpChunkAssemblies.DropPeer(peerID)
 	}
-	actions, err := session.OnEvent(event, d.Sync.now())
-	if err != nil {
+	engineResult := d.syncEngine.HandleEvent(event, d.Sync.now())
+	if engineResult.Err != nil {
 		d.logWarn("sync", "session_event_error", map[string]any{
 			"peer_id": peerID,
-			"error":   err,
+			"error":   engineResult.Err,
 		})
-		session.Fail(err)
 	}
+	actions := engineResult.Actions
 	eventName := gossip.SyncEventName(event)
 	eventNow := d.Sync.now()
 	activeSession := &gossip.SyncSession{State: session.State}
@@ -510,11 +404,11 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 	mutations.add("active_pull", func(state *stateFile) {
 		recordSyncActivePull(state, peerID, eventName, activeSession, eventNow)
 	})
-	if session.State != oldState {
+	if session.State != engineResult.OldState {
 		d.logDebug("sync", "session_state_changed", map[string]any{
 			"peer_id":   peerID,
 			"event":     fmt.Sprintf("%T", event),
-			"old_state": oldState,
+			"old_state": engineResult.OldState,
 			"new_state": session.State,
 			"pending":   session.PendingCount(),
 			"inflight":  session.InflightCount(),
@@ -938,9 +832,9 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	for _, action := range actions {
 		switch a := action.(type) {
 		case gossip.StartTimerAction:
-			d.timerManager.Start(a.PeerID, a.Kind, a.Deadline)
+			d.syncEngine.StartTimer(a.PeerID, a.Kind, a.Deadline)
 		case gossip.CancelTimerAction:
-			d.timerManager.Cancel(a.PeerID, a.Kind)
+			d.syncEngine.CancelTimer(a.PeerID, a.Kind)
 		}
 	}
 
@@ -1036,9 +930,7 @@ func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, pat
 }
 
 func (d *DaemonService) enqueueObjectPullResult(result ObjectPullResult) {
-	select {
-	case d.syncEvents <- objectPullResultToEvent(result):
-	default:
+	if err := d.syncEngine.Post(objectPullResultToEvent(result)); err != nil {
 		d.logWarn("sync", "object_pull_result_dropped", map[string]any{
 			"peer_id": result.PeerID,
 			"zone":    result.Zone,
@@ -1087,7 +979,7 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *gossip.SyncSe
 		return
 	}
 	peerID := session.PeerID
-	d.timerManager.CancelAll(peerID)
+	d.syncEngine.CancelPeerTimers(peerID)
 	// Only mark the last-used address as failing for timeout-like errors; do
 	// not penalize the address for internal/event handling failures.
 	if session.LastError() != nil && d.Sync.Transport != nil && strings.Contains(session.LastError().Error(), "timeout") {
@@ -1105,9 +997,8 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *gossip.SyncSe
 			d.logWarn("sync", "session_save_failed", map[string]any{"peer_id": peerID, "error": err})
 		}
 	}
-	delete(d.syncSessions, peerID)
-	if d.pendingSyncHints != nil && d.pendingSyncHints[peerID] {
-		delete(d.pendingSyncHints, peerID)
+	d.syncEngine.RemoveSession(peerID)
+	if d.syncEngine.TakePendingHint(peerID) {
 		_ = d.startHintedSyncSession(peerID, "announce_hint_followup")
 	}
 }
@@ -1138,13 +1029,11 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			continue
 		}
 		relayed++
-		if existing, ok := d.syncSessions[peerID]; ok && !existing.Done() {
+		if d.syncEngine.HasActiveSession(peerID) {
 			continue
 		}
-		d.syncSessions[peerID] = gossip.NewSyncSession(peerID)
-		select {
-		case d.syncEvents <- &gossip.SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}:
-		default:
+		d.syncEngine.NewSession(peerID)
+		if err := d.syncEngine.Post(&gossip.SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}); err != nil {
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
 		}
 		d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {

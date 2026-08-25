@@ -273,7 +273,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 
 	return []SyncAction{
 		SendPingAction{PeerID: e.PeerID, Digests: e.LocalDigests, Summary: e.LocalSummary},
-		StartTimerAction{PeerID: e.PeerID, Kind: "round", Deadline: now.Add(s.roundTimeout())},
+		StartTimerAction{PeerID: e.PeerID, Kind: TimerKindRound, Deadline: now.Add(s.roundTimeout())},
 	}, nil
 }
 
@@ -340,7 +340,7 @@ func (s *SyncSession) handleCatalogSummary(peerID string, summary *CatalogSummar
 	s.lastCatalogCursor = ""
 	return []SyncAction{
 		SendFetchCatalogPageAction{PeerID: peerID},
-		StartTimerAction{PeerID: peerID, Kind: "catalog_page", Deadline: now.Add(s.catalogPageTimeout())},
+		StartTimerAction{PeerID: peerID, Kind: TimerKindCatalogPage, Deadline: now.Add(s.catalogPageTimeout())},
 	}, nil
 }
 
@@ -372,7 +372,7 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	s.lastCatalogCursor = e.Page.NextCursor
 	if e.Page.NextCursor != "" {
 		actions = append(actions, SendFetchCatalogPageAction{PeerID: e.PeerID, Cursor: e.Page.NextCursor})
-		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: "catalog_page", Deadline: now.Add(s.catalogPageTimeout())})
+		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: TimerKindCatalogPage, Deadline: now.Add(s.catalogPageTimeout())})
 		return actions, nil
 	}
 	if len(s.objectPullInflight) > 0 {
@@ -438,7 +438,7 @@ func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error)
 	return []SyncAction{
 		RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
 		SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: round timeout", e.PeerID), Persistence: SyncPersistenceMeta},
-		CancelTimerAction{PeerID: e.PeerID, Kind: "catalog_page"},
+		CancelTimerAction{PeerID: e.PeerID, Kind: TimerKindCatalogPage},
 	}, nil
 }
 

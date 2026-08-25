@@ -104,6 +104,21 @@ active-session/unsolicited packet classifier 也位于同一 `pkg/core/gossip`�
 message 的 `PeerID` 查询当前 `SyncSession` map，不解释 message type。Linux 与 Windows 的
 executor 分别处理 responder、状态提交和平台日志，不能把这些副作用放回 classifier。
 同步事件的稳定诊断名和 peer ID 提取也由公共包提供，executor 不重复维护 event type switch。
+在 classifier 之后，共享 inbound planner 统一解释 message type，产出有序的 session-event、
+Ping/fetch responder、announce、chunk 或 NACK action。它固定 active/unsolicited policy 和
+nil payload 的 fail-closed 行为；Linux/Windows executor 只执行 action 所需的平台副作用。
+Read-only fetch 分类与 Ping response message planning 同样共享：公共逻辑固定 responder 标签、
+catalog-root equality，以及 Pong 后按需请求 catalog page 的顺序；executor 负责读取本地 summary、
+观测和实际发送。
+`gossip.Engine` 是平台无关的 single-writer orchestration root，拥有 per-peer session registry、
+pending announce hint、bounded `SyncEvent` queue 和 protocol timers。共享 `TimerClock` 固定 timer
+replace/cancel、stale 防护、背压和 stop 语义。Linux daemon 与 Photon Windows 都把共享 receive
+loop 产出的 verified packet 交给 Engine，再执行它返回的 action。
+
+因此平台注入边界不只有 UDP：至少还包括 timer clock、verified state projection、snapshot
+apply/object-pull completion，以及 send/persistence/log effect executor。公共 gossip 不 bind socket、
+不打开数据库，也不创建平台资源；协议 timer/receive goroutine 只依赖注入的 capability，具体 UDP
+adapter 不泄漏进状态机。
 UDP object chunk assembly、quiet-period NACK 和 sent-chunk repair cache 也复用
 `pkg/core/gossip` 的同一实现。共享策略固定 object/hash/metadata 校验、per-peer inflight、
 repair rounds、NACK index、TTL 和内存 byte 上限；Linux/Windows executor 只负责实际发送

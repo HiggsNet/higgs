@@ -144,6 +144,21 @@ authorization 和 transport records 作为可信事实来源。
   和 datagram forwarding 五组兼容壳；共享行为测试迁到 `pkg/core/gossip`，daemon timer 测试归位
   到 timer manager。同步事件名和 peer ID 提取也进入同一公共包，Linux/Windows executor 不再
   重复维护 event type switch。
+- [x] 将 inbound verified packet 的 message policy 抽到 `pkg/core/gossip`：公共 planner 统一
+  active/unsolicited 下 Ping/Pong、catalog、fetch、announce、object chunk/NACK 的允许范围、
+  payload fail-closed 和 session event 转换，并保留 active Ping“先投递 summary event、再响应”
+  的动作顺序。Linux daemon 只执行 planner action，继续拥有状态投影、发送、apply、日志和持久化。
+- [x] 将 read-only request 分类、catalog-root equality 和 Ping response planning 抽到
+  `pkg/core/gossip`：`fetch_zone`、`chunk_fallback`、`catalog_page` 标签及 nil payload 策略只有
+  一个来源；Pong 必须先发，remote root 不同时再发 `FETCH_CATALOG_PAGE`。Linux 只读取 committed
+  catalog、记录观测并按顺序发送 planner 生成的 message。
+- [x] 将 per-peer protocol timer manager 从 `app/photon` 整体迁入 `pkg/core/gossip`，共享
+  `TimerClock`、round/catalog-page kind、replace/cancel/cancel-all、stale timer 防护、bounded event
+  delivery 和幂等 stop；完整 timer 测试同步迁移，app 只保留实现公共 clock contract 的集成替身。
+- [x] 新增共享 `gossip.Engine` 作为 single-writer protocol orchestration：统一拥有 session registry、
+  pending announce hint、bounded `SyncEvent` queue 和 timers，并提供 inbound planning、event FSM
+  advance、session lifecycle 与 timer API。Linux 删除对应四份本地字段，直接消费 Engine event
+  channel 和执行公共 action；Engine 不依赖 daemon、StateStore、日志或具体 UDP socket。
 
 ### 10.0 冻结 v1 契约与威胁模型
 

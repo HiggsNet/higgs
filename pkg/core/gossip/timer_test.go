@@ -1,31 +1,10 @@
-package main
+package gossip
 
 import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
-
-func TestNextTimerWait(t *testing.T) {
-	now := time.Unix(1000, 0)
-	d := &DaemonService{
-		Sync: &SyncRuntime{
-			App: &Runtime{Clock: func() time.Time { return now }},
-		},
-	}
-
-	if wait := d.nextTimerWait(now.Add(time.Second), now.Add(2*time.Second)); wait != time.Second {
-		t.Fatalf("nextTimerWait = %v, want 1s", wait)
-	}
-	if wait := d.nextTimerWait(now.Add(-time.Second), now.Add(time.Second)); wait != 0 {
-		t.Fatalf("nextTimerWait for due deadline = %v, want 0", wait)
-	}
-	if wait := d.nextTimerWait(time.Time{}, time.Time{}); wait != 24*time.Hour {
-		t.Fatalf("nextTimerWait with no deadlines = %v, want 24h", wait)
-	}
-}
 
 type fakeClock struct {
 	mu     sync.Mutex
@@ -41,7 +20,7 @@ func (c *fakeClock) Now() time.Time {
 	return c.now
 }
 
-func (c *fakeClock) NewTimer(d time.Duration) Timer {
+func (c *fakeClock) NewTimer(d time.Duration) EventTimer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	t := &fakeTimer{clock: c, when: c.now.Add(d), c: make(chan time.Time, 1)}
@@ -127,7 +106,7 @@ func requireTimerManagerStops(t *testing.T, tm *TimerManager) {
 
 func TestTimerManagerPostsRoundTimeout(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	events := make(chan gossip.SyncEvent, 1)
+	events := make(chan SyncEvent, 1)
 	tm := NewTimerManager(clock, events)
 
 	tm.Start("peer-a", "round", clock.Now().Add(5*time.Second))
@@ -135,9 +114,9 @@ func TestTimerManagerPostsRoundTimeout(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		rt, ok := ev.(*gossip.RoundTimeoutEvent)
+		rt, ok := ev.(*RoundTimeoutEvent)
 		if !ok {
-			t.Fatalf("expected gossip.RoundTimeoutEvent, got %T", ev)
+			t.Fatalf("expected RoundTimeoutEvent, got %T", ev)
 		}
 		if rt.PeerID != "peer-a" {
 			t.Fatalf("unexpected peer id: %s", rt.PeerID)
@@ -150,7 +129,7 @@ func TestTimerManagerPostsRoundTimeout(t *testing.T) {
 
 func TestTimerManagerPostsCatalogPageTimeout(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	events := make(chan gossip.SyncEvent, 1)
+	events := make(chan SyncEvent, 1)
 	tm := NewTimerManager(clock, events)
 
 	tm.Start("peer-a", "catalog_page", clock.Now().Add(250*time.Millisecond))
@@ -158,9 +137,9 @@ func TestTimerManagerPostsCatalogPageTimeout(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		qt, ok := ev.(*gossip.CatalogPageTimeoutEvent)
+		qt, ok := ev.(*CatalogPageTimeoutEvent)
 		if !ok {
-			t.Fatalf("expected gossip.CatalogPageTimeoutEvent, got %T", ev)
+			t.Fatalf("expected CatalogPageTimeoutEvent, got %T", ev)
 		}
 		if qt.PeerID != "peer-a" {
 			t.Fatalf("unexpected peer id: %s", qt.PeerID)
@@ -173,7 +152,7 @@ func TestTimerManagerPostsCatalogPageTimeout(t *testing.T) {
 
 func TestTimerManagerCancelPreventsEvent(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	events := make(chan gossip.SyncEvent, 1)
+	events := make(chan SyncEvent, 1)
 	tm := NewTimerManager(clock, events)
 
 	tm.Start("peer-a", "round", clock.Now().Add(5*time.Second))
@@ -190,7 +169,7 @@ func TestTimerManagerCancelPreventsEvent(t *testing.T) {
 
 func TestTimerManagerStartReplacesExistingTimer(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	events := make(chan gossip.SyncEvent, 1)
+	events := make(chan SyncEvent, 1)
 	tm := NewTimerManager(clock, events)
 
 	tm.Start("peer-a", "round", clock.Now().Add(10*time.Second))
@@ -215,7 +194,7 @@ func TestTimerManagerStartReplacesExistingTimer(t *testing.T) {
 
 func TestTimerManagerCancelAllForPeer(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	events := make(chan gossip.SyncEvent, 1)
+	events := make(chan SyncEvent, 1)
 	tm := NewTimerManager(clock, events)
 
 	tm.Start("peer-a", "round", clock.Now().Add(5*time.Second))
@@ -233,7 +212,7 @@ func TestTimerManagerCancelAllForPeer(t *testing.T) {
 
 func TestTimerManagerStopCancelsAllWaiters(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	events := make(chan gossip.SyncEvent, 2)
+	events := make(chan SyncEvent, 2)
 	tm := NewTimerManager(clock, events)
 
 	tm.Start("peer-a", "round", clock.Now().Add(time.Hour))
@@ -250,7 +229,7 @@ func TestTimerManagerStopCancelsAllWaiters(t *testing.T) {
 
 func TestTimerManagerStaleFiredTimerDoesNotPost(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	events := make(chan gossip.SyncEvent, 1)
+	events := make(chan SyncEvent, 1)
 	tm := NewTimerManager(clock, events)
 	key := timerKey{peerID: "peer-a", kind: "round"}
 	staleTimer := newChannelTimer()
@@ -262,7 +241,7 @@ func TestTimerManagerStaleFiredTimerDoesNotPost(t *testing.T) {
 	tm.waiters.Add(1)
 	tm.mu.Unlock()
 	staleTimer.c <- clock.Now()
-	go tm.waitAndPost(key, stale, key.peerID, key.kind)
+	go tm.waitAndPost(key, stale)
 
 	select {
 	case ev := <-events:
@@ -273,14 +252,14 @@ func TestTimerManagerStaleFiredTimerDoesNotPost(t *testing.T) {
 }
 
 func TestTimerManagerStopIsIdempotent(t *testing.T) {
-	tm := NewTimerManager(newFakeClock(time.Unix(1000, 0)), make(chan gossip.SyncEvent, 1))
+	tm := NewTimerManager(newFakeClock(time.Unix(1000, 0)), make(chan SyncEvent, 1))
 	requireTimerManagerStops(t, tm)
 	requireTimerManagerStops(t, tm)
 }
 
 func TestTimerManagerRepeatedCancelDoesNotRetainWaiters(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	tm := NewTimerManager(clock, make(chan gossip.SyncEvent, 1))
+	tm := NewTimerManager(clock, make(chan SyncEvent, 1))
 
 	for range 2500 {
 		tm.Start("peer-a", "round", clock.Now().Add(time.Hour))
