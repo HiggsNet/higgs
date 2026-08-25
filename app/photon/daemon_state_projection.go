@@ -509,11 +509,13 @@ func (s *DaemonStateStore) peerTCPAddrProjection(config *syncConfigFile, peerID 
 
 type relayProjection struct {
 	digests    []gossip.ZoneDigest
+	summary    *gossip.CatalogSummary
 	peers      []string
 	peerStates map[string]syncPeerState
+	err        error
 }
 
-func (s *DaemonStateStore) relayProjection(config *syncConfigFile, now time.Time) relayProjection {
+func (s *DaemonStateStore) relayProjection(config *syncConfigFile, now time.Time, budget int) relayProjection {
 	var out relayProjection
 	if s == nil {
 		return out
@@ -529,6 +531,7 @@ func (s *DaemonStateStore) relayProjection(config *syncConfigFile, now time.Time
 	for _, peerID := range out.peers {
 		out.peerStates[peerID] = cloneSyncPeerState(s.committed.SyncPeers[peerID])
 	}
+	out.summary, out.err = gossip.CatalogSummaryForDigests(out.digests, budget)
 	return out
 }
 

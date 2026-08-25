@@ -1277,9 +1277,16 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	}
 	now := d.Sync.now()
 	relayed := 0
-	projection := d.StateStore.relayProjection(d.Sync.Config, now)
+	projection := d.StateStore.relayProjection(d.Sync.Config, now, d.syncDatagramBudget())
+	if projection.err != nil {
+		d.logWarn("sync", "relay_catalog_summary_failed", map[string]any{"error": projection.err})
+		return
+	}
+	if projection.summary == nil {
+		return
+	}
 	localDigests, peers, peerStates := projection.digests, projection.peers, projection.peerStates
-	catalogRoot := hex.EncodeToString(gossip.CatalogRoot(localDigests))
+	catalogRoot := hex.EncodeToString(projection.summary.CatalogRoot)
 	for _, peerID := range peers {
 		if peerID == sourcePeerID {
 			continue
@@ -1304,7 +1311,11 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 		d.syncSessions[peerID] = NewSyncSession(peerID)
 		queued := false
 		select {
-		case d.syncEvents <- &SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}:
+		case d.syncEvents <- &SyncTimerEvent{
+			PeerID:       peerID,
+			LocalDigests: localDigests,
+			LocalSummary: projection.summary,
+		}:
 			queued = true
 		default:
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
