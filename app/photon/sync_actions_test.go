@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"net"
 	"path/filepath"
 	"testing"
@@ -267,7 +268,7 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	state.Lock()
 	unlock := state.Unlock
 	changed := service.executeSyncActions(context.Background(), session, []SyncAction{
-		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot},
+		ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot, ExpectedRoot: gossip.ZoneRoot(source.Network.Zones["node-b.catofes."])},
 	})
 	unlock()
 	if !changed {
@@ -347,6 +348,93 @@ func TestExecuteSyncActionsPureNoopDoesNotCommit(t *testing.T) {
 	}
 	if due := service.metadataCheckpointDue(); !due.IsZero() {
 		t.Fatalf("pure no-op scheduled metadata checkpoint at %s", due)
+	}
+}
+
+func TestExecuteSyncActionsRejectsSnapshotOutsideAdvertisedRoot(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2207, 0)
+	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(node-b): %v", err)
+	}
+
+	service := newDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	session := NewSyncSession("node-b.catofes.")
+	beforeRoot := append([]byte(nil), gossip.ZoneRoot(state.Network.Zones[snapshot.Zone])...)
+	changed := service.executeSyncActions(context.Background(), session, []SyncAction{ApplySnapshotAction{
+		PeerID:       session.PeerID,
+		Snapshot:     snapshot,
+		ExpectedRoot: []byte("different-advertised-root"),
+		ReportResult: true,
+	}})
+	if changed {
+		t.Fatal("root-mismatched snapshot changed Network")
+	}
+	committed, _ := service.StateStore.Snapshot()
+	if afterRoot := gossip.ZoneRoot(committed.Network.Zones[snapshot.Zone]); !bytes.Equal(afterRoot, beforeRoot) {
+		t.Fatalf("root-mismatched snapshot changed zone: before=%x after=%x", beforeRoot, afterRoot)
+	}
+	if !isRejectedDigestActive(committed, session.PeerID, snapshot.Zone, []byte("different-advertised-root"), now.Add(time.Minute)) {
+		t.Fatal("root-mismatched snapshot did not record rejected digest")
+	}
+	select {
+	case event := <-service.syncEvents:
+		applied, ok := event.(*SnapshotAppliedEvent)
+		if !ok || applied.Err == nil {
+			t.Fatalf("apply completion = %#v, want SnapshotAppliedEvent error", event)
+		}
+	default:
+		t.Fatal("root-mismatched snapshot did not report apply completion")
+	}
+}
+
+func TestExecuteSyncActionsRejectsAdvertisedRootThatCannotConverge(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(2208, 0)
+	staleSnapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(stale node-b): %v", err)
+	}
+	localRecord, err := buildSignedRecordAt(state, "node-b.catofes.", "local-newer", []byte("keep"), "policy.string", now)
+	if err != nil {
+		t.Fatalf("buildSignedRecordAt(local-newer): %v", err)
+	}
+	if err := state.Network.PutAt(localRecord, now); err != nil {
+		t.Fatalf("PutAt(local-newer): %v", err)
+	}
+	beforeRoot := append([]byte(nil), gossip.ZoneRoot(state.Network.Zones[staleSnapshot.Zone])...)
+	expectedRoot := digestForSnapshot(staleSnapshot).RootHash
+
+	service := newDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	session := NewSyncSession("node-b.catofes.")
+	changed := service.executeSyncActions(context.Background(), session, []SyncAction{ApplySnapshotAction{
+		PeerID:       session.PeerID,
+		Snapshot:     staleSnapshot,
+		ExpectedRoot: expectedRoot,
+		ReportResult: true,
+	}})
+	if changed {
+		t.Fatal("non-converging stale snapshot changed Network")
+	}
+	committed, _ := service.StateStore.Snapshot()
+	if afterRoot := gossip.ZoneRoot(committed.Network.Zones[staleSnapshot.Zone]); !bytes.Equal(afterRoot, beforeRoot) {
+		t.Fatalf("non-converging snapshot changed local root: before=%x after=%x", beforeRoot, afterRoot)
+	}
+	if committed.Network.Zones[staleSnapshot.Zone].Records[localRecord.Key] == nil {
+		t.Fatal("non-converging snapshot removed newer local record")
+	}
+	if !isRejectedDigestActive(committed, session.PeerID, staleSnapshot.Zone, expectedRoot, now.Add(time.Minute)) {
+		t.Fatal("non-converging advertised root was not rejected")
+	}
+	select {
+	case event := <-service.syncEvents:
+		applied, ok := event.(*SnapshotAppliedEvent)
+		if !ok || applied.Err == nil {
+			t.Fatalf("apply completion = %#v, want convergence error", event)
+		}
+	default:
+		t.Fatal("non-converging snapshot did not report apply completion")
 	}
 }
 
@@ -448,6 +536,14 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	}
 	config := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
 	service := newDaemonService(rt, targetState, config, defaultDaemonInterval)
+	peerID := "node-b.catofes."
+	session := NewSyncSession(peerID)
+	_, _ = session.OnEvent(&SyncTimerEvent{PeerID: peerID}, now)
+	_, _ = session.OnEvent(&PongReceivedEvent{PeerID: peerID, Pong: &gossip.Pong{}, MissingZones: []zone.ZonePath{"catofes."}}, now)
+	_, _ = session.OnEvent(&ObjectPullResultEvent{PeerID: peerID, Zone: "catofes.", Err: errors.New("tcp unavailable")}, now)
+	service.syncSessions[peerID] = session
+	notifications := 0
+	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
 	beforeRev := service.StateStore.Meta().Revision
 
 	chunkSize := len(data) / 2
@@ -479,10 +575,18 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
 		if err := service.handleObjectChunk(&gossip.Message{
 			Type:        gossip.MessageObjectChunk,
-			PeerID:      "node-b.catofes.",
+			PeerID:      peerID,
 			ObjectChunk: chunk,
 		}, gossip.DefaultSyncLimits()); err != nil {
 			t.Fatalf("handleObjectChunk: %v", err)
+		}
+	}
+	for range 2 {
+		select {
+		case event := <-service.syncEvents:
+			service.handleSyncEvent(context.Background(), event)
+		default:
+			t.Fatal("chunk apply did not enqueue the expected FSM event")
 		}
 	}
 
@@ -490,8 +594,8 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 		t.Fatal("daemon object chunk mutated the detached constructor input")
 	}
 	committed, rev := service.StateStore.Snapshot()
-	if rev != beforeRev+1 {
-		t.Fatalf("state revision = %d, want exactly one object apply after %d", rev, beforeRev)
+	if rev <= beforeRev {
+		t.Fatalf("state revision = %d, want object apply after %d", rev, beforeRev)
 	}
 	if committed.Network.Zones["catofes."] == nil {
 		t.Fatal("committed state missing chunk-applied zone")
@@ -506,7 +610,13 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	if reloaded.Network.Zones["catofes."] == nil {
 		t.Fatal("persisted state missing chunk-applied zone")
 	}
-	observed, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)
+	if _, ok := service.syncSessions[peerID]; ok {
+		t.Fatal("chunk sync session remained active after apply acknowledgement")
+	}
+	if notifications != 1 {
+		t.Fatalf("chunk apply notifications = %d, want one after acknowledged completion", notifications)
+	}
+	observed, ok := service.PeerObservability.Snapshot(peerID, now)
 	if !ok || observed.DatagramStats == nil || observed.DatagramStats.ChunkFallbacks != 1 {
 		t.Fatalf("chunk fallback observability = %+v, want one apply", observed.DatagramStats)
 	}

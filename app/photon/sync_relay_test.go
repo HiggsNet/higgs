@@ -13,6 +13,7 @@ func TestShouldRelayToPeer(t *testing.T) {
 		state   syncPeerState
 		peerID  string
 		source  string
+		root    string
 		allowed bool
 		reason  string
 	}{
@@ -36,6 +37,14 @@ func TestShouldRelayToPeer(t *testing.T) {
 			reason: "backoff",
 		},
 		{
+			name:   "same catalog root",
+			state:  syncPeerState{LastRelayCatalogRootHex: "root-a"},
+			peerID: "node-b",
+			source: "node-a",
+			root:   "root-a",
+			reason: "relay_root_unchanged",
+		},
+		{
 			name:   "throttled",
 			state:  syncPeerState{LastRelayUnix: now.Unix()},
 			peerID: "node-b",
@@ -53,7 +62,7 @@ func TestShouldRelayToPeer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason := shouldRelayToPeer(tt.state, tt.peerID, tt.source, now)
+			allowed, reason := shouldRelayToPeer(tt.state, tt.peerID, tt.source, tt.root, now)
 			if allowed != tt.allowed || reason != tt.reason {
 				t.Fatalf("shouldRelayToPeer() = %v, %q; want %v, %q", allowed, reason, tt.allowed, tt.reason)
 			}
@@ -84,7 +93,7 @@ func TestRecordRelaySuccess(t *testing.T) {
 	}
 	now := time.Unix(100, 0)
 
-	recordRelaySuccess(state, "node-b", "node-a", now)
+	recordRelaySuccess(state, "node-b", "node-a", "catalog-root-a", now)
 
 	peerState := state.SyncPeers["node-b"]
 	if peerState.LastRelayUnix != now.Unix() {
@@ -92,6 +101,9 @@ func TestRecordRelaySuccess(t *testing.T) {
 	}
 	if peerState.LastUpdateSource != "node-a" {
 		t.Fatalf("LastUpdateSource = %q, want node-a", peerState.LastUpdateSource)
+	}
+	if peerState.LastRelayCatalogRootHex != "catalog-root-a" {
+		t.Fatalf("LastRelayCatalogRootHex = %q, want catalog-root-a", peerState.LastRelayCatalogRootHex)
 	}
 	if peerState.LastRelaySuppression != "" || peerState.LastRelaySuppressedAt != 0 {
 		t.Fatalf("relay suppression was not cleared: %#v", peerState)
@@ -140,10 +152,10 @@ func TestRelayRejectsSourceAndBackoffToLimitStorm(t *testing.T) {
 		"node-c.catofes.": {BackoffUntilUnix: now.Add(time.Minute).Unix()},
 	}}
 
-	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-b.catofes."], "node-b.catofes.", "node-b.catofes.", now); allowed || reason != "source_peer" {
+	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-b.catofes."], "node-b.catofes.", "node-b.catofes.", "root-a", now); allowed || reason != "source_peer" {
 		t.Fatalf("source relay decision = %v %q, want source_peer suppression", allowed, reason)
 	}
-	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-c.catofes."], "node-c.catofes.", "node-b.catofes.", now); allowed || reason != "backoff" {
+	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-c.catofes."], "node-c.catofes.", "node-b.catofes.", "root-a", now); allowed || reason != "backoff" {
 		t.Fatalf("backoff relay decision = %v %q, want backoff suppression", allowed, reason)
 	}
 }

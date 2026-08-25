@@ -790,7 +790,7 @@ func rejectedDigestKey(path zone.ZonePath) string {
 	return "zone:" + path.String()
 }
 
-func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now time.Time) (bool, string) {
+func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID, catalogRoot string, now time.Time) (bool, string) {
 	switch {
 	case peerID == "":
 		return false, "empty_peer_id"
@@ -798,6 +798,8 @@ func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now
 		return false, "source_peer"
 	case backoffRemaining(peerState, now) > 0:
 		return false, "backoff"
+	case catalogRoot != "" && peerState.LastRelayCatalogRootHex == catalogRoot:
+		return false, "relay_root_unchanged"
 	case peerState.LastRelayUnix != 0 && now.Sub(time.Unix(peerState.LastRelayUnix, 0)) < relayMinInterval:
 		return false, "relay_throttled"
 	default:
@@ -807,13 +809,14 @@ func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now
 
 // recordRelaySuccess mutates state.SyncPeers. The caller must hold the write
 // lock on state.
-func recordRelaySuccess(state *stateFile, peerID, sourcePeerID string, now time.Time) {
+func recordRelaySuccess(state *stateFile, peerID, sourcePeerID, catalogRoot string, now time.Time) {
 	if state == nil || peerID == "" {
 		return
 	}
 	normalizeSyncPeers(state)
 	peerState := state.SyncPeers[peerID]
 	peerState.LastRelayUnix = now.Unix()
+	peerState.LastRelayCatalogRootHex = catalogRoot
 	peerState.LastUpdateSource = sourcePeerID
 	peerState.LastRelaySuppression = ""
 	peerState.LastRelaySuppressedAt = 0

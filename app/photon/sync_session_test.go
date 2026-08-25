@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 	"time"
@@ -184,6 +185,19 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	if !s.pendingZones["catofes."] || !s.objectPullInflight["catofes."] {
 		t.Fatalf("catalog diff did not mark zone pending/inflight")
 	}
+	applyActions, err := s.OnEvent(&ObjectPullResultEvent{
+		PeerID:   "peer-a",
+		Zone:     "catofes.",
+		Snapshot: &gossip.ZoneSnapshot{Zone: "catofes."},
+	}, now.Add(30*time.Millisecond))
+	if err != nil {
+		t.Fatalf("ObjectPullResultEvent: %v", err)
+	}
+	assertActionTypes(t, applyActions, []string{"ApplySnapshotAction"})
+	apply := applyActions[0].(ApplySnapshotAction)
+	if !apply.ReportResult || !bytes.Equal(apply.ExpectedRoot, remote[0].RootHash) {
+		t.Fatalf("apply action completion/root binding = %+v, want %x", apply, remote[0].RootHash)
+	}
 }
 
 func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
@@ -289,7 +303,8 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	}
 	assertActionTypes(t, actions1, []string{"ApplySnapshotAction"})
 
-	// Second result returns; both snapshots should be applied and session completes.
+	// Second result returns, but the session must still wait for both runtime
+	// apply acknowledgements before it can complete.
 	actions2, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
@@ -298,10 +313,26 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
-	if s.State != SyncSessionCompleted {
-		t.Fatalf("expected state completed, got %s", s.State)
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling while applies are pending, got %s", s.State)
 	}
-	assertActionTypes(t, actions2, []string{"ApplySnapshotAction", "SaveStateAction"})
+	assertActionTypes(t, actions2, []string{"ApplySnapshotAction"})
+
+	ack1, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "catofes."}, now)
+	if err != nil {
+		t.Fatalf("first SnapshotAppliedEvent: %v", err)
+	}
+	if s.State != SyncSessionObjectPulling || len(ack1) != 0 {
+		t.Fatalf("first apply acknowledgement state/actions = %s/%v", s.State, ack1)
+	}
+	ack2, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "node-a.catofes."}, now)
+	if err != nil {
+		t.Fatalf("second SnapshotAppliedEvent: %v", err)
+	}
+	if s.State != SyncSessionCompleted {
+		t.Fatalf("expected state completed after apply acknowledgements, got %s", s.State)
+	}
+	assertActionTypes(t, ack2, []string{"SaveStateAction"})
 }
 
 func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
@@ -365,10 +396,18 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
-	if s.State != SyncSessionCompleted {
-		t.Fatalf("expected state completed, got %s", s.State)
+	if s.State != SyncSessionObjectPulling {
+		t.Fatalf("expected state object_pulling while apply is pending, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"ApplySnapshotAction", "SaveStateAction"})
+	assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
+	ack, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "node-a.catofes."}, now)
+	if err != nil {
+		t.Fatalf("SnapshotAppliedEvent: %v", err)
+	}
+	if s.State != SyncSessionCompleted {
+		t.Fatalf("expected state completed after apply acknowledgement, got %s", s.State)
+	}
+	assertActionTypes(t, ack, []string{"SaveStateAction"})
 }
 
 func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
@@ -420,10 +459,39 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
 	}
-	if s.State != SyncSessionCompleted {
-		t.Fatalf("expected state completed, got %s", s.State)
+	if s.State != SyncSessionChunkFallback {
+		t.Fatalf("expected state chunk_fallback while apply is pending, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"ApplySnapshotAction", "SaveStateAction"})
+	assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
+	ack, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "node-a.catofes."}, now)
+	if err != nil {
+		t.Fatalf("SnapshotAppliedEvent: %v", err)
+	}
+	if s.State != SyncSessionCompleted {
+		t.Fatalf("expected state completed after chunk apply acknowledgement, got %s", s.State)
+	}
+	assertActionTypes(t, ack, []string{"SaveStateAction"})
+}
+
+func TestSyncSessionSnapshotAppliedRequiresExpectedRoot(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	s.State = SyncSessionObjectPulling
+	s.pendingZones["catofes."] = true
+	s.snapshotApplyPending["catofes."] = true
+	s.expectedDigests["catofes."] = gossip.ZoneDigest{Zone: "catofes.", RootHash: []byte("expected")}
+
+	actions, err := s.OnEvent(&SnapshotAppliedEvent{
+		PeerID:    "peer-a",
+		Zone:      "catofes.",
+		LocalRoot: []byte("different"),
+	}, time.Unix(1000, 0))
+	if err != nil {
+		t.Fatalf("SnapshotAppliedEvent: %v", err)
+	}
+	if s.State != SyncSessionFailed {
+		t.Fatalf("state = %s, want failed", s.State)
+	}
+	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction"})
 }
 
 func TestSyncSessionRoundTimeout(t *testing.T) {

@@ -101,6 +101,19 @@ type ObjectChunkEvent struct {
 
 func (*ObjectChunkEvent) isSyncEvent() {}
 
+// SnapshotAppliedEvent is the runtime's acknowledgement for a previously
+// emitted ApplySnapshotAction. The FSM must not clear pendingZones or complete
+// a round until the committed local root is known.
+type SnapshotAppliedEvent struct {
+	PeerID       string
+	Zone         zone.ZonePath
+	ExpectedRoot []byte
+	LocalRoot    []byte
+	Err          error
+}
+
+func (*SnapshotAppliedEvent) isSyncEvent() {}
+
 // SyncAction is an action returned by SyncSession.OnEvent for the event loop to execute.
 type SyncAction interface {
 	isSyncAction()
@@ -146,6 +159,8 @@ func (StartObjectPullAction) isSyncAction() {}
 type ApplySnapshotAction struct {
 	PeerID        string
 	Snapshot      *gossip.ZoneSnapshot
+	ExpectedRoot  []byte
+	ReportResult  bool
 	RelaxedLimits bool // set for object-pull / chunk-fallback snapshots
 }
 
@@ -198,6 +213,9 @@ type SyncSession struct {
 	pendingZones map[zone.ZonePath]bool
 	// objectPullInflight tracks zones with an outstanding async TCP pull.
 	objectPullInflight map[zone.ZonePath]bool
+	// snapshotApplyPending tracks snapshots handed to the runtime whose apply
+	// outcome has not yet been delivered back to the FSM.
+	snapshotApplyPending map[zone.ZonePath]bool
 	// chunkFallbackZones tracks zones we are trying to receive via UDP chunk.
 	chunkFallbackZones map[zone.ZonePath]bool
 	// expectedDigests maps pending zones to the remote root hash advertised in
@@ -213,18 +231,22 @@ type SyncSession struct {
 	pingSentAt   time.Time
 
 	lastError error
+	// networkChanged accumulates runtime-confirmed Network changes across the
+	// multi-event session so completion can save/notify/relay exactly once.
+	networkChanged bool
 }
 
 // NewSyncSession creates a new sync session for peerID.
 func NewSyncSession(peerID string) *SyncSession {
 	return &SyncSession{
-		PeerID:             peerID,
-		State:              SyncSessionIdle,
-		pendingZones:       make(map[zone.ZonePath]bool),
-		objectPullInflight: make(map[zone.ZonePath]bool),
-		chunkFallbackZones: make(map[zone.ZonePath]bool),
-		expectedDigests:    make(map[zone.ZonePath]gossip.ZoneDigest),
-		estimatedRTT:       InitialRTT,
+		PeerID:               peerID,
+		State:                SyncSessionIdle,
+		pendingZones:         make(map[zone.ZonePath]bool),
+		objectPullInflight:   make(map[zone.ZonePath]bool),
+		snapshotApplyPending: make(map[zone.ZonePath]bool),
+		chunkFallbackZones:   make(map[zone.ZonePath]bool),
+		expectedDigests:      make(map[zone.ZonePath]gossip.ZoneDigest),
+		estimatedRTT:         InitialRTT,
 	}
 }
 
@@ -247,6 +269,8 @@ func (s *SyncSession) OnEvent(event SyncEvent, now time.Time) ([]SyncAction, err
 		return s.onObjectPullResult(e)
 	case *ObjectChunkEvent:
 		return s.onObjectChunk(e)
+	case *SnapshotAppliedEvent:
+		return s.onSnapshotApplied(e)
 	default:
 		return nil, fmt.Errorf("unknown sync event type %T", event)
 	}
@@ -260,6 +284,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.pingSentAt = now
 	s.pendingZones = make(map[zone.ZonePath]bool)
 	s.objectPullInflight = make(map[zone.ZonePath]bool)
+	s.snapshotApplyPending = make(map[zone.ZonePath]bool)
 	s.chunkFallbackZones = make(map[zone.ZonePath]bool)
 	s.expectedDigests = make(map[zone.ZonePath]gossip.ZoneDigest)
 	s.localCatalogRoot = nil
@@ -268,6 +293,7 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	}
 	s.remoteCatalogRoot = nil
 	s.lastCatalogCursor = ""
+	s.networkChanged = false
 
 	return []SyncAction{
 		SendPingAction{PeerID: e.PeerID, Digests: e.LocalDigests, Summary: e.LocalSummary},
@@ -404,6 +430,9 @@ func (s *SyncSession) reconcilePendingWithDigests(digests []gossip.ZoneDigest) [
 		local[digest.Zone] = digest.RootHash
 	}
 	for z := range s.pendingZones {
+		if s.snapshotApplyPending[z] {
+			continue
+		}
 		expected, ok := s.expectedDigests[z]
 		if !ok {
 			continue
@@ -416,6 +445,7 @@ func (s *SyncSession) reconcilePendingWithDigests(digests []gossip.ZoneDigest) [
 			delete(s.pendingZones, z)
 			delete(s.expectedDigests, z)
 			delete(s.objectPullInflight, z)
+			delete(s.snapshotApplyPending, z)
 			delete(s.chunkFallbackZones, z)
 		}
 	}
@@ -455,9 +485,17 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 		s.chunkFallbackZones[e.Zone] = true
 		actions = append(actions, SendFetchZoneAction{PeerID: e.PeerID, Zone: e.Zone, ChunkFallback: true})
 	} else if e.Snapshot != nil {
-		s.pendingZones[e.Snapshot.Zone] = false
-		delete(s.pendingZones, e.Snapshot.Zone)
-		actions = append(actions, ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true})
+		if e.Snapshot.Zone != e.Zone {
+			return s.failSnapshotApply(e.PeerID, e.Zone, fmt.Errorf("object pull zone mismatch: requested %s, received %s", e.Zone, e.Snapshot.Zone), nil)
+		}
+		s.snapshotApplyPending[e.Zone] = true
+		actions = append(actions, ApplySnapshotAction{
+			PeerID:        e.PeerID,
+			Snapshot:      e.Snapshot,
+			ExpectedRoot:  s.expectedRoot(e.Zone),
+			ReportResult:  true,
+			RelaxedLimits: true,
+		})
 	}
 
 	// Don't change state until all concurrent object pulls have reported back.
@@ -471,6 +509,8 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 	// error, not a reason to wait for ANNOUNCE payloads.
 	if len(s.chunkFallbackZones) > 0 {
 		s.State = SyncSessionChunkFallback
+	} else if len(s.snapshotApplyPending) > 0 {
+		s.State = SyncSessionObjectPulling
 	} else if s.pendingEmpty() {
 		s.State = SyncSessionCompleted
 		actions = append(actions, SaveStateAction{Reason: fmt.Sprintf("sync completed after object pull from %s", e.PeerID), Persistence: SyncPersistenceMeta})
@@ -498,23 +538,73 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 		}, nil
 	}
 	if e.Snapshot != nil {
-		delete(s.chunkFallbackZones, e.Snapshot.Zone)
-		delete(s.pendingZones, e.Snapshot.Zone)
-		if s.pendingEmpty() {
-			s.State = SyncSessionCompleted
-			return []SyncAction{
-				ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true},
-				SaveStateAction{Reason: fmt.Sprintf("sync completed after chunk fallback from %s", e.PeerID), Persistence: SyncPersistenceMeta},
-			}, nil
+		if e.Snapshot.Zone != e.Zone {
+			return s.failSnapshotApply(e.PeerID, e.Zone, fmt.Errorf("chunk snapshot zone mismatch: requested %s, received %s", e.Zone, e.Snapshot.Zone), nil)
 		}
-		if len(s.chunkFallbackZones) > 0 {
-			s.State = SyncSessionChunkFallback
-		} else {
-			s.State = SyncSessionFailed
-		}
-		return []SyncAction{ApplySnapshotAction{PeerID: e.PeerID, Snapshot: e.Snapshot, RelaxedLimits: true}}, nil
+		delete(s.chunkFallbackZones, e.Zone)
+		s.snapshotApplyPending[e.Zone] = true
+		return []SyncAction{ApplySnapshotAction{
+			PeerID:        e.PeerID,
+			Snapshot:      e.Snapshot,
+			ExpectedRoot:  s.expectedRoot(e.Zone),
+			ReportResult:  true,
+			RelaxedLimits: true,
+		}}, nil
 	}
 	return nil, nil
+}
+
+func (s *SyncSession) onSnapshotApplied(e *SnapshotAppliedEvent) ([]SyncAction, error) {
+	if !s.snapshotApplyPending[e.Zone] {
+		return nil, nil
+	}
+	delete(s.snapshotApplyPending, e.Zone)
+	if e.Err != nil {
+		return s.failSnapshotApply(e.PeerID, e.Zone, e.Err, nil)
+	}
+	expected := e.ExpectedRoot
+	if len(expected) == 0 {
+		expected = s.expectedRoot(e.Zone)
+	}
+	if len(expected) > 0 && !bytes.Equal(expected, e.LocalRoot) {
+		return s.failSnapshotApply(e.PeerID, e.Zone, fmt.Errorf("snapshot apply root mismatch for %s: expected %x, local %x", e.Zone, expected, e.LocalRoot), nil)
+	}
+
+	delete(s.pendingZones, e.Zone)
+	delete(s.expectedDigests, e.Zone)
+	delete(s.chunkFallbackZones, e.Zone)
+	if len(s.objectPullInflight) > 0 || len(s.snapshotApplyPending) > 0 {
+		s.State = SyncSessionObjectPulling
+		return nil, nil
+	}
+	if len(s.chunkFallbackZones) > 0 {
+		s.State = SyncSessionChunkFallback
+		return nil, nil
+	}
+	if s.pendingEmpty() {
+		s.State = SyncSessionCompleted
+		return []SyncAction{SaveStateAction{Reason: fmt.Sprintf("sync completed after snapshot apply from %s", e.PeerID), Persistence: SyncPersistenceMeta}}, nil
+	}
+	return s.failSnapshotApply(e.PeerID, e.Zone, errors.New("sync has pending zones without transport or apply work"), nil)
+}
+
+func (s *SyncSession) expectedRoot(path zone.ZonePath) []byte {
+	digest, ok := s.expectedDigests[path]
+	if !ok {
+		return nil
+	}
+	return append([]byte(nil), digest.RootHash...)
+}
+
+func (s *SyncSession) failSnapshotApply(peerID string, path zone.ZonePath, err error, actions []SyncAction) ([]SyncAction, error) {
+	s.State = SyncSessionFailed
+	s.lastError = err
+	delete(s.snapshotApplyPending, path)
+	actions = append(actions,
+		RecordBackoffAction{PeerID: peerID, Err: err},
+		SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", peerID, err), Persistence: SyncPersistenceMeta},
+	)
+	return actions, nil
 }
 
 // Done returns true when the session has reached a terminal state.

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -522,12 +523,13 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event SyncEvent) bo
 		})
 	}
 	networkChanged := d.executeSyncActionsWithMutations(ctx, session, actions, mutations)
+	session.networkChanged = session.networkChanged || networkChanged
 	if session.Done() {
 		mutations.addCompletion(session, eventNow)
 	}
 	mutations.commit(d)
 	if session.Done() {
-		d.completeSyncSessionAfterPeerState(session, networkChanged)
+		d.completeSyncSessionAfterPeerState(session, session.networkChanged)
 	}
 	return networkChanged
 }
@@ -550,6 +552,8 @@ func syncEventName(event SyncEvent) string {
 		return "object_pull_result"
 	case *ObjectChunkEvent:
 		return "object_chunk"
+	case *SnapshotAppliedEvent:
+		return "snapshot_applied"
 	default:
 		return fmt.Sprintf("%T", event)
 	}
@@ -587,6 +591,8 @@ func syncEventPeerID(event SyncEvent) string {
 	case *ObjectPullResultEvent:
 		return e.PeerID
 	case *ObjectChunkEvent:
+		return e.PeerID
+	case *SnapshotAppliedEvent:
 		return e.PeerID
 	}
 	return ""
@@ -721,6 +727,8 @@ type syncSnapshotCommit struct {
 	NetworkChanged bool
 }
 
+var errSnapshotRootMismatch = errors.New("snapshot root does not match advertised catalog digest")
+
 // applySyncSnapshotBatch gives every action an independent target-zone COW
 // savepoint, then publishes the final working root once. The callback body is
 // pure with respect to external effects, so an unexpected stale revision can
@@ -752,6 +760,15 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 			}
 			outcome := &outcomes[i]
 			outcome.managedZone = state.ManagedZone
+			if len(apply.action.ExpectedRoot) > 0 {
+				actualRoot := digestForSnapshot(snapshot).RootHash
+				if !bytes.Equal(actualRoot, apply.action.ExpectedRoot) {
+					outcome.applyErr = fmt.Errorf("%w for %s: expected %x, received %x", errSnapshotRootMismatch, snapshot.Zone, apply.action.ExpectedRoot, actualRoot)
+					recordRejectedDigest(state, peerID, gossip.ZoneDigest{Zone: snapshot.Zone, RootHash: apply.action.ExpectedRoot}, gossip.RejectReason(outcome.applyErr), now)
+					dirty = true
+					continue
+				}
+			}
 			nextNetwork, result, err := gossip.ApplySnapshot(state.Network, snapshot, now, apply.limits)
 			if err != nil {
 				outcome.applyErr = err
@@ -785,14 +802,26 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 
 			// Successful action: advancing state.Network is this action's
 			// savepoint commit. A later rejected action cannot mutate it.
+			outcome.result = result
+			outcome.networkChanged = result.NetworkChanged || outcome.adopted || outcome.refreshed
+			if len(apply.action.ExpectedRoot) > 0 {
+				localRoot := gossip.ZoneRoot(state.Network.Zones[snapshot.Zone])
+				if !bytes.Equal(localRoot, apply.action.ExpectedRoot) {
+					outcome.applyErr = fmt.Errorf("snapshot apply did not converge %s: expected %x, local %x", snapshot.Zone, apply.action.ExpectedRoot, localRoot)
+					state.Network = previousNetwork
+					outcome.result = nil
+					outcome.networkChanged = false
+					recordRejectedDigest(state, peerID, gossip.ZoneDigest{Zone: snapshot.Zone, RootHash: apply.action.ExpectedRoot}, gossip.RejectReason(outcome.applyErr), now)
+					dirty = true
+					continue
+				}
+			}
 			peerState := state.SyncPeers[peerID]
 			_, hadRejectedDigest := peerState.RejectedDigests[rejectedDigestKey(snapshot.Zone)]
 			if !hadRejectedDigest {
 				_, hadRejectedDigest = peerState.RejectedDigests[snapshot.Zone.String()]
 			}
 			clearRejectedDigest(state, peerID, snapshot.Zone)
-			outcome.result = result
-			outcome.networkChanged = result.NetworkChanged || outcome.adopted || outcome.refreshed
 			metadataChanged := hadRejectedDigest
 			if outcome.adopted || outcome.adoptionErr != nil {
 				recordAdoptionResult(state, outcome.adopted, outcome.adoptionErr, now)
@@ -910,6 +939,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 		}
 	}
 	snapshotCommit := syncSnapshotCommit{}
+	var snapshotOutcomes []syncSnapshotOutcome
 	if len(snapshotApplies) > 0 {
 		outcomes, commit, err := d.applySyncSnapshotBatch(peerID, snapshotApplies, now)
 		if err != nil {
@@ -917,10 +947,21 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 				"peer_id": peerID,
 				"error":   err,
 			})
+			for _, apply := range snapshotApplies {
+				if apply.action.ReportResult && apply.action.Snapshot != nil {
+					_ = d.postSyncEvent(&SnapshotAppliedEvent{
+						PeerID:       peerID,
+						Zone:         apply.action.Snapshot.Zone,
+						ExpectedRoot: append([]byte(nil), apply.action.ExpectedRoot...),
+						Err:          err,
+					})
+				}
+			}
 			// Do not execute transport/timer callbacks derived from a batch
 			// that was never published.
 			return false
 		} else {
+			snapshotOutcomes = outcomes
 			snapshotCommit = commit
 			networkChanged = commit.NetworkChanged
 			for i, outcome := range outcomes {
@@ -962,6 +1003,28 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	// the state file at most once.
 	if networkChanged {
 		stateProjection = d.StateStore.syncStateProjection()
+	}
+	for i, apply := range snapshotApplies {
+		if !apply.action.ReportResult || apply.action.Snapshot == nil {
+			continue
+		}
+		event := &SnapshotAppliedEvent{
+			PeerID:       peerID,
+			Zone:         apply.action.Snapshot.Zone,
+			ExpectedRoot: append([]byte(nil), apply.action.ExpectedRoot...),
+		}
+		if i >= len(snapshotOutcomes) {
+			event.Err = errors.New("snapshot apply produced no outcome")
+		} else {
+			event.Err = snapshotOutcomes[i].applyErr
+		}
+		for _, digest := range stateProjection.digests {
+			if digest.Zone == event.Zone {
+				event.LocalRoot = append([]byte(nil), digest.RootHash...)
+				break
+			}
+		}
+		_ = d.postSyncEvent(event)
 	}
 
 	// Applied object-pull or chunk-fallback snapshots may leave a zone pending
@@ -1216,6 +1279,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	relayed := 0
 	projection := d.StateStore.relayProjection(d.Sync.Config, now)
 	localDigests, peers, peerStates := projection.digests, projection.peers, projection.peerStates
+	catalogRoot := hex.EncodeToString(gossip.CatalogRoot(localDigests))
 	for _, peerID := range peers {
 		if peerID == sourcePeerID {
 			continue
@@ -1226,7 +1290,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			})
 			continue
 		}
-		allowed, reason := shouldRelayToPeer(peerStates[peerID], peerID, sourcePeerID, now)
+		allowed, reason := shouldRelayToPeer(peerStates[peerID], peerID, sourcePeerID, catalogRoot, now)
 		if !allowed {
 			d.recordSyncPeerState(peerID, "relay_suppression", func(state *stateFile) {
 				recordRelaySuppression(state, peerID, reason, now)
@@ -1238,13 +1302,19 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			continue
 		}
 		d.syncSessions[peerID] = NewSyncSession(peerID)
+		queued := false
 		select {
 		case d.syncEvents <- &SyncTimerEvent{PeerID: peerID, LocalDigests: localDigests}:
+			queued = true
 		default:
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
 		}
+		if !queued {
+			delete(d.syncSessions, peerID)
+			continue
+		}
 		d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {
-			recordRelaySuccess(state, peerID, sourcePeerID, now)
+			recordRelaySuccess(state, peerID, sourcePeerID, catalogRoot, now)
 		})
 	}
 }
