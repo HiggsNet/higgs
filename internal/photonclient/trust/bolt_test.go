@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func TestLoadBoltSnapshotUsesSharedGossipVerification(t *testing.T) {
+func TestLoadBoltSnapshotUsesSharedStateVerification(t *testing.T) {
 	network, rootPub, _, _ := signedNetwork(t)
 	path := saveNetwork(t, network)
 	snapshot, err := LoadBoltSnapshot(path, "node-a.catofes.", rootPub, time.Unix(1_000, 0), generousLimits())
@@ -159,6 +159,6 @@ func saveNetwork(t *testing.T, network *zone.NetworkState) string {
 	return path
 }
 
-func generousLimits() gossip.SyncLimits {
-	return gossip.SyncLimits{MaxZones: 16, MaxRecords: 1024, MaxBytes: 1 << 20}
+func generousLimits() corestate.SyncLimits {
+	return corestate.SyncLimits{MaxZones: 16, MaxRecords: 1024, MaxBytes: 1 << 20}
 }

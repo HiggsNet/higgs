@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -77,7 +78,7 @@ func TestPackDigestAnnouncesRespectsBudget(t *testing.T) {
 }
 
 func TestBuildZoneSnapshotChunksFitsWireBudgetAndRoundTrips(t *testing.T) {
-	snapshot := &ZoneSnapshot{
+	snapshot := &corestate.ZoneSnapshot{
 		Zone:      "node-a.catofes.",
 		Authority: &zone.ZoneAuthority{Zone: "node-a.catofes.", Epoch: 1, Threshold: 1},
 		Records: map[string]*zone.Record{
@@ -113,7 +114,7 @@ func TestBuildZoneSnapshotChunksFitsWireBudgetAndRoundTrips(t *testing.T) {
 }
 
 func TestBuildZoneSnapshotChunksRejectsTransferIDAndTinyBudget(t *testing.T) {
-	snapshot := &ZoneSnapshot{Zone: "node-a.catofes.", Authority: &zone.ZoneAuthority{Zone: "node-a.catofes."}}
+	snapshot := &corestate.ZoneSnapshot{Zone: "node-a.catofes.", Authority: &zone.ZoneAuthority{Zone: "node-a.catofes."}}
 	if _, err := BuildZoneSnapshotChunks(snapshot, DefaultDatagramBudget, "sender", []byte("short")); err == nil {
 		t.Fatal("short transfer ID accepted")
 	}

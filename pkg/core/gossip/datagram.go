@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -121,7 +122,7 @@ func MaxObjectChunkDataSize(budget int, senderID string, path zone.ZonePath) int
 // BuildZoneSnapshotChunks encodes a detached snapshot into bounded object
 // chunks. The caller supplies the random transfer ID and owns the returned
 // chunks; caching and sending remain executor responsibilities.
-func BuildZoneSnapshotChunks(snapshot *ZoneSnapshot, budget int, senderID string, transferID []byte) ([]*ObjectChunk, error) {
+func BuildZoneSnapshotChunks(snapshot *corestate.ZoneSnapshot, budget int, senderID string, transferID []byte) ([]*ObjectChunk, error) {
 	if snapshot == nil {
 		return nil, errors.New("zone snapshot is nil")
 	}
@@ -144,7 +145,7 @@ func BuildZoneSnapshotChunks(snapshot *ZoneSnapshot, budget int, senderID string
 		return nil, fmt.Errorf("chunk zone snapshot %s needs invalid chunk count %d", snapshot.Zone, total)
 	}
 	objectHash := sha256.Sum256(data)
-	rootHash := ZoneRoot(snapshotZoneState(snapshot))
+	rootHash := ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))
 	chunks := make([]*ObjectChunk, 0, total)
 	for i := range total {
 		start := i * chunkSize

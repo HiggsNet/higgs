@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -278,7 +279,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	actions1, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "catofes.",
-		Snapshot: &ZoneSnapshot{Zone: "catofes."},
+		Snapshot: &corestate.ZoneSnapshot{Zone: "catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -292,7 +293,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	actions2, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -334,7 +335,7 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	actions2, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -359,7 +360,7 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 	actions, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -414,7 +415,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	actions, err := s.OnEvent(&ObjectChunkEvent{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)

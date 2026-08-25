@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -90,7 +91,7 @@ func TestObjectPullResultMapsToSyncEvent(t *testing.T) {
 	res := ObjectPullResult{
 		PeerID:   "peer-a",
 		Zone:     "node-a.catofes.",
-		Snapshot: &gossip.ZoneSnapshot{Zone: "node-a.catofes."},
+		Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."},
 	}
 	ev := objectPullResultToEvent(res)
 	ore, ok := ev.(*gossip.ObjectPullResultEvent)

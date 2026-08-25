@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -90,7 +91,7 @@ func (*RoundTimeoutEvent) SyncEventMarker() {}
 type ObjectPullResultEvent struct {
 	PeerID   string
 	Zone     zone.ZonePath
-	Snapshot *ZoneSnapshot
+	Snapshot *corestate.ZoneSnapshot
 	Err      error
 }
 
@@ -99,7 +100,7 @@ func (*ObjectPullResultEvent) SyncEventMarker() {}
 type ObjectChunkEvent struct {
 	PeerID   string
 	Zone     zone.ZonePath
-	Snapshot *ZoneSnapshot
+	Snapshot *corestate.ZoneSnapshot
 	Err      error
 }
 
@@ -149,7 +150,7 @@ func (StartObjectPullAction) isSyncAction() {}
 
 type ApplySnapshotAction struct {
 	PeerID        string
-	Snapshot      *ZoneSnapshot
+	Snapshot      *corestate.ZoneSnapshot
 	RelaxedLimits bool // set for object-pull / chunk-fallback snapshots
 }
 

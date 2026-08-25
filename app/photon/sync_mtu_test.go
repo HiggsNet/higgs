@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -50,7 +51,7 @@ func TestSendDetachedSnapshotsChunksOversizedRecords(t *testing.T) {
 	transport.SetPeerAddrs("peer", []*net.UDPAddr{transport.LocalAddr()})
 
 	plan := gossip.PlanSnapshotDatagrams(state.Network, []zone.ZonePath{"node-b.catofes."}, transport.MaxMessageBytes(), now)
-	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	snapshot, err := corestate.Snapshot(state.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestSendDetachedSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T)
 	transport.SetPeerAddrs("node-b.catofes.", []*net.UDPAddr{transport.LocalAddr()})
 
 	plan := gossip.PlanSnapshotDatagrams(state.Network, []zone.ZonePath{"node-b.catofes."}, transport.MaxMessageBytes(), now)
-	snapshot, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	snapshot, err := corestate.Snapshot(state.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestSendDetachedSnapshotsChunksOversizedSkeleton(t *testing.T) {
 
 	now := time.Now()
 	plan := gossip.PlanSnapshotDatagrams(state.Network, []zone.ZonePath{"catofes."}, transport.MaxMessageBytes(), now)
-	snapshot, err := gossip.Snapshot(state.Network, "catofes.")
+	snapshot, err := corestate.Snapshot(state.Network, "catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}

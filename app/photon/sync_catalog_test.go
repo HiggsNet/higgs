@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -36,10 +37,10 @@ func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 		t.Fatalf("SignRecord: %v", err)
 	}
 	badRecord.Value = []byte("tampered")
-	snapshot := &gossip.ZoneSnapshot{Zone: "node-b.catofes.", Authority: state.Network.Zones["node-b.catofes."].Authority, Records: map[string]*zone.Record{"bad": badRecord}}
+	snapshot := &corestate.ZoneSnapshot{Zone: "node-b.catofes.", Authority: state.Network.Zones["node-b.catofes."].Authority, Records: map[string]*zone.Record{"bad": badRecord}}
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, _, err := service.applySyncSnapshotAction("node-b.catofes.", gossip.ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err == nil {
+	if _, _, err := service.applySyncSnapshotAction("node-b.catofes.", gossip.ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err == nil {
 		t.Fatal("applySyncSnapshotAction accepted an invalid snapshot")
 	}
 	committed, _ := service.StateStore.Snapshot()
@@ -72,7 +73,7 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, committed, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err != nil {
+	if _, committed, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err != nil {
 		t.Fatalf("applySyncSnapshotAction(root grant): %v", err)
 	} else if !committed {
 		t.Fatal("root grant snapshot was not committed")
@@ -117,14 +118,14 @@ func TestParentSnapshotRejectsManagedAuthorityRefreshForDifferentKey(t *testing.
 		t.Fatalf("SignDelegation(refresh): %v", err)
 	}
 	remote.Zones[managed.Parent()].Delegations[managed] = delegation
-	snapshot, err := gossip.Snapshot(remote, managed.Parent())
+	snapshot, err := corestate.Snapshot(remote, managed.Parent())
 	if err != nil {
 		t.Fatalf("Snapshot(parent): %v", err)
 	}
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, _, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, gossip.DefaultSyncLimits(), now); err == nil {
+	if _, _, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err == nil {
 		t.Fatal("managed authority refresh accepted a different identity key")
 	}
 
@@ -225,7 +226,7 @@ func buildManagedAuthorityRefreshState(t *testing.T) (*stateFile, *syncConfigFil
 	return state, config, rootPriv
 }
 
-func managedAuthorityGrantSnapshot(t *testing.T, network *zone.NetworkState, managed zone.ZonePath, parentPriv ed25519.PrivateKey, permissions ...zone.Permission) *gossip.ZoneSnapshot {
+func managedAuthorityGrantSnapshot(t *testing.T, network *zone.NetworkState, managed zone.ZonePath, parentPriv ed25519.PrivateKey, permissions ...zone.Permission) *corestate.ZoneSnapshot {
 	t.Helper()
 	remote := zone.CloneNetworkState(network)
 	authority := cloneAuthorityForJoinBundle(remote.Zones[managed].Authority)
@@ -237,7 +238,7 @@ func managedAuthorityGrantSnapshot(t *testing.T, network *zone.NetworkState, man
 	}
 	remote.Zones[managed.Parent()].Delegations[managed] = delegation
 	remote.Zones[managed].Authority = authority
-	snapshot, err := gossip.Snapshot(remote, managed.Parent())
+	snapshot, err := corestate.Snapshot(remote, managed.Parent())
 	if err != nil {
 		t.Fatalf("Snapshot(parent): %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
@@ -103,7 +104,7 @@ func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest
 	}
 }
 
-func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath) (*gossip.ZoneSnapshot, error) {
+func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath) (*corestate.ZoneSnapshot, error) {
 	return tryObjectPullTCPUntil(state, config, peerID, path, time.Time{})
 }
 

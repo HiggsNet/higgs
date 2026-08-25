@@ -1,5 +1,5 @@
 // Package trust adapts persisted Photon state to the portable leaf-client
-// StateSource contract. It deliberately reuses pkg/core/gossip ApplySnapshot
+// StateSource contract. It deliberately reuses pkg/core/state ApplySnapshot
 // instead of defining client- or platform-specific verification semantics.
 package trust
 
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -22,7 +22,7 @@ import (
 // LoadBoltSnapshot reads an existing Photon bbolt store and rebuilds a
 // detached network by passing every Zone through the same Snapshot and
 // ApplySnapshot path used by the Linux daemon's gossip synchronization.
-func LoadBoltSnapshot(path string, managed zone.ZonePath, trustedRoot ed25519.PublicKey, now time.Time, limits gossip.SyncLimits) (photonclient.StateSnapshot, error) {
+func LoadBoltSnapshot(path string, managed zone.ZonePath, trustedRoot ed25519.PublicKey, now time.Time, limits corestate.SyncLimits) (photonclient.StateSnapshot, error) {
 	if !managed.Valid() || managed.IsRoot() {
 		return photonclient.StateSnapshot{}, errors.New("managed zone must be a valid non-root Photon zone")
 	}
@@ -45,22 +45,22 @@ func LoadBoltSnapshot(path string, managed zone.ZonePath, trustedRoot ed25519.Pu
 	if closeErr != nil {
 		return photonclient.StateSnapshot{}, fmt.Errorf("close Photon state %s: %w", path, closeErr)
 	}
-	verified, err := verifyWithSharedGossip(network, managed, trustedRoot, now, limits)
+	verified, err := verifyWithSharedState(network, managed, trustedRoot, now, limits)
 	if err != nil {
 		return photonclient.StateSnapshot{}, fmt.Errorf("verify Photon state %s: %w", path, err)
 	}
 	return photonclient.StateSnapshot{Revision: 1, ManagedZone: managed, Network: verified}, nil
 }
 
-func verifyWithSharedGossip(network *zone.NetworkState, managed zone.ZonePath, trustedRoot ed25519.PublicKey, now time.Time, limits gossip.SyncLimits) (*zone.NetworkState, error) {
+func verifyWithSharedState(network *zone.NetworkState, managed zone.ZonePath, trustedRoot ed25519.PublicKey, now time.Time, limits corestate.SyncLimits) (*zone.NetworkState, error) {
 	if network == nil || len(network.Zones) == 0 {
 		return nil, errors.New("network state is empty")
 	}
 	if err := photoncrypto.VerifyPinnedRoot(network, trustedRoot); err != nil {
 		return nil, err
 	}
-	if limits == (gossip.SyncLimits{}) {
-		limits = gossip.DefaultSyncLimits()
+	if limits == (corestate.SyncLimits{}) {
+		limits = corestate.DefaultSyncLimits()
 	}
 	paths := make([]zone.ZonePath, 0, len(network.Zones))
 	for path := range network.Zones {
@@ -77,11 +77,11 @@ func verifyWithSharedGossip(network *zone.NetworkState, managed zone.ZonePath, t
 
 	verified := zone.NewNetworkState()
 	for _, path := range paths {
-		snapshot, err := gossip.Snapshot(network, path)
+		snapshot, err := corestate.Snapshot(network, path)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot zone %s: %w", path, err)
 		}
-		next, _, err := gossip.ApplySnapshot(verified, snapshot, now, limits)
+		next, _, err := corestate.ApplySnapshot(verified, snapshot, now, limits)
 		if err != nil {
 			return nil, fmt.Errorf("apply zone %s: %w", path, err)
 		}

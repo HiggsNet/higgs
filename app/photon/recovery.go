@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/urfave/cli/v3"
@@ -140,7 +140,7 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := gossip.Snapshot(state.Network, path)
+	snapshot, err := corestate.Snapshot(state.Network, path)
 	if err != nil {
 		return err
 	}
@@ -160,7 +160,7 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 }
 
 func recoveryImportZone(input string, direct bool) error {
-	var snapshot gossip.ZoneSnapshot
+	var snapshot corestate.ZoneSnapshot
 	if err := readBase64JSONOrJSON(input, &snapshot); err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func recoveryImportZone(input string, direct bool) error {
 	return nil
 }
 
-func printRecoveryImportResult(result *gossip.ApplyResult, revocations int, suffix string) {
+func printRecoveryImportResult(result *corestate.ApplyResult, revocations int, suffix string) {
 	fmt.Printf("imported zone %s snapshot%s: records_applied=%d delegations=%d revocations=%d\n",
 		result.Zone, suffix, result.Records, result.Delegation, revocations)
 }
@@ -251,7 +251,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	defer state.Unlock()
 
 	deadline := time.Now().Add(timeout)
-	results := make([]*gossip.ApplyResult, 0, len(paths))
+	results := make([]*corestate.ApplyResult, 0, len(paths))
 	for _, path := range paths {
 		select {
 		case <-ctx.Done():
@@ -291,7 +291,7 @@ func recoveryChainZones(path zone.ZonePath) []zone.ZonePath {
 	return out
 }
 
-func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.ZoneSnapshot) (*gossip.ApplyResult, error) {
+func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, error) {
 	if rt == nil {
 		return nil, errors.New("runtime is nil")
 	}
@@ -314,7 +314,7 @@ func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.Z
 	}
 	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
-	nextNetwork, result, err := gossip.ApplySnapshot(state.Network, snapshot, rt.Now(), limits)
+	nextNetwork, result, err := corestate.ApplySnapshot(state.Network, snapshot, rt.Now(), limits)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +329,7 @@ func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.Z
 	return result, nil
 }
 
-func validateRecoveryRootSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.ZoneSnapshot) error {
+func validateRecoveryRootSnapshot(rt *Runtime, state *stateFile, snapshot *corestate.ZoneSnapshot) error {
 	if snapshot.Zone != zone.RootZone {
 		return nil
 	}

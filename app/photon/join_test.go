@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -80,11 +80,11 @@ func TestJoinFlow(t *testing.T) {
 	if err := readBase64JSONOrJSON(siblingBundlePath, &siblingBundle); err != nil {
 		t.Fatalf("read node-a bundle: %v", err)
 	}
-	nodeBSnapshot, err := gossip.Snapshot(bundle.Network, "node-b.catofes.")
+	nodeBSnapshot, err := corestate.Snapshot(bundle.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
-	nextNetwork, _, err := gossip.ApplySnapshot(siblingBundle.Network, nodeBSnapshot, timeNow(), gossip.DefaultSyncLimits())
+	nextNetwork, _, err := corestate.ApplySnapshot(siblingBundle.Network, nodeBSnapshot, timeNow(), corestate.DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot(node-b into node-a bundle): %v", err)
 	}

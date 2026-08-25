@@ -19,6 +19,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -115,7 +116,7 @@ type daemonEvent struct {
 	JoinBundle  *joinBundle
 	PrivateKey  *privateKeyFile
 	Permissions []zone.Permission
-	Snapshot    *gossip.ZoneSnapshot
+	Snapshot    *corestate.ZoneSnapshot
 	Zone        zone.ZonePath
 	Reason      string
 	Key         string
@@ -1214,8 +1215,8 @@ func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions
 	return bundle, nil
 }
 
-func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *gossip.ZoneSnapshot) (*gossip.ApplyResult, int, error) {
-	var result *gossip.ApplyResult
+func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, error) {
+	var result *corestate.ApplyResult
 	var revocations int
 	err := d.runStateStoreWrite(func(state *stateFile) error {
 		var err error

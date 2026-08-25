@@ -16,7 +16,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	photonstate "github.com/HiggsNet/photon/internal/state"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -37,7 +37,7 @@ type controlRequest struct {
 	JoinBundle  *joinBundle             `json:"join_bundle,omitempty"`
 	PrivateKey  *privateKeyFile         `json:"private_key,omitempty"`
 	Permissions []zone.Permission       `json:"permissions,omitempty"`
-	Snapshot    *gossip.ZoneSnapshot    `json:"snapshot,omitempty"`
+	Snapshot    *corestate.ZoneSnapshot `json:"snapshot,omitempty"`
 	Apply       bool                    `json:"apply,omitempty"`
 	Orphans     bool                    `json:"orphans,omitempty"`
 	NetNS       string                  `json:"netns,omitempty"`
@@ -467,7 +467,7 @@ func grantDelegationPermissionsViaControl(rt *Runtime, path zone.ZonePath, permi
 	return response.JoinBundle, true, nil
 }
 
-func importRecoveryZoneViaControl(rt *Runtime, snapshot *gossip.ZoneSnapshot) (*gossip.ApplyResult, int, bool, error) {
+func importRecoveryZoneViaControl(rt *Runtime, snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method:   "recovery_import_zone",
 		Snapshot: snapshot,
@@ -475,7 +475,7 @@ func importRecoveryZoneViaControl(rt *Runtime, snapshot *gossip.ZoneSnapshot) (*
 	if err != nil || !ok {
 		return nil, 0, ok, err
 	}
-	return &gossip.ApplyResult{
+	return &corestate.ApplyResult{
 		Zone:       response.Zone,
 		Records:    response.RecordsApplied,
 		Delegation: response.Delegations,

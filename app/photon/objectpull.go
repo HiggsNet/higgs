@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -232,7 +233,7 @@ func objectPullResponseFromState(state *stateFile, req *gossip.ObjectPullRequest
 		if state.Network.IsZoneRevoked(req.Zone, now) {
 			return &gossip.ObjectPullResponse{Error: "zone revoked"}
 		}
-		snapshot, err := gossip.Snapshot(state.Network, req.Zone)
+		snapshot, err := corestate.Snapshot(state.Network, req.Zone)
 		if err != nil {
 			return &gossip.ObjectPullResponse{Error: err.Error()}
 		}
@@ -241,11 +242,7 @@ func objectPullResponseFromState(state *stateFile, req *gossip.ObjectPullRequest
 		if req.Key == "" {
 			return &gossip.ObjectPullResponse{Error: "missing key"}
 		}
-		record, err := gossip.RecordSnapshotFor(state.Network, &gossip.FetchRecord{
-			Zone:    req.Zone,
-			Key:     req.Key,
-			Version: req.Version,
-		})
+		record, err := corestate.RecordSnapshotFor(state.Network, req.Zone, req.Key, req.Version)
 		if err != nil {
 			return &gossip.ObjectPullResponse{Error: err.Error()}
 		}
@@ -279,7 +276,7 @@ func logObjectPullSnapshot(req *gossip.ObjectPullRequest, response *gossip.Objec
 	})
 }
 
-func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath, deadline time.Time) (*gossip.ZoneSnapshot, error) {
+func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath, deadline time.Time) (*corestate.ZoneSnapshot, error) {
 	addr := resolvePeerTCPAddr(state, config, peerID)
 	if addr == "" {
 		return nil, fmt.Errorf("no TCP address for peer %s", peerID)
@@ -310,7 +307,7 @@ func encodedObjectPullResponseSize(resp *gossip.ObjectPullResponse) int {
 	return len(data)
 }
 
-func encodedZoneSnapshotSize(snapshot *gossip.ZoneSnapshot) int {
+func encodedZoneSnapshotSize(snapshot *corestate.ZoneSnapshot) int {
 	data, err := gossip.EncodeZoneSnapshotObject(snapshot)
 	if err != nil {
 		return 0
@@ -487,7 +484,7 @@ type ObjectPullRequest struct {
 type ObjectPullResult struct {
 	PeerID      string
 	Zone        zone.ZonePath
-	Snapshot    *gossip.ZoneSnapshot
+	Snapshot    *corestate.ZoneSnapshot
 	Bytes       int
 	Unreachable bool
 	Err         error

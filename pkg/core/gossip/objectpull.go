@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -27,10 +28,10 @@ type ObjectPullRequest struct {
 
 // ObjectPullResponse is returned by the TCP object-pull server.
 type ObjectPullResponse struct {
-	OK       bool            `msgpack:"ok"`
-	Snapshot *ZoneSnapshot   `msgpack:"s,omitempty"`
-	Record   *RecordSnapshot `msgpack:"r,omitempty"`
-	Error    string          `msgpack:"e,omitempty"`
+	OK       bool                      `msgpack:"ok"`
+	Snapshot *corestate.ZoneSnapshot   `msgpack:"s,omitempty"`
+	Record   *corestate.RecordSnapshot `msgpack:"r,omitempty"`
+	Error    string                    `msgpack:"e,omitempty"`
 }
 
 // EncodeObjectPullRequest serializes a request with a 4-byte big-endian length prefix.
@@ -83,12 +84,12 @@ func DecodeObjectPullResponse(r io.Reader) (*ObjectPullResponse, error) {
 	return &resp, nil
 }
 
-func EncodeZoneSnapshotObject(snapshot *ZoneSnapshot) ([]byte, error) {
+func EncodeZoneSnapshotObject(snapshot *corestate.ZoneSnapshot) ([]byte, error) {
 	return msgpack.Marshal(snapshot)
 }
 
-func DecodeZoneSnapshotObject(data []byte) (*ZoneSnapshot, error) {
-	var snapshot ZoneSnapshot
+func DecodeZoneSnapshotObject(data []byte) (*corestate.ZoneSnapshot, error) {
+	var snapshot corestate.ZoneSnapshot
 	if err := msgpack.Unmarshal(data, &snapshot); err != nil {
 		return nil, err
 	}

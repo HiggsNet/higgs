@@ -167,7 +167,7 @@ runtime 猜测。service crash 后下一次启动只能 adopt 带匹配 owner/ge
 - system/manual clock；
 - memory tunnel 和 memory datagram transport；
 - Photon Windows schema v1 与离线 `config validate`；
-- 预置 bbolt state 经共享 `gossip.Snapshot`/`ApplySnapshot` 重建为 verified static source；
+- 预置 bbolt state 经共享 `state.Snapshot`/`ApplySnapshot` 重建为 verified static source；
 - Linux unit tests 与 Windows amd64 compile guard。
 
 Wintun、IP Helper、SCM、IKE/ESP/Babel 实现分别在后续窄切口加入。未实现的命令不得伪造

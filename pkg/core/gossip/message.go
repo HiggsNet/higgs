@@ -113,21 +113,6 @@ type ObjectChunkNACK struct {
 	Missing    []uint16 `json:"missing" msgpack:"m"`
 }
 
-type RecordSnapshot struct {
-	Zone   zone.ZonePath `json:"zone" msgpack:"z"`
-	Record *zone.Record  `json:"record" msgpack:"r"`
-}
-
-type ZoneSnapshot struct {
-	Zone          zone.ZonePath                                `json:"zone" msgpack:"z"`
-	Authority     *zone.ZoneAuthority                          `json:"authority" msgpack:"a"`
-	ParentProof   []*zone.Delegation                           `json:"parent_proof,omitempty" msgpack:"pp,omitempty"`
-	Delegations   map[zone.ZonePath]*zone.Delegation           `json:"delegations,omitempty" msgpack:"d,omitempty"`
-	Revocations   map[zone.ZonePath]*zone.DelegationRevocation `json:"revocations,omitempty" msgpack:"rv,omitempty"`
-	Records       map[string]*zone.Record                      `json:"records,omitempty" msgpack:"rc,omitempty"`
-	RecordHistory map[string][]*zone.Record                    `json:"record_history,omitempty" msgpack:"rh,omitempty"`
-}
-
 // MarshalMessage encodes a Message using the default send codec (MessagePack).
 func MarshalMessage(message *Message) ([]byte, error) {
 	return encodeMessage(DefaultSendCodec, message)

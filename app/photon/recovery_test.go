@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 )
@@ -27,7 +27,7 @@ func TestRecoveryChainZonesRootToLeaf(t *testing.T) {
 
 func TestRecoveryApplySnapshotRestoresManagedZoneDelegations(t *testing.T) {
 	source, _ := buildTestNetworkState(t)
-	snapshot, err := gossip.Snapshot(source.Network, "catofes.")
+	snapshot, err := corestate.Snapshot(source.Network, "catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(catofes): %v", err)
 	}
@@ -140,7 +140,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadState(admin): %v", err)
 	}
-	snapshot, err := gossip.Snapshot(adminState.Network, zone.RootZone)
+	snapshot, err := corestate.Snapshot(adminState.Network, zone.RootZone)
 	if err != nil {
 		t.Fatalf("Snapshot(root): %v", err)
 	}
@@ -186,15 +186,15 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 
 func TestRecoveryApplySnapshotsCanRestoreChainInOrder(t *testing.T) {
 	source, _ := buildTestNetworkState(t)
-	rootSnapshot, err := gossip.Snapshot(source.Network, zone.RootZone)
+	rootSnapshot, err := corestate.Snapshot(source.Network, zone.RootZone)
 	if err != nil {
 		t.Fatalf("Snapshot(root): %v", err)
 	}
-	catofesSnapshot, err := gossip.Snapshot(source.Network, "catofes.")
+	catofesSnapshot, err := corestate.Snapshot(source.Network, "catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(catofes): %v", err)
 	}
-	nodeSnapshot, err := gossip.Snapshot(source.Network, "node-b.catofes.")
+	nodeSnapshot, err := corestate.Snapshot(source.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
@@ -220,7 +220,7 @@ func TestRecoveryApplySnapshotsCanRestoreChainInOrder(t *testing.T) {
 		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
-	for _, snapshot := range []*gossip.ZoneSnapshot{rootSnapshot, catofesSnapshot, nodeSnapshot} {
+	for _, snapshot := range []*corestate.ZoneSnapshot{rootSnapshot, catofesSnapshot, nodeSnapshot} {
 		if _, err := applyRecoveryZoneSnapshot(rt, target, snapshot); err != nil {
 			t.Fatalf("applyRecoveryZoneSnapshot(%s): %v", snapshot.Zone, err)
 		}
@@ -238,7 +238,7 @@ func TestRecoveryApplySnapshotsCanRestoreChainInOrder(t *testing.T) {
 
 func TestRecoveryRootSnapshotMustMatchTrustedRoot(t *testing.T) {
 	source, _ := buildTestNetworkState(t)
-	snapshot, err := gossip.Snapshot(source.Network, zone.RootZone)
+	snapshot, err := corestate.Snapshot(source.Network, zone.RootZone)
 	if err != nil {
 		t.Fatalf("Snapshot(root): %v", err)
 	}

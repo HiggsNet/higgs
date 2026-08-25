@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -31,7 +32,7 @@ func TestObjectPullRequestRoundTrip(t *testing.T) {
 func TestObjectPullResponseRoundTrip(t *testing.T) {
 	resp := &ObjectPullResponse{
 		OK: true,
-		Snapshot: &ZoneSnapshot{
+		Snapshot: &corestate.ZoneSnapshot{
 			Zone: "catofes.",
 			Authority: &zone.ZoneAuthority{
 				Zone:      "catofes.",

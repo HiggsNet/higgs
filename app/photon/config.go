@@ -15,6 +15,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -283,8 +284,8 @@ func defaultAppConfig() *appConfig {
 		DataDir:             defaultDataDir,
 		ListenAddr:          fmt.Sprintf("[::]:%d", gossip.DefaultPort),
 		MaxMessageBytes:     gossip.DefaultMaxMessage,
-		MaxSyncZones:        gossip.DefaultSyncLimits().MaxZones,
-		MaxSyncRecords:      gossip.DefaultSyncLimits().MaxRecords,
+		MaxSyncZones:        corestate.DefaultSyncLimits().MaxZones,
+		MaxSyncRecords:      corestate.DefaultSyncLimits().MaxRecords,
 		ReflectorInterval:   5 * time.Minute,
 		ReflectorTimeout:    3 * time.Second,
 		EndpointTTL:         gossip.DefaultEndpointTTL,
@@ -328,10 +329,10 @@ func normalizeAppConfig(config *appConfig) {
 		config.MaxMessageBytes = gossip.DefaultMaxMessage
 	}
 	if config.MaxSyncZones <= 0 {
-		config.MaxSyncZones = gossip.DefaultSyncLimits().MaxZones
+		config.MaxSyncZones = corestate.DefaultSyncLimits().MaxZones
 	}
 	if config.MaxSyncRecords <= 0 {
-		config.MaxSyncRecords = gossip.DefaultSyncLimits().MaxRecords
+		config.MaxSyncRecords = corestate.DefaultSyncLimits().MaxRecords
 	}
 	if config.Log.Level == "" {
 		config.Log.Level = config.LogLevel

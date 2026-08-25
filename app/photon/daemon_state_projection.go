@@ -9,6 +9,7 @@ import (
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -460,7 +461,7 @@ func (s *DaemonStateStore) fetchZonePlanProjection(path zone.ZonePath, budget in
 	return gossip.PlanSnapshotDatagrams(s.committed.Network, []zone.ZonePath{path}, budget, now), nil
 }
 
-func (s *DaemonStateStore) fetchZoneChunkProjection(path zone.ZonePath, budget int, now time.Time) (gossip.DatagramPlan, *gossip.ZoneSnapshot, error) {
+func (s *DaemonStateStore) fetchZoneChunkProjection(path zone.ZonePath, budget int, now time.Time) (gossip.DatagramPlan, *corestate.ZoneSnapshot, error) {
 	if s == nil {
 		return gossip.DatagramPlan{}, nil, nil
 	}
@@ -477,7 +478,7 @@ func (s *DaemonStateStore) fetchZoneChunkProjection(path zone.ZonePath, budget i
 	if network.IsZoneRevoked(path, now) {
 		return plan, nil, nil
 	}
-	snapshot, err := gossip.Snapshot(network, path)
+	snapshot, err := corestate.Snapshot(network, path)
 	return plan, snapshot, err
 }
 

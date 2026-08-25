@@ -1,4 +1,6 @@
-package gossip
+// Package state owns Photon verified-state DTOs and pure verification/COW
+// operations shared by Linux and Windows runtimes.
+package state
 
 import (
 	"bytes"
@@ -18,6 +20,23 @@ var (
 	ErrUntrustedZone        = errors.New("zone is not under a trusted root")
 )
 
+const DefaultSnapshotMaxBytes = 1200
+
+type RecordSnapshot struct {
+	Zone   zone.ZonePath `json:"zone" msgpack:"z"`
+	Record *zone.Record  `json:"record" msgpack:"r"`
+}
+
+type ZoneSnapshot struct {
+	Zone          zone.ZonePath                                `json:"zone" msgpack:"z"`
+	Authority     *zone.ZoneAuthority                          `json:"authority" msgpack:"a"`
+	ParentProof   []*zone.Delegation                           `json:"parent_proof,omitempty" msgpack:"pp,omitempty"`
+	Delegations   map[zone.ZonePath]*zone.Delegation           `json:"delegations,omitempty" msgpack:"d,omitempty"`
+	Revocations   map[zone.ZonePath]*zone.DelegationRevocation `json:"revocations,omitempty" msgpack:"rv,omitempty"`
+	Records       map[string]*zone.Record                      `json:"records,omitempty" msgpack:"rc,omitempty"`
+	RecordHistory map[string][]*zone.Record                    `json:"record_history,omitempty" msgpack:"rh,omitempty"`
+}
+
 type SyncLimits struct {
 	MaxZones   int
 	MaxRecords int
@@ -34,7 +53,7 @@ func DefaultSyncLimits() SyncLimits {
 	return SyncLimits{
 		MaxZones:   16,
 		MaxRecords: 1024,
-		MaxBytes:   DefaultMaxMessage,
+		MaxBytes:   DefaultSnapshotMaxBytes,
 	}
 }
 
@@ -56,26 +75,26 @@ func Snapshot(ns *zone.NetworkState, path zone.ZonePath) (*ZoneSnapshot, error) 
 	}, nil
 }
 
-func RecordSnapshotFor(ns *zone.NetworkState, fetch *FetchRecord) (*RecordSnapshot, error) {
+func RecordSnapshotFor(ns *zone.NetworkState, path zone.ZonePath, key string, version uint64) (*RecordSnapshot, error) {
 	if ns == nil {
 		return nil, errors.New("network state is nil")
 	}
-	if fetch == nil || !fetch.Zone.Valid() || fetch.Key == "" {
+	if !path.Valid() || key == "" {
 		return nil, zone.ErrInvalidFQKey
 	}
-	zs := ns.Zones[fetch.Zone]
+	zs := ns.Zones[path]
 	if zs == nil {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, fetch.Zone)
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
-	for _, record := range append([]*zone.Record(nil), zs.RecordHistory[fetch.Key]...) {
-		if record != nil && (fetch.Version == 0 || record.Version == fetch.Version) {
-			return &RecordSnapshot{Zone: fetch.Zone, Record: cloneRecord(record)}, nil
+	for _, record := range append([]*zone.Record(nil), zs.RecordHistory[key]...) {
+		if record != nil && (version == 0 || record.Version == version) {
+			return &RecordSnapshot{Zone: path, Record: cloneRecord(record)}, nil
 		}
 	}
-	if record := zs.Records[fetch.Key]; record != nil && (fetch.Version == 0 || record.Version == fetch.Version) {
-		return &RecordSnapshot{Zone: fetch.Zone, Record: cloneRecord(record)}, nil
+	if record := zs.Records[key]; record != nil && (version == 0 || record.Version == version) {
+		return &RecordSnapshot{Zone: path, Record: cloneRecord(record)}, nil
 	}
-	return nil, fmt.Errorf("%w: %s/%s", zone.ErrRecordNotFound, fetch.Zone, fetch.Key)
+	return nil, fmt.Errorf("%w: %s/%s", zone.ErrRecordNotFound, path, key)
 }
 
 // ApplySnapshot validates and applies snapshot to a detached target-zone COW
@@ -105,7 +124,7 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	candidate := zone.CloneNetworkStateForZone(ns, snapshot.Zone)
 	candidate.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	active := candidate.Zones[snapshot.Zone]
-	candidate.Zones[snapshot.Zone] = snapshotZoneState(snapshot)
+	candidate.Zones[snapshot.Zone] = ZoneStateFromSnapshot(snapshot)
 	if err := photoncrypto.VerifyChain(candidate, snapshot.Zone, now); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrUntrustedZone, err)
 	}
@@ -217,7 +236,9 @@ func orderedSnapshotRecords(snapshot *ZoneSnapshot) []*zone.Record {
 	return out
 }
 
-func snapshotZoneState(snapshot *ZoneSnapshot) *zone.ZoneState {
+// ZoneStateFromSnapshot returns a detached zone projection for hashing and
+// protocol encoding. It does not verify or publish the snapshot.
+func ZoneStateFromSnapshot(snapshot *ZoneSnapshot) *zone.ZoneState {
 	return &zone.ZoneState{
 		Path:          snapshot.Zone,
 		Authority:     cloneAuthority(snapshot.Authority),

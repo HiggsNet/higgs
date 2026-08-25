@@ -9,6 +9,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -548,11 +549,11 @@ func (b *syncPeerStateMutationBatch) commit(d *DaemonService) {
 
 type syncSnapshotApply struct {
 	action gossip.ApplySnapshotAction
-	limits gossip.SyncLimits
+	limits corestate.SyncLimits
 }
 
 type syncSnapshotOutcome struct {
-	result      *gossip.ApplyResult
+	result      *corestate.ApplyResult
 	applyErr    error
 	adopted     bool
 	adoptionErr error
@@ -583,7 +584,7 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 			}
 			outcome := &outcomes[i]
 			outcome.managedZone = state.ManagedZone
-			nextNetwork, result, err := gossip.ApplySnapshot(state.Network, snapshot, now, apply.limits)
+			nextNetwork, result, err := corestate.ApplySnapshot(state.Network, snapshot, now, apply.limits)
 			if err != nil {
 				outcome.applyErr = err
 				recordRejectedDigest(state, peerID, digestForSnapshot(snapshot), gossip.RejectReason(err), now)
@@ -657,7 +658,7 @@ func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotO
 	}
 }
 
-func (d *DaemonService) applySyncSnapshotAction(peerID string, action gossip.ApplySnapshotAction, limits gossip.SyncLimits, now time.Time) (*gossip.ApplyResult, bool, error) {
+func (d *DaemonService) applySyncSnapshotAction(peerID string, action gossip.ApplySnapshotAction, limits corestate.SyncLimits, now time.Time) (*corestate.ApplyResult, bool, error) {
 	if action.Snapshot == nil {
 		return nil, false, nil
 	}
@@ -1046,7 +1047,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	}
 }
 
-func digestForSnapshot(snapshot *gossip.ZoneSnapshot) gossip.ZoneDigest {
+func digestForSnapshot(snapshot *corestate.ZoneSnapshot) gossip.ZoneDigest {
 	if snapshot == nil {
 		return gossip.ZoneDigest{}
 	}
@@ -1056,7 +1057,7 @@ func digestForSnapshot(snapshot *gossip.ZoneSnapshot) gossip.ZoneDigest {
 	}
 }
 
-func zoneStateFromSnapshot(snapshot *gossip.ZoneSnapshot) *zone.ZoneState {
+func zoneStateFromSnapshot(snapshot *corestate.ZoneSnapshot) *zone.ZoneState {
 	if snapshot == nil {
 		return nil
 	}

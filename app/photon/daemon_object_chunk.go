@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 // handleObjectChunk keeps UDP assembly and transport repair outside the
 // committed state transaction, then applies a completed snapshot through the
 // daemon StateStore. The non-daemon SyncRuntime path retains its standalone
 // implementation for sync-once compatibility.
-func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits gossip.SyncLimits) error {
+func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits corestate.SyncLimits) error {
 	if d == nil || d.Sync == nil {
 		return errors.New("daemon service is not initialized")
 	}

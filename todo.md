@@ -117,7 +117,7 @@ authorization 和 transport records 作为可信事实来源。
   hints、Wintun、log、reconnect 均严格解析；未知字段、多 YAML 文档、full-tunnel default
   route 和不完整配置 fail closed。
 - [x] 新建 `internal/photonclient/trust` 预置状态 adapter：不复制 gossip 实现，而是把现有
-  bbolt Zone state 逐层送入共享 `gossip.Snapshot`/`ApplySnapshot`，校验 root pin、delegation、
+  bbolt Zone state 逐层送入共享 `state.Snapshot`/`ApplySnapshot`，校验 root pin、delegation、
   record、revocation 和有效期后才发布 detached `StateSnapshot`；篡改 record、错误 root、
   revoked managed zone 已有负向测试。
 - [x] 将原先位于 Linux `app/photon/sync_session.go` 的无 I/O per-peer gossip FSM 与完整单测
@@ -523,6 +523,12 @@ package dependency: app -> host -> gossip -> state -> zone
 
 - [ ] A：先移动 state-domain DTO/纯函数并消除 import cycle；所有现有 Linux 调用直接改用新包，删除旧
   alias/wrapper。跑 state/gossip/zone unit、fuzz/codec compatibility 和 Windows compile guard。
+  - [x] A1：`ZoneSnapshot`/`RecordSnapshot`、`SyncLimits`、`ApplyResult` 和 snapshot create/record projection/
+    verify/apply/target-zone COW 已整体迁入 `pkg/core/state`；gossip wire/object-pull/action 直接引用 state DTO，
+    Linux daemon/recovery/join/trust adapter 直接调用 state API。已删除 `pkg/core/gossip/sync.go` 和全部旧定义，
+    未保留 alias/forwarder；snapshot 原子性、chain、revocation、limit 测试同步迁入 state。
+  - [ ] A2：迁移 `ZoneDigest`、catalog DTO/root/diff/state projection；只把依赖 Message wire-size 的分页装箱
+    留在 gossip，禁止为了旧调用路径增加 gossip forwarding API。
 - [ ] B：让 Engine 输出 timer/read/apply/send/pull Action，迁出 event queue/TimerManager；实现公共
   HostRuntime + Scheduler 的 memory vertical slice，并证明 Linux/Windows adapter 使用同一 action executor。
   - [x] B1：完成 timer memory vertical slice：新增 `pkg/core/host.Runtime` bounded queue 和单 heap/wakeup
@@ -835,7 +841,8 @@ package dependency: app -> host -> gossip -> state -> zone
     - 每个子阶段独立落地、独立 benchmark/测试；前一阶段的正确性和 perf 数据验收后再进入下一阶段。不得为了达到最终 COW 形态而在一个改动中同时重写 sync、routing、IPsec、firewall 和 persistence。
 
     - [x] **7.11.6.1 修复 `ApplySnapshot` 失败原子性**
-      - 当前 `gossip.ApplySnapshot` 使用完整 candidate 验证 trust chain，但验证后转而修改传入 `NetworkState`；delegation/revocation 已写入或部分 record 已 `PutAt` 后发生错误时，调用者可能提交部分 snapshot。
+      - `state.ApplySnapshot` 已改为 detached target-zone COW candidate，调用者只在完整成功后发布；该历史风险
+        已由 state snapshot atomicity tests 固定，后续 `ApplyRemoteBatch` 必须保持同一语义。
       - 将 authority、parent proof、delegation、revocation、record/history 的全部变更先应用到 detached candidate；只有所有验证和 record apply 完成后才一次性安装结果。任何错误返回时，传入 Network 的字段、map、slice、record/history、root 和 validation hook 均保持不变。
       - 保持现有 stale record、record conflict、apply count、delegation count、auto-join 和 rejected digest 对外语义。snapshot apply 失败只记录 rejected digest；失败 snapshot 不得借由外层 `StateStore.Update` 提交 Network 的部分变化。
       - 测试至少覆盖：trust chain 失败、delegation/revocation 校验失败、前一条 record 成功而后一条失败、stale/conflict 被跳过、成功 apply；失败用序列化状态或逐字段断言验证前后 Network 等价，并运行 `pkg/core/gossip` race 测试。

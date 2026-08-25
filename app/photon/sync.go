@@ -20,6 +20,7 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -1329,7 +1330,7 @@ type datagramSendDiagnostics struct {
 	ChunkFallbacks int
 }
 
-func sendDetachedSnapshotWithDiagnostics(snapshot *gossip.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
+func sendDetachedSnapshotWithDiagnostics(snapshot *corestate.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
 	diag := datagramSendDiagnostics{Oversized: append([]gossip.OversizedDatagramObject(nil), plan.Oversized...)}
 	for _, oversized := range plan.Oversized {
 		if logger != nil && logger.debugEnabled() {
@@ -1349,7 +1350,7 @@ func sendDetachedSnapshotWithDiagnostics(snapshot *gossip.ZoneSnapshot, plan gos
 	return diag, err
 }
 
-func sendDetachedZoneSnapshotChunks(snapshot *gossip.ZoneSnapshot, transport *gossip.Transport, peerID string, now time.Time) (int, error) {
+func sendDetachedZoneSnapshotChunks(snapshot *corestate.ZoneSnapshot, transport *gossip.Transport, peerID string, now time.Time) (int, error) {
 	if snapshot == nil || transport == nil {
 		return 0, nil
 	}
@@ -1498,8 +1499,8 @@ func recordCatalogReject(store *observability.PeerObservabilityStore, peerID, cu
 	})
 }
 
-func syncLimits(config *syncConfigFile) gossip.SyncLimits {
-	limits := gossip.DefaultSyncLimits()
+func syncLimits(config *syncConfigFile) corestate.SyncLimits {
+	limits := corestate.DefaultSyncLimits()
 	if config == nil {
 		return limits
 	}

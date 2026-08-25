@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -255,7 +256,7 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 		t.Fatalf("buildSignedRecordAt: %v", err)
 	}
 	source.Network.Zones["node-b.catofes."].Records[record.Key] = record
-	snapshot, err := gossip.Snapshot(source.Network, "node-b.catofes.")
+	snapshot, err := corestate.Snapshot(source.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
@@ -286,16 +287,16 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2210, 0)
-	validParent, err := gossip.Snapshot(state.Network, "catofes.")
+	validParent, err := corestate.Snapshot(state.Network, "catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(catofes): %v", err)
 	}
-	invalidParent, err := gossip.Snapshot(state.Network, "catofes.")
+	invalidParent, err := corestate.Snapshot(state.Network, "catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(invalid catofes): %v", err)
 	}
 	invalidParent.Authority.Keys[0].Key[0] ^= 0xff
-	validChild, err := gossip.Snapshot(state.Network, "node-b.catofes.")
+	validChild, err := corestate.Snapshot(state.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
@@ -351,7 +352,7 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	udpChunkAssemblies = gossip.NewChunkAssemblyStore()
 	sourceState, _ := buildTestNetworkState(t)
-	snapshot, err := gossip.Snapshot(sourceState.Network, "catofes.")
+	snapshot, err := corestate.Snapshot(sourceState.Network, "catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(catofes): %v", err)
 	}
@@ -408,7 +409,7 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 			Type:        gossip.MessageObjectChunk,
 			PeerID:      "node-b.catofes.",
 			ObjectChunk: chunk,
-		}, gossip.DefaultSyncLimits()); err != nil {
+		}, corestate.DefaultSyncLimits()); err != nil {
 			t.Fatalf("handleObjectChunk: %v", err)
 		}
 	}
@@ -465,7 +466,7 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 			Total:      1,
 			Data:       []byte("invalid object"),
 		},
-	}, gossip.DefaultSyncLimits())
+	}, corestate.DefaultSyncLimits())
 	if err == nil {
 		t.Fatal("handleObjectChunk accepted invalid object hash")
 	}
